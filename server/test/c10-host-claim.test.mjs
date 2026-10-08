@@ -368,3 +368,70 @@ test('A5 project readback requires actual matching revision/digest and complete 
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
   assert.equal(child.status, 0, child.stderr);
 });
+
+test('A5 real legacy publisher persists an accepted snapshot without a C6.5 body', () => {
+  const root = new URL('../../', import.meta.url).href;
+  const code = `import assert from 'node:assert/strict'; import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+    import {createHash} from 'node:crypto';
+    const {projectModule}=await import(${JSON.stringify(root + 'server/docservice/modules/project.mjs')});
+    const {createFileStore}=await import(${JSON.stringify(root + 'server/docservice/store/index.mjs')});
+    const {createProjectClient}=await import(${JSON.stringify(root + 'server/render-node/project-client.mjs')});
+    const {resolvePublishVersion}=await import(${JSON.stringify(root + 'server/queue-publish.mjs')});
+    const {renderProject}=await import(${JSON.stringify(root + 'server/render-project.mjs')});
+    const {readFixtureProject}=await import(${JSON.stringify(judgeEntry)});
+    const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pc-c10-accepted-'));
+    let mod, listeners=new Set(), replies=[];
+    const ctx={now:()=>Date.now(),send:(_id,m)=>{replies.push(m);for(const f of [...listeners])f(m);return true;},
+      subscribe(){},unsubscribe(){},publish(){},log(){},pendingBytes:()=>0};
+    function restart(){if(mod)mod.disconnect(ctx,'publisher');mod=projectModule({store:createFileStore({dir,log(){}})});mod.connect(ctx,'publisher',{userId:'publisher'});}
+    const ep={onMessage:f=>{listeners.add(f);return()=>listeners.delete(f);},send:m=>{queueMicrotask(()=>mod.handle(ctx,'publisher',m));return true;}};
+    const client=createProjectClient(ep);
+    try {
+      restart();
+      const empty=await readFixtureProject(ep,'project','empty');assert.equal(empty.project,null);assert.equal(empty.reason,'unpublished');
+      const project={id:'project',duration:11.26,media:[],tracks:[{id:'track',clips:[{id:'target',cardId:'cpu',start:11,end:11.26,params:{seed:4}}]}]};
+      const rendered=renderProject(project), text=JSON.stringify(rendered);
+      const published=await resolvePublishVersion({projects:client,projectId:'project',text,rawText:JSON.stringify(project)});
+      assert.equal(published.via,'announce');
+      const found=await readFixtureProject(ep,'project','accepted');
+      assert.equal(found.via,'accepted-snapshot');assert.deepEqual(found.project,rendered);assert.equal(found.rev,published.projectRev);assert.equal(found.digest,published.digest);
+      const head=replies.find(m=>m.reqId==='accepted');assert.equal(head.hasBody,false);assert.equal(head.project,null);
+      restart();const recovered=await readFixtureProject(ep,'project','restart');assert.deepEqual(recovered,found);
+      const nextText=JSON.stringify({...project,duration:12}), digest=createHash('sha256').update(nextText).digest('hex');
+      await client.announce('project',digest);
+      const pending=await readFixtureProject(ep,'project','pending');assert.equal(pending.project,null);assert.equal(pending.reason,'snapshot-missing');assert.equal(pending.rev,found.rev+1);
+      await client.putSnapshot('project',pending.rev,digest,nextText);
+      assert.equal((await readFixtureProject(ep,'project','next')).project.duration,12);
+      console.log(JSON.stringify({realPublisher:true,fileStoreReload:true,metadataNotBody:true,acceptedFullSnapshot:true,missingIsNotReady:true,listener:false}));
+    } finally {mod?.disconnect(ctx,'publisher');fs.rmSync(dir,{recursive:true,force:true});}`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr);
+});
+
+test('A5 snapshot fallback rejects foreign revisions, corrupt chunks and obsolete current heads', () => {
+  const code = `import assert from 'node:assert/strict'; import {createHash} from 'node:crypto';
+    import {readFixtureProject} from ${JSON.stringify(judgeEntry)};
+    const project={id:'doc',tracks:[]},text=JSON.stringify(project),digest=createHash('sha256').update(text).digest('hex');
+    const head={type:'project.state',projectId:'doc',rev:2,digest,hasBody:false,project:null};
+    const pieces=[{type:'project.snapshot.part',projectId:'doc',projectRev:2,index:0,count:2,data:text.slice(0,8)},
+      {type:'project.snapshot.part',projectId:'doc',projectRev:2,index:1,count:2,data:text.slice(8)},
+      {type:'project.snapshot.end',projectId:'doc',projectRev:2,digest}];
+    async function read(parts=pieces,verify=head){let handler,off=0;const sent=[];
+      const ep={onMessage:f=>{handler=f;return()=>off++;},send:m=>{sent.push(m.type);assert.ok(['project.open','project.snapshot.get'].includes(m.type));
+        if(m.type==='project.snapshot.get')assert.equal(m.projectRev,2);
+        const frames=m.type==='project.snapshot.get'?parts:m.reqId.endsWith(':verify')?[verify]:[head];
+        queueMicrotask(()=>frames.forEach(f=>handler({...f,reqId:m.reqId})));return true;}};
+      try{return await readFixtureProject(ep,'doc','snapshot',1000);}finally{assert.equal(off,1);}}
+    assert.deepEqual((await read()).project,project);
+    assert.equal((await read(pieces,{...head,rev:3})).reason,'head-changed');
+    assert.equal((await read(pieces,{...head,digest:'0'.repeat(64)})).project,null);
+    await assert.rejects(read([{...pieces[0],projectRev:1},...pieces.slice(1)]),/version-mismatch/);
+    await assert.rejects(read([{...pieces[0],projectId:'other'},...pieces.slice(1)]),/version-mismatch/);
+    await assert.rejects(read([pieces[0],pieces[2]]),/parts-missing/);
+    await assert.rejects(read([pieces[1],pieces[0],pieces[2]]),/parts-invalid/);
+    await assert.rejects(read([{...pieces[0],data:'corrupt'},pieces[1],pieces[2]]),/digest-mismatch/);
+    await assert.rejects(read([pieces[0],pieces[1],{...pieces[2],digest:'0'.repeat(64)}]),/digest-mismatch/);
+    console.log(JSON.stringify({currentHeadRechecked:true,wrongRevisionRejected:true,foreignProjectRejected:true,missingRejected:true,orderRejected:true,badDigestRejected:true}));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr);
+});

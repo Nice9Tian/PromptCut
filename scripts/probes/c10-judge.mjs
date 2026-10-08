@@ -49,14 +49,23 @@ export function editHeavyFixtureClip(spec, store = globalThis.__pcStore, catalog
     start: saved.start, duration: saved.end - saved.start, projectDuration: project.duration, end: saved.end };
 }
 
-/** Read the doc's actual project, including chunked replies, and check its digest.
- * This is evidence collection only; it never sends a project mutation. */
+/** Read a C6.5 body or the exact current C6.3 server-accepted full snapshot.
+ * Metadata alone is not a project. Recheck the head after snapshot assembly so
+ * an older accepted snapshot cannot stand in for the current revision.
+ * This collector never announces, uploads, or mutates a project. */
 export function readFixtureProject(endpoint, projectId, reqId, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
-    let head, finished = false, off;
+    let head, finished = false, off, phase = 'body', activeReq = reqId, snapshot;
     const parts = new Map();
     const finish = (error, value) => { if (finished) return; finished = true; clearTimeout(timer); if (typeof off === 'function') off(); error ? reject(error) : resolve(value); };
     const timer = setTimeout(() => finish(new Error('A5:fixture-project-read-timeout')), timeoutMs);
+    const send = (type, suffix, fields = {}) => {
+      activeReq = `${reqId}${suffix}`;
+      if (!endpoint.send({ type, projectId, reqId: activeReq, ...fields })) throw new Error('A5:fixture-project-read-not-sent');
+    };
+    const metadata = reason => finish(null, { project: null, rev: head.rev, digest: head.digest, via: 'metadata', reason });
+    const validHead = m => m.projectId === projectId && Number.isSafeInteger(m.rev) && m.rev >= 0 &&
+      (m.rev === 0 ? m.digest === null : /^[a-f0-9]{64}$/.test(m.digest));
     const complete = (text, end) => {
       if (!head || !Number.isSafeInteger(head.rev) || head.rev < 0 || head.projectId !== projectId ||
           (end && (end.rev !== head.rev || end.digest !== head.digest)) ||
@@ -64,12 +73,44 @@ export function readFixtureProject(endpoint, projectId, reqId, timeoutMs = 20000
       finish(null, { project: JSON.parse(text), rev: head.rev, digest: head.digest });
     };
     off = endpoint.onMessage(m => {
-      if (finished || m?.reqId !== reqId) return;
+      if (finished || m?.reqId !== activeReq) return;
       try {
         if (m.type === 'error') throw new Error('A5:fixture-project-read-rejected');
+        if (phase === 'verify') {
+          if (m.type !== 'project.state' || !validHead(m)) throw new Error('A5:fixture-project-head-invalid');
+          if (m.rev !== head.rev || m.digest !== head.digest) return metadata('head-changed');
+          return finish(null, { project: snapshot, rev: head.rev, digest: head.digest, via: 'accepted-snapshot' });
+        }
+        if (phase === 'snapshot') {
+          if (m.projectId !== projectId || m.projectRev !== head.rev) throw new Error('A5:fixture-snapshot-version-mismatch');
+          if (m.type === 'project.snapshot.part') {
+            if (m.missing === true) return metadata('snapshot-missing');
+            if (!Number.isSafeInteger(m.count) || m.count < 1 || !Number.isSafeInteger(m.index) ||
+                m.index !== parts.size || m.index >= m.count || typeof m.data !== 'string' ||
+                (head.parts !== undefined && head.parts !== m.count)) throw new Error('A5:fixture-project-parts-invalid');
+            head.parts = m.count;
+            parts.set(m.index, m.data);
+          } else if (m.type === 'project.snapshot.end') {
+            if (!head.parts || parts.size !== head.parts) throw new Error('A5:fixture-project-parts-missing');
+            const text = Array.from({ length: head.parts }, (_, i) => parts.get(i)).join('');
+            if (m.digest !== head.digest || createHash('sha256').update(text).digest('hex') !== head.digest)
+              throw new Error('A5:fixture-project-digest-mismatch');
+            snapshot = JSON.parse(text);
+            if (!snapshot || snapshot.id !== projectId) throw new Error('A5:fixture-snapshot-project-mismatch');
+            phase = 'verify';
+            send('project.open', ':verify');
+          } else throw new Error('A5:fixture-snapshot-reply-invalid');
+          return;
+        }
         if (m.type === 'project.state') {
-          head = m;
+          head = { ...m };
           if (m.project) complete(JSON.stringify(m.project));
+          else if (m.hasBody === false && m.project === null && m.parts === undefined) {
+            if (!validHead(m)) throw new Error('A5:fixture-project-head-invalid');
+            if (m.rev === 0) return metadata('unpublished');
+            phase = 'snapshot';
+            send('project.snapshot.get', ':snapshot', { projectRev: head.rev });
+          }
           else if (!Number.isSafeInteger(m.parts) || m.parts < 1) throw new Error('A5:fixture-project-missing');
         } else if (m.type === 'project.state.part') {
           if (!head || m.projectId !== projectId || m.rev !== head.rev || m.count !== head.parts ||
