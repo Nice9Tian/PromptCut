@@ -92,7 +92,9 @@
  *     或者查询串 `?t=<票据>`。查询串只认 `r: 'r'` 的票据,写入一律不认查询串;
  *   - 没票据、签名不对、过期、代数不符回 401 `{ ok: false, error: "unauthorized" }`;写入用了只读票据回 403
  *     `{ ok: false, error: "forbidden" }`。每个请求都重新核对,包括同一段播放里的每个 Range 请求。
- * - 票据不限定哈希:持某个项目的有效票据,就能读这台服务上任何已知哈希的内容(契约〔裁〕)。
+ * - 旧LAN/v1历史机制的票据不限定哈希，可读该服务已知内容；仅描述下文旧模式。
+ *   账号v2云模式传入projectStores/projectAccess后由doc权威逐次核项目归属，
+ *   只能读本项目独立库中的已知哈希；知道其它项目hash不能越权。本包不改旧LAN语义。
  * - 票据由文档服务签发;核对用同一进程里的凭证存储(`server/auth/asset-tickets.mjs`),缺省按
  *   `<root>/out/docservice/auth` 取进程内单例。**集群令牌不再用于素材服务**(C5 的「非本机写入凭集群令牌」退役)。
  * - 带查询串票据的响应加 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`。

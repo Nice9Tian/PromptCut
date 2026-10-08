@@ -99,3 +99,13 @@
 - 新project-io为独占模块。媒体upload/adopt/pull finalize、tier发布和frame init/segment/save接同一guarded publish；原本地调用保留既有atomic/目录行为。frame项目cache与caller分离，新manifest未接受不覆盖已接受cache。
 - target合跑-1共28项27过/1失败5416.6129ms，原因是本包旧单测假设release同步unsubscribe；按新合同改为await release后保留原false断言。-2 28/28、1226.9154ms；最后补tier/segment等实际同helper后-3 28/28、3001.9382ms，TMP/promptcut-asset-close-target-{1,2,3}.log。close-type-{1,2}均零错，最新完整块固定后仍需一次type/npm；不盲重跑旧full。
 - 三次apply_patch因同一文件hunk非升序而找不到前段，均未落部分修改；拆成升序/精确片段后修正。不算测试，不归咎产品。所有尝试如实留工具记录。
+
+## 目录耐久复核与本轮证据边界
+
+- 固定cf49240a期间没有修改源码：close-type-3零错；close-probe-1为26/26（TMP/pc-asset-project-close-final/result.json）；close-full-1为4960总、4959通过、0失败、1既有跳过，98823.2154ms，退出0。cf的意图仅文件sync，没有父目录fsync，前段“持久意图”在cf上只证明正常进程/重启恢复，不能作为Linux崩溃完整证明。根指出这条实际缺口后再修，未冒用cf全量作后续源码证据。
+- 〔裁〕补最小目录耐久顺序：temp和备份文件sync；新建项目/分片目录连同祖先目录sync；marker内容sync且父目录sync先于target rename；rename后目录sync；最后权限fence成功再移marker开放读口，父目录sync完成才能正常收口。故障时先耐久回退目标再清marker；清marker后的目录sync故障保留已经开放的接受目标并failClose拒complete ACK，不能再回滚已开放内容。替代仅文件sync/仅最深目录sync均不能保证文件名和新目录在Linux崩溃后存在；验证尺子为真实文件syscall加可注入目录故障的严格顺序断言。
+- 接受权限fence和对读口可见是相邻但不同点：fence以后移marker才开放，移marker后的目录sync是耐久完成点；撤销不会回滚已接受内容，ACK仍等待实际IO及耐久完成。索引是可重建查找辅助，读口仍核实际文件和marker，索引残留不能开放不存在或未接受目标；本包不提供数据库/文件跨介质原子事务。
+- Windows的Node目录句柄不支持这里所需fsync，projectDirectoryDurability明确返回unsupported；不捕获Linux目录sync错误冒称成功，不把Windows顺序seam当Linux真实目录syscall。portable server/test/asset-project-publication-durability.test.mjs仅标准库，可在固定源码Linux临时目录用node --test运行；没有本叶节点操作或安装依赖。正常重启/故障seam不等价于物理掉电，后者仍未做。
+- durability-target-1为27总/19过/8失败，2290.6459ms（TMP/promptcut-asset-durability-target-1.log）：Windows只读文件句柄sync返回EPERM，尚未走到目录同步；改为本次拥有temp/backup的r+文件句柄。target-2为27/27、988.2186ms。两轮命令误写不存在的asset-project-isolation.test.mjs，未包含真实stores测试；最终target-3明确列全6份真实test：34总/33过/0失败/1跳过，1080.0894ms。跳过仅Windows未请求symlink权限，Linux同文件会真实执行；原日志全部保留，没有降低原断言。
+- recoverProjectPublications遇任何symlink即拒，不跟随；坏JSON/路径或backup尚未存在时同样failclosed并保留marker。恢复中已经还原backup、但marker未清即崩溃再次遇缺backup也会failclosed，需可信运维消歧；这是安全停用限制而非“任意崩溃自动恢复完整”。真实缺backup测试确认目标仍不可读，B项目不被触及。成功恢复先目录sync再清marker，杜绝先开放尚未耐久回退的目标。
+- asset-service文首旧“票据可读任何项目”注释限定为旧LAN/v1历史机制；账号v2由doc权威及物理项目库取代，不更改未授权的旧LAN产品语义。类型durability-type-1使用npx --no-install tsc -b --force零错；后续固定本块再跑一次必要完整npm及实际HTTP probe，不盲重跑cf。
