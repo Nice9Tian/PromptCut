@@ -8,6 +8,7 @@ import { createConversationAuthority, claimNextInState, markReadInState, finishI
 import { createRunAuthority } from '../account/run-authority.mjs';
 import { openReadIntents } from '../agent/service/read-intents.mjs';
 import { createAccountRunManager } from '../agent/service/account-runner.mjs';
+import { instanceFixture } from './agent-instance-fixture.mjs';
 
 const projectId = 'sp_' + 'a'.repeat(26), accountId = 'acc_' + 'b'.repeat(24);
 function fixture() {
@@ -15,11 +16,22 @@ function fixture() {
   const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'runner-test' });
   ledger.transaction(state => { state.projects[projectId] = { status: 'active', creatorAccountId: accountId,
     members: { [accountId]: { access: 'rw' } }, bans: {}, hosted: { agent: true } }; });
-  const servicePrincipal = { authenticated: 'temporary-agent-cert' };
+  const verifyServiceInState = (_state, source) => source?.authenticated === 'temporary-agent-cert' &&
+    source?.serviceKid === 'kid-fixture' ? { serviceId: 'agent', serviceKid: 'kid-fixture' } : null;
+  const instances = instanceFixture(ledger, { verifyServiceInState });
+  const agentProcess = instances.boot({ principal: instances.connection({ authenticated: 'temporary-agent-cert', serviceKid: 'kid-fixture' }) });
+  const servicePrincipal = agentProcess.principal;
   const run = createRunAuthority({ ledger, conversationHooks: { claimNextInState, markReadInState, finishInState },
     verifySender: async ref => ({ ...ref, accountEventSeq: 0 }),
-    verifyServiceInState: (_state, source) => source === servicePrincipal ? { serviceId: 'agent', serviceKid: 'kid-fixture' } : null,
+    verifyServiceInState, instanceAuthority: instances.authority,
     synchronize: async () => {} });
+  const invoke = async (operation, input) => {
+    const signed = instances.authorize(agentProcess, operation, input);
+    const forwarded = input.principal ? { ...input, principal: { ...input.principal, servicePrincipal: signed.principal } }
+      : { ...input, servicePrincipal: signed.principal };
+    try { return await run[operation](forwarded); }
+    finally { instances.authority.release(signed.principal.instanceSession); }
+  };
   const principal = { authorizationId: 'valid', projectId, accountId, accountName: 'Alice',
     loginId: 'login-a', credentialId: 'credential-a', loginGeneration: 1 };
   const authority = createConversationAuthority({ ledger, accountAuthority: { authorizePrincipal: async () => principal },
@@ -30,20 +42,20 @@ function fixture() {
   const intents = openReadIntents({ file: path.join(dir, 'intents.sqlite') });
   let lostAck = false;
   const client = {
-    admit: input => run.admit({ ...input, servicePrincipal }),
-    async confirmRead(input) { const result = await run.confirmRead({ ...input, servicePrincipal });
+    admit: input => invoke('admit', input),
+    async confirmRead(input) { const result = await invoke('confirmRead', input);
       if (!lostAck) { lostAck = true; throw new Error('response-lost-after-durable-commit'); } return result; },
-    queryRead: input => run.queryRead({ ...input, servicePrincipal }),
+    queryRead: input => invoke('queryRead', input),
     async checkAccess({ projectId: p, runGrantId, action }) {
-      const runPrincipal = await run.resolveRunPrincipal({ servicePrincipal, projectId: p, runGrantId });
-      return run.checkAccess({ principal: runPrincipal, projectId: p, action });
+      const runPrincipal = await invoke('resolveRunPrincipal', { projectId: p, runGrantId });
+      return invoke('checkAccess', { principal: runPrincipal, projectId: p, action });
     },
-    finish: input => run.finish({ ...input, servicePrincipal }),
+    finish: input => invoke('finish', input),
     pending: async () => ({ conversations: Object.values(ledger.read().conversationsV2?.[projectId] ?? {})
       .filter(c => c.messages.some(m => m.queueState === 'queued')).map(c => ({ projectId, conversationId: c.id, queueRevision: c.queueRevision })) }),
   };
-  return { dir, ledger, authority, run, intents, client,
-    close() { intents.close(); ledger.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, ledger, authority, run, intents, client, agentProcess,
+    close() { instances.close(); intents.close(); ledger.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test('durable complete record + lost read ACK resolves by query before first model/tool', async () => {
@@ -53,7 +65,7 @@ test('durable complete record + lost read ACK resolves by query before first mod
       conversationId: 'conv1', requestId: 'send1', content: 'Do work' });
     let started = 0, model = 0, tool = 0, closed = 0;
     const manager = createAccountRunManager({ runClient: f.client, readIntents: f.intents,
-      serviceKid: 'kid-fixture', instanceId: 'instance-fixture',
+      serviceKid: 'kid-fixture', instanceId: f.agentProcess.registration.instanceId,
       runnerFactory: async ({ grant, record, onModelCall, beforeToolCall }) => {
         assert.equal(record.messageId, sent.messageId);
         assert.equal(record.senderAccountId, accountId);
@@ -82,7 +94,7 @@ test('credential revoked before admit cancels queue; no read intent or runner st
     f.ledger.transaction(state => { state.revokedLogins['login:login-a'] = { seq: 1 }; });
     let starts = 0;
     const manager = createAccountRunManager({ runClient: f.client, readIntents: f.intents,
-      serviceKid: 'kid-fixture', instanceId: 'instance-fixture',
+      serviceKid: 'kid-fixture', instanceId: f.agentProcess.registration.instanceId,
       runnerFactory: async () => { starts++; throw new Error('must not start'); } });
     await manager.wake(projectId, 'conv1');
     assert.equal(starts, 0); assert.equal(f.intents.pending().length, 0);

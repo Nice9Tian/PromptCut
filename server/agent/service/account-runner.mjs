@@ -108,6 +108,9 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     typeof preflight !== 'function' || typeof serviceKid !== 'string' || !serviceKid ||
     typeof instanceId !== 'string' || !instanceId) fail(503, 'account-runner-configuration');
   const waking = new Map(), active = new Map(), closedRuns = new Set(), listeners = new Set();
+  // Same live Agent OS only: unknown doc ACKs keep the exact request/grant until
+  // replay resolves them. A new OS cannot inherit an old instance's grant.
+  const pending = new Map(), retryTimers = new Map(), retryDelay = new Map();
   let closed = false;
   const check = async (grant, action = 'write') => {
     const result = await runClient.checkAccess({ projectId: grant.projectId, runGrantId: grant.runGrantId, action });
@@ -115,14 +118,18 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       !['active', 'retained'].includes(result.runGrant.state)) fail(403, 'run-fenced');
     return result;
   };
-  async function processGrant(grant) {
+  async function processGrant(grant, slot) {
     if (!grant?.message || grant.message.runId !== grant.runId || grant.message.messageId !== grant.messageId ||
       canonicalJson(acceptedMessageRef(grant.message, grant)) !== canonicalJson(grant.messageRef)) fail(503, 'run-record-mismatch');
     const prompt = canonicalReadRecord(grant.message, grant);
     const binding = Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(key => [key, grant[key]]));
     const intent = readIntents.prepare({ requestId: `read:${grant.runGrantId}`, binding, prompt });
     const confirmed = await readIntents.confirm(intent.readIntentId, runClient);
-    if (confirmed.state !== 'confirmed' || confirmed.receipt?.runGrantId !== grant.runGrantId) fail(503, 'read-confirmation-unknown');
+    if (!['confirmed', 'execution-started', 'finished'].includes(confirmed.state) ||
+        confirmed.receipt?.runGrantId !== grant.runGrantId) fail(503, 'read-confirmation-unknown');
+    const local = readIntents.get(intent.readIntentId);
+    if (local.state === 'execution-started') fail(503, 'run-execution-uncertain');
+    if (local.state === 'finished') { slot.grant = null; slot.finish = { ...binding, requestId: `finish:${grant.runGrantId}` }; return; }
     let settle;
     const entry = { grant, runner: null, handle: null, cancelled: false, done: null,
       completion: new Promise(resolve => { settle = resolve; }) };
@@ -138,7 +145,10 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
         entry.done = handle.done;
         await handle.done;
       } });
-      await runClient.finish({ ...binding, requestId: `finish:${grant.runGrantId}` });
+      // No later wake may call runner.start again. The next loop only retries the
+      // deterministic finish request if its response is lost after doc commit.
+      slot.grant = null;
+      slot.finish = { ...binding, requestId: `finish:${grant.runGrantId}` };
     } finally {
       let drained = !entry.handle;
       try { if (entry.handle?.drain) { await entry.handle.drain(); drained = true; } }
@@ -150,28 +160,60 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     }
   }
   const runnerClose = entry => { try { entry.runner?.close(); } catch { /* Witness remains pending. */ } };
+  function scheduleRetry(key, projectId, conversationId) {
+    if (closed || retryTimers.has(key)) return;
+    const delay = retryDelay.get(key) ?? 250;
+    retryDelay.set(key, Math.min(delay * 2, 5_000));
+    const timer = setTimeout(() => {
+      retryTimers.delete(key);
+      if (!closed) void wake(projectId, conversationId).catch(() => {});
+    }, delay);
+    timer.unref?.(); retryTimers.set(key, timer);
+  }
   async function wake(projectId, conversationId) {
     if (closed) fail(503, 'account-runner-closed');
     const key = keyOf(projectId, conversationId);
     if (waking.has(key)) return waking.get(key);
+    if (retryTimers.has(key)) { clearTimeout(retryTimers.get(key)); retryTimers.delete(key); }
+    const slot = pending.get(key) ?? { admitRequestId: null, grant: null, finish: null };
+    pending.set(key, slot);
     const work = (async () => {
       for (;;) {
         if (await preflight({ projectId, conversationId }) !== true) fail(503, 'no-model-key');
-        const admitted = await runClient.admit({ projectId, conversationId, requestId: `wake:${randomUUID()}` });
-        if (admitted?.empty) return;
+        if (slot.finish) {
+          await runClient.finish(slot.finish);
+          slot.finish = null; retryDelay.delete(key);
+          continue;
+        }
+        if (slot.grant) { await processGrant(slot.grant, slot); continue; }
+        slot.admitRequestId ??= `wake:${randomUUID()}`;
+        const admitted = await runClient.admit({ projectId, conversationId, requestId: slot.admitRequestId });
+        slot.admitRequestId = null;
+        if (admitted?.empty) { pending.delete(key); retryDelay.delete(key); return; }
         if (admitted?.retry) continue;
         if (!admitted?.runGrantId || !admitted.message) fail(503, 'run-admit-protocol');
-        await processGrant(admitted);
+        slot.grant = admitted;
       }
     })();
     waking.set(key, work);
-    try { return await work; } finally { waking.delete(key); }
+    try { return await work; }
+    catch (error) {
+      if (error?.status === 503 && error?.code !== 'run-execution-uncertain' &&
+          (slot.admitRequestId || slot.grant || slot.finish)) scheduleRetry(key, projectId, conversationId);
+      throw error;
+    } finally { waking.delete(key); }
   }
   async function resumeQueued() {
-    const pending = await runClient.pending();
-    if (!Array.isArray(pending?.conversations)) fail(503, 'run-pending-protocol');
-    await Promise.all(pending.conversations.map(({ projectId, conversationId }) => wake(projectId, conversationId)));
-    return pending.conversations.length;
+    const listed = await runClient.pending();
+    if (!Array.isArray(listed?.conversations)) fail(503, 'run-pending-protocol');
+    const targets = new Map(listed.conversations.map(({ projectId, conversationId }) =>
+      [keyOf(projectId, conversationId), { projectId, conversationId }]));
+    for (const key of pending.keys()) {
+      const [projectId, conversationId] = key.split('\n');
+      targets.set(key, { projectId, conversationId });
+    }
+    await Promise.all([...targets.values()].map(({ projectId, conversationId }) => wake(projectId, conversationId)));
+    return targets.size;
   }
   async function drainControl(control) {
     if (!control || !Array.isArray(control.operationFences)) fail(400, 'control-invalid');
@@ -194,9 +236,10 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
   }
   return { wake, resumeQueued, drainControl, onRevoke(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     describe: () => ({ accountMode: true, instanceId, activeRuns: active.size, closedRuns: closedRuns.size,
-      readIntents: readIntents.pending().length, runAuthorityMounted: true, at: now() }),
+      readIntents: readIntents.pending().length, pendingAdmissions: pending.size, runAuthorityMounted: true, at: now() }),
     close() { closed = true; for (const entry of active.values()) { entry.cancelled = true; try { entry.handle?.abort(); } catch {} }
-      listeners.clear(); } };
+      for (const timer of retryTimers.values()) clearTimeout(timer);
+      retryTimers.clear(); retryDelay.clear(); pending.clear(); listeners.clear(); } };
 }
 
 /** Public account-v2 service retains doc-owned HTTP ACL and adds the durable consumer. */
