@@ -4,13 +4,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { clipsPlanTaskOf } from '../render-queue/messages.mjs';
 import { createRenderQueue } from '../render-queue/index.mjs';
 import { createRenderHost } from '../render-node/host.mjs';
 import { createLoopback } from './fake-loopback-transport.mjs';
+import { splitPlan } from '../render-node/split.mjs';
+import { cardSnapshotIdentity } from '../card-identity.mjs';
 
 // Exercise the script in its own Node process; server modules do not import scripts.
 const entry = new URL('../../scripts/render-host.mjs', import.meta.url).href;
+const judgeEntry = new URL('../../scripts/probes/c10-judge.mjs', import.meta.url).href;
+function traceOf(frames, view, fixture = null) {
+  const code = `import { createC10Trace, hostDidWork, hostRenderedClip } from ${JSON.stringify(judgeEntry)};
+    let input=''; for await(const part of process.stdin) input+=part;
+    const {frames,view,fixture}=JSON.parse(input), trace=createC10Trace();
+    for(const f of frames) f.boundary ? trace.boundary(f.channel,f.boundary) : trace.observe(f.message,{channel:f.channel,at:0});
+    console.log(JSON.stringify({worked:hostDidWork(view),...trace.snapshot(),fixture:fixture?hostRenderedClip(trace.snapshot(),fixture.events,fixture):null}));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+    input: JSON.stringify({ frames, view, fixture }), encoding: 'utf8', windowsHide: true, timeout: 30000,
+  });
+  assert.equal(child.status, 0, '独立诊断子进程实际退出');
+  return JSON.parse(child.stdout);
+}
 function hostClaimStatusOf(queue, events = [], tasks = null) {
   const code = `import { hostClaimStatusOf } from ${JSON.stringify(entry)};
     let input = ''; for await (const part of process.stdin) input += part;
@@ -81,4 +97,120 @@ test('A5 queue/provider control: a host with idle serial lane claims and splits 
     assert.deepEqual(lb.nonJson(), []);
     assert.ok(lb.log().some(e => e.connId === 'host' && e.dir === 'in' && e.message.type === 'task.claim'));
   } finally { host.shutdown(); lb.flush(); await host.settled(); }
+});
+
+test('A5 real queue counterexample: browser wins every dual fine task while host splits successfully and completion stays false', async t => {
+  const lb = createLoopback(), q = createRenderQueue({ now: () => 1000, send: lb.queueSend, epoch: 'c10-dual' }); lb.attach(q);
+  const frames = [], principal = { userId: 'member', tenantId: 'sp_a' }, browserFp = 'bbbbbbbbbbbbbbbb';
+  const connect = (id, channel) => { const ep = lb.connect(id, principal); ep.onMessage(message => frames.push({ channel, message })); return ep; };
+  const publisher = connect('publisher', 'publisher'); publisher.send({ type: 'publisher.hello', publisherId: 'page' });
+  const observer = connect('observer', 'observer');
+  observer.send({ type: 'node.hello', nodeId: 'observer', profile: 'pc', codeVersions: [], capabilities: {}, maxConcurrent: 1 });
+  observer.send({ type: 'queue.watch', projects: ['sp_a'] });
+  const browser = connect('browser', 'browser');
+  browser.send({ type: 'node.hello', nodeId: 'browser', profile: 'browser', envFingerprint: browserFp, codeVersions: ['v1'], capabilities: {}, maxConcurrent: 8 });
+  browser.send({ type: 'queue.watch', projects: ['sp_a'] });
+  browser.onMessage(message => {
+    if (message.type === 'task.opened' && message.task?.kind === 'snapshot') browser.send({ type: 'task.claim', id: message.task.id, expectVersion: message.task.version });
+    if (message.type === 'task.claimed' && message.task?.kind === 'snapshot') browser.send({ type: 'task.complete', id: message.id, token: message.token, result: { ranges: [message.task.range] } });
+  });
+  publisher.send({ type: 'task.publish', tasks: [plan()] }); lb.flush();
+  const view = queueView(); let renders = 0;
+  const host = createRenderHost({ entries: [{ projectId: 'sp_a' }], codeVersion: 'v1', envFingerprint: view.envFingerprint,
+    capabilities: view.capabilities, now: () => 1000,
+    connect: () => ({ endpoint: connect('host', 'host'), executor: {
+      laneOf: task => ['plan', 'snapshot'].includes(task.kind) ? 'queue' : null, laneBusy: () => 0,
+      async plan() { return { entryKey: 'entry', cardPlan: [{ clipId: 'clip-a', cardId: 'chapter-bar', snapshotKey: 'content-a', contentKey: 'content-a',
+        tier: 'shared', compositing: 'independent', capabilities: { compositing: 'independent', frameMode: 'stateful' },
+        start: 0, end: 4, count: 120, sampling: { firstFrame: 0, fps: { numerator: 30, denominator: 1 }, phase: { numerator: 0, denominator: 1 } } }],
+        weightOf: () => ({ class: 'medium', estMs: null }) }; },
+      async render() { renders++; assert.fail('浏览器已先获得两段，主机不应再执行'); },
+    }, sink: { async has() { return false; }, async put() { assert.fail('主机无细任务不能写产物'); } } }) });
+  try {
+    host.start(); lb.flush(); host.tick(); lb.flush();
+    for (let i = 0; i < 12 && host.nodes()[0].plans !== 1; i++) { await new Promise(resolve => setImmediate(resolve)); lb.flush(); }
+    host.tick(); lb.flush(); await new Promise(resolve => setImmediate(resolve)); lb.flush();
+    const node = host.nodes()[0];
+    t.diagnostic(JSON.stringify({ trace: frames.filter(f => ['error', 'task.claim-rejected', 'task.claimed'].includes(f.message.type)).map(f => ({
+      channel: f.channel, type: f.message.type, reason: f.message.reason, kind: f.message.task?.kind,
+      fingerprint: f.message.task?.requires?.envFingerprint, browserFingerprints: f.message.browserFingerprints })) }));
+    assert.equal(node.claimed, 1); assert.equal(node.plans, 1); assert.equal(node.completed, 0); assert.equal(node.dedup, 0);
+    assert.deepEqual(node.held, []); assert.deepEqual(host.running(), []); assert.equal(renders, 0);
+    const fineDone = frames.filter(f => f.channel === 'publisher' && f.message.type === 'task.done' && f.message.id.startsWith('snapshot:'));
+    const superseded = frames.filter(f => f.channel === 'publisher' && f.message.type === 'task.failed' && f.message.error === 'superseded');
+    assert.equal(fineDone.length, 2); assert.equal(superseded.length, 2);
+    const evidence = traceOf(frames, { nodes: [node] }); assert.equal(evidence.worked, false, '保留旧完成标准，此合法队列结果不能宣称主机实际渲染');
+    assert.equal(evidence.events.filter(e => e.type === 'task.done' && e.derived?.length === 4).length, 1, 'plan 完成 ACK 带原四个派生 ID');
+    assert.equal(evidence.events.filter(e => e.channel === 'host' && e.type === 'task.published' && e.results.length === 4).length, 1);
+    assert.equal(evidence.records.filter(r => r.channel === 'observer' && r.kind === 'snapshot' && r.winner?.fingerprint === browserFp).length, 2);
+    assert.ok(evidence.records.filter(r => r.channel === 'observer' && r.requires.envFingerprint === view.envFingerprint).every(r => r.closed?.state === 'failed'));
+    t.diagnostic(JSON.stringify({ counterexample: 'browser-wins-all', host: { claimed: node.claimed, plans: node.plans, completed: node.completed },
+      browserDone: fineDone.length, hostSuperseded: superseded.length, originalCompletion: evidence.worked, productionRenderer: false }));
+    assert.deepEqual(lb.errors(), []); assert.deepEqual(lb.nonJson(), []);
+  } finally { host.shutdown(); lb.flush(); await host.settled(); publisher.close(); observer.close(); browser.close(); }
+});
+
+test('A5 evidence keeps same-ID generations and connection gaps distinct; unversioned failure cannot label a later close', () => {
+  const task = { ...plan(), version: 1 };
+  const evidence = traceOf([
+    { channel: 'observer', message: { type: 'task.opened', task } },
+    { channel: 'publisher', message: { type: 'task.failed', id: task.id, error: 'superseded' } },
+    { channel: 'observer', message: { type: 'task.closed', id: task.id, state: 'failed' } },
+    { channel: 'observer', message: { type: 'task.opened', task } },
+    { channel: 'observer', message: { type: 'task.closed', id: task.id, state: 'failed' } },
+    { channel: 'observer', boundary: 'new-session' },
+    { channel: 'observer', message: { type: 'queue.snapshot', tasks: [task] } },
+  ], queueView());
+  assert.deepEqual(evidence.records.map(r => r.generation), [1, 2, 3]);
+  assert.equal(evidence.records[0].closed.reason, 'unknown'); assert.equal(evidence.records[1].closed.reason, 'unknown');
+  assert.equal(evidence.records[1].continuous, false); assert.equal(evidence.records[2].completeFromOpen, false);
+  assert.equal(evidence.events.find(e => e.reason === 'superseded').association, 'unversioned-not-correlated');
+});
+
+test('A5 task evidence excludes arbitrary payload, credentials and error text without changing host completion', () => {
+  const secret = 'fixture-value-excluded';
+  const task = { ...plan(), version: 1, input: { password: secret, dual: true }, requires: { token: secret, cardSources: { private: secret } } };
+  const evidence = traceOf([{ channel: 'observer', message: { type: 'task.opened', task, token: secret } },
+    { channel: 'publisher', message: { type: 'task.failed', id: task.id, error: secret } },
+    { channel: 'publisher', message: { type: 'task.done', id: task.id, result: { secret } } }], { nodes: [{ claimed: 2, completed: 1 }] });
+  assert.equal(JSON.stringify(evidence).includes(secret), false); assert.equal(evidence.worked, true);
+  assert.equal(evidence.records[0].requires.cardSourceCount, 1); assert.equal(evidence.records[0].dual, true);
+});
+
+test('A5 evidence requires a complete open/version chain for winner evidence and separates a restarted queue', () => {
+  const task = { ...plan(), version: 1 };
+  const evidence = traceOf([
+    { channel: 'observer', message: { type: 'queue.snapshot', epoch: 'first', tasks: [task] } },
+    { channel: 'observer', message: { type: 'task.taken', epoch: 'first', id: task.id, version: 7 } },
+    { channel: 'observer', message: { type: 'queue.snapshot', epoch: 'restart', tasks: [task] } },
+  ], queueView());
+  assert.equal(evidence.records.length, 2); assert.ok(evidence.records.every(r => r.winner === null && r.completeFromOpen === false));
+  assert.equal(evidence.records[0].continuous, false);
+  assert.equal(evidence.events.filter(e => e.type === 'boundary' && e.reason === 'queue-epoch').length, 1);
+});
+
+test('A5 canvas fixture follows audited capabilities and genuine snapshot duration identity; exact completion excludes dedup and other clips', () => {
+  const capabilities = JSON.parse(fs.readFileSync(new URL('../../src/cards/capabilities.json', import.meta.url), 'utf8'))['r6-canvas'];
+  assert.equal(capabilities.canvasHeavy, true); assert.equal(capabilities.compositing, 'independent');
+  const node = { cardId: 'r6-canvas', params: {} }, identity = duration => cardSnapshotIdentity(node, { duration, fps: { numerator: 30, denominator: 1 } });
+  assert.notEqual(identity(1.01), identity(1.02), '真实片段时长改变共享内容身份，不靠伪参数或clip ID');
+  const control = { clipId: 'new-canvas', cardId: 'r6-canvas', contentKey: identity(1.01), snapshotKey: identity(1.01),
+    tier: 'shared', compositing: capabilities.compositing, capabilities, start: 11, end: 12.01, count: 31 };
+  const tasks = splitPlan({ planTask: plan(), entryKey: 'entry', cardPlan: [control], browserFingerprints: ['bbbbbbbbbbbbbbbb'],
+    envFingerprint: queueView().envFingerprint, codeVersion: 'v1', weightOf: c => ({ class: c.capabilities.canvasHeavy ? 'heavy' : 'medium', estMs: null }) });
+  assert.equal(tasks.length, 1); assert.equal(tasks[0].input.dual, undefined); assert.equal(tasks[0].requires.envFingerprint, queueView().envFingerprint);
+  const task = { ...tasks[0], state: 'open', version: 1 }, frames = [
+    { channel: 'observer', message: { type: 'task.opened', task } },
+    { channel: 'observer', message: { type: 'task.taken', id: task.id, version: 2 } },
+    { channel: 'observer', message: { type: 'task.closed', id: task.id, state: 'done' } },
+  ];
+  const fixture = { clipId: control.clipId, fingerprint: queueView().envFingerprint, events: [{ event: 'node.completed', id: task.id }],
+    layer: { clipId: control.clipId, envFingerprint: queueView().envFingerprint, resultKey: task.resultKey, ready: 31 } };
+  assert.equal(traceOf(frames, queueView(), fixture).fixture.ready, true);
+  for (const change of [ { clipId: 'different' }, { fingerprint: 'bbbbbbbbbbbbbbbb' },
+    { events: [{ event: 'node.dedup', id: task.id }] }, { events: [{ event: 'node.completed', id: 'different' }] },
+    { events: [...fixture.events, { event: 'node.dedup', id: task.id }] } ]) {
+    assert.equal(traceOf(frames, queueView(), { ...fixture, ...change }).fixture.rendered, false);
+  }
+  assert.equal(traceOf(frames, queueView(), { ...fixture, layer: { ...fixture.layer, resultKey: 'old' } }).fixture.ready, false);
 });
