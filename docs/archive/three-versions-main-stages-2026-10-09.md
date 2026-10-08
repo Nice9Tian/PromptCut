@@ -157,3 +157,7 @@ VisuHive实际表单源码3f95ac07，冻结报告e7af5956。四页共7表单显�
 ## 首次真实Linux进程组关闭取证
 
 固定Astra886cd6b5，脚本SHA4a7f957074cb66da8b0b63d8ed80bd26676adead7f543e1c2ddc3f896b84629e，在systemd249/node24.21真实唯一瞬态unit pc-asset-cgroup-proof-66f1b663560e6a51，专属asset UID995、端口6540；未启动生产publisher/doc接收。wall2283ms/exit1，stop只一次且exit0，负例已观察：268ms父出生消失，但子仍持文件FD/TCP，populated1；2261ms子关闭FD与连接但出生仍在；2273ms两个出生均消失，固定旧eventsFD读ENODEV，没观察到pop0，emptyObservedfalse，不能将未知视为空。最终两个EOF/close真、unitinactive/MainPID0，6540–49清空。生产account274484/doc274497/asset273011/nginx9395前后PID相同且NRestarts0/active。实际失败原文TEMP pc-root-cgroup-os-886cd6b5-once.log，节点/var/tmp/pc-root-cgroup-os-886cd6b5/once-output/result.json；不原码重复跑，交Astra列保留可观察空对象的三级解法，此模块仍不合main。
+
+## 第三轮公网完整用户路径小阶段
+
+真实固定2d2fcd11完整58/58、0失败、completedtrue，probe38116ms/wrapper41.25秒；实际桌面壳两次运行/IPC隔离/DPAPI退出重开/换账号加入与两方fresh网站列表全部通过，原两轮失败仍保留。根已逐张看实际在线创建者列表、加入者列表和native编辑器，三幅安全截图随仓库归档。集成候选074769e5类型0/全量5309项5305通过0失败0取消4跳过70369.6038ms墙70.75秒/native重跑0，两构建0。58项不是模仿原测试回包，online create201/join200/WSS101与project.state精确编号，网站owned/joined编号精确一致；native真实HTTP在Rust进程，不冒称CDP读到它。仅本阶段用户路成立，未声称Agent/用户卡重渲/成员显示或全部附带事件都验过。详细首败/源码/端口/PID/测试记录见[独立公网报告](agent-reports/AGENT-codex-018-account-public-path.md)；公网注册账户及两个项目尚未删，后续按准确清单和备份做。
