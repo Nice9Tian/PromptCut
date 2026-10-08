@@ -26,35 +26,73 @@ export async function authorizeAsset({ authority, principal, projectId, action, 
  * authority.subscribeRevocations(context, async event=>...) 必须同步登记，返回 unsubscribe；服务启动 head 同步由 doc adapter 保证。
  */
 export async function openProjectStream({ authority, principal, projectId, action = 'read', resource, close = () => {} }) {
-  const controller = new AbortController(), tracked = new Set();
-  let released = false, releasePromise, barrierError, closePromise = Promise.resolve();
-  const context = { principal, projectId, action, resource, accountId: principal?.accountId, loginId: principal?.loginId, credentialId: principal?.credentialId };
-  const waitTracked = async () => { while (tracked.size) await Promise.all([...tracked].map(stream => new Promise(resolve => stream.once('close', resolve)))); };
   if (typeof authority?.subscribeRevocations !== 'function') throw assetAccessError('revocation-unavailable', 503);
-  const revoke = event => {
-    if (event?.projectId && event.projectId !== projectId) return;
-    if (event?.accountIds?.length && !event.accountIds.includes(principal?.accountId)) return;
-    if (event?.loginIds?.length && !event.loginIds.includes(principal?.loginId)) return;
-    if (event?.type && !['login-revoked', 'project-access-changed'].includes(event.type)) return;
-    if (event?.reason === 'unban') return;
+  const context = { principal, projectId, action, resource, accountId: principal?.accountId, loginId: principal?.loginId, credentialId: principal?.credentialId };
+  const relevant = event => {
+    if (event?.projectId && event.projectId !== projectId) return false;
+    if (event?.accountIds?.length && !event.accountIds.includes(principal?.accountId)) return false;
+    if (event?.loginIds?.length && !event.loginIds.includes(principal?.loginId)) return false;
+    if (event?.type && !['login-revoked', 'project-access-changed'].includes(event.type)) return false;
+    return event?.reason !== 'unban';
+  };
+  return createAssetResourceLease({ context, check: () => authorizeAsset({ authority, ...context }),
+    subscribe: callback => authority.subscribeRevocations(context, callback), relevant, close,
+    fork: () => openProjectStream({ authority, ...context }) });
+}
+
+/** Generic actual-close ownership only; the supplied check remains the sole
+ * authorization authority. Human leases keep synchronous abort by default.
+ * Run leases may synchronously pause then independently recheck a committed
+ * fence; they never await a consumer lock recursively inside that recheck. */
+export async function createAssetResourceLease({ context = {}, check, subscribe, relevant = () => true,
+  eventPolicy = 'abort', close = () => {}, fork, initialCheck = true } = {}) {
+  if (typeof check !== 'function' || typeof subscribe !== 'function' || typeof relevant !== 'function' ||
+      !['abort', 'recheck'].includes(eventPolicy)) throw assetAccessError('resource-lease-unconfigured', 503);
+  const controller = new AbortController(), tracked = new Set();
+  const flowing = new Set();
+  let released = false, releasePromise, barrierError, closePromise = Promise.resolve(), paused = 0;
+  let rechecks = Promise.resolve();
+  const waitTracked = async () => { while (tracked.size) await Promise.all([...tracked].map(stream => new Promise(resolve => stream.once('close', resolve)))); };
+  const abort = event => {
     if (controller.signal.aborted) return closePromise;
     if (!controller.signal.aborted) controller.abort(assetAccessError(event?.reason ?? 'access-revoked'));
     for (const stream of tracked) stream.destroy?.();
     closePromise = Promise.resolve().then(() => close(event)).then(waitTracked).then(() => { if (barrierError) throw barrierError; return { closed: true }; });
     return closePromise;
   };
-  const unsubscribe = authority.subscribeRevocations(context, revoke);
+  const revoke = event => {
+    if (!relevant(event)) return;
+    if (eventPolicy === 'abort' || event?.reason === 'revocation-unavailable') return abort(event);
+    paused++; // Synchronous read/write barrier, before the first authority await.
+    for (const stream of tracked) { if (stream.readableFlowing === true) flowing.add(stream); stream.pause?.(); }
+    const pending = rechecks.catch(() => {}).then(async () => {
+      try {
+        const result = await check({ revalidating: true });
+        if (result?.allowed !== true || controller.signal.aborted) throw assetAccessError('access-revoked');
+        return { complete: true, retained: true, result };
+      } catch { return { closing: abort(event) }; }
+      finally {
+        paused--;
+        if (!paused && !controller.signal.aborted) { for (const stream of flowing) if (!stream.closed) stream.resume?.(); flowing.clear(); }
+      }
+    });
+    // The decision gate must settle before waiting for tracked operations:
+    // those operations may themselves be waiting in assert() at this gate.
+    rechecks = pending; return pending.then(result => result.closing ?? result);
+  };
+  const unsubscribe = subscribe(revoke);
   const assert = async () => {
     if (released || controller.signal.aborted) throw assetAccessError('access-revoked');
-    await authorizeAsset({ authority, ...context });
+    while (paused) await rechecks;
+    await check();
+    while (paused) await rechecks;
     if (released || controller.signal.aborted) throw assetAccessError('access-revoked');
   };
-  try { await assert(); } catch (error) { released = true; unsubscribe?.(); throw error; }
+  try { if (initialCheck) await assert(); } catch (error) { released = true; unsubscribe?.(); throw error; }
   return {
-    ...context, signal: controller.signal, assert,
+    ...context, signal: controller.signal, assert, revoke,
     failClose(error) { barrierError = error; },
-    check: () => authorizeAsset({ authority, ...context }),
-    fork: () => openProjectStream({ authority, ...context }),
+    check, fork,
     track(stream) { if (!stream.closed) { tracked.add(stream); stream.once?.('close', () => tracked.delete(stream)); } if (controller.signal.aborted || released) { stream.destroy?.(); throw assetAccessError('access-revoked'); } return stream; },
     trackProcess(child) { let closed = false; child.once('close', () => { closed = true; }); this.track({ destroy: () => child.kill('SIGTERM'), once: child.once.bind(child), get closed() { return closed; } }); return child; },
     trackHandle(handle) {
