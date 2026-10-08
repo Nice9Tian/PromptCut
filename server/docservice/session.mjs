@@ -409,6 +409,8 @@ export function createSessionLayer({
       }
       const resumeAllowed = (reason) => {
         if (s.ended) return { ok: false, status: 410, code: SESSION_CLOSE.SESSION_CLOSED, reason: 'session-closed' };
+        if (typeof transport.isUsable === 'function' && !transport.isUsable())
+          return { ok: false, status: 503, code: 1012, reason: 'transport-unavailable' };
         if (typeof reason === 'string') {
           endSession(s, 1012, reason);
           return { ok: false, status: 503, code: 1012, closedCode: 1012, closedReason: reason, reason };

@@ -296,6 +296,9 @@ export function createDocService(options = {}) {
       const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
       if (!ws) return;
       const t = wsTransport(ws);
+      let transportClosed = false;
+      ws.on('close', () => { transportClosed = true; });
+      t.isUsable = () => !transportClosed && !socket.destroyed && socket.writable && !closing;
       const r = await sessions.resume({ sid: item.sid, ack: item.ack, transport: t });
       if (!r.ok) {
         ws.closeNow(r.code, r.reason);
@@ -313,7 +316,10 @@ export function createDocService(options = {}) {
       return rejectUpgrade(socket, error?.status === 503 ? 503 : 401,
         error?.status === 503 ? 'Service Unavailable' : 'Unauthorized');
     }
-    if (closing || socket.destroyed) return rejectUpgrade(socket, 503, 'Service Unavailable');
+    // Authentication can yield to another upgrade. The last check and synchronous open
+    // must share one event-loop turn, otherwise concurrent admissions exceed the cap.
+    if (closing || socket.destroyed || !socket.writable || sessions.size() >= maxConnections)
+      return rejectUpgrade(socket, 503, 'Service Unavailable');
     if (!principal || typeof principal.userId !== 'string') return rejectUpgrade(socket, 401, 'Unauthorized');
     const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
     if (!ws) return;
