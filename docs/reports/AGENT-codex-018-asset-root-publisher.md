@@ -81,3 +81,9 @@ root 可在**独立测试 unit 与专用 UID**执行如下方案（本 Agent 未
 - G 的 exporter HMAC 反查、doc acceptCurrent、生产 OS 部署/实际 UID隔离、旧业务 lease/control 完整 ACK 均不由本工具代替。新 epoch active 也不重放旧外部效果，不给历史 unknown 空 ACK。
 
 当前包无生产部署、没有完整 npm/full或实际 Linux root 运行结论；固定三文件 clean 交根审查及后续独立实证。
+
+## 完成凭据修正：首个真实文件反例
+
+root/Sol 审查指出 617 的原受控 IO 只在 files.set 前注入故障，不能证明 real rename 后 fsync 失败仍 inactive。此前“未成功发布一定非 active”陈述撤回，保留原 27/27 证据范围。
+
+新增真实 TMP counter：实际 file write+fsync+rename 已使 current.state=active 可读；在紧随其后的 directory barrier 注入失败，旧协调器 finally 仍删除 publisher.lock。首次 npm wrapper 28 tests /27 pass/1 fail/0 skip，138.4368 ms，exit1，TEMP/pc-asset-root-publication-red-1.log。错误为断言要求 lock 在场却实际 ENOENT，active 可见断言已过。Windows directory barrier 是受控故障边界，不冒称 Linux syscall/powerloss；文件操作和 CLI均真实。

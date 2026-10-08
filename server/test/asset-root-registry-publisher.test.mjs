@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { digestOf } from '../account/ledger.mjs';
-import { publishAssetRootRegistry, parseProcStat, validatePublisherScope, validatePublisherUnit, runAssetRootPublisher } from '../hosted/deploy/asset-root-registry-publisher.mjs';
+import { publishAssetRootRegistry, parseProcStat, validatePublisherScope, validatePublisherUnit, runAssetRootPublisher,
+  writePublisherArtifact, openPublisherLock } from '../hosted/deploy/asset-root-registry-publisher.mjs';
 
 const scope = { authorityId: 'doc-test', serviceIdentity: 'asset-test', uid: 12001,
   unit: 'promptcut-asset-test.service', cgroupPath: '/sys/fs/cgroup/system.slice/promptcut-asset-test.service',
@@ -171,4 +175,25 @@ test('production entry never accepts Windows/nonroot as OS evidence; CLI rejects
   let output = ''; child.stderr.on('data', chunk => { output += chunk; }); child.stdout.resume();
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   assert.equal(code, 1); assert.match(output, /publisher-cli-invalid/); assert.equal(child.stdout.destroyed, true);
+});
+
+test('real TMP current rename followed by directory fsync failure may expose active, but must retain publisher lock', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-root-publication-red-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const m = model();
+  // Windows cannot prove Linux directory durability. Only this boundary is
+  // controlled; all writes, file fsyncs, rename/link, reads and locks are real.
+  const directoryBarrier = async (_dir, item) => {
+    if (item?.name === 'current.json' && item.value.state === 'active') throw Error('injected-post-rename-dir-fsync');
+  };
+  m.io.lock = () => openPublisherLock(dir, { directoryBarrier });
+  const previousWrite = m.io.write;
+  m.io.write = async (name, value, exclusive) => {
+    await writePublisherArtifact({ dir, name, value, exclusive, directoryBarrier });
+    await previousWrite(name, value, exclusive);
+  };
+  await assert.rejects(m.run('initialize'), /injected-post-rename-dir-fsync/);
+  const visible = JSON.parse(await fs.readFile(path.join(dir, 'current.json'), 'utf8'));
+  assert.equal(visible.state, 'active'); // Regression: "failure implies inactive" is false.
+  assert.equal((await fs.lstat(path.join(dir, '.publisher.lock'))).isFile(), true);
 });

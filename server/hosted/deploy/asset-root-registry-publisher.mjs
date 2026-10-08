@@ -197,12 +197,39 @@ async function atomicWrite(dir, name, value, exclusive = false) {
   await rootDirectory(dir);
   const target = path.join(dir, name);
   if (exclusive && await rootRead(target, true)) fail('publisher-record-exists');
+  await writePublisherArtifact({ dir, name, value, exclusive });
+}
+async function syncDirectory(dir) {
+  const directory = await fs.open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try { await directory.sync(); } finally { await directory.close(); }
+}
+/** Filesystem primitive shared with real-TMP fault tests. Production only
+ * reaches it after Linux/root and owned-directory validation; no CLI injection.
+ * A rejected directory barrier can leave the published target VISIBLE.
+ */
+export async function writePublisherArtifact({ dir, name, value, exclusive = false, directoryBarrier = syncDirectory }) {
+  if (!/^[a-z][a-z0-9.-]*\.json$/.test(name)) fail('publisher-artifact-name');
+  const target = path.join(dir, name);
   const tmp = path.join(dir, `.${name}.${randomUUID()}.tmp`), fd = await fs.open(tmp, 'wx', 0o644);
   try { await fd.writeFile(JSON.stringify(value)); await fd.sync(); } finally { await fd.close(); }
   if (exclusive) { await fs.link(tmp, target); await fs.unlink(tmp); }
   else await fs.rename(tmp, target);
-  const directory = await fs.open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-  try { await directory.sync(); } finally { await directory.close(); }
+  await directoryBarrier(dir, { name, value, exclusive });
+}
+export async function openPublisherLock(dir, { directoryBarrier = syncDirectory } = {}) {
+  const filename = path.join(dir, '.publisher.lock'), fd = await fs.open(filename, 'wx', 0o600);
+  const stat = await fd.stat();
+  try { await fd.writeFile(JSON.stringify({ pid: process.pid })); await fd.sync(); await directoryBarrier(dir); }
+  catch (error) { await fd.close(); throw error; }
+  return async ({ publicationDurable = true } = {}) => {
+    try {
+      if (!publicationDurable) return; // Failed/unknown result retains the exclusion marker.
+      const current = await fs.lstat(filename);
+      if (current.ino !== stat.ino || current.dev !== stat.dev || current.isSymbolicLink()) fail('publisher-lock-changed');
+      await fs.unlink(filename);
+      await directoryBarrier(dir);
+    } finally { await fd.close(); }
+  };
 }
 const exec = args => new Promise((resolve, reject) => execFile('/usr/bin/systemctl', args,
   { windowsHide: true, timeout: 120000, maxBuffer: 65536, encoding: 'utf8' }, (error, stdout) =>
@@ -293,17 +320,7 @@ export async function runAssetRootPublisher({ configFile, mode }) {
     uuid: randomUUID,
     read: name => rootRead(path.join(dir, name), true),
     write: (name, value, exclusive) => atomicWrite(dir, name, value, exclusive),
-    async lock() {
-      const filename = path.join(dir, '.publisher.lock'), fd = await fs.open(filename, 'wx', 0o600);
-      const stat = await fd.stat();
-      try { await fd.writeFile(JSON.stringify({ pid: process.pid })); await fd.sync(); }
-      catch (error) { await fd.close(); throw error; } // Stale lock requires root inspection, never guessed from PID.
-      return async () => { try {
-        const current = await fs.lstat(filename);
-        if (current.ino !== stat.ino || current.dev !== stat.dev || current.isSymbolicLink()) fail('publisher-lock-changed');
-        await fs.unlink(filename);
-      } finally { await fd.close(); } };
-    },
+    lock: () => openPublisherLock(dir),
     async assertInitial() {
       const unit = await unitInfo(scope.unit);
       if (unit.ActiveState !== 'inactive' || Number(unit.MainPID) !== 0) fail('publisher-bootstrap-unit-active');
