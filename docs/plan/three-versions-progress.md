@@ -9,7 +9,7 @@
 - 版本：0.7.18，第一个整合小阶段进行中
 - 最后更新：2026-10-08，用户已分别确认计划定稿、开始实施
 - main：见 `git log`
-- 一句话：集成bf7314e5已收回云端子Agent关闭与工具拆包；根旧政策组合full5173项/5171过/0失败/2跳过。新HTTP组合506首目标177项/173过/3失败/1跳过，故未启动full；旧夹具/同OS丢回执与快照import修复已交，根277类型0与纯目标30/30。80长验收58项52过/5败/1人工留原结果，skill已补验35项、storage诊断过但首败因果未定，C10真实探针仍在跑。WS/LP逐消息修复及独立审查在途；尚未合main/发版/部署新服务
+- 一句话：集成66bf00b9已收回云端子Agent关闭与工具拆包并推送；根旧政策组合full5173项/5171过/0失败/2跳过。新HTTP组合506首目标177项/173过/3失败/1跳过，故未启动full；根277类型0与纯目标30/30，最新修复组合57985002待独立服务目标/full。80长验收58项52过/5败/1人工保留，skill已补验35项、storage诊断过但首败因果未定。3652真实C10自然结束exit1/7失败，新增r6夹具实测轻且未进计划，替换夹具仅纯目标10/10，尚未真实探针。中央074组件38/38，真实完整provider首7506目标3项/2过/1败，拒绝原因待补取；生产runner仍未挂载，不admit/model。尚未合main/发版/部署新服务
 
 ## 已经做了什么
 
@@ -145,12 +145,16 @@
 - 快照固定8d49c1f4：StreamProducer.handle原export-from不能建立模块内绑定，仅本地import加handleStreamRequest。Luna修前真实类反例22/21/1、ReferenceError；修后首轮fixture initId不符合16hex失败22/21/1，修fixture后22/22、117.3873ms，types0/6.764秒。根新277136ea组合包含HTTP/ACK修复、快照和C10诊断，强制types0/6.516秒、frame-stream+C10纯目标30/30、0fail/cancel/skip、823.9508ms，源码干净不变、native重跑0。root实际ready探针及服务目标/full尚未运行，等待C10共享租约自然结束。
 - 根ToolJobs固定5c6722a0精确9文件Git包SHA256 f66496be28ae11a00bdbc7ba3613607508ed12df01924c316370a3d66ddc6a0b：节点TMP、visuhive-account账号实际npm目标11/11、0fail/cancel/skip、474.366492ms（墙钟1.3406秒），含真实POSIX父700/DB600及既有共享父权限不变。nginx9395/账号204715前后相同，无部署。wrapper初次PowerShell引号错误发生在SSH前；原hosted /proc stat按空白拆列给出0不是合法出生证据，补只读正确解析确认PID24163/startTicks6645844存在，仅作测后证据，不补造测前身份。runid pc-tool-jobs-linux-15cd49ca079543559476e9d541f0d02d日志保留；Windows权限skip不作通过，产品工具执行/取消尚未接线。
 - 根旧80源码skill实际单项命令端口5880：exit0、ok:true、35条PASS、fails空、墙钟17秒；已看真实AI栏分组图。storage固定dc51afa4诊断：exit0/ok:true、U1–8及editor菜单入口过、墙钟77.938秒、pageErrors空，根已看菜单截图；仅诊断增加采样，不是产品修复，原80的编辑器菜单首败原因仍未确定。原ready e2 exit1/56.875秒及pretty JSON wrapper提取失败仍保留；空fails不能算通过。
-- C10固定3652b04c根独立type0/6.969秒、纯目标8/8/824.8106ms；full5069项/5047pass/0fail/cancel/22skip、64348.4596ms。该根wrapper遗漏VH provider/order环境造成额外skip，明确不当最终完整基线；下一次有配置的新共同候选覆盖，不同源盲重跑。真实Chromium/独立host探针6320段仍运行，A5 host claimed1/plans1/completed0，未完成不计通过；冻结叶、PID/handle及TMP/pc-root-c10-3652b04c-probe证据保留。
+- C10固定3652b04c根独立type0/6.969秒、纯目标8/8/824.8106ms；full5069项/5047pass/0fail/cancel/22skip、64348.4596ms。该根wrapper遗漏VH provider/order环境造成额外skip，明确不当最终完整基线；下一次有配置的新共同候选覆盖，不同源盲重跑。真实Chromium/独立host探针自然结束：exit1/ok:false/7失败/pending0、墙钟1766秒、native重跑0、源码不变；缺目标计划后又等host完成与新层的7条失败保留。cleanup为本次临时项目shared.admin.ok，最终listening为空、根端口6320～6329亦零监听。TMP/pc-root-c10-3652b04c-probe原输出和截图保留。
+- Astra夹具修复固定0c1ccf2a/报告70458814经根全diff审：真实持久r6片段成本身份136798c2570ddc对应实际L2 build stepMs=0.2，未进最终预渲染清单；canvasHeavy描述载体，不等于页面实测判重。此因果不扩大为旧80首败唯一原因。正常particles400合法参数替换，启动host前必须同身份完整真实成本、生产clipWeight判重、舞台heavy与当前发布清单含目标，前置缺失保存证据并失败；原精确任务/host指纹/non-dedup完成/新层断言保留。owner纯目标10/10、0fail/cancel/skip、1537.3001ms、type0/7.485秒；真实粒子是否判重及host完成未验。根57985002已收此源码与c377，尚未新full或宽探针。
+- Worker c377c248补修finish先于模型preflight：已完成轮ACK丢失期间模型配置暂不可用仍仅续原finishId，后排消息不先admit，模型/工具不重执行。根逐diff与原日志核读，owner正式目标3/3、0fail/cancel/skip、196.495ms；旧cc1/506首失败保留。WS/LP消费者独立叶仍实现中，不能据此把main ready置真。
+- 中央074bbe27已根逐diff审：7aac真实部分POST body反例使合法LP send得到409（应200），日志pc-instance-doc-preauth-7aac-counter.log保留；074使Agent recv/close/send先完整验proof/current再登记请求、占发送位或更新lastSeen，普通LAN路径保持。组件相关目标38/38、0fail/cancel/skip、5537.8528ms，实际关闭证据已核。完整真实mTLS实例/逐帧签名provider首7506目标3项/2pass/1fail、4893.7788ms（墙钟5.255秒）、exit1：WS welcome后project.open回type:error而非project.state，后续selection/write/LP尚未跑到。只加安全type/reason的78c8诊断待一次独占窗口，不猜根因、不降低授权标准。
+- 新独占018-cloud-tool-context叶从277136ea开始，Luna只租可信8字段context/逐调用授权适配器及专用测试/报告。项目、消息、发送者、实例与世代只能来自已确认读的当前doc grant及注册证明；不从模型参数或缓存用户名构造。ToolJobs仅持久账本已验，asset/provider/控制关闭及生产工具接线仍待完成。
 - Astra固定a506454e审查与原session/router纯反例确认M1未await、外围乱序、旧transport回调缺current检查，及worker admit/finish ACK缺恢复；已交owners。中央cc5465a8组件目标2/2、0fail/cancel/skip、2135.1394ms，实际临时WS/LP端口close已核原日志，但cap/auth是受控组件fixture，非完整签名中央通过。独立固定cc546纯反例又证LP超限未验proof即关闭、空batch无proof取ack、旧recv/close跨resume影响新会话，中央按最窄core修；nonce/schema、延迟recv fresh read与同步fence先关仍需完整实际mTLS WS/LP验证。生产runner保持未挂载，不admit/model；OS/cgroup完整关闭回执未齐仍pending。
 
 ## 接下来干什么
 
-1. 保留80长验收和506首目标失败；C10自然结束后先完成根修复共同候选types/服务目标/full、快照真实ready探针。未配置skip、人工项与旧成功不能替代最终候选基线。
+1. 保留80长验收、506首目标失败、3652真实C10失败与7506中央签名首失败；先取中央安全拒绝原因、收冻结修复后完成根新共同候选types/服务目标/full、快照真实ready探针及带真实前置证据的C10。明确配置VH provider/order，未配置skip、人工项与旧成功不能替代最终候选基线。
 2. 调度纯文档已收回并推送，沿用claude/four-stage；不盲合最新main、不打断在途验收。小阶段真正共同基线通过后合入main并推送，进度随提交更新。
 3. 两Sol完成中央与worker的真实mTLS WS/LP逐帧、同实例resume/FIFO/ALS/fence/data消费者；Astra按冻结源码复核反例，再给真实服务目标租约。随后依设计接ToolJobs与剩余工具/UI、实际独立OS/cgroup关闭清单，部署前完整备份恢复；已过fixture不当生产已挂载。
 4. 新调度包先约本地完整查询资格与云端单活跃项目接口，准备真实自定义卡片容量场景；提前让位、故障A/B和删除细节仅记录/草拟，不依据旧常规裁定授权自行选择。原先已授权且不依赖它们的工作继续。
