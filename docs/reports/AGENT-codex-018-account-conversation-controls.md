@@ -40,3 +40,12 @@
 - 回归测试不是源码字符串断言：以真实 deferred promise 模拟同一 conversation 的 A→B→A。保留首红输出：首次 4 项中 3 项通过、1 项失败，ABA 旧 token 被误判 current（`true !== false`）；单调 epoch 修复及 consent-迟到提交用例后，控制测试 6 项通过。测试还检查旧操作不能清除新 request pending，迟到 consent 后 API 提交次数为 0，账号 abort 缺任一编号会拒绝。
 - 浏览器探针补了实际签入页面的可调用操作 `requestAccountVisibility` / `retryAccountStop`，读取真实控件、点击真实按钮并区分 `confirmed`、`pending`、`error`。它不模拟服务端成功；仍需 root 提供的真实签入窗口做角色、private/fence-pending 页面验收和截图。
 - 本补丁验证：`node scripts/test-suite.mjs src/ai/cloud/account-conversation-controls.test.mjs src/ai/cloud/cloud-chat.test.mjs src/ai/cloud/account-queue.test.mjs`（31 项通过，0 失败）、`npx tsc -p tsconfig.json --pretty false`、`node --check scripts/probes/account-conversation-controls-probe.mjs`、`git diff --check`。未启动浏览器、服务或节点；实际账号 fence ACK 仍由独立服务块验收。
+
+
+## Puppeteer 用户路径 CLI 补充（2026-10-09）
+
+- 把先前只暴露页面操作函数的探针扩展为 Puppeteer CLI：`node scripts/probes/account-conversation-controls-probe.mjs --dist <online-dist> --site-root <site-root> --out <os-temp-child>`。脚本启动自有 Puppeteer 浏览器、静态页面和新 fixture，按真实 UI 流程创建两账号会话、由项目成员发送共享对话、项目创建者核对无切换按钮、成员切私有遇 HTTP 503 fence pending 后重试并核同一 request ID；创建者打开私有对话核对可读只读状态。页面只通过 DOM 检查和点击操作，不注入状态或伪造接口响应。
+- 原 cloud queue fixture 的 Agent HTTP 端口固定在 6526，超出本阶段 6620–6639 租用段，所以新增独立 fixture 文件副本 `server/test/fixtures/account-conversation-controls-user-path.mjs`，只将其 Agent 端口配置为调用者传入的 6627，close 后保留失败现场目录供核查；没有修改既有 queue fixture。探针使用 6620–6629，并在 finally 后验证这些端口全部可重新绑定。输出只留安全路径/status/method、重试 request ID 相同的布尔值、截图与检查结果；不写凭证、请求 body 或原始 request ID，并保留已关闭的 Chrome profile 与 fixture 临时目录，供 root 检查真实失败现场；临时数据位于当前用户 temp 下，fixture 在非 Windows 系统使用 0700 权限。
+- 可见性检查现在核对目标元素实际矩形和从元素到根节点的所有祖先样式、`hidden` 与 `aria-hidden`，避免隐藏 panel 内的按钮被误报可见。CLI 的结果分类纯测试覆盖 confirmed/pending/error 三种状态。
+- 代码检查只做 `node --check` 和 `git diff --check`；纯分类测试三种情况通过。本轮没有运行真实 CLI、浏览器或 fixture，也没有运行完整服务；因此尚无页面截图、真实 HTTP 503 或端口关闭实测结果。已有服务代码路径显示私有切换执行 `onFence` 并在 ACK 未完成时返回 `agent-fence-pending`，conversation authority 的 `get` 为创建者私有只读返回标志；这只是源码证据，不替代真实页面验收。
+- root 另审到 `Composer` 的 running 分支始终显示停止按钮，账号成员无权停止别人运行时 `handleStop` 只会静默返回。此为可见权限缺口，和对话 `streaming` 状态无关；本次在 CLI 中没有伪造 running 状态。root 已单独授权窄修 `src/editor/right/chat/Composer.tsx`，后续以独立提交修正并验证按钮的权限说明，同时保留真实运行态待 executor 验收。
