@@ -72,3 +72,31 @@ test('instance revoked during asynchronous credential verification cannot commit
   assert.equal(control.instances[0].instanceId, f.agentProcess.registration.instanceId);
   assert.equal(f.ledger.read().agentInstancesV2[control.instances[0].instanceId].closure, null);
 });
+
+test('idle registered instance still requires closure inventory; its unassigned queue can be admitted by another instance', async t => {
+  const f = await fixture(t); f.enqueue();
+  const control = f.provider.fenceInstance({ ...f.agentProcess.registration, requestId: 'idle-stop', reason: 'shutdown' });
+  assert.deepEqual(control.revoked, []); assert.deepEqual(control.operationFences, []);
+  assert.equal(control.instances.length, 1); assert.equal(control.instances[0].instanceGeneration, f.agentProcess.registration.instanceGeneration);
+  assert.equal(control.instances[0].instanceId, f.agentProcess.registration.instanceId); assert.equal(control.state, 'pending');
+  assert.equal(f.ledger.read().agentInstancesV2[control.instances[0].instanceId].closure, null);
+  const next = f.instances.boot();
+  const grant = await call(f, next, 'admit', { projectId, conversationId, requestId: 'new-instance-admit' });
+  assert.equal(grant.instanceId, next.registration.instanceId); assert.equal(grant.messageId, 'message1');
+});
+
+test('multiple assigned grants yield one exact instance inventory entry and all corresponding operation fences', async t => {
+  const f = await fixture(t); f.enqueue();
+  f.ledger.transaction(s => {
+    const other = structuredClone(s.conversationsV2[projectId][conversationId]); other.id = 'second';
+    other.messages[0].messageId = 'second-message'; other.messages[0].requestId = 'second-send';
+    s.conversationsV2[projectId].second = other;
+  });
+  const first = await f.admit(), second = await f.provider.admit({ servicePrincipal: f.agentProcess.principal,
+    projectId, conversationId: 'second', requestId: 'second-admit' });
+  const control = f.provider.fenceInstance({ ...f.agentProcess.registration, requestId: 'all-stop', reason: 'shutdown' });
+  assert.equal(control.instances.length, 1); assert.equal(control.instances[0].instanceId, first.instanceId);
+  assert.deepEqual(new Set(control.revoked), new Set([first.runGrantId, second.runGrantId]));
+  assert.deepEqual(new Set(control.operationFences[0].runIds), new Set([first.runId, second.runId]));
+  assert.equal(control.state, 'pending');
+});
