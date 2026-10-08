@@ -36,3 +36,79 @@ export function judgeDualClip({ groups, candidates = [], layerFp = null }) {
   if (!layerFp || !names.includes(layerFp)) reasons.push('层表这一层没有指向其中一组');
   return { ok: reasons.length === 0, winner: full.length === 1 ? full[0] : null, fullySuperseded, takenOverMidway, badRanges, reasons };
 }
+
+/** Current describe wins over history. A vanished task is not evidence of success:
+ * require both the publisher's explicit superseded reason and the watcher's latest
+ * failed event. Reopening clears that terminal event in the probe. */
+export function observedSuperseded({ current, closed, publisher, history }) {
+  if (current) return current.state === 'failed' && current.lastError === 'superseded';
+  return publisher?.type === 'task.failed' && publisher.error === 'superseded'
+    && closed?.state === 'failed' && history?.state === 'failed'
+    && history.completeFirstGeneration === true && typeof history.epoch === 'string'
+    && publisher.epoch === history.epoch;
+}
+
+/** Missing records can use history only when the entire first publication was
+ * observed on one uninterrupted stream. Versions reset to 1 after recreation;
+ * neither a snapshot nor a repeated version proves that this is the same task. */
+export function createTaskObservationHistory() {
+  const records = new Map();
+  let continuous = true, epoch = null, seq = 0;
+  const invalidate = () => { continuous = false; };
+  const record = (id, type, state, version, isOpen) => {
+    let item = records.get(id);
+    if (!item) {
+      item = { generation: type === 'task.opened' ? 1 : null, firstType: type, state: null, gap: false, timeline: [] };
+      records.set(id, item);
+    } else if (isOpen && ['failed', 'done', 'removed', 'hidden'].includes(item.state)) {
+      item.generation = item.generation === null ? null : item.generation + 1;
+    } else if (type === 'task.taken' && ['failed', 'done', 'removed', 'hidden'].includes(item.state)) {
+      item.gap = true; // a reopen was not observed
+    }
+    if (state === 'hidden') item.gap = true;
+    item.state = state;
+    item.timeline.push({ seq, type, state, version: version ?? null });
+    if (item.timeline.length > 16) item.timeline.shift();
+  };
+  return {
+    invalidate,
+    note(message) {
+      seq++;
+      if (typeof message.epoch === 'string') {
+        if (epoch !== null && epoch !== message.epoch) invalidate();
+        epoch = message.epoch;
+      }
+      if (message.type === 'queue.snapshot') {
+        for (const task of message.tasks ?? []) record(task.id, message.type, task.state ?? 'open', task.version, true);
+      } else if (message.type === 'task.opened' && message.task?.id) {
+        record(message.task.id, message.type, 'open', message.task.version, true);
+      } else if (message.id && message.type === 'task.closed') {
+        record(message.id, message.type, message.state, message.version, false);
+      } else if (message.id && message.type === 'task.taken') {
+        record(message.id, message.type, 'claimed', message.version, false);
+      }
+    },
+    proof(id) {
+      const item = records.get(id);
+      return item ? { ...item, timeline: item.timeline.map(e => ({ ...e })), continuous, epoch,
+        completeFirstGeneration: continuous && !item.gap && item.firstType === 'task.opened' && item.generation === 1 } : null;
+    },
+  };
+}
+
+/** Observe the page's actual chosen layers, preserving the first (possibly stale)
+ * sample. The existing A4 deadline bounds this wait; no elapsed time implies pass. */
+export async function observeLayerEnvironments(read, { clips, fingerprint, timeoutMs, pollMs = 250,
+  now = () => performance.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  const started = now();
+  const pick = value => (value?.layers ?? []).map(l => ({ clip: l.clipId, fp: l.envFingerprint, ready: l.ready }));
+  const matches = layers => !!fingerprint && clips.every(c => layers.find(l => l.clip === c)?.fp === fingerprint);
+  const first = pick(await read());
+  let layers = first, samples = 1;
+  while (!matches(layers) && now() - started < timeoutMs) {
+    await sleep(Math.min(pollMs, Math.max(0, timeoutMs - (now() - started))));
+    layers = pick(await read());
+    samples++;
+  }
+  return { ok: matches(layers), first, layers, samples, waitedMs: now() - started };
+}

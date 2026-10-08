@@ -57,7 +57,7 @@ import { argsOf, sayer, newRunId, lastJsonLine, fingerprintOf } from './m8/lib.m
 import { roleKv, resolveRun } from './m8/kv.mjs';
 import { startCoord, startQueueEditor, viteBin, killTree, until, claimPorts, portFree } from './m8/procs.mjs';
 import { ASSUMPTIONS, readNodeDiag, readStageBakeDiag, releaseCauseOf } from './m7-node-adapter.mjs';
-import { judgeDualClip } from './m7-judge.mjs';
+import { judgeDualClip, observedSuperseded, observeLayerEnvironments, createTaskObservationHistory } from './m7-judge.mjs';
 import { createTimings, TIMINGS_PREFIX } from './probe-timings.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
@@ -664,8 +664,11 @@ async function startWatcher({ url, projectId, cred, run, log }) {
   const bodies = new Map();
   const closed = new Map();
   const events = [];
+  const history = createTaskObservationHistory();
+  conn.ep.onClose(() => history.invalidate());
   conn.ep.onMessage((m) => {
-    const put = (t) => { if (t?.id) bodies.set(t.id, t); };
+    history.note(m);
+    const put = (t) => { if (t?.id) { bodies.set(t.id, t); closed.delete(t.id); } };
     if (m?.type === 'queue.snapshot') for (const t of m.tasks ?? []) put(t);
     else if (m?.type === 'task.opened') put(m.task);
     if (m?.type === 'task.closed') closed.set(m.id, { state: m.state, reason: m.reason ?? null, at: Date.now() });
@@ -678,7 +681,7 @@ async function startWatcher({ url, projectId, cred, run, log }) {
   };
   const first = await reg();
   conn.ep.onOpen(() => { reg().catch(() => {}); });
-  return { conn, bodies, closed, events, first, close: () => conn.close() };
+  return { conn, bodies, closed, events, history, first, close: () => conn.close() };
 }
 
 /* ================================================================== creator */
@@ -1192,24 +1195,37 @@ function planOnlyState(ctx) {
  * 每张卡恰好有一份被作废（先认领的是谁都行：宿主全开时 pc 先得卡也合契约），被作废那份的全部段都是 superseded；
  * 层表 v3 这一层两个候选（pc、页面）都在。
  */
-async function judgeDualOnPage(ctx) {
+async function judgeDualOnPage(ctx, pageEvidence) {
   const { book, god, watcher } = ctx;
   const lm = await contentGet(ctx.aConn, `layers:${ctx.projectId}`);
   const pageFp = ctx.pageNode?.envFingerprint ?? null;
-  const sup = (t) => god.tasks.get(t.id)?.state === 'failed' && (god.remote || /superseded/.test(String(god.tasks.get(t.id)?.lastError)));
+  god.poll();
+  const current = god.remote ? null : new Map(ctx.site.queues().list.flatMap(q => q.tasks ?? []).map(t => [t.id, t]));
+  const publisherEvents = new Map((pageEvidence?.taskEvents ?? []).map(e => [e.id, e]));
+  const disposition = t => {
+    const live = current?.get(t.id);
+    const closed = watcher.closed.get(t.id);
+    const history = watcher.history.proof(t.id), publisher = publisherEvents.get(t.id);
+    const superseded = observedSuperseded({ current: live, closed, publisher, history });
+    return { id: t.id, sampledState: god.tasks.get(t.id)?.state ?? null,
+      currentState: live?.state ?? null, currentError: live?.lastError ?? null,
+      watcherClosed: closed?.state ?? null, publisher: publisher ?? null, history, superseded };
+  };
   const perClip = {};
   for (const clip of ['h1', 'h2', 'h3']) {
     const ts = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
     const copies = { pc: ts.filter((t) => t.requires?.envFingerprint === ctx.pcFp), page: ts.filter((t) => t.requires?.envFingerprint === pageFp) };
     const layer = lm?.layers?.find((l) => l.clipId === clip);
     const nameOf = (fp) => (fp === ctx.pcFp ? 'pc' : fp === pageFp ? 'page' : fp);
-    const groups = Object.fromEntries(Object.entries(copies).map(([k, list]) => [k, list.map((t) => ({ range: `${t.range?.from}-${t.range?.to}`, live: !sup(t) }))]));
+    const evidence = Object.fromEntries(Object.entries(copies).map(([k, list]) => [k, list.map(disposition)]));
+    const groups = Object.fromEntries(Object.entries(copies).map(([k, list]) => [k, list.map((t, i) => ({ range: `${t.range?.from}-${t.range?.to}`, live: !evidence[k][i].superseded }))]));
     const v = judgeDualClip({ groups, candidates: (layer?.candidates ?? []).map((c) => nameOf(c.envFingerprint)), layerFp: layer?.envFingerprint ? nameOf(layer.envFingerprint) : null });
     perClip[clip] = {
       pc: copies.pc.length, page: copies.page.length,
       allDual: ts.length > 0 && ts.every((t) => t.input?.dual === true), // 只记不判（旁观节点手里可能是旧正文）
       pageHasBake: copies.page.length > 0 && copies.page.every((t) => t.input?.compositing === 'independent' && t.input?.bake),
       ...v,
+      evidence,
       candidates: (layer?.candidates ?? []).map((c) => nameOf(c.envFingerprint)),
     };
   }
@@ -1323,7 +1339,7 @@ async function pageServerSide(ctx) {
   book.judge('M7-A9', 'server-every-frame-has-px', smallRows.length > 0 && smallRows.every((r) => r.small === r.frames && r.pxAll), smallRows);
 
   /* ---- D1-D2-D12：A4 之后、A10 之前判（见 judgeDualOnPage） */
-  await judgeDualOnPage(ctx);
+  await judgeDualOnPage(ctx, a4);
 
   /* ---- A10：宿主全开时谁先谁得卡；浏览器认领后关页、锁闲置 > 30 s、有人发布计划 → pc 接手整张卡 */
   if (flag('--no-a10')) { book.pending('M7-A10', 'server', '--no-a10'); return; }
@@ -1420,6 +1436,7 @@ async function tapPage(page, name) {
   await cdp.send('Network.enable');
   const conns = new Map();
   const frames = [];
+  let frameSequence = 0;
   const sidRole = new Map();
   const secrets = new Set();
   const leaks = [];
@@ -1468,7 +1485,9 @@ async function tapPage(page, name) {
     const keep = /^(node\.|queue\.|task\.|error$|auth\.ticket$|publisher\.)/.test(m.type ?? '');
     if (!keep) return;
     const slim = { at: Date.now(), dir, conn: requestId, type: m.type, id: m.id ?? m.task?.id ?? null, reqId: m.reqId ?? null };
+    if (m.type === 'task.failed' || m.type === 'task.done') Object.assign(slim, { epoch: m.epoch ?? null, version: m.version ?? null });
     if (m.reason !== undefined) slim.reason = m.reason;
+    if (m.type === 'task.failed') slim.error = m.error;
     if (m.state !== undefined) slim.state = m.state;
     if (m.type === 'node.hello') Object.assign(slim, { profile: m.profile, nodeId: m.nodeId, hasEnvironment: !!m.environment, maxConcurrent: m.maxConcurrent, codeVersions: m.codeVersions });
     if (m.type === 'node.welcome') Object.assign(slim, { envFingerprint: m.envFingerprint ?? null, nodeId: m.nodeId ?? null });
@@ -1479,6 +1498,7 @@ async function tapPage(page, name) {
     if (m.type === 'task.claimed' && m.task) slim.task = { priority: m.task.priority, clipId: m.task.input?.clipId ?? null, fp: m.task.requires?.envFingerprint ?? null, resultKey: m.task.resultKey, range: m.task.range, weight: m.task.weight?.class ?? null, attempts: m.task.attempts ?? null };
     if (m.type === 'task.complete' && m.result) slim.result = { resultKey: m.result.resultKey, range: m.result.range, frames: m.result.frames?.length ?? null, small: m.result.small?.length ?? null, dedup: m.result.dedup ?? null };
     if (m.type === 'auth.ticket') Object.assign(slim, { kind: m.kind, role: m.role ?? null, owner: m.owner?.kind ?? null, access: m.access ?? null });
+    slim.seq = ++frameSequence;
     frames.push(slim);
     if (frames.length > 200_000) frames.shift();
   };
@@ -1517,6 +1537,8 @@ async function tapPage(page, name) {
     renderConns, assetHttp,
     sent: (type, since = 0) => frames.filter((f) => f.dir === 'sent' && f.type === type && f.at >= since),
     recv: (type, since = 0) => frames.filter((f) => f.dir === 'recv' && f.type === type && f.at >= since),
+    taskTerminals: () => frames.filter(f => f.dir === 'recv' && (f.type === 'task.failed' || f.type === 'task.done'))
+      .map(f => ({ id: f.id, type: f.type, error: f.error ?? null, epoch: f.epoch, version: f.version, seq: f.seq })),
     /** 页面当了节点：发过 node.hello 且收到 node.welcome */
     nodeState() {
       const h = frames.find((f) => f.dir === 'sent' && f.type === 'node.hello');
@@ -1807,10 +1829,13 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, playCheck })
   say('a4.timing', { bakeMs: a4.diag?.counts?.bakeMs ?? null, stageMs: a4.diag?.counts?.stageMs ?? null, assetHttp: a4.assetHttp, ticketReqs: a4.ticketReqs, phases: a4.phases, uploadMs: a4.uploadMs });
   book.judge('M7-A4', 'page-anchors-done', heavy.every((c) => done[c]?.length) && (l2 ?? 0) > 0, a4);
   book.recorded('M7-A4', 'page-within-30s', '遮罩撤下到最慢的锚帧段做完', a4.worstSinceGateMs, '≤ 30 秒');
-  const od = await onlineDiag(page);
-  book.judge('M7-A4', 'page-layer-env-browser', heavy.every((c) => od?.layers?.find((l) => l.clipId === c)?.envFingerprint === pageFp), (od?.layers ?? []).map((l) => ({ clip: l.clipId, fp: l.envFingerprint, ready: l.ready })));
+  const layerObservation = await observeLayerEnvironments(() => onlineDiag(page), {
+    clips: heavy, fingerprint: pageFp, timeoutMs: Math.max(0, b1.gateLiftAt + 600_000 - Date.now()),
+  });
+  book.judge('M7-A4', 'page-layer-env-browser', layerObservation.ok, layerObservation);
   await kv.signal('a4.page', { done: Object.fromEntries(Object.entries(done).map(([k, v]) => [k, v.length])), worstSinceGateMs: a4.worstSinceGateMs,
-    completedIds: tap.sent('task.complete').map((f) => f.id) });
+    completedIds: tap.sent('task.complete').map((f) => f.id),
+    taskEvents: tap.taskTerminals() });
 
   // A12：生成快照期间主文档长任务 0（从遮罩撤下到三张卡的锚帧段做完）
   const bakeLong = await longTasks(page, b1.gateLiftAt);
