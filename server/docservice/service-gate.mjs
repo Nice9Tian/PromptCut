@@ -101,11 +101,14 @@ export function serviceGate(principal, type, msg) {
     return null;
   }
   const allow = Object.hasOwn(SERVICE_ALLOW, principal.service) ? SERVICE_ALLOW[principal.service] : null;
-  if (!allow || !allow.includes(type)) return 'forbidden';
+  const accountAgent = principal.realm === 'account' && principal.identityVersion === 2 && principal.service === 'agent';
+  if (!allow || (!allow.includes(type) && !(accountAgent && type === 'selection.query'))) return 'forbidden';
   if (principal.service === 'agent') {
     // 代成员的连接必须是成员身份；只读的不能改项目
     if (principal.scope !== 'member') return 'forbidden';
-    if (principal.access !== 'rw' && AGENT_WRITE_TYPES.includes(type)) return 'forbidden';
+    // v2 writes must pass the live run provider in the assembly gate. A cached
+    // page access field cannot revoke a retained run or authorize a new one.
+    if (!accountAgent && principal.access !== 'rw' && AGENT_WRITE_TYPES.includes(type)) return 'forbidden';
     // 内容库只许卡片源码这一类（预渲染清单、事件详情、别的类别都碰不到）
     if (type.startsWith('content.') && !AGENT_CONTENT_KINDS.includes(msg?.kind)) return 'forbidden';
     // 票据只许素材票据（连接票据、委托都要不到：Agent 不能给自己换角色、续命）；读写票据要成员本人有读写权限

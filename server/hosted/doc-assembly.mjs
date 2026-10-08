@@ -41,8 +41,16 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
   try { history = openOperationHistory(path.join(dataDir, 'operation-history-v2.sqlite')); }
   catch (error) { transport.close(); throw error; }
   const coordinators = new Map(), selections = new Map();
-  let closed = false, closing = null;
+  let closed = false, closing = null, tenantResolver = null;
   const requireOpen = () => { if (closed) throw historyError('doc-assembly-unavailable', 503); };
+  const ensureTenant = space => {
+    requireOpen();
+    if (!isProjectId(space)) throw historyError('projection-unavailable', 503);
+    if (!coordinators.has(space)) tenantResolver?.(space);
+    const coordinator = coordinators.get(space);
+    if (!coordinator) throw historyError('projection-unavailable', 503);
+    return coordinator;
+  };
   const trustedRuns = {
     async checkAccess(input) {
       requireOpen();
@@ -52,12 +60,31 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
     async authorizeQuery(input) {
       requireOpen();
       if (typeof runProvider?.authorizeQuery !== 'function') throw historyError('run-authority-unavailable', 503);
-      return runProvider.authorizeQuery(input);
+      const result = await runProvider.authorizeQuery(input);
+      // Query reads the same recovered projection as project.open; an accepted
+      // operation not materialized before a crash cannot leave selections on an old rev.
+      await ensureTenant(input.projectId).read(input.projectId, input.principal, () => undefined, 'read');
+      return result;
     },
   };
   return {
     history,
     runProvider: trustedRuns,
+    bindTenantResolver(resolve) {
+      requireOpen();
+      if (tenantResolver || typeof resolve !== 'function') throw historyError('projection-unavailable', 503);
+      tenantResolver = resolve;
+    },
+    async captureSnapshot({ principal, projectId, selectionInput } = {}) {
+      if (!selectionInput || Object.keys(selectionInput).length !== 1 ||
+        typeof selectionInput.pageId !== 'string' || principal?.projectId !== projectId)
+        throw historyError('invalid-authority-claim', 400);
+      ensureTenant(projectId);
+      const selection = selections.get(projectId);
+      if (!selection) throw historyError('selection-unavailable', 503);
+      return selection.captureSnapshot({ principal: { ...principal, tenantId: projectId },
+        projectId, pageId: selectionInput.pageId });
+    },
     coordinatorForSpace({ space, store, directory }) {
       requireOpen();
       if (!isProjectId(space)) return undefined; // local/LAN v1 keeps its existing path.
@@ -81,9 +108,7 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
     },
     async fence(value) {
       requireOpen();
-      const coordinator = coordinators.get(value?.projectId);
-      if (!coordinator) throw historyError('projection-unavailable', 503);
-      return coordinator.fence(value);
+      return ensureTenant(value?.projectId).fence(value);
     },
     async close() {
       if (closing) return closing;

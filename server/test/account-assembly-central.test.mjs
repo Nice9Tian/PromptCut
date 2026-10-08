@@ -125,10 +125,18 @@ test('actual provider/order → central doc → independent asset → two pages:
   assert.equal(readonly.status, 200, JSON.stringify(readonly.body)); await b.closed;
   const readonlySession = await session(1); b = await connect(readonlySession.connectionTicket);
   assert.equal((await received(b, { type: 'selection.set', projectId, pageId: 'page-b', revision: 1, selection: { clipIds: [] }, reqId: 'select' })).type, 'selection.ok');
+  const pagePrincipal = await combo.accountRuntime.resolveAgentDelegation(readonlySession.agentDelegationTicket);
+  const captured = await combo.docAssembly.captureSnapshot({ principal: pagePrincipal, projectId, selectionInput: { pageId: 'page-b' } });
+  assert.deepEqual(captured.selection, { clipIds: [] }); assert.equal(captured.accountId, ids[1]);
+  await assert.rejects(combo.docAssembly.captureSnapshot({ principal: pagePrincipal, projectId,
+    selectionInput: { pageId: 'page-b', selection: { clipIds: ['forged'] } } }), /invalid-authority-claim/);
   assert.equal((await received(b, { type: 'selection.set', projectId, pageId: 'page-b', revision: 2, selection: { clipIds: [] }, username: 'forged', reqId: 'name' })).reason, 'invalid-authority-claim');
   assert.equal((await received(b, { type: 'project.op', projectId, opId: 'readonly-op', ops: [{ op: 'set', path: '/title', value: 'bad' }], reqId: 'readonly-op' })).reason, 'not-listed');
   assert.equal(combo.docAssembly.history.accepted(projectId).length, 1);
-  await closePages(); await combo.close(); combo = await startHostedCombo(config);
+  await closePages();
+  await assert.rejects(combo.docAssembly.captureSnapshot({ principal: pagePrincipal, projectId,
+    selectionInput: { pageId: 'page-b' } }), /selection-page-unavailable/);
+  await combo.close(); combo = await startHostedCombo(config);
   a = await connect((await session(0)).connectionTicket);
   const recovered = await received(a, { type: 'project.open', projectId, reqId: 'reopen' });
   assert.equal(recovered.rev, 2); assert.equal(recovered.project.title, 'after');
