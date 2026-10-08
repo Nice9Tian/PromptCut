@@ -9,7 +9,7 @@
 - 版本：0.7.18，第一个整合小阶段进行中
 - 最后更新：2026-10-08，用户已分别确认计划定稿、开始实施
 - main：见 `git log`
-- 一句话：三项接线已按 --no-ff 收回集成b7647627；根隔离联合候选80b5e658类型及定向68/68、完整npm5089/5087/0/2通过。原首轮失败、根反例和有因修正证据保留；账号联合718fc180真实Linux67/67，operation另真实Linux45过/1Windows专属跳过。后续中央doc装配、对话ACL/FIFO和可信已读run授权继续，尚未合入main/发版/部署新服务
+- 一句话：固定联合80b5e658已过根类型、定向68/68、完整npm5089/5087/0/2；根整套渲染/探针后台在跑，桌面壳首轮37/36/1/0保留。中央doc与对话/run新包继续组合，根独立发现跨对话control编号冲突及短access凭证到期误取消有效队列，修正和消息专属核验正在进行；尚未合入main/发版/部署新服务
 
 ## 已经做了什么
 
@@ -93,6 +93,12 @@
 
 - 三个已收回实现叶（018-asset-wiring/018-operation-wiring/018-project-selections）及render-scheduling-doc-sync叶和本机分支已正常清理，未用force。根预核clean/ancestor/zero reparse/zero process references；三个实现叶生成的ignored data/auth身份与tsbuildinfo先移到TMP/pc-retired-second-stage-evidence-8b7a0f68bf1c463d863c9f958080ea1a，内容未打印，retirement.json与Git提交保留。新三个在途叶、根80验证叶、既有用户工作区及生产数据/备份不动。
 - 下一授权接口审查：Agent关闭再开启不能复活旧grant，现authority事件缺service/enabled且listener可能略过空accountIds；中央Sol获窄租同ledger事务runHooks/fenceInState与不可变事件字段，Astra提供run权威接口，不双改文件。旧接线通过不替此边界通过。〔裁·三级最小收敛，拟实施〕可信read独立验证完整持久消息record及sender/currentRun/snapshot/附件关联，不要求doc重构模型system/history/tools全部上下文；Agent先从持久record读全并装入runner、fsync readIntent，再取doc持久ACK后才首次model/tool，最终model input digest另作审计。替代为doc复写模型prompt编译器，会额外复制职责且不能可靠推断Agent私有上下文；用户已定的已读消息例外不变，未标新用户批准，真实instance接线尚未完成。
+
+- 中央页接线固定bc6e5a42/324ca429定向2/2，authority同事务撤销hook03ee7fd1定向1/1；缺expectedAccessRevision的首次fixture失败保留。hook错误/thenable整事务回滚，agent关闭事件永久带service/enabled、空accountIds也通知；没有真实资源receipt仍pending。根在中央clean叶no-ff组合对话b25e5de8为eba60f05；capture快照e662aaf7定向5/5仅用服务端在线页与精确四身份，callback数组逐control处理。尚未宣称完整Agent执行挂载。
+- Agent对话候选b25e5de8/报告9ba4d8b8：根逐源核对权限/FIFO/50上限、专用mTLS、HTTP/SSE；读原始日志确认首且唯一full5095/5093通过/0fail/cancel/2skip、66071.662ms，native重跑0。该包消息只持久queued，fixture中的selection/run/close ACK不当生产证据，runner/附件/诊断/用量/UI仍需接。
+- 根固定ce444052独立反例TMP/pc-root-run-scope-ce444052.mjs/.log、exit1：不同对话合法复用同requestId，第二次切私有因run-request-mismatch409回滚为shared。Astra scoped controlId修正08335387目标40/40，原full5128/5126/0/2与修正后full5129/5127/0/2分别保留（71245.252/75318.156ms，无native重跑）；含真实19个exit73且close的崩溃切点，但生产service身份/runner仍待实际挂载。根尚待对最终源码复验原反例，不将子包绿代替独立核验。
+- 排队资格另发现短access TTL错接：Astra真实VH SQLite反例TMP/promptcut-run-authority-ttl-counterexample.log、exit1，发送后120001ms普通token已过期、login仍有效，原verifyActorRef却使queued取消。Luna已交严格普通actor-ref mTLS接口4f598506/报告99e31311，定向11/11、full68/65/0/3 Windows权限跳过；该接口本身不能用于长期已接受消息资格，批准独立accepted-message用途核验增量，不放宽普通token/order鉴权。新接口与真实actor/run联验进行中。
+- 根固定80b5e658新整套后台验收（TMP/pc-root-baseline-80b5e658-20261008，session89976，进程37696）：已有同源类型/full不重复，新增G0网页/在线构建、桌面壳、全部G0-R与探针类别共58项；main参考固定e0e3afc3，dev5900/5903、清单端口平移210，保留参考叶供安全清理。两构建已过；桌面壳37条36过/1失败/0skip，PowerShell补丁检查子进程缺Get-FileHash，根诊断中，首轮不记通过。其余仍在跑，未完成和人工不计通过。
 
 ## 接下来干什么
 
@@ -203,9 +209,9 @@
 | 模型 | 工作 | 工作区 / 分支 | 状态 |
 |---|---|---|---|
 | Sol | 中央doc挂载operation/history、全员selection与真实run接口 | .worktrees/018-cloud-doc-assembly / codex/018-cloud-doc-assembly | 起点80b5e658；5770～5779；先约真实callback/装配，原asset叶已验收冻结 |
-| Sol | 对话ACL/FIFO、当前权限读取及发送者/快照持久化 | .worktrees/018-agent-access-v2 / codex/018-agent-access-v2 | 起点80b5e658；5790～5799；先交doc schema与run接口，删除细节未批准不自行确定 |
+| Sol | 对话ACL/FIFO、当前权限读取及发送者/快照持久化 | .worktrees/018-agent-access-v2 / codex/018-agent-access-v2 | 已交b25e5de8/报告9ba4d8b8；原full5095/5093/0/2，根审查/组合中；暂无新实施任务，删除细节仍未批准 |
 | Astra | doc可信read/currentRun/runGrant与退出/切私有竞态 | .worktrees/018-run-authority / codex/018-run-authority | 起点80b5e658；5730～5739；先约同ledger事务，旧operation已验收冻结 |
-| Luna | 账号备份每日runner/unit与POSIX测试补导入 | VisuHive .worktrees/018-account-backup-timer / codex/018-account-backup-timer | 已交7306bfe5并由root独立Linux67/67；当前无实施任务，未启动节点timer |
+| Luna | 账号内部持久actor-ref与已接受消息专属核验 | VisuHive .worktrees/018-actor-ref-endpoint / codex/018-actor-ref-endpoint | 起点718fc180；5780～5789；普通verify-actor已交4f598506，accepted-message增量应对真实120秒TTL反例，不改普通order鉴权/不部署 |
 
 ## 没做到的与原因
 
