@@ -190,3 +190,25 @@ wall2283ms，okfalse，negativeObserved=true，emptyObserved=false。244ms旧FD�
 如果真实OS实验通过，后续publisher与G必须另约显式schema：保留serviceCgroup及service unitInvocation；新增closureScope的sliceUnit/sliceInvocationId/cgroup{path,bootId,dev,ino}并绑定同epoch、authority和真实包含关系。所有root启停仍走同一互斥锁，只有真实旧scope空且证据耐久后才能预留/启动下一代。现v1 exact schema不能静默把serviceCgroup改成slice路径，更不能仅把本方案说明或服务已inactive当witness。现有跨boot不支持、marker+无锁接受协议保持，生产run-assets继续失败关闭。
 
 本轮只有报告更新和官方资料只读，无本地listener、npm/type/full、systemd或节点执行；886脚本及publisher源码均未改。实际slice可观测性、publisher互斥交叉、TLS/G checkpoint与自然掉电仍未证明。
+
+## 获准的独占slice实验源码（Linux尚未运行）
+
+root随后精确扩租同一个OS smoke文件和本报告，未允许改publisher/G。解法表选择第4行：g=2（现探针加真实slice生命周期与双identity）、h=1（仍需目标VM一次真实FD实验）、f=3；第5行g=4/h=3/f=7，保留后备。其余三行已剪，无开放二级候选；关闭判据未改变。
+
+固定源码 `b9d802dc4de9214d3e177c98339f8afd735f1269`，脚本当前文件SHA256 `394a2aa7a2a7726da142fcd760b9c5fdb27ebc7404fc146c0774a5198b41fb23`。仅修改 `scripts/probes/asset-root-cgroup-os-probe.mjs`。首红886与原publisher继续保留，不能使用新scope实验倒写旧叶FD为通过。
+
+v249语法已核：systemd-run只有`--slice`，没有`--slice-property`；[run.c](https://raw.githubusercontent.com/systemd/systemd/v249/src/run/run.c)把它写成service的Slice属性。显式创建slice使用现有系统D-Bus `StartTransientUnit`，签名`ssa(sv)a(sa(sv))`，properties仅Description与StopWhenUnneeded=false，aux为空；[dbus-manager.c](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/dbus-manager.c)定义此签名，[dbus-unit.c](https://raw.githubusercontent.com/systemd/systemd/v249/src/core/dbus-unit.c)支持该bool属性。无新unit文件、daemon-reload、Delegate权限或系统安全配置。
+
+新版重要边界：
+
+- 新slice为`pcassetproof<16hex>.slice`，新service仍`pc-asset-cgroup-proof-<samehex>.service`；两者先not-found。slice启动后核真实ACTIVE/Transient/StopWhenUnneeded=no/InvocationID/ControlGroup。slice无ExecContext，因此User必须空或不存在；其身份依据是root通过system manager创建的精确随机unit/description/invocation与cgroup对象，不假造User=root。实际服务与父子/proc四UID仍严格核dedicated asset UID。
+- 启动服务前固定slice目录及eventsFD，记录boot/dev/ino，真实初始inventory只有scope且pop0。服务运行后真实inventory必须恰好scope+唯一service目录，PID恰好实际父子，pop1；root observer不得在scope下。初始pop0不会设置最终emptyObserved。
+- 结果`closureScope`保存sliceUnit/invocation/boot/真实cgroup{path,dev,ino}；`before.service`另存实际serviceUnit/invocation/uid/boot/自身cgroup，`before.main/child`存真实pid/startTicks/uid/归属。不再把原before.cgroup单字段混称服务叶与祖先。
+- 与886同样只stop一次自有service，保留main退出而child仍持FD/TCP且scope pop1的真实负例。固定原slice FD观察最终pop0，原父子birthgone、真实EOF/close、serviceinactive/MainPID0且slice仍ACTIVE、同InvocationID/dev/ino才能通过。ENODEV/ENOENT仍失败，没有以路径重开替代。
+- 清理前再次读scope原FD空、完整inventory空、旧birth消失；在scope仍ACTIVE时，`closure-result.json`先真实file fsync与directory fsync。随后再次核同scope/空才stop自身slice；最终`result.json`也耐久写，记录sliceCleanup实际结果。closure-result是释放前证据，不等于整个probe通过；最终CLI与result.json还要求slice stop成功/实际inactive和654x无监听。
+- 任何证据写入失败、scope归属不明、旧FD异常、意外进程/子组或预算耗尽，不stop未知scope，记录`probe-slice-retained`及随机名称/路径等metadata供root处理。不会为了清干净而杀未知PID/停止其它unit。强制关闭本观察器socket不计入真实EOF成功断言，成功断言在强制清理前已经采集。
+- 工作预算仍20秒、总界限30秒，service TimeoutStopSec=5秒。所有systemctl/busctl调用有剩余预算；超界失败。父/子2秒延迟仍只用于负例，未加完成宽限。
+
+本机最终验证（固定b9源码）：node --check exit0；--help exit0；Windows正常入口 exit1=`probe-linux-root-required`；非法--force exit1=`probe-cli-invalid`，git diff --check通过。原始TEMP `pc-asset-root-cgroup-slice-{syntax,help,platform,invalid}-1.log`（初版）与`-2.log`（b9最终）均保留；第二轮有因是最后补足失败结果输出和部分启动清理空值保护后的固定源码验证。没有本地业务listener、npm guard/目标/full/type或任何Linux运行。
+
+Root单次执行命令不变，必须新out路径、真实专属用户和本节固定脚本hash：`node <fixed-script> --user <actual-asset-user> --out <new-unique-directory>`。需同时保留stdout、closure-result.json（若已到达）和result.json；首轮886 result不得覆盖。只有root下一次真实实验通过后，才讨论publisher/G显式双scope接口；当前生产run-assets仍503，此实验不证明TLS、业务资源ACK或跨进程完整部署。
