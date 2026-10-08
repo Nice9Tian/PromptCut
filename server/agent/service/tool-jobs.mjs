@@ -190,10 +190,20 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS tool_jobs_idempotency ON tool_jobs (
-      project_id, conversation_id, run_id, grant_id, instance_id, instance_generation, kind, request_key
-    );
   `);
+  db.exec('BEGIN IMMEDIATE;');
+  try {
+    db.exec('DROP INDEX IF EXISTS tool_jobs_idempotency;');
+    db.exec(`CREATE UNIQUE INDEX tool_jobs_idempotency ON tool_jobs (
+      project_id, conversation_id, run_id, grant_id, instance_id, instance_generation,
+      sender_account_id, message_id, kind, request_key
+    );`);
+    db.exec('COMMIT;');
+  } catch (error) {
+    db.exec('ROLLBACK;');
+    db.close();
+    throw error;
+  }
   db.exec('BEGIN IMMEDIATE;');
   try {
     const at = Number(now());
@@ -276,10 +286,10 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
       const requestKey = createHash('sha256').update(requestId).digest('hex');
       return enqueue(() => authorizedWrite(context, (fenceRevision) => {
         const key = [context.projectId, context.conversationId, context.runId, context.runGrantId,
-          context.instanceId, context.instanceGeneration, kind, requestKey];
+          context.instanceId, context.instanceGeneration, context.senderAccountId, context.messageId, kind, requestKey];
         const existing = db.prepare(`SELECT job_id, state, input_digest FROM tool_jobs WHERE
           project_id=? AND conversation_id=? AND run_id=? AND grant_id=? AND instance_id=? AND
-          instance_generation=? AND kind=? AND request_key=?`).get(...key);
+          instance_generation=? AND sender_account_id=? AND message_id=? AND kind=? AND request_key=?`).get(...key);
         if (existing) {
           if (existing.input_digest !== inputDigest) fail('idempotency-conflict');
           return { jobId: existing.job_id, state: existing.state };

@@ -82,7 +82,7 @@ test('POSIX database and parent-directory permissions stay private without chang
   assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
 });
 
-test('start is idempotent only for the exact run, grant, instance, kind, request and digest', async (t) => {
+test('start is idempotent only for the exact immutable context, kind, request and digest', async (t) => {
   const f = fixture(t);
   const jobs = f.open();
   t.after(() => jobs.close());
@@ -94,6 +94,14 @@ test('start is idempotent only for the exact run, grant, instance, kind, request
   await assert.rejects(jobs.start(ctx, 'image.search', digest('different body'), 'request_12345678'), code('idempotency-conflict'));
   assert.notEqual((await jobs.start(context({ runId: 'run-2', runGrantId: 'grant-2' }), 'image.search', digest('same body'), 'request_12345678')).jobId, first.jobId);
   assert.notEqual((await jobs.start(context({ instanceId: 'instance-2' }), 'image.search', digest('same body'), 'request_12345678')).jobId, first.jobId);
+  const differentSender = context({ senderAccountId: 'account-2' });
+  const senderBound = await jobs.start(differentSender, 'image.search', digest('same body'), 'request_12345678');
+  assert.notEqual(senderBound.jobId, first.jobId);
+  assert.deepEqual(await jobs.start(differentSender, 'image.search', digest('same body'), 'request_12345678'), senderBound);
+  const differentMessage = context({ messageId: 'message-2' });
+  const messageBound = await jobs.start(differentMessage, 'image.search', digest('same body'), 'request_12345678');
+  assert.notEqual(messageBound.jobId, first.jobId);
+  assert.deepEqual(await jobs.start(differentMessage, 'image.search', digest('same body'), 'request_12345678'), messageBound);
   assert.notEqual((await jobs.start(ctx, 'asset.fetch', digest('same body'), 'request_12345678')).jobId, first.jobId);
 });
 
