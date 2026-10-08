@@ -304,3 +304,66 @@ test('A5 particles candidate uses real independent canvas capability and content
   assert.notEqual(cardSnapshotIdentity(node, options), cardSnapshotIdentity(node, { ...options, duration: 3.02 }));
   assert.notEqual(cardSnapshotIdentity(node, options), cardSnapshotIdentity({ ...node, params: { ...node.params, seed: 124 } }, options));
 });
+
+test('A5 synced metadata uses real project-edit action without registering an editor component', () => {
+  const root = new URL('../../', import.meta.url).href;
+  const code = `import assert from 'node:assert/strict';
+    await import(${JSON.stringify(root + 'src/testing/registerTs.mjs')});
+    const { OnlineCardSources } = await import(${JSON.stringify(root + 'src/editor/sync/onlineCardSources.ts')});
+    const { bundleCard } = await import(${JSON.stringify(root + 'src/online/cardRuntime/transpile.ts')});
+    const registry = await import(${JSON.stringify(root + 'src/kernel/registry.ts')});
+    const { clips } = await import(${JSON.stringify(root + 'src/store/actions/clips.ts')});
+    const { projectMeta } = await import(${JSON.stringify(root + 'src/store/actions/projectMeta.ts')});
+    const { state } = await import(${JSON.stringify(root + 'src/store/core.ts')});
+    const { heavyUserCardSource, editHeavyFixtureClip } = await import(${JSON.stringify(judgeEntry)});
+    const cardId='c10-cpu-field-store-test', key='src/cards/user/'+cardId+'.tsx', source=heavyUserCardSource(cardId), link={};
+    let bundles=[];
+    const sync=new OnlineCardSources({linkKey:()=>link, request:async m=>m.type==='content.list'
+      ? {type:'content.listing',items:[{key,hash:'source-hash',rev:1}]}
+      : {type:'content.item',key,hash:'source-hash',rev:1,body:source},
+      bundling:{enabled:()=>true,run:({entries,read})=>Promise.all(entries.map(entry=>bundleCard({runtime:'test',entry,read,hasBuiltin:()=>false}))),onBundles:b=>{bundles=b;}}});
+    try {
+      await sync.sync(); assert.equal(bundles[0].ok,true); assert.ok(registry.syncedCardView(cardId));
+      assert.equal(registry.getCard(cardId),undefined);
+      assert.equal(clips.addClipOnNewTrack({cardId,start:11,duration:.26}),null);
+      assert.equal(clips.addCardClip(cardId,11,{duration:.26}),null);
+      const store={getState:()=>state,actions:{...clips,...projectMeta}};
+      const before=state.project, beforeText=JSON.stringify(before), originalTracks=before.tracks;
+      const spec={cardId,sourceKey:key,clipId:'c-a5-pure',trackId:'t-a5-pure',start:11,duration:.26,params:{},createdAt:10};
+      const result=editHeavyFixtureClip(spec,store,sync.debug());
+      assert.equal(JSON.stringify(before),beforeText); assert.notEqual(state.project,before);
+      assert.equal(state.project.tracks.length,originalTracks.length+1);
+      assert.ok(originalTracks.every((track,i)=>state.project.tracks[i+1]===track));
+      assert.equal(result.cardId,cardId); assert.equal(result.params.seed,1);
+      assert.ok(Math.abs(result.duration-.26)<1e-9); assert.equal(state.project.duration>=result.end,true);
+      assert.equal(registry.getCard(cardId),undefined,'不能借假Component注册绕编辑页隔离');
+      assert.throws(()=>editHeavyFixtureClip(spec,store,sync.debug()),/fixture-id-conflict/);
+      assert.throws(()=>editHeavyFixtureClip({...spec,clipId:'other',sourceKey:'different'},store,sync.debug()),/fixture-source-metadata-missing/);
+      console.log(JSON.stringify({originalActionNull:true,normalProjectEdit:true,editorComponentRegistered:false,immutable:true,actualDocCommit:false}));
+    } finally { sync.stop(); }`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(JSON.parse(child.stdout).normalProjectEdit, true);
+});
+
+test('A5 project readback requires actual matching revision/digest and complete chunks', () => {
+  const code = `import assert from 'node:assert/strict'; import {createHash} from 'node:crypto';
+    import {readFixtureProject} from ${JSON.stringify(judgeEntry)};
+    const project={id:'doc',tracks:[]}, text=JSON.stringify(project), digest=createHash('sha256').update(text).digest('hex');
+    const head={type:'project.state',projectId:'doc',rev:3,digest,reqId:'read'};
+    async function read(frames){let handler,off=0;const ep={onMessage:h=>{handler=h;return()=>off++;},send:m=>{
+      assert.deepEqual(m,{type:'project.open',projectId:'doc',reqId:'read'});
+      queueMicrotask(()=>frames.forEach(f=>handler(f)));return true;}};
+      try{return await readFixtureProject(ep,'doc','read',1000);}finally{assert.equal(off,1);}}
+    assert.deepEqual(await read([{...head,project}]),{project,rev:3,digest});
+    const frames=[{...head,parts:2},{type:'project.state.part',projectId:'doc',rev:3,count:2,index:0,data:text.slice(0,8),reqId:'read'},
+      {type:'project.state.part',projectId:'doc',rev:3,count:2,index:1,data:text.slice(8),reqId:'read'},
+      {type:'project.state.end',projectId:'doc',rev:3,digest,reqId:'read'}];
+    assert.deepEqual(await read(frames),{project,rev:3,digest});
+    await assert.rejects(read([{...head,project,digest:'0'.repeat(64)}]),/digest-mismatch/);
+    await assert.rejects(read([frames[0],frames[1],frames[3]]),/parts-missing/);
+    await assert.rejects(read([frames[0],{...frames[1],rev:2},frames[2],frames[3]]),/parts-invalid/);
+    console.log(JSON.stringify({inline:true,chunked:true,badDigestRejected:true,missingPartRejected:true,mixedRevisionRejected:true}));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr);
+});

@@ -27,6 +27,64 @@ export const cpuField: CardDef<{ seed: number }> = {
 `;
 }
 
+/** Browser-serializable normal project editing action. Synced metadata stays
+ * metadata: no Component or capability is installed in the editor registry. */
+export function editHeavyFixtureClip(spec, store = globalThis.__pcStore, catalog = globalThis.__pcCardSources?.()) {
+  const known = catalog?.cards?.find(c => c.id === spec.cardId && c.source === spec.sourceKey);
+  if (!known || !known.defaults || typeof known.defaults !== 'object') throw new Error('A5:fixture-source-metadata-missing');
+  const before = store.getState().project;
+  if (!spec.clipId || !spec.trackId || before.tracks.some(t => t.id === spec.trackId || t.clips.some(c => c.id === spec.clipId)))
+    throw new Error('A5:fixture-id-conflict');
+  const params = { ...known.defaults, ...spec.params }, end = spec.start + spec.duration;
+  if (!Number.isFinite(spec.start) || spec.start < 0 || !Number.isFinite(spec.duration) || spec.duration <= 0)
+    throw new Error('A5:fixture-time-invalid');
+  const clip = { id: spec.clipId, cardId: spec.cardId, start: spec.start, end, params };
+  store.actions.editCardProject(p => ({ ...p, tracks: [
+    { id: spec.trackId, name: 'CPU 纹理', clips: [clip] }, ...p.tracks,
+  ] }));
+  store.actions.setDurationManual(Math.max(before.duration, end));
+  const project = store.getState().project, saved = project.tracks.flatMap(t => t.clips).find(c => c.id === spec.clipId);
+  if (!saved) throw new Error('A5:fixture-edit-not-applied');
+  return { clipId: saved.id, cardId: saved.cardId, params: saved.params, createdAt: spec.createdAt,
+    start: saved.start, duration: saved.end - saved.start, projectDuration: project.duration, end: saved.end };
+}
+
+/** Read the doc's actual project, including chunked replies, and check its digest.
+ * This is evidence collection only; it never sends a project mutation. */
+export function readFixtureProject(endpoint, projectId, reqId, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    let head, finished = false, off;
+    const parts = new Map();
+    const finish = (error, value) => { if (finished) return; finished = true; clearTimeout(timer); if (typeof off === 'function') off(); error ? reject(error) : resolve(value); };
+    const timer = setTimeout(() => finish(new Error('A5:fixture-project-read-timeout')), timeoutMs);
+    const complete = (text, end) => {
+      if (!head || !Number.isSafeInteger(head.rev) || head.rev < 0 || head.projectId !== projectId ||
+          (end && (end.rev !== head.rev || end.digest !== head.digest)) ||
+          createHash('sha256').update(text).digest('hex') !== head.digest) throw new Error('A5:fixture-project-digest-mismatch');
+      finish(null, { project: JSON.parse(text), rev: head.rev, digest: head.digest });
+    };
+    off = endpoint.onMessage(m => {
+      if (finished || m?.reqId !== reqId) return;
+      try {
+        if (m.type === 'error') throw new Error('A5:fixture-project-read-rejected');
+        if (m.type === 'project.state') {
+          head = m;
+          if (m.project) complete(JSON.stringify(m.project));
+          else if (!Number.isSafeInteger(m.parts) || m.parts < 1) throw new Error('A5:fixture-project-missing');
+        } else if (m.type === 'project.state.part') {
+          if (!head || m.projectId !== projectId || m.rev !== head.rev || m.count !== head.parts ||
+              !Number.isSafeInteger(m.index) || m.index < 0 || m.index >= head.parts || typeof m.data !== 'string' ||
+              (parts.has(m.index) && parts.get(m.index) !== m.data)) throw new Error('A5:fixture-project-parts-invalid');
+          parts.set(m.index, m.data);
+        } else if (m.type === 'project.state.end') {
+          if (!head || m.projectId !== projectId || parts.size !== head.parts) throw new Error('A5:fixture-project-parts-missing');
+          complete(Array.from({ length: head.parts }, (_, i) => parts.get(i)).join(''), m);
+        }
+      } catch (error) { finish(error); }
+    });
+    if (!endpoint.send({ type: 'project.open', projectId, reqId })) finish(new Error('A5:fixture-project-read-not-sent'));
+  });
+}
 /** A prerequisite, never completion evidence. Costs must come from the page's
  * finished probe/L2 record; canvasHeavy only governs splitting AFTER selection.
  * Online l2CostBackend uses the normal default tuning, as does clipWeight here. */
