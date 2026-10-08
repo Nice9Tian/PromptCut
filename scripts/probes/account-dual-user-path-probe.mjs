@@ -13,7 +13,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { stageHostedAssetFiles } from '../../server/hosted/files.mjs';
@@ -66,10 +66,21 @@ const siteActor = (origin, ca) => {
     if (result.body.csrfToken) csrf = result.body.csrfToken;
     return result;
   };
-  return { request };
+  return { request, get cookie() { return cookie; } };
 };
 const docRequest = (origin, method, route, body, token, ca) => jsonRequest(`${origin}${route}`, { method, body, ca,
   headers: token ? { authorization: `Bearer ${token}` } : {} });
+const mediaRequest = (url, { ca, cookie }) => new Promise((resolve, reject) => {
+  const request = https.get(url, { ca, rejectUnauthorized: true, timeout: 5000,
+    headers: { cookie } }, response => {
+    const chunks = [];
+    response.on('data', chunk => chunks.push(chunk));
+    response.once('error', reject);
+    response.once('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks) }));
+  });
+  request.once('error', reject);
+  request.once('timeout', () => request.destroy(Error('media request timeout')));
+});
 
 export async function runAccountDualUserPath({ ports = [6380, 6381, 6382, 6383, 6384, 6385, 6388], keepOpen = false,
   providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT,
@@ -138,8 +149,13 @@ export async function runAccountDualUserPath({ ports = [6380, 6381, 6382, 6383, 
         route.startsWith('/hosted/') ? docPort :
           (route.startsWith('/api/asset/') || route.startsWith('/api/media/') || route.startsWith('/@media/')) ? assetPort : null;
       if (!target) { res.writeHead(404); res.end(); return; }
+      const headers = { ...req.headers, host: `127.0.0.1:${target}` };
+      // Same-origin <img>/<video> attach the website cookie even when fetch uses
+      // credentials:omit. Only the edge removes it; the asset service still
+      // rejects cookies and checks the actual project-bound ticket itself.
+      if (target === assetPort) delete headers.cookie;
       const upstream = http.request({ hostname: '127.0.0.1', port: target, method: req.method, path: req.url,
-        headers: { ...req.headers, host: `127.0.0.1:${target}` } }, response => {
+        headers }, response => {
         res.writeHead(response.statusCode, response.headers); response.pipe(res);
       });
       upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
@@ -248,6 +264,30 @@ export async function runAccountDualUserPath({ ports = [6380, 6381, 6382, 6383, 
     assert.equal(siteA.body.authorityId, authorityId);
     assert.equal(siteB.body.authorityId, authorityId);
     assert.equal(siteB.body.joined[0].creatorAccountId, accounts[0]);
+    const websiteMe = await actors[0].request('GET', '/me');
+    assert.equal(websiteMe.status, 200);
+    assert.equal(websiteMe.body.account.id, accounts[0], 'account cookie remains on the account route');
+    const mediaBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+    const mediaHash = createHash('sha256').update(mediaBytes).digest('hex');
+    const mediaPath = `/api/asset/media/${mediaHash}`;
+    const put = await fetch(`http://127.0.0.1:${assetPort}${mediaPath}/0`, { method: 'PUT',
+      headers: { authorization: `Bearer ${sessionA.body.assetTicket}`,
+        'x-media-size': String(mediaBytes.length), 'x-media-ext': 'png' }, body: mediaBytes });
+    assert.equal(put.status, 200); await put.arrayBuffer();
+    const complete = await fetch(`http://127.0.0.1:${assetPort}${mediaPath}/complete`, { method: 'POST',
+      headers: { authorization: `Bearer ${sessionA.body.assetTicket}` } });
+    assert.equal(complete.status, 200); await complete.arrayBuffer();
+    const directWithCookie = await fetch(`http://127.0.0.1:${assetPort}${mediaPath}?t=${sessionA.body.assetTicket}`, {
+      headers: { cookie: actors[0].cookie } });
+    assert.equal(directWithCookie.status, 400, 'asset itself still refuses website cookies');
+    await directWithCookie.arrayBuffer();
+    const validMedia = await mediaRequest(`${edgeOrigin}${mediaPath}?t=${sessionA.body.assetTicket}`, {
+      ca: pki.ca, cookie: actors[0].cookie });
+    assert.equal(validMedia.status, 200);
+    assert.deepEqual(validMedia.body, mediaBytes);
+    const invalidMedia = await mediaRequest(`${edgeOrigin}${mediaPath}?t=invalid-ticket`, {
+      ca: pki.ca, cookie: actors[0].cookie });
+    assert.equal(invalidMedia.status, 401);
     if (keepOpen) {
       handedOff = true;
       return { origin: edgeOrigin, leafFingerprint256: pki.wrong.fingerprint256,
@@ -271,7 +311,9 @@ export async function runAccountDualUserPath({ ports = [6380, 6381, 6382, 6383, 
       created: project.status, blockedJoin: blocked.status, joined: joined.status,
       ownerProjects: siteA.body.owned.length, memberProjects: siteB.body.joined.length,
       sessions: [sessionA.status, sessionB.status], revokedSession: lost.status,
-      assetOfflineSession: offline.status, assetHead: readiness.accessHead,
+      assetOfflineSession: offline.status, accountCookie: websiteMe.status,
+      mediaWithWebsiteCookie: validMedia.status, mediaWithInvalidTicket: invalidMedia.status,
+      assetHead: readiness.accessHead,
       assetInstanceMatched: typeof readiness.instanceId === 'string',
       ports: { site: sitePort, accountInternal: accountPort, doc: docPort, docInternal: docInternalPort,
         asset: assetPort, assetInternal: assetInternalPort, edge: edgePort },

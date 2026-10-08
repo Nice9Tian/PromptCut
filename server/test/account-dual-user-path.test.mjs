@@ -10,6 +10,9 @@ test('真实双账号网站列表与文档创建/加入/会话经独立素材追
   assert.deepEqual(result.sessions, [200, 200]);
   assert.equal(result.ownerProjects, 1);
   assert.equal(result.memberProjects, 1);
+  assert.equal(result.accountCookie, 200);
+  assert.equal(result.mediaWithWebsiteCookie, 200);
+  assert.equal(result.mediaWithInvalidTicket, 401);
   assert.equal(result.revokedSession, 401);
   assert.equal(result.assetOfflineSession, 503);
   assert.equal(result.childClosed, true);
