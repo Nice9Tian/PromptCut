@@ -14,10 +14,10 @@ function destroyGate(socket) {
   socket._destroy = function(error, callback) { continuation = () => original.call(this, error, callback); entered.resolve(); };
   return { entered: entered.promise, release() { const next = continuation; continuation = null; next?.(); } };
 }
-function request(port, route, { agent = false, method = 'GET', sid, body, protocols } = {}) {
+function request(port, route, { agent = false, method = 'GET', sid, body, protocols, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, path: route, agent, method,
-      headers: { ...(sid ? { authorization: `Bearer ${sid}` } : {}),
+      headers: { ...headers, ...(sid ? { authorization: `Bearer ${sid}` } : {}),
         ...(protocols ? { 'x-promptcut-protocols': protocols } : {}),
         ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}) } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk));
@@ -27,7 +27,7 @@ function request(port, route, { agent = false, method = 'GET', sid, body, protoc
     req.on('error', reject); req.end(body);
   });
 }
-const open = (port, agent = false) => request(port, '/lp/open', { agent, method: 'POST', body: '{}',
+const open = (port, agent = false, headers = {}) => request(port, '/lp/open', { agent, headers, method: 'POST', body: '{}',
   protocols: 'promptcut.v1, promptcut.session.new' });
 async function setup(t, port, authenticate, modules = [], options = {}) {
   const service = createDocService({ authenticate, modules, enableHttpTransport: true, autoTick: false, log() {}, ...options });
@@ -143,3 +143,83 @@ for (const transport of ['ws', 'http']) {
     if (resumed) assert.equal(resumed.all.some(value => value.type === 'session.welcome'), false);
   });
 }
+
+test('transient account/project fence drains admissions started before and during it, then permits live reentry', { timeout: 10000 }, async t => {
+  const cases = new Map(['before', 'during'].map(name => [name, { entered: deferred(), release: deferred() }]));
+  const service = await setup(t, 5775, async req => {
+    const name = req.headers['x-case'], state = cases.get(name);
+    if (state) { state.socket = req.socket; state.entered.resolve(); await state.release.promise; }
+    return { ...principal, ...(name === 'other-project' ? { projectId: 'project-b', tenantId: 'project-b' } : {}),
+      ...(name === 'new-login' ? { loginId: 'login-new', credentialId: 'credential-new' } : {}) };
+  });
+  const gates = []; t.after(() => { for (const state of cases.values()) state.release.resolve(); gates.forEach(gate => gate.release()); });
+  const before = open(5775, false, { 'x-case': 'before' }).then(() => 'admitted', () => 'closed');
+  await cases.get('before').entered.promise;
+  gates.push(destroyGate(cases.get('before').socket));
+  let completed = false;
+  const barrier = service.fencePrincipals({ accountIds: ['account-a'], projectId: 'project-a' }).then(value => { completed = true; return value; });
+  await turn(); assert.equal(completed, false);
+  const during = open(5775, false, { 'x-case': 'during' }).then(() => 'admitted', () => 'closed');
+  await cases.get('during').entered.promise; gates.push(destroyGate(cases.get('during').socket));
+  const unrelatedAgent = new http.Agent({ keepAlive: true }); t.after(() => unrelatedAgent.destroy());
+  assert.equal((await open(5775, unrelatedAgent, { 'x-case': 'other-project' })).status, 200);
+  const unrelated = service.describe().conns.find(conn => conn.principal.projectId === 'project-b'); assert.ok(unrelated);
+  cases.get('before').release.resolve(); await gates[0].entered; gates[0].release(); await turn();
+  assert.equal(completed, false); // The admission made after the barrier started is still unknown.
+  cases.get('during').release.resolve(); await gates[1].entered; await turn();
+  assert.equal(completed, false); gates[1].release(); const receipt = await barrier;
+  assert.equal(receipt.pendingAdmissions, 3); assert.equal(receipt.rejectedAdmissions, 2);
+  assert.equal(await before, 'closed'); assert.equal(await during, 'closed');
+  assert.ok(service.describe().conns.some(conn => conn.connId === unrelated.connId));
+  assert.equal((await open(5775)).status, 200); // Same account and still-valid login can legitimately rejoin.
+  assert.equal((await open(5775, false, { 'x-case': 'new-login' })).status, 200);
+  assert.equal((await open(5775, false, { 'x-case': 'other-project' })).status, 200);
+});
+
+test('concurrent transient fences keep independent cohorts and do not close an identified unrelated scope', { timeout: 10000 }, async t => {
+  const cases = new Map(['a', 'b'].map(name => [name, { entered: deferred(), release: deferred() }]));
+  const service = await setup(t, 5776, async req => {
+    const name = req.headers['x-case'], state = cases.get(name);
+    if (state) { state.socket = req.socket; state.entered.resolve(); await state.release.promise; }
+    return name?.startsWith('b') ? { ...principal, accountId: 'account-b', userId: 'account-b', loginId: 'login-b',
+      credentialId: 'credential-b', projectId: 'project-b', tenantId: 'project-b' } : principal;
+  });
+  const pending = ['a', 'b'].map(name => open(5776, false, { 'x-case': name }).then(() => 'admitted', () => 'closed'));
+  await Promise.all([...cases.values()].map(state => state.entered.promise));
+  const gates = [...cases.values()].map(state => destroyGate(state.socket));
+  t.after(() => { for (const state of cases.values()) state.release.resolve(); gates.forEach(gate => gate.release()); });
+  let doneA = false, doneB = false;
+  const fenceA = service.fencePrincipals({ accountIds: ['account-a'], projectId: 'project-a' }).then(value => { doneA = true; return value; });
+  const fenceB = service.fencePrincipals({ accountIds: ['account-b'], projectId: 'project-b' }).then(value => { doneB = true; return value; });
+  for (const state of cases.values()) state.release.resolve();
+  await Promise.all(gates.map(gate => gate.entered)); gates[0].release();
+  const receiptA = await fenceA; assert.equal(doneA, true); assert.equal(doneB, false);
+  assert.equal(receiptA.rejectedAdmissions, 1); assert.equal(cases.get('b').socket.closed, false);
+  assert.equal(await open(5776, false, { 'x-case': 'b-new' }).then(() => 'admitted', () => 'closed'), 'closed');
+  assert.equal(doneB, false);
+  assert.equal((await open(5776, false, { 'x-case': 'a-new' })).status, 200); // A removal cannot remove B's predicate.
+  gates[1].release(); const receiptB = await fenceB;
+  assert.equal(receiptB.rejectedAdmissions, 2); assert.deepEqual(await Promise.all(pending), ['closed', 'closed']);
+  assert.equal((await open(5776, false, { 'x-case': 'b-new' })).status, 200);
+});
+
+test('project switch fences retire, while old login/run/service references stay rejected and new authorized references can enter', { timeout: 10000 }, async t => {
+  const service = await setup(t, 5777, req => {
+    const agent = req.headers['x-kind'] === 'agent';
+    return { ...principal, role: agent ? 'agent' : 'page',
+      ...(agent ? { service: 'agent', serviceId: 'agent', serviceKid: req.headers['x-kid'] ?? 'kid-new',
+        runGrantId: req.headers['x-grant'] ?? 'grant-new' } : {}),
+      loginId: req.headers['x-login'] ?? 'login-a' };
+  });
+  await service.fencePrincipals({ projectId: 'project-a', roles: ['agent'] });
+  assert.equal((await open(5777, false, { 'x-kind': 'agent' })).status, 200);
+  await service.fencePrincipals({ runGrantIds: ['grant-old'], projectId: 'project-a', roles: ['agent'] });
+  assert.equal(await open(5777, false, { 'x-kind': 'agent', 'x-grant': 'grant-old' }).then(() => 'admitted', () => 'closed'), 'closed');
+  assert.equal((await open(5777, false, { 'x-kind': 'agent', 'x-grant': 'grant-new' })).status, 200);
+  await service.fencePrincipals({ serviceKids: ['kid-old'], roles: ['agent'] });
+  assert.equal(await open(5777, false, { 'x-kind': 'agent', 'x-kid': 'kid-old' }).then(() => 'admitted', () => 'closed'), 'closed');
+  assert.equal((await open(5777, false, { 'x-kind': 'agent', 'x-kid': 'kid-new' })).status, 200);
+  await service.fencePrincipals({ loginIds: ['login-a'], roles: ['page'] });
+  assert.equal(await open(5777).then(() => 'admitted', () => 'closed'), 'closed');
+  assert.equal((await open(5777, false, { 'x-login': 'login-new' })).status, 200);
+});
