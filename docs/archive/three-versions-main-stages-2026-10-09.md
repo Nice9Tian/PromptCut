@@ -81,3 +81,15 @@ VisuHive节点固定43cfdf77 Linux实际76/76、零失败/跳过、12576.99244ms
 未过的强化C10探针、judge及其新增测试留原共同分支并已推送。main候选ff4f04cf529ac73c7cce28a36490d473fbb1821e与完整账号验证源没有生产代码差异，仅恢复该旧探针与对应测试。实际类型exit0墙7.250秒；完整5291/5287通过/0失败/0取消/4跳过68894.4272ms（墙69.265秒）；build/online-build exit0墙8.610/1.750秒；源不变clean、native重跑0。这是改变合并范围后的新候选验证，非覆盖首次失败。TMP pc-account-path-main-ff4f04cf-{type,full,build,online-build}.log/.result.json。
 
 VisuHive后端兼容安装之后，新网站收回main30a9908a并推送。网站381939e语法34文件零错；full80/71过/0失败/9跳过6654.5617ms，显式provider只补未执行目标两个文件10/10零跳过242.97ms；三项POSIX跳过保留。详细证据在其docs/archive/account-backend-main-2026-10-09.md。隔离真实在线/桌面验证含新网站，生产账号v2和项目/独立素材服务仍待接线激活，不称公网新项目已可用。
+
+## 首次无桌面凭据的独立小修
+
+实际运行原account_vault.rs内完整PowerShell SCRIPT，无vault recover stdout为''，Rust解析JSON失败；首红2项/1过1败499.3122ms（墙0.763秒），未发HTTP、不读生产凭据。仅把null结果输出字面JSON null，其他结果、DPAPI/ACL/原子替换不变；修后同目标2/2零失败505.8325ms（墙0.764秒），首次原log不覆盖。TMP pc-account-vault-fresh-{red,green,type}.log。
+
+根精确共同e22ff7f6a544535142e1022caf8dd662990a7d03：类型exit0墙6.531秒；full5292/5288通过/0失败/0取消/4跳过68819.9617ms（墙69.156秒）；build/online-build exit0墙8.578/1.812秒；源不变clean、native0。TMP pc-account-fresh-vault-e22ff7f6-{type,full,build,online-build}.log/.result.json。
+
+对应真实Rust重新离线locked编译exit0墙17.140秒。第一次临时准备脚本误把capability的identifier当文件名，FileNotFoundError，在cargo/原生启动前结束；实际文件remote.json，修的只有TEMP脚本，首错保留。新exe SHA256 64f12b5cb86e50cc71e3acd9e99bd1f4f7a99d5504d2e74a681bb1749f7919a2；原908已验证exe原字节另存pc-account-native-compile-oqemhch8/verified-90832022/promptcut.exe，未损失原证据。
+
+新exe实际桌面28/28、complete、零失败、17600ms（墙20.734秒），首次登录按钮可用时errorVisible=false/errorCode=none。真实登录/创建/加入、同profile重启保护凭据恢复、切账号、两网站权威列表与cookie恢复仍全过；两轮各11个自有PID、CDP、Vite、Chrome和fixture均关。TMP pc-account-native-fresh-e22ff7f6/result.json、pc-account-desktop-fresh-e22ff7f6-out/result.json。所有目录和识别号只在TEMP，未触碰用户正在运行的编辑器。
+
+小阶段main72967e43及网站main30a9908a收回后，再核6458f7a4的素材工作区和99c6379的网页工作区：各HEAD已在main、完整status空、绝对.worktrees边界、全树reparse0；PC仅有可再生成的tsconfig.tsbuildinfo，VH无ignored文件。用git worktree remove和branch -d清2个，累计PC33/VH10，共43个，任务剩3个。详细TMP three-versions-user-path-worktree-cleanup-20261009.json；用户旧六个/其它会话不动。
