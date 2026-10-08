@@ -56,7 +56,7 @@
 5. 先 witness-N.json 独占写、文件 fsync、发布并目录 fsync。之后 reservation.json 预留新 UUID/epoch，journal=reserved；再 start 相同配置 unit。
 6. reservation exact fields：`{v:1,protocol:'promptcut.asset-root-reservation.v1',authorityId,serviceIdentity,uid,unit,cgroupPath,clientFingerprint256,serverFingerprint256,epoch,instanceId}`。G 已确认仅作 root 分配启动输入，不能作为 current 授权。asset 先起只读 identity/control，业务仍缺 active 失败关闭。
 7. 核新 OS 元组 → fresh pinned mTLS identity → 再核同一 OS 元组；private identity exact fields 为原 `{v,serviceId,serviceIdentity,instanceId,pid,startedAt,docClientFingerprint256,internalServerFingerprint256,state}` 加 `authorityId,epoch`。PID/instance/epoch/pins 与 root 预留、真实内核一致；startedAt 只核合法，不作为 PID 出生证明。
-8. epoch1 先写 immutable anchor；写 immutable epoch-N.json，再核 OS 元组，最后唯一 current.json active 原子发布。文件实际 fsync+rename/link+目录 fsync；exclusive archive 不覆盖已有记录。纯 identity 强制新 TLS、完整读回后等 socket close，握手/身份/协议错误不退避成通过；只有启动尚未 listen 的 ECONNREFUSED 可有限退避且两侧重核 OS 身份。
+8. epoch1 先写 immutable anchor；写 immutable epoch-N.json，再核 OS 元组，发布 current.json active 候选。ef5c 后还必须完成 publication marker 文件及目录 fsync，最后解除 publisher 锁；active 单独可见不授权。文件实际 fsync+rename/link+目录 fsync；exclusive archive 不覆盖已有记录。纯 identity 强制新 TLS、完整读回后等 socket close，握手/身份/协议错误不退避成通过；只有启动尚未 listen 的 ECONNREFUSED 可有限退避且两侧重核 OS 身份。
 
 ## 首次信任、checkpoint 与失败恢复
 
@@ -64,7 +64,7 @@
 
 producer 不写 doc SQLite，不把输出 checkpointDigest 当授权。G 的 `acceptCurrent` 仍需完整 root 文件/anchor/见证链检查；首次 checkpoint 只能从该明确受信 anchor 建立，以 ledger 事务耐久 `{v,authorityId,epoch,recordDigest,anchorDigest}` 后再暴露 RAM。缺 checkpoint 不由现 readRootRunAssetCurrent 自动创建，不能从任意 current 高 epoch 自举。
 
-未成功发布的中断留 preparing/journal/已有 immutable 证据，自动重跑 rotate 会拒绝 inactive current，不覆盖成新 epoch；没有 force/自动清锁/自动跳过部分写入的恢复入口。root 应核实际 OS、journal 和 owned artifacts 后另制定精确恢复，工具不猜测。新服务可能已起但未发布 active，此时业务应仍失败关闭，工具不在 catch 中盲停可能已变化的 unit。
+更正：未成功发布的中断可能留 preparing，也可能已经让 active/marker 可见；ef5c 后任何未完成失败均保留持久 publisher 锁，自动重跑在 wx 锁门拒绝，不覆盖成新 epoch；没有 force/自动清锁/自动跳过部分写入的恢复入口。root 应核实际 OS、journal 和 owned artifacts 后另制定精确恢复，工具不猜测。新服务可能已起但未发布 active，此时业务应仍失败关闭，工具不在 catch 中盲停可能已变化的 unit。
 
 跨 boot 恢复明确未支持：旧 cgroup 对象不可重获，G 0cd witness schema 也未定义 boot-transition。工具拒绝而非把 ENOENT/新 boot 当旧关闭；这是部署机制限制，不是用户产品语义待定。现基础三角色 plan 的 on-failure 未改；初版不声称该计划已支持 run-assets。Linux stop 后 pinned events FD 是否仍可观察到 empty，必须实际测：若内核移除对象使读取失败，当前安全结果为拒绝，不得把该错误当 empty。
 
@@ -80,10 +80,42 @@ root 可在**独立测试 unit 与专用 UID**执行如下方案（本 Agent 未
 - producer 源码仅输出摘要；需要 syscall 证据由 root 在隔离目录加 strace 观察真实文件/目录 fsync 和 systemctl/proc 操作。不要输出 TLS private key、nonce、exporter 或真实账号凭证。
 - G 的 exporter HMAC 反查、doc acceptCurrent、生产 OS 部署/实际 UID隔离、旧业务 lease/control 完整 ACK 均不由本工具代替。新 epoch active 也不重放旧外部效果，不给历史 unknown 空 ACK。
 
-当前包无生产部署、没有完整 npm/full或实际 Linux root 运行结论；固定三文件 clean 交根审查及后续独立实证。
+当前包无生产部署、没有完整 npm/full或实际 Linux root 运行结论；初版三文件固定后又接受下述完成凭据审查，最终状态以下文为准。
 
 ## 完成凭据修正：首个真实文件反例
 
 root/Sol 审查指出 617 的原受控 IO 只在 files.set 前注入故障，不能证明 real rename 后 fsync 失败仍 inactive。此前“未成功发布一定非 active”陈述撤回，保留原 27/27 证据范围。
 
 新增真实 TMP counter：实际 file write+fsync+rename 已使 current.state=active 可读；在紧随其后的 directory barrier 注入失败，旧协调器 finally 仍删除 publisher.lock。首次 npm wrapper 28 tests /27 pass/1 fail/0 skip，138.4368 ms，exit1，TEMP/pc-asset-root-publication-red-1.log。错误为断言要求 lock 在场却实际 ENOENT，active 可见断言已过。Windows directory barrier 是受控故障边界，不冒称 Linux syscall/powerloss；文件操作和 CLI均真实。
+
+
+## 完成凭据最终协议与验证
+
+- 首红固定 df0deb04：真实 TMP 写入与 rename 后的受控目录 barrier 失败，active 可见而旧 finally 删锁；28/27pass/1fail，138.4368 ms，exit1，原始 TEMP/pc-asset-root-publication-red-1.log 保留。
+- 最终产品 source ef5c92d9：同一 wrapper 32/32、0fail/skip/cancel，165.9398 ms，wall1132ms，exit0；TEMP/pc-asset-root-publication-green-1.log。最终 types --force exit0/wall7322ms，TEMP/pc-asset-root-publication-types-1.log。源码测中不变、diff-check 通过。
+- G account_wiring_sol 已明确确认相同接受协议。本包不改 G 文件，不声称已完成 doc acceptCurrent 的实际联验。
+
+完成文件为 `publication-<epoch>.json`，exact schema：
+
+```text
+{v:1, protocol:'promptcut.asset-root-publication.v1', authorityId, epoch,
+ registryDigest, anchorDigest, closureWitnessDigest:null|sha256, reservationDigest}
+```
+
+摘要全部用实际 ledger.digestOf 的完整规范对象，epoch1 closureWitnessDigest=null。root producer 读取历史时也要求每个 epoch 的准确 marker。原617没有marker的数据不能被自动当完整发布；本任务没有该格式生产存量，不提供猜测迁移。
+
+**接受条件是 marker 与无锁共同成立。** producer 在任何 mutation 前耐久创建 `.publisher.lock`（文件 fsync、目录 fsync）；active 文件和目录 fsync、marker 文件和目录 fsync全部成功后才解除该锁。目录 fsync失败可能使 active 或 marker 已可见，这不是回滚；失败路径只关闭锁FD，保留锁文件。突然进程退出同样不自动清锁。消费者必须对全部 root-owned 证据与 lock 不存在做前后检查，再在 SQLite 内耐久 checkpoint；marker可见但锁在场一律503。服务身份和 exporter反查仍需原完整证据，marker不是新cap。
+
+`writePublisherArtifact` 与 `openPublisherLock` 是文件原语测试 seam，生产CLI没有注入参数；生产调用只在 Linux root/配置与目录核验之后。TMP测试使用真正 file write、file fsync、rename或hardlink、读取和锁文件；Windows目录fsync边界使用受控 callback，明确不是Linux持久性/自然掉电证明。
+
+新增实际文件场景：
+
+1. current rename后目录barrier报错：实际active可读，lock实际保留，不能接受。
+2. publication hardlink+临时名删除后目录barrier报错：marker实际nlink1/active实际存在，lock保留，第二publisher wx实际EEXIST。
+3. marker目录barrier尚在等待：marker已可读，但lock仍在；只有barrier成功后才删锁，marker的registry/anchor/reservation/closure摘要全部核对。
+4. 最后unlock已经unlink、随后锁目录barrier失败：抛 `publisher-unlock-result-unknown`。此时active与marker的barrier已经完成，不能因CLI exit1声称inactive；消费者仍按完整证据判定。若掉电后锁复现只会失败关闭。根不得将缺锁、独立marker或CLI退出码单独当完成证明。
+5. 历史marker缺失、anchor/reservation/closure摘要错误拒绝rotate，不发unit stop。
+
+部署恢复限制仍保留：所有root启停共用同一外锁；Restart=no/Delegate=no/精确cgroup；跨boot不支持；未知ENODEV/ENOENT不能closed；root需要显式核对与恢复失败事务，不能简单删除残锁来绕过未知的发布结果。当前业务生产run-assets仍无据503；独立account/doc/asset基础部署不被本包宣告覆盖。
+
+最终只改原3文件；无业务listener、full、节点、main写入、push或merge。真实Linuxroot/cgroup与G checkpoint联验由root后续分窗口执行。
