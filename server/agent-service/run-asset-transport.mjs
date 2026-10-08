@@ -3,7 +3,7 @@ import { checkServerIdentity } from 'node:tls';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { accountError, certificateFingerprint } from '../account/client.mjs';
-import { assetHttpTuple, bytesDigest, reference, resourceRevision, runAssetIssueRequest,
+import { assetHttpTuple, bytesDigest, hashOf, reference, resourceRevision, runAssetIssueRequest,
   ticketDigest, validateAssetRef } from '../account/run-asset-protocol.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
@@ -84,21 +84,30 @@ export function createRunAssetTransport({ runClient, assetOrigin, assetTls, asse
     const after = await resources.authorize(context, action);
     if (!sameAccess(before, after) || identityKey(identity) !== identityKey(runClient.instanceIdentity()))
       fail(403, 'run-revoked');
-    if (typeof result?.ticket !== 'string' || result.ticket.length < 16 || result.ticket.length > 4096 ||
-        /[\r\n\0]/.test(result.ticket) || !reference(result.ticketId) ||
+    if (typeof result?.ticket !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(result.ticket) ||
+        !reference(result.ticketId) ||
         !Number.isSafeInteger(result.expiresAt) || result.expiresAt <= Date.now() ||
         result.fenceRevision !== after.fenceRevision || result.grantState !== after.grantState)
       fail(503, 'run-asset-issue-protocol');
     const resource = Object.freeze(validateAssetRef(result.resource));
     if (resource.projectId !== context.projectId || result.resourceRev !== resourceRevision(resource) ||
-        (purpose !== 'openRead' && resource.hash !== selector.hash)) fail(503, 'run-asset-issue-protocol');
+        (purpose !== 'openRead' && (resource.hash !== selector.hash || resource.size !== selector.size)) ||
+        (purpose === 'import' && resource.ext !== selector.ext) ||
+        (result.mediaRev !== undefined && !hashOf(result.mediaRev)) ||
+        (result.projectRev !== undefined && (!Number.isSafeInteger(result.projectRev) || result.projectRev < 0)) ||
+        (result.kind !== undefined && !['video', 'audio', 'image'].includes(result.kind)) ||
+        (purpose === 'openRead' && (result.mediaRev === undefined || result.projectRev === undefined || result.kind === undefined)))
+      fail(503, 'run-asset-issue-protocol');
     const assetHandleId = `asset_handle_${randomUUID()}`;
     handles.set(assetHandleId, { ticket: result.ticket, body: descriptor.body, resource,
       resourceRev: result.resourceRev, expiresAt: result.expiresAt,
       contextKey: contextKey(context), identityKey: identityKey(identity) });
     return Object.freeze({ assetHandleId, resource: structuredClone(resource), resourceRev: result.resourceRev,
       expiresAt: result.expiresAt, fenceRevision: result.fenceRevision,
-      grantState: result.grantState });
+      grantState: result.grantState,
+      ...(result.mediaRev !== undefined ? { mediaRev: result.mediaRev } : {}),
+      ...(result.projectRev !== undefined ? { projectRev: result.projectRev } : {}),
+      ...(result.kind !== undefined ? { kind: result.kind } : {}) });
   }
 
   async function request(input) {
