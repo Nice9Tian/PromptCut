@@ -118,3 +118,13 @@ type CloudQueueSnapshot = {
 待主会话批准的执行入口：先固定源码及真实 online 构建，再运行 `scripts/probes/cloud-queue-user-pages-probe.mjs --dist <本叶dist-online> --site-root <真实VH site> --out <TMP本任务独占目录>`，设置真实 provider/order 路径、fileURL silent preload 和仅进程 cuda/models 环境。asset 为唯一常驻业务 Node 子进程，Chrome 使用 pipe；临时 PKI openssl 子进程隐藏并等待 close。固定端口、业务子进程/浏览器与构建尚未实际启动。真实 Rust admin IPC 由主会话后续独立编译/窗口验证；本任务不占旧6388、不扩 lib.rs、不以受控注入替代。
 
 明确未做：整套 npm/真实双浏览器/真实 native IPC/节点与公网/模型执行/跨服务立即 fence。fresh RPC 与250ms轮询不替代已有即刻撤销承诺，account-policy onRevoke 的真实 control 来源仍须专属 owner 接线。
+
+### 主会话首次真实浏览器与探针操作修正
+
+主会话在固定 `e9abf5945750907fbe75af9c05a6b61096a9f108` 编译 online 并单次运行；本叶没有启动该服务/浏览器。原始 TMP `pc-cloud-queue-e9abf594-once/result.json`、两张队列图和 failure-0/failure-1 图均保留。sourceBefore/sourceAfter 完全相同；9/9 前置检查通过但 completed=false，总35002ms，phase=reload 等待 queue 超时。实际 create201、admin200、join200、两次消息202，双方同一 messageId/FIFO 和真实用户名已通过；这些局部结果不冒称刷新恢复或完整链通过。cleanup.closed/childClosed=true、assetPid35024；主会话实际复核6520–6539零监听。
+
+已只读查看 failure-1：刷新后 cookie 已恢复，页面为已登录账号开始页，joined 有 baseline 项目和本次 Queue shared browser project。`workflow/project.md` 第13/26条规定在线开始页与共用账号登录；`product/agent.md` 承诺重新打开项目后能找回有权对话，没有要求普通 F5 自动回到编辑器。真实 `AccountProjects.restore` 仅恢复账号/列表，`enter` 从可见按钮触发。本次是探针误假设直接 reload 后应立刻出现队列，没有改产品刷新行为。
+
+仅 probe 修正为：F5→等待真实账号与目标 joined 行 enabled→实际点“显示项目链接”并核同源链接中的 projectId 等于本次 ID→实际点击该行打开项目→从真实历史选择原 conversationId→核原 messageIds/FIFO 并截图。新增 reload-cookie-restored、reopen-list-link-exact-project、reopen-same-conversation 检查，重用原 queue 恢复检查。禁止新建、重送、注入页面状态/URL或替代后端；只读取 DOM 及现有只读对话标识，链接全文不写结果。
+
+本次改动只有 probe 和报告，nodecheck exit0、diff --check0，未重新执行 pure/type/full/浏览器。产品与测试源码相对 e9 原样保持，主会话可复用已编译同一产品的 dist 单次有因运行。另补 e9 提交后完成而此前尚未记入的固定证据：项目归属专属目标6/6、209.2007ms、wrapper397.3602ms，TMP `pc-queue-project-confirm-1.log`；force type0、wall7392.2995ms，TMP `pc-queue-type-2.log`；原 probe/fixture nodecheck 均0。原首 pure1 失败和首次真实 reload 超时未删除或覆盖。实际 Rust admin IPC/全量仍由主会话独立验证，当前不称执行器可运行。
