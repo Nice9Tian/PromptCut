@@ -95,3 +95,10 @@
 - 原 `metadataKey` 只由 qKey 和 conversation ID 组成，刷新 effect 也只依赖账号模式、consent、conversation、refresh 函数和该 key。Agent 开启状态变化时 key 不变，因此先前失败的历史/权限读取不会重做，发送区也继续正确保持关闭。
 - `CloudAiPanel.tsx` 将 `cloud.enabled` 和 `chat.info?.enabled` 的可用状态位纳入 `metadataKey`。项目开关或服务 `info.enabled` 状态恢复时，既有 metadata refresh effect 会重新读取当前对话权限；key 在 render 中同步变化，使 `metadataReady` 先转为 false，成功刷新前仍禁发。流程只重读原 conversation，不创建新对话；creator 私有只读仍由已读取的 conversation metadata 决定，异步控制请求 epoch/身份隔离没有变化。此次无需改 `useCloud.ts`。
 - 本修复验证：`node --check`、`tsc -p tsconfig.json --pretty false`、账号控制目标测试（7 项通过、0 失败）、`git diff --check`。没有重跑 browser、服务或 full；root 将用固定源码重新构建并实际复测。
+
+## 项目分享 toast 遮挡历史入口的真实点击修正（2026-10-09）
+
+- root 检查前一轮安全页面证据后发现，进入项目产生的项目分享 toast 仍覆盖云端历史入口；相同遮挡根因已由项目成员探针通过用户关闭按钮处理。此时诊断已经确认项目视图和 consent 成功，本轮仅修点击顺序，不改产品或延长等待。
+- `openProject` 保留 `[data-pc="cloud-project-copy"]` 的可见等待作为项目分享功能原验收；consent 实际接受后，探针现在要求分享 toast 内的真实 `aria-label="关闭"` 按钮可见、启用且点击中心无遮挡，再用 Puppeteer `ElementHandle.click()` 关闭，并等待该 toast 从 DOM 消失。creator 与 owner 页面各自执行此步骤。
+- 历史入口现有的中心无遮挡检查和真实 ElementHandle 点击保持原样；没有通过 `evaluate`/DOM `.click()` 或删除 toast 节点规避遮挡。其余已记录的 pageerror 与安全快照不需额外扩大采集范围。
+- 本轮只做探针语法检查和 diff 检查，不运行浏览器、服务、type、目标测试或 full；root 将以已修复 metadata gate 的基线重新构建，并在一次真实窗口运行中验证。
