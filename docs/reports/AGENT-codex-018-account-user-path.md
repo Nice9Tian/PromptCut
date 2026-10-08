@@ -119,3 +119,9 @@ root固定4adc类型0、full5303/5299通过/0失败/4跳过、75.544s、build/on
 ## 实际表单输入清除默认值
 
 root读取0c66 failure-1与4adc创建截图发现实际项目名带“未命名双账号页面验收-...”默认前缀，而网站后续预期为probe生成的“ 双账号页面验收-...”无默认前缀。原type helper的三击没有可靠清除原input值，首图原因保留，不能改产品默认名称/网站断言来通过。独立仅改probe type helper：等待确切selector对应可见输入框，聚焦该节点后真实Control+A并释放Control、Backspace清空，再由该input.type输入；用户名/密码/链接也同样精确填入。没有DOM写value、页面脚本注值或mock。本次仅node --check/diff --check通过，无业务listener/Chrome/壳/full；实际键盘效果及完整路径由root固定probe重验，不借先前full作为此probe通过证据。
+
+## 测试证书指纹边界格式
+
+Astra只读静态核到确定格式冲突：fixture叶证书指纹来自Node X509Certificate.fingerprint256，是冒号分隔大写95字符；原startNative直接给CLOUD_PIN，Rust lib.rs account_cloud_binding只接受64位小写hex，在创建窗口/CDP前返回Err，最终Tauri build.expect会panic。此与root首native101发生位置吻合，但旧源stdio ignore，没有stderr证据，不能写已由stderr确认。本块只probe边界严格接受32组大写双hex的标准冒号SHA256结构，再去冒号/小写后给独立进程ENV；缺失/非标准/尾随字符直接受控错误拒，不改Rust pin验证/证书/客户端或生产host。
+
+下一步仅固定源最小纯验证，复用G静态assetWiringPki生成自有TMP证书，无服务listener；运行实际probe中的nativeCertificatePin函数，核95字符到64小写且等于同叶证书DER原字节SHA256、坏格式拒，私钥/指纹不打印。node --check/diff --check先通过。原native101/已闭PID和在线失败均保留，root后续实际壳及双网页再验，不为probe/报告重复全量。

@@ -248,13 +248,17 @@ async function cdpClosed() {
     socket.once('close', () => resolve(closed));
   });
 }
+function nativeCertificatePin(fingerprint) {
+  if (typeof fingerprint !== 'string' || !/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(fingerprint)) throw new Error('invalid-native-certificate-pin');
+  return fingerprint.replaceAll(':', '').toLowerCase();
+}
 async function startNative(label) {
   await fs.access(DESKTOP_EXE);
   assert(await cdpClosed(), 'native-cdp-is-not-another-process');
   await fs.mkdir(DESKTOP_PROFILE, { recursive:true });
   const env = { ...process.env, USERPROFILE:DESKTOP_PROFILE,
     PROMPTCUT_ACCOUNT_TEST_EDITOR_PORT:'6340', PROMPTCUT_ACCOUNT_TEST_CLOUD_ORIGIN:ORIGIN,
-    PROMPTCUT_ACCOUNT_TEST_CLOUD_PIN:fixture.leafFingerprint256, PROMPTCUT_AGENT_CDP:'6348',
+    PROMPTCUT_ACCOUNT_TEST_CLOUD_PIN:nativeCertificatePin(fixture.leafFingerprint256), PROMPTCUT_AGENT_CDP:'6348',
     WEBVIEW2_USER_DATA_FOLDER:path.join(DESKTOP_PROFILE, 'webview2'), PROMPTCUT_NO_PORT_FILE:'1' };
   const child = spawn(DESKTOP_EXE, [], { cwd:path.dirname(DESKTOP_EXE), env, windowsHide:true, stdio:['ignore', 'ignore', 'pipe'] });
   const state = { child, env, connection:null, page:null, closed:childClosed(child) }; native = state;
