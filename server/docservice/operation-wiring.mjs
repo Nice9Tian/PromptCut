@@ -126,6 +126,7 @@ export function createOperationWiring({ history, account, verifyWitness, authori
       });
     },
     fence: value => order.fence(value),
+    idle: () => order.idle(),
     history,
   };
 }

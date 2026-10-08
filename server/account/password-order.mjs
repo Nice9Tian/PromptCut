@@ -183,7 +183,8 @@ export function createPasswordOrder({ history, account, verifyWitness, checkGate
       return { ...value, state: 'committed', complete: ack?.durable === true, acknowledgement: ack ?? null };
     });
   }
-  return { submit, transact, fence, assertUnfenced: localGate, recover: (projectId) => locked(projectId, () => recoverProject(projectId)) };
+  return { submit, transact, fence, assertUnfenced: localGate, idle: () => Promise.all([...queues.values()]),
+    recover: (projectId) => locked(projectId, () => recoverProject(projectId)) };
 }
 
 /** 0.7.18 only records the candidate interval; no compensation is performed. */

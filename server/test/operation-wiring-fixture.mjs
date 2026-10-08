@@ -65,6 +65,7 @@ export async function operationFixture({ dir, port = 5760, request, failpoint = 
     async close() {
       for (const c of clients) c.close();
       await service.close(); await Promise.all(clients.map(c => c.closed));
+      await coordinator.idle();
       authority.close(); history.close(); ledger.close(); account.close();
     },
   };
