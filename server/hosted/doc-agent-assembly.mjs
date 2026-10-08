@@ -80,7 +80,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   function completeReadAccessEvents() {
     const state = ledger.read();
     for (const event of state.accessEvents) {
-      if (state.accessAcks[`ack:${event.eventId}:agent`] ||
+      if (runtime.authority.hasAgentReadClosure(event.eventId) ||
           !state.agentReadsV1?.controls.some(c => c.accessSeq === event.seq)) continue;
       try {
         const closure = readControl.finalizeAccessEvent({ eventId: event.eventId });

@@ -8,6 +8,16 @@ const accountIdOK = value => typeof value === 'string' && /^acc_[a-f0-9]{24}$/.t
 const projectIdOK = value => typeof value === 'string' && /^sp_[a-z2-7]{26}$/.test(value);
 const services = ['asset', 'agent', 'render'];
 const reject = (status, code) => { throw accountError(status, code); };
+const agentReadClosureComplete = (state, eventId, receipt) => {
+  if (state.agentReadControlRequired !== true) return true;
+  const event = state.accessEvents.find(e => e.eventId === eventId);
+  const closure = state.agentReadAccessClosuresV1?.[eventId];
+  return !!(event && closure && closure.payload?.source === 'doc-agent-read-control' &&
+    closure.payload.complete === true && closure.payload.eventId === eventId &&
+    closure.payload.accessSeq === event.seq && Array.isArray(closure.payload.controlIds) &&
+    closure.payload.controlIds.length && closure.digest === digestOf(closure.payload) &&
+    receipt?.agentReadClosureDigest === closure.digest);
+};
 const projectOf = (state, id) => {
   if (!projectIdOK(id)) reject(400, 'invalid-project');
   const project = state.projects[id];
@@ -309,14 +319,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return ledger.transaction(state => {
       const event = state.accessEvents.find(e => e.eventId === eventId); if (!event) reject(404, 'no-event');
       if (receipt.cursor < event.seq || receipt.cursor > state.accessHead) reject(409, 'ack-cursor-mismatch');
-      if (serviceId === 'agent' && state.agentReadControlRequired === true) {
-        const closure = state.agentReadAccessClosuresV1?.[eventId];
-        if (!closure || closure.payload?.source !== 'doc-agent-read-control' || closure.payload.complete !== true ||
-            closure.payload.eventId !== eventId || closure.payload.accessSeq !== event.seq ||
-            !Array.isArray(closure.payload.controlIds) || !closure.payload.controlIds.length ||
-            closure.digest !== digestOf(closure.payload) || receipt.agentReadClosureDigest !== closure.digest)
-          reject(503, 'agent-read-closure-required');
-      }
+      if (serviceId === 'agent' && !agentReadClosureComplete(state, eventId, receipt)) reject(503, 'agent-read-closure-required');
       const key = `ack:${eventId}:${serviceId}`; const old = state.accessAcks[key];
       if (old && receipt.cursor < old.cursor) return old;
       if (old && receipt.cursor === old.cursor && digestOf(old) !== digestOf(receipt)) reject(409, 'ack-mismatch');
@@ -337,6 +340,8 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const state = ledger.read(); const barrier = state.barriers[`event:${eventId}`];
     if (!barrier) reject(404, 'no-event');
     const serviceAcks = Object.fromEntries(services.map(service => [service, state.accessAcks[`ack:${barrier.accessEventId}:${service}`] ?? null]));
+    // Preserve legacy rows on disk, but they are not proof under the required protocol.
+    if (!agentReadClosureComplete(state, barrier.accessEventId, serviceAcks.agent)) serviceAcks.agent = null;
     return { ...barrier, serviceAcks, pendingServices: ['doc', ...services.filter(s => !serviceAcks[s]?.complete || serviceAcks[s].cursor < barrier.accessSeq)],
       logoutComplete: false };
   }
@@ -355,6 +360,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       const ackKey = `seq:${event.seq}`;
       let persisted = ledger.read().accountAcks[ackKey];
       if (persisted?.sent) continue;
+      if (event.type === 'credentials-revoked' && !hasAgentReadClosure(ledger.read().barriers[`event:${event.eventId}`]?.accessEventId)) {
+        pending.push(event.eventId); continue;
+      }
       if (!persisted) {
         let receipt = { receiptId: `doc:${ledger.authorityId}:${event.seq}`, appliedSeq: event.seq, logoutComplete: false };
         if (event.type === 'credentials-revoked') {
@@ -379,18 +387,35 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
             }])) };
         }
         persisted = ledger.transaction(state => {
-          state.accountAcks[ackKey] ??= { eventId: event.eventId, receipt, sent: false };
+          const accessEventId = state.barriers[`event:${event.eventId}`]?.accessEventId;
+          const agentAck = state.accessAcks[`ack:${accessEventId}:agent`];
+          if (event.type === 'credentials-revoked' && !agentReadClosureComplete(state, accessEventId, agentAck))
+            reject(503, 'agent-read-closure-required');
+          state.accountAcks[ackKey] ??= { eventId: event.eventId, receipt, sent: false,
+            ...(state.agentReadControlRequired === true && event.type === 'credentials-revoked'
+              ? { agentReadClosureDigest: agentAck.agentReadClosureDigest } : {}) };
           return state.accountAcks[ackKey];
         });
       }
       // Persist the exact receipt before network send. A lost response/restart replays the same request.
+      const state = ledger.read(), accessEventId = state.barriers[`event:${event.eventId}`]?.accessEventId;
+      if (event.type === 'credentials-revoked' && state.agentReadControlRequired === true &&
+          (!agentReadClosureComplete(state, accessEventId, state.accessAcks[`ack:${accessEventId}:agent`]) ||
+           !agentReadClosureComplete(state, accessEventId, persisted))) {
+        // A legacy unsent outbox is retained, not rewritten into a new receipt.
+        pending.push(event.eventId); continue;
+      }
       await accountClient.ack(persisted.eventId, persisted.receipt);
       ledger.transaction(state => { state.accountAcks[ackKey].sent = true; });
     }
     return { pendingEvents: [...new Set(pending)], accountHead: ledger.read().accountHead };
   }
+  function hasAgentReadClosure(eventId) {
+    const state = ledger.read();
+    return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
+  }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
-    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, revocationStatus, flushAccountAcknowledgements,
+    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);
