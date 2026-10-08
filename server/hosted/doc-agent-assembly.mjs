@@ -7,7 +7,7 @@ import { createRunAuthority } from '../account/run-authority.mjs';
 import { createRunInternalHandler } from '../account/run-internal.mjs';
 import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
 import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
-  INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders } from '../account/agent-instance-internal.mjs';
+  INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
@@ -201,7 +201,13 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   }
   async function dispatchInvocation(input, next) {
     const { principal, connId, transport, kind } = input;
-    if (principal?.realm !== 'account' || principal.role !== 'agent') return next(input.text);
+    if (principal?.realm !== 'account' || principal.role !== 'agent') {
+      if (transport?.internal || transport?.req?.headers?.[INSTANCE_PROOF_HEADER] ||
+          transport?.req?.headers?.[INSTANCE_DATA_PROOF_HEADER] ||
+          new URL(transport?.req?.url ?? '/', 'http://localhost').searchParams.has('runGrantId'))
+        fail(403, 'run-principal-invalid');
+      return next(input.text);
+    }
     if (!transport?.internal) fail(403, 'instance-internal-transport-required');
     const req = transport.req; assertInstanceDirectTransport(req);
     const base = resolveServicePrincipal({ socket: transport.socket });

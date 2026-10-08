@@ -98,3 +98,77 @@ test('Agent LP waits for full module and holds read lease until fresh cache chec
   const denied = await waiting; assert.equal(denied.status, 403); assert.equal(denied.body.error, 'fixture-revoked');
   assert.equal(denied.body.frames, undefined); await waitFor(() => recvReleased);
 });
+
+test('Agent LP rejects unproved oversize/empty sends and superseded recv/close before session side effects', { timeout: 12000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-instance-lp-boundary-')), pki = assetWiringPki(dir);
+  const gates = new Map(); let invocations = 0;
+  const service = createDocService({ enableHttpTransport: true, maxPayload: 256, autoTick: false,
+    authenticate: () => fixtureAgent,
+    modules: [{ name: 'fixture', types: ['fixture.'], handle(api, connId, msg) {
+      api.send(connId, { type: 'fixture.ok', reqId: msg.reqId });
+    } }], async dispatchInvocation(input, next) {
+      invocations++;
+      if (input.transport.req.headers['x-fixture-proof'] !== 'yes')
+        throw Object.assign(Error('proof-required'), { status: 403, code: 'fixture-proof-required' });
+      const gate = gates.get(input.transport.req.headers['x-fixture-held']);
+      if (gate) { gate.entered.resolve(); await gate.release.promise; }
+      return next(input.text, async () => {});
+    } });
+  const server = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true }, (req, res) => {
+    if (!service.handleTransportHttp(req, res)) { res.writeHead(404); res.end('{}'); }
+  }); service.attachTransportServer(server);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); const port = server.address().port;
+  t.after(async () => { for (const gate of gates.values()) gate.release.resolve(); await service.close();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true }); t.diagnostic(`owned LP boundary port=${port}; actual close complete`); });
+  const request = (...args) => httpRequest(port, pki.asset, ...args);
+  const opened = await request('POST', '/lp/open', {}, { 'x-promptcut-protocols': 'promptcut.v1, promptcut.session.new' });
+  const auth = { authorization: `Bearer ${opened.body.sid}` }, proof = { ...auth, 'x-fixture-proof': 'yes' };
+  assert.equal((await request('POST', '/lp/send', { frames: ['x'.repeat(70000)] }, auth)).status, 413);
+  assert.equal((await request('POST', '/lp/send', { frames: ['x'.repeat(257)] }, auth)).status, 413);
+  const empty = await request('POST', '/lp/send', { frames: [] }, auth);
+  assert.equal(empty.status, 400); assert.equal(empty.body.ack, undefined); assert.equal(invocations, 0);
+  assert.equal((await request('POST', '/lp/send', { frames: [JSON.stringify({ type: 'fixture.echo', reqId: 'first', seq: 1, ack: 0 })] }, proof)).body.ack, 1);
+  for (const kind of ['recv', 'close']) {
+    const gate = { entered: deferred(), release: deferred() }; gates.set(kind, gate);
+    const stale = request(kind === 'recv' ? 'GET' : 'POST', kind === 'recv' ? '/lp/recv?ack=1&wait=0' : '/lp/close',
+      kind === 'recv' ? undefined : {}, { ...proof, 'x-fixture-held': kind });
+    await gate.entered.promise;
+    const resumed = await request('POST', '/lp/open', {}, { 'x-fixture-proof': 'yes',
+      'x-promptcut-protocols': `promptcut.v1, promptcut.session.${opened.body.sid}.0` });
+    assert.equal(resumed.status, 200); assert.equal(resumed.body.connId, opened.body.connId);
+    gate.release.resolve(); const result = await stale;
+    assert.equal(result.status, 409); assert.equal(result.body.error, 'superseded');
+    assert.equal(result.body.ack, undefined); assert.equal(result.body.frames, undefined);
+    const received = await request('GET', '/lp/recv?ack=0&wait=0', undefined, proof);
+    assert.equal(received.status, 200); assert.equal(received.body.frames.length, 1, 'old recv cannot release cached frame; old close cannot end resumed session');
+  }
+});
+
+test('instance-attempt resume cannot fall back to a cached ordinary page; ordinary public resume stays unchanged', { timeout: 12000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-instance-page-resume-')), pki = assetWiringPki(dir), clients = [];
+  let invoked = 0;
+  const service = createDocService({ enableHttpTransport: true, autoTick: false,
+    authenticate: () => ({ userId: 'ordinary', role: 'editor' }),
+    dispatchInvocation() { invoked++; throw Object.assign(Error('run-principal-invalid'), { status: 403, code: 'run-principal-invalid' }); } });
+  const address = await service.listen(0, '127.0.0.1');
+  const server = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true }, (req, res) => {
+    if (!service.handleTransportHttp(req, res)) { res.writeHead(404); res.end('{}'); }
+  }); service.attachTransportServer(server);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); const port = server.address().port;
+  t.after(async () => { for (const c of clients) c.close(); await Promise.all(clients.map(c => c.closed)); await service.close();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true });
+    t.diagnostic(`owned ordinary WS=${address.port}/TLS resume=${port}; actual close complete`); });
+  const client = wsClient(`ws://127.0.0.1:${address.port}`, ['promptcut.v1', 'promptcut.session.new']); clients.push(client);
+  await client.opened; const welcome = await client.next(m => m.type === 'session.welcome'); assert.equal(welcome.connId, undefined);
+  const attempted = wsClient(`ws://127.0.0.1:${address.port}/?runGrantId=not-authority`,
+    ['promptcut.v1', `promptcut.session.${welcome.sid}.0`]); clients.push(attempted);
+  await attempted.opened; assert.equal((await attempted.closed).code, 4003); assert.equal(invoked, 1);
+  assert.equal(attempted.all.some(m => m.type === 'session.welcome'), false);
+  const denied = await httpRequest(port, pki.asset, 'POST', '/lp/open', {}, {
+    'x-promptcut-protocols': `promptcut.v1, promptcut.session.${welcome.sid}.0` });
+  assert.equal(denied.status, 403); assert.equal(denied.body.error, 'run-principal-invalid'); assert.equal(invoked, 2);
+  const ordinary = wsClient(`ws://127.0.0.1:${address.port}`, ['promptcut.v1', `promptcut.session.${welcome.sid}.0`]); clients.push(ordinary);
+  await ordinary.opened; assert.equal((await ordinary.next(m => m.type === 'session.welcome')).resumed, true);
+  assert.equal(invoked, 2, 'ordinary resume follows its unchanged path');
+});

@@ -131,9 +131,11 @@ export function createDocService(options = {}) {
   // still running, before it can become the session's current transport.
   const ownedWsTransports = new Set();
   const additionalServers = new Map(), additionalSockets = new WeakSet();
-  const needsInvocation = principal => principal?.realm === 'account' && principal?.role === 'agent' &&
-    typeof options.dispatchInvocation === 'function';
-  const dispatchInvocation = (input, next) => needsInvocation(input.principal) ?
+  const needsInvocation = (principal, req) => typeof options.dispatchInvocation === 'function' &&
+    (principal?.realm === 'account' && principal?.role === 'agent' || req &&
+      (additionalSockets.has(req.socket) || req.headers?.['x-promptcut-instance-proof'] ||
+        req.headers?.['x-promptcut-data-proof'] || new URL(req.url, 'http://localhost').searchParams.has('runGrantId')));
+  const dispatchInvocation = (input, next) => needsInvocation(input.principal, input.transport?.req) ?
     options.dispatchInvocation(input, next) : next(input.text);
   /** 模块名 → { mod, timer }，按挂载顺序 */
   const mounted = new Map();
@@ -341,10 +343,16 @@ export function createDocService(options = {}) {
       let transportClosed = false;
       ws.on('close', () => { transportClosed = true; });
       t.isUsable = () => !transportClosed && !socket.destroyed && socket.writable && !closing;
-      const r = await dispatchInvocation({ connId: t.connId, principal: t.principal,
-        kind: 'resume', sessionItem: { sid: item.sid, ack: item.ack },
-        transport: { kind: 'ws', req, socket, internal: additionalSockets.has(socket) } },
-        () => sessions.resume({ sid: item.sid, ack: item.ack, transport: t }));
+      let r;
+      try {
+        r = await dispatchInvocation({ connId: t.connId, principal: t.principal,
+          kind: 'resume', sessionItem: { sid: item.sid, ack: item.ack },
+          transport: { kind: 'ws', req, socket, internal: additionalSockets.has(socket) } },
+          () => sessions.resume({ sid: item.sid, ack: item.ack, transport: t }));
+      } catch {
+        ws.closeNow(4003, 'instance-invocation-forbidden');
+        return;
+      }
       if (!r.ok) {
         ws.closeNow(r.code, r.reason);
         return;

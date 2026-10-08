@@ -260,7 +260,7 @@ export function createHttpTransport({
   /** 立即回一次 recv：会话还开着就向会话层取帧；已结束就回剩下的帧，都回完了带 `closed` 并忘掉这条传输 */
   function respondRecv(t, res, cors, lease) {
     if (lease) return Promise.resolve().then(() => lease.check()).then(() => {
-      if (t.fenced || !t.closed && !sessions.isCurrent(t.connId, t))
+      if (t.fenced || t.dead || t.superseded || !t.closed && !sessions.isCurrent(t.connId, t))
         throw Object.assign(Error('superseded'), { status: 409, code: 'superseded' });
       return respondRecv(t, res, cors);
     }).catch(error => sendJson(res, error?.status ?? 503,
@@ -348,13 +348,20 @@ export function createHttpTransport({
   });
 
   function invoke(t, req, res, cors, kind, bodyText, next, extra = {}) {
-    if (!needsInvocation(t.principal)) return next();
+    if (!needsInvocation(t.principal, req)) return next();
     return Promise.resolve().then(() => dispatchInvocation({ connId: t.connId, principal: t.principal,
       kind, bodyText, ...extra, transport: { kind: 'http', req, res, socket: req.socket,
         internal: internalTransport(req) } }, next)).catch(error => {
       sendJson(res, error?.status ?? 503, { ok: false, error: error?.code ?? 'instance-invocation-forbidden' }, cors);
       throw error;
     });
+  }
+
+  // Only Agent instance dispatch is asynchronous. Recheck the exact transport
+  // after that await before mutating a session which may have been resumed.
+  function requireCurrentInvocation(t) {
+    if (needsInvocation(t.principal) && (t.fenced || t.dead || t.superseded || !sessions.isCurrent(t.connId, t)))
+      throw Object.assign(Error('superseded'), { status: 409, code: 'superseded' });
   }
 
   async function onOpen(req, res, cors) {
@@ -457,7 +464,8 @@ export function createHttpTransport({
       t.lastSeen = now();
       if (body.tooLarge) {
         sendJson(res, 413, { ok: false, error: 'too-large' }, cors);
-        sessions.close(t.connId, 1009, 'too-large');
+        // A SID locates the session; an unverified oversize request cannot end it.
+        if (!needsInvocation(t.principal, req)) sessions.close(t.connId, 1009, 'too-large');
         return undefined;
       }
       if (t.closed) return closedReply(t, res, cors);
@@ -472,16 +480,19 @@ export function createHttpTransport({
       }
       if (msg.frames.some((f) => byteLen(f) > maxFrame)) {
         sendJson(res, 413, { ok: false, error: 'too-large' }, cors);
-        sessions.close(t.connId, 1009, 'too-large');
+        if (!needsInvocation(t.principal, req)) sessions.close(t.connId, 1009, 'too-large');
         return undefined;
       }
+      if (needsInvocation(t.principal, req) && msg.frames.length === 0)
+        return sendJson(res, 400, { ok: false, error: 'empty-frames' }, cors);
       for (const [frameIndex, text] of msg.frames.entries()) {
         if (t.closed || !sessions.isCurrent(t.connId, t)) break;
-        if (needsInvocation(t.principal)) await invoke(t, req, res, cors, 'message', body.text,
+        if (needsInvocation(t.principal, req)) await invoke(t, req, res, cors, 'message', body.text,
           frame => { if (!t.closed && sessions.isCurrent(t.connId, t)) return sessions.receive(t.connId, frame); },
           { text, frameIndex, frameCount: msg.frames.length });
         else sessions.receive(t.connId, text);
       }
+      requireCurrentInvocation(t);
       if (t.closed) return closedReply(t, res, cors);
       return sendJson(res, 200, { ok: true, ack: sessions.takeAck(t.connId) }, cors);
     } finally {
@@ -493,7 +504,7 @@ export function createHttpTransport({
     const t = transportOf(req, res, cors);
     if (!t) return;
     track(t, req, res);
-    if (needsInvocation(t.principal)) return invoke(t, req, res, cors, 'recv', '', (_frame, check) => {
+    if (needsInvocation(t.principal, req)) return invoke(t, req, res, cors, 'recv', '', (_frame, check) => {
       if (typeof check !== 'function') throw Object.assign(Error('instance-read-lease-required'),
         { status: 503, code: 'instance-read-lease-required' });
       return receiveAllowed(t, req, res, cors, url, { check });
@@ -502,6 +513,8 @@ export function createHttpTransport({
   }
 
   function receiveAllowed(t, req, res, cors, url, lease) {
+    // This runs after signature/current-run checks, before ACK or waiter changes.
+    requireCurrentInvocation(t);
     // A signed read invocation stays live until this response actually finishes
     // or closes. Its fresh check is used again immediately before pulling bytes.
     const replied = lease ? new Promise(resolve => { res.once('finish', resolve); res.once('close', resolve); }) : undefined;
@@ -558,6 +571,7 @@ export function createHttpTransport({
       try { msg = JSON.parse(body.text); } catch { msg = null; }
     }
     return invoke(t, req, res, cors, 'close', body.text, () => {
+      requireCurrentInvocation(t);
       if (!t.closed) sessions.end(t.connId, isObj(msg) ? msg.code : undefined, isObj(msg) ? msg.reason : '');
       // 客户端自己关的：剩下的帧它不要了
       if (bySid.get(t.sid) === t) bySid.delete(t.sid);
