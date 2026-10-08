@@ -24,7 +24,7 @@ function SaveVault($record) {
   $tmp=$file+'.tmp-'+[Guid]::NewGuid().ToString('N')
   try { $stream=[IO.FileStream]::new($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
     try { $stream.Write($sealed,0,$sealed.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-    if ([IO.File]::Exists($file)) { [IO.File]::Replace($tmp,$file,$null) } else { [IO.File]::Move($tmp,$file) }
+    if ([IO.File]::Exists($file)) { [IO.File]::Replace($tmp,$file,[NullString]::Value) } else { [IO.File]::Move($tmp,$file) }
   } finally { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } }
 }
 function ReadVault {
