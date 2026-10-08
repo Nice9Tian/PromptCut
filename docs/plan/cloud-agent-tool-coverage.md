@@ -73,4 +73,3 @@
 - 账号版运行结构复用已存在：`account-runner.mjs:24-75` 取得持久 run grant 后复用 `createHostedTools`、现有 `createAgentInstance` 和 `startHostedRun`。实际工具调用证据缺口是明确的：`server/test/agent-runner-read.test.mjs` 的 runnerFactory 是 mock，只数模型/工具回调；未逐个调用 Hosted tool；同样不代表主服务的 Linux/生产部署。
 - 新用户决定要求不能只改工具提示词：登录素材采集必须实装 PC 本地代下桥；选区要汇总所有在线成员；spawn_agent 要停在稳定文案；所有工具授权/实例绑定仍需 account-v2 的有效项目与消息/run grant。
 - 本次只做静态审查；没有运行服务、probe、测试、安装依赖、访问节点或读取生产凭证。具体分块、接口/验收的新实现设计由 root/Sol 单独定夺；本文的技术建议只是为分包标注依赖，不是用户批准的新产品语义。
-
