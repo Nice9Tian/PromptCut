@@ -166,12 +166,26 @@ export function createSharedDocService({
   function handleSharedHttp(req, res) {
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     if (accountProjects && pathname.startsWith('/hosted/shared/account')) {
-      if (!accountRuntime.sessionReady && (pathname === '/hosted/shared/account/join' || pathname === '/hosted/shared/account/session')) {
-        res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify({ ok: false, code: 'session-unavailable' }));
-        return true;
-      }
-      void accountProjects.handlePublic(req, res);
+      void (async () => {
+        let readiness;
+        if (pathname === '/hosted/shared/account/join' || pathname === '/hosted/shared/account/session') {
+          try { readiness = await accountRuntime.requireAssetReady(); }
+          catch {
+            if (!res.destroyed && !res.headersSent) {
+              res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+              res.end(JSON.stringify({ ok: false, code: 'session-unavailable' }));
+            }
+            return;
+          }
+        }
+        if (!res.destroyed) await accountProjects.handlePublic(req, res, { readiness });
+      })().catch(error => {
+        say?.('account.http-error', { code: String(error?.code ?? 'internal') });
+        if (!res.destroyed && !res.headersSent) {
+          res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify({ ok: false, code: 'account-unavailable' }));
+        }
+      });
       return true;
     }
     if (mode === 'hosted' && pathname.startsWith('/hosted/shared/account')) {
