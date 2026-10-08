@@ -346,3 +346,53 @@ Linux root adapter只接受精确root配置的固定service Fragment/baseDropIns
 - types首次`pc-asset-root-publisher-v2-types-1.log` exit1/wall749ms：本叶没有node_modules/typescript/bin/tsc，编译器尚未运行。已保留，未装依赖。改用主库已安装TypeScript绝对入口后`tsc -b --force`零错，`pc-asset-root-publisher-v2-types-2.log` exit0/wall7741ms。
 
 证据层级：新IO callbacks属于纯顺序/拒绝模型。Windows真实TMP文件测试实际执行hardlink/rename/锁并注入目录fsync失败，证明“新文件可见但失败保锁”，不能声称Windows支持Linux目录耐久或自然掉电。Linuxroot入口在Windows明确拒绝，未运行systemd/TLS。此前bd760d25单scope真实OS通过仍仅其原边界；本v2双代runtime adapter、真实G reservation/identity与doc checkpoint联合尚待root独立执行。没有完整npm/节点/部署，本轮按root小阶段租约只跑纯目标与类型。
+
+## v2双epoch隔离OS探针源码与root执行交接（未运行）
+
+root另外精确租赁`scripts/probes/fixtures/asset-root-publisher-v2-worker.mjs`。现OS脚本新增独立显式入口，原`--user`单scope分支保持原行为与30秒边界，新producer依赖只在新分支动态导入，旧单文件使用不需要带这些依赖。新模式是一次initialize→rotate→终止隔离实验的编排，不执行真实doc接受；`docAcceptanceVerified`始终false。
+
+```text
+node scripts/probes/asset-root-cgroup-os-probe.mjs --publisher-v2 --config /run/<fresh-root-namespace>/publisher.json --out /var/tmp/<fresh-result-dir>
+```
+
+命令由root在Linux独立窗口运行，本Agent没有执行。`out`必须不存在，mkdir成功后才chmod755，不改既有目录。publisher/config/TLS/冻结源码必须位于全祖先root-owned且不可group/world写的路径；`/var/tmp`不适合放可信publisher输入，独立结果目录可在这里。registry目录创建0755以供asset UID遍历，所有v2 JSON仅公开身份元数据；v2写端显式fd.chmod0644后write/fsync，抵抗root umask077。v1写端默认权限行为不变。私钥不进入JSON或输出。
+
+root先用新的16位小写hex `<id>` 预建唯一固定普通service，名字严格`pc-asset-cgroup-proof-<id>.service`，fragment严格`/run/systemd/system/<该名字>`，不得使用生产unit。显式User/Group为独立现有asset身份，`Type=simple`、`Restart=no`、`KillMode=control-group`、`Delegate=no`、`TimeoutStopSec=5`（探针精确核systemctl返回5s），建议初始化Slice=system.slice且尚未启动。ExecStart为当前Node绝对路径、冻结的新增worker绝对路径、`--parent /run/<fresh-root-namespace>/worker.json`。root daemon-reload后核实际inactive/MainPID0/无CG。producer只维护自己的`/run/systemd/system/<unit>.d/90-promptcut-root-slice.conf`；现成未知配置不覆盖、不删除。
+
+`publisher.json` exact结构为：
+
+```text
+{v:2, expected:ExpectedV2, registryDir:<new-root-owned-empty-dir>,
+ identity:{origin:'https://127.0.0.1:6541',keyFile:<doc-client-key>,certFile:<doc-client-cert>,caFile:<CA>},
+ runtimeAdapter:{unitFragment:{path:'/run/systemd/system/<unit>',sha256:<actual-bytes>},
+ baseDropIns:[],ownDropInPath:'/run/systemd/system/<unit>.d/90-promptcut-root-slice.conf'}}
+```
+
+ExpectedV2为已固定schema，`closurePolicy.unitNamespace`在这个探针中必须`pcassetproof<id>`，配置unit/UID/authority/serviceIdentity/两种asset证书pin来自本次root实际fixture；不填虚构pin。`identity` doc证书是root向asset发私有请求的真实client，TLS server证书SAN必须含127.0.0.1。`expected.clientFingerprint256`是asset outgoing client证书的真实SHA256 pin，serverFingerprint256是asset私有server证书的真实pin，不混成doc请求client pin。
+
+与publisher.json同目录的`worker.json` exact结构为：
+
+```text
+{v:2, readerModule:<frozen-G-run-assets-current-registry-v2.mjs-absolute-path>,
+ readerSha256:<actual-reader-bytes-sha256>, reservationFile:<registryDir>/reservation.json,
+ expected:ExpectedV2, dataDir:<fresh-asset-owned-0700-dir>,
+ tls:{keyFile:<asset-server-key>,certFile:<asset-server-cert>,caFile:<CA>,
+      clientCertFile:<asset-outgoing-public-cert>,observerCertFile:<doc-client-public-cert>},
+ identityPort:6541,observerPort:6540}
+```
+
+reader入口按G固定`63bfc0fa`/报告`b851`模块闭包准备，具体Git对象由root固定导出，不引用其后WIP；worker启动前后核reader字节hash并真实调用`readRootAssetReservationV2`，一次读取真实root reservation冻结authority/epoch/instanceId。不把namespace/PID从网络body抬成权限。实际process.pid、/proc startTicks、文件fd、TCP socket fd由进程自己记录供root独立交叉核；identity各pin从真实X509证书算出，HTTPS双向验证并精确核真实req.socket peer doc pin。没有模拟identity回调或关闭布尔接口。此worker只实现隔离identity/resource fixture，不冒充G完整asset运行时、observer/HMAC或业务receipt。
+
+worker的root配置/源码/公开证书均不可asset写；server私钥由root持有且只授该隔离asset组读取（如0640），其dataDir为新建asset-owned0700。父进程实际HTTPS监听6541，父子各持有真实文件和到root6540的TCP。systemd stop时父收口并退出，子收到同次SIGTERM后持FD/TCP两秒再实际close/exit；root检查实际/proc UID/startTicks/cgroup、fd目标和socket inode/端点，不能凭peer自报角色认定OS归属。6540–6549启动前全空检查；仅用本次端口，不碰其它服务。
+
+一次性编排与root真实G读端插入点：
+
+1. probe调用真实producer initialize，验证epoch1完整文件链；等待真实父/子资源，经内核交叉核对后输出`stage-epoch1-ready.json`（含record/anchor digest和registryDir）。
+2. root外部脚本用真实G factory及独立SQLite进行epoch1 accept/persist→close/reopen验证。然后写本out下`continue-epoch1.json` exact `{v:1,continueEpoch:1,recordDigest:<stage同值>}`。这只是root的操作时序门，probe不称其为doc receipt；真实G结果另存raw。
+3. probe实际rotate，同时固定旧scope/eventsFD采样“父birthgone、子FD/TCP仍持有、pop1”负例。真正producer独立读其固定FD的pop0并完整witness file/dir fsync后才释放旧scope；probe验证epoch2完整历史及witness双tuple/摘要、旧scope已inactive、旧父子birthgone和双方EOF/close。旧observer若在producer已释放scope后读到ENODEV，只留diagnostic，绝不充empty；真实empty证据来源是本轮未注入hook的Linux producer固定FD观察及耐久witness。
+4. `stage-epoch2-ready.json`后，root真实G必须先拒未显式accept的epoch2，再显式接受完整1..2链、checkpoint关闭重开，并验rollback/mixed record拒绝，结果另存raw；完成后写`continue-epoch2.json` exact `{v:1,continueEpoch:2,recordDigest:<stage同值>}`。
+5. probe锁定本registry，核精确当前第二代、真实OS双身份和有限资源清单；current置preparing，再重核后只stop该精确service。固定第二代scope/eventsFD实际pop0+父子birthgone+双EOFclose+serviceinactive，写`publisher-v2-final-closure.json` file/dir fsync；再重核才stop自己slice。这个关闭记录不是epoch3 publication/witness，结束目录保留`.publisher.lock`和nonactive current，不能继续作为生产授权源。root后续只按已保存ownership清理自己unit配置，不由probe删除任何fragment/drop-in/备份。
+
+每个人工协调门最多30秒，生产publisher原每次systemctl命令上限120秒保留；探针固定unit实际StopTimeout5秒，最终stop命令7秒、slice stop3秒。新模式不宣称沿用原单scope总30秒保证。没有盲重试整轮；唯一startup ECONNREFUSED仍是producer限定同一OS身份的退避，不掩盖协议/pin错误。失败会保留证据与未知资源，不猜PID去stop；已知发布若阶段门失败，会取得真实锁并将精确同record置preparing，已有publisher失败锁不替换。未知state留metadata供root准确恢复。
+
+本机验证：三个修改源码`node --check`均通过；Windows调用新OS CLI返回exit1 `probe-linux-root-required`，worker CLI返回exit1 `worker-platform`，raw `pc-asset-root-v2-os-probe-cli-1.log`及`pc-asset-root-v2-worker-cli-1.log`。这是平台边界拒绝，非Linux运行通过。chmod及诊断窄补后纯目标73/73零fail/cancel/skip，239.8896ms/wall1717ms，`pc-asset-root-publisher-v2-target-3.log`；类型零错exit0/wall7602ms，`pc-asset-root-publisher-v2-types-3.log`。保留全部前次结果/首types未启动记录；尚未跑Linux双代/TLS/G SQLite，不把已有单scopeOS通过扩大。

@@ -1,4 +1,5 @@
-/** ONE bounded Linux/root OS experiment. Never invokes publisher or doc ACK.
+/** Linux/root OS experiments. The original --user experiment never invokes
+ * publisher; the separate --publisher-v2 mode uses its actual root entry.
  * Usage: node ... --user <existing-dedicated-asset-user> [--out <new-absolute-dir>]
  * Root creates one random transient service inside its own active slice and its
  * own TCP server on 6540, after checking ALL 6540..6549 are free. Evidence stays.
@@ -389,9 +390,232 @@ export async function runAssetCgroupOSProbe({ user, out }) {
   return result;
 }
 
+/** Root separately creates the random fixed service, worker.json and fresh TLS
+ * material. No production unit or foreign configuration is created/deleted.
+ * continue-epochN.json is an operator timing gate, NEVER a doc receipt.
+ */
+export async function runPublisherV2OSProbe({ configFile, out }) {
+  if (process.platform !== 'linux' || process.getuid?.() !== 0 || process.geteuid?.() !== 0) fail('probe-linux-root-required');
+  const { digestOf } = await import('../../server/account/ledger.mjs');
+  const { runAssetRootPublisherV2, openPublisherLock, writePublisherArtifact } = await import('../../server/hosted/deploy/asset-root-registry-publisher.mjs');
+  const { validateAssetRootHistoryV2 } = await import('../../server/hosted/asset-root-registry-schema-v2.mjs');
+  const equal = (a, b) => digestOf(a) === digestOf(b);
+  async function readRoot(filename) {
+    if (!path.isAbsolute(filename) || path.normalize(filename) !== filename) fail('probe-root-file');
+    for (let p = path.dirname(filename); ; p = path.dirname(p)) {
+      const st = await fs.lstat(p);
+      if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== 0 || (st.mode & 0o022)) fail('probe-root-file');
+      if (p === path.dirname(p)) break;
+    }
+    const fd = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const st = await fd.stat();
+      if (!st.isFile() || st.uid !== 0 || st.nlink !== 1 || (st.mode & 0o022) || st.size > 65536) fail('probe-root-file');
+      return JSON.parse(await fd.readFile('utf8'));
+    } finally { await fd.close(); }
+  }
+  const config = await readRoot(configFile), workerConfig = await readRoot(path.join(path.dirname(configFile), 'worker.json'));
+  const expected = config.expected, match = /^pc-asset-cgroup-proof-([a-f0-9]{16})\.service$/.exec(expected?.unit ?? '');
+  const origin = new URL(config.identity?.origin);
+  if (config.v !== 2 || !match || config.runtimeAdapter?.unitFragment?.path !== `/run/systemd/system/${expected.unit}` ||
+      config.runtimeAdapter.ownDropInPath !== `/run/systemd/system/${expected.unit}.d/90-promptcut-root-slice.conf` ||
+      expected.closurePolicy?.unitNamespace !== `pcassetproof${match[1]}` || origin.protocol !== 'https:' || origin.hostname !== '127.0.0.1' ||
+      Number(origin.port) !== workerConfig.identityPort || workerConfig.observerPort !== 6540 || !equal(workerConfig.expected, expected) ||
+      workerConfig.reservationFile !== path.join(config.registryDir, 'reservation.json') || !path.isAbsolute(out) || path.normalize(out) !== out)
+    fail('probe-v2-config');
+  if ((await listeners()).length) fail('probe-port-busy');
+  const stopConfig = await command('/usr/bin/systemctl', ['show', expected.unit, '--property=TimeoutStopUSec', '--value'], 2000);
+  if (stopConfig.code || stopConfig.stdout.trim() !== '5s') fail('probe-stop-bound');
+  await fs.mkdir(out, { mode: 0o755 }); await fs.chmod(out, 0o755); // exclusive: never chmod an existing out
+  const start = now(), peers = new Map(), sockets = new Set();
+  const result = { v: 2, mode: 'publisher-v2', ok: false, errors: [], samples: [], unit: expected.unit,
+    productionMounted: false, docAcceptanceVerified: false, negativeObserved: false, publication: [], cleanup: {} };
+  let server, releaseLock, group, events, latestPublished;
+  const readRegistry = name => readRoot(path.join(config.registryDir, name));
+  async function published(epoch) {
+    await fs.lstat(path.join(config.registryDir, '.publisher.lock')).then(() => fail('probe-publisher-still-locked'), e => { if (e.code !== 'ENOENT') throw e; });
+    const currentRecord = await readRegistry('current.json'), anchor = await readRegistry('anchor.json'), entries = [];
+    for (let n = 1; n <= epoch; n++) entries.push({ record: await readRegistry(`epoch-${n}.json`), reservation: await readRegistry(`reservation-${n}.json`),
+      witness: n === 1 ? null : await readRegistry(`witness-${n}.json`), publication: await readRegistry(`publication-${n}.json`) });
+    if (currentRecord.epoch !== epoch) fail('probe-epoch');
+    const checkpoint = validateAssetRootHistoryV2({ entries, currentRecord, anchor, expected, publisherLocked: false });
+    result.publication.push(checkpoint); latestPublished = currentRecord; return currentRecord;
+  }
+  async function peerPair(record) {
+    const deadline = now() + 5000;
+    while (now() < deadline && !['parent', 'child'].every(r => peers.has(`${record.epoch}:${r}`))) await delay(20);
+    const pair = ['parent', 'child'].map(r => peers.get(`${record.epoch}:${r}`));
+    if (pair.some(p => !p)) fail('probe-worker-peers-missing');
+    for (const p of pair) {
+      const info = await processInfo(p.pid);
+      if (p.instanceId !== record.instance.instanceId || p.authorityId !== expected.authorityId || info.uid !== expected.uid ||
+          info.startTicks !== p.startTicks || `/sys/fs/cgroup${info.cgroup}` !== record.instance.cgroup.v2Path ||
+          await fs.readlink(`/proc/${p.pid}/fd/${p.fd}`) !== path.join(workerConfig.dataDir, `${record.epoch}-${p.role}.bin`)) fail('probe-peer-identity');
+      const inode = /^socket:\[(\d+)\]$/.exec(await fs.readlink(`/proc/${p.pid}/fd/${p.socketFd}`))?.[1];
+      const row = (await fs.readFile('/proc/net/tcp', 'utf8')).trim().split('\n').slice(1).map(s => s.trim().split(/\s+/)).find(f => f[9] === inode);
+      if (!inode || !row || row[1] !== `0100007F:${p.remotePort.toString(16).toUpperCase().padStart(4, '0')}` ||
+          row[2] !== '0100007F:198C' || row[3] !== '01') fail('probe-peer-socket');
+    }
+    if (pair[0].pid !== record.instance.pid || pair[0].startTicks !== record.instance.pidBirth.startTicks) fail('probe-peer-main');
+    return pair;
+  }
+  async function operatorGate(record) {
+    await durableJSON(out, `stage-epoch${record.epoch}-ready.json`, { v: 2, epoch: record.epoch, recordDigest: digestOf(record),
+      registryDir: config.registryDir, anchorDigest: result.publication.at(-1).anchorDigest, docAcceptanceVerified: false });
+    // Root runs the real G SQLite factory/close/reopen assertions externally.
+    // This file only controls when this experiment moves to its next OS step.
+    const deadline = now() + 30000, filename = path.join(out, `continue-epoch${record.epoch}.json`);
+    do {
+      let st; try { st = await fs.lstat(filename); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      if (st) {
+        if (!st.isFile() || st.isSymbolicLink() || st.uid !== 0 || st.nlink !== 1 || (st.mode & 0o022) || st.size > 512) fail('probe-operator-gate');
+        const v = JSON.parse(await fs.readFile(filename, 'utf8'));
+        if (!equal(v, { v: 1, continueEpoch: record.epoch, recordDigest: digestOf(record) })) fail('probe-operator-gate');
+        return;
+      }
+      await delay(20);
+    } while (now() < deadline);
+    fail('probe-operator-gate-timeout');
+  }
+  async function pinScope(record) {
+    const scope = record.closureScope;
+    const handle = await fs.open(scope.cgroup.v2Path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try { return { record, handle, events: await fs.open(`/proc/self/fd/${handle.fd}/cgroup.events`, constants.O_RDONLY | constants.O_NOFOLLOW) }; }
+    catch (e) { await handle.close(); throw e; }
+  }
+  async function populated(pin) {
+    const st = await pin.handle.stat({ bigint: true }), scope = pin.record.closureScope;
+    if (String(st.dev) !== scope.cgroup.dev || String(st.ino) !== scope.cgroup.ino) fail('probe-scope-changed');
+    const buf = Buffer.alloc(4096), { bytesRead } = await pin.events.read(buf, 0, buf.length, 0);
+    const m = /^populated ([01])$/m.exec(buf.subarray(0, bytesRead).toString('utf8'));
+    if (!m) fail('probe-events-invalid'); return Number(m[1]);
+  }
+  async function verifyScope(record) {
+    const scope = record.closureScope, state = await describe(scope.unit, 2000);
+    if (state.Id !== scope.unit || state.ActiveState !== 'active' || state.Transient !== 'yes' || state.StopWhenUnneeded !== 'no' ||
+        state.InvocationID !== scope.unitInvocationId || `/sys/fs/cgroup${state.ControlGroup}` !== scope.cgroup.v2Path ||
+        state.Description !== `PromptCut root closure ${expected.authorityId} epoch ${scope.epoch} ${scope.scopeId}` ||
+        (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim() !== scope.bootId) fail('probe-scope-changed');
+    const inv = await inventory(scope.cgroup.v2Path);
+    if (inv.groups.some(p => p !== scope.cgroup.v2Path && p !== record.instance.cgroup.v2Path)) fail('probe-scope-not-exclusive');
+    return inv;
+  }
+  async function sample(pin, pair) {
+    const [parent, child] = pair, mainGone = await birthGone(parent), childGone = await birthGone(child);
+    let childFdHeld = false;
+    if (!childGone) try { childFdHeld = await fs.readlink(`/proc/${child.pid}/fd/${child.fd}`) === path.join(workerConfig.dataDir, `${child.epoch}-child.bin`); }
+    catch (e) { if (e.code !== 'ENOENT') throw e; }
+    return { mainGone, childGone, populated: await populated(pin), childFdHeld, parentEof: parent.eof, childEof: child.eof,
+      parentClosed: parent.closed, childClosed: child.closed };
+  }
+  try {
+    server = net.createServer(socket => {
+      sockets.add(socket); let text = '', admitted = false;
+      socket.on('error', () => {}); socket.once('close', () => sockets.delete(socket));
+      socket.on('data', chunk => {
+        if (admitted) return socket.destroy(); text += chunk.toString('utf8');
+        if (text.length > 2048) return socket.destroy(); if (!text.endsWith('\n')) return;
+        try {
+          const v = JSON.parse(text), key = `${v.epoch}:${v.role}`;
+          if (!['parent', 'child'].includes(v.role) || ![1, 2].includes(v.epoch) || peers.has(key) ||
+              ![v.pid, v.fd, v.socketFd].every(Number.isSafeInteger) || !/^[1-9][0-9]*$/.test(v.startTicks)) throw Error();
+          admitted = true; const p = { ...v, remotePort: socket.remotePort, eof: false, closed: false }; peers.set(key, p);
+          socket.once('end', () => { p.eof = true; }); socket.once('close', () => { p.closed = true; });
+        } catch { socket.destroy(); }
+      });
+    });
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(6540, '127.0.0.1', resolve); });
+    await runAssetRootPublisherV2({ configFile, mode: 'initialize' });
+    const first = await published(1), pair1 = await peerPair(first); await operatorGate(first);
+    const pin1 = await pinScope(first); await verifyScope(first);
+    let rotationDone = false;
+    const rotation = runAssetRootPublisherV2({ configFile, mode: 'rotate' }).then(value => ({ value }), error => ({ error }))
+      .finally(() => { rotationDone = true; });
+    try {
+      while (!rotationDone) {
+        try {
+          const s = await sample(pin1, pair1);
+          if (s.mainGone && !s.childGone && s.childFdHeld && s.populated === 1 && !s.childEof && !s.childClosed) result.negativeObserved = true;
+          if (!equal(s, result.samples.at(-1)?.sample ?? {})) result.samples.push({ ms: Math.round(now() - start), sample: s });
+        } catch (e) {
+          // Publisher may already have durably witnessed empty and released this
+          // old scope. ENODEV here is diagnostic, never an empty observation.
+          result.oldObserverError = safeCode(e); break;
+        }
+        await delay(20);
+      }
+      const outcome = await rotation; if (outcome.error) throw outcome.error;
+    } finally { await pin1.events.close(); await pin1.handle.close(); }
+    const second = await published(2), pair2 = await peerPair(second);
+    if (!result.negativeObserved || !pair1.every(p => p.eof && p.closed) || !await birthGone(pair1[0]) || !await birthGone(pair1[1]))
+      fail('probe-real-rotation-negative-or-close-missing');
+    const witness = await readRegistry('witness-2.json');
+    result.rotationWitness = { digest: digestOf(witness), populated: witness.observed.populated, scopeActive: witness.observed.scopeActive,
+      serviceInstance: witness.observed.serviceInstance, closureScope: witness.observed.closureScope };
+    const old = await describe(first.closureScope.unit, 2000);
+    if (old.ActiveState !== 'inactive') fail('probe-old-scope-not-released');
+    await operatorGate(second);
+    // End this isolated experiment; this is NOT an epoch3 authorization/witness.
+    releaseLock = await openPublisherLock(config.registryDir);
+    if (!equal(await readRegistry('current.json'), second)) fail('probe-current-changed');
+    const pin2 = await pinScope(second); group = pin2.handle; events = pin2.events;
+    const inv = await verifyScope(second), u = await describe(expected.unit, 2000), main = await processInfo(second.instance.pid);
+    if (u.Id !== expected.unit || u.InvocationID !== second.instance.unitInvocationId || Number(u.MainPID) !== main.pid ||
+        u.Restart !== 'no' || u.KillMode !== 'control-group' || u.Delegate !== 'no' || u.Slice !== second.closureScope.unit ||
+        main.startTicks !== second.instance.pidBirth.startTicks || main.uid !== expected.uid ||
+        `/sys/fs/cgroup${main.cgroup}` !== second.instance.cgroup.v2Path || inv.pids.some(p => !pair2.some(peer => peer.pid === p))) fail('probe-stop-ownership-unproved');
+    await writePublisherArtifact({ dir: config.registryDir, name: 'current.json', value: { ...second, state: 'preparing' }, publicMetadata: true });
+    const preStop = await describe(expected.unit, 2000), preMain = await processInfo(second.instance.pid);
+    if (preStop.InvocationID !== second.instance.unitInvocationId || Number(preStop.MainPID) !== second.instance.pid ||
+        preStop.Slice !== second.closureScope.unit || preStop.Restart !== 'no' || preStop.KillMode !== 'control-group' || preStop.Delegate !== 'no' ||
+        !equal(preMain, main) || (await verifyScope(second)).pids.some(p => !pair2.some(peer => peer.pid === p)) || await populated(pin2) !== 1)
+      fail('probe-stop-ownership-unproved');
+    const stopped = await command('/usr/bin/systemctl', ['stop', expected.unit, '--no-ask-password'], 7000);
+    result.cleanup.serviceStop = { code: stopped.code, timedOut: stopped.timedOut };
+    const remaining = await verifyScope(second), state = await describe(expected.unit, 2000);
+    if (stopped.code || stopped.timedOut || state.ActiveState !== 'inactive' || Number(state.MainPID) !== 0 || remaining.pids.length ||
+        await populated(pin2) !== 0 || !await birthGone(pair2[0]) || !await birthGone(pair2[1]) || !pair2.every(p => p.eof && p.closed)) fail('probe-final-close-unproved');
+    result.cleanup.empty = { populated: 0, scope: second.closureScope, birthsGone: true, bothEofClose: true };
+    await durableJSON(out, 'publisher-v2-final-closure.json', result.cleanup);
+    if ((await verifyScope(second)).pids.length || await populated(pin2) !== 0) fail('probe-final-close-unproved');
+    const released = await command('/usr/bin/systemctl', ['stop', second.closureScope.unit, '--no-ask-password'], 3000);
+    result.cleanup.scopeStop = { code: released.code, timedOut: released.timedOut };
+    if (released.code || released.timedOut || (await describe(second.closureScope.unit, 2000)).ActiveState !== 'inactive') fail('probe-slice-release-incomplete');
+    result.cleanup.lockIntentionallyRetained = true; result.ok = true;
+  } catch (e) {
+    result.errors.push(typeof e?.code === 'string' && /^(probe|publisher|asset-root-v2)-[a-z-]+$/.test(e.code) ? e.code : safeCode(e));
+    // A failed operator gate must not leave this known isolated publication
+    // freely admissible. Acquire, never replace, the real publisher lock; a
+    // publisher failure's existing lock stays untouched. No guessed stop.
+    if (latestPublished && !releaseLock) try {
+      releaseLock = await openPublisherLock(config.registryDir);
+      if (!equal(await readRegistry('current.json'), latestPublished)) fail('probe-current-changed');
+      await writePublisherArtifact({ dir: config.registryDir, name: 'current.json', value: { ...latestPublished, state: 'preparing' }, publicMetadata: true });
+      result.cleanup.failedPublicationFenced = true;
+    } catch (error) { result.cleanup.fenceError = safeCode(error); }
+  }
+  finally {
+    await events?.close(); await group?.close();
+    if (releaseLock) await releaseLock({ publicationDurable: false });
+    for (const socket of sockets) socket.destroy();
+    if (server?.listening) await new Promise(resolve => server.close(resolve));
+    result.afterListeners = await listeners(); if (result.afterListeners.length) { result.ok = false; result.errors.push('probe-listener-remains'); }
+    result.wallMs = Math.round(now() - start);
+    // Unknown ownership/partial publisher failure deliberately retains its unit,
+    // scope and root lock. Root gets metadata for explicit recovery, no blind stop.
+    result.remainingUnit = await describe(expected.unit, 2000);
+    await durableJSON(out, 'publisher-v2-result.json', result);
+  }
+  return result;
+}
+
 export async function main(args) {
   if (args.length === 1 && args[0] === '--help') {
-    process.stdout.write('Linux root only: --user <existing-asset-user> [--out <new-absolute-dir>]; one random service + exclusive active slice, ports 6540..6549, 30s bound.\n'); return 0;
+    process.stdout.write('Linux root only: --user <existing-asset-user> [--out <new-absolute-dir>]; original single-scope 30s experiment. Or --publisher-v2 --config <root-v2-config> --out <new-dir>; root-prepared isolated fixed service, worker.json, real TLS; two 30s operator gates. Ports 6540..6549.\n'); return 0;
+  }
+  if (args.length === 5 && args[0] === '--publisher-v2' && args[1] === '--config' && args[3] === '--out') {
+    const result = await runPublisherV2OSProbe({ configFile: args[2], out: args[4] });
+    process.stdout.write(JSON.stringify(result) + '\n'); return result.ok ? 0 : 1;
   }
   if (args.length === 3 && args[0] === '--worker') { await worker(args[1], args[2]); return 0; }
   if (![2, 4].includes(args.length) || args[0] !== '--user' || args.length === 4 && args[2] !== '--out') fail('probe-cli-invalid');

@@ -295,11 +295,11 @@ async function rootRead(filename, optional = false, bytes = false) {
     return bytes ? content : JSON.parse(content.toString('utf8'));
   } finally { await fd.close(); }
 }
-async function atomicWrite(dir, name, value, exclusive = false) {
+async function atomicWrite(dir, name, value, exclusive = false, publicMetadata = false) {
   await rootDirectory(dir);
   const target = path.join(dir, name);
   if (exclusive && await rootRead(target, true)) fail('publisher-record-exists');
-  await writePublisherArtifact({ dir, name, value, exclusive });
+  await writePublisherArtifact({ dir, name, value, exclusive, publicMetadata });
 }
 async function syncDirectory(dir) {
   const directory = await fs.open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
@@ -309,11 +309,11 @@ async function syncDirectory(dir) {
  * reaches it after Linux/root and owned-directory validation; no CLI injection.
  * A rejected directory barrier can leave the published target VISIBLE.
  */
-export async function writePublisherArtifact({ dir, name, value, exclusive = false, directoryBarrier = syncDirectory }) {
+export async function writePublisherArtifact({ dir, name, value, exclusive = false, publicMetadata = false, directoryBarrier = syncDirectory }) {
   if (!/^[a-z][a-z0-9.-]*\.json$/.test(name)) fail('publisher-artifact-name');
   const target = path.join(dir, name);
   const tmp = path.join(dir, `.${name}.${randomUUID()}.tmp`), fd = await fs.open(tmp, 'wx', 0o644);
-  try { await fd.writeFile(JSON.stringify(value)); await fd.sync(); } finally { await fd.close(); }
+  try { if (publicMetadata) await fd.chmod(0o644); await fd.writeFile(JSON.stringify(value)); await fd.sync(); } finally { await fd.close(); }
   if (exclusive) { await fs.link(tmp, target); await fs.unlink(tmp); }
   else await fs.rename(tmp, target);
   await directoryBarrier(dir, { name, value, exclusive });
@@ -562,7 +562,9 @@ export async function runAssetRootPublisherV2({ configFile, mode }) {
       origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password) fail('publisher-config-invalid');
   await rootDirectory(dir);
   const read = name => rootRead(path.join(dir, name), true);
-  const write = (name, value, exclusive) => atomicWrite(dir, name, value, exclusive);
+  // These records contain public identity metadata, never key material. The
+  // asset UID must read its reservation even if the root caller has umask 077.
+  const write = (name, value, exclusive) => atomicWrite(dir, name, value, exclusive, true);
   const receiptName = 'runtime-dropin.json';
   const descriptor = async filename => {
     const content = await rootRead(filename, false, true), st = await fs.lstat(filename, { bigint: true });
@@ -776,7 +778,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const result = await run({ configFile: args[1], mode: args[2].slice(2) });
     process.stdout.write(JSON.stringify({ ok: true, epoch: result.epoch, recordDigest: result.recordDigest, anchorDigest: result.anchorDigest }) + '\n');
   } catch (e) {
-    process.stderr.write(JSON.stringify({ ok: false, code: /^publisher-[a-z-]+$/.test(e.code ?? '') ? e.code : 'publisher-failed' }) + '\n');
+    process.stderr.write(JSON.stringify({ ok: false, code: /^(publisher|asset-root-v2)-[a-z-]+$/.test(e.code ?? '') ? e.code : 'publisher-failed' }) + '\n');
     process.exitCode = 1;
   }
 }
