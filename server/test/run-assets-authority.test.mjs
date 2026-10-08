@@ -211,5 +211,13 @@ test('full body/method/path are signed; failed proof never claims the nonce; mis
   assert.equal(Object.keys(x.f.ledger.read().runAssetNoncesV1).length, 0);
   await x.assets.check(input); assert.equal(Object.keys(x.f.ledger.read().runAssetNoncesV1).length, 1);
   const { size: _size, ...noSize } = ticket.resource; x.setResource(noSize);
-  await assert.rejects(x.issue(x.body('small-no-stat')), /resource-invalid/);
+  await assert.rejects(x.issue(x.body('small-no-stat')), /run-asset-resource-unavailable/);
+});
+
+test('new factory epoch invalidates the old runtime before any late admission can publish', async t => {
+  const x = await setup(t), ticket = await x.issue(), input = x.checkInput(ticket);
+  const replacement = createRunAssets(x.config); t.after(() => replacement.close());
+  await assert.rejects(x.assets.check(input), /run-assets-unconfigured/);
+  await assert.rejects(x.issue(x.body('late-old-runtime')), /run-assets-unconfigured/);
+  assert.equal(Object.keys(x.f.ledger.read().runAssetNoncesV1).length, 0);
 });

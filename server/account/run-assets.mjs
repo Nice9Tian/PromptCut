@@ -32,9 +32,11 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
   const docEpoch = randomUUID(), tickets = new Map(), issued = new Map(), liveLeases = new Map();
   const observerIds = new WeakMap(), observerSockets = new Map();
   let closed = false, unavailable = false;
-  const requireOpen = () => { if (closed || unavailable) fail(503, 'run-assets-unconfigured'); };
+  const requireOpen = () => {
+    if (closed || unavailable || ledger.read().runAssetsEpochV1 !== docEpoch) fail(503, 'run-assets-unconfigured');
+  };
   const time = () => { const n = now(); if (!Number.isSafeInteger(n) || n < 0) fail(503, 'run-asset-clock-invalid'); return n; };
-  ledger.transaction(s => { tables(s); for (const l of Object.values(s.runAssetLeasesV1))
+  ledger.transaction(s => { tables(s); s.runAssetsEpochV1 = docEpoch; for (const l of Object.values(s.runAssetLeasesV1))
     if (l.state === 'admitted') l.state = 'unknown'; return null; });
 
   function mirror() {
@@ -120,7 +122,9 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
   async function resourceFor(body, principal) {
     const selected = await resolveMedia({ principal, ...body });
     if (!selected || !exactShape(selected, ['resource'], ['mediaRev', 'projectRev', 'kind'])) fail(503, 'run-asset-resource-unavailable');
-    const resource = validateAssetRef(selected.resource);
+    let resource;
+    try { resource = validateAssetRef(selected.resource); }
+    catch { fail(503, 'run-asset-resource-unavailable'); }
     if (resource.projectId !== body.projectId || (body.purpose !== 'openRead' &&
         (resource.hash !== body.selector.hash || resource.size !== body.selector.size)) ||
         (body.purpose === 'import' && resource.ext !== body.selector.ext)) fail(403, 'resource-scope-mismatch');
