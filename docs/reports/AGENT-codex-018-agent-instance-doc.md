@@ -59,3 +59,13 @@ root随后批准service/session/http-transport窄lease，以及仅可信Agent we
 - deliver先同步启动service.fencePrincipals读/入场/socket屏障，再await操作fence与实际close；conversation onFence先从已提交ledger控制发起barrier，再异步synchronize。所有closure记录仍complete:false，缺Agent/OS证据不ACK。
 
 只读Astra复核反例来自旧固定f45：session return缺口、异步seq乱序、被替换transport与LP waiter过早release；不是已上线故障。当前按确切接缝修正，不改router或常规close/tail契约。新增account-instance-dispatch-core.test.mjs为明确组件fixture：真实WS/HTTP/TLS/actualclose与ALS生命周期，不以它代替生产密码、grant或签名链；真正全中央数据负向/正向仍待后续目标。静态node --check、实际mjs import与diff --check通过。只读一次猜测旧test路径不存在，已rg找到真实docservice-http-transport.test.mjs，未执行不存在测试/未改其它文件；记录命令错误，非产品失败。
+
+## cc546组件首测与7aac复审修正
+
+固定cc5465a8组件首测2/2、0失败/取消/跳过，2135.1394ms，TMP/pc-instance-doc-core-target-1.log；WS OS端口4148、TLS LP5820均实际关闭。仅传输fixture认证/能力，不是生产密码或实例签名链。Astra固定Git真实session/http/router受控反例指出超body/超frame未验proof直接close、empty batch直接ACK，以及旧recv/close授权await后被resume替换仍副作用。原counter.log保留于TMP/pc-instance-data-review-cc5465-013c5e31640a4187b58731c991591dd8，exit0、零listener；没有删除或写成测试通过。此前f45三个反例也原保留。
+
+7aac35a4最小修正：Agent超限只回413、不凭SID结束会话；empty batch400且不取ACK；recv/close的next入口在ACK/clearWaiter/end前核fenced/dead/superseded/isCurrent，send末ACK也核，fresh read后再次核旧传输。普通LAN/page超限close与普通尾帧契约保持。另真实internal transport、实例proof头或runGrant尝试即使cached主体为page也进入factory明确拒，不能因cached role回落legacy；普通public页面原路径不变。已升级的WS拒绝用真正WS close4003，不能在upgrade后再写HTTP错误。
+
+固定7aac35a457cb03734fdb58f71f859bcf6b4cc936，组件加原HT1/session ACK/LP回归首测37/37、0失败/取消/跳过，5534.3693ms，exit0；TMP/pc-instance-doc-core-related-1.log。新真实HTTPS组件把未验proof超body/frame/empty与合法请求并列；旧recv/close持gate后真实resume再放行409，缓存仍1帧、新会话活；internal LP与带runGrant的普通page SID尝试拒，普通页面welcome无connId与合法public resume仍通过。测试私有能力fixture不能作为生产crypto证据。new owned端口逐项actualclose记录：WS6338、LP2922、LP boundary5937、普通WS/TLS各见原日志；OS listen(0)由系统原子分配，不占已监听固定口。强制tsc -b --force零错误、exit0、wall6.8881s，TMP/pc-instance-doc-type-2.log。未运行577x/full或宽浏览器探针，前后源码不变且Git干净。
+
+生产factory+instanceAuthority的真实mTLS WS/LP签名目标仍待独立运行，不能借root全量或上面的组件绿声明生产数据连接完成。公共helper真实export/schema已同步Agent owner：instanceConnectionRequest/instanceDataRequest/instanceProtocolHeaders与INSTANCE_DATA_PROOF_HEADER，所有actual URL、原协议头tuple、原bodyText、connId、seq/ack、nonce、operation/action绑定；空batch请用签名recv取得ACK，不新增旁路。
