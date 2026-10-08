@@ -52,13 +52,17 @@ export function createExistingHostedRunnerFactory({ root, loadModule, docUrl, da
         ticket.expiresAt <= now()) fail(503, 'run-ticket-invalid');
       return [PROTOCOL, `promptcut.account.${ticket.connectionTicket}`];
     };
+    // This binding is made only from the doc-admitted grant. Tool arguments and
+    // page messages never choose the run or supply a selection snapshot.
+    const accountSelection = Object.freeze({ projectId: grant.projectId, conversationId: grant.conversationId,
+      runId: grant.runId, runGrantId: grant.runGrantId });
     let inst;
     inst = createAgentInstance({ profile: 'hosted', server: { httpServer: null, ssrLoadModule: loadModule,
       config: { root }, middlewares: { use() {} } },
       prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {} }) : null,
       latestMirror: () => null, latestPlayhead: () => null, projectId: grant.projectId,
       identity: { userId: grant.accountId, username: grant.initiatorName ?? record.senderNameAtSend }, ownerKey,
-      hostedTools, docUrl, protocolsFor, execSerial, accountMode: true, initiatorOnline: () => false,
+      hostedTools, docUrl, protocolsFor, execSerial, accountMode: true, accountSelection, initiatorOnline: () => false,
       pageCall: async () => ({ offline: true, why: 'initiator-unavailable' }),
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
     try { await inst.bindAgent({ projectId: grant.projectId, mode: 'hosted' }); }
@@ -69,7 +73,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, docUrl, da
         if (handle) fail(409, 'runner-already-started');
         handle = inst.startHostedRun({ runId: grant.runId, conversationId: grant.conversationId,
           prompt: record.content, attachments: record.attachments,
-          pageState: { selection: record.selectionSnapshot?.selection?.clipIds ?? [], selectionSource: 'verified-message' },
+          pageState: { selection: record.selectionSnapshot?.selection?.clipIds ?? [] },
           apiConfig: cfg, model: pickModel(cfg), historyFile: path.join(dir, 'history.json'),
           sessionKey: `account-v2-${grant.conversationId}`, onModelCall: async (phase, info) => {
             if (phase === 'before') {
