@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { accountFixture, actor, keys, saveKeys, loadKeys } from './password-order-fixture.mjs';
+import { accountFixture, actor, actorOther, keys, saveKeys, loadKeys } from './password-order-fixture.mjs';
 import { openAccountLedger } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
 import { openOperationHistory } from '../docservice/modules/operation-history.mjs';
@@ -23,8 +23,8 @@ export async function operationFixture({ dir, port = 5760, request, failpoint = 
   const store = createFileStore({ dir: storeDir, log: () => {} });
   const sessionFile = path.join(dir, 'fixture-sessions.json');
   const sessions = fs.existsSync(sessionFile) ? JSON.parse(fs.readFileSync(sessionFile, 'utf8')) : {};
-  for (const name of ['a', 'b']) if (!sessions[name]) sessions[name] = account.credentials.createEditor({
-    account: account.store.accountById(actor.accountId), deviceId: `fixture-${name}`, requestId: `fixture-login-${name}` });
+  for (const name of ['a', 'b', 'c']) if (!sessions[name]) sessions[name] = account.credentials.createEditor({
+    account: account.store.accountById(name === 'c' ? actorOther.accountId : actor.accountId), deviceId: `fixture-${name}`, requestId: `fixture-login-${name}` });
   const ledger = openAccountLedger({ file: path.join(dir, 'authority.db'), authorityId: 'doc-fixture' });
   const counts = { credentialChecks: 0 };
   const authority = createAccountAuthority({ ledger, accountClient: {
@@ -51,16 +51,17 @@ export async function operationFixture({ dir, port = 5760, request, failpoint = 
   const project = projectModule({ store, now: () => clock.now, operationCoordinator: coordinator });
   const service = createDocService({ modules: [project], autoTick: false, log: () => {},
     async authenticate(req) {
-      const name = new URL(req.url, 'http://localhost').searchParams.get('page') ?? 'a';
+      const query = new URL(req.url, 'http://localhost').searchParams;
+      const name = query.get('page') ?? 'a';
       if (!sessions[name]?.accessToken) return null;
-      const p = await authority.authorizePrincipal({ accessToken: sessions[name].accessToken }, { projectId: sessions.projectId });
-      return principalTransform({ ...p, tenantId: sessions.projectId, userId: p.accountId, deviceId: `fixture-${name}` });
+      const p = await authority.authorizePrincipal({ accessToken: sessions[name].accessToken }, { projectId: query.get('project') ?? sessions.projectId });
+      return principalTransform({ ...p, tenantId: p.projectId, userId: p.accountId, deviceId: `fixture-${name}` });
     },
   });
   await service.listen(port, '127.0.0.1');
   const clients = [];
   return { account, authority, ledger, store, storeDir, history, coordinator, project, sessions, counts, projectId: sessions.projectId,
-    async connect(name = 'a') { const c = wsClient(`ws://127.0.0.1:${port}/?page=${name}`); clients.push(c); await c.opened; return c; },
+    async connect(name = 'a', projectId = sessions.projectId) { const c = wsClient(`ws://127.0.0.1:${port}/?page=${name}&project=${projectId}`); clients.push(c); await c.opened; return c; },
     async close() {
       for (const c of clients) c.close();
       await service.close(); await Promise.all(clients.map(c => c.closed));

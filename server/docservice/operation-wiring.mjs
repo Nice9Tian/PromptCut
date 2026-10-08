@@ -59,19 +59,22 @@ export function createOperationWiring({ history, account, verifyWitness, authori
   }
   async function checkPrincipal(principal, projectId, action = 'write') {
     if (principal?.realm !== 'account' || principal.identityVersion !== 2 || principal.projectId !== projectId) throw historyError('operation-forbidden', 403);
+    order.assertUnfenced({ projectId, actor: principal });
     const isRun = principal.role !== 'page' || runFields.some(key => principal[key] !== undefined);
     if (isRun) {
       if (!runProvider?.checkAccess || runFields.some(key => typeof principal[key] !== 'string' || !principal[key])) throw historyError('run-provider-unavailable', 503);
       const result = await runProvider.checkAccess({ principal, projectId, action });
       if (result?.allowed !== true) throw historyError('operation-forbidden', 403);
+      order.assertUnfenced({ projectId, actor: principal });
       return result;
     }
     const verified = await authority.checkAccess({ principal, projectId, action });
     if (verified?.allowed !== true) throw historyError('operation-forbidden', 403);
+    order.assertUnfenced({ projectId, actor: principal });
     return { allowed: true };
   }
   const order = createPasswordOrder({ history, account, verifyWitness, docAttestationPrivateKey, failpoint, initializeProject,
-    async checkGate({ operation, phase, witness }) {
+    async checkGate({ operation }) {
       const principal = active.get(operation.requestId);
       if (!principal) throw historyError('operation-forbidden', 403);
       const result = await checkPrincipal(principal, operation.projectId);
@@ -79,11 +82,12 @@ export function createOperationWiring({ history, account, verifyWitness, authori
       return result;
     },
     async materializeAccepted(operation) {
+      ready.delete(operation.projectId);
       await requireTarget().materialize(operation, projection);
       ready.add(operation.projectId);
     },
     acknowledgeFence,
-    onFenceRequested(fence) { ready.delete(fence.projectId); onFenceRequested?.(fence); },
+    onFenceRequested(fence) { ready.delete(fence.projectId); target?.fenceRequested?.(fence, order.assertUnfenced); onFenceRequested?.(fence); },
   });
   return {
     bind(adapter) { if (target) throw historyError('projection-already-bound'); target = adapter; },
@@ -96,7 +100,7 @@ export function createOperationWiring({ history, account, verifyWitness, authori
         ready.add(projectId); return fn();
       });
     },
-    async execute({ projectId, principal, actor, request }, prepare) {
+    async execute({ projectId, principal, actor, request }, prepare, committed) {
       // Stable identity includes the client's exact operation intent, never its claimed actor.
       const requestIdentity = digest({ projectId, actor, request });
       const requestId = `project-op:${digest({ docAuthorityId, projectId, opId: request.opId })}`;
@@ -109,12 +113,15 @@ export function createOperationWiring({ history, account, verifyWitness, authori
         if (!spec) return null;
         // verifyPrepared includes derived fields; submit expects the exact original input.
         const { v, projectRev, before, after, changes, dependencies, ...input } = spec;
-        const submission = prior ? { ...input, ...(prior.inputDependencies ? { dependencies: prior.inputDependencies } : {}) } : spec;
+        // This adapter's specifications have no caller-defined dependencies; history derives them.
+        const submission = prior ? input : spec;
         active.set(requestId, principal);
         try {
           const operation = await scope.submit(submission);
           ready.add(projectId);
-          return { operation, duplicate: Boolean(prior) };
+          const result = { operation, duplicate: Boolean(prior) };
+          committed?.(result); // visible reply/broadcast precede the next fence's completion under the same lock
+          return result;
         } finally { active.delete(requestId); }
       });
     },

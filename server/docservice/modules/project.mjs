@@ -267,6 +267,17 @@ export function projectModule({
     writers: [...st.writers].map(([entity, w]) => [entity, { actor: w.actor, at: w.at, rev: w.rev }]),
     history: st.history, opIds: [...st.opIds] });
   operationCoordinator?.bind({
+    fenceRequested(fence, assertUnfenced) {
+      for (const [connId, principal] of principals) {
+        if (principal.projectId !== fence.projectId) continue;
+        try { assertUnfenced({ projectId: fence.projectId, actor: principal }); }
+        catch {
+          lastCtx?.unsubscribe(connId, channelOf(fence.projectId));
+          const sender = senders.get(connId); if (sender) sender.alive = false;
+          lastCtx?.close(connId, 1008, 'operation-fenced');
+        }
+      }
+    },
     read(projectId) {
       const st = stateOf(projectId);
       const raw = store.readBlob?.(stateBlobName(projectId));
@@ -286,7 +297,8 @@ export function projectModule({
       if (current.projectRev === operation.projectRev) {
         if (!text || canonical(JSON.parse(text)) !== canonical(expected)) throw historyError('needs-reconciliation');
       } else {
-        if (current.projectRev !== operation.expectedRev || historyDigest(current.body) !== historyDigest(operation.before)) throw historyError('needs-reconciliation');
+        if (current.projectRev !== operation.expectedRev || historyDigest(current.body) !== historyDigest(operation.before) ||
+            canonical(snapshotOf(projectId, current)) !== canonical(operation.beforeProjection)) throw historyError('needs-reconciliation');
       }
       // Repeat durability completion even after a previous rename, never infer fsync from readback.
       projection.write(stateBlobName(projectId), expected);
@@ -658,7 +670,7 @@ export function projectModule({
     if (msg.expectRev != null && (!Number.isSafeInteger(msg.expectRev) || msg.expectRev < 0)) bad('expectRev 必须是非负整数');
     const undoOf = msg.undoOf == null ? null : checkToken(msg.undoOf, 'undoOf');
     const request = { opId, ops: msg.ops, expectRev: msg.expectRev ?? null, undoOf, session };
-    const result = await operationCoordinator.execute({ projectId, principal, actor, request }, (binding) => {
+    return operationCoordinator.execute({ projectId, principal, actor, request }, (binding) => {
       const st = stateOf(projectId);
       if (request.expectRev !== null && request.expectRev !== st.projectRev) throw historyError('stale');
       let ops, used, applied;
@@ -677,26 +689,27 @@ export function projectModule({
       const next = { ...st, writers: new Map(st.writers), history: [...st.history], opIds: new Map(st.opIds) };
       landCommit(next, record, applied.root);
       return { ...binding, projectId, opId, expectedRev: st.projectRev, actor, ops,
-        projection: snapshotOf(projectId, next), result: { record, overwrote, victims, used: used ?? [] } };
+        beforeProjection: snapshotOf(projectId, st), projection: snapshotOf(projectId, next), result: { record, overwrote, victims, used: used ?? [] } };
+    }, result => {
+      const { operation, duplicate } = result;
+      const { record, overwrote, victims, used } = operation.result;
+      for (const key of used) bodyUploads.delete(key);
+      trackIdentity(connId, identityOf(actor));
+      reply(ctx, connId, { type: 'project.op.ok', projectId, opId, rev: record.rev, overwrote: duplicate ? [] : overwrote,
+        ...(duplicate ? { duplicate: true } : {}), orderSeq: operation.witness.orderSeq }, reqId);
+      if (duplicate) { stats.duplicates++; return; }
+      stats.commits++; stats.overwrites += overwrote.length;
+      for (const victim of victims) for (const target of identityConns.get(victim.identity) ?? []) {
+        ctx.send(target, { type: 'project.overwritten', projectId, entity: victim.entity, by: record.actor,
+          writer: victim.writer, rev: record.rev, at: record.at });
+      }
+      const broadcast = { type: 'project.ops', projectId, rev: record.rev, opId, ops: record.ops, actor: record.actor, at: record.at,
+        ...(record.undoOf ? { undoOf: record.undoOf } : {}) };
+      if (used.length && Buffer.byteLength(JSON.stringify(broadcast)) > PROJECT_LIMITS.INLINE_BYTES) {
+        delete broadcast.ops; broadcast.resync = true;
+      }
+      ctx.publish(channelOf(projectId), broadcast, { except: connId });
     });
-    const { operation, duplicate } = result;
-    const { record, overwrote, victims, used } = operation.result;
-    for (const key of used) bodyUploads.delete(key);
-    trackIdentity(connId, identityOf(actor));
-    reply(ctx, connId, { type: 'project.op.ok', projectId, opId, rev: record.rev, overwrote: duplicate ? [] : overwrote,
-      ...(duplicate ? { duplicate: true } : {}), orderSeq: operation.witness.orderSeq }, reqId);
-    if (duplicate) { stats.duplicates++; return; }
-    stats.commits++; stats.overwrites += overwrote.length;
-    for (const victim of victims) for (const target of identityConns.get(victim.identity) ?? []) {
-      ctx.send(target, { type: 'project.overwritten', projectId, entity: victim.entity, by: record.actor,
-        writer: victim.writer, rev: record.rev, at: record.at });
-    }
-    const broadcast = { type: 'project.ops', projectId, rev: record.rev, opId, ops: record.ops, actor: record.actor, at: record.at,
-      ...(record.undoOf ? { undoOf: record.undoOf } : {}) };
-    if (used.length && Buffer.byteLength(JSON.stringify(broadcast)) > PROJECT_LIMITS.INLINE_BYTES) {
-      delete broadcast.ops; broadcast.resync = true;
-    }
-    ctx.publish(channelOf(projectId), broadcast, { except: connId });
   }
 
   /** 落一次真身快照，再把日志截断到快照之后（存储支持时）。出错只记日志：日志本身已经完整 */
