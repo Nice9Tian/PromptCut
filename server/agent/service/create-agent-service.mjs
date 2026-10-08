@@ -34,6 +34,7 @@ import { createWorkspaces } from './workspace.mjs';
 import { createEgressGate } from './egress.mjs';
 import { createHostedTools, readHostedVoiceConfig, saveAttachment } from './hosted-tools.mjs';
 import { createAccountConversationService } from './conversation-policy.mjs';
+import { createAccountRunnerService } from './account-runner.mjs';
 
 export const CONVERSATION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -173,10 +174,25 @@ export function createHostedAgentService({
   collect = null,
   accountMode = false,
   conversationClient = null,
+  runClient = null,
+  requireAccountRunner = false,
+  readIntentsFile = null,
+  runnerFactory = null,
+  serviceKid = null,
+  instanceId = null,
+  connectionsClosed = null,
+  childrenClosed = null,
   log = () => {},
   now = () => Date.now(),
 } = {}) {
-  if (accountMode === true) return createAccountConversationService({ conversationClient, now });
+  if (accountMode === true) {
+    if (requireAccountRunner === true || runClient) return createAccountRunnerService({ root, loadModule, docUrl, dataDir,
+      modelConfig, assetBase, look, voiceConfig: voiceConfig ?? (async () => null), collect,
+      egress: egressOptions, workspaceLimits, toolLimits, toolFetch,
+      conversationClient, runClient, readIntentsFile, runnerFactory, serviceKid, instanceId,
+      connectionsClosed, childrenClosed, log, now });
+    return createAccountConversationService({ conversationClient, now });
+  }
   if (typeof loadModule !== 'function') throw new TypeError('createHostedAgentService: 要 loadModule');
   if (typeof docUrl !== 'string' || !/^wss?:\/\//.test(docUrl)) throw new TypeError('createHostedAgentService: docUrl 要是 ws(s):// 地址');
   if (!credentials || typeof credentials.protocolsFor !== 'function') throw new TypeError('createHostedAgentService: 要 credentials.protocolsFor');

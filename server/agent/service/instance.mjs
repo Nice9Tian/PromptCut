@@ -1373,7 +1373,8 @@ export function createAgentInstance(env) {
   function hostedPageRead(tool, agent) {
     const ps = hostedPageStates.get(agent) ?? null;
     const online = hostedInitiatorOnline(agent);
-    if (!online || !ps || !Array.isArray(ps.selection)) {
+    const verifiedSentSnapshot = env.accountMode === true && ps?.selectionSource === 'verified-message';
+    if ((!online && !verifiedSentSnapshot) || !ps || !Array.isArray(ps.selection)) {
       return initiatorOffline(tool);
     }
     const ids = ps.selection.filter((x) => typeof x === 'string').slice(0, 200);
@@ -1395,6 +1396,7 @@ export function createAgentInstance(env) {
     const agentId = String(o.conversationId);
     let aborted = false;
     let inner = null;
+    const activeTools = new Set();
     const emit = (ev) => { try { o.onEvent(ev); } catch { /* 宿主的事 */ } };
     const done = (async () => {
       const binding = agentBinding;
@@ -1488,9 +1490,14 @@ export function createAgentInstance(env) {
           checkpoint: true,
           ...(typeof o.onModelCall === 'function' ? { onModelCall: o.onModelCall } : {}),
           callTool: async (name, args, meta) => {
+            // Account-v2 supplies a fresh doc runGrant/fence gate before any local
+            // or project tool side effect. Legacy hosted callers omit this hook.
+            if (typeof o.beforeToolCall === 'function') await o.beforeToolCall({ runId: o.runId, conversationId: agentId, name });
             // 单次工具调用的时限(契约第 11 节):到时不再等,明说这一步没做完。工具实现在进程级的串行锁里跑,
             // 所以这里只是不让这一轮干等;真卡住的实现由一轮的墙钟上限与看护兜底
             const work = callToolInternal(name, args, agentId, typeof meta?.callId === 'string' ? meta.callId : undefined);
+            activeTools.add(work);
+            void work.finally(() => activeTools.delete(work)).catch(() => {});
             // 看画面的工具另给时限:带用户卡的项目要等隔离工作进程起来,别的项目在渲时还要排队;渲染服务那一侧自己有更短的时限并回明确的原因
             const isLook = CLOUD_LOOK_TOOLS.has(name) || name === 'get_layout' || CLOUD_SLOW_TOOLS.has(name);
             const limitMs = isLook && Number(o.lookTimeoutMs) > 0 ? Number(o.lookTimeoutMs) : Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
@@ -1529,6 +1536,15 @@ export function createAgentInstance(env) {
       abort() {
         aborted = true;
         try { inner?.abort(); } catch { /* 已经结束 */ }
+      },
+      /** Control ACK waits for the runner AND timed-out underlying tool dispatches.
+       * A hung dispatch leaves this promise pending; callers must not claim closure. */
+      async drain() {
+        aborted = true;
+        try { inner?.abort(); } catch { /* 已经结束 */ }
+        await done;
+        while (activeTools.size) await Promise.allSettled([...activeTools]);
+        return { runId: o.runId, dispatchesOpen: 0 };
       },
       done,
     };
