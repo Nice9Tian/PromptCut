@@ -9,7 +9,7 @@
 - 版本：0.7.18，第一个整合小阶段进行中
 - 最后更新：2026-10-08，用户已分别确认计划定稿、开始实施
 - main：见 `git log`
-- 一句话：集成66bf00b9已收回云端子Agent关闭与工具拆包并推送；根旧政策组合full5173项/5171过/0失败/2跳过。新HTTP组合506首目标177项/173过/3失败/1跳过，故未启动full；根277类型0与纯目标30/30，最新修复组合57985002待独立服务目标/full。80长验收58项52过/5败/1人工保留，skill已补验35项、storage诊断过但首败因果未定。3652真实C10自然结束exit1/7失败，新增r6夹具实测轻且未进计划，替换夹具仅纯目标10/10，尚未真实探针。中央074组件38/38，真实完整provider首7506目标3项/2过/1败，拒绝原因待补取；生产runner仍未挂载，不admit/model。尚未合main/发版/部署新服务
+- 一句话：集成0f5cd504已推最新事实记录；根新候选2485c6cc已收中央d48、可信context96、快照8d与C10夹具704。中央146d真实3/3，原7506/78c8两红保留；根实际ready-index exit0/56.469秒、fails空、HTTP200字节与盘相同。Astra7de复核又证LP关闭正文缺守门、WS分片/UTF8与早期建厂取消三处边界，正分两窄叶修，尚未新共同full。80长验收58项52过/5败/1人工和3652真实C10七失败保留，particles夹具尚未真实探针。生产runner仍未挂载，不admit/model；尚未合main/发版/部署新服务
 
 ## 已经做了什么
 
@@ -150,6 +150,11 @@
 - Worker c377c248补修finish先于模型preflight：已完成轮ACK丢失期间模型配置暂不可用仍仅续原finishId，后排消息不先admit，模型/工具不重执行。根逐diff与原日志核读，owner正式目标3/3、0fail/cancel/skip、196.495ms；旧cc1/506首失败保留。WS/LP消费者独立叶仍实现中，不能据此把main ready置真。
 - 中央074bbe27已根逐diff审：7aac真实部分POST body反例使合法LP send得到409（应200），日志pc-instance-doc-preauth-7aac-counter.log保留；074使Agent recv/close/send先完整验proof/current再登记请求、占发送位或更新lastSeen，普通LAN路径保持。组件相关目标38/38、0fail/cancel/skip、5537.8528ms，实际关闭证据已核。完整真实mTLS实例/逐帧签名provider首7506目标3项/2pass/1fail、4893.7788ms（墙钟5.255秒）、exit1：WS welcome后project.open回type:error而非project.state，后续selection/write/LP尚未跑到。只加安全type/reason的78c8诊断待一次独占窗口，不猜根因、不降低授权标准。
 - 新独占018-cloud-tool-context叶从277136ea开始，Luna只租可信8字段context/逐调用授权适配器及专用测试/报告。项目、消息、发送者、实例与世代只能来自已确认读的当前doc grant及注册证明；不从模型参数或缓存用户名构造。ToolJobs仅持久账本已验，asset/provider/控制关闭及生产工具接线仍待完成。
+- 中央两红有因修正：旧正则把project.open前缀当project.op；原fixture实际签write，外层/runtime写核可过，而项目coordinator.read缺read cap。146d5714统一精确instanceMessageAction，不让write proof派生read。纯目标1/1、73.4288ms、type0/7.039秒；修后真实VH327/provider/order/doc/独立asset/两页面+mTLS WS/LP目标3/3、0fail/cancel/skip、7183.0952ms（墙7.518秒），5770～5779前后零监听、owned实际close。完整读写/全员选区双proof/FIFO/resume/seqack-body-query-protocol-nonce-crossTLS/普通SID及同cert新OS负向已执行，private实际关pendingLP/WS；完整Agent/OS control ACK仍pending。报告d48冻结、根2485已收；原两红日志不覆盖。
+- 根固定2485c6cc实际ready-index（快照/冷缓存/重启/判轻集合）一次：exit0、墙56.469秒、native重跑0、源码不变clean；完整结果fails=[]，快照HTTP200/14413字节/sameBytes:true、stateful判轻目录未重建/canvas目录存在，6210～6219零监听。包装器误要求该脚本不存在的ok字段，原result中的null保留；直接解析同一完整pretty JSON另存parsed.json，没有重跑探针。原e2/80 HTTP500及handleStreamRequest模块内绑定缺失证据保留；修复的实际读取已通过。TMP/pc-root-ready-repair-2485c6cc{.log,.result.json,.parsed.json,-out}为证。
+- Luna可信context96bc785e经根逐diff审并收2485：只从当前已确认读grant与实例注册返回immutable8字段，authorize逐次doc read/write、异步前后核当前实例，不加宿主降权policy。首5项/4pass/1fail是拿admit旧fence比read确认新fence，修当前fence断言；最终5/5、198.0403ms、type0，受控SQLite instance adapter非真实mTLS、无signal/child关闭、无真实只读发起grant，不作生产工具通过。
+- Worker8ab9f111待绑定停控修后受控真实TLS data1/1、1543.8787ms与read/control/ACK7/7、1607.812ms、type0/6.527秒；welcome后扣project.state，private关闭实际socket后才receipt，模型/工具0、late state不恢复、缺witness仍pending，原fixture漏LP绑定及真实counter两红保留。Astra7de54d4a又以原完整factory纯反例证明modelConfig挂起取消仍pending、bind挂起取消产生unhandledRejection，parser累计两5MiB超过8MiB仍保存/非法控制与UTF8未拒；worker新窄修进行中，不把8ab当最终挂载资格。
+- Astra7de54d4a原模块纯反例还证LP close声明4097/chunk4097/aborted正文仍被归空输入交invoke后200关闭；不是无签名越权结论，完整body绑定守门缺失。Luna新018-instance-lp-close-body仅onClose边界/专用测试，worker仅既有parser/建厂取消lease；没有改用户权限语义、依赖或系统环境。Sol新018-cloud-assets-design只写Agent→asset→doc当前grant/实例/资源授权与取消接口设计，不把人类已撤销token续用给retained Agent。
 - Astra固定a506454e审查与原session/router纯反例确认M1未await、外围乱序、旧transport回调缺current检查，及worker admit/finish ACK缺恢复；已交owners。中央cc5465a8组件目标2/2、0fail/cancel/skip、2135.1394ms，实际临时WS/LP端口close已核原日志，但cap/auth是受控组件fixture，非完整签名中央通过。独立固定cc546纯反例又证LP超限未验proof即关闭、空batch无proof取ack、旧recv/close跨resume影响新会话，中央按最窄core修；nonce/schema、延迟recv fresh read与同步fence先关仍需完整实际mTLS WS/LP验证。生产runner保持未挂载，不admit/model；OS/cgroup完整关闭回执未齐仍pending。
 
 ## 接下来干什么
@@ -260,10 +265,10 @@
 
 | 模型 | 工作 | 工作区 / 分支 | 状态 |
 |---|---|---|---|
-| Sol | 中央真实实例HTTP、WS/LP逐调用scope与same-instance resume | .worktrees/018-agent-instance-doc / codex/018-agent-instance-doc | cc5465a8组件目标2/2；Astra残余LP反例已交窄修，真实mTLS WS/LP未验；无fixed/full租约 |
-| Sol | Agent启动RAM key、真实TLS签请求、账号main守门与数据消费者 | .worktrees/018-agent-instance-worker / codex/018-agent-instance-worker | cc1bac0f旧夹具/ACK修复目标5/5/type0已交；WS/LP客户端与生产接入在途，无full/部署 |
-| Astra | 新数据通道实例/nonce/seq/ack/ALS/fence只读审查 | .worktrees/018-instance-data-review / codex/018-instance-data-review | a506454e首审已交；续审冻结cc546/cc1，LP残余反例成立，早发owners；仅报告/TMP，无fixed/full/节点 |
-| Luna | F0可信持久ToolJobs；快照缺模块内绑定窄修复 | .worktrees/018-cloud-tool-jobs / codex/018-cloud-tool-jobs；018-snapshot-stream-fix / codex/018-snapshot-stream-fix | jobs5c根Linux11/11；快照8d49已交/根纯目标过；实际ready/组合full待验，当前idle |
+| Sol | Agent数据消费者、规范分片/UTF8及建厂全程取消 | .worktrees/018-agent-instance-worker / codex/018-agent-instance-worker | 8ab已冻结但Astra三边界仍待新修；生产main ready=false，无最终full/节点部署 |
+| Sol | F0当前grant/实例/资源绑定的素材读写设计 | .worktrees/018-cloud-assets-design / codex/018-cloud-assets-design | 2485起点，只docs设计，无实现/服务/节点 |
+| Astra | 实例数据通道冻结复核 | .worktrees/018-instance-data-final-review / codex/018-instance-data-final-review | 7de报告冻结；旧M1–M3已收口，LP body/parser/early abort三个反例已交owners；纯counter非真实mTLS，无full |
+| Luna | LP关闭正文未完整读取的窄守门修复 | .worktrees/018-instance-lp-close-body / codex/018-instance-lp-close-body | 新2485起点，仅onClose/专用测试；jobs5c节点11/11、context96及snapshot8d已交根，不当生产接线 |
 
 ## 没做到的与原因
 
