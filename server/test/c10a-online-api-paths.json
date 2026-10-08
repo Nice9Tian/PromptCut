@@ -1,6 +1,11 @@
 {
- "note": "C10A-API-03 的棘轮清单〔裁，主会话 2026-09-27〕：在线构建产物里允许出现的 /api/ 路径。只许删、不许加；清单与产物须逐条一致（产物里没有了就从这里删）。M8 遗留 L24（2026-09-28）按编译期常量剪掉置灰入口背后的调用后由 120 条减到 20 条；随后「合并 Skill 结果…」在线置灰（C10 契约第 10 节〔裁〕），/api/cards/install 剪掉，19 条，剩下的是渲染、快照、素材分档、导出等与桌面共用、运行期按宿主能力分支的调用。运行时这些请求都被 src/online/apiGuard.ts 拦下。",
+ "note": "C10A-API-03 的棘轮清单〔裁，主会话 2026-09-27〕：在线构建产物里的 /api/ 路径与清单逐条一致，遗留桌面调用只许删、不许扩。M8 遗留 L24 与在线归档 Skill 合并入口剪枝后剩19条。0.7.18账号登录与云端项目真实入口按 docs/plan/account-binding-task.md、docs/plan/account-binding-contract.md 追加 src/account/client.ts 实际产物中的5条官网同源账号路径：me/login/logout/projects与editor/动态session或renew；它们采用官网Cookie+CSRF，不是本机编辑器API。在线不包含桌面editor/login、recover或任意account前缀授权。旧渲染/快照/素材/导出本机调用仍由 src/online/apiGuard.ts 拒绝；scanner和逐条一致断言不放宽。",
  "paths": [
+  "/api/account/editor/",
+  "/api/account/login",
+  "/api/account/logout",
+  "/api/account/me",
+  "/api/account/projects",
   "/api/asset",
   "/api/data/costs",
   "/api/data/diff",
