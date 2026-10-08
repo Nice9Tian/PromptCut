@@ -137,21 +137,28 @@ export function createDocService(options = {}) {
   const admissions = new Set(), admissionRows = new WeakMap(), admissionFences = [], connectionFences = new Map();
   const matching = (principal, criteria) => principal?.realm === 'account' &&
     (!criteria.projectId || (principal.projectId ?? principal.tenantId) === criteria.projectId) &&
-    ['accountIds', 'loginIds', 'runGrantIds', 'roles'].every((field, i) => !criteria[field] ||
-      criteria[field].includes(principal[['accountId', 'loginId', 'runGrantId', 'role'][i]]));
-  const admissionRefusal = principal => admissionFences.some(criteria => matching(principal, criteria));
+    ['accountIds', 'loginIds', 'runGrantIds', 'serviceKids', 'roles'].every((field, i) => !criteria[field] ||
+      criteria[field].includes(principal[['accountId', 'loginId', 'runGrantId', 'serviceKid', 'role'][i]]));
+  const admissionRefusal = (principal, row) => [...admissionFences, ...(row?.cohorts ?? [])]
+    .some(fence => matching(principal, fence.criteria));
+  function includeAdmission(fence, row) {
+    row.cohorts.add(fence);
+    if (fence.pending) fence.rows.add(row);
+  }
   async function authenticate(req) {
     let resolveDone, onClosed;
-    const row = { principal: null, socket: req.socket, done: new Promise(resolve => { resolveDone = resolve; }),
+    const row = { principal: null, socket: req.socket, cohorts: new Set(), rejected: false,
+      done: new Promise(resolve => { resolveDone = resolve; }),
       actualClosed: req.socket.closed ? Promise.resolve() : new Promise(resolve => { onClosed = resolve; req.socket.once('close', onClosed); }),
       complete() { resolveDone(); admissions.delete(row); admissionRows.delete(req);
-        if (!admissionRefusal(row.principal) && onClosed) req.socket.off('close', onClosed); } };
+        if (!row.rejected && !admissionRefusal(row.principal, row) && onClosed) req.socket.off('close', onClosed); } };
+    for (const fence of admissionFences) includeAdmission(fence, row);
     admissions.add(row); admissionRows.set(req, row);
-    try {
-      row.principal = await authenticateOwner(req);
-      if (admissionRefusal(row.principal)) { req.socket.destroy(); return null; }
-      return row.principal;
-    } catch (error) { throw error; }
+    row.principal = await authenticateOwner(req);
+    // Cohorts survive removal of a transient global predicate: this request
+    // started behind that barrier and cannot later use a stale auth result.
+    if (admissionRefusal(row.principal, row)) { row.rejected = true; req.socket.destroy(); return null; }
+    return row.principal;
   }
   const completeAdmission = req => admissionRows.get(req)?.complete();
 
@@ -559,22 +566,43 @@ export function createDocService(options = {}) {
     /** Trusted logout barrier includes every admission that was already awaiting
      * authentication, and prevents a matching identity from entering afterwards. */
     async fencePrincipals(criteria, code = 4003, reason = 'access-revoked') {
-      if (!criteria || !['accountIds', 'loginIds', 'runGrantIds'].some(field => Array.isArray(criteria[field]) && criteria[field].length) ||
-          ['accountIds', 'loginIds', 'runGrantIds', 'roles'].some(field => criteria[field] !== undefined &&
+      const selectors = ['accountIds', 'loginIds', 'runGrantIds', 'serviceKids'];
+      if (!criteria || (!criteria.projectId && !selectors.some(field => Array.isArray(criteria[field]) && criteria[field].length)) ||
+          criteria.projectId !== undefined && (typeof criteria.projectId !== 'string' || !criteria.projectId) ||
+          [...selectors, 'roles'].some(field => criteria[field] !== undefined &&
             (!Array.isArray(criteria[field]) || !criteria[field].length || criteria[field].some(value => typeof value !== 'string' || !value))))
         throw new TypeError('precise fence identity is required');
-      const scope = structuredClone(criteria); admissionFences.push(scope);
-      const pending = [...admissions];
+      const scope = structuredClone(criteria);
+      // Only immutable revoked references remain permanent. Account/project and
+      // switch predicates fence this cohort, not future legitimate joins/runs.
+      const fence = { criteria: scope, rows: new Set(), pending: true,
+        permanent: ['loginIds', 'runGrantIds', 'serviceKids'].some(field => scope[field]?.length) };
+      admissionFences.push(fence);
+      for (const row of admissions) includeAdmission(fence, row);
       const ids = new Set(sessions.connIds().filter(id => matching(router.describeConn(id)?.principal, scope)));
       for (const t of ownedWsTransports) if (t.connId && matching(t.principal, scope)) ids.add(t.connId);
       for (const id of httpTransport?.connectionIdsMatching(p => matching(p, scope)) ?? []) ids.add(id);
       const fences = [...ids].map(id => this.fenceConn(id, code, reason));
-      await Promise.all(pending.map(row => row.done));
-      const affected = pending.filter(row => matching(row.principal, scope));
-      for (const row of affected) row.socket.destroy();
-      await Promise.all(affected.map(row => row.actualClosed));
-      return { actualClosed: true, connections: await Promise.all(fences),
-        pendingAdmissions: pending.length, rejectedAdmissions: affected.length };
+      const connectionReceipts = await Promise.all(fences);
+      const processed = new Set(); let rejectedAdmissions = 0;
+      for (;;) {
+        const pending = [...fence.rows].filter(row => !processed.has(row));
+        if (!pending.length) break;
+        // Unknown identity remains pending. Authentication completion is required
+        // even if all logical sessions are already gone.
+        await Promise.all(pending.map(row => row.done));
+        const affected = pending.filter(row => matching(row.principal, scope));
+        for (const row of affected) row.socket.destroy();
+        await Promise.all(affected.map(row => row.actualClosed));
+        rejectedAdmissions += affected.length;
+        for (const row of pending) processed.add(row);
+      }
+      // No yield between finishing this cohort and retiring its predicate. Each
+      // concurrent fence owns a separate record and cannot remove another's.
+      fence.pending = false; fence.rows.clear();
+      if (!fence.permanent) admissionFences.splice(admissionFences.indexOf(fence), 1);
+      return { actualClosed: true, connections: connectionReceipts,
+        pendingAdmissions: processed.size, rejectedAdmissions };
     },
     closeSpace(space, code = 1012, reason = 'relocating') { sessions.closeSpace(space, code, reason); },
 
