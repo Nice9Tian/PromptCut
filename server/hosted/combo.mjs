@@ -363,7 +363,8 @@ export async function startHostedCombo({
         try {
           if (await docAgentAssembly?.handleInternal(req, res)) return;
           const route = new URL(req.url ?? '/', 'https://internal.invalid').pathname;
-          if (route.startsWith('/internal/v2/runs/') || route.startsWith('/internal/v2/conversations/')) {
+          if (route.startsWith('/internal/v2/runs/') || route.startsWith('/internal/v2/conversations/') ||
+              route.startsWith('/internal/v2/instances/')) {
             res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             res.end(JSON.stringify({ ok: false, code: 'doc-agent-unavailable' })); return;
           }

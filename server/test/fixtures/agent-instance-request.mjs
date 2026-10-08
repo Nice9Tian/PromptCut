@@ -9,15 +9,19 @@ import { INSTANCE_PROOF_HEADER } from '../../account/agent-instance-internal.mjs
 export function instanceHttpRequest({ port, tls, path, body, method = 'POST', instance, operation,
   headers = {}, signedBody = body, signedPath = path, signedOperation = operation, proofOverride } = {}) {
   return new Promise((resolve, reject) => {
+    let outcome, socketClosed = false;
+    const complete = () => { if (outcome && socketClosed) resolve(outcome); };
     const encoded = Buffer.from(JSON.stringify(body));
     const req = https.request({ host: '127.0.0.1', port, path, method, key: tls.key, cert: tls.cert,
       ca: tls.ca, minVersion: 'TLSv1.3', agent: false, headers: { 'content-type': 'application/json',
         'content-length': encoded.length, ...headers } }, res => {
       const chunks = []; res.on('data', bytes => chunks.push(bytes)); res.on('error', reject);
-      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString()) }));
+      res.on('end', () => { outcome = { status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString()) }; complete(); });
     });
     req.on('error', reject);
-    req.on('socket', socket => socket.once('secureConnect', () => {
+    req.on('socket', socket => {
+      socket.once('close', () => { socketClosed = true; complete(); });
+      socket.once('secureConnect', () => {
       try {
         if (instance) {
           const payload = instanceProofPayload({ ...instance, channelBinding: instanceTlsBinding(socket),
@@ -28,7 +32,8 @@ export function instanceHttpRequest({ port, tls, path, body, method = 'POST', in
         }
         req.end(encoded);
       } catch (error) { req.destroy(error); }
-    }));
+      });
+    });
   });
 }
 
