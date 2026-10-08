@@ -179,12 +179,14 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     pending.set(key, slot);
     const work = (async () => {
       for (;;) {
-        if (await preflight({ projectId, conversationId }) !== true) fail(503, 'no-model-key');
         if (slot.finish) {
           await runClient.finish(slot.finish);
           slot.finish = null; retryDelay.delete(key);
           continue;
         }
+        // Completing a read/execution already committed by this OS does not
+        // require a fresh model configuration. New admissions still do.
+        if (await preflight({ projectId, conversationId }) !== true) fail(503, 'no-model-key');
         if (slot.grant) { await processGrant(slot.grant, slot); continue; }
         slot.admitRequestId ??= `wake:${randomUUID()}`;
         const admitted = await runClient.admit({ projectId, conversationId, requestId: slot.admitRequestId });
