@@ -128,6 +128,10 @@ export function createHttpTransport({
   admissionRefusal = () => false,
   completeAdmission = () => {},
   principalOf = () => null,
+  dispatchInvocation = (_input, next) => next(),
+  needsInvocation = () => false,
+  internalTransport = () => false,
+  transportConnected,
   canOpen = () => null,
   remoteOf = (req) => req?.socket?.remoteAddress ?? null,
   normalizePrincipal = (p) => p,
@@ -254,7 +258,13 @@ export function createHttpTransport({
   }
 
   /** 立即回一次 recv：会话还开着就向会话层取帧；已结束就回剩下的帧，都回完了带 `closed` 并忘掉这条传输 */
-  function respondRecv(t, res, cors) {
+  function respondRecv(t, res, cors, lease) {
+    if (lease) return Promise.resolve().then(() => lease.check()).then(() => {
+      if (t.fenced || !t.closed && !sessions.isCurrent(t.connId, t))
+        throw Object.assign(Error('superseded'), { status: 409, code: 'superseded' });
+      return respondRecv(t, res, cors);
+    }).catch(error => sendJson(res, error?.status ?? 503,
+      { ok: false, error: error?.code ?? 'instance-invocation-forbidden' }, cors));
     t.lastSeen = now();
     if (t.closed) {
       const frames = [];
@@ -279,7 +289,7 @@ export function createHttpTransport({
     if (!t.waiter) return;
     if (immediate) {
       const w = clearWaiter(t);
-      respondRecv(t, w.res, w.cors);
+      respondRecv(t, w.res, w.cors, w.lease);
       return;
     }
     if (t.wakeQueued) return;
@@ -287,7 +297,7 @@ export function createHttpTransport({
     setImmediate(() => {
       t.wakeQueued = false;
       const w = clearWaiter(t);
-      if (w) respondRecv(t, w.res, w.cors);
+      if (w) respondRecv(t, w.res, w.cors, w.lease);
     });
   }
 
@@ -334,7 +344,18 @@ export function createHttpTransport({
     maxFrameBytes: maxFrame,
     protocol,
     transport: 'http',
+    ...(welcome.connId ? { connId: welcome.connId } : {}),
   });
+
+  function invoke(t, req, res, cors, kind, bodyText, next, extra = {}) {
+    if (!needsInvocation(t.principal)) return next();
+    return Promise.resolve().then(() => dispatchInvocation({ connId: t.connId, principal: t.principal,
+      kind, bodyText, ...extra, transport: { kind: 'http', req, res, socket: req.socket,
+        internal: internalTransport(req) } }, next)).catch(error => {
+      sendJson(res, error?.status ?? 503, { ok: false, error: error?.code ?? 'instance-invocation-forbidden' }, cors);
+      throw error;
+    });
+  }
 
   async function onOpen(req, res, cors) {
     if (canOpen() === 'closing') return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
@@ -356,7 +377,9 @@ export function createHttpTransport({
       t.connId = sessions.connIdOf(item.sid);
       t.principal = principalOf(t.connId);
       if (t.connId) track(t, req, res);
-      const r = await sessions.resume({ sid: item.sid, ack: item.ack, transport: t, fallback });
+      const r = await invoke(t, req, res, cors, 'resume', body.text,
+        () => sessions.resume({ sid: item.sid, ack: item.ack, transport: t, fallback }),
+        { sessionItem: { sid: item.sid, ack: item.ack } });
       if (!r.ok) {
         if (r.status === 404) return sendJson(res, 404, { ok: false, error: 'no-session' }, cors);
         if (r.status === 503) return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
@@ -375,7 +398,8 @@ export function createHttpTransport({
     if (canOpen() !== null) return sendJson(res, 503, { ok: false, error: 'unavailable' }, cors);
     // 同一个请求对象，只把子协议列表放进 WebSocket 握手的那个头；socket、url、其余头都不变
     const headers = { ...req.headers, 'sec-websocket-protocol': offered.join(', ') };
-    const authReq = Object.create(req, { headers: { value: headers, enumerable: true, writable: true, configurable: true } });
+    const authReq = Object.create(req, { headers: { value: headers, enumerable: true, writable: true, configurable: true },
+      transportBodyText: { value: body.text }, transportProtocolHeaders: { value: req.headers } });
     let principal;
     try {
     try { principal = await authenticate(authReq); }
@@ -406,6 +430,7 @@ export function createHttpTransport({
     }
     t.sid = opened.sid;
     t.connId = opened.connId;
+    transportConnected?.({ connId: t.connId, principal: t.principal, req });
     bySid.set(opened.sid, t);
     track(t, req, res);
     return sendJson(res, 200, openReply(opened.welcome), cors);
@@ -450,9 +475,12 @@ export function createHttpTransport({
         sessions.close(t.connId, 1009, 'too-large');
         return undefined;
       }
-      for (const text of msg.frames) {
+      for (const [frameIndex, text] of msg.frames.entries()) {
         if (t.closed || !sessions.isCurrent(t.connId, t)) break;
-        sessions.receive(t.connId, text);
+        if (needsInvocation(t.principal)) await invoke(t, req, res, cors, 'message', body.text,
+          frame => { if (!t.closed && sessions.isCurrent(t.connId, t)) return sessions.receive(t.connId, frame); },
+          { text, frameIndex, frameCount: msg.frames.length });
+        else sessions.receive(t.connId, text);
       }
       if (t.closed) return closedReply(t, res, cors);
       return sendJson(res, 200, { ok: true, ack: sessions.takeAck(t.connId) }, cors);
@@ -465,6 +493,18 @@ export function createHttpTransport({
     const t = transportOf(req, res, cors);
     if (!t) return;
     track(t, req, res);
+    if (needsInvocation(t.principal)) return invoke(t, req, res, cors, 'recv', '', (_frame, check) => {
+      if (typeof check !== 'function') throw Object.assign(Error('instance-read-lease-required'),
+        { status: 503, code: 'instance-read-lease-required' });
+      return receiveAllowed(t, req, res, cors, url, { check });
+    });
+    return receiveAllowed(t, req, res, cors, url);
+  }
+
+  function receiveAllowed(t, req, res, cors, url, lease) {
+    // A signed read invocation stays live until this response actually finishes
+    // or closes. Its fresh check is used again immediately before pulling bytes.
+    const replied = lease ? new Promise(resolve => { res.once('finish', resolve); res.once('close', resolve); }) : undefined;
     t.lastSeen = now();
     const rawWait = Number(url.searchParams.get('wait') ?? waitCap);
     const wait = Number.isFinite(rawWait) && rawWait >= 0 ? Math.min(rawWait, waitCap) : waitCap;
@@ -483,20 +523,20 @@ export function createHttpTransport({
         // 越界的 ack：会话已坏（第 3.5 节），会话层以 1002 结束它
         sessions.ack(t.connId, ack);
         sendJson(res, 400, { ok: false, error: 'bad-ack', last }, cors);
-        return;
+        return replied;
       }
       sessions.ack(t.connId, ack);
     }
 
     if (t.closed || wait === 0 || sessions.hasPending(t.connId)) {
-      respondRecv(t, res, cors);
-      return;
+      respondRecv(t, res, cors, lease);
+      return replied;
     }
-    const w = { res, cors, timer: null };
+    const w = { res, cors, timer: null, lease };
     w.timer = setTimeout(() => {
       if (t.waiter !== w) return;
       t.waiter = null;
-      respondRecv(t, res, cors);
+      respondRecv(t, res, cors, lease);
     }, wait);
     w.timer.unref?.();
     t.waiter = w;
@@ -505,6 +545,7 @@ export function createHttpTransport({
       clearWaiter(t);
       t.lastSeen = now();
     });
+    return replied;
   }
 
   async function onClose(req, res, cors) {
@@ -516,11 +557,13 @@ export function createHttpTransport({
     if (body.text) {
       try { msg = JSON.parse(body.text); } catch { msg = null; }
     }
-    if (!t.closed) sessions.end(t.connId, isObj(msg) ? msg.code : undefined, isObj(msg) ? msg.reason : '');
-    // 客户端自己关的：剩下的帧它不要了
-    if (bySid.get(t.sid) === t) bySid.delete(t.sid);
-    sendJson(res, 200, { ok: true }, cors);
-    return undefined;
+    return invoke(t, req, res, cors, 'close', body.text, () => {
+      if (!t.closed) sessions.end(t.connId, isObj(msg) ? msg.code : undefined, isObj(msg) ? msg.reason : '');
+      // 客户端自己关的：剩下的帧它不要了
+      if (bySid.get(t.sid) === t) bySid.delete(t.sid);
+      sendJson(res, 200, { ok: true }, cors);
+      return undefined;
+    });
   }
 
   /**
