@@ -80,6 +80,11 @@
 - 联合阶段已审的9份AGENT报告按协议从docs/reports归档到docs/archive/agent-reports，均为100%原文重命名，没有改写首次失败。新素材中央/真实操作/选区各用新报告，旧报告不当后续接线验收；原8个工作区、生产数据和备份均保留。
 - 收回后另清理本任务的5个已完成PC叶及本机分支：auth-fixture-lifecycle、c10-host-claim-fix、018-doc-authority、three-versions-card-policy、018-asset-isolation。均已证提交在集成、tracked/untracked干净、reparse为0、无引用该叶的存活进程；使用正常worktree remove/branch -d、未强制删除。C10/card的ignored out证据已先移到TMP/pc-retired-worktree-evidence-b1de19d094be4d0cb4a8061fbc2fec2f，其余原始日志及Git提交保留；原8个工作区和其它会话分支不动。
 
+- 选区初包3fb85f1f经根真实模块受控审查发现三个漏洞：allowed:false对象仍被允许、readonly成员被当写拒绝、成员核验期间runGrant撤销后仍返回（TMP/pc-root-selection-review-3fb85f1f.log，exit1）。Sol最小修正4370101c，新增首尾grant/fence验证、read权限、递增clear及发布重试隔离，type --force零错、target11/11；根固定源码独立6/6、exit0，另验allowed缺失、clear后旧set及生产缺fence均拒。productionMounted:false，中央逐消息selection gate仍需接read，project.op写闸不变。新全量等待串行端口租约，不把首次全绿当权限正确。
+- 素材中央包固定4c91f5d2，真实独立stage/provider/doc/asset集成3/3，实际fd关闭前不ACK、ACK响应持续丢失后的同receipt重放和clean restart均有证；部署49文件闭包bare依赖/非literal目标/missing均0。target首次87/86/1/0，fixture删除请求漏expectedAccessRevision，e32f26a6仅补真实status前置条件，单项复验1/1。首次完整npm5028/5010/16失败/2跳过，65818.116ms：11条漏设真实password-order模块，5条PCM旧测试夹具仍引用抽取前index路径；原日志TMP/promptcut-asset-wiring-full-1.log保留，夹具改后仅定向复验，联合候选再有因跑full。
+- 根独立审查素材生命周期另发现并发重启锁竞态：两个启动先读同一旧锁，后一方无条件rm可删掉前一方刚建的新锁，两个实例均获准；TMP/pc-root-asset-lock-race-0de62bd5.log，exit1，acceptedInstances为next-a/next-b。暂不收回，本包owner修原子启动/恢复claim、遗留claim failclosed；生产旧资源关闭仍须root在专用cgroup真实为空后作证明，PID死亡及本机fixture不替代该证据。
+- 真实project.op接线固定7c4f1f11，子包target58/58、15682.505ms，25个真实子进程切点均exit73且close，含fence提交与ACK夹缝；原33个账号provider故障切点另保留。实际Chromium双context双账号WS探针exit0、519.485ms，unsealed无ok/广播，同值两账号rev2/rev3，重启后真实页读取rev3和两份accepted。是隔离fixture，不是生产UI验收；root源码、历史投影和Linux目录fsync仍待复核。本包正在冻结源完整测试，5823～5829全量fixture端口串行使用，Sol选区full等待，无源码在跑测中修改。
+
 ## 接下来干什么
 
 1. 旧共同候选首轮与有因修正已完成并保留；中央独立asset接线固定后先核真实账号/doc/mTLS/head、实际关闭回执及独立部署依赖闭包。已通过模块与fixture不能替代完整产品交互；18人工、真实网络和未完成项不计通过。
@@ -188,9 +193,9 @@
 
 | 模型 | 工作 | 工作区 / 分支 | 状态 |
 |---|---|---|---|
-| Sol | 中央独立素材入口、mTLS权威与实时ready、关闭回执及部署闭包 | .worktrees/018-asset-wiring / codex/018-asset-wiring | 正在实现；5860～5869；无依赖部署树首轮缺pngjs失败保留，纯模块分层解法已授权，未部署 |
-| Sol | 项目全员在线选区、可信名字与发起人离线快照provider | .worktrees/018-project-selections / codex/018-project-selections | 开场ff01d9b6；5920～5929；接口已约，未完成，不改中央/Agent UI |
-| Astra | 真实project.op顺序见证、完整历史与投影崩溃恢复接线 | .worktrees/018-operation-wiring / codex/018-operation-wiring | 开场3d872632；5760～5769；发现原append未fsync/先广播及history仅镜像，准备真实反例与窄接口增量 |
+| Sol | 中央独立素材入口、mTLS权威与实时ready、关闭回执及部署闭包 | .worktrees/018-asset-wiring / codex/018-asset-wiring | 5860～5869；独立stage真实集成通过，首full16失败分类保留；根双启动竞态反例已交回修，未收回/部署 |
+| Sol | 项目全员在线选区、可信名字与发起人离线快照provider | .worktrees/018-project-selections / codex/018-project-selections | 固定4370101c，5920～5929；type/target11项与根独立6项通过；等待全量租约，不改中央/Agent UI |
+| Astra | 真实project.op顺序见证、完整历史与投影崩溃恢复接线 | .worktrees/018-operation-wiring / codex/018-operation-wiring | 固定7c4f1f11；5760～5769；58项与双Chromium页探针通过，正在完整测试；root尚未复核/收回 |
 | Luna | 账号备份每日runner/unit与POSIX测试补导入 | VisuHive .worktrees/018-account-backup-timer / codex/018-account-backup-timer | 已交7306bfe5并由root独立Linux67/67；当前无实施任务，未启动节点timer |
 
 ## 没做到的与原因
