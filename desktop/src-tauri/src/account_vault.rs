@@ -91,7 +91,7 @@ try {
     $result=Http $path $argsData.body $argsData.accessToken }
   default { throw 'bad-operation' }
  }
- [Console]::Write(($result|ConvertTo-Json -Compress -Depth 80))
+ if ($null -eq $result) { [Console]::Write('null') } else { [Console]::Write(($result|ConvertTo-Json -Compress -Depth 80)) }
 } catch { [Console]::Write('{"ok":false,"status":503,"code":"desktop-account-bridge"}') }
 "#;
 

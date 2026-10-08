@@ -149,3 +149,11 @@ root同6df隔离桌面标准profile补齐后，actual-main-and-agent-configurati
 本叶完整Git核：observePage本已pages.push，startNative也调用它，最初“未登记原生主页”的静态判断不成立；已告root，不新增复杂nativePages/重复截图集合。只在原安全截图循环保存每次page-closed/saved/password-not-cleared/capture-failed固定分类，原安全清密码验证和拒带密码截图保留，不吞成空数组而不知原因。
 
 loginEditor沿原动作新增goto、username-input、password-input、submit、account-name的started/completed/failed固定阶段；UI只记账号区/输入框/账号名/编辑器可见布尔、提交disabled/busy固定分类及真实Tauri invoke是否存在。错误只按client/AccountProjects已有确切文案白名单映射固定代码，未知只记other-error，不保存任意DOM文本/用户名/输入值/凭据。root补核initial busy=true且输入仍可见，旧probe直接点disabled可能无动作：现真实click前等待实际form submit存在且!disabled，沿用TIMEOUT并记录submit-ready状态；不注入/绕过登录、不改产品状态。原账号名等待与真实名字断言保持，失败由finally/原异常路径记录。node --check/diff --check通过；本轮未真实browser/desktop/listener/full，旧6df用户链证据与新probe未测边界分开。
+
+## 首次无凭据恢复的 JSON 输出
+
+root固定0b1454df真实桌面完整路径28/28、completed=true、18039ms：首次submit诊断实际disabled=true/connecting，等待控件可用后真实登录成功；DPAPI实际退出/重启恢复A、切换B、凭链接加入及双方网站owned/joined列表均过，自有进程全部关闭。这是root的真实壳证据，本叶没有重复运行。root隔离强化C10后ff4f04cf类型0、全量5291/5287通过/0失败/4跳过、68894ms、build/online build exit0；这些结果不作为随后脚本改动的独立验证。
+
+root观察首次无vault恢复出现restore-failed，要求最窄核验。先提交实际SCRIPT回归cac766fa80991c99eca002aa97e6717bec17b084：从account_vault.rs提取完整原SCRIPT，经隐藏Windows PowerShell执行，以stdin仅传自建TMP目录和fixture deviceId；无HTTP、无生产账号/密码/密钥，等待真实子进程close，目录核TMP归属后清理。原npm wrapper/global setup保留，只有其原坏端口guard，没有业务listener。固定源一次 `npm.cmd test -- src/account/desktopVault.test.mjs` 首红：2项/1通过/1失败/0取消跳过、499.3122ms、wall763ms、exit1、native重跑0，raw `%TEMP%/pc-account-vault-fresh-red.log`。fresh recover进程exit0但stdout确为`''`，不等于有效JSON `null`；既有真实DPAPI/ACL/原子替换回归通过。source测前后cac766fa、clean，保留首红。
+
+已证实空PowerShell pipeline不输出JSON。修复只在SCRIPT最终输出对`$null`显式写字面量`null`；非空结果仍走原ConvertTo-Json，Rust解析、HTTP/pin、凭据安全存储、权限及产品退出/恢复流程均未改。实际fresh回归同时核JSON.parse为null及目录仍为空。下一步只对固定新源复验同pure目标、nodecheck及强制类型；不跑业务listener、桌面壳、全量、TLS或宽探针，不声称本修复已经实际IPC验收。
