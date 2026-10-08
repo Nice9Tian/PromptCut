@@ -29,6 +29,8 @@
 | 许可竞态首红（`5c3f6d54` 产品＋新增反例） | 5 项 3 pass/2 fail、exit 1：被覆盖 GET 错借 UI 缓存 `accepted=true`；A 旧绑定错借 B 的同意，失败原文完整保留 | `%TEMP%/pc-consent-race-red/target.out.log` |
 | `9202c240` 初修 | 32/32、0 fail/skip，强制类型 exit 0；真 VH/Chrome 19/19、exit 0、wall 2489 ms，6650–6659 收口零监听 | `%TEMP%/pc-consent-race-fixed/target.out.log`、`%TEMP%/pc-consent-browser-9202c240/browser.out.log` |
 | `0267f863` 同账号新绑定与弹窗清理补齐 | 33/33、0 fail/cancel/skip、exit 0、duration 1542.6 ms；强制类型 exit 0；真 VH/Chrome 19/19、exit 0、wall 2730 ms，浏览器与服务器显式关闭且 6650–6659 零监听 | `%TEMP%/pc-consent-race-final/target.out.log`、`%TEMP%/pc-consent-race-final/type.log`、`%TEMP%/pc-consent-browser-0267f863/browser.out.log` |
+| 根联合候选 `c5bae31a` 首次 full | type 0；full 5318/5313 pass/1 fail/4 skip、0 cancel、71418 ms、未重跑。唯一红 C10A-API-03：实际在线产物新增精确 `/api/account/cloud-agent-consent`，在线清单仍旧7账号路径，产品代码未回退 | `%TEMP%/pc-consent-root-c5bae31a-full.log` |
+| 告知路由精确棘轮登记 | 在线清单、基线 `accountPaths`、C10-RA 固定数组仅各加这一条，旧本机19条不变。C10A 在线与桌面真实构建及 C10-RA 合并定向17/17、0 fail/cancel/skip、exit 0、wall 4112 ms；未重跑 full/Chrome | `%TEMP%/pc-consent-ratchet-8paths/target.out.log`、`%TEMP%/pc-consent-ratchet-8paths/diff-check.log` |
 
 这轮修复把许可判断与展示缓存分开：被后发 GET/POST 覆盖的旧 GET 不修改展示状态，也不能放行本次 send；`requireCloudConsent` 在发起与返回时核当前账号和绑定代次，并要求当前服务端刷新结果仍有效。对话、digest、标题和会话键包含账号及绑定代次；发送、附件上传、队列出队和插队在等待同意之后再次核当前绑定，迟到的旧请求不再把 A 草稿用于 B。新增真实同页 A→B 换账号验证旧草稿/队列不展示、不产生 Agent POST，另有同账号换绑定纯回归。
 
