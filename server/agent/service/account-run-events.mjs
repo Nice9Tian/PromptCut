@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalJson, digestOf } from '../../account/ledger.mjs';
+import { acceptedMessageRef } from '../../account/run-authority.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const text = v => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(v);
@@ -147,6 +148,20 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
     }));
     tail = work.catch(() => {}); return work;
   }
+  // A queued run recovered without a human HTTP reader uses only the original
+  // doc-admitted record, matched to a fresh signed run gate's immutable digest.
+  // No revoked human delegation is reused and no public body supplies this source.
+  async function mirrorRunMessage({ grant }) {
+    usable();
+    const source = structuredClone(grant), binding = bindingOf(source); validateBinding(binding);
+    const checked = await verifyGrant(source);
+    if (checked?.allowed !== true || canonicalJson(bindingOf(checked.runGrant)) !== canonicalJson(binding) ||
+        !source.message || source.message.messageId !== source.messageId || source.message.runId !== source.runId ||
+        canonicalJson(acceptedMessageRef(source.message, source)) !== canonicalJson(checked.runGrant.messageRef))
+      fail(403, 'accepted-run-message-source');
+    return mirrorAccepted({ projectId: source.projectId, conversationId: source.conversationId,
+      read: async () => ({ v: 2, projectId: source.projectId, id: source.conversationId, messages: [source.message] }) });
+  }
   function after({ projectId, conversationId, after = 0 }) {
     if (closed) fail(503, 'run-events-closed');
     if (!text(projectId) || !text(conversationId) || !Number.isSafeInteger(after) || after < 0) fail(400, 'run-event-cursor');
@@ -175,7 +190,7 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       async beforeCall() { await serial; if (error) throw error; usable(); },
     };
   }
-  return { registerRun, append, after, writer, mirrorAccepted, failure: () => fatal,
+  return { registerRun, append, after, writer, mirrorAccepted, mirrorRunMessage, failure: () => fatal,
     inspect: () => ({ synchronous: db.prepare('PRAGMA synchronous').get().synchronous,
       journalMode: db.prepare('PRAGMA journal_mode').get().journal_mode, integrity: db.prepare('PRAGMA integrity_check').get().integrity_check }),
     async close() { if (closed) { if (fatal) throw fatal; return; }

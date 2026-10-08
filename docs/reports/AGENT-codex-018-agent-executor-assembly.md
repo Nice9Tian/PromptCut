@@ -137,3 +137,17 @@ f5b7之后有具体代码与验证增量才复验：关闭传播持久错误、�
 Astra并行提供finish方向：五元binding/requestId/readReceiptId/outcome{v:1,status:'done'|'failed'|'interrupted',eventId,eventDigest}，先录不可变outcome、缺doc已核关闭引用仍finishPending/FIFO占用。当前本叶没有实现该调用或摘要；等实际runner drain/事件flush结束以及provider固定精确schema后，下一租约才组真实终态，不把donePromise或录outcome成功当用户complete。HTTP/main/关闭/finalizer由根明确移交后再接，未覆盖Astra路径。
 
 此次交回产品b234、报告后续独立提交，git diff --check0与clean；main/release/push/环境/真实数据均未操作。全部首红与较早绿证据按原source保留，不冒用19目标为完整模型路径通过。
+
+## 同RAM实例执行器中央装配（开始，尚未验证）
+
+根将Astra 21c97 HTTP/read-control收回本叶，固定715c62edb818e7975fbd1b1fe0c955b46800f6c0、开工clean，正式移交 main/http/new account-executor-assembly及专属targets，原runner/service/events仍本叶独占。Astra provider/instance/read-control/data/resources/control均只读；a87 finish尚未组合，本块继续run-outcome-unavailable，不调用旧finish，更不把pending结算当下一条可执行。根全量结束后另告5795–97释放；新增6640–6659许可仅自己的fixture，首次预检这些端口无监听，执行前仍复查。
+
+新增createAccountExecutorAssembly配置必须给真实doc origin/CA+pin+Agent自有TLS、同一个runClient、已经装同readControl.transports的conversationClient、绝对private dataDir/root/loadModule/modelConfig、独立回环controlPort。registerInstance取持久instanceId/generation/authority后启动实际签名readControl，等真实connected，5s缺就503失败，不手动ready；构造同RAM签名dataClient与runResources，再挂真实HostedRunnerFactory/read-intents/event SQLite和mTLS run-control。main生产account路径要求PROMPTCUT_AGENT_CONTROL_PORT与公开口不同；无executor参数的原纯account-policy startAgentService接口保留作既有明确fixture/未挂运行模式，不拿它声称生产装配。账号关闭先收公共HTTP实际连接，再等read inventory/runner/data资源；不拿5s强制exit0证明close。普通LAN主路径保留。
+
+POST /messages事件模式加入真实req/res/socket readTransports.run，doc接受后只通过base.conversation实际owned读取完成mirror提交才wake；失败传播原requestId可重试，不把body或202当可信消息。SSE先真实doc读取及镜像、验证after，再每条fresh ACL/revision+本地同步fence写出eventSeq，queue.state仍doc arrivalSeq/位置独立权威；未挂event-store的既有queued-only路径保留原cursor。启动补漏不借被撤用户delegation：mirrorRunMessage只收doc admit原完整message，逐调用真实checkAccess，比当前grant精确binding与acceptedMessageRef规范digest，才复用同accepted镜像事务；不是新ACL/retained算法。resources.contextFor来自真实read-confirmed grant，下一model/tool加freshauthorize，control先发abortForFence再await runner完成；全量工具资源producer未接，不宣称资源全盘已注册。
+
+闭口缺口明确：run-control的connectionsClosed/childrenClosed与OS-tree producer未提供时仍pending，未以data.openCount=0/空resources或函数true作证明；旧OS unknown不因本次注册消失。真实模型、G资产桥、渲染/采集页面回连、终态outcome/finalizer仍没有本块验收。executor仅configured/mounted与completionReady:false，不能说production ready/任务成功/FIFO释放。
+
+新constructor首红：npm wrapper精准server/test/account-executor-assembly.test.mjs，1/0pass/1fail、63.4236ms、exit1，ERR_MODULE_NOT_FOUND，TMP pc-account-executor-red-1.log保留。未启动业务服务；global-setup原38候选坏端口guards例外仍原样执行。新增mTLS fixture已编写未跑，6640 docHTTPS/6641 AgentHTTP/6642 controlHTTPS，30s测试/5s局部等待，无浏览器/真实模型/VH。真实SQLite、注册RAMkey、exporter与doc run/read-control/HTTP/SSE，sender/registry/selection/driver是受控adapter，同OS证书角色不算生产UID分离。原旧control target5795–97另有真实own child，执行前再核端口。
+
+首次写完node --check（new assembly/main/new TLS test）exit0，diffcheck0。读取过程中3处猜测路径不存在均纠正为真实tool-context/agent/service/agent-instance-session/read-control-fixture，只有只读命令失败，无测试或产品修改效应。以下追加固定source与实际目标结果后才交付。

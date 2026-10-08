@@ -174,8 +174,9 @@ test('real doc read/run bindings reach durable run/tool/model events, but no inf
     await assert.rejects(manager.wake(f.projectId, 'conv_a'), { code: 'run-outcome-unavailable' });
     assert.equal(models, 1); assert.equal(tools, 1); assert.equal(drains, 1); assert.equal(f.finishes(), 0);
     const list = f.events.after({ projectId: f.projectId, conversationId: 'conv_a', after: 0 });
-    assert.deepEqual(list.events.map(e => e.event.type), ['run', 'tool_call', 'tool_result', 'runner_done']);
-    assert.equal(list.events[3].event.settlement, 'pending');
+    assert.deepEqual(list.events.map(e => e.event.type), ['user', 'run', 'tool_call', 'tool_result', 'runner_done']);
+    assert.equal(list.events[0].event.prompt, 'short task');
+    assert.equal(list.events[4].event.settlement, 'pending');
     assert.equal(f.intents.pending()[0].state, 'execution-started');
     await assert.rejects(manager.wake(f.projectId, 'conv_a'), { code: 'run-execution-uncertain' });
     assert.equal(models, 1); assert.equal(f.finishes(), 0);
@@ -285,4 +286,23 @@ test('accepted-message commit fault rolls back both row and cursor and closes wi
     assert.equal(store.after({ projectId: 'project_a', conversationId: 'conv_a', after: 0 }).head, 0);
     await assert.rejects(store.close(), /mirror-commit-failed/);
   } finally { await store.close().catch(() => {}); f.cleanup(); }
+});
+
+test('recovered run mirrors only original doc message matched to fresh grant digest; denied or changed sources write nothing', async () => {
+  const f = await managerFixture();
+  try {
+    const g = await f.client.admit({ projectId: f.projectId, conversationId: 'conv_a', requestId: 'admit-mirror' });
+    const prompt = (await import('../account/run-authority.mjs')).canonicalReadRecord(g.message, g);
+    const intent = f.intents.prepare({ requestId: 'read-mirror', binding: Object.fromEntries(
+      ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(k => [k, g[k]])), prompt });
+    await f.intents.confirm(intent.readIntentId, f.client);
+    const changed = structuredClone(g); changed.message.content = 'changed'; changed.message.contentDigest = digestOf('changed');
+    await assert.rejects(f.events.mirrorRunMessage({ grant: changed }), /accepted-run-message-source/);
+    assert.equal(f.events.after({ projectId: f.projectId, conversationId: 'conv_a' }).head, 0);
+    assert.deepEqual(await f.events.mirrorRunMessage({ grant: g }), { appended: 1, head: 1 });
+    assert.deepEqual(await f.events.mirrorRunMessage({ grant: g }), { appended: 0, head: 1 });
+    f.ledger.transaction(s => { s.projects[f.projectId].hosted.agent = false; });
+    await assert.rejects(f.events.mirrorRunMessage({ grant: g }));
+    assert.equal(f.events.after({ projectId: f.projectId, conversationId: 'conv_a' }).head, 1);
+  } finally { await f.close(); }
 });

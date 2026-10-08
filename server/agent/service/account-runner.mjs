@@ -132,7 +132,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
  * the original request. execution-started work is never auto-replayed on restart.
  */
 export function createAccountRunManager({ runClient, readIntents, runnerFactory, preflight = async () => true, serviceKid, instanceId,
-  runEvents = null, connectionsClosed = null, childrenClosed = null, now = Date.now, log = () => {} } = {}) {
+  runEvents = null, resources = null, connectionsClosed = null, childrenClosed = null, now = Date.now, log = () => {} } = {}) {
   if (!runClient || ['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'pending'].some(name => typeof runClient[name] !== 'function') ||
     !readIntents?.prepare || !readIntents?.confirm || !readIntents?.executeOnce || typeof runnerFactory !== 'function' ||
     typeof preflight !== 'function' || typeof serviceKid !== 'string' || !serviceKid ||
@@ -171,6 +171,7 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     let events = null;
     try {
       if (runEvents) {
+        await runEvents.mirrorRunMessage({ grant });
         events = await runEvents.writer({ grant });
         // instance.mjs deliberately has a synchronous, exception-swallowing emit.
         // Never return an unobserved append promise to it: latch/abort here, and
@@ -180,10 +181,13 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
           try { entry.handle?.abort(); } catch { /* drain remains mandatory */ }
         });
       }
+      const context = resources ? await resources.contextFor({ projectId: grant.projectId, runGrantId: grant.runGrantId }) : null;
+      entry.context = context;
       const gated = async () => {
         await events?.beforeCall();
         if (entry.cancelled || closed) fail(403, 'run-fenced');
         const result = await check(grant, 'write');
+        if (context) await resources.authorize(context, 'write');
         await events?.beforeCall();
         if (entry.cancelled || closed) fail(403, 'run-fenced');
         return result;
@@ -301,7 +305,11 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       if (!entry) { if (!closedRuns.has(runId)) oldInstanceUnknown = true; continue; }
       entry.cancelled = true; entry.cancelController.abort();
       try { entry.handle?.abort(); } catch {}
-      await entry.completion;
+      // Resource abort begins synchronously with run cancellation; the existing
+      // producer still must prove actual data sockets and the complete OS tree.
+      const resourceClose = entry.context ? resources.abortForFence(entry.context, control.controlId) : null;
+      const supervised = Promise.resolve(resourceClose); void supervised.catch(() => {});
+      await entry.completion; await supervised;
     }
     const closedRunIds = targets.filter(id => closedRuns.has(id));
     const sockets = typeof connectionsClosed === 'function' ? await connectionsClosed({ control, instanceId, closedRunIds }) : false;
@@ -326,6 +334,7 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
 /** Public account-v2 service retains doc-owned HTTP ACL and adds the durable consumer. */
 export function createAccountRunnerService({ conversationClient, runClient, readIntentsFile, runnerFactory,
   runEventsFile = null, runEventsAuthorityId = null,
+  resources = null,
   serviceKid, instanceId, connectionsClosed, childrenClosed, now = Date.now, log = () => {}, ...runnerOptions } = {}) {
   if (typeof readIntentsFile !== 'string' || !path.isAbsolute(readIntentsFile)) fail(503, 'read-intent-configuration');
   const readIntents = openReadIntents({ file: readIntentsFile, now });
@@ -340,12 +349,11 @@ export function createAccountRunnerService({ conversationClient, runClient, read
     const factory = runnerFactory ?? createExistingHostedRunnerFactory({ ...runnerOptions, runClient, now, log });
     const preflight = runnerFactory ? async () => true : async () => modelReady(await runnerOptions.modelConfig());
     const manager = createAccountRunManager({ runClient, readIntents, runnerFactory: factory, preflight, serviceKid, instanceId,
-      runEvents, connectionsClosed, childrenClosed, now, log });
+      runEvents, resources, connectionsClosed, childrenClosed, now, log });
     const base = createAccountConversationService({ conversationClient, now });
     return { ...base, runManager: manager, runEvents,
       // Internal assembly seam only. A production caller must already own a
-      // genuine conversation read-control invocation. POST /messages currently
-      // lacks that scope; do not call here from send or fabricate it from body.
+      // genuine conversation read-control invocation owned by HTTP/SSE.
       async mirrorAccepted(identity, conversationId) {
         if (!runEvents) fail(503, 'run-events-configuration');
         return runEvents.mirrorAccepted({ projectId: identity?.projectId, conversationId,
@@ -353,6 +361,10 @@ export function createAccountRunnerService({ conversationClient, runClient, read
       },
       async send(identity, conversationId, body) {
         const response = await base.send(identity, conversationId, body);
+        // The doc send response contains metadata, not the accepted original.
+        // A failed read/commit propagates and never wakes a model from public body.
+        if (runEvents) await runEvents.mirrorAccepted({ projectId: identity.projectId, conversationId,
+          read: () => base.conversation(identity, conversationId, 0) });
         void manager.wake(identity.projectId, conversationId).catch(error => log('agent.account.run.pending',
           { projectId: identity.projectId, code: error?.code ?? 'unavailable' }));
         return response;

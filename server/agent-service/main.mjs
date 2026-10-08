@@ -73,6 +73,7 @@ import { createLookClient, parseLookUrl } from './look-client.mjs';
 import { createConversationClient } from './conversation-client.mjs';
 import { createRunClient } from './run-client.mjs';
 import { createConversationControlClient } from './conversation-control-client.mjs';
+import { createAccountExecutorAssembly } from './account-executor-assembly.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -122,6 +123,7 @@ export async function startAgentService({
   collect = null,
   accountMode = false,
   conversationClient = null,
+  accountExecutor = null,
   root = ROOT,
   version = 'dev',
   codeVersion = null,
@@ -153,7 +155,7 @@ export async function startAgentService({
     optimizeDeps: { noDiscovery: true, include: [] },
   });
 
-  const service = createHostedAgentService({
+  const serviceOptions = {
     root,
     loadModule: (id) => vite.ssrLoadModule(id),
     docUrl,
@@ -177,7 +179,18 @@ export async function startAgentService({
     ...(collect ? { collect } : {}),
     ...(accountMode ? { accountMode: true, conversationClient } : {}),
     log,
-  });
+  };
+  let executor = null, service;
+  try {
+    if (accountMode && accountExecutor) {
+      // CLI supplies its one already-created RAM runClient and read-control
+      // client. No secondary tool/model process registers a different instance.
+      executor = await createAccountExecutorAssembly({ ...serviceOptions, ...accountExecutor,
+        dataDir, conversationClient, root, loadModule: serviceOptions.loadModule,
+        modelConfig: serviceOptions.modelConfig, log });
+      service = executor.service;
+    } else service = createHostedAgentService(serviceOptions);
+  } catch (error) { await vite.close(); throw error; }
   const api = createAgentHttp({ service, authenticate, version, codeVersion, log });
   const server = http.createServer((req, res) => { void api.handle(req, res); });
   try {
@@ -186,7 +199,7 @@ export async function startAgentService({
       server.listen(port, host, resolve);
     });
   } catch (err) {
-    await service.close();
+    if (executor) await executor.close(); else await service.close();
     await vite.close();
     throw new AgentConfigError('listen', `监听失败:${err?.message ?? err}`);
   }
@@ -198,12 +211,21 @@ export async function startAgentService({
     port: actual,
     url: `http://${host.includes(':') ? `[${host}]` : host}:${actual}`,
     service,
+    executor,
     close() {
       closing ??= (async () => {
-        await service.close();
-        server.closeAllConnections?.();
-        await new Promise((resolve) => server.close(() => resolve()));
-        await vite.close();
+        if (executor) {
+          // Close actual public HTTP/SSE owners before waiting on read-control
+          // receipts. HTTP finish alone cannot stand in for socket close.
+          server.closeAllConnections?.();
+          await new Promise(resolve => server.close(resolve));
+          try { await executor.close(); } finally { await vite.close(); }
+        } else {
+          await service.close();
+          server.closeAllConnections?.();
+          await new Promise(resolve => server.close(resolve));
+          await vite.close();
+        }
       })();
       return closing;
     },
@@ -258,7 +280,7 @@ async function main() {
   const accountMode = env.PROMPTCUT_ACCOUNT_V2 === '1';
   if (env.PROMPTCUT_ACCOUNT_V2_REQUIRED === '1' && !accountMode) return fail('account-v2-required');
   if (accountMode && !/^wss:\/\//.test(docUrl)) return fail('account-v2', { detail: 'doc-url-must-be-wss' });
-  let key = null, client = null, conversationClient = null, runClient = null, conversationControl = null, wiring;
+  let key = null, client = null, conversationClient = null, runClient = null, conversationControl = null, wiring, accountExecutor = null;
   if (accountMode) {
     try {
       const file = name => {
@@ -276,6 +298,10 @@ async function main() {
         receiptFile: path.join(env.PROMPTCUT_AGENT_DATA, 'conversation-read-closures.sqlite'),
         onDiagnostic: event => line('agent.read-control', event) });
       conversationClient.useReadControl(conversationControl);
+      const controlPort = Number(env.PROMPTCUT_AGENT_CONTROL_PORT);
+      if (!Number.isInteger(controlPort) || controlPort < 1 || controlPort > 65535 || controlPort === port)
+        throw new AgentConfigError('account-executor', 'separate-control-port-required');
+      accountExecutor = { doc: options, runClient, readControl: conversationControl, controlPort };
       wiring = createHostedWiring({ accountMode: true, conversationClient, log: line });
     } catch {
       await conversationControl?.close(); conversationClient?.close(); runClient?.close(); return fail('account-v2');
@@ -309,7 +335,7 @@ async function main() {
       ...(!accountMode && lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
       ...(collect ? { collect } : {}),
-      ...(accountMode ? { accountMode: true, conversationClient } : {}),
+      ...(accountMode ? { accountMode: true, conversationClient, accountExecutor } : {}),
       ...(rehearsal ? { modelConfig: () => readDesktopModelConfig() } : {}),
       version,
       codeVersion: () => wiring.publisher?.codeVersion?.() ?? version,
@@ -335,11 +361,12 @@ async function main() {
       registerTimer = setTimeout(registerInstance, 2_000); registerTimer.unref?.();
     }
   };
-  if (runClient) void registerInstance();
+  if (runClient && !started.executor) void registerInstance();
   line('agent.ready', {
     url: started.url, auth: accountMode ? 'account-v2-mtls' : 'service-identity',
     service: 'agent', ...(key ? { kid: key.kid } : {}), version, accountMode,
-    ...(accountMode ? { runAuthorityMounted: false, runDataProofReady: false } : {}),
+    ...(accountMode ? { runAuthorityMounted: !!started.executor, runDataProofReady: !!started.executor,
+      completionReady: false } : {}),
     ...(origin ? { publicOrigin: origin } : {}),
     assetService: !!assetBase, look: !accountMode && !!lookUrl, egressTestAllow: testAllow.length > 0,
     collect: !accountMode && !!collect, collectTestRunner: !accountMode && collect?.testRunner === true,
@@ -347,6 +374,12 @@ async function main() {
   });
   const stop = () => {
     registerStopped = true; if (registerTimer) clearTimeout(registerTimer);
+    if (started.executor) {
+      // No five-second successful exit can certify an unobserved old OS tree.
+      void started.close().then(() => { wiring.close(); runClient?.close(); conversationClient?.close(); })
+        .catch(error => { line('agent.close.pending', { code: error?.code ?? 'closure-pending' }); process.exitCode = 1; });
+      return;
+    }
     void Promise.resolve(conversationControl?.close()).then(() => started.close()).then(() => { wiring.close(); client?.close(); runClient?.close(); process.exit(0); });
     setTimeout(() => process.exit(0), 5000).unref();
   };
