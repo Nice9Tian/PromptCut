@@ -17,14 +17,28 @@ export function createRunAssetPrivateClient(config) {
   return Object.freeze({
     async identity() {
       const value = await read('/internal/v2/asset/run/identity');
-      if (!fields(value, ['v', 'serviceId', 'serviceIdentity', 'instanceId', 'pid', 'startedAt',
-        'docClientFingerprint256', 'internalServerFingerprint256', 'state']) ||
+      const base = ['v', 'serviceId', 'serviceIdentity', 'instanceId', 'pid', 'startedAt',
+        'docClientFingerprint256', 'internalServerFingerprint256', 'state'];
+      if (!(fields(value, base) || fields(value, [...base, 'authorityId', 'epoch'])) ||
           value.v !== 1 || value.serviceId !== 'asset' || value.state !== 'running' ||
           !reference(value.serviceIdentity) || !reference(value.instanceId) ||
           !Number.isSafeInteger(value.pid) || value.pid < 1 ||
           !Number.isSafeInteger(value.startedAt) || value.startedAt < 0 ||
           !hashOf(value.docClientFingerprint256) || value.internalServerFingerprint256 !== pin)
         fail('asset-current-identity-invalid');
+      if ('epoch' in value && (!Number.isSafeInteger(value.epoch) || value.epoch < 1 || !reference(value.authorityId)))
+        fail('asset-current-identity-invalid');
+      return value;
+    },
+    async proveObserver(input) {
+      const value = (await transport.request('POST', '/internal/v2/asset/run/observer/verify', input)).result;
+      if (!fields(value, ['identity', 'proof']) || !hashOf(value.proof) ||
+          !fields(value.identity, ['v', 'serviceId', 'authorityId', 'epoch', 'serviceIdentity', 'instanceId',
+            'pid', 'startedAt', 'docClientFingerprint256', 'internalServerFingerprint256', 'state']) ||
+          value.identity.serviceId !== 'asset' || value.identity.state !== 'running' ||
+          value.identity.internalServerFingerprint256 !== pin ||
+          value.identity.authorityId !== input?.docAuthorityId || value.identity.epoch !== input?.epoch)
+        fail('asset-observer-binding-unavailable');
       return value;
     },
     async resolveTierAssetRef({ projectId, hash, tier, mediaId }) {

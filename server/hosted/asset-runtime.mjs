@@ -18,6 +18,8 @@ import { createRunAssetMetadataRpc } from './run-assets-metadata-rpc.mjs';
 import { createAssetRunClient } from './asset-run-client.mjs';
 import { createAssetRunConsumer, createAssetRunAccess } from './asset-run-access.mjs';
 import { createRunAssetHeadClient } from './run-assets-head-client.mjs';
+import { readRootAssetReservation } from './run-assets-current-registry.mjs';
+import { createAssetObserverChannels } from './run-assets-observer-binding.mjs';
 
 const send = (res, status, value) => { if (res.destroyed || res.headersSent) return; res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); res.end(JSON.stringify(value)); };
 const listen = (server, port, host) => new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => { server.off('error', reject); resolve(server.address()); }); });
@@ -37,10 +39,14 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
   registerTsResolve();
   const [asset, media, shots] = await Promise.all([import('../asset-service.ts'), import('../vite-plugin-media.ts'), import('../asset-store/shots-thumb.mjs')]);
   const root = path.resolve(dataDir), assetsDir = path.join(root, 'assets-v2'); await fsp.mkdir(assetsDir, { recursive: true });
+  const rootReservation = runAssets?.rootReservationFile ? readRootAssetReservation({
+    reservationFile: runAssets.rootReservationFile, expected: runAssets.rootExpected }) : null;
+  const observerChannels = rootReservation ? createAssetObserverChannels({ docFingerprint256 }) : null;
   const runClient = runAssets ? createAssetRunClient({ origin: doc.origin, tls: doc.tls,
     serverFingerprint256: doc.serverFingerprint256, timeoutMs: runAssets.timeoutMs,
-    maxResponseBytes: runAssets.maxResponseBytes }) : null;
-  const docClient = createAssetDocClient(doc), instanceId = randomUUID();
+    maxResponseBytes: runAssets.maxResponseBytes,
+    ...(observerChannels ? { onObserverSocket: socket => observerChannels.register(socket) } : {}) }) : null;
+  const docClient = createAssetDocClient(doc), instanceId = rootReservation?.instanceId ?? randomUUID();
   const lifecycle = await openAssetLifecycle({ root, instanceId, cert: doc.tls.cert, recoveryFence, serviceIdentity, allowFixtureRecoveryFence });
   let stopped = false, failure = null, syncing = null, timer, assetServer, internalServer;
   const runConsumer = runClient ? createAssetRunConsumer({ client: runClient, file: path.join(root, 'run-assets-v1.json'),
@@ -71,7 +77,7 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
   // connection. No run admission or closure ACK is inferred from this read.
   const runPrivateReads = serviceIdentity ? createRunAssetMetadataRpc({ docFingerprint256,
     internalServerCert: internalTls.cert, lifecycle, projectStores: factory, consumer: runConsumer,
-    isOpen: () => !stopped }) : null;
+    isOpen: () => !stopped, rootReservation, observerChannels }) : null;
   const headClient = runConsumer ? createRunAssetHeadClient({ client: runClient, humanConsumer: consumer, runConsumer }) : null;
   const runAccess = runConsumer ? createAssetRunAccess({ client: headClient, consumer: runConsumer,
     projectStores: factory, humanConsumer: consumer, assetInstanceId: instanceId, serviceIdentity,
@@ -142,6 +148,7 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
       get ready() { return ready(); }, get runAssetsStatus() { return runAccess?.status() ?? { runAssetsConfigured: false, runAssetsReady: false }; },
       async close() { if (stopped) return; stopped = true; clearInterval(timer);
         const failed = [];
+        observerChannels?.close();
         for (const close of [() => runAccess?.close(), () => consumer.close(), () => runConsumer?.close(), () => runClient?.close()])
           try { await close(); } catch (error) { failed.push(error); }
         docClient.close(); await Promise.all([closeServer(assetServer), closeServer(internalServer)]);
@@ -149,6 +156,7 @@ export async function startHostedAssetService({ dataDir, host = '127.0.0.1', por
         await lifecycle.closeClean();
       } };
   } catch (error) { stopped = true; clearInterval(timer);
+    observerChannels?.close();
     for (const close of [() => runAccess?.close(), () => consumer.close(), () => runConsumer?.close(), () => runClient?.close()])
       try { await close(); } catch { /* preserve startup failure */ }
     docClient.close(); await Promise.all([closeServer(assetServer), closeServer(internalServer)]); throw error; }

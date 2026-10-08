@@ -9,12 +9,14 @@ const actualClose = item => !item || item.closed ? Promise.resolve() : new Promi
 /** Asset-owned credentials only. Every data lease has one dedicated observer
  * TLS connection; an Agent request cannot be continued on a replacement socket.
  * Neither a shared pool nor a body instance reference supplies observer identity. */
-export function createAssetRunClient({ origin, tls, serverFingerprint256, timeoutMs, maxResponseBytes } = {}) {
+export function createAssetRunClient({ origin, tls, serverFingerprint256, timeoutMs, maxResponseBytes,
+  onObserverSocket } = {}) {
   let base; try { base = new URL(origin); } catch { throw fail('asset-run-client-unconfigured'); }
   const pin = certificateFingerprint(serverFingerprint256);
   if (base.protocol !== 'https:' || base.pathname !== '/' || base.search || base.hash || base.username || base.password ||
       !tls?.key || !tls?.cert || !tls?.ca || !/^[a-f0-9]{64}$/.test(pin) ||
-      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1)
+      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1 ||
+      (onObserverSocket !== undefined && typeof onObserverSocket !== 'function'))
     throw fail('asset-run-client-unconfigured');
   const channels = new Set(); let stopped = false;
   function channel() {
@@ -23,7 +25,7 @@ export function createAssetRunClient({ origin, tls, serverFingerprint256, timeou
       minVersion: 'TLSv1.3', keepAlive: true, maxSockets: 1, maxFreeSockets: 1,
       checkServerIdentity(host, cert) { return checkServerIdentity(host, cert) ||
         (certificateFingerprint(cert.fingerprint256) !== pin ? fail('asset-run-peer-forbidden') : undefined); } });
-    let socket, lost = false, closing = false, closePromise;
+    let socket, lost = false, closing = false, closePromise, observerRegistration;
     const pending = new Set();
     const request = (method, route, body) => new Promise((resolve, reject) => {
       if (stopped || closing || lost || !route.startsWith(RUN_ASSET_ROOT)) return reject(fail('asset-run-observer-lost'));
@@ -46,7 +48,20 @@ export function createAssetRunClient({ origin, tls, serverFingerprint256, timeou
       pending.add(req); req.once('close', () => pending.delete(req));
       req.on('socket', current => {
         if (socket && current !== socket) { lost = true; req.destroy(fail('asset-run-observer-lost')); return; }
-        if (!socket) { socket = current; socket.once('close', () => { lost = true; }); }
+        if (!socket) {
+          socket = current;
+          const lose = () => { lost = true; observerRegistration?.unregister(); observerRegistration = null; };
+          socket.once('end', lose); socket.once('close', lose);
+          if (onObserverSocket) {
+            const register = () => {
+              if (closing || lost || current.destroyed) return;
+              try { observerRegistration = onObserverSocket(current); }
+              catch { lost = true; req.destroy(fail('asset-run-observer-lost')); }
+            };
+            if (current.authorized === true && !current.connecting) register();
+            else current.once('secureConnect', register);
+          }
+        }
       });
       req.on('timeout', () => req.destroy(fail('asset-run-authority-unavailable')));
       req.on('error', () => reject(fail('asset-run-authority-unavailable'))); req.end(bytes);
@@ -54,6 +69,7 @@ export function createAssetRunClient({ origin, tls, serverFingerprint256, timeou
     const result = { request, get lost() { return lost || closing; }, close() {
       if (!closePromise) { closing = true; closePromise = (async () => {
         const waits = [...pending].map(actualClose); if (socket) waits.push(actualClose(socket));
+        observerRegistration?.unregister(); observerRegistration = null;
         for (const req of pending) req.destroy(); agent.destroy(); socket?.destroy();
         await Promise.all(waits); channels.delete(result);
       })(); } return closePromise;

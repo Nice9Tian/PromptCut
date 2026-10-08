@@ -1,6 +1,8 @@
 /** 独立账号v2素材入口；部署由root分配专用OS用户，不能共持doc/account/agent/render私钥。 */
 import fs from 'node:fs';
 import path from 'node:path';
+import { X509Certificate } from 'node:crypto';
+import { certificateFingerprint } from '../account/client.mjs';
 import { startHostedAssetService } from './asset-runtime.mjs';
 
 const file = name => { const value = process.env[name]; if (!value || !path.isAbsolute(value)) throw new Error('asset-configuration'); return fs.readFileSync(value); };
@@ -37,6 +39,16 @@ try {
           throw new Error('asset-run-service-forbidden');
         return { serviceKid };
       } };
+    if (process.platform !== 'linux' || typeof process.getuid !== 'function' ||
+        !env.PROMPTCUT_ASSET_ROOT_UNIT || !env.PROMPTCUT_ASSET_ROOT_CGROUP_PATH)
+      throw new Error('asset-run-configuration');
+    config.runAssets.rootReservationFile = env.PROMPTCUT_ASSET_ROOT_RESERVATION_FILE;
+    if (!path.isAbsolute(config.runAssets.rootReservationFile ?? '')) throw new Error('asset-run-configuration');
+    config.runAssets.rootExpected = { authorityId: config.doc.authorityId,
+      serviceIdentity: config.serviceIdentity, uid: process.getuid(), unit: env.PROMPTCUT_ASSET_ROOT_UNIT,
+      cgroupPath: env.PROMPTCUT_ASSET_ROOT_CGROUP_PATH,
+      clientFingerprint256: certificateFingerprint(new X509Certificate(config.doc.tls.cert).fingerprint256),
+      serverFingerprint256: certificateFingerprint(new X509Certificate(config.internalTls.cert).fingerprint256) };
   }
   if (env.PROMPTCUT_HOSTED_RENDER_CAP_BYTES !== undefined) {
     const cap = Number(env.PROMPTCUT_HOSTED_RENDER_CAP_BYTES); if (!Number.isFinite(cap) || cap < 0) throw new Error('asset-capacity'); config.renderCapBytes = Math.floor(cap);

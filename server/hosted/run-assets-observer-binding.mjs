@@ -52,12 +52,14 @@ export function createAssetObserverChannels({ docFingerprint256 } = {}) {
     const digest = assetObserverExporterDigest(socket);
     if (active.has(digest)) fail();
     const onClose = () => unregister(socket);
-    active.set(digest, { socket, onClose }); socket.once('close', onClose);
+    active.set(digest, { socket, onClose });
+    for (const event of ['end', 'error', 'close']) socket.once(event, onClose);
     return Object.freeze({ exporterDigest: digest, unregister: () => unregister(socket) });
   }
   function unregister(socket) {
     for (const [digest, entry] of active) if (entry.socket === socket) {
-      active.delete(digest); socket.removeListener('close', entry.onClose);
+      active.delete(digest);
+      for (const event of ['end', 'error', 'close']) socket.removeListener(event, entry.onClose);
     }
   }
   function prove(input) {
