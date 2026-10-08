@@ -5,6 +5,7 @@ fn main() {
     // 以前就是这么静默失败的(前端那边 catch 掉了,所以没人发现)。
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+            "account_bridge",
             "acquire_proc_lock",
             "release_proc_lock",
             "is_proc_locked",

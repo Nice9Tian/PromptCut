@@ -24,6 +24,8 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
       if (!device) throw new Error('无法取得当前设备身份，请重试。');
       const serviceOrigin = online ? location.origin : (await desktopAccountBridge('configuration') as { origin: string }).origin;
       if (!alive) return; setOrigin(serviceOrigin);
+      const invited = new URL(location.href).searchParams.get('project');
+      if (invited) setLink(projectLink(serviceOrigin, invited));
       const c = createAccountClient({ online, origin: serviceOrigin, device, ...(!online ? { native: desktopAccountBridge } : {}) }); client.current = c;
       try { const current = await c.restore(); if (alive) { setAccount(current); if (current) await refreshLists(); } }
       catch (e) { if (alive) setError(e instanceof Error ? e.message : '登录恢复失败，请重新登录。'); }
