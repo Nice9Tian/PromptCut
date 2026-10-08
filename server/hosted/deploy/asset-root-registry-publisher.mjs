@@ -207,13 +207,16 @@ async function atomicWrite(dir, name, value, exclusive = false) {
 const exec = args => new Promise((resolve, reject) => execFile('/usr/bin/systemctl', args,
   { windowsHide: true, timeout: 120000, maxBuffer: 65536, encoding: 'utf8' }, (error, stdout) =>
     error ? reject(Object.assign(new Error('publisher-systemctl-failed'), { code: 'publisher-systemctl-failed' })) : resolve(stdout)));
+export function validatePublisherUnit(value, unit) {
+  if (value.Id !== unit || value.LoadState !== 'loaded' || value.KillMode !== 'control-group' || value.Delegate !== 'no' ||
+      value.Restart !== 'no') fail('publisher-unit-scope');
+  return value;
+}
 async function unitInfo(unit) {
-  const names = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'InvocationID', 'KillMode', 'Delegate'];
+  const names = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'InvocationID', 'KillMode', 'Delegate', 'Restart'];
   const raw = await exec(['show', unit, '--no-pager', ...names.map(n => `--property=${n}`)]);
   const value = Object.fromEntries(raw.trim().split('\n').map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
-  if (value.Id !== unit || value.LoadState !== 'loaded' || value.KillMode !== 'control-group' || value.Delegate !== 'no')
-    fail('publisher-unit-scope');
-  return value;
+  return validatePublisherUnit(value, unit);
 }
 async function bootId() { const v = (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim(); if (!boot(v)) fail('publisher-boot-invalid'); return v; }
 async function procInfo(pid) {
@@ -231,6 +234,7 @@ async function inspect(scope, reservation) {
   if (!positive(pid) || !['active', 'activating'].includes(before.ActiveState) ||
       `/sys/fs/cgroup${before.ControlGroup}` !== scope.cgroupPath || !/^[a-f0-9]{32}$/.test(before.InvocationID)) fail('publisher-unit-not-running');
   const proc = await procInfo(pid), cg = await fs.lstat(scope.cgroupPath, { bigint: true });
+  if ((await fs.statfs(scope.cgroupPath)).type !== 0x63677270) fail('publisher-cgroup-not-v2');
   if (!cg.isDirectory() || cg.isSymbolicLink() || proc.uid !== scope.uid || proc.cgroupPath !== scope.cgroupPath ||
       !equal(before, await unitInfo(scope.unit)) || bootBefore !== await bootId()) fail('publisher-proc-changed');
   return { instanceId: reservation.instanceId, bootId: bootBefore, pid,
@@ -258,7 +262,13 @@ async function freshIdentity(config, scope) {
         result = body.result;
       } catch (e) { failure = e; } req.destroy(); socket?.destroy(); });
     });
-    const complete = () => failure || !result ? reject(new Error('publisher-identity-unavailable')) : resolve(result);
+    const complete = () => {
+      if (!failure && result) return resolve(result);
+      const error = new Error('publisher-identity-unavailable'); error.code = 'publisher-identity-unavailable';
+      // Only connection-not-yet-listening is a startup readiness retry. A
+      // protocol/pin/identity rejection is never retried into acceptance.
+      error.retryable = failure?.code === 'ECONNREFUSED'; reject(error);
+    };
     req.on('socket', s => { socket = s; s.once('close', complete); });
     req.on('error', e => { failure = e; if (!socket) complete(); });
     req.on('timeout', () => { failure = new Error('publisher-identity-timeout'); req.destroy(); }); req.end();
@@ -319,6 +329,7 @@ export async function runAssetRootPublisher({ configFile, mode }) {
         events = await fs.open(`/proc/self/fd/${group.fd}/cgroup.events`, constants.O_RDONLY | constants.O_NOFOLLOW);
         return {
           async stopAndObserve() {
+            if (!equal(previous, await inspect(scope, previous))) fail('publisher-previous-instance-mismatch');
             // Start exact configured unit stop, immediately attach its rejection
             // handler, and inspect the pinned object while systemd drains it.
             const stopping = exec(['stop', scope.unit, '--no-ask-password']).then(() => ({ ok: true }), () => ({ ok: false }));
@@ -350,7 +361,19 @@ export async function runAssetRootPublisher({ configFile, mode }) {
     },
     start: () => exec(['start', scope.unit, '--no-ask-password']),
     inspect: reservation => inspect(scope, reservation),
-    identity: () => freshIdentity(config.identity, scope),
+    async identity() {
+      const reservation = await rootRead(path.join(dir, 'reservation.json'));
+      const original = await inspect(scope, reservation);
+      for (let attempt = 0; ; attempt++) {
+        try { return await freshIdentity(config.identity, scope); }
+        catch (error) {
+          if (!error.retryable || attempt >= 6) throw error;
+          if (!equal(original, await inspect(scope, reservation))) fail('publisher-instance-changed');
+          await new Promise(resolve => setTimeout(resolve, Math.min(100 * 2 ** attempt, 1600)));
+          if (!equal(original, await inspect(scope, reservation))) fail('publisher-instance-changed');
+        }
+      }
+    },
   };
   return await publishAssetRootRegistry({ scope, mode, io });
 }

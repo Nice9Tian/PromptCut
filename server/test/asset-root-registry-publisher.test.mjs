@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { digestOf } from '../account/ledger.mjs';
-import { publishAssetRootRegistry, parseProcStat, validatePublisherScope, runAssetRootPublisher } from '../hosted/deploy/asset-root-registry-publisher.mjs';
+import { publishAssetRootRegistry, parseProcStat, validatePublisherScope, validatePublisherUnit, runAssetRootPublisher } from '../hosted/deploy/asset-root-registry-publisher.mjs';
 
 const scope = { authorityId: 'doc-test', serviceIdentity: 'asset-test', uid: 12001,
   unit: 'promptcut-asset-test.service', cgroupPath: '/sys/fs/cgroup/system.slice/promptcut-asset-test.service',
@@ -66,6 +66,14 @@ test('publisher parses actual /proc stat field 22 without whitespace/comm confus
   assert.deepEqual(validatePublisherScope(scope), scope);
   for (const change of [{ uid: 0 }, { unit: '../other.service' }, { unit: '--help.service' }, { cgroupPath: '/sys/fs/cgroup/a/../b' },
     { cgroupPath: '/sys/fs/cgroup/a//b' }, { arbitraryUnit: 'other.service' }]) assert.throws(() => validatePublisherScope({ ...scope, ...change }));
+});
+
+test('publisher rejects automatic replacement, delegated tree, alias unit, or process-only KillMode before unit control', () => {
+  const value = { Id: scope.unit, LoadState: 'loaded', KillMode: 'control-group', Delegate: 'no', Restart: 'no' };
+  assert.equal(validatePublisherUnit(value, scope.unit), value);
+  for (const change of [{ Id: 'unrelated.service' }, { Restart: 'always' }, { Restart: 'on-failure' },
+    { Delegate: 'yes' }, { KillMode: 'process' }, { LoadState: 'not-found' }])
+    assert.throws(() => validatePublisherUnit({ ...value, ...change }, scope.unit), { code: 'publisher-unit-scope' });
 });
 
 test('controlled initialize creates immutable anchor; rotate closure precedes reservation/active; matches canonical witness chain', async () => {
