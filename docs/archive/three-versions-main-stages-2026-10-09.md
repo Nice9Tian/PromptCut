@@ -189,3 +189,13 @@ main产品合d948acb3已push；首次文档stage含已gitmv删除的旧报告路
 根离线Rust构建固定c5bae31a，exit0/21.219秒、--offline --locked、不装依赖，exe SHA256 32e40c9e9025d613e3687edf55daf3b2345ba0c15c39d407da230e35894d71eb；独立TMP配置与标识，旧exe保留。最终b66实际启动前lib.rs/account_vault.rs/build.rs/Cargo.toml/Cargo.lock五文件逐字对照编译来源一致。首两次自建IPC探针因临时USERPROFILE未建AppData/Local/Roaming，Rust setup unknown path、exit101；第一轮未捕获stderr，第二轮仅准备阶段有限stderr取证，不含任何登录数据。根承认漏了归档已有的测试目录要求；补齐这些临时标准目录及recover的真实deviceId参数后，实际Rust IPC、RAM SQLite、真实TLS VH后台21/21通过，墙5013ms。包含同源agent webview拒绝桥接、DPAPI登录、同意GET/POST/持久、无效body/路径拒绝、实际恢复与注销、Bearer撤销；原生自有9进程树和6340/6348/6388监听都关闭。scope是隔离空页面的真实原生桥接，不能称整份React桌面编辑器或真实模型已验。三次手工启动准备过程分别保留TEMP pc-consent-native-ipc-c5{,-diag,-profile-fixed}.mjs及各目录result.json，程序内nativeRetries=0不代表此前没有失败尝试。
 
 本阶段报告收回后归档到agent-reports/AGENT-codex-018-cloud-consent-user-path.md。G工作区复用为新生产登记v2读/接受分支，旧v1源码8c1078f6及已完成告知分支远端保留；没有以删目录丢弃未合成果。Astra负责显式双身份publisher，G只读根文件链和独立SQLite持久确认，Sol继续真实发送与排队界面；此时实际在用4个工作区，累计清理仍49=PC35+VH14。
+
+## 舞台素材模板同步与第50个工作区收回
+
+首次告知main0435ff30已push/local-origin0/0；告知本机分支先核d36c6218已在main后branch-d，远端保留。G登记读端v2源码63bfc0fa/报告b851f449及完整旧8c历史已push codex/018-run-assets-current-v2，纯目标35/35/type0，但真实Linux双代publisher/checkpoint还没验、不合main。物理018-cloud-assets-central-glue转交Luna做边界1字符修正，不让冻结源码占一份空工作区。
+
+Luna源码7ae88cb6仅改server/hosted/deploy/nginx-site-promptcut-stages.conf的map regex/value间分隔空格。Root从0435ff30和7ae精确Git对象提取同一mapblock，以同样其它变量定义放入两份独立最小nginx配置。实际Linux/usr/sbin/nginx -t：旧exit1、新exit0；仅创建/var/tmp/pc-stage-map-source-7ae88cb6下自己的配置与日志，无监听、无reload。nginx原PID9395/NRestarts0/active前后完全一致。该目标证明本次map语法差异，不能称整份生产素材跨站Cookie行为或所有路由已验；SameSite跨站实际使用仍待完整素材链。
+
+根联合候选9674ee8a：强制type0/墙6.610秒，完整npm5318项/5314通过/0失败/4跳过/0取消70524.7121ms（墙70.875秒），npm原生自动重跑0；源码始终同一head且clean。本阶段没有新增测试或重复全部历史探针，专属目标是上述真实nginx parser；raw TEMP pc-stage-map-root-9674ee8a-{type,full}.log、pc-stage-map-source-7ae88cb6.log，VM原/新.syntax.log均保留。Luna报告收回归档agent-reports/AGENT-codex-018-stage-nginx-map.md。
+
+移除复用工作区前核Luna7ae已在集成、无未提交或普通未跟踪文件。首次更严忽略文件检查发现70份Vite/TypeScript自建缓存，守门停止，没删除任何东西。全树3349项实际reparse0后，仅将本叶node_modules中的.vite/.vite-temp和tsconfig.tsbuildinfo用同一PowerShell LiteralPath移至TEMP/pc-stage-map-preserved-cache-20261009；未碰主库依赖、不沿联接、不卸包。移后ignored0，再git worktree remove无force；记录TEMP pc-stage-map-cleanup-20261009.json。累计清理50=PC36+VH14，剩本任务实际3个：真实队列Sol、关闭登记Astra、主会话集成；旧六个、其它会话与所有未合源分支继续保留。
