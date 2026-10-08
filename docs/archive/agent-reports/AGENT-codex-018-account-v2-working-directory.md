@@ -9,3 +9,7 @@ Sol 真实静态首红 5项4通过1失败，修后6/6，包含原有实际三服
 根首次候选f5b96bf7类型零错、完整5307/5303通过/0失败/4跳过70187.4166ms（墙70.547秒）、两构建通过，native重跑0。节点实际verify退出0但三份EnvironmentFile带引号均被忽略；另启动唯一隔离unit、真实含空格/百分号/反斜杠目录，CHDIR退出200，证明首修仍未正确。临时unit停止并清掉，旧三服务未停/新三服务未装，完整日志TEMP pc-account-unit-verify-f5b96bf7/unit-proof-first.log及对应full/type/build保留；不把全量绿或verify退出0等同部署通过。
 
 二次仅收b51e494f两文件：WorkingDirectory与EnvironmentFile单值均只转义百分号，保留反斜杠与内部空格，向量字段原样保留。依据systemd v249 load-fragment.c的config_parse_working_directory/config_parse_unit_env_file源码，两者直接用rvalue解析。Sol新首红7项4过3败、修后7/7、type0，TEMP pc-account-v2-single-path-{red,green,type}.log；根还要以真实cwd与环境标记复核，不能用静态字符串断言代替实际加载。
+
+根二次候选9efa8ecb实际verify3份退出0；真实隔离unit读取含字面反斜杠的EnvironmentFile仍ENOENT/resources，未进入Node。WorkingDirectory与EnvironmentFile不能共用全部路径承诺，因为后者随后经glob。日志TEMP pc-account-unit-verify-9efa8ecb/unit-proof-first.log保留，唯一unit已清，旧服务未停。
+
+第三次仅收d8cda394两文件：WorkingDirectory支持原单值字面反斜杠；EnvironmentFile独立格式，POSIX明确拒反斜杠及glob元字符，正常生产路径不受影响。Sol首红8项7过1败、修后8/8含原5真实三服务子进程，type0/6594ms；TEMP pc-account-v2-envfile-special-{red,green,type}.log。根将分别核复杂cwd与无特殊元字符的真实环境文件，再验完整基线。
