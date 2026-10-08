@@ -12,6 +12,7 @@ import { createAssetObserverChannels } from '../hosted/run-assets-observer-bindi
 import { createRunAssetMetadataRpc } from '../hosted/run-assets-metadata-rpc.mjs';
 import { createRunAssetPrivateClient } from '../hosted/run-assets-metadata-client.mjs';
 import { createRunAssetObserverAuthority } from '../hosted/run-assets-observer-authority.mjs';
+import { createRunAssetsInternalHandler } from '../account/run-assets-internal.mjs';
 
 const send = (res, status, value) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
 const close = server => new Promise(resolve => {
@@ -81,11 +82,46 @@ test('original asset TLS channel alone answers doc pinned challenge; current epo
     exporterDigest: '0'.repeat(64), epoch: 1, recordDigest: 'a'.repeat(64), docAuthorityId: 'doc-one',
     purpose: 'run-assets-observer-verify', instance }), error => error.code === 'asset-observer-binding-unavailable');
   assert.deepEqual(await authority.resolveObserver({ socket: docSocket }),
-    { assetInstanceId: instance.instanceId, serviceIdentity: instance.serviceIdentity });
+    { assetInstanceId: instance.instanceId, serviceIdentity: instance.serviceIdentity,
+      authorityId: 'doc-one', epoch: 1, recordDigest: 'a'.repeat(64) });
   assert.equal(authority.currentAsset({ socket: docSocket }).assetInstanceId, instance.instanceId);
   epoch = 2;
   assert.throws(() => authority.currentAsset({ socket: docSocket }), error => error.code === 'asset-observer-binding-unavailable');
   await assert.rejects(authority.resolveObserver({ socket: docSocket }), error =>
     ['run-asset-observer-forbidden', 'asset-observer-binding-unavailable'].includes(error.code));
   authority.close();
+});
+
+test('actual pinned events socket rejects a root epoch transition during awaited synchronization', { timeout: 45000 }, async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-run-assets-events-fence-'));
+  const pki = assetWiringPki(dir), port = 6446;
+  const sockets = new Set(), closes = new Set(); let server, client, release, reached;
+  const entered = new Promise(resolve => { reached = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  let epoch = 1;
+  const handler = createRunAssetsInternalHandler({ agentFingerprint256: pki.account.fingerprint256,
+    assetFingerprint256: pki.asset.fingerprint256, maxBodyBytes: 4096,
+    resolveObserver: async ({ socket }) => {
+      if (socket.destroyed) throw new Error('socket-closed');
+      return { assetInstanceId: `asset-${epoch}`, serviceIdentity: 'asset-service',
+        authorityId: 'doc-one', epoch, recordDigest: epoch === 1 ? 'a'.repeat(64) : 'b'.repeat(64) };
+    },
+    runAssets: { issue() {}, check() {}, closeLease() {}, acknowledgeEvent() {},
+      async eventsSince() { reached(); await pending; return { events: [], headSeq: 0 }; } } });
+  server = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' },
+    (req, res) => { void handler(req, res); });
+  server.on('secureConnection', socket => {
+    sockets.add(socket); closes.add(new Promise(resolve => socket.once('close', () => { sockets.delete(socket); resolve(); })));
+  });
+  t.after(async () => {
+    release(); await client?.close(); for (const socket of sockets) socket.destroy();
+    await close(server); await Promise.allSettled([...closes]);
+    t.diagnostic(`events-port=${port}; owned-tls-sockets=${sockets.size}; listening=${server?.listening === true}`);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  server.listen(port, '127.0.0.1'); await once(server, 'listening');
+  client = createAssetRunClient({ origin: `https://127.0.0.1:${port}`, tls: pki.asset,
+    serverFingerprint256: pki.doc.fingerprint256, timeoutMs: 5000, maxResponseBytes: 4096 });
+  const waiting = assert.rejects(client.eventsSince(0), error => error.code === 'asset-observer-forbidden');
+  await entered; epoch = 2; release(); await waiting;
 });

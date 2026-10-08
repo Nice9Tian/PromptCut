@@ -43,7 +43,8 @@ export function createRunAssetObserverAuthority({ checkpoint, privateClient, ass
     if (!same(first, second) || socket.destroyed) fail();
     bound.set(socket, { epoch: second.epoch, recordDigest: second.recordDigest, instance: second.instance });
     socket.once('close', () => bound.delete(socket));
-    return currentAsset({ socket });
+    return { ...currentAsset({ socket }), authorityId: second.authorityId,
+      epoch: second.epoch, recordDigest: second.recordDigest };
   }
   return Object.freeze({ currentAsset, resolveObserver, close() { closed = true; } });
 }

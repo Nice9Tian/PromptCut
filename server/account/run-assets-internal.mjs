@@ -2,7 +2,7 @@ import https from 'node:https';
 import { certificateFingerprint } from './client.mjs';
 import { instanceTlsBinding } from './agent-instance-authority.mjs';
 import { assertInstanceDirectTransport, instanceRequestProof } from './agent-instance-internal.mjs';
-import { RUN_ASSET_ROOT, exactShape, requestProof, reference, decodeRunAssetBody, failRunAsset as fail } from './run-asset-protocol.mjs';
+import { RUN_ASSET_ROOT, exactShape, hashOf, requestProof, reference, decodeRunAssetBody, failRunAsset as fail } from './run-asset-protocol.mjs';
 
 function respond(res, status, body) {
   if (res.destroyed || res.writableEnded) return;
@@ -53,14 +53,23 @@ export function createRunAssetsInternalHandler({ runAssets, agentFingerprint256,
           proof: instanceRequestProof(req) });
       } else {
         const identity = await resolveObserver({ socket: req.socket, fingerprint256: peer });
-        if (!exactShape(identity, ['assetInstanceId', 'serviceIdentity']) ||
-            ![identity.assetInstanceId, identity.serviceIdentity].every(reference)) fail(403, 'asset-observer-forbidden');
+        const fullIdentity = exactShape(identity, ['assetInstanceId', 'serviceIdentity', 'authorityId', 'epoch', 'recordDigest']);
+        if (!(fullIdentity || exactShape(identity, ['assetInstanceId', 'serviceIdentity'])) ||
+            ![identity.assetInstanceId, identity.serviceIdentity].every(reference) ||
+            (fullIdentity && (!reference(identity.authorityId) || !Number.isSafeInteger(identity.epoch) ||
+              identity.epoch < 1 || !hashOf(identity.recordDigest)))) fail(403, 'asset-observer-forbidden');
         const observer = { ...identity, socket: req.socket };
         if (route === 'events') {
           if (url.searchParams.size !== 1 || !url.searchParams.has('after') ||
               !/^(0|[1-9][0-9]*)$/.test(url.searchParams.get('after'))) fail(400, 'run-asset-cursor-invalid');
           // Registry was force-checked on this actual socket even for metadata.
           result = await runAssets.eventsSince(Number(url.searchParams.get('after')));
+          // An access event or root rotation can happen during synchronize().
+          // Re-prove the SAME original TLS socket before returning metadata;
+          // never replace its pre-await OS identity with a newer one.
+          const after = await resolveObserver({ socket: req.socket, fingerprint256: peer });
+          if (req.socket.destroyed || Object.keys(identity).length !== Object.keys(after ?? {}).length ||
+              Object.keys(identity).some(key => identity[key] !== after[key])) fail(503, 'asset-observer-forbidden');
         } else {
           const leaseRoute = /^leases\/([A-Za-z0-9_.:-]{1,128})\/(check|closed)$/.exec(route);
           const ackRoute = /^events\/([A-Za-z0-9_.:-]{1,128})\/ack$/.exec(route);
