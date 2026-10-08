@@ -149,9 +149,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       await Promise.all(immediate);
       const controls = await runAuthority.synchronize();
       await Promise.all(controls.filter(matches).map(deliver));
-      const readClosed = await readControl.waitCompletion({ projectId: input.projectId, conversationId: input.conversationId });
       const relevant = Object.values(ledger.read().runControlsV2 ?? {}).filter(matches);
       if (relevant.every(control => control.instances.length === 0 && control.retained.length === 0 && control.revoked.length === 0)) {
+        const readClosed = await readControl.waitCompletion({ projectId: input.projectId, conversationId: input.conversationId });
         // This phase mounts human HTTP reads only. Empty run inventory is checked
         // in the transaction; it cannot stand in for a historical OS/runner close.
         for (const control of relevant) runAuthority.acknowledgeControl({ controlId: control.controlId,
