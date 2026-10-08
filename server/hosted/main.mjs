@@ -148,6 +148,17 @@ async function main() {
   }
 
   let combo;
+  // 独立v2素材status连接：这里仅doc client钥匙；asset进程另读自己的配置。
+  let assetStatus = null;
+  if (env.PROMPTCUT_ASSET_STATUS_ORIGIN) {
+    try {
+      if (!account || !assetPublicUrl) throw new Error('asset-status');
+      const file = name => { const filename = env[name]; if (!filename || !path.isAbsolute(filename)) throw new Error('asset-status'); return fs.readFileSync(filename); };
+      assetStatus = { origin: env.PROMPTCUT_ASSET_STATUS_ORIGIN, serverFingerprint256: env.PROMPTCUT_ASSET_STATUS_FINGERPRINT256,
+        instanceId: env.PROMPTCUT_ASSET_INSTANCE_ID || undefined,
+        tls: { key: file('PROMPTCUT_ASSET_STATUS_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_ASSET_STATUS_CLIENT_CERT_FILE'), ca: file('PROMPTCUT_ASSET_STATUS_CA_FILE') } };
+    } catch { return configError('asset-status'); }
+  }
   try {
     combo = await startHostedCombo({
       dataDir,
@@ -160,6 +171,7 @@ async function main() {
       agentPublicUrl,
       account,
       accountRequired,
+      assetStatus,
       trustLoopback,
       localDevice: localDeviceInfo(),
       log,

@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import { unlinkSync } from 'node:fs';
 import path from 'node:path';
+import { atomic } from './asset-store/atomic.mjs';
+export { atomic } from './asset-store/atomic.mjs';
 import { randomUUID } from 'node:crypto';
 import { PNG } from 'pngjs';
 import { isFullyTransparentPng } from './frame-validity.mjs';
@@ -8,25 +10,6 @@ import { readRenderRecord, withRenderRecord } from './png-record.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
-
-/** Write through a temp file and rename it into place. The editor server and
- * the prerender worker share these files; Windows refuses to replace a file
- * the other process has open for a moment (EPERM/EBUSY/EACCES), so retry. */
-export async function atomic(file, data) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  await fs.writeFile(temp, data);
-  for (let attempt = 0; ; attempt++) {
-    try { await fs.rename(temp, file); return; }
-    catch (error) {
-      if (attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) {
-        await fs.rm(temp, { force: true }).catch(() => {});
-        throw error;
-      }
-      await new Promise(resolve => setTimeout(resolve, 20 * (attempt + 1)));
-    }
-  }
-}
 
 /** A fully transparent render is accepted only when a second render agrees. */
 export const CLEAR_CONFIRMATIONS = 2;

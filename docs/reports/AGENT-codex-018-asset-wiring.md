@@ -1,0 +1,165 @@
+# 018中央素材接线报告
+
+状态：开工。专属分支codex/018-asset-wiring，起点cc085b9ff46ffc932135d18960b82d0da9abd867；旧资产包保持只读。5860～5869开工只读核零监听。
+
+目标：public opaque assetTicket经独立asset client证书mTLS问doc权威建立可信principal；项目独立stores挂中央HTTP/媒体/stream入口；真实连续access events追齐、实际资源close、receipt持久后ACK。重启/失联/head未齐ready=false且failclosed，内部追齐才允许组合join/session，public不能设置ready。提供独立asset进程入口及配置边界，生产OS用户/私钥隔离和部署由根负责。
+
+独占：server/hosted/combo.mjs；server/hosted/main.mjs仅asset配置/入口；新asset↔doc mTLS client、服务入口及asset专属test/probe。本叶不改doc/account权限/HTTP/router/会话或旧素材底层包，接口不足先报其owner。本期仍保留LAN v1，无UI/费用/defaultmemory/真实密文/部署/版本/merge/push/清理操作。
+
+验证：先约跨进程接口；独立服务真实A/B同hash、无证/伪principal/错project、GET/HEAD/Range/chunks/upload/complete/媒体/stream、long source/fd真实close才ACK；真实resume/crash/head与ready正反向。固定完整块后类型、target、一次必要full；首次失败全部保留。Node绝对静默预载，整子树windowsHide及实际close，产物只TMP；Python如需使用cuda_Vit和PYTHONDONTWRITEBYTECODE，不改环境/依赖。
+
+开工状态（历史，后续实现见下）：实际assetTicket解析契约、独立mTLSclient/entry、连续消费与中央ready接线均尚未实施；当前base仍0.7.17，release前0.7.18 required传播由根整合确认。原isolated素材证据不替代本包中央验证。
+
+## 跨进程接口与首块
+
+- doc owner约定runtime assetReadyProbe({authorityId,requiredAccessHead}) -> {ok:true,ready:true,authorityId,instanceId,accessCursor,accessHead}；比较的是doc access事件head，不是account事件head。每次join/session前后实时同步doc，并要求两个head不变/asset精确追齐/同instance；缺callback生产503。asset内部GET /internal/v2/asset/status只认doc mTLS证书，先真实consumer.sync再回status，不提供public setReady或永久POST ready。
+- doc owner另补opaque ticket解析：/internal/v2/access/check的assetTicket分支缺projectId时取真实绑定principal.projectId，显式projectId严格相同。原返回allowed+account/login/credential/generation/project/authority/access/revision/revocationSeq/authorizationId足够建立精确principal；没有另复制账号或项目权威。
+- 首块新增独立asset doc client、service runtime/entry和combo/main status配置：doc只读自己status client私钥，独立asset只读自己client/server私钥；v2配置external status时combo不再监听旧素材端口，公网字节直达独立asset。缺接线仍准确不可用，不降级LAN全局库。此刻runtime尚待真实provider集成，不能称生产接通。
+- asset-client-1 RPC测试2/2、0fail/skip，1729.559ms，TMP/promptcut-asset-wiring-client-1.log；真实临时CA/各角色证书和mTLS，覆盖opaque字段/pin/错证书/伪principal、连续通知、精确certificate-derived asset ACK及实时status精确head。这是transport单测，权限authority为局部stub，不替代真实doc+account+独立进程验收。
+- 只读搜索误把account-hosted-wiring文件名/模块位置反写造成ENOENT，另一次rg Windows glob路径报os error123；按rg --files/真实import修正，无源码变更，不归咎产品。大段合读输出截断后改按真实文件分段读取。
+
+
+## 独立入口、恢复fence和部署闭包完整块
+
+- 显式依赖接入：首次pick 0e12db21因base少da476出现报告/test冲突，未猜合并。根授权abort，仅撤中间状态，保留4d4aeb9a；然后按顺序pick da476e15659990247efa54bf1f20015b39576473（本叶20619755）和0e12db214f7d2509abb93c59fc47253834bf5584（本叶e27fbcad）。原doc源码由owner提供，未另改权限模块。
+- 独立asset-main只读asset角色client/server私钥与doc CA/公开fingerprint；doc combo只读doc角色status client私钥。新增内部status监听独立mTLS口，只认doc叶cert pin。public opaque ticket由asset自己的client cert向doc核对，显式project不一致拒；不接public principal/role/runGrant，不把token存队列/cursor/receipt。status先消费真实连续日志，cursor/head不相等或doc失联拒ready；doc每次join/session两次真实status核精确head和同instance。周期100ms是日志追齐唤醒；每次数据请求仍问doc，不是权限缓存。
+- 新asset-lifecycle：启动持久running marker和独占owner lock；正常close在consumer实际owned资源、HTTP内部/public listener全部收口之后才写clean。旧running时，生产必须提供root文件、全部祖先root所有且不可group/world写的fence；Windows生产不接受。证明绑定previousInstanceId、previousPid、previousServiceFingerprint256、serviceId asset、scope=上一marker的serviceIdentity，observedAt>=上一startedAt且不在未来。不同旧instance证明不能永久复用。缺证明/错身份/未核旧资源关闭拒消费者启动、拒ACK。服务身份由PROMPTCUT_ASSET_SERVICE_IDENTITY配置；根部署专用asset UID、systemd KillMode=control-group，停旧服务后真实核旧cgroup空，写root控制的单次证明再启动。PID死亡本身不等于orphan ffmpeg关闭。
+- Windows受控fixture只在测试API显式allowFixtureRecoveryFence:true接受owned-tree-close；生产CLI没有该开关。证明由父测试在own child的实际close之后生成，本次没有在途ffmpeg（PCM已真实完成）。它证明自有文件流子树crash恢复，不证明Linux OS UID私钥隔离、orphan worker/cgroup或物理掉电。根须在节点核这些部署前提。
+
+### 授权的纯移动与接线差异
+
+| 文件 | 内容/行为边界 |
+|---|---|
+| server/frame-stream.mjs → server/asset-store/stream-store.mjs | readySegmentRanges、StreamStore、publicManifest、handleStreamRequest原函数体纯移动；原模块保持import/reexport同一个实现。SEGMENT_FRAMES仍来自原ffmpeg常量，producer/encoder/像素/参数未改。 |
+| server/frame-mov.mjs → server/asset-store/atomic.mjs | atomic原重试/临时文件/rename函数纯移动，旧导出保持；PNG/MOV逻辑未动。 |
+| server/snapshot-store.mjs → server/asset-store/ranges.mjs | mergeRanges原函数体纯移动并reexport；atomic改引纯模块，其余快照逻辑不动。 |
+| server/vite-plugin-shots.ts → server/asset-store/shots-thumb.mjs | shotsDir、shotsThumbMiddleware按Node stripTypeScriptTypes只剥类型，原TS import/reexport；读口project guard/hold/trackHandle/actualclose行为保留。shotsDir旧dataDir表达式相同；识别/Python/worker不移动不改。原文件没有projectShotsDir函数，不发明导出。 |
+| server/vite-plugin-media.ts | 根唯一授权的一行动态import bakery/index → bakery/ffmpeg，同findFfmpeg导出/行为。 |
+| server/hosted/asset-runtime.mjs | 改引纯stream/thumb读口；stream传已解析pathname而不是含?t的req.url，并对不认路径答404。原handler协议不改。这是入口接线修正，不属纯移动。 |
+| server/hosted/files.mjs | 新独立stageHostedAssetFiles和HOSTED_ASSET_DEPLOY_FILES；旧hosted清单/策略不改。 |
+
+系统AST遍历asset-main所有静态/literal动态import（TS用Node剥类型，JSON计入），精确闭包49文件；bare外部依赖0、无法解析dynamic target0、missing0。清单和图在TMP/pc-asset-deploy-closure-2.json。独立stage不复制node_modules，不安装pngjs/puppeteer，也不把整套生成/解析模块放入asset角色。此前frame-stream→frame-mov→pngjs以及shots→vision-compose→pngjs链由纯抽取移除。
+
+### 所有首次失败和有因修正
+
+| 尝试 | 原始结果/原因 |
+|---|---|
+| client-1 | RPC 2/2、0fail，1729.559ms；局部authority stub，仅transport契约。 |
+| stage-1 | 0过1失败；真实隔离import ERR_MODULE_NOT_FOUND pngjs来自frame-mov。保留TMP/promptcut-asset-wiring-stage-1.log。 |
+| move-1 | 原frame-stream、snapshot-store和四份MOV/playback/archive/cache tests 82/82，0fail/skip，444.8134ms。 |
+| stage-2 | 静态runtime import/缺配置拒启1/1，277.8856ms；当时未执行runtime的TS动态import，不能充当三读口证明。 |
+| integration-1 | 1过1失败，2217.8094ms；首个完整入口拒启。stage-diagnostic-1定位抽取残留shotsDir返回TS标注，非产品服务不可用。 |
+| integration-2 | 0过2失败；第一次机械删标注仅删一处，第二处root:string残留。我承认抽取方式失误；不删断言。 |
+| integration-3 | 改用原TS函数经Node完整stripTypeScriptTypes后，真实动态三模块和provider/独立stage入口2/2，6566.0502ms。 |
+| integration-4 | 2过1失败，6344.4268ms；故障代理仅丢一次ACK，consumer已立即通过通知队列重试清掉pending，测试读null。不是source未关闭。 |
+| integration-5 | 故障持续丢ACK直到own process crash；3/3，0fail/skip，6736.1542ms；真实source fd gate与receipt重放通过。 |
+
+上述日志均在TMP/promptcut-asset-wiring-<名称>.log；stage-diagnostic-1为明确语法原文。新child日志以时间戳独立保存，路径由测试diagnostic打印；首次两份旧child合并log曾用同名覆盖，主测试日志与diagnostic原文保留，不声称旧child副本全在。只读rg Windows glob/错误文件名报错、依赖扫描PowerShell引号导致node-e SyntaxError均未改源码；改literal stdin/真实路径后完成系统检查。
+
+### 真实中央产品证据范围
+
+asset-wiring-integration.test.mjs用冻结VisuHive provider的store/credentials/internal真实代码，新TMP SQLite与临时CA/账号，不读真实密码/钥匙/数据。实际combo(doc public5861/internal5862)问实际provider5860，隔离stage asset-main public5863/internal5864，asset角色独立进程且仅读取own cert/key。受控ACK丢失代理5866仅转发真实doc，先等doc持久成功再断响应；不伪造权限/ACK。RPC专用5865。子树隐藏并await实际close，所有artifact仅TMP。
+
+覆盖三命名空间A/B独立同hash上传完成和GET/HEAD/Range/chunks/complete；B未入库404/空清单，同hash分别入库可读；无证/伪principal/错project/public内部口拒；回环缺client cert真实TLS失败；media上传/真实非零ffmpeg PCM、同项目adopt保留输入/跨项目私路径拒；真实stream manifest/init/seg、未接受publication marker隐藏；真实thumb文件隔离；asset离线join/session503且不加成员、上线真实head自动可用；HTTP正文结束后真fs source _destroy gate使closed=false、fd仍数值，持久logout时receipt为空/cursor不越事件；release到actualclose之后才完成ACK；真实网络持续丢ACK响应→own child crash→可信fixture fence→pending同receiptId及全字段重放；clean restart实际asset-main换instance并session再次通过。最后扩充成功join、新登录删除A而B同hash保留等断言已由下方target-2和full-1的同一集成确认。
+
+未覆盖/未挂载：没有生产部署/真实公网/Linux完整HTTP或专用OS UID实权隔离；cgroup证明由根提供且本机未试orphan ffmpeg；未挂render/Agent runGrant权限（仍拒body豁免）、业务队列自动删除/回收未决语义不实施；流producer仍由后续owner传可信写lease，本包挂真实read routes并以TMP可信seed验证，不冒称生产render产物已贯通。combo旧LAN全局admin inventory/usage不变，v2 public不降级它；不推出新管理员删除策略。基底仍.17；root release .18前必须传播PROMPTCUT_ACCOUNT_V2_REQUIRED=1及独立asset/status/key/UID/fence配置，否则缺required/配置即未完成生产，不冒称可上线。
+
+该阶段待验记录（历史）：type、最新target、一次full；实际结果见最终段，不冒用旧节点6项或旧4966证据。
+
+
+## 最终固定验收与交回
+
+- 产品源码固定4c91f5d2f6b0a6f221df09638c52ceed69cbcc63；e32f26a6e7dbca171b0cefc87678372f4c83344a只补集成测试admin.expectedAccessRevision；最终测试补丁0de62bd5只改media-pcm BAKERY目标/regex两行，保留真实HTTP和逐样本断言。最终交回格式收口只删四个新纯模块末尾多余空行，函数/语句与4c91相同；不据此重复type/full。
+- type-1：实际node主仓库typescript/bin/tsc -b --force，exit0/零错误，TMP/promptcut-asset-wiring-type-1.log；类型受检产品即4c91。没有不存在的npm types命令。
+- target-1固定4c91：87项/86pass/1fail/0skip，10115.7612ms；最后新增delete隔离fixture漏现有expectedAccessRevision，真实服务409 access-revision-mismatch。按public status真实取revision，仅修fixture，无产品权限改动。
+- target-2固定e32：只复验完整真实provider/combo/独立stage/PCM/stream/thumb/source-fd-gate/crash/receipt/clean restart/successful join/delete-A不影响B的集成1/1，0fail/skip，6034.0082ms，TMP/promptcut-asset-wiring-target-2.log。原其余86项已在target-1通过，不把两轮写成一次87/87。
+- full-1固定e32：唯一npm.cmd test，5028 tests/5010pass/16fail/0cancel/2skip，65818.1163ms，exit1；TMP/promptcut-asset-wiring-full-1.log，整个跑程没有改受测源码。11失败为我设PROMPTCUT_ACCOUNT_PROVIDER_ROOT但漏PROMPTCUT_PASSWORD_ORDER_MODULE，password-order真实fixture按规则拒配置；5失败为media-pcm TMP transpile只rewrite旧bakery/index而生产已按授权改pure ffmpeg，读PCM500。新中央集成和所有其余5010项通过。不得称full零失败。根明确不在本叶重跑；共同候选由根补真实order模块环境后复验，不回避真实provider也不删断言。
+- 根扩租server/test/media-pcm.test.mjs仅上述两行。pcm-target-1固定0de：8/8，0fail/skip，808.8954ms，TMP/promptcut-asset-wiring-pcm-target-1.log，真实ffmpeg完整truth逐采样比较覆盖起点/中段/负start/尾部零/重采样与参数负向。该修正补上full的5项失效夹具，未重复full。
+- 根给full一轮5823–5829旧静态fixture端口例外；full开始/结束均核该段与新5860–5869零监听，已通知根释放，lease已转Astra。本叶无服务/owned子进程遗留。新业务测试只5860/61/62/63/64/66，RPC5865；既有PCM target listen(0)仅自有测试server。Node每命令绝对父仓库test-silent-processes预载、全子孙隐藏；Python变量每命令指定cuda_Vit与PYTHONDONTWRITEBYTECODE；没有装依赖/改全局env/读生产钥匙/操作节点。
+- 纯抽取对照5块（atomic、mergeRanges、store+ready、publicManifest+HTTP handler、剥类型后的shots函数）与e27原函数体逐字相同，仅标准化换行/剥TS：TMP/promptcut-asset-wiring-pure-move-compare.json全true。对照脚本首版用CRLF界限读git输出LF导致错误切片/assert失败（只读，无源改）；先标准化换行并要求界限存在后5/5相同。此为明确脚本证据修正，不算产品失败也不隐瞒首次尝试。
+
+### 独立部署精确文件清单（49）
+
+以下就是HOSTED_ASSET_DEPLOY_FILES，stage另写type:module package.json，不带node_modules/私钥。入口静态及literal dynamic import全可解析；外部bare包0；非literal dynamic目标0；Node builtins不算外部依赖。
+
+- server/account/client.mjs
+- server/account/protocol.mjs
+- server/asset-announce.mjs
+- server/asset-client.ts
+- server/asset-service.ts
+- server/asset-store/atomic.mjs
+- server/asset-store/blob-store.mjs
+- server/asset-store/client.mjs
+- server/asset-store/fs-store.mjs
+- server/asset-store/index.mjs
+- server/asset-store/memory-store.mjs
+- server/asset-store/project-access.mjs
+- server/asset-store/project-io.mjs
+- server/asset-store/project-revocations.mjs
+- server/asset-store/project-stores.mjs
+- server/asset-store/px-evict.mjs
+- server/asset-store/ranges.mjs
+- server/asset-store/service-usage.mjs
+- server/asset-store/shots-thumb.mjs
+- server/asset-store/stream-store.mjs
+- server/auth/asset-tickets.mjs
+- server/auth/delegation.mjs
+- server/auth/handshake.mjs
+- server/auth/hosted-default.mjs
+- server/auth/invite.mjs
+- server/auth/origin.mjs
+- server/auth/protocol.mjs
+- server/auth/service-identity.mjs
+- server/auth/store.mjs
+- server/auth/tickets.mjs
+- server/bake-store.mjs
+- server/bakery/ffmpeg.mjs
+- server/bandwidth-gate.mjs
+- server/hosted/asset-doc-client.mjs
+- server/hosted/asset-lifecycle.mjs
+- server/hosted/asset-main.mjs
+- server/hosted/asset-runtime.mjs
+- server/hosted/ts-resolve.mjs
+- server/http-guard.mjs
+- server/media-pull.mjs
+- server/media-tiers.mjs
+- server/recovery/descriptor.mjs
+- server/recovery/paths.mjs
+- server/recovery/relocation.mjs
+- server/render-node/session-link.mjs
+- server/render-node/ws-transport.mjs
+- server/render-role.mjs
+- server/upload-queue.mjs
+- server/vite-plugin-media.ts
+
+### 可启动配置与部署前提
+
+asset独立进程node server/hosted/asset-main.mjs：PROMPTCUT_ASSET_DATA_DIR绝对存在目录、HOST、PORT、公网PUBLIC_URL、INTERNAL_PORT；DOC_AUTHORITY_ID、DOC_ORIGIN https根origin、DOC_FINGERPRINT256、DOC_CA_FILE绝对路径；CLIENT_KEY_FILE/CLIENT_CERT_FILE仅own asset叶、INTERNAL_KEY_FILE/INTERNAL_CERT_FILE仅own asset叶（所有前缀PROMPTCUT_ASSET_）；DOC_CLIENT_FINGERPRINT256限定status调用方doc。PROMPTCUT_ASSET_SERVICE_IDENTITY设置部署的精确systemd unit/cgroup服务身份；unclean重启需要PROMPTCUT_ASSET_RECOVERY_FENCE_FILE=root控制的proof绝对文件。可选PROMPTCUT_HOSTED_RENDER_CAP_BYTES非负数，0真实保留，不转换缺省容量。
+
+doc组合main：PROMPTCUT_ASSET_STATUS_ORIGIN https内部asset根origin，PROMPTCUT_ASSET_STATUS_CLIENT_KEY_FILE、PROMPTCUT_ASSET_STATUS_CLIENT_CERT_FILE、PROMPTCUT_ASSET_STATUS_CA_FILE仅doc own privatekey/cert和peer CA；PROMPTCUT_ASSET_STATUS_FINGERPRINT256限定asset cert，PROMPTCUT_ASSET_INSTANCE_ID可选固定。对应startHostedCombo({assetStatus:{origin,tls,serverFingerprint256,instanceId?},assetPublicUrl,...})，inject真实assetReadyProbe；account模式不listen旧asset口。真实渲染/Agent后续各自独立UID/私钥，不能让一个OS用户拥有四角色钥匙来称隔离。根在release .18前传播account-required，核nginx公网asset指向独立服务和内部口无公网，核数据dir/UID/CA/pin、SQLite一致备份和恢复，以及cgroup证明。这里未部署，不能以Windows临时证书运行替代生产完成。
+
+最终状态：本叶已完成中央素材独立入口/真实mTLS权威/连续事件close→持久receipt→ACK/内部实时ready接线、精确部署闭包及本地产品正反向验证。未完成的闸门是共同候选full零失败与根节点部署/公网/OS权界；原因和所需环境/证明已明确，不借旧baseline称通过。原LAN v1和未决调度/回收/业务删除政策保持范围；不碰用户数据或别的owner工作区。git diff--check及最终干净SHA在交回时核，root收回审查后再推进共同full。
+
+最终base→HEAD diff--check首次发现四个新纯模块多余EOF空行；已仅删除空白，不改任何函数/语句，记录并提交后重新核整块diff，而非仅核工作区空diff。
+
+
+## 根独立并发反例后的lifecycle最小修正
+
+旧890/0de冻结证据不冒用为新源。根真实fs受控反例TMP/pc-root-asset-lock-race-0de62bd5.mjs/log，exit1：acceptedInstances=[next-a,next-b]且marker=next-b。两启动读同旧lock后，B根据旧读值无条件rm误删A新lock；此为本叶真实产品漏洞，不以systemd通常单实例掩盖。根授权暂不收回并补窄lifecycle修正。
+
+新原子.asset-start.claim必须wx创建在读取previous marker/owner之前，写v1/serviceId/serviceIdentity/instanceId/pid/own cert fingerprint/startedAt/nonce/phase/claimedAt并file-sync+dir-sync。claim串行proof核验、旧owner处理、新owner wx与marker持久；成功最后核自身nonce/instance/phase再释放自己的claim。wx busy不碰另一claim；任一持claim后的失败都遗留证据，不finally强删、不根据PID死亡/旧proof自动清。cleanClose也先claim，核owner.instanceId/pid/fingerprint为自己，再persist clean/移除自身owner/dir-sync后释放claim，堵住A clean marker落盘→B新owner→A误rm窗口。
+
+新增确定性真fs测试：A持starting claim并暂停旧owner read，B必须在wx busy、不能进入旧反例第二次读取barrier；显式timeout和finally release A，A最终唯一owner/marker。另A close已落clean marker但暂停owner unlink，B仍busy，A收口后B才能正常启动。失败恢复留下claim/nonce，后续启动busy且不能覆盖。所有IO是真TMP fs，hook只控制调度，不以两份RAM锁替代内核wx。
+
+生产恢复前提进一步明确：root在停机期读取claim与marker全部精确身份，逐一核所对应旧service cgroup确实空；未核前不删任何lock/claim。失败claim可能属于一次没改marker的新启动身份，不能只检查marker的老PID。Windows集成fixture在实际失败child close之后核该claim.pid/phase/nonce，才由父测试在自己TMP模拟root精确清理；运行时没有自动清理API或env开关。根部署脚本另owner，不在本叶实施或冒称验证生产cgroup。
+
+新源固定提交后只做lifecycle与真实integration/独立stage定向和类型；不再full，根联合候选跑。结果待下一条记录。
+
+
+### claim修正最终固定证据
+
+产品/测试源码5bb5ff3777caaa6102a6e8a8fcdc328c341a4ad5固定后，claim-target-1首轮6 tests/6pass/0fail/cancel/skip、9538.0555ms，TMP/promptcut-asset-wiring-claim-target-1.log。包含新双恢复启动反例收口、新正常close与启动竞态、失败claim/nonce保持，以及真实provider→combo→隔离stage完整素材/PCM/stream/thumb/HTTP end后source fd仍open的撤销等待/lostACK→own crash→exact receipt replay/clean restart/join/删A不影响B的整项再次通过（该整项5651.1167ms）。新real child日志TMP/promptcut-asset-wiring-entry-child-1791421136521.log；关闭后新业务5860–5869核零监听。
+
+同一固定新源type-2：node主仓库typescript/bin/tsc -b --force，exit0零错，TMP/promptcut-asset-wiring-type-2.log。两命令并行独立，整个跑程未改源码。此增量只窄lifecycle和对应测试/报告，49文件依赖清单不增文件/不增bare包；独立stage动态三个读口与入口在claim-target中实际重新跑。根反例仍保留原mjs/log；不得把旧full-1或旧4c/type作为新源完整全量通过。新联合full明确由根执行，生产root cgroup/private-key UID边界仍未在本叶验证。
+
+当前实现完成且交回待根独立审查；最终报告提交只记录结果不再改源码。整块base→HEAD diff--check零错，工作树tracked/untracked干净，无本叶服务遗留；没有merge/push/部署/版本变更。本叶所有失败、原counterexample及未完成闸门完整保留。
