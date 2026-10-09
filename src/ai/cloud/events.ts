@@ -11,7 +11,7 @@
 import type { ChatAttachment, ChatMessage, MessagePart } from "../types.ts";
 import { appendTextPart, appendThinkingPart } from "../streamBatch.ts";
 import { cloudAttachKind } from "./attach.ts";
-import type { CloudEvent, CloudQueueSnapshot } from "./types.ts";
+import type { CloudEvent, CloudQueueSnapshot, CloudAcceptedBinding, CloudRunBinding, CloudAccountMessage } from "./types.ts";
 
 export const userMessageId = (runId: string) => `cu-${runId}`;
 export const accountMessageId = (messageId: string) => `cq-${messageId}`;
@@ -71,6 +71,24 @@ function freshAssistant(runId: string, at: number | undefined): ChatMessage {
   return { id: assistantMessageId(runId), role: "assistant", text: "", parts: [], tools: [], statuses: [], pending: true, startedAt: at ?? Date.now() };
 }
 
+const acceptedKeys = ['projectId', 'conversationId', 'messageId', 'senderAccountId'] as const;
+const runKeys = [...acceptedKeys, 'runId', 'runGrantId', 'instanceId', 'instanceGeneration', 'serviceKid'] as const;
+const pendingSettlementText = '执行已结束，等待云端确认关闭与结算。';
+function acceptedBinding(ev: CloudEvent): CloudAcceptedBinding | null {
+  if (acceptedKeys.some(key => typeof ev[key] !== 'string' || !ev[key])) return null;
+  return Object.fromEntries(acceptedKeys.map(key => [key, ev[key]])) as unknown as CloudAcceptedBinding;
+}
+function runBinding(ev: CloudEvent): CloudRunBinding | null {
+  const accepted = acceptedBinding(ev);
+  if (!accepted || !Number.isSafeInteger(ev.seq) || Number(ev.seq) < 1 ||
+    !Number.isSafeInteger(ev.instanceGeneration) || Number(ev.instanceGeneration) < 1 ||
+    ['runId', 'runGrantId', 'instanceId', 'serviceKid'].some(key => typeof ev[key] !== 'string' || !ev[key])) return null;
+  return Object.fromEntries(runKeys.map(key => [key, ev[key]])) as unknown as CloudRunBinding;
+}
+function sameBinding(a: CloudAcceptedBinding, b: CloudAcceptedBinding, keys: readonly (keyof CloudRunBinding)[]): boolean {
+  return keys.every(key => (a as CloudRunBinding)[key] === (b as CloudRunBinding)[key]);
+}
+
 /** 事件属于哪一轮:没带 `runId` 的挂在最后一条助手消息上 */
 function targetIndex(messages: ChatMessage[], runId: string | undefined): number {
   if (runId) {
@@ -103,7 +121,10 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
     if (typeof ev.messageId === 'string' && ev.messageId && typeof ev.prompt === 'string' &&
       Number.isSafeInteger(ev.seq) && Number(ev.seq) > 0 && typeof ev.senderAccountId === 'string' && typeof ev.senderNameAtSend === 'string') {
       const id = accountMessageId(ev.messageId);
-      return messages.some(message => message.id === id) ? messages : [...messages, { id, role: 'user', text: ev.prompt }];
+      const accepted = acceptedBinding(ev);
+      const message: CloudAccountMessage = { id, role: 'user', text: ev.prompt,
+        ...(accepted ? { cloudAccepted: accepted, ...userAttachments(ev) } : {}) };
+      return messages.some(message => message.id === id) ? messages : [...messages, message];
     }
     if (!runId || messages.some((m) => m.id === userMessageId(runId))) return messages;
     const at = typeof ev.at === "number" ? ev.at : undefined;
@@ -114,13 +135,31 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
     ];
   }
 
-  const idx = targetIndex(messages, runId);
+  const binding = runBinding(ev);
+  if (ev.type === 'run' && binding) {
+    const userIndex = messages.findIndex(m => m.id === accountMessageId(binding.messageId) && m.role === 'user');
+    const accepted = userIndex >= 0 ? (messages[userIndex] as CloudAccountMessage).cloudAccepted : undefined;
+    if (!accepted || !sameBinding(accepted, binding, acceptedKeys)) return messages;
+    // A repeated run row cannot reset the assistant or adopt another grant.
+    if (messages.some(m => m.id === assistantMessageId(binding.runId))) return messages;
+    const assistant: CloudAccountMessage = { ...freshAssistant(binding.runId, typeof ev.at === 'number' ? ev.at : undefined),
+      cloudRun: binding, cloudAcceptedMessageId: accountMessageId(binding.messageId), cloudSeq: Number(ev.seq) };
+    return [...messages.slice(0, userIndex + 1), assistant, ...messages.slice(userIndex + 1)];
+  }
+  // Account events never borrow an unrelated last assistant. A partial binding
+  // is rejected too; it cannot turn a malformed v2 row into legacy behavior.
+  const accountEvent = acceptedKeys.some(key => ev[key] !== undefined) ||
+    ['runGrantId', 'instanceId', 'instanceGeneration', 'serviceKid'].some(key => ev[key] !== undefined);
+  const idx = accountEvent ? (binding ? messages.findIndex(m => m.id === assistantMessageId(binding.runId)) : -1) : targetIndex(messages, runId);
   if (idx < 0) return messages;
-  const m = messages[idx];
+  const m = messages[idx] as CloudAccountMessage;
+  if (accountEvent || m.cloudRun) {
+    if (!binding || !m.cloudRun || !sameBinding(m.cloudRun, binding, runKeys)) return messages;
+  }
   // 每条助手消息记着折到过的最大 seq:同一个事件重复到达(重连交界处、从头重读)只折一次,折函数对重放是幂等的
   const seq = typeof ev.seq === "number" ? ev.seq : null;
   if (seq !== null && seq <= (m.cloudSeq ?? 0)) return messages;
-  const set = (patch: Partial<ChatMessage>): ChatMessage[] => {
+  const set = (patch: Partial<CloudAccountMessage>): ChatMessage[] => {
     const next = messages.slice();
     next[idx] = { ...m, ...patch, ...(seq !== null ? { cloudSeq: seq } : {}) };
     return next;
@@ -173,12 +212,22 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
       return set({ statuses: [...(m.statuses ?? []), text], parts: [...(m.parts ?? []), { kind: "status", text }], cloudRender: { state: String(ev.state ?? ""), text } });
     }
     case "error": {
+      if (m.cloudRun) return set({ error: cloudErrorMessage(typeof ev.code === 'string' ? ev.code : undefined,
+        typeof ev.message === 'string' ? ev.message : undefined), pending: true });
       return set({ error: cloudErrorMessage(typeof ev.code === "string" ? ev.code : undefined, typeof ev.message === "string" ? ev.message : undefined), pending: false, outcome: "error", finishedAt: Date.now() });
     }
+    case 'runner_done':
     case "done": {
+      if (m.cloudRun) return set({ pending: true, cloudSettlement: 'pending',
+        ...(m.cloudSettlement === 'pending' ? {} : { statuses: [...(m.statuses ?? []), pendingSettlementText],
+          parts: [...(m.parts ?? []), { kind: 'status', text: pendingSettlementText }] }) });
+      if (ev.type === 'runner_done') return messages;
       return set({ pending: false, finishedAt: Date.now(), outcome: m.outcome === "error" ? "error" : typeof ev.outcome === "string" ? ev.outcome : m.outcome || "completed", usage: ev.usage });
     }
     case "end": {
+      if (m.cloudRun) return set({ pending: true, cloudSettlement: 'pending',
+        ...(m.cloudSettlement === 'pending' ? {} : { statuses: [...(m.statuses ?? []), pendingSettlementText],
+          parts: [...(m.parts ?? []), { kind: 'status', text: pendingSettlementText }] }) });
       if (m.outcome === "error") return set({ pending: false, finishedAt: m.finishedAt ?? Date.now() });
       // 主人停掉的那一轮没有 done:收尾事件带 `reason: "stopped"`(契约第 20 节)
       const stopped = ev.reason === "stopped";
