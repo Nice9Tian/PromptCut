@@ -5,9 +5,11 @@ import { createAgentInstanceSession } from '../agent/service/agent-instance-sess
 import { runAssetIssueRequest } from '../account/run-asset-protocol.mjs';
 
 const paths = Object.freeze({ admit: 'admit', confirmRead: 'read', queryRead: 'read/query',
-  checkAccess: 'check', finish: 'finish', runTicket: 'ticket', pending: 'pending' });
+  checkAccess: 'check', finish: 'finish', queryFinish: 'finish/query', scopePrepare: 'scope/prepare',
+  scopeTerminal: 'scope/terminal', scopeControl: 'scope/control', runTicket: 'ticket', pending: 'pending' });
 const operations = Object.freeze({ admit: 'admit', confirmRead: 'confirmRead', queryRead: 'queryRead',
-  checkAccess: 'checkAccess', finish: 'finish', runTicket: 'resolveRunPrincipal' });
+  checkAccess: 'checkAccess', finish: 'finish', queryFinish: 'queryFinish', scopePrepare: 'scopePrepare',
+  scopeTerminal: 'scopeTerminal', scopeControl: 'scopeControl', runTicket: 'resolveRunPrincipal' });
 const fail = code => { throw accountError(503, code); };
 
 /** Agent-owned mTLS transport. Doc derives the service principal from the pinned
@@ -96,6 +98,10 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
       ['servicePrincipal', 'serviceId', 'serviceKid', 'principal', 'creator', 'accountId', 'loginId', 'credentialId', 'loginGeneration',
         'instanceId', 'instanceGeneration', 'instanceSession'].some(key => fields[key] !== undefined))
       throw accountError(400, 'invalid-authority-claim');
+    // Keep the encoded request and the later TLS signature on one immutable
+    // snapshot, including outcome/read receipt and the complete signed prepare.
+    // Registration can await a network response before transmit creates bytes.
+    fields = structuredClone(fields);
     if (name === 'checkAccess' && !['read', 'write'].includes(fields.action)) throw accountError(400, 'invalid-run-action');
     if (name !== 'pending' || registrationPurpose || scopedRegistration) await instanceSession.register();
     return transmit(`/internal/v2/runs/${paths[name]}`, fields,
@@ -105,6 +111,8 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     admit: input => request('admit', input), confirmRead: input => request('confirmRead', input),
     queryRead: input => request('queryRead', input), checkAccess: input => request('checkAccess', input),
     finish: input => request('finish', input), runTicket: input => request('runTicket', input),
+    queryFinish: input => request('queryFinish', input), scopePrepare: input => request('scopePrepare', input),
+    scopeTerminal: input => request('scopeTerminal', input), scopeControl: input => request('scopeControl', input),
     pending: () => request('pending', {}),
     async scopeAssignment(input) {
       const keys = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'requestId'];

@@ -13,7 +13,38 @@ import { WORKER_EVENT_PROOF_HEADER, workerEventRequest, workerEventProofPayload,
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'resolveRunPrincipal',
-  'scopeAssignment', 'pendingRuns', 'workerEventSource']);
+  'scopeAssignment', 'pendingRuns', 'workerEventSource', 'queryFinish', 'scopePrepare', 'scopeTerminal', 'scopeControl']);
+const settlementPaths = Object.freeze({ finish: 'finish', queryFinish: 'finish/query',
+  scopePrepare: 'scope/prepare', scopeTerminal: 'scope/terminal', scopeControl: 'scope/control' });
+const bindingKeys = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'];
+const hexDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+function settlementRequest(operation, path, body) {
+  if (path !== `/internal/v2/runs/${settlementPaths[operation]}`) fail('instance-proof-input');
+  if (operation === 'scopeControl') {
+    const ref = body.rootScopeRef;
+    if (!exactScope(body, ['projectId', 'controlId', 'runGrantId', 'assignmentDigest', 'rootScopeRef']) ||
+        !['projectId', 'controlId', 'runGrantId'].every(k => reference(body[k])) || !hexDigest(body.assignmentDigest) ||
+        !exactScope(ref, ['rootAuthorityId', 'slotId', 'epoch', 'recordDigest']) ||
+        !reference(ref.rootAuthorityId) || !reference(ref.slotId) || !Number.isSafeInteger(ref.epoch) || ref.epoch < 1 ||
+        !hexDigest(ref.recordDigest)) fail('instance-proof-input');
+    return;
+  }
+  const keys = [...bindingKeys, 'requestId'];
+  if (operation === 'queryFinish' || (operation === 'finish' && ('outcome' in body || 'readReceiptId' in body))) {
+    keys.push('readReceiptId', 'outcome');
+    const outcome = body.outcome;
+    if (!reference(body.readReceiptId) || !exactScope(outcome, ['v', 'status', 'eventId', 'eventDigest']) ||
+        outcome.v !== 1 || !['done', 'failed', 'interrupted'].includes(outcome.status) ||
+        !reference(outcome.eventId) || !hexDigest(outcome.eventDigest)) fail('instance-proof-input');
+  }
+  if (['scopePrepare', 'scopeTerminal'].includes(operation)) {
+    keys.push('finishReceiptId');
+    if (!reference(body.finishReceiptId)) fail('instance-proof-input');
+  }
+  if (operation === 'scopePrepare') keys.push('prepare');
+  if (!exactScope(body, keys) || ![...bindingKeys, 'requestId'].every(k => reference(body[k]))) fail('instance-proof-input');
+}
 
 /** One Agent OS process owns one non-exported Ed25519 private key. The request
  * callback is the same pinned mTLS transport later used for run requests.
@@ -159,8 +190,8 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
 
   function proofFor({ socket, method, path, operation, body }) {
     if (closed || !registered) fail('instance-not-registered');
-    if (registered.purpose === 'control-only' && !['pendingRuns', 'workerEventSource'].includes(operation)) fail('instance-purpose-forbidden');
-    if (operation === 'workerEventSource' && registered.purpose !== 'control-only') fail('instance-purpose-forbidden');
+    if (registered.purpose === 'control-only' && !['pendingRuns', 'workerEventSource', 'scopeControl'].includes(operation)) fail('instance-purpose-forbidden');
+    if (['workerEventSource', 'scopeControl'].includes(operation) && registered.purpose !== 'control-only') fail('instance-purpose-forbidden');
     if (method !== 'POST' || typeof path !== 'string' || !path.startsWith('/internal/v2/runs/') ||
         !operations.has(operation) || !body || typeof body !== 'object' || Array.isArray(body) ||
         (operation === 'scopeAssignment' && (path !== '/internal/v2/runs/assignment' ||
@@ -172,6 +203,16 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
           !reference(body.runGrantId) || !/^[a-f0-9]{64}$/.test(body.assignmentDigest))) ||
         (operation === 'checkAccess' && !['read', 'write'].includes(body.action)))
       fail('instance-proof-input');
+    if (Object.hasOwn(settlementPaths, operation)) {
+      settlementRequest(operation, path, body);
+      if (operation !== 'finish' && operation !== 'scopeControl' && registered.purpose !== 'run-worker') fail('instance-purpose-forbidden');
+      if (operation !== 'scopeControl' && registered.purpose === 'run-worker' &&
+          (!boundScope || bindingKeys.some(k => body[k] !== boundScope.assignment.target[k]))) fail('instance-scope-binding');
+      // The inner signature must be the exact prepare obtained from this RAM
+      // instance's private durable source, never arbitrary caller supplied data.
+      if (operation === 'scopePrepare' && (!prepared || canonicalJson(body.prepare) !== canonicalJson(prepared)))
+        fail('instance-scope-prepare-source');
+    }
     const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
       method, path, operation, requestDigest: digestOf(body) });
     const proof = { instanceId: registered.instanceId, instanceGeneration: registered.instanceGeneration,

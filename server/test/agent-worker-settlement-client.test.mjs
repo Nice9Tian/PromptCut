@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
 import { once } from 'node:events';
+import { verify } from 'node:crypto';
 import { createRunClient } from '../agent-service/run-client.mjs';
+import { createAgentInstanceSession } from '../agent/service/agent-instance-session.mjs';
 import { createDocService } from '../docservice/service.mjs';
 import { createAgentRunScopeDoc, agentScopeRef } from '../account/agent-run-scope-doc.mjs';
-import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
+import { createAgentInstanceAuthority, instanceTlsBinding, instanceProofPayload } from '../account/agent-instance-authority.mjs';
 import { createAgentInstanceInternalHandler, instanceRequestProof } from '../account/agent-instance-internal.mjs';
 import { createRunInternalHandler } from '../account/run-internal.mjs';
 import { createRunAuthority, canonicalReadRecord } from '../account/run-authority.mjs';
@@ -126,7 +127,7 @@ test('actual run client normal settlement remains pending until original RAM pre
   const prepare = await f.prepare(first.finishReceipt);
   await worker.scopePrepare({ ...input, requestId: 'prepare', prepare });
   await assert.rejects(worker.scopePrepare({ ...input, requestId: 'changed', prepare: { ...prepare, drainReceiptId: 'other' } }),
-    { code: 'run-scope-prepare-invalid' });
+    { code: 'instance-scope-prepare-source' });
   await assert.rejects(worker.scopeTerminal(input), { code: 'run-scope-doc-closure-pending' });
   await assert.rejects(f.master.scopeTerminal(input), { code: 'instance-purpose-forbidden' });
   await assert.rejects(f.master.queryFinish(finish), { code: 'instance-purpose-forbidden' });
@@ -159,7 +160,7 @@ test('missing private source cannot mint prepare; private race needs master exac
     assignmentDigest: digestOf(f.assignment), rootScopeRef: f.ref };
   await assert.rejects(worker.scopeControl(input), { code: 'instance-purpose-forbidden' });
   await assert.rejects(f.master.scopeControl(input), { code: 'run-scope-doc-closure-pending' });
-  await assert.rejects(f.master.scopeControl({ ...input, controlId: 'other' }), { code: 'run-scope-control-mismatch' });
+  await assert.rejects(f.master.scopeControl({ ...input, controlId: 'other' }), { status: 403 });
   const doc = createDocService({ autoTick: false, log: () => {} });
   const history = openOperationHistory(path.join(f.dir, 'operations.db')); history.createProject(projectId, { id: projectId });
   const unavailable = () => { throw Error('no-account-operation'); };
@@ -175,4 +176,35 @@ test('missing private source cannot mint prepare; private race needs master exac
     assert.equal(settled[0].terminalOutcome.status, 'interrupted');
     assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, null);
   } finally { await operations.idle(); history.close(); await doc.close(); }
+});
+
+test('legacy finish and scoped outcome proofs bind complete body/path/operation/generation/socket; no generic signer', async () => {
+  // Controlled registration/exporter inputs, real original RAM Ed25519 crypto.
+  // The preceding cases separately exercise the actual TLS/authority boundary.
+  const session = createAgentInstanceSession({ requestRegistration: async (name, body) => name === 'challenge'
+    ? { domain: 'promptcut.agent-instance.register.v1', authorityId: 'doc', serviceId: 'agent', serviceKid: 'kid',
+      requestId: body.requestId, challengeId: 'challenge', nonce: 'nonce', publicKeyDigest: digestOf(body.publicKey) }
+    : { authorityId: 'doc', serviceId: 'agent', serviceKid: 'kid', instanceId: 'instance', instanceGeneration: 3 } });
+  try {
+    const identity = await session.register(), key = session.scopeIdentity().publicKey;
+    const socket = { encrypted: true, authorized: true, destroyed: false, exportKeyingMaterial: () => Buffer.alloc(32, 1) };
+    const original = { projectId: 'p', conversationId: 'c', messageId: 'm', runId: 'r', runGrantId: 'g', requestId: 'f' };
+    for (const body of [original, { ...original, readReceiptId: 'read', outcome: {
+      v: 1, status: 'interrupted', eventId: 'event', eventDigest: 'a'.repeat(64) } }]) {
+      const request = { socket, method: 'POST', path: '/internal/v2/runs/finish', operation: 'finish', body };
+      const proof = JSON.parse(Buffer.from(session.proofFor(request).value, 'base64url'));
+      const payload = instanceProofPayload({ ...identity, channelBinding: instanceTlsBinding(socket), method: request.method,
+        path: request.path, operation: request.operation, requestDigest: digestOf(body) });
+      const valid = value => verify(null, Buffer.from(canonicalJson(value)), key, Buffer.from(proof.signature, 'base64url'));
+      assert.equal(valid(payload), true);
+      for (const change of [{ path: '/internal/v2/runs/finish/query' }, { operation: 'queryFinish' },
+        { instanceGeneration: 4 }, { channelBinding: instanceTlsBinding({ ...socket, exportKeyingMaterial: () => Buffer.alloc(32, 2) }) },
+        { requestDigest: digestOf({ ...body, readReceiptId: 'substituted' }) }]) assert.equal(valid({ ...payload, ...change }), false);
+      if (body.outcome) assert.equal(valid({ ...payload, requestDigest: digestOf({ ...body, outcome: { ...body.outcome, status: 'done' } }) }), false);
+      assert.throws(() => session.proofFor({ ...request, path: '/internal/v2/runs/finish/query' }), { code: 'instance-proof-input' });
+      assert.throws(() => session.proofFor({ ...request, body: { ...body, closed: true } }), { code: 'instance-proof-input' });
+    }
+    assert.throws(() => session.proofFor({ socket, method: 'POST', path: '/internal/v2/runs/finish', operation: 'finish',
+      body: { ...original, readReceiptId: 'read' } }), { code: 'instance-proof-input' });
+  } finally { session.close(); }
 });
