@@ -9,6 +9,7 @@ import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { editorSecurityHeaders, stageSecurityHeaders } from '../../src/online/stagePolicy.mjs';
@@ -159,7 +160,9 @@ async function newPage(context, label) {
   page.on('requestfailed', request => {
     let url; try { url = new URL(request.url()); } catch { return; }
     if (![ORIGIN, ...STAGES].includes(url.origin) || !/\.(?:css|js)$/.test(url.pathname)) return;
-    result.staticAssets.push({ page:label, path:url.pathname, status:null, type:'failed-request' });
+    const failure = request.failure()?.errorText ?? '';
+    result.staticAssets.push({ page:label, path:url.pathname, status:null, type:'failed-request',
+      error: /^net::ERR_[A-Z0-9_]+$/.test(failure) ? failure : 'other' });
   });
   return page;
 }
@@ -246,12 +249,74 @@ async function changePasswordThroughWebsite(page, account, checkPrefix = '') {
   });
   check(result.passwordSubmitGeometry.visible && result.passwordSubmitGeometry.unobscured,
     checkPrefix ? `${checkPrefix}-password-submit-visible-unobscured` : 'password-submit-visible-unobscured');
+  result.passwordRuntime = await page.evaluate(() => {
+    const form = document.querySelector('#password'), current = form?.querySelector('[name="current"]'),
+      next = form?.querySelector('[name="next"]'), again = form?.querySelector('[name="again"]');
+    const diagnostics = { clickCount:0, clickTrusted:null, clickTargetSubmitter:false,
+      submitCount:0, submitTrusted:null, submitterMatchesTarget:false, submitDefaultPrevented:null,
+      invalidCount:0, invalidFields:[] };
+    Object.defineProperty(window, '__pcPasswordFormDiagnostics', { value:diagnostics, configurable:true });
+    const submitButton = form?.querySelector('button[type="submit"]');
+    form?.addEventListener('click', event => {
+      if (!submitButton || !(event.target instanceof Element) || !submitButton.contains(event.target) && event.target !== submitButton) return;
+      diagnostics.clickCount++; diagnostics.clickTrusted = event.isTrusted;
+      diagnostics.clickTargetSubmitter = true;
+    }, true);
+    form?.addEventListener('submit', event => {
+      diagnostics.submitCount++; diagnostics.submitTrusted = event.isTrusted;
+      diagnostics.submitterMatchesTarget = event.submitter === submitButton;
+      queueMicrotask(() => { diagnostics.submitDefaultPrevented = event.defaultPrevented; });
+    }, true);
+    form?.addEventListener('invalid', event => {
+      diagnostics.invalidCount++;
+      const name = event.target instanceof HTMLInputElement ? event.target.name : '';
+      if (['current','next','again'].includes(name)) diagnostics.invalidFields.push(name);
+    }, true);
+    return { secureContext:isSecureContext, randomUUIDType:typeof crypto?.randomUUID,
+      fieldsValid:Boolean(current?.validity.valid && next?.validity.valid && again?.validity.valid),
+      fieldsPresent:Boolean(current?.value && next?.value && again?.value),
+      repeatedMatches:Boolean(next?.value && next.value === again?.value) };
+  });
   const passwordResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
-    new URL(response.url()).pathname === '/api/account/password', { timeout:TIMEOUT })
+    new URL(response.url()).pathname === '/api/account/password', { timeout:2500 })
     .then(response => ({ response }), () => ({ response:null }));
-  await submit.click();
+  const eventSnapshot = () => page.evaluate(() => ({ ...window.__pcPasswordFormDiagnostics,
+    invalidFields:[...window.__pcPasswordFormDiagnostics.invalidFields] }));
+  result.passwordRuntime.eventsBeforeClick = await eventSnapshot();
+  try {
+    await submit.click();
+    result.passwordRuntime.clickOutcome = 'clicked';
+  } catch (error) {
+    result.passwordRuntime.clickOutcome = 'failed';
+    const safeClass = value => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_$]{0,80}$/.test(value) ? value : 'Other';
+    result.passwordRuntime.clickErrorType = safeClass(error?.name);
+    result.passwordRuntime.clickErrorConstructor = safeClass(error?.constructor?.name);
+    result.passwordRuntime.clickErrorFrames = String(error?.stack ?? '').split(/\r?\n/).slice(1, 9).map(line =>
+      line.replace(/https?:\/\/[^\s)]+/g, value => {
+        try { const url = new URL(value); return `${url.origin}${url.pathname}`; } catch { return '[url]'; }
+      }).replace(/file:\/\/[^\s)]+/g, value => {
+        try { return new URL(value).pathname; } catch { return '[file]'; }
+      }));
+    result.passwordRuntime.eventsAfterClick = await eventSnapshot().catch(() => null);
+    await delay(300);
+    result.passwordRuntime.hint = await page.$eval('#password .msg', element => {
+      const text = element.textContent?.trim() ?? '';
+      return !text ? 'empty' : /两次输入的新密码不一样/.test(text) ? 'mismatch' :
+        text === '服务器出错了，过一会儿再试。' ? 'generic' : 'other';
+    }).catch(() => 'unavailable');
+    throw Error('password-button-click-failed');
+  }
   const passwordResult = (await passwordResponse).response;
-  if (!passwordResult) throw Error('password-change-response-not-observed');
+  result.passwordRuntime.eventsAfterClick = await eventSnapshot();
+  if (!passwordResult) {
+    await delay(300);
+    result.passwordRuntime.hint = await page.$eval('#password .msg', element => {
+      const text = element.textContent?.trim() ?? '';
+      return !text ? 'empty' : /两次输入的新密码不一样/.test(text) ? 'mismatch' :
+        text === '服务器出错了，过一会儿再试。' ? 'generic' : 'other';
+    }).catch(() => 'unavailable');
+    throw Error('password-change-response-not-observed-after-short-wait');
+  }
   check(passwordResult.status() === 200, checkPrefix ? `${checkPrefix}-actual-password-change-accepted` : 'actual-password-change-request-accepted');
   await page.waitForFunction(() => document.querySelector('#password-event-choices')?.hidden === false, { timeout:TIMEOUT });
   const choiceResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
@@ -378,7 +443,9 @@ try {
   for (const port of [6688, 6689]) await startStage(port);
   browser = await puppeteer.launch({ executablePath:await puppeteer.executablePath(), headless:true, pipe:true, acceptInsecureCerts:true,
     userDataDir:profile, defaultViewport:{ width:1440, height:1000 }, protocolTimeout:TIMEOUT,
-    args:[...PROBE_CHROME_ARGS, '--no-first-run', '--no-default-browser-check', '--force-device-scale-factor=1', '--mute-audio'] });
+    args:[...PROBE_CHROME_ARGS, '--ignore-certificate-errors',
+      '--host-resolver-rules=MAP s1.pc.localhost 127.0.0.1,MAP s2.pc.localhost 127.0.0.1',
+      '--no-first-run', '--no-default-browser-check', '--force-device-scale-factor=1', '--mute-audio'] });
   const contextsByRole = await Promise.all(['initiator', 'other-one', 'other-two'].map(() => browser.createBrowserContext()));
   contexts.push(...contextsByRole);
   const sitePages = await Promise.all(contextsByRole.map((context, index) => newPage(context, ['initiator', 'other-one', 'other-two'][index])));
@@ -537,7 +604,8 @@ try {
   }
 } catch (error) {
   const safeFailure = new Set(['provider-accepted-consent-but-dialog-remained-visible','consent-read-or-dialog-not-observed',
-    'project-open-disabled','cloud-agent-enable-disabled','consent-buttons-missing']);
+    'project-open-disabled','cloud-agent-enable-disabled','consent-buttons-missing',
+    'password-change-response-not-observed-after-short-wait','password-button-click-failed']);
   result.failure = { phase:currentPhase, step:editorStep, check:error?.check ?? (safeFailure.has(String(error?.message)) ? String(error.message) : 'unclassified') };
   process.exitCode = 1;
   for (const page of pages) {
