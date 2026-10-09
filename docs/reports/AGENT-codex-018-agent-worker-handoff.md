@@ -88,6 +88,17 @@ resource row 按 c705 现 verifier 精确填原 binding、finish/read/outcome、
 
 Astra已进一步确认：scope schema 的 terminalReceiptDigest 已是哈希字段，可保持其正常结构；新增的是 Doc 私有 prepare签发/验签明确域，而不是修改worker intent算法。拟 `runTerminalPrepareReceiptsV1` 存 exact binding/read/outcome/rootScopeRef/eventDigest、worker签名与requestDigest；不含closed:Boolean/伪witness。Doc finalizer须增加明确的 prepare+root 路径，分别核这条原签名声明、真实闭合source和Doc库存；不能给prepare补一个后来rootwitness字段后冒充worker原已签closed drain，也不能把现c705 verifier的 `agent.drain.resourceWitnessId` 强塞给尚未closed的记录。root关闭后不向死workerRPC，这正是本接口的收口点。
 
+收口时双方约定 prepare 的准确 payload 如下（待实施，不是现有export）：
+
+```text
+{v:1,domain:'promptcut.agent-run.prepare.v1',
+ scope:{authorityId,slotId,epoch,recordDigest,assignmentDigest},
+ target,readReceiptId,finishReceiptId,outcomeDigest,eventId,eventDigest,
+ drainReceiptId,docControlId,docFenceRevision}
+```
+
+target复用原assignment的完整tuple；scope.authorityId是root authority。拟同session增加 `scopePrepareFor(payload)` 与 `scopeIntentFor({assignment,terminal})`，分别签独立域，不复用索取closed witness的 `prepareTerminalClosure`。Doc gate的未绑定状态统一称 `assigned-unbound`（本报告前文的pending是其概括），作为assignmentState而不是自由授予run state。原worker先prepare，再待Doc实际数据/读传输关闭持久receipt及Docterminal签发，最后签intent。Astra与Sol均确认此调用顺序；任何步骤错误维持pending，不产正常成功引用。
+
 终态事务才调用 `conversationHooks.finishInState`、释放 currentRun/FIFO并唤醒下一条。HTTP200记录 finishReceipt、model done Promise、进程退出、cgroup空中的任意一项均不是完整完成。若 root已关闭但 Doc导入/ACK失败，reader按原 checkpoint可重放，不能重新执行；finalize同receipt幂等。
 
 ### 〔裁5〕强制中止和未绑定代退休使用独立类型
