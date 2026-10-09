@@ -108,3 +108,8 @@ A/B 实际先初始化、bind、两角色 TCP/文件持有确认。先经真实 
 | server/account/protocol.mjs | 6a0f40fd89df3a8ae75a76a53627927f71b4aebb5fc4ee0b992d4793587a5ecc |
 
 未修改 provider/instance/doc-agent-assembly/Sol 执行器；没有将尚缺的资源 source 填入 runTerminalResourceClosuresV1，没有弱化旧 core/FIFO 成功承诺。实际 Linux 通过之前，本报告不将 schema/pure green 写成 OS 关闭通过；Linux 通过之后仍需后包接业务 Doc 签发、实际执行器与 finalizer。
+
+
+## 根会话收回后的真实 Linux 复核
+
+2026-10-09：同上固定源码首包十个运行文件经 Git blob SHA256 核对与共同候选逐字相同；根会话首次真实 Linux 双槽实验10/10通过，8357ms，外层10061ms，无重跑。A父退出时子仍持文件和TCP，原组仍非空并拒绝关闭；仅原固定句柄读到整个组为空才接受；B原进程与资源期间保持。两组最后inactive/MainPID0，实验端口段零监听，四个生产服务PID与重启数均未变。使用受控Doc issuer，尚非生产执行器、真实admission或FIFO结算。CLI输出必须在受信0755祖先下，本轮实际`/run/pcagentrunproof6e67e1c1f4514d4e/out`；原`/var/tmp`示例的1777祖先不合受信目录规则。结果和源码哈希见[根实证归档](../three-versions-real-runner-scope-2026-10-09.md)。

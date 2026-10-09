@@ -1,0 +1,410 @@
+{
+  "sourceBefore": "246f72e91fbe03cad8dcea666e3b0b26400c2b11",
+  "checks": [
+    {
+      "name": "authoritative-created-project",
+      "pass": true
+    },
+    {
+      "name": "member-cannot-enable-creator-switch",
+      "pass": true
+    },
+    {
+      "name": "history-button-visible",
+      "pass": true
+    },
+    {
+      "name": "full-editor-bound-output-0",
+      "pass": true
+    },
+    {
+      "name": "real-project-projection-0",
+      "pass": true
+    },
+    {
+      "name": "real-tools-visible-0",
+      "pass": true
+    },
+    {
+      "name": "actual-doc-revision-0",
+      "pass": true
+    },
+    {
+      "name": "full-editor-bound-output-1",
+      "pass": true
+    },
+    {
+      "name": "real-project-projection-1",
+      "pass": true
+    },
+    {
+      "name": "real-tools-visible-1",
+      "pass": true
+    },
+    {
+      "name": "actual-doc-revision-1",
+      "pass": true
+    },
+    {
+      "name": "four-real-tools-succeeded",
+      "pass": true
+    },
+    {
+      "name": "exact-tools",
+      "pass": true
+    },
+    {
+      "name": "fifo-remains-pending",
+      "pass": true
+    },
+    {
+      "name": "actual-data-closed-no-final-proof",
+      "pass": true
+    },
+    {
+      "name": "actual-send-202-once",
+      "pass": true
+    },
+    {
+      "name": "actual-sse-200",
+      "pass": true
+    }
+  ],
+  "network": [
+    {
+      "path": "/hosted/shared/account/create",
+      "status": 201,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098k7j-vxca/events",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/admin",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098k7j-vxca/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098kmf-6pcl/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098k7j-vxca/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098kmf-6pcl/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098k7j-vxca/messages",
+      "status": 202,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098k7j-vxca/events",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098kmf-6pcl/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098kmf-6pcl/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv098k7j-vxca/events",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "00-actual-editor",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-hit\\00-actual-editor.png"
+    },
+    {
+      "name": "01-actual-editor",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-hit\\01-actual-editor.png"
+    }
+  ],
+  "completed": true,
+  "executorMounted": true,
+  "productionModel": false,
+  "completionReady": false,
+  "cleanup": {
+    "closed": true,
+    "childClosed": true,
+    "assetPid": 23188,
+    "ports": [
+      6700,
+      6701,
+      6702,
+      6703,
+      6704,
+      6705,
+      6708
+    ],
+    "browserClosed": true,
+    "stagesClosed": true,
+    "contextsClosed": true
+  },
+  "projectId": "sp_fuddefxttfynd7gbono4okg3ih",
+  "conversationId": "cc-mv098k7j-vxca",
+  "page0": {
+    "text": true,
+    "pending": true,
+    "userCount": 1,
+    "assistantCount": 1,
+    "projectName": true,
+    "tools": [
+      {
+        "name": "get_project",
+        "visible": true
+      },
+      {
+        "name": "get_selection",
+        "visible": true
+      },
+      {
+        "name": "set_project_meta",
+        "visible": true
+      }
+    ],
+    "reportVisible": true
+  },
+  "revisions0": [
+    {
+      "type": "project.state",
+      "rev": 1
+    },
+    {
+      "type": "project.ops",
+      "rev": 2
+    }
+  ],
+  "page1": {
+    "text": true,
+    "pending": true,
+    "userCount": 1,
+    "assistantCount": 1,
+    "projectName": true,
+    "tools": [
+      {
+        "name": "get_project",
+        "visible": true
+      },
+      {
+        "name": "get_selection",
+        "visible": true
+      },
+      {
+        "name": "set_project_meta",
+        "visible": true
+      }
+    ],
+    "reportVisible": true
+  },
+  "revisions1": [
+    {
+      "type": "project.state",
+      "rev": 1
+    },
+    {
+      "type": "project.ops",
+      "rev": 2
+    }
+  ],
+  "eventSeq": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34
+  ],
+  "wallMs": 10492,
+  "sourceAfter": "246f72e91fbe03cad8dcea666e3b0b26400c2b11"
+}

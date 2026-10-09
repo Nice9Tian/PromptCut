@@ -1,0 +1,299 @@
+{
+  "productSource": "a4d22ce33264e957aabd6ef825305a90b3daa899",
+  "linuxSource": "fc47062eb0d6133370dcad2bed917d7408806a22",
+  "linuxHelpersSha256": {
+    "pc-agent-scope-linux-fc47062e-once.py": "e6a15ef51f9dd844856276633558f905c4283c5241bb5f64aa1d992e7587dc6c",
+    "pc-agent-scope-linux-fc47062e-once.remote.py": "a093db7614f1f0c8c83ae32c4318e501157c1a708f3bd9354ce5957c3ae83691"
+  },
+  "redactionCount": 171,
+  "entries": [
+    {
+      "name": "root-gates.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-gates.result.json"
+    },
+    {
+      "name": "root-browsers.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-browsers.result.json"
+    },
+    {
+      "name": "root-type.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-gates-type.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-target.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-gates-target.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-full.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-gates-full.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-online-build.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-gates-online-build.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-real-result.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-real-once\\result.json"
+    },
+    {
+      "name": "root-real-browser.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-browsers-real.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-real-00-actual-editor.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-real-once\\00-actual-editor.png"
+    },
+    {
+      "name": "root-real-01-actual-editor.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-real-once\\01-actual-editor.png"
+    },
+    {
+      "name": "root-private-result.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once\\result.json"
+    },
+    {
+      "name": "root-private-browser.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-browsers-private.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-private-01-creator-shared-no-toggle.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once\\01-creator-shared-no-toggle.png"
+    },
+    {
+      "name": "root-private-02-member-shared-readable.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once\\02-member-shared-readable.png"
+    },
+    {
+      "name": "root-private-03-owner-shared-toggle.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once\\03-owner-shared-toggle.png"
+    },
+    {
+      "name": "root-private-04-creator-private-readonly.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once\\04-creator-private-readonly.png"
+    },
+    {
+      "name": "root-private-04-owner-private-confirmed.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once\\04-owner-private-confirmed.png"
+    },
+    {
+      "name": "root-private-05-owner-private-confirmed.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once\\05-owner-private-confirmed.png"
+    },
+    {
+      "name": "root-private-06-member-after-private-history-refresh.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once\\06-member-after-private-history-refresh.png"
+    },
+    {
+      "name": "pc-real-runner-browser-d2ff.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-d2ff\\result.json"
+    },
+    {
+      "name": "pc-real-runner-browser-d2ff-failure-0.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-d2ff\\failure-0.png"
+    },
+    {
+      "name": "pc-real-runner-browser-d2ff-failure-1.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-d2ff\\failure-1.png"
+    },
+    {
+      "name": "pc-real-runner-browser-be3d.json",
+      "missing": true
+    },
+    {
+      "name": "pc-real-runner-browser-be3d-failure-0.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-be3d\\failure-0.png"
+    },
+    {
+      "name": "pc-real-runner-browser-be3d-failure-1.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-be3d\\failure-1.png"
+    },
+    {
+      "name": "pc-real-runner-browser-8061.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-8061\\result.json"
+    },
+    {
+      "name": "pc-real-runner-browser-8061-failure-0.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-8061\\failure-0.png"
+    },
+    {
+      "name": "pc-real-runner-browser-8061-failure-1.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-8061\\failure-1.png"
+    },
+    {
+      "name": "pc-real-runner-browser-icons.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-icons\\result.json"
+    },
+    {
+      "name": "pc-real-runner-browser-icons-00-actual-editor.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-icons\\00-actual-editor.png"
+    },
+    {
+      "name": "pc-real-runner-browser-icons-failure-0.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-icons\\failure-0.png"
+    },
+    {
+      "name": "pc-real-runner-browser-icons-failure-1.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-icons\\failure-1.png"
+    },
+    {
+      "name": "pc-real-runner-browser-replay.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-replay\\result.json"
+    },
+    {
+      "name": "pc-real-runner-browser-replay-failure-0.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-replay\\failure-0.png"
+    },
+    {
+      "name": "pc-real-runner-browser-replay-failure-1.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-replay\\failure-1.png"
+    },
+    {
+      "name": "pc-real-runner-browser-rawlog.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-rawlog\\result.json"
+    },
+    {
+      "name": "pc-real-runner-browser-rawlog-failure-0.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-rawlog\\failure-0.png"
+    },
+    {
+      "name": "pc-real-runner-browser-rawlog-failure-1.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-rawlog\\failure-1.png"
+    },
+    {
+      "name": "pc-real-runner-browser-hit.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-hit\\result.json"
+    },
+    {
+      "name": "pc-real-runner-browser-hit-00-actual-editor.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-hit\\00-actual-editor.png"
+    },
+    {
+      "name": "pc-real-runner-browser-hit-01-actual-editor.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-hit\\01-actual-editor.png"
+    },
+    {
+      "name": "pc-real-runner-first.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-first.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-diagnostic-f74.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-diagnostic-f74.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-f720.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-f720.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-12c6.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-12c6.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-state-target.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-state-target.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-sse-red.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-sse-red.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-sse-green.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-sse-green.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-type-8061.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-type-8061.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-build-8061.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-build-8061.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-browser-d2ff.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-d2ff.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-browser-be3d.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-be3d.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-browser-8061.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-8061.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-browser-icons.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-icons.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-browser-replay.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-replay.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-browser-rawlog.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-rawlog.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-real-runner-browser-hit.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-hit.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-agent-run-scope-fc47062e-target-3.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-agent-run-scope-fc47062e-target-3.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-agent-run-scope-fc47062e-type-3.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-agent-run-scope-fc47062e-type-3.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "linux-result.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-agent-scope-linux-fc47062e-once.result.json"
+    },
+    {
+      "name": "linux-metadata.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-agent-scope-linux-fc47062e-once.metadata.json"
+    },
+    {
+      "name": "linux-stdout.txt",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-agent-scope-linux-fc47062e-once.stdout.txt",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "linux-stderr.txt",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-agent-scope-linux-fc47062e-once.stderr.txt",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "linux-driver.stdout.txt",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-agent-scope-linux-fc47062e-once.driver.stdout.txt",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "linux-driver.stderr.txt",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-agent-scope-linux-fc47062e-once.driver.stderr.txt",
+      "sensitiveLinesHidden": true
+    }
+  ]
+}
