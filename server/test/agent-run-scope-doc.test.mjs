@@ -95,6 +95,13 @@ test('real mTLS parser separates master/worker, signs full assignment/read reque
   const registration = createAgentInstanceInternalHandler({ instanceAuthority: instances, agentFingerprint256: workerPin, masterFingerprint256: masterPin, resolveServicePrincipal });
   const runs = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: workerPin, masterFingerprint256: masterPin,
     requirePendingProof: true, resolveServicePrincipal,
+    principalForCheck({ projectId: requestedProject, runGrantId, servicePrincipal }) {
+      const grant = f.ledger.read().runGrantsV2[runGrantId];
+      assert.equal(grant.projectId, requestedProject);
+      // Same trusted-ledger identity construction as the assembly; the actual
+      // provider still checks the complete PoP scope and all access gates.
+      return { ...grant, realm: 'account', identityVersion: 2, role: 'agent', creator: false, servicePrincipal };
+    },
     authenticateInvocation({ req, servicePrincipal, body, operation }) {
       const cap = instances.authenticate({ servicePrincipal, method: req.method, path: req.url, operation, request: body, proof: instanceRequestProof(req) });
       return { servicePrincipal: { ...servicePrincipal, ...cap }, release: () => instances.release(cap.instanceSession) };
@@ -126,12 +133,40 @@ test('real mTLS parser separates master/worker, signs full assignment/read reque
     const prompt = canonicalReadRecord(grant.message, grant), read = { ...binding, requestId: 'actual-read', readIntentId: 'actual-intent', prompt, promptDigest: digestOf(prompt) };
     assert.equal((await call(pki.asset, worker, 'read', 'confirmRead', read)).status, 503);
     await f.m.run('bind', { assignment: assigned.body.result.assignment });
-    assert.equal((await call(pki.asset, worker, 'read', 'confirmRead', read)).status, 200);
+    const readReply = await call(pki.asset, worker, 'read', 'confirmRead', read);
+    assert.equal(readReply.status, 200);
     const eventInput = { projectId, runGrantId: grant.runGrantId, assignmentDigest: digestOf(assigned.body.result.assignment) };
     const metadata = await call(pki.account, master, 'worker-event-source', 'workerEventSource', eventInput);
     assert.equal(metadata.status, 200); assert.equal(metadata.body.result.workerFingerprint256, workerPin);
     assert.equal(Object.hasOwn(metadata.body.result.message, 'credentialId'), false);
     assert.equal((await call(pki.asset, worker, 'worker-event-source', 'workerEventSource', eventInput)).status, 403);
+    const access = { projectId, runGrantId: grant.runGrantId };
+    for (const action of ['read', 'write']) assert.equal((await call(pki.asset, worker, 'check', 'checkAccess', { ...access, action })).status, 200);
+    const ticketInput = { ...access, conversationId, purpose: 'run' };
+    const beforeTicket = await call(pki.asset, worker, 'ticket', 'resolveRunPrincipal', ticketInput);
+    assert.equal(beforeTicket.status, 503); assert.equal(beforeTicket.body.code, 'run-ticket-unavailable');
+    // No fake ticket issuer. Before finish the real resolve gate succeeds and
+    // reaches missing issuer; after finish it must reject before reaching it.
+    const finishInput = { ...binding, requestId: 'actual-finish', readReceiptId: readReply.body.result.receipt.receiptId,
+      outcome: { v: 1, status: 'failed', eventId: 'actual-error', eventDigest: '8'.repeat(64) } };
+    const finishReply = await call(pki.asset, worker, 'finish', 'finish', finishInput);
+    assert.equal(finishReply.status, 200); assert.equal(finishReply.body.result.finishPending, true);
+    for (const action of ['read', 'write']) {
+      const blocked = await call(pki.asset, worker, 'check', 'checkAccess', { ...access, action });
+      assert.equal(blocked.status, 403); assert.equal(blocked.body.code, 'run-revoked');
+    }
+    const afterTicket = await call(pki.asset, worker, 'ticket', 'resolveRunPrincipal', ticketInput);
+    assert.equal(afterTicket.status, 403); assert.equal(afterTicket.body.code, 'run-revoked');
+    assert.equal((await call(pki.account, master, 'worker-event-source', 'workerEventSource', eventInput)).status, 403);
+    const finishQuery = await call(pki.asset, worker, 'finish/query', 'queryFinish', finishInput);
+    assert.equal(finishQuery.status, 200); assert.equal(finishQuery.body.result.finishPending, true);
+    const receipt = finishReply.body.result.finishReceipt;
+    const prepare = signed(f.scope.preparePayload(f.ledger.read(), f.ledger.read().runGrantsV2[grant.runGrantId], receipt,
+      'actual-drain-reference'), f.m.workerKey.privateKey);
+    const terminalInput = { ...binding, requestId: 'actual-terminal', finishReceiptId: receipt.finishReceiptId };
+    assert.equal((await call(pki.asset, worker, 'scope/prepare', 'scopePrepare', { ...terminalInput, requestId: 'actual-prepare', prepare })).status, 200);
+    const pendingTerminal = await call(pki.asset, worker, 'scope/terminal', 'scopeTerminal', terminalInput);
+    assert.equal(pendingTerminal.status, 503); assert.equal(pendingTerminal.body.code, 'run-scope-doc-closure-pending');
     f.privateFence();
     assert.equal((await call(pki.account, master, 'worker-event-source', 'workerEventSource', eventInput)).status, 403);
     assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, grant.runId);
