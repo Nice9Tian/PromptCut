@@ -38,6 +38,7 @@ const pages = [], contexts = [], stageServers = [];
 let currentPhase = 'preflight';
 let editorStep = null;
 let targetConversationId = null;
+let realAgentDelegationTicket = null;
 const eventConversationIds = new WeakMap();
 
 function check(condition, name) {
@@ -137,8 +138,17 @@ async function newPage(context, label) {
       result.staticAssets.push({ page:label, path:url.pathname, status:response.status(),
         type:type === 'text/css' || type === 'text/javascript' || type === 'application/javascript' ? type : 'other' });
     }
-    if (route.startsWith('/api/account/') || route.startsWith('/agent/v1/') || route === '/hosted/shared/account/admin') {
+    if (route.startsWith('/api/account/') || route.startsWith('/agent/v1/') ||
+        route === '/hosted/shared/account/admin' || route === '/hosted/shared/account/session') {
       const entry = { page:label, method:response.request().method(), path:route, status:response.status() };
+      if (label === 'online-editor' && route === '/hosted/shared/account/session' && response.status() === 200) {
+        void response.json().then(body => {
+          if (typeof body?.agentDelegationTicket === 'string' && /^[A-Za-z0-9_-]{43}$/.test(body.agentDelegationTicket)) {
+            realAgentDelegationTicket = body.agentDelegationTicket;
+            result.authorizationCapture = { realProjectSessionObserved:true, agentTicketCapturedInRam:true };
+          }
+        }).catch(() => {});
+      }
       if (route.startsWith('/agent/v1/') && response.status() >= 400) void response.json().then(body => {
         const code = typeof body?.code === 'string' && SAFE_AGENT_CODES.has(body.code) ? body.code : 'other';
         entry.errorCode = code;
@@ -434,7 +444,7 @@ async function messageGone(page, expected) {
     if (!panel) return false;
     return ![...panel.querySelectorAll('.ai-message.user .ai-message-text')].some(element =>
       (element.textContent ?? '').replace(/\s+/g, ' ').trim().includes(text));
-  }, { timeout:TIMEOUT }, expected);
+  }, { timeout:TIMEOUT, polling:100 }, expected);
 }
 async function revokedConversationContentGone(page, expectedText) {
   await page.waitForFunction(text => {
@@ -447,24 +457,32 @@ async function revokedConversationContentGone(page, expectedText) {
   }, { timeout:TIMEOUT }, expectedText);
 }
 async function requestHistoryReadAfterClick(page) {
-  const response = await new Promise(async (resolve, reject) => {
-    let historyRequest = null;
-    const timer = setTimeout(() => finish(null), TIMEOUT);
-    const finish = value => { clearTimeout(timer); page.off('request', onRequest); page.off('response', onResponse); value ? resolve(value) : reject(Error('history-read-response-not-observed')); };
-    const matches = request => {
-      try { const url = new URL(request.url()); return request.method() === 'GET' && url.pathname === '/agent/v1/conversations'; }
-      catch { return false; }
+  const button = await page.$('[data-pc="ai-history"]');
+  if (!button || !await visibleAndUnobscured(page, button) || await button.evaluate(element => element.disabled))
+    return { action:'blocked-by-current-ui', status:null };
+  const responsePromise = new Promise(resolve => {
+    const pending = new WeakSet();
+    const finish = value => { clearTimeout(timer); page.off('request', onRequest); page.off('response', onResponse); resolve(value); };
+    const timer = setTimeout(() => finish(null), 5000);
+    const onRequest = request => {
+      try {
+        const url = new URL(request.url());
+        if ((request.method() === 'GET' && url.pathname === '/agent/v1/conversations') ||
+            (request.method() === 'POST' && url.pathname === '/hosted/shared/account/session')) pending.add(request);
+      } catch { /* Ignore non-URL request data. */ }
     };
-    const onRequest = request => { if (!historyRequest && matches(request)) historyRequest = request; };
-    const onResponse = response => { if (historyRequest && response.request() === historyRequest) finish(response); };
+    const onResponse = response => {
+      if (!pending.has(response.request())) return;
+      const url = new URL(response.url());
+      finish({ endpoint:url.pathname === '/agent/v1/conversations' ? 'agent-history' : 'project-session',
+        status:response.status(), denied:response.status() === 401 || response.status() === 403 });
+    };
     page.on('request', onRequest); page.on('response', onResponse);
-    try {
-      await page.bringToFront();
-      await page.waitForSelector('[data-pc="ai-history"]', { visible:true });
-      await page.click('[data-pc="ai-history"]');
-    } catch (error) { finish(null); }
   });
-  return response.status();
+  await button.click();
+  const clickResult = await responsePromise;
+  if (clickResult) return { action:'clicked', ...clickResult };
+  return { action:'clicked-no-authorization-response', status:null, denied:false };
 }
 
 await fs.mkdir(OUT, { recursive:true, mode:0o700 });
@@ -602,7 +620,18 @@ try {
     await page.waitForFunction(() => new URL(location.href).pathname === '/login', { timeout:TIMEOUT });
     check(new URL(page.url()).pathname === '/login', `other-site-session-${index + 1}-logged-out`);
   }));
-  editorStep = 'editor-wait-for-real-read-revocation';
+  editorStep = 'editor-bring-to-front-and-wait-for-real-read-revocation';
+  result.readRevocationWait = { focusBefore:await editor.evaluate(() => ({ visibilityState:document.visibilityState, hasFocus:document.hasFocus() })) };
+  await editor.bringToFront();
+  result.readRevocationWait.focusAfter = await editor.evaluate(() => ({ visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
+  result.readRevocationWait.domBeforeWait = await editor.evaluate(text => {
+    const panel = document.querySelector('[data-pc="cloud-ai-panel"]');
+    const messages = [...(panel?.querySelectorAll('.ai-message.user .ai-message-text') ?? [])];
+    return { expectedMessageRemains:messages.some(element => (element.textContent ?? '').replace(/\s+/g, ' ').trim().includes(text)),
+      userMessageCount:panel?.querySelectorAll('.ai-message.user').length ?? 0,
+      queueItemCount:panel?.querySelectorAll('.ai-queue-item[data-message-id]').length ?? 0,
+      permissionLoadingCount:document.querySelectorAll('[data-pc="cloud-permission-loading"]').length };
+  }, prompt);
   await messageGone(editor, prompt);
   check(true, 'online-editor-real-read-body-cleared-after-revocation');
   await waitForControlClosure(result.eventStreams);
@@ -617,9 +646,22 @@ try {
     'editor-plaintext-message-and-queue-clear-naturally-after-revocation');
   result.attachmentPath = 'not-tested: mounted account attachment authority is absent; no upload was attempted';
   editorStep = 'editor-history-read-after-revocation';
-  const historyStatus = await requestHistoryReadAfterClick(editor);
-  result.deniedHistoryRead = { status:historyStatus, denied:historyStatus === 401 || historyStatus === 403 };
-  check(result.deniedHistoryRead.denied, 'subsequent-real-history-read-denied-after-revocation');
+  result.deniedHistoryRead = await requestHistoryReadAfterClick(editor);
+  if (result.deniedHistoryRead.denied !== true && realAgentDelegationTicket && result.deniedHistoryRead.action !== 'clicked') {
+    result.deniedHistoryRead.oldIssuedTicketRequest = await editor.evaluate(async ticket => {
+      const response = await fetch('/agent/v1/conversations', { headers:{ Authorization:`Bearer ${ticket}` },
+        credentials:'omit', cache:'no-store' });
+      let code = null;
+      if (response.status >= 400) {
+        const body = await response.json().catch(() => null);
+        code = ['disabled','unauthorized','forbidden','account-required','consent-required','not-found','busy','unavailable'].includes(body?.code)
+          ? body.code : body?.code == null ? null : 'other';
+      }
+      return { status:response.status, denied:response.status === 401 || response.status === 403, code };
+    }, realAgentDelegationTicket);
+    result.deniedHistoryRead.denied = result.deniedHistoryRead.oldIssuedTicketRequest.denied;
+  }
+  check(result.deniedHistoryRead.denied === true, 'subsequent-real-history-read-denied-after-revocation');
   const eventStatus = await sitePages[0].evaluate(async () => {
     const node = document.querySelector('#password-event-status');
     const eventId = document.querySelector('#password-event')?.dataset.eventId;
@@ -719,6 +761,7 @@ try {
   if (result.cleanup.browserClosed) await fs.rm(profile, { recursive:true, force:true });
   result.cleanup.profileRemoved = !fsSync.existsSync(profile);
   result.sourceAfter = SOURCE(); result.elapsedMs = Date.now() - started;
+  realAgentDelegationTicket = null;
   result.summary = { passed:result.checks.filter(item => item.pass).length, failed:result.checks.filter(item => !item.pass).length,
     completed:result.completed, sourceUnchanged:result.sourceBefore === result.sourceAfter };
   if (!result.completed || !result.summary.sourceUnchanged || result.cleanup.browserClosed !== true || result.cleanup.fixtureClosed !== true ||
