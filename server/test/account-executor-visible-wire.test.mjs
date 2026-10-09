@@ -4,7 +4,7 @@ import { startAccountExecutorVisibleFixture } from './fixtures/account-executor-
 
 test('actual account HTTP SSE projects accepted user scope from FULL doc-bound row before run output',
   { timeout: 30000 }, async () => {
-    const fixture = await startAccountExecutorVisibleFixture();
+    const fixture = await startAccountExecutorVisibleFixture({ ports: [0, 0, 0] });
     const abort = new AbortController(); let reader, primary;
     try {
       const base = fixture.origin + '/v1/conversations/' + fixture.conversationId;

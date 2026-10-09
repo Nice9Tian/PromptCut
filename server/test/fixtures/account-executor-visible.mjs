@@ -24,7 +24,7 @@ import { assetWiringPki } from './asset-wiring-pki.mjs';
 // Controlled actor/service registry/selection/model/tool driver; real doc SQLite,
 // RAM instance key/exporter proof/read inventory, Agent HTTP and durable SSE.
 // This helper cannot prove VH, an actual model, data WS or OS-tree closure.
-export async function startAccountExecutorVisibleFixture() {
+export async function startAccountExecutorVisibleFixture({ ports = [6640, 6641, 6642] } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-account-executor-visible-'));
     const pki = assetWiringPki(dir), sockets = new Set(), subjects = new Map(), socketIds = new WeakMap();
     const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'executor-doc' });
@@ -90,15 +90,15 @@ export async function startAccountExecutorVisibleFixture() {
     track(docServer);
     const listen = (server, port) => new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
     let assembly, publicServer, controlClient, client, runClient;
-    let models = 0, tools = 0, closing; const diagnostics = [];
+    let models = 0, tools = 0, closing, actualPorts = []; const diagnostics = [];
     try {
-      await listen(docServer, 6640);
-      const doc = { origin: 'https://127.0.0.1:6640', tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 };
+      await listen(docServer, ports[0]);
+      const doc = { origin: `https://127.0.0.1:${docServer.address().port}`, tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 };
       client = createConversationClient(doc); runClient = createRunClient(doc);
       controlClient = createConversationControlClient({ ...doc, runClient, receiptFile: path.join(dir, 'read-closures.sqlite') });
       client.useReadControl(controlClient);
       assembly = await createAccountExecutorAssembly({ dataDir: dir, doc, runClient, conversationClient: client, readControl: controlClient,
-        controlPort: 6642, root: dir, loadModule: async () => { throw Error('no-real-model-module'); }, modelConfig: async () => ({}),
+        controlPort: ports[2], root: dir, loadModule: async () => { throw Error('no-real-model-module'); }, modelConfig: async () => ({}),
         log: (event, fields) => diagnostics.push({ event, code: fields.code }),
         runnerFactory: async ({ onEvent, onModelCall, beforeToolCall }) => ({ async start() {
           onEvent({ type: 'run' }); await onModelCall(); models++;
@@ -109,9 +109,10 @@ export async function startAccountExecutorVisibleFixture() {
         }, async drain() {}, close() {} }) });
       const api = createAgentHttp({ service: assembly.service, authenticate: async req => req.headers.authorization === 'Bearer controlled-delegation'
         ? { accountMode: true, delegation: 'controlled-delegation', projectId, accountId, userId: accountId } : null });
-      publicServer = http.createServer((req, res) => { void api.handle(req, res); }); track(publicServer); await listen(publicServer, 6641);
+      publicServer = http.createServer((req, res) => { void api.handle(req, res); }); track(publicServer); await listen(publicServer, ports[1]);
+      actualPorts = [docServer.address().port, publicServer.address().port, assembly.controlPort];
 
-      return { origin: 'http://127.0.0.1:6641', projectId, conversationId, ports: [6640, 6641, 6642],
+      return { origin: `http://127.0.0.1:${publicServer.address().port}`, projectId, conversationId, ports: actualPorts,
         ticket: 'controlled-delegation', close, rows: () => assembly.service.runEvents.after({ projectId, conversationId }),
         describe: () => ({ ...assembly.describe(), models, tools, sockets: sockets.size,
           activeRuns: assembly.service.runManager.describe().activeRuns,
@@ -129,7 +130,7 @@ export async function startAccountExecutorVisibleFixture() {
         instances.close(); ledger.close();
         assert.equal(sockets.size, 0); fs.rmSync(dir, { recursive: true, force: true });
         if (errors.length) throw new AggregateError(errors, 'visible-fixture-owned-close-failed');
-        return { closed: true, sockets: 0, ports: [6640, 6641, 6642] };
+        return { closed: true, sockets: 0, ports: actualPorts };
       })();
       return closing;
     }
