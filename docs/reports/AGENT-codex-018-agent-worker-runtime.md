@@ -55,3 +55,5 @@ task只接受projectId/conversationId/requestId，不能携grant或instance身�
 修fixture固定9752f5c5后8/8、0fail/cancel/skip、257.2992ms/exit0（外层517ms），TMP `pc-worker-task-9752f5c5-target.log`。包括旧read/ACK丢失回归5项与新task3项；真实SQLite/FULL/eventcrypto，assignment/model为受控，不计真实OSworker。
 
 只读发现Hosted factory显式参数列表会丢task四接口；root已窄扩 `create-agent-service.mjs` 仅四参数解构/传原accountRunner，不改LAN/default。新实际factory调用回归同时核singleTask参数真正到manager、durableevent/drain hook被调用及旧default仍非task，而不是只看manager纯目标推断assembly挂通。
+
+新增factory目标1e4首4/3/1、252.6671ms，因test传空conversationClient被原构造守门503正确拒；TMP `pc-worker-task-1e4c46a0-target.log`保留。测试改为具备原必需方法且调用一律throw的human-client adapter；本测试不做human读，不能用freeACL代替真实服务，也不改生产constructor。
