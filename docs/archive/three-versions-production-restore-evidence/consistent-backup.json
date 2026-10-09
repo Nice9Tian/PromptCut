@@ -1,0 +1,66 @@
+{
+  "backup": "/root/promptcut-v2-consistent-20261009-b9fb4c8d8e5c",
+  "before": {
+    "promptcut-account-v2": {
+      "MainPID": "274484",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2": {
+      "MainPID": "274497",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2": {
+      "MainPID": "273011",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "nginx": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    }
+  },
+  "ok": true,
+  "consistent": true,
+  "deletedActualData": false,
+  "dataFiles": 18,
+  "dataBytes": 308944,
+  "assetClean": true,
+  "archives": {
+    "account-doc-asset-data.tar": {
+      "bytes": 337920,
+      "sha256": "167d331f0c41b9754f2b6b047cf6b8ba535b594f75c864070f3542325cc28ef2"
+    },
+    "code-config-private.tar": {
+      "bytes": 176373760,
+      "sha256": "5591415f88150ec40dea6aab87a5d133e65a954ab75bf69760c3f2b882fa4717"
+    }
+  },
+  "resumed": true,
+  "quiescedSeconds": 1.465,
+  "after": {
+    "promptcut-account-v2": {
+      "MainPID": "279515",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2": {
+      "MainPID": "279516",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2": {
+      "MainPID": "279517",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "nginx": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    }
+  },
+  "nginxUnchanged": true
+}

@@ -1,0 +1,200 @@
+{
+  "restore": "/var/tmp/pc-v2-restore-20261009-eedd75ae50b1",
+  "backup": "/root/promptcut-v2-consistent-20261009-b9fb4c8d8e5c",
+  "namespace": "ea93ab1ff5b9",
+  "checks": [
+    {
+      "name": "account-restored-http-health",
+      "pass": true,
+      "details": {
+        "status": 200,
+        "ok": true,
+        "schema": 2,
+        "protocol": 2,
+        "role": null,
+        "service": "visuhive-account",
+        "accountRequired": null,
+        "assetReady": null
+      }
+    },
+    {
+      "name": "doc-restored-http-health",
+      "pass": true,
+      "details": {
+        "status": 200,
+        "ok": true,
+        "schema": null,
+        "protocol": "promptcut.v1",
+        "role": null,
+        "service": "promptcut-docservice",
+        "accountRequired": true,
+        "assetReady": false
+      }
+    },
+    {
+      "name": "asset-restored-http-health",
+      "pass": true,
+      "details": {
+        "status": 200,
+        "ok": true,
+        "schema": null,
+        "protocol": null,
+        "role": "asset",
+        "service": null,
+        "accountRequired": true,
+        "assetReady": true
+      }
+    },
+    {
+      "name": "restored-doc-asset-mtls-ready",
+      "pass": false
+    }
+  ],
+  "observed": {
+    "account": {
+      "MainPID": "280575",
+      "NRestarts": "0",
+      "WorkingDirectory": "/var/tmp/pc-v2-restore-20261009-eedd75ae50b1/copy/opt/promptcut-v2/releases/vh-a01ae0bc",
+      "User": "visuhive-account",
+      "Group": "visuhive-account",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "asset": {
+      "MainPID": "280583",
+      "NRestarts": "0",
+      "WorkingDirectory": "/var/tmp/pc-v2-restore-20261009-eedd75ae50b1/copy/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-asset",
+      "Group": "promptcut-asset",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "doc": {
+      "MainPID": "280591",
+      "NRestarts": "0",
+      "WorkingDirectory": "/var/tmp/pc-v2-restore-20261009-eedd75ae50b1/copy/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-doc",
+      "Group": "promptcut-doc",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    }
+  },
+  "failure": {
+    "type": "AssertionError",
+    "code": "restored-runtime-health-not-ready"
+  },
+  "runtimeVerified": false,
+  "cleanup": {
+    "ownUnits": {
+      "account": {
+        "MainPID": "0",
+        "NRestarts": "0",
+        "WorkingDirectory": "",
+        "User": "",
+        "Group": "",
+        "LoadState": "not-found",
+        "ActiveState": "inactive"
+      },
+      "asset": {
+        "MainPID": "0",
+        "NRestarts": "0",
+        "WorkingDirectory": "",
+        "User": "",
+        "Group": "",
+        "LoadState": "not-found",
+        "ActiveState": "inactive"
+      },
+      "doc": {
+        "MainPID": "0",
+        "NRestarts": "0",
+        "WorkingDirectory": "",
+        "User": "",
+        "Group": "",
+        "LoadState": "not-found",
+        "ActiveState": "inactive"
+      }
+    },
+    "ports6590_6599Free": true,
+    "allOwnServicesClosed": true
+  },
+  "productionUnchanged": true,
+  "productionBefore": {
+    "promptcut-account-v2": {
+      "MainPID": "279515",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/vh-a01ae0bc",
+      "User": "visuhive-account",
+      "Group": "visuhive-account",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2": {
+      "MainPID": "279516",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-doc",
+      "Group": "promptcut-doc",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2": {
+      "MainPID": "279517",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-asset",
+      "Group": "promptcut-asset",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "nginx": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "WorkingDirectory": "",
+      "User": "",
+      "Group": "",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    }
+  },
+  "productionAfter": {
+    "promptcut-account-v2": {
+      "MainPID": "279515",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/vh-a01ae0bc",
+      "User": "visuhive-account",
+      "Group": "visuhive-account",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2": {
+      "MainPID": "279516",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-doc",
+      "Group": "promptcut-doc",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2": {
+      "MainPID": "279517",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-asset",
+      "Group": "promptcut-asset",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "nginx": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "WorkingDirectory": "",
+      "User": "",
+      "Group": "",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    }
+  },
+  "wallSec": 45.427,
+  "deletedActualData": false,
+  "ok": false
+}
