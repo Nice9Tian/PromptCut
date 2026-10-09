@@ -245,9 +245,10 @@ async function main() {
   const ports = [6620, 6621, 6622, 6623, 6624, 6625, 6626, 6627, 6628, 6629];
   const ORIGIN = 'https://127.0.0.1:6626', STAGES = ['http://s1.pc.localhost:6628', 'http://s2.pc.localhost:6629'];
   const result = { sourceBefore: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim(),
-    checks: [], network: [], screenshots: [], pageErrors: [], pageSteps: [], completed: false, fence: 'pending-unconfirmed', cleanup: {} };
+    checks: [], network: [], screenshots: [], pageErrors: [], pageSteps: [], completed: false, fence: 'not-tested', cleanup: {} };
   const check = (condition, name) => { result.checks.push({ name, pass: Boolean(condition) }); if (!condition) throw new Error(name); };
   const stages = [], contexts = [], pages = [], requestIds = new WeakMap(), firstVisibilityId = new WeakMap(), visibilityCounts = new WeakMap();
+  const pageLabels = ['creator', 'owner', 'member'];
   let browser, fixture, phase = 'preflight', phaseDetail = null, browserProfile;
   const started = Date.now();
   const recordPageStep = async (page, label, step) => {
@@ -359,10 +360,10 @@ async function main() {
     result.browserProfileEvidenceDir = browserProfile;
     browser = await puppeteer.launch({ executablePath, headless: true, pipe: true, userDataDir: browserProfile,
       args: [...PROBE_CHROME_ARGS, '--ignore-certificate-errors', '--host-resolver-rules=MAP s1.pc.localhost 127.0.0.1,MAP s2.pc.localhost 127.0.0.1'] });
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < pageLabels.length; i++) {
       const context = await browser.createBrowserContext(); contexts.push(context);
       const page = await context.newPage(); pages.push(page); page.setDefaultTimeout(TIMEOUT);
-      const pageLabel = i === 0 ? 'creator' : 'owner';
+      const pageLabel = pageLabels[i];
       page.on('pageerror', error => result.pageErrors.push({ page: pageLabel, ...safePageError(error) }));
       page.on('request', request => {
         const url = new URL(request.url());
@@ -379,26 +380,27 @@ async function main() {
         if (url.pathname.startsWith('/agent/') || url.pathname.startsWith('/hosted/shared/account/')) {
           const meta = requestIds.get(response.request());
           const safePath = url.pathname.replace(/\/conversations\/[^/]+(?=\/)/g, '/conversations/:conversationId');
-          result.network.push({ path: safePath, status: response.status(), method: response.request().method(),
+          result.network.push({ page: pageLabel, path: safePath, status: response.status(), method: response.request().method(),
             ...(url.pathname.endsWith('/visibility') ? { attempt: meta?.sequence ?? 0, stableRequestIdMatch: meta?.matched === true } : {}) });
         }
       });
     }
-    const [creator, owner] = pages, projectName = 'Shared dual account project';
+    const [creator, owner, member] = pages, projectName = 'Shared dual account project';
     phase = 'login';
     for (let index = 0; index < pages.length; index++) {
       const page = pages[index], account = fixture.accounts[index];
-      await recordPageStep(page, index === 0 ? 'creator' : 'owner', 'login:navigate');
+      const pageLabel = pageLabels[index];
+      await recordPageStep(page, pageLabel, 'login:navigate');
       await page.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
-      await recordPageStep(page, index === 0 ? 'creator' : 'owner', 'login:form-loaded');
+      await recordPageStep(page, pageLabel, 'login:form-loaded');
       await fill(page, 'input[name="username"]', account.name); await fill(page, 'input[name="password"]', account.password);
       const submit = '[data-pc="account-projects"] form button.sp-primary-btn';
       await enabled(page, submit); await page.click(submit);
       await waitVisible(page, '[data-pc="account-name"]');
-      await recordPageStep(page, index === 0 ? 'creator' : 'owner', 'login:account-ready');
+      await recordPageStep(page, pageLabel, 'login:account-ready');
     }
     const openProject = async page => {
-      const pageLabel = page === creator ? 'creator' : 'owner';
+      const pageLabel = pageLabels[pages.indexOf(page)];
       let consentRead;
       await recordPageStep(page, pageLabel, 'open-project:wait-list-row');
       await page.waitForFunction(name => Array.from(document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row'))
@@ -443,13 +445,14 @@ async function main() {
       }
       await closeProjectShareToast(page, pageLabel);
     };
-    phase = 'project-open'; await openProject(creator); await openProject(owner);
+    phase = 'project-open'; await openProject(creator); await openProject(owner); await openProject(member);
     phase = 'enable-agent';
     const enableButton = await creator.$('[data-pc="cloud-agent-enable"]');
     if (enableButton) { await enabled(creator, '[data-pc="cloud-agent-enable"]'); await enableButton.click(); }
     await creator.waitForSelector('[data-pc="cloud-off"]', { hidden: true, timeout: TIMEOUT });
     await owner.waitForFunction(() => document.querySelector('[data-pc="cloud-off"]') === null, { timeout: TIMEOUT });
     phase = 'owner-creates-shared-conversation';
+    phaseDetail = 'owner-send-shared-message';
     const ownerPrompt = 'Owner-created shared conversation for control probe';
     await fill(owner, '[data-pc="cloud-ai-panel"] [data-pc="ai-input"]', ownerPrompt);
     await owner.keyboard.press('Enter');
@@ -460,23 +463,75 @@ async function main() {
     await chooseHistory(creator, conversationId);
     await creator.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('共有对话'), { timeout: TIMEOUT });
     await waitForVisibleUserMessage(creator, ownerPrompt);
+    await chooseHistory(member, conversationId);
+    await member.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('共有对话'), { timeout: TIMEOUT });
+    await waitForVisibleUserMessage(member, ownerPrompt);
+    check(result.network.some(entry => entry.page === 'member' && entry.method === 'GET' && entry.path.endsWith('/events') && entry.status === 200),
+      'ordinary-member-real-shared-events-readable');
     const creatorShared = await inspectAccountConversationControls(creator);
     assertAccountConversationControls(creatorShared, { visibility: 'shared', canToggleVisibility: false, creatorReadOnly: false });
     check(creatorShared.visibleMessages > 0, 'creator-can-read-shared-conversation');
     await shot(creator, '01-creator-shared-no-toggle');
+    check((await inspectAccountConversationControls(member)).visibleMessages > 0, 'ordinary-member-real-shared-history-readable');
+    await shot(member, '02-member-shared-readable');
     const ownerShared = await inspectAccountConversationControls(owner);
     assertAccountConversationControls(ownerShared, { visibility: 'shared', canToggleVisibility: true });
-    await shot(owner, '02-owner-shared-toggle');
+    await shot(owner, '03-owner-shared-toggle');
 
-    phase = 'owner-switch-private-pending';
+    phase = 'owner-switch-private-confirmed';
+    phaseDetail = 'wait-for-real-private-confirmation-and-member-access-revocation';
+    const deniedMemberRead = member.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === `/agent/v1/conversations/${encodeURIComponent(conversationId)}/events` &&
+        response.status() === 403;
+    }, { timeout: TIMEOUT }).catch(() => null);
     const firstAttempt = await requestAccountVisibility(owner, 'private');
-    check(firstAttempt.outcome === 'pending', 'private-switch-shows-real-pending');
-    check(firstAttempt.state.status?.includes('已禁止新访问，相关服务关闭待确认') || firstAttempt.state.status?.includes('云端尚未确认这项操作'),
-      'private-switch-does-not-claim-complete');
-    check(result.network.some(entry => entry.path.endsWith('/visibility') && entry.status === 503), 'private-switch-real-http-503');
-    await shot(owner, '03-owner-private-fence-pending');
+    check(firstAttempt.outcome === 'confirmed' && firstAttempt.httpStatus === 200, 'private-switch-real-fence-confirmed');
+    check(result.network.some(entry => entry.page === 'owner' && entry.path.endsWith('/visibility') && entry.status === 200),
+      'private-switch-real-http-200');
+    const memberDeniedResponse = await deniedMemberRead;
+    check(memberDeniedResponse?.status() === 403 && result.network.some(entry => entry.page === 'member' &&
+      entry.path.endsWith('/events') && entry.status === 403),
+      'ordinary-member-old-read-denied-after-private');
+    await shot(owner, '04-owner-private-confirmed');
 
+    phase = 'ordinary-member-private-history-hidden';
+    phaseDetail = 'refresh-member-history-after-real-private-confirmation';
+    const memberHistoryButton = await member.$('[data-pc="cloud-ai-panel"] button[title*="历史"]');
+    if (!memberHistoryButton || !await visibleAndUnobscured(member, memberHistoryButton)) throw new Error('member-history-button-not-usable');
+    const memberListResponse = member.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/agent/v1/conversations';
+    }, { timeout: TIMEOUT }).catch(() => null);
+    await memberHistoryButton.click();
+    check((await memberListResponse)?.status() === 200, 'ordinary-member-history-refresh-real-http-200');
+    await waitVisible(member, '[data-pc="chat-new"]');
+    const memberNewChat = await member.$('[data-pc="chat-new"]');
+    if (!memberNewChat || !await visibleAndUnobscured(member, memberNewChat)) throw new Error('member-new-chat-not-usable');
+    await memberNewChat.click();
+    const memberListAfterPrivate = member.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/agent/v1/conversations';
+    }, { timeout: TIMEOUT }).catch(() => null);
+    await member.waitForFunction(() => {
+      const button = document.querySelector('[data-pc="cloud-ai-panel"] button[title*="历史"]');
+      if (!button || button.disabled) return false;
+      const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return Boolean(hit && (hit === button || button.contains(hit)));
+    }, { timeout: TIMEOUT });
+    const memberHistoryAfterPrivate = await member.$('[data-pc="cloud-ai-panel"] button[title*="历史"]');
+    if (!memberHistoryAfterPrivate || !await visibleAndUnobscured(member, memberHistoryAfterPrivate)) throw new Error('member-history-button-after-new-chat-not-usable');
+    await memberHistoryAfterPrivate.click();
+    check((await memberListAfterPrivate)?.status() === 200, 'ordinary-member-private-history-refresh-real-http-200');
+    await waitVisible(member, '[data-pc="chat-cloud-group"]');
+    await member.waitForFunction(id => !Array.from(document.querySelectorAll('[data-pc="chat-cloud-item"]'))
+      .some(row => row.getAttribute('data-chat-id') === id), { timeout: TIMEOUT }, conversationId);
+    check(!result.network.some(entry => entry.page === 'member' && entry.path === '/agent/v1/conversations' && entry.status >= 500),
+      'ordinary-member-private-history-not-server-error');
     phase = 'creator-private-readonly';
+    phaseDetail = 'creator-reopen-private-conversation-and-wait-for-history-body';
     await chooseHistory(creator, conversationId);
     await creator.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('私有对话'), { timeout: TIMEOUT });
     await waitForVisibleUserMessage(creator, ownerPrompt);
@@ -485,24 +540,16 @@ async function main() {
     check(creatorPrivate.visibleMessages > 0, 'creator-can-read-private-conversation');
     await shot(creator, '04-creator-private-readonly');
 
-    phase = 'owner-retries-same-request-pending';
-    const retry = await requestAccountVisibility(owner, 'private');
-    check(retry.outcome === 'pending', 'same-request-retry-remains-pending');
-    const visibilityAttempts = result.network.filter(entry => entry.path.endsWith('/visibility'));
-    check(visibilityAttempts.length === 2 && visibilityAttempts.every(entry => entry.status === 503), 'two-actual-pending-responses');
-    check(visibilityAttempts.length === 2 && visibilityAttempts[1].stableRequestIdMatch, 'retry-reuses-request-id-without-recording-it');
-    check((await inspectAccountConversationControls(owner)).status?.includes('已禁止新访问，相关服务关闭待确认') ||
-      (await inspectAccountConversationControls(owner)).status?.includes('云端尚未确认这项操作'), 'owner-visible-pending-after-retry');
     check(result.network.filter(entry => entry.path.endsWith('/messages') && entry.status === 202).length === 1,
       'message-was-queued-and-not-called-running');
-    await shot(owner, '05-owner-private-pending-retry');
-    result.fence = 'pending-unconfirmed';
+    await shot(owner, '05-owner-private-confirmed');
+    result.fence = 'confirmed-by-real-service';
     result.completed = true;
   } catch (error) {
     result.failure = { phase, detail: phaseDetail, code: error?.name === 'TimeoutError' ? 'timeout' : error?.name === 'Error' ? 'probe-check-failed' : 'probe-failed' };
     for (let index = 0; index < pages.length; index++) {
       const page = pages[index];
-      result.pageSteps.push({ page: index === 0 ? 'creator' : 'owner', step: `failure-snapshot:${phase}`, ...(await safePageSnapshot(page)) });
+      result.pageSteps.push({ page: pageLabels[index], step: `failure-snapshot:${phase}`, ...(await safePageSnapshot(page)) });
     }
     for (let index = 0; index < pages.length; index++) await shot(pages[index], `failure-${index}`).catch(() => {});
     process.exitCode = 1;

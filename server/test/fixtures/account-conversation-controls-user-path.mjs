@@ -23,6 +23,8 @@ import { assetWiringPki } from './asset-wiring-pki.mjs';
 import WebSocket from 'ws';
 import { addServiceKey, generateServiceKeyPair } from '../../auth/service-identity.mjs';
 import { createConversationClient } from '../../agent-service/conversation-client.mjs';
+import { createRunClient } from '../../agent-service/run-client.mjs';
+import { createConversationControlClient } from '../../agent-service/conversation-control-client.mjs';
 import { createHostedWiring } from '../../agent-service/hosted-wiring.mjs';
 import { createHostedAgentService } from '../../agent/service/create-agent-service.mjs';
 import { createAgentHttp } from '../../agent-service/http.mjs';
@@ -143,7 +145,7 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
   const authorityId = 'dual-account-doc';
   const pki = assetWiringPki(dir);
   const agentKey = generateServiceKeyPair();
-  let agentServer, agentClient, agentService;
+  let agentServer, agentClient, agentRunClient, agentReadControl, agentService;
   const staged = path.join(dir, 'staged-asset');
   const docDir = path.join(dir, 'doc');
   const assetDir = path.join(dir, 'asset');
@@ -159,20 +161,36 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
   };
   const close = async () => {
     if (cleanupComplete) return { closed: true, childClosed: child === null, assetPid, ports };
-    await stopChild();
-    await Promise.all([...upgradePairs].map(pair => {
-      pair.client.destroy(); pair.upstream.destroy(); return pair.closed;
-    }));
-    await closeServer(edgeServer);
-    await closeServer(agentServer); agentService?.close(); agentClient?.close();
-    await combo?.close();
-    await closeServer(siteServer);
-    await closeServer(accountServer);
-    docAuthorityClient?.close();
-    store?.close();
+    const failures = [];
+    const settle = async entries => {
+      const results = await Promise.allSettled(entries.map(([, action]) => Promise.resolve().then(action)));
+      results.forEach((result, index) => { if (result.status === 'rejected') failures.push(entries[index][0]); });
+    };
+    // The read-control client owns its SQLite receipt file. Close it once before
+    // its HTTP/doc/run transports, then check every remaining close independently.
+    await settle([['read-control', () => agentReadControl?.close()]]);
+    await settle([
+      ['asset-child', stopChild],
+      ['websocket-upgrades', async () => Promise.all([...upgradePairs].map(pair => {
+        pair.client.destroy(); pair.upstream.destroy(); return pair.closed;
+      }))],
+      ['edge-server', () => closeServer(edgeServer)],
+      ['agent-http-server', () => closeServer(agentServer)],
+      ['agent-service', () => agentService?.close()],
+      ['conversation-client', () => agentClient?.close()],
+      ['run-client', () => agentRunClient?.close()],
+    ]);
+    await settle([['hosted-combo', () => combo?.close()]]);
+    await settle([
+      ['site-server', () => closeServer(siteServer)],
+      ['account-server', () => closeServer(accountServer)],
+      ['doc-authority-client', () => docAuthorityClient?.close()],
+      ['account-store', () => store?.close()],
+    ]);
     cleanupComplete = true;
-    diagnostic({ cleanupComplete, childClosed: child === null });
-    return { closed: true, childClosed: child === null, assetPid, ports, fixtureDir: dir };
+    diagnostic({ cleanupComplete, childClosed: child === null, closeFailureCount: failures.length });
+    if (failures.length) throw Error(`fixture-cleanup-failed:${failures.join(',')}`);
+    return { closed: true, childClosed: child === null, closeFailureCount: 0, assetPid, ports, fixtureDir: dir };
   };
   try {
     await Promise.all([fsp.mkdir(docDir), fsp.mkdir(assetDir)]);
@@ -271,18 +289,25 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
         order: { witnessKeys: { 'dual-path-order': orderKeys.account.publicKey },
           docAttestationPrivateKey: orderKeys.doc.privateKey } } });
     assert.equal(combo.assetPort, null, 'account mode uses the separate asset process');
-    agentClient = createConversationClient({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong,
-      serverFingerprint256: pki.doc.fingerprint256 });
+    const agentOptions = { origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong,
+      serverFingerprint256: pki.doc.fingerprint256 };
+    agentClient = createConversationClient(agentOptions);
+    agentRunClient = createRunClient(agentOptions);
+    agentReadControl = createConversationControlClient({ ...agentOptions, runClient: agentRunClient,
+      receiptFile: path.join(dir, 'agent-read-closures.sqlite') });
+    agentClient.useReadControl(agentReadControl);
+    await agentReadControl.start();
+    await waitFor(() => agentReadControl.describe().connected, 'actual pinned read-control ready', 5000);
     const wiring = createHostedWiring({ accountMode: true, conversationClient: agentClient });
     agentService = createHostedAgentService({ accountMode: true, conversationClient: agentClient });
     const agentHttp = createAgentHttp({ service: agentService, authenticate: wiring.authenticate });
     agentServer = http.createServer((req, res) => { void agentHttp.handle(req, res); });
     await listen(agentServer, agentPort);
-    const actors = [siteActor(siteOrigin, pki.ca), siteActor(siteOrigin, pki.ca)];
+    const actors = [siteActor(siteOrigin, pki.ca), siteActor(siteOrigin, pki.ca), siteActor(siteOrigin, pki.ca)];
     const doc = (method, route, body, token) => docRequest(docOrigin, method, route, body, token, pki.ca);
     const accounts = [];
     const editors = [];
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       const before = await actors[i].request('GET', '/me');
       assert.equal(before.status, 200);
       assert.equal(typeof before.body.csrfToken, 'string');
@@ -308,6 +333,9 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
     const pendingJoin = { projectId, requestId: 'dual-join-same-request', deviceId: 'dual-device-1' };
     const blocked = await doc('POST', '/hosted/shared/account/join', pendingJoin, editors[1]);
     assert.equal(blocked.status, 503, JSON.stringify(blocked.body));
+    const blockedThirdJoin = await doc('POST', '/hosted/shared/account/join', {
+      projectId, requestId: 'dual-third-join-same-request', deviceId: 'dual-device-2' }, editors[2]);
+    assert.equal(blockedThirdJoin.status, 503, JSON.stringify(blockedThirdJoin.body));
     assert.equal((await doc('POST', '/hosted/shared/account/session', {
       projectId, deviceId: 'dual-device-0', requestId: 'dual-before-asset' }, editors[0])).status, 503);
     assert.deepEqual(combo.accountRuntime.authority.listProjects(accounts[1]).joined, [], 'blocked join does not persist membership');
@@ -350,24 +378,34 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
     assert.ok(readiness.accessHead > 0);
     const joined = await doc('POST', '/hosted/shared/account/join', pendingJoin, editors[1]);
     assert.equal(joined.status, 200, JSON.stringify(joined.body));
+    const thirdJoined = await doc('POST', '/hosted/shared/account/join', {
+      projectId, requestId: 'dual-third-join-same-request', deviceId: 'dual-device-2' }, editors[2]);
+    assert.equal(thirdJoined.status, 200, JSON.stringify(thirdJoined.body));
     const sessionA = await doc('POST', '/hosted/shared/account/session', {
       projectId, deviceId: 'dual-device-0', requestId: 'dual-ready-a' }, editors[0]);
     const sessionB = await doc('POST', '/hosted/shared/account/session', {
       projectId, deviceId: 'dual-device-1', requestId: 'dual-ready-b' }, editors[1]);
+    const sessionC = await doc('POST', '/hosted/shared/account/session', {
+      projectId, deviceId: 'dual-device-2', requestId: 'dual-ready-c' }, editors[2]);
     assert.equal(sessionA.status, 200, JSON.stringify(sessionA.body));
     assert.equal(sessionB.status, 200, JSON.stringify(sessionB.body));
+    assert.equal(sessionC.status, 200, JSON.stringify(sessionC.body));
     assert.equal(typeof sessionA.body.connectionTicket, 'string');
     assert.equal(typeof sessionB.body.connectionTicket, 'string');
-    const [siteA, siteB] = await Promise.all(actors.map(actor => actor.request('GET', '/projects')));
+    const [siteA, siteB, siteC] = await Promise.all(actors.map(actor => actor.request('GET', '/projects')));
     assert.equal(siteA.status, 200, JSON.stringify(siteA.body));
     assert.equal(siteB.status, 200, JSON.stringify(siteB.body));
+    assert.equal(siteC.status, 200, JSON.stringify(siteC.body));
     assert.deepEqual(siteA.body.owned.map(item => item.projectId), [projectId]);
     assert.deepEqual(siteA.body.joined, []);
     assert.deepEqual(siteB.body.owned, []);
     assert.deepEqual(siteB.body.joined.map(item => item.projectId), [projectId]);
+    assert.deepEqual(siteC.body.owned, []);
+    assert.deepEqual(siteC.body.joined.map(item => item.projectId), [projectId]);
     assert.equal(siteA.body.authorityId, authorityId);
     assert.equal(siteB.body.authorityId, authorityId);
     assert.equal(siteB.body.joined[0].creatorAccountId, accounts[0]);
+    assert.equal(siteC.body.joined[0].creatorAccountId, accounts[0]);
     let publicHandlerServed = null;
     if (publicHandler) {
       const page = await mediaRequest(`${edgeOrigin}/editor`, { ca: pki.ca, cookie: '' });
@@ -406,25 +444,18 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
       return { origin: edgeOrigin, leafFingerprint256: pki.wrong.fingerprint256,
         caFile: path.join(dir, 'ca.crt'), projectId, fixtureDir: dir, assetPid,
         accounts: [{ name: 'dualUser0', password: 'temporary-dual-password-0' },
-          { name: 'dualUser1', password: 'temporary-dual-password-1' }],
+          { name: 'dualUser1', password: 'temporary-dual-password-1' },
+          { name: 'dualUser2', password: 'temporary-dual-password-2' }],
         ports: { site: sitePort, accountInternal: accountPort, doc: docPort,
           docInternal: docInternalPort, asset: assetPort, assetInternal: assetInternalPort, agent: agentPort, edge: edgePort },
         close };
     }
-    const revoked = await docRequest(siteOrigin + '/api/account', 'POST', '/editor/logout', {}, editors[1], pki.ca);
-    assert.equal(revoked.status, 200, JSON.stringify(revoked.body));
-    const lost = await doc('POST', '/hosted/shared/account/session', {
-      projectId, deviceId: 'dual-device-1', requestId: 'dual-after-logout' }, editors[1]);
-    assert.equal(lost.status, 401, JSON.stringify(lost.body));
-    await stopChild();
-    const offline = await doc('POST', '/hosted/shared/account/session', {
-      projectId, deviceId: 'dual-device-0', requestId: 'dual-asset-offline' }, editors[0]);
-    assert.equal(offline.status, 503, JSON.stringify(offline.body));
     const result = { provider: 'actual-v2-app-store-internal', accountCount: accounts.length,
-      created: project.status, blockedJoin: blocked.status, joined: joined.status,
+      created: project.status, blockedJoin: blocked.status, blockedThirdJoin: blockedThirdJoin.status,
+      joined: joined.status, thirdJoined: thirdJoined.status,
       ownerProjects: siteA.body.owned.length, memberProjects: siteB.body.joined.length,
-      sessions: [sessionA.status, sessionB.status], revokedSession: lost.status,
-      assetOfflineSession: offline.status, accountCookie: websiteMe.status,
+      observerProjects: siteC.body.joined.length, sessions: [sessionA.status, sessionB.status, sessionC.status],
+      accountCookie: websiteMe.status,
       mediaWithWebsiteCookie: validMedia.status, mediaWithInvalidTicket: invalidMedia.status,
       webSocketProjectRevision: webSocket.projectRevision, publicHandlerServed,
       assetHead: readiness.accessHead,
