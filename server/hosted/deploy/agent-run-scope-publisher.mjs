@@ -105,7 +105,11 @@ export async function publishAgentScope({ expected, mode, configuredAnchorDigest
     // through release; failure never becomes a consumable closed publication.
     await pinned.releaseScope();
     return await publish('closed');
-  } finally { try { await pinned?.close(); } finally { await unlock({ publicationDurable: durable }); } }
+  } finally {
+    try { await pinned?.close(); }
+    catch (error) { durable = false; throw error; }
+    finally { await unlock({ publicationDurable: durable }); }
+  }
 }
 
 export async function runAgentScopePublisher({ configFile, mode, assignmentFile = null, terminalFile = null, intentFile = null }) {

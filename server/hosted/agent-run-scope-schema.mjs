@@ -14,7 +14,7 @@ const domain = kind => `promptcut.agent-run-scope.${kind}.v1`;
 const ROOT = ['authorityId', 'serviceIdentity', 'uid', 'unit', 'clientFingerprint256', 'serverFingerprint256', 'closurePolicy'];
 const EXPECTED = [...ROOT, 'slotId', 'docAuthorityId', 'docPublicKey'];
 const TARGET = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration', 'publicKeyDigest'];
-export const scopePhaseRank = phase => ({ ready: 0, bound: 1, closed: 2 })[phase];
+export const scopePhaseRank = phase => phase === 'ready' ? 0 : phase === 'bound' ? 1 : phase === 'closed' ? 2 : undefined;
 
 export function scopePublicKey(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length > 128) failScope('public-key');
