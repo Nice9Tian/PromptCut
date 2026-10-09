@@ -1,0 +1,107 @@
+[
+  {
+    "check": "type",
+    "source": "63225318630b776e06c546f4627611fa8ee03369",
+    "providerSource": "1b3b0029eddf951225a8a2912597dc46854e9041",
+    "exitCode": 0,
+    "wallSec": 7.172,
+    "log": "pc-password-root-63225318-accept-type.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "providerUnchanged": true,
+    "nativeRetries": 0,
+    "tests": null,
+    "pass": null,
+    "fail": null,
+    "cancelled": null,
+    "skipped": null,
+    "durationMs": null
+  },
+  {
+    "check": "full",
+    "source": "63225318630b776e06c546f4627611fa8ee03369",
+    "providerSource": "1b3b0029eddf951225a8a2912597dc46854e9041",
+    "exitCode": 0,
+    "wallSec": 73.485,
+    "log": "pc-password-root-63225318-accept-full.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "providerUnchanged": true,
+    "nativeRetries": 0,
+    "tests": 5503.0,
+    "pass": 5499.0,
+    "fail": 0.0,
+    "cancelled": 0.0,
+    "skipped": 4.0,
+    "durationMs": 73136.7599
+  },
+  {
+    "check": "online-build",
+    "source": "63225318630b776e06c546f4627611fa8ee03369",
+    "providerSource": "1b3b0029eddf951225a8a2912597dc46854e9041",
+    "exitCode": 0,
+    "wallSec": 1.954,
+    "log": "pc-password-root-63225318-accept-online-build.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "providerUnchanged": true,
+    "nativeRetries": 0,
+    "tests": null,
+    "pass": null,
+    "fail": null,
+    "cancelled": null,
+    "skipped": null,
+    "durationMs": null
+  },
+  {
+    "check": "browser",
+    "source": "63225318630b776e06c546f4627611fa8ee03369",
+    "providerSource": "1b3b0029eddf951225a8a2912597dc46854e9041",
+    "exitCode": 0,
+    "wallSec": 5.719,
+    "log": "pc-password-root-63225318-accept-browser.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "providerUnchanged": true,
+    "nativeRetries": 0,
+    "tests": null,
+    "pass": null,
+    "fail": null,
+    "cancelled": null,
+    "skipped": null,
+    "durationMs": null,
+    "summary": {
+      "passed": 46,
+      "failed": 0,
+      "completed": true,
+      "sourceUnchanged": true
+    },
+    "cleanup": {
+      "browserClosed": true,
+      "stages": [
+        {
+          "port": 6688,
+          "listening": false,
+          "sockets": 0
+        },
+        {
+          "port": 6689,
+          "listening": false,
+          "sockets": 0
+        }
+      ],
+      "fixtureClosed": true,
+      "assetChildClosed": true,
+      "portsFree": true,
+      "profileRemoved": true
+    },
+    "elapsedMs": 5490,
+    "failure": null,
+    "history": {
+      "action": "clicked",
+      "endpoint": "agent-history",
+      "status": 401,
+      "denied": true
+    }
+  }
+]
