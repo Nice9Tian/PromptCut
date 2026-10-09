@@ -12,4 +12,10 @@
 ## 进度
 
 - 已核对入口 `developer_guide.md`、`suggested_agent_behavior.md` 与 `constraints.md`；产品语义以账号任务书与 VisuHive 真实 provider 为准。
-- 开工报告先独立提交；接口与页面复核、隔离 fixture、真实路径结果和任何无法验证原因将在后续提交中补充。
+- 已用独立隔离 fixture 调用真实 VisuHive provider 的注册、登录、编辑器子会话、改密、事件选择、邮箱绑定、重设码签发与重设确认接口。邮件回调只在进程内接住 provider 随机签发的验证码；没有使用真实邮箱投递或生产账号。
+- 专属 `npm test -- server/test/account-password-user-path.test.mjs` 在显式指向只读 VisuHive provider、密码排序模块和本地 authority 模块后通过：1/1；验证发起网站会话保留、另两网站会话及编辑器 bearer 失效、旧密码拒绝、新密码可登录；重设也验证旧会话撤销与新密码登录。provider 对改密和重设退出均返回 `logoutState=revoking`，这是服务确认仍待处理的真实状态；未声称退出已完成、未验证互联网邮件投递。
+- 测试首轮在未显式提供外部 provider 路径时红于 `real v2 account provider root is required`，这属于环境入口缺失；加进程级路径后同一目标通过。探针和 fixture 另已通过 `node --check` 与 `git diff --check`。
+- 固定在线构建 `npm run build -- --mode online --outDir <TEMP>` 通过。产物 `index.html` 引用 `/editor/assets/index-C3woiw05.js` 等在线资源；`stage.html` 使用同一编辑器入口资源，探针 runtime config 为两个独立 origin `s1.pc.localhost:6688`、`s2.pc.localhost:6689`。普通构建没有被当作在线资源验收。
+- 真实浏览器尚未完成改密闭环。最初 403 轮 consent GET/POST 成功，但探针在 consent dialog/Agent 开启间停滞；脱敏业务码证实 `/agent/v1/info`、对话列表和事件请求返回 `403 disabled`。后来一轮真实路径完成：真实 project-agent admin POST 为 200，项目 ID只作相等比较并匹配当前项目；read-control 为 connected、实例已登记、`executorMounted=false`；Agent info/history 后续回到 200，网站 `/api/account/me` 为 200，实际发送消息 POST 为 202，界面显示等待执行服务。没有运行 Agent executor。
+- 上述成功轮次之后进入改密 UI，但没有观察到 `/api/account/password` 请求，故没有把它记作改密通过。后续两轮复验未发 Agent admin 请求：探针在分享 toast 的真实关闭步骤卡住；Dom 计数显示 consent 对话框不存在、Agent 开启按钮和关闭状态可见、权限仍在读取。toast 截图/安全结果与之前的成功路径均保存在 `%TEMP%\pc-password-user-path-once-*`；每轮 browser、stage servers、fixture、asset 子进程均关闭，6680–6689 全部空闲。未用 API 绕过实际按钮。
+- 桌面原生登录桥接不在本阶段范围。改密后真实在线编辑器正文自然清空、服务器读取关闭的浏览器断言尚未到达；必须等真实界面闭环再判定，不能由仅 provider session 撤销结果推断。
