@@ -181,3 +181,46 @@ Agent receiver 独立 prepareTerminalClosure 只查询已真实 drain 的同一�
 权威内部 finalizer 只能从同账本读取目标、read/outcome、已验实例回执和实际 doc 关闭库存；同事务重核 grant/instance/currentRun，private/stop 先提交不得被终态复活或释放另一个 run。网络无 closed 布尔入口。manager 真实资源/OS 引用尚须与 Sol 消费者协商；未知历史始终 pending，不以 donePromise 或新实例空库存放行。
 
 本轮额外窄租：run-control.mjs 的正常 terminal 分支、agent-instance-session.mjs 的固定域 terminalControlProofFor。原撤销路径保留。可选配置 account.agent.controlOrigin/controlServerFingerprint256；root 管理端点显式配置，生产尚未挂。
+
+### 正常终态阶段冻结结果与接口（源码 c705c12533abad6d7de565912e90c4cd9947ceed）
+
+本块实现正常 terminal 控制、真实 doc 数据关闭、同实例 RAM 签名回执、finish/query 与只读同账本证据的 finalizer。没有挂独立运行资源/OS scope witness producer，因此没有宣称真实 FIFO 已恢复，也没有改旧 FIFO 成功测试为永久 pending。
+
+1. `run-authority.finish` 在记录 outcome 的同一 SQLite 事务写 `runControlsV2`：`kind:'terminal'`，`closing:[runGrantId]`，`revoked/retained/cancelled/operationFences` 为空；target 精确为 `{authorityId,finishReceiptId,projectId,conversationId,messageId,runId,runGrantId,serviceId,serviceKid,instanceId,instanceGeneration,readReceiptId,outcomeDigest}`。`controlId=terminal-control:<target规范摘要>`；`fenceRevision` 为 finish 的权威序号。正常终态不调用取消 hook。
+2. 每次真实 Agent 数据握手接受前，同账本 `runDocInstancesV1[runGrantId][docInstanceId]` 登记该 doc 实例；finish 锁定全部既有实例加当前 doc 的 `docInstanceIds`。delivery 首次 await 前持久 closing 库存，真实 `service.fencePrincipals` 的实际 close 结果才变 closed。新 doc 空库存不能填掉旧实例的空缺或 pending。
+3. `POST /internal/v2/runs/finish/query` 使用原 finish 完整 body（原 requestId、readReceipt、outcome 和五个目标 ID），独立 `queryFinish` scope；未记录返回 `{recorded:false}`，已记录返回 `{recorded:true,...runGrant,finishPending,finishReceipt}`。原请求重放读取现持久状态；改变 outcome 为 409。不存在网络 finalizer/closed Boolean 路由。
+4. Agent 新入口 `POST /internal/v2/agent/terminal-control` 精确 body `{control,nonce}`。必须 doc 证书 pin，receiver 参数增加 `instanceGeneration` 和 `instanceSession:{identity,terminalControlProofFor}`。原 stop/private `drainControl` 保留；terminal 只调用 `manager.prepareTerminalClosure(control)`，不能 abort/cancel。真实 client 转发同一个 RAM session，不创建第二身份。
+5. manager 返回精确 drain：`{v:1,drainReceiptId,resourceScopeId,resourceWitnessId,eventId,eventDigest,dispatchesOpen:0,connectionsOpen:0,streamsOpen:0,childrenOpen:0,pendingRegistrations:0,oldInstanceUnknown:false}`。这些字段必须来自其实际终态/资源库存；缺独立引用必须 503。固定签名域 `promptcut.agent-terminal-closure.v1` 绑定 POST/固定路径、authority、完整 target、controlId/fenceRevision、当次 nonce、实际 TLS exporter 的摘要、完整 drain 的规范摘要。只在当前实例公钥与同一 generation 下验；跨 TLS、nonce 或新 OS key 不可复用。
+6. doc 可选配置 `account.agent.controlOrigin`（仅显式回环 HTTPS，127.0.0.1 或 ::1）和 `controlServerFingerprint256`；每请求独立 TLS1.3、pin，等待 request/socket 实际 close，回包后再核当前服务 registry。缺配置保持 pending。验过回执仅写 `runTerminalAgentReceiptsV1`，不会产生独立资源证明。
+
+### 独立资源引用交接：只定义消费者，当前无 producer
+
+finalizer 唯一资源来源为同 doc ledger 的 `runTerminalResourceClosuresV1[witnessId]`。网络 terminal receipt 只能引用其 ID，不能写此表；本块没有创建此表的产品路径或测试成功 row。拟由后续真实 root scope observer 经已核验的 publisher/current 注册链写入，必须包含：
+
+- `v:1, source:'root-observed-run-scope-v1', state:'closed', authorityId, witnessId, targetDigest, resourceScopeId`；
+- 完整 `projectId,conversationId,messageId,runId,runGrantId,serviceId,serviceKid,instanceId,instanceGeneration,finishReceiptId,readReceiptId,outcomeDigest`；
+- `rootAuthorityId,rootEpoch(正整数),rootInstanceId,publicationDigest,closureWitnessDigest`。
+
+`targetDigest` 等于持久 terminal target 摘要；resourceScopeId/witnessId 必须等于当前已验 Agent drain 引用。root publication/closure 引用的实际完整 OS tuple、历史和 marker/lock 验证须由独立 producer 完成，不能只把这些摘要从请求复制入表。当前基底没有 G v2 reader，既有 agentInstancesV2.closure 是整 OS 实例关闭，不是可随意复用的单 run 资源收口；run-resources 的 Boolean childTreeWitness 也不够。本块不造第二个 root 权威、不将签名 counts=0 升级为 OS 证明。
+
+finalizer 同事务重核 grant/read/outcome/instance/currentRun/private、全部 required doc 库存、已验 Agent 回执和上述独立引用；普通 `acknowledgeControl` 拒 terminal，即使其调用方给自由 true verifier 也不能旁路。关闭证明未来齐备后 queueState=done 只表示排队条目结清，同时写消息及 grant 的 `terminalOutcome` 保留真实 done/failed/interrupted。当前无可信 producer，成功完成分支尚未实际联验；UI/事件消费者必须按 outcome.status 展示，不能把 queueState=done 当模型成功。
+
+### 本轮首败、因果验证与实际范围
+
+全部原始文件在系统 TEMP；每次命令使用 process-only cuda_Vit Python、主库 models、绝对 silent preload 与 canonical PSModulePath。npm 使用原 wrapper，未绕 global setup/guards；不能把全过程称为零监听。
+
+| 固定源码/步骤 | 原始日志 | 实际结果 |
+|---|---|---|
+| e8deeb36 首红 | pc-run-finish-closure-red-1.log | 2 tests，0 pass，2 fail，124.4903 ms，exit1/native0；真实 SQLite/provider，分别缺持久 terminal 控制及内部 finalizer。非实际 TLS 首红 |
+| b32dd994 首修后 | pc-run-finish-closure-target-1.log | 14/14，0 fail/skip/cancel/native，1105.4844 ms，exit0；包含真实 TLS/WS/文件 close |
+| b369a65c 新重放反例后 | pc-run-finish-closure-target-2.log | 14/14，0 fail/skip/cancel/native，1091.5357 ms，exit0；追加真实跨连接/nonce/新实例拒绝 |
+| b369a65c 类型首次尝试 | pc-run-finish-closure-types-not-started.log | 叶内 node_modules/.bin/tsc.cmd 不存在，CommandNotFoundException，编译未启动、无编译退出码；不是类型通过 |
+| b369a65c 类型实际运行 | pc-run-finish-closure-types-2.log | 主库绝对 tsc 对本叶配置 `-b --force`，0 错、exit0，7046 ms |
+| c705c125 自审补持久 read/旧 doc 库存 | pc-run-finish-closure-target-3.log | 15/15，0 fail/skip/cancel/native，1035.209 ms，exit0 |
+| c705c125 最终类型 | pc-run-finish-closure-types-3.log | 0 错、exit0，7541 ms |
+
+目标命令：`npm test -- server/test/run-finish-closure.test.mjs server/test/run-finish-outcome.test.mjs server/test/run-finish-closure-transport.test.mjs`。最终真实 TLS 项 941.4921 ms：真实 doc factory/SQLite/实例注册/admit/read/finish/query；真实产品 DocService 关闭精确一条 WS；正常 terminal 从不调用 cancelling drainControl；实际文件 close 后同 RAM key 签名可核并持久，但刻意不存在独立 root witness，仍 pending/FIFO 占用。新 doc 的实际空 service.close 库存不能证明旧 doc 仍活 WS 已关闭；没有手造 closed row 或 true 回调。账号发行/registry 与 Agent 无子进程 driver 是受控组件，不是 VH 联验、模型调用、生产跨进程/root OS 证明。
+
+测试还保留原 outcome 的 9 项断言（模型 error+donePromise resolve、read/instance/body 绑定、三种终态、ACK 丢失/SQLite 重开、提交前失败），新 generic ACK 绕过、private 竞态、持久 read 消失、query scope/原请求冲突均拒绝。资源 witness 不足没有改成绿色“完成”。
+
+6600/6601 为本轮实际监听；每次 fixture 等 own server/socket close，文件句柄关闭后清本 TMP。最终 Get-NetTCPConnection 检查 6600–6619 零 LISTEN。无 full、浏览器、模型、节点或部署；未改 Sol 的 runner/events/main/http、run-resources/data-client，也未改 core/central 的旧成功 FIFO 断言。那些调用者仍需真实 outcome + 独立资源 producer 配套后迁移，由 root 另授权，不能将本目标代替共同基线。
