@@ -83,3 +83,21 @@ root已将clean叶快进56a10f07，纳Astra5beb的真实scope provider/角色注
 本次预备Windows真实TLS目标使用6700 Doc/6701 workeridentity；完整6700–6711预检无监听。TMP临时PKI/SQLite/rootchain，真实原instance/run internalhandlers、PoP/exporter、同RAM注册/admit，原inspectAgentScopeSource完整检查实际JSON链。publisher的cgroup/birth/uid为受控OS模型，account sender核验为受控adapter；不降低production createAgentScopeReader的linux-required，也不声称系统root权限/OSclosed。节点根后续应以相同冻结入口配真实Linux reader/publisher、独立controller证书与worker出站证书执行。旧128M控制实验上限不用于SSR worker；root须实测RSS后选本次实验限制，此处没有默认生产预算或吞吐结论。
 
 当前尚未执行这个新的TLS目标、未跑全量/模型/完整Editor；gateway/remoteeventmaster/finalizer/forced退役配对未完成，completionReady仍false。已通过的旧Editor/main基线不得套给这些新代码。
+
+## 固定1ab766d9真实TLS首轮结果
+
+源码1ab766d9930a1615d5756d3bd81fe558f4a60fbd固定期间未编辑。root准Windows独立真实TLS/原Dochandlers/磁盘链窗口后，仅运行 `npm test -- server/test/agent-worker-registration-mtls.test.mjs`。首轮1/1、0fail/cancel/skip，case883.6528ms、suite998.2461ms、工具wall1828ms、exit0；无retry。TMP `pc-worker-registration-1ab766d9-first.log`。初次6700–6711全段空，实际Doc6700、workeridentity6701；teardown实际servers/sockets/SQLiteclose断言通过，结束全段无监听。PKI子进程都是已安装OpenSSL、windowsHide、自建TMP，不读取生产证书。没有模型/浏览器/业务full。
+
+本次真实链：新worker同一个RAM key公开DER → root publisher exactidentity通过真实独立TLS读取 → TMP磁盘ready chain → Doc原instance internalhandler/authority真实PoP → worker自身admit/单grant → Doc签assignment。root-controller证书与worker→Doc证书不同，错误controller身份真实403。Doc登记仍PEM摘要，root target仍DER摘要，原mapping完整核同key。bound前assignmentReady/startTask拒、modelconfig调用0、实际Docreadreceipt0；原publisher bind/原chain验证后assignmentReady真返回bound。第二调度请求不同requestId拒、grant总1、completionReady:false。
+
+准确边界：这是同OSworker模块实际PID/TLS/SQLite/磁盘链，不是child进程、Linuxroot UID/cgroup/birth、真实模型/完整Editor/终态完成。publisher OS与账号sender验证是受控adapter，生产reader没有任何宽免。源码中runClient.close新增等待owned请求及TLSsocket的实际close；assembly已有同worker预登记时核purpose/rootinstance/Docauthority/同DERkey再继续，不能重复configureRegistrationScope导致真实worker注册后assembly启动拒绝。task组装仍复用Hosted factory。
+
+同固定源affected纯目标 session12+task4合16/16、0fail/cancel/skip、274.8935ms/exit0，TMP `pc-worker-registration-1ab766d9-pure.log`；强制绝对父仓库tsc -b --force，exit0/零错误、工具wall7205ms，TMP `pc-worker-registration-1ab766d9-type.log`。没有重跑既有full/Editor，三份目标/类型日志原样保留。report后提交不改变本次product source。
+
+### 根Linux预备配置与接口
+
+入口为 `createAccountTaskWorker({doc,expected,reservation,identityTls,readRootRecord,scopePrepareSource?,workerEventSource?})`。doc是worker自己读的outboundclient `{origin,tls:{key,cert,ca},serverFingerprint256}`；identityTls是workeridentity server自己的key/cert/CA；expected中的clientFingerprint256仅root-controller入站pin，serverFingerprint256必须与identityTls实际leaf一致。root privatekey不交worker/master。expected/reservation必须来自root已耐久的固定slot启动配置；readRootRecord是可信entry配置读同registryDir的epoch文件，Doc仍用原createAgentScopeReader完整rootownership/连续链/currenthead再验，worker读单record绝不代替它。
+
+先 `worker.listen({host:'127.0.0.1',port:根独占端口})`，root才能按原 `/internal/v2/agent/run-scope/identity` RPC取得原schema exact公开DER与真实PID。root发布ready后，gateway只指定 `{projectId,conversationId,requestId}` 调 `prepareTask`，不传旧grant/instance/privatekey；返回Doc签assignment和当前phase。root耐久bind后才 `assignmentReady(实际grant)`/`startTask(可信assembly参数)`。startTask只调用原assembly/Hostedfactory，仍需要真实sameRAM readControl、DocdataClient、remote runEventsSink、onTaskDrained；这些生产参数未配置时拒，不补()=>true。正常prepareSource与workerEventSource必须读durable本机事实，缺失503。本包尚未实现root调度gateway/独立worker CLI或远端eventmaster，因此Linux根可先用固定module构造配置验证身份/准入；不能声称它已自动上线生产worker。
+
+normal闭合还需Astra冻结scopePrepare/scopeTerminal/queryFinish及root真实forced/unassigned/finalizer配对。活跃任务强制中止保原pending/原slot，不把失败启动或新OS自动作closed。root最新内存/CPU/磁盘仅现场快照，SSR必须测实际RSS再取实验限制，不从旧128M控制实验/两槽示例推默认生产值。
