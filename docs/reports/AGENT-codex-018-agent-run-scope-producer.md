@@ -44,7 +44,7 @@ CLI 模式为 initialize / start / bind / close。initialize 必须 root 显式 
 
 源码 `scripts/probes/agent-run-scope-proof.mjs`、`scripts/probes/fixtures/agent-run-scope-worker.mjs`。两个槽只是实验数量，不是生产并发默认。worker 是隔离受控驱动，不是生产 Agent：真实 RAM Ed25519、真实 pinned mTLS、父/子文件 FD 和 TCP，无模型、工具业务或 Doc admission。Doc assignment/terminal 由 root 独立新实验 issuer 签发。全程不把测试自己写的 closed row 当根证据。
 
-root 预建两个名称严格为 `pcagentrunproof<同一16位随机hex>a.service` / `...b.service` 的固定 unit，各自新 root 目录、公开 reservation 目录、由目标非 root UID 拥有的 holdFile 父目录；每槽独立 registryDir/authorityId/slotId/端口。所有可信配置放全祖先 root-owned、无组/他人写权限的 `/run/<唯一实验目录>`；输出用新 `/var/tmp/<唯一实验目录>/out`，脚本只 exclusive mkdir 这一个新 out，不 chmod 既有路径。
+root 预建两个名称严格为 `pcagentrunproof<同一16位随机hex>a.service` / `...b.service` 的固定 unit，各自新 root 目录、公开 reservation 目录、由目标非 root UID 拥有的 holdFile 父目录；每槽独立 registryDir/authorityId/slotId/端口。所有可信配置放全祖先 root-owned、无组/他人写权限的 `/run/<唯一实验目录>`；输出也用新 `/run/<唯一实验目录>/out`，脚本只 exclusive mkdir 这一个新 out，不 chmod 既有路径。
 
 service 必须 `Type=simple; User=<实验UID>; Restart=no; KillMode=control-group; Delegate=no; TimeoutStopSec=5`，`ExecStart=/usr/bin/node <可遍历的固定源码>/scripts/probes/fixtures/agent-run-scope-worker.mjs --config <worker配置>`。基础 unit **不能写 Slice=system.slice**：之前真实 systemd249 已证明其与 runtime drop-in 赋值不符合本 adapter 前提。runtimeAdapter 精确 root-owned fragment 路径及 SHA256、baseDropIns 白名单、`/run/systemd/system/<unit>.d/90-promptcut-root-slice.conf`；原文件存在须有该 publisher 自有 receipt，未知配置一律拒绝。root 所有操作使用同一外部互斥约定，不允许其它 controller 同时启停这两个 unit。
 
@@ -56,7 +56,7 @@ publisher 配置精确：`{v:1,expected,registryDir,identity:{origin,keyFile,cer
 
 worker 配置精确：`{v:1,expected,registryDir,port,observerPort,holdFile,tls:{keyFile,certFile,caFile,clientCertFile,rootClientFingerprint256}}`。registry/config 公共元数据可读，私钥文件仅正确 UID/root 可读；启动后 reservation 身份只读一次，RAM 私钥不落盘。对子进程 SIGTERM 用持续注册 handler 加 stopping 幂等，避免 systemd 二次 SIGTERM 抢掉两秒负例。
 
-运行命令：`node scripts/probes/agent-run-scope-proof.mjs --config /run/<唯一目录>/probe.json --out /var/tmp/<唯一目录>/out`。不自动重跑。采样/peer 等待使用30秒阶段期限，底层已审 root systemctl 原语保留120秒硬超时（不为探针改 Asset 安全原语）；因此不能宣称总进程保证30秒。root 外层 bounded runner 需保留原始结果并按精确 tuple 收尾，不杀未知 PID。
+运行命令：`node scripts/probes/agent-run-scope-proof.mjs --config /run/<唯一目录>/probe.json --out /run/<唯一目录>/out`。不自动重跑。采样/peer 等待使用30秒阶段期限，底层已审 root systemctl 原语保留120秒硬超时（不为探针改 Asset 安全原语）；因此不能宣称总进程保证30秒。root 外层 bounded runner 需保留原始结果并按精确 tuple 收尾，不杀未知 PID。
 
 A/B 实际先初始化、bind、两角色 TCP/文件持有确认。先经真实 mTLS 请求原 RAM key 签 intent；publisher 锁内将完整 Doc terminal 与 intent fsync，再 stop。A MainPID birth 消失、子 birth 存在且文件/TCP仍持有、原 scope 仍 active/populated1 时，真实 root reader 必须因锁拒绝；原固定 eventsFD 最终 populated0、父子 birth gone、双 EOF+close，B 原 tuple/文件/连接仍活才继续。closure fsync 后才释放 scope，最终 marker+无锁才供 reader 导入。B 随后独立关闭。
 
@@ -108,3 +108,9 @@ A/B 实际先初始化、bind、两角色 TCP/文件持有确认。先经真实 
 | server/account/protocol.mjs | 6a0f40fd89df3a8ae75a76a53627927f71b4aebb5fc4ee0b992d4793587a5ecc |
 
 未修改 provider/instance/doc-agent-assembly/Sol 执行器；没有将尚缺的资源 source 填入 runTerminalResourceClosuresV1，没有弱化旧 core/FIFO 成功承诺。实际 Linux 通过之前，本报告不将 schema/pure green 写成 OS 关闭通过；Linux 通过之后仍需后包接业务 Doc 签发、实际执行器与 finalizer。
+
+## root 单次实际 Linux 回传
+
+root 导出 fc47062e 十文件原 blob，全部 hash 匹配；单次10/10通过，proof8357 ms、外层12.05秒。A在3823 ms时父birth gone、子live且文件/TCP仍持有、populated1；5825 ms同原FD为populated0、父子gone与EOF/close。A关闭时B原tuple/资源保持。四项坏证据真实reader均拒绝。两unit最终inactive/MainPID0，6540–6549无监听；四生产PID279515/279516/279517/9395、NRestarts0前后相同。原始根证据为TMP `pc-agent-scope-linux-fc47062e-once.result.json`、节点 `/run/pcagentrunproof6e67e1c1f4514d4e/root-summary.json`。本Agent未执行节点。
+
+按root运行审查，将上文out示例纠正为新 `/run/<namespace>/out`，旧稿 `/var/tmp/.../out` 作为不合可信输出父目录约定的文档错误保留此记录；源码fc47062e不改，holdFile仍为自有UID临时目录。此前“未跑”表是交接当时的状态，本节追加实际root结果，不抹掉历史。通过边界是受控Doc签发、真实Linux资源生命周期及root reader；业务Doc签发/SQLite投影/生产worker/FIFO仍未接。
