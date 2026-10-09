@@ -95,7 +95,7 @@ PushQueue = { enqueue(unit, priority), start(), stop(), stats() }
 | 级 | 条件 |
 |---|---|
 | 0 `normal` | 共享档，而且下面几条都不命中 |
-| 1 `low` | 卡是 `canvasHeavy`、图卡、`unknown`、`belowDependent`，或本地档（A5）；或者这一段里 `data:image` 字节占全部 HTML 字节一半以上（A3b 块级；按帧文件计，用与 `scripts/probes/snapshot-size-probe.mjs` 的 `dataImageBytes` 相同的算法，复制过来，不引用探针） |
+| 1 `low` | 卡是 `canvasHeavy`、素材效果卡、`unknown`、`belowDependent`，或本地档（A5）；或者这一段里 `data:image` 字节占全部 HTML 字节一半以上（A3b 块级；按帧文件计，用与 `scripts/probes/snapshot-size-probe.mjs` 的 `dataImageBytes` 相同的算法，复制过来，不引用探针） |
 | 2 `lowest` | 这一段里有超体积（`oversize`）的帧 |
 
 卡级、块级取低的那个（数字大的）。流一律按 1。
@@ -198,7 +198,7 @@ PushQueue = { enqueue(unit, priority), start(), stop(), stats() }
 2. **`priority` 是最终级别**：数字 0 / 1 / 2，由调用方（钩子）按第 4 节的表算好，队列不再二次判定。
 3. **`resultFor` 是异步的**，返回 `Promise<result | null>`。
 4. **挂推送队列的三种方式**：构造参数、赋值 `pipeline.pushQueue`、`createPushQueue` 自动挂上，三种都认。注入时钟时，`clock: { now, setTimeout, clearTimeout }` 与分开的三个参数都认。
-5. **数据图卡只认明确标记的**：card plan 里没有图卡字段的卡，不当作图卡；只有 plan 条目带 `graphCard: true` 才算。
+5. **数据素材效果卡只认明确标记的**：card plan 里没有素材效果卡字段的卡，不当作素材效果卡；只有 plan 条目带 `graphCard: true` 才算。
 6. **最后一段的帧数**：钩子按 card plan 里 control 的帧数决定最后一段到哪里结束；卡不在 card plan 里时，整段按 60 帧算。
 7. **`data:image` 过半**：指严格大于一半。
 8. **清单写失败**：sink 里只记日志（第 3 节），推送队列里算失败、照退避重试。清单超过 256 KiB、或这一段磁盘上一帧都没有时，这一段丢弃，不重试。

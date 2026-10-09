@@ -163,7 +163,7 @@ R9 落地时把这个上下文并进共享渲染器：`pixelMapGl` 不再自己 
 - **帧率制与 `glRoute` 下拉。** 项目 `fps` 提供 24 / 25 / 30 / 60 四档，在项目选项面板 `src/editor/ProjectSettingsDialog.tsx` 里切换；**同一面板再加 `glRoute` 下拉**——`project.ts:260` 的 `Project` 接口加字段 `glRoute?: 'perDocument' | 'shared'`，缺省按宿主能力（`lowMemory` 时 `shared`、否则 `perDocument`）；**切换后两个舞台重建 `glHost`，并和切 fps 一样重走 K1 的 `ProbeGate` 遮罩**（`device` 变了，新 `device` 下已有记录的跳过）。整条约束的全文见 `docs/archive/restructure_planning/r2-r7-task.md` 的「约束」第 1 条。
 - **不改导出像素基线的其余部分**：`FrameScene` 的 `placeholder` 分支不动、不加包裹层；`Stage` 的六个新 prop 在导出页不传。M5 明写的抗锯齿边缘差异是这一条的**唯一例外**，验收按 M5 的口径。
 - **页面代码只按宿主能力表分支，不按平台名分支**（J4）。`offscreenGl` / `lowMemory` 的判据已经落地在 `stageRpc.ts:322` / `:329`。
-- **在线浏览器模式下同样成立**：canvas 卡走同一套 Worker，不请求任何本机进程；那个模式加载不了用户卡 / 图卡，所以只有内置 canvas 卡参与。
+- **在线浏览器模式下同样成立**：canvas 卡走同一套 Worker，不请求任何本机进程；那个模式加载不了用户卡 / 素材效果卡，所以只有内置 canvas 卡参与。
 
 ## 验收
 

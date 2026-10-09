@@ -1004,12 +1004,12 @@ W6 需要用户配合的物理操作：笔记本切到手机热点。阿里云�
   - 用户侧流程先由 Gemini 出稿（0.2 节补充）：离线提示、素材导入置灰；加入表单已在 C10a。主会话核实后再交 Opus。
   - 开工前按「查资料先行」查 IndexedDB 配额、浏览器媒体元素的鉴权限制。
 - 分支 `claude/c10-browser`（`opus-dev-high`）、`claude/c10-tests`（`opus-dev`）；端口段 5420～5429、5430～5439。
-- 验收：G0 通用门槛，加上 G0-R，加上 `cloud-task.md` L 节的验收（含 L6 低内存档），环境是纯浏览器。放本机的项目经局域网直连的那一遍是 **PC 窗口项**，不挡合入。（2026-09-27 按 `c10-contract.md` 第 8、9 节改：L 节验收里「后台 30 秒内预渲染完锚帧」「拖动 3 秒内后台不新增条目」两条移到 M7；「素材输入的音频图卡报错」一条删去，图卡一律显示「电脑 + 离线」图标；以契约第 20 节 C10-A1～A10 为准。）
+- 验收：G0 通用门槛，加上 G0-R，加上 `cloud-task.md` L 节的验收（含 L6 低内存档），环境是纯浏览器。放本机的项目经局域网直连的那一遍是 **PC 窗口项**，不挡合入。（2026-09-27 按 `c10-contract.md` 第 8、9 节改：L 节验收里「后台 30 秒内预渲染完锚帧」「拖动 3 秒内后台不新增条目」两条移到 M7；「素材输入的音频素材效果卡报错」一条删去，素材效果卡一律显示「电脑 + 离线」图标；以契约第 20 节 C10-A1～A10 为准。）
 - **2026-09-27 定稿**（PC 主会话；契约 `docs/plan/c10-contract.md` 第 1 版，发给用户但不等）：
   - 前置核对：J1～J4、K1～K6、A3b 都已落地，L 节不需要另开 R 系列阶段；硬前置是 C10a、HT-a 合入 main，C10 的分支在那之后从 main 拉。
   - 开工前的可行性探针 `claude/c10-probe`（契约第 15 节）：在线普通档的两个舞台用子域，编辑器页与两个舞台都带 `Origin-Agent-Cluster: ?1`，主文档长任务为 0；后台舞台 `opacity: 0` 留在视口里、父页判空闲、舞台用 `setTimeout` 逐帧、页面隐藏就停；L2 软上限 256 / 64 MiB。
   - **L1 并入 M7**〔裁：语义写的是后台舞台「从文档服务的任务队列认领」快照任务，分布式队列设计 Q1 已定页面不移植键的计算；L1 的自驱要页面算键，先做再在 M7 换成认领会整个作废。契约第 8 节〕。L 节验收里「后台 30 秒内预渲染完锚帧」「拖动 3 秒内后台不新增条目」两条随之移到 M7。
-  - 分支增加 `claude/c10-ui`（`opus-dev`，端口段 5700～5709）：用户卡与图卡的时间轴提示、在线置灰、离线提示与本地备份、L5 预留接口、计划文档勘误。
+  - 分支增加 `claude/c10-ui`（`opus-dev`，端口段 5700～5709）：用户卡与素材效果卡的时间轴提示、在线置灰、离线提示与本地备份、L5 预留接口、计划文档勘误。
   - 验收以契约第 20 节 C10-A1～A10 为准。
 
 - **〔2026-09-27 用户定〕低内存档的完整规则**：文档服务的成本记录模块、页面的界限搜索、队列优先级（预渲染任务排在本机判重之后）；C10a 的过渡做法随之退出（`c10-contract.md` 第 3 节，`mechanism/rendering.md` 与 `mechanism/document-service.md`）。
@@ -1085,7 +1085,7 @@ W6 需要用户配合的物理操作：笔记本切到手机热点。阿里云�
 | 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:<端口>/?export=1"` | 1800/1800 帧逐像素相同 |
 | 快照重放一致 | `node scripts/verify-unified-frames.mjs` | PASS |
 | 导出像素基线 | 临时起 main 的 worktree，逐像素比两边导出 | **0 不同、0 缺失**；要变须事先经用户确认 |
-| 预渲染探针 | `ready-index-probe`、`stream-produce-probe`（含 `--group`）、`preview-fallback-probe`（含 `--page-preload`）；改到取帧、解码、图卡视频源、`src/render/frameMedia.ts` 时另跑 `video-source-cadence-probe`（视频取帧节奏的回归基线，2026-09-30 起）与 `video-seek-race-probe --mode fixed --busy --settle 0 --loops 300` 三实例并行（取帧竞态的回归基线，2026-10-01 主会话据 `claude/cadence-race` 加：节奏探针抓这类竞态太钝，改前每轮都能复现） | 全部退出码 0；`video-source-cadence-probe` 另要 `fails: []`；`video-seek-race-probe` 另要 `stale`、`wrongPixel` 都是 0。探针里的耗时数字（如 `stream-produce-probe` 的 15 帧分段编码 p50，原门槛 ≤ 300 ms）只记录，不作通过条件，在哪台机器上跑都一样判 |
+| 预渲染探针 | `ready-index-probe`、`stream-produce-probe`（含 `--group`）、`preview-fallback-probe`（含 `--page-preload`）；改到取帧、解码、素材效果卡视频源、`src/render/frameMedia.ts` 时另跑 `video-source-cadence-probe`（视频取帧节奏的回归基线，2026-09-30 起）与 `video-seek-race-probe --mode fixed --busy --settle 0 --loops 300` 三实例并行（取帧竞态的回归基线，2026-10-01 主会话据 `claude/cadence-race` 加：节奏探针抓这类竞态太钝，改前每轮都能复现） | 全部退出码 0；`video-source-cadence-probe` 另要 `fails: []`；`video-seek-race-probe` 另要 `stale`、`wrongPixel` 都是 0。探针里的耗时数字（如 `stream-produce-probe` 的 15 帧分段编码 p50，原门槛 ≤ 300 ms）只记录，不作通过条件，在哪台机器上跑都一样判 |
 
 ---
 

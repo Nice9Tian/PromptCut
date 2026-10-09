@@ -5,7 +5,7 @@
 依据：
 
 - 语义：
-  - `docs/semantics/product/platforms.md`「面向的平台」（低内存档不当节点）、「渲染节点」（纯浏览器只认领本人产生的、不需要本机转码的快照任务，内置卡片与本页能运行的用户卡（2026-10-06 改，`online-card-exec-contract.md` 第 7 节；图卡任务不认领）；播放拖动时不认领新任务、手里那一批做完为止；绝不替别的用户干活）、「在线浏览器模式」；`docs/semantics/mechanism/platforms.md`「渲染节点」；
+  - `docs/semantics/product/platforms.md`「面向的平台」（低内存档不当节点）、「渲染节点」（纯浏览器只认领本人产生的、不需要本机转码的快照任务，内置卡片与本页能运行的用户卡（2026-10-06 改，`online-card-exec-contract.md` 第 7 节；素材效果卡任务不认领）；播放拖动时不认领新任务、手里那一批做完为止；绝不替别的用户干活）、「在线浏览器模式」；`docs/semantics/mechanism/platforms.md`「渲染节点」；
   - `docs/semantics/product/document-service.md`「渲染任务队列」（只记账不分配；只把权限关，纯浏览器只见本人任务、由文档服务保证）、「会话与传输」；`docs/semantics/mechanism/document-service.md`「渲染任务队列」（拉取式、节点自己挑、指纹前置过滤、完成、断开与超时、优先级）、「会话与传输」；
   - `docs/semantics/product/rendering.md`「重管线：预渲染」（不同环境的结果不混用；两档）；`docs/semantics/mechanism/rendering.md`「舞台」「重管线：预渲染」（卡片级指纹锁、预渲染结果的复用与接手）。
 - 计划：`docs/plan/Master-Execution-Plan.md` 第 6.5 节 W7、第 7 节 M7、第 8 节、第 9 节；`docs/plan/TASK-distributed-prerender-queue.md` 第 2 节 M7 行、第 6 节 E5；`docs/plan/distributed-prerender-queue.md` 第 2、2.1、4.2～4.4 节与 Q1、Q2；`docs/plan/render-queue-contract.md` A、B、D、F、I、J 节；`docs/plan/c10-contract.md` 第 2、5、7、8、18 节；`docs/plan/c10-research.md` Q4、Q5；`docs/plan/http-transport-contract.md` 第 4、9 节与 `docs/reports/REPORT-HT-a.md`；`docs/plan/auth-contract.md` 第 5、6、8 节；`docs/plan/c10a-contract.md` 第 8、9 节；`docs/plan/cloud-task.md` L1 与 L 节验收；`docs/plan/m6c-contract.md` X3～X5。
@@ -38,7 +38,7 @@
 |---|---|
 | 在线普通档的后台舞台当 `profile: 'browser'` 节点：开 render 连接、报到、只 watch 本项目、认领、续约、让路、放回（第 2、5 节） | 低内存档当节点：不做（语义） |
 | 浏览器可做的卡怎样落到浏览器的环境；锁闲置接手（第 3 节，D1、D2） | 纯浏览器认领 plan、切分：不做（设计规则 6、队列 `plan-profile`）。没有能切分的节点在线时浏览器不干活 |
-| 生成快照执行器：后台舞台的 `bake` 工作项，逐帧生成快照，压缩交父页（第 4 节，D3） | 轨道流、要转码的任务、本地档（整场景）快照、本页运行不了的用户卡与图卡、改过源码的内置卡：不认领（规则 1～4）；本页能运行的用户卡可以认领，图卡任务因整屏快照体积超限不认领（2026-10-06 改） |
+| 生成快照执行器：后台舞台的 `bake` 工作项，逐帧生成快照，压缩交父页（第 4 节，D3） | 轨道流、要转码的任务、本地档（整场景）快照、本页运行不了的用户卡与素材效果卡、改过源码的内置卡：不认领（规则 1～4）；本页能运行的用户卡可以认领，素材效果卡任务因整屏快照体积超限不认领（2026-10-06 改） |
 | 两档产物：原尺寸 HTML 快照与小尺寸 WebP，推素材服务、清单写内容库、`task.complete`（第 4 节，D5） | 替别的用户干活，含同名不同设备：不做（E5） |
 | 自产的块进页面内快照库；层表与实际出键一致（第 4 节，D12） | 非 Chromium 内核的浏览器当节点：一期不做（D14） |
 | 凭证：render 连接票据、子协议、HT-a 会话层、写票据续签；profile 与凭证绑定（第 5 节，D9、D10） | 放本机的项目（局域网主机、明文 http 页面）里当节点：随 PC 窗口项（C10 第 13 节） |
@@ -78,7 +78,7 @@
 ### 3.2 节点自己挑的（`filterClaimable`，现有规则 0～6）
 
 - 快照任务、`tier: 'shared'`、重度 `light` / `medium`；
-- 不要转码、不是流；用户卡、图卡要节点报了对应能力；`requires.cardSources` 里每张卡的代码身份节点手里都有（没改过的内置卡由 `codeVersion` 覆盖，契约 B.4 末；2026-10-06 改）；
+- 不要转码、不是流；用户卡、素材效果卡要节点报了对应能力；`requires.cardSources` 里每张卡的代码身份节点手里都有（没改过的内置卡由 `codeVersion` 覆盖，契约 B.4 末；2026-10-06 改）；
 - `requires.codeVersion` 等于页面嵌入的代码版本；
 - 建议另加浏览器自己的一条：只接独立卡（审阅表 `compositing: 'independent'`），切分方在给浏览器的那一份细任务里写 `input.compositing`（D4）。
 
@@ -224,7 +224,7 @@ G0 + G0-R（改了预渲染与快照路径）；桌面导出像素基线不变�
 |---|---|
 | M7-A1 | E5 分发：成员 B 的纯浏览器节点在 A 一整轮发布、切分、完成期间，收到 A 的任务消息 0 条（`queue.snapshot`、`task.opened`、`task.taken`、`task.closed`）；B 用与 A 同名、不同设备进入时同样 0 条 |
 | M7-A2 | E5 认领：B 的节点拿 A 的任务 id 认领一律回 `forbidden`（不带 state）；认领 plan 回 `plan-profile`；D9 做了的话，B 以 `pc` 报到回 `forbidden` |
-| M7-A3 | B2：本人任务里各放 heavy 快照、流、plan、本地档、本页运行不了的用户卡与图卡（没有对应代码身份）、改过源码的卡若干，跑满 60 s：这些被纯浏览器认领 0 次；light / medium 共享档照常认领并完成 |
+| M7-A3 | B2：本人任务里各放 heavy 快照、流、plan、本地档、本页运行不了的用户卡与素材效果卡（没有对应代码身份）、改过源码的卡若干，跑满 60 s：这些被纯浏览器认领 0 次；light / medium 共享档照常认领并完成 |
 | M7-A3b | 2026-10-06 新增：本页能运行的用户卡任务照常认领并完成（`online-card-node-probe.mjs` A-1~A-5） |
 | M7-A4 | 承接 L1（笔记本判）：新项目、10 秒时间轴、3 张没被预渲染过、实测为重的独立内置卡〔裁：原写「3 张重 Motion 卡」；Motion 卡在快机器上会判轻、不产任务，验收探针 `claude/m7-accept-probe` 查出，主会话 2026-09-28 改述〕；能切分的节点在线；页面可见且空闲。从加载遮罩撤下起 30 秒内，3 张卡的锚帧段都由纯浏览器认领并完成：`snap/` 块在素材服务、清单在内容库、页面内快照库有条目、层表指向浏览器指纹（D15） |
 | M7-A5 | 承接 L1：生成快照中开始连续拖动 3 秒：拖动开始后发出的 `task.claim` 0 条；拖动开始后新完成的帧 ≤ 1；那一帧之后放回 1 次、`attempts` 不变；拖动期间页面内快照库不再新增生成快照产出的块；停下超过 500 ms 后恢复认领 |

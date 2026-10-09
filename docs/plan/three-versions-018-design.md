@@ -19,7 +19,7 @@
 | `auth-contract.md` §8；`hosted-render-contract.md` §1.6、§7.5 残余；`cloud-agent-contract.md` §4.4、§9 | 任意项目票据凭已知hash可读任何素材 | `server/asset-service.ts` 的真实 storage selector按project隔离，media/snap/px、索引、staging、tier、thumb、stream、worker、转码及队列产物全覆盖；见素材协议 |
 | `cloud-agent-contract.md` §9、§23–28；`cloud-agent-task.md` J | 本机与云端工具一致；pending工具和登录通路未完成 | 按下文真实23个pending及额外欠项补齐；§9.4d/§27/§28的登录上传方向失效；spawn_agent固定关闭，不算待实现 |
 | `online-card-exec-contract.md` 隔离/执行/素材授权；`hosted-render-contract.md` §1、§5a、§7、§8a | 执行隔离和服务身份已实现，不能绕过项目读 | 保留Ed25519服务身份、角色白名单、隔离进程，追加project ACL/产物归属；舞台不接账号cookie，不向卡代码交凭证 |
-| `online-card-exec-contract.md` 的出口限制/Connection-Allowlist fallback、`platforms.md` 2026-10-08补记；旧集成两条〔裁〕 | 不支持Connection-Allowlist就不执行、外链不能加载，均已作废 | 所有浏览器执行用户卡/图卡，图片/字体/样式/脚本外链照常；三版本不做卡片出口护栏。保留stage/editor分源、握手与project素材隔离；改 `src/online/{isolation,cardRuntime,stagePolicy.mjs}`及真实nginx模板 |
+| `online-card-exec-contract.md` 的出口限制/Connection-Allowlist fallback、`platforms.md` 2026-10-08补记；旧集成两条〔裁〕 | 不支持Connection-Allowlist就不执行、外链不能加载，均已作废 | 所有浏览器执行用户卡/素材效果卡，图片/字体/样式/脚本外链照常；三版本不做卡片出口护栏。保留stage/editor分源、握手与project素材隔离；改 `src/online/{isolation,cardRuntime,stagePolicy.mjs}`及真实nginx模板 |
 | `hosted-render-contract.md` 数字容量与“已满/本机降级”、`agent.md`旧发起页面专属选区 | 数字先沿用并由节点复核，超容量旧拒绝及原页专属选区失效 | `server/hosted-render/{limits,broker,main,isolation}.mjs`持久排队、Agent优先；`get_selection`改项目全员在线选区，标用户名和发起人，离线发起人用非实时快照；没有生产旧对话迁移 |
 | `four-stage-deploy-checklist.md` A3/A4/B1/B4；`HANDOFF-four-stage.md` §4、§5甲乙、旧周额度与笔记本 | 三版本合一、只补丁、不备份整数据、等5分钟/3小时、模型密文待用户提供等历史句子 | 三版各完整包+patch；一致备份和实际恢复；旧测试项目临时例外三版适用；cipher已经待导入；网站后端先、site最后；新主分工Sol/Luna/Astra |
 
@@ -327,7 +327,7 @@ guard包不能只删在线execGate：真实Linux云worker `vite-gate.mjs`有出�
 
 0.7.19依赖但不提前扩0.7.18：另派Sol `019-platform-gates`锁 `src/online/{lowMemory,stageWatch,device,l2,l2Costs,browserNode}.ts`和`src/online/stagePolicy.mjs`（guard-reversal移交后）及相应render闸门；依既定顶配/标准/精简/低配的名字、文案、位置，不再标待决；另派Sol `019-save-offline`锁proc/sync/project history快照与离线三方逐项窗口（018-file-recovery移交后）；Luna做覆盖清单/真机核对表；Astra只在崩溃与重连竞态确有难题时派。0.7.20另派Sol `020-selective-compensation`消费018 history/password ledger，Sol `020-join-requests`消费account project v2，Luna写冲突矩阵；history中央修改回cloud-glue owner审后串行接入。新版本端口重新租段，每段十个，不复用正在跑的上版服务。三版本所有终点均保留。
 
-四档气泡逐字为“这台设备运行在顶配模式”“这台设备运行在标准模式”“这台设备运行在精简模式：复杂的效果交给云端渲染”“这台设备运行在低配模式：播放时只显示已渲染好的画面”；所有档都在预览窗口上方提示，几秒后自动消失，不能另起更名文案。P2纯浏览器超过图卡体积上限不认领仍保留，和P1所有浏览器画面执行是两件不同能力。取消出口限制和以后跨服务器调度只同步最新TODO，不塞回三版本。
+四档气泡逐字为“这台设备运行在顶配模式”“这台设备运行在标准模式”“这台设备运行在精简模式：复杂的效果交给云端渲染”“这台设备运行在低配模式：播放时只显示已渲染好的画面”；所有档都在预览窗口上方提示，几秒后自动消失，不能另起更名文案。P2纯浏览器超过素材效果卡体积上限不认领仍保留，和P1所有浏览器画面执行是两件不同能力。取消出口限制和以后跨服务器调度只同步最新TODO，不塞回三版本。
 
 ### 后续调度实施包与验收增量
 
@@ -346,7 +346,7 @@ guard包不能只删在线execGate：真实Linux云worker `vite-gate.mjs`有出�
 | Agent ACL/FIFO/read | A建shared，B/C同时发，A/B各多页面；read前/后kick/exit | 一currentRun、FIFO arrivalSeq和队列位置；private creator只读、只有owner可切；切私有立刻other initiator停+queued作废+SSE不再有字节；共享已读run继续但旧账号各读/发/next全部拒；项目关/删压过例外 |
 | consent/Agent UI | 同账号两个设备首次使用；拒绝再用；接受后改密/退出重登；直调send | 精确文案/两按钮，拒绝消息数/队列数/model调用数均0，下一次重弹，接受跨设备与重启保持；伪造客户端accepted/别账号consent拒，private仍显示托管方可读事实 |
 | all-member selection | A/B各两页面、C空选区；发起B离线/踢出，read-confirmed shared run保留 | 全部有效在线成员用户名和各页选区；B名字带“（当前用户）”，离线B仅发送快照且非实时；C空仍有条目，删clip明确missing，撤销立即移除live，另一project无数据 |
-| card外链/分源 | 同一用户卡/图卡加载受控图片、字体、CSS、JS，四浏览器含不支持allowlist | 全部画面执行/资源正常；不得恢复外发拦截，不以无allowlist降档；分源editor DOM/cookie摸取失败，账号CSRF拒、跨项目素材拒；截图交root事后审 |
+| card外链/分源 | 同一用户卡/素材效果卡加载受控图片、字体、CSS、JS，四浏览器含不支持allowlist | 全部画面执行/资源正常；不得恢复外发拦截，不以无allowlist降档；分源editor DOM/cookie摸取失败，账号CSRF拒、跨项目素材拒；截图交root事后审 |
 | render capacity | 保留旧2+1任务/16+1连接压力输入，追加均含自定义卡的多项目、合格本地/失格/离线/迟到、Agent look争用、manager重启 | 0.7.18 云端单活跃项目，超额queued并恢复，无已满提示或云端满后的静默本机回退；本地优先必须完整授权/能力/可用性核验；对应任务书 RS18-local/queue，新增未跑。原初值不能代替新约束；保留原requestId幂等、普通任务之后继续及改private/off/delete取消失权产物、不借队列继续写断言 |
 | 同hash素材/worker | A上传hash H，B知道H；另测B合法独立上传H | 各接口A权限读成功/B未入库读404；chunks/complete/thumbnail/PCM/stream/tier/key/worker/manifest都不漏；B自己上传正常；delete A不影响B；撤旧流、Private visual不能靠asset hash读 |
 | 工具与隔离 | 短speech/两镜头/移动点/人物fixture，受控网站，PCM正弦；真实模型示例句 | 不只status，实际result写doc且run/op相连；同project不同conversation browser隔离，系统/其它project/path/内网/redirect拒，安装参数白名单；spawn精确中文固定回复，代下载不上凭据 |

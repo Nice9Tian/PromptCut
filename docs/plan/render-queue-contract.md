@@ -350,7 +350,7 @@ export function filterClaimable(tasks, node) // → task[]（保持原顺序）
   profile: 'pc' | 'host' | 'browser',
   userId?: string,
   envFingerprint: string,
-  cardEnvFingerprint?: string,    // 只对 browser 有意义:envFingerprint 再加在线卡片运行时版本,用户卡、图卡的任务按它比(2026-10-06)
+  cardEnvFingerprint?: string,    // 只对 browser 有意义:envFingerprint 再加在线卡片运行时版本,用户卡、素材效果卡的任务按它比(2026-10-06)
   codeVersions: string[],
   cardSourceVersions?: Record<cardId, string[]>,
   capabilities: { transcode: boolean, userCards: boolean, graphCards: boolean, memoryMB?: number },
@@ -369,7 +369,7 @@ export function filterClaimable(tasks, node) // → task[]（保持原顺序）
 | 2 | `task.kind === 'stream'` 或 `requires.transcode === true`，且 `!capabilities.transcode` |
 | 3 | `requires.userCards === true` 且 `!capabilities.userCards`；或 `requires.graphCards === true` 且 `!capabilities.graphCards` |
 
-纯浏览器节点自 2026-10-06 起在本页能运行时报 `userCards` / `graphCards` 为真；规则 1 对它的用户卡、图卡任务比的是 `cardEnvFingerprint`（`online-card-exec-contract.md` 第 7 节）。
+纯浏览器节点自 2026-10-06 起在本页能运行时报 `userCards` / `graphCards` 为真；规则 1 对它的用户卡、素材效果卡任务比的是 `cardEnvFingerprint`（`online-card-exec-contract.md` 第 7 节）。
 | 4 | 重度策略（见下）不允许 `weight.class`。缺 `weight` 按 `medium` |
 | 5 | `requires.memoryMB` 是数且 `capabilities.memoryMB` 是数，且前者大于后者 |
 | 6 | `task.kind === 'plan'` 且 `profile === 'browser'` |

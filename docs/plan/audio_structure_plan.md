@@ -22,12 +22,12 @@
    出处：验证：`chunk.all` 预滚 4 秒 `maxRel 1.8e-7`；`longTail` 预滚 4 秒 `0.0040`、8 秒 `1.8e-5`。
 4. **8% 只能比编码前的 PCM。** AAC 往返之后，带噪声的信号最大差 54%，比成片没有意义。
    出处：验证：`roundtrip["music:mp4a.40.2"].maxRel 0.5407`。
-5. **现在「测整条时间轴响度」量的不是导出的那条声音**：它用 ffmpeg 直接混素材，不带音频效果，也跳过音频图卡。重构之后，响度直接量导出同一条混音，这是修正而不是回归。
+5. **现在「测整条时间轴响度」量的不是导出的那条声音**：它用 ffmpeg 直接混素材，不带音频效果，也跳过音频素材效果卡。重构之后，响度直接量导出同一条混音，这是修正而不是回归。
    出处："预览不用它……测响度(measure_audio 的 timeline 档,浏览器把这份清单发给服务端)"——`src/kernel/audioPlan.mjs` 文件头；`audioPlanOf` 只收 `c.mediaId` 有素材的片段；`server/vite-plugin-audio.ts` 的 timeline 分支只拼素材文件。
 
 ## 1. 假设
 
-- **范围**：预览播放、音频图卡求值、导出混音、响度测量、时间轴波形，一共五块，全部改到浏览器里做。**不在范围内**：
+- **范围**：预览播放、音频素材效果卡求值、导出混音、响度测量、时间轴波形，一共五块，全部改到浏览器里做。**不在范围内**：
   - 语音转文字（`python/promptcut_stt`，分析类功能）；
   - 画面合成（ffmpeg 的 `composePreview`）；
   - 画面的逐字节对账。
@@ -43,9 +43,9 @@
 
 | 块 | 现在 | 改成 | 文件 |
 |---|---|---|---|
-| 素材解码（给音频图卡） | 服务端 `GET /@media/<hash>/pcm`，由 ffmpeg 按区间裁 | Worker 里 JS 解封装 + `AudioDecoder` 按区间解 | `src/render/cards/audioSources.ts`、`server/vite-plugin-media.ts` |
+| 素材解码（给音频素材效果卡） | 服务端 `GET /@media/<hash>/pcm`，由 ffmpeg 按区间裁 | Worker 里 JS 解封装 + `AudioDecoder` 按区间解 | `src/render/cards/audioSources.ts`、`server/vite-plugin-media.ts` |
 | 预览播放 | 每段声音一个 `<audio>` 元素，按 `planSync` 追播放头；挂了效果的才接进 Web Audio | 一个 `AudioContext` 调度引擎：Worker 提前 2 秒算块，`AudioBufferSourceNode` 按时刻拼接，后面接效果链 | `src/editor/preview/MediaLayers.tsx`、`src/audio/previewAudio.ts` |
-| 音频图卡预览 | 整段算完编成 WAV 再交给 `<audio>` | 和素材走同一个调度引擎，边算边播 | `src/audio/cardAudio.ts` 的 `acquireCardAudioClipUrl` |
+| 音频素材效果卡预览 | 整段算完编成 WAV 再交给 `<audio>` | 和素材走同一个调度引擎，边算边播 | `src/audio/cardAudio.ts` 的 `acquireCardAudioClipUrl` |
 | 导出混音 | ffmpeg 先把每段裁成 wav；整条时间轴一个 `OfflineAudioContext` 一次渲完；整段 POST；ffmpeg 编 AAC；失败时退回 ffmpeg 直接混（没有效果） | 页面按 10 秒一段加预滚分段渲，每段编成 AAC 立刻追加上传；ffmpeg 只 `-c copy` | `src/audio/renderMix.ts`、`server/bakery/audio-mix.mjs`、`server/bakery/mux-audio.mjs`、`server/bakery/export.mjs` |
 | 响度 | 服务端 ffmpeg `ebur128` | JS 实现 EBU R128，量导出同一条混音 | `server/vite-plugin-audio.ts`、`src/mcp/common.ts` 的 `measure_audio` |
 | 波形 | `decodeAudioData` 把整个文件读进内存解 | Worker 按区间解码，只存峰值，按素材哈希缓存 | `src/editor/timeline/AudioWaveform.tsx` |
@@ -60,7 +60,7 @@
 
 **推荐：一个「音频内核」，三个外壳。**
 
-内核跑在 Worker 里，负责三件事：解封装、解码、求值音频图卡。三个外壳共用这个内核：
+内核跑在 Worker 里，负责三件事：解封装、解码、求值音频素材效果卡。三个外壳共用这个内核：
 1. **预览引擎**：主线程上的 `AudioContext` 调度；
 2. **分段渲染器**：导出和测响度用，`OfflineAudioContext` 逐段渲；
 3. **判重 / 预渲染**：见 A6。
@@ -70,7 +70,7 @@
 
 **候选路线和不选的理由：**
 - **ffmpeg.wasm**：格式最全，但体积约 30 MB；要开多线程还得加跨源隔离头，会和舞台 iframe 的隔离方案相互牵连。只在第 6 节待定 3 选「补格式」时才考虑。（一般经验，无原文；体积没有实测。）
-- **继续用 `<audio>` 元素播放素材，只把音频图卡改成 JS**：改动小，但预览和导出的解码不是同一份，流式和内存问题也只解决了一半，不满足「完整重构」。
+- **继续用 `<audio>` 元素播放素材，只把音频素材效果卡改成 JS**：改动小，但预览和导出的解码不是同一份，流式和内存问题也只解决了一半，不满足「完整重构」。
 
 ## 4. 步骤
 
@@ -113,7 +113,7 @@
   3. 随机跳到 100 个位置解 0.5 秒，每次都和参考对齐。
   4. 10 分钟的 4K 视频（大于 1 GB）取中间 5 秒，内存增长 < 20 MB，耗时 < 200 ms。
 
-### A2 音频图卡接内核（1～2 天）
+### A2 音频素材效果卡接内核（1～2 天）
 
 - `audioSources.ts` 的 `mediaBlock` 从 `fetch('/@media/<hash>/pcm')` 改成调内核的 `decodeRange`。
 - 求值搬进 Worker（用户卡在 Worker 里 import，和画面卡的注册表一样，按源码版本重载）。
@@ -123,7 +123,7 @@
 - **验收**：
   - `src/audio/cardAudio.test.mjs`、`src/render/cards/audioSources.test.mjs` 全部改到新路径后全绿；
   - 探针里的 9 张合成卡在新路径下和旧路径的输出 `maxRel ≤ 0.08`，纯的卡应当逐样本相同；
-  - `cloud-task.md` L 节「素材输入的音频图卡报错」这条改成「支持」。
+  - `cloud-task.md` L 节「素材输入的音频素材效果卡报错」这条改成「支持」。
 
 ### A3 预览播放引擎（3～4 天）
 
@@ -154,7 +154,7 @@
   - 混响：`decay`（脉冲响应的长度就是 decay 秒，见 `kernel/audioFx.mjs` 的 `reverbImpulse`）；
   - 压缩 / 限幅：`7 × release`；
   - 滤波：0.05 秒；
-  - 音频图卡本身不需要预滚，它按区间随机访问。
+  - 音频素材效果卡本身不需要预滚，它按区间随机访问。
 
   上面几条公式是我按指数衰减推的，还要实测核（A4 验收第 1 条）。
 - **尾巴特别长的情况**：尾巴超过 30 秒（比如回声间隔 2 秒、反馈 0.9，算出来约 175 秒），就把 W 放大到 2P，并在导出日志里告警，内存按实际用量计入。
@@ -220,7 +220,7 @@
 
 - 删掉服务端的 `/@media/<hash>/pcm`（`server/vite-plugin-media.ts`）和 `server/test/media-pcm.test.mjs`。
 - 改 `cloud-task.md`：删掉「Agent 云端环境要预装 `ffmpeg`……`/@media/<hash>/pcm`」这条，Agent 端音频也走 JS；导出装 mp4 还用不用 ffmpeg，看待定 2。
-- 改 `docs/archive/topics/audio-fx.md` 的结构图；在音频图卡的作者约定里写明「必须是按区间的纯函数」，并在 `cardAuthoring` 的校验里加上分块无关性检查。
+- 改 `docs/archive/topics/audio-fx.md` 的结构图；在音频素材效果卡的作者约定里写明「必须是按区间的纯函数」，并在 `cardAuthoring` 的校验里加上分块无关性检查。
 - 更新 `hand_off.md`、`render_pipeline_restructure_check.md`。
 - **完成的标志**：
   - `grep -rn "pcm\|ebur128\|aac" server/` 只剩导出装 mp4 那一处；
@@ -229,8 +229,8 @@
 
 ## 5. 优点 / 缺点 / 限制
 
-- **优点：满足「服务端不处理音频」，在线浏览器模式第一次有完整的声音**，包括读素材的音频图卡。
-  出处："**素材输入的音频图卡报错「该模式暂不支持素材输入的音频图卡」**"——`docs/plan/cloud-task.md` L 节验收。重构后这条限制取消。
+- **优点：满足「服务端不处理音频」，在线浏览器模式第一次有完整的声音**，包括读素材的音频素材效果卡。
+  出处："**素材输入的音频素材效果卡报错「该模式暂不支持素材输入的音频素材效果卡」**"——`docs/plan/cloud-task.md` L 节验收。重构后这条限制取消。
 - **优点：导出内存和时间轴长度无关**，从约 460 MB 降到每段约 7 MB（第 2 节的算式）。
 - **优点：预览和导出连解码都是同一份代码，响度量的也是真正导出的那条声音**（第 0 节第 5 条）。
 - **缺点：改动面大。** 现有音频相关测试文件里至少 5 个要重写或删除（下面出处列的那几个）；`<audio>` 元素加 `planSync` 这一路已经调好了一轮（R7b 刚修过 24 / 25 fps 的误判），这次要整体换掉。
