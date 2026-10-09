@@ -10,7 +10,7 @@ import { exactScope, validateAgentScopeExpected, validateAgentScopeRecord,
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
-const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'resolveRunPrincipal']);
+const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'resolveRunPrincipal', 'scopeAssignment']);
 
 /** One Agent OS process owns one non-exported Ed25519 private key. The request
  * callback is the same pinned mTLS transport later used for run requests.
@@ -145,6 +145,9 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
     if (closed || !registered) fail('instance-not-registered');
     if (method !== 'POST' || typeof path !== 'string' || !path.startsWith('/internal/v2/runs/') ||
         !operations.has(operation) || !body || typeof body !== 'object' || Array.isArray(body) ||
+        (operation === 'scopeAssignment' && (path !== '/internal/v2/runs/assignment' ||
+          !exactScope(body, ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'requestId']) ||
+          Object.values(body).some(value => !reference(value)))) ||
         (operation === 'checkAccess' && !['read', 'write'].includes(body.action)))
       fail('instance-proof-input');
     const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),

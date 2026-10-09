@@ -5,6 +5,8 @@ import { createAgentInstanceSession } from '../agent/service/agent-instance-sess
 import { canonicalJson, digestOf } from '../account/ledger.mjs';
 import { validateAgentScopeTerminal } from '../hosted/agent-run-scope-schema.mjs';
 import { scopeModel, signed } from './agent-run-scope-fixture.mjs';
+import { createRunClient } from '../agent-service/run-client.mjs';
+import { instanceProofPayload, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
 
 // Real Ed25519/signature validation; registration/local drain and OS lifecycle
 // are controlled adapters here. This is not a Doc/root/production admission.
@@ -118,4 +120,38 @@ test('prepare source failure or changes reject and cannot create an intent', asy
       assert.throws(() => x.session.scopeIntentFor({ assignment: x.assignment, terminal: {} }), /instance-scope-prepare-unavailable/);
     } finally { x.session.close(); }
   }
+});
+
+test('assignment proof has a distinct full-body scope; resolve/read and other routes cannot substitute', async () => {
+  const x = await setup();
+  try {
+    // Controlled exporter adapter; real signed payload, not a TLS integration.
+    const socket = { encrypted: true, authorized: true, destroyed: false,
+      exportKeyingMaterial: () => Buffer.alloc(32, 1) };
+    const body = { projectId: 'project', conversationId: 'conversation-slot-a', messageId: 'message-1',
+      runId: 'run-1', runGrantId: 'grant-1', requestId: 'assignment:grant-1' };
+    const input = { socket, method: 'POST', path: '/internal/v2/runs/assignment', operation: 'scopeAssignment', body };
+    const result = x.session.proofFor(input), proof = JSON.parse(Buffer.from(result.value, 'base64url'));
+    const payload = instanceProofPayload({ ...x.session.identity(), channelBinding: instanceTlsBinding(socket),
+      method: input.method, path: input.path, operation: input.operation, requestDigest: digestOf(body) });
+    assert.ok(verify(null, Buffer.from(canonicalJson(payload)), x.key.publicKey, Buffer.from(proof.signature, 'base64url')));
+    assert.equal(verify(null, Buffer.from(canonicalJson({ ...payload, operation: 'resolveRunPrincipal' })),
+      x.key.publicKey, Buffer.from(proof.signature, 'base64url')), false);
+    assert.equal(verify(null, Buffer.from(canonicalJson({ ...payload, requestDigest: digestOf({ ...body, messageId: 'changed' }) })),
+      x.key.publicKey, Buffer.from(proof.signature, 'base64url')), false);
+    assert.throws(() => x.session.proofFor({ ...input, path: '/internal/v2/runs/check' }), /instance-proof-input/);
+    assert.throws(() => x.session.proofFor({ ...input, body: { ...body, action: 'write' } }), /instance-proof-input/);
+  } finally { x.session.close(); }
+});
+
+test('run client exposes the same public-only key and rejects body identity before creating TLS', async () => {
+  const client = createRunClient({ origin: 'https://127.0.0.1:6700', tls: { key: 'unused', cert: 'unused', ca: 'unused' },
+    serverFingerprint256: 'a'.repeat(64) });
+  try {
+    assert.deepEqual(client.scopeIdentity(), client.scopeIdentity());
+    await assert.rejects(client.scopeAssignment({ projectId: 'p', conversationId: 'c', messageId: 'm',
+      runId: 'r', runGrantId: 'g', requestId: 'a', instanceId: 'forged' }), /invalid-scope-assignment/);
+    await assert.rejects(client.scopeAssignment({}), /invalid-scope-assignment/);
+    client.close(); assert.throws(() => client.scopeIdentity(), /instance-session-closed/);
+  } finally { client.close(); }
 });

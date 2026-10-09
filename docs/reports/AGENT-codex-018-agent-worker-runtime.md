@@ -35,3 +35,9 @@ root已将run-client租约更正为真实 `server/agent-service/run-client.mjs`�
 类型第一次命令误用本worktree不存在的 `node_modules/typescript/bin/tsc`，exit1/ERR_MODULE_NOT_FOUND，日志 `pc-worker-session-c2b820ca-type.log`保留；属于启动路径错误，未进入TS检查。改用已有父仓库绝对TypeScript路径 `tsc -b --force` 后exit0/零错误，工具wall7333ms，日志 `pc-worker-session-c2b820ca-type-2.log`。未装依赖/建junction/更改全局环境。session nodecheck/diffcheck0，验证期间源码固定，无重跑target。
 
 当前真实exports为 `scopeIdentity/configureRegistrationScope/bindScope/scopePrepareFor/scopeIntentFor`。configureRegistrationScope必须在PoP注册开始前以可信expected/record调用；bindScope核signedassignment完整target与已注册身份。prepare签名域与intent签名域都用scope digest算法，Doc PoP原canonicalJson算法保持。生产source仍未挂，缺scopePrepareSource拒503，缺Doc新register/bound gate也不执行；这个提交仅可独立审RAM身份与签名块，不是完整worker/gateway/FIFO交付。
+
+## run-client 窄消费接口
+
+Astra约定 `POST /internal/v2/runs/assignment` exact六refs `{projectId,conversationId,messageId,runId,runGrantId,requestId}`，独立signed operation `scopeAssignment`；Doc每次rootreader核bound才回executionAllowed。session仅对这条exactpath/exactbody签新op，resolve/read/write proof不能替代；原其它op不改。run-client沿原真实secureConnect/exporter路径发送，透传上述五个RAM接口，不另生key/实例；不允许body自报instanceId/身份。
+
+本块仅消费者接口，Doc新路由/source尚待Astra固定；尚无正常成功闭合或单任务worker服务监听。
