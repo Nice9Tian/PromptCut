@@ -35,3 +35,10 @@
 - fixture 的诊断仅记录 Agent HTTP 路由类别、状态、有限白名单业务码、是否已发送 headers 与是否正常结束；Edge 只记录路由类别、网络错误枚举、上游是否完整及下游 headers 状态；read-control 只记录有限错误码及 transport `describe()` 状态。错误响应体仅在内存中短暂解析其 `code` 并随即丢弃，结果不含原始响应、凭证、header 或完整 URL。列表上限为每种 250 条。
 - 本轮 `node --check`（probe 与 fixture）及 `git diff --check` 通过；显式提供只读 VisuHive provider、密码排序模块、本地 authority 模块、CUDA Python 后，`npm test -- server/test/account-password-user-path.test.mjs` 通过 1/1，清理诊断为 child 已关闭、closeFailureCount 为 0。provider 的改密/重设退出状态仍为 `revoking`，不作为服务屏障确认。
 - 下一轮固定源码的真实浏览器只跑一次纯文本路径；Agent SSE 若仍失败，将用上述受限诊断区分 Agent HTTP/read-control 与 Edge 流生命周期。保留既有真实失败记录，不自动重跑。附件能力、桌面桥接、互联网邮件投递和 logout `revoking` 到最终确认仍是独立未完成事项。
+
+## 固定纯文本路径的真实浏览器结果（2026-10-09）
+
+- 固定源码 `b84737433001306c9870e23f78b1cbb871f30091` 后只运行一轮；`result.json` 与截图保存在 `%TEMP%\pc-password-user-path-full-plaintext-b8473743`。探针总结 34 项通过、0 个显式断言失败，但 `completed=false`；源前后相同，浏览器、stage、fixture、asset child 都关闭，6680–6689 全部空闲。首次 preload 命令错误地写成 `--import scripts/...`，Node 未启动探针；随后改用 `--import ./scripts/...`，只产生这一轮浏览器运行。
+- 共享项目、真实 consent、Agent 启用均完成；read-control 起始为 connected、open=0、closed=0、executor 未挂载。启用前 Agent `info`、列表和 events 为 403 `disabled`。启用后，消息前一个 events 请求被 Edge 记为 502；Agent HTTP 侧没有对应的 completed 502 记录，代理侧有 `ECONNRESET`/abort/incomplete-close 记录。消息真实 POST 为 202，UI 显示一个等待执行的队列项，发送后的真实 events 为 200 长流，随后页面能显示用户纯文本 SSE 消息。这个结果支持“首次消息前新对话与发送后已有 durable 事件”行为不同，但没有通过模拟状态或读取原始响应体作结论。
+- 网站改密 POST 返回 200、退出其它设备选择返回 202；另外两个网站会话退出断言通过。探针在 `editor-wait-for-real-read-revocation` 等待旧正文自然消失时超时；截图中的在线编辑器仍有权限读取加载状态，因此正文清除没有通过。其后真实 events 出现 401 `unauthorized`，read-control 最终仍 connected、open=0、closed=8，并报告 `read-control-disconnected`。没有到达正文清除检查完成、退出事件状态检查、后续历史读取拒绝或 reset UI；不得把 34 个已过检查等同完整路径通过。
+- 当前证据将 early events 502 与其余服务侧状态区分开，但仍无法仅凭路由类别建立同一请求级因果。下一步应由 root 审阅首次失败截图与安全 JSON；本分支不改产品或绕过 read fence，也不再次启动浏览器。附件路径没有尝试，仍待真实服务 authority 单独接通和验收。
