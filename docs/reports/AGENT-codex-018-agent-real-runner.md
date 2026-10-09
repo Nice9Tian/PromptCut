@@ -31,4 +31,26 @@
 
 〔裁〕受控模型使用现有 mock-script provider，真实 factory/harness/SSR 工具和文档 WSS/操作授权全部复用产品代码；不引入 fake socket/投影或另造 executor。get_selection 已走同grant的真实 selection.query，所以本阶段不需要 page bridge。模型响应受控与真实生产模型明确分开。
 
-当前冻结接缝：完整Editor第二次实际暴露 SSE 定时器 `void poll().catch` 无法捕获 `readTransports.dispatch` 同步抛错。已报根申请仅 http.mjs 的 poll async 接缝及专属目标，未获租前不改。终态仍 run-outcome-unavailable，不从 handle.done 判成功，不释放 FIFO、不生成 root/OS witness。旧 executor 可见层、私有代理及根全量均不冒用为本任务新路径通过。
+## 最小产品修复及完整 Editor 收口
+
+根授 `http.mjs` 窄租后，只将 accountEvents 的 poll 改成 async，先拒 released/destroyed，再 await 原 dispatch；同步/异步失败进入原 entry.close。没有放宽 read fence、current instance、实际 res/socket close，也没有无限重连或假 ACK。新 `server/test/account-real-runner-sse.test.mjs` 真实 HTTP/SSE/ALS/TCP，投影受控：前三个正常 poll 保持流，随后真实 transports.disconnect，再原 dispatch 同步抛错；旧源 cd684136 首红 1/0/1、905.7498ms (`pc-real-runner-sse-red.log`)。修复源 80618a3b 的四并行目标 4/4、0fail/cancel/skip、4400.6508ms (`pc-real-runner-sse-green.log`)，包括真实短链与原两 assembly/wire 目标。type0 墙6.81s (`pc-real-runner-type-8061.log`)，online build0 墙1.81s (`pc-real-runner-build-8061.log`)。
+
+后续实际浏览器全部使用同一 `pc-real-runner-8061-dist`，产品字节不随 probe 改动重建；均 before/after 固定同 SHA、无 wrapper native retry。没有全量或真实生产模型。
+
+| probe 源/输出目录与日志 | 原结果（未删除） | 精确修正理由 |
+|---|---|---|
+|80618a3b / `pc-real-runner-browser-8061`|6检查5过1败、9134ms，completedfalse；失败 real-tools-visible-0|探针错查详细视图 `.ai-tool-name`，产品默认简洁视图工具为 `data-pc-op.is-ok` 图标/title。不是 B 历史失败；phase 当时未再细分。|
+|f07ed0e2 / `pc-real-runner-browser-icons`|8检查7过1败、9646ms，completedfalse；A真实全部可见+版本1→2过，B pendingfalse|B 等整体 text 会先命中用户 mock-script 内同句，早于可信助手重放。这个早期整体文本检查不作为助手已可见证据。|
+|92f06e5f / `pc-real-runner-browser-replay`|2前置过、34859ms，actual-output-a timeout|严格 ca 助手文本暴露产品既有默认隐藏原文规则：AgentBubble simple 默认不铺模型文字，showThinking 时才有 RawLog。|
+|ddd4956c / `pc-real-runner-browser-rawlog`|2前置过、39359ms，actual-output-a timeout|已正常点击显示思考，截图有 RawLog 但仍 collapsed；未核其正常点击中心命中/aria展开。不能把点击调用等同操作成功。|
+|246f72e9 / `pc-real-runner-browser-hit`|**17/17、0失败，completedtrue，10492ms**|通过真实 `scrollIntoView`、只读 elementFromPoint 中心命中、正常 button.click、aria-expanded=true 再核 ca 助手文本；不写DOM/preferences、不force。|
+
+最终真实路径：两隔离 Chrome context 登录真实 VH→A创建201/同意/creator开启→B加入200/同意→A正常 ShiftEnter 多行输入+Enter发送202→doc持久 FIFO/admit/read→现有真实 HostedRunnerFactory＋同RAM实例签名 WSS→实际 get_project/get_selection/report_progress/set_project_meta→project.op 被真 account order/coordinator 接受，A/B收到 project.state rev1 + project.ops rev2并改名→真实 SSE FULL 事件→完整 MessageList 显示原 cq 用户/唯一 ca 助手、成功工具图标、真实进度与展开的原文。B真实打开同 conversation 的历史，持久 eventSeq 1–34 重放，无重复消息。
+
+`pc-real-runner-browser-hit/result.json` 记录源前后 `246f72e91fbe03cad8dcea666e3b0b26400c2b11` 相等。实际 Agent 数据连接0、grant active、completionReadyfalse、pending结算，两页均不显示成功。截图 `00-actual-editor.png`、`01-actual-editor.png` 已实际查看，助手句子“真实文档短任务已执行；关闭结算仍在等待。”可见，项目名已修改，操作日志有成功结果。
+
+最后清理：独立 asset PID23188 的 childClose 已await；fixture closed/childClosed、browser/stages/contextsClosed 均true，主会话租段 6700–6711 实查零监听，无删除用户进程/数据。be3d原异常退出没有生成resultJSON，不能把后补清理检查写成该轮completed或完整回执。
+
+最终可消费：`startAccountRealRunnerFixture({publicHandler,diagnostic})` 复用真实组合，返回真实 connectActor/rows/checkRun/describe/close；`cloud-queue-user-path` 默认 queued 行为保留，hook 由实际 assembly 独占 read start；`account-real-runner-probe --dist <TEMP编译目录> --site-root <VH/site> --out <TEMP私有目录>` 用完整静态 Editor与真实 stagePolicy/双分源。前端/backend都未注入假ready、正文镜像、WebSocket或文档状态。
+
+仍未完成：真实生产两模型调用/节点部署、素材工具、独立 OS/cgroup 关闭 producer、terminal finalizer/FIFO释放。本包不修改 outcome 接口，保持 run-outcome-unavailable，不从 handle.done 判成功，不生成 root/OS witness。只有现有 factory真实使用及 SSE异常窄修，不新造 page bridge、executor或权威。旧 executor 可见层、私有代理及根全量均不冒用为本任务通过；下一整合由根给 fresh 候选全量和生产模型窗口。
