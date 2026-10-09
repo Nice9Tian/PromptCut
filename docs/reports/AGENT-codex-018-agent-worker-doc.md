@@ -53,3 +53,13 @@ master新两项均独立只读operation/PoP fullbody，旧五项不泛化：`POS
 worker-failed/crash自动授权仍缺可信producer：当前scopeControl不能凭master自报死亡生成Doc fence。最小后续入口应仅让Doc读取固定root槽下root-owned失败观测（authority/slot/epoch/recordDigest、原service/scope双tuple、actual boot/startTicks/Invocation及失败原因），核现grant/rootbound/配置同源后在原ledger事务写typed worker-failed fence；root尚未证空仍pending，闭口仍必须原FD链。不得补RAM normal intent或新实例空库存，本块不把此入口声称已实现。
 
 新增TLS/SQLite目标首两红保留：TMP pc-worker-doc-control-tls-target-1.log 为6/5/1、1188.2458ms，真实operation history夹具没建项目genesis导致needs-reconciliation；第2.log为6/5/1、1606.1081ms，显式受控root模型缺pinRetired接口而拒forced-close。补正常createProject与明确模型接口后第3.log为6/6、0fail/skip/cancel、1255.3245ms。所有TLS实际socket0/server不监听后清理，6712端口自有；未改生产拒绝标准。测试的Doc库存/SQLite fence为实际产品函数（零数据连接），root关闭部分仍受控模型；真实Linux证明由上节独立结果承担，未声称这一项把两者合为生产执行器验收。冻结后另跑相关目标/类型，不跑full。
+
+固定正常三段source `8d869ae966de033a4764e71ed7bfd94d58d7f088` 首相关回归：8文件166项/166pass/0fail/cancel/skip，1716.5763ms（TMP pc-worker-doc-completion-target-1.log），显式真实VH provider/order。类型首轮0/7492ms（TMP pc-worker-doc-completion-type-1.log）。含原Asset完整专属、旧instance/run core成功断言，未把旧成功改pending。scope-doc文件现在7个顶级case，实际TLS为第2项，专用6712；第7项覆盖六类fence各未读/已读共12分支。结束原TLS socket inventory=0/listening=false，端口段6712–6721读查无LISTEN，源码测中不变、diff-check通过。根随后收此固定source独立验证；本Agent未跑full/浏览器/模型/节点。
+
+根回传Linux9e forced精确probe duration为8703ms、外层13.562秒；前文samples/11项/PID与清理结论不变。该次实际验证已封存，不更改其源码或复跑。
+
+### 后续crash证据最小接缝（提案，未实现）
+
+由root槽控制器在已有互斥/root-owned目录下发布独立typed失败观测，必须绑定authority/slot/epoch/recordDigest/assignmentDigest和完整原service+closureScope双tuple、boot/startTicks/Invocation及实际MainPID0/旧birth消失；读取原scope FD的populated可为1，它仅授权精确强制收口，绝不是closed证据。文件/目录fsync与完成marker后才可读；master只能提示Doc重新读取固定槽，不能上传观测字段或写root文件。Doc核完整既有root链与当前ledger同grant/instance/key和assigned/bound状态，事务创建worker-failed typed control及立即访问fence，再用现scopeControl只读证书；真实root空链完成后仍由同内部finalizer释放。新MainPID、错boot、变Invocation、混scope或过期epoch拒绝/保锁，不向死worker索normal intent。
+
+未bound的root retirement与任务结清必须另核：当前代码只允许已revoked的原scope grant消费unassigned-retirement；没有真实Doc控制时，assigned-unbound遇root ready失败仍pending，不会自行冒称失败已结清。后包需由同root可信失败观测驱动Doc准确撤销该未执行assignment，或证明本epoch根本没有Doc assignment后仅回收槽，不写任务done。它与已bound worker crash是不同类型，不能靠新实例空清单替旧库存。本段是后续精确实施提案，不把尚无producer说成已完成。
