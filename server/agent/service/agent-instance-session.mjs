@@ -10,13 +10,14 @@ import { exactScope, validateAgentScopeExpected, validateAgentScopeRecord,
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
-const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'resolveRunPrincipal', 'scopeAssignment']);
+const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'resolveRunPrincipal', 'scopeAssignment', 'pendingRuns']);
 
 /** One Agent OS process owns one non-exported Ed25519 private key. The request
  * callback is the same pinned mTLS transport later used for run requests.
  * Registration's requestId/key survive an unknown HTTP ACK in this process. */
-export function createAgentInstanceSession({ requestRegistration, scopePrepareSource = null } = {}) {
+export function createAgentInstanceSession({ requestRegistration, scopePrepareSource = null, registrationPurpose = null } = {}) {
   if (typeof requestRegistration !== 'function') fail('instance-session-configuration');
+  if (registrationPurpose !== null && !['control-only', 'run-worker'].includes(registrationPurpose)) fail('instance-session-configuration');
   const pair = generateKeyPairSync('ed25519');
   const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
   const scopePublicKey = pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
@@ -38,6 +39,7 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
   function configureRegistrationScope(input) {
     if (closed) fail('instance-session-closed');
     if (registered || challenge || inFlight) fail('instance-scope-registration-started');
+    if (registrationPurpose === 'control-only') fail('instance-purpose-forbidden');
     const value = checkedScope(input);
     if (registrationScope && canonicalJson(value) !== canonicalJson(registrationScope)) fail('instance-scope-binding');
     registrationScope = value;
@@ -53,6 +55,7 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
   function bindScope(input) {
     if (closed) fail('instance-session-closed');
     if (!registered) fail('instance-not-registered');
+    if (registered.purpose === 'control-only') fail('instance-purpose-forbidden');
     const value = checkedScope(input);
     const assignment = validateAgentScopeAssignment(input.assignment, value.expected, value.record);
     if (registered.authorityId !== value.expected.docAuthorityId ||
@@ -113,6 +116,8 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
     if (!inFlight) {
       inFlight = (async () => {
         const rootScopeRef = registrationScope ? rootRefOf(registrationScope) : null;
+        const expectedPurpose = rootScopeRef ? 'run-worker' : registrationPurpose;
+        if (expectedPurpose === 'run-worker' && !rootScopeRef) fail('instance-scope-registration-required');
         const current = await requestRegistration('challenge', { requestId, publicKey,
           ...(rootScopeRef ? { rootScopeRef } : {}) });
         if (!current || current.domain !== 'promptcut.agent-instance.register.v1' ||
@@ -121,6 +126,11 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
             current.publicKeyDigest !== digestOf(publicKey) || !reference(current.challengeId) ||
             !reference(current.nonce) || (challenge && canonicalJson(challenge) !== canonicalJson(current)))
           fail('instance-challenge-protocol');
+        if ((current.purpose !== undefined && !['control-only', 'run-worker'].includes(current.purpose)) ||
+            (expectedPurpose && current.purpose !== expectedPurpose) ||
+            (current.purpose === 'run-worker' && !rootScopeRef) ||
+            (current.purpose === 'control-only' && (current.rootScopeRef !== undefined ||
+              current.docPublicKeyDigest !== undefined || current.scopePublicKeyDigest !== undefined))) fail('instance-challenge-purpose');
         if (rootScopeRef && (canonicalJson(current.rootScopeRef) !== canonicalJson(rootScopeRef) ||
             current.docPublicKeyDigest !== docPublicKeyDigest || current.scopePublicKeyDigest !== scopePublicKeyDigest ||
             current.authorityId !== registrationScope.expected.docAuthorityId)) fail('instance-challenge-scope');
@@ -130,11 +140,13 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
             result.serviceKid !== challenge.serviceKid || !reference(result.instanceId) ||
             !Number.isSafeInteger(result.instanceGeneration) || result.instanceGeneration < 1)
           fail('instance-register-protocol');
+        if (result.purpose !== current.purpose) fail('instance-register-purpose');
         if (rootScopeRef && (canonicalJson(result.rootScopeRef) !== canonicalJson(rootScopeRef) ||
             result.instanceId !== registrationScope.record.instance.instanceId)) fail('instance-register-scope');
         if (closed) fail('instance-session-closed');
         registered = Object.freeze({ authorityId: result.authorityId, serviceId: 'agent',
-          serviceKid: result.serviceKid, instanceId: result.instanceId, instanceGeneration: result.instanceGeneration });
+          serviceKid: result.serviceKid, instanceId: result.instanceId, instanceGeneration: result.instanceGeneration,
+          ...(result.purpose ? { purpose: result.purpose } : {}) });
         return { ...registered };
       })().finally(() => { inFlight = null; });
     }
@@ -143,11 +155,13 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
 
   function proofFor({ socket, method, path, operation, body }) {
     if (closed || !registered) fail('instance-not-registered');
+    if (registered.purpose === 'control-only' && operation !== 'pendingRuns') fail('instance-purpose-forbidden');
     if (method !== 'POST' || typeof path !== 'string' || !path.startsWith('/internal/v2/runs/') ||
         !operations.has(operation) || !body || typeof body !== 'object' || Array.isArray(body) ||
         (operation === 'scopeAssignment' && (path !== '/internal/v2/runs/assignment' ||
           !exactScope(body, ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'requestId']) ||
           Object.values(body).some(value => !reference(value)))) ||
+        (operation === 'pendingRuns' && (path !== '/internal/v2/runs/pending' || !exactScope(body, []))) ||
         (operation === 'checkAccess' && !['read', 'write'].includes(body.action)))
       fail('instance-proof-input');
     const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
@@ -159,6 +173,7 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
 
   function dataProofFor({ socket, method, path, operation, request }) {
     if (closed || !registered) fail('instance-not-registered');
+    if (registered.purpose === 'control-only') fail('instance-purpose-forbidden');
     if (!['GET', 'POST', 'WS'].includes(method) || (path !== '/' && !/^\/lp\/(open|send|recv|close)$/.test(path)) ||
         !['resolveRunPrincipal', 'checkAccess', 'authorizeQuery'].includes(operation) ||
         !request || typeof request !== 'object' || Array.isArray(request) ||
@@ -172,6 +187,7 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
 
   function runAssetIssueProofFor({ socket, body, bodyText }) {
     if (closed || !registered) fail('instance-not-registered');
+    if (registered.purpose === 'control-only') fail('instance-purpose-forbidden');
     const request = runAssetIssueRequest({ body, bodyText });
     const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
       method: 'POST', path: '/internal/v2/run-assets/issue', operation: 'checkAccess',
@@ -184,6 +200,7 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
 
   function runAssetHttpProofFor({ socket, tuple }) {
     if (closed || !registered) fail('instance-not-registered');
+    if (registered.purpose === 'control-only') fail('instance-purpose-forbidden');
     const request = assetHttpTuple(tuple);
     const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
       method: request.method, path: request.url, operation: 'checkAccess',

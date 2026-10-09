@@ -19,14 +19,14 @@ async function setup({ source = async value => value, rootRegistration = false, 
         wirePublicKey = body.publicKey;
         return changeChallenge({ domain: 'promptcut.agent-instance.register.v1', authorityId: 'doc', serviceId: 'agent',
           serviceKid: 'agent-kid', requestId: body.requestId, challengeId: 'challenge', nonce: 'nonce',
-          publicKeyDigest: digestOf(body.publicKey), ...(body.rootScopeRef ? { rootScopeRef: body.rootScopeRef,
+          publicKeyDigest: digestOf(body.publicKey), ...(body.rootScopeRef ? { purpose: 'run-worker', rootScopeRef: body.rootScopeRef,
             docPublicKeyDigest: digestOf(body.publicKey), scopePublicKeyDigest: session.scopeIdentity().scopePublicKeyDigest } : {}) });
       }
       assert.ok(verify(null, Buffer.from(canonicalJson(body.challenge)), wirePublicKey,
         Buffer.from(body.signature, 'base64url')));
       return changeResult({ authorityId: 'doc', serviceId: 'agent', serviceKid: 'agent-kid',
         instanceId: model.files.get('epoch-1.json').instance.instanceId, instanceGeneration: 1,
-        ...(body.challenge.rootScopeRef ? { rootScopeRef: body.challenge.rootScopeRef } : {}) });
+        ...(body.challenge.rootScopeRef ? { purpose: 'run-worker', rootScopeRef: body.challenge.rootScopeRef } : {}) });
     } });
   const key = session.scopeIdentity();
   const identity = model.io.identity;
@@ -154,4 +154,39 @@ test('run client exposes the same public-only key and rejects body identity befo
     await assert.rejects(client.scopeAssignment({}), /invalid-scope-assignment/);
     client.close(); assert.throws(() => client.scopeIdentity(), /instance-session-closed/);
   } finally { client.close(); }
+});
+
+test('control-only instance signs only scoped metadata/read-control and cannot become a run worker', async () => {
+  const session = createAgentInstanceSession({ registrationPurpose: 'control-only',
+    requestRegistration: async (name, body) => name === 'challenge'
+      ? { domain: 'promptcut.agent-instance.register.v1', authorityId: 'doc', serviceId: 'agent', serviceKid: 'master-kid',
+        requestId: body.requestId, challengeId: 'master-challenge', nonce: 'nonce', publicKeyDigest: digestOf(body.publicKey),
+        purpose: 'control-only' }
+      : { authorityId: 'doc', serviceId: 'agent', serviceKid: 'master-kid', instanceId: 'master-instance',
+        instanceGeneration: 1, purpose: 'control-only' } });
+  try {
+    await session.register();
+    const socket = { encrypted: true, authorized: true, destroyed: false, exportKeyingMaterial: () => Buffer.alloc(32, 2) };
+    const input = { socket, method: 'POST', path: '/internal/v2/runs/pending', operation: 'pendingRuns', body: {} };
+    assert.ok(session.proofFor(input).value);
+    assert.throws(() => session.proofFor({ ...input, body: { projectId: 'p' } }), /instance-proof-input/);
+    assert.throws(() => session.proofFor({ ...input, path: '/internal/v2/runs/admit', operation: 'admit' }), /instance-purpose-forbidden/);
+    assert.throws(() => session.dataProofFor({}), /instance-purpose-forbidden/);
+    assert.throws(() => session.runAssetIssueProofFor({}), /instance-purpose-forbidden/);
+    assert.throws(() => session.runAssetHttpProofFor({}), /instance-purpose-forbidden/);
+    assert.throws(() => session.configureRegistrationScope({}), /registration-started/);
+    assert.throws(() => session.bindScope({}), /instance-purpose-forbidden/);
+  } finally { session.close(); }
+});
+
+test('explicit worker registration requires trusted root scope; requested purpose cannot be downgraded', async () => {
+  let calls = 0;
+  const worker = createAgentInstanceSession({ registrationPurpose: 'run-worker', requestRegistration: async () => { calls++; } });
+  try { await assert.rejects(worker.register(), /instance-scope-registration-required/); assert.equal(calls, 0); }
+  finally { worker.close(); }
+  const master = createAgentInstanceSession({ registrationPurpose: 'control-only', requestRegistration: async (_name, body) => ({
+    domain: 'promptcut.agent-instance.register.v1', authorityId: 'doc', serviceId: 'agent', serviceKid: 'kid',
+    requestId: body.requestId, challengeId: 'challenge', nonce: 'nonce', publicKeyDigest: digestOf(body.publicKey), purpose: 'run-worker' }) });
+  try { await assert.rejects(master.register(), /instance-challenge-purpose/); }
+  finally { master.close(); }
 });
