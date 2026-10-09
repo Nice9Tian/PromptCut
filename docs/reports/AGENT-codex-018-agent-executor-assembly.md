@@ -165,3 +165,28 @@ POST /messages事件模式加入真实req/res/socket readTransports.run，doc接
 随后已获准原control target在5795–97先零监听再跑：1/1、1122.3359ms/case1018.8786ms/wall1.3149449s/exit0/nativeRetry0，TMP pc-account-executor-2ea-control.log，原真实doc pin/实际socket+child close、错cert和缺witness仍拒断言未改。绝对typescript tsc -b --force零输出exit0/wall7.2542025s，TMP pc-account-executor-2ea-type.log。结束真实6640–59/5795–97零监听，matching owned test Node进程0，源2ea保持clean。
 
 后续只读自查发现同一关闭ownership在main启动失败分支亦需窄保护：assembly启动失败已关闭readControl，外层boot cleanup可能再次close同一个非幂等receipt SQLite。main在创建客户端时仅包一层共享Promise close（包括原拒绝），不改Astra客户端源、不伪成功；listen失败分支finally关Vite。新增真实CLI子进程配置target，TMP独立PKI、无网络服务：正确TLS文件但缺controlPort/与publicPort相同均在登记/业务监听前配置失败，未写read-intents。普通LAN路径与原fixture-only account无executor入口不变。该main窄增量未冒用较早2ea TLS结果；固定后target/type单次补验记录下方。
+
+最终产品源码4689324bf6501ff37726d3f9c5125b32b568cbf3，补验 `npm test -- server/test/account-executor-assembly.test.mjs` 2/2、0fail/cancel/skip、1308.6094ms/wall1.6265864s/exit0/nativeRetry0，TMP pc-account-executor-468-pure-2.log；真实子进程以正确TMP TLS文件但缺/共用控制口在register/listen前失败，未启动业务listener。绝对tsc -b --force零输出exit0/wall9.1179657s，TMP pc-account-executor-468-type-2.log。main变更导致有因补验，没有再跑已经通过且产品不变的TLS/control/21项纯组合，不重复全量。后续本提交只报告，product固定468；所有git diffcheck/nodecheck0，结束clean/no own监听或matching test进程。
+
+本次实施文件边界（相对715基底）：
+
+| 文件 | 真实实现与范围 |
+| --- | --- |
+| server/agent-service/account-executor-assembly.mjs | 新工厂注册sameRAM、真实read connected、同RAM data/resources、private event/read-intent、mTLS control、queued metadata恢复周期、owned统一关闭；completionReady:false |
+| server/agent-service/main.mjs | 生产account窄挂factory/独立控制口，启动失败close唯一归属与Vite finally；account关闭去掉无证明成功强退；旧LAN与显式无executor fixture模式保留 |
+| server/agent-service/http.mjs | event模式POST实际read scope与SSE持久eventSeq+fresh ACL；queue仍doc权威；非事件queued-only原行为保留 |
+| server/agent/service/create-agent-service.mjs | 仅向既有account工厂传dataClient/resources |
+| server/agent/service/account-runner.mjs | doc admitted消息摘要镜像、before model/tool resources fresh授权、POST实际mirror后wake；原strict outcome pending与生产closure缺口保留 |
+| server/agent/service/account-run-events.mjs | mirrorRunMessage消费doc消息+fresh grant exact accepted摘要；原镜像/SQLite幂等机制复用 |
+| server/test/account-executor-assembly*.test.mjs | 新constructor/真实CLI配置负向及实际mTLS/HTTP/SSE短链；首次两红完整留档 |
+| server/test/account-run-events.test.mjs | 新current grant消息恢复正负向，原run事件列表增加真实user，未删原失败断言 |
+
+server/hosted/doc-agent-assembly.mjs、provider/instance/authority/runClient/read-control/data/resources/control、G资产/部署清单、src UI都未改；无main/push/merge/节点/真实cipher/模型Key读取与依赖安装。Agent部署原deploy.mjs共用render完整检出，并不是hosted/files的asset闭包；这次没有部署/stage验证，也不将源码import绿写成节点可用。生产需root明确控制口、Agent自有兼具管理端serverAuth的TLS证书/CA+doc pin、doc服务当前注册策略及private目录，根导入模型密文而非本叶读值。
+
+下一最短接缝明确，尚未完成：
+
+1. Astra terminal control/queryFinish/provider固定后组合；manager.prepareTerminalClosure必须匹配独立completed entry/readReceipt/outcome/instance/gen与resourceWitnessId，不能拿旧closedRuns Set/取消drainControl生成正常完成证据。当前done被映射runner_done/pending，handle.done无权决定成功；缺producer保持503/FIFO占用。
+2. src/ai/cloud/events.ts当前账号user只建cq-messageId，run事件未建ca-runId，targetIndex<0导致text/tool被忽略。本叶只读发现已报根：下一最窄events/types/parser目标要让真实run创建一次助手并绑定原messageId，runner_done pending不能当done。本块虽真实SSE可重放，不代表用户已经看到真实模型输出。
+3. 真正HostedRunnerFactory＋同RAM数据WS/project.open+工具入口＋两浏览器短链及模型调用还未执行，本次TLS driver是受控对象，不冒称真实模型/图像/素材/生产UID/OS证明。无full/browser/native/model/node，此轮按根授权只做自己的protocol targets与type；根共同候选后再验。
+
+交回时原首红、原17/19/21/2目标和不同source的type按各自索引保留；不把第一次中止删改为成功，不凭报告改动重跑全量。最终状态是“执行器中央装配小块完成，终态与UI/真实模型链待下一块”，不是 .18 全业务终点完成。
