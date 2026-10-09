@@ -125,3 +125,15 @@ root审查确认1ab首次unbound startTask把rejected starting保留，后续bou
 新联合起点 b8ca9070fd7fef552105977c42fe11b68a2ba44b，包含Astra正常三段8d869ae9/36d6cfa4，当前未自动运行模型/浏览器/节点。〔裁〕沿已采用三级机制：每worker一个EXCLUSIVE/FULL SQLite journal，精确Doc authority/rootRef/assignment/binding不可变；sourceSeq连续、packet原文耐久后才可由同RAM签名，master ACK精确event row/digest验证并单独耐久，才允许下一model/tool boundary。journal重开仅供原packet检查/重发，不能声明重执行安全或新RAM可继承旧grant。ACK不是OS closed/finish成功。
 
 第一轮新目标因worker-event-journal.mjs尚未实现，1/0/1、exit1、77.8196ms，原日志TMP pc-worker-journal-first.log保留。实现后6/6、0fail/cancel/skip、177.0826ms、exit0，TMP pc-worker-journal-fixed.log；实际SQLite包括packet/ACK before-commit故障、回滚/重开、原packet幂等/变更409、错receipt/未连续ACK拒、缺尾/缺中/改receipt/混instance启动failclosed。无业务listener、仅原npm wrapper guards，未做type/全量/真实TLS/独立OS任务。API createWorkerEventJournal({file,authorityId,rootScopeRef,assignmentDigest,binding,failpoint?}) -> append/acknowledge/source/pending/receipt/inspect/close；新module与专属server/test可独立收回，不改Doc/root/schema/部署。
+
+## worker journal→原RAM TLS sink 独立小块
+
+产品源码66e7d16551997fc35c7e81cef1c65feec3532670；journal首块f11bf044。新增createWorkerEventSink({journal,runClient,origin,tls,serverFingerprint256,timeoutMs?,verifyGrant})，只有原runClient.workerEventProofFor签固定append域/原packet完整body/current真实exporter。worker先本机FULL packet，再master fresh resolver/FULL receipt，再本机FULL ACK，beforeCall/flush等待全链；任何失败立即监督/latch到failed，下一model/tool拒，close仍实际收所有req/res/TCP后返回原错误，不吞为成功。server叶pin+CA/hostname双核、独立agent:false连接、严格UTF8 response/上限/超时，不能把end作socketclose。master省略tool_result.output原语义保持，worker精确核row/event/binding/digest。
+
+journal重开或有任何旧packet（含已ACK）拒writer再执行；replayPending只传原packet，不启动runner/model、不重领grant，重发必须fresh resolver+新TLS/nonce。旧ACK不能替当前grant权限。missing verifyGrant/signer/TLS/journal配置503；本机scope/signature证据不是closed、终态或FIFO释放。normal provider8d三段已在b8ca，但本块不调用finish/prepare/terminal，不提前写success。
+
+纯journal+sink首轮9/9、0fail/cancel/skip、189.0744ms、exit0；TMP pc-worker-sink-pure-first.log。sink三个目标只拒绝/真实SQLite fault，没有业务网络，verify/signer构造seam受控，TLS另验。journal最初未实现的1/0/1首红原日志保留，未掩盖。
+
+固定66e7d165真实TLS首次1/1、0fail/cancel/skip、case997.1151ms、suite1074.179ms、工具wall1869ms/exit0、native重试0，TMP pc-worker-sink-mtls-66e7d165-first.log。源前后同66e7且status空；预检/结束6700–6711无监听。唯一自有业务HTTPS6702，TMP OpenSSL所有调用windowsHide，实际原RAM私钥未导出，CA/leaf/真实exporter、Ed25519、worker/master各自FULL SQLite；正常双事件ACK耐久，lostACK master已落第4会话事件但worker仍原packet pending，原session重发准确同receipt/eventSeq不增；fresh getter撤回后新packet拒，所有req/res/TCP实际close计数0。fixture注册/rootOS/Doc getter为受控，sameOS进程，不能称真实Doc授权链/独立UID/OS子进程/生产模型或Linux闭口完成。失败close显式AggregateError，teardown按已预计transport/revoke失败检查，未虚构closure ACK。
+
+强制tsc -b --force零错误、exit0、工具wall7173ms，TMP pc-worker-sink-66e7d165-type.log。无full/browser/节点/生产模型。下一独立小块才将此journal与remote sink挂进实际task worker/OS child；当前既有task-worker start仍缺真实readControl/sink/factory参数就503，不把constructor拒当用户任务成功。crash pending的scopeControls接口已与Astra确认，等待根配对source，不从库存mint forced/closed。
