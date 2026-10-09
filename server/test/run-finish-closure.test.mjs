@@ -38,3 +38,32 @@ test('internal finalizer cannot turn a terminal event or missing close evidence 
   assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, grant.runId);
   await assert.rejects(f.admit('next-before-close'), { code: 'run-not-ready' });
 });
+
+test('finish query has a separate exact operation capability and cannot change the recorded outcome', async t => {
+  const { f, body, result } = await ready(t);
+  const invoke = async (input, operation = 'queryFinish') => {
+    const signed = f.instances.authorize(f.agentProcess, operation, input);
+    try { return await f.rawProvider.queryFinish({ ...input, servicePrincipal: signed.principal }); }
+    finally { f.instances.authority.release(signed.principal.instanceSession); }
+  };
+  const result2 = await invoke(body);
+  assert.equal(result2.recorded, true); assert.equal(result2.finishPending, true);
+  assert.deepEqual(result2.finishReceipt, result.finishReceipt);
+  await assert.rejects(invoke(body, 'finish'), { code: 'instance-invocation-forbidden' });
+  await assert.rejects(invoke({ ...body, outcome: { ...body.outcome, status: 'done' } }), { code: 'run-request-mismatch' });
+  assert.deepEqual(await invoke({ ...body, requestId: 'unrecorded' }), { recorded: false });
+});
+
+test('generic control ACK cannot bypass terminal finalizer; private fence wins without reviving current run', async t => {
+  const { f, result } = await ready(t), c = f.ledger.read().runControlsV2[result.finishReceipt.controlId];
+  let validatorCalled = false;
+  assert.throws(() => f.rawProvider.acknowledgeControl({ controlId: c.controlId, receipt: {
+    controlId: c.controlId, fenceRevision: c.fenceRevision, receiptId: 'forged', complete: true,
+  } }, () => { validatorCalled = true; return true; }), { code: 'run-terminal-finalizer-required' });
+  assert.equal(validatorCalled, false);
+  f.privateFence();
+  assert.throws(() => f.rawProvider.finalizeFinish({ finishReceiptId: result.finishReceipt.finishReceiptId }), { code: 'run-revoked' });
+  const conv = f.ledger.read().conversationsV2[projectId][conversationId];
+  assert.equal(conv.currentRunId, null); assert.equal(conv.messages[0].queueState, 'cancelled');
+  assert.equal(f.ledger.read().runFinishReceiptsV2[result.finishReceipt.finishReceiptId].complete, false);
+});

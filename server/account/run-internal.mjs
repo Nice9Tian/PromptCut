@@ -7,7 +7,7 @@ const ROOT = '/internal/v2/runs/';
 const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'];
 const readFields = [...binding, 'requestId', 'readIntentId', 'promptDigest', 'prompt'];
 const shapes = Object.freeze({ admit: ['projectId', 'conversationId', 'requestId'], read: readFields,
-  'read/query': readFields, check: ['projectId', 'runGrantId'], finish: RUN_FINISH_FIELDS,
+  'read/query': readFields, check: ['projectId', 'runGrantId'], finish: RUN_FINISH_FIELDS, 'finish/query': RUN_FINISH_FIELDS,
   ticket: ['projectId', 'runGrantId', 'conversationId', 'purpose'], pending: [] });
 const fail = (status, code) => { throw accountError(status, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -27,7 +27,7 @@ async function bodyOf(req) {
   return body;
 }
 function validateBody(action, body) {
-  if (action === 'finish') { validateRunFinishInput(body); return; }
+  if (action === 'finish' || action === 'finish/query') { validateRunFinishInput(body); return; }
   const fields = shapes[action], optional = action === 'check' ? ['action'] : [];
   if (Object.keys(body).some(field => !fields.includes(field) && !optional.includes(field)) ||
       fields.some(field => !Object.hasOwn(body, field))) fail(400, 'invalid-run-body');
@@ -61,6 +61,7 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       if (req.socket?.authorized !== true || fingerprint256 !== pin) fail(403, 'service-forbidden');
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = url.pathname.slice(ROOT.length);
+      if (action === 'finish/query' && url.search) fail(400, 'invalid-run-body');
       if (!Object.hasOwn(shapes, action)) fail(404, 'no-route');
       const body = await bodyOf(req); validateBody(action, body);
       let servicePrincipal = await resolveServicePrincipal({ fingerprint256, socket: req.socket });
@@ -70,7 +71,7 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
         if (typeof authenticateInvocation !== 'function') fail(503, 'instance-consumer-unavailable');
         if (action === 'check' && !['read', 'write'].includes(body.action)) fail(400, 'invalid-run-action');
         invocation = await authenticateInvocation({ req, servicePrincipal, body,
-          operation: ({ admit: 'admit', read: 'confirmRead', 'read/query': 'queryRead', finish: 'finish',
+          operation: ({ admit: 'admit', read: 'confirmRead', 'read/query': 'queryRead', finish: 'finish', 'finish/query': 'queryFinish',
             check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
         if (!invocation?.servicePrincipal || typeof invocation.release !== 'function') fail(503, 'instance-consumer-unavailable');
         servicePrincipal = invocation.servicePrincipal;
@@ -80,6 +81,10 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       else if (action === 'read') result = await runAuthority.confirmRead(input);
       else if (action === 'read/query') result = await runAuthority.queryRead(input);
       else if (action === 'finish') result = await runAuthority.finish(input);
+      else if (action === 'finish/query') {
+        if (typeof runAuthority.queryFinish !== 'function') fail(503, 'run-finish-query-unavailable');
+        result = await runAuthority.queryFinish(input);
+      }
       else if (action === 'pending') {
         if (typeof listPendingRuns !== 'function') fail(503, 'run-pending-unavailable');
         result = await listPendingRuns({ servicePrincipal });

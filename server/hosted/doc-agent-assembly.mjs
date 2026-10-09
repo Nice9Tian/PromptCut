@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import https from 'node:https';
+import { checkServerIdentity } from 'node:tls';
 import { accountError, certificateFingerprint } from '../account/client.mjs';
 import { createConversationAuthority, conversationReadInState } from '../account/conversation-authority.mjs';
 import { createAgentReadControl, createAgentReadControlHandler } from '../account/agent-read-control.mjs';
 import { createConversationInternalHandler } from '../account/conversation-internal.mjs';
 import { createRunAuthority } from '../account/run-authority.mjs';
 import { createRunInternalHandler } from '../account/run-internal.mjs';
-import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
+import { createAgentInstanceAuthority, instanceTlsBinding, TERMINAL_CONTROL_PATH } from '../account/agent-instance-authority.mjs';
+import { canonicalJson } from '../account/ledger.mjs';
 import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
   INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
@@ -31,6 +34,56 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
   let stopped = false, runAuthority;
+  const terminalRequests = new Set();
+  function requestTerminalClosure(control) {
+    let origin;
+    try { origin = new URL(account.agent.controlOrigin); } catch { fail(503, 'terminal-control-unavailable'); }
+    const serverPin = certificateFingerprint(account.agent.controlServerFingerprint256);
+    if (origin.protocol !== 'https:' || !['127.0.0.1', '[::1]'].includes(origin.hostname) ||
+        origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password ||
+        !/^[a-f0-9]{64}$/.test(serverPin)) fail(503, 'terminal-control-configuration');
+    currentService();
+    const nonce = randomUUID(), encoded = Buffer.from(JSON.stringify({ control, nonce }));
+    return new Promise((resolve, reject) => {
+      let channelBinding, answer, error, socket, socketClosed = false, requestClosed = false;
+      const settle = () => {
+        if (!requestClosed || socket && !socketClosed) return;
+        if (error) reject(error); else if (answer && channelBinding) resolve({ ...answer, nonce, channelBinding });
+        else reject(accountError(503, 'terminal-control-unavailable'));
+      };
+      const req = https.request(new URL(TERMINAL_CONTROL_PATH, origin), { ...account.clientTls, agent: false,
+        rejectUnauthorized: true, minVersion: 'TLSv1.3', method: 'POST', timeout: 5000,
+        checkServerIdentity(host, cert) { return checkServerIdentity(host, cert) ||
+          (certificateFingerprint(cert.fingerprint256) !== serverPin ? accountError(403, 'terminal-control-pin') : undefined); },
+        headers: { 'content-type': 'application/json', 'content-length': encoded.length, connection: 'close' } }, res => {
+        const chunks = []; let length = 0;
+        res.on('data', chunk => { length += chunk.length; if (length > 256 * 1024) req.destroy(accountError(503, 'terminal-control-protocol')); else chunks.push(chunk); });
+        res.on('error', e => { error = e; req.destroy(); });
+        res.on('aborted', () => { error = accountError(503, 'terminal-control-unavailable'); req.destroy(); });
+        res.on('end', () => {
+          try {
+            const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (res.statusCode !== 200 || value?.ok !== true || !value.result?.drain || !value.result?.proof)
+              fail(503, 'terminal-control-pending');
+            answer = value.result;
+          } catch (e) { error = e; }
+          req.destroy();
+        });
+      });
+      terminalRequests.add(req);
+      req.once('socket', value => { socket = value;
+        socket.once('close', () => { socketClosed = true; settle(); });
+        socket.once('secureConnect', () => { try {
+          if (certificateFingerprint(socket.getPeerCertificate().fingerprint256) !== serverPin) fail(403, 'terminal-control-pin');
+          channelBinding = instanceTlsBinding(socket);
+        } catch (e) { req.destroy(e); } });
+      });
+      req.once('timeout', () => req.destroy(accountError(503, 'terminal-control-unavailable')));
+      req.once('error', e => { error = e; });
+      req.once('close', () => { terminalRequests.delete(req); requestClosed = true; settle(); });
+      req.end(encoded);
+    });
+  }
   const currentService = () => {
     if (stopped) fail(503, 'doc-agent-unavailable');
     try { serviceRegistry?.refresh({ force: true }); } catch { fail(403, 'run-service-forbidden'); }
@@ -102,10 +155,16 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         fail(403, 'run-control-mismatch');
       const doc = getDocAssembly(), service = getService();
       if (!doc || !service) fail(503, 'doc-agent-unavailable');
+      if (persisted.kind === 'terminal') ledger.transaction(state => {
+        const record = (state.docRunClosuresV2 ??= {})[control.controlId] ??= {
+          controlId: control.controlId, fenceRevision: control.fenceRevision, payloadDigest: control.payloadDigest, instances: {} };
+        record.instances[docInstanceId] ??= { docInstanceId, state: 'closing', recordedAt: now() };
+      });
       // fencePrincipals installs logical/admission barriers and terminates owned
       // transports synchronously before its first await. Establish the read
       // barrier before operation recovery can yield to any cache/push callback.
-      const closing = persisted.revoked.length ? service.fencePrincipals({ runGrantIds: persisted.revoked, roles: ['agent'] }) : Promise.resolve(null);
+      const closingIds = persisted.kind === 'terminal' ? persisted.closing : persisted.revoked;
+      const closing = closingIds.length ? service.fencePrincipals({ runGrantIds: closingIds, roles: ['agent'] }) : Promise.resolve(null);
       const closingResult = closing.then(value => ({ value }), error => ({ error }));
       const operationReceipts = [];
       for (const fence of persisted.operationFences ?? []) operationReceipts.push(await doc.fence(fence));
@@ -118,10 +177,31 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
           fail(403, 'run-control-mismatch');
         const record = (state.docRunClosuresV2 ??= {})[control.controlId] ??= {
           controlId: control.controlId, fenceRevision: control.fenceRevision, instances: {} };
-        record.instances[docInstanceId] ??= { docInstanceId, operationReceipts, closed,
+        if (persisted.kind === 'terminal') record.instances[docInstanceId] = {
+          docInstanceId, operationReceipts, closed, state: 'closed', recordedAt: now() };
+        else record.instances[docInstanceId] ??= { docInstanceId, operationReceipts, closed,
           // This is deliberately not a complete receipt or old-instance proof.
           complete: false, agentState: 'resource-closure-required', recordedAt: now() };
       });
+      if (persisted.kind === 'terminal') {
+        const answer = await requestTerminalClosure(persisted);
+        currentService();
+        ledger.transaction(state => {
+          const current = state.runControlsV2?.[control.controlId];
+          if (!current || current.payloadDigest !== persisted.payloadDigest || current.fenceRevision !== persisted.fenceRevision)
+            fail(403, 'run-control-mismatch');
+          const receipt = state.runFinishReceiptsV2?.[current.target.finishReceiptId];
+          if (answer.drain.eventId !== receipt?.outcome.eventId || answer.drain.eventDigest !== receipt?.outcome.eventDigest)
+            fail(403, 'terminal-event-mismatch');
+          const verified = instanceAuthority.verifyTerminalClosureInState(state, { control: current, ...answer });
+          const prior = (state.runTerminalAgentReceiptsV1 ??= {})[control.controlId];
+          if (prior && (prior.targetDigest !== verified.targetDigest || canonicalJson(prior.drain) !== canonicalJson(verified.drain)))
+            fail(409, 'terminal-drain-mismatch');
+          state.runTerminalAgentReceiptsV1[control.controlId] ??= verified;
+        });
+        const result = runAuthority.finalizeFinish({ finishReceiptId: persisted.target.finishReceiptId });
+        return { pending: result.finishPending, controlId: control.controlId };
+      }
       return { pending: true, controlId: control.controlId };
     })();
     deliveries.set(control.controlId, pending);
@@ -166,7 +246,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       fail(503, 'agent-fence-pending');
     },
   });
-  runAuthority = createRunAuthority({ ledger, conversationHooks: conversations.hooks,
+  runAuthority = createRunAuthority({ ledger, conversationHooks: conversations.hooks, docInstanceId,
     verifyServiceInState, instanceAuthority, now, synchronize: () => runtime.authority.synchronize(),
     async verifySender(ref, context) {
       const checked = await accountClient.verifyAcceptedMessage(ref, context);
@@ -191,6 +271,14 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     authorizeQuery: input => runAuthority.authorizeQuery(scopedInput(input, 'authorizeQuery')),
     resolveRunPrincipal: input => runAuthority.resolveRunPrincipal(input), admit: input => runAuthority.admit(input),
     confirmRead: input => runAuthority.confirmRead(input), queryRead: input => runAuthority.queryRead(input), finish: input => runAuthority.finish(input),
+    async queryFinish(input) {
+      const value = await runAuthority.queryFinish(input);
+      if (value.recorded && value.finishPending) {
+        try { await deliver(ledger.read().runControlsV2[value.finishReceipt.controlId]); }
+        catch (error) { if (error.status !== 503) throw error; }
+      }
+      return runAuthority.queryFinish(input);
+    },
     applyAccessEvent: event => runAuthority.applyAccessEvent(event), synchronize: () => runAuthority.synchronize(),
   };
   function nonce(value) { if (!Number.isSafeInteger(value) || value < 1) fail(400, 'instance-nonce-invalid'); return value; }
@@ -231,6 +319,11 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     try {
       claimNonce(handshakeNonces, req.socket, requestNonce);
       const principal = await runAuthority.resolveRunPrincipal({ servicePrincipal: { ...base, ...cap }, projectId, runGrantId });
+      ledger.transaction(state => {
+        const grant = state.runGrantsV2?.[runGrantId];
+        if (!grant || grant.finishReceiptId || !['active', 'retained'].includes(grant.state)) fail(403, 'run-finishing');
+        ((state.runDocInstancesV1 ??= {})[runGrantId] ??= {})[docInstanceId] ??= { docInstanceId, registeredAt: now() };
+      });
       initialNonces.set(req.socket, requestNonce);
       return { ...principal, servicePrincipal: base, userId: principal.accountId, tenantId: projectId,
         service: 'agent', scope: 'member' };
@@ -339,7 +432,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   return { conversations, readControl, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
     async handleInternal(req, res) { return await instancesHandler(req, res) || await readControlsHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
-    async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
+    async close() { stopped = true; readControl.close(); for (const req of terminalRequests) req.destroy(); await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
 }

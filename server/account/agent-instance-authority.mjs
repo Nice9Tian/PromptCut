@@ -9,6 +9,33 @@ const generation = value => Number.isSafeInteger(value) && value > 0;
 const clone = value => structuredClone(value);
 export const INSTANCE_EXPORTER_LABEL = 'EXPORTER-PromptCut-Agent-Instance-v1';
 export const INSTANCE_PROOF_DOMAIN = 'promptcut.agent-instance.request.v1';
+export const TERMINAL_CONTROL_PATH = '/internal/v2/agent/terminal-control';
+export function validateTerminalControl(control) {
+  const target = control?.target;
+  const fields = ['authorityId', 'finishReceiptId', 'projectId', 'conversationId', 'messageId', 'runId', 'runGrantId',
+    'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration', 'readReceiptId', 'outcomeDigest'];
+  if (control?.kind !== 'terminal' || !text(control.controlId) || !generation(control.fenceRevision) ||
+      !target || Object.keys(target).length !== fields.length || fields.some(k => !Object.hasOwn(target, k)) ||
+      fields.filter(k => !['instanceGeneration', 'outcomeDigest'].includes(k)).some(k => !text(target[k])) ||
+      target.serviceId !== 'agent' || !generation(target.instanceGeneration) ||
+      !/^[a-f0-9]{64}$/.test(target.outcomeDigest ?? '') || digestOf(target) !== control.payloadDigest)
+    deny(403, 'terminal-control-invalid');
+  return target;
+}
+export function terminalControlPayload({ control, nonce, drain, channelBinding }) {
+  const target = validateTerminalControl(control);
+  if (!text(nonce) || !/^[a-f0-9]{64}$/.test(channelBinding ?? '')) deny(403, 'terminal-control-invalid');
+  const drainFields = ['v', 'drainReceiptId', 'resourceScopeId', 'resourceWitnessId', 'eventId', 'eventDigest',
+    'dispatchesOpen', 'connectionsOpen', 'streamsOpen', 'childrenOpen', 'pendingRegistrations', 'oldInstanceUnknown'];
+  if (!drain || Object.keys(drain).length !== drainFields.length || drainFields.some(k => !Object.hasOwn(drain, k)) ||
+      drain.v !== 1 || ['drainReceiptId', 'resourceScopeId', 'resourceWitnessId', 'eventId'].some(k => !text(drain[k])) ||
+      !/^[a-f0-9]{64}$/.test(drain.eventDigest ?? '') || drain.oldInstanceUnknown !== false ||
+      ['dispatchesOpen', 'connectionsOpen', 'streamsOpen', 'childrenOpen', 'pendingRegistrations'].some(k => drain[k] !== 0))
+    deny(503, 'terminal-resource-pending');
+  return { domain: 'promptcut.agent-terminal-closure.v1', method: 'POST', path: TERMINAL_CONTROL_PATH,
+    authorityId: target.authorityId, target: clone(target), controlId: control.controlId,
+    fenceRevision: control.fenceRevision, nonce, channelBinding, drainDigest: digestOf(drain) };
+}
 const tables = state => {
   state.agentInstancesV2 ??= {}; state.agentRegistrationsV2 ??= {};
   state.agentInstanceFencesV2 ??= {};
@@ -46,10 +73,10 @@ export function instanceRunScope(operation, input) {
     conversationId: input.conversationId, requestId: input.requestId };
   if (['resolveRunPrincipal', 'authorizeQuery'].includes(operation)) return { operation, ...target };
   if (operation === 'checkAccess') return { operation, ...target, action: input.action };
-  if (['confirmRead', 'queryRead', 'finish'].includes(operation)) {
+  if (['confirmRead', 'queryRead', 'finish', 'queryFinish'].includes(operation)) {
     const value = { operation, ...Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId',
       'runGrantId', 'requestId'].map(key => [key, input[key]])) };
-    if (operation !== 'finish') Object.assign(value, { readIntentId: input.readIntentId, promptDigest: input.promptDigest });
+    if (!['finish', 'queryFinish'].includes(operation)) Object.assign(value, { readIntentId: input.readIntentId, promptDigest: input.promptDigest });
     else Object.assign(value, { readReceiptId: input.readReceiptId, outcome: structuredClone(input.outcome) });
     return value;
   }
@@ -185,7 +212,20 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
       value.closure = clone(witness); value.state = 'closed'; return clone(value);
     });
   }
-  return { beginRegistration, register, authenticate, verifyInState, fenceInState, confirmClosed,
+  // Called only by the trusted outbound pinned-control adapter, never an HTTP
+  // body route. Its actual socket supplies channelBinding and its own nonce.
+  function verifyTerminalClosureInState(state, { control, nonce, drain, proof, channelBinding }) {
+    const payload = terminalControlPayload({ control, nonce, drain, channelBinding });
+    const target = control.target, value = record(state, target.instanceId, target.instanceGeneration);
+    if (target.authorityId !== ledger.authorityId || value.state !== 'active' ||
+        value.serviceId !== target.serviceId || value.serviceKid !== target.serviceKid ||
+        proof?.instanceId !== target.instanceId || proof?.instanceGeneration !== target.instanceGeneration ||
+        !signed(payload, proof.signature, value.publicKey)) deny(403, 'terminal-instance-proof-invalid');
+    return { targetDigest: control.payloadDigest, fenceRevision: control.fenceRevision,
+      instanceId: value.instanceId, instanceGeneration: value.instanceGeneration,
+      drain: clone(drain), proofDigest: digestOf(proof) };
+  }
+  return { beginRegistration, register, authenticate, verifyInState, fenceInState, confirmClosed, verifyTerminalClosureInState,
     release: instanceSession => invocations.delete(instanceSession),
     close: () => invocations.clear() };
 }

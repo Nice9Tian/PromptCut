@@ -1,6 +1,7 @@
 import https from 'node:https';
 import { randomUUID } from 'node:crypto';
 import { certificateFingerprint, accountError } from '../account/client.mjs';
+import { TERMINAL_CONTROL_PATH, terminalControlPayload, validateTerminalControl, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 const send = (res, status, body) => {
@@ -20,7 +21,7 @@ async function read(req) {
  * An unobserved older instance, child or data socket leaves the control pending.
  */
 export function createRunControlServer({ tls, docFingerprint256, serviceKid, instanceId,
-  manager, now = Date.now } = {}) {
+  instanceGeneration, instanceSession, manager, now = Date.now } = {}) {
   const pin = certificateFingerprint(docFingerprint256);
   if (!tls?.key || !tls?.cert || !tls?.ca || !/^[a-f0-9]{64}$/.test(pin) ||
       typeof serviceKid !== 'string' || !serviceKid || typeof instanceId !== 'string' || !instanceId ||
@@ -31,8 +32,25 @@ export function createRunControlServer({ tls, docFingerprint256, serviceKid, ins
     try {
       const peer = req.socket?.getPeerCertificate?.();
       if (req.socket?.authorized !== true || certificateFingerprint(peer?.fingerprint256) !== pin) fail(403, 'control-service-forbidden');
-      if (req.url !== '/internal/v2/agent/control' || req.method !== 'POST') fail(404, 'control-no-route');
+      if (!['/internal/v2/agent/control', TERMINAL_CONTROL_PATH].includes(req.url) || req.method !== 'POST') fail(404, 'control-no-route');
       const body = await read(req);
+      if (req.url === TERMINAL_CONTROL_PATH) {
+        if (Object.keys(body).length !== 2 || !Object.hasOwn(body, 'control') || !Object.hasOwn(body, 'nonce')) fail(400, 'terminal-control-invalid');
+        const control = body.control, identity = instanceSession?.identity?.();
+        validateTerminalControl(control);
+        if (typeof body.nonce !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(body.nonce)) fail(400, 'terminal-control-invalid');
+        if (!identity || typeof manager.prepareTerminalClosure !== 'function' ||
+            typeof instanceSession.terminalControlProofFor !== 'function') fail(503, 'terminal-control-unavailable');
+        if (identity.instanceId !== instanceId || identity.instanceGeneration !== instanceGeneration || identity.serviceKid !== serviceKid ||
+            ['authorityId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'].some(k => control?.target?.[k] !== identity[k]) ||
+            control?.kind !== 'terminal') fail(403, 'control-binding-mismatch');
+        // Normal terminal drain NEVER invokes the cancelling drainControl path.
+        // Manager must retain the immutable actual-event/result/resource tuple.
+        const drain = await manager.prepareTerminalClosure(structuredClone(control));
+        terminalControlPayload({ control, nonce: body.nonce, drain, channelBinding: instanceTlsBinding(req.socket) });
+        const proof = instanceSession.terminalControlProofFor({ socket: req.socket, control, nonce: body.nonce, drain });
+        send(res, 200, { ok: true, result: { drain, proof } }); return;
+      }
       if (body.receipt !== undefined || body.complete !== undefined || body.servicePrincipal !== undefined ||
         body.targetInstanceId !== instanceId || body.targetServiceKid !== serviceKid) fail(403, 'control-binding-mismatch');
       const control = body.control;

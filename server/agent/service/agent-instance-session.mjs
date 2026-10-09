@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { accountError } from '../../account/client.mjs';
 import { canonicalJson, digestOf } from '../../account/ledger.mjs';
-import { instanceProofPayload, instanceTlsBinding } from '../../account/agent-instance-authority.mjs';
+import { instanceProofPayload, instanceTlsBinding, terminalControlPayload } from '../../account/agent-instance-authority.mjs';
 import { INSTANCE_PROOF_HEADER } from '../../account/agent-instance-internal.mjs';
 import { RUN_ASSET_PROOF_HEADER, assetHttpTuple, runAssetIssueRequest } from '../../account/run-asset-protocol.mjs';
 import { CONVERSATION_CONTROL_ROOT, conversationControlOperations, conversationControlScope } from '../../account/agent-read-control.mjs';
@@ -9,7 +9,7 @@ import { validateRunFinishInput } from '../../account/run-authority.mjs';
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
-const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'resolveRunPrincipal']);
+const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'queryFinish', 'resolveRunPrincipal']);
 
 /** One Agent OS process owns one non-exported Ed25519 private key. The request
  * callback is the same pinned mTLS transport later used for run requests.
@@ -55,8 +55,8 @@ export function createAgentInstanceSession({ requestRegistration } = {}) {
         !operations.has(operation) || !body || typeof body !== 'object' || Array.isArray(body) ||
         (operation === 'checkAccess' && !['read', 'write'].includes(body.action)))
       fail('instance-proof-input');
-    if (operation === 'finish') {
-      if (path !== '/internal/v2/runs/finish') fail('instance-proof-input');
+    if (['finish', 'queryFinish'].includes(operation)) {
+      if (path !== (operation === 'finish' ? '/internal/v2/runs/finish' : '/internal/v2/runs/finish/query')) fail('instance-proof-input');
       validateRunFinishInput(body);
     }
     const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),
@@ -113,7 +113,14 @@ export function createAgentInstanceSession({ requestRegistration } = {}) {
     return { name: INSTANCE_PROOF_HEADER, value: Buffer.from(JSON.stringify({ instanceId: registered.instanceId,
       instanceGeneration: registered.instanceGeneration, signature: signatureOf(payload) })).toString('base64url') };
   }
-  return { register, proofFor, dataProofFor, runAssetIssueProofFor, runAssetHttpProofFor, conversationControlProofFor,
+  function terminalControlProofFor({ socket, control, nonce, drain }) {
+    if (closed || !registered) fail('instance-not-registered');
+    if (['authorityId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'].some(k => control?.target?.[k] !== registered[k]))
+      fail('terminal-instance-mismatch');
+    const payload = terminalControlPayload({ control, nonce, drain, channelBinding: instanceTlsBinding(socket) });
+    return { instanceId: registered.instanceId, instanceGeneration: registered.instanceGeneration, signature: signatureOf(payload) };
+  }
+  return { register, proofFor, dataProofFor, runAssetIssueProofFor, runAssetHttpProofFor, conversationControlProofFor, terminalControlProofFor,
     identity: () => registered ? { ...registered } : null,
     close() { closed = true; registered = null; challenge = null; } };
 }

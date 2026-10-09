@@ -6,9 +6,9 @@ import { runAssetIssueRequest } from '../account/run-asset-protocol.mjs';
 import { validateRunFinishInput } from '../account/run-authority.mjs';
 
 const paths = Object.freeze({ admit: 'admit', confirmRead: 'read', queryRead: 'read/query',
-  checkAccess: 'check', finish: 'finish', runTicket: 'ticket', pending: 'pending' });
+  checkAccess: 'check', finish: 'finish', queryFinish: 'finish/query', runTicket: 'ticket', pending: 'pending' });
 const operations = Object.freeze({ admit: 'admit', confirmRead: 'confirmRead', queryRead: 'queryRead',
-  checkAccess: 'checkAccess', finish: 'finish', runTicket: 'resolveRunPrincipal' });
+  checkAccess: 'checkAccess', finish: 'finish', queryFinish: 'queryFinish', runTicket: 'resolveRunPrincipal' });
 const fail = code => { throw accountError(503, code); };
 
 /** Agent-owned mTLS transport. Doc derives the service principal from the pinned
@@ -95,14 +95,14 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
         'instanceId', 'instanceGeneration', 'instanceSession'].some(key => fields[key] !== undefined))
       throw accountError(400, 'invalid-authority-claim');
     if (name === 'checkAccess' && !['read', 'write'].includes(fields.action)) throw accountError(400, 'invalid-run-action');
-    if (name === 'finish') validateRunFinishInput(fields);
+    if (name === 'finish' || name === 'queryFinish') validateRunFinishInput(fields);
     if (name !== 'pending') await instanceSession.register();
     return transmit(`/internal/v2/runs/${paths[name]}`, fields, operations[name] ?? null);
   }
   return {
     admit: input => request('admit', input), confirmRead: input => request('confirmRead', input),
     queryRead: input => request('queryRead', input), checkAccess: input => request('checkAccess', input),
-    finish: input => request('finish', input), runTicket: input => request('runTicket', input),
+    finish: input => request('finish', input), queryFinish: input => request('queryFinish', input), runTicket: input => request('runTicket', input),
     pending: () => request('pending', {}),
     async issueRunAsset(body, { registerResource } = {}) {
       if (closed) throw accountError(503, 'run-client-unavailable');
@@ -117,6 +117,7 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     registerInstance: () => instanceSession.register(), instanceIdentity: () => instanceSession.identity(),
     dataProofFor: input => instanceSession.dataProofFor(input),
     conversationControlProofFor: input => instanceSession.conversationControlProofFor(input),
+    terminalControlProofFor: input => instanceSession.terminalControlProofFor(input),
     runAssetHttpProofFor: input => instanceSession.runAssetHttpProofFor(input),
     close() { closed = true; instanceSession.close(); for (const req of active) req.destroy(); },
   };
