@@ -87,6 +87,7 @@ try {
     args: [...PROBE_CHROME_ARGS, '--ignore-certificate-errors', '--host-resolver-rules=MAP s1.pc.localhost 127.0.0.1,MAP s2.pc.localhost 127.0.0.1'] });
   for (let i = 0; i < 2; i++) {
     const context = await browser.createBrowserContext(); contexts.push(context); const page = await context.newPage(); pages.push(page);
+    await page.setViewport({width:1600,height:1100});
     page.docRevisions = [];
     const cdp = await page.createCDPSession(); await cdp.send('Network.enable');
     cdp.on('Network.webSocketFrameReceived', ({ response }) => {
@@ -131,7 +132,7 @@ try {
       assistantCount: document.querySelectorAll('[data-pc-msg^="ca-"]').length,
       projectName: window.__pcStore?.getState()?.project?.name === name,
       tools: ['get_project','get_selection','set_project_meta'].map(tool=>({name:tool,
-        visible:Array.from(document.querySelectorAll('.ai-tool-name')).some(el=>el.textContent===tool)})),
+        visible:Array.from(document.querySelectorAll('button[data-pc-op].is-ok')).some(el=>el.getAttribute('title')?.includes(tool))})),
       reportVisible: document.querySelector('.ai-messages')?.textContent?.includes('真实工具短链'),
     }), {text:REAL_RUNNER_TEXT,name:REAL_RUNNER_NAME});
     result['page'+i] = visible;
