@@ -25,3 +25,15 @@
 typed forced-terminal需Doc签名完整assignment+持久fence引用，intent必须null；unassigned-retirement只可ready且无assignment，root可信文件记录不表示任务完成。两类closed有独立protocol，完整历史允许无bound阶段的retirement；normal原结构/签名不变。共享Asset原语仅固定Agent endpoint允许显式allowDeadMain，Asset默认及Asset用途传true均拒；死主分支核boot/scope/原service inode/Invocation/MainPID0/旧birth消失及loaded drop-in前后相同，随后复用原固定eventsFD空证据。实际Linux尚未跑，纯模型不能替代该证据。
 
 首typed/兼容回归TMP `pc-worker-doc-lifecycle-target-1.log`：163项/162pass/1fail/0skip、651.2879ms。唯一失败为actual account fixture要求两条显式路径，我仅配置provider未配PROMPTCUT_PASSWORD_ORDER_MODULE，尚未进入该项业务；原失败保留，补真实order绝对路径后有因复验。eca3类型首轮exit0（8.10秒，TMP pc-worker-doc-assignment-type-1.log）；本增量需固定后重验类型。没有full/真实TLS/节点。
+
+补正确actual VH provider/order配置后，同源码目标163/163、0fail/skip、686.9127ms（TMP pc-worker-doc-lifecycle-target-2.log）；类型0、7.84秒（TMP pc-worker-doc-lifecycle-type-1.log）。根另在集成点56a运行208/208、7217ms、类型0；这不包含本叶后续未提交正常三段，不能据此认定scope revoke已保FIFO或Linux forced通过。
+
+## 独立forced OS实验增量（仅交根执行）
+
+既有agent-run-scope-proof显式增加`--forced`，原无flag正常入口不变。命令为`node scripts/probes/agent-run-scope-proof.mjs --config /run/<fresh>/probe.json --out /run/<fresh>/out --forced`；沿用原两槽固定配置与新root命名空间，不能复用旧实验目录/锁。两槽仅实验数量，不是生产并发默认。输出祖先必须root可信，不能用world-writable的/var/tmp作发布证据目录。
+
+A先经原真实pinned mTLS向隔离worker专用probe-parent-exit提交受控Doc签名private forced-terminal，worker核真实root assignment、原record、完整签名后仅自行退出父进程；不签normal intent、不向任意PID发kill。子进程保留既有SIGTERM幂等handler及2秒FD/TCP窗口。root先实际观察原父birthgone、原子birthlive/持真实FD/TCP、固定scope FD populated1及active invocation，再调用真实pinRetired→allowDeadMain→stopAndObserve。未观察该负例、原service对象被回收/替换或未知均失败，不能用更长sleep或ENODEV算空。原scope固定FD真实pop0、父子birthgone/双EOFclose、durable closure/marker完成后reader才closed。同期B原tuple、子资源与TCP必须不变；之后按原normal路径关闭B。
+
+替换反例从真实已启动B记录取得OS tuple，代入A的pinRetired，必须publisher-previous-instance-mismatch且A/B原birth仍在；不改真实unit/record，不stop替代PID。其余实际文件缺marker/有锁/混代/新空实例拒绝仍保留。测试采用受控Doc issuer，只证明root OS adapter，不证明真实Doc worker-failed授权或业务模型完成。worker-failed自动证书producer尚未接：master getter只能读取已存在证书，不能请求生成；缺真实Doc fence时保持FIFO pending。
+
+本机只做两脚本node --check与diff --check（均0）；Windows CLI一次自然exit1、精确probe-linux-root-required，按预期断言通过，原始TMP pc-agent-forced-proof-cli-1.log。未启动listener/服务/模型、未操作节点。首次Linux原normal10/10保持原历史，不能移作本forced增量结果；由root导出固定blob后单轮实测。
