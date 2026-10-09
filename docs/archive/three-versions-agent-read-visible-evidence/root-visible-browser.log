@@ -1,0 +1,15 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs C:\Users\admin\AppData\Local\Temp\pc-account-read-visible-root-ba2d7753-browsers-visible.test.mjs
+
+{"completed":true,"checks":7,"passed":7,"wallMs":3492,"listening":[],"output":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-visible-once"}
+✔ actual visible account browser (3679.9901ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3776.0756
+✓ npm test 最终结果：零失败

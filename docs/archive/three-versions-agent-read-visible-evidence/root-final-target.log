@@ -1,0 +1,77 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs server/test/agent-read-control.test.mjs server/test/agent-read-control-transport.test.mjs server/test/agent-access-http.test.mjs server/test/cloud-queue-http.test.mjs server/test/account-assembly-central.test.mjs server/test/account-executor-assembly-mtls.test.mjs server/test/account-executor-assembly.test.mjs server/test/account-executor-visible-wire.test.mjs server/test/account-run-events.test.mjs src/ai/cloud/events.test.mjs src/ai/cloud/account-read-revocation.test.mjs src/ai/cloud/account-conversation-controls.test.mjs server/test/fixtures/http-proxy-stream.test.mjs src/ai/cloud/page-requests.test.mjs
+
+✔ v2 required refuses missing order before opening any cloud entry (1.9171ms)
+✔ actual provider/order → central doc → independent asset → two pages: durable op, readonly selection, restart and revoked resume (1473.6918ms)
+ℹ actual order accepted=1, orderSeq=1; no run provider installed
+ℹ C:\Users\admin\AppData\Local\Temp\pc-doc-assembly-child-1791506291483.log
+✔ actual provider/order → central doc → independent asset → two pages + real conversation/run factories: durable op, readonly selection, restart and revoked resume (2938.0411ms)
+ℹ actual order accepted=1, orderSeq=1; registered HTTP + scoped mTLS WS/LP data; control ACK/OS closure remain pending
+ℹ C:\Users\admin\AppData\Local\Temp\pc-doc-assembly-child-1791506294423.log
+✔ one registered RAM instance assembles real mTLS run/read clients; POST mirrors doc original and SSE replays durable eventSeq (1071.9983ms)
+✔ account executor assembly rejects incomplete configuration before registration or listening (51.6552ms)
+✔ actual account CLI rejects missing or shared control port before registration and business listening (1098.6753ms)
+✔ actual account HTTP SSE projects accepted user scope from FULL doc-bound row before run output (1025.2301ms)
+✔ FULL committed events replay across reopen; scoped monotonic cursors and immutable sender binding (30.1975ms)
+✔ identical event IDs replay exactly, conflicts and forged registered binding are rejected (17.0656ms)
+✔ fresh provider mismatch and missing trusted configuration never register a run (15.369ms)
+✔ supervised synchronous emitter copies payload, drains in order, omits full tool output (19.2175ms)
+✔ real SQLite failure is supervised immediately; subsequent gate and flush reject original failure (18.8357ms)
+✔ concurrent registered runs share one committed conversation cursor, other conversations do not (21.368ms)
+✔ real doc read/run bindings reach durable run/tool/model events, but no inferred successful finish (68.7652ms)
+✔ append failure aborts actual runner handle, waits owned drain, and blocks next model/tool/finish (56.5976ms)
+✔ fresh doc SQLite message mirror shares stable eventSeq; mutable queue/run projections do not duplicate it (32.85ms)
+✔ accepted mirror rejects doc denial, scope mismatch and forged digest before writing any event (26.435ms)
+✔ private service mirror invokes actual doc get, propagates missing read scope and never mirrors send body (44.7255ms)
+✔ accepted-message commit fault rolls back both row and cursor and closes with failure (11.4722ms)
+✔ recovered run mirrors only original doc message matched to fresh grant digest; denied or changed sources write nothing (36.9388ms)
+✔ real mTLS doc + HTTP Agent: two accounts, private fence, consent, ACK replay, revocation (1109.8787ms)
+✔ Agent history cannot send an old real access RPC result after a private fence (892.023ms)
+ℹ {"actualDocRpc":true,"realSqlitePrivate":true,"actualAllowed":true,"leakedSentinel":false,"complete":true,"actualCloseBeforeAck":true,"executorMounted":false}
+✔ zero-run HTTP reads persist exact instance inventory; private completion waits close then exact ACK (31.4075ms)
+✔ creator and owner private read remain; ordinary project-wide list is included in fence (28.1404ms)
+✔ same certificate new RAM instance cannot close or ACK the original read; unknown historical instance stays pending (21.9352ms)
+✔ disconnect and doc restart preserve open inventory; only original live RAM key can reprove (23.1395ms)
+✔ read proofs have exact body/action scope, nonce replay rejects, and changed request identity conflicts (17.9513ms)
+✔ same control scope has immutable payload and rollback cannot publish a phantom control (18.0841ms)
+✔ legacy Agent ACK cannot bypass mandatory read closure, including module loss after SQLite reopen (17.8911ms)
+✔ only complete internal zero-run closure can produce the legacy ACK digest; real run inventory remains pending (23.7317ms)
+✔ pre-existing legacy Agent ACK stays evidence, not completion after required/reopen (outbox=false) (23.7305ms)
+ℹ {"lostOldAccountAck":false,"agentPending":true,"forwardedAfterRequired":0,"pendingEvents":1}
+✔ pre-existing legacy Agent ACK stays evidence, not completion after required/reopen (outbox=true) (22.8209ms)
+ℹ {"lostOldAccountAck":true,"agentPending":true,"forwardedAfterRequired":0,"pendingEvents":1}
+✔ account history without a real read transport fails closed before invoking its consumer (1.1859ms)
+✔ real account SSE publishes queue revisions without duplicates and fences a fetched plaintext batch (1451.3232ms)
+✔ fixture HTTP proxy propagates aborted source and downstream cancel but preserves complete bodies (47.068ms)
+✔ account conversation controls are owner/creator scoped and queued work is not represented as running (0.5286ms)
+[包含敏感字段的日志行已隐藏]
+✔ fence pending remains an error, malformed success is rejected, and callers can retry the same request ID (0.8137ms)
+✔ late control response cannot mutate state after an account/project A-B-A scope change (0.1837ms)
+✔ late consent in an A-B-A identity change never submits the old visibility request (0.1419ms)
+✔ account stop rejects missing current run/request IDs instead of falling back to an empty legacy abort (0.123ms)
+✔ Composer renders account stop authority honestly and keeps local mode stop enabled by default (93.9608ms)
+✔ 账号读取 EOF 清正文、待折增量和附件关联；从 seq 0 重放且旧页面工具结果不回写 (53.2577ms)
+✔ 账号读取 HTTP 401 即使带业务错误码也清正文并停止重连 (45.2575ms)
+✔ 账号读取 HTTP 403 即使带业务错误码也清正文并停止重连 (46.3839ms)
+✔ 旧 LAN 会话断线仍沿用 seq 续读和缓存语义 (15.6012ms)
+✔ durable account run pairs one assistant with its accepted user and preserves exact sender binding (2.0386ms)
+✔ replay never resets text, tools or pending assistant and same run cannot change its binding (0.2822ms)
+✔ unbound account run/text never borrows last assistant, or an unrelated accepted sender (0.2467ms)
+✔ account runner_done, raw done/end and model error do not claim settled success (0.216ms)
+✔ legacy user/run sequence retains its existing completion behavior (0.1151ms)
+✔ CAU-REV-01 白名单:四种各调到本机的实现;别的一律拒绝、什么都不执行 (1.271ms)
+✔ CAU-REV-02 参数的规矩、不合格的请求不答、实现抛错只回原因 (2.119ms)
+✔ CAU-REV-03 会话:报页面号;事件流里的请求执行一次并交回,不折进消息、不动 lastSeq;重复的只执行一次 (73.2282ms)
+✔ CAU-REV-04 只看不动的页面不报页面号、不执行;关掉或换了对话之后的结果不交回 (77.4752ms)
+✔ CAU-REV-05 对账:页面的白名单与服务端经反向通道的工具表是同一组 (0.2853ms)
+✔ CAU-REV-06 守门:触发执行的入口只有事件流;接口层带委托票据交回 (51.4705ms)
+ℹ tests 57
+ℹ suites 0
+ℹ pass 57
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6495.8403
+✓ npm test 最终结果：零失败

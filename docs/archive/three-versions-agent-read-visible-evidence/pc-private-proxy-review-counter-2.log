@@ -1,0 +1,60 @@
+{
+  "old": {
+    "forwarded": false,
+    "upstream": {
+      "aborted": true,
+      "errorCode": "ECONNRESET",
+      "closed": true,
+      "complete": false
+    },
+    "downstream": {
+      "aborted": true,
+      "errorCode": "ECONNRESET",
+      "closed": true
+    },
+    "ports": [
+      11590,
+      11591
+    ],
+    "edgeResponse": {
+      "destroyed": false,
+      "writableEnded": false
+    },
+    "observedDownstream": {},
+    "cleanup": {
+      "sockets": 0,
+      "serversClosed": true
+    }
+  },
+  "proposed": {
+    "forwarded": true,
+    "upstream": {
+      "aborted": true,
+      "errorCode": "ECONNRESET",
+      "closed": true,
+      "complete": false
+    },
+    "downstream": {
+      "aborted": true,
+      "errorCode": "ECONNRESET",
+      "closed": true
+    },
+    "ports": [
+      4968,
+      4969
+    ],
+    "edgeResponse": {
+      "destroyed": true,
+      "writableEnded": false
+    },
+    "observedDownstream": {
+      "aborted": true,
+      "errorCode": "ECONNRESET",
+      "closed": true
+    },
+    "cleanup": {
+      "sockets": 0,
+      "serversClosed": true
+    }
+  }
+}

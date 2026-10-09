@@ -1,0 +1,50 @@
+[
+  {
+    "check": "type",
+    "source": "ff51441cc7fa28f8cfae6fa5062af2be706bf575",
+    "exitCode": 0,
+    "wallSec": 6.781,
+    "log": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ff51441c-gates-type.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "tests": null,
+    "pass": null,
+    "fail": null,
+    "cancelled": null,
+    "skipped": null,
+    "durationMs": null
+  },
+  {
+    "check": "target",
+    "source": "ff51441cc7fa28f8cfae6fa5062af2be706bf575",
+    "exitCode": 0,
+    "wallSec": 7.375,
+    "log": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ff51441c-gates-target.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "tests": 51.0,
+    "pass": 51.0,
+    "fail": 0.0,
+    "cancelled": 0.0,
+    "skipped": 0.0,
+    "durationMs": 7105.2462
+  },
+  {
+    "check": "full",
+    "source": "ff51441cc7fa28f8cfae6fa5062af2be706bf575",
+    "exitCode": 1,
+    "wallSec": 72.515,
+    "log": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ff51441c-gates-full.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "tests": 5455.0,
+    "pass": 5449.0,
+    "fail": 2.0,
+    "cancelled": 0.0,
+    "skipped": 4.0,
+    "durationMs": 72159.1511
+  }
+]

@@ -1,0 +1,60 @@
+{
+  "source": "655d796d294d2b67ce46163ef88f5195261b8134",
+  "layer": "actual-service-sse-react-visible-controlled-driver",
+  "completed": false,
+  "checks": [
+    {
+      "name": "exclusive-four-ports-empty",
+      "ok": true
+    }
+  ],
+  "cleanup": {
+    "browser": true,
+    "vite": true,
+    "fixture": {
+      "closed": true,
+      "sockets": 0,
+      "ports": [
+        6640,
+        6641,
+        6642
+      ]
+    },
+    "listening": []
+  },
+  "chromePid": 14488,
+  "error": {
+    "name": "TimeoutError",
+    "phase": "real-submit-and-pending-output"
+  },
+  "ui": {
+    "submitDisabled": true,
+    "errorVisible": false,
+    "messages": 1,
+    "cursor": 6
+  },
+  "sourceAfter": "655d796d294d2b67ce46163ef88f5195261b8134",
+  "network": [
+    {
+      "pathname": "events",
+      "status": 204
+    },
+    {
+      "pathname": "messages",
+      "status": 204
+    },
+    {
+      "pathname": "messages",
+      "status": 202
+    },
+    {
+      "pathname": "events",
+      "status": 204
+    },
+    {
+      "pathname": "events",
+      "status": 200
+    }
+  ],
+  "wallMs": 17733
+}

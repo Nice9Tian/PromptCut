@@ -1,0 +1,32 @@
+{
+  "source": "d31d3022886207059be5b36c7e258c2a5e0cdde6",
+  "layer": "actual-service-sse-react-visible-controlled-driver",
+  "completed": false,
+  "checks": [
+    {
+      "name": "exclusive-four-ports-empty",
+      "ok": true
+    }
+  ],
+  "cleanup": {
+    "browser": true,
+    "vite": true,
+    "fixture": {
+      "closed": true,
+      "sockets": 0,
+      "ports": [
+        6640,
+        6641,
+        6642
+      ]
+    },
+    "listening": []
+  },
+  "chromePid": 43044,
+  "error": {
+    "name": "TimeoutError",
+    "phase": "exclusive-four-ports-empty"
+  },
+  "sourceAfter": "d31d3022886207059be5b36c7e258c2a5e0cdde6",
+  "wallMs": 18069
+}
