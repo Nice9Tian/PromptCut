@@ -1,0 +1,15 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs C:\Users\admin\AppData\Local\Temp\pc-cloud-controls-root-9380b89a-browser-once.test.mjs
+
+{"completed":true,"phase":"owner-retries-same-request-pending","checks":25,"fence":"pending-unconfirmed","detail":"open-project:share-toast-dismissed","pageErrors":0,"wallMs":7345,"closed":true,"output":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-cloud-controls-browser-9380b89a-once","fixtureEvidenceDir":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-control-account-path-ClEix5","browserProfileEvidenceDir":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-cloud-controls-browser-9380b89a-once\\chrome-profile"}
+✔ real account conversation controls (7563.2592ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7636.7675
+✓ npm test 最终结果：零失败

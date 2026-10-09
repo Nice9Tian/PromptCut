@@ -1,0 +1,45 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs src/ai/cloud/account-conversation-controls.test.mjs src/ai/cloud/cloud-chat.test.mjs src/ai/cloud/account-queue.test.mjs
+
+✔ account conversation controls are owner/creator scoped and queued work is not represented as running (0.5309ms)
+✔ visibility and account stop use strict POST confirmations without cookies; legacy abort keeps its old empty body (13.1976ms)
+✔ fence pending remains an error, malformed success is rejected, and callers can retry the same request ID (0.794ms)
+✔ late control response cannot mutate state after an account/project A-B-A scope change (0.1511ms)
+✔ late consent in an A-B-A identity change never submits the old visibility request (0.123ms)
+✔ account stop rejects missing current run/request IDs instead of falling back to an empty legacy abort (0.1116ms)
+✔ Composer renders account stop authority honestly and keeps local mode stop enabled by default (85.1616ms)
+✔ account delegate rechecks binding after an outstanding session refresh; no legacy grant (1.3791ms)
+✔ persistent user without run ID renders exactly once and never fabricates an assistant (0.61ms)
+✔ queue validates project conversation, FIFO order, unique IDs and separate revision (0.1704ms)
+✔ actual account 202 retains message, position and no-run; cookies omitted and reference untouched (12.3842ms)
+✔ account acceptance from another project or a missing current binding is refused (0.3915ms)
+✔ session sees queued sender, ignores old queue revisions and clears private content after access refusal (14.2094ms)
+✔ CAU-EV-01 事件折成消息,从头折与边收边折相同 (1.391ms)
+✔ CAU-EV-01b 两轮、补渲进展、思考片段 (0.2154ms)
+✔ CAU-EV-03 补渲进展另记在消息上(气泡末尾常驻一行),失败的不只藏在状态行里 (0.1211ms)
+✔ CAU-EV-02 每种收尾都有明确原因 (0.2422ms)
+✔ CAU-SES-01 流断了自动重连,带已看到的 seq,交界处重复的不重复、缺的补齐 (132.2543ms)
+✔ CAU-SES-01b 断线期间界面仍显示这一轮在跑(服务端还在跑),重连时标出连接状态 (31.7684ms)
+✔ CAU-SES-02 新对话读到「没有」就停下,发消息后接上;服务端把对话丢了就标中断 (200.8148ms)
+✔ CAU-SES-03 关闭只掐流不发停止;停止才发 abort;身份类错误停下给原因 (77.1579ms)
+✔ CAU-SES-04 文字增量攒批后折进去,与逐条折相同 (775.7772ms)
+✔ CAU-EP-01 「云端」出不出现:放本机的项目没有,文档服务报了才有,开关关了置灰,在线页面地址固定 (0.3914ms)
+✔ CAU-API-01 请求带票据与对话委托、不带 Cookie;错误码换成人话;info 与列表容错 (13.004ms)
+✔ CAU-API-02 委托要不到时不发请求,原因换成给用户看的话 (0.2629ms)
+✔ CAU-API-03 事件流太久没有任何字节就当断了 (63.6753ms)
+✔ CAU-ID-01 身份只有注入这一个来源:没注入抛 no-identity,请求一个都不发 (0.2896ms)
+✔ CAU-ID-02 守门:没有探针用的全局回退口子 (29.5257ms)
+✔ CAU-SES-05 服务端的对话从头开始了(seq 比页面看到的还小):掐掉旧流、从 0 重读,新的一轮照样显示 (32.579ms)
+✔ CAU-ATT-01 附件上传:请求体是文件字节、带票据、文件名在查询串里;回包与各种错误 (15.4498ms)
+✔ CAU-ATT-02 发消息带附件:url 随消息走、气泡里显示名字;服务端的 user 事件带了附件时重新打开也看得到 (93.5524ms)
+✔ CAU-ATT-03 守门:云端这条路不引本机附件模块、不带 /api/chats/attach,也没有「附件置灰」的说明 (0.7551ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1577.7053
+✓ npm test 最终结果：零失败

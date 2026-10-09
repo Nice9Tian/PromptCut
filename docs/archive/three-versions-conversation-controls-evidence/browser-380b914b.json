@@ -1,0 +1,759 @@
+{
+  "sourceBefore": "380b914b51355802cb0bf7496226741598c66f62",
+  "checks": [
+    {
+      "name": "port-6620-available",
+      "pass": true
+    },
+    {
+      "name": "port-6621-available",
+      "pass": true
+    },
+    {
+      "name": "port-6622-available",
+      "pass": true
+    },
+    {
+      "name": "port-6623-available",
+      "pass": true
+    },
+    {
+      "name": "port-6624-available",
+      "pass": true
+    },
+    {
+      "name": "port-6625-available",
+      "pass": true
+    },
+    {
+      "name": "port-6626-available",
+      "pass": true
+    },
+    {
+      "name": "port-6627-available",
+      "pass": true
+    },
+    {
+      "name": "port-6628-available",
+      "pass": true
+    },
+    {
+      "name": "port-6629-available",
+      "pass": true
+    }
+  ],
+  "network": [
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/admin",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "failure-0",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-cloud-controls-browser-380b914b-once\\failure-0.png"
+    },
+    {
+      "name": "failure-1",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-cloud-controls-browser-380b914b-once\\failure-1.png"
+    }
+  ],
+  "pageErrors": [],
+  "pageSteps": [
+    {
+      "page": "creator",
+      "step": "login:navigate",
+      "pathname": "blank",
+      "readyState": "complete",
+      "rootPresent": false,
+      "rootChildCount": 0,
+      "bodyChildCount": 0,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "login:form-loaded",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "login:account-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "login:navigate",
+      "pathname": "blank",
+      "readyState": "complete",
+      "rootPresent": false,
+      "rootChildCount": 0,
+      "bodyChildCount": 0,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "login:form-loaded",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "login:account-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:wait-list-row",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:list-row-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:before-real-click",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:clicked-wait-cloud-copy",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:cloud-copy-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "creator",
+      "step": "open-project:consent-dialog-visible",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "creator",
+      "step": "open-project:consent-accepted",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "open-project:wait-list-row",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "open-project:list-row-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "open-project:before-real-click",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "open-project:clicked-wait-cloud-copy",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "open-project:cloud-copy-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "open-project:consent-dialog-visible",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "open-project:consent-accepted",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "creator",
+      "step": "failure-snapshot:owner-creates-shared-conversation",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "failure-snapshot:owner-creates-shared-conversation",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": true,
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    }
+  ],
+  "completed": false,
+  "fence": "pending-unconfirmed",
+  "cleanup": {
+    "fixture": {
+      "closed": true,
+      "childClosed": true,
+      "evidenceDir": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-control-account-path-FRPgPF"
+    },
+    "portsFree": {
+      "6620": true,
+      "6621": true,
+      "6622": true,
+      "6623": true,
+      "6624": true,
+      "6625": true,
+      "6626": true,
+      "6627": true,
+      "6628": true,
+      "6629": true
+    },
+    "allPortsFree": true,
+    "fixtureAndPortsClosed": true
+  },
+  "fixtureEvidenceDir": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-control-account-path-FRPgPF",
+  "browserProfileEvidenceDir": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-cloud-controls-browser-380b914b-once\\chrome-profile",
+  "failure": {
+    "phase": "owner-creates-shared-conversation",
+    "detail": "open-project:consent-accepted",
+    "code": "timeout"
+  },
+  "wallMs": 36369,
+  "sourceAfter": "380b914b51355802cb0bf7496226741598c66f62"
+}
