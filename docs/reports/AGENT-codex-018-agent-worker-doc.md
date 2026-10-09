@@ -69,3 +69,11 @@ worker-failed/crash自动授权仍缺可信producer：当前scopeControl不能�
 根提出check/ticket可能缺finish闸的审查疑点，经固定8d源码核实checkWithScope已在同事务拒g.finishReceiptId，resolveRunPrincipal调用此门；疑点未成立，不改产品。独立测试提交6c11caeedfdef58e867b9b1421bb961fbf6b1400补真实TLS前后对照：read/write在finish前200，scope finishReceipt落库后都403 run-revoked；ticket在finish前实际resolve成功抵达未配置issuer的503 run-ticket-unavailable，之后先被provider403拒，未加入伪ticket issuer。workerEventSource同拒；queryFinish仍200/pending，原RAM prepare仍200，terminal因Doc尚未关实际返回503 doc-closure-pending。随后private与原finish竞态仍只在forced rootclosed后结清，结果interrupted、不恢复成功。
 
 该固定测试source首次7/7、0fail/cancel/skip、5541.3325ms，TLS case3780.8672ms，TMP pc-worker-doc-finish-gates-tls-1.log。原7项均保留；6712实际socket0/server不监听、6712–6721结束零LISTEN。仅测试增量，产品类型结果仍8d的0，未因纯测试变更无因重跑所有目标/full。根独立集成继续负责共同基线。
+
+## crash失败观测首包：明确接口与机制〔裁〕
+
+新实现基线b8ca9070fd7fef552105977c42fe11b68a2ba44b，根已合正常三段及Sol消费者。〔三级机制〕修改前：已有root原FD关闭证明，但死worker没有normal intent、master也不能凭body生成forced control，故保持pending。修改后：仅root固定槽CLI新增observe-failure，复用精确Agent用途pinRetired及原OS双tuple核验，要求实际MainPID0/旧birth消失/同boot/Invocation/原cgroup，原scope仍active/exclusive。发布failure-<epoch>.json及failure-publication-<epoch>.json，完整绑定recordDigest/assignmentDigest与root观察；file+dir fsync、完成marker和锁释放俱全才接受。populated=1允许记录失败，绝不叫closed或释放FIFO；正常closed链仍另行完成。
+
+Doc只从配置好的root目录/anchor重读完整历史及失败文件链，不接网络上传证据。bound原grant按真实失败摘要在同ledger写worker-failed fence/forced证书；assigned-unbound按同原ref明确撤销执行门，再走root unassigned-retirement，不伪造已bound任务证书。无Doc assignment只回收槽，不造任务done。任何混scope、替换key/newPID、回退、缺marker/锁或文件未知都保pending。master只能通过既有受认证control通道提示重新核对，不自由指定路径/unit/URL/authority字段。该字段方案是根裁定下的技术实施接口，不称用户逐字段批准。
+
+本块仍只专属纯/SQLite/mTLS6712–6721验证，不跑full/浏览器/模型/节点；真实Linux由根单轮执行。旧Linux11项不是本新增失败观测producer的实测，必须分开记录。
