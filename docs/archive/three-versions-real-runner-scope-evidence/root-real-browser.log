@@ -1,0 +1,15 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs C:\Users\admin\AppData\Local\Temp\pc-real-scope-root-a4d22ce3-browsers-real.test.mjs
+
+{"completed":true,"phase":"expand-actual-output-b","checks":17,"wallMs":10707,"closed":true,"output":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-real-once"}
+✔ actual real account browser (10936.6222ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11043.2406
+✓ npm test 最终结果：零失败

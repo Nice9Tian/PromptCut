@@ -1,0 +1,32 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs server/test/account-real-runner-sse.test.mjs
+
+✖ actual SSE normal polls survive; synchronous fenced dispatch is supervised and closes owned response/socket (799.0944ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 905.7498
+
+✖ failing tests:
+
+test at server\test\account-real-runner-sse.test.mjs:9:1
+✖ actual SSE normal polls survive; synchronous fenced dispatch is supervised and closes owned response/socket (799.0944ms)
+  Error: read-transport-revoked
+      at accountError (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/account/client.mjs:6:61)
+      at fail (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent/service/conversation-transports.mjs:6:30)
+      at track (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent/service/conversation-transports.mjs:51:59)
+      at Object.dispatch (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent/service/conversation-transports.mjs:88:12)
+      at Object.dispatch (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/test/account-real-runner-sse.test.mjs:18:77)
+      at poll (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent-service/http.mjs:213:72)
+      at Timeout._onTimeout (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent-service/http.mjs:214:44)
+      at listOnTimeout (node:internal/timers:635:17)
+      at process.processTimers (node:internal/timers:571:7) {
+    status: 503,
+    code: 'read-transport-revoked'
+  }
+✖ npm test 最终结果：仍有失败

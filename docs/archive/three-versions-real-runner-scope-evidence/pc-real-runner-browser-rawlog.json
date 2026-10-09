@@ -1,0 +1,439 @@
+{
+  "sourceBefore": "ddd4956c512573d748c88fe7e4aa82655b6f6225",
+  "checks": [
+    {
+      "name": "authoritative-created-project",
+      "pass": true
+    },
+    {
+      "name": "member-cannot-enable-creator-switch",
+      "pass": true
+    }
+  ],
+  "network": [
+    {
+      "path": "/hosted/shared/account/create",
+      "status": 201,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv097187-kd49/events",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/admin",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv097187-kd49/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/join",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv0971mp-t3kx/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv097187-kd49/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv0971mp-t3kx/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv097187-kd49/messages",
+      "status": 202,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv097187-kd49/events",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv0971mp-t3kx/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv0971mp-t3kx/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv0971mp-t3kx/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv0971mp-t3kx/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv0971mp-t3kx/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/agent/v1/conversations/cc-mv0971mp-t3kx/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "failure-0",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-rawlog\\failure-0.png"
+    },
+    {
+      "name": "failure-1",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-runner-browser-rawlog\\failure-1.png"
+    }
+  ],
+  "completed": false,
+  "executorMounted": true,
+  "productionModel": false,
+  "completionReady": false,
+  "cleanup": {
+    "closed": true,
+    "childClosed": true,
+    "assetPid": 26272,
+    "ports": [
+      6700,
+      6701,
+      6702,
+      6703,
+      6704,
+      6705,
+      6708
+    ],
+    "browserClosed": true,
+    "stagesClosed": true,
+    "contextsClosed": true
+  },
+  "projectId": "sp_yvi4xgyhmbpjxb7uxeny3t7yur",
+  "conversationId": "cc-mv097187-kd49",
+  "failure": {
+    "phase": "actual-output-a",
+    "code": "timeout"
+  },
+  "wallMs": 39359,
+  "sourceAfter": "ddd4956c512573d748c88fe7e4aa82655b6f6225"
+}

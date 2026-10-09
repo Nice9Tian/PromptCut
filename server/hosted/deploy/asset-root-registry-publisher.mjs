@@ -271,7 +271,7 @@ export async function publishAssetRootRegistryV2({ expected, mode, io }) {
   } finally { await release({ publicationDurable }); }
 }
 
-async function rootDirectory(dir) {
+export async function rootDirectory(dir) {
   if (!path.isAbsolute(dir) || path.normalize(dir) !== dir) fail('publisher-path-untrusted');
   for (let p = dir; ; p = path.dirname(p)) {
     const st = await fs.lstat(p);
@@ -279,7 +279,7 @@ async function rootDirectory(dir) {
     if (p === path.dirname(p)) break;
   }
 }
-async function rootRead(filename, optional = false, bytes = false) {
+export async function rootRead(filename, optional = false, bytes = false) {
   await rootDirectory(path.dirname(filename));
   let fd;
   try { fd = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW); }
@@ -295,13 +295,13 @@ async function rootRead(filename, optional = false, bytes = false) {
     return bytes ? content : JSON.parse(content.toString('utf8'));
   } finally { await fd.close(); }
 }
-async function atomicWrite(dir, name, value, exclusive = false, publicMetadata = false) {
+export async function atomicWrite(dir, name, value, exclusive = false, publicMetadata = false) {
   await rootDirectory(dir);
   const target = path.join(dir, name);
   if (exclusive && await rootRead(target, true)) fail('publisher-record-exists');
   await writePublisherArtifact({ dir, name, value, exclusive, publicMetadata });
 }
-async function syncDirectory(dir) {
+export async function syncDirectory(dir) {
   const directory = await fs.open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try { await directory.sync(); } finally { await directory.close(); }
 }
@@ -388,7 +388,7 @@ async function unitInfo(unit) {
   return validatePublisherUnit(value, unit);
 }
 async function bootId() { const v = (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim(); if (!boot(v)) fail('publisher-boot-invalid'); return v; }
-async function procInfo(pid) {
+export async function procInfo(pid) {
   const first = parseProcStat(await fs.readFile(`/proc/${pid}/stat`, 'utf8'));
   const status = await fs.readFile(`/proc/${pid}/status`, 'utf8');
   const ids = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/m.exec(status);
@@ -412,11 +412,11 @@ async function inspect(scope, reservation) {
     serviceIdentity: scope.serviceIdentity, clientFingerprint256: scope.clientFingerprint256, serverFingerprint256: scope.serverFingerprint256 };
 }
 
-async function freshIdentity(config, scope) {
+async function freshIdentity(config, scope, identityPath = '/internal/v2/asset/run/identity') {
   const [key, cert, ca] = await Promise.all(['keyFile', 'certFile', 'caFile'].map(k => rootRead(config[k], false, true)));
   return await new Promise((resolve, reject) => {
     let result, failure, socket;
-    const req = https.request(new URL('/internal/v2/asset/run/identity', config.origin), {
+    const req = https.request(new URL(identityPath, config.origin), {
       method: 'GET', agent: false, key, cert, ca, rejectUnauthorized: true, minVersion: 'TLSv1.3', timeout: 10000,
       checkServerIdentity(host, peer) { return checkServerIdentity(host, peer) ||
         (pin(peer.fingerprint256) !== scope.serverFingerprint256 ? new Error('publisher-tls-pin') : undefined); },
@@ -540,7 +540,7 @@ export async function runAssetRootPublisher({ configFile, mode }) {
 const sliceTextV2 = (expected, reservation) => `# PromptCut root publisher v2 ${expected.authorityId} epoch ${reservation.epoch}\n[Service]\nSlice=${reservation.closureScope.unit}\n`;
 const systemPropertiesV2 = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'InvocationID',
   'KillMode', 'Delegate', 'Restart', 'Slice', 'User', 'FragmentPath', 'SourcePath', 'DropInPaths', 'Following', 'Transient', 'Job', 'Description', 'StopWhenUnneeded'];
-async function systemUnitV2(unit) {
+export async function systemUnitV2(unit) {
   const raw = await exec(['show', unit, '--no-pager', '--all', ...systemPropertiesV2.map(n => `--property=${n}`)]);
   return Object.fromEntries(raw.trim().split('\n').map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
 }
@@ -556,6 +556,21 @@ export async function runAssetRootPublisherV2({ configFile, mode }) {
   const config = await rootRead(configFile);
   if (!exact(config, ['v', 'expected', 'registryDir', 'identity', 'runtimeAdapter']) || config.v !== 2 ||
       !exact(config.identity, ['origin', 'keyFile', 'certFile', 'caFile'])) fail('publisher-config-invalid');
+  const expected = validateAssetRootExpectedV2(config.expected);
+  const io = await createRootScopeRuntimeV2(config);
+  return await publishAssetRootRegistryV2({ expected, mode, io });
+}
+
+/** Shared root-only OS mechanism, not a network/CLI injection point. Asset
+ * keeps its original defaults; Agent passes its explicit reservation grammar
+ * and the one fixed Agent identity endpoint. Neither accepts caller URLs/units.
+ */
+export async function createRootScopeRuntimeV2(config, {
+  validateReservation = (value, expected) => validateAssetRootReservationV2(value, { expected }),
+  identityPath = '/internal/v2/asset/run/identity',
+} = {}) {
+  if (process.platform !== 'linux' || process.getuid?.() !== 0 || process.geteuid?.() !== 0) fail('publisher-linux-root-required');
+  if (!['/internal/v2/asset/run/identity', '/internal/v2/agent/run-scope/identity'].includes(identityPath)) fail('publisher-config-invalid');
   const expected = validateAssetRootExpectedV2(config.expected), adapter = validatePublisherRuntimeAdapterV2(config.runtimeAdapter, expected);
   const dir = config.registryDir, origin = new URL(config.identity.origin);
   if (origin.protocol !== 'https:' || !['127.0.0.1', '[::1]', 'localhost'].includes(origin.hostname) ||
@@ -588,7 +603,7 @@ export async function runAssetRootPublisherV2({ configFile, mode }) {
           receipt.authorityId !== expected.authorityId || receipt.unit !== expected.unit || receipt.path !== adapter.ownDropInPath ||
           receipt.adapterDigest !== digestOf(adapter) || !positive(receipt.epoch) || !content) fail('publisher-dropin-ownership');
       const previousReservation = await read(`reservation-${receipt.epoch}.json`);
-      validateAssetRootReservationV2(previousReservation, { expected });
+      validateReservation(previousReservation, expected);
       const actual = await descriptor(adapter.ownDropInPath);
       if (receipt.scopeUnit !== previousReservation.closureScope.unit ||
           !equal(receipt.file, { dev: actual.dev, ino: actual.ino, digest: actual.digest }) ||
@@ -640,7 +655,7 @@ export async function runAssetRootPublisherV2({ configFile, mode }) {
     await visit(scope.cgroup.v2Path);
   }
   async function inspectV2(reservation) {
-    validateAssetRootReservationV2(reservation, { expected });
+    validateReservation(reservation, expected);
     await configuration(reservation); await scopeInfo(reservation.closureScope);
     const instance = await inspect({ ...expected, cgroupPath: reservation.serviceCgroupPath }, reservation);
     await exclusiveScope(reservation.closureScope);
@@ -710,7 +725,7 @@ export async function runAssetRootPublisherV2({ configFile, mode }) {
     async identity(reservation) {
       const original = await inspectV2(reservation);
       for (let attempt = 0; ; attempt++) {
-        try { return await freshIdentity(config.identity, expected); }
+        try { return await freshIdentity(config.identity, expected, identityPath); }
         catch (error) {
           if (!error.retryable || attempt >= 6) throw error;
           if (!equal(original, await inspectV2(reservation))) fail('publisher-instance-changed');
@@ -767,7 +782,7 @@ export async function runAssetRootPublisherV2({ configFile, mode }) {
       } catch (e) { await events?.close(); await group.close(); throw e; }
     },
   };
-  return await publishAssetRootRegistryV2({ expected, mode, io });
+  return io;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

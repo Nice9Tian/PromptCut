@@ -1,0 +1,17 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs server/test/account-real-runner-sse.test.mjs server/test/account-real-runner.test.mjs server/test/account-executor-assembly-mtls.test.mjs server/test/account-executor-visible-wire.test.mjs
+
+✔ one registered RAM instance assembles real mTLS run/read clients; POST mirrors doc original and SSE replays durable eventSeq (1087.2759ms)
+✔ actual account HTTP SSE projects accepted user scope from FULL doc-bound row before run output (1220.198ms)
+✔ actual SSE normal polls survive; synchronous fenced dispatch is supervised and closes owned response/socket (790.7307ms)
+✔ actual hosted factory signs WSS/project.open, executes real tools and commits doc revision; settlement stays pending (4176.2769ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4400.6508
+✓ npm test 最终结果：零失败

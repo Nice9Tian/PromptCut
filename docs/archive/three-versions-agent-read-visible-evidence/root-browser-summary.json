@@ -1,0 +1,68 @@
+[
+  {
+    "check": "visible",
+    "source": "ba2d7753390196edbb004248d458211d5f1b8990",
+    "exitCode": 0,
+    "wallSec": 4.032,
+    "log": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-browsers-visible.log",
+    "output": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-visible-once",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "completed": true,
+    "checks": 7,
+    "passed": 7,
+    "cleanup": {
+      "browser": true,
+      "vite": true,
+      "fixture": {
+        "closed": true,
+        "sockets": 0,
+        "ports": [
+          6640,
+          6641,
+          6642
+        ]
+      },
+      "listening": []
+    },
+    "probeWallMs": 3492
+  },
+  {
+    "check": "private",
+    "source": "ba2d7753390196edbb004248d458211d5f1b8990",
+    "exitCode": 0,
+    "wallSec": 9.265,
+    "log": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-browsers-private.log",
+    "output": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "completed": true,
+    "checks": 29,
+    "passed": 29,
+    "cleanup": {
+      "fixture": {
+        "closed": true,
+        "childClosed": true,
+        "closeFailureCount": 0,
+        "evidenceDir": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-control-account-path-mPOJ3e"
+      },
+      "portsFree": {
+        "6620": true,
+        "6621": true,
+        "6622": true,
+        "6623": true,
+        "6624": true,
+        "6625": true,
+        "6626": true,
+        "6627": true,
+        "6628": true,
+        "6629": true
+      },
+      "allPortsFree": true,
+      "fixtureAndPortsClosed": true
+    },
+    "probeWallMs": 8714
+  }
+]

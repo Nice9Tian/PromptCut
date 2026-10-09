@@ -1,0 +1,227 @@
+{
+  "productSource": "ba2d7753390196edbb004248d458211d5f1b8990",
+  "redactionCount": 548,
+  "entries": [
+    {
+      "name": "root-first-gates.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ff51441c-gates.result.json"
+    },
+    {
+      "name": "root-first-type.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ff51441c-gates-type.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-first-target.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ff51441c-gates-target.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-first-full.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ff51441c-gates-full.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-first-online-build.log",
+      "missing": true
+    },
+    {
+      "name": "root-final-gates.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-gates.result.json"
+    },
+    {
+      "name": "root-final-type.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-gates-type.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-final-target.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-gates-target.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-final-full.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-gates-full.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-final-online-build.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-gates-online-build.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-browser-summary.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-browsers.result.json"
+    },
+    {
+      "name": "root-first-browser-not-started.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ff51441c-browsers.stderr.txt",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-visible-result.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-visible-once\\result.json"
+    },
+    {
+      "name": "root-visible-browser.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-browsers-visible.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-visible-visible-first.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-visible-once\\visible-first.png"
+    },
+    {
+      "name": "root-visible-visible-replay.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-visible-once\\visible-replay.png"
+    },
+    {
+      "name": "root-private-result.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\result.json"
+    },
+    {
+      "name": "root-private-browser.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-browsers-private.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "root-private-01-creator-shared-no-toggle.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\01-creator-shared-no-toggle.png"
+    },
+    {
+      "name": "root-private-02-member-shared-readable.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\02-member-shared-readable.png"
+    },
+    {
+      "name": "root-private-03-owner-shared-toggle.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\03-owner-shared-toggle.png"
+    },
+    {
+      "name": "root-private-04-creator-private-readonly.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\04-creator-private-readonly.png"
+    },
+    {
+      "name": "root-private-04-owner-private-confirmed.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\04-owner-private-confirmed.png"
+    },
+    {
+      "name": "root-private-05-owner-private-confirmed.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\05-owner-private-confirmed.png"
+    },
+    {
+      "name": "root-private-06-member-after-private-history-refresh.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\06-member-after-private-history-refresh.png"
+    },
+    {
+      "name": "executor-first.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-executor-visible-d31-first\\result.json"
+    },
+    {
+      "name": "executor-first-failure.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-executor-visible-d31-first\\failure.png"
+    },
+    {
+      "name": "executor-second.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-executor-visible-655-second\\result.json"
+    },
+    {
+      "name": "executor-second-failure.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-executor-visible-655-second\\failure.png"
+    },
+    {
+      "name": "executor-third.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-executor-visible-f556-third\\result.json"
+    },
+    {
+      "name": "private-initialization-first.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-444f5a2e-once\\result.json"
+    },
+    {
+      "name": "private-browser-first.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-c1b0a2b3-once\\result.json"
+    },
+    {
+      "name": "private-browser-first-failure-2.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-c1b0a2b3-once\\failure-2.png"
+    },
+    {
+      "name": "private-probe-reference-failure.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-0a3a0471-once\\result.json"
+    },
+    {
+      "name": "private-probe-reference-failure-failure-2.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-0a3a0471-once\\failure-2.png"
+    },
+    {
+      "name": "private-transient-misread.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\result.json"
+    },
+    {
+      "name": "private-transient-misread-failure-2.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\failure-2.png"
+    },
+    {
+      "name": "private-transient-misread-06-member-after-private-history-refresh.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\06-member-after-private-history-refresh.png"
+    },
+    {
+      "name": "private-counterexample.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-fb89029b-once\\result.json"
+    },
+    {
+      "name": "private-counterexample-failure-2.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-fb89029b-once\\failure-2.png"
+    },
+    {
+      "name": "private-counterexample-06-member-after-private-history-refresh.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-fb89029b-once\\06-member-after-private-history-refresh.png"
+    },
+    {
+      "name": "private-cache-failure.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-8759557e-once\\result.json"
+    },
+    {
+      "name": "private-cache-failure-failure-2.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-8759557e-once\\failure-2.png"
+    },
+    {
+      "name": "private-cache-failure-06-member-after-private-history-refresh.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-8759557e-once\\06-member-after-private-history-refresh.png"
+    },
+    {
+      "name": "private-final.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-ff4353d2-once\\result.json"
+    },
+    {
+      "name": "private-final-06-member-after-private-history-refresh.png",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-ff4353d2-once\\06-member-after-private-history-refresh.png"
+    },
+    {
+      "name": "private-wrong-build-once.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-fd979212-once\\result.json"
+    },
+    {
+      "name": "private-wrong-build-once-dist-root.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-fd979212-once-dist-root\\result.json"
+    },
+    {
+      "name": "private-wrong-build-once-site-fix.json",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-fd979212-once-site-fix\\result.json"
+    },
+    {
+      "name": "pc-private-proxy-review-counter.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-private-proxy-review-counter.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-private-proxy-review-counter-2.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-private-proxy-review-counter-2.log",
+      "sensitiveLinesHidden": true
+    },
+    {
+      "name": "pc-executor-port-isolation-692462fa.log",
+      "source": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-executor-port-isolation-692462fa.log",
+      "sensitiveLinesHidden": true
+    }
+  ]
+}

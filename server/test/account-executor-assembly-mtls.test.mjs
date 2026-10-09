@@ -95,13 +95,13 @@ test('one registered RAM instance assembles real mTLS run/read clients; POST mir
     const abort = new AbortController(); let models = 0, tools = 0, failure = null;
     const diagnostics = [];
     try {
-      await listen(docServer, 6640);
-      const doc = { origin: 'https://127.0.0.1:6640', tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 };
+      await listen(docServer, 0);
+      const doc = { origin: `https://127.0.0.1:${docServer.address().port}`, tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 };
       client = createConversationClient(doc); runClient = createRunClient(doc);
       controlClient = createConversationControlClient({ ...doc, runClient, receiptFile: path.join(dir, 'read-closures.sqlite') });
       client.useReadControl(controlClient);
       assembly = await createAccountExecutorAssembly({ dataDir: dir, doc, runClient, conversationClient: client, readControl: controlClient,
-        controlPort: 6642, root: dir, loadModule: async () => { throw Error('no-real-model-module'); }, modelConfig: async () => ({}),
+        controlPort: 0, root: dir, loadModule: async () => { throw Error('no-real-model-module'); }, modelConfig: async () => ({}),
         log: (event, fields) => diagnostics.push({ event, code: fields.code }),
         runnerFactory: async ({ onEvent, onModelCall, beforeToolCall }) => ({ async start() {
           onEvent({ type: 'run' }); await onModelCall(); models++;
@@ -112,8 +112,8 @@ test('one registered RAM instance assembles real mTLS run/read clients; POST mir
         }, async drain() {}, close() {} }) });
       const api = createAgentHttp({ service: assembly.service, authenticate: async req => req.headers.authorization === 'Bearer controlled-delegation'
         ? { accountMode: true, delegation: 'controlled-delegation', projectId, accountId, userId: accountId } : null });
-      publicServer = http.createServer((req, res) => { void api.handle(req, res); }); track(publicServer); await listen(publicServer, 6641);
-      const base = `http://127.0.0.1:6641/v1/conversations/${conversationId}`, headers = { Authorization: 'Bearer controlled-delegation', 'Content-Type': 'application/json' };
+      publicServer = http.createServer((req, res) => { void api.handle(req, res); }); track(publicServer); await listen(publicServer, 0);
+      const base = `http://127.0.0.1:${publicServer.address().port}/v1/conversations/${conversationId}`, headers = { Authorization: 'Bearer controlled-delegation', 'Content-Type': 'application/json' };
       const response = await fetch(base + '/messages', { method: 'POST', headers, body: JSON.stringify({ prompt: 'Doc accepted original', requestId: 'send_a' }) });
       assert.equal(response.status, 202); const accepted = await response.json();
       assert.ok(Number.isSafeInteger(accepted.queuePosition) && accepted.queuePosition >= 1);

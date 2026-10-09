@@ -1,0 +1,226 @@
+{
+  "source": "fc47062eb0d6133370dcad2bed917d7408806a22",
+  "namespace": "pcagentrunproof6e67e1c1f4514d4e",
+  "actualLinux": true,
+  "controlledDocIssuer": true,
+  "productionExecutor": false,
+  "cleanup": [
+    {
+      "unit": "pcagentrunproof6e67e1c1f4514d4ea.service",
+      "actual": {
+        "MainPID": "0",
+        "Id": "pcagentrunproof6e67e1c1f4514d4ea.service",
+        "ActiveState": "inactive"
+      },
+      "inactive": true
+    },
+    {
+      "unit": "pcagentrunproof6e67e1c1f4514d4eb.service",
+      "actual": {
+        "MainPID": "0",
+        "Id": "pcagentrunproof6e67e1c1f4514d4eb.service",
+        "ActiveState": "inactive"
+      },
+      "inactive": true
+    }
+  ],
+  "nodeVersion": "v24.21.0",
+  "exitCode": 0,
+  "proofResultFile": "/run/pcagentrunproof6e67e1c1f4514d4e/out/result.json",
+  "proof": {
+    "ok": true,
+    "controlledDocIssuer": true,
+    "productionExecutor": false,
+    "samples": [
+      {
+        "ms": 3610,
+        "slotId": "slot-a",
+        "populated": 1,
+        "mainGone": false,
+        "childGone": false,
+        "held": true,
+        "peersClosed": false
+      },
+      {
+        "ms": 3823,
+        "slotId": "slot-a",
+        "populated": 1,
+        "mainGone": true,
+        "childGone": false,
+        "held": true,
+        "peersClosed": false
+      },
+      {
+        "ms": 5803,
+        "slotId": "slot-a",
+        "populated": 1,
+        "mainGone": true,
+        "childGone": false,
+        "held": false,
+        "peersClosed": true
+      },
+      {
+        "ms": 5825,
+        "slotId": "slot-a",
+        "populated": 0,
+        "mainGone": true,
+        "childGone": true,
+        "held": false,
+        "peersClosed": true
+      },
+      {
+        "ms": 5966,
+        "slotId": "slot-b",
+        "populated": 1,
+        "mainGone": false,
+        "childGone": false,
+        "held": true,
+        "peersClosed": false
+      },
+      {
+        "ms": 6152,
+        "slotId": "slot-b",
+        "populated": 1,
+        "mainGone": true,
+        "childGone": false,
+        "held": true,
+        "peersClosed": false
+      },
+      {
+        "ms": 8147,
+        "slotId": "slot-b",
+        "populated": 0,
+        "mainGone": true,
+        "childGone": true,
+        "held": false,
+        "peersClosed": true
+      }
+    ],
+    "checks": [
+      "slot-a:ready-bound-real-TLS-root-files",
+      "slot-b:ready-bound-real-TLS-root-files",
+      "A-parent-gone-child-FD-TCP-live-reader-locked-same-active-scope",
+      "slot-a:original-FD-empty-durable-reader-closed",
+      "B-continued-during-A-close",
+      "slot-b:original-FD-empty-durable-reader-closed",
+      "missing-marker:reader-rejected",
+      "lock:reader-rejected",
+      "mixed:reader-rejected",
+      "new-empty:reader-rejected"
+    ],
+    "errors": [],
+    "retainedUnits": [],
+    "protectedBefore": [
+      {
+        "MainPID": "279515",
+        "NRestarts": "0",
+        "Id": "promptcut-account-v2.service",
+        "ActiveState": "active"
+      },
+      {
+        "MainPID": "279516",
+        "NRestarts": "0",
+        "Id": "promptcut-doc-v2.service",
+        "ActiveState": "active"
+      },
+      {
+        "MainPID": "279517",
+        "NRestarts": "0",
+        "Id": "promptcut-asset-v2.service",
+        "ActiveState": "active"
+      },
+      {
+        "MainPID": "9395",
+        "NRestarts": "0",
+        "Id": "nginx.service",
+        "ActiveState": "active"
+      }
+    ],
+    "listeners": [],
+    "durationMs": 8357,
+    "protectedAfter": [
+      {
+        "MainPID": "279515",
+        "NRestarts": "0",
+        "Id": "promptcut-account-v2.service",
+        "ActiveState": "active"
+      },
+      {
+        "MainPID": "279516",
+        "NRestarts": "0",
+        "Id": "promptcut-doc-v2.service",
+        "ActiveState": "active"
+      },
+      {
+        "MainPID": "279517",
+        "NRestarts": "0",
+        "Id": "promptcut-asset-v2.service",
+        "ActiveState": "active"
+      },
+      {
+        "MainPID": "9395",
+        "NRestarts": "0",
+        "Id": "nginx.service",
+        "ActiveState": "active"
+      }
+    ]
+  },
+  "productionBefore": {
+    "promptcut-account-v2.service": {
+      "MainPID": "279515",
+      "NRestarts": "0",
+      "Id": "promptcut-account-v2.service",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2.service": {
+      "MainPID": "279516",
+      "NRestarts": "0",
+      "Id": "promptcut-doc-v2.service",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2.service": {
+      "MainPID": "279517",
+      "NRestarts": "0",
+      "Id": "promptcut-asset-v2.service",
+      "ActiveState": "active"
+    },
+    "nginx.service": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "Id": "nginx.service",
+      "ActiveState": "active"
+    }
+  },
+  "productionAfter": {
+    "promptcut-account-v2.service": {
+      "MainPID": "279515",
+      "NRestarts": "0",
+      "Id": "promptcut-account-v2.service",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2.service": {
+      "MainPID": "279516",
+      "NRestarts": "0",
+      "Id": "promptcut-doc-v2.service",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2.service": {
+      "MainPID": "279517",
+      "NRestarts": "0",
+      "Id": "promptcut-asset-v2.service",
+      "ActiveState": "active"
+    },
+    "nginx.service": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "Id": "nginx.service",
+      "ActiveState": "active"
+    }
+  },
+  "productionUnchanged": true,
+  "listenersAfter": [],
+  "wallSec": 10.061,
+  "actualDataDeleted": false,
+  "unitFilesAndEvidenceRetained": true,
+  "ok": true
+}
