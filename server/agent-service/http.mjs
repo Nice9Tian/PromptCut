@@ -186,7 +186,11 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           const access = await service.access(identity, conversationId, 'read');
           if (released || res.destroyed) break;
           if (access.allowed !== true || access.aclRevision !== view.aclRevision) return;
-          res.write(`data: ${JSON.stringify({ ...row.event, seq: row.eventSeq })}\n\n`);
+          // Accepted user events predate the run and keep scope on the FULL
+          // durable row. Project this trusted scope after the event payload;
+          // event fields cannot override it. Queued-only/LAN wire stays intact.
+          res.write(`data: ${JSON.stringify({ ...row.event, ...(service.runEvents
+            ? { projectId: row.projectId, conversationId: row.conversationId } : {}), seq: row.eventSeq })}\n\n`);
           cursor = row.eventSeq;
         }
         if (!released && !res.destroyed && (view.queueRevision !== queueRevision || view.aclRevision !== aclRevision)) {
