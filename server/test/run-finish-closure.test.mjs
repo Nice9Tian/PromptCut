@@ -67,3 +67,11 @@ test('generic control ACK cannot bypass terminal finalizer; private fence wins w
   assert.equal(conv.currentRunId, null); assert.equal(conv.messages[0].queueState, 'cancelled');
   assert.equal(f.ledger.read().runFinishReceiptsV2[result.finishReceipt.finishReceiptId].complete, false);
 });
+
+test('finalizer independently rechecks the persisted read receipt after recording an outcome', async t => {
+  const { f, result } = await ready(t);
+  f.ledger.transaction(state => { delete state.runReceiptsV2[result.finishReceipt.readReceiptId]; });
+  assert.throws(() => f.rawProvider.finalizeFinish({ finishReceiptId: result.finishReceipt.finishReceiptId }),
+    { code: 'run-read-receipt-mismatch' });
+  assert.equal(f.ledger.read().runFinishReceiptsV2[result.finishReceipt.finishReceiptId].complete, false);
+});

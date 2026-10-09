@@ -19,7 +19,7 @@ const close = server => new Promise(resolve => { server.closeAllConnections?.();
 
 test('real doc TLS/WS closes exact terminal grant; signed empty counts cannot manufacture an independent resource witness', { timeout: 30000 }, async t => {
   const f = await runFixture(), pki = assetWiringPki(f.dir);
-  let assembly, service, server, controlServer, client, otherClient, dataClient, file;
+  let assembly, service, server, controlServer, client, otherClient, dataClient, file, deliveryEnabled = false;
   const diagnostics = [], managerEntered = deferred(), permitDrain = deferred();
   let fileClosed = false, dataClosed = false, cancelCalls = 0, completeCalls = 0, proofMode = 'normal', savedProof;
   const accountClient = { events: async () => ({ events: [], headSeq: 0 }),
@@ -36,14 +36,15 @@ test('real doc TLS/WS closes exact terminal grant; signed empty counts cannot ma
     t.diagnostic(`owned TLS ports 6600/6601 listening=${server?.listening === true}/${controlServer?.listening === true}; dataClosed=${dataClosed}; fileClosed=${fileClosed}`);
   });
   f.enqueue(); f.enqueue('next-message');
-  assembly = createDocAgentAssembly({ ledger: f.ledger, accountClient,
+  const assemblyOptions = { ledger: f.ledger, accountClient,
     account: { origin: 'https://127.0.0.1:6600', clientTls: pki.doc, serverFingerprint256: pki.doc.fingerprint256,
       agent: { fingerprint256: pki.asset.fingerprint256, serviceKid: 'agent-test-key',
         controlOrigin: 'https://127.0.0.1:6601', controlServerFingerprint256: pki.asset.fingerprint256 } },
     runtime: { authority, docInstanceId: 'actual-doc-terminal-1' },
     serviceRegistry: { refresh() {}, get: () => ({ role: 'agent', actsFor: 'member', keys: [{ kid: 'agent-test-key' }] }) },
     getDocAssembly: () => ({ fence() { throw Error('normal finish must not cancel an operation'); } }),
-    getService: () => service, onDiagnostic: e => diagnostics.push(e) });
+    getService: () => deliveryEnabled ? service : null, onDiagnostic: e => diagnostics.push(e) };
+  assembly = createDocAgentAssembly(assemblyOptions);
   service = createDocService({ autoTick: false, log() {}, transportAuthenticate: assembly.transportAuthenticate,
     transportConnected: assembly.transportConnected, dispatchInvocation: assembly.dispatchInvocation });
   server = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, async (req, res) => {
@@ -92,6 +93,26 @@ test('real doc TLS/WS closes exact terminal grant; signed empty counts cannot ma
   const body = { ...Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(k => [k, grant[k]])),
     requestId: `finish:${grant.runGrantId}`, readReceiptId: read.receipt.receiptId, outcome };
   const finished = await client.finish(body);
+  const persistedControl = f.ledger.read().runControlsV2[finished.finishReceipt.controlId];
+  assert.deepEqual(persistedControl.docInstanceIds, ['actual-doc-terminal-1']);
+  // A new doc process with zero local sockets cannot attest the earlier doc's
+  // live connection. Use the actual idle service close implementation, not a
+  // fabricated closed row or a true callback. No extra listener is opened.
+  const replacementService = createDocService({ autoTick: false, log() {} });
+  const replacement = createDocAgentAssembly({ ...assemblyOptions,
+    runtime: { authority, docInstanceId: 'new-doc-empty-inventory' },
+    account: { ...assemblyOptions.account, agent: { ...assemblyOptions.account.agent, controlOrigin: undefined } },
+    getService: () => replacementService });
+  try {
+    await assert.rejects(replacement.deliver(persistedControl), { code: 'terminal-control-unavailable' });
+    assert.equal(dataClosed, false);
+    assert.equal(f.ledger.read().docRunClosuresV2[persistedControl.controlId].instances['new-doc-empty-inventory'].closed.connections.length, 0);
+    assert.throws(() => f.rawProvider.finalizeFinish({ finishReceiptId: finished.finishReceipt.finishReceiptId }), { code: 'run-doc-closure-pending' });
+  } finally { await replacement.close(); await replacementService.close(); }
+  deliveryEnabled = true;
+  const actualDelivery = assembly.deliver(persistedControl);
+  // Consume the rejection immediately while the manager is deliberately held.
+  const deliveryResult = actualDelivery.then(value => ({ value }), error => ({ error }));
   await managerEntered.promise; await closed;
   assert.equal(finished.finishPending, true); assert.equal(fileClosed, false); assert.equal(cancelCalls, 0);
   const controlId = finished.finishReceipt.controlId;
@@ -100,6 +121,7 @@ test('real doc TLS/WS closes exact terminal grant; signed empty counts cannot ma
   assert.equal(docClosure.closed.connections.length, 1); assert.equal(docClosure.closed.connections[0].closedWs, 1);
   assert.equal(f.ledger.read().runFinishReceiptsV2[finished.finishReceipt.finishReceiptId].complete, false);
   permitDrain.resolve();
+  assert.equal((await deliveryResult).error?.code, 'run-resource-closure-pending');
   const queried = await client.queryFinish(body);
   assert.equal(queried.recorded, true); assert.equal(queried.finishPending, true);
   assert.equal(fileClosed, true); assert.equal(dataClosed, true); assert.equal(cancelCalls, 0); assert.ok(completeCalls >= 1);

@@ -461,6 +461,10 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       const registered = s.agentInstancesV2?.[g.instanceId];
       if (registered?.state !== 'active' || registered.instanceGeneration !== g.instanceGeneration ||
           registered.serviceKid !== g.serviceKid) reject(403, 'run-instance-forbidden');
+      const read = s.runReceiptsV2[receipt.readReceiptId];
+      if (!read || read.promptDigest !== g.promptDigest ||
+          [...binding, 'runGrantId', 'serviceId', 'serviceKid', ...instanceBinding].some(k => read[k] !== g[k]))
+        reject(403, 'run-read-receipt-mismatch');
       const doc = s.docRunClosuresV2?.[control.controlId];
       const rows = Object.values(doc?.instances ?? {});
       if (doc?.payloadDigest !== control.payloadDigest || doc.fenceRevision !== control.fenceRevision || !rows.length ||
@@ -470,7 +474,8 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
         reject(503, 'run-doc-closure-pending');
       const agent = s.runTerminalAgentReceiptsV1?.[control.controlId];
       if (!agent || agent.targetDigest !== control.payloadDigest || agent.fenceRevision !== control.fenceRevision ||
-          agent.instanceId !== g.instanceId || agent.instanceGeneration !== g.instanceGeneration)
+          agent.instanceId !== g.instanceId || agent.instanceGeneration !== g.instanceGeneration ||
+          agent.drain?.eventId !== receipt.outcome.eventId || agent.drain?.eventDigest !== receipt.outcome.eventDigest)
         reject(503, 'run-agent-closure-pending');
       const resource = s.runTerminalResourceClosuresV1?.[agent.drain.resourceWitnessId];
       // No producer is mounted here. A signed self-report of counts cannot
