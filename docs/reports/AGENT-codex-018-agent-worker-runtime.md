@@ -41,3 +41,11 @@ root已将run-client租约更正为真实 `server/agent-service/run-client.mjs`�
 Astra约定 `POST /internal/v2/runs/assignment` exact六refs `{projectId,conversationId,messageId,runId,runGrantId,requestId}`，独立signed operation `scopeAssignment`；Doc每次rootreader核bound才回executionAllowed。session仅对这条exactpath/exactbody签新op，resolve/read/write proof不能替代；原其它op不改。run-client沿原真实secureConnect/exporter路径发送，透传上述五个RAM接口，不另生key/实例；不允许body自报instanceId/身份。
 
 本块仅消费者接口，Doc新路由/source尚待Astra固定；尚无正常成功闭合或单任务worker服务监听。
+
+固定 `cd90cc13676824de8989aa91367e744b3cd63700` 的专属7/7、0fail/cancel/skip，106.5577ms/exit0（外层344ms），TMP `pc-worker-session-cd90cc13-target.log`。新增op fullbody签名反向使用受控exporter、真实Ed25519，不计实际TLS。未重复已过scopecore/type，也未启动业务服务。
+
+## 指定单任务 manager 接缝
+
+task只接受projectId/conversationId/requestId，不能携grant或instance身份。必须有私有assignmentReady、durableevent sink与onTaskDrained；领到原workergrant后先等bound完整tuple，才准备readIntent和调用factory。仅一次指定admit；没有跨对话pending扫描、第二次领队列、legacyfinish或后台自动重试定时器。此时终态仍pending，第二条消息必须留DocFIFO，不在本包改finish协议。
+
+单任务drain hook等待实际runner drain/close和event flush，分别给local-drained/unknown与durable/failed分类；不产生root witness/complete。close异常保留并监督所有本task清理，hook失败不能遗留active逻辑状态。默认旧多任务fixture路径不变。assembly在注册前配置可信rootrecord，task模式用remote sink、无周期resume，仅一次工作Promise且保持completionReady:false；实际Doc/worker入口将在固定依赖收回后验证。

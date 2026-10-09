@@ -15,6 +15,7 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
   controlPort, controlHost = '127.0.0.1', root, loadModule, modelConfig,
   readyTimeoutMs = 5000, resumeIntervalMs = 2000, runnerFactory = null,
   connectionsClosed = null, childrenClosed = null, childTreeWitness = null,
+  task = null, registrationScope = null, assignmentReady = null, onTaskDrained = null, runEventsSink = null,
   log = () => {}, ...runnerOptions } = {}) {
   if (typeof dataDir !== 'string' || !path.isAbsolute(dataDir) ||
       !doc?.tls?.key || !doc.tls.cert || !doc.tls.ca || typeof doc.origin !== 'string' ||
@@ -49,6 +50,12 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
     if (errors.length) throw new AggregateError(errors, 'account-executor-close-pending');
   })();
   try {
+    if (task) {
+      if (!registrationScope || typeof runClient.configureRegistrationScope !== 'function' ||
+          typeof assignmentReady !== 'function' || typeof onTaskDrained !== 'function' || !runEventsSink)
+        fail('account-worker-task-configuration');
+      runClient.configureRegistrationScope(registrationScope);
+    }
     const registered = await runClient.registerInstance(), identity = runClient.instanceIdentity();
     if (!identity || identity.serviceId !== 'agent' || !reference(identity.authorityId) ||
         !reference(identity.serviceKid) || !reference(identity.instanceId) ||
@@ -68,7 +75,7 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
       readIntentsFile: path.join(dataDir, 'run-read-intents.sqlite'),
       runEventsFile: path.join(dataDir, 'run-events.sqlite'), runEventsAuthorityId: identity.authorityId,
       serviceKid: identity.serviceKid, instanceId: identity.instanceId,
-      runnerFactory, connectionsClosed, childrenClosed, log });
+      runnerFactory, connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, runEventsSink, log });
     controlServer = createRunControlServer({ tls: doc.tls, docFingerprint256: doc.serverFingerprint256,
       serviceKid: identity.serviceKid, instanceId: identity.instanceId, manager: service.runManager });
     controlServer.on('connection', socket => { controlSockets.add(socket);
@@ -82,9 +89,12 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
       void work.catch(error => log('agent.account.resume.pending', { code: error?.code ?? 'unavailable' }))
         .finally(() => { if (resumeWork === work) resumeWork = null; });
     };
-    timer = setInterval(resume, resumeIntervalMs); timer.unref?.(); resume();
+    if (!task) { timer = setInterval(resume, resumeIntervalMs); timer.unref?.(); }
+    resume();
+    const taskWork = task ? resumeWork : null;
     return { service, dataClient, resources, identity: Object.freeze({ ...identity }),
       controlPort: controlServer.address().port, close,
+      ...(task ? { taskWork } : {}),
       describe: () => ({ ...service.describe(), readControlConnected: readControl.describe().connected === true,
         runDataProofMounted: true, completionReady: false, controlSockets: controlSockets.size }) };
   } catch (error) {
