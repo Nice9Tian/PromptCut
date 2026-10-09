@@ -1,0 +1,78 @@
+{
+  "sourceBefore": "cf82a519a9c3a307490fced7c4b8fe9c9bdb446f",
+  "sourceAfter": "cf82a519a9c3a307490fced7c4b8fe9c9bdb446f",
+  "summary": {
+    "passed": 46,
+    "failed": 0,
+    "completed": true,
+    "sourceUnchanged": true
+  },
+  "completed": true,
+  "elapsedMs": 5264,
+  "cleanup": {
+    "browserClosed": true,
+    "stages": [
+      {
+        "port": 6688,
+        "listening": false,
+        "sockets": 0
+      },
+      {
+        "port": 6689,
+        "listening": false,
+        "sockets": 0
+      }
+    ],
+    "fixtureClosed": true,
+    "assetChildClosed": true,
+    "portsFree": true,
+    "profileRemoved": true
+  },
+  "fixtureCleanup": {
+    "childClosed": true,
+    "closeFailureCount": 0
+  },
+  "readControl": {
+    "connected": true,
+    "registeredInstanceReady": true,
+    "executorMounted": false,
+    "stateAtStart": {
+      "connected": true,
+      "open": 0,
+      "closed": 0,
+      "executorMounted": false
+    },
+    "stateAfterQueuedMessage": {
+      "connected": true,
+      "open": 2,
+      "closed": 5,
+      "executorMounted": false
+    }
+  },
+  "readRevocationWait": {
+    "focusBefore": {
+      "visibilityState": "hidden",
+      "hasFocus": false
+    },
+    "focusAfter": {
+      "visibilityState": "visible",
+      "hasFocus": true
+    },
+    "domBeforeWait": {
+      "expectedMessageRemains": false,
+      "userMessageCount": 0,
+      "queueItemCount": 0,
+      "permissionLoadingCount": 0
+    }
+  },
+  "revokedContentUi": {
+    "userMessageCount": 0,
+    "queueItemCount": 0
+  },
+  "deniedHistoryRead": {
+    "action": "clicked",
+    "endpoint": "agent-history",
+    "status": 401,
+    "denied": true
+  }
+}

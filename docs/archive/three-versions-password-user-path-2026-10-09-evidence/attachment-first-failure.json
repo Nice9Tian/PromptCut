@@ -1,0 +1,54 @@
+{
+  "sourceBefore": "2619bac96ec84e5e4714613c1a82dfc95fd2d04c",
+  "sourceAfter": "2619bac96ec84e5e4714613c1a82dfc95fd2d04c",
+  "summary": {
+    "passed": 24,
+    "failed": 0,
+    "completed": false,
+    "sourceUnchanged": true
+  },
+  "completed": false,
+  "elapsedMs": 74326,
+  "cleanup": {
+    "browserClosed": true,
+    "stages": [
+      {
+        "port": 6688,
+        "listening": false,
+        "sockets": 0
+      },
+      {
+        "port": 6689,
+        "listening": false,
+        "sockets": 0
+      }
+    ],
+    "fixtureClosed": true,
+    "assetChildClosed": true,
+    "portsFree": true,
+    "profileRemoved": true
+  },
+  "fixtureCleanup": {
+    "childClosed": true,
+    "closeFailureCount": 0
+  },
+  "readControl": {
+    "connected": true,
+    "registeredInstanceReady": true,
+    "executorMounted": false
+  },
+  "failure": {
+    "phase": "editor-project-open",
+    "step": "editor-agent-enable",
+    "check": "unclassified",
+    "editorState": {
+      "pathname": "/editor/",
+      "consentCount": 0,
+      "visibleConsentCount": 0,
+      "enableButtonCount": 0,
+      "visibleEnableButtonCount": 0,
+      "offCount": 0,
+      "permissionLoadingCount": 0
+    }
+  }
+}

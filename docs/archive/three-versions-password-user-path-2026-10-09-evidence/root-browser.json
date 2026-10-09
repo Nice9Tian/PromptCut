@@ -1,0 +1,1283 @@
+{
+  "sourceBefore": "63225318630b776e06c546f4627611fa8ee03369",
+  "sourceAfter": "63225318630b776e06c546f4627611fa8ee03369",
+  "summary": {
+    "passed": 46,
+    "failed": 0,
+    "completed": true,
+    "sourceUnchanged": true
+  },
+  "checks": [
+    {
+      "name": "port-6680-available",
+      "pass": true
+    },
+    {
+      "name": "port-6681-available",
+      "pass": true
+    },
+    {
+      "name": "port-6682-available",
+      "pass": true
+    },
+    {
+      "name": "port-6683-available",
+      "pass": true
+    },
+    {
+      "name": "port-6684-available",
+      "pass": true
+    },
+    {
+      "name": "port-6685-available",
+      "pass": true
+    },
+    {
+      "name": "port-6686-available",
+      "pass": true
+    },
+    {
+      "name": "port-6687-available",
+      "pass": true
+    },
+    {
+      "name": "port-6688-available",
+      "pass": true
+    },
+    {
+      "name": "port-6689-available",
+      "pass": true
+    },
+    {
+      "name": "real-provider-doc-agent-read-control-fixture-ready",
+      "pass": true
+    },
+    {
+      "name": "initiator-website-session-created",
+      "pass": true
+    },
+    {
+      "name": "initiator-authenticated-account-name",
+      "pass": true
+    },
+    {
+      "name": "other-one-website-session-created",
+      "pass": true
+    },
+    {
+      "name": "other-one-authenticated-account-name",
+      "pass": true
+    },
+    {
+      "name": "other-two-website-session-created",
+      "pass": true
+    },
+    {
+      "name": "other-two-authenticated-account-name",
+      "pass": true
+    },
+    {
+      "name": "real-project-row-clicked",
+      "pass": true
+    },
+    {
+      "name": "provider-recorded-agent-consent",
+      "pass": true
+    },
+    {
+      "name": "project-copy-toast-present",
+      "pass": true
+    },
+    {
+      "name": "real-project-agent-enable-request-accepted",
+      "pass": true
+    },
+    {
+      "name": "account-editor-project-and-agent-ready",
+      "pass": true
+    },
+    {
+      "name": "actual-agent-enable-targets-current-project",
+      "pass": true
+    },
+    {
+      "name": "website-session-still-valid-after-agent-enable",
+      "pass": true
+    },
+    {
+      "name": "real-user-message-accepted-as-queued",
+      "pass": true
+    },
+    {
+      "name": "real-sse-plaintext-user-message-body-visible",
+      "pass": true
+    },
+    {
+      "name": "one-real-queued-message-no-executor-active",
+      "pass": true
+    },
+    {
+      "name": "conversation-id-observed-shape-only",
+      "pass": true
+    },
+    {
+      "name": "password-change-form-valid-before-submit",
+      "pass": true
+    },
+    {
+      "name": "actual-password-change-request-accepted",
+      "pass": true
+    },
+    {
+      "name": "exit-choice-awaits-real-service-confirmations",
+      "pass": true
+    },
+    {
+      "name": "initiating-site-session-remains",
+      "pass": true
+    },
+    {
+      "name": "other-site-session-2-logged-out",
+      "pass": true
+    },
+    {
+      "name": "other-site-session-1-logged-out",
+      "pass": true
+    },
+    {
+      "name": "online-editor-real-read-body-cleared-after-revocation",
+      "pass": true
+    },
+    {
+      "name": "real-old-conversation-event-stream-closed",
+      "pass": true
+    },
+    {
+      "name": "editor-plaintext-message-and-queue-clear-naturally-after-revocation",
+      "pass": true
+    },
+    {
+      "name": "subsequent-real-history-read-denied-after-revocation",
+      "pass": true
+    },
+    {
+      "name": "ui-honestly-stays-pending-without-all-service-acks",
+      "pass": true
+    },
+    {
+      "name": "real-email-binding-otp-request-accepted",
+      "pass": true
+    },
+    {
+      "name": "provider-generated-bind-code-captured-in-private-memory",
+      "pass": true
+    },
+    {
+      "name": "real-reset-request-accepted",
+      "pass": true
+    },
+    {
+      "name": "provider-generated-reset-code-captured-in-private-memory",
+      "pass": true
+    },
+    {
+      "name": "actual-reset-confirmation-accepted",
+      "pass": true
+    },
+    {
+      "name": "reset-exit-choice-awaits-real-service-confirmations",
+      "pass": true
+    },
+    {
+      "name": "reset-flow-used-provider-issued-otp-and-private-mail-callback-no-external-email",
+      "pass": true
+    }
+  ],
+  "phases": [],
+  "network": [
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "POST",
+      "path": "/api/account/login",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/projects",
+      "status": 200
+    },
+    {
+      "page": "other-one",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "other-one",
+      "method": "POST",
+      "path": "/api/account/login",
+      "status": 200
+    },
+    {
+      "page": "other-one",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "other-one",
+      "method": "GET",
+      "path": "/api/account/projects",
+      "status": 200
+    },
+    {
+      "page": "other-two",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "other-two",
+      "method": "POST",
+      "path": "/api/account/login",
+      "status": 200
+    },
+    {
+      "page": "other-two",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "other-two",
+      "method": "GET",
+      "path": "/api/account/projects",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "POST",
+      "path": "/api/account/editor/session",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/projects",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "POST",
+      "path": "/hosted/shared/account/session",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/cloud-agent-consent",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "POST",
+      "path": "/api/account/cloud-agent-consent",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/info",
+      "status": 403,
+      "errorCode": "disabled"
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "errorCode": "disabled"
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "errorCode": "disabled"
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "errorCode": "disabled"
+    },
+    {
+      "page": "online-editor",
+      "method": "POST",
+      "path": "/hosted/shared/account/session",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "POST",
+      "path": "/hosted/shared/account/admin",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "POST",
+      "path": "/hosted/shared/account/session",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/projects",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/info",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "errorCode": "unreadable"
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/cloud-agent-consent",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/api/account/cloud-agent-consent",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "POST",
+      "path": "/agent/v1/conversations/:conversationId/messages",
+      "status": 202
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/projects",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "POST",
+      "path": "/api/account/password",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/password-events/:eventId",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "POST",
+      "path": "/api/account/password-events/:eventId/choice",
+      "status": 202
+    },
+    {
+      "page": "other-two",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "other-one",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "other-two",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "other-one",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations",
+      "status": 401,
+      "errorCode": "unauthorized"
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/password-events/:eventId",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "POST",
+      "path": "/api/account/email/start",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "POST",
+      "path": "/api/account/email/confirm",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "POST",
+      "path": "/api/account/reset/start",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "GET",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 401,
+      "errorCode": "unauthorized"
+    },
+    {
+      "page": "initiator",
+      "method": "POST",
+      "path": "/api/account/reset/confirm",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/me",
+      "status": 200
+    },
+    {
+      "page": "online-editor",
+      "method": "POST",
+      "path": "/hosted/shared/account/session",
+      "status": 401
+    },
+    {
+      "page": "initiator",
+      "method": "GET",
+      "path": "/api/account/projects",
+      "status": 200
+    },
+    {
+      "page": "initiator",
+      "method": "POST",
+      "path": "/api/account/password-events/:eventId/choice",
+      "status": 202
+    }
+  ],
+  "staticAssets": [
+    {
+      "page": "initiator",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "other-one",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "other-one",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "other-one",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "other-one",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "other-two",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "other-two",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "other-two",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "other-two",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/rolldown-runtime-B0Z9INg1.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/index-C-Dl6M5S.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/mode-CYrvg28X.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/pageFlag-DB9NNSTu.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/react-CUdNIagt.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/jsx-runtime-B74pBk57.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/registry-Bl6cyw33.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/soundEffects-DkeC-LmC.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/cardAudio-C2NUNZZL.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/preload-helper-QLb11AKf.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/cardAudioRendition-DsFCtUM6.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/captions-CReEOAtn.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/viewOnly-d21KpRMk.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/project-Jhe-hbM-.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/generatedAudioUpload-DeId3OG7.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/onlineSoundJudge-BF7SMPd4.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/browser-CNd9CVZ-.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/ColorUtils-BtL_dJ3Y.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/index-C3woiw05.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/rolldown-runtime-B0Z9INg1.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/mode-CYrvg28X.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/pageFlag-DB9NNSTu.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/jsx-runtime-B74pBk57.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/react-CUdNIagt.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/index-C-Dl6M5S.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/registry-Bl6cyw33.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/preload-helper-QLb11AKf.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/cardAudioRendition-DsFCtUM6.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/soundEffects-DkeC-LmC.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/cardAudio-C2NUNZZL.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/captions-CReEOAtn.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/viewOnly-d21KpRMk.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/generatedAudioUpload-DeId3OG7.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/project-Jhe-hbM-.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/browser-CNd9CVZ-.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/onlineSoundJudge-BF7SMPd4.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/ColorUtils-BtL_dJ3Y.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/index-C3woiw05.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/mode-CYrvg28X.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/rolldown-runtime-B0Z9INg1.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/jsx-runtime-B74pBk57.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/pageFlag-DB9NNSTu.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/react-CUdNIagt.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/index-C-Dl6M5S.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/registry-Bl6cyw33.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/cardAudioRendition-DsFCtUM6.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/soundEffects-DkeC-LmC.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/preload-helper-QLb11AKf.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/cardAudio-C2NUNZZL.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/captions-CReEOAtn.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/generatedAudioUpload-DeId3OG7.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/project-Jhe-hbM-.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/ColorUtils-BtL_dJ3Y.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/viewOnly-d21KpRMk.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/onlineSoundJudge-BF7SMPd4.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/browser-CNd9CVZ-.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "online-editor",
+      "path": "/editor/assets/index-C3woiw05.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "other-two",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "other-two",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "other-one",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "other-one",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "other-two",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "other-two",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "other-one",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "other-one",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/site.css",
+      "status": 200,
+      "type": "text/css"
+    },
+    {
+      "page": "initiator",
+      "path": "/assets/account.js",
+      "status": 200,
+      "type": "text/javascript"
+    }
+  ],
+  "styleStates": [
+    {
+      "page": "initiator",
+      "label": "initiator-website-login",
+      "stylesheetCount": 1,
+      "loadedStylesheetCount": 1,
+      "readableRuleCount": 49,
+      "unreadableStyleSheets": 0,
+      "bodyHasBackground": true,
+      "buttonsStyled": true
+    },
+    {
+      "page": "other-one",
+      "label": "other-one-website-login",
+      "stylesheetCount": 1,
+      "loadedStylesheetCount": 1,
+      "readableRuleCount": 49,
+      "unreadableStyleSheets": 0,
+      "bodyHasBackground": true,
+      "buttonsStyled": true
+    },
+    {
+      "page": "other-two",
+      "label": "other-two-website-login",
+      "stylesheetCount": 1,
+      "loadedStylesheetCount": 1,
+      "readableRuleCount": 49,
+      "unreadableStyleSheets": 0,
+      "bodyHasBackground": true,
+      "buttonsStyled": true
+    },
+    {
+      "page": "online-editor",
+      "label": "04-editor-before-message",
+      "stylesheetCount": 1,
+      "loadedStylesheetCount": 1,
+      "readableRuleCount": 2083,
+      "unreadableStyleSheets": 0,
+      "bodyHasBackground": true,
+      "buttonsStyled": true
+    },
+    {
+      "page": "online-editor",
+      "label": "05-editor-real-queued-message",
+      "stylesheetCount": 1,
+      "loadedStylesheetCount": 1,
+      "readableRuleCount": 2083,
+      "unreadableStyleSheets": 0,
+      "bodyHasBackground": true,
+      "buttonsStyled": true
+    },
+    {
+      "page": "initiator",
+      "label": "06-password-changed-pending",
+      "stylesheetCount": 1,
+      "loadedStylesheetCount": 1,
+      "readableRuleCount": 49,
+      "unreadableStyleSheets": 0,
+      "bodyHasBackground": true,
+      "buttonsStyled": true
+    },
+    {
+      "page": "initiator",
+      "label": "07-reset-pending",
+      "stylesheetCount": 1,
+      "loadedStylesheetCount": 1,
+      "readableRuleCount": 49,
+      "unreadableStyleSheets": 0,
+      "bodyHasBackground": true,
+      "buttonsStyled": true
+    }
+  ],
+  "eventStreams": [
+    {
+      "page": "online-editor",
+      "lifecycle": "finished",
+      "status": 403,
+      "conversationMatch": true
+    },
+    {
+      "page": "online-editor",
+      "lifecycle": "finished",
+      "status": 502,
+      "conversationMatch": true
+    },
+    {
+      "page": "online-editor",
+      "lifecycle": "failed",
+      "status": 200,
+      "conversationMatch": true
+    },
+    {
+      "page": "online-editor",
+      "lifecycle": "finished",
+      "status": 401,
+      "conversationMatch": true
+    }
+  ],
+  "pageErrors": [],
+  "completed": true,
+  "cleanup": {
+    "browserClosed": true,
+    "stages": [
+      {
+        "port": 6688,
+        "listening": false,
+        "sockets": 0
+      },
+      {
+        "port": 6689,
+        "listening": false,
+        "sockets": 0
+      }
+    ],
+    "fixtureClosed": true,
+    "assetChildClosed": true,
+    "portsFree": true,
+    "profileRemoved": true
+  },
+  "fixtureCleanup": {
+    "childClosed": true,
+    "closeFailureCount": 0
+  },
+  "elapsedMs": 5490,
+  "readControl": {
+    "connected": true,
+    "registeredInstanceReady": true,
+    "executorMounted": false,
+    "stateAtStart": {
+      "connected": true,
+      "open": 0,
+      "closed": 0,
+      "executorMounted": false
+    },
+    "stateAfterQueuedMessage": {
+      "connected": true,
+      "open": 2,
+      "closed": 5,
+      "executorMounted": false
+    }
+  },
+  "passwordFormState": {
+    "valid": true,
+    "currentPresent": true,
+    "nextPresent": true,
+    "repeatedMatches": true,
+    "submitEnabled": true
+  },
+  "passwordRuntime": {
+    "focusBeforeBringToFront": {
+      "visibilityState": "hidden",
+      "hasFocus": false
+    },
+    "focusAfterBringToFront": {
+      "visibilityState": "visible",
+      "hasFocus": true
+    }
+  },
+  "readRevocationWait": {
+    "focusBefore": {
+      "visibilityState": "hidden",
+      "hasFocus": false
+    },
+    "focusAfter": {
+      "visibilityState": "visible",
+      "hasFocus": true
+    },
+    "domBeforeWait": {
+      "expectedMessageRemains": true,
+      "userMessageCount": 1,
+      "queueItemCount": 1,
+      "permissionLoadingCount": 0
+    }
+  },
+  "revokedContentUi": {
+    "userMessageCount": 0,
+    "queueItemCount": 0
+  },
+  "deniedHistoryRead": {
+    "action": "clicked",
+    "endpoint": "agent-history",
+    "status": 401,
+    "denied": true
+  },
+  "attachmentPath": "not-tested: mounted account attachment authority is absent; no upload was attempted",
+  "resetPageFocusBeforeBringToFront": {
+    "visibilityState": "visible",
+    "hasFocus": true
+  },
+  "resetPageFocusAfterBringToFront": {
+    "visibilityState": "visible",
+    "hasFocus": true
+  }
+}
