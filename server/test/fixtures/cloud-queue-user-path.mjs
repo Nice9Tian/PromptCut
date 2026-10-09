@@ -23,6 +23,8 @@ import { assetWiringPki } from './asset-wiring-pki.mjs';
 import WebSocket from 'ws';
 import { addServiceKey, generateServiceKeyPair } from '../../auth/service-identity.mjs';
 import { createConversationClient } from '../../agent-service/conversation-client.mjs';
+import { createRunClient } from '../../agent-service/run-client.mjs';
+import { createConversationControlClient } from '../../agent-service/conversation-control-client.mjs';
 import { createHostedWiring } from '../../agent-service/hosted-wiring.mjs';
 import { createHostedAgentService } from '../../agent/service/create-agent-service.mjs';
 import { createAgentHttp } from '../../agent-service/http.mjs';
@@ -140,7 +142,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
   const authorityId = 'dual-account-doc';
   const pki = assetWiringPki(dir);
   const agentKey = generateServiceKeyPair();
-  let agentServer, agentClient, agentService;
+  let agentServer, agentClient, agentService, agentRunClient, agentReadControl;
   const staged = path.join(dir, 'staged-asset');
   const docDir = path.join(dir, 'doc');
   const assetDir = path.join(dir, 'asset');
@@ -161,7 +163,8 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
       pair.client.destroy(); pair.upstream.destroy(); return pair.closed;
     }));
     await closeServer(edgeServer);
-    await closeServer(agentServer); agentService?.close(); agentClient?.close();
+    await agentReadControl?.close();
+    await closeServer(agentServer); agentService?.close(); agentClient?.close(); agentRunClient?.close();
     await combo?.close();
     await closeServer(siteServer);
     await closeServer(accountServer);
@@ -268,8 +271,18 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
         order: { witnessKeys: { 'dual-path-order': orderKeys.account.publicKey },
           docAttestationPrivateKey: orderKeys.doc.privateKey } } });
     assert.equal(combo.assetPort, null, 'account mode uses the separate asset process');
-    agentClient = createConversationClient({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong,
-      serverFingerprint256: pki.doc.fingerprint256 });
+    const agentOptions = { origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong,
+      serverFingerprint256: pki.doc.fingerprint256 };
+    agentClient = createConversationClient(agentOptions); agentRunClient = createRunClient(agentOptions);
+    agentReadControl = createConversationControlClient({ ...agentOptions, runClient: agentRunClient,
+      receiptFile: path.join(dir, 'agent-read-closures.sqlite') });
+    agentClient.useReadControl(agentReadControl);
+    await agentReadControl.start();
+    const readReadyDeadline = Date.now() + 5000;
+    while (!agentReadControl.describe().connected) {
+      if (Date.now() >= readReadyDeadline) throw Error('agent-read-control-not-ready');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
     const wiring = createHostedWiring({ accountMode: true, conversationClient: agentClient });
     agentService = createHostedAgentService({ accountMode: true, conversationClient: agentClient });
     const agentHttp = createAgentHttp({ service: agentService, authenticate: wiring.authenticate });

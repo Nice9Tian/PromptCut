@@ -7,8 +7,7 @@ import http from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import { openAccountLedger } from '../account/ledger.mjs';
-import { createConversationAuthority } from '../account/conversation-authority.mjs';
-import { createConversationInternalServer } from '../account/conversation-internal.mjs';
+import { agentReadControlFixture } from './agent-read-control-fixture.mjs';
 import { createConversationClient } from '../agent-service/conversation-client.mjs';
 import { createHostedAgentService } from '../agent/service/create-agent-service.mjs';
 import { createHostedWiring } from '../agent-service/hosted-wiring.mjs';
@@ -63,7 +62,9 @@ test('real mTLS doc + HTTP Agent: two accounts, private fence, consent, ACK repl
   const principals = Object.fromEntries([a, b, c].map(id => [`auth:${id}`, { authorizationId: `auth:${id}`, projectId: pid,
     accountId: id, accountName: id === a ? 'Alice' : id === b ? 'Bob' : 'Creator', loginId: `login:${id}`,
     credentialId: `cred:${id}`, loginGeneration: 1 }]));
-  const authority = createConversationAuthority({ ledger, accountAuthority: { async authorizePrincipal(ref, { projectId, action }) {
+  const fixture = agentReadControlFixture({ ledger, directory: dir, docTls: cert.doc, agentTls: cert.agent,
+    docPin: cert.doc.pin, agentPin: cert.agent.pin, port: 5790,
+    accountAuthority: { async authorizePrincipal(ref, { projectId, action }) {
     const p = principals[ref.authorizationId];
     if (!p || p.projectId !== projectId || ledger.read().revokedLogins[`login:${p.loginId}`]) throw Object.assign(new Error('revoked'), { status: 401, code: 'credential-revoked' });
     const access = ledger.read().projects[pid].members[p.accountId]?.access;
@@ -73,22 +74,19 @@ test('real mTLS doc + HTTP Agent: two accounts, private fence, consent, ACK repl
   verifySelectionSnapshot: async ({ principal, projectId, selectionInput }) => {
     if (selectionInput?.pageId !== 'page_123') return null;
     return { projectId, accountId: principal.accountId, pageId: 'page_123', selection: { clipIds: [] }, sentAt: 100, source: 'sent-snapshot' };
-  }, runHooks: { fenceInState() {} }, onFence: async value => ({ ack: true, ...value }) });
-  const internal = createConversationInternalServer({ tls: cert.doc, conversationAuthority: authority,
-    agentFingerprint256: cert.agent.pin, async resolveDelegation(ticket) {
+  }, async resolveDelegation(ticket) {
       if (!['delegation_alice_1234567890', 'delegation_bob_1234567890', 'delegation_creator_1234567890'].includes(ticket))
         throw Object.assign(new Error('bad'), { status: 401, code: 'delegation-expired' });
       return { authorizationId: `auth:${ticket.includes('alice') ? a : ticket.includes('bob') ? b : c}`, projectId: pid };
     } });
-  await listen(internal, 5790);
-  const client = createConversationClient({ origin: 'https://127.0.0.1:5790', tls: cert.agent, serverFingerprint256: cert.doc.pin });
+  const client = fixture.client;
   const wrong = createConversationClient({ origin: 'https://127.0.0.1:5790', tls: cert.wrong, serverFingerprint256: cert.doc.pin });
   const wiring = createHostedWiring({ accountMode: true, conversationClient: client });
   const service = createHostedAgentService({ accountMode: true, conversationClient: client });
   const publicServer = http.createServer(createAgentHttp({ service, authenticate: wiring.authenticate }).handle);
-  await listen(publicServer, 5791);
-  t.after(async () => { wrong.close(); wiring.close(); service.close(); await close(publicServer); await close(internal);
+  t.after(async () => { wrong.close(); await fixture.close(); wiring.close(); service.close(); if (publicServer.listening) await close(publicServer);
     ledger.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  await fixture.start(); await listen(publicServer, 5791);
   const alice = 'delegation_alice_1234567890', bob = 'delegation_bob_1234567890', creator = 'delegation_creator_1234567890';
   await assert.rejects(wrong.identity({ delegation: alice }), { status: 403 });
   const spoof = await request(5791, bob, 'POST', '/v1/conversations/c1/messages', { prompt: 'Bob text', requestId: 'b1',
@@ -124,7 +122,13 @@ test('real mTLS doc + HTTP Agent: two accounts, private fence, consent, ACK repl
   assert.equal(privateAttempt.status, 403);
   const privateResult = await request(5791, bob, 'POST', '/v1/conversations/c1/visibility', { visibility: 'private', requestId: 'b-switch' });
   assert.equal(privateResult.status, 200); assert.deepEqual(privateResult.body.cancelled, [sent.body.messageId]);
-  assert.match(await readUntil(reader, /access\.revoked/), /access\.revoked/);
+  // The signed control closes the real old transport before the private ACK.
+  // It cannot enqueue a friendly tail event after installing its output fence.
+  let ended = false;
+  try { for (;;) { const next = await reader.read(); if (next.done) { ended = true; break; }
+    assert.equal(new TextDecoder().decode(next.value).includes('must-not-publish'), false); } }
+  catch { ended = true; }
+  assert.equal(ended, true);
   streamAbort.abort();
   assert.equal((await request(5791, alice, 'GET', '/v1/conversations/c1')).status, 404);
   const creatorView = await request(5791, creator, 'GET', '/v1/conversations/c1');

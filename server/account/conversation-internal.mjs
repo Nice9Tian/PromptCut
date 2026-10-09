@@ -23,7 +23,7 @@ async function bodyOf(req) {
 /** Only the pinned Agent service certificate can use this internal route. The delegation
  * is resolved by doc RAM authority; caller-supplied principal/role/account fields are rejected.
  */
-export function createConversationInternalHandler({ conversationAuthority, resolveDelegation, agentFingerprint256 }) {
+export function createConversationInternalHandler({ conversationAuthority, resolveDelegation, agentFingerprint256, requireReadControl = false }) {
   const pin = certificateFingerprint(agentFingerprint256);
   if (!/^[a-f0-9]{64}$/.test(pin) || !conversationAuthority || typeof resolveDelegation !== 'function') fail(503, 'conversation-internal-configuration');
   return async function handle(req, res) {
@@ -35,6 +35,7 @@ export function createConversationInternalHandler({ conversationAuthority, resol
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = url.pathname.slice(ROOT.length);
       if (!['identity', 'access', 'list', 'get', 'send', 'switch', 'stop', 'rename'].includes(action)) fail(404, 'no-route');
+      if (requireReadControl && ['access', 'list', 'get'].includes(action)) fail(503, 'read-control-required');
       const body = await bodyOf(req);
       if (['principal', 'principalRef', 'authorizationId', 'accountId', 'loginId', 'credentialId', 'loginGeneration',
         'senderAccountId', 'senderNameAtSend', 'creator', 'serviceId', 'servicePrincipal', 'readReceiptId', 'runGrantId'].some(k => body[k] !== undefined))

@@ -76,6 +76,9 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
             const ack = /^\/internal\/v2\/access\/events\/([^/]+)\/ack$/.exec(url.pathname);
             if (!ack || req.method !== 'POST') bad(403, 'service-forbidden');
             const receipt = await readBody(req); if (receipt.serviceId !== undefined) bad(400, 'invalid-authority-claim');
+            // The authoritative transaction validates the persisted doc closure;
+            // a service certificate and a body complete flag are not that proof.
+            if (service === 'agent' && !/^[a-f0-9]{64}$/.test(receipt?.agentReadClosureDigest ?? '')) bad(503, 'agent-read-closure-required');
             result = authority.ackAccessEvent(decodeURIComponent(ack[1]), service, receipt);
           }
         } else bad(403, 'service-forbidden');
