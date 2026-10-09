@@ -190,3 +190,17 @@ server/hosted/doc-agent-assembly.mjs、provider/instance/authority/runClient/rea
 3. 真正HostedRunnerFactory＋同RAM数据WS/project.open+工具入口＋两浏览器短链及模型调用还未执行，本次TLS driver是受控对象，不冒称真实模型/图像/素材/生产UID/OS证明。无full/browser/native/model/node，此轮按根授权只做自己的protocol targets与type；根共同候选后再验。
 
 交回时原首红、原17/19/21/2目标和不同source的type按各自索引保留；不把第一次中止删改为成功，不凭报告改动重跑全量。最终状态是“执行器中央装配小块完成，终态与UI/真实模型链待下一块”，不是 .18 全业务终点完成。
+
+### 账号持久运行事件到页面助手气泡（后续窄块，固定源与证据独立）
+
+根在装配468/报告738冻结后授权仅 src/ai/cloud/events.ts、同名新test、cloud专属types及必要parser；CloudAiPanel/useCloud/Luna控制、session/HTTP/provider/instance/control/资源底层都未改。真实服务HTTP accountEvents输出是 `{...row.event, seq:row.eventSeq}`，来自 runEvents.after 的FULL持久row；append覆盖projectId/conversationId/messageId/runId/runGrantId/instanceId/instanceGeneration/serviceKid/senderAccountId九字段。用户原件只来自doc镜像，run字段为空。新页面只在完整正seq v2 run与原cq-messageId的project/conversation/message/sender匹配时建一次ca-runId，插到原用户消息之后；后续事件逐字段核同grant/instance/代际，不使用lastassistant兜底。部分v2 user不回落成旧run气泡，旧合法队列fixture形状与LAN完成行为保持。云端专属CloudAccountMessage交叉类型携带cloudAccepted/cloudRun/cloudAcceptedMessageId，不扩大本地ChatMessage。
+
+runner_done与账号raw done/end仍pending，无outcome/finishedAt；状态与progress.text显示“执行已结束，等待云端确认关闭与结算。”，既有MessageList简洁activity读取这个text，不再伪显示继续思考。模型error可以显示错误但不自动宣布资源关闭/结算完成；Astra新c705终态接口只读收到，未组合到本轮。任何doc已核finalizer事件目前未接，FIFO仍由doc占用。
+
+首纯红：TMP pc-executor-ui-red-1.log，5项2pass/3fail、89.5266ms、exit1；明确run未创建助手，文字与pending目标因没有助手而失败。修9fa后新5+原cloud-chat/account-queue合30/30、1599.858ms、exit0；type9fa零错误（pc-executor-ui-9fa-type.log）。7bb增加真实React夹具与待结算progress，pure30/30、1585.1236ms/wall1768ms；type首红2个TS2322，必需RunProgress.phase遗漏，wall6755ms（pc-executor-ui-7bb-type.log），不能用较早9fa绿掩盖。6f44075e补phase:pending-settlement的实际值为settlement-pending，type0/wall6657ms（pc-executor-ui-phase-type.log）。d31d3022886207059be5b36c7e258c2a5e0cdde6再拒缺字段账号user回落，固定纯30/30、1563.8194ms/wall1746ms、type0/wall6588ms（pc-executor-ui-final-target.log与pc-executor-ui-final-type.log）。每轮有代码/断言变化才复验，没有全量或native重跑。
+
+新增可见层真实探针：scripts/probes/account-executor-visible-probe.mjs（第一import no-user-dirs）；scripts/probes/fixtures/account-executor-visible/index.html/page.tsx；server/test/fixtures/account-executor-visible.mjs。实际doc SQLite、同RAM实例注册/exporter proof、read inventory、AgentHTTP、持久SSE，页面真实CloudApi/CloudSession/MessageList；账号核验、registry、selection、model/tool driver是受控adapter。独立Vite configFile:false/no产品server插件、TMP cache与Chrome profile；OpenSSL仅TMP临时CA角色cert。不是完整Editor双页、VH、真实模型、数据WS或OS-tree证明，没有fetch/native/SSE替身，没有手动ready/closure true。
+
+根授d31一次6640(doc mTLS)/6641(AgentHTTP)/6642(control mTLS)/6643(Vite)窗口。首次实际运行exit1、probe wall18069ms/wrapper18313ms，1check/1pass前置空口、completedfalse；真实页面渲染后等待待结算文字15s Timeout。原log pc-executor-visible-d31-first.log/result.json/failure.png完整保留于TMP；Chrome43044，source/sourceAfter均d31，nativeRetry0，没有自动重跑。截图只有实际空MessageList与reconnecting，不能说文本/工具已可见。静态定位夹具createCloudApi只传ticket但未传grant，send实际先调用deps.grant??cloudGrant；未设置CloudIdentity，current()拒，发生在POST之前。这是确切fixture配置遗漏候选，原raw没有记录HTTP数组/子phase，不能事后冒造首次网络详情。
+
+首次清理全完成：result.cleanup browser/vite true、fixture closed:true/socket0/ports6640–42；TCP复核6640–6659零监听，matching private Chrome进程0，源clean。尚待根批准fixture最窄grant回调/安全阶段诊断以及一次修后真实窗口；本报告不把首失败删改或当可见链通过。

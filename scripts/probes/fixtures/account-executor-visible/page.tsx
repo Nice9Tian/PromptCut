@@ -11,7 +11,7 @@ import { createCloudSession } from '../../../../src/ai/cloud/session';
 const config = await fetch('/fixture-config').then(r => r.json());
 const store = getChatStore('visible-account-run');
 const api = createCloudApi({ baseUrl: () => config.origin + '/v1', projectId: () => config.projectId,
-  ticket: async () => config.ticket });
+  ticket: async () => config.ticket, grant: async () => undefined });
 const session = createCloudSession({ api, store });
 function Page() {
   const messages = useChatMessages(store);
