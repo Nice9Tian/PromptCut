@@ -43,7 +43,7 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
   m.expected.clientFingerprint256 = certificateFingerprint(pki.account.fingerprint256);
   m.expected.serverFingerprint256 = certificateFingerprint(pki.asset.fingerprint256);
   const workerPin = certificateFingerprint(pki.wrong.fingerprint256), masterPin = m.expected.clientFingerprint256;
-  const docSockets = new Set(); let worker, scope, instances, provider, instanceHandler, runHandler, modelCalls = 0;
+  const docSockets = new Set(); let worker, scope, instances, provider, instanceHandler, runHandler, modelCalls = 0, assemblyCalls = 0;
   const doc = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, async (req, res) => {
     try {
       if (await instanceHandler?.(req, res)) return;
@@ -74,7 +74,20 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
   m.io.start = async reservation => {
     worker = createAccountTaskWorker({ expected: m.expected, reservation, identityTls: pki.asset,
       doc: { origin: 'https://127.0.0.1:6700', tls: pki.wrong, serverFingerprint256: pki.doc.fingerprint256 },
-      readRootRecord: async () => m.io.read('epoch-1.json') });
+      readRootRecord: async () => m.io.read('epoch-1.json'),
+      eventSink: { file: path.join(f.dir, 'worker-local-events.sqlite'), origin: 'https://127.0.0.1:6702',
+        tls: pki.wrong, serverFingerprint256: pki.asset.fingerprint256 },
+      createAssemblyOptions: async ({ runClient, runEventsSink, task, grant }) => {
+        assemblyCalls++;
+        assert.equal(runClient.instanceIdentity().instanceId, grant.instanceId);
+        assert.equal(runClient.scopeIdentity().scopePublicKey, (await m.io.read('epoch-1.json')).worker.publicKey);
+        assert.equal(task.projectId, projectId); assert.equal(task.conversationId, conversationId);
+        assert.equal(typeof runEventsSink.writer, 'function');
+        assert.equal(runEventsSink.describe().requests, 0);
+        // Reaches the real caller with original RAM and real journal/sink, but
+        // intentionally lacks readControl/Hosted options: still MUST reject.
+        return {};
+      } });
     await worker.listen({ port: 6701 });
   };
   m.io.identity = async () => {
@@ -134,12 +147,14 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
   assert.equal(worker.startTask({}), notBound);
   await assert.rejects(notBound, { code: 'account-worker-not-bound' });
   assert.equal(modelCalls, 0); assert.equal(Object.keys(f.ledger.read().runReceiptsV2).length, 0);
+  assert.equal(assemblyCalls, 0); assert.equal(worker.describe().durableEventSinkMounted, true);
   await m.run('bind', { assignment: result.assignment });
   assert.equal((await worker.assignmentReady(grant)).executionAllowed, true);
   // This now reaches the real assembly constructor rather than the old rejected
   // start latch. Missing real readControl/sink/options MUST still reject; this
   // assertion is not a successful Hosted/SSR execution or a free-allow fixture.
   await assert.rejects(worker.startTask({}), { code: 'account-executor-configuration' });
+  assert.equal(assemblyCalls, 1);
   await assert.rejects(worker.startTask({}), /account-worker-not-prepared/);
   await assert.rejects(worker.prepareTask({ ...task, requestId: 'other-task' }), { code: 'account-worker-task-conflict' });
   assert.equal(Object.keys(f.ledger.read().runGrantsV2).length, 1);
