@@ -73,6 +73,15 @@ const chooseHistory = async (page, conversationId) => {
   await page.waitForSelector(row, { visible: true }); await page.click(row);
   await page.waitForFunction(id => window.__pcCloud?.main?.conversationId?.() === id, { timeout: TIMEOUT }, conversationId);
 };
+const openRawLog = async page => {
+  const selector = '[data-pc-msg^="ca-"] .ai-rawlog-head';
+  await page.waitForSelector(selector, {visible:true});
+  const button = await page.$(selector); await button.scrollIntoView();
+  await page.waitForFunction(selector=>{ const el=document.querySelector(selector), r=el?.getBoundingClientRect();
+    return r && el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)); }, {timeout:TIMEOUT}, selector);
+  if (await button.evaluate(el=>el.getAttribute('aria-expanded')!=='true')) await button.click();
+  await page.waitForFunction(selector=>document.querySelector(selector)?.getAttribute('aria-expanded')==='true', {timeout:TIMEOUT}, selector);
+};
 const started = Date.now();
 try {
   await fs.mkdir(OUT, { recursive: true }); await fs.access(path.join(DIST, 'index.html'));
@@ -126,11 +135,11 @@ try {
   const conversationId = await a.evaluate(() => window.__pcCloud.main.conversationId()); result.conversationId = conversationId;
   phase = 'actual-output-a';
   await a.waitForFunction(() => document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'), { timeout: TIMEOUT });
-  await a.waitForSelector('.ai-rawlog-head'); await a.click('.ai-rawlog-head');
+  phase='expand-actual-output-a'; await openRawLog(a);
   await a.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
   phase = 'shared-history-b'; await chooseHistory(b, conversationId);
   await b.waitForFunction(() => document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'), { timeout: TIMEOUT });
-  await b.waitForSelector('.ai-rawlog-head'); await b.click('.ai-rawlog-head');
+  phase='expand-actual-output-b'; await openRawLog(b);
   await b.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
   for (const [i, page] of [a,b].entries()) {
     await page.waitForFunction(name => window.__pcStore?.getState()?.project?.name === name, { timeout: TIMEOUT }, REAL_RUNNER_NAME);
