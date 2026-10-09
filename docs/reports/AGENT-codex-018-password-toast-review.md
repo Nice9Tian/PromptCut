@@ -8,4 +8,4 @@ f9的close helper与main controls相同：**先**等待关闭按钮中心element
 
 静态排除：f9 MIME有text/css、/editor/assets映射DIST正确，fixture publicHandler通过Promise处理；CSS文件存在不等于浏览器实际成功加载/应用。缺失的是该次stylesheet请求status/失败分类、styleSheets/cssRules可读计数，以及button rect与viewport/命中元素白名单。最小建议在现探针加这些非秘密诊断与样式就绪前置，再由owner定位资源失败；目前不猜CSS请求失败的唯一原因。
 
-Root另发现独立site-form-only也未发password请求。已向Luna索取其安全截图/字段有效性/事件/异常栈；这与Editor缺CSS应分别归因，不将一次无admin短路当改密功能失败。等待该轮证据后补本页明确结论。
+补充独立 site-form-smoke-9 的真实证据：Editor CSS failed-request、无HTTP response、规则0且不可读，确认资源未加载；仍缺 request.failure().errorText，不能猜TLS或MIME。网站CSS200/49规则与JS200正常，字段valid/match/submitEnabled及按钮visible/unobscured全true，却无password POST。failure-1图未见表单catch固定错误；safeShot会清输入，不能据空字段推原表单无效。静态VH account.js:334→336→143→28在POST前调用crypto.randomUUID，但尚无证据证明此处抛错。建议仅加click/submit/invalid计数、isTrusted/submitter/defaultPrevented、提示分类与isSecureContext/randomUUID能力布尔；如submit后generic错误成立，再收CDP caught异常类型与源码行（禁locals/值），不延长等待或API绕过。Root已交Luna实施此窄诊断。本咨询未启动任何服务/浏览器/测试，产品全只读；明确未定位网站提交无POST的唯一根因。
