@@ -54,7 +54,12 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
       if (!registrationScope || typeof runClient.configureRegistrationScope !== 'function' ||
           typeof assignmentReady !== 'function' || typeof onTaskDrained !== 'function' || !runEventsSink)
         fail('account-worker-task-configuration');
-      runClient.configureRegistrationScope(registrationScope);
+      const existing = runClient.instanceIdentity();
+      if (!existing) runClient.configureRegistrationScope(registrationScope);
+      else if (existing.purpose !== 'run-worker' || existing.instanceId !== registrationScope.record?.instance?.instanceId ||
+          existing.authorityId !== registrationScope.expected?.docAuthorityId ||
+          runClient.scopeIdentity?.().scopePublicKey !== registrationScope.record?.worker?.publicKey)
+        fail('account-worker-task-registration');
     }
     const registered = await runClient.registerInstance(), identity = runClient.instanceIdentity();
     if (!identity || identity.serviceId !== 'agent' || !reference(identity.authorityId) ||
