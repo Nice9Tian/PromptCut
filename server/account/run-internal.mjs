@@ -7,7 +7,7 @@ const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantI
 const readFields = [...binding, 'requestId', 'readIntentId', 'promptDigest', 'prompt'];
 const shapes = Object.freeze({ admit: ['projectId', 'conversationId', 'requestId'], read: readFields,
   'read/query': readFields, check: ['projectId', 'runGrantId'], finish: [...binding, 'requestId'],
-  ticket: ['projectId', 'runGrantId', 'conversationId', 'purpose'], pending: [] });
+  assignment: [...binding, 'requestId'], ticket: ['projectId', 'runGrantId', 'conversationId', 'purpose'], pending: [] });
 const fail = (status, code) => { throw accountError(status, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 const response = (res, status, body) => {
@@ -44,8 +44,9 @@ function validateBody(action, body) {
 /** Only a pinned Agent leaf certificate reaches these routes. All service and
  * actor identities come from trusted callbacks/ledger, never from the body. */
 export function createRunInternalHandler({ runAuthority, agentFingerprint256, resolveServicePrincipal,
-  authenticateInvocation, principalForCheck, issueRunTicket, listPendingRuns } = {}) {
+  masterFingerprint256, requirePendingProof = false, authenticateInvocation, principalForCheck, issueRunTicket, listPendingRuns } = {}) {
   const pin = certificateFingerprint(agentFingerprint256);
+  const pins = new Set([pin, ...(masterFingerprint256 ? [certificateFingerprint(masterFingerprint256)] : [])]);
   if (!/^[a-f0-9]{64}$/.test(pin) || typeof resolveServicePrincipal !== 'function' ||
       !['admit', 'confirmRead', 'queryRead', 'checkAccess', 'resolveRunPrincipal', 'finish'].every(method =>
         typeof runAuthority?.[method] === 'function')) fail(503, 'run-internal-configuration');
@@ -56,7 +57,7 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
     try {
       assertInstanceDirectTransport(req);
       const peer = req.socket?.getPeerCertificate?.(), fingerprint256 = certificateFingerprint(peer?.fingerprint256);
-      if (req.socket?.authorized !== true || fingerprint256 !== pin) fail(403, 'service-forbidden');
+      if (req.socket?.authorized !== true || !pins.has(fingerprint256)) fail(403, 'service-forbidden');
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = url.pathname.slice(ROOT.length);
       if (!Object.hasOwn(shapes, action)) fail(404, 'no-route');
@@ -64,12 +65,12 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       let servicePrincipal = await resolveServicePrincipal({ fingerprint256, socket: req.socket });
       if (!servicePrincipal || servicePrincipal.service !== 'agent' || !reference(servicePrincipal.serviceKid))
         fail(403, 'run-service-forbidden');
-      if (action !== 'pending') {
+      if (action !== 'pending' || requirePendingProof) {
         if (typeof authenticateInvocation !== 'function') fail(503, 'instance-consumer-unavailable');
         if (action === 'check' && !['read', 'write'].includes(body.action)) fail(400, 'invalid-run-action');
         invocation = await authenticateInvocation({ req, servicePrincipal, body,
           operation: ({ admit: 'admit', read: 'confirmRead', 'read/query': 'queryRead', finish: 'finish',
-            check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
+            pending: 'pendingRuns', assignment: 'scopeAssignment', check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
         if (!invocation?.servicePrincipal || typeof invocation.release !== 'function') fail(503, 'instance-consumer-unavailable');
         servicePrincipal = invocation.servicePrincipal;
       }
@@ -78,6 +79,10 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       else if (action === 'read') result = await runAuthority.confirmRead(input);
       else if (action === 'read/query') result = await runAuthority.queryRead(input);
       else if (action === 'finish') result = await runAuthority.finish(input);
+      else if (action === 'assignment') {
+        if (typeof runAuthority.scopeAssignment !== 'function') fail(503, 'run-scope-unavailable');
+        result = await runAuthority.scopeAssignment(input);
+      }
       else if (action === 'pending') {
         if (typeof listPendingRuns !== 'function') fail(503, 'run-pending-unavailable');
         result = await listPendingRuns({ servicePrincipal });

@@ -83,12 +83,39 @@ export function validateAgentScopeTerminal(value, intent, expected, record, assi
   verifyScopeSignature(intent, record.worker.publicKey);
   return structuredClone(value);
 }
+/** Forced closure is Doc-authorized by a durable fence, never a fabricated
+ * worker intent. Retirement concerns a root-unbound slot, not a task outcome. */
+export function agentScopeCloseKind(terminal) {
+  return terminal?.protocol === domain('terminal') ? 'normal' : terminal?.protocol === domain('forced-terminal') ? 'forced'
+    : terminal?.protocol === domain('unassigned-retirement') ? 'unassigned' : failScope('terminal-kind');
+}
+export function validateAgentScopeCloseEnvelope(value, intent, expected, record, assignment) {
+  const kind = agentScopeCloseKind(value);
+  if (kind === 'normal') return validateAgentScopeTerminal(value, intent, expected, record, assignment);
+  if (intent !== null) failScope('unexpected-worker-intent');
+  if (kind === 'forced') {
+    validateAgentScopeAssignment(assignment, expected, record);
+    certificate(value, 'forced-terminal', ['assignmentDigest', 'fence'], expected, record);
+    const f = value.fence;
+    if (value.assignmentDigest !== digestOf(assignment) || !exactScope(f, ['controlId', 'fenceRevision', 'payloadDigest', 'kind', 'outcome']) ||
+        !ref(f.controlId) || !positive(f.fenceRevision) || !hash(f.payloadDigest) ||
+        !['stop', 'private', 'delete', 'agent-disabled', 'credential-revoked', 'member-revoked', 'instance-revoked', 'worker-failed'].includes(f.kind) ||
+        !['failed', 'interrupted'].includes(f.outcome)) failScope('forced-terminal');
+  } else {
+    if (assignment !== null || !exactScope(value, ['v', 'protocol', 'authorityId', 'slotId', 'epoch', 'recordDigest', 'reason']) ||
+        value.v !== 1 || value.authorityId !== expected.authorityId || value.slotId !== expected.slotId ||
+        value.epoch !== record.epoch || value.recordDigest !== digestOf(record) ||
+        !['worker-start-failed', 'registration-failed', 'assignment-failed'].includes(value.reason)) failScope('unassigned-retirement');
+  }
+  return structuredClone(value);
+}
 export function validateAgentScopeClosure(value, expected, record, assignment, terminal, intent) {
-  validateAgentScopeTerminal(terminal, intent, expected, record, assignment);
+  validateAgentScopeCloseEnvelope(terminal, intent, expected, record, assignment);
+  const kind = agentScopeCloseKind(terminal), closureProtocol = kind === 'normal' ? domain('closure') : domain(`${kind}-closure`);
   if (!exactScope(value, ['v', 'protocol', 'authorityId', 'slotId', 'epoch', 'recordDigest', 'assignmentDigest', 'terminalDigest', 'intentDigest', 'observed']) ||
-      value.v !== 1 || value.protocol !== domain('closure') || value.authorityId !== expected.authorityId || value.slotId !== expected.slotId ||
-      value.epoch !== record.epoch || value.recordDigest !== digestOf(record) || value.assignmentDigest !== digestOf(assignment) ||
-      value.terminalDigest !== digestOf(terminal) || value.intentDigest !== digestOf(intent)) failScope('closure');
+      value.v !== 1 || value.protocol !== closureProtocol || value.authorityId !== expected.authorityId || value.slotId !== expected.slotId ||
+      value.epoch !== record.epoch || value.recordDigest !== digestOf(record) || value.assignmentDigest !== (assignment ? digestOf(assignment) : null) ||
+      value.terminalDigest !== digestOf(terminal) || value.intentDigest !== (intent ? digestOf(intent) : null)) failScope('closure');
   const o = value.observed;
   if (!exactScope(o, ['kind', 'closed', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'populated', 'serviceInactive', 'mainBirthGone']) ||
       o.kind !== 'cgroup-empty' || o.closed !== true || !positive(o.at) || o.bootId !== record.instance.bootId ||
@@ -98,13 +125,13 @@ export function validateAgentScopeClosure(value, expected, record, assignment, t
 }
 export function scopeHead(entry, phase) {
   return { v: 1, protocol: domain('head'), authorityId: entry.record.authorityId, slotId: entry.record.slotId, epoch: entry.record.epoch, phase,
-    recordDigest: digestOf(entry.record), assignmentDigest: phase === 'ready' ? null : digestOf(entry.assignment),
+    recordDigest: digestOf(entry.record), assignmentDigest: phase === 'ready' || !entry.assignment ? null : digestOf(entry.assignment),
     closureDigest: phase === 'closed' ? digestOf(entry.closure) : null };
 }
 export function scopePublication(entry, phase, anchor) {
   return { v: 1, protocol: domain('publication'), head: scopeHead(entry, phase), anchorDigest: digestOf(anchor),
     reservationDigest: digestOf(entry.reservation), terminalDigest: phase === 'closed' ? digestOf(entry.terminal) : null,
-    intentDigest: phase === 'closed' ? digestOf(entry.intent) : null };
+    intentDigest: phase === 'closed' && entry.intent ? digestOf(entry.intent) : null };
 }
 export function validateAgentScopeHistory({ expected, anchor, configuredAnchorDigest, entries, current, locked = true, checkpoint = null }) {
   validateAgentScopeExpected(expected);
@@ -127,12 +154,14 @@ export function validateAgentScopeHistory({ expected, anchor, configuredAnchorDi
     }
     if (phase === 'ready' && [e.assignment, e.terminal, e.intent, e.closure, e.publications.bound, e.publications.closed].some(x => x !== null)) failScope('phase');
     if (phase === 'bound' && [e.terminal, e.intent, e.closure, e.publications.closed].some(x => x !== null)) failScope('phase');
-    if (phase !== 'ready') {
+    const unassigned = phase === 'closed' && agentScopeCloseKind(e.terminal) === 'unassigned';
+    if (unassigned && (e.assignment !== null || e.intent !== null || e.publications.bound !== null)) failScope('retirement-bound');
+    if (phase !== 'ready' && !unassigned) {
       validateAgentScopeAssignment(e.assignment, expected, r);
       const id = `grant:${e.assignment.target.runGrantId}`; if (unique.has(id)) failScope('grant-reused'); unique.add(id);
     }
     if (phase === 'closed') validateAgentScopeClosure(e.closure, expected, r, e.assignment, e.terminal, e.intent);
-    for (const p of ['ready', 'bound', 'closed'].slice(0, scopePhaseRank(phase) + 1))
+    for (const p of (unassigned ? ['ready', 'closed'] : ['ready', 'bound', 'closed'].slice(0, scopePhaseRank(phase) + 1)))
       if (!sameScope(e.publications[p], scopePublication(e, p, anchor))) failScope('publication-incomplete');
     previous = e;
   }

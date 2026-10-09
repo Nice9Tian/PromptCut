@@ -10,6 +10,7 @@ import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/age
 import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
   INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
+import { createAgentRunScopeDoc } from '../account/agent-run-scope-doc.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 
@@ -30,40 +31,50 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     'messageId', 'runId', 'runGrantId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'];
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
+  const scopeAuthority = account.agent.runScopes ? createAgentRunScopeDoc({ ledger,
+    signingKey: account.agent.runScopes.signingKey, slots: account.agent.runScopes.slots,
+    masterServiceKid: account.agent.runScopes.masterServiceKid, masterFingerprint256: account.agent.runScopes.masterFingerprint256 }) : null;
+  const masterPin = scopeAuthority ? certificateFingerprint(account.agent.runScopes.masterFingerprint256) : null;
+  const masterKid = scopeAuthority ? account.agent.runScopes.masterServiceKid : null;
+  if (scopeAuthority && (masterPin === pin || masterKid === kid)) fail(503, 'doc-agent-role-configuration');
+  const servicePins = new Map([[kid, pin], ...(scopeAuthority ? [[masterKid, masterPin]] : [])]);
   let stopped = false, runAuthority;
-  const currentService = () => {
+  const currentService = (serviceKid = kid) => {
     if (stopped) fail(503, 'doc-agent-unavailable');
     try { serviceRegistry?.refresh({ force: true }); } catch { fail(403, 'run-service-forbidden'); }
     const entry = serviceRegistry?.get('agent');
-    if (entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === kid))
+    if (!servicePins.has(serviceKid) || entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === serviceKid))
       fail(403, 'run-service-forbidden');
   };
   const resolveServicePrincipal = ({ socket }) => {
+    const fingerprint = certificateFingerprint(socket?.getPeerCertificate?.()?.fingerprint256);
+    const serviceKid = [...servicePins].find(([_kid, allowed]) => allowed === fingerprint)?.[0];
     if (!socket?.encrypted || socket.authorized !== true || socket.destroyed ||
-        certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== pin) fail(403, 'run-service-forbidden');
-    currentService();
+        !serviceKid) fail(403, 'run-service-forbidden');
+    currentService(serviceKid);
     instanceTlsBinding(socket); // exporter is taken only from the real peer socket.
     let subject = sockets.get(socket);
     if (!subject) {
       const authenticationId = randomUUID();
-      subject = { service: 'agent', serviceKid: kid, authenticationId };
+      subject = { service: 'agent', serviceKid, authenticationId };
       sockets.set(socket, subject); subjects.set(authenticationId, socket);
       socket.once('close', () => { subjects.delete(authenticationId); sockets.delete(socket); handshakeNonces.delete(socket); });
     }
     return structuredClone(subject);
   };
   const verifyServiceInState = (_state, subject) => {
-    currentService();
+    currentService(subject?.serviceKid);
     const socket = subjects.get(subject?.authenticationId);
-    if (!socket || subject.service !== 'agent' || subject.serviceKid !== kid || socket.destroyed ||
-        socket.authorized !== true || certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== pin)
+    if (!socket || subject.service !== 'agent' || socket.destroyed ||
+        socket.authorized !== true || certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== servicePins.get(subject.serviceKid))
       fail(403, 'run-service-forbidden');
-    return { serviceId: 'agent', serviceKid: kid };
+    return { serviceId: 'agent', serviceKid: subject.serviceKid };
   };
-  const instanceAuthority = createAgentInstanceAuthority({ ledger,
+  const instanceAuthority = createAgentInstanceAuthority({ ledger, scopeAuthority,
     verifyTransportInState(state, subject) {
       const service = verifyServiceInState(state, subject);
       return { ...service, authenticationId: subject.authenticationId,
+        fingerprint256: certificateFingerprint(subjects.get(subject.authenticationId)?.getPeerCertificate?.()?.fingerprint256),
         channelBinding: instanceTlsBinding(subjects.get(subject.authenticationId)) };
     } });
   const readControl = createAgentReadControl({ ledger, instanceAuthority,
@@ -167,7 +178,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     },
   });
   runAuthority = createRunAuthority({ ledger, conversationHooks: conversations.hooks,
-    verifyServiceInState, instanceAuthority, now, synchronize: () => runtime.authority.synchronize(),
+    verifyServiceInState, instanceAuthority, scopeAuthority, now, synchronize: () => runtime.authority.synchronize(),
     async verifySender(ref, context) {
       const checked = await accountClient.verifyAcceptedMessage(ref, context);
       await runtime.authority.synchronize();
@@ -308,14 +319,14 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       return await dispatchContext.run({ principal, caps }, () => next(text, check));
     } finally { for (const cap of caps) instanceAuthority.release(cap.instanceSession); }
   }
-  const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, resolveServicePrincipal });
+  const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, masterFingerprint256: masterPin, resolveServicePrincipal });
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
-    agentFingerprint256: pin, requireReadControl: true, resolveDelegation: async ticket => {
+    agentFingerprint256: masterPin ?? pin, requireReadControl: true, resolveDelegation: async ticket => {
       currentService(); return runtime.resolveAgentDelegation(ticket);
     } });
   const readControlsHandler = createAgentReadControlHandler({ control: readControl, resolveServicePrincipal, instanceAuthority });
   const runsHandler = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: pin,
-    resolveServicePrincipal,
+    masterFingerprint256: masterPin, requirePendingProof: Boolean(scopeAuthority), resolveServicePrincipal,
     authenticateInvocation({ req, servicePrincipal, body, operation }) {
       const cap = instanceAuthority.authenticate({ servicePrincipal, method: req.method,
         path: new URL(req.url, 'https://internal.invalid').pathname, operation, request: body, proof: instanceRequestProof(req) });
@@ -328,6 +339,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     issueRunTicket: () => fail(503, 'run-data-proof-unavailable'),
     async listPendingRuns({ servicePrincipal }) {
       await runtime.authority.synchronize(); verifyServiceInState(ledger.read(), servicePrincipal);
+      if (scopeAuthority) {
+        instanceAuthority.verifyInState(ledger.read(), servicePrincipal, { operation: 'pendingRuns', input: {} });
+        if (ledger.read().agentInstancesV2?.[servicePrincipal.instanceId]?.purpose !== 'control-only') fail(403, 'instance-purpose-forbidden');
+      }
       const state = ledger.read(), rows = [];
       for (const [projectId, group] of Object.entries(state.conversationsV2 ?? {})) {
         if (state.projects[projectId]?.status !== 'active' || state.projects[projectId].hosted?.agent !== true) continue;

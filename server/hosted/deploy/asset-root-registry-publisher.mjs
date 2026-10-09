@@ -734,9 +734,37 @@ export async function createRootScopeRuntimeV2(config, {
         }
       }
     },
-    async pinPrevious(old) {
+    async pinPrevious(old, { allowDeadMain = false } = {}) {
+      if (allowDeadMain && identityPath !== '/internal/v2/agent/run-scope/identity') fail('publisher-dead-main-purpose');
       const reservation = await read(`reservation-${old.epoch}.json`);
-      if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: old.closureScope })) fail('publisher-previous-instance-mismatch');
+      const assertPrevious = async () => {
+        if (!allowDeadMain) {
+          if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: old.closureScope })) fail('publisher-previous-instance-mismatch');
+          return;
+        }
+        validateReservation(reservation, expected);
+        if (!equal(reservation.closureScope, old.closureScope) || reservation.instanceId !== old.instance.instanceId ||
+            reservation.serviceCgroupPath !== old.instance.cgroup.v2Path) fail('publisher-previous-instance-mismatch');
+        const { unit } = await configuration(reservation);
+        if (Number(unit.MainPID) === old.instance.pid) {
+          if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: old.closureScope })) fail('publisher-previous-instance-mismatch');
+          return;
+        }
+        await scopeInfo(old.closureScope); await exclusiveScope(old.closureScope);
+        const cg = await fs.lstat(old.instance.cgroup.v2Path, { bigint: true });
+        if (Number(unit.MainPID) !== 0 || unit.InvocationID !== old.instance.unitInvocationId ||
+            `/sys/fs/cgroup${unit.ControlGroup}` !== old.instance.cgroup.v2Path ||
+            await bootId() !== old.instance.bootId || !cg.isDirectory() || cg.isSymbolicLink() ||
+            cg.uid !== 0n || (cg.mode & 0o022n) || String(cg.dev) !== old.instance.cgroup.dev || String(cg.ino) !== old.instance.cgroup.ino)
+          fail('publisher-previous-instance-mismatch');
+        try {
+          if (parseProcStat(await fs.readFile(`/proc/${old.instance.pid}/stat`, 'utf8')).startTicks === old.instance.pidBirth.startTicks)
+            fail('publisher-old-birth-live');
+        } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        // Re-read the exact loaded unit after every kernel/proc observation.
+        if (!equal(unit, (await configuration(reservation)).unit)) fail('publisher-previous-instance-mismatch');
+      };
+      await assertPrevious();
       const scope = old.closureScope, group = await fs.open(scope.cgroup.v2Path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       let events;
       try {
@@ -761,7 +789,7 @@ export async function createRootScopeRuntimeV2(config, {
         };
         return {
           async stopAndObserve() {
-            if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: scope })) fail('publisher-previous-instance-mismatch');
+            await assertPrevious();
             const stopping = exec(['stop', expected.unit, '--no-ask-password']).then(() => true, () => false);
             let observed = false;
             try {

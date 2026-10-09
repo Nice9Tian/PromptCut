@@ -8,7 +8,7 @@ import { createRootScopeRuntimeV2, rootRead, procInfo } from './asset-root-regis
 import { loadAgentScopeChain } from '../agent-run-scope-reader.mjs';
 import { failScope, exactScope, sameScope, scopeRuntimeExpected, scopeHead, scopePublication,
   validateAgentScopeExpected, validateAgentScopeRecord, validateAgentScopeReservation, validateAgentScopeAssignment,
-  validateAgentScopeTerminal, validateAgentScopeClosure, validateAgentScopeHistory, scopePublicKey } from '../agent-run-scope-schema.mjs';
+  validateAgentScopeCloseEnvelope, agentScopeCloseKind, validateAgentScopeClosure, validateAgentScopeHistory, scopePublicKey } from '../agent-run-scope-schema.mjs';
 
 const protocol = name => `promptcut.agent-run-scope.${name}.v1`;
 const emptyEntry = (record, reservation) => ({ record, reservation, assignment: null, terminal: null, intent: null, closure: null,
@@ -68,7 +68,7 @@ function matchIdentity(identity, expected, reservation, tuple) {
  * runAgentScopePublisher below supplies the authenticated Linux root adapter. */
 export async function publishAgentScope({ expected, mode, configuredAnchorDigest = null, assignment = null, terminal = null, intent = null, io }) {
   validateAgentScopeExpected(expected);
-  if (!['initialize', 'start', 'bind', 'close'].includes(mode)) failScope('mode');
+  if (!['initialize', 'start', 'bind', 'close', 'forced-close', 'retire'].includes(mode)) failScope('mode');
   const unlock = await io.lock(); let durable = false, pinned;
   try {
     let current = await io.read('current.json'), chain, entry, anchor;
@@ -125,22 +125,28 @@ export async function publishAgentScope({ expected, mode, configuredAnchorDigest
       }
       if (!sameScope(await io.inspect(entry.reservation), { instance: entry.record.instance, closureScope: entry.record.closureScope })) failScope('instance-changed');
       entry.assignment = assignment;
-      if (chain.entries.slice(0, -1).some(e => e.assignment.target.runGrantId === assignment.target.runGrantId)) failScope('grant-reused');
+      if (chain.entries.slice(0, -1).some(e => e.assignment?.target.runGrantId === assignment.target.runGrantId)) failScope('grant-reused');
       await io.write(`assignment-${current.epoch}.json`, assignment, true);
       return await publish('bound');
     }
-    validateAgentScopeTerminal(terminal, intent, expected, entry.record, entry.assignment);
+    validateAgentScopeCloseEnvelope(terminal, intent, expected, entry.record, entry.assignment);
+    const kind = agentScopeCloseKind(terminal);
+    if (kind !== ({ close: 'normal', 'forced-close': 'forced', retire: 'unassigned' })[mode]) failScope('close-mode');
     if (current.phase === 'closed') {
       if (!sameScope(entry.terminal, terminal) || !sameScope(entry.intent, intent)) failScope('terminal-conflict');
       durable = true; return { head: current, anchorDigest: digestOf(anchor) };
     }
-    if (current.phase !== 'bound') failScope('phase');
-    pinned = await io.pinPrevious(entry.record);
+    if (current.phase !== (kind === 'unassigned' ? 'ready' : 'bound')) failScope('phase');
+    // The runtime must explicitly implement dead-main ownership proof. Passing
+    // this option must never silently fall back to an unsafe PID-only stop.
+    if (kind !== 'normal' && typeof io.pinRetired !== 'function') failScope('retired-runtime-unavailable');
+    pinned = kind === 'normal' ? await io.pinPrevious(entry.record) : await io.pinRetired(entry.record);
     await io.write(`terminal-${current.epoch}.json`, terminal, true); await io.write(`intent-${current.epoch}.json`, intent, true);
     const observed = await pinned.stopAndObserve();
     entry.terminal = terminal; entry.intent = intent;
-    entry.closure = { v: 1, protocol: protocol('closure'), authorityId: expected.authorityId, slotId: expected.slotId, epoch: current.epoch,
-      recordDigest: digestOf(entry.record), assignmentDigest: digestOf(entry.assignment), terminalDigest: digestOf(terminal), intentDigest: digestOf(intent), observed };
+    entry.closure = { v: 1, protocol: protocol(kind === 'normal' ? 'closure' : `${kind}-closure`), authorityId: expected.authorityId, slotId: expected.slotId, epoch: current.epoch,
+      recordDigest: digestOf(entry.record), assignmentDigest: entry.assignment ? digestOf(entry.assignment) : null,
+      terminalDigest: digestOf(terminal), intentDigest: intent ? digestOf(intent) : null, observed };
     validateAgentScopeClosure(entry.closure, expected, entry.record, entry.assignment, terminal, intent);
     await io.write(`closure-${current.epoch}.json`, entry.closure, true);
     // Empty evidence is durable before scope release. Marker stays locked
@@ -173,6 +179,7 @@ export async function createAgentScopeRuntime(config) {
     validateReservation: value => validateAgentScopeReservation(value, expected), identityPath: '/internal/v2/agent/run-scope/identity',
   });
   const identity = io.identity;
+  io.pinRetired = old => io.pinPrevious(old, { allowDeadMain: true });
   io.identity = async reservation => {
     const tuple = await io.inspect(reservation); let before;
     for (let attempt = 0; ; attempt++) {
@@ -192,10 +199,10 @@ export async function createAgentScopeRuntime(config) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const [flag, configFile, modeFlag, ...rest] = process.argv.slice(2), mode = modeFlag?.replace(/^--/, '');
-    if (flag !== '--config' || !configFile || !['initialize', 'start', 'bind', 'close'].includes(mode) ||
-        rest.length !== (mode === 'bind' ? 1 : mode === 'close' ? 2 : 0)) failScope('cli');
+    if (flag !== '--config' || !configFile || !['initialize', 'start', 'bind', 'close', 'forced-close', 'retire'].includes(mode) ||
+        rest.length !== (['bind', 'forced-close', 'retire'].includes(mode) ? 1 : mode === 'close' ? 2 : 0)) failScope('cli');
     const result = await runAgentScopePublisher({ configFile, mode, assignmentFile: mode === 'bind' ? rest[0] : null,
-      terminalFile: mode === 'close' ? rest[0] : null, intentFile: mode === 'close' ? rest[1] : null });
+      terminalFile: ['close', 'forced-close', 'retire'].includes(mode) ? rest[0] : null, intentFile: mode === 'close' ? rest[1] : null });
     process.stdout.write(JSON.stringify({ ok: true, ...result }) + '\n');
   } catch (e) { process.stderr.write(JSON.stringify({ ok: false, code: /^(agent-scope|publisher|asset-root-v2)-[a-z-]+$/.test(e.code ?? '') ? e.code : 'agent-scope-failed' }) + '\n'); process.exitCode = 1; }
 }

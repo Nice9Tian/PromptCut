@@ -70,12 +70,13 @@ export const runControlId = fence => `run-control:${digestOf(runControlScope(fen
  * records are independently rebuilt here, never authorized by an HTTP body's hash.
  */
 export function createRunAuthority({ ledger, conversationHooks, verifySender, verifyServiceInState, instanceAuthority,
-  validatePromptInState, synchronize, now = Date.now, failpoint = () => {}, onControl = () => {} } = {}) {
+  scopeAuthority, validatePromptInState, synchronize, now = Date.now, failpoint = () => {}, onControl = () => {} } = {}) {
   for (const value of [ledger?.transaction, ledger?.read, conversationHooks?.claimNextInState,
     conversationHooks?.markReadInState, conversationHooks?.finishInState, verifySender,
     verifyServiceInState, instanceAuthority?.verifyInState, instanceAuthority?.fenceInState, synchronize])
     if (typeof value !== 'function') reject(503, 'run-authority-configuration');
   const service = (s, principal, invocation) => {
+    if (s.agentRunScopesV1?.required && !scopeAuthority) reject(503, 'run-scope-unavailable');
     const v = verifyServiceInState(s, principal);
     if (v?.then || !text(v?.serviceId) || !text(v?.serviceKid)) reject(403, 'run-service-forbidden');
     const registered = instanceAuthority.verifyInState(s, principal, invocation);
@@ -202,8 +203,15 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       s.runAccessCursorV2 = e.seq;
     }
   }
-  const sync = async () => {
+  const refreshScope = async input => {
+    if (!scopeAuthority || !input) return;
+    const principal = input.servicePrincipal ?? input.principal?.servicePrincipal;
+    const instance = ledger.read().agentInstancesV2?.[principal?.instanceId];
+    await scopeAuthority.refresh(instance?.rootScopeRef);
+  };
+  const sync = async input => {
     await synchronize();
+    await refreshScope(input);
     return ledger.transaction(s => { reconcile(s); return Object.values(s.runControlsV2).filter(c => c.state === 'pending'); });
   };
   function applyAccessEvent(event) {
@@ -219,7 +227,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   async function admit(input) {
     const { servicePrincipal, projectId, conversationId, requestId } = input;
     const invocation = { operation: 'admit', input };
-    request(requestId); await sync();
+    request(requestId); await sync(input);
     const before = ledger.read(), svc = service(before, servicePrincipal, invocation);
     const key = `${svc.instanceId}:${svc.instanceGeneration}:${requestId}`, digest = digestOf({ projectId, conversationId });
     const prior = replay(before.runRequestsV2 ?? {}, key, digest);
@@ -237,6 +245,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       }
     }
     const ref = next && refOf(next);
+    await refreshScope(input);
     const result = ledger.transaction(s => {
       reconcile(s); service(s, servicePrincipal, invocation);
       const old = replay(s.runRequestsV2, key, digest); if (old) return old.result;
@@ -259,6 +268,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
         visibilityAtRead: null, fenceRevision: seq(s), accessHeadAtAdmission: s.accessHead,
         admittedAt: now(), contentDigest: message.contentDigest };
       g.messageRef = acceptedMessageRef(message, { projectId, conversationId });
+      if (scopeAuthority) g.scopeBinding = scopeAuthority.assignInState(s, g);
       s.runGrantsV2[runGrantId] = g;
       const value = { ...g, message: copy(message) };
       s.runRequestsV2[key] = { digest, result: value };
@@ -279,17 +289,21 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   async function confirmRead(input) {
     request(input.requestId); request(input.readIntentId);
     if (typeof input.promptDigest !== 'string' || digestOf(input.prompt) !== input.promptDigest) reject(400, 'prompt-digest-mismatch');
-    await sync();
+    await sync(input);
     const invocation = { operation: 'confirmRead', input };
     const before = ledger.read(), svc = service(before, input.servicePrincipal, invocation);
+    if (scopeAuthority) scopeAuthority.assignmentInState(before, bound(before, input, svc), { requireBound: true });
     const digest = readDigest(input), key = readKey(input, svc);
     const old = replay(before.runReadRequestsV2 ?? {}, key, digest);
     if (old) return copy(old.result);
     const g = bound(before, input, svc), verified = await verifiedSender(g, g.messageRef);
+    await refreshScope(input);
     const result = ledger.transaction(s => {
       reconcile(s); const registered = service(s, input.servicePrincipal, invocation);
+      if (scopeAuthority) scopeAuthority.assignmentInState(s, bound(s, input, registered), { requireBound: true });
       const prior = replay(s.runReadRequestsV2, key, digest); if (prior) return prior.result;
       const grant = bound(s, input, registered), { c, m } = current(s, grant);
+      if (scopeAuthority) scopeAuthority.assignmentInState(s, grant, { requireBound: true });
       if (grant.state !== 'preparing') reject(403, 'run-not-preparing');
       senderAtCommit(s, c, grant, verified);
       const expected = canonicalReadRecord(m, grant);
@@ -312,8 +326,9 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     failpoint('run-read-after-commit'); return result;
   }
   async function queryRead(input) {
-    request(input.requestId); await sync(); const s = ledger.read(), svc = service(s, input.servicePrincipal, { operation: 'queryRead', input });
-    bound(s, input, svc);
+    request(input.requestId); await sync(input); const s = ledger.read(), svc = service(s, input.servicePrincipal, { operation: 'queryRead', input });
+    const grant = bound(s, input, svc);
+    if (scopeAuthority) scopeAuthority.assignmentInState(s, grant, { requireBound: true });
     const old = replay(s.runReadRequestsV2 ?? {}, readKey(input, svc), readDigest(input));
     return old ? copy(old.result) : { confirmed: false };
   }
@@ -321,16 +336,18 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   async function checkWithScope({ principal, projectId, action }, invocation) {
     if (!['read', 'write'].includes(action) || principal?.realm !== 'account' || principal.identityVersion !== 2 ||
       principal.role !== 'agent' || principal.projectId !== projectId) reject(403, 'run-principal-invalid');
-    await sync();
+    await sync({ principal });
     const before = ledger.read(), svc = service(before, principal.servicePrincipal, invocation);
     const original = bound(before, principal, svc);
     if ([...identity, ...instanceBinding].some(k => principal[k] !== original[k]) || principal.serviceId !== svc.serviceId || principal.serviceKid !== svc.serviceKid)
       reject(403, 'run-principal-mismatch');
     // Retained references intentionally do not renew/reuse the revoked user's token.
     const verified = original.state === 'active' ? await verifiedSender(original, original.messageRef) : null;
+    await refreshScope({ principal });
     return ledger.transaction(s => {
       reconcile(s); const v = service(s, principal.servicePrincipal, invocation), g = bound(s, principal, v);
       const { c, m } = current(s, g); project(s, projectId);
+      if (scopeAuthority) scopeAuthority.assignmentInState(s, g, { requireBound: true });
       if (canonicalJson(acceptedMessageRef(m, g)) !== canonicalJson(g.messageRef)) reject(503, 'accepted-message-changed');
       if (!['active', 'retained'].includes(g.state) || !g.readReceiptId || !s.runReceiptsV2[g.readReceiptId]) reject(403, 'run-revoked');
       if (c.visibility === 'private' && c.ownerAccountId !== g.accountId) reject(403, 'private-run-forbidden');
@@ -352,7 +369,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   }
   async function resolveRunPrincipal(input) {
     const { servicePrincipal, projectId, runGrantId } = input, invocation = { operation: 'resolveRunPrincipal', input };
-    await sync(); const s = ledger.read(), svc = service(s, servicePrincipal, invocation);
+    await sync(input); const s = ledger.read(), svc = service(s, servicePrincipal, invocation);
     const g = s.runGrantsV2?.[runGrantId];
     if (!g || g.projectId !== projectId) reject(403, 'run-binding-mismatch');
     matchService(g, svc);
@@ -362,6 +379,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     await checkWithScope({ principal, projectId, action: 'read' }, invocation); return principal;
   }
   async function finish(input) {
+    if (scopeAuthority || ledger.read().agentRunScopesV1?.required) reject(503, 'run-scope-terminal-required');
     request(input.requestId); await sync();
     return ledger.transaction(s => {
       reconcile(s); const g = bound(s, input, service(s, input.servicePrincipal, { operation: 'finish', input }));
@@ -370,6 +388,16 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       current(s, g); g.state = 'finished'; g.fenceRevision = seq(s); g.finishedAt = now();
       conversationHooks.finishInState(s, { ...g, state: 'done' });
       return copy(g);
+    });
+  }
+  async function scopeAssignment(input) {
+    request(input.requestId); await sync(input);
+    if (!scopeAuthority) reject(503, 'run-scope-unavailable');
+    return ledger.transaction(s => {
+      reconcile(s); const g = bound(s, input, service(s, input.servicePrincipal, { operation: 'scopeAssignment', input }));
+      current(s, g);
+      if (!['preparing', 'active', 'retained'].includes(g.state)) reject(403, 'run-revoked');
+      return scopeAuthority.assignmentInState(s, g);
     });
   }
   function fence(input) {
@@ -401,6 +429,6 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       control.receipt = copy(receipt); control.state = 'complete'; return copy(control);
     });
   }
-  return { admit, confirmRead, queryRead, finish, checkAccess, authorizeQuery, resolveRunPrincipal, applyAccessEvent, fence, fenceInstance, acknowledgeControl,
+  return { admit, confirmRead, queryRead, finish, scopeAssignment, checkAccess, authorizeQuery, resolveRunPrincipal, applyAccessEvent, fence, fenceInstance, acknowledgeControl,
     hooks: { fenceInState }, synchronize: sync };
 }

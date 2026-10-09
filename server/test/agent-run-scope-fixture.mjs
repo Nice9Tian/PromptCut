@@ -71,5 +71,5 @@ export function scopeModel(slotId = 'slot-a') {
     const intent = signed({ v: 1, protocol: 'promptcut.agent-run-scope.intent.v1', assignmentDigest: digestOf(a), terminalDigest: digestOf(terminal) }, key.privateKey);
     return { terminal, intent };
   };
-  return { expected, files, io, faults, calls, run, assignment, closing, doc };
+  return { expected, files, io, faults, calls, run, assignment, closing, doc, get workerKey() { return key; } };
 }
