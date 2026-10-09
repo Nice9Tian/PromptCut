@@ -59,3 +59,5 @@ task只接受projectId/conversationId/requestId，不能携grant或instance身�
 新增factory目标1e4首4/3/1、252.6671ms，因test传空conversationClient被原构造守门503正确拒；TMP `pc-worker-task-1e4c46a0-target.log`保留。测试改为具备原必需方法且调用一律throw的human-client adapter；本测试不做human读，不能用freeACL代替真实服务，也不改生产constructor。
 
 固定5324874d目标4/3/1、271.7113ms，实际factory/单任务断言都已到达，但fixture清理顺序失败：早登记setup after hook先rm父目录，较晚登记Hosted service close尚未关闭自己的SQLite handle，Windows实际EPERM。TMP `pc-worker-task-5324874d-target.log`保留，不拿断言成功算通过。改新测试为本体try/finally先await实际service.close，再运行setup后置清理；不吞EPERM/改重试次数/改产品关闭行为。
+
+修后固定 `c215bfccfbcba20a69d82924f0f891cc8f17c84c`：新task4与旧read/ACK5合9/9，0fail/cancel/skip，305.0308ms/exit0（外层527ms），`pc-worker-task-c215bfcc-target.log`；强制类型exit0/零错误、7271ms，`pc-worker-task-c215bfcc-type.log`。均无业务listener，使用真实SQLite/原factory调用接线/受控assignment与模型，原旧default断言保持。source固定期间无编辑，无target重试/native retry；失败TEMP日志/目录保留，没有全量、根服务、模型或OSworker实验。
