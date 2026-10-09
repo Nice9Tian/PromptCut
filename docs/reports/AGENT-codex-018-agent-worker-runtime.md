@@ -49,3 +49,5 @@ Astra约定 `POST /internal/v2/runs/assignment` exact六refs `{projectId,convers
 task只接受projectId/conversationId/requestId，不能携grant或instance身份。必须有私有assignmentReady、durableevent sink与onTaskDrained；领到原workergrant后先等bound完整tuple，才准备readIntent和调用factory。仅一次指定admit；没有跨对话pending扫描、第二次领队列、legacyfinish或后台自动重试定时器。此时终态仍pending，第二条消息必须留DocFIFO，不在本包改finish协议。
 
 单任务drain hook等待实际runner drain/close和event flush，分别给local-drained/unknown与durable/failed分类；不产生root witness/complete。close异常保留并监督所有本task清理，hook失败不能遗留active逻辑状态。默认旧多任务fixture路径不变。assembly在注册前配置可信rootrecord，task模式用remote sink、无周期resume，仅一次工作Promise且保持completionReady:false；实际Doc/worker入口将在固定依赖收回后验证。
+
+固定94cf首目标出现两项accepted-message-record：新test复用旧runFixture.enqueue，其Docseed缺createdAt与selectionSnapshot.messageId，真实FULL事件镜像在runner前拒绝。首log `pc-worker-task-94cf0321-target.log`保留。仅补新test中这两个真实conversation.send本会持久的字段；不改oldfixture/生产校验/既有测试。该窄修有因复验，不能把旧通过项套给修后源。

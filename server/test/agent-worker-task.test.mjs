@@ -10,6 +10,14 @@ import { createAccountRunEvents } from '../agent/service/account-run-events.mjs'
 // publication and model/drain are controlled here; no production bound proof.
 async function setup(t, { bound = false, closeError = null } = {}) {
   const f = await runFixture(); f.enqueue(); f.enqueue('message2');
+  // The old core fixture predates durable user-event mirroring. Complete this
+  // test's trusted Doc seed with the fields real conversation.send persists.
+  f.ledger.transaction(state => {
+    for (const message of state.conversationsV2[projectId][conversationId].messages) {
+      message.createdAt = f.clock.now;
+      message.selectionSnapshot.messageId = message.messageId;
+    }
+  });
   const calls = { admit: [], reads: 0, model: 0, drain: 0, hook: [] };
   const client = { async admit(input) { calls.admit.push(input.requestId); return f.provider.admit({ ...input, servicePrincipal }); },
     confirmRead(input) { calls.reads++; return f.provider.confirmRead({ ...input, servicePrincipal }); },
