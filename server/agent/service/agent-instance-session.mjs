@@ -12,7 +12,8 @@ import { WORKER_EVENT_PROOF_HEADER, workerEventRequest, workerEventProofPayload,
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
-const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'resolveRunPrincipal', 'scopeAssignment', 'pendingRuns']);
+const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'resolveRunPrincipal',
+  'scopeAssignment', 'pendingRuns', 'workerEventSource']);
 
 /** One Agent OS process owns one non-exported Ed25519 private key. The request
  * callback is the same pinned mTLS transport later used for run requests.
@@ -158,13 +159,17 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
 
   function proofFor({ socket, method, path, operation, body }) {
     if (closed || !registered) fail('instance-not-registered');
-    if (registered.purpose === 'control-only' && operation !== 'pendingRuns') fail('instance-purpose-forbidden');
+    if (registered.purpose === 'control-only' && !['pendingRuns', 'workerEventSource'].includes(operation)) fail('instance-purpose-forbidden');
+    if (operation === 'workerEventSource' && registered.purpose !== 'control-only') fail('instance-purpose-forbidden');
     if (method !== 'POST' || typeof path !== 'string' || !path.startsWith('/internal/v2/runs/') ||
         !operations.has(operation) || !body || typeof body !== 'object' || Array.isArray(body) ||
         (operation === 'scopeAssignment' && (path !== '/internal/v2/runs/assignment' ||
           !exactScope(body, ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'requestId']) ||
           Object.values(body).some(value => !reference(value)))) ||
         (operation === 'pendingRuns' && (path !== '/internal/v2/runs/pending' || !exactScope(body, []))) ||
+        (operation === 'workerEventSource' && (path !== '/internal/v2/runs/worker-event-source' ||
+          !exactScope(body, ['projectId', 'runGrantId', 'assignmentDigest']) || !reference(body.projectId) ||
+          !reference(body.runGrantId) || !/^[a-f0-9]{64}$/.test(body.assignmentDigest))) ||
         (operation === 'checkAccess' && !['read', 'write'].includes(body.action)))
       fail('instance-proof-input');
     const payload = instanceProofPayload({ ...registered, channelBinding: instanceTlsBinding(socket),

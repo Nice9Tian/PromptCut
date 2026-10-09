@@ -28,7 +28,7 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
   catch { fail('account-worker-identity-certificate'); }
   if (fingerprint !== e.serverFingerprint256) fail('account-worker-identity-certificate');
   const client = createRunClient({ ...doc, registrationPurpose: 'run-worker', scopePrepareSource, workerEventSource });
-  let record = null, task = null, grant = null, assignment = null, admission = null, assembly = null, starting = null;
+  let record = null, task = null, grant = null, assignment = null, admission = null, assembly = null, starting = null, waiting = null;
   let stopped = false, closing = null;
   const sockets = new Set();
   const identity = () => {
@@ -95,24 +95,30 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
   }
   function startTask(options = {}) {
     if (!admission || starting || stopped) return Promise.reject(Object.assign(new Error('account-worker-not-prepared'), { status: 503 }));
-    starting = (async () => {
+    // All callers for this one task share the same pending bound check. A ready
+    // epoch is not executable yet and may become bound later; that expected
+    // rejection must not poison an OS that has never created an assembly.
+    if (waiting) return waiting;
+    const work = (async () => {
     await admission; await assignmentReady(grant);
     if (stopped) fail('account-worker-closed');
     // All actual Hosted/SSR/model/tool options are trusted entry configuration.
     // No network route exposes these or changes the one admitted task.
-    assembly = await createAccountExecutorAssembly({ ...options, doc, runClient: client, task,
+    starting = createAccountExecutorAssembly({ ...options, doc, runClient: client, task,
       registrationScope: { expected: e, record }, assignmentReady });
+    assembly = await starting;
     return assembly;
     })();
-    void starting.catch(() => {});
-    return starting;
+    waiting = work;
+    void work.catch(() => {}).finally(() => { if (!starting && waiting === work) waiting = null; });
+    return work;
   }
   const close = () => closing ??= (async () => {
     stopped = true;
     const observedSockets = [...sockets].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); }));
     const serverClosed = server.listening ? new Promise(resolve => server.close(resolve)) : Promise.resolve();
     const results = await Promise.allSettled([client.close(), serverClosed, ...observedSockets,
-      admission?.catch(() => {}), Promise.resolve(starting).catch(() => {}).then(() => assembly?.close())]);
+      admission?.catch(() => {}), Promise.resolve(waiting).catch(() => {}).then(() => assembly?.close())]);
     const errors = results.filter(v => v.status === 'rejected').map(v => v.reason);
     if (errors.length) throw new AggregateError(errors, 'account-worker-close-pending');
   })();

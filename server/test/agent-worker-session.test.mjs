@@ -233,6 +233,16 @@ test('control-only instance signs only scoped metadata/read-control and cannot b
     const input = { socket, method: 'POST', path: '/internal/v2/runs/pending', operation: 'pendingRuns', body: {} };
     assert.ok(session.proofFor(input).value);
     assert.throws(() => session.proofFor({ ...input, body: { projectId: 'p' } }), /instance-proof-input/);
+    const observer = { ...input, path: '/internal/v2/runs/worker-event-source', operation: 'workerEventSource',
+      body: { projectId: 'p', runGrantId: 'g', assignmentDigest: 'a'.repeat(64) } };
+    const proof = JSON.parse(Buffer.from(session.proofFor(observer).value, 'base64url'));
+    const payload = instanceProofPayload({ ...session.identity(), method: 'POST', path: observer.path,
+      operation: 'workerEventSource', requestDigest: digestOf(observer.body), channelBinding: instanceTlsBinding(socket) });
+    assert.ok(verify(null, Buffer.from(canonicalJson(payload)), session.scopeIdentity().publicKey, Buffer.from(proof.signature, 'base64url')));
+    assert.equal(verify(null, Buffer.from(canonicalJson({ ...payload, operation: 'checkAccess' })),
+      session.scopeIdentity().publicKey, Buffer.from(proof.signature, 'base64url')), false);
+    assert.throws(() => session.proofFor({ ...observer, body: { ...observer.body, action: 'write' } }), /instance-proof-input/);
+    assert.throws(() => session.proofFor({ ...observer, path: '/internal/v2/runs/check' }), /instance-proof-input/);
     assert.throws(() => session.proofFor({ ...input, path: '/internal/v2/runs/admit', operation: 'admit' }), /instance-purpose-forbidden/);
     assert.throws(() => session.dataProofFor({}), /instance-purpose-forbidden/);
     assert.throws(() => session.runAssetIssueProofFor({}), /instance-purpose-forbidden/);

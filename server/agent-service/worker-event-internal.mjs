@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey, verify } from 'node:crypto';
 import { canonicalJson, digestOf } from '../account/ledger.mjs';
+import { certificateFingerprint } from '../account/client.mjs';
 
 export const WORKER_EVENT_PATH = '/internal/v2/worker/events/append';
 export const WORKER_EVENT_PROOF_HEADER = 'x-promptcut-worker-event-proof';
@@ -64,4 +65,66 @@ export function workerEventProofPayload({ request, channelBinding, nonce } = {})
     authorityId: p.authorityId, rootScopeRef: p.rootScopeRef, assignmentDigest: p.assignmentDigest,
     binding: p.binding, sourceSeq: p.sourceSeq, eventId: p.eventId, packetDigest: digestOf(p),
     bodyHash: request.bodyHash, channelBinding, nonce };
+}
+
+/** Mount only on a direct mTLS master endpoint. resolveWorker must call the
+ * control-only master's current pinned Doc getter, never a cached root record.
+ * The callback runs inside the event store's serialized append, immediately
+ * before its synchronous FULL transaction. This route does not grant execution.
+ */
+export function createWorkerEventInternalHandler({ eventStore, resolveWorker } = {}) {
+  if (typeof eventStore?.appendWorker !== 'function' || typeof resolveWorker !== 'function')
+    fail(503, 'worker-event-configuration');
+  const used = new WeakMap();
+  return async function handle(req, res) {
+    if (req.url !== WORKER_EVENT_PATH) return false;
+    const reply = (status, body) => {
+      if (res.destroyed || res.writableEnded) return;
+      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(body));
+    };
+    try {
+      if (req.method !== 'POST') fail(405, 'method-not-allowed');
+      if (req.socket?.encrypted !== true || req.socket.authorized !== true || req.socket.destroyed ||
+          Object.keys(req.headers ?? {}).some(k => k === 'forwarded' || k === 'x-real-ip' || k.startsWith('x-forwarded-')))
+        fail(403, 'worker-event-peer');
+      const peer = certificateFingerprint(req.socket.getPeerCertificate?.()?.fingerprint256);
+      if (!hash(peer)) fail(403, 'worker-event-peer');
+      const encoded = req.headers?.[WORKER_EVENT_PROOF_HEADER];
+      if (typeof encoded !== 'string' || encoded.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(encoded)) fail(403, 'worker-event-proof');
+      let proof;
+      try { proof = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch { fail(403, 'worker-event-proof'); }
+      if (!exact(proof, ['v', 'nonce', 'signature']) || proof.v !== 1 || !ref(proof.nonce) ||
+          typeof proof.signature !== 'string' || !/^[A-Za-z0-9_-]{86}$/.test(proof.signature)) fail(403, 'worker-event-proof');
+      const chunks = []; let size = 0;
+      for await (const chunk of req) {
+        size += chunk.length; if (size > 1024 * 1024) fail(413, 'worker-event-body'); chunks.push(chunk);
+      }
+      let bodyText, body;
+      try { bodyText = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)); body = JSON.parse(bodyText); }
+      catch { fail(400, 'worker-event-body'); }
+      const request = workerEventRequest({ body, bodyText });
+      const result = await eventStore.appendWorker({ packet: request.packet, readSource: async packet => {
+        const source = await resolveWorker({ projectId: packet.binding.projectId, runGrantId: packet.binding.runGrantId,
+          assignmentDigest: packet.assignmentDigest });
+        if (source?.allowed !== true || certificateFingerprint(source.workerFingerprint256) !== peer ||
+            source.scopePublicKeyDigest !== digestOf(source.scopePublicKey)) fail(403, 'worker-event-peer');
+        let key;
+        try {
+          key = createPublicKey({ key: Buffer.from(source.scopePublicKey, 'base64'), format: 'der', type: 'spki' });
+          if (key.asymmetricKeyType !== 'ed25519' || key.export({ format: 'der', type: 'spki' }).toString('base64') !== source.scopePublicKey)
+            fail(403, 'worker-event-key');
+        } catch { fail(403, 'worker-event-key'); }
+        const payload = workerEventProofPayload({ request, nonce: proof.nonce, channelBinding: workerEventTlsBinding(req.socket) });
+        if (!verify(null, Buffer.from(canonicalJson(payload)), key, Buffer.from(proof.signature, 'base64url')))
+          fail(403, 'worker-event-signature');
+        const nonces = used.get(req.socket) ?? new Set();
+        if (nonces.has(proof.nonce)) fail(403, 'worker-event-replay');
+        nonces.add(proof.nonce); used.set(req.socket, nonces);
+        return source;
+      } });
+      reply(200, { ok: true, result });
+    } catch (error) { reply(error.status ?? 503, { ok: false, code: error.code ?? 'worker-event-unavailable' }); }
+    return true;
+  };
 }
