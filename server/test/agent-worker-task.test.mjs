@@ -5,6 +5,7 @@ import path from 'node:path';
 import { runFixture, projectId, conversationId, servicePrincipal } from './run-authority-fixture.mjs';
 import { createAccountRunManager } from '../agent/service/account-runner.mjs';
 import { createAccountRunEvents } from '../agent/service/account-run-events.mjs';
+import { createHostedAgentService } from '../agent/service/create-agent-service.mjs';
 
 // Real SQLite/read-intent/event ledgers and existing run authority. Assignment
 // publication and model/drain are controlled here; no production bound proof.
@@ -41,7 +42,7 @@ async function setup(t, { bound = false, closeError = null } = {}) {
   const manager = createAccountRunManager(options);
   t.after(async () => { manager.close(); await manager.idle().catch(() => {}); await events.close(); f.close();
     fs.rmSync(f.dir, { recursive: true, force: true }); });
-  return { f, manager, options, calls, enable: () => { bound = true; } };
+  return { f, manager, options, calls, events, enable: () => { bound = true; } };
 }
 
 test('single worker cannot read/model before bound or select another conversation', async t => {
@@ -75,4 +76,20 @@ test('actual owned close failure propagates and reports unknown rather than loca
   assert.equal(x.calls.hook[0].drainState, 'unknown');
   assert.equal(x.manager.describe().activeRuns, 0);
   await assert.rejects(x.manager.resumeQueued(), /account-worker-task-consumed/);
+});
+
+test('Hosted factory actually passes task, assignment, events and drain hooks; default stays non-task', async t => {
+  const x = await setup(t, { bound: true });
+  const service = createHostedAgentService({ ...x.options, accountMode: true, requireAccountRunner: true,
+    conversationClient: {}, readIntentsFile: path.join(x.f.dir, 'hosted-intents.sqlite'), runEventsSink: x.events });
+  t.after(async () => { await service.close(); });
+  assert.equal(service.describe().singleTask, true);
+  await assert.rejects(service.runManager.resumeQueued(), /run-outcome-unavailable/);
+  assert.equal(x.calls.model, 1); assert.equal(x.calls.hook.length, 1);
+  const ordinary = createHostedAgentService({ accountMode: true, requireAccountRunner: true,
+    conversationClient: {}, runClient: x.options.runClient, serviceKid: x.options.serviceKid,
+    instanceId: x.options.instanceId, runnerFactory: x.options.runnerFactory,
+    readIntentsFile: path.join(x.f.dir, 'ordinary-intents.sqlite') });
+  try { assert.equal(ordinary.describe().singleTask, undefined); }
+  finally { await ordinary.close(); }
 });

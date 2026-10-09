@@ -51,3 +51,7 @@ task只接受projectId/conversationId/requestId，不能携grant或instance身�
 单任务drain hook等待实际runner drain/close和event flush，分别给local-drained/unknown与durable/failed分类；不产生root witness/complete。close异常保留并监督所有本task清理，hook失败不能遗留active逻辑状态。默认旧多任务fixture路径不变。assembly在注册前配置可信rootrecord，task模式用remote sink、无周期resume，仅一次工作Promise且保持completionReady:false；实际Doc/worker入口将在固定依赖收回后验证。
 
 固定94cf首目标出现两项accepted-message-record：新test复用旧runFixture.enqueue，其Docseed缺createdAt与selectionSnapshot.messageId，真实FULL事件镜像在runner前拒绝。首log `pc-worker-task-94cf0321-target.log`保留。仅补新test中这两个真实conversation.send本会持久的字段；不改oldfixture/生产校验/既有测试。该窄修有因复验，不能把旧通过项套给修后源。
+
+修fixture固定9752f5c5后8/8、0fail/cancel/skip、257.2992ms/exit0（外层517ms），TMP `pc-worker-task-9752f5c5-target.log`。包括旧read/ACK丢失回归5项与新task3项；真实SQLite/FULL/eventcrypto，assignment/model为受控，不计真实OSworker。
+
+只读发现Hosted factory显式参数列表会丢task四接口；root已窄扩 `create-agent-service.mjs` 仅四参数解构/传原accountRunner，不改LAN/default。新实际factory调用回归同时核singleTask参数真正到manager、durableevent/drain hook被调用及旧default仍非task，而不是只看manager纯目标推断assembly挂通。

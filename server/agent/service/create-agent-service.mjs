@@ -186,6 +186,7 @@ export function createHostedAgentService({
   instanceId = null,
   connectionsClosed = null,
   childrenClosed = null,
+  task = null, assignmentReady = null, onTaskDrained = null, runEventsSink = null,
   log = () => {},
   now = () => Date.now(),
 } = {}) {
@@ -194,7 +195,7 @@ export function createHostedAgentService({
       modelConfig, dataClient, resources, assetBase, look, voiceConfig: voiceConfig ?? (async () => null), collect,
       egress: egressOptions, workspaceLimits, toolLimits, toolFetch,
       conversationClient, runClient, readIntentsFile, runEventsFile, runEventsAuthorityId, runnerFactory, serviceKid, instanceId,
-      connectionsClosed, childrenClosed, log, now });
+      connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, runEventsSink, log, now });
     return createAccountConversationService({ conversationClient, now });
   }
   if (typeof loadModule !== 'function') throw new TypeError('createHostedAgentService: 要 loadModule');
