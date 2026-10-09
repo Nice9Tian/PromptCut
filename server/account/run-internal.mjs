@@ -44,8 +44,9 @@ function validateBody(action, body) {
 /** Only a pinned Agent leaf certificate reaches these routes. All service and
  * actor identities come from trusted callbacks/ledger, never from the body. */
 export function createRunInternalHandler({ runAuthority, agentFingerprint256, resolveServicePrincipal,
-  authenticateInvocation, principalForCheck, issueRunTicket, listPendingRuns } = {}) {
+  masterFingerprint256, requirePendingProof = false, authenticateInvocation, principalForCheck, issueRunTicket, listPendingRuns } = {}) {
   const pin = certificateFingerprint(agentFingerprint256);
+  const pins = new Set([pin, ...(masterFingerprint256 ? [certificateFingerprint(masterFingerprint256)] : [])]);
   if (!/^[a-f0-9]{64}$/.test(pin) || typeof resolveServicePrincipal !== 'function' ||
       !['admit', 'confirmRead', 'queryRead', 'checkAccess', 'resolveRunPrincipal', 'finish'].every(method =>
         typeof runAuthority?.[method] === 'function')) fail(503, 'run-internal-configuration');
@@ -56,7 +57,7 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
     try {
       assertInstanceDirectTransport(req);
       const peer = req.socket?.getPeerCertificate?.(), fingerprint256 = certificateFingerprint(peer?.fingerprint256);
-      if (req.socket?.authorized !== true || fingerprint256 !== pin) fail(403, 'service-forbidden');
+      if (req.socket?.authorized !== true || !pins.has(fingerprint256)) fail(403, 'service-forbidden');
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = url.pathname.slice(ROOT.length);
       if (!Object.hasOwn(shapes, action)) fail(404, 'no-route');
@@ -64,12 +65,12 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       let servicePrincipal = await resolveServicePrincipal({ fingerprint256, socket: req.socket });
       if (!servicePrincipal || servicePrincipal.service !== 'agent' || !reference(servicePrincipal.serviceKid))
         fail(403, 'run-service-forbidden');
-      if (action !== 'pending') {
+      if (action !== 'pending' || requirePendingProof) {
         if (typeof authenticateInvocation !== 'function') fail(503, 'instance-consumer-unavailable');
         if (action === 'check' && !['read', 'write'].includes(body.action)) fail(400, 'invalid-run-action');
         invocation = await authenticateInvocation({ req, servicePrincipal, body,
           operation: ({ admit: 'admit', read: 'confirmRead', 'read/query': 'queryRead', finish: 'finish',
-            assignment: 'scopeAssignment', check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
+            pending: 'pendingRuns', assignment: 'scopeAssignment', check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
         if (!invocation?.servicePrincipal || typeof invocation.release !== 'function') fail(503, 'instance-consumer-unavailable');
         servicePrincipal = invocation.servicePrincipal;
       }

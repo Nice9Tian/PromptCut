@@ -22,13 +22,14 @@ async function fixture(t) {
   // Real SQLite, signatures and complete root-chain validator; OS/transport below
   // are controlled models, NOT kernel/TLS proof or a production source factory.
   const scope = createAgentRunScopeDoc({ ledger: f.ledger, signingKey: m.doc.privateKey, slots: [slot],
+    masterServiceKid: 'master-key', masterFingerprint256: '5'.repeat(64),
     sourceFactory: () => ({ read: ({ checkpoint }) => inspectAgentScopeSource({ read: m.io.read,
       expected: m.expected, configuredAnchorDigest: slot.configuredAnchorDigest, checkpoint }) }) });
   const principal = { ...servicePrincipal, authenticationId: 'test-connection' };
   const transport = (_s, p) => {
     assert.equal(p.authenticationId, principal.authenticationId);
     return { serviceId: 'agent', serviceKid: p.serviceKid, authenticationId: p.authenticationId,
-      channelBinding: '4'.repeat(64), fingerprint256: slot.workerFingerprint256 };
+      channelBinding: '4'.repeat(64), fingerprint256: p.serviceKid === 'master-key' ? '5'.repeat(64) : slot.workerFingerprint256 };
   };
   const instances = createAgentInstanceAuthority({ ledger: f.ledger, verifyTransportInState: transport, scopeAuthority: scope });
   const request = { servicePrincipal: principal, requestId: 'register', publicKey: pem(m.workerKey.publicKey), rootScopeRef: ref };
@@ -91,4 +92,27 @@ test('required mode persists and cannot reopen without scope module; wrong key/e
     serviceId: 'agent', serviceKid: servicePrincipal.serviceKid, authenticationId: 'x', channelBinding: '4'.repeat(64) }) });
   assert.throws(() => missing.beginRegistration({ ...f.request, rootScopeRef: undefined }), { code: 'instance-scope-unavailable' });
   missing.close();
+});
+
+test('separate trusted master certificate registers control-only and cannot sign itself run access', async t => {
+  const f = await fixture(t), masterKey = pair(), principal = { ...f.principal, serviceKid: 'master-key' };
+  const request = { servicePrincipal: principal, requestId: 'master', publicKey: pem(masterKey.publicKey) };
+  const challenge = await f.instances.beginRegistration(request);
+  assert.equal(challenge.purpose, 'control-only');
+  assert.equal(Object.hasOwn(challenge, 'rootScopeRef'), false);
+  const registration = await f.instances.register({ servicePrincipal: principal, challenge, signature: signature(challenge, masterKey.privateKey) });
+  assert.equal(registration.purpose, 'control-only');
+  await assert.rejects(f.instances.beginRegistration({ ...request, requestId: 'master-forged-worker', rootScopeRef: f.ref }), { code: 'run-scope-master-scope-forbidden' });
+  await assert.rejects(f.instances.beginRegistration({ ...f.request, requestId: 'worker-without-ref', rootScopeRef: undefined }), { code: 'run-scope-reference' });
+  for (const operation of ['admit', 'confirmRead', 'scopeAssignment', 'checkAccess', 'resolveRunPrincipal', 'finish']) {
+    const input = {}, proof = { ...registration, signature: signature(instanceProofPayload({ ...registration,
+      channelBinding: '4'.repeat(64), method: 'POST', path: `/test/${operation}`, operation, requestDigest: digestOf(input) }), masterKey.privateKey) };
+    assert.throws(() => f.instances.authenticate({ servicePrincipal: principal, method: 'POST', path: `/test/${operation}`, operation, request: input, proof }),
+      { code: 'instance-purpose-forbidden' });
+  }
+  const operation = 'pendingRuns', requestBody = {}, proof = { ...registration, signature: signature(instanceProofPayload({ ...registration,
+    channelBinding: '4'.repeat(64), method: 'POST', path: '/internal/v2/runs/pending', operation, requestDigest: digestOf(requestBody) }), masterKey.privateKey) };
+  const cap = f.instances.authenticate({ servicePrincipal: principal, method: 'POST', path: '/internal/v2/runs/pending', operation, request: requestBody, proof });
+  assert.equal(f.instances.verifyInState(f.ledger.read(), { ...principal, ...cap }, { operation, input: requestBody }).instanceId, registration.instanceId);
+  f.instances.release(cap.instanceSession);
 });

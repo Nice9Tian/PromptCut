@@ -57,8 +57,9 @@ export function instanceDataRequest({ projectId, runGrantId, connId, nonce, kind
     ...(action !== undefined ? { action } : {}) };
 }
 
-export function createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256, resolveServicePrincipal } = {}) {
+export function createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256, masterFingerprint256, resolveServicePrincipal } = {}) {
   const pin = certificateFingerprint(agentFingerprint256);
+  const pins = new Set([pin, ...(masterFingerprint256 ? [certificateFingerprint(masterFingerprint256)] : [])]);
   if (!/^[a-f0-9]{64}$/.test(pin) || typeof resolveServicePrincipal !== 'function' ||
       typeof instanceAuthority?.beginRegistration !== 'function' || typeof instanceAuthority?.register !== 'function')
     fail(503, 'instance-internal-configuration');
@@ -67,7 +68,7 @@ export function createAgentInstanceInternalHandler({ instanceAuthority, agentFin
     if (!route.startsWith(ROOT)) return false;
     try {
       assertInstanceDirectTransport(req);
-      if (req.socket?.authorized !== true || certificateFingerprint(req.socket?.getPeerCertificate?.()?.fingerprint256) !== pin)
+      if (req.socket?.authorized !== true || !pins.has(certificateFingerprint(req.socket?.getPeerCertificate?.()?.fingerprint256)))
         fail(403, 'service-forbidden');
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = route.slice(ROOT.length);

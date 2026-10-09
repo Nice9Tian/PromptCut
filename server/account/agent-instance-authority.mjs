@@ -40,6 +40,7 @@ export function instanceProofPayload({ authorityId, instanceId, instanceGenerati
 // from the grant; a caller cannot enlarge an invocation by adding body identity.
 export function instanceRunScope(operation, input) {
   if (Object.values(conversationControlOperations).includes(operation)) return conversationControlScope(operation, input);
+  if (operation === 'pendingRuns') return { operation };
   const p = input?.principal ?? input ?? {};
   const target = { projectId: input?.projectId, runGrantId: input?.runGrantId ?? p.runGrantId };
   if (operation === 'admit') return { operation, projectId: input.projectId,
@@ -110,13 +111,14 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
       }
       const challenge = { domain: 'promptcut.agent-instance.register.v1', authorityId: ledger.authorityId,
         serviceId: svc.serviceId, serviceKid: svc.serviceKid, requestId, challengeId: `instance-challenge_${randomUUID()}`,
-        nonce: randomUUID(), publicKeyDigest: digestOf(key), ...(scoped ? {
+        nonce: randomUUID(), publicKeyDigest: digestOf(key), ...(scoped ? { purpose: scoped.purpose } : {}), ...(scoped?.purpose === 'run-worker' ? {
           rootScopeRef: scoped.rootScopeRef, docPublicKeyDigest: scoped.docPublicKeyDigest,
           scopePublicKeyDigest: scoped.scopePublicKeyDigest } : {}) };
       state.agentRegistrationsV2[id] = { publicKey: key, challenge, result: null };
       failpoint('instance-challenge-before-commit'); return clone(challenge);
     });
-    return scopeAuthority ? scopeAuthority.refresh(rootScopeRef).then(begin) : begin();
+    return scopeAuthority ? scopeAuthority.prepareRegistration({ rootScopeRef,
+      transport: transport(ledger.read(), servicePrincipal) }).then(begin) : begin();
   }
   function register({ servicePrincipal, challenge, signature }) {
     const commit = () => { const result = ledger.transaction(state => {
@@ -125,31 +127,34 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
       const registration = state.agentRegistrationsV2[id];
       if (!registration || canonicalJson(registration.challenge) !== canonicalJson(challenge) ||
           !signed(registration.challenge, signature, registration.publicKey)) deny(403, 'instance-registration-unverified');
-      if (registration.result) return clone(registration.result);
       if ((challenge.rootScopeRef || state.agentRunScopesV1?.required) && !scopeAuthority) deny(503, 'instance-scope-unavailable');
+      if (registration.result) return clone(registration.result);
       const scoped = scopeAuthority ? scopeAuthority.registrationInState(state, {
         publicKey: registration.publicKey, rootScopeRef: challenge.rootScopeRef, transport: svc }) : null;
-      if (scoped && state.agentInstancesV2[scoped.instanceId]) deny(409, 'instance-already-registered');
+      if (scoped?.instanceId && state.agentInstancesV2[scoped.instanceId]) deny(409, 'instance-already-registered');
       const next = (state.agentInstanceGenerationV2 ?? 0) + 1;
       if (!generation(next)) deny(503, 'instance-generation-overflow');
       const value = { v: 2, instanceId: scoped?.instanceId ?? `instance_${randomUUID()}`, instanceGeneration: next,
         serviceId: svc.serviceId, serviceKid: svc.serviceKid, publicKey: registration.publicKey,
-        registrationId: id, state: 'active', closure: null, ...(scoped ? { rootScopeRef: scoped.rootScopeRef,
+        registrationId: id, state: 'active', closure: null, ...(scoped ? { purpose: scoped.purpose } : {}), ...(scoped?.purpose === 'run-worker' ? { rootScopeRef: scoped.rootScopeRef,
           docPublicKeyDigest: scoped.docPublicKeyDigest, scopePublicKeyDigest: scoped.scopePublicKeyDigest } : {}) };
       state.agentInstanceGenerationV2 = next; state.agentInstancesV2[value.instanceId] = value;
       registration.result = { instanceId: value.instanceId, instanceGeneration: next,
         authorityId: ledger.authorityId, serviceId: svc.serviceId, serviceKid: svc.serviceKid,
-        ...(scoped ? { rootScopeRef: scoped.rootScopeRef } : {}) };
+        ...(scoped ? { purpose: scoped.purpose } : {}), ...(scoped?.purpose === 'run-worker' ? { rootScopeRef: scoped.rootScopeRef } : {}) };
       failpoint('instance-register-before-commit'); return clone(registration.result);
     });
     failpoint('instance-register-after-commit'); return result; };
-    return scopeAuthority ? scopeAuthority.refresh(challenge?.rootScopeRef).then(commit) : commit();
+    return scopeAuthority ? scopeAuthority.prepareRegistration({ rootScopeRef: challenge?.rootScopeRef,
+      transport: transport(ledger.read(), servicePrincipal) }).then(commit) : commit();
   }
   function authenticate({ servicePrincipal, method, path, operation, request, proof }) {
     if (!text(method) || method !== method.toUpperCase() || !text(path) || !path.startsWith('/'))
       deny(400, 'instance-request-invalid');
     const state = ledger.read(), svc = transport(state, servicePrincipal);
     const instance = current(state, proof?.instanceId, proof?.instanceGeneration, svc);
+    if (instance.purpose === 'control-only' && ![...Object.values(conversationControlOperations), 'pendingRuns'].includes(operation))
+      deny(403, 'instance-purpose-forbidden');
     const payload = instanceProofPayload({ authorityId: ledger.authorityId, ...instance,
       channelBinding: svc.channelBinding, method, path, operation, requestDigest: digestOf(request) });
     if (!signed(payload, proof?.signature, instance.publicKey)) deny(403, 'instance-proof-invalid');

@@ -29,16 +29,19 @@ export function agentScopeKeyMapping(publicKey, rootPublicKey) {
     scopePublicKey: der, scopePublicKeyDigest: digestOf(der) };
 }
 
-export function createAgentRunScopeDoc({ ledger, signingKey, slots, sourceFactory = createAgentScopeReader } = {}) {
+export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServiceKid, masterFingerprint256,
+  sourceFactory = createAgentScopeReader } = {}) {
   if (!ledger?.transaction || !ledger?.read || !signingKey || !Array.isArray(slots) || !slots.length)
     fail(503, 'configuration');
+  if (!hash(masterFingerprint256) || typeof masterServiceKid !== 'string' || !masterServiceKid) fail(503, 'master-configuration');
   const publicKey = createPublicKey(signingKey).export({ format: 'der', type: 'spki' }).toString('base64');
   const configs = new Map(), sources = new Map(), live = new Map();
   const keyOf = ref => `${ref.rootAuthorityId}:${ref.slotId}`;
   for (const slot of slots) {
     const e = slot.expected, key = keyOf({ rootAuthorityId: e?.authorityId, slotId: e?.slotId });
     if (e?.docAuthorityId !== ledger.authorityId || e.docPublicKey !== publicKey || configs.has(key) ||
-        !hash(slot.workerFingerprint256) || typeof slot.workerServiceKid !== 'string' || !slot.workerServiceKid)
+        !hash(slot.workerFingerprint256) || typeof slot.workerServiceKid !== 'string' || !slot.workerServiceKid ||
+        slot.workerFingerprint256 === masterFingerprint256 || slot.workerServiceKid === masterServiceKid)
       fail(503, 'configuration');
     configs.set(key, slot); sources.set(key, sourceFactory(slot));
   }
@@ -69,6 +72,10 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, sourceFactor
     return value;
   }
   function registrationInState(s, { publicKey: requestedKey, rootScopeRef, transport }) {
+    if (transport.serviceId === 'agent' && transport.serviceKid === masterServiceKid && transport.fingerprint256 === masterFingerprint256) {
+      if (rootScopeRef !== undefined) fail(403, 'master-scope-forbidden');
+      return { purpose: 'control-only', publicKey: requestedKey };
+    }
     const value = projectionFor(rootScopeRef), cfg = configs.get(keyOf(rootScopeRef));
     // Root controller's identity-RPC client cert is NOT the worker Doc client.
     if (transport.serviceId !== 'agent' || transport.serviceKid !== cfg.workerServiceKid ||
@@ -80,7 +87,7 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, sourceFactor
       fail(403, 'not-ready');
     if (prior && (prior.publicKey !== mapping.publicKey || canonicalJson(prior.rootScopeRef) !== canonicalJson(rootScopeRef)))
       fail(409, 'instance-reused');
-    return { rootScopeRef: copy(rootScopeRef), instanceId: value.record.instance.instanceId, ...mapping };
+    return { purpose: 'run-worker', rootScopeRef: copy(rootScopeRef), instanceId: value.record.instance.instanceId, ...mapping };
   }
   function assignInState(s, grant) {
     const instance = s.agentInstancesV2?.[grant.instanceId];
@@ -120,5 +127,12 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, sourceFactor
       .map(i => i.rootScopeRef);
     for (const ref of refs) await refresh(ref);
   }
-  return Object.freeze({ refresh, synchronize, registrationInState, assignInState, assignmentInState });
+  async function prepareRegistration({ rootScopeRef, transport }) {
+    if (transport.serviceId === 'agent' && transport.serviceKid === masterServiceKid && transport.fingerprint256 === masterFingerprint256) {
+      if (rootScopeRef !== undefined) fail(403, 'master-scope-forbidden');
+      return;
+    }
+    await refresh(rootScopeRef);
+  }
+  return Object.freeze({ refresh, synchronize, prepareRegistration, registrationInState, assignInState, assignmentInState });
 }
