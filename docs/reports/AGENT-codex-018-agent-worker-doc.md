@@ -87,3 +87,7 @@ Doc内部reconcileScopeFailures只读配置槽、同事务验证原grant/assignm
 首目标15/15、0fail/cancel/skip、2178.1115ms（TMP pc-worker-doc-failure-target-1.log），包含实际SQLite importer及原真实TLS，OS失败观察/文件写故障使用明确受控模型。新增marker可见后fsync故障保锁、缺marker/混record/伪closed/live-main拒绝；bound和unbound都在原root关闭模型后才释放，状态failed、其它queued保持。没有拿模型证据替真实Linux。
 
 为根准备同原两槽CLI新增--crash-observation：实际父gone/子FD+TCP/pop1后，真实root observe-failure耐久发布并由实际reader保持bound/notclosed；再走原forced收口、B不中断。原--forced和normal保持，仍受控Doc issuer，无节点执行；需要根另一次固定blob Linux取证，旧11项不能套新producer。所有输出仍/run可信目录。
+
+主体675b2a10d6a0d263d66cb0543a779b9c7c4c3898，收紧完整forced terminal与同ledger原签名对象相等后固定0bf3b7e0。该source首9文件相关175/175、0fail/cancel/skip、2118.8672ms（TMP pc-worker-doc-crash-complete-target-1.log）；类型0/8137ms（TMP pc-worker-doc-crash-type-1.log），probe node --check 0。保留全部Asset专属/旧run成功回归；未跑full。专属scope-doc现9个顶级项，其中2项新增bound crash/unbound retirement，实际TLS仍1个case，包含pending发现：master真实PoP返回完整既有control引用，worker同入口403、body failed:true被strict parser400拒。受控模型中pop1失败只生成Doc fence，原rootclosed前FIFO保持；真实rootclosed后worker-failed结算failed，private竞态继续interrupted。没有修改已过Linux9e原日志，也没有把此新源码称Linux已过。
+
+根收回0bf固定点后独立运行6712窗口；本Agent目标已结束，TLS实际owned socket0/serverfalse，窗口已明确释放。工作区最终仅本报告追加，无source测中改动。后续真实root OS或业务配对的首次结果由根补入，不同层证据分别归档。
