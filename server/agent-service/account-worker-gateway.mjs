@@ -61,7 +61,9 @@ export function createAccountWorkerGateway({ configurationModule, cwd, env = pro
       stopping = (async () => {
         let error;
         if (!stopped) { try { await request('close', null); } catch (cause) { error = cause; }
-          if (child.connected) child.disconnect(); }
+          // The child flushes ACK then closes its IPC. Keep observing real EOF
+          // and ChildProcess close; never substitute exit for actual close.
+        }
         let timer;
         const observed = await Promise.race([closed, new Promise((_, reject) => {
           timer = setTimeout(() => reject(fail('worker-gateway-actual-close-pending')), timeoutMs);

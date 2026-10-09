@@ -52,11 +52,14 @@ createAssemblyOptions:async()=>{throw Object.assign(Error('must not execute'),{c
   diagnostic('gateway-ready');
   const first = await get(ready.port, pki.account), second = await get(ready.port, pki.account);
   assert.equal(first.status, 200); assert.equal(first.body.pid, ready.pid);
+  diagnostic('actual-identity-200');
   assert.equal(first.body.publicKey, second.body.publicKey); assert.equal(first.body.instanceId, model.files.get('reservation-1.json').instanceId);
   assert.equal((await get(ready.port, pki.wrong)).status, 403);
+  diagnostic('wrong-controller-403');
   await assert.rejects(gateway.start(), { code: 'account-worker-not-prepared' });
   await assert.rejects(gateway.prepare({ projectId: 'project', conversationId: 'conversation-child', requestId: 'one' }), { code: 'root-ready-missing' });
   await assert.rejects(gateway.prepare({ projectId: 'project', conversationId: 'conversation-child', requestId: 'one', runGrantId: 'master-grant' }), { code: 'account-worker-task' });
+  diagnostic('root-missing-grant-body-rejected');
   assert.equal(gateway.describe().completionReady, false);
   const closed = await gateway.close(); assert.equal(closed.childClosed, true); assert.equal(closed.exitCode, 0);
   diagnostic('close-returned');

@@ -10,7 +10,7 @@ const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) &&
   Object.keys(v).sort().join(',') === [...keys].sort().join(',');
 const safeCode = error => typeof error?.code === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(error.code)
   ? error.code : 'account-worker-unavailable';
-const send = body => { if (process.connected) process.send(body); };
+const send = (body, callback) => { if (process.connected) process.send(body, callback); else callback?.(Error('ipc disconnected')); };
 const close = () => stopping ??= (async () => { await worker?.close(); })();
 try {
   if (!process.send || process.argv.length !== 4 || process.argv[2] !== '--configuration-module' || !path.isAbsolute(process.argv[3]))
@@ -39,7 +39,14 @@ process.on('message', message => {
         result = { started: true, completionReady: false, controlPort: assembly.controlPort };
       } else if (message.operation === 'close' && message.input === null) { await close(); result = { stopped: true, completionReady: false }; }
       else throw Object.assign(Error('unknown command'), { code: 'account-worker-command' });
-      send({ type: 'result', id: message.id, ok: true, result });
+      if (message.operation === 'close') {
+        // Let the CHILD close its IPC after the ACK is flushed. Parent-side
+        // disconnect can suppress the IPC EOF contribution to ChildProcess
+        // close on the installed Node runtime; exit alone is insufficient.
+        send({ type: 'result', id: message.id, ok: true, result }, error => {
+          if (error) process.exitCode = 1; if (process.connected) process.disconnect();
+        });
+      } else send({ type: 'result', id: message.id, ok: true, result });
     } catch (error) { send({ type: 'result', id: message.id, ok: false, code: safeCode(error) }); }
   };
   // Stop can interrupt an owned pending network admission rather than waiting
