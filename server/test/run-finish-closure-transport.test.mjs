@@ -19,16 +19,16 @@ const close = server => new Promise(resolve => { server.closeAllConnections?.();
 
 test('real doc TLS/WS closes exact terminal grant; signed empty counts cannot manufacture an independent resource witness', { timeout: 30000 }, async t => {
   const f = await runFixture(), pki = assetWiringPki(f.dir);
-  let assembly, service, server, controlServer, client, dataClient, file;
+  let assembly, service, server, controlServer, client, otherClient, dataClient, file;
   const diagnostics = [], managerEntered = deferred(), permitDrain = deferred();
-  let fileClosed = false, dataClosed = false, cancelCalls = 0, completeCalls = 0;
+  let fileClosed = false, dataClosed = false, cancelCalls = 0, completeCalls = 0, proofMode = 'normal', savedProof;
   const accountClient = { events: async () => ({ events: [], headSeq: 0 }),
     verifyAcceptedMessage: async ref => ({ ...ref, accountEventSeq: 0 }) };
   const authority = createAccountAuthority({ ledger: f.ledger, accountClient, pollMs: 0 });
   t.after(async () => {
     permitDrain.resolve();
     if (file) await file.close();
-    await dataClient?.close(); client?.close();
+    await dataClient?.close(); client?.close(); otherClient?.close();
     await assembly?.close(); await service?.close();
     if (controlServer?.listening) await close(controlServer);
     if (server?.listening) await close(server);
@@ -81,7 +81,13 @@ test('real doc TLS/WS closes exact terminal grant; signed empty counts cannot ma
     } };
   controlServer = createRunControlServer({ tls: pki.asset, docFingerprint256: pki.doc.fingerprint256,
     serviceKid: registered.serviceKid, instanceId: registered.instanceId, instanceGeneration: registered.instanceGeneration,
-    instanceSession: { identity: client.instanceIdentity, terminalControlProofFor: client.terminalControlProofFor }, manager });
+    instanceSession: { identity: client.instanceIdentity, terminalControlProofFor(args) {
+      if (proofMode === 'replay') return savedProof;
+      if (proofMode === 'new-instance') return otherClient.terminalControlProofFor(args);
+      const proof = client.terminalControlProofFor(proofMode === 'wrong-nonce' ? { ...args, nonce: `${args.nonce}:changed` } : args);
+      if (proofMode === 'normal') savedProof = proof;
+      return proof;
+    } }, manager });
   await listen(controlServer, 6601);
   const body = { ...Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(k => [k, grant[k]])),
     requestId: `finish:${grant.runGrantId}`, readReceiptId: read.receipt.receiptId, outcome };
@@ -104,4 +110,17 @@ test('real doc TLS/WS closes exact terminal grant; signed empty counts cannot ma
   await assert.rejects(client.admit({ projectId, conversationId, requestId: 'still-queued' }), { code: 'run-not-ready' });
   const changed = { ...body, outcome: { ...body.outcome, status: 'done' } };
   await assert.rejects(client.queryFinish(changed), { code: 'run-request-mismatch' });
+  proofMode = 'replay';
+  await assert.rejects(client.queryFinish(body), { code: 'terminal-instance-proof-invalid' });
+  proofMode = 'wrong-nonce';
+  await assert.rejects(client.queryFinish(body), { code: 'terminal-instance-proof-invalid' });
+  otherClient = createRunClient({ origin: 'https://127.0.0.1:6600', tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 });
+  const other = await otherClient.registerInstance();
+  assert.notEqual(other.instanceId, registered.instanceId);
+  await assert.rejects(otherClient.queryFinish(body), { code: 'run-instance-mismatch' });
+  proofMode = 'new-instance';
+  const stillPending = await client.queryFinish(body);
+  assert.equal(stillPending.finishPending, true);
+  assert.equal(f.ledger.read().runTerminalAgentReceiptsV1[controlId].instanceId, registered.instanceId);
+  assert.equal(f.ledger.read().runFinishReceiptsV2[finished.finishReceipt.finishReceiptId].complete, false);
 });
