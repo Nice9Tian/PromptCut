@@ -38,6 +38,8 @@ test('unbound account run/text never borrows last assistant, or an unrelated acc
   assert.deepEqual(applyCloudEvents([], [event('run', 2)]), []);
   assert.equal(applyCloudEvent(applyCloudEvents([], [accepted]), event('run', 2, { senderAccountId: 'other' })).length, 1);
   assert.equal(applyCloudEvent(messages, { type: 'text', seq: 3, runId: 'run_a', delta: 'Missing binding' }), messages);
+  assert.deepEqual(applyCloudEvents([], [{ ...accepted, seq: 0, runId: 'run_a' }]), []);
+  assert.deepEqual(applyCloudEvents([], [{ ...accepted, senderNameAtSend: undefined, runId: 'run_a' }]), []);
 });
 
 test('account runner_done, raw done/end and model error do not claim settled success', () => {

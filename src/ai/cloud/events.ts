@@ -126,6 +126,7 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
         ...(accepted ? { cloudAccepted: accepted, ...userAttachments(ev) } : {}) };
       return messages.some(message => message.id === id) ? messages : [...messages, message];
     }
+    if (acceptedKeys.some(key => ev[key] !== undefined) || ev.runGrantId !== undefined || ev.instanceId !== undefined) return messages;
     if (!runId || messages.some((m) => m.id === userMessageId(runId))) return messages;
     const at = typeof ev.at === "number" ? ev.at : undefined;
     return [
