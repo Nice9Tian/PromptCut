@@ -14,6 +14,7 @@ import { assertProjectCardAudio } from "../audio/cardAudio";
 import type { Project } from "../kernel/project";
 import { audioPlanOf } from "../kernel/audioPlan.mjs";
 import { renderMix, encodeWavFloat32, type MixPlan } from "../audio/renderMix";
+import { MISSING_MATERIAL_WAV_URL, confirmedMissingAudio, missingMaterialAudibleDuration } from "../audio/missingMaterial";
 import { awaitingUploaderMessage, type MissingOriginal } from "../render/mediaTier";
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, audioConfigOf, probeExportCapability, videoConfigOf, type EncoderEnv } from "./capability";
 import { Mp4Muxer, type MuxSink } from "./mp4Mux";
@@ -131,7 +132,7 @@ async function sliceWav(source: ArrayBuffer, offset: number, dur: number): Promi
   return encodeWavFloat32({ numberOfChannels: AUDIO_CHANNELS, length: n, sampleRate: AUDIO_SAMPLE_RATE, getChannelData: (c: number) => chans[c] } as unknown as AudioBuffer);
 }
 
-async function encodeAudio(deps: BrowserExportDeps, durationSec: number): Promise<EncodedAudio | null> {
+export async function encodeAudio(deps: BrowserExportDeps, durationSec: number): Promise<EncodedAudio | null> {
   const project = deps.project;
   assertProjectCardAudio(project);
   const all = audioPlanOf(project).filter((e: { start: number }) => e.start < durationSec);
@@ -145,12 +146,18 @@ async function encodeAudio(deps: BrowserExportDeps, durationSec: number): Promis
     if (!m) continue;
     let bytes = sources.get(m.id);
     if (!bytes) {
-      const res = await fetch(deps.mediaUrl ? deps.mediaUrl(m.url) : m.url, { signal: deps.signal });
-      if (!res.ok) throw new Error(`${m.name || m.id} 的声音取不到:HTTP ${res.status}`);
-      bytes = await res.arrayBuffer();
+      if (confirmedMissingAudio(m, project)) {
+        const res = await fetch(MISSING_MATERIAL_WAV_URL, { signal: deps.signal });
+        if (!res.ok) throw new Error(`内置缺失素材人声无法读取:HTTP ${res.status}`);
+        bytes = await res.arrayBuffer();
+      } else {
+        const res = await fetch(deps.mediaUrl ? deps.mediaUrl(m.url) : m.url, { signal: deps.signal });
+        if (!res.ok) throw new Error(`${m.name || m.id} 的声音取不到:HTTP ${res.status}`);
+        bytes = await res.arrayBuffer();
+      }
       sources.set(m.id, bytes);
     }
-    if (isoHasSoundTrack(new Uint8Array(bytes)) === false) continue;
+    if (!confirmedMissingAudio(m, project) && isoHasSoundTrack(new Uint8Array(bytes)) === false) continue;
     entries.push(e);
   }
   if (!entries.length) return null;
@@ -161,7 +168,8 @@ async function encodeAudio(deps: BrowserExportDeps, durationSec: number): Promis
     clips: entries.map((e: { clipId: string; mediaId: string; start: number; dur: number; offset: number; volume: number; fadeIn: number; fadeOut: number; fx: MixPlan["clips"][number]["fx"] }, i: number) => {
       const m = byId.get(e.mediaId)!;
       const key = `pc-slice:${i}`;
-      slices.set(key, { mediaId: m.id, offset: e.offset, dur: e.dur });
+      const missing = confirmedMissingAudio(m, project);
+      slices.set(key, { mediaId: m.id, offset: missing ? 0 : e.offset, dur: missing ? missingMaterialAudibleDuration({ start: 0, end: e.dur }) : e.dur });
       return { clipId: e.clipId, url: key, start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx };
     }),
   };

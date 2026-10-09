@@ -12,6 +12,8 @@ import { cardMountedAt } from "./frameWindow.mjs";
 import { VideoTrack } from "./VideoTrack";
 import { driveMedia, releaseMedia, targetTimeOf } from "./mediaDrive";
 import { playbackUrl } from "./mediaTier";
+import { confirmedMissingVisual, missingMaterialLabel } from "../audio/missingMaterial";
+import { MissingMaterial } from "./MissingMaterial";
 
 const NO_HASHES: readonly string[] = [];
 
@@ -262,7 +264,7 @@ export function FrameScene({
           <PixelMappedMedia media={media as MediaAsset} clip={clip} t={mediaT} project={project} style={style} def={def} live playing={playing} scrubbing={scrubbing} localHashes={hashes} />
         </div>;
       }) : null}
-      {!live && layers.filter(l => l.trackId === tr.id && !graphVisualNode(graph, l.clip.nodeId) && !replaced(l.clip.id)).map(({ clip, media, opacity }) => {
+      {!live && layers.filter(l => l.trackId === tr.id && !graphVisualNode(graph, l.clip.nodeId) && !replaced(l.clip.id) && !confirmedMissingVisual(l.media)).map(({ clip, media, opacity }) => {
         const ops = project.filters?.length ? clipFilterOpsAt(project, clip, t) : null;
         const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
         const style = { display: "block", width: "100%", height: "100%", objectFit: "cover" as const, opacity, filter: filter || undefined };
@@ -280,6 +282,14 @@ export function FrameScene({
       {tr.clips.map((clip, clipIndex) => {
         if (!active(clip)) return null;
         const layerStyle: React.CSSProperties = { position: "absolute", inset: 0, zIndex: clipIndex };
+        const media = clip.mediaId ? project.media.find((item) => item.id === clip.mediaId) : undefined;
+        if (media && confirmedMissingVisual(media)) {
+          if (live && !takenByOther(clip)) return null; // The live VideoTrack owns ordinary visual media layers.
+          return <div key={clip.id} data-pc-clip={clip.id} data-pc-media="" data-pc-confirmed-missing="1"
+            style={{ ...layerStyle, ...frameCss(clip.frame, project), opacity: opacityAt(clip, directT), pointerEvents: "none" }}>
+            <MissingMaterial name={missingMaterialLabel(media)} />
+          </div>;
+        }
         if (replaced(clip.id)) {
           const url = cached(clip.id);
           // Cached controls are full-stage PNGs. Their placement and motion have

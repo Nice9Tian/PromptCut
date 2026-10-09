@@ -20,6 +20,36 @@ import { mixAudioInChrome } from './audio-mix.mjs';
 // 的运行时环;环已经解开(export-unified 只依赖 chrome / bake / shards / ffmpeg),这里静态引。
 import { exportUnified } from './export-unified.mjs';
 
+const MISSING_MATERIAL_FONT_CANDIDATES = Object.freeze({
+  win32: (windir) => [
+    path.join(windir, 'Fonts', 'msyh.ttc'),
+    path.join(windir, 'Fonts', 'msyhbd.ttc'),
+    path.join(windir, 'Fonts', 'simhei.ttf'),
+    path.join(windir, 'Fonts', 'simsun.ttc'),
+  ],
+  linux: () => [
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf',
+  ],
+});
+
+/** Resolve only from trusted platform font locations; project fields never participate. */
+export function findMissingMaterialFontFile({ platform = process.platform, windir = process.env.WINDIR || process.env.SystemRoot || 'C:/Windows', exists = fsSync.existsSync } = {}) {
+  const candidates = platform === 'win32'
+    ? MISSING_MATERIAL_FONT_CANDIDATES.win32(windir)
+    : platform === 'linux'
+      ? MISSING_MATERIAL_FONT_CANDIDATES.linux()
+      : [];
+  const fontFile = candidates.find((candidate) => exists(candidate));
+  if (!fontFile) {
+    const platformName = platform === 'win32' ? 'Windows Fonts' : platform === 'linux' ? 'Noto Sans CJK' : 'supported platform font locations';
+    throw new Error(`确认缺失素材需要中文代理字体，但未找到可用字体（${platformName}）。`);
+  }
+  return fontFile;
+}
+
 /**
  * 一次性导出:自己开 bakery、渲帧、合成视频、关掉。CLI 和现有的 /api/export 走这条。
  * opts.workers:数字 / 'auto'（默认）。离散取样(targetFrames)和外部传进来的 bakery 一律单进程。
@@ -175,11 +205,15 @@ async function composePreview({ ffmpegCmd, baked, layers, outDir, cardsVideo = n
     await fillGlassGaps(baked.glass.dir, startFrame, endFrame, width, height);
     mask = { pattern: path.join(baked.glass.dir, '%06d.png'), blur };
   }
+  const fontFile = layers.some((layer) => layer.missingMaterial)
+    ? findMissingMaterialFontFile()
+    : undefined;
   const { args, graph, notes, sidecars = [] } = buildComposeArgs({
     width, height, fps, startFrame, endFrame, layers, mask,
     cardsPattern: path.join(framesDir, `%06d.${ext}`),
     cardsVideo,
     out: path.join(outDir, 'preview.mp4'),
+    fontFile,
     // 随时间变化的滤镜每段一份 sendcmd 脚本,写进导出目录;给绝对路径,不依赖 ffmpeg 的工作目录
     sidecarDir: path.resolve(outDir),
   });

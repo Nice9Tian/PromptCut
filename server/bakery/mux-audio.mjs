@@ -9,9 +9,24 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { audioPlanOf } from "../../src/kernel/audioPlan.mjs";
 import { audioFxOfClip } from "../../src/kernel/audioFx.mjs";
+
+export const MISSING_MATERIAL_WAV = fileURLToPath(new URL("../../src/audio/assets/missing-material.wav", import.meta.url));
+
+function isConfirmedMissingAudio(media, project) {
+  const state = media?.missingMaterial;
+  if (media && media.kind !== "image" && state?.v === 1 && state.reason === "confirmed-missing"
+    && state.mediaId === media.id && state.audio === true && state.original?.kind === media.kind
+    && typeof state.original?.name === "string" && typeof state.original?.url === "string") return true;
+  const source = media?.soundOf ? project?.media?.find((item) => item.id === media.soundOf) : undefined;
+  const sourceState = source?.missingMaterial;
+  return source?.kind === "video" && sourceState?.v === 1 && sourceState.reason === "confirmed-missing"
+    && sourceState.mediaId === source.id && sourceState.audio === true && sourceState.original?.kind === "video"
+    && typeof sourceState.original?.name === "string" && typeof sourceState.original?.url === "string";
+}
 
 /** 导出时素材的 url 形如 /@export/<id>/media/<file>,真实文件在 outDir/media/<file> */
 export function localPathOf(url, outDir) {
@@ -38,13 +53,15 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
     // A generated node replaces its corresponding source-media input; applying both would double it.
     if (!sourceClip?.cardAudio && isCardAudioNode(project, sourceClip?.nodeId)) continue;
     const m = (project.media || []).find((x) => x.id === e.mediaId);
-    const file = sourceOf(m);
+    const missingMaterial = isConfirmedMissingAudio(m, project);
+    const file = missingMaterial ? MISSING_MATERIAL_WAV : sourceOf(m);
     const soundEffect = !!(sourceClip?.cardAudio || m?.soundEffect || sourceClip?.soundEffect);
     if (!file || (!/^https?:/i.test(file) && !exists(file))) {
       if (soundEffect) throw new Error(`${e.clipId} 的合成音效文件缺失，请恢复素材或重新生成`);
       continue;
     }
-    out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx, ...(soundEffect ? { soundEffect: true } : {}) });
+    out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: missingMaterial ? 0 : e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx,
+      ...(missingMaterial ? { missingMaterial: true } : null), ...(soundEffect ? { soundEffect: true } : {}) });
   }
   // 音频图卡节点 have no ffmpeg-readable source file.  Keep them in the one common
   // plan so Chrome's OfflineAudioContext can request their true WAV blocks.  A caller that

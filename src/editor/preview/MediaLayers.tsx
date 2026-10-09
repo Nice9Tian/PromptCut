@@ -3,6 +3,7 @@ import { clipHasEmbeddedAudio } from "../../kernel/cardAudioRendition.mjs";
 import { getCard, syncedUserCards } from "../../kernel/registry";
 import type { AudioFxDef } from "../../kernel/audioFx.mjs";
 import { releasePreviewAudio, routePreviewAudio } from "../../audio/previewAudio";
+import { MISSING_MATERIAL_WAV_URL, missingMaterialSourceTime } from "../../audio/missingMaterial";
 import { CARD_AUDIO_SAMPLE_RATE, acquireCardAudioClipUrl, cardAudioNodeOf, generatedCardAudioClipsAt, getCardAudioEpoch, subscribeCardAudioEpoch, persistentCardAudio } from "../../audio/cardAudio";
 import { audioClipsAt, isImageMedia, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
@@ -12,6 +13,7 @@ import { playbackUrl } from "../../render/mediaTier";
 import { onlinePage } from "../../online/pageFlag";
 import { ONLINE_CARD_AUDIO_BLOCKED } from "../../online/soundPolicy";
 import { onlineLiveCardAudio, onlineLiveEffectAudio } from "../io/onlineSoundSource";
+import { confirmedMissingAudio } from "../io/missingMaterials";
 import "../io/onlineSoundBoot";
 
 /**
@@ -33,10 +35,11 @@ const NO_HASHES: readonly string[] = [];
 function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audioFx, onCardState, localHashes }: { project: Project; clip: TrackClip; media?: MediaAsset; volume: number; t: number; playing: boolean; scrubbing: boolean; audioFx?: AudioFxDef[]; onCardState?: (clipId: string, state: CardState, message?: string) => void; localHashes: readonly string[] }) {
   const ref = useRef<HTMLAudioElement>(null);
   const nodeId = cardAudioNodeOf(project, clip);
+  const missingAudio = confirmedMissingAudio(media, project);
   const embedded = clipHasEmbeddedAudio(project, clip, getCard) || !!syncedUserCards().get(clip.cardId)?.embeddedAudio;
   const [cardOffset, setCardOffset] = useState(0);
   // Card runtime blocks use clip-local samples; mediaOffset applies only to the old source media path.
-  const target = nodeId ? Math.max(0, t - clip.start + cardOffset) : targetTimeOf(clip, t);
+  const target = nodeId ? Math.max(0, t - clip.start + cardOffset) : missingAudio ? missingMaterialSourceTime(clip, t) : targetTimeOf(clip, t);
   const [cardUrl, setCardUrl] = useState<string | null>(null);
   const [cardState, setCardState] = useState<"idle" | CardState>("idle");
   // 这一段卡片声音的播放源是当场合成的(图卡、在线页面判轻的内置声音)还是已入库的产物;只给验收探针看(`data-pc-audio-source`)
@@ -45,7 +48,7 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
   // `productFailed` = 这一段的产物地址已经报过读不了;`effectUrl` = 独立音效按配方合成出来的临时地址
   const [productFailed, setProductFailed] = useState(false);
   const [effectUrl, setEffectUrl] = useState<string | null>(null);
-  const effectKey = !nodeId ? clip.soundEffect?.reuseKey : undefined;
+  const effectKey = !nodeId && !missingAudio ? clip.soundEffect?.reuseKey : undefined;
   useEffect(() => { setProductFailed(false); }, [clip.id, clip.cardAudio?.mediaId, clip.mediaId, effectKey]);
   useEffect(() => {
     if (!productFailed || !effectKey) return;
@@ -119,17 +122,17 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
   }, []);
   // 主文档的声音也经换档判据(T1a 审查 #5)。C6.6「音频先留在素材小尺寸」:播放中换了档,声音先接着用上一档,
   // 停下(暂停、拖动松开前的暂停态)再换 —— 两路声音不重叠、不爆音。上一档本来就没出声(挂失败了)时当场换。
-  const wanted = media ? playbackUrl(media, localHashes) : undefined;
+  const wanted = missingAudio ? MISSING_MATERIAL_WAV_URL : media ? playbackUrl(media, localHashes) : undefined;
   const held = useRef<string | undefined>(undefined);
   if (held.current === undefined || !playing || held.current === wanted || !media || ref.current?.error) held.current = wanted;
   return <audio ref={ref}
     onCanPlay={() => { if (nodeId && cardUrl) { setCardState("ready"); onCardState?.(clip.id, "ready"); } }}
     onError={() => {
       // 在线页面:产物的字节取不到(没同步到、素材服务里被清了)→ 换成浏览器合成的播放源
-      if (onlinePage() && !productFailed && (effectKey || (nodeId && embedded))) { setProductFailed(true); return; }
+      if (!missingAudio && onlinePage() && !productFailed && (effectKey || (nodeId && embedded))) { setProductFailed(true); return; }
       if (nodeId && cardUrl) { const message = `${clip.label ?? clip.id} 的卡片声音素材无法读取，请恢复素材或重新生成`; setCardState("error"); onCardState?.(clip.id, "error", message); }
     }}
-    src={nodeId ? (cardUrl ?? undefined) : (effectUrl ?? held.current)} preload="auto" hidden
+    src={nodeId ? (cardUrl ?? undefined) : missingAudio ? MISSING_MATERIAL_WAV_URL : (effectUrl ?? held.current)} preload="auto" hidden
     data-pc-audio-clip={clip.id} data-pc-audio-source={nodeId ? (cardUrl ? (cardLive ? "live" : "product") : undefined) : (effectUrl ? "live" : "product")}
     data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
 }
