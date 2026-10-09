@@ -14,7 +14,7 @@ const fail = code => { throw accountError(503, code); };
  * client certificate; no caller can supply servicePrincipal or a human identity.
  */
 export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs = 5000, scopePrepareSource = null,
-  registrationPurpose = null } = {}) {
+  registrationPurpose = null, workerEventSource = null } = {}) {
   let base;
   try { base = new URL(origin); } catch { fail('run-client-configuration'); }
   const pin = certificateFingerprint(serverFingerprint256);
@@ -87,7 +87,7 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     });
   }
   let scopedRegistration = false;
-  const instanceSession = createAgentInstanceSession({ scopePrepareSource, registrationPurpose, requestRegistration: (name, body) =>
+  const instanceSession = createAgentInstanceSession({ scopePrepareSource, registrationPurpose, workerEventSource, requestRegistration: (name, body) =>
     transmit(`/internal/v2/instances/${name}`, body) });
   async function request(name, fields) {
     if (closed || !paths[name]) throw accountError(503, 'run-client-unavailable');
@@ -130,6 +130,7 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     bindScope: input => instanceSession.bindScope(input),
     scopePrepareFor: input => instanceSession.scopePrepareFor(input),
     scopeIntentFor: input => instanceSession.scopeIntentFor(input),
+    workerEventProofFor: input => instanceSession.workerEventProofFor(input),
     dataProofFor: input => instanceSession.dataProofFor(input),
     conversationControlProofFor: input => instanceSession.conversationControlProofFor(input),
     runAssetHttpProofFor: input => instanceSession.runAssetHttpProofFor(input),

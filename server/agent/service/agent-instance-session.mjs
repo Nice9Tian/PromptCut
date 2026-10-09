@@ -7,6 +7,8 @@ import { RUN_ASSET_PROOF_HEADER, assetHttpTuple, runAssetIssueRequest } from '..
 import { CONVERSATION_CONTROL_ROOT, conversationControlOperations, conversationControlScope } from '../../account/agent-read-control.mjs';
 import { exactScope, validateAgentScopeExpected, validateAgentScopeRecord,
   validateAgentScopeAssignment, validateAgentScopeTerminal } from '../../hosted/agent-run-scope-schema.mjs';
+import { WORKER_EVENT_PROOF_HEADER, workerEventRequest, workerEventProofPayload,
+  workerEventTlsBinding } from '../../agent-service/worker-event-internal.mjs';
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -15,7 +17,8 @@ const operations = new Set(['admit', 'confirmRead', 'queryRead', 'checkAccess', 
 /** One Agent OS process owns one non-exported Ed25519 private key. The request
  * callback is the same pinned mTLS transport later used for run requests.
  * Registration's requestId/key survive an unknown HTTP ACK in this process. */
-export function createAgentInstanceSession({ requestRegistration, scopePrepareSource = null, registrationPurpose = null } = {}) {
+export function createAgentInstanceSession({ requestRegistration, scopePrepareSource = null, registrationPurpose = null,
+  workerEventSource = null } = {}) {
   if (typeof requestRegistration !== 'function') fail('instance-session-configuration');
   if (registrationPurpose !== null && !['control-only', 'run-worker'].includes(registrationPurpose)) fail('instance-session-configuration');
   const pair = generateKeyPairSync('ed25519');
@@ -221,8 +224,27 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
     return { name: INSTANCE_PROOF_HEADER, value: Buffer.from(JSON.stringify({ instanceId: registered.instanceId,
       instanceGeneration: registered.instanceGeneration, signature: signatureOf(payload) })).toString('base64url') };
   }
+  async function workerEventProofFor({ socket, packet, bodyText, nonce }) {
+    if (closed || !registered) fail('instance-not-registered');
+    if (registered.purpose === 'control-only' || !boundScope) fail('instance-scope-unbound');
+    const scope = boundScope, request = workerEventRequest({ body: packet, bodyText });
+    const p = request.packet, target = scope.assignment.target;
+    if (p.authorityId !== registered.authorityId || canonicalJson(p.rootScopeRef) !== canonicalJson(rootRefOf(scope)) ||
+        p.assignmentDigest !== digestOf(scope.assignment) ||
+        ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'instanceId', 'instanceGeneration', 'serviceKid']
+          .some(k => p.binding[k] !== target[k])) fail('instance-worker-event-binding');
+    if (typeof workerEventSource !== 'function') fail('instance-worker-event-source');
+    // The local durable journal owner supplies the exact already recorded packet.
+    // Neither this signer nor a historical assignment replaces fresh Doc access.
+    const observed = await workerEventSource(structuredClone(p));
+    if (closed || !registered || boundScope !== scope) fail('instance-session-closed');
+    if (canonicalJson(observed) !== canonicalJson(p)) fail('instance-worker-event-source');
+    const payload = workerEventProofPayload({ request, channelBinding: workerEventTlsBinding(socket), nonce });
+    return { name: WORKER_EVENT_PROOF_HEADER, value: Buffer.from(JSON.stringify({ v: 1, nonce,
+      signature: signatureOf(payload) })).toString('base64url') };
+  }
   return { register, proofFor, dataProofFor, runAssetIssueProofFor, runAssetHttpProofFor, conversationControlProofFor,
-    scopeIdentity, configureRegistrationScope, bindScope, scopePrepareFor, scopeIntentFor,
+    scopeIdentity, configureRegistrationScope, bindScope, scopePrepareFor, scopeIntentFor, workerEventProofFor,
     identity: () => registered ? { ...registered } : null,
     close() { closed = true; registered = null; challenge = null; boundScope = null; prepared = null; registrationScope = null; } };
 }

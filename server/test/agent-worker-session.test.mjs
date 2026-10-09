@@ -11,9 +11,9 @@ import { instanceProofPayload, instanceTlsBinding } from '../account/agent-insta
 // Real Ed25519/signature validation; registration/local drain and OS lifecycle
 // are controlled adapters here. This is not a Doc/root/production admission.
 async function setup({ source = async value => value, rootRegistration = false, changeChallenge = value => value,
-  changeResult = value => value } = {}) {
+  changeResult = value => value, eventSource = null } = {}) {
   const model = scopeModel(); let wirePublicKey;
-  const session = createAgentInstanceSession({ scopePrepareSource: source,
+  const session = createAgentInstanceSession({ scopePrepareSource: source, workerEventSource: eventSource,
     requestRegistration: async (name, body) => {
       if (name === 'challenge') {
         wirePublicKey = body.publicKey;
@@ -58,6 +58,69 @@ test('worker public PEM/DER refer to one RAM key and retain distinct digest rule
     const other = await setup();
     try { assert.notEqual(other.key.scopePublicKey, x.key.scopePublicKey); } finally { other.session.close(); }
   } finally { x.session.close(); }
+});
+
+function workerPacket(x) {
+  return { v: 1, authorityId: 'doc', rootScopeRef: { rootAuthorityId: x.model.expected.authorityId,
+    slotId: x.model.expected.slotId, epoch: x.record.epoch, recordDigest: digestOf(x.record) },
+  assignmentDigest: digestOf(x.assignment), binding: { ...Object.fromEntries(['projectId', 'conversationId',
+    'messageId', 'runId', 'runGrantId', 'instanceId', 'instanceGeneration', 'serviceKid'].map(k => [k, x.assignment.target[k]])),
+    senderAccountId: 'account-a' }, sourceSeq: 1, eventId: 'worker-event:1', event: { type: 'text', delta: 'kept' } };
+}
+
+test('worker event signer uses its own domain, full original body and current TLS exporter', async () => {
+  const x = await setup({ rootRegistration: true, eventSource: async packet => packet });
+  try {
+    x.session.bindScope({ expected: x.model.expected, record: x.record, assignment: x.assignment });
+    const packet = workerPacket(x), bodyText = JSON.stringify(packet);
+    const socket = { encrypted: true, authorized: true, destroyed: false,
+      exportKeyingMaterial: (_length, label) => { assert.equal(label, 'EXPORTER-PromptCut-Agent-Worker-Event-v1'); return Buffer.alloc(32, 4); } };
+    const proof = await x.session.workerEventProofFor({ socket, bodyText, packet, nonce: 'event-nonce' });
+    const protocol = await import('../agent-service/worker-event-internal.mjs');
+    const parsed = JSON.parse(Buffer.from(proof.value, 'base64url').toString('utf8'));
+    const request = protocol.workerEventRequest({ body: packet, bodyText });
+    const payload = protocol.workerEventProofPayload({ request, channelBinding: protocol.workerEventTlsBinding(socket), nonce: parsed.nonce });
+    assert.equal(proof.name, protocol.WORKER_EVENT_PROOF_HEADER);
+    assert.ok(verify(null, Buffer.from(canonicalJson(payload)), x.key.publicKey, Buffer.from(parsed.signature, 'base64url')));
+    for (const changed of [{ ...payload, path: '/internal/v2/runs/check' }, { ...payload, method: 'GET' },
+      { ...payload, nonce: 'replay-nonce' }, { ...payload, channelBinding: 'a'.repeat(64) },
+      protocol.workerEventProofPayload({ request: protocol.workerEventRequest({ body: packet, bodyText: ' ' + bodyText }),
+        channelBinding: protocol.workerEventTlsBinding(socket), nonce: parsed.nonce })])
+      assert.equal(verify(null, Buffer.from(canonicalJson(changed)), x.key.publicKey, Buffer.from(parsed.signature, 'base64url')), false);
+    assert.throws(() => protocol.workerEventRequest({ body: packet, bodyText: JSON.stringify({ ...packet, sourceSeq: 2 }) }));
+    assert.throws(() => protocol.workerEventRequest({ body: packet, bodyText: null }));
+  } finally { x.session.close(); }
+});
+
+test('event signing requires durable private source and exact bound worker identity', async () => {
+  for (const eventSource of [null, async () => { throw Error('worker-event-not-durable'); },
+    async packet => ({ ...packet, sourceSeq: 2 })]) {
+    const x = await setup({ rootRegistration: true, eventSource });
+    try {
+      x.session.bindScope({ expected: x.model.expected, record: x.record, assignment: x.assignment });
+      const packet = workerPacket(x), socket = { encrypted: true, authorized: true, destroyed: false,
+        exportKeyingMaterial: () => Buffer.alloc(32, 4) };
+      await assert.rejects(x.session.workerEventProofFor({ socket, packet, bodyText: JSON.stringify(packet), nonce: 'n' }));
+      const wrong = { ...packet, binding: { ...packet.binding, runGrantId: 'another-run' } };
+      await assert.rejects(x.session.workerEventProofFor({ socket, packet: wrong, bodyText: JSON.stringify(wrong), nonce: 'n' }));
+    } finally { x.session.close(); }
+  }
+});
+
+test('closed TLS after durable source await cannot sign a worker packet', async () => {
+  let sourceEntered, release;
+  const entered = new Promise(resolve => { sourceEntered = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  const x = await setup({ rootRegistration: true, eventSource: async packet => { sourceEntered(); await wait; return packet; } });
+  try {
+    x.session.bindScope({ expected: x.model.expected, record: x.record, assignment: x.assignment });
+    const packet = workerPacket(x), socket = { encrypted: true, authorized: true, destroyed: false,
+      exportKeyingMaterial: () => Buffer.alloc(32, 4) };
+    const work = x.session.workerEventProofFor({ socket, packet, bodyText: JSON.stringify(packet), nonce: 'n' });
+    const observed = work.catch(error => error);
+    await entered; socket.destroyed = true; release();
+    assert.match((await observed).message, /worker-event-transport/);
+  } finally { release(); x.session.close(); }
 });
 
 test('root-scoped registration binds the exact record and rejects swapped digest/ref/instance', async () => {
