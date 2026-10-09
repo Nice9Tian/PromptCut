@@ -6065,7 +6065,7 @@ test at server\test\account-executor-assembly-mtls.test.mjs:28:1
 test at src\ai\cloud\page-requests.test.mjs:204:1
 ✖ CAU-REV-06 守门:触发执行的入口只有事件流;接口层带委托票据交回 (47.2531ms)
   AssertionError [ERR_ASSERTION]: The input did not match the regular expression /createCloudSession\(\{ api, store, pageId: PAGE_ID, onPageRequest: \(ev\) => runPageRequest\(ev, pageExec\) \}\)/. Input:
-  
+
   '/**\r\n' +
     ' * 云端 Agent 的 React 接线:谁来用、能不能用(`useCloudAgent`)、这一页的云端对话(`useCloudChat`)、\r\n' +
     ' * 桌面版在本机模式下看一眼云端有没有在跑的对话(`useCloudDigest`)。\r\n' +
@@ -6290,7 +6290,7 @@ test at src\ai\cloud\page-requests.test.mjs:204:1
     '  const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);\r\n' +
     '  const projectId = cloud.projectId ?? "";\r\n' +
     '  const accountScope = cloud.accountMode ? `${cloud.accountId ?'... 13066 more characters
-  
+
       at TestContext.<anonymous> (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-instance-http-repair-verification/src/ai/cloud/page-requests.test.mjs:224:10)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1382:25)
