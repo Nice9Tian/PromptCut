@@ -109,3 +109,17 @@ node scripts/probes/agent-run-scope-proof.mjs \
 6. 自有unit/slice按原完整tuple核归属后关闭；日志/SQLite/root链保留；全部自有监听实际关闭；生产四角色PID/NRestarts不变。任何ENODEV/未知或未观察负例按失败，单轮不盲重跑。
 
 先实现并验这个最小本地执行范围，再接真实runner和远端任务闭合。不能用这个OS实验声称模型API服务远端计算已撤销或asset后台任务已结束。
+
+## Linux首包之后的Doc/worker共同接线契约（设计，尚未实现）
+
+根已实际验证fc47062e首包两槽10/10；具体原始证据在producer报告。上面的早期命令/业务联验是当时草案，不是该次实跑范围；当前可信输出必须在`/run/<namespace>/out`，不能放world-writable `/var/tmp`祖先下。以下为根裁定的三级实施接口，非用户逐字段批准。
+
+**准入。** master只选择root配置的slotId及固定端点/证书，不代worker持有或转移grant。worker用每次OS启动独立RAM key登记，Doc从实际持久消息与实时权限准入；同事务形成`assigned-unbound`和现有scope assignment完整target。root核Doc签名并耐久bind后，Doc通过可信reader核同slot/epoch/recordDigest/assignmentDigest/instance/gen/publicKeyDigest，才能confirmRead及执行。此状态只是执行门，不能另复制ACL或覆盖shared-retained例外。不同conversation可用不同槽并行，同conversation下一条仍等原FIFO结清。
+
+**正常终态的三段协议。** c705旧prepare要求resourceWitnessId，而root close先需要Doc terminal与原RAM intent，形成顺序环，必须替换而非伪填引用。原worker在存活时flush真实terminal事件并完成本机drain，签独立`promptcut.agent-run.prepare.v1`域，payload精确绑定`scope:{authorityId,slotId,epoch,recordDigest,assignmentDigest}`、完整assignment target、`readReceiptId/finishReceiptId/outcomeDigest/eventId/eventDigest/drainReceiptId/docControlId/docFenceRevision`。该声明不含closed布尔、不证明OS空。Doc核原RAM签名及当前ledger，把prepare receipt与实际read/data关闭receipt持久化，再签现有scope terminal，其`terminalReceiptDigest`绑定此不可变prepare receipt。worker核terminal后以同RAM签现有scope intent，root耐久存储后才stop。死后Doc只读root完整链、marker/lock/双tuple证据，导入可信投影并同事务核finalizer；不向已死worker求key，不让supervisor重签。Sol已确认可以拆`scopePrepareFor(payload)`与`scopeIntentFor({assignment,terminal})`，不导出自由sign。
+
+**强制终止独立类型。** stop/private/kick/password已持久fence或受信异常退出判据，由Doc从已持久assignment/grant签typed forced terminal，明确fence id/revision/digest与完整target；不得补原RAM intent或记正常done。异常无终态且尚无可信强制授权时仍pending。root固定旧scope FD与bound记录：旧MainPID已消失但子仍在原固定组，可在service Invocation/已加载unit配置/旧scope归属一致、无替代MainPID的前提下stop精确自有unit并等原FD真pop0；新MainPID、cgroup/Invocation改变或归属不明保锁拒绝。Doc只有导入真实forced closed且重核当前fence后才结清原FIFO，保留failed/interrupted实际原因，不把强制中止显示成功。
+
+**未分配退役独立类型。** ready失败且从未admit/bind的槽，由root按不可变ready记录与单槽互斥确认无assignment后执行typed unassigned retire，只记槽生命周期，不创建任务终态或释放别人的FIFO。bind与retire共用root锁，Doc尚未确认bound的grant只能由精确失败对账收口，不能新实例空库存替代旧证据。
+
+**下一包拟租约（待root分配）。** Doc侧`run-authority.mjs`、`agent-instance-authority.mjs`、`run-internal.mjs`、`doc-agent-assembly.mjs`及新`agent-run-scope-doc.mjs`/专属测试：唯一Doc签发与rootreader导入入口；从root指定干净共同基点独立提交，不盲合含c705的本分支。scope schema/publisher/reader及OS probe的forced/unassigned增量须另明确租约，保持normal类型原义。Sol持worker/master、session/run-client的RAM签名消费者和实际事件/drain实现，双方不同时写。实际producer/consumer/Doc SQLite及Linux probe须配对验：A父退子仍持资源时pending/B保持；正常或forced原FD空且marker耐久后才释放A的原FIFO；missing prepare的normal、混target、新实例替代、锁/缺marker与重启回退全拒。当前只完成设计，未更改runtime或启动新实验。
