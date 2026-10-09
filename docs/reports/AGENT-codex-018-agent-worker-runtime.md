@@ -57,3 +57,5 @@ task只接受projectId/conversationId/requestId，不能携grant或instance身�
 只读发现Hosted factory显式参数列表会丢task四接口；root已窄扩 `create-agent-service.mjs` 仅四参数解构/传原accountRunner，不改LAN/default。新实际factory调用回归同时核singleTask参数真正到manager、durableevent/drain hook被调用及旧default仍非task，而不是只看manager纯目标推断assembly挂通。
 
 新增factory目标1e4首4/3/1、252.6671ms，因test传空conversationClient被原构造守门503正确拒；TMP `pc-worker-task-1e4c46a0-target.log`保留。测试改为具备原必需方法且调用一律throw的human-client adapter；本测试不做human读，不能用freeACL代替真实服务，也不改生产constructor。
+
+固定5324874d目标4/3/1、271.7113ms，实际factory/单任务断言都已到达，但fixture清理顺序失败：早登记setup after hook先rm父目录，较晚登记Hosted service close尚未关闭自己的SQLite handle，Windows实际EPERM。TMP `pc-worker-task-5324874d-target.log`保留，不拿断言成功算通过。改新测试为本体try/finally先await实际service.close，再运行setup后置清理；不吞EPERM/改重试次数/改产品关闭行为。

@@ -85,14 +85,15 @@ test('Hosted factory actually passes task, assignment, events and drain hooks; d
     .map(name => [name, unavailable]));
   const service = createHostedAgentService({ ...x.options, accountMode: true, requireAccountRunner: true,
     conversationClient, readIntentsFile: path.join(x.f.dir, 'hosted-intents.sqlite'), runEventsSink: x.events });
-  t.after(async () => { await service.close(); });
-  assert.equal(service.describe().singleTask, true);
-  await assert.rejects(service.runManager.resumeQueued(), /run-outcome-unavailable/);
-  assert.equal(x.calls.model, 1); assert.equal(x.calls.hook.length, 1);
-  const ordinary = createHostedAgentService({ accountMode: true, requireAccountRunner: true,
-    conversationClient, runClient: x.options.runClient, serviceKid: x.options.serviceKid,
-    instanceId: x.options.instanceId, runnerFactory: x.options.runnerFactory,
-    readIntentsFile: path.join(x.f.dir, 'ordinary-intents.sqlite') });
-  try { assert.equal(ordinary.describe().singleTask, undefined); }
-  finally { await ordinary.close(); }
+  try {
+    assert.equal(service.describe().singleTask, true);
+    await assert.rejects(service.runManager.resumeQueued(), /run-outcome-unavailable/);
+    assert.equal(x.calls.model, 1); assert.equal(x.calls.hook.length, 1);
+    const ordinary = createHostedAgentService({ accountMode: true, requireAccountRunner: true,
+      conversationClient, runClient: x.options.runClient, serviceKid: x.options.serviceKid,
+      instanceId: x.options.instanceId, runnerFactory: x.options.runnerFactory,
+      readIntentsFile: path.join(x.f.dir, 'ordinary-intents.sqlite') });
+    try { assert.equal(ordinary.describe().singleTask, undefined); }
+    finally { await ordinary.close(); }
+  } finally { await service.close(); }
 });
