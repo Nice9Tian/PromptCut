@@ -206,6 +206,14 @@ const enabled = (page, selector) => page.waitForFunction(query => {
   const element = document.querySelector(query); return element && !element.disabled;
 }, { timeout: TIMEOUT }, selector);
 const waitVisible = (page, selector) => page.waitForSelector(selector, { visible: true, timeout: TIMEOUT });
+async function waitUntil(check, label, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  throw new Error(`timeout:${label}`);
+}
 const waitForVisibleUserMessage = (page, expectedText) => page.waitForFunction(expected => {
   const panel = document.querySelector('[data-pc="cloud-ai-panel"]:not([data-inactive="1"]):not([aria-hidden="true"])');
   const list = panel?.querySelector('.ai-messages');
@@ -500,9 +508,9 @@ async function main() {
     result.fence = 'confirmed-by-real-service';
     check(result.network.some(entry => entry.page === 'owner' && entry.path.endsWith('/visibility') && entry.status === 200),
       'private-switch-real-http-200');
-    const memberReadClosed = await waitFor(() => result.eventReads.some(entry => entry.page === 'member' &&
+    const memberReadClosed = await waitUntil(() => result.eventReads.some(entry => entry.page === 'member' &&
       entry.path.endsWith('/events') && entry.status === 200 && entry.lifecycle !== 'open'),
-    'ordinary member old events stream close after private fence', TIMEOUT).then(() => true, () => false);
+    'ordinary-member-old-events-stream-close-after-private-fence', TIMEOUT).then(() => true, () => false);
     let memberMessageCleared = false;
     try {
       await member.waitForFunction(() => {
