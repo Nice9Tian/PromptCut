@@ -13,7 +13,8 @@ export const REAL_RUNNER_TEXT = '真实文档短任务已执行；关闭结算�
 export const REAL_RUNNER_NAME = 'Agent actual document edit';
 export const REAL_RUNNER_PROMPT = '验证真实工具与项目修改。\n```mock-script\n' + JSON.stringify([
   { tool: 'get_project', input: {} }, { tool: 'get_selection', input: {} },
-  { tool: 'report_progress', input: { final: false, stage: '真实工具短链', done: ['已读真实项目与选区'], todo: ['等待关闭结算'] } },
+  { tool: 'report_progress', input: { final: false, has_done: true, has_todo: true, has_problem: false,
+    stage: '真实工具短链', done: ['已读真实项目与选区'], todo: ['等待关闭结算'], problems: [] } },
   { tool: 'set_project_meta', input: { name: REAL_RUNNER_NAME } },
   { say: REAL_RUNNER_TEXT },
 ]) + '\n```';
