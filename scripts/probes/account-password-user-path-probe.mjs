@@ -282,6 +282,11 @@ async function changePasswordThroughWebsite(page, account, checkPrefix = '') {
     .then(response => ({ response }), () => ({ response:null }));
   const eventSnapshot = () => page.evaluate(() => ({ ...window.__pcPasswordFormDiagnostics,
     invalidFields:[...window.__pcPasswordFormDiagnostics.invalidFields] }));
+  const focusSnapshot = () => page.evaluate(() => ({ visibilityState:document.visibilityState,
+    hasFocus:document.hasFocus() }));
+  result.passwordRuntime.focusBeforeBringToFront = await focusSnapshot();
+  await page.bringToFront();
+  result.passwordRuntime.focusAfterBringToFront = await focusSnapshot();
   result.passwordRuntime.eventsBeforeClick = await eventSnapshot();
   try {
     await submit.click();
@@ -291,7 +296,13 @@ async function changePasswordThroughWebsite(page, account, checkPrefix = '') {
     const safeClass = value => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_$]{0,80}$/.test(value) ? value : 'Other';
     result.passwordRuntime.clickErrorType = safeClass(error?.name);
     result.passwordRuntime.clickErrorConstructor = safeClass(error?.constructor?.name);
-    result.passwordRuntime.clickErrorFrames = String(error?.stack ?? '').split(/\r?\n/).slice(1, 9).map(line =>
+    const safeMessage = typeof error?.message === 'string' ? error.message : '';
+    result.passwordRuntime.clickProtocolMethod = safeMessage.match(/Protocol error \(([A-Za-z0-9_.]+)\)/)?.[1] ?? null;
+    result.passwordRuntime.clickProtocolReason = /timed.?out|timeout/i.test(safeMessage) ? 'timed-out' :
+      /target.*closed|session.*closed/i.test(safeMessage) ? 'target-closed' :
+        /execution context.*(destroyed|not found)|context.*lost/i.test(safeMessage) ? 'context-lost' :
+          /invalid (parameters|params)|parameter.*invalid/i.test(safeMessage) ? 'invalid-parameters' : 'other';
+    result.passwordRuntime.clickErrorFrames = String(error?.stack ?? '').split(/\r?\n/).slice(1, 17).map(line =>
       line.replace(/https?:\/\/[^\s)]+/g, value => {
         try { const url = new URL(value); return `${url.origin}${url.pathname}`; } catch { return '[url]'; }
       }).replace(/file:\/\/[^\s)]+/g, value => {
