@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { scopeModel, pair, signed } from './agent-run-scope-fixture.mjs';
 import { digestOf } from '../account/ledger.mjs';
 import { inspectAgentScopeSource, createAgentScopeReader } from '../hosted/agent-run-scope-reader.mjs';
@@ -30,6 +32,25 @@ test('single generation admits one signed grant; exact bind retry is idempotent,
   await m.run('bind', { assignment: original }); assert.equal((await read(m)).assignment.target.runGrantId, 'grant-1');
   await assert.rejects(m.run('bind', { assignment: m.assignment({ conversationId: 'other', runGrantId: 'other' }) }), { code: 'agent-scope-assignment-conflict' });
   assert.deepEqual(m.files.get('assignment-1.json'), original); assert.ok(m.files.has('.publisher.lock'));
+});
+test('terminal retry uses identical old intent; changed terminal cannot rewrite closed history', async () => {
+  const m = await bound(), c = m.closing(); await m.run('close', c);
+  const old = structuredClone(m.files.get('closure-1.json')), stops = m.calls.filter(x => x === 'stop').length;
+  await m.run('close', c); assert.equal(m.calls.filter(x => x === 'stop').length, stops);
+  const { signature, ...body } = c.terminal; body.finish.finishReceiptId = 'another-finish';
+  const terminal = signed(body, m.doc.privateKey);
+  await assert.rejects(m.run('close', { terminal, intent: c.intent })); assert.deepEqual(m.files.get('closure-1.json'), old);
+});
+test('fresh generation cannot reuse old runGrantId even with a new valid doc signature', async () => {
+  const m = await bound(); await m.run('close', m.closing()); await m.run('start');
+  await assert.rejects(m.run('bind', { assignment: m.assignment({ runGrantId: 'grant-1' }) }), { code: 'agent-scope-grant-reused' });
+  assert.equal(m.files.has('assignment-2.json'), false);
+});
+test('RAM key reuse across OS generations is rejected before a new publication', async () => {
+  const m = await bound(), old = m.files.get('epoch-1.json').worker; await m.run('close', m.closing());
+  const originalIdentity = m.io.identity; m.io.identity = async r => ({ ...await originalIdentity(r), ...old });
+  await assert.rejects(m.run('start'), { code: 'agent-scope-generation-reused' });
+  assert.equal(m.files.has('publication-2-ready.json'), false); assert.ok(m.files.has('.publisher.lock'));
 });
 test('active slot cannot start new OS generation', async () => {
   const m = await initialize(); await assert.rejects(m.run('start'), { code: 'agent-scope-slot-occupied' });
@@ -86,6 +107,12 @@ test('Agent reservation domain cannot be exchanged for Asset, and trusted anchor
   assert.throws(() => validateAgentScopeReservation(r, m.expected));
   await assert.rejects(inspectAgentScopeSource({ read: m.io.read, expected: m.expected, configuredAnchorDigest: 'f'.repeat(64) }), { code: 'agent-scope-anchor-or-lock' });
 });
+test('unknown/prototype phases cannot skip publication checks', async t => {
+  for (const phase of ['__proto__', 'constructor', 'finished', null, {}]) await t.test(String(phase), async () => {
+    const m = await bound(); m.files.get('current.json').phase = phase;
+    await assert.rejects(read(m), { code: 'agent-scope-history' });
+  });
+});
 test('real TMP file post-link directory barrier failure leaves visible marker AND exclusion lock', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-agent-scope-fsync-'));
   const release = await openPublisherLock(dir, { directoryBarrier: async () => {} });
@@ -102,4 +129,14 @@ test('Windows is never promoted to Linux root by an injected callback or valid c
   const m = scopeModel(); await assert.rejects(runAgentScopePublisher({ configFile: 'unused', mode: 'initialize' }), { code: 'agent-scope-linux-root-required' });
   await assert.rejects(createRootScopeRuntimeV2({ expected: scopeRuntimeExpected(m.expected) }), { code: 'publisher-linux-root-required' });
   await assert.rejects(createAgentScopeReader({ registryDir: os.tmpdir(), expected: m.expected, configuredAnchorDigest: 'f'.repeat(64) }).read(), { code: 'agent-scope-linux-required' });
+});
+test('probe/worker CLI guards reject before any listener, and child actual close is awaited', async () => {
+  for (const relative of ['../../scripts/probes/agent-run-scope-proof.mjs', '../../scripts/probes/fixtures/agent-run-scope-worker.mjs']) {
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [fileURLToPath(new URL(relative, import.meta.url)), '--invalid'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = ''; child.stdout.on('data', b => { output += b; }); child.stderr.on('data', b => { output += b; });
+      child.once('error', reject); child.once('close', code => resolve({ code, output }));
+    });
+    assert.equal(result.code, 1); assert.match(result.output, /"ok":false/);
+  }
 });

@@ -33,3 +33,35 @@ CLI 模式为 initialize / start / bind / close。initialize 必须 root 显式 
 文件为 current.json、anchor.json、reservation.json、reservation-N.json、epoch-N.json、assignment-N.json、terminal-N.json、intent-N.json、closure-N.json、publication-N-{ready,bound,closed}.json。anchor 摘要需 root 外部配置，不由 reader 自信任。reader 验全历史和 checkpoint，锁及 head 前后双读，只返回 record/assignment/terminal/closure 与新 checkpoint，不写任何 doc 账本。签名生产者及 finalizer 后包接；本包 Linux 实验仅受控 Doc 签发。
 
 首块 node --check（schema、两 publisher、新 test）及 diff-check 通过；尚未运行 npm、类型或 Linux。所有纯模型的 OS 回调明确不构成真实 kernel witness。
+
+## 首轮本机验证
+
+固定 4c5401cb 首次 npm 专属（agent-run-scope-core + 原 Asset publisher/schema 两整文件）99/99，0 failed/cancelled/skipped，353.2699 ms，外层 789 ms；原日志系统 TMP `pc-agent-run-scope-4c5401cb-target-1.log`。没有 native retry，没有业务 listener。4c 产品加尚未提交的实验源码时类型首次 0 错，9010 ms，日志 `pc-agent-run-scope-type-1.log`；该结果不代替最终固定源类型。
+
+追加代码自审将 phase 显式枚举，防 JavaScript prototype 属性名被当阶段序号；补对应纯反例。固定 FD close 失败也保锁，不能在 finally 中因先前 durable=true 解锁。追加同 terminal 幂等/异 terminal、旧 grant、旧 RAM key 重用拒绝测试。
+
+## root 单次 Linux 实验入口（尚未执行）
+
+源码 `scripts/probes/agent-run-scope-proof.mjs`、`scripts/probes/fixtures/agent-run-scope-worker.mjs`。两个槽只是实验数量，不是生产并发默认。worker 是隔离受控驱动，不是生产 Agent：真实 RAM Ed25519、真实 pinned mTLS、父/子文件 FD 和 TCP，无模型、工具业务或 Doc admission。Doc assignment/terminal 由 root 独立新实验 issuer 签发。全程不把测试自己写的 closed row 当根证据。
+
+root 预建两个名称严格为 `pcagentrunproof<同一16位随机hex>a.service` / `...b.service` 的固定 unit，各自新 root 目录、公开 reservation 目录、由目标非 root UID 拥有的 holdFile 父目录；每槽独立 registryDir/authorityId/slotId/端口。所有可信配置放全祖先 root-owned、无组/他人写权限的 `/run/<唯一实验目录>`；输出用新 `/var/tmp/<唯一实验目录>/out`，脚本只 exclusive mkdir 这一个新 out，不 chmod 既有路径。
+
+service 必须 `Type=simple; User=<实验UID>; Restart=no; KillMode=control-group; Delegate=no; TimeoutStopSec=5`，`ExecStart=/usr/bin/node <可遍历的固定源码>/scripts/probes/fixtures/agent-run-scope-worker.mjs --config <worker配置>`。基础 unit **不能写 Slice=system.slice**：之前真实 systemd249 已证明其与 runtime drop-in 赋值不符合本 adapter 前提。runtimeAdapter 精确 root-owned fragment 路径及 SHA256、baseDropIns 白名单、`/run/systemd/system/<unit>.d/90-promptcut-root-slice.conf`；原文件存在须有该 publisher 自有 receipt，未知配置一律拒绝。root 所有操作使用同一外部互斥约定，不允许其它 controller 同时启停这两个 unit。
+
+端口选 6540/6541（A HTTPS/observer）、6542/6543（B），脚本预查完整 6540–6549 无监听。root 另给实际节点窗口，本 Agent 未用这些端口。新 CA/root client/worker server 证书与私钥只在本实验目录，root 配置带精确 pin；worker 的 clientCertFile 真证书计算值也必须匹配配置。私钥、signature、exporter 不打印。
+
+probe 配置精确：`{v:1,issuerPrivateKeyFile,protectedUnits:[账号unit,docunit,assetunit,nginxunit],slots:[{publisherConfigFile,workerConfigFile},{publisherConfigFile,workerConfigFile}]}`。四个生产 unit 只读 MainPID/NRestarts/ActiveState 前后必须相同；探针不控制这些 unit。
+
+publisher 配置精确：`{v:1,expected,registryDir,identity:{origin,keyFile,certFile,caFile},runtimeAdapter,configuredAnchorDigest:null}`。expected 为 `{authorityId,slotId,docAuthorityId,docPublicKey,serviceIdentity:'agent',uid,unit,clientFingerprint256,serverFingerprint256,closurePolicy:{kind:'systemd-slice',unitNamespace,cgroupRoot:'/sys/fs/cgroup',placement:'direct-child',singleEpoch:true}}`。docPublicKey 是新实验 Ed25519 SPKI DER 的 base64；不是生产密钥。首次初始化返回 anchorDigest，probe 将精确该摘要传给后续 bind/close/reader，不重写配置或自信任旧文件。
+
+worker 配置精确：`{v:1,expected,registryDir,port,observerPort,holdFile,tls:{keyFile,certFile,caFile,clientCertFile,rootClientFingerprint256}}`。registry/config 公共元数据可读，私钥文件仅正确 UID/root 可读；启动后 reservation 身份只读一次，RAM 私钥不落盘。对子进程 SIGTERM 用持续注册 handler 加 stopping 幂等，避免 systemd 二次 SIGTERM 抢掉两秒负例。
+
+运行命令：`node scripts/probes/agent-run-scope-proof.mjs --config /run/<唯一目录>/probe.json --out /var/tmp/<唯一目录>/out`。不自动重跑。采样/peer 等待使用30秒阶段期限，底层已审 root systemctl 原语保留120秒硬超时（不为探针改 Asset 安全原语）；因此不能宣称总进程保证30秒。root 外层 bounded runner 需保留原始结果并按精确 tuple 收尾，不杀未知 PID。
+
+A/B 实际先初始化、bind、两角色 TCP/文件持有确认。先经真实 mTLS 请求原 RAM key 签 intent；publisher 锁内将完整 Doc terminal 与 intent fsync，再 stop。A MainPID birth 消失、子 birth 存在且文件/TCP仍持有、原 scope 仍 active/populated1 时，真实 root reader 必须因锁拒绝；原固定 eventsFD 最终 populated0、父子 birth gone、双 EOF+close，B 原 tuple/文件/连接仍活才继续。closure fsync 后才释放 scope，最终 marker+无锁才供 reader 导入。B 随后独立关闭。
+
+缺 marker/有锁/混配 B closure/替代空实例的反例在独立 root-owned **复制目录**上执行真实 reader，绝不改成功原链。正常路径只由 publisher stop 精确自有 service/slice，不删除 unit、drop-in、数据或锁。失败保留未关闭 unit 元数据交 root 按 receipt/tuple 处理，不自动第二次 stop/retry。结果输出 checks/samples/实际 retainedUnits/listeners/四生产 unit 前后元数据与耗时，不输出签名或密钥。
+
+### 源闭包
+
+新增 schema、reader、publisher、probe、worker；既有 Asset publisher/schema；既有 `server/account/ledger.mjs` 及其静态依赖。root 可按固定提交的 Git 文件闭包导出，不能拿 G WIP 或本机绝对路径作运行依赖。Doc 签名业务 producer、真实执行器/远端任务资源引用、doc finalizer/SQLite 闭合投影均未接；该实验通过也只证明单 run root 生命周期和可信源，不能声称整个 Agent FIFO/生产 ready。
