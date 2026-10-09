@@ -92,9 +92,9 @@
 | remotion 式、motion 式 | 2D 动效卡的两种写法（2026-10-09 用户定）。remotion 式：画面只由时间 t 和参数决定，不依赖前后状态，跳到任意一帧都是直接算；只是这种写法，不使用 Remotion 这个库。motion 式：有状态，要从起点一帧帧推进。对应代码里的 `frameMode: "direct"` 与 `"stateful"`。取代原先对外的三分法（随机访问卡、可定位的推帧卡、只能逐帧推的卡），那三个词只在软件内部的优化里用 | 二 | ../plan/render-standard.md |
 | 部件 | 组合卡的零件，有自己的框、参数和进场时机 | 二 | product/cards.md |
 | 约定封装 | 一张卡对外唯一的样子，Agent 和代码页看的都是它 | 二 | product/cards.md |
-| 随机访问卡 | 按时间直接算出画面的卡 | 三 | mechanism/cards.md |
-| 可定位的推帧卡 | 能把动画时间一步钉到目标帧的有状态卡 | 三 | mechanism/cards.md |
-| 只能逐帧推的卡 | 自己累积状态、只能从起点逐帧推进的卡 | 三 | mechanism/cards.md |
+| 随机访问卡 | 〔2026-10-09 起不再作为对外的分类，就是「remotion 式」〕按时间直接算出画面的卡 | 三 | mechanism/cards.md |
+| 可定位的推帧卡 | 〔2026-10-09 起不再作为对外的分类，属于「motion 式」，只在软件内部的优化里用〕能把动画时间一步钉到目标帧的有状态卡 | 三 | mechanism/cards.md |
+| 只能逐帧推的卡 | 〔2026-10-09 起不再作为对外的分类，属于「motion 式」〕自己累积状态、只能从起点逐帧推进的卡 | 三 | mechanism/cards.md |
 | canvas 卡 | 画在 2D canvas 或 WebGL 上的卡 | 三 | mechanism/cards.md |
 | 独立卡、源依赖卡、下层依赖卡 | 按依不依赖下层分的三类 | 三 | mechanism/cards.md |
 | 审阅表 | 卡片分类的权威记录，优先于卡片源码里的声明 | 三 | mechanism/cards.md |
