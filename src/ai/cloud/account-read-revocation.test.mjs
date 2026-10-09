@@ -37,8 +37,9 @@ test("账号读取 EOF 清正文、待折增量和附件关联；从 seq 0 重�
   const pageToolStarted = deferred();
   const pageToolFinish = deferred();
   const replayStarted = deferred();
+  const replayedPageRequest = deferred();
   const afters = [];
-  let streams = 0, pageResults = 0;
+  let streams = 0, pageResults = 0, pageRequests = 0;
   const api = {
     async send() { return { runId: "r2", seq: 4 }; },
     async abort() { assert.fail("读取关闭不能停止服务端任务"); },
@@ -57,13 +58,15 @@ test("账号读取 EOF 清正文、待折增量和附件关联；从 seq 0 重�
         return; // 服务端关闭旧 SSE，不伪造 403 或 revoked 事件。
       }
       replayStarted.resolve({ after, messagesBeforeReplay: store.get(), viewBeforeReplay: session.getView() });
+      yield { type: "page.request", id: "old-page-request" };
+      replayedPageRequest.resolve();
       yield { type: "user", seq: 1, runId: "r2", prompt: "replayed authorized body" };
       await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
     },
   };
   const session = createCloudSession({
     api, store, accountMode: true, pageId: "page", flushMs: 60_000, backoff: () => 1,
-    onPageRequest: async () => { pageToolStarted.resolve(); await pageToolFinish.promise; return { id: "old-page-request", ok: true }; },
+    onPageRequest: async () => { pageRequests++; pageToolStarted.resolve(); await pageToolFinish.promise; return { id: "old-page-request", ok: true }; },
   });
   t.after(() => { disconnect.resolve(); pageToolFinish.resolve(); session.close(); });
 
@@ -79,6 +82,8 @@ test("账号读取 EOF 清正文、待折增量和附件关联；从 seq 0 重�
   assert.deepEqual(replay.messagesBeforeReplay, [], "旧正文在重连前已清除");
   assert.equal(replay.viewBeforeReplay.queue, null, "旧队列快照已清除");
   assert.deepEqual(replay.viewBeforeReplay.senders, {}, "旧发言者缓存已清除");
+  await replayedPageRequest.promise;
+  assert.equal(pageRequests, 1, "断线重放同一个 page.request ID 不会重复执行页面工具");
   pageToolFinish.resolve();
   await waitFor(() => store.get().some(message => message.role === "user" && message.text === "replayed authorized body"));
   await new Promise(resolve => setTimeout(resolve, 10));

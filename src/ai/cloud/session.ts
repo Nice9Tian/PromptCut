@@ -132,7 +132,6 @@ export function createCloudSession(deps: CloudSessionDeps) {
     if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
     queued = [];
     pendingAttachments.clear();
-    answered.clear();
     lastSeq = 0;
     queue = null;
     senders = {};
