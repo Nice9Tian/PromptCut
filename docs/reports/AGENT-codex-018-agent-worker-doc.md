@@ -9,3 +9,11 @@
 第二阶段：normal before-death prepare签名→Doc实际read/data关闭→Doc terminal→原RAM intent→root原FD实空→Doc可信reader导入与FIFO finalizer。forced和unassigned独立类型，不补死worker签名、不把未知资源算空。保留retained政策、并行conversation和完整原grant/currentRun绑定。
 
 所有首次失败保存TMP。仅授权专属目标/类型及6712–6721自有mTLS窗口；不开full/浏览器/模型/节点。生产尚未挂载，报告逐项区分纯schema/SQLite/受控TLS/实际root Linux证据。
+
+## 第一块：公钥映射与assignment执行门
+
+服务端`agentScopeKeyMapping`从实际Ed25519公钥规范导出PEM/DER，Doc原publicKeyDigest仍digestOf(PEM)，另scopePublicKeyDigest=digestOf(DER base64)，仅同公钥字节相等才关联。challenge可选rootScopeRef exact4；启用scope模式时缺ref拒绝。root控制面identity RPC的clientFingerprint256不充worker Doc客户端pin，slot另配workerServiceKid/workerFingerprint256且逐次核trusted transport。
+
+注册从完整root链ready取instanceId，同request同key可幂等；admit在同SQLite事务生成assignment并占原currentRun，root真正bound以前confirmRead拒绝且无receipt，query/check同闸。独立`scopeAssignment`operation及`/internal/v2/runs/assignment`只返回原tuple签名记录/执行门状态。持久required重启后缺模块拒绝；root锁/失败refresh清旧缓存。第一块normalfinish暂明确503，不能沿旧main finish直接done释放FIFO；后续同本包接三段终态，不以此pending当整体完成。
+
+验证首轮原始日志：TMP `pc-worker-doc-assignment-target-1.log`，3/3、0fail/skip、153.5352ms；为真实SQLite/签名/完整root链校验器，rootOS与transport是明确受控模型，非TLS/OS证明。首回归TMP `pc-worker-doc-assignment-regression-1.log`，78项/77pass/0fail/1skip、627.0225ms；唯一skip未配置actual VH provider，保留该首次结果，后续显式配置再验。未业务监听/full/模型/节点。

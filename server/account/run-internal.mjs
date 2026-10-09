@@ -7,7 +7,7 @@ const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantI
 const readFields = [...binding, 'requestId', 'readIntentId', 'promptDigest', 'prompt'];
 const shapes = Object.freeze({ admit: ['projectId', 'conversationId', 'requestId'], read: readFields,
   'read/query': readFields, check: ['projectId', 'runGrantId'], finish: [...binding, 'requestId'],
-  ticket: ['projectId', 'runGrantId', 'conversationId', 'purpose'], pending: [] });
+  assignment: [...binding, 'requestId'], ticket: ['projectId', 'runGrantId', 'conversationId', 'purpose'], pending: [] });
 const fail = (status, code) => { throw accountError(status, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 const response = (res, status, body) => {
@@ -69,7 +69,7 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
         if (action === 'check' && !['read', 'write'].includes(body.action)) fail(400, 'invalid-run-action');
         invocation = await authenticateInvocation({ req, servicePrincipal, body,
           operation: ({ admit: 'admit', read: 'confirmRead', 'read/query': 'queryRead', finish: 'finish',
-            check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
+            assignment: 'scopeAssignment', check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
         if (!invocation?.servicePrincipal || typeof invocation.release !== 'function') fail(503, 'instance-consumer-unavailable');
         servicePrincipal = invocation.servicePrincipal;
       }
@@ -78,6 +78,10 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       else if (action === 'read') result = await runAuthority.confirmRead(input);
       else if (action === 'read/query') result = await runAuthority.queryRead(input);
       else if (action === 'finish') result = await runAuthority.finish(input);
+      else if (action === 'assignment') {
+        if (typeof runAuthority.scopeAssignment !== 'function') fail(503, 'run-scope-unavailable');
+        result = await runAuthority.scopeAssignment(input);
+      }
       else if (action === 'pending') {
         if (typeof listPendingRuns !== 'function') fail(503, 'run-pending-unavailable');
         result = await listPendingRuns({ servicePrincipal });

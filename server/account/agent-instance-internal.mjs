@@ -76,11 +76,12 @@ export function createAgentInstanceInternalHandler({ instanceAuthority, agentFin
       for await (const chunk of req) { size += chunk.length; if (size > 16 * 1024) fail(413, 'instance-body-too-large'); chunks.push(chunk); }
       let body;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail(400, 'invalid-body'); }
-      if (!exact(body, action === 'challenge' ? ['requestId', 'publicKey'] : ['challenge', 'signature']))
+      if (!exact(body, action === 'challenge' ? ['requestId', 'publicKey',
+        ...(Object.hasOwn(body ?? {}, 'rootScopeRef') ? ['rootScopeRef'] : [])] : ['challenge', 'signature']))
         fail(400, 'invalid-instance-body');
       const servicePrincipal = await resolveServicePrincipal({ socket: req.socket });
-      const result = action === 'challenge' ? instanceAuthority.beginRegistration({ ...body, servicePrincipal }) :
-        instanceAuthority.register({ ...body, servicePrincipal });
+      const result = await (action === 'challenge' ? instanceAuthority.beginRegistration({ ...body, servicePrincipal }) :
+        instanceAuthority.register({ ...body, servicePrincipal }));
       // Only persistent public challenge/registration results reach the wire.
       reply(res, 200, { ok: true, result });
     } catch (error) { reply(res, error.status ?? 503, { ok: false, code: error.code ?? 'instance-unavailable' }); }

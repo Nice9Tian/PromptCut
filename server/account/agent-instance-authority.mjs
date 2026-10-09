@@ -46,10 +46,10 @@ export function instanceRunScope(operation, input) {
     conversationId: input.conversationId, requestId: input.requestId };
   if (['resolveRunPrincipal', 'authorizeQuery'].includes(operation)) return { operation, ...target };
   if (operation === 'checkAccess') return { operation, ...target, action: input.action };
-  if (['confirmRead', 'queryRead', 'finish'].includes(operation)) {
+  if (['confirmRead', 'queryRead', 'finish', 'scopeAssignment'].includes(operation)) {
     const value = { operation, ...Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId',
       'runGrantId', 'requestId'].map(key => [key, input[key]])) };
-    if (operation !== 'finish') Object.assign(value, { readIntentId: input.readIntentId, promptDigest: input.promptDigest });
+    if (['confirmRead', 'queryRead'].includes(operation)) Object.assign(value, { readIntentId: input.readIntentId, promptDigest: input.promptDigest });
     return value;
   }
   deny(403, 'instance-operation-forbidden');
@@ -74,7 +74,7 @@ function signed(payload, signature, key) {
  * This proves key possession on the live TLS channel, not OS/cgroup closure.
  */
 export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
-  verifyClosureWitnessInState, failpoint = () => {} } = {}) {
+  verifyClosureWitnessInState, scopeAuthority, failpoint = () => {} } = {}) {
   if (!ledger?.transaction || !ledger?.read || typeof verifyTransportInState !== 'function')
     deny(503, 'instance-authority-configuration');
   const invocations = new Map();
@@ -95,43 +95,55 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
     if (value.serviceId !== svc.serviceId || value.serviceKid !== svc.serviceKid) deny(403, 'instance-service-mismatch');
     return value;
   }
-  function beginRegistration({ servicePrincipal, requestId, publicKey: requestedKey }) {
+  function beginRegistration({ servicePrincipal, requestId, publicKey: requestedKey, rootScopeRef }) {
     if (!text(requestId)) deny(400, 'instance-request-invalid');
     const key = publicKey(requestedKey);
-    return ledger.transaction(state => {
+    const begin = () => ledger.transaction(state => {
       tables(state); const svc = transport(state, servicePrincipal);
+      if ((rootScopeRef || state.agentRunScopesV1?.required) && !scopeAuthority) deny(503, 'instance-scope-unavailable');
+      const scoped = scopeAuthority ? scopeAuthority.registrationInState(state, { publicKey: key, rootScopeRef, transport: svc }) : null;
       const id = digestOf({ serviceId: svc.serviceId, serviceKid: svc.serviceKid, requestId });
       const old = state.agentRegistrationsV2[id];
       if (old) {
-        if (old.publicKey !== key) deny(409, 'instance-registration-mismatch');
+        if (old.publicKey !== key || canonicalJson(old.challenge.rootScopeRef ?? null) !== canonicalJson(rootScopeRef ?? null)) deny(409, 'instance-registration-mismatch');
         return clone(old.challenge);
       }
       const challenge = { domain: 'promptcut.agent-instance.register.v1', authorityId: ledger.authorityId,
         serviceId: svc.serviceId, serviceKid: svc.serviceKid, requestId, challengeId: `instance-challenge_${randomUUID()}`,
-        nonce: randomUUID(), publicKeyDigest: digestOf(key) };
+        nonce: randomUUID(), publicKeyDigest: digestOf(key), ...(scoped ? {
+          rootScopeRef: scoped.rootScopeRef, docPublicKeyDigest: scoped.docPublicKeyDigest,
+          scopePublicKeyDigest: scoped.scopePublicKeyDigest } : {}) };
       state.agentRegistrationsV2[id] = { publicKey: key, challenge, result: null };
       failpoint('instance-challenge-before-commit'); return clone(challenge);
     });
+    return scopeAuthority ? scopeAuthority.refresh(rootScopeRef).then(begin) : begin();
   }
   function register({ servicePrincipal, challenge, signature }) {
-    const result = ledger.transaction(state => {
+    const commit = () => { const result = ledger.transaction(state => {
       tables(state); const svc = transport(state, servicePrincipal);
       const id = digestOf({ serviceId: svc.serviceId, serviceKid: svc.serviceKid, requestId: challenge?.requestId });
       const registration = state.agentRegistrationsV2[id];
       if (!registration || canonicalJson(registration.challenge) !== canonicalJson(challenge) ||
           !signed(registration.challenge, signature, registration.publicKey)) deny(403, 'instance-registration-unverified');
       if (registration.result) return clone(registration.result);
+      if ((challenge.rootScopeRef || state.agentRunScopesV1?.required) && !scopeAuthority) deny(503, 'instance-scope-unavailable');
+      const scoped = scopeAuthority ? scopeAuthority.registrationInState(state, {
+        publicKey: registration.publicKey, rootScopeRef: challenge.rootScopeRef, transport: svc }) : null;
+      if (scoped && state.agentInstancesV2[scoped.instanceId]) deny(409, 'instance-already-registered');
       const next = (state.agentInstanceGenerationV2 ?? 0) + 1;
       if (!generation(next)) deny(503, 'instance-generation-overflow');
-      const value = { v: 2, instanceId: `instance_${randomUUID()}`, instanceGeneration: next,
+      const value = { v: 2, instanceId: scoped?.instanceId ?? `instance_${randomUUID()}`, instanceGeneration: next,
         serviceId: svc.serviceId, serviceKid: svc.serviceKid, publicKey: registration.publicKey,
-        registrationId: id, state: 'active', closure: null };
+        registrationId: id, state: 'active', closure: null, ...(scoped ? { rootScopeRef: scoped.rootScopeRef,
+          docPublicKeyDigest: scoped.docPublicKeyDigest, scopePublicKeyDigest: scoped.scopePublicKeyDigest } : {}) };
       state.agentInstanceGenerationV2 = next; state.agentInstancesV2[value.instanceId] = value;
       registration.result = { instanceId: value.instanceId, instanceGeneration: next,
-        authorityId: ledger.authorityId, serviceId: svc.serviceId, serviceKid: svc.serviceKid };
+        authorityId: ledger.authorityId, serviceId: svc.serviceId, serviceKid: svc.serviceKid,
+        ...(scoped ? { rootScopeRef: scoped.rootScopeRef } : {}) };
       failpoint('instance-register-before-commit'); return clone(registration.result);
     });
-    failpoint('instance-register-after-commit'); return result;
+    failpoint('instance-register-after-commit'); return result; };
+    return scopeAuthority ? scopeAuthority.refresh(challenge?.rootScopeRef).then(commit) : commit();
   }
   function authenticate({ servicePrincipal, method, path, operation, request, proof }) {
     if (!text(method) || method !== method.toUpperCase() || !text(path) || !path.startsWith('/'))

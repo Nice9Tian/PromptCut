@@ -10,6 +10,7 @@ import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/age
 import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
   INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
+import { createAgentRunScopeDoc } from '../account/agent-run-scope-doc.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 
@@ -30,6 +31,8 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     'messageId', 'runId', 'runGrantId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'];
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
+  const scopeAuthority = account.agent.runScopes ? createAgentRunScopeDoc({ ledger,
+    signingKey: account.agent.runScopes.signingKey, slots: account.agent.runScopes.slots }) : null;
   let stopped = false, runAuthority;
   const currentService = () => {
     if (stopped) fail(503, 'doc-agent-unavailable');
@@ -60,10 +63,11 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       fail(403, 'run-service-forbidden');
     return { serviceId: 'agent', serviceKid: kid };
   };
-  const instanceAuthority = createAgentInstanceAuthority({ ledger,
+  const instanceAuthority = createAgentInstanceAuthority({ ledger, scopeAuthority,
     verifyTransportInState(state, subject) {
       const service = verifyServiceInState(state, subject);
       return { ...service, authenticationId: subject.authenticationId,
+        fingerprint256: certificateFingerprint(subjects.get(subject.authenticationId)?.getPeerCertificate?.()?.fingerprint256),
         channelBinding: instanceTlsBinding(subjects.get(subject.authenticationId)) };
     } });
   const readControl = createAgentReadControl({ ledger, instanceAuthority,
@@ -167,7 +171,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     },
   });
   runAuthority = createRunAuthority({ ledger, conversationHooks: conversations.hooks,
-    verifyServiceInState, instanceAuthority, now, synchronize: () => runtime.authority.synchronize(),
+    verifyServiceInState, instanceAuthority, scopeAuthority, now, synchronize: () => runtime.authority.synchronize(),
     async verifySender(ref, context) {
       const checked = await accountClient.verifyAcceptedMessage(ref, context);
       await runtime.authority.synchronize();
