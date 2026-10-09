@@ -82,6 +82,14 @@ try {
     args: [...PROBE_CHROME_ARGS, '--ignore-certificate-errors', '--host-resolver-rules=MAP s1.pc.localhost 127.0.0.1,MAP s2.pc.localhost 127.0.0.1'] });
   for (let i = 0; i < 2; i++) {
     const context = await browser.createBrowserContext(); contexts.push(context); const page = await context.newPage(); pages.push(page);
+    page.docRevisions = [];
+    const cdp = await page.createCDPSession(); await cdp.send('Network.enable');
+    cdp.on('Network.webSocketFrameReceived', ({ response }) => {
+      try { const frame = JSON.parse(response.payloadData);
+        if (['project.state', 'project.ops'].includes(frame.type) && Number.isSafeInteger(frame.rev))
+          page.docRevisions.push({ type: frame.type, rev: frame.rev });
+      } catch { /* Other protocol frames are not copied into output. */ }
+    });
     page.setDefaultTimeout(TIMEOUT); page.on('response', response => {
       const url = new URL(response.url()); if (url.pathname.startsWith('/agent/') || url.pathname.startsWith('/hosted/shared/account/'))
         result.network.push({ path: url.pathname, status: response.status(), method: response.request().method() });
@@ -110,17 +118,23 @@ try {
   phase = 'shared-history-b'; await chooseHistory(b, conversationId);
   await b.waitForFunction(text => document.querySelector('.ai-messages')?.textContent?.includes(text), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
   for (const [i, page] of [a,b].entries()) {
+    await page.waitForFunction(name => window.__pcStore?.getState()?.project?.name === name, { timeout: TIMEOUT }, REAL_RUNNER_NAME);
     const visible = await page.evaluate(({text,name}) => ({
       text: document.querySelector('.ai-messages')?.textContent?.includes(text),
       pending: document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'),
       userCount: document.querySelectorAll('[data-pc-msg^="cq-"]').length,
       assistantCount: document.querySelectorAll('[data-pc-msg^="ca-"]').length,
       projectName: window.__pcStore?.getState()?.project?.name === name,
-      toolCount: document.querySelectorAll('.ai-messages [data-pc-tool]').length,
+      tools: ['get_project','get_selection','set_project_meta'].map(tool=>({name:tool,
+        visible:Array.from(document.querySelectorAll('.ai-tool-name')).some(el=>el.textContent===tool)})),
+      reportVisible: document.querySelector('.ai-messages')?.textContent?.includes('真实工具短链'),
     }), {text:REAL_RUNNER_TEXT,name:REAL_RUNNER_NAME});
     result['page'+i] = visible;
     check(visible.text && visible.pending && visible.userCount===1 && visible.assistantCount===1, 'full-editor-bound-output-'+i);
     check(visible.projectName, 'real-project-projection-'+i);
+    check(visible.tools.every(tool=>tool.visible) && visible.reportVisible, 'real-tools-visible-'+i);
+    check(page.docRevisions.some(row=>row.rev>1),'actual-doc-revision-'+i);
+    result['revisions'+i] = page.docRevisions;
     await shot(page, '0'+i+'-actual-editor');
   }
   const rows = fixture.rows(id,conversationId);
