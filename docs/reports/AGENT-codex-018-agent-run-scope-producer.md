@@ -77,3 +77,34 @@ A/B 实际先初始化、bind、两角色 TCP/文件持有确认。先经真实 
 纯测试覆盖 Linux table 解析、错误 MainPID 的 fd 集、wildcard/IPv6替代/重复端口/未知格式；这些是纯反例，不代表本机实际Linux proc已经跑过。CLI与实验统一调用同一个 `createAgentScopeRuntime`，实验不跳过该归属门。
 
 仍保持部署限制：跨boot历史不自动恢复；ready 尚无assignment而失败的代不被后代空实例覆盖，保留锁/记录交root显式恢复；不把重试初始化当清理。此阶段不提供通用恢复删除/force接口。
+
+## 最终本机固定验证与交接
+
+产品/实验固定源 **fc47062eb0d6133370dcad2bed917d7408806a22**。其后只补本报告，不改变源码。
+
+| 验证 | 结果 | 原始证据 |
+|---|---|---|
+| 新 agent-run-scope-core + 原 Asset publisher/schema 全专属 npm | 118 tests /118 pass /0 fail /0 cancelled /0 skipped；325.1604 ms，外层591 ms，exit0，无 native retry | TMP `pc-agent-run-scope-fc47062e-target-3.log` |
+| 固定源 types --force | 0错误、exit0、6748 ms | TMP `pc-agent-run-scope-fc47062e-type-3.log` |
+| 最终 schema/reader/publisher/probe/worker node --check | 全部exit0 | 本轮工具原始输出 |
+| diff-check / source 状态 | 通过，测试期间源码未改；报告提交前 clean | git 输出 |
+| 真实 Linux 两槽/OS归属/TLS/reader | **未跑**；由 root 审核后单次执行 | 本机没有业务 listener、没有节点/模型/full操作 |
+
+三轮纯目标每次都有新增因果覆盖，原日志全部保留；没有首红被重跑覆盖。真实 TMP post-link/fsync 失败测试保留本测试目录，证明“marker可见但锁仍在”拒绝导入，不声称Windows验证Linux目录耐久。CLI guard 子进程只启动非法参数入口，实际 close 后结清，无业务监听；npm wrapper 自身既有 guard 按原规则运行。
+
+固定 Git blob SHA256（按 Git 对象字节，不取换行转换后的副本）：
+
+| 源文件 | SHA256 |
+|---|---|
+| scripts/probes/agent-run-scope-proof.mjs | 92ff5d0b75d72092d32b18d07256ecf41f965b6537de884e3762bc20a9177f66 |
+| scripts/probes/fixtures/agent-run-scope-worker.mjs | 9e926e8c53fd057ebfdf8943dc6394c8562f2fc775274249127f42e7cfd03bbf |
+| server/hosted/deploy/agent-run-scope-publisher.mjs | 34b98f81470ed636ee47ce1a60470de7578119729e4f786bfc538b783522997a |
+| server/hosted/agent-run-scope-schema.mjs | 757392d0756679429fbde81f014f04db7d2e8cef67f7f5805f376dc843a1aa43 |
+| server/hosted/agent-run-scope-reader.mjs | 39710d4f83f580d3061b722c555f5cc8b51acc2e61f7520ee5b5cbd2b25d93ed |
+| server/hosted/deploy/asset-root-registry-publisher.mjs | 3ec54f8517d379774b272e6aaa2a57349c40df5ba664b62f490d5ab3a2721525 |
+| server/hosted/asset-root-registry-schema-v2.mjs | f7a96b5fc6fbde15fb1dc18c3d576e433cb6c7c1b505aeec999fd0e6cb490f20 |
+| server/account/ledger.mjs | 491a0ae0d8d99312b46d3d74c0158df6474159d06566048d5b565be660d67238 |
+| server/account/client.mjs | fbe71db0c18762a2af27b447d4838932c789d6e217f232f3f95c28b0932fb90d |
+| server/account/protocol.mjs | 6a0f40fd89df3a8ae75a76a53627927f71b4aebb5fc4ee0b992d4793587a5ecc |
+
+未修改 provider/instance/doc-agent-assembly/Sol 执行器；没有将尚缺的资源 source 填入 runTerminalResourceClosuresV1，没有弱化旧 core/FIFO 成功承诺。实际 Linux 通过之前，本报告不将 schema/pure green 写成 OS 关闭通过；Linux 通过之后仍需后包接业务 Doc 签发、实际执行器与 finalizer。
