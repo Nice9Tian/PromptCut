@@ -265,7 +265,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     if (cloud.accountMode) { setInfo(null); setHistItems([]); setNotice(null); }
     const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : lsGet(chatKey(projectId, tabId, accountScope));
     const first = stored && CHAT_ID_RE.test(stored) ? stored : newCloudChatId();
-    const session = createCloudSession({ api, store, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
+    const session = createCloudSession({ api, store, accountMode: cloud.accountMode, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
     sessionRef.current = session;
     sessionKeyRef.current = key;
     const off = session.subscribe(() => setView(session.getView()));
