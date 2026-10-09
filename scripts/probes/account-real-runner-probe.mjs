@@ -39,7 +39,12 @@ const serve = stage => async (req, res) => {
 };
 const fill = async (page, selector, text) => {
   await page.waitForSelector(selector, { visible: true }); await page.focus(selector);
-  await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace'); if (text.includes('\n')) await page.keyboard.insertText(text); else await page.type(selector, text);
+  await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace');
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (i) { await page.keyboard.down('Shift'); await page.keyboard.press('Enter'); await page.keyboard.up('Shift'); }
+    await page.type(selector, lines[i]);
+  }
 };
 const enabled = async (page, selector) => page.waitForFunction(selector => { const el = document.querySelector(selector); return el && !el.disabled; }, { timeout: TIMEOUT }, selector);
 const shot = async (page, name) => {
