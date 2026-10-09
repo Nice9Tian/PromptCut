@@ -1,0 +1,147 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs server/test/agent-run-scope-core.test.mjs server/test/asset-root-registry-publisher.test.mjs server/test/asset-root-registry-schema-v2.test.mjs
+
+▶ listener parser/owner refuses another MainPID fd set, wildcard, other UID and ambiguous/reused port
+  ✔ wrong MainPID owns different socket (0.5548ms)
+  ✔ recycled inode absent from actual fd (0.1054ms)
+  ✔ wildcard bound management listener (0.0768ms)
+  ✔ other UID (0.0586ms)
+  ✔ multiple candidates (0.0598ms)
+  ✔ unknown table (0.0558ms)
+  ✔ malformed table (0.0492ms)
+  ✔ IPv6 alternative listener (0.0608ms)
+✔ listener parser/owner refuses another MainPID fd set, wildcard, other UID and ambiguous/reused port (2.3085ms)
+✔ controlled two independent slots: closing A leaves B bound; two epochs have distinct complete OS/key identities (22.8809ms)
+✔ single generation admits one signed grant; exact bind retry is idempotent, another conversation conflicts (6.0054ms)
+✔ terminal retry uses identical old intent; changed terminal cannot rewrite closed history (8.323ms)
+✔ fresh generation cannot reuse old runGrantId even with a new valid doc signature (9.7602ms)
+✔ RAM key reuse across OS generations is rejected before a new publication (7.5912ms)
+✔ active slot cannot start new OS generation (1.7248ms)
+✔ missing or forged Doc signature never reaches OS stop (3.3063ms)
+✔ new OS key cannot sign the old terminal intent (3.7333ms)
+▶ wrong slot/instance/generation is not accepted merely because a signature is valid
+  ✔ {"instanceId":"replacement"} (2.2257ms)
+  ✔ {"instanceGeneration":0} (1.8587ms)
+  ✔ {"publicKeyDigest":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"} (2.0656ms)
+  ✔ {"serviceId":"asset"} (1.8534ms)
+✔ wrong slot/instance/generation is not accepted merely because a signature is valid (8.3432ms)
+▶ old FD errors/nonempty keep marker absent, lock held, scope unreleased
+  ✔ observe (3.5189ms)
+  ✔ populated (4.0134ms)
+  ✔ pin (3.3619ms)
+  ✔ release (4.2931ms)
+✔ old FD errors/nonempty keep marker absent, lock held, scope unreleased (15.492ms)
+✔ closure is durable before scope release and publication; no successful close is inferred from visible head (4.43ms)
+▶ reader rejects missing marker, mixed target, partial history, rollback and moved scope inode
+  ✔ tampered chain (5.2652ms)
+  ✔ tampered chain (5.3152ms)
+  ✔ tampered chain (4.653ms)
+  ✔ tampered chain (4.4341ms)
+  ✔ tampered chain (4.9365ms)
+✔ reader rejects missing marker, mixed target, partial history, rollback and moved scope inode (31.2657ms)
+✔ reader detects a concurrent transition or lock before returning a projection (3.4936ms)
+✔ Agent reservation domain cannot be exchanged for Asset, and trusted anchor is explicit (1.6837ms)
+▶ unknown/prototype phases cannot skip publication checks
+  ✔ __proto__ (2.5977ms)
+  ✔ constructor (2.121ms)
+  ✔ finished (2.1531ms)
+  ✔ null (2.4538ms)
+  ✔ [object Object] (2.3368ms)
+✔ unknown/prototype phases cannot skip publication checks (12.0191ms)
+✔ real TMP file post-link directory barrier failure leaves visible marker AND exclusion lock (10.114ms)
+✔ Windows is never promoted to Linux root by an injected callback or valid config (0.6632ms)
+✔ probe/worker CLI guards reject before any listener, and child actual close is awaited (97.7766ms)
+✔ publisher parses actual /proc stat field 22 without whitespace/comm confusion; scope rejects arbitrary unit/path (1.3612ms)
+✔ publisher rejects automatic replacement, delegated tree, alias unit, or process-only KillMode before unit control (0.2574ms)
+✔ controlled initialize creates immutable anchor; rotate closure precedes reservation/active; matches canonical witness chain (1.8942ms)
+✔ controlled incorrect old process refuses stop; ENOENT observation remains inactive and never starts (1.2044ms)
+▶ controlled closure cannot substitute another boot/cgroup/birth/invocation or false completion
+  ✔ mismatch 0 (0.4168ms)
+  ✔ mismatch 1 (0.4507ms)
+  ✔ mismatch 2 (0.3803ms)
+  ✔ mismatch 3 (0.406ms)
+  ✔ mismatch 4 (0.635ms)
+✔ controlled closure cannot substitute another boot/cgroup/birth/invocation or false completion (2.7736ms)
+▶ controlled pre-write cuts leave nonactive and retain lock; these do not model post-rename failure
+  ✔ transition.json (0.4451ms)
+  ✔ witness-2.json (0.3553ms)
+  ✔ reservation.json (0.3362ms)
+  ✔ epoch-2.json (0.4238ms)
+  ✔ current-active (0.3738ms)
+✔ controlled pre-write cuts leave nonactive and retain lock; these do not model post-rename failure (2.2263ms)
+▶ controlled identity cannot change PID/epoch/instance/authority/pin or self-attest extra OS fields
+  ✔ pid (0.4426ms)
+  ✔ epoch (0.1141ms)
+  ✔ instanceId (0.0908ms)
+  ✔ authorityId (0.0896ms)
+  ✔ docClientFingerprint256 (0.0832ms)
+  ✔ uid (0.0779ms)
+✔ controlled identity cannot change PID/epoch/instance/authority/pin or self-attest extra OS fields (1.1722ms)
+✔ controlled MainPID change during identity await or final fsync window never publishes active (0.2594ms)
+✔ controlled bootstrap is explicit, prior files/history cannot be reset and root mutex spans entire async operation (0.3972ms)
+✔ controlled third epoch checks complete owned history; corrupt/missing prior witness cannot stop a unit (2.072ms)
+✔ production entry never accepts Windows/nonroot as OS evidence; CLI rejects fixture/force before IO and actually closes (49.8178ms)
+✔ real TMP current rename followed by directory fsync failure may expose active, but must retain publisher lock (11.9805ms)
+ℹ actual active JSON visible after rename; injected directory barrier failure; lock retained; no accepted checkpoint claim
+✔ real TMP publication hardlink visible then directory barrier fails: marker alone never permits unlock (11.3229ms)
+[包含敏感字段的日志行已隐藏]
+✔ real TMP in-flight publication barrier keeps lock; only successful completion removes it and binds every digest (10.571ms)
+ℹ real file operations; controlled directory barrier on Windows; no Linux durability/power-loss claim
+✔ real TMP unlock barrier failure has unknown CLI result but cannot undo already completed publication (10.0348ms)
+ℹ unlock result unknown; marker/active barriers completed before unlink; failure is NOT a claim of inactive
+✔ prior active without exact publication completion marker cannot be rotated (1.3407ms)
+✔ v2 controlled two-epoch publisher persists witness before releasing old scope, archives every reservation and keeps new scope (4.8494ms)
+▶ v2 controlled faults never release old scope before durable empty witness or authorize new active generation
+  ✔ ENODEV (1.0087ms)
+  ✔ populated (1.2784ms)
+  ✔ wrong tuple (1.019ms)
+  ✔ witness visible but fsync fails (1.3782ms)
+  ✔ release unknown (0.9998ms)
+  ✔ scope collision (1.1601ms)
+  ✔ foreign configuration (1.0948ms)
+  ✔ identity mismatch (1.302ms)
+✔ v2 controlled faults never release old scope before durable empty witness or authorize new active generation (9.7412ms)
+✔ v2 refuses missing reservation history before any stop and rejects implicit v1 upgrade (1.2944ms)
+✔ v2 visible active/marker write failures retain exclusion, not a fictitious rollback (1.3176ms)
+✔ v2 third epoch cannot reuse nonadjacent history identities or invocations (10.4394ms)
+✔ v2 runtime configuration permits only exact owned drop-in and immutable declared base set; Linux root gate remains (0.413ms)
+✔ v2 real file drop-in replacement refuses foreign contents/inode; post-rename fsync failure retains real lock (9.4689ms)
+ℹ Real Windows file/rename/lock; injected directory fsync failure, not Linux unit or durability proof
+✔ v2 pure validation binds two distinct tuples, immutable reservations and full contiguous history (4.5239ms)
+▶ v2 rejects slice/service tuple substitution, prefix-only containment and foreign identity
+  ✔ slice substituted for service (0.3446ms)
+  ✔ sibling prefix (0.2263ms)
+  ✔ nested other unit (0.2152ms)
+  ✔ dot path (0.444ms)
+  ✔ wrong scope epoch (0.1679ms)
+  ✔ wrong authority (0.1483ms)
+  ✔ wrong instance (0.1432ms)
+  ✔ different boot (0.1626ms)
+  ✔ same inode (0.2578ms)
+  ✔ same invocation (0.1951ms)
+  ✔ zero invocation (0.1582ms)
+  ✔ extra trusted flag (0.1415ms)
+✔ v2 rejects slice/service tuple substitution, prefix-only containment and foreign identity (3.5208ms)
+▶ v2 rejects missing/nonempty/unknown closure facts and changed previous tuple even with recomputed witness digest
+  ✔ populated (1.3255ms)
+  ✔ closed (0.8231ms)
+  ✔ scopeActive (1.1109ms)
+  ✔ scopeExclusive (0.7548ms)
+  ✔ serviceInactive (1.0673ms)
+  ✔ mainBirthGone (0.8769ms)
+  ✔ kind (1.1563ms)
+  ✔ at (0.9263ms)
+✔ v2 rejects missing/nonempty/unknown closure facts and changed previous tuple even with recomputed witness digest (9.4508ms)
+✔ v2 requires marker/unlocked gate, exact reservation and checkpoint rather than visible active alone (2.0017ms)
+✔ v2 rejects history gaps, reorder, epoch truncation and all v1 forms without migration (3.0638ms)
+✔ v2 never reuses a prior scope ID even when epoch-specific name and all digests are recomputed (0.5041ms)
+ℹ tests 118
+ℹ suites 0
+ℹ pass 118
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 325.1604
+✓ npm test 最终结果：零失败

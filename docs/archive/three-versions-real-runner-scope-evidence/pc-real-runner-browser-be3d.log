@@ -1,0 +1,18 @@
+file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent/service/conversation-transports.mjs:6
+const fail = code => { throw accountError(503, code); };
+                       ^
+
+Error: read-transport-revoked
+    at accountError (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/account/client.mjs:6:61)
+    at fail (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent/service/conversation-transports.mjs:6:30)
+    at track (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent/service/conversation-transports.mjs:51:59)
+    at Object.dispatch (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent/service/conversation-transports.mjs:88:12)
+    at poll (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent-service/http.mjs:213:72)
+    at Timeout._onTimeout (file:///C:/Users/admin/Documents/PromptCut/.worktrees/018-cloud-queue-user-path/server/agent-service/http.mjs:214:44)
+    at listOnTimeout (node:internal/timers:635:17)
+    at process.processTimers (node:internal/timers:571:7) {
+  status: 503,
+  code: 'read-transport-revoked'
+}
+
+Node.js v24.19.0
