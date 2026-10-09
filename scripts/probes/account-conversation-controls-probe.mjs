@@ -558,11 +558,14 @@ async function main() {
     await browser?.close().catch(() => {});
     for (const stage of stages) await closeServer(stage).catch(() => {});
     const fixtureClose = await fixture?.close().catch(() => ({ closed: false })) ?? { closed: true, notStarted: true };
-    result.cleanup.fixture = { closed: fixtureClose.closed === true, childClosed: fixtureClose.childClosed === true,
+    result.cleanup.fixture = { closed: fixtureClose.closed === true,
+      ...(typeof fixtureClose.childClosed === 'boolean' ? { childClosed: fixtureClose.childClosed } : {}),
+      ...(fixtureClose.notStarted === true ? { notStarted: true } : {}),
       evidenceDir: fixtureClose.fixtureDir ?? result.fixtureEvidenceDir ?? null };
     result.cleanup.portsFree = Object.fromEntries(await Promise.all(ports.map(async port => [String(port), await portFree(port)])));
     result.cleanup.allPortsFree = Object.values(result.cleanup.portsFree).every(Boolean);
-    result.cleanup.fixtureAndPortsClosed = result.cleanup.fixture.closed && result.cleanup.fixture.childClosed && result.cleanup.allPortsFree;
+    result.cleanup.fixtureAndPortsClosed = result.cleanup.fixture.closed &&
+      (result.cleanup.fixture.notStarted === true || result.cleanup.fixture.childClosed === true) && result.cleanup.allPortsFree;
     result.wallMs = Date.now() - started;
     result.sourceAfter = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim();
     await fs.writeFile(path.join(OUT, 'result.json'), JSON.stringify(result, null, 2));
