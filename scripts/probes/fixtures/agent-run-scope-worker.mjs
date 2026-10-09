@@ -10,7 +10,7 @@ import { generateKeyPairSync, sign, X509Certificate } from 'node:crypto';
 import { digestOf } from '../../../server/account/ledger.mjs';
 import { rootRead } from '../../../server/hosted/deploy/asset-root-registry-publisher.mjs';
 import { validateAgentScopeExpected, validateAgentScopeReservation, validateAgentScopeAssignment,
-  verifyScopeSignature, exactScope, sameScope } from '../../../server/hosted/agent-run-scope-schema.mjs';
+  verifyScopeSignature, validateAgentScopeCloseEnvelope, exactScope, sameScope } from '../../../server/hosted/agent-run-scope-schema.mjs';
 
 const die = () => { throw Error('scope-fixture-invalid'); };
 const pin = s => String(s ?? '').replaceAll(':', '').toLowerCase();
@@ -48,7 +48,7 @@ async function main() {
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--child', JSON.stringify(owned)],
     { stdio: 'ignore', windowsHide: true, env: { PATH: process.env.PATH } });
   child.once('error', die);
-  const sockets = new Set(); let assignmentDigest = null;
+  const sockets = new Set(); let assignmentDigest = null, stopParent;
   const server = https.createServer({ key, cert, ca, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, async (req, res) => {
     try {
       if (!req.socket.authorized || pin(req.socket.getPeerCertificate().fingerprint256) !== config.tls.rootClientFingerprint256) die();
@@ -58,7 +58,8 @@ async function main() {
           pid: process.pid, publicKey, publicKeyDigest: digestOf(publicKey),
           clientFingerprint256, serverFingerprint256: pin(new X509Certificate(cert).fingerprint256) } })); return;
       }
-      if (req.method !== 'POST' || req.url !== '/internal/v2/agent/run-scope/probe-intent') die();
+      const forcedExit = req.url === '/internal/v2/agent/run-scope/probe-parent-exit';
+      if (req.method !== 'POST' || (!forcedExit && req.url !== '/internal/v2/agent/run-scope/probe-intent')) die();
       const chunks = []; let length = 0;
       for await (const chunk of req) { length += chunk.length; if (length > 16384) die(); chunks.push(chunk); }
       const body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
@@ -68,6 +69,15 @@ async function main() {
       if (record.worker.publicKey !== publicKey || record.instance.pid !== process.pid || !sameScope(stored, body.assignment)) die();
       validateAgentScopeAssignment(body.assignment, expected, record); verifyScopeSignature(body.terminal, expected.docPublicKey);
       const t = body.terminal;
+      if (forcedExit) {
+        if (t.protocol !== 'promptcut.agent-run-scope.forced-terminal.v1') die();
+        validateAgentScopeCloseEnvelope(t, null, expected, record, stored);
+        // Only this isolated fixture can request its own parent exit. No PID kill,
+        // no child cleanup: systemd must observe and close the original group.
+        req.socket.once('close', () => stopParent());
+        res.setHeader('Connection', 'close'); res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: true, result: { parentExitRequested: true, instanceId: reservation.instanceId } })); return;
+      }
       if (!exactScope(t, ['v', 'protocol', 'authorityId', 'slotId', 'epoch', 'recordDigest', 'docAuthorityId', 'assignmentDigest', 'finish', 'signature']) ||
           t.v !== 1 || t.protocol !== 'promptcut.agent-run-scope.terminal.v1' || t.authorityId !== expected.authorityId || t.slotId !== expected.slotId ||
           t.epoch !== reservation.epoch || t.recordDigest !== digestOf(record) || t.docAuthorityId !== expected.docAuthorityId ||
@@ -81,10 +91,11 @@ async function main() {
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.port, '127.0.0.1', resolve); });
   let stopping = false;
-  process.on('SIGTERM', () => { if (stopping) return; stopping = true;
+  stopParent = () => { if (stopping) return; stopping = true;
     for (const socket of sockets) socket.destroy();
     server.close();
     closeParent().then(() => process.exit(0), () => process.exit(2));
-  });
+  };
+  process.on('SIGTERM', stopParent);
 }
 main().catch(() => { process.stderr.write('{"ok":false,"code":"scope-fixture-failed"}\n'); process.exitCode = 1; });

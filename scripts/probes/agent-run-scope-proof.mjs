@@ -1,5 +1,5 @@
 /** ROOT-ONLY, one-shot isolated Linux proof. No production units or models.
- * Usage: node ... --config /run/<fresh>/probe.json --out /var/tmp/<fresh>/out
+ * Usage: node ... --config /run/<fresh>/probe.json --out /run/<fresh>/out [--forced]
  * Root precreates TWO fixed service fragments (Restart=no, KillMode=control-group,
  * Delegate=no, TimeoutStopSec=5, no base Slice=), fresh PKI and root configs.
  * probe.json={v:1,issuerPrivateKeyFile,protectedUnits:[four existing units],
@@ -42,12 +42,12 @@ async function protectedSnapshot(units) {
   }
   return rows;
 }
-async function requestIntent(config, assignment, terminal) {
+async function requestIntent(config, assignment, terminal, forcedExit = false) {
   const [key, cert, ca] = await Promise.all(['keyFile', 'certFile', 'caFile'].map(k => rootRead(config.identity[k], false, true)));
   return new Promise((resolve, reject) => {
     let socket, result, error, completed = false;
     const finish = () => { if (completed) return; completed = true; error || !result ? reject(Error('probe-intent-failed')) : resolve(result); };
-    const req = https.request(new URL('/internal/v2/agent/run-scope/probe-intent', config.identity.origin), {
+    const req = https.request(new URL(`/internal/v2/agent/run-scope/${forcedExit ? 'probe-parent-exit' : 'probe-intent'}`, config.identity.origin), {
       method: 'POST', agent: false, key, cert, ca, minVersion: 'TLSv1.3', rejectUnauthorized: true, timeout: 3000,
       checkServerIdentity(host, peer) { return checkServerIdentity(host, peer) || (pin(peer.fingerprint256) !== config.expected.serverFingerprint256 ? Error('pin') : undefined); },
       headers: { 'content-type': 'application/json' },
@@ -100,7 +100,7 @@ async function peersReady(slot, until) {
       !(await holdsFile(child.pid, slot.worker.holdFile))) fail('probe-child-ownership');
   return { parent: p, child: c };
 }
-export async function runAgentScopeProof({ configFile, out }) {
+export async function runAgentScopeProof({ configFile, out, forced = false }) {
   if (process.platform !== 'linux' || process.getuid?.() !== 0 || process.geteuid?.() !== 0) fail('probe-linux-root-required');
   const config = await rootRead(configFile);
   if (!exactScope(config, ['v', 'issuerPrivateKeyFile', 'protectedUnits', 'slots']) || config.v !== 1 || !Array.isArray(config.slots) || config.slots.length !== 2 ||
@@ -108,7 +108,7 @@ export async function runAgentScopeProof({ configFile, out }) {
       config.protectedUnits.some(v => typeof v !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.@-]*\.service$/.test(v))) fail('probe-config');
   if ((await listeners()).length) fail('probe-port-in-use');
   const slots = [], startedAt = Date.now(), deadline = startedAt + 30000; let stage = 'preflight';
-  const result = { ok: false, controlledDocIssuer: true, productionExecutor: false, samples: [], checks: [], errors: [], retainedUnits: [] };
+  const result = { ok: false, mode: forced ? 'forced-dead-parent' : 'normal', controlledDocIssuer: true, productionExecutor: false, samples: [], checks: [], errors: [], retainedUnits: [] };
   result.protectedBefore = await protectedSnapshot(config.protectedUnits);
   const key = createPrivateKey(await rootRead(config.issuerPrivateKeyFile, false, true));
   const publicKey = createPublicKey(key).export({ type: 'spki', format: 'der' }).toString('base64');
@@ -147,12 +147,15 @@ export async function runAgentScopeProof({ configFile, out }) {
     }
     const [a, b] = slots;
     const closeSlot = async (slot, observeNegative) => {
+      const forcedSlot = forced && observeNegative;
       stage = `${slot.expected.slotId}-terminal-intent`;
-      const terminal = signing(slot, 'terminal', { assignmentDigest: digestOf(slot.assignment), finish: {
+      const terminal = forcedSlot ? signing(slot, 'forced-terminal', { assignmentDigest: digestOf(slot.assignment), fence: {
+        controlId: `controlled-private-${slot.expected.slotId}`, fenceRevision: 1, payloadDigest: digestOf({ controlledFixture: true, kind: 'private' }),
+        kind: 'private', outcome: 'interrupted' } }) : signing(slot, 'terminal', { assignmentDigest: digestOf(slot.assignment), finish: {
         readReceiptId: `controlled-read-${slot.expected.slotId}`, finishReceiptId: `controlled-finish-${slot.expected.slotId}`,
         outcomeDigest: digestOf({ status: 'done', controlledFixture: true }), terminalReceiptDigest: digestOf({ fixture: 'RAM-intent-before-OS-stop' }) } });
-      const intent = await requestIntent(slot.cfg, slot.assignment, terminal);
-      const originalPin = slot.io.pinPrevious;
+      const intent = forcedSlot ? null : await requestIntent(slot.cfg, slot.assignment, terminal);
+      const pinName = forcedSlot ? 'pinRetired' : 'pinPrevious', originalPin = slot.io[pinName];
       const group = await fs.open(slot.record.closureScope.cgroup.v2Path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       let events;
       try { events = await fs.open(`/proc/self/fd/${group.fd}/cgroup.events`, constants.O_RDONLY | constants.O_NOFOLLOW); }
@@ -171,16 +174,17 @@ export async function runAgentScopeProof({ configFile, out }) {
           const scopeUnit = await systemUnitV2(slot.record.closureScope.unit);
           if (scopeUnit.ActiveState !== 'active' || scopeUnit.InvocationID !== slot.record.closureScope.unitInvocationId) fail('probe-scope-changed');
           let blocked = false;
-          try { await slot.reader.read({ checkpoint: slot.checkpoint }); }
+          try { const p = await slot.reader.read({ checkpoint: slot.checkpoint }); blocked = forcedSlot && p.checkpoint.head.phase === 'bound'; }
           catch (e) { blocked = e.code === 'agent-scope-publisher-locked'; }
           if (!blocked) fail('probe-reader-during-negative');
-          result.checks.push('A-parent-gone-child-FD-TCP-live-reader-locked-same-active-scope'); negative = true;
+          result.checks.push(forcedSlot ? 'A-parent-already-gone-child-live-reader-not-closed-same-active-scope' : 'A-parent-gone-child-FD-TCP-live-reader-locked-same-active-scope'); negative = true;
         }
         if (!result.samples.length || !sameScope({ ...row, ms: 0 }, { ...result.samples.at(-1), ms: 0 })) result.samples.push(row);
         return row;
       };
       const monitor = (async () => { while (sampling && Date.now() < deadline) { try { await sample(); } catch (e) { sampleError = e; break; } await delay(20); } })();
-      slot.io.pinPrevious = async old => {
+      slot.io[pinName] = async old => {
+        if (forcedSlot && (!negative || !await birthGone(slot.births.parent) || await birthGone(slot.births.child))) fail('probe-forced-pin-precondition');
         const pin = await originalPin(old);
         return { ...pin, async stopAndObserve() {
           const observed = await pin.stopAndObserve(); sampling = false; await monitor;
@@ -194,12 +198,24 @@ export async function runAgentScopeProof({ configFile, out }) {
         } };
       };
       try {
+        if (forcedSlot) {
+          // Reject an actual other-slot OS identity before causing any parent exit.
+          let rejected = false;
+          try { const wrong = await originalPin({ ...slot.record, instance: b.record.instance }); await wrong.close(); }
+          catch (e) { rejected = e.code === 'publisher-previous-instance-mismatch'; }
+          if (!rejected || await birthGone(slot.births.parent) || await birthGone(b.births.parent)) fail('probe-replacement-not-rejected');
+          result.checks.push('actual-B-OS-tuple-cannot-replace-A-no-stop');
+          const ack = await requestIntent(slot.cfg, slot.assignment, terminal, true);
+          if (ack.instanceId !== slot.record.instance.instanceId || ack.parentExitRequested !== true) fail('probe-parent-exit-ack');
+          while (!negative && !sampleError && Date.now() < deadline) await delay(10);
+          if (!negative || sampleError) fail('probe-dead-parent-negative-missing');
+        }
         stage = `${slot.expected.slotId}-close`;
-        await publishAgentScope({ expected: slot.expected, mode: 'close', io: slot.io, configuredAnchorDigest: slot.anchorDigest, terminal, intent });
+        await publishAgentScope({ expected: slot.expected, mode: forcedSlot ? 'forced-close' : 'close', io: slot.io, configuredAnchorDigest: slot.anchorDigest, terminal, intent });
         const projection = await slot.reader.read({ checkpoint: slot.checkpoint });
         if (projection.checkpoint.head.phase !== 'closed') fail('probe-reader-not-closed');
         result.checks.push(`${slot.expected.slotId}:original-FD-empty-durable-reader-closed`);
-      } finally { sampling = false; await monitor; await events.close(); await group.close(); slot.io.pinPrevious = originalPin; }
+      } finally { sampling = false; await monitor; await events.close(); await group.close(); slot.io[pinName] = originalPin; }
     };
     await closeSlot(a, true); result.checks.push('B-continued-during-A-close'); await closeSlot(b, false);
     // Actual trusted-file reader rejects incomplete and mixed evidence without
@@ -239,7 +255,7 @@ export async function runAgentScopeProof({ configFile, out }) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
-    const a = process.argv.slice(2); if (a.length !== 4 || a[0] !== '--config' || a[2] !== '--out') fail('probe-cli');
-    const result = await runAgentScopeProof({ configFile: a[1], out: a[3] }); process.stdout.write(JSON.stringify(result) + '\n'); if (!result.ok) process.exitCode = 1;
+    const a = process.argv.slice(2); if (![4, 5].includes(a.length) || a[0] !== '--config' || a[2] !== '--out' || (a.length === 5 && a[4] !== '--forced')) fail('probe-cli');
+    const result = await runAgentScopeProof({ configFile: a[1], out: a[3], forced: a[4] === '--forced' }); process.stdout.write(JSON.stringify(result) + '\n'); if (!result.ok) process.exitCode = 1;
   } catch (e) { process.stderr.write(JSON.stringify({ ok: false, code: e.code ?? 'probe-failed' }) + '\n'); process.exitCode = 1; }
 }
