@@ -110,3 +110,17 @@ A3854ms原parent gone、child live、真实FD/TCP仍持有、原scope pop1；实
 4. 正常/forced交错必须串起现有门：全部终态event ACK先于finish（finish后workerEventSource拒新事件）；finish只是recorded/pending，不能据HTTP200释放。若先被private/crash撤销，消费者只能发现既有typed control并走forced，不补normal prepare；若normal terminal后发生fence，Doc最终从当前ledger控制与原root闭口链对账，不能用旧normal成功响应覆盖interrupted/failed。未知ACK只查询/重传原tuple，execution-started不再跑模型。当前provider已具这些拒绝/最终对账门，本轮未发现消费者绕过；下一消费块须实际并发验证，不能只用顺序正例。
 
 以上是可执行接线缺口与后续验证要求，不是新用户语义或新的关闭权威。唯一文档提交不改正在根Linux验收的任何source；原所有首红与分层结果保留。
+
+## 精确终态client/session接缝（独立小块）
+
+基线为根ff的`6ce993ea53fb4d6b04af0200d1c93483c8786efa`。根临时从Sol移交run-client及agent-instance-session两文件，只实现已存在Doc协议的消费端；不改Doc provider、runner、gateway、root publisher或资源producer。新专属agent-worker-settlement-client.test.mjs先固定`9d374bb5`，首次真实TLS目标2项/0pass/2fail、1999.0588ms，TMP pc-worker-settlement-client-red-1.log；分别停于queryFinish方法缺失与scopeTerminal方法缺失。两次实际socket/transport归零、server不监听；首红不覆盖。
+
+〔三级实施机制〕产品固定`070579f56b7419ea62bca8d32420d2e6e0f93c62`新增createRunClient四个方法：queryFinish→POST /internal/v2/runs/finish/query（operation queryFinish）；scopePrepare→/scope/prepare（scopePrepare）；scopeTerminal→/scope/terminal（scopeTerminal）；scopeControl→/scope/control（scopeControl）。均是实际TLS1.3 socket exporter、原RAM instance/key/generation和完整body摘要的新签名；没有新身份或自由sign导出。request在第一次await前clone，避免调用者改对象令发送正文与稍后签名分离。
+
+queryFinish精确原五绑定+requestId+readReceiptId+outcome；outcome exact {v:1,status:done|failed|interrupted,eventId,eventDigest}。scopePrepare/Terminal精确原五绑定+requestId+finishReceiptId，prepare另完整signed prepare。control exact {projectId,controlId,runGrantId,assignmentDigest,rootScopeRef}，rootRef exact四字段。客户端不裁决closed，返回Doc既有结果原形。scopePrepare还必须等于本session已从私有source取得的原签名对象，缺source继续503；worker只能对原bound assignment签正常结算，master仅新增scopeControl（旧metadata/read-control不变）。旧未启scope的finish六字段无outcome仍可签；一旦出现outcome/readReceiptId则二者都必须完整入body签名，不忽略任何一项。新query/prepare/terminal不授旧无purpose实例权限。
+
+调用顺序已发Sol：实际终态事件/最后drain及flush由其可信producer负责→finish记录pendingReceipt→scopePrepareFor私有源核验并签→scopePrepare持久→Doc实际关闭后scopeTerminal取得Doc证书→原RAM scopeIntentFor→独立root关闭→Doc导入/finalizer→queryFinish才可能finishPending=false。prepare返回recorded/prepareDigest也不是完成，master强制control与worker正常prepare不能互换。本包不生成假的drain/source/root关闭证明，不接模型消费者。
+
+产品固定后首次专属目标3/3、0fail/cancel/skip、2031.7566ms（TMP pc-worker-settlement-client-green-1.log）。两项实际6713 TLS/SQLite覆盖：finish200仍pending与同请求幂等，异outcome冲突；原RAM prepare且Doc真实零连接库存关闭后才有terminal，独立受控root关闭前FIFO保持；缺私有source503；private在finish之后发生，worker normal拒、master控制缺Doc关闭拒、实际operation fence/Doc关闭后才可取forced证书，独立root关闭后结果interrupted。第三项明确为受控transport输入+真实Ed25519，核legacy无outcome及新增outcome/readReceipt完整签名、path/op/generation/不同socket绑定变化拒、自由closed/缺字段拒。实际root OS仍由前节Linux证据独立承担，不将这两类组合成生产模型运行结论。
+
+同固定产品必要兼容目标4文件28/28、0fail/cancel/skip、2236.1348ms（TMP pc-worker-settlement-client-regression-1.log）：原worker session/task、旧admit/finish ACK恢复、原scope Doc9项全部保留。类型0、7545ms（TMP pc-worker-settlement-client-type-1.log）。两目标均无native retry。窗口6712与6713实际owned socket0/serverfalse，结束6712–6721零LISTEN；无full/浏览器/模型/节点，源码测试期间不变，diff-check0。本报告单独提交，临时两文件租约可交回Sol由根统一组合。
