@@ -13,7 +13,8 @@ const fail = code => { throw accountError(503, code); };
 /** Agent-owned mTLS transport. Doc derives the service principal from the pinned
  * client certificate; no caller can supply servicePrincipal or a human identity.
  */
-export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs = 5000 } = {}) {
+export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs = 5000, scopePrepareSource = null,
+  registrationPurpose = null, workerEventSource = null } = {}) {
   let base;
   try { base = new URL(origin); } catch { fail('run-client-configuration'); }
   const pin = certificateFingerprint(serverFingerprint256);
@@ -85,7 +86,8 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
       });
     });
   }
-  const instanceSession = createAgentInstanceSession({ requestRegistration: (name, body) =>
+  let scopedRegistration = false;
+  const instanceSession = createAgentInstanceSession({ scopePrepareSource, registrationPurpose, workerEventSource, requestRegistration: (name, body) =>
     transmit(`/internal/v2/instances/${name}`, body) });
   async function request(name, fields) {
     if (closed || !paths[name]) throw accountError(503, 'run-client-unavailable');
@@ -94,14 +96,24 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
         'instanceId', 'instanceGeneration', 'instanceSession'].some(key => fields[key] !== undefined))
       throw accountError(400, 'invalid-authority-claim');
     if (name === 'checkAccess' && !['read', 'write'].includes(fields.action)) throw accountError(400, 'invalid-run-action');
-    if (name !== 'pending') await instanceSession.register();
-    return transmit(`/internal/v2/runs/${paths[name]}`, fields, operations[name] ?? null);
+    if (name !== 'pending' || registrationPurpose || scopedRegistration) await instanceSession.register();
+    return transmit(`/internal/v2/runs/${paths[name]}`, fields,
+      name === 'pending' && instanceSession.identity()?.purpose ? 'pendingRuns' : operations[name] ?? null);
   }
   return {
     admit: input => request('admit', input), confirmRead: input => request('confirmRead', input),
     queryRead: input => request('queryRead', input), checkAccess: input => request('checkAccess', input),
     finish: input => request('finish', input), runTicket: input => request('runTicket', input),
     pending: () => request('pending', {}),
+    async scopeAssignment(input) {
+      const keys = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'requestId'];
+      if (!input || Array.isArray(input) || Object.keys(input).sort().join(',') !== keys.sort().join(',') ||
+          Object.values(input).some(value => typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)))
+        throw accountError(400, 'invalid-scope-assignment');
+      if (closed) throw accountError(503, 'run-client-unavailable');
+      await instanceSession.register();
+      return transmit('/internal/v2/runs/assignment', input, 'scopeAssignment');
+    },
     async issueRunAsset(body, { registerResource } = {}) {
       if (closed) throw accountError(503, 'run-client-unavailable');
       if (registerResource !== undefined && typeof registerResource !== 'function')
@@ -113,6 +125,12 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
         { bodyText, runAssetIssue: true, registerResource });
     },
     registerInstance: () => instanceSession.register(), instanceIdentity: () => instanceSession.identity(),
+    scopeIdentity: () => instanceSession.scopeIdentity(),
+    configureRegistrationScope(input) { const result = instanceSession.configureRegistrationScope(input); scopedRegistration = true; return result; },
+    bindScope: input => instanceSession.bindScope(input),
+    scopePrepareFor: input => instanceSession.scopePrepareFor(input),
+    scopeIntentFor: input => instanceSession.scopeIntentFor(input),
+    workerEventProofFor: input => instanceSession.workerEventProofFor(input),
     dataProofFor: input => instanceSession.dataProofFor(input),
     conversationControlProofFor: input => instanceSession.conversationControlProofFor(input),
     runAssetHttpProofFor: input => instanceSession.runAssetHttpProofFor(input),
