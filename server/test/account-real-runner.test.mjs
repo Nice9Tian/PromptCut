@@ -27,7 +27,7 @@ test('actual hosted factory signs WSS/project.open, executes real tools and comm
       assert.equal(rows.filter(row => row.event.type === 'text').map(row => row.event.delta).join(''), REAL_RUNNER_TEXT);
       const state = await actor.send({ type: 'project.open', projectId: fixture.projectId });
       assert.equal(state.type, 'project.state'); assert.ok(state.rev > actor.opened.rev);
-      assert.equal(state.body.name, REAL_RUNNER_NAME);
+      assert.equal(state.project.name, REAL_RUNNER_NAME);
       const run = rows.find(row => row.event.type === 'run');
       const access = await fixture.checkRun(run);
       assert.equal(access.allowed, true); assert.equal(access.runGrant.state, 'active');
