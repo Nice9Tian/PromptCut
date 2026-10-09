@@ -104,7 +104,7 @@ export function createWorkerEventJournal({ file, authorityId, rootScopeRef, assi
       db.prepare('UPDATE worker_scope SET ack_head=? WHERE id=1').run(r.sourceSeq); return r;
     });
   }
-  return { append, acknowledge,
+  return { append, acknowledge, scope: () => { usable(); return structuredClone(scope); },
     source(packet) {
       const { rows } = inventory(), found = rows.find(row => row.seq === packet?.sourceSeq);
       if (!found || found.packet !== canonicalJson(packet)) fail(503, 'worker-journal-source'); return JSON.parse(found.packet);
