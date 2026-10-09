@@ -130,10 +130,17 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
   assert.equal(registered.purpose, 'run-worker');
   const grant = f.ledger.read().runGrantsV2[result.assignment.target.runGrantId];
   await assert.rejects(worker.assignmentReady(grant), { code: 'account-worker-not-bound' });
-  await assert.rejects(worker.startTask({ modelConfig: async () => { modelCalls++; return {}; } }), { code: 'account-worker-not-bound' });
+  const notBound = worker.startTask({ modelConfig: async () => { modelCalls++; return {}; } });
+  assert.equal(worker.startTask({}), notBound);
+  await assert.rejects(notBound, { code: 'account-worker-not-bound' });
   assert.equal(modelCalls, 0); assert.equal(Object.keys(f.ledger.read().runReceiptsV2).length, 0);
   await m.run('bind', { assignment: result.assignment });
   assert.equal((await worker.assignmentReady(grant)).executionAllowed, true);
+  // This now reaches the real assembly constructor rather than the old rejected
+  // start latch. Missing real readControl/sink/options MUST still reject; this
+  // assertion is not a successful Hosted/SSR execution or a free-allow fixture.
+  await assert.rejects(worker.startTask({}), { code: 'account-executor-configuration' });
+  await assert.rejects(worker.startTask({}), /account-worker-not-prepared/);
   await assert.rejects(worker.prepareTask({ ...task, requestId: 'other-task' }), { code: 'account-worker-task-conflict' });
   assert.equal(Object.keys(f.ledger.read().runGrantsV2).length, 1);
   assert.equal(worker.describe().completionReady, false);
