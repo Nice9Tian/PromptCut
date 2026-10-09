@@ -115,6 +115,14 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
       await instanceSession.register();
       return transmit('/internal/v2/runs/assignment', input, 'scopeAssignment');
     },
+    async workerEventSource(input) {
+      if (!input || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'assignmentDigest,projectId,runGrantId' ||
+          !['projectId', 'runGrantId'].every(k => typeof input[k] === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(input[k])) ||
+          !/^[a-f0-9]{64}$/.test(input.assignmentDigest)) throw accountError(400, 'invalid-worker-event-source');
+      if (closed) throw accountError(503, 'run-client-unavailable');
+      await instanceSession.register();
+      return transmit('/internal/v2/runs/worker-event-source', input, 'workerEventSource');
+    },
     async issueRunAsset(body, { registerResource } = {}) {
       if (closed) throw accountError(503, 'run-client-unavailable');
       if (registerResource !== undefined && typeof registerResource !== 'function')
