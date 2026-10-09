@@ -1,0 +1,17 @@
+{
+  "source": "9e9854abc913c488c6b844aa44554f6c18c97c7d",
+  "namespace": "pcagentrunproofd150ecc31aa04187",
+  "remoteRoot": "/run/pcagentrunproofd150ecc31aa04187",
+  "sourceSha256": {
+    "scripts/probes/agent-run-scope-proof.mjs": "ec40812125c63043afc3a07cda20a2438e141c5e6a8aa8dee1eedb900dbd95f9",
+    "scripts/probes/fixtures/agent-run-scope-worker.mjs": "11302bfb40ebdbee2d94887f801e061543e97d212ca337e6b7f7d4b212768e4e",
+    "server/hosted/deploy/agent-run-scope-publisher.mjs": "22992175448bfb5b1bc7b606b7d7825eec1215d404012686db7cae98c3294687",
+    "server/hosted/agent-run-scope-schema.mjs": "29dbf22fd540ab5781b3e66dd91c58404b25d095001f3fe710681acaf7431112",
+    "server/hosted/agent-run-scope-reader.mjs": "39710d4f83f580d3061b722c555f5cc8b51acc2e61f7520ee5b5cbd2b25d93ed",
+    "server/hosted/deploy/asset-root-registry-publisher.mjs": "52288693dadf1e2ccbacc9e20b2afba669306c305a09a582e2b264dcde48b8b4",
+    "server/hosted/asset-root-registry-schema-v2.mjs": "f7a96b5fc6fbde15fb1dc18c3d576e433cb6c7c1b505aeec999fd0e6cb490f20",
+    "server/account/ledger.mjs": "491a0ae0d8d99312b46d3d74c0158df6474159d06566048d5b565be660d67238",
+    "server/account/client.mjs": "fbe71db0c18762a2af27b447d4838932c789d6e217f232f3f95c28b0932fb90d",
+    "server/account/protocol.mjs": "6a0f40fd89df3a8ae75a76a53627927f71b4aebb5fc4ee0b992d4793587a5ecc"
+  }
+}

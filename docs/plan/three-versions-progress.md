@@ -86,7 +86,7 @@
 - 开工前原普通档探针也失败：独立主机等待超时及两个后续断言；强化探针又遇旧夹具不适配新账号入口，尚未通过，不挡其它已验阶段。
 - 素材异步关闭和两代进程实验已有通过证据，但生产登记与传输还没接齐；保留分支，不用局部测试冒称完成。
 - 改密和重设的文字路径46项已过；全部服务确认、活跃任务停止及真实附件链还没做齐，仍保留总任务。首败与根验收见[改密完整记录](../archive/three-versions-password-user-path-2026-10-09.md)。
-- 新任务进程与结算尚在接线，不能用模型输出结束、连接数为零或父进程退出替代整组资源关闭。生产两模型尚未验。
+- 新任务进程与结算尚在接线：根联合219项和Linux原组关闭12项已过，完整独立进程任务还未跑完。局部证据见[任务进程准备](../archive/three-versions-worker-preparation-2026-10-09.md)；生产两模型尚未验。
 - 公网账号首两轮、成员/对话窗口、读取撤回和完整工具链的首败均保留在归档；修后实际通过的部分才收回。累计5个自建测试账号、两个项目还待准确清理。
 
 最近实际截图：[双方项目列表](../archive/three-versions-user-path/online-created-list.png)、[桌面加入](../archive/three-versions-user-path/desktop-joined-project.png)、[完整编辑器工具](../archive/three-versions-real-runner-scope-evidence/root-real-00-actual-editor.png)、[另一方历史重放](../archive/three-versions-real-runner-scope-evidence/root-real-01-actual-editor.png)、[成员私有正文清除](../archive/three-versions-real-runner-scope-evidence/root-private-06-member-after-private-history-refresh.png)。
