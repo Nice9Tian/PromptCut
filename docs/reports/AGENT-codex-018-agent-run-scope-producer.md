@@ -65,3 +65,15 @@ A/B 实际先初始化、bind、两角色 TCP/文件持有确认。先经真实 
 ### 源闭包
 
 新增 schema、reader、publisher、probe、worker；既有 Asset publisher/schema；既有 `server/account/ledger.mjs` 及其静态依赖。root 可按固定提交的 Git 文件闭包导出，不能拿 G WIP 或本机绝对路径作运行依赖。Doc 签名业务 producer、真实执行器/远端任务资源引用、doc finalizer/SQLite 闭合投影均未接；该实验通过也只证明单 run root 生命周期和可信源，不能声称整个 Agent FIFO/生产 ready。
+
+静态源闭包除上述七文件外，ledger 引入 `server/account/client.mjs`，后者引入 `server/account/protocol.mjs`；剩余都是 Node builtin（含 node:sqlite，只导入未在本实验创建业务账本）。无需安装 npm 包。
+
+## Agent identity 的额外 OS 绑定
+
+70809091 固定轮专属+Asset 全部109/109，0 failed/cancelled/skipped，322.481 ms（wall580 ms）；type0/6638 ms。原日志 `pc-agent-run-scope-70809091-target-2.log`、`pc-agent-run-scope-70809091-type-2.log` 保留。
+
+代码自审发现仅 identity RPC 的 pid 自报与 proc 双读不足以排除同 pin 另一进程抢 origin。root 批准在 Agent adapter 内窄补：仅允许配置 `https://127.0.0.1:<port>/`；identity RPC 前后，从真实 `/proc/net/tcp{,6}` 找唯一对应 LISTEN，并要求是127.0.0.1、UID匹配、inode确在该 MainPID 的 `/proc/PID/fd`。同一 network namespace、proc birth/UID/cgroup、完整OS双tuple与监听inode均前后核对；未知/多个候选/错UID/错PID fd/换socket拒绝。只有启动尚未出现监听允许有界 readiness 退避，其它错误不重试。原 Asset 算法、默认入口和 endpoint 未增加此新要求。
+
+纯测试覆盖 Linux table 解析、错误 MainPID 的 fd 集、wildcard/IPv6替代/重复端口/未知格式；这些是纯反例，不代表本机实际Linux proc已经跑过。CLI与实验统一调用同一个 `createAgentScopeRuntime`，实验不跳过该归属门。
+
+仍保持部署限制：跨boot历史不自动恢复；ready 尚无assignment而失败的代不被后代空实例覆盖，保留锁/记录交root显式恢复；不把重试初始化当清理。此阶段不提供通用恢复删除/force接口。

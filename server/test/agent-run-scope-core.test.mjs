@@ -9,13 +9,32 @@ import { scopeModel, pair, signed } from './agent-run-scope-fixture.mjs';
 import { digestOf } from '../account/ledger.mjs';
 import { inspectAgentScopeSource, createAgentScopeReader } from '../hosted/agent-run-scope-reader.mjs';
 import { validateAgentScopeReservation, scopeRuntimeExpected } from '../hosted/agent-run-scope-schema.mjs';
-import { runAgentScopePublisher } from '../hosted/deploy/agent-run-scope-publisher.mjs';
+import { runAgentScopePublisher, parseAgentTcpListeners, validateAgentListenerOwner } from '../hosted/deploy/agent-run-scope-publisher.mjs';
 import { openPublisherLock, writePublisherArtifact, createRootScopeRuntimeV2 } from '../hosted/deploy/asset-root-registry-publisher.mjs';
 
 const read = (m, checkpoint = null) => inspectAgentScopeSource({ read: m.io.read, expected: m.expected,
   configuredAnchorDigest: digestOf(m.files.get('anchor.json')), checkpoint });
 const initialize = async () => { const m = scopeModel(); await m.run('initialize'); return m; };
 const bound = async () => { const m = await initialize(); await m.run('bind', { assignment: m.assignment() }); return m; };
+
+test('listener parser/owner refuses another MainPID fd set, wildcard, other UID and ambiguous/reused port', async t => {
+  const header = 'sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode';
+  const row = '0: 0100007F:198C 00000000:0000 0A 00000000:00000000 00:00000000 00000000 12001 0 91234 1 0';
+  const input = { tcp4: `${header}\n${row}`, tcp6: header, links: ['socket:[91234]'], port: 6540, uid: 12001 };
+  assert.equal(validateAgentListenerOwner(input).inode, '91234');
+  assert.equal(parseAgentTcpListeners(input.tcp4, 4)[0].address, '0100007F');
+  for (const [name, change] of [
+    ['wrong MainPID owns different socket', { links: ['socket:[77777]'] }],
+    ['recycled inode absent from actual fd', { links: [] }],
+    ['wildcard bound management listener', { tcp4: `${header}\n${row.replace('0100007F', '00000000')}` }],
+    ['other UID', { uid: 12002 }],
+    ['multiple candidates', { tcp4: `${header}\n${row}\n${row.replace('91234', '91235')}` }],
+    ['unknown table', { tcp4: '' }],
+    ['malformed table', { tcp4: `${header}\n0: missing` }],
+    ['IPv6 alternative listener', { tcp4: header, tcp6: `${header}\n${row.replace('0100007F', '00000000000000000000000001000000')}` }],
+  ]) await t.test(name, () => assert.throws(() => validateAgentListenerOwner({ ...input, ...change })));
+  assert.throws(() => validateAgentListenerOwner({ ...input, tcp4: header }), { code: 'agent-scope-listener-not-ready' });
+});
 
 test('controlled two independent slots: closing A leaves B bound; two epochs have distinct complete OS/key identities', async () => {
   const a = await bound(), b = scopeModel('slot-b'); await b.run('initialize'); await b.run('bind', { assignment: b.assignment() });

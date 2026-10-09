@@ -17,10 +17,10 @@ import { execFile } from 'node:child_process';
 import { createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { digestOf } from '../../server/account/ledger.mjs';
-import { rootRead, createRootScopeRuntimeV2, procInfo, systemUnitV2, writePublisherArtifact } from '../../server/hosted/deploy/asset-root-registry-publisher.mjs';
-import { publishAgentScope } from '../../server/hosted/deploy/agent-run-scope-publisher.mjs';
+import { rootRead, procInfo, systemUnitV2, writePublisherArtifact } from '../../server/hosted/deploy/asset-root-registry-publisher.mjs';
+import { publishAgentScope, createAgentScopeRuntime } from '../../server/hosted/deploy/agent-run-scope-publisher.mjs';
 import { createAgentScopeReader } from '../../server/hosted/agent-run-scope-reader.mjs';
-import { exactScope, sameScope, scopeRuntimeExpected, validateAgentScopeExpected, validateAgentScopeReservation } from '../../server/hosted/agent-run-scope-schema.mjs';
+import { exactScope, sameScope, validateAgentScopeExpected } from '../../server/hosted/agent-run-scope-schema.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -120,9 +120,7 @@ export async function runAgentScopeProof({ configFile, out }) {
         !sameScope(worker.expected, expected) || worker.registryDir !== cfg.registryDir || ![worker.port, worker.observerPort].every(p => p >= 6540 && p <= 6549)) fail('probe-config');
     const unit = await systemUnitV2(expected.unit);
     if (unit.ActiveState !== 'inactive' || Number(unit.MainPID) !== 0 || unit.ControlGroup) fail('probe-unit-not-idle');
-    const io = await createRootScopeRuntimeV2({ ...cfg, expected: scopeRuntimeExpected(expected) }, {
-      validateReservation: r => validateAgentScopeReservation(r, expected), identityPath: '/internal/v2/agent/run-scope/identity',
-    });
+    const io = await createAgentScopeRuntime(cfg);
     slots.push({ expected, cfg, worker, io });
   }
   for (const field of ['unit', 'slotId', 'authorityId']) if (slots[0].expected[field] === slots[1].expected[field]) fail('probe-slots-not-independent');
