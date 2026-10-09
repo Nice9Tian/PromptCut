@@ -42,3 +42,11 @@
 - 共享项目、真实 consent、Agent 启用均完成；read-control 起始为 connected、open=0、closed=0、executor 未挂载。启用前 Agent `info`、列表和 events 为 403 `disabled`。启用后，消息前一个 events 请求被 Edge 记为 502；Agent HTTP 侧没有对应的 completed 502 记录，代理侧有 `ECONNRESET`/abort/incomplete-close 记录。消息真实 POST 为 202，UI 显示一个等待执行的队列项，发送后的真实 events 为 200 长流，随后页面能显示用户纯文本 SSE 消息。这个结果支持“首次消息前新对话与发送后已有 durable 事件”行为不同，但没有通过模拟状态或读取原始响应体作结论。
 - 网站改密 POST 返回 200、退出其它设备选择返回 202；另外两个网站会话退出断言通过。探针在 `editor-wait-for-real-read-revocation` 等待旧正文自然消失时超时；截图中的在线编辑器仍有权限读取加载状态，因此正文清除没有通过。其后真实 events 出现 401 `unauthorized`，read-control 最终仍 connected、open=0、closed=8，并报告 `read-control-disconnected`。没有到达正文清除检查完成、退出事件状态检查、后续历史读取拒绝或 reset UI；不得把 34 个已过检查等同完整路径通过。
 - 当前证据将 early events 502 与其余服务侧状态区分开，但仍无法仅凭路由类别建立同一请求级因果。下一步应由 root 审阅首次失败截图与安全 JSON；本分支不改产品或绕过 read fence，也不再次启动浏览器。附件路径没有尝试，仍待真实服务 authority 单独接通和验收。
+
+## 前台撤权与真实历史拒绝复验（2026-10-09）
+
+- 对 `b8473743` 的后台轮询失败，只修了探针和报告。只读源码确认账号 Cloud ticket 每次来自当前内存 `ProjectSession.agentDelegationTicket`；project session 过期时才由当前账号客户端续期，失权会清除 `CloudIdentity`。探针只记录项目 session 响应是否含合法票据，票据仅在进程内存保留供必要的拒权 fallback，不写入 JSON 或日志。
+- 固定 probe `c8e61862f4247aa5f9b2b18d8e0d7aff404b580f` 后只复验一次。撤权清除等待前 Editor 的焦点为 `hidden/false`；调用 `bringToFront()` 后为 `visible/true`。只读快照显示 expected message 不残留、用户消息 0、排队项 0、权限加载 0；改成 100ms polling 的真实 DOM predicate 通过，随后消息/队列最终计数仍为 0。真实可见的历史按钮被实际点击，Agent history 返回 401；`deniedHistoryRead` 记录 endpoint 类别与状态，不包含票据。此轮因此完成了旧正文消失、队列清空、真实历史拒绝三项读取撤权验证，不需要直接旧票 fallback。
+- 改密 POST 200、退出选择 202、两条其他网站会话退出断言通过；旧 SSE 关闭断言通过。在线 editor 发生真实 events 401，之后真实 project-session renew POST 401。read-control 最终 connected=true、open=0、closed=9；无 executor。
+- 本轮总计 39 项检查通过、0 项断言失败，但 `completed=false`：运行在 `website-provider-issued-reset` 阶段、reset 操作尚未开始时退出；完整日志的当前 phase 仍为 password-change-and-exit。截图和安全 JSON 保存在 `%TEMP%\pc-password-user-path-front-recheck-c8e61862`。Editor 被置前后，initiator 网站 tab 转为后台；退出发生在 password-pending 截图准备处，结果未留下更细的内部异常分类。因此不得把 reset 记为本轮验收通过，也不能确定截图准备是唯一失败根因。下一步若要继续，应先只为该 probe 步骤补当前焦点/安全异常分类，再由 root 决定是否授权新的单轮运行。
+- 真实浏览器、stage、fixture、asset child 全部关闭，6680–6689 空闲。未修改产品，没有重跑或清理首轮与本轮证据。
