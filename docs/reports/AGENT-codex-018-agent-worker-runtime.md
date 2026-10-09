@@ -71,3 +71,15 @@ session可配置required registrationPurpose并核服务器回显；rootScope配
 固定aafd69ec专属9/9、0fail/cancel/skip、110.6967ms/exit0（外层347ms），TMP `pc-worker-session-aafd69ec-target.log`。均纯受控注册/真实RAM签名，没有业务TLS监听。尚未把Astraeca3/purpose新增provider合进本叶，等待root冻结组合；未冒用其目标结果。
 
 root准最窄workerEventProofFor固定POST独立域，但实际signed remote sink的fresh Doc验权仍需observer getter：control-only master不能拿当前五个op作scopeAssignment/checkAccess(write)，历史rootassignment不是currentgrant/fence权限。已与Astra约exactworker/root/actor绑定的只读private getter；缺callback仍503，不自由allow、不放宽masterrun能力。当前gateway/worker入口/remote sink没有实现或运行，不能称此阶段完整OSworker/Editor已过。
+
+## 独立事件签名协议及真实注册目标预备
+
+事件签名首红12tests/9pass/3fail/119.0206ms，三个新目标均为workerEventProofFor缺失，TMP `pc-worker-event-signer-first.log`；原9项未退化。固定源码1284c59f后12/12、0fail/cancel/skip、125.6583ms，`pc-worker-event-signer-fixed.log`。纯exporter adapter、真实同RAM Ed25519；不是实际TLS/远端sink/OSworker验证。新域只签固定POST `/internal/v2/worker/events/append`，完整原body SHA256、packet/rootref/assignmentDigest/fullbinding/sourceSeq/eventId、nonce、独立TLS exporter。私有durable source缺失或变packet拒，sourceawait后真实socket已关闭拒。签名不能替fresh Doc授权。
+
+root已将clean叶快进56a10f07，纳Astra5beb的真实scope provider/角色注册/assignment gate；未自行合依赖。Astra新getter约exactPOST `/internal/v2/runs/worker-event-source`、独立workerEventSource operation、body只projectId/runGrantId/assignmentDigest；control-only master真实PoP，每次真实rootbound/currentgrant/readreceipt/active或精确retained/fence核验。只返业务message和公开绑定/DERkey/Docworkerpin/版本，不返人类login/credential/delegation或cap；master不能藉此拿run/check/write授权。此getter尚WIP，remote sink接收端未配置仍503。
+
+新增account-task-worker为真实oneRAM/client/identity入口：root reservation来自可信启动参数；identity只接受另配root-controller leaf，原root schema exact response、真实process.pid及DER公钥。worker→Doc outbound TLS另配证书，不能把root-controller pin当Doc worker pin。仅一project/conversation/requestId领grant并取得Doc签assignment；assignmentReady再次真实问Doc且同原tuple/原assignment，未bound拒startTask；startTask仍调用现有account-executor-assembly/Hosted factory，不复制执行器。局部close等待实际identity sockets、client请求/TLSsocket与正在startup的assembly收口，不产root闭合证据。
+
+本次预备Windows真实TLS目标使用6700 Doc/6701 workeridentity；完整6700–6711预检无监听。TMP临时PKI/SQLite/rootchain，真实原instance/run internalhandlers、PoP/exporter、同RAM注册/admit，原inspectAgentScopeSource完整检查实际JSON链。publisher的cgroup/birth/uid为受控OS模型，account sender核验为受控adapter；不降低production createAgentScopeReader的linux-required，也不声称系统root权限/OSclosed。节点根后续应以相同冻结入口配真实Linux reader/publisher、独立controller证书与worker出站证书执行。旧128M控制实验上限不用于SSR worker；root须实测RSS后选本次实验限制，此处没有默认生产预算或吞吐结论。
+
+当前尚未执行这个新的TLS目标、未跑全量/模型/完整Editor；gateway/remoteeventmaster/finalizer/forced退役配对未完成，completionReady仍false。已通过的旧Editor/main基线不得套给这些新代码。

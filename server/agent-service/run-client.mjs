@@ -21,7 +21,7 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
   if (base.protocol !== 'https:' || base.pathname !== '/' || base.search || base.hash || base.username || base.password ||
     !tls?.key || !tls?.cert || !tls?.ca || !/^[a-f0-9]{64}$/.test(pin) || !Number.isInteger(timeoutMs) || timeoutMs < 1)
     fail('run-client-configuration');
-  const active = new Set(); let closed = false;
+  const active = new Set(), sockets = new Set(); let closed = false, closing = null;
   /** Every call opens its own real TLS socket. The signature is constructed only
    * after secureConnect, then the exact body is sent, and completion waits for
    * the transport close. No HTTP capability is reused on a later request. */
@@ -66,7 +66,8 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
       req.on('error', () => abort(accountError(503, 'run-client-unavailable')));
       req.on('socket', current => {
         socket = current;
-        current.once('close', () => { socketClosed = true; finish(); });
+        sockets.add(current);
+        current.once('close', () => { sockets.delete(current); socketClosed = true; finish(); });
         const registrations = registerResource ? Promise.all([
           registerResource('stream', req), registerResource('socket', current),
         ]) : Promise.resolve([]);
@@ -134,6 +135,15 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     dataProofFor: input => instanceSession.dataProofFor(input),
     conversationControlProofFor: input => instanceSession.conversationControlProofFor(input),
     runAssetHttpProofFor: input => instanceSession.runAssetHttpProofFor(input),
-    close() { closed = true; instanceSession.close(); for (const req of active) req.destroy(); },
+    close() {
+      if (closing) return closing;
+      closed = true; instanceSession.close();
+      const resources = new Set([...active, ...sockets]);
+      closing = Promise.all([...resources].map(resource => new Promise(resolve => {
+        if (resource.closed === true) return resolve();
+        resource.once('close', resolve); resource.destroy();
+      })));
+      return closing;
+    },
   };
 }
