@@ -1,0 +1,40 @@
+{
+  "sourceBefore": "0eda72c970905e65ecf09e01d05f7ad322ec79e5",
+  "sourceAfter": "0eda72c970905e65ecf09e01d05f7ad322ec79e5",
+  "summary": {
+    "passed": 27,
+    "failed": 0,
+    "completed": true,
+    "sourceUnchanged": true
+  },
+  "completed": true,
+  "elapsedMs": 4169,
+  "cleanup": {
+    "browserClosed": true,
+    "stages": [
+      {
+        "port": 6688,
+        "listening": false,
+        "sockets": 0
+      },
+      {
+        "port": 6689,
+        "listening": false,
+        "sockets": 0
+      }
+    ],
+    "fixtureClosed": true,
+    "assetChildClosed": true,
+    "portsFree": true,
+    "profileRemoved": true
+  },
+  "fixtureCleanup": {
+    "childClosed": true,
+    "closeFailureCount": 0
+  },
+  "readControl": {
+    "connected": true,
+    "registeredInstanceReady": true,
+    "executorMounted": false
+  }
+}
