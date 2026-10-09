@@ -148,7 +148,9 @@ test('one registered RAM instance assembles real mTLS run/read clients; POST mir
       if (publicServer?.listening) { publicServer.closeAllConnections(); await new Promise(resolve => publicServer.close(resolve)); }
       // A rejected owned close must not skip any later server/socket/db cleanup.
       // Inspect every result, retain the primary assertion, and fail on cleanup.
-      const results = await Promise.allSettled([assembly?.close(), controlClient?.close()]);
+      // Assembly exclusively owns its read client. Concurrently closing the
+      // same SQLite receipt store twice is not an independent closure witness.
+      const results = await Promise.allSettled([assembly ? assembly.close() : controlClient?.close()]);
       const errors = results.filter(row => row.status === 'rejected').map(row => row.reason);
       client?.close(); runClient?.close(); reads.close();
       await Promise.all([...sockets].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); })));
