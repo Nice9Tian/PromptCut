@@ -50,3 +50,12 @@
 - 改密 POST 200、退出选择 202、两条其他网站会话退出断言通过；旧 SSE 关闭断言通过。在线 editor 发生真实 events 401，之后真实 project-session renew POST 401。read-control 最终 connected=true、open=0、closed=9；无 executor。
 - 本轮总计 39 项检查通过、0 项断言失败，但 `completed=false`：运行在 `website-provider-issued-reset` 阶段、reset 操作尚未开始时退出；完整日志的当前 phase 仍为 password-change-and-exit。截图和安全 JSON 保存在 `%TEMP%\pc-password-user-path-front-recheck-c8e61862`。Editor 被置前后，initiator 网站 tab 转为后台；退出发生在 password-pending 截图准备处，结果未留下更细的内部异常分类。因此不得把 reset 记为本轮验收通过，也不能确定截图准备是唯一失败根因。下一步若要继续，应先只为该 probe 步骤补当前焦点/安全异常分类，再由 root 决定是否授权新的单轮运行。
 - 真实浏览器、stage、fixture、asset child 全部关闭，6680–6689 空闲。未修改产品，没有重跑或清理首轮与本轮证据。
+
+## 前台截图步骤与完整纯文本/重设闭环（2026-10-09）
+
+- 按 root 对 `c8e61862` 结果的审阅，只改探针和本报告：`safeShot` 先记录目标页面切前台前后的 `visibilityState/hasFocus`，再由真实可见输入框点击清理密码和验证码；填表及其余真实页面点击也统一先将对应页面带到前台。没有使用 DOM click、脚本注入状态或截图明文。
+- `password-pending` 截图准备现在单独标为 phase `password-change-pending-screenshot` / step `website-password-pending-screenshot`，只有截图成功后才进入 `password-reset-with-provider-issued-code`。catch 安全结果只保存动作分类、异常类型、协议方法与原因枚举、去掉原错误首行后的最多 16 个栈帧，并移除 URL query；不保存原始 error message、局部变量、口令或验证码。
+- provider 专属 `npm test -- server/test/account-password-user-path.test.mjs` 通过 1/1；`node --check` 与 `git diff --check` 通过。探针固定源码为 `cf82a519a9c3a307490fced7c4b8fe9c9bdb446f` 后只执行一轮真实路径，结果 `%TEMP%\pc-password-user-path-final-cf82a519`：46 项检查通过、0 失败、completed=true、sourceUnchanged=true。
+- 撤权部分再次实测：Editor 后台切到前台后显示 `visible/true`；DOM 只读计数为旧正文不残留、用户消息 0、队列 0；100ms polling 的正文消失检查、旧事件流关闭、消息/队列最终清空均通过。真实 UI 历史按钮点击后 Agent history 返回 401。真实项目 session 中合法票据仅在进程 RAM 暂存，实际历史拒绝来自按钮发起的请求，因此没有使用直接旧票 fallback。events 与 project-session renewal 的撤权响应按安全网络记录可见。
+- 主路径中的真实网站改密和选择退出后，随后实际绑定隔离邮箱、通过真实 provider 生成并校验的 reset code 完成网页重设，再选择退出其他会话。provider 邮件回调只在本机 fixture 私有内存接收随机码，没有外部邮箱投递；改密和重设退出选择均为真实 202/pending 状态，没有把 `revoking` 说成已完成，也没有伪造 service ACK。provider 目标测试另已验证旧密码拒绝、新密码可登录与另两网站会话/Editor 登录失效。
+- 浏览器、stage、fixture、asset child 均关闭，6680–6689 端口空闲。之前 `b8473743` 的后台等待失败、`c8e61862` 的 reset 截图准备失败及其原始证据均保留，没有覆盖或清理。
