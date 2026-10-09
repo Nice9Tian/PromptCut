@@ -48,6 +48,7 @@ test('account runner_done, raw done/end and model error do not claim settled suc
     assert.equal(messages[1].outcome, undefined);
     assert.equal(messages[1].finishedAt, undefined);
     assert.equal(messages[1].statuses.at(-1), '执行已结束，等待云端确认关闭与结算。');
+    assert.equal(messages[1].progress.text, '执行已结束，等待云端确认关闭与结算。');
     assert.equal(applyCloudEvent(messages, event('runner_done', 5, { settlement: 'pending' })).length, 2);
     assert.equal(applyCloudEvent(messages, event('runner_done', 5, { settlement: 'pending' }))[1].statuses.length, 1);
   }
