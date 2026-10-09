@@ -19,6 +19,7 @@ const argv = process.argv.slice(2);
 const arg = name => { const index = argv.indexOf(name); return index < 0 ? undefined : argv[index + 1]; };
 const required = name => { const value = arg(name); if (!value || value.startsWith('--')) throw Error(`missing-${name}`); return path.resolve(value); };
 const DIST = required('--dist'), SITE = required('--site-root'), OUT = required('--out');
+const SITE_FORM_ONLY = argv.includes('--site-form-only');
 const outRelative = path.relative(os.tmpdir(), OUT);
 if (!outRelative || outRelative.startsWith('..') || path.isAbsolute(outRelative)) throw Error('output-must-be-private-temp-child');
 const PORTS = [6680, 6681, 6682, 6683, 6684, 6685, 6686, 6687, 6688, 6689];
@@ -28,7 +29,7 @@ const TIMEOUT = 35_000;
 const MIME = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.css':'text/css', '.json':'application/json',
   '.svg':'image/svg+xml', '.png':'image/png', '.jpg':'image/jpeg', '.woff':'font/woff', '.woff2':'font/woff2', '.ttf':'font/ttf', '.wasm':'application/wasm' };
 const SOURCE = () => execFileSync('git', ['rev-parse', 'HEAD'], { cwd:ROOT, windowsHide:true, encoding:'utf8' }).trim();
-const result = { sourceBefore:SOURCE(), checks:[], phases:[], network:[], eventStreams:[], pageErrors:[], screenshots:[], completed:false, cleanup:{} };
+const result = { sourceBefore:SOURCE(), checks:[], phases:[], network:[], staticAssets:[], styleStates:[], eventStreams:[], pageErrors:[], screenshots:[], completed:false, cleanup:{} };
 const SAFE_AGENT_CODES = new Set(['disabled','bad-grant','unauthorized','forbidden','account-required','consent-required',
   'project-mismatch','ticket-expired','ticket-invalid','not-found','bad-request','service-unavailable']);
 let fixture, browser;
@@ -130,6 +131,11 @@ async function newPage(context, label) {
     let url; try { url = new URL(response.url()); } catch { return; }
     if (![ORIGIN, ...STAGES].includes(url.origin)) return;
     const route = safePath(response.url());
+    if (/\.(?:css|js)$/.test(url.pathname) && (url.pathname.startsWith('/editor/assets/') || url.pathname.startsWith('/assets/'))) {
+      const type = response.headers()['content-type']?.split(';')[0].trim();
+      result.staticAssets.push({ page:label, path:url.pathname, status:response.status(),
+        type:type === 'text/css' || type === 'text/javascript' || type === 'application/javascript' ? type : 'other' });
+    }
     if (route.startsWith('/api/account/') || route.startsWith('/agent/v1/') || route === '/hosted/shared/account/admin') {
       const entry = { page:label, method:response.request().method(), path:route, status:response.status() };
       if (route.startsWith('/agent/v1/') && response.status() >= 400) void response.json().then(body => {
@@ -150,6 +156,11 @@ async function newPage(context, label) {
   });
   page.on('requestfinished', request => { const entry = eventRequests.get(request); if (entry) entry.lifecycle = 'finished'; });
   page.on('requestfailed', request => { const entry = eventRequests.get(request); if (entry) entry.lifecycle = 'failed'; });
+  page.on('requestfailed', request => {
+    let url; try { url = new URL(request.url()); } catch { return; }
+    if (![ORIGIN, ...STAGES].includes(url.origin) || !/\.(?:css|js)$/.test(url.pathname)) return;
+    result.staticAssets.push({ page:label, path:url.pathname, status:null, type:'failed-request' });
+  });
   return page;
 }
 async function fill(page, selector, value) {
@@ -170,6 +181,17 @@ async function safeShot(page, label) {
   }
   const clear = await page.$$eval('input[type="password"]', nodes => nodes.every(node => !node.getClientRects().length || node.value === ''));
   if (!clear) throw Error('password-screenshot-blocked');
+  result.styleStates.push({ page:page.label, label, ...(await page.evaluate(() => {
+    const links = [...document.querySelectorAll('link[rel="stylesheet"]')];
+    let readableRuleCount = 0, unreadableStyleSheets = 0;
+    for (const sheet of [...document.styleSheets]) {
+      try { readableRuleCount += sheet.cssRules.length; } catch { unreadableStyleSheets++; }
+    }
+    return { stylesheetCount:links.length, loadedStylesheetCount:links.filter(link => Boolean(link.sheet) && !link.disabled).length,
+      readableRuleCount, unreadableStyleSheets,
+      bodyHasBackground:getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)',
+      buttonsStyled:[...document.querySelectorAll('button')].some(button => getComputedStyle(button).borderRadius !== '0px') };
+  })) });
   const file = `${label}.png`; await page.screenshot({ path:path.join(OUT, file), fullPage:true }); result.screenshots.push(file);
 }
 async function visibleAndUnobscured(page, element) {
@@ -195,6 +217,50 @@ async function loginWebsite(page, account, label) {
   const visibleNameMatches = await page.$eval('#acc-name', element => element.textContent?.trim()) === account.name;
   check(visibleNameMatches, `${label}-authenticated-account-name`);
   await safeShot(page, `${label}-website-login`);
+}
+async function changePasswordThroughWebsite(page, account, checkPrefix = '') {
+  currentPhase = 'password-change-and-exit';
+  await page.goto(`${ORIGIN}/account`, { waitUntil:'domcontentloaded' });
+  await page.waitForSelector('#password input[name="current"]', { visible:true });
+  await fill(page, '#password input[name="current"]', account.password);
+  await fill(page, '#password input[name="next"]', account.nextPassword);
+  await fill(page, '#password input[name="again"]', account.nextPassword);
+  result.passwordFormState = await page.$eval('#password', form => {
+    const current = form.querySelector('[name="current"]'), next = form.querySelector('[name="next"]'), again = form.querySelector('[name="again"]');
+    const submit = form.querySelector('button[type="submit"]');
+    return { valid:form.checkValidity(), currentPresent:Boolean(current?.value), nextPresent:Boolean(next?.value),
+      repeatedMatches:Boolean(next?.value) && next.value === again?.value, submitEnabled:Boolean(submit && !submit.disabled) };
+  });
+  check(result.passwordFormState.valid && result.passwordFormState.currentPresent && result.passwordFormState.nextPresent &&
+    result.passwordFormState.repeatedMatches && result.passwordFormState.submitEnabled,
+  checkPrefix ? `${checkPrefix}-password-form-valid` : 'password-change-form-valid-before-submit');
+  const submit = await page.$('#password button[type="submit"]');
+  if (!submit) throw Error('password-submit-button-missing');
+  await submit.evaluate(element => element.scrollIntoView({ block:'center', inline:'nearest' }));
+  result.passwordSubmitGeometry = await submit.evaluate(element => {
+    const rect = element.getBoundingClientRect(), style = getComputedStyle(element);
+    const visible = !element.disabled && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 &&
+      rect.top >= 0 && rect.left >= 0 && rect.bottom <= innerHeight && rect.right <= innerWidth;
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return { visible, unobscured:Boolean(hit && (hit === element || element.contains(hit))) };
+  });
+  check(result.passwordSubmitGeometry.visible && result.passwordSubmitGeometry.unobscured,
+    checkPrefix ? `${checkPrefix}-password-submit-visible-unobscured` : 'password-submit-visible-unobscured');
+  const passwordResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
+    new URL(response.url()).pathname === '/api/account/password', { timeout:TIMEOUT })
+    .then(response => ({ response }), () => ({ response:null }));
+  await submit.click();
+  const passwordResult = (await passwordResponse).response;
+  if (!passwordResult) throw Error('password-change-response-not-observed');
+  check(passwordResult.status() === 200, checkPrefix ? `${checkPrefix}-actual-password-change-accepted` : 'actual-password-change-request-accepted');
+  await page.waitForFunction(() => document.querySelector('#password-event-choices')?.hidden === false, { timeout:TIMEOUT });
+  const choiceResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
+    /\/password-events\/[^/]+\/choice$/.test(new URL(response.url()).pathname), { timeout:TIMEOUT })
+    .then(response => ({ response }), () => ({ response:null }));
+  await page.click('#password-exit-yes');
+  const choice = (await choiceResponse).response;
+  if (!choice) throw Error('password-event-choice-response-not-observed');
+  check(choice.status() === 202, checkPrefix ? `${checkPrefix}-exit-choice-real-pending` : 'exit-choice-awaits-real-service-confirmations');
 }
 async function closeOwnStageServers() {
   for (const item of stageServers) {
@@ -319,6 +385,40 @@ try {
   const account = fixture.accounts[0];
   for (let index = 0; index < sitePages.length; index++) await loginWebsite(sitePages[index], account, ['initiator', 'other-one', 'other-two'][index]);
 
+  if (SITE_FORM_ONLY) {
+    result.mode = 'site-password-form-smoke';
+    currentPhase = 'site-password-form-preflight';
+    const editor = await newPage(contextsByRole[0], 'online-editor');
+    await editor.goto(`${ORIGIN}/editor/`, { waitUntil:'domcontentloaded' });
+    await editor.waitForSelector('[data-pc="account-name"]', { visible:true });
+    check(result.network.some(entry => entry.page === 'online-editor' && entry.method === 'POST' &&
+      entry.path === '/api/account/editor/session' && entry.status === 200), 'actual-editor-login-created-before-password-change');
+    await changePasswordThroughWebsite(sitePages[0], account, 'site-smoke');
+    await sitePages[0].waitForSelector('#acc-name', { visible:true });
+    check(new URL(sitePages[0].url()).pathname === '/account', 'site-smoke-initiating-session-remains');
+    await Promise.all([sitePages[1], sitePages[2]].map(async (page, index) => {
+      await page.goto(`${ORIGIN}/account`, { waitUntil:'domcontentloaded' });
+      await page.waitForFunction(() => new URL(location.href).pathname === '/login', { timeout:TIMEOUT });
+      check(new URL(page.url()).pathname === '/login', `site-smoke-other-session-${index + 1}-revoked`);
+    }));
+    const verificationContext = await browser.createBrowserContext(); contexts.push(verificationContext);
+    const verificationPage = await newPage(verificationContext, 'password-login-verification');
+    await verificationPage.goto(`${ORIGIN}/login`, { waitUntil:'domcontentloaded' });
+    await fill(verificationPage, '#login input[name="name"]', account.name);
+    await fill(verificationPage, '#login input[name="password"]', account.password);
+    const oldLogin = verificationPage.waitForResponse(response => response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/api/account/login', { timeout:TIMEOUT })
+      .then(response => ({ response }), () => ({ response:null }));
+    await verificationPage.click('#login button[type="submit"]');
+    const oldLoginResponse = (await oldLogin).response;
+    check(oldLoginResponse?.status() === 401, 'site-smoke-old-password-rejected');
+    await fill(verificationPage, '#login input[name="password"]', account.nextPassword);
+    await Promise.all([verificationPage.waitForNavigation({ waitUntil:'domcontentloaded' }),
+      verificationPage.click('#login button[type="submit"]')]);
+    check(new URL(verificationPage.url()).pathname === '/account', 'site-smoke-new-password-login-succeeds');
+    await safeShot(sitePages[0], 'site-password-smoke-event');
+    result.completed = true;
+  } else {
   const editor = await newPage(contextsByRole[0], 'online-editor');
   await openProject(editor, 'Shared dual account project');
   check(result.projectControlRequests?.some(entry => entry.projectIdMatchesExpected && entry.enablesAgent),
@@ -434,6 +534,7 @@ try {
   check(true, 'reset-flow-used-provider-issued-otp-and-private-mail-callback-no-external-email');
   await safeShot(sitePages[0], '07-reset-pending');
   result.completed = true;
+  }
 } catch (error) {
   const safeFailure = new Set(['provider-accepted-consent-but-dialog-remained-visible','consent-read-or-dialog-not-observed',
     'project-open-disabled','cloud-agent-enable-disabled','consent-buttons-missing']);
