@@ -29,6 +29,7 @@ import { createHostedWiring } from '../../agent-service/hosted-wiring.mjs';
 import { createHostedAgentService } from '../../agent/service/create-agent-service.mjs';
 import { createAgentHttp } from '../../agent-service/http.mjs';
 import { createEmptyProject } from '../../../src/kernel/project.ts';
+import { pipeHttpProxyResponse } from './http-proxy-stream.mjs';
 
 const waitFor = async (check, label, ms = 20_000) => {
   const until = Date.now() + ms;
@@ -238,9 +239,14 @@ export async function runAccountConversationControlsUserPath({ ports = [6620, 66
       if (target === assetPort || target === agentPort) delete headers.cookie;
       const upstream = http.request({ hostname: '127.0.0.1', port: target, method: req.method, path: upstreamPath,
         headers }, response => {
-        res.writeHead(response.statusCode, response.headers); response.pipe(res);
+        pipeHttpProxyResponse(response, res, upstream);
       });
-      upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+      upstream.on('error', () => {
+        if (!res.headersSent && !res.destroyed) { res.writeHead(502); res.end(); }
+        else if (!res.destroyed && !res.writableEnded) res.destroy();
+      });
+      req.once('aborted', () => upstream.destroy());
+      res.once('close', () => { if (!res.writableEnded && !upstream.destroyed) upstream.destroy(); });
       req.pipe(upstream);
     });
     edgeServer.on('upgrade', (req, client, head) => {
