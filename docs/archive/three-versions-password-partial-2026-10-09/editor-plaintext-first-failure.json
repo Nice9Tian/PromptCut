@@ -1,0 +1,72 @@
+{
+  "sourceBefore": "b84737433001306c9870e23f78b1cbb871f30091",
+  "sourceAfter": "b84737433001306c9870e23f78b1cbb871f30091",
+  "summary": {
+    "passed": 34,
+    "failed": 0,
+    "completed": false,
+    "sourceUnchanged": true
+  },
+  "completed": false,
+  "elapsedMs": 40472,
+  "cleanup": {
+    "browserClosed": true,
+    "stages": [
+      {
+        "port": 6688,
+        "listening": false,
+        "sockets": 0
+      },
+      {
+        "port": 6689,
+        "listening": false,
+        "sockets": 0
+      }
+    ],
+    "fixtureClosed": true,
+    "assetChildClosed": true,
+    "portsFree": true,
+    "profileRemoved": true
+  },
+  "fixtureCleanup": {
+    "childClosed": true,
+    "closeFailureCount": 0
+  },
+  "readControl": {
+    "connected": true,
+    "registeredInstanceReady": true,
+    "executorMounted": false,
+    "stateAtStart": {
+      "connected": true,
+      "open": 0,
+      "closed": 0,
+      "executorMounted": false
+    },
+    "stateAfterQueuedMessage": {
+      "connected": true,
+      "open": 2,
+      "closed": 5,
+      "executorMounted": false
+    },
+    "stateAtFailure": {
+      "connected": true,
+      "open": 0,
+      "closed": 8,
+      "executorMounted": false
+    }
+  },
+  "failure": {
+    "phase": "password-change-and-exit",
+    "step": "editor-wait-for-real-read-revocation",
+    "check": "unclassified",
+    "editorState": {
+      "pathname": "/editor/",
+      "consentCount": 0,
+      "visibleConsentCount": 0,
+      "enableButtonCount": 0,
+      "visibleEnableButtonCount": 0,
+      "offCount": 0,
+      "permissionLoadingCount": 1
+    }
+  }
+}
