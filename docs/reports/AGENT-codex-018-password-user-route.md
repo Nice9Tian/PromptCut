@@ -26,3 +26,12 @@
 - 真实浏览器尚未完成改密闭环。最初 403 轮 consent GET/POST 成功，但探针在 consent dialog/Agent 开启间停滞；脱敏业务码证实 `/agent/v1/info`、对话列表和事件请求返回 `403 disabled`。后来一轮真实路径完成：真实 project-agent admin POST 为 200，项目 ID只作相等比较并匹配当前项目；read-control 为 connected、实例已登记、`executorMounted=false`；Agent info/history 后续回到 200，网站 `/api/account/me` 为 200，实际发送消息 POST 为 202，界面显示等待执行服务。没有运行 Agent executor。
 - 上述成功轮次之后进入改密 UI，但没有观察到 `/api/account/password` 请求，故没有把它记作改密通过。后续两轮复验未发 Agent admin 请求：探针在分享 toast 的真实关闭步骤卡住；Dom 计数显示 consent 对话框不存在、Agent 开启按钮和关闭状态可见、权限仍在读取。toast 截图/安全结果与之前的成功路径均保存在 `%TEMP%\pc-password-user-path-once-*`；每轮 browser、stage servers、fixture、asset 子进程均关闭，6680–6689 全部空闲。未用 API 绕过实际按钮。
 - 桌面原生登录桥接不在本阶段范围。改密后真实在线编辑器正文自然清空、服务器读取关闭的浏览器断言尚未到达；必须等真实界面闭环再判定，不能由仅 provider session 撤销结果推断。
+
+## 纯文本真实读取路径修正（2026-10-09）
+
+- 按最新服务接线审查，account 模式尚未挂载对话附件 authority；`attach` 返回 503 是现有边界，不能用 fixture 数据目录补出授权能力。因此完整 Editor 路径调整为真实纯文本消息，附件上传单独列为未验，不绕过权限或直接写历史。
+- 删除附件步骤时同时修正了探针 TDZ：旧附件响应 matcher 在 `conversationId` 声明之前读取它，异常会被 Puppeteer matcher 捕获并吞掉，造成永不匹配的等待。现在先执行真实纯文本消息 POST，收到 202 和 SSE 可见正文后，再只读页面取得 conversation ID 用于流匹配。
+- `editorStep` 会在发送纯文本、网站改密、等待读权撤销、检查已读正文清空、后续历史读取和 provider 重设前更新，使失败结果指向当时实际操作。
+- fixture 的诊断仅记录 Agent HTTP 路由类别、状态、有限白名单业务码、是否已发送 headers 与是否正常结束；Edge 只记录路由类别、网络错误枚举、上游是否完整及下游 headers 状态；read-control 只记录有限错误码及 transport `describe()` 状态。错误响应体仅在内存中短暂解析其 `code` 并随即丢弃，结果不含原始响应、凭证、header 或完整 URL。列表上限为每种 250 条。
+- 本轮 `node --check`（probe 与 fixture）及 `git diff --check` 通过；显式提供只读 VisuHive provider、密码排序模块、本地 authority 模块、CUDA Python 后，`npm test -- server/test/account-password-user-path.test.mjs` 通过 1/1，清理诊断为 child 已关闭、closeFailureCount 为 0。provider 的改密/重设退出状态仍为 `revoking`，不作为服务屏障确认。
+- 下一轮固定源码的真实浏览器只跑一次纯文本路径；Agent SSE 若仍失败，将用上述受限诊断区分 Agent HTTP/read-control 与 Edge 流生命周期。保留既有真实失败记录，不自动重跑。附件能力、桌面桥接、互联网邮件投递和 logout `revoking` 到最终确认仍是独立未完成事项。

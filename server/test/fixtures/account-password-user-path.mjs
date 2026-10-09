@@ -157,6 +157,23 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
     issuedCodes.set(key, [...(issuedCodes.get(key) ?? []), match[1]]);
   } };
   let agentServer, agentClient, agentRunClient, agentReadControl, agentService;
+  const agentHttpDiagnostics = [], edgeDiagnostics = [], readControlDiagnostics = [];
+  const safeAgentCodes = new Set(['bad-request','too-large','unauthorized','forbidden','disabled','unavailable','not-found',
+    'busy','attachment-unavailable','conversation-unavailable','project-required','account-required','consent-required']);
+  const safeReadControlCodes = new Set(['read-control-unavailable','read-control-disconnected','read-control-timeout',
+    'read-control-aborted','read-control-protocol','read-resource-unknown','read-control-gap','read-control-ready-mismatch']);
+  const safeNetworkCodes = new Set(['ECONNRESET','ECONNREFUSED','EPIPE','ETIMEDOUT','EHOSTUNREACH','ENETUNREACH','ECONNABORTED']);
+  const routeCategory = raw => {
+    const route = new URL(raw, 'http://localhost').pathname;
+    if (route === '/v1/info') return 'info';
+    if (route === '/v1/conversations') return 'conversation-list';
+    if (/^\/v1\/conversations\/[^/]+\/events$/.test(route)) return 'events';
+    if (/^\/v1\/conversations\/[^/]+\/messages$/.test(route)) return 'messages';
+    if (/^\/v1\/conversations\/[^/]+\/attachments$/.test(route)) return 'attachments';
+    if (/^\/v1\/conversations\/[^/]+$/.test(route)) return 'conversation';
+    return route === '/healthz' ? 'health' : 'other';
+  };
+  const keepDiagnostic = (rows, item) => { if (rows.length < 250) rows.push(item); };
   const staged = path.join(dir, 'staged-asset');
   const docDir = path.join(dir, 'doc');
   const assetDir = path.join(dir, 'asset');
@@ -249,9 +266,25 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
       if (target === assetPort || target === agentPort) delete headers.cookie;
       const upstream = http.request({ hostname: '127.0.0.1', port: target, method: req.method, path: upstreamPath,
         headers }, response => {
+        const category = routeCategory(route.replace(/^\/agent/, ''));
+        response.once('aborted', () => keepDiagnostic(edgeDiagnostics, { route:category, event:'upstream-aborted',
+          headersSent:res.headersSent === true, sourceComplete:response.complete === true }));
+        response.once('error', error => keepDiagnostic(edgeDiagnostics, { route:category, event:'upstream-error',
+          code:safeNetworkCodes.has(error?.code) ? error.code : 'other', headersSent:res.headersSent === true,
+          sourceComplete:response.complete === true }));
+        response.once('close', () => {
+          if (!response.complete) keepDiagnostic(edgeDiagnostics, { route:category, event:'upstream-incomplete-close',
+            headersSent:res.headersSent === true, sourceComplete:false });
+        });
+        res.once('close', () => {
+          if (!res.writableEnded) keepDiagnostic(edgeDiagnostics, { route:category, event:'downstream-closed',
+            headersSent:res.headersSent === true, sourceComplete:response.complete === true });
+        });
         pipeHttpProxyResponse(response, res, upstream);
       });
-      upstream.on('error', () => {
+      upstream.on('error', error => {
+        keepDiagnostic(edgeDiagnostics, { route:routeCategory(route.replace(/^\/agent/, '')), event:'upstream-request-error',
+          code:safeNetworkCodes.has(error?.code) ? error.code : 'other', headersSent:res.headersSent === true });
         if (!res.headersSent && !res.destroyed) { res.writeHead(502); res.end(); }
         else if (!res.destroyed && !res.writableEnded) res.destroy();
       });
@@ -310,14 +343,52 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
     agentClient = createConversationClient(agentOptions);
     agentRunClient = createRunClient(agentOptions);
     agentReadControl = createConversationControlClient({ ...agentOptions, runClient: agentRunClient,
-      receiptFile: path.join(dir, 'agent-read-closures.sqlite') });
+      receiptFile: path.join(dir, 'agent-read-closures.sqlite'),
+      onDiagnostic: entry => keepDiagnostic(readControlDiagnostics, { code:safeReadControlCodes.has(entry?.code) ? entry.code : 'other' }) });
     agentClient.useReadControl(agentReadControl);
     await agentReadControl.start();
     await waitFor(() => agentReadControl.describe().connected, 'actual pinned read-control ready', 5000);
     const wiring = createHostedWiring({ accountMode: true, conversationClient: agentClient });
     agentService = createHostedAgentService({ accountMode: true, conversationClient: agentClient });
     const agentHttp = createAgentHttp({ service: agentService, authenticate: wiring.authenticate });
-    agentServer = http.createServer((req, res) => { void agentHttp.handle(req, res); });
+    agentServer = http.createServer((req, res) => {
+      const category = routeCategory(req.url);
+      let status = null, chunks = [], size = 0;
+      const writeHead = res.writeHead;
+      res.writeHead = function(code, ...args) { status = Number(code); return writeHead.call(this, code, ...args); };
+      const write = res.write;
+      res.write = function(chunk, ...args) {
+        if (status >= 400 && size < 4096 && chunk != null) {
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+          size += bytes.length; if (size <= 4096) chunks.push(bytes);
+        }
+        return write.call(this, chunk, ...args);
+      };
+      const end = res.end;
+      res.end = function(chunk, ...args) {
+        if (status >= 400 && size < 4096 && chunk != null) {
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+          size += bytes.length; if (size <= 4096) chunks.push(bytes);
+        }
+        return end.call(this, chunk, ...args);
+      };
+      res.once('finish', () => {
+        let code = null;
+        if (status >= 400 && size <= 4096) {
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            code = safeAgentCodes.has(body?.code) ? body.code : body?.code == null ? null : 'other';
+          } catch { code = 'unparsed'; }
+        }
+        keepDiagnostic(agentHttpDiagnostics, { route:category, status:Number.isInteger(status) ? status : res.statusCode,
+          code, headersSent:res.headersSent === true, finished:true });
+      });
+      res.once('close', () => {
+        if (!res.writableFinished) keepDiagnostic(agentHttpDiagnostics, { route:category,
+          status:Number.isInteger(status) ? status : res.statusCode, code:null, headersSent:res.headersSent === true, finished:false });
+      });
+      void agentHttp.handle(req, res);
+    });
     await listen(agentServer, agentPort);
     const actors = [siteActor(siteOrigin, pki.ca), siteActor(siteOrigin, pki.ca), siteActor(siteOrigin, pki.ca)];
     const doc = (method, route, body, token) => docRequest(docOrigin, method, route, body, token, pki.ca);
@@ -467,6 +538,8 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
         ports: { site: sitePort, accountInternal: accountPort, doc: docPort,
           docInternal: docInternalPort, asset: assetPort, assetInternal: assetInternalPort, agent: agentPort, edge: edgePort },
         readControlReady: agentReadControl.describe().connected === true,
+        readControlState: () => ({ ...agentReadControl.describe() }),
+        agentHttpDiagnostics, edgeDiagnostics, readControlDiagnostics,
         agentInstanceReadiness: (() => { const identity = agentRunClient.instanceIdentity();
           return { registered:typeof identity?.instanceId === 'string' && identity.instanceId.length > 0 &&
             Number.isSafeInteger(identity.instanceGeneration) && identity.instanceGeneration > 0,

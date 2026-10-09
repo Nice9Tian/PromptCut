@@ -436,18 +436,15 @@ async function messageGone(page, expected) {
       (element.textContent ?? '').replace(/\s+/g, ' ').trim().includes(text));
   }, { timeout:TIMEOUT }, expected);
 }
-async function revokedConversationContentGone(page, expectedText, attachmentName) {
-  await page.waitForFunction(({ text, name }) => {
+async function revokedConversationContentGone(page, expectedText) {
+  await page.waitForFunction(text => {
     const panel = document.querySelector('[data-pc="cloud-ai-panel"]:not([data-inactive="1"]):not([aria-hidden="true"])');
     if (!panel) return false;
     const bodyRemains = [...panel.querySelectorAll('.ai-message.user .ai-message-text')]
       .some(element => (element.textContent ?? '').replace(/\s+/g, ' ').trim().includes(text));
-    const attachmentRemains = [...panel.querySelectorAll('.ai-bubble-file-name')]
-      .some(element => element.textContent?.trim() === name);
     const queueCount = panel.querySelectorAll('.ai-queue-item[data-message-id]').length;
-    const draftAttachmentCount = panel.querySelectorAll('.ai-attachments .ai-attachment-chip').length;
-    return !bodyRemains && !attachmentRemains && queueCount === 0 && draftAttachmentCount === 0;
-  }, { timeout:TIMEOUT }, { text:expectedText, name:attachmentName });
+    return !bodyRemains && queueCount === 0;
+  }, { timeout:TIMEOUT }, expectedText);
 }
 async function requestHistoryReadAfterClick(page) {
   const response = await new Promise(async (resolve, reject) => {
@@ -477,12 +474,17 @@ try {
   for (const port of PORTS) check(await portIsFree(port), `port-${port}-available`);
   for (const file of [path.join(DIST, 'index.html'), path.join(DIST, 'stage.html'), path.join(SITE, 'account.html'), path.join(SITE, 'login.html'), path.join(SITE, 'reset.html')]) await fs.access(file);
   fixture = await startAccountPasswordUserFixture({ publicHandler:siteHandler(), diagnostic:entry => {
-    result.fixtureCleanup = { childClosed:entry.childClosed === true, closeFailureCount:entry.closeFailureCount };
+    if (entry.cleanupComplete === true) result.fixtureCleanup = { childClosed:entry.childClosed === true,
+      closeFailureCount:entry.closeFailureCount };
   } });
   check(fixture.accounts?.length === 3 && fixture.readControlReady, 'real-provider-doc-agent-read-control-fixture-ready');
   const readIdentity = fixture.agentInstanceReadiness ?? null;
   result.readControl = { connected:fixture.readControlReady === true,
     registeredInstanceReady:readIdentity?.registered === true, executorMounted:readIdentity?.executorMounted === true };
+  result.readControl.stateAtStart = fixture.readControlState();
+  result.agentHttpDiagnostics = fixture.agentHttpDiagnostics;
+  result.edgeDiagnostics = fixture.edgeDiagnostics;
+  result.readControlDiagnostics = fixture.readControlDiagnostics;
   result.expectedProjectMatch = null;
   for (const port of [6688, 6689]) await startStage(port);
   browser = await puppeteer.launch({ executablePath:await puppeteer.executablePath(), headless:true, pipe:true, acceptInsecureCerts:true,
@@ -540,25 +542,8 @@ try {
   check(result.accountSessionValidAfterAgentEnable, 'website-session-still-valid-after-agent-enable');
   await safeShot(editor, '04-editor-before-message');
   const prompt = `Password-revocation user-path ${randomUUID().slice(0, 8)}; remain queued, do not run.`;
-  const attachmentName = 'revocation-note.txt';
-  const attachmentPath = path.join(OUT, attachmentName);
-  await fs.writeFile(attachmentPath, 'Isolated password revocation attachment probe.\n', { mode:0o600 });
-  const attachmentResponse = editor.waitForResponse(response => {
-    const request = response.request();
-    try { const url = new URL(response.url()); return request.method() === 'POST' &&
-      url.pathname.endsWith(`/conversations/${conversationId}/attachments`) && url.searchParams.get('name') === attachmentName; }
-    catch { return false; }
-  }, { timeout:TIMEOUT });
-  const fileInput = await editor.$('[data-pc="cloud-attach-input"]');
-  if (!fileInput) throw Error('cloud-attachment-input-missing');
-  await fileInput.uploadFile(attachmentPath);
-  const attached = await attachmentResponse;
-  check(attached.status() === 200, 'real-user-attachment-uploaded-to-conversation');
-  await editor.waitForFunction(name => [...document.querySelectorAll('[data-pc="cloud-ai-panel"] .ai-attachment-chip')]
-    .some(chip => chip.querySelector('.ai-attachment-name')?.textContent?.trim() === name &&
-      !chip.classList.contains('is-importing') && !chip.classList.contains('is-error')), { timeout:TIMEOUT }, attachmentName);
-  check(true, 'real-attachment-ready-in-composer-before-message');
   currentPhase = 'queue-real-message-without-executor';
+  editorStep = 'editor-send-plaintext-user-message';
   const messageResponse = editor.waitForResponse(response => response.request().method() === 'POST' &&
     /\/agent\/v1\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname), { timeout:TIMEOUT });
   await fill(editor, '[data-pc="cloud-ai-panel"] [data-pc="ai-input"]', prompt);
@@ -566,21 +551,19 @@ try {
   const accepted = await messageResponse;
   check(accepted.status() === 202, 'real-user-message-accepted-as-queued');
   await waitForUserMessage(editor, prompt);
-  await editor.waitForFunction(({ text, name }) => [...document.querySelectorAll('[data-pc="cloud-ai-panel"] .ai-message.user')]
-    .some(row => row.querySelector('.ai-message-text')?.textContent?.includes(text) &&
-      [...row.querySelectorAll('.ai-bubble-file-name')].some(file => file.textContent?.trim() === name)),
-    { timeout:TIMEOUT }, { text:prompt, name:attachmentName });
-  check(true, 'real-sse-user-message-body-and-attachment-visible');
+  check(true, 'real-sse-plaintext-user-message-body-visible');
   await editor.waitForSelector('[data-pc="cloud-queue"] li[data-message-id]', { visible:true, timeout:TIMEOUT });
   const queueState = await editor.$eval('[data-pc="cloud-queue"]', element => ({ text:element.textContent ?? '', count:element.querySelectorAll('li[data-message-id]').length }));
   check(queueState.count === 1 && queueState.text.includes('等待执行服务'), 'one-real-queued-message-no-executor-active');
   const conversationId = await editor.evaluate(() => window.__pcCloud?.main?.conversationId?.() ?? null);
   check(typeof conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(conversationId), 'conversation-id-observed-shape-only');
   targetConversationId = conversationId;
+  result.readControl.stateAfterQueuedMessage = fixture.readControlState();
   for (const stream of result.eventStreams) stream.conversationMatch = eventConversationIds.get(stream) === conversationId;
   await safeShot(editor, '05-editor-real-queued-message');
 
   currentPhase = 'password-change-and-exit';
+  editorStep = 'website-change-password';
   result.passwordRuntime = {};
   result.passwordRuntime.focusBeforeBringToFront = await sitePages[0].evaluate(() => ({
     visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
@@ -619,20 +602,21 @@ try {
     await page.waitForFunction(() => new URL(location.href).pathname === '/login', { timeout:TIMEOUT });
     check(new URL(page.url()).pathname === '/login', `other-site-session-${index + 1}-logged-out`);
   }));
+  editorStep = 'editor-wait-for-real-read-revocation';
   await messageGone(editor, prompt);
   check(true, 'online-editor-real-read-body-cleared-after-revocation');
   await waitForControlClosure(result.eventStreams);
   check(result.eventStreams.some(stream => stream.conversationMatch === true && stream.status === 200 && stream.lifecycle !== 'open'), 'real-old-conversation-event-stream-closed');
-  await revokedConversationContentGone(editor, prompt, attachmentName);
+  editorStep = 'editor-revoked-content-cleared';
+  await revokedConversationContentGone(editor, prompt);
   result.revokedContentUi = await editor.$eval('[data-pc="cloud-ai-panel"]', panel => ({
     userMessageCount:panel.querySelectorAll('.ai-message.user').length,
-    attachedFileCount:panel.querySelectorAll('.ai-bubble-file-name').length,
     queueItemCount:panel.querySelectorAll('.ai-queue-item[data-message-id]').length,
-    composerAttachmentCount:panel.querySelectorAll('.ai-attachments .ai-attachment-chip').length,
   }));
-  check(result.revokedContentUi.userMessageCount === 0 && result.revokedContentUi.attachedFileCount === 0 &&
-    result.revokedContentUi.queueItemCount === 0 && result.revokedContentUi.composerAttachmentCount === 0,
-  'editor-message-attachment-queue-clear-naturally-after-revocation');
+  check(result.revokedContentUi.userMessageCount === 0 && result.revokedContentUi.queueItemCount === 0,
+    'editor-plaintext-message-and-queue-clear-naturally-after-revocation');
+  result.attachmentPath = 'not-tested: mounted account attachment authority is absent; no upload was attempted';
+  editorStep = 'editor-history-read-after-revocation';
   const historyStatus = await requestHistoryReadAfterClick(editor);
   result.deniedHistoryRead = { status:historyStatus, denied:historyStatus === 401 || historyStatus === 403 };
   check(result.deniedHistoryRead.denied, 'subsequent-real-history-read-denied-after-revocation');
@@ -645,6 +629,7 @@ try {
       logoutState:body.logout?.state ?? null };
   });
   check(eventStatus.textCode === 'revoking' && eventStatus.logoutState !== 'complete', 'ui-honestly-stays-pending-without-all-service-acks');
+  editorStep = 'website-provider-issued-reset';
   await safeShot(sitePages[0], '06-password-changed-pending');
 
   currentPhase = 'password-reset-with-provider-issued-code';
@@ -698,6 +683,9 @@ try {
     'project-open-disabled','cloud-agent-enable-disabled','consent-buttons-missing',
     'password-change-response-not-observed-after-short-wait','password-button-click-failed']);
   result.failure = { phase:currentPhase, step:editorStep, check:error?.check ?? (safeFailure.has(String(error?.message)) ? String(error.message) : 'unclassified') };
+  if (fixture) {
+    try { result.readControl.stateAtFailure = fixture.readControlState(); } catch { result.readControl.stateAtFailure = { unavailable:true }; }
+  }
   process.exitCode = 1;
   for (const page of pages) {
     if (page.isClosed()) continue;
