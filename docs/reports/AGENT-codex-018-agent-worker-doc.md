@@ -37,3 +37,19 @@ A先经原真实pinned mTLS向隔离worker专用probe-parent-exit提交受控Doc
 替换反例从真实已启动B记录取得OS tuple，代入A的pinRetired，必须publisher-previous-instance-mismatch且A/B原birth仍在；不改真实unit/record，不stop替代PID。其余实际文件缺marker/有锁/混代/新空实例拒绝仍保留。测试采用受控Doc issuer，只证明root OS adapter，不证明真实Doc worker-failed授权或业务模型完成。worker-failed自动证书producer尚未接：master getter只能读取已存在证书，不能请求生成；缺真实Doc fence时保持FIFO pending。
 
 本机只做两脚本node --check与diff --check（均0）；Windows CLI一次自然exit1、精确probe-linux-root-required，按预期断言通过，原始TMP pc-agent-forced-proof-cli-1.log。未启动listener/服务/模型、未操作节点。首次Linux原normal10/10保持原历史，不能移作本forced增量结果；由root导出固定blob后单轮实测。
+
+根实际9e9854ab第一次Linux forced已通过11/11、proof exit0、wrapper13.562秒，10份固定blob hash一致。A4109ms原父birthgone、子live/FD/TCP仍持有、原scope pop1，随后才pinRetired；6108ms同固定FD pop0、父子gone、双EOFclose。B6284ms仍原tuple/资源，8480ms才正常closed。实际B tuple代A拒且不stop，缺marker/lock/mixed/new-empty均拒。四生产PID/NRestarts零变化，两owned units inactive/MainPID0，6540–49零监听、retainedUnits[]。原证据TMP pc-agent-scope-linux-forced-9e9854ab-once.result.json/meta。仍为受控Doc issuer的OS增量，不等于Doc业务/crash授权通过。
+
+## 正常三段和独立只读getter
+
+〔裁：三级实施机制〕旧scope revoke会沿finishInState提前释放FIFO，本增量保留原currentRun，立即拒新read/write、取消匹配queued；只有root可信closed链和Doc实际关闭库存双齐全后，内部reconcileScopeClosures同事务结清该原run。shared已读credential/member仍保retained，private覆盖；六类fence的未读/已读分别回归。失去reader、原父未知、缺历史Doc库存不能释放。
+
+normal接口：`finish`在scope模式精确原五绑定+requestId+readReceiptId+outcome={v:1,status:done|failed|interrupted,eventId,eventDigest}，仅持久finishReceipt/terminal control，不完成。`finish/query`同全body独立queryFinish operation，冲突outcome409。旧未启scope调用形状保留；新scope缺outcome拒绝，不从donePromise补done。
+
+`scope/prepare`精确五绑定+requestId+finishReceiptId+prepare（原RAM签名完整promptcut.agent-run.prepare.v1，含rootref/assignment/完整target/read/outcome/event/drain/control）。Doc核同key和持久receipt，保存原签名对象。`scope/terminal`精确五绑定+requestId+finishReceiptId，在原Doc transport真实fence完成、所有相关operation fence持久committed后签normal terminal，terminalReceiptDigest=digestOf(完整signed prepare)。worker据此签intent后交root；闭口后只读完整root历史导入runScopeClosuresV1，离线finalizer无需向死worker取key。queueState done表示结清，terminalOutcome保存真实failed/interrupted，不能显示为成功。
+
+master新两项均独立只读operation/PoP fullbody，旧五项不泛化：`POST /internal/v2/runs/worker-event-source` body={projectId,runGrantId,assignmentDigest}，workerEventSource核当前rootbound、readreceipt/currentRun、真实account资格或精确retained及fence；返回DER公钥/worker Doc pin/安全业务message字段（含requestId/arrivalSeq/createdAt），不返回login/credential/cap。`POST /internal/v2/runs/scope/control` body={projectId,controlId,runGrantId,assignmentDigest,rootScopeRef}，scopeControl只读同ledger既有forced证书，核配置master、worker slot/kid、原revoked grant/closureControlId/control inventory及Doc实际关闭；当前fence不阻这项关闭证据读取，但不能执行。root尚未bound仅返明确unassigned，不冒任务terminal。未知/跨control/ref/worker角色/签名body错拒。两接口都不会根据网络body新建forced control。
+
+worker-failed/crash自动授权仍缺可信producer：当前scopeControl不能凭master自报死亡生成Doc fence。最小后续入口应仅让Doc读取固定root槽下root-owned失败观测（authority/slot/epoch/recordDigest、原service/scope双tuple、actual boot/startTicks/Invocation及失败原因），核现grant/rootbound/配置同源后在原ledger事务写typed worker-failed fence；root尚未证空仍pending，闭口仍必须原FD链。不得补RAM normal intent或新实例空库存，本块不把此入口声称已实现。
+
+新增TLS/SQLite目标首两红保留：TMP pc-worker-doc-control-tls-target-1.log 为6/5/1、1188.2458ms，真实operation history夹具没建项目genesis导致needs-reconciliation；第2.log为6/5/1、1606.1081ms，显式受控root模型缺pinRetired接口而拒forced-close。补正常createProject与明确模型接口后第3.log为6/6、0fail/skip/cancel、1255.3245ms。所有TLS实际socket0/server不监听后清理，6712端口自有；未改生产拒绝标准。测试的Doc库存/SQLite fence为实际产品函数（零数据连接），root关闭部分仍受控模型；真实Linux证明由上节独立结果承担，未声称这一项把两者合为生产执行器验收。冻结后另跑相关目标/类型，不跑full。

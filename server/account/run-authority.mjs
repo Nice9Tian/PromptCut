@@ -8,6 +8,16 @@ const copy = x => structuredClone(x);
 const identity = ['accountId', 'loginId', 'credentialId', 'loginGeneration'];
 const binding = ['projectId', 'conversationId', 'messageId', 'runId'];
 const instanceBinding = ['instanceId', 'instanceGeneration'];
+export const RUN_FINISH_FIELDS = [...binding, 'runGrantId', 'requestId', 'readReceiptId', 'outcome'];
+export function validateRunFinishInput(input) {
+  if (!input || Object.keys(input).some(k => ![...RUN_FINISH_FIELDS, 'servicePrincipal'].includes(k)) ||
+      RUN_FINISH_FIELDS.filter(k => k !== 'outcome').some(k => !text(input[k]))) reject(400, 'run-finish-invalid');
+  const o = input.outcome;
+  if (!o || Object.keys(o).sort().join(',') !== 'eventDigest,eventId,status,v' || o.v !== 1 ||
+      !['done', 'failed', 'interrupted'].includes(o.status) || !text(o.eventId) || !/^[a-f0-9]{64}$/.test(o.eventDigest ?? ''))
+    reject(400, 'run-outcome-invalid');
+  return copy(o);
+}
 const seq = s => {
   const next = (s.runClockV2 ?? 0) + 1;
   if (!Number.isSafeInteger(next)) reject(503, 'run-clock-overflow');
@@ -16,6 +26,7 @@ const seq = s => {
 const tables = s => {
   s.runGrantsV2 ??= {}; s.runRequestsV2 ??= {}; s.runReadRequestsV2 ??= {};
   s.runControlsV2 ??= {}; s.runReceiptsV2 ??= {};
+  s.runFinishRequestsV2 ??= {}; s.runFinishReceiptsV2 ??= {};
 };
 const bumpQueue = (s, c) => {
   const revision = Math.max(s.conversationClockV2 ?? 0, c.queueRevision ?? 0) + 1;
@@ -70,7 +81,7 @@ export const runControlId = fence => `run-control:${digestOf(runControlScope(fen
  * records are independently rebuilt here, never authorized by an HTTP body's hash.
  */
 export function createRunAuthority({ ledger, conversationHooks, verifySender, verifyServiceInState, instanceAuthority,
-  scopeAuthority, validatePromptInState, synchronize, now = Date.now, failpoint = () => {}, onControl = () => {} } = {}) {
+  scopeAuthority, docInstanceId, validatePromptInState, synchronize, now = Date.now, failpoint = () => {}, onControl = () => {} } = {}) {
   for (const value of [ledger?.transaction, ledger?.read, conversationHooks?.claimNextInState,
     conversationHooks?.markReadInState, conversationHooks?.finishInState, verifySender,
     verifyServiceInState, instanceAuthority?.verifyInState, instanceAuthority?.fenceInState, synchronize])
@@ -140,13 +151,14 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       if (keep) { g.state = 'retained'; retained.push(g.runGrantId); }
       else {
         g.state = 'revoked'; revoked.push(g.runGrantId);
-        conversationHooks.finishInState(s, { ...g, state: 'cancelled', reason: f.kind });
+        if (!g.scopeBinding) conversationHooks.finishInState(s, { ...g, state: 'cancelled', reason: f.kind });
       }
     }
     for (const byProject of Object.values(s.conversationsV2 ?? {})) for (const c of Object.values(byProject)) {
       if ((f.projectId && c.projectId !== f.projectId) || (f.conversationId && c.id !== f.conversationId)) continue;
       for (const m of c.messages) {
         if (!['queued', 'preparing'].includes(m.queueState)) continue;
+        if (m.runId && Object.values(s.runGrantsV2).some(g => g.runId === m.runId && g.scopeBinding)) continue;
         const candidate = { projectId: c.projectId, conversationId: c.id, runId: m.runId,
           accountId: m.senderAccountId, loginId: m.loginId };
         // Service-key revocation cancels only already assigned work for that service.
@@ -158,6 +170,14 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     const control = { controlId: key, scope, digest, payloadDigest: digest, requestId: f.requestId, kind: f.kind, projectId: f.projectId ?? null,
       fenceRevision: revision, retained, revoked, cancelled, state: 'pending', receipt: null };
     const affected = [...retained, ...revoked].map(id => s.runGrantsV2[id]);
+    if (scopeAuthority) {
+      control.docInstanceIds = [...new Set([...affected.flatMap(g => Object.keys(s.runDocInstancesV1?.[g.runGrantId] ?? {})),
+        ...(text(docInstanceId) ? [docInstanceId] : [])])];
+      for (const id of revoked) {
+        const g = s.runGrantsV2[id];
+        if (g.scopeBinding) { g.closureControlId = key; scopeAuthority.forcedInState(s, g, control); }
+      }
+    }
     control.instances = [...new Map(affected.map(g => [g.instanceId,
       Object.fromEntries(['serviceId', 'serviceKid', ...instanceBinding].map(k => [k, g[k]]))])).values()];
     if (f.kind === 'instance-revoked') {
@@ -349,7 +369,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       const { c, m } = current(s, g); project(s, projectId);
       if (scopeAuthority) scopeAuthority.assignmentInState(s, g, { requireBound: true });
       if (canonicalJson(acceptedMessageRef(m, g)) !== canonicalJson(g.messageRef)) reject(503, 'accepted-message-changed');
-      if (!['active', 'retained'].includes(g.state) || !g.readReceiptId || !s.runReceiptsV2[g.readReceiptId]) reject(403, 'run-revoked');
+      if (!['active', 'retained'].includes(g.state) || g.finishReceiptId || !g.readReceiptId || !s.runReceiptsV2[g.readReceiptId]) reject(403, 'run-revoked');
       if (c.visibility === 'private' && c.ownerAccountId !== g.accountId) reject(403, 'private-run-forbidden');
       if (g.state === 'active') {
         if (!verified) reject(403, 'run-state-changed'); senderAtCommit(s, c, g, verified);
@@ -379,7 +399,8 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     await checkWithScope({ principal, projectId, action: 'read' }, invocation); return principal;
   }
   async function finish(input) {
-    if (scopeAuthority || ledger.read().agentRunScopesV1?.required) reject(503, 'run-scope-terminal-required');
+    if (scopeAuthority) return recordFinish(input);
+    if (ledger.read().agentRunScopesV1?.required) reject(503, 'run-scope-unavailable');
     request(input.requestId); await sync();
     return ledger.transaction(s => {
       reconcile(s); const g = bound(s, input, service(s, input.servicePrincipal, { operation: 'finish', input }));
@@ -390,6 +411,96 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       return copy(g);
     });
   }
+  function finishView(s, g) {
+    const receipt = s.runFinishReceiptsV2?.[g.finishReceiptId];
+    return { ...copy(g), finishPending: receipt?.complete !== true, finishReceipt: copy(receipt) };
+  }
+  async function recordFinish(input) {
+    const outcome = validateRunFinishInput(input); await sync(input);
+    const result = ledger.transaction(s => {
+      reconcile(s); const svc = service(s, input.servicePrincipal, { operation: 'finish', input }), g = bound(s, input, svc);
+      const key = digestOf({ ...svc, runGrantId: g.runGrantId, requestId: input.requestId });
+      const digest = digestOf(Object.fromEntries(RUN_FINISH_FIELDS.map(k => [k, input[k]])));
+      const old = replay(s.runFinishRequestsV2, key, digest); if (old) return finishView(s, g);
+      if (g.finishReceiptId) reject(409, 'run-finish-conflict');
+      current(s, g); scopeAuthority.assignmentInState(s, g, { requireBound: true });
+      if (!['active', 'retained'].includes(g.state)) reject(403, 'run-revoked');
+      const read = s.runReceiptsV2[input.readReceiptId];
+      if (!read || input.readReceiptId !== g.readReceiptId || read.promptDigest !== g.promptDigest ||
+          [...binding, 'runGrantId', ...instanceBinding].some(k => read[k] !== g[k])) reject(403, 'run-read-receipt-mismatch');
+      const receipt = { v: 1, finishReceiptId: `finish_${randomUUID()}`, authorityId: ledger.authorityId,
+        ...Object.fromEntries([...binding, 'runGrantId'].map(k => [k, g[k]])), ...svc, requestId: input.requestId,
+        readReceiptId: input.readReceiptId, outcome, outcomeDigest: digestOf(outcome), requestDigest: digest,
+        authoritySeq: seq(s), recordedAt: now(), complete: false };
+      const target = { ...Object.fromEntries([...binding, 'runGrantId', ...instanceBinding, 'serviceId', 'serviceKid'].map(k => [k, g[k]])),
+        finishReceiptId: receipt.finishReceiptId, readReceiptId: receipt.readReceiptId, outcomeDigest: receipt.outcomeDigest };
+      const controlId = `terminal-control:${digestOf(target)}`; receipt.controlId = controlId;
+      s.runFinishReceiptsV2[receipt.finishReceiptId] = receipt; g.finishReceiptId = receipt.finishReceiptId;
+      s.runControlsV2[controlId] = { controlId, kind: 'terminal', target, payloadDigest: digestOf(target),
+        projectId: g.projectId, fenceRevision: receipt.authoritySeq, state: 'pending', receipt: null,
+        docInstanceIds: [...new Set([...Object.keys(s.runDocInstancesV1?.[g.runGrantId] ?? {}), ...(text(docInstanceId) ? [docInstanceId] : [])])],
+        closing: [g.runGrantId], revoked: [], retained: [], cancelled: [], instances: [svc], operationFences: [] };
+      s.runFinishRequestsV2[key] = { digest }; return finishView(s, g);
+    });
+    onControl(copy(ledger.read().runControlsV2[result.finishReceipt.controlId])); return result;
+  }
+  async function queryFinish(input) {
+    validateRunFinishInput(input); await sync(input);
+    return ledger.transaction(s => {
+      reconcile(s); const svc = service(s, input.servicePrincipal, { operation: 'queryFinish', input }), g = bound(s, input, svc);
+      const key = digestOf({ ...svc, runGrantId: g.runGrantId, requestId: input.requestId });
+      if (!replay(s.runFinishRequestsV2, key, digestOf(Object.fromEntries(RUN_FINISH_FIELDS.map(k => [k, input[k]]))))) return { recorded: false };
+      return { recorded: true, ...finishView(s, g) };
+    });
+  }
+  async function scopeTerminalCall(input, operation) {
+    request(input.requestId); await sync(input);
+    if (!scopeAuthority) reject(503, 'run-scope-unavailable');
+    return ledger.transaction(s => {
+      reconcile(s); const g = bound(s, input, service(s, input.servicePrincipal, { operation, input }));
+      current(s, g);
+      if (!['active', 'retained'].includes(g.state)) reject(403, 'run-revoked');
+      const receipt = s.runFinishReceiptsV2?.[input.finishReceiptId];
+      if (!receipt || g.finishReceiptId !== input.finishReceiptId || receipt.runGrantId !== g.runGrantId) reject(403, 'run-finish-binding-mismatch');
+      return operation === 'scopePrepare' ? scopeAuthority.recordPrepareInState(s, g, receipt, input.prepare)
+        : scopeAuthority.terminalInState(s, g, receipt);
+    });
+  }
+  const scopePrepare = input => scopeTerminalCall(input, 'scopePrepare');
+  const scopeTerminal = input => scopeTerminalCall(input, 'scopeTerminal');
+  async function reconcileScopeClosures() {
+    if (!scopeAuthority) return [];
+    const completed = [];
+    for (const initial of Object.values(ledger.read().runGrantsV2 ?? {}).filter(g => g.scopeBinding && g.state !== 'finished')) {
+      try {
+        await scopeAuthority.refresh(initial.scopeBinding.rootScopeRef);
+        const result = ledger.transaction(s => {
+          reconcile(s); const g = s.runGrantsV2[initial.runGrantId];
+          if (g.state === 'finished') return null;
+          const receipt = s.runFinishReceiptsV2?.[g.finishReceiptId];
+          if ((!receipt && g.state !== 'revoked') || !['active', 'retained', 'revoked'].includes(g.state)) reject(503, 'run-forced-closure-pending');
+          const { c, m } = current(s, g);
+          const forced = g.state === 'revoked';
+          if (!forced && c.visibility === 'private' && c.ownerAccountId !== g.accountId) reject(403, 'private-run-forbidden');
+          const evidence = scopeAuthority.closedInState(s, g, receipt);
+          const outcome = forced ? { v: 1, status: 'interrupted', reason: g.reason, source: 'doc-fence-root-closed' } : receipt.outcome;
+          conversationHooks.finishInState(s, { ...g, state: forced ? 'cancelled' : 'done', reason: outcome.status });
+          m.terminalOutcome = copy(outcome); g.terminalOutcome = copy(outcome); g.state = 'finished';
+          if (receipt) { receipt.complete = true; receipt.resourceWitnessDigest = evidence.closureWitnessDigest; }
+          if (!forced) {
+            const control = s.runControlsV2[receipt.controlId]; control.state = 'complete';
+            control.receipt = { finishReceiptId: receipt.finishReceiptId, closureWitnessDigest: evidence.closureWitnessDigest };
+          }
+          return receipt ? finishView(s, g) : { ...copy(g), finishPending: false };
+        });
+        if (result) completed.push(result);
+      } catch (error) {
+        if (error.status === 503 || /^(agent-scope|run-scope)-/.test(error.code ?? '')) continue;
+        throw error;
+      }
+    }
+    return completed;
+  }
   async function scopeAssignment(input) {
     request(input.requestId); await sync(input);
     if (!scopeAuthority) reject(503, 'run-scope-unavailable');
@@ -398,6 +509,41 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       current(s, g);
       if (!['preparing', 'active', 'retained'].includes(g.state)) reject(403, 'run-revoked');
       return scopeAuthority.assignmentInState(s, g);
+    });
+  }
+  async function workerEventSource(input) {
+    if (!scopeAuthority || !/^[a-f0-9]{64}$/.test(input.assignmentDigest ?? '')) reject(503, 'run-scope-unavailable');
+    await sync();
+    const before = ledger.read(), svc = service(before, input.servicePrincipal, { operation: 'workerEventSource', input });
+    if (before.agentInstancesV2[svc.instanceId]?.purpose !== 'control-only') reject(403, 'instance-purpose-forbidden');
+    const initial = before.runGrantsV2?.[input.runGrantId];
+    if (!initial || initial.projectId !== input.projectId || initial.scopeBinding?.assignmentDigest !== input.assignmentDigest)
+      reject(403, 'run-binding-mismatch');
+    const verified = initial.state === 'active' ? await verifiedSender(initial, initial.messageRef) : null;
+    await scopeAuthority.refresh(initial.scopeBinding.rootScopeRef);
+    return ledger.transaction(s => {
+      reconcile(s); service(s, input.servicePrincipal, { operation: 'workerEventSource', input });
+      const g = s.runGrantsV2[input.runGrantId], { c, m } = current(s, g);
+      if (!['active', 'retained'].includes(g.state) || g.finishReceiptId || !g.readReceiptId || !s.runReceiptsV2[g.readReceiptId]) reject(403, 'run-revoked');
+      if (c.visibility === 'private' && c.ownerAccountId !== g.accountId) reject(403, 'private-run-forbidden');
+      if (g.state === 'active') { if (!verified) reject(403, 'run-state-changed'); senderAtCommit(s, c, g, verified); }
+      else if (c.visibility !== 'shared' || g.visibilityAtRead !== 'shared') reject(403, 'run-retained-invalid');
+      return { allowed: true, ...scopeAuthority.eventSourceInState(s, g, s.agentInstancesV2[svc.instanceId]),
+        message: copy(Object.fromEntries(['messageId', 'requestId', 'arrivalSeq', 'createdAt', 'content', 'contentDigest', 'attachments', 'selectionSnapshot',
+          'senderAccountId', 'senderNameAtSend'].map(k => [k, m[k]]))), fenceRevision: g.fenceRevision, authorityRevision: s.revision };
+    });
+  }
+  async function scopeControl(input) {
+    if (!scopeAuthority) reject(503, 'run-scope-unavailable');
+    await sync();
+    const initial = ledger.read(), svc = service(initial, input.servicePrincipal, { operation: 'scopeControl', input });
+    if (initial.agentInstancesV2[svc.instanceId]?.purpose !== 'control-only') reject(403, 'instance-purpose-forbidden');
+    const g = initial.runGrantsV2?.[input.runGrantId];
+    if (!g || g.projectId !== input.projectId) reject(403, 'run-binding-mismatch');
+    await scopeAuthority.refresh(g.scopeBinding?.rootScopeRef);
+    return ledger.transaction(s => {
+      reconcile(s); service(s, input.servicePrincipal, { operation: 'scopeControl', input });
+      return scopeAuthority.controlSourceInState(s, s.runGrantsV2[input.runGrantId], s.agentInstancesV2[svc.instanceId], input);
     });
   }
   function fence(input) {
@@ -429,6 +575,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       control.receipt = copy(receipt); control.state = 'complete'; return copy(control);
     });
   }
-  return { admit, confirmRead, queryRead, finish, scopeAssignment, checkAccess, authorizeQuery, resolveRunPrincipal, applyAccessEvent, fence, fenceInstance, acknowledgeControl,
+  return { admit, confirmRead, queryRead, finish, queryFinish, scopeAssignment, scopePrepare, scopeTerminal, reconcileScopeClosures, workerEventSource, scopeControl,
+    checkAccess, authorizeQuery, resolveRunPrincipal, applyAccessEvent, fence, fenceInstance, acknowledgeControl,
     hooks: { fenceInState }, synchronize: sync };
 }

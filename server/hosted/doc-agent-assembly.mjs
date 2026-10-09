@@ -113,10 +113,15 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         fail(403, 'run-control-mismatch');
       const doc = getDocAssembly(), service = getService();
       if (!doc || !service) fail(503, 'doc-agent-unavailable');
+      if (scopeAuthority && (persisted.kind === 'terminal' || persisted.revoked.length)) {
+        await scopeAuthority.closeDocControl({ controlId: persisted.controlId, docInstanceId, service, operationCoordinator: doc });
+        return { pending: true, controlId: persisted.controlId };
+      }
       // fencePrincipals installs logical/admission barriers and terminates owned
       // transports synchronously before its first await. Establish the read
       // barrier before operation recovery can yield to any cache/push callback.
-      const closing = persisted.revoked.length ? service.fencePrincipals({ runGrantIds: persisted.revoked, roles: ['agent'] }) : Promise.resolve(null);
+      const closingIds = persisted.kind === 'terminal' ? persisted.closing : persisted.revoked;
+      const closing = closingIds.length ? service.fencePrincipals({ runGrantIds: closingIds, roles: ['agent'] }) : Promise.resolve(null);
       const closingResult = closing.then(value => ({ value }), error => ({ error }));
       const operationReceipts = [];
       for (const fence of persisted.operationFences ?? []) operationReceipts.push(await doc.fence(fence));
@@ -128,7 +133,11 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         if (!current || current.payloadDigest !== persisted.payloadDigest || current.fenceRevision !== persisted.fenceRevision)
           fail(403, 'run-control-mismatch');
         const record = (state.docRunClosuresV2 ??= {})[control.controlId] ??= {
-          controlId: control.controlId, fenceRevision: control.fenceRevision, instances: {} };
+          controlId: control.controlId, payloadDigest: control.payloadDigest, fenceRevision: control.fenceRevision, instances: {} };
+        if (scopeAuthority) {
+          record.instances[docInstanceId] = { docInstanceId, operationReceipts, closed, state: 'closed', recordedAt: now() };
+          return;
+        }
         record.instances[docInstanceId] ??= { docInstanceId, operationReceipts, closed,
           // This is deliberately not a complete receipt or old-instance proof.
           complete: false, agentState: 'resource-closure-required', recordedAt: now() };
@@ -178,7 +187,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     },
   });
   runAuthority = createRunAuthority({ ledger, conversationHooks: conversations.hooks,
-    verifyServiceInState, instanceAuthority, scopeAuthority, now, synchronize: () => runtime.authority.synchronize(),
+    verifyServiceInState, instanceAuthority, scopeAuthority, docInstanceId, now, synchronize: () => runtime.authority.synchronize(),
     async verifySender(ref, context) {
       const checked = await accountClient.verifyAcceptedMessage(ref, context);
       await runtime.authority.synchronize();
@@ -242,6 +251,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     try {
       claimNonce(handshakeNonces, req.socket, requestNonce);
       const principal = await runAuthority.resolveRunPrincipal({ servicePrincipal: { ...base, ...cap }, projectId, runGrantId });
+      if (scopeAuthority) ledger.transaction(state => {
+        ((state.runDocInstancesV1 ??= {})[runGrantId] ??= {})[docInstanceId] = { docInstanceId };
+      });
       initialNonces.set(req.socket, requestNonce);
       return { ...principal, servicePrincipal: base, userId: principal.accountId, tenantId: projectId,
         service: 'agent', scope: 'member' };
@@ -342,6 +354,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       if (scopeAuthority) {
         instanceAuthority.verifyInState(ledger.read(), servicePrincipal, { operation: 'pendingRuns', input: {} });
         if (ledger.read().agentInstancesV2?.[servicePrincipal.instanceId]?.purpose !== 'control-only') fail(403, 'instance-purpose-forbidden');
+        await runAuthority.reconcileScopeClosures();
       }
       const state = ledger.read(), rows = [];
       for (const [projectId, group] of Object.entries(state.conversationsV2 ?? {})) {
@@ -353,7 +366,8 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     } });
   return { conversations, readControl, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
     async handleInternal(req, res) { return await instancesHandler(req, res) || await readControlsHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
-    async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
+    async start() { for (const control of await runAuthority.synchronize()) await deliver(control);
+      if (scopeAuthority) await runAuthority.reconcileScopeClosures(); },
     async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
