@@ -97,13 +97,13 @@ taskIdOf({ kind, resultKey, range })
   id: string,                    // 必须等于 taskIdOf(...)，否则整条消息 bad-message
   kind: 'plan' | 'snapshot' | 'stream',
   tier?: 'shared' | 'local',     // snapshot 必填；其余忽略
-  resultKey: string,             // 非空。plan 任务是 `${projectId}@${projectRev}`，且必须与 source 一致；补渲计划任务是 `${projectId}@${projectRev}#backfill:<片段清单的签名>`（c10a 契约第 17 节）
+  resultKey: string,             // 非空。plan 任务是 `${projectId}@${projectRev}`，且必须与 source 一致；预渲染任务任务是 `${projectId}@${projectRev}#backfill:<片段清单的签名>`（c10a 契约第 17 节）
   range: { unit: 'localFrame' | 'segment', from: int, to: int } | null,   // plan 为 null；其余必填，0 <= from <= to
   source: { projectId: string, projectRev: int, derivedFrom?: string | null },
   input?: object,                // 原样保存
   weight?: { class: 'light' | 'medium' | 'heavy', estMs?: number | null, frames?: number | null },
   requires?: object,             // 原样保存（envFingerprint、codeVersion、cardSources 等）
-  priority?: int | 'normal' | 'backfill',   // 缺省 0。整数是 normal 档里的名次（旧形状，大的先）；'backfill' 是补渲档，排在整个 normal 档之后（c10a 契约第 17 节）
+  priority?: int | 'normal' | 'backfill',   // 缺省 0。整数是 normal 档里的名次（旧形状，大的先）；'backfill' 是预渲染任务档，排在整个 normal 档之后（c10a 契约第 17 节）
 }
 ```
 
@@ -813,7 +813,7 @@ export async function probeBrowserEnvironment({ browser, page }, { platform = pr
 
 - 在 `NOT_INDEPENDENT` 判断之后、写盘之前加一道闸：请求体的 `envFingerprint` 必须是字符串，且等于 `control.envFingerprint`；
 - 不等（含没带）就回 `200 { ok: true, stored: false, reason: 'ENV_MISMATCH' }`，不写盘、不发层。
-- 页面（`src/editor/probeRunner.ts`）本阶段不改，它现在不带这个字段，所以测量帧不再入库，这些帧由预渲染进程自己补渲。页面只在意 404，回 200 不影响它。
+- 页面（`src/editor/probeRunner.ts`）本阶段不改，它现在不带这个字段，所以测量帧不再入库，这些帧由预渲染进程自己预渲染任务。页面只在意 404，回 200 不影响它。
 
 ### E.7 测试（Verification，`server/test/`）
 
@@ -2110,7 +2110,7 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
    - 带片段清单的计划任务与它切出的细任务（`source.derivedFrom` 指的计划 id 里有 `#clips:` 或 `#backfill:`）另加一条：本执行器已经算成过这个项目更新的一版，就从那一版起取，不回头用旧的。清单计划的意思是「这几个片段，按现在的样子」；这样旧版本的画面不白渲，层表也不会被迟到的旧计划写回旧版本。不是清单计划切出的任务（桌面版的计划）不适用这一条。
    - `plan`：按实际那一版算；不是任务指的那一版时回的上下文多带 `actualRev`。`afterSplit` 写层表用切分时的同一版。
    - `render`：按的不是任务指的那一版时，先在实际那一版里按片段找 control、比内容键（本地档的内容键含 entry.key，换了版本一定不同）。片段没了或内容键不同，抛 `superseded`：`error.message === 'superseded'`、`error.superseded === true`、`retryable === false`。内容键相同就照做，其余核对（档位、帧范围、结果键）不变，对不上仍是 `plan-mismatch`。按的就是任务指的那一版时与原来完全相同。
-   - 清单计划切出的细任务，片段不在这一版的预渲染集合里时按任务把它记成补渲再渲（原来只对 `priority: 'backfill'` 的做）：清单是发布方判的，切分它的计划可能是别的进程、本进程重启之前、或按另一版算的。
+   - 清单计划切出的细任务，片段不在这一版的预渲染集合里时按任务把它记成预渲染任务再渲（原来只对 `priority: 'backfill'` 的做）：清单是发布方判的，切分它的计划可能是别的进程、本进程重启之前、或按另一版算的。
 4. **切分方**（D.2 的补充，`local-node.mjs`）：执行器回的上下文带 `actualRev` 时，细任务的 `source.projectRev` 写它；`source.derivedFrom` 仍是那个计划任务。
 5. **细任务编排**（`task-runner.mjs`）：执行器抛的错带 `superseded === true` 时发 `task.fail { error: 'superseded', retryable: false }`，诊断事件是 `superseded`（不是 `failed`）。队列对它的处理就是现有的 `task.fail` 不可重试那一支：任务进 `failed`、`lastError = 'superseded'`，订阅者收 `task.failed { error: 'superseded' }`；之后同一个 id 再被发布时当它不存在（F.1「被作废的任务记录不挡重新发布」），重新建。
 6. **诊断**：独立渲染主机每个节点的计数多一项 `superseded`（`render-node/host.mjs` 的 `nodes()`），不计入 `failed`；预渲染进程的日志多一种行 `[queue-node] node.task-superseded {…}`（`session-diag.mjs` 的转发器放行）。

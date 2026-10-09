@@ -164,7 +164,7 @@ $PROMPTCUT_DATA_DIR/
 
 | 东西 | 在哪 | 换机时 |
 |---|---|---|
-| 对话记录、模型历史、没渲完的补渲清单 | `/var/lib/promptcut/agent/tenants/` | **整个拷过去**：成员重新打开项目要能找回云端对话。停掉旧节点的 Agent 服务之后再拷（进行中的对话会被记为「中断」） |
+| 对话记录、模型历史、没渲完的预渲染任务清单 | `/var/lib/promptcut/agent/tenants/` | **整个拷过去**：成员重新打开项目要能找回云端对话。停掉旧节点的 Agent 服务之后再拷（进行中的对话会被记为「中断」） |
 | 用量流水与额度 | `/var/lib/promptcut/agent/usage/`、`config/limits.json` | 拷过去：用量是托管方的账，额度是已经发给各项目的上限 |
 | 模型配置 | `/var/lib/promptcut/agent/config/ai.json` | 可以拷（厂商、地址、模型清单，不含 Key） |
 | 模型 Key 的密文 | `/var/lib/promptcut/agent/config/keys/custom.key` | **拷过去也解不开**：口令由机器指纹（`/etc/machine-id`）派生。新节点上重新走加密分发（〔用户 2026-10-07 定〕`machine-id-agent` 取新节点的识别码，用户用 `make-api-share.bat` 重新生成密文，`import-key-agent` 导入，见 README「模型 Key 的加密分发」）；云厂商重装镜像后 `machine-id` 会变，同样要重新导入 |
