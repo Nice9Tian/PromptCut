@@ -7,6 +7,11 @@ const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantI
 const readFields = [...binding, 'requestId', 'readIntentId', 'promptDigest', 'prompt'];
 const shapes = Object.freeze({ admit: ['projectId', 'conversationId', 'requestId'], read: readFields,
   'read/query': readFields, check: ['projectId', 'runGrantId'], finish: [...binding, 'requestId'],
+  'finish/query': [...binding, 'requestId', 'readReceiptId', 'outcome'],
+  'scope/prepare': [...binding, 'requestId', 'finishReceiptId', 'prepare'],
+  'scope/terminal': [...binding, 'requestId', 'finishReceiptId'],
+  'worker-event-source': ['projectId', 'runGrantId', 'assignmentDigest'],
+  'scope/control': ['projectId', 'controlId', 'runGrantId', 'assignmentDigest', 'rootScopeRef'],
   assignment: [...binding, 'requestId'], ticket: ['projectId', 'runGrantId', 'conversationId', 'purpose'], pending: [] });
 const fail = (status, code) => { throw accountError(status, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -26,10 +31,10 @@ async function bodyOf(req) {
   return body;
 }
 function validateBody(action, body) {
-  const fields = shapes[action], optional = action === 'check' ? ['action'] : [];
+  const fields = shapes[action], optional = action === 'check' ? ['action'] : action === 'finish' ? ['readReceiptId', 'outcome'] : [];
   if (Object.keys(body).some(field => !fields.includes(field) && !optional.includes(field)) ||
       fields.some(field => !Object.hasOwn(body, field))) fail(400, 'invalid-run-body');
-  for (const field of fields.filter(field => !['prompt', 'promptDigest', 'purpose'].includes(field)))
+  for (const field of fields.filter(field => !['prompt', 'promptDigest', 'purpose', 'outcome', 'prepare', 'rootScopeRef'].includes(field)))
     if (!reference(body[field])) fail(400, 'invalid-run-reference');
   if (action === 'read' || action === 'read/query') {
     if (!body.prompt || typeof body.prompt !== 'object' || Array.isArray(body.prompt) ||
@@ -70,7 +75,8 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
         if (action === 'check' && !['read', 'write'].includes(body.action)) fail(400, 'invalid-run-action');
         invocation = await authenticateInvocation({ req, servicePrincipal, body,
           operation: ({ admit: 'admit', read: 'confirmRead', 'read/query': 'queryRead', finish: 'finish',
-            pending: 'pendingRuns', assignment: 'scopeAssignment', check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
+            'finish/query': 'queryFinish', 'scope/prepare': 'scopePrepare', 'scope/terminal': 'scopeTerminal',
+            'scope/control': 'scopeControl', 'worker-event-source': 'workerEventSource', pending: 'pendingRuns', assignment: 'scopeAssignment', check: 'checkAccess', ticket: 'resolveRunPrincipal' })[action] });
         if (!invocation?.servicePrincipal || typeof invocation.release !== 'function') fail(503, 'instance-consumer-unavailable');
         servicePrincipal = invocation.servicePrincipal;
       }
@@ -82,6 +88,11 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       else if (action === 'assignment') {
         if (typeof runAuthority.scopeAssignment !== 'function') fail(503, 'run-scope-unavailable');
         result = await runAuthority.scopeAssignment(input);
+      }
+      else if (['finish/query', 'scope/prepare', 'scope/terminal', 'worker-event-source', 'scope/control'].includes(action)) {
+        const method = ({ 'finish/query': 'queryFinish', 'scope/prepare': 'scopePrepare', 'scope/terminal': 'scopeTerminal', 'worker-event-source': 'workerEventSource', 'scope/control': 'scopeControl' })[action];
+        if (typeof runAuthority[method] !== 'function') fail(503, 'run-scope-unavailable');
+        result = await runAuthority[method](input);
       }
       else if (action === 'pending') {
         if (typeof listPendingRuns !== 'function') fail(503, 'run-pending-unavailable');

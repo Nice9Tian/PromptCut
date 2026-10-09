@@ -5,7 +5,7 @@ import { createPublicKey, sign } from 'node:crypto';
 import { accountError } from './client.mjs';
 import { digestOf, canonicalJson } from './ledger.mjs';
 import { createAgentScopeReader } from '../hosted/agent-run-scope-reader.mjs';
-import { exactScope, validateAgentScopeAssignment } from '../hosted/agent-run-scope-schema.mjs';
+import { exactScope, validateAgentScopeAssignment, verifyScopeSignature } from '../hosted/agent-run-scope-schema.mjs';
 
 const fail = (status, code) => { throw accountError(status, `run-scope-${code}`); };
 const copy = structuredClone;
@@ -57,8 +57,12 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
   async function refresh(ref) {
     const key = requireRef(ref), checkpoint = ledger.read().agentRunScopesV1.checkpoints[key] ?? null;
     live.delete(key); // Failed/locked refresh must never leave an older allow cached.
-    const projection = await sources.get(key).read({ checkpoint });
-    if (canonicalJson(agentScopeRef(projection.record)) !== canonicalJson(ref)) fail(403, 'epoch-changed');
+    const result = await sources.get(key).read({ checkpoint });
+    const historical = result.history?.find(entry => entry.record.epoch === ref.epoch);
+    const projection = result.record.epoch === ref.epoch ? result : historical ? { ...result,
+      record: historical.record, assignment: historical.assignment, terminal: historical.terminal, closure: historical.closure } : null;
+    if (!projection || canonicalJson(agentScopeRef(projection.record)) !== canonicalJson(ref)) fail(403, 'epoch-changed');
+    projection.phase = projection.closure ? 'closed' : projection.assignment ? 'bound' : 'ready';
     ledger.transaction(s => {
       const old = s.agentRunScopesV1.checkpoints[key];
       if (canonicalJson(old ?? null) !== canonicalJson(checkpoint)) fail(409, 'refresh-race');
@@ -83,7 +87,7 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     const mapping = agentScopeKeyMapping(requestedKey, value.record.worker.publicKey);
     if (mapping.scopePublicKeyDigest !== value.record.worker.publicKeyDigest) fail(403, 'key-mismatch');
     const prior = s.agentInstancesV2?.[value.record.instance.instanceId];
-    if (value.checkpoint.head.phase !== 'ready' && !(value.checkpoint.head.phase === 'bound' && prior?.state === 'active'))
+    if (value.phase !== 'ready' && !(value.phase === 'bound' && prior?.state === 'active'))
       fail(403, 'not-ready');
     if (prior && (prior.publicKey !== mapping.publicKey || canonicalJson(prior.rootScopeRef) !== canonicalJson(rootScopeRef)))
       fail(409, 'instance-reused');
@@ -98,7 +102,7 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
       if (prior.target.runGrantId !== grant.runGrantId) fail(409, 'slot-already-assigned');
       return { rootScopeRef: copy(ref), assignmentDigest: digestOf(prior), phase: 'assigned-unbound' };
     }
-    if (projection.checkpoint.head.phase !== 'ready') fail(403, 'not-ready');
+    if (projection.phase !== 'ready') fail(403, 'not-ready');
     const cfg = configs.get(keyOf(ref));
     const payload = { v: 1, protocol: 'promptcut.agent-run-scope.assignment.v1',
       authorityId: ref.rootAuthorityId, slotId: ref.slotId, epoch: ref.epoch, recordDigest: ref.recordDigest,
@@ -115,7 +119,7 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     const projection = projectionFor(ref), assignment = s.agentRunScopesV1.assignments[`${keyOf(ref)}:${ref.epoch}`];
     if (!assignment || digestOf(assignment) !== grant.scopeBinding.assignmentDigest ||
         targetFields.some(k => assignment.target[k] !== grant[k])) fail(403, 'assignment-mismatch');
-    const phase = projection.checkpoint.head.phase;
+    const phase = projection.phase;
     if (phase === 'closed') fail(403, 'already-closed');
     const bound = phase === 'bound' && canonicalJson(projection.assignment) === canonicalJson(assignment);
     if (phase === 'bound' && !bound) fail(403, 'root-assignment-mismatch');
@@ -134,5 +138,159 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     }
     await refresh(rootScopeRef);
   }
-  return Object.freeze({ refresh, synchronize, prepareRegistration, registrationInState, assignInState, assignmentInState });
+  function docClosed(s, control) {
+    if (!control) fail(503, 'doc-closure-pending');
+    const inventory = s.docRunClosuresV2?.[control.controlId];
+    if (!control.docInstanceIds?.length || inventory?.payloadDigest !== control.payloadDigest || inventory.fenceRevision !== control.fenceRevision ||
+        control.docInstanceIds.some(id => {
+          const row = inventory.instances?.[id];
+          return row?.state !== 'closed' || row.closed?.actualClosed !== true || !Array.isArray(row.closed.connections) ||
+            row.closed.connections.some(connection => connection.actualClosed !== true) ||
+            (control.operationFences ?? []).some(fence => !row.operationReceipts?.some(receipt =>
+              receipt.state === 'committed' && canonicalJson(Object.fromEntries(Object.keys(fence).map(k => [k, receipt[k]]))) === canonicalJson(fence)));
+        })) fail(503, 'doc-closure-pending');
+    return inventory;
+  }
+  async function closeDocTerminal({ controlId, docInstanceId, service }) {
+    if (ledger.read().runControlsV2?.[controlId]?.kind !== 'terminal') fail(503, 'doc-closure-unavailable');
+    return closeDocControl({ controlId, docInstanceId, service });
+  }
+  async function closeDocControl({ controlId, docInstanceId, service, operationCoordinator }) {
+    const control = ledger.read().runControlsV2?.[controlId];
+    if (!control?.docInstanceIds?.includes(docInstanceId) || typeof service?.fencePrincipals !== 'function' ||
+        (control.operationFences?.length && typeof operationCoordinator?.fence !== 'function'))
+      fail(503, 'doc-closure-unavailable');
+    const ids = control.kind === 'terminal' ? control.closing : control.revoked;
+    if (!ids?.length) fail(503, 'doc-closure-unavailable');
+    // Install the real read/transport barrier synchronously before awaiting
+    // operation settlement. Keep the rejection handler installed throughout.
+    const closing = service.fencePrincipals({ runGrantIds: ids, roles: ['agent'] })
+      .then(value => ({ value }), error => ({ error }));
+    const operationReceipts = [];
+    for (const fence of control.operationFences ?? []) operationReceipts.push(await operationCoordinator.fence(fence));
+    const outcome = await closing;
+    if (outcome.error) throw outcome.error;
+    const closed = outcome.value;
+    if (closed?.actualClosed !== true || !Array.isArray(closed.connections) || closed.connections.some(c => c.actualClosed !== true))
+      fail(503, 'doc-closure-pending');
+    ledger.transaction(s => {
+      const now = s.runControlsV2[controlId];
+      if (!now || now.payloadDigest !== control.payloadDigest || now.fenceRevision !== control.fenceRevision) fail(403, 'doc-control-changed');
+      const row = (s.docRunClosuresV2 ??= {})[controlId] ??= { controlId, payloadDigest: control.payloadDigest,
+        fenceRevision: control.fenceRevision, instances: {} };
+      row.instances[docInstanceId] = { docInstanceId, state: 'closed', closed, operationReceipts };
+      // Persist this actual Doc instance independently; a historical instance
+      // still missing from the inventory must not erase this one's evidence.
+      docClosed(s, { ...now, docInstanceIds: [docInstanceId] });
+    });
+  }
+  function preparePayload(s, grant, receipt, drainReceiptId) {
+    const assignment = assignmentInState(s, grant, { requireBound: true }).assignment;
+    const control = s.runControlsV2[receipt.controlId];
+    if (!control || control.kind !== 'terminal' || typeof drainReceiptId !== 'string' || !/^[A-Za-z0-9_.:@-]{1,128}$/.test(drainReceiptId))
+      fail(403, 'prepare-binding');
+    const ref = grant.scopeBinding.rootScopeRef;
+    return { v: 1, domain: 'promptcut.agent-run.prepare.v1', scope: { authorityId: ref.rootAuthorityId, slotId: ref.slotId,
+      epoch: ref.epoch, recordDigest: ref.recordDigest, assignmentDigest: digestOf(assignment) }, target: copy(assignment.target),
+      readReceiptId: receipt.readReceiptId, finishReceiptId: receipt.finishReceiptId, outcomeDigest: receipt.outcomeDigest,
+      eventId: receipt.outcome.eventId, eventDigest: receipt.outcome.eventDigest, drainReceiptId,
+      docControlId: control.controlId, docFenceRevision: control.fenceRevision };
+  }
+  function recordPrepareInState(s, grant, receipt, prepared) {
+    if (!prepared || typeof prepared !== 'object') fail(400, 'prepare-invalid');
+    const { signature, ...payload } = prepared;
+    if (canonicalJson(payload) !== canonicalJson(preparePayload(s, grant, receipt, payload.drainReceiptId))) fail(403, 'prepare-binding');
+    verifyScopeSignature(prepared, projectionFor(grant.scopeBinding.rootScopeRef).record.worker.publicKey);
+    const rows = s.runScopePreparesV1 ??= {}, prior = rows[receipt.finishReceiptId];
+    if (prior && canonicalJson(prior) !== canonicalJson(prepared)) fail(409, 'prepare-conflict');
+    rows[receipt.finishReceiptId] ??= copy(prepared);
+    return { recorded: true, prepareDigest: digestOf(prepared), finishReceiptId: receipt.finishReceiptId };
+  }
+  function terminalInState(s, grant, receipt) {
+    const assignment = assignmentInState(s, grant, { requireBound: true }).assignment;
+    const prepare = s.runScopePreparesV1?.[receipt.finishReceiptId];
+    if (!prepare) fail(503, 'prepare-pending');
+    recordPrepareInState(s, grant, receipt, prepare);
+    const control = s.runControlsV2[receipt.controlId]; docClosed(s, control);
+    const ref = grant.scopeBinding.rootScopeRef;
+    const payload = { v: 1, protocol: 'promptcut.agent-run-scope.terminal.v1', authorityId: ref.rootAuthorityId,
+      slotId: ref.slotId, epoch: ref.epoch, recordDigest: ref.recordDigest, docAuthorityId: ledger.authorityId,
+      assignmentDigest: digestOf(assignment), finish: { readReceiptId: receipt.readReceiptId, finishReceiptId: receipt.finishReceiptId,
+        outcomeDigest: receipt.outcomeDigest, terminalReceiptDigest: digestOf(prepare) } };
+    const terminal = { ...payload, signature: sign(null, Buffer.from(digestOf(payload)), signingKey).toString('base64url') };
+    const rows = s.runScopeTerminalsV1 ??= {}, prior = rows[receipt.finishReceiptId];
+    if (prior && canonicalJson(prior) !== canonicalJson(terminal)) fail(409, 'terminal-conflict');
+    rows[receipt.finishReceiptId] ??= terminal;
+    return { terminal: copy(terminal), terminalDigest: digestOf(terminal) };
+  }
+  function closedInState(s, grant, receipt) {
+    const p = projectionFor(grant.scopeBinding.rootScopeRef);
+    const assignment = s.agentRunScopesV1.assignments[`${keyOf(grant.scopeBinding.rootScopeRef)}:${grant.scopeBinding.rootScopeRef.epoch}`];
+    const retired = p.terminal?.protocol === 'promptcut.agent-run-scope.unassigned-retirement.v1';
+    if (p.phase !== 'closed' || !p.closure || (!retired && (canonicalJson(p.assignment) !== canonicalJson(assignment) ||
+        targetFields.some(k => p.assignment?.target[k] !== grant[k])))) fail(503, 'closure-pending');
+    if (grant.state === 'revoked') {
+      const control = s.runControlsV2[grant.closureControlId];
+      if (!control?.revoked.includes(grant.runGrantId)) fail(403, 'forced-control-mismatch');
+      docClosed(s, control);
+      if (!retired && p.terminal.protocol === 'promptcut.agent-run-scope.forced-terminal.v1') {
+        if (p.terminal.fence.controlId !== control.controlId || p.terminal.fence.fenceRevision !== control.fenceRevision ||
+            p.terminal.fence.payloadDigest !== control.payloadDigest) fail(403, 'forced-control-mismatch');
+      } else if (!retired && !receipt) fail(403, 'terminal-mismatch');
+    } else if (retired) fail(403, 'retirement-has-live-grant');
+    if (receipt && p.terminal.protocol === 'promptcut.agent-run-scope.terminal.v1') {
+      const stored = s.runScopeTerminalsV1?.[receipt.finishReceiptId], prepare = s.runScopePreparesV1?.[receipt.finishReceiptId];
+      if (!stored || !prepare || canonicalJson(stored) !== canonicalJson(p.terminal) ||
+          p.terminal.finish.terminalReceiptDigest !== digestOf(prepare)) fail(403, 'terminal-mismatch');
+      docClosed(s, s.runControlsV2[receipt.controlId]);
+    }
+    const evidence = { v: 1, source: 'root-observed-run-scope-v1', rootScopeRef: copy(grant.scopeBinding.rootScopeRef),
+      target: copy(assignment.target), closure: copy(p.closure), closureWitnessDigest: digestOf(p.closure),
+      terminal: copy(p.terminal), checkpoint: copy(p.checkpoint) };
+    (s.runScopeClosuresV1 ??= {})[grant.runGrantId] = evidence;
+    return evidence;
+  }
+  function forcedInState(s, grant, control) {
+    const ref = grant.scopeBinding?.rootScopeRef;
+    if (!ref || grant.state !== 'revoked' || !control.revoked?.includes(grant.runGrantId)) fail(403, 'forced-control-mismatch');
+    const assignment = s.agentRunScopesV1.assignments[`${keyOf(ref)}:${ref.epoch}`];
+    if (!assignment || targetFields.some(k => assignment.target[k] !== grant[k])) fail(403, 'assignment-mismatch');
+    const kind = ({ credential: 'credential-revoked', member: 'member-revoked', 'service-revoked': 'agent-disabled' })[control.kind] ?? control.kind;
+    const payload = { v: 1, protocol: 'promptcut.agent-run-scope.forced-terminal.v1', authorityId: ref.rootAuthorityId,
+      slotId: ref.slotId, epoch: ref.epoch, recordDigest: ref.recordDigest, docAuthorityId: ledger.authorityId,
+      assignmentDigest: digestOf(assignment), fence: { controlId: control.controlId, fenceRevision: control.fenceRevision,
+        payloadDigest: control.payloadDigest, kind, outcome: kind === 'worker-failed' ? 'failed' : 'interrupted' } };
+    const terminal = { ...payload, signature: sign(null, Buffer.from(digestOf(payload)), signingKey).toString('base64url') };
+    ((s.runScopeForcedV1 ??= {})[control.controlId] ??= {})[grant.runGrantId] = terminal;
+    return copy(terminal);
+  }
+  function eventSourceInState(s, grant, master) {
+    if (master?.purpose !== 'control-only' || master.serviceKid !== masterServiceKid) fail(403, 'master-required');
+    const { assignment } = assignmentInState(s, grant, { requireBound: true });
+    const ref = grant.scopeBinding.rootScopeRef, p = projectionFor(ref), cfg = configs.get(keyOf(ref));
+    if (grant.serviceKid !== cfg.workerServiceKid) fail(403, 'worker-transport');
+    return { assignmentDigest: digestOf(assignment), rootScopeRef: copy(ref), scopePublicKey: p.record.worker.publicKey,
+      scopePublicKeyDigest: p.record.worker.publicKeyDigest, workerFingerprint256: cfg.workerFingerprint256,
+      runGrant: { ...copy(assignment.target), accountId: grant.accountId, initiatorName: grant.initiatorName,
+        state: grant.state, fenceRevision: grant.fenceRevision, readReceiptId: grant.readReceiptId } };
+  }
+  function controlSourceInState(s, grant, master, input) {
+    if (master?.purpose !== 'control-only' || master.serviceKid !== masterServiceKid) fail(403, 'master-required');
+    const ref = grant.scopeBinding?.rootScopeRef;
+    if (!ref || canonicalJson(ref) !== canonicalJson(input.rootScopeRef) || grant.scopeBinding.assignmentDigest !== input.assignmentDigest ||
+        grant.state !== 'revoked' || grant.closureControlId !== input.controlId) fail(403, 'forced-control-mismatch');
+    const control = s.runControlsV2[input.controlId], terminal = s.runScopeForcedV1?.[input.controlId]?.[grant.runGrantId];
+    if (!control?.revoked.includes(grant.runGrantId) || !terminal || terminal.assignmentDigest !== input.assignmentDigest ||
+        !control.instances.some(i => i.instanceId === grant.instanceId && i.instanceGeneration === grant.instanceGeneration && i.serviceKid === grant.serviceKid))
+      fail(403, 'forced-control-mismatch');
+    const p = projectionFor(ref), cfg = configs.get(keyOf(ref));
+    if (grant.serviceKid !== cfg.workerServiceKid) fail(403, 'worker-transport');
+    docClosed(s, control);
+    if (p.phase === 'ready' && p.assignment === null) return { unassigned: true, rootScopeRef: copy(ref),
+      assignmentDigest: input.assignmentDigest, reason: 'root-assignment-not-bound' };
+    if (!p.assignment || digestOf(p.assignment) !== input.assignmentDigest) fail(403, 'root-assignment-mismatch');
+    return { unassigned: false, rootScopeRef: copy(ref), assignmentDigest: input.assignmentDigest, terminal: copy(terminal) };
+  }
+  return Object.freeze({ refresh, synchronize, prepareRegistration, registrationInState, assignInState, assignmentInState,
+    preparePayload, recordPrepareInState, terminalInState, forcedInState, closedInState, docClosed, closeDocTerminal, closeDocControl, eventSourceInState, controlSourceInState });
 }

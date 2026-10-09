@@ -41,16 +41,24 @@ export function instanceProofPayload({ authorityId, instanceId, instanceGenerati
 export function instanceRunScope(operation, input) {
   if (Object.values(conversationControlOperations).includes(operation)) return conversationControlScope(operation, input);
   if (operation === 'pendingRuns') return { operation };
+  if (operation === 'workerEventSource') return { operation, projectId: input.projectId,
+    runGrantId: input.runGrantId, assignmentDigest: input.assignmentDigest };
+  if (operation === 'scopeControl') return { operation, projectId: input.projectId, controlId: input.controlId,
+    runGrantId: input.runGrantId, assignmentDigest: input.assignmentDigest, rootScopeRef: input.rootScopeRef };
   const p = input?.principal ?? input ?? {};
   const target = { projectId: input?.projectId, runGrantId: input?.runGrantId ?? p.runGrantId };
   if (operation === 'admit') return { operation, projectId: input.projectId,
     conversationId: input.conversationId, requestId: input.requestId };
   if (['resolveRunPrincipal', 'authorizeQuery'].includes(operation)) return { operation, ...target };
   if (operation === 'checkAccess') return { operation, ...target, action: input.action };
-  if (['confirmRead', 'queryRead', 'finish', 'scopeAssignment'].includes(operation)) {
+  if (['confirmRead', 'queryRead', 'finish', 'queryFinish', 'scopeAssignment', 'scopePrepare', 'scopeTerminal'].includes(operation)) {
     const value = { operation, ...Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId',
       'runGrantId', 'requestId'].map(key => [key, input[key]])) };
     if (['confirmRead', 'queryRead'].includes(operation)) Object.assign(value, { readIntentId: input.readIntentId, promptDigest: input.promptDigest });
+    if (['finish', 'queryFinish'].includes(operation) && ('outcome' in input || 'readReceiptId' in input))
+      Object.assign(value, { outcome: input.outcome, readReceiptId: input.readReceiptId });
+    if (['scopePrepare', 'scopeTerminal'].includes(operation)) value.finishReceiptId = input.finishReceiptId;
+    if (operation === 'scopePrepare') value.prepare = input.prepare;
     return value;
   }
   deny(403, 'instance-operation-forbidden');
@@ -153,7 +161,7 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
       deny(400, 'instance-request-invalid');
     const state = ledger.read(), svc = transport(state, servicePrincipal);
     const instance = current(state, proof?.instanceId, proof?.instanceGeneration, svc);
-    if (instance.purpose === 'control-only' && ![...Object.values(conversationControlOperations), 'pendingRuns'].includes(operation))
+    if (instance.purpose === 'control-only' && ![...Object.values(conversationControlOperations), 'pendingRuns', 'workerEventSource', 'scopeControl'].includes(operation))
       deny(403, 'instance-purpose-forbidden');
     const payload = instanceProofPayload({ authorityId: ledger.authorityId, ...instance,
       channelBinding: svc.channelBinding, method, path, operation, requestDigest: digestOf(request) });

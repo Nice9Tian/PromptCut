@@ -174,5 +174,6 @@ export function validateAgentScopeHistory({ expected, anchor, configuredAnchorDi
   }
   return { checkpoint: { anchorDigest: configuredAnchorDigest, head: structuredClone(current) },
     record: structuredClone(previous.record), assignment: structuredClone(previous.assignment),
-    terminal: structuredClone(previous.terminal), closure: structuredClone(previous.closure) };
+    terminal: structuredClone(previous.terminal), closure: structuredClone(previous.closure),
+    history: structuredClone(entries) };
 }
