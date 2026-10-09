@@ -47,7 +47,8 @@
  * `config/voice.json` 与 `config/keys/voice.key`(托管方的配音配置与令牌的密文,可没有)、`work/`(各对话的工作目录:附件、下载的文件)、
  * `config/limits.json`(各项目额度与节点并发,`admin.mjs quota` 写,改了即生效)、`tenants/`(对话)、`usage/`(用量流水)。
  * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发补渲。
- * 收到 SIGTERM / SIGINT:进行中的每一轮记「中断」后停下,状态落盘,5 秒内退出。
+ * 收到 SIGTERM / SIGINT:旧 LAN 模式记「中断」并停下,状态落盘,5 秒内退出。
+ * 账号模式等待 owned 资源真实关闭;不以 5 秒超时替代关闭证明或成功退出。
  *
  * 账号版以同一个 RAM 注册客户端装配 run/data/read-control 与持久事件；
  * 真实关闭 producer/终态结算尚未接通，完成状态严格 pending，不能宣称整链 ready。
