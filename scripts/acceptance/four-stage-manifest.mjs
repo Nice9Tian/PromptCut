@@ -70,6 +70,8 @@ export const EXCLUDED_PROBE_FILES = {
   'oac-probe.mjs': 'Origin-Agent-Cluster 可行性探针(历史)',
   'backdrop-probe.mjs': '毛玻璃采样可行性探针(历史)',
   'videodecoder-probe.mjs': 'WebCodecs 可行性探针(历史)',
+  'browser-stream-encode-probe.mjs': '浏览器压轨道流的可行性实测(见 render-standard.md),还没接进在线页面的生成流程,接进去后改进整套',
+  'snapshot-diff-apply-probe.mjs': '快照「结构一份加每帧差异」的贴图耗时实验(见 render-standard.md),只记录耗时',
   'audio-determine-probe.mjs': '音频图卡判重方案的前提实测(历史)',
   'svg-url-serialize-probe.mjs': '序列化可行性探针(历史)',
   'inherited-props-probe.mjs': '属性表对账工具(历史)',
