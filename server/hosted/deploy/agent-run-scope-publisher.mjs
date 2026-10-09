@@ -1,9 +1,10 @@
 /** Explicit external-root Agent slot lifecycle. No finalizer or network write
  * API. Failure retains the root lock; no force/recover/assume-empty option. */
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { digestOf } from '../../account/ledger.mjs';
-import { createRootScopeRuntimeV2, rootRead } from './asset-root-registry-publisher.mjs';
+import { createRootScopeRuntimeV2, rootRead, procInfo } from './asset-root-registry-publisher.mjs';
 import { loadAgentScopeChain } from '../agent-run-scope-reader.mjs';
 import { failScope, exactScope, sameScope, scopeRuntimeExpected, scopeHead, scopePublication,
   validateAgentScopeExpected, validateAgentScopeRecord, validateAgentScopeReservation, validateAgentScopeAssignment,
@@ -12,6 +13,47 @@ import { failScope, exactScope, sameScope, scopeRuntimeExpected, scopeHead, scop
 const protocol = name => `promptcut.agent-run-scope.${name}.v1`;
 const emptyEntry = (record, reservation) => ({ record, reservation, assignment: null, terminal: null, intent: null, closure: null,
   publications: { ready: null, bound: null, closed: null } });
+
+export function parseAgentTcpListeners(text, family) {
+  const lines = String(text).trim().split('\n');
+  if (![4, 6].includes(family) || !/local_address/.test(lines.shift() ?? '')) failScope('listener-table');
+  const listeners = [];
+  for (const line of lines) {
+    const columns = line.trim().split(/\s+/), local = /^([0-9A-F]+):([0-9A-F]{4})$/i.exec(columns[1] ?? '');
+    if (!local || local[1].length !== (family === 4 ? 8 : 32) || !/^[0-9A-F]{2}$/i.test(columns[3] ?? '') ||
+        !/^\d+$/.test(columns[7] ?? '') || !/^\d+$/.test(columns[9] ?? '')) failScope('listener-table');
+    if (columns[3].toUpperCase() === '0A') listeners.push({ family, address: local[1].toUpperCase(),
+      port: parseInt(local[2], 16), uid: Number(columns[7]), inode: columns[9] });
+  }
+  return listeners;
+}
+/** Pure negative-test surface; actual paths/PID come only from root inspection. */
+export function validateAgentListenerOwner({ tcp4, tcp6, links, port, uid }) {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535 || !Array.isArray(links)) failScope('listener-owner');
+  const rows = [...parseAgentTcpListeners(tcp4, 4), ...parseAgentTcpListeners(tcp6, 6)].filter(r => r.port === port);
+  if (!rows.length) failScope('listener-not-ready');
+  if (rows.length !== 1 || rows[0].family !== 4 || rows[0].address !== '0100007F' || rows[0].uid !== uid ||
+      rows[0].inode === '0' || !links.includes(`socket:[${rows[0].inode}]`)) failScope('listener-owner');
+  return rows[0];
+}
+async function listenerOwnership(origin, instance) {
+  const parsed = new URL(origin);
+  if (parsed.hostname !== '127.0.0.1' || parsed.protocol !== 'https:') failScope('identity-origin');
+  const before = await procInfo(instance.pid);
+  if (before.startTicks !== instance.pidBirth.startTicks || before.uid !== instance.uid || before.cgroupPath !== instance.cgroup.v2Path) failScope('instance-changed');
+  // Same network namespace is required. No host table substitution or socket
+  // activation guess: the inspected MainPID must own the listening inode.
+  const [selfNet, peerNet] = await Promise.all([fs.readlink('/proc/self/ns/net'), fs.readlink(`/proc/${instance.pid}/ns/net`)]);
+  if (selfNet !== peerNet) failScope('listener-namespace');
+  const links = await Promise.all((await fs.readdir(`/proc/${instance.pid}/fd`)).map(async fd => {
+    try { return await fs.readlink(`/proc/${instance.pid}/fd/${fd}`); }
+    catch (e) { if (e.code === 'ENOENT') return ''; throw e; }
+  }));
+  const [tcp4, tcp6] = await Promise.all(['/proc/net/tcp', '/proc/net/tcp6'].map(f => fs.readFile(f, 'utf8')));
+  const result = validateAgentListenerOwner({ tcp4, tcp6, links, port: Number(parsed.port || 443), uid: instance.uid });
+  if (!sameScope(before, await procInfo(instance.pid))) failScope('instance-changed');
+  return result;
+}
 function matchIdentity(identity, expected, reservation, tuple) {
   if (!exactScope(identity, ['v', 'serviceId', 'authorityId', 'slotId', 'epoch', 'instanceId', 'pid', 'publicKey', 'publicKeyDigest',
     'clientFingerprint256', 'serverFingerprint256']) || identity.v !== 1 || identity.serviceId !== 'agent' ||
@@ -115,15 +157,37 @@ export async function publishAgentScope({ expected, mode, configuredAnchorDigest
 export async function runAgentScopePublisher({ configFile, mode, assignmentFile = null, terminalFile = null, intentFile = null }) {
   if (process.platform !== 'linux' || process.getuid?.() !== 0 || process.geteuid?.() !== 0) failScope('linux-root-required');
   const config = await rootRead(configFile);
+  const io = await createAgentScopeRuntime(config);
+  return publishAgentScope({ expected: config.expected, mode, configuredAnchorDigest: config.configuredAnchorDigest,
+    assignment: assignmentFile ? await rootRead(assignmentFile) : null,
+    terminal: terminalFile ? await rootRead(terminalFile) : null, intent: intentFile ? await rootRead(intentFile) : null, io });
+}
+/** Root-only adapter used identically by CLI and the isolated OS experiment. */
+export async function createAgentScopeRuntime(config) {
+  if (process.platform !== 'linux' || process.getuid?.() !== 0 || process.geteuid?.() !== 0) failScope('linux-root-required');
   if (!exactScope(config, ['v', 'expected', 'registryDir', 'identity', 'runtimeAdapter', 'configuredAnchorDigest']) || config.v !== 1 ||
       !exactScope(config.identity, ['origin', 'keyFile', 'certFile', 'caFile'])) failScope('config');
   const expected = validateAgentScopeExpected(config.expected);
+  if (new URL(config.identity.origin).hostname !== '127.0.0.1') failScope('identity-origin');
   const io = await createRootScopeRuntimeV2({ ...config, expected: scopeRuntimeExpected(expected) }, {
     validateReservation: value => validateAgentScopeReservation(value, expected), identityPath: '/internal/v2/agent/run-scope/identity',
   });
-  return publishAgentScope({ expected, mode, configuredAnchorDigest: config.configuredAnchorDigest,
-    assignment: assignmentFile ? await rootRead(assignmentFile) : null,
-    terminal: terminalFile ? await rootRead(terminalFile) : null, intent: intentFile ? await rootRead(intentFile) : null, io });
+  const identity = io.identity;
+  io.identity = async reservation => {
+    const tuple = await io.inspect(reservation); let before;
+    for (let attempt = 0; ; attempt++) {
+      try { before = await listenerOwnership(config.identity.origin, tuple.instance); break; }
+      catch (e) {
+        if (e.code !== 'agent-scope-listener-not-ready' || attempt >= 6) throw e;
+        if (!sameScope(tuple, await io.inspect(reservation))) failScope('instance-changed');
+        await new Promise(r => setTimeout(r, Math.min(100 * 2 ** attempt, 1600)));
+      }
+    }
+    const result = await identity(reservation), after = await listenerOwnership(config.identity.origin, tuple.instance);
+    if (!sameScope(before, after) || !sameScope(tuple, await io.inspect(reservation))) failScope('identity-socket-changed');
+    return result;
+  };
+  return io;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
