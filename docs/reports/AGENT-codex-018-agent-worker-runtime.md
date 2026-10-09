@@ -21,3 +21,11 @@ root 在已核干净的原物理工作区将分支切为 `codex/018-agent-worker
 端口6700–6711由root租本叶，首次业务fixture前完整查空；占用只报告、不杀其它进程。专属纯目标走既有npm wrapper，隐身preload/process-only cuda/models/provider与唯一PSModulePath；不裸node--test、不装依赖、不全量、不生产模型/节点。实际TLS/worker/完整Editor仅固定源码后按窗口执行，首红及实际资源close全部保留。
 
 本开工提交仅报告，尚未实现/验证新runtime；上包root type/full/Editor/Linux证据不套给本阶段。现有真正factory与持久events保持原样。
+
+## RAM session 首块
+
+root已将run-client租约更正为真实 `server/agent-service/run-client.mjs`。Astra确认challenge附精确rootScopeRef及双摘要，原publicKeyDigest仍PEM；result附原ref且instanceId来自可信rootrecord。prepare签 `Buffer.from(digestOf(payload))`，terminalReceiptDigest为完整signedprepare摘要；原Doc注册PoP签canonicalJson不变。
+
+角色进一步澄清：scope `record.instance.clientFingerprint256` 是root-controller→worker identity RPC的客户端证书，不是worker→Doc客户端证书。Doc另配workerServiceKid/workerFingerprint256核真实transport；DER/PEM同key关联两通路，两个pin不得强行相等。worker entry/gateway后包必须独立配置这两个证书身份。
+
+新增纯专属session目标首红4tests/0pass/4fail/82.244ms，exit1，均为尚无scopeIdentity；TMP `pc-worker-session-first.log`保留。没有业务listener，npm原globalguard照旧。本轮修session实现公开两种编码/key摘要、可信rootrecord注册绑定、assignment精确绑定、prepare私有source+完整域/tuple、原Docterminal与intent核验；source失败/变内容/多调用竞争不得签冲突prepare，无closed/counts/rootwitness伪声明。Doc/root真正注册reader装配仍等待Astra模块，此纯目标registration/OS/localdrain是受控adapter，Ed25519签名是真实，不称production链。
