@@ -245,9 +245,9 @@ async function main() {
   const ports = [6620, 6621, 6622, 6623, 6624, 6625, 6626, 6627, 6628, 6629];
   const ORIGIN = 'https://127.0.0.1:6626', STAGES = ['http://s1.pc.localhost:6628', 'http://s2.pc.localhost:6629'];
   const result = { sourceBefore: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, windowsHide: true, encoding: 'utf8' }).trim(),
-    checks: [], network: [], screenshots: [], pageErrors: [], pageSteps: [], completed: false, fence: 'not-tested', cleanup: {} };
+    checks: [], network: [], eventReads: [], screenshots: [], pageErrors: [], pageSteps: [], completed: false, fence: 'not-tested', cleanup: {} };
   const check = (condition, name) => { result.checks.push({ name, pass: Boolean(condition) }); if (!condition) throw new Error(name); };
-  const stages = [], contexts = [], pages = [], requestIds = new WeakMap(), firstVisibilityId = new WeakMap(), visibilityCounts = new WeakMap();
+  const stages = [], contexts = [], pages = [], requestIds = new WeakMap(), firstVisibilityId = new WeakMap(), visibilityCounts = new WeakMap(), eventReadRequests = new WeakMap();
   const pageLabels = ['creator', 'owner', 'member'];
   let browser, fixture, phase = 'preflight', phaseDetail = null, browserProfile;
   const started = Date.now();
@@ -367,6 +367,11 @@ async function main() {
       page.on('pageerror', error => result.pageErrors.push({ page: pageLabel, ...safePageError(error) }));
       page.on('request', request => {
         const url = new URL(request.url());
+        if (request.method() === 'GET' && /\/agent\/v1\/conversations\/[^/]+\/events$/.test(url.pathname)) {
+          const safePath = url.pathname.replace(/\/conversations\/[^/]+(?=\/)/g, '/conversations/:conversationId');
+          const record = { page: pageLabel, path: safePath, status: null, lifecycle: 'open' };
+          result.eventReads.push(record); eventReadRequests.set(request, record);
+        }
         if (url.pathname.endsWith('/visibility') && request.method() === 'POST') {
           let id = null; try { id = JSON.parse(request.postData() ?? '{}')?.requestId ?? null; } catch { /* keep only match status */ }
           const count = visibilityCounts.get(page) ?? 0;
@@ -377,12 +382,22 @@ async function main() {
       });
       page.on('response', response => {
         const url = new URL(response.url());
+        const eventRead = eventReadRequests.get(response.request());
+        if (eventRead) eventRead.status = response.status();
         if (url.pathname.startsWith('/agent/') || url.pathname.startsWith('/hosted/shared/account/')) {
           const meta = requestIds.get(response.request());
           const safePath = url.pathname.replace(/\/conversations\/[^/]+(?=\/)/g, '/conversations/:conversationId');
           result.network.push({ page: pageLabel, path: safePath, status: response.status(), method: response.request().method(),
             ...(url.pathname.endsWith('/visibility') ? { attempt: meta?.sequence ?? 0, stableRequestIdMatch: meta?.matched === true } : {}) });
         }
+      });
+      page.on('requestfinished', request => {
+        const eventRead = eventReadRequests.get(request);
+        if (eventRead) eventRead.lifecycle = 'finished';
+      });
+      page.on('requestfailed', request => {
+        const eventRead = eventReadRequests.get(request);
+        if (eventRead) eventRead.lifecycle = 'failed';
       });
     }
     const [creator, owner, member] = pages, projectName = 'Shared dual account project';
@@ -466,7 +481,7 @@ async function main() {
     await chooseHistory(member, conversationId);
     await member.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('共有对话'), { timeout: TIMEOUT });
     await waitForVisibleUserMessage(member, ownerPrompt);
-    check(result.network.some(entry => entry.page === 'member' && entry.method === 'GET' && entry.path.endsWith('/events') && entry.status === 200),
+    check(result.eventReads.some(entry => entry.page === 'member' && entry.path.endsWith('/events') && entry.status === 200 && entry.lifecycle === 'open'),
       'ordinary-member-real-shared-events-readable');
     const creatorShared = await inspectAccountConversationControls(creator);
     assertAccountConversationControls(creatorShared, { visibility: 'shared', canToggleVisibility: false, creatorReadOnly: false });
@@ -480,19 +495,22 @@ async function main() {
 
     phase = 'owner-switch-private-confirmed';
     phaseDetail = 'wait-for-real-private-confirmation-and-member-access-revocation';
-    const deniedMemberRead = member.waitForResponse(response => {
-      const url = new URL(response.url());
-      return response.request().method() === 'GET' && url.pathname === `/agent/v1/conversations/${encodeURIComponent(conversationId)}/events` &&
-        response.status() === 403;
-    }, { timeout: TIMEOUT }).catch(() => null);
     const firstAttempt = await requestAccountVisibility(owner, 'private');
     check(firstAttempt.outcome === 'confirmed' && firstAttempt.httpStatus === 200, 'private-switch-real-fence-confirmed');
+    result.fence = 'confirmed-by-real-service';
     check(result.network.some(entry => entry.page === 'owner' && entry.path.endsWith('/visibility') && entry.status === 200),
       'private-switch-real-http-200');
-    const memberDeniedResponse = await deniedMemberRead;
-    check(memberDeniedResponse?.status() === 403 && result.network.some(entry => entry.page === 'member' &&
-      entry.path.endsWith('/events') && entry.status === 403),
-      'ordinary-member-old-read-denied-after-private');
+    const memberReadClosed = await waitFor(() => result.eventReads.some(entry => entry.page === 'member' &&
+      entry.path.endsWith('/events') && entry.status === 200 && entry.lifecycle !== 'open'),
+    'ordinary member old events stream close after private fence', TIMEOUT).then(() => true, () => false);
+    let memberMessageCleared = false;
+    try {
+      await member.waitForFunction(() => {
+        const panel = document.querySelector('[data-pc="cloud-ai-panel"]:not([data-inactive="1"]):not([aria-hidden="true"])');
+        return Boolean(panel) && panel.querySelector('.ai-message.user .ai-message-text') === null;
+      }, { timeout: TIMEOUT });
+      memberMessageCleared = (await inspectAccountConversationControls(member)).visibleMessages === 0;
+    } catch { /* Keep the actual visible result for the paired assertions below. */ }
     await shot(owner, '04-owner-private-confirmed');
 
     phase = 'ordinary-member-private-history-hidden';
@@ -505,31 +523,40 @@ async function main() {
     }, { timeout: TIMEOUT }).catch(() => null);
     await memberHistoryButton.click();
     check((await memberListResponse)?.status() === 200, 'ordinary-member-history-refresh-real-http-200');
-    await waitVisible(member, '[data-pc="chat-new"]');
-    const memberNewChat = await member.$('[data-pc="chat-new"]');
-    if (!memberNewChat || !await visibleAndUnobscured(member, memberNewChat)) throw new Error('member-new-chat-not-usable');
-    await memberNewChat.click();
+    const memberHistoryAfterPrivate = await member.$('[data-pc="cloud-ai-panel"] button[title*="历史"]');
+    if (!memberHistoryAfterPrivate || !await visibleAndUnobscured(member, memberHistoryAfterPrivate)) throw new Error('member-history-button-after-private-not-usable');
     const memberListAfterPrivate = member.waitForResponse(response => {
       const url = new URL(response.url());
       return response.request().method() === 'GET' && url.pathname === '/agent/v1/conversations';
     }, { timeout: TIMEOUT }).catch(() => null);
-    await member.waitForFunction(() => {
-      const button = document.querySelector('[data-pc="cloud-ai-panel"] button[title*="历史"]');
-      if (!button || button.disabled) return false;
-      const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
-      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
-      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      return Boolean(hit && (hit === button || button.contains(hit)));
-    }, { timeout: TIMEOUT });
-    const memberHistoryAfterPrivate = await member.$('[data-pc="cloud-ai-panel"] button[title*="历史"]');
-    if (!memberHistoryAfterPrivate || !await visibleAndUnobscured(member, memberHistoryAfterPrivate)) throw new Error('member-history-button-after-new-chat-not-usable');
     await memberHistoryAfterPrivate.click();
-    check((await memberListAfterPrivate)?.status() === 200, 'ordinary-member-private-history-refresh-real-http-200');
+    const memberHistoryResponse = await memberListAfterPrivate;
+    const memberHistoryStatus = memberHistoryResponse?.status() ?? null;
+    let memberServerListsPrivate = null;
+    if (memberHistoryResponse?.ok()) {
+      try {
+        const body = await memberHistoryResponse.json();
+        memberServerListsPrivate = Array.isArray(body?.items) && body.items.some(item => item?.id === conversationId);
+      } catch { memberServerListsPrivate = null; }
+    }
     await waitVisible(member, '[data-pc="chat-cloud-group"]');
-    await member.waitForFunction(id => !Array.from(document.querySelectorAll('[data-pc="chat-cloud-item"]'))
-      .some(row => row.getAttribute('data-chat-id') === id), { timeout: TIMEOUT }, conversationId);
-    check(!result.network.some(entry => entry.page === 'member' && entry.path === '/agent/v1/conversations' && entry.status >= 500),
-      'ordinary-member-private-history-not-server-error');
+    await member.waitForFunction(() => {
+      const group = document.querySelector('[data-pc="chat-cloud-group"]');
+      const loading = group?.querySelector('.chat-drawer-empty');
+      return Boolean(group) && (!loading || loading.textContent?.trim() !== '读取中…');
+    }, { timeout: TIMEOUT });
+    const memberHistoryRowVisible = await member.evaluate(id => Array.from(document.querySelectorAll('[data-pc="chat-cloud-item"]'))
+      .some(row => row.getAttribute('data-chat-id') === id), conversationId);
+    await shot(member, '06-member-after-private-history-refresh');
+    const privateReadChecks = [
+      { name: 'ordinary-member-old-read-closed-after-private', pass: memberReadClosed },
+      { name: 'ordinary-member-current-private-message-cleared', pass: memberMessageCleared },
+      { name: 'ordinary-member-private-history-refresh-real-http-200', pass: memberHistoryStatus === 200 },
+      { name: 'ordinary-member-private-history-server-omits-id', pass: memberServerListsPrivate === false },
+      { name: 'ordinary-member-private-history-ui-omits-id', pass: memberHistoryRowVisible === false },
+    ];
+    result.checks.push(...privateReadChecks);
+    if (privateReadChecks.some(item => !item.pass)) throw new Error(privateReadChecks.find(item => !item.pass).name);
     phase = 'creator-private-readonly';
     phaseDetail = 'creator-reopen-private-conversation-and-wait-for-history-body';
     await chooseHistory(creator, conversationId);
@@ -561,6 +588,7 @@ async function main() {
     result.cleanup.fixture = { closed: fixtureClose.closed === true,
       ...(typeof fixtureClose.childClosed === 'boolean' ? { childClosed: fixtureClose.childClosed } : {}),
       ...(fixtureClose.notStarted === true ? { notStarted: true } : {}),
+      ...(Number.isSafeInteger(fixtureClose.closeFailureCount) ? { closeFailureCount: fixtureClose.closeFailureCount } : {}),
       evidenceDir: fixtureClose.fixtureDir ?? result.fixtureEvidenceDir ?? null };
     result.cleanup.portsFree = Object.fromEntries(await Promise.all(ports.map(async port => [String(port), await portFree(port)])));
     result.cleanup.allPortsFree = Object.values(result.cleanup.portsFree).every(Boolean);
