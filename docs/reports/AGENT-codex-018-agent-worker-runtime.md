@@ -67,3 +67,7 @@ task只接受projectId/conversationId/requestId，不能携grant或instance身�
 Astra新scope模式从真实mTLS kid+pin与可信配置判断purpose，challenge/result不可变 `control-only` 或 `run-worker`。master只可签conversationControlSubscribe/conversationReadOpen/conversationReadClose/conversationControlAck与pendingRuns；后者exactPOST `/internal/v2/runs/pending`/body{}。不由缺ref推master，不允许两个kid/pin相同配置。worker强制rootScopeRef并核双摘要；其他DocrunAPI强拒master。
 
 session可配置required registrationPurpose并核服务器回显；rootScope配置自动要求run-worker。master签data/run/assets/assignment与bindScope全拒；metadata签精确pendingRuns，旧未启scope模式pending仍沿原路径。生产master/controller/worker证书由root另配，本叶不读取真实key、不自行改main开启。新消费者源码尚待配Astra最终固定provider真实目标。
+
+固定aafd69ec专属9/9、0fail/cancel/skip、110.6967ms/exit0（外层347ms），TMP `pc-worker-session-aafd69ec-target.log`。均纯受控注册/真实RAM签名，没有业务TLS监听。尚未把Astraeca3/purpose新增provider合进本叶，等待root冻结组合；未冒用其目标结果。
+
+root准最窄workerEventProofFor固定POST独立域，但实际signed remote sink的fresh Doc验权仍需observer getter：control-only master不能拿当前五个op作scopeAssignment/checkAccess(write)，历史rootassignment不是currentgrant/fence权限。已与Astra约exactworker/root/actor绑定的只读private getter；缺callback仍503，不自由allow、不放宽masterrun能力。当前gateway/worker入口/remote sink没有实现或运行，不能称此阶段完整OSworker/Editor已过。
