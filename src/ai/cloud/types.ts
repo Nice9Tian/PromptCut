@@ -1,4 +1,19 @@
 /** 云端 Agent 服务的接口形状(契约 2.3、2.4 节);以 `server/agent-service/http.mjs` 的实际回包为准,只多不少地容错 */
+import type { ChatMessage } from '../types.ts';
+
+/** Account event rows carry the immutable doc grant binding; seq is eventSeq. */
+export interface CloudAcceptedBinding {
+  projectId: string; conversationId: string; messageId: string; senderAccountId: string;
+}
+export interface CloudRunBinding extends CloudAcceptedBinding {
+  runId: string; runGrantId: string; instanceId: string; instanceGeneration: number; serviceKid: string;
+}
+export type CloudAccountMessage = ChatMessage & {
+  cloudAccepted?: CloudAcceptedBinding;
+  cloudRun?: CloudRunBinding;
+  cloudAcceptedMessageId?: string;
+  cloudSettlement?: 'pending';
+};
 
 export interface CloudModelChoice {
   id: string;
