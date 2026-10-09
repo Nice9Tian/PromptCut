@@ -1,0 +1,71 @@
+[
+  {
+    "check": "real",
+    "source": "a4d22ce33264e957aabd6ef825305a90b3daa899",
+    "exitCode": 0,
+    "wallSec": 11.343,
+    "log": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-browsers-real.log",
+    "output": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-real-once",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "completed": true,
+    "checks": 17,
+    "passed": 17,
+    "cleanup": {
+      "closed": true,
+      "childClosed": true,
+      "assetPid": 37524,
+      "ports": [
+        6700,
+        6701,
+        6702,
+        6703,
+        6704,
+        6705,
+        6708
+      ],
+      "browserClosed": true,
+      "stagesClosed": true,
+      "contextsClosed": true
+    },
+    "probeWallMs": 10707
+  },
+  {
+    "check": "private",
+    "source": "a4d22ce33264e957aabd6ef825305a90b3daa899",
+    "exitCode": 0,
+    "wallSec": 9.047,
+    "log": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-browsers-private.log",
+    "output": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-real-scope-root-a4d22ce3-private-once",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "completed": true,
+    "checks": 29,
+    "passed": 29,
+    "cleanup": {
+      "fixture": {
+        "closed": true,
+        "childClosed": true,
+        "closeFailureCount": 0,
+        "evidenceDir": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-control-account-path-Tad6Qj"
+      },
+      "portsFree": {
+        "6620": true,
+        "6621": true,
+        "6622": true,
+        "6623": true,
+        "6624": true,
+        "6625": true,
+        "6626": true,
+        "6627": true,
+        "6628": true,
+        "6629": true
+      },
+      "allPortsFree": true,
+      "fixtureAndPortsClosed": true
+    },
+    "probeWallMs": 8523
+  }
+]
