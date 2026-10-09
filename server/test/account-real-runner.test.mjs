@@ -10,7 +10,9 @@ test('actual hosted factory signs WSS/project.open, executes real tools and comm
       const conversationId = 'actual_runner_conversation';
       const posted = await actor.agent('/conversations/' + conversationId + '/messages', {
         prompt: REAL_RUNNER_PROMPT, requestId: 'actual_runner_message', selectionSnapshot: { pageId: actor.pageId } });
-      assert.equal(posted.status, 202); assert.equal(posted.body.runId, null);
+      assert.equal(posted.status, 202, 'send status; safe code=' +
+        (/^[a-z0-9-]{1,80}$/.test(posted.body?.code ?? '') ? posted.body.code : 'unclassified'));
+      assert.equal(posted.body.runId, null);
       const deadline = Date.now() + 40000; let rows;
       for (;;) {
         rows = fixture.rows(fixture.projectId, conversationId);
