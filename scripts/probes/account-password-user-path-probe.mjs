@@ -39,11 +39,35 @@ let currentPhase = 'preflight';
 let editorStep = null;
 let targetConversationId = null;
 let realAgentDelegationTicket = null;
+let safeAction = null;
 const eventConversationIds = new WeakMap();
 
 function check(condition, name) {
   result.checks.push({ name, pass:Boolean(condition) });
   if (!condition) { const error = Error(name); error.check = name; throw error; }
+}
+async function bringPageToFront(page, purpose) {
+  const before = await page.evaluate(() => ({ visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
+  await page.bringToFront();
+  const after = await page.evaluate(() => ({ visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
+  result.pageFocus ??= [];
+  result.pageFocus.push({ page:page.label ?? 'unlabelled', purpose, before, after });
+}
+function safeErrorDetails(error) {
+  const rawName = error?.name || error?.constructor?.name || 'Error';
+  const errorType = /^[A-Za-z][A-Za-z0-9_$]{0,80}$/.test(rawName) ? rawName : 'other';
+  const message = String(error?.message ?? '');
+  const protocolMethod = /Protocol error \(([A-Za-z0-9_.]{1,100})\)/.exec(message)?.[1] ?? null;
+  const protocolReason = /timed?\s*out|timeout/i.test(message) ? 'timed-out' :
+    /target closed|browser has disconnected/i.test(message) ? 'target-closed' :
+    /execution context.*destroyed|cannot find context|context was destroyed/i.test(message) ? 'context-lost' :
+    /invalid parameters/i.test(message) ? 'invalid-parameters' : 'other';
+  const sourceFrames = String(error?.stack ?? '').split('\n').slice(1).map(line => line.trim())
+    .filter(line => /^at\s/.test(line)).slice(0, 16)
+    .map(line => line.replace(/https?:\/\/[^\s)]+/g, raw => {
+      try { const url = new URL(raw); return `${url.origin}${url.pathname}`; } catch { return '[url]'; }
+    }));
+  return { errorType, protocolMethod, protocolReason, sourceFrames };
 }
 function safePath(raw) {
   const url = new URL(raw, ORIGIN), prefix = url.pathname;
@@ -177,23 +201,42 @@ async function newPage(context, label) {
   return page;
 }
 async function fill(page, selector, value) {
+  safeAction = 'fill-visible-field';
+  await bringPageToFront(page, 'fill-form-field');
   const input = await page.waitForSelector(selector, { visible:true });
   await input.focus(); await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
   await page.keyboard.press('Backspace'); await input.type(value);
+  safeAction = null;
+}
+async function clickPage(page, selector, options) {
+  safeAction = 'real-page-click';
+  await bringPageToFront(page, 'real-page-click');
+  await page.click(selector, options);
+  safeAction = null;
+}
+async function clickHandle(page, element, options) {
+  safeAction = 'real-element-click';
+  await bringPageToFront(page, 'real-element-click');
+  await element.click(options);
+  safeAction = null;
 }
 async function safeShot(page, label) {
+  safeAction = 'screenshot-redaction';
+  await bringPageToFront(page, `safe-screenshot:${label}`);
   for (const input of await page.$$('input[type="password"]')) {
     const visible = await input.evaluate(element => element.getClientRects().length > 0);
-    if (visible) { await input.click({ clickCount:3 }); await page.keyboard.press('Backspace'); }
+    if (visible) { await clickHandle(page, input, { clickCount:3 }); await page.keyboard.press('Backspace'); safeAction = 'screenshot-redaction'; }
   }
   for (const input of await page.$$('input[name="code"]')) {
     if (await input.evaluate(element => element.getClientRects().length > 0)) {
-      await input.click(); await page.keyboard.down('Control'); await page.keyboard.press('KeyA');
+      await clickHandle(page, input); await page.keyboard.down('Control'); await page.keyboard.press('KeyA');
       await page.keyboard.up('Control'); await page.keyboard.press('Backspace');
+      safeAction = 'screenshot-redaction';
     }
   }
   const clear = await page.$$eval('input[type="password"]', nodes => nodes.every(node => !node.getClientRects().length || node.value === ''));
   if (!clear) throw Error('password-screenshot-blocked');
+  safeAction = 'screenshot-write';
   result.styleStates.push({ page:page.label, label, ...(await page.evaluate(() => {
     const links = [...document.querySelectorAll('link[rel="stylesheet"]')];
     let readableRuleCount = 0, unreadableStyleSheets = 0;
@@ -206,6 +249,7 @@ async function safeShot(page, label) {
       buttonsStyled:[...document.querySelectorAll('button')].some(button => getComputedStyle(button).borderRadius !== '0px') };
   })) });
   const file = `${label}.png`; await page.screenshot({ path:path.join(OUT, file), fullPage:true }); result.screenshots.push(file);
+  safeAction = null;
 }
 async function visibleAndUnobscured(page, element) {
   return page.evaluate(target => {
@@ -221,10 +265,12 @@ async function visibleAndUnobscured(page, element) {
 }
 async function loginWebsite(page, account, label) {
   currentPhase = `${label}-website-login`;
+  await bringPageToFront(page, 'website-login');
   await page.goto(`${ORIGIN}/login`, { waitUntil:'domcontentloaded' });
   await fill(page, '#login input[name="name"]', account.name);
   await fill(page, '#login input[name="password"]', account.password);
-  await Promise.all([page.waitForNavigation({ waitUntil:'domcontentloaded' }), page.click('#login button[type="submit"]')]);
+  const navigation = page.waitForNavigation({ waitUntil:'domcontentloaded' });
+  await clickPage(page, '#login button[type="submit"]'); await navigation;
   check(new URL(page.url()).pathname === '/account', `${label}-website-session-created`);
   await page.waitForSelector('#acc-name');
   const visibleNameMatches = await page.$eval('#acc-name', element => element.textContent?.trim()) === account.name;
@@ -299,7 +345,7 @@ async function changePasswordThroughWebsite(page, account, checkPrefix = '') {
   result.passwordRuntime.focusAfterBringToFront = await focusSnapshot();
   result.passwordRuntime.eventsBeforeClick = await eventSnapshot();
   try {
-    await submit.click();
+    await clickHandle(page, submit);
     result.passwordRuntime.clickOutcome = 'clicked';
   } catch (error) {
     result.passwordRuntime.clickOutcome = 'failed';
@@ -343,7 +389,7 @@ async function changePasswordThroughWebsite(page, account, checkPrefix = '') {
   const choiceResponse = page.waitForResponse(response => response.request().method() === 'POST' &&
     /\/password-events\/[^/]+\/choice$/.test(new URL(response.url()).pathname), { timeout:TIMEOUT })
     .then(response => ({ response }), () => ({ response:null }));
-  await page.click('#password-exit-yes');
+  await clickPage(page, '#password-exit-yes');
   const choice = (await choiceResponse).response;
   if (!choice) throw Error('password-event-choice-response-not-observed');
   check(choice.status() === 202, checkPrefix ? `${checkPrefix}-exit-choice-real-pending` : 'exit-choice-awaits-real-service-confirmations');
@@ -358,6 +404,7 @@ async function closeOwnStageServers() {
 async function openProject(page, projectName) {
   currentPhase = 'editor-project-open';
   editorStep = 'editor-open-navigation';
+  await bringPageToFront(page, 'open-shared-project');
   await page.goto(`${ORIGIN}/editor/`, { waitUntil:'domcontentloaded' });
   await page.waitForSelector('[data-pc="account-name"]', { visible:true });
   await page.waitForFunction(name => [...document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row')]
@@ -374,7 +421,7 @@ async function openProject(page, projectName) {
       new URL(response.url()).pathname === '/api/account/cloud-agent-consent', { timeout:TIMEOUT })
       .then(async response => ({ kind:'response', accepted:response.ok() &&
         (await response.json().catch(() => null))?.accepted === true })).catch(() => null);
-    await button.click(); clicked = true; break;
+    await clickHandle(page, button); clicked = true; break;
   }
   check(clicked, 'real-project-row-clicked');
   await page.waitForSelector('[data-pc="cloud-project-copy"]', { visible:true });
@@ -391,7 +438,7 @@ async function openProject(page, projectName) {
     if (buttons.length < 2) throw Error('consent-buttons-missing');
     const accepted = page.waitForResponse(response => response.request().method() === 'POST' &&
       new URL(response.url()).pathname === '/api/account/cloud-agent-consent', { timeout:TIMEOUT });
-    await buttons[1].click(); const outcome = await accepted;
+    await clickHandle(page, buttons[1]); const outcome = await accepted;
     const recorded = outcome.status() === 200 && (await outcome.json().catch(() => null))?.accepted === true;
     check(recorded, 'provider-recorded-agent-consent');
     await page.waitForFunction(() => ![...document.querySelectorAll('[data-pc="cloud-agent-consent"]')].some(dialog => {
@@ -413,14 +460,14 @@ async function openProject(page, projectName) {
   }, { timeout:TIMEOUT }, closeToast);
   const closeButton = await page.$(closeToast);
   if (!closeButton || !await visibleAndUnobscured(page, closeButton)) throw Error('project-share-toast-close-obscured');
-  await closeButton.click();
+  await clickHandle(page, closeButton);
   await page.waitForFunction(selector => document.querySelector(selector) === null, { timeout:TIMEOUT }, toast);
   editorStep = 'editor-agent-enable';
   const enable = await page.waitForSelector('[data-pc="cloud-agent-enable"]', { visible:true, timeout:TIMEOUT });
   if (await enable.evaluate(element => element.disabled)) throw Error('cloud-agent-enable-disabled');
   const enabledRequest = page.waitForResponse(response => response.request().method() === 'POST' &&
     new URL(response.url()).pathname === '/hosted/shared/account/admin', { timeout:TIMEOUT });
-  await enable.click();
+  await clickHandle(page, enable);
   const enabledResponse = await enabledRequest;
   check(enabledResponse.status() >= 200 && enabledResponse.status() < 300, 'real-project-agent-enable-request-accepted');
   await page.waitForSelector('[data-pc="cloud-off"]', { hidden:true, timeout:TIMEOUT });
@@ -479,7 +526,7 @@ async function requestHistoryReadAfterClick(page) {
     };
     page.on('request', onRequest); page.on('response', onResponse);
   });
-  await button.click();
+  await clickHandle(page, button);
   const clickResult = await responsePromise;
   if (clickResult) return { action:'clicked', ...clickResult };
   return { action:'clicked-no-authorization-response', status:null, denied:false };
@@ -540,12 +587,12 @@ try {
     const oldLogin = verificationPage.waitForResponse(response => response.request().method() === 'POST' &&
       new URL(response.url()).pathname === '/api/account/login', { timeout:TIMEOUT })
       .then(response => ({ response }), () => ({ response:null }));
-    await verificationPage.click('#login button[type="submit"]');
+    await clickPage(verificationPage, '#login button[type="submit"]');
     const oldLoginResponse = (await oldLogin).response;
     check(oldLoginResponse?.status() === 401, 'site-smoke-old-password-rejected');
     await fill(verificationPage, '#login input[name="password"]', account.nextPassword);
     await Promise.all([verificationPage.waitForNavigation({ waitUntil:'domcontentloaded' }),
-      verificationPage.click('#login button[type="submit"]')]);
+      clickPage(verificationPage, '#login button[type="submit"]')]);
     check(new URL(verificationPage.url()).pathname === '/account', 'site-smoke-new-password-login-succeeds');
     await safeShot(sitePages[0], 'site-password-smoke-event');
     result.completed = true;
@@ -603,14 +650,14 @@ try {
     result.passwordFormState.repeatedMatches && result.passwordFormState.submitEnabled, 'password-change-form-valid-before-submit');
   const passwordResponse = sitePages[0].waitForResponse(response => response.request().method() === 'POST' &&
     new URL(response.url()).pathname === '/api/account/password', { timeout:TIMEOUT });
-  await sitePages[0].click('#password button[type="submit"]');
+  await clickPage(sitePages[0], '#password button[type="submit"]');
   const passwordResult = await passwordResponse;
   check(passwordResult.status() === 200, 'actual-password-change-request-accepted');
   await sitePages[0].waitForFunction(() => document.querySelector('#password-event-choices')?.hidden === false, { timeout:TIMEOUT });
   await sitePages[0].waitForFunction(() => document.querySelector('#password-exit-yes')?.getClientRects().length > 0, { timeout:TIMEOUT });
   const choiceResponse = sitePages[0].waitForResponse(response => response.request().method() === 'POST' &&
     /\/password-events\/[^/]+\/choice$/.test(new URL(response.url()).pathname), { timeout:TIMEOUT });
-  await sitePages[0].click('#password-exit-yes');
+  await clickPage(sitePages[0], '#password-exit-yes');
   const choice = await choiceResponse;
   check(choice.status() === 202, 'exit-choice-awaits-real-service-confirmations');
   await sitePages[0].waitForFunction(() => document.querySelector('#acc-name')?.textContent?.trim().length > 0, { timeout:TIMEOUT });
@@ -671,10 +718,12 @@ try {
       logoutState:body.logout?.state ?? null };
   });
   check(eventStatus.textCode === 'revoking' && eventStatus.logoutState !== 'complete', 'ui-honestly-stays-pending-without-all-service-acks');
-  editorStep = 'website-provider-issued-reset';
+  currentPhase = 'password-change-pending-screenshot';
+  editorStep = 'website-password-pending-screenshot';
   await safeShot(sitePages[0], '06-password-changed-pending');
 
   currentPhase = 'password-reset-with-provider-issued-code';
+  editorStep = 'reset-bind-email';
   result.resetPageFocusBeforeBringToFront = await sitePages[0].evaluate(() => ({
     visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
   await sitePages[0].bringToFront();
@@ -686,18 +735,18 @@ try {
   await fill(sitePages[0], '#email-start input[name="password"]', account.nextPassword);
   const bindResponse = sitePages[0].waitForResponse(response => response.request().method() === 'POST' &&
     new URL(response.url()).pathname === '/api/account/email/start', { timeout:TIMEOUT });
-  await sitePages[0].click('#email-start button[type="submit"]');
+  await clickPage(sitePages[0], '#email-start button[type="submit"]');
   check((await bindResponse).status() === 200, 'real-email-binding-otp-request-accepted');
   const bindCode = fixture.takeIssuedCode(email, 'bind');
   check(/^\d{6}$/.test(bindCode ?? ''), 'provider-generated-bind-code-captured-in-private-memory');
   await fill(sitePages[0], '#email-confirm input[name="code"]', bindCode);
-  await sitePages[0].click('#email-confirm button[type="submit"]');
+  await clickPage(sitePages[0], '#email-confirm button[type="submit"]');
   await sitePages[0].waitForFunction(() => document.querySelector('#email-done')?.textContent?.includes('邮箱已绑定'), { timeout:TIMEOUT });
   await sitePages[0].goto(`${ORIGIN}/reset`, { waitUntil:'domcontentloaded' });
   await fill(sitePages[0], '#reset-start input[name="name"]', account.name);
   const resetStartResponse = sitePages[0].waitForResponse(response => response.request().method() === 'POST' &&
     new URL(response.url()).pathname === '/api/account/reset/start', { timeout:TIMEOUT });
-  await sitePages[0].click('#reset-start button[type="submit"]');
+  await clickPage(sitePages[0], '#reset-start button[type="submit"]');
   check((await resetStartResponse).status() === 200, 'real-reset-request-accepted');
   const resetCode = fixture.takeIssuedCode(email, 'reset');
   check(/^\d{6}$/.test(resetCode ?? ''), 'provider-generated-reset-code-captured-in-private-memory');
@@ -707,13 +756,13 @@ try {
   const resetNavigation = sitePages[0].waitForNavigation({ waitUntil:'domcontentloaded' });
   const resetConfirmResponse = sitePages[0].waitForResponse(response => response.request().method() === 'POST' &&
     new URL(response.url()).pathname === '/api/account/reset/confirm', { timeout:TIMEOUT });
-  await sitePages[0].click('#reset-confirm button[type="submit"]');
+  await clickPage(sitePages[0], '#reset-confirm button[type="submit"]');
   const [resetResponse] = await Promise.all([resetConfirmResponse, resetNavigation]);
   check(resetResponse.status() === 200, 'actual-reset-confirmation-accepted');
   await sitePages[0].waitForSelector('#password-event-choices', { visible:true, timeout:TIMEOUT });
   const resetChoiceResponse = sitePages[0].waitForResponse(response => response.request().method() === 'POST' &&
     /\/password-events\/[^/]+\/choice$/.test(new URL(response.url()).pathname), { timeout:TIMEOUT });
-  await sitePages[0].click('#password-exit-yes');
+  await clickPage(sitePages[0], '#password-exit-yes');
   const resetChoice = await resetChoiceResponse;
   check(resetChoice.status() === 202, 'reset-exit-choice-awaits-real-service-confirmations');
   check(true, 'reset-flow-used-provider-issued-otp-and-private-mail-callback-no-external-email');
@@ -724,7 +773,9 @@ try {
   const safeFailure = new Set(['provider-accepted-consent-but-dialog-remained-visible','consent-read-or-dialog-not-observed',
     'project-open-disabled','cloud-agent-enable-disabled','consent-buttons-missing',
     'password-change-response-not-observed-after-short-wait','password-button-click-failed']);
-  result.failure = { phase:currentPhase, step:editorStep, check:error?.check ?? (safeFailure.has(String(error?.message)) ? String(error.message) : 'unclassified') };
+  result.failure = { phase:currentPhase, step:editorStep,
+    check:error?.check ?? (safeFailure.has(String(error?.message)) ? String(error.message) : 'unclassified'),
+    action:safeAction, ...safeErrorDetails(error) };
   if (fixture) {
     try { result.readControl.stateAtFailure = fixture.readControlState(); } catch { result.readControl.stateAtFailure = { unavailable:true }; }
   }
