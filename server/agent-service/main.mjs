@@ -17,6 +17,7 @@
  *                                  账号版 doc 独立内部 mTLS HTTPS 源与 pinned 服务端证书
  *   PROMPTCUT_AGENT_CLIENT_KEY_FILE / PROMPTCUT_AGENT_CLIENT_CERT_FILE / PROMPTCUT_AGENT_CA_FILE
  *                                  Agent 独占 mTLS 私钥、证书、私有 CA 文件；只读，值不进日志
+ *   PROMPTCUT_AGENT_CONTROL_PORT    账号执行器独立回环 mTLS 控制口，必须与公开 HTTP 口不同
  *   PROMPTCUT_AGENT_SECRETS        服务身份的私钥目录(缺省 /var/lib/promptcut/agent-secrets),里面是 keygen 生成的 service-key.json(服务名 agent)
  *   PROMPTCUT_AGENT_HOST           缺省 127.0.0.1;只许回环(对外只经反向代理)
  *   PROMPTCUT_AGENT_PORT           缺省 8790
@@ -48,8 +49,8 @@
  * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发补渲。
  * 收到 SIGTERM / SIGINT:进行中的每一轮记「中断」后停下,状态落盘,5 秒内退出。
  *
- * 账号版当前仅开放 doc mTLS 对话 HTTP 与进程 RAM 实例注册。run 数据连接的逐帧证明尚未挂载；
- * 虽然注册客户端能签 HTTP run 请求，生产 runner 不 admit，也不报 ready。
+ * 账号版以同一个 RAM 注册客户端装配 run/data/read-control 与持久事件；
+ * 真实关闭 producer/终态结算尚未接通，完成状态严格 pending，不能宣称整链 ready。
  * 旧模式鉴权(契约第 4 节):命令行入口凭服务私钥连文档服务的控制连接(`server/auth/service-client.mjs`),每个请求的委托票据、
  * 每一轮的对话委托都交文档服务核验;连文档服务的数据连接用凭对话委托换来的连接票据(`hosted-wiring.mjs`)。
  * 补渲经服务身份的发布连接进文档服务的任务队列(`render-publisher.mjs`)。测试经 `startAgentService({ authenticate, credentials })` 给替身。
@@ -199,8 +200,8 @@ export async function startAgentService({
       server.listen(port, host, resolve);
     });
   } catch (err) {
-    if (executor) await executor.close(); else await service.close();
-    await vite.close();
+    try { if (executor) await executor.close(); else await service.close(); }
+    finally { await vite.close(); }
     throw new AgentConfigError('listen', `监听失败:${err?.message ?? err}`);
   }
   const actual = server.address().port;
@@ -297,6 +298,12 @@ async function main() {
       conversationControl = createConversationControlClient({ ...options, runClient,
         receiptFile: path.join(env.PROMPTCUT_AGENT_DATA, 'conversation-read-closures.sqlite'),
         onDiagnostic: event => line('agent.read-control', event) });
+      // Assembly owns this client once started; outer boot/stop cleanup may
+      // still run after assembly startup rejected. Share that one real close,
+      // including its rejection, rather than closing the receipt DB twice.
+      const closeReadControl = conversationControl.close.bind(conversationControl);
+      let readClosing = null;
+      conversationControl.close = () => readClosing ??= Promise.resolve().then(closeReadControl);
       conversationClient.useReadControl(conversationControl);
       const controlPort = Number(env.PROMPTCUT_AGENT_CONTROL_PORT);
       if (!Number.isInteger(controlPort) || controlPort < 1 || controlPort > 65535 || controlPort === port)
