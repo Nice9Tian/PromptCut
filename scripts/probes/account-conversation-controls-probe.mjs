@@ -489,7 +489,9 @@ async function main() {
     await chooseHistory(member, conversationId);
     await member.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('共有对话'), { timeout: TIMEOUT });
     await waitForVisibleUserMessage(member, ownerPrompt);
-    check(result.eventReads.some(entry => entry.page === 'member' && entry.path.endsWith('/events') && entry.status === 200 && entry.lifecycle === 'open'),
+    const memberStreamBeforePrivate = [...result.eventReads].reverse().find(entry => entry.page === 'member' &&
+      entry.path.endsWith('/events') && entry.status === 200 && entry.lifecycle === 'open');
+    check(Boolean(memberStreamBeforePrivate),
       'ordinary-member-real-shared-events-readable');
     const creatorShared = await inspectAccountConversationControls(creator);
     assertAccountConversationControls(creatorShared, { visibility: 'shared', canToggleVisibility: false, creatorReadOnly: false });
@@ -508,9 +510,8 @@ async function main() {
     result.fence = 'confirmed-by-real-service';
     check(result.network.some(entry => entry.page === 'owner' && entry.path.endsWith('/visibility') && entry.status === 200),
       'private-switch-real-http-200');
-    const memberReadClosed = await waitUntil(() => result.eventReads.some(entry => entry.page === 'member' &&
-      entry.path.endsWith('/events') && entry.status === 200 && entry.lifecycle !== 'open'),
-    'ordinary-member-old-events-stream-close-after-private-fence', TIMEOUT).then(() => true, () => false);
+    const memberReadClosedPromise = waitUntil(() => Boolean(memberStreamBeforePrivate && memberStreamBeforePrivate.lifecycle !== 'open'),
+      'ordinary-member-old-events-stream-close-after-private-fence', TIMEOUT).then(() => true, () => false);
     let memberMessageCleared = false;
     try {
       await member.waitForFunction(() => {
@@ -530,15 +531,7 @@ async function main() {
       return response.request().method() === 'GET' && url.pathname === '/agent/v1/conversations';
     }, { timeout: TIMEOUT }).catch(() => null);
     await memberHistoryButton.click();
-    check((await memberListResponse)?.status() === 200, 'ordinary-member-history-refresh-real-http-200');
-    const memberHistoryAfterPrivate = await member.$('[data-pc="cloud-ai-panel"] button[title*="历史"]');
-    if (!memberHistoryAfterPrivate || !await visibleAndUnobscured(member, memberHistoryAfterPrivate)) throw new Error('member-history-button-after-private-not-usable');
-    const memberListAfterPrivate = member.waitForResponse(response => {
-      const url = new URL(response.url());
-      return response.request().method() === 'GET' && url.pathname === '/agent/v1/conversations';
-    }, { timeout: TIMEOUT }).catch(() => null);
-    await memberHistoryAfterPrivate.click();
-    const memberHistoryResponse = await memberListAfterPrivate;
+    const memberHistoryResponse = await memberListResponse;
     const memberHistoryStatus = memberHistoryResponse?.status() ?? null;
     let memberServerListsPrivate = null;
     if (memberHistoryResponse?.ok()) {
@@ -555,6 +548,7 @@ async function main() {
     }, { timeout: TIMEOUT });
     const memberHistoryRowVisible = await member.evaluate(id => Array.from(document.querySelectorAll('[data-pc="chat-cloud-item"]'))
       .some(row => row.getAttribute('data-chat-id') === id), conversationId);
+    const memberReadClosed = await memberReadClosedPromise;
     await shot(member, '06-member-after-private-history-refresh');
     const privateReadChecks = [
       { name: 'ordinary-member-old-read-closed-after-private', pass: memberReadClosed },
