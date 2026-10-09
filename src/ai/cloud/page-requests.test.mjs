@@ -221,7 +221,8 @@ test("CAU-REV-06 守门:触发执行的入口只有事件流;接口层带委托�
   // useCloud.ts 里只把它交给会话控制器(事件流的唯一读者),没有挂到全局
   const wiring = fs.readFileSync(path.join(HERE, "useCloud.ts"), "utf8");
   assert.equal(wiring.split("runPageRequest").length - 1, 2, "一处引入、一处交给 createCloudSession");
-  assert.match(wiring, /createCloudSession\(\{ api, store, pageId: PAGE_ID, onPageRequest: \(ev\) => runPageRequest\(ev, pageExec\) \}\)/);
+  assert.match(wiring, /createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*cloud\.accountMode,\s*pageId:\s*PAGE_ID,\s*onPageRequest:\s*\(ev\)\s*=>\s*runPageRequest\(ev,\s*pageExec\)\s*\}\)/,
+    "事件流会话显式绑定当前账号模式，页面请求仍经唯一接线入口执行");
   assert.equal(/__pcCloud[^\n]*(runPageRequest|pageExec|PAGE_ID)/.test(wiring), false, "探针的只读口子里没有它");
 
   // 接口层:交回带委托票据、不带 Cookie;事件流的查询串带页面号

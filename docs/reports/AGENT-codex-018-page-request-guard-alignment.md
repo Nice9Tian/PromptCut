@@ -10,4 +10,4 @@
 
 ## 验证
 
-待执行目标测试：`npm test -- src/ai/cloud/page-requests.test.mjs`，经仓库测试包装器运行。此处不运行全量测试，也不修改产品代码。
+目标测试已通过：`npm test -- src/ai/cloud/page-requests.test.mjs`，经仓库测试包装器运行，6 项全过、0 失败，305 ms。此处不运行全量测试，也不修改产品代码。
