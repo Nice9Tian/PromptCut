@@ -436,6 +436,39 @@ async function messageGone(page, expected) {
       (element.textContent ?? '').replace(/\s+/g, ' ').trim().includes(text));
   }, { timeout:TIMEOUT }, expected);
 }
+async function revokedConversationContentGone(page, expectedText, attachmentName) {
+  await page.waitForFunction(({ text, name }) => {
+    const panel = document.querySelector('[data-pc="cloud-ai-panel"]:not([data-inactive="1"]):not([aria-hidden="true"])');
+    if (!panel) return false;
+    const bodyRemains = [...panel.querySelectorAll('.ai-message.user .ai-message-text')]
+      .some(element => (element.textContent ?? '').replace(/\s+/g, ' ').trim().includes(text));
+    const attachmentRemains = [...panel.querySelectorAll('.ai-bubble-file-name')]
+      .some(element => element.textContent?.trim() === name);
+    const queueCount = panel.querySelectorAll('.ai-queue-item[data-message-id]').length;
+    const draftAttachmentCount = panel.querySelectorAll('.ai-attachments .ai-attachment-chip').length;
+    return !bodyRemains && !attachmentRemains && queueCount === 0 && draftAttachmentCount === 0;
+  }, { timeout:TIMEOUT }, { text:expectedText, name:attachmentName });
+}
+async function requestHistoryReadAfterClick(page) {
+  const response = await new Promise(async (resolve, reject) => {
+    let historyRequest = null;
+    const timer = setTimeout(() => finish(null), TIMEOUT);
+    const finish = value => { clearTimeout(timer); page.off('request', onRequest); page.off('response', onResponse); value ? resolve(value) : reject(Error('history-read-response-not-observed')); };
+    const matches = request => {
+      try { const url = new URL(request.url()); return request.method() === 'GET' && url.pathname === '/agent/v1/conversations'; }
+      catch { return false; }
+    };
+    const onRequest = request => { if (!historyRequest && matches(request)) historyRequest = request; };
+    const onResponse = response => { if (historyRequest && response.request() === historyRequest) finish(response); };
+    page.on('request', onRequest); page.on('response', onResponse);
+    try {
+      await page.bringToFront();
+      await page.waitForSelector('[data-pc="ai-history"]', { visible:true });
+      await page.click('[data-pc="ai-history"]');
+    } catch (error) { finish(null); }
+  });
+  return response.status();
+}
 
 await fs.mkdir(OUT, { recursive:true, mode:0o700 });
 const profile = path.join(OUT, 'browser-profile');
@@ -507,6 +540,24 @@ try {
   check(result.accountSessionValidAfterAgentEnable, 'website-session-still-valid-after-agent-enable');
   await safeShot(editor, '04-editor-before-message');
   const prompt = `Password-revocation user-path ${randomUUID().slice(0, 8)}; remain queued, do not run.`;
+  const attachmentName = 'revocation-note.txt';
+  const attachmentPath = path.join(OUT, attachmentName);
+  await fs.writeFile(attachmentPath, 'Isolated password revocation attachment probe.\n', { mode:0o600 });
+  const attachmentResponse = editor.waitForResponse(response => {
+    const request = response.request();
+    try { const url = new URL(response.url()); return request.method() === 'POST' &&
+      url.pathname.endsWith(`/conversations/${conversationId}/attachments`) && url.searchParams.get('name') === attachmentName; }
+    catch { return false; }
+  }, { timeout:TIMEOUT });
+  const fileInput = await editor.$('[data-pc="cloud-attach-input"]');
+  if (!fileInput) throw Error('cloud-attachment-input-missing');
+  await fileInput.uploadFile(attachmentPath);
+  const attached = await attachmentResponse;
+  check(attached.status() === 200, 'real-user-attachment-uploaded-to-conversation');
+  await editor.waitForFunction(name => [...document.querySelectorAll('[data-pc="cloud-ai-panel"] .ai-attachment-chip')]
+    .some(chip => chip.querySelector('.ai-attachment-name')?.textContent?.trim() === name &&
+      !chip.classList.contains('is-importing') && !chip.classList.contains('is-error')), { timeout:TIMEOUT }, attachmentName);
+  check(true, 'real-attachment-ready-in-composer-before-message');
   currentPhase = 'queue-real-message-without-executor';
   const messageResponse = editor.waitForResponse(response => response.request().method() === 'POST' &&
     /\/agent\/v1\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname), { timeout:TIMEOUT });
@@ -515,6 +566,11 @@ try {
   const accepted = await messageResponse;
   check(accepted.status() === 202, 'real-user-message-accepted-as-queued');
   await waitForUserMessage(editor, prompt);
+  await editor.waitForFunction(({ text, name }) => [...document.querySelectorAll('[data-pc="cloud-ai-panel"] .ai-message.user')]
+    .some(row => row.querySelector('.ai-message-text')?.textContent?.includes(text) &&
+      [...row.querySelectorAll('.ai-bubble-file-name')].some(file => file.textContent?.trim() === name)),
+    { timeout:TIMEOUT }, { text:prompt, name:attachmentName });
+  check(true, 'real-sse-user-message-body-and-attachment-visible');
   await editor.waitForSelector('[data-pc="cloud-queue"] li[data-message-id]', { visible:true, timeout:TIMEOUT });
   const queueState = await editor.$eval('[data-pc="cloud-queue"]', element => ({ text:element.textContent ?? '', count:element.querySelectorAll('li[data-message-id]').length }));
   check(queueState.count === 1 && queueState.text.includes('等待执行服务'), 'one-real-queued-message-no-executor-active');
@@ -525,6 +581,12 @@ try {
   await safeShot(editor, '05-editor-real-queued-message');
 
   currentPhase = 'password-change-and-exit';
+  result.passwordRuntime = {};
+  result.passwordRuntime.focusBeforeBringToFront = await sitePages[0].evaluate(() => ({
+    visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
+  await sitePages[0].bringToFront();
+  result.passwordRuntime.focusAfterBringToFront = await sitePages[0].evaluate(() => ({
+    visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
   await sitePages[0].goto(`${ORIGIN}/account`, { waitUntil:'domcontentloaded' });
   await sitePages[0].waitForSelector('#password input[name="current"]', { visible:true });
   await fill(sitePages[0], '#password input[name="current"]', account.password);
@@ -561,6 +623,19 @@ try {
   check(true, 'online-editor-real-read-body-cleared-after-revocation');
   await waitForControlClosure(result.eventStreams);
   check(result.eventStreams.some(stream => stream.conversationMatch === true && stream.status === 200 && stream.lifecycle !== 'open'), 'real-old-conversation-event-stream-closed');
+  await revokedConversationContentGone(editor, prompt, attachmentName);
+  result.revokedContentUi = await editor.$eval('[data-pc="cloud-ai-panel"]', panel => ({
+    userMessageCount:panel.querySelectorAll('.ai-message.user').length,
+    attachedFileCount:panel.querySelectorAll('.ai-bubble-file-name').length,
+    queueItemCount:panel.querySelectorAll('.ai-queue-item[data-message-id]').length,
+    composerAttachmentCount:panel.querySelectorAll('.ai-attachments .ai-attachment-chip').length,
+  }));
+  check(result.revokedContentUi.userMessageCount === 0 && result.revokedContentUi.attachedFileCount === 0 &&
+    result.revokedContentUi.queueItemCount === 0 && result.revokedContentUi.composerAttachmentCount === 0,
+  'editor-message-attachment-queue-clear-naturally-after-revocation');
+  const historyStatus = await requestHistoryReadAfterClick(editor);
+  result.deniedHistoryRead = { status:historyStatus, denied:historyStatus === 401 || historyStatus === 403 };
+  check(result.deniedHistoryRead.denied, 'subsequent-real-history-read-denied-after-revocation');
   const eventStatus = await sitePages[0].evaluate(async () => {
     const node = document.querySelector('#password-event-status');
     const eventId = document.querySelector('#password-event')?.dataset.eventId;
@@ -573,6 +648,11 @@ try {
   await safeShot(sitePages[0], '06-password-changed-pending');
 
   currentPhase = 'password-reset-with-provider-issued-code';
+  result.resetPageFocusBeforeBringToFront = await sitePages[0].evaluate(() => ({
+    visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
+  await sitePages[0].bringToFront();
+  result.resetPageFocusAfterBringToFront = await sitePages[0].evaluate(() => ({
+    visibilityState:document.visibilityState, hasFocus:document.hasFocus() }));
   const email = `password-path-${randomUUID().replaceAll('-', '').slice(0, 18)}@example.invalid`;
   // The first field is the new-address form on the actual VisuHive account page.
   await fill(sitePages[0], '#email-start input[name="email"]', email);
