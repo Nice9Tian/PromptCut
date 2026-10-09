@@ -238,3 +238,18 @@ producer报告收回到agent-reports/AGENT-codex-018-asset-root-publisher.md。�
 ab0→最终产品与所有test字节不变（src/server/desktop/package/lock diff0），两修仅probe+报告，沿用固定产品已通过的三门，不重复整套历史验收、full或cargo。安全根结果与三轮截图/原日志在 three-versions-member-controls-evidence/，成功图复制到 three-versions-user-path/account-creator-{two-devices,ban}.png，主会话已实际看图。禁入UI诚实“正在确认相关服务关闭”；真正Agent task/read关闭与改密退出待独立闭环，不冒称admin200即complete。
 
 Sol成员报告与Luna原生报告归档agent-reports。本任务继续4个物理工作区；这轮未删除工作区，累计清理仍50=PC36+VH14。实际Agent执行器与生产部署未完成，release尚不推进。
+
+
+## 对话权限界面小阶段
+
+产品及测试固定根候选6f6d51ec116cbd5a6053445cc6e7579ef99b14fd：类型exit0、wall6.859秒；新权限及真实队列专属目标32/32、1577.7053ms；完整npm5417项/5413通过/0失败/0取消/4跳过、71740.5997ms（墙72.078秒）、原生自动重跑0；在线构建exit0、2.015秒。代码与全部测试在运行前后不变、工作树干净。最终9380b89abf0f596a1716a4258eba59468b22bb8c相对6f仅探针与报告变更，src/server/desktop/package/lock差异为零，沿用该固定产品构建和全量结果，没有为了探针窄修重复全套历史验收。
+
+根真实Chrome完整React页面双账号、原VH main provider/order、真实SQLite doc及独立asset/pinned TLS Agent夹具：最终25/25（含10项端口预检）、completed=true、7345ms（wrapper7.906秒）、exit0、nativeRetries0。真实历史点击同对话后，创建者读共有正文、没有切换按钮；开对话者有按钮。真实私有操作当前返回503pending，UI不称完成，创建者以只读形式读到同一私有正文、无输入框；开对话者用同一个请求重试，两次实际503，仍显示待确认。消息202仍诚实排队等待执行，没有调用模型或声称runner已部署。根已实际看私有只读和owner待确认两图。
+
+首次临时npm入口生成错误SyntaxError：未启动浏览器或服务，1/0pass/1fail、54.4042ms/wall0.312秒，保留。修入口后8ccb真实第一轮32.692秒，停在打开项目、完成false；197诊断第二轮32.685秒，实际TypeError定位正常ControlBar.duration.toFixed，原因是本探针夹具只造tracks数组，未用正常项目工厂，不改ControlBar。980窄修fixture采用真实createEmptyProject，去掉遮掉停任务解释的CSS；380产品fresh type0、全量5417零失败（4跳过）71218.8025ms后第三真实轮36.369秒，页面正常但权限读取在Agent关闭时失败，开启后未触发重读，这是新UI产品问题。87窄修CloudAiPanel重读依赖、保留fresh服务结果门，产生上述6f固定新基线。
+
+随后三轮probe-only窄修：9cc第四实际轮14/15、6987ms，截图明确正文已显示而probe仍数旧标记；223换真实可见正文等待。372第五实际轮19/20、7322ms，私有标签已更新但session.open正清空消息等待SSE回填；e76在共有和私有均等固定测试正文实际进入活动消息区。最终938第六实际轮25/25通过。分享气泡均通过真实×按钮关闭和按钮中心命中校验；没有DOM注入、伪消息或改产品标记迎合probe。各轮源码不同且有明确原因，所有首红原JSON/截图/日志保留，未把旧失败改成通过。
+
+实际自建Chrome contexts、独立asset子进程、TLS/HTTP/舞台均关闭；每轮6620–6629最终全空。真实模型/任务资源与OS树关闭尚未接入，因此本阶段只交付权限界面与诚实pending操作，不称私有跨服务闭环完成。Astra的读取即时封口及Sol执行器继续独立分支验证，没有作为本小阶段附加门槛。
+
+安全结果与图见three-versions-conversation-controls-evidence/，主要成功图见three-versions-user-path/cloud-creator-private-readonly.png、cloud-owner-private-pending.png。Luna报告收回归档agent-reports/AGENT-codex-018-account-conversation-controls.md。本轮没有删除物理工作区，累计仍50=PC36+VH14，在用4个；release继续保留完整旧版，版本结束再按用户安排推进。

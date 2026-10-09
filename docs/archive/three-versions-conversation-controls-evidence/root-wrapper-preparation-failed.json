@@ -1,0 +1,12 @@
+[
+  {
+    "check": "browser",
+    "source": "8ccb36cdad194f5311efbeac856d86a2e9424182",
+    "exitCode": 1,
+    "wallSec": 0.312,
+    "log": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-cloud-controls-root-8ccb36cd-browser-browser.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0
+  }
+]
