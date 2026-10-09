@@ -114,16 +114,24 @@ try {
   phase = 'join'; await enabled(b, '[data-pc="cloud-join"]'); await fill(b, '[data-pc="cloud-project-link"]', `${ORIGIN}/editor?project=${encodeURIComponent(id)}`); await b.click('[data-pc="cloud-join"]');
   await b.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true }); await consent(b);
   check(!await b.$('[data-pc="cloud-agent-enable"]'), 'member-cannot-enable-creator-switch');
+  // The product hides raw model text until its real "show thinking" control is
+  // enabled. Use that user action and expand RawLog; do not mutate preferences.
+  for (const page of [a,b]) {
+    const buttons = await page.$$('button');
+    for (const button of buttons) if (await button.evaluate(el=>el.textContent?.includes('显示思考'))) { await button.click(); break; }
+  }
   phase = 'actual-send';
   await fill(a, '[data-pc="cloud-ai-panel"] [data-pc="ai-input"]', REAL_RUNNER_PROMPT); await a.keyboard.press('Enter');
   await a.waitForFunction(() => Boolean(window.__pcCloud?.main?.conversationId?.()));
   const conversationId = await a.evaluate(() => window.__pcCloud.main.conversationId()); result.conversationId = conversationId;
   phase = 'actual-output-a';
-  await a.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text) &&
-    document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
+  await a.waitForFunction(() => document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'), { timeout: TIMEOUT });
+  await a.waitForSelector('.ai-rawlog-head'); await a.click('.ai-rawlog-head');
+  await a.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
   phase = 'shared-history-b'; await chooseHistory(b, conversationId);
-  await b.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text) &&
-    document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
+  await b.waitForFunction(() => document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'), { timeout: TIMEOUT });
+  await b.waitForSelector('.ai-rawlog-head'); await b.click('.ai-rawlog-head');
+  await b.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
   for (const [i, page] of [a,b].entries()) {
     await page.waitForFunction(name => window.__pcStore?.getState()?.project?.name === name, { timeout: TIMEOUT }, REAL_RUNNER_NAME);
     const visible = await page.evaluate(({text,name}) => ({
