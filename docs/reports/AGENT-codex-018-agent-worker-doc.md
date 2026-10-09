@@ -91,3 +91,22 @@ Doc内部reconcileScopeFailures只读配置槽、同事务验证原grant/assignm
 主体675b2a10d6a0d263d66cb0543a779b9c7c4c3898，收紧完整forced terminal与同ledger原签名对象相等后固定0bf3b7e0。该source首9文件相关175/175、0fail/cancel/skip、2118.8672ms（TMP pc-worker-doc-crash-complete-target-1.log）；类型0/8137ms（TMP pc-worker-doc-crash-type-1.log），probe node --check 0。保留全部Asset专属/旧run成功回归；未跑full。专属scope-doc现9个顶级项，其中2项新增bound crash/unbound retirement，实际TLS仍1个case，包含pending发现：master真实PoP返回完整既有control引用，worker同入口403、body failed:true被strict parser400拒。受控模型中pop1失败只生成Doc fence，原rootclosed前FIFO保持；真实rootclosed后worker-failed结算failed，private竞态继续interrupted。没有修改已过Linux9e原日志，也没有把此新源码称Linux已过。
 
 根收回0bf固定点后独立运行6712窗口；本Agent目标已结束，TLS实际owned socket0/serverfalse，窗口已明确释放。工作区最终仅本报告追加，无source测中改动。后续真实root OS或业务配对的首次结果由根补入，不同层证据分别归档。
+
+## 根实际crash-observation首轮与消费者只读复核
+
+根在联合固定source `ab217f05ad0fc09be354426bb577af4ed952b899` 导出10份Git blob并核hash，首次真实Linux `--crash-observation` 12/12、proof/SSH exit0、proof8502ms；根外层计时12.047秒，result内部wallSec为9.98，计时层不同不混用。原始TMP `pc-agent-scope-linux-crash-ab217f05-once.result.json` / `.metadata.json` 已只读核验；namespace `pcagentrunproofd5ec146ad6ea40b7`，节点证据保留在对应/run目录。本Agent没有节点操作或复跑。
+
+A3854ms原parent gone、child live、真实FD/TCP仍持有、原scope pop1；实际failure文件和完成marker可读，reader仍bound/notclosed。5859ms同原FD pop0、父子gone/双连接close后才closed。B6083ms原tuple/资源保持，8254ms虽文件/TCP已关但子live/pop1仍不完成，8275ms才pop0/closed。真实B tuple代A、缺marker、存在lock、混配与新空实例均拒。两owned units实际inactive/MainPID0，retainedUnits为空，6540–49无listener；四生产PID279515/279516/279517/9395及NRestarts=0前后不变，实际数据未删。该证据明确actualLinux=true、controlledDocIssuer=true、productionExecutor=false；它证明root失败观测与原OS范围闭口，不证明业务Doc签发、真实模型或gateway完整闭环。
+
+本轮只读审固定Sol `6869e304`（产品`f11bf044`、`66e7d165`）的journal/sink及其原消费者，未读入Sol后续WIP、未改产品、未运行目标或listener。没有发现可据现有代码直接成立的提前成功/自由关闭授权缺陷；当前最短用户路径仍有明确未接接口，不能因219共同目标全过声称正常FIFO已经完成。
+
+已核边界：worker-event-journal的packet和ACK分别FULL事务持久，ACK核完整packet/row摘要及连续序号；worker-event-sink发送实际TLS exporter签名，成功/错误均等待request/socket/response实际close，再持久ACK。master appendWorker在串行写队列内fresh Doc getter后同步事务追加原message、event、receipt。该master receipt是事件持久收据，绝非Doc任务完成收据。固定实际TLS测试覆盖master已commit而响应丢失：同OS原RAM session重开sink/journal，只重发原packet，master不重复追加；新writer被execution-replay-pending拒。该测试Doc getter/注册为受控组件，不替代真实业务Doc或Linux隔离。fatal sink不能原对象重启继续执行是安全关闭边界；自动创建同OS packet-only恢复消费者尚未装配，不把新OS读旧journal当执行恢复。
+
+最小尚缺接缝（由消费者owner实现，保持现Doc权威）：
+
+1. `server/agent/service/account-runner.mjs:233` 仍在真实done/flush后明确抛run-outcome-unavailable，259行onTaskDrained仅给local-drained/durable和原绑定；没有终态状态推导/不可变drain记录。应从已持久真实终态事件及journal.receipt(eventId)核master原row/eventDigest，实际runner/data drain后最后flush，才形成原RAM scopePrepareSource可精确重读的记录。donePromise resolve、closedRuns Set或零计数都不能替代它。
+2. `server/agent-service/run-client.mjs:7` 与 `server/agent/service/agent-instance-session.mjs:15` 尚缺finish/query、scope/prepare、scope/terminal、scopeControl的精确transport/operation消费。已有scopePrepareFor（91行私有source门）和scopeIntentFor（103行）绑定同原RAM/key/assignment，但没有正常消费者调用；应只补现Doc已冻结的exact body/op，保留不同角色与失权后的独立只读关闭域。master pending发现control不等于取得terminal，仍需独立scopeControl验证。
+3. root独立进程需从固定槽/allowlist接收已持久Doc terminal和原worker intent，执行现publisher原FD真实关闭，然后由Doc重读可信文件链/finalizer；worker在取得prepare/intent前不能close其runClient丢RAM身份。当前account-task-worker.close会关闭session，这是正确销毁行为，不能把它提前当正常结算入口。缺root业务调度入口时保持pending，不向已死worker补签、不由master重签。
+4. 正常/forced交错必须串起现有门：全部终态event ACK先于finish（finish后workerEventSource拒新事件）；finish只是recorded/pending，不能据HTTP200释放。若先被private/crash撤销，消费者只能发现既有typed control并走forced，不补normal prepare；若normal terminal后发生fence，Doc最终从当前ledger控制与原root闭口链对账，不能用旧normal成功响应覆盖interrupted/failed。未知ACK只查询/重传原tuple，execution-started不再跑模型。当前provider已具这些拒绝/最终对账门，本轮未发现消费者绕过；下一消费块须实际并发验证，不能只用顺序正例。
+
+以上是可执行接线缺口与后续验证要求，不是新用户语义或新的关闭权威。唯一文档提交不改正在根Linux验收的任何source；原所有首红与分层结果保留。
