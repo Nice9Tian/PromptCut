@@ -101,3 +101,21 @@ root已将clean叶快进56a10f07，纳Astra5beb的真实scope provider/角色注
 先 `worker.listen({host:'127.0.0.1',port:根独占端口})`，root才能按原 `/internal/v2/agent/run-scope/identity` RPC取得原schema exact公开DER与真实PID。root发布ready后，gateway只指定 `{projectId,conversationId,requestId}` 调 `prepareTask`，不传旧grant/instance/privatekey；返回Doc签assignment和当前phase。root耐久bind后才 `assignmentReady(实际grant)`/`startTask(可信assembly参数)`。startTask只调用原assembly/Hostedfactory，仍需要真实sameRAM readControl、DocdataClient、remote runEventsSink、onTaskDrained；这些生产参数未配置时拒，不补()=>true。正常prepareSource与workerEventSource必须读durable本机事实，缺失503。本包尚未实现root调度gateway/独立worker CLI或远端eventmaster，因此Linux根可先用固定module构造配置验证身份/准入；不能声称它已自动上线生产worker。
 
 normal闭合还需Astra冻结scopePrepare/scopeTerminal/queryFinish及root真实forced/unassigned/finalizer配对。活跃任务强制中止保原pending/原slot，不把失败启动或新OS自动作closed。root最新内存/CPU/磁盘仅现场快照，SSR必须测实际RSS再取实验限制，不从旧128M控制实验/两槽示例推默认生产值。
+
+## master 单writer事件事务与当前Doc getter消费者
+
+固定ecb4b239新增private `eventStore.appendWorker({packet,readSource})` 与 `createWorkerEventInternalHandler({eventStore,resolveWorker})`。readSource/resolveWorker缺任一503，不由packet授run。每个packet及ACK重送均在串行队列内重新取得当前Doc getter；验证绑定/source/peer/key/signature后，同步FULL事务原子写可信Doc原message镜像、worker sourceSeq/原packet/原receipt、会话eventSeq。原accepted mirror重用同一校验/插入函数，不复制另一套消息语义。sourceSeq按grant连续，不直接作会话eventSeq；lostACK原packet幂等，变packet409，缺尾/middle/事件row拒gap，不自动降head。tool_result仍沿原省略output语义。
+
+固定POST handler只读真实req bytes，fatalUTF8、完整原bodyhash、actualPeer叶pin与Doc返回独立workerDocpin相等、同DERkey实际Ed25519、独立TLSexporter、每socket nonce一次；不信proxy headers/body主体验权。freshgetter在本次同步事务前取得，不称跨服务“立即撤销OS资源”已完整挂通；existing read-control/Doc/root fence仍是实际撤销权威。本getter不能作为execute/read/write任意授权。当前未挂HTTP master listener，没有事件journal/client远程sink生产调用。
+
+ecb4b239精准pure17/17、0fail/cancel/skip、444.1642ms、exit0，TMP `pc-worker-event-master-first.log`，无business listener；真实SQLite/触发器故障、Ed25519，Doc/source/req/TLS adapter受控。覆盖message+event+receipt全回滚、错误latch下一append/close、缺尾failclosed、每次currentgetter重核与revoked后旧receipt不能代allow、原字节空白变更/非法UTF8/peer/nonce反向。原account-run-events 13项完整保留，4项新目标首次全过；没有事后红→重跑掩盖。
+
+消费者9455cfd4增加runClient.workerEventSource exact三字段，以及session只允许control-only独立 `workerEventSource` 的fullbody签名；未知字段/错path/任意write不签，run-worker/legacy主体不能调用这个getter。按Astra冻结8d869ae9接口消费，Doc新provider尚未由root组合到本叶（只读git对象核schema），当前base仍56a的provider，不冒称此getter实际TLS已通。固定9455纯session12+remote4合16/16、0fail/cancel/skip、163.5301ms/exit0，TMP `pc-worker-event-source-pure.log`；强制types exit0/零错误、工具wall7696ms，`pc-worker-event-source-type.log`。没有business listener/全量/模型。
+
+## bound等待阶段修正
+
+root审查确认1ab首次unbound startTask把rejected starting保留，后续bound虽assignmentReady通过但无法开始assembly。此前1/1只是注册/bound gate成立，不是已成功启动真实SSRworker。最小修正bbbb0e12：creating之前独立waiting gate，同task并发共用；bound前预期拒只释放waiting，不重admit；真正createAccountExecutorAssembly调用后保starting单次锁，失败/未知不重跑模型或领另一个grant。close同时等pending waiting/实际assembly资源，不能晚创建后遗漏关闭。
+
+固定bbbb0e12763a393bfe444b215cf3c5d781888206，root释放6700–6711后预检全空，新增真实同sourceTLS目标1/1、0fail/cancel/skip，case992.7786ms、suite1123.5023ms、工具wall1893ms/exit0，`pc-worker-registration-bbbb0e12-start-gate.log`。新增断言证明未bound两个并发start共用Promise，bound后确已进入原assembly constructor；缺真实readControl/sink/options准确503，随后单次启动锁拒。并未用freeACL、mockreadControl、空closed证明做成功例，真实完整Hosted SSR启动仍下一块欠项。前1ab首轮原日志与根独立复验原证据全部保持，不套给修后source。
+
+本次ownedservers/sockets/SQLite实际收口，结束6700–6711零监听；强制tsc -b --force exit0/零错误，工具wall6755ms，`pc-worker-registration-bbbb0e12-type.log`。测试源码全程固定，没有full/浏览器/生产模型/节点/用户数据操作。截止本提交的实现进度：RAMsession/注册角色/rootscope映射、单task管理接缝、实际TLS注册与unbound门、master事件原子接收和getter调用消费者已可独立审；独立OSchild启动/调度gateway、worker本机durablejournal+signed remote sink、实际currentgetterTLS配对、实际SSR任务/prepare/intent/强停/Docfinalizer仍未完成，不填写productionReady或任务完成。
