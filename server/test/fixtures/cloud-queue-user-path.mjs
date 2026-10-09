@@ -124,7 +124,7 @@ async function openHostedProjectOverWebSocket({ origin, ca, ticket, projectId })
 export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6524, 6525, 6528], agentPort = 6526, keepOpen = false,
   providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT,
   passwordOrderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE,
-  publicHandler = null,
+  publicHandler = null, createAgentService = null,
   diagnostic = () => {} } = {}) {
   assert.equal(ports.length, 7);
   assert.ok(path.isAbsolute(providerRoot ?? '') && fs.existsSync(path.join(providerRoot, 'account/internal.mjs')),
@@ -132,6 +132,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
   assert.ok(path.isAbsolute(passwordOrderModule ?? '') && fs.existsSync(passwordOrderModule),
     'real password order module is required');
   assert.ok(publicHandler === null || typeof publicHandler === 'function', 'publicHandler must be a function');
+  assert.ok(createAgentService === null || typeof createAgentService === 'function', 'createAgentService must be a function');
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pc-dual-account-path-'));
   const [sitePort, accountPort, docPort, docInternalPort, assetPort, assetInternalPort, edgePort] = ports;
   const edgeOrigin = `https://127.0.0.1:${edgePort}`;
@@ -142,7 +143,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
   const authorityId = 'dual-account-doc';
   const pki = assetWiringPki(dir);
   const agentKey = generateServiceKeyPair();
-  let agentServer, agentClient, agentService, agentRunClient, agentReadControl;
+  let agentServer, agentClient, agentService, agentRunClient, agentReadControl, agentAssembly;
   const staged = path.join(dir, 'staged-asset');
   const docDir = path.join(dir, 'doc');
   const assetDir = path.join(dir, 'asset');
@@ -163,8 +164,14 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
       pair.client.destroy(); pair.upstream.destroy(); return pair.closed;
     }));
     await closeServer(edgeServer);
-    await agentReadControl?.close();
-    await closeServer(agentServer); agentService?.close(); agentClient?.close(); agentRunClient?.close();
+    if (agentAssembly) {
+      await closeServer(agentServer);
+      await agentAssembly.close();
+    } else {
+      await agentReadControl?.close();
+      await closeServer(agentServer); await agentService?.close();
+    }
+    agentClient?.close(); agentRunClient?.close();
     await combo?.close();
     await closeServer(siteServer);
     await closeServer(accountServer);
@@ -257,7 +264,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
     const statusConfig = { origin: `https://127.0.0.1:${assetInternalPort}`, tls: pki.doc,
       serverFingerprint256: pki.asset.fingerprint256 };
     addServiceKey(hostedPaths(docDir).servicesFile, { service: 'agent', role: 'agent', actsFor: 'member', kid: agentKey.kid, pub: agentKey.pub });
-    combo = await startHostedCombo({ dataDir: docDir, docPort, assetPort: 6539, host: '127.0.0.1',
+    combo = await startHostedCombo({ dataDir: docDir, docPort, assetPort, host: '127.0.0.1',
       trustLoopback: false, clusterToken: 'dual-path-test-cluster-token-32-characters',
       accountRequired: true, docPublicUrl: `${edgeOrigin}/hosted/`,
       assetPublicUrl: `${assetOrigin}/media/api/asset`, assetStatus: statusConfig,
@@ -277,14 +284,23 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
     agentReadControl = createConversationControlClient({ ...agentOptions, runClient: agentRunClient,
       receiptFile: path.join(dir, 'agent-read-closures.sqlite') });
     agentClient.useReadControl(agentReadControl);
-    await agentReadControl.start();
-    const readReadyDeadline = Date.now() + 5000;
-    while (!agentReadControl.describe().connected) {
-      if (Date.now() >= readReadyDeadline) throw Error('agent-read-control-not-ready');
-      await new Promise(resolve => setTimeout(resolve, 5));
+    // The actual executor assembly owns its subscribe/start lifecycle. Starting
+    // here as well would supersede its stream and disconnect the same transport.
+    if (!createAgentService) {
+      await agentReadControl.start();
+      const readReadyDeadline = Date.now() + 5000;
+      while (!agentReadControl.describe().connected) {
+        if (Date.now() >= readReadyDeadline) throw Error('agent-read-control-not-ready');
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
     }
     const wiring = createHostedWiring({ accountMode: true, conversationClient: agentClient });
-    agentService = createHostedAgentService({ accountMode: true, conversationClient: agentClient });
+    if (createAgentService) {
+      agentAssembly = await createAgentService({ agentOptions, agentClient, agentRunClient, agentReadControl, dir, combo });
+      assert.equal(typeof agentAssembly?.close, 'function', 'injected assembly must own its actual close');
+      agentService = agentAssembly.service;
+      assert.equal(typeof agentService?.send, 'function', 'injected assembly supplies the actual account service');
+    } else agentService = createHostedAgentService({ accountMode: true, conversationClient: agentClient });
     const agentHttp = createAgentHttp({ service: agentService, authenticate: wiring.authenticate });
     agentServer = http.createServer((req, res) => { void agentHttp.handle(req, res); });
     await listen(agentServer, agentPort);

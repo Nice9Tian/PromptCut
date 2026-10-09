@@ -210,7 +210,11 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         if (!released && !res.destroyed) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} entry.close(); }
       } finally { polling = false; }
     };
-    const poll = () => service.readTransports ? service.readTransports.dispatch(pollWork) : pollWork();
+    const poll = async () => {
+      if (released || res.destroyed) return;
+      try { await (service.readTransports ? service.readTransports.dispatch(pollWork) : pollWork()); }
+      catch { entry.close(); }
+    };
     const timer = setInterval(() => { void poll().catch(() => {}); }, 250); timer.unref?.();
     req.on('aborted', release); res.on('close', release);
     void poll().catch(() => {});
