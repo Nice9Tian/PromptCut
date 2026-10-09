@@ -8,7 +8,7 @@ import { startCloudQueueUserFixture } from './cloud-queue-user-path.mjs';
 import { createAccountExecutorAssembly } from '../../agent-service/account-executor-assembly.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-export const REAL_RUNNER_PORTS = Object.freeze([6660, 6661, 6662, 6663, 6664, 6665, 6668]);
+export const REAL_RUNNER_PORTS = Object.freeze([6700, 6701, 6702, 6703, 6704, 6705, 6708]);
 export const REAL_RUNNER_TEXT = '真实文档短任务已执行；关闭结算仍在等待。';
 export const REAL_RUNNER_NAME = 'Agent actual document edit';
 export const REAL_RUNNER_PROMPT = '验证真实工具与项目修改。\n```mock-script\n' + JSON.stringify([
@@ -23,7 +23,7 @@ export const REAL_RUNNER_PROMPT = '验证真实工具与项目修改。\n```mock
 // and accepted operation projection are the real product implementations.
 export async function startAccountRealRunnerFixture({ publicHandler = null, diagnostic = () => {} } = {}) {
   let executor, vite, runClient; const logs = [], humanSockets = new Set();
-  const fixture = await startCloudQueueUserFixture({ ports: [...REAL_RUNNER_PORTS], agentPort: 6666, publicHandler,
+  const fixture = await startCloudQueueUserFixture({ ports: [...REAL_RUNNER_PORTS], agentPort: 6706, publicHandler,
     diagnostic, async createAgentService({ agentOptions, agentClient, agentRunClient, agentReadControl, dir, combo: actualCombo }) {
       runClient = agentRunClient;
       vite = await createServer({ configFile: false, root: ROOT, cacheDir: path.join(dir, 'agent-vite-cache'),
@@ -32,7 +32,7 @@ export async function startAccountRealRunnerFixture({ publicHandler = null, diag
       try {
         executor = await createAccountExecutorAssembly({ dataDir: path.join(dir, 'actual-agent'), doc: agentOptions,
           runClient: agentRunClient, conversationClient: agentClient, readControl: agentReadControl,
-          controlPort: 6669, root: ROOT, loadModule: id => vite.ssrLoadModule(id),
+          controlPort: 6709, root: ROOT, loadModule: id => vite.ssrLoadModule(id),
           modelConfig: async () => ({ vendor: 'mock', model: 'scripted-local-response' }),
           log: (event, fields) => logs.push({ event, code: fields?.code }) });
         return { service: executor.service, async close() {
