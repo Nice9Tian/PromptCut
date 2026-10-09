@@ -219,7 +219,7 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
     case 'runner_done':
     case "done": {
       if (m.cloudRun) return set({ pending: true, cloudSettlement: 'pending',
-        progress: { ...m.progress, text: pendingSettlementText },
+        progress: { ...m.progress, phase: 'settlement-pending', text: pendingSettlementText },
         ...(m.cloudSettlement === 'pending' ? {} : { statuses: [...(m.statuses ?? []), pendingSettlementText],
           parts: [...(m.parts ?? []), { kind: 'status', text: pendingSettlementText }] }) });
       if (ev.type === 'runner_done') return messages;
@@ -227,7 +227,7 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
     }
     case "end": {
       if (m.cloudRun) return set({ pending: true, cloudSettlement: 'pending',
-        progress: { ...m.progress, text: pendingSettlementText },
+        progress: { ...m.progress, phase: 'settlement-pending', text: pendingSettlementText },
         ...(m.cloudSettlement === 'pending' ? {} : { statuses: [...(m.statuses ?? []), pendingSettlementText],
           parts: [...(m.parts ?? []), { kind: 'status', text: pendingSettlementText }] }) });
       if (m.outcome === "error") return set({ pending: false, finishedAt: m.finishedAt ?? Date.now() });
