@@ -12,7 +12,10 @@ const entry = fileURLToPath(new URL('./account-task-worker-cli.mjs', import.meta
 export function createAccountWorkerGateway({ configurationModule, cwd, env = process.env, timeoutMs = 10000 } = {}) {
   if (!path.isAbsolute(configurationModule ?? '') || !path.isAbsolute(cwd ?? '') ||
       !Number.isInteger(timeoutMs) || timeoutMs < 1) throw fail('worker-gateway-configuration');
-  const child = fork(entry, ['--configuration-module', configurationModule], { cwd, env: { ...env },
+  // Worker is a separate runtime, never another test runner/inspector inherited
+  // from the master. Preserve process-only preload/config, not Node test IPC.
+  const childEnv = { ...env }; delete childEnv.NODE_TEST_CONTEXT;
+  const child = fork(entry, ['--configuration-module', configurationModule], { cwd, env: childEnv, execArgv: [],
     execPath: process.execPath, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   const pending = new Map(); let readyResolve, readyReject, closeResolve, stopped = false, fatal = null, stopping = null;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
@@ -59,7 +62,10 @@ export function createAccountWorkerGateway({ configurationModule, cwd, env = pro
         let error;
         if (!stopped) { try { await request('close', null); } catch (cause) { error = cause; }
           if (child.connected) child.disconnect(); }
-        const observed = await closed;
+        let timer;
+        const observed = await Promise.race([closed, new Promise((_, reject) => {
+          timer = setTimeout(() => reject(fail('worker-gateway-actual-close-pending')), timeoutMs);
+        })]).finally(() => clearTimeout(timer));
         if (error) throw error; if (observed.exitCode !== 0) throw fatal ?? fail('worker-gateway-close-failed');
         return observed;
       })();

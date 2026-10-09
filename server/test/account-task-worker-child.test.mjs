@@ -27,6 +27,8 @@ const get = (port, tls) => new Promise((resolve, reject) => {
 // is available here: admission/model execution must reject. Not SSR completion.
 test('private worker child owns its RAM identity; gateway cannot provide grant or skip root ready', { timeout: 30000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-task-worker-child-'));
+  const diagnostic = phase => fs.appendFileSync(path.join(dir, 'safe-phases.log'), phase + '\n');
+  diagnostic('temporary-pki');
   const pki = assetWiringPki(dir), model = scopeModel('child'); await model.run('initialize');
   model.expected.clientFingerprint256 = certificateFingerprint(pki.account.fingerprint256);
   model.expected.serverFingerprint256 = certificateFingerprint(pki.asset.fingerprint256);
@@ -43,9 +45,11 @@ readRootRecord:async()=>{throw Object.assign(Error('root ready missing'),{status
 createAssemblyOptions:async()=>{throw Object.assign(Error('must not execute'),{code:'model-must-not-start'});}
 }};}`;
   fs.writeFileSync(configurationModule, code, { mode: 0o600 });
+  diagnostic('gateway-spawn');
   const gateway = createAccountWorkerGateway({ configurationModule, cwd: path.dirname(fileURLToPath(import.meta.url)), timeoutMs: 10000 });
-  t.after(async () => { await gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { diagnostic('teardown'); await gateway.close(); diagnostic('child-actual-closed'); fs.rmSync(dir, { recursive: true, force: true }); });
   const ready = await gateway.ready; assert.notEqual(ready.pid, process.pid); assert.equal(ready.pid, gateway.pid()); assert.equal(ready.port, 6703);
+  diagnostic('gateway-ready');
   const first = await get(ready.port, pki.account), second = await get(ready.port, pki.account);
   assert.equal(first.status, 200); assert.equal(first.body.pid, ready.pid);
   assert.equal(first.body.publicKey, second.body.publicKey); assert.equal(first.body.instanceId, model.files.get('reservation-1.json').instanceId);
@@ -55,6 +59,7 @@ createAssemblyOptions:async()=>{throw Object.assign(Error('must not execute'),{c
   await assert.rejects(gateway.prepare({ projectId: 'project', conversationId: 'conversation-child', requestId: 'one', runGrantId: 'master-grant' }), { code: 'account-worker-task' });
   assert.equal(gateway.describe().completionReady, false);
   const closed = await gateway.close(); assert.equal(closed.childClosed, true); assert.equal(closed.exitCode, 0);
+  diagnostic('close-returned');
   assert.equal(closed.rootClosureProved, false); assert.equal(gateway.describe().pendingCommands, 0);
   t.diagnostic('owned hidden independent Node child; identity listener 6703; actual ChildProcess close only, no root cgroup/FIFO proof');
 });
