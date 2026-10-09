@@ -119,14 +119,15 @@ try {
   await a.waitForFunction(() => Boolean(window.__pcCloud?.main?.conversationId?.()));
   const conversationId = await a.evaluate(() => window.__pcCloud.main.conversationId()); result.conversationId = conversationId;
   phase = 'actual-output-a';
-  await a.waitForFunction(text => document.querySelector('.ai-messages')?.textContent?.includes(text) &&
+  await a.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text) &&
     document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
   phase = 'shared-history-b'; await chooseHistory(b, conversationId);
-  await b.waitForFunction(text => document.querySelector('.ai-messages')?.textContent?.includes(text), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
+  await b.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text) &&
+    document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
   for (const [i, page] of [a,b].entries()) {
     await page.waitForFunction(name => window.__pcStore?.getState()?.project?.name === name, { timeout: TIMEOUT }, REAL_RUNNER_NAME);
     const visible = await page.evaluate(({text,name}) => ({
-      text: document.querySelector('.ai-messages')?.textContent?.includes(text),
+      text: document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text),
       pending: document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'),
       userCount: document.querySelectorAll('[data-pc-msg^="cq-"]').length,
       assistantCount: document.querySelectorAll('[data-pc-msg^="ca-"]').length,
