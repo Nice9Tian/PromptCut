@@ -33,6 +33,8 @@ export interface CloudSessionView {
 
 export interface CloudSessionDeps {
   api: Pick<CloudApi, "send" | "abort" | "events"> & Partial<Pick<CloudApi, "pageResult">>;
+  /** 账号共享对话的读取可能在流中途被撤销;断流后不能继续把上一授权下的正文留在 store。 */
+  accountMode?: boolean;
   /**
    * 反向通道(契约第 28 节):这张页面的页面号与执行请求的函数。两样都给了,发消息与开事件流时才报页面号,
    * 事件流里来的 `page.request` 才会被执行并交回;不给就是只看不动的页面。
@@ -71,6 +73,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
   let queue: CloudQueueSnapshot | null = null;
   let senders: Record<string, CloudSender> = {};
   let queued: CloudEvent[] = [];
+  /** 账号读取授权的代次。断流或撤权时递增，阻止旧流触发的页面工具异步结果继续回写。 */
+  let readEpoch = 0;
   /** 这一页刚发出去的消息带的附件(气泡里显示名字用):runId → 附件;服务端的 user 事件到了(或已经在)就贴上、从表里去掉 */
   const pendingAttachments = new Map<string, ChatAttachment[]>();
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -83,7 +87,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
    * 事件流里来了一条 `page.request`:执行并交回。只在这条流还是当前对话的那一条时做(换了对话、关了页面就不做);
    * 交回失败(已经不在等了、网络断了)不重试——服务端到时会回「发起方不在线」,Agent 自己继续。
    */
-  async function answerPageRequest(ev: CloudEvent, id: string, myGen: number) {
+  async function answerPageRequest(ev: CloudEvent, id: string, myGen: number, myReadEpoch: number) {
     if (!pageId || !deps.onPageRequest || !api.pageResult) return;
     const reqId = typeof ev.id === "string" ? ev.id : "";
     if (!reqId || answered.has(reqId)) return;
@@ -95,7 +99,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     } catch (err) {
       answer = { id: reqId, ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    if (!answer || closed || myGen !== gen || id !== conversationId) return;
+    if (!answer || closed || myGen !== gen || id !== conversationId || myReadEpoch !== readEpoch) return;
     try {
       await api.pageResult(id, { ...answer, pageId });
     } catch { /* 不在等了或网络断了:不重试 */ }
@@ -119,6 +123,20 @@ export function createCloudSession(deps: CloudSessionDeps) {
     const batch = queued;
     queued = [];
     store.set((prev) => applyCloudEvents(prev, batch));
+  }
+
+  /** 账号共享读取失效后，丢弃这条授权下的正文、待折增量和附件关联，再从 seq 0 请求完整授权重放。 */
+  function clearAccountReadState() {
+    if (!deps.accountMode) return;
+    readEpoch++;
+    if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
+    queued = [];
+    pendingAttachments.clear();
+    lastSeq = 0;
+    queue = null;
+    senders = {};
+    store.set([]);
+    publish();
   }
 
   /** 把这一页发的附件贴到对应的用户消息上(消息还没到就留着等它) */
@@ -186,27 +204,40 @@ export function createCloudSession(deps: CloudSessionDeps) {
       while (!closed && myGen === gen) {
         const ctl = new AbortController();
         ac = ctl;
+        const streamReadEpoch = readEpoch;
         setConnection(attempt === 0 ? "connecting" : "reconnecting");
         let sawNone = false;
         try {
           for await (const ev of api.events(id, lastSeq, ctl.signal, pageId)) {
-            if (myGen !== gen) return;
+            if (myGen !== gen || streamReadEpoch !== readEpoch) return;
             attempt = 0;
             if (connection !== "live") { problem = null; setConnection("live"); }
             if (ev.type === "end" && ev.state === "none") { sawNone = true; continue; }
             // 反向通道的请求不是对话记录的一部分(没有 seq):不折进消息,交给页面执行
-            if (ev.type === "page.request") { void answerPageRequest(ev, id, myGen); continue; }
+            if (ev.type === "page.request") { void answerPageRequest(ev, id, myGen, streamReadEpoch); continue; }
+            if (deps.accountMode && ev.type === "access.revoked") {
+              clearAccountReadState();
+              problem = "当前账号已无法读取这个对话，请重新选择有权限的对话。";
+              setConnection("idle");
+              return;
+            }
             handle(ev);
           }
         } catch (err) {
           if (myGen !== gen) return;
-          if (err instanceof CloudError && FATAL.has(err.code)) {
-            problem = err.message;
+          const status = err instanceof CloudError ? err.status : Number((err as { status?: unknown })?.status ?? 0);
+          const accountAuthFailure = Boolean(deps.accountMode &&
+            ((status === 401 || status === 403) || (err instanceof CloudError && FATAL.has(err.code))));
+          if (accountAuthFailure) clearAccountReadState();
+          if (accountAuthFailure || (err instanceof CloudError && FATAL.has(err.code))) {
+            problem = err instanceof Error ? err.message : cloudErrorText("network");
             setConnection("idle");
             return;
           }
         }
         if (myGen !== gen || closed) return;
+        // 账号对话的 EOF/断连不保留旧正文，也不续用旧 seq；下一次连接会重新取票并从头重放。
+        if (deps.accountMode) clearAccountReadState();
         if (sawNone) {
           // 对话还不存在(新对话,发第一条消息时再起),或服务端已经没有它了
           if (lastSeq > 0) markInterrupted();
