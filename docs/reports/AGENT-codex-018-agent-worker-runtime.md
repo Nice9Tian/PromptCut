@@ -119,3 +119,9 @@ root审查确认1ab首次unbound startTask把rejected starting保留，后续bou
 固定bbbb0e12763a393bfe444b215cf3c5d781888206，root释放6700–6711后预检全空，新增真实同sourceTLS目标1/1、0fail/cancel/skip，case992.7786ms、suite1123.5023ms、工具wall1893ms/exit0，`pc-worker-registration-bbbb0e12-start-gate.log`。新增断言证明未bound两个并发start共用Promise，bound后确已进入原assembly constructor；缺真实readControl/sink/options准确503，随后单次启动锁拒。并未用freeACL、mockreadControl、空closed证明做成功例，真实完整Hosted SSR启动仍下一块欠项。前1ab首轮原日志与根独立复验原证据全部保持，不套给修后source。
 
 本次ownedservers/sockets/SQLite实际收口，结束6700–6711零监听；强制tsc -b --force exit0/零错误，工具wall6755ms，`pc-worker-registration-bbbb0e12-type.log`。测试源码全程固定，没有full/浏览器/生产模型/节点/用户数据操作。截止本提交的实现进度：RAMsession/注册角色/rootscope映射、单task管理接缝、实际TLS注册与unbound门、master事件原子接收和getter调用消费者已可独立审；独立OSchild启动/调度gateway、worker本机durablejournal+signed remote sink、实际currentgetterTLS配对、实际SSR任务/prepare/intent/强停/Docfinalizer仍未完成，不填写productionReady或任务完成。
+
+## 本机 worker journal 第一块
+
+新联合起点 b8ca9070fd7fef552105977c42fe11b68a2ba44b，包含Astra正常三段8d869ae9/36d6cfa4，当前未自动运行模型/浏览器/节点。〔裁〕沿已采用三级机制：每worker一个EXCLUSIVE/FULL SQLite journal，精确Doc authority/rootRef/assignment/binding不可变；sourceSeq连续、packet原文耐久后才可由同RAM签名，master ACK精确event row/digest验证并单独耐久，才允许下一model/tool boundary。journal重开仅供原packet检查/重发，不能声明重执行安全或新RAM可继承旧grant。ACK不是OS closed/finish成功。
+
+第一轮新目标因worker-event-journal.mjs尚未实现，1/0/1、exit1、77.8196ms，原日志TMP pc-worker-journal-first.log保留。实现后6/6、0fail/cancel/skip、177.0826ms、exit0，TMP pc-worker-journal-fixed.log；实际SQLite包括packet/ACK before-commit故障、回滚/重开、原packet幂等/变更409、错receipt/未连续ACK拒、缺尾/缺中/改receipt/混instance启动failclosed。无业务listener、仅原npm wrapper guards，未做type/全量/真实TLS/独立OS任务。API createWorkerEventJournal({file,authorityId,rootScopeRef,assignmentDigest,binding,failpoint?}) -> append/acknowledge/source/pending/receipt/inspect/close；新module与专属server/test可独立收回，不改Doc/root/schema/部署。
