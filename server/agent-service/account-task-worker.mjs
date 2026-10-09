@@ -1,11 +1,13 @@
 import https from 'node:https';
 import { X509Certificate } from 'node:crypto';
 import { certificateFingerprint } from '../account/client.mjs';
-import { canonicalJson } from '../account/ledger.mjs';
+import { canonicalJson, digestOf } from '../account/ledger.mjs';
 import { validateAgentScopeExpected, validateAgentScopeReservation,
   validateAgentScopeRecord } from '../hosted/agent-run-scope-schema.mjs';
 import { createRunClient } from './run-client.mjs';
 import { createAccountExecutorAssembly } from './account-executor-assembly.mjs';
+import { createWorkerEventJournal } from './worker-event-journal.mjs';
+import { createWorkerEventSink } from './worker-event-sink.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
 const ref = v => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(v);
@@ -19,7 +21,7 @@ const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantI
  * Master scheduling never supplies an existing grant or signs on this OS's behalf.
  */
 export function createAccountTaskWorker({ doc, expected, reservation, identityTls, readRootRecord,
-  scopePrepareSource = null, workerEventSource = null } = {}) {
+  scopePrepareSource = null, workerEventSource = null, eventSink = null, createAssemblyOptions = null } = {}) {
   const e = validateAgentScopeExpected(expected), r = validateAgentScopeReservation(reservation, e);
   if (!identityTls?.key || !identityTls.cert || !identityTls.ca || typeof readRootRecord !== 'function')
     fail('account-worker-configuration');
@@ -27,7 +29,13 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
   try { fingerprint = certificateFingerprint(new X509Certificate(identityTls.cert).fingerprint256); }
   catch { fail('account-worker-identity-certificate'); }
   if (fingerprint !== e.serverFingerprint256) fail('account-worker-identity-certificate');
-  const client = createRunClient({ ...doc, registrationPurpose: 'run-worker', scopePrepareSource, workerEventSource });
+  if (eventSink && (workerEventSource !== null || typeof eventSink.file !== 'string')) fail('account-worker-event-configuration');
+  if (createAssemblyOptions !== null && typeof createAssemblyOptions !== 'function') fail('account-worker-assembly-configuration');
+  let journal = null, events = null;
+  const client = createRunClient({ ...doc, registrationPurpose: 'run-worker', scopePrepareSource,
+    workerEventSource: eventSink ? packet => {
+      if (!journal) fail('account-worker-event-unavailable'); return journal.source(packet);
+    } : workerEventSource });
   let record = null, task = null, grant = null, assignment = null, admission = null, assembly = null, starting = null, waiting = null;
   let stopped = false, closing = null;
   const sockets = new Set();
@@ -75,6 +83,14 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
         if (!['assigned-unbound', 'bound'].includes(result?.phase) || typeof result.executionAllowed !== 'boolean')
           fail('account-worker-assignment');
         client.bindScope({ expected: e, record, assignment: result.assignment }); assignment = result.assignment;
+        if (eventSink) {
+          journal = createWorkerEventJournal({ file: eventSink.file, authorityId: e.docAuthorityId,
+            rootScopeRef: { rootAuthorityId: e.authorityId, slotId: e.slotId, epoch: record.epoch, recordDigest: digestOf(record) },
+            assignmentDigest: digestOf(assignment), binding: { ...Object.fromEntries([...binding,
+              'instanceId', 'instanceGeneration', 'serviceKid'].map(k => [k, grant[k]])), senderAccountId: grant.accountId } });
+          events = createWorkerEventSink({ ...eventSink, journal, runClient: client,
+            verifyGrant: current => client.checkAccess({ projectId: current.projectId, runGrantId: current.runGrantId, action: 'write' }) });
+        }
         return { assignment: structuredClone(assignment), phase: result.phase, executionAllowed: result.executionAllowed };
       })();
       // Persisting/admitting is one-way in this OS. Unknown ACK is pending; a
@@ -94,7 +110,7 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     return result;
   }
   function startTask(options = {}) {
-    if (!admission || starting || stopped) return Promise.reject(Object.assign(new Error('account-worker-not-prepared'), { status: 503 }));
+    if (!admission || starting || stopped) return Promise.reject(Object.assign(new Error('account-worker-not-prepared'), { status: 503, code: 'account-worker-not-prepared' }));
     // All callers for this one task share the same pending bound check. A ready
     // epoch is not executable yet and may become bound later; that expected
     // rejection must not poison an OS that has never created an assembly.
@@ -104,8 +120,16 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     if (stopped) fail('account-worker-closed');
     // All actual Hosted/SSR/model/tool options are trusted entry configuration.
     // No network route exposes these or changes the one admitted task.
-    starting = createAccountExecutorAssembly({ ...options, doc, runClient: client, task,
-      registrationScope: { expected: e, record }, assignmentReady });
+    starting = (async () => {
+      // The entry's private local configuration constructs current read control
+      // and Hosted/SSR options with THIS process's client. Never accept this
+      // callback or its result from an IPC/HTTP body or a master-provided grant.
+      const configured = createAssemblyOptions ? await createAssemblyOptions({ runClient: client,
+        runEventsSink: events, task: structuredClone(task), grant: structuredClone(grant) }) : options;
+      if (stopped) fail('account-worker-closed');
+      return createAccountExecutorAssembly({ ...configured, ...(events ? { runEventsSink: events } : {}), doc,
+        runClient: client, task, registrationScope: { expected: e, record }, assignmentReady });
+    })();
     assembly = await starting;
     return assembly;
     })();
@@ -119,6 +143,9 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     const serverClosed = server.listening ? new Promise(resolve => server.close(resolve)) : Promise.resolve();
     const results = await Promise.allSettled([client.close(), serverClosed, ...observedSockets,
       admission?.catch(() => {}), Promise.resolve(waiting).catch(() => {}).then(() => assembly?.close())]);
+    // Journal/transport cleanup is required even when admission or assembly
+    // failed. Sink errors remain observable; no new receipt is invented here.
+    results.push(...await Promise.allSettled([events ? events.close() : Promise.resolve().then(() => journal?.close())]));
     const errors = results.filter(v => v.status === 'rejected').map(v => v.reason);
     if (errors.length) throw new AggregateError(errors, 'account-worker-close-pending');
   })();
@@ -131,6 +158,7 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     },
     describe: () => ({ phase: stopped ? 'stopped' : assembly ? 'started' : assignment ? 'assigned-unbound' : 'identity',
       rootScopeRef: record ? { rootAuthorityId: e.authorityId, slotId: e.slotId, epoch: record.epoch } : null,
-      taskSelected: task !== null, completionReady: false, identitySockets: sockets.size }),
+      taskSelected: task !== null, completionReady: false, identitySockets: sockets.size,
+      durableEventSinkMounted: events !== null }),
   };
 }
