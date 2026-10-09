@@ -284,11 +284,15 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
     agentReadControl = createConversationControlClient({ ...agentOptions, runClient: agentRunClient,
       receiptFile: path.join(dir, 'agent-read-closures.sqlite') });
     agentClient.useReadControl(agentReadControl);
-    await agentReadControl.start();
-    const readReadyDeadline = Date.now() + 5000;
-    while (!agentReadControl.describe().connected) {
-      if (Date.now() >= readReadyDeadline) throw Error('agent-read-control-not-ready');
-      await new Promise(resolve => setTimeout(resolve, 5));
+    // The actual executor assembly owns its subscribe/start lifecycle. Starting
+    // here as well would supersede its stream and disconnect the same transport.
+    if (!createAgentService) {
+      await agentReadControl.start();
+      const readReadyDeadline = Date.now() + 5000;
+      while (!agentReadControl.describe().connected) {
+        if (Date.now() >= readReadyDeadline) throw Error('agent-read-control-not-ready');
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
     }
     const wiring = createHostedWiring({ accountMode: true, conversationClient: agentClient });
     if (createAgentService) {
