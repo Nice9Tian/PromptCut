@@ -243,7 +243,9 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
       docClosed(s, control);
       if (!retired && p.terminal.protocol === 'promptcut.agent-run-scope.forced-terminal.v1') {
         if (p.terminal.fence.controlId !== control.controlId || p.terminal.fence.fenceRevision !== control.fenceRevision ||
-            p.terminal.fence.payloadDigest !== control.payloadDigest) fail(403, 'forced-control-mismatch');
+            p.terminal.fence.payloadDigest !== control.payloadDigest ||
+            canonicalJson(p.terminal) !== canonicalJson(s.runScopeForcedV1?.[control.controlId]?.[grant.runGrantId]))
+          fail(403, 'forced-control-mismatch');
       } else if (!retired && !receipt) fail(403, 'terminal-mismatch');
     } else if (retired) fail(403, 'retirement-has-live-grant');
     if (receipt && p.terminal.protocol === 'promptcut.agent-run-scope.terminal.v1') {
