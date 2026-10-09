@@ -17,6 +17,7 @@
  *                                  账号版 doc 独立内部 mTLS HTTPS 源与 pinned 服务端证书
  *   PROMPTCUT_AGENT_CLIENT_KEY_FILE / PROMPTCUT_AGENT_CLIENT_CERT_FILE / PROMPTCUT_AGENT_CA_FILE
  *                                  Agent 独占 mTLS 私钥、证书、私有 CA 文件；只读，值不进日志
+ *   PROMPTCUT_AGENT_CONTROL_PORT    账号执行器独立回环 mTLS 控制口，必须与公开 HTTP 口不同
  *   PROMPTCUT_AGENT_SECRETS        服务身份的私钥目录(缺省 /var/lib/promptcut/agent-secrets),里面是 keygen 生成的 service-key.json(服务名 agent)
  *   PROMPTCUT_AGENT_HOST           缺省 127.0.0.1;只许回环(对外只经反向代理)
  *   PROMPTCUT_AGENT_PORT           缺省 8790
@@ -46,10 +47,11 @@
  * `config/voice.json` 与 `config/keys/voice.key`(托管方的配音配置与令牌的密文,可没有)、`work/`(各对话的工作目录:附件、下载的文件)、
  * `config/limits.json`(各项目额度与节点并发,`admin.mjs quota` 写,改了即生效)、`tenants/`(对话)、`usage/`(用量流水)。
  * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发补渲。
- * 收到 SIGTERM / SIGINT:进行中的每一轮记「中断」后停下,状态落盘,5 秒内退出。
+ * 收到 SIGTERM / SIGINT:旧 LAN 模式记「中断」并停下,状态落盘,5 秒内退出。
+ * 账号模式等待 owned 资源真实关闭;不以 5 秒超时替代关闭证明或成功退出。
  *
- * 账号版当前仅开放 doc mTLS 对话 HTTP 与进程 RAM 实例注册。run 数据连接的逐帧证明尚未挂载；
- * 虽然注册客户端能签 HTTP run 请求，生产 runner 不 admit，也不报 ready。
+ * 账号版以同一个 RAM 注册客户端装配 run/data/read-control 与持久事件；
+ * 真实关闭 producer/终态结算尚未接通，完成状态严格 pending，不能宣称整链 ready。
  * 旧模式鉴权(契约第 4 节):命令行入口凭服务私钥连文档服务的控制连接(`server/auth/service-client.mjs`),每个请求的委托票据、
  * 每一轮的对话委托都交文档服务核验;连文档服务的数据连接用凭对话委托换来的连接票据(`hosted-wiring.mjs`)。
  * 补渲经服务身份的发布连接进文档服务的任务队列(`render-publisher.mjs`)。测试经 `startAgentService({ authenticate, credentials })` 给替身。
@@ -72,6 +74,8 @@ import { readDesktopModelConfig } from './rehearsal-model.mjs';
 import { createLookClient, parseLookUrl } from './look-client.mjs';
 import { createConversationClient } from './conversation-client.mjs';
 import { createRunClient } from './run-client.mjs';
+import { createConversationControlClient } from './conversation-control-client.mjs';
+import { createAccountExecutorAssembly } from './account-executor-assembly.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -121,6 +125,7 @@ export async function startAgentService({
   collect = null,
   accountMode = false,
   conversationClient = null,
+  accountExecutor = null,
   root = ROOT,
   version = 'dev',
   codeVersion = null,
@@ -152,7 +157,7 @@ export async function startAgentService({
     optimizeDeps: { noDiscovery: true, include: [] },
   });
 
-  const service = createHostedAgentService({
+  const serviceOptions = {
     root,
     loadModule: (id) => vite.ssrLoadModule(id),
     docUrl,
@@ -176,7 +181,18 @@ export async function startAgentService({
     ...(collect ? { collect } : {}),
     ...(accountMode ? { accountMode: true, conversationClient } : {}),
     log,
-  });
+  };
+  let executor = null, service;
+  try {
+    if (accountMode && accountExecutor) {
+      // CLI supplies its one already-created RAM runClient and read-control
+      // client. No secondary tool/model process registers a different instance.
+      executor = await createAccountExecutorAssembly({ ...serviceOptions, ...accountExecutor,
+        dataDir, conversationClient, root, loadModule: serviceOptions.loadModule,
+        modelConfig: serviceOptions.modelConfig, log });
+      service = executor.service;
+    } else service = createHostedAgentService(serviceOptions);
+  } catch (error) { await vite.close(); throw error; }
   const api = createAgentHttp({ service, authenticate, version, codeVersion, log });
   const server = http.createServer((req, res) => { void api.handle(req, res); });
   try {
@@ -185,8 +201,8 @@ export async function startAgentService({
       server.listen(port, host, resolve);
     });
   } catch (err) {
-    await service.close();
-    await vite.close();
+    try { if (executor) await executor.close(); else await service.close(); }
+    finally { await vite.close(); }
     throw new AgentConfigError('listen', `监听失败:${err?.message ?? err}`);
   }
   const actual = server.address().port;
@@ -197,12 +213,21 @@ export async function startAgentService({
     port: actual,
     url: `http://${host.includes(':') ? `[${host}]` : host}:${actual}`,
     service,
+    executor,
     close() {
       closing ??= (async () => {
-        await service.close();
-        server.closeAllConnections?.();
-        await new Promise((resolve) => server.close(() => resolve()));
-        await vite.close();
+        if (executor) {
+          // Close actual public HTTP/SSE owners before waiting on read-control
+          // receipts. HTTP finish alone cannot stand in for socket close.
+          server.closeAllConnections?.();
+          await new Promise(resolve => server.close(resolve));
+          try { await executor.close(); } finally { await vite.close(); }
+        } else {
+          await service.close();
+          server.closeAllConnections?.();
+          await new Promise(resolve => server.close(resolve));
+          await vite.close();
+        }
       })();
       return closing;
     },
@@ -257,7 +282,7 @@ async function main() {
   const accountMode = env.PROMPTCUT_ACCOUNT_V2 === '1';
   if (env.PROMPTCUT_ACCOUNT_V2_REQUIRED === '1' && !accountMode) return fail('account-v2-required');
   if (accountMode && !/^wss:\/\//.test(docUrl)) return fail('account-v2', { detail: 'doc-url-must-be-wss' });
-  let key = null, client = null, conversationClient = null, runClient = null, wiring;
+  let key = null, client = null, conversationClient = null, runClient = null, conversationControl = null, wiring, accountExecutor = null;
   if (accountMode) {
     try {
       const file = name => {
@@ -271,9 +296,23 @@ async function main() {
           ca: file('PROMPTCUT_AGENT_CA_FILE') } };
       conversationClient = createConversationClient(options);
       runClient = createRunClient(options);
+      conversationControl = createConversationControlClient({ ...options, runClient,
+        receiptFile: path.join(env.PROMPTCUT_AGENT_DATA, 'conversation-read-closures.sqlite'),
+        onDiagnostic: event => line('agent.read-control', event) });
+      // Assembly owns this client once started; outer boot/stop cleanup may
+      // still run after assembly startup rejected. Share that one real close,
+      // including its rejection, rather than closing the receipt DB twice.
+      const closeReadControl = conversationControl.close.bind(conversationControl);
+      let readClosing = null;
+      conversationControl.close = () => readClosing ??= Promise.resolve().then(closeReadControl);
+      conversationClient.useReadControl(conversationControl);
+      const controlPort = Number(env.PROMPTCUT_AGENT_CONTROL_PORT);
+      if (!Number.isInteger(controlPort) || controlPort < 1 || controlPort > 65535 || controlPort === port)
+        throw new AgentConfigError('account-executor', 'separate-control-port-required');
+      accountExecutor = { doc: options, runClient, readControl: conversationControl, controlPort };
       wiring = createHostedWiring({ accountMode: true, conversationClient, log: line });
     } catch {
-      conversationClient?.close(); runClient?.close(); return fail('account-v2');
+      await conversationControl?.close(); conversationClient?.close(); runClient?.close(); return fail('account-v2');
     }
   } else {
     try {
@@ -304,7 +343,7 @@ async function main() {
       ...(!accountMode && lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
       ...(collect ? { collect } : {}),
-      ...(accountMode ? { accountMode: true, conversationClient } : {}),
+      ...(accountMode ? { accountMode: true, conversationClient, accountExecutor } : {}),
       ...(rehearsal ? { modelConfig: () => readDesktopModelConfig() } : {}),
       version,
       codeVersion: () => wiring.publisher?.codeVersion?.() ?? version,
@@ -312,7 +351,7 @@ async function main() {
     });
   } catch (err) {
     wiring.close();
-    client?.close(); runClient?.close();
+    await conversationControl?.close(); client?.close(); runClient?.close();
     if (err instanceof AgentConfigError) return fail(err.reason, { detail: err.message });
     throw err;
   }
@@ -322,6 +361,7 @@ async function main() {
     if (registerStopped || !runClient) return;
     try {
       const instance = await runClient.registerInstance();
+      await conversationControl?.start();
       line('agent.instance.registered', { instanceId: instance.instanceId, instanceGeneration: instance.instanceGeneration });
     } catch (error) {
       if (registerStopped) return;
@@ -329,11 +369,12 @@ async function main() {
       registerTimer = setTimeout(registerInstance, 2_000); registerTimer.unref?.();
     }
   };
-  if (runClient) void registerInstance();
+  if (runClient && !started.executor) void registerInstance();
   line('agent.ready', {
     url: started.url, auth: accountMode ? 'account-v2-mtls' : 'service-identity',
     service: 'agent', ...(key ? { kid: key.kid } : {}), version, accountMode,
-    ...(accountMode ? { runAuthorityMounted: false, runDataProofReady: false } : {}),
+    ...(accountMode ? { runAuthorityMounted: !!started.executor, runDataProofReady: !!started.executor,
+      completionReady: false } : {}),
     ...(origin ? { publicOrigin: origin } : {}),
     assetService: !!assetBase, look: !accountMode && !!lookUrl, egressTestAllow: testAllow.length > 0,
     collect: !accountMode && !!collect, collectTestRunner: !accountMode && collect?.testRunner === true,
@@ -341,7 +382,13 @@ async function main() {
   });
   const stop = () => {
     registerStopped = true; if (registerTimer) clearTimeout(registerTimer);
-    void started.close().then(() => { wiring.close(); client?.close(); runClient?.close(); process.exit(0); });
+    if (started.executor) {
+      // No five-second successful exit can certify an unobserved old OS tree.
+      void started.close().then(() => { wiring.close(); runClient?.close(); conversationClient?.close(); })
+        .catch(error => { line('agent.close.pending', { code: error?.code ?? 'closure-pending' }); process.exitCode = 1; });
+      return;
+    }
+    void Promise.resolve(conversationControl?.close()).then(() => started.close()).then(() => { wiring.close(); client?.close(); runClient?.close(); process.exit(0); });
     setTimeout(() => process.exit(0), 5000).unref();
   };
   process.once('SIGINT', stop);

@@ -1,0 +1,173 @@
+{
+  "restore": "/var/tmp/pc-v2-restore-20261009-705476775bf3",
+  "backup": "/root/promptcut-v2-consistent-20261009-b9fb4c8d8e5c",
+  "namespace": "81930e503880",
+  "checks": [
+    {
+      "name": "account-restored-http-health",
+      "pass": false,
+      "details": null
+    },
+    {
+      "name": "doc-restored-http-health",
+      "pass": false,
+      "details": null
+    },
+    {
+      "name": "asset-restored-http-health",
+      "pass": false,
+      "details": null
+    },
+    {
+      "name": "restored-doc-asset-mtls-ready",
+      "pass": false
+    }
+  ],
+  "observed": {
+    "account": {
+      "MainPID": "0",
+      "NRestarts": "0",
+      "WorkingDirectory": "",
+      "User": "",
+      "Group": "",
+      "LoadState": "not-found",
+      "ActiveState": "inactive"
+    },
+    "asset": {
+      "MainPID": "0",
+      "NRestarts": "0",
+      "WorkingDirectory": "",
+      "User": "",
+      "Group": "",
+      "LoadState": "not-found",
+      "ActiveState": "inactive"
+    },
+    "doc": {
+      "MainPID": "0",
+      "NRestarts": "0",
+      "WorkingDirectory": "",
+      "User": "",
+      "Group": "",
+      "LoadState": "not-found",
+      "ActiveState": "inactive"
+    }
+  },
+  "failure": {
+    "type": "AssertionError",
+    "code": "restored-runtime-health-not-ready"
+  },
+  "runtimeVerified": false,
+  "cleanup": {
+    "ownUnits": {
+      "account": {
+        "MainPID": "0",
+        "NRestarts": "0",
+        "WorkingDirectory": "",
+        "User": "",
+        "Group": "",
+        "LoadState": "not-found",
+        "ActiveState": "inactive"
+      },
+      "asset": {
+        "MainPID": "0",
+        "NRestarts": "0",
+        "WorkingDirectory": "",
+        "User": "",
+        "Group": "",
+        "LoadState": "not-found",
+        "ActiveState": "inactive"
+      },
+      "doc": {
+        "MainPID": "0",
+        "NRestarts": "0",
+        "WorkingDirectory": "",
+        "User": "",
+        "Group": "",
+        "LoadState": "not-found",
+        "ActiveState": "inactive"
+      }
+    },
+    "ports6590_6599Free": true,
+    "allOwnServicesClosed": true
+  },
+  "productionUnchanged": true,
+  "productionBefore": {
+    "promptcut-account-v2": {
+      "MainPID": "279515",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/vh-a01ae0bc",
+      "User": "visuhive-account",
+      "Group": "visuhive-account",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2": {
+      "MainPID": "279516",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-doc",
+      "Group": "promptcut-doc",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2": {
+      "MainPID": "279517",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-asset",
+      "Group": "promptcut-asset",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "nginx": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "WorkingDirectory": "",
+      "User": "",
+      "Group": "",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    }
+  },
+  "productionAfter": {
+    "promptcut-account-v2": {
+      "MainPID": "279515",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/vh-a01ae0bc",
+      "User": "visuhive-account",
+      "Group": "visuhive-account",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2": {
+      "MainPID": "279516",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-doc",
+      "Group": "promptcut-doc",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2": {
+      "MainPID": "279517",
+      "NRestarts": "0",
+      "WorkingDirectory": "/opt/promptcut-v2/releases/eb8228a4/pc",
+      "User": "promptcut-asset",
+      "Group": "promptcut-asset",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    },
+    "nginx": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "WorkingDirectory": "",
+      "User": "",
+      "Group": "",
+      "LoadState": "loaded",
+      "ActiveState": "active"
+    }
+  },
+  "wallSec": 45.241,
+  "deletedActualData": false,
+  "ok": false
+}

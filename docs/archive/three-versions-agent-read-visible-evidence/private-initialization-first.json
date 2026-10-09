@@ -1,0 +1,79 @@
+{
+  "sourceBefore": "444f5a2e94c1b7cf5c38c2ebc5e524a5c8a239c4",
+  "checks": [
+    {
+      "name": "port-6620-available",
+      "pass": true
+    },
+    {
+      "name": "port-6621-available",
+      "pass": true
+    },
+    {
+      "name": "port-6622-available",
+      "pass": true
+    },
+    {
+      "name": "port-6623-available",
+      "pass": true
+    },
+    {
+      "name": "port-6624-available",
+      "pass": true
+    },
+    {
+      "name": "port-6625-available",
+      "pass": true
+    },
+    {
+      "name": "port-6626-available",
+      "pass": true
+    },
+    {
+      "name": "port-6627-available",
+      "pass": true
+    },
+    {
+      "name": "port-6628-available",
+      "pass": true
+    },
+    {
+      "name": "port-6629-available",
+      "pass": true
+    }
+  ],
+  "network": [],
+  "screenshots": [],
+  "pageErrors": [],
+  "pageSteps": [],
+  "completed": false,
+  "fence": "not-tested",
+  "cleanup": {
+    "fixture": {
+      "closed": true,
+      "childClosed": false,
+      "evidenceDir": null
+    },
+    "portsFree": {
+      "6620": true,
+      "6621": true,
+      "6622": true,
+      "6623": true,
+      "6624": true,
+      "6625": true,
+      "6626": true,
+      "6627": true,
+      "6628": true,
+      "6629": true
+    },
+    "allPortsFree": true,
+    "fixtureAndPortsClosed": false
+  },
+  "failure": {
+    "phase": "preflight",
+    "detail": null,
+    "code": "probe-failed"
+  },
+  "wallMs": 5,
+  "sourceAfter": "444f5a2e94c1b7cf5c38c2ebc5e524a5c8a239c4"
+}

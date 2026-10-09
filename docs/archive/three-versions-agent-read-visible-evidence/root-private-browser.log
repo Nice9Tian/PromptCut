@@ -1,0 +1,15 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs C:\Users\admin\AppData\Local\Temp\pc-account-read-visible-root-ba2d7753-browsers-private.test.mjs
+
+{"completed":true,"phase":"creator-private-readonly","checks":29,"fence":"confirmed-by-real-service","detail":"creator-reopen-private-conversation-and-wait-for-history-body","pageErrors":0,"wallMs":8714,"closed":true,"output":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once","fixtureEvidenceDir":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-control-account-path-mPOJ3e","browserProfileEvidenceDir":"C:\\Users\\admin\\AppData\\Local\\Temp\\pc-account-read-visible-root-ba2d7753-private-once\\chrome-profile"}
+✔ actual private account browser (8914.7266ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8990.095
+✓ npm test 最终结果：零失败

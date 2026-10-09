@@ -148,6 +148,10 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       res.end('data: {"type":"end","state":"none","seq":0}\n\n'); return;
     }
     if (!view) return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
+    if (service.runEvents) {
+      await service.mirrorAccepted(identity, conversationId);
+      service.runEvents.after({ projectId: identity.projectId, conversationId, after });
+    }
     const owner = identity.accountId;
     if (streams >= MAX_STREAMS || (streamsByOwner.get(owner) ?? 0) >= MAX_STREAMS_PER_OWNER)
       return sendJson(res, 429, { ok: false, code: 'busy' }, CORS);
@@ -164,22 +168,30 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     };
     const entry = { projectId: identity.projectId, userId: identity.userId, close: () => { release(); res.end(); } };
     openStreams.add(entry);
-    const poll = async () => {
+    const pollWork = async () => {
       if (polling || released || res.destroyed) return;
       polling = true;
       try {
         view = await service.conversation(identity, conversationId, 0);
-        for (const message of view.messages ?? []) {
+        if (service.runEvents) await service.mirrorAccepted(identity, conversationId);
+        const rows = service.runEvents
+          ? service.runEvents.after({ projectId: identity.projectId, conversationId, after: cursor }).events
+          : (view.messages ?? []).map(message => ({ eventSeq: message.arrivalSeq, event: { type: 'user',
+            messageId: message.messageId, prompt: message.content, senderAccountId: message.senderAccountId,
+            senderNameAtSend: message.senderNameAtSend, queueState: message.queueState } }));
+        for (const row of rows) {
           if (released || res.destroyed) break;
-          if (message.arrivalSeq <= cursor) continue;
+          if (row.eventSeq <= cursor) continue;
           // Recheck even when a batch was fetched before a private switch or kick.
           const access = await service.access(identity, conversationId, 'read');
           if (released || res.destroyed) break;
           if (access.allowed !== true || access.aclRevision !== view.aclRevision) return;
-          res.write(`data: ${JSON.stringify({ type: 'user', seq: message.arrivalSeq, messageId: message.messageId,
-            prompt: message.content, senderAccountId: message.senderAccountId, senderNameAtSend: message.senderNameAtSend,
-            queueState: message.queueState })}\n\n`);
-          cursor = message.arrivalSeq;
+          // Accepted user events predate the run and keep scope on the FULL
+          // durable row. Project this trusted scope after the event payload;
+          // event fields cannot override it. Queued-only/LAN wire stays intact.
+          res.write(`data: ${JSON.stringify({ ...row.event, ...(service.runEvents
+            ? { projectId: row.projectId, conversationId: row.conversationId } : {}), seq: row.eventSeq })}\n\n`);
+          cursor = row.eventSeq;
         }
         if (!released && !res.destroyed && (view.queueRevision !== queueRevision || view.aclRevision !== aclRevision)) {
           const access = await service.access(identity, conversationId, 'read');
@@ -198,9 +210,10 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         if (!released && !res.destroyed) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} entry.close(); }
       } finally { polling = false; }
     };
-    const timer = setInterval(() => { void poll(); }, 250); timer.unref?.();
+    const poll = () => service.readTransports ? service.readTransports.dispatch(pollWork) : pollWork();
+    const timer = setInterval(() => { void poll().catch(() => {}); }, 250); timer.unref?.();
     req.on('aborted', release); res.on('close', release);
-    void poll();
+    void poll().catch(() => {});
     return undefined;
   }
 
@@ -343,5 +356,15 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     }
   }
 
-  return { handle };
+  return { async handle(req, res) {
+    const route = new URL(req.url || '/', 'http://agent.invalid').pathname.replace(/\/+$/, '') || '/';
+    const history = req.method === 'GET' && /^\/v1\/conversations(?:\/[^/]+(?:\/events)?)?$/.test(route);
+    const messageRead = !!service.runEvents && req.method === 'POST' && /^\/v1\/conversations\/[^/]+\/messages$/.test(route);
+    if (service.accountMode !== true || (!history && !messageRead)) return handle(req, res);
+    if (!service.readTransports) return sendJson(res, 503, { ok: false, code: 'read-control-unavailable' }, CORS);
+    try { return await service.readTransports.run(req, res, () => handle(req, res)); }
+    catch (error) { if (!res.destroyed && !res.headersSent) return sendJson(res, error.status ?? 503,
+      { ok: false, code: error.code ?? 'read-control-unavailable' }, CORS);
+      res.destroy(); }
+  } };
 }

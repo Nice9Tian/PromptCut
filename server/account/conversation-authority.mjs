@@ -51,6 +51,24 @@ function publicConversation(conversation, creatorReadOnly = false) {
     updatedAt: conversation.updatedAt, creatorReadOnly };
 }
 
+// Used inside the read-inventory transaction, after a real account/delegation
+// verification. A list has project scope; an individual read keeps the exact
+// conversation and creator's existing read-only exception.
+export function conversationReadInState(state, principal, { projectId, conversationId, action, after = 0 }) {
+  const { creator } = projectAccessInState(state, principal, projectId, 'read');
+  if (action === 'list' && conversationId === null) return Object.values(rows(state)[projectId] ?? {})
+    .filter(c => c.visibility === 'shared' || c.ownerAccountId === principal.accountId || creator)
+    .map(c => publicConversation(c, c.visibility === 'private' && creator && c.ownerAccountId !== principal.accountId));
+  if (!['get', 'access'].includes(action) || !idOK(conversationId) || !Number.isSafeInteger(after) || after < 0)
+    fail(400, 'read-request-invalid');
+  const { conversation, creatorReadOnly } = conversationAccessInState(state, principal, projectId, conversationId, 'read');
+  if (action === 'access') return { allowed: true, accountId: principal.accountId, projectId,
+    aclRevision: conversation.aclRevision, visibility: conversation.visibility,
+    ownerAccountId: conversation.ownerAccountId, creatorReadOnly };
+  return { ...publicConversation(conversation, creatorReadOnly),
+    messages: conversation.messages.filter(m => m.arrivalSeq > after).map(publicMessage) };
+}
+
 /** Synchronous helpers compose with run-authority inside one openAccountLedger.transaction. */
 export function claimNextInState(state, { projectId, conversationId, runId, expectedMessageId }) {
   if (!idOK(runId) || !idOK(expectedMessageId)) fail(400, 'invalid-run');

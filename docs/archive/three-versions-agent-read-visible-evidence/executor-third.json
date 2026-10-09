@@ -1,0 +1,110 @@
+{
+  "source": "f55677813bf97b3d901dabc77612a8c4fa245ece",
+  "layer": "actual-service-sse-react-visible-controlled-driver",
+  "completed": true,
+  "checks": [
+    {
+      "name": "exclusive-four-ports-empty",
+      "ok": true
+    },
+    {
+      "name": "actual-post-202-and-sse-200",
+      "ok": true
+    },
+    {
+      "name": "one-accepted-user-and-bound-assistant",
+      "ok": true
+    },
+    {
+      "name": "actual-durable-text-sender-and-tool-visible",
+      "ok": true
+    },
+    {
+      "name": "terminal-remains-pending-not-success",
+      "ok": true
+    },
+    {
+      "name": "reopen-from-durable-cursor-no-duplicate",
+      "ok": true
+    },
+    {
+      "name": "controlled-model-tool-once-and-doc-fifo-retained",
+      "ok": true
+    }
+  ],
+  "cleanup": {
+    "browser": true,
+    "vite": true,
+    "fixture": {
+      "closed": true,
+      "sockets": 0,
+      "ports": [
+        6640,
+        6641,
+        6642
+      ]
+    },
+    "listening": []
+  },
+  "chromePid": 4380,
+  "first": {
+    "userCount": 1,
+    "assistantCount": 1,
+    "textVisible": true,
+    "senderVisible": true,
+    "toolVisible": true,
+    "pending": true,
+    "cursor": 6,
+    "error": false
+  },
+  "replay": {
+    "userCount": 1,
+    "assistantCount": 1,
+    "textVisible": true,
+    "senderVisible": true,
+    "toolVisible": true,
+    "pending": true,
+    "cursor": 6,
+    "error": false
+  },
+  "eventSeq": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "sourceAfter": "f55677813bf97b3d901dabc77612a8c4fa245ece",
+  "network": [
+    {
+      "pathname": "events",
+      "status": 204
+    },
+    {
+      "pathname": "messages",
+      "status": 204
+    },
+    {
+      "pathname": "messages",
+      "status": 202
+    },
+    {
+      "pathname": "events",
+      "status": 204
+    },
+    {
+      "pathname": "events",
+      "status": 200
+    },
+    {
+      "pathname": "events",
+      "status": 204
+    },
+    {
+      "pathname": "events",
+      "status": 200
+    }
+  ],
+  "wallMs": 3326
+}

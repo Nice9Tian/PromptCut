@@ -1,0 +1,15 @@
+
+> promptcut@0.7.17 test
+> node scripts/test-suite.mjs server/test/account-executor-assembly-mtls.test.mjs server/test/account-executor-visible-wire.test.mjs
+
+✔ one registered RAM instance assembles real mTLS run/read clients; POST mirrors doc original and SSE replays durable eventSeq (1152.7665ms)
+✔ actual account HTTP SSE projects accepted user scope from FULL doc-bound row before run output (1312.7416ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1426.2216
+✓ npm test 最终结果：零失败

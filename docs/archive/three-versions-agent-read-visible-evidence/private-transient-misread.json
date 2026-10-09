@@ -1,0 +1,2403 @@
+{
+  "sourceBefore": "72b80d4ed2d17f9ffbf8d7a5f947661273168571",
+  "checks": [
+    {
+      "name": "port-6620-available",
+      "pass": true
+    },
+    {
+      "name": "port-6621-available",
+      "pass": true
+    },
+    {
+      "name": "port-6622-available",
+      "pass": true
+    },
+    {
+      "name": "port-6623-available",
+      "pass": true
+    },
+    {
+      "name": "port-6624-available",
+      "pass": true
+    },
+    {
+      "name": "port-6625-available",
+      "pass": true
+    },
+    {
+      "name": "port-6626-available",
+      "pass": true
+    },
+    {
+      "name": "port-6627-available",
+      "pass": true
+    },
+    {
+      "name": "port-6628-available",
+      "pass": true
+    },
+    {
+      "name": "port-6629-available",
+      "pass": true
+    },
+    {
+      "name": "creator-project-copy-toast-present",
+      "pass": true
+    },
+    {
+      "name": "owner-project-copy-toast-present",
+      "pass": true
+    },
+    {
+      "name": "member-project-copy-toast-present",
+      "pass": true
+    },
+    {
+      "name": "owner-conversation-id-shape",
+      "pass": true
+    },
+    {
+      "name": "history-button-present",
+      "pass": true
+    },
+    {
+      "name": "history-button-present",
+      "pass": true
+    },
+    {
+      "name": "ordinary-member-real-shared-events-readable",
+      "pass": true
+    },
+    {
+      "name": "creator-can-read-shared-conversation",
+      "pass": true
+    },
+    {
+      "name": "ordinary-member-real-shared-history-readable",
+      "pass": true
+    },
+    {
+      "name": "private-switch-real-fence-confirmed",
+      "pass": true
+    },
+    {
+      "name": "private-switch-real-http-200",
+      "pass": true
+    },
+    {
+      "name": "ordinary-member-history-refresh-real-http-200",
+      "pass": true
+    },
+    {
+      "name": "ordinary-member-old-read-closed-after-private",
+      "pass": false
+    },
+    {
+      "name": "ordinary-member-current-private-message-cleared",
+      "pass": true
+    },
+    {
+      "name": "ordinary-member-private-history-refresh-real-http-200",
+      "pass": false
+    },
+    {
+      "name": "ordinary-member-private-history-server-omits-id",
+      "pass": false
+    },
+    {
+      "name": "ordinary-member-private-history-ui-omits-id",
+      "pass": true
+    }
+  ],
+  "network": [
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/info",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/info",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/info",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/admin",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations/:conversationId/messages",
+      "status": 202,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/info",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations/:conversationId/visibility",
+      "status": 200,
+      "method": "POST",
+      "attempt": 1,
+      "stableRequestIdMatch": true
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations",
+      "status": 200,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "method": "GET"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/members",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "owner",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "member",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    },
+    {
+      "page": "creator",
+      "path": "/hosted/shared/account/session",
+      "status": 200,
+      "method": "POST"
+    }
+  ],
+  "eventReads": [
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 403,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "owner",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200,
+      "lifecycle": "open"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "creator",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200,
+      "lifecycle": "open"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 200,
+      "lifecycle": "failed"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    },
+    {
+      "page": "member",
+      "path": "/agent/v1/conversations/:conversationId/events",
+      "status": 502,
+      "lifecycle": "finished"
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "01-creator-shared-no-toggle",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\01-creator-shared-no-toggle.png"
+    },
+    {
+      "name": "02-member-shared-readable",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\02-member-shared-readable.png"
+    },
+    {
+      "name": "03-owner-shared-toggle",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\03-owner-shared-toggle.png"
+    },
+    {
+      "name": "04-owner-private-confirmed",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\04-owner-private-confirmed.png"
+    },
+    {
+      "name": "06-member-after-private-history-refresh",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\06-member-after-private-history-refresh.png"
+    },
+    {
+      "name": "failure-0",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\failure-0.png"
+    },
+    {
+      "name": "failure-1",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\failure-1.png"
+    },
+    {
+      "name": "failure-2",
+      "file": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\failure-2.png"
+    }
+  ],
+  "pageErrors": [],
+  "pageSteps": [
+    {
+      "page": "creator",
+      "step": "login:navigate",
+      "pathname": "blank",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 0,
+      "bodyChildCount": 0,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "login:form-loaded",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "login:account-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "login:navigate",
+      "pathname": "blank",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 0,
+      "bodyChildCount": 0,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "login:form-loaded",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "login:account-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "member",
+      "step": "login:navigate",
+      "pathname": "blank",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 0,
+      "bodyChildCount": 0,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "member",
+      "step": "login:form-loaded",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "member",
+      "step": "login:account-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:wait-list-row",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:list-row-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:before-real-click",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:clicked-wait-cloud-copy",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "creator",
+      "step": "open-project:cloud-copy-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "creator",
+      "step": "open-project:consent-dialog-visible",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "creator",
+      "step": "open-project:consent-accepted",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "creator",
+      "step": "open-project:share-toast-close-visible",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "creator",
+      "step": "open-project:share-toast-dismissed",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "open-project:wait-list-row",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "open-project:list-row-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "open-project:before-real-click",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "open-project:clicked-wait-cloud-copy",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "owner",
+      "step": "open-project:cloud-copy-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "open-project:consent-dialog-visible",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "open-project:consent-accepted",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "open-project:share-toast-close-visible",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "open-project:share-toast-dismissed",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "member",
+      "step": "open-project:wait-list-row",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "member",
+      "step": "open-project:list-row-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "member",
+      "step": "open-project:before-real-click",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "member",
+      "step": "open-project:clicked-wait-cloud-copy",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": true,
+      "accountNamePresent": true,
+      "projectListPresent": true,
+      "projectRowCount": 1,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": false
+    },
+    {
+      "page": "member",
+      "step": "open-project:cloud-copy-ready",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "member",
+      "step": "open-project:consent-dialog-visible",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": true,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "member",
+      "step": "open-project:consent-accepted",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "member",
+      "step": "open-project:share-toast-close-visible",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 2,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": true,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "member",
+      "step": "open-project:share-toast-dismissed",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "creator",
+      "step": "failure-snapshot:ordinary-member-private-history-hidden",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "owner",
+      "step": "failure-snapshot:ordinary-member-private-history-hidden",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    },
+    {
+      "page": "member",
+      "step": "failure-snapshot:ordinary-member-private-history-hidden",
+      "pathname": "/editor/",
+      "readyState": "complete",
+      "rootPresent": "[敏感字段已隐藏]",
+      "rootChildCount": 1,
+      "bodyChildCount": 1,
+      "loginFormPresent": false,
+      "accountNamePresent": false,
+      "projectListPresent": false,
+      "projectRowCount": 0,
+      "projectCopyPresent": false,
+      "consentDialogPresent": false,
+      "cloudPanelPresent": true
+    }
+  ],
+  "completed": false,
+  "fence": "confirmed-by-real-service",
+  "cleanup": {
+    "fixture": {
+      "closed": true,
+      "childClosed": true,
+      "closeFailureCount": 0,
+      "evidenceDir": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-control-account-path-uUmAiC"
+    },
+    "portsFree": {
+      "6620": true,
+      "6621": true,
+      "6622": true,
+      "6623": true,
+      "6624": true,
+      "6625": true,
+      "6626": true,
+      "6627": true,
+      "6628": true,
+      "6629": true
+    },
+    "allPortsFree": true,
+    "fixtureAndPortsClosed": true
+  },
+  "fixtureEvidenceDir": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-control-account-path-uUmAiC",
+  "browserProfileEvidenceDir": "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conversation-read-close-72b80d4e-once\\chrome-profile",
+  "failure": {
+    "phase": "ordinary-member-private-history-hidden",
+    "detail": "refresh-member-history-after-real-private-confirmation",
+    "code": "probe-check-failed"
+  },
+  "wallMs": 83545,
+  "sourceAfter": "72b80d4ed2d17f9ffbf8d7a5f947661273168571"
+}

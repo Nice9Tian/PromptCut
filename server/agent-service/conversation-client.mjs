@@ -12,7 +12,7 @@ export function createConversationClient({ origin, tls, serverFingerprint256, ti
   const agent = new https.Agent({ key: tls.key, cert: tls.cert, ca: tls.ca, rejectUnauthorized: true, minVersion: 'TLSv1.3',
     checkServerIdentity(host, cert) { return checkServerIdentity(host, cert) ||
       (certificateFingerprint(cert.fingerprint256) !== pin ? accountError(503, 'conversation-server-certificate') : undefined); } });
-  const active = new Set(); let closed = false;
+  const active = new Set(); let closed = false, readControl = null;
   const request = (action, input) => new Promise((resolve, reject) => {
     if (closed || !['identity', 'access', 'list', 'get', 'send', 'switch', 'stop', 'rename'].includes(action))
       return reject(accountError(503, 'conversation-client-unavailable'));
@@ -38,8 +38,15 @@ export function createConversationClient({ origin, tls, serverFingerprint256, ti
     req.end(body);
   });
   return {
-    identity: input => request('identity', input), access: input => request('access', input),
-    list: input => request('list', input), get: input => request('get', input),
+    useReadControl(value) { if (readControl || typeof value?.read !== 'function') throw accountError(503, 'read-control-configuration'); readControl = value; },
+    get readTransports() { return readControl?.transports ?? null; },
+    identity: input => request('identity', input),
+    access: input => readControl ? readControl.read({ delegation: input.delegation, projectId: input.projectId,
+      conversationId: input.conversationId, action: 'access', after: 0 }) : request('access', input),
+    list: input => readControl ? readControl.read({ delegation: input.delegation, projectId: input.projectId,
+      conversationId: null, action: 'list', after: 0 }) : request('list', input),
+    get: input => readControl ? readControl.read({ delegation: input.delegation, projectId: input.projectId,
+      conversationId: input.conversationId, action: 'get', after: input.after ?? 0 }) : request('get', input),
     send: input => request('send', input), switchVisibility: input => request('switch', input),
     stop: input => request('stop', input), rename: input => request('rename', input),
     close() { closed = true; for (const req of active) req.destroy(); agent.destroy(); },

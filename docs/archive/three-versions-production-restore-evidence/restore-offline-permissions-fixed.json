@@ -1,0 +1,67 @@
+{
+  "backup": "/root/promptcut-v2-consistent-20261009-b9fb4c8d8e5c",
+  "restore": "/var/tmp/pc-v2-restore-20261009-eedd75ae50b1",
+  "filesMatched": 18,
+  "dataBytes": 308944,
+  "offline": {
+    "databases": [
+      {
+        "role": "account",
+        "schema": 2,
+        "integrity": "ok"
+      },
+      {
+        "role": "doc",
+        "schema": 2,
+        "integrity": "ok"
+      },
+      {
+        "role": "operations",
+        "schema": 2,
+        "integrity": "ok"
+      }
+    ],
+    "accounts": 6,
+    "projectIds": [
+      "sp_h7ywbgvps7ktly6t7lvbmsnmwe",
+      "sp_knvubijdlvsl6onhrvgjykrx5n"
+    ],
+    "projects": [
+      {
+        "projectId": "sp_h7ywbgvps7ktly6t7lvbmsnmwe",
+        "revision": 1,
+        "bodyHash": "f56b46524b26021345276a039f7fdc754cf6681a9ec8dad084b8bf6878c75940"
+      },
+      {
+        "projectId": "sp_knvubijdlvsl6onhrvgjykrx5n",
+        "revision": 1,
+        "bodyHash": "10eb77fba4a261a5c6f55081c351ad09b3d8cac122ba34639176e71ace6ff098"
+      }
+    ]
+  },
+  "runtimeVerified": false,
+  "ok": false,
+  "deletedActualData": false,
+  "productionBefore": {
+    "promptcut-account-v2": {
+      "MainPID": "279515",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "promptcut-doc-v2": {
+      "MainPID": "279516",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "promptcut-asset-v2": {
+      "MainPID": "279517",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "nginx": {
+      "MainPID": "9395",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    }
+  }
+}

@@ -4,13 +4,21 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { startHostedCombo, hostedPaths } from '../hosted/combo.mjs';
 import { addServiceKey, generateServiceKeyPair } from '../auth/service-identity.mjs';
 import { createAssetMtlsTransport } from '../hosted/asset-doc-client.mjs';
-import { openAccountLedger, digestOf } from '../account/ledger.mjs';
+import { openAccountLedger, digestOf, canonicalJson } from '../account/ledger.mjs';
+import { instanceProofPayload, instanceTlsBinding } from '../account/agent-instance-authority.mjs';
+import { INSTANCE_PROOF_HEADER } from '../account/agent-instance-internal.mjs';
+import { CONVERSATION_CONTROL_ROOT, conversationControlOperations, conversationControlScope } from '../account/agent-read-control.mjs';
+import { createConversationClient } from '../agent-service/conversation-client.mjs';
+import { createConversationControlClient } from '../agent-service/conversation-control-client.mjs';
+import { createAccountConversationService } from '../agent/service/conversation-policy.mjs';
+import { createAgentHttp } from '../agent-service/http.mjs';
 import { canonicalReadRecord } from '../account/run-authority.mjs';
 import { instanceHttpRequest, registerHttpInstance } from './fixtures/agent-instance-request.mjs';
 import { instanceWsClient, instanceDataHttpRequest } from './fixtures/agent-instance-data.mjs';
@@ -43,12 +51,16 @@ test('v2 required refuses missing order before opening any cloud entry', async (
 for (const agentConfigured of [false, true]) test(`actual provider/order → central doc → independent asset → two pages${agentConfigured ? ' + real conversation/run factories' : ''}: durable op, readonly selection, restart and revoked resume`, actual, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-doc-assembly-central-'));
   const pki = assetWiringPki(dir), pair = { account: generateKeyPairSync('ed25519'), doc: generateKeyPairSync('ed25519') };
-  let provider, accountServer, combo, child, childClosed, childLog = '', closed = false, agentTransport;
+  let provider, accountServer, combo, child, childClosed, childLog = '', closed = false, agentTransport,
+    readControl, readClient, readServer;
+  const closeRead = async () => { await readControl?.close(); readControl = null; readClient?.close();
+    if (readServer?.listening) await closeServer(readServer); };
   const clients = [], dataClients = [];
   const closePages = async () => { for (const client of clients) client.close(); await Promise.all(clients.map(client => client.closed)); clients.length = 0; };
   t.after(async () => {
     await closePages();
     for (const client of dataClients) client.destroy(); await Promise.all(dataClients.map(client => client.ended));
+    await closeRead();
     agentTransport?.close();
     if (child && child.exitCode === null && child.signalCode === null) child.kill();
     await childClosed;
@@ -165,6 +177,29 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     assert.equal(Object.keys(pending.conversations[0]).length, 3);
     await assert.rejects(rpc('runs/admit', { projectId, conversationId: 'actual-conversation', requestId: 'wake' }), /instance-proof-required/);
     const instance = await registerHttpInstance({ port: 5772, tls: pki.wrong, requestId: 'actual-agent-os-a' });
+    const readOptions = { origin: 'https://127.0.0.1:5772', tls: pki.wrong, serverFingerprint256: pki.doc.fingerprint256 };
+    // Share the original real fixture RAM key with its WS/LP proofs; do not
+    // register a substitute instance merely to read conversation metadata.
+    const sameInstance = { registerInstance: async () => Object.fromEntries(['authorityId', 'serviceId', 'serviceKid',
+      'instanceId', 'instanceGeneration'].map(key => [key, instance[key]])),
+      conversationControlProofFor({ socket, path, operation, body }) {
+        const action = Object.keys(conversationControlOperations).find(key => conversationControlOperations[key] === operation);
+        assert.equal(path, CONVERSATION_CONTROL_ROOT + action); conversationControlScope(operation, body);
+        const payload = instanceProofPayload({ ...instance, channelBinding: instanceTlsBinding(socket), method: 'POST', path,
+          operation, requestDigest: digestOf(body) });
+        return { name: INSTANCE_PROOF_HEADER, value: Buffer.from(JSON.stringify({ instanceId: instance.instanceId,
+          instanceGeneration: instance.instanceGeneration,
+          signature: sign(null, Buffer.from(canonicalJson(payload)), instance.privateKey).toString('base64url') })).toString('base64url') };
+      } };
+    readControl = createConversationControlClient({ ...readOptions, runClient: sameInstance,
+      receiptFile: path.join(dir, 'agent-reads.sqlite') });
+    readClient = createConversationClient(readOptions); readClient.useReadControl(readControl);
+    await readControl.start(); await waitFor(() => readControl.describe().connected, 5000, 'actual read control ready');
+    const readApi = createAgentHttp({ service: createAccountConversationService({ conversationClient: readClient }),
+      authenticate: async () => ({ accountMode: true, projectId, accountId: ids[0], userId: ids[0],
+        delegation: sessions[0].agentDelegationTicket }) });
+    readServer = http.createServer((req, res) => { void readApi.handle(req, res); });
+    await new Promise(resolve => readServer.listen(5775, '127.0.0.1', resolve));
     const signedRpc = (action, operation, body, os = instance) => instanceHttpRequest({ port: 5772, tls: pki.wrong,
       path: '/internal/v2/runs/' + action, operation, body, instance: os });
     const admitted = await signedRpc('admit', 'admit', { projectId, conversationId: 'actual-conversation', requestId: 'signed-wake' });
@@ -244,8 +279,11 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
       assert.ok(Object.values(closure.instances).some(record => record.closed?.actualClosed === true &&
         record.closed.connections.some(connection => connection.actualClosed && connection.closedHttp > 0)), 'real LP request/socket close receipt precedes partial evidence');
     } finally { fencedAudit.close(); }
-    const messages = (await rpc('conversations/get', { delegation: sessions[0].agentDelegationTicket, projectId,
-      conversationId: 'actual-conversation' })).result.messages;
+    await assert.rejects(rpc('conversations/get', { delegation: sessions[0].agentDelegationTicket, projectId,
+      conversationId: 'actual-conversation' }), /read-control-required/);
+    const historyRead = await web('http://127.0.0.1:5775', 'GET', '/v1/conversations/actual-conversation');
+    assert.equal(historyRead.status, 200, JSON.stringify(historyRead.body));
+    const messages = historyRead.body.meta.messages;
     assert.equal(messages.find(message => message.messageId !== sent.messageId).queueState, 'cancelled');
     // off then on cannot revive already cancelled messages. HTTP invocation
     // proof does not establish a reusable WS/LP capability or OS-close witness.
@@ -269,7 +307,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   await closePages();
   await assert.rejects(combo.docAssembly.captureSnapshot({ principal: pagePrincipal, projectId,
     selectionInput: { pageId: 'page-b' } }), /selection-page-unavailable/);
-  await combo.close();
+  await closeRead(); await combo.close();
   let priorClosureInstances = [];
   if (agentConfigured) {
     const audit = openAccountLedger({ file: path.join(docDir, 'docservice/account-v2.sqlite'), authorityId: 'assembly-doc' });
