@@ -1,0 +1,34 @@
+[
+  {
+    "source": "ab217f05ad0fc09be354426bb577af4ed952b899",
+    "check": "type",
+    "exitCode": 0,
+    "wallSec": 7.125,
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "log": "pc-worker-root-ab217f05-target-type.log",
+    "tests": null,
+    "pass": null,
+    "fail": null,
+    "cancelled": null,
+    "skipped": null,
+    "durationMs": null
+  },
+  {
+    "source": "ab217f05ad0fc09be354426bb577af4ed952b899",
+    "check": "target",
+    "exitCode": 0,
+    "wallSec": 2.125,
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "log": "pc-worker-root-ab217f05-target-target.log",
+    "tests": 219.0,
+    "pass": 219.0,
+    "fail": 0.0,
+    "cancelled": 0.0,
+    "skipped": 0.0,
+    "durationMs": 1865.804
+  }
+]

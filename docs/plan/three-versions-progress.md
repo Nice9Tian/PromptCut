@@ -15,12 +15,16 @@
 - Agent首次告知、拒绝保留草稿、同意持久保存和换账号隔离已验；双方消息、排队位置、重开原对话恢复已进main。排队没有冒称任务已开始执行。
 - 成员两设备展示、禁入/解禁、回首页保登录、对话共有/私有控制已进main；切私有后其它成员读取断开、正文和附件清除、历史不再可见，创建者的私有只读权限已验。
 - 完整编辑器实际执行文档工具、修改项目，并在另一账号重放同一回复；独立进程关闭实验也已过。本阶段合并`cc730361`已推送；全量5502条零失败（4条原有跳过），实际双编辑器17项、切私有29项、Linux关闭10项全过。模型响应受控，生产任务与结算仍待接。
-- 真实网站改密、重设及在线编辑器读取撤回已验；接受源码`63225318`随本阶段合入。根全量5503条零失败（4条原有跳过）、浏览器46项全过。退出仍等全部服务确认，附件与活跃任务不计通过。
+- 真实网站改密、重设及在线编辑器读取撤回已验；阶段合并`cf56aa13`已推送。根全量5503条零失败（4条原有跳过）、浏览器46项全过。退出仍等全部服务确认，附件与活跃任务不计通过。
 - 声音预览/导出、在线执行用户卡和图卡、渲染服务源码已进main；画面和1800帧基线已核。后台权限、任务素材票据、工具作业记录及工作目录隔离也已收回；未接生产的模块不算整项交付。
 - 三版本迁移设计、接口和用户新决定已对齐；节点ffmpeg、中文字体、Chrome、采集工具及授权Python升级已独立烟测，本机cuda_Vit未改。
 - 旧托管数据和当前生产均已一致备份并实际隔离恢复。当前三个数据库、18个文件、三角色启动及加密素材状态验证通过；每日账号备份已启用并实际校验。未删除实际数据或备份。
 
 各小阶段提交、条数、耗时和原失败见[阶段汇总](../archive/three-versions-main-stages-2026-10-09.md)、[工具与关闭实证](../archive/three-versions-real-runner-scope-2026-10-09.md)、[恢复实证](../archive/three-versions-production-restore-2026-10-09.md)。原逐轮首页已移到[本次首页归档](../archive/three-versions-progress-tools-stage-2026-10-09.md)。
+
+## 本次做了什么
+
+把已验改密路径单独合main，不带未完成的任务进程包；原失败和日志归档。完成的改密分支已清，原工作区复用做缺素材提示，仍只有4个在用。
 
 ## 接下来干什么
 
@@ -74,7 +78,7 @@
 |---|---|---|
 | Sol | 把已验文档工具放进独立任务进程，并接持久消息 | PromptCut/018-cloud-queue-user-path |
 | Astra | 把真实进程关闭接到文档服务和队列结算 | PromptCut/018-browser-doc-read |
-| Luna | 查真实改密网页，验证发起网站保登录、其它网站及编辑器退出 | PromptCut/018-member-native-route |
+| Luna | 做缺素材时的文字提示和一次人声占位，接预览与导出 | PromptCut/018-member-native-route |
 | 主会话 | 分阶段收回、main推送、节点部署和真实网络验证 | PromptCut/018-instance-http-repair-verification |
 
 ## 没做到的与原因
@@ -82,7 +86,7 @@
 - 开工前原普通档探针也失败：独立主机等待超时及两个后续断言；强化探针又遇旧夹具不适配新账号入口，尚未通过，不挡其它已验阶段。
 - 素材异步关闭和两代进程实验已有通过证据，但生产登记与传输还没接齐；保留分支，不用局部测试冒称完成。
 - 改密和重设的文字路径46项已过；全部服务确认、活跃任务停止及真实附件链还没做齐，仍保留总任务。首败与根验收见[改密完整记录](../archive/three-versions-password-user-path-2026-10-09.md)。
-- 新任务进程与结算尚在接线，不能用模型输出结束、连接数为零或父进程退出替代整组资源关闭。生产两模型尚未验。
+- 新任务进程与结算尚在接线：根联合219项和Linux原组关闭12项已过，完整独立进程任务还未跑完。局部证据见[任务进程准备](../archive/three-versions-worker-preparation-2026-10-09.md)；生产两模型尚未验。
 - 公网账号首两轮、成员/对话窗口、读取撤回和完整工具链的首败均保留在归档；修后实际通过的部分才收回。累计5个自建测试账号、两个项目还待准确清理。
 
 最近实际截图：[双方项目列表](../archive/three-versions-user-path/online-created-list.png)、[桌面加入](../archive/three-versions-user-path/desktop-joined-project.png)、[完整编辑器工具](../archive/three-versions-real-runner-scope-evidence/root-real-00-actual-editor.png)、[另一方历史重放](../archive/three-versions-real-runner-scope-evidence/root-real-01-actual-editor.png)、[成员私有正文清除](../archive/three-versions-real-runner-scope-evidence/root-private-06-member-after-private-history-refresh.png)。

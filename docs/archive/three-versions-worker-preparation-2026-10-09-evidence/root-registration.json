@@ -1,0 +1,18 @@
+[
+  {
+    "check": "target",
+    "source": "8c1b1c02263e3e2ad18001e9fcf5cfb02a25fd77",
+    "exitCode": 0,
+    "wallSec": 1.188,
+    "log": "pc-worker-root-8c1b1c02-mtls-target.log",
+    "sourceUnchanged": true,
+    "clean": true,
+    "nativeRetries": 0,
+    "tests": 1.0,
+    "pass": 1.0,
+    "fail": 0.0,
+    "cancelled": 0.0,
+    "skipped": 0.0,
+    "durationMs": 933.0754
+  }
+]
