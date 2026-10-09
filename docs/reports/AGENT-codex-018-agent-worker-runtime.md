@@ -29,3 +29,9 @@ root已将run-client租约更正为真实 `server/agent-service/run-client.mjs`�
 角色进一步澄清：scope `record.instance.clientFingerprint256` 是root-controller→worker identity RPC的客户端证书，不是worker→Doc客户端证书。Doc另配workerServiceKid/workerFingerprint256核真实transport；DER/PEM同key关联两通路，两个pin不得强行相等。worker entry/gateway后包必须独立配置这两个证书身份。
 
 新增纯专属session目标首红4tests/0pass/4fail/82.244ms，exit1，均为尚无scopeIdentity；TMP `pc-worker-session-first.log`保留。没有业务listener，npm原globalguard照旧。本轮修session实现公开两种编码/key摘要、可信rootrecord注册绑定、assignment精确绑定、prepare私有source+完整域/tuple、原Docterminal与intent核验；source失败/变内容/多调用竞争不得签冲突prepare，无closed/counts/rootwitness伪声明。Doc/root真正注册reader装配仍等待Astra模块，此纯目标registration/OS/localdrain是受控adapter，Ed25519签名是真实，不称production链。
+
+固定首块源码 `c2b820ca5d43777716e48cbf392edc74a88ecffa`：5个新session目标与既有scopecore合计50/50，0fail/cancel/skip，304.6914ms（外层约569ms），npm exit0，TMP `pc-worker-session-c2b820ca-target.log`。目标覆盖同RAMkey的两种编码、rootref/摘要/instance混配拒绝、prepare前置/source失败和冲突、Doc签名终态/原intent验证。无业务listener；scope原CLI负向owned子进程等待close，没有运行root或worker服务。
+
+类型第一次命令误用本worktree不存在的 `node_modules/typescript/bin/tsc`，exit1/ERR_MODULE_NOT_FOUND，日志 `pc-worker-session-c2b820ca-type.log`保留；属于启动路径错误，未进入TS检查。改用已有父仓库绝对TypeScript路径 `tsc -b --force` 后exit0/零错误，工具wall7333ms，日志 `pc-worker-session-c2b820ca-type-2.log`。未装依赖/建junction/更改全局环境。session nodecheck/diffcheck0，验证期间源码固定，无重跑target。
+
+当前真实exports为 `scopeIdentity/configureRegistrationScope/bindScope/scopePrepareFor/scopeIntentFor`。configureRegistrationScope必须在PoP注册开始前以可信expected/record调用；bindScope核signedassignment完整target与已注册身份。prepare签名域与intent签名域都用scope digest算法，Doc PoP原canonicalJson算法保持。生产source仍未挂，缺scopePrepareSource拒503，缺Doc新register/bound gate也不执行；这个提交仅可独立审RAM身份与签名块，不是完整worker/gateway/FIFO交付。
