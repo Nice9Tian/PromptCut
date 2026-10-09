@@ -77,3 +77,13 @@ worker-failed/crash自动授权仍缺可信producer：当前scopeControl不能�
 Doc只从配置好的root目录/anchor重读完整历史及失败文件链，不接网络上传证据。bound原grant按真实失败摘要在同ledger写worker-failed fence/forced证书；assigned-unbound按同原ref明确撤销执行门，再走root unassigned-retirement，不伪造已bound任务证书。无Doc assignment只回收槽，不造任务done。任何混scope、替换key/newPID、回退、缺marker/锁或文件未知都保pending。master只能通过既有受认证control通道提示重新核对，不自由指定路径/unit/URL/authority字段。该字段方案是根裁定下的技术实施接口，不称用户逐字段批准。
 
 本块仍只专属纯/SQLite/mTLS6712–6721验证，不跑full/浏览器/模型/节点；真实Linux由根单轮执行。旧Linux11项不是本新增失败观测producer的实测，必须分开记录。
+
+实现精确文件：failure-<epoch>.json协议promptcut.agent-run-scope.failure.v1，字段v/protocol/authorityId/slotId/epoch/recordDigest/assignmentDigest/observed；observed为kind=main-birth-gone、at、bootId、完整serviceInstance/closureScope、scopeActive/scopeExclusive=true、mainPid=0、mainBirthGone=true、populated=0|1，禁止closed字段。failure-publication-<epoch>.json完整绑定anchorDigest/failureDigest及authority/slot/epoch。root observe-failure不会stop、释放scope或改变head phase。首次import后Doc另存failure摘要，删除/换写历史拒绝；reader对原先不存在的failure文件也前后双读，防“head未变”的发布竞态。原Asset默认用途不提供可用失败观测，Agent allowDeadMain用途才可调用，继续原OS/config双核。
+
+〔裁：发现接口窄扩〕修改前master pending只有conversations，无法定位新产生的关闭control。修改后仅scope模式且configured control-only master以原pendingRuns PoP调用时返回{conversations,scopeControls}；scopeControls每项exact {projectId,controlId,runGrantId,assignmentDigest,rootScopeRef}，全部从现ledger revoked grant+原assignment+实例generation/slot/kid核出。旧非scope仍原shape。没有terminal/登录/cap/closed，必须再调用原独立scopeControl；请求body仍必须{}，不能上传failed布尔/证据。根已裁此三级接口，Sol拥有run-client/gateway消费者，不在本叶代改。
+
+Doc内部reconcileScopeFailures只读配置槽、同事务验证原grant/assignment后才能使用私有内部门生成worker-failed control；对外trusted fence普通调用也拒worker-failed，网络没有mint路由。bound原实例失败与assigned-unbound分别消费forced-close/retire，Doc实际transport/operation fence和原rootclosed前都不释放。未知service cgroup已被systemd移除且不能完整核原对象时，当前root adapter仍失败保锁；不把ENOENT或只有主PID消失算完成，这是本窄包明确未自动处理的安全边界。
+
+首目标15/15、0fail/cancel/skip、2178.1115ms（TMP pc-worker-doc-failure-target-1.log），包含实际SQLite importer及原真实TLS，OS失败观察/文件写故障使用明确受控模型。新增marker可见后fsync故障保锁、缺marker/混record/伪closed/live-main拒绝；bound和unbound都在原root关闭模型后才释放，状态failed、其它queued保持。没有拿模型证据替真实Linux。
+
+为根准备同原两槽CLI新增--crash-observation：实际父gone/子FD+TCP/pop1后，真实root observe-failure耐久发布并由实际reader保持bound/notclosed；再走原forced收口、B不中断。原--forced和normal保持，仍受控Doc issuer，无节点执行；需要根另一次固定blob Linux取证，旧11项不能套新producer。所有输出仍/run可信目录。

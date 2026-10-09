@@ -338,7 +338,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     } });
   const readControlsHandler = createAgentReadControlHandler({ control: readControl, resolveServicePrincipal, instanceAuthority });
   const runsHandler = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: pin,
-    masterFingerprint256: masterPin, requirePendingProof: Boolean(scopeAuthority), resolveServicePrincipal,
+    masterFingerprint256: masterPin, requirePendingProof: Boolean(scopeAuthority), includeScopeControls: Boolean(scopeAuthority), resolveServicePrincipal,
     authenticateInvocation({ req, servicePrincipal, body, operation }) {
       const cap = instanceAuthority.authenticate({ servicePrincipal, method: req.method,
         path: new URL(req.url, 'https://internal.invalid').pathname, operation, request: body, proof: instanceRequestProof(req) });
@@ -354,6 +354,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       if (scopeAuthority) {
         instanceAuthority.verifyInState(ledger.read(), servicePrincipal, { operation: 'pendingRuns', input: {} });
         if (ledger.read().agentInstancesV2?.[servicePrincipal.instanceId]?.purpose !== 'control-only') fail(403, 'instance-purpose-forbidden');
+        for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
         await runAuthority.reconcileScopeClosures();
       }
       const state = ledger.read(), rows = [];
@@ -362,12 +363,15 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         for (const conversation of Object.values(group)) if (conversation.messages.some(message => message.queueState === 'queued'))
           rows.push({ projectId, conversationId: conversation.id, queueRevision: conversation.queueRevision });
       }
-      return { conversations: rows };
+      return { conversations: rows, ...(scopeAuthority ? { scopeControls: runAuthority.listScopeControls({ servicePrincipal }) } : {}) };
     } });
   return { conversations, readControl, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
     async handleInternal(req, res) { return await instancesHandler(req, res) || await readControlsHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control);
-      if (scopeAuthority) await runAuthority.reconcileScopeClosures(); },
+      if (scopeAuthority) {
+        for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
+        await runAuthority.reconcileScopeClosures();
+      } },
     async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };

@@ -52,6 +52,15 @@ export function scopeModel(slotId = 'slot-a') {
         async close() { calls.push('close-fd'); },
       };
     },
+    async pinRetired(record) {
+      const pinned = await io.pinPrevious(record);
+      return { ...pinned, async observeFailure() {
+        calls.push('observe-failure');
+        if (faults.mainGone !== true) throw Error('main-still-live');
+        return { kind: 'main-birth-gone', at: 100, bootId, serviceInstance: clone(record.instance), closureScope: clone(record.closureScope),
+          scopeActive: true, scopeExclusive: true, mainPid: 0, mainBirthGone: true, populated: faults.failurePopulated ?? 1 };
+      } };
+    },
   };
   const run = (mode, args = {}) => publishAgentScope({ expected, mode, io,
     configuredAnchorDigest: files.has('anchor.json') ? digestOf(files.get('anchor.json')) : null, ...args });

@@ -788,6 +788,17 @@ export async function createRootScopeRuntimeV2(config, {
           await exclusiveScope(scope, true);
         };
         return {
+          async observeFailure() {
+            if (!allowDeadMain || identityPath !== '/internal/v2/agent/run-scope/identity') fail('publisher-failure-purpose');
+            await assertPrevious();
+            if (Number((await configuration(reservation)).unit.MainPID) !== 0) fail('publisher-main-still-live');
+            const populated = await empty() ? 0 : 1;
+            await assertPrevious();
+            if (Number((await configuration(reservation)).unit.MainPID) !== 0) fail('publisher-main-still-live');
+            return { kind: 'main-birth-gone', at: Date.now(), bootId: old.instance.bootId,
+              serviceInstance: old.instance, closureScope: scope, scopeActive: true, scopeExclusive: true,
+              mainPid: 0, mainBirthGone: true, populated };
+          },
           async stopAndObserve() {
             await assertPrevious();
             const stopping = exec(['stop', expected.unit, '--no-ask-password']).then(() => true, () => false);

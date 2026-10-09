@@ -94,7 +94,16 @@ test('real mTLS parser separates master/worker, signs full assignment/read reque
   const provider = createRunAuthority({ ...f.options, instanceAuthority: instances });
   const registration = createAgentInstanceInternalHandler({ instanceAuthority: instances, agentFingerprint256: workerPin, masterFingerprint256: masterPin, resolveServicePrincipal });
   const runs = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: workerPin, masterFingerprint256: masterPin,
-    requirePendingProof: true, resolveServicePrincipal,
+    requirePendingProof: true, includeScopeControls: true, resolveServicePrincipal,
+    async listPendingRuns({ servicePrincipal }) {
+      // Test wiring calls the same internal importer/getter as the assembly;
+      // request bodies cannot become failure evidence or a control certificate.
+      instances.verifyInState(f.ledger.read(), servicePrincipal, { operation: 'pendingRuns', input: {} });
+      if (f.ledger.read().agentInstancesV2[servicePrincipal.instanceId]?.purpose !== 'control-only')
+        throw Object.assign(Error('instance-purpose-forbidden'), { status: 403, code: 'instance-purpose-forbidden' });
+      await provider.reconcileScopeFailures();
+      return { conversations: [], scopeControls: provider.listScopeControls({ servicePrincipal }) };
+    },
     principalForCheck({ projectId: requestedProject, runGrantId, servicePrincipal }) {
       const grant = f.ledger.read().runGrantsV2[runGrantId];
       assert.equal(grant.projectId, requestedProject);
@@ -120,6 +129,9 @@ test('real mTLS parser separates master/worker, signs full assignment/read reque
     const worker = { ...f.registration, privateKey: f.m.workerKey.privateKey };
     const call = (tls, instance, route, operation, body, extra = {}) => instanceHttpRequest({ port: 6712, tls, instance,
       path: `/internal/v2/runs/${route}`, operation, body, ...extra });
+    assert.deepEqual((await call(pki.account, master, 'pending', 'pendingRuns', {})).body.result.scopeControls, []);
+    assert.equal((await call(pki.asset, worker, 'pending', 'pendingRuns', {})).status, 403);
+    assert.equal((await call(pki.account, master, 'pending', 'pendingRuns', { failed: true })).status, 400);
     f.enqueue(); const admitBody = { projectId, conversationId, requestId: 'actual-admit' };
     assert.equal((await call(pki.account, master, 'admit', 'admit', admitBody)).status, 403);
     const admitted = await call(pki.asset, worker, 'admit', 'admit', admitBody);
@@ -172,6 +184,8 @@ test('real mTLS parser separates master/worker, signs full assignment/read reque
     assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, grant.runId);
     const controlId = f.ledger.read().runGrantsV2[grant.runGrantId].closureControlId;
     const controlInput = { ...eventInput, controlId, rootScopeRef: f.ref };
+    const discovered = await call(pki.account, master, 'pending', 'pendingRuns', {});
+    assert.equal(discovered.status, 200); assert.deepEqual(discovered.body.result.scopeControls, [controlInput]);
     assert.equal((await call(pki.account, master, 'scope/control', 'scopeControl', controlInput)).status, 503);
     assert.equal((await call(pki.account, master, 'scope/control', 'scopeControl', { ...controlInput, controlId: 'other' })).status, 403);
     assert.equal((await call(pki.account, master, 'scope/control', 'scopeControl', { ...controlInput, rootScopeRef: { ...f.ref, epoch: 2 } })).status, 403);
@@ -282,6 +296,42 @@ test('required mode persists and cannot reopen without scope module; wrong key/e
     serviceId: 'agent', serviceKid: servicePrincipal.serviceKid, authenticationId: 'x', channelBinding: '4'.repeat(64) }) });
   assert.throws(() => missing.beginRegistration({ ...f.request, rootScopeRef: undefined }), { code: 'instance-scope-unavailable' });
   missing.close();
+});
+
+for (const bound of [false, true]) test(`root failure import ${bound ? 'bound crash' : 'unbound retirement'} preserves FIFO until independent root close`, async t => {
+  const f = await fixture(t); f.enqueue(); f.enqueue('message2');
+  const grant = await f.invoke('admit', { projectId, conversationId, requestId: 'failure-admit' });
+  const binding = Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(k => [k, grant[k]]));
+  const assignment = (await f.invoke('scopeAssignment', { ...binding, requestId: 'assignment' })).assignment;
+  if (bound) await f.m.run('bind', { assignment });
+  assert.throws(() => f.provider.fence({ kind: 'worker-failed', projectId, requestId: 'forged-failure' }), { code: 'invalid-run-fence' });
+  f.m.faults.mainGone = true; await f.m.run('observe-failure');
+  const controls = await f.provider.reconcileScopeFailures(); assert.equal(controls.length, 1);
+  assert.equal(controls[0].kind, 'worker-failed');
+  assert.equal(f.ledger.read().runGrantsV2[grant.runGrantId].state, 'revoked');
+  assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, grant.runId);
+  assert.deepEqual(await f.provider.reconcileScopeClosures(), []);
+  assert.deepEqual(await f.provider.reconcileScopeFailures(), []);
+  const doc = createDocService({ autoTick: false, log: () => {} });
+  const history = openOperationHistory(path.join(f.dir, 'crash-operations.db'));
+  history.createProject(projectId, { id: projectId });
+  const unavailable = () => { throw Error('fixture-has-no-account-operation'); };
+  const operations = createPasswordOrder({ history, account: { get: unavailable }, verifyWitness: unavailable, checkGate: unavailable });
+  try {
+    await f.scope.closeDocControl({ controlId: controls[0].controlId, docInstanceId: 'doc-live', service: doc, operationCoordinator: operations });
+    const terminal = bound ? f.ledger.read().runScopeForcedV1[controls[0].controlId][grant.runGrantId] : {
+      v: 1, protocol: 'promptcut.agent-run-scope.unassigned-retirement.v1', authorityId: f.m.expected.authorityId,
+      slotId: f.m.expected.slotId, epoch: 1, recordDigest: f.ref.recordDigest, reason: 'assignment-failed' };
+    await f.m.run(bound ? 'forced-close' : 'retire', { terminal, intent: null });
+    const results = await f.provider.reconcileScopeClosures();
+    assert.equal(results.length, 1); assert.equal(results[0].terminalOutcome.status, 'failed');
+    assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, null);
+    assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].messages[1].queueState, 'queued');
+    // The imported failure digest is durable: losing/changing historical root
+    // evidence after the import never creates a new permission or clear state.
+    f.m.files.delete('failure-1.json'); f.m.files.delete('failure-publication-1.json');
+    await assert.rejects(f.scope.refresh(f.ref), { code: 'run-scope-failure-history-changed' });
+  } finally { await operations.idle(); history.close(); await doc.close(); }
 });
 
 test('every scoped revoke holds its original FIFO until root closure; shared read credential/member exception remains retained', async t => {
