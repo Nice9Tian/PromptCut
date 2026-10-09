@@ -49,7 +49,7 @@ function validateBody(action, body) {
 /** Only a pinned Agent leaf certificate reaches these routes. All service and
  * actor identities come from trusted callbacks/ledger, never from the body. */
 export function createRunInternalHandler({ runAuthority, agentFingerprint256, resolveServicePrincipal,
-  masterFingerprint256, requirePendingProof = false, authenticateInvocation, principalForCheck, issueRunTicket, listPendingRuns } = {}) {
+  masterFingerprint256, requirePendingProof = false, includeScopeControls = false, authenticateInvocation, principalForCheck, issueRunTicket, listPendingRuns } = {}) {
   const pin = certificateFingerprint(agentFingerprint256);
   const pins = new Set([pin, ...(masterFingerprint256 ? [certificateFingerprint(masterFingerprint256)] : [])]);
   if (!/^[a-f0-9]{64}$/.test(pin) || typeof resolveServicePrincipal !== 'function' ||
@@ -97,10 +97,17 @@ export function createRunInternalHandler({ runAuthority, agentFingerprint256, re
       else if (action === 'pending') {
         if (typeof listPendingRuns !== 'function') fail(503, 'run-pending-unavailable');
         result = await listPendingRuns({ servicePrincipal });
-        if (!result || Object.keys(result).length !== 1 || !Array.isArray(result.conversations) ||
+        if (!result || Object.keys(result).sort().join(',') !== (includeScopeControls ? 'conversations,scopeControls' : 'conversations') || !Array.isArray(result.conversations) ||
             result.conversations.some(row => !row || Object.keys(row).length !== 3 ||
               !reference(row.projectId) || !reference(row.conversationId) ||
               !Number.isSafeInteger(row.queueRevision) || row.queueRevision < 0))
+          fail(503, 'run-pending-protocol');
+        if (includeScopeControls && (!Array.isArray(result.scopeControls) || result.scopeControls.some(row =>
+          !row || Object.keys(row).sort().join(',') !== 'assignmentDigest,controlId,projectId,rootScopeRef,runGrantId' ||
+          ![row.projectId, row.controlId, row.runGrantId].every(reference) || !/^[a-f0-9]{64}$/.test(row.assignmentDigest ?? '') ||
+          !row.rootScopeRef || Object.keys(row.rootScopeRef).sort().join(',') !== 'epoch,recordDigest,rootAuthorityId,slotId' ||
+          ![row.rootScopeRef.rootAuthorityId, row.rootScopeRef.slotId].every(reference) ||
+          !Number.isSafeInteger(row.rootScopeRef.epoch) || row.rootScopeRef.epoch < 1 || !/^[a-f0-9]{64}$/.test(row.rootScopeRef.recordDigest ?? ''))))
           fail(503, 'run-pending-protocol');
       } else {
         if (action === 'check' && typeof principalForCheck !== 'function') fail(503, 'instance-consumer-unavailable');

@@ -8,7 +8,8 @@ import { createRootScopeRuntimeV2, rootRead, procInfo } from './asset-root-regis
 import { loadAgentScopeChain } from '../agent-run-scope-reader.mjs';
 import { failScope, exactScope, sameScope, scopeRuntimeExpected, scopeHead, scopePublication,
   validateAgentScopeExpected, validateAgentScopeRecord, validateAgentScopeReservation, validateAgentScopeAssignment,
-  validateAgentScopeCloseEnvelope, agentScopeCloseKind, validateAgentScopeClosure, validateAgentScopeHistory, scopePublicKey } from '../agent-run-scope-schema.mjs';
+  validateAgentScopeCloseEnvelope, agentScopeCloseKind, validateAgentScopeClosure, validateAgentScopeHistory, scopePublicKey,
+  scopeFailurePublication, validateAgentScopeFailure } from '../agent-run-scope-schema.mjs';
 
 const protocol = name => `promptcut.agent-run-scope.${name}.v1`;
 const emptyEntry = (record, reservation) => ({ record, reservation, assignment: null, terminal: null, intent: null, closure: null,
@@ -68,7 +69,7 @@ function matchIdentity(identity, expected, reservation, tuple) {
  * runAgentScopePublisher below supplies the authenticated Linux root adapter. */
 export async function publishAgentScope({ expected, mode, configuredAnchorDigest = null, assignment = null, terminal = null, intent = null, io }) {
   validateAgentScopeExpected(expected);
-  if (!['initialize', 'start', 'bind', 'close', 'forced-close', 'retire'].includes(mode)) failScope('mode');
+  if (!['initialize', 'start', 'bind', 'close', 'forced-close', 'retire', 'observe-failure'].includes(mode)) failScope('mode');
   const unlock = await io.lock(); let durable = false, pinned;
   try {
     let current = await io.read('current.json'), chain, entry, anchor;
@@ -118,6 +119,7 @@ export async function publishAgentScope({ expected, mode, configuredAnchorDigest
       return await publish('ready');
     }
     if (mode === 'bind') {
+      if (await io.read(`failure-${current.epoch}.json`)) failScope('failed-generation');
       validateAgentScopeAssignment(assignment, expected, entry.record);
       if (current.phase !== 'ready') {
         if (!sameScope(entry.assignment, assignment)) failScope('assignment-conflict');
@@ -128,6 +130,24 @@ export async function publishAgentScope({ expected, mode, configuredAnchorDigest
       if (chain.entries.slice(0, -1).some(e => e.assignment?.target.runGrantId === assignment.target.runGrantId)) failScope('grant-reused');
       await io.write(`assignment-${current.epoch}.json`, assignment, true);
       return await publish('bound');
+    }
+    if (mode === 'observe-failure') {
+      if (!['ready', 'bound'].includes(current.phase) || typeof io.pinRetired !== 'function') failScope('failure-phase');
+      const prior = await io.read(`failure-${current.epoch}.json`), priorMarker = await io.read(`failure-publication-${current.epoch}.json`);
+      if (prior !== null || priorMarker !== null) {
+        validateAgentScopeFailure(prior, priorMarker, expected, entry.record, entry.assignment, configuredAnchorDigest);
+        durable = true; return { head: current, failure: prior, failureDigest: digestOf(prior) };
+      }
+      pinned = await io.pinRetired(entry.record);
+      if (typeof pinned.observeFailure !== 'function') failScope('failure-runtime-unavailable');
+      const failure = { v: 1, protocol: protocol('failure'), authorityId: expected.authorityId, slotId: expected.slotId,
+        epoch: current.epoch, recordDigest: digestOf(entry.record), assignmentDigest: entry.assignment ? digestOf(entry.assignment) : null,
+        observed: await pinned.observeFailure() };
+      const marker = scopeFailurePublication(failure, configuredAnchorDigest);
+      validateAgentScopeFailure(failure, marker, expected, entry.record, entry.assignment, configuredAnchorDigest);
+      await io.write(`failure-${current.epoch}.json`, failure, true);
+      await io.write(`failure-publication-${current.epoch}.json`, marker, true);
+      durable = true; return { head: current, failure, failureDigest: digestOf(failure) };
     }
     validateAgentScopeCloseEnvelope(terminal, intent, expected, entry.record, entry.assignment);
     const kind = agentScopeCloseKind(terminal);
@@ -199,7 +219,7 @@ export async function createAgentScopeRuntime(config) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const [flag, configFile, modeFlag, ...rest] = process.argv.slice(2), mode = modeFlag?.replace(/^--/, '');
-    if (flag !== '--config' || !configFile || !['initialize', 'start', 'bind', 'close', 'forced-close', 'retire'].includes(mode) ||
+    if (flag !== '--config' || !configFile || !['initialize', 'start', 'bind', 'close', 'forced-close', 'retire', 'observe-failure'].includes(mode) ||
         rest.length !== (['bind', 'forced-close', 'retire'].includes(mode) ? 1 : mode === 'close' ? 2 : 0)) failScope('cli');
     const result = await runAgentScopePublisher({ configFile, mode, assignmentFile: mode === 'bind' ? rest[0] : null,
       terminalFile: ['close', 'forced-close', 'retire'].includes(mode) ? rest[0] : null, intentFile: mode === 'close' ? rest[1] : null });

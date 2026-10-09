@@ -1,5 +1,5 @@
 /** ROOT-ONLY, one-shot isolated Linux proof. No production units or models.
- * Usage: node ... --config /run/<fresh>/probe.json --out /run/<fresh>/out [--forced]
+ * Usage: node ... --config /run/<fresh>/probe.json --out /run/<fresh>/out [--forced|--crash-observation]
  * Root precreates TWO fixed service fragments (Restart=no, KillMode=control-group,
  * Delegate=no, TimeoutStopSec=5, no base Slice=), fresh PKI and root configs.
  * probe.json={v:1,issuerPrivateKeyFile,protectedUnits:[four existing units],
@@ -100,7 +100,8 @@ async function peersReady(slot, until) {
       !(await holdsFile(child.pid, slot.worker.holdFile))) fail('probe-child-ownership');
   return { parent: p, child: c };
 }
-export async function runAgentScopeProof({ configFile, out, forced = false }) {
+export async function runAgentScopeProof({ configFile, out, forced = false, observeFailure = false }) {
+  if (observeFailure) forced = true;
   if (process.platform !== 'linux' || process.getuid?.() !== 0 || process.geteuid?.() !== 0) fail('probe-linux-root-required');
   const config = await rootRead(configFile);
   if (!exactScope(config, ['v', 'issuerPrivateKeyFile', 'protectedUnits', 'slots']) || config.v !== 1 || !Array.isArray(config.slots) || config.slots.length !== 2 ||
@@ -108,7 +109,7 @@ export async function runAgentScopeProof({ configFile, out, forced = false }) {
       config.protectedUnits.some(v => typeof v !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.@-]*\.service$/.test(v))) fail('probe-config');
   if ((await listeners()).length) fail('probe-port-in-use');
   const slots = [], startedAt = Date.now(), deadline = startedAt + 30000; let stage = 'preflight';
-  const result = { ok: false, mode: forced ? 'forced-dead-parent' : 'normal', controlledDocIssuer: true, productionExecutor: false, samples: [], checks: [], errors: [], retainedUnits: [] };
+  const result = { ok: false, mode: observeFailure ? 'root-crash-observation' : forced ? 'forced-dead-parent' : 'normal', controlledDocIssuer: true, productionExecutor: false, samples: [], checks: [], errors: [], retainedUnits: [] };
   result.protectedBefore = await protectedSnapshot(config.protectedUnits);
   const key = createPrivateKey(await rootRead(config.issuerPrivateKeyFile, false, true));
   const publicKey = createPublicKey(key).export({ type: 'spki', format: 'der' }).toString('base64');
@@ -209,6 +210,17 @@ export async function runAgentScopeProof({ configFile, out, forced = false }) {
           if (ack.instanceId !== slot.record.instance.instanceId || ack.parentExitRequested !== true) fail('probe-parent-exit-ack');
           while (!negative && !sampleError && Date.now() < deadline) await delay(10);
           if (!negative || sampleError) fail('probe-dead-parent-negative-missing');
+          if (observeFailure) {
+            stage = `${slot.expected.slotId}-failure-publication`;
+            const failure = await publishAgentScope({ expected: slot.expected, mode: 'observe-failure', io: slot.io,
+              configuredAnchorDigest: slot.anchorDigest });
+            const observed = await slot.reader.read({ checkpoint: slot.checkpoint });
+            if (failure.failure.observed.populated !== 1 || observed.checkpoint.head.phase !== 'bound' || observed.closure !== null ||
+                !sameScope(observed.failures[1], failure.failure) || await birthGone(slot.births.child) ||
+                !await holdsFile(slot.births.child.pid, slot.worker.holdFile) || [...slot.observer.peers.values()].every(p => p.closed))
+              fail('probe-failure-observation-not-live');
+            result.checks.push('root-durable-failure-marker-reader-bound-not-closed-child-still-live');
+          }
         }
         stage = `${slot.expected.slotId}-close`;
         await publishAgentScope({ expected: slot.expected, mode: forcedSlot ? 'forced-close' : 'close', io: slot.io, configuredAnchorDigest: slot.anchorDigest, terminal, intent });
@@ -255,7 +267,9 @@ export async function runAgentScopeProof({ configFile, out, forced = false }) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
-    const a = process.argv.slice(2); if (![4, 5].includes(a.length) || a[0] !== '--config' || a[2] !== '--out' || (a.length === 5 && a[4] !== '--forced')) fail('probe-cli');
-    const result = await runAgentScopeProof({ configFile: a[1], out: a[3], forced: a[4] === '--forced' }); process.stdout.write(JSON.stringify(result) + '\n'); if (!result.ok) process.exitCode = 1;
+    const a = process.argv.slice(2); if (![4, 5].includes(a.length) || a[0] !== '--config' || a[2] !== '--out' ||
+      (a.length === 5 && !['--forced', '--crash-observation'].includes(a[4]))) fail('probe-cli');
+    const result = await runAgentScopeProof({ configFile: a[1], out: a[3], forced: a[4] === '--forced', observeFailure: a[4] === '--crash-observation' });
+    process.stdout.write(JSON.stringify(result) + '\n'); if (!result.ok) process.exitCode = 1;
   } catch (e) { process.stderr.write(JSON.stringify({ ok: false, code: e.code ?? 'probe-failed' }) + '\n'); process.exitCode = 1; }
 }

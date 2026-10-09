@@ -126,9 +126,11 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     return old;
   };
 
-  function fenceInState(s, f) {
+  const rootFailureGate = Symbol('verified-root-failure');
+  function fenceInState(s, f, internalGate) {
     tables(s); request(f.requestId);
-    if (!['credential', 'member', 'private', 'stop', 'delete', 'agent-disabled', 'service-revoked', 'instance-revoked'].includes(f.kind)) reject(400, 'invalid-run-fence');
+    if (!['credential', 'member', 'private', 'stop', 'delete', 'agent-disabled', 'service-revoked', 'instance-revoked', 'worker-failed'].includes(f.kind) ||
+        (f.kind === 'worker-failed' && internalGate !== rootFailureGate)) reject(400, 'invalid-run-fence');
     const scope = runControlScope(f), key = runControlId(f), digest = digestOf(f);
     const old = replay(s.runControlsV2, key, digest); if (old) return copy(old);
     const revision = seq(s), retained = [], revoked = [], cancelled = [];
@@ -190,7 +192,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     }
     control.operationFences = [...new Set(affected.map(g => g.projectId))].map(projectId => ({
       id: `${key}:${projectId}`, projectId,
-      kind: ['credential', 'member'].includes(f.kind) ? 'credential' : ['service-revoked', 'instance-revoked'].includes(f.kind) ? 'agent-disabled' : f.kind,
+      kind: ['credential', 'member'].includes(f.kind) ? 'credential' : ['service-revoked', 'instance-revoked', 'worker-failed'].includes(f.kind) ? 'agent-disabled' : f.kind,
       loginIds: [...new Set(affected.filter(g => g.projectId === projectId).map(g => g.loginId))],
       runIds: revoked.map(id => s.runGrantsV2[id]).filter(g => g.projectId === projectId).map(g => g.runId),
       ...(f.runId ? { runId: f.runId } : {}),
@@ -468,6 +470,28 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   }
   const scopePrepare = input => scopeTerminalCall(input, 'scopePrepare');
   const scopeTerminal = input => scopeTerminalCall(input, 'scopeTerminal');
+  async function reconcileScopeFailures() {
+    if (!scopeAuthority) return [];
+    const controls = [];
+    for (const initial of Object.values(ledger.read().runGrantsV2 ?? {}).filter(g => g.scopeBinding && ['preparing', 'active', 'retained'].includes(g.state))) {
+      try {
+        await scopeAuthority.refresh(initial.scopeBinding.rootScopeRef);
+        const control = ledger.transaction(s => {
+          reconcile(s); const grant = s.runGrantsV2[initial.runGrantId];
+          if (!['preparing', 'active', 'retained'].includes(grant.state)) return null;
+          const evidence = scopeAuthority.failureInState(s, grant); if (!evidence) return null;
+          return fenceInState(s, { kind: 'worker-failed', projectId: grant.projectId, conversationId: grant.conversationId,
+            runId: grant.runId, instanceId: grant.instanceId, instanceGeneration: grant.instanceGeneration,
+            requestId: `root-failure:${evidence.failureDigest}`, rootFailure: evidence }, rootFailureGate);
+        });
+        if (control) { controls.push(control); onControl(copy(control)); }
+      } catch (error) {
+        if (error.status === 503 || /^(agent-scope|run-scope)-/.test(error.code ?? '')) continue;
+        throw error;
+      }
+    }
+    return controls;
+  }
   async function reconcileScopeClosures() {
     if (!scopeAuthority) return [];
     const completed = [];
@@ -483,7 +507,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
           const forced = g.state === 'revoked';
           if (!forced && c.visibility === 'private' && c.ownerAccountId !== g.accountId) reject(403, 'private-run-forbidden');
           const evidence = scopeAuthority.closedInState(s, g, receipt);
-          const outcome = forced ? { v: 1, status: 'interrupted', reason: g.reason, source: 'doc-fence-root-closed' } : receipt.outcome;
+          const outcome = forced ? { v: 1, status: g.reason === 'worker-failed' ? 'failed' : 'interrupted', reason: g.reason, source: 'doc-fence-root-closed' } : receipt.outcome;
           conversationHooks.finishInState(s, { ...g, state: forced ? 'cancelled' : 'done', reason: outcome.status });
           m.terminalOutcome = copy(outcome); g.terminalOutcome = copy(outcome); g.state = 'finished';
           if (receipt) { receipt.complete = true; receipt.resourceWitnessDigest = evidence.closureWitnessDigest; }
@@ -546,6 +570,15 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       return scopeAuthority.controlSourceInState(s, s.runGrantsV2[input.runGrantId], s.agentInstancesV2[svc.instanceId], input);
     });
   }
+  function listScopeControls({ servicePrincipal }) {
+    if (!scopeAuthority) reject(503, 'run-scope-unavailable');
+    const s = ledger.read(), svc = service(s, servicePrincipal, { operation: 'pendingRuns', input: {} });
+    const master = s.agentInstancesV2[svc.instanceId];
+    if (master?.purpose !== 'control-only') reject(403, 'instance-purpose-forbidden');
+    return Object.values(s.runGrantsV2 ?? {}).filter(g => g.scopeBinding && g.state === 'revoked').map(g => {
+      current(s, g); return scopeAuthority.controlReferenceInState(s, g, master);
+    });
+  }
   function fence(input) {
     const result = ledger.transaction(s => { reconcile(s); return fenceInState(s, input); });
     // Delivery is retriable. Only a separately verified close receipt can complete it.
@@ -575,7 +608,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
       control.receipt = copy(receipt); control.state = 'complete'; return copy(control);
     });
   }
-  return { admit, confirmRead, queryRead, finish, queryFinish, scopeAssignment, scopePrepare, scopeTerminal, reconcileScopeClosures, workerEventSource, scopeControl,
+  return { admit, confirmRead, queryRead, finish, queryFinish, scopeAssignment, scopePrepare, scopeTerminal, reconcileScopeFailures, reconcileScopeClosures, workerEventSource, scopeControl, listScopeControls,
     checkAccess, authorizeQuery, resolveRunPrincipal, applyAccessEvent, fence, fenceInstance, acknowledgeControl,
     hooks: { fenceInState }, synchronize: sync };
 }

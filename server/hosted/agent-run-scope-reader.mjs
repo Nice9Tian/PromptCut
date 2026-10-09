@@ -1,7 +1,7 @@
 /** Read-only root chain source. Does not write a Doc row or finalize a run. */
 import path from 'node:path';
 import { rootDirectory, rootRead } from './deploy/asset-root-registry-publisher.mjs';
-import { failScope, sameScope, validateAgentScopeExpected, validateAgentScopeHistory } from './agent-run-scope-schema.mjs';
+import { failScope, sameScope, validateAgentScopeExpected, validateAgentScopeHistory, validateAgentScopeFailure } from './agent-run-scope-schema.mjs';
 
 export async function loadAgentScopeChain(read, current) {
   if (!Number.isSafeInteger(current?.epoch) || current.epoch < 1 || current.epoch > 100000) failScope('history');
@@ -24,9 +24,23 @@ export async function inspectAgentScopeSource({ read, expected, configuredAnchor
   const current = await read('current.json');
   const chain = await loadAgentScopeChain(read, current);
   const result = validateAgentScopeHistory({ ...chain, expected, configuredAnchorDigest, checkpoint, locked: false });
+  const failures = {}, failureFiles = [];
+  for (const entry of chain.entries) {
+    const epoch = entry.record.epoch, value = await read(`failure-${epoch}.json`), marker = await read(`failure-publication-${epoch}.json`);
+    failureFiles.push({ epoch, value, marker });
+    if (value !== null || marker !== null) {
+      failures[epoch] = validateAgentScopeFailure(value, marker, expected, entry.record, entry.assignment, configuredAnchorDigest);
+    }
+  }
+  // A failure publication intentionally does not change current.phase. Re-read
+  // absent files too, otherwise a complete publication could hide between the
+  // initial read and final head check.
+  for (const { epoch, value, marker } of failureFiles)
+    if (!sameScope(value, await read(`failure-${epoch}.json`)) || !sameScope(marker, await read(`failure-publication-${epoch}.json`)))
+      failScope('source-changed');
   // Lock first and last, head double-read: never import across publication.
   if (!sameScope(current, await read('current.json')) || await read('.publisher.lock')) failScope('source-changed');
-  return result;
+  return { ...result, failures };
 }
 export function createAgentScopeReader({ registryDir, expected, configuredAnchorDigest }) {
   validateAgentScopeExpected(expected);

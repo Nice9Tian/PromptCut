@@ -133,6 +133,26 @@ export function scopePublication(entry, phase, anchor) {
     reservationDigest: digestOf(entry.reservation), terminalDigest: phase === 'closed' ? digestOf(entry.terminal) : null,
     intentDigest: phase === 'closed' && entry.intent ? digestOf(entry.intent) : null };
 }
+/** Root-owned failure observation authorizes only a typed forced fence. It is
+ * intentionally not a closure witness, even when populated was observed zero. */
+export function scopeFailurePublication(failure, anchorDigest) {
+  return { v: 1, protocol: domain('failure-publication'), authorityId: failure.authorityId,
+    slotId: failure.slotId, epoch: failure.epoch, anchorDigest, failureDigest: digestOf(failure) };
+}
+export function validateAgentScopeFailure(value, publication, expected, record, assignment, anchorDigest) {
+  if (!exactScope(value, ['v', 'protocol', 'authorityId', 'slotId', 'epoch', 'recordDigest', 'assignmentDigest', 'observed']) ||
+      value.v !== 1 || value.protocol !== domain('failure') || value.authorityId !== expected.authorityId ||
+      value.slotId !== expected.slotId || value.epoch !== record.epoch || value.recordDigest !== digestOf(record) ||
+      value.assignmentDigest !== (assignment ? digestOf(assignment) : null) || !hash(anchorDigest)) failScope('failure-binding');
+  const o = value.observed;
+  if (!exactScope(o, ['kind', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'mainPid', 'mainBirthGone', 'populated']) ||
+      o.kind !== 'main-birth-gone' || !positive(o.at) || o.bootId !== record.instance.bootId ||
+      !sameScope(o.serviceInstance, record.instance) || !sameScope(o.closureScope, record.closureScope) ||
+      o.scopeActive !== true || o.scopeExclusive !== true || o.mainPid !== 0 || o.mainBirthGone !== true ||
+      ![0, 1].includes(o.populated)) failScope('failure-observation');
+  if (!sameScope(publication, scopeFailurePublication(value, anchorDigest))) failScope('failure-publication');
+  return structuredClone(value);
+}
 export function validateAgentScopeHistory({ expected, anchor, configuredAnchorDigest, entries, current, locked = true, checkpoint = null }) {
   validateAgentScopeExpected(expected);
   if (locked !== false || !hash(configuredAnchorDigest) || digestOf(anchor) !== configuredAnchorDigest ||

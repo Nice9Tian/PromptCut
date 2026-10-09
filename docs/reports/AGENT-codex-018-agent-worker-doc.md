@@ -69,3 +69,25 @@ worker-failed/crash自动授权仍缺可信producer：当前scopeControl不能�
 根提出check/ticket可能缺finish闸的审查疑点，经固定8d源码核实checkWithScope已在同事务拒g.finishReceiptId，resolveRunPrincipal调用此门；疑点未成立，不改产品。独立测试提交6c11caeedfdef58e867b9b1421bb961fbf6b1400补真实TLS前后对照：read/write在finish前200，scope finishReceipt落库后都403 run-revoked；ticket在finish前实际resolve成功抵达未配置issuer的503 run-ticket-unavailable，之后先被provider403拒，未加入伪ticket issuer。workerEventSource同拒；queryFinish仍200/pending，原RAM prepare仍200，terminal因Doc尚未关实际返回503 doc-closure-pending。随后private与原finish竞态仍只在forced rootclosed后结清，结果interrupted、不恢复成功。
 
 该固定测试source首次7/7、0fail/cancel/skip、5541.3325ms，TLS case3780.8672ms，TMP pc-worker-doc-finish-gates-tls-1.log。原7项均保留；6712实际socket0/server不监听、6712–6721结束零LISTEN。仅测试增量，产品类型结果仍8d的0，未因纯测试变更无因重跑所有目标/full。根独立集成继续负责共同基线。
+
+## crash失败观测首包：明确接口与机制〔裁〕
+
+新实现基线b8ca9070fd7fef552105977c42fe11b68a2ba44b，根已合正常三段及Sol消费者。〔三级机制〕修改前：已有root原FD关闭证明，但死worker没有normal intent、master也不能凭body生成forced control，故保持pending。修改后：仅root固定槽CLI新增observe-failure，复用精确Agent用途pinRetired及原OS双tuple核验，要求实际MainPID0/旧birth消失/同boot/Invocation/原cgroup，原scope仍active/exclusive。发布failure-<epoch>.json及failure-publication-<epoch>.json，完整绑定recordDigest/assignmentDigest与root观察；file+dir fsync、完成marker和锁释放俱全才接受。populated=1允许记录失败，绝不叫closed或释放FIFO；正常closed链仍另行完成。
+
+Doc只从配置好的root目录/anchor重读完整历史及失败文件链，不接网络上传证据。bound原grant按真实失败摘要在同ledger写worker-failed fence/forced证书；assigned-unbound按同原ref明确撤销执行门，再走root unassigned-retirement，不伪造已bound任务证书。无Doc assignment只回收槽，不造任务done。任何混scope、替换key/newPID、回退、缺marker/锁或文件未知都保pending。master只能通过既有受认证control通道提示重新核对，不自由指定路径/unit/URL/authority字段。该字段方案是根裁定下的技术实施接口，不称用户逐字段批准。
+
+本块仍只专属纯/SQLite/mTLS6712–6721验证，不跑full/浏览器/模型/节点；真实Linux由根单轮执行。旧Linux11项不是本新增失败观测producer的实测，必须分开记录。
+
+实现精确文件：failure-<epoch>.json协议promptcut.agent-run-scope.failure.v1，字段v/protocol/authorityId/slotId/epoch/recordDigest/assignmentDigest/observed；observed为kind=main-birth-gone、at、bootId、完整serviceInstance/closureScope、scopeActive/scopeExclusive=true、mainPid=0、mainBirthGone=true、populated=0|1，禁止closed字段。failure-publication-<epoch>.json完整绑定anchorDigest/failureDigest及authority/slot/epoch。root observe-failure不会stop、释放scope或改变head phase。首次import后Doc另存failure摘要，删除/换写历史拒绝；reader对原先不存在的failure文件也前后双读，防“head未变”的发布竞态。原Asset默认用途不提供可用失败观测，Agent allowDeadMain用途才可调用，继续原OS/config双核。
+
+〔裁：发现接口窄扩〕修改前master pending只有conversations，无法定位新产生的关闭control。修改后仅scope模式且configured control-only master以原pendingRuns PoP调用时返回{conversations,scopeControls}；scopeControls每项exact {projectId,controlId,runGrantId,assignmentDigest,rootScopeRef}，全部从现ledger revoked grant+原assignment+实例generation/slot/kid核出。旧非scope仍原shape。没有terminal/登录/cap/closed，必须再调用原独立scopeControl；请求body仍必须{}，不能上传failed布尔/证据。根已裁此三级接口，Sol拥有run-client/gateway消费者，不在本叶代改。
+
+Doc内部reconcileScopeFailures只读配置槽、同事务验证原grant/assignment后才能使用私有内部门生成worker-failed control；对外trusted fence普通调用也拒worker-failed，网络没有mint路由。bound原实例失败与assigned-unbound分别消费forced-close/retire，Doc实际transport/operation fence和原rootclosed前都不释放。未知service cgroup已被systemd移除且不能完整核原对象时，当前root adapter仍失败保锁；不把ENOENT或只有主PID消失算完成，这是本窄包明确未自动处理的安全边界。
+
+首目标15/15、0fail/cancel/skip、2178.1115ms（TMP pc-worker-doc-failure-target-1.log），包含实际SQLite importer及原真实TLS，OS失败观察/文件写故障使用明确受控模型。新增marker可见后fsync故障保锁、缺marker/混record/伪closed/live-main拒绝；bound和unbound都在原root关闭模型后才释放，状态failed、其它queued保持。没有拿模型证据替真实Linux。
+
+为根准备同原两槽CLI新增--crash-observation：实际父gone/子FD+TCP/pop1后，真实root observe-failure耐久发布并由实际reader保持bound/notclosed；再走原forced收口、B不中断。原--forced和normal保持，仍受控Doc issuer，无节点执行；需要根另一次固定blob Linux取证，旧11项不能套新producer。所有输出仍/run可信目录。
+
+主体675b2a10d6a0d263d66cb0543a779b9c7c4c3898，收紧完整forced terminal与同ledger原签名对象相等后固定0bf3b7e0。该source首9文件相关175/175、0fail/cancel/skip、2118.8672ms（TMP pc-worker-doc-crash-complete-target-1.log）；类型0/8137ms（TMP pc-worker-doc-crash-type-1.log），probe node --check 0。保留全部Asset专属/旧run成功回归；未跑full。专属scope-doc现9个顶级项，其中2项新增bound crash/unbound retirement，实际TLS仍1个case，包含pending发现：master真实PoP返回完整既有control引用，worker同入口403、body failed:true被strict parser400拒。受控模型中pop1失败只生成Doc fence，原rootclosed前FIFO保持；真实rootclosed后worker-failed结算failed，private竞态继续interrupted。没有修改已过Linux9e原日志，也没有把此新源码称Linux已过。
+
+根收回0bf固定点后独立运行6712窗口；本Agent目标已结束，TLS实际owned socket0/serverfalse，窗口已明确释放。工作区最终仅本报告追加，无source测中改动。后续真实root OS或业务配对的首次结果由根补入，不同层证据分别归档。
