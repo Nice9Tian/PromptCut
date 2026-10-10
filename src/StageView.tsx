@@ -2272,6 +2272,9 @@ export default function StageView() {
         let lastMs = clock.now();
         await clock.advanceToAsync(sec * 1000, {
           step: 1000 / fps,
+          // 从挂载帧一帧不落地推到这一帧:不传的话缺省的 6 秒补跑上限会把起点削掉(那是给可见舞台跳转「只求不卡」用的),
+          // 生成出来的就不是这一帧该有的状态。测量、互换、整场景补跑同样传 Infinity
+          maxCatchUp: Infinity,
           yieldEvery: 1,
           gate: () => {
             const g = backGate(stale);
