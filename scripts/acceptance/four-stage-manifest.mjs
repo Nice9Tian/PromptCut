@@ -72,6 +72,7 @@ export const EXCLUDED_PROBE_FILES = {
   'videodecoder-probe.mjs': 'WebCodecs 可行性探针(历史)',
   'browser-stream-encode-probe.mjs': '浏览器压轨道流的可行性实测(见 render-standard.md),还没接进在线页面的生成流程,接进去后改进整套',
   'stateful-seek-cost-probe.mjs': '有状态的卡在在线后台舞台里跳到第 N 帧要多久的实验(见 render-standard.md),要先出在线构建,只记录耗时',
+  'lottie-renderer-probe.mjs': 'Lottie 用 SVG 画和用画布画的耗时与画面对比实验(见 render-standard.md),只记录',
   'snapshot-diff-apply-probe.mjs': '快照「结构一份加每帧差异」的贴图耗时实验(见 render-standard.md),只记录耗时',
   'audio-determine-probe.mjs': '音频图卡判重方案的前提实测(历史)',
   'svg-url-serialize-probe.mjs': '序列化可行性探针(历史)',
