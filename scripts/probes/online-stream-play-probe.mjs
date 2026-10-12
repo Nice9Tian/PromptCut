@@ -73,6 +73,8 @@ const RUN = Date.now().toString(36) + randomBytes(3).toString('hex');
 const OUT = path.resolve(arg('--out', path.join(ROOT, 'out', 'online-stream-play-probe', RUN)));
 const TMP = path.join(OUT, 'tmp');
 const BASE = Number(arg('--base-port', 7420));
+/** 观看的那个页面报的浏览器(非 Chromium 内核:不当浏览器节点,也就不走本页产流;理由见开页面的那一处) */
+const VIEWER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0';
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4, page: BASE + 5, desk: BASE + 6 };
 const SITE = `http://127.0.0.1:${PORTS.editor}`;
 const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
@@ -452,6 +454,10 @@ try {
   page.on('dialog', (d) => void d.accept());
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 240)));
   await page.setViewport({ width: 1600, height: 900, deviceScaleFactor: 2 });
+  // 这个页面只是观看的一方:报成非 Chromium 内核的浏览器,它就不当浏览器节点(`browserNodeEligibility` 回 not-chromium)。
+  // 「甲二」(本页产流)起,当节点的页面在线上没有能切分的节点时会自己产这两张卡的流、把自己的那两行写进层表;这支探针里产流的是下面那条
+  // 预渲染管线(它不是队列节点),要验的是「页面播管线产的流」,所以不让页面自己产
+  await page.setUserAgent(VIEWER_UA);
   await page.goto(`${SITE}/editor/?editor`, { waitUntil: 'domcontentloaded', timeout: 240_000 });
   await until('编辑器起来(window.__pcStore)', () => page.evaluate(() => !!window.__pcStore), 240_000, 300);
   const entered = await page.evaluate(async (cand, cred) => {

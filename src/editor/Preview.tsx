@@ -76,7 +76,7 @@ import { builtinCardSourceFiles } from "../render/cardSourceFiles.mjs";
 import { builtinSourceExports } from "../cards/builtinSourceExports";
 import { pageL2 } from "../online/l2";
 import { l2CostBackend } from "../online/l2Costs";
-import { createPlanPublisher } from "../online/planPublisher";
+import { createPlanPublisher, type PlanPublisher } from "../online/planPublisher";
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
@@ -1138,6 +1138,8 @@ export function Preview() {
    * 小位图到货后自己重投一次(`snapshotFeed` 的到货回调只在 SSE 那条路上挂)。
    */
   const onlineSourceRef = useRef<OnlineSnapshotSource | null>(null);
+  /** 本页的清单计划发布器(本页产流要问它「这一版计划发出去了没有、有没有节点接」;任务书「甲二」) */
+  const planPublisherRef = useRef<PlanPublisher | null>(null);
   useEffect(() => {
     if (!online) return;
     /*
@@ -1358,6 +1360,11 @@ export function Preview() {
       }),
       projectId: () => (currentSharedLink() ? currentDocProjectId() || null : null),
       onAlive: (resultKey) => onlineSourceRef.current?.markAlive(resultKey),
+      // 本页产流(任务书「甲二」):线上没有能切分的节点接本页的清单计划时,本页自己产单卡流(判据在 `online/pageStreams.ts`)
+      pagePlan: () => planPublisherRef.current?.current() ?? null,
+      planState: () => planPublisherRef.current?.probe() ?? Promise.resolve(null),
+      // 这条流有了(本页产的、先查查到的):不等下一轮轮询,马上重取层表与清单
+      onPageStream: () => onlineSourceRef.current?.refresh(),
     });
   }, [online, lowMem]);
   /*
@@ -1389,6 +1396,7 @@ export function Preview() {
         if (ds) keepConfirmedProject(ds.rev, ds.confirmedProject);
       },
     });
+    planPublisherRef.current = publisher;
     const offNodeReady = subscribeBrowserNodeReady(() => publisher.nodeChanged());
     let link: unknown = null;
     let lastKey = "";
@@ -1413,7 +1421,7 @@ export function Preview() {
     check();
     const w = window as unknown as Record<string, unknown>;
     w.__pcPlanPublisher = () => publisher.debug();
-    return () => { offProbe(); offNodeReady(); window.clearInterval(timer); publisher.dispose(); delete w.__pcPlanPublisher; };
+    return () => { offProbe(); offNodeReady(); window.clearInterval(timer); publisher.dispose(); if (planPublisherRef.current === publisher) planPublisherRef.current = null; delete w.__pcPlanPublisher; };
   }, [online, lowMem]);
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
 

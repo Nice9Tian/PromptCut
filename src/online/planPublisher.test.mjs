@@ -320,3 +320,42 @@ test("C10-PP-ST-04 几个成员同时在线:各自重发的是同一个任务 id
   assert.deepEqual(broken.ids(), [a.ids()[0]], "读不出这一项:按关着发");
   for (const x of [a, b, broken]) x.pub.dispose();
 });
+
+test("C10-PP-PS-01 本页产流要的两样:current() 给最近发成的那一版;probe() 把同一个任务再发布一次、读回包里的状态", async () => {
+  const sent = [];
+  let state = "open";
+  const request = async (msg) => {
+    sent.push(msg);
+    if (msg.type === "publisher.hello") return { type: "publisher.welcome" };
+    if (msg.type === "task.publish") return { type: "task.published", results: msg.tasks.map((t) => ({ id: t.id, created: sent.filter((m) => m.type === "task.publish").length === 1, state })) };
+    return { type: "error" };
+  };
+  const t = timers();
+  let now = 5000;
+  const pub = createPlanPublisher({ request, publisherId: "page-ps", clips: () => ["c2", "c1"], codeVersion: "cv", setTimer: t.setTimer, clearTimer: t.clearTimer, now: () => now });
+  assert.equal(pub.current(), null, "还没发成");
+  assert.equal(await pub.probe(), null, "没发成过:问不到");
+  pub.measured({ projectId: "p1", projectRev: 3 });
+  await t.flush();
+  const cur = pub.current();
+  assert.deepEqual({ ...cur, id: undefined }, { id: undefined, projectId: "p1", projectRev: 3, clips: ["c1", "c2"], at: 5000 });
+  assert.match(cur.id, /^plan:p1@3#clips:/);
+  now = 9000;
+  assert.equal(await pub.probe(), "open");
+  state = "claimed";
+  assert.equal(await pub.probe(), "claimed");
+  state = "done";
+  assert.equal(await pub.probe(), "done");
+  const pubs = sent.filter((m) => m.type === "task.publish");
+  assert.equal(pubs.length, 4);
+  assert.deepEqual(pubs.map((m) => m.tasks[0].id), Array(4).fill(cur.id), "问状态发的是同一个任务(队列只合并,不另起)");
+  assert.equal(pub.current().at, 5000, "发成的时刻不随问状态变");
+  // 连接换了:队列可能重启过,上一版不算数,等重新发成
+  pub.reset();
+  assert.equal(pub.current(), null);
+  assert.equal(await pub.probe(), null);
+  await t.flush();
+  assert.equal(pub.current()?.id, cur.id);
+  pub.dispose();
+  assert.equal(await pub.probe(), null, "销毁后不问");
+});
