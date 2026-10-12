@@ -3,7 +3,7 @@
  * 出处:`docs/plan/render-refactor-task.md`「癸:Lottie 改成 remotion 式」的「要留意的一处」;用户 2026-10-12:「我觉得可以覆盖随机数种子。」
  * 原型在 `src/cards/native/lottie.tsx`(`loadLottie`,两个开关缺省都关)和 `src/kernel/pinEntropy.ts`(`withSeededRandom`)。
  *
- *   node scripts/probes/lottie-seed-probe.mjs [--port 5750] [--assets fixture,adrock,bodymovin,gatin,happy2016,navidad]
+ *   node scripts/probes/lottie-seed-probe.mjs [--port 5750] [--assets fixture,fixtureasync,fixtureip,adrock,bodymovin,gatin,happy2016,navidad]
  *        [--out <目录>]       存结果 result.json,以及对不上的那几帧的 SVG 文本(缺省放系统临时目录)
  *        [--before 7e7ae968]  「开关关着和改之前一样」拿哪个提交的 lottie.tsx 当改之前
  *        [--skip-sweep]       不跑「全长逐帧,开和关比」那一项(最慢)
@@ -19,7 +19,11 @@
  * 「相同」指看得见的文本逐字节相同、并且像素逐个相同。
  *
  * 素材:`fixture` 是 `scripts/probes/fixtures/lottie-seed/expr-layers.json`——手写的测试 Lottie,图层入点 0、10、20、25、30、40,
- * 分别用 random()、只有 wiggle()、seedRandom()+random() 驱动位置、透明度、旋转、缩放,其中两层在嵌套合成里;其余是自带的 5 个。
+ * 分别用 random()、只有 wiggle()、seedRandom()+random() 驱动位置、透明度、旋转、缩放,其中两层在嵌套合成里。
+ * `fixtureasync` 是同一份再挂一个外部数据素材(探针现造,不落盘):播放库要等它取回来才建图层,走的是「装载完成在定时器回调里」那条路。
+ * `fixtureip` 是同一份把起点改到第 22 帧(探针现造):卡片的第 0 帧落在合成的第 22 帧,这时两个只有 wiggle() 的图层已经在场、
+ * 带 random 的那个嵌套图层还没进来——播放库装载完成那一下自己画的第 0 帧,和之后跳回第 0 帧重画的,要是同一个画面。
+ * 其余是自带的 5 个。
  *
  * 三种开法各做一遍:「关」两个开关都关(现状);「种子」只开覆盖随机数种子;「种子+不留旧数」两个都开。每个 N 取这几份画面:
  *   顺推              新开页面,建一份,从第 0 帧一帧一帧推到第 N 帧
@@ -37,10 +41,12 @@
  *   耗时          建一份、跳一帧各要多久(只记录)
  *   为什么还差一点  happy2016 不带表达式,「关」和「种子」下顺推和直接跳仍差几十个像素:分别试清插值缓存、开开关二,看哪个管用(只报告)
  *   真卡片        用 React 挂真的 LottieView:开着时和上面直接跳的那一份相同;关着时和 --before 那个提交的卡片逐帧原文相同
+ *   图            --out 目录里存几张缩到 960×540 的 PNG,给人看一眼画面不是空的:fixture 第 21 帧(关、种子各取顺推和新页新建两份)、happy2016 最后一帧
  *
  * 判定(不满足进 `fails`,退出码 1):
  *   - 「种子+不留旧数」:所有素材、所有 N 的各份画面相同;连建两次相同。
- *   - 「种子」:fixture 所有 N 的各份画面相同;各素材连建两次相同;不带随机表达式的素材全长逐帧和「关」相同(种子不该动它们)。
+ *   - 「种子」:fixture、fixtureasync、fixtureip 所有 N 的各份画面相同;各素材连建两次相同;不带随机表达式的素材全长逐帧和「关」相同(种子不该动它们)。
+ *   - fixtureasync 建实例那一下确实还没装载完(否则这一项没测到它要测的)。
  *   - 开着种子时全页那一串被吃掉 0 个;建好后图层全建了;「真卡片」各条成立;页面没有报错和警告。
  *   「关」下各份画面相同不相同是现状,只报告;自带素材在「种子」下顺推和直接跳相同不相同也只报告(差的那一点归开关二)。耗时只记录。
  */
@@ -67,11 +73,24 @@ const SKIP_SWEEP = flag('--skip-sweep');
 const CATALOG = path.join(ROOT, 'server', 'catalog', 'lottie');
 const FIXTURE = path.join(ROOT, 'scripts', 'probes', 'fixtures', 'lottie-seed', 'expr-layers.json');
 const BUNDLED = ['adrock', 'bodymovin', 'gatin', 'happy2016', 'navidad'];
-const ASSETS = arg('--assets', ['fixture', ...BUNDLED].join(',')).split(',').filter(Boolean);
+const FIXTURES = ['fixture', 'fixtureasync', 'fixtureip'];
+const ASSETS = arg('--assets', [...FIXTURES, ...BUNDLED].join(',')).split(',').filter(Boolean);
+const FIXTURE_PICKS = {
+  fixture: [0, 5, 9, 10, 11, 12.5, 19, 20, 21, 24, 25, 26, 29, 30, 31, 39, 40, 41, 50, 59],
+  fixtureasync: [0, 5, 9, 10, 11, 12.5, 19, 20, 21, 24, 25, 26, 29, 30, 31, 39, 40, 41, 50, 59],
+  // 起点在合成第 22 帧:卡片第 3 帧 = 合成第 25 帧(带 random 的嵌套图层入),第 8 帧 = 第 30 帧,第 18 帧 = 第 40 帧
+  fixtureip: [0, 1, 2, 3, 4, 7, 8, 9, 17, 18, 19, 28, 37],
+};
 const FIXTURE_LAYERS = ['random-pos', 'wiggle-pos', 'seeded-opacity', 'wiggle-opacity', 'precomp', 'inner-wiggle', 'inner-random', 'plain-keyframes'];
 const MODES = ['off', 'seed', 'both'];
 const MODE_NAME = { off: '关', seed: '种子', both: '种子+不留旧数' };
-const dataFile = (name) => (name === 'fixture' ? FIXTURE : path.join(CATALOG, `${name}.json`));
+/** 素材的 JSON 文本。fixtureasync = fixture 再挂一个外部数据素材(t: 3),地址指向探针自己服务的 /lottie-data/footage.json */
+function dataText(name) {
+  if (name === 'fixture') return fs.readFileSync(FIXTURE, 'utf8');
+  if (name === 'fixtureasync') { const d = JSON.parse(fs.readFileSync(FIXTURE, 'utf8')); d.nm = 'lottie-seed-fixture-async'; d.assets.push({ id: 'data_0', nm: 'footage', t: 3, u: '/lottie-data/', p: 'footage.json', e: 0 }); return JSON.stringify(d); }
+  if (name === 'fixtureip') { const d = JSON.parse(fs.readFileSync(FIXTURE, 'utf8')); d.nm = 'lottie-seed-fixture-ip'; d.ip = 22; return JSON.stringify(d); }
+  return fs.readFileSync(path.join(CATALOG, `${name}.json`), 'utf8');
+}
 
 // ── 页面里跑的那一半 ──
 const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
@@ -128,9 +147,10 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
       const box = document.createElement('div'); box.className = 'box'; document.body.appendChild(box);
       const t0 = performance.now();
       const handle = current.loadLottie(box, data, 'contain', MODES[mode]);
+      const asyncLoad = !handle.anim.isLoaded;
       await loaded(handle.anim);
       const id = nextId++; made.set(id, { handle, box });
-      return { id, seed: handle.seed, exact: handle.exact, buildMs: +(performance.now() - t0).toFixed(1), ...countLayers(handle.anim.renderer) };
+      return { id, asyncLoad, seed: handle.seed, exact: handle.exact, buildMs: +(performance.now() - t0).toFixed(1), ...countLayers(handle.anim.renderer) };
     },
     goTo(id, frame) { made.get(id).handle.goTo(frame); },
     jump(id, frame) { const m = made.get(id); m.handle.goTo(frame); return svgText(m.box); },
@@ -177,6 +197,14 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
       for (let i = 0; i < pa.length; i += 4) { const d = Math.max(Math.abs(pa[i] - pb[i]), Math.abs(pa[i + 1] - pb[i + 1]), Math.abs(pa[i + 2] - pb[i + 2]), Math.abs(pa[i + 3] - pb[i + 3])); if (d) { count++; if (d > max) max = d; } }
       return { pixels: count, pct: +(100 * count / (W * H)).toFixed(4), max };
     },
+    /** 把一份 SVG 文本变成缩到 960×540 的 PNG(base64),给人看 */
+    async png(s) {
+      const doc = new DOMParser().parseFromString(s, 'image/svg+xml').documentElement; doc.setAttribute('width', '1920'); doc.setAttribute('height', '1080');
+      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(doc)], { type: 'image/svg+xml' }));
+      const canvas = new OffscreenCanvas(960, 540); const ctx = canvas.getContext('2d');
+      try { const img = new Image(); img.src = url; await img.decode(); ctx.fillStyle = '#111'; ctx.fillRect(0, 0, 960, 540); ctx.drawImage(img, 0, 0, 960, 540); } finally { URL.revokeObjectURL(url); }
+      const buf = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer()); let out = ''; for (let i = 0; i < buf.length; i += 32768) out += String.fromCharCode(...buf.subarray(i, i + 32768)); return btoa(out);
+    },
     // ── 真卡片(React) ──
     root: null, Card: null, params: null, pre: null,
     /** which: 'current' | 'before';burn > 0 时在 Lottie 前面先挂一张挂载时调 burn 次 Math.random 的卡 */
@@ -211,7 +239,8 @@ const plugin = {
       if (url.pathname === '/favicon.ico') { res.statusCode = 204; res.end(); return; }
       if (url.pathname === '/harness') { res.setHeader('content-type', 'text/html; charset=utf-8'); res.end(await server.transformIndexHtml('/harness', HARNESS)); return; }
       const m = /^\/lottie-data\/([a-z0-9]+)\.json$/.exec(url.pathname);
-      if (m && (m[1] === 'fixture' || BUNDLED.includes(m[1]))) { res.setHeader('content-type', 'application/json'); res.end(fs.readFileSync(dataFile(m[1]))); return; }
+      if (m && m[1] === 'footage') { res.setHeader('content-type', 'application/json'); res.end('{"rows":[]}'); return; }
+      if (m && (FIXTURES.includes(m[1]) || BUNDLED.includes(m[1]))) { res.setHeader('content-type', 'application/json'); res.end(dataText(m[1])); return; }
       next();
     });
   },
@@ -280,16 +309,17 @@ try {
   const pixelDiff = (a, b) => call(tool, 'pixelDiff', a, b);
 
   for (const name of ASSETS) {
-    const data = JSON.parse(fs.readFileSync(dataFile(name), 'utf8'));
+    const isFixture = FIXTURES.includes(name);
+    const data = JSON.parse(dataText(name));
     const total = Math.max(1, (Number(data.op) || 0) - (Number(data.ip) || 0));
-    const picks = name === 'fixture'
-      ? [0, 5, 9, 10, 11, 12.5, 19, 20, 21, 24, 25, 26, 29, 30, 31, 39, 40, 41, 50, 59]
+    const picks = isFixture
+      ? FIXTURE_PICKS[name]
       : [...new Set([0, 1, Math.floor(total * 0.13), Math.floor(total * 0.31), Math.floor(total / 2), Math.floor(total * 0.69), total - 2, total - 1])].filter((f) => f >= 0 && f < total);
     const maxPick = Math.max(...picks);
     const frames = []; for (let f = 0; f <= Math.floor(maxPick); f++) { frames.push(f); for (const p of picks) if (!Number.isInteger(p) && Math.floor(p) === f) frames.push(p); }
     const all = Array.from({ length: total }, (_, i) => i);
     const few = [picks[1], picks[Math.floor(picks.length / 2)], picks[picks.length - 1]];
-    const layerNames = name === 'fixture' ? FIXTURE_LAYERS : null;
+    const layerNames = isFixture ? FIXTURE_LAYERS : null;
     const expressions = expressionsOf(data);
     const entry = { total, fr: Number(data.fr) || 30, picks, expressions, modes: {} };
     report.assets[name] = entry;
@@ -350,10 +380,13 @@ try {
         if (row.rawSame) tally.rawSame++; if (row.same) tally.same++;
         perN[n] = row;
       }
+      // 给人看的图
+      const showN = name === 'fixture' && mode !== 'both' ? 21 : name === 'happy2016' && mode === 'both' ? picks[picks.length - 1] : null;
+      if (showN !== null) for (const kind of ['顺推', '新页新建']) fs.writeFileSync(path.join(OUT, `看-${name}-${MODE_NAME[mode]}-第${showN}帧-${kind}.png`), Buffer.from(await call(tool, 'png', shots[kind][showN].r), 'base64'));
       let twiceSame = twice[0].r === twice[1].r;
       if (!twiceSame) twiceSame = twice[0].v === twice[1].v && (await pixelDiff(twice[0].r, twice[1].r)).pixels === 0;
       const result = {
-        seed: first.seed, exact: first.exact, layers: first.layers, built: first.built, buildMs: first.buildMs, frameMs,
+        seed: first.seed, exact: first.exact, asyncLoad: first.asyncLoad, layers: first.layers, built: first.built, buildMs: first.buildMs, frameMs,
         allSame: tally.same === picks.length, rawSameCount: tally.rawSame, sameCount: tally.same, twice: { n: twiceN, same: twiceSame }, perN,
         // 建一份并顺推到最大的 N,全页那一串被吃掉几个(-1:超出参照的 4000 个)
         globalDraws: before0 < 0 || afterSeq < 0 ? -1 : afterSeq - before0 - 1,
@@ -362,9 +395,10 @@ try {
       entry.modes[mode] = result;
       const label = `${name}/${MODE_NAME[mode]}`;
       if (first.built !== first.layers) fail(`${label}:建好后只建了 ${first.built}/${first.layers} 个图层`);
+      if (first.asyncLoad !== (name === 'fixtureasync')) fail(`${label}:建实例那一下${first.asyncLoad ? '还没装载完' : '已经装载完'},和预期相反`);
       const worst = (n) => Object.entries(perN[n].differ).map(([k, d]) => `${k}:${d.pixels.pct}%/${d.pixels.max}${d.layers ? `(${d.layers.join(',')})` : ''}`).join(' ');
       const bad = picks.filter((n) => !perN[n].same);
-      const mustMatch = mode === 'both' || (mode === 'seed' && name === 'fixture');
+      const mustMatch = mode === 'both' || (mode === 'seed' && isFixture);
       if (mustMatch) for (const n of bad) fail(`${label}:第 ${n} 帧和「顺推」不同 —— ${worst(n)}`);
       if (mode !== 'off') {
         if (!twiceSame) fail(`${label}:连建两次,第 ${twiceN} 帧不同`);
@@ -429,28 +463,35 @@ try {
   }
 
   // ── 真卡片 ──
-  const fixtureText = fs.readFileSync(FIXTURE, 'utf8');
-  const inlineParams = { json: fixtureText, src: '', speed: 1, loop: 'no', fit: 'contain' };
+  const inlineParams = { json: dataText('fixture'), src: '', speed: 1, loop: 'no', fit: 'contain' };
   const srcParams = (name) => ({ json: '', src: `/lottie-data/${name}.json`, speed: 1, loop: 'no', fit: 'contain' });
   /** 开着:直接挂在第 N 帧、挂在第 0 帧再一帧帧推到第 N 帧、前面先挂一张取随机数的卡,都要和 loadLottie 直接跳的那一份相同 */
-  const cardOn = async (label, query, wantSwitches, params, rate, ns, wantOf) => {
+  const cardOn = async (label, query, wantSwitches, params, rate, ns, asset, mode) => {
     const rows = [];
     for (const n of ns) {
-      const want = wantOf(n); const row = { n, want };
-      let p = await open(query); row.switches = await call(p, 'switches'); row.direct = sha((await call(p, 'mountCard', 'current', params, n / rate, 0)).v); await p.close();
+      const want = report.assets[asset].modes[mode].perN[n].hash; const row = { n, want };
+      let p = await open(query); row.switches = await call(p, 'switches'); const directShot = await call(p, 'mountCard', 'current', params, n / rate, 0); row.direct = sha(directShot.v); await p.close();
       p = await open(query); let last = await call(p, 'mountCard', 'current', params, 0, 0); for (let f = 1; f <= n; f++) last = await call(p, 'cardFrame', f / rate); row.pushed = sha(last.v); await p.close();
       p = await open(query); row.afterOther = sha((await call(p, 'mountCard', 'current', params, n / rate, 13)).v); await p.close();
       row.same = row.switches.seed === wantSwitches.seed && row.switches.exact === wantSwitches.exact && row.direct === want && row.pushed === want && row.afterOther === want;
-      if (!row.same) fail(`真卡片/${label}:第 ${n} 帧 直接挂 ${row.direct}、推过来 ${row.pushed}、别的卡在前 ${row.afterOther},应为 ${want}(开关读到 ${JSON.stringify(row.switches)})`);
+      if (!row.same) {
+        // 不同在哪:再用 loadLottie 建一份直接跳,和「直接挂」的那一份比
+        p = await open(); const m = await call(p, 'make', asset, mode); const ref = await call(p, 'jump', m.id, n); await p.close();
+        row.diff = { ...describeDiff(ref.v, directShot.v, asset.startsWith('fixture') ? FIXTURE_LAYERS : null), pixels: await pixelDiff(ref.r, directShot.r) };
+        fail(`真卡片/${label}:第 ${n} 帧 直接挂 ${row.direct}、推过来 ${row.pushed}、别的卡在前 ${row.afterOther},应为 ${want}(开关读到 ${JSON.stringify(row.switches)});直接挂和 loadLottie 直接跳比:${row.diff.pixels.pct}% 的像素不同${row.diff.layers ? `,图层 ${row.diff.layers.join(',')}` : ''};${row.diff.a} ‖ ${row.diff.b}`);
+      }
       rows.push(row);
     }
     console.log(`真卡片 / ${label}(地址带 ${query}):第 ${ns.join('、')} 帧,直接挂、从第 0 帧推过来、别的卡在前 —— ${rows.every((r) => r.same) ? '都和 loadLottie 直接跳的那一份相同' : '有不同'}`);
     return rows;
   };
-  if (ASSETS.includes('fixture')) report.card.seed = await cardOn('种子,fixture(内联 JSON)', '?lottieSeed=1', { seed: true, exact: false }, inlineParams, 30, [9, 21, 41, 59], (n) => report.assets.fixture.modes.seed.perN[n].hash);
+  if (ASSETS.includes('fixture')) report.card.seed = await cardOn('种子,fixture(内联 JSON)', '?lottieSeed=1', { seed: true, exact: false }, inlineParams, 30, [9, 21, 41, 59], 'fixture', 'seed');
+  // 装载是异步的那一份:卡片在装载完成之前就调过一次跳帧,播放库装完那一下画的就是那一帧
+  if (ASSETS.includes('fixtureasync')) report.card.seedAsync = await cardOn('种子,fixtureasync(内联 JSON,装载是异步的)', '?lottieSeed=1', { seed: true, exact: false }, { ...inlineParams, json: dataText('fixtureasync') }, 30, [21, 41], 'fixtureasync', 'seed');
+  if (ASSETS.includes('fixtureip')) report.card.seedIp = await cardOn('种子,fixtureip(内联 JSON,起点不在第 0 帧)', '?lottieSeed=1', { seed: true, exact: false }, { ...inlineParams, json: dataText('fixtureip') }, 30, [0, 2, 17], 'fixtureip', 'seed');
   if (ASSETS.includes('happy2016')) {
     const a = report.assets.happy2016;
-    report.card.both = await cardOn('种子+不留旧数,happy2016(src 加载)', '?lottieSeed=1&lottieExact=1', { seed: true, exact: true }, srcParams('happy2016'), a.fr, [a.picks[4], a.picks[a.picks.length - 1]], (n) => a.modes.both.perN[n].hash);
+    report.card.both = await cardOn('种子+不留旧数,happy2016(src 加载)', '?lottieSeed=1&lottieExact=1', { seed: true, exact: true }, srcParams('happy2016'), a.fr, [a.picks[4], a.picks[a.picks.length - 1]], 'happy2016', 'both');
   }
   // 关着:和 --before 那个提交的卡片逐帧原文相同(内联 JSON 的 fixture,和走 src 加载的 navidad)
   {

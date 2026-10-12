@@ -60,27 +60,33 @@ const DEMO_JSON = JSON.stringify({
  *
  * ── 开关一:覆盖随机数种子(2026-10-12 用户:「我觉得可以覆盖随机数种子。」)──
  *
- *   1. 每个带表达式的属性在**建图层时**取一个 `randSeed = Math.floor(Math.random() * 1000000)`(不管表达式里用没用随机),
- *      表达式里出现 `random` 这个词的,每次求值先按 `randSeed + 时间` 重新播种。`Math.random` 是全页共用的那一串
- *      (kernel/pinEntropy.ts),所以 randSeed 跟「这份实例建的时候,页面里已经取过几次随机数」有关。
- *   2. 表达式里**只有 `wiggle()`、没有 `random` 这个词**的,求值前不重新播种,直接从播放库内部那一串
- *      (`BMMath.random`,全页所有 Lottie 共用)接着取。取到什么跟之前推过哪些帧、别的 Lottie 推过什么有关。
+ * 播放库的表达式有自己的一串随机数(源码里叫 `BMMath.random`),**全页所有 Lottie 共用一串**。页面里还没有任何表达式
+ * 给它播过种时,它就是全页共用的 `Math.random`(kernel/pinEntropy.ts 钉住的那一串);第一次播种之后换成播放库自带的
+ * 发生器,再不回头。两处从这一串里取数的方式都和「之前发生过什么」有关:
+ *
+ *   1. 每个带表达式的属性在**建图层时**从这一串里取一个 `randSeed`(不管表达式里用没用随机)。表达式里出现 `random`
+ *      这个词的,每次求值先按 `randSeed + 时间` 重新播种,所以这类表达式的值只跟 randSeed 和帧号有关——但 randSeed
+ *      本身跟「这份实例建的时候那一串走到哪了」有关:页面里别的卡取过几次 `Math.random`、别的 Lottie 推过哪些帧。
+ *   2. 表达式里**只有 `wiggle()`、没有 `random` 这个词**的,求值前不重新播种,直接从这一串里接着取。
+ *      取到什么跟之前推过哪些帧、别的 Lottie 推过什么有关——同一份实例顺着推和跳着推都不一样。
  *
  * 做法:
  *   - 种子 = 素材内容的散列(`lottieSeedOf`)。同一份 JSON 无论从哪个地址来、在哪台机器上、换行符是哪种,种子相同。
  *     速度、循环、适配不进种子:它们只决定「t 对应第几帧」和怎么摆,不该改变某一帧的内容。
- *   - 建实例包在 `withSeededRandom(种子, …)` 里:各属性的 randSeed 从这份种子起按建图层的固定顺序取完
- *     (`progressiveLoad: false` 时播放库在装载完成那一下把所有图层、连同嵌套合成里的一次建好,不是用到才建),
- *     全页那一串不被它挪动。字体或外部数据没到齐时,建图层发生在播放库自己的定时器回调里,
- *     所以把这份实例的 `checkLoaded` 也包进去。
- *   - 每次跳帧前,把播放库内部那一串按「种子 + 帧号」重新播种(`BMMath.seedrandom`),再包在
- *     `withSeededRandom` 里跳。这样第 2 条里的 wiggle 拿到的数只跟帧号有关。
+ *   - 建图层之前把播放库那一串按「种子 + build」重新播种(`BMMath.seedrandom`):各属性的 randSeed 从这里起按建图层的
+ *     固定顺序取完(`progressiveLoad: false` 时播放库在装载完成那一下把所有图层、连同嵌套合成里的一次建好,不是用到才建)。
+ *     字体或外部数据没到齐时,建图层发生在播放库自己的定时器回调里,所以把这份实例的 `checkLoaded` 也包进去。
+ *   - 每画一帧之前按「种子 + 帧号」重新播种。这样第 2 条里的 wiggle 拿到的数只跟帧号有关。装载完成那一下播放库
+ *     自己画的那一次用的是建图层取剩的数,所以紧接着按帧号重画一遍。
+ *   - 以上每一段都再包在 `withSeededRandom(种子, …)` 里:全页共用的那一串不被 Lottie 挪动(页面里第一个 Lottie 建图层时
+ *     本来会从它那里取数),播放库里直接调 `Math.random()` 的地方(文字图层的随机顺序)也落在种子里。
  *   - `BMMath` 播放库没有导出。表达式的代码是在它的作用域里求值的,能看到它(名字是 `Math`)和 `globalData`,
  *     所以建一份只有一个空图层的一次性动画,让它的表达式把 `Math` 挂到 `globalData` 上,取出来就销毁。
- *     全页只取一次。取不到(播放库换了版本、关了表达式)就只做前两步,并在控制台说一声。
+ *     全页只取一次。取不到(播放库换了版本、关了表达式)就只剩 `withSeededRandom` 那一层,并在控制台说一声:
+ *     那一层只在播放库那一串还没被播过种时管用。
  *
  * 没管到的:文字图层的「随机顺序」动画器(播放库在文字内容变化时直接调 `Math.random()` 打乱字符顺序)。
- * 它在 `withSeededRandom` 里,同一次调用里只有一个这样的图层时是确定的;多个时仍可能和推帧路径有关。自带素材里没有。
+ * 它在 `withSeededRandom` 里,同一次调用里只有一个这样的图层时是确定的;多个时仍可能和推帧路径有关。自带素材里没有,没测。
  *
  * ── 开关二:属性值不留旧数(任务书没要求,查自带素材 happy2016 那 0.0036% 的像素差时找到的)──
  *
@@ -234,27 +240,41 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
     return { anim, seed, exact, goTo: (frame) => anim.goToAndStop(frame, true) };
   }
   const math = seed === null ? null : captureLottieMath();
-  /** 播放库里可能建图层、可能画一帧的同步代码都从这里过:建实例、装载完成、跳帧 */
-  const guarded = <T,>(frame: number, fn: () => T): T => {
+  /**
+   * 播放库里可能建图层、可能画一帧的同步代码都从这里过:建实例、装载完成、跳帧。
+   * key 是这一段用哪一串随机数:建图层用 "build",画一帧用它的帧号。
+   */
+  const guarded = <T,>(key: string | number, fn: () => T): T => {
     const outer = exactBuilding;
     exactBuilding = exact;
     try {
       if (seed === null) return fn();
-      math?.seedrandom(`${seed}:${frame}`);
+      math?.seedrandom(`${seed}:${key}`);
       return withSeededRandom(seed, fn);
     } finally {
       exactBuilding = outer;
     }
   };
-  // 装载完成那一下播放库会自己画一次「当前帧」(这时是第 0 帧),所以这里按第 0 帧播种
-  const anim = guarded(0, build);
-  if (!anim.isLoaded) {
-    // 字体 / 外部数据没到齐:建图层和第一次画都在播放库的定时器回调里,把这份实例的 checkLoaded 包进来。
-    // 那时画的是之前 goToAndStop 记下的那一帧,按它播种
-    const item = anim as unknown as { checkLoaded: () => void; currentRawFrame: number };
+  /**
+   * 装载完成那一下播放库会自己画一次当前帧,接着用的是建图层取剩的那一串,不是「种子 + 帧号」那一串;
+   * 以后再跳回这一帧画出来的就可能不一样。所以装载完成后按帧号重新播种,原地重画一遍
+   * (`renderFrame(null)` 是播放库里「当前帧再画一次」的写法)。
+   */
+  const redraw = () => {
+    if (seed === null) return;
+    const item = anim as unknown as { currentRawFrame: number; renderer?: { renderFrame?: (frame: number | null) => void } };
+    guarded(Number(item.currentRawFrame) || 0, () => item.renderer?.renderFrame?.(null));
+  };
+  const anim: AnimationItem = guarded("build", build);
+  if (anim.isLoaded) redraw();
+  else {
+    // 字体 / 外部数据没到齐:建图层和第一次画都在播放库的定时器回调里,把这份实例的 checkLoaded 包进来
+    const item = anim as unknown as { checkLoaded: () => void; isLoaded: boolean };
     const original = item.checkLoaded;
     item.checkLoaded = function checkLoadedGuarded(this: unknown) {
-      return guarded(Number(item.currentRawFrame) || 0, () => original.call(this));
+      const was = item.isLoaded;
+      guarded("build", () => original.call(this));
+      if (!was && item.isLoaded) redraw();
     };
   }
   return { anim, seed, exact, goTo: (frame) => guarded(frame, () => anim.goToAndStop(frame, true)) };
