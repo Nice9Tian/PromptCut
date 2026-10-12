@@ -58,6 +58,13 @@ export interface StreamPlaneRequest {
   key?: string;
   /** 就绪的**分段号**闭区间(C3 的 `stream` 表单位是分段号) */
   ranges?: Array<[number, number]>;
+  /**
+   * 在线页面(`docs/plan/browser-stream-task.md` 第七处):这条流的清单由父页随流平面带过来,舞台不自己去取。
+   * 带了它,这条流的字节也只从父页推来的块里拿(`PushedStreamSource`),不碰预渲染进程的地址。桌面不带,照旧。
+   */
+  manifest?: StreamManifest;
+  /** 随这一次一起推来的块(哈希 → 字节):清单用到、而这台舞台手里还没有的开头文件与分段(`StreamPlaneSender` 算) */
+  blocks?: Record<string, ArrayBuffer>;
 }
 
 export interface StreamManifest {
@@ -69,7 +76,9 @@ export interface StreamManifest {
   segmentFrames: number;
   bound: StreamRect;
   tight: StreamRect | null;
-  inits: Record<string, { codec: string; width: number; height: number; rect: StreamRect }>;
+  /** `hash`:在线页面推来的清单才有,开头文件的内容哈希(字节按它在推来的块里找) */
+  inits: Record<string, { codec: string; width: number; height: number; rect: StreamRect; hash?: string }>;
+  /** `file`:桌面是分段的文件名;在线页面推来的清单里是分段的内容哈希(两种都是「换了内容就换名」) */
   segments: Record<string, { init: string; file: string; stride: number; samples: number }>;
 }
 
@@ -268,6 +277,133 @@ export class HttpStreamSource implements StreamSource {
 }
 
 /* ======================================================================== *
+ * 在线页面:清单与字节由父页推来
+ * ======================================================================== */
+
+/**
+ * 为什么在线页面的舞台不自己去素材服务取流的字节,而由父页取了传过来(2026-10-12 定,理由三条):
+ *
+ *   1. **隔离的跨源舞台取不到。** 它读素材只有自己源上的 `/media-s/<会话号>/media/<哈希>`(`src/online/stagePolicy.mjs` 的
+ *      `MEDIA_S_PATH_PATTERN`),预渲染产物所在的 `px/` 不在放行的路径里;要放行得改策略文件、nginx 模板并重新部署舞台源。
+ *   2. **票据不能进舞台的脚本。** `px/<哈希>` 要带只读票据的请求头;而收到过票据的舞台文档永久不执行用户卡与素材效果卡
+ *      (`online/isolation/execGate.ts`)。让舞台带票据取流,就等于关掉在线执行。
+ *   3. **父页本来就有这条路。** 层表、清单、候选的认定、票据续签、并发与超时都在父页的在线来源里(`snapshotSource.ts`);
+ *      就绪区间按「字节已在父页」算,流平面发出去时字节跟着到,舞台不用自己等网络,流这一拍画不出来的情形只剩解码没跟上。
+ *
+ * 代价:每块字节多一次 postMessage 的结构化克隆(一段不超过 512 KB)。协议只借现有的 `setStreamPlanes`,不加新的消息种类:
+ *
+ *   父页 `StreamPlaneSender.decorate(planes)`:每条平面带上清单;块只带这台舞台还没有的。
+ *   舞台 `PushedStreamSource.accept(planes)`:收下新块;**这一次的清单没用到的块当场丢掉**。
+ *
+ * 两边按同一条规矩记账(舞台手里的块 = 上一次那批清单用到的块),所以父页不用问舞台缺什么;一次调用失败(舞台在重载)父页清账重发。
+ */
+
+/** 一份清单用到的块的哈希(开头文件 + 分段);只列形状像哈希的 */
+export function manifestBlockHashes(manifest: StreamManifest | null | undefined): string[] {
+  const out = new Set<string>();
+  for (const seg of Object.values(manifest?.segments ?? {})) {
+    if (typeof seg?.file === "string" && /^[0-9a-f]{64}$/.test(seg.file)) out.add(seg.file);
+    const hash = manifest?.inits?.[seg?.init]?.hash;
+    if (typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash)) out.add(hash);
+  }
+  return [...out];
+}
+
+const isBuffer = (v: unknown): v is ArrayBuffer => !!v && typeof (v as ArrayBuffer).byteLength === "number" && typeof (v as ArrayBuffer).slice === "function";
+const missingBlock = (what: string) => Object.assign(new Error(`父页还没把这一块推过来:${what}`), { status: 404 });
+
+/** 舞台一侧:字节源是父页随流平面推来的块 */
+export class PushedStreamSource implements StreamSource {
+  private manifests = new Map<string, StreamManifest>();
+  private blocks = new Map<string, ArrayBuffer>();
+
+  /** 父页的一次 `setStreamPlanes`:记下每条流的清单,收下新块,丢掉这一批清单没用到的块 */
+  accept(planes: readonly StreamPlaneRequest[]): void {
+    const manifests = new Map<string, StreamManifest>();
+    const keep = new Set<string>();
+    for (const p of planes) {
+      if (typeof p?.key !== "string" || !p.key || !p.manifest || typeof p.manifest !== "object") continue;
+      manifests.set(p.key, p.manifest);
+      for (const hash of manifestBlockHashes(p.manifest)) keep.add(hash);
+      for (const [hash, buf] of Object.entries(p.blocks ?? {})) if (isBuffer(buf)) this.blocks.set(hash, buf);
+    }
+    this.manifests = manifests;
+    for (const hash of [...this.blocks.keys()]) if (!keep.has(hash)) this.blocks.delete(hash);
+  }
+  async manifest(key: string): Promise<StreamManifest> {
+    const m = this.manifests.get(key);
+    if (!m) throw missingBlock(`清单 ${key}`);
+    return m;
+  }
+  async init(key: string, id: string): Promise<ArrayBuffer> {
+    const hash = this.manifests.get(key)?.inits?.[id]?.hash;
+    const buf = hash ? this.blocks.get(hash) : undefined;
+    if (!buf) throw missingBlock(`开头文件 ${id}`);
+    return buf;
+  }
+  async segment(_key: string, file: string): Promise<ArrayBuffer> {
+    const buf = this.blocks.get(file);
+    if (!buf) throw missingBlock(`分段 ${file}`);
+    return buf;
+  }
+  /** 手里有没有这一块(探针、单测看) */
+  has(hash: string): boolean { return this.blocks.has(hash); }
+  get size(): number { return this.blocks.size; }
+  get bytes(): number { let n = 0; for (const b of this.blocks.values()) n += b.byteLength; return n; }
+}
+
+/** 父页手里一条流的清单与字节(`OnlineSnapshotSource.streamPlane` 给) */
+export interface StreamPlaneData {
+  manifest: StreamManifest;
+  blocks: ReadonlyMap<string, Uint8Array | ArrayBuffer>;
+}
+
+const toArrayBuffer = (bytes: Uint8Array | ArrayBuffer): ArrayBuffer => {
+  if (!(bytes instanceof Uint8Array)) return bytes;
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? (bytes.buffer as ArrayBuffer) : (bytes.slice().buffer as ArrayBuffer);
+};
+
+/**
+ * 父页一侧:给**一台**舞台发流平面之前过一遍,带上清单和这台舞台还没有的块。一台舞台(一个 RPC 客户端)一个实例。
+ * `lookup(key)` 回这条流此刻的清单与字节;回 null 的平面原样发(舞台那边这条流取不到清单,落到快照)。
+ */
+export class StreamPlaneSender {
+  private held = new Set<string>();
+  private lookup: (key: string) => StreamPlaneData | null;
+  constructor(lookup: (key: string) => StreamPlaneData | null) { this.lookup = lookup; }
+
+  decorate(planes: readonly StreamPlaneRequest[]): StreamPlaneRequest[] {
+    const next = new Set<string>();
+    const sending = new Set<string>();
+    const out: StreamPlaneRequest[] = [];
+    for (const p of planes) {
+      const base: StreamPlaneRequest = { clipIds: [...p.clipIds], ...(p.key ? { key: p.key } : {}), ...(p.ranges ? { ranges: p.ranges } : {}) };
+      const data = p.key ? this.lookup(p.key) : null;
+      if (!data) { out.push(base); continue; }
+      const blocks: Record<string, ArrayBuffer> = {};
+      let added = 0;
+      for (const hash of manifestBlockHashes(data.manifest)) {
+        const bytes = data.blocks.get(hash);
+        if (!bytes) continue;   // 清单列着而字节不在:舞台这一段取不到,那一拍落到快照
+        next.add(hash);
+        if (this.held.has(hash) || sending.has(hash)) continue;
+        sending.add(hash);
+        blocks[hash] = toArrayBuffer(bytes);
+        added++;
+      }
+      out.push({ ...base, manifest: data.manifest, ...(added ? { blocks } : {}) });
+    }
+    // 舞台收到之后手里正好是这一批清单用到的块(见 `PushedStreamSource.accept`)
+    this.held = next;
+    return out;
+  }
+  /** 这一次没送到(舞台在换、回包丢了):清账,下一次全部重发 */
+  reset(): void { this.held = new Set(); }
+  /** 认为舞台手里有几块(单测看) */
+  get heldCount(): number { return this.held.size; }
+}
+
+/* ======================================================================== *
  * WebGL 合成
  * ======================================================================== */
 
@@ -408,7 +544,18 @@ class StreamTrack {
     this.plane = plane;
     this.canvas = canvas;
     this.id = planeId(plane);
+    if (plane.manifest) this.adoptPushed(plane.manifest);
   }
+
+  /** 父页随平面带来的清单:直接用,不去问字节源 */
+  private adoptPushed(manifest: StreamManifest): void {
+    this.manifest = manifest;
+    this.manifestAt = Date.now();
+    this.ensureCompositor()?.place(manifest.bound);
+  }
+
+  /** 这条流的字节从哪来:带了清单的平面只认父页推来的块,否则是播放器的字节源(桌面:预渲染进程) */
+  private get bytes(): StreamSource { return this.plane.manifest ? this.player.pushed : this.player.source; }
 
   get key(): string { return this.plane.key ?? ""; }
   private get fps(): number { return this.manifest?.fps || this.player.fps; }
@@ -448,6 +595,8 @@ class StreamTrack {
    * 回这一次有没有真的发起。
    */
   private loadManifest(force = false): boolean {
+    // 清单由父页推来的流:没有可问的地方,等父页下一次带新的来(`setPlane`)
+    if (this.plane.manifest) return false;
     if (!this.key || this.manifestLoading) return false;
     const now = Date.now();
     if (this.manifest && !force) return false;
@@ -470,7 +619,7 @@ class StreamTrack {
   /** 一个 init(变体)的解码器配置 */
   private loadInit(id: string): void {
     if (this.inits.has(id) || this.initLoading.has(id) || !this.key) return;
-    const work = this.player.source.init(this.key, id)
+    const work = this.bytes.init(this.key, id)
       .then((buf) => {
         const info = parseInit(buf);
         this.inits.set(id, {
@@ -490,7 +639,7 @@ class StreamTrack {
     if (this.segments.has(n) || this.fetching.has(n) || this.fetching.size >= MAX_INFLIGHT_PER_STREAM || !this.manifest) return;
     const meta = this.manifest.segments[String(n)];
     if (!meta) return;
-    const work = this.player.source.segment(this.key, meta.file)
+    const work = this.bytes.segment(this.key, meta.file)
       .then((buf) => {
         if (this.disposed) return;
         this.segments.set(n, { buf, samples: parseSegment(buf), init: meta.init, file: meta.file });
@@ -749,6 +898,8 @@ class StreamTrack {
       this.canvas = canvas;
       this.lastDrawn = null;
     }
+    // 父页带来了新的清单(多了分段、某一段换了文件):当场换上;换了文件的段在分段起点接上(`pump` 里比对文件名)
+    if (plane.manifest && plane.manifest !== this.manifest) this.adoptPushed(plane.manifest);
   }
 
   dispose(): void {
@@ -765,7 +916,7 @@ class StreamTrack {
   }
 
   diag() {
-    return { id: this.id, key: this.key, held: this.frames.size, queue: this.decoder?.decodeQueueSize ?? 0,
+    return { id: this.id, key: this.key, pushed: !!this.plane.manifest, held: this.frames.size, queue: this.decoder?.decodeQueueSize ?? 0,
       decoder: this.decoder?.state ?? null, nextFeed: this.nextFeed, lastDrawn: this.lastDrawn,
       segments: [...this.segments.keys()], manifest: !!this.manifest, bound: this.manifest?.bound ?? null,
       cap: this.player.capFor(this), ...this.stats };
@@ -780,6 +931,8 @@ const planeId = (plane: StreamPlaneRequest) => `${plane.clipIds.join(",")}#${pla
 
 export class StreamPlayer {
   readonly source: StreamSource;
+  /** 父页随流平面推来的清单与字节(在线页面);桌面的平面不带清单,这里一直是空的 */
+  readonly pushed = new PushedStreamSource();
   fps = 30;
   private root: () => Element | null;
   private planes: StreamPlaneRequest[] = [];
@@ -795,7 +948,14 @@ export class StreamPlayer {
 
   /** 父页的 `setStreamPlanes`。只存,下一次 `present` 才绑画布(画布要等 React 提交之后才在) */
   setPlanes(planes: readonly StreamPlaneRequest[], fps: number): void {
-    this.planes = planes.filter((p) => Array.isArray(p?.clipIds) && p.clipIds.length && typeof p.key === "string" && p.key);
+    const list = planes.filter((p) => Array.isArray(p?.clipIds) && p.clipIds.length && typeof p.key === "string" && p.key);
+    // 在线页面:先收下随平面推来的块(没用到的旧块当场丢),平面自己不留着字节
+    this.pushed.accept(list);
+    this.planes = list.map((p) => {
+      if (!p.blocks) return p;
+      const { blocks: _blocks, ...rest } = p;
+      return rest;
+    });
     this.fps = Math.max(1, fps || 30);
     this.stopped = false;
     // 不再要的流当场关掉(解码器、持有的 VideoFrame):暂停时父页发一张空表,下一拍不一定还会来
@@ -934,6 +1094,7 @@ export class StreamPlayer {
 
   diag() {
     return { stopped: this.stopped, proxy: this.proxy, fps: this.fps, lastFrame: this.lastFrame, planes: this.planes.length,
-      heldBytes: this.heldBytes(), tracks: [...this.tracks.values()].map((t) => t.diag()) };
+      heldBytes: this.heldBytes(), pushed: { blocks: this.pushed.size, bytes: this.pushed.bytes },
+      tracks: [...this.tracks.values()].map((t) => t.diag()) };
   }
 }

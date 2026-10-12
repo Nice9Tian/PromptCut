@@ -461,6 +461,30 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
 }
 
 /**
+ * 交给切分(`render-node/split.mjs` 的 `streams`)的一条流:流键与分段范围之外,带上这条流的形状 ——
+ * 切分给浏览器出单卡流那一份时要写进任务的 `input.stream`(`docs/plan/browser-stream-task.md` 第一处;页面不自己算这些)。
+ * 成员卡的信息不在这里:切分按 `topClipId` 到同一份 card plan 里取(那里有 cardId 与超体积标记)。
+ */
+export function queueStreamOf(spec) {
+  return {
+    streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: spec.topClipId,
+    firstSegment: spec.firstSegment, lastSegment: spec.lastSegment,
+    kind: spec.kind, plane: spec.plane, clipIds: [...(spec.clipIds ?? [])], fps: spec.fps,
+    bound: spec.bound ? { ...spec.bound } : null, offset: spec.offset ? { ...spec.offset } : null,
+    firstFrame: spec.firstFrame, lastFrame: spec.lastFrame, total: spec.total,
+  };
+}
+
+/**
+ * 在线页面的清单计划用:只按清单里的片段算流(`picked` = 在清单里),不看本机判没判重、本机能不能产流 ——
+ * 这些流只给浏览器出一份(`splitPlan` 的 `browserOnly`),切分方自己不产。回 `planStreams` 的结果;`clips` 是片段 id 的集合或数组。
+ */
+export function planListStreams(entry, clips, options = {}) {
+  const listed = clips instanceof Set ? clips : new Set(Array.isArray(clips) ? clips : []);
+  return planStreams(entry, { ...options, picked: clipId => listed.has(clipId) });
+}
+
+/**
  * 这条流的**隔离工程**(G4「单卡像素怎么隔离」:`isolatedCardProject` 的流版本)。
  *
  * 只留这条流的卡(单卡流一张、组流一组)可见;同一条序列上的其它片段和别的序列都变成

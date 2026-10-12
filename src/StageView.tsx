@@ -35,7 +35,7 @@ import { budgetOf, CATCHUP_STEPS_PER_BEAT, clipWeight, pipelineAt } from "./rend
 import { beatAt, createK6State, noteK6Beat, scheduleNextBeat } from "./render/beatLoop.mjs";
 import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
-import { StreamPlayer } from "./render/streamPlayer";
+import { PushedStreamSource, StreamPlayer } from "./render/streamPlayer";
 import {
   applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, onlineBrowserMode, setPlaceholderViewScale, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
   resetPlaceholderGeometry, setCatchingUpClips, setLocalOnlyConfirmed, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
@@ -65,7 +65,7 @@ import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome,
 import { clipFrameMode } from "./kernel/frameMode.mjs";
 import { resolveFrameSize } from "./kernel/frameSize.mjs";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
-import { renderSmallWebp } from "./render/bakeSmall";
+import { pixelRect, renderSmallWebp, renderSnapshotBitmap } from "./render/bakeSmall";
 import "./cards";
 
 /**
@@ -388,7 +388,12 @@ export default function StageView() {
      * `close()` 全部 `VideoFrame`;`back` 不收 `streamPlanes`,也就不建 decoder、不画(K5)。
      * 它往 `Stage` 已经渲好的 `[data-pc-stream-plane]` / `[data-pc-group-plane]` 上画。
      */
-    const player = new StreamPlayer({ root: () => rootRef.current });
+    /*
+     * 字节从哪来:桌面直连预渲染进程(缺省的字节源);在线页面没有预渲染进程,清单与字节由父页随流平面推来
+     * (理由见 `streamPlayer.ts`「在线页面:清单与字节由父页推来」)—— 这里给一个只认推来的块的源,
+     * 没带清单的平面(父页还没取到)在它这里取不到东西,不会去请求不存在的预渲染进程。
+     */
+    const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}) });
     // 占位符的几何首选流清单的实体框(product/rendering.md「兜底顺序」;`placeholderHost` 的 `geometryFor`)
     setStreamBoxSource((clipId) => player.boxOf(clipId));
 
@@ -2191,16 +2196,26 @@ export default function StageView() {
           commitPlanes();
           return { ok: true as const };
         }
-        ref.current.streamPlanes = (Array.isArray(planes) ? planes : [])
-          .filter((g) => Array.isArray(g?.clipIds) && g.clipIds.length)
-          .map((g) => ({
-            clipIds: g.clipIds.map(String),
-            ...(typeof g.key === "string" && g.key ? { key: g.key } : {}),
-            ...(Array.isArray(g.ranges) ? { ranges: g.ranges.map((r) => [Number(r[0]), Number(r[1])] as [number, number]) } : {}),
-          }));
-        commitPlanes();
+        const incoming = (Array.isArray(planes) ? planes : []).filter((g) => Array.isArray(g?.clipIds) && g.clipIds.length);
+        const groupsOf = (list: readonly { clipIds: readonly string[] }[]) => list.map((g) => g.clipIds.join(",")).join("|");
+        const before = groupsOf(ref.current.streamPlanes);
+        ref.current.streamPlanes = incoming.map((g) => ({
+          clipIds: g.clipIds.map(String),
+          ...(typeof g.key === "string" && g.key ? { key: g.key } : {}),
+          ...(Array.isArray(g.ranges) ? { ranges: g.ranges.map((r) => [Number(r[0]), Number(r[1])] as [number, number]) } : {}),
+        }));
+        /*
+         * 在线页面的流平面另带清单与字节(`streamPlayer.ts` 的 `PushedStreamSource`),播放中每取到一段就来一次;
+         * `Stage` 只看每条平面的 `clipIds`,分组没变就不为它多做一次 React 提交(占位符的显隐下面照样当场重算)。桌面照旧每次都提交。
+         */
+        if (!ONLINE || groupsOf(ref.current.streamPlanes) !== before) commitPlanes();
         const fps = Math.max(1, ref.current.project?.fps || 30);
-        player.setPlanes(ref.current.streamPlanes, fps);
+        // 清单与字节只交给播放器,不进 `ref.current.streamPlanes`(那一份会进 React 的 props)
+        player.setPlanes(ref.current.streamPlanes.map((p, i) => {
+          const g = incoming[i];
+          const manifest = g.manifest && typeof g.manifest === "object" && g.manifest.bound && g.manifest.segments && g.manifest.inits ? g.manifest : null;
+          return manifest ? { ...p, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : p;
+        }), fps);
         // 画布刚随这次提交挂上:当场画一次,不等下一拍
         presentStreams(ref.current.t);
         refreshPlaceholders();
@@ -2245,6 +2260,9 @@ export default function StageView() {
        * 便宜 4～7 倍(画布卡不等价,节点侧与切分都不让它进浏览器);`batch4` 批起点按 4 帧对齐、每批从头推(同桌面 `fillCardControls`)。帧与帧之间让一个宏任务、查后台活的停止标志(停着的时长记进 `pausedMs`,不算耗时);
        * 不受一拍预算截断。到了这一帧先过就绪闸,再生成快照、取本控件的 HTML:有读不出像素的画布(`lossy`)回 `lossy`
        * (父页按不可重试失败交回,同 `server/bakery/bake.mjs`)。
+       *
+       * 要像素(`req.pixels`,浏览器节点产轨道流用):生成快照之后照小尺寸那条路按原尺寸把矩形那一块画成位图(`bakeSmall.ts` 的
+       * `renderSnapshotBitmap`),随 `bake-frame` 事件转移给父页;画不出来回 `pixels-failed`。`req.html === false` 时事件不带 HTML 字节。
        */
       async bakeFrame(req) {
         if (!ONLINE || !clock) return { ok: false, reason: "unsupported" } satisfies BakeFrameReply;
@@ -2272,6 +2290,9 @@ export default function StageView() {
         let lastMs = clock.now();
         await clock.advanceToAsync(sec * 1000, {
           step: 1000 / fps,
+          // 从挂载帧一帧不落地推到这一帧:不传的话缺省的 6 秒补跑上限会把起点削掉(那是给可见舞台跳转「只求不卡」用的),
+          // 生成出来的就不是这一帧该有的状态。测量、互换、整场景补跑同样传 Infinity
+          maxCatchUp: Infinity,
           yieldEvery: 1,
           gate: () => {
             const g = backGate(stale);
@@ -2310,7 +2331,25 @@ export default function StageView() {
         if (own.frame !== n) return bakeFail({ ok: false, reason: "frame-mismatch", detail: `生成快照的本地帧是 ${own.frame},要的是 ${n}` } satisfies BakeFrameReply);
         const bytes = new TextEncoder().encode(own.html);
         const hash = await sha256Hex(bytes);
-        const gz = await compressHtml(own.html);
+        const wantHtml = req.html !== false;
+        const gz = wantHtml ? await compressHtml(own.html) : null;
+        let pixels: { rect: { x: number; y: number; w: number; h: number }; bitmap: ImageBitmap } | null = null;
+        let pixelsMs = 0;
+        if (req.pixels) {
+          const rect = pixelRect(req.pixels.rect);
+          if (!rect) return bakeFail({ ok: false, reason: "pixels-failed", detail: "要像素的矩形不对(要整数、宽高为偶数)" } satisfies BakeFrameReply);
+          const p0 = realNow();
+          const box = resolveFrameSize(clip.frame, p);
+          try {
+            const bitmap = await renderSnapshotBitmap({ html: own.html, boxWidth: Number(box.w) || p.width, boxHeight: Number(box.h) || p.height, rect });
+            pixels = { rect, bitmap };
+          } catch (e) {
+            return bakeFail({ ok: false, reason: "pixels-failed", detail: String((e as Error)?.message ?? e).slice(0, 200) } satisfies BakeFrameReply);
+          }
+          pixelsMs = realNow() - p0;
+        }
+        /** 这一帧不交了(被作废、小尺寸没成):位图还没转移走,关掉 */
+        const dropPixels = () => { try { pixels?.bitmap.close(); } catch { /* 已经关了 */ } };
         let small: { hash: string; bytes: number; webp: ArrayBuffer } | null = null;
         let smallMs = 0;
         if (req.small) {
@@ -2320,18 +2359,20 @@ export default function StageView() {
           try {
             webp = await renderSmallWebp({ html: own.html, projectWidth: p.width, projectHeight: p.height, boxWidth: Number(box.w) || p.width, boxHeight: Number(box.h) || p.height });
           } catch (e) {
+            dropPixels();
             return { ok: false, reason: "small-failed", detail: String((e as Error)?.message ?? e).slice(0, 200) } satisfies BakeFrameReply;
           }
-          if (!webp) return { ok: false, reason: "small-failed", detail: "浏览器出不了 WebP" } satisfies BakeFrameReply;
+          if (!webp) { dropPixels(); return { ok: false, reason: "small-failed", detail: "浏览器出不了 WebP" } satisfies BakeFrameReply; }
           small = { hash: await sha256Hex(new Uint8Array(webp)), bytes: webp.byteLength, webp };
           smallMs = realNow() - s0;
         }
-        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        if (stale()) { dropPixels(); return { ok: false, reason: "cancelled" } satisfies BakeFrameReply; }
         const transfer: Transferable[] = [];
         const event = { type: "bake-frame" as const, session: req.session, clipId: req.clipId, localFrame: n, hash, bytes: bytes.length,
-          ...(gz ? { htmlGz: gz } : { htmlRaw: bytes.buffer as ArrayBuffer }), small };
-        transfer.push(gz ?? (bytes.buffer as ArrayBuffer));
+          ...(!wantHtml ? {} : gz ? { htmlGz: gz } : { htmlRaw: bytes.buffer as ArrayBuffer }), small, ...(pixels ? { pixels } : {}) };
+        if (wantHtml) transfer.push(gz ?? (bytes.buffer as ArrayBuffer));
         if (small) transfer.push(small.webp);
+        if (pixels) transfer.push(pixels.bitmap);
         postStageEvent(event, "*", transfer);
         bakeCursor = { project: p, clipId: req.clipId, frame: n };
         bakeStats.frames++;
@@ -2341,7 +2382,7 @@ export default function StageView() {
         if (req.small) bakeStats.smallMs.push(smallMs);
         if (bakeStats.ms.length > 200) { bakeStats.ms.splice(0, bakeStats.ms.length - 200); bakeStats.smallMs.splice(0, Math.max(0, bakeStats.smallMs.length - 200)); }
         return { ok: true, localFrame: n, hash, bytes: bytes.length, small: small ? { hash: small.hash, bytes: small.bytes } : null,
-          ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing, smallMs, readyMs } satisfies BakeFrameReply;
+          ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing, smallMs, readyMs, ...(pixels ? { pixelsMs } : {}) } satisfies BakeFrameReply;
       },
       async bakeCancel() {
         bakeGen++;

@@ -29,6 +29,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { rangeHas } from './snapshot-store.mjs';
 import { clipInputSig } from '../src/render/layerInputSig.mjs';
+import { streamInputSig } from '../src/render/streamInputSig.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { MovFrameStore, signatureMatches } from './frame-mov.mjs';
 import { readRenderRecord } from './png-record.mjs';
@@ -181,6 +182,8 @@ export const LAYER_MAP_PREFIX = 'layers:';
  * 读 v 2 的页面照旧能用(当作一个候选)。
  * 〔裁〕stale-layer:v 3 的层可另带 `inputSig`(生成这一层的片段输入的签名,`src/render/layerInputSig.mjs`)。不加版本号 ——
  * 旧页面不读这一项,照旧贴;新页面遇到没有这一项的层(旧节点写的)也照旧贴。
+ * 轨道流(`docs/plan/browser-stream-task.md` 第五处):v 3 的层表可另带一张 `streams` 表(`layerStreamsOf`),每条流一行。同样不加版本号 ——
+ * 旧页面只读 `layers`,不认识的字段忽略;没有流时不带这一项,层表与以前一字不差。
  */
 export const LAYER_MAP_VERSION = 3;
 export const layerMapKeyOf = projectId => (typeof projectId === 'string' && projectId ? LAYER_MAP_PREFIX + projectId : null);
@@ -199,7 +202,8 @@ export const layerMapKeyOf = projectId => (typeof projectId === 'string' && proj
  * 共享档的候选 = 这些指纹,再补上这一层自己的指纹(没出现过的排在最后);层上的 v 2 字段取第一个候选。
  * 不给 `candidatesOf` 或它回空时只有自己一个候选,与 v 2 相同。本地档只有自己一个候选(纯浏览器不做本地档)。
  */
-export function layerMapOf(entry, { picked = () => true, fingerprint = null, span = QUEUE_DEFAULTS.SNAPSHOT_SPAN, now = Date.now(), candidatesOf = null } = {}) {
+export function layerMapOf(entry, { picked = () => true, fingerprint = null, span = QUEUE_DEFAULTS.SNAPSHOT_SPAN, now = Date.now(), candidatesOf = null,
+  streams = null, streamCandidatesOf = null, streamSegments = QUEUE_DEFAULTS.STREAM_SEGMENTS } = {}) {
   const project = entry?.project ?? {};
   const layers = [];
   for (const control of entry?.cardPlan ?? []) {
@@ -239,11 +243,63 @@ export function layerMapOf(entry, { picked = () => true, fingerprint = null, spa
       entryKey: tier === 'local' ? entry.key : null, firstFrame, count, contentKey, envFingerprint: primary.envFingerprint, candidates,
       ...(inputSig ? { inputSig } : {}) });
   }
+  const streamRows = layerStreamsOf(entry, { streams, fingerprint, candidatesOf: streamCandidatesOf, segmentsPerTask: streamSegments });
   return {
     v: LAYER_MAP_VERSION, kind: 'layer-map', projectId: project.id ?? null, entryKey: entry?.key ?? null,
     fps: Number(project.fps) || 30, width: Number(project.width) || null, height: Number(project.height) || null,
     span, at: now, layers,
+    ...(streamRows.length ? { streams: streamRows } : {}),
   };
+}
+
+/** 层表里流候选在切分候选记录(`FramePipeline.recordSplitCandidates`)里的键前缀:流的内容键与卡的内容键分开记 */
+export const STREAM_CANDIDATE_PREFIX = 'stream:';
+export const streamCandidateKey = contentKey => (typeof contentKey === 'string' && contentKey ? STREAM_CANDIDATE_PREFIX + contentKey : null);
+
+/**
+ * 层表的 `streams` 表(`docs/plan/browser-stream-task.md` 第五处):这一版的每条轨道流一行,在线页面按它找流清单
+ * (内容库 `render-manifest`,键 `<结果键>:<起>-<止>`,分段号从 `firstSegment` 起每 `segmentsPerTask` 段一份,最后一份到 `lastSegment`,
+ * 与 `render-node/split.mjs`、推送队列同一种切法)。每行:
+ *
+ *   `{ topClipId, clipIds, kind: 'card' | 'group', plane: 'local' | 'stage', contentKey,
+ *      candidates: [{ envFingerprint, resultKey }], firstSegment, lastSegment, segmentsPerTask, inputSig? }`
+ *
+ *   - `streams` 是 `frame-stream.mjs` 的 `planStreams` 的结果(调用方算好给进来:要预算、代码版本、环境指纹,这里不引它)。
+ *     两个片段共用一条流(同一张卡、同参数同入点)时 `planStreams` 回两项,这里也是两行,`topClipId` 不同、键相同;
+ *   - `candidates` 照快照层的做法:`candidatesOf(spec)` 回这条流最近一次切分实际出键的指纹(按发布顺序,`splitStreamCandidatesOf` 收集),
+ *     再补上这条流自己的指纹(`spec.envFingerprint`,没有就用 `fingerprint`;没出现过的排在最后)。结果键 = 内容键 × 指纹。
+ *     流标了 `ownCandidate: false`(切分只给别的指纹出过键、本机自己不产,在线页面的清单计划给浏览器出的那一份就是)时不补自己的指纹,
+ *     候选只有切分实际出键的那些。一个候选也凑不出(没有任何指纹)的流不列;
+ *   - `inputSig`:这条流的输入签名(`src/render/streamInputSig.mjs`),页面按当前项目算同一个签名,对不上就不播。算不出不写。
+ * 形状不对的项跳过,不抛。
+ */
+export function layerStreamsOf(entry, { streams = null, fingerprint = null, candidatesOf = null, segmentsPerTask = QUEUE_DEFAULTS.STREAM_SEGMENTS } = {}) {
+  const project = entry?.project ?? {};
+  const per = Math.max(1, Math.floor(Number(segmentsPerTask) || 0) || QUEUE_DEFAULTS.STREAM_SEGMENTS);
+  const str = x => (typeof x === 'string' && x ? x : null);
+  const out = [];
+  for (const spec of Array.isArray(streams) ? streams : []) {
+    const contentKey = str(spec?.contentKey);
+    const clipIds = Array.isArray(spec?.clipIds) ? spec.clipIds.filter(id => typeof id === 'string' && id) : [];
+    if (!contentKey || !clipIds.length || clipIds.length !== spec.clipIds.length) continue;
+    const topClipId = str(spec.topClipId) ?? clipIds[clipIds.length - 1];
+    const kind = spec.kind === 'group' ? 'group' : spec.kind === 'card' ? 'card' : null;
+    const plane = spec.plane === 'stage' ? 'stage' : spec.plane === 'local' ? 'local' : null;
+    const firstSegment = Number(spec.firstSegment), lastSegment = Number(spec.lastSegment);
+    if (!kind || !plane || !Number.isInteger(firstSegment) || !Number.isInteger(lastSegment) || firstSegment < 0 || lastSegment < firstSegment) continue;
+    // `ownCandidate: false`:切分给别的指纹出过键、本机自己不产的流(`FramePipeline.issuedStreamSpecs`),候选只列切分实际出键的指纹
+    const own = spec.ownCandidate === false ? null : str(spec.envFingerprint) ?? str(fingerprint);
+    let listed = [];
+    if (typeof candidatesOf === 'function') {
+      try { listed = candidatesOf(spec) ?? []; } catch { listed = []; }
+    }
+    const fps = [...new Set([...(Array.isArray(listed) ? listed : []), ...(own ? [own] : [])].filter(x => typeof x === 'string' && x))];
+    if (!fps.length) continue;
+    const candidates = fps.map(f => ({ envFingerprint: f, resultKey: resultKeyOf(contentKey, f) }));
+    const inputSig = streamInputSig(project, { clipIds, kind });
+    out.push({ topClipId, clipIds, kind, plane, contentKey, candidates, firstSegment, lastSegment, segmentsPerTask: per, ...(inputSig ? { inputSig } : {}) });
+  }
+  return out;
 }
 
 /**
@@ -254,6 +310,24 @@ export function splitCandidatesOf(tasks) {
   const out = new Map();
   for (const t of Array.isArray(tasks) ? tasks : []) {
     if (t?.kind !== 'snapshot' || t.tier !== 'shared') continue;
+    const ck = t.input?.contentKey;
+    const fp = t.requires?.envFingerprint;
+    if (typeof ck !== 'string' || !ck || typeof fp !== 'string' || !fp) continue;
+    const list = out.get(ck) ?? [];
+    if (!list.includes(fp)) list.push(fp);
+    out.set(ck, list);
+  }
+  return out;
+}
+
+/**
+ * 同 `splitCandidatesOf`,收的是轨道流任务(层表 `streams` 表的候选用):`Map<流的内容键, envFingerprint[]>`,指纹按发布顺序
+ * (切分方自己的在前)。只看流任务通用的字段:`kind: 'stream'`、`input.contentKey`、`requires.envFingerprint`。
+ */
+export function splitStreamCandidatesOf(tasks) {
+  const out = new Map();
+  for (const t of Array.isArray(tasks) ? tasks : []) {
+    if (t?.kind !== 'stream') continue;
     const ck = t.input?.contentKey;
     const fp = t.requires?.envFingerprint;
     if (typeof ck !== 'string' || !ck || typeof fp !== 'string' || !fp) continue;

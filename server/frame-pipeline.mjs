@@ -23,7 +23,7 @@ import { isFullyTransparentPng } from './frame-validity.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { isolatedCardProject } from '../src/kernel/isolatedCard.mjs';
 import { anchorFrames } from '../src/render/snapshotPick.mjs';
-import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX, STREAM_CODE_VERSION, planStreams } from './frame-stream.mjs';
+import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX, STREAM_CODE_VERSION, planStreams, planListStreams, queueStreamOf, streamDecoderBudget } from './frame-stream.mjs';
 import { dirtyStreamLease } from './bakery/bake.mjs';
 import { createCardLockStore, cardLockDecision, CARD_LOCK_IDLE_MS } from './card-lock.mjs';
 import { QUEUE_DEFAULTS } from './render-queue/index.mjs';
@@ -33,7 +33,7 @@ import { applyResult, manifestKindOf, manifestKeyOf, manifestMatches, spansOf } 
 export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { createSmallRenderer, SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
-import { layerMapOf } from './artifact-transfer.mjs';
+import { layerMapOf, streamCandidateKey, STREAM_CANDIDATE_PREFIX } from './artifact-transfer.mjs';
 import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServesAgent, modeServesPrerender } from './prerender-mode.mjs';
 
 /**
@@ -2095,9 +2095,62 @@ export class FramePipeline {
         picked: clipId => this.prerenderPicked(entry, clipId),
         fingerprint: this.envFingerprint,
         candidatesOf: control => this.splitCandidatesFor(control?.contentKey),
+        ...this.layerMapStreamOptions(entry),
       });
       return queue.putLayerMap(projectId, body);
     } catch { return false; }
+  }
+  /**
+   * 层表的 `streams` 表要的两样(`artifact-transfer.mjs` 的 `layerStreamsOf`;`docs/plan/browser-stream-task.md` 第五处):这一版的流,
+   * 和每条流最近一次切分实际出键的指纹。在线页面按这张表找流清单。流有两个来处:
+   *
+   *   1. 本机自己这一版要产的(与生产者、与队列切分同一组参数的 `planStreams`,所以流键相同):本机没有生产者或开关关着
+   *      (`PROMPTCUT_STREAMS=0`)时没有这一部分。这里不探编码器(那是异步的):列了而没人产的流,页面取不到清单,照旧每拍换快照;
+   *   2. 切分给别的指纹出过键、本机自己不产的单卡流(`issuedStreamSpecs`):在线页面的清单计划只给浏览器出一份流任务
+   *      (`listStreamSpecs`),本机没有生产者、关着流开关、或这张卡本机没判重时第 1 部分里没有它,不列的话别的在线页面找不到
+   *      浏览器产出来的那条流。
+   *
+   * 两部分都空时回空对象,层表里不带 `streams`(与以前逐字相同);只有第 1 部分时结果也与以前逐字相同。
+   * 写层表的两处(本机推送队列、独立渲染主机)都经这里。
+   */
+  layerMapStreamOptions(entry) {
+    if (!entry) return {};
+    const producer = this.streamProducer();
+    let own = [];
+    if (producer?.enabled) {
+      try {
+        own = planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
+          codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
+      } catch { own = []; }
+    }
+    const issued = this.issuedStreamSpecs(entry, own);
+    const streams = issued.length ? [...own, ...issued] : own;
+    if (!streams.length) return {};
+    return { streams, streamCandidatesOf: spec => this.splitCandidatesFor(streamCandidateKey(spec?.contentKey)) };
+  }
+  /**
+   * 切分给别的指纹出过键、而 `own`(本机自己这一版要产的流)里没有的单卡流。判据是切分候选记录(`recordSplitCandidates`,
+   * 执行器在每次切分完成后按最终发布成功的流任务记,键 `stream:<流的内容键>`):这一版某张卡的单卡流的内容键在记录里,
+   * 就是「有人被派过这条流」。单卡流的内容键只由这张卡的内容、采样窗口、帧率、画幅、代码版本决定,与同一版里还有哪些卡无关,
+   * 所以这里不按解码器预算合并(预算给无穷大),逐张卡算出单卡流去对记录;组流不会派给浏览器,对不上,不列。
+   *
+   * 只看在预渲染集合里的卡(清单计划的片段由 `addBackfill` 并进集合,层表的 `layers` 里有它的快照层),
+   * 已经是 `own` 某条流成员的卡不再另列。每项标 `ownCandidate: false`:本机不产它,层表的候选只列记录里的指纹。
+   * 记录里一条流都没有时直接回空(不算流计划)。
+   */
+  issuedStreamSpecs(entry, own = []) {
+    let any = false;
+    for (const key of this.loadSplitCandidates().keys()) if (key.startsWith(STREAM_CANDIDATE_PREFIX)) { any = true; break; }
+    if (!any) return [];
+    const covered = new Set(own.flatMap(spec => spec?.clipIds ?? []));
+    let singles = [];
+    try {
+      singles = planStreams(entry, { picked: clipId => !covered.has(clipId) && this.prerenderPicked(entry, clipId), budget: Infinity,
+        codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
+    } catch { singles = []; }
+    return singles
+      .filter(spec => spec.kind === 'card' && this.splitCandidatesFor(streamCandidateKey(spec.contentKey))?.length)
+      .map(spec => ({ ...spec, ownCandidate: false }));
   }
   /**
    * M7 契约 D12:队列切分完成后记下每张共享档卡实际出键的指纹(`artifact-transfer.mjs` 的 `splitCandidatesOf`,
@@ -3038,8 +3091,11 @@ export class FramePipeline {
       prerenderSet: entry.basePrerenderSet instanceof Set ? new Set(entry.basePrerenderSet)
         : entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
       cardPlan,
-      streams: streamSpecs.map(spec => ({ streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: spec.topClipId,
-        firstSegment: spec.firstSegment, lastSegment: spec.lastSegment })),
+      // 每条流连同它的形状(`queueStreamOf`):切分给浏览器出单卡流那一份时要(browser-stream-task.md 第一处)
+      streams: streamSpecs.map(queueStreamOf),
+      // 在线页面的清单计划用(`local-node.mjs` 的 `listPlanOverrides`):按清单里的片段算流,只给浏览器出一份。
+      // 不看本机判没判重、本机能不能产流(`queueStreamSpecs` 那两道闸只管切分方自己产的那一份)
+      browserStreamsFor: clips => this.listStreamSpecs(entry, clips).map(queueStreamOf),
       anchorFrames: anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count),
       // c66-host-cards:全局代码版本(`frameCode`)不再覆盖用户卡与改动层;这一版用到的定制卡的代码身份
       // 由切分写进 requires.cardSources(共享档只写这张卡的,本地档、流写全部),节点手里没有这份代码就不认领
@@ -3062,6 +3118,15 @@ export class FramePipeline {
     if (!producer?.enabled || !(await producer.capable())) return [];
     try {
       return planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
+        codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
+    } catch {
+      return [];
+    }
+  }
+  /** 清单计划里的片段各自的流(与 `queueStreamSpecs` 同一组参数,所以单卡流的内容键相同);算不出回 `[]` */
+  listStreamSpecs(entry, clips) {
+    try {
+      return planListStreams(entry, clips, { budget: this.streamProducer()?.budget ?? streamDecoderBudget(),
         codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
     } catch {
       return [];

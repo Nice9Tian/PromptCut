@@ -90,6 +90,8 @@ export function LottieView(params: LottieViewProps) {
       box.current.innerHTML = "";
       const a = lottie.loadAnimation({
         container: box.current,
+        // 画在 SVG 上,不用画布(2026-10-10 用户定):自带素材里带遮罩层的那一个用画布画出来是错的,SVG 兼容性更好;
+        // 要像素时把 SVG 直接变成像素,速度够用。实测见 docs/plan/render-standard.md「Lottie 动效」
         renderer: "svg",
         loop: false,
         autoplay: false,

@@ -14,7 +14,8 @@
  * 标 `light` —— 于是它只切分、不认领细任务(契约 D15「切分方只切分」的测试替身做法),浏览器可做的卡由队列给的浏览器指纹另出一份。
  * 内容键带本轮的随机串,不会撞上别的锁。
  *
- * 流程:建项目 → 起切分方 → 成员(Chrome 无头,普通档)凭项目名 + 口令进入 → 页面加一张重卡(`probe-slow-stepped`,每帧烧 40 ms)
+ * 流程:建项目 → 起切分方 → 成员(Chrome 无头,普通档)进入(在线构建的开始页只有账号入口,照「刷新后回到项目」那条产品路径进,
+ * `lib/online-resume-entry.mjs`)→ 页面加一张重卡(`probe-slow-stepped`,每帧烧 40 ms)
  * → 页面测完、当节点报到(拿到指纹)、发清单计划 → 切分方认领计划、双份出键 → 页面认领浏览器那一份(light)→ 逐帧生成快照、推送、完成。
  *
  * 判据:页面 `__pcBrowserNode()` 的 completed ≥ 1、推了块;内容库里有这一段的清单(过 `manifestMatches`、两档齐、结果键 = 内容键 × 浏览器指纹);
@@ -34,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -171,13 +173,6 @@ let browser = null;
 const EVAL_TIMEOUT_MS = 30_000;
 const P = (page, fn, ...a) => Promise.race([page.evaluate(fn, ...a), delay(EVAL_TIMEOUT_MS).then(() => { throw new Error('页面 30 秒没应答'); })]);
 const shot = async (page, name) => { const f = path.join(OUT, `${name}.png`); await page.screenshot({ path: f }).catch(() => {}); return f; };
-async function typeInto(page, sel, text) {
-  await page.waitForSelector(sel, { visible: true, timeout: 20_000 });
-  await page.click(sel);
-  await page.$eval(sel, (el) => el.select());
-  await page.keyboard.press('Backspace');
-  if (text) await page.type(sel, text, { delay: 5 });
-}
 const nodeDiag = (page) => P(page, () => { try { return JSON.parse(JSON.stringify(window.__pcBrowserNode?.() ?? null)); } catch { return null; } }).catch(() => null);
 
 let splitter = null;
@@ -230,12 +225,10 @@ try {
     window.__pcLongTasks = [];
     try { new PerformanceObserver((list) => { for (const e of list.getEntries()) window.__pcLongTasks.push({ at: e.startTime, ms: e.duration }); }).observe({ type: 'longtask', buffered: true }); } catch { /* 没有 */ }
   });
+  // 进项目:照「刷新后回到刷新前打开的共享项目」(只带派生出的 K,不带口令)
+  await plantResume(page, await resumeRecord({ base: HOSTED, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: projName, username: 'm7-member', password: projectPassword,
+    deviceId: `m7n-member-${RUN}`.padEnd(16, '0') }));
   await page.goto(EDITOR, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto(page, '[data-pc="join-name"]', projName);
-  await typeInto(page, '[data-pc="join-username"]', 'm7-member');
-  await typeInto(page, '[data-pc="join-password"]', projectPassword);
-  await page.click('[data-pc="join-submit"]');
   const entered = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
   if (!check(entered, '成员进入项目')) throw new Error('成员没进去');
   await until('成员页双舞台握上手', async () => P(page, () => { const d = window.__pcPreviewDiag?.(); return d?.dual && d.onlineStages?.handshake === 'ok'; }), 120_000, 500);
@@ -343,40 +336,58 @@ try {
   out.steps.page = { longTasks: longTasks.length, worst: longTasks.sort((a, b) => b.ms - a.ms).slice(0, 3), errors: pageErrors.slice(0, 5), assetWrites: assetReqs.filter((a) => a.method === 'PUT').length };
   await shot(page, 'm7-node-after');
 
-  /* ---------------------------------------------------------------- 5. 让路(D8):生成快照中开始播放 → 当前帧做完放回一次;停下后恢复、做完 */
-  const clip2 = await P(page, () => {
+  /*
+   * ---------------------------------------------------------------- 5. 让路(D8):生成快照中开始播放 → 当前帧做完放回一次;停下后恢复、做完
+   * 两处取样改稳过(2026-10-13,验的东西没变):
+   *   - 「放回之前至多再做完当前这一帧」的起点,原来取的是开始播放之前某一次轮询(每 200 毫秒一次)读到的帧数,轮询到发出播放命令之间
+   *     还能再做完一两帧(一帧约 90 毫秒),会被算到「放回之前多做的」头上。现在读帧数与发播放命令在页面的同一个任务里做,起点就是开始播放那一刻;
+   *   - 「播放期间不认领、不生成快照」原来在放回之后 2.5 秒取样,而第二张卡只有 2 秒(项目时长跟着内容走,播到 2 秒就停,再过 500 毫秒
+   *     安静期页面就算闲、会重新认领),取样正踩在边界上。现在第二张卡 6 秒,取样时同一个任务里读一下是不是还在播,不在播算探针没取到(不过)。
+   */
+  const YIELD_SEC = 6, YIELD_FRAMES = YIELD_SEC * 30;
+  const clip2 = await P(page, (sec) => {
     const S = window.__pcStore;
-    const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: 2 });
+    const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: sec });
     S.actions.setClipParams(c.id, { burnMs: 40, label: 'm7-yield' });
-    S.actions.seek(1.5);
+    S.actions.seek(sec - 0.5);
     return c.id;
-  });
+  }, YIELD_SEC);
   const baking = await until('第二张卡开始生成快照(做了至少 2 帧)', async () => {
     const d = await nodeDiag(page);
     const h = d?.holding?.[0];
     return d?.state === 'baking' && h && h.done >= 2 && h.of === 60 ? d : null;
   }, 300_000, 200);
-  const before = baking?.counters ?? null;
-  await P(page, () => { const S = window.__pcStore; S.actions.seek(0); S.actions.play(); });
+  // 读帧数与开始播放在同一个任务里:`before` 就是开始播放那一刻的计数
+  const before = baking ? await P(page, () => {
+    const d = JSON.parse(JSON.stringify(window.__pcBrowserNode?.() ?? null));
+    const S = window.__pcStore;
+    S.actions.seek(0);
+    S.actions.play();
+    return d?.counters ?? null;
+  }).catch(() => null) : null;
   const released = await until('播放开始后放回一次', async () => { const d = await nodeDiag(page); return (d?.counters?.released?.['yield-play'] ?? 0) >= 1 ? d : null; }, 60_000, 100);
   await delay(2500);
-  const during = await nodeDiag(page);
+  // 取样与「是不是还在播」在同一个任务里读
+  const sampled = await P(page, () => ({ d: JSON.parse(JSON.stringify(window.__pcBrowserNode?.() ?? null)), playing: !!window.__pcStore.getState().playing, t: window.__pcStore.getState().t })).catch(() => null);
+  const during = sampled?.d ?? null;
   await P(page, () => window.__pcStore.actions.pause());
-  const after = await until('停下后恢复认领、做完第二张卡', async () => { const d = await nodeDiag(page); return d?.counters?.completed >= 2 ? d : null; }, 600_000, 1000);
+  // 第二张卡 YIELD_FRAMES 帧按每段 60 帧切成几段:都做完才算
+  const after = await until('停下后恢复认领、做完第二张卡', async () => { const d = await nodeDiag(page); return d?.counters?.completed >= 1 + YIELD_FRAMES / 60 ? d : null; }, 600_000, 1000);
   out.steps.yield = {
     clip: clip2,
     before: before && { claims: before.claims, bakedFrames: before.bakedFrames },
     released: released && { released: released.counters.released, claims: released.counters.claims, bakedFrames: released.counters.bakedFrames },
-    during: during && { claims: during.counters.claims, bakedFrames: during.counters.bakedFrames, state: during.state, idle: during.idle },
+    during: during && { claims: during.counters.claims, bakedFrames: during.counters.bakedFrames, state: during.state, idle: during.idle, playing: sampled.playing, t: sampled.t },
     after: after && { claims: after.counters.claims, completed: after.counters.completed, bakedFrames: after.counters.bakedFrames, failed: after.counters.failed },
   };
   check(released && released.counters.released['yield-play'] === 1, 'D8:播放开始后放回恰好一次(reason yield-play)', out.steps.yield.released);
   check(released && before && released.counters.bakedFrames - before.bakedFrames <= 1, 'D8:放回之前至多再做完当前这一帧', out.steps.yield);
+  check(sampled?.playing === true, 'D8:取样落在播放区间里(取样那一刻页面还在播;不在播是探针没取到,按不过)', out.steps.yield.during);
   check(during && released && during.counters.claims === released.counters.claims && during.counters.bakedFrames === released.counters.bakedFrames,
     'D8:播放期间不认领、不生成快照', out.steps.yield.during);
   check(after && after.counters.failed === 0, '停下后恢复认领并做完(不计失败)', out.steps.yield.after);
-  // 重新认领同一段只补缺的帧:两段一共 30 + 60 帧,放回前做过的不重做
-  check(after && after.counters.bakedFrames === 90, '重新认领同一段只补缺的帧(两段共生成 90 帧)', out.steps.yield.after);
+  // 重新认领同一段只补缺的帧:第一张卡 30 帧 + 第二张卡 YIELD_FRAMES 帧,放回前做过的不重做
+  check(after && after.counters.bakedFrames === 30 + YIELD_FRAMES, `重新认领同一段只补缺的帧(两张卡共生成 ${30 + YIELD_FRAMES} 帧)`, out.steps.yield.after);
   try { chk.close(); } catch { /* 已关 */ }
   out.ok = fails.length === 0;
 } catch (e) {
