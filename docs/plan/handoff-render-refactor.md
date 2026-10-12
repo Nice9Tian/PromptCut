@@ -247,13 +247,15 @@ git for-each-ref --format="%(refname:short) %(committerdate:short)" refs/heads r
 
 ## 9. 等用户定的
 
-**2026-10-12 用户定了其中几条**（授权范围以用户当时发出的开工指令为准）：
+**2026-10-12 用户定了其中几条**（开工指令是 `render-018-kickoff.md`，授权范围以它为准）：
 
 - 第 1 条：九块加 Lottie 全做；「壬」（改旧名词）挪到 0.7.18 的在途分支合完之后、发版验收之前。任务书是 `render-refactor-task.md`。
 - 第 2 条：另开，这次一起做，见 `render-refactor-task.md` 的「甲二」。
 - 第 3 条：沿用；并且 0.7.18 的发版和部署也不逐次问。删除类操作先列清单，等用户点头。
 - 第 7 条：已定，见 `account-binding-task.md`「已拍板」的「云端 Agent 对话的删除」。
-- 第 4、5、6 条写进开工指令处理：保全动作和环境变量由执行方开工时做，清分支归「删除类」。
+- 第 4 条：保全 2026-10-12 已做。`.worktrees/018-member-native-route` 里那 6 个文件原样提交在 `codex/018-missing-material-user-path` 上（`01ff6ba5`）；这条分支和 `codex/018-agent-worker-doc`、`codex/018-agent-worker-runtime` 都推到了远端，本机和远端一致。第 5.1、5.2 节里写的「6 个文件没提交」「远端没有这条分支」「远端那两条是旧的」是 10-10 的情况，现在都不成立了。同一天逐条核对过：`codex/` 开头的 18 条分支本文都写到了，没有漏的。
+- 第 5 条：已写。变量名和用途在 `guide_files/verification.md`「基线」，这台电脑上指到哪在 `docs/local.md`。
+- 第 6 条：用户定，内容已经合入或用完的分支和工作区直接清，不用问，尽量保持干净；规矩写在 `render-018-kickoff.md`「可以直接做的」。
 - 第 10 条：阿里云那台执行方不碰，旧数据由用户自己处理（`three-versions-brief.md` 第 5 节原来就是这样写的）。和旧信箱谁先谁后仍未定。
 - 第 8、9 条仍未定，不在这次任务里。
 
