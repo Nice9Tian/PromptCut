@@ -49,6 +49,7 @@ function kit({ limits = {}, dir = null, state: stateIn = null } = {}) {
   const look = createLook({
     verify: (auth) => (typeof auth === 'string' && auth.startsWith('agent') ? { ok: true, service: 'agent', kid: 'k', instanceId: auth } : { ok: false, reason: 'signature' }),
     project: (id) => state.projects.get(id) ?? null,
+    directoryReady: () => state.directoryReady !== false,
     paused: () => state.paused,
     storagePaused: () => state.storagePaused,
     resident: () => ({ port: 7000, key: 'resident-key', running: true, node: (id) => state.residentNodes.get(id) ?? null }),
@@ -266,6 +267,15 @@ test('RQ4 重启后排着的请求还在：队列落盘，新起的管理进程�
   k1.look.close();
   const k2 = kit({ dir });
   assert.deepEqual(k2.loaded, { restored: 3, results: 1, dropped: 0 });
+  // 管理进程刚起来、目录清单还没拿到：这时「目录里没有这个项目」不作数，接回来的请求排着等，不被当成项目不在了
+  const real = k2.state.projects;
+  k2.state.projects = new Map();
+  k2.state.directoryReady = false;
+  k2.look.resume();
+  await sleep(60);
+  assert.deepEqual(k2.look.status().queue.blocked, { directory: 3 });
+  k2.state.projects = real;
+  k2.state.directoryReady = true;
   assert.deepEqual(k2.requests.queued().map((e) => [e.id, e.projectId, e.attempts]), [[rid(1), P1, 0], [rid(2), P2, 0], [rid(3), P3, 0]], '次序不变；正在做的那一个回到排队，那一次不算重试次数');
   // 调用方接着问：出过结果的那一份还在；排着的还是排着（隔离工作进程还没起来）
   assert.deepEqual((await k2.poll({ requestId: rid(0) })).body, { ok: true, n: 0 });

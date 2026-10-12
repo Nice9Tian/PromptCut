@@ -124,7 +124,7 @@ export function renderServiceConfig(env = process.env) {
     lookServicesFile: env.PROMPTCUT_RENDER_LOOK_SERVICES || '/var/lib/promptcut/hosted/secrets/services.json',
     lookQueueDir: path.resolve(env.PROMPTCUT_RENDER_LOOK_QUEUE || path.join(env.PROMPTCUT_RENDER_DATA || '/var/lib/promptcut/render', 'look-queue')),
     // 测试与演练用：看画面的时限（渲染这一段每次多久、重试几次、排队最多等多久、调用方多久没来问就撤）
-    lookAttemptMs: intOf(env.PROMPTCUT_RENDER_LOOK_ATTEMPT_MS, LOOK_DEFAULTS.attemptMs, 500, 600_000),
+    lookAttemptMs: intOf(env.PROMPTCUT_RENDER_LOOK_ATTEMPT_MS, LOOK_DEFAULTS.attemptMs, 1, 600_000),
     lookRetries: intOf(env.PROMPTCUT_RENDER_LOOK_RETRIES, LOOK_DEFAULTS.retries, 0, 10),
     lookMaxQueueMs: intOf(env.PROMPTCUT_RENDER_LOOK_MAX_QUEUE_MS, LOOK_DEFAULTS.maxQueueMs, 1000, 86_400_000),
     lookOrphanMs: intOf(env.PROMPTCUT_RENDER_LOOK_ORPHAN_MS, LOOK_DEFAULTS.orphanMs, 1000, 86_400_000),
@@ -458,7 +458,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const looks = new Map();
     for (const [projectId, w] of [...lookWants]) { if (lookWanted(projectId)) looks.set(projectId, w.seq); }
     // 背压暂停时不新起（已经在跑的照旧，它自己不认领新的）；排着的看画面请求留在队列里，背压过去后先轮到它们
-    const candidates = backpressure.paused && !isolation.active ? [] : isolationCandidates({ directory: dir, residentNodes: report?.queue?.nodes ?? [], looks });
+    // 管理进程刚起来、第一次采样还没做完时不知道机器吃不吃紧：也先不新起（不然内存本来就低的机器上，重启后会抢在背压生效前起一轮）
+    const holdOff = backpressure.paused || readings.at === null;
+    const candidates = holdOff && !isolation.active ? [] : isolationCandidates({ directory: dir, residentNodes: report?.queue?.nodes ?? [], looks });
     isolation.tick({
       candidates,
       eligible: (projectId) => dir.some((p) => p.projectId === projectId && p.enabled && p.active),
@@ -477,6 +479,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     requests: lookRequests,
     limits: { attemptMs: config.lookAttemptMs, retries: config.lookRetries, maxQueueMs: config.lookMaxQueueMs, orphanMs: config.lookOrphanMs },
     project: (projectId) => directory.get(projectId),
+    // 刚起来、目录清单还没拿到：接回来的请求先排着（这时「目录里没有」不等于项目不在了）
+    directoryReady: () => directory.status().syncedAt !== null,
     paused: () => backpressure.paused,
     // 产物到了容量上限（素材服务回 507，工作进程暂停认领）：要写产物的看画面请求排着等，别的照常出
     storagePaused: () => { const until = report?.queue?.quotaPausedUntil ?? null; return Number.isFinite(until) ? until > Date.now() : !!until; },

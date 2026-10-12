@@ -84,8 +84,12 @@ export const LOOK_DEFAULTS = Object.freeze({
   maxPollMs: 25_000,
   /** 请求体上限（项目副本上限 16 MiB，留余量） */
   maxBodyBytes: 48 * 1024 * 1024,
-  /** 「要看画面」的需求在最后一次请求之后再保持多久（隔离工作进程据此不急着结束：模型多半马上再看一眼） */
-  holdMs: 90_000,
+  /**
+   * 「要看画面」的需求登记一次管多久。排着、在做的请求会一直续（调度每一拍、在途每 5 秒），所以它只要比续的间隔长。
+   * 〔裁，三级〕原来是 90 秒（最后一次请求之后隔离工作进程多留 90 秒，等模型再看一眼）；闲置回收改成五分钟之后这层保留没有用了，
+   * 留着只会让「空闲满五分钟才让位」变成五分钟加 90 秒。现在出完图最多再算 15 秒有需求，之后开始算空闲
+   */
+  holdMs: 15_000,
   /** 等常驻工作进程报出这个项目、报出它带没带卡，最多多久 */
   settleMs: 20_000,
   /** 隔离工作进程就绪之后，等要的那几份卡装到要的版本，最多再等多久；到点照渲并在结果里注明 */
@@ -205,6 +209,8 @@ const pending202 = (requests, e) => ({
  * @param {boolean} o.enabled 配置里开没开
  * @param {(header: unknown, bodyText: string) => object} o.verify `createLookVerifier` 的结果
  * @param {(projectId: string) => null | { enabled: boolean, active: boolean, hosted?: object }} o.project 目录里的这一项
+ * @param {() => boolean} [o.directoryReady] 目录清单拿到过没有。管理进程刚起来、还没拿到时「目录里没有这个项目」不作数：
+ *   重启后接回来的请求这时候排着等，不能被当成项目不在了
  * @param {() => boolean} o.paused 背压是不是暂停着
  * @param {() => boolean} [o.storagePaused] 产物是不是到了容量上限（工作进程报的 `quotaPausedUntil` 还没过）
  * @param {() => { port: number, key: string, running: boolean, node(projectId: string): object | null }} o.resident 常驻工作进程此刻的样子；
@@ -216,7 +222,7 @@ const pending202 = (requests, e) => ({
  * @param {ReturnType<typeof createRenderRequests>} [o.requests] 队列；不给就用一条只在内存里的
  */
 export function createLook({
-  enabled = true, verify: verifyAuth, project, paused = () => false, storagePaused = () => false, resident, iso, want = () => {},
+  enabled = true, verify: verifyAuth, project, directoryReady = () => true, paused = () => false, storagePaused = () => false, resident, iso, want = () => {},
   requests: requestsIn = null,
   fetch: fetchImpl = globalThis.fetch, now = Date.now, log = () => {}, limits: limitsIn = {},
 } = {}) {
@@ -258,6 +264,7 @@ export function createLook({
    */
   function routeOnce(e) {
     const { projectId, cards } = e;
+    if (!directoryReady()) return { wait: 'directory' };
     const p = project(projectId);
     if (!p) return { fail: fail(404, 'no-project') };
     if (!p.enabled) return { fail: fail(403, 'service-disabled') };
