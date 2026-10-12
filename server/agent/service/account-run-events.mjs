@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalJson, digestOf } from '../../account/ledger.mjs';
 import { acceptedMessageRef } from '../../account/run-authority.mjs';
+import { validateWorkerEventPacket } from '../../agent-service/worker-event-internal.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const text = v => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(v);
@@ -33,7 +34,11 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
         PRIMARY KEY(project_id,conversation_id,message_id), UNIQUE(project_id,conversation_id,arrival_seq));
       CREATE TABLE IF NOT EXISTS run_events (project_id TEXT, conversation_id TEXT, seq INTEGER NOT NULL,
         grant_id TEXT NOT NULL, event_id TEXT NOT NULL, content TEXT NOT NULL, payload TEXT NOT NULL,
-        PRIMARY KEY(project_id,conversation_id,seq), UNIQUE(grant_id,event_id));`);
+        PRIMARY KEY(project_id,conversation_id,seq), UNIQUE(grant_id,event_id));
+      CREATE TABLE IF NOT EXISTS worker_source_heads (grant_id TEXT PRIMARY KEY, head INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS worker_source_packets (grant_id TEXT NOT NULL, source_seq INTEGER NOT NULL,
+        event_id TEXT NOT NULL, packet TEXT NOT NULL, receipt TEXT NOT NULL,
+        PRIMARY KEY(grant_id,source_seq), UNIQUE(grant_id,event_id));`);
     const prior = db.prepare('SELECT authority FROM event_authority WHERE id=1').get();
     if (prior && prior.authority !== authorityId) fail(503, 'run-events-authority');
     if (!prior) db.prepare('INSERT INTO event_authority VALUES(1,?)').run(authorityId);
@@ -108,9 +113,14 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
     if (snapshot?.v !== 2 || snapshot.projectId !== projectId || snapshot.id !== conversationId ||
         !Array.isArray(snapshot.messages)) fail(403, 'accepted-message-scope');
     if (closing) fail(503, 'run-events-closed');
+    const records = acceptedRecords(projectId, conversationId, snapshot.messages);
+    const work = tail.then(() => transaction('accepted-message', () => mirrorRecords(projectId, conversationId, records)));
+    tail = work.catch(() => {}); return work;
+  }
+  function acceptedRecords(projectId, conversationId, messages) {
     // Mutable queue/read/run references do not change the accepted original.
     const seen = new Set(), arrivals = new Set();
-    const records = snapshot.messages.map(message => {
+    return messages.map(message => {
       if (!text(message?.messageId) || !text(message.requestId) || !text(message.senderAccountId) ||
           typeof message.senderNameAtSend !== 'string' || typeof message.content !== 'string' ||
           message.contentDigest !== digestOf(message.content) || !Number.isSafeInteger(message.arrivalSeq) || message.arrivalSeq < 1 ||
@@ -122,7 +132,8 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       return Object.fromEntries(['messageId', 'requestId', 'arrivalSeq', 'senderAccountId', 'senderNameAtSend',
         'createdAt', 'content', 'contentDigest', 'selectionSnapshot', 'attachments'].map(k => [k, message[k]]));
     }).sort((a, b) => a.arrivalSeq - b.arrivalSeq);
-    const work = tail.then(() => transaction('accepted-message', () => {
+  }
+  function mirrorRecords(projectId, conversationId, records) {
       let appended = 0;
       for (const record of records) {
         const args = [projectId, conversationId, record.messageId], content = canonicalJson(record);
@@ -145,7 +156,65 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
         appended++;
       }
       return { appended, head: headOf(projectId, conversationId) };
-    }));
+  }
+  /** Only the private receiving service may supply readSource. It must read the
+   * current pinned Doc workerEventSource for EVERY packet/retry and also verify
+   * the incoming worker's actual TLS/key/full-byte signature. No cached binding
+   * or previous ACK substitutes for that source. Source seq and original user
+   * mirror share one FULL transaction with the public conversation event seq. */
+  function appendWorker({ packet, readSource } = {}) {
+    let p;
+    try { p = validateWorkerEventPacket(packet); } catch (error) { return Promise.reject(error); }
+    if (typeof readSource !== 'function') return Promise.reject(Object.assign(new Error('worker-event-source'), { status: 503 }));
+    if (closing) return Promise.reject(Object.assign(new Error('run-events-closed'), { status: 503 }));
+    const work = tail.then(async () => {
+      usable(); if (closing) fail(503, 'run-events-closed');
+      const checked = structuredClone(await readSource(structuredClone(p)));
+      if (closing) fail(503, 'run-events-closed');
+      if (p.authorityId !== authorityId || checked?.allowed !== true ||
+          !['active', 'retained'].includes(checked.runGrant?.state) || !text(checked.runGrant.readReceiptId) ||
+          canonicalJson(bindingOf(checked.runGrant)) !== canonicalJson(p.binding) ||
+          checked.assignmentDigest !== p.assignmentDigest || canonicalJson(checked.rootScopeRef) !== canonicalJson(p.rootScopeRef) ||
+          !Number.isSafeInteger(checked.fenceRevision) || checked.fenceRevision < 0 ||
+          !Number.isSafeInteger(checked.authorityRevision) || checked.authorityRevision < 0 ||
+          checked.message?.messageId !== p.binding.messageId || checked.message?.senderAccountId !== p.binding.senderAccountId)
+        fail(403, 'worker-event-source');
+      const records = acceptedRecords(p.binding.projectId, p.binding.conversationId, [checked.message]);
+      // No await after this fresh Doc result: the local persistence unit is one
+      // synchronous transaction. Revocation is still owned by the Doc/root gate.
+      return transaction('worker-event', () => {
+        const grantId = p.binding.runGrantId;
+        const head = db.prepare('SELECT head FROM worker_source_heads WHERE grant_id=?').get(grantId)?.head ?? 0;
+        const inventory = db.prepare('SELECT COUNT(*) AS count,MAX(source_seq) AS last FROM worker_source_packets WHERE grant_id=?').get(grantId);
+        if (inventory.count !== head || (inventory.last ?? 0) !== head) fail(503, 'worker-event-gap');
+        const prior = db.prepare('SELECT packet,receipt FROM worker_source_packets WHERE grant_id=? AND source_seq=?').get(grantId, p.sourceSeq);
+        if (prior) {
+          if (prior.packet !== canonicalJson(p)) fail(409, 'worker-event-conflict');
+          const receipt = JSON.parse(prior.receipt);
+          const row = db.prepare('SELECT payload FROM run_events WHERE grant_id=? AND event_id=?').get(grantId, p.eventId);
+          if (!row || digestOf(JSON.parse(row.payload)) !== receipt.eventDigest) fail(503, 'worker-event-gap');
+          return receipt;
+        }
+        if (p.sourceSeq !== head + 1) fail(409, 'worker-event-sequence');
+        const existing = db.prepare('SELECT binding FROM run_bindings WHERE grant_id=?').get(grantId);
+        if (existing && existing.binding !== canonicalJson(p.binding)) fail(409, 'run-event-binding-conflict');
+        if (!existing) db.prepare('INSERT INTO run_bindings VALUES(?,?)').run(grantId, canonicalJson(p.binding));
+        mirrorRecords(p.binding.projectId, p.binding.conversationId, records);
+        const event = { ...p.event, ...p.binding };
+        if (event.type === 'tool_result') { delete event.output; event.outputOmitted = true; }
+        if (db.prepare('SELECT 1 FROM run_events WHERE grant_id=? AND event_id=?').get(grantId, p.eventId)) fail(409, 'worker-event-conflict');
+        const row = insertEvent(p.binding, p.eventId, event, grantId, canonicalJson({ binding: p.binding, event }));
+        const receipt = { v: 1, authorityId, runGrantId: grantId, instanceId: p.binding.instanceId,
+          instanceGeneration: p.binding.instanceGeneration, assignmentDigest: p.assignmentDigest,
+          sourceSeq: p.sourceSeq, eventId: p.eventId, packetDigest: digestOf(p),
+          eventSeq: row.eventSeq, eventDigest: digestOf(row), row };
+        db.prepare('INSERT INTO worker_source_packets VALUES(?,?,?,?,?)').run(grantId, p.sourceSeq, p.eventId, canonicalJson(p), JSON.stringify(receipt));
+        db.prepare('INSERT INTO worker_source_heads VALUES(?,?) ON CONFLICT(grant_id) DO UPDATE SET head=excluded.head').run(grantId, p.sourceSeq);
+        return receipt;
+      });
+    });
+    // Rejected source/persistence cannot become an unhandled queue tail; the
+    // original result still rejects, so the worker cannot continue model/tool.
     tail = work.catch(() => {}); return work;
   }
   // A queued run recovered without a human HTTP reader uses only the original
@@ -190,7 +259,7 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       async beforeCall() { await serial; if (error) throw error; usable(); },
     };
   }
-  return { registerRun, append, after, writer, mirrorAccepted, mirrorRunMessage, failure: () => fatal,
+  return { registerRun, append, appendWorker, after, writer, mirrorAccepted, mirrorRunMessage, failure: () => fatal,
     inspect: () => ({ synchronous: db.prepare('PRAGMA synchronous').get().synchronous,
       journalMode: db.prepare('PRAGMA journal_mode').get().journal_mode, integrity: db.prepare('PRAGMA integrity_check').get().integrity_check }),
     async close() { if (closed) { if (fatal) throw fatal; return; }

@@ -132,11 +132,18 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
  * the original request. execution-started work is never auto-replayed on restart.
  */
 export function createAccountRunManager({ runClient, readIntents, runnerFactory, preflight = async () => true, serviceKid, instanceId,
-  runEvents = null, resources = null, connectionsClosed = null, childrenClosed = null, now = Date.now, log = () => {} } = {}) {
+  runEvents = null, resources = null, connectionsClosed = null, childrenClosed = null,
+  task = null, assignmentReady = null, onTaskDrained = null, now = Date.now, log = () => {} } = {}) {
   if (!runClient || ['admit', 'confirmRead', 'queryRead', 'checkAccess', 'finish', 'pending'].some(name => typeof runClient[name] !== 'function') ||
     !readIntents?.prepare || !readIntents?.confirm || !readIntents?.executeOnce || typeof runnerFactory !== 'function' ||
     typeof preflight !== 'function' || typeof serviceKid !== 'string' || !serviceKid ||
     typeof instanceId !== 'string' || !instanceId || (runEvents && typeof runEvents.writer !== 'function')) fail(503, 'account-runner-configuration');
+  const selectedTask = task ? structuredClone(task) : null;
+  if (selectedTask && (Object.keys(selectedTask).sort().join(',') !== 'conversationId,projectId,requestId' ||
+      Object.values(selectedTask).some(value => typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) ||
+      typeof assignmentReady !== 'function' || typeof onTaskDrained !== 'function' || !runEvents?.writer))
+    fail(503, 'account-worker-task-configuration');
+  let taskConsumed = false;
   const waking = new Map(), active = new Map(), closedRuns = new Set(), listeners = new Set();
   // Same live Agent OS only: unknown doc ACKs keep the exact request/grant until
   // replay resolves them. A new OS cannot inherit an old instance's grant.
@@ -149,6 +156,17 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     return result;
   };
   async function processGrant(grant, slot) {
+    if (selectedTask) {
+      if (grant.projectId !== selectedTask.projectId || grant.conversationId !== selectedTask.conversationId ||
+          grant.serviceKid !== serviceKid || grant.instanceId !== instanceId) fail(403, 'account-worker-task-binding');
+      // Admission alone is not execution authority. The private worker gate
+      // waits for the Doc/root bound publication before preparing read intent.
+      const bound = await assignmentReady(structuredClone(grant));
+      if (closed) fail(503, 'account-runner-closed');
+      if (bound?.executionAllowed !== true || bound?.phase !== 'bound' ||
+          ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'serviceKid', 'instanceId', 'instanceGeneration']
+            .some(k => bound.assignment?.target?.[k] !== grant[k])) fail(503, 'account-worker-assignment-pending');
+    }
     if (!grant?.message || grant.message.runId !== grant.runId || grant.message.messageId !== grant.messageId ||
       canonicalJson(acceptedMessageRef(grant.message, grant)) !== canonicalJson(grant.messageRef)) fail(503, 'run-record-mismatch');
     const prompt = canonicalReadRecord(grant.message, grant);
@@ -226,11 +244,30 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       }
       finally {
         // No emit may remain unobserved when the owned runner has drained.
-        try { await events?.flush(); }
+        let eventFlushState = 'failed';
+        try { await events?.flush(); eventFlushState = 'durable'; }
         finally {
-          runnerClose(entry);
-          active.delete(grant.runId); if (drained) closedRuns.add(grant.runId);
-          settle();
+          let closeError = null;
+          if (selectedTask) {
+            try { await entry.runner?.close(); }
+            catch (error) { closeError = error; drained = false; }
+          } else runnerClose(entry);
+          try {
+            if (selectedTask) {
+              // This local observation is not a root/OS closure receipt and does
+              // not settle Doc outcome/FIFO. The owner must preserve that boundary.
+              await onTaskDrained({ grant: structuredClone(grant), readReceiptId: confirmed.receipt.receiptId,
+                drainState: drained ? 'local-drained' : 'unknown', eventFlushState, cancelled: entry.cancelled });
+            }
+            if (closeError) throw closeError;
+          } catch (error) {
+            if (closeError && error !== closeError) throw new AggregateError([closeError, error], 'account-worker-drain-pending');
+            throw error;
+          } finally {
+            active.delete(grant.runId); if (drained) closedRuns.add(grant.runId);
+            if (selectedTask) taskConsumed = true;
+            settle();
+          }
         }
       }
     }
@@ -248,6 +285,9 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
   }
   async function wake(projectId, conversationId) {
     if (closed) fail(503, 'account-runner-closed');
+    if (selectedTask && (projectId !== selectedTask.projectId || conversationId !== selectedTask.conversationId))
+      fail(403, 'account-worker-task-binding');
+    if (selectedTask && taskConsumed) fail(503, 'account-worker-task-consumed');
     const key = keyOf(projectId, conversationId);
     if (waking.has(key)) return waking.get(key);
     if (retryTimers.has(key)) { clearTimeout(retryTimers.get(key)); retryTimers.delete(key); }
@@ -256,6 +296,7 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     const work = (async () => {
       for (;;) {
         if (slot.finish) {
+          if (selectedTask) fail(503, 'run-outcome-unavailable');
           await runClient.finish(slot.finish);
           slot.finish = null; retryDelay.delete(key);
           continue;
@@ -263,11 +304,11 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
         // Completing a read/execution already committed by this OS does not
         // require a fresh model configuration. New admissions still do.
         if (await preflight({ projectId, conversationId }) !== true) fail(503, 'no-model-key');
-        if (slot.grant) { await processGrant(slot.grant, slot); continue; }
-        slot.admitRequestId ??= `wake:${randomUUID()}`;
+        if (slot.grant) { await processGrant(slot.grant, slot); if (selectedTask) return; continue; }
+        slot.admitRequestId ??= selectedTask?.requestId ?? `wake:${randomUUID()}`;
         const admitted = await runClient.admit({ projectId, conversationId, requestId: slot.admitRequestId });
         slot.admitRequestId = null;
-        if (admitted?.empty) { pending.delete(key); retryDelay.delete(key); return; }
+        if (admitted?.empty) { pending.delete(key); retryDelay.delete(key); if (selectedTask) taskConsumed = true; return; }
         if (admitted?.retry) continue;
         if (!admitted?.runGrantId || !admitted.message) fail(503, 'run-admit-protocol');
         slot.grant = admitted;
@@ -276,13 +317,14 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     waking.set(key, work);
     try { return await work; }
     catch (error) {
-      if (error?.status === 503 && !runEvents?.failure?.() &&
+      if (!selectedTask && error?.status === 503 && !runEvents?.failure?.() &&
           !['run-execution-uncertain', 'run-outcome-unavailable', 'run-events-persistence'].includes(error?.code) &&
           (slot.admitRequestId || slot.grant || slot.finish)) scheduleRetry(key, projectId, conversationId);
       throw error;
     } finally { waking.delete(key); }
   }
   async function resumeQueued() {
+    if (selectedTask) return wake(selectedTask.projectId, selectedTask.conversationId);
     const listed = await runClient.pending();
     if (!Array.isArray(listed?.conversations)) fail(503, 'run-pending-protocol');
     const targets = new Map(listed.conversations.map(({ projectId, conversationId }) =>
@@ -324,7 +366,8 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       if (errors.length) throw new AggregateError(errors, 'account-runner-pending');
     },
     describe: () => ({ accountMode: true, instanceId, activeRuns: active.size, closedRuns: closedRuns.size,
-      readIntents: readIntents.pending().length, pendingAdmissions: pending.size, runAuthorityMounted: true, at: now() }),
+      readIntents: readIntents.pending().length, pendingAdmissions: pending.size, runAuthorityMounted: true, at: now(),
+      ...(selectedTask ? { singleTask: true, taskConsumed } : {}) }),
     close() { closed = true; for (const entry of active.values()) { entry.cancelled = true; entry.cancelController.abort();
         try { entry.handle?.abort(); } catch {} }
       for (const timer of retryTimers.values()) clearTimeout(timer);
@@ -335,6 +378,7 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
 export function createAccountRunnerService({ conversationClient, runClient, readIntentsFile, runnerFactory,
   runEventsFile = null, runEventsAuthorityId = null,
   resources = null,
+  task = null, assignmentReady = null, onTaskDrained = null, runEventsSink = null,
   serviceKid, instanceId, connectionsClosed, childrenClosed, now = Date.now, log = () => {}, ...runnerOptions } = {}) {
   if (typeof readIntentsFile !== 'string' || !path.isAbsolute(readIntentsFile)) fail(503, 'read-intent-configuration');
   const readIntents = openReadIntents({ file: readIntentsFile, now });
@@ -343,13 +387,17 @@ export function createAccountRunnerService({ conversationClient, runClient, read
     // Legacy controlled runner fixtures can omit the event store. A real factory
     // must supply private persistent execution evidence; it never silently falls
     // back to the old conversation-owner store or a RAM-only event sink.
-    if (!runnerFactory || runEventsFile) runEvents = createAccountRunEvents({ file: runEventsFile,
+    if (runEventsSink) {
+      if (!task || ['writer', 'mirrorRunMessage', 'failure', 'close'].some(name => typeof runEventsSink[name] !== 'function'))
+        fail(503, 'worker-event-sink-configuration');
+      runEvents = runEventsSink;
+    } else if (!runnerFactory || runEventsFile) runEvents = createAccountRunEvents({ file: runEventsFile,
       authorityId: runEventsAuthorityId, now, verifyGrant: grant => runClient.checkAccess({
         projectId: grant.projectId, runGrantId: grant.runGrantId, action: 'write' }) });
     const factory = runnerFactory ?? createExistingHostedRunnerFactory({ ...runnerOptions, runClient, now, log });
     const preflight = runnerFactory ? async () => true : async () => modelReady(await runnerOptions.modelConfig());
     const manager = createAccountRunManager({ runClient, readIntents, runnerFactory: factory, preflight, serviceKid, instanceId,
-      runEvents, resources, connectionsClosed, childrenClosed, now, log });
+      runEvents, resources, connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, now, log });
     const base = createAccountConversationService({ conversationClient, now });
     return { ...base, runManager: manager, runEvents,
       // Internal assembly seam only. A production caller must already own a

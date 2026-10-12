@@ -5,22 +5,25 @@ import { createAgentInstanceSession } from '../agent/service/agent-instance-sess
 import { runAssetIssueRequest } from '../account/run-asset-protocol.mjs';
 
 const paths = Object.freeze({ admit: 'admit', confirmRead: 'read', queryRead: 'read/query',
-  checkAccess: 'check', finish: 'finish', runTicket: 'ticket', pending: 'pending' });
+  checkAccess: 'check', finish: 'finish', queryFinish: 'finish/query', scopePrepare: 'scope/prepare',
+  scopeTerminal: 'scope/terminal', scopeControl: 'scope/control', runTicket: 'ticket', pending: 'pending' });
 const operations = Object.freeze({ admit: 'admit', confirmRead: 'confirmRead', queryRead: 'queryRead',
-  checkAccess: 'checkAccess', finish: 'finish', runTicket: 'resolveRunPrincipal' });
+  checkAccess: 'checkAccess', finish: 'finish', queryFinish: 'queryFinish', scopePrepare: 'scopePrepare',
+  scopeTerminal: 'scopeTerminal', scopeControl: 'scopeControl', runTicket: 'resolveRunPrincipal' });
 const fail = code => { throw accountError(503, code); };
 
 /** Agent-owned mTLS transport. Doc derives the service principal from the pinned
  * client certificate; no caller can supply servicePrincipal or a human identity.
  */
-export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs = 5000 } = {}) {
+export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs = 5000, scopePrepareSource = null,
+  registrationPurpose = null, workerEventSource = null } = {}) {
   let base;
   try { base = new URL(origin); } catch { fail('run-client-configuration'); }
   const pin = certificateFingerprint(serverFingerprint256);
   if (base.protocol !== 'https:' || base.pathname !== '/' || base.search || base.hash || base.username || base.password ||
     !tls?.key || !tls?.cert || !tls?.ca || !/^[a-f0-9]{64}$/.test(pin) || !Number.isInteger(timeoutMs) || timeoutMs < 1)
     fail('run-client-configuration');
-  const active = new Set(); let closed = false;
+  const active = new Set(), sockets = new Set(); let closed = false, closing = null;
   /** Every call opens its own real TLS socket. The signature is constructed only
    * after secureConnect, then the exact body is sent, and completion waits for
    * the transport close. No HTTP capability is reused on a later request. */
@@ -65,7 +68,8 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
       req.on('error', () => abort(accountError(503, 'run-client-unavailable')));
       req.on('socket', current => {
         socket = current;
-        current.once('close', () => { socketClosed = true; finish(); });
+        sockets.add(current);
+        current.once('close', () => { sockets.delete(current); socketClosed = true; finish(); });
         const registrations = registerResource ? Promise.all([
           registerResource('stream', req), registerResource('socket', current),
         ]) : Promise.resolve([]);
@@ -85,7 +89,8 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
       });
     });
   }
-  const instanceSession = createAgentInstanceSession({ requestRegistration: (name, body) =>
+  let scopedRegistration = false;
+  const instanceSession = createAgentInstanceSession({ scopePrepareSource, registrationPurpose, workerEventSource, requestRegistration: (name, body) =>
     transmit(`/internal/v2/instances/${name}`, body) });
   async function request(name, fields) {
     if (closed || !paths[name]) throw accountError(503, 'run-client-unavailable');
@@ -93,15 +98,39 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
       ['servicePrincipal', 'serviceId', 'serviceKid', 'principal', 'creator', 'accountId', 'loginId', 'credentialId', 'loginGeneration',
         'instanceId', 'instanceGeneration', 'instanceSession'].some(key => fields[key] !== undefined))
       throw accountError(400, 'invalid-authority-claim');
+    // Keep the encoded request and the later TLS signature on one immutable
+    // snapshot, including outcome/read receipt and the complete signed prepare.
+    // Registration can await a network response before transmit creates bytes.
+    fields = structuredClone(fields);
     if (name === 'checkAccess' && !['read', 'write'].includes(fields.action)) throw accountError(400, 'invalid-run-action');
-    if (name !== 'pending') await instanceSession.register();
-    return transmit(`/internal/v2/runs/${paths[name]}`, fields, operations[name] ?? null);
+    if (name !== 'pending' || registrationPurpose || scopedRegistration) await instanceSession.register();
+    return transmit(`/internal/v2/runs/${paths[name]}`, fields,
+      name === 'pending' && instanceSession.identity()?.purpose ? 'pendingRuns' : operations[name] ?? null);
   }
   return {
     admit: input => request('admit', input), confirmRead: input => request('confirmRead', input),
     queryRead: input => request('queryRead', input), checkAccess: input => request('checkAccess', input),
     finish: input => request('finish', input), runTicket: input => request('runTicket', input),
+    queryFinish: input => request('queryFinish', input), scopePrepare: input => request('scopePrepare', input),
+    scopeTerminal: input => request('scopeTerminal', input), scopeControl: input => request('scopeControl', input),
     pending: () => request('pending', {}),
+    async scopeAssignment(input) {
+      const keys = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId', 'requestId'];
+      if (!input || Array.isArray(input) || Object.keys(input).sort().join(',') !== keys.sort().join(',') ||
+          Object.values(input).some(value => typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)))
+        throw accountError(400, 'invalid-scope-assignment');
+      if (closed) throw accountError(503, 'run-client-unavailable');
+      await instanceSession.register();
+      return transmit('/internal/v2/runs/assignment', input, 'scopeAssignment');
+    },
+    async workerEventSource(input) {
+      if (!input || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'assignmentDigest,projectId,runGrantId' ||
+          !['projectId', 'runGrantId'].every(k => typeof input[k] === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(input[k])) ||
+          !/^[a-f0-9]{64}$/.test(input.assignmentDigest)) throw accountError(400, 'invalid-worker-event-source');
+      if (closed) throw accountError(503, 'run-client-unavailable');
+      await instanceSession.register();
+      return transmit('/internal/v2/runs/worker-event-source', input, 'workerEventSource');
+    },
     async issueRunAsset(body, { registerResource } = {}) {
       if (closed) throw accountError(503, 'run-client-unavailable');
       if (registerResource !== undefined && typeof registerResource !== 'function')
@@ -113,9 +142,24 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
         { bodyText, runAssetIssue: true, registerResource });
     },
     registerInstance: () => instanceSession.register(), instanceIdentity: () => instanceSession.identity(),
+    scopeIdentity: () => instanceSession.scopeIdentity(),
+    configureRegistrationScope(input) { const result = instanceSession.configureRegistrationScope(input); scopedRegistration = true; return result; },
+    bindScope: input => instanceSession.bindScope(input),
+    scopePrepareFor: input => instanceSession.scopePrepareFor(input),
+    scopeIntentFor: input => instanceSession.scopeIntentFor(input),
+    workerEventProofFor: input => instanceSession.workerEventProofFor(input),
     dataProofFor: input => instanceSession.dataProofFor(input),
     conversationControlProofFor: input => instanceSession.conversationControlProofFor(input),
     runAssetHttpProofFor: input => instanceSession.runAssetHttpProofFor(input),
-    close() { closed = true; instanceSession.close(); for (const req of active) req.destroy(); },
+    close() {
+      if (closing) return closing;
+      closed = true; instanceSession.close();
+      const resources = new Set([...active, ...sockets]);
+      closing = Promise.all([...resources].map(resource => new Promise(resolve => {
+        if (resource.closed === true) return resolve();
+        resource.once('close', resolve); resource.destroy();
+      })));
+      return closing;
+    },
   };
 }
