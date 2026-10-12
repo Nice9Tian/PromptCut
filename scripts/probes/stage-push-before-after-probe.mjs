@@ -7,7 +7,7 @@
  *        [--port-base 27590]                  用 +0(父页的源)、+2(舞台的源);两份构建先后用同一对端口
  *        [--cards <卡片 id,逗号分隔>]         缺省是那 14 张有状态的内置卡加 `terminal-3d`
  *        [--last 150] [--fps 30] [--seconds 20]   每条路从第 0 帧逐帧做到第几帧
- *        [--paths front,measure,bake]         要走哪几条路
+ *        [--paths front,measure,bake]         要走哪几条路(另有 booleans,见下)
  *        [--json <文件>] [--out <目录>]        --out 把改前改后不相同的快照存下来
  *
  * 在线构建:`npx vite build --mode online --outDir <目录> --emptyOutDir`(改之前的那一份在改之前的树里构建)。
@@ -20,6 +20,8 @@
  *   measure  测量的快照趟:后台舞台 `render(t, { jump: true, probe: 'snapshot' })`,从挂载帧逐帧推、每帧生成快照发回来
  *            (`probe-frame` 事件)。产品里这一趟按一拍预算截断,所以只有头几帧;两份构建取到的帧数不一样时只比都有的。
  *   bake     后台舞台为浏览器节点逐帧生成快照(`bakeFrame`,顺着做)。
+ *   booleans 测量的两趟布尔探针(`render(t, { jump: true, probe: 'booleans' })`):这张卡判没判成「只推自己子树的时间就行」(`vtOk`)、
+ *            「可定位」(`seekOk`)。缺省不走,`--paths` 里写上才走;只报改前改后各是什么。
  *
  * 报告:每张卡每条路,改前改后逐帧比(口径同 `snapshotCompare.mjs`:标签、属性、文本逐字比,样式数值 1e-6 容差),
  * 写出相同几帧、不同几帧、哪些帧不同、第一处差在哪;另报每份构建里 front 与 bake 两条路对不对得上(同一帧两条路的快照比)。
@@ -153,6 +155,12 @@ async function runBuild(label, dist) {
             await rpc('setProject', projectOf(cardId), { reset: true });
             await rpc('render', LAST / FPS, { jump: true, probe: 'snapshot' });
             for (const [n, html] of await taken()) got.set(n, html);
+          } else if (how === 'booleans') {
+            await rpc('setRole', 'back', { job: 'probe' });
+            await rpc('setProject', projectOf(cardId), { reset: true });
+            const r = await rpc('render', (SECONDS * FPS - 1) / FPS, { jump: true, probe: 'booleans' });
+            if (!r?.booleans) failures.push(`${label} ${cardId} booleans:${JSON.stringify(r).slice(0, 120)}`);
+            else got.set(0, JSON.stringify({ vtOk: r.booleans.vtOk, seekOk: r.booleans.seekOk }));
           } else if (how === 'bake') {
             await rpc('setRole', 'back', { job: 'bake' });
             await rpc('setProject', projectOf(cardId), { reset: true });
@@ -204,6 +212,12 @@ for (const cardId of CARDS) {
   const row = { cardId, beforeVsAfter: {}, frontVsBake: {} };
   console.log(`卡 ${cardId}`);
   for (const how of PATHS) {
+    if (how === 'booleans') {
+      const x = before[cardId][how]?.get(0) ?? '没量出来', y = after[cardId][how]?.get(0) ?? '没量出来';
+      row.booleans = { before: x, after: y, same: x === y };
+      console.log(`   booleans 改前 ${x};改后 ${y}${x === y ? '' : '  ← 变了'}`);
+      continue;
+    }
     const r = compare(before[cardId][how] ?? new Map(), after[cardId][how] ?? new Map(), `${cardId}-${how}`);
     row.beforeVsAfter[how] = r;
     console.log(`   ${how.padEnd(7)} 改前对改后:${brief(r)}${r.first ? `〔${r.first}〕` : ''}`);
