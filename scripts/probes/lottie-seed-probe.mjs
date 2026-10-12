@@ -53,7 +53,10 @@
  *   表达式用例    exprcases 在「关」「种子」「替换」下第 28～42 帧各图层的数:连调两次 random 的两个数、Math.random、同名变量、
  *                 wiggle 相邻帧差多少、seedRandom 两种写法随不随时间变、同一个合成的两份是不是各动各的;另核 this.pv 和 value、
  *                 表达式里用 gaussRandom(播放库没有这个函数)开着和关着是不是同样地失败、开关一和开关三叠着开。
- *                 「替换」要守的是用户 2026-10-12 定的原则:固定随机数只为每次结果一致,不改变原来的观感
+ *                 「替换」要守的是用户 2026-10-12 定的原则:固定随机数只为每次结果一致,不改变原来的观感。
+ *                 卡片这边和播放库一样是「同一帧里各表达式共用一串、按求值先后接着取」,只把每一帧的起点固定住
+ *   交替画帧      同一页里三份开着的实例(其中两份是同一个素材)加一份关着的,轮流各跳一帧:每份的画面要和它单独画时相同
+ *   绕过去        不走 loadLottie 给的 goTo、直接调播放库的 goToAndStop:表达式退回各用各的一串,两个新页面读到的仍相同(只报告和正常画差几帧)
  *   图            --out 目录里存几张缩到 960×540 的 PNG,给人看一眼画面不是空的:fixture 第 21 帧(关、种子各取顺推和新页新建两份)、happy2016 最后一帧
  *
  * 判定(不满足进 `fails`,退出码 1):
@@ -261,6 +264,18 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
       }
       return out;
     },
+    /**
+     * 交替画帧:specs 里每份 { name, mode, offset },轮流各跳一帧(第 f + offset 帧),记下每份每一步「看得见的」文本。
+     * 只给一份时就是它单独画。
+     */
+    async alternate(specs, frames) {
+      const items = [];
+      for (const spec of specs) { const data = JSON.parse(await text(spec.name)); const box = document.createElement('div'); box.className = 'box'; document.body.appendChild(box); const handle = current.loadLottie(box, data, 'contain', MODES[spec.mode]); await loaded(handle.anim); items.push({ handle, box, spec, out: [] }); }
+      for (const f of frames) for (const it of items) { it.handle.goTo(f + it.spec.offset); it.out.push(svgText(it.box).v); }
+      return items.map((it) => it.out);
+    },
+    /** 绕过 loadLottie 给的 goTo,直接调播放库的 goToAndStop */
+    bypass(id, frames) { const m = made.get(id); return frames.map((f) => { m.handle.anim.goToAndStop(f, true); return svgText(m.box).v; }); },
     /** exprcases 里那两层记在全局对象上的核对结果 */
     pvCheck: () => ({ static: globalThis.__pcPvStatic ?? null, keyed: globalThis.__pcPvKeyed ?? null }),
     /** 卡片自己的随机函数装没装到这个页面上;装了就看它给的是不是四样、同样的参数再调一次是不是同样的数、Math 别的东西还在不在 */
@@ -595,11 +610,12 @@ try {
       if (!(runtime.gives === 4 && runtime.repeatable && runtime.mathKeepsRest)) fail(`${label}:卡片自己的随机函数直接调的结果不对 ${JSON.stringify(runtime)}`);
     }
     // 只有 wiggle 的表达式跟在别的表达式的 seedRandom 后面求值时(fixture 的 wiggle-pos 就是):播放库现在让它接着那一串取,
-    // 看起来是连续的;「替换」下它不再受别的表达式影响,照旧逐帧跳。只记录
+    // 看起来是连续的(每帧最多走幅度的六分之一)。「替换」下也得是这样
     if (ASSETS.includes('fixture')) {
       const late = Array.from({ length: 15 }, (_, i) => 42 + i); const steps = {};
       for (const mode of ['off', 'seed', 'expr']) { const p = await open(); const m = await call(p, 'make', 'fixture', mode); const rows = await call(p, 'readLayers', m.id, late); await p.close(); const xs = late.map((f) => rows[f]['wiggle-pos'][X]); steps[mode] = +Math.max(...xs.slice(1).map((x, i) => Math.abs(x - xs[i]))).toFixed(2); }
       section.wiggleAfterSeeded = steps;
+      if (!(steps.expr <= AMP / 6 + 0.001)) fail(`表达式用例/替换:fixture 的 wiggle-pos 排在别的表达式的 seedRandom 后面求值,播放库现在是连续的(相邻帧最多差 ${steps.off}),开着却差 ${steps.expr}`);
       console.log(`表达式用例 / fixture 的 wiggle-pos(每帧排在一个 seedRandom(7, true) 的表达式后面求值)第 42～56 帧相邻帧最多差:关 ${steps.off},种子 ${steps.seed},替换 ${steps.expr}`);
     }
     // 开关一和开关三叠着开(再加开关二):表达式已经不用播放库那一串了,画面应当和只开开关三(加开关二)一样
@@ -609,6 +625,29 @@ try {
       section.stacked = { same, of: ns.length };
       if (same !== ns.length) fail(`表达式用例:三个开关都开,fixture ${ns.length} 个 N 里只有 ${same} 个和「替换+不留旧数」相同`);
       console.log(`表达式用例 / 三个开关都开:fixture 第 ${ns.join('、')} 帧,${same}/${ns.length} 和「替换+不留旧数」的画面相同`);
+    }
+    // 交替画帧:三份开着正式那一组的实例(其中两份是同一个素材、错开 11 帧)加一份关着的,轮流各跳一帧
+    if (ASSETS.includes('fixture')) {
+      const steps = [...Array.from({ length: 26 }, (_, i) => 20 + i), 30, 22, 44];
+      const specs = [{ name: 'fixture', mode: 'exprboth', offset: 0 }, { name: 'exprcases', mode: 'exprboth', offset: 3 }, { name: 'fixture', mode: 'exprboth', offset: 11 }, { name: 'fixture', mode: 'off', offset: 5 }];
+      let p = await open(); const together = await call(p, 'alternate', specs, steps); await p.close();
+      const rows = [];
+      for (let i = 0; i < 3; i++) {
+        p = await open(); const [alone] = await call(p, 'alternate', [specs[i]], steps); await p.close();
+        const same = steps.filter((f, k) => alone[k] === together[i][k]).length;
+        rows.push({ name: specs[i].name, offset: specs[i].offset, same, of: steps.length });
+        if (same !== steps.length) fail(`交替画帧:${specs[i].name}(错开 ${specs[i].offset} 帧)${steps.length} 步里只有 ${same} 步和单独画时相同`);
+      }
+      section.alternate = rows;
+      console.log(`交替画帧 / 三份「替换+不留旧数」的实例加一份关着的轮流各跳一帧(${steps.length} 步):和单独画时相同的步数 ${rows.map((r) => `${r.name}+${r.offset} ${r.same}/${r.of}`).join(',')}`);
+      // 绕过去:直接调播放库的 goToAndStop,表达式不在卡片包住的那一段里求值
+      const late = Array.from({ length: 15 }, (_, i) => 42 + i); const runs = [];
+      for (let k = 0; k < 2; k++) { p = await open(); const m = await call(p, 'make', 'fixture', 'expr'); runs.push(await call(p, 'bypass', m.id, late)); await p.close(); }
+      p = await open(); const normal = await call(p, 'make', 'fixture', 'expr'); const shots = await call(p, 'seq', normal.id, late, late); await p.close();
+      const repeat = runs[0].every((v, k) => v === runs[1][k]); const differ = late.filter((f, k) => runs[0][k] !== shots[f].v).length;
+      section.bypass = { repeat, differFromNormal: differ, of: late.length };
+      if (!repeat) fail('绕过去:直接调播放库的 goToAndStop,两个新页面读到的画面不同');
+      console.log(`绕过去 / fixture 开着「替换」但直接调播放库的 goToAndStop(第 42～56 帧):两个新页面${repeat ? '相同' : '不同'};和正常跳帧比 ${differ}/${late.length} 帧不同`);
     }
     report.exprCases = section;
   }

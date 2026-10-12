@@ -89,11 +89,11 @@ const DEMO_JSON = JSON.stringify({
  *
  * 不去碰播放库那一串,而是让表达式根本不用它:交给播放库之前改写素材里每个表达式的原文,包一层函数,把
  * `random`、`seedRandom`、`wiggle`、`Math` 这几个名字遮成卡片自己的(`wrapLottieExpression`、`lottieExprRuntime`)。
- * 卡片自己的每次求值开一串新的随机数,种子由(素材种子、表达式编号、时间)算出,不记任何状态。
  * 改写以后没有任何表达式再读播放库内部那一串,所以这个开关不取它、不给它播种。表达式以外的随机归外面那一层。
- * 观感照播放库现在的不变(2026-10-12 用户定的原则,见 `lottieExprRuntime` 的说明):wiggle 照旧逐帧跳,
- * seedRandom 照旧不看第二个参数,同一个合成放几份照旧各动各的。
- * 和开关一比:不用取播放库内部的随机源、不用按帧播种、不用装载后重画。
+ * 观感照播放库现在的不变(2026-10-12 用户定的原则,见 `lottieExprRuntime` 的说明):卡片这边同样是「同一帧里各表达式
+ * 共用一串、按求值先后接着取」,wiggle 照旧逐帧跳,seedRandom 照旧不看第二个参数,同一个合成放几份照旧各动各的;
+ * 改掉的只有一处:这一串每一帧的起点由(素材、帧号)定,不再接着上一帧剩下的取。
+ * 和开关一比:不用取播放库内部的随机源、不用给它播种、不用装载后重画。
  *
  * ── 外面那一层(开关一、开关三只要开了一个就有;2026-10-12 用户:「你帮我在外面也兜住,把播放库的随机数也固定。」)──
  *
@@ -259,36 +259,54 @@ function bitsOf(x: number): [number, number] {
   return [u32[0], u32[1]];
 }
 
-/** 各串的用途号,进种子:同一个表达式里不同用途的随机数互不相干 */
-const STREAM_EVAL = 1, STREAM_SEEDED = 3, STREAM_MATH_SEEDED = 5;
+/** 各串的用途号,进种子:不同用途的随机数互不相干 */
+const STREAM_EVAL = 1, STREAM_SEEDED = 3, STREAM_MATH_SEEDED = 5, STREAM_FRAME = 6;
+
+/** 一串随机数现在走到哪了。里面的 next 会被整个换掉(重新播种) */
+interface ExprStream { next: () => number }
+
+/**
+ * 「这一帧里各表达式共用的那一串」。只在某份开了开关三的实例被包住的那一段同步代码里(建实例、装载完成、跳帧)不为 null;
+ * 那一段开头由 `loadLottie` 按(素材种子、帧号)定好起点,结束时放回原来的值,所以两份实例交替画帧互不相干。
+ */
+let exprShared: ExprStream | null = null;
 
 /**
  * 改写后的表达式每次求值调一次,拿到这一次用的四样东西:random、seedRandom、wiggle、换掉了 random 的 Math。
- * 都只由(素材种子、表达式编号、时间)决定;不记任何东西,所以和别的表达式、别的 Lottie、别的卡、推帧路径无关。
  *
- * 原则(2026-10-12 用户定):固定随机数只为让每次结果一致,不改变原来的观感。所以下面每一样都照播放库现在的样子做,
- * 只是数不再跟「之前发生过什么」有关:
+ * 原则(2026-10-12 用户定):固定随机数只为让每次结果一致,不改变原来的观感。所以这里照着播放库现在的样子做——
+ * 播放库里**所有表达式共用一串随机数,同一帧里按求值的先后接着取**——只把这一串每一帧的起点固定住:
  *
- *   这一次求值的一串  种子 =(素材、表达式编号、时间)。播放库对文本里有 `random` 的表达式也是每次求值按
- *                     「randSeed + 时间」重新播种;这里对所有表达式都这样。
+ *   这一帧的起点   开始画一帧时由(素材种子、帧号)定(`loadLottie` 里)。播放库现在是接着上一帧剩下的取,
+ *                  所以和之前画过什么有关;这是唯一改掉的地方。
+ *   求值之前       表达式原文里有 `random` 这几个字母的,把共用的这一串换成由(素材、表达式编号、时间)定的一串。
+ *                  对应播放库的 `_needsRandom` 和 `seedRandom(randSeed + time)`。原文里没有的不换,接着前一个表达式留下的取。
  *   random       调用形式照播放库的:无参 0～1;一个参数是上限;两个参数是下限上限;参数是数组时各分量共用一个随机数。
- *                连着调,取的是这一串里的下一个。
- *   wiggle       算法照播放库的:频率写死成 5,累加 floor(时间×5) 组随机数,再加下一组乘以小数部分;随机数就从这一次求值的
- *                那一串里接着取(播放库里 wiggle 和 random 也是同一串)。每一帧各取各的,相邻帧之间照旧是跳的。
+ *   wiggle       算法照播放库的:频率写死成 5,累加 floor(时间×5) 组随机数,再加下一组乘以小数部分。
  *                「时间」读的是调用那一刻的 `time`(表达式里先调过 posterizeTime 的话是改过的),和播放库一样。
- *   seedRandom   照播放库现在的规矩,不看第二个参数:调了以后这一串换成只跟(素材、表达式编号、参数)有关的一串,不带时间,
- *                所以后面的 random 每帧同一个数(后面的 wiggle 也改从这一串取,和播放库一样)。
- *   Math         `Math.random()` 也取这一次求值的那一串;`Math.seedrandom(x)`(播放库把它的播种函数也挂在 Math 上)
- *                同样只换这一串;别的照旧。
+ *   seedRandom   照播放库现在的规矩,不看第二个参数:把共用的这一串换成由(素材、表达式编号、参数)定的一串,不带时间。
+ *   Math         `Math.random()` 也从共用的这一串取;`Math.seedrandom(x)`(播放库把它的播种函数也挂在 Math 上)同样换这一串。
+ * random、wiggle、Math.random 都从共用的这一串**当前的位置**接着取。于是和播放库现在一样:只写了 wiggle、排在别人的
+ * seedRandom 后面求值的表达式,接着那一串不带时间的数取,看起来是连续的;排在最前面、前面没人播过种的,从这一帧的起点取,
+ * 逐帧跳;一个表达式求值到一半去读另一个带随机表达式的属性,后者中途换掉这一串,前者接着换过的取。
  * 播放库没有 `gaussRandom`,这里也不补:表达式里用了,和现在一样按播放库的方式失败。
+ *
+ * 「同一帧里求值的先后」只跟素材和帧号有关(播放库每帧从最后一层往前、只算在场的图层,每个表达式一帧只算一次),
+ * 所以画面只跟素材和帧号有关。
+ *
+ * 万一表达式在那一段同步代码之外被求值(`exprShared` 为 null:有人绕过 `loadLottie` 给的 goTo 直接调播放库的
+ * `goToAndStop`、`resize`、`updateDocumentData` 之类),退回每个表达式自己的一串(素材、表达式编号、时间):
+ * 仍然每次一致,只是「排在别人的 seedRandom 后面的 wiggle」不再连续。卡片自己不会走到这里。
  *
  * value 是表达式拿到的属性原值。播放库的 wiggle 用的是 `this.pv`:带关键帧的属性两者是同一个对象;不带关键帧的多维属性
  * `pv` 是原值存成单精度的样子,所以这里先取单精度再算,结果和用 `pv` 逐位相同(探针核对过)。
  */
-function lottieExprRuntime(seed: number, id: number, time: number, value: any, math: object, now?: () => number): unknown[] {
+function lottieExprRuntime(seed: number, id: number, time: number, value: any, math: object, now?: () => number, needsRandom?: unknown): unknown[] {
   const [t0, t1] = bitsOf(Number(time) || 0);
-  let next = streamOf(mixSeed(seed, id, STREAM_EVAL, t0, t1));
-  const rnd = () => next();
+  const own = () => streamOf(mixSeed(seed, id, STREAM_EVAL, t0, t1));
+  const stream: ExprStream = exprShared ?? { next: own() };
+  if (exprShared && needsRandom) stream.next = own();
+  const rnd = () => stream.next();
   const random = (min?: any, max?: any) => {
     if (max === undefined) {
       if (min === undefined) { min = 0; max = 1; } else { max = min; min = undefined; }
@@ -306,7 +324,7 @@ function lottieExprRuntime(seed: number, id: number, time: number, value: any, m
   };
   const seedRandom = (offset?: any) => {
     const [o0, o1] = bitsOf(Number(offset) || 0);
-    next = streamOf(mixSeed(seed, id, STREAM_SEEDED, o0, o1));
+    stream.next = streamOf(mixSeed(seed, id, STREAM_SEEDED, o0, o1));
   };
   const wiggle = (_freq: number, amp: number) => {
     const len = (value && value.length) || 1;
@@ -324,7 +342,7 @@ function lottieExprRuntime(seed: number, id: number, time: number, value: any, m
   };
   const shadowMath = Object.create(math) as { random: () => number; seedrandom: (s?: unknown) => void };
   shadowMath.random = rnd;
-  shadowMath.seedrandom = (s?: unknown) => { next = streamOf(mixSeed(seed, id, STREAM_MATH_SEEDED, lottieSeedOf(String(s)))); };
+  shadowMath.seedrandom = (s?: unknown) => { stream.next = streamOf(mixSeed(seed, id, STREAM_MATH_SEEDED, lottieSeedOf(String(s)))); };
   return [random, seedRandom, wiggle, shadowMath];
 }
 
@@ -346,10 +364,11 @@ const EXPR_MARK = "/*pc-expr*/";
  * 第一个形参就是标识符 random,只是把其中的字母 a 写成了 Unicode 转义,文本里不出现这个词:播放库看表达式文本里有没有
  * 这六个字母来决定求值前要不要给它自己那一串播种(`_needsRandom`),这样包完以后它的判断和包之前一样,我们不多惊动它。
  * 原文后面先换行再接 `return`:原文最后一行是 `//` 注释时不会把 return 一起注释掉。
- * 最后一个实参是「现在的 time」:表达式里调 posterizeTime 会改 `time`,wiggle 要读改过以后的。
+ * 倒数第二个实参是「现在的 time」:表达式里调 posterizeTime 会改 `time`,wiggle 要读改过以后的。
+ * 最后一个实参是原文里有没有 `random` 这几个字母(和播放库的 `_needsRandom` 同一个判法,区分大小写):有的求值前先换一串。
  */
 function wrapLottieExpression(source: string, seed: number, id: number): string {
-  return `${EXPR_MARK}var $bm_rt = (function (r\\u0061ndom, seedRandom, wiggle, Math) {\nvar $bm_rt;\n${source}\n;return $bm_rt;\n}).apply(null, ${EXPR_RUNTIME}(${seed}, ${id}, time, value, Math, function () { return time; }));`;
+  return `${EXPR_MARK}var $bm_rt = (function (r\\u0061ndom, seedRandom, wiggle, Math) {\nvar $bm_rt;\n${source}\n;return $bm_rt;\n}).apply(null, ${EXPR_RUNTIME}(${seed}, ${id}, time, value, Math, function () { return time; }, ${source.indexOf("random") !== -1 ? 1 : 0}));`;
 }
 
 /** 这段表达式原文里有没有可能取随机数(名字里带 random、wiggle,或者用到 Math) */
@@ -553,6 +572,8 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
   }
   // 播放库内部的随机源只有开关一用;只开开关三时不取它、不给它播种
   const math = mode.seed ? captureLottieMath() : null;
+  /** 建好的实例。建之前(同步建的那一段里)还是 null,那时播放库画的是第 0 帧 */
+  let built: AnimationItem | null = null;
   // 外面那一层(开关一、开关三都有):播放库直接调全页 `Math.random()` 的地方
   const outerOn = seed !== null && mode.debug !== "no-outer";
   const textKeyed = outerOn && mode.debug !== "no-text-key" && hasRandomTextOrder(data) && hookTextOrder();
@@ -563,11 +584,16 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
    *     随机数只跟素材和 N 有关,全页那一串也不被 Lottie 挪动。
    *   - 文字的随机顺序另按(素材、图层、文字内容)固定,见 `hookTextOrder`。
    *   - 开关一另外给播放库内部那一串按同一个 key 播种。
+   *   - 开关三另外定好「这一帧里各表达式共用的那一串」的起点(见 `lottieExprRuntime`)。
    */
   const guarded = <T,>(key: "build" | number, fn: () => T): T => {
-    const outerExact = exactBuilding, outerText = textSeedNow;
+    const outerExact = exactBuilding, outerText = textSeedNow, outerShared = exprShared;
     exactBuilding = exact;
     textSeedNow = textKeyed ? seed : null;
+    // 开关三:这一帧里各表达式共用的那一串,起点 =(素材种子、帧号)。建实例 / 装载完成那一段里播放库会自己画一次当前帧
+    // (建图层本身不求值表达式),所以那一段用的也是当前帧的帧号,和以后再跳回这一帧时一样,不用重画
+    const frame = key === "build" ? Number((built as unknown as { currentRawFrame?: number } | null)?.currentRawFrame) || 0 : key;
+    exprShared = mode.expr && seed !== null ? { next: streamOf(mixSeed(seed, STREAM_FRAME, ...bitsOf(frame))) } : null;
     try {
       if (seed === null) return fn();
       math?.seedrandom(`${seed}:${key}`);
@@ -576,12 +602,13 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
     } finally {
       exactBuilding = outerExact;
       textSeedNow = outerText;
+      exprShared = outerShared;
     }
   };
   /**
    * 只有开关一需要:装载完成那一下播放库会自己画一次当前帧,表达式接着用的是建图层取剩的那一串,不是「种子 + 帧号」
    * 那一串;以后再跳回这一帧画出来的就可能不一样。所以装载完成后按帧号重新播种,原地重画一遍
-   * (`renderFrame(null)` 是播放库里「当前帧再画一次」的写法)。开关三下表达式不记状态,不用重画。
+   * (`renderFrame(null)` 是播放库里「当前帧再画一次」的写法)。开关三下那一段的起点用的就是当前帧的帧号,不用重画。
    */
   const redraw = () => {
     if (!mode.seed) return;
@@ -589,6 +616,7 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
     guarded(Number(item.currentRawFrame) || 0, () => item.renderer?.renderFrame?.(null));
   };
   const anim: AnimationItem = guarded("build", build);
+  built = anim;
   if (anim.isLoaded) redraw();
   else {
     // 字体 / 外部数据没到齐:建图层和第一次画都在播放库的定时器回调里,把这份实例的 checkLoaded 包进来
