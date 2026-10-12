@@ -3,7 +3,7 @@
  *
  *   node scripts/probes/export-paths-measure.mjs [--runs 3] [--projects demo,heavy] [--frames 0-59]
  *        [--workers auto] [--port 7460] [--work <目录>] [--json <汇总文件>] [--assets <小图目录>]
- *        [--no-split] [--keep]
+ *        [--no-split] [--keep] [--retries 3]
  *
  * 两条路(同一台机器、同一个项目，交替跑：桌面、在线、桌面、在线……，各 `--runs` 遍，缺省 3)：
  *
@@ -51,7 +51,7 @@ import { PROJECTS, FIXTURE_VIDEO } from './fixtures/export-paths/projects.mjs';
 /* ---------------- 参数 ---------------- */
 
 function parseArgs(argv) {
-  const o = { runs: 3, projects: ['demo', 'heavy'], frames: null, workers: 'auto', port: 7460, work: null, json: null, assets: null, split: true, keep: false };
+  const o = { runs: 3, projects: ['demo', 'heavy'], frames: null, workers: 'auto', port: 7460, work: null, json: null, assets: null, split: true, keep: false, retries: 3 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { if (i + 1 >= argv.length) throw new Error(`${a} 后面要跟一个值`); return argv[++i]; };
@@ -65,6 +65,7 @@ function parseArgs(argv) {
     else if (a === '--assets') o.assets = path.resolve(next());
     else if (a === '--no-split') o.split = false;
     else if (a === '--keep') o.keep = true;
+    else if (a === '--retries') o.retries = Math.max(1, Math.floor(Number(next())));
     else if (a === '--help' || a === '-h') o.help = true;
     else throw new Error(`不认识的参数 ${a}`);
   }
@@ -128,6 +129,13 @@ async function machineInfo({ ffmpeg, onlineChrome }) {
     onlineChrome, desktopChromeHeadlessShell: await expectedHeadlessShellVersion(),
     puppeteer: (await import('puppeteer/package.json', { with: { type: 'json' } }).catch(() => ({ default: {} }))).default.version ?? null,
   };
+}
+
+/** 有没有可见的终端、控制台、node、chrome、ffmpeg 窗口(排查有没有哪一环弹窗)；探针开跑前后各查一次 */
+function visibleWindows() {
+  if (process.platform !== 'win32') return [];
+  const r = psJson("Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.ProcessName -match 'WindowsTerminal|OpenConsole|cmd|powershell|conhost|node|chrome|ffmpeg' } | Select-Object Id,ProcessName,MainWindowTitle");
+  return r ? [].concat(r).map((w) => `${w.Id} ${w.ProcessName} ${w.MainWindowTitle}`) : [];
 }
 
 /* ---------------- ffmpeg 小工具 ---------------- */
@@ -198,18 +206,23 @@ async function frameHashes(ffmpeg, file, w, h) {
 }
 
 /** 同一条路各遍成片逐帧比：和第 1 遍比 */
-function sameRoute(runs) {
+async function sameRoute(runs, ffmpeg, w, h) {
   const base = runs[0];
-  return runs.slice(1).map((r) => {
+  const out = [];
+  for (const r of runs.slice(1)) {
     const n = Math.min(base.frameHashes.length, r.frameHashes.length);
     let diff = 0, first = null;
     for (let i = 0; i < n; i++) if (base.frameHashes[i] !== r.frameHashes[i]) { diff++; first ??= i; }
-    return { run: r.k, vsRun: base.k, frames: n, frameCountEqual: base.frameHashes.length === r.frameHashes.length, identicalFrames: n - diff, differentFrames: diff, firstDifferentFrame: first, fileSha256Equal: base.fileSha256 === r.fileSha256 };
-  });
+    const rec = { run: r.k, vsRun: base.k, frames: n, frameCountEqual: base.frameHashes.length === r.frameHashes.length, identicalFrames: n - diff, differentFrames: diff, firstDifferentFrame: first, fileSha256Equal: base.fileSha256 === r.fileSha256 };
+    // 有不同的帧时量一下差多大(平均差、最大通道差、差超过 32 的像素比例)，分清是抗锯齿末位还是画面真不一样
+    if (diff) { const per = (await crossDiff(ffmpeg, base.file, r.file, w, h)).filter((q) => base.frameHashes[q.i] !== r.frameHashes[q.i]); rec.magnitudeOfDifferentFrames = per.length ? { meanAbsDiffMean: round(mean(per.map((q) => q.mean)), 3), maxChannelDiff: Math.max(...per.map((q) => q.max)), fracOver32MaxPct: round(Math.max(...per.map((q) => q.over32)) * 100, 3), worstFrame: per.reduce((x, y) => (y.mean > x.mean ? y : x)).i } : null; }
+    out.push(rec);
+  }
+  return out;
 }
 
 /** 两条路成片逐帧画面差 */
-async function crossDiff(ffmpeg, fileA, fileB, w, h) {
+export async function crossDiff(ffmpeg, fileA, fileB, w, h) {
   const per = [];
   const a = frameStream(ffmpeg, fileA, w, h), b = frameStream(ffmpeg, fileB, w, h);
   const px = w * h;
@@ -237,7 +250,7 @@ async function crossDiff(ffmpeg, fileA, fileB, w, h) {
   return per;
 }
 
-function summarizeDiff(per, framesA, framesB) {
+export function summarizeDiff(per, framesA, framesB) {
   if (!per.length) return { frames: 0 };
   const worst = per.reduce((x, y) => (y.mean > x.mean ? y : x));
   const sortedMean = per.map((p) => p.mean).sort((x, y) => x - y);
@@ -527,6 +540,7 @@ async function main() {
   const ffmpeg = await findFfmpeg();
   const ffprobe = ffprobeOf(ffmpeg);
   const failures = [];
+  const windowsBefore = visibleWindows();
   const result = { ok: false, probe: 'export-paths-measure', startedAt: new Date().toISOString(), argv: process.argv.slice(2), work, options: { runs: opts.runs, projects: opts.projects, frames: opts.frames, workers: opts.workers, split: opts.split }, projects: {}, failures };
 
   // 素材：320x180 testsrc2，没有声音(同像素基线的夹具)
@@ -614,7 +628,7 @@ async function main() {
           // 暂时性故障(机器被别的任务压住、导出页 20 秒没就绪这类)重试，最多 3 次；每次失败都记下，3 次都失败才算这一遍失败
           const attempts = [];
           let done = false;
-          for (let attempt = 1; attempt <= 3 && !done; attempt++) {
+          for (let attempt = 1; attempt <= opts.retries && !done; attempt++) {
             try {
               let rec;
               if (route === 'desktop') {
@@ -638,9 +652,9 @@ async function main() {
               log(`  完成 ${round(rec.totalMs / 1000, 1)} s，${rec.video.frames} 帧，${round(rec.video.bytes / 1e6, 2)} MB，${rec.video.bitrateKbps} kbps，跑的过程平均占用 ${rec.cpuDuring.meanPct}%${attempts.length ? `(前面失败了 ${attempts.length} 次)` : ''}`);
             } catch (e) {
               const msg = String(e.message || e).slice(-1500);
-              attempts.push(msg.slice(-400));
+              attempts.push((msg.length > 500 ? msg.slice(0, 200) + ' … ' + msg.slice(-250) : msg));
               log(`  第 ${attempt} 次失败：${msg.slice(0, 200).replace(/\s+/g, ' ')}`);
-              if (attempt === 3) failures.push(`${name} ${route} 第 ${k} 遍失败(试了 3 次)：${msg}`);
+              if (attempt === opts.retries) failures.push(`${name} ${route} 第 ${k} 遍失败(试了 ${opts.retries} 次)：${msg}`);
               else await sleep(3000 * attempt);
             }
           }
@@ -653,7 +667,7 @@ async function main() {
       for (const route of ['desktop', 'online']) {
         const runs = P[route].runs;
         for (const r of runs) r.frameHashes = await frameHashes(ffmpeg, r.file, w, h);
-        P[route].repeatability = runs.length > 1 ? sameRoute(runs) : null;
+        P[route].repeatability = runs.length > 1 ? await sameRoute(runs, ffmpeg, w, h) : null;
       }
       const d1 = P.desktop.runs[0], o1 = P.online.runs[0];
       if (d1 && o1) {
@@ -718,6 +732,9 @@ async function main() {
     cleanup();
   }
 
+  const windowsAfter = visibleWindows();
+  result.visibleWindows = { before: windowsBefore, after: windowsAfter, newAfter: windowsAfter.filter((w) => !windowsBefore.includes(w)) };
+  if (result.visibleWindows.newAfter.length) failures.push(`跑完后多出可见窗口：${result.visibleWindows.newAfter.join(' | ')}`);
   result.finishedAt = new Date().toISOString();
   result.ok = failures.length === 0;
   await fsp.writeFile(jsonFile, JSON.stringify(result, null, 2));
@@ -726,4 +743,6 @@ async function main() {
   return result.ok ? 0 : 1;
 }
 
-main().then((c) => process.exit(c), (e) => { console.error(e); process.exit(1); });
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+  main().then((c) => process.exit(c), (e) => { console.error(e); process.exit(1); });
+}
