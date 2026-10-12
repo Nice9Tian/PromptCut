@@ -6,7 +6,8 @@
  *
  *   node scripts/probes/stateful-seq-vs-jump-probe.mjs [--dist dist-online] [--port-base 7430]
  *        [--cards <卡片 id,逗号分隔>]         缺省是当时核对的那 14 张有状态的内置卡(见下面 DEFAULT_CARDS)
- *        [--frames 150,180,240,300,497,540]   要核对的帧(30 帧/秒:第 5、6、8、10、16.57、18 秒)
+ *        [--frames <帧号,逗号分隔>]           要核对的帧。缺省 6,12,18,24,30,45,60,90,150,180,240,300,497,540:前八个落在多数卡
+ *                                             还在动的头 3 秒里,后六个是第 5、6、8、10、16.57、18 秒(30 帧/秒)
  *        [--seconds 20] [--fps 30]            片段多长、工程的帧率(25 帧/秒时每帧 40 毫秒,是个整数,逐帧累加时间没有浮点误差,拿来做对照)
  *        [--repeat 2]                         每一帧从头推几次(核对「每次都一样」;要证明稳定用 5)
  *        [--seq-repeat 1]                     顺着做几遍(大于 1 时另核对顺着做的几遍互相一样)
@@ -15,6 +16,8 @@
  *        [--intervene <名字,逗号分隔>]        实验用的干预,只在探针里往舞台文档装,不改产品代码:
  *                                             sync-finish  动画被拨到结尾后,结束回调当场(同一个微任务检查点里)调用,不等浏览器出帧;
  *                                             exact-steps  舞台时钟推帧时,每一帧的时刻都用「帧号 ÷ 帧率 × 1000」直接算,不逐帧累加;
+ *                                             settle       舞台时钟每次推完(生成快照之前),先让出一个排在 React 后面的宏任务,
+ *                                                          让卡片在这一帧的回调里排下的 React 更新先提交;
  *                                             real-raf     让舞台文档一直向浏览器要真实的帧(结束事件随真实的帧送到,看它迟到多久)
  *        [--json <文件>] [--out <目录>]        --out 把不相同的快照两份都存下来;再加 --save-all 连相同的也存
  *        [--trace-deep]                       同 --trace,另记舞台每推一帧的时刻、每次经 MessageChannel 发消息的时刻(React 排后续渲染用的就是它)
@@ -69,7 +72,7 @@ const CARDS = flagArg('cards', DEFAULT_CARDS.join(',')).split(',').map((s) => s.
 const SECONDS = Number(flagArg('seconds', '20'));
 const FPS = Math.max(1, Number(flagArg('fps', '30')));
 const LAST = SECONDS * FPS - 1;
-const FRAMES = [...new Set(flagArg('frames', '150,180,240,300,497,540').split(',').map(Number))]
+const FRAMES = [...new Set(flagArg('frames', '6,12,18,24,30,45,60,90,150,180,240,300,497,540').split(',').map(Number))]
   .filter((n) => Number.isInteger(n) && n > 0 && n <= LAST).sort((a, b) => a - b);
 const REPEAT = Math.max(1, Number(flagArg('repeat', '2')));
 const SEQ_REPEAT = Math.max(1, Number(flagArg('seq-repeat', '1')));
@@ -85,7 +88,7 @@ const JSON_OUT = flagArg('json', null);
 const OUT = flagArg('out', null);
 if (!fs.existsSync(path.join(DIST, 'stage.html'))) { console.error(`没有在线构建:${DIST}(先跑 npx vite build --mode online)`); process.exit(2); }
 if (!FRAMES.length) { console.error('没有要核对的帧'); process.exit(2); }
-if (INTERVENTIONS.some((x) => !['sync-finish', 'exact-steps', 'real-raf'].includes(x))) { console.error(`不认识的干预:${INTERVENE}`); process.exit(2); }
+if (INTERVENTIONS.some((x) => !['sync-finish', 'exact-steps', 'settle', 'real-raf'].includes(x))) { console.error(`不认识的干预:${INTERVENE}`); process.exit(2); }
 
 /* ───────────────────────── 比对 ───────────────────────── */
 
@@ -233,6 +236,7 @@ const REPLAY_HTML = `<!doctype html><meta charset=utf-8><title>seq-vs-jump repla
  * 每条记录带两个时刻:`v` 舞台时间(被接管的 `performance.now`,毫秒)、`r` 真实时间(`__pcRealNow`,毫秒)。
  * 干预 `sync-finish`:`finish()` 之后,在同一个微任务检查点里把这条动画的 `onfinish` 回调调掉(并摘下,免得浏览器出帧时再调一次)。
  * 干预 `exact-steps`:换掉舞台时钟对象上的 `advanceToAsync`(`__pcStageClock`),见函数里的说明。
+ * 干预 `settle`:同样换掉 `advanceToAsync`,推完以后等两轮 MessageChannel 消息再返回。
  * 干预 `real-raf`:用舞台留着的原始 `requestAnimationFrame`(`__pcRealRaf`)一直要帧。
  */
 function installTracer(interventions, deep) {
@@ -290,6 +294,14 @@ function installTracer(interventions, deep) {
       }
       if (clock.now() !== target && !opts.abort?.()) await inner(target, { ...opts, step: 1e12, maxCatchUp: Infinity, yieldEvery: undefined });
     };
+  }
+  if (has('settle')) {
+    // React 把回调里的状态更新排进 MessageChannel 的宏任务。这里在推完之后也发一条消息、等它回来:消息按先后顺序处理,
+    // 等到的时候 React 那一条已经跑过了(它提交时又排了后续的,再等一轮)。
+    const clock = window.__pcStageClock;
+    const inner = clock.advanceToAsync.bind(clock);
+    const turn = () => new Promise((r) => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(null); });
+    clock.advanceToAsync = async (target, opts = {}) => { await inner(target, opts); await turn(); await turn(); };
   }
   if (has('real-raf')) { const raf = window.__pcRealRaf || window.requestAnimationFrame.bind(window); const loop = () => { push('real-frame', {}); raf(loop); }; raf(loop); }
   if (deep) {
