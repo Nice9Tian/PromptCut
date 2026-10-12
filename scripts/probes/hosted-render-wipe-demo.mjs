@@ -1,14 +1,14 @@
 /**
- * 隔离工作进程数据目录的清空（ 的 ，加主进程  的重试写法）在「有进程还占着目录」时的行为演示。
+ * 隔离工作进程数据目录的清空（`server/hosted-render/isolation.mjs` 的 `wipeDir`，加主进程 `wipeIso` 的重试写法）在「有进程还占着目录」时的行为演示。
  *
  *   node scripts/probes/hosted-render-wipe-demo.mjs
  *
  * 只在系统临时目录里操作，不起浏览器、不起服务。让一个子进程把工作目录停在 iso/tmp 里 3 秒（相当于还没死透的 Chrome，Windows 上占着的目录删不掉），
- * 然后像  那样最多重试 20 次、每次调 ：
- *   - 旧的 wipeDir（整目录一起 rmSync，记号先被删）：第 1 次 EPERM，记号没了；第 2 次 （「没有记号，不清」）直接抛、不再重试；
- *     收尾后下一轮 wipeDir 仍然 ——隔离工作进程在这次服务期间再也起不来；
+ * 然后像 `wipeIso` 那样最多重试 20 次、每次调 `wipeDir`：
+ *   - 旧的 wipeDir（整目录一起 rmSync，记号先被删）：第 1 次 EPERM，记号没了；第 2 次 `iso-not-ours`（「没有记号，不清」）直接抛、不再重试；
+ *     收尾后下一轮 wipeDir 仍然 `iso-not-ours`——隔离工作进程在这次服务期间再也起不来；
  *   - 现在的 wipeDir（先清记号以外的每一项、记号最后才动）：前几次 EPERM 但记号一直在，占着的子进程退出后重试清干净，下一轮 wipeDir 成功。
- * 用例钉在 （模拟删不掉）；这里是真文件锁的演示（Windows 上才会失败，别的平台第 1 次就清干净）。
+ * 用例钉在 `server/test/hosted-render-isolation.test.mjs`（模拟删不掉）；这里是真文件锁的演示（Windows 上才会失败，别的平台第 1 次就清干净）。
  */
 import fs from 'node:fs';
 import os from 'node:os';
