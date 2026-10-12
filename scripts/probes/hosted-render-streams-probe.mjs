@@ -25,7 +25,8 @@
  *   A 缺省关  新建的项目:成员列表里 `hosted.render.streams` 是 false,渲染服务给工作进程的清单里这个项目 `streams: false`;
  *             甲加一张重卡 → 清单计划由渲染服务认领并切分,快照任务全部做完(照常);队列里这个项目一条流任务都没有;
  *             层表里有这张卡的快照层、没有它的流;甲的在线来源里没有这张卡的流
- *   B 打开    创建者打开:成员列表、渲染服务的清单跟着变;项目下一次发清单计划(探针让甲改一下项目名)时,切出渲染服务自己的那一份流任务
+ *   B 打开    创建者打开:成员列表、渲染服务的清单跟着变;**只打开、不动项目**,甲的页面看到这一项从关变开就重发一份清单计划
+ *             (同一版项目,结果键带这一项),渲染服务据此切出自己的那一份流任务
  *             (三个:分段 0～7、8～15、16～16),渲染服务认领其中一个
  *   C 再关    手里正有一个流任务时创建者关掉:手里的那个照做完(没有放回),渲染服务与这个项目的连接没断;之后一段时间(≥ 15 秒)里剩下的
  *             两个流任务一直是 open、没有被认领;这期间这个项目新发的清单计划照常被认领、切分(不切流);已经产出的那一段的流清单还在内容库里,
@@ -34,8 +35,6 @@
  *   E 播放    甲的在线来源认出这条流(选中的候选是渲染服务的指纹),播放时舞台上是流在画:包裹层被抑制、流播放器在出帧且跟着播放头、
  *             快照平面不是每拍在换;截图与同一帧的精确活渲相符,与往后 2 秒的明显不同
  *   F 页面    没有未捕获的错误;整个过程渲染服务没有失败的任务
- * 局限(如实):创建者打开这一项之后,要等这个项目**下一次发清单计划**(项目有任何改动、或清单变了)才会切出渲染服务自己的那一份流任务 ——
- *   同一版项目的清单计划已经做完,页面重发同一个结果键队列不会重切。B 里所以让甲改了一次项目名。见报告「没做成的」。
  * 耗时只记录。不打印私钥、口令、票据。
  * 输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, ... }`;截图在 `--out/`。
  */
@@ -557,7 +556,7 @@ async function main() {
   const getManifest = async (resultKey, from, to) => (await content.get('render-manifest', `${resultKey}:${from}-${to}`).catch(() => null))?.body ?? null;
 
   const { page } = await openMember({ projectId: P1.projectId, name: P1.name, username: 'hrs-jia', password: P1.password, deviceId: `hrs-jia-${RUN}`.padEnd(16, '0') });
-  const nodeState = await until('甲的节点状态落定', async () => P(page, () => { try { const d = window.__pcBrowserNode?.(); return d && (d.ready === 'ready' || d.eligibility?.ok === false) ? JSON.parse(JSON.stringify({ ready: d.ready, eligibility: d.eligibility })) : null; } catch { return null; } }), 180_000, 500);
+  const nodeState = await until('甲的节点状态落定', async () => P(page, () => { try { const d = window.__pcBrowserNode?.(); return d && (d.ready === 'ready' || d.eligibility?.reason === 'not-chromium') ? JSON.parse(JSON.stringify({ ready: d.ready, eligibility: d.eligibility })) : null; } catch { return null; } }), 180_000, 500);
   A.pageNode = nodeState;
   check(nodeState?.eligibility?.ok === false && nodeState.eligibility.reason === 'not-chromium', 'A:甲不当渲染节点(报的是非 Chromium 内核的浏览器)', nodeState);
   say('jia.entered', { node: nodeState });
@@ -607,6 +606,9 @@ async function main() {
   const on2 = await setStreams(M, creator2, P2, true);
   check(on2.type === 'shared.admin.ok', '项目二的创建者打开「生成轨道流」', { type: on2.type, reason: on2.reason });
 
+  const planBefore = await planDiag(page);
+  const plansBefore = planTasks(P1.projectId).length;
+  const revBefore = await store(page, `return S.getState().project.name;`);
   const tOn = Date.now();
   const on1 = await setStreams(M, creator1, P1, true);
   check(on1.type === 'shared.admin.ok' && on1.op === 'set-hosted-option', 'B:创建者打开「生成轨道流」(shared.admin 回 ok)', { type: on1.type, reason: on1.reason });
@@ -615,17 +617,15 @@ async function main() {
   const seenOn = await until('B:渲染服务的清单里项目一变成 streams: true', async () => { const s = await status(); return listedOf(s, P1.projectId)?.streams === true ? s : null; }, 30_000, 100);
   out.timings.onSeenByServiceMs = Date.now() - tOn;
   check(!!seenOn && listedOf(seenOn, P2.projectId) === null || listedOf(seenOn, P2.projectId)?.streams === true, 'B:项目二(还没人进,或已经在清单里)不受影响', listedOf(seenOn, P2.projectId));
-  await delay(2500);
-  B.beforeEdit = { streams: streamTasks(P1.projectId).length };
-  check(B.beforeEdit.streams === 0, 'B(局限,见文件头):只打开、项目没有新的清单计划时,还没有流任务', B.beforeEdit);
-  // 项目下一次发清单计划:让甲改一下项目名(内容键不变,快照任务都去重)
-  const plansBefore = planTasks(P1.projectId).length;
-  await store(page, `S.actions.setProjectMeta({ name: args[0] }); return true;`, `${P1.name}-开`);
-  const tSplit = Date.now();
-  const issued = await until('B:新的清单计划切出渲染服务自己的那一份流任务(三个)', async () => (streamTasks(P1.projectId).length >= 3 ? streamTasks(P1.projectId) : null), 180_000, 100);
-  say('B.issued', { streams: streamTasks(P1.projectId).length });
-  B.issued = { ms: Date.now() - tSplit, plans: planTasks(P1.projectId).length - plansBefore, streams: briefTasks(streamTasks(P1.projectId)) };
-  if (!check(!!issued && issued.length === 3, 'B:切出三个流任务(分段 0～7、8～15、16～16)', B.issued)) throw new Error('没有切出流任务');
+  // 只打开、不动项目:页面看到这一项从关变开,自己重发一份清单计划(同一版,结果键不同),渲染服务切出自己的那一份流任务
+  const issued = await until('B:只打开、不动项目,渲染服务自己的那一份流任务(三个)也出现', async () => (streamTasks(P1.projectId).length >= 3 ? streamTasks(P1.projectId) : null), 120_000, 100);
+  const planAfter = await planDiag(page);
+  say('B.issued', { streams: streamTasks(P1.projectId).length, ms: Date.now() - tOn });
+  B.issued = { ms: Date.now() - tOn, plans: planTasks(P1.projectId).length - plansBefore, streams: briefTasks(streamTasks(P1.projectId)),
+    planBefore: String(planBefore?.last).slice(-22), planAfter: String(planAfter?.last).slice(-22), rev: [planBefore?.want?.projectRev ?? null, planAfter?.want?.projectRev ?? null] };
+  if (!check(!!issued && issued.length === 3, 'B:打开之后不用改项目,切出三个流任务(分段 0～7、8～15、16～16)', B.issued)) throw new Error('没有切出流任务');
+  check(B.issued.plans === 1 && planAfter?.last !== planBefore?.last, 'B:页面重发了一份清单计划,而且只多出这一个(结果键与关着时的不同)', B.issued);
+  check(Number.isSafeInteger(B.issued.rev[0]) && B.issued.rev[0] === B.issued.rev[1] && (await store(page, `return S.getState().project.name;`)) === revBefore, 'B:项目没有动过(版本号与项目名都没变)', B.issued.rev);
   check(STREAM_SPANS.every(([f, t]) => issued.some((x) => x.id.endsWith(`:${f}-${t}`))), 'B:流任务的分段范围对', issued.map((x) => x.id.slice(-8)));
 
   /* -------------------------------------------------------------- C 手里有一个流任务时再关 */
@@ -650,8 +650,8 @@ async function main() {
   check(heldDone?.state === 'done' && heldDone.attempts <= 1, 'C:关掉之后手里的那个流任务没有被放回,照做完了', heldDone && { state: heldDone.state, attempts: heldDone.attempts, lastError: heldDone.lastError });
 
   // 同一段时间里:项目二(这一项开着)照常产流;项目一新发的清单计划照常被认领、切分(不切流)
-  // 项目文档的 id 用共享项目的 id(页面与云端 Agent 服务发任务时都是这样):渲染服务按任务的 `source.projectId` 认「哪个项目的开关」
-  const doc2 = P2.projectId;
+  // 项目二的项目文档 id 故意不用共享项目的 id:渲染服务按「这条连接所属的项目」认开关,不看任务里写的 `source.projectId`
+  const doc2 = 'hrs-p2-doc';
   const body2 = { id: doc2, name: P2.name, width: 1280, height: 720, fps: FPS, duration: 2, themeId: 'dark', camera3dFov: 50, media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
     tracks: [{ id: 'tr-1', name: 'tr-1', hidden: false, clips: [{ id: 'clip-p2', kind: 'card', cardId: 'r6-canvas', start: 0, end: 2, params: { probeSalt: RUN } }] }] };
   const put2 = await putProject(creator2, doc2, body2);
