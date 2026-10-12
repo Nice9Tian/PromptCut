@@ -19,27 +19,28 @@
 
 ## 1. 两种写法：建卡前先定一种
 
-PromptCut 里的 2D 动效卡只有两种写法，**都是正式写法，没有哪一种更推荐**，按画面的需要选。选哪一种，就在 `CardDef` 里把 `frameMode` 写成对应的字面量。**`frameMode` 是必填项**：建卡时不写会被拒绝，写成变量或算出来的值也会被拒绝（建卡检查要在源码里直接读出你选了哪一种）。
+PromptCut 的卡都在两种写法里二选一（动效卡、素材效果卡一样），**两种都是正式写法，没有哪一种更推荐**，按画面的需要选。选哪一种，就在卡片定义对象（导出的 `CardDef`，字段见第 4.1 节）里把 `frameMode` 写成对应的字面量。**`frameMode` 是必填项**：建卡时不写会被拒绝，写成变量或算出来的值也会被拒绝（建卡检查要在源码里直接读出你选了哪一种）。
 
 | | remotion 式 | motion 式 |
 |---|---|---|
 | 声明 | `frameMode: "direct"` | `frameMode: "stateful"` |
 | 画面怎么得到 | 只由时间 `t`、参数和输入素材算出来；跳到哪一帧都是直接算，代价一样 | 有状态：要从片段起点一帧帧推进，才得到目标帧 |
-| 怎么写 | 只用 react 和 PromptCut 自带的 remotion 式框架（`interpolate`、`tween`、`spring`、`stagger`、`random` 等），第 2 节 | 可以用 Motion 的动画、弹簧、`AnimatePresence`，CSS 动画，`lottie-web`，粒子，three，也可以自己累积状态，第 3 节 |
+| 怎么写 | 只用 react、PromptCut 自带的 remotion 式框架（`interpolate`、`tween`、`spring`、`stagger`、`random` 等）和第 2.5 节名单里的模块。不一定要引用框架：纯算术、GLSL 的卡（素材效果卡）也写 `"direct"`。第 2 节 | 可以用 Motion 的动画、弹簧、`AnimatePresence`，CSS 动画，`lottie-web`，粒子，three，也可以自己累积状态。用了第 2.5 节名单之外的库（`lottie-web`、three 等）的卡也写 `"stateful"`，不要求它真的累积状态。第 3 节 |
 | 适合 | 画面能写成「t 的函数」：标题与字幕的进出场、数字与柱图、按种子摆出来的一批元素、画布上按公式算位置的图形 | 要用 Motion 或 CSS 现成的动画而不想自己写曲线；要用粒子、物理模拟这类一帧依赖上一帧的效果；要用 `lottie-web`、three |
 | 代价 | 只能用框架里有的工具，框架外的写法建卡时当场拒绝（第 2.4 节）；弹簧、缓动、错开进场要用框架自己的 | 暂停、拖动到片段中间时，要从片段起点重新推进到那一帧，片段越长越慢；预渲染要为它存每一帧的快照 |
-| 建卡时的检查 | 严格，逐条指出哪一行不行 | 只查硬约束（第 6 节） |
+| 建卡时的检查 | 严格，逐条指出哪一行不行 | 硬约束与通用合规：必填字段、没装的依赖、没定义的动画 class、来源与许可证等（第 6、8 节） |
 
 - 一张卡属于哪一种，**只看它的 `frameMode` 声明**，软件不会替你判定。写了 `"direct"` 就是在保证「这一帧的画面只由 t、参数和输入素材决定」，建卡检查按这个保证查你的源码。
 - 字面量只有这两个：`"direct"`、`"stateful"`。旧项目里能读到的旧值 `"react"`、`"non-react"` **都按 motion 式读**（老卡不用重写），新卡不要再写它们。
-- 素材效果卡（滤镜、转场、强调、音频，第 4.1 节）也要写 `frameMode`，规则同上。
-- 现有的内置卡不改写，两种写法的都有。
+- 素材效果卡（滤镜、转场、强调、音频，第 4.3 节）也要写 `frameMode`：只用 `at()` + GLSL 的写 `"direct"`，用了 `pixels()` 或自带状态的写 `"stateful"`。
+- 两种写法都写得出来的画面（例如标题的淡入上移）：差别就是上表的「怎么写」和「代价」两行。remotion 式要自己用框架写曲线，跳到哪一帧代价都一样；motion 式可以直接用 Motion 现成的曲线，代价是暂停、拖动到片段中间时要从片段起点推进。选哪一种由你按画面和维护方便来定。
+- 现有的内置卡里两种写法的都有，都不用改写。
 
 ## 2. remotion 式写法
 
 **一句话：这一帧的画面，只许用时间 t、参数、输入素材算出来。** 不读上一帧留下的东西，不读真实时间，不用自带时钟的动画，不用不带种子的随机数。
 
-声明：`frameMode: "direct"`。时间 `t` 是组件收到的片段本地**秒**（从片段起点算，不是帧号）；组件签名里写 `{ params, t = 0 }`。
+声明：`frameMode: "direct"`。时间 `t` 是组件收到的片段本地**秒**（从片段起点算，不是帧号）；组件签名里写 `{ params, t = 0 }`。例外：同时写了 `audio()` 的卡，收到的 `t` 已经加上了片段开头被裁掉的那一段（`sourceOffset`），没裁过的片段两者相同，见第 10 节。
 
 ### 2.1 框架
 
@@ -53,20 +54,20 @@ import { interpolate, tween, spring, stagger, random, Easing } from "../../kerne
 
 | 工具 | 写法 | 返回 | 例子 |
 |---|---|---|---|
-| `interpolate` | `interpolate(t, 时间点[], 取值[], { easing?, extrapolateLeft?, extrapolateRight? })`。时间点至少两个、一个比一个大，取值个数要一样多，否则抛错。`easing` 给一条，或每一段各给一条（数组）；缺省匀速 | 数 | `interpolate(t, [0, 0.4], [0, 1])`：0.4 秒内从 0 到 1，之后停在 1 |
+| `interpolate` | `interpolate(t, 时间点[], 取值[], { easing?, extrapolateLeft?, extrapolateRight? })`。时间点至少两个、一个比一个大，取值个数要一样多，否则抛错。`easing` 给一条，或每一段各给一条（数组）；缺省匀速。`extrapolateLeft` / `extrapolateRight` 只有两个值：`"clamp"`（缺省，停在端点）、`"extend"`（顺着最边上一段的斜率延伸） | 数 | `interpolate(t, [0, 0.4], [0, 1])`：0.4 秒内从 0 到 1，之后停在 1 |
 | `interpolateColors` | `interpolateColors(t, 时间点[], 颜色[], 同上)`。颜色认 `#rgb`、`#rrggbb`、`#rrggbbaa`、`rgb()`、`rgba()` | `"rgba(r, g, b, a)"` | `interpolateColors(t, [0, 1], ["#ff0000", "#0000ff"])` |
-| `tween` | `tween(t, { from = 0, to = 1, delay = 0, duration, easing = Easing.easeOut })` | 数；开始前是 `from`，走完是 `to` | `tween(t, { from: 40, to: 0, delay: 0.2, duration: 0.5 })` |
+| `tween` | `tween(t, { from = 0, to = 1, delay = 0, duration, easing = Easing.easeOut })`。`duration` 没有缺省，要写；`duration` 不大于 0 时没有过渡，`t` 到了 `delay` 就是 `to` | 数；开始前是 `from`，走完是 `to` | `tween(t, { from: 40, to: 0, delay: 0.2, duration: 0.5 })` |
 | `Easing` | `linear` `quad` `cubic` `quart` `sin` `circ` `expo` `bounce`；`back(overshoot)` `elastic(bounciness)`；`in(e)` `out(e)` `inOut(e)`；`bezier(x1, y1, x2, y2)`；`steps(n, atEnd)`；现成的 `easeIn` `easeOut` `easeInOut`（三次曲线） | 缓动函数 `(p) => 数` | `Easing.bezier(0.16, 1, 0.3, 1)`、`Easing.out(Easing.back(1.4))`。基础曲线都是「起步慢」的形状，要「起步快」就包一层 `Easing.out(...)` |
 | `spring` | `spring(t, { stiffness = 100, damping = 10, mass = 1, from = 0, to = 1, delay = 0, velocity = 0, clamp = false })`：阻尼振子的解析解，给 t 直接算位置，不从头推 | 第 t 秒的位置；`delay` 之前是 `from`；`clamp: true` 不许越过终点 | `spring(t, { from: 0.6, to: 1, stiffness: 180, damping: 12 })` |
 | `springDuration` | `springDuration(同一组参数, restRatio = 0.001)` | 停稳要多少秒（含 `delay`） | `springDuration({ stiffness: 180, damping: 12 })` 约 1.17 |
 | `stagger` | `stagger(t, index, { each, delay = 0, from = "first", count })`；`from` 可以是 `"first"`、`"last"`、`"center"` 或一个下标；`last` 和 `center` 要同时给 `count` | 第 index 个元素自己的时间（还没轮到它是负数） | `tween(stagger(t, i, { each: 0.08 }), { duration: 0.4 })` |
-| `staggerDuration` | `staggerDuration(count, 同一组 stagger 参数, 单个元素的时长 = 0)` | 整组走完要多少秒 | `staggerDuration(5, { each: 0.08 }, 0.4)` = 0.72 |
+| `staggerDuration` | `staggerDuration(count, 同一组 stagger 参数, 单个元素的时长 = 0)`；那组参数里的 `delay` 也算进总时长 | 整组走完要多少秒 | `staggerDuration(5, { each: 0.08 }, 0.4)` = 0.72 |
 | `random` | `random(种子, ...序号)`，种子和序号是数或字符串；**必须给种子** | [0, 1) | `random(params.seed, i)`；要互不相干的第二个数就多加一个序号：`random(params.seed, i, "hue")` |
 | `randomRange` | `randomRange(min, max, 种子, ...序号)` | [min, max) | `randomRange(-20, 20, params.seed, i)` |
 | `randomInt` | `randomInt(min, max, 种子, ...序号)` | 整数，两头都取得到 | `randomInt(1, 6, params.seed, i)` |
 | `randomPick` | `randomPick(数组, 种子, ...序号)` | 数组里的一个 | `randomPick(["#f43", "#3af"], params.seed, i)` |
 | `noise` | `noise(x, 种子, ...序号)` | −1～1，随 x 平滑起伏；是 x 的函数，不是一步步累加的 | `noise(t * 2, params.seed, i) * 12`：「一直在轻轻晃」 |
-| `clamp` `lerp` `loop` `pingPong` | `clamp(x, lo = 0, hi = 1)`、`lerp(a, b, p)`、`loop(t, period)`、`pingPong(t, period)` | 数 | `loop(t, 2)` 每 2 秒从头走一遍 |
+| `clamp` `lerp` `loop` `pingPong` | `clamp(x, lo = 0, hi = 1)`、`lerp(a, b, p)`、`loop(t, period)`、`pingPong(t, period)` | 数。`loop` 返回 [0, period)，`pingPong` 返回 [0, period] | `loop(t, 2)` 每 2 秒从头走一遍；`pingPong(t, 1)` 0 → 1 → 0 来回走 |
 
 名字和 Remotion 这个库里的同名工具对得上，但有两处不同，不要凭印象写：
 
@@ -77,8 +78,8 @@ import { interpolate, tween, spring, stagger, random, Easing } from "../../kerne
 
 - **随机一律用 `random` 这一族，并给种子和序号。** 种子放进参数（`seed` 做成一个 `number` 控件），每个要随机的东西用自己的序号（下标，或 `i, "hue"` 这样），这样第 N 帧拿到的数和前面调过几次无关。
 - **「一直在动」用 `loop`、`pingPong`、`noise`，不要自己累加。** 它们都是 t 的函数。
-- 时间点、弹簧参数、颜色这类**会被调的值**同样放进 `controls` / `defaults`（见第 5 节），模块顶层只写常量。
-- `lifecycle.settleMs` 是毫秒；落定时刻可以用 `springDuration`、`staggerDuration` 算出秒数再乘 1000，参数会变的卡写进 `timing`（见 `rs-title-reveal` 的写法，下面例一）。
+- **哪些值做成参数**（和第 5 节一致）：使用者（用户或 Agent）会说「再快一点、再大一点、换个颜色」的值，放进 `controls` / `defaults`（见第 4.2、5 节）；卡自己的设计常量——缓动曲线的形状、弹簧的刚度与阻尼、进场上移的距离——可以写成文件开头起了名字的 `const`（例一的 `POP`、`LINE_EASE`）。模块顶层只写常量。这不是检查强制的，是为了以后改起来省事。
+- `lifecycle.settleMs` 是毫秒，从片段起点算（不是时长）；落定时刻可以用 `springDuration`、`staggerDuration` 算出秒数再乘 1000，参数会变的卡写进 `timing`（例一、例二都有）。
 
 ### 2.2 例子
 
@@ -135,7 +136,7 @@ export const titleReveal: CardDef<Params> = {
   frameMode: "direct",
   defaults: { text: "由 t 直接算", accent: "#ffd166", size: 132, each: 0.07 },
   controls: [
-    { key: "text", label: "文字", type: "text", required: true },
+    { key: "text", label: "文字", type: "text" },
     { key: "accent", label: "主色", type: "color" },
     { key: "size", label: "字号", type: "number", min: 24, max: 240, step: 4 },
     { key: "each", label: "每个字相隔(秒)", type: "number", min: 0, max: 0.5, step: 0.01 },
@@ -150,7 +151,7 @@ export const titleReveal: CardDef<Params> = {
 
 ```tsx 完整卡片
 import type { CardDef, CardProps } from "../../kernel/types";
-import { Easing, noise, randomPick, randomRange, stagger, tween } from "../../kernel/remotionStyle";
+import { Easing, noise, randomPick, randomRange, stagger, staggerDuration, tween } from "../../kernel/remotionStyle";
 
 interface Params { count: number; seed: number; accent: string }
 
@@ -193,7 +194,9 @@ export const barRace: CardDef<Params> = {
     { key: "accent", label: "强调色", type: "color" },
   ],
   Component: BarRace,
-  lifecycle: { settleMs: 1600, after: "evolve", exit: ["fade"] },
+  // 柱子个数可调，最后一根长好的时刻跟着变：落定时刻用 staggerDuration 按个数算（每根 0.7 秒长高再加 0.3 秒起伏淡入）
+  timing: (p) => ({ settleMs: Math.round(staggerDuration(Math.max(1, Math.min(24, Math.round(p.count))), { each: 0.06, from: "center" }, 1.0) * 1000) }),
+  lifecycle: { settleMs: 1400, after: "evolve", exit: ["fade"] },
 };
 ```
 
@@ -263,22 +266,25 @@ export const orbitCanvas: CardDef<Params> = {
 - **React 的 hook：不能用记状态的那一类**（`useState`、`useReducer`、`useSyncExternalStore`、`useTransition`、`useDeferredValue`、`useOptimistic`、`useActionState`）。它们记的值活得比一帧长，画面就不再只由 t 和参数决定。可以用 `useMemo`（缓存由参数算出来的东西）、`useEffect`、`useLayoutEffect`（往画布上画）、`useId`。
 - **`useRef` 只写 `useRef(null)`**，用来拿 DOM 节点（上面例三）。带初值的 `useRef(0)`、往 `.current` 里写，都是在把东西带到下一帧。
 - **画布类的卡，每一帧先 `clearRect` 再整张重画**，画布上不留上一帧的像素（例三）。
-- **异步准备用 `beginFrameWork` 挡住截图。** 要等图片解码、等一份数据、等字体才能画对的卡，在 effect 里先领一张票，准备好再交还；预渲染和导出每一帧截图前会等所有票，失败会明确报错、不会截一张半成品：
+- **异步准备用 `beginFrameWork` 挡住截图。** 要等图片解码、等一份数据、等字体才能画对的卡，在 effect 里调 `beginFrameWork("名字")` 领一张票；准备好了调 `ready.ready()`，失败调 `ready.fail(错误)`；effect 清理时（卸载，或下一帧 `t` 变了重跑之前）一定调 `ready.dispose()` 退票。预渲染和导出每一帧截图前会等所有没退的票，失败会明确报错、不会截一张半成品。图片对象用 `useMemo` 按 `src` 缓存，别每一帧新建：
 
 ```tsx
 import { beginFrameWork } from "../../kernel/frameReady";
 // 组件里
+const img = useMemo(() => { const i = new Image(); i.src = params.src; return i; }, [params.src]);
 useLayoutEffect(() => {
-  const ready = beginFrameWork("封面图");   // 领票
-  const img = new Image();
-  img.src = params.src;
-  img.decode().then(() => { draw(img, t); ready.ready(); }, (e) => ready.fail(e));
-  return () => ready.dispose();             // 卸载时一定还票
-}, [params.src, t]);
+  const ready = beginFrameWork("封面图");               // 领票
+  let stale = false;
+  img.decode().then(
+    () => { if (!stale) draw(img, t); ready.ready(); },  // 解码好了：按这一帧的 t 画，再通知就绪
+    (e) => ready.fail(e),                                 // 失败：明确报错
+  );
+  return () => { stale = true; ready.dispose(); };      // 卸载或下一帧到来时退票
+}, [img, t]);
 ```
 
 - **字体和 `<img>` 即使不领票，截图也会等它们加载完**；但「先画一版、加载好再换一版」这种写法仍然不对：画面要在准备好之后才画，且只画一版。
-- `t` 是可选属性，组件里写 `t = 0` 当缺省。
+- 在 `CardProps` 里 `t` 是可选属性（`t?: number`），所以组件里解构时写 `t = 0` 当缺省；但 remotion 式的卡画面就是 t 的函数，一定要读它。
 
 ### 2.4 建卡时会被当场拒绝的写法
 
@@ -286,7 +292,7 @@ useLayoutEffect(() => {
 
 | 写法 | 为什么不行 | 改成 |
 |---|---|---|
-| 引用名单之外的模块，动态 `import()`、`require()` | remotion 式的卡只许引用 2.5 节名单里的模块 | 改用框架和名单里的模块 |
+| 引用名单之外的模块（含同目录的辅助文件 `./xxx`、样式文件、没列在名单里的第三方库），动态 `import()`、`require()` | remotion 式的卡只许引用 2.5 节名单里的模块 | 改用框架和名单里的模块；辅助函数写进同一个文件 |
 | `motion` / `motion/react`、`<motion.div>`、`whileHover` 这类交互属性 | Motion 的动画和弹簧按真实时间自己往前走，跳到某一帧算不出那一帧；导出时也没有鼠标和滚动 | 用框架的 `tween`、`spring`、`stagger`，写成 t 的函数；要它出现就写 t 的条件 |
 | `<AnimatePresence>` | 进出场组件靠「上一帧有、这一帧没有」播退场，是在读前一帧的状态 | 出场、退场写成 t 的条件和过渡：该出现的时间段里渲染它，透明度、位移由 `tween` / `interpolate` 按 t 算 |
 | CSS 动画与过渡：样式里的 `animation*`、`transition*`；样式文本里的 `@keyframes`；类名 `animate-*`、`transition*`；元素的 `.animate()`；SVG 的 `<animate>` | 它们跟着真实时间走，机器一卡就对不上帧 | 把随时间变的样式写成 t 的函数，直接写进 `style`（样式里写 `"none"` 的不算违规） |
@@ -306,8 +312,9 @@ useLayoutEffect(() => {
 
 - 末尾会多一句不带行号的总说明，提醒这张卡声明的是 remotion 式；要从起点一帧帧推进才能得到画面的效果，是另一种声明 `frameMode: "stateful"`（第 3 节）。
 - 只在建卡、改卡时检查。已经在库里的卡（内置卡、以前建的卡）照旧载入、照旧运行，不会因为多了检查而坏。
-- 改一张**框架出现之前建的、没有引用框架**的 remotion 式老卡，只拒绝这次编辑**新增**的违规，原来就有的不追究。一旦这张卡引用了框架，从那一刻起每一条都要改掉。从 motion 式改成 remotion 式，按新建卡算。
+- 改一张**框架出现之前建的、没有引用框架**的 remotion 式老卡，只拒绝这次编辑**新增**的违规，原来就有的不追究。一旦这张卡引用了框架，从那一刻起每一条都要改掉。两种写法互相改：把 motion 式的卡改成 remotion 式，按新建卡检查（每一条违规都拒）；把 remotion 式的卡改成 motion 式，就不再归这一节的检查管，按 motion 式的检查走。
 - 引用了框架的卡载入时，文件顶层的对象会被整体锁成**只读**，往里写当场报错。
+- 这一节的检查看的是语法树，不是文本匹配：注释里写到这些词不会被拦；字符串和类名里的 `animate-*`、`transition`、`@keyframes` 会被查。（motion 式那三条老规矩——`Date.now()`、`setTimeout` / `setInterval`、`IntersectionObserver`——是文本匹配，注释里写出这几个词也会被拦。）
 
 ### 2.5 remotion 式的卡可以引用的模块
 
@@ -332,22 +339,22 @@ useLayoutEffect(() => {
 
 - **画布不清就接着画。** 画布本身就活得比一帧长，上一帧的像素会留着。每一帧先 `clearRect` 再画。
 - **往 DOM 节点上存东西**（`el.dataset.n`、往节点上挂属性）。
-- **往 `params` 里写。**
+- **往 `params` 里写。**（所有卡都不要往 `params` 里写，见第 7 节。）
 - **绕一道变量，往别的模块导出的对象里写。**
 - **没引用框架的 remotion 式新卡，绕一道变量往自己顶层的对象里写**（它不会被载入时锁只读）。
 - **依赖「谁先加载好」**：字体、图片等齐了再画，不能先画一版再变（用 `beginFrameWork`，见 2.3）。
 
 ## 3. motion 式写法
 
-声明：`frameMode: "stateful"`。画面有状态，要从片段起点一帧帧推进才能得到目标帧。**这是和 remotion 式并列的正式写法，现有的内置卡大多是这一种，不要求改写成 remotion 式。**
+声明：`frameMode: "stateful"`。画面有状态，要从片段起点一帧帧推进才能得到目标帧。**这是和 remotion 式并列的正式写法，内置卡里两种写法的都有，都不用改写。**
 
 **适合什么：**
 
 - 用 Motion 现成的动画：`initial` / `animate` / `transition`、弹簧、`AnimatePresence` 进出场、布局动画。写起来省力，曲线现成。
 - CSS 关键帧与过渡。
 - 一帧依赖上一帧的效果：粒子（`@tsparticles`）、物理模拟、自己累积状态的 JS。
-- `lottie-web`（按帧定位用 `goToAndStop(frame, true)`，不要 autoplay；参考 `src/cards/native/lottie.tsx`）。素材目录里的 Lottie 已经是现成的卡，见 4.5 节，不要重写。
-- three（三维画面写成 t 的纯函数，t 变了再显式 render 一次；参考 `src/cards/native/scene-3d.tsx`）。
+- `lottie-web`（按帧定位用 `goToAndStop(frame, true)`，不要 autoplay；参考 `src/cards/native/lottie.tsx`）。素材目录里的 Lottie 已经是现成的卡，见 4.6 节，不要重写。
+- three（三维画面写成 t 的纯函数，t 变了再显式 render 一次；参考 `src/cards/native/scene-3d.tsx`）。three 不在 remotion 式的模块名单里（第 2.5 节），所以用它的卡声明 `"stateful"`。
 
 **代价：**
 
@@ -361,16 +368,112 @@ useLayoutEffect(() => {
 - 不用 `setTimeout` / `setInterval` 驱动动画：它们不受虚拟时钟控制。动画交给 `motion/react`，需要按时间推进就读组件收到的 `t`。
 - 不用 `IntersectionObserver`：卡片挂载即播放。
 - 不自己跑帧循环（`setAnimationLoop`、`requestAnimationFrame` 配三维），不靠鼠标、滚动、hover 驱动（第 6 节的审查表）。
-- 可以用 `Math.random`（舞台把它钉成了带种子的），但它每调一次往前走一步，结果取决于调用的先后。要「跳到哪一帧都一样」，用 remotion 式。
-- 挂载即播放：`motion` 自己会把动画走完，**绝大多数 motion 式的卡不需要读 `t`**。只有「跟着时间轴走」的卡（字幕轨按时间切换当前句、章节导航按时间高亮）才读 `t`；这样的卡在 `useWhen` 里说明它需要 clip 覆盖整段时间，而不是一小截。
+- 可以用 `Math.random`（舞台把它钉成了带种子的），但它每调一次往前走一步，结果取决于调用的先后。要让同一个 `t` 不管怎么跳转都得到同一个随机数，用框架的 `random(种子, 序号)`（第 2.1 节；它只依赖种子和序号，motion 式的卡也可以引用）。
+- 挂载即播放：`motion` 自己会把动画走完，**绝大多数用 Motion 的卡不需要读 `t`**。只有「跟着时间轴走」的卡（字幕轨按时间切换当前句、章节导航按时间高亮）和按 `t` 显式渲染的卡（三维卡；按帧号定位的 `lottie-web` 卡把 `t` 换算成帧号）才读 `t`；这样的卡在 `useWhen` 里说明它需要 clip 覆盖整段时间，而不是一小截。
+- Motion 的其它写法（`type: "spring"` 的弹簧、关键帧数组、`delay`、`repeat`）都可以用，照 Motion 自己的文档写。导出时舞台的虚拟时钟管着 Motion 的帧循环，也把 CSS 与 Web Animations 的动画钉在「舞台时间减去它出现时的舞台时间」上，所以无限循环（`repeat: Infinity`）的动画在导出里的相位也只由时间决定；这样的卡落定之后的行为写 `after: "loop"` 或 `"evolve"`（第 4.4 节）。
 
-完整例子见 4.2 节的「价格标签」。
+### 3.1 例子：价格标签
+
+下面是一张 motion 式的 DOM 卡（remotion 式的 DOM 卡见第 2.2 节）：
+
+```tsx 完整卡片
+import { motion } from "motion/react";
+import type { CardDef, CardProps } from "../../kernel/types";
+
+/** 这张卡认哪些参数 */
+interface Params {
+  text: string;
+  accent: string;
+  size: number;
+}
+
+function PriceTagCard({ params }: CardProps<Params>) {
+  // 挂载即开始播放。不要写「进入视口才播」这类逻辑。
+  return (
+    <div className="absolute inset-0 grid place-items-center">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+        style={{ color: params.accent, fontSize: params.size }}
+      >
+        {params.text}
+      </motion.div>
+    </div>
+  );
+}
+
+export const priceTag: CardDef<Params> = {
+  id: "price-tag",              // 小写 kebab-case，全局唯一，必须和 create_card 传的 id 一致
+  name: "价格标签",              // 界面上显示的名字
+  description: "价格数字带弹跳浮现",  // 一句话说清长什么样
+  source: "user",               // AI/用户建的卡一律填 "user"
+  useWhen: "口播报价格、报价区间时，把价格做成主视觉。只是陈述普通数字用 stat-proof。",
+  tags: ["价格", "数字", "标签"],
+  frameMode: "stateful",        // 必填：Motion 的动画要从起点推进，所以是 motion 式
+  defaults: { text: "¥199", accent: "#ffd166", size: 96 },
+  controls: [
+    { key: "text", label: "文字", type: "text", hint: "要显示的价格，含货币符号" },   // 有像样的默认值，所以不标 required（见 4.2）
+    { key: "accent", label: "主色", type: "color" },
+    { key: "size", label: "字号", type: "number", min: 24, max: 240, step: 4 },
+  ],
+  Component: PriceTagCard,
+};
+```
 
 ## 4. CardDef 契约
 
-### 4.1 素材效果卡路线
+### 4.1 字段说明
 
-当需求需要现有参数做不到的**滤镜、转场、音频算法或多输入合成**时，写一张**素材效果卡**。素材效果卡不是另一套体系：它就是一张普通的 `CardDef`，源码同样是 `src/cards/user/<id>.tsx` 一个文件，同样用 `create_card` 落盘、`get_card_source` + `edit_card` 修改。视觉的素材效果卡写 `card()`，声音写 `audio()`，由宿主分别求值。动效卡可以同时写视觉 `Component` 或 `card()` 与 `audio()`，画面和声音属于同一个时间轴片段。
+先看一张卡的全部字段。**两种写法、素材效果卡都是同一个 `CardDef`**，下面是它的形状（`?` 是可以不写的）：
+
+```ts
+interface CardDef<Params> {
+  id: string;  name: string;  description: string;  source: "user";
+  useWhen?: string;  tags?: string[];
+  frameMode: "direct" | "stateful";                           // 必填，第 1 节
+  defaults: Params;  controls: Control[];                     // 第 4.2、5 节
+  Component?: (props: CardProps<Params>) => JSX.Element;      // 画面（DOM 卡）
+  card?: …;  audio?: …;  kind?: …;  inputs?: …;               // 素材效果卡的出口，第 4.3 节
+  parts?: CardPart[];                                         // 部件树，第 4.4 节
+  lifecycle?: { settleMs?: number; after: "hold" | "loop" | "evolve"; exit: ["fade"] };
+  timing?: (params: Params) => { settleMs?: number; parts?: Record<string, { enterMs?: number; settleMs?: number }>; after?: "hold" | "loop" | "evolve" };
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `id` | ✓ | 小写 kebab-case。不能用 `mu-` 前缀（留给 Magic UI），不能用 `lottie-` / `particles-` 前缀（留给素材封装卡），不能和现有卡重名 |
+| `name` | ✓ | 中文短名，显示在卡片库里 |
+| `description` | ✓ | 一句话说清**外观和动效** |
+| `source` | ✓ | 建新卡固定填 `"user"` |
+| `useWhen` | 强烈建议 | **什么时候该选这张卡**，写给以后的 AI 看。写清触发条件，以及和近义卡怎么区分（「XX 情况用这张，YY 情况用另一张」；不知道有哪些近义卡就先 `list_cards()` 看，拿不到列表时写清这张卡做什么、不做什么，不要引用没确认过存在的卡 id）。不写的话这张卡以后基本不会被选中 |
+| `tags` | 建议 | 检索关键词 |
+| `defaults` | ✓ | 每个参数的默认值。见 4.2 节「默认值规则」 |
+| `controls` | ✓ | 参数控件表。界面面板和 AI 都靠它了解 schema |
+| `frameMode` | ✓ | **必填，只能是字面量 `"direct"`（remotion 式）或 `"stateful"`（motion 式）**，选法见第 1 节。不写、写成变量都会被 `create_card` 拒绝。旧值 `"react"`、`"non-react"` 只为读老项目，都按 motion 式读，新卡不要写 |
+| `Component` / `card` / `audio` | 至少写一个 | `Component` 是 React 视觉组件，可以同时声明 `audio`；`card` 是视觉素材效果卡的出口，与 `Component` 二选一；`audio` 是音频出口，可以单独写，也可以和 `Component` / `card` 一起写（第 4.3 节） |
+| `parts` | 建议 | **部件树**(约定封装的结构):这张卡对外由哪几块组成,每块由哪些参数驱动、什么时候进场、多久落定。代码页和 `get_clip` 按它组织参数。见下面「部件树与生命周期」 |
+| `lifecycle` | 建议 | **生命周期**(约定封装的时间):进场多久落定(`settleMs`，毫秒)、之后 `hold` 停住 / `loop` 循环 / `evolve` 持续变化、支持的退场(`exit`,目前写 `["fade"]`)。见 4.4 节 |
+| `timing` | 看情况 | 落定时刻随参数变的卡再给：`(params) => ({ settleMs?, parts?, after? })`，见 4.4 节 |
+
+### 4.2 默认值规则（重要）
+
+`clip.params` 是**稀疏覆盖层**，渲染时才和 `defaults` 合并。所以默认值必须是「不填也说得过去」的东西。
+
+- 能给出合理默认的参数：给一个像样的默认值，让卡片一加上去就有效果。
+- **内容只能来自外部、给不出有意义默认值的参数**（比如字幕正文、转写文本）：
+  默认值留空 **并且** 在 control 上标 `required: true`。
+
+  别放演示文案当默认值。曾经字幕卡的 `lines` 默认放了三行样例，结果 AI 建卡时漏传 `lines`，
+  画面照播那三行与视频无关的文案，看上去像「字幕加好了」——失败被默认值盖住，没有任何一处报错。
+
+标了 `required` 的参数，`add_clip` / `update_clip` 会在写入前校验，为空直接报错。校验的是**合并之后**的结果（`defaults` + 已有参数 + 这次写入的键）：所以只有默认值留空的必填参数，漏传才会报错；默认值非空的参数标 `required` 不起作用，不要标。
+`hint` 会一起返回给 AI，写清格式和取值范围。
+
+### 4.3 素材效果卡路线
+
+当需求需要现有参数做不到的**滤镜、转场、音频算法或多输入合成**时，写一张**素材效果卡**。素材效果卡不是另一套体系：它就是一张普通的 `CardDef`，源码同样是 `src/cards/user/<id>.tsx` 一个文件，同样用 `create_card` 落盘、`get_card_source` + `edit_card` 修改。视觉的素材效果卡写 `card()`，声音写 `audio()`，由宿主分别求值。动效卡可以在**同一张 `CardDef` 里**同时写视觉 `Component` 或 `card()` 与 `audio()`，画面和声音属于同一个时间轴片段（有声动效卡，规则见第 10 节）。
 
 建卡和应用是**两步**：`create_card({ id, source })` 落盘定义，再 `apply_card({ cardId, clipId, ... })` 建实例。
 
@@ -509,79 +612,13 @@ export const gainAudio: CardDef<Params> = {
 };
 ```
 
-音频卡 `kind: "audio"`，样本是交错的 `float32`（frames × channels）。**返回的样本数和起点必须和 `range` 完全一致**，非有限样本会被拒绝。音频素材效果卡只写 `clip.nodeId`、不写 `clip.cardId`，所以画面上不会多出一层；同一个片段**不能**同时挂音频素材效果卡和视觉素材效果卡（要两样就先复制片段）。输入边上的 `rate ≠ 1` 第一版不支持。
+音频卡 `kind: "audio"`，样本是交错的 `float32`（frames × channels）。**返回的样本数和起点必须和 `range` 完全一致**，非有限样本会被拒绝。音频素材效果卡只写 `clip.nodeId`、不写 `clip.cardId`，所以画面上不会多出一层；时间轴上，同一个片段**不能**同时挂「纯音频素材效果卡」（`kind: "audio"`、没有视觉出口，走 `apply_card`、挂在 `clip.nodeId` 上）和视觉素材效果卡——它们是两个节点（要两样就先复制片段）；这和上面「同一张卡里既有画面又有 `audio()`」是两回事。输入边上的 `rate ≠ 1` 第一版不支持。
 
 #### 第一版的边界
 
 - 素材效果卡的输入只接**素材节点**和**别的素材效果卡节点**；接 DOM 卡（普通 TSX 卡）会被 `apply_card` 拒掉。
 - 传当前 `clip.nodeId` 给 `apply_card` = 原地改这个实例的参数和输入（不传 `inputs` 时继承旧的），不会接成自指。
 - 改源码先 `get_card_source` 再 `edit_card`，不要建重复定义；同一张定义可以有多个参数不同的实例。做完用 `see_frames` 看实际效果。
-
-### 4.2 DOM 卡路线（普通 TSX 卡）
-
-每张卡是一个文件，导出一个 `CardDef`。下面是一张 motion 式的 DOM 卡（remotion 式的 DOM 卡见 2.2 节）：
-
-```tsx 完整卡片
-import { motion } from "motion/react";
-import type { CardDef, CardProps } from "../../kernel/types";
-
-/** 这张卡认哪些参数 */
-interface Params {
-  text: string;
-  accent: string;
-  size: number;
-}
-
-function PriceTagCard({ params }: CardProps<Params>) {
-  // 挂载即开始播放。不要写「进入视口才播」这类逻辑。
-  return (
-    <div className="absolute inset-0 grid place-items-center">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-        style={{ color: params.accent, fontSize: params.size }}
-      >
-        {params.text}
-      </motion.div>
-    </div>
-  );
-}
-
-export const priceTag: CardDef<Params> = {
-  id: "price-tag",              // 小写 kebab-case，全局唯一，必须和 create_card 传的 id 一致
-  name: "价格标签",              // 界面上显示的名字
-  description: "价格数字带弹跳浮现",  // 一句话说清长什么样
-  source: "user",               // AI/用户建的卡一律填 "user"
-  useWhen: "口播报价格、报价区间时，把价格做成主视觉。只是陈述普通数字用 stat-proof。",
-  tags: ["价格", "数字", "标签"],
-  frameMode: "stateful",        // 必填：Motion 的动画要从起点推进，所以是 motion 式
-  defaults: { text: "¥199", accent: "#ffd166", size: 96 },
-  controls: [
-    { key: "text", label: "文字", type: "text", required: true, hint: "要显示的价格，含货币符号" },
-    { key: "accent", label: "主色", type: "color" },
-    { key: "size", label: "字号", type: "number", min: 24, max: 240, step: 4 },
-  ],
-  Component: PriceTagCard,
-};
-```
-
-### 4.3 字段说明
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `id` | ✓ | 小写 kebab-case。不能用 `mu-` 前缀（留给 Magic UI），不能用 `lottie-` / `particles-` 前缀（留给素材封装卡），不能和现有卡重名 |
-| `name` | ✓ | 中文短名，显示在卡片库里 |
-| `description` | ✓ | 一句话说清**外观和动效** |
-| `source` | ✓ | 建新卡固定填 `"user"` |
-| `useWhen` | 强烈建议 | **什么时候该选这张卡**，写给以后的 AI 看。写清触发条件，以及和近义卡怎么区分（「XX 情况用这张，YY 情况用另一张」）。不写的话这张卡以后基本不会被选中 |
-| `tags` | 建议 | 检索关键词 |
-| `defaults` | ✓ | 每个参数的默认值。见下面「默认值规则」 |
-| `controls` | ✓ | 参数控件表。界面面板和 AI 都靠它了解 schema |
-| `frameMode` | ✓ | **必填，只能是字面量 `"direct"`（remotion 式）或 `"stateful"`（motion 式）**，选法见第 1 节。不写、写成变量都会被 `create_card` 拒绝。旧值 `"react"`、`"non-react"` 只为读老项目，都按 motion 式读，新卡不要写 |
-| `Component` | 三选一 | React 视觉组件，可以同时声明 `audio`。`Component`、`card`（视觉素材效果卡）、`audio`（音频）三者至少写一个 |
-| `parts` | 建议 | **部件树**(约定封装的结构):这张卡对外由哪几块组成,每块由哪些参数驱动、什么时候进场、多久落定。代码页和 `get_clip` 按它组织参数。见下面「部件树与生命周期」 |
-| `lifecycle` | 建议 | **生命周期**(约定封装的时间):进场多久落定(`settleMs`)、之后 `hold` 停住 / `loop` 循环 / `evolve` 持续变化、支持的退场(`exit`,目前都是 `["fade"]`) |
 
 ### 4.4 部件树与生命周期(约定封装)
 
@@ -596,12 +633,15 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
   lifecycle: { settleMs: 1100, after: "hold", exit: ["fade"] },
 ```
 
-- `parts[].params` 里的键必须是 `controls` 里真有的;一个参数只归一个部件;通用的 position / accent 归根部件或不写。
-- `enterMs` / `settleMs` 按 motion 的 delay / duration 算(spring 按 +400ms 估),列表按最后一项算。
-- `lifecycle.settleMs` 是整张卡最晚落定的时刻。Agent 据此知道「这段 clip 后面几秒是静止的」,该缩短时长还是加淡出。
+- `parts[].role` 只有五个取值：`"text"`（文字）、`"media"`（图、动画、画布）、`"list"`（列表）、`"decor"`（装饰，例如背景圆点、进度条）、`"group"`（分组，可以带 `children`）。
+- `parts[].params` 里的键必须是 `controls` 里真有的;一个参数只归一个部件。种子、个数、颜色这类不属于哪一块的参数可以不写进任何部件。没写 `parts` 的卡，所有参数都归一个叫 `root` 的根部件。
+- `enterMs` / `settleMs` 都是**从片段起点算的毫秒时刻**：`enterMs` 是这一块什么时候开始进场，`settleMs` 是它什么时候落定（= 开始时刻 + 动画时长，不是时长本身）；列表按最后一项算。用 Motion 的卡按它的 delay / duration 相加（弹簧按 +400ms 估，弱阻尼、位移大的弹簧不一定准）；remotion 式的卡用框架的 `springDuration`、`staggerDuration` 算（第 2.1 节），是准的。
+- `lifecycle.settleMs` 是整张卡最晚落定的时刻（同样是从片段起点算的毫秒）。Agent 据此知道「这段 clip 后面几秒是静止的」,该缩短时长还是加淡出。
+- `lifecycle.after`：`hold` 落定后停住不动；`loop` 整段进场动画一遍遍重来；`evolve` 落定后画面仍在持续变化（脉动、起伏、绕转、粒子、跟着时间轴走）。
+- `lifecycle.exit` 目前写 `["fade"]`（用片段的淡出整体淡出）。
 - 没写这两个字段的卡按「一个根部件、有进场动画、之后停住、只支持淡出」处理,不报错。
 - **时序随参数变的卡(条目数、字数、间隔、速度决定落定时刻)再给一个 `timing`**:`timing: (p) => ({ settleMs, parts: { items: { settleMs } }, after? })`,
-  封装每次读的时候按 clip 的实际参数重算,和 frame 的 local → world 一样是派生量、不落盘;`parts` / `lifecycle` 里的静态值只当默认参数下的参考。
+  封装每次读的时候按 clip 的实际参数重算,和 frame 的 local → world 一样是派生量、不落盘;`parts` / `lifecycle` 里的静态值只当默认参数下的参考。`timing` 返回的 `parts` 可以只写会变的那几块。
 
 ### 4.5 部件库与组合卡(自由组合不用建卡)
 
@@ -633,23 +673,9 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 - 不要自己拼 `/media/…`、`http://localhost:端口/…`:端口不固定,导出时也不走那个端口。
 - 素材库里没有想要的图:找到图片直链后 `import_media({ url, name })` 装进来,返回里就有 `cardUrl`。
 
-### 4.8 默认值规则（重要）
-
-`clip.params` 是**稀疏覆盖层**，渲染时才和 `defaults` 合并。所以默认值必须是「不填也说得过去」的东西。
-
-- 能给出合理默认的参数：给一个像样的默认值，让卡片一加上去就有效果。
-- **内容只能来自外部、给不出有意义默认值的参数**（比如字幕正文、转写文本）：
-  默认值留空 **并且** 在 control 上标 `required: true`。
-
-  别放演示文案当默认值。曾经字幕卡的 `lines` 默认放了三行样例，结果 AI 建卡时漏传 `lines`，
-  画面照播那三行与视频无关的文案，看上去像「字幕加好了」——失败被默认值盖住，没有任何一处报错。
-
-标了 `required` 的参数，`add_clip` / `update_clip` 会在写入前校验，为空直接报错。
-`hint` 会一起返回给 AI，写清格式和取值范围。
-
 ## 5. 控件类型
 
-只有这四种：
+手写的卡用这四种（素材封装卡里另有一种 `asset`，从素材目录挑 Lottie 或粒子，手写的卡不用它）。四种都可以写 `required`、`hint`：
 
 ```ts
 { key, label, type: "text",   required?, hint? }
@@ -659,12 +685,15 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 ```
 
 要一个「列表」参数就用 `text`，自己定一个分隔格式，并在 `hint` 里写清楚
-（例如字幕轨的 `lines` 用换行分条、`|` 分列）。
+（例如字幕轨的 `lines` 用换行分条、`|` 分列）。条数固定的几行文字（例如三行说明）也可以直接做成几个 `text` 参数（`line1`、`line2`、`line3`），空的行不占位由组件自己处理；条数不固定才用分隔格式。
+
+- **`color` 控件**：界面里选出来的是 `#rrggbb` 十六进制字符串；通过 `update_clip` 写入时不校验格式，Agent 可能写进颜色名或 `hsl()`。用框架的 `interpolateColors` 只认 `#rgb`、`#rrggbb`、`#rrggbbaa`、`rgb()`、`rgba()`，认不出会抛错（卡会渲不出来），所以这样的 `color` 控件要在 `hint` 里写明「十六进制颜色，如 #4cc9f0」。
+- **`number` 控件的 `min` / `max` / `step`** 只管界面（拖动、输入框的范围）。`update_clip` 只校验是不是数字，**不会**拒绝或夹住越界值，越界值会原样交给组件。所以组件里要自己把参数夹进合理范围，免得算出 NaN 或负的时长。
 
 ### 会被调的值，一律做成参数
 
 **凡是「换个数字/颜色就是另一种效果」的值，都要放进 `controls` + `defaults`，不要写死在
-组件里。** 字号、字重、间距、圆角、颜色、动画时长和延迟、进场方向、缩放系数、随机种子——这些
+组件里。**（检查不会强制这一条，是为了以后好改。卡自己的设计常量——缓动曲线的形状、弹簧的刚度与阻尼、进场上移的距离——不属于「会被调的值」，可以写成文件开头起了名字的 `const`，见第 2.1 节。） 字号、字重、间距、圆角、颜色、动画时长和延迟、进场方向、缩放系数、随机种子——这些
 都属于这一类。
 
 这不是风格建议，是成本问题：写死的值只能靠改源码来调，而每改一次源码就有把别处改
@@ -678,7 +707,7 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 
 ## 6. 硬性约束
 
-两种写法都要守。违反前三条的源码 `create_card` 会直接拒绝（remotion 式的卡另有第 2.4 节那一整张表）。
+两种写法都要守。`create_card` 会直接拒绝、并告诉你哪条不过的有：下面的前三条（对 motion 式是文本匹配，注释里写出这几个词也会被拦）；本节末「审查会拒绝这几类」那张表里的各档（自带帧循环、鼠标 / 滚动 / hover 驱动、没装的依赖、没定义的动画 class、来源与许可证）；源码里写 `compositing: 'independent'`、缺必填字段、语法错误。remotion 式的卡另有第 2.4 节那一整张表。`new Date()` 读的也是真实时间，同样不要用——新建卡时不拦它，导出会对不上；改内置卡时才拦。
 
 1. **不要用 `Date.now()`**。导出走的是虚拟时间，读真实时间会和画面对不上。
 2. **不要用 `setTimeout` / `setInterval` 驱动动画**。同上，它们不受虚拟时钟控制。
@@ -686,7 +715,7 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 3. **不要用 `IntersectionObserver`**。卡片挂载即播放，不存在「滚动进入视口」。
 4. **卡片是 1920×1080 舞台上的透明层**，根元素用 `absolute inset-0`，背景保持透明
    （除非这张卡就是要铺满底色）。
-5. 字号、间距按 1920×1080 写死像素即可，舞台会整体缩放。
+5. 字号、间距用 1920×1080 下的固定像素，不用响应式单位，舞台会整体缩放。（具体数值要不要做成参数，见第 5 节。）
 
 ### 可以用的依赖
 
@@ -699,9 +728,9 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 两种写法都可以：
 
 - `import type { CardDef, CardProps } from "../../kernel/types"`
-- 复用 HUD 那套位置/主色约定：`import { hudControls, hudDefaults, getPositionClass, accentOf, easeExpoOut, type HudParams } from "../native/hud"`，
+- 复用 HUD 那套位置/主色约定（不是必须用）：`import { hudControls, hudDefaults, getPositionClass, accentOf, easeExpoOut, type HudParams } from "../native/hud"`，
   然后 `interface Params extends HudParams`、`defaults: { ...hudDefaults, ... }`、`controls: [...hudControls, ...]`。
-  这样卡片自动获得「位置」和「主色」两个参数，和内置卡保持一致。
+  这样卡片自动获得「位置」（`position`，取值 `"center"` / `"bottom"` / `"left"` / `"right"`，缺省居中）和「主色」（`accent`，缺省留空）两个参数，和内置卡保持一致。`getPositionClass(params.position)` 回对应的定位类名（`hud-pos-center` 等），`accentOf(params)` 回 `accent`，留空时回主题色 `var(--pc-accent, #4f8cff)`，`easeExpoOut` 是 Motion 用的缓动数组 `[0.16, 1, 0.3, 1]`。
 
 别引其他第三方库——没装的会直接编译失败。
 
@@ -715,9 +744,9 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 - 文件头声明了来源是 magicui 的卡可以用 `mu-` 前缀。
 - **不用上网找源码**：Magic UI 全部组件的原始源码在本地目录里，本文末尾「附:Magic UI 可搬目录」按档位列了每一个。想用哪个就 `get_card_source({ cardId: "mu-<name>" })` 读它（返回里的 `hint` 会告诉你要先处理什么），包好后用同一个 id `create_card`。
 
-审查会**拒绝**这几类，返回的 `findings` 逐条带档位：
+审查会**拒绝**这几类，返回的 `findings` 逐条带类型标签（报错里原样写成 `[第二档·管线暂不支持]`、`[第三档·交互驱动]`、`[依赖]`、`[动画 class]`、`[来源/许可证]`；「第二档」「第三档」只是内部的编号，没有「第一档」这一档——前面那三条老规矩不在这张表里，它们的报错不带标签）：
 
-| 档位 | 触发 | 为什么 |
+| 类型 | 触发 | 为什么 |
 |---|---|---|
 | 第二档·管线暂不支持 | `setAnimationLoop` 这类**自带帧循环**、@react-three/fiber、cobe | 按 delta 累积的循环在导出里会多走不确定的步数，往回拖播放头也回不去。`<canvas>`、`Math.random`、**WebGL 和 three 现在都接得住**（three 已装，导出开了软件 WebGL，实测两趟逐字节相同），不再拒 |
 | 第三档·交互驱动 | mousemove / scroll 监听、`whileHover` / `whileTap` / `whileInView`、`useScroll` | 导出里没有鼠标和滚动，只会停在初态；改成由 `t` 驱动的参数才能进导出 |
@@ -738,9 +767,11 @@ interface CardProps<P> {
 }
 ```
 
-- **remotion 式的卡一定要读 `t`**：画面就是 t 的函数，写 `{ params, t = 0 }`。
-- **motion 式的绝大多数卡不需要 `t`**——挂载即播，`motion` 自己会把动画走完。只有「跟着时间轴走」的卡才读 `t`：字幕轨（按时间切换当前句）、章节导航（按时间高亮当前章节）。
+- **remotion 式的卡一定要读 `t`**：画面就是 t 的函数。`t` 在 `CardProps` 里是可选属性，所以解构时写 `{ params, t = 0 }`。
+- **用 Motion 的卡绝大多数不需要 `t`**——挂载即播，`motion` 自己会把动画走完。只有「跟着时间轴走」的卡才读 `t`：字幕轨（按时间切换当前句）、章节导航（按时间高亮当前章节），以及按 `t` 显式渲染的卡（三维卡、按帧号定位的 `lottie-web` 卡）。
   如果你的卡要读 `t`，在 `useWhen` 里说明它需要 clip 覆盖整段时间，而不是一小截。
+- **不要往 `params` 里写**（所有卡都一样）：它是宿主交来的输入，往里写会把状态带到下一帧或别的片段。
+- `t` 的起点：普通卡是片段本地秒；写了 `audio()` 的卡，`t` 已经加上片段开头被裁掉的那一段，见第 10 节。
 
 ## 8. 建卡流程
 
@@ -755,7 +786,7 @@ seek({ t: start + 0.5 })                   ← 把播放头挪过去，让用户
 
 源码写到 `src/cards/user/<id>.tsx`，**不需要**改任何注册表文件——该目录是自动扫描的。
 
-`create_card` 落盘前会校验：id 合法且不重名、确实导出了 `CardDef`、
+`create_card` 落盘前会校验：id 合法且不重名（整张推倒重来才传 `overwrite: true`，见 8.1 节）、确实导出了 `CardDef`、
 源码里的 `id` 和参数里的 `id` 一致、必需字段齐全（含 `frameMode`）、没用禁用 API、TypeScript 语法能过；
 声明成 remotion 式的卡另外按第 2.4 节逐条检查。
 不合格会返回**具体哪一条不过**（remotion 式的带行号），照着改再调一次即可。
@@ -837,7 +868,7 @@ fill_captions({ clipId })
 在对应 segment 的时间点 `add_clip`。注意同一条轨上的 clip 不能重叠
 （store 会自动挪开，但结果多半不是你想要的）；需要并排显示就先 `add_track` 建新的 overlay 轨。
 
-## 有声动效卡与持久声音
+## 10. 有声动效卡与持久声音
 
 - 同一 `CardDef` 可写 `Component + audio` 或 `card + audio`；`kind` 保持视觉类别。不要在组件挂载时调用实时声音播放来代替 `audio()`，那种副作用不能保证定位、静音和成片一致。
 - `audio()` 按 48 kHz 采样位置返回交错浮点 PCM；只依赖完整参数、确定种子、事件身份与采样位置，不能用真实时钟或随机调用顺序推进声音。纯合成显式 `inputs: {}`。
@@ -845,4 +876,4 @@ fill_captions({ clipId })
 - `set_clip_muted` 只关声音，时间轴醒目标记；声音仍在原动效片段中。对它调用 `separate_audio` 明确返回 `EMBEDDED_CARD_AUDIO_UNSEPARABLE`，不自动退回生成独立声音段。普通视频素材的分离能力不变。
 - 单独提示音或键盘音效先用 `sound_presets` / `sound_generate`，无需重新创建卡片。
 
-- 有声视觉卡的 `Component` 所收到的 `t`、视觉 `card()` 的 `t`、`audio()` 的 `range.start / sampleRate` 已由宿主归到同一源时间；裁切后不要再次加 `sourceOffset`。没有 `audio` 的普通 DOM 卡保留原局部 `t` 契约。
+- 有声视觉卡（写了 `audio()` 的卡）的 `Component` 所收到的 `t`、视觉 `card()` 的 `t`、`audio()` 的 `range.start / sampleRate`，宿主已经归到同一根时间轴上：这根轴是「片段本地秒 + 片段开头被裁切、切分掉的秒数（`sourceOffset`）」，没裁过的片段就等于片段本地秒。`CardProps` 里另给的 `sourceOffset` 只作诊断，**不要再把它加到 `t` 上**。没有 `audio` 的普通 DOM 卡，`t` 就是片段本地秒。

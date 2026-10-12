@@ -134,7 +134,7 @@ function cardWith({ imports = '', top = '', body = '', jsx = '<div style={{ opac
  * 指南里加一行、改一行的措辞，这里要跟着改，对照表就是这样钉住的。
  */
 const REJECTED = [
-  { guide: '引用名单之外的模块，动态 `import()`、`require()`', rule: 'import', source: cardWith({ imports: 'import lottie from "lottie-web";' }) },
+  { guide: '引用名单之外的模块（含同目录的辅助文件 `./xxx`、样式文件、没列在名单里的第三方库），动态 `import()`、`require()`', rule: 'import', source: cardWith({ imports: 'import lottie from "lottie-web";' }) },
   { guide: '`motion` / `motion/react`、`<motion.div>`、`whileHover` 这类交互属性', rule: 'motion', source: cardWith({ imports: 'import { motion } from "motion/react";', jsx: '<motion.div animate={{ opacity: 1 }} />' }) },
   { guide: '`<AnimatePresence>`', rule: 'presence', source: cardWith({ jsx: '<AnimatePresence><div /></AnimatePresence>' }) },
   { guide: 'CSS 动画与过渡：样式里的 `animation*`、`transition*`；样式文本里的 `@keyframes`；类名 `animate-*`、`transition*`；元素的 `.animate()`；SVG 的 `<animate>`', rule: 'css-animation', source: cardWith({ jsx: '<div style={{ transition: "opacity 1s" }} />' }) },
@@ -254,6 +254,15 @@ test('GA-04b 指南里写的缺省值和例子数字和代码对得上', () => {
   // loop / pingPong
   assert.equal(F.loop(5, 2), 1);
   assert.equal(F.pingPong(1.5, 1), 0.5);
+  // 指南 2.1 表里写的取值范围与签名
+  for (let i = 0; i <= 40; i++) { const v = F.pingPong(i * 0.13, 1); assert.ok(v >= 0 && v <= 1, 'pingPong 返回 [0, period]'); const w = F.loop(i * 0.37, 2); assert.ok(w >= 0 && w < 2, 'loop 返回 [0, period)'); }
+  assert.equal(F.pingPong(1, 1), 1);
+  assert.equal(F.tween(0.5, { duration: 0 }), 1, 'tween 的 duration 不大于 0：t 到了 delay 就是 to');
+  assert.equal(F.tween(-1, { duration: 0 }), 0);
+  assert.ok(Math.abs(F.staggerDuration(3, { each: 0.1, delay: 0.5 }, 0) - 0.7) < 1e-9, 'staggerDuration 把 delay 算进去');
+  assert.equal(F.interpolate(5, [0, 1], [0, 1], { extrapolateRight: 'clamp' }), 1);
+  assert.throws(() => F.interpolateColors(0, [0, 1], ['red', '#000']), /认不出/, 'interpolateColors 认不出颜色名会抛错');
+  assert.throws(() => F.interpolateColors(0, [0, 1], ['hsl(0, 0%, 0%)', '#000']), /认不出/);
   // 颜色
   assert.equal(F.interpolateColors(0, [0, 1], ['#ff0000', '#0000ff']), 'rgba(255, 0, 0, 1)');
   assert.equal(F.interpolateColors(1, [0, 1], ['#ff0000', '#0000ff']), 'rgba(0, 0, 255, 1)');
@@ -267,7 +276,7 @@ test('GA-05 指南里 beginFrameWork 的片段放进一张卡里能过建卡检�
   const importLine = block.split('\n').find((l) => l.startsWith('import '));
   const body = block.split('\n').slice(block.split('\n').findIndex((l) => l.includes('// 组件里')) + 1).join('\n');
   const source = [
-    'import { useLayoutEffect } from "react";',
+    'import { useLayoutEffect, useMemo } from "react";',
     'import type { CardDef, CardProps } from "../../kernel/types";',
     importLine,
     'interface P { src: string }',
@@ -288,7 +297,9 @@ test('GA-05 指南里 beginFrameWork 的片段放进一张卡里能过建卡检�
 
 test('GA-06 指南不再说过时的话', () => {
   // frameMode 必填（建卡实际会拒绝没写的）
-  const missing = cards.checkCardSource('no-mode', FULL[3].replace(/\n\s*frameMode:[^\n]*/, '').replace('price-tag', 'no-mode'), [], { mode: 'author', before: '' });
+  const price = FULL.find((x) => idOf(x) === 'price-tag');
+  assert.ok(price, '指南里有价格标签例子');
+  const missing = cards.checkCardSource('no-mode', price.replace(/\n\s*frameMode:[^\n]*/, '').replace('price-tag', 'no-mode'), [], { mode: 'author', before: '' });
   assert.equal(missing.ok, false);
   assert.ok(missing.errors.some((e) => /frameMode/.test(e)), '没写 frameMode 会被拒绝');
   assert.match(GUIDE, /\| `frameMode` \| ✓ \|/, '字段表里 frameMode 标必填');
@@ -301,6 +312,15 @@ test('GA-06 指南不再说过时的话', () => {
   // 不规定优先用哪一种
   assert.doesNotMatch(GUIDE, /优先(使用|用|选)[^。\n]*(direct|remotion|motion)/i);
   assert.match(GUIDE, /没有哪一种更推荐/);
+  // 中性：不暗示偏向，两个方向的改写都说到
+  assert.doesNotMatch(GUIDE, /不要求改写成 remotion 式/);
+  assert.doesNotMatch(GUIDE, /跳到哪一帧都一样」，用 remotion 式/);
+  assert.match(GUIDE, /把 motion 式的卡改成 remotion 式[^。]*把 remotion 式的卡改成 motion 式/);
+  assert.match(GUIDE, /内置卡里两种写法的都有，都不用改写/);
+  assert.doesNotMatch(GUIDE, /PromptCut 里的 2D 动效卡只有两种写法/);
+  // 必填参数的默认值：校验的是合并之后的结果，所以带非空默认值的 required 没有作用；例子里不能出现这种写法
+  assert.match(GUIDE, /默认值非空的参数标 `required` 不起作用/);
+  for (const ex of FULL) assert.doesNotMatch(ex, /required: true[^\n]*\n/, `例子 ${idOf(ex)} 里不该有「带非空默认值的 required」`);
   // 旧名词（「地图卡」「示意图卡」不是旧名词）
   assert.doesNotMatch(GUIDE.replace(/地图卡|示意图卡/g, ''), /图卡/, '指南里不再有旧名词「图卡」');
   // 补渲、烘焙、冻结
@@ -342,4 +362,26 @@ test('GA-07 工具说明与 Agent 提示词里讲怎么写卡的地方和指南�
   assert.doesNotMatch(prompt, /动画交给 `?motion\/react`?/, '提示词不再一律劝人动画交给 motion/react');
   const cloud = read('server/agent/service/cloud-tools.mjs');
   assert.match(cloud, /frameMode/, '云端 Agent 的提示词要提到 frameMode');
+});
+
+test('GA-08 指南里「第 N.M 节」「N.M 节」「第 N 节」的引用都指向真有的标题', () => {
+  const heads = new Set([...GUIDE.matchAll(/^#{2,3} (\d+(?:\.\d+)?)[ .]/gm)].map((m) => m[1]));
+  const bad = [];
+  for (const m of GUIDE.matchAll(/第?\s*(\d+\.\d+)\s*节/g)) if (!heads.has(m[1])) bad.push(m[0]);
+  for (const m of GUIDE.matchAll(/第\s*(\d+)\s*节/g)) if (!heads.has(m[1])) bad.push(m[0]);
+  assert.deepEqual(bad, [], '引用了不存在的小节');
+  // 指南的 12 个标题编号没有缺号
+  for (const n of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "2.1", '2.6', '3.1', '4.1', '4.7', '8.1']) assert.ok(heads.has(n), `缺标题 ${n}`);
+});
+
+test('GA-09 指南里的每一处「第 N.M 节」指的内容和标题对得上（抽查几处关键引用）', () => {
+  const titleOf = (n) => new RegExp(`^#{2,3} ${n.replace('.', '\\.')}[ .]([^\\n]*)`, 'm').exec(GUIDE)?.[1] ?? '';
+  assert.match(titleOf('4.3'), /素材效果卡路线/);
+  assert.match(titleOf('4.2'), /默认值规则/);
+  assert.match(titleOf('4.4'), /部件树与生命周期/);
+  assert.match(titleOf('4.6'), /素材封装卡/);
+  assert.match(titleOf('2.4'), /当场拒绝/);
+  assert.match(titleOf('2.5'), /可以引用的模块/);
+  assert.match(GUIDE, /素材目录里的 Lottie 已经是现成的卡，见 4\.6 节/);
+  assert.match(GUIDE, /素材效果卡路线|第 4\.3 节/);
 });
