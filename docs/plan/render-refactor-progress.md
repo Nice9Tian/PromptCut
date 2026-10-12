@@ -21,6 +21,8 @@
 
 | 辛：两条导出路各量一遍 | `defe591d` | 探针 `export-paths-measure.mjs`、两个夹具项目、报告和 6 张对比图；没改 `src/`、`server/`（差异 0 行），导出像素基线不受影响。机器被占着时量到：桌面那条路快，演示项目 21.1 秒对 61.8 秒，带重卡和粒子卡的项目 43.7 秒对 150.7 秒；两条路的成片平均差 3.1～3.8（满分 255）；桌面三遍逐字节相同。机器空闲时的正式数字待主会话补跑 |
 
+| 己零：画布取像素走哪条路（己的前置测量） | `c276d926` | 单文件、零依赖的探针，在这台 PC 和节点的临时目录里各跑一遍（节点上跑完已删）。节点上每帧：现在的办法 83～637 毫秒，原始像素交给 ffmpeg 36～154 毫秒，浏览器自带的编码器 16～67 毫秒；三条都编得出来、解回来 90 帧都在。定为原始像素交给 ffmpeg |
+
 子 Agent 的报告在 `docs/reports/AGENT-rr-*.md`。
 
 ## 本次做了什么
@@ -32,7 +34,6 @@
 
 1. 甲一集成做完：读差异、重跑基线和探针、改语义文档第 1～6 行，合进 `main`。
 2. 甲一合入后照契约第 13 节派第二批。不等甲一就能开的几块（网格、守门、己零的探针）现在就派。
-3. 「己零」：画布卡取像素的两条路，探针在这台 PC 上和节点的临时目录里各跑一遍，再定走哪条。
 4. 收回其余各路。
 
 ## 还差什么
@@ -58,7 +59,6 @@
 | `claude/rr-a1-verify` | 甲一留下的两件核对 | Opus Extra（根因不明） | 7430～7439 |
 | `claude/rr-guide` | 丙：改建卡指南，补验框架卡在在线页面和托管渲染节点里 | Sonnet high | 7450～7459 |
 | `claude/rr-preview-fixes` | 己之前要修的两处预览老问题 | Opus Extra（根因不明） | 7480～7489 |
-| `claude/rr-canvas-paths` | 己零：画布取像素三条路的测量探针（节点上那一遍主会话自己跑） | Sonnet high | 随机端口 |
 
 ## 〔裁〕清单
 
@@ -98,7 +98,7 @@
 
 ## 分支去向
 
-- `claude/rr-card-table`（`393b0b2a`）、`claude/rr-framework`（`cd907bb2`）、`claude/rr-contract`（`4068ff7e`）、`claude/rr-silent-spawn`（`faf03d4c`）、`claude/rr-grid-guard`（`69e21870`）、`claude/rr-export-measure`（`defe591d`）：已合进 `main`，工作区和分支已清。
+- `claude/rr-card-table`（`393b0b2a`）、`claude/rr-framework`（`cd907bb2`）、`claude/rr-contract`（`4068ff7e`）、`claude/rr-silent-spawn`（`faf03d4c`）、`claude/rr-grid-guard`（`69e21870`）、`claude/rr-export-measure`（`defe591d`）、`claude/rr-canvas-paths`（`c276d926`）：已合进 `main`，工作区和分支已清。
 - `claude/rr-a1-produce`、`claude/rr-a1-play`：已合进集成分支 `claude/rr-a1`，等甲一进 `main` 后一起清。
 
 `release` 照开工指令在 0.7.18 发版时推进，这期间不动。
