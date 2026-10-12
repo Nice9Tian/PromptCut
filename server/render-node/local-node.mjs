@@ -23,7 +23,7 @@ import { LOCK_IDLE_TAKEOVER_MS } from '../render-queue/constants.mjs';
  *
  *   plan    executor.plan → splitPlan → task.publish 细任务(带 reqId)→ 等同一 reqId 的
  *           task.published → (有 card-locked 就照锁重切重发)→ complete 这个 plan
- *           (带片段清单的计划任务:预渲染集合换成它的片段清单;流只按清单里的片段切;补渲计划不切流、细任务标 backfill,见 `listPlanOverrides`)
+ *           (带片段清单的计划任务:预渲染集合换成它的片段清单;流只按清单里的片段切;预渲染重试计划(backfill)不切流、细任务标 backfill,见 `listPlanOverrides`)
  *   细任务   sink.has 为真就直接 complete(dedup,带 sink.resultFor 的清单);否则 executor.render →
  *            sink.put → 收全才 complete(带 put 回的清单),没收全 fail(可重试)。
  *            sink 收到的 ref 带任务的 input 与 requires(契约 J.3)。这一段在同构的 `task-runner.mjs` 里

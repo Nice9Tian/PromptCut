@@ -170,7 +170,7 @@ function cardStream(clipId, extra = {}) {
 }
 const groupStream = () => cardStream('b', { streamKey: rk('sk-g', OWN), contentKey: 'sk-g', kind: 'group', plane: 'stage', clipIds: ['a', 'b'] });
 
-test('HRS-03 listPlanOverrides:ownListStreams 为真才出切分方自己的那一份(只给单卡流);不为真、补渲计划、旧执行器照旧', () => {
+test('HRS-03 listPlanOverrides:ownListStreams 为真才出切分方自己的那一份(只给单卡流);不为真、预渲染重试计划、旧执行器照旧', () => {
   const list = clipsPlan({ clips: ['a', 'b'] });
   const browserStreamsFor = () => [cardStream('a'), groupStream()];
   const off = listPlanOverrides(list, { browserStreamsFor });
@@ -181,7 +181,7 @@ test('HRS-03 listPlanOverrides:ownListStreams 为真才出切分方自己的那�
   assert.deepEqual(on.streams.map((s) => [s.topClipId, s.kind, 'browserOnly' in s]), [['a', 'card', false], ['b', 'group', true]], '为真:单卡流连自己的一份;组流仍不出');
   assert.deepEqual([...on.prerenderSet], ['a', 'b']);
   assert.equal(on.lane, 'normal');
-  // 补渲计划不切流;旧执行器(不给 browserStreamsFor)不切流;不是带清单的计划不改
+  // 预渲染重试计划(backfill)不切流;旧执行器(不给 browserStreamsFor)不切流;不是带清单的计划不改
   const backfill = { ...list, id: list.id.replace('#clips:', '#backfill:'), resultKey: list.resultKey.replace('#clips:', '#backfill:'), priority: 'backfill' };
   assert.deepEqual(listPlanOverrides(backfill, { browserStreamsFor, ownListStreams: true }).streams, []);
   assert.deepEqual(listPlanOverrides(list, { ownListStreams: true }).streams, []);
@@ -233,7 +233,7 @@ test('HRS-04 local-node 切清单计划:ownListStreams 为真时流出两份(自
   assert.equal(br.requires.transcode, false);
   assert.equal(br.input.dual, true);
   assert.equal(own.source.derivedFrom, list.id, '带着清单计划的 id(执行器靠它认「清单计划切出的」)');
-  assert.notEqual(own.priority, 'backfill', '清单计划照 normal 的名次(不是补渲档;具体名次由切分定)');
+  assert.notEqual(own.priority, 'backfill', '清单计划照 normal 的名次(不是 backfill 档;具体名次由切分定)');
   const only = (await publishedBy({ planTask: list, plan: { ...base, ownListStreams: false } })).filter((t) => t.kind === 'stream');
   assert.deepEqual(only.map((t) => t.requires.envFingerprint), [BR]);
   assert.equal('dual' in only[0].input, false);
