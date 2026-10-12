@@ -266,7 +266,7 @@ test("HS10 解析 hosted:streams 是布尔才收;非布尔丢掉但这个服务�
   assert.deepEqual(H.parseHosted({ agent: { available: true, enabled: true, streams: true } }), { agent: { available: true, enabled: true } }, "只有渲染节点有这一项");
 });
 
-test("HS10 出现条件:放云端、render.available、文档服务报了 streams(旧托管端不报就不出现);缺省开(由文档服务算好再报)", () => {
+test("HS10 出现条件:放云端、render.available、文档服务报了 streams(旧托管端不报就不出现);缺省关(记录里没有算关,由文档服务算好再报,页面只照报的值显示)", () => {
   const opt = (enabled, parentOff = false) => [{ service: "render", option: "streams", label: "生成轨道流", enabled, parentOff }];
   assert.deepEqual(H.hostedOptionRowsOf("hosted", WITH_STREAMS), opt(true));
   assert.deepEqual(H.hostedOptionRowsOf("hosted", STREAMS_OFF), opt(false));
@@ -301,7 +301,7 @@ test("HS10 文案(先照任务书,用户看过截图再定):标签、两个方�
   const t = H.hostedOptionText("render", "streams");
   assert.equal(t.label, "生成轨道流");
   assert.equal(t.hint(true), "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。");
-  assert.equal(t.hint(false), "已关闭：托管方的渲染节点只为这个项目生成快照，不生成轨道流；已经生成的保留。");
+  assert.equal(t.hint(false), "没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。");
   assert.equal(t.confirm(true), "打开后，托管方的渲染节点会为这个项目生成轨道流。");
   assert.equal(t.confirm(false), "关闭后，托管方的渲染节点不再为这个项目生成轨道流，已经生成的保留。");
   assert.equal(t.changed(true), "", "打开时不提示,和另两行同一个规矩");
@@ -313,13 +313,13 @@ test("HS10 文案(先照任务书,用户看过截图再定):标签、两个方�
 
 const streamsBoxOf = (html) => html.match(/<input[^>]*data-pc="collab-hosted-render-streams-toggle"[^>]*>/)?.[0] ?? null;
 
-test("HS11 组件:渲染节点那一行下面缩进多一行,缺省勾上;创建者能改,成员只读并带「只有创建者能改」", () => withRows(({ render }) => {
+test("HS11 组件:渲染节点那一行下面缩进多一行,按报来的值勾选;创建者能改,成员只读并带「只有创建者能改」", () => withRows(({ render }) => {
   const asCreator = render({ where: "hosted", hosted: WITH_STREAMS, creator: true, onToggleOption: () => {} });
   assert.match(asCreator, /生成轨道流/);
   assert.match(asCreator, /重卡在在线浏览器里播放更流畅/, "有一行说明");
   const box = streamsBoxOf(asCreator);
   assert.ok(box, "有勾选框");
-  assert.match(box, /checked=""/, "缺省勾上");
+  assert.match(box, /checked=""/, "报来是开就勾上");
   assert.doesNotMatch(box, /disabled/, "创建者可以改");
   assert.doesNotMatch(asCreator, /只有创建者能改/);
   assert.ok(asCreator.indexOf("托管方的渲染节点</label>") < asCreator.indexOf("生成轨道流"), "在渲染节点那一行后面");
@@ -333,7 +333,9 @@ test("HS11 组件:渲染节点那一行下面缩进多一行,缺省勾上;创建
 
   const off = render({ where: "hosted", hosted: STREAMS_OFF, creator: true, onToggleOption: () => {} });
   assert.doesNotMatch(streamsBoxOf(off), /checked/, "关掉后不勾");
-  assert.match(off, /只为这个项目生成快照，不生成轨道流/);
+  assert.match(off, /没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流/);
+  assert.match(off, /会多用云端的渲染时间/, "关着的说明讲清代价");
+  assert.doesNotMatch(off, /渲染节点关着，暂不生效/, "渲染节点开着时不加这一句");
   assert.match(off, /data-state="off"/);
 
   const busy = render({ where: "hosted", hosted: WITH_STREAMS, creator: true, busy: true, onToggleOption: () => {} });
@@ -346,6 +348,9 @@ test("HS11 渲染节点那一行关着时:轨道流这一行置灰(不可点,带
   const html = render({ where: "hosted", hosted: RENDER_OFF, creator: true, onToggleOption: () => {} });
   assert.match(streamsBoxOf(html), /disabled=""/, "创建者也点不了");
   assert.match(streamsBoxOf(html), /checked=""/, "它自己的状态不变");
+  assert.match(html, /重卡在在线浏览器里播放更流畅。（渲染节点关着，暂不生效）/, "开着的说明后面加一句");
+  const offAndGrey = render({ where: "hosted", hosted: { render: { available: true, enabled: false, streams: false } }, creator: false, onToggleOption: () => {} });
+  assert.match(offAndGrey, /会多用云端的渲染时间。（渲染节点关着，暂不生效）（只有创建者能改）/, "关着的说明后面加一句,成员再加「只有创建者能改」");
   assert.match(html, /<div class="pc-collab-hosted-sub pc-collab-hosted-sub--off" data-pc="collab-hosted-render-streams" data-state="disabled">/);
   const back = render({ where: "hosted", hosted: { render: { available: true, enabled: true, streams: true } }, creator: true, onToggleOption: () => {} });
   assert.doesNotMatch(streamsBoxOf(back), /disabled/);

@@ -20,7 +20,7 @@
  *   并给本空间其余成员连接发 `shared.notice { event: 'hosted-service-changed', service, enabled }`。
  *   登记表里没有这个服务时回 `bad-message`；改的时候只动 `enabled`，同一个服务下的子选项（`render.streams`）保留；
  * - 创建者操作 `set-hosted-option { service: 'render', option: 'streams', enabled: boolean }`：改服务下面的子选项（项目记录
- *   `hosted.<服务名>.<选项名>`，没有算开）。只记下并通知，不断连接、不动认领；成员列表顶层 `hosted.render` 多带 `streams`；
+ *   `hosted.<服务名>.<选项名>`，没有算关）。只记下并通知，不断连接、不动认领；成员列表顶层 `hosted.render` 多带 `streams`；
  *   给本空间其余成员连接（不含服务连接）发 `shared.notice { event: 'hosted-option-changed', service, option, enabled }`。
  *   `service` 不认识、登记表里没有它、`option` 不认识、`enabled` 不是布尔值，都回 `bad-message`；
  * - 服务连接（`scope: 'service'`）的 `auth.ticket` 只签素材票据，负载多带 `sv`（服务名）与 `sk`（公钥编号）；
@@ -470,7 +470,7 @@ export function sharedModule({
         break;
       }
       case 'set-hosted-option': {
-        // 服务下面的子选项（现在只有 render 的 streams，缺省开）：只记下并通知，不断任何连接、不动认领
+        // 服务下面的子选项（现在只有 render 的 streams，缺省关）：只记下并通知，不断任何连接、不动认领
         const name = msg.service;
         if (!HOSTED_SERVICES.includes(name)) throw new Refused('bad-message', `service 只能是 ${HOSTED_SERVICES.join(' / ')}`);
         if (!hostedServices || !registryOf()?.get(name)) throw new Refused('bad-message', '这台文档服务没有这个托管方服务');

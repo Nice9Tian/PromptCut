@@ -8,7 +8,7 @@
  *   `HOSTED_SERVICE_TEXT` 各加一项就多一行。
  *
  * - 渲染节点那一行下面缩进多一行子选项「生成轨道流」（契约 `hosted-render-contract.md` 第 3.1 节）：成员列表里 `hosted.render.streams`
- *   （布尔，文档服务报了才出现；旧托管端不报，这一行就不显示），记录里没有算开；渲染节点那一行关着时置灰、不可点。
+ *   （布尔，文档服务报了才出现；旧托管端不报，这一行就不显示），记录里没有算关（2026-10-12 用户定：在线浏览器暂停时不靠渲染节点也能看任意一帧，云端缺省不产轨道流，省服务器资源）；渲染节点那一行关着时置灰、不可点。
  *   子选项按「服务名 + 选项名」渲染，文案在 `HOSTED_OPTION_TEXT`。
  *
  * - 代成员进项目的服务连接（云端 Agent）不另起一行：归在那位成员的行里，`conns` 里那一项带 `service: 'agent'`，界面在这位成员下
@@ -24,7 +24,7 @@ export type HostedServiceName = "render" | "agent";
 export interface HostedServiceState {
   available: boolean;
   enabled: boolean;
-  /** 渲染节点的子选项「生成轨道流」：文档服务报了才有（旧托管端没有）；缺省开由文档服务算好再报 */
+  /** 渲染节点的子选项「生成轨道流」：文档服务报了才有（旧托管端没有）；缺省关由文档服务算好再报（记录里没有这一项算关，只有显式为 true 才算开） */
   streams?: boolean;
 }
 
@@ -81,7 +81,7 @@ export interface HostedOptionText {
 export const HOSTED_OPTION_TEXT: Record<string, HostedOptionText> = {
   "render.streams": {
     label: "生成轨道流",
-    hint: (enabled) => (enabled ? "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。" : "已关闭：托管方的渲染节点只为这个项目生成快照，不生成轨道流；已经生成的保留。"),
+    hint: (enabled) => (enabled ? "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。" : "没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。"),
     changed: (enabled) => (enabled ? "" : "创建者关闭了轨道流，托管方的渲染节点不再为这个项目生成轨道流。"),
     confirm: (enabled) => (enabled ? "打开后，托管方的渲染节点会为这个项目生成轨道流。" : "关闭后，托管方的渲染节点不再为这个项目生成轨道流，已经生成的保留。"),
   },

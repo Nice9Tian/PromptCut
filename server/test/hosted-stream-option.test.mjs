@@ -10,7 +10,8 @@ import { createProject, join, adminOp, ask, members, sleep } from './auth-kit.mj
 import { serviceHostFor, openControl, openData, watchDirectory } from './hosted-render-kit.mjs';
 import { hostedStateOf, hostedOptionEnabled, HOSTED_OPTIONS } from '../auth/service-identity.mjs';
 
-const OPTION = (over = {}) => ({ service: 'render', option: 'streams', enabled: false, ...over });
+const OPTION = (over = {}) => ({ service: 'render', option: 'streams', enabled: true, ...over });
+const OFF = { enabled: false };
 const NOTICE = (enabled) => ({ type: 'shared.notice', event: 'hosted-option-changed', service: 'render', option: 'streams', enabled });
 const isOptionNotice = (m) => m.type === 'shared.notice' && m.event === 'hosted-option-changed';
 
@@ -33,39 +34,42 @@ async function quietFor(c, pred, ms = 600) {
 
 const hostedOf = async (c) => (await ask(c, { type: 'shared.members' }, 'shared.members.list')).hosted;
 
-test('HS1 纯函数：记录里没有这一项算开；只有渲染节点带 streams，云端 Agent 没有', () => {
+test('HS1 纯函数：记录里没有这一项算关（只有显式为 true 才算开）；只有渲染节点带 streams，云端 Agent 没有', () => {
   const registry = { get: () => ({}) };
   assert.deepEqual(HOSTED_OPTIONS, { render: ['streams'], agent: [] });
-  assert.equal(hostedOptionEnabled(undefined, 'render', 'streams'), true);
-  assert.equal(hostedOptionEnabled({}, 'render', 'streams'), true);
-  assert.equal(hostedOptionEnabled({ hosted: { render: { enabled: true } } }, 'render', 'streams'), true);
+  assert.equal(hostedOptionEnabled(undefined, 'render', 'streams'), false);
+  assert.equal(hostedOptionEnabled({}, 'render', 'streams'), false);
+  assert.equal(hostedOptionEnabled({ hosted: { render: { enabled: true } } }, 'render', 'streams'), false, '渲染节点开着不等于轨道流开着');
+  assert.equal(hostedOptionEnabled({ hosted: { render: { streams: 'yes' } } }, 'render', 'streams'), false, '不是布尔值不算开');
   assert.equal(hostedOptionEnabled({ hosted: { render: { streams: false } } }, 'render', 'streams'), false);
-  assert.deepEqual(hostedStateOf(registry, {}), { render: { available: true, enabled: true, streams: true }, agent: { available: true, enabled: true } });
+  assert.equal(hostedOptionEnabled({ hosted: { render: { streams: true } } }, 'render', 'streams'), true);
+  assert.deepEqual(hostedStateOf(registry, {}), { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true } });
   assert.deepEqual(
-    hostedStateOf(registry, { hosted: { render: { enabled: false, streams: false }, agent: { enabled: false } } }),
-    { render: { available: true, enabled: false, streams: false }, agent: { available: true, enabled: false } },
+    hostedStateOf(registry, { hosted: { render: { enabled: false, streams: true }, agent: { enabled: false } } }),
+    { render: { available: true, enabled: false, streams: true }, agent: { available: true, enabled: false } },
     '渲染节点关着与轨道流关着互不影响，各报各的',
   );
-  assert.deepEqual(hostedStateOf(null, {}).render, { available: false, enabled: true, streams: true }, '没有登记表：照报，available 为假');
+  assert.deepEqual(hostedStateOf(null, {}).render, { available: false, enabled: true, streams: false }, '没有登记表：照报，available 为假');
 });
 
-test('HS2 创建者能改：落盘、成员列表顶层 hosted.render.streams 跟着变；缺省是开；不加代数；旧字段原样', async (t) => {
+test('HS2 创建者能改：落盘、成员列表顶层 hosted.render.streams 跟着变；缺省是关；不加代数；旧字段原样', async (t) => {
   const { env, proj, creator, member } = await setup(t);
   const generation = env.store.peek(proj.projectId).generation;
-  assert.deepEqual(await hostedOf(member), { render: { available: true, enabled: true, streams: true }, agent: { available: false, enabled: true } }, '缺省：记录里没有，算开');
+  assert.deepEqual(await hostedOf(member), { render: { available: true, enabled: true, streams: false }, agent: { available: false, enabled: true } }, '缺省：记录里没有，算关');
   assert.equal(env.store.peek(proj.projectId).hosted, undefined, '没改过就不写记录');
 
-  const off = await adminOp(creator, proj, 'set-hosted-option', OPTION());
-  assert.deepEqual([off.type, off.op], ['shared.admin.ok', 'set-hosted-option'], JSON.stringify(off));
-  assert.deepEqual(env.store.peek(proj.projectId).hosted, { render: { streams: false } });
+  const on = await adminOp(creator, proj, 'set-hosted-option', OPTION());
+  assert.deepEqual([on.type, on.op], ['shared.admin.ok', 'set-hosted-option'], JSON.stringify(on));
+  assert.deepEqual(env.store.peek(proj.projectId).hosted, { render: { streams: true } });
   assert.equal(env.store.peek(proj.projectId).generation, generation, '不加代数');
   const list = await ask(member, { type: 'shared.members' }, 'shared.members.list');
-  assert.deepEqual(list.hosted.render, { available: true, enabled: true, streams: false }, '旧字段 available、enabled 不变，多一个 streams');
+  assert.deepEqual(list.hosted.render, { available: true, enabled: true, streams: true }, '旧字段 available、enabled 不变，多一个 streams');
   assert.deepEqual(list.hosted.agent, { available: false, enabled: true }, '云端 Agent 不带 streams');
 
-  const on = await adminOp(creator, proj, 'set-hosted-option', OPTION({ enabled: true }));
-  assert.equal(on.type, 'shared.admin.ok');
-  assert.deepEqual((await hostedOf(member)).render, { available: true, enabled: true, streams: true });
+  const off = await adminOp(creator, proj, 'set-hosted-option', OPTION(OFF));
+  assert.equal(off.type, 'shared.admin.ok');
+  assert.deepEqual(env.store.peek(proj.projectId).hosted, { render: { streams: false } }, '显式关：记录里写 false');
+  assert.deepEqual((await hostedOf(member)).render, { available: true, enabled: true, streams: false });
   assert.equal(await ask(member, { type: 'shared.members' }, 'shared.members.list').then((m) => m.type), 'shared.members.list', '成员连接没断');
 });
 
@@ -73,8 +77,8 @@ test('HS3 订阅了成员列表的连接在改完后收到刷新后的列表', a
   const { proj, creator, member } = await setup(t);
   await ask(member, { type: 'shared.watch' }, 'shared.members.list');
   await adminOp(creator, proj, 'set-hosted-option', OPTION());
-  const pushed = await member.next((m) => m.type === 'shared.members.list' && m.hosted?.render?.streams === false, 3000);
-  assert.deepEqual(pushed.hosted.render, { available: true, enabled: true, streams: false });
+  const pushed = await member.next((m) => m.type === 'shared.members.list' && m.hosted?.render?.streams === true, 3000);
+  assert.deepEqual(pushed.hosted.render, { available: true, enabled: true, streams: true });
 });
 
 test('HS4 只有创建者：不带证明、证明错、成员（拿不到创建者口令）都被拒，记录不变', async (t) => {
@@ -116,7 +120,7 @@ test('HS6 这台文档服务的登记表里没有渲染服务：被拒；放本�
   const creator = await join(env, proj, { username: proj.creator.username, as: 'creator' });
   const r = await adminOp(creator, proj, 'set-hosted-option', OPTION());
   assert.deepEqual([r.type, r.reason], ['error', 'bad-message'], JSON.stringify(r));
-  assert.deepEqual((await hostedOf(creator)).render, { available: false, enabled: true, streams: true });
+  assert.deepEqual((await hostedOf(creator)).render, { available: false, enabled: true, streams: false });
   assert.equal(env.store.peek(proj.projectId).hosted, undefined);
 
   // 放本机：没有 hostedServices
@@ -141,23 +145,23 @@ test('HS7 两个开关互不冲掉：改渲染节点自己的开关不冲掉 str
   const recordHosted = () => env.store.peek(proj.projectId).hosted;
 
   assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION())).type, 'shared.admin.ok');
-  assert.deepEqual(recordHosted(), { render: { streams: false } });
+  assert.deepEqual(recordHosted(), { render: { streams: true } });
 
   // 关渲染节点：streams 还在
   assert.equal((await adminOp(creator, proj, 'set-hosted-service', { service: 'render', enabled: false })).type, 'shared.admin.ok');
-  assert.deepEqual(recordHosted(), { render: { streams: false, enabled: false } }, '改 enabled 不冲掉 streams');
-  assert.deepEqual((await hostedOf(creator)).render, { available: true, enabled: false, streams: false });
+  assert.deepEqual(recordHosted(), { render: { streams: true, enabled: false } }, '改 enabled 不冲掉 streams');
+  assert.deepEqual((await hostedOf(creator)).render, { available: true, enabled: false, streams: true });
   // 渲染节点关着时也能改 streams（界面把它置灰，但服务端不另设限）；enabled 保留
-  assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION({ enabled: true }))).type, 'shared.admin.ok');
-  assert.deepEqual(recordHosted(), { render: { streams: true, enabled: false } }, '改 streams 不冲掉 enabled');
+  assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION(OFF))).type, 'shared.admin.ok');
+  assert.deepEqual(recordHosted(), { render: { streams: false, enabled: false } }, '改 streams 不冲掉 enabled');
   // 再开渲染节点：streams 还在
   assert.equal((await adminOp(creator, proj, 'set-hosted-service', { service: 'render', enabled: true })).type, 'shared.admin.ok');
-  assert.deepEqual(recordHosted(), { render: { streams: true, enabled: true } });
+  assert.deepEqual(recordHosted(), { render: { streams: false, enabled: true } });
 
   // 别的服务的开关不受影响
   assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION())).type, 'shared.admin.ok');
   assert.equal((await adminOp(creator, proj, 'set-hosted-service', { service: 'agent', enabled: false })).type, 'shared.admin.ok');
-  assert.deepEqual(recordHosted(), { render: { streams: false, enabled: true }, agent: { enabled: false } });
+  assert.deepEqual(recordHosted(), { render: { streams: true, enabled: true }, agent: { enabled: false } });
 });
 
 test('HS8 通知：只发给本空间其余成员连接；不发给发起的那条，也不发给服务自己的连接；打开关闭都发；不断任何连接', async (t) => {
@@ -165,14 +169,14 @@ test('HS8 通知：只发给本空间其余成员连接；不发给发起的那�
   const other = await join(env, proj, { username: 'ned' });
 
   assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION())).type, 'shared.admin.ok');
-  assert.deepEqual(await member.next(isOptionNotice, 3000), NOTICE(false));
-  assert.deepEqual(await other.next(isOptionNotice, 3000), NOTICE(false), '每位其余成员都收到');
+  assert.deepEqual(await member.next(isOptionNotice, 3000), NOTICE(true));
+  assert.deepEqual(await other.next(isOptionNotice, 3000), NOTICE(true), '每位其余成员都收到');
   await quietFor(creator, isOptionNotice);
   await quietFor(data, isOptionNotice);
   await quietFor(control, isOptionNotice);
 
-  assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION({ enabled: true }))).type, 'shared.admin.ok');
-  assert.deepEqual(await member.next(isOptionNotice, 3000), NOTICE(true), '打开时也发（界面决定要不要弹提示）');
+  assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION(OFF))).type, 'shared.admin.ok');
+  assert.deepEqual(await member.next(isOptionNotice, 3000), NOTICE(false), '关闭时也发；打开时也发（界面决定要不要弹提示）');
   await quietFor(data, isOptionNotice);
 
   // 没断：渲染服务的数据连接还能用，成员连接还能问
@@ -196,11 +200,11 @@ test('HS10 目录条目：渲染服务订阅的 hosted.project 里 hosted.render
   const { proj, creator, control, data } = await setup(t);
   const projects = await watchDirectory(control);
   const entry = projects.find((p) => p.projectId === proj.projectId);
-  assert.deepEqual(entry.hosted.render, { available: true, enabled: true, streams: true }, '完整清单里的条目');
+  assert.deepEqual(entry.hosted.render, { available: true, enabled: true, streams: false }, '完整清单里的条目（缺省关）');
 
   assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION())).type, 'shared.admin.ok');
-  const pushed = await control.next((m) => m.type === 'hosted.project' && m.projectId === proj.projectId && m.hosted?.render?.streams === false, 3000);
-  assert.deepEqual(pushed.hosted.render, { available: true, enabled: true, streams: false });
+  const pushed = await control.next((m) => m.type === 'hosted.project' && m.projectId === proj.projectId && m.hosted?.render?.streams === true, 3000);
+  assert.deepEqual(pushed.hosted.render, { available: true, enabled: true, streams: true });
   assert.equal(pushed.enabled, true, '条目的 enabled 是渲染节点的开关，不受 streams 影响');
   const dataState = await Promise.race([data.closed.then(() => 'closed'), sleep(300).then(() => 'open')]);
   assert.equal(dataState, 'open', '数据连接没被关');

@@ -4,6 +4,8 @@
 
 ## 结论
 
+> 2026-10-12 用户看过截图后改定：「生成轨道流」缺省是关。下文「缺省开」「缺省勾上」「on/off 截图」等说法都是第一版，以文末「缺省改成关」一节为准。
+
 入口做完：项目设置「多用户协作」里，渲染节点那一行下面缩进多一行「生成轨道流」；文档服务把这一项记在 `hosted.render.streams` 并通知成员。**渲染服务认领任务时看不看它，这次没做**（任务书明确不在范围内）。类型检查零错误，`npm test` 零失败，新探针 22 项全过且 `fails: []`，原有界面探针 19 项全过，三张截图在。
 
 ## 范围
@@ -76,3 +78,34 @@
 ## 提交
 
 见最后一条消息里的哈希列表。
+
+## 缺省改成关
+
+用户理由：在线浏览器暂停时不靠渲染节点也能看任意一帧，所以云端缺省不产轨道流，省服务器资源；入口保留，创建者想要更流畅的播放时自己打开。
+
+### 改了什么
+
+- 文档服务：`hostedOptionEnabled`（`server/auth/service-identity.mjs`）改成「记录里显式为 `true` 才算开」，没有这一项、不是布尔值都算关；`hostedStateOf` 报出来的 `streams` 跟着变（成员列表顶层与目录条目都是缺省 `false`）。`set-hosted-option` 的校验、通知不变。服务本身的开关（`enabled`）仍是「没有算开」，两者规则相反，代码注释里写明。
+- 页面：解析与显示逻辑没变（值由文档服务给）。文案：关着的说明改为「没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。」；开着的说明、两句确认弹窗、关闭时给别的成员的提示不变（仍然只在关闭时提示）；渲染节点那一行关着、这一行置灰时，说明后面加「（渲染节点关着，暂不生效）」（`HostedServiceRows.tsx`）。
+- 单测：`hosted-stream-option.test.mjs` 里缺省断言翻成关，操作顺序改成「先打开再关闭」，新增「渲染节点开着不等于轨道流开着」「非布尔值不算开」「显式关写 false」；`hostedServices.test.mjs` 的文案断言换成新说法，新增置灰时后缀与「成员 + 关着 + 置灰」的组合断言；四个既有单测里对 `hosted` 形状的断言 `streams: true` 改成 `streams: false`（`cloud-agent-auth`、`hosted-render-access`、`hosted-render-actsfor`、`hosted-render-identity`，共 12 处）。
+- 探针 `hosted-stream-entry-probe.mjs`：场景改成缺省关：S1 缺省没勾、说明带代价；S2 成员只读；S3 勾上（打开时成员无提示）；S4 再取消（成员收到提示）；S5 再勾上后关渲染节点，置灰且说明带「暂不生效」；S6 渲染节点再开，仍是勾着；S7 无页面错误。
+- 契约 3.1 节：存放规则、界面段落、以后接渲染服务那一段都改成缺省关，并记了用户的理由。
+- 三张截图重拍，文件名不变：`off.png` 是缺省状态（没勾，带代价的说明），`on.png` 是创建者勾上并确认以后，`disabled.png` 是渲染节点关着、这一行置灰（勾着，说明后面带「（渲染节点关着，暂不生效）」）。
+
+### 验证（命令都在前台跑完）
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
+| 全量测试 | `npm test`（带两个环境变量） | 退出码 0；5523 个用例，通过 5519，失败 0，跳过 4（非本次引入）；末行「npm test 最终结果：零失败」 |
+| 受影响的服务端单测 | `node --test` 跑 hosted-stream-option、hosted-render-access、hosted-render-actsfor、hosted-render-identity、cloud-agent-auth | 55 个全过 |
+| 页面单测 | `node --test src/editor/sync/hostedServices.test.mjs` | 22 个全过 |
+| 新探针 | `node scripts/probes/hosted-stream-entry-probe.mjs --out docs/reports/assets/hosted-stream-entry` | 退出码 0；`{"summary":{"ok":true,"total":20,"fails":[]}}` |
+| 原有界面探针 | `node scripts/probes/hosted-render-ui-probe.mjs --out <临时目录> --desktop-port 5760 --doc-port 5763 --asset-port 5764` | 退出码 0；`{"summary":{"ok":true,"total":19,"failed":[]}}` |
+
+本轮没有失败重跑：除了开发中第一次跑单测前我漏改的 `hosted-render-access` 里一处 `pushed.hosted.render` 断言（改完即过），验证命令都是第一次就过。
+
+### 对计划的更正建议
+
+- 渲染服务那一半以后接时，「缺省不产」已经由数据给出：目录条目里 `hosted.render.streams` 缺省 `false`，渲染服务只在 `enabled && streams` 时产流。已有项目记录里没有这一项，也按关处理，不需要迁移。
+- 旧托管端（不报 `streams`）上这一行不显示，等价于「用户没法打开」；这与缺省关一致，不需要处理。

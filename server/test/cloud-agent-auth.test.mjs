@@ -432,7 +432,7 @@ test('CA-AUTH-05 白名单：代成员的连接只有表里的十四种（内容
 test('CA-AUTH-06 控制连接：Agent 服务看到的 enabled 是云端 Agent 的开关；被踢成员的委托立刻核验不过', async (t) => {
   const { env, proj, creator, control } = await setup(t);
   const entry = async () => (await watchDirectory(control)).find((p) => p.projectId === proj.projectId);
-  assert.deepEqual([(await entry()).enabled, (await entry()).hosted], [true, { render: { available: true, enabled: true, streams: true }, agent: { available: true, enabled: true } }]);
+  assert.deepEqual([(await entry()).enabled, (await entry()).hosted], [true, { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true } }]);
   // 关渲染的开关：Agent 服务自己的 enabled 不变，hosted.render 变了
   assert.equal((await adminOp(creator, proj, 'set-hosted-service', { service: 'render', enabled: false })).type, 'shared.admin.ok');
   const push = await control.next((m) => m.type === 'hosted.project' && m.projectId === proj.projectId && m.hosted?.render?.enabled === false, 3000);
@@ -712,15 +712,15 @@ test('CA-URL-01 成员列表顶层的 hosted.agent.url：组装方配了、登�
   const proj = await createProject(env, { mode: 'free' });
   const creator = await join(env, proj, { username: proj.creator.username, as: 'creator' });
   const list = await ask(creator, { type: 'shared.members' }, 'shared.members.list');
-  assert.deepEqual(list.hosted, { render: { available: true, enabled: true, streams: true }, agent: { available: true, enabled: true, url } });
+  assert.deepEqual(list.hosted, { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true, url } });
   // 登记表里没有 agent 的托管端：配了地址也不带
   const env2 = await serviceHostFor(t, { services: ['render'], serviceUrls: { agent: url } });
   const proj2 = await createProject(env2, { mode: 'free' });
   const c2 = await join(env2, proj2, { username: proj2.creator.username, as: 'creator' });
-  assert.deepEqual((await ask(c2, { type: 'shared.members' }, 'shared.members.list')).hosted, { render: { available: true, enabled: true, streams: true }, agent: { available: false, enabled: true } });
+  assert.deepEqual((await ask(c2, { type: 'shared.members' }, 'shared.members.list')).hosted, { render: { available: true, enabled: true, streams: false }, agent: { available: false, enabled: true } });
   // 没配地址：与第 1 批的形状逐字段相同
   const { creator: c3 } = await setup(t);
-  assert.deepEqual((await ask(c3, { type: 'shared.members' }, 'shared.members.list')).hosted, { render: { available: true, enabled: true, streams: true }, agent: { available: true, enabled: true } });
+  assert.deepEqual((await ask(c3, { type: 'shared.members' }, 'shared.members.list')).hosted, { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true } });
 });
 
 test('CA-URL-02 托管组合的配置：PROMPTCUT_AGENT_PUBLIC_URL 不是 http(s) 地址时失败即关（config.error agent-public-url，退出码 1）', { timeout: 30_000 }, async (t) => {

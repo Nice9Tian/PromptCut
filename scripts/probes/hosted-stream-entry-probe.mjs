@@ -9,17 +9,20 @@
  *   node scripts/probes/hosted-stream-entry-probe.mjs --out <截图目录> [--desktop-port 5760] [--doc-port 5763] [--asset-port 5764]
  *   （dev server 另占 +1、+2 当舞台端口，所以桌面端口留 5760，文档与素材服务用 5763、5764）
  *
+ * 缺省是关（2026-10-12 用户定：在线浏览器暂停时不靠渲染节点也能看任意一帧，云端缺省不产轨道流）。
+ *
  * 断言（每项一行 JSON `{ check, ok, … }`，最后一行 `{ summary }`；有失败退出码 1；成功时 summary 里 `fails: []`）：
- *   S1 创建者放云端开启协作后，渲染节点那一行下面缩进多一行「生成轨道流」：缺省勾上、创建者可点、挂在渲染节点那一块里
- *   S2 成员加入后在自己的项目设置里看到同一项：勾着、禁用（只读）、带「只有创建者能改」
- *   S3 创建者取消勾选（验证创建者身份 → 确认弹窗，弹窗里是约定的一句话）：创建者的勾选取消；成员那一端 5 s 内跟着变、
- *      收到一条「创建者关闭了轨道流…」的提示
- *   S4 渲染节点那一行关掉：轨道流这一行置灰（禁用、带置灰状态），成员那一端同样；它自己的勾选状态不变（还是关）
- *   S5 渲染节点再打开：轨道流这一行恢复可点，且仍是关（渲染节点的开关没有冲掉它）
- *   S6 轨道流再勾上：创建者勾上；成员那一端 5 s 内跟着变，且没有新的提示（打开时不提示）
- *   S7 渲染节点再关一次：轨道流这一行置灰，勾着（截图用）；渲染节点的开关随后恢复，没有留下别的状态
- *   S8 页面没有未捕获的错误
- * 截图（只截项目设置里「多用户协作」那一块，2 倍清晰度）写进 --out：`on.png`（开着）、`off.png`（关着）、
+ *   S1 创建者放云端开启协作后，渲染节点那一行下面缩进多一行「生成轨道流」：缺省不勾、创建者可点、挂在渲染节点那一块里，
+ *      关着的说明讲清代价（「没有打开：…会多用云端的渲染时间。」）
+ *   S2 成员加入后在自己的项目设置里看到同一项：没勾、禁用（只读）、带「只有创建者能改」
+ *   S3 创建者勾上（验证创建者身份 → 确认弹窗，弹窗里是约定的一句话）：创建者的勾选勾上；成员那一端 5 s 内跟着变，
+ *      且没有提示（打开时不提示）
+ *   S4 创建者再取消：成员那一端跟着变、收到一条「创建者关闭了轨道流…」的提示
+ *   S5 创建者再勾上；渲染节点那一行关掉：轨道流这一行置灰（禁用、带置灰状态），成员那一端同样；它自己的勾选状态不变（还是勾着），
+ *      说明后面带「（渲染节点关着，暂不生效）」
+ *   S6 渲染节点再打开：轨道流这一行恢复可点，且仍是勾着（渲染节点的开关没有冲掉它）
+ *   S7 页面没有未捕获的错误
+ * 截图（只截项目设置里「多用户协作」那一块，2 倍清晰度）写进 --out：`off.png`（缺省状态，没勾）、`on.png`（创建者勾上并确认以后）、
  * `disabled.png`（渲染节点关着、轨道流这一行置灰）。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -244,9 +247,11 @@ async function main() {
   // S1 创建者看到这一行
   const c0 = await boxState(creator, SEL.streams);
   const b0 = await streamsBlock(creator);
-  check('S1.creator-sees-row-checked-editable', !!c0 && c0.checked === true && c0.disabled === false, { box: c0 });
-  check('S1.indented-under-render-node', !!b0 && b0.nestedInRender && b0.indent >= 16 && b0.state === 'on' && b0.opacity === 1 && b0.text.includes('生成轨道流') && b0.text.includes('重卡在在线浏览器里播放更流畅'), b0 ?? {});
-  await shotCollab(creator, 'on');
+  check('S1.creator-sees-row-default-unchecked-editable', !!c0 && c0.checked === false && c0.disabled === false, { box: c0 });
+  check('S1.indented-under-render-node', !!b0 && b0.nestedInRender && b0.indent >= 16 && b0.state === 'off' && b0.opacity === 1 && b0.text.includes('生成轨道流')
+    && b0.text.includes('没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。')
+    && !b0.text.includes('暂不生效'), b0 ?? {});
+  await shotCollab(creator, 'off');
   const found = await lookupProject({ base: DOC, name: NAME });
   check('S1.project-on-hosted', !!found?.projectId, { projectId: found?.projectId });
 
@@ -266,67 +271,56 @@ async function main() {
   await member.waitForSelector(SEL.streams, { visible: true, timeout: 15_000 }).catch(() => {});
   const m0 = await boxState(member, SEL.streams);
   const mText = await textOf(member, '[data-pc="collab-hosted-render-streams-hint"]');
-  check('S2.member-row-readonly', !!m0 && m0.checked === true && m0.disabled === true && mText.includes('只有创建者能改'), { box: m0, hint: mText });
+  check('S2.member-row-readonly', !!m0 && m0.checked === false && m0.disabled === true && mText.includes('只有创建者能改'), { box: m0, hint: mText });
 
-  // S3 创建者取消勾选 → 成员跟着变并收到提示
+  // S3 创建者勾上 → 成员跟着变，打开时不提示
+  const dialogOn = await toggleStreams(creator, creatorPw);
+  check('S3.confirm-dialog-text', dialogOn === '打开后，托管方的渲染节点会为这个项目生成轨道流。', { dialog: dialogOn });
+  const cOn = await waitFor(async () => { const s = await boxState(creator, SEL.streams); return s && s.checked === true ? s : null; }, 8000, '创建者的勾选勾上');
+  check('S3.creator-checked', !!cOn && cOn.disabled === false, { box: cOn });
+  const mOn = await waitFor(async () => { const s = await boxState(member, SEL.streams); return s && s.checked === true ? s : null; }, 5000, '成员那一端跟着勾上').catch(() => null);
+  await sleep(1200);
+  const toastsOn = (await toastsOf(member)).filter((x) => x.includes('轨道流'));
+  check('S3.member-follows-within-5s-no-toast-on-open', !!mOn && mOn.disabled === true && toastsOn.length === 0, { box: mOn, toasts: toastsOn });
+  const bOn = await streamsBlock(creator);
+  check('S3.on-state-and-hint', !!bOn && bOn.state === 'on' && bOn.text.includes('托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。') && !bOn.text.includes('没有打开'), bOn ?? {});
+  await shotCollab(creator, 'on');
+
+  // S4 创建者再取消 → 成员跟着变并收到提示
   const dialogOff = await toggleStreams(creator, creatorPw);
-  check('S3.confirm-dialog-text', dialogOff === '关闭后，托管方的渲染节点不再为这个项目生成轨道流，已经生成的保留。', { dialog: dialogOff });
-  const cOff = await waitFor(async () => { const s = await boxState(creator, SEL.streams); return s && s.checked === false ? s : null; }, 8000, '创建者的勾选取消');
-  check('S3.creator-unchecked', !!cOff && cOff.disabled === false, { box: cOff });
+  check('S4.confirm-dialog-text', dialogOff === '关闭后，托管方的渲染节点不再为这个项目生成轨道流，已经生成的保留。', { dialog: dialogOff });
+  await waitFor(async () => (await boxState(creator, SEL.streams))?.checked === false, 8000, '创建者的勾选取消');
   const mOff = await waitFor(async () => { const s = await boxState(member, SEL.streams); return s && s.checked === false ? s : null; }, 5000, '成员那一端跟着取消').catch(() => null);
-  check('S3.member-follows-within-5s', !!mOff && mOff.disabled === true, { box: mOff });
+  check('S4.member-follows-within-5s', !!mOff && mOff.disabled === true, { box: mOff });
   const toasts1 = await waitFor(async () => { const t = (await toastsOf(member)).filter((x) => x.includes('创建者关闭了轨道流')); return t.length ? t : null; }, 5000, '成员收到提示').catch(() => null);
-  check('S3.member-toast', !!toasts1 && toasts1[0].includes('托管方的渲染节点不再为这个项目生成轨道流'), { toasts: toasts1 });
-  const bOff = await streamsBlock(creator);
-  check('S3.off-state-and-hint', !!bOff && bOff.state === 'off' && bOff.text.includes('只为这个项目生成快照，不生成轨道流'), bOff ?? {});
-  await shotCollab(creator, 'off');
-  const memberBlockOff = await streamsBlock(member);
-  check('S3.member-sees-off-hint', !!memberBlockOff && memberBlockOff.state === 'off' && memberBlockOff.text.includes('已关闭'), memberBlockOff ?? {});
+  check('S4.member-toast', !!toasts1 && toasts1[0].includes('托管方的渲染节点不再为这个项目生成轨道流'), { toasts: toasts1 });
 
-  // S4 渲染节点那一行关掉：轨道流这一行置灰
+  // S5 再勾上；渲染节点那一行关掉：轨道流这一行置灰，说明后面带一句
+  await toggleStreams(creator, creatorPw);
+  await waitFor(async () => (await boxState(creator, SEL.streams))?.checked === true, 8000, '创建者勾回');
   const renderOffDialog = await toggleRender(creator, creatorPw);
-  check('S4.render-off-dialog', renderOffDialog.includes('关闭后，托管方的渲染节点不再为这个项目做预渲染'), { dialog: renderOffDialog });
+  check('S5.render-off-dialog', renderOffDialog.includes('关闭后，托管方的渲染节点不再为这个项目做预渲染'), { dialog: renderOffDialog });
   const cDis = await waitFor(async () => { const s = await boxState(creator, SEL.streams); return s && s.disabled ? s : null; }, 8000, '创建者的轨道流置灰');
   const bDis = await streamsBlock(creator);
-  check('S4.creator-streams-greyed', !!cDis && cDis.checked === false && bDis?.state === 'disabled' && bDis.opacity < 1, { box: cDis, block: bDis });
-  // 置灰的框点不动：点击不会弹出创建者验证
+  check('S5.creator-streams-greyed-still-checked', !!cDis && cDis.checked === true && bDis?.state === 'disabled' && bDis.opacity < 1, { box: cDis, block: bDis });
+  check('S5.hint-says-not-in-effect', !!bDis && bDis.text.includes('重卡在在线浏览器里播放更流畅。（渲染节点关着，暂不生效）'), { text: bDis?.text });
   await creator.click(SEL.streams).catch(() => {});
   await sleep(500);
-  check('S4.greyed-row-not-clickable', !(await creator.$('[data-pc="creator-verify"]')), { note: '点置灰的勾选没有弹出创建者验证' });
+  check('S5.greyed-row-not-clickable', !(await creator.$('[data-pc="creator-verify"]')), { note: '点置灰的勾选没有弹出创建者验证' });
   const mDis = await waitFor(async () => { const s = await streamsBlock(member); return s && s.state === 'disabled' ? s : null; }, 5000, '成员那一端也置灰').catch(() => null);
-  check('S4.member-streams-greyed', !!mDis && mDis.opacity < 1, mDis ?? {});
+  check('S5.member-streams-greyed', !!mDis && mDis.opacity < 1 && mDis.text.includes('（渲染节点关着，暂不生效）'), mDis ?? {});
+  await shotCollab(creator, 'disabled');
 
-  // S5 渲染节点再打开：恢复可点，仍是关
+  // S6 渲染节点再打开：恢复可点，仍是勾着
   await toggleRender(creator, creatorPw);
   const cBack = await waitFor(async () => { const s = await boxState(creator, SEL.streams); return s && !s.disabled ? s : null; }, 8000, '轨道流恢复可点');
-  check('S5.streams-enabled-again-and-still-off', cBack.checked === false, { box: cBack });
-  const mBack = await waitFor(async () => { const s = await streamsBlock(member); return s && s.state === 'off' ? s : null; }, 5000, '成员那一端恢复').catch(() => null);
-  check('S5.member-back-to-off', !!mBack, mBack ?? {});
-
-  // S6 轨道流再勾上：成员跟着变，没有新的提示
-  // 等 S3 的提示自己消失（6 s），再勾，才看得出「打开时不提示」
-  await waitFor(async () => !(await toastsOf(member)).some((x) => x.includes('轨道流')), 12_000, '旧提示消失');
-  const dialogOn = await toggleStreams(creator, creatorPw);
-  check('S6.confirm-dialog-text', dialogOn === '打开后，托管方的渲染节点会为这个项目生成轨道流。', { dialog: dialogOn });
-  await waitFor(async () => (await boxState(creator, SEL.streams))?.checked === true, 8000, '创建者勾回');
-  const mOn = await waitFor(async () => { const s = await boxState(member, SEL.streams); return s && s.checked === true ? s : null; }, 5000, '成员勾回').catch(() => null);
-  await sleep(1200);
-  const toasts2 = (await toastsOf(member)).filter((x) => x.includes('轨道流'));
-  check('S6.member-follows-and-no-toast-on-open', !!mOn && toasts2.length === 0, { box: mOn, toasts: toasts2 });
-
-  // S7 渲染节点再关一次：轨道流置灰、勾着（截图）；随后恢复
-  await toggleRender(creator, creatorPw);
-  await waitFor(async () => (await streamsBlock(creator))?.state === 'disabled', 8000, '置灰');
-  const bDis2 = await streamsBlock(creator);
-  const cDis2 = await boxState(creator, SEL.streams);
-  check('S7.greyed-and-still-checked', !!bDis2 && bDis2.opacity < 1 && cDis2?.checked === true && cDis2?.disabled === true, { block: bDis2, box: cDis2 });
-  await shotCollab(creator, 'disabled');
-  await toggleRender(creator, creatorPw);
-  const cBack2 = await waitFor(async () => { const s = await boxState(creator, SEL.streams); return s && !s.disabled ? s : null; }, 8000, '恢复');
-  check('S7.restored', cBack2.checked === true, { box: cBack2, render: await boxState(creator, SEL.render) });
+  const bBack = await streamsBlock(creator);
+  check('S6.streams-enabled-again-and-still-on', cBack.checked === true && bBack?.state === 'on' && !bBack.text.includes('暂不生效'), { box: cBack, block: bBack, render: await boxState(creator, SEL.render) });
+  const mBack = await waitFor(async () => { const s = await streamsBlock(member); return s && s.state === 'on' ? s : null; }, 5000, '成员那一端恢复').catch(() => null);
+  check('S6.member-back-to-on', !!mBack, mBack ?? {});
 
   const errs = [...new Set([...creator.consoleErrors, ...member.consoleErrors])];
-  check('S8.page-errors', errs.length === 0, { sample: errs.slice(0, 5) });
+  check('S7.page-errors', errs.length === 0, { sample: errs.slice(0, 5) });
   await creator.close$();
   await member.close$();
 }

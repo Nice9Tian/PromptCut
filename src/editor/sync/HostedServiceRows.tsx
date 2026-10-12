@@ -61,6 +61,7 @@ export function HostedServiceRows({ where, hosted, creator, busy = false, onTogg
               </label>
               <div className="pc-sync-hint" data-pc={`collab-hosted-${o.service}-${o.option}-hint`}>
                 {hostedOptionText(o.service, o.option)?.hint(o.enabled)}
+                {o.parentOff ? "（渲染节点关着，暂不生效）" : ""}
                 {creator ? "" : "（只有创建者能改）"}
               </div>
             </div>
