@@ -139,6 +139,15 @@ export function hostedChangeNotices(prev: HostedView | null, next: HostedView | 
 }
 
 /**
+ * 本页此刻看到这个项目的「生成轨道流」是不是在起作用:项目放云端、托管方有渲染节点、渲染节点开着、这一项开着。
+ * 在线页面据此在这一项从关变开时重发清单计划(`src/online/planPublisher.ts` 的 `streamsOn`)。旧文档服务不报这一项:一直是 false。
+ */
+export function hostedStreamsOn(where: "lan" | "hosted" | null | undefined, hosted: HostedView | null): boolean {
+  const r = hosted?.render;
+  return where === "hosted" && !!r && r.available === true && r.enabled === true && r.streams === true;
+}
+
+/**
  * 托管方服务的勾选要不要先验证创建者密码:口令项目要(创建者操作凭密码的证明);账号项目没有创建者密码,
  * 凭账号的登录态,由服务端按创建者身份把关,直接到确认那一步。
  */

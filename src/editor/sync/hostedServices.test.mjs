@@ -452,3 +452,17 @@ test("HS13 改托管方服务的勾选:口令项目先验证创建者密码,账�
   assert.equal(H.hostedFlowNeedsPassword(false), true);
   assert.equal(H.hostedFlowNeedsPassword(true), false);
 });
+
+test("HS14 本页看到「生成轨道流」在起作用(在线页面据此在它从关变开时重发清单计划):放云端、有渲染节点、渲染节点开着、这一项开着四样都要;旧文档服务不报这一项就是 false", () => {
+  const view = (render) => ({ render, agent: { available: true, enabled: true } });
+  assert.equal(H.hostedStreamsOn("hosted", view({ available: true, enabled: true, streams: true })), true);
+  assert.equal(H.hostedStreamsOn("hosted", view({ available: true, enabled: true, streams: false })), false);
+  assert.equal(H.hostedStreamsOn("hosted", view({ available: true, enabled: false, streams: true })), false, "渲染节点关着:这一项开着也不起作用");
+  assert.equal(H.hostedStreamsOn("hosted", view({ available: false, enabled: true, streams: true })), false, "这台托管端没有渲染节点");
+  assert.equal(H.hostedStreamsOn("hosted", view({ available: true, enabled: true })), false, "新页面连旧文档服务(不报 streams):退回下一次改动起生效");
+  assert.equal(H.hostedStreamsOn("lan", view({ available: true, enabled: true, streams: true })), false, "放本机的项目没有托管方的渲染节点");
+  assert.equal(H.hostedStreamsOn("hosted", null), false);
+  assert.equal(H.hostedStreamsOn(null, null), false);
+  // 账号项目的会话形状同样读得出
+  assert.equal(H.hostedStreamsOn("hosted", { agent: { available: true, enabled: false, url: null }, render: { available: true, enabled: true, streams: true } }), true);
+});
