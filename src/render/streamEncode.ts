@@ -139,8 +139,61 @@ function defaultEnv(): StreamEncodeEnv {
   };
 }
 
-/** 这个浏览器压不压得了这种画面;压得了就回实际要用的配置 */
-export async function probeStreamEncoder(o: { width: number; height: number; fps: number; hardwareAcceleration?: StreamEncoderOptions["hardwareAcceleration"]; env?: Partial<StreamEncodeEnv> }): Promise<{ supported: boolean; config?: Record<string, unknown>; mode?: "quantizer" | "variable"; reason?: string }> {
+/** 问一组编码配置各自支不支持:回与 `configs` 等长的数组;问不了(没有 Worker、起不来、里面没有编码器、超时)回 null */
+export type ConfigSupportAsker = (configs: Record<string, unknown>[]) => Promise<boolean[] | null>;
+
+/** Worker 里跑的那一小段:逐个问 `VideoEncoder.isConfigSupported`,回布尔数组;Worker 里没有编码器回 null */
+const PROBE_WORKER_SOURCE = `self.onmessage = async (ev) => {
+  if (typeof VideoEncoder !== "function") { self.postMessage(null); return; }
+  const out = [];
+  for (const c of ev.data) { try { const r = await VideoEncoder.isConfigSupported(c); out.push(!!(r && r.supported)); } catch (e) { out.push(false); } }
+  self.postMessage(out);
+};`;
+const PROBE_WORKER_TIMEOUT_MS = 5000;
+
+/**
+ * 在 Worker 里问编码器支不支持这些配置。`VideoEncoder.isConfigSupported` 是异步接口,但这个页面第一次调用它的那个线程会被占住
+ * 50～120 毫秒(实测:无硬件加速的 Chrome,1920×1080 的画面主线程上是一个 115 毫秒的长任务;在线页面里量到 53～57 毫秒)。
+ * 浏览器节点是在编辑页面的主文档里探的,这一下正落在「生成快照期间主文档没有长任务」的时间段里(`m7-contract.md` 的 M7-A12)。
+ * 放到 Worker 里问,答案相同,主线程不受影响;之后在主线程上配置编码器、逐帧压没有长任务(同一组实测)。
+ * Worker 从 blob 地址起(编辑页面与舞台的内容安全策略都许)。任何一步不成回 null,调用方退回在本线程问。
+ */
+export const askConfigSupportInWorker: ConfigSupportAsker = (configs) => {
+  const g = globalThis as any;
+  if (typeof g.Worker !== "function" || typeof g.Blob !== "function" || typeof g.URL?.createObjectURL !== "function") return Promise.resolve(null);
+  return new Promise<boolean[] | null>((resolve) => {
+    let worker: any = null, url = "", timer: unknown = null, settled = false;
+    const finish = (v: boolean[] | null) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer as ReturnType<typeof setTimeout>);
+      try { worker?.terminate(); } catch { /* 已经停了 */ }
+      try { if (url) g.URL.revokeObjectURL(url); } catch { /* 撤不了也无妨 */ }
+      resolve(v);
+    };
+    try {
+      url = g.URL.createObjectURL(new g.Blob([PROBE_WORKER_SOURCE], { type: "text/javascript" }));
+      worker = new g.Worker(url);
+      worker.onmessage = (ev: { data: unknown }) => {
+        const d = ev.data;
+        finish(Array.isArray(d) && d.length === configs.length ? d.map((x) => x === true) : null);
+      };
+      worker.onerror = () => finish(null);
+      timer = setTimeout(() => finish(null), PROBE_WORKER_TIMEOUT_MS);
+      worker.postMessage(configs);
+    } catch {
+      finish(null);
+    }
+  });
+};
+
+/**
+ * 这个浏览器压不压得了这种画面;压得了就回实际要用的配置。
+ * 用浏览器自己的编码器时(没有注入 `env.VideoEncoder`)先在 Worker 里问(`askConfigSupportInWorker`,不占主线程),问不了才在本线程问;
+ * `askOffThread` 给 null 就只在本线程问,给函数就换成它(测试用)。
+ */
+export async function probeStreamEncoder(o: { width: number; height: number; fps: number; hardwareAcceleration?: StreamEncoderOptions["hardwareAcceleration"]; env?: Partial<StreamEncodeEnv>;
+  askOffThread?: ConfigSupportAsker | null }): Promise<{ supported: boolean; config?: Record<string, unknown>; mode?: "quantizer" | "variable"; reason?: string }> {
   const env = { ...defaultEnv(), ...o.env };
   if (typeof env.VideoEncoder !== "function" || typeof env.VideoFrame !== "function") return { supported: false, reason: "这个浏览器没有 VideoEncoder" };
   const size = packedSize(o.width, o.height);
@@ -154,14 +207,25 @@ export async function probeStreamEncoder(o: { width: number; height: number; fps
     ...(o.hardwareAcceleration ? { hardwareAcceleration: o.hardwareAcceleration } : {}),
   };
   // 优先按固定量化压(画质不随内容复杂度掉);浏览器不认就退到按码率
-  for (const [mode, extra] of [["quantizer", { bitrateMode: "quantizer" }], ["variable", { bitrateMode: "variable", bitrate: streamBitrateFor(size.width, size.height, o.fps) }]] as const) {
+  const modes = [["quantizer", { bitrateMode: "quantizer" }], ["variable", { bitrateMode: "variable", bitrate: streamBitrateFor(size.width, size.height, o.fps) }]] as const;
+  const unsupported = { supported: false, reason: `这个浏览器压不了 ${size.width}×${size.height} 的 H.264` };
+  const ask = o.askOffThread === undefined ? (o.env?.VideoEncoder === undefined ? askConfigSupportInWorker : null) : o.askOffThread;
+  if (ask) {
+    let answers: boolean[] | null = null;
+    try { answers = await ask(modes.map(([, extra]) => ({ ...base, ...extra }))); } catch { answers = null; }
+    if (answers) {
+      const i = answers.findIndex((x) => x === true);
+      return i >= 0 ? { supported: true, config: { ...base, ...modes[i][1] }, mode: modes[i][0] } : unsupported;
+    }
+  }
+  for (const [mode, extra] of modes) {
     const config = { ...base, ...extra };
     try {
       const r = await env.VideoEncoder.isConfigSupported(config);
       if (r?.supported) return { supported: true, config, mode };
     } catch { /* 这个模式不认,试下一个 */ }
   }
-  return { supported: false, reason: `这个浏览器压不了 ${size.width}×${size.height} 的 H.264` };
+  return unsupported;
 }
 
 export interface StreamEncoder {

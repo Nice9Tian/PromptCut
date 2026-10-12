@@ -130,6 +130,33 @@ test('能力查询:优先量化模式;不认就退到按码率;都不认或没�
   assert.equal((await probeStreamEncoder({ width: 320, height: 160, fps: 30, env: { VideoEncoder: undefined } })).supported, false);
 });
 
+test('能力查询先在主线程之外问(Worker):答案照用、主线程的编码器一次都不问;问不了才退回本线程', async () => {
+  const called = [];
+  const counting = (inner) => ({ ...inner, VideoEncoder: Object.assign(function () {}, { isConfigSupported: async (c) => { called.push(c.bitrateMode); return inner.VideoEncoder.isConfigSupported(c); } }) });
+  const env = counting(fakeEnv().env);
+  // Worker 说量化模式不认、按码率的认:用按码率的那一份配置,本线程不再问
+  const asked = [];
+  const r1 = await probeStreamEncoder({ width: 320, height: 160, fps: 30, env, askOffThread: async (configs) => { asked.push(configs.map((c) => c.bitrateMode)); return [false, true]; } });
+  assert.deepEqual(asked, [['quantizer', 'variable']], '两种配置一次问完');
+  assert.equal(r1.supported, true);
+  assert.equal(r1.mode, 'variable');
+  assert.equal(r1.config.bitrate, 1_000_000);
+  assert.equal(r1.config.height, 336);
+  assert.deepEqual(called, [], '本线程的 isConfigSupported 没有被调用');
+  // 都不认:报不支持,也不退回本线程(Worker 的答案是算数的)
+  assert.equal((await probeStreamEncoder({ width: 320, height: 160, fps: 30, env, askOffThread: async () => [false, false] })).supported, false);
+  assert.deepEqual(called, []);
+  // 问不了(回 null、抛错):退回本线程,结果与原来相同
+  const r2 = await probeStreamEncoder({ width: 320, height: 160, fps: 30, env, askOffThread: async () => null });
+  assert.equal(r2.mode, 'quantizer');
+  assert.deepEqual(called, ['quantizer']);
+  const r3 = await probeStreamEncoder({ width: 320, height: 160, fps: 30, env, askOffThread: async () => { throw new Error('boom'); } });
+  assert.equal(r3.mode, 'quantizer');
+  // 这个运行环境没有 Worker(Node):缺省的问法回 null
+  const { askConfigSupportInWorker } = await import('./streamEncode.ts');
+  if (typeof globalThis.Worker !== 'function') assert.equal(await askConfigSupportInWorker([{}]), null);
+});
+
 test('37 帧 → 3 段(15、15、7):段号、样本数、关键帧位置、时间戳都对,页面侧的解封装读得回来', async () => {
   const { inits, segs, done, state } = await collect({}, 37);
   assert.deepEqual(done, { frames: 37, segments: 3, mode: 'quantizer', codec: 'avc1.640032' });
