@@ -21,7 +21,7 @@ export function findFfmpeg() {
   const fallback = path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Packages',
     'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe', 'ffmpeg-9.0.1-full_build', 'bin', 'ffmpeg.exe');
   try {
-    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
     return 'ffmpeg';
   } catch {
     return fallback;
@@ -32,7 +32,7 @@ export const ffprobeOf = (ffmpeg) =>
   ffmpeg.replace(/ffmpeg(\.exe)?$/i, (m) => (m.toLowerCase().endsWith('.exe') ? 'ffprobe.exe' : 'ffprobe'));
 
 export async function ffmpegVersion(ffmpeg) {
-  const { stdout } = await execFileAsync(ffmpeg, ['-version']);
+  const { stdout } = await execFileAsync(ffmpeg, ['-version'], { windowsHide: true });
   return stdout.split(/\r?\n/)[0];
 }
 
@@ -45,7 +45,7 @@ export async function probeEncoders(ffmpeg, names = ['libx264', 'h264_nvenc', 'h
       '-c:v', name, '-pix_fmt', 'yuv420p', '-f', 'null', '-'];
     const t0 = performance.now();
     try {
-      await execFileAsync(ffmpeg, args);
+      await execFileAsync(ffmpeg, args, { windowsHide: true });
       out.push({ name, ok: true, ms: +(performance.now() - t0).toFixed(1), error: null });
     } catch (e) {
       out.push({ name, ok: false, ms: +(performance.now() - t0).toFixed(1), error: String(e.stderr || e.message).trim().split(/\r?\n/).slice(-2).join(' ') });
@@ -343,7 +343,7 @@ export function encodePng(rgba, width, height) {
 export async function pngToRgba(ffmpeg, file, width, height) {
   const { stdout } = await execFileAsync(ffmpeg,
     ['-hide_banner', '-loglevel', 'error', '-i', file, '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'],
-    { encoding: 'buffer', maxBuffer: width * height * 4 * 4 + (1 << 20) });
+    { encoding: 'buffer', maxBuffer: width * height * 4 * 4 + (1 << 20), windowsHide: true });
   return stdout;
 }
 
