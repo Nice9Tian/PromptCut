@@ -32,6 +32,7 @@ import { applyResult, manifestKindOf, manifestKeyOf, manifestMatches, spansOf } 
 /** 同一版里延后的卡最多重判几次(契约 F.8 第 2 条),之后等下一版 */
 export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
+import { withInnerCards, isUserCardControl } from './render-node/split.mjs';
 import { createSmallRenderer, SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
 import { layerMapOf, streamCandidateKey, STREAM_CANDIDATE_PREFIX, layerMapKeyOf } from './artifact-transfer.mjs';
 import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServesAgent, modeServesPrerender } from './prerender-mode.mjs';
@@ -3159,7 +3160,8 @@ export class FramePipeline {
    *   4. 按本机锁库给共享档卡定 `cardLocks` / `takeover`(`cardLockDecision`):`reuse` / `defer` 照锁定方的指纹
    *      出键;`takeover` 先在本机锁库里接手(同 `fillCardControls` 的做法,同一内容键的片段一起换键发层),
    *      再让切分按本机指纹出键、任务带 `takeover`;
-   *   5. 只留 `queueHandles` 的卡,补上 `cardId`(`split.mjs` 要,卡片计划里的 control 只有 `nodeId`);
+   *   5. 只留 `queueHandles` 的卡,补上里面的卡 `cardId` / `cardIds`(`split.mjs` 的 `withInnerCards`:卡片计划里的 control
+   *      只有 `nodeId`;片段挂了强调、滤镜时输出节点是外面那一层,要顺着输入找到里面那张卡);
    *   6. 轨道流(M6c X1):本机能产流(`queueStreamSpecs`:开关开着、探到编码器)时按这一版算出全部流,
    *      放进 `context.streams`(`splitPlan` 按它切流任务);否则为空,与 M5b 相同。
    *
@@ -3186,7 +3188,6 @@ export class FramePipeline {
     const fps = Number(entry.project.fps) || 30;
     const count = Math.max(1, Math.floor(Number(entry.project.duration) * fps));
     const graph = browserPlan?.graph || browserPlan;
-    const cardIdOf = new Map((graph?.nodes ?? []).map(node => [node?.id, node?.cardId ?? null]));
     const sourceVersions = browserPlan?.sourceVersions ?? {};
     const store = this.cardLockStore;
     const own = this.envFingerprint;
@@ -3211,8 +3212,7 @@ export class FramePipeline {
       this.publishRelocked(entry, null, control, index.frames);
       takeover.add(lockKey);
     }
-    const cardPlan = entry.cardPlan.filter(control => this.queueHandles(control))
-      .map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
+    const cardPlan = withInnerCards(entry.cardPlan.filter(control => this.queueHandles(control)), graph);
     const clips = (entry.project.tracks || []).flatMap(track => track.clips || []);
     // 任务书「甲二」:先查,没有才产。这一版的单卡流别的环境已经有整条的(在线页面在没有切分节点时自己产的),先拉回本机、记锁;
     // 下面的流计划与切分都照锁出键:这条流只照那个指纹出一份,本机不出自己的那一份、不重产
@@ -3240,7 +3240,8 @@ export class FramePipeline {
       // 由切分写进 requires.cardSources(共享档只写这张卡的,本地档、流写全部),节点手里没有这份代码就不认领
       cardSourceVersions: { ...(entry.cardSources ?? {}) },
       weightOf: control => ({ class: this.queueWeightClass(control), estMs: null }),
-      isUserCard: control => String(sourceVersions[control?.cardId] ?? '').startsWith('user:'),
+      // 片段里面任何一张是用户卡就算(挂了强调、滤镜的片段看里面那张);里面拿不准时,这一版有用户卡就算
+      isUserCard: control => isUserCardControl(control, sourceVersions),
       isGraphCard: control => this.isGraphCardControl(control),
       cardLocks,
       takeover,

@@ -176,9 +176,93 @@ const BROWSER_WEIGHTS = new Set(['light', 'medium']);
 export const BROWSER_EXCLUDED_CARD = /^lottie(?:-|$)/;
 
 /**
+ * 这个控件里面有哪几张卡(卡片 id,去重)。`planForQueue` 经 `withInnerCards` 给的 `cardIds` 优先;
+ * 没有这一栏的(旧调用方、单测只给 `cardId`)就是 `cardId` 那一张,没有就是空。
+ */
+export function cardIdsOf(control) {
+  const list = Array.isArray(control?.cardIds) ? control.cardIds : [control?.cardId];
+  return [...new Set(list.filter(id => typeof id === 'string' && id !== ''))];
+}
+
+/**
+ * 这个控件的任务用不用执行用户卡的代码(`planForQueue` 交给切分的 `isUserCard`):里面任何一张卡的源码版本是 `user:` 开头就算。
+ * 里面是什么拿不准(`cardIdsUnsure`)时,这一版只要有用户卡就算 —— 宁可多要一项能力,不让没有这项能力的节点认领。
+ */
+export function isUserCardControl(control, sourceVersions = {}) {
+  const user = cardId => String(sourceVersions?.[cardId] ?? '').startsWith('user:');
+  if (control?.cardIdsUnsure === true) return Object.keys(sourceVersions ?? {}).some(user);
+  return cardIdsOf(control).some(user);
+}
+
+/**
+ * 卡片图里一个节点「里面有哪几张卡」:节点自己的 `cardId` 在前,再顺着 `inputs` 一层层往上游收(输入按名字排序,去重)。
+ * 片段挂了强调、滤镜、声音效果时输出节点是外面那一层(`@clip/<id>/emphasis` 等,没有 `cardId`),卡片在它的
+ * `inputs.source` 后面;套了几层就走几层,走到底。回 `(nodeId) => { cardIds, unsure, canvasHeavy }`:
+ * `unsure` 为真 = 这个节点或它的某个上游在图里找不到(或成环),里面是什么拿不准;
+ * `canvasHeavy` 为真 = 这个节点或它的某个上游是画布卡(能力表 `canvasHeavy`)。
+ */
+export function innerCardIds(graph) {
+  const byId = new Map((graph?.nodes ?? []).filter(node => node?.id != null).map(node => [node.id, node]));
+  const memo = new Map();
+  const walk = (nodeId, path) => {
+    if (memo.has(nodeId)) return memo.get(nodeId);
+    const node = byId.get(nodeId);
+    if (!node || path.has(nodeId)) return { cardIds: [], unsure: true, canvasHeavy: false };
+    path.add(nodeId);
+    const ids = typeof node.cardId === 'string' && node.cardId ? [node.cardId] : [];
+    let unsure = false;
+    // 外面那一层的能力表是从上游推的,只有「要不要预渲染」「依不依赖下层」两项(`projectCardGraph`),画布卡这一项在里面那张卡的节点上
+    let canvasHeavy = node.capabilities?.canvasHeavy === true;
+    for (const name of Object.keys(node.inputs ?? {}).sort()) {
+      const input = node.inputs[name];
+      const up = walk(typeof input === 'string' ? input : input?.nodeId, path);
+      if (up.unsure) unsure = true;
+      if (up.canvasHeavy) canvasHeavy = true;
+      for (const id of up.cardIds) if (!ids.includes(id)) ids.push(id);
+    }
+    path.delete(nodeId);
+    const out = { cardIds: ids, unsure, canvasHeavy };
+    // 成环时路上的节点只算了一半,不记;正常的图(`validateCardGraph` 过了的)无环,都记
+    if (!unsure) memo.set(nodeId, out);
+    return out;
+  };
+  return nodeId => walk(nodeId, new Set());
+}
+
+/**
+ * 给 card plan 的每个控件补上里面的卡(`FramePipeline.planForQueue` 用;卡片计划里的控件只有 `nodeId`)。〔裁〕取法:
+ *
+ *   - `cardIds`:输出节点和它全部上游里的卡片 id(`innerCardIds`)。切分按它判「要哪几张卡的代码」「是不是用户卡」「给不给浏览器」。
+ *   - `cardId`(写进任务的 `input.cardId`):输出节点自己是卡片就是它(与原来逐字相同);输出节点不是卡片、里面恰好一张卡
+ *     就是那一张(片段挂了强调、滤镜);里面没有卡、不止一张(外面一层接着两段的转场)、或拿不准,是 null。
+ *   - `cardIdsUnsure: true`:里面是什么拿不准。切分按最保守的算:要这一版全部定制卡的代码、不给浏览器节点。
+ *   - `innerCanvasHeavy: true`:控件自己的能力表没标画布卡、里面却有画布卡(挂了强调、滤镜的画布卡)。切分照画布卡办:
+ *     不给浏览器节点、重度记「重」。只管这两件;任务的 `input.canvasHeavy`(清单的体积上限)不跟着变 —— 它要和推送那一侧
+ *     按控件能力表算的同一个值,那一侧不在这里。
+ *
+ * 输出节点自己是卡片、上游里没有别的卡的控件(普通卡片段),补出来的 `cardId` 与原来相同,`cardIds` 只有它一张,
+ * 切出的任务逐字段不变。
+ */
+export function withInnerCards(cardPlan, graph) {
+  const inner = innerCardIds(graph);
+  const own = new Map((graph?.nodes ?? []).map(node => [node?.id, typeof node?.cardId === 'string' && node.cardId ? node.cardId : null]));
+  return (cardPlan ?? []).map(control => {
+    const { cardIds, unsure, canvasHeavy } = inner(control?.nodeId);
+    const given = typeof control?.cardId === 'string' && control.cardId ? control.cardId : null;
+    const all = given && !cardIds.includes(given) ? [given, ...cardIds] : cardIds;
+    const cardId = given ?? own.get(control?.nodeId) ?? (all.length === 1 && !unsure ? all[0] : null);
+    const out = { ...control, cardId, cardIds: [...all] };
+    if (unsure) out.cardIdsUnsure = true;
+    if (canvasHeavy && control?.capabilities?.canvasHeavy !== true) out.innerCanvasHeavy = true;
+    return out;
+  });
+}
+
+/**
  * 这张卡纯浏览器做不做得了(M7 契约 D1、D4):共享档、独立卡、light / medium、不用只在发布方本机的素材;
  * 内置卡片要没改过源码(`cardSources` 为空);用户卡、图卡(块 N)要本页声明能运行(`pageCards`)且这张卡要的代码身份本页都有;
- * 另外不是画布卡(`canvasHeavy`:逐帧顺推与桌面不等价)、不是 Lottie 素材卡、
+ * 另外不是画布卡(`canvasHeavy`:逐帧顺推与桌面不等价)、里面没有 Lottie 素材卡(片段挂了强调、滤镜时看里面那张)、
+ * 里面不超过一张卡且认得出是哪张(`cardIdsOf`、`cardIdsUnsure`;拿不准一律不给)、
  * 调用方没标它的帧超体积上限(`control.snapshotOversize`,执行器按本机快照库里已记为超限的内容键给)。
  * `requires` 是这张卡自己那一份的 requires(已含 localMedia)。
  */
@@ -187,8 +271,9 @@ function browserEligible({ tier, compositing, requires, weight, control, pageCar
     && cardCodeAllowed(requires, pageCards)
     && !('localMedia' in requires)
     && BROWSER_WEIGHTS.has(weight?.class)
-    && control?.capabilities?.canvasHeavy !== true
-    && !BROWSER_EXCLUDED_CARD.test(String(control?.cardId ?? ''))
+    && control?.capabilities?.canvasHeavy !== true && control?.innerCanvasHeavy !== true
+    && !cardIdsOf(control).some(id => BROWSER_EXCLUDED_CARD.test(id))
+    && cardIdsOf(control).length <= 1 && control?.cardIdsUnsure !== true
     && control?.snapshotOversize !== true;
 }
 
@@ -308,6 +393,21 @@ export function splitPlan({
     for (const [cardId, version] of Object.entries(cardSourceVersions ?? {})) if (typeof version === 'string' && version) out[cardId] = version;
     return out;
   };
+  /** 一张卡的重度:调用方给的;里面有画布卡而控件自己没标的(`innerCanvasHeavy`)照画布卡记「重」 */
+  const cardWeightOf = control => (control?.innerCanvasHeavy === true ? { ...weightOf(control), class: 'heavy' } : weightOf(control));
+  /**
+   * 只画这一个片段的任务(共享档快照、单卡流的浏览器那一份)要的代码身份:片段里面每张定制卡各一项(`cardIdsOf`:
+   * 挂了强调、滤镜的片段取里面那张);里面是什么拿不准(`cardIdsUnsure`)就要全部。
+   */
+  const ownCardSources = control => {
+    if (control?.cardIdsUnsure === true) return allCardSources();
+    const out = {};
+    for (const cardId of cardIdsOf(control)) {
+      const version = cardSourceVersions?.[cardId];
+      if (version) out[cardId] = version;
+    }
+    return out;
+  };
   /**
    * 这张卡的结果浏览器出哪几份(M7 D1,块 N;快照与单卡流共用):`eligible` 做不做得了;`copyFps` 另出哪些指纹(用户卡、素材效果卡用页面的
    * cardEnvFingerprint,内置卡片用浏览器的 envFingerprint);`browserOf` 哪些指纹的那一份要带页面要的输入。
@@ -342,20 +442,19 @@ export function splitPlan({
     const cardId = control.cardId ?? null;
     // 决定清单的体积上限,推送与拉取两边要一致(C6.2 第 11 节第 2 条,J.3)
     const canvasHeavy = control.capabilities?.canvasHeavy === true;
-    const cardVersion = control.cardId ? cardSourceVersions?.[control.cardId] : undefined;
     const compositing = control.compositing ?? control.capabilities?.compositing;
     // 锚帧是全局帧号,换成这张卡的本地帧再比;没有 firstFrame 就判不了,一律按普通段
     const firstFrame = Number(control.sampling?.firstFrame);
     const requires = {
       envFingerprint: keying.fingerprint, codeVersion,
-      cardSources: tier === 'local' ? allCardSources() : cardVersion ? { [control.cardId]: cardVersion } : {},
+      cardSources: tier === 'local' ? allCardSources() : ownCardSources(control),
       transcode: false,
       userCards: !!isUserCard(control),
       graphCards: !!isGraphCard(control),
       belowDependent: compositing === 'belowDependent',
     };
     gateLocalMedia(requires, control);
-    const weight = weightOf(control);
+    const weight = cardWeightOf(control);
     // M7 D1:这张卡出哪几份。没锁(或锁在自己的指纹上)、浏览器做得了时另出浏览器指纹的;锁在别处的照锁只出一份
     // 用户卡、图卡(块 N)的浏览器那一份用页面的 cardEnvFingerprint;内置卡片照旧用浏览器的 envFingerprint
     const { eligible, copyFps, browserOf } = browserPlanOf({ tier, compositing, requires, weight, control });
@@ -408,17 +507,16 @@ export function splitPlan({
     if (streamInput) {
       const tier = control.tier ?? snapshotTier(control.capabilities);
       const compositing = control.compositing ?? control.capabilities?.compositing;
-      const cardVersion = control.cardId ? cardSourceVersions?.[control.cardId] : undefined;
       const requires = gateLocalMedia({
         envFingerprint: keying.fingerprint, codeVersion,
-        cardSources: cardVersion ? { [control.cardId]: cardVersion } : {},
+        cardSources: ownCardSources(control),
         transcode: false,
         userCards: !!isUserCard(control),
         graphCards: !!isGraphCard(control),
         belowDependent: compositing === 'belowDependent',
         capabilities: { streams: true },
       }, control);
-      const cardWeight = weightOf(control);
+      const cardWeight = cardWeightOf(control);
       const plan = browserPlanOf({ tier, compositing, requires, weight: cardWeight, control });
       if (plan.eligible) {
         // 流的浏览器那一份不含切分方自己的指纹:同指纹时两份的任务 id 相同,而切分方那一份要本机转码
