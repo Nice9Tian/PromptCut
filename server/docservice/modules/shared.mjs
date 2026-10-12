@@ -18,7 +18,11 @@
  * - 创建者操作 `set-hosted-service { service: 'render' | 'agent', enabled: boolean }`：改开关（项目记录 `hosted.<服务名>.enabled`），
  *   不加代数、不断成员自己的连接。关掉时这个项目里这个服务的连接先放回手里的认领、再以 4003 `service-disabled` 关闭；
  *   并给本空间其余成员连接发 `shared.notice { event: 'hosted-service-changed', service, enabled }`。
- *   登记表里没有这个服务时回 `bad-message`；
+ *   登记表里没有这个服务时回 `bad-message`；改的时候只动 `enabled`，同一个服务下的子选项（`render.streams`）保留；
+ * - 创建者操作 `set-hosted-option { service: 'render', option: 'streams', enabled: boolean }`：改服务下面的子选项（项目记录
+ *   `hosted.<服务名>.<选项名>`，没有算开）。只记下并通知，不断连接、不动认领；成员列表顶层 `hosted.render` 多带 `streams`；
+ *   给本空间其余成员连接（不含服务连接）发 `shared.notice { event: 'hosted-option-changed', service, option, enabled }`。
+ *   `service` 不认识、登记表里没有它、`option` 不认识、`enabled` 不是布尔值，都回 `bad-message`；
  * - 服务连接（`scope: 'service'`）的 `auth.ticket` 只签素材票据，负载多带 `sv`（服务名）与 `sk`（公钥编号）；
  * - `service:` 开头的用户名留给服务身份：`set-list` 的名单项、`kick` / `unban` 的目标是这种用户名回 `bad-message`。
  *
@@ -34,7 +38,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   ROLES, adminPurpose, b64urlDecode, isUsername as isUsernameShape, isDeviceId, isRole, isConversation, normalizeOwner, isReservedUsername,
 } from '../../auth/protocol.mjs';
-import { serviceAdmission, hostedStateOf, HOSTED_SERVICES } from '../../auth/service-identity.mjs';
+import { serviceAdmission, hostedStateOf, HOSTED_SERVICES, HOSTED_OPTIONS } from '../../auth/service-identity.mjs';
 import { signTicket, userGeneration } from '../../auth/tickets.mjs';
 import { signDelegation, memberAccess } from '../../auth/delegation.mjs';
 import { DELEGATION_AUDIENCES, isConversationId } from '../../auth/protocol.mjs';
@@ -46,7 +50,7 @@ export const SHARED_MODULE = 'shared';
 export const ADMIN_OPS = Object.freeze([
   'set-password', 'set-list', 'kick', 'unban', 'delete', 'set-creator-password', 'list-bans',
   'invite-create', 'invite-revoke', 'invite-status',
-  'set-hosted-service',
+  'set-hosted-service', 'set-hosted-option',
 ]);
 
 /** 成员能用的用户名：形状对，且不是留给服务身份的 `service:` 开头 */
@@ -448,7 +452,8 @@ export function sharedModule({
         if (!HOSTED_SERVICES.includes(name)) throw new Refused('bad-message', `service 只能是 ${HOSTED_SERVICES.join(' / ')}`);
         if (!hostedServices || !registryOf()?.get(name)) throw new Refused('bad-message', '这台文档服务没有这个托管方服务');
         if (typeof msg.enabled !== 'boolean') throw new Refused('bad-message', 'enabled 要是布尔值');
-        st.update(space, (d) => { d.hosted = { ...(d.hosted ?? {}), [name]: { enabled: msg.enabled } }; });
+        // 只改 enabled，同一个服务下别的字段（子选项，如 render.streams）保留，不整条换掉
+        st.update(space, (d) => { d.hosted = { ...(d.hosted ?? {}), [name]: { ...(d.hosted?.[name] ?? {}), enabled: msg.enabled } }; });
         if (!msg.enabled) {
           // 关掉：这个服务在这个项目里的连接先放回手里的认领（不等断线宽限期），再关
           for (const [other, oc] of connsIn(space)) {
@@ -461,6 +466,24 @@ export function sharedModule({
         }
         for (const [other, oc] of connsIn(space)) {
           if (other !== connId && serviceOf(oc.principal) === null) ctx.send(other, { type: 'shared.notice', event: 'hosted-service-changed', service: name, enabled: msg.enabled });
+        }
+        break;
+      }
+      case 'set-hosted-option': {
+        // 服务下面的子选项（现在只有 render 的 streams，缺省开）：只记下并通知，不断任何连接、不动认领
+        const name = msg.service;
+        if (!HOSTED_SERVICES.includes(name)) throw new Refused('bad-message', `service 只能是 ${HOSTED_SERVICES.join(' / ')}`);
+        if (!hostedServices || !registryOf()?.get(name)) throw new Refused('bad-message', '这台文档服务没有这个托管方服务');
+        if (typeof msg.option !== 'string' || !HOSTED_OPTIONS[name].includes(msg.option)) {
+          throw new Refused('bad-message', `${name} 的 option 只能是 ${HOSTED_OPTIONS[name].join(' / ') || '（没有）'}`);
+        }
+        if (typeof msg.enabled !== 'boolean') throw new Refused('bad-message', 'enabled 要是布尔值');
+        const option = msg.option;
+        st.update(space, (d) => { d.hosted = { ...(d.hosted ?? {}), [name]: { ...(d.hosted?.[name] ?? {}), [option]: msg.enabled } }; });
+        for (const [other, oc] of connsIn(space)) {
+          if (other !== connId && serviceOf(oc.principal) === null) {
+            ctx.send(other, { type: 'shared.notice', event: 'hosted-option-changed', service: name, option, enabled: msg.enabled });
+          }
         }
         break;
       }
