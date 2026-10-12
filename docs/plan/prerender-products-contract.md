@@ -18,14 +18,15 @@
 | 类 | 判据 | 快照 | 轨道流 | 位置矩形 |
 |---|---|---|---|---|
 | R：remotion 式 | 写法是 remotion 式（`frameMode: "direct"`） | 不存 | 判重时产 | 判重时登记 |
-| C：画布与 WebGL | 写法是 motion 式，登记为「画面全在画布里」（第 6.1 节） | 不存 | 判重时产，像素从画布直接取 | 判重时登记 |
-| M：motion 式的 DOM 卡 | 其余的 motion 式卡（DOM、SVG、画布之外还有别的元素） | 存，每隔 15 帧一张（第 2 节），存法见第 7 节 | 判重时产 | 不另登记（要用时取流清单的框或当场量的框） |
+| C：画布与 WebGL | 写法是 motion 式，登记为画布卡（丁的表里 `surface` 是 `canvas2d` 或 `webgl`） | 不存 | 判重时产；画面全在画布里的，像素从画布直接取（第 6.1 节） | 判重时登记 |
+| M：motion 式的 DOM 卡 | 其余的 motion 式卡（`surface` 是 `dom`，SVG 也算） | 存，每隔 15 帧一张（第 2 节），存法见第 7 节 | 判重时产 | 不另登记（要用时取流清单的框或当场量的框） |
 | 依赖下层 | 上面三类里，依不依赖下层这一样不是「独立」的卡 | 照它所属的 R、C、M | 走戊二的流（第 5 节） | 同它所属的类 |
 
 - 「判重」指在预渲染集合里（`mechanism/rendering.md`「分派」）。在所有位置都判轻的卡不产任何预渲染结果，这一条不变。
-- 判据只有一份实现：`server/snapshot-tier.mjs` 的 `snapshotTier(capabilities)`。它现在的规则是「不是 `stateful` 回 `none`，独立或源依赖回 `shared`，其余回 `local`」；己落地时加一条「登记为画面全在画布里的回 `none`」。页面一侧（`src/editor/snapshotFeed.ts`、`src/editor/probeRunner.ts`）也用这一个函数，不另写一份（`src/editor/browserNodeHost.ts` 已有从 `server/` 引纯模块的先例）。
-- 「画面全在画布里」在能力对象里叫什么字段，随丁定。现在的字段是 `canvasHeavy`（`src/kernel/frameMode.mjs` 的 `cardCapabilities`），它只说「是画布卡」，没说「画布之外没有别的元素」。要丁的表分得出这两种（第 14 节第 12 条）。
-- 能力对象进卡片身份的摘要（`src/kernel/cardGraph.mjs` 的 `projectCardGraph` 把它写在节点上，`server/card-identity.mjs` 的 `cardNodeIdentities`、`cardSnapshotIdentity` 把节点整个算进去）。所以本契约不往能力对象里加字段，只读丁登记的；丁加字段会不会换键由丁自己的验收管。
+- 判据只有一份实现：`server/snapshot-tier.mjs` 的 `snapshotTier(capabilities)`。它现在的规则是「不是 `stateful` 回 `none`，独立或源依赖回 `shared`，其余回 `local`」；己落地时加一条「画布卡回 `none`」。页面一侧（`src/editor/snapshotFeed.ts`、`src/editor/probeRunner.ts`）也用这一个函数，不另写一份（`src/editor/browserNodeHost.ts` 已有从 `server/` 引纯模块的先例）。
+- 字段照丁（分支 `claude/rr-card-table`，写本文时还没合入，以合入的为准）：表里登记 `writing`（`remotion` / `motion`，取自声明）、`surface`（`dom` / `canvas2d` / `webgl` / `none`）、`compositing`。运行时的能力对象仍只有五项（`frameMode`、`need_prerendering`、`compositing`、`canvasHeavy`、`independentCache`），`surface` 不在里面，画布卡读的是 `canvasHeavy`；丁的守门测试保证两者一致。所以 `snapshotTier` 加的那一条读 `canvasHeavy`。
+- 「是画布卡」和「画面全在画布里」是两件事：前者定类别（存不存快照），读登记；后者只定像素怎么取，产流时实测（第 6.1 节）。画布之外还有别的元素的画布卡也算 C 类，这一点任务书的话有两种读法（第 14 节第 12 条）。
+- 本契约不往能力对象里加字段、不改 `src/kernel/frameMode.mjs`。能力对象进卡片身份的摘要（`src/kernel/cardGraph.mjs` 的 `projectCardGraph` 把它写在节点上，`server/card-identity.mjs` 把节点整个算进去）；丁的报告另外指出，`frameMode.mjs` 在每张内置卡的源码导入闭包里，改一个字就有 42 张内置卡换键。
 
 现状对照：`snapshotTier` 已经让 R 类不产快照；`server/artifact-transfer.mjs` 的 `layerMapOf`（第 202 行）只列 `kindOfTier(tier)` 不为空的层，所以 R 类的卡现在在层表里一行都没有。C 类现在产快照（`src/render/snapshot/rasterizeCanvas.ts` 把画布转成内嵌的 PNG），依赖下层的卡现在没有流（`server/frame-stream.mjs` 的 `streamEligible`，第 304 行，只收 `independent`）。
 
@@ -33,8 +34,8 @@
 
 | 东西 | 现状 | 变成 | 哪一项 |
 |---|---|---|---|
-| 快照的内容键 | `cardSnapshotIdentity`，里面有生成快照的代码指纹 `snapshotCode()` | 加一项显式的存法版本（第 9.1 节） | 庚 |
-| 单卡流的内容键 | `cardStreamIdentity`，成员键取 `control.contentKey`，也就是快照的内容键 | 成员键改用不带快照代码指纹的那一份〔裁〕（第 9.1 节） | 己 |
+| 快照的内容键 | `cardSnapshotIdentity`，里面有生成快照的代码指纹 `snapshotCode()` | 加一项显式的存法版本（第 9.3 节） | 庚 |
+| 单卡流的内容键 | `cardStreamIdentity`，成员键取 `control.contentKey`，也就是快照的内容键 | 成员键改用不带快照代码指纹的那一份〔裁〕（第 9.3 节） | 己 |
 | 依赖下层的流的内容键 | 没有 | `cardStreamIdentity` 新增一种 `kind: 'below'`（第 5.2 节） | 戊二 |
 | 流的代码版本 | `STREAM_CODE_VERSION = 1` 拼上 `captureCode()` | 己落地时加到 2 | 己 |
 | 快照任务清单（`SnapshotResult`） | `v: 1`，`frames: [[本地帧, 哈希, 字节数]]`，每帧一块整份 HTML | 第一步加 `want`（这一段该有哪几帧，第 2.4 节）；庚落地时 `v: 2`，`frames` 留空，另加 `bases`、`patches`（第 7.3 节） | 戊、庚 |
@@ -42,7 +43,11 @@
 | 层表（内容库 `layers:<项目 id>`，`LAYER_MAP_VERSION = 3`） | 只有 `layers`（快照） | 版本号不动，加 `streams`（甲一加，形状以甲一合入时为准）、`rects`（第 4.1 节）。旧页面只读 `layers`，不认识的字段忽略 | 甲一、戊 |
 | 帧库 | `controls-html/`、`controls-local/`、`streams/` | 多一个 `card-rects/`；快照目录里庚落地后是「结构一份加每帧差异」 | 戊、庚 |
 
-甲一的两条分支（`claude/rr-a1-produce`、`claude/rr-a1-play`）写本文时只有报告文件，层表 `streams` 的形状取自 `browser-stream-task.md` 第五处；它们合入后以合入的代码为准，本文和它对不上的地方由后做的一方改。
+甲一的两条分支（`claude/rr-a1-produce`、`claude/rr-a1-play`）写本文时还没合入。本文对齐的是它们 2026-10-12 的样子，合入后以合入的代码为准，对不上的地方由后做的一方改：
+
+- 层表的 `streams` 表（`rr-a1-play` 上 `server/artifact-transfer.mjs` 的 `layerStreamsOf`）：每条流一行 `{ topClipId, clipIds, kind: 'card' | 'group', plane: 'local' | 'stage', contentKey, candidates: [{ envFingerprint, resultKey }], firstSegment, lastSegment, segmentsPerTask, inputSig? }`。
+- 流的输入签名（`rr-a1-play` 上新加的 `src/render/streamInputSig.mjs`）：在线页面按当前项目算同一个签名，对不上的流不播。
+- 浏览器那一份流任务只给单卡流（`rr-a1-produce` 上 `server/render-node/split.mjs` 的 `browserStreamInputOf`，只认 `kind: 'card'`、`plane: 'local'`）。
 
 ## 2. 快照什么时候产、什么时候用
 
@@ -117,7 +122,9 @@
 | 播放时贴流，流这一拍画不出来就露出垫着的快照，再没有才占位 | `planFeed` 给每张重卡照样选一张快照（`tier: 'poster'`），`streamPlayer.ts` 的 `coverSnapshot` | 不改。R、C 类没有快照，自然跳过中间这一步 |
 | 垫在流下面的快照相差 15 帧以上才换 | `heldPoster`、`POSTER_REFRESH_FRAMES` | 不改 |
 
-要跟着改的一处：`planFeed` 报给预渲染进程的缺口（`wanted`，第 511～519 行）。现在「选中的不是当前这一帧」就报当前帧，稀疏以后每一拍都会报，预渲染进程会按它把当前帧渲出来，等于按需加密。改成：只在这一层这一段选不出任何快照时报，报的是「不晚于当前帧的最近一格」；R、C 类不报。
+要跟着改的一处：`planFeed` 报给预渲染进程的缺口（`wanted`，第 511～519 行）。现在「选中的不是当前这一帧」就报当前帧，稀疏以后每一拍都会报，而当前帧多半不在这一套里，报了也没有东西可产。改成：只在这一层这一段选不出任何快照时报，报的是「不晚于当前帧的最近一格」；R、C 类不报。
+
+改这一处要留意一件事：预渲染进程判断「用户在播放」靠的是这条消息的新鲜程度（`streamBusy()` 和 `queue-idle.mjs` 的 `interactionReason`：在播、且 5 秒内有过音讯）。看到的代码里，播放中带着 `playing` 发过去的只有缺口上报这一条路（`src/render/dataMirror.ts` 的 `sendWanted`，每 100 毫秒至多一次），播放头那条路播放中不推。缺口报得少了以后，播放中要保证仍有这条音讯（例如没有缺口也按同样的节流发一条空的），否则预渲染进程会在播放中恢复生产，违反「播放时不产」。播放中还有没有别的音讯来源，未查清，实现时核对。
 
 ## 3. 暂停和拖动时，没有快照的卡贴什么
 
@@ -202,7 +209,7 @@
 改法：
 
 - `frame-stream.mjs` 的 `planStreams`：每条流多带一项「要不要回放」，成员里有一张 motion 式的卡就要。成员的写法取 `control.frameMode`（`card-cache.mjs` 的 `plan` 已经带着）。
-- `StreamProducer.runSegment`（第 998 行）：不要回放的流不传 `mountFrame`。`bakeStream` 现在对「没给 `mountFrame`」的处理就是从 `fromFrame` 起，不用改这一句；另外让它对不要回放的流跳过预热（照 `warmUpAt` 里「没有要回放的卡就直接返回」的现成写法）。
+- `StreamProducer.runSegment`（第 998 行）：不要回放的流不传 `mountFrame`，预热帧数传 0（`bakeStream` 的 `warm`）。`bakeStream` 现在对「没给 `mountFrame`」的处理就是从 `fromFrame` 起，所以这一块可以不动 `server/bakery/bake.mjs`。尽量不动：它在生成快照和截图两份代码指纹的名单里，改一个字全部快照和全部流的键就换一次（第 9.3 节）。
 - 这类流断了租约也只是重灌一次页面，分段可以不按顺序产。
 - 在线一侧：`StageView.bakeFrame` 对隔离工程里唯一那张卡是 remotion 式的情形，直接把时钟拨到目标帧，不走 `remountAt` 加逐帧推。这一句和甲一在 `bakeFrame` 上加的「交出像素」是同一个函数，排在甲一之后改。
 - 证明：探针或日志里 `StreamProducer.status()` 的 `resets`、`bakeStream` 回的 `replayed`，对这类流 `replayed` 恒为 0。
@@ -214,7 +221,7 @@
 - 进这条路的卡：预渲染集合里、依不依赖下层这一样是「依赖下层」「旧的统称 `context`」或「未知」的卡（审阅表没覆盖到的卡按未知，用户和 Agent 建的卡都是）。源依赖卡（转场、接素材的素材效果卡）现在不进流，这次是否一并走这条路，未定，缺省不进。
 - 框用了三维的卡照旧不进（`streamEligible` 里的 `frame3d`）。
 - 这种流不参加组流合并（`groupStreams` 只合并独立卡的流），但占解码器预算；超出预算的层照现有规则从快照那一步开始兜底。
-- 谁能产：桌面应用和渲染主机。浏览器节点和本页产流不产。`split.mjs` 里这种流的任务：`requires.transcode: true`、`requires.belowDependent: true`、`capabilities.streams` 照旧，不出浏览器那一份；用到只在发布方本机的素材时带 `requires.localMedia`（`usesLocalMedia` 要把下层的素材算进去）。
+- 谁能产：桌面应用和渲染主机。浏览器节点和本页产流不产。`split.mjs` 里这种流的任务：`requires.transcode: true`、`requires.belowDependent: true`、`capabilities.streams` 照旧；浏览器那一份不会出（甲一的 `browserStreamInputOf` 只认单卡流）；用到只在发布方本机的素材时带 `requires.localMedia`（`usesLocalMedia` 要把下层的素材算进去）。
 
 ### 5.2 键里怎么带上下层
 
@@ -227,6 +234,8 @@
 这样下层任一控件的参数、位置、时间、顺序变了，或者下层多了少了一层，键就变，旧流不再贴；上面的层怎么改都不影响。这和 `mechanism/cards.md`「轴三」的失效规则是同一条。
 
 没有按「会不会碰到这块区域」再筛下层：第一版按时间重叠算，宁可多作废。按区域筛是以后的优化（第 14 节第 5 条）。算不出某个下层的键时，退回用整个项目的键 `entry.key`（本地档快照现在就是这样，更粗但不会错）。
+
+在线页面那一头要能自己判出「下层改了，这条流不能再贴」，不能等渲染节点重写层表：甲一加的流的输入签名（`src/render/streamInputSig.mjs` 的 `streamInputs`）加 `below` 一支，进签名的是目标卡的片段签名、采样窗口、外观，加时间重叠的每个下层的片段签名、采样窗口、外观和画家顺序。层表的 `streams` 表（`layerStreamsOf`）现在只认 `card` 和 `group`，要认 `below`。
 
 ### 5.3 流里放什么〔裁〕
 
@@ -261,12 +270,12 @@
 
 ### 6.1 什么算「卡片的画面全在画布里」
 
-两道，都过才走直取：
+它只决定这条流的像素怎么取，不决定存不存快照（存不存快照看是不是画布卡，第 1.1 节）。两道，都过才走直取：
 
-1. **登记**：分类登记表里登记为画面全在画布里（字段名随丁）。现在审阅表里 `canvasHeavy` 为真的有 `particles`、`particles-*`、`scene-3d` 和探针卡 `r6-canvas`；它们的组件除了画布还渲不渲别的元素，本文没有逐张核，由己的第一块核，结果回填给丁。
+1. **登记**：这张卡登记为画布卡。现在登记的有通用粒子卡 `particles`、53 张粒子素材封装卡（`particles-*`）、`scene-3d` 和探针卡 `r6-canvas`。
 2. **产流时实测**：隔离工程里这张卡挂好以后的第一帧，以及之后每个分段的第一帧，把「从画布取出的像素按画布在包裹层里的位置摆好」的图和这一帧的截图比，颜色和不透明度的平均差不超过 1（满分 255）才算过。不过的卡这一条流照现在的办法（截图、PNG、ffmpeg），并在诊断里记一条。
 
-实测这一道兜住的是：画布外面还有别的元素；画布或它的祖先带着不透明度、滤镜、变形；画布的像素尺寸和排版尺寸不一致。
+实测这一道兜住的是：画布外面还有别的元素；画布或它的祖先带着不透明度、滤镜、变形；画布的像素尺寸和排版尺寸不一致。现有的画布卡除了画布还渲不渲别的元素，本文没有逐张读源码核，靠这一道在产流时判；己的第一块把结果记进报告。
 
 画布怎么认：包裹层里唯一的 `<canvas>`。共享 WebGL 渲染器的平面（`[data-pc-gl-plane]`）取之前照 `rasterizeCanvas.ts` 的办法核帧号（`data-pc-gl-frame` 等于包裹层的 `data-pc-local-frame`），对不上按这一帧取不到处理，不许交出空图。
 
@@ -378,20 +387,72 @@
 
 ## 8. Lottie 改成 remotion 式以后（癸）
 
-- **类别**：两处声明改掉以后（`src/cards/native/lottie.tsx` 第 162 行、`src/cards/assets/index.ts` 第 46、86 行），Lottie 是 R 类：不产快照；测量走抽样那一支；判重时产轨道流；登记位置矩形。它画在 SVG 上，不是 C 类，产流走截图，不走第 6 节的直取。
+- **类别**：两处声明改掉以后（`src/cards/native/lottie.tsx` 第 162 行、`src/cards/assets/index.ts` 第 46、86 行），Lottie 是 R 类：不产快照；测量走抽样那一支；判重时产轨道流；登记位置矩形。它画在 SVG 上，不是 C 类，产流走截图，不走第 6 节的直取。丁的表里 6 条 Lottie 现在登记的是 `writing: "motion"`，声明改了表要一起改，不然丁的守门测试会红。
 - **判重时的流**：Lottie 在审阅表里是独立卡，走现有的单卡流；产流时不从挂载帧回放（第 4.2 节），这就是「预渲染不再从挂载帧重推」的证据来源。
 - **浏览器节点**：`split.mjs` 的 `BROWSER_EXCLUDED_CARD` 照旧把 Lottie 排除在外（任务书：缺省不放开，评估写进报告）。
 - **键**：声明一改，能力对象里的写法就变，Lottie 卡的节点身份、快照内容键、流键、成本记录的键都跟着变，旧的预渲染结果自然不再命中。
-- **随机数那三样缺省打开**（改写表达式里的随机函数、外面那一层、属性值不留旧数）：会改画面（带随机表达式的素材换一次数，`happy2016` 有 76 帧微变），所以键也必须变。内置卡的源码版本进键（`src/ExportView.tsx` 第 146 行给内置卡也算了 `sourceVersions`），`lottie.tsx` 改了，通用 Lottie 卡的键会变；5 张封装卡的源码版本覆不覆盖 `lottie.tsx`，未查清，实现时核对，不覆盖就要另外换键。
-- **两件事同一次合入**：声明改写和随机数缺省打开放在同一次合入里，免得中间有一段「键没变、画面变了」。
+- **随机数那三样缺省打开**（改写表达式里的随机函数、外面那一层、属性值不留旧数）：会改画面（带随机表达式的素材换一次数，`happy2016` 有 76 帧微变），所以键也必须变。通用 Lottie 卡 `lottie` 的源码版本走导入闭包，`lottie.tsx` 改了它的键就变。5 张封装卡不一样：它们的源码版本不走闭包，只取声明里的几项（第 9.2 节），`lottie.tsx` 怎么改它们的键都不变；它们的键只在声明里的 `frameMode` 改掉的那一次变。
+- **所以两件事必须同一次合入**：声明改写和随机数缺省打开放在同一次合入里。分开合的话，后合的那一次 5 张封装卡「键没变、画面变了」，旧的流和 PNG 会被错用。
+- 原型还改了 `src/kernel/pinEntropy.ts`。它现在不在任何卡的源码导入闭包里；原型让 `lottie.tsx` 引它以后，只进 `lottie` 这一张的闭包（在原型分支上核过）。Lottie 没有声音，卡片声音不受影响。
 - **素材的随机种子**取自素材内容的散列（原型的 `lottieSeedOf`），不取片段、不取位置：同一份素材摆在两处画面相同，和快照、流按内容寻址对得上。
 - 当场算一帧要多久，量出来写进 `render-standard.md`（任务书的要求），用来判断它在弱设备上会不会判重。
 
 ## 9. 旧的预渲染结果怎么作废；新旧同时在线怎么读
 
-### 9.1 作废：显式换版本号，不靠文件哈希碰巧变
+### 9.1 键会从三条路变
 
-现在的键里已经带着两个代码指纹：`snapshotCode()`（`server/frame-code.mjs` 的 `SNAPSHOT_FILES`，其中有 `server/bakery/bake.mjs`）进快照的内容键，`captureCode()` 进流的 `codeVersion`。这五项只要改到这些文件，键就会自己变。但不能指望它：新加的文件不在名单里，改了也不换键。所以每一项落地时显式换：
+| 路 | 是什么 | 进哪些东西 | 进不进卡片声音 |
+|---|---|---|---|
+| 源码版本 | `src/render/cardSourceVersion.mjs` 的 `cardSourceVersion`：这张卡的源文件，加上它一路相对导入到的文件的全文，类型导入也算。只在 `src/cards`、`src/parts`、`src/render`、`src/kernel` 四个目录里找（`src/render/cardSourceFiles.mjs`） | 预渲染结果的各种键（节点身份、快照内容键、流键、每卡 PNG 的键）、成本键 | **进**。卡片声音的身份里有它（`src/kernel/cardAudioRendition.mjs` 的 `cardAudioIdentity`）；对不上，已生成的声音被判「已过期，请重新生成」（`resolveCardAudioRendition`） |
+| 代码指纹 | `server/frame-code.mjs` 的 `snapshotCode()`（名单 `SNAPSHOT_FILES`）和 `captureCode()`（名单 `CAPTURE_FILES`） | 前者进快照的内容键（单卡流的键现在取快照的内容键，也跟着变）；后者进流的 `codeVersion` 和每卡 PNG 的校验 | 不进 |
+| 显式版本号 | `STREAM_CODE_VERSION`、键里写死的版本字段 | 各自那一种键 | 不进 |
+
+用户同意过的只有「换了快照的存法以后，旧的预渲染结果作废重渲一遍」，没有同意过卡片声音被判过期。所以源码版本这一路要管住。
+
+### 9.2 源码版本这一路：哪些文件不许碰，哪些卡躲不开
+
+主会话 2026-10-12 转来丁的实测：`src/kernel/frameMode.mjs` 加一行注释，42 张内置卡的键全变，已生成的卡片声音被判过期（分支 `claude/rr-card-table` 的 `docs/reports/AGENT-rr-card-table.md`）。本文照 `cardSourceVersion.mjs` 的算法在 `main`（`a556b7bc`）上把闭包走了一遍（脚本没有入库；丁合入后以它的 `scripts/probes/card-table-digest-compare.mjs` 为准），分三组：
+
+| 组 | 文件 | 在谁的闭包里 | 改了会怎样 |
+|---|---|---|---|
+| 甲：全体 | `src/kernel/types.ts`、`src/kernel/frameMode.mjs`、`src/kernel/cardGraph.mjs`、`src/kernel/emphasis.ts`、`src/kernel/cardGpu.ts`、`src/render/cards/gpuExecutor.ts` | 每一张按 id 找得到自己源文件的内置卡（丁实测 42 张）；用户卡只要引了 `kernel/types` 也在 | 这些卡的键全变；有声音的卡，声音被判过期 |
+| 乙：有声卡另外带的 | `src/kernel/soundEffects.ts`、`src/kernel/typingEvents.ts`、`src/cards/native/sound-effects.ts`、`src/cards/native/av-pulse.tsx` | 内置的三张有声卡 `av-pulse`、`sound-notification`、`sound-keyboard` | 这三张的键变，声音被判过期 |
+| 丙：经 `kernel/clock.ts` 连到渲染层的 | `src/kernel/clock.ts`、`src/kernel/registry.ts`、`src/kernel/project.ts`、`src/render/stageRpc.ts`、`src/render/streamPlayer.ts`、`src/render/placeholderHost.ts`、`src/render/createSnapshot.ts`、`src/render/snapshot/` 下四个文件、`src/render/solid.ts`、`src/render/frameWindow.mjs`、`src/render/cardCostKey.mjs` 等 29 个 | 引了 `kernel/clock` 的四个卡片文件里的五个 id：`lottie`、`focus-card`、`terminal-3d`、`probe-slow`、`probe-slow-stepped` | 这五个 id 的键变。它们都没有声音 |
+
+58 张素材封装卡（5 张 Lottie、53 张粒子）和组合卡的源码版本不走闭包，取的是声明里的几项（id、缺省参数、控件、生命周期、`frameMode` 等）：改文件的文字不影响它们，改声明才影响。
+
+五项各自会碰到什么：
+
+| 项 | 会改到的、在闭包里的文件 | 源码版本这一路换键的卡 | 卡片声音 |
+|---|---|---|---|
+| 稀疏快照（第 2 节） | 丙组的 `stageRpc.ts` | 丙组五个 id | 不受影响 |
+| 戊 | 丙组的 `placeholderHost.ts` | 丙组五个 id | 不受影响 |
+| 戊二 | 丙组的 `streamPlayer.ts` | 丙组五个 id | 不受影响 |
+| 己 | 丙组的 `streamPlayer.ts`、`stageRpc.ts`。`src/render/gl/` 下的文件不在任何带 id 的卡片文件的闭包里 | 丙组五个 id | 不受影响 |
+| 庚 | 丙组的 `stageRpc.ts`、`snapshot/` 下的文件；`createSnapshot.ts` 如果要引新模块也算 | 丙组五个 id | 不受影响 |
+| 癸 | `src/cards/native/lottie.tsx`；`src/cards/assets/index.ts` 里的声明；`src/kernel/pinEntropy.ts`（现在不在任何闭包里，原型让 `lottie.tsx` 引它以后只进 `lottie` 这一张的闭包） | 6 张 Lottie 卡，本来就要换 | 不受影响，Lottie 没有声音 |
+| 先修一（粒子） | `src/cards/native/particles.tsx` | 通用粒子卡 `particles` 一张；53 张封装卡不变 | 不受影响 |
+
+结论和规矩：
+
+- **五项都不需要改甲、乙两组的文件，照做的话已生成的卡片声音不受牵连。** 甲、乙两组的文件五项一律不改，注释也不加。哪一块发现非改不可，停下报主会话，不自己改：那会让卡片声音被判过期，用户没有同意过。
+- **丙组躲不开。** 那几个文件正是这五项要改的地方（甲一也改到了 `streamPlayer.ts`、`stageRpc.ts`）。五个 id 的键每合入一块换一次，开发用的帧库重渲这几张卡；对用户仍是发版时一次，而且只是预渲染结果。
+- 新加的模块（`snapshotGrid.mjs`、`diffSnapshot.ts`、己取像素的页面钩子）不要让甲、乙两组的文件去引，否则等于改了它们的闭包。
+- 守住的办法两条：每一块合入前跑丁的比对脚本，「源码版本变了」的卡只许是上表里列的，写进报告；另加一条守门测试，钉住三张内置有声卡的源码版本，值一变就红（要改这个值，先问过用户）。后一条排在第 13 节。
+
+以后有别的改动非动甲、乙两组不可时（不在这五项里），本文想到两个办法，都没有验：
+
+- 集中成一次：攒到一起改，并在同一次里让类型导入不进闭包（丁的报告的第 3 条建议），以后这类文件少牵连。这一次卡片声音会被判过期：预览里提示重新生成，导出开始时自动重新生成（`product/rendering.md`「有声动效卡」）。要先问用户。
+- 让声音完全不被牵连：先发一版，声音的身份新旧两种算法都认（新算法只取和声音有关的文件），认上旧的就把记录改写成新的；等到存量项目都被打开过，再动公共文件。改写记录是写项目数据，要另立契约。
+
+### 9.3 代码指纹和显式版本号这两路
+
+现在的键里已经带着两个代码指纹：`snapshotCode()`（`server/frame-code.mjs` 的 `SNAPSHOT_FILES`，其中有 `server/bakery/` 下七个模块和 `createSnapshot.ts`、`snapshot/` 下四个文件）进快照的内容键，`captureCode()` 进流的 `codeVersion`。这五项只要改到名单里的文件，全部快照或全部流的键就会自己变一次，和改的是不是画面无关：
+
+- 戊的「不回放」可以不动 `server/bakery/bake.mjs`：`runSegment` 不传 `mountFrame`、把预热帧数传成 0（`bakeStream` 的 `warm`）就够了，尽量这样做。
+- 己的直取像素、戊二的差分取层、庚的存法要动名单里的文件，各会让全部快照或全部流作废一次。这三块排在相邻的合入里。
+
+也不能指望它自己变：新加的文件不在名单里，改了也不换键。所以每一项落地时显式换：
 
 | 项 | 换什么 | 作废什么 |
 |---|---|---|
@@ -399,16 +460,22 @@
 | 庚 | `cardSnapshotIdentity` 的 `snapshot` 那一段加一项存法版本 `format: 2`；`diffSnapshot.ts` 进 `SNAPSHOT_FILES` | 全部快照 |
 | 己 | `STREAM_CODE_VERSION` 加到 2；取像素的新文件进 `CAPTURE_FILES`；流的成员键不再带快照代码指纹（见下） | 全部轨道流 |
 | 戊二 | 新的 `kind`，不动旧键 | 不作废 |
-| 戊（不回放、位置矩形） | 不换。不回放不改画面（remotion 式的卡画面只由时间和参数决定），由探针核对 | 不作废 |
+| 戊（不回放、位置矩形） | 不换。不回放不改画面（remotion 式的卡画面只由时间和参数决定），由探针核对。不动 `bake.mjs` 的话代码指纹也不变 | 不作废 |
 | 癸 | 靠声明和源码版本自然变（第 8 节） | Lottie 卡的流、PNG、成本记录 |
 
 **流的成员键去掉快照代码指纹〔裁〕**：单卡流的内容键现在取 `control.contentKey`，里面有 `snapshotCode()`。结果是改一次生成快照的代码，所有单卡流跟着作废，包括根本没有快照的 R、C 类。己落地时给 `card-cache.mjs` 的 `plan` 多算一份不带快照代码指纹的内容键，`planStreams` 用它。这一改和 `STREAM_CODE_VERSION` 加一放在同一次合入，流只作废一次。
 
-用户同意的是「换这一次」。五项分几次合入，开发用的帧库会各作废一次；对用户是发版时一次。会换键的合入（庚的存法、己的流）尽量排在一起。
+**集中成几次。** 用户同意的是「换这一次」。对用户，三条路上的换键都落在同一次发版里，是一次。对开发用的帧库做不到一次，能做到的是：
+
+- 全部快照的键：庚换一次（存法版本和代码指纹同一次合入）。
+- 全部流的键：己换一次（`STREAM_CODE_VERSION`、成员键的算法、代码指纹同一次合入）；戊二的差分取层如果改到 `CAPTURE_FILES` 里的文件，和己排在相邻的合入里。
+- 丙组五个 id：每合入一块换一次，躲不开（第 9.2 节）。
+- 6 张 Lottie 卡：癸换一次。
+- 卡片声音：一次都不换。
 
 旧结果不用删：换了键以后它们不再被引用，帧库按容量上限和最近使用淘汰（`product/platforms.md`「预渲染缓存」），素材服务的像素产物同样有淘汰。
 
-### 9.2 新旧同时在线
+### 9.4 新旧同时在线
 
 | 情形 | 怎么读 |
 |---|---|
@@ -444,6 +511,8 @@
 | 10 | 快照的体积上限 | 一帧超过 300 KB 不投递 | 按块判，现在合格的卡不变 | 〔裁〕第 7.6 节 |
 | 11 | 低内存档、最低一档的设备上，画布卡和 remotion 式的重卡 | 画布卡有预渲染小尺寸可贴 | 没有小尺寸，只有占位，停下后逐层渲 | 未定，第 14 节第 10 条 |
 | 12 | 带随机表达式的 Lottie；`happy2016` | 每次挂载画面不同；顺着推和直接跳差 74 个像素 | 每次相同（数换一次）；`happy2016` 有 76 帧微变 | 用户已定 |
+| 13 | 已经生成的卡片声音（`av-pulse`、提示音、键盘声，以及带声音的用户卡） | 有效 | 照第 9.2 节做，不受影响，一次都不会被判过期。只有哪一块改了第 9.2 节甲、乙两组里的文件才会被判「已过期，请重新生成」（预览里提示，导出开始时自动重新生成）；用户没有同意过，所以不许发生，非改不可先问用户 | 用户没有同意过；本文定为不许发生 |
+| 14 | 升级后第一次打开旧项目，丙组五个 id（`lottie`、`focus-card`、`terminal-3d` 和两张探针卡）与 6 张 Lottie 卡 | — | 成本记录重测一次、预渲染结果重渲一次。和第 8 行是同一次，不另外多出一次 | 随第 8 行 |
 
 对外数据格式的改动（三级，用户看不出区别，照规则标〔裁〕）：快照清单 `v: 2` 与 `want`、`bases`、`patches`；流清单的 `kind: 'below'`；层表的 `rects`；流的成员键换算法；流任务的名次排到快照任务之下。
 
@@ -506,54 +575,61 @@
 
 ## 13. 施工拆分
 
-文件按「道」分，同一条道里的块串行，不同的道可以并行；每个文件只属于一条道。块名前面的字是它属于哪一项。档位是建议。
+文件按「道」分，同一条道里的块串行，不同的道可以并行；每个文件只属于一条道。每一块属于哪一项写在表里。档位是建议。
 
 ### 13.1 各道的文件
 
 | 道 | 文件 |
 |---|---|
-| 一：流的计划与生产 | `server/frame-stream.mjs`、`server/bakery/bake.mjs`、`server/bakery/ffmpeg.mjs`、`server/bakery/capture-frame.mjs`、`server/card-identity.mjs`、`server/card-cache.mjs`、`server/frame-code.mjs`、`server/render-node/split.mjs`、`server/render-node/filter.mjs`；己取像素的页面钩子：`src/ExportView.tsx`、`src/render/gl/` |
+| 一：流的计划与生产 | `server/frame-stream.mjs`、`server/bakery/bake.mjs`、`server/bakery/ffmpeg.mjs`、`server/bakery/capture-frame.mjs`、`server/card-identity.mjs`、`server/card-cache.mjs`、`server/frame-code.mjs`、`server/render-node/split.mjs`、`server/render-node/filter.mjs`、`src/render/streamInputSig.mjs`（甲一加的）；己取像素的页面钩子：`src/ExportView.tsx`、`src/render/gl/` |
 | 二：快照库与清单 | `server/frame-pipeline.mjs`、`server/snapshot-store.mjs`、`server/snapshot-tier.mjs`、`server/artifact-transfer.mjs`、`server/artifact-push.mjs`、`server/prerender-executor.mjs`、`server/ready-index.mjs`、`server/vite-plugin-frames.ts`、`src/render/snapshotGrid.mjs`（新）、`src/render/createSnapshot.ts`、`src/render/snapshot/` |
 | 三：舞台与父页 | `src/StageView.tsx`、`src/render/Stage.tsx`、`src/render/streamPlayer.ts`、`src/render/planeStyle.ts`、`src/render/placeholderHost.ts`、`src/render/stageRpc.ts`、`src/editor/snapshotFeed.ts`、`src/editor/Preview.tsx`、`src/editor/probeRunner.ts`、`scripts/probe-card-costs.mjs` |
 | 四：在线来源与浏览器节点 | `src/render/snapshotSource.ts`、`src/online/bakeTask.ts`、`src/online/browserNode.ts`、`src/editor/browserNodeHost.ts`、`src/editor/stageBake.ts`、`src/online/l2.ts` |
-| 五：Lottie | `src/cards/native/lottie.tsx`、`src/cards/assets/index.ts`、`src/kernel/pinEntropy.ts`、`scripts/probes/lottie-*`、`render-standard.md` 的 Lottie 一节 |
+| 五：Lottie | `src/cards/native/lottie.tsx`、`src/cards/assets/index.ts`、`src/kernel/pinEntropy.ts`、`src/cards/capabilities.json` 与 `capabilities.md` 里 Lottie 的 6 条、`scripts/probes/lottie-*`、`render-standard.md` 的 Lottie 一节 |
 | 六：粒子卡 | `src/cards/native/particles.tsx` 和它用的粒子视图；根因落在舞台时钟时加 `src/render/stageClock.ts`。根因落在 `src/StageView.tsx` 的追帧一段时，这一块并进道三，排在道三最前面 |
 
 每一块自己的新探针、新单测归这一块。道一的 `card-cache.mjs`、道二的 `snapshot-tier.mjs` 这种一两行的改动，如果别的道的块要用，由拥有它的道先做、先合。
 
+所有块共同的两条：
+
+- **不许改的文件**（第 9.2 节甲、乙两组）：`src/kernel/types.ts`、`src/kernel/frameMode.mjs`、`src/kernel/cardGraph.mjs`、`src/kernel/emphasis.ts`、`src/kernel/cardGpu.ts`、`src/render/cards/gpuExecutor.ts`、`src/kernel/soundEffects.ts`、`src/kernel/typingEvents.ts`、`src/cards/native/sound-effects.ts`、`src/cards/native/av-pulse.tsx`。派活时写进每一块的文件清单；非改不可就停下报主会话。
+- 每一块合入前跑丁的 `scripts/probes/card-table-digest-compare.mjs`，「源码版本变了」的卡只许是第 9.2 节表里列的，结果写进这一块的报告。
+
 ### 13.2 各块
 
-| 块 | 做什么 | 道 | 等谁 | 验收探针 | 档位 |
-|---|---|---|---|---|---|
-| 先修一 | 粒子卡往回跳以后停下，画面不是这一刻的（任务书「己」的「先要修的两处」第 1 条） | 六 | 不等 | 新探针：同一帧往回跳到达和往前到达，两张的差在编码误差量级以内，并且和别的时刻比明显更大；逐帧比对这张卡改前改后的导出 | Opus high（根因不明） |
-| 先修二 | 手按着标尺不动时快照贴不上（同上第 2 条）：`deliverSnapshots` 被节流挡掉以后补一次 | 三 | 不等 | 新探针：按住 12 处各 2.5 秒，12 处都贴上 | Sonnet high |
-| 网格 | `snapshotGrid.mjs` 和单测；`snapshotTier` 给页面一侧用的入口 | 二 | 不等 | 单测 | Sonnet high |
-| 稀疏一 | 预渲染进程：稀疏快照趟、几处「齐了没有」、清单的 `want`、先快照后流（第 2.3、2.4 节） | 二 | 网格 | 探针：预渲染完，M 类卡的快照目录里正好是这一套；流在快照齐了之后才开始产；`verify-unified-frames.mjs` 照过 | Opus medium |
-| 稀疏二 | 测量的快照趟（第 2.2 节）、缺口上报、降级的就绪判据（第 2.6 节） | 三 | 网格、先修二 | 探针：打开项目后每张 M 类独立卡的这一套是齐的；遮罩时间改前改后各记一个数；拖动时每 15 帧一跳、只往回找 | Opus medium |
-| 稀疏三 | 在线来源、浏览器节点、清单判齐、在线测量帧留用（第 2.3、2.4、2.5 节） | 四 | 网格、甲一 | 浏览器节点的验收探针（`m7-*`）按新判据照过；只开在线页面时拖动能贴上本页测量出的快照 | Opus medium |
-| 戊一 | 产流不回放（第 4.2 节）；`planStreams` 带上成员的写法 | 一 | 甲一（在线那一句） | 探针：remotion 式重卡的流 `replayed` 为 0；流的画面和回放着产的逐帧相同 | Sonnet high |
-| 戊二 | 位置矩形：量、帧库、层表、就绪消息（第 4.1 节的服务端一半） | 二 | 稀疏一 | 任务书戊的探针里「有位置矩形」那一条 | Sonnet high |
-| 戊三 | 位置矩形的取用（`placeholderHost`、在线读层表的 `rects`） | 三、四各一小块 | 戊二 | 占位符探针：没有流时 remotion 式重卡的占位符是实体框，不是徽标 | Sonnet high |
-| 己零 | 在节点和 PC 上量两条路（第 6.3 节） | 不改产品代码 | 甲一的压和封装两个模块（没合入时直接用分支 `claude/browser-stream-encode` 上的探针） | 报告里有第 6.3 节的全部数字 | 主会话安排 |
-| 己一 | 「画面全在画布里」的登记核对和实测判定；直取像素进编码器；`STREAM_CODE_VERSION` 加一；流的成员键去掉快照代码指纹 | 一 | 己零、戊一、丁 | 任务书己的验收：新旧两条路的流逐帧比；预渲染耗时改前改后 | Opus high |
-| 己二 | 画布卡不存快照（`snapshotTier` 加一条、测量不跑快照趟、体积上限那一档） | 二、三各一小块 | 己三（拖动先接好再撤快照） | 帧库和素材服务里没有画布卡的每帧快照 | Sonnet high |
-| 己三 | 暂停和拖动贴流：合入原型分支，去掉开关，照第 3 节定的做 | 三 | 先修一、先修二、稀疏二 | 第 3.7 节 | Opus high |
-| 戊二甲 | 依赖下层的流：计划、键、隔离工程、切分与认领（第 5.1、5.2 节） | 一 | 戊一 | 单测：下层改一处键就变、上层改不变；切分出的任务浏览器节点认领不了 | Opus high |
-| 戊二乙 | 差分取层的产流（第 5.3 节）；先做探针量耗时和编码后的误差，再定用不用 | 一 | 戊二甲 | 任务书戊二的探针；另加一个带半透明下层的场景，比差分取层和原样盖的误差 | Opus Extra |
-| 戊二丙 | 贴回舞台（第 5.4 节） | 三 | 戊二乙、己三 | 同上 | Opus medium |
-| 庚一 | `diffSnapshot.ts`、落盘、存法版本（第 7.1、7.2、9.1 节） | 二 | 稀疏一、戊二 | 还原出的整帧 HTML 和旧存法逐字节相同；整场景 `html` 不变；占用空间改前改后 | Opus high |
-| 庚二 | 清单 `v: 2`、推送拉取、读口（第 7.3、7.5 节的服务端） | 二 | 庚一 | 两台节点之间推拉一段再贴；旧清单照旧能读 | Opus medium |
-| 庚三 | 舞台贴法、压住过渡、投递（第 7.5 节的页面一半） | 三 | 庚二、戊二丙 | 任务书庚的验收：逐节点相同、跳着贴、贴一帧的耗时改前改后 | Opus high |
-| 庚四 | 在线取用、浏览器节点产的那一份（第 7.4、7.5 节） | 四 | 庚二、稀疏三 | 在线的暂停、拖动截图和改之前一致 | Opus medium |
-| 癸一 | 留底；合入原型分支；两处声明和随机数三样缺省打开同一次合入；开关到得了导出页和舞台 | 五 | 戊一、丁 | 任务书癸的验收；原型的 `lottie-seed-probe.mjs` | Opus medium |
-| 癸二 | 量当场算一帧的耗时；评估浏览器节点产 Lottie 的流；补测原型没测到的几样 | 五 | 癸一 | 报告 | Sonnet high |
+| 块 | 项 | 做什么 | 道 | 等谁 | 验收探针 | 档位 |
+|---|---|---|---|---|---|---|
+| 先修一 | 己之前 | 粒子卡往回跳以后停下，画面不是这一刻的（任务书「己」的「先要修的两处」第 1 条） | 六 | 不等 | 新探针：同一帧往回跳到达和往前到达，两张的差在编码误差量级以内，并且和别的时刻比明显更大；逐帧比对这张卡改前改后的导出 | Opus high（根因不明） |
+| 先修二 | 己之前 | 手按着标尺不动时快照贴不上（同上第 2 条）：`deliverSnapshots` 被节流挡掉以后补一次 | 三 | 不等 | 新探针：按住 12 处各 2.5 秒，12 处都贴上 | Sonnet high |
+| 网格 | 戊、庚 | `snapshotGrid.mjs` 和单测；`snapshotTier` 给页面一侧用的入口 | 二 | 不等 | 单测 | Sonnet high |
+| 守门 | 全部 | 一条新的守门测试：钉住三张内置有声卡（`av-pulse`、`sound-notification`、`sound-keyboard`）的源码版本，值变了就红；顺带断言第 9.2 节甲、乙两组的文件清单没有变长（新文件进了有声卡的闭包也红）。只加测试文件，不改产品代码 | 单独一个新文件，不属于哪条道 | 丁（借它读内置卡声明的夹具 `src/testing/loadBuiltinCards.mjs`） | 故意在 `src/kernel/frameMode.mjs` 末尾加一行注释，测试变红；还原后变绿 | Sonnet medium |
+| 稀疏一 | 戊、庚 | 预渲染进程：稀疏快照趟、几处「齐了没有」、清单的 `want`、先快照后流（第 2.3、2.4 节） | 二 | 网格 | 探针：预渲染完，M 类卡的快照目录里正好是这一套；流在快照齐了之后才开始产；`verify-unified-frames.mjs` 照过 | Opus medium |
+| 稀疏二 | 戊、庚 | 测量的快照趟（第 2.2 节）、缺口上报、降级的就绪判据（第 2.6 节） | 三 | 网格、先修二 | 探针：打开项目后每张 M 类独立卡的这一套是齐的；遮罩时间改前改后各记一个数；拖动时每 15 帧一跳、只往回找 | Opus medium |
+| 稀疏三 | 戊、庚 | 在线来源、浏览器节点、清单判齐、在线测量帧留用（第 2.3、2.4、2.5 节） | 四 | 网格、甲一 | 浏览器节点的验收探针（`m7-*`）按新判据照过；只开在线页面时拖动能贴上本页测量出的快照 | Opus medium |
+| 不回放 | 戊 | 产流不回放（第 4.2 节）；`planStreams` 带上成员的写法。不动 `server/bakery/bake.mjs` | 一 | 甲一（在线那一句） | 探针：remotion 式重卡的流 `replayed` 为 0；流的画面和回放着产的逐帧相同；生成快照的代码指纹改前改后相同 | Sonnet high |
+| 矩形一 | 戊 | 位置矩形：量、帧库、层表、就绪消息（第 4.1 节的服务端一半） | 二 | 稀疏一 | 任务书戊的探针里「有位置矩形」那一条 | Sonnet high |
+| 矩形二 | 戊 | 位置矩形的取用（`placeholderHost`、在线读层表的 `rects`） | 三、四各一小块 | 矩形一 | 占位符探针：没有流时 remotion 式重卡的占位符是实体框，不是徽标 | Sonnet high |
+| 己零 | 己 | 在节点和 PC 上量两条路（第 6.3 节） | 不改产品代码 | 甲一的压和封装两个模块（没合入时直接用分支 `claude/browser-stream-encode` 上的探针） | 报告里有第 6.3 节的全部数字 | 主会话安排 |
+| 己一 | 己 | 「画面全在画布里」的登记核对和实测判定；直取像素进编码器；`STREAM_CODE_VERSION` 加一；流的成员键去掉快照代码指纹 | 一 | 己零、不回放、丁 | 任务书己的验收：新旧两条路的流逐帧比；预渲染耗时改前改后 | Opus high |
+| 己二 | 己 | 画布卡不存快照（`snapshotTier` 加一条、测量不跑快照趟、体积上限那一档） | 二、三各一小块 | 己三（拖动先接好再撤快照） | 帧库和素材服务里没有画布卡的每帧快照 | Sonnet high |
+| 己三 | 己 | 暂停和拖动贴流：合入原型分支，去掉开关，照第 3 节定的做 | 三 | 先修一、先修二、稀疏二 | 第 3.7 节 | Opus high |
+| 下层一 | 戊二 | 依赖下层的流：计划、键、输入签名的 `below` 一支、隔离工程、切分与认领（第 5.1、5.2 节）。层表的 `layerStreamsOf` 认 `below` 是道二的一行改动，交给道二当时在做的那一块 | 一 | 不回放、甲一 | 单测：下层改一处键和输入签名就变、上层改不变；切分出的任务浏览器节点认领不了 | Opus high |
+| 下层二 | 戊二 | 差分取层的产流（第 5.3 节）；先做探针量耗时和编码后的误差，再定用不用 | 一 | 下层一 | 任务书戊二的探针；另加一个带半透明下层的场景，比差分取层和原样盖的误差 | Opus Extra |
+| 下层三 | 戊二 | 贴回舞台（第 5.4 节） | 三 | 下层二、己三 | 同上 | Opus medium |
+| 下层四 | 戊二 | 在线来源读 `below` 的行和清单、按输入签名判过期（甲一的解析现在只认 `card`、`group`，别的行跳过） | 四 | 下层一、甲一 | 在线页面：桌面产好依赖下层的流，页面播放时贴上；改下层一张卡，旧流立刻不贴 | Sonnet high |
+| 庚一 | 庚 | `diffSnapshot.ts`、落盘、存法版本（第 7.1、7.2、9.3 节） | 二 | 稀疏一、矩形一 | 还原出的整帧 HTML 和旧存法逐字节相同；整场景 `html` 不变；占用空间改前改后 | Opus high |
+| 庚二 | 庚 | 清单 `v: 2`、推送拉取、读口（第 7.3、7.5 节的服务端） | 二 | 庚一 | 两台节点之间推拉一段再贴；旧清单照旧能读 | Opus medium |
+| 庚三 | 庚 | 舞台贴法、压住过渡、投递（第 7.5 节的页面一半） | 三 | 庚二、下层三 | 任务书庚的验收：逐节点相同、跳着贴、贴一帧的耗时改前改后 | Opus high |
+| 庚四 | 庚 | 在线取用、浏览器节点产的那一份（第 7.4、7.5 节） | 四 | 庚二、稀疏三 | 在线的暂停、拖动截图和改之前一致 | Opus medium |
+| 癸一 | 癸 | 留底；合入原型分支；两处声明和随机数三样缺省打开同一次合入；开关到得了导出页和舞台 | 五 | 不回放、丁 | 任务书癸的验收；原型的 `lottie-seed-probe.mjs` | Opus medium |
+| 癸二 | 癸 | 量当场算一帧的耗时；评估浏览器节点产 Lottie 的流；补测原型没测到的几样 | 五 | 癸一 | 报告 | Sonnet high |
 
 ### 13.3 先后
 
-1. 不等甲一就能开的：先修一、先修二、网格、稀疏一、癸的留底。
-2. 甲一合入以后：稀疏二、稀疏三、戊一、己零。
-3. 之后三条线并着走：道一上「戊一、己一、戊二甲、戊二乙」；道二上「稀疏一、戊二、庚一、庚二」；道三上「先修二、稀疏二、己三、戊三、戊二丙、庚三」。道四跟着道二、道三的对应块走。道五独立。
-4. 会换键的两块（己一、庚一）尽量挨着合入。
+1. 不等甲一就能开的：先修一、先修二、网格、稀疏一、癸的留底。守门等丁合入就做，排在别的块合入之前。
+2. 甲一合入以后：稀疏二、稀疏三、不回放、己零。
+3. 之后三条线并着走：道一上「不回放、己一、下层一、下层二」；道二上「稀疏一、矩形一、庚一、庚二」；道三上「先修二、稀疏二、己三、矩形二、下层三、庚三」。道四跟着道二、道三的对应块走。道五独立。
+4. 会让全部快照或全部流换键的块（己一、庚一，以及下层二如果动到截图那几个文件）尽量挨着合入（第 9.3 节）。
 5. 己二排在己三之后：先让拖动贴得上流，再撤快照，中间不出现「没有快照、也贴不了流」的一段。
 
 ## 14. 拿不准、要主会话或用户定的
@@ -571,10 +647,12 @@
 | 9 | 在线页面测量出的快照推不推素材服务 | 甲：跟着甲二，页面能算键以后推。乙：只在本页用 | 甲 |
 | 10 | 低内存档和最低一档的设备上，画布卡和 remotion 式的重卡没有小尺寸可贴 | 甲：接受，等 0.7.19 撤掉低内存档。乙：低内存档也贴流（要动任务书说照现状保留的分支）。丙：给这些卡每 15 帧另产一张小图 | 报用户。不处理的话这些设备上画布卡比现在差 |
 | 11 | 暂停时同屏第 7 张走流的卡 | 甲：解完一帧让出解码器、排队。乙：占位符。丙：露活组件（原型现状） | 甲 |
-| 12 | 丁的表里「画在什么上」 | 要分得出「画面全在画布里」和「画布之外还有别的元素」 | 请丁加；己的第一块逐张核现有的画布卡，回填 |
+| 12 | 画布之外还有别的元素的画布卡，存不存快照。任务书「己」写这种卡「照现在的办法」，可以读成只指像素怎么取，也可以读成连快照也照旧存 | 甲：算 C 类，不存快照，流走截图。乙：照旧存快照（要在丁的表里多登记一样，并且动得到 `frameMode.mjs` 或能力对象，会连带换键） | 甲。不用加字段、不换键，也合「不存图片」。内置卡里现在有没有这种卡，未逐张核 |
 | 13 | 新旧两个能切分的节点同在一个项目里，层表被轮流改写 | 甲：靠部署规矩（同一个提交）。乙：层表按代码版本分键 | 甲。项目放本机、桌面版本不同的情形未查清 |
 | 14 | 源依赖卡（转场、接素材的素材效果卡）进不进戊二的流 | 进、不进 | 这次不进，任务书没有点名 |
 | 15 | 选了第 1 条的甲以后，庚还做不做全套 | 甲：照做。乙：只做落盘，不改贴法 | 报用户。快照已经稀了 15 倍，庚省下的空间和贴一帧的耗时都只剩原来十五分之一的量级；任务书定的是全做，本文按全做写 |
+| 16 | 哪一块发现非改第 9.2 节甲、乙两组的文件不可（会让已生成的卡片声音被判过期） | 甲：不改，换做法。乙：攒成一次改，同一次里让类型导入不进源码闭包，先问用户。丙：先发一版让声音的身份新旧两种算法都认，再改 | 甲。五项按本文的做法都用不着改这些文件；乙、丙是给别的项（例如乙的框架如果要动 `kernel/types.ts`）留的，没有验 |
+| 17 | 丙组五个 id 每合入一块换一次键 | 甲：接受（对用户是一次，只是预渲染结果）。乙：根治。渲染层是被 `kernel/clock.ts` 的全局类型声明里那几句 `import('../render/…')` 带进闭包的，源码版本的算法把它们当成了导入；要么改算法让类型导入不算，要么挪走这几句。前一种会让全部内置卡换键、卡片声音被判过期（同第 16 条的乙）；后一种改的是 `clock.ts`，只让这五个 id 换一次键 | 甲。乙不在这五项的范围里，记待办 |
 
 ## 15. 和任务书、语义对不上的地方
 
