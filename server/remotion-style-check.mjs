@@ -301,7 +301,7 @@ export function inspectRemotionStyle(source, o = {}) {
       return;
     }
     const root = rootOf(target);
-    if (root && topKind(root)) hit(node, 'state', `往${describeTop(root)}里写：它活得比一帧长，上一帧写进去的东西下一帧读得到。${NO_CARRY}`);
+    if (root && topKind(root)) hit(node, 'state', `往${describeTop(root)} 里写：它活得比一帧长，上一帧写进去的东西下一帧读得到。${NO_CARRY}`);
   };
 
   /** 字符串在不在「类名」的位置上（className 属性里、cn() 这类函数的参数里） */
@@ -392,13 +392,13 @@ export function inspectRemotionStyle(source, o = {}) {
       // 往顶层的东西里写：X.push(…)、Object.assign(X, …)
       if (callee && ts.isPropertyAccessExpression(callee) && MUTATORS.has(callee.name.text)) {
         const root = rootOf(callee.expression);
-        if (root && topKind(root)) hit(node, 'state', `往${describeTop(root)}里写（${callee.name.text}）：它活得比一帧长，上一帧写进去的东西下一帧读得到。${NO_CARRY}`);
+        if (root && topKind(root)) hit(node, 'state', `往${describeTop(root)} 里写（${callee.name.text}）：它活得比一帧长，上一帧写进去的东西下一帧读得到。${NO_CARRY}`);
       }
       if (callee && ts.isPropertyAccessExpression(callee) && OBJECT_WRITERS.has(callee.name.text) && node.arguments[0]) {
         const holder = unwrap(callee.expression);
         const root = rootOf(node.arguments[0]);
         if (holder && ts.isIdentifier(holder) && ['Object', 'Reflect'].includes(holder.text) && root && topKind(root)) {
-          hit(node, 'state', `往${describeTop(root)}里写（${holder.text}.${callee.name.text}）：它活得比一帧长，上一帧写进去的东西下一帧读得到。${NO_CARRY}`);
+          hit(node, 'state', `往${describeTop(root)} 里写（${holder.text}.${callee.name.text}）：它活得比一帧长，上一帧写进去的东西下一帧读得到。${NO_CARRY}`);
         }
       }
     }
