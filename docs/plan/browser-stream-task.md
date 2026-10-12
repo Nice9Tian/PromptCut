@@ -1,10 +1,12 @@
 # 在线浏览器生成和播放轨道流：接入任务
 
-2026-10-09 用户定「在线浏览器也要能生成和播放轨道流」（见 `render-standard.md`「预渲染的产物」），2026-10-10 用户说「做成，然后合入」。本文件记下已经做了什么、还差哪几处、每一处改哪里。还没动手的部分都标了「未做」。
+2026-10-09 用户定「在线浏览器也要能生成和播放轨道流」（见 `render-standard.md`「预渲染的产物」），2026-10-10 用户说「做成，然后合入」。本文件记下这件事做了什么、每一处改在哪里、怎么验的、合入之后还差什么。
 
-**2026-10-12 用户定：产流走两条路，这次一起做。** 一条是本文件写的、经过任务队列的路（下面的七处）；另一条不经过任务队列：线上没有能切分的节点时，在线页面给本页能运行的重卡自己压、自己播。第二条的要求和验收写在 `render-refactor-task.md` 的「甲二」，本文件的七处不变。
+**2026-10-12 用户定：产流走两条路，这次一起做。** 一条是本文件写的、经过任务队列的路（下面的七处，任务书 `render-refactor-task.md` 的「甲一」）；另一条不经过任务队列：线上没有能切分的节点时，在线页面给本页能运行的重卡自己压、自己播。第二条的要求和验收写在 `render-refactor-task.md` 的「甲二」，本文件的七处不变。
 
-## 已经做了的（分支 `claude/browser-stream-encode`，未合入 main）
+**状态（2026-10-13）：七处都已做完，另补了把两半接起来的一环，在集成分支 `claude/rr-a1` 上，待合入 `main`。** 三份子 Agent 报告：`docs/reports/AGENT-rr-a1-produce.md`（第一到四处）、`AGENT-rr-a1-play.md`（第五到七处）、`AGENT-rr-a1-integ.md`（接起来的一环、整条链的端到端验收）。
+
+## 先有的两个模块
 
 | 文件 | 做什么 |
 |---|---|
@@ -12,43 +14,47 @@
 | `src/render/streamEncode.ts` | 把每帧画面拼成上半颜色、下半透明度，用浏览器自带的编码器压，每 15 帧交一段 |
 | 两份单测、两个探针 | 见 `render-standard.md` |
 
-这两个文件还没有任何地方调用。
+这两个文件原样接上了，没有改。
 
-## 现在的流程是怎样的（查代码得出）
+## 流程（做完之后）
 
-1. 在线页面只发布「给这一版项目做计划」这一个粗任务（`src/online/planPublisher.ts`）。
+1. 在线页面只发布「给这一版项目做计划」这一个粗任务，带着自己判重的片段清单（清单计划，`src/online/planPublisher.ts`）。
 2. **切分只有桌面应用和独立渲染主机能做**：它们认领粗任务，在自己的 Chrome 里算出每张卡的键，切成细任务发回队列（`server/render-node/local-node.mjs` 调 `split.mjs` 的 `splitPlan`）。浏览器节点不能认领粗任务（`server/render-queue/queue.mjs`）。
-3. 切分时，浏览器做得了的卡（共享档、独立卡、轻或中等、不是画布卡、不是 Lottie）的**快照任务**会多出一份给浏览器的；**轨道流任务**只出切分方自己的一份，而且要求节点有转码能力，浏览器节点报的是「不能产流」（`src/online/browserNode.ts` 里 `streams: false`）。
-4. 浏览器节点认领到快照任务后，后台舞台逐帧生成快照，推到素材服务，往内容库写一份清单（`src/editor/browserNodeHost.ts`）。
-5. 在线页面播放时，靠内容库里的「层表」知道每张卡有哪些快照（`src/render/snapshotSource.ts` 的 `OnlineSnapshotSource`）。层表里只有快照，没有轨道流，所以在线页面的就绪索引里永远没有流，播放器不会启用。
-6. 播放器本身（`src/render/streamPlayer.ts`）和父页挑流的逻辑（`src/editor/snapshotFeed.ts`）不分桌面和在线，只要就绪索引里有流、字节取得到就能播。
+3. 切分时，浏览器做得了的卡（共享档、独立卡、轻或中等、不是画布卡、不是 Lottie）的快照任务多出一份给浏览器的；这张卡的**单卡流**同样多出一份给浏览器的。**清单计划原来一条流任务都不切**（`listPlanOverrides` 写死 `streams: []`）；现在按清单里的片段算流，**只给浏览器出一份**，切分方自己的那一份不出（桌面和渲染主机替在线页面的清单计划产流是「甲三」的事）。切分方自己不能产流（没有生产者、关着流开关）时浏览器那一份照出。
+4. 浏览器节点认领到快照任务后，后台舞台逐帧生成快照，推到素材服务，往内容库写一份清单；认领到流任务后，逐段逐帧向舞台要像素、用浏览器自带的编码器压、把开头文件和分段推到素材服务的像素那一类、往内容库写一份流清单（`src/editor/browserNodeHost.ts`）。
+5. 切分完成后，切分方按实际出键写层表。层表除了每张卡的快照层，另带一张 `streams` 表：每条流一行，候选里是实际被派过这条流的指纹。
+6. 在线页面靠层表知道每张卡有哪些快照、哪些流（`src/render/snapshotSource.ts` 的 `OnlineSnapshotSource`）：按播放头附近的范围取流清单，把清单里的开头文件和分段取到本页，字节到了的分段才算就绪。
+7. 父页挑流的逻辑（`src/editor/snapshotFeed.ts`）和播放器（`src/render/streamPlayer.ts`）不分桌面和在线。在线页面里流的清单和字节由父页随流平面一起推给舞台，舞台不自己取。
 
-一个要先知道的事实：**线上现在没有能切分的节点**（渲染主机没部署，0.7.17 桌面版连不上云端）。在它们出现之前，浏览器节点连快照任务都收不到，轨道流任务同样收不到。
+## 七处（都已做）
 
-## 还差的七处（全部未做）
-
-### 一、切分：单卡流多出一份给浏览器的
+### 一、切分：单卡流多出一份给浏览器的（已做）
 
 `server/render-node/split.mjs` 的流任务那一段。条件照快照那一套（`browserEligible`），另外只给单卡流（组流不给，组流要把几张卡连同摆放一起画，浏览器这条路画不了）。浏览器那一份：
 
-- 结果键 = 流的内容键 × 浏览器指纹；`requires.envFingerprint` 是浏览器指纹；`requires.transcode` 为假；仍要求 `capabilities.streams`。
+- 结果键 = 流的内容键 × 浏览器指纹（用户卡、素材效果卡用页面的 `cardEnvFingerprint`）；`requires.envFingerprint` 同它；`requires.transcode` 为假；仍要求 `capabilities.streams`。
 - `input` 里带页面要的东西：`dual`、`compositing`、`bake`（同快照那一份），再加 `stream`：`{ kind: 'card', plane: 'local', clipIds, fps, bound, offset, firstFrame, count, total }`。页面不自己算这些。
-- 调用方（`local-node.mjs`）要把 `planStreams` 算出的每条流连同成员卡的信息传进来，现在只传了流键和分段范围。
+- 流标了 `browserOnly` 时不出切分方自己的那一份（清单计划用）。浏览器指纹与切分方指纹相同时不另出。
+- 调用方：只传流键和分段范围的那一处在 `server/frame-pipeline.mjs` 的 `planForQueue`（不是 `local-node.mjs`）。现在每条流经 `server/frame-stream.mjs` 的 `queueStreamOf` 连同形状交给切分；清单计划的流由 `planForQueue` 给的 `browserStreamsFor`（`listStreamSpecs`）按清单里的片段算，`local-node.mjs` 的 `listPlanOverrides` 给它们标上 `browserOnly`。
 
-### 二、节点侧过滤：流任务不再一律要求转码
+### 二、节点侧过滤：流任务不再一律要求转码（已做）
 
-`server/render-node/filter.mjs` 规则 2 现在写的是「流任务或者要求转码的任务，节点必须能转码」。改成只看任务自己写的 `requires.transcode`。桌面的流任务本来就写了 `transcode: true`，行为不变。队列（文档服务）用的是同一个文件，**要重新部署文档服务才对浏览器生效**。
+`server/render-node/filter.mjs` 规则 2 改成只看任务自己写的 `requires.transcode`。桌面的流任务本来就写了 `transcode: true`，行为不变。另在规则 7 加了浏览器流任务的形状闸：纯浏览器只收 `input.stream` 是单卡流、带 `input.bake`、独立卡、不是画布卡的流任务。
 
-### 三、舞台：生成一帧时顺带交出像素
+过滤只在节点一侧跑：`server/render-queue/queue.mjs` 不引 `filter.mjs`，**文档服务不用为这一处重新部署**。要重新部署的是在线编辑器（页面包里带着 `filter.mjs`）和切分方（桌面应用、渲染主机）。
 
-`src/render/stageRpc.ts` 的 `BakeFrameRequest` 加一项「要像素」，带一个矩形（平面坐标，就是流的 `bound`）。`src/StageView.tsx` 的 `bakeFrame` 在生成快照之后，照 `src/render/bakeSmall.ts` 的办法（把快照包进 SVG 画上画布，要内嵌页面的样式表），按原尺寸、平移到矩形左上角画出来，把位图随事件交给父页。`bakeSmall.ts` 已经验证过这条路和桌面截图只差不到 1% 的像素。
+### 三、舞台：生成一帧时顺带交出像素（已做）
 
-### 四、浏览器节点：认领并执行流任务
+`src/render/stageRpc.ts` 的 `BakeFrameRequest` 加了 `pixels: { rect }`（平面坐标，就是流的 `bound`）和 `html`（只要像素的调用方不收 HTML 字节）。`src/StageView.tsx` 的 `bakeFrame` 在生成快照之后，照 `src/render/bakeSmall.ts` 的办法按原尺寸把矩形画成位图（`ImageBitmap`），随 `bake-frame` 事件转移给父页；画不出来回 `pixels-failed`。
 
-- `src/online/browserNode.ts`：能力位 `streams` 改成由宿主报（`probeStreamEncoder` 说能压才报真）；`render` 里放行 `kind: 'stream'`，交给宿主的新方法。
-- `src/editor/browserNodeHost.ts`：新方法做这几件事——按任务的 `input.bake` 建隔离单卡工程；任务范围里每个分段 15 帧，全局帧号减去 `firstFrame` 得本地帧，不在卡的范围里的帧送全透明；每帧向舞台要像素，送进 `openStreamEncoder`；每段出来后算哈希，把开头文件和分段推到素材服务的像素那一类；全部做完往内容库写一份流清单（`render-manifest`，键是 `<结果键>:<起>-<止>`），再报完成。让路、中止、丢认领照快照任务的规矩。
+父页对跨源舞台的事件只留认得的字段，所以**父页的消息守卫 `src/online/stageMessageGuard.ts` 也要放行**：`bake-frame` 事件里的位图要真是 `ImageBitmap`、大小与矩形一致、矩形为整数且不超过 8192。
 
-清单的形状必须和桌面产的一样，桌面才能把浏览器产的流拉回去用（`server/artifact-transfer.mjs` 的 `collectStreamResult` 是样板）：
+### 四、浏览器节点：认领并执行流任务（已做）
+
+- `src/online/browserNode.ts`：能力位 `streams` 由宿主报（`probeStreamEncoder` 说能压才报真）；`render` 里放行 `kind: 'stream'`，交给宿主的新方法。
+- `src/editor/browserNodeHost.ts`：按任务的 `input.bake` 建隔离单卡工程；任务范围里每个分段 15 帧，全局帧号减去 `firstFrame` 得本地帧，不在卡的范围里的帧送全透明；每帧向舞台要像素，送进 `openStreamEncoder`；每段出来后算哈希，把开头文件和分段推到素材服务的像素那一类；全部做完往内容库写一份流清单（`render-manifest`，键是 `<结果键>:<起>-<止>`），再报完成。让路、中止、丢认领照快照任务的规矩；让路时已经满了的分段留着，重新认领只补缺的。
+
+清单的形状和桌面产的一样，桌面能把浏览器产的流拉回去落盘（`server/artifact-transfer.mjs` 的 `collectStreamResult` 是样板，这一处不用改）：
 
 ```
 { v: 1, kind: 'stream', resultKey, range: { from, to },
@@ -57,36 +63,58 @@
   segments: { <分段号>: { hash, bytes, init, stride: 1, samples, sig: null, encoder } } }
 ```
 
-浏览器只产满密度的分段（`stride: 1`），矩形固定用 `bound`，不做「先稀疏、再收紧」那两步。`encoder` 写一个新名字（例如 `webcodecs-avc`），让人看得出是浏览器压的。
+浏览器只产满密度的分段（`stride: 1`），矩形固定用 `bound`，不做「先稀疏、再收紧」那两步。`encoder` 写 `webcodecs-avc`。
 
-### 五、层表：把流写进去
+### 五、层表：把流写进去（已做）
 
-`server/artifact-transfer.mjs` 生成层表的地方加一张 `streams` 表：每条流一行，带顶层卡的 id、成员、内容键、候选（指纹和结果键）、分段范围、每个任务几段。旧页面只读 `layers`，不认识的字段会忽略，所以不用升版本号。
+`server/artifact-transfer.mjs` 的 `layerMapOf` 多一张 `streams` 表（`layerStreamsOf`），每条流一行：
 
-### 六、在线页面：读流清单，发给舞台
+```
+{ topClipId, clipIds, kind: 'card' | 'group', plane: 'local' | 'stage', contentKey,
+  candidates: [{ envFingerprint, resultKey }], firstSegment, lastSegment, segmentsPerTask, inputSig? }
+```
 
-`src/render/snapshotSource.ts` 的 `OnlineSnapshotSource`：读层表里的 `streams`，按播放头附近的范围去内容库取流清单，把已有的分段号合成就绪区间，照现有的就绪消息（`kind: 'stream'`）交给订阅方。这样 `snapshotFeed.ts` 不用改。
+- 候选照快照层的做法：切分实际出键的指纹在前（按发布顺序，`splitStreamCandidatesOf` 收集，记在管线的切分候选记录里，键带 `stream:` 前缀），再补上这条流自己的指纹。
+- `inputSig` 是流的输入签名（`src/render/streamInputSig.mjs`）：比快照层的签名多算了片段在时间轴上的位置（流按全局帧号分段）；组流另算成员的摆放和上下顺序。页面按当前项目算同一个签名，对不上就不播。
+- 旧页面只读 `layers`，不认识的字段会忽略，所以没升版本号（仍是 3）。没有流时不带 `streams` 这一项，层表与以前逐字相同。
+- **哪些流进表**（`server/frame-pipeline.mjs` 的 `layerMapStreamOptions`，写层表的两处都经它）：一是切分方自己这一版要产的流（与生产者同一份流计划；没有生产者或关着流开关时没有这一部分）；二是切分给别的指纹出过键、切分方自己不产的单卡流（`issuedStreamSpecs`：按切分候选记录认，清单计划给浏览器出的那一份就在这里）。第二部分的候选只列实际出键的指纹，不补切分方自己的。
 
-### 七、舞台：在线模式下从素材服务取流的字节
+### 六、在线页面：读流清单，发给舞台（已做）
 
-`src/render/streamPlayer.ts` 已经有可替换的字节来源接口（`StreamSource`）。加一个在线的实现：清单由父页随流平面一起发给舞台，开头文件和分段按哈希从素材服务取。舞台现在怎么带票据取素材还要再看一眼（`src/StageView.tsx` 里 `setMediaPolicy` 那一段），两个办法二选一：舞台自己带票据取，或者父页取了传给舞台。
+`src/render/snapshotSource.ts` 的 `OnlineSnapshotSource`（只在普通档；低内存档照旧不消费流）：读层表里的 `streams`，按播放头附近的范围（往回 1 段、往前 2 秒）去内容库取流清单，把清单里的开头文件和分段按哈希从素材服务取到本页内存（上限 64 MiB），**字节到了本页的分段才算就绪**，合成区间后照现有的就绪消息（`kind: 'stream'`）交给订阅方。`snapshotFeed.ts` 没有改。候选的认定同快照层：`task.done` 认定活着的优先，被作废的不用，都没认定取第一个。输入签名对不上的流马上撤掉。
+
+### 七、舞台：流的字节由父页取了传给舞台（已做）
+
+定的是**父页取了传给舞台**，不是舞台自己带票据取。理由：隔离的跨源舞台读素材只有自己源上的 `/media-s/<会话号>/media/<哈希>`，像素那一类不在放行的路径里；收到过票据的舞台文档永久不执行用户卡与素材效果卡，让舞台带票据取流等于关掉在线执行；父页本来就有层表、清单、候选、票据续签这条路。
+
+做法（`src/render/streamPlayer.ts`）：流平面的请求多两个可选项 `manifest`、`blocks`，借现有的 `setStreamPlanes` 发；父页一侧 `StreamPlaneSender` 一台舞台一本账，块只带这台舞台还没有的；舞台一侧 `PushedStreamSource` 只从推来的块里取字节。桌面的流平面不带清单，行为不变。
 
 ## 语义文档要跟着改的
 
-- `product/platforms.md`：「在线浏览器……没有轨道流」「认领自己做得了的快照任务，产 HTML 快照」两处。
-- `mechanism/rendering.md`：「在线浏览器没有轨道流：重层每拍换一次 HTML 快照……」那一段。有流的层走流，没流的层才照原来每拍换快照。
-- 渲染节点能力表里浏览器那一行加上「单卡轨道流」。
+合入 `main` 时由主会话改（改前改后的文字在 `render-refactor-task.md` 的语义表，第 1～6 行）：
 
-## 怎么验
+- `product/platforms.md`：「在线浏览器……没有轨道流」「认领自己做得了的快照任务，产 HTML 快照」两处；渲染节点能力表里浏览器那一行加上「单卡轨道流」。
+- `mechanism/rendering.md`：「在线浏览器没有轨道流：重层每拍换一次 HTML 快照……」那一段。有流的层走流，没流的层才照原来每拍换快照。建议在「旧输入的层不贴」里补一句流的签名多算了时间位置。
 
-- 每一处配单测（切分、过滤、清单形状、在线来源的就绪区间）。
-- 端到端探针：起文档服务、素材服务、一个桌面预渲染进程当切分方、一个在线页面当浏览器节点，确认浏览器认领了流任务、内容库里有流清单、另一个在线页面播放时舞台上是流在画（不是快照在换）；再让桌面把这条流拉回去，确认桌面能播。可以照现有的浏览器节点验收探针（`scripts/probes/m7-*`）搭。
+## 怎么验的
+
+- 单测：切分与过滤（`server/test/browser-stream-split.test.mjs`）、清单形状与桌面拉回（`server/test/browser-stream-manifest.test.mjs`）、帧号换算与让路（`src/online/browserStream.test.mjs`）、层表的流（`server/test/layer-map-streams.test.mjs`，含清单计划的流进层表、切分方不产流时照列、没有流时层表逐字相同）、流的输入签名、在线来源的就绪区间、父页推块（`src/render/streamInputSig.test.mjs`、`onlineStreams.test.mjs`、`streamPush.test.mjs`）。
+- 端到端探针三支，都在本机：
+  - `scripts/probes/browser-stream-node-probe.mjs`：产这一半。桌面预渲染进程只切分，在线构建的页面当浏览器节点；浏览器产的流与 ffmpeg 产的参照流逐帧比；桌面把流拉回去落盘。
+  - `scripts/probes/online-stream-play-probe.mjs`：播这一半。预渲染管线自己产流、自己推，在线页面播；含缺块、组流。页面用的是在线模式的开发服务。
+  - `scripts/probes/browser-stream-e2e-probe.mjs`：整条链。桌面预渲染进程只切分，在线构建的页面甲产流，另一个浏览器里的页面乙播；跑两轮（切分方关着、开着流开关）。断言见探针文件头。
+- 在线构建的开始页现在只有账号入口，等 `[data-pc="join-form"]` 的旧探针都进不了项目。进项目改走「刷新后回到项目」那条产品路径，共用 `scripts/probes/lib/online-resume-entry.mjs`；`m7-browser-probe.mjs`、`m7-node-probe.mjs`、`online-stale-layer-probe.mjs` 已换。
 - 基线：类型检查、全量测试（要带 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT` 和 `PROMPTCUT_PASSWORD_ORDER_MODULE` 两个环境变量）。
 
 ## 合入之后还要做的
 
-- 文档服务、素材服务、在线编辑器都要重新部署才生效。
-- 线上要有一个能切分的节点（桌面应用或渲染主机）。
+- **在线编辑器、切分方（桌面应用、渲染主机）要重新部署才生效。** 文档服务与素材服务的代码这次没有改；跟着 0.7.18 一起部署即可，不是这件事的前提。
+- **线上要有一个能切分的节点**（桌面应用或渲染主机）。在它出现之前浏览器节点收不到任何细任务；那种情形由「甲二」（本页自己产流）接住。
+- **桌面把浏览器产的流拉回去以后，自己的舞台不会播它**：桌面按自己的指纹给流出键，浏览器产的流落进桌面流库以后不属于桌面的任何一版。要让桌面的流计划照队列的锁换键，留给「甲二」。
+- **桌面和渲染主机替在线页面的清单计划产流**（切分方自己的那一份）：留给「甲三」。那时层表里这些流的候选会多出切分方的指纹，现有写法（照切分候选记录列）不用改。
+- **后进来的页面拿不到快照层的活候选**（这次端到端查出，快照那一半原有的行为，不是流引入的）：层表里快照层的候选是「切分方自己的在前、浏览器的在后」，哪一份活着靠页面收到的 `task.done` 与 `superseded` 认定；任务做完之后才打开的页面两样都没收到，取第一个，也就是切分方那一份。切分方没产（只切分，或它那一份被作废了）时，这个页面这张卡就没有快照：流照播，但每次起播的头 500 毫秒舞台给这一层盖「等快照」的沙漏，流缺段时也没有快照可退。`m7-contract.md` 的 D12 写的是「按 `task.done` 与清单认定」，按清单认定的那一半没有实现。待定怎么补（例如选中的候选取不到清单、别的候选取得到时改认后者）。
+- **在线页面按拍换快照的预算还把海报层算进去**（`snapshotFeed.ts` 的 `applyBeatBudget`）：流覆盖着的层 15 帧才换一次快照，却每拍占一份换帧成本。不比原来差，有流之后可以更好。
+- 流的字节在页面里只放内存，刷新之后要重取。
 
 ## 没有覆盖的
 
