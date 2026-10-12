@@ -7,6 +7,7 @@
  *
  *   HR23  隔离工作进程的编排（状态机）：一次只做一个项目；60 s 没有它能做的任务就结束；几个项目都在等时轮流、每个最多 5 分钟一换；
  *         换项目之前清空；起不来、什么都没认领到的不反复重来；检出副本与数据目录的建与清（只清带记号的目录、Windows 上不建链接）
+ *         清空清到一半失败（某一项删不掉）：记号还在、再调一次能清完、没有记号的非空目录照旧不清（`wipeDir` 先清记号以外的每一项，记号最后才动）
  *   HR28  页面请求闸（纯函数）：浏览器发来的请求——编辑器的 Vite 一律拒；预渲染的 Vite 只认同源，`/api/**` 只放行表里的几条；
  *         Node 一侧的调用（不带 `Sec-Fetch-Site` / `Origin`）照旧放行
  */
@@ -268,6 +269,56 @@ test('HR23 检出副本与数据目录：只拷源码、不拷依赖与数据；
   // 副本不能就是发布目录或它的上级
   assert.throws(() => prepareCheckout({ root, dest: root }), (err) => err.code === 'iso-bad-checkout');
   assert.throws(() => prepareCheckout({ root, dest: tmp }), (err) => err.code === 'iso-bad-checkout');
+});
+
+test('HR23 清空清到一半失败（某一项被还没死透的进程占着删不掉）：记号还在，再调一次能清完，清完记号还在；没有记号的非空目录照旧不清', (t) => {
+  // 复盘：Windows 上子进程（Chrome）还握着 tmp / vite-cache 里的文件时，rmSync 抛 EPERM。原来整目录一起删，记号（点开头，排第一）先没了，
+  // 管理进程的重试（wipeIso）看到「非空、没有记号」就抛 iso-not-ours 不再重试，之后每一轮 prepare 都起不来。记号要最后才动。
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-iso-wipe-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const dir = path.join(tmp, 'iso');
+  wipeDir(dir);
+  fs.mkdirSync(path.join(dir, 'tmp'));
+  fs.writeFileSync(path.join(dir, 'tmp', 'a.txt'), 'a');
+  fs.mkdirSync(path.join(dir, 'vite-cache'));
+  fs.writeFileSync(path.join(dir, 'vite-cache', 'b.txt'), 'b');
+  fs.mkdirSync(path.join(dir, 'stuck'));
+  fs.writeFileSync(path.join(dir, 'stuck', 'held.bin'), 'held');
+
+  // 模拟：名叫 stuck 的那一项删不掉（别的照常删）
+  const realRm = fs.rmSync;
+  let attempts = 0;
+  fs.rmSync = (target, ...rest) => {
+    if (path.basename(String(target)) === 'stuck') { attempts += 1; throw Object.assign(new Error('EPERM, Permission denied (模拟被占着)'), { code: 'EPERM' }); }
+    return realRm(target, ...rest);
+  };
+  try {
+    assert.throws(() => wipeDir(dir), (err) => err.code === 'EPERM');
+    assert.throws(() => wipeDir(dir), (err) => err.code === 'EPERM', '第二次也是 EPERM，不是 iso-not-ours');
+    assert.ok(attempts >= 2);
+    assert.ok(fs.readdirSync(dir).includes(ISO_MARKER), '清到一半失败，记号还在');
+    assert.equal(fs.existsSync(path.join(dir, 'stuck')), true);
+  } finally {
+    fs.rmSync = realRm;
+  }
+  // 占着的东西放手了：再调一次能清完，清完记号还在
+  wipeDir(dir);
+  assert.deepEqual(fs.readdirSync(dir), [ISO_MARKER]);
+  assert.equal(leftoverCount(dir), 0);
+
+  // 原有的安全性不丢：非空又没有记号的目录不清（包括「记号被人删了、里面还有东西」的目录）
+  const foreign = path.join(tmp, 'not-ours');
+  fs.mkdirSync(foreign);
+  fs.writeFileSync(path.join(foreign, 'precious.txt'), 'keep');
+  assert.throws(() => wipeDir(foreign), (err) => err.code === 'iso-not-ours');
+  assert.equal(fs.readFileSync(path.join(foreign, 'precious.txt'), 'utf8'), 'keep');
+  // 空目录、不存在的目录：照旧建出来并放记号
+  const empty = path.join(tmp, 'empty');
+  fs.mkdirSync(empty);
+  wipeDir(empty);
+  assert.deepEqual(fs.readdirSync(empty), [ISO_MARKER]);
+  wipeDir(path.join(tmp, 'brand-new'));
+  assert.deepEqual(fs.readdirSync(path.join(tmp, 'brand-new')), [ISO_MARKER]);
 });
 
 /* ------------------------------------------------------------------ HR28 */
