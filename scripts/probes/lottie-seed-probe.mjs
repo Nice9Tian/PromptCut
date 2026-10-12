@@ -1,15 +1,15 @@
 /**
  * 探针:Lottie「覆盖随机数种子」——直接跳到第 N 帧和从头顺着推到第 N 帧,画面相同不相同。
  * 出处:`docs/plan/render-refactor-task.md`「癸:Lottie 改成 remotion 式」的「要留意的一处」;用户 2026-10-12:「我觉得可以覆盖随机数种子。」
- * 原型在 `src/cards/native/lottie.tsx`(`loadLottie`,开关缺省关)和 `src/kernel/pinEntropy.ts`(`withSeededRandom`)。
+ * 原型在 `src/cards/native/lottie.tsx`(`loadLottie`,两个开关缺省都关)和 `src/kernel/pinEntropy.ts`(`withSeededRandom`)。
  *
  *   node scripts/probes/lottie-seed-probe.mjs [--port 5750] [--assets fixture,adrock,bodymovin,gatin,happy2016,navidad]
- *        [--out <目录>]    存结果 result.json,以及对不上的那几帧的 SVG 文本
+ *        [--out <目录>]       存结果 result.json,以及对不上的那几帧的 SVG 文本(缺省放系统临时目录)
  *        [--before 7e7ae968]  「开关关着和改之前一样」拿哪个提交的 lottie.tsx 当改之前
- *        [--skip-sweep]    不跑「全长逐帧,开和关比」那一项(最慢)
+ *        [--skip-sweep]       不跑「全长逐帧,开和关比」那一项(最慢)
  *
- * 做法:起一个只服务本探针的 vite(根是本工作区,不读项目的 vite 配置),真 Chrome 里装上和产品一样的随机数钉子
- * (`installPinnedEntropy`),用卡片自己的 `loadLottie` 建实例。每份画面比三样:
+ * 做法:起一个只服务本探针的 vite(根是本工作区,不读项目的 vite 配置,只占 --port 这一个端口),真 Chrome 里装上和产品一样的
+ * 随机数钉子(`installPinnedEntropy`),用卡片自己的 `loadLottie` 建实例。每份画面比三样:
  *   原文      SVG 序列化后的文本,只把播放库按全页计数器发的节点 id(`__lottie_element_N`)按出现顺序重新编号。
  *             它连**看不见的图层**上留着的旧属性也比:播放库藏起一个图层只是加 `display: none`,上次显示时的位置、透明度原样留着,
  *             从没显示过的图层则什么属性都没有。所以原文相同不相同和推帧路径有关,这一项只报告。
@@ -21,22 +21,28 @@
  * 素材:`fixture` 是 `scripts/probes/fixtures/lottie-seed/expr-layers.json`——手写的测试 Lottie,图层入点 0、10、20、25、30、40,
  * 分别用 random()、只有 wiggle()、seedRandom()+random() 驱动位置、透明度、旋转、缩放,其中两层在嵌套合成里;其余是自带的 5 个。
  *
- * 每个素材、开关关着和开着各做一遍,每个 N 取这几份画面:
- *   顺推          新开页面,建一份,从第 0 帧一帧一帧推到第 N 帧
- *   回跳          同一份实例推完全长后,回到第 0 帧再直接跳到第 N 帧
- *   同页新建      同一个页面里再建一份,直接跳到第 N 帧
- *   新页新建      新开页面,建一份,直接跳到第 N 帧
- *   别的卡在前    新开页面,先调 13 次 Math.random,再建一份直接跳(只取 3 个 N)
+ * 三种开法各做一遍:「关」两个开关都关(现状);「种子」只开覆盖随机数种子;「种子+不留旧数」两个都开。每个 N 取这几份画面:
+ *   顺推              新开页面,建一份,从第 0 帧一帧一帧推到第 N 帧
+ *   回跳              同一份实例推完全长后,回到第 0 帧再直接跳到第 N 帧
+ *   同页新建          同一个页面里再建一份,直接跳到第 N 帧
+ *   新页新建          新开页面,建一份,直接跳到第 N 帧
+ *   别的卡在前        新开页面,先调 13 次 Math.random,再建一份直接跳(只取 3 个 N)
  *   别的 Lottie 在前  新开页面,先建一份带随机表达式的 Lottie 推几帧,再建一份直接跳(只取 3 个 N)
- *   连建两次      同一个页面里连建两份,都直接跳到同一帧(只取 1 个 N)
+ *   连建两次          同一个页面里连建两份,都直接跳到同一帧(只取 1 个 N)
  * 另外:
- *   全长逐帧      开和关各顺推全长,逐帧比,列出变了的帧(只报告)
- *   全页那一串    建一份 Lottie 并推几帧之后,页面里下一个 Math.random 是第几个(关着:被吃掉几个;开着:应为 0 个)
+ *   全长逐帧      「种子」「种子+不留旧数」各顺推全长,和「关」逐帧比,列出变了的帧,取最多 3 帧数不同的像素
+ *   全页那一串    建一份 Lottie 并推几帧之后,全页共用的那一串随机数被它吃掉几个
+ *   和现在的直接跳比  不带随机表达式的素材,「种子+不留旧数」的画面是不是就是「关」下新页新建直接跳的那一份(只报告)
  *   图层          建好后是不是所有图层(含嵌套合成里的)都已经建了
- *   真卡片        用 React 挂真的 LottieView:开着时和上面「新页新建」的画面相同;关着时和 --before 那个提交的卡片逐帧相同
+ *   耗时          建一份、跳一帧各要多久(只记录)
+ *   为什么还差一点  happy2016 不带表达式,「关」和「种子」下顺推和直接跳仍差几十个像素:分别试清插值缓存、开开关二,看哪个管用(只报告)
+ *   真卡片        用 React 挂真的 LottieView:开着时和上面直接跳的那一份相同;关着时和 --before 那个提交的卡片逐帧原文相同
  *
- * 判定:开关**开着**时,同一个 N 的各份画面必须逐字节相同;「真卡片」两条必须成立;页面不许报错。不满足进 `fails`,退出码 1。
- * 开关**关着**时各份画面相同不相同只报告(那是现状),不算失败。耗时只记录。
+ * 判定(不满足进 `fails`,退出码 1):
+ *   - 「种子+不留旧数」:所有素材、所有 N 的各份画面相同;连建两次相同。
+ *   - 「种子」:fixture 所有 N 的各份画面相同;各素材连建两次相同;不带随机表达式的素材全长逐帧和「关」相同(种子不该动它们)。
+ *   - 开着种子时全页那一串被吃掉 0 个;建好后图层全建了;「真卡片」各条成立;页面没有报错和警告。
+ *   「关」下各份画面相同不相同是现状,只报告;自带素材在「种子」下顺推和直接跳相同不相同也只报告(差的那一点归开关二)。耗时只记录。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -63,6 +69,8 @@ const FIXTURE = path.join(ROOT, 'scripts', 'probes', 'fixtures', 'lottie-seed', 
 const BUNDLED = ['adrock', 'bodymovin', 'gatin', 'happy2016', 'navidad'];
 const ASSETS = arg('--assets', ['fixture', ...BUNDLED].join(',')).split(',').filter(Boolean);
 const FIXTURE_LAYERS = ['random-pos', 'wiggle-pos', 'seeded-opacity', 'wiggle-opacity', 'precomp', 'inner-wiggle', 'inner-random', 'plain-keyframes'];
+const MODES = ['off', 'seed', 'both'];
+const MODE_NAME = { off: '关', seed: '种子', both: '种子+不留旧数' };
 const dataFile = (name) => (name === 'fixture' ? FIXTURE : path.join(CATALOG, `${name}.json`));
 
 // ── 页面里跑的那一半 ──
@@ -78,16 +86,16 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
   import React from 'react';
   import { createRoot } from 'react-dom/client';
   import { flushSync } from 'react-dom';
-  import lottie from 'lottie-web';
   import * as current from '/src/cards/native/lottie.tsx';
   import * as before from '/__lottie_before.tsx';
   import { waitForFrameWork } from '/src/kernel/frameReady.ts';
 
+  const MODES = { off: { seed: false, exact: false }, seed: { seed: true, exact: false }, both: { seed: true, exact: true } };
   const texts = new Map();
   const text = async (name) => { if (!texts.has(name)) texts.set(name, await (await fetch('/lottie-data/' + name + '.json')).text()); return texts.get(name); };
   const made = new Map(); let nextId = 1;
   const normalize = (s) => { const ids = new Map(); return s.replace(/__lottie_element_\d+/g, (m) => { if (!ids.has(m)) ids.set(m, 'E' + ids.size); return ids.get(m); }); };
-  /** 看得见的那部分:display:none 的节点只留壳(它和里面的东西都不画),属性按名字排序 */
+  /** 看得见的那部分:display:none 的节点只留壳(它和里面的东西都不画),没人引用的 <defs> 去掉,属性按名字排序 */
   const visible = (svg) => {
     const copy = svg.cloneNode(true);
     const walk = (el) => {
@@ -98,7 +106,7 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
       for (const child of [...el.children]) walk(child);
     };
     walk(copy);
-    // <defs> 里没人用的东西也去掉:图层的蒙版路径放在 <defs> 里,图层藏起来以后它不再更新,留着的是旧路径
+    // 图层的蒙版路径放在 <defs> 里,图层藏起来以后它不再更新,留着的是旧路径
     const refsOf = (el, into) => { for (const node of [el, ...el.querySelectorAll('*')]) for (const a of node.attributes) { for (const m of a.value.matchAll(/url\(["']?#([^)"']+)["']?\)/g)) into.add(m[1]); if (a.localName === 'href' && a.value.startsWith('#')) into.add(a.value.slice(1)); } };
     const byId = new Map(); for (const el of copy.querySelectorAll('[id]')) byId.set(el.getAttribute('id'), el);
     const used = new Set(); const pending = new Set();
@@ -111,33 +119,38 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
   const svgText = (root) => { const svg = root.querySelector('svg'); return svg ? { r: normalize(new XMLSerializer().serializeToString(svg)), v: visible(svg) } : { r: '', v: '' }; };
   const loaded = (anim) => anim.isLoaded ? Promise.resolve() : new Promise((resolve, reject) => { anim.addEventListener('DOMLoaded', resolve); anim.addEventListener('data_failed', () => reject(new Error('data_failed'))); });
   const countLayers = (renderer) => { let layers = 0, built = 0; const walk = (r) => { (r.layers || []).forEach((l, i) => { if (l.ty === 99) return; layers++; const e = r.elements && r.elements[i]; if (e && e !== true) { built++; if (l.ty === 0) walk(e); } }); }; walk(renderer); return { layers, built }; };
+  const median = (xs) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 
   const api = {
-    /** 建一份。mode: 'on' 开着、'off' 关着(都走卡片的 loadLottie) */
+    /** 建一份(走卡片的 loadLottie)。mode: 'off' | 'seed' | 'both' */
     async make(name, mode) {
       const data = JSON.parse(await text(name));
       const box = document.createElement('div'); box.className = 'box'; document.body.appendChild(box);
       const t0 = performance.now();
-      const handle = current.loadLottie(box, data, 'contain', mode === 'on');
+      const handle = current.loadLottie(box, data, 'contain', MODES[mode]);
       await loaded(handle.anim);
       const id = nextId++; made.set(id, { handle, box });
-      return { id, seed: handle.seed, buildMs: +(performance.now() - t0).toFixed(1), total: Math.max(1, (Number(data.op) || 0) - (Number(data.ip) || 0)), fr: Number(data.fr) || 30, ...countLayers(handle.anim.renderer) };
+      return { id, seed: handle.seed, exact: handle.exact, buildMs: +(performance.now() - t0).toFixed(1), ...countLayers(handle.anim.renderer) };
     },
     goTo(id, frame) { made.get(id).handle.goTo(frame); },
-    snap(id) { return svgText(made.get(id).box); },
     jump(id, frame) { const m = made.get(id); m.handle.goTo(frame); return svgText(m.box); },
-    /** 从 frames[0] 起依次推,picks 里的帧各留一份文本 */
+    /** 依次推 frames,picks 里的帧各留一份画面 */
     seq(id, frames, picks) { const m = made.get(id); const want = new Set(picks); const out = {}; for (const f of frames) { m.handle.goTo(f); if (want.has(f)) out[f] = svgText(m.box); } return out; },
-    /** 依次推,每帧只回散列(全长逐帧用) */
+    /** 依次推,每帧只回「看得见的」的散列(全长逐帧用) */
     async seqHashes(id, frames) { const m = made.get(id); const out = []; for (const f of frames) { m.handle.goTo(f); const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(svgText(m.box).v)); out.push([...new Uint8Array(buf)].slice(0, 12).map((x) => x.toString(16).padStart(2, '0')).join('')); } return out; },
+    /** 跳一帧的同步耗时:顺推全长 3 遍,取每帧毫秒数的中位数 */
+    timeSeq(id, frames) { const m = made.get(id); const runs = []; for (let r = 0; r < 3; r++) { m.handle.goTo(frames[frames.length - 1]); const t0 = performance.now(); for (const f of frames) m.handle.goTo(f); runs.push((performance.now() - t0) / frames.length); } return +median(runs).toFixed(4); },
     hide(id) { made.get(id).box.style.display = 'none'; },
     destroy(id) { const m = made.get(id); m.handle.anim.destroy(); m.box.remove(); made.delete(id); },
+    /** 别的卡:调 n 次 Math.random */
+    burn(n) { let last = 0; for (let i = 0; i < n; i++) last = Math.random(); return last; },
+    /** 页面里接下来的 n 个 Math.random */
+    peek(n) { return Array.from({ length: n }, () => Math.random()); },
     /**
-     * 实验用(不是原型的一部分):找出这份实例里所有带关键帧的属性,按要求动两处播放库内部的东西——
-     *   exact  把「新值和旧值差不到 0.00001 就不更新」换成「不相等就更新」(播放库 setVValue 里的门槛)
-     *   cold   之后每次 seqCold 跳帧前,把各属性的插值缓存清回刚建好的样子
+     * 实验用(不是原型的一部分):找出这份实例里所有带关键帧的属性;之后 seqCold 每次跳帧前把它们的插值缓存清回刚建好的样子。
+     * 用来回答「顺推和直接跳差的那一点是不是插值缓存引起的」。
      */
-    tune(id, exact) {
+    findKeyframed(id) {
       const m = made.get(id); const seen = new Set(); const props = []; const stack = [m.handle.anim.renderer.elements];
       while (stack.length) {
         const o = stack.pop();
@@ -146,13 +159,7 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
         if (o._caching && typeof o._caching === 'object' && 'lastFrame' in o._caching) props.push(o);
         for (const k of Object.keys(o)) { if (k === 'data' || k === 'layers' || k === 'keyframes' || k === 'globalData' || k === 'comp') continue; const v = o[k]; if (v && typeof v === 'object') stack.push(v); }
       }
-      let patched = 0;
-      if (exact) for (const p of props) if (typeof p.setVValue === 'function') {
-        p.setVValue = function (val) { if (this.propType === 'unidimensional') { const x = val * this.mult; if (this.v !== x) { this.v = x; this._mdf = true; } } else { for (let i = 0; i < this.v.length; i++) { const x = val[i] * this.mult; if (this.v[i] !== x) { this.v[i] = x; this._mdf = true; } } } };
-        patched++;
-      }
-      m.props = props;
-      return { props: props.length, patched };
+      m.props = props; return props.length;
     },
     seqCold(id, frames, picks) {
       const m = made.get(id); const want = new Set(picks); const out = {};
@@ -162,10 +169,6 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
       }
       return out;
     },
-    /** 别的卡:调 n 次 Math.random */
-    burn(n) { let last = 0; for (let i = 0; i < n; i++) last = Math.random(); return last; },
-    /** 页面里接下来的 n 个 Math.random */
-    peek(n) { return Array.from({ length: n }, () => Math.random()); },
     /** 把两份 SVG 文本各变成像素,数不同的像素 */
     async pixelDiff(a, b) {
       const W = 1920, H = 1080; const canvas = new OffscreenCanvas(W, H); const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -185,14 +188,14 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
     },
     async cardFrame(t) {
       flushSync(() => api.root.render(React.createElement(React.Fragment, null, api.pre ? React.createElement(api.pre, { key: 'other' }) : null, React.createElement(api.Card, { ...api.params, t, key: 'card' }))));
-      await waitForFrameWork();
-      await new Promise((resolve) => setTimeout(resolve, 0)); // 播放库的 DOMLoaded 是 setTimeout(0) 发的
+      // 走 src 的要等取数;播放库的 DOMLoaded 是 setTimeout(0) 发的,卡片在那以后才交「这一帧好了」
+      await new Promise((resolve) => setTimeout(resolve, 0));
       await waitForFrameWork();
       return svgText(document.getElementById('card'));
     },
-    seedEnabled: () => current.lottieSeedEnabled(),
+    switches: () => ({ seed: current.lottieSeedEnabled(), exact: current.lottieExactEnabled() }),
   };
-  window.api = api; window.lottie = lottie; window.ready = true;
+  window.api = api; window.ready = true;
 </script>`;
 
 const beforeSource = execFileSync('git', ['show', `${BEFORE}:src/cards/native/lottie.tsx`], { cwd: ROOT, encoding: 'utf8', windowsHide: true, maxBuffer: 16 << 20 });
@@ -215,15 +218,14 @@ const plugin = {
 };
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
-/** 两份 SVG 文本哪里不同:第一处的位置和上下文;fixture 再按图层名归到层上 */
+/** 两份文本哪里不同:第一处的位置和上下文;fixture 再按图层名归到层上 */
 function describeDiff(a, b, layerNames) {
   let i = 0; const n = Math.min(a.length, b.length);
   while (i < n && a[i] === b[i]) i++;
   const from = Math.max(0, i - 50);
-  const out = { at: i, lenA: a.length, lenB: b.length, a: a.slice(from, i + 70), b: b.slice(from, i + 70) };
+  const out = { at: i, a: a.slice(from, i + 70), b: b.slice(from, i + 70) };
   if (layerNames) {
-    const tags = (s) => s.split('<');
-    const ta = tags(a), tb = tags(b); const layers = new Set(); let cur = '(根)';
+    const ta = a.split('<'), tb = b.split('<'); const layers = new Set(); let cur = '(根)';
     for (let k = 0; k < Math.max(ta.length, tb.length); k++) {
       const m = /^g[^>]*\bid="([^"]+)"/.exec(ta[k] ?? '');
       if (m && layerNames.includes(m[1])) cur = m[1];
@@ -232,6 +234,12 @@ function describeDiff(a, b, layerNames) {
     out.layers = [...layers];
   }
   return out;
+}
+/** 素材里的表达式:一共几个,其中用到随机(random、wiggle)的几个 */
+function expressionsOf(data) {
+  let all = 0, random = 0;
+  const walk = (o) => { if (Array.isArray(o)) { o.forEach(walk); return; } if (o && typeof o === 'object') { if (typeof o.x === 'string' && typeof o.ty !== 'string') { all++; if (/random|wiggle/i.test(o.x)) random++; } for (const k in o) walk(o[k]); } };
+  walk(data); return { all, random };
 }
 
 const report = { when: new Date().toISOString(), host: { cpu: os.cpus()[0]?.model?.trim(), logicalCores: os.cpus().length }, before: BEFORE, out: OUT, assets: {}, card: {}, pageErrors: [], fails: [] };
@@ -269,6 +277,7 @@ try {
   await refPage.close();
   const drawsBefore = (next) => reference.indexOf(next);
   const tool = await open(); // 只用来把 SVG 文本变成像素
+  const pixelDiff = (a, b) => call(tool, 'pixelDiff', a, b);
 
   for (const name of ASSETS) {
     const data = JSON.parse(fs.readFileSync(dataFile(name), 'utf8'));
@@ -278,25 +287,29 @@ try {
       : [...new Set([0, 1, Math.floor(total * 0.13), Math.floor(total * 0.31), Math.floor(total / 2), Math.floor(total * 0.69), total - 2, total - 1])].filter((f) => f >= 0 && f < total);
     const maxPick = Math.max(...picks);
     const frames = []; for (let f = 0; f <= Math.floor(maxPick); f++) { frames.push(f); for (const p of picks) if (!Number.isInteger(p) && Math.floor(p) === f) frames.push(p); }
+    const all = Array.from({ length: total }, (_, i) => i);
     const few = [picks[1], picks[Math.floor(picks.length / 2)], picks[picks.length - 1]];
     const layerNames = name === 'fixture' ? FIXTURE_LAYERS : null;
-    const entry = { total, fr: Number(data.fr) || 30, picks, modes: {} };
+    const expressions = expressionsOf(data);
+    const entry = { total, fr: Number(data.fr) || 30, picks, expressions, modes: {} };
     report.assets[name] = entry;
+    console.log(`── ${name}:${total} 帧;表达式 ${expressions.all} 个,其中用到随机的 ${expressions.random} 个;取 N = ${picks.join(',')}`);
 
-    for (const mode of ['off', 'on']) {
+    for (const mode of MODES) {
       const started = Date.now();
-      const shots = {}; // 画面名 → { N: 文本 }
-      // 顺推、回跳、同页新建、连建两次
+      const shots = {}; // 画面名 → { N: { r, v } }
       // 全页那一串被吃掉几个:单开一页数,不搅进下面的比较
       const p0 = await open();
       const before0 = drawsBefore((await call(p0, 'peek', 1))[0]);
       const counted = await call(p0, 'make', name, mode); await call(p0, 'seq', counted.id, frames, []);
       const afterSeq = drawsBefore((await call(p0, 'peek', 1))[0]);
+      const frameMs = await call(p0, 'timeSeq', counted.id, all);
       await p0.close();
+      // 顺推、回跳、同页新建、连建两次
       const p1 = await open();
       const first = await call(p1, 'make', name, mode);
       shots['顺推'] = await call(p1, 'seq', first.id, frames, picks);
-      await call(p1, 'seq', first.id, Array.from({ length: total }, (_, i) => i), []);
+      await call(p1, 'seq', first.id, all, []);
       shots['回跳'] = {};
       for (const n of picks) { await call(p1, 'goTo', first.id, 0); shots['回跳'][n] = await call(p1, 'jump', first.id, n); }
       await call(p1, 'hide', first.id);
@@ -304,7 +317,7 @@ try {
       for (const n of picks) { const m = await call(p1, 'make', name, mode); shots['同页新建'][n] = await call(p1, 'jump', m.id, n); await call(p1, 'destroy', m.id); }
       const twiceN = few[1];
       const twice = [];
-      for (let k = 0; k < 2; k++) { const m = await call(p1, 'make', name, mode); twice.push({ id: m.id, text: await call(p1, 'jump', m.id, twiceN) }); await call(p1, 'hide', m.id); }
+      for (let k = 0; k < 2; k++) { const m = await call(p1, 'make', name, mode); twice.push(await call(p1, 'jump', m.id, twiceN)); await call(p1, 'hide', m.id); }
       await p1.close();
       // 新页新建
       shots['新页新建'] = {};
@@ -323,11 +336,11 @@ try {
       const perN = {}; const kinds = Object.keys(shots).filter((k) => k !== '顺推');
       const tally = { rawSame: 0, same: 0 };
       for (const n of picks) {
-        const base = shots['顺推'][n]; const row = { hash: sha(base.v), rawSame: true, same: true, differ: {} };
+        const base = shots['顺推'][n]; const row = { hash: sha(base.v), jumpHash: sha(shots['新页新建'][n].v), rawSame: true, same: true, differ: {} };
         for (const kind of kinds) {
           const other = shots[kind][n]; if (other === undefined || other.r === base.r) continue;
           row.rawSame = false;
-          const pixels = await call(tool, 'pixelDiff', base.r, other.r);
+          const pixels = await pixelDiff(base.r, other.r);
           if (other.v === base.v && pixels.pixels === 0) continue;
           row.same = false;
           const d = describeDiff(base.v, other.v, layerNames);
@@ -337,94 +350,118 @@ try {
         if (row.rawSame) tally.rawSame++; if (row.same) tally.same++;
         perN[n] = row;
       }
-      const allSame = tally.same === picks.length;
-      let twiceSame = twice[0].text.r === twice[1].text.r;
-      if (!twiceSame) twiceSame = twice[0].text.v === twice[1].text.v && (await call(tool, 'pixelDiff', twice[0].text.r, twice[1].text.r)).pixels === 0;
+      let twiceSame = twice[0].r === twice[1].r;
+      if (!twiceSame) twiceSame = twice[0].v === twice[1].v && (await pixelDiff(twice[0].r, twice[1].r)).pixels === 0;
       const result = {
-        seed: first.seed, layers: first.layers, built: first.built, buildMs: first.buildMs,
-        allSame, rawSameCount: tally.rawSame, sameCount: tally.same, twice: { n: twiceN, same: twiceSame }, perN,
+        seed: first.seed, exact: first.exact, layers: first.layers, built: first.built, buildMs: first.buildMs, frameMs,
+        allSame: tally.same === picks.length, rawSameCount: tally.rawSame, sameCount: tally.same, twice: { n: twiceN, same: twiceSame }, perN,
         // 建一份并顺推到最大的 N,全页那一串被吃掉几个(-1:超出参照的 4000 个)
         globalDraws: before0 < 0 || afterSeq < 0 ? -1 : afterSeq - before0 - 1,
         ms: Date.now() - started,
       };
       entry.modes[mode] = result;
-      if (first.built !== first.layers) fail(`${name}/${mode}:建好后只建了 ${first.built}/${first.layers} 个图层`);
+      const label = `${name}/${MODE_NAME[mode]}`;
+      if (first.built !== first.layers) fail(`${label}:建好后只建了 ${first.built}/${first.layers} 个图层`);
       const worst = (n) => Object.entries(perN[n].differ).map(([k, d]) => `${k}:${d.pixels.pct}%/${d.pixels.max}${d.layers ? `(${d.layers.join(',')})` : ''}`).join(' ');
-      if (mode === 'on') {
-        for (const n of picks) if (!perN[n].same) fail(`${name}/开:第 ${n} 帧和「顺推」不同 —— ${worst(n)}`);
-        if (!twiceSame) fail(`${name}/开:连建两次,第 ${twiceN} 帧不同`);
-        if (result.globalDraws !== 0) fail(`${name}/开:全页那一串被吃掉 ${result.globalDraws} 个(应为 0)`);
-      }
       const bad = picks.filter((n) => !perN[n].same);
-      console.log(`${name} / 开关${mode === 'on' ? '开' : '关'}:${picks.length} 个 N 里 ${tally.same} 个各份画面相同(其中原文也逐字节相同的 ${tally.rawSame} 个);连建两次${twiceSame ? '相同' : '不同'};全页那一串被吃掉 ${result.globalDraws} 个;图层 ${first.built}/${first.layers};${result.ms} 毫秒`);
+      const mustMatch = mode === 'both' || (mode === 'seed' && name === 'fixture');
+      if (mustMatch) for (const n of bad) fail(`${label}:第 ${n} 帧和「顺推」不同 —— ${worst(n)}`);
+      if (mode !== 'off') {
+        if (!twiceSame) fail(`${label}:连建两次,第 ${twiceN} 帧不同`);
+        if (result.globalDraws !== 0) fail(`${label}:全页那一串被吃掉 ${result.globalDraws} 个(应为 0)`);
+        if (first.seed === null) fail(`${label}:种子没生效`);
+        if (mode === 'both' && first.exact !== true) fail(`${label}:开关二没生效`);
+      }
+      console.log(`${label}:${picks.length} 个 N 里 ${tally.same} 个各份画面相同(原文也逐字节相同的 ${tally.rawSame} 个);连建两次${twiceSame ? '相同' : '不同'};全页那一串被吃掉 ${result.globalDraws} 个;图层 ${first.built}/${first.layers};建一份 ${first.buildMs} 毫秒,跳一帧 ${frameMs} 毫秒${first.seed === null ? '' : `;种子 ${first.seed}`}`);
       for (const n of bad) console.log(`     第 ${n} 帧不同(画面名:不同的像素占比/最大差(哪些图层)) ${worst(n)}`);
     }
 
-    // 全长逐帧:开和关比
+    // 不带随机表达式的素材:两个开关都开以后的画面,是不是就是现在(关着)新开页面直接跳拿到的那一份
+    if (expressions.random === 0) {
+      const same = picks.filter((n) => entry.modes.both.perN[n].hash === entry.modes.off.perN[n].jumpHash).length;
+      entry.bothEqualsOffJump = { same, of: picks.length };
+      console.log(`${name} /「种子+不留旧数」的画面和「关」下新页新建直接跳的画面比:${picks.length} 个 N 里 ${same} 个看得见的文本逐字节相同`);
+    }
+
+    // 全长逐帧:「种子」「种子+不留旧数」各和「关」比
     if (!SKIP_SWEEP) {
-      const all = Array.from({ length: total }, (_, i) => i); const hashes = {};
-      for (const mode of ['off', 'on']) { const p = await open(); const m = await call(p, 'make', name, mode); hashes[mode] = await call(p, 'seqHashes', m.id, all); await p.close(); }
-      const changed = all.filter((f) => hashes.off[f] !== hashes.on[f]);
-      entry.sweep = { frames: total, changed: changed.length, changedFrames: changed };
-      console.log(`${name} / 全长 ${total} 帧,开和关比:${changed.length ? `${changed.length} 帧变了(${changed.length > 12 ? `${changed.slice(0, 12).join(',')}…` : changed.join(',')})` : '逐帧相同'}`);
+      const hashes = {};
+      for (const mode of MODES) { const p = await open(); const m = await call(p, 'make', name, mode); hashes[mode] = await call(p, 'seqHashes', m.id, all); await p.close(); }
+      entry.sweep = {};
+      for (const mode of ['seed', 'both']) {
+        const changed = all.filter((f) => hashes.off[f] !== hashes[mode][f]);
+        const sample = [...new Set([changed[0], changed[Math.floor(changed.length / 2)], changed[changed.length - 1]])].filter((f) => f !== undefined);
+        const pixels = {};
+        if (sample.length) {
+          const got = {};
+          for (const m2 of ['off', mode]) { const p = await open(); const m = await call(p, 'make', name, m2); got[m2] = await call(p, 'seq', m.id, all.slice(0, Math.max(...sample) + 1), sample); await p.close(); }
+          for (const f of sample) pixels[f] = await pixelDiff(got.off[f].r, got[mode][f].r);
+        }
+        entry.sweep[mode] = { frames: total, changed: changed.length, changedFrames: changed, pixels };
+        const px = Object.entries(pixels).map(([f, d]) => `第 ${f} 帧 ${d.pixels} 个像素(${d.pct}%,最多差 ${d.max})`).join(';');
+        console.log(`${name} / 全长 ${total} 帧,「${MODE_NAME[mode]}」和「关」比:${changed.length ? `${changed.length} 帧变了(${changed.length > 14 ? `${changed.slice(0, 14).join(',')}…` : changed.join(',')})${px ? `;${px}` : ''}` : '逐帧相同'}`);
+        if (mode === 'seed' && expressions.random === 0 && changed.length) fail(`${name}:不带随机表达式,「种子」却让 ${changed.length} 帧变了`);
+      }
     }
   }
 
-  // ── 不带随机表达式的素材顺推和直接跳为什么还会差一点(只报告;实验,不是原型的一部分)──
+  // ── 不带随机表达式的素材顺推和直接跳为什么还会差一点(只报告;清插值缓存那一项是实验,不是原型的一部分)──
   if (ASSETS.includes('happy2016')) {
-    const name = 'happy2016'; const { total, picks } = report.assets[name];
+    const name = 'happy2016'; const { picks } = report.assets[name];
     const frames = Array.from({ length: Math.max(...picks) + 1 }, (_, i) => i);
     const rows = [];
-    for (const [label, exact, cold] of [['原样', false, false], ['只清插值缓存', false, true], ['只去掉 0.00001 的门槛', true, false], ['两样都做', true, true]]) {
+    for (const [label, mode, cold] of [['只开种子', 'seed', false], ['种子,另外每帧清插值缓存', 'seed', true], ['种子+不留旧数(开关二)', 'both', false]]) {
       const p = await open();
-      const a = await call(p, 'make', name, 'on'); const tuned = await call(p, 'tune', a.id, exact);
+      const a = await call(p, 'make', name, mode); const props = await call(p, 'findKeyframed', a.id);
       const pushed = await call(p, cold ? 'seqCold' : 'seq', a.id, frames, picks); await call(p, 'hide', a.id);
-      let same = 0, pixelsMax = 0, pctMax = 0;
+      let same = 0, pixelsMax = 0, pctMax = 0, diffMax = 0;
       for (const n of picks) {
-        const b = await call(p, 'make', name, 'on'); await call(p, 'tune', b.id, exact); const jumped = await call(p, 'jump', b.id, n); await call(p, 'destroy', b.id);
+        const b = await call(p, 'make', name, mode); const jumped = await call(p, 'jump', b.id, n); await call(p, 'destroy', b.id);
         if (jumped.v === pushed[n].v) { same++; continue; }
-        const d = await call(tool, 'pixelDiff', pushed[n].r, jumped.r); if (d.pixels === 0) continue;
-        pixelsMax = Math.max(pixelsMax, d.pixels); pctMax = Math.max(pctMax, d.pct);
+        const d = await pixelDiff(pushed[n].r, jumped.r);
+        pixelsMax = Math.max(pixelsMax, d.pixels); pctMax = Math.max(pctMax, d.pct); diffMax = Math.max(diffMax, d.max);
       }
       await p.close();
-      rows.push({ label, props: tuned.props, visibleSame: same, of: picks.length, worstPixels: pixelsMax, worstPct: pctMax });
-      console.log(`happy2016 / 实验「${label}」:${picks.length} 个 N 里顺推和直接跳看得见的文本相同的 ${same} 个;像素最多差 ${pixelsMax} 个(${pctMax}%);带关键帧的属性 ${tuned.props} 个`);
+      rows.push({ label, keyframedProps: props, visibleSame: same, of: picks.length, worstPixels: pixelsMax, worstPct: pctMax, worstDiff: diffMax });
+      console.log(`happy2016 / 为什么还差一点 /「${label}」:${picks.length} 个 N 里顺推和直接跳看得见的文本相同的 ${same} 个;像素最多 ${pixelsMax} 个不同(${pctMax}%,最多差 ${diffMax});带关键帧的属性 ${props} 个`);
     }
     report.floatExperiment = rows;
   }
 
   // ── 真卡片 ──
   const fixtureText = fs.readFileSync(FIXTURE, 'utf8');
-  const cardParams = { json: fixtureText, src: '', speed: 1, loop: 'no', fit: 'contain' };
+  const inlineParams = { json: fixtureText, src: '', speed: 1, loop: 'no', fit: 'contain' };
   const srcParams = (name) => ({ json: '', src: `/lottie-data/${name}.json`, speed: 1, loop: 'no', fit: 'contain' });
-  const fr = 30;
-  if (ASSETS.includes('fixture')) {
-    const on = report.assets.fixture.modes.on;
-    // 开着:地址带 lottieSeed=1。直接挂在第 N 帧、挂在第 0 帧再一帧帧推到第 N 帧、前面先挂一张取随机数的卡,都要和「新页新建」那一份相同
+  /** 开着:直接挂在第 N 帧、挂在第 0 帧再一帧帧推到第 N 帧、前面先挂一张取随机数的卡,都要和 loadLottie 直接跳的那一份相同 */
+  const cardOn = async (label, query, wantSwitches, params, rate, ns, wantOf) => {
     const rows = [];
-    for (const n of [9, 21, 41, 59]) {
-      const want = on.perN[n].hash; const row = { n, want };
-      const sha = (shot) => crypto.createHash('sha256').update(shot.v).digest('hex').slice(0, 16);
-      let p = await open('?lottieSeed=1'); row.enabled = await call(p, 'seedEnabled'); row.direct = sha(await call(p, 'mountCard', 'current', cardParams, n / fr, 0)); await p.close();
-      p = await open('?lottieSeed=1'); let last = await call(p, 'mountCard', 'current', cardParams, 0, 0); for (let f = 1; f <= n; f++) last = await call(p, 'cardFrame', f / fr); row.pushed = sha(last); await p.close();
-      p = await open('?lottieSeed=1'); row.afterOther = sha(await call(p, 'mountCard', 'current', cardParams, n / fr, 13)); await p.close();
-      row.same = row.enabled === true && row.direct === want && row.pushed === want && row.afterOther === want;
-      if (!row.same) fail(`真卡片/开:fixture 第 ${n} 帧 直接挂 ${row.direct}、推过来 ${row.pushed}、别的卡在前 ${row.afterOther},应为 ${want}(开关读到 ${row.enabled})`);
+    for (const n of ns) {
+      const want = wantOf(n); const row = { n, want };
+      let p = await open(query); row.switches = await call(p, 'switches'); row.direct = sha((await call(p, 'mountCard', 'current', params, n / rate, 0)).v); await p.close();
+      p = await open(query); let last = await call(p, 'mountCard', 'current', params, 0, 0); for (let f = 1; f <= n; f++) last = await call(p, 'cardFrame', f / rate); row.pushed = sha(last.v); await p.close();
+      p = await open(query); row.afterOther = sha((await call(p, 'mountCard', 'current', params, n / rate, 13)).v); await p.close();
+      row.same = row.switches.seed === wantSwitches.seed && row.switches.exact === wantSwitches.exact && row.direct === want && row.pushed === want && row.afterOther === want;
+      if (!row.same) fail(`真卡片/${label}:第 ${n} 帧 直接挂 ${row.direct}、推过来 ${row.pushed}、别的卡在前 ${row.afterOther},应为 ${want}(开关读到 ${JSON.stringify(row.switches)})`);
       rows.push(row);
     }
-    report.card.on = rows;
-    console.log(`真卡片 / 开关开(地址带 lottieSeed=1):fixture 第 ${rows.map((r) => r.n).join('、')} 帧,直接挂、从第 0 帧推过来、别的卡在前 —— ${rows.every((r) => r.same) ? '都和 loadLottie 直接跳的那一份逐字节相同' : '有不同'}`);
+    console.log(`真卡片 / ${label}(地址带 ${query}):第 ${ns.join('、')} 帧,直接挂、从第 0 帧推过来、别的卡在前 —— ${rows.every((r) => r.same) ? '都和 loadLottie 直接跳的那一份相同' : '有不同'}`);
+    return rows;
+  };
+  if (ASSETS.includes('fixture')) report.card.seed = await cardOn('种子,fixture(内联 JSON)', '?lottieSeed=1', { seed: true, exact: false }, inlineParams, 30, [9, 21, 41, 59], (n) => report.assets.fixture.modes.seed.perN[n].hash);
+  if (ASSETS.includes('happy2016')) {
+    const a = report.assets.happy2016;
+    report.card.both = await cardOn('种子+不留旧数,happy2016(src 加载)', '?lottieSeed=1&lottieExact=1', { seed: true, exact: true }, srcParams('happy2016'), a.fr, [a.picks[4], a.picks[a.picks.length - 1]], (n) => a.modes.both.perN[n].hash);
   }
-  // 关着:和 --before 那个提交的卡片逐帧相同(内联 JSON 的 fixture,和走 src 加载的 navidad)
+  // 关着:和 --before 那个提交的卡片逐帧原文相同(内联 JSON 的 fixture,和走 src 加载的 navidad)
   {
     const cases = [];
-    if (ASSETS.includes('fixture')) cases.push(['fixture(内联 JSON)', cardParams, 30, fr]);
+    if (ASSETS.includes('fixture')) cases.push(['fixture(内联 JSON)', inlineParams, 30, 30]);
     if (ASSETS.includes('navidad')) cases.push(['navidad(src 加载)', srcParams('navidad'), 12, 25]);
     report.card.off = [];
     for (const [label, params, count, rate] of cases) {
       const seqs = {};
       for (const which of ['before', 'current']) {
-        const p = await open(); const enabled = await call(p, 'seedEnabled'); if (enabled) fail(`真卡片/关:不带开关时 lottieSeedEnabled() 是 true`);
+        const p = await open(); const switches = await call(p, 'switches'); if (switches.seed || switches.exact) fail(`真卡片/关:不带开关时读到 ${JSON.stringify(switches)}`);
         // 关着比的是原文:连看不见的图层上留着的旧属性也要一样
         const out = [sha((await call(p, 'mountCard', which, params, 0, 0)).r)];
         for (let f = 1; f < count; f++) out.push(sha((await call(p, 'cardFrame', f / rate)).r));
@@ -435,7 +472,7 @@ try {
       const equal = seqs.before.filter((h, i) => h === seqs.current[i]).length;
       report.card.off.push({ label, frames: seqs.before.length, equal });
       if (equal !== seqs.before.length) fail(`真卡片/关:${label} 和 ${BEFORE} 的卡片 ${seqs.before.length} 帧里只有 ${equal} 帧相同`);
-      console.log(`真卡片 / 开关关:${label} 和 ${BEFORE} 的卡片比,${seqs.before.length} 帧里 ${equal} 帧原文逐字节相同`);
+      console.log(`真卡片 / 关:${label} 和 ${BEFORE} 的卡片比,${seqs.before.length} 帧里 ${equal} 帧原文逐字节相同`);
     }
   }
   await tool.close();

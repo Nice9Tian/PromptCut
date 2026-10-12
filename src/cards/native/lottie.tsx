@@ -52,22 +52,25 @@ const DEMO_JSON = JSON.stringify({
 });
 
 /*
- * ── 覆盖随机数种子(原型,2026-10-12 用户:「我觉得可以覆盖随机数种子。」;开关缺省关)──
+ * ── 画面只由素材、参数、帧号决定(原型,两个开关,缺省都关)──
  *
- * 要的是:一张 Lottie 卡的画面只由素材、参数、帧号决定 —— 从头顺着推到第 N 帧和新建一份直接跳到第 N 帧相同,
- * 和页面里别的卡取过几次随机数无关。不带随机表达式的素材本来就是这样;带的不是,播放库(lottie-web 5.13.0)里有两处:
+ * 要的是:从头顺着推到第 N 帧,和新建一份直接跳到第 N 帧,画面相同;和页面里别的卡取过几次随机数无关。
+ * 播放库(lottie-web 5.13.0)里有三处让它做不到。前两处是随机数,归开关一;第三处和随机数无关,归开关二。
+ * 实测与数字见 `scripts/probes/lottie-seed-probe.mjs` 和 docs/reports/AGENT-lottie-seed.md。
  *
- *   1. 每个带表达式的属性在**建图层时**取一个 `randSeed = Math.floor(Math.random() * 1000000)`,表达式里出现
- *      `random` 这个词的,每次求值先按 `randSeed + 时间` 重新播种。`Math.random` 是全页共用的那一串
+ * ── 开关一:覆盖随机数种子(2026-10-12 用户:「我觉得可以覆盖随机数种子。」)──
+ *
+ *   1. 每个带表达式的属性在**建图层时**取一个 `randSeed = Math.floor(Math.random() * 1000000)`(不管表达式里用没用随机),
+ *      表达式里出现 `random` 这个词的,每次求值先按 `randSeed + 时间` 重新播种。`Math.random` 是全页共用的那一串
  *      (kernel/pinEntropy.ts),所以 randSeed 跟「这份实例建的时候,页面里已经取过几次随机数」有关。
  *   2. 表达式里**只有 `wiggle()`、没有 `random` 这个词**的,求值前不重新播种,直接从播放库内部那一串
  *      (`BMMath.random`,全页所有 Lottie 共用)接着取。取到什么跟之前推过哪些帧、别的 Lottie 推过什么有关。
  *
  * 做法:
- *   - 种子 = 素材内容的散列(`lottieSeedOf`)。同一份 JSON 无论从哪个地址来、在哪台机器上,种子相同。
+ *   - 种子 = 素材内容的散列(`lottieSeedOf`)。同一份 JSON 无论从哪个地址来、在哪台机器上、换行符是哪种,种子相同。
  *     速度、循环、适配不进种子:它们只决定「t 对应第几帧」和怎么摆,不该改变某一帧的内容。
  *   - 建实例包在 `withSeededRandom(种子, …)` 里:各属性的 randSeed 从这份种子起按建图层的固定顺序取完
- *     (`progressiveLoad: false` 时播放库在装载完成那一下把所有图层、连同嵌套合成里的一次建好),
+ *     (`progressiveLoad: false` 时播放库在装载完成那一下把所有图层、连同嵌套合成里的一次建好,不是用到才建),
  *     全页那一串不被它挪动。字体或外部数据没到齐时,建图层发生在播放库自己的定时器回调里,
  *     所以把这份实例的 `checkLoaded` 也包进去。
  *   - 每次跳帧前,把播放库内部那一串按「种子 + 帧号」重新播种(`BMMath.seedrandom`),再包在
@@ -78,14 +81,33 @@ const DEMO_JSON = JSON.stringify({
  *
  * 没管到的:文字图层的「随机顺序」动画器(播放库在文字内容变化时直接调 `Math.random()` 打乱字符顺序)。
  * 它在 `withSeededRandom` 里,同一次调用里只有一个这样的图层时是确定的;多个时仍可能和推帧路径有关。自带素材里没有。
+ *
+ * ── 开关二:属性值不留旧数(任务书没要求,查自带素材 happy2016 那 0.0036% 的像素差时找到的)──
+ *
+ *   3. 播放库更新一个属性的值时,新值和手里的旧值差不到 0.00001 就**不更新**(`setVValue`)。顺着推时值一点点变,
+ *      最后几步每步都不到这个门槛,就停在离终点差一点的地方;直接跳过去拿到的是准确的终点。两边差不到 0.00001,
+ *      但落到变换矩阵上是 `1.0000001192092896` 对 `1`,光栅化出来有几十个边缘像素不同。和随机数无关,开关一管不到。
+ *
+ * 做法:播放库自己就是靠换掉 `PropertyFactory.getProp` 来给属性加表达式的,这里用同一个口子(`lottie.__getFactory`)
+ * 再包一层:本开关开着的实例在建属性时,把它的 `setVValue` 换成「不相等就更新」。别的实例不受影响。
  */
 
-/** 开关:缺省关。开法:页面地址带 `lottieSeed=1`,或在建实例之前设 `window.__pcLottieSeed = true`(设成 false 压过地址) */
-export function lottieSeedEnabled(): boolean {
+/** 读一个开关:`window[key]` 是布尔就用它,否则看页面地址里的同名参数是不是 1。缺省关 */
+function flagOf(key: "__pcLottieSeed" | "__pcLottieExact", query: string): boolean {
   if (typeof window === "undefined") return false;
-  const flag = (window as Window & { __pcLottieSeed?: boolean }).__pcLottieSeed;
+  const flag = (window as unknown as Record<string, unknown>)[key];
   if (typeof flag === "boolean") return flag;
-  try { return new URLSearchParams(window.location.search).get("lottieSeed") === "1"; } catch { return false; }
+  try { return new URLSearchParams(window.location.search).get(query) === "1"; } catch { return false; }
+}
+
+/** 开关一:缺省关。开法:页面地址带 `lottieSeed=1`,或在建实例之前设 `window.__pcLottieSeed = true`(设成 false 压过地址) */
+export function lottieSeedEnabled(): boolean {
+  return flagOf("__pcLottieSeed", "lottieSeed");
+}
+
+/** 开关二:缺省关。开法:页面地址带 `lottieExact=1`,或在建实例之前设 `window.__pcLottieExact = true`(设成 false 压过地址) */
+export function lottieExactEnabled(): boolean {
+  return flagOf("__pcLottieExact", "lottieExact");
 }
 
 /** 素材内容 → 32 位种子(FNV-1a)。要在交给播放库**之前**算:播放库会原地改这份数据 */
@@ -135,19 +157,65 @@ function captureLottieMath(): LottieMath | null {
   return lottieMath;
 }
 
+/** 播放库里一个属性对象上本原型用到的那几样 */
+interface LottieProp { propType?: string; mult: number; v: number | number[] | Float32Array; _mdf: boolean; setVValue?: (val: any) => void }
+
+/** 播放库 setVValue 的「不相等就更新」版:原版是差不到 0.00001 就不更新(见上第 3 条) */
+function setVValueExact(this: LottieProp, val: any): void {
+  if (this.propType === "unidimensional") {
+    const next = val * this.mult;
+    if (this.v !== next) { this.v = next; this._mdf = true; }
+    return;
+  }
+  const v = this.v as number[] | Float32Array;
+  for (let i = 0; i < v.length; i++) {
+    const next = val[i] * this.mult;
+    if (v[i] !== next) { v[i] = next; this._mdf = true; }
+  }
+}
+
+/** 正在建的这份实例开没开开关二。只在建属性的那一段同步代码里为 true */
+let exactBuilding = false;
+let propertyFactoryHooked: boolean | undefined;
+
+/** 在播放库建属性的口子上包一层(见上)。全页只包一次;`exactBuilding` 为 false 时原样放行 */
+function hookPropertyFactory(): boolean {
+  if (propertyFactoryHooked !== undefined) return propertyFactoryHooked;
+  propertyFactoryHooked = false;
+  try {
+    const factory = (lottie as unknown as { __getFactory?: (name: string) => { getProp?: (...args: unknown[]) => LottieProp } | null }).__getFactory?.("propertyFactory");
+    const inner = factory?.getProp;
+    if (factory && typeof inner === "function") {
+      factory.getProp = function getPropExact(this: unknown, ...args: unknown[]) {
+        const prop = inner.apply(this, args);
+        if (exactBuilding && prop && typeof prop.setVValue === "function") prop.setVValue = setVValueExact;
+        return prop;
+      };
+      propertyFactoryHooked = true;
+    }
+  } catch { /* 包不上按没包上办 */ }
+  if (!propertyFactoryHooked) console.warn("[lottie] 包不上播放库建属性的口子:属性值仍会留旧数,顺着推和直接跳可能差一点");
+  return propertyFactoryHooked;
+}
+
+/** 两个开关各开没开 */
+export interface LottieMode { seed: boolean; exact: boolean }
+
 /** 一份建好的动画:跳帧一律走 goTo。seed 为 null 表示没开「覆盖随机数种子」 */
 export interface LottieHandle {
   anim: AnimationItem;
   seed: number | null;
+  exact: boolean;
   goTo(frame: number): void;
 }
 
 /**
- * 建一份动画实例。seeded 为 false(缺省,见 `lottieSeedEnabled`)时就是原来那两句:`lottie.loadAnimation` 和
- * `goToAndStop(frame, true)`,一个字不多。为 true 时照上面那段说明把随机数罩住。
+ * 建一份动画实例。两个开关都关着(缺省)时就是原来那两句:`lottie.loadAnimation` 和 `goToAndStop(frame, true)`,
+ * 一个字不多。开着时照上面那段说明办。
  */
-export function loadLottie(container: HTMLElement, data: any, fit: string, seeded: boolean = lottieSeedEnabled()): LottieHandle {
-  const seed = seeded ? lottieSeedOf(data) : null;
+export function loadLottie(container: HTMLElement, data: any, fit: string, mode: LottieMode = { seed: lottieSeedEnabled(), exact: lottieExactEnabled() }): LottieHandle {
+  const seed = mode.seed ? lottieSeedOf(data) : null;
+  const exact = mode.exact && hookPropertyFactory();
   const build = () => lottie.loadAnimation({
     container,
     // 画在 SVG 上,不用画布(2026-10-10 用户定):自带素材里带遮罩层的那一个用画布画出来是错的,SVG 兼容性更好;
@@ -161,27 +229,35 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, seede
       progressiveLoad: false,
     },
   });
-  if (seed === null) {
+  if (seed === null && !exact) {
     const anim = build();
-    return { anim, seed, goTo: (frame) => anim.goToAndStop(frame, true) };
+    return { anim, seed, exact, goTo: (frame) => anim.goToAndStop(frame, true) };
   }
-  const math = captureLottieMath();
-  const scoped = <T,>(frame: number, fn: () => T): T => {
-    math?.seedrandom(`${seed}:${frame}`);
-    return withSeededRandom(seed, fn);
+  const math = seed === null ? null : captureLottieMath();
+  /** 播放库里可能建图层、可能画一帧的同步代码都从这里过:建实例、装载完成、跳帧 */
+  const guarded = <T,>(frame: number, fn: () => T): T => {
+    const outer = exactBuilding;
+    exactBuilding = exact;
+    try {
+      if (seed === null) return fn();
+      math?.seedrandom(`${seed}:${frame}`);
+      return withSeededRandom(seed, fn);
+    } finally {
+      exactBuilding = outer;
+    }
   };
   // 装载完成那一下播放库会自己画一次「当前帧」(这时是第 0 帧),所以这里按第 0 帧播种
-  const anim = scoped(0, build);
+  const anim = guarded(0, build);
   if (!anim.isLoaded) {
     // 字体 / 外部数据没到齐:建图层和第一次画都在播放库的定时器回调里,把这份实例的 checkLoaded 包进来。
     // 那时画的是之前 goToAndStop 记下的那一帧,按它播种
     const item = anim as unknown as { checkLoaded: () => void; currentRawFrame: number };
     const original = item.checkLoaded;
-    item.checkLoaded = function checkLoadedSeeded(this: unknown) {
-      return scoped(Number(item.currentRawFrame) || 0, () => original.call(this));
+    item.checkLoaded = function checkLoadedGuarded(this: unknown) {
+      return guarded(Number(item.currentRawFrame) || 0, () => original.call(this));
     };
   }
-  return { anim, seed, goTo: (frame) => scoped(frame, () => anim.goToAndStop(frame, true)) };
+  return { anim, seed, exact, goTo: (frame) => guarded(frame, () => anim.goToAndStop(frame, true)) };
 }
 
 /** LottieView 的输入:和卡片参数同名,素材封装卡(src/cards/assets)把 src 固定后也用它 */
@@ -222,7 +298,7 @@ export function LottieView(params: LottieViewProps) {
       if (dead || !box.current) return;
       anim.current?.anim.destroy();
       box.current.innerHTML = "";
-      // 建实例和跳帧都经 loadLottie:开关关着时就是原来的 loadAnimation / goToAndStop,开着时把随机数罩住(见上)
+      // 建实例和跳帧都经 loadLottie:两个开关都关着时就是原来的 loadAnimation / goToAndStop(见上)
       const handle = loadLottie(box.current, data, params.fit);
       const a = handle.anim;
       meta.current = { fr: Number(data.fr) || 30, total: Math.max(0, (Number(data.op) || 0) - (Number(data.ip) || 0)) };
