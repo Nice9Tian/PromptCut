@@ -116,3 +116,140 @@ test("resetIn / syncIn 对 null 是空跑", () => {
   p.resetIn(null);
   p.syncIn(undefined, 10);
 });
+
+/* ---------------- 结束回调当场交付(渲染重构「推帧一致性」) ---------------- */
+
+// 浏览器里现成的构造器;这里只要能 new、带上类型和时刻
+globalThis.AnimationPlaybackEvent ??= class AnimationPlaybackEvent {
+  constructor(type, init = {}) { this.type = type; this.currentTime = init.currentTime ?? null; this.timelineTime = init.timelineTime ?? null; }
+};
+
+/** 带 `onfinish` 的假动画:`finish()` 像浏览器一样**不**当场调回调;`browserFinishEvent()` 模拟浏览器下一次出帧时补发的那一次 */
+function fakeAnimWithHandler(endTime, log, name) {
+  const a = fakeAnim(fakeWrapper(name), endTime);
+  a.name = name;
+  a.onfinish = function (ev) { log.push([name, this === a, ev?.type]); };
+  a.browserFinishEvent = () => { if (typeof a.onfinish === "function") a.onfinish({ type: "finish", isTrusted: true }); };
+  return a;
+}
+
+test("拨到结尾:结束回调在这一次 sync 里当场调,不等浏览器出帧;this 是这条动画", () => {
+  const log = [];
+  const a = fakeAnimWithHandler(100, log, "a");
+  const p = createAnimationPinner(fakeDoc([a]));
+  p.sync(0);
+  assert.deepEqual(log, [], "没到结尾不调");
+  p.sync(150);
+  assert.equal(a.playState, "finished");
+  assert.deepEqual(log, [["a", true, "finish"]]);
+  // 已经结束的动画之后不再钉、不再调
+  p.sync(200);
+  assert.equal(log.length, 1);
+});
+
+test("拨到结尾:全部钉完才交付 —— 回调里看到的别的动画已经是这一帧的值", () => {
+  const seen = [];
+  const a = fakeAnim(fakeWrapper("a"), 100);
+  const b = fakeAnim(fakeWrapper("b"), Infinity);
+  a.onfinish = () => { seen.push(b.currentTime); };
+  // a 排在 b 前面:要是边钉边调,回调里 b 还停在上一帧
+  const p = createAnimationPinner(fakeDoc([a, b]));
+  p.sync(0);
+  p.sync(150);
+  assert.deepEqual(seen, [150]);
+});
+
+test("浏览器补发的那一次结束事件落空,回调一共只跑一遍;吞完以后 onfinish 换回原样", () => {
+  const log = [];
+  const a = fakeAnimWithHandler(100, log, "a");
+  const original = a.onfinish;
+  const p = createAnimationPinner(fakeDoc([a]));
+  p.sync(0);
+  p.sync(150);
+  assert.equal(log.length, 1);
+  assert.notEqual(a.onfinish, original, "补发的那一次到之前,挂着的是占位");
+  a.browserFinishEvent();
+  assert.equal(log.length, 1, "补发的不再调回调");
+  assert.equal(a.onfinish, original);
+  // 换回原样以后,浏览器自己发的结束事件(不是舞台拨出来的)照常送到
+  a.browserFinishEvent();
+  assert.equal(log.length, 2);
+});
+
+test("同一条动画重播后又被拨到结尾:每次结束各交付一次,欠浏览器的两次都吞掉", () => {
+  const log = [];
+  const a = fakeAnimWithHandler(100, log, "a");
+  const original = a.onfinish;
+  const p = createAnimationPinner(fakeDoc([a]));
+  p.sync(0);
+  p.sync(150);
+  // 回调的主人把它重播(浏览器那一次还没补发)
+  a.playState = "running";
+  p.sync(300);
+  assert.equal(log.length, 2);
+  a.browserFinishEvent();
+  a.browserFinishEvent();
+  assert.equal(log.length, 2);
+  assert.equal(a.onfinish, original);
+});
+
+test("回调里自己换掉了 onfinish:按新挂的算,不把旧的换回去", () => {
+  const log = [];
+  const a = fakeAnim(fakeWrapper("a"), 100);
+  const next = () => { log.push("next"); };
+  a.onfinish = () => { log.push("first"); a.onfinish = next; };
+  const p = createAnimationPinner(fakeDoc([a]));
+  p.sync(0);
+  p.sync(150);
+  assert.deepEqual(log, ["first"]);
+  assert.equal(a.onfinish, next);
+  // 回调里摘掉(Motion 的 attachTimeline 会置 null)也一样:不换回去
+  const b = fakeAnim(fakeWrapper("b"), 100);
+  b.onfinish = () => { b.onfinish = null; };
+  const q = createAnimationPinner(fakeDoc([b]));
+  q.sync(0);
+  q.sync(150);
+  assert.equal(b.onfinish, null);
+});
+
+test("没挂 onfinish 的动画照旧只 finish();一条回调抛错不连累别的", () => {
+  const log = [];
+  const plain = fakeAnim(fakeWrapper("plain"), 100);
+  const bad = fakeAnim(fakeWrapper("bad"), 100);
+  bad.onfinish = () => { throw new Error("回调里抛的"); };
+  const good = fakeAnimWithHandler(100, log, "good");
+  const p = createAnimationPinner(fakeDoc([plain, bad, good]));
+  p.sync(0);
+  const error = console.error;
+  console.error = () => {};
+  try { p.sync(150); } finally { console.error = error; }
+  assert.equal(plain.playState, "finished");
+  assert.deepEqual(log, [["good", true, "finish"]]);
+});
+
+test("syncIn 拨到结尾同样当场交付;被 skip 跳过的不拨、不交付", () => {
+  const log = [];
+  const w = fakeWrapper("c1");
+  const a = fakeAnimWithHandler(100, log, "a");
+  a.effect.target = fakeTarget(w);
+  const p = createAnimationPinner(fakeDoc([a]));
+  p.sync(0);
+  p.sync(150, new Set([w]));
+  assert.deepEqual(log, []);
+  p.syncIn(host([a]), 150);
+  assert.deepEqual(log, [["a", true, "finish"]]);
+});
+
+test("endedInLastSync:最近一趟拨到结尾了几条;下一趟没有就归零", () => {
+  const a = fakeAnim(fakeWrapper("a"), 100);
+  const b = fakeAnim(fakeWrapper("b"), 100);
+  const c = fakeAnim(fakeWrapper("c"), Infinity);
+  const p = createAnimationPinner(fakeDoc([a, b, c]));
+  assert.equal(p.endedInLastSync(), 0);
+  p.sync(0);
+  assert.equal(p.endedInLastSync(), 0);
+  p.sync(150);
+  assert.equal(p.endedInLastSync(), 2);
+  p.sync(200);
+  assert.equal(p.endedInLastSync(), 0);
+});

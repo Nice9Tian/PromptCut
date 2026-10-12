@@ -20,6 +20,24 @@
  *                    一把 `finish()` 到终态;
  *   - `sync(nowMs, skip)` 全局钉,但跳过 `skip` 里那些包裹层子树的动画 —— 正在自己追帧
  *                    (`.pc-settling`)或被抑制(`.pc-suppressed`)的片段不能被全局时钟拨回去。
+ *
+ * # 结束回调当场交付
+ *
+ * 动画被拨到结尾时调的是 `finish()`。浏览器并不当场通知:「结束事件」排到这个文档**下一次真实出帧**时才派发,
+ * 而舞台推帧不等真实的帧(后台舞台推帧时大约一秒才出一帧,补跑时帧与帧之间只让微任务,一帧都不出)。
+ * Motion 靠这条动画的 `onfinish` 得知它播完了(写回终值、撤掉动画、通知等它的人),事件迟到多久,
+ * 它对这条动画的认识就旧多久 —— 换词的卡(`AnimatePresence mode="wait"`)因此同一帧每次推出来的画面都不一样,
+ * 别的卡留下「动画还挂着、终值没写回」的痕迹(实测与拆解见 `docs/reports/AGENT-rr-a1-verify.md`)。
+ *
+ * 所以这里不等浏览器:每次 `sync` / `syncIn` 把该钉的都钉完以后,**当场**把这一趟里拨到结尾的那些动画的
+ * `onfinish` 调掉。动画什么时候算结束于是只由舞台时间决定,和浏览器出不出帧无关。
+ *
+ *   - 浏览器之后还会补发它自己的那一次结束事件。已经交付过的不能再调一遍(Motion 的回调会把终值再写一次,
+ *     那时同一个属性上可能已经起了下一条动画),所以交付时把 `onfinish` 临时换成一个只吞这一次的占位,吞完换回原样。
+ *   - 等全部钉完再交付:回调里会撤动画、改样式,不能夹在钉别的动画中间。
+ *   - 只管用 `onfinish` 属性挂的回调(Motion 是这样挂的)。`finished` 这个 Promise 在 `finish()` 里就已经落定,
+ *     本来就不等出帧。用 `addEventListener('finish')` 挂的监听、CSS 动画的 `animationend`、过渡的 `transitionend`
+ *     仍然等浏览器出帧:当场补发这几种事件,浏览器自己那一次就没法只对已经收到的监听拦下。内置卡和 Motion 都不用它们。
  */
 export interface AnimationPinner {
   /**
@@ -29,6 +47,11 @@ export interface AnimationPinner {
   sync(nowMs: number, skip?: ReadonlySet<Element>): void;
   /** 只钉 `el` 子树里的动画,时间基同样是**全局舞台毫秒**(K3(a′) / K5 第一路) */
   syncIn(el: AnimationHost | null | undefined, stageMs: number): void;
+  /**
+   * 最近一次 `sync` / `syncIn` 里被拨到结尾的动画数(它们的结束回调已经当场交付)。
+   * 调用方据此知道这一帧要不要再等一次 React 提交(`StageView.tsx` 的 `bakeFrame`)。
+   */
+  endedInLastSync(): number;
   /** 重挂载卡片前调一次,丢掉旧锚点 */
   reset(): void;
   /** 只丢 `el` 子树里那些动画的锚点(按片段重挂载,K3),别的卡不动 */
@@ -55,8 +78,63 @@ function clipWrapperOf(a: Animation): Element | null {
   return target && typeof target.closest === "function" ? target.closest("[data-pc-clip]") : null;
 }
 
+type FinishHandler = NonNullable<Animation["onfinish"]>;
+
+/** 一条动画上「已经当场交付、浏览器还没补发」的结束事件:原来的回调、顶替它的占位、还欠几次 */
+interface OwedFinish {
+  handler: FinishHandler;
+  guard: FinishHandler;
+  count: number;
+}
+
 export function createAnimationPinner(doc: Document = document): AnimationPinner {
   let anchors = new WeakMap<Animation, number>();
+  /** 这一趟里被拨到结尾的动画;钉完一起交付结束回调(见文件头「结束回调当场交付」) */
+  let ended: Animation[] = [];
+  const owed = new WeakMap<Animation, OwedFinish>();
+
+  /** 当场调这条动画的 `onfinish`,并让浏览器之后补发的那一次落空 */
+  const deliverFinish = (a: Animation): void => {
+    let debt = owed.get(a);
+    // 占位被别人换掉了(回调里自己改了 `onfinish`):旧账作废,按现在挂着的算
+    if (debt && a.onfinish !== debt.guard) {
+      owed.delete(a);
+      debt = undefined;
+    }
+    const handler = debt ? debt.handler : a.onfinish;
+    if (typeof handler !== "function") return;
+    if (debt) debt.count++;
+    else {
+      const fresh: OwedFinish = {
+        handler,
+        count: 1,
+        guard: () => {
+          if (--fresh.count > 0) return;
+          owed.delete(a);
+          if (a.onfinish === fresh.guard) a.onfinish = fresh.handler;
+        },
+      };
+      owed.set(a, fresh);
+      a.onfinish = fresh.guard;
+    }
+    try {
+      handler.call(a, new AnimationPlaybackEvent("finish", { currentTime: a.currentTime, timelineTime: a.timeline?.currentTime ?? null }));
+    } catch (err) {
+      console.error("[pinAnimations] 结束回调抛错", err);
+    }
+  };
+
+  /** 最近一趟拨到结尾了几条(`endedInLastSync`) */
+  let lastEnded = 0;
+
+  /** 这一趟拨到结尾的动画,逐条交付结束回调 */
+  const deliverEnded = (): void => {
+    // 先取走再调:回调里再触发一次 sync 的话,新拨到结尾的归那一次
+    const batch = ended;
+    ended = [];
+    lastEnded = batch.length;
+    for (const a of batch) deliverFinish(a);
+  };
 
   /** 把一条动画钉到 nowMs。返回 false 表示这条不用管(已经结束 / 还没开始) */
   const pin = (a: Animation, nowMs: number): void => {
@@ -70,8 +148,10 @@ export function createAnimationPinner(doc: Document = document): AnimationPinner
     const target = Math.max(0, nowMs - anchor);
     const end = a.effect?.getComputedTiming().endTime;
     if (typeof end === "number" && Number.isFinite(end) && target >= end) {
-      // 越过结尾:finish() 让 Motion 提交终态、CSS 动画回到自然样式,和正常播完一致
+      // 越过结尾:finish() 让 Motion 提交终态、CSS 动画回到自然样式,和正常播完一致。
+      // Motion 的提交在它的结束回调里,这一趟钉完由 deliverEnded 当场调,不等浏览器出帧
       a.finish();
+      ended.push(a);
       return;
     }
     if (a.playState !== "paused") a.pause();
@@ -101,10 +181,13 @@ export function createAnimationPinner(doc: Document = document): AnimationPinner
         }
         pin(a, nowMs);
       }
+      deliverEnded();
     },
     syncIn(el, stageMs: number) {
       if (!el) return;
       for (const a of el.getAnimations({ subtree: true })) pin(a, stageMs);
+      deliverEnded();
     },
+    endedInLastSync: () => lastEnded,
   };
 }
