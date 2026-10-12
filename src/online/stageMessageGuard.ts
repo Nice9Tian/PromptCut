@@ -27,6 +27,8 @@ export const STAGE_MESSAGE_LIMITS = Object.freeze({
   maxHtmlLength: 16 * 1024 * 1024,
   /** 随消息转移的字节块 */
   maxBufferBytes: 64 * 1024 * 1024,
+  /** 随消息转移的位图(生成快照时要的像素)一边最长多少、矩形坐标的绝对值上限 */
+  maxPixelSide: 8192,
   /** RPC 回包的嵌套深度与节点总数 */
   maxDepth: 12,
   maxNodes: 400_000,
@@ -52,6 +54,22 @@ function str(v: unknown, max: number): string | null {
 }
 function buf(v: unknown, max: number = L.maxBufferBytes): ArrayBuffer | null {
   return v instanceof ArrayBuffer && v.byteLength <= max ? v : null;
+}
+
+/**
+ * `bake-frame` 的像素(浏览器节点产轨道流用):`{ rect: { x, y, w, h }, bitmap }`。矩形要是整数、宽高为偶数且不超过上限;
+ * 位图要真是 `ImageBitmap`、大小与矩形一致。位图只是一张图,父页拿它送编码器、不放进活文档。不合形状回 null。
+ */
+function pixelsOf(v: unknown): { rect: { x: number; y: number; w: number; h: number }; bitmap: unknown } | null {
+  if (!isObj(v) || !isObj(v.rect)) return null;
+  const x = v.rect.x as number, y = v.rect.y as number, w = v.rect.w as number, h = v.rect.h as number;
+  for (const n of [x, y, w, h]) if (typeof n !== "number" || !Number.isInteger(n)) return null;
+  if (w < 2 || h < 2 || w % 2 || h % 2 || w > L.maxPixelSide || h > L.maxPixelSide) return null;
+  if (Math.abs(x) > L.maxPixelSide || Math.abs(y) > L.maxPixelSide) return null;
+  const Bitmap = (globalThis as { ImageBitmap?: new (...a: never[]) => unknown }).ImageBitmap;
+  const bitmap = v.bitmap as { width?: unknown; height?: unknown } | null;
+  if (typeof Bitmap !== "function" || !(bitmap instanceof Bitmap) || bitmap?.width !== w || bitmap?.height !== h) return null;
+  return { rect: { x, y, w, h }, bitmap };
 }
 
 type Clean = Record<string, unknown> & { type: string };
@@ -116,6 +134,12 @@ export function sanitizeStageEvent(d: unknown, opts: { maxSec?: number } = {}): 
         const sh = str(d.small.hash, 64), sb = int(d.small.bytes, 0, L.maxBufferBytes), webp = buf(d.small.webp);
         if (sh === null || !HASH.test(sh) || sb === null || !webp) return null;
         out.small = { hash: sh, bytes: sb, webp };
+      }
+      if (d.pixels === null) out.pixels = null;
+      else if (d.pixels !== undefined) {
+        const px = pixelsOf(d.pixels);
+        if (!px) return null;
+        out.pixels = px;
       }
       return out;
     }
