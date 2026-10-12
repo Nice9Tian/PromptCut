@@ -23,6 +23,8 @@
 
 | 己零：画布取像素走哪条路（己的前置测量） | `c276d926` | 单文件、零依赖的探针，在这台 PC 和节点的临时目录里各跑一遍（节点上跑完已删）。节点上每帧：现在的办法 83～637 毫秒，原始像素交给 ffmpeg 36～154 毫秒，浏览器自带的编码器 16～67 毫秒；三条都编得出来、解回来 90 帧都在。定为原始像素交给 ffmpeg |
 
+| 丙：改建卡指南 | `3e8953c4` | 指南按两种写法重写，7 个完整例子都过建卡检查（指南测试 13 条）；**盲写验收**：不带上下文的子 Agent 只读指南写了一张 remotion 式、一张 motion 式的卡，经真的建卡接口都回 200，remotion 式那张同页顺着渲对倒着跳 0 个像素不同，两张图主会话看过；Gemini 的 25 条文字意见和盲写的 18 条卡点逐条对过代码后修订；用框架写的卡在在线页面的卡片运行时和托管渲染的隔离工作进程里都渲得出来（各 13 项过）；顺带修了隔离目录清理先删记号的缺陷（加了用例）；现有 88 个卡片入口没变；类型检查零错误；全量测试 5587 条，失败 0 |
+
 子 Agent 的报告在 `docs/reports/AGENT-rr-*.md`。
 
 ## 本次做了什么
@@ -42,12 +44,11 @@
 |---|---|
 | 甲一 | 集成中；留下的两件核对另一路在做 |
 | 甲二、甲三 | 等甲一 |
-| 丙 | 在做 |
 | 戊、戊二、己、庚、癸 | 契约已定；先修的两处在做；其余等甲一 |
 | 壬 | 放在 0.7.18 里 |
 | 整套渲染附加项、`REPORT-render-refactor.md` | 收尾时 |
 
-收尾时要补验的：用框架写的用户卡经真的预渲染与导出管线跑一遍（在线页面和托管渲染节点那两处交给丙补验）。
+收尾时要补验的：用框架写的用户卡经真的预渲染与导出管线跑一遍；在线页面那一处丙只验到卡片运行时，没经账号加入和跨源舞台。后面的块要回头改指南的两句：motion 式「预渲染要为它存每一帧的快照」（稀疏几块合入时改）、Lottie 的说法（癸合入时改）。
 
 ## 派出去的活
 
@@ -57,7 +58,6 @@
 |---|---|---|---|
 | `claude/rr-a1` | 甲一集成：层表列出浏览器产的流、完整链路的端到端探针、回归探针换入口并改前改后对比 | Opus high | 7410～7429 |
 | `claude/rr-a1-verify` | 甲一留下的两件核对 | Opus Extra（根因不明） | 7430～7439 |
-| `claude/rr-guide` | 丙：改建卡指南，补验框架卡在在线页面和托管渲染节点里 | Sonnet high | 7450～7459 |
 | `claude/rr-preview-fixes` | 己之前要修的两处预览老问题 | Opus Extra（根因不明） | 7480～7489 |
 
 ## 〔裁〕清单
@@ -98,7 +98,7 @@
 
 ## 分支去向
 
-- `claude/rr-card-table`（`393b0b2a`）、`claude/rr-framework`（`cd907bb2`）、`claude/rr-contract`（`4068ff7e`）、`claude/rr-silent-spawn`（`faf03d4c`）、`claude/rr-grid-guard`（`69e21870`）、`claude/rr-export-measure`（`defe591d`）、`claude/rr-canvas-paths`（`c276d926`）：已合进 `main`，工作区和分支已清。
+- `claude/rr-card-table`（`393b0b2a`）、`claude/rr-framework`（`cd907bb2`）、`claude/rr-contract`（`4068ff7e`）、`claude/rr-silent-spawn`（`faf03d4c`）、`claude/rr-grid-guard`（`69e21870`）、`claude/rr-export-measure`（`defe591d`）、`claude/rr-canvas-paths`（`c276d926`）、`claude/rr-guide`（`3e8953c4`）：已合进 `main`，工作区和分支已清。
 - `claude/rr-a1-produce`、`claude/rr-a1-play`：已合进集成分支 `claude/rr-a1`，等甲一进 `main` 后一起清。
 
 `release` 照开工指令在 0.7.18 发版时推进，这期间不动。
