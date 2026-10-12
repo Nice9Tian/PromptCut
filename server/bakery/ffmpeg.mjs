@@ -15,7 +15,7 @@ export async function findFfmpeg() {
   const ffmpegFallback = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages', 'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe', 'ffmpeg-9.0.1-full_build', 'bin', 'ffmpeg.exe');
   try {
     await new Promise((resolve, reject) => {
-      const proc = spawn('ffmpeg', ['-version']);
+      const proc = spawn('ffmpeg', ['-version'], { windowsHide: true });
       proc.on('close', code => code === 0 ? resolve() : reject());
       proc.on('error', reject);
     });
@@ -81,7 +81,7 @@ export function streamPngVideo(ffmpeg, file, fps) {
  */
 function runFfmpegProgress(ffmpegCmd, args, onFrame, stallMs = Number(process.env.PC_COMPOSE_STALL_MS) || 45000) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegCmd, ['-progress', 'pipe:1', '-nostats', '-loglevel', 'warning', ...args], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const proc = spawn(ffmpegCmd, ['-progress', 'pipe:1', '-nostats', '-loglevel', 'warning', ...args], { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true });
     let buf = '';
     let last = -1;
     let lastChange = Date.now();

@@ -283,7 +283,7 @@ function killTree(pid: number | undefined): void {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      spawn("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" }).unref();
+      spawn("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", windowsHide: true }).unref();
     } else {
       process.kill(pid, "SIGKILL");
     }

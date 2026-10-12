@@ -161,7 +161,7 @@ try {
   assert.deepEqual(PNG.sync.read(a.images.get(159)).data, PNG.sync.read(b.images.get(18159)).data);
   results.push({ name: 'shift-600s', steps: b.steps, ms: b.ms });
   const mediaFile = path.join(out, 'seek.webm');
-  execFileSync(await findFfmpeg(), ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=30:d=2', '-c:v', 'libvpx-vp9', '-y', mediaFile]);
+  execFileSync(await findFfmpeg(), ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=30:d=2', '-c:v', 'libvpx-vp9', '-y', mediaFile], { windowsHide: true });
   const media = { ...base, duration: 610, media: [{ id: 'v', kind: 'video', url: '/@fs/' + mediaFile.replaceAll('\\', '/') }],
     tracks: [track({ id: 'video', mediaId: 'v', start: 600, end: 602, mediaOffset: 0, params: {} })] };
   const movie = await render(media, [18015]);
