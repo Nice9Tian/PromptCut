@@ -1,0 +1,1016 @@
+{
+  "probe": "canvas-encode-paths",
+  "probeVersion": 1,
+  "when": "2026-10-12T15:40:21.163Z",
+  "options": {
+    "chrome": "/opt/promptcut-tools/chrome/152.0.7977.75/chrome-headless-shell-linux64/chrome-headless-shell",
+    "noGpu": true,
+    "noSandbox": true,
+    "ffmpeg": "ffmpeg",
+    "frames": 90,
+    "fps": 30,
+    "sizes": [
+      "960x540",
+      "1920x1080"
+    ],
+    "scenes": [
+      "particles",
+      "three"
+    ],
+    "hw": [
+      "no-preference",
+      "prefer-software"
+    ],
+    "chromeArgExtra": []
+  },
+  "criteria": {
+    "colorMeanMax": 1,
+    "alphaMeanMax": 0.5,
+    "note": "可用 = 编得出来、解回来帧数对、颜色平均差 < colorMeanMax、不透明度平均差 < alphaMeanMax"
+  },
+  "proxies": {
+    "particles": "2D 画布,400 个半透明小圆点(粒子卡的替身)",
+    "three": "WebGL 画布,带光照的转动球体加一圈环(scene-3d 的替身)"
+  },
+  "host": {
+    "cpu": "Intel(R) Xeon(R) Platinum 8272CL CPU @ 2.60GHz",
+    "logicalCores": 8,
+    "availableParallelism": 8,
+    "memGiB": 15.6,
+    "platform": "linux 5.15.0-30-generic x64",
+    "node": "v24.21.0",
+    "gpuAdapters": [
+      "VGA compatible controller: Cirrus Logic GD 5446"
+    ],
+    "hasGpu": true,
+    "devDri": [],
+    "cpuBusyPercentBefore": 1.6,
+    "cpuBusyPercentAfter": 1.9
+  },
+  "ffmpeg": {
+    "path": "ffmpeg",
+    "version": "ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers",
+    "usable": true,
+    "libx264": true
+  },
+  "chrome": {
+    "executable": "/opt/promptcut-tools/chrome/152.0.7977.75/chrome-headless-shell-linux64/chrome-headless-shell",
+    "product": "HeadlessChrome/152.0.7977.75",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.7977.75 Safari/537.36",
+    "isHeadlessShell": true,
+    "launchArgs": [
+      "--headless",
+      "--remote-debugging-port=0",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-extensions",
+      "--mute-audio",
+      "--hide-scrollbars",
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-field-trial-config",
+      "--force-device-scale-factor=1",
+      "--window-position=-32000,-32000",
+      "--disable-gpu",
+      "--disable-gpu-rasterization",
+      "--disable-gpu-compositing",
+      "--enable-unsafe-swiftshader",
+      "--no-sandbox",
+      "about:blank"
+    ],
+    "page": {
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.7977.75 Safari/537.36",
+      "hardwareConcurrency": 8,
+      "secureContext": true,
+      "videoEncoder": true,
+      "videoDecoder": true,
+      "offscreenCanvas": true,
+      "webgl": {
+        "available": true,
+        "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
+        "renderer": "WebKit WebGL",
+        "unmaskedRenderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        "unmaskedVendor": "Google Inc. (Google)"
+      },
+      "webgl2Available": true
+    },
+    "systemInfo": {
+      "gpuDevices": [
+        {
+          "vendorId": 65535,
+          "deviceId": 65535,
+          "vendorString": "Google Inc. (Google)",
+          "deviceString": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)",
+          "driverVendor": "SwANGLE",
+          "driverVersion": "5.0.0"
+        }
+      ],
+      "featureStatus": {
+        "2d_canvas": "unavailable_software",
+        "direct_rendering_display_compositor": "disabled_off_ok",
+        "gpu_compositing": "disabled_software",
+        "multiple_raster_threads": "enabled_on",
+        "opengl": "disabled_off",
+        "rasterization": "disabled_software",
+        "raw_draw": "disabled_off_ok",
+        "skia_graphite": "disabled_off",
+        "trees_in_viz": "disabled_off",
+        "video_decode": "disabled_software",
+        "video_encode": "disabled_software",
+        "vulkan": "disabled_off",
+        "webgl": "unavailable_software",
+        "webgpu": "unavailable_software",
+        "webgpu_on_vk_via_gl_interop": "disabled_off",
+        "webnn": "unavailable_software"
+      },
+      "videoEncoding": [],
+      "videoDecoding": []
+    }
+  },
+  "encoderSupport": {
+    "960x540": {
+      "packed": "960x1096",
+      "rows": [
+        {
+          "profile": "baseline",
+          "codec": "avc1.420028",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "baseline",
+          "codec": "avc1.420028",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "baseline",
+          "codec": "avc1.420028",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "baseline",
+          "codec": "avc1.420028",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "main",
+          "codec": "avc1.4D0028",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "main",
+          "codec": "avc1.4D0028",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "main",
+          "codec": "avc1.4D0028",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "main",
+          "codec": "avc1.4D0028",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "high",
+          "codec": "avc1.640028",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "high",
+          "codec": "avc1.640028",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "high",
+          "codec": "avc1.640028",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "high",
+          "codec": "avc1.640028",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "variable",
+          "supported": true
+        }
+      ]
+    },
+    "1920x1080": {
+      "packed": "1920x2176",
+      "rows": [
+        {
+          "profile": "baseline",
+          "codec": "avc1.420032",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "baseline",
+          "codec": "avc1.420032",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "baseline",
+          "codec": "avc1.420032",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "baseline",
+          "codec": "avc1.420032",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "main",
+          "codec": "avc1.4D0032",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "main",
+          "codec": "avc1.4D0032",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "main",
+          "codec": "avc1.4D0032",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "main",
+          "codec": "avc1.4D0032",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "high",
+          "codec": "avc1.640032",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "high",
+          "codec": "avc1.640032",
+          "hardwareAcceleration": "no-preference",
+          "bitrateMode": "variable",
+          "supported": true
+        },
+        {
+          "profile": "high",
+          "codec": "avc1.640032",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "quantizer",
+          "supported": false
+        },
+        {
+          "profile": "high",
+          "codec": "avc1.640032",
+          "hardwareAcceleration": "prefer-software",
+          "bitrateMode": "variable",
+          "supported": true
+        }
+      ]
+    }
+  },
+  "results": [
+    {
+      "scene": "particles",
+      "size": "960x540",
+      "frames": 90,
+      "sampleFrames": [
+        0,
+        12,
+        15,
+        25,
+        38,
+        51,
+        64,
+        77,
+        89
+      ],
+      "setup": {
+        "ok": true,
+        "kind": "2d"
+      },
+      "opaqueFraction": 0.07,
+      "paths": {
+        "browserEncoder": {
+          "bytes": 2343023,
+          "kbps": 6248,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.467,
+          "alphaMeanDiff": 0.221,
+          "colorMaxDiff": 130,
+          "alphaMaxDiff": 77,
+          "problems": [],
+          "codec": "avc1.640028",
+          "bitrateMode": "variable",
+          "hardwareAcceleration": "no-preference",
+          "packed": "960x1096",
+          "encodeFps": 61.9,
+          "decodeMs": 702,
+          "timingMsPerFrame": {
+            "paint": 2.15,
+            "pack": 15.07,
+            "encodeWait": 1.07,
+            "handoff": 0.26
+          },
+          "e2ePerFrameMs": 16.42,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 2.4
+        },
+        "browserEncoder:prefer-software": {
+          "bytes": 2342340,
+          "kbps": 6246,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.464,
+          "alphaMeanDiff": 0.224,
+          "colorMaxDiff": 130,
+          "alphaMaxDiff": 77,
+          "problems": [],
+          "codec": "avc1.640028",
+          "bitrateMode": "variable",
+          "hardwareAcceleration": "prefer-software",
+          "packed": "960x1096",
+          "encodeFps": 64.7,
+          "decodeMs": 616,
+          "timingMsPerFrame": {
+            "paint": 1.82,
+            "pack": 14.06,
+            "encodeWait": 1.38,
+            "handoff": 0.27
+          },
+          "e2ePerFrameMs": 15.73,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 2.2
+        },
+        "ffmpegRaw": {
+          "bytes": 1531582,
+          "kbps": 4084,
+          "segments": 6,
+          "receivedFrames": 90,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.412,
+          "alphaMeanDiff": 0.226,
+          "colorMaxDiff": 71,
+          "alphaMaxDiff": 36,
+          "browserDecode": {
+            "decoded": 90,
+            "comparedFrames": 9,
+            "colorMeanDiff": 0.441,
+            "alphaMeanDiff": 0.225
+          },
+          "timingMsPerFrame": {
+            "transferPure": 18.72,
+            "paint": 1.5,
+            "read": 6.57,
+            "readGpu": 6.56,
+            "readConvert": 0,
+            "transfer": 43.48,
+            "encodeIsolated": 38.23,
+            "tail": 1.28
+          },
+          "e2ePerFrameMs": 51.36,
+          "rawBytesPerFrame": 2073600,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 11.2
+        },
+        "ffmpegScreenshot": {
+          "bytes": 1531582,
+          "kbps": 4084,
+          "segments": 6,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.412,
+          "alphaMeanDiff": 0.226,
+          "colorMaxDiff": 71,
+          "alphaMaxDiff": 36,
+          "browserDecode": {
+            "decoded": 90,
+            "comparedFrames": 9,
+            "colorMeanDiff": 0.441,
+            "alphaMeanDiff": 0.225
+          },
+          "timingMsPerFrame": {
+            "paintAndSettle": 13.59,
+            "screenshot": 80.42,
+            "transfer": 1.22,
+            "encodeIsolated": 40.42,
+            "tail": 1.72
+          },
+          "e2ePerFrameMs": 83.37,
+          "pngBytesPerFrame": 85367,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 15.1
+        }
+      },
+      "previewPng": "preview-particles-960x540-f38.png"
+    },
+    {
+      "scene": "three",
+      "size": "960x540",
+      "frames": 90,
+      "sampleFrames": [
+        0,
+        12,
+        15,
+        25,
+        38,
+        51,
+        64,
+        77,
+        89
+      ],
+      "setup": {
+        "ok": true,
+        "kind": "webgl"
+      },
+      "opaqueFraction": 0.635,
+      "paths": {
+        "browserEncoder": {
+          "bytes": 1629731,
+          "kbps": 4346,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.939,
+          "alphaMeanDiff": 0.045,
+          "colorMaxDiff": 120,
+          "alphaMaxDiff": 75,
+          "problems": [],
+          "codec": "avc1.640028",
+          "bitrateMode": "variable",
+          "hardwareAcceleration": "no-preference",
+          "packed": "960x1096",
+          "encodeFps": 59.4,
+          "decodeMs": 580,
+          "timingMsPerFrame": {
+            "paint": 43.57,
+            "pack": 15.3,
+            "encodeWait": 1.52,
+            "handoff": 0.18
+          },
+          "e2ePerFrameMs": 17.01,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 6.1
+        },
+        "browserEncoder:prefer-software": {
+          "bytes": 1631914,
+          "kbps": 4352,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.941,
+          "alphaMeanDiff": 0.045,
+          "colorMaxDiff": 120,
+          "alphaMaxDiff": 75,
+          "problems": [],
+          "codec": "avc1.640028",
+          "bitrateMode": "variable",
+          "hardwareAcceleration": "prefer-software",
+          "packed": "960x1096",
+          "encodeFps": 54.8,
+          "decodeMs": 522,
+          "timingMsPerFrame": {
+            "paint": 47.24,
+            "pack": 16.71,
+            "encodeWait": 1.52,
+            "handoff": 0.19
+          },
+          "e2ePerFrameMs": 18.43,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 6.5
+        },
+        "ffmpegRaw": {
+          "bytes": 788203,
+          "kbps": 2102,
+          "segments": 6,
+          "receivedFrames": 90,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 1.047,
+          "alphaMeanDiff": 0.074,
+          "colorMaxDiff": 117,
+          "alphaMaxDiff": 66,
+          "browserDecode": {
+            "decoded": 90,
+            "comparedFrames": 9,
+            "colorMeanDiff": 0.897,
+            "alphaMeanDiff": 0.068
+          },
+          "timingMsPerFrame": {
+            "transferPure": 18.07,
+            "paint": 52.29,
+            "read": 9.45,
+            "readGpu": 4.12,
+            "readConvert": 5.32,
+            "transfer": 25.73,
+            "encodeIsolated": 36.99,
+            "tail": 1.24
+          },
+          "e2ePerFrameMs": 36.44,
+          "rawBytesPerFrame": 2073600,
+          "ran": true,
+          "available": false,
+          "verdict": "不可用",
+          "reasons": [
+            "颜色平均差 1.047 不小于 1"
+          ],
+          "secondsSpent": 14.1
+        },
+        "ffmpegScreenshot": {
+          "bytes": 788098,
+          "kbps": 2102,
+          "segments": 6,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 1.046,
+          "alphaMeanDiff": 0.074,
+          "colorMaxDiff": 117,
+          "alphaMaxDiff": 66,
+          "browserDecode": {
+            "decoded": 90,
+            "comparedFrames": 9,
+            "colorMeanDiff": 0.897,
+            "alphaMeanDiff": 0.068
+          },
+          "timingMsPerFrame": {
+            "paintAndSettle": 54.71,
+            "screenshot": 171.78,
+            "transfer": 21.16,
+            "encodeIsolated": 41.23,
+            "tail": 1.39
+          },
+          "e2ePerFrameMs": 194.33,
+          "pngBytesPerFrame": 180999,
+          "ran": true,
+          "available": false,
+          "verdict": "不可用",
+          "reasons": [
+            "颜色平均差 1.046 不小于 1"
+          ],
+          "secondsSpent": 28.3
+        }
+      },
+      "previewPng": "preview-three-960x540-f38.png"
+    },
+    {
+      "scene": "particles",
+      "size": "1920x1080",
+      "frames": 90,
+      "sampleFrames": [
+        0,
+        12,
+        15,
+        25,
+        38,
+        51,
+        64,
+        77,
+        89
+      ],
+      "setup": {
+        "ok": true,
+        "kind": "2d"
+      },
+      "opaqueFraction": 0.065,
+      "paths": {
+        "browserEncoder": {
+          "bytes": 6712206,
+          "kbps": 17899,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.242,
+          "alphaMeanDiff": 0.095,
+          "colorMaxDiff": 105,
+          "alphaMaxDiff": 80,
+          "problems": [],
+          "codec": "avc1.640032",
+          "bitrateMode": "variable",
+          "hardwareAcceleration": "no-preference",
+          "packed": "1920x2176",
+          "encodeFps": 17.5,
+          "decodeMs": 1622,
+          "timingMsPerFrame": {
+            "paint": 1.97,
+            "pack": 52.52,
+            "encodeWait": 4.64,
+            "handoff": 0.66
+          },
+          "e2ePerFrameMs": 57.82,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 7.3
+        },
+        "browserEncoder:prefer-software": {
+          "bytes": 6712206,
+          "kbps": 17899,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.242,
+          "alphaMeanDiff": 0.095,
+          "colorMaxDiff": 105,
+          "alphaMaxDiff": 80,
+          "problems": [],
+          "codec": "avc1.640032",
+          "bitrateMode": "variable",
+          "hardwareAcceleration": "prefer-software",
+          "packed": "1920x2176",
+          "encodeFps": 17.6,
+          "decodeMs": 1755,
+          "timingMsPerFrame": {
+            "paint": 1.98,
+            "pack": 51.79,
+            "encodeWait": 5.03,
+            "handoff": 0.66
+          },
+          "e2ePerFrameMs": 57.48,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 7.4
+        },
+        "ffmpegRaw": {
+          "bytes": 2886280,
+          "kbps": 7697,
+          "segments": 6,
+          "receivedFrames": 90,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.245,
+          "alphaMeanDiff": 0.136,
+          "colorMaxDiff": 77,
+          "alphaMaxDiff": 33,
+          "browserDecode": {
+            "decoded": 90,
+            "comparedFrames": 9,
+            "colorMeanDiff": 0.252,
+            "alphaMeanDiff": 0.132
+          },
+          "timingMsPerFrame": {
+            "transferPure": 60.13,
+            "paint": 1.58,
+            "read": 19.22,
+            "readGpu": 19.21,
+            "readConvert": 0,
+            "transfer": 130.67,
+            "encodeIsolated": 141.1,
+            "tail": 3.71
+          },
+          "e2ePerFrameMs": 153.61,
+          "rawBytesPerFrame": 8294400,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 34.8
+        },
+        "ffmpegScreenshot": {
+          "bytes": 2886280,
+          "kbps": 7697,
+          "segments": 6,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.245,
+          "alphaMeanDiff": 0.136,
+          "colorMaxDiff": 77,
+          "alphaMaxDiff": 33,
+          "browserDecode": {
+            "decoded": 90,
+            "comparedFrames": 9,
+            "colorMeanDiff": 0.252,
+            "alphaMeanDiff": 0.132
+          },
+          "timingMsPerFrame": {
+            "paintAndSettle": 15.64,
+            "screenshot": 169.28,
+            "transfer": 52.95,
+            "encodeIsolated": 148.52,
+            "tail": 6.05
+          },
+          "e2ePerFrameMs": 228.28,
+          "pngBytesPerFrame": 181238,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 42.6
+        }
+      },
+      "previewPng": "preview-particles-1920x1080-f38.png"
+    },
+    {
+      "scene": "three",
+      "size": "1920x1080",
+      "frames": 90,
+      "sampleFrames": [
+        0,
+        12,
+        15,
+        25,
+        38,
+        51,
+        64,
+        77,
+        89
+      ],
+      "setup": {
+        "ok": true,
+        "kind": "webgl"
+      },
+      "opaqueFraction": 0.634,
+      "paths": {
+        "browserEncoder": {
+          "bytes": 4244723,
+          "kbps": 11319,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.789,
+          "alphaMeanDiff": 0.02,
+          "colorMaxDiff": 122,
+          "alphaMaxDiff": 73,
+          "problems": [],
+          "codec": "avc1.640032",
+          "bitrateMode": "variable",
+          "hardwareAcceleration": "no-preference",
+          "packed": "1920x2176",
+          "encodeFps": 15,
+          "decodeMs": 1679,
+          "timingMsPerFrame": {
+            "paint": 117.07,
+            "pack": 61.38,
+            "encodeWait": 5.13,
+            "handoff": 0.42
+          },
+          "e2ePerFrameMs": 66.94,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 18.5
+        },
+        "browserEncoder:prefer-software": {
+          "bytes": 4244723,
+          "kbps": 11319,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.789,
+          "alphaMeanDiff": 0.02,
+          "colorMaxDiff": 122,
+          "alphaMaxDiff": 73,
+          "problems": [],
+          "codec": "avc1.640032",
+          "bitrateMode": "variable",
+          "hardwareAcceleration": "prefer-software",
+          "packed": "1920x2176",
+          "encodeFps": 15.5,
+          "decodeMs": 1813,
+          "timingMsPerFrame": {
+            "paint": 120.09,
+            "pack": 59.67,
+            "encodeWait": 4.93,
+            "handoff": 0.5
+          },
+          "e2ePerFrameMs": 65.11,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 18.8
+        },
+        "ffmpegRaw": {
+          "bytes": 1944776,
+          "kbps": 5186,
+          "segments": 6,
+          "receivedFrames": 90,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.915,
+          "alphaMeanDiff": 0.035,
+          "colorMaxDiff": 114,
+          "alphaMaxDiff": 67,
+          "browserDecode": {
+            "decoded": 90,
+            "comparedFrames": 9,
+            "colorMeanDiff": 0.728,
+            "alphaMeanDiff": 0.033
+          },
+          "timingMsPerFrame": {
+            "transferPure": 58.01,
+            "paint": 140.11,
+            "read": 33.92,
+            "readGpu": 13.57,
+            "readConvert": 20.35,
+            "transfer": 72.54,
+            "encodeIsolated": 137.5,
+            "tail": 4.81
+          },
+          "e2ePerFrameMs": 111.3,
+          "rawBytesPerFrame": 8294400,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 43.5
+        },
+        "ffmpegScreenshot": {
+          "bytes": 1944872,
+          "kbps": 5186,
+          "segments": 6,
+          "decodedFrames": 90,
+          "comparedFrames": 9,
+          "colorMeanDiff": 0.915,
+          "alphaMeanDiff": 0.035,
+          "colorMaxDiff": 114,
+          "alphaMaxDiff": 67,
+          "browserDecode": {
+            "decoded": 90,
+            "comparedFrames": 9,
+            "colorMeanDiff": 0.728,
+            "alphaMeanDiff": 0.033
+          },
+          "timingMsPerFrame": {
+            "paintAndSettle": 137.46,
+            "screenshot": 483.67,
+            "transfer": 148.54,
+            "encodeIsolated": 166.85,
+            "tail": 4.64
+          },
+          "e2ePerFrameMs": 636.85,
+          "pngBytesPerFrame": 500546,
+          "ran": true,
+          "available": true,
+          "verdict": "可用",
+          "reasons": [],
+          "secondsSpent": 91.9
+        }
+      },
+      "previewPng": "preview-three-1920x1080-f38.png"
+    }
+  ],
+  "comparison": [
+    {
+      "scene": "particles",
+      "size": "960x540",
+      "e2eMsPerFrame": {
+        "browserEncoder": 16.42,
+        "ffmpegRaw": 51.36,
+        "ffmpegScreenshot": 83.37
+      },
+      "available": {
+        "browserEncoder": true,
+        "ffmpegRaw": true,
+        "ffmpegScreenshot": true
+      }
+    },
+    {
+      "scene": "three",
+      "size": "960x540",
+      "e2eMsPerFrame": {
+        "browserEncoder": 17.01,
+        "ffmpegRaw": 36.44,
+        "ffmpegScreenshot": 194.33
+      },
+      "available": {
+        "browserEncoder": true,
+        "ffmpegRaw": false,
+        "ffmpegScreenshot": false
+      }
+    },
+    {
+      "scene": "particles",
+      "size": "1920x1080",
+      "e2eMsPerFrame": {
+        "browserEncoder": 57.82,
+        "ffmpegRaw": 153.61,
+        "ffmpegScreenshot": 228.28
+      },
+      "available": {
+        "browserEncoder": true,
+        "ffmpegRaw": true,
+        "ffmpegScreenshot": true
+      }
+    },
+    {
+      "scene": "three",
+      "size": "1920x1080",
+      "e2eMsPerFrame": {
+        "browserEncoder": 66.94,
+        "ffmpegRaw": 111.3,
+        "ffmpegScreenshot": 636.85
+      },
+      "available": {
+        "browserEncoder": true,
+        "ffmpegRaw": true,
+        "ffmpegScreenshot": true
+      }
+    }
+  ],
+  "failures": [],
+  "exit": {
+    "code": 0,
+    "reason": null
+  },
+  "pathVerdicts": {
+    "browserEncoder": {
+      "verdict": "可用",
+      "availableIn": [
+        "particles 960x540",
+        "three 960x540",
+        "particles 1920x1080",
+        "three 1920x1080"
+      ],
+      "unavailableIn": []
+    },
+    "browserEncoder:prefer-software": {
+      "verdict": "可用",
+      "availableIn": [
+        "particles 960x540",
+        "three 960x540",
+        "particles 1920x1080",
+        "three 1920x1080"
+      ],
+      "unavailableIn": []
+    },
+    "ffmpegRaw": {
+      "verdict": "不可用",
+      "availableIn": [
+        "particles 960x540",
+        "particles 1920x1080",
+        "three 1920x1080"
+      ],
+      "unavailableIn": [
+        "three 960x540:颜色平均差 1.047 不小于 1"
+      ]
+    },
+    "ffmpegScreenshot": {
+      "verdict": "不可用",
+      "availableIn": [
+        "particles 960x540",
+        "particles 1920x1080",
+        "three 1920x1080"
+      ],
+      "unavailableIn": [
+        "three 960x540:颜色平均差 1.046 不小于 1"
+      ]
+    }
+  }
+}
