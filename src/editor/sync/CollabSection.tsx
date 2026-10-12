@@ -342,7 +342,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
           ) : null}
           {/* 托管方的服务(渲染节点):放云端且这台托管端有它才出现;创建者能改(先验证创建者身份),其他成员只读 */}
           <HostedServiceRows where={shared.where} hosted={hostedServices} creator={iAmCreator} busy={busy}
-            onToggle={(service, enabled) => setFlow({ kind: "hosted-service", service, enabled })} />
+            onToggle={(service, enabled) => setFlow({ kind: "hosted-service", service, enabled })}
+            onToggleOption={(service, option, enabled) => setFlow({ kind: "hosted-option", service, option, enabled })} />
           {shared.where === "lan" ? (
             <>
               <div className="pc-sync-warn">{COLLAB_TEXT.localNote}</div>

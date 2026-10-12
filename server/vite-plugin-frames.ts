@@ -796,6 +796,9 @@ function hostAssetClient({ node, endpoint, docUrl, origin, ticket, createAssetCl
  * 项目清单与每条连接的票据向管理进程的本机代理口要(`render-node/host.mjs` 的 `createBrokerClient`):每秒对一次账,
  * 清单里新出现的项目当场连上、不在清单里的让掉认领后断开、标了排空的做完再断开;管理进程说暂停就不认领新任务(背压)。
  * 这个进程里没有服务私钥,也没有任何项目的口令,只有两分钟的连接票据。节点 id 用清单给的。
+ * 清单每一项的 `streams`(这个项目此刻产不产轨道流:渲染节点开着并且「生成轨道流」开着,`hosted-render/broker.mjs`)随配置项进
+ * `host.add`,每次对账更新:不产的项目这台主机不认领它的流任务,它的执行器切清单计划时也不出自己的那一份流(`render-node/host.mjs`
+ * 文件头「按项目产不产轨道流」)。不走代理口的独立渲染主机没有这一项,不按项目管。
  */
 async function startHostNode(root: string, service: FramePipeline, node: any, origin: string) {
   const hostMod: any = await import("./render-node/host.mjs");
@@ -893,7 +896,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     cardSourceVersions: cardCode(root).view,
     now: Date.now,
     nodeIdOf: (entry: any, index: number) => (typeof entry?.nodeId === "string" && entry.nodeId ? entry.nodeId : `${nodeIdBase}/p${index}`).slice(0, 128),
-    connect: (entry: any, index: number) => {
+    connect: (entry: any, index: number, live: { streams: () => boolean | null }) => {
       const rec: any = { projectId: entry.projectId ?? null, endpoint: null, assets: null, ticket: null, connectFailed: 0, opens: 0, cards: null, closed: false };
       // 代理模式:每次建新会话向管理进程要一张连接票据(与桌面版「页面每次交一张 render 票据」同一做法)
       const protocols = broker
@@ -928,7 +931,9 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
           (error: any) => log("host.layer-map-failed", { project: index, message: String(error?.message ?? error) }),
         );
       };
-      const executor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log, codeStamp: () => cardCode(root).epoch, publishLayerMap });
+      // 托管方的渲染节点:这个项目此刻产不产轨道流(现读;管理进程的清单变了,一拍之内跟上)。别的主机不按项目管,不给
+      const streamsEnabled = broker ? () => live.streams() === true : null;
+      const executor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log, codeStamp: () => cardCode(root).epoch, publishLayerMap, streamsEnabled });
       if (createHostCardSync && rec.projectId) {
         try {
           rec.cards = createHostCardSync({
@@ -1027,7 +1032,8 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     try {
       const listing = await broker.projects();
       if (closed) return;
-      const diff = hostMod.reconcileHostProjects(host, listing, (item: any) => ({ url: listing.docUrl, projectId: item.projectId, members: item.members === true, nodeId: item.nodeId }));
+      // `streams` 一律给布尔:清单里没有这一项(或不是 true)按不产算
+      const diff = hostMod.reconcileHostProjects(host, listing, (item: any) => ({ url: listing.docUrl, projectId: item.projectId, members: item.members === true, nodeId: item.nodeId, streams: item.streams === true }));
       if (diff.added.length || diff.removed.length || diff.drained.length) log("queue.broker-sync", { profile: "host", ...diff, paused: listing.paused === true });
       brokerError = "";
       void broker.report({ pid: process.pid, queue: summary() });

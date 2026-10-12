@@ -274,7 +274,7 @@ test('HR11 接续与逐消息都重新核对开关：记录被直接改掉（不
 test('HR12 成员列表：服务连接的行带 service、不是创建者；顶层 hosted；认领时带「渲染中」；放本机的项目没有这些', async (t) => {
   const { env, proj, creator, data } = await setup(t);
   const list = await ask(creator, { type: 'shared.members' }, 'shared.members.list');
-  assert.deepEqual(list.hosted, { render: { available: true, enabled: true }, agent: { available: false, enabled: true } });
+  assert.deepEqual(list.hosted, { render: { available: true, enabled: true, streams: false }, agent: { available: false, enabled: true } });
   const row = list.devices.find((d) => d.service === 'render');
   assert.ok(row, JSON.stringify(list.devices));
   assert.deepEqual(
@@ -297,7 +297,7 @@ test('HR12 成员列表：服务连接的行带 service、不是创建者；顶�
 
   await adminOp(creator, proj, 'set-hosted-service', { service: 'render', enabled: false });
   const pushed = await creator.next((m) => m.type === 'shared.members.list' && m.hosted?.render?.enabled === false && !m.devices.some((d) => d.service), 3000);
-  assert.deepEqual(pushed.hosted.render, { available: true, enabled: false });
+  assert.deepEqual(pushed.hosted.render, { available: true, enabled: false, streams: false });
 
   // 放本机（挂载模式）：没有 hosted，开关操作 bad-message
   const lan = await serviceHostFor(t, { attached: true, trustLoopback: true });

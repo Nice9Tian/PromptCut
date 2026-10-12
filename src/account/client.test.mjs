@@ -210,3 +210,35 @@ test('desktop consent uses only the pinned native bridge with exact bearer reque
   assert.equal(calls[0].args.body, undefined);
   assert.deepEqual(calls[1].args.body, { accept:true, noticeVersion:1, requestId:'native-consent-request' });
 });
+
+test('account session carries the hosted render node (with its streams option) only when the doc service reports a well-formed one; creator toggles use the bearer admin route', async () => {
+  const wires = []; let hosted = session.hosted;
+  const client = createAccountClient({ online: true, origin: 'https://visuhive.com', device, now: () => 1000,
+    fetch: async (url, init) => {
+      if (url.pathname.endsWith('/me')) return reply({ ok: true, account, csrfToken: 'csrf' });
+      if (url.pathname.includes('/editor/')) return reply(credential());
+      if (url.pathname.endsWith('/admin')) { wires.push(init); return reply({ ok: true, eventId: 'event', accessRevision: 2, completed: false, state: 'pending-services' }); }
+      return reply({ ...session, hosted });
+    } });
+  await client.restore();
+  // old doc service: no render entry -> the page shows neither row
+  assert.equal('render' in (await client.session(projectId)).hosted, false);
+  hosted = { ...session.hosted, render: { available: true, enabled: true, streams: false, extra: 'ignored' } };
+  assert.deepEqual((await client.session(projectId)).hosted.render, { available: true, enabled: true, streams: false });
+  // a doc service that reports the node but not the option: node row only
+  hosted = { ...session.hosted, render: { available: true, enabled: false } };
+  assert.deepEqual((await client.session(projectId)).hosted.render, { available: true, enabled: false });
+  // malformed entries are dropped, the session itself stays valid
+  for (const bad of [{ available: 'yes', enabled: true }, { available: true }, 'on', null, { available: true, enabled: true, streams: 'yes' }]) {
+    hosted = { ...session.hosted, render: bad };
+    const got = (await client.session(projectId)).hosted;
+    if (bad && typeof bad === 'object' && typeof bad.available === 'boolean' && typeof bad.enabled === 'boolean') assert.deepEqual(got.render, { available: true, enabled: true });
+    else assert.equal('render' in got, false);
+    assert.equal(got.agent.enabled, false);
+  }
+  await client.setHostedService(projectId, 'render', true, 1, 'render-on');
+  await client.setHostedOption(projectId, 'render', 'streams', true, 1, 'streams-on');
+  assert.deepEqual(wires.map(w => [w.credentials, w.headers.Authorization]), [['omit', 'Bearer access-test'], ['omit', 'Bearer access-test']]);
+  assert.deepEqual(JSON.parse(wires[0].body), { projectId, enabled: true, expectedAccessRevision: 1, requestId: 'render-on', op: 'set-hosted-service', service: 'render' });
+  assert.deepEqual(JSON.parse(wires[1].body), { projectId, enabled: true, expectedAccessRevision: 1, requestId: 'streams-on', op: 'set-hosted-option', service: 'render', option: 'streams' });
+});

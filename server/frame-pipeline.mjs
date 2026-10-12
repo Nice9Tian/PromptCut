@@ -2105,7 +2105,9 @@ export class FramePipeline {
    * 和每条流最近一次切分实际出键的指纹。在线页面按这张表找流清单。流有两个来处:
    *
    *   1. 本机自己这一版要产的(与生产者、与队列切分同一组参数的 `planStreams`,所以流键相同):本机没有生产者或开关关着
-   *      (`PROMPTCUT_STREAMS=0`)时没有这一部分。这里不探编码器(那是异步的):列了而没人产的流,页面取不到清单,照旧每拍换快照;
+   *      (`PROMPTCUT_STREAMS=0`)时没有这一部分。这里不探编码器(那是异步的):列了而没人产的流,页面取不到清单,照旧每拍换快照。
+   *      托管方的渲染节点按项目的「生成轨道流」产流(任务书「甲三」):这一版所属的项目此刻不产流时,执行器在 entry 上记
+   *      `ownStreamsOff`(`prerender-executor.mjs` 的 `plan`),这一部分同样不列;
    *   2. 切分给别的指纹出过键、本机自己不产的单卡流(`issuedStreamSpecs`):在线页面的清单计划只给浏览器出一份流任务
    *      (`listStreamSpecs`),本机没有生产者、关着流开关、或这张卡本机没判重时第 1 部分里没有它,不列的话别的在线页面找不到
    *      浏览器产出来的那条流。
@@ -2117,7 +2119,7 @@ export class FramePipeline {
     if (!entry) return {};
     const producer = this.streamProducer();
     let own = [];
-    if (producer?.enabled) {
+    if (producer?.enabled && entry.ownStreamsOff !== true) {
       try {
         own = planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
           codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
@@ -3085,6 +3087,7 @@ export class FramePipeline {
       .map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
     const clips = (entry.project.tracks || []).flatMap(track => track.clips || []);
     const streamSpecs = await this.queueStreamSpecs(entry);
+    const ownListStreams = await this.streamCapable();
     const context = {
       entryKey: entry.key,
       // 普通计划只切本机判重的卡;补渲进集合的片段只由补渲计划任务切(标 backfill,排在本机判重的任务之后,c10a 契约第 17 节)
@@ -3093,9 +3096,13 @@ export class FramePipeline {
       cardPlan,
       // 每条流连同它的形状(`queueStreamOf`):切分给浏览器出单卡流那一份时要(browser-stream-task.md 第一处)
       streams: streamSpecs.map(queueStreamOf),
-      // 在线页面的清单计划用(`local-node.mjs` 的 `listPlanOverrides`):按清单里的片段算流,只给浏览器出一份。
-      // 不看本机判没判重、本机能不能产流(`queueStreamSpecs` 那两道闸只管切分方自己产的那一份)
+      // 在线页面的清单计划用(`local-node.mjs` 的 `listPlanOverrides`):按清单里的片段算流。浏览器那一份不看本机判没判重、
+      // 本机能不能产流(`queueStreamSpecs` 那两道闸只管切分方自己产的那一份)
       browserStreamsFor: clips => this.listStreamSpecs(entry, clips).map(queueStreamOf),
+      // 任务书「甲三」:清单计划里切分方自己的那一份出不出,看本机此刻能不能产流(有生产者、开关开着、探到了编码器 ——
+      // 与 `node.hello` 报的 `capabilities.streams` 同一个判据)。托管方的渲染节点另看这个项目的「生成轨道流」(执行器按项目再收一道)。
+      // 本机判没判重不看:清单是发布方判的,流任务回来时执行器按清单里的片段把它对回这一版(`prerender-executor.mjs` 的 `matchStream`)
+      ownListStreams,
       anchorFrames: anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count),
       // c66-host-cards:全局代码版本(`frameCode`)不再覆盖用户卡与改动层;这一版用到的定制卡的代码身份
       // 由切分写进 requires.cardSources(共享档只写这张卡的,本地档、流写全部),节点手里没有这份代码就不认领
@@ -3123,7 +3130,11 @@ export class FramePipeline {
       return [];
     }
   }
-  /** 清单计划里的片段各自的流(与 `queueStreamSpecs` 同一组参数,所以单卡流的内容键相同);算不出回 `[]` */
+  /**
+   * 清单计划里的片段各自的流(与 `queueStreamSpecs` 同一组参数,所以单卡流的内容键相同);算不出回 `[]`。
+   * 切分时用(`planForQueue` 的 `browserStreamsFor`),流任务回来时执行器也用它把任务对回这一版:清单计划里切分方自己的那一份只出单卡流
+   * (`local-node.mjs` 的 `listPlanOverrides`),单卡流的内容键与清单里还有哪些片段无关,所以只给一个片段也算得出同一条流。
+   */
   listStreamSpecs(entry, clips) {
     try {
       return planListStreams(entry, clips, { budget: this.streamProducer()?.budget ?? streamDecoderBudget(),

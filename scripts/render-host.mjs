@@ -22,7 +22,11 @@
  *   --data            这个实例的数据目录(帧库、编辑器数据、临时目录),缺省 `<系统临时目录>/promptcut-render-host-<端口>`。
  *                     每个实例要各用一份:帧库和临时目录不能共用。
  *   --max-concurrent  并发总数(1～4),覆盖配置里的 `maxConcurrent`。
- *   --streams         `PROMPTCUT_STREAMS=1`(缺省 0:流任务在 M6c 之前不走队列)。
+ *   --streams         `PROMPTCUT_STREAMS=1`:这台主机能产轨道流(探到 H.264 编码器时报 `capabilities.streams`,认领流任务;
+ *                     认领在线页面的清单计划时连自己的那一份流一起切)。缺省 0:不产流、不认领流任务。
+ *                     托管方的渲染服务(代理模式)部署时带它(管理进程的 `PROMPTCUT_RENDER_STREAMS=1`,部署模板里写着);
+ *                     带了只是「能产」,每个项目产不产看它自己的「生成轨道流」(项目记录 `hosted.render.streams`,缺省关):
+ *                     管理进程把它放进 `GET /projects` 的每一项,工作进程据此不认领没打开的项目的流任务(任务书「甲三」)。
  *   --verbose         把编辑器与预渲染进程的输出原样转出来(缺省只转 `[queue-node]` 与报错行)。
  *
  * 给子进程设的环境变量(契约第 2 节):`PROMPTCUT_QUEUE_NODE=1`、`PROMPTCUT_NODE_PROFILE=host`、
