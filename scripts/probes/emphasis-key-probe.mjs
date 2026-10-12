@@ -218,7 +218,7 @@ try {
     if (!last || CLIPS.some((clipId) => last[clipId] !== row[clipId])) out.snapshotProgress.push(row);
     return done ? true : null;
   };
-  await until('每个片段的键下面都有快照', snapshotsDone, 300_000, 2000);
+  await until('每个片段的键下面都有快照', snapshotsDone, 1_200_000, 2000);
   out.produceMs = Date.now() - t0;
 
   // ---------- 2. 记下计划、流、层
