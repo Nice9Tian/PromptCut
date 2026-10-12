@@ -454,7 +454,7 @@ async function comparePixels(page, id, { from, name, key, until: untilSec }) {
       if (!s || !ta || after.clip.placeholder) { res.rejects.push({ shot: !!s, drawing: !!ta, t: after?.t ?? null }); continue; }
       const near = (st, t) => Math.abs(t.lastDrawn - Math.round((st.t ?? 0) * FPS)) <= 3;
       if (!near(before, tb) || !near(after, ta) || ta.lastDrawn < tb.lastDrawn) { res.rejects.push({ stale: [tb.lastDrawn, before.t, ta.lastDrawn, after.t] }); continue; }
-      if (ta.lastDrawn - tb.lastDrawn <= 3) { shot = s; frame = Math.round((tb.lastDrawn + ta.lastDrawn) / 2); res.f0 = tb.lastDrawn; res.f1 = ta.lastDrawn; }
+      if (ta.lastDrawn - tb.lastDrawn <= 2) { shot = s; frame = Math.round((tb.lastDrawn + ta.lastDrawn) / 2); res.f0 = tb.lastDrawn; res.f1 = ta.lastDrawn; }
       else res.rejects.push({ frames: ta.lastDrawn - tb.lastDrawn });
     }
   }

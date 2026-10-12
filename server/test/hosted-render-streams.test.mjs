@@ -191,12 +191,12 @@ test('HRS-03 listPlanOverrides:ownListStreams 为真才出切分方自己的那�
 /* ================================================================== HRS-04 / HRS-05 */
 
 /** 假端点上的一个节点:回它发出去的消息与往里塞消息的口子 */
-function nodeOn({ executor, canClaim, capabilities = { transcode: true, streams: true }, profile = 'host' }) {
+function nodeOn({ executor, canClaim, capabilities = { transcode: true, streams: true }, profile = 'host', planOnly = false }) {
   const sent = [];
   let handler = () => {};
   const endpoint = { send: (m) => { sent.push(m); }, onMessage: (h) => { handler = h; } };
   const node = createLocalNode({
-    nodeId: 'n-host', node: { profile, envFingerprint: OWN, codeVersions: ['cv-1'], capabilities },
+    nodeId: 'n-host', node: { profile, envFingerprint: OWN, codeVersions: ['cv-1'], capabilities, ...(planOnly ? { planOnly: true } : {}) },
     endpoint, now: () => 1000, codeVersion: 'cv-1', projects: ['p1'], maxConcurrent: 1,
     executor, sink: { has: async () => false, put: async () => ({ complete: false }) },
     ...(canClaim ? { canClaim } : {}),
@@ -207,8 +207,8 @@ function nodeOn({ executor, canClaim, capabilities = { transcode: true, streams:
 }
 const open = (task) => ({ ...task, state: 'open', version: 1, source: { ...task.source, userId: 'u@d' } });
 
-async function publishedBy({ planTask, plan }) {
-  const { node, sent, deliver } = nodeOn({ executor: { plan: async () => plan, render: async () => null }, profile: 'pc' });
+async function publishedBy({ planTask, plan, planOnly = false }) {
+  const { node, sent, deliver } = nodeOn({ executor: { plan: async () => plan, render: async () => null }, profile: 'pc', planOnly });
   const view = open(planTask);
   deliver({ type: 'queue.snapshot', epoch: 1, tasks: [view] });
   node.tick();
@@ -237,6 +237,9 @@ test('HRS-04 local-node 切清单计划:ownListStreams 为真时流出两份(自
   const only = (await publishedBy({ planTask: list, plan: { ...base, ownListStreams: false } })).filter((t) => t.kind === 'stream');
   assert.deepEqual(only.map((t) => t.requires.envFingerprint), [BR]);
   assert.equal('dual' in only[0].input, false);
+  // 只切分、不认领细任务的节点(仅供测试的 planOnly):它不会去做,所以不出自己的那一份
+  const planOnly = (await publishedBy({ planTask: list, plan: { ...base, ownListStreams: true }, planOnly: true })).filter((t) => t.kind === 'stream');
+  assert.deepEqual(planOnly.map((t) => t.requires.envFingerprint), [BR]);
 });
 
 const streamTaskFor = (projectId = 'p1') => ({

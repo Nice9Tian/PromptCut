@@ -406,7 +406,9 @@ export function createLocalNode({
     const cutBy = Number.isSafeInteger(plan?.actualRev) && plan.actualRev !== task?.source?.projectRev
       ? { ...task, source: { ...task.source, projectRev: plan.actualRev } }
       : task;
-    const base = { ...plan, planTask: cutBy, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, ...listPlanOverrides(task, plan) };
+    // 只切分、不认领细任务的节点(`planOnly`,仅供测试,filter.mjs 规则 8)不出自己的那一份流:它不会去做,出了只是多一个永远没人产的候选
+    const listPlan = node?.planOnly === true && plan?.ownListStreams === true ? { ...plan, ownListStreams: false } : plan;
+    const base = { ...plan, planTask: cutBy, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, ...listPlanOverrides(task, listPlan) };
     const outcome = await publishDerived(run, base, plan?.cardLocks);
     if (!holding(run)) return discard();
     const { derived, published, relocked, gaveUp } = outcome;

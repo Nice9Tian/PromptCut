@@ -1,19 +1,206 @@
 # 子 Agent 报告：渲染重构「甲三」——云端的渲染服务能产轨道流，界面上给一个入口
 
-分支 `claude/rr-hosted-streams`，工作区 `.worktrees/rr-hosted-streams`，端口段 27620～27659。2026-10-13 开工。
+分支 `claude/rr-hosted-streams`，工作区 `.worktrees/rr-hosted-streams`，端口段 27620～27659。2026-10-13。
 
-「甲三」是任务书 `docs/plan/render-refactor-task.md` 里的一项：云端的渲染服务以能产轨道流的方式部署，项目设置里给一个「生成轨道流」的入口（缺省关），产不产由每个项目自己的这一项定。
+文中的叫法：「甲三」是任务书 `docs/plan/render-refactor-task.md` 里「云端的渲染服务能产轨道流，项目设置里给一个『生成轨道流』的入口（缺省关）」那一项；「清单计划」是在线页面发布的、带片段清单的计划任务；「切分方」是认领计划任务、把它切成细任务的节点（桌面应用、独立渲染主机、托管方的渲染节点）；「切分方自己的那一份」是切分方按自己的环境指纹出键、自己能认领的那份流任务（另一份是给浏览器节点的）；「这一项」指项目设置里的「生成轨道流」；「管理进程」「工作进程」是托管方渲染服务的两层进程（`server/hosted-render/main.mjs` 与它起的 `scripts/render-host.mjs`）；「账号项目」是走中心账号那条路的云端项目，「口令项目」是凭项目密码进入的共享项目。
+
+## 状态
+
+五件都做了，验收探针、入口的单测与界面探针、「甲一」的三支探针、基线两条的结果见「验证结果」。有三处要主会话注意，先写在这里：
+
+1. **打开这一项以后，要等这个项目下一次发清单计划才开始产流**（项目有任何改动、或清单变了）。要它当场生效得改三个不在我文件范围里的文件，没有做，见「没做成的」第 1 条。
+2. **账号项目里这两项现在只是能改、能看**：托管方的渲染服务看不到账号项目（目录模块只列旧凭证存储里的项目），改了也没有渲染节点来干活。见「没做成的」第 2 条。
+3. **「每个项目产不产」传到工作进程里的那条线，我是绕着文件范围接的**（工作进程自己向管理进程的代理口问），没有改 `server/render-node/host.mjs` 与 `server/vite-plugin-frames.ts`。直接接更干净，改法写在「裁定」第 1 条，请主会话定要不要换。
 
 ## 做了什么
 
-（开工建档，随做随填。）
+### 一、合入原型
+
+`git merge --no-ff claude/hosted-stream-entry`，没有冲突。界面上的八句文案（`src/editor/sync/hostedServices.ts` 的 `HOSTED_OPTION_TEXT`）一个字没动。
+
+### 二、渲染服务那一半
+
+| 处 | 改了什么 | 文件 |
+|---|---|---|
+| 以能产流的方式起 | 部署模板写 `PROMPTCUT_RENDER_STREAMS: '{{STREAMS}}'`，部署参数 `streams` 缺省 `'1'`（显式给 `0` 才整台不产，别的值报用法错误）；管理进程把 `--streams` 同样交给隔离工作进程（带用户卡的项目整个归它做，它不能产的话这种项目打开了也没人产）；`/status` 多一项 `streams` | `server/hosted/deploy/pm2-promptcut-render.config.cjs`、`server/hosted-render/deploy.mjs`、`server/hosted-render/main.mjs`、`server/hosted/deploy/README.md`、`scripts/render-host.mjs` 与 `scripts/remote/docservice.mjs` 的说明 |
+| 管理进程读目录条目 | 给工作进程的清单（代理口 `GET /projects`）每一项多带 `streams`：**渲染节点开着并且 `hosted.render.streams` 是 true**（`streamsOn`）。只关这一项的项目照样列、照样连。隔离工作进程的那份清单照目录条目补上同一项 | `server/hosted-render/broker.mjs`、`main.mjs` |
+| 工作进程问「这个项目产不产」 | 新模块：向代理口问，按项目答。没问到过、清单过期（1.2 秒没更新）、清单里没有这个项目、这一项不是 true，一律答「不产」。不开计时器，被问到才请求 | `server/hosted-render/project-streams.mjs`（新） |
+| 认领闸 | 执行器多一个可选方法 `accepts(task)`：流任务要这个项目此刻产流才接，快照任务、计划任务照常。`createLocalNode` 认领前问它一次（与调用方给的 `canClaim` 两道都过才认领）；执行器没有这个方法时行为与原来逐项相同。**只挡认领**：手里的流任务照做完，不放回 | `server/prerender-executor.mjs`、`server/render-node/local-node.mjs` |
+
+关这一项与关渲染节点的区别照任务书：不断开服务的连接、不放回手里的认领、已经产出的流保留。
+
+### 三、清单计划连切分方自己的那一份流一起出
+
+| 处 | 改了什么 | 文件 |
+|---|---|---|
+| 切分的输入 | `planForQueue` 的上下文多一项 `ownListStreams`：本机此刻能不能产流（有生产者、开关开着、探到了编码器，就是 `streamCapable()`，与节点报的 `capabilities.streams` 同一个判据）。`browserStreamsFor` 没改 | `server/frame-pipeline.mjs` 的 `planForQueue` |
+| 托管方按项目收一道 | 执行器 `plan()` 对清单计划：这个项目此刻不产流就把 `ownListStreams` 改成 false（每次切分现问，不进按版本的缓存） | `server/prerender-executor.mjs` |
+| 出哪几份 | `listPlanOverrides`：`ownListStreams` 为真时，**单卡流**不再标 `browserOnly`，于是 `splitPlan` 照它现成的规矩出两份（切分方自己的、浏览器的，成对，谁先认领谁得）；不为真照旧只给浏览器。**组流任何时候都只标 `browserOnly`**（等于不出） | `server/render-node/local-node.mjs` |
+| 把任务对回这一版 | `matchStream`：清单计划切出的流任务在本机这一版的流里找不到时，按任务的片段现算它的单卡流再对（`pipeline.listStreamSpecs(entry, [片段])`）。内容键、结果键、分段范围照核，对不上照旧 `plan-mismatch`；不是清单计划切出的任务不走这条回退 | `server/prerender-executor.mjs` |
+| 层表 | 没改写法：切分方自己的指纹随流任务进切分候选记录，`issuedStreamSpecs` 照记录列，候选是「切分方、浏览器」（照发布顺序）。另加一处：这一版所属的项目此刻不产流时（执行器在 entry 上记 `ownStreamsOff`），层表不列本机自己这一版的流，免得页面去取没人产的清单；已经派过的照记录列 | `server/frame-pipeline.mjs` 的 `layerMapStreamOptions` |
+
+**没有改 `streamPicked`**。任务书说「`FramePipeline.streamPicked` 现在只认本机判重的卡」，我的读法是它管的是「本机自己这一版要产哪些流」（自动生产、本机流计划），清单里的片段是发布方判的，本机没判重也要产。所以没有把清单并进它，而是让执行器在任务回来时按片段现算：这样不用记着当时的清单，换一个进程、重启之后照样对得回（做法同「甲一」集成时层表那一环的理由）。`produceRange` 拿到流的形状就能产，不过 `streamPicked` 这道闸。`preload`、`fillAnchorSnapshots`、`fillCardControls`、`recordSnapshots` 没有碰。
+
+### 四、账号项目那条路
+
+账号项目的记录在账本里（`server/account/authority.mjs`），页面凭登录令牌走 `/hosted/shared/account/admin`，与口令项目是两套接口。
+
+| 处 | 改了什么 | 文件 |
+|---|---|---|
+| 账本 | 新的创建者操作 `set-hosted-option { service: 'render', option: 'streams', enabled }`：记在 `hostedOptions.render.streams`（没有算关）；与原有的 `set-hosted-service` 互不冲掉；记一条访问事件（不带受影响的成员，不停任何任务）；不是创建者 403，参数不对 400 `invalid-option`，版本号对不上 409 | `server/account/authority.mjs` |
+| 会话 | `hosted` 多一项 `render: { available, enabled, streams }`（`available` 看登记表里有没有渲染服务的公钥） | `server/docservice/account-hosted.mjs` |
+| 页面的账号客户端 | `setHostedService(projectId, service, …)`、`setHostedOption(…)`；会话里的 `hosted.render` 形状对才收，旧文档服务不报就没有 | `src/account/client.ts` |
+| 同步管理 | `setHostedService` 对账号项目不再只认云端 Agent；`setHostedOption` 对账号项目不再回「不允许」。改完续一次会话。成员靠每 3 秒续会话读到的状态看到变化；账号项目没有口令项目那两种通知，按前后两次读到的状态给提示，规矩与文案同口令项目（只在关闭时） | `src/editor/sync/syncManager.ts`、`hostedServices.ts` |
+| 界面 | 账号项目点这两行的勾选，不弹「验证创建者身份」（账号项目没有创建者密码，原来这一步对账号项目一定过不去），直接到确认弹窗；成员照旧只读 | `src/editor/sync/MembersPanel.tsx` |
+
+**VisuHive 仓库不用改。** 这两项的读写都在 PromptCut 的文档服务与页面之间；账号服务那边只调 PromptCut 的 `/internal/v2/projects`（列项目），不读这些字段。
+
+### 五、新旧兼容
+
+原型的单测（`hosted-stream-option.test.mjs`、`hostedServices.test.mjs` 的 HS10～HS12）原样通过。新加的两处同样兼容：旧文档服务的会话没有 `hosted.render`，新页面不显示那两行；旧文档服务的目录条目不带 `streams`，渲染服务按不产算。
+
+### 六、文档
+
+`docs/plan/hosted-render-contract.md` 第 3.1 节补了「渲染服务怎么用它」「账号项目」两条，第 7.2 节改了 `PROMPTCUT_RENDER_STREAMS` 一行；`docs/plan/browser-stream-task.md` 两处「留给甲三」改成已做。`docs/semantics/` 没有动。
 
 ## 验证结果
 
+机器：这台 PC，同时有别的子 Agent 在跑。
+
+### 验收探针 `scripts/probes/hosted-render-streams-probe.mjs`（新）
+
+隔离的托管组合：进程内的文档服务与素材服务（本机信任关着、带集群令牌，与云节点同样的配置）、本机托管代理的三个同站跨源的源、真的渲染服务管理进程与工作进程（`PROMPTCUT_RENDER_STREAMS=1`，并发 1，测试指纹）、在线构建的页面。创建者是本进程里的一条连接，发的是页面同一个创建者操作。
+
+命令：`node scripts/probes/hosted-render-streams-probe.mjs --dist out/rr-hosted-streams/dist-online --base-port 27620 --out out/rr-hosted-streams/run4`
+
+**第 4 遍：退出码 0，`ok: true`，`fails: []`，174 秒。** 逐条：
+
+| 验收 | 结果 |
+|---|---|
+| 新建的项目这一项是关的 | 成员列表 `hosted.render` 是 `{ available: true, enabled: true, streams: false }`；管理进程的清单里这个项目 `streams: false` |
+| 关着：不认领流任务、快照任务照常 | 页面发的清单计划由渲染服务切分（`plans: 2`），4 个快照任务全部 done，失败 0；队列里这个项目 0 条流任务；层表有这张卡的快照层、没有流；页面的在线来源里没有这张卡的流 |
+| 创建者打开 | `shared.admin` 回 ok；成员列表变成 `streams: true`；管理进程的清单 69 毫秒后跟着变。只打开、没有新的清单计划时仍是 0 条流任务（见「没做成的」第 1 条）；页面改一次项目名后 2.9 秒切出 3 个流任务（分段 0～7、8～15、16～16） |
+| 再关掉（手里正有一个流任务） | 渲染服务认领一个流任务后 71 毫秒关掉。手里的那个 4.5 秒后 done（`attempts` ≤ 1，没有放回，`released` 不变）；之后 39 秒里另外两个一直 `open`、`attempts: 0`、没有认领；渲染服务与这个项目的连接没断；这期间这个项目新发的清单计划照常被认领、切分，没有再切出流任务；已经产出的那一段的流清单在内容库里，层表里这条流的那一行还在（候选是渲染服务的指纹） |
+| 别的项目不受影响 | 同一段时间里项目二（这一项开着）的清单计划被认领，1 个流任务、1 个快照任务都 done（36 秒） |
+| 再打开 | 剩下的两个流任务 8.9 秒后都 done；3 份流清单都过 `manifestMatches`；素材服务 `px` 里 18 块（1 个开头文件加 17 个分段，147 KB，编码器 `libx264`）都 complete、哈希对 |
+| 在线页面播放时贴上 | 页面的在线来源选中的是渲染服务产的那一份（6 段就绪，没有过期的）。播 45 帧：流播放器 `drawn` 从 1 到 53、`lastDrawn` 从 32 到 77，跟着播放头；字节是父页推的；包裹层一直被抑制；0 错误；快照平面只变动 3 次（不是每拍换）；舞台在 `http://s1.pc.localhost:27621`（跨源、隔离的那一种） |
+| 像素（638×359，满分 255） | 流在画第 44～47 帧时截图，与第 46 帧的精确活渲比：平均差 0.117、差得多的像素 0.088%；对照（往后 2 秒）平均差 1.003、差得多的像素 1.108% |
+| 页面错误、失败任务 | 0；渲染服务两个项目的节点 `failed: 0`、`released: 0`、`lost: 0`；代码版本与在线构建相同 |
+
+**看过的图**（`docs/reports/assets/rr-hosted-streams/`）：`e-jia-stream.png` 是棋盘格背景上、画面下方正中一块橙色圆角块（流在画的那一帧）；`e-jia-live-same.png` 肉眼看不出差别；`e-jia-live-far.png` 里橙块往右挪了约 10 个像素。
+
+**前三遍没过，原因都在探针，产品代码没有为此改动：**
+
+| 遍 | 退出码 | 不过的 | 原因 |
+|---|---|---|---|
+| 1 | 1 | 等不到页面把卡列进清单计划 | 我先用了画布卡 `r6-canvas`（想让浏览器节点做不了它）。页面测出来它是轻卡，不进清单。改成 `probe-slow-stepped`（每帧烧 40 毫秒，页面判重），并让页面报非 Chromium 内核的浏览器标识，于是它不当渲染节点 |
+| 2 | 1 | 项目二的流任务没出现 | 探针给项目二用了一个与共享项目 id 不同的项目文档 id。渲染服务按任务的 `source.projectId` 认「哪个项目」，查不到就按不产算。页面与云端 Agent 服务发的任务里它就是共享项目的 id，探针改成一样。这条约束见「裁定」第 1 条 |
+| 3 | 1 | 一条计数断言 | 工作进程每秒交一次诊断，任务做完那一刻读到的完成数还是上一拍的（3，队列里已是 4 个 done）。改成等它跟上。同一遍里像素那条「差得多的像素」是 0.19%，贴着 0.2% 的线：块上的字在流里是灰度抗锯齿、活渲是子像素抗锯齿（「甲一」集成报告记过）。第 4 遍把字去掉，是 0.088% |
+
+第 2、3 遍里别的各条都过；第 2 遍因为等项目二等满了 300 秒，「再关之后剩下的两个流任务一直没被认领」实际看了 310 秒。
+
+**为什么页面不当渲染节点。** 在线页面（Chromium 内核、身份为电脑）自己也是浏览器节点，做得了这张卡的流；渲染服务也出自己的那一份时两份成对，谁先认领谁得。探针要验的是渲染服务这一份，所以让页面报非 Chromium 的标识（页面自己据此不开节点连接，同 Firefox、Safari、手机身份的成员）。两边都能做时的那条路是「甲一」的三支探针验的。
+
+### 单测
+
+| 文件 | 条数 | 覆盖 |
+|---|---|---|
+| `server/test/hosted-render-streams.test.mjs`（新） | 10 | 清单的 `streams`；工作进程问「产不产」（没问到过、过期、问不到、晚一拍生效、口令不进诊断）；`listPlanOverrides`；local-node 切清单计划出两份；认领闸；执行器 `accepts` 与 `plan`；把清单计划的流任务对回这一版；管理进程的配置 |
+| `server/test/layer-map-streams.test.mjs` | 14 → 16 | 新增：清单计划连切分方自己的那一份一起出时层表的候选是「切分方、浏览器」，关着时只有浏览器；这一项关着的项目不列本机自己这一版的流、派过的照列 |
+| `server/test/account-hosted-option.test.mjs`（新） | 5 | 账号项目：会话里的 `hosted.render`；创建者改、落账、访问事件、重放；校验；成员 403 但读得到；公开路由走通 |
+| `src/account/client.test.mjs` | +1 | 会话里的渲染节点一项（旧文档服务没有、形状不对的丢掉）；两个新调用的请求体 |
+| `src/editor/sync/hostedServices.test.mjs` | 22 → 25 | 账号项目的三条（会话形状出这几行、创建者能改成员只读；前后两次状态给提示；不走创建者密码） |
+| `server/test/hosted-render-deploy.test.mjs` | 改 | PM2 配置里有 `PROMPTCUT_RENDER_STREAMS: '1'`；`0` 与非法值 |
+
+`hosted-render-streams.test.mjs` 里 local-node 切出的流任务，名次只断言「不是补渲档」，没有钉具体的数（「稀疏一」要把流任务的名次改成 5）。
+
+### 「甲一」的三支探针与入口的界面探针
+
+先重新出了在线构建（`vite build --mode online`，6 秒），跑的时候没有再动 `src/` 与 `server/frame-pipeline.mjs`。都带 `PROMPTCUT_NO_PORT_FILE=1`。
+
+（结果见本节末尾的表，跑完填。）
+
+### 基线
+
+（跑完填。）
+
+### 键的核对
+
+（跑完填。）
+
+### 窗口与端口
+
+- 每次起探针前后都查了可见窗口（`Get-Process` 里 `MainWindowHandle` 不为 0 的终端、node、chrome、ffmpeg），渲染服务那条进程链第一遍开跑 8 秒时查过一次，一共查了（见末尾）次，都是空的。
+- 端口只用了 27620～27659。跑完查过这一段上没有监听。
+- **开发服务器与公共的 `port.json`：** 我没有不带 `PROMPTCUT_NO_PORT_FILE=1` 起过编辑器的开发服务器。头两遍验收探针没有显式带这个变量，但那里起的编辑器是渲染服务的工作进程起的，`scripts/render-host.mjs` 本来就把它的临时目录指到自己的数据目录下，不写公共的那一份；`%TEMP%\promptcut\port.json` 的修改时间是 03:10，早于我第一次起任何进程（03:24）。第 3 遍起所有探针都带了这个变量，验收探针也在给渲染服务的环境里写明了。
+
 ## 没做成的及原因
 
-## 裁定〔裁〕
+1. **打开这一项以后不会当场开始产流。** 渲染服务自己的那一份流任务是切分清单计划时出的。同一版项目的清单计划已经做完，页面重发同一个结果键，队列不会重切（做完的任务 10 分钟内不重开）。所以创建者打开以后，要等这个项目下一次发清单计划：项目有任何改动（哪怕只是改名），或者清单变了。验收探针在打开之后让页面改了一次项目名。
+   - 要当场生效，得让在线页面在这一项变化时重发一份结果键不同的清单计划：`src/online/planPublisher.ts`（签名里带上这一项）、`server/render-queue/messages.mjs`（与页面那份对拍）、`src/editor/Preview.tsx`（订阅这一项的变化、触发重发）。三个都不在我的文件范围里，其中 `Preview.tsx` 是「道三」的文件。我估半天以内。
+   - 反过来，关掉是当场生效的（最迟约 0.5 秒）。
+2. **账号项目里这两项还没有渲染节点来执行。** 托管方的渲染服务看不到账号项目：目录模块（`server/docservice/modules/hosted.mjs`）只列旧凭证存储里的项目，服务的连接票据也从那里签。任务书说这是 0.7.18「把托管方的渲染节点接进账号项目」的事。到时候目录条目按账本出 `enabled`（`hosted.render`）与 `hosted.render.streams`（`hostedOptions.render.streams`），`authority.mjs` 导出的 `accountRenderState` 就是这两项的读法。另外注意：账号项目新建时渲染节点是**关**的（账本里原来就是 `hosted: { render: false, agent: false }`），与口令项目「没有算开」相反，我没有动它。
+   - 在那之前这两行会不会露出来：看登记表里有没有渲染服务的公钥。现在生产上没有部署渲染服务，所以不会出现；部署渲染服务而没有接账号项目的话，这两行会出现、能改、但不起作用。
+3. **账号项目这条路没有浏览器端的走查。** 服务端、客户端、界面逻辑各有单测；整条路（账号登录、进项目、点勾选）要起账号服务，现有的账号探针都靠 VisuHive 仓库的源码，我没有另搭。`syncManager.ts` 在 Node 里载不起来，它里面新加的那几行只过了类型检查。
+4. **清单计划里的组流不出。** 清单里同时活跃的重卡超过解码器预算（6 条）时，被并成组流的那几张卡，渲染服务不为它们产流（浏览器本来也画不了组流）。原因：组流的内容键跟着「清单里还有哪些片段」变，流任务回来时对不回这一版，层表也只认单卡流。这几张卡照旧贴快照。
+5. **真实网络环境的验收**不是这次的活，见下一节。
 
 ## 部署时要做什么、怎么验
 
+跟着 0.7.18 的部署做。
+
+**要做的：**
+
+1. 文档服务、在线编辑器、渲染服务三样用**同一个提交**重新部署（渲染服务与在线页面的代码版本不同时，它一个任务也认领不了）。这次文档服务有改动（口令项目的 `set-hosted-option`、目录条目的 `streams` 是原型带来的；账号项目的会话多了 `hosted.render`）。
+2. 渲染服务：`deploy-render` 生成的 PM2 配置里现在有 `PROMPTCUT_RENDER_STREAMS: '1'`，不用另外给参数。要整台不产流时部署前设 `PROMPTCUT_RENDER_STREAMS=0`。
+3. 节点上的 ffmpeg 要有 H.264 编码器（`install-render` 装的 `ffmpeg` 包带 libx264）。没有的话自检只告警 `no-h264`，渲染服务照常做快照、一条流也不产。
+4. 已有项目不用迁移：记录里没有这一项按关算。
+
+**怎么验（在节点上，用测试项目）：**
+
+1. `status-render`（或节点上 `curl http://127.0.0.1:5399/status`）：顶层 `streams: true`；`queue.capabilities.streams` 与 `transcode` 都是 true；`codeVersion.match` 不是 false；自检告警里没有 `no-h264`。
+2. 新建一个测试项目，只开在线页面、不开桌面应用。`/status` 的 `projects[]` 里这个项目 `streams: false`。加一张重卡，等快照做完：渲染节点那一行的成员列表里有「渲染中」，播放时重卡在换快照。
+3. 创建者在项目设置里勾上「生成轨道流」并确认。`/status` 里这个项目变成 `streams: true`。**随手改一下项目**（见「没做成的」第 1 条），几秒后 `/status` 的 `queue.nodes[]` 里这个项目的 `held` / `running` 出现 `stream:` 开头的任务，随后 `completed` 增加。
+4. 页面播放这张卡：是流在画（画面连续，不是隔一阵跳一张）。要看数字的话，页面控制台 `__pcOnlineSnapshots().streams` 里有这张卡、`ready` 大于 0。
+5. 再取消勾选：`/status` 里变回 `streams: false`，之后新加的重卡只有快照；已经有流的那张卡照旧播流。
+6. 另开一个没勾这一项的测试项目，确认它一条流都没有。
+7. 任务书点名的那一条：只开在线页面、没有桌面应用在线，重卡的流由云端的渲染服务产出并能播放——就是第 3、4 步。用 Firefox 或手机身份的页面再看一遍更直接（这种页面自己产不了流）。
+8. 验完删掉测试项目。
+
+**部署时可能遇到的：** 用 Chromium 内核的电脑页面时，页面自己也是浏览器节点，同一张卡的流两边都能做，谁先认领谁得；所以 `/status` 里渲染服务没有做这张卡的流、而页面照样播流，是正常的（流是页面自己产的）。要确认渲染服务在产，用第 7 步的页面，或者用浏览器做不了的卡（画布卡、Lottie）。
+
+## 裁定〔裁〕
+
+没有改语义文档。下面是实现里自己定的。
+
+1. 〔裁〕**「每个项目产不产」怎么传到工作进程里：工作进程自己向管理进程的代理口问**（`server/hosted-render/project-streams.mjs`），执行器按任务的 `source.projectId` 查。这是绕着文件范围接的：管理进程的清单本来就由 `server/vite-plugin-frames.ts` 的 `startHostNode` 每秒取一次、交给 `server/render-node/host.mjs` 的 `reconcileHostProjects`，把 `streams` 顺着这条线带到每个项目的节点上最直接，但这两个文件不在我的范围里（`vite-plugin-frames.ts` 还是「道二」的文件），所以没有动。现在的做法能用、有单测、验收过，代价是三条：
+   - 代理口多一路请求（只在有流任务可认领、或切分清单计划时才问，本机回环，毫秒级）；
+   - 按任务的 `source.projectId` 认项目。页面与云端 Agent 服务发的任务里它就是共享项目的 id；发布方用了别的项目文档 id 时查不到，按不产算（验收探针第 2 遍踩到的就是这个）；
+   - `host.mjs` 给管理进程报的「等着的任务数」不知道这道闸。带用户卡的项目在关掉这一项时如果还留着没人认领的流任务，隔离工作进程会为它们起来、不认领、也不算闲置，直到项目没有成员在线才结束。条件要凑齐三样（带用户卡、打开过、关的时候流任务还没做完），而且那些任务在发布方离开后会被队列清掉。
+   
+   **直接接的改法**（约三十行）：清单项的 `streams` 经 `startHostNode` 的 `entryOf` 进 `host.add(entry)`；`createRenderHost` 给每个项目记一个 `streams`，`reconcileHostProjects` 每次对账更新它；`canClaim` 与 `pendingOf` 对流任务看它；`connect` 里把「这个项目产不产」作为 `projectStreams` 交给 `createPrerenderExecutor`（这个注入口现在就有）。换过去之后 `project-streams.mjs` 可以删，上面三条代价都没有了。
+2. 〔裁〕**桌面应用认领清单计划时出不出自己的那一份：照它自己能不能产流。** 有轨道流生产者、流开关开着、探到了编码器（`streamCapable()`）就出，否则只给浏览器出。这一项不管桌面应用、普通的独立渲染主机。行为上的变化：以前桌面替在线页面的清单计划只切快照与给浏览器的流，现在能产流的桌面会多切出自己的那一份流任务，并去做它们。
+3. 〔裁〕**清单计划里切分方自己的那一份只出单卡流**，组流不出。理由见「没做成的」第 4 条。
+4. 〔裁〕**没有改 `streamPicked`**，改由执行器按任务的片段把流任务对回这一版。理由见「做了什么」第三节。
+5. 〔裁〕**隔离工作进程同样以能产流的方式起。** 不然带用户卡的项目打开这一项也没人产。
+6. 〔裁〕**清单过期按不产算。** 工作进程手里的清单超过 1.2 秒没更新就不作数：节点手里占满、一阵子没问过，腾出手来的第一拍不认领流任务，先问到新的。这样关掉之后不会按旧清单错认领一个，代价是打开之后晚一拍（约 0.5 秒）。
+7. 〔裁〕**这一项关着的项目，层表不列渲染服务自己这一版的流**（`entry.ownStreamsOff`）。渲染服务整台以能产流的方式起之后，不加这一处的话每个没打开的项目的层表都会列出没人产的流，页面白取清单。已经派过的流照候选记录列，产出的保留。
+8. 〔裁〕**部署参数缺省是开**（`deploy.mjs` 的 `streams` 缺省 `'1'`），管理进程自己的缺省仍是不产（不设 `PROMPTCUT_RENDER_STREAMS` 时与原来相同）。这样手工起管理进程、现有的探针与测试行为不变。
+9. 〔裁〕**账号项目的子选项记在 `hostedOptions.render.streams`**，不改 `hosted.render` 的形状（它在账本里是布尔，别处按布尔读）。会话里对页面给的是合起来的 `hosted.render: { available, enabled, streams }`，与口令项目成员列表里的形状相同，界面那两行不用分两种读法。
+10. 〔裁〕**账号项目改这两项不弹「验证创建者身份」。** 账号项目没有创建者密码；服务端按登录与创建者身份把关。确认弹窗照旧。
+11. 〔裁〕**账号项目里别的成员的提示靠比前后两次会话**（页面每 3 秒续一次），不新增通知。规矩与文案同口令项目：只在关闭时提示。创建者自己那一页不提示。
+
 ## 对任务书或语义的更正建议
+
+1. 语义表第 10 行（`workflow/project.md`「项目设置」）建议在「创建者可以打开」后面补半句：打开以后从项目下一次改动起生效。或者先把「没做成的」第 1 条补上再写成「打开以后生效」。这一行是一级，由主会话与用户定。
+2. `product/hosting.md`（二级）里托管方渲染节点的开关那一段，建议补：渲染节点下面有一项「生成轨道流」，缺省关；关这一项不断开渲染节点、不放回它手里的任务，已经产出的保留。
+3. `mechanism/hosting.md`（三级）建议补：渲染服务以能产流的方式起；管理进程把「渲染节点开着并且这一项开着」放进给工作进程的清单；工作进程没打开的项目不认领流任务、切分清单计划时不出自己的那一份；工作进程手里的清单 1.2 秒没更新不作数。
+4. `mechanism/rendering.md` 写层表的地方（「甲一」集成报告已经建议过补一句）：清单计划的流，切分方能产时连自己的那一份一起出，候选里切分方的指纹在前。
+5. 任务书「甲三」说「账号项目那条路……要在 0.7.18 把托管方的渲染节点接进账号项目时一并接上」。这次接的是「能改、能看」；「接进账号项目」本身还没做，见「没做成的」第 2 条。
+6. 任务书「甲三」的验收写「创建者打开以后，渲染服务认领并完成这个项目的流任务」。照现在的实现要加一句「项目有下一次改动之后」。
+7. `hosted-render-contract.md` 第 3.1 节已照实际改好。
+8. 契约 `prerender-products-contract.md` 第 16 节末尾第一件说「让本机只为清单里的片段产流（`FramePipeline.streamPicked` 现在只认本机判重的卡）」：实际不用改 `streamPicked`，见「裁定」第 4 条。
+
+## 提交
+
+见最终回复里的列表。

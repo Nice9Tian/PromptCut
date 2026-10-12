@@ -372,7 +372,31 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     const started = Date.now();
     await pipeline.renderStreamRange(entry, spec, range, { signal, progress });
     say('executor.render', { id: task.id, kind: 'stream', streamKey: spec.streamKey.slice(0, 12), ms: Date.now() - started });
+    promoteOwnStream(entry, spec);
     return null;
+  }
+
+  /**
+   * 一条流几种环境各出一份时(切分方自己的、浏览器的,成对,谁先认领谁得),层表里候选的先后要对着「实际是谁产的」:
+   * 之后才进来的页面没收到过完成通知,取第一个候选。切分完成时还不知道谁会赢,先把自己的排在别人后面(`afterSplit`);
+   * 本机真产出了这条流的一段,才在这里把自己的提到最前、把层表重写一次。别人赢了的话本机那一份被队列作废、走不到这里,顺序不动。
+   * 记录里没有这条流、或没有自己的指纹(切分它的不是本机)时不动。
+   */
+  function promoteOwnStream(entry, spec) {
+    try {
+      const own = pipeline.envFingerprint;
+      const key = streamCandidateKey(spec?.contentKey);
+      const list = typeof pipeline.splitCandidatesFor === 'function' ? pipeline.splitCandidatesFor(key) : null;
+      if (!own || !Array.isArray(list) || !list.includes(own) || list[0] === own || typeof pipeline.recordSplitCandidates !== 'function') return false;
+      pipeline.recordSplitCandidates(new Map([[key, [own, ...list.filter(fp => fp !== own)]]]));
+      if (typeof publishLayerMap === 'function') publishLayerMap(entry);
+      else if (typeof pipeline.publishLayerMap === 'function') pipeline.publishLayerMap(entry);
+      say('executor.stream-candidates', { streamKey: String(spec.streamKey).slice(0, 12), first: 'own' });
+      return true;
+    } catch (error) {
+      say('executor.stream-candidates-failed', { message: String(error?.message ?? error) });
+      return false;
+    }
   }
 
   async function render(task, { signal, progress, phase } = {}) {
@@ -420,7 +444,14 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       pipeline.recordSplitCandidates(candidates);
       // 轨道流的候选(层表 `streams` 表用)记在同一份记录里,键带 `stream:` 前缀,与卡的内容键分开;这一次切分没有流任务就不记
       const streamCandidates = splitStreamCandidatesOf(tasks);
-      if (streamCandidates.size) pipeline.recordSplitCandidates(new Map([...streamCandidates].map(([contentKey, fps]) => [streamCandidateKey(contentKey), fps])));
+      // 自己与别的环境各出了一份的流:自己的先排在后面,真产出了再提到最前(`promoteOwnStream`)。已经是自己在前的(之前产过)不往后挪
+      const own = pipeline.envFingerprint;
+      const ordered = (contentKey, fps) => {
+        if (!own || fps.length < 2 || !fps.includes(own)) return fps;
+        const before = typeof pipeline.splitCandidatesFor === 'function' ? pipeline.splitCandidatesFor(streamCandidateKey(contentKey)) : null;
+        return Array.isArray(before) && before[0] === own ? [own, ...fps.filter(fp => fp !== own)] : [...fps.filter(fp => fp !== own), own];
+      };
+      if (streamCandidates.size) pipeline.recordSplitCandidates(new Map([...streamCandidates].map(([contentKey, fps]) => [streamCandidateKey(contentKey), ordered(contentKey, fps)])));
     }
     if (!isListPlan(planTask)) return;
     try {

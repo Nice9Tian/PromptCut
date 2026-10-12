@@ -230,11 +230,19 @@ function splitListPlan(pipeline, entry, clips) {
 }
 /** 真的执行器 `afterSplit`(记候选、写层表)。没开 Chrome:`planForQueue` 由替身回这一版的 entry,其余方法都是真管线的 */
 async function afterSplit(pipeline, entry, tasks) {
-  const exec = createPrerenderExecutor({
-    pipeline: { recordSplitCandidates: (m) => pipeline.recordSplitCandidates(m), publishLayerMap: (e) => pipeline.publishLayerMap(e), planForQueue: async () => ({ entry, context: { cardPlan: [] }, streamSpecs: [] }) },
-    projects: { get: async () => entry.project },
-  });
+  const exec = executorOn(pipeline, entry);
   await exec.afterSplit(clipsPlan({ clips: [...entry.prerenderSet] }), { tasks });
+  return exec;
+}
+/** 真的执行器接在真管线的候选记录与层表上;`planForQueue`、产流由替身代(不开 Chrome、不编码) */
+function executorOn(pipeline, entry, { produced = [] } = {}) {
+  return createPrerenderExecutor({
+    pipeline: { get envFingerprint() { return pipeline.envFingerprint; }, recordSplitCandidates: (m) => pipeline.recordSplitCandidates(m), splitCandidatesFor: (k) => pipeline.splitCandidatesFor(k),
+      publishLayerMap: (e) => pipeline.publishLayerMap(e), planForQueue: async () => ({ entry, context: { cardPlan: [] }, streamSpecs: [] }),
+      listStreamSpecs: (e, clips) => pipeline.listStreamSpecs(e, clips), streamCapable: async () => true, prerenderPicked: (e, id) => pipeline.prerenderPicked(e, id),
+      renderStreamRange: async (e, spec, range) => { produced.push({ streamKey: spec.streamKey, range }); return null; } },
+    projects: { get: async () => entry.project }, projectStreams: null,
+  });
 }
 
 for (const mode of ['none', 'off']) {
@@ -315,18 +323,37 @@ test('清单计划连切分方自己的那一份一起出(任务书「甲三」)
     assert.deepEqual(streamTasks.map((t) => [t.input.clipId, t.requires.envFingerprint, t.requires.transcode, t.input.dual]).sort(), [
       ['clip-a', BROWSER, false, true], ['clip-a', PIPE_FP, true, true], ['clip-b', BROWSER, false, true], ['clip-b', PIPE_FP, true, true],
     ].sort(), '每张卡两份:切分方自己的(要转码)、浏览器的');
-    await afterSplit(pipeline, entry, tasks);
+    const produced = [];
+    const exec = executorOn(pipeline, entry, { produced });
+    await exec.afterSplit(clipsPlan({ clips: [...entry.prerenderSet] }), { tasks });
     const map = maps[maps.length - 1].body;
     assert.deepEqual(map.streams.map((r) => r.topClipId).sort(), ['clip-a', 'clip-b']);
+    const ownOf = (clipId) => streamTasks.find((t) => t.input.clipId === clipId && t.requires.envFingerprint === PIPE_FP);
     for (const row of map.streams) {
-      assert.deepEqual(row.candidates.map((c) => c.envFingerprint), [PIPE_FP, BROWSER], '候选照实际出键:切分方自己的在前,浏览器的在后');
-      const own = streamTasks.find((t) => t.input.clipId === row.topClipId && t.requires.envFingerprint === PIPE_FP);
-      assert.equal(row.candidates[0].resultKey, own.resultKey, '结果键就是切分方那一份任务的结果键');
-      assert.equal(row.contentKey, own.input.contentKey);
+      // 两份成对,谁先认领谁得:切分完成时还不知道谁会赢,自己的先排在后面(之后才进来的页面取第一个候选)
+      assert.deepEqual(row.candidates.map((c) => c.envFingerprint), [BROWSER, PIPE_FP], '切分完成时:浏览器的在前,切分方自己的在后');
+      assert.equal(row.candidates[1].resultKey, ownOf(row.topClipId).resultKey, '结果键就是切分方那一份任务的结果键');
+      assert.equal(row.contentKey, ownOf(row.topClipId).input.contentKey);
       assert.equal(row.kind, 'card');
     }
-    // 重启后照样列(候选记录落盘)
-    assert.deepEqual(make({ pushQueue: null }).layerMapStreamOptions(entry).streams.map((s) => s.topClipId).sort(), ['clip-a', 'clip-b']);
+    // 本机真产出了 clip-a 的一段(流任务做完):这条流的候选里自己提到最前,层表重写一次;clip-b 没产,顺序不动
+    const before = maps.length;
+    await exec.render(ownOf('clip-a'), { progress: () => {} });
+    assert.equal(produced.length, 1);
+    assert.equal(maps.length, before + 1, '层表重写了一次');
+    const after = maps[maps.length - 1].body;
+    assert.deepEqual(after.streams.find((r) => r.topClipId === 'clip-a').candidates.map((c) => c.envFingerprint), [PIPE_FP, BROWSER], '产出之后:自己的在前');
+    assert.deepEqual(after.streams.find((r) => r.topClipId === 'clip-b').candidates.map((c) => c.envFingerprint), [BROWSER, PIPE_FP]);
+    // 同一条流再做一段:顺序已经对了,不再重写
+    await exec.render(ownOf('clip-a'), { progress: () => {} });
+    assert.equal(maps.length, before + 1);
+    // 之后同一条流又被切了一次(项目有别的改动、这张卡没变):已经是自己在前的不往后挪
+    await exec.afterSplit(clipsPlan({ clips: [...entry.prerenderSet] }), { tasks });
+    assert.deepEqual(maps[maps.length - 1].body.streams.find((r) => r.topClipId === 'clip-a').candidates.map((c) => c.envFingerprint), [PIPE_FP, BROWSER]);
+    // 重启后照样列、顺序照旧(候选记录落盘)
+    const again = make({ pushQueue: null });
+    assert.deepEqual(again.layerMapStreamOptions(entry).streams.map((s) => s.topClipId).sort(), ['clip-a', 'clip-b']);
+    assert.deepEqual(again.splitCandidatesFor(streamCandidateKey(ownOf('clip-a').input.contentKey)), [PIPE_FP, BROWSER]);
   });
   await withPipeline('on', async ({ pipeline, maps }) => {
     // 这一项关着(`ownListStreams: false`):与甲一相同,只有浏览器那一份
