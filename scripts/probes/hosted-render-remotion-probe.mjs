@@ -26,7 +26,7 @@
  * 单元对照：同时直接调页面请求闸的纯函数 `pageGate`，框架的每个文件作为页面自己的请求（`Sec-Fetch-Site: same-origin`）放行，作为别的源的请求拒绝。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import：不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -52,6 +52,7 @@ const flag = (name) => argv.includes(name);
 const BASE = Number(arg('--base-port', 7450));
 const PORTS = { worker: BASE, iso: BASE + 3, status: BASE + 6, doc: Number(arg('--doc-port', BASE + 8)), asset: Number(arg('--asset-port', BASE + 9)) };
 const KEEP = flag('--keep-temp');
+const WATCH_ISO = flag('--watch-iso');
 const VERBOSE = flag('--verbose');
 const CORES = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
 const SCALE = Number(arg('--time-scale', CORES <= 4 ? 2 : 1)) || 1;
@@ -237,6 +238,34 @@ async function stopSupervisor() {
 }
 const prerenderText = () => { try { return fs.readFileSync(PRERENDER_LOG, 'utf8').replace(/@\d{13} /g, ''); } catch { return ''; } };
 
+/* ------------------------------------------------------------------ 排障：--watch-iso 盯隔离工作进程的目录（只读） */
+// 每 300 毫秒看一次 render/iso 下有什么、记号在不在，变了就记一行；管理进程报 isolation.stop 之后每秒列一次命令行里带本次临时目录的进程
+const isoWatch = { events: [], procs: [], timer: null };
+function startIsoWatch() {
+  if (!WATCH_ISO) return;
+  const dir = path.join(RENDER_DATA, 'iso');
+  let last = null;
+  let seenLogs = 0, lastProc = 0, stopped = false;
+  const needle = path.basename(TMP);
+  const psCommand = "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*" + needle + "*' } | ForEach-Object { '' + $_.ProcessId + '|' + $_.Name + '|' + $_.CommandLine.Substring(0, [Math]::Min(140, $_.CommandLine.Length)) }";
+  isoWatch.timer = setInterval(() => {
+    let names = null;
+    try { names = fs.readdirSync(dir); } catch { names = null; }
+    const key = names === null ? 'absent' : (names.includes('.promptcut-render-iso') ? 'marker' : 'NO-marker') + ':' + names.length + ':' + names.slice(0, 6).join(',');
+    if (key !== last) { last = key; isoWatch.events.push({ at: new Date().toISOString(), iso: key }); say('iso-watch', { iso: key }); }
+    for (; seenLogs < supLogs.length; seenLogs++) {
+      const l = supLogs[seenLogs];
+      if (/^isolation\.|^worker\.(exit|start)/.test(l.event ?? '')) isoWatch.events.push({ at: l.t, event: l.event, worker: l.worker, reason: l.reason, cleaned: l.cleaned, message: l.message });
+      if (l.event === 'isolation.stop') stopped = true;
+    }
+    if (stopped && Date.now() - lastProc > 1000 && isoWatch.procs.length < 14) {
+      lastProc = Date.now();
+      const r = spawnSync('powershell', ['-NoProfile', '-Command', psCommand], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      isoWatch.procs.push({ at: new Date().toISOString(), iso: last, procs: String(r.stdout ?? '').split(/\r?\n/).filter(Boolean) });
+    }
+  }, 300);
+}
+
 /* ------------------------------------------------------------------ 主流程 */
 const out = { ok: false, run: RUN, platform: process.platform, cores: CORES, ports: PORTS };
 
@@ -252,6 +281,7 @@ async function main() {
   runKeygen(['--hosted-data', HOSTED_DATA, '--secrets', RENDER_SECRETS, '--instance-name', '托管方的渲染节点（框架探针）']);
   // 看画面的口子：探针持一把登记过的 agent 服务私钥扮演云端 Agent 服务
   runKeygen(['--hosted-data', HOSTED_DATA, '--secrets', AGENT_SECRETS, '--service', 'agent', '--instance-name', '云端 Agent（框架探针扮演）']);
+  startIsoWatch();
   startSupervisor();
   const ready = await Promise.race([
     waitFor(async () => { const s = await status(); return s.directory?.connected && s.worker?.ready && s.queue ? s : null; }, 300_000, '渲染服务就绪', 1000),
@@ -448,6 +478,8 @@ try {
   }
   if (!KEEP) { try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); } catch { /* 有文件还被占着，留给系统清 */ } } else out.tmp = TMP;
 }
+if (isoWatch.timer) clearInterval(isoWatch.timer);
+if (WATCH_ISO) out.isoWatch = { events: isoWatch.events, procs: isoWatch.procs };
 out.pass = checks.filter((c) => c.ok).length;
 out.fails = fails;
 out.checks = checks;

@@ -144,3 +144,51 @@
 3. **指南没写、但可以考虑规定的**：「remotion 式的卡必须引用框架」（乙的〔裁 5〕缺口）。现在的指南说：没引用框架的 remotion 式新卡不会被载入时锁只读，但检查照样查。如果用户决定堵上缺口，要同时改指南 4.1 节三个素材效果卡例子的那一段说明、`card-overlay-probe.mjs` 等夹具。
 4. **`vite-plugin-cards.ts` 的三条文案**见「三」末尾。
 5. **隔离工作进程清理失败**见「六②」。
+
+## 附：隔离工作进程「没有记号」查因（主会话追问第 1 条）
+
+**结论：不是 `faf03d4c` 带出来的。是 `wipeDir` / `wipeIso` 里一个本来就有的缺陷（2026-10-06 的 `ae43593a`、`35f16683` 引入），被「工作进程停了、它的子进程还没死透」这个时间差触发；这个时间差取决于机器忙不忙，所以偶发。** 其余几项排除如下。
+
+**机制（有证据）**
+
+1. 隔离工作进程结束时，管理进程的 `cleanup` 调 `wipeIso`（`server/hosted-render/main.mjs`）：最多 20 次，每次调 `wipeDir(iso 目录)`，遇到 `iso-not-ours` 直接抛、别的错等 500 毫秒再来。
+2. `wipeDir`（`isolation.mjs`）用 `fs.rmSync(整个目录, {recursive, maxRetries: 5, retryDelay: 200})`。Windows 上目录里的 `tmp`、`vite-cache` 被还没死透的 `chrome-headless-shell` / `node` 占着时，`rmSync` 重试约 1 秒后抛 EPERM。而它是按目录顺序删的，**记号文件 `.promptcut-render-iso`（点开头，排第一）已经先删掉了**。
+3. `wipeIso` 的第二次调用看到「非空、没有记号」，抛 `iso-not-ours`，而这一种错不重试——日志里就是 `…\iso 不是隔离工作进程的目录（没有记号），不清`。目录里剩下 `tmp`、`vite-cache`，记号再也不会回来：之后同一次服务里每一轮 `prepare` 的 `wipeDir` 都抛同一个错，隔离工作进程起不来（我看到的 `/look` 先回 503「渲染服务现在忙」、重试到超时回 504）。
+
+**证据**
+
+- 确定性复现：`node scripts/probes/hosted-render-wipe-demo.mjs`（新增，只在系统临时目录里操作）。用真的 `wipeDir` 和 `wipeIso` 一样的重试写法，让一个子进程把工作目录停在 `iso/tmp` 里 3 秒：第 1 次 `EPERM`、此刻目录里只剩 `tmp`、`vite-cache`（记号没了）；第 2 次 `iso-not-ours`，不再重试；收尾后下一轮 `wipeDir` 仍是 `iso-not-ours`。
+- 真服务里观察：给托管探针加了 `--watch-iso`（只读：每 300 毫秒看一次 `render/iso` 下的名字、记号在不在；管理进程报 `isolation.stop` 之后每秒列一次命令行里带本次临时目录的进程）。其中一轮拍到：停止后 0.9 秒工作进程退出，此刻 iso 目录是 `NO-marker:2:tmp,vite-cache`（记号已被删、其余还在），同时还有 2 个 `chrome-headless-shell.exe` 活着；约 1 秒后它们死了、第二次重试清干净、`cleaned:true`。这一轮是侥幸：Chrome 在 `rmSync` 的重试窗口内死了。窗口外死就是「没有记号」。
+- 子进程死透要多久（`--watch-iso` 四轮，`isolation.stop` → 工作进程退出）：0.93、1.07、0.84 秒各一次，另一次 6.3 秒（此时还有 3 个进程撑了 6 秒）。时间差不是固定的。
+
+**对「是不是 faf03d4c」**
+
+- `faf03d4c` 里在这条链上的只有 `server/vision/worker-pool.ts`：给 `fork`（渲染工作进程）和一处 `taskkill` 加 `windowsHide: true`，其余 18 处不在这条探针的路径上（导出、STT、主体检测、ffmpeg、agy、验证脚本）。`worker-pool.ts` 的改动只影响「要不要新开控制台窗口」，不改谁来杀谁、杀的是哪棵树（`taskkill /T` 本来就带 `windowsHide`，那一处是同一条命令），没有改变 Chrome 退出快慢的因果。
+- 统计：合入前我看到的清理都是 `cleaned:true`（4 次）；合入后失败 2 次（一次是闲置结束、一次是服务关停），之后 5 次（带 `--watch-iso` 的 4 次加 1 次）都 `cleaned:true`。失败发生在机器忙的时候。次数太少，不能当比较。
+- **没做的对照**：把 `worker-pool.ts` 还原成旧样子跑一遍。它在这条路径上会让每个渲染工作进程弹一个窗口，而这次要对比的是一个偶发事件，一次实验得不出结论，所以没有跑；上面的机制证明里没有哪一步依赖 `windowsHide`。其余 18 处不在路径上，还原它们对结果没有意义，也没做。主会话要的话，可以在你在场时跑，我给的 `--watch-iso` 够用。
+- 「我的探针改动」「上一次被停掉留下的残留」：排除。每次探针用自己的 `mkdtemp` 目录（路径里有随机串），被停掉的那一次的目录与这一次无关；我先后改了探针的顺序（先看画面、后发计划）是为了绕开这个缺陷，不是原因（失败发生在改之前的两种顺序里）。
+
+**根因所在与最小改法（不改产品代码，交主会话定）**
+
+根因在 `server/hosted-render/isolation.mjs` 的 `wipeDir`：先把记号和别的东西一起删，失败时记号已经丢了。最小改法：记号留到最后，只清记号以外的每一项。
+
+```diff
+-    fs.rmSync(abs, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
++    // 记号最后才动：先清记号以外的每一项；某一项被还没死透的进程占着、清不掉时，记号还在，上层（wipeIso）重试才认得这是我们的目录
++    for (const name of names) {
++      if (name === ISO_MARKER) continue;
++      fs.rmSync(path.join(abs, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
++    }
+```
+
+（后面本来就有 `mkdirSync` 和写记号，是幂等的。diff 存了一份在 `out/wipe-fix.diff`，不入库。）
+
+**验证过这个改法**：在工作区里临时改了、验证完用 `git checkout` 还原（`git status` 只剩探针文件）：
+
+- `hosted-render-wipe-demo.mjs`：改后第 1～6 次 `EPERM` 但目录里记号一直在，第 7 次（占着的子进程退出后）清掉了，下一轮 `wipeDir` 成功。
+- `npm test -- server/test/hosted-render-isolation.test.mjs`：6 条通过，零失败。
+- 没有拿它重跑整条托管探针（失败是偶发的，重跑一次说明不了什么）；演示脚本是确定性的，这是验证它的办法。
+
+**另一个小问题（顺带）**：`wipeIso` 遇到 `iso-not-ours` 不重试、后果是整个服务期间隔离工作进程起不来。即使改了 `wipeDir`，建议 `prepare` 失败后管理进程不要无限「同一批任务先不再试」而没有恢复路径；这属于产品逻辑，我只提醒。
+
+**窗口检查**：这一轮的 5 次托管探针（含 3 次连跑）期间每 5 秒查一次，`OpenConsole` 始终 0，没有可见窗口（除用户自己的 chrome 18392）。
