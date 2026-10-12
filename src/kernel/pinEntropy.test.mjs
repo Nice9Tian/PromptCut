@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { installPinnedEntropy, PINNED_EPOCH_MS } from "./pinEntropy.ts";
+import { installPinnedEntropy, withSeededRandom, PINNED_EPOCH_MS } from "./pinEntropy.ts";
 
 /** 沙箱:不碰测试进程自己的 Math / Date / crypto */
 function makeHost() {
@@ -77,6 +77,73 @@ test("crypto 走同一个种子:两个页面填出同样的字节,UUID 格式正
   const ida = a.crypto.randomUUID(), idb = b.crypto.randomUUID();
   assert.equal(ida, idb);
   assert.match(ida, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+test("withSeededRandom:里面从种子起出数,和外面取过几次无关;出来以后外面那一串一个数都没少", () => {
+  const a = makeHost(), b = makeHost();
+  installPinnedEntropy(a);
+  installPinnedEntropy(b);
+  // a 先取 5 次再进去,b 直接进去:里面拿到的应当一样
+  for (let i = 0; i < 5; i++) a.Math.random();
+  const inA = withSeededRandom(42, () => [a.Math.random(), a.Math.random(), a.Math.random()], a);
+  const inB = withSeededRandom(42, () => [b.Math.random(), b.Math.random(), b.Math.random()], b);
+  assert.deepEqual(inA, inB);
+  // 和 __pcResetRandom(42) 之后的头三个数相同:同一个算法、同一个起点
+  const c = makeHost();
+  installPinnedEntropy(c);
+  c.__pcResetRandom(42);
+  assert.deepEqual(inA, [c.Math.random(), c.Math.random(), c.Math.random()]);
+  // 出来以后:a 接着的是它的第 6 个数,b 接着的是它的第 1 个数
+  const d = makeHost();
+  installPinnedEntropy(d);
+  const plain = Array.from({ length: 7 }, () => d.Math.random());
+  assert.equal(a.Math.random(), plain[5]);
+  assert.equal(b.Math.random(), plain[0]);
+});
+
+test("withSeededRandom:不同种子出不同的数;crypto 在里面走同一串,出来同样不留痕迹", () => {
+  const h = makeHost();
+  installPinnedEntropy(h);
+  const one = withSeededRandom(1, () => h.Math.random(), h);
+  const two = withSeededRandom(2, () => h.Math.random(), h);
+  assert.notEqual(one, two);
+  const bytesA = withSeededRandom(7, () => [...h.crypto.getRandomValues(new Uint8Array(8))], h);
+  const bytesB = withSeededRandom(7, () => [...h.crypto.getRandomValues(new Uint8Array(8))], h);
+  assert.deepEqual(bytesA, bytesB);
+  const fresh = makeHost();
+  installPinnedEntropy(fresh);
+  assert.equal(h.Math.random(), fresh.Math.random());
+});
+
+test("withSeededRandom:可以嵌套;里面抛错也把外面的状态放回去", () => {
+  const h = makeHost(), ref = makeHost();
+  installPinnedEntropy(h);
+  installPinnedEntropy(ref);
+  const first = ref.Math.random();
+  const got = withSeededRandom(3, () => {
+    const x = h.Math.random();
+    const inner = withSeededRandom(3, () => h.Math.random(), h);
+    assert.equal(inner, x);               // 里层同一个种子,从头出数
+    return [x, h.Math.random()];          // 回到外层,接着外层的第 2 个数
+  }, h);
+  ref.__pcResetRandom(3);
+  assert.deepEqual(got, [ref.Math.random(), ref.Math.random()]);
+  assert.throws(() => withSeededRandom(9, () => { h.Math.random(); throw new Error("boom"); }, h), /boom/);
+  assert.equal(h.Math.random(), first);
+});
+
+test("withSeededRandom:没钉住的页面里临时换 Math.random,数和钉住的一样,出来换回原来那个", () => {
+  const h = makeHost();                     // 不装钉子
+  const real = () => 0.123;
+  h.Math.random = real;
+  const got = withSeededRandom(42, () => [h.Math.random(), h.Math.random()], h);
+  const pinned = makeHost();
+  installPinnedEntropy(pinned);
+  pinned.__pcResetRandom(42);
+  assert.deepEqual(got, [pinned.Math.random(), pinned.Math.random()]);
+  assert.equal(h.Math.random, real);
+  assert.throws(() => withSeededRandom(1, () => { throw new Error("boom"); }, h), /boom/);
+  assert.equal(h.Math.random, real);
 });
 
 test("重复安装不会把种子流拨回起点", () => {
