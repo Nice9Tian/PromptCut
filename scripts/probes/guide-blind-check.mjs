@@ -19,6 +19,15 @@
  * 端口：编辑器用 --port，另占 +1、+2 当舞台端口，三个连号都要空着。不碰用户常驻的 5190～5192、58xx、59xx。
  * 两张卡也可以只给一张（只验那一种）。卡的 Component 要存在（画面台只挂 DOM 卡）。
  *
+ * remotion 式那张的判据（2026-10-13 主会话用盲写的两张卡实跑后定）：
+ *   - 同一页「顺着渲」对「倒着跳」：必须 **0** 个像素不同。同一页上两条路径走到同一个 t，画面逐像素相同，这才是「卡是时间的纯函数」的判据；
+ *   - 另开新页「直接渲」对同一页「顺着渲」：允许极小的容差——不同的像素不超过总数的十万分之五（1920×1080 是 103 个），且最大通道差不超过 2。
+ *     输出里照样打印实际的像素数和最大通道差（`seqVsDirect` / `jumpVsDirect` 里的 `px`、`max`），不因为过了容差就不打印。
+ *   原因（核实过）：用盲写的 blind-counter 在第 20、45、90 帧各比一次：新页与同页的 DOM（innerHTML）和每个元素的计算样式逐字相同；
+ *   而两个全新的页面彼此之间也差 0～32 个像素（去掉所有不透明度淡入后还是 0～15 个），差的是大数字字形边缘的文字抗锯齿，最大通道差 2 以内。
+ *   所以这几个像素是 Chrome 每个页面各自的文字光栅化/合成历史造成的，不是卡读了前一帧的东西（读了前一帧会差成百上千个像素，
+ *   `remotion-style-probe.mjs` 的有状态对照卡差 13619 个）。
+ *
  * 通过标准：fails 为空，退出码 0；不过退出码 1；用法不对或起不来退出码 2。
  * 输出：过程写 stderr；stdout 只有最后一行 JSON：{ ok, ..., fails: [] }。
  */
@@ -100,16 +109,22 @@ function viteBin() {
   return path.join(main.slice(0, at + 6), 'bin', 'vite.js');
 }
 
-/** 两张截图有多少个像素不同；尺寸不同回 -1 */
-function diffPixels(a, b) {
+/** 两张截图：不同的像素数 px、最大通道差 max（0～255）、总像素数 total；尺寸不同 px 回 -1 */
+function diffStats(a, b) {
   const pa = PNG.sync.read(a), pb = PNG.sync.read(b);
-  if (pa.width !== pb.width || pa.height !== pb.height) return -1;
-  let n = 0;
+  if (pa.width !== pb.width || pa.height !== pb.height) return { px: -1, max: 255, total: pa.width * pa.height };
+  let px = 0, max = 0;
   for (let i = 0; i < pa.data.length; i += 4) {
-    if (pa.data[i] !== pb.data[i] || pa.data[i + 1] !== pb.data[i + 1] || pa.data[i + 2] !== pb.data[i + 2] || pa.data[i + 3] !== pb.data[i + 3]) n++;
+    let d = 0;
+    for (let c = 0; c < 4; c++) d = Math.max(d, Math.abs(pa.data[i + c] - pb.data[i + c]));
+    if (d > 0) { px++; if (d > max) max = d; }
   }
-  return n;
+  return { px, max, total: pa.width * pa.height };
 }
+const diffPixels = (a, b) => diffStats(a, b).px;
+/** 新页直接渲对同页顺着渲的容差：不超过总数的十万分之五，最大通道差不超过 2 */
+const TOLERANCE = { fraction: 5e-5, maxChannel: 2 };
+const withinTolerance = (d) => d.px >= 0 && d.px <= Math.floor(d.total * TOLERANCE.fraction) && d.max <= TOLERANCE.maxChannel;
 /** 不是画面台底色的像素有多少（画面是不是空的） */
 function inkPixels(buf) {
   const p = PNG.sync.read(buf);
@@ -230,17 +245,20 @@ try {
       const directError = await page.evaluate(() => window.__rs.error());
       await page.close();
       if (directError) fail(`remotion-f${n}-direct-render-error`, `${directError.name}: ${directError.message}`);
-      const row = { frame: n, seqVsDirect: diffPixels(sequential.get(n), direct), jumpVsDirect: diffPixels(jumped.get(n), direct), ink: inkPixels(direct) };
+      const seqVsDirect = diffStats(sequential.get(n), direct), jumpVsDirect = diffStats(jumped.get(n), direct), seqVsJump = diffStats(sequential.get(n), jumped.get(n));
+      const row = { frame: n, seqVsJump: seqVsJump.px, seqVsDirect: { px: seqVsDirect.px, max: seqVsDirect.max }, jumpVsDirect: { px: jumpVsDirect.px, max: jumpVsDirect.max }, ink: inkPixels(direct) };
       rows.push(row);
       saved.push(save(`remotion-${rem.id}-f${String(n).padStart(3, '0')}-direct.png`, direct));
-      if (row.seqVsDirect !== 0) { fail(`remotion-f${n}-sequential-differs-${row.seqVsDirect}`); save(`remotion-${rem.id}-f${String(n).padStart(3, '0')}-sequential.png`, sequential.get(n)); }
-      if (row.jumpVsDirect !== 0) { fail(`remotion-f${n}-jump-differs-${row.jumpVsDirect}`); save(`remotion-${rem.id}-f${String(n).padStart(3, '0')}-jumped.png`, jumped.get(n)); }
+      // 同一页上两条路径必须逐像素相同；新页直接渲允许极小的容差（见文件头）
+      if (seqVsJump.px !== 0) { fail(`remotion-f${n}-same-page-sequential-vs-jump-differs-${seqVsJump.px}`); save(`remotion-${rem.id}-f${String(n).padStart(3, '0')}-sequential.png`, sequential.get(n)); save(`remotion-${rem.id}-f${String(n).padStart(3, '0')}-jumped.png`, jumped.get(n)); }
+      if (!withinTolerance(seqVsDirect)) { fail(`remotion-f${n}-new-page-differs-${seqVsDirect.px}px-max${seqVsDirect.max}`); save(`remotion-${rem.id}-f${String(n).padStart(3, '0')}-sequential.png`, sequential.get(n)); }
+      if (!withinTolerance(jumpVsDirect)) { fail(`remotion-f${n}-jump-vs-new-page-differs-${jumpVsDirect.px}px-max${jumpVsDirect.max}`); save(`remotion-${rem.id}-f${String(n).padStart(3, '0')}-jumped.png`, jumped.get(n)); }
     }
     const first = checkpoints[0], last = checkpoints.at(-1);
     const moving = Math.max(...checkpoints.slice(1).map((n) => diffPixels(sequential.get(first), sequential.get(n))));
     if (!(moving > 300)) fail(`remotion-not-moving-${moving}`);
     if (!(rows.at(-1).ink > 300)) fail(`remotion-last-frame-blank-${rows.at(-1).ink}`);
-    res.remotion = { id: rem.id, frozen: info.frozen, frameMode: info.frameMode, checkpoints, rows, movingPixels: moving, lastInk: rows.at(-1).ink, ms: Date.now() - t0, screenshots: saved };
+    res.remotion = { tolerance: { ...TOLERANCE, pixelsAt1080p: Math.floor(1920 * 1080 * TOLERANCE.fraction) }, id: rem.id, frozen: info.frozen, frameMode: info.frameMode, checkpoints, rows, movingPixels: moving, lastInk: rows.at(-1).ink, ms: Date.now() - t0, screenshots: saved };
     say('remotion', res.remotion);
   }
 
