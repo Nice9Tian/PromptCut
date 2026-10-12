@@ -255,8 +255,12 @@ async function comparePixels(page, id, { from, name, dir, key, until: untilSec =
   for (let round = 0; round < 10 && !shot; round++) {
     await playFrom(page, from);
     const t0 = Date.now();
+    // 刚发出「放播放头再播」的头几次读到的可能还是上一段播放留下的时刻与帧号(流播放器重新从分段起点解到播放头之前,`lastDrawn` 还是旧的):
+    // 等舞台的时刻回到起点附近再开始取,取到的帧号还要跟着舞台的时刻(下面的 `near`)
+    let started = false;
     while (Date.now() - t0 < 12_000 && !shot) {
       const before = await stageState(page, id);
+      if (!started) { if (before && (before.t ?? -1) >= from - 0.05 && (before.t ?? 99) <= from + 0.6) started = true; else { await delay(20); continue; } }
       const tb = drawing(before, key);
       // 起播后的头几百毫秒这一层可能还盖着「等快照」的沙漏(见文件头「已知」):等它退下再截
       if (!tb || before.clip.placeholder || (before.t ?? 0) < from + 0.25) { await delay(40); continue; }
@@ -267,6 +271,9 @@ async function comparePixels(page, id, { from, name, dir, key, until: untilSec =
       const ta = drawing(after, key);
       if (!s || !ta || after.clip.placeholder) { res.rejects.push({ shot: !!s, drawing: !!ta, placeholder: !!after?.clip?.placeholder, t: after?.t ?? null }); continue; }
       // 截图那一下落在 f0～f1 之间:只收相差不超过 3 帧的(探针卡 3 帧只挪 1 像素,不影响结论)
+      // 画着的帧要跟着舞台的时刻(差不超过 3 帧),前后两次读到的帧号不倒退
+      const near = (st, t) => Math.abs(t.lastDrawn - Math.round((st.t ?? 0) * FPS)) <= 3;
+      if (!near(before, tb) || !near(after, ta) || ta.lastDrawn < tb.lastDrawn) { res.rejects.push({ stale: [tb.lastDrawn, before.t, ta.lastDrawn, after.t] }); continue; }
       if (ta.lastDrawn - tb.lastDrawn <= 3) { shot = s; frame = Math.round((tb.lastDrawn + ta.lastDrawn) / 2); res.f0 = tb.lastDrawn; res.f1 = ta.lastDrawn; }
       else res.rejects.push({ frames: ta.lastDrawn - tb.lastDrawn });
     }
@@ -314,9 +321,12 @@ async function playAndSample(page, id, { from, to, key = null }) {
   const samples = [];
   const t0 = Date.now();
   let swaps0 = null;
+  // 同 `comparePixels`:等这一次播放生效(舞台的时刻回到起点附近)再开始记样本
+  let started = false;
   while (Date.now() - t0 < 25_000) {
     const s = await stageState(page, id);
     if (!s) { await delay(40); continue; }
+    if (!started) { if ((s.t ?? -1) >= from - 0.05 && (s.t ?? 99) <= from + 0.6) started = true; else { await delay(20); continue; } }
     if ((s.t ?? 0) >= to) break;
     if (swaps0 === null && drawing(s, key)) swaps0 = s.swaps;
     samples.push(s);
@@ -324,7 +334,8 @@ async function playAndSample(page, id, { from, to, key = null }) {
   }
   const lastState = await stageState(page, id);
   await pauseAt(page, from);
-  const drawn = samples.filter((s) => drawing(s, key));
+  // 开头几个样本里 `lastDrawn` 可能还是上一段播放留下的(跑在播放头前面):不算进「流在画」的样本
+  const drawn = samples.filter((s) => { const t = drawing(s, key); return t && t.lastDrawn <= Math.round((s.t ?? 0) * FPS) + 3; });
   const first = drawn[0] ?? null, last = drawn[drawn.length - 1] ?? null;
   return { ...res, samples, drawn, first, last, frames: first && last ? Math.round((last.t - first.t) * FPS) : 0,
     swaps: swaps0 !== null && typeof lastState?.swaps === 'number' ? lastState.swaps - swaps0 : null };
