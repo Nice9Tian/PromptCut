@@ -17,9 +17,11 @@ const APP_ROOT = path.resolve(fileURLToPath(import.meta.url), '../..');
 const BAKERY_FILES = ['server/bakery/chrome.mjs', 'server/bakery/bake.mjs', 'server/bakery/shards.mjs',
   'server/bakery/media.mjs', 'server/bakery/ffmpeg.mjs', 'server/bakery/export.mjs', 'server/bakery/audio-mix.mjs'];
 /* 画布直取(产轨道流时从画布取像素,不经过截图)的两个文件也决定流里的像素:Node 一侧的 `capture-canvas.mjs`
- * 和页面一侧的 `src/render/gl/canvasGrab.ts`。它们不决定快照 HTML,不进下面的 `SNAPSHOT_FILES`。 */
+ * 和页面一侧的 `src/render/gl/canvasGrab.ts`。它们不决定快照 HTML,不进下面的 `SNAPSHOT_FILES`。
+ * 依赖下层的流的差分取层(`capture-below.mjs`:怎么藏目标卡、怎么由两张截图算出那一层)同理。 */
 const CAPTURE_FILES = [...BAKERY_FILES, 'server/bakery/capture-frame.mjs', 'server/bakery/capture-snapshot.mjs', 'server/bakery/frame-media.mjs',
-  'server/bakery/frame-ready.mjs', 'server/bakery/png-integrity.mjs', 'server/bakery/capture-canvas.mjs', 'src/render/gl/canvasGrab.ts'];
+  'server/bakery/frame-ready.mjs', 'server/bakery/png-integrity.mjs', 'server/bakery/capture-canvas.mjs', 'src/render/gl/canvasGrab.ts',
+  'server/bakery/capture-below.mjs'];
 /**
  * 源码按文本哈希,换行先统一成 LF:仓库是 `text=auto`,Windows 检出是 CRLF、Linux 检出是 LF,
  * 同一个提交在两种机器上不能算出两个代码版本(另一台机器上的独立渲染主机按代码版本分池、按快照键核对任务)。
