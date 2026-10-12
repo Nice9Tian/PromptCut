@@ -45,10 +45,25 @@ export async function startIsolatedEditor({ port, work }) {
   // 依赖预构建缓存按端口分开放在仓库 out/ 下:两台同时起的编辑器不抢同一份,重跑时是热的
   const cacheDir = path.join(ROOT, 'out', 'probe-vite-cache', String(port));
   await fs.mkdir(cacheDir, { recursive: true });
-  const server = await startDevServer({
-    port, logFile,
-    env: { PROMPTCUT_EXPORT_DIR: exportDir, PROMPTCUT_DATA_DIR: dataDir, PROMPTCUT_VITE_CACHE_DIR: cacheDir },
-  });
+  /*
+   * 端口被占是暂时性故障:重试加退避,不算失败。实测刚跑完全量测试的那几秒里,指定的三个端口会被系统当临时端口发给别的连接
+   * (这台机器的动态端口段把它们包在里面),`startDevServer` 当场报「没有全空着」;隔几秒就空出来了。
+   * 试 6 次(间隔 3、6、9、12、15 秒)还占着,才照原样抛。
+   */
+  let server = null;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      server = await startDevServer({
+        port, logFile,
+        env: { PROMPTCUT_EXPORT_DIR: exportDir, PROMPTCUT_DATA_DIR: dataDir, PROMPTCUT_VITE_CACHE_DIR: cacheDir },
+      });
+      break;
+    } catch (e) {
+      if (attempt >= 6 || !/没有全空着/.test(String(e?.message))) throw e;
+      console.error(`[preview-stop-lib] ${e.message};${attempt * 3} 秒后重试(第 ${attempt} 次)`);
+      await sleep(attempt * 3000);
+    }
+  }
   return { origin: server.origin, stagePorts: server.stagePorts.map(String), stop: server.stop, logFile };
 }
 
