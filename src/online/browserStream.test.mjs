@@ -109,6 +109,7 @@ test("BSN-02 宿主报了能压流才认领流任务;整段交给 bakeStream,进
   assert.equal(job.yielding(), false);
   assert.equal(r.node.debug().state, "baking");
   assert.deepEqual(r.node.debug().holding.map((h) => [h.done, h.of]), [[0, 30]], "进度按帧数:两个分段共 30 帧");
+  job.progress(0);   // 宿主开工先报起点(没有上一次认领留下的分段)
   job.progress(7);
   job.progress(16);
   await flush();

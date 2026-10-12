@@ -333,7 +333,7 @@ export interface BrowserNodeDeps {
   streams?: () => boolean;
   /**
    * 执行一段流任务(`kind: 'stream'`):按 `input.bake` 建隔离单卡工程,任务范围里逐段逐帧要像素、送编码器、把开头文件与分段推素材服务。
-   * `progress(n)` 报已经做了几帧;每帧前问 `yielding()`,为真就在当前帧做完后停手、回 `{ yielded: true }`;`signal` 中止时尽早停手。
+   * `progress(n)` 报已经做了几帧(开工先报一次起点:上一次认领里已经推完的分段的帧数,没有就是 0);每帧前问 `yielding()`,为真就在当前帧做完后停手、回 `{ yielded: true }`;`signal` 中止时尽早停手。
    * 全部分段都推完回 `{ manifest }`(清单,`streamManifest` 的形状)。
    */
   bakeStream?: (job: { task: NodeTask; project: unknown; signal: AbortSignal; progress: (frames: number) => void; yielding: () => boolean }) => Promise<{ manifest: Record<string, unknown> } | { yielded: true }>;
@@ -467,6 +467,8 @@ interface Run {
   frames: Map<number, FrameRecord>;
   /** 流任务:这一次认领里做到了第几帧(宿主报的) */
   streamDone: number;
+  /** 流任务:宿主开工报的起点帧数(还没报过为 null) */
+  streamBase: number | null;
   /** 去重查到的清单(`sink.resultFor` 回它) */
   found: Record<string, unknown> | null;
   ended: boolean;
@@ -619,7 +621,9 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
           task, project, signal: mine,
           progress: (n) => {
             const done = Math.max(0, Math.floor(Number(n) || 0));
-            if (done > r.streamDone) counters.streamFrames += done - r.streamDone;
+            // 宿主开工先报一次起点(上一次认领里已经推完的分段的帧数,让路放回后回来时不为 0):起点不算这一次送进编码器的
+            if (r.streamBase !== null && done > r.streamDone) counters.streamFrames += done - r.streamDone;
+            if (r.streamBase === null) r.streamBase = done;
             r.streamDone = Math.max(r.streamDone, done);
             if (holding(r)) progress(r.streamDone);
           },
@@ -737,7 +741,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
       if (run) { run.controller.abort(); endRun(run, "replaced"); }
       run = {
         task, token: ctx.token, controller: new AbortController(), phase: "prep", yieldCause: null, yieldAt: null,
-        frames: new Map(retained.get(task.id) ?? []), streamDone: 0, found: null, ended: false,
+        frames: new Map(retained.get(task.id) ?? []), streamDone: 0, streamBase: null, found: null, ended: false,
       };
       // 开工先报 0、去重、执行、推送、完成的规矩在 task-runner(桌面与页面同一份,D11)
       runner.onTask(task, ctx);
