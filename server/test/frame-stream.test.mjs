@@ -11,7 +11,7 @@ import path from 'node:path';
 import { PNG } from 'pngjs';
 import {
   splitFmp4, segmentInfo, initInfo, codecOfAvcC, topLevelBoxes, evenRect, intersectRect, unionRect, padRect,
-  groupStreams, peakConcurrency, paintLayers, planStreams, isolatedStreamProject, localPlacement, streamEligible,
+  groupStreams, peakConcurrency, paintLayers, planStreams, streamNeedsReplay, isolatedStreamProject, localPlacement, streamEligible,
   pngAlphaBox, segmentSignature, readySegmentRanges, publicManifest, StreamStore, handleStreamRequest,
   streamsEnabled, streamDecoderBudget, streamPoolLimit, SEGMENT_FRAMES, StreamProducer,
 } from '../frame-stream.mjs';
@@ -206,6 +206,43 @@ test('stream keys: placement-free for single-card streams, with time placement; 
   const a = cardStreamIdentity({ kind: 'card', fps: 30, stage: { width: 1920, height: 1080 }, members: [{ key: 'S', sampling: base.sampling, count: 60 }], codeVersion: '1' });
   assert.notEqual(a, cardStreamIdentity({ kind: 'card', fps: 30, stage: { width: 1920, height: 1080 }, members: [{ key: 'S', sampling: base.sampling, count: 60 }], codeVersion: '2' }), '生产代码换了旧流作废');
   assert.notEqual(a, cardStreamIdentity({ kind: 'card', fps: 25, stage: { width: 1920, height: 1080 }, members: [{ key: 'S', sampling: base.sampling, count: 60 }], codeVersion: '1' }), 'fps 进键');
+});
+
+test('不回放:全部成员都是 remotion 式(direct)的流不要从挂载帧回放;有一张 motion 式、或写法没带的流照旧回放;replay 不进任何键', () => {
+  const DIRECT = { compositing: 'independent', frameMode: 'direct' };
+  const direct = (clipId, start, end, extra = {}) => control(clipId, start, end, 30, { frameMode: 'direct', capabilities: DIRECT, ...extra });
+  const stateful = (clipId, start, end, extra = {}) => control(clipId, start, end, 30, { frameMode: 'stateful', ...extra });
+  assert.equal(streamNeedsReplay([direct('a', 0, 1)]), false);
+  assert.equal(streamNeedsReplay([stateful('a', 0, 1)]), true);
+  assert.equal(streamNeedsReplay([direct('a', 0, 1), stateful('b', 0, 1)]), true, '组里有一张 motion 式的就要');
+  assert.equal(streamNeedsReplay([direct('a', 0, 1), direct('b', 0, 1)]), false);
+  assert.equal(streamNeedsReplay([control('a', 0, 1)]), true, '顶层没有 frameMode、capabilities 里是 stateful:要');
+  assert.equal(streamNeedsReplay([{ ...control('a', 0, 1), capabilities: { compositing: 'independent' } }]), true, '写法没带:保守,要');
+  assert.equal(streamNeedsReplay([direct('a', 0, 1, { capabilities: { ...DIRECT, need_prerendering: true } })]), true, '声明了 need_prerendering:要');
+  assert.equal(streamNeedsReplay([direct('a', 0, 1, { needPrerendering: true })]), true);
+  assert.equal(streamNeedsReplay([]), true);
+  // capabilities 里才有写法(旧形状的输入)也认
+  assert.equal(streamNeedsReplay([{ ...control('a', 0, 1), capabilities: DIRECT }]), false);
+
+  const p = project([
+    { id: 't1', clips: [{ id: 'a', cardId: 'x', start: 0.5, end: 2 }] },
+    { id: 't2', clips: [{ id: 'b', cardId: 'y', start: 0, end: 4 }] },
+    { id: 't3', clips: [{ id: 'c', cardId: 'z', start: 1, end: 3 }] },
+  ]);
+  const plan = [direct('a', 0.5, 2), stateful('b', 0, 4), direct('c', 1, 3)];
+  const specs = planStreams({ key: 'E', project: p, cardPlan: plan }, { envFingerprint: ENV_FP });
+  const by = id => specs.find(s => s.clipIds[0] === id);
+  assert.equal(by('a').replay, false);
+  assert.equal(by('b').replay, true);
+  assert.equal(by('c').replay, false);
+  // 组流:a+c 都是 direct、紧挨着(t1、t3 中间隔着 t2 的 b → 不能合并)。预算压到 1 时只能合相邻的;看合出来的组
+  const grouped = planStreams({ key: 'E', project: p, cardPlan: plan }, { budget: 1, envFingerprint: ENV_FP });
+  for (const g of grouped) assert.equal(g.replay, g.members.some(m => m.frameMode !== 'direct'), `组 ${g.clipIds}:成员里有 motion 式的才要回放`);
+  assert.ok(grouped.some(g => g.kind === 'group'));
+  // 键不变:同一份计划把写法改成 stateful 以外的任何值,流键相同(replay 不进键)
+  const flipped = plan.map(c => ({ ...c, frameMode: c.frameMode === 'direct' ? 'stateful' : 'direct' }));
+  const keysOf = list => planStreams({ key: 'E', project: p, cardPlan: list }, { envFingerprint: ENV_FP }).map(s => `${s.clipIds}:${s.streamKey}`).sort();
+  assert.deepEqual(keysOf(plan), keysOf(flipped), '写法不进流键(键里的内容身份已经带着卡的声明)');
 });
 
 test('isolatedStreamProject: only the stream cards paint, other clips stay as hidden sources, time is not shifted; local plane strips the wrapper appearance', () => {
