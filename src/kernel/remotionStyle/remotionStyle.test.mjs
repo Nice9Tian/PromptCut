@@ -6,6 +6,7 @@
  *   RS-T-03  插值、过渡、缓动、弹簧、错开进场各自的值对不对（端点、范围之外、解析解与数值积分对得上）
  *   RS-T-04  带种子的随机：与调用先后无关；没有种子不给数；分布大致均匀；不同种子、不同序号互不相干
  *   RS-T-05  守门：框架里没有能跨帧存东西的工具（对外只有纯函数和冻住的常量；源码里没有模块级的可变量）
+ *   RS-T-07  守门：框架在现有卡片的导入闭包之外（现有文件不引它，它也不引别的模块）
  *   RS-T-06  载入时锁只读（`lock.ts`）：顶层的对象、数组、Map、Set、函数、正则一写就当场报错；别的模块的导出不碰；锁不住的当场指出
  *
  * 这些工具错了不会报错，只会让「顺着播」和「直接跳」出两个画面，所以把性质钉死。
@@ -283,6 +284,29 @@ test("RS-T-05 守门：框架里没有能跨帧存东西的工具", () => {
   const first = probe();
   frameValues(99);
   assert.equal(probe(), first);
+});
+
+test("RS-T-07 守门：框架在现有卡片的导入闭包之外（只有用框架写的新卡引它）", () => {
+  /*
+   * 每张卡的源码版本 = 它的定义文件连同导入闭包里每个文件的全文（`src/render/cardSourceVersion.mjs`）。
+   * 现有的内核、渲染、卡片、部件文件只要有一个引了框架，框架就进了一批老卡的闭包：以后框架每改一行，
+   * 那批卡的预渲染结果的键就全变，已生成的卡片声音也被判过期。所以 `src/` 下除了框架自己，谁都不引它。
+   * 框架反过来也不引别的模块（它的闭包只有自己这几个文件）。
+   * 改之前与改之后逐张比源码版本的脚本：`scripts/probes/card-source-version-compare.mjs`。
+   */
+  const SRC = path.resolve(HERE, "..", "..");
+  const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+  const specifiers = (text) => [...text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
+    .matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["']([^"']+)["']/g)].map((m) => m[1]);
+  const offenders = [];
+  for (const file of walk(SRC)) {
+    if (!/\.(ts|tsx|mts|mjs|js)$/.test(file) || /\.test\.(ts|tsx|mjs|js)$/.test(file) || file.startsWith(HERE + path.sep)) continue;
+    for (const spec of specifiers(fs.readFileSync(file, "utf8"))) if (/remotionStyle/.test(spec)) offenders.push(`${path.relative(SRC, file).replace(/\\/g, "/")} → ${spec}`);
+  }
+  assert.deepEqual(offenders, [], "现有文件不引框架（用户卡目录下用框架写的新卡除外，仓库里没有这样的卡）");
+  for (const file of fs.readdirSync(HERE).filter((f) => f.endsWith(".ts"))) {
+    for (const spec of specifiers(fs.readFileSync(path.join(HERE, file), "utf8"))) assert.match(spec, /^\.\/(easing|interpolate|spring|stagger|random)\.ts$/, `${file} → ${spec}`);
+  }
 });
 
 /* ------------------------------------------------------------------ 载入时锁只读 */
