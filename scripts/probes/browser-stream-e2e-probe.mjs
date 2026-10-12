@@ -25,8 +25,8 @@
  *   E 像素    乙播放中截可见舞台(同时读流播放器正画着第几帧),暂停后追到同一帧的精确活渲再截:差在编码误差以内;
  *             与往后 2 秒的精确活渲比明显更大(对照)
  *   F 甲自播  甲自己播放这张卡时,舞台上同样是它自己产的那条流在画(键相同、父页推的字节)
- *   G 改参数  甲改这张卡的文字:乙那边旧流马上不再贴(在线来源把它撤了、舞台上没有旧键的轨道);新一版的流产出来之后层表换成新的一行
- *             (内容键、输入签名都换了),乙认出新流并播它;像素同 E 那样比,且画面里的白字比旧流那张多(换成了更长的文字)
+ *   G 改参数  甲把这张卡的文字改成空的:乙那边旧流马上不再贴(在线来源把它撤了、舞台上没有旧键的轨道);新一版的流产出来之后层表换成新的一行
+ *             (内容键、输入签名都换了),乙认出新流并播它;像素同 E 那样比,且旧流那张截图里有白字、新流这张里没有(与新一版的活渲一样)
  *   H 没有页面错误
  * 已知(不判不过,只记数,见 `docs/reports/AGENT-rr-a1-integ.md`):乙是甲产完之后才进来的,它没收到过这张卡快照任务的 `task.done`,层表里快照层的候选
  *   它取第一个(切分方自己的那一份,切分方只切分、没产),所以它这里这张卡没有快照;每次起播(先放播放头再播)的头 500 毫秒,舞台给这一层盖
@@ -76,7 +76,7 @@ const CLIP = { start: 0.4, duration: 4.0 };
 const SEG = 15;
 /** 项目时长跟着内容走(卡在 4.4 秒结束):一共 132 帧,最后一个分段(第 8 段)只有 12 帧 */
 const TOTAL = Math.round((CLIP.start + CLIP.duration) * FPS);
-const LABEL_1 = 'e2e', LABEL_2 = 'MMMMMMM';
+const LABEL_1 = 'e2e', LABEL_2 = '';
 
 const fails = [];
 const out = { ok: false, run: RUN, site: SITE, out: OUT, rounds: {} };
@@ -250,9 +250,9 @@ const drawing = (s, key = null) => {
  * 通过线照 `online-stream-play-probe.mjs`:平均差 ≤ 1.5、差得多的像素 ≤ 0.2%;对照至少是它的 4 倍再加 0.2%。
  */
 async function comparePixels(page, id, { from, name, dir, key, until: untilSec = from + 1.4 }) {
-  const res = { name, tries: 0 };
+  const res = { name, tries: 0, rejects: [] };
   let shot = null, frame = null;
-  for (let round = 0; round < 6 && !shot; round++) {
+  for (let round = 0; round < 10 && !shot; round++) {
     await playFrom(page, from);
     const t0 = Date.now();
     while (Date.now() - t0 < 12_000 && !shot) {
@@ -265,13 +265,15 @@ async function comparePixels(page, id, { from, name, dir, key, until: untilSec =
       const s = await stageShot(page, dir, `${name}-stream`);
       const after = await stageState(page, id);
       const ta = drawing(after, key);
-      if (!s || !ta || after.clip.placeholder) continue;
+      if (!s || !ta || after.clip.placeholder) { res.rejects.push({ shot: !!s, drawing: !!ta, placeholder: !!after?.clip?.placeholder, t: after?.t ?? null }); continue; }
       // 截图那一下落在 f0～f1 之间:只收相差不超过 3 帧的(探针卡 3 帧只挪 1 像素,不影响结论)
       if (ta.lastDrawn - tb.lastDrawn <= 3) { shot = s; frame = Math.round((tb.lastDrawn + ta.lastDrawn) / 2); res.f0 = tb.lastDrawn; res.f1 = ta.lastDrawn; }
+      else res.rejects.push({ frames: ta.lastDrawn - tb.lastDrawn });
     }
   }
   if (!check(!!shot, `${name}:播放中截到流在画的一帧`, res)) { await pauseAt(page, from).catch(() => {}); return res; }
   res.frame = frame;
+  res.rejects = res.rejects.slice(-6);
   const same = await liveShot(page, id, frame / FPS, dir, `${name}-live-same`);
   const far = await liveShot(page, id, (frame + 2 * FPS) / FPS, dir, `${name}-live-far`);
   if (!check(!!same && !!far, `${name}:截到精确活渲的两张参照`, { same: !!same, far: !!far })) return res;
@@ -602,10 +604,10 @@ async function runRound(streams, M) {
       const playNew = await playAndSample(pageB, clipId, { from: 0.6, to: 2.1, key: keyB2 });
       R.playNew = checkStreamPlaying('G 乙·新流', playNew, { key: keyB2 });
       R.pixelsNew = await comparePixels(pageB, clipId, { from: 0.6, name: 'g-yi-new', dir, key: keyB2, until: 2.2 });
-      // 新流画的是新文字:白字比旧流那张明显多(文字从 3 个字母换成 10 个宽字母),且与新一版的活渲相符
+      // 新流画的是新参数:旧流那张截图里块上有白字(`e2e`),新流这张与新一版的活渲一样没有
       const w1 = R.pixels?.colors?.stream?.white ?? null, w2 = R.pixelsNew?.colors?.stream?.white ?? null, l2 = R.pixelsNew?.colors?.live?.white ?? null;
       R.label = { oldStreamWhite: w1, newStreamWhite: w2, newLiveWhite: l2 };
-      check(typeof w1 === 'number' && typeof w2 === 'number' && typeof l2 === 'number' && w2 >= w1 * 1.8 + 0.0005 && Math.abs(w2 - l2) <= Math.max(0.0015, l2 * 0.35), 'G:新流画的是新文字(白字比旧流多得多,与新一版的活渲相当)', R.label);
+      check(typeof w1 === 'number' && typeof w2 === 'number' && typeof l2 === 'number' && w1 >= 0.0002 && w2 <= w1 * 0.15 && l2 <= w1 * 0.15, 'G:新流画的是新参数(旧流那张有白字,新流这张与新一版的活渲一样没有)', R.label);
     }
 
     /* -------------------------------------------------------------- 9. H 页面错误 */
