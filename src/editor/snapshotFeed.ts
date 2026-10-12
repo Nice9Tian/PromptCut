@@ -184,6 +184,7 @@ export function stopSnapshotFeed(): void {
   unsubscribe = null;
   subscribedTo = "";
   onArrive = null;
+  cancelThrottleRetries();
   readyIndex = new Map();
   have.clear();
   flying.clear();
@@ -650,6 +651,28 @@ export function pickForSetTime(head: Playhead): { snapshots: Record<string, stri
 }
 
 /**
+ * 约一次补投:不在播放时,这一次投递被换帧节流挡掉了(或者一包装不下、剩了几张),之后没有别的事件会再来投 ——
+ * 暂停着、手按着标尺不动时,发 `setTime` 之后 33 ms 内到货的字节正好撞上这个窗口(节流的起点就是发 `setTime` 的那一刻),
+ * 那一层就一直贴不上(藏 500 ms 后露出活组件,或者一直挂着上一处的旧快照),直到下一次拖动。
+ * 所以过了窗口叫一次宿主重投(和字节到货走同一个口子 `onArrive`,由宿主按那时的播放头重算)。每个 iframe 至多挂一个;
+ * 到点时又被新的 `setTime` 推后了窗口,那一次投递会再约一次。播放中不约:下一拍自己会投。
+ */
+const throttleRetry: Record<StageRole, ReturnType<typeof setTimeout> | null> = { front: null, back: null };
+function retryAfterThrottle(role: StageRole, waitMs: number): void {
+  if (throttleRetry[role] !== null) return;
+  throttleRetry[role] = setTimeout(() => {
+    throttleRetry[role] = null;
+    onArrive?.();
+  }, Math.max(1, Math.ceil(waitMs)));
+}
+function cancelThrottleRetries(): void {
+  for (const role of ["front", "back"] as const) {
+    if (throttleRetry[role] !== null) clearTimeout(throttleRetry[role]!);
+    throttleRetry[role] = null;
+  }
+}
+
+/**
  * 投一次（播放中、或者字节到货之后的补投）。`reset` 时不受 33 ms 节流（A3c：
  * 互换后的首次投递）。**一次一包、≤ 2 MB**，按兜底级别装（`packChanges`），装不下的下一拍再投。
  * 回的是这次真的发了几条 —— 没什么可发的时候一条 RPC 都不发。
@@ -664,12 +687,18 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   const now = performance.now();
   // L4:在线普通档播放中每拍都换,不受 33 ms 节流(C10 契约第 6 节);暂停、拖动时照旧节流
   const perBeat = beatSwap && head.playing;
-  if (!perBeat && !base.needsReset && now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) return 0;
+  if (!perBeat && !base.needsReset && now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) {
+    // 被节流挡掉的这一次要是真有东西要换,过了窗口得有人再投(见 `retryAfterThrottle`)
+    if (!head.playing && diffAgainst(role, feed.picks).length) retryAfterThrottle(role, SNAPSHOT_THROTTLE_MS - (now - base.lastSentAt));
+    return 0;
+  }
   const reset = base.needsReset;
   const changes = diffAgainst(role, applyBeatBudget(head, feed.picks), reset);
   if (!reset && !changes.length) return 0;
-  const { patch, next } = packChanges(role, changes, reset);
+  const { patch, next, deferred } = packChanges(role, changes, reset);
   if (!reset && !Object.keys(patch).length) return 0;
+  // 2 MB 装不下、留到「下一拍」的那几张:停着的时候没有下一拍,同样约一次补投
+  if (deferred && !head.playing) retryAfterThrottle(role, SNAPSHOT_THROTTLE_MS);
   if (perBeat) {
     beatStats.deliveries++;
     if (now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) beatStats.underThrottle++;
