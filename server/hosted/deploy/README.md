@@ -56,6 +56,7 @@
 | `{{MEMORY_MAX}}` / `{{MEMORY_HIGH}}` / `{{CPU_QUOTA}}` | `6G` / `5G` / `400%` | `PROMPTCUT_RENDER_MEMORY_MAX` / `_MEMORY_HIGH` / `PROMPTCUT_RENDER_CPU_QUOTA`（slice 与管理进程的看护共用这几个值） |
 | `{{RENDER_USER}}` | `promptcut-render` | `PROMPTCUT_RENDER_USER`：工作进程的系统用户；空串表示与管理进程同一用户（root 或容器里直接跑，Chrome 自动带 `--no-sandbox`） |
 | `{{USER_CARDS}}` | `isolated` | `PROMPTCUT_RENDER_USER_CARDS`：`isolated`（内容库里有卡片源码的项目由按项目隔离的工作进程渲，常驻工作进程不碰）或 `off`（退回不接用户卡任务：不起隔离工作进程）。隔离工作进程不用另外配置：端口缺省是工作进程的端口 + 10（`PROMPTCUT_RENDER_ISO_PORT` 可改，另占 +1、+2），数据目录是 `{{DATA}}/iso`（每一轮前后整个清空，属主跟 `{{DATA}}` 走），与常驻工作进程在同一个 slice 里 |
+| `{{STREAMS}}` | `1` | `PROMPTCUT_RENDER_STREAMS`：`1` = 工作进程以能产轨道流的方式起（常驻的与隔离的都带 `--streams`；要节点上的 ffmpeg 有 H.264 编码器，没有时自检告警 `no-h264`、一条流也不产）。**能产不等于产**：每个项目产不产看它自己的「生成轨道流」（项目设置「多用户协作」里渲染节点下面那一行，缺省关，创建者能改；项目记录 `hosted.render.streams`）——渲染节点开着并且这一项开着，渲染服务才认领这个项目的流任务，别的项目只做快照。`0` = 整台不产流。`/status` 的 `streams` 是这台起没起成能产流的，`projects[].streams` 是每个项目此刻产不产 |
 | `{{EDITOR_DIR}}` | `/opt/promptcut-hosted/editor` | `PROMPTCUT_RENDER_EDITOR_DIR`：托管服务部署目录里的在线页面构建，管理进程从它读在线页面的代码版本，与自己比 |
 | `{{MAX_MEMORY_RESTART}}` / `{{KILL_TIMEOUT_MS}}` | `300M` / `20000` | 固定值 |
 

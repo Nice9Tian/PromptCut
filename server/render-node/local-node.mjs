@@ -23,7 +23,7 @@ import { LOCK_IDLE_TAKEOVER_MS } from '../render-queue/constants.mjs';
  *
  *   plan    executor.plan → splitPlan → task.publish 细任务(带 reqId)→ 等同一 reqId 的
  *           task.published → (有 card-locked 就照锁重切重发)→ complete 这个 plan
- *           (带片段清单的计划任务:预渲染集合换成它的片段清单、不切流;补渲计划的细任务标 backfill,见 `listPlanOverrides`)
+ *           (带片段清单的计划任务:预渲染集合换成它的片段清单;流只按清单里的片段切;补渲计划不切流、细任务标 backfill,见 `listPlanOverrides`)
  *   细任务   sink.has 为真就直接 complete(dedup,带 sink.resultFor 的清单);否则 executor.render →
  *            sink.put → 收全才 complete(带 put 回的清单),没收全 fail(可重试)。
  *            sink 收到的 ref 带任务的 input 与 requires(契约 J.3)。这一段在同构的 `task-runner.mjs` 里
@@ -97,6 +97,8 @@ import { LOCK_IDLE_TAKEOVER_MS } from '../render-queue/constants.mjs';
  *   抛出的错误带 `retryable === false` 时按不可重试处理,否则可重试
  * @property {(planTask: object, info: { tasks: object[], derived: string[] }) => unknown} [afterSplit]
  *   (M7 D12)切分完成、发布回包都回来之后调一次,`tasks` 是最终发布成功的细任务(TaskInput)。不等它,出错只记事件
+ * @property {(task: object) => boolean} [accepts]
+ *   (任务书「甲三」)认领之前问一次:回 `false` 就不认领这个任务(同步、不碰网络;每一拍对每个候选任务都会问)
  *
  * @typedef {object} SinkRef
  * @property {string} resultKey
@@ -181,21 +183,29 @@ function mergedLocks(cardLocks, extra) {
  * (C10 契约第 7 节、第 18 节第 9 条)。清单里的片段当重卡算键 —— 预渲染集合换成清单(与本机的判重无关)。
  * 细任务的档跟着 plan:补渲计划的一律标 `backfill`,清单计划照 normal 的名次。不是带清单的 plan 时回空对象,切分照旧。
  *
- * 轨道流(`docs/plan/browser-stream-task.md` 第一处):
+ * 轨道流(`docs/plan/browser-stream-task.md` 第一处;任务书 `docs/plan/render-refactor-task.md`「甲三」):
  *   - 补渲计划照旧不切流(低内存档不消费流);
  *   - 在线页面的清单计划:执行器给了 `browserStreamsFor`(按清单里的片段算流,`frame-pipeline.mjs` 的 `planForQueue`)时,
- *     这些流只给浏览器出一份(`browserOnly`:单卡流、浏览器做得了的才出),**切分方自己的那一份照旧不出** ——
- *     清单计划原来就不切流,桌面与渲染主机替在线页面产流是另一件事(任务书「甲三」),这里不改它们的行为。
- *     执行器没给(旧执行器、测试替身)就不切流,与原来相同。
+ *     这些流给浏览器出一份(单卡流、浏览器做得了的才出)。**切分方自己的那一份**看执行器给的 `ownListStreams`:
+ *       - 为真(本机此刻能产流;托管方的渲染节点另要这个项目的「生成轨道流」开着,由执行器按项目收):单卡流连自己的那一份一起出,
+ *         与浏览器那一份照 `splitPlan` 的规矩成对(`input.dual`,谁先认领谁得);
+ *       - 不为真(本机不能产流、托管方的这一项关着、旧执行器):照旧只给浏览器出(`browserOnly`),切分方自己不产。
+ *     组流任何时候都只标 `browserOnly`(浏览器画不了,等于不出):组流的内容键跟着「清单里还有哪些片段」变,流任务回来时
+ *     对不回这一版,层表也列不出它(`frame-pipeline.mjs` 的 `issuedStreamSpecs` 只认单卡流)。
+ *     执行器没给 `browserStreamsFor`(旧执行器、测试替身)就不切流,与原来相同。
  */
-function listPlanOverrides(task, plan) {
+export function listPlanOverrides(task, plan) {
   if (!isListPlan(task)) return {};
   const clips = Array.isArray(task.input?.clips) ? task.input.clips.filter(id => typeof id === 'string' && id) : [];
   const backfill = priorityBand(task.priority) === 'backfill';
   let streams = [];
   if (!backfill && typeof plan?.browserStreamsFor === 'function') {
-    try { streams = (plan.browserStreamsFor(new Set(clips)) ?? []).filter(s => s && typeof s === 'object').map(s => ({ ...s, browserOnly: true })); }
-    catch { streams = []; }
+    const own = plan.ownListStreams === true;
+    const single = s => s.kind === 'card' && s.plane === 'local' && Array.isArray(s.clipIds) && s.clipIds.length === 1;
+    try {
+      streams = (plan.browserStreamsFor(new Set(clips)) ?? []).filter(s => s && typeof s === 'object')
+        .map(s => (own && single(s) ? { ...s } : { ...s, browserOnly: true }));
+    } catch { streams = []; }
   }
   return { prerenderSet: new Set(clips), streams, lane: backfill ? 'backfill' : 'normal' };
 }
@@ -272,7 +282,17 @@ export function createLocalNode({
   if (isIdle !== undefined) sessionOptions.isIdle = isIdle;
   if (maxConcurrent !== undefined) sessionOptions.maxConcurrent = maxConcurrent;
   if (projects !== undefined) sessionOptions.projects = projects;
-  if (canClaim !== undefined) sessionOptions.canClaim = canClaim;
+  /*
+   * 执行器可以说「这个任务我不接」(`executor.accepts(task) === false`,可选;任务书「甲三」):托管方的渲染节点对没打开
+   * 「生成轨道流」的项目不认领流任务,快照任务照常。只挡认领,不动手里已有的认领(关掉这一项不放回认领)。
+   * 执行器没有这个方法(测试替身、旧执行器)时不加这道闸,行为与原来逐项相同;它抛错按不接算。
+   */
+  const accepts = typeof executor?.accepts === 'function'
+    ? task => { try { return executor.accepts(task) !== false; } catch { return false; } }
+    : null;
+  if (accepts && canClaim !== undefined) sessionOptions.canClaim = (task, info) => accepts(task) && canClaim(task, info) !== false;
+  else if (accepts) sessionOptions.canClaim = accepts;
+  else if (canClaim !== undefined) sessionOptions.canClaim = canClaim;
   if (claimLimit !== undefined) sessionOptions.claimLimit = claimLimit;
   session = createNodeSession(sessionOptions);
 
