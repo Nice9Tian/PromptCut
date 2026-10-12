@@ -227,6 +227,11 @@ export interface SetRoleOptions {
  * `mode: 'batch4'` —— 与桌面预渲染一致,批起点按 4 帧对齐,每批从头推(重挂载、从挂载帧推到这一帧)。
  * 每帧生成快照前过就绪闸(控件异步活、字体、图片,同预渲染的 `waitFrameReady`),20 秒没就绪回 `not-ready`(这一段失败,不出空白帧)。帧间查后台活的停止标志(`setBackWork`),
  * 被门挡住的时长单记(`pausedMs`),不算进耗时。
+ *
+ * 要像素(`pixels`,`docs/plan/browser-stream-task.md` 第三处;浏览器节点产轨道流用):生成快照之后,照预渲染小尺寸那条路
+ * (`bakeSmall.ts`:把快照包进 SVG `foreignObject`、内嵌页面样式表、画上画布)按**原尺寸**把 `rect` 这一块画出来,
+ * 位图(`ImageBitmap`,带透明)随 `bake-frame` 事件转移给父页。`rect` 是包裹层自己的坐标(框的左上角是原点,可以为负:框外留给阴影、描边),
+ * 就是轨道流的 `bound`。
  */
 export interface BakeFrameRequest {
   /** 这一段的会话号(任务 id + 令牌),`bake-frame` 事件原样带回 */
@@ -237,10 +242,18 @@ export interface BakeFrameRequest {
   mode?: "batch4" | "seq";
   /** 要不要出预渲染小尺寸 */
   small?: boolean;
+  /** 要像素:把这个矩形(包裹层坐标,整数,宽高为偶数)按原尺寸画成位图,随事件交给父页 */
+  pixels?: { rect: BakePixelRect };
+  /** 给 `false` 时事件不带 HTML 字节(只要像素的调用方省一次压缩与转移);`hash`、`bytes` 照给。缺省带 */
+  html?: boolean;
 }
+/** `bakeFrame` 要像素时的矩形:包裹层自己的坐标(框的左上角是原点),单位是项目像素 */
+export interface BakePixelRect { x: number; y: number; w: number; h: number }
 export type BakeFrameReply =
-  | { ok: true; localFrame: number; hash: string; bytes: number; small: { hash: string; bytes: number } | null; ms: number; pausedMs: number; remounted: boolean; smallMs: number; readyMs: number }
-  | { ok: false; reason: "unsupported" | "role" | "no-project" | "no-clip" | "cancelled" | "lossy" | "no-control" | "frame-mismatch" | "small-failed" | "not-ready"; detail?: string };
+  | { ok: true; localFrame: number; hash: string; bytes: number; small: { hash: string; bytes: number } | null; ms: number; pausedMs: number; remounted: boolean; smallMs: number; readyMs: number;
+    /** 要了像素时:画这一张位图用的时间(毫秒) */
+    pixelsMs?: number }
+  | { ok: false; reason: "unsupported" | "role" | "no-project" | "no-clip" | "cancelled" | "lossy" | "no-control" | "frame-mismatch" | "small-failed" | "not-ready" | "pixels-failed"; detail?: string };
 export interface SetRoleReply {
   ok: boolean;
   reason?: "unsupported";
@@ -385,9 +398,11 @@ export type StageEvent =
   /**
    * M7 生成快照的一帧(`bakeFrame` 的产出,契约第 4.3 节):`hash` 是原始 HTML 字节的 sha256(舞台里 WebCrypto 算),
    * `htmlGz` 是 gzip 压过的 HTML(压不了时 `htmlRaw` 给原始字节),`small` 是预渲染小尺寸 WebP;字节都随消息转移。
+   * 要了像素(`BakeFrameRequest.pixels`)时另带 `pixels`:`rect` 这一块按原尺寸画出来的位图(随消息转移;收的一方用完要 `close()`)。
    */
   | { type: "bake-frame"; session: string; clipId: string; localFrame: number; hash: string; bytes: number; htmlGz?: ArrayBuffer; htmlRaw?: ArrayBuffer;
-    small?: { hash: string; bytes: number; webp: ArrayBuffer } | null }
+    small?: { hash: string; bytes: number; webp: ArrayBuffer } | null;
+    pixels?: { rect: BakePixelRect; bitmap: ImageBitmap } | null }
   /**
    * 在线执行用户卡与图卡:这一台舞台里每张同步卡的运行状态(整份;卡片 id → 状态,契约第 8 节),连同这一台的图形能力
    * 与「画面那一半在这一台执行不执行」。两台都发(不分角色);父页当不可信输入收(`online/stageMessageGuard.ts`)。

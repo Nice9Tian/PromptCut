@@ -65,7 +65,7 @@ import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome,
 import { clipFrameMode } from "./kernel/frameMode.mjs";
 import { resolveFrameSize } from "./kernel/frameSize.mjs";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
-import { renderSmallWebp } from "./render/bakeSmall";
+import { pixelRect, renderSmallWebp, renderSnapshotBitmap } from "./render/bakeSmall";
 import "./cards";
 
 /**
@@ -2245,6 +2245,9 @@ export default function StageView() {
        * 便宜 4～7 倍(画布卡不等价,节点侧与切分都不让它进浏览器);`batch4` 批起点按 4 帧对齐、每批从头推(同桌面 `fillCardControls`)。帧与帧之间让一个宏任务、查后台活的停止标志(停着的时长记进 `pausedMs`,不算耗时);
        * 不受一拍预算截断。到了这一帧先过就绪闸,再生成快照、取本控件的 HTML:有读不出像素的画布(`lossy`)回 `lossy`
        * (父页按不可重试失败交回,同 `server/bakery/bake.mjs`)。
+       *
+       * 要像素(`req.pixels`,浏览器节点产轨道流用):生成快照之后照小尺寸那条路按原尺寸把矩形那一块画成位图(`bakeSmall.ts` 的
+       * `renderSnapshotBitmap`),随 `bake-frame` 事件转移给父页;画不出来回 `pixels-failed`。`req.html === false` 时事件不带 HTML 字节。
        */
       async bakeFrame(req) {
         if (!ONLINE || !clock) return { ok: false, reason: "unsupported" } satisfies BakeFrameReply;
@@ -2313,7 +2316,25 @@ export default function StageView() {
         if (own.frame !== n) return bakeFail({ ok: false, reason: "frame-mismatch", detail: `生成快照的本地帧是 ${own.frame},要的是 ${n}` } satisfies BakeFrameReply);
         const bytes = new TextEncoder().encode(own.html);
         const hash = await sha256Hex(bytes);
-        const gz = await compressHtml(own.html);
+        const wantHtml = req.html !== false;
+        const gz = wantHtml ? await compressHtml(own.html) : null;
+        let pixels: { rect: { x: number; y: number; w: number; h: number }; bitmap: ImageBitmap } | null = null;
+        let pixelsMs = 0;
+        if (req.pixels) {
+          const rect = pixelRect(req.pixels.rect);
+          if (!rect) return bakeFail({ ok: false, reason: "pixels-failed", detail: "要像素的矩形不对(要整数、宽高为偶数)" } satisfies BakeFrameReply);
+          const p0 = realNow();
+          const box = resolveFrameSize(clip.frame, p);
+          try {
+            const bitmap = await renderSnapshotBitmap({ html: own.html, boxWidth: Number(box.w) || p.width, boxHeight: Number(box.h) || p.height, rect });
+            pixels = { rect, bitmap };
+          } catch (e) {
+            return bakeFail({ ok: false, reason: "pixels-failed", detail: String((e as Error)?.message ?? e).slice(0, 200) } satisfies BakeFrameReply);
+          }
+          pixelsMs = realNow() - p0;
+        }
+        /** 这一帧不交了(被作废、小尺寸没成):位图还没转移走,关掉 */
+        const dropPixels = () => { try { pixels?.bitmap.close(); } catch { /* 已经关了 */ } };
         let small: { hash: string; bytes: number; webp: ArrayBuffer } | null = null;
         let smallMs = 0;
         if (req.small) {
@@ -2323,18 +2344,20 @@ export default function StageView() {
           try {
             webp = await renderSmallWebp({ html: own.html, projectWidth: p.width, projectHeight: p.height, boxWidth: Number(box.w) || p.width, boxHeight: Number(box.h) || p.height });
           } catch (e) {
+            dropPixels();
             return { ok: false, reason: "small-failed", detail: String((e as Error)?.message ?? e).slice(0, 200) } satisfies BakeFrameReply;
           }
-          if (!webp) return { ok: false, reason: "small-failed", detail: "浏览器出不了 WebP" } satisfies BakeFrameReply;
+          if (!webp) { dropPixels(); return { ok: false, reason: "small-failed", detail: "浏览器出不了 WebP" } satisfies BakeFrameReply; }
           small = { hash: await sha256Hex(new Uint8Array(webp)), bytes: webp.byteLength, webp };
           smallMs = realNow() - s0;
         }
-        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        if (stale()) { dropPixels(); return { ok: false, reason: "cancelled" } satisfies BakeFrameReply; }
         const transfer: Transferable[] = [];
         const event = { type: "bake-frame" as const, session: req.session, clipId: req.clipId, localFrame: n, hash, bytes: bytes.length,
-          ...(gz ? { htmlGz: gz } : { htmlRaw: bytes.buffer as ArrayBuffer }), small };
-        transfer.push(gz ?? (bytes.buffer as ArrayBuffer));
+          ...(!wantHtml ? {} : gz ? { htmlGz: gz } : { htmlRaw: bytes.buffer as ArrayBuffer }), small, ...(pixels ? { pixels } : {}) };
+        if (wantHtml) transfer.push(gz ?? (bytes.buffer as ArrayBuffer));
         if (small) transfer.push(small.webp);
+        if (pixels) transfer.push(pixels.bitmap);
         postStageEvent(event, "*", transfer);
         bakeCursor = { project: p, clipId: req.clipId, frame: n };
         bakeStats.frames++;
@@ -2344,7 +2367,7 @@ export default function StageView() {
         if (req.small) bakeStats.smallMs.push(smallMs);
         if (bakeStats.ms.length > 200) { bakeStats.ms.splice(0, bakeStats.ms.length - 200); bakeStats.smallMs.splice(0, Math.max(0, bakeStats.smallMs.length - 200)); }
         return { ok: true, localFrame: n, hash, bytes: bytes.length, small: small ? { hash: small.hash, bytes: small.bytes } : null,
-          ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing, smallMs, readyMs } satisfies BakeFrameReply;
+          ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing, smallMs, readyMs, ...(pixels ? { pixelsMs } : {}) } satisfies BakeFrameReply;
       },
       async bakeCancel() {
         bakeGen++;

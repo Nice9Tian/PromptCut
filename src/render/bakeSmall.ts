@@ -11,6 +11,12 @@
  * CDP 截的小位图差 ≤ 0.9% 像素(文字抗锯齿与模糊边缘)。SVG 图里取不到外部资源,外部字体会退回系统字体 —— 内置卡只用系统字体,
  * 这一条只影响用户卡(用户卡不进浏览器)。Chrome 实测 `data:` 地址的 foreignObject 图不污染画布(探针 P3、`frameCompositor.ts`)。
  *
+ * # 原尺寸的一块像素(`renderSnapshotBitmap`,`docs/plan/browser-stream-task.md` 第三处)
+ *
+ * 浏览器节点产轨道流要每一帧的像素。同一条路:快照包进 SVG、内嵌页面样式表、画上画布,只是**不缩放**,把包裹层坐标里的一个矩形
+ * (轨道流的 `bound`:框外留了一圈给阴影、描边,所以 x、y 可以为负)平移到画布左上角,交出带透明的位图。
+ * 这样产出的流画在包裹层自己的坐标系里,与桌面单卡流(`server/frame-stream.mjs` 的 `plane: 'local'`)同一个口径。
+ *
  * 本模块属于 render 这一层;只在舞台页里用(要 DOM 与画布)。换算部分是纯函数,Node 单测直接载。
  */
 
@@ -61,9 +67,12 @@ export function documentCss(doc: Document): string {
   return out;
 }
 
-/** 这一帧的小尺寸 SVG(foreignObject 里:页面样式、框大小整体缩放的盒子、`inset: 0` 的快照平面) */
-export function smallSvg(doc: Document, { html, boxWidth, boxHeight, scale, width, height, css = "" }: {
-  html: string; boxWidth: number; boxHeight: number; scale: number; width: number; height: number; css?: string;
+/**
+ * 这一帧的 SVG(foreignObject 里:页面样式、框大小整体缩放的盒子、`inset: 0` 的快照平面)。`left` / `top` 是盒子在这张图里的位置
+ * (小尺寸恒为 0;原尺寸取一块时是矩形左上角的相反数)。
+ */
+function snapshotSvg(doc: Document, { html, boxWidth, boxHeight, scale, width, height, css = "", left = 0, top = 0 }: {
+  html: string; boxWidth: number; boxHeight: number; scale: number; width: number; height: number; css?: string; left?: number; top?: number;
 }): string {
   const ser = new XMLSerializer();
   let body = "";
@@ -71,8 +80,34 @@ export function smallSvg(doc: Document, { html, boxWidth, boxHeight, scale, widt
   const style = css ? `<style><![CDATA[${css.replace(/\]\]>/g, "]]]]><![CDATA[>")}]]></style>` : "";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject x="0" y="0" width="${width}" height="${height}">`
     + `<div xmlns="${XHTML}" style="position:relative;width:${width}px;height:${height}px;overflow:hidden">${style}`
-    + `<div style="position:absolute;left:0;top:0;width:${boxWidth}px;height:${boxHeight}px;transform:scale(${scale});transform-origin:0 0;isolation:isolate;overflow:visible">`
+    + `<div style="position:absolute;left:${left ? `${left}px` : "0"};top:${top ? `${top}px` : "0"};width:${boxWidth}px;height:${boxHeight}px;transform:scale(${scale});transform-origin:0 0;isolation:isolate;overflow:visible">`
     + `<div style="position:absolute;inset:0">${body}</div></div></div></foreignObject></svg>`;
+}
+
+/** 这一帧的小尺寸 SVG(盒子在左上角、整体缩放) */
+export function smallSvg(doc: Document, o: { html: string; boxWidth: number; boxHeight: number; scale: number; width: number; height: number; css?: string }): string {
+  return snapshotSvg(doc, o);
+}
+
+/** 要像素的矩形一边最长多少(只为挡坏数据:8K 画幅再外扩也到不了) */
+export const PIXELS_MAX_SIDE = 8192;
+
+/** 要像素的矩形:整数、宽高为偶数(4:2:0 取样)、不超过上限;不合格回 null */
+export function pixelRect(rect: unknown): { x: number; y: number; w: number; h: number } | null {
+  const r = rect as { x?: unknown; y?: unknown; w?: unknown; h?: unknown } | null;
+  if (!r || typeof r !== "object") return null;
+  const x = r.x as number, y = r.y as number, w = r.w as number, h = r.h as number;
+  if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(w) || !Number.isInteger(h)) return null;
+  if (w < 2 || h < 2 || w % 2 || h % 2 || w > PIXELS_MAX_SIDE || h > PIXELS_MAX_SIDE) return null;
+  if (Math.abs(x) > PIXELS_MAX_SIDE || Math.abs(y) > PIXELS_MAX_SIDE) return null;
+  return { x, y, w, h };
+}
+
+/** 原尺寸取一块的 SVG:图的大小是矩形的大小,框大小的盒子不缩放、挪到 (-rect.x, -rect.y) */
+export function pixelsSvg(doc: Document, { html, boxWidth, boxHeight, rect, css = "" }: {
+  html: string; boxWidth: number; boxHeight: number; rect: { x: number; y: number; w: number; h: number }; css?: string;
+}): string {
+  return snapshotSvg(doc, { html, boxWidth, boxHeight, scale: 1, width: rect.w, height: rect.h, css, left: -rect.x, top: -rect.y });
 }
 
 let cssCache: { doc: Document; count: number; text: string } | null = null;
@@ -106,4 +141,35 @@ export async function renderSmallWebp({ html, projectWidth, projectHeight, boxWi
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", SMALL_WEBP_QUALITY));
   if (!blob || blob.type !== "image/webp") return null;
   return await blob.arrayBuffer();
+}
+
+/**
+ * 一帧 HTML 快照 → 原尺寸的一块位图(带透明)。`rect` 是包裹层坐标里的矩形(过 `pixelRect`);位图的大小就是矩形的大小。
+ * 画不出来(SVG 解码失败、拿不到画布)抛错,调用方按这一帧没成处理。位图用完要 `close()`。
+ */
+export async function renderSnapshotBitmap({ html, boxWidth, boxHeight, rect, doc = document }: {
+  html: string; boxWidth: number; boxHeight: number; rect: { x: number; y: number; w: number; h: number }; doc?: Document;
+}): Promise<ImageBitmap> {
+  const svg = pixelsSvg(doc, { html, boxWidth, boxHeight, rect, css: cachedCss(doc) });
+  const img = new Image(rect.w, rect.h);
+  img.decoding = "async";
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  await img.decode();
+  const Offscreen = (globalThis as { OffscreenCanvas?: new (w: number, h: number) => OffscreenCanvas }).OffscreenCanvas;
+  if (Offscreen) {
+    const canvas = new Offscreen(rect.w, rect.h);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("拿不到 2D 画布");
+    ctx.clearRect(0, 0, rect.w, rect.h);
+    ctx.drawImage(img, 0, 0, rect.w, rect.h);
+    return canvas.transferToImageBitmap();
+  }
+  const canvas = doc.createElement("canvas");
+  canvas.width = rect.w;
+  canvas.height = rect.h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("拿不到 2D 画布");
+  ctx.clearRect(0, 0, rect.w, rect.h);
+  ctx.drawImage(img, 0, 0, rect.w, rect.h);
+  return await createImageBitmap(canvas);
 }
