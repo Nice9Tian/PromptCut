@@ -9,9 +9,11 @@
  *          (仓库里没有原来的 make-fixture.mjs，这里按表重建)：1280x720、30 fps、8 秒(240 帧)，
  *          文字层(punch-pill 0-2.5 / odometer 2.5-5 / mu-word-rotate 5-8)、常驻层 chapter-bar 0-8、
  *          图表层 growth-curve 2-6、三维层 scene-3d 1-5、粒子层 particles 0-8、素材层(320x180 testsrc2 视频，铺满)0-8。
- *   heavy  带重卡和画布卡的项目：同尺寸同时长，一层视频打底，上面叠两张画布卡(particles，数量取上限 400、带连线、
- *          两个 seed 与颜色)、两张 WebGL 卡(scene-3d、terminal-3d)和 growth-curve、rank-bars、chapter-bar、punch-pill。
+ *   heavy  带重卡和画布卡的项目：同尺寸同时长，一层视频打底，上面叠一张画布卡(particles，数量取上限 400、带连线)、
+ *          两张 WebGL 卡(scene-3d、terminal-3d)和 growth-curve、rank-bars、chapter-bar、punch-pill。
  *          粒子卡与三维卡都是 stateful(每帧要从头推的那类)，是预渲染与导出里最贵的几张。
+ *          只放一张粒子卡：同一份项目里放两张粒子卡(哪怕 seed、数量不同)，桌面导出在预热帧上永远等不到「就绪」，
+ *          20 秒后报「控件、字体或图片在 20 秒内未就绪」(2026-10-12 实测，见 docs/reports/AGENT-rr-export-measure.md)。
  *
  * 配方的 layers 从下往上叠(先写的在下)。`params` 只写要覆盖的键，其余用卡片缺省。
  */
@@ -43,7 +45,6 @@ export const PROJECTS = {
     layers: [
       { media: true, start: 0, end: 8 },
       { cardId: 'particles', start: 0, end: 8, params: { quantity: 400, speed: 2.4, size: 3, links: 'yes', color: '#8ab4ff', seed: 7 } },
-      { cardId: 'particles', start: 0, end: 8, params: { quantity: 400, speed: 1.2, size: 2, links: 'yes', color: '#ffb48a', seed: 4242 } },
       { cardId: 'scene-3d', start: 0, end: 8 },
       { cardId: 'terminal-3d', start: 1, end: 7 },
       { cardId: 'growth-curve', start: 2, end: 6 },

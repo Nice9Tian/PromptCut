@@ -2,7 +2,7 @@
  * 桌面版导出的两条整路各量一遍(渲染重构「辛」；只量，不换)。
  *
  *   node scripts/probes/export-paths-measure.mjs [--runs 3] [--projects demo,heavy] [--frames 0-59]
- *        [--workers auto] [--port 5860] [--work <目录>] [--json <汇总文件>] [--assets <小图目录>]
+ *        [--workers auto] [--port 7460] [--work <目录>] [--json <汇总文件>] [--assets <小图目录>]
  *        [--no-split] [--keep]
  *
  * 两条路(同一台机器、同一个项目，交替跑：桌面、在线、桌面、在线……，各 `--runs` 遍，缺省 3)：
@@ -28,7 +28,7 @@
  *   - 机器配置：处理器、核数、内存、显卡、系统、Chrome 版本。
  * 汇总写成一份 JSON(`--json`，缺省在工作目录里)，最后一行也打到标准输出。导出失败、少帧、读不出成片等，退出码非 0。
  *
- * 自己起一台 dev server(端口 `--port` 起连号三个，缺省 5860)，导出目录与素材目录指向工作目录，不碰用户的目录和端口。
+ * 自己起一台 dev server(端口 `--port` 起连号三个，缺省 7460)，导出目录与素材目录指向工作目录，不碰用户的目录和端口。
  * 工作目录缺省 `out/export-paths-measure/<时间>`(不入库)；`--keep` 保留中间文件(ProRes、逐帧 PNG)，缺省收掉。
  * 机器同时有别的任务在跑时耗时会被干扰：探针照量并如实记占用；要拿正式数字，在机器空闲时重跑。
  */
@@ -51,7 +51,7 @@ import { PROJECTS, FIXTURE_VIDEO } from './fixtures/export-paths/projects.mjs';
 /* ---------------- 参数 ---------------- */
 
 function parseArgs(argv) {
-  const o = { runs: 3, projects: ['demo', 'heavy'], frames: null, workers: 'auto', port: 5860, work: null, json: null, assets: null, split: true, keep: false };
+  const o = { runs: 3, projects: ['demo', 'heavy'], frames: null, workers: 'auto', port: 7460, work: null, json: null, assets: null, split: true, keep: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { if (i + 1 >= argv.length) throw new Error(`${a} 后面要跟一个值`); return argv[++i]; };
@@ -398,7 +398,7 @@ async function runDesktop({ origin, work, id, project, frames, workers, keepFram
   const out = path.join(dir, 'preview.mp4');
   return { dir, out, wallMs, cpu, shards: Number(shards), segments, sizes: {
     overlayMovBytes: fs.existsSync(path.join(dir, 'overlay.mov')) ? fs.statSync(path.join(dir, 'overlay.mov')).size : null,
-  }, marks: marks.map((m) => ({ t: round(m.t, 0), line: m.line })).filter((m) => !/^Exported frame/.test(m.line) && !/^Composited frame/.test(m.line)).slice(0, 60), frameLines: frameMarks.length };
+  }, marks: marks.map((m) => ({ t: round(m.t, 0), line: m.line })).filter((m) => /^(分片|Warm-up|Export finished|Running ffmpeg|Creating|Composited \d+ frames|No audio|Audio muxed|Video synthesis|Launching|Navigating|Waiting for)/.test(m.line)).slice(0, 40), frameLines: frameMarks.length };
 }
 
 /* ---------------- 在线那条路 ---------------- */
