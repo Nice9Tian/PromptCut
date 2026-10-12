@@ -34,3 +34,7 @@
 - desktop/scripts/*（build-release、make-extension、make-patch、prepare-python、prepare-runtime、smoke-*）约 30 处：构建与冒烟脚本。
 - 测试文件里自己起进程的（src/*.test.mjs、desktop/test/*）：`npm test` 经 scripts/lib/test-silent-processes.mjs 预加载统一补，本次未动。
 - 扫描器只看直接调用；经 `spawnImpl = spawn` 这类默认参数传入的，只在调用点检查选项（现有几处调用点都带了）。
+
+## 基线（提交 b05a8308 之后的树）
+- `npx tsc -b --force`：退出码 0，零错误。
+- `npm test`（带 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE）：退出码 0；5546 条，通过 5542，失败 0，跳过 4；末行「npm test 最终结果：零失败」。没有遇到端口撞车或偶发超时，没有重跑。
