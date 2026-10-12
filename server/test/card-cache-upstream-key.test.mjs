@@ -274,6 +274,29 @@ test('没有上游的片段:三个键和原来的算法逐字相同', () => {
   assert.equal(checked, 8);
 });
 
+test('cardSnapshotInputKeys:没有上游的节点是空对象;有上游的带上游的身份,身份里没有片段的 id', () => {
+  const project = projectOf(pill('aaa', { emphasis: EMPHASIS }), pill('aaa', { emphasis: EMPHASIS }));
+  const graph = projectCardGraph(project, getCard);
+  const opts = { style: {}, environment: ENVIRONMENT, sourceVersions: SOURCE_VERSIONS };
+  const keys = identity.cardSnapshotInputKeys(graph, opts);
+  assert.equal(keys.size, graph.nodes.length, '每个节点一栏');
+  assert.deepEqual(keys.get('@clip/clip-l/source'), {});
+  const left = keys.get('@clip/clip-l/emphasis'), right = keys.get('@clip/clip-r/emphasis');
+  assert.deepEqual(Object.keys(left), ['source']);
+  assert.match(left.source.key, /^[0-9a-f]{64}$/);
+  assert.equal(left.source.offset, 0);
+  assert.equal(left.source.rate, 1);
+  assert.deepEqual(left, right, '两个片段里面是同一张卡同参数:上游的身份相同');
+  // 对照:`cardNodeIdentities` 的节点身份带片段的 id(给带外观的缓存键用),两个片段不同;它没有被改动
+  const nodeKeys = identity.cardNodeIdentities(graph, opts);
+  assert.notEqual(nodeKeys.get('@clip/clip-l/source'), nodeKeys.get('@clip/clip-r/source'));
+  assert.notEqual(left.source.key, nodeKeys.get('@clip/clip-l/source'));
+  // 环境、项目样式、源码版本进上游的身份
+  assert.notEqual(identity.cardSnapshotInputKeys(graph, { ...opts, sourceVersions: { ...SOURCE_VERSIONS, 'punch-pill': 'builtin:pill-v2' } }).get('@clip/clip-l/emphasis').source.key, left.source.key);
+  assert.notEqual(identity.cardSnapshotInputKeys(graph, { ...opts, environment: { ...ENVIRONMENT, fontFingerprint: 'deadbeef' } }).get('@clip/clip-l/emphasis').source.key, left.source.key);
+  assert.notEqual(identity.cardSnapshotInputKeys(graph, { ...opts, style: { accent: '#f00' } }).get('@clip/clip-l/emphasis').source.key, left.source.key);
+});
+
 test('没有上游的片段:成员键的定值(在改之前的 main 上算出来记下的)', () => {
   // 整份图手写,不经 `projectCardGraph`、不读审阅表;成员键不带生成快照的代码指纹,所以只随键的算法变
   const graph = { definitions: [], nodes: [{ id: 'card', adapter: 'chrome', cardId: 'demo', clipId: 'clip', params: { text: 'aaa' }, parts: [],
