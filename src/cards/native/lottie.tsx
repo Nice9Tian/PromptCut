@@ -88,11 +88,12 @@ const DEMO_JSON = JSON.stringify({
  * ── 开关三:替换表达式里的随机函数(2026-10-12 用户:「能不能用替换方式直接覆盖,比如替换 random 为 random_in_card()」)──
  *
  * 不去碰播放库那一串,而是让表达式根本不用它:交给播放库之前改写素材里每个表达式的原文,包一层函数,把
- * `random`、`gaussRandom`、`seedRandom`、`wiggle`、`Math` 这几个名字遮成卡片自己的(`wrapLottieExpression`、
- * `lottieExprRuntime`)。卡片自己的每次求值开一串新的随机数,种子由(素材种子、表达式编号、时间)算出,不记任何状态。
+ * `random`、`seedRandom`、`wiggle`、`Math` 这几个名字遮成卡片自己的(`wrapLottieExpression`、`lottieExprRuntime`)。
+ * 卡片自己的每次求值开一串新的随机数,种子由(素材种子、表达式编号、时间)算出,不记任何状态。
  * 改写以后没有任何表达式再读播放库内部那一串,所以这个开关不取它、不给它播种。表达式以外的随机归外面那一层。
- * 和开关一比:不用取播放库内部的随机源、不用按帧播种、不用装载后重画;代价是 wiggle 和 seedRandom 的画面和播放库
- * 现在的不一样(见 `lottieExprRuntime` 的说明)。
+ * 观感照播放库现在的不变(2026-10-12 用户定的原则,见 `lottieExprRuntime` 的说明):wiggle 照旧逐帧跳,
+ * seedRandom 照旧不看第二个参数,同一个合成放几份照旧各动各的。
+ * 和开关一比:不用取播放库内部的随机源、不用按帧播种、不用装载后重画。
  *
  * ── 外面那一层(开关一、开关三只要开了一个就有;2026-10-12 用户:「你帮我在外面也兜住,把播放库的随机数也固定。」)──
  *
@@ -259,31 +260,36 @@ function bitsOf(x: number): [number, number] {
 }
 
 /** 各串的用途号,进种子:同一个表达式里不同用途的随机数互不相干 */
-const STREAM_EVAL = 1, STREAM_WIGGLE = 2, STREAM_SEEDED = 3, STREAM_TIMELESS = 4, STREAM_MATH_SEEDED = 5;
+const STREAM_EVAL = 1, STREAM_SEEDED = 3, STREAM_MATH_SEEDED = 5;
 
 /**
- * 改写后的表达式每次求值调一次,拿到这一次用的五样东西:random、gaussRandom、seedRandom、wiggle、换掉了 random 的 Math。
+ * 改写后的表达式每次求值调一次,拿到这一次用的四样东西:random、seedRandom、wiggle、换掉了 random 的 Math。
  * 都只由(素材种子、表达式编号、时间)决定;不记任何东西,所以和别的表达式、别的 Lottie、别的卡、推帧路径无关。
  *
+ * 原则(2026-10-12 用户定):固定随机数只为让每次结果一致,不改变原来的观感。所以下面每一样都照播放库现在的样子做,
+ * 只是数不再跟「之前发生过什么」有关:
+ *
+ *   这一次求值的一串  种子 =(素材、表达式编号、时间)。播放库对文本里有 `random` 的表达式也是每次求值按
+ *                     「randSeed + 时间」重新播种;这里对所有表达式都这样。
  *   random       调用形式照播放库的:无参 0～1;一个参数是上限;两个参数是下限上限;参数是数组时各分量共用一个随机数。
- *                这一次求值里连着调,取的是同一串里的下一个。
- *   seedRandom   照 AE 的语义:`seedRandom(offset, timeless)` 之后的 random 改从(offset)那一串取,timeless 为真时
- *                种子里不带时间(每帧同一个数),否则带。播放库现在不看第二个参数,只要调了 seedRandom 就不随时间变。
- *   wiggle       算法照播放库的:频率写死成 5,把前 floor(时间×5) 组随机数累加,再加上下一组乘以小数部分。
- *                但随机数取自只跟(素材、表达式)有关、不跟时间有关的一串,所以相邻两帧的累加是同一批数,值随时间连续。
- *                播放库现在每次求值都是新取的数,逐帧乱跳。
- *   gaussRandom  播放库没有这个函数(表达式里用了会报错)。这里按 AE 的说明补一个:钟形分布,约九成落在下限和上限之间。
- *   Math         `Math.random()` 也取这一次求值的那一串;别的照旧。
+ *                连着调,取的是这一串里的下一个。
+ *   wiggle       算法照播放库的:频率写死成 5,累加 floor(时间×5) 组随机数,再加下一组乘以小数部分;随机数就从这一次求值的
+ *                那一串里接着取(播放库里 wiggle 和 random 也是同一串)。每一帧各取各的,相邻帧之间照旧是跳的。
+ *                「时间」读的是调用那一刻的 `time`(表达式里先调过 posterizeTime 的话是改过的),和播放库一样。
+ *   seedRandom   照播放库现在的规矩,不看第二个参数:调了以后这一串换成只跟(素材、表达式编号、参数)有关的一串,不带时间,
+ *                所以后面的 random 每帧同一个数(后面的 wiggle 也改从这一串取,和播放库一样)。
+ *   Math         `Math.random()` 也取这一次求值的那一串;`Math.seedrandom(x)`(播放库把它的播种函数也挂在 Math 上)
+ *                同样只换这一串;别的照旧。
+ * 播放库没有 `gaussRandom`,这里也不补:表达式里用了,和现在一样按播放库的方式失败。
  *
  * value 是表达式拿到的属性原值。播放库的 wiggle 用的是 `this.pv`:带关键帧的属性两者是同一个对象;不带关键帧的多维属性
  * `pv` 是原值存成单精度的样子,所以这里先取单精度再算,结果和用 `pv` 逐位相同(探针核对过)。
  */
-function lottieExprRuntime(seed: number, id: number, time: number, value: any, math: object): unknown[] {
+function lottieExprRuntime(seed: number, id: number, time: number, value: any, math: object, now?: () => number): unknown[] {
   const [t0, t1] = bitsOf(Number(time) || 0);
   let next = streamOf(mixSeed(seed, id, STREAM_EVAL, t0, t1));
   const rnd = () => next();
-  /** 照播放库 random 的参数处理,draw 给出 0～1 的那个数 */
-  const ranged = (draw: () => number) => (min?: any, max?: any) => {
+  const random = (min?: any, max?: any) => {
     if (max === undefined) {
       if (min === undefined) { min = 0; max = 1; } else { max = min; min = undefined; }
     }
@@ -291,40 +297,35 @@ function lottieExprRuntime(seed: number, id: number, time: number, value: any, m
       const len = max.length;
       if (!min) min = new Float32Array(len);
       const arr = new Float32Array(len);
-      const r = draw();
+      const r = rnd();
       for (let i = 0; i < len; i++) arr[i] = min[i] + r * (max[i] - min[i]);
       return arr;
     }
     if (min === undefined) min = 0;
-    return min + draw() * (max - min);
+    return min + rnd() * (max - min);
   };
-  const random = ranged(rnd);
-  // 0.5 为中心、标准差 0.304:正负 1.645 个标准差(九成)正好是 0～1
-  const gaussRandom = ranged(() => 0.5 + 0.304 * Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd()));
-  const seedRandom = (offset?: any, timeless?: any) => {
+  const seedRandom = (offset?: any) => {
     const [o0, o1] = bitsOf(Number(offset) || 0);
-    next = streamOf(timeless ? mixSeed(seed, id, STREAM_TIMELESS, o0, o1) : mixSeed(seed, id, STREAM_SEEDED, o0, o1, t0, t1));
+    next = streamOf(mixSeed(seed, id, STREAM_SEEDED, o0, o1));
   };
   const wiggle = (_freq: number, amp: number) => {
     const len = (value && value.length) || 1;
-    const draw = streamOf(mixSeed(seed, id, STREAM_WIGGLE));
     const added = new Float32Array(len);
-    const periods = (Number(time) || 0) * 5;
+    const periods = (Number(now ? now() : time) || 0) * 5;
     const iterations = Math.floor(periods);
-    for (let i = 0; i < iterations; i++) for (let j = 0; j < len; j++) added[j] += -amp + amp * 2 * draw();
+    for (let i = 0; i < iterations; i++) for (let j = 0; j < len; j++) added[j] += -amp + amp * 2 * rnd();
     const perc = periods - iterations;
     if (len > 1) {
       const arr = new Float32Array(len);
-      for (let j = 0; j < len; j++) arr[j] = Math.fround(value[j]) + added[j] + (-amp + amp * 2 * draw()) * perc;
+      for (let j = 0; j < len; j++) arr[j] = Math.fround(value[j]) + added[j] + (-amp + amp * 2 * rnd()) * perc;
       return arr;
     }
-    return value + added[0] + (-amp + amp * 2 * draw()) * perc;
+    return value + added[0] + (-amp + amp * 2 * rnd()) * perc;
   };
   const shadowMath = Object.create(math) as { random: () => number; seedrandom: (s?: unknown) => void };
   shadowMath.random = rnd;
-  // 播放库把它的播种函数也挂在 Math 上;表达式里直接调它的话,同样只换这一次求值的这一串
   shadowMath.seedrandom = (s?: unknown) => { next = streamOf(mixSeed(seed, id, STREAM_MATH_SEEDED, lottieSeedOf(String(s)))); };
-  return [random, gaussRandom, seedRandom, wiggle, shadowMath];
+  return [random, seedRandom, wiggle, shadowMath];
 }
 
 /** 改写后的表达式靠这个全局名字找到上面那个函数。每个页面(舞台、导出页)各自装一次 */
@@ -338,29 +339,36 @@ function installLottieExprRuntime(): void {
 const EXPR_MARK = "/*pc-expr*/";
 
 /**
- * 把一段表达式原文包一层:原文原样放进一个函数体,函数的形参叫 random、gaussRandom、seedRandom、wiggle、Math,
+ * 把一段表达式原文包一层:原文原样放进一个函数体,函数的形参叫 random、seedRandom、wiggle、Math,
  * 把播放库作用域里的同名东西遮住;实参在外层求值,所以拿得到播放库的 `time`、`value`、`Math`。
  * 不去找调用点替换(正则会误伤字符串、属性名、别的标识符);原文里自己再声明同名变量或函数照常遮住形参,不出错。
  *
- * `random` 就是标识符 random,只是不写出这个词:播放库看表达式文本里有没有 `random` 这几个字母来决定求值前
- * 要不要给它自己那一串播种(`_needsRandom`),这样包完以后它的判断和包之前一样,我们不多惊动它。
+ * 第一个形参就是标识符 random,只是把其中的字母 a 写成了 Unicode 转义,文本里不出现这个词:播放库看表达式文本里有没有
+ * 这六个字母来决定求值前要不要给它自己那一串播种(`_needsRandom`),这样包完以后它的判断和包之前一样,我们不多惊动它。
  * 原文后面先换行再接 `return`:原文最后一行是 `//` 注释时不会把 return 一起注释掉。
+ * 最后一个实参是「现在的 time」:表达式里调 posterizeTime 会改 `time`,wiggle 要读改过以后的。
  */
 function wrapLottieExpression(source: string, seed: number, id: number): string {
-  return `${EXPR_MARK}var $bm_rt = (function (r\\u0061ndom, gaussRandom, seedRandom, wiggle, Math) {\nvar $bm_rt;\n${source}\n;return $bm_rt;\n}).apply(null, ${EXPR_RUNTIME}(${seed}, ${id}, time, value, Math));`;
+  return `${EXPR_MARK}var $bm_rt = (function (r\\u0061ndom, seedRandom, wiggle, Math) {\nvar $bm_rt;\n${source}\n;return $bm_rt;\n}).apply(null, ${EXPR_RUNTIME}(${seed}, ${id}, time, value, Math, function () { return time; }));`;
 }
 
+/** 这段表达式原文里有没有可能取随机数(名字里带 random、wiggle,或者用到 Math) */
+const MAY_DRAW = /random|wiggle|math/i;
+
 /**
- * 改写素材数据里所有表达式(原地改;要在交给播放库之前、算完种子之后做)。返回改写了几个。
- * 表达式 = 带 `k` 的属性对象上那个字符串 `x`。编号 = 它在 JSON 里的路径的散列:同一份素材里每个表达式一个,
- * 换个页面、换台机器不变。嵌套合成被引用多次时,里面同一个表达式的各份编号相同,随机数也相同(AE 也是这样)。
+ * 改写素材数据里所有表达式(原地改;要在交给播放库之前、算完种子之后做)。返回改写了几处。
+ * 表达式 = 带 `k` 的属性对象上那个字符串 `x`。编号 = 它在素材里的位置的散列,换个页面、换台机器不变。
+ *
+ * 嵌套合成被引用多次时(同一个合成放了几份):播放库现在给每一份里的表达式各取一个 `randSeed`,几份各动各的。
+ * 为了保住这一点,带随机表达式的合成每被引用一次就复制一份、各自改写,编号里带上「是从哪个图层进来的」;
+ * 原来那份没人引用了就拿掉。不带随机表达式的合成不复制。
  */
 export function rewriteLottieExpressions(data: unknown, seed: number): number {
   let count = 0;
-  const walk = (node: unknown, path: string): void => {
+  const wrapIn = (node: unknown, path: string): void => {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], `${path}/${i}`);
+      for (let i = 0; i < node.length; i++) wrapIn(node[i], `${path}/${i}`);
       return;
     }
     const o = node as Record<string, unknown>;
@@ -368,9 +376,56 @@ export function rewriteLottieExpressions(data: unknown, seed: number): number {
       o.x = wrapLottieExpression(o.x, seed, lottieSeedOf(path));
       count++;
     }
-    for (const key of Object.keys(o)) walk(o[key], `${path}/${key}`);
+    for (const key of Object.keys(o)) wrapIn(o[key], `${path}/${key}`);
   };
-  walk(data, "");
+  type Comp = { id: string; layers: Array<Record<string, unknown>> };
+  const root = data as { layers?: Array<Record<string, unknown>>; assets?: unknown[]; chars?: unknown } | null;
+  if (root && typeof root === "object" && Array.isArray(root.layers) && Array.isArray(root.assets)) {
+    const comps = new Map<string, Comp>();
+    for (const a of root.assets as Comp[]) if (a && typeof a.id === "string" && Array.isArray(a.layers)) comps.set(a.id, a);
+    const drawsInside = (node: unknown): boolean => {
+      if (!node || typeof node !== "object") return false;
+      if (Array.isArray(node)) return node.some(drawsInside);
+      const o = node as Record<string, unknown>;
+      if (typeof o.x === "string" && "k" in o && MAY_DRAW.test(o.x)) return true;
+      return Object.keys(o).some((key) => drawsInside(o[key]));
+    };
+    // 这个合成(连同它里面嵌的)有没有可能取随机数的表达式
+    const memo = new Map<string, boolean>();
+    const draws = (id: string): boolean => {
+      const known = memo.get(id);
+      if (known !== undefined) return known;
+      memo.set(id, false); // 自己嵌自己时不绕圈
+      const comp = comps.get(id);
+      const yes = !!comp && (drawsInside(comp.layers) || comp.layers.some((l) => l && typeof l.refId === "string" && draws(l.refId)));
+      memo.set(id, yes);
+      return yes;
+    };
+    const copied = new Set<string>();
+    let copies = 0;
+    const visit = (layers: Array<Record<string, unknown>>, from: string): void => {
+      layers.forEach((layer, i) => {
+        if (!layer || typeof layer !== "object") return;
+        const here = `${from}/${i}`;
+        wrapIn(layer, here);
+        const ref = layer.refId;
+        if (layer.ty === 0 && typeof ref === "string" && comps.has(ref) && draws(ref)) {
+          const copy = JSON.parse(JSON.stringify(comps.get(ref))) as Comp;
+          copy.id = `${ref}~pc${copies++}`;
+          root.assets!.push(copy);
+          layer.refId = copy.id;
+          copied.add(ref);
+          visit(copy.layers, here);
+        }
+      });
+    };
+    visit(root.layers, "");
+    // 复制过的原件:除非别处(字形)还引用它,否则拿掉
+    const stillUsed = JSON.stringify(root.chars ?? null);
+    root.assets = root.assets.filter((a) => !(a && typeof a === "object" && copied.has((a as Comp).id) && !stillUsed.includes(JSON.stringify((a as Comp).id))));
+  }
+  // 其余的(没复制的合成、字形、别处):按它在 JSON 里的路径编号
+  wrapIn(data, "");
   return count;
 }
 

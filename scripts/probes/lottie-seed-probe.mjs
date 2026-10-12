@@ -26,7 +26,8 @@
  * 带 random 的那个嵌套图层还没进来——播放库装载完成那一下自己画的第 0 帧,和之后跳回第 0 帧重画的,要是同一个画面。
  * `exprcases` 是 `scripts/probes/fixtures/lottie-seed/expr-cases.json`——另一份手写的,一层一个表达式用例:一个表达式里连调两次
  * random()、表达式里写 Math.random()、表达式里自己声明同名变量和函数、只有 wiggle()、seedRandom(7, true)、seedRandom(7)、
- * random 的另两种调用形式,以及两层用来核对「wiggle 用的 this.pv 和表达式拿到的 value 是不是同一个东西」。
+ * random 的另两种调用形式、两层用来核对「wiggle 用的 this.pv 和表达式拿到的 value 是不是同一个东西」,
+ * 以及一个带随机表达式、放了两份的嵌套合成(两份应当各动各的)。
  * `textrandom` 是 `scripts/probes/fixtures/lottie-seed/text-random.json`——三个文字图层,都用了「随机顺序」的动画器(播放库在这里
  * 直接调全页的 `Math.random()`,不经过表达式)。字形是自己画的方块,不用字体文件。两层的文字内容带关键帧(第 30、40 帧各换一次),
  * 一层不带。它另外多做两种只为对照的开法:「替换、不包外层」和「替换、外层按帧播种但不单独固定文字」。
@@ -50,14 +51,15 @@
  *   为什么还差一点  happy2016 不带表达式,「关」和「种子」下顺推和直接跳仍差几十个像素:分别试清插值缓存、开开关二,看哪个管用(只报告)
  *   真卡片        用 React 挂真的 LottieView:开着时和上面直接跳的那一份相同;关着时和 --before 那个提交的卡片逐帧原文相同
  *   表达式用例    exprcases 在「关」「种子」「替换」下第 28～42 帧各图层的数:连调两次 random 的两个数、Math.random、同名变量、
- *                 wiggle 相邻帧差多少、seedRandom 两种写法随不随时间变;另核 this.pv 和 value、卡片补的 gaussRandom 的分布、
- *                 开关一和开关三叠着开
+ *                 wiggle 相邻帧差多少、seedRandom 两种写法随不随时间变、同一个合成的两份是不是各动各的;另核 this.pv 和 value、
+ *                 表达式里用 gaussRandom(播放库没有这个函数)开着和关着是不是同样地失败、开关一和开关三叠着开。
+ *                 「替换」要守的是用户 2026-10-12 定的原则:固定随机数只为每次结果一致,不改变原来的观感
  *   图            --out 目录里存几张缩到 960×540 的 PNG,给人看一眼画面不是空的:fixture 第 21 帧(关、种子各取顺推和新页新建两份)、happy2016 最后一帧
  *
  * 判定(不满足进 `fails`,退出码 1):
  *   - 「种子+不留旧数」「替换+不留旧数」:所有素材、所有 N 的各份画面相同;连建两次相同。
  *   - 「种子」「替换」:五份测试素材所有 N 的各份画面相同;各素材连建两次相同;不带随机表达式、也没有随机顺序文字的素材全长逐帧和「关」相同(不该动它们)。
- *   - 「替换」:改写的表达式个数等于素材里的表达式个数;「表达式用例」里文件头列的各条成立(见那一段的注释)。
+ *   - 「替换」:改写的表达式处数不少于素材里的表达式个数(放了几份的合成每份各算);「表达式用例」各条成立(见那一段的注释)。
  *   - fixtureasync 建实例那一下确实还没装载完(否则这一项没测到它要测的)。
  *   - 开着时全页那一串被吃掉 0 个;建好后图层全建了;「真卡片」各条成立;页面没有报错和警告。
  *   「关」下各份画面相同不相同是现状,只报告;自带素材在「种子」「替换」下顺推和直接跳相同不相同也只报告(差的那一点归开关二)。耗时只记录。
@@ -99,7 +101,7 @@ const FIXTURE_PICKS = {
 };
 const FIXTURE_LAYERS = ['random-pos', 'wiggle-pos', 'seeded-opacity', 'wiggle-opacity', 'precomp', 'inner-wiggle', 'inner-random', 'plain-keyframes',
   'twice', 'math-random', 'shadowed', 'wiggle-only', 'seed-timeless', 'seed-timed', 'forms', 'pv-static', 'pv-keyed',
-  'text-keyed-30', 'text-keyed-40', 'text-static'];
+  'text-keyed-30', 'text-keyed-40', 'text-static', 'twin-a', 'twin-b', 'twin-random', 'twin-wiggle', 'seeded-wiggle'];
 const MODES = ['off', 'seed', 'both', 'expr', 'exprboth'];
 const MODE_NAME = { off: '关', seed: '种子', both: '种子+不留旧数', expr: '替换', exprboth: '替换+不留旧数', exprbare: '替换、不包外层', exprframe: '替换、外层不单独固定文字' };
 /** 只为对照的开法:只有带随机顺序文字的那份测试素材做,只报告 */
@@ -254,21 +256,35 @@ const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
       const m = made.get(id); const out = {};
       for (const f of frames) {
         m.handle.goTo(f); const row = {};
-        for (const g of m.box.querySelectorAll('svg g[id]')) { const t = /matrix\(([^)]+)\)/.exec(g.getAttribute('transform') || ''); row[g.id] = [...(t ? t[1].split(',').map(Number) : [1, 0, 0, 1, 0, 0]), Number(g.getAttribute('opacity') ?? 1)]; }
+        for (const g of m.box.querySelectorAll('svg g[id]')) { const t = /matrix\(([^)]+)\)/.exec(g.getAttribute('transform') || ''); row[g.id in row ? g.id + '#2' : g.id] = [...(t ? t[1].split(',').map(Number) : [1, 0, 0, 1, 0, 0]), Number(g.getAttribute('opacity') ?? 1)]; }
         out[f] = row;
       }
       return out;
     },
     /** exprcases 里那两层记在全局对象上的核对结果 */
     pvCheck: () => ({ static: globalThis.__pcPvStatic ?? null, keyed: globalThis.__pcPvKeyed ?? null }),
-    /** 卡片自己的随机函数装没装到这个页面上;装了就直接调它的 gaussRandom 看分布(播放库没有这个函数,没法走表达式对照) */
+    /** 卡片自己的随机函数装没装到这个页面上;装了就看它给的是不是四样、同样的参数再调一次是不是同样的数、Math 别的东西还在不在 */
     runtime() {
       const f = globalThis.__pcLottieFn; if (typeof f !== 'function') return { installed: false };
-      const n = 4000; let sum = 0, inside = 0;
-      for (let i = 0; i < n; i++) { const g = f(1, 2, i / 30, 0, Math)[1](); sum += g; if (g >= 0 && g <= 1) inside++; }
-      const arr = f(1, 2, 0.5, 0, Math)[1]([0, 0], [10, 20]);
       const once = f(1, 2, 0.5, 0, Math), again = f(1, 2, 0.5, 0, Math);
-      return { installed: true, gaussMean: +(sum / n).toFixed(4), gaussInside: +(inside / n).toFixed(4), gaussArrayRatio: +(arr[1] / arr[0]).toFixed(6), repeatable: once[0]() === again[0]() && once[4].random() === again[4].random(), mathKeepsRest: once[4].floor(2.5) === 2 && once[4].PI === Math.PI };
+      return { installed: true, gives: once.length, repeatable: once[0]() === again[0]() && once[3].random() === again[3].random(), mathKeepsRest: once[3].floor(2.5) === 2 && once[3].PI === Math.PI };
+    },
+    /**
+     * 表达式里用了 gaussRandom(播放库没有这个函数)会怎样:建一份只有这一个表达式的动画,记下播放库报的错。
+     * 图层第 2 帧才入场:播放库只在表达式第一次求值出错时报一次(之后这个属性就锁在原值上),要赶在那之前挂上监听
+     */
+    async gaussFails(mode) {
+      const st = (v) => ({ a: 0, k: v });
+      const data = { v: '5.7.4', fr: 30, ip: 0, op: 10, w: 100, h: 100, nm: 'gauss', ddd: 0, assets: [], layers: [{ ddd: 0, ind: 1, ty: 4, nm: 'g', sr: 1, ao: 0, ip: 2, op: 10, st: 0, bm: 0, shapes: [],
+        ks: { o: st(100), r: st(0), p: { a: 0, k: [0, 0, 0], x: 'var $bm_rt;\n$bm_rt = [gaussRandom() * 100, 0, 0];' }, a: st([0, 0, 0]), s: st([100, 100, 100]) } }] };
+      const box = document.createElement('div'); box.className = 'box'; document.body.appendChild(box);
+      const errors = [];
+      const handle = current.loadLottie(box, data, 'contain', MODES[mode]);
+      handle.anim.addEventListener('error', (e) => errors.push(String(e?.nativeError?.message ?? e?.type ?? e)));
+      await loaded(handle.anim);
+      try { handle.goTo(3); } catch (e) { errors.push('抛出:' + String(e?.message ?? e)); }
+      handle.anim.destroy(); box.remove();
+      return errors[0] ?? null;
     },
   };
   window.api = api; window.ready = true;
@@ -456,7 +472,7 @@ try {
         if (result.globalDraws !== 0) fail(`${label}:全页那一串被吃掉 ${result.globalDraws} 个(应为 0)`);
         if (first.seed === null) fail(`${label}:素材种子没算出来`);
         if ((mode === 'both' || mode === 'exprboth') && first.exact !== true) fail(`${label}:开关二没生效`);
-        if (isExpr(mode) && first.rewritten !== expressions.all) fail(`${label}:改写了 ${first.rewritten} 个表达式,素材里有 ${expressions.all} 个`);
+        if (isExpr(mode) && !(first.rewritten >= expressions.all)) fail(`${label}:改写了 ${first.rewritten} 处表达式,素材里有 ${expressions.all} 个`);
       }
       console.log(`${label}:${picks.length} 个 N 里 ${tally.same} 个各份画面相同(原文也逐字节相同的 ${tally.rawSame} 个);连建两次${twiceSame ? '相同' : '不同'};全页那一串被吃掉 ${result.globalDraws} 个;图层 ${first.built}/${first.layers};建一份 ${first.buildMs} 毫秒,跳一帧 ${frameMs} 毫秒${first.seed === null ? '' : `;种子 ${first.seed}`}`);
       for (const n of bad) console.log(`     第 ${n} 帧不同(画面名:不同的像素占比/最大差(哪些图层)) ${worst(n)}`);
@@ -529,8 +545,8 @@ try {
     for (const mode of ['off', 'seed', 'expr']) {
       // 各读两遍(两个新页面):同一种开法下两遍应当一样
       const reads = [];
-      let pv = null, runtime = null;
-      for (let k = 0; k < 2; k++) { const p = await open(); const m = await call(p, 'make', 'exprcases', mode); reads.push(await call(p, 'readLayers', m.id, frames)); pv = await call(p, 'pvCheck'); runtime = await call(p, 'runtime'); await p.close(); }
+      let pv = null, runtime = null, gauss = null;
+      for (let k = 0; k < 2; k++) { const p = await open(); const m = await call(p, 'make', 'exprcases', mode); reads.push(await call(p, 'readLayers', m.id, frames)); pv = await call(p, 'pvCheck'); runtime = await call(p, 'runtime'); gauss = await call(p, 'gaussFails', mode); await p.close(); }
       const [a, b] = reads;
       const wx = col(a, 'wiggle-only', X), wy = col(a, 'wiggle-only', Y);
       const row = {
@@ -539,33 +555,52 @@ try {
         mathRandom: col(a, 'math-random', X),
         shadowed: col(a, 'shadowed', X),
         wiggle: { x: wx, y: wy, maxStep: +Math.max(maxStep(wx), maxStep(wy)).toFixed(4) },
+        // 同一个表达式里先 seedRandom(3, true) 再 wiggle(5, 100)
+        seededWiggle: { x: col(a, 'seeded-wiggle', X), maxStep: +Math.max(maxStep(col(a, 'seeded-wiggle', X)), maxStep(col(a, 'seeded-wiggle', Y))).toFixed(4) },
         seedTimeless: col(a, 'seed-timeless', O), seedTimed: col(a, 'seed-timed', O),
-        pv, runtime,
+        // 同一个合成放的两份:里面那两层各自的 x
+        twin: { random: [col(a, 'twin-random', X), col(a, 'twin-random#2', X)], wiggle: [col(a, 'twin-wiggle', X), col(a, 'twin-wiggle#2', X)] },
+        pv, runtime, gauss,
       };
       section.modes[mode] = row;
       const label = `表达式用例/${MODE_NAME[mode]}`;
       const r3 = (xs) => xs.slice(2, 13).map((x) => x.toFixed(1)).join(' ');
-      console.log(`${label}:两遍${row.repeat ? '相同' : '不同'};wiggle-only 第 30～40 帧的 x:${r3(wx)};相邻帧最多差 ${row.wiggle.maxStep}`);
+      const twinApart = (pair) => frames.filter((f, i) => pair[0][i] !== pair[1][i]).length;
+      console.log(`${label}:两遍${row.repeat ? '相同' : '不同'};wiggle-only 第 30～40 帧的 x:${r3(wx)};相邻帧最多差 ${row.wiggle.maxStep};先 seedRandom 再 wiggle 的那一层相邻帧最多差 ${row.seededWiggle.maxStep}`);
       console.log(`${label}:连调两次 random 的两个数(第 30 帧)${row.twice.x[2].toFixed(2)} / ${row.twice.y[2].toFixed(2)};Math.random 的 x 第 30～32 帧 ${row.mathRandom.slice(2, 5).map((x) => x.toFixed(2)).join(' ')};同名变量那一层 x 都是 ${[...new Set(row.shadowed)].join(',')}`);
       console.log(`${label}:seedRandom(7, true) 的透明度${varies(row.seedTimeless) ? '随时间变' : '不随时间变'}(第 30 帧 ${row.seedTimeless[2].toFixed(4)});seedRandom(7) 的透明度${varies(row.seedTimed) ? '随时间变' : '不随时间变'}(第 30～32 帧 ${row.seedTimed.slice(2, 5).map((x) => x.toFixed(4)).join(' ')})`);
+      console.log(`${label}:同一个合成放两份,${frames.length} 帧里两份不同的帧数——random 那层 ${twinApart(row.twin.random)},wiggle 那层 ${twinApart(row.twin.wiggle)}(第 30 帧 random ${row.twin.random[0][2].toFixed(1)} / ${row.twin.random[1][2].toFixed(1)});表达式里用 gaussRandom:${gauss ?? '没报错'}`);
       // 三种开法下都该成立的
       if (!row.shadowed.every((x) => x === 600)) fail(`${label}:表达式里自己声明了同名的 random、wiggle,x 应恒为 600,读到 ${[...new Set(row.shadowed)].join(',')}`);
       if (!pv.static || pv.static.maxDiff !== 0 || pv.static.same !== false) fail(`${label}:不带关键帧的多维属性,this.pv 应当是 value 取单精度(且不是同一个对象),读到 ${JSON.stringify(pv.static)}`);
       if (!pv.keyed || pv.keyed.same !== true) fail(`${label}:带关键帧的属性,this.pv 和 value 应当是同一个对象,读到 ${JSON.stringify(pv.keyed)}`);
       if (runtime.installed !== (mode === 'expr')) fail(`${label}:卡片自己的随机函数${runtime.installed ? '装上了' : '没装上'},和预期相反`);
+      if (!gauss || !/gaussRandom/.test(gauss)) fail(`${label}:表达式里用 gaussRandom 应当照播放库的方式失败(报它没定义),读到 ${gauss}`);
       if (mode === 'off') continue;
       // 开着时:两遍相同
       if (!row.repeat) fail(`${label}:两个新页面读到的数不同`);
       if (mode !== 'expr') continue;
-      // 只有「替换」保证的
+      // 「替换」要守的:数固定,观感和播放库现在的一样
+      if (gauss !== section.modes.off.gauss) fail(`${label}:表达式里用 gaussRandom,开着报「${gauss}」,关着报「${section.modes.off.gauss}」,应当一样`);
       if (!frames.every((f, i) => row.twice.x[i] !== row.twice.y[i])) fail(`${label}:一个表达式里连调两次 random,有的帧两个数相同`);
       if (!varies(row.twice.x) || !varies(row.mathRandom)) fail(`${label}:random / Math.random 的数不随帧变`);
       if (!row.mathRandom.every((x) => x >= 300 && x < 1300)) fail(`${label}:Math.random 的 x 出了 300～1300`);
-      if (!(row.wiggle.maxStep <= AMP / 6 + 0.001)) fail(`${label}:wiggle 相邻帧差 ${row.wiggle.maxStep},超过幅度的六分之一(${(AMP / 6).toFixed(2)}),不连续`);
+      // wiggle 照旧逐帧跳:相邻帧的差应当远超过「连续」时的上限(幅度的六分之一),和关着时一个量级
+      if (!(row.wiggle.maxStep > AMP)) fail(`${label}:wiggle 相邻帧最多只差 ${row.wiggle.maxStep},不像逐帧各取各的(关着时 ${section.modes.off.wiggle.maxStep})`);
+      // 同一个表达式里先 seedRandom 再 wiggle:照播放库现在的,接着不带时间的那一串取,随时间连续(每帧最多走幅度的六分之一)
+      if (!(row.seededWiggle.maxStep <= 100 / 6 + 0.001)) fail(`${label}:先 seedRandom 再 wiggle(5, 100) 的那一层相邻帧差 ${row.seededWiggle.maxStep},超过 ${(100 / 6).toFixed(2)};播放库现在是连续的(关着时 ${section.modes.off.seededWiggle.maxStep})`);
       if (varies(row.seedTimeless)) fail(`${label}:seedRandom(7, true) 的值随时间变了`);
-      if (!varies(row.seedTimed)) fail(`${label}:seedRandom(7) 的值不随时间变(照 AE 应当变)`);
-      if (!(runtime.gaussMean > 0.47 && runtime.gaussMean < 0.53 && runtime.gaussInside > 0.85 && runtime.gaussInside < 0.95 && runtime.gaussArrayRatio === 2 && runtime.repeatable && runtime.mathKeepsRest)) fail(`${label}:卡片自己的随机函数直接调的结果不对 ${JSON.stringify(runtime)}`);
-      console.log(`${label}:gaussRandom 4000 次的平均 ${runtime.gaussMean},落在 0～1 的占 ${runtime.gaussInside};同样的参数再调一次拿到同样的数:${runtime.repeatable}`);
+      if (varies(row.seedTimed)) fail(`${label}:seedRandom(7) 的值随时间变了(播放库现在不看第二个参数,不变)`);
+      if (twinApart(row.twin.random) !== frames.length || twinApart(row.twin.wiggle) < frames.length - 1) fail(`${label}:同一个合成放两份,两份应当各动各的;不同的帧数 random ${twinApart(row.twin.random)}、wiggle ${twinApart(row.twin.wiggle)}(共 ${frames.length} 帧)`);
+      if (!(runtime.gives === 4 && runtime.repeatable && runtime.mathKeepsRest)) fail(`${label}:卡片自己的随机函数直接调的结果不对 ${JSON.stringify(runtime)}`);
+    }
+    // 只有 wiggle 的表达式跟在别的表达式的 seedRandom 后面求值时(fixture 的 wiggle-pos 就是):播放库现在让它接着那一串取,
+    // 看起来是连续的;「替换」下它不再受别的表达式影响,照旧逐帧跳。只记录
+    if (ASSETS.includes('fixture')) {
+      const late = Array.from({ length: 15 }, (_, i) => 42 + i); const steps = {};
+      for (const mode of ['off', 'seed', 'expr']) { const p = await open(); const m = await call(p, 'make', 'fixture', mode); const rows = await call(p, 'readLayers', m.id, late); await p.close(); const xs = late.map((f) => rows[f]['wiggle-pos'][X]); steps[mode] = +Math.max(...xs.slice(1).map((x, i) => Math.abs(x - xs[i]))).toFixed(2); }
+      section.wiggleAfterSeeded = steps;
+      console.log(`表达式用例 / fixture 的 wiggle-pos(每帧排在一个 seedRandom(7, true) 的表达式后面求值)第 42～56 帧相邻帧最多差:关 ${steps.off},种子 ${steps.seed},替换 ${steps.expr}`);
     }
     // 开关一和开关三叠着开(再加开关二):表达式已经不用播放库那一串了,画面应当和只开开关三(加开关二)一样
     if (ASSETS.includes('fixture')) {
