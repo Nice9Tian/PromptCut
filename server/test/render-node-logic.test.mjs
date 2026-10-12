@@ -251,10 +251,13 @@ test('B.2 规则 1：plan 任务只查 codeVersion（指纹、卡片源码不查
   rejected(checkClaimable(planView({ requires: { codeVersion: 'other' } }), pc), 1, 'plan 代码版本不符');
 });
 
-test('B.2 规则 2：stream 任务或 requires.transcode 要转码能力', () => {
+// browser-stream-task.md 第二处：规则 2 改成只看任务自己写的 requires.transcode。切分方的流任务本来就写 transcode: true（split.mjs），
+// 所以这里的流任务夹具照它的真实形状带上这一项；没写这一项的流任务不再一律要求转码（给浏览器的单卡流那一份写的是 false）
+test('B.2 规则 2：requires.transcode 要转码能力（切分方的流任务写了它）', () => {
   const noTranscode = nodeOf({ capabilities: { transcode: false } });
-  const stream = taskView({ id: 'stream:rk:0-7', kind: 'stream', tier: undefined, range: { unit: 'segment', from: 0, to: 7 } });
+  const stream = taskView({ id: 'stream:rk:0-7', kind: 'stream', tier: undefined, range: { unit: 'segment', from: 0, to: 7 }, requires: { transcode: true } });
   rejected(checkClaimable(stream, noTranscode), 2, 'stream 无转码');
+  accepted(checkClaimable(taskView({ id: 'stream:rk:0-7', kind: 'stream', tier: undefined, range: { unit: 'segment', from: 0, to: 7 }, requires: { transcode: false } }), noTranscode), 'stream 自己写了不要转码');
   rejected(checkClaimable(taskView({ requires: { transcode: true } }), noTranscode), 2, 'snapshot 要转码');
   accepted(checkClaimable(stream, nodeOf({ capabilities: { transcode: true } })), 'stream 有转码');
   accepted(checkClaimable(taskView({ requires: { transcode: false } }), noTranscode), 'snapshot 不要转码');
@@ -337,7 +340,7 @@ test('B.2 按规则号顺序检查，返回第一条不过的', () => {
   // 1 与 5 同时不过 → 1
   rejected(checkClaimable(taskView({ requires: { codeVersion: 'x', memoryMB: 99999 } }), nodeOf()), 1, '1 与 5');
   // 2 与 4 同时不过（browser、stream、heavy）→ 2
-  const stream = taskView({ id: 'stream:rk:0-7', kind: 'stream', tier: undefined, range: { unit: 'segment', from: 0, to: 7 }, weight: { class: 'heavy' } });
+  const stream = taskView({ id: 'stream:rk:0-7', kind: 'stream', tier: undefined, range: { unit: 'segment', from: 0, to: 7 }, weight: { class: 'heavy' }, requires: { transcode: true } });
   rejected(checkClaimable(stream, nodeOf({ profile: 'browser', capabilities: { transcode: false } })), 2, '2 与 4');
   // 3 与 5 同时不过 → 3
   rejected(checkClaimable(taskView({ requires: { userCards: true, memoryMB: 99999 } }), nodeOf({ capabilities: { userCards: false } })), 3, '3 与 5');

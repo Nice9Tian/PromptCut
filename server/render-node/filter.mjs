@@ -11,7 +11,9 @@
  *      `nodeId`(M6c X2 本地档能力闸,`node.nodeId` 由会话补上)
  *   2  要求 `capabilities.streams` 的任务(M6c X1 起的流任务)需要节点报 `streams: true`(没报这一项的旧形状
  *      按 `transcode` 算);
- *      轨道流 / 要转码的任务需要转码能力
+ *      任务自己写了 `requires.transcode: true` 的需要转码能力。只看任务写的这一项,不再按「是流任务」一律要求转码
+ *      (`docs/plan/browser-stream-task.md` 第二处):切分方自己的流任务本来就写 `transcode: true`,行为不变;
+ *      给浏览器的单卡流那一份写 `transcode: false`(浏览器用自带的编码器压),只凭 `capabilities.streams` 认领
  *   3  用户卡、图卡需要对应能力
  *   4  重度策略(见 `DEFAULT_WEIGHT_POLICY`)
  *   5  内存要求不超过本机可用内存
@@ -22,6 +24,8 @@
  *      里写):M7 契约第 3.2 节与 D4(桌面只把独立卡的页面测量帧当预渲染结果;本地档要整场景渲)。不只靠切分方把本地档记 heavy。
  *      画布卡(`input.canvasHeavy`)也不收:浏览器逐帧顺推生成快照,画布卡与桌面 4 帧一批的结果不等价(M7 探针 P2,主会话裁定)
  *      用户卡、图卡的任务(块 N)另要 `requires.cardSources` 非空:用户卡一定有代码身份,空了说明切分方没给身份可对
+ *      纯浏览器的流任务同理,只收切分方按浏览器的形状出的单卡流:`input.stream` 是 `{ kind: 'card', plane: 'local' }`、带 `input.bake`、
+ *      独立卡、不是画布卡(组流要连摆放一起画,浏览器这条路画不了);不只靠规则 2 挡
  *   8  仅供测试(M7 契约 D15):节点描述带 `planOnly: true` 时只认领 `plan`、不认领细任务 —— 验收时切分方只切分,
  *      不和纯浏览器抢同一批卡。只在测试环境变量 `PROMPTCUT_TEST_PLAN_ONLY=1` 时由调用方设(`testPlanOnly`),生产不设
  *
@@ -97,7 +101,8 @@ export function checkClaimable(task, node) {
   // 2(M6c X1:任务要求 `capabilities.streams` 时,节点要报 `streams: true`,即本机探到了编码器;
   //   没报 `streams` 这一项的节点(M6c 之前的形状)按它的转码能力算,报了 `false` 的一律不收)
   if (requires.capabilities?.streams === true && (capabilities.streams ?? capabilities.transcode) !== true) return reject(2, 'streams');
-  if ((task?.kind === 'stream' || requires.transcode === true) && !capabilities.transcode) return reject(2, 'transcode');
+  // 转码只看任务自己写的 `requires.transcode`(browser-stream-task.md 第二处):浏览器的单卡流那一份写的是 false
+  if (requires.transcode === true && !capabilities.transcode) return reject(2, 'transcode');
 
   // 3
   if (requires.userCards === true && !capabilities.userCards) return reject(3, 'user-cards');
@@ -124,6 +129,15 @@ export function checkClaimable(task, node) {
     if (task.input?.compositing !== 'independent') return reject(7, 'not-independent');
     if (task.input?.canvasHeavy === true) return reject(7, 'canvas-heavy');
     // 块 N:用户卡、图卡一定有代码身份;没有(`cardSources` 为空)说明切分方没给身份可对,浏览器不接
+    if (runsCardCode && Object.keys(requires.cardSources ?? {}).length === 0) return reject(7, 'card-source-missing');
+  }
+
+  // 7(续):纯浏览器的流任务只收浏览器形状的单卡流(切分方在浏览器那一份里写 `input.stream`、`input.bake`、`input.compositing`)
+  if (browser && task?.kind === 'stream') {
+    if (task.input?.stream?.kind !== 'card' || task.input.stream.plane !== 'local') return reject(7, 'not-card-stream');
+    if (!task.input.bake || typeof task.input.bake !== 'object') return reject(7, 'no-bake-input');
+    if (task.input.compositing !== 'independent') return reject(7, 'not-independent');
+    if (task.input.canvasHeavy === true) return reject(7, 'canvas-heavy');
     if (runsCardCode && Object.keys(requires.cardSources ?? {}).length === 0) return reject(7, 'card-source-missing');
   }
 

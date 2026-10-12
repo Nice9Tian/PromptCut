@@ -164,7 +164,10 @@ test('OCN-04 节点侧过滤:纯浏览器认领用户卡与图卡的任务——
   // 不变的:只认本人的(规则 0)、不要转码的(规则 2)、不认流、不认本地档与非独立卡与画布卡(规则 7)、重度策略(规则 4)
   assert.deepEqual(checkClaimable({ ...cardTask(), source: { projectId: 'p1', projectRev: 7, userId: 'mallory@devB' } }, node), { ok: false, rule: 0, reason: 'other-user' });
   assert.equal(checkClaimable(cardTask({ requires: { transcode: true } }), node).rule, 2, '要本机转码的不认领');
-  assert.equal(checkClaimable({ ...cardTask(), kind: 'stream' }, node).rule, 2, '流任务不认领');
+  // 规则 2 改成只看任务自己写的 requires.transcode(browser-stream-task.md 第二处)之后,不是浏览器形状的流任务由规则 7 挡(没有 input.stream);
+  // 切分方自己的流任务(写了 transcode: true)照旧被规则 2 挡
+  assert.deepEqual(checkClaimable({ ...cardTask(), kind: 'stream' }, node), { ok: false, rule: 7, reason: 'not-card-stream' }, '流任务不认领');
+  assert.equal(checkClaimable({ ...cardTask({ requires: { transcode: true } }), kind: 'stream' }, node).rule, 2, '要本机转码的流任务不认领');
   assert.equal(checkClaimable(cardTask({ tier: 'local' }), node).rule, 7);
   assert.equal(checkClaimable(cardTask({ input: { compositing: 'belowDependent' } }), node).reason, 'not-independent');
   assert.equal(checkClaimable(cardTask({ input: { canvasHeavy: true } }), node).reason, 'canvas-heavy');
