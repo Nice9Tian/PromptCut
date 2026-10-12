@@ -4,8 +4,9 @@
  * HR38 认身份：只认登记表里角色是 agent 的服务 `agent` 的签名；别的服务、撤掉的公钥、改过的请求体、过期的时刻、重放、没有登记表都进不来。
  * HR39 路由：没有卡片源码的项目走常驻工作进程；有卡片源码的只走隔离工作进程，而且要等它这一轮正是这个项目、卡片同步到位；
  *      绝不把一个项目的内容交给正在跑另一个项目的隔离工作进程；项目不在目录里、渲染节点或云端 Agent 的开关关着、整条路关着时要不到。
- * HR40 并发与时限：同一时刻只转发一个，其余排队，排满回忙；背压暂停时不接；到时限回「这次没看成」，不挂着。
- * HR41 隔离工作进程的编排：要看画面的项目没有任务等着也算候选并排最前；出图的半路上不因闲置、轮换而结束。
+ * HR40 并发与时限：同一时刻只转发一个，其余排队（不回忙）；背压暂停时排着等；到时限回「这次没看成」，不挂着。
+ * HR41 隔离工作进程的编排：要看画面的项目没有任务等着也算候选并排最前；出图的半路上不因闲置、轮换而结束；有人等着看画面也不提前让位。
+ * （排队、重试、让位、重启接续的用例在 `hosted-render-queue.test.mjs`。）
  * HR42 代理口上的 `/look`：浏览器形状的请求 403；工作进程的口令要不到画面；Agent 服务的签名要不到清单与票据。
  * HR43 工作进程的页面请求闸：看画面的那批接口，Node 一侧的请求也要带这个工作进程自己的口令；浏览器发来的照旧 403。
  * CA-LOOK-01 Agent 服务一侧的客户端：地址只许回环；项目由宿主定；「这次没看成」原话抛出；云端不存可视化记录。
@@ -95,6 +96,7 @@ function lookKit({ limits = {}, enabled = true } = {}) {
       const r = await state.reply(url, init);
       return { status: r.status, json: async () => r.json };
     },
+    // 重试之间不等：用例里的替身要么立刻回、要么按时限回
     limits: { pollMs: 10, settleMs: 200, cardWaitMs: 150, ...limits },
   });
   const ask = (msg, auth = 'good') => look.handle({ auth, bodyText: JSON.stringify(msg) });
@@ -162,7 +164,7 @@ test('HR39 路由：没有卡的走常驻；有卡的只走这一轮正是它的
   assert.equal(c.status, 200);
   assert.equal(k.state.sent[3].url.includes(':7003/'), true);
 
-  // 隔离工作进程这一轮是别的项目：项目甲的内容绝不交给它；到时限回「排队」
+  // 隔离工作进程这一轮是别的项目：项目甲的内容绝不交给它；同步等的调用法到了自己的时限如实回「在排队」
   k.isoReady(P2, {});
   const before = k.state.sent.length;
   const d = await k.ask(k.snap(P1, { cards, timeoutMs: 2000 }));
@@ -179,9 +181,13 @@ test('HR39 路由：没有卡的走常驻；有卡的只走这一轮正是它的
   // 这台节点没开用户卡的隔离：带卡的项目看不了
   k.state.iso = { ...k.state.iso, enabled: false };
   assert.equal((await k.ask(k.snap(P1, { cards }))).body.look, 'iso-off');
-  // 为它起过又没起成：不干等
-  k.state.iso = { enabled: true, port: 7003, key: null, current: null, report: null, lastRun: { projectId: P1, reason: 'oom', at: Date.now() + 1000 } };
-  assert.equal((await k.ask(k.snap(P1, { cards, timeoutMs: 3000 }))).body.look, 'iso-failed');
+  // 为它起过又没起成、重试也用完了：不干等到时限（重试的次数在 hosted-render-queue.test.mjs 里验）
+  const noRetry = lookKit({ limits: { retries: 0 } });
+  noRetry.state.iso = { enabled: true, port: 7003, key: null, current: null, report: null, lastRun: { projectId: P1, reason: 'oom', at: Date.now() + 1000 } };
+  const t0 = Date.now();
+  assert.equal((await noRetry.ask(noRetry.snap(P1, { cards, timeoutMs: 3000 }))).body.look, 'iso-failed');
+  assert.ok(Date.now() - t0 < 1500);
+  k.state.iso = { enabled: true, port: 7003, key: null, current: null, report: null, lastRun: null };
 
   // 常驻工作进程还没报出这个项目带没带卡：等到它确知「没有」
   k.state.residentNodes.set(P2, { projectId: P2, connected: true, cards: { state: 'unknown' } });
@@ -202,15 +208,14 @@ test('HR39 路由：没有卡的走常驻；有卡的只走这一轮正是它的
   assert.equal(closed.state.sent.length, 0);
 });
 
-test('HR40 并发与时限：同一时刻只转发一个，其余排队；排满回忙；背压暂停时不接；工作进程不回就按时限回「这次没看成」', async () => {
-  const k = lookKit({ limits: { maxWaiting: 2 } });
+test('HR40 并发与时限：同一时刻只转发一个，其余排队（不回忙）；背压暂停时排着等；工作进程不回就按时限回「这次没看成」', async () => {
+  const k = lookKit();
   let inFlight = 0;
   let peak = 0;
   k.state.reply = async () => { inFlight += 1; peak = Math.max(peak, inFlight); await sleep(80); inFlight -= 1; return { status: 200, json: { ok: true } }; };
   const all = await Promise.all([1, 2, 3, 4, 5].map(() => k.ask(k.snap(P1, { timeoutMs: 5000 }))));
   assert.equal(peak, 1, '同一时刻只有一个在工作进程上');
-  assert.deepEqual(all.map((r) => r.status).sort(), [200, 200, 200, 503, 503], '一个在途、最多再排 2 个，再多回忙');
-  assert.equal(all.find((r) => r.status === 503).body.look, 'busy');
+  assert.deepEqual(all.map((r) => r.status), [200, 200, 200, 200, 200], '一个在途，其余都排着等到轮到，没有一个回忙');
   assert.equal(k.look.busyOn(), null);
 
   // 在途时报出正在哪个工作进程上（管理进程据此让出一个并发名额）
@@ -219,10 +224,14 @@ test('HR40 并发与时限：同一时刻只转发一个，其余排队；排满
   await k.ask(k.snap(P1));
   assert.deepEqual(seen, ['resident', P1]);
 
+  // 背压暂停：不回忙，排着等；过去了接着做
   k.state.paused = true;
-  const p = await k.ask(k.snap(P1));
-  assert.deepEqual([p.status, p.body.look], [503, 'busy']);
+  const held = k.ask(k.snap(P1, { timeoutMs: 5000 }));
+  await sleep(120);
+  assert.equal(k.look.status().waiting, 1);
+  assert.deepEqual(k.look.status().queue.blocked, { backpressure: 1 });
   k.state.paused = false;
+  assert.equal((await held).status, 200);
 
   // 工作进程不回：按时限回，不挂着
   k.state.reply = (_url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(Object.assign(new Error('timeout'), { name: 'TimeoutError' }))));
@@ -230,7 +239,7 @@ test('HR40 并发与时限：同一时刻只转发一个，其余排队；排满
   const t = await k.ask(k.snap(P1, { timeoutMs: 2000 }));
   assert.deepEqual([t.status, t.body.ok, t.body.look], [504, false, 'timeout']);
   assert.ok(Date.now() - t0 < 4000);
-  // 工作进程回了不是 JSON 的东西、连不上：明说出错
+  // 工作进程回了不是 JSON 的东西、连不上：重试用完后明说出错
   k.state.reply = async () => ({ status: 502, json: null });
   assert.equal((await k.ask(k.snap(P1))).body.look, 'failed');
   k.state.reply = async () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); };
@@ -245,7 +254,7 @@ test('HR40 并发与时限：同一时刻只转发一个，其余排队；排满
   assert.equal(s.waiting, 0);
 });
 
-test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算候选并排最前；出图的半路上不结束、不轮换；有需求就不算闲置', async () => {
+test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算候选并排最前；出图的半路上不结束、不轮换；有需求就不算闲置；有人等着看画面也不提前让位', async () => {
   const directory = [{ projectId: P1, enabled: true, active: true, members: false, since: 1 }, { projectId: P2, enabled: true, active: true, members: true, since: 2 }];
   const residentNodes = [{ projectId: P2, cards: { state: 'some' }, pending: 2, pendingKey: 'k2' }];
   assert.deepEqual(isolationCandidates({ directory, residentNodes }).map((c) => c.projectId), [P2]);
@@ -259,7 +268,7 @@ test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算
   const calls = [];
   let exited = false;
   const iso = createIsolation({
-    nodeIdOf: (id) => `iso/${id.slice(3, 5)}`, now: () => at, idleMs: 1000, sliceMs: 10_000, lookSliceMs: 3000, drainMs: 500,
+    nodeIdOf: (id) => `iso/${id.slice(3, 5)}`, now: () => at, idleMs: 1000, sliceMs: 10_000, drainMs: 500,
     runner: {
       async prepare(id) { calls.push(`prepare:${id.slice(3, 5)}`); },
       start(id) { calls.push(`start:${id.slice(3, 5)}`); exited = false; },
@@ -293,7 +302,7 @@ test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算
   assert.ok(calls.includes('stop:rotated'));
   assert.equal(iso.current, null);
 
-  // 乙在跑、甲要看画面在等：乙最多再做 lookSliceMs 就轮换（不是 sliceMs）
+  // 乙在跑（一直有活）、甲要看画面在等：不提前让位（原来 45 秒就换，2026-10-09 用户定取消），连续做满 sliceMs 才排空
   calls.length = 0;
   const onlyB = isolationCandidates({ directory, residentNodes });
   iso.tick({ candidates: onlyB });
@@ -304,10 +313,16 @@ test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算
   assert.equal(iso.current.phase, 'running');
   at = 23_000;
   iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'] }), looks: { wanted: (id) => id === P1, busy: null } });
-  assert.equal(iso.current.phase, 'running', '还不到 lookSliceMs');
+  assert.equal(iso.current.phase, 'running');
   at = 24_500;
   iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'] }), looks: { wanted: (id) => id === P1, busy: null } });
-  assert.equal(iso.current.phase, 'draining', '有人等着看画面：提前轮换');
+  assert.equal(iso.current.phase, 'running', '有人等着看画面：也不提前让位');
+  at = 30_900;
+  iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'] }), looks: { wanted: (id) => id === P1, busy: null } });
+  assert.equal(iso.current.phase, 'running', '还不到 sliceMs');
+  at = 31_000;
+  iso.tick({ candidates: withLook, report: report(P2, { held: ['t1'] }), looks: { wanted: (id) => id === P1, busy: null } });
+  assert.equal(iso.current.phase, 'draining', '一直有活、连续做满 sliceMs：排空让位');
   iso.tick({ candidates: withLook, report: report(P2, { held: [] }), looks: { wanted: (id) => id === P1, busy: null } });
   await settle();
   assert.ok(calls.includes('stop:rotated'));
@@ -316,9 +331,9 @@ test('HR41 隔离工作进程的编排：要看画面的项目没有任务也算
   calls.length = 0;
   iso.tick({ candidates: withLook });
   await settle();
-  at = 30_000;
+  at = 40_000;
   iso.tick({ candidates: [], report: report(P1), looks: { wanted: () => false, busy: null } });
-  at = 31_500;
+  at = 41_500;
   iso.tick({ candidates: [], report: report(P1), looks: { wanted: () => false, busy: null } });
   await settle();
   assert.ok(calls.includes('stop:idle'));
@@ -436,7 +451,9 @@ test('CA-LOOK-01 Agent 服务一侧的客户端：地址只许回环；项目由
   assert.equal(out.ok, true);
   assert.equal(sent[0].url, 'http://127.0.0.1:5399/look');
   const msg = JSON.parse(sent[0].init.body);
-  assert.deepEqual([msg.projectId, msg.path, msg.cards, msg.timeoutMs], [P1, '/api/vision/snapshot', { 'src/cards/user/x.tsx': 4 }, 30_000]);
+  assert.deepEqual([msg.projectId, msg.path, msg.cards], [P1, '/api/vision/snapshot', { 'src/cards/user/x.tsx': 4 }]);
+  assert.match(msg.requestId, /^[A-Za-z0-9_-]{16,64}$/, '带着现生成的 requestId 登记（排队的调用法）');
+  assert.equal(msg.timeoutMs, undefined, '排队的调用法不带整条请求的时限');
   assert.equal(verify(sent[0].init.headers[LOOK_AUTH_HEADER], sent[0].init.body).ok, true, '签名按发出去的请求体原文算，对端核得过');
   // 项目是绑死的：工具给的请求体里写别的项目也改不了信封上的项目
   await post('/api/vision/snapshot', { project: { id: P2, tracks: [] }, projectId: P2 });
@@ -459,8 +476,8 @@ test('CA-LOOK-01 Agent 服务一侧的客户端：地址只许回环；项目由
   // 工作进程自己的回答（片段不存在）原样交回，由工具照桌面版的办法处理
   reply = { status: 200, json: { ok: false, error: '时间轴上没有 id 为 c9 的片段。' } };
   assert.deepEqual(await post('/api/vision/snapshot', { project: { tracks: [] }, clipId: 'c9' }), { ok: false, error: '时间轴上没有 id 为 c9 的片段。' });
-  // 连不上
-  const down = createLookClient({ url: 'http://127.0.0.1:5399', key, fetch: async () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); } });
+  // 一直连不上（过了重连的时限）
+  const down = createLookClient({ url: 'http://127.0.0.1:5399', key, limits: { reconnectMs: 60, backoffMs: [20] }, fetch: async () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); } });
   await assert.rejects(() => down.forProject(P1)('/api/vision/snapshot', { project: { tracks: [] } }), /这次没看成：连不上/);
   assert.equal(client.describe().url, 'http://127.0.0.1:5399');
 });
