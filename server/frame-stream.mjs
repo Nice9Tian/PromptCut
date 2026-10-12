@@ -395,9 +395,28 @@ export function localPlacement(clip, stage) {
 }
 
 /**
+ * 这条流产分段时要不要从挂载帧回放(`docs/plan/prerender-products-contract.md` 第 4.2 节)。
+ *
+ * 成员里有一张 motion 式(有状态)的卡就要:它的画面带着前面各帧的历史,接不上租约时只能从挂载帧逐帧推过来。
+ * 全部成员都是 remotion 式(`frameMode === 'direct'`:画面只由时间和参数决定)才不要 —— 直接落在目标帧就是对的。
+ * 写法取 card plan 里带着的 `control.frameMode`;没有这一项(旧形状的输入)、或者声明了 `need_prerendering`
+ * 的,一律按有状态处理(宁可多回放,不可画错)。判据和 `snapshot-tier.mjs` 的 `snapshotTier` 的「有状态」一致。
+ */
+export function streamNeedsReplay(controls) {
+  const list = Array.isArray(controls) ? controls : [];
+  if (!list.length) return true;
+  return list.some(control => {
+    const caps = control?.capabilities;
+    if ((control?.frameMode ?? caps?.frameMode) !== 'direct') return true;
+    return caps?.need_prerendering === true || caps?.needPrerendering === true || control.needPrerendering === true;
+  });
+}
+
+/**
  * 按 entry(项目 + card plan + 预渲染集合)算出这一版的全部流。纯函数(除了 `prerenderPicked`
  * 由调用方给)。回 `[{ streamKey, contentKey, envFingerprint, kind, plane, clipIds, topClipId, offset, bound,
- * mountFrame, firstFrame, lastFrame, firstSegment, lastSegment, members }]`。
+ * mountFrame, replay, firstFrame, lastFrame, firstSegment, lastSegment, members }]`。`replay`:产分段时要不要从挂载帧
+ * 回放(`streamNeedsReplay`);不进任何键 —— 不回放不改画面,remotion 式的卡画面只由时间和参数决定。
  *
  * M4(契约 E.4):`contentKey` 是流的内容键(成员取 card plan 的**内容键**,不含环境),
  * `streamKey = resultKeyOf(contentKey, envFingerprint)` 是落盘和路由用的结果键。同一个项目在两种
@@ -440,6 +459,7 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       firstFrame: firstVisible, lastFrame: last,
       firstSegment: Math.floor(Math.max(0, firstVisible) / SEGMENT_FRAMES), lastSegment: Math.floor(last / SEGMENT_FRAMES),
       fps, stage, total,
+      replay: streamNeedsReplay(members.map(m => m.control)),
     };
     if (members.length === 1) {
       const m = members[0];
@@ -609,7 +629,7 @@ export class StreamProducer {
     this.generation = 0;
     this.closed = false;
     this.measure = { idle: [], busy: [] };
-    this.stats = { segments: 0, resets: 0, replacedDeleted: 0, failures: 0, maxAliveEncoders: 0, setFrameWindowCalls: 0 };
+    this.stats = { segments: 0, resets: 0, replayedFrames: 0, replacedDeleted: 0, failures: 0, maxAliveEncoders: 0, setFrameWindowCalls: 0 };
     this.log = [];
     /**
      * 分段字节的读口接上了没有(`attachRoute()`,由挂 `/api/frames/*` 的那一处在建 `FramePipeline` 时调)。
@@ -645,6 +665,7 @@ export class StreamProducer {
         streamKey: state.spec.streamKey, contentKey: state.spec.contentKey, kind: state.spec.kind, clipIds: state.spec.clipIds,
         firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
         bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
+        replay: state.spec.replay !== false, replayedFrames: state.replayedFrames ?? 0,
         segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs }])),
         inits: Object.keys(state.manifest?.inits ?? {}),
       })),
@@ -1053,8 +1074,15 @@ export class StreamProducer {
     let firstCapture = true;
     const measuring = stride > 1 && !manifest.tight;
     try {
+      /*
+       * 不要回放的流(成员全是 remotion 式,`spec.replay === false`):不传 `mountFrame`、预热帧数传 0。
+       * `bakeStream` 对「没给 `mountFrame`」就是从 `fromFrame` 起挂载,接不上租约只付一次重灌页面的钱,
+       * 不再从挂载帧逐帧推过来;所以分段不必按顺序产。`server/bakery/bake.mjs` 一个字不动(代码指纹)。
+       */
+      const replay = spec.replay !== false;
       const result = await bakeStream(bakery, {
-        streamSignature: spec.streamKey, fromFrame, toFrame, stride, fps, mountFrame: spec.mountFrame,
+        streamSignature: spec.streamKey, fromFrame, toFrame, stride, fps,
+        ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
         clip: captureRect, hasMedia: false, signal: abort.signal,
         onFrame: async (frame, png) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
@@ -1070,6 +1098,9 @@ export class StreamProducer {
         },
       });
       if (result.reset) this.stats.bakeStreamResets = (this.stats.bakeStreamResets ?? 0) + 1;
+      // 回放过的帧数(`bakeStream` 的 `replayed`):不回放的流恒为 0,探针读 `status()` 核对
+      this.stats.replayedFrames = (this.stats.replayedFrames ?? 0) + (result.replayed ?? 0);
+      state.replayedFrames = (state.replayedFrames ?? 0) + (result.replayed ?? 0);
       if (result.captured) {
         const per = result.captureMs / result.captured;
         (this.aliveEncoders > 1 ? this.measure.busy : this.measure.idle).push(per);
