@@ -80,7 +80,7 @@ export async function exportFrames(opts) {
   if (!noVideo) {
     console.log('Running ffmpeg to generate video files...');
     const runFfmpeg = (args) => new Promise((resolve, reject) => {
-      const proc = spawn(ffmpegCmd, args, { stdio: 'inherit' });
+      const proc = spawn(ffmpegCmd, args, { stdio: 'inherit', windowsHide: true });
       proc.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
       proc.on('error', reject);
     });
