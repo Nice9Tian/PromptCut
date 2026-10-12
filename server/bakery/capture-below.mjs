@@ -163,8 +163,9 @@ export function diffLayer(upper, lower, width, height, { crop = null, glass = nu
 }
 
 /**
- * `crop` 外面两张有没有不同的像素。有就回它们的包围盒(整张的像素坐标),没有回 null。
- * 满密度那一趟只交出收紧矩形里的那一块;目标卡要是改到了矩形外面(稀疏那一趟每隔几帧才量一次,中间的帧可能超出),这里查得出来。
+ * `crop` 外面两张有没有不同的像素(逐字节比,很快)。有就回它们的包围盒(整张的像素坐标),没有回 null。
+ * 满密度那一趟只交出收紧矩形里的那一块;目标卡要是改到了矩形外面(稀疏那一趟每隔几帧才量一次,中间的帧可能超出),
+ * 先用它粗筛,再由 `layerOutside` 细看。
  */
 export function changedOutside(upper, lower, width, height, crop) {
   let x0 = width, y0 = -1, x1 = -1, y1 = -1;
@@ -182,6 +183,32 @@ export function changedOutside(upper, lower, width, height, crop) {
   for (let y = 0; y < height; y++) {
     if (y < crop.y || y >= crop.y + crop.h) scan(y, 0, width);
     else { scan(y, 0, crop.x); scan(y, crop.x + crop.w, width); }
+  }
+  return y1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+/**
+ * `crop` 外面,算出来的那一层有没有不透明的像素。有就回它们的包围盒(整张的像素坐标),没有回 null。
+ * 和稀疏那一趟量实体框是同一个口径(那一层的不透明度大于 0):两张逐字节不同、算出来却仍是全透明的像素不算
+ * (下层几乎全透明的地方两张的颜色常常对不上,预乘以后其实没有差别),不然这些像素每一帧都会被当成「改到了矩形外面」。
+ */
+export function layerOutside(upper, lower, width, height, crop, { glass = null, origin = { x: 0, y: 0 } } = {}) {
+  const exact = changedOutside(upper, lower, width, height, crop);
+  if (!exact) return null;
+  const mask = glass?.length ? glassMask(glass, { x: exact.x + origin.x, y: exact.y + origin.y, w: exact.w, h: exact.h }) : null;
+  const ring = diffLayer(upper, lower, width, height, { crop: exact, mask }).rgba;
+  let x0 = width, y0 = -1, x1 = -1, y1 = -1;
+  for (let y = 0; y < exact.h; y++) {
+    const py = y + exact.y, inRows = py >= crop.y && py < crop.y + crop.h;
+    for (let x = 0; x < exact.w; x++) {
+      if (!ring[(y * exact.w + x) * 4 + 3]) continue;
+      const px = x + exact.x;
+      if (inRows && px >= crop.x && px < crop.x + crop.w) continue;
+      if (y0 < 0) y0 = py;
+      y1 = py;
+      if (px < x0) x0 = px;
+      if (px > x1) x1 = px;
+    }
   }
   return y1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
 }
@@ -303,7 +330,7 @@ const samePixels = (a, b) => {
  * 顺序固定为:上张(`shoot()`)→ 藏 → 下张 →(实测时再截一张)→ 撤 →(实测时再截一张)。中间不推时间、不重挂载;
  * 藏了以后无论截图成没成都撤(`finally`)。
  *
- * `rect` 比 `view` 小时,两张在 `rect` 外面还有不同的像素(目标卡改到了交出去的矩形外面)就抛 `code: 'below-overflow'` 的错,
+ * `rect` 比 `view` 小时,那一层在 `rect` 外面还有不透明的像素(目标卡改到了交出去的矩形外面)就抛 `code: 'below-overflow'` 的错,
  * `box` 是那些像素的包围盒(场景坐标);调用方把矩形放大以后重来。
  */
 export function belowSegmentCapture(bakery, { clipId, view, rect, record = newBelowRecord(), signal = null, verify = true, note = () => {}, tap = null }) {
@@ -372,7 +399,7 @@ export function belowSegmentCapture(bakery, { clipId, view, rect, record = newBe
     record.decodeMs += performance.now() - at;
     at = performance.now();
     if (crop.w < view.w || crop.h < view.h) {
-      const outside = changedOutside(upper.data, lower.data, view.w, view.h, crop);
+      const outside = layerOutside(upper.data, lower.data, view.w, view.h, crop, { glass, origin: view });
       if (outside) {
         record.overflows++;
         throw Object.assign(fail('below-overflow', `第 ${frame} 帧目标卡改到了交出去的矩形外面`), { box: { x: outside.x + view.x, y: outside.y + view.y, w: outside.w, h: outside.h } });

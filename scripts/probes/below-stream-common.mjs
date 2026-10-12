@@ -23,6 +23,8 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 export const DURATION = 3;
 export const FPS = 30;
 export const TARGET = 'clip-glass';
+/** `edit: 'above'` 时加在毛玻璃卡上面的那张卡 */
+export const ABOVE = 'clip-above';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const round2 = (n) => (n === null || n === undefined || Number.isNaN(n) ? null : +Number(n).toFixed(2));
@@ -34,17 +36,24 @@ const glassFrame = (width, height) => (width === 1920 && height === 1080 ? {} : 
 
 /**
  * 场景项目。`kind`:`'a'`(甲)或 `'b'`(乙);`mediaUrl`:甲的视频地址。
- * `edit`:`'below'` 时把下层那张卡的参数改一处(验「下层改了键就变」用)。
+ * `edit`:`'below'` 时把下层那张卡的参数改一处(验「下层改了键就变」用);`'above'` 时在毛玻璃卡上面多加一张卡
+ * (验「上面的层怎么改键都不变」用)。
  */
 export function scenarioProject(kind, { width, height, mediaUrl = '', edit = null } = {}) {
   const glass = { id: 'tr-glass', name: 'glass', hidden: false, clips: [
     { id: TARGET, kind: 'card', cardId: 'odometer', start: 0.2, end: DURATION, params: { position: 'left', value: 86420, label: '下层二探针' }, ...glassFrame(width, height) },
   ] };
   const base = { name: '依赖下层的流探针', width, height, fps: FPS, duration: DURATION, themeId: 'dark', filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {} };
+  // 上面的层:右上角一枚小药丸,在毛玻璃卡上面
+  const above = edit === 'above' ? [{ id: 'tr-above', name: 'above', hidden: false, clips: [
+    { id: ABOVE, kind: 'card', cardId: 'punch-pill', start: 0.5, end: 2, params: { text: '上面的层' },
+      frame: { x: Math.round(width * 0.75), y: Math.round(height * 0.25), w: 1280, h: 720, anchor: [0.5, 0.5], scale: width / 1920 * 0.6 } },
+  ] }] : [];
   if (kind === 'a') {
     return { ...base, id: `below-a-${width}x${height}`,
       media: [{ id: 'm-video', kind: 'video', name: 'below-probe.mp4', url: mediaUrl, duration: DURATION }],
       tracks: [
+        ...above,
         glass,
         { id: 'tr-move', name: 'move', hidden: false, clips: [
           { id: 'clip-move', kind: 'card', cardId: 'particles', start: 0, end: DURATION, params: { color: edit === 'below' ? '#ff5a30' : '#30ff60', quantity: 120, speed: 1.5, size: 4, links: 'yes', seed: 3 } },
@@ -54,6 +63,7 @@ export function scenarioProject(kind, { width, height, mediaUrl = '', edit = nul
   }
   return { ...base, id: `below-b-${width}x${height}`, media: [],
     tracks: [
+      ...above,
       glass,
       { id: 'tr-block', name: 'block', hidden: false, clips: [
         { id: 'clip-block', kind: 'card', cardId: 'punch-pill', start: 0, end: DURATION, params: { text: edit === 'below' ? '半透明的下层(改过)' : '半透明的下层' },

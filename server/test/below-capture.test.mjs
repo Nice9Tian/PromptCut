@@ -20,7 +20,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { PNG } from 'pngjs';
 import { bakeStream } from '../bakery/bake.mjs';
 import { dropStreamEncoderSpares } from '../bakery/ffmpeg.mjs';
-import { diffLayer, glassMask, changedOutside, belowSegmentCapture, newBelowRecord, pageHideTarget, pageShowTarget, DIFF_TOLERANCE } from '../bakery/capture-below.mjs';
+import { diffLayer, glassMask, changedOutside, layerOutside, belowSegmentCapture, newBelowRecord, pageHideTarget, pageShowTarget, DIFF_TOLERANCE } from '../bakery/capture-below.mjs';
 import { StreamProducer, planStreams, SEGMENT_FRAMES, SPARSE_STRIDE } from '../frame-stream.mjs';
 import { BELOW_STREAM_VERSION } from '../card-identity.mjs';
 import { captureCode, snapshotCode, invalidateFrameCode } from '../frame-code.mjs';
@@ -277,6 +277,27 @@ test('BD-outside 交出去的矩形外面两张有没有不同:回那些像素�
   assert.deepEqual(changedOutside(upper, lower, W, H, crop), { x: 2, y: 1, w: 16, h: 7 });
 });
 
+test('BD-outside-layer 矩形外面逐字节不同、算出来却仍是全透明的像素不算改到了外面;真有东西的才算', () => {
+  const W = 20, H = 12;
+  const crop = { x: 6, y: 4, w: 8, h: 4 };
+  // 下层是不透明度 1/255 的蓝(几乎全透明)
+  const lower = Buffer.alloc(W * H * 4);
+  for (let i = 0; i < W * H; i++) lower.set([0, 0, 255, 1], i * 4);
+  // 外面几个像素颜色变成了黑(预乘以后和原来一样是 0):逐字节不同,但算出来的那一层是透明的
+  const faint = Buffer.from(lower);
+  for (const [x, y] of [[2, 1], [17, 7], [3, 10]]) faint.set([0, 0, 0, 1], (y * W + x) * 4);
+  assert.ok(changedOutside(faint, lower, W, H, crop));
+  assert.equal(layerOutside(faint, lower, W, H, crop), null);
+  // 外面有一个真的盖了东西的像素:算
+  const real = Buffer.from(faint);
+  real.set([200, 200, 200, 180], (9 * W + 16) * 4);
+  assert.deepEqual(layerOutside(real, lower, W, H, crop), { x: 16, y: 9, w: 1, h: 1 });
+  // 矩形里面再怎么变都不算
+  const inside = Buffer.from(lower);
+  inside.set([10, 10, 10, 255], (5 * W + 8) * 4);
+  assert.equal(layerOutside(inside, lower, W, H, crop), null);
+});
+
 /* ------------------------------------------------------------ 取两张 */
 
 const STAGE = { width: 96, height: 64 };
@@ -522,7 +543,8 @@ async function producerFor(project, { below = true } = {}) {
   producer.attachRoute();
   producer.ffmpeg = 'ffmpeg';
   producer.encoderName = 'libx264';
-  const cardPlan = [control('target', 0, 2, GLASS_CAPS), control('low', 0, 2, PLAIN_CAPS), ...(project.media.length ? [control('video', 0, 2, PLAIN_CAPS)] : [])];
+  const clipIds = project.tracks.flatMap(track => track.clips.map(c => c.id));
+  const cardPlan = clipIds.map(id => control(id, 0, 2, id === 'target' ? GLASS_CAPS : PLAIN_CAPS));
   const specs = planStreams({ key: 'E', project, cardPlan }, { envFingerprint: ENV_FP, below });
   const stateOf = (spec) => {
     // `queueOnly`:自动生产不碰这条流(测试里没有真的预渲染间给它借),分段由下面的 `run` 一个一个产
@@ -633,6 +655,34 @@ test('BD-widen 收紧矩形不够大(稀疏那一趟没量到的帧里目标卡�
     assert.deepEqual(state.manifest.inits[seg.init].rect, state.manifest.tight);
     assert.ok(state.manifest.tight.x + state.manifest.tight.w >= 30 + 28 + 24 + 4, '装得下第 14 帧的阴影');
   } finally { await close(); }
+});
+
+test('BD-noreplay 成员和下层都是 remotion 式的(`replay: false`):接不上前一段也不从挂载帧回放;有 motion 式的下层就回放', { skip: !ffmpegOk }, async () => {
+  // 下层是 motion 式的卡:回放
+  const stateful = await producerFor(projectOf());
+  try {
+    const spec = stateful.specs.find(s => s.kind === 'below');
+    assert.equal(spec.replay, true);
+    const bakery = fakeBakery();
+    await stateful.run(bakery, stateful.stateOf(spec), 2, SPARSE_STRIDE);
+    assert.ok(bakery.log.includes('step:0') && bakery.log.includes('step:29'), '从挂载帧推到这个分段');
+    assert.equal(stateful.producer.status().streams[0].replayedFrames, 30);
+  } finally { await stateful.close(); }
+  // 下层只有素材(纯素材段按时间直接取帧),目标卡是 remotion 式:不回放
+  const direct = await producerFor({ ...STAGE, fps: 30, duration: 2, media: [{ id: 'm', kind: 'video', name: 'v.mp4', url: '/v.mp4' }],
+    tracks: [{ id: 't-top', clips: [{ id: 'target', cardId: 'glass', start: 0, end: 2 }] }, { id: 't-low', clips: [{ id: 'video', mediaId: 'm', start: 0, end: 2 }] }] });
+  try {
+    const spec = direct.specs.find(s => s.kind === 'below');
+    assert.equal(spec.replay, false);
+    assert.deepEqual(spec.belowClipIds, ['video']);
+    const bakery = fakeBakery();
+    await direct.run(bakery, direct.stateOf(spec), 2, SPARSE_STRIDE);
+    const stepped = bakery.log.filter(op => op.startsWith('step:')).map(op => Number(op.slice(5)));
+    assert.equal(Math.min(...stepped), 30, '直接落在这个分段的第一帧');
+    assert.equal(direct.producer.status().streams.find(s => s.kind === 'below').replayedFrames, 0);
+    // 两张照样取、实测照样做
+    assert.equal(direct.producer.status().streams.find(s => s.kind === 'below').below.checks, 1);
+  } finally { await direct.close(); }
 });
 
 test('BD-failed 实测判死的流:自动生产记成失败不再白付一次重灌,队列的任务报不可重试', { skip: !ffmpegOk }, async () => {
