@@ -313,6 +313,14 @@ test('auto 档:直取不比截图快的分段照旧截图,并歇几个分段;画
   out = await runSegment(capture, bakery, log, { frames: [0, 1], shots: frameOf, shotDelayMs: 120 });
   assert.deepEqual(log, ['grab:0', 'shot:0', 'grab:1']);
   assert.deepEqual([record.slowSegments, record.cooldown, record.segments, record.frames], [0, 0, 1, 2]);
+  // 直取每帧比截图快,但这个分段只剩一帧可省,抵不过实测自己多花的那一张截图:照旧截图
+  log = []; record = newDirectRecord();
+  bakery = fakeBakery((frame) => ({ rgba: frameOf(frame), readMs: 0 }), log);
+  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, captures: 2 });
+  out = await runSegment(capture, bakery, log, { frames: [0, 1], shots: frameOf, shotDelayMs: 40 });
+  assert.deepEqual(log, ['grab:0', 'shot:0', 'shot:1']);
+  assert.ok(record.last.grabMs < record.last.shotMs, '单看每帧是直取快');
+  assert.deepEqual([record.slowSegments, record.segments], [1, 0], '但省下的抵不过实测多花的');
   // 截图那一次先丢了一张(primed):每帧的截图耗时按一半算;稀疏的分段每帧都要先丢一张,按两倍算
   log = []; record = newDirectRecord();
   bakery = fakeBakery((frame) => ({ rgba: frameOf(frame), readMs: 0 }), log);

@@ -1320,7 +1320,7 @@ export class StreamProducer {
         streamSignature: spec.streamKey, fromFrame, toFrame, stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
         clip: captureRect, hasMedia: false, signal: abort.signal,
-        ...(direct ? { capture: directSegmentCapture(bakery, { clipId: spec.topClipId, rect: captureRect, record: direct, stride, always: this.direct === 'always',
+        ...(direct ? { capture: directSegmentCapture(bakery, { clipId: spec.topClipId, rect: captureRect, record: direct, stride, captures: Math.ceil(samples / stride), always: this.direct === 'always',
           note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) } : {}),
         onFrame: async (frame, shot) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });

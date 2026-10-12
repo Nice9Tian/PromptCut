@@ -15,7 +15,7 @@
  * (平时直取的帧没有这一拍)在这里会被比出来,不会混过去。
  *
  * 过了实测也不一定走直取:像素是经 CDP 搬的,画面里不透明的像素一多,搬比截图还慢(实测数字在
- * `docs/reports/AGENT-rr-canvas-direct.md`)。所以同一帧上两条路各花了多少毫秒也量着,直取不比截图快的分段照旧截图,
+ * `docs/reports/AGENT-rr-canvas-direct.md`)。所以同一帧上两条路各花了多少毫秒也量着,直取省下的抵不过实测多花的,这个分段照旧截图,
  * 并且接下来 `DIRECT_COOLDOWN_SEGMENTS` 个分段不再试;压掉全透明像素以后仍超过原始大小 `DIRECT_MAX_FILL` 的,连搬都不搬。
  * 走哪条路不改画面(过了实测才有得选),只改快慢。
  *
@@ -219,10 +219,10 @@ export function newDirectRecord() {
  * 直取的是 `{ rgba, width, height }`,照旧截图的是 PNG 的 Buffer(`shoot()` 就是原来那次截图)。
  * 一个分段里要么全是前一种、要么全是后一种(由这个分段第一帧定),编码器的输入格式不会半路变。
  *
- * `record`:这条流的直取记录(`newDirectRecord`);`stride`:这个分段每隔几帧取一张;`always`:过了实测就走直取,
- * 不看快慢(`directCaptureMode` 的 `always` 档);`note(message)`:记一条诊断。
+ * `record`:这条流的直取记录(`newDirectRecord`);`stride`:这个分段每隔几帧取一张;`captures`:这个分段一共取几张;
+ * `always`:过了实测就走直取,不看快慢(`directCaptureMode` 的 `always` 档);`note(message)`:记一条诊断。
  */
-export function directSegmentCapture(bakery, { clipId, rect, record, stride = 1, always = false, note = () => {} }) {
+export function directSegmentCapture(bakery, { clipId, rect, record, stride = 1, captures = 15, always = false, note = () => {} }) {
   let mode = null;
   const shotAsRgba = async (shoot, why) => {
     const decoded = decodePngRgba(await shoot());
@@ -266,7 +266,8 @@ export function directSegmentCapture(bakery, { clipId, rect, record, stride = 1,
         verdict = { pass, reason: pass ? null : 'differs', color: +diff.color.toFixed(4), alpha: +diff.alpha.toFixed(4), bad: diff.bad, badLimit };
       }
     }
-    record.checkMs += performance.now() - started;
+    const checkMs = performance.now() - started;
+    record.checkMs += checkMs;
     record.last = { frame, ...verdict, bytes: got.bytes };
     if (!verdict.pass) {
       mode = 'shot';
@@ -279,13 +280,14 @@ export function directSegmentCapture(bakery, { clipId, rect, record, stride = 1,
     }
     /*
      * 划不划算:截图那条路稳定下来每帧花多少 —— 满密度的分段相邻两帧都截,不用先丢一张(`primed` 为真时这一次多截了一张,减半);
-     * 稀疏的分段每一帧前面都要先丢一张(翻倍)。直取这一帧花的不比它少,这个分段就照旧截图。
+     * 稀疏的分段每一帧前面都要先丢一张(翻倍)。直取每帧省下的,乘上这个分段余下的帧数,要抵得过这一次实测多花的
+     * (那张截图加解码加比对);抵不过,这个分段就照旧截图。
      */
     const grabMs = got.readMs + got.moveMs;
     const perShot = (primed ? shotMs / 2 : shotMs) * (stride > 1 ? 2 : 1);
     record.last.grabMs = +grabMs.toFixed(2);
     record.last.shotMs = +perShot.toFixed(2);
-    if (!always && grabMs >= perShot) {
+    if (!always && (perShot - grabMs) * Math.max(0, captures - 1) <= checkMs) {
       mode = 'shot';
       record.slowSegments++;
       record.cooldown = DIRECT_COOLDOWN_SEGMENTS;
