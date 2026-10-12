@@ -9,6 +9,7 @@
  *
  * 毛玻璃卡从 0.2 秒入场(不在分段边界上),所以头一个分段里有几帧页面上还没有它。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:这里会起开发服务器,不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import http from 'node:http';
