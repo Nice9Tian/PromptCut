@@ -288,6 +288,47 @@ async function main() {
   const put = await conn.ask({ type: 'project.op', projectId: docId, opId: `op-${RUN}-1`, session: `s-${RUN}`, ops: [{ op: 'set', path: '', value: project }] }, 20_000);
   if (put.type !== 'project.op.ok') throw new Error(`project.op 被拒：${JSON.stringify(put).slice(0, 300)}`);
 
+  // 先看画面、后发清单计划：看画面起的隔离工作进程闲置结束时（Windows 上偶发清理不干净），再起第二轮会失败，所以把要紧的放在第一轮里
+  // ---------- 「看画面」：框架卡（remotion 式的卡不出预渲染结果，在托管节点上经这一路渲）经管理进程的 /look 要几帧
+  say('look');
+  const agentKey = readServiceKeyFile(AGENT_SECRETS);
+  const look = async (t) => {
+    const msg = { projectId: made.projectId, path: '/api/vision/snapshot', body: { project, t }, cards: Object.fromEntries(['rs-title-reveal.tsx', 'rs-hosted-mark.tsx', 'rs-hosted-control.tsx'].map((f) => [`src/cards/user/${f}`, null])), timeoutMs: 170_000 };
+    const text = JSON.stringify(msg);
+    const res = await fetch(`${STATUS}/look`, { method: 'POST', headers: { 'content-type': 'application/json', [LOOK_AUTH_HEADER]: signLookRequest(agentKey, text) }, body: text, signal: AbortSignal.timeout(T(240_000)) });
+    return { status: res.status, json: await res.json().catch(() => null) };
+  };
+  const lookBefore = (await status()).look ?? null;
+  const TIMES = [0.5, 0.8, 1.6];
+  const looks = [];
+  for (const t of TIMES) {
+    let got = null;
+    // 503「渲染服务现在忙」是暂时性的（上一轮还在让出资源、或看画面的请求排满），重试加退避，不算结果
+    for (let attempt = 0; attempt < 12; attempt++) {
+      try { got = await look(t); out.lookError = undefined; } catch (err) { out.lookError = String(err?.message ?? err); }
+      if (got?.status !== 503) break;
+      say('look.busy', { t, attempt });
+      await delay(T(5000));
+    }
+    const b64 = got?.json?.__image?.base64 ?? null;
+    let png = null, inkPx = 0, file = null;
+    if (b64) {
+      const buf = Buffer.from(b64, 'base64');
+      file = path.join(OUT, `look-t${String(Math.round(t * 100)).padStart(3, '0')}.png`);
+      fs.writeFileSync(file, buf);
+      png = PNG.sync.read(buf);
+      const bg = [png.data[0], png.data[1], png.data[2]];
+      for (let i = 0; i < png.data.length; i += 4) if (png.data[i] !== bg[0] || png.data[i + 1] !== bg[1] || png.data[i + 2] !== bg[2]) inkPx++;
+    }
+    looks.push({ png, t, status: got?.status ?? null, ok: got?.json?.ok ?? null, image: png ? `${png.width}x${png.height}` : null, inkPixels: inkPx, file, error: got?.json?.error ?? out.lookError });
+    say('look.done', { ...looks.at(-1), png: undefined });
+  }
+  await delay(2500); // 页面日志落进文件有一点延迟
+  const sLook = await status();
+  out.look = { looks: looks.map(({ png: _png, ...rest }) => rest), byWorker: sLook.look?.byWorker ?? null, byWorkerBefore: lookBefore?.byWorker ?? null };
+  const isoDelta = (sLook.look?.byWorker?.isolated ?? 0) - (lookBefore?.byWorker?.isolated ?? 0);
+  const residentDelta = (sLook.look?.byWorker?.resident ?? 0) - (lookBefore?.byWorker?.resident ?? 0);
+
   // ---------- 发清单计划，等渲染
   say('render');
   const known = new Set(queueTasks(made.projectId).map((t) => t.id));
@@ -316,40 +357,6 @@ async function main() {
   const cardSync = s0.isolation?.queue?.cardSync ?? [];
   out.cardSync = cardSync.map((c) => ({ projectId: c.projectId, state: c.state, rejected: c.rejected, installed: c.installed, errors: c.errors?.slice?.(0, 3) }));
   out.plan = done;
-
-  // ---------- 「看画面」：框架卡（remotion 式的卡不出预渲染结果，在托管节点上经这一路渲）经管理进程的 /look 要几帧
-  say('look');
-  const agentKey = readServiceKeyFile(AGENT_SECRETS);
-  const look = async (t) => {
-    const msg = { projectId: made.projectId, path: '/api/vision/snapshot', body: { project, t }, cards: Object.fromEntries(['rs-title-reveal.tsx', 'rs-hosted-mark.tsx', 'rs-hosted-control.tsx'].map((f) => [`src/cards/user/${f}`, null])), timeoutMs: 170_000 };
-    const text = JSON.stringify(msg);
-    const res = await fetch(`${STATUS}/look`, { method: 'POST', headers: { 'content-type': 'application/json', [LOOK_AUTH_HEADER]: signLookRequest(agentKey, text) }, body: text, signal: AbortSignal.timeout(T(240_000)) });
-    return { status: res.status, json: await res.json().catch(() => null) };
-  };
-  const lookBefore = (await status()).look ?? null;
-  const TIMES = [0.5, 0.8, 1.6];
-  const looks = [];
-  for (const t of TIMES) {
-    let got = null;
-    try { got = await look(t); } catch (err) { out.lookError = String(err?.message ?? err); }
-    const b64 = got?.json?.__image?.base64 ?? null;
-    let png = null, inkPx = 0, file = null;
-    if (b64) {
-      const buf = Buffer.from(b64, 'base64');
-      file = path.join(OUT, `look-t${String(Math.round(t * 100)).padStart(3, '0')}.png`);
-      fs.writeFileSync(file, buf);
-      png = PNG.sync.read(buf);
-      const bg = [png.data[0], png.data[1], png.data[2]];
-      for (let i = 0; i < png.data.length; i += 4) if (png.data[i] !== bg[0] || png.data[i + 1] !== bg[1] || png.data[i + 2] !== bg[2]) inkPx++;
-    }
-    looks.push({ png, t, status: got?.status ?? null, ok: got?.json?.ok ?? null, image: png ? `${png.width}x${png.height}` : null, inkPixels: inkPx, file, error: got?.json?.error ?? out.lookError });
-    say('look.done', { ...looks.at(-1), png: undefined });
-  }
-  await delay(2500); // 页面日志落进文件有一点延迟
-  const sLook = await status();
-  out.look = { looks: looks.map(({ png: _png, ...rest }) => rest), byWorker: sLook.look?.byWorker ?? null, byWorkerBefore: lookBefore?.byWorker ?? null };
-  const isoDelta = (sLook.look?.byWorker?.isolated ?? 0) - (lookBefore?.byWorker?.isolated ?? 0);
-  const residentDelta = (sLook.look?.byWorker?.resident ?? 0) - (lookBefore?.byWorker?.resident ?? 0);
 
   /* ---- H1 */
   const text = prerenderText();
