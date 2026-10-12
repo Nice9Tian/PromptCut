@@ -16,8 +16,10 @@ const APP_ROOT = path.resolve(fileURLToPath(import.meta.url), '../..');
  * 哈希到的内容和搬家前完全一样,既不多也不少。 */
 const BAKERY_FILES = ['server/bakery/chrome.mjs', 'server/bakery/bake.mjs', 'server/bakery/shards.mjs',
   'server/bakery/media.mjs', 'server/bakery/ffmpeg.mjs', 'server/bakery/export.mjs', 'server/bakery/audio-mix.mjs'];
+/* 画布直取(产轨道流时从画布取像素,不经过截图)的两个文件也决定流里的像素:Node 一侧的 `capture-canvas.mjs`
+ * 和页面一侧的 `src/render/gl/canvasGrab.ts`。它们不决定快照 HTML,不进下面的 `SNAPSHOT_FILES`。 */
 const CAPTURE_FILES = [...BAKERY_FILES, 'server/bakery/capture-frame.mjs', 'server/bakery/capture-snapshot.mjs', 'server/bakery/frame-media.mjs',
-  'server/bakery/frame-ready.mjs', 'server/bakery/png-integrity.mjs'];
+  'server/bakery/frame-ready.mjs', 'server/bakery/png-integrity.mjs', 'server/bakery/capture-canvas.mjs', 'src/render/gl/canvasGrab.ts'];
 /**
  * 源码按文本哈希,换行先统一成 LF:仓库是 `text=auto`,Windows 检出是 CRLF、Linux 检出是 LF,
  * 同一个提交在两种机器上不能算出两个代码版本(另一台机器上的独立渲染主机按代码版本分池、按快照键核对任务)。
