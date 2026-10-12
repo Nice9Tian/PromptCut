@@ -31,7 +31,8 @@
  *   - `swap`:钉成重卡并把记录改成只认全局时钟(`vtOk = false`),停下时走后台舞台整场景补跑再互换那一路。
  *
  * `--survey`:另外抽几张别的有状态的卡(`SURVEY_CARDS`;`--survey-cards` 点名)各走一遍同样的步骤,
- * 比的是可见舞台的截图(预览里缩放过的),结果只记录、不算失败(写进 `survey`)。
+ * 比的是可见舞台的截图(预览里缩放过的;先取消选中,免得编辑台画在上面的选中描边进图),结果只记录、不算失败(写进 `survey`)。
+ * `--cards none` 时主用例一个都不跑,只抽查。
  *
  * 验收:退出码 0,结果里 `fails: []`。耗时只记录(`verification.md`「耗时只记录,不当闸门」)。等待时限只为防卡死。
  */
@@ -288,6 +289,8 @@ try {
         const clip = actions.addCardClip(c.cardId, 0, { duration: args[1], params: c.params, ...(trackId ? { trackId } : {}) });
         if (clip) ids.push(clip.id);
       }
+      // 取消选中:编辑台画在预览上面的选中描边会进截图(抽查别的卡时比的是截图)
+      actions.select([]);
       actions.pause(); actions.seek(0);
       return ids;`, `seek-back-${name}-${RUN}`, SECONDS, clips);
     if (!clipIds || clipIds.length !== clips.length) return null;
