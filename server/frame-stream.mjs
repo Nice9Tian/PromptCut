@@ -666,10 +666,10 @@ export function belowLayerExtra(project, clip) {
  *   - 键:`cardStreamIdentity({ kind: 'below' })`。下层取 `belowLayersOf`(与页面的输入签名、与隔离工程同一份认定),每层用它在
  *     card plan 里的缓存内容键加采样窗口,再加 `belowLayerExtra`。有一层在 card plan 里找不到键(预渲染间不认识的卡)时,
  *     整条退回用整个项目的键 `entry.key`(`belowScene: true`;更粗,但不会错);连 `entry.key` 也没有就不出这条流;
- *   - `replay` / `mountFrame`:目标卡和下层里的卡片段(含图卡片段)有一张是 motion 式的就要回放,从这些有状态的卡里最早的
+ *   - `replay` / `mountFrame`:目标卡和下层里的卡片段(含挂着节点的素材效果卡片段)有一张是 motion 式的就要回放,从这些有状态的卡里最早的
  *     挂载帧起(在 card plan 里找不到的按有状态算)。纯素材段按时间直接取帧,不算;
  *   - `hasMedia`:项目里有没有画面素材(有的话产流那一趟截图前要等素材就位,`bakeStream` 的 `hasMedia`;
- *     藏起来的源片段也算,图卡可能接着它们)。
+ *     藏起来的源片段也算,素材效果卡可能接着它们)。
  */
 function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envFingerprint }) {
   const project = entry.project;
@@ -723,7 +723,7 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
  * 依赖下层的流的**隔离工程**(契约第 5.3 节头一段):留着目标卡和画家顺序排在它下面的全部层,只把上面的层藏起来。
  * `isolatedStreamProject` 遇到 `kind: 'below'` 的流走这里;单卡流、组流那一种(非成员全藏)不变。
  *
- *   - 目标卡上面的序列:整条变成隐藏的 `sourceOnly` 序列(不出画,图卡按源片段解输入时还找得到);
+ *   - 目标卡上面的序列:整条变成隐藏的 `sourceOnly` 序列(不出画,素材效果卡按源片段解输入时还找得到);
  *   - 目标卡所在的序列:它前面的片段(画家顺序在它下面)和它自己留着,它后面的片段挪到一条隐藏的 `sourceOnly` 序列里;
  *   - 目标卡下面的序列:原样(本来隐藏的照旧隐藏),卡片、素材、它们的外观都不动;
  *   - 目标卡的外观原样保留(这种流按舞台坐标产,外观画进流里);时间不平移。
