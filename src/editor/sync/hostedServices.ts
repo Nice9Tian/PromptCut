@@ -124,6 +124,26 @@ export function applyHostedOptionChange(hosted: HostedView | null, service: unkn
   return { ...hosted, render: { ...prev, streams: enabled } };
 }
 
+/**
+ * 账号项目用:前后两次读到的托管方服务状态里,哪些变化要给别的成员一条提示(与口令项目的通知同一个规矩、同一处文案:
+ * 只在关闭时提示,打开时不提示)。回要弹的句子;没有变化、变成打开、前一次没有这一项,都不弹。
+ */
+export function hostedChangeNotices(prev: HostedView | null, next: HostedView | null): string[] {
+  const out: string[] = [];
+  const a = prev?.render, b = next?.render;
+  if (a && b) {
+    if (a.enabled && !b.enabled) { const text = HOSTED_SERVICE_TEXT.render?.changed(false); if (text) out.push(text); }
+    if (a.streams === true && b.streams === false) { const text = hostedOptionText("render", "streams")?.changed(false); if (text) out.push(text); }
+  }
+  return out;
+}
+
+/**
+ * 托管方服务的勾选要不要先验证创建者密码:口令项目要(创建者操作凭密码的证明);账号项目没有创建者密码,
+ * 凭账号的登录态,由服务端按创建者身份把关,直接到确认那一步。
+ */
+export const hostedFlowNeedsPassword = (account: boolean): boolean => !account;
+
 export interface HostedRow {
   service: HostedServiceName;
   label: string;

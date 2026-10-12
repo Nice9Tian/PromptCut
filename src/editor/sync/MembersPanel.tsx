@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, setHostedOption, setHostedService, useSync, type MemberRow } from "./syncManager";
 import { ListEditor } from "./SharedDialogs";
 import { rememberPasswords } from "./collab";
-import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, hostedOptionText, isCloudAgentOnly, isCloudAgentRunning, memberCountLabel, serviceRowLabel, splitMembers, visibleMembers, type HostedOptionName, type HostedServiceName } from "./hostedServices";
+import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, hostedFlowNeedsPassword, hostedOptionText, isCloudAgentOnly, isCloudAgentRunning, memberCountLabel, serviceRowLabel, splitMembers, visibleMembers, type HostedOptionName, type HostedServiceName } from "./hostedServices";
 import { useCloudRunning } from "./presence";
 import "./sync.css";
 import { AccountMembersPanel } from '../../account/AccountMembersPanel';
@@ -198,7 +198,11 @@ function LegacyMembersButton() {
 type Verified = { key: string; bans: { username: string; deviceId: string }[]; list: string[] };
 
 export function CreatorFlow({ flow, onClose }: { flow: Flow; onClose: () => void }) {
-  const [verified, setVerified] = useState<Verified | null>(null);
+  const account = useSync((v) => !!v.shared?.accountId);
+  const [checked, setVerified] = useState<Verified | null>(null);
+  // 账号项目改托管方服务的开关:没有创建者密码这一步(凭账号的登录态,服务端按创建者身份把关),直接到确认
+  const direct = (flow.kind === "hosted-service" || flow.kind === "hosted-option") && !hostedFlowNeedsPassword(account);
+  const verified: Verified | null = checked ?? (direct ? { key: "", bans: [], list: [] } : null);
   if (!verified) return <VerifyDialog onClose={onClose} onOk={setVerified} />;
   switch (flow.kind) {
     case "password":

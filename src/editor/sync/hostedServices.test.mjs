@@ -8,6 +8,7 @@
  *   HR24b 组件：放本机、没有 `hosted` 字段、`available` 为假时没有这一项；放云端且 `available` 时出现，缺省勾上；
  *         创建者能改（勾选没有 disabled）、其他成员只读（disabled，另有「只有创建者能改」）；点勾选把「要改成什么」交给上层
  *   HS10～HS12：渲染节点下面的子选项「生成轨道流」（见文件末尾）
+ *   HS13：账号项目那条路（状态从会话里来、没有创建者密码这一步、成员靠前后两次读到的状态得到提示）
  *   同步管理（`syncManager.ts`）把成员列表的 `hosted` 与 `hosted-service-changed` 通知接到上面两个纯函数；它在 Node 里载不起来（要浏览器环境），
  *   那一段在浏览器里验（报告里的两张截图与断言）。
  */
@@ -405,3 +406,49 @@ test("HS12 向后兼容(页面一侧):旧托管端的成员列表(没有 streams
   const rows = H.hostedRowsOf("hosted", { render: { available: true, enabled: false, streams: false }, agent: { available: true, enabled: true } });
   assert.deepEqual(rows.map((r) => [r.service, r.enabled]), [["render", false], ["agent", true]]);
 }));
+
+/* ---------------- 账号项目那条路(任务书 `docs/plan/render-refactor-task.md`「甲三」):状态从会话里来,没有创建者密码这一步 ---------------- */
+
+test("HS13 账号项目:会话里的 hosted(渲染节点带 streams、云端 Agent 带 url)照样出这几行;创建者能改,成员只读;旧文档服务不报渲染节点就没有那两行", () => withRows(({ render }) => {
+  // 新文档服务的会话:`hosted.render` 是 `{ available, enabled, streams }`,`hosted.agent` 多一个 url(界面不看)
+  const session = { agent: { available: true, enabled: false, url: "https://example.invalid/agent/v1" }, render: { available: true, enabled: true, streams: false } };
+  assert.deepEqual(H.hostedRowsOf("hosted", session).map((r) => [r.service, r.enabled]), [["render", true], ["agent", false]]);
+  assert.deepEqual(H.hostedOptionRowsOf("hosted", session), [{ service: "render", option: "streams", label: "生成轨道流", enabled: false, parentOff: false }]);
+  const asCreator = render({ where: "hosted", hosted: session, creator: true, onToggleOption: () => {} });
+  const box = (html, pc) => html.match(new RegExp(`<input[^>]*data-pc="${pc}"[^>]*>`))?.[0] ?? null;
+  assert.doesNotMatch(box(asCreator, "collab-hosted-render-toggle"), /disabled/, "创建者能改渲染节点的开关");
+  assert.doesNotMatch(box(asCreator, "collab-hosted-render-streams-toggle"), /disabled/, "创建者能改「生成轨道流」");
+  const asMember = render({ where: "hosted", hosted: session, creator: false, onToggleOption: () => {} });
+  assert.match(box(asMember, "collab-hosted-render-toggle"), /disabled=""/, "成员只读");
+  assert.match(box(asMember, "collab-hosted-render-streams-toggle"), /disabled=""/, "成员只读");
+  assert.match(asMember, /只有创建者能改/);
+  // 账号项目新建时渲染节点是关的:轨道流那一行置灰
+  const fresh = { agent: session.agent, render: { available: true, enabled: false, streams: false } };
+  assert.equal(H.hostedOptionRowsOf("hosted", fresh)[0].parentOff, true);
+  assert.match(box(render({ where: "hosted", hosted: fresh, creator: true, onToggleOption: () => {} }), "collab-hosted-render-streams-toggle"), /disabled=""/);
+  // 旧文档服务的会话只有云端 Agent:没有渲染节点那两行,云端 Agent 一行照旧
+  const old = { agent: session.agent };
+  assert.deepEqual(H.hostedRowsOf("hosted", old).map((r) => r.service), ["agent"]);
+  assert.deepEqual(H.hostedOptionRowsOf("hosted", old), []);
+  // 登记表里没有渲染服务(available 为假):同样没有那两行
+  assert.deepEqual(H.hostedOptionRowsOf("hosted", { agent: session.agent, render: { available: false, enabled: false, streams: false } }), []);
+}));
+
+test("HS13 账号项目:成员靠前后两次读到的状态知道创建者改了什么 —— 只在关闭时提示(同口令项目的规矩与文案),打开、没变、头一次读到都不提示", () => {
+  const view = (enabled, streams) => ({ render: { available: true, enabled, ...(streams === undefined ? {} : { streams }) }, agent: { available: true, enabled: true } });
+  assert.deepEqual(H.hostedChangeNotices(view(true, true), view(true, false)), [H.HOSTED_OPTION_TEXT["render.streams"].changed(false)]);
+  assert.deepEqual(H.hostedChangeNotices(view(true, true), view(false, true)), [H.HOSTED_SERVICE_TEXT.render.changed(false)]);
+  assert.deepEqual(H.hostedChangeNotices(view(true, true), view(false, false)), [H.HOSTED_SERVICE_TEXT.render.changed(false), H.HOSTED_OPTION_TEXT["render.streams"].changed(false)]);
+  assert.deepEqual(H.hostedChangeNotices(view(true, false), view(true, true)), [], "打开不提示");
+  assert.deepEqual(H.hostedChangeNotices(view(false, false), view(true, false)), [], "打开不提示");
+  assert.deepEqual(H.hostedChangeNotices(view(true, false), view(true, false)), [], "没变不提示");
+  assert.deepEqual(H.hostedChangeNotices(null, view(true, false)), [], "头一次读到不提示");
+  assert.deepEqual(H.hostedChangeNotices(view(true, true), null), []);
+  assert.deepEqual(H.hostedChangeNotices(view(true), view(true, false)), [], "前一次没有这一项(旧文档服务刚升级)不提示");
+  assert.deepEqual(H.hostedChangeNotices({ agent: { available: true, enabled: true } }, { agent: { available: true, enabled: false } }), [], "云端 Agent 不归这里");
+});
+
+test("HS13 改托管方服务的勾选:口令项目先验证创建者密码,账号项目没有这一步(凭登录态,服务端按创建者身份把关)", () => {
+  assert.equal(H.hostedFlowNeedsPassword(false), true);
+  assert.equal(H.hostedFlowNeedsPassword(true), false);
+});

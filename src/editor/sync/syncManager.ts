@@ -35,7 +35,7 @@ import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
-import { applyHostedChange, applyHostedOptionChange, HOSTED_SERVICE_TEXT, hostedOptionText, parseHosted, type HostedOptionName, type HostedServiceName, type HostedView } from "./hostedServices";
+import { applyHostedChange, applyHostedOptionChange, hostedChangeNotices, HOSTED_SERVICE_TEXT, hostedOptionText, parseHosted, type HostedOptionName, type HostedServiceName, type HostedView } from "./hostedServices";
 import { clearHostedAgent, setHostedAgent, setHostedAgentEnabled } from "../../ai/cloud/endpoint";
 import { accountCloudIdentity, CloudDelegationError, setCloudIdentity, type CloudIdentity } from "../../ai/cloud/identity";
 import { setCloudConsentSource } from "../../ai/cloud/consent";
@@ -246,6 +246,8 @@ interface Current {
   /** Change the in-memory proof used by subsequent reconnects after a successful own-password update. */
   updateAuthentication?: (key: string) => void;
   setAccountAgentEnabled?: (enabled: boolean) => Promise<void>;
+  /** 账号项目:创建者改托管方的渲染节点的开关,或它下面的子选项(「生成轨道流」)。成员调用被服务端拒(403) */
+  setAccountHosted?: (change: { service: "render"; enabled: boolean } | { service: "render"; option: HostedOptionName; enabled: boolean }) => Promise<void>;
   accountMembers?: () => Promise<AccountMembersSnapshot>;
   accountMemberAdmin?: (operation: AccountMemberOperation) => Promise<AccountMemberResult>;
 }
@@ -1117,8 +1119,13 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   let first = true, stopped = false, renewing: Promise<ProjectSession> | null = null;
   const projectAccountId = options.client.account?.id;
   const isCurrent = () => !stopped && cur?.link === link && options.client.account?.id === projectAccountId;
+  /** 本页自己正在改托管方服务的开关(改完续会话读到新状态时不给自己弹「创建者关闭了…」) */
+  let ownHostedChange = 0;
   const projectSession = (value: ProjectSession) => {
     if (!isCurrent()) return;
+    // 账号项目没有 `hosted-service-changed` / `hosted-option-changed` 这两种通知:成员靠每次续会话读到的状态知道创建者改了什么。
+    // 与口令项目同一个规矩:只在关闭时给别的成员一条提示,打开时不提示(文案同一处,`hostedChangeNotices`)
+    if (ownHostedChange === 0 && view.shared) for (const text of hostedChangeNotices(view.hosted, value.hosted)) pushToast(text, "info", 6000);
     patch({ shared: view.shared ? { ...view.shared, creator: value.creator } : null, hosted: value.hosted });
     setHostedAgent(options.projectId, value.hosted.agent);
   };
@@ -1168,6 +1175,17 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         if (!isCurrent() || !current.creator) throw new AccountFailure(403, 'creator-required');
         await options.client.setAgentEnabled(options.projectId, enabled, current.accessRevision, crypto.randomUUID());
         await renew();
+      };
+      if (cur?.link === link) cur.setAccountHosted = async change => {
+        if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
+        ownHostedChange += 1;
+        try {
+          await renew();
+          if (!isCurrent() || !current.creator) throw new AccountFailure(403, 'creator-required');
+          if ('option' in change) await options.client.setHostedOption(options.projectId, change.service, change.option, change.enabled, current.accessRevision, crypto.randomUUID());
+          else await options.client.setHostedService(options.projectId, change.service, change.enabled, current.accessRevision, crypto.randomUUID());
+          await renew();
+        } finally { ownHostedChange -= 1; }
       };
       if (cur?.link === link) {
         cur.accountMembers = async () => {
@@ -1746,9 +1764,12 @@ export async function adminOp(
  */
 export async function setHostedService(service: HostedServiceName, enabled: boolean, key: string): Promise<{ ok: true } | { ok: false; error: AdminError }> {
   if (view.shared?.accountId) {
-    if (service !== 'agent') return { ok: false, error: 'forbidden' };
-    try { await setAccountAgentEnabled(enabled); return { ok: true }; }
-    catch { return { ok: false, error: 'other' }; }
+    // 账号项目:不走创建者密码的证明,凭账号的登录态,服务端按创建者身份把关(成员回 403)。改完续一次会话,界面照读到的状态走
+    try {
+      if (service === 'agent') await setAccountAgentEnabled(enabled);
+      else await setAccountHosted({ service, enabled });
+      return { ok: true };
+    } catch (error) { return { ok: false, error: accountAdminError(error) }; }
   }
   const r = await adminOp("set-hosted-service", { key }, { service, enabled });
   if (!r.ok) return r;
@@ -1761,10 +1782,14 @@ export async function setHostedService(service: HostedServiceName, enabled: bool
 /**
  * 创建者改托管方服务下面的子选项(渲染节点的「生成轨道流」,契约 `docs/plan/hosted-render-contract.md` 第 3.1 节):
  * `shared.admin { op: 'set-hosted-option' }`,证明与其它创建者操作相同。成功后马上把本页的状态改过来(服务端随后还会推一条刷新后的成员列表)。
- * 账号项目(云端账号那条路)没有这个选项:一律 forbidden。
+ * 账号项目(云端账号那条路):创建者经 `/hosted/shared/account/admin` 的 `set-hosted-option` 改,凭账号的登录态,成员被服务端拒。
  */
 export async function setHostedOption(service: HostedServiceName, option: HostedOptionName, enabled: boolean, key: string): Promise<{ ok: true } | { ok: false; error: AdminError }> {
-  if (view.shared?.accountId) return { ok: false, error: 'forbidden' };
+  if (view.shared?.accountId) {
+    if (service !== 'render') return { ok: false, error: 'bad-message' };
+    try { await setAccountHosted({ service, option, enabled }); return { ok: true }; }
+    catch (error) { return { ok: false, error: accountAdminError(error) }; }
+  }
   const r = await adminOp("set-hosted-option", { key }, { service, option, enabled });
   if (!r.ok) return r;
   patch({ hosted: applyHostedOptionChange(view.hosted, service, option, enabled) });
@@ -1775,6 +1800,21 @@ export async function setHostedOption(service: HostedServiceName, option: Hosted
 export async function setAccountAgentEnabled(enabled: boolean): Promise<void> {
   if (!cur?.setAccountAgentEnabled) throw new AccountFailure(503, 'session-unavailable');
   await cur.setAccountAgentEnabled(enabled);
+}
+
+/** 账号项目:创建者改托管方的渲染节点的开关或它的子选项(同上,凭账号的登录态) */
+async function setAccountHosted(change: Parameters<NonNullable<Current["setAccountHosted"]>>[0]): Promise<void> {
+  if (!cur?.setAccountHosted) throw new AccountFailure(503, 'session-unavailable');
+  await cur.setAccountHosted(change);
+}
+
+/** 账号那条路的失败 → 创建者操作的错误种类:不是创建者(403)是 forbidden,请求不对(400)是 bad-message,连不上是 offline */
+function accountAdminError(error: unknown): AdminError {
+  if (!(error instanceof AccountFailure)) return "other";
+  if (error.status === 403) return "forbidden";
+  if (error.status === 400) return "bad-message";
+  if (error.status === 0 || error.code === "network") return "offline";
+  return "other";
 }
 
 /** 新的一份口令凭证(改项目密码、改名单、改创建者密码用),kdf 与项目记录一致用缺省 */
