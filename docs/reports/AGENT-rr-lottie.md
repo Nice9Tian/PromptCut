@@ -117,7 +117,9 @@
 | 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:27614/?export=1"` | 退出码 0;1800 帧,Identical 1800,Different 0 |
 | 导出与快照重放一致 | `PC_FRAME_TEST_URL=http://127.0.0.1:27614 node scripts/verify-unified-frames.mjs` | 退出码 0,`PASS: …` 整条。头两次是我的环境没配对(脚本把测试视频写到 `out/media`,我起的服务器的素材目录在临时目录,404),把 `PC_FRAME_MEDIA_DIR` 指到服务器的素材目录以后过;不是代码的问题 |
 
-全量测试:第一遍 5695 条,通过 5684,失败 5,跳过 4。失败的 5 条在 4 个文件里:`agent-live-selection`、`asset-project-workers`、`c66-integ`、`operation-wiring-crash`(3 个子用例算 1 条加 2 条),都和 Lottie、渲染无关,其中 `agent-live-selection` 在通用规矩列的「机器忙时偶发」名单里,另外三个不在名单里(当时别的子 Agent 也在跑)。单独重跑这 4 个文件:`npm test -- <4 个文件>`,42 条通过 42,失败 0,退出码 0。写完报告以后又完整跑了一遍,结果记在本节末尾「收尾的一遍」。
+全量测试:第一遍 5695 条,通过 5684,失败 5,跳过 4。失败的 5 条在 4 个文件里:`agent-live-selection`、`asset-project-workers`、`c66-integ`、`operation-wiring-crash`(3 个子用例算 1 条加 2 条),都和 Lottie、渲染无关,其中 `agent-live-selection` 在通用规矩列的「机器忙时偶发」名单里,另外三个不在名单里(当时别的子 Agent 也在跑)。单独重跑这 4 个文件:`npm test -- <4 个文件>`,42 条通过 42,失败 0,退出码 0。
+
+收尾的一遍(最后一个代码提交之后,`tsc` 同样退出码 0):5695 条,通过 5686,失败 4,跳过 4。失败的在 3 个文件里:`agent-live-selection`、`asset-project-workers`、`operation-wiring-crash`(日志里有 `listen EADDRINUSE 127.0.0.1:5761`,端口被别的进程占着)。单独重跑这 3 个文件:36 条通过 36,失败 0,退出码 0。**所以全量测试两遍都没有做到一次零失败**,失败的每一条单独重跑都过,都不是 Lottie 或渲染的测试;没有改松或跳过任何测试。请主会话在机器空下来的时候自己重跑一遍为准。
 
 守门测试 `src/cards/capabilities.test.mjs`、`server/test/card-authoring-guide.test.mjs`、`src/render/audioCardSourceVersion.test.mjs`、`src/kernel/pinEntropy.test.mjs`、`server/test/port-file.test.mjs`、`server/test/windows-hide-silent-spawn.test.mjs` 都在全量里,没有失败。
 
