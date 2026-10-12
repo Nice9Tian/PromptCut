@@ -46,5 +46,7 @@ window.__rs = {
   unmount() { if (root) flushSync(() => root.unmount()); root = null; },
   error() { return window.__rsError ?? null; },
 };
+// ?css=1：带上编辑器自己的样式（Tailwind 等），用 Tailwind 类写的卡才排得对（指南的盲写验收脚本用；remotion-style-probe 不带，它的卡都用行内样式）
+if (new URLSearchParams(location.search).get("css") === "1") await import(/* @vite-ignore */ "/src/index.css");
 window.__rsReady = true;
 </script></body></html>

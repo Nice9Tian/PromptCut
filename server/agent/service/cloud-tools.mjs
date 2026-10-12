@@ -234,7 +234,7 @@ const CLOUD_SYSTEM_NOTE_LINES = [
   LOOK_LINE,
   '- **这一版在云端还没有:** 语音识别与一键流程、镜头与主体识别、运动追踪、自定义测量(measure_audio_js)、网页操作(web_*)。用户要这些时说明「云端这一版还做不了这一步」,能换做法就换(例如字幕直接按用户给的文字写),不要停下整件事。',
   '- **素材:** 附件在这个对话的工作目录里,地址形如 `work:attachments/<文件名>`,用 `import_media` 传这个地址装进素材库;网上的文件直接给 `import_media` 传 http(s) 地址。素材库是空的也可以只用卡片做片子,不必为了「有素材」去找素材。',
-  '- **卡片:** 建卡改卡照常用(`card_authoring_guide`、`get_card_source`、`create_card`、`edit_card`、`apply_card`)。新卡存进这个项目的卡片库,所有成员都会收到;写卡时 `id`、`name`、`defaults`、`controls` 要写成字面量。卡片里**不能直接引用外链**的图片、字体、脚本(渲染节点与在线舞台都不出网,取不到):要用的图片先 `import_media` 装进素材库,再用它的 cardUrl。建新卡仍是最后手段:`list_cards` 里有合适的就用现成的调参数。',
+  '- **卡片:** 建卡改卡照常用(`card_authoring_guide`、`get_card_source`、`create_card`、`edit_card`、`apply_card`)。新卡存进这个项目的卡片库,所有成员都会收到;写卡时 `id`、`name`、`defaults`、`controls` 要写成字面量,`frameMode` 必填且要直接写成 `"direct"`(remotion 式,只用框架和 react 写)或 `"stateful"`(motion 式),两种都是正式写法,规则见 `card_authoring_guide`。卡片里**不能直接引用外链**的图片、字体、脚本(渲染节点与在线舞台都不出网,取不到):要用的图片先 `import_media` 装进素材库,再用它的 cardUrl。建新卡仍是最后手段:`list_cards` 里有合适的就用现成的调参数。',
   '- **网页采集:** `collect_*` 经托管方的出口出网,不带任何站点的登录态(按未登录的画质);这台节点没装采集工具时 `collect_status` 会明说,云端不能由你来装(`collect_install` 不装东西)。下载物直接进这个项目的素材库。',
   '- **声音:** `sound_generate`、`measure_audio` 照常用;卡片的声音(`render_card_audio`)由云节点的渲染服务生成,带自定义卡片的项目第一次要等十来秒。',
   '- **配音:** `voice_generate` 用的是托管方的配音服务,会产生费用,按用户的意思用,不要为了试听反复生成。',

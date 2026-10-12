@@ -1,6 +1,6 @@
 /** remotion 式的框架的示例卡（测试夹具，不进卡片库）：一排柱子从中间往两边长出来，长好后轻轻起伏。 */
 import type { CardDef, CardProps } from "../../kernel/types";
-import { Easing, noise, randomPick, randomRange, stagger, tween } from "../../kernel/remotionStyle";
+import { Easing, noise, randomPick, randomRange, stagger, staggerDuration, tween } from "../../kernel/remotionStyle";
 
 interface Params { count: number; seed: number; accent: string }
 
@@ -43,5 +43,7 @@ export const barRace: CardDef<Params> = {
     { key: "accent", label: "强调色", type: "color" },
   ],
   Component: BarRace,
-  lifecycle: { settleMs: 1600, after: "evolve", exit: ["fade"] },
+  // 柱子个数可调，最后一根长好的时刻跟着变：落定时刻用 staggerDuration 按个数算（每根 0.7 秒长高再加 0.3 秒起伏淡入）
+  timing: (p) => ({ settleMs: Math.round(staggerDuration(Math.max(1, Math.min(24, Math.round(p.count))), { each: 0.06, from: "center" }, 1.0) * 1000) }),
+  lifecycle: { settleMs: 1400, after: "evolve", exit: ["fade"] },
 };

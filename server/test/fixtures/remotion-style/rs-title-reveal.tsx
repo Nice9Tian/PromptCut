@@ -47,7 +47,7 @@ export const titleReveal: CardDef<Params> = {
   frameMode: "direct",
   defaults: { text: "由 t 直接算", accent: "#ffd166", size: 132, each: 0.07 },
   controls: [
-    { key: "text", label: "文字", type: "text", required: true },
+    { key: "text", label: "文字", type: "text" },
     { key: "accent", label: "主色", type: "color" },
     { key: "size", label: "字号", type: "number", min: 24, max: 240, step: 4 },
     { key: "each", label: "每个字相隔(秒)", type: "number", min: 0, max: 0.5, step: 0.01 },

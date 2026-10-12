@@ -271,7 +271,11 @@ export function wipeDir(dir) {
       try { st = fs.lstatSync(p); } catch { continue; }
       if (st.isSymbolicLink()) { try { fs.unlinkSync(p); } catch { fs.rmdirSync(p); } }
     }
-    fs.rmSync(abs, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    // 记号最后才动：先清记号以外的每一项；某一项被还没死透的进程占着、清不掉时，记号还在，上层（wipeIso）重试才认得这是我们的目录
+    for (const name of names) {
+      if (name === ISO_MARKER) continue;
+      fs.rmSync(path.join(abs, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
   }
   fs.mkdirSync(abs, { recursive: true });
   fs.writeFileSync(path.join(abs, ISO_MARKER), 'promptcut hosted render isolation\n');
