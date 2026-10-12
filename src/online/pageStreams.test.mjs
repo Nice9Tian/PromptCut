@@ -3,7 +3,8 @@
  *
  *   PS-01  计划发出去没人认领:等满 PAGE_STREAM_WAIT_MS 才动手;先查、把自己的那一行写进层表、再产;产完叫宿主认这个结果键
  *   PS-02  有能切分的节点接了活(计划是 claimed / done):不产;done 之后不再问队列
- *   PS-03  先查:自己的键已经有 → 不产;层表里别的候选已经有 → 不产,认的是那个候选的键
+ *   PS-03  先查:自己的键已经有 → 不产;层表里别的能播的流已经有(同内容键,或内容键不同但输入签名没过期)→ 不产,认的是那个候选的键;
+ *          输入签名过期的行(旧参数的流)不算
  *   PS-04  让路:播放、拖动、更急的活 —— 当前帧做完就停,闲下来接着做;页面隐藏马上中止;让路后当前帧 1 秒做不完就中止
  *   PS-05  产到一半有切分方接了活:做完当前帧就停,不再开工
  *   PS-06  产到一半别处产出来了:停下,改用现成的
@@ -11,6 +12,7 @@
  *   PS-08  层表:开工前写;本页的那一行被别人盖掉之后重写;有切分方接了活之后不再写
  *   PS-09  口子:产几趟、每趟多密由 passes 定(先稀疏后满密度时,先把每条流的稀疏那一趟都做完)
  *   PS-10  做不成:退避后再试,连着不成放下这一段;没活了不再问队列
+ *   PS-11  本页的那一行被别的写层表的一方盖掉、而它整条产好了:不写回去(不来回盖)
  *
  * 跑:npm test -- src/online/pageStreams.test.mjs
  */
@@ -153,13 +155,29 @@ test("PS-03 先查:自己的键已经有、别的候选已经有,都不产", asy
   assert.deepEqual(other.w.alive, ["rk-desktop"], "认的是那个候选的键");
   assert.equal(other.w.written.length, 0, "别人的流,本页不往层表里加自己的候选");
   assert.equal(other.pages.debug().jobs[0].state, "elsewhere");
-  // 内容键不同的行(旧参数的流)不算
+  // 内容键不同、输入签名没过期的行(别的环境按它自己的键产的同一条流:代码版本不同、字体不同):同样直接用;它的清单按它那一行的范围分份
+  const foreign = rig();
+  foreign.w.specs = [specOf("clip-a", "ka", 0, 9)];
+  foreign.w.layerMap = { ...other.w.layerMap, streams: [{ ...other.w.layerMap.streams[0], contentKey: "their-ka", lastSegment: 9, segmentsPerTask: 4 }] };
+  for (const k of ["rk-desktop:0-3", "rk-desktop:4-7", "rk-desktop:8-9"]) foreign.w.present.add(k);
+  await foreign.run(PAGE_STREAM_WAIT_MS + 3000);
+  assert.equal(foreign.w.produced.length, 0);
+  assert.deepEqual(foreign.pages.debug().jobs.map((j) => [j.state, j.via]), [["elsewhere", "rk-desktop"], ["elsewhere", "rk-desktop"]]);
+  // 它只产了一部分(缺 8～9 那一份):本页这一段(8～9)自己产,前一段用它的
+  const partly = rig();
+  partly.w.specs = [specOf("clip-a", "ka", 0, 9)];
+  partly.w.layerMap = structuredClone(foreign.w.layerMap);
+  for (const k of ["rk-desktop:0-3", "rk-desktop:4-7"]) partly.w.present.add(k);
+  await partly.run(PAGE_STREAM_WAIT_MS + 3000);
+  assert.deepEqual(partly.w.produced.map((x) => x.id), ["stream:rk-ka:8-9"]);
+  // 输入签名过期的行(旧参数的流)不算
   const stale = rig();
   stale.w.specs = [specOf("clip-a", "ka", 0, 7)];
-  stale.w.layerMap = { ...other.w.layerMap, streams: [{ ...other.w.layerMap.streams[0], contentKey: "old" }] };
+  stale.w.layerMap = { ...other.w.layerMap, streams: [{ ...other.w.layerMap.streams[0], contentKey: "old", inputSig: "s1-0000000000000000" }] };
   stale.w.present.add("rk-desktop:0-7");
   await stale.run(PAGE_STREAM_WAIT_MS + 2000);
   assert.equal(stale.w.produced.length, 1);
+  assert.deepEqual(stale.w.layerMap.streams.map((r) => r.contentKey), ["ka"], "过期的那一行换成本页的");
 });
 
 test("PS-04 让路:播放、拖动做完当前帧就停,闲下来接着做;隐藏马上中止;当前帧 1 秒做不完就中止", async () => {
@@ -329,4 +347,33 @@ test("PS-10 做不成:退避后再试,连着不成放下这一段;没活了不�
   await run(10_000);
   assert.equal(w.produced.length, PAGE_STREAM_ATTEMPTS, "不再试");
   assert.equal(w.probes, probes, "没活了不再问队列");
+});
+
+test("PS-11 本页的那一行被别的写层表的一方盖掉、而它整条产好了:不写回去", async () => {
+  const { w, pages, run, finish } = rig();
+  w.specs = [specOf("clip-a", "ka", 0, 7)];
+  await run(PAGE_STREAM_WAIT_MS + 500);
+  await finish();
+  await run(500);
+  const writes = w.written.length;
+  // 另一方(比如代码版本不同的桌面)按它自己的键把同一条流整条产好了,并用它的层表盖掉了本页的
+  w.layerMap = { v: 3, kind: "layer-map", projectId: "proj", layers: [], streams: [
+    { topClipId: "clip-a", clipIds: ["clip-a"], kind: "card", plane: "local", contentKey: "their-ka", candidates: [{ envFingerprint: "desktop", resultKey: "rk-desktop" }], firstSegment: 0, lastSegment: 7, segmentsPerTask: 8 }] };
+  w.present.add("rk-desktop:0-7");
+  await run(PAGE_STREAM_ROWS_MS + 1000);
+  await run(PAGE_STREAM_ROWS_MS + 1000);
+  assert.equal(w.written.length, writes, "不写回去");
+  assert.equal(pages.debug().counters.rowsYielded, 1);
+  assert.deepEqual(w.layerMap.streams.map((r) => r.contentKey), ["their-ka"]);
+  // 对照:盖掉本页那一行的一方并没有产好(清单不在):写回去
+  const again = rig();
+  again.w.specs = [specOf("clip-a", "ka", 0, 7)];
+  await again.run(PAGE_STREAM_WAIT_MS + 500);
+  await again.finish();
+  await again.run(500);
+  const n = again.w.written.length;
+  again.w.layerMap = structuredClone(w.layerMap);
+  await again.run(PAGE_STREAM_ROWS_MS + 1000);
+  assert.equal(again.w.written.length, n + 1);
+  assert.deepEqual(again.w.layerMap.streams.map((r) => r.contentKey), ["ka", "their-ka"], "本页的在前,别人没过期的那一行留在后面");
 });

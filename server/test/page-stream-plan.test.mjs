@@ -14,7 +14,8 @@
  *   PSP-07  超过解码器预算时合并的结果相同:并进组流的卡两边都不出单卡流
  *   PSP-08  不产的卡:画布卡、Lottie、依赖下层、框带三维、隐藏序列两边都不出;页面另外不产的两种(挂了强调的片段、不是内置卡片)
  *   PSP-09  没有指纹、没有代码指纹:一条都不算
- *   PSP-10  并进现有的层表:别的字段与别的卡的行不动、本页的候选提到最前、同一张卡旧内容键的行去掉、没有变化时不写
+ *   PSP-10  并进现有的层表:别的字段与别的卡的行不动、本页的候选提到最前、同一张卡输入签名过期的行去掉(没过期的留在后面)、没有变化时不写;
+ *           「先查」认哪些候选:同内容键的,或输入签名没过期的(与播放那一侧同一个判据)
  *
  * 跑:npm test -- server/test/page-stream-plan.test.mjs
  */
@@ -34,7 +35,7 @@ import { resultKeyOf as serverResultKeyOf } from '../render-node/fingerprint.mjs
 import { projectCardGraph } from '../../src/kernel/cardGraph.mjs';
 import { streamManifest, STREAM_SEGMENT_FRAMES } from '../../src/online/browserNode.ts';
 import {
-  planPageStreams, pageStreamTasks, pageStreamRow, mergeLayerStreams, layerStreamCandidates, pageControls, streamMemberKey, resultKeyOf,
+  planPageStreams, pageStreamTasks, pageStreamRow, mergeLayerStreams, layerStreamCandidates, candidateSpans, pageControls, streamMemberKey, resultKeyOf,
   PAGE_STREAM_CODE_VERSION, PAGE_STREAM_DECODER_BUDGET, PAGE_LOCAL_OVERFLOW_PX, PAGE_STREAM_SEGMENTS_PER_TASK, PAGE_LAYER_MAP_VERSION,
   PAGE_SNAPSHOT_SPAN, PAGE_EXCLUDED_CARD,
 } from '../../src/online/pageStreamPlan.ts';
@@ -288,22 +289,36 @@ test('PSP-10 并进现有的层表', async () => {
   assert.equal(fresh.streams.length, 2);
   // 再并一次:没有变化,不写
   assert.equal(mergeLayerStreams(fresh, { project, rows, now: 6 }), null);
-  // 现有的表:别的字段、layers、别的卡的行不动;同一张卡同内容键的行,本页的候选提到最前、别人的留着;旧内容键的行去掉
+  // 现有的表:别的字段、layers、别的卡的行不动(先后也不动);同一张卡同内容键的行,本页的候选提到最前、别人的留着
+  const rowB = rows.find(r => r.topClipId === 'clip-b');
   const other = { topClipId: 'clip-z', clipIds: ['clip-z'], kind: 'card', plane: 'local', contentKey: 'z', candidates: [{ envFingerprint: OWN, resultKey: 'rz' }], firstSegment: 0, lastSegment: 1, segmentsPerTask: 8 };
   const theirs = { ...rowA, candidates: [{ envFingerprint: OWN, resultKey: serverResultKeyOf(rowA.contentKey, OWN) }] };
-  const stale = { ...rows.find(r => r.topClipId === 'clip-b'), contentKey: 'old-content', candidates: [{ envFingerprint: OWN, resultKey: 'old' }] };
-  const existing = { v: 3, kind: 'layer-map', projectId: project.id, entryKey: 'e', fps: 30, width: 1920, height: 1080, span: 60, at: 1, layers: [{ clipId: 'clip-a', kind: 'html' }], streams: [other, theirs, stale] };
+  // clip-b 另有两行别的内容键的:一行输入签名过期(旧参数的流),一行没过期(别的环境按它自己的键产的同一条流)
+  const stale = { ...rowB, contentKey: 'old-content', inputSig: 's1-0000000000000000', candidates: [{ envFingerprint: OWN, resultKey: 'old' }] };
+  const foreign = { ...rowB, contentKey: 'their-content', candidates: [{ envFingerprint: OWN, resultKey: 'their-key' }] };
+  const existing = { v: 3, kind: 'layer-map', projectId: project.id, entryKey: 'e', fps: 30, width: 1920, height: 1080, span: 60, at: 1, layers: [{ clipId: 'clip-a', kind: 'html' }], streams: [other, theirs, stale, foreign] };
   const merged = mergeLayerStreams(existing, { project, rows, now: 9 });
   assert.deepEqual(merged.layers, existing.layers);
   assert.equal(merged.entryKey, 'e');
-  assert.deepEqual(merged.streams.find(r => r.topClipId === 'clip-z'), other);
-  const a = merged.streams.find(r => r.topClipId === 'clip-a');
-  assert.deepEqual(a.candidates.map(c => c.envFingerprint), [BROWSER, OWN]);
-  const bs = merged.streams.filter(r => r.topClipId === 'clip-b');
-  assert.equal(bs.length, 1);
-  assert.equal(bs[0].contentKey, rows.find(r => r.topClipId === 'clip-b').contentKey);
-  assert.deepEqual(layerStreamCandidates(existing, 'clip-a', rowA.contentKey).map(c => c.envFingerprint), [OWN]);
-  assert.deepEqual(layerStreamCandidates(existing, 'clip-b', rowA.contentKey), []);
+  assert.deepEqual(merged.streams.map(r => [r.topClipId, r.contentKey === 'z' ? 'z' : r.contentKey === rowA.contentKey ? 'A' : r.contentKey === rowB.contentKey ? 'B' : r.contentKey]),
+    [['clip-z', 'z'], ['clip-a', 'A'], ['clip-b', 'B'], ['clip-b', 'their-content']], '别的卡的行原位;本页的行在这张卡的第一行的位置;过期的去掉,没过期的留在后面');
+  assert.deepEqual(merged.streams[0], other);
+  assert.deepEqual(merged.streams[1].candidates.map(c => c.envFingerprint), [BROWSER, OWN]);
+  assert.deepEqual(merged.streams[3], foreign);
+  assert.equal(mergeLayerStreams(merged, { project, rows, now: 10 }), null, '并过的再并:没有变化');
+  // 「先查」认的候选:同内容键的;别的内容键、输入签名没过期的(连同那一行的分段范围);过期的不认
+  assert.deepEqual(layerStreamCandidates(existing, rowA).map(c => c.envFingerprint), [OWN]);
+  assert.deepEqual(layerStreamCandidates(existing, rowB).map(c => c.resultKey), ['their-key']);
+  assert.deepEqual(layerStreamCandidates({ ...existing, streams: [{ ...foreign, inputSig: undefined }] }, rowB).map(c => c.resultKey), ['their-key'], '那一行没带输入签名:照播,也认');
+  assert.deepEqual(layerStreamCandidates(existing, { ...rowB, topClipId: 'clip-q' }), []);
+  assert.deepEqual(layerStreamCandidates({ ...existing, streams: [{ ...foreign, kind: 'group' }] }, rowB), [], '组流不算');
+  // 候选的清单按它那一行的范围分份:盖住本页这一段的是哪几份
+  const cand = { envFingerprint: OWN, resultKey: 'k', firstSegment: 2, lastSegment: 20, segmentsPerTask: 8 };
+  assert.deepEqual(candidateSpans(cand, 2, 9), [[2, 9]]);
+  assert.deepEqual(candidateSpans(cand, 9, 11), [[2, 9], [10, 17]]);
+  assert.deepEqual(candidateSpans(cand, 18, 20), [[18, 20]]);
+  assert.equal(candidateSpans(cand, 0, 9), null, '候选的范围没把这一段盖全');
+  assert.equal(candidateSpans(cand, 18, 21), null);
   // 别的项目的表、不认识的版本:当没有,重写
   assert.deepEqual(mergeLayerStreams({ ...existing, projectId: 'someone-else' }, { project, rows, now: 9 }).layers, []);
   assert.deepEqual(mergeLayerStreams({ ...existing, v: 9 }, { project, rows, now: 9 }).layers, []);

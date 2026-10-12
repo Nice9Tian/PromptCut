@@ -19,13 +19,14 @@
  * # 先查,没有才产
  *
  * 每一段任务动手之前查两处:本页自己的键在内容库里有没有覆盖这一段的清单、块都在素材服务上(另一个同指纹的页面、上一次打开时产的);
- * 层表里这张卡、这个内容键的流有没有别的候选(桌面应用、渲染主机、别的指纹的页面),它的清单覆盖这一段、块都在。查到就直接用,不产。
- * 产的途中每 `PAGE_STREAM_RECHECK_MS` 再查一次,别处已经产出来了就做完当前这一帧停下,改用现成的。
+ * 层表里这张卡有没有别的**能播的**单卡流(桌面应用、渲染主机、别的指纹的页面产的;能播的判据与播放那一侧相同:同一个内容键,或输入签名没过期),
+ * 它的清单覆盖这一段、块都在。查到就直接用,不产。产的途中每 `PAGE_STREAM_RECHECK_MS` 再查一次,别处已经产出来了就做完当前这一帧停下,改用现成的。
  *
  * # 层表
  *
  * 没有切分方时层表没人写:本页开工前把自己的那一行并进内容库里的层表(`mergeLayerStreams`,只动 `streams` 里自己这几行),
- * 之后每隔 `PAGE_STREAM_ROWS_MS` 核对一次还在不在(两个页面同时写,后写的会盖掉先写的)。有切分方接了活之后不再写(层表归它)。
+ * 之后每隔 `PAGE_STREAM_ROWS_MS` 核对一次还在不在(两个页面同时写,后写的会盖掉先写的)。本页的那一行不在了、而表里这张卡已经有别人整条产好的流时
+ * 不再写回去(不和别的写层表的一方来回盖)。有切分方接了活之后不再写(层表归它)。
  *
  * # 让路
  *
@@ -43,7 +44,7 @@
  */
 import type { NodeTask } from "./browserNode.ts";
 import { YIELD_FRAME_MAX_MS, type YieldCause } from "./browserNode.ts";
-import { layerStreamCandidates, mergeLayerStreams, pageStreamRow, pageStreamTasks, type PageStreamRow, type PageStreamSpec } from "./pageStreamPlan.ts";
+import { candidateSpans, layerStreamCandidates, mergeLayerStreams, pageStreamRow, pageStreamTasks, type PageStreamRow, type PageStreamSpec } from "./pageStreamPlan.ts";
 
 /** 清单计划发出去之后没人认领,等这么久本页才自己产(三级数字;空闲的切分方认领计划在一秒以内,留出它正忙着别的活的余量) */
 export const PAGE_STREAM_WAIT_MS = 5000;
@@ -116,6 +117,8 @@ interface Job { task: NodeTask; spec: PageStreamSpec; pass: PageStreamPass; stat
 interface Ctx {
   plan: PublishedPlan;
   specs: PageStreamSpec[] | null;
+  /** 每条流在层表里的那一行(结果键 → 行;先查与写层表都用它的输入签名) */
+  rows: Map<string, PageStreamRow>;
   skipped: Record<string, string>;
   project: unknown;
   jobs: Job[];
@@ -157,6 +160,8 @@ export interface PageStreamsDebug {
     stops: Record<string, number>;
     aborts: number;
     probes: number; rowsWritten: number; rowsFailed: number;
+    /** 本页的那一行不在层表里了、别人整条产好的流在:不写回去的次数 */
+    rowsYielded: number;
   };
   lastError: string | null;
 }
@@ -182,7 +187,7 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
   let working = false;
   let phase: "planning" | "checking" | null = null;
   let lastError: string | null = null;
-  const counters: PageStreamsDebug["counters"] = { produced: 0, have: 0, elsewhere: 0, failed: 0, starts: 0, yields: {}, stops: {}, aborts: 0, probes: 0, rowsWritten: 0, rowsFailed: 0 };
+  const counters: PageStreamsDebug["counters"] = { produced: 0, have: 0, elsewhere: 0, failed: 0, starts: 0, yields: {}, stops: {}, aborts: 0, probes: 0, rowsWritten: 0, rowsFailed: 0, rowsYielded: 0 };
   const bump = (bag: Record<string, number>, key: string) => { bag[key] = (bag[key] ?? 0) + 1; };
   const fail = (e: unknown) => { lastError = String((e as Error)?.message ?? e).slice(0, 200); };
   const alive = (key: string) => { try { deps.onAlive?.(key); } catch { /* 宿主坏了 */ } };
@@ -194,14 +199,42 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
     if (abort) r.controller.abort();
   };
 
+  /** 层表 `map` 里这条流别的候选,有没有哪一个的清单把分段 `[from, to]` 整个盖住、块都在。回那个候选的结果键 */
+  const coveredBy = async (c: Ctx, spec: PageStreamSpec, map: unknown, from: number, to: number): Promise<string | null> => {
+    const row = c.rows.get(spec.streamKey) ?? pageStreamRow(c.project, spec);
+    for (const cand of layerStreamCandidates(map, row)) {
+      if (cand.resultKey === spec.streamKey) continue;
+      const spans = candidateSpans(cand, from, to);
+      if (!spans?.length) continue;
+      let all = true;
+      for (const [a, b] of spans) if (!(await deps.lookupOther(cand.resultKey, { from: a, to: b }).catch(() => false))) { all = false; break; }
+      if (all) return cand.resultKey;
+    }
+    return null;
+  };
+
   /** 把本页有份的那几行并进层表;没有变化不写 */
   const syncRows = async (c: Ctx): Promise<void> => {
     c.rowsAt = deps.now();
-    const rows: PageStreamRow[] = (c.specs ?? []).filter((s) => c.mine.has(s.streamKey)).map((s) => pageStreamRow(c.project, s));
-    if (!rows.length) return;
+    if (!c.mine.size) return;
     try {
       const existing = await deps.readLayerMap(c.project);
       if (ctx !== c) return;
+      const listed = (key: string, row: PageStreamRow) => layerStreamCandidates(existing, row).some((x) => x.resultKey === key);
+      const rows: PageStreamRow[] = [];
+      for (const spec of c.specs ?? []) {
+        if (!c.mine.has(spec.streamKey)) continue;
+        const row = c.rows.get(spec.streamKey) ?? pageStreamRow(c.project, spec);
+        // 本页的这一行不在表里(还没写过,或被别的写层表的一方盖掉了),而表里这张卡已经有别人整条产好的流:不写回去
+        if (!listed(spec.streamKey, row) && await coveredBy(c, spec, existing, spec.firstSegment, spec.lastSegment)) {
+          if (ctx !== c) return;
+          c.mine.delete(spec.streamKey);
+          counters.rowsYielded++;
+          continue;
+        }
+        rows.push(row);
+      }
+      if (ctx !== c || !rows.length) return;
       const body = mergeLayerStreams(existing, { project: c.project as Record<string, any>, rows, now: deps.now() });
       if (!body) return;
       await deps.writeLayerMap(c.project, body);
@@ -220,11 +253,8 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
     if (await deps.lookupOwn(job.task).catch(() => false)) return { resultKey: job.task.resultKey, own: true };
     let map: unknown = null;
     try { map = await deps.readLayerMap(c.project); } catch { return null; }
-    for (const cand of layerStreamCandidates(map, job.spec.topClipId, job.spec.contentKey)) {
-      if (cand.resultKey === job.task.resultKey) continue;
-      if (await deps.lookupOther(cand.resultKey, range).catch(() => false)) return { resultKey: cand.resultKey, own: false };
-    }
-    return null;
+    const other = await coveredBy(c, job.spec, map, range.from, range.to);
+    return other ? { resultKey: other, own: false } : null;
   };
 
   const settle = (c: Ctx, job: Job, found: { resultKey: string; own: boolean }) => {
@@ -244,6 +274,7 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
       c.specs = got.specs;
       c.skipped = got.skipped;
       c.project = got.project;
+      c.rows = new Map(got.specs.map((spec) => [spec.streamKey, pageStreamRow(got.project, spec)]));
       c.jobs = passes.flatMap((pass) => got.specs.flatMap((spec) => pageStreamTasks(spec, { projectId: c.plan.projectId, projectRev: c.plan.projectRev, codeVersion: deps.codeVersion ?? null, derivedFrom: c.plan.id })
         .map((task): Job => ({ task, spec, pass, state: "todo", fails: 0, retryAt: -Infinity, via: null }))));
     } catch (e) {
@@ -312,7 +343,8 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
       if (taken(c) || !deps.isIdle() || !deps.capable()) return;
       // 开工前把这一行写进层表:别的页面(和本页的在线来源)据此找这条流的清单
       if (!c.mine.has(job.spec.streamKey)) { c.mine.add(job.spec.streamKey); await syncRows(c); }
-      if (ctx !== c || run || taken(c) || !deps.isIdle()) return;
+      // 写的时候发现别人整条产好了(`syncRows` 把这条流从本页的名下拿掉了):不开工,下一拍先查会认它
+      if (ctx !== c || run || taken(c) || !deps.isIdle() || !c.mine.has(job.spec.streamKey)) return;
       start(c, job);
     } catch (e) {
       fail(e);
@@ -350,7 +382,7 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
       if (!ctx || ctx.plan.id !== plan.id) {
         // 换了一版(或清单变了):旧一版在产的马上停(那一版的流多半已经过期)
         if (run) stopRun("plan-changed", true);
-        ctx = { plan, specs: null, skipped: {}, project: null, jobs: [], mine: new Set(), rowsAt: -Infinity, specsAt: -Infinity, probe: { state: "none", at: -Infinity, flying: false } };
+        ctx = { plan, specs: null, rows: new Map(), skipped: {}, project: null, jobs: [], mine: new Set(), rowsAt: -Infinity, specsAt: -Infinity, probe: { state: "none", at: -Infinity, flying: false } };
       }
       const c = ctx;
       const r = run;

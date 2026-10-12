@@ -504,11 +504,12 @@ async function sceneSolo(M) {
     const before = await until('产了几帧(让路前)', async () => { const s = await pageStreams(pageA); return s?.state === 'producing' && s.frames >= 6 ? s : null; }, 120_000, 50);
     const tPlay = Date.now();
     await playFrom(pageA, 0.5);
+    const tPlayed = Date.now();
     const released = await until('播放开始后本页停手', async () => { const s = await pageStreams(pageA); return s && !s.running ? s : null; }, 5000, 25);
     const duringPlay = [];
     for (let i = 0; i < 12; i++) { const s = await pageStreams(pageA); if (s) duringPlay.push({ playing: s.playing, frames: s.frames, running: !!s.running, starts: s.counters.starts, state: s.state }); await delay(200); }
     const stillPlaying = duringPlay.filter((s) => s.playing);
-    R.yieldPlay = { framesBefore: before?.frames ?? null, releaseMs: released ? Date.now() - tPlay - 0 : null, framesAtRelease: released?.frames ?? null, yields: released?.counters.yields ?? null, aborts: released?.counters.aborts ?? null,
+    R.yieldPlay = { framesBefore: before?.frames ?? null, playCallMs: tPlayed - tPlay, releaseMs: released ? released.at - tPlayed : null, framesAtRelease: released?.frames ?? null, yields: released?.counters.yields ?? null, aborts: released?.counters.aborts ?? null,
       samples: duringPlay.length, playingSamples: stillPlaying.length, framesDuring: [...new Set(stillPlaying.map((s) => s.frames))], startsDuring: [...new Set(stillPlaying.map((s) => s.starts))] };
     check(!!released && (released.counters.yields.play ?? 0) === 1, '让路:播放开始,本页产流让路一次(原因 play)', released?.counters);
     check(!!released && !!before && released.frames - before.frames <= 2, '让路:播放开始后至多再做完当前这一帧', { before: before?.frames, atRelease: released?.frames });

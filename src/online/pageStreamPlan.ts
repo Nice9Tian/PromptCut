@@ -28,7 +28,7 @@
 import { CARD_RUNTIME_ABI, selectedCardStyle } from "../kernel/cardGraph.mjs";
 import { resolveFrameSize } from "../kernel/frameSize.mjs";
 import { mountFrameOf } from "../render/frameWindow.mjs";
-import { streamInputSig } from "../render/streamInputSig.mjs";
+import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 import { STREAM_SEGMENT_FRAMES, type NodeTask, type StreamTaskInput } from "./browserNode.ts";
 
 /** 与 `server/frame-stream.mjs` 的 `STREAM_CODE_VERSION` 同值(对拍) */
@@ -526,10 +526,11 @@ const isObj = (v: unknown): v is Record<string, any> => !!v && typeof v === "obj
  * 把本页的几行并进内容库里现有的层表(没有切分方时层表没人写,由本页写它的 `streams` 那一部分)。回要写回去的整张表;
  * 现有的表已经含这几行(本页的候选都在、排在最前)时回 null,不用写。
  *
- *   - 现有的表不是认得的层表(没有、版本不认识):新写一张,`layers` 是空的(本页不写快照层);
- *   - 别的字段、`layers`、别的卡的流一个字不动;
+ *   - 现有的表不是认得的层表(没有、版本不认识、别的项目的):新写一张,`layers` 是空的(本页不写快照层);
+ *   - 别的字段、`layers`、别的卡的流一个字不动,先后也不动(两个页面各写各的卡时不来回倒);
  *   - 同一张卡、同一个内容键的行:本页的候选提到最前(这一份是实际产出来的;之后才进来的页面取第一个候选),别人的候选留在后面;
- *   - 同一张卡、别的内容键的行(旧参数的流):去掉 —— 同一张卡列两行时页面只认第一行,留着会挡住新的。
+ *   - 同一张卡、别的内容键的行:输入签名过期的(旧参数的流)去掉;没过期的(别的环境按它自己的键产的同一条流)留着,排在本页那一行后面
+ *     (同一张卡列两行时页面只认第一行)。
  */
 export function mergeLayerStreams(existing: unknown, o: { project: Record<string, any>; rows: readonly PageStreamRow[]; now: number }): Record<string, unknown> | null {
   const { project, rows } = o;
@@ -543,37 +544,57 @@ export function mergeLayerStreams(existing: unknown, o: { project: Record<string
   };
   const old: Record<string, any>[] = usable && Array.isArray((existing as Record<string, unknown>).streams) ? ((existing as Record<string, unknown>).streams as Record<string, any>[]).filter(isObj) : [];
   const mine = new Map(rows.map((r) => [r.topClipId, r]));
+  /** 本页这一行,候选并上现有同内容键那几行里别人的候选(本页的在前) */
+  const mergedRow = (next: PageStreamRow): Record<string, any> => {
+    const others = old.filter((row) => row.topClipId === next.topClipId && row.contentKey === next.contentKey)
+      .flatMap((row) => (Array.isArray(row.candidates) ? row.candidates : []))
+      .filter((c: any, i: number, all: any[]) => isObj(c) && !next.candidates.some((m) => m.resultKey === c.resultKey) && all.findIndex((x: any) => x?.resultKey === c.resultKey) === i);
+    return { ...next, candidates: [...next.candidates, ...others] };
+  };
   const merged: Record<string, any>[] = [];
   const placed = new Set<string>();
-  let changed = !usable;
   for (const row of old) {
     const next = typeof row.topClipId === "string" ? mine.get(row.topClipId) : undefined;
     if (!next) { merged.push(row); continue; }
-    if (row.contentKey !== next.contentKey || placed.has(next.topClipId)) { changed = true; continue; }
-    const others = (Array.isArray(row.candidates) ? row.candidates : []).filter((c: any) => isObj(c) && !next.candidates.some((m) => m.resultKey === c.resultKey));
-    const candidates = [...next.candidates, ...others];
-    const same = JSON.stringify(row.candidates ?? null) === JSON.stringify(candidates) && row.inputSig === next.inputSig
-      && row.firstSegment === next.firstSegment && row.lastSegment === next.lastSegment && row.segmentsPerTask === next.segmentsPerTask;
-    if (!same) changed = true;
-    merged.push(same ? row : { ...next, candidates });
-    placed.add(next.topClipId);
+    // 这张卡的第一行所在的位置放本页的那一行
+    if (!placed.has(next.topClipId)) { merged.push(mergedRow(next)); placed.add(next.topClipId); }
+    if (row.contentKey === next.contentKey) continue;
+    if (streamSigStale(row.inputSig, next.inputSig)) continue;
+    merged.push(row);
   }
-  for (const r of rows) if (!placed.has(r.topClipId)) { merged.unshift({ ...r, candidates: [...r.candidates] }); placed.add(r.topClipId); changed = true; }
-  if (!changed) return null;
-  return { ...base, at: o.now, streams: merged };
+  const fresh = rows.filter((r) => !placed.has(r.topClipId)).map((r) => ({ ...r, candidates: [...r.candidates] }));
+  const streams = [...fresh, ...merged];
+  if (usable && JSON.stringify(streams) === JSON.stringify(old)) return null;
+  return { ...base, at: o.now, streams };
 }
 
-/** 现有的层表里,这张卡、这个内容键的流有哪些候选(「先查」用:哪种环境产的都算) */
-export function layerStreamCandidates(existing: unknown, topClipId: string, contentKey: string): { envFingerprint: string; resultKey: string }[] {
+/** 层表里这张卡的一条现成的流的一个候选,连同那一行的分段范围(它的清单按这个范围分份) */
+export interface LayerStreamCandidate { envFingerprint: string; resultKey: string; firstSegment: number; lastSegment: number; segmentsPerTask: number }
+
+/**
+ * 现有的层表里,这张卡此刻**能播的**单卡流有哪些候选(「先查」用:哪种环境产的都算)。能播的判据与在线来源播放时的相同
+ * (`snapshotSource.ts` 的 `streamStale`):同一个内容键,或者输入签名没有过期(那一行没带签名也算)。别的环境算出的内容键可能与本页的不同
+ * (代码版本不同、加载的字体不同),但它的输入签名对得上、页面本来就会播它 —— 有了就不必再产。
+ */
+export function layerStreamCandidates(existing: unknown, row: { topClipId: string; contentKey: string; inputSig?: string | null }): LayerStreamCandidate[] {
   if (!isObj(existing) || existing.kind !== "layer-map" || !Array.isArray(existing.streams)) return [];
-  const out: { envFingerprint: string; resultKey: string }[] = [];
-  for (const row of existing.streams as Record<string, any>[]) {
-    if (!isObj(row) || row.topClipId !== topClipId || row.contentKey !== contentKey || row.kind !== "card") continue;
-    for (const c of Array.isArray(row.candidates) ? row.candidates : []) {
+  const out: LayerStreamCandidate[] = [];
+  for (const r of existing.streams as Record<string, any>[]) {
+    if (!isObj(r) || r.topClipId !== row.topClipId || r.kind !== "card") continue;
+    if (r.contentKey !== row.contentKey && streamSigStale(r.inputSig, row.inputSig)) continue;
+    const firstSegment = Number(r.firstSegment), lastSegment = Number(r.lastSegment), segmentsPerTask = Number(r.segmentsPerTask);
+    if (!Number.isInteger(firstSegment) || !Number.isInteger(lastSegment) || lastSegment < firstSegment || !Number.isInteger(segmentsPerTask) || segmentsPerTask < 1) continue;
+    for (const c of Array.isArray(r.candidates) ? r.candidates : []) {
       if (isObj(c) && typeof c.envFingerprint === "string" && c.envFingerprint && typeof c.resultKey === "string" && c.resultKey && !out.some((x) => x.resultKey === c.resultKey)) {
-        out.push({ envFingerprint: c.envFingerprint, resultKey: c.resultKey });
+        out.push({ envFingerprint: c.envFingerprint, resultKey: c.resultKey, firstSegment, lastSegment, segmentsPerTask });
       }
     }
   }
   return out;
+}
+
+/** 这个候选的清单里,盖住分段 `[from, to]` 的那几份的范围;候选的分段范围没把它盖全回 null */
+export function candidateSpans(cand: LayerStreamCandidate, from: number, to: number): [number, number][] | null {
+  if (cand.firstSegment > from || cand.lastSegment < to) return null;
+  return spansOf(cand.firstSegment, cand.lastSegment, cand.segmentsPerTask).filter(([a, b]) => a <= to && b >= from);
 }
