@@ -32,6 +32,89 @@ interface Params {
 /** 引擎插件只装一次,多张粒子卡共用 */
 let engineReady: Promise<void> | null = null;
 
+/*
+ * # 装容器全模块排队,一次只装一个
+ *
+ * 引擎是全局的,有两样东西所有容器共用:
+ *   1. **随机数源只有一个**:`setRandom` 换的是引擎模块里的那一个函数,谁后调谁生效;
+ *   2. **容器按 id 互相顶替**:`Engine.load` 发现同名的旧容器就先销毁它。不传 id 时取 `element.id`,我们的 div 没有 id,
+ *      于是所有容器都叫 "" —— 后装的那张粒子卡会把先装的那张的容器销毁掉。
+ * 而装一个容器是异步的(`load` → `start` → `init`,十几个 await),**销毁不会让它停下**:`Container.init()` 只在入口查一次
+ * `destroyed`,被销毁的容器照样把粒子排完,照样从「此刻的」随机数源里取数。
+ *
+ * 两次装载交错时就出事。实测(暂停着在时间轴上往回点):舞台先把往回的 t 交给旧组件,旧组件开始重装(第一次 load 在飞);
+ * 同一个同步块里舞台又按片段重挂载了这张卡,新组件播种、开始装(第二次 load)。第二次 load 把第一次的容器当同名销毁,
+ * 可第一次的 init 还在走,从新组件刚播好种的随机数里取走了前 840 个,新容器拿到的是第 841 个起 —— 粒子排布和这一刻的
+ * 毫不相干(与往前到达的同一帧比,差得和两个不相干的帧一样大),而且每次都稳定地错成同一张。
+ *
+ * 所以:
+ *   - 装载排队:前一次**排完粒子**(或失败)之后才开始下一次,随机数源在一次装载期间只属于它;
+ *   - 排上了还没开工就被作废的(卸载、配置换了)直接跳过,一个字都不装;已经开工的等它排完再销毁;
+ *   - 每个容器一个自己的 id,互不顶替;
+ *   - 每个容器一份自己的随机数流,推进时换上,推完把源还给正在装的那一次(`stepTo`)—— 几张粒子卡同屏时各走各的。
+ * 单张卡取随机数的次序和以前逐个相同:播种 → 装载时取 → 推进时取,用的是同一份(起名本来就不取随机数:取的是 `element.id`)。
+ */
+interface LoadJob {
+  el: HTMLElement;
+  opts: Record<string, any>;
+  rand: () => number;
+  cancelled: boolean;
+  resolve: (c: Container | null) => void;
+  reject: (e: unknown) => void;
+}
+const loadQueue: LoadJob[] = [];
+/** 正在装的那一次(随机数源此刻属于它) */
+let loading: LoadJob | null = null;
+let pumpQueued = false;
+let containerSeq = 0;
+
+/** 排一次装载。回的 Promise:粒子排布好了给容器;被作废了给 null;装不成就 reject。`cancel` 作废这一次 */
+function requestLoad(el: HTMLElement, opts: Record<string, any>, rand: () => number): { promise: Promise<Container | null>; cancel: () => void } {
+  let resolve!: (c: Container | null) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<Container | null>((res, rej) => { resolve = res; reject = rej; });
+  const job: LoadJob = { el, opts, rand, cancelled: false, resolve, reject };
+  loadQueue.push(job);
+  schedulePump();
+  return { promise, cancel: () => { job.cancelled = true; } };
+}
+
+/** 晚一个微任务开工:同一个同步块里刚排上就被作废的那一次(往回拖紧接着被舞台重挂载)来得及跳过 */
+function schedulePump(): void {
+  if (pumpQueued) return;
+  pumpQueued = true;
+  queueMicrotask(() => { pumpQueued = false; pumpLoads(); });
+}
+
+function pumpLoads(): void {
+  if (loading) return;
+  let job = loadQueue.shift();
+  while (job && job.cancelled) { job.resolve(null); job = loadQueue.shift(); }
+  if (!job) return;
+  const current = job;
+  loading = current;
+  // 粒子的初始排布由种子决定:装载这一段用的随机数就是这一次播种过的
+  setRandom(current.rand);
+  withRealCanvas(() => {}); // 确保短路已装上(幂等)
+  const id = `pc-particles-${++containerSeq}`;
+  const setUp = whenSetUp((k) => k.id.description === id);
+  let finished = false;
+  const finish = (c: Container | null, error?: unknown) => {
+    if (finished) return;
+    finished = true;
+    setUp.dispose();
+    loading = null;
+    if (c && current.cancelled) { c.destroy(); current.resolve(null); }
+    else if (c) current.resolve(c);
+    else if (current.cancelled) current.resolve(null);
+    else current.reject(error ?? new Error("粒子容器没有装起来"));
+    schedulePump();
+  };
+  void setUp.promise.then((c) => finish(c));
+  // 不等 load() 的 Promise 报喜(见 whenSetUp),只接它的失败和「没排粒子就回来了」
+  tsParticles.load({ id, element: current.el, options: forceOurs(current.opts) }).then(() => finish(null), (e) => finish(null, e));
+}
+
 /** 不管配置怎么写,这几项一律按我们的来:铺在卡片层里、不响应鼠标、不按 DPR 放大、透明底 */
 function forceOurs(opts: Record<string, any>): Record<string, any> {
   return {
@@ -122,6 +205,7 @@ export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () =
     st.container?.destroy();
     st.container = null;
     st.atMs = 0;
+    st.rand = undefined;
     st.reloading = false;
     st.pendingT = undefined;
     st.reload = undefined;
@@ -129,28 +213,29 @@ export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () =
     // HMR 重跑这个模块时引擎已经 load 过,再注册插件会抛错;吞掉,插件本来就在
     engineReady ??= loadSlim(tsParticles).catch(() => {});
     const ready = beginFrameWork('particles');
-    let unlisten = () => {};
+    /** 作废这个组件还没装完的那一次装载(卸载、配置换了) */
+    let cancelLoad = () => {};
 
     /**
-     * 装一个新容器,粒子排布好就回。首次挂载和往回拖都走这一条,两边的随机数流逐个相同。
+     * 排一次装载,粒子排布好就回(连同它那份随机数流)。首次挂载和往回拖都走这一条,两边的随机数流逐个相同。
      * 不等 load() 的 Promise:它要等引擎 start() 里那个 setTimeout,暂停的舞台上它永远不响(见 whenSetUp)。
+     * 为什么排队、为什么随机数流跟着容器走,见 `requestLoad` 上面那段。
      */
-    const mount = (opts: Record<string, any>): Promise<Container> | null => {
+    const mount = (opts: Record<string, any>): Promise<Loaded | null> | null => {
       const el = box.current;
       if (dead || !el) return null;
-      // 粒子的初始排布由种子决定:装载那一刻用的随机数就是播种过的
-      setRandom(seededRandom(seed));
-      withRealCanvas(() => {}); // 确保短路已装上(幂等)
-      const setUp = whenSetUp((k) => k.canvas.domElement?.parentElement === el);
-      unlisten = setUp.dispose;
-      tsParticles.load({ element: el, options: forceOurs(opts) }).catch((e) => { setUp.dispose(); console.warn("[particles] 启动失败:", e); });
-      return setUp.promise;
+      cancelLoad();
+      const rand = seededRandom(seed);
+      const req = requestLoad(el, opts, rand);
+      cancelLoad = req.cancel;
+      return req.promise.then((c) => (c ? { c, rand } : null));
     };
     /** 装好了:掐掉引擎自己的帧循环,从现在起只有我们按 t 推它 */
-    const adopt = (c: Container): boolean => {
+    const adopt = ({ c, rand }: Loaded): boolean => {
       if (dead || gen !== st.gen) { c.destroy(); return false; }
       c.pause();
       st.container = c;
+      st.rand = rand;
       st.atMs = 0;
       return true;
     };
@@ -160,10 +245,9 @@ export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () =
         /*
          * 往回拖:整个容器销毁、按同一条路重装,再从 0 推过来(粒子系统没有倒带)。
          *
-         * **不用 container.refresh()。** refresh 和首次 load() 走的不是同一条路:load 在建容器之前先拿一个
-         * 随机数给容器起名(engine/Core/Engine.js 的 `tsparticles${getRandom()}`,我们不传 id),refresh 不起名;
-         * 粒子编号、对象池也不归零。实测停在 3s、跳到 5s、再跳回 3s,refresh 重排出来的画面和第一次不同
-         * (补上起名那个随机数也还不同)。重装一个新容器,两次就是逐个相同的随机数、逐个相同的步序。
+         * **不用 container.refresh()。** refresh 和首次 load() 走的不是同一条路:粒子编号、对象池不归零。
+         * 实测停在 3s、跳到 5s、再跳回 3s,refresh 重排出来的画面和第一次不同。
+         * 重装一个新容器,两次就是逐个相同的随机数、逐个相同的步序。
          */
         st.reload = (tSec: number) => {
           st.reloading = true;
@@ -173,16 +257,18 @@ export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () =
           st.atMs = 0;
           const p = mount(opts);
           if (!p) { st.reloading = false; return; }
-          p.then((c) => {
+          p.then((got) => {
+            // 这一次重装已经不归这个组件管了(卸载、配置换了):装出来的东西销毁,别动新一轮的状态
+            if (dead || gen !== st.gen) { got?.c.destroy(); return; }
             st.reloading = false;
-            if (adopt(c)) stepTo(st, seed, st.pendingT ?? tSec);
-          }).catch(() => { st.reloading = false; });
+            if (got && adopt(got)) stepTo(st, seed, st.pendingT ?? tSec);
+          }).catch(() => { if (!dead && gen === st.gen) st.reloading = false; });
         };
         return mount(opts);
       })
-      .then((c) => {
-        if (!c) { ready.dispose(); return; }
-        if (!adopt(c)) return;
+      .then((got) => {
+        if (!got) { ready.dispose(); return; }
+        if (!adopt(got)) return;
         stepTo(st, seed, wantT.current);
         ready.ready();
       })
@@ -190,7 +276,7 @@ export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () =
 
     return () => {
       dead = true;
-      unlisten();
+      cancelLoad();
       ready.dispose();
       st.reload = undefined;
       st.container?.destroy();
@@ -216,7 +302,9 @@ const MAX_STEPS = 60 * 20;
  * 推进状态:引擎容器、已经推到第几毫秒。
  * 往回拖时 reload 重装一个新容器;重装期间 reloading 为真,最新的 t 记在 pendingT,装好了一并推。
  */
-interface StepState { container: Container | null; atMs: number; reloading?: boolean; pendingT?: number; reload?: (tSec: number) => void }
+interface StepState { container: Container | null; atMs: number; rand?: () => number; reloading?: boolean; pendingT?: number; reload?: (tSec: number) => void }
+/** 装好的一个容器,连同它自己那份播过种的随机数流 */
+interface Loaded { c: Container; rand: () => number }
 
 function stepTo(st: StepState, seed: number, tSec: number) {
   // 往回拖触发的重装还没好:记下最新的 t,装好了一并推
@@ -228,6 +316,16 @@ function stepTo(st: StepState, seed: number, tSec: number) {
     st.reload?.(tSec);
     return;
   }
+  // 推进时取的随机数来自这个容器自己那一份(见 `requestLoad` 上面那段);推完把源还给正在装的那一次
+  if (st.rand) setRandom(st.rand);
+  try {
+    advance(st, c, target);
+  } finally {
+    if (loading) setRandom(loading.rand);
+  }
+}
+
+function advance(st: StepState, c: Container, target: number) {
   const render = c.canvas.render;
   let steps = 0;
   if (st.atMs === 0) {

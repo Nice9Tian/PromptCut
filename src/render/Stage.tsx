@@ -70,7 +70,7 @@ export interface StagePlaneProps {
   suppressed?: ReadonlySet<string>;
   /** G1 的流平面分组(R8 之前恒空,渲染位置和 prop 先就位) */
   streamPlanes?: readonly StreamPlaneGroup[];
-  /** K3:按片段重挂载的代数。key 和传给组件的 `playToken` 都换成它,**不传时退回整舞台 playToken** */
+  /** K3:按片段重挂载的代数。key 和传给组件的 `playToken` 用的是「整舞台 playToken + 它」,**不传时就是整舞台 playToken** */
   remountGen?: ReadonlyMap<string, number>;
   /** K5 第一路:正在用子树虚拟时间追帧的片段 → 它此刻的**全局舞台毫秒** */
   settling?: ReadonlyMap<string, number>;
@@ -295,8 +295,16 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            * K3:重挂载的粒度是片段。key 和**传给组件的 `playToken`** 都换成 `remountGen`,
            * 不传时退回整舞台 `playToken`(导出页、legacy 行为不变)。两处必须一起换:
            * `layoutId` 靠它换新、三维 / 终端卡靠它重播,只换 key 的话 Motion 会把重播当共享布局过渡。
+           *
+           * **两个代数相加,不是二选一。** 以前写的是 `remountGen ?? playToken`,有两处漏挂(`seek-back-exact-probe.mjs` 在
+           * 包裹层节点上留记号量出来的):
+           *   - 舞台的 `playToken` 从 1 起,按片段重挂载的代数第一次也是 1 —— 新开的可见舞台上每张卡的第一次按片段重挂载
+           *     (向后跳的定位配方、追帧的起步)key 没变,等于没挂;
+           *   - 一张卡按片段重挂载过之后,它的 key 就只认 `remountGen`,整舞台的 `playToken` 再涨也不动它 —— 这个舞台转到后台
+           *     做整场景补跑(`render(jump)`)、探针复位、生成快照时,这张卡不再跟着整台重挂载。
+           * 两个代数都只增不减,和每次重挂载都严格变大;没有按片段的代数时就是 `playToken`(导出页、legacy 一个字不变)。
            */
-          const gen = remountGen?.get(clip.id) ?? playToken;
+          const gen = playToken + (remountGen?.get(clip.id) ?? 0);
           const mountClockMs = mountClockMsOf(`${clip.id}:${gen}`, clip, cardT);
           const isSettling = settling?.has(clip.id) ?? false;
           const snapshotHtml = snapshots?.get(clip.id);
