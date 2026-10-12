@@ -687,7 +687,9 @@ try {
           if (clipId !== 'clip-pill') {
             check(rec.diffPixelsMax === 0, `${clipId}#${segment}：不回放直接产和回放着产逐帧相同（像素）`, diffs);
             check(rec.inkMax > 0, `${clipId}#${segment}：画面不是空的`, ink);
-            check(replay.stats.replayed > 0, `${clipId}#${segment}：B 路确实回放了（replayed > 0）`, replay.stats.replayed);
+            // 分段起点不在挂载帧之后（挂载帧就在这一段里）时，回放着产也没有可回放的帧
+            if (spec.mountFrame < segment * SEGMENT_FRAMES) check(replay.stats.replayed > 0, `${clipId}#${segment}：B 路确实回放了（replayed > 0；挂载帧 ${spec.mountFrame}）`, replay.stats.replayed);
+            else check(replay.stats.replayed === 0, `${clipId}#${segment}：挂载帧 ${spec.mountFrame} 就在这一段里，B 路没有可回放的帧`, replay.stats.replayed);
             await fs.writeFile(path.join(SHOTS, `stream-${clipId}-seg${segment}-A-direct.png`), direct.pngs[Math.min(7, direct.pngs.length - 1)]);
             await fs.writeFile(path.join(SHOTS, `stream-${clipId}-seg${segment}-B-replay.png`), replay.pngs[Math.min(7, replay.pngs.length - 1)]);
             // 流库里 runSegment（不回放）产出的这一段，对 B 路 PNG 用同一个编码器编出来的
