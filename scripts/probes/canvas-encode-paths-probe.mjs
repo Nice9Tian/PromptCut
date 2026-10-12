@@ -565,12 +565,16 @@ function pageMain() {
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.i);
       gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
     };
+    const tiny = new Uint8Array(4);
     S.drawFn = (i) => {
       gl.viewport(0, 0, w, h);
       gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.enable(gl.DEPTH_TEST); gl.useProgram(prog);
       drawMesh(sphere, mul(rotZ(0.4), rotY(i * 0.06)), new Float32Array([0.25, 0.55, 0.95]), 7.0);
       drawMesh(ring, mul(mul(rotY(0.35 * Math.sin(i * 0.04)), rotX(1.25 + 0.2 * Math.sin(i * 0.06))), rotZ(i * 0.05)), new Float32Array([0.95, 0.7, 0.2]), 14.0);
+      // 软件 WebGL 的命令是拖到有人读像素时才执行的:不等它画完,「画」的耗时会漏到第一个取像素的那一步里,三条路的对比就不干净
+      gl.finish();
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, tiny);   // 读一个像素逼它现在就画完(finish 在软件 WebGL 上不一定等)
     };
     S.rb = new Uint8Array(w * h * 4); S.sb = new Uint8Array(w * h * 4);
   }
@@ -994,7 +998,7 @@ async function main() {
 
     const evalPage = async (expression, timeoutMs = opts.timeoutSec * 1000) => {
       const r = await withTimeout(call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, timeoutMs + 5000), timeoutMs, '页面脚本');
-      if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception?.description || r.exceptionDetails.text || '页面脚本出错').split('\n').slice(0, 2).join(' '));
+      if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception?.description || r.exceptionDetails.text || '页面脚本出错').split('\n')[0]);
       return r.result.value;
     };
     const loadPage = async () => {
