@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { assetWiringPki } from './asset-wiring-pki.mjs';
 import { scopeModel, pair } from '../agent-run-scope-fixture.mjs';
-import { openAccountLedger, digestOf } from '../../account/ledger.mjs';
+import { openAccountLedger, digestOf, appendAccessEvent } from '../../account/ledger.mjs';
 import { certificateFingerprint } from '../../account/client.mjs';
 import { createRunAuthority } from '../../account/run-authority.mjs';
 import { createRunInternalHandler } from '../../account/run-internal.mjs';
@@ -74,7 +74,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   const hooks = await import(new URL('../../account/conversation-authority.mjs', import.meta.url).href);
   ledger.transaction(s => {
     s.projects[projectId] = { projectId, status: 'active', creatorAccountId: 'owner', hosted: { agent: true }, bans: {},
-      members: { owner: { access: 'rw' }, sender: { access: 'rw' } }, accessRevision: 1 };
+      members: { owner: { access: 'rw' }, sender: { access: 'rw' }, other: { access: 'rw' } }, accessRevision: 1 };
     s.conversationsV2 = { [projectId]: { [conversationId]: { v: 2, projectId, id: conversationId, ownerAccountId: 'owner',
       visibility: 'shared', aclRevision: 1, queueRevision: 1, currentRunId: null, messages: [] } } };
     s.testServices = { 'worker-key': true, 'master-key': true };
@@ -261,6 +261,15 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
     events: () => eventStore.after({ projectId, conversationId }).events,
     /** 用户按「停止」时对话权威做的那一步：在文档服务的账本里给这条任务下围栏，并通知它自己去关连接。 */
     stop: (runId, requestId = `stop-${runId}`) => provider.fence({ kind: 'stop', projectId, conversationId, runId, requestId }),
+    /** 改密选了退出（或被踢）：账号的旧登录作废，文档服务据这条访问事件给相关任务下围栏。 */
+    exit(accountId) {
+      const event = ledger.transaction(s => { s.revokedLogins[`login:login-${accountId}`] = { seq: ++s.accountHead };
+        return appendAccessEvent(s, { type: 'login-revoked', accountIds: [accountId], loginIds: [`login-${accountId}`] }); });
+      return provider.applyAccessEvent(event);
+    },
+    /** 开对话的人把它切成私有：只在账本里下围栏，不另外通知（文档服务在主服务下一次来问时补做它那一侧的关闭）。 */
+    makePrivate: (requestId = 'private-1') => ledger.transaction(s => hooks.privateFenceInState(s, { projectId, conversationId,
+      ownerAccountId: 'owner', requestId, runHooks: provider.hooks })),
     async close() {
       const errors = [];
       const attempt = async fn => { try { await fn(); } catch (error) { errors.push(error); } };

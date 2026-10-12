@@ -192,6 +192,45 @@ test('任务进程中途死掉：root 写失败观察，文档服务据此强制
   assert.equal(f.grantOf(second).terminalOutcome.status, 'done'); assert.equal(f.marker(`started-${second}`).epoch, 2);
 });
 
+test('改密选退出：共有对话里已读的当前任务继续做完，旧登录排着的下一条不再执行；切私有：别人的任务被中断', { timeout: 120_000 }, async t => {
+  const f = await fixture(t);
+  const current = f.enqueue([{ say: '已经读到的任务' }, { hold: 'kept' }, { say: '退出以后继续做完' }]);
+  const queued = f.enqueue([{ say: '旧登录排着的下一条' }]);
+  await f.scheduler.start();
+  const held = await until(() => f.marker('held-kept'), { what: '已读任务在跑' });
+  const [control] = f.exit('sender');
+  const g1 = f.grantOf(current);
+  // 例外只给这一条已读的当前任务：它保留下来继续跑，没有被撤销。
+  assert.deepEqual(control.retained, [g1.runGrantId]); assert.deepEqual(control.revoked, []);
+  assert.equal(g1.state, 'retained'); assert.equal(g1.reason, 'credential');
+  for (let i = 0; i < 4; i++) await f.scheduler.tick();
+  assert.equal(f.generations.get(1).gateway.describe().childClosed, false, '保留的任务没有被关');
+  f.release('kept');
+  await until(() => finished(f, current), { what: '保留的任务做完并结清' });
+  assert.equal(f.grantOf(current).terminalOutcome.status, 'done');
+  assert.equal(f.chain(1).closure.protocol, 'promptcut.agent-run-scope.closure.v1');
+  assert.equal(f.stops.find(row => row.epoch === 1).how, 'graceful'); assert.equal(f.stops[0].pid, held.pid);
+  assert.ok(f.events().some(row => row.event.type === 'text' && row.event.delta === '退出以后继续做完'));
+  // 例外不延伸到下一条：旧登录排着的消息被取消，不产生任务授权，也没有进程替它干活。
+  await until(() => message(f, queued).queueState === 'cancelled' && f.scheduler.describe()[0].phase === 'idle', { what: '旧登录的下一条被取消' });
+  assert.equal(f.grantOf(queued), null); assert.equal(f.marker(`started-${queued}`), null);
+
+  // 另一位成员的任务在跑，开对话的人切成私有：这条任务被中断，已经落下的不撤。
+  const others = f.enqueue([{ say: '别的成员的任务' }, { hold: 'private' }, { say: '这句不该出现' }], 'other');
+  f.scheduler.kick();
+  await until(() => f.marker('held-private'), { what: '别的成员的任务在跑' });
+  const fenced = f.makePrivate(), g3 = f.grantOf(others);
+  assert.equal(f.grantOf(others).state, 'revoked'); assert.equal(f.conversation().visibility, 'private');
+  await until(() => finished(f, others), { what: '切私有后结清' });
+  const epoch = f.marker(`started-${others}`).epoch, chain = f.chain(epoch);
+  assert.equal(f.grantOf(others).terminalOutcome.status, 'interrupted'); assert.equal(f.grantOf(others).terminalOutcome.reason, 'private');
+  assert.equal(chain.terminal.protocol, 'promptcut.agent-run-scope.forced-terminal.v1'); assert.equal(chain.terminal.fence.kind, 'private');
+  assert.equal(chain.assignment.target.runGrantId, g3.runGrantId);
+  assert.equal(f.ledger.read().runControlsV2[f.grantOf(others).closureControlId].state, 'complete');
+  assert.equal(f.events().some(row => row.event.type === 'text' && row.event.delta === '这句不该出现'), false);
+  assert.ok(fenced);
+});
+
 test('没领到任务的一代：退掉、槽回收，不占名额；之后的任务照常', { timeout: 120_000 }, async t => {
   const f = await fixture(t);
   const ghost = f.enqueue([{ say: '不该执行' }], 'ghost'); // 发消息的账号不是这个项目的成员
