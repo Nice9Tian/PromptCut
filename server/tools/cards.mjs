@@ -13,7 +13,7 @@ export const cardsTools = [
   },
   {
     name: "card_authoring_guide",
-    description: "取建卡规则全文（CardDef 契约、控件类型、硬性约束、可用依赖、完整示例）。要用 create_card 新建卡片前**必须先调它**，不要凭印象写。",
+    description: "取建卡规则全文（两种写法 remotion 式 / motion 式及各自的规矩、CardDef 契约、控件类型、硬性约束、可用依赖、完整示例）。新卡只按这两种写法写，用必填的 frameMode 声明：\"direct\" 是 remotion 式，\"stateful\" 是 motion 式，不规定优先用哪一种。要用 create_card 新建卡片前**必须先调它**，不要凭印象写。",
     inputSchema: { type: "object", properties: {} },
     side: "agent"
   },
@@ -32,7 +32,7 @@ export const cardsTools = [
   },
   {
     name: "edit_card",
-    description: "改一张卡的源码（用户卡和内置卡都行）：把源码里的 find 这一段替换成 replace，只动这一处，别的地方原样不变。**这是修改已有卡片的唯一正确方式**，不要用 create_card + overwrite 整篇重写。用法：先 get_card_source 读回源码，照着它原样复制要改的那几行当 find（缩进空格都要一致），写上改完的样子当 replace。find 必须在源码里唯一命中：命中 0 次说明你手上的版本旧了，命中多次就把 find 写长一点带上周围几行。带 file 可以改这张卡用到的部件 / vendor 文件（必须在 get_card_source 返回的 files 里）；sharedBy > 1 的文件被多张卡共用，改了它们都会跟着变。**只能改源码，不能改 HTML**：舞台上的 DOM 是源码渲染出来的，直接改 DOM 下一帧就被盖掉。内置文件改之前会自动备份到 out/card-edits/。落盘前会做语法检查，并拒绝新引入 Date.now / setTimeout / setAnimationLoop 这类不跟帧走的写法。",
+    description: "改一张卡的源码（用户卡和内置卡都行）：把源码里的 find 这一段替换成 replace，只动这一处，别的地方原样不变。**这是修改已有卡片的唯一正确方式**，不要用 create_card + overwrite 整篇重写。用法：先 get_card_source 读回源码，照着它原样复制要改的那几行当 find（缩进空格都要一致），写上改完的样子当 replace。find 必须在源码里唯一命中：命中 0 次说明你手上的版本旧了，命中多次就把 find 写长一点带上周围几行。带 file 可以改这张卡用到的部件 / vendor 文件（必须在 get_card_source 返回的 files 里）；sharedBy > 1 的文件被多张卡共用，改了它们都会跟着变。**只能改源码，不能改 HTML**：舞台上的 DOM 是源码渲染出来的，直接改 DOM 下一帧就被盖掉。内置文件改之前会自动备份到 out/card-edits/。落盘前会做语法检查，并拒绝新引入 Date.now / setTimeout / setAnimationLoop 这类不跟帧走的写法；声明成 remotion 式（frameMode: \"direct\"）的卡还会按 remotion 式的规矩逐条检查，违规的指出行号。",
     inputSchema: {
       type: "object",
       properties: {
@@ -65,7 +65,7 @@ export const cardsTools = [
   },
   {
     name: "create_card",
-    description: "创建可复用卡片定义：TSX `CardDef`；要多输入或 GPU 滤镜、转场、音频时写 `kind` / `inputs` / `card` / `audio`，先读 `card_authoring_guide`。建完用 apply_card 把它应用到片段。改现有源码用 get_card_source 和 edit_card，不要用 create_card + overwrite 整篇重写。",
+    description: "创建可复用卡片定义：TSX `CardDef`；要多输入或 GPU 滤镜、转场、音频时写 `kind` / `inputs` / `card` / `audio`，先读 `card_authoring_guide`。必须写 `frameMode`：\"direct\"（remotion 式，画面只由 t、参数、输入素材决定，只许用框架 remotionStyle 和 react 写，违规的逐条带行号被拒）或 \"stateful\"（motion 式，可用 Motion、CSS 动画等）。建完用 apply_card 把它应用到片段。改现有源码用 get_card_source 和 edit_card，不要用 create_card + overwrite 整篇重写。",
     inputSchema: {
       type: "object",
       properties: {

@@ -5,7 +5,7 @@ import { pairingSession } from '../agent/call-pairing.mjs';
 
 function runAgy(exe, args, options) {
   const invocation = cliCommand(exe, args);
-  return execFileSync(invocation.command, invocation.args, { env: cliEnv('agy'), timeout: 15000, ...options });
+  return execFileSync(invocation.command, invocation.args, { env: cliEnv('agy'), timeout: 15000, windowsHide: true, ...options });
 }
 
 /**
