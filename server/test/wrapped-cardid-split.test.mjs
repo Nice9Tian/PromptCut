@@ -17,6 +17,7 @@
  *   WC-06  不套一层的片段:补出来的 `cardId` 与 main 的写法相同,切出的任务逐字段相同
  *   WC-07  `innerCardIds` / `withInnerCards` 的取法:里面不止一张卡、拿不准时
  *   WC-08  里面不止一张卡、拿不准的控件:不给浏览器节点;要里面每张卡的代码 / 全部定制卡的代码
+ *   WC-09  画布卡(审阅表 `canvasHeavy`):不给浏览器节点、重度为「重」,挂了强调、滤镜也一样
  *
  * 跑:npm test -- server/test/wrapped-cardid-split.test.mjs
  */
@@ -39,9 +40,10 @@ const DEFS = {
   'punch-pill': { id: 'punch-pill', defaults: { text: '' } },
   'focus-card': { id: 'focus-card', defaults: { text: '' } },
   'my-card': { id: 'my-card', defaults: { text: '' } },
+  particles: { id: 'particles', defaults: {} },
 };
 const getCard = id => DEFS[id];
-const SOURCE_VERSIONS = { lottie: 'builtin:lottie-v1', 'punch-pill': 'builtin:pill-v1', 'focus-card': 'builtin:focus-v1', 'my-card': 'user:mine-v1' };
+const SOURCE_VERSIONS = { lottie: 'builtin:lottie-v1', 'punch-pill': 'builtin:pill-v1', 'focus-card': 'builtin:focus-v1', 'my-card': 'user:mine-v1', particles: 'builtin:particles-v1' };
 
 const EMPHASIS = { kind: 'outline', color: '#ffffff', size: 6 };
 const FILTERS = [{ id: 'f-warm', name: '暖色', ops: [{ op: 'sepia', amount: 0.4 }] }];
@@ -187,9 +189,9 @@ test('WC-05 强调和滤镜都挂(套两层):照样认得出里面那张', () =>
 });
 
 test('WC-06 不套一层的片段:cardId 与 main 的写法相同,切出的任务逐字段相同', () => {
-  const cards = ['lottie', 'punch-pill', 'focus-card', 'my-card'];
+  const cards = ['lottie', 'punch-pill', 'focus-card', 'my-card', 'particles'];
   const project = {
-    id: 'p', width: 1920, height: 1080, fps: 30, duration: 6, themeId: 'dark', style: {}, media: [], filters: FILTERS, audioFx: [], pixelMaps: [], cardNodes: [],
+    id: 'p', width: 1920, height: 1080, fps: 30, duration: 8, themeId: 'dark', style: {}, media: [], filters: FILTERS, audioFx: [], pixelMaps: [], cardNodes: [],
     tracks: cards.map((cardId, n) => ({ id: `tr-${n}`, hidden: false, clips: [{ id: `clip-${cardId}`, start: 0.5 + n, end: 2.5 + n, frame: FRAME, cardId, params: {} }] })),
   };
   const graph = projectCardGraph(project, getCard);
@@ -227,15 +229,15 @@ const HAND_GRAPH = { nodes: [
 
 test('WC-07 innerCardIds / withInnerCards 的取法', () => {
   const inner = innerCardIds(HAND_GRAPH);
-  assert.deepEqual(inner('a'), { cardIds: ['punch-pill'], unsure: false });
-  assert.deepEqual(inner('wrap-wrap-a'), { cardIds: ['punch-pill'], unsure: false });
-  assert.deepEqual(inner('wrap-media'), { cardIds: [], unsure: false });
+  assert.deepEqual(inner('a'), { cardIds: ['punch-pill'], unsure: false, canvasHeavy: false });
+  assert.deepEqual(inner('wrap-wrap-a'), { cardIds: ['punch-pill'], unsure: false, canvasHeavy: false });
+  assert.deepEqual(inner('wrap-media'), { cardIds: [], unsure: false, canvasHeavy: false });
   // 输入按名字排序(from 在 to 前面),与写的先后无关
-  assert.deepEqual(inner('wrap-mix'), { cardIds: ['punch-pill', 'my-card'], unsure: false });
-  assert.deepEqual(inner('fx'), { cardIds: ['fx-tint', 'punch-pill'], unsure: false });
-  assert.deepEqual(inner('same'), { cardIds: ['punch-pill'], unsure: false });
-  assert.deepEqual(inner('lost'), { cardIds: [], unsure: true });
-  assert.deepEqual(inner('nowhere'), { cardIds: [], unsure: true });
+  assert.deepEqual(inner('wrap-mix'), { cardIds: ['punch-pill', 'my-card'], unsure: false, canvasHeavy: false });
+  assert.deepEqual(inner('fx'), { cardIds: ['fx-tint', 'punch-pill'], unsure: false, canvasHeavy: false });
+  assert.deepEqual(inner('same'), { cardIds: ['punch-pill'], unsure: false, canvasHeavy: false });
+  assert.deepEqual(inner('lost'), { cardIds: [], unsure: true, canvasHeavy: false });
+  assert.deepEqual(inner('nowhere'), { cardIds: [], unsure: true, canvasHeavy: false });
 
   const pick = nodeId => { const [out] = withInnerCards([{ clipId: 'c', nodeId }], HAND_GRAPH); return [out.cardId, out.cardIds, out.cardIdsUnsure === true]; };
   assert.deepEqual(pick('a'), ['punch-pill', ['punch-pill'], false]);
@@ -293,4 +295,34 @@ test('WC-08 里面不止一张卡、拿不准的控件:不给浏览器节点,代
   }
   const unsureClean = run({ ...base, clipId: 'c5', cardId: null, cardIds: [], cardIdsUnsure: true }, {});
   assert.ok(unsureClean.length > 0 && unsureClean.every(task => task.requires.envFingerprint === OWN), '拿不准的即使没有定制卡也不给浏览器');
+});
+
+test('WC-09 画布卡:挂了强调、滤镜也不给浏览器节点、重度为「重」', () => {
+  const { cardPlan, tasks } = splitOf({ cardId: 'particles', params: {} });
+  for (const control of cardPlan) assert.equal(control.tier, 'shared', `${control.clipId} 是共享档`);
+  assert.equal(cardPlan.find(control => control.clipId === 'clip-bare').capabilities.canvasHeavy, true);
+  const bare = assertSame(tasks);
+  for (const item of bare.filter(item => item.kind === 'snapshot')) assert.equal(item.weight, 'heavy');
+  for (const clipId of ['clip-bare', ...WRAPPED]) assert.equal(browserTasks(tasks, clipId).length, 0, `${clipId} 不给浏览器`);
+});
+
+test('WC-10 innerCardIds 的 canvasHeavy:里面有画布卡才为真;控件自己标了的不另加 innerCanvasHeavy', () => {
+  const graph = { nodes: [
+    { id: 'p', cardId: 'particles', inputs: {}, capabilities: { compositing: 'independent', canvasHeavy: true } },
+    { id: 'wrap-p', adapter: 'emphasis', inputs: { source: { nodeId: 'p' } }, capabilities: { compositing: 'independent' } },
+    { id: 'a', cardId: 'punch-pill', inputs: {}, capabilities: { compositing: 'independent', canvasHeavy: false } },
+    { id: 'wrap-a', adapter: 'emphasis', inputs: { source: { nodeId: 'a' } }, capabilities: { compositing: 'independent' } },
+  ] };
+  const inner = innerCardIds(graph);
+  assert.equal(inner('p').canvasHeavy, true);
+  assert.equal(inner('wrap-p').canvasHeavy, true);
+  assert.equal(inner('wrap-a').canvasHeavy, false);
+  const [bare, wrapped, plain] = withInnerCards([
+    { clipId: 'c1', nodeId: 'p', capabilities: { canvasHeavy: true } },
+    { clipId: 'c2', nodeId: 'wrap-p', capabilities: { compositing: 'independent' } },
+    { clipId: 'c3', nodeId: 'wrap-a', capabilities: { compositing: 'independent' } },
+  ], graph);
+  assert.equal('innerCanvasHeavy' in bare, false);
+  assert.equal(wrapped.innerCanvasHeavy, true);
+  assert.equal('innerCanvasHeavy' in plain, false);
 });
