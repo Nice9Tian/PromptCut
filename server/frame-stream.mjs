@@ -35,6 +35,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { bakeStream } from './bakery/bake.mjs';
+import { directCaptureMode, directSegmentCapture, newDirectRecord, rgbaAlphaBox } from './bakery/capture-canvas.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
@@ -56,8 +57,12 @@ export const STREAM_POOL_DEFAULT = 1;
 export const STREAM_POOL_MAX = 2;
 /** G6:替换后旧文件延迟这么久再删(页面上可能还有一个在途请求) */
 export const REPLACED_DELETE_MS = 5000;
-/** 生产这条流的代码的版本(改了分段格式 / 坐标口径就加一,旧流全部作废) */
-export const STREAM_CODE_VERSION = 1;
+/**
+ * 生产这条流的代码的版本(改了分段格式 / 坐标口径就加一,旧流全部作废)。
+ * 2:画布卡的帧从画布直接取像素(`./bakery/capture-canvas.mjs`);单卡流的成员键不再带生成快照的代码指纹
+ * (`docs/plan/prerender-products-contract.md` 第 9.3 节,这两样同一次换)。
+ */
+export const STREAM_CODE_VERSION = 2;
 /** 单卡流的矩形上界:框外再留这么多像素给溢出框的内容(阴影、描边) */
 export const LOCAL_OVERFLOW_PX = 32;
 /** 实测实体框并集再外扩这么多(稀疏趟只量了三分之一的帧,中间帧可能略微超出) */
@@ -520,9 +525,10 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     if (members.length === 1) {
       const m = members[0];
       const placement = localPlacement(m.clip, stage);
-      // 成员键优先取内容键;`??` 后面的回退只为没有内容键字段的旧形状输入(照旧 `snapshotKey || key`)
+      // 成员键取不带生成快照的代码指纹的那一份内容键(`streamMemberKey`:改生成快照的代码不该让流跟着作废);
+      // `??` 后面的回退只为没有这个字段的旧形状输入(照旧内容键,再照旧 `snapshotKey || key`)
       const contentKey = cardStreamIdentity({ kind: 'card', fps, stage, codeVersion,
-        members: [{ key: m.control.contentKey ?? (m.control.snapshotKey || m.control.key), sampling: m.control.sampling, count: m.control.count }] });
+        members: [{ key: m.control.streamMemberKey ?? m.control.contentKey ?? (m.control.snapshotKey || m.control.key), sampling: m.control.sampling, count: m.control.count }] });
       const streamKey = resultKeyOf(contentKey, envFingerprint);
       specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'card', plane: 'local', offset: placement.offset, bound: placement.bound, box: placement.box, members: [m.control] });
     } else {
@@ -831,6 +837,8 @@ export class StreamProducer {
     this.poolLimit = streamPoolLimit(env);
     this.pool = this.poolLimit.fixed ?? STREAM_POOL_DEFAULT;
     this.store = new StreamStore(path.join(pipeline.root, 'streams'), { ownership, projectAccess });
+    /** 画布卡的流走不走画布直取:`auto`(缺省)/ `always`(过了实测就走,不管快慢)/ `off`;见 `directOf` */
+    this.direct = directCaptureMode(env);
     this.streams = new Map();
     this.workers = new Set();
     this.encoding = new Set();
@@ -876,6 +884,7 @@ export class StreamProducer {
         firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
         bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
         replay: state.spec.replay !== false, replayedFrames: state.replayedFrames ?? 0,
+        direct: state.direct ? { ...state.direct } : null, capture: state.capture ? { ...state.capture } : null,
         segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs }])),
         inits: Object.keys(state.manifest?.inits ?? {}),
       })),
@@ -1247,6 +1256,21 @@ export class StreamProducer {
   }
 
   /**
+   * 这条流走不走画布直取(`docs/plan/prerender-products-contract.md` 第 6.1 节第一道:登记)。回这条流的直取记录,不走回 null。
+   * 只有单卡流、成员登记为画布卡(审阅表的 `canvasHeavy`)才走;组流、别的种类的流、实测没过的流照旧截图。
+   * 第二道(产流时实测)和「直取快不快」都在 `directSegmentCapture` 里,每个分段的第一帧做。
+   */
+  directOf(state) {
+    const { spec } = state;
+    if (this.direct === 'off' || spec.kind !== 'card' || spec.members?.length !== 1 || spec.members[0]?.capabilities?.canvasHeavy !== true) return null;
+    const record = state.direct ||= newDirectRecord();
+    if (record.failed) return null;
+    // 上一次试出来不比截图快:歇几个分段再试
+    if (this.direct !== 'always' && record.cooldown > 0) { record.cooldown--; return null; }
+    return record;
+  }
+
+  /**
    * 生产一个分段(G4:单个分段的生产是它自己的一个 run)。租约接得上就接着推,接不上就把这条流的
    * 隔离工程灌进会话、从挂载帧重放。出帧逐张喂给这个分段的编码器;编码在后台收尾(双缓冲)。
    */
@@ -1290,24 +1314,32 @@ export class StreamProducer {
        * 不再从挂载帧逐帧推过来;所以分段不必按顺序产。`server/bakery/bake.mjs` 一个字不动(代码指纹)。
        */
       const replay = spec.replay !== false;
+      // 画布直取:这个分段的帧不截图,从画布取像素(过不了实测的照旧截图);`shot` 是 PNG,或 `{ rgba, width, height }`
+      const direct = this.directOf(state);
       const result = await bakeStream(bakery, {
         streamSignature: spec.streamKey, fromFrame, toFrame, stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
         clip: captureRect, hasMedia: false, signal: abort.signal,
-        onFrame: async (frame, png) => {
+        ...(direct ? { capture: directSegmentCapture(bakery, { clipId: spec.topClipId, rect: captureRect, record: direct, stride, captures: Math.ceil(samples / stride), always: this.direct === 'always',
+          note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) } : {}),
+        onFrame: async (frame, shot) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
-          if (measuring) this.measurePng(state, frame, png, rect);
+          const raw = shot?.rgba ? shot : null;
+          if (measuring) { if (raw) this.measureRgba(state, frame, raw, rect); else this.measurePng(state, frame, shot, rect); }
           if (!enc) {
             // 第一张图出来时还没有这个分段的编码器在跑:这一张的出图耗时算「空闲」样本
             await this.encoderSlot();
-            enc = openStreamSegmentEncoder(this.ffmpeg, { encoder, fps });
+            enc = openStreamSegmentEncoder(this.ffmpeg, { encoder, fps, ...(raw ? { raw: { width: raw.width, height: raw.height } } : {}) });
           }
           const repeat = Math.min(stride, toFrame - frame + 1);
-          for (let k = 0; k < repeat; k++) await enc.write(png);
+          for (let k = 0; k < repeat; k++) await enc.write(raw ? raw.rgba : shot);
           firstCapture = false;
         },
       });
       if (result.reset) this.stats.bakeStreamResets = (this.stats.bakeStreamResets ?? 0) + 1;
+      // 这条流取图那一段的累计(诊断:`status()` 每条流的 `capture`;取了几帧、取图和推帧各花多少毫秒)
+      const taken = state.capture ||= { frames: 0, captureMs: 0, stepMs: 0 };
+      taken.frames += result.captured; taken.captureMs += result.captureMs; taken.stepMs += result.stepMs;
       // 回放过的帧数(`bakeStream` 的 `replayed`):不回放的流恒为 0,探针读 `status()` 核对
       this.stats.replayedFrames = (this.stats.replayedFrames ?? 0) + (result.replayed ?? 0);
       state.replayedFrames = (state.replayedFrames ?? 0) + (result.replayed ?? 0);
@@ -1345,6 +1377,13 @@ export class StreamProducer {
   measurePng(state, frame, png, rect) {
     const box = pngAlphaBox(png);
     if (box?.full) { state.measureFailed = true; return; }
+    if (box) state.measured = unionRect(state.measured, { x: rect.x + box.x, y: rect.y + box.y, w: box.w, h: box.h });
+    state.measuredSegments.add(Math.floor(frame / SEGMENT_FRAMES));
+  }
+
+  /** 同 `measurePng`,这一帧是画布直取的原始像素(`{ rgba, width, height }`) */
+  measureRgba(state, frame, raw, rect) {
+    const box = rgbaAlphaBox(raw.rgba, raw.width, raw.height);
     if (box) state.measured = unionRect(state.measured, { x: rect.x + box.x, y: rect.y + box.y, w: box.w, h: box.h });
     state.measuredSegments.add(Math.floor(frame / SEGMENT_FRAMES));
   }

@@ -114,6 +114,17 @@ export class CardFrameCache {
         fontFingerprint: value?.environment?.fontFingerprint || '', snapshotCode: snapshotCode(),
       });
       const snapshotKey = resultKeyOf(contentKey, fp);
+      // 单卡轨道流的成员键(`planStreams` 用):同一份内容身份,只是不带生成快照的代码指纹 ——
+      // 流的像素是截图或画布直取来的,和快照 HTML 怎么生成无关;带着它,改一次生成快照的代码所有单卡流都跟着作废
+      // (`docs/plan/prerender-products-contract.md` 第 9.3 节)。流自己的代码指纹在 `planStreams` 的 `codeVersion` 里
+      const streamMemberKey = cardSnapshotIdentity(node ?? {}, {
+        definition, style: this.project.style || {}, environment: value?.environment || {},
+        sourceVersions: value?.sourceVersions || {}, inputKeys: {},
+        fps: this.fps, sampling, duration: end - start,
+        stage: { width: this.project.width, height: this.project.height, camera3dFov: this.project.camera3dFov },
+        frame: output.frame, themeId: this.project.themeId,
+        fontFingerprint: value?.environment?.fontFingerprint || '', snapshotCode: '',
+      });
       /*
        * K1 / K2 的成本键(R5)。**必须在这里算** —— `cardCostKey` 要的是 graph 的**节点**
        * 和它的源码版本,两样都只在这一层拿得到(`adoptCardPlan` 收到的只是 controls)。
@@ -123,7 +134,7 @@ export class CardFrameCache {
       const costKey = cardCostKey(node ?? {}, (value?.sourceVersions || {})[node?.cardId] ?? null,
         this.fps, Math.max(1, Math.round((end - start) * this.fps)));
       // `costKey` 不乘指纹:成本记录另有设备口径(`device` 字段),键只认卡和源码版本
-      controls.push({ key, snapshotKey, contentKey, cacheContentKey, envFingerprint: fp, costKey, frameMode: caps.frameMode, tier: snapshotTier(caps), capabilities: caps,
+      controls.push({ key, snapshotKey, contentKey, streamMemberKey, cacheContentKey, envFingerprint: fp, costKey, frameMode: caps.frameMode, tier: snapshotTier(caps), capabilities: caps,
         clipId: output.clipId || node?.clipId, nodeId: output.nodeId, start, end, count, sampling, compositing, cacheable,
         needPrerendering: caps.need_prerendering === true || caps.needPrerendering === true || node?.need_prerendering === true || node?.needPrerendering === true, appearance });
     }

@@ -221,13 +221,21 @@ export function streamFilterThreads(cpus = typeof os.availableParallelism === 'f
   return Math.max(1, Math.min(8, Math.floor(Number(cpus)) || 1));
 }
 
-/** 一个分段的完整命令行(输出 fMP4 到 stdout) */
-export function streamSegmentArgs({ encoder = 'libx264', fps }) {
+/**
+ * 一个分段的完整命令行(输出 fMP4 到 stdout)。
+ *
+ * `raw: { width, height }`(画布直取,`./capture-canvas.mjs`):输入不是 PNG,是一帧接一帧的 straight RGBA 原始像素
+ * (`rawvideo`、`rgba`,每帧 `width × height × 4` 字节)。只换输入这一段,后面的滤镜链和编码参数一个字不变 ——
+ * PNG 解出来也是同一种 `rgba` 帧,同样的像素两种输入编出来逐字节相同(`server/test/stream-encode-raw.test.mjs`)。
+ */
+export function streamSegmentArgs({ encoder = 'libx264', fps, raw = null }) {
   const spec = STREAM_ENCODERS[encoder];
   if (!spec) throw new Error(`未知的轨道流编码器 ${encoder}`);
   if (!(Number(fps) > 0)) throw new Error('轨道流编码要帧率');
+  if (raw && !(Number.isInteger(raw.width) && Number.isInteger(raw.height) && raw.width > 0 && raw.height > 0)) throw new Error('原始像素输入要整数宽高');
+  const input = raw ? ['-f', 'rawvideo', '-pix_fmt', 'rgba', '-video_size', `${raw.width}x${raw.height}`] : ['-f', 'image2pipe', '-c:v', 'png'];
   return ['-y', '-hide_banner', '-loglevel', 'error', '-filter_complex_threads', String(streamFilterThreads()),
-    '-reinit_filter', '0', ...STREAM_INPUT_ARGS, '-f', 'image2pipe', '-c:v', 'png', '-framerate', String(fps), '-i', 'pipe:0',
+    '-reinit_filter', '0', ...STREAM_INPUT_ARGS, ...input, '-framerate', String(fps), '-i', 'pipe:0',
     '-filter_complex', streamFilter(spec.pixFmt),
     ...spec.args,
     '-color_range', 'tv', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
@@ -309,6 +317,22 @@ function takeSpare(ffmpeg, args) {
   return proc;
 }
 
+/**
+ * 原始像素输入的命令行带着宽高,每种矩形是自己的一种命令行:空等的进程会比 PNG 那一种(只按编码器和帧率分)多。
+ * 留最近的 `SPARE_MAX` 个,更早的收掉(`Map` 按放进去的先后排)。
+ */
+const SPARE_MAX = 3;
+function trimSpares() {
+  while (spareSegmentProcs.size > SPARE_MAX) {
+    const [key, entry] = spareSegmentProcs.entries().next().value;
+    spareSegmentProcs.delete(key);
+    clearTimeout(entry.timer);
+    entry.dead = true;
+    try { entry.proc.stdin.destroy(); } catch {}
+    try { entry.proc.kill(); } catch {}
+  }
+}
+
 /** 收掉全部空等的编码进程(测试和关停用) */
 export function dropStreamEncoderSpares() {
   for (const [key, entry] of spareSegmentProcs) {
@@ -349,12 +373,13 @@ export function endsWithCompleteMfra(buf) {
  * 喂进去几帧、ffmpeg 就该编出几帧 —— 对不上由切分那一侧按样本数判(G2「少一帧就重拍」)。
  *
  * `prewarm`(缺省看 `streamPrewarmEnabled`):优先领一个预先拉起的进程,并补拉下一个。
+ * `raw: { width, height }`:喂的是原始 RGBA 帧,`write` 每次给恰好一帧(见 `streamSegmentArgs`)。
  * `finish()` 在输出以完整的 `mfra` 收尾时就交字节,不等进程退出;没收尾而进程退出码非零,照旧报错。
  */
-export function openStreamSegmentEncoder(ffmpeg, { encoder = 'libx264', fps, prewarm = streamPrewarmEnabled() }) {
-  const args = streamSegmentArgs({ encoder, fps });
+export function openStreamSegmentEncoder(ffmpeg, { encoder = 'libx264', fps, prewarm = streamPrewarmEnabled(), raw = null }) {
+  const args = streamSegmentArgs({ encoder, fps, raw });
   const proc = (prewarm && takeSpare(ffmpeg, args)) || spawnSegmentProc(ffmpeg, args);
-  if (prewarm) setImmediate(() => parkSpare(ffmpeg, args));
+  if (prewarm) setImmediate(() => { parkSpare(ffmpeg, args); if (raw) trimSpares(); });
   const chunks = [];
   let stderr = '', inputError = null, written = 0, received = 0, onTrailer = null;
   const startedAt = Date.now();
