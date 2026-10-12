@@ -19,13 +19,15 @@ export const MISSING_MATERIAL_WAV = fileURLToPath(new URL("../../src/audio/asset
 function isConfirmedMissingAudio(media, project) {
   const state = media?.missingMaterial;
   if (media && media.kind !== "image" && state?.v === 1 && state.reason === "confirmed-missing"
-    && state.mediaId === media.id && state.audio === true && state.original?.kind === media.kind
-    && typeof state.original?.name === "string" && typeof state.original?.url === "string") return true;
+    && state.mediaId === media.id && state.audio === true && typeof state.visual === "boolean"
+    && state.original?.kind === media.kind && state.original?.name === media.name && state.original?.url === media.url
+    && state.original?.hash === media.hash) return true;
   const source = media?.soundOf ? project?.media?.find((item) => item.id === media.soundOf) : undefined;
   const sourceState = source?.missingMaterial;
   return source?.kind === "video" && sourceState?.v === 1 && sourceState.reason === "confirmed-missing"
-    && sourceState.mediaId === source.id && sourceState.audio === true && sourceState.original?.kind === "video"
-    && typeof sourceState.original?.name === "string" && typeof sourceState.original?.url === "string";
+    && sourceState.mediaId === source.id && sourceState.audio === true && typeof sourceState.visual === "boolean"
+    && sourceState.original?.kind === "video" && sourceState.original?.name === source.name && sourceState.original?.url === source.url
+    && sourceState.original?.hash === source.hash;
 }
 
 /** 导出时素材的 url 形如 /@export/<id>/media/<file>,真实文件在 outDir/media/<file> */

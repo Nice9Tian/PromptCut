@@ -201,7 +201,7 @@ test("buildComposeArgs:没有素材时就是灰底 + 卡片", () => {
 });
 
 test("buildComposeArgs:显式 confirmed-missing 走原框文字代理并保留淡化", () => {
-  const media = { ...project.media[0], missingMaterial: { v: 1, mediaId: "v1", original: { kind: "video", name: "采访.mp4", url: "/@media/a.mp4" }, reason: "confirmed-missing", visual: true, audio: true } };
+  const media = { ...project.media[0], kind: "video", name: "采访.mp4", url: "/@media/a.mp4", missingMaterial: { v: 1, mediaId: "v1", original: { kind: "video", name: "采访.mp4", url: "/@media/a.mp4" }, reason: "confirmed-missing", visual: true, audio: true } };
   const layers = [{ clip: { id: "lost", mediaId: "v1", start: 1, end: 3, opacity: .6, fadeIn: .5, fadeOut: .25,
     frame: { x: 12, y: 20, w: 640, h: 360, anchor: [0, 0], scale: 1, rotate: 0 } }, media, src: null, missingMaterial: true }];
   const { args, graph, notes, used, sidecars } = buildComposeArgs({ width: 1920, height: 1080, fps: 30, startFrame: 0, endFrame: 89, cardsPattern: "f/%06d.png", layers, out: "o.mp4", sidecarDir: "tmp", fontFile: "C:/Windows/Fonts/msyh.ttc" });
@@ -215,7 +215,7 @@ test("buildComposeArgs:显式 confirmed-missing 走原框文字代理并保留�
 });
 
 test("buildComposeArgs:缺少显式字体时不静默省略 confirmed-missing 文字代理", () => {
-  const media = { ...project.media[0], missingMaterial: { v: 1, mediaId: "v1", original: { kind: "video", name: "lost.mp4", url: "/@media/a.mp4" }, reason: "confirmed-missing", visual: true, audio: true } };
+  const media = { ...project.media[0], kind: "video", name: "lost.mp4", url: "/@media/a.mp4", missingMaterial: { v: 1, mediaId: "v1", original: { kind: "video", name: "lost.mp4", url: "/@media/a.mp4" }, reason: "confirmed-missing", visual: true, audio: true } };
   const layers = [{ clip: { id: "lost", mediaId: "v1", start: 0, end: 1, frame: { x: 0, y: 0, w: 640, h: 360, anchor: [0, 0], scale: 1, rotate: 0 } }, media, src: null, missingMaterial: true }];
   assert.throws(() => buildComposeArgs({ width: 1920, height: 1080, fps: 30, startFrame: 0, endFrame: 29, cardsPattern: "f/%06d.png", layers, out: "o.mp4" }), /需要显式中文字体文件/);
 });

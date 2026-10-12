@@ -9,19 +9,20 @@ export const MISSING_MATERIAL_WAV_SECONDS = 1.37;
 export function confirmedMissing(media: MediaAsset | undefined): boolean {
   const state = media?.missingMaterial;
   return !!media && state?.v === 1 && state.reason === "confirmed-missing" && state.mediaId === media.id
-    && state.original?.kind === media.kind && typeof state.original.name === "string"
-    && typeof state.original.url === "string";
+    && state.original?.kind === media.kind && state.original.name === media.name
+    && state.original.url === media.url && state.original.hash === media.hash
+    && typeof state.visual === "boolean" && typeof state.audio === "boolean";
 }
 
 export function confirmedMissingVisual(media: MediaAsset | undefined): boolean {
-  return confirmedMissing(media) && media!.missingMaterial!.visual;
+  return confirmedMissing(media) && media!.missingMaterial!.visual === true;
 }
 
 export function confirmedMissingAudio(media: MediaAsset | undefined, project?: Project): boolean {
-  if (confirmedMissing(media) && media!.missingMaterial!.audio && media!.kind !== "image") return true;
+  if (confirmedMissing(media) && media!.missingMaterial!.audio === true && media!.kind !== "image") return true;
   if (!media?.soundOf || !project) return false;
   const source = project.media.find((item) => item.id === media.soundOf);
-  return confirmedMissing(source) && source!.kind === "video" && source!.missingMaterial!.audio;
+  return confirmedMissing(source) && source!.kind === "video" && source!.missingMaterial!.audio === true;
 }
 
 export function missingMaterialLabel(media: MediaAsset): string {

@@ -10,7 +10,7 @@ import { drawPixelMap } from "./pixelMapGl";
 import { graphVisualNode } from "./cards/GraphCard";
 import { cardMountedAt } from "./frameWindow.mjs";
 import { VideoTrack } from "./VideoTrack";
-import { driveMedia, releaseMedia, targetTimeOf } from "./mediaDrive";
+import { driveMedia, filterOf, releaseMedia, targetTimeOf } from "./mediaDrive";
 import { playbackUrl } from "./mediaTier";
 import { confirmedMissingVisual, missingMaterialLabel } from "../audio/missingMaterial";
 import { MissingMaterial } from "./MissingMaterial";
@@ -254,7 +254,7 @@ export function FrameScene({
           localHashes={hashes}
         />
       ) : null}
-      {live ? layers.filter((l) => l.trackId === tr.id && !graphVisualNode(graph, l.clip.nodeId) && !replaced(l.clip.id)
+      {live ? layers.filter((l) => l.trackId === tr.id && !graphVisualNode(graph, l.clip.nodeId) && !replaced(l.clip.id) && !confirmedMissingVisual(l.media)
         && !!(l.clip.pixelMap && project.pixelMaps?.some((x) => x.id === l.clip.pixelMap!.id))).map(({ clip, media, opacity }) => {
         const def = project.pixelMaps!.find((x) => x.id === clip.pixelMap!.id)!;
         const ops = project.filters?.length ? clipFilterOpsAt(project, clip, mediaT) : null;
@@ -285,8 +285,9 @@ export function FrameScene({
         const media = clip.mediaId ? project.media.find((item) => item.id === clip.mediaId) : undefined;
         if (media && confirmedMissingVisual(media)) {
           if (live && !takenByOther(clip)) return null; // The live VideoTrack owns ordinary visual media layers.
+          const sceneTime = live ? mediaT : t;
           return <div key={clip.id} data-pc-clip={clip.id} data-pc-media="" data-pc-confirmed-missing="1"
-            style={{ ...layerStyle, ...frameCss(clip.frame, project), opacity: opacityAt(clip, directT), pointerEvents: "none" }}>
+            style={{ ...layerStyle, ...frameCss(clip.frame, project), opacity: opacityAt(clip, sceneTime), filter: filterOf(clip, project.filters, sceneTime), pointerEvents: "none" }}>
             <MissingMaterial name={missingMaterialLabel(media)} />
           </div>;
         }
