@@ -212,6 +212,101 @@ test("setSnapshotArrive:投递时缺的那一帧取到之后叫一次重投(在�
   setSnapshotArrive(null);
 });
 
+/** 等真定时器(被节流挡掉之后约的那次补投用的是真 `setTimeout`,至多一个节流窗口) */
+const realWait = (ms = SNAPSHOT_THROTTLE_MS + 40) => new Promise((r) => setTimeout(r, ms));
+
+test("停着时(暂停、手按着标尺不动)字节在节流窗口里到货:到货的那次补投被挡掉,过了窗口会再叫一次宿主重投", async () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  src.push(layer("h", [[0, 100]]));
+  const stage = fakeStage();
+  const head = { project: p, t: 1, playing: false };
+  let arrived = 0;
+  setSnapshotArrive(() => { arrived++; void deliverSnapshots(stage, "front", head); });
+  // 发 setTime:这一帧的字节手里没有,当场去取;节流窗口从这一刻起算
+  assert.deepEqual(pickForSetTime(head), { snapshots: {}, awaiting: ["h"] });
+  await settle();
+  assert.equal(arrived, 1, "字节到了(时钟没动,还在窗口里)");
+  assert.equal(stage.calls.length, 0, "节流内不发");
+  // 窗口过了,没有任何别的事件:以前这一层就一直贴不上
+  now += SNAPSHOT_THROTTLE_MS;
+  await realWait();
+  assert.equal(arrived, 2, "过了窗口叫了一次宿主重投");
+  assert.deepEqual(stage.calls, [{ patch: { h: "html:html/k-h/30" }, opts: {} }]);
+  // 投上了就不再约
+  await realWait();
+  assert.equal(arrived, 2);
+  assert.equal(stage.calls.length, 1);
+  setSnapshotArrive(null);
+});
+
+test("约的那次补投到点时窗口又被新的 setTime 推后了:再约一次,直到投上", async () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  src.push(layer("h", [[0, 100]]));
+  const stage = fakeStage();
+  const head = { project: p, t: 1, playing: false };
+  let arrived = 0;
+  setSnapshotArrive(() => { arrived++; void deliverSnapshots(stage, "front", head); });
+  pickForSetTime(head);
+  await settle();
+  assert.equal(stage.calls.length, 0);
+  // 时钟不动:到点的那次重投仍在窗口里,又被挡掉
+  await realWait();
+  assert.ok(arrived >= 2, "到点叫过宿主");
+  assert.equal(stage.calls.length, 0, "窗口没过:还是不发");
+  now += SNAPSHOT_THROTTLE_MS;
+  await realWait();
+  assert.equal(stage.calls.length, 1, "窗口过了之后的那一次投上了");
+  setSnapshotArrive(null);
+});
+
+test("播放中被节流挡掉的不约补投(下一拍自己会投);停着但没有东西要换的也不约", async () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  src.push(layer("h", [[0, 100]]));
+  const stage = fakeStage();
+  let arrived = 0;
+  const playing = { project: p, t: 1, playing: true };
+  await deliverSnapshots(stage, "front", playing);
+  await settle();
+  assert.equal(await deliverSnapshots(stage, "front", playing), 1);
+  setSnapshotArrive(() => { arrived++; });
+  // 播放中:有东西要换(不再判重 → 摘掉),被节流挡掉,不约
+  plan = heavyEverywhere();
+  assert.equal(await deliverSnapshots(stage, "front", playing), 0, "节流内不发");
+  await realWait();
+  assert.equal(arrived, 0, "播放中不约补投");
+  // 停着:没有东西要换,被节流挡掉也不约
+  plan = heavyEverywhere("h");
+  assert.equal(await deliverSnapshots(stage, "front", { ...playing, playing: false }), 0);
+  await realWait();
+  assert.equal(arrived, 0, "没有东西要换:不约");
+  setSnapshotArrive(null);
+});
+
+test("停着时一包 2 MB 装不下的那几张:没有下一拍,同样约补投,直到都投完", async () => {
+  const ids = ["a", "b", "c"];
+  plan = heavyEverywhere(...ids);
+  const big = "x".repeat(Math.ceil(SNAPSHOT_DELIVERY_MAX_BYTES * 0.6));
+  for (const id of ids) {
+    src.push(layer(id, [[0, 100]]));
+    src.bodies.set(`html/k-${id}/30`, big);
+  }
+  const stage = fakeStage();
+  const head = { project: project(ids.map((id) => card(id, 0, 10))), t: 1, playing: false };
+  await deliverSnapshots(stage, "front", head);   // 发起取字节
+  await settle();
+  // 宿主的重投:每次到点时钟都已经过了窗口
+  setSnapshotArrive(() => { now += SNAPSHOT_THROTTLE_MS; void deliverSnapshots(stage, "front", head); });
+  now += SNAPSHOT_THROTTLE_MS;
+  assert.equal(await deliverSnapshots(stage, "front", head), 1);
+  assert.deepEqual(stage.calls.map((c) => Object.keys(c.patch)), [["a"]], "第一包只装得下一张");
+  await realWait(3 * SNAPSHOT_THROTTLE_MS + 120);
+  assert.deepEqual(stage.calls.map((c) => Object.keys(c.patch)), [["a"], ["b"], ["c"]], "剩下的两张靠约的补投投完");
+  setSnapshotArrive(null);
+});
+
 test("deliverSnapshots:reset 不受节流,带 reset 并把该挂的整份重投", async () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
