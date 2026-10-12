@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createProject, join, adminOp, ask, members, sleep } from './auth-kit.mjs';
-import { serviceHostFor, openControl, openData } from './hosted-render-kit.mjs';
+import { serviceHostFor, openControl, openData, watchDirectory } from './hosted-render-kit.mjs';
 import { hostedStateOf, hostedOptionEnabled, HOSTED_OPTIONS } from '../auth/service-identity.mjs';
 
 const OPTION = (over = {}) => ({ service: 'render', option: 'streams', enabled: false, ...over });
@@ -190,4 +190,18 @@ test('HS9 向后兼容：新的通知是新的事件名，旧页面按事件名�
   await adminOp(creator, proj, 'set-hosted-service', { service: 'render', enabled: false });
   assert.deepEqual(await member.next((m) => m.type === 'shared.notice' && m.event === 'hosted-service-changed', 3000),
     { type: 'shared.notice', event: 'hosted-service-changed', service: 'render', enabled: false }, '旧通知不带 option，形状不变');
+});
+
+test('HS10 目录条目：渲染服务订阅的 hosted.project 里 hosted.render 同样带 streams，改选项后推一条新的；渲染服务这一侧不因此被关或被通知', async (t) => {
+  const { proj, creator, control, data } = await setup(t);
+  const projects = await watchDirectory(control);
+  const entry = projects.find((p) => p.projectId === proj.projectId);
+  assert.deepEqual(entry.hosted.render, { available: true, enabled: true, streams: true }, '完整清单里的条目');
+
+  assert.equal((await adminOp(creator, proj, 'set-hosted-option', OPTION())).type, 'shared.admin.ok');
+  const pushed = await control.next((m) => m.type === 'hosted.project' && m.projectId === proj.projectId && m.hosted?.render?.streams === false, 3000);
+  assert.deepEqual(pushed.hosted.render, { available: true, enabled: true, streams: false });
+  assert.equal(pushed.enabled, true, '条目的 enabled 是渲染节点的开关，不受 streams 影响');
+  const dataState = await Promise.race([data.closed.then(() => 'closed'), sleep(300).then(() => 'open')]);
+  assert.equal(dataState, 'open', '数据连接没被关');
 });
