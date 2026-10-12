@@ -19,7 +19,7 @@ await fs.mkdir(isolatedMedia, { recursive: true });
 const name = `frame-verification-${Date.now()}.webm`;
 const media = path.join(isolatedMedia, name);
 const ffmpeg = await findFfmpeg();
-execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=10:d=2', '-c:v', 'libvpx-vp9', '-y', media]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=10:d=2', '-c:v', 'libvpx-vp9', '-y', media], { windowsHide: true });
 const project = { id: 'verification', width: 320, height: 180, fps: 10, duration: 1, media: [{ id: 'video', kind: 'video', name, url: '/@media/' + name }], tracks: [
   { id: 'top', clips: [{ id: 'card', cardId: 'punch-pill', start: 0, end: 1, params: { text: 'Unified' } }] },
   { id: 'bottom', clips: [{ id: 'v1', mediaId: 'video', start: 0, end: 1, mediaOffset: .4, params: {} }] },
