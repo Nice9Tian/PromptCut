@@ -209,7 +209,7 @@ export function newDirectRecord() {
     segments: 0, frames: 0, slowSegments: 0, checks: 0, misses: 0,
     /** 累计耗时(毫秒):页面里读像素、压和搬到 Node、实测(那一张截图加解码加比对) */
     readMs: 0, moveMs: 0, checkMs: 0,
-    /** 最近一次实测的结果 `{ frame, pass, reason, color, alpha, bad, badLimit, grabMs, shotMs }` */
+    /** 最近一次实测的结果 `{ frame, pass, reason, color, alpha, bad, badLimit, bytes, grabMs, shotMs }`(`bytes`:搬了多少字节) */
     last: null,
   };
 }
@@ -267,7 +267,7 @@ export function directSegmentCapture(bakery, { clipId, rect, record, stride = 1,
       }
     }
     record.checkMs += performance.now() - started;
-    record.last = { frame, ...verdict };
+    record.last = { frame, ...verdict, bytes: got.bytes };
     if (!verdict.pass) {
       mode = 'shot';
       // 这一帧碰巧取不到(平面的帧号对不上、卡还没挂上)只让这个分段走截图;比出差别、画布认不出来的,这条流从此走截图

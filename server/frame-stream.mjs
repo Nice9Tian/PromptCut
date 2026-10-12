@@ -674,7 +674,7 @@ export class StreamProducer {
         firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
         bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
         replay: state.spec.replay !== false, replayedFrames: state.replayedFrames ?? 0,
-        direct: state.direct ? { ...state.direct } : null,
+        direct: state.direct ? { ...state.direct } : null, capture: state.capture ? { ...state.capture } : null,
         segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs }])),
         inits: Object.keys(state.manifest?.inits ?? {}),
       })),
@@ -1127,6 +1127,9 @@ export class StreamProducer {
         },
       });
       if (result.reset) this.stats.bakeStreamResets = (this.stats.bakeStreamResets ?? 0) + 1;
+      // 这条流取图那一段的累计(诊断:`status()` 每条流的 `capture`;取了几帧、取图和推帧各花多少毫秒)
+      const taken = state.capture ||= { frames: 0, captureMs: 0, stepMs: 0 };
+      taken.frames += result.captured; taken.captureMs += result.captureMs; taken.stepMs += result.stepMs;
       // 回放过的帧数(`bakeStream` 的 `replayed`):不回放的流恒为 0,探针读 `status()` 核对
       this.stats.replayedFrames = (this.stats.replayedFrames ?? 0) + (result.replayed ?? 0);
       state.replayedFrames = (state.replayedFrames ?? 0) + (result.replayed ?? 0);
