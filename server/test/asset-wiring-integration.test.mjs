@@ -15,15 +15,15 @@ import { StreamStore } from '../asset-store/stream-store.mjs';
 import { publicationMarker } from '../asset-store/project-io.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 
-const providerDir = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? 'C:/Users/admin/Documents/VisuHive/.worktrees/018-account-foundation';
-const available = fs.existsSync(path.join(providerDir, 'account/internal.mjs'));
+const providerDir = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? '';
+const available = Boolean(providerDir) && fs.existsSync(path.join(providerDir, 'account/internal.mjs'));
 const close = server => new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve); });
 const waitFor = async (check, label, ms = 10000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 25)); } throw Error(`timeout: ${label}`); };
 const web = async (origin, method, route, body, token) => { const res = await fetch(origin + route, { method, signal: AbortSignal.timeout(5000),
   headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { status: res.status, body: await res.json() }; };
 const wav = () => { const b = Buffer.alloc(44 + 4800 * 2); b.write('RIFF'); b.writeUInt32LE(b.length - 8, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(48000, 24); b.writeUInt32LE(96000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(b.length - 44, 40); for (let i = 0; i < 4800; i++) b.writeInt16LE(Math.round(Math.sin(i * 2 * Math.PI * 440 / 48000) * 16000), 44 + i * 2); return b; };
 
-test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全读写隔离、PCM/stream/thumb与重启', { skip: !available && 'frozen account provider unavailable', timeout: 60000 }, async t => {
+test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全读写隔离、PCM/stream/thumb与重启', { skip: !available && 'account provider unavailable; set PROMPTCUT_ACCOUNT_PROVIDER_ROOT (VisuHive repo root) and PROMPTCUT_PASSWORD_ORDER_MODULE', timeout: 60000 }, async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pc-asset-wire-real-'));
   let accountServer, combo, provider, proxy, child, childClosed, stdout = '', stderr = '';
   const children = [];

@@ -176,7 +176,7 @@ function sampleTcpLinux(rootPid) {
       for (const p of procs) if (ids.has(p.ppid) && !ids.has(p.pid) && p.start >= (born.get(p.ppid) ?? 0)) { ids.add(p.pid); added = true; }
     }
     const names = new Map(procs.filter((p) => ids.has(p.pid)).map((p) => [p.pid, p.name]));
-    execFile('ss', ['-tanpH'], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+    execFile('ss', ['-tanpH'], { windowsHide: true, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
       if (error && !stdout) return resolve({ error: `ss: ${String(error.message ?? error).slice(0, 160)}` });
       const conns = [];
       const split = (a) => { const i = a.lastIndexOf(':'); return [a.slice(0, i).replace(/^\[|\]$/g, '').replace(/^::ffff:/, '').replace(/%.*$/, ''), Number(a.slice(i + 1))]; };

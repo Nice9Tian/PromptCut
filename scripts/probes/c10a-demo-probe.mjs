@@ -128,7 +128,7 @@ function pidOnPort(port) {
     }
     return null;
   }
-  const r = spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' });
+  const r = spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { windowsHide: true, encoding: 'utf8' });
   return Number(r.stdout.trim().split(/\s+/)[0]) || null;
 }
 

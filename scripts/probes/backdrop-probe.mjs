@@ -76,7 +76,7 @@ fs.writeFileSync(bmpPath, stripesBmp(W, H));
 execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-loop', '1', '-i', bmpPath, '-t', '2', '-r', '30',
   '-c:v', 'libx264', '-profile:v', 'high', '-level', '4.0', '-pix_fmt', 'yuv420p',
   '-vf', 'scale=in_range=full:out_range=full', '-color_range', 'pc', '-g', '30', '-movflags', '+faststart',
-  mp4Path]);
+  mp4Path], { windowsHide: true });
 const mp4 = fs.readFileSync(mp4Path);
 
 // ── page fragments ───────────────────────────────────────────────────────────

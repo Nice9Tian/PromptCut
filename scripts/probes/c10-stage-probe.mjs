@@ -74,7 +74,7 @@ function cpuPct(a, b) {
 }
 function winLoad() {
   try {
-    return Number(execFileSync('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average'], { encoding: 'utf8', timeout: 20000 }).trim());
+    return Number(execFileSync('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average'], { windowsHide: true, encoding: 'utf8', timeout: 20000 }).trim());
   } catch { return null; }
 }
 function stats(xs) {
@@ -703,7 +703,7 @@ parent.postMessage({ kind: 'ready', role: 'bg', origin: location.origin }, '*');
 async function startHosted(dataDir, noTrust) {
   const env = { ...process.env, PROMPTCUT_DATA_DIR: dataDir, PROMPTCUT_DOCSERVICE_PORT: String(PORT.doc), PROMPTCUT_ASSET_PORT: String(PORT.asset), PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1' };
   if (noTrust) env.PROMPTCUT_TEST_NO_LOOPBACK_TRUST = '1';
-  const child = spawn(process.execPath, [path.join(ROOT, 'server/hosted/main.mjs')], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(ROOT, 'server/hosted/main.mjs')], { windowsHide: true, cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = [];
   child.stdout.on('data', (d) => lines.push(String(d))); child.stderr.on('data', (d) => lines.push(String(d)));
   const t0 = Date.now();
@@ -718,7 +718,7 @@ async function startHosted(dataDir, noTrust) {
 async function runP4() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c10p4-'));
   const mp4 = path.join(OUT, 'p4.mp4');
-  if (!fs.existsSync(mp4)) execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=30:duration=2', '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-movflags', '+faststart', mp4]);
+  if (!fs.existsSync(mp4)) execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=30:duration=2', '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-movflags', '+faststart', mp4], { windowsHide: true });
   const png = fs.readFileSync(path.join(ROOT, 'desktop/src-tauri/icons/128x128.png'));
   const file = path.join(OUT, `p4-${Date.now()}.json`);
   const result = { dataDir, rows: [] };

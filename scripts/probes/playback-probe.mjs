@@ -77,7 +77,7 @@ async function startServer() {
   const viteBin = path.join(path.dirname(createRequire(import.meta.url).resolve('vite/package.json')), 'bin', 'vite.js');
   const proc = spawn(process.execPath,
     [viteBin, '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
-    { cwd: path.resolve(import.meta.dirname, '../..'), env: { ...process.env, PROMPTCUT_DATA_DIR: dataDir }, stdio: ['ignore', 'pipe', 'pipe'] });
+    { windowsHide: true, cwd: path.resolve(import.meta.dirname, '../..'), env: { ...process.env, PROMPTCUT_DATA_DIR: dataDir }, stdio: ['ignore', 'pipe', 'pipe'] });
   const log = [];
   proc.stdout.on('data', (b) => log.push(String(b)));
   proc.stderr.on('data', (b) => log.push(String(b)));
@@ -96,7 +96,7 @@ async function stopServer() {
   if (!server) return;
   server.kill();
   if (process.platform === 'win32') {
-    await new Promise((r) => spawn('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' }).on('close', r));
+    await new Promise((r) => spawn('taskkill', ['/pid', String(server.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('close', r));
   }
   server = null;
 }

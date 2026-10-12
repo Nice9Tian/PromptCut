@@ -39,7 +39,7 @@ const pageUrl = `http://127.0.0.1:${PORT}/?export=1&timeline=${encodeURIComponen
 
 const vite = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx',
   ['vite', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'],
-  { cwd: ROOT, env: { ...process.env, TEMP: tmp, TMP: tmp }, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+  { windowsHide: true, cwd: ROOT, env: { ...process.env, TEMP: tmp, TMP: tmp }, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
 let viteLog = '';
 vite.stdout.on('data', (d) => { viteLog += d; });
 vite.stderr.on('data', (d) => { viteLog += d; });
@@ -178,6 +178,6 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   vite.kill();
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(vite.pid), '/T', '/F'], { stdio: 'ignore' });
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(vite.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
   setTimeout(() => process.exit(0), 1500).unref();
 }

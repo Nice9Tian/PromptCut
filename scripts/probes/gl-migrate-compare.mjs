@@ -41,7 +41,7 @@ for (const tree of [ROOT, baseTree].filter(Boolean)) {
   const file = path.join(dir, texName);
   if (fs.existsSync(file)) continue;
   const r = spawnSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=256x256:rate=1', '-frames:v', '1',
-    '-vf', 'format=rgba,geq=r=r(X\\,Y):g=g(X\\,Y):b=b(X\\,Y):a=if(lt(hypot(X-128\\,Y-128)\\,110)\\,255\\,0)', file], { encoding: 'utf8' });
+    '-vf', 'format=rgba,geq=r=r(X\\,Y):g=g(X\\,Y):b=b(X\\,Y):a=if(lt(hypot(X-128\\,Y-128)\\,110)\\,255\\,0)', file], { windowsHide: true, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`ffmpeg 贴图失败:${r.stderr}`);
 }
 
