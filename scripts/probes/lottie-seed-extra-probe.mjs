@@ -20,7 +20,7 @@
  *   nested        合成嵌套三层、每层各放几份,最里面带 random 和 wiggle;另核各份是不是各动各的
  *   netfont       带网络字体(探针把本机一个字体文件当网络字体发出去)的文字图层,装载是异步的;找不到字体文件就记「没跑」
  * 另外:
- *   build         生产构建(vite build,缺省的压缩):同一段页面代码打包后再跑一遍 fixture、exprcases、textrandom、nested、happy2016,
+ *   build         生产构建(vite build,缺省的压缩):同一段页面代码打包后再跑一遍 fixture、exprcases、textrandom、nested、textexpr、globalbypass、happy2016,
  *                 六份画面相同,并且和开发构建取到的画面相同;页面没有 `[lottie]` 警告(几处靠播放库内部名字的钩子都包上了)
  *   big           大素材上复制合成的耗时和内存(只记录):一个 150 层、层层带随机表达式的合成放 30 份
  *   timing        当场算一帧要多久(只记录):5 个自带素材,跳一帧的同步耗时,和「跳一帧并等浏览器出一帧」的耗时;主线程不放慢、放慢 4 倍各量一遍
@@ -455,7 +455,7 @@ try {
     if (!minified) fail('生产构建:入口没有被压缩(行数太多),没测到压缩后的代码');
     const p0 = await openProd(); section.switches = await call(p0, 'switches'); await p0.close();
     if (!(section.switches.seed === false && section.switches.exact === true && section.switches.expr === true)) fail(`生产构建:缺省的开关应当是 关/开/开,读到 ${JSON.stringify(section.switches)}`);
-    const list = [['fixture', fixtureText('fixture'), [0, 9, 21, 41, 59]], ['exprcases', fixtureText('exprcases'), [0, 18, 30, 37, 59]], ['textrandom', fixtureText('textrandom'), [0, 15, 31, 40, 45]], ['nested', JSON.stringify(nested()), [0, 13, 30, 59]], ['happy2016', fixtureText('happy2016'), [0, 49, 68, 98]]];
+    const list = [['fixture', fixtureText('fixture'), [0, 9, 21, 41, 59]], ['exprcases', fixtureText('exprcases'), [0, 18, 30, 37, 59]], ['textrandom', fixtureText('textrandom'), [0, 15, 31, 40, 45]], ['nested', JSON.stringify(nested()), [0, 13, 30, 59]], ['textexpr', JSON.stringify(textexpr()), [0, 14, 20, 40, 45]], ['globalbypass', JSON.stringify(globalbypass()), [0, 1, 25, 59]], ['happy2016', fixtureText('happy2016'), [0, 49, 68, 98]]];
     for (const [name, text, picks] of list) {
       const prod = await sixWay(openProd, text, picks, false);
       // 开发构建同样的帧:新开页面直接跳
