@@ -3,7 +3,7 @@
  * 「生成轨道流」(项目记录 `hosted.render.streams`,缺省关)定;在线页面发的清单计划连切分方自己的那一份流一起出。
  *
  *   HRS-01  管理进程给工作进程的清单:每一项的 `streams` = 渲染节点开着并且这一项显式开着(`broker.mjs` 的 `selectProjects`)
- *   HRS-02  工作进程一侧问「这个项目产不产流」(`project-streams.mjs`):没问到过按不产;过期了后台再问;问不到按手里的
+ *   HRS-02  工作进程一侧问「这个项目产不产流」(`project-streams.mjs`):没问到过、过期了按不产;每次被问顺手更新
  *   HRS-03  `listPlanOverrides`:`ownListStreams` 为真才出切分方自己的那一份,而且只给单卡流;不为真照旧只给浏览器
  *   HRS-04  local-node 切清单计划:自己的一份与浏览器的一份成对(`dual`),自己那一份要本机转码
  *   HRS-05  local-node 的认领闸:执行器说不接(`accepts`)的流任务不认领,快照任务照常;没有 `accepts` 的执行器行为不变
@@ -68,46 +68,65 @@ function fakeBroker() {
 }
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 
-test('HRS-02 工作进程问「产不产流」:没问到过按不产;问到之后照清单;过期了后台再问;问不到按手里的;口令只进请求头', async () => {
+test('HRS-02 工作进程问「产不产流」:没问到过、过期了都按不产;每次被问顺手更新;问不到时手里没过期的照用;口令只进请求头', async () => {
   const { state, fetch } = fakeBroker();
   let t = 1000;
-  const ps = createProjectStreams({ url: 'http://127.0.0.1:5399/', key: 'k-secret', fetch, now: () => t, maxAgeMs: 1000 });
+  const ps = createProjectStreams({ url: 'http://127.0.0.1:5399/', key: 'k-secret', fetch, now: () => t, refreshAfterMs: 300, maxAgeMs: 1200 });
   state.projects = [{ projectId: 'sp_on', streams: true }, { projectId: 'sp_off', streams: false }, { projectId: 'sp_old' }];
-  assert.equal(ps.allowed('sp_on'), false, '从没问到过:不产(同步的这一次按手里的答)');
+  assert.equal(ps.allowed('sp_on'), false, '从没问到过:不认领');
   assert.equal(state.calls, 1, '顺手在后台问了一次');
   await turn(); await turn();
-  assert.equal(ps.allowed('sp_on'), true);
+  assert.equal(ps.allowed('sp_on'), true, '下一拍:照问到的清单');
   assert.equal(ps.allowed('sp_off'), false);
   assert.equal(ps.allowed('sp_old'), false, '清单里没带这一项:不产');
   assert.equal(ps.allowed('sp_unknown'), false, '清单里没有这个项目:不产');
-  assert.equal(state.calls, 1, '没过期不再问');
+  assert.equal(state.calls, 1, '刚问到的不重复问');
   assert.deepEqual(state.auth[0], ['http://127.0.0.1:5399/projects', 'Bearer k-secret']);
 
-  // 创建者关掉这一项:目录推给管理进程,清单变了;过期后这一次仍按手里的答,后台问到新的,下一次就是 false
+  // 认领闸每一拍(500 ms)问一次:每一拍答的是上一拍问到的,同时再问一次
+  // 创建者在这两拍之间关掉这一项:这一拍还按上一拍的答(最多晚一拍),下一拍就是 false
+  t += 500;
   state.projects = [{ projectId: 'sp_on', streams: false }];
-  t += 1000;
-  assert.equal(ps.allowed('sp_on'), true, '这一拍按手里的');
+  assert.equal(ps.allowed('sp_on'), true, '这一拍按上一拍问到的');
+  assert.equal(state.calls, 2, '同时再问一次');
   await turn(); await turn();
+  t += 500;
   assert.equal(ps.allowed('sp_on'), false, '下一拍生效');
-  assert.equal(state.calls, 2);
+  await turn(); await turn();
 
-  // fresh:过期了先问到新的再答
+  // 手里占满、一阵子没问过:清单过期,腾出手来的第一拍不认领(哪怕上一次问到的是开着),先问到新的
   state.projects = [{ projectId: 'sp_on', streams: true }];
-  t += 1000;
-  assert.equal(await ps.fresh('sp_on'), true);
-  assert.equal(state.calls, 3);
-  assert.equal(await ps.fresh('sp_on'), true);
-  assert.equal(state.calls, 3, '没过期不重复问');
+  t += 500;
+  ps.allowed('sp_on');
+  await turn(); await turn();
+  assert.equal(ps.allowed('sp_on'), true);
+  state.projects = [{ projectId: 'sp_on', streams: false }];
+  t += 5000;
+  assert.equal(ps.allowed('sp_on'), false, '过期的清单不作数:这一拍不认领');
+  await turn(); await turn();
+  assert.equal(ps.allowed('sp_on'), false, '问到新的:确实关了');
 
-  // 问不到(管理进程不在):按手里的答,不抛
+  // fresh:先问到新的再答
+  state.projects = [{ projectId: 'sp_on', streams: true }];
+  t += 500;
+  const before = state.calls;
+  assert.equal(await ps.fresh('sp_on'), true);
+  assert.equal(state.calls, before + 1);
+  assert.equal(await ps.fresh('sp_on'), true);
+  assert.equal(state.calls, before + 1, '刚问到的不重复问');
+
+  // 问不到(管理进程不在):手里的还没过期就照用,不抛;过期了答 false
   state.fail = true;
-  t += 1000;
+  t += 500;
   assert.equal(await ps.fresh('sp_on'), true);
   assert.equal(ps.status().lastError, 'ECONNREFUSED');
-  // 被拒(口令不对):同样按手里的
-  state.fail = false; state.status = 401;
   t += 1000;
-  assert.equal(await ps.fresh('sp_on'), true);
+  assert.equal(await ps.fresh('sp_on'), false, '问不到、手里的又过期了:不产');
+  assert.equal(ps.allowed('sp_on'), false);
+  await turn(); await turn();
+  // 被拒(口令不对):同样
+  state.fail = false; state.status = 401;
+  assert.equal(await ps.fresh('sp_on'), false);
   assert.equal(ps.status().lastError, 'unauthorized');
   assert.equal(JSON.stringify(ps.status()).includes('k-secret'), false, '诊断里没有口令');
 
@@ -116,12 +135,12 @@ test('HRS-02 工作进程问「产不产流」:没问到过按不产;问到之�
   let release;
   state.hold = new Promise((resolve) => { release = resolve; });
   t += 1000;
-  const before = state.calls;
+  const n = state.calls;
   ps.allowed('sp_on'); ps.allowed('sp_on');
   const waiting = ps.fresh('sp_on');
-  assert.equal(state.calls, before + 1);
+  assert.equal(state.calls, n + 1);
   release(); state.hold = null;
-  await waiting;
+  assert.equal(await waiting, true);
 });
 
 test('HRS-02 不是托管方渲染服务的工作进程(没有代理口的环境变量):没有这道闸', () => {
@@ -362,6 +381,14 @@ test('HRS-06 执行器 plan:清单计划里切分方自己的那一份,托管方
   assert.equal((await exec.plan(list)).ownListStreams, false);
   table.p1 = true;
   assert.equal((await exec.plan(list)).ownListStreams, true);
+  // 这一版的 entry 上记着「这个项目此刻不产流」(本机写层表时不列自己这一版的流);桌面不按项目管,不写这个记号
+  assert.equal(f.entry.ownStreamsOff, false);
+  table.p1 = false;
+  await exec.plan(list);
+  assert.equal(f.entry.ownStreamsOff, true);
+  const d = fakePipeline({ ownListStreams: true });
+  await createPrerenderExecutor({ pipeline: d.pipeline, projects: projectsOf(d.entry), projectStreams: null }).plan(list);
+  assert.equal('ownStreamsOff' in d.entry, false);
   // 这道闸接到 listPlanOverrides 上:关着 → 只给浏览器
   table.p1 = false;
   assert.ok(listPlanOverrides(list, await exec.plan(list)).streams.every((s) => s.browserOnly === true));

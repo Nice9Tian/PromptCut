@@ -353,6 +353,23 @@ test('切分方流开着、没有另列的流:层表与只按本机流计划写�
   });
 });
 
+test('这一版所属的项目此刻不产流(托管方按项目的「生成轨道流」,entry.ownStreamsOff):不列本机自己这一版的流;派过的照候选记录列', async () => {
+  await withPipeline('on', async ({ pipeline }) => {
+    const entry = pipelineEntry({ base: ['clip-a', 'clip-b'] });
+    assert.deepEqual(pipeline.layerMapStreamOptions(entry).streams.map((s) => s.topClipId).sort(), ['clip-a', 'clip-b'], '照旧:本机判重的卡的流都列');
+    entry.ownStreamsOff = true;
+    assert.deepEqual(pipeline.layerMapStreamOptions(entry), {}, '这一项关着、也没人被派过:层表不带 streams');
+    // clip-a 的单卡流以前派过(开着的时候产的,或者给浏览器的):照记录列,候选只有记录里的指纹
+    const [a] = planStreams({ ...entry, cardPlan: entry.cardPlan.filter((c) => c.clipId === 'clip-a') }, { budget: Infinity, codeVersion: STREAM_CODE, envFingerprint: PIPE_FP });
+    pipeline.recordSplitCandidates(new Map([[streamCandidateKey(a.contentKey), [PIPE_FP]]]));
+    const off = pipeline.layerMapStreamOptions(entry);
+    assert.deepEqual(off.streams.map((s) => [s.topClipId, s.ownCandidate]), [['clip-a', false]], '已经产出的保留在层表里;没派过的 clip-b 不列');
+    assert.deepEqual(layerStreamsOf(entry, { streams: off.streams, fingerprint: PIPE_FP, candidatesOf: off.streamCandidatesOf })[0].candidates.map((c) => c.envFingerprint), [PIPE_FP]);
+    entry.ownStreamsOff = false;
+    assert.deepEqual(pipeline.layerMapStreamOptions(entry).streams.map((s) => s.topClipId).sort(), ['clip-a', 'clip-b'], '再打开:照旧');
+  });
+});
+
 test('另列的流不与本机的流重叠(成员卡已在本机的组流里就不再另列);预渲染集合之外的卡不列', async () => {
   const recordSingles = (pipeline, entry) => {
     const singles = planStreams(entry, { budget: Infinity, codeVersion: STREAM_CODE, envFingerprint: PIPE_FP });

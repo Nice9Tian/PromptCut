@@ -265,9 +265,15 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     let context = drifted ? { ...resolved.context, actualRev: rev } : resolved.context;
     // 任务书「甲三」:清单计划里切分方自己的那一份流出不出 —— 本机能产(`planForQueue` 给的 `ownListStreams`)并且这个项目此刻产流
     // (托管方的渲染节点看「生成轨道流」;别的节点不按项目管)。每次切分现问,不进按版本的缓存
-    if (isListPlan(planTask) && context.ownListStreams === true && !(await streamsAllowedFresh(projectId))) {
-      context = { ...context, ownListStreams: false };
-      say('executor.list-streams-off', { version: id });
+    if (isListPlan(planTask) && projectStreams) {
+      const on = await streamsAllowedFresh(projectId);
+      // 这个项目此刻不产流:本机写层表时不列自己这一版的流(列了没人产,页面白取清单);已经派过的流照候选记录列,产出的保留
+      // (`frame-pipeline.mjs` 的 `layerMapStreamOptions` 读 `entry.ownStreamsOff`)。只有按项目管的进程才写这个记号
+      if (entry && typeof entry === 'object') entry.ownStreamsOff = !on;
+      if (!on && context.ownListStreams === true) {
+        context = { ...context, ownListStreams: false };
+        say('executor.list-streams-off', { version: id });
+      }
     }
     // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
     // C10 契约第 18 节第 9 条:在线页面的清单计划同一条路(清单是页面自己判重的片段)

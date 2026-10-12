@@ -2105,7 +2105,9 @@ export class FramePipeline {
    * 和每条流最近一次切分实际出键的指纹。在线页面按这张表找流清单。流有两个来处:
    *
    *   1. 本机自己这一版要产的(与生产者、与队列切分同一组参数的 `planStreams`,所以流键相同):本机没有生产者或开关关着
-   *      (`PROMPTCUT_STREAMS=0`)时没有这一部分。这里不探编码器(那是异步的):列了而没人产的流,页面取不到清单,照旧每拍换快照;
+   *      (`PROMPTCUT_STREAMS=0`)时没有这一部分。这里不探编码器(那是异步的):列了而没人产的流,页面取不到清单,照旧每拍换快照。
+   *      托管方的渲染节点按项目的「生成轨道流」产流(任务书「甲三」):这一版所属的项目此刻不产流时,执行器在 entry 上记
+   *      `ownStreamsOff`(`prerender-executor.mjs` 的 `plan`),这一部分同样不列;
    *   2. 切分给别的指纹出过键、本机自己不产的单卡流(`issuedStreamSpecs`):在线页面的清单计划只给浏览器出一份流任务
    *      (`listStreamSpecs`),本机没有生产者、关着流开关、或这张卡本机没判重时第 1 部分里没有它,不列的话别的在线页面找不到
    *      浏览器产出来的那条流。
@@ -2117,7 +2119,7 @@ export class FramePipeline {
     if (!entry) return {};
     const producer = this.streamProducer();
     let own = [];
-    if (producer?.enabled) {
+    if (producer?.enabled && entry.ownStreamsOff !== true) {
       try {
         own = planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
           codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });

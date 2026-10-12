@@ -6,13 +6,15 @@
  * 放进代理口 `GET /projects` 的每一项里（`broker.mjs` 的 `selectProjects`：`streams` = 渲染节点开着并且这一项开着）；
  * 工作进程里没有目录、没有私钥，向代理口问。这里是问的那一头：
  *
- *   allowed(projectId)   同步：按最近一次问到的清单答（认领闸每一拍对每个候选的流任务都会问）。清单超过 `maxAgeMs` 没更新就在后台再问一次，
- *                        这一次仍按手里的答。**从没问到过、清单里没有这个项目、这一项不是 true，一律答 false**：不知道就不产
- *   fresh(projectId)     异步：清单过期了就先问到新的再答（切分清单计划时用，那里本来就是异步的）。问不到时按手里的答
+ *   allowed(projectId)   同步：按手里的清单答（认领闸每一拍对每个候选的流任务都会问）。手里的清单问到之后过了 `refreshAfterMs`（300 ms）
+ *                        就顺手在后台再问一次；过了 `maxAgeMs`（1.2 s）还没更新的**不作数**。
+ *                        **从没问到过、清单过期了、清单里没有这个项目、这一项不是 true，一律答 false**：不知道就不认领（晚一拍，不会错认领）
+ *   fresh(projectId)     异步：先问到新的再答（切分清单计划时用，那里本来就是异步的）。问不到、手里的又过期了：答 false
  *   status()             诊断：最近一次问到的时刻、项目数、最近一次的错误
  *
- * 不开计时器：没人问就不请求。代理口在本机回环上，一次请求是毫秒级的。
- * 关掉「生成轨道流」到工作进程不再认领新的流任务：目录当场推给管理进程，这里最迟 `maxAgeMs`（1 s）后问到，再下一拍生效。
+ * 不开计时器：没人问就不请求。认领闸每一拍（500 ms）问一次时，每一拍答的是上一拍问到的清单。代理口在本机回环上，一次请求是毫秒级的。
+ * 关掉「生成轨道流」到工作进程不再认领新的流任务：目录当场推给管理进程；工作进程手里的清单最多是上一拍的，所以最迟一拍（约 0.5 s）之后生效。
+ * 节点手里占满、一阵子没问过时清单已经过期，腾出手来的第一拍一律不认领流任务，先问到新的。
  * 手里已经认领的流任务不受影响（关这一项不放回认领，见契约第 3.1 节）。
  *
  * `workerProjectStreams(env)`：这个进程是托管方渲染服务的工作进程（环境里有 `PROMPTCUT_RENDER_BROKER`）时回一个进程内共用的实例，
@@ -24,7 +26,7 @@
 export const BROKER_URL_ENV = 'PROMPTCUT_RENDER_BROKER';
 export const BROKER_KEY_ENV = 'PROMPTCUT_RENDER_BROKER_KEY';
 
-export const PROJECT_STREAMS_DEFAULTS = Object.freeze({ MAX_AGE_MS: 1000, TIMEOUT_MS: 4000 });
+export const PROJECT_STREAMS_DEFAULTS = Object.freeze({ REFRESH_AFTER_MS: 300, MAX_AGE_MS: 1200, TIMEOUT_MS: 4000 });
 
 /**
  * @param {object} o
@@ -32,12 +34,13 @@ export const PROJECT_STREAMS_DEFAULTS = Object.freeze({ MAX_AGE_MS: 1000, TIMEOU
  * @param {string} o.key 这个工作进程的口令
  * @param {typeof globalThis.fetch} [o.fetch]
  * @param {() => number} [o.now]
- * @param {number} [o.maxAgeMs] 清单多久算过期
+ * @param {number} [o.refreshAfterMs] 清单问到之后过多久、再被问到时顺手更新
+ * @param {number} [o.maxAgeMs] 清单多久算过期（过期的不作数）
  * @param {number} [o.timeoutMs]
  */
 export function createProjectStreams({
   url, key, fetch: fetchImpl = globalThis.fetch, now = Date.now,
-  maxAgeMs = PROJECT_STREAMS_DEFAULTS.MAX_AGE_MS, timeoutMs = PROJECT_STREAMS_DEFAULTS.TIMEOUT_MS,
+  refreshAfterMs = PROJECT_STREAMS_DEFAULTS.REFRESH_AFTER_MS, maxAgeMs = PROJECT_STREAMS_DEFAULTS.MAX_AGE_MS, timeoutMs = PROJECT_STREAMS_DEFAULTS.TIMEOUT_MS,
 } = {}) {
   const base = String(url ?? '').replace(/\/+$/, '');
   /** projectId → 这个项目产不产流（清单里的每一项都记，不产的记 false） */
@@ -69,16 +72,17 @@ export function createProjectStreams({
   }
   /** 同一时刻只问一次 */
   const refresh = () => (inflight ??= load().finally(() => { inflight = null; }));
-  const stale = () => now() - at >= maxAgeMs;
+  const age = () => now() - at;
+  const answer = (projectId) => age() < maxAgeMs && table.get(projectId) === true;
 
   return {
     allowed(projectId) {
-      if (stale()) void refresh().catch(() => {});
-      return table.get(projectId) === true;
+      if (age() >= refreshAfterMs) void refresh().catch(() => {});
+      return answer(projectId);
     },
     async fresh(projectId) {
-      if (stale()) { try { await refresh(); } catch { /* 问不到：按手里的答 */ } }
-      return table.get(projectId) === true;
+      if (age() >= refreshAfterMs) { try { await refresh(); } catch { /* 问不到：手里的没过期就按它，过期了答 false */ } }
+      return answer(projectId);
     },
     refresh,
     status: () => ({ at: Number.isFinite(at) ? at : null, projects: table.size, on: [...table.values()].filter(Boolean).length, asked, failed, lastError }),
