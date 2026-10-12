@@ -21,6 +21,8 @@
  *                    (`hosted-render/project-streams.mjs`:向管理进程的代理口问,渲染节点开着并且这一项开着才算开);快照任务、计划任务照常。
  *                    桌面应用与普通的独立渲染主机不归这一项管,一律回 true。带片段清单的计划切分时,切分方自己的那一份流出不出
  *                    (`context.ownListStreams`)同样过这一道。
+ *                    按任务的 `source.projectId` 认「哪个项目」:在线页面与云端 Agent 服务发的任务里,它就是共享项目的 id(与管理进程清单里的
+ *                    `projectId` 同一个);发布方用了别的项目文档 id 时清单里查不到,按不产算(不知道就不产)。
  *                    回 `null`:产物在帧库 / 流库里,sink 自己读(`collectSnapshotResult` / `collectStreamResult`)。
  *                    共享档卡在本机快照库里记过超限帧(`index.json` 的 `oversize`,R6-14)的,交给切分的 control 标
  *                    `snapshotOversize: true`(见 `markSnapshotOversize`),切分据此不给纯浏览器另出一份(M7 契约第 13 节

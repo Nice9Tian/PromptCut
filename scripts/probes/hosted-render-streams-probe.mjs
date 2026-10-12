@@ -9,13 +9,16 @@
  *   - 文档服务 + 素材服务:进程内的托管组合(本机信任关着、带集群令牌,与云节点同样的配置),经本机托管代理 `lib/hosted-proxy.mjs` 开三个同站跨源的源;
  *   - 托管方的渲染服务:真的管理进程 `server/hosted-render/main.mjs`(`PROMPTCUT_RENDER_STREAMS=1`,即部署模板的配置)与它起的常驻工作进程;
  *     并发压到 1(「手里有认领时关掉」那一步要它一次只拿一个任务);用测试指纹,与本机桌面的不同;
- *   - 甲:在线构建的页面(项目一的成员,进项目走「刷新后回到项目」那条产品路径),既是清单计划的发布方,也是观看的一方;
+ *   - 甲:在线构建的页面(项目一的成员,进项目走「刷新后回到项目」那条产品路径),既是清单计划的发布方,也是观看的一方。
+ *     **甲不当渲染节点**:它报的是非 Chromium 内核的浏览器标识(页面自己据此不开节点连接,`src/online/browserNode.ts` 的 `isChromiumUserAgent`),
+ *     相当于用 Firefox、Safari 或手机身份的成员 —— 这种页面自己产不了流,重卡的流只能靠渲染节点。这样这张卡的流任务只可能由渲染服务做,
+ *     不会和页面自己的浏览器节点抢同一张卡(两边都能做时谁先认领谁得,那是「甲一」验过的路);
  *   - 创建者:本进程里的一条连接,照页面的同一个创建者操作(`shared.admin { op: 'set-hosted-option' }`)开、关这一项
  *     (界面上那一行的走查在 `hosted-stream-entry-probe.mjs`);
  *   - 项目二:另一个项目,这一项一直开着,由本进程扮成员发清单计划(「别的项目不受影响」)。
  *
- * 用的卡是画布卡 `r6-canvas`(审阅表 `canvasHeavy`):浏览器节点做不了它的快照与流,所以这张卡的任务只可能由渲染服务做,
- * 不会和页面自己的浏览器节点抢。
+ * 项目一用的卡是 `probe-slow-stepped`(每帧烧 40 毫秒,页面测出来判重、进清单计划;同 `browser-stream-e2e-probe.mjs`);
+ * 项目二的清单由本进程直接给,用画布卡 `r6-canvas`。
  *
  * 断言(任一不成立退出码 1):
  *   S 起来    渲染服务以能产流的方式起:`/status` 的 `streams` 为真,工作进程报 `capabilities.streams` 与 `transcode`
@@ -76,10 +79,14 @@ process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 /** 渲染服务报的环境指纹:与本机桌面的、与页面的都不同 */
 const HOST_FP = process.env.PROMPTCUT_TEST_ENV_FINGERPRINT || '7e57c10d000a3001';
 
-/** 项目一:1280×720、30 fps。画布卡从第 12 帧起、占 240 帧(全局 12～251,分段 0～16:三个流任务 0～7、8～15、16～16;四个快照任务) */
+/** 项目一:1280×720、30 fps。重卡从第 12 帧起、占 240 帧(全局 12～251,分段 0～16:三个流任务 0～7、8～15、16～16;四个快照任务) */
 const PROJECT = { width: 1280, height: 720, fps: 30, duration: 10 };
 const FPS = PROJECT.fps;
 const CLIP = { start: 0.4, duration: 8.0 };
+/** 块上不放字:流的位图里文字是灰度抗锯齿、精确活渲是子像素抗锯齿(`docs/reports/AGENT-rr-a1-integ.md` 记过),带字时边缘的差贴着 0.2% 的通过线 */
+const LABEL = '';
+/** 甲报的浏览器标识:非 Chromium 内核(带 `Firefox/`),页面据此不当渲染节点 */
+const NON_NODE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0';
 const SEG = 15;
 const STREAM_SPANS = [[0, 7], [8, 15], [16, 16]];
 /** 「再关」之后看多久没有新的流认领 */
@@ -158,6 +165,8 @@ function startSupervisor(dist) {
     // 部署模板写的就是 1:以能产轨道流的方式起
     PROMPTCUT_RENDER_STREAMS: '1',
     PROMPTCUT_TEST_ENV_FINGERPRINT: HOST_FP,
+    // 工作进程起的编辑器不写公共的 %TEMP%\promptcut\port.json(render-host 本来就把临时目录指到自己的数据目录下,这里再明说一次)
+    PROMPTCUT_NO_PORT_FILE: '1',
   });
   const child = spawn(process.execPath, [path.join(ROOT, 'server', 'hosted-render', 'main.mjs')], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
   let tail = '';
@@ -330,14 +339,16 @@ function diffOf(a, b) {
   }
   return { mad: +(sum / (w * h * 3)).toFixed(3), bad: +(bad / (w * h)).toFixed(5), w, h };
 }
-/** 画面里有颜色的像素占比(画布卡画的是一圈彩色的点;舞台背景是灰的棋盘格) */
-function colorfulOf(png) {
-  let n = 0;
+/** 画面里橙块的像素占比(探针卡的块是 #f97316)与块上白字的像素占比 */
+function colorsOf(png) {
+  let orange = 0, white = 0;
   for (let i = 0; i < png.data.length; i += 4) {
     const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
-    if (Math.max(r, g, b) - Math.min(r, g, b) > 90) n++;
+    if (r > 200 && g > 80 && g < 160 && b < 90) orange++;
+    else if (r > 225 && g > 215 && b > 200) white++;
   }
-  return +(n / (png.width * png.height)).toFixed(5);
+  const n = png.width * png.height;
+  return { orange: +(orange / n).toFixed(5), white: +(white / n).toFixed(5) };
 }
 async function liveShot(page, id, sec, name) {
   await store(page, `S.actions.pause(); return true;`);
@@ -421,8 +432,7 @@ function checkStreamPlaying(who, r, { key }) {
 }
 /**
  * 播放中截一张、同时记下流播放器正画着第几帧,再与那一帧的精确活渲、往后 2 秒的精确活渲比。
- * 画布卡的点每帧转约 4 个像素(半径 120 的圈上每秒 1 弧度),截图那一下前后最多差 2 帧,所以「相符」的线比 e2e 探针的 DOM 卡宽:
- * 差得多的像素 ≤ 1%;对照(2 秒后:转了约 115 度、颜色也换了)至少 2%、且至少是它的两倍。
+ * 通过线照 `browser-stream-e2e-probe.mjs` 与 `online-stream-play-probe.mjs`:平均差 ≤ 1.5、差得多的像素 ≤ 0.2%;对照至少是它的 4 倍再加 0.2%。
  */
 async function comparePixels(page, id, { from, name, key, until: untilSec }) {
   const res = { name, tries: 0, rejects: [] };
@@ -444,7 +454,7 @@ async function comparePixels(page, id, { from, name, key, until: untilSec }) {
       if (!s || !ta || after.clip.placeholder) { res.rejects.push({ shot: !!s, drawing: !!ta, t: after?.t ?? null }); continue; }
       const near = (st, t) => Math.abs(t.lastDrawn - Math.round((st.t ?? 0) * FPS)) <= 3;
       if (!near(before, tb) || !near(after, ta) || ta.lastDrawn < tb.lastDrawn) { res.rejects.push({ stale: [tb.lastDrawn, before.t, ta.lastDrawn, after.t] }); continue; }
-      if (ta.lastDrawn - tb.lastDrawn <= 2) { shot = s; frame = Math.round((tb.lastDrawn + ta.lastDrawn) / 2); res.f0 = tb.lastDrawn; res.f1 = ta.lastDrawn; }
+      if (ta.lastDrawn - tb.lastDrawn <= 3) { shot = s; frame = Math.round((tb.lastDrawn + ta.lastDrawn) / 2); res.f0 = tb.lastDrawn; res.f1 = ta.lastDrawn; }
       else res.rejects.push({ frames: ta.lastDrawn - tb.lastDrawn });
     }
   }
@@ -456,10 +466,10 @@ async function comparePixels(page, id, { from, name, key, until: untilSec }) {
   if (!check(!!same && !!far, `${name}:截到精确活渲的两张参照`, { same: !!same, far: !!far })) return res;
   res.same = diffOf(shot.png, same.png);
   res.far = diffOf(shot.png, far.png);
-  res.colorful = { stream: colorfulOf(shot.png), live: colorfulOf(same.png) };
-  check(res.same.bad <= 0.01 && res.same.mad <= 2.5, `${name}:流的画面与同一帧的精确活渲相符(差得多的像素 ≤ 1%、平均差 ≤ 2.5)`, res.same);
-  check(res.far.bad >= 0.02 && res.far.bad >= res.same.bad * 2, `${name}:与往后 2 秒的精确活渲比,差明显更大(对照)`, { same: res.same, far: res.far });
-  check(res.colorful.stream > 0.005 && Math.abs(res.colorful.stream - res.colorful.live) <= 0.006, `${name}:流的画面里那一圈彩色的点在,多少与活渲的相当`, res.colorful);
+  res.colors = { stream: colorsOf(shot.png), live: colorsOf(same.png) };
+  check(res.same.mad <= 1.5 && res.same.bad <= 0.002, `${name}:流的画面与同一帧的精确活渲相符(平均差 ≤ 1.5、差得多的像素 ≤ 0.2%)`, res.same);
+  check(res.far.bad >= 0.004 && res.far.bad >= res.same.bad * 4 + 0.002, `${name}:与往后 2 秒的精确活渲比,差明显更大(对照)`, { same: res.same, far: res.far });
+  check(res.colors.stream.orange > 0.02 && Math.abs(res.colors.stream.orange - res.colors.live.orange) <= 0.004, `${name}:流的画面里橙块在(不透明),大小与活渲的相同`, res.colors);
   return res;
 }
 
@@ -472,6 +482,8 @@ async function openMember({ projectId, name, username, password, deviceId }) {
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e?.message ?? e).slice(0, 240)));
   await page.setViewport({ width: 1600, height: 900, deviceScaleFactor: 1.25 });
+  // 这一页不当渲染节点(见文件头)
+  await page.setUserAgent(NON_NODE_UA);
   await plantResume(page, await resumeRecord({ base: HOSTED, derivationBase: `${DOC_DIRECT}/`, projectId, name, username, password, deviceId }));
   await page.goto(EDITOR, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   const entered = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
@@ -545,10 +557,15 @@ async function main() {
   const getManifest = async (resultKey, from, to) => (await content.get('render-manifest', `${resultKey}:${from}-${to}`).catch(() => null))?.body ?? null;
 
   const { page } = await openMember({ projectId: P1.projectId, name: P1.name, username: 'hrs-jia', password: P1.password, deviceId: `hrs-jia-${RUN}`.padEnd(16, '0') });
+  const nodeState = await until('甲的节点状态落定', async () => P(page, () => { try { const d = window.__pcBrowserNode?.(); return d && (d.ready === 'ready' || d.eligibility?.ok === false) ? JSON.parse(JSON.stringify({ ready: d.ready, eligibility: d.eligibility })) : null; } catch { return null; } }), 180_000, 500);
+  A.pageNode = nodeState;
+  check(nodeState?.eligibility?.ok === false && nodeState.eligibility.reason === 'not-chromium', 'A:甲不当渲染节点(报的是非 Chromium 内核的浏览器)', nodeState);
+  say('jia.entered', { node: nodeState });
   const clipId = await store(page, `
-    const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'r6-canvas', start: args[0].start, duration: args[0].duration });
+    const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: args[0].start, duration: args[0].duration });
+    S.actions.setClipParams(c.id, { burnMs: 40, label: args[1] });
     S.actions.seek(args[0].start + args[0].duration + 1);
-    return c.id;`, CLIP);
+    return c.id;`, CLIP, LABEL);
   const docId = await store(page, `return S.getState().project.id;`);
   out.clip = clipId;
   const layerKey = `layers:${docId}`;
@@ -560,13 +577,15 @@ async function main() {
   const tOff = Date.now();
   const listed = await until('A:甲的清单计划里有这张卡', async () => { const d = await planDiag(page); return d?.lastClips?.includes(clipId) ? d : null; }, 240_000, 500);
   A.plan = listed && { lastClips: listed.lastClips.length, last: String(listed.last).slice(0, 40) };
-  if (!check(!!listed, 'A:甲把这张画布卡判成重卡、发了清单计划', await planDiag(page))) throw new Error('页面没有把这张卡列进清单计划');
+  if (!check(!!listed, 'A:甲把这张卡判成重卡、发了清单计划', await planDiag(page))) throw new Error('页面没有把这张卡列进清单计划');
+  say('jia.planned', { plan: A.plan });
   const snapsDone = await until('A:这张卡的快照任务由渲染服务全部做完', async () => {
     const snaps = snapTasks(P1.projectId);
     return snaps.length >= 4 && snaps.every((t) => t.state === 'done') && planTasks(P1.projectId).every((t) => t.state === 'done') ? snaps : null;
   }, 600_000, 500);
   out.timings.snapshotsMs = Date.now() - tOff;
-  const sA = await status();
+  // 工作进程每秒向管理进程交一次诊断:任务做完的那一刻读到的计数可能还是上一拍的,等它跟上
+  const sA = (await until('A:渲染服务的诊断里快照任务的完成数跟上', async () => { const s = await status(); return (nodeOf(s, P1.projectId)?.completed ?? 0) >= 4 ? s : null; }, 15_000, 300)) ?? (await status());
   const nA = nodeOf(sA, P1.projectId);
   A.node = nA && { claimed: nA.claimed, completed: nA.completed, dedup: nA.dedup, plans: nA.plans, failed: nA.failed, released: nA.released };
   A.queue = { snapshots: briefTasks(snapTasks(P1.projectId)), streams: briefTasks(streamTasks(P1.projectId)), plans: planTasks(P1.projectId).length };
@@ -604,6 +623,7 @@ async function main() {
   await store(page, `S.actions.setProjectMeta({ name: args[0] }); return true;`, `${P1.name}-开`);
   const tSplit = Date.now();
   const issued = await until('B:新的清单计划切出渲染服务自己的那一份流任务(三个)', async () => (streamTasks(P1.projectId).length >= 3 ? streamTasks(P1.projectId) : null), 180_000, 100);
+  say('B.issued', { streams: streamTasks(P1.projectId).length });
   B.issued = { ms: Date.now() - tSplit, plans: planTasks(P1.projectId).length - plansBefore, streams: briefTasks(streamTasks(P1.projectId)) };
   if (!check(!!issued && issued.length === 3, 'B:切出三个流任务(分段 0～7、8～15、16～16)', B.issued)) throw new Error('没有切出流任务');
   check(STREAM_SPANS.every(([f, t]) => issued.some((x) => x.id.endsWith(`:${f}-${t}`))), 'B:流任务的分段范围对', issued.map((x) => x.id.slice(-8)));
@@ -630,7 +650,8 @@ async function main() {
   check(heldDone?.state === 'done' && heldDone.attempts <= 1, 'C:关掉之后手里的那个流任务没有被放回,照做完了', heldDone && { state: heldDone.state, attempts: heldDone.attempts, lastError: heldDone.lastError });
 
   // 同一段时间里:项目二(这一项开着)照常产流;项目一新发的清单计划照常被认领、切分(不切流)
-  const doc2 = 'hrs-p2-doc';
+  // 项目文档的 id 用共享项目的 id(页面与云端 Agent 服务发任务时都是这样):渲染服务按任务的 `source.projectId` 认「哪个项目的开关」
+  const doc2 = P2.projectId;
   const body2 = { id: doc2, name: P2.name, width: 1280, height: 720, fps: FPS, duration: 2, themeId: 'dark', camera3dFov: 50, media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
     tracks: [{ id: 'tr-1', name: 'tr-1', hidden: false, clips: [{ id: 'clip-p2', kind: 'card', cardId: 'r6-canvas', start: 0, end: 2, params: { probeSalt: RUN } }] }] };
   const put2 = await putProject(creator2, doc2, body2);
@@ -646,6 +667,7 @@ async function main() {
     return st.length >= 1 && sn.length >= 1 && [...st, ...sn].every((t) => t.state === 'done') ? { st, sn } : null;
   }, 300_000, 300);
   C.project2 = { ms: Date.now() - t2, listed: listedOf(await status(), P2.projectId), streams: briefTasks(streamTasks(P2.projectId)), snapshots: snapTasks(P2.projectId).length };
+  say('C.project2', C.project2);
   check(!!done2 && C.project2.listed?.streams === true, 'C:别的项目不受影响:项目二(这一项开着)的流任务在这段时间里照常被认领并做完', C.project2);
 
   const plansBeforeOff = planTasks(P1.projectId).length;
@@ -689,6 +711,7 @@ async function main() {
   check(on1b.type === 'shared.admin.ok', 'D:创建者再打开', { type: on1b.type, reason: on1b.reason });
   const allDone = await until('D:剩下的两个流任务被认领并做完', async () => { const st = streamTasks(P1.projectId); return st.length === 3 && st.every((t) => t.state === 'done') ? st : null; }, 300_000, 200);
   D.ms = Date.now() - tOn2;
+  say('D.done', { ms: D.ms, streams: briefTasks(streamTasks(P1.projectId)) });
   D.streams = briefTasks(streamTasks(P1.projectId));
   check(!!allDone, 'D:再打开之后,剩下的流任务被渲染服务认领并做完', D.streams);
   const mapD = await layerMap();
@@ -696,7 +719,7 @@ async function main() {
   const cand = rowD?.candidates?.find((c) => c.envFingerprint === HOST_FP) ?? null;
   const hostKey = cand?.resultKey ?? null;
   D.row = briefRow(rowD);
-  check(!!rowD && rowD.firstSegment === 0 && rowD.lastSegment === 16 && rowD.candidates.every((c) => c.envFingerprint === HOST_FP), 'D:层表里这条流:分段 0～16,候选只有渲染服务(画布卡浏览器做不了)', D.row);
+  check(!!rowD && rowD.firstSegment === 0 && rowD.lastSegment === 16 && rowD.candidates.every((c) => c.envFingerprint === HOST_FP), 'D:层表里这条流:分段 0～16,候选只有渲染服务(这一页不当节点,没有浏览器那一份)', D.row);
   const authHeaders = await assetAuth();
   const blocks = [];
   let manifestsOk = 0;

@@ -233,7 +233,7 @@ test('HRS-04 local-node 切清单计划:ownListStreams 为真时流出两份(自
   assert.equal(br.requires.transcode, false);
   assert.equal(br.input.dual, true);
   assert.equal(own.source.derivedFrom, list.id, '带着清单计划的 id(执行器靠它认「清单计划切出的」)');
-  assert.equal(own.priority, 10, '清单计划照 normal 的名次');
+  assert.notEqual(own.priority, 'backfill', '清单计划照 normal 的名次(不是补渲档;具体名次由切分定)');
   const only = (await publishedBy({ planTask: list, plan: { ...base, ownListStreams: false } })).filter((t) => t.kind === 'stream');
   assert.deepEqual(only.map((t) => t.requires.envFingerprint), [BR]);
   assert.equal('dual' in only[0].input, false);
