@@ -5,12 +5,13 @@
  * 经**导出页**导出、再和**编辑器预览**对上）。
  *
  *   node scripts/probes/framework-card-pipeline-probe.mjs [--port 27780] [--out <目录>] [--json <文件>] [--keep]
- *        [--only create,export,prerender,preview] [--origin http://127.0.0.1:27780]
+ *        [--only create,export,prerender,preview] [--origin http://127.0.0.1:27780] [--default-review]
  *
  * 端口：编辑器用 --port，另占 +1、+2 当舞台端口，三个连号都要空着（缺省 27780～27782）。自己起一台隔离的编辑器
  * （`scripts/lib/dev-server.mjs` 的 `startDevServer`；`no-user-dirs.mjs` 已设 `PROMPTCUT_NO_PORT_FILE=1`；数据目录、导出目录、
  * 卡片改动层都在临时目录里，检出目录里一个文件都不多），做完连子进程一起收掉。`--origin` 接一台已经起好的（只给调试用；
  * 建的卡带本次运行的随机后缀，不会和已有的撞）。`--only` 只跑其中几步（调试用；缺省全跑，验收口径是全跑）。
+ * `--default-review`：第 4 步只做 4a（不在探针进程里改计划能力），等 punch-pill 的流产完就收，记下用了多久（只记录）。
  *
  * 做什么（每步的判据写在后面；耗时只记录，不当通过条件）：
  *
@@ -30,7 +31,12 @@
  *                 判据：单路两遍、4 路两遍、单路对 4 路、单路对抽帧——每一帧字节相同；字节不同时再比像素，像素也不同才算不过。
  *                 不空洞：用户卡的片段里每一帧都有内容（不透明度大于 0 的像素），且不同时刻的画面不同；总帧数是 270。
  *   4. prerender  进程内起一个 `FramePipeline`（同预渲染进程的代码，`interactive: true`，库根放临时目录），把三张卡钉成重卡
- *                 （`streamPicked` 钉成全选；remotion 式的卡声明上是轻卡，不钉就没有流），预渲染完：
+ *                 （`streamPicked` 钉成全选；remotion 式的卡声明上是轻卡，不钉就没有流）。分两小步：
+ *                 4a 默认行为：用户卡不在审阅表（`src/cards/capabilities.json`）里，计划里 `compositing` 是 unknown，按下层依赖卡处理，
+ *                    **不进单卡流**（`docs/semantics/mechanism/cards.md`「分类以审阅表为准」）——所以照默认，两张用户卡没有轨道流。探针用没改过的
+ *                    计划算一遍 `planStreams`，核对这个事实（用户卡没有单卡流、punch-pill 有）；
+ *                 4b 在**探针进程的内存里**把两张用户卡在计划里的 `compositing` 改成 independent（等于「审阅表登记了它们」；产品代码一个字不动），
+ *                    验这种卡的流产出来以后不回放、与回放着产逐帧相同。预渲染完：
  *                   - 三张卡各有一条轨道流；两张用户卡的流 `replay` 是 false，`replayedFrames` 是 0；punch-pill 的流 `replay` 是 true；
  *                   - 把每条流中间的两个分段作废再产（每段都断租约），两张用户卡的流 `replayedFrames` 仍是 0，punch-pill 的 > 0；
  *                   - 每条用户卡的流取三个分段，A 路「不回放直接产」对 B 路「从挂载帧回放着产」逐帧比像素，必须一张不差；
