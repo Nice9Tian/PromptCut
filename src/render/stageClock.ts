@@ -63,8 +63,12 @@ export interface StageClock {
    * 从当前时刻推进到 target,分步跑帧。
    * 一定要分步:Motion 的帧循环会把单帧 delta 夹到 40ms 上限(防切回标签页时跳变),
    * 一步跨几秒的话动画只会前进 40ms。
+   *
+   * **每一步落在帧格上,时刻用帧号直接算,不逐步累加**(见 `frameGrid`):从哪一帧起推,第 k 帧的时刻都是同一个数。
+   * 起点不在帧格上(`set` 拨过、被 `maxCatchUp` 削过)时,第一步走到下一个帧格;`target` 不在帧格上时,最后一步走到 `target`。
+   * `fps`:工程的帧率,给了就照它排帧格;没给从 `step` 认。
    */
-  advanceTo(target: number, opts?: { step?: number; maxCatchUp?: number; onFrame?: (ms: number, ran: number) => void }): void;
+  advanceTo(target: number, opts?: { step?: number; fps?: number; maxCatchUp?: number; onFrame?: (ms: number, ran: number) => void }): void;
   /**
    * 和 advanceTo 一样地补跑,但**每帧之间让出一个微任务**。
    *
@@ -80,6 +84,8 @@ export interface StageClock {
    */
   advanceToAsync(target: number, opts?: {
     step?: number;
+    /** 工程的帧率。给了就照它排帧格;没给从 `step` 认(见 `frameGrid`) */
+    fps?: number;
     maxCatchUp?: number;
     /** **跑这一帧之前**调:提交 React。和导出的 step 同序 —— 那边也是先 __pcSetT 再推虚拟时间 */
     onFrame?: (ms: number) => void;
@@ -104,6 +110,37 @@ export interface StageClock {
 }
 
 const DEFAULT_STEP = 1000 / 60;
+
+/**
+ * 推帧用的帧格:第 k 帧的时刻,以及从某个时刻起下一步该走到第几帧。
+ *
+ * **时刻用帧号直接算,不逐帧累加。** 30 帧/秒时一步是 33.333… 毫秒,不是能精确表示的数,逐帧加出来的时刻和直接算的差最后几位:
+ * 从头推到第 60 帧得到 1999.9999999999982,调用方拿「帧号 ÷ 帧率 × 1000」算的目标是 2000。卡片按时刻判「到没到」
+ * (整秒换一个词的卡取「过了多少毫秒 ÷ 1000」的整数部分)就晚一帧;接着上一帧推一步时,「上一帧的时刻 + 一步」有时比目标小最后一位,
+ * 这一帧里还要再补一拍。实测与拆解见 `docs/reports/AGENT-rr-a1-verify.md`「原因二」。
+ *
+ *   - 知道帧率时,第 k 帧 = `k / fps * 1000`。这和调用方算目标时刻(`帧号 / fps` 得到秒,再 `* 1000`)是同一个式子、
+ *     同一个运算顺序,落点逐位相同。换一种写法(例如 `k * 步长`)最后一位仍可能不同。
+ *     帧率由调用方给(`fps`);没给时从步长认:步长正好是整数帧率的一帧(`1000 / fps`,调用方都是这样给的)就认得出来。
+ *   - 认不出帧率的步长,用 `k * 步长`:同样不累加,只是不保证和调用方的目标逐位相同(最后一步照旧直接走到目标本身)。
+ *
+ * `after(ms)`:严格晚于 `ms` 的第一个帧号。`ms` 本身在帧格上、或只差浮点尾数(百万分之一帧以内)时算在这一帧上,
+ * 下一步走到它后面那一帧 —— 不为一个尾数多跑一拍。`reaches(k, target)`:第 k 帧是不是已经到了 `target`(同样的容差),
+ * 到了就由调用方直接走到 `target` 本身。
+ */
+export function frameGrid(step: number, fps?: number): { at(k: number): number; after(ms: number): number; reaches(k: number, target: number): boolean } {
+  const perSec = 1000 / step;
+  const rounded = Math.round(perSec);
+  // 调用方给的帧率要和步长对得上才用(对不上按步长走,不猜)
+  const rate = fps && Math.abs(perSec - fps) < 1e-9 * fps ? fps : rounded >= 1 && Math.abs(perSec - rounded) < 1e-9 * rounded ? rounded : 0;
+  const at = rate ? (k: number) => (k / rate) * 1000 : (k: number) => k * step;
+  const slack = step * 1e-6;
+  return {
+    at,
+    after: (ms) => Math.floor((ms + slack) / step) + 1,
+    reaches: (k, target) => at(k) >= target - slack,
+  };
+}
 /** 补跑上限(ms):落后超过这么多就先把时钟直接拨到 target-上限,再分步跑完最后这段 */
 const DEFAULT_MAX_CATCH_UP = 6000;
 
@@ -204,9 +241,11 @@ export function installStageClock(): StageClock {
       }
       // 削起点同样是跳转:被削掉那一段里的定时器不触发(E4b)
       if (target - now > maxCatchUp) jumpTo(target - maxCatchUp);
+      // 每一步落在帧格上(时刻用帧号直接算,不累加);最后一步走到 target 本身
+      const grid = frameGrid(step, opts.fps);
       let ms = now;
-      while (ms < target) {
-        ms = Math.min(target, ms + step);
+      for (let k = grid.after(ms); ms < target; k++) {
+        ms = grid.reaches(k, target) ? target : grid.at(k);
         opts.onFrame?.(ms, tick(ms));
       }
       if (now !== target) {
@@ -240,13 +279,15 @@ export function installStageClock(): StageClock {
       let ms = now;
       let ran = 0;
       const realTimeout = window.__pcRealSetTimeout ?? window.setTimeout.bind(window);
-      while (ms < target) {
+      // 每一步落在帧格上(时刻用帧号直接算,不累加);最后一步走到 target 本身
+      const grid = frameGrid(step, opts.fps);
+      for (let k = grid.after(ms); ms < target; k++) {
         if (opts.yieldEvery && ran > 0 && ran % opts.yieldEvery === 0) await new Promise<void>((r) => realTimeout(r, 0));
         else await Promise.resolve();
         if (opts.gate && ran > 0) { const g = opts.gate(); if (g) await g; }
         if (opts.abort?.()) return;
         ran++;
-        ms = Math.min(target, ms + step);
+        ms = grid.reaches(k, target) ? target : grid.at(k);
         now = ms;                 // 先拨时钟:React 渲染时读到的就是这一帧
         opts.onFrame?.(ms);       // 提交
         tick(ms);                 // 跑这一帧的 rAF 回调
