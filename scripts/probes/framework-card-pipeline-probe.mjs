@@ -78,6 +78,8 @@ const args = process.argv.slice(2);
 const PORT = Number(flagArg('port', '27780', args)) || 27780;
 const GIVEN_ORIGIN = flagArg('origin', null, args);
 const KEEP = args.includes('--keep');
+/** 只看默认行为（不在探针进程里改计划能力）：第 4 步只做 4a，等 punch-pill 的流出来就收，记下用了多久 */
+const DEFAULT_REVIEW = args.includes('--default-review');
 const JSON_OUT = flagArg('json', null, args);
 const OUT = path.resolve(flagArg('out', null, args) || path.join(ROOT, 'out', 'framework-card-pipeline-probe'));
 const ONLY = new Set((flagArg('only', 'create,export,prerender,preview', args) || '').split(',').map((s) => s.trim()).filter(Boolean));
@@ -567,13 +569,13 @@ try {
       if (!value) return value;
       unpatched = structuredClone(value);
       const graph = value.graph || value;
-      for (const o of graph.outputs ?? []) if (USER_CLIPS.includes(o.clipId)) o.capabilities = { ...(o.capabilities ?? {}), compositing: 'independent', independentCache: true };
+      if (!DEFAULT_REVIEW) for (const o of graph.outputs ?? []) if (USER_CLIPS.includes(o.clipId)) o.capabilities = { ...(o.capabilities ?? {}), compositing: 'independent', independentCache: true };
       return value;
     };
     const ALL = [...USER_CLIPS, 'clip-pill'];
     const t0 = Date.now();
     const entry = await pipeline.preload(PROJECT);
-    const ready = await until('生产者起来、三条流到位', () => (pipeline._streams?.streams.size >= 3 ? pipeline._streams : null), 900_000);
+    const ready = await until('生产者起来、三条流到位', () => (pipeline._streams?.streams.size >= (DEFAULT_REVIEW ? 1 : 3) ? pipeline._streams : null), 1_800_000);
     if (!ready) throw new Error('生产者没起来');
     // 4a：默认行为——没改过的计划
     {
@@ -589,6 +591,15 @@ try {
       check(compOf('clip-pill') === 'independent', '默认行为：内置的 punch-pill 是 independent', pr.defaultBehavior.compositing);
       check(USER_CLIPS.every((id) => !pr.defaultBehavior.streamClips.includes(id)) && pr.defaultBehavior.streamClips.includes('clip-pill'),
         '默认行为：用户卡没有单卡流、punch-pill 有（缺省关着的「依赖下层的流」才会收 unknown 卡）', pr.defaultBehavior.streamClips);
+    }
+    if (DEFAULT_REVIEW) {
+      pr.defaultOnly = true;
+      pr.msToFirstStream = Date.now() - t0;
+      const pill = await until('punch-pill 的流满密度', dense, 1_800_000, 1000);
+      pr.msToPillDense = Date.now() - t0;
+      check(!!pill, '默认行为：punch-pill 的流产完');
+      out.steps.prerender = pr;
+      throw Object.assign(new Error('default-review-done'), { done: true });
     }
     const first = await until('全部分段满密度', dense, 1_800_000, 1000);
     if (!first) throw new Error('第一轮生产没做完');
@@ -878,8 +889,11 @@ try {
     for (const n of [80, 160]) if (exportPng.get(n)) await fs.writeFile(path.join(SHOTS, `export-bakery-f${n}.png`), exportPng.get(n));
   }
 } catch (error) {
-  check(false, `异常：${String(error?.stack || error).slice(0, 1500)}`);
-  say('ERROR', { error: String(error?.stack || error) });
+  if (error?.done) say('default-review-done', {}); // --default-review：做完 4a 主动收尾，不是异常
+  else {
+    check(false, `异常：${String(error?.stack || error).slice(0, 1500)}`);
+    say('ERROR', { error: String(error?.stack || error) });
+  }
 } finally {
   try { await bakery?.close(); } catch { /* 已经关了 */ }
   try { await editorPage?.browser?.close(); } catch { /* 已经关了 */ }
