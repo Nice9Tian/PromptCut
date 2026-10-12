@@ -33,7 +33,7 @@ import { applyResult, manifestKindOf, manifestKeyOf, manifestMatches, spansOf } 
 export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { createSmallRenderer, SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
-import { layerMapOf, streamCandidateKey, STREAM_CANDIDATE_PREFIX } from './artifact-transfer.mjs';
+import { layerMapOf, streamCandidateKey, STREAM_CANDIDATE_PREFIX, layerMapKeyOf } from './artifact-transfer.mjs';
 import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServesAgent, modeServesPrerender } from './prerender-mode.mjs';
 
 /**
@@ -43,6 +43,8 @@ import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServe
  */
 export const PUSH_SNAPSHOT_SPAN = QUEUE_DEFAULTS.SNAPSHOT_SPAN;
 export const PUSH_STREAM_SEGMENTS = QUEUE_DEFAULTS.STREAM_SEGMENTS;
+/** 流锁(`FramePipeline.streamLocks`:别的环境产好、本机整条拉回来了的单卡流)最多记几条 */
+export const STREAM_LOCKS_MAX = 2000;
 /** c10a 第 9 节:还没画成小位图的帧最多攒这么多(本进程好久没换页时只留最新的) */
 export const SMALL_PENDING_MAX = 480;
 /** 推送优先级(`artifact-push.mjs` 的 `PUSH_PRIORITY`):0 normal、1 low。这里不引那个模块,只用数 */
@@ -287,6 +289,12 @@ export class FramePipeline {
      */
     this.ready = createReadyHub();
     this.entries = new Map();
+    /**
+     * 别的环境已经产好、本机整条拉回来了的单卡流(任务书「甲二」):流的内容键 → 产它的环境指纹。每个 entry 带着这张表的引用
+     * (`entry.streamLocks`),本机的流计划照它出键(`frame-stream.mjs` 的 `relockStreams`)。由 `adoptForeignStreams` 记,落盘在库根的
+     * `stream-locks.json`(重启后拉回来的流照样用,不重产)。
+     */
+    this.streamLocks = this.loadStreamLocks();
     this.queue = [];
     // The human preview, Agent and background bake each own an independent
     // serialized queue.  A long Agent render must never hold the hot user Chrome.
@@ -863,7 +871,9 @@ export class FramePipeline {
       // 预渲染进程的模式与它建的 lane(`prerender-mode.mjs`);编辑器进程(`interactive: false`)没有这些 lane
       mode: { mode: this.mode, lanes: this.interactive ? lanesOfMode(this.mode) : [] },
       // C6.4:只在配了推送队列时才有这两项(没配时诊断的形状不变)
-      ...(this.pushQueue ? { push: this.pushQueue.stats?.() ?? null, adoption: this.lastAdoption ?? null } : {}) };
+      ...(this.pushQueue ? { push: this.pushQueue.stats?.() ?? null, adoption: this.lastAdoption ?? null } : {}),
+      // 任务书「甲二」:别的环境产好、本机整条拉回来照它的键用的单卡流(有才带这一项,没有时诊断的形状不变)
+      ...(this.streamLocks.size || this.lastForeignStreams ? { foreignStreams: { locks: [...this.streamLocks], last: this.lastForeignStreams ?? null } } : {}) };
   }
   /**
    * 每个 entry 此刻的预渲染集合和它的 card plan 摘要 —— `ready-index-probe` 靠它
@@ -917,6 +927,7 @@ export class FramePipeline {
       // A removed or replaced full-scene frame must not stay published in the
       // playback movie: put that sample back to transparent.
       entry.mov.onEvict = frame => entry.playbackMovie?.evict(frame);
+      entry.streamLocks = this.streamLocks;
       this.entries.set(key, entry);
       entry.loading = this.loadArchive(entry).then(archive => {
         try {
@@ -1757,6 +1768,8 @@ export class FramePipeline {
         // 拉别的机器已经产好的段,再开始后台那一趟 —— 拉到的段本机不再渲。没配时这里什么都不做
         if (browserPlan && this.pushQueue && !controller.signal.aborted) {
           try { await this.adoptFromManifests(entry, this.pushQueue.content, this.pushQueue.client, { signal: controller.signal }); } catch {}
+          // 任务书「甲二」:别的环境(在线页面自己产的)已经有整条的单卡流,拉回来、照它的键用,本机不重产
+          try { await this.adoptForeignStreams(entry, this.pushQueue.content, this.pushQueue.client, { signal: controller.signal }); } catch {}
         }
         entry.stage = 'required';
         // C2:**锚帧全部就绪前不开始其余后台预渲染**。
@@ -2213,6 +2226,121 @@ export class FramePipeline {
     // 契约第 9 节第 1 条:进队同步生效,回的 promise 是落盘;钩子不等它
     void Promise.resolve(queue.enqueue({ kind: 'stream', resultKey: spec.streamKey, range: { from, to } }, PUSH_LOW)).catch(() => {});
     return true;
+  }
+  streamLocksPath() {
+    return typeof this.root === 'string' && this.root ? path.join(this.root, 'stream-locks.json') : null;
+  }
+  loadStreamLocks() {
+    const locks = new Map();
+    const file = this.streamLocksPath();
+    if (!file) return locks;
+    try {
+      const body = JSON.parse(readFileSync(file, 'utf8'));
+      for (const [contentKey, fingerprint] of Array.isArray(body?.entries) ? body.entries : []) {
+        if (typeof contentKey === 'string' && contentKey && typeof fingerprint === 'string' && fingerprint) locks.set(contentKey, fingerprint);
+      }
+    } catch { /* 没有记录、读不了:当没有锁 */ }
+    return locks;
+  }
+  saveStreamLocks() {
+    const file = this.streamLocksPath();
+    if (!file) return;
+    try {
+      // 只留最近记的 STREAM_LOCKS_MAX 条(Map 的插入顺序)
+      while (this.streamLocks.size > STREAM_LOCKS_MAX) this.streamLocks.delete(this.streamLocks.keys().next().value);
+      const tmp = `${file}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ v: 1, entries: [...this.streamLocks] }));
+      renameSync(tmp, file);
+    } catch { /* 落不了盘:这一进程里照样按内存里的用 */ }
+  }
+  /**
+   * 「先查,没有才产」的桌面一侧(任务书 `render-refactor-task.md`「甲二」):这一版的单卡流,别的环境(在线页面在没有切分节点时自己产的、
+   * 别的桌面)已经在素材服务上有**整条满密度**的,就拉回本机流库,并把这条流锁到那个指纹上(`streamLocks`:内容键 → 指纹)。
+   * 之后本机的流计划照锁出键(`relockStreams`):生产者不重产、舞台播的就是拉回来的那一条、层表的候选是那个指纹;切分时照锁只出一份
+   * (`planForQueue` 把锁并进 `cardLocks`)。
+   *
+   *   - 候选从哪来:内容库里这个项目的层表(`layers:<项目 id>` 的 `streams` 表里同内容键的行列着的指纹),加上本机的切分候选记录;
+   *   - 本机自己的键已经整条都有的不查、不锁;别的候选只有一部分的不锁(照旧按自己的键产);
+   *   - 已经记的锁每次复核:拉回来的那条在本机流库里不齐了(被清掉了)就解锁,回到自己的键。
+   *
+   * 回 `{ checked, locked, unlocked }`(查了几条流、新锁了几条、解了几条);出错只记进 `this.lastForeignStreams`,不抛。
+   */
+  async adoptForeignStreams(entry, content, client, { signal } = {}) {
+    const report = { checked: 0, locked: 0, unlocked: 0, at: Date.now(), error: null };
+    const own = this.envFingerprint;
+    const producer = this.streamProducer();
+    const projectId = entry?.project?.id;
+    if (!own || !producer || !entry || !content || typeof content.get !== 'function' || !client) return report;
+    let singles = [];
+    try {
+      // 按本机自己的指纹算(不带锁);预算给无穷大:只看单卡流,每张进得了流的卡一条
+      singles = planStreams({ ...entry, streamLocks: null }, { budget: Infinity, codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: own })
+        .filter(spec => spec.kind === 'card');
+    } catch { singles = []; }
+    if (!singles.length) return report;
+    /** 这个键的流在本机流库里是不是整条满密度 */
+    const complete = async (streamKey, spec) => {
+      let manifest = null;
+      try { manifest = producer.streams?.get(streamKey)?.manifest ?? await producer.store?.load(streamKey); } catch { manifest = null; }
+      if (!manifest) return false;
+      for (let n = spec.firstSegment; n <= spec.lastSegment; n++) if (!(manifest.segments?.[n]?.stride === 1)) return false;
+      return true;
+    };
+    let changed = false;
+    try {
+      // 复核已有的锁
+      for (const spec of singles) {
+        const fingerprint = this.streamLocks.get(spec.contentKey);
+        if (!fingerprint || await complete(resultKeyOf(spec.contentKey, fingerprint), spec)) continue;
+        this.streamLocks.delete(spec.contentKey);
+        report.unlocked++;
+        changed = true;
+      }
+      let rows = null;
+      for (const spec of singles) {
+        if (signal?.aborted || this.closed) break;
+        if (this.streamLocks.has(spec.contentKey) || await complete(spec.streamKey, spec)) continue;
+        if (rows === null) {
+          rows = [];
+          const key = layerMapKeyOf(projectId);
+          if (key) {
+            const body = (await content.get('snapshot-manifest', key))?.body;
+            if (Array.isArray(body?.streams)) rows = body.streams;
+          }
+        }
+        const listed = rows.filter(row => row?.kind === 'card' && row.contentKey === spec.contentKey).flatMap(row => (Array.isArray(row.candidates) ? row.candidates : []).map(c => c?.envFingerprint));
+        const fingerprints = [...new Set([...listed, ...(this.splitCandidatesFor(streamCandidateKey(spec.contentKey)) ?? [])])].filter(fp => typeof fp === 'string' && fp && fp !== own);
+        if (!fingerprints.length) continue;
+        report.checked++;
+        for (const fingerprint of fingerprints) {
+          const resultKey = resultKeyOf(spec.contentKey, fingerprint);
+          if (!await complete(resultKey, spec)) {
+            // 每一份清单都要在、覆盖它那一段、全是满密度,才整条拉;缺一份就不要这个候选
+            const bodies = [];
+            for (const [from, to] of spansOf(spec.firstSegment, spec.lastSegment, PUSH_STREAM_SEGMENTS)) {
+              const ref = { kind: 'stream', resultKey, range: { from, to } };
+              const body = (await content.get('render-manifest', manifestKeyOf(ref)))?.body;
+              let full = !!body && manifestMatches(body, ref);
+              for (let n = from; full && n <= to; n++) if (!(body.segments?.[n]?.stride === 1)) full = false;
+              if (!full) { bodies.length = 0; break; }
+              bodies.push(body);
+            }
+            if (!bodies.length) continue;
+            for (const body of bodies) await applyResult(this, client, body);
+            if (!await complete(resultKey, spec)) continue;
+          }
+          this.streamLocks.set(spec.contentKey, fingerprint);
+          report.locked++;
+          changed = true;
+          break;
+        }
+      }
+    } catch (error) {
+      report.error = String(error?.message ?? error).slice(0, 200);
+    }
+    if (changed) this.saveStreamLocks();
+    this.lastForeignStreams = report;
+    return report;
   }
   /**
    * C6.4 第 5 节:换机取用。给一个活的 entry(某个会话当前版本的 card plan),按它每个共享档与本地档的 control、
@@ -3086,6 +3214,10 @@ export class FramePipeline {
     const cardPlan = entry.cardPlan.filter(control => this.queueHandles(control))
       .map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
     const clips = (entry.project.tracks || []).flatMap(track => track.clips || []);
+    // 任务书「甲二」:先查,没有才产。这一版的单卡流别的环境已经有整条的(在线页面在没有切分节点时自己产的),先拉回本机、记锁;
+    // 下面的流计划与切分都照锁出键:这条流只照那个指纹出一份,本机不出自己的那一份、不重产
+    if (this.pushQueue) { try { await this.adoptForeignStreams(entry, this.pushQueue.content, this.pushQueue.client, { signal }); } catch {} }
+    for (const [contentKey, fingerprint] of this.streamLocks) cardLocks.set(`stream:${contentKey}`, fingerprint);
     const streamSpecs = await this.queueStreamSpecs(entry);
     const ownListStreams = await this.streamCapable();
     const context = {
