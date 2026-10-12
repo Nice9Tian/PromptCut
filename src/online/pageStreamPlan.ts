@@ -148,9 +148,9 @@ export function streamMemberKey(o: {
   codes: StreamCodes;
 }): Promise<string> {
   const { id: _id, inputs: _inputs, definitionId: _definitionId, clipId: _clipId, ...stripped } = o.node ?? {};
-  const usedStyle = o.definition ? selectedCardStyle(o.definition, o.style) : stripped.adapter === "chrome" ? o.style : {};
+  const usedStyle = o.definition ? selectedCardStyle(o.definition as never, o.style) : stripped.adapter === "chrome" ? o.style : {};
   const parent = { width: o.stage.width as number, height: o.stage.height as number };
-  const size = resolveFrameSize(o.frame, parent);
+  const size = resolveFrameSize(o.frame as never, parent);
   const cardId = typeof stripped.cardId === "string" ? stripped.cardId : "";
   return digest({
     abi: CARD_RUNTIME_ABI, environment: o.environment, node: stripped, definition: o.definition, style: usedStyle,
@@ -198,7 +198,7 @@ export function evenRect(r: Rect, limit: Rect): Rect {
 
 /** 这张卡的框在隔离工程里摆到哪儿、流的矩形上界(与服务端 `localPlacement` 同一个式子) */
 export function localPlacement(clip: { frame?: { w?: number; h?: number } }, stage: StageSize): { offset: { x: number; y: number }; bound: Rect } {
-  const size = resolveFrameSize(clip.frame, stage);
+  const size = resolveFrameSize(clip.frame as never, stage);
   const w = Math.max(2, Math.ceil(size.w)), h = Math.max(2, Math.ceil(size.h));
   const ox = Math.max(0, Math.floor((stage.width - w) / 2));
   const oy = Math.max(0, Math.floor((stage.height - h) / 2));
@@ -209,7 +209,7 @@ export function localPlacement(clip: { frame?: { w?: number; h?: number } }, sta
 
 /* ------------------------------------------------------------------ 画家顺序与组流(同 `server/frame-stream.mjs`) */
 
-type AnyClip = Record<string, any>;
+interface AnyClip { id: string; start: number; end: number; cardId?: string; mediaId?: string; frame?: any; [k: string]: any }
 type AnyTrack = { id?: string; hidden?: boolean; sourceOnly?: boolean; clips?: AnyClip[] };
 interface PaintLayer { clipId: string; order: number; from: number; to: number }
 

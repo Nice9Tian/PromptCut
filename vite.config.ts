@@ -176,14 +176,18 @@ const stageEntryPlugin = (): Plugin => ({
 });
 
 const onlineConfig = async (): Promise<UserConfig> => {
-  const { frameCode } = await import("./server/frame-code.mjs");
+  const { frameCode, captureCode, snapshotCode } = await import("./server/frame-code.mjs");
   const codeVersion = frameCode(process.cwd());
+  // 本页产流(任务书 `render-refactor-task.md`「甲二」,`src/online/pageStreamPlan.ts`):轨道流的键里有截图代码与生成快照代码的指纹,
+  // 页面要算出与切分方相同的键,就得带着同一套算法在构建时算出的这两项
+  const streamCodes = { capture: captureCode(process.cwd()), snapshot: snapshotCode(process.cwd()) };
   return {
     base: "/editor/",
     // Tailwind 的构建期优化(Lightning CSS)即使不压缩也会改写数值(`0.4` → `.4`),与开发服务器(桌面导出页)的原文不同:一并关掉
     plugins: [rawEolPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss({ optimize: false }), onlineCatalogPlugin(process.cwd()), stageEntryPlugin()],
     define: {
       "import.meta.env.VITE_PC_ONLINE": JSON.stringify("1"), __PC_CODE_VERSION__: JSON.stringify(codeVersion),
+      __PC_STREAM_CODES__: JSON.stringify(streamCodes),
       // 在线卡片运行时版本里的转译器与 Tailwind 版本(`src/online/cardRuntime/version.ts`):取实际装的那一版
       __PC_CARD_RUNTIME_DEPS__: JSON.stringify(cardRuntimeDeps()),
     },
