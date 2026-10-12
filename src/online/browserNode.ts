@@ -400,6 +400,8 @@ export interface BrowserNode {
   /** 下线:放回全部,不再认领 */
   stop(): void;
   debug(): BrowserNodeDebug;
+  /** 手里有没有认领(在做、在查去重、在取项目都算)。本页产流(`pageStreams.ts`)据此不与认领来的任务同时用后台舞台 */
+  working(): boolean;
   readonly envFingerprint: string | null;
   readonly cardEnvFingerprint: string | null;
 }
@@ -900,6 +902,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
         lastError,
       };
     },
+    working() { return !stopped && ((!!run && !run.ended) || session.held().length > 0); },
     get envFingerprint() { return nodeDesc.envFingerprint; },
     get cardEnvFingerprint() { return nodeDesc.cardEnvFingerprint; },
   };
