@@ -28,8 +28,8 @@
  *   B 打开    创建者打开:成员列表、渲染服务的清单跟着变;**只打开、不动项目**,甲的页面看到这一项从关变开就重发一份清单计划
  *             (同一版项目,结果键带这一项),渲染服务据此切出自己的那一份流任务
  *             (三个:分段 0～7、8～15、16～16),渲染服务认领其中一个
- *   C 再关    手里正有一个流任务时创建者关掉:手里的那个照做完(没有放回),渲染服务与这个项目的连接没断;之后一段时间(≥ 15 秒)里剩下的
- *             两个流任务一直是 open、没有被认领;这期间这个项目新发的清单计划照常被认领、切分(不切流);已经产出的那一段的流清单还在内容库里,
+ *   C 再关    手里正有一个流任务时创建者关掉:手里的那个照做完(没有放回),渲染服务与这个项目的连接没断;工作进程对账看到「关着」以后(一秒上下)不再认领:之后一段时间(≥ 15 秒)里剩下的
+ *             流任务一直是 open、没有被认领(工作进程看到之前那一拍里碰巧又认领的至多一个,照做完,不算);这期间这个项目新发的清单计划照常被认领、切分(不切流);已经产出的那一段的流清单还在内容库里,
  *             层表里这条流的那一行还在。同一段时间里项目二(这一项开着)的流任务照常被认领并做完
  *   D 再打开  创建者再打开:剩下的两个流任务被认领并做完,三份流清单与它们的块都在
  *   E 播放    甲的在线来源认出这条流(选中的候选是渲染服务的指纹),播放时舞台上是流在画:包裹层被抑制、流播放器在出帧且跟着播放头、
@@ -636,6 +636,22 @@ async function main() {
   const tOffAgain = Date.now();
   const off1 = await setStreams(M, creator1, P1, false);
   C.offAfterClaimMs = Date.now() - tOffAgain;
+  // 关掉传到工作进程有一拍的延迟:管理进程的清单当场变,工作进程每秒对一次账才记到这个项目上(`render-node/host.mjs`)。
+  // 这一拍里手里的任务碰巧做完,它还会再认领一个(照做完,产出的保留);工作进程看到「关着」之后不许再认领。
+  // 所以这里记下每个流任务第一次被认领的时刻,和工作进程的诊断里这个项目变成 streams: false 的时刻,后面按先后判
+  const claimSeen = new Map();
+  const sampleClaims = () => { for (const t of streamTasks(P1.projectId)) if (t.claim && !claimSeen.has(t.id)) claimSeen.set(t.id, Number.isFinite(t.claim.claimedAt) ? t.claim.claimedAt : Date.now()); };
+  sampleClaims();
+  const claimSampler = setInterval(sampleClaims, 40);
+  claimSampler.unref?.();
+  let tWorkerOff = null;
+  const workerOffWatch = (async () => {
+    const until0 = Date.now() + 30_000;
+    while (Date.now() < until0 && tWorkerOff === null) {
+      try { if (nodeOf(await status(), P1.projectId)?.streams === false) { tWorkerOff = Date.now(); break; } } catch { /* 下一拍再问 */ }
+      await delay(50);
+    }
+  })();
   check(off1.type === 'shared.admin.ok', 'C:创建者关掉(shared.admin 回 ok)', { type: off1.type, reason: off1.reason });
   C.heldId = `${held.id.slice(0, 15)}…${held.id.slice(-6)}`;
   C.heldNode = held.claim?.nodeId ?? null;
@@ -689,7 +705,19 @@ async function main() {
   C.watchedMs = Date.now() - tHeldDone;
   C.rest = briefTasks(restNow);
   C.node = nC && { connected: nC.connected, claimed: nC.claimed, released: nC.released, held: nC.held?.length ?? 0, running: nC.running?.length ?? 0, failed: nC.failed };
-  check(restNow.length === 2 && restNow.every((t) => t.state === 'open' && t.attempts === 0 && !t.claim), `C:再关之后 ${Math.round(C.watchedMs / 1000)} 秒里,剩下的两个流任务一直没有被认领`, C.rest);
+  await workerOffWatch;
+  clearInterval(claimSampler);
+  sampleClaims();
+  C.workerOffMs = tWorkerOff === null ? null : tWorkerOff - tOffAgain;
+  // 工作进程看到「关着」之前认领的(最多一个:并发 1,手里那个做完才会再认领)照做完,不算;之后认领的才算违规。诊断是对账后当场交的,留 300 毫秒的余量
+  const claimedLate = restNow.filter((t) => claimSeen.has(t.id) && (tWorkerOff === null || claimSeen.get(t.id) > tWorkerOff + 300));
+  const claimedEarly = restNow.filter((t) => claimSeen.has(t.id) && !claimedLate.includes(t));
+  const stillOpen = restNow.filter((t) => t.state === 'open' && t.attempts === 0 && !t.claim);
+  C.claimedBeforeWorkerSawOff = briefTasks(claimedEarly);
+  check(tWorkerOff !== null, 'C:工作进程对账后自己也看到这个项目不产流(诊断里 streams: false)', { workerOffMs: C.workerOffMs });
+  check(restNow.length === 2 && claimedLate.length === 0 && claimedEarly.length <= 1 && stillOpen.length >= 1 && stillOpen.length + claimedEarly.length === 2,
+    `C:再关之后 ${Math.round(C.watchedMs / 1000)} 秒里,工作进程看到「关着」以后没有再认领流任务(之前那一拍里认领的至多一个,照做完)`,
+    { rest: C.rest, workerOffMs: C.workerOffMs, claimedBeforeWorkerSawOff: C.claimedBeforeWorkerSawOff, late: briefTasks(claimedLate) });
   check(nC?.connected === true && listedOf(sC, P1.projectId)?.streams === false, 'C:渲染服务与这个项目的连接没断(只关这一项不断开服务)', { node: C.node, listed: listedOf(sC, P1.projectId) });
   check((nC?.released ?? 0) === releasedBefore, 'C:没有放回任何认领', { released: nC?.released, before: releasedBefore });
   // 已经产出的保留:那一段的流清单在内容库里;层表里这条流的那一行还在(候选是渲染服务的指纹)
