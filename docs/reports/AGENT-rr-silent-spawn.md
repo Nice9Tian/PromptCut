@@ -3,8 +3,8 @@
 任务：Windows 上起子进程不弹命令行窗口——给 child_process 调用补 windowsHide: true，加守门测试。分支 claude/rr-silent-spawn，基于 main 5d960cb4。
 
 ## 做了什么
-- 补 windowsHide: true 共 18 处：
-  - server/（10 处）：vision/worker-pool.ts 的 fork（弹窗的直接原因）和 taskkill、vite-plugin-collect/export/stt/subject.ts 的 taskkill、vite-plugin-export.ts 起 node、bakery/export.mjs、bakery/ffmpeg.mjs（2 处）、runners/agy.mjs（选项放在展开之前，调用方仍可覆盖）。
+- 补 windowsHide: true 共 19 处：
+  - server/（11 处）：vision/worker-pool.ts 的 fork（弹窗的直接原因）和 taskkill、vite-plugin-collect/export/stt/subject.ts 的 taskkill、vite-plugin-export.ts 起 node、bakery/export.mjs、bakery/ffmpeg.mjs（2 处）、runners/agy.mjs（选项放在展开之前，调用方仍可覆盖）。
   - scripts/（8 处）：card-shots.mjs、verify-preview-window.mjs、verify-unified-frames.mjs、acceptance/four-stage-manifest.mjs（命令串里 `node -e` 的 execSync）、probes/stream-common.mjs（4 处，被多支探针共用）。
   - 其余 server/、scripts/lib/、scripts/*.mjs 里起进程的调用原本就带了。
 - 只加选项，没改行为，没重构。
@@ -29,7 +29,7 @@
 
 ## 没覆盖的（清单，不逐个改）
 范围外、未改，扫描器能认出的遗漏：
-- scripts/probes/ 单支探针（约 25 个文件、40 余处），文件：backdrop-probe、c10-stage-probe、c10a-demo-probe、cold-start-probe、gl-atlas-probe、gl-migrate-compare、m7-bake-node-probe、m7-bake-probe、m7-build-probe、m7-upload-probe、m8-outbound-probe、pixelmap-gl-probe、playback-probe、probe-gate-probe、ready-index-probe、reopen-public-tunnel、reveal-probe、sound-effects-probe、stage-content-probe、storage-cap-probe、storage-ui-probe、stream-encoder-params、stream-produce-probe、svg-url-serialize-probe、tier-switch-probe、videodecoder-probe。多数是 ffmpeg、taskkill、vite 的起停，另有 `powershell -Command` 取 CPU 负载的几处。
+- scripts/probes/ 单支探针（26 个文件、约 40 处），文件：backdrop-probe、c10-stage-probe、c10a-demo-probe、cold-start-probe、gl-atlas-probe、gl-migrate-compare、m7-bake-node-probe、m7-bake-probe、m7-build-probe、m7-upload-probe、m8-outbound-probe、pixelmap-gl-probe、playback-probe、probe-gate-probe、ready-index-probe、reopen-public-tunnel、reveal-probe、sound-effects-probe、stage-content-probe、storage-cap-probe、storage-ui-probe、stream-encoder-params、stream-produce-probe、svg-url-serialize-probe、tier-switch-probe、videodecoder-probe。多数是 ffmpeg、taskkill、vite 的起停，另有 `powershell -Command` 取 CPU 负载的几处。
 - scripts/remote/docservice.mjs：ssh/scp 共 5 处（部署工具，手动在控制台跑）。
 - desktop/scripts/*（build-release、make-extension、make-patch、prepare-python、prepare-runtime、smoke-*）约 30 处：构建与冒烟脚本。
 - 测试文件里自己起进程的（src/*.test.mjs、desktop/test/*）：`npm test` 经 scripts/lib/test-silent-processes.mjs 预加载统一补，本次未动。
