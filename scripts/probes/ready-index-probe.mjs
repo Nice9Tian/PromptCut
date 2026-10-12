@@ -330,7 +330,7 @@ try {
     const port = new URL(oldBase).port;
     const { execSync } = await import('node:child_process');
     try {
-      const text = execSync(process.platform === 'win32' ? `netstat -ano -p tcp` : `lsof -ti tcp:${port}`, { encoding: 'utf8' });
+      const text = execSync(process.platform === 'win32' ? `netstat -ano -p tcp` : `lsof -ti tcp:${port}`, { windowsHide: true, encoding: 'utf8' });
       if (process.platform !== 'win32') return Number(text.trim().split(/\s+/)[0]);
       const line = text.split(/\r?\n/).find(l => l.includes(`127.0.0.1:${port}`) && l.includes('LISTENING'));
       return line ? Number(line.trim().split(/\s+/).pop()) : null;

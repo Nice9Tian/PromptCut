@@ -31,7 +31,7 @@ const elapsed = () => ((Date.now() - t0) / 1000).toFixed(0);
 
 function run(label, cmd, args, opts = {}) {
   console.log(`\n── ${label} ──`);
-  const r = spawnSync(cmd, args, { cwd: DESKTOP_DIR, stdio: "inherit", shell: true, ...opts });
+  const r = spawnSync(cmd, args, { windowsHide: true, cwd: DESKTOP_DIR, stdio: "inherit", shell: true, ...opts });
   if (r.status !== 0) {
     console.error(`[FAIL] ${label} 失败（退出码 ${r.status}）`);
     process.exit(1);
@@ -61,8 +61,8 @@ console.log(`  外壳版本：${shellVersion}（Rust 那半边，只在需要重
 let sourceArgs = [];
 let worktree = null;
 if (has("--from-head")) {
-  const dirty = spawnSync("git", ["status", "--porcelain"], { cwd: PROJECT_ROOT, encoding: "utf8" }).stdout || "";
-  const head = (spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: PROJECT_ROOT, encoding: "utf8" }).stdout || "").trim();
+  const dirty = spawnSync("git", ["status", "--porcelain"], { windowsHide: true, cwd: PROJECT_ROOT, encoding: "utf8" }).stdout || "";
+  const head = (spawnSync("git", ["rev-parse", "--short", "HEAD"], { windowsHide: true, cwd: PROJECT_ROOT, encoding: "utf8" }).stdout || "").trim();
   worktree = path.join(DESKTOP_DIR, ".cache", "release-src");
   console.log(`\n── 从 HEAD (${head}) 取源码 ──`);
   const excluded = dirty.split(/\r?\n/).filter((l) => l.trim() && !/^\?\?/.test(l));
@@ -71,9 +71,9 @@ if (has("--from-head")) {
     for (const l of excluded.slice(0, 12)) console.log(`    ${l.trim()}`);
     if (excluded.length > 12) console.log(`    …还有 ${excluded.length - 12} 个`);
   }
-  spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: PROJECT_ROOT, stdio: "ignore" });
-  spawnSync("git", ["worktree", "prune"], { cwd: PROJECT_ROOT, stdio: "ignore" });
-  const add = spawnSync("git", ["worktree", "add", "--detach", worktree, "HEAD"], { cwd: PROJECT_ROOT, stdio: "inherit" });
+  spawnSync("git", ["worktree", "remove", "--force", worktree], { windowsHide: true, cwd: PROJECT_ROOT, stdio: "ignore" });
+  spawnSync("git", ["worktree", "prune"], { windowsHide: true, cwd: PROJECT_ROOT, stdio: "ignore" });
+  const add = spawnSync("git", ["worktree", "add", "--detach", worktree, "HEAD"], { windowsHide: true, cwd: PROJECT_ROOT, stdio: "inherit" });
   if (add.status !== 0) {
     console.error("[FAIL] 建不出 worktree");
     process.exit(1);
@@ -83,8 +83,8 @@ if (has("--from-head")) {
 
 function cleanupWorktree() {
   if (!worktree) return;
-  spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: PROJECT_ROOT, stdio: "ignore" });
-  spawnSync("git", ["worktree", "prune"], { cwd: PROJECT_ROOT, stdio: "ignore" });
+  spawnSync("git", ["worktree", "remove", "--force", worktree], { windowsHide: true, cwd: PROJECT_ROOT, stdio: "ignore" });
+  spawnSync("git", ["worktree", "prune"], { windowsHide: true, cwd: PROJECT_ROOT, stdio: "ignore" });
   worktree = null;
 }
 process.on("exit", cleanupWorktree);

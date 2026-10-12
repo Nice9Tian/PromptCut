@@ -35,7 +35,7 @@ fs.mkdirSync(OUT, { recursive: true });
 /* ------------------------------------------------------------------ 素材 */
 
 const ff = (args, label) => {
-  const r = spawnSync('ffmpeg', ['-y', '-v', 'error', ...args], { encoding: 'utf8' });
+  const r = spawnSync('ffmpeg', ['-y', '-v', 'error', ...args], { windowsHide: true, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`ffmpeg ${label} 失败:${r.stderr || r.error?.message}`);
 };
 const srcPng = path.join(OUT, 'src-testsrc2.png');
@@ -88,7 +88,7 @@ const CASES = [
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-pmgl-'));
 const vite = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx',
   ['vite', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'],
-  { cwd: ROOT, env: { ...process.env, TEMP: tmp, TMP: tmp, PROMPTCUT_NO_PORT_FILE: '1' }, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+  { windowsHide: true, cwd: ROOT, env: { ...process.env, TEMP: tmp, TMP: tmp, PROMPTCUT_NO_PORT_FILE: '1' }, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
 let viteLog = '';
 vite.stdout.on('data', (d) => { viteLog += d; });
 vite.stderr.on('data', (d) => { viteLog += d; });
@@ -223,7 +223,7 @@ try {
    * Windows 上 vite 是经 npx.cmd + shell 起的,`kill()` 只打到那层 shell,真正占着 5199 的
    * node 会活下来(实测跑完之后端口还 LISTENING)。所以整棵进程树一起收。
    */
-  if (process.platform === 'win32' && vite.pid) spawnSync('taskkill', ['/F', '/T', '/PID', String(vite.pid)], { stdio: 'ignore' });
+  if (process.platform === 'win32' && vite.pid) spawnSync('taskkill', ['/F', '/T', '/PID', String(vite.pid)], { windowsHide: true, stdio: 'ignore' });
   vite.kill();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录清不掉不影响结论 */ }
 }

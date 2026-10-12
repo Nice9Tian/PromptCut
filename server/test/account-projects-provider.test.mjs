@@ -13,8 +13,8 @@ import { openAccountLedger, canonicalJson } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
 import { mountAccountProjects, createAccountProjectsInternalServer } from '../docservice/modules/account-projects.mjs';
 
-const providerDir = process.env.ACCOUNT_PROVIDER_DIR ?? 'C:/Users/admin/Documents/VisuHive/.worktrees/018-account-foundation';
-const available = fs.existsSync(path.join(providerDir, 'account/internal.mjs'));
+const providerDir = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? '';
+const available = Boolean(providerDir) && fs.existsSync(path.join(providerDir, 'account/internal.mjs'));
 const ids = ['acc_0123456789abcdef01234567', 'acc_abcdef0123456789abcdef01'];
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const close = server => new Promise(resolve => server.close(resolve));
@@ -45,7 +45,7 @@ function request(origin, tls, method, route, body, headers = {}) {
 }
 
 test('account project v2 real frozen provider, pinned mTLS, persisted doc authority and A/B separation',
-  { skip: !available && 'readonly account provider not available; set ACCOUNT_PROVIDER_DIR' }, async t => {
+  { skip: !available && 'readonly account provider not available; set PROMPTCUT_ACCOUNT_PROVIDER_ROOT (VisuHive repo root)' }, async t => {
     const [storeModule, credentialModule, internalModule] = await Promise.all(['store', 'credentials', 'internal'].map(name => import(pathToFileURL(path.join(providerDir, `account/${name}.mjs`)).href)));
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-account-projects-'));
     const tls = certificateFixture(dir); const store = storeModule.openStore(path.join(dir, 'account.sqlite'));

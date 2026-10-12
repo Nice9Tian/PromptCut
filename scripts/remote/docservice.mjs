@@ -114,13 +114,13 @@ const baseOpts = [
 
 /** 跑一条远端命令，输出收回来 */
 function ssh(remoteCmd, { timeout = 30_000 } = {}) {
-  const r = spawnSync('ssh', [...baseOpts, target, remoteCmd], { encoding: 'utf8', timeout });
+  const r = spawnSync('ssh', [...baseOpts, target, remoteCmd], { windowsHide: true, encoding: 'utf8', timeout });
   return { code: r.status, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() };
 }
 
 /** 把一段 bash 脚本经 stdin 交给远端执行，输出直接打到本机终端 */
 function sshScript(script, { timeout = 600_000 } = {}) {
-  const r = spawnSync('ssh', [...baseOpts, target, 'bash -s'], { input: script, stdio: ['pipe', 'inherit', 'inherit'], timeout });
+  const r = spawnSync('ssh', [...baseOpts, target, 'bash -s'], { windowsHide: true, input: script, stdio: ['pipe', 'inherit', 'inherit'], timeout });
   return r.status ?? 1;
 }
 
@@ -232,7 +232,7 @@ function deploy() {
   // 相对路径 + cwd：Windows 的绝对路径带盘符冒号，scp 会把 `C:` 当成主机名
   const sources = ['server/docservice', 'server/auth', 'server/render-queue'];
   console.log(`== scp ${sources.join(' ')} -> ${target}:${dir}/`);
-  const scp = spawnSync('scp', [...baseOpts, '-r', '-q', ...sources, `${target}:${dir}/.incoming/server/`], { cwd: ROOT, stdio: 'inherit', timeout: 120_000 });
+  const scp = spawnSync('scp', [...baseOpts, '-r', '-q', ...sources, `${target}:${dir}/.incoming/server/`], { windowsHide: true, cwd: ROOT, stdio: 'inherit', timeout: 120_000 });
   if (scp.status !== 0) return scp.status ?? 1;
   return sshScript(deployScript(token));
 }
@@ -292,14 +292,14 @@ function deployHosted() {
     }
     console.log(`== scp ${files.length} 个文件 -> ${target}:${inst.dir}/.incoming（实例 ${inst.name}，app ${inst.app}）`);
     // 相对路径 + cwd：Windows 的绝对路径带盘符冒号，scp 会把 C: 当成主机名
-    const scp = spawnSync('scp', [...baseOpts, '-r', '-q', '.incoming', `${target}:${inst.dir}/`], { cwd: stage, stdio: 'inherit', timeout: 180_000 });
+    const scp = spawnSync('scp', [...baseOpts, '-r', '-q', '.incoming', `${target}:${inst.dir}/`], { windowsHide: true, cwd: stage, stdio: 'inherit', timeout: 180_000 });
     if (scp.status !== 0) return scp.status ?? 1;
     if (editorDir) {
       // 在线构建：先在本机暂存目录里拷一份、给 assets/ 生成 .gz（stageEditorBuild），再拷成 .incoming-editor，远端脚本再整体换名（C10a 契约第 3 节）
       const { gz } = stageEditorBuild(editorDir, path.join(stage, '.incoming-editor'));
       console.log(`== 预压缩 ${gz.length} 个 assets（.gz）`);
       console.log(`== scp 在线构建 ${editorDir} -> ${target}:${inst.dir}/.incoming-editor`);
-      const up = spawnSync('scp', [...baseOpts, '-r', '-q', '.incoming-editor', `${target}:${inst.dir}/.incoming-editor`], { cwd: stage, stdio: 'inherit', timeout: 180_000 });
+      const up = spawnSync('scp', [...baseOpts, '-r', '-q', '.incoming-editor', `${target}:${inst.dir}/.incoming-editor`], { windowsHide: true, cwd: stage, stdio: 'inherit', timeout: 180_000 });
       if (up.status !== 0) return up.status ?? 1;
     }
   } finally {

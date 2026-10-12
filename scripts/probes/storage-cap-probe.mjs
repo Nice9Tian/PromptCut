@@ -237,7 +237,7 @@ try {
   // 先设一个大上限(合法、不淘汰)让它立即检查一次:打开的项目刚写的键在检查时才量(增量维护),
   // 量完的总字节才是下面算目标用的
   // (三支合并后)跑着的时候在一个留着的键目录里放死进程的遗留:下面这次检查要一并清掉(启动清理早就做过了,清它的只能是检查)
-  const deadPid = spawnSync(process.execPath, ['-e', '0']).pid;
+  const deadPid = spawnSync(process.execPath, ['-e', '0'], { windowsHide: true }).pid;
   const leftDir = path.join(LIBRARY, fakes[4].entryKey);
   const leftFiles = [path.join(leftDir, 'mov', `full-${deadPid}.tmp.mov`), path.join(leftDir, 'html-cache', `live-${deadPid}-probe`, 'blob')];
   for (const file of leftFiles) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, Buffer.alloc(250_000)); }

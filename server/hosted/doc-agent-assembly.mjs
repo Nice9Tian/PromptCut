@@ -11,6 +11,10 @@ import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanc
   INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
 import { createAgentRunScopeDoc } from '../account/agent-run-scope-doc.mjs';
+import { createRunAssetsInstanceAdapter } from './run-assets-instance-adapter.mjs';
+import { createRunAssets } from '../account/run-assets.mjs';
+import { createRunAssetsInternalHandler } from '../account/run-assets-internal.mjs';
+import { createRunAssetClosure } from './run-assets-closure.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 
@@ -38,13 +42,15 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   const masterKid = scopeAuthority ? account.agent.runScopes.masterServiceKid : null;
   if (scopeAuthority && (masterPin === pin || masterKid === kid)) fail(503, 'doc-agent-role-configuration');
   const servicePins = new Map([[kid, pin], ...(scopeAuthority ? [[masterKid, masterPin]] : [])]);
-  let stopped = false, runAuthority;
+  let stopped = false, runAuthority, assetInstanceAdapter = null, runAssets = null, runAssetsHandler = null;
+  // 不带参数时核的是跑任务的那个身份（运行素材那一侧这样调）；带参数时核指定的那个（任务身份或只做控制的主身份）。
   const currentService = (serviceKid = kid) => {
     if (stopped) fail(503, 'doc-agent-unavailable');
     try { serviceRegistry?.refresh({ force: true }); } catch { fail(403, 'run-service-forbidden'); }
     const entry = serviceRegistry?.get('agent');
     if (!servicePins.has(serviceKid) || entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === serviceKid))
       fail(403, 'run-service-forbidden');
+    return { serviceId: 'agent', serviceKid };
   };
   const resolveServicePrincipal = ({ socket }) => {
     const fingerprint = certificateFingerprint(socket?.getPeerCertificate?.()?.fingerprint256);
@@ -63,6 +69,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     return structuredClone(subject);
   };
   const verifyServiceInState = (_state, subject) => {
+    if (assetInstanceAdapter?.has(subject)) {
+      const observed = assetInstanceAdapter.transportFor(subject);
+      return { serviceId: observed.serviceId, serviceKid: observed.serviceKid };
+    }
     currentService(subject?.serviceKid);
     const socket = subjects.get(subject?.authenticationId);
     if (!socket || subject.service !== 'agent' || socket.destroyed ||
@@ -72,6 +82,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   };
   const instanceAuthority = createAgentInstanceAuthority({ ledger, scopeAuthority,
     verifyTransportInState(state, subject) {
+      if (assetInstanceAdapter?.has(subject)) return assetInstanceAdapter.transportFor(subject);
       const service = verifyServiceInState(state, subject);
       return { ...service, authenticationId: subject.authenticationId,
         fingerprint256: certificateFingerprint(subjects.get(subject.authenticationId)?.getPeerCertificate?.()?.fingerprint256),
@@ -335,6 +346,55 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     } finally { for (const cap of caps) instanceAuthority.release(cap.instanceSession); }
   }
   const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, masterFingerprint256: masterPin, resolveServicePrincipal });
+  function createRunAssetAuthentication({ assetFingerprint256, currentAsset } = {}) {
+    if (assetInstanceAdapter) fail(503, 'run-assets-instance-already-bound');
+    const adapter = createRunAssetsInstanceAdapter({ agentFingerprint256: pin, agentServiceKid: kid,
+      assetFingerprint256, currentAgent: currentService, currentAsset });
+    assetInstanceAdapter = adapter;
+    const authenticateDirect = ({ transport, proof, method, path, operation, request }) => {
+      assertInstanceDirectTransport(transport);
+      const base = resolveServicePrincipal({ socket: transport.socket });
+      // 〔裁〕运行素材只给跑任务的身份用。开了「一条任务一个进程」以后这个入口还认得只做控制的主身份的证书，
+      // 这里先拒掉它，不等到后面按实例用途去拒。
+      if (base.serviceKid !== kid) fail(403, 'run-service-forbidden');
+      const cap = instanceAuthority.authenticate({ servicePrincipal: base, method, path, operation, request, proof });
+      return { servicePrincipal: { ...base, ...cap }, release: () => instanceAuthority.release(cap.instanceSession) };
+    };
+    const authenticateObserved = ({ observer, observation, proof, method, path, operation, request }) => {
+      const observed = adapter.open({ observer, observation });
+      try {
+        const cap = instanceAuthority.authenticate({ servicePrincipal: observed.servicePrincipal,
+          method, path, operation, request, proof });
+        return { servicePrincipal: { ...observed.servicePrincipal, ...cap },
+          release() { instanceAuthority.release(cap.instanceSession); observed.release(); } };
+      } catch (error) { observed.release(); throw error; }
+    };
+    return Object.freeze({ authenticateDirect, authenticateObserved, verifyObserver: adapter.verifyObserver });
+  }
+  function mountRunAssets({ assetFingerprint256, currentAsset, resolveObserver, privateClient,
+    ticketTtlMs, maxBodyBytes, now: runNow = now } = {}) {
+    if (runAssets || typeof resolveObserver !== 'function' || typeof privateClient?.identity !== 'function')
+      fail(503, 'run-assets-unconfigured');
+    const doc = getDocAssembly();
+    if (typeof doc?.resolveRunMedia !== 'function') fail(503, 'run-assets-unconfigured');
+    const authentication = createRunAssetAuthentication({ assetFingerprint256, currentAsset });
+    let authority;
+    try {
+      const closure = createRunAssetClosure({ privateClient, currentAsset });
+      authority = createRunAssets({ ledger, runProvider: provider,
+        authenticateDirect: authentication.authenticateDirect,
+        authenticateObserved: authentication.authenticateObserved,
+        verifyObserver: authentication.verifyObserver,
+        resolveMedia: input => doc.resolveRunMedia(input),
+        verifyLeaseClosure: input => closure.verifyLeaseClosure(input),
+        verifyControlReceipt: input => closure.verifyControlReceipt(input),
+        now: runNow, ticketTtlMs });
+      const handler = createRunAssetsInternalHandler({ runAssets: authority,
+        agentFingerprint256: pin, assetFingerprint256, resolveObserver, maxBodyBytes });
+      runAssets = authority; runAssetsHandler = handler;
+      return Object.freeze({ authority, handler });
+    } catch (error) { authority?.close(); assetInstanceAdapter?.close(); assetInstanceAdapter = null; throw error; }
+  }
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
     agentFingerprint256: masterPin ?? pin, requireReadControl: true, resolveDelegation: async ticket => {
       currentService(); return runtime.resolveAgentDelegation(ticket);
@@ -374,14 +434,16 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       }
       return { conversations: rows, ...(scopeAuthority ? { scopeControls: runAuthority.listScopeControls({ servicePrincipal }) } : {}) };
     } });
-  return { conversations, readControl, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
-    async handleInternal(req, res) { return await instancesHandler(req, res) || await readControlsHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
+  return { conversations, readControl, runProvider: provider, runHooks, deliver, createRunAssetAuthentication, mountRunAssets,
+    transportAuthenticate, transportConnected, dispatchInvocation,
+    async handleInternal(req, res) { return await runAssetsHandler?.(req, res) || await instancesHandler(req, res) || await readControlsHandler(req, res) ||
+      await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control);
       if (scopeAuthority) {
         for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
         await runAuthority.reconcileScopeClosures();
       } },
-    async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
+    async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); runAssets?.close(); assetInstanceAdapter?.close(); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
 }

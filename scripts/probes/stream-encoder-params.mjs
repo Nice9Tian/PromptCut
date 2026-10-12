@@ -46,7 +46,7 @@ console.log(`素材就绪：PNG 共 ${(pngs.reduce((s, p) => s + p.length, 0) / 
 // ── ffprobe：帧类型序列 ──────────────────────────────────────────────────────
 async function frameTypes(file) {
   const { stdout } = await execFileAsync(ffprobe, ['-v', 'error', '-select_streams', 'v:0',
-    '-show_entries', 'frame=pict_type,key_frame', '-of', 'csv=p=0', file], { maxBuffer: 1 << 22 });
+    '-show_entries', 'frame=pict_type,key_frame', '-of', 'csv=p=0', file], { windowsHide: true, maxBuffer: 1 << 22 });
   return stdout.trim().split(/\r?\n/).filter(Boolean).map((l) => {
     const [key, type] = l.split(',');
     return { key: key === '1', type: type || '?' };

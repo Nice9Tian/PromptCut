@@ -143,7 +143,7 @@ function listPayloadFiles(dir = APP_DIR, base = "") {
  * 比逐个 copyFileSync 快得多，也不会撞上 260 字符的路径上限。
  */
 function copyTree(src, dest) {
-  const r = spawnSync("robocopy.exe", [src, dest, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/R:1", "/W:1"], {
+  const r = spawnSync("robocopy.exe", [src, dest, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/R:1", "/W:1"], { windowsHide: true,
     stdio: "inherit", timeout: 1_800_000,
   });
   // robocopy 用退出码表示做了什么，0–7 都算成功，≥8 才是真出错。
@@ -360,7 +360,7 @@ function main() {
     `-DOUTFILE=${exePath}`,
     `-DICON=${path.join(DESKTOP_DIR, "src-tauri", "icons", "icon.ico")}`,
     path.join(INSTALLER_DIR, "patch-installer.nsi"),
-  ], { encoding: "utf8", timeout: 1_800_000 });
+  ], { windowsHide: true, encoding: "utf8", timeout: 1_800_000 });
   if (build.status !== 0 || !fs.existsSync(exePath)) {
     fail(`NSIS 打包失败（退出码 ${build.status}）\n${(build.stdout || "").slice(-2000)}${build.stderr || ""}`);
   }
@@ -372,7 +372,7 @@ function main() {
     // 直接丢掉，只在 stderr 留一行警告。
     const tarExe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
     const zip = spawnSync(fs.existsSync(tarExe) ? tarExe : "tar",
-      ["-a", "-c", "--options", "hdrcharset=UTF-8", "-f", zipPath, stem], {
+      ["-a", "-c", "--options", "hdrcharset=UTF-8", "-f", zipPath, stem], { windowsHide: true,
         cwd: STAGE_DIR, stdio: ["ignore", "inherit", "pipe"], encoding: "utf8", timeout: 1_800_000,
       });
     if (zip.status !== 0) fail(`zip 打包失败（退出码 ${zip.status}）${zip.stderr || ""}`);
@@ -391,7 +391,7 @@ function main() {
 function findMakensis() {
   const bundled = path.join(process.env.LOCALAPPDATA || "", "tauri", "NSIS", "Bin", "makensis.exe");
   if (fs.existsSync(bundled)) return bundled;
-  const probe = spawnSync("makensis", ["/VERSION"], { encoding: "utf8" });
+  const probe = spawnSync("makensis", ["/VERSION"], { windowsHide: true, encoding: "utf8" });
   if (probe.status === 0 || probe.stdout) return "makensis";
   fail("找不到 makensis。跑一次 npm run build 让 Tauri 把 NSIS 装下来，或者自己装 NSIS 并加进 PATH。");
 }

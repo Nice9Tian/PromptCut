@@ -346,7 +346,7 @@ function stepApp() {
 
   // npm ci
   console.log("  Running npm ci…");
-  const ciResult = spawnSync("npm", ["ci"], {
+  const ciResult = spawnSync("npm", ["ci"], { windowsHide: true,
     cwd: appDir,
     shell: true,
     stdio: "inherit",
@@ -380,7 +380,7 @@ function stepApp() {
     `Background CLI login component failed verification: ${ptyCheck.stderr || ptyCheck.error || ptyCheck.status}`);
   console.log("  Running vite build…");
   const viteEnv = viteEnvFromDotEnv();
-  const buildResult = spawnSync("npx.cmd", ["vite", "build"], {
+  const buildResult = spawnSync("npx.cmd", ["vite", "build"], { windowsHide: true,
     cwd: appDir,
     shell: true,
     stdio: "inherit",
@@ -491,7 +491,7 @@ function stepChrome(appDir) {
       const dlResult = spawnSync("npx.cmd", [
         "puppeteer", "browsers", "install", `${b.name}@${version}`,
         "--path", chromeDir,
-      ], {
+      ], { windowsHide: true,
         cwd: effectiveAppDir,
         shell: true,
         stdio: "inherit",
@@ -525,7 +525,7 @@ function stepChrome(appDir) {
 function findFfmpegDir() {
   // Try PATH first
   try {
-    const which = execSync("where ffmpeg", { encoding: "utf-8", timeout: 5000 }).trim().split(/\r?\n/)[0];
+    const which = execSync("where ffmpeg", { windowsHide: true, encoding: "utf-8", timeout: 5000 }).trim().split(/\r?\n/)[0];
     if (which) {
       const binDir = path.dirname(which);
       if (fs.existsSync(path.join(binDir, "ffprobe.exe"))) {
@@ -574,7 +574,7 @@ function stepFfmpeg() {
     // Get version
     let ver = "unknown";
     try {
-      const out = execSync(`"${path.join(ffmpegDest, "ffmpeg.exe")}" -version`, {
+      const out = execSync(`"${path.join(ffmpegDest, "ffmpeg.exe")}" -version`, { windowsHide: true,
         encoding: "utf-8", timeout: 5000,
       });
       ver = out.split(/\r?\n/)[0];
@@ -607,7 +607,7 @@ function stepFfmpeg() {
 
   let ver = "unknown";
   try {
-    const out = execSync(`"${path.join(ffmpegDest, "ffmpeg.exe")}" -version`, {
+    const out = execSync(`"${path.join(ffmpegDest, "ffmpeg.exe")}" -version`, { windowsHide: true,
       encoding: "utf-8", timeout: 5000,
     });
     ver = out.split(/\r?\n/)[0];
@@ -645,7 +645,7 @@ function stepPython() {
 
   let ver;
   try {
-    ver = execSync(`"${pythonExe}" -V`, { encoding: "utf-8", timeout: 5000 }).trim(); // "Python 3.11.x"
+    ver = execSync(`"${pythonExe}" -V`, { windowsHide: true, encoding: "utf-8", timeout: 5000 }).trim(); // "Python 3.11.x"
   } catch (e) {
     assert(false, `内置 Python 存在但跑不起来: ${e.message}\n         用 npm run prepare-python -- --force 重装。`);
   }
@@ -758,7 +758,7 @@ function main() {
   // Node version
   let nodeVer = "unknown";
   try {
-    nodeVer = execSync(`"${process.execPath}" --version`, { encoding: "utf-8", timeout: 5000 }).trim();
+    nodeVer = execSync(`"${process.execPath}" --version`, { windowsHide: true, encoding: "utf-8", timeout: 5000 }).trim();
   } catch { /* ignore */ }
 
   stepVersions(nodeVer, chromeVer, ffmpegVer, pythonVer);

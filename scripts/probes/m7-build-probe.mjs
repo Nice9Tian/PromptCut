@@ -34,7 +34,7 @@ const err = (...a) => console.error(...a);
 const out = { root: ROOT, build: null, runtime: null };
 if (!SKIP) {
   const t0 = Date.now();
-  const r = spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['vite', 'build', '--mode', 'online'], { cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 << 20 });
+  const r = spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['vite', 'build', '--mode', 'online'], { windowsHide: true, cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 << 20 });
   const log = `${r.stdout || ''}\n${r.stderr || ''}`.replace(/\x1b\[[0-9;]*m/g, '');
   const nodeLines = [...new Set(log.split(/\r?\n/).filter((l) => /node:[a-z_]+/.test(l) && /externalized|not exported|resolve|Error|error/i.test(l)).map((l) => l.trim().replace(ROOT.replace(/\\/g, '/'), '<root>').slice(0, 300)))];
   out.build = { exit: r.status, ms: Date.now() - t0, nodeLines, errorLines: log.split(/\r?\n/).filter((l) => /\berror\b/i.test(l) && !/warn/i.test(l)).slice(0, 10).map((l) => l.slice(0, 300)) };

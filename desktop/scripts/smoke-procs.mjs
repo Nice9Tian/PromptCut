@@ -14,7 +14,7 @@ import { execSync } from "child_process";
 export function procList() {
   const csv = execSync(
     'powershell -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Csv -NoTypeInformation"',
-    { encoding: "utf-8", timeout: 15_000 }
+    { windowsHide: true, encoding: "utf-8", timeout: 15_000 }
   );
   const lines = csv.trim().split(/\r?\n/).slice(1); // skip header
   return lines.map((line) => {

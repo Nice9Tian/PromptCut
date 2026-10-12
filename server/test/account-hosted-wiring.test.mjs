@@ -18,8 +18,8 @@ import { createFileStore } from '../docservice/store/index.mjs';
 import { stateBlobName } from '../docservice/modules/project.mjs';
 import { stageHostedFiles } from '../hosted/files.mjs';
 
-const providerDir = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? 'C:/Users/admin/Documents/VisuHive/.worktrees/018-account-foundation';
-const available = fs.existsSync(path.join(providerDir, 'account/internal.mjs'));
+const providerDir = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? '';
+const available = Boolean(providerDir) && fs.existsSync(path.join(providerDir, 'account/internal.mjs'));
 const idA = 'acc_0123456789abcdef01234567';
 const idB = 'acc_abcdef0123456789abcdef01';
 const listen = (server, port) => new Promise((resolve, reject) => {
@@ -149,7 +149,7 @@ test('staged hosted account dependencies are present and required mode fails clo
 });
 
 test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, message gate and internal ticket check',
-  { skip: !available && 'frozen account provider unavailable' }, async t => {
+  { skip: !available && 'account provider unavailable; set PROMPTCUT_ACCOUNT_PROVIDER_ROOT (VisuHive repo root) and PROMPTCUT_PASSWORD_ORDER_MODULE' }, async t => {
     const modules = await Promise.all(['store', 'credentials', 'internal'].map(name => import(pathToFileURL(path.join(providerDir, `account/${name}.mjs`)).href)));
     const [storeModule, credentialModule, internalModule] = modules;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-account-wiring-'));

@@ -391,7 +391,7 @@ function bundledPython() {
 function findMakensis() {
   const bundled = path.join(process.env.LOCALAPPDATA || "", "tauri", "NSIS", "Bin", "makensis.exe");
   if (fs.existsSync(bundled)) return bundled;
-  const probe = spawnSync("makensis", ["/VERSION"], { encoding: "utf8" });
+  const probe = spawnSync("makensis", ["/VERSION"], { windowsHide: true, encoding: "utf8" });
   if (probe.status === 0 || probe.stdout) return "makensis";
   fail("找不到 makensis。先跑一次 npm run build 让 Tauri 把 NSIS 装下来。");
 }
@@ -460,7 +460,7 @@ function main() {
   console.log(`  下载 wheel（${ext.requirements.length} 份清单）…`);
   const dl = spawnSync(python,
     ["-m", "pip", "download", ...ext.requirements.flatMap((r) => ["-r", r]), "-d", wheelDir],
-    { stdio: "inherit", timeout: 3_600_000 });
+    { windowsHide: true, stdio: "inherit", timeout: 3_600_000 });
   if (dl.status !== 0) fail(`pip download 失败（退出码 ${dl.status}）`);
   const wheels = fs.readdirSync(wheelDir);
   if (!wheels.length) fail("一个 wheel 都没下到");
@@ -508,7 +508,7 @@ function main() {
     `-DOUTFILE=${exePath}`,
     `-DICON=${path.join(DESKTOP_DIR, "src-tauri", "icons", "icon.ico")}`,
     path.join(__dirname, "extension-installer.nsi"),
-  ], { encoding: "utf8", timeout: 3_600_000 });
+  ], { windowsHide: true, encoding: "utf8", timeout: 3_600_000 });
   if (build.status !== 0 || !fs.existsSync(exePath)) {
     fail(`NSIS 打包失败（退出码 ${build.status}）\n${(build.stdout || "").slice(-2000)}${build.stderr || ""}`);
   }

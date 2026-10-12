@@ -504,7 +504,7 @@ export async function exportFrames(opts) {
     let ffmpegCmd = 'ffmpeg';
     try {
       await new Promise((resolve, reject) => {
-        const proc = spawn('ffmpeg', ['-version']);
+        const proc = spawn('ffmpeg', ['-version'], { windowsHide: true });
         proc.on('close', code => code === 0 ? resolve() : reject());
         proc.on('error', reject);
       });
@@ -512,7 +512,7 @@ export async function exportFrames(opts) {
       ffmpegCmd = ffmpegFallback;
     }
     const runFfmpeg = (args) => new Promise((resolve, reject) => {
-      const proc = spawn(ffmpegCmd, args, { stdio: 'inherit' });
+      const proc = spawn(ffmpegCmd, args, { windowsHide: true, stdio: 'inherit' });
       proc.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
       proc.on('error', reject);
     });
