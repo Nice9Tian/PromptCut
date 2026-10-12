@@ -73,6 +73,6 @@ try {
   await browserHandle?.close().catch(() => {});
   // Windows 上只结束本探针自己起的那个 Chrome。
   if (process.platform === 'win32' && chromeProcess?.pid && chromeProcess.exitCode === null)
-    spawnSync('taskkill', ['/F', '/T', '/PID', String(chromeProcess.pid)], { stdio: 'ignore' });
+    spawnSync('taskkill', ['/F', '/T', '/PID', String(chromeProcess.pid)], { windowsHide: true, stdio: 'ignore' });
   await closeAll(servers);
 }

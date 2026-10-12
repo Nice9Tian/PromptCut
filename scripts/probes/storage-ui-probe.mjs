@@ -99,7 +99,7 @@ let vite = null;
 async function stopTree(child) {
   if (!child?.pid || child.exitCode !== null) return;
   await new Promise((resolve) => {
-    const k = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    const k = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
     k.once('error', resolve);
     k.once('exit', resolve);
   });

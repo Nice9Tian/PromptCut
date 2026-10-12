@@ -264,7 +264,7 @@ function runPython(args, extraEnv = {}, opts = {}) {
     ...extraEnv,
   };
   for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
-  return spawnSync(PYTHON_EXE, args, {
+  return spawnSync(PYTHON_EXE, args, { windowsHide: true,
     encoding: 'utf8',
     env,
     cwd: opts.cwd ?? ROOT,

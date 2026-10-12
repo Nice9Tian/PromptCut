@@ -89,7 +89,7 @@ function cpuPct(a, b) {
   return total ? +(100 * (1 - idle / total)).toFixed(1) : null;
 }
 function winLoad() {
-  try { return Number(execFileSync('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average'], { encoding: 'utf8', timeout: 20000 }).trim()); } catch { return null; }
+  try { return Number(execFileSync('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average'], { windowsHide: true, encoding: 'utf8', timeout: 20000 }).trim()); } catch { return null; }
 }
 function stats(xs) {
   if (!xs || !xs.length) return { n: 0 };

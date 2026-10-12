@@ -69,10 +69,10 @@ function makeMedia(tmpDir) {
   const png = path.join(tmpDir, 'pc-stage-content-probe.png');
   if (!fs.existsSync(mp4)) {
     execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=30:duration=4',
-      '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-g', '15', mp4], { stdio: 'inherit' });
+      '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-g', '15', mp4], { windowsHide: true, stdio: 'inherit' });
   }
   if (!fs.existsSync(png)) {
-    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=128x128', '-frames:v', '1', png], { stdio: 'inherit' });
+    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=128x128', '-frames:v', '1', png], { windowsHide: true, stdio: 'inherit' });
   }
   return { video: intoMediaStore(mp4), image: intoMediaStore(png) };
 }
