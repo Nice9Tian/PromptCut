@@ -10,6 +10,10 @@ import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/age
 import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
   INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
+import { createRunAssetsInstanceAdapter } from './run-assets-instance-adapter.mjs';
+import { createRunAssets } from '../account/run-assets.mjs';
+import { createRunAssetsInternalHandler } from '../account/run-assets-internal.mjs';
+import { createRunAssetClosure } from './run-assets-closure.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 
@@ -30,13 +34,14 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     'messageId', 'runId', 'runGrantId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'];
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
-  let stopped = false, runAuthority;
+  let stopped = false, runAuthority, assetInstanceAdapter = null, runAssets = null, runAssetsHandler = null;
   const currentService = () => {
     if (stopped) fail(503, 'doc-agent-unavailable');
     try { serviceRegistry?.refresh({ force: true }); } catch { fail(403, 'run-service-forbidden'); }
     const entry = serviceRegistry?.get('agent');
     if (entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === kid))
       fail(403, 'run-service-forbidden');
+    return { serviceId: 'agent', serviceKid: kid };
   };
   const resolveServicePrincipal = ({ socket }) => {
     if (!socket?.encrypted || socket.authorized !== true || socket.destroyed ||
@@ -53,6 +58,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     return structuredClone(subject);
   };
   const verifyServiceInState = (_state, subject) => {
+    if (assetInstanceAdapter?.has(subject)) {
+      const observed = assetInstanceAdapter.transportFor(subject);
+      return { serviceId: observed.serviceId, serviceKid: observed.serviceKid };
+    }
     currentService();
     const socket = subjects.get(subject?.authenticationId);
     if (!socket || subject.service !== 'agent' || subject.serviceKid !== kid || socket.destroyed ||
@@ -62,6 +71,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   };
   const instanceAuthority = createAgentInstanceAuthority({ ledger,
     verifyTransportInState(state, subject) {
+      if (assetInstanceAdapter?.has(subject)) return assetInstanceAdapter.transportFor(subject);
       const service = verifyServiceInState(state, subject);
       return { ...service, authenticationId: subject.authenticationId,
         channelBinding: instanceTlsBinding(subjects.get(subject.authenticationId)) };
@@ -309,6 +319,52 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     } finally { for (const cap of caps) instanceAuthority.release(cap.instanceSession); }
   }
   const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, resolveServicePrincipal });
+  function createRunAssetAuthentication({ assetFingerprint256, currentAsset } = {}) {
+    if (assetInstanceAdapter) fail(503, 'run-assets-instance-already-bound');
+    const adapter = createRunAssetsInstanceAdapter({ agentFingerprint256: pin, agentServiceKid: kid,
+      assetFingerprint256, currentAgent: currentService, currentAsset });
+    assetInstanceAdapter = adapter;
+    const authenticateDirect = ({ transport, proof, method, path, operation, request }) => {
+      assertInstanceDirectTransport(transport);
+      const base = resolveServicePrincipal({ socket: transport.socket });
+      const cap = instanceAuthority.authenticate({ servicePrincipal: base, method, path, operation, request, proof });
+      return { servicePrincipal: { ...base, ...cap }, release: () => instanceAuthority.release(cap.instanceSession) };
+    };
+    const authenticateObserved = ({ observer, observation, proof, method, path, operation, request }) => {
+      const observed = adapter.open({ observer, observation });
+      try {
+        const cap = instanceAuthority.authenticate({ servicePrincipal: observed.servicePrincipal,
+          method, path, operation, request, proof });
+        return { servicePrincipal: { ...observed.servicePrincipal, ...cap },
+          release() { instanceAuthority.release(cap.instanceSession); observed.release(); } };
+      } catch (error) { observed.release(); throw error; }
+    };
+    return Object.freeze({ authenticateDirect, authenticateObserved, verifyObserver: adapter.verifyObserver });
+  }
+  function mountRunAssets({ assetFingerprint256, currentAsset, resolveObserver, privateClient,
+    ticketTtlMs, maxBodyBytes, now: runNow = now } = {}) {
+    if (runAssets || typeof resolveObserver !== 'function' || typeof privateClient?.identity !== 'function')
+      fail(503, 'run-assets-unconfigured');
+    const doc = getDocAssembly();
+    if (typeof doc?.resolveRunMedia !== 'function') fail(503, 'run-assets-unconfigured');
+    const authentication = createRunAssetAuthentication({ assetFingerprint256, currentAsset });
+    let authority;
+    try {
+      const closure = createRunAssetClosure({ privateClient, currentAsset });
+      authority = createRunAssets({ ledger, runProvider: provider,
+        authenticateDirect: authentication.authenticateDirect,
+        authenticateObserved: authentication.authenticateObserved,
+        verifyObserver: authentication.verifyObserver,
+        resolveMedia: input => doc.resolveRunMedia(input),
+        verifyLeaseClosure: input => closure.verifyLeaseClosure(input),
+        verifyControlReceipt: input => closure.verifyControlReceipt(input),
+        now: runNow, ticketTtlMs });
+      const handler = createRunAssetsInternalHandler({ runAssets: authority,
+        agentFingerprint256: pin, assetFingerprint256, resolveObserver, maxBodyBytes });
+      runAssets = authority; runAssetsHandler = handler;
+      return Object.freeze({ authority, handler });
+    } catch (error) { authority?.close(); assetInstanceAdapter?.close(); assetInstanceAdapter = null; throw error; }
+  }
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
     agentFingerprint256: pin, requireReadControl: true, resolveDelegation: async ticket => {
       currentService(); return runtime.resolveAgentDelegation(ticket);
@@ -336,10 +392,12 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       }
       return { conversations: rows };
     } });
-  return { conversations, readControl, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
-    async handleInternal(req, res) { return await instancesHandler(req, res) || await readControlsHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
+  return { conversations, readControl, runProvider: provider, runHooks, deliver, createRunAssetAuthentication, mountRunAssets,
+    transportAuthenticate, transportConnected, dispatchInvocation,
+    async handleInternal(req, res) { return await runAssetsHandler?.(req, res) || await instancesHandler(req, res) || await readControlsHandler(req, res) ||
+      await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
-    async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
+    async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); runAssets?.close(); assetInstanceAdapter?.close(); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
 }
