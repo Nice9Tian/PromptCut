@@ -218,6 +218,21 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 - **再打开**：目录推 `enabled: true`，渲染服务按第 2 节连回来。
 - **界面**：项目设置里多用户协作那一组加一个勾选「托管方的渲染节点」。只在项目放云端且 `available` 时出现；创建者可改（改时照其它创建者操作验证创建者身份），其他成员只读。
 
+### 3.1 子选项：渲染节点的「生成轨道流」〔裁：主会话 2026-10-12 派工，接口是这次新设的；已实现于 `claude/hosted-stream-entry`〕
+
+背景：独立渲染主机缺省不产轨道流（`scripts/render-host.mjs` 要带 `--streams`），云端渲染服务以后要产流（本轮计划见 `docs/plan/render-refactor-task.md`）。用户要求先在界面增加入口。**这一节只管入口：记下这一项并通知成员；渲染服务认领任务时看不看它，不在这一节、也不在已实现的范围内。**
+
+- **存在哪**：项目记录 `hosted.render.streams`，布尔，**没有这一项算关，只有显式为 `true` 才算开**〔用户 2026-10-12 看过截图后定：在线浏览器暂停时不靠渲染节点也能看任意一帧，云端缺省不产轨道流以省服务器资源；入口保留，创建者想要更流畅的播放时自己打开。这与服务本身的开关（没有算开）相反，`hostedOptionEnabled` 单独按「`=== true`」判〕。同一个服务下可以有别的字段（`enabled`、`streams`），互不影响：`set-hosted-service` 只改 `enabled`、保留同服务下别的字段（原先是整条换成 `{ enabled }`，会冲掉子选项，已改）。有哪些子选项由 `service-identity.mjs` 的 `HOSTED_OPTIONS` 登记：`render: ['streams']`、`agent: []`。
+- **谁能改**：创建者。新的创建者操作 `shared.admin { op: 'set-hosted-option', service: 'render', option: 'streams', enabled: boolean, proof: { nonce, m } }`；证明的用途串里 `op` 就是 `set-hosted-option`，证明与限速同其它创建者操作；成功回 `shared.admin.ok { op: 'set-hosted-option' }`；**不加代数、不断任何连接、不动服务手里的认领**。`service` 不是 `render` / `agent` 之一、登记表里没有这个服务、`option` 不是这个服务登记过的选项（含 `agent` 没有任何选项、非字符串、原型链上的名字）、`enabled` 不是布尔值，一律回 `error { reason: 'bad-message' }`，不落盘、不通知。渲染节点那一行（`enabled`）关着时服务端不另设限，照样能改 `streams`（界面把它置灰，不让点）。
+- **谁能看**：所有成员，从 `shared.members.list` 顶层的 `hosted.render.streams` 看：`hosted.render` 由 `{ available, enabled }` 变成 `{ available, enabled, streams }`；`hosted.agent` 不变。目录条目（`hosted.project` 推给渲染服务的）里用到同一个 `hostedStateOf`，同样带 `streams`，渲染服务本轮不读它。放本机的项目没有 `hosted` 字段，也没有这个操作（回 `bad-message`）。
+- **通知**：改完给本空间其余成员连接发 `shared.notice { event: 'hosted-option-changed', service, option, enabled }`（打开关闭都发）；不发给发起操作的那条连接，也不发给服务自己的连接；并刷新成员列表。界面只在 `enabled: false` 时给别的成员弹一条提示，打开时不提示（与 `hosted-service-changed` 同一个规矩）。
+- **向后兼容**：
+  - 旧页面连新文档服务：多出来的 `streams` 字段旧页面不读；新通知是新的事件名 `hosted-option-changed`，旧页面按事件名分支，不认识就忽略。旧通知 `hosted-service-changed` 的形状不变。
+  - 新页面连旧文档服务：成员列表里没有 `streams`，「生成轨道流」这一行不显示，渲染节点那一行不受影响；旧文档服务收不到 `set-hosted-option`（界面不会发）。
+  - 账号项目（中心账号那条路，`/hosted/shared/account/admin`）只有云端 Agent 一项开关，没有渲染节点，也就没有这一行；页面这边对账号项目调用 `setHostedOption` 直接回 `forbidden`。
+- **界面**：渲染节点那一行下面缩进多一行勾选「生成轨道流」。出现条件：项目放云端、`render.available`、文档服务报了 `streams`（旧托管端不报就不出现）。渲染节点那一行关着时这一行置灰、不可点（仍显示它自己的勾选状态）。创建者能改，改之前走和别的行一样的创建者确认；其他成员只读，显示「（只有创建者能改）」。缺省是关（勾选框不勾），关着的说明写明代价：「没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。」；渲染节点那一行关着、这一行置灰时，说明后面加「（渲染节点关着，暂不生效）」。文案在 `hostedServices.ts` 的 `HOSTED_OPTION_TEXT`。
+- **以后渲染服务那一半怎么接**：目录条目里已经带 `hosted.render.streams`（缺省 `false`），渲染服务认领任务时读目录条目即可，不用再问文档服务；是否要在 `hosted.project` 的顶层再带一个便于过滤的字段，等接的时候再定。
+
 ---
 
 ## 4. 并发与资源上限

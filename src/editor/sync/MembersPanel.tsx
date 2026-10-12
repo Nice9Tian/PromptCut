@@ -9,10 +9,10 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, setHostedService, useSync, type MemberRow } from "./syncManager";
+import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, setHostedOption, setHostedService, useSync, type MemberRow } from "./syncManager";
 import { ListEditor } from "./SharedDialogs";
 import { rememberPasswords } from "./collab";
-import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, isCloudAgentOnly, isCloudAgentRunning, memberCountLabel, serviceRowLabel, splitMembers, visibleMembers, type HostedServiceName } from "./hostedServices";
+import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, hostedOptionText, isCloudAgentOnly, isCloudAgentRunning, memberCountLabel, serviceRowLabel, splitMembers, visibleMembers, type HostedOptionName, type HostedServiceName } from "./hostedServices";
 import { useCloudRunning } from "./presence";
 import "./sync.css";
 import { AccountMembersPanel } from '../../account/AccountMembersPanel';
@@ -24,7 +24,8 @@ export type Flow =
   | { kind: "bans" }
   | { kind: "delete" }
   | { kind: "kick"; row: MemberRow }
-  | { kind: "hosted-service"; service: HostedServiceName; enabled: boolean };
+  | { kind: "hosted-service"; service: HostedServiceName; enabled: boolean }
+  | { kind: "hosted-option"; service: HostedServiceName; option: HostedOptionName; enabled: boolean };
 
 export function MembersButton() {
   const account = useSync(v => !!v.shared?.accountId);
@@ -213,6 +214,8 @@ export function CreatorFlow({ flow, onClose }: { flow: Flow; onClose: () => void
       return <KickDialog row={flow.row} v={verified} onClose={onClose} />;
     case "hosted-service":
       return <HostedServiceDialog service={flow.service} enabled={flow.enabled} v={verified} onClose={onClose} />;
+    case "hosted-option":
+      return <HostedOptionDialog service={flow.service} option={flow.option} enabled={flow.enabled} v={verified} onClose={onClose} />;
   }
 }
 
@@ -508,6 +511,41 @@ function HostedServiceDialog({ service, enabled, v, onClose }: { service: Hosted
       <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
         {HOSTED_SERVICE_TEXT[service]?.confirm(enabled) ?? (enabled ? `打开${label}。` : `关闭${label}。`)}
       </div>
+      {err ? <div className="pc-sync-err">{err}</div> : null}
+    </Dialog>
+  );
+}
+
+/** 创建者改托管方服务下面的子选项(项目设置里「生成轨道流」的勾选;验证创建者身份之后到这一步确认) */
+function HostedOptionDialog({ service, option, enabled, v, onClose }: { service: HostedServiceName; option: HostedOptionName; enabled: boolean; v: Verified; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const text = hostedOptionText(service, option);
+  const label = text?.label ?? option;
+  const apply = async () => {
+    setBusy(true);
+    const r = await setHostedOption(service, option, enabled, v.key);
+    setBusy(false);
+    if (!r.ok) return setErr(r.error === "bad-message" ? "这台云节点现在没有这个选项。" : failText(r.error));
+    pushToast(enabled ? `已打开${label}。` : `已关闭${label}。`, "info", 4000);
+    onClose();
+  };
+  return (
+    <Dialog
+      title={label}
+      pc="hosted-option-dialog"
+      foot={
+        <>
+          <button type="button" className="pc-btn" onClick={onClose}>
+            取消
+          </button>
+          <button type="button" className="pc-btn pc-btn--primary" data-pc="hosted-option-confirm" disabled={busy} onClick={() => void apply()}>
+            {enabled ? "打开" : "关闭"}
+          </button>
+        </>
+      }
+    >
+      <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>{text?.confirm(enabled) ?? (enabled ? `打开${label}。` : `关闭${label}。`)}</div>
       {err ? <div className="pc-sync-err">{err}</div> : null}
     </Dialog>
   );

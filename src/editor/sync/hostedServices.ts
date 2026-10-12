@@ -7,6 +7,10 @@
  * - 项目设置里每种服务一行勾选，**按服务名渲染**：现在只有 `render`，第四段（云端 Agent）往 `HOSTED_SERVICE_ROWS` 与
  *   `HOSTED_SERVICE_TEXT` 各加一项就多一行。
  *
+ * - 渲染节点那一行下面缩进多一行子选项「生成轨道流」（契约 `hosted-render-contract.md` 第 3.1 节）：成员列表里 `hosted.render.streams`
+ *   （布尔，文档服务报了才出现；旧托管端不报，这一行就不显示），记录里没有算关（2026-10-12 用户定：在线浏览器暂停时不靠渲染节点也能看任意一帧，云端缺省不产轨道流，省服务器资源）；渲染节点那一行关着时置灰、不可点。
+ *   子选项按「服务名 + 选项名」渲染，文案在 `HOSTED_OPTION_TEXT`。
+ *
  * - 代成员进项目的服务连接（云端 Agent）不另起一行：归在那位成员的行里，`conns` 里那一项带 `service: 'agent'`，界面在这位成员下
  *   显示「〈成员名〉的云端 Agent」（`cloudAgentConns`、`cloudAgentLabel`；契约 `docs/plan/cloud-agent-contract.md` 第 5 节）。
  *   项目设置里 `agent` 一行就是「云端 Agent」开关。
@@ -20,7 +24,15 @@ export type HostedServiceName = "render" | "agent";
 export interface HostedServiceState {
   available: boolean;
   enabled: boolean;
+  /** 渲染节点的子选项「生成轨道流」：文档服务报了才有（旧托管端没有）；缺省关由文档服务算好再报（记录里没有这一项算关，只有显式为 true 才算开） */
+  streams?: boolean;
 }
+
+/** 服务下面的子选项名；现在只有渲染节点的 `streams` */
+export type HostedOptionName = "streams";
+
+/** 项目设置里出现哪几个子选项、按什么顺序（每项挂在自己的服务那一行下面） */
+export const HOSTED_OPTION_ROWS: readonly { service: HostedServiceName; option: HostedOptionName }[] = [{ service: "render", option: "streams" }];
 
 export type HostedView = Partial<Record<HostedServiceName, HostedServiceState>>;
 
@@ -55,6 +67,29 @@ export const HOSTED_SERVICE_TEXT: Partial<Record<HostedServiceName, HostedServic
   },
 };
 
+export interface HostedOptionText {
+  label: string;
+  /** 勾选行下面的一行说明 */
+  hint: (enabled: boolean) => string;
+  /** 别的成员收到「创建者改了这个选项」时的提示；空串表示这个方向不提示（与服务开关同一个规矩：只在关闭时提示） */
+  changed: (enabled: boolean) => string;
+  /** 创建者确认弹窗里的一句话(`enabled` 是要改成的状态) */
+  confirm: (enabled: boolean) => string;
+}
+
+/** 每个子选项在界面上的文案（先照任务书，用户看过截图再定）。键是 `<服务名>.<选项名>` */
+export const HOSTED_OPTION_TEXT: Record<string, HostedOptionText> = {
+  "render.streams": {
+    label: "生成轨道流",
+    hint: (enabled) => (enabled ? "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。" : "没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。"),
+    changed: (enabled) => (enabled ? "" : "创建者关闭了轨道流，托管方的渲染节点不再为这个项目生成轨道流。"),
+    confirm: (enabled) => (enabled ? "打开后，托管方的渲染节点会为这个项目生成轨道流。" : "关闭后，托管方的渲染节点不再为这个项目生成轨道流，已经生成的保留。"),
+  },
+};
+
+export const hostedOptionText = (service: unknown, option: unknown): HostedOptionText | null =>
+  (typeof service === "string" && typeof option === "string" && HOSTED_OPTION_TEXT[`${service}.${option}`]) || null;
+
 const isServiceName = (v: unknown): v is HostedServiceName => v === "render" || v === "agent";
 
 /** 成员列表消息顶层的 `hosted` → 界面状态；没有或形状不对回 null（放本机的项目、旧托管端） */
@@ -64,9 +99,11 @@ export function parseHosted(raw: unknown): HostedView | null {
   for (const name of ["render", "agent"] as const) {
     const s = (raw as Record<string, unknown>)[name];
     if (!s || typeof s !== "object") continue;
-    const { available, enabled } = s as Record<string, unknown>;
+    const { available, enabled, streams } = s as Record<string, unknown>;
     if (typeof available !== "boolean" || typeof enabled !== "boolean") continue;
     out[name] = { available, enabled };
+    // 子选项：形状对才收（布尔）；旧托管端不报，就没有这个字段，对应的行不显示
+    if (name === "render" && typeof streams === "boolean") out[name]!.streams = streams;
   }
   return Object.keys(out).length ? out : null;
 }
@@ -77,6 +114,14 @@ export function applyHostedChange(hosted: HostedView | null, service: unknown, e
   const prev = hosted?.[service];
   if (!prev) return hosted;
   return { ...hosted, [service]: { ...prev, enabled } };
+}
+
+/** `hosted-option-changed` 通知落到状态上：服务或选项不认识、这个项目没有报这个选项（旧托管端）就原样返回 */
+export function applyHostedOptionChange(hosted: HostedView | null, service: unknown, option: unknown, enabled: unknown): HostedView | null {
+  if (service !== "render" || option !== "streams" || typeof enabled !== "boolean") return hosted;
+  const prev = hosted?.render;
+  if (!prev || typeof prev.streams !== "boolean") return hosted;
+  return { ...hosted, render: { ...prev, streams: enabled } };
 }
 
 export interface HostedRow {
@@ -96,6 +141,31 @@ export function hostedRowsOf(where: "lan" | "hosted" | null | undefined, hosted:
     const s = hosted[service];
     const text = HOSTED_SERVICE_TEXT[service];
     if (s?.available && text) rows.push({ service, label: text.label, enabled: s.enabled });
+  }
+  return rows;
+}
+
+export interface HostedOptionRow {
+  service: HostedServiceName;
+  option: HostedOptionName;
+  label: string;
+  enabled: boolean;
+  /** 它挂着的服务那一行关着：这一行置灰、不可点 */
+  parentOff: boolean;
+}
+
+/**
+ * 项目设置里要显示哪几个子选项：项目放云端、这台托管端有这个服务（`available`）、文档服务报了这个选项（旧托管端不报）才出现。
+ * 服务那一行关着时仍然出现，`parentOff` 为真，界面置灰。
+ */
+export function hostedOptionRowsOf(where: "lan" | "hosted" | null | undefined, hosted: HostedView | null): HostedOptionRow[] {
+  if (where !== "hosted" || !hosted) return [];
+  const rows: HostedOptionRow[] = [];
+  for (const { service, option } of HOSTED_OPTION_ROWS) {
+    const s = hosted[service];
+    const text = hostedOptionText(service, option);
+    const value = s?.[option];
+    if (s?.available && text && typeof value === "boolean") rows.push({ service, option, label: text.label, enabled: value, parentOff: !s.enabled });
   }
   return rows;
 }

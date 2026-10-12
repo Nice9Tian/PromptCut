@@ -35,7 +35,7 @@ import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
-import { applyHostedChange, HOSTED_SERVICE_TEXT, parseHosted, type HostedServiceName, type HostedView } from "./hostedServices";
+import { applyHostedChange, applyHostedOptionChange, HOSTED_SERVICE_TEXT, hostedOptionText, parseHosted, type HostedOptionName, type HostedServiceName, type HostedView } from "./hostedServices";
 import { clearHostedAgent, setHostedAgent, setHostedAgentEnabled } from "../../ai/cloud/endpoint";
 import { accountCloudIdentity, CloudDelegationError, setCloudIdentity, type CloudIdentity } from "../../ai/cloud/identity";
 import { setCloudConsentSource } from "../../ai/cloud/consent";
@@ -925,6 +925,15 @@ function onSideMessage(msg: AnyMsg) {
         // AI 栏里「云端」一项随之置灰或恢复
         if (msg.service === "agent" && typeof msg.enabled === "boolean") setHostedAgentEnabled(view.shared?.projectId ?? currentDocProjectId(), msg.enabled);
       }
+      // 创建者改了托管方服务下面的子选项(渲染节点的「生成轨道流」):同上,界面马上跟着变,只在关闭时给别的成员一条提示
+      if (msg.event === "hosted-option-changed") {
+        const next = applyHostedOptionChange(view.hosted, msg.service, msg.option, msg.enabled);
+        if (next !== view.hosted) {
+          patch({ hosted: next });
+          const text = hostedOptionText(msg.service, msg.option)?.changed(msg.enabled === true);
+          if (text) pushToast(text, "info", 6000);
+        }
+      }
       return;
     case "events.event":
       rememberEvent(msg as Record<string, unknown>);
@@ -1746,6 +1755,19 @@ export async function setHostedService(service: HostedServiceName, enabled: bool
   patch({ hosted: applyHostedChange(view.hosted, service, enabled) });
   // 创建者自己这一页的 AI 栏也马上跟着变(通知只发给别的连接)
   if (service === "agent") setHostedAgentEnabled(view.shared?.projectId ?? currentDocProjectId(), enabled);
+  return { ok: true };
+}
+
+/**
+ * 创建者改托管方服务下面的子选项(渲染节点的「生成轨道流」,契约 `docs/plan/hosted-render-contract.md` 第 3.1 节):
+ * `shared.admin { op: 'set-hosted-option' }`,证明与其它创建者操作相同。成功后马上把本页的状态改过来(服务端随后还会推一条刷新后的成员列表)。
+ * 账号项目(云端账号那条路)没有这个选项:一律 forbidden。
+ */
+export async function setHostedOption(service: HostedServiceName, option: HostedOptionName, enabled: boolean, key: string): Promise<{ ok: true } | { ok: false; error: AdminError }> {
+  if (view.shared?.accountId) return { ok: false, error: 'forbidden' };
+  const r = await adminOp("set-hosted-option", { key }, { service, option, enabled });
+  if (!r.ok) return r;
+  patch({ hosted: applyHostedOptionChange(view.hosted, service, option, enabled) });
   return { ok: true };
 }
 
