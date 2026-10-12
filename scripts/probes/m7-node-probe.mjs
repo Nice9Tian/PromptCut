@@ -14,7 +14,8 @@
  * 标 `light` —— 于是它只切分、不认领细任务(契约 D15「切分方只切分」的测试替身做法),浏览器可做的卡由队列给的浏览器指纹另出一份。
  * 内容键带本轮的随机串,不会撞上别的锁。
  *
- * 流程:建项目 → 起切分方 → 成员(Chrome 无头,普通档)凭项目名 + 口令进入 → 页面加一张重卡(`probe-slow-stepped`,每帧烧 40 ms)
+ * 流程:建项目 → 起切分方 → 成员(Chrome 无头,普通档)进入(在线构建的开始页只有账号入口,照「刷新后回到项目」那条产品路径进,
+ * `lib/online-resume-entry.mjs`)→ 页面加一张重卡(`probe-slow-stepped`,每帧烧 40 ms)
  * → 页面测完、当节点报到(拿到指纹)、发清单计划 → 切分方认领计划、双份出键 → 页面认领浏览器那一份(light)→ 逐帧生成快照、推送、完成。
  *
  * 判据:页面 `__pcBrowserNode()` 的 completed ≥ 1、推了块;内容库里有这一段的清单(过 `manifestMatches`、两档齐、结果键 = 内容键 × 浏览器指纹);
@@ -34,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -171,13 +173,6 @@ let browser = null;
 const EVAL_TIMEOUT_MS = 30_000;
 const P = (page, fn, ...a) => Promise.race([page.evaluate(fn, ...a), delay(EVAL_TIMEOUT_MS).then(() => { throw new Error('页面 30 秒没应答'); })]);
 const shot = async (page, name) => { const f = path.join(OUT, `${name}.png`); await page.screenshot({ path: f }).catch(() => {}); return f; };
-async function typeInto(page, sel, text) {
-  await page.waitForSelector(sel, { visible: true, timeout: 20_000 });
-  await page.click(sel);
-  await page.$eval(sel, (el) => el.select());
-  await page.keyboard.press('Backspace');
-  if (text) await page.type(sel, text, { delay: 5 });
-}
 const nodeDiag = (page) => P(page, () => { try { return JSON.parse(JSON.stringify(window.__pcBrowserNode?.() ?? null)); } catch { return null; } }).catch(() => null);
 
 let splitter = null;
@@ -230,12 +225,10 @@ try {
     window.__pcLongTasks = [];
     try { new PerformanceObserver((list) => { for (const e of list.getEntries()) window.__pcLongTasks.push({ at: e.startTime, ms: e.duration }); }).observe({ type: 'longtask', buffered: true }); } catch { /* 没有 */ }
   });
+  // 进项目:照「刷新后回到刷新前打开的共享项目」(只带派生出的 K,不带口令)
+  await plantResume(page, await resumeRecord({ base: HOSTED, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: projName, username: 'm7-member', password: projectPassword,
+    deviceId: `m7n-member-${RUN}`.padEnd(16, '0') }));
   await page.goto(EDITOR, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto(page, '[data-pc="join-name"]', projName);
-  await typeInto(page, '[data-pc="join-username"]', 'm7-member');
-  await typeInto(page, '[data-pc="join-password"]', projectPassword);
-  await page.click('[data-pc="join-submit"]');
   const entered = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
   if (!check(entered, '成员进入项目')) throw new Error('成员没进去');
   await until('成员页双舞台握上手', async () => P(page, () => { const d = window.__pcPreviewDiag?.(); return d?.dual && d.onlineStages?.handshake === 'ok'; }), 120_000, 500);

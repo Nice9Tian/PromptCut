@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 import { seedSharedProject } from './lib-seed.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { layerMapOf } from '../../server/artifact-transfer.mjs';
 import { renderProject } from '../../server/render-project.mjs';
 import { clipInputSig } from '../../src/render/layerInputSig.mjs';
@@ -197,19 +198,12 @@ async function newPage(label) {
   page.on('pageerror', (e) => page.errors.push(String(e?.message ?? e).slice(0, 200)));
   return page;
 }
-async function typeInto(page, sel, text) {
-  await page.waitForSelector(sel, { visible: true, timeout: 15_000 });
-  await page.click(sel, { clickCount: 3 });
-  await page.keyboard.press('Backspace');
-  if (text) await page.type(sel, text, { delay: 5 });
-}
+let joined = 0;
 async function join(page, username) {
+  // 在线构建的开始页只有账号入口(加入表单不再进在线构建):照「刷新后回到刷新前打开的共享项目」进项目,只带派生出的 K
+  await plantResume(page, await resumeRecord({ base: `${SITE}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: NAME, username, password: PROJECT_PW,
+    deviceId: `osl-member-${stamp}-${joined++}`.padEnd(16, '0') }));
   await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto(page, '[data-pc="join-name"]', NAME);
-  await typeInto(page, '[data-pc="join-username"]', username);
-  await typeInto(page, '[data-pc="join-password"]', PROJECT_PW);
-  await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until(`${username} 的时间轴`, () => page.evaluate(() => !!window.__pcStore), 30_000);
 }

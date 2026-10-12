@@ -53,6 +53,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { argsOf, sayer, newRunId, lastJsonLine, fingerprintOf } from './m8/lib.mjs';
 import { roleKv, resolveRun } from './m8/kv.mjs';
 import { startCoord, startQueueEditor, viteBin, killTree, until, claimPorts, portFree } from './m8/procs.mjs';
@@ -1598,17 +1599,9 @@ async function openMember(browser, cfg, key, { lowMem = false, single = false } 
       void r.continue();
     });
   }
+  // 在线构建的开始页只有账号入口(加入表单不再进在线构建):照「刷新后回到刷新前打开的共享项目」进项目(`lib/online-resume-entry.mjs`),只带派生出的 K
+  await plantResume(page, await resumeRecord({ base: `${cfg.site}/hosted/`, projectId: cfg.projectId, name: cfg.projectName, username: u.username, password: cfg.projectPassword, deviceId: u.deviceId }));
   await page.goto(`${cfg.site}/editor`, { waitUntil: 'domcontentloaded', timeout: 180_000 });
-  const typeInto = async (sel, text) => {
-    await page.waitForSelector(sel, { visible: true, timeout: 60_000 });
-    await page.click(sel, { clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    await page.type(sel, text, { delay: 3 });
-  };
-  await typeInto('[data-pc="join-name"]', cfg.projectName);
-  await typeInto('[data-pc="join-password"]', cfg.projectPassword);
-  await typeInto('[data-pc="join-username"]', u.username);
-  await page.click('[data-pc="join-submit"]');
   const joined = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
   if (!joined) {
     const msg = await page.$eval('[data-pc="join-message"]', (el) => el.textContent).catch(() => null);
