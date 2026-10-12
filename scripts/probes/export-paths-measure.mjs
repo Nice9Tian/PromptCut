@@ -7,7 +7,7 @@
  *
  * 两条路(同一台机器、同一个项目，交替跑：桌面、在线、桌面、在线……，各 `--runs` 遍，缺省 3)：
  *
- *   desktop  桌面版：Chrome(chrome-headless-shell)beginFrame 整帧截图 -> 流式喂 ffmpeg 编成带透明的 ProRes 4444 中间文件
+ *   desktop  桌面版：Chrome(chrome-headless-shell)beginFrame 整帧截图 -> ffmpeg 编成带透明的 ProRes 4444 中间文件
  *            -> 和素材合成、libx264 编成 preview.mp4(`server/bakery/export.mjs`、`export-unified.mjs`、`server/export-compose.mjs`)。
  *            做法同 `/api/export`(`server/vite-plugin-export.ts`)：起 `scripts/export-frames.mjs`，参数相同；探针直接起它，
  *            给每一行输出打时间，按行分段。
@@ -24,7 +24,7 @@
  *   - 同一条路各遍成片是否逐帧相同(把成片解成 rgb24 逐帧比 sha1)；
  *   - 两条路的成片逐帧画面差(平均差 0～255、最大通道差、差超过 8 和 32 的像素比例、PSNR)，抽几帧存「桌面 | 在线 | 差×8」对比图；
  *   - 拆段单测(桌面一遍，不进总耗时)：只截图不编码(PNG)、PNG 编 ProRes、ProRes 解码、ProRes 解码加 libx264。
- *     桌面主流程里截图和 ProRes 是流水线并行的，分不开，用这个补一个量级；
+ *     用来交叉核对主流程里按日志分出来的各段(默认路径是先写 PNG、截完再编 ProRes；--workers 1 整段才边截边编，那时两段并行分不开)；
  *   - 机器配置：处理器、核数、内存、显卡、系统、Chrome 版本。
  * 汇总写成一份 JSON(`--json`，缺省在工作目录里)，最后一行也打到标准输出。导出失败、少帧、读不出成片等，退出码非 0。
  *
@@ -393,23 +393,26 @@ async function runDesktop({ origin, work, id, project, frames, workers, keepFram
   const composed = last(/^Composited \d+ frames in [\d.]+s/);
   const tComposedEnd = composed?.t ?? null;
   const composedSec = composed ? Number(composed.line.match(/in ([\d.]+)s/)[1]) : null;
-  const tMerged = first(/分片视频已合并/)?.t ?? null;
+    // 默认(workers=auto)的整段导出：先把每帧 PNG 写进 frames/，截完再起一趟 ffmpeg 把 PNG 编成 ProRes(日志有「Creating overlay.mov...」)；
+  // 只有「单进程且整段」(--workers 1 且没有 --frames)时才边截边把 PNG 流给 ffmpeg 编 ProRes(日志没有这一行)，那时截图和 ProRes 并行，分不开
+  const tOverlay = first(/^Creating overlay\.mov/)?.t ?? null;
+  const proresMode = noVideo ? null : (tOverlay !== null ? 'png-files-then-encode' : 'streamed-during-capture');
   const segments = noVideo ? { startupToFirstFrameMs: tFirstFrame, captureMs: tFirstFrame !== null && tLastFrame !== null ? tLastFrame - tFirstFrame : null } : {
     // 进程起来 -> 第一帧截图出来(含 Node 启动、开 Chrome、载页、预热)
     startupToFirstFrameMs: tFirstFrame,
-    // 第一帧 -> 最后一帧：截图与 ProRes 编码是流水线并行，这里是两者合起来的墙钟
-    captureAndProresMs: tFirstFrame !== null && tLastFrame !== null ? tLastFrame - tFirstFrame : null,
-    // 最后一帧 -> 「Running ffmpeg」：等 ProRes 写完收尾(流 finish)、多分片时合并分片
-    proresFinishMs: tRunning !== null && tLastFrame !== null ? tRunning - tLastFrame : null,
-    // 「Creating preview.mp4」 -> 「Composited N frames」：一趟 ffmpeg，解 ProRes + 铺素材 + libx264 编码，分不开
+    // 第一帧 -> 最后一帧：截图(含写 PNG)。streamed 模式下这里还含并行的 ProRes 编码
+    captureMs: tFirstFrame !== null && tLastFrame !== null ? tLastFrame - tFirstFrame : null,
+    // 最后一帧 -> 「Running ffmpeg」：截图收尾、(多分片时合并分片)
+    captureEndToFfmpegMs: tRunning !== null && tLastFrame !== null ? tRunning - tLastFrame : null,
+    // PNG -> ProRes 4444 中间文件(png-files-then-encode 模式才有)：「Creating overlay.mov」 -> 「Creating preview.mp4」
+    proresEncodeMs: tOverlay !== null && tCreating !== null ? tCreating - tOverlay : null,
+    // 「Creating preview.mp4」 -> 「Composited N frames」：一趟 ffmpeg，解 ProRes + 铺素材层(默认路径里素材已在 Chrome 截图里，这里 0 层)+ libx264 编码，分不开
     composeAndX264Ms: composedSec !== null ? composedSec * 1000 : (tComposedEnd !== null && tCreating !== null ? tComposedEnd - tCreating : null),
-    // 合成结束 -> 进程退出：混音(没有声音就是 0)、收尾
+    // 合成结束 -> 进程退出：混音(没有声音就几乎是 0)、收尾
     afterComposeMs: tComposedEnd !== null ? wallMs - tComposedEnd : null,
-    // 「Running ffmpeg」到「Creating preview.mp4」之间(取素材规划、起 ffmpeg)
-    composeSetupMs: tRunning !== null && tCreating !== null ? tCreating - tRunning : null,
   };
   const out = path.join(dir, 'preview.mp4');
-  return { dir, out, wallMs, cpu, shards: Number(shards), segments, sizes: {
+  return { dir, out, wallMs, cpu, shards: Number(shards), proresMode, segments, sizes: {
     overlayMovBytes: fs.existsSync(path.join(dir, 'overlay.mov')) ? fs.statSync(path.join(dir, 'overlay.mov')).size : null,
   }, marks: marks.map((m) => ({ t: round(m.t, 0), line: m.line })).filter((m) => /^(分片|Warm-up|Export finished|Running ffmpeg|Creating|Composited \d+ frames|No audio|Audio muxed|Video synthesis|Launching|Navigating|Waiting for)/.test(m.line)).slice(0, 40), frameLines: frameMarks.length };
 }
@@ -636,7 +639,7 @@ async function main() {
                 const info = probeVideo(ffprobe, d.out);
                 const keep = path.join(work, `${name}-desktop-${k}.mp4`);
                 await fsp.copyFile(d.out, keep);
-                rec = { k, before, totalMs: d.wallMs, cpuDuring: d.cpu, shards: d.shards, segments: d.segments, intermediateBytes: d.sizes, video: info, file: keep, log: d.marks, progressLines: d.frameLines };
+                rec = { k, before, totalMs: d.wallMs, cpuDuring: d.cpu, shards: d.shards, proresMode: d.proresMode, segments: d.segments, intermediateBytes: d.sizes, video: info, file: keep, log: d.marks, progressLines: d.frameLines };
                 if (P.desktop.runs.length > 0 || !opts.split) { if (!opts.keep) await fsp.rm(d.dir, { recursive: true, force: true }); }
                 else rec.keepDir = d.dir;
               } else {
