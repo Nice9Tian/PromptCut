@@ -26,6 +26,9 @@
  *   签名里多一段 —— 同一版项目、同一份清单,这一项开着是另一个计划。创建者刚打开时宿主调 `streamsOn()`,马上重发:关着时发的那一份已经做完,
  *   同一个结果键队列不会重切;换了键,渲染节点才会再切一次、出它自己的那一份流任务。这一项关着(或旧文档服务不报)时计划与原来逐字相同。
  *   从开变关不用重发(渲染节点的认领闸当场生效);几个成员同时在线时各自重发的是同一个结果键,队列只留一个任务。
+ * - 本页产流(任务书「甲二」,`pageStreams.ts`)要知道「线上有没有能切分的节点接这份计划」:`current()` 给最近发成的那一版(任务 id、版本、清单、
+ *   发成的时刻),`probe()` 把同一个任务再发布一次、读回包里它此刻的状态(`open` 没人认领、`claimed` / `done` 有节点接了、`failed`)。
+ *   同一个结果键队列只合并,再发布不另起任务、不改它的状态。
  * - 每发一版之前调 `onPublish(version)`:宿主据此把这一版的已确认项目留在内存(M7 D6:执行细任务用任务的 `projectRev` 那一版)。
  *
  * 任务形状与队列侧 `server/render-queue/messages.mjs` 的 `clipsPlanTaskOf` 逐字段相同(单测对拍);这里照抄,页面构建不带服务端模块。
@@ -176,6 +179,13 @@ export interface PlanPublisher {
   nodeChanged(): void;
   /** 「生成轨道流」从关变开了:马上重发这一版(结果键带这一项,是另一个计划;不防抖,创建者正等着)。从开变关不用调 */
   streamsOn(): void;
+  /** 最近发成的那一版清单计划(本页产流用);还没发成、连接换了之后为 null */
+  current(): { id: string; projectId: string; projectRev: number; clips: string[]; at: number } | null;
+  /**
+   * 问队列最近发成的那一版计划此刻的状态:把同一个任务再发布一次,读回包里的 `state`(`open` / `claimed` / `done` / `failed`)。
+   * 问不到(没发成过、正在发、连接断着、回包不对)回 null。
+   */
+  probe(): Promise<string | null>;
   dispose(): void;
   debug(): { measured: boolean; want: Version | null; last: string | null; lastClips: string[]; helloOk: boolean; nodeWaitMs: number | null; log: { at: number; id: string; clips: number; ok: boolean; error?: string; state?: string; waitedMs?: number; node?: string }[] };
 }
@@ -214,6 +224,9 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
   let last: string | null = null;
   /** 上一次发成的那一份清单(探针核「清单含哪些片段」;任务 id 里只有签名) */
   let lastClips: string[] = [];
+  /** 上一次发成的那一个任务与发成的时刻(`current()`、`probe()` 用);连接换了就清掉 */
+  let lastTask: ClipsPlanTask | null = null;
+  let lastAt = 0;
   let helloOk = false;
   let timer: unknown = null;
   let busy = false;
@@ -271,6 +284,8 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
       if (!r || r.error) throw new Error(`task.publish:${r?.error ?? "no-result"}`);
       last = task.id;
       lastClips = [...task.input.clips];
+      lastTask = task;
+      lastAt = now();
       note({ at: now(), id: task.id, clips: clips.length, ok: true, state: r.state, node, ...(waitedMs !== undefined ? { waitedMs } : {}) });
     } catch (e) {
       const error = String((e as Error)?.message ?? e);
@@ -293,7 +308,7 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
   return {
     measured(v) { measuredOk = true; want = { ...v }; schedule(); },
     changed(v) { want = { ...v }; if (measuredOk) schedule(); },
-    reset() { helloOk = false; last = null; if (measuredOk && want) schedule(); },
+    reset() { helloOk = false; last = null; lastTask = null; if (measuredOk && want) schedule(); },
     nodeChanged() {
       // 在等节点报到的那一版:马上再判一次(报到完就发)
       if (disposed || waitSince === null || busy) return;
@@ -306,6 +321,23 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
       if (timer !== null) clearTimer(timer);
       timer = null;
       void publish();
+    },
+    current() {
+      const t = lastTask;
+      return t ? { id: t.id, projectId: t.source.projectId, projectRev: t.source.projectRev, clips: [...t.input.clips], at: lastAt } : null;
+    },
+    async probe() {
+      const t = lastTask;
+      if (disposed || !request || !t || busy || !helloOk) return null;
+      try {
+        const reply = await request({ type: "task.publish", tasks: [t] });
+        if (reply?.type !== "task.published" || lastTask !== t) return null;
+        const results = Array.isArray(reply.results) ? (reply.results as { id?: string; error?: string; state?: string }[]) : [];
+        const r = results.find((x) => x?.id === t.id);
+        return r && !r.error && typeof r.state === "string" ? r.state : null;
+      } catch {
+        return null;
+      }
     },
     dispose() {
       disposed = true;

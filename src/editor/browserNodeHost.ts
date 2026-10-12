@@ -51,6 +51,13 @@
  * 让路:每帧前看节点要不要让路,要让就把编码器里已经满了的分段冲出来(没满的那一段丢掉)、放回;已推完的分段按任务 id 留着,
  * 重新认领同一段只补缺的分段。中止(页面隐藏、丢认领)直接关编码器。
  *
+ * # 本页产流(任务书 `render-refactor-task.md`「甲二」;判据与次序在 `src/online/pageStreams.ts`)
+ *
+ * 线上没有能切分的节点接本页的清单计划时,本页自己把清单里能产的单卡流做出来,不经过任务队列:流的计划由 `pageStreamPlan.ts` 按那一版的
+ * 已确认项目算(键与切分方算的相同),每一段照队列里那种流任务的形状组一个任务,交给上面同一个 `bakeStream`(同一份活、同一个编码器、
+ * 同一份「已推完的分段」登记),清单同样写内容库;层表里本页的那一行由本页并进去。先查、让路、有切分方接了活就停,都在 `pageStreams.ts`。
+ * 两条路共用后台舞台的同一份活:本页在产时节点不认领(`isIdle` 多一条),节点手里有认领时本页不产。
+ *
  * # 项目版本(D6)
  *
  * 清单计划发布前(`planPublisher` 的 `onPublish`)把此刻的已确认版本按版本号留在内存,最多 `KEPT_REVISIONS` 版;
@@ -59,7 +66,7 @@
  * # 诊断(第 7 节)
  *
  * `window.__pcBrowserNode()`:资格与原因、节点状态与计数(`browserNode.ts` 的 `debug()`)、推了几块 / 跳过几块 / 多少字节、
- * 小尺寸几帧、舞台每帧耗时 p50 / p95 与被门挡住的时长、连接状态、最近一次错误。
+ * 小尺寸几帧、舞台每帧耗时 p50 / p95 与被门挡住的时长、连接状态、最近一次错误;`pageStreams` 是本页产流的状态与计数。
  */
 import { browserNodeEligibility, createBrowserNode, streamManifest, streamManifestBlocks, streamManifestCovers, streamTaskFrames, BROWSER_STREAM_ENCODER,
   type BrowserNode, type EligibilityInput, type FrameRecord, type NodeTask, type StreamInitMeta, type StreamSegmentMeta } from "../online/browserNode";
@@ -80,6 +87,12 @@ import { currentSharedUrl, me, pageSession } from "./sync/syncManager";
 import type { Project } from "../kernel/project";
 import { createStageBaker } from "./stageBake";
 import type { BakeFrameRequest, StageEvent, StageRpcClient } from "../render/stageRpc";
+import { createPageStreams, type PlanState, type PublishedPlan } from "../online/pageStreams";
+import { pageStreamCodes, planPageStreams, type PageCardPlanValue } from "../online/pageStreamPlan";
+import { projectCardGraph } from "../kernel/cardGraph.mjs";
+import { getCard, unknownCardClipIds } from "../kernel/registry";
+import { sourceVersionsOf } from "./costIdentity";
+import { fontFingerprintOf } from "../render/fontFingerprint";
 // @ts-expect-error 无类型声明的 .mjs(浏览器与 Node 通用,只用 WebSocket 与计时器)
 import { createDocEndpoint as createDocEndpointUntyped } from "../../server/render-node/session-link.mjs";
 
@@ -151,6 +164,32 @@ export interface BrowserNodeHostDeps {
   projectId: () => string | null;
   /** 本页产出并完成了这一段:在线来源把这个结果键认作活着(D12) */
   onAlive?: (resultKey: string) => void;
+  /** 本页产流(「甲二」):本页最近发成的那一版清单计划(`planPublisher.ts` 的 `current()`);不给就不走本页产流这条路 */
+  pagePlan?: () => PublishedPlan | null;
+  /** 本页产流:问队列那一版计划此刻的状态(`planPublisher.ts` 的 `probe()`);问不到回 null */
+  planState?: () => Promise<string | null>;
+  /** 本页产流:这个结果键有了可用的流(本页产的、先查查到的),宿主叫在线来源认它、马上重取层表 */
+  onPageStream?: (resultKey: string) => void;
+}
+
+/**
+ * 页面一侧的「卡片计划」原料,与导出页 `window.__pcCardPlan()` 同形(`src/ExportView.tsx`):卡片图、每张卡的源码版本、环境。
+ * 切分方的键是拿导出页的这一份算的;本页产流拿这一份算,同一个项目、同一份代码两边就得出同一个键。
+ * 字体指纹取本页文档已加载的字体(导出页取它自己文档的);两边加载的字体不一样时键不同,那条流切分方会当没有、按自己的键另产。
+ */
+export function pageCardPlanValue(project: Project): PageCardPlanValue | null {
+  try {
+    const fonts = typeof document !== "undefined" ? (document.fonts as unknown as Iterable<{ family: string; status: string }>) : null;
+    return {
+      graph: projectCardGraph(project, getCard) as unknown as PageCardPlanValue["graph"],
+      sourceVersions: sourceVersionsOf(),
+      unknownClipIds: [...unknownCardClipIds(project.tracks.flatMap((track) => track.clips))].sort(),
+      environment: { width: project.width, height: project.height, fps: project.fps, theme: project.themeId, fontFingerprint: fontFingerprintOf(fonts) },
+    };
+  } catch {
+    // 卡片图算不出来(悬空输入):这一版不产
+    return null;
+  }
 }
 
 const quantile = (sorted: number[], p: number): number | null =>
@@ -224,7 +263,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   const baker = createStageBaker({
     runBackJob: (kind, run) => runBackJob(kind, run),
     backStage, pushProject, onStageEvent,
-    onUrgent: () => { node?.yieldFor("urgent"); },
+    onUrgent: () => { node?.yieldFor("urgent"); pages.yieldFor("urgent"); },
     isIdle: () => isIdle(),
     mode: BAKE_MODE,
     now: () => performance.now(),
@@ -292,7 +331,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       (e) => { Object.assign(streamCap, { key, capable: false, mode: null, reason: String((e as Error)?.message ?? e).slice(0, 120) }); },
     ).finally(() => { streamCap.probing = false; });
   };
-  const streamStats = { tasks: 0, frames: 0, blank: 0, segments: 0, inits: 0, bytes: 0, yields: 0, resumedSegments: 0, pixelsMs: [] as number[], encodeMs: [] as number[], lastError: null as string | null };
+  const streamStats = { tasks: 0, encoders: 0, frames: 0, blank: 0, segments: 0, inits: 0, bytes: 0, yields: 0, resumedSegments: 0, pixelsMs: [] as number[], encodeMs: [] as number[], lastError: null as string | null };
   /** 已推完的分段:任务 id → 这段任务的开头文件与分段登记(按插入顺序淘汰) */
   const streamKept = new Map<string, { inits: Record<string, StreamInitMeta>; segments: Record<number, StreamSegmentMeta> }>();
   /** 舞台交来、还没用的位图:会话号 + 本地帧 → 位图(用完、这一段收尾时关掉) */
@@ -332,7 +371,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       }
       listener(e);
     }),
-    onUrgent: () => { node?.yieldFor("urgent"); },
+    onUrgent: () => { node?.yieldFor("urgent"); pages.yieldFor("urgent"); },
     isIdle: () => isIdle(),
     mode: BAKE_MODE,
     small: false,
@@ -343,9 +382,14 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   /** 交还流任务那一份活:停掉在推的帧、关掉还没用的位图 */
   const closeStreamLease = () => { streamBaker.close(); dropPixels(); pixelRectNow = null; };
 
-  const bakeStream = async ({ task, project, signal, progress, yielding }: {
-    task: NodeTask; project: unknown; signal: AbortSignal; progress: (frames: number) => void; yielding: () => boolean;
+  /**
+   * `stride`:每几帧向舞台取一张(缺省 1,每帧都取,满密度)。大于 1 时取到的那一张连着送 `stride` 次(分段的样本数不变),清单里这一段记这个 `stride`。
+   * 现在两条路(认领来的任务、本页产流)都只用 1;「先产一趟稀疏的」以后从这里接。
+   */
+  const bakeStream = async ({ task, project, signal, progress, yielding, stride: strideIn }: {
+    task: NodeTask; project: unknown; signal: AbortSignal; progress: (frames: number) => void; yielding: () => boolean; stride?: number;
   }): Promise<{ manifest: Record<string, unknown> } | { yielded: true }> => {
+    const stride = Number.isInteger(strideIn) && (strideIn as number) > 1 ? (strideIn as number) : 1;
     const plan = streamTaskFrames(task);
     if (!plan) throw Object.assign(new Error("任务没有 input.stream(切分方没给浏览器那一份的参数)"), { retryable: false });
     const { input } = plan;
@@ -358,9 +402,11 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     const parts = kept;
     const expected = new Map(plan.segments.map((s) => [s.index, s.frames.length]));
     const framesOf = (done: (n: number) => boolean) => plan.segments.reduce((sum, s) => sum + (done(s.index) ? s.frames.length : 0), 0);
+    /** 这一段已经有不比这一趟稀的分段(上一次推完的):不重做 */
+    const have = (n: number) => !!parts.segments[n] && parts.segments[n].stride <= stride;
     /** 上一次认领里推完的分段(让路放回之后回来的):不重做 */
-    const before = framesOf((n) => !!parts.segments[n]);
-    streamStats.resumedSegments += plan.segments.filter((s) => parts.segments[s.index]).length;
+    const before = framesOf(have);
+    streamStats.resumedSegments += plan.segments.filter((s) => have(s.index)).length;
     let fed = 0;
     progress(before);
     // 流任务用自己那份「活」向舞台要帧:范围按卡的本地帧给(它据此决定要不要先发下一帧)
@@ -372,12 +418,13 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     // 缺的分段按连续的几段分组:每组一个编码器(每段段首是关键帧,组与组之间不相干)
     const runs: (typeof plan.segments)[] = [];
     for (const s of plan.segments) {
-      if (parts.segments[s.index]) continue;
+      if (have(s.index)) continue;
       const last = runs[runs.length - 1];
       if (last && last[last.length - 1].index === s.index - 1) last.push(s); else runs.push([s]);
     }
     for (const group of runs) {
       let initId: string | null = null;
+      streamStats.encoders++;
       const enc = await openStreamEncoder({
         width: input.bound.w, height: input.bound.h, fps: input.fps, firstSegment: group[0].index,
         onInit: async (init) => {
@@ -392,7 +439,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
           if (seg.samples !== expected.get(seg.index) || !initId) return;
           const hash = await sha256Hex(seg.bytes);
           await uploader.put("px", hash, seg.bytes, "m4s");
-          parts.segments[seg.index] = { hash, bytes: seg.bytes.length, init: initId, stride: 1, samples: seg.samples, sig: null, encoder: BROWSER_STREAM_ENCODER };
+          parts.segments[seg.index] = { hash, bytes: seg.bytes.length, init: initId, stride, samples: seg.samples, sig: null, encoder: BROWSER_STREAM_ENCODER };
           streamStats.segments++;
           streamStats.bytes += seg.bytes.length;
         },
@@ -400,7 +447,10 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       let finished = false;
       try {
         for (const seg of group) {
-          for (const local of seg.frames) {
+          for (let at = 0; at < seg.frames.length; at += stride) {
+            const local = seg.frames[at];
+            /** 这一张连着送几次(满密度时是 1) */
+            const repeat = Math.min(stride, seg.frames.length - at);
             if (signal.aborted) throw Object.assign(new Error("已中止"), { retryable: true });
             if (yielding()) {
               // 让路:已经满了的分段冲出来(推完才算数),没满的那一段丢掉
@@ -411,8 +461,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
             }
             const t0 = performance.now();
             if (local === null) {
-              streamStats.blank++;
-              await enc.add(blank);
+              streamStats.blank += repeat;
+              for (let k = 0; k < repeat; k++) await enc.add(blank);
             } else {
               const { reply } = await streamBaker.bakeFrame({ task: frameTask, project, localFrame: local, signal });
               const key = `${session}#${local}`;
@@ -427,13 +477,13 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
               if (reply.remounted) stage.remounts++;
               streamStats.pixelsMs.push(reply.pixelsMs ?? 0);
               const e0 = performance.now();
-              try { await enc.add(bitmap); } finally { try { bitmap.close(); } catch { /* 已经关了 */ } }
+              try { for (let k = 0; k < repeat; k++) await enc.add(bitmap); } finally { try { bitmap.close(); } catch { /* 已经关了 */ } }
               streamStats.encodeMs.push(performance.now() - e0);
               if (streamStats.pixelsMs.length > 200) { streamStats.pixelsMs.splice(0, streamStats.pixelsMs.length - 200); streamStats.encodeMs.splice(0, Math.max(0, streamStats.encodeMs.length - 200)); }
             }
             notePhase("total", performance.now() - t0);
-            fed++;
-            streamStats.frames++;
+            fed += repeat;
+            streamStats.frames += repeat;
             progress(before + fed);
           }
         }
@@ -445,22 +495,27 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
         throw e;
       }
     }
-    for (const s of plan.segments) if (!parts.segments[s.index]) throw Object.assign(new Error(`分段 ${s.index} 没出齐`), { retryable: true });
+    for (const s of plan.segments) if (!have(s.index)) throw Object.assign(new Error(`分段 ${s.index} 没出齐`), { retryable: true });
     streamStats.tasks++;
     return { manifest: streamManifest(task as Parameters<typeof streamManifest>[0], parts) as unknown as Record<string, unknown> };
   };
 
   /** 流任务全部分段齐后:清单写内容库(`render-manifest`,键 `<结果键>:<起>-<止>`);失败只记诊断(同快照、同桌面 writeManifest) */
-  const finishStream = async ({ task, manifest }: { task: NodeTask; manifest: Record<string, unknown> }) => {
+  const putStreamManifest = async (task: NodeTask, manifest: Record<string, unknown>): Promise<boolean> => {
     const key = manifestKey(task);
     try {
       const r = await docRequest({ type: "content.put", kind: "render-manifest", key, body: manifest });
-      if (r.type === "content.stored") manifestStats.written++;
-      else { manifestStats.failed++; manifestStats.lastError = String(r.reason ?? r.type); }
+      if (r.type === "content.stored") { manifestStats.written++; return true; }
+      manifestStats.failed++;
+      manifestStats.lastError = String(r.reason ?? r.type);
     } catch (e) {
       manifestStats.failed++;
       manifestStats.lastError = String((e as Error)?.message ?? e);
     }
+    return false;
+  };
+  const finishStream = async ({ task, manifest }: { task: NodeTask; manifest: Record<string, unknown> }) => {
+    await putStreamManifest(task, manifest);
     streamKept.delete(task.id);
     return manifest;
   };
@@ -556,11 +611,85 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     return urgentBackJobs() > 0 ? "stage" : null;
   };
 
+  /* ---------------- 本页产流(「甲二」;判据与次序在 pageStreams.ts) ---------------- */
+
+  /** 满密度才算有:清单覆盖这一段、每个分段都是每帧一张、块都在素材服务上 */
+  const streamRangePresent = async (resultKey: string, range: { from: number; to: number }): Promise<boolean> => {
+    let found: unknown = null;
+    try {
+      const r = await docRequest({ type: "content.get", kind: "render-manifest", key: `${resultKey}:${range.from}-${range.to}` });
+      found = r.type === "content.item" ? r.body : null;
+    } catch { return false; }
+    const ref = { resultKey, range };
+    if (!streamManifestCovers(found, ref)) return false;
+    for (let n = range.from; n <= range.to; n++) if (found.segments[n]?.stride !== 1) return false;
+    for (const b of streamManifestBlocks(found)) if (!(await uploader.has(b.ns, b.hash))) return false;
+    return true;
+  };
+  /** 层表在内容库里的键:`layers:<项目 id>`(与在线来源、与渲染节点写的同一个键) */
+  const layerMapKey = (project: unknown): string => {
+    const id = (project as Project | null)?.id;
+    if (typeof id !== "string" || !id) throw new Error("项目没有 id,写不了层表");
+    return `layers:${id}`;
+  };
+  const pages = createPageStreams({
+    now: Date.now,
+    capable: () => !!deps.pagePlan && !!node && !!node.envFingerprint && readyState === "ready" && streamCap.capable && pageStreamCodes() !== null,
+    isIdle: () => isIdle() && !node?.working(),
+    plan: () => {
+      const p = deps.pagePlan?.() ?? null;
+      return p && p.projectId === nodeProject ? p : null;
+    },
+    planState: async () => {
+      const s = await deps.planState?.();
+      return s === "open" || s === "claimed" || s === "done" || s === "failed" ? (s as PlanState) : "none";
+    },
+    codeVersion: deps.eligibility().codeVersion ?? null,
+    specs: async (plan) => {
+      const project = kept.get(plan.projectRev) ?? null;
+      const fp = node?.envFingerprint ?? null;
+      if (!project || !fp) return null;
+      const value = pageCardPlanValue(project);
+      if (!value) return { specs: [], skipped: {}, project };
+      const out = await planPageStreams({ project: project as unknown as Record<string, unknown>, value, clips: plan.clips, codes: pageStreamCodes(), envFingerprint: fp });
+      return { ...out, project };
+    },
+    lookupOwn: async (task) => !!task.range && streamRangePresent(task.resultKey, task.range),
+    lookupOther: streamRangePresent,
+    readLayerMap: async (project) => {
+      const r = await docRequest({ type: "content.get", kind: "snapshot-manifest", key: layerMapKey(project) });
+      if (r.type !== "content.item") throw new Error(`取层表:${String(r.reason ?? r.type)}`);
+      return r.missing ? null : (r.body ?? null);
+    },
+    writeLayerMap: async (project, body) => {
+      const r = await docRequest({ type: "content.put", kind: "snapshot-manifest", key: layerMapKey(project), body });
+      if (r.type !== "content.stored") throw new Error(`写层表:${String(r.reason ?? r.type)}`);
+    },
+    produce: async ({ task, project, stride, signal, yielding }) => {
+      try {
+        const out = await bakeStream({ task, project, signal, progress: () => {}, yielding, stride });
+        if (!("manifest" in out)) return "yielded";
+        // 清单没写进内容库,这一段别人就找不到:按做不成算(已推完的分段留着,下次只差写清单)
+        if (!(await putStreamManifest(task, out.manifest))) throw Object.assign(new Error(`流清单没写进内容库:${manifestStats.lastError ?? "?"}`), { retryable: true });
+        streamKept.delete(task.id);
+        return "done";
+      } finally {
+        closeLease();
+      }
+    },
+    onAlive: (resultKey) => {
+      try { deps.onAlive?.(resultKey); } catch { /* 宿主坏了 */ }
+      try { deps.onPageStream?.(resultKey); } catch { /* 宿主坏了 */ }
+    },
+  });
+  /** 让路:认领来的任务与本页产流同一套规矩 */
+  const yieldAll = (cause: "play" | "drag" | "urgent" | "hidden") => { node?.yieldFor(cause); pages.yieldFor(cause); };
+
   let wasPlaying = !!getState().playing;
   const offStore = subscribe(() => {
     const playing = !!getState().playing;
     if (playing) lastInteractionAt = Date.now();
-    if (playing && !wasPlaying) node?.yieldFor("play");
+    if (playing && !wasPlaying) yieldAll("play");
     if (!playing && wasPlaying) lastInteractionAt = Date.now();
     wasPlaying = playing;
   });
@@ -568,16 +697,16 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   const offScrub = subscribeScrub(() => {
     const s = isScrubbing();
     lastInteractionAt = Date.now();
-    if (s && !wasScrubbing) node?.yieldFor("drag");
+    if (s && !wasScrubbing) yieldAll("drag");
     wasScrubbing = s;
   });
-  const onVisibility = () => { if (typeof document !== "undefined" && document.visibilityState === "hidden") node?.yieldFor("hidden"); };
+  const onVisibility = () => { if (typeof document !== "undefined" && document.visibilityState === "hidden") yieldAll("hidden"); };
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
   /*
    * 冻结(M7 探针 P5):冻结只发生在隐藏之后,D8 已经放回;`freeze` 事件来时再尽力放回一次(切走约 2 s 后到,还发得出消息)。
    * 冻结恢复时 Chrome 会关掉 WebSocket,手里的认领在冻结超过租约时已经丢了:`resume` 一律当一次重连 —— 结束这条会话、马上重建、重新报到。
    */
-  const onFreeze = () => { node?.yieldFor("hidden"); };
+  const onFreeze = () => { yieldAll("hidden"); };
   const onResume = () => {
     conn.resumes++;
     const e = ep;
@@ -659,7 +788,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     setReady("pending");
     node = createBrowserNode({
       nodeId, projectId, userId: me().userId ?? "", codeVersion: deps.eligibility().codeVersion ?? null, environment: pageEnvironment(),
-      now: Date.now, isIdle, busy,
+      // 本页自己在产流时不认领:两条路共用后台舞台的同一份活
+      now: Date.now, isIdle: () => isIdle() && !pages.running(), busy,
       send: (m) => ep?.send(m) ?? false,
       keptProject: (rev) => kept.get(rev) ?? null,
       fetchSnapshot, bakeFrame, finishTask, lookupResult,
@@ -685,6 +815,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     node = null;
     nodeProject = null;
     if (n) { try { n.stop(); } catch { /* 连接已坏 */ } lastStop = { reason, at: Date.now(), debug: n.debug() }; }
+    pages.stop(reason);
     closeLease();
     setNodeCardEnvFingerprint(null);
     const e = ep;
@@ -716,9 +847,10 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     if (!ep && !dialing && Date.now() >= redialAt) void dial();
     // 页面隐藏、父页 rAF 断档:不等当前帧,立即放回(D8)
     const bw = backWorkDiag();
-    if (!bw.on && (bw.reason === "hidden" || bw.reason === "raf-gap")) node?.yieldFor("hidden");
+    if (!bw.on && (bw.reason === "hidden" || bw.reason === "raf-gap")) yieldAll("hidden");
     if (getState().playing || isScrubbing()) lastInteractionAt = Date.now();
     try { node?.tick(); } catch (e) { lastError = String((e as Error)?.message ?? e); }
+    try { pages.tick(); } catch (e) { lastError = String((e as Error)?.message ?? e); }
   };
   const timer = setInterval(loop, HOST_TICK_MS);
   // 块 N:本页能运行哪些用户卡与图卡的登记(随注册表、闸门、图形能力更新)
@@ -753,10 +885,14 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
         streams: (() => {
           const px = [...streamStats.pixelsMs].sort((a, b) => a - b), en = [...streamStats.encodeMs].sort((a, b) => a - b);
           return { capable: streamCap.capable, probe: streamCap.key || null, mode: streamCap.mode, reason: streamCap.reason,
+            // 起过几个编码器(两条路合计;「先查到了就不产」的验收看它)
+            encoders: streamStats.encoders,
             tasks: streamStats.tasks, frames: streamStats.frames, blank: streamStats.blank, segments: streamStats.segments, inits: streamStats.inits, bytes: streamStats.bytes,
             yields: streamStats.yields, resumedSegments: streamStats.resumedSegments, kept: streamKept.size, restage: streamBaker.diag(),
             pixelsMs: { p50: quantile(px, 0.5), p95: quantile(px, 0.95) }, encodeMs: { p50: quantile(en, 0.5), p95: quantile(en, 0.95) }, lastError: streamStats.lastError };
         })(),
+        // 本页产流(不经队列):状态、这一版的流与每一段的去向、计数
+        pageStreams: pages.debug(),
         connection: { connected: !!ep?.connected, transport: ep?.stats().transport ?? null, ...conn },
         kept: [...kept.keys()],
         lastError: d?.lastError ?? lastError,
@@ -770,6 +906,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     clearInterval(timer);
     offCardInfo();
     teardown("unmount");
+    pages.stop("unmount");
     baker.dispose();
     streamBaker.dispose();
     dropPixels();

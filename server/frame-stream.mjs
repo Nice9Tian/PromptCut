@@ -540,7 +540,23 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     }
   }
   if (belows.length) specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion, envFingerprint }));
-  return specs;
+  return relockStreams(specs, entry?.streamLocks);
+}
+
+/**
+ * 「流库里有别的指纹产的同一条流」(任务书 `render-refactor-task.md`「甲二」):单卡流的内容键在 `locks`(内容键 → 环境指纹)里时,
+ * 这条流的键照那个指纹出(`streamKey = 内容键 × 那个指纹`,`envFingerprint` 也换成它,本机的记在 `ownEnvFingerprint`)。
+ * 锁由管线在把那条流整条拉回本机流库之后才记(`FramePipeline.adoptForeignStreams`),记在每个 entry 的 `streamLocks` 上;
+ * 所以照锁出键的流在本机一定是齐的:生产者不重产,舞台播的就是拉回来的那一条,切分时照锁只出一份。
+ * 组流、依赖下层的流不换(它们不在别的环境产)。没有锁时原样返回同一个数组。
+ */
+export function relockStreams(specs, locks) {
+  if (!locks || typeof locks.get !== 'function' || !locks.size) return specs;
+  return specs.map(spec => {
+    const fingerprint = spec?.kind === 'card' ? locks.get(spec.contentKey) : null;
+    if (typeof fingerprint !== 'string' || !fingerprint || fingerprint === spec.envFingerprint) return spec;
+    return { ...spec, streamKey: resultKeyOf(spec.contentKey, fingerprint), envFingerprint: fingerprint, ownEnvFingerprint: spec.envFingerprint };
+  });
 }
 
 /**
