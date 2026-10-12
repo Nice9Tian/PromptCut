@@ -51,7 +51,7 @@
 
 ### 四、浏览器节点：认领并执行流任务（已做）
 
-- `src/online/browserNode.ts`：能力位 `streams` 由宿主报（`probeStreamEncoder` 说能压才报真）；`render` 里放行 `kind: 'stream'`，交给宿主的新方法。
+- `src/online/browserNode.ts`：能力位 `streams` 由宿主报（`probeStreamEncoder` 说能压才报真）；`render` 里放行 `kind: 'stream'`，交给宿主的新方法探编码器在 Worker 里问（`streamEncode.ts` 的 `askConfigSupportInWorker`）：在主线程上第一次问会留下一个 50～120 毫秒的长任务，正落在「生成快照期间主文档没有长任务」的时间段里；问不了才退回主线程。
 - `src/editor/browserNodeHost.ts`：按任务的 `input.bake` 建隔离单卡工程；任务范围里每个分段 15 帧，全局帧号减去 `firstFrame` 得本地帧，不在卡的范围里的帧送全透明；每帧向舞台要像素，送进 `openStreamEncoder`；每段出来后算哈希，把开头文件和分段推到素材服务的像素那一类；全部做完往内容库写一份流清单（`render-manifest`，键是 `<结果键>:<起>-<止>`），再报完成。让路、中止、丢认领照快照任务的规矩；让路时已经满了的分段留着，重新认领只补缺的。
 
 清单的形状和桌面产的一样，桌面能把浏览器产的流拉回去落盘（`server/artifact-transfer.mjs` 的 `collectStreamResult` 是样板，这一处不用改）：
