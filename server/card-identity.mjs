@@ -159,11 +159,14 @@ export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {
 }
 
 /**
- * 依赖下层的流里**放的是什么**的版本。现在是 0:这种流的身份(本文件)和计划(`frame-stream.mjs` 的 `planStreams`)定了,
- * 流里的像素怎么取(差分取层还是原样盖,契约第 5.3 节)还没做。定下来的那一次把它加到 1,之后每改一次流里放的东西再加一 ——
- * 开关打开时(`belowStreamsEnabled`)用旧办法产出来的分段就不会被新的读法拿去贴。不动 `STREAM_CODE_VERSION`:那一个管所有的流。
+ * 依赖下层的流里**放的是什么**的版本。每改一次流里放的东西就加一 —— 开关打开时(`belowStreamsEnabled`)用旧办法产出来的分段
+ * 就不会被新的读法拿去贴。不动 `STREAM_CODE_VERSION`:那一个管所有的流。
+ *
+ *   0  只有身份(本文件)和计划(`frame-stream.mjs` 的 `planStreams`),流里照单卡流的办法放整幅截图(带着下层);
+ *   1  差分取层(契约第 5.3 节,`./bakery/capture-below.mjs`):流里是「盖在只有下层的画面上正好得到带目标卡的画面」的那一层,
+ *      目标卡没有改动的地方全透明。
  */
-export const BELOW_STREAM_VERSION = 0;
+export const BELOW_STREAM_VERSION = 1;
 
 /**
  * 依赖下层的流(`kind: 'below'`)的内容键。摘要里是(契约第 5.2 节):

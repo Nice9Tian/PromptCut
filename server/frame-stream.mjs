@@ -36,6 +36,7 @@ import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { bakeStream } from './bakery/bake.mjs';
 import { directCaptureMode, directSegmentCapture, newDirectRecord, rgbaAlphaBox } from './bakery/capture-canvas.mjs';
+import { belowSegmentCapture, newBelowRecord } from './bakery/capture-below.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
@@ -80,7 +81,8 @@ export function streamsEnabled(env = process.env) {
 /**
  * 「依赖下层的流」(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5 节)出不出。**缺省关**〔裁〕。
  *
- * 这种流现在只做了计划、键、隔离工程、切分与认领;流里的像素怎么取、怎么贴回舞台、在线页面怎么读都还没做。关着的时候
+ * 这种流现在做了计划、键、隔离工程、切分与认领,以及流里的像素怎么取(差分取层,`./bakery/capture-below.mjs`);
+ * 怎么贴回舞台、在线页面怎么读还没做。关着的时候
  * `planStreams` 不出这种流,于是切分不出这种任务、层表里没有这种行、生产者不产它,行为和加这种流之前一字不差。
  * 只给单测和探针一个打开的办法:环境变量 `PROMPTCUT_TEST_BELOW_STREAMS=1`(照 `PROMPTCUT_TEST_PLAN_ONLY` 的写法,生产环境不设),
  * 或者直接给 `planStreams` 传 `below: true`。贴回舞台那一块合入时把这个开关去掉(常量改成 true、删掉环境变量)。
@@ -615,7 +617,8 @@ function localClip(clip, spec) {
 /* ======================================================================== *
  * 依赖下层的流(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.1、5.2 节)
  *
- * 这一节只有计划、键和隔离工程;流里的像素怎么取(第 5.3 节)、怎么贴回舞台(第 5.4 节)不在这里。
+ * 这一节只有计划、键和隔离工程。流里的像素怎么取(第 5.3 节:差分取层)在 `./bakery/capture-below.mjs`,
+ * 由 `StreamProducer.runSegment` 接上;怎么贴回舞台(第 5.4 节)不在这里。
  * 出不出这种流由 `belowStreamsEnabled` 管,缺省关。
  * ======================================================================== */
 
@@ -885,6 +888,7 @@ export class StreamProducer {
         bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
         replay: state.spec.replay !== false, replayedFrames: state.replayedFrames ?? 0,
         direct: state.direct ? { ...state.direct } : null, capture: state.capture ? { ...state.capture } : null,
+        below: state.below ? { ...state.below } : null,
         segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs }])),
         inits: Object.keys(state.manifest?.inits ?? {}),
       })),
@@ -998,6 +1002,8 @@ export class StreamProducer {
         let attempts = 0, made = false;
         while (this.segmentState(state, n) !== 'dense') {
           if (signal?.aborted || this.closed) throw cancelled();
+          // 差分取层实测没过的流(`belowSegmentCapture`):这张卡的这种流产不出来,换一台同样的节点也一样,不重试
+          if (state.below?.failed) throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 的差分取层没过(${state.below.failed})`), { code: 'below-capture-failed', retryable: false });
           if (state.reserved.has(n)) { await sleep(50); continue; }
           if (attempts++ >= QUEUE_SEGMENT_ATTEMPTS) {
             throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 分段 ${n} 连续 ${QUEUE_SEGMENT_ATTEMPTS} 次没产成`), { code: 'stream-segment-failed', retryable: true });
@@ -1273,10 +1279,17 @@ export class StreamProducer {
   /**
    * 生产一个分段(G4:单个分段的生产是它自己的一个 run)。租约接得上就接着推,接不上就把这条流的
    * 隔离工程灌进会话、从挂载帧重放。出帧逐张喂给这个分段的编码器;编码在后台收尾(双缓冲)。
+   *
+   * 依赖下层的流(`kind: 'below'`)每一帧截两张、差分取层(`./bakery/capture-below.mjs`):隔离工程里留着下层,
+   * 截图矩形恒为上界(整个画面,不随收紧变:毛玻璃要采样四周的下层),交给编码器的是裁到这一趟的矩形的那一层;
+   * 项目里有画面素材时截图前等素材就位。别的两种流走的路和原来逐项相同。
    */
   async runSegment(bakery, task) {
     const { state, segment, stride } = task;
     const { spec } = state;
+    const below = spec.kind === 'below';
+    // 差分取层实测没过的流不再产(不白付一次重灌和回放);自动生产把它记成这个分段的一次失败,三次以后不再挑它
+    if (below && state.below?.failed) throw Object.assign(new Error(`差分取层没过(${state.below.failed}),这条流不再产`), { code: 'below-capture-failed', retryable: false });
     // X1:队列任务产的分段(`task.queue`)不随版本作废 —— 流键是内容寻址的,换了一版而键没变,分段照样有效;
     // 只有任务被中止、生产者关了、这条流被换掉才作废。`generation: null` 让 `storeSegment` 不按版本判旧
     const queue = task.queue ?? null;
@@ -1289,6 +1302,8 @@ export class StreamProducer {
     const manifest = state.manifest;
     const rect = stride > 1 ? manifest.bound : (manifest.tight ?? manifest.bound);
     const captureRect = { x: rect.x + spec.offset.x, y: rect.y + spec.offset.y, w: rect.w, h: rect.h };
+    // 依赖下层的流:两张截图都按上界截,算完再裁到 `captureRect`
+    const viewRect = below ? { x: manifest.bound.x + spec.offset.x, y: manifest.bound.y + spec.offset.y, w: manifest.bound.w, h: manifest.bound.h } : captureRect;
     const lease = bakery.streamLease;
     const continues = !!lease && !lease.dirty && lease.page === bakery.page && lease.streamSignature === spec.streamKey && lease.lastFrame + 1 === fromFrame;
     if (!continues) {
@@ -1319,8 +1334,10 @@ export class StreamProducer {
       const result = await bakeStream(bakery, {
         streamSignature: spec.streamKey, fromFrame, toFrame, stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
-        clip: captureRect, hasMedia: false, signal: abort.signal,
-        ...(direct ? { capture: directSegmentCapture(bakery, { clipId: spec.topClipId, rect: captureRect, record: direct, stride, captures: Math.ceil(samples / stride), always: this.direct === 'always',
+        clip: viewRect, hasMedia: below && spec.hasMedia === true, signal: abort.signal,
+        ...(below ? { capture: belowSegmentCapture(bakery, { clipId: spec.topClipId, view: viewRect, rect: captureRect, record: state.below ||= newBelowRecord(), signal: abort.signal,
+          note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) }
+        : direct ? { capture: directSegmentCapture(bakery, { clipId: spec.topClipId, rect: captureRect, record: direct, stride, captures: Math.ceil(samples / stride), always: this.direct === 'always',
           note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) } : {}),
         onFrame: async (frame, shot) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
@@ -1352,6 +1369,8 @@ export class StreamProducer {
     } catch (error) {
       if (enc) { await enc.abort(); this.releaseEncoderSlot(); }
       bakery.streamLease = null;
+      // 差分取层发现目标卡改到了收紧矩形外面(稀疏那一趟没量到的帧):把收紧矩形放大,这个分段按新矩形重来,不算失败
+      if (below && error?.code === 'below-overflow' && this.widenTight(state, error.box)) error.cancelled = true;
       throw error;
     } finally { clearInterval(guard); }
     if (!enc) return false;
@@ -1404,6 +1423,24 @@ export class StreamProducer {
     const tight = evenRect(intersectRect(padRect(state.measured, MEASURE_PAD_PX), bound), bound);
     manifest.tight = rectArea(tight) <= rectArea(bound) * (1 - TIGHTEN_MIN_SAVING) ? tight : bound;
     this.note(`流 ${spec.streamKey.slice(0, 8)} 收紧到 ${JSON.stringify(manifest.tight)}(上界 ${JSON.stringify(bound)})`);
+  }
+
+  /**
+   * 依赖下层的流的收紧矩形不够大:满密度那一趟里目标卡改到了它外面(`box`,场景坐标)。把它并进去再外扩、夹回上界。
+   * 已经按旧矩形产好的满密度分段签名对不上了(`segmentState` 判 `stale`),会按新矩形重产。回有没有真的放大。
+   */
+  widenTight(state, box) {
+    const manifest = state.manifest;
+    const { spec } = state;
+    if (!manifest?.tight || !box) return false;
+    const bound = manifest.bound;
+    const plane = { x: box.x - spec.offset.x, y: box.y - spec.offset.y, w: box.w, h: box.h };
+    const wider = evenRect(intersectRect(unionRect(manifest.tight, padRect(plane, MEASURE_PAD_PX)), bound), bound);
+    if (rectArea(wider) <= rectArea(manifest.tight)) return false;
+    state.measured = unionRect(state.measured, plane);
+    this.note(`流 ${spec.streamKey.slice(0, 8)} 的收紧矩形放大到 ${JSON.stringify(wider)}(原来 ${JSON.stringify(manifest.tight)},目标卡改到了它外面)`);
+    manifest.tight = wider;
+    return true;
   }
 
   /** 编完一个分段:切分、校验、落盘、改清单、发 `layer`;被替换的旧文件 5 秒后删(G6) */
