@@ -21,6 +21,7 @@ import { fontFingerprintOf } from "./render/fontFingerprint";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { demoTimeline } from "./demo";
 import { createGlHost, type GlHost } from "./render/gl/glHost";
+import { grabCanvasPixels } from "./render/gl/canvasGrab";
 import "./cards";
 
 // 只要进了导出视图就把页面时钟量化到导出帧(见 exportClock.ts),必须早于任何卡片挂载
@@ -186,6 +187,8 @@ export default function ExportView() {
       // D3(c):实体几何的导出面,只给 puppeteer 侧 page.evaluate 用(/api/cards/layout 对快照 DOM 量 contentBox),页面内部不经它
       window.__pcSolid = solidApi;
       window.__pcCanvasBox = solidApi.canvasPaintedBox;
+      // 画布直取(己一):产轨道流时预渲染进程问页面要画布的像素,不经过截图(`server/bakery/capture-canvas.mjs`)
+      (window as unknown as { __pcGrabCanvas?: typeof grabCanvasPixels }).__pcGrabCanvas = grabCanvasPixels;
 
 
       window.__pcSetT = (sec: number, directSec = sec) => {

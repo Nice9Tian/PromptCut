@@ -437,6 +437,9 @@ const STREAM_SHOT = { format: 'png', optimizeForSpeed: true };
  *   clip             截图矩形 `{ x, y, w, h }`(偶数宽高),见 `captureFrame`
  *   hasMedia         隔离工程里有没有素材层(有才在截图前 `prepareFrameMedia`)
  *   beforeCapture    `(frame) => Promise`:截图之前的钩子(实测实体框用,G1)
+ *   capture          `(frame, shoot, { primed }) => Promise`:这一帧怎么取由调用方定(`./capture-canvas.mjs` 的画布直取):
+ *                    回什么,`onFrame` 就收到什么;`shoot()` 是原来那一次截图(回 PNG),`primed` 说它会不会先丢一张。
+ *                    不给 = 每帧截图
  *   onFrame          `(frame, png) => Promise`:逐帧交出,`await` 就是背压(G4:编码器双缓冲靠它)
  *   signal           只在两帧之间生效
  *
@@ -488,8 +491,14 @@ export async function bakeStream(bakery, opts) {
     await opts.beforeCapture?.(frame);
     if (opts.hasMedia) await prepareFrameMedia(bakery);
     // prime 只看「紧挨着的上一帧截没截过」(和 bakeFrames 同一个判据),跨趟也算
-    const png = await captureFrame(bakery, STREAM_SHOT, signal, { prime: lease.lastShot !== frame - 1, clip: opts.clip ?? null });
-    lease.lastShot = frame;
+    const primed = lease.lastShot !== frame - 1;
+    const shoot = async () => {
+      const shot = await captureFrame(bakery, STREAM_SHOT, signal, { prime: primed, clip: opts.clip ?? null });
+      lease.lastShot = frame;
+      return shot;
+    };
+    // 调用方给了 `capture` 就由它定这一帧怎么取(画布直取,或者调 `shoot()` 照旧截图);没给就是原来那一次截图
+    const png = opts.capture ? await opts.capture(frame, shoot, { primed }) : await shoot();
     stats.captureMs += Date.now() - shotStarted;
     stats.captured++;
     await opts.onFrame?.(frame, png);
