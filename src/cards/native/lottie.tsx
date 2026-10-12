@@ -4,6 +4,7 @@ import type { CardDef, CardProps } from "../../kernel/types";
 import { assetOptions } from "../catalogAssets";
 import { isExportMode } from "../../kernel/clock";
 import { beginFrameWork } from "../../kernel/frameReady";
+import { withSeededRandom } from "../../kernel/pinEntropy";
 
 /**
  * Lottie 卡:把一段 Lottie 动画(After Effects 导出的 JSON)放到舞台上,按时间轴逐帧定位。
@@ -50,6 +51,139 @@ const DEMO_JSON = JSON.stringify({
   }],
 });
 
+/*
+ * ── 覆盖随机数种子(原型,2026-10-12 用户:「我觉得可以覆盖随机数种子。」;开关缺省关)──
+ *
+ * 要的是:一张 Lottie 卡的画面只由素材、参数、帧号决定 —— 从头顺着推到第 N 帧和新建一份直接跳到第 N 帧相同,
+ * 和页面里别的卡取过几次随机数无关。不带随机表达式的素材本来就是这样;带的不是,播放库(lottie-web 5.13.0)里有两处:
+ *
+ *   1. 每个带表达式的属性在**建图层时**取一个 `randSeed = Math.floor(Math.random() * 1000000)`,表达式里出现
+ *      `random` 这个词的,每次求值先按 `randSeed + 时间` 重新播种。`Math.random` 是全页共用的那一串
+ *      (kernel/pinEntropy.ts),所以 randSeed 跟「这份实例建的时候,页面里已经取过几次随机数」有关。
+ *   2. 表达式里**只有 `wiggle()`、没有 `random` 这个词**的,求值前不重新播种,直接从播放库内部那一串
+ *      (`BMMath.random`,全页所有 Lottie 共用)接着取。取到什么跟之前推过哪些帧、别的 Lottie 推过什么有关。
+ *
+ * 做法:
+ *   - 种子 = 素材内容的散列(`lottieSeedOf`)。同一份 JSON 无论从哪个地址来、在哪台机器上,种子相同。
+ *     速度、循环、适配不进种子:它们只决定「t 对应第几帧」和怎么摆,不该改变某一帧的内容。
+ *   - 建实例包在 `withSeededRandom(种子, …)` 里:各属性的 randSeed 从这份种子起按建图层的固定顺序取完
+ *     (`progressiveLoad: false` 时播放库在装载完成那一下把所有图层、连同嵌套合成里的一次建好),
+ *     全页那一串不被它挪动。字体或外部数据没到齐时,建图层发生在播放库自己的定时器回调里,
+ *     所以把这份实例的 `checkLoaded` 也包进去。
+ *   - 每次跳帧前,把播放库内部那一串按「种子 + 帧号」重新播种(`BMMath.seedrandom`),再包在
+ *     `withSeededRandom` 里跳。这样第 2 条里的 wiggle 拿到的数只跟帧号有关。
+ *   - `BMMath` 播放库没有导出。表达式的代码是在它的作用域里求值的,能看到它(名字是 `Math`)和 `globalData`,
+ *     所以建一份只有一个空图层的一次性动画,让它的表达式把 `Math` 挂到 `globalData` 上,取出来就销毁。
+ *     全页只取一次。取不到(播放库换了版本、关了表达式)就只做前两步,并在控制台说一声。
+ *
+ * 没管到的:文字图层的「随机顺序」动画器(播放库在文字内容变化时直接调 `Math.random()` 打乱字符顺序)。
+ * 它在 `withSeededRandom` 里,同一次调用里只有一个这样的图层时是确定的;多个时仍可能和推帧路径有关。自带素材里没有。
+ */
+
+/** 开关:缺省关。开法:页面地址带 `lottieSeed=1`,或在建实例之前设 `window.__pcLottieSeed = true`(设成 false 压过地址) */
+export function lottieSeedEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  const flag = (window as Window & { __pcLottieSeed?: boolean }).__pcLottieSeed;
+  if (typeof flag === "boolean") return flag;
+  try { return new URLSearchParams(window.location.search).get("lottieSeed") === "1"; } catch { return false; }
+}
+
+/** 素材内容 → 32 位种子(FNV-1a)。要在交给播放库**之前**算:播放库会原地改这份数据 */
+export function lottieSeedOf(data: unknown): number {
+  const text = typeof data === "string" ? data : JSON.stringify(data) ?? "";
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h | 0;
+}
+
+interface LottieMath { seedrandom(seed: string): unknown }
+let lottieMath: LottieMath | null | undefined;
+
+/** 取播放库内部的随机源(见上)。全页只做一次;自己那一个表达式取的 randSeed 不算进全页那一串 */
+function captureLottieMath(): LottieMath | null {
+  if (lottieMath !== undefined) return lottieMath;
+  lottieMath = null;
+  try {
+    withSeededRandom(0, () => {
+      const a = lottie.loadAnimation({
+        container: document.createElement("div"),
+        renderer: "svg",
+        loop: false,
+        autoplay: false,
+        animationData: {
+          v: "5.7.4", fr: 30, ip: 0, op: 1, w: 1, h: 1, nm: "pc-seed", ddd: 0, assets: [],
+          layers: [{
+            ddd: 0, ind: 1, ty: 3, nm: "pc-seed", sr: 1, ao: 0, ip: 0, op: 1, st: 0, bm: 0,
+            ks: {
+              o: { a: 0, k: 100, x: "var $bm_rt;\nglobalData.__pcLottieMath = Math;\n$bm_rt = value;" },
+              r: { a: 0, k: 0 }, p: { a: 0, k: [0, 0, 0] }, a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] },
+            },
+          }],
+        },
+        rendererSettings: { progressiveLoad: false },
+      });
+      a.goToAndStop(0, true);
+      const g = (a as unknown as { renderer?: { globalData?: { __pcLottieMath?: LottieMath } } }).renderer?.globalData;
+      if (g?.__pcLottieMath && typeof g.__pcLottieMath.seedrandom === "function") lottieMath = g.__pcLottieMath;
+      a.destroy();
+    });
+  } catch { /* 取不到按没取到办 */ }
+  if (!lottieMath) console.warn("[lottie] 取不到播放库内部的随机源:只有 wiggle() 的表达式仍会和推帧路径有关");
+  return lottieMath;
+}
+
+/** 一份建好的动画:跳帧一律走 goTo。seed 为 null 表示没开「覆盖随机数种子」 */
+export interface LottieHandle {
+  anim: AnimationItem;
+  seed: number | null;
+  goTo(frame: number): void;
+}
+
+/**
+ * 建一份动画实例。seeded 为 false(缺省,见 `lottieSeedEnabled`)时就是原来那两句:`lottie.loadAnimation` 和
+ * `goToAndStop(frame, true)`,一个字不多。为 true 时照上面那段说明把随机数罩住。
+ */
+export function loadLottie(container: HTMLElement, data: any, fit: string, seeded: boolean = lottieSeedEnabled()): LottieHandle {
+  const seed = seeded ? lottieSeedOf(data) : null;
+  const build = () => lottie.loadAnimation({
+    container,
+    // 画在 SVG 上,不用画布(2026-10-10 用户定):自带素材里带遮罩层的那一个用画布画出来是错的,SVG 兼容性更好;
+    // 要像素时把 SVG 直接变成像素,速度够用。实测见 docs/plan/render-standard.md「Lottie 动效」
+    renderer: "svg",
+    loop: false,
+    autoplay: false,
+    animationData: data,
+    rendererSettings: {
+      preserveAspectRatio: fit === "cover" ? "xMidYMid slice" : "xMidYMid meet",
+      progressiveLoad: false,
+    },
+  });
+  if (seed === null) {
+    const anim = build();
+    return { anim, seed, goTo: (frame) => anim.goToAndStop(frame, true) };
+  }
+  const math = captureLottieMath();
+  const scoped = <T,>(frame: number, fn: () => T): T => {
+    math?.seedrandom(`${seed}:${frame}`);
+    return withSeededRandom(seed, fn);
+  };
+  // 装载完成那一下播放库会自己画一次「当前帧」(这时是第 0 帧),所以这里按第 0 帧播种
+  const anim = scoped(0, build);
+  if (!anim.isLoaded) {
+    // 字体 / 外部数据没到齐:建图层和第一次画都在播放库的定时器回调里,把这份实例的 checkLoaded 包进来。
+    // 那时画的是之前 goToAndStop 记下的那一帧,按它播种
+    const item = anim as unknown as { checkLoaded: () => void; currentRawFrame: number };
+    const original = item.checkLoaded;
+    item.checkLoaded = function checkLoadedSeeded(this: unknown) {
+      return scoped(Number(item.currentRawFrame) || 0, () => original.call(this));
+    };
+  }
+  return { anim, seed, goTo: (frame) => scoped(frame, () => anim.goToAndStop(frame, true)) };
+}
+
 /** LottieView 的输入:和卡片参数同名,素材封装卡(src/cards/assets)把 src 固定后也用它 */
 export interface LottieViewProps {
   json: string;
@@ -67,7 +201,7 @@ export interface LottieViewProps {
 export function LottieView(params: LottieViewProps) {
   const t = params.t ?? 0;
   const box = useRef<HTMLDivElement>(null);
-  const anim = useRef<AnimationItem | null>(null);
+  const anim = useRef<LottieHandle | null>(null);
   const meta = useRef({ fr: 30, total: 0 });
   /** 最新的 t。装载是异步的(src 要 fetch),装完那一刻得知道「现在该停在哪一帧」 */
   const wantT = useRef(t);
@@ -86,23 +220,13 @@ export function LottieView(params: LottieViewProps) {
     const ready = beginFrameWork('lottie');
     const mount = (data: any) => {
       if (dead || !box.current) return;
-      anim.current?.destroy();
+      anim.current?.anim.destroy();
       box.current.innerHTML = "";
-      const a = lottie.loadAnimation({
-        container: box.current,
-        // 画在 SVG 上,不用画布(2026-10-10 用户定):自带素材里带遮罩层的那一个用画布画出来是错的,SVG 兼容性更好;
-        // 要像素时把 SVG 直接变成像素,速度够用。实测见 docs/plan/render-standard.md「Lottie 动效」
-        renderer: "svg",
-        loop: false,
-        autoplay: false,
-        animationData: data,
-        rendererSettings: {
-          preserveAspectRatio: params.fit === "cover" ? "xMidYMid slice" : "xMidYMid meet",
-          progressiveLoad: false,
-        },
-      });
+      // 建实例和跳帧都经 loadLottie:开关关着时就是原来的 loadAnimation / goToAndStop,开着时把随机数罩住(见上)
+      const handle = loadLottie(box.current, data, params.fit);
+      const a = handle.anim;
       meta.current = { fr: Number(data.fr) || 30, total: Math.max(0, (Number(data.op) || 0) - (Number(data.ip) || 0)) };
-      anim.current = a;
+      anim.current = handle;
       /*
        * **停在当前 t,不是第 0 帧。**
        *
@@ -112,10 +236,10 @@ export function LottieView(params: LottieViewProps) {
        * 导出那边踩不到这个坑:虚拟时钟会等挂着的网络请求(pauseIfNetworkFetchesPending),
        * JSON 一定在推帧之前就位。
        */
-      a.goToAndStop(meta.current.total ? frameAt(wantT.current) : 0, true);
+      handle.goTo(meta.current.total ? frameAt(wantT.current) : 0);
       const finish = () => {
         if (dead) return;
-        a.goToAndStop(meta.current.total ? frameAt(wantT.current) : 0, true);
+        handle.goTo(meta.current.total ? frameAt(wantT.current) : 0);
         ready.ready();
       };
       if (a.isLoaded) finish();
@@ -134,7 +258,7 @@ export function LottieView(params: LottieViewProps) {
     return () => {
       dead = true;
       ready.dispose();
-      anim.current?.destroy();
+      anim.current?.anim.destroy();
       anim.current = null;
     };
   }, [params.json, params.src, params.fit]);
@@ -143,7 +267,7 @@ export function LottieView(params: LottieViewProps) {
   useEffect(() => {
     const a = anim.current;
     if (!a || !meta.current.total) return;
-    a.goToAndStop(frameAt(t), true);
+    a.goTo(frameAt(t));
   }, [t, params.speed, params.loop]);
 
   return <div ref={box} className="absolute inset-0" />;
