@@ -8,6 +8,7 @@ import { createRunClient } from './run-client.mjs';
 import { createAccountExecutorAssembly } from './account-executor-assembly.mjs';
 import { createWorkerEventJournal } from './worker-event-journal.mjs';
 import { createWorkerEventSink } from './worker-event-sink.mjs';
+import { createWorkerSettlement, createTerminalPrepareSource } from './worker-settlement.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
 const ref = v => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(v);
@@ -32,12 +33,36 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
   if (eventSink && (workerEventSource !== null || typeof eventSink.file !== 'string')) fail('account-worker-event-configuration');
   if (createAssemblyOptions !== null && typeof createAssemblyOptions !== 'function') fail('account-worker-assembly-configuration');
   let journal = null, events = null;
-  const client = createRunClient({ ...doc, registrationPurpose: 'run-worker', scopePrepareSource,
+  // 带本机事件日志时，准备签名只认日志里封存的收尾记录；调用方不能再另给一个来源。
+  if (eventSink && scopePrepareSource !== null) fail('account-worker-event-configuration');
+  const terminalSource = eventSink ? createTerminalPrepareSource({ readTerminal: () => {
+    if (!events) fail('account-worker-event-unavailable'); return events.terminal();
+  } }) : scopePrepareSource;
+  const client = createRunClient({ ...doc, registrationPurpose: 'run-worker', scopePrepareSource: terminalSource,
     workerEventSource: eventSink ? packet => {
       if (!journal) fail('account-worker-event-unavailable'); return journal.source(packet);
     } : workerEventSource });
   let record = null, task = null, grant = null, assignment = null, admission = null, assembly = null, starting = null, waiting = null;
   let stopped = false, closing = null;
+  // 正常结算的结果只有两种：拿到了文档服务的终态和本进程的意向，或者放弃（交给强制路径）。
+  let settle, settlementState = 'none', taskEnded = null, driver = null;
+  const settlement = new Promise(resolve => { settle = value => { if (settlementState === 'settled') return;
+    settlementState = 'settled'; resolve(value); }; });
+  const abandon = code => settle({ kind: 'abandoned', code });
+  async function taskDrained(value, configured) {
+    taskEnded = { drainState: value.drainState, eventFlushState: value.eventFlushState, cancelled: value.cancelled === true,
+      outcome: value.outcome?.status ?? null };
+    try {
+      if (!value.drainRecord || !events) return abandon('run-drain-unavailable');
+      // 先封存再结算：封存失败就没有可以签准备的来源，这条任务不走正常结算。
+      await events.sealTerminal(value.drainRecord);
+      driver = createWorkerSettlement({ runClient: client, readTerminal: () => events.terminal(),
+        scope: { expected: e, record, assignment, grant }, stopped: () => stopped });
+      settlementState = 'running';
+      void driver.start().then(settle);
+    } catch (error) { abandon(error?.code ?? 'run-drain-unavailable'); throw error; }
+    finally { await configured?.(value); }
+  }
   const sockets = new Set();
   const identity = () => {
     if (stopped) fail('account-worker-closed');
@@ -73,9 +98,24 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
         if (stopped || record.instance.instanceId !== r.instanceId || record.epoch !== r.epoch ||
             record.instance.pid !== process.pid) fail('account-worker-record');
         client.configureRegistrationScope({ expected: e, record });
-        await client.registerInstance();
+        // 登记被文档服务明确拒绝时还没有发出过领取请求，这一代肯定没有任何任务授权，可以如实报「没领到」。
+        try { await client.registerInstance(); }
+        catch (error) {
+          if (![403, 409].includes(error?.status)) throw error;
+          return { noTask: true, stage: 'registration', code: typeof error.code === 'string' ? error.code : 'instance-registration-rejected' };
+        }
         if (stopped) fail('account-worker-closed');
-        grant = await client.admit(task);
+        // 文档服务明确说「现在没有可领的」（上一条还没结清、队列空了、对话不在了）：这一代进程没有领到任务，
+        // 也没有产生任何授权，如实回给调度方去退掉这一代。回应不确定的情况不在这里，照旧抛出。
+        let admitted;
+        try { admitted = await client.admit(task); }
+        catch (error) {
+          if (![403, 404, 409].includes(error?.status)) throw error;
+          return { noTask: true, stage: 'admission', code: typeof error.code === 'string' ? error.code : 'run-admit-rejected' };
+        }
+        if (admitted?.empty === true || admitted?.retry === true)
+          return { noTask: true, stage: 'admission', code: admitted.empty === true ? 'run-queue-empty' : 'run-queue-retry' };
+        grant = admitted;
         if (!grant || grant.projectId !== task.projectId || grant.conversationId !== task.conversationId ||
             grant.instanceId !== r.instanceId || binding.some(k => !ref(grant[k]))) fail('account-worker-grant');
         const result = await client.scopeAssignment({ ...Object.fromEntries(binding.map(k => [k, grant[k]])),
@@ -116,7 +156,8 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     // rejection must not poison an OS that has never created an assembly.
     if (waiting) return waiting;
     const work = (async () => {
-    await admission; await assignmentReady(grant);
+    if ((await admission)?.noTask) fail('account-worker-no-task');
+    await assignmentReady(grant);
     if (stopped) fail('account-worker-closed');
     // All actual Hosted/SSR/model/tool options are trusted entry configuration.
     // No network route exposes these or changes the one admitted task.
@@ -128,8 +169,14 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
         runEventsSink: events, task: structuredClone(task), grant: structuredClone(grant) }) : options;
       if (stopped) fail('account-worker-closed');
       return createAccountExecutorAssembly({ ...configured, ...(events ? { runEventsSink: events } : {}), doc,
-        runClient: client, task, registrationScope: { expected: e, record }, assignmentReady });
+        runClient: client, task, registrationScope: { expected: e, record }, assignmentReady,
+        onTaskDrained: value => taskDrained(value, configured.onTaskDrained) });
     })();
+    // 任务没能走到收尾（没绑定、启动失败、运行器没建起来）就没有正常结算。
+    void starting.then(value => Promise.resolve(value.taskWork).then(
+      () => { if (settlementState === 'none') abandon('run-drain-unavailable'); },
+      error => { if (settlementState === 'none') abandon(error?.code ?? 'account-worker-task-failed'); }),
+      error => abandon(error?.code ?? 'account-worker-start-failed'));
     assembly = await starting;
     return assembly;
     })();
@@ -138,7 +185,7 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     return work;
   }
   const close = () => closing ??= (async () => {
-    stopped = true;
+    stopped = true; abandon('account-worker-closed');
     const observedSockets = [...sockets].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); }));
     const serverClosed = server.listening ? new Promise(resolve => server.close(resolve)) : Promise.resolve();
     const results = await Promise.allSettled([client.close(), serverClosed, ...observedSockets,
@@ -150,6 +197,8 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     if (errors.length) throw new AggregateError(errors, 'account-worker-close-pending');
   })();
   return { identity, prepareTask, startTask, assignmentReady, close,
+    /** 正常结算的结果。`normal` 带文档服务签的终态和本进程签的意向，只是「可以交给 root 去关」，不是任务已结束。 */
+    settlement: () => settlement,
     async listen({ port = 0, host = '127.0.0.1' } = {}) {
       if (stopped || server.listening || host !== '127.0.0.1' || !Number.isInteger(port) || port < 0 || port > 65535)
         fail('account-worker-listener');
@@ -159,6 +208,7 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     describe: () => ({ phase: stopped ? 'stopped' : assembly ? 'started' : assignment ? 'assigned-unbound' : 'identity',
       rootScopeRef: record ? { rootAuthorityId: e.authorityId, slotId: e.slotId, epoch: record.epoch } : null,
       taskSelected: task !== null, completionReady: false, identitySockets: sockets.size,
-      durableEventSinkMounted: events !== null }),
+      durableEventSinkMounted: events !== null, taskEnded: taskEnded ? { ...taskEnded } : null,
+      settlement: driver ? driver.describe().state : settlementState === 'settled' ? 'abandoned' : 'none' }),
   };
 }

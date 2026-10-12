@@ -6,10 +6,12 @@ import { runFixture, projectId, conversationId, servicePrincipal } from './run-a
 import { createAccountRunManager } from '../agent/service/account-runner.mjs';
 import { createAccountRunEvents } from '../agent/service/account-run-events.mjs';
 import { createHostedAgentService } from '../agent/service/create-agent-service.mjs';
+import { validateRunDrainRecord } from '../agent-service/worker-settlement.mjs';
+import { digestOf } from '../account/ledger.mjs';
 
 // Real SQLite/read-intent/event ledgers and existing run authority. Assignment
 // publication and model/drain are controlled here; no production bound proof.
-async function setup(t, { bound = false, closeError = null } = {}) {
+async function setup(t, { bound = false, closeError = null, runnerError = null, silent = false } = {}) {
   const f = await runFixture(); f.enqueue(); f.enqueue('message2');
   // The old core fixture predates durable user-event mirroring. Complete this
   // test's trusted Doc seed with the fields real conversation.send persists.
@@ -36,6 +38,8 @@ async function setup(t, { bound = false, closeError = null } = {}) {
     onTaskDrained: async value => { calls.hook.push(value); },
     runnerFactory: async ({ onModelCall, onEvent }) => ({
       async start() { await onModelCall(); calls.model++; onEvent({ type: 'text_delta', text: 'controlled task' });
+        if (runnerError) return { done: Promise.reject(runnerError), abort() {} };
+        if (!silent) onEvent({ type: 'done' });
         return { done: Promise.resolve(), abort() {} }; },
       async drain() { calls.drain++; }, close() { if (closeError) throw closeError; },
     }) };
@@ -52,11 +56,24 @@ test('single worker cannot read/model before bound or select another conversatio
   assert.equal(x.calls.reads, 0); assert.equal(x.calls.model, 0);
   assert.equal(Object.keys(x.f.ledger.read().runGrantsV2).length, 1);
   x.enable();
-  await assert.rejects(x.manager.resumeQueued(), /run-outcome-unavailable/);
+  // 2026-10-13：任务真做完以后不再有意抛 run-outcome-unavailable，而是形成收尾记录交给主人去结算。
+  // 旧的结束接口仍然一次都不调（上面的 finish 一调就抛），文档服务那边这条任务也仍然没结清。
+  await x.manager.resumeQueued();
   assert.equal(x.calls.admit.length, 1); assert.equal(x.calls.admit[0], 'task-dispatch');
   assert.equal(x.calls.model, 1); assert.equal(x.calls.drain, 1);
-  assert.equal(x.calls.hook[0].eventFlushState, 'durable'); assert.equal(x.calls.hook[0].drainState, 'local-drained');
-  assert.equal(x.calls.hook[0].readReceiptId, Object.values(x.f.ledger.read().runReceiptsV2)[0].receiptId);
+  const hook = x.calls.hook[0], grant = Object.values(x.f.ledger.read().runGrantsV2)[0];
+  assert.equal(hook.eventFlushState, 'durable'); assert.equal(hook.drainState, 'local-drained');
+  assert.equal(hook.readReceiptId, Object.values(x.f.ledger.read().runReceiptsV2)[0].receiptId);
+  const rows = x.events.after({ projectId, conversationId }).events, last = rows.at(-1);
+  assert.deepEqual(rows.map(row => row.event.type), ['user', 'text_delta', 'runner_done']);
+  assert.equal(last.event.outcome, 'done'); assert.equal(last.event.settlement, 'pending');
+  assert.deepEqual(hook.outcome, { v: 1, status: 'done', eventId: last.eventId, eventDigest: digestOf(last) });
+  assert.deepEqual(validateRunDrainRecord(hook.drainRecord), hook.drainRecord);
+  assert.deepEqual(hook.drainRecord.outcome, hook.outcome); assert.equal(hook.drainRecord.readReceiptId, hook.readReceiptId);
+  assert.equal(hook.drainRecord.binding.runGrantId, grant.runGrantId);
+  assert.throws(() => validateRunDrainRecord({ ...hook.drainRecord, outcome: { ...hook.outcome, status: 'failed' } }), /run-drain-record/);
+  assert.equal(grant.state, 'active'); assert.equal(grant.finishReceiptId, undefined);
+  assert.equal(x.f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, grant.runId);
   await assert.rejects(x.manager.resumeQueued(), /account-worker-task-consumed/);
   assert.equal(Object.keys(x.f.ledger.read().runGrantsV2).length, 1);
   assert.equal(x.f.ledger.read().conversationsV2[projectId][conversationId].messages[1].queueState, 'queued');
@@ -74,8 +91,21 @@ test('actual owned close failure propagates and reports unknown rather than loca
   const x = await setup(t, { bound: true, closeError: Error('owned-close-failed') });
   await assert.rejects(x.manager.resumeQueued(), /owned-close-failed/);
   assert.equal(x.calls.hook[0].drainState, 'unknown');
+  // 运行器没收干净：终态事件虽然落了盘，也不形成收尾记录，这条任务不能走正常结算。
+  assert.equal(x.calls.hook[0].outcome.status, 'done'); assert.equal(x.calls.hook[0].drainRecord, null);
   assert.equal(x.manager.describe().activeRuns, 0);
   await assert.rejects(x.manager.resumeQueued(), /account-worker-task-consumed/);
+});
+
+test('a rejected or silent runner is a real failed outcome; it is never reported as done', async t => {
+  for (const options of [{ runnerError: Error('model-crashed') }, { silent: true }]) {
+    const x = await setup(t, { bound: true, ...options });
+    await x.manager.resumeQueued();
+    const hook = x.calls.hook[0], last = x.events.after({ projectId, conversationId }).events.at(-1);
+    assert.equal(last.event.type, 'runner_done'); assert.equal(last.event.outcome, 'failed');
+    assert.equal(hook.outcome.status, 'failed'); assert.equal(hook.drainRecord.outcome.status, 'failed');
+    assert.equal(hook.drainState, 'local-drained');
+  }
 });
 
 test('Hosted factory actually passes task, assignment, events and drain hooks; default stays non-task', async t => {
@@ -87,8 +117,9 @@ test('Hosted factory actually passes task, assignment, events and drain hooks; d
     conversationClient, readIntentsFile: path.join(x.f.dir, 'hosted-intents.sqlite'), runEventsSink: x.events });
   try {
     assert.equal(service.describe().singleTask, true);
-    await assert.rejects(service.runManager.resumeQueued(), /run-outcome-unavailable/);
+    await service.runManager.resumeQueued();
     assert.equal(x.calls.model, 1); assert.equal(x.calls.hook.length, 1);
+    assert.equal(x.calls.hook[0].outcome.status, 'done'); assert.ok(x.calls.hook[0].drainRecord.drainReceiptId.startsWith('drain:'));
     const ordinary = createHostedAgentService({ accountMode: true, requireAccountRunner: true,
       conversationClient, runClient: x.options.runClient, serviceKid: x.options.serviceKid,
       instanceId: x.options.instanceId, runnerFactory: x.options.runnerFactory,

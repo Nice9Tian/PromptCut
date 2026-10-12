@@ -20,6 +20,9 @@ try {
   const configuration = await module.createWorkerConfiguration();
   if (!exact(configuration, ['workerOptions', 'listener'])) throw Object.assign(Error('entry configuration required'), { code: 'account-worker-entry-configuration' });
   worker = createAccountTaskWorker(configuration.workerOptions);
+  // 结算结果是这个进程主动报的唯一一件事：文档服务签的终态和本进程签的意向，或者「放弃」。
+  // 两样都能被 root 独立验签，经手的调度方改不了；这条消息本身不让出名额、不代表进程已关。
+  void worker.settlement().then(result => send({ type: 'event', name: 'settlement', result }));
   const listening = await worker.listen(configuration.listener);
   send({ type: 'ready', pid: process.pid, port: listening.port });
 } catch (error) {

@@ -18,6 +18,9 @@ export function createAccountWorkerGateway({ configurationModule, cwd, env = pro
   const child = fork(entry, ['--configuration-module', configurationModule], { cwd, env: childEnv, execArgv: [],
     execPath: process.execPath, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   const pending = new Map(); let readyResolve, readyReject, closeResolve, stopped = false, fatal = null, stopping = null;
+  let settlementResolve, settlementSeen = false;
+  const settlement = new Promise(resolve => { settlementResolve = value => { if (!settlementSeen) { settlementSeen = true; resolve(value); } }; });
+  const safe = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   const closed = new Promise(resolve => { closeResolve = resolve; });
   const startup = setTimeout(() => { fatal ??= fail('worker-gateway-start-timeout'); readyReject(fatal); }, timeoutMs);
@@ -28,6 +31,12 @@ export function createAccountWorkerGateway({ configurationModule, cwd, env = pro
     } else if (message?.type === 'failed') {
       fatal ??= fail(typeof message.code === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(message.code) ? message.code : 'worker-gateway-failed');
       clearTimeout(startup); readyReject(fatal);
+    } else if (message?.type === 'event' && message.name === 'settlement') {
+      // 只转交，不判断：终态和意向由 root 的发布器对着文档服务公钥和这一代进程的公钥验。
+      const r = message.result;
+      if (r?.kind === 'normal' && r.terminal && typeof r.terminal === 'object' && r.intent && typeof r.intent === 'object')
+        settlementResolve({ kind: 'normal', terminal: structuredClone(r.terminal), intent: structuredClone(r.intent) });
+      else settlementResolve({ kind: 'abandoned', code: safe(r?.code) ? r.code : 'worker-settlement-failed' });
     } else if (message?.type === 'result' && pending.has(message.id)) {
       const owner = pending.get(message.id); pending.delete(message.id); clearTimeout(owner.timer);
       if (message.ok === true) owner.resolve(message.result);
@@ -39,6 +48,7 @@ export function createAccountWorkerGateway({ configurationModule, cwd, env = pro
     clearTimeout(startup); stopped = true;
     const cause = fatal ?? fail('worker-gateway-process-closed'); readyReject(cause);
     for (const owner of pending.values()) { clearTimeout(owner.timer); owner.reject(cause); } pending.clear();
+    settlementResolve({ kind: 'closed' });
     closeResolve({ pid: child.pid ?? null, exitCode: code, signal, childClosed: true, rootClosureProved: false });
   });
   function request(operation, input) {
@@ -54,7 +64,17 @@ export function createAccountWorkerGateway({ configurationModule, cwd, env = pro
     });
     void work.catch(() => {}); return work;
   }
-  return { ready, closed, pid: () => child.pid,
+  return { ready, closed, settlement, pid: () => child.pid,
+    /** 不商量，直接结束这个子进程并等它真的关掉。只给强制路径和进程已经不听话的时候用；
+     * 返回的是这个进程本身的退出，不是整棵进程树的关闭证明。 */
+    terminate() {
+      stopping ??= closed;
+      if (!stopped) { try { child.kill('SIGKILL'); } catch { /* 已经退出 */ } }
+      let timer;
+      return Promise.race([closed, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(fail('worker-gateway-actual-close-pending')), timeoutMs);
+      })]).finally(() => clearTimeout(timer));
+    },
     prepare: input => request('prepare', input), start: () => request('start', null),
     close() {
       if (stopping) return stopping;

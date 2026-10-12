@@ -116,13 +116,19 @@ export function createWorkerEventSink({ journal, runClient, origin, tls, serverF
           const eventId = `event:${scope.binding.runGrantId}:${++next}`;
           const work = enqueue(async () => { if (error) throw error;
             const packet = journal.append({ eventId, event: copy }); return deliver(packet); });
-          void work.catch(stop);
+          void work.catch(stop); return eventId;
         }, flush, beforeCall: flush,
+        // 只在 flush 之后有意义：主服务持久确认过的那一行的编号与摘要，没确认就是 null。
+        async receiptOf(eventId) { await flush(); const receipt = journal.receipt(eventId);
+          return receipt ? { eventId: receipt.eventId, eventDigest: receipt.eventDigest } : null; },
       };
     },
     // Explicit packet-only recovery. This never creates a model/runner nor resets
     // the single-task writer; retry always uses original packet and fresh TLS.
     replayPending: () => enqueue(async () => { for (const packet of journal.pending()) await deliver(packet); }),
+    // 收尾记录跟事件走同一条串行队列：封存时前面的事件都已经送达并确认，之后不会再有事件插进来。
+    sealTerminal: record => enqueue(async () => journal.sealTerminal(record)),
+    terminal: () => { usable(); return journal.terminal(); },
     failure: () => fatal,
     describe: () => ({ requests: requests.size, sockets: sockets.size, responses: responses.size, writerCreated }),
     close() {

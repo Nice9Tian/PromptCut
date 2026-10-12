@@ -514,6 +514,17 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
           if (!forced) {
             const control = s.runControlsV2[receipt.controlId]; control.state = 'complete';
             control.receipt = { finishReceiptId: receipt.finishReceiptId, closureWitnessDigest: evidence.closureWitnessDigest };
+          } else {
+            // 强制停止的那条控制记录：它撤掉的每一条任务都凭 root 的关闭记录结清了，才算办完。
+            // 保留下来继续跑的任务（共有已读的例外）不在等的范围里。停止、切私有的接口据此回成功。
+            const control = s.runControlsV2[g.closureControlId];
+            if (control && control.state === 'pending' && control.revoked.every(id =>
+              s.runGrantsV2[id]?.scopeBinding && s.runGrantsV2[id].state === 'finished' && s.runScopeClosuresV1?.[id])) {
+              control.state = 'complete';
+              control.receipt = { controlId: control.controlId, fenceRevision: control.fenceRevision, complete: true,
+                receiptId: `scope-closed:${control.controlId}`,
+                closures: Object.fromEntries(control.revoked.map(id => [id, s.runScopeClosuresV1[id].closureWitnessDigest])) };
+            }
           }
           return receipt ? finishView(s, g) : { ...copy(g), finishPending: false };
         });

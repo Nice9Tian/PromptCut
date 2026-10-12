@@ -243,7 +243,7 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
   }
   async function writer({ grant }) {
     const binding = await registerRun({ grant });
-    let serial = Promise.resolve(), error = null, next = 0, resolveFailure;
+    let serial = Promise.resolve(), error = null, next = 0, resolveFailure; const rows = new Map();
     const failed = new Promise(resolve => { resolveFailure = resolve; });
     const stop = cause => { if (!error) { error = cause; resolveFailure(cause); } };
     return { binding, failed, stop,
@@ -252,9 +252,13 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
         let copy;
         try { copy = structuredClone(event); } catch (cause) { stop(cause); return; }
         const eventId = `event:${binding.runGrantId}:${++next}`;
-        const work = serial.then(() => { if (error) throw error; return append({ binding, eventId, event: copy }); });
-        serial = work.catch(stop);
+        const work = serial.then(() => { if (error) throw error; return append({ binding, eventId, event: copy }); })
+          .then(row => { rows.set(eventId, digestOf(row)); });
+        serial = work.catch(stop); return eventId;
       },
+      // 只在 flush 之后有意义：已经落盘的那一行的编号与摘要，没落盘就是 null。
+      async receiptOf(eventId) { await serial; if (error) throw error; usable();
+        return rows.has(eventId) ? { eventId, eventDigest: rows.get(eventId) } : null; },
       async flush() { await serial; if (error) throw error; usable(); },
       async beforeCall() { await serial; if (error) throw error; usable(); },
     };

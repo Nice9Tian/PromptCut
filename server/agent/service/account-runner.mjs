@@ -14,6 +14,7 @@ import { createAccountRunEvents } from './account-run-events.mjs';
 import { canonicalReadRecord, acceptedMessageRef } from '../../account/run-authority.mjs';
 import { canonicalJson } from '../../account/ledger.mjs';
 import { PROTOCOL } from '../../auth/protocol.mjs';
+import { createRunDrainRecord } from '../../agent-service/worker-settlement.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const idOK = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
@@ -143,6 +144,8 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       Object.values(selectedTask).some(value => typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) ||
       typeof assignmentReady !== 'function' || typeof onTaskDrained !== 'function' || !runEvents?.writer))
     fail(503, 'account-worker-task-configuration');
+  // 一条任务一个进程时，任务做完的结果由这个进程自己形成并交给它的主人去结算；
+  // 旧的多任务路径没有结算方，仍然不给结果（下面照旧抛 run-outcome-unavailable）。
   let taskConsumed = false;
   const waking = new Map(), active = new Map(), closedRuns = new Set(), listeners = new Set();
   // Same live Agent OS only: unknown doc ACKs keep the exact request/grant until
@@ -186,16 +189,19 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       cancelController: new AbortController(),
       completion: new Promise(resolve => { settle = resolve; }) };
     active.set(grant.runId, entry);
-    let events = null;
+    let events = null, eventsFailed = false;
+    // 终态只看这个进程真的看到的事：运行器有没有说做完、有没有报错、是不是被叫停。
+    const seen = { done: false, error: false, terminal: false };
     try {
       if (runEvents) {
         await runEvents.mirrorRunMessage({ grant });
         events = await runEvents.writer({ grant });
+        if (selectedTask && typeof events.receiptOf !== 'function') fail(503, 'account-worker-task-configuration');
         // instance.mjs deliberately has a synchronous, exception-swallowing emit.
         // Never return an unobserved append promise to it: latch/abort here, and
         // every model/tool gate and completion boundary awaits the same queue.
         void events.failed.then(() => {
-          entry.cancelled = true; entry.cancelController.abort();
+          eventsFailed = true; entry.cancelled = true; entry.cancelController.abort();
           try { entry.handle?.abort(); } catch { /* drain remains mandatory */ }
         });
       }
@@ -212,8 +218,15 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       };
       const runner = await runnerFactory({ grant, record: prompt,
         onModelCall: gated, beforeToolCall: gated,
-        ...(events ? { onEvent: event => events.emit(event?.type === 'done'
-          ? { ...event, type: 'runner_done', settlement: 'pending' } : event) } : {}),
+        ...(events ? { onEvent: event => {
+          if (!selectedTask) return void events.emit(event?.type === 'done'
+            ? { ...event, type: 'runner_done', settlement: 'pending' } : event);
+          // 终态事件发出以后不再接事件：它必须是这条任务的最后一条。
+          if (seen.terminal) return;
+          if (event?.type === 'done') { seen.done = true; return; }
+          if (event?.type === 'error') seen.error = true;
+          events.emit(event);
+        } } : {}),
         signal: entry.cancelController.signal });
       entry.runner = runner;
       if (entry.cancelled) fail(403, 'run-fenced');
@@ -224,18 +237,37 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
         entry.done = Promise.resolve(handle.done);
         // Race persistence failure against the model promise, but always drain
         // the actual runner below. A rejected append cannot permit doc.finish.
-        if (events) await Promise.race([entry.done, events.failed.then(error => { throw error; })]);
-        else await entry.done;
+        let rejected = false;
+        try {
+          if (events) await Promise.race([entry.done, events.failed.then(error => { throw error; })]);
+          else await entry.done;
+        } catch (error) {
+          // 事件没能落盘就没有可信的终态；运行器自己失败则是一个真实的「失败」结果。
+          if (!selectedTask || eventsFailed) throw error;
+          rejected = true;
+        }
+        if (selectedTask) {
+          // 这一条就是终态事件。主服务持久确认它以后，才有可以交给文档服务的结果。
+          const status = entry.cancelled ? 'interrupted' : rejected || seen.error || !seen.done ? 'failed' : 'done';
+          seen.terminal = true;
+          const eventId = events.emit({ type: 'runner_done', settlement: 'pending', outcome: status });
+          await events.flush();
+          const receipt = eventId ? await events.receiptOf(eventId) : null;
+          if (!receipt) fail(503, 'run-outcome-unavailable');
+          entry.outcome = Object.freeze({ v: 1, status, eventId: receipt.eventId, eventDigest: receipt.eventDigest });
+          return;
+        }
         await events?.flush();
-        // The current doc finish API unconditionally marks success. A resolved
+        // The legacy doc finish API unconditionally marks success. A resolved
         // model promise (including model/tool errors) is not an outcome receipt.
-        // Keep this execution uncertain until its provider supplies settlement.
+        // Without a settlement owner this execution stays uncertain.
         if (events) fail(503, 'run-outcome-unavailable');
       } });
       // No later wake may call runner.start again. The next loop only retries the
       // deterministic finish request if its response is lost after doc commit.
       slot.grant = null;
-      slot.finish = { ...binding, requestId: `finish:${grant.runGrantId}` };
+      // 单任务进程不走旧的结束接口：结算由收尾记录的主人按「结束、准备、终态、意向」去做。
+      slot.finish = selectedTask ? null : { ...binding, requestId: `finish:${grant.runGrantId}` };
     } finally {
       let drained = !entry.handle && !entry.runner;
       try {
@@ -256,8 +288,14 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
             if (selectedTask) {
               // This local observation is not a root/OS closure receipt and does
               // not settle Doc outcome/FIFO. The owner must preserve that boundary.
+              // 三样都成立才有收尾记录：终态事件已被持久确认、运行器真的收完、最后一次落盘成功。
+              // 缺任何一样都只报告状态，不形成记录，这条任务只能由强制路径收口。
+              const outcome = entry.outcome ?? null;
+              const drainRecord = outcome && drained && eventFlushState === 'durable' && !closeError
+                ? createRunDrainRecord({ grant, readReceiptId: confirmed.receipt.receiptId, outcome }) : null;
               await onTaskDrained({ grant: structuredClone(grant), readReceiptId: confirmed.receipt.receiptId,
-                drainState: drained ? 'local-drained' : 'unknown', eventFlushState, cancelled: entry.cancelled });
+                drainState: drained ? 'local-drained' : 'unknown', eventFlushState, cancelled: entry.cancelled,
+                outcome: outcome ? structuredClone(outcome) : null, drainRecord: drainRecord ? structuredClone(drainRecord) : null });
             }
             if (closeError) throw closeError;
           } catch (error) {

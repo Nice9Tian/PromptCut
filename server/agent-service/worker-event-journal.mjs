@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalJson, digestOf } from '../account/ledger.mjs';
 import { validateWorkerEventPacket, WORKER_EVENT_BINDING_FIELDS } from './worker-event-internal.mjs';
+import { validateRunDrainRecord, RUN_DRAIN_BINDING } from './worker-settlement.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const receiptKeys = ['v', 'authorityId', 'runGrantId', 'instanceId', 'instanceGeneration', 'assignmentDigest',
@@ -70,7 +71,8 @@ export function createWorkerEventJournal({ file, authorityId, rootScopeRef, assi
     // share this instance journal. A stale OS is handled by root, not PID guessing.
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE;
       CREATE TABLE IF NOT EXISTS worker_scope(id INTEGER PRIMARY KEY CHECK(id=1),scope TEXT NOT NULL,head INTEGER NOT NULL,ack_head INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS worker_packets(seq INTEGER PRIMARY KEY,event_id TEXT NOT NULL UNIQUE,packet TEXT NOT NULL,receipt TEXT);`);
+      CREATE TABLE IF NOT EXISTS worker_packets(seq INTEGER PRIMARY KEY,event_id TEXT NOT NULL UNIQUE,packet TEXT NOT NULL,receipt TEXT);
+      CREATE TABLE IF NOT EXISTS worker_terminal(id INTEGER PRIMARY KEY CHECK(id=1),record TEXT NOT NULL);`);
     transaction('scope', () => {
       const prior = db.prepare('SELECT scope FROM worker_scope WHERE id=1').get();
       if (prior && prior.scope !== canonicalJson(scope)) fail(503, 'worker-journal-scope');
@@ -83,6 +85,8 @@ export function createWorkerEventJournal({ file, authorityId, rootScopeRef, assi
     const prior = state.rows.find(row => row.event_id === eventId);
     const packet = validateWorkerEventPacket({ v: 1, ...scope, sourceSeq: prior?.seq ?? state.meta.head + 1, eventId, event });
     if (prior) { if (prior.packet !== canonicalJson(packet)) fail(409, 'worker-journal-conflict'); return structuredClone(packet); }
+    // 收尾记录封存以后这份日志不再接新事件：终态事件必须是最后一条。
+    if (terminalRow()) fail(409, 'worker-journal-sealed');
     return transaction('packet', () => {
       db.prepare('INSERT INTO worker_packets VALUES(?,?,?,NULL)').run(packet.sourceSeq, eventId, canonicalJson(packet));
       db.prepare('UPDATE worker_scope SET head=? WHERE id=1').run(packet.sourceSeq); return packet;
@@ -104,7 +108,27 @@ export function createWorkerEventJournal({ file, authorityId, rootScopeRef, assi
       db.prepare('UPDATE worker_scope SET ack_head=? WHERE id=1').run(r.sourceSeq); return r;
     });
   }
-  return { append, acknowledge, scope: () => { usable(); return structuredClone(scope); },
+  const terminalRow = () => db.prepare('SELECT record FROM worker_terminal WHERE id=1').get() ?? null;
+  /** 封存「任务终态 + 本机资源已收干净」的记录。只在全部事件都已被主服务持久确认、并且终态事件就是最后
+   * 一条时才封；封了以后内容不能换，也不能再追加事件。重开日志只能读它，不能据此重跑任务。 */
+  function sealTerminal(input) {
+    const record = validateRunDrainRecord(input), { meta, rows } = inventory(), last = rows.at(-1);
+    if (RUN_DRAIN_BINDING.some(k => record.binding[k] !== scope.binding[k])) fail(403, 'worker-journal-terminal-binding');
+    const prior = terminalRow();
+    if (prior) { if (prior.record !== canonicalJson(record)) fail(409, 'worker-journal-terminal-conflict'); return structuredClone(record); }
+    if (!last || meta.ack_head !== meta.head || last.event_id !== record.outcome.eventId ||
+        JSON.parse(last.receipt).eventDigest !== record.outcome.eventDigest) fail(503, 'worker-journal-terminal-pending');
+    return transaction('terminal', () => { db.prepare('INSERT INTO worker_terminal VALUES(1,?)').run(canonicalJson(record)); return record; });
+  }
+  function terminal() {
+    usable(); const row = terminalRow(); if (!row) return null;
+    const record = validateRunDrainRecord(JSON.parse(row.record)), { meta, rows } = inventory(), last = rows.at(-1);
+    if (!last || meta.ack_head !== meta.head || last.event_id !== record.outcome.eventId ||
+        JSON.parse(last.receipt).eventDigest !== record.outcome.eventDigest ||
+        RUN_DRAIN_BINDING.some(k => record.binding[k] !== scope.binding[k])) fail(503, 'worker-journal-terminal');
+    return record;
+  }
+  return { append, acknowledge, sealTerminal, terminal, scope: () => { usable(); return structuredClone(scope); },
     source(packet) {
       const { rows } = inventory(), found = rows.find(row => row.seq === packet?.sourceSeq);
       if (!found || found.packet !== canonicalJson(packet)) fail(503, 'worker-journal-source'); return JSON.parse(found.packet);

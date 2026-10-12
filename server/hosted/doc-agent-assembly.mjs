@@ -169,6 +169,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       await Promise.all(immediate);
       const controls = await runAuthority.synchronize();
       await Promise.all(controls.filter(matches).map(deliver));
+      // 任务在独立进程里跑时，这条控制要等 root 把进程关掉、这里读到关闭记录才办完。这里读一次：
+      // 已经关了就当场结清并回成功；还没关就照旧回「还在办」，调用方用同一个请求号再问。
+      if (scopeAuthority) await runAuthority.reconcileScopeClosures();
       const relevant = Object.values(ledger.read().runControlsV2 ?? {}).filter(matches);
       if (relevant.every(control => control.instances.length === 0 && control.retained.length === 0 && control.revoked.length === 0)) {
         const readClosed = await readControl.waitCompletion({ projectId: input.projectId, conversationId: input.conversationId });
@@ -355,6 +358,12 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         instanceAuthority.verifyInState(ledger.read(), servicePrincipal, { operation: 'pendingRuns', input: {} });
         if (ledger.read().agentInstancesV2?.[servicePrincipal.instanceId]?.purpose !== 'control-only') fail(403, 'instance-purpose-forbidden');
         for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
+        // 文档服务自己这一侧的连接没关完，终态和强制终态都签不出来。第一次没关成的（当时出错、进程重启过），
+        // 主服务每次来问时补做一遍；已经关过的不重复。
+        for (const control of Object.values(ledger.read().runControlsV2 ?? {}))
+          if (control.state === 'pending' && (control.kind === 'terminal' || control.revoked?.length) &&
+              ledger.read().docRunClosuresV2?.[control.controlId]?.instances?.[docInstanceId]?.state !== 'closed')
+            await deliver(control).catch(error => onDiagnostic({ code: error.code ?? 'run-control-pending', controlId: control.controlId }));
         await runAuthority.reconcileScopeClosures();
       }
       const state = ledger.read(), rows = [];
