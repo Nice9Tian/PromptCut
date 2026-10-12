@@ -9,8 +9,9 @@
  *
  * # 键里和实现有关的两处,各只有一个地方
  *
- *   - **成员键** `streamMemberKey`:单卡流里代表「这张卡的内容」的那一项。现在与 `cardSnapshotIdentity` 的结果相同
- *     (带生成快照的代码指纹)。别处不要自己再拼这个键;算法换了(「己一」会把它换成不带生成快照的代码指纹的一份)只改这一个函数;
+ *   - **成员键** `streamMemberKey`:单卡流里代表「这张卡的内容」的那一项。与服务端 `CardFrameCache.plan` 的 `streamMemberKey` 相同
+ *     (`cardSnapshotIdentity` 的那一份身份,不带生成快照的代码指纹:流的像素是截图来的,和快照 HTML 怎么生成无关)。
+ *     别处不要自己再拼这个键;服务端的算法再换,只改这一个函数;
  *   - **流的代码版本** `streamCodeVersion`:`<STREAM_CODE_VERSION>:<截图代码的指纹>`。版本号 `PAGE_STREAM_CODE_VERSION` 与
  *     `server/frame-stream.mjs` 的 `STREAM_CODE_VERSION` 同值(对拍),截图代码的指纹由在线构建嵌进页面(`pageStreamCodes`)。
  *
@@ -31,8 +32,8 @@ import { mountFrameOf } from "../render/frameWindow.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 import { STREAM_SEGMENT_FRAMES, type NodeTask, type StreamTaskInput } from "./browserNode.ts";
 
-/** 与 `server/frame-stream.mjs` 的 `STREAM_CODE_VERSION` 同值(对拍) */
-export const PAGE_STREAM_CODE_VERSION = 1;
+/** 与 `server/frame-stream.mjs` 的 `STREAM_CODE_VERSION` 同值(对拍)。2:「己一」起单卡流的成员键不带生成快照的代码指纹 */
+export const PAGE_STREAM_CODE_VERSION = 2;
 /** 与 `server/frame-stream.mjs` 的 `STREAM_DECODER_BUDGET`、`LOCAL_OVERFLOW_PX` 同值 */
 export const PAGE_STREAM_DECODER_BUDGET = 6;
 export const PAGE_LOCAL_OVERFLOW_PX = 32;
@@ -46,19 +47,19 @@ export const PAGE_EXCLUDED_CARD = /^lottie(?:-|$)/;
 
 /* ------------------------------------------------------------------ 在线构建嵌进页面的代码指纹 */
 
-/** 流的键里和代码有关的两项:截图代码的指纹(`server/frame-code.mjs` 的 `captureCode`)、生成快照的代码指纹(`snapshotCode`) */
-export interface StreamCodes { capture: string; snapshot: string }
+/** 流的键里和代码有关的那一项:截图代码的指纹(`server/frame-code.mjs` 的 `captureCode`,流的 `codeVersion` 里的后半) */
+export interface StreamCodes { capture: string }
 
-declare const __PC_STREAM_CODES__: { capture?: unknown; snapshot?: unknown } | undefined;
+declare const __PC_STREAM_CODES__: { capture?: unknown } | undefined;
 
 /**
- * 在线构建时由 `vite.config.ts` 用服务端同一套算法算出、以 `__PC_STREAM_CODES__` 嵌进页面的两项代码指纹;
- * 开发构建、桌面构建、Node 单测里没有,回 null(本页不产流:算不出与切分方相同的键)。
+ * 在线构建时由 `vite.config.ts` 用服务端同一套算法算出、以 `__PC_STREAM_CODES__` 嵌进页面的代码指纹;
+ * 桌面构建、Node 单测里没有,回 null(本页不产流:算不出与切分方相同的键)。
  */
 export function pageStreamCodes(): StreamCodes | null {
   const raw = typeof __PC_STREAM_CODES__ === "object" && __PC_STREAM_CODES__ ? __PC_STREAM_CODES__ : null;
-  if (!raw || typeof raw.capture !== "string" || !raw.capture || typeof raw.snapshot !== "string" || !raw.snapshot) return null;
-  return { capture: raw.capture, snapshot: raw.snapshot };
+  if (!raw || typeof raw.capture !== "string" || !raw.capture) return null;
+  return { capture: raw.capture };
 }
 
 /* ------------------------------------------------------------------ 哈希(同 `server/frame-identity.mjs`) */
@@ -126,12 +127,11 @@ export interface StageSize { width: number; height: number; camera3dFov?: unknow
 /**
  * 单卡流的**成员键**(这张卡的内容身份;流的内容键拿它再加上时间上的摆放、画幅、帧率、流的代码版本)。
  *
- * 现在与服务端 `cardSnapshotIdentity` 的结果相同(`CardFrameCache.plan` 的 `contentKey`,`planStreams` 取它当成员键):
- * 片段身份(节点 id、输入、定义 id、片段 id)剥掉,参数、源码版本、片段时长、采样相位、帧率、框宽高、画幅、主题、字体指纹、
- * 生成快照的代码指纹都在里面;位置、缩放、旋转、不透明度、淡入淡出、motion、强调不在(由包裹层加)。
+ * 与服务端 `CardFrameCache.plan` 的 `streamMemberKey` 相同(`planStreams` 取它当成员键):`cardSnapshotIdentity` 的那一份身份,
+ * 生成快照的代码指纹那一项是空串。片段身份(节点 id、输入、定义 id、片段 id)剥掉,参数、源码版本、片段时长、采样相位、帧率、框宽高、
+ * 画幅、主题、字体指纹都在里面;位置、缩放、旋转、不透明度、淡入淡出、motion、强调不在(由包裹层加)。
  *
- * **整个页面一侧只有这一处拼成员键。**「己一」合入后服务端改成不带生成快照的代码指纹的一份(`streamMemberKey`,`snapshotCode: ''`),
- * 到时把下面 `snapshotCode` 那一项换成空串、`PAGE_STREAM_CODE_VERSION` 改成 2,对拍单测就又对得上。
+ * **整个页面一侧只有这一处拼成员键。** 服务端的算法再换,改这里,再把 `PAGE_STREAM_CODE_VERSION` 跟上,对拍单测就又对得上。
  */
 export function streamMemberKey(o: {
   node: Record<string, unknown>;
@@ -145,7 +145,6 @@ export function streamMemberKey(o: {
   stage: { width: unknown; height: unknown; camera3dFov?: unknown };
   frame: { w?: number; h?: number } | undefined;
   themeId: unknown;
-  codes: StreamCodes;
 }): Promise<string> {
   const { id: _id, inputs: _inputs, definitionId: _definitionId, clipId: _clipId, ...stripped } = o.node ?? {};
   const usedStyle = o.definition ? selectedCardStyle(o.definition as never, o.style) : stripped.adapter === "chrome" ? o.style : {};
@@ -160,7 +159,7 @@ export function streamMemberKey(o: {
       fps: ratio(o.fps), phase: ratio(o.sampling.phase), duration: o.duration,
       stage: { width: parent.width, height: parent.height, camera3dFov: o.stage.camera3dFov },
       frame: { width: size.w, height: size.h },
-      themeId: o.themeId, fontFingerprint: (o.environment?.fontFingerprint as string) || "", snapshotCode: o.codes.snapshot,
+      themeId: o.themeId, fontFingerprint: (o.environment?.fontFingerprint as string) || "", snapshotCode: "",
     },
   });
 }
@@ -447,7 +446,7 @@ export async function planPageStreams(o: {
       node: control.node, definition: control.definition, style: project.style || {}, environment, sourceVersions: value.sourceVersions ?? {},
       fps, sampling: control.sampling, duration: control.end - control.start,
       stage: { width: project.width, height: project.height, camera3dFov: project.camera3dFov },
-      frame: control.frame, themeId: project.themeId, codes,
+      frame: control.frame, themeId: project.themeId,
     });
     const contentKey = await cardStreamContentKey({ memberKey, sampling: control.sampling, count: control.count, fps, stage, codeVersion });
     const streamKey = await resultKeyOf(contentKey, envFingerprint);

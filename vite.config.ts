@@ -176,11 +176,11 @@ const stageEntryPlugin = (): Plugin => ({
 });
 
 const onlineConfig = async (): Promise<UserConfig> => {
-  const { frameCode, captureCode, snapshotCode } = await import("./server/frame-code.mjs");
+  const { frameCode, captureCode } = await import("./server/frame-code.mjs");
   const codeVersion = frameCode(process.cwd());
-  // 本页产流(任务书 `render-refactor-task.md`「甲二」,`src/online/pageStreamPlan.ts`):轨道流的键里有截图代码与生成快照代码的指纹,
-  // 页面要算出与切分方相同的键,就得带着同一套算法在构建时算出的这两项
-  const streamCodes = { capture: captureCode(process.cwd()), snapshot: snapshotCode(process.cwd()) };
+  // 本页产流(任务书 `render-refactor-task.md`「甲二」,`src/online/pageStreamPlan.ts`):轨道流的键里有截图代码的指纹,
+  // 页面要算出与切分方相同的键,就得带着同一套算法在构建时算出的这一项
+  const streamCodes = { capture: captureCode(process.cwd()) };
   return {
     base: "/editor/",
     // Tailwind 的构建期优化(Lightning CSS)即使不压缩也会改写数值(`0.4` → `.4`),与开发服务器(桌面导出页)的原文不同:一并关掉

@@ -7,7 +7,7 @@
  *
  *   PSP-01  照抄的常量与服务端同值
  *   PSP-02  流的键与形状:内容键、结果键、分段范围、矩形、摆放(整数入点、带小数的入点、带框、超出项目末尾、两张卡)
- *   PSP-03  成员键只有一处:`streamMemberKey` 与切分方用的成员键相同(「己一」换算法之后这一条先红)
+ *   PSP-03  成员键只有一处:`streamMemberKey` 与切分方用的成员键相同(服务端换算法之后这一条先红)
  *   PSP-04  流任务:id、结果键、范围、input、source、weight、requires、priority 与切分方给浏览器出的那一份相同
  *   PSP-05  清单:同一份分段登记,两边的任务组出的清单相同,过 `manifestMatches`
  *   PSP-06  层表的那一行与 `layerStreamsOf` 写出来的相同
@@ -25,7 +25,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CardFrameCache } from '../card-cache.mjs';
-import { captureCode, snapshotCode } from '../frame-code.mjs';
+import { captureCode } from '../frame-code.mjs';
 import { planListStreams, queueStreamOf, STREAM_CODE_VERSION, STREAM_DECODER_BUDGET, LOCAL_OVERFLOW_PX, SEGMENT_FRAMES } from '../frame-stream.mjs';
 import { splitPlan, BROWSER_EXCLUDED_CARD } from '../render-node/split.mjs';
 import { clipsPlanTaskOf } from '../render-queue/index.mjs';
@@ -43,7 +43,7 @@ import {
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '../../..');
 const OWN = '1111111111111111';      // 切分方的指纹
 const BROWSER = '2222222222222222';  // 本页的指纹
-const CODES = { capture: captureCode(ROOT), snapshot: snapshotCode(ROOT) };
+const CODES = { capture: captureCode(ROOT) };
 const CODE_VERSION = 'code-version-for-test';
 
 /** 注册表的替身:内置卡片只要有 id(能力取审阅表);`user-pill` 当一张用户卡 */
@@ -93,7 +93,7 @@ const BASIC = () => plain([
 ]);
 
 test('PSP-01 照抄的常量与服务端同值', () => {
-  assert.equal(PAGE_STREAM_CODE_VERSION, STREAM_CODE_VERSION, '流的代码版本(「己一」合入后服务端是 2,这里跟着改,连同 streamMemberKey)');
+  assert.equal(PAGE_STREAM_CODE_VERSION, STREAM_CODE_VERSION, '流的代码版本(服务端加了,这里跟着改,连同 streamMemberKey)');
   assert.equal(PAGE_STREAM_DECODER_BUDGET, STREAM_DECODER_BUDGET);
   assert.equal(PAGE_LOCAL_OVERFLOW_PX, LOCAL_OVERFLOW_PX);
   assert.equal(PAGE_STREAM_SEGMENTS_PER_TASK, QUEUE_DEFAULTS.STREAM_SEGMENTS);
@@ -142,10 +142,12 @@ test('PSP-03 成员键只有一处:与切分方用的成员键相同', async () 
     const key = await streamMemberKey({
       node: control.node, definition: control.definition, style: project.style, environment: wire.environment, sourceVersions: wire.sourceVersions,
       fps: 30, sampling: control.sampling, duration: control.end - control.start,
-      stage: { width: project.width, height: project.height, camera3dFov: project.camera3dFov }, frame: control.frame, themeId: project.themeId, codes: CODES,
+      stage: { width: project.width, height: project.height, camera3dFov: project.camera3dFov }, frame: control.frame, themeId: project.themeId,
     });
-    // `planStreams` 取成员键的那个式子:「己一」之后是 `streamMemberKey ?? contentKey`
+    // `planStreams` 取成员键的那个式子:`streamMemberKey ?? contentKey`(「己一」起有 `streamMemberKey`,不带生成快照的代码指纹)
+    assert.ok(theirs.streamMemberKey, '服务端的 card plan 带 streamMemberKey');
     assert.equal(key, theirs.streamMemberKey ?? theirs.contentKey, `${control.clipId} 的成员键`);
+    assert.notEqual(key, theirs.contentKey, '不是带生成快照代码指纹的那一份');
     assert.deepEqual(control.sampling, theirs.sampling);
     assert.equal(control.count, theirs.count);
     assert.equal(control.tier, theirs.tier);
