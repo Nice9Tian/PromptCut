@@ -19,7 +19,7 @@
  * - 超过 `maxProjects` 时有成员在线的先连，其次按变成有活的先后；排不上的记在 `waiting` 里。
  * - 每一项的 `streams`（任务书 `docs/plan/render-refactor-task.md`「甲三」，契约第 3.1 节）：这个项目此刻产不产轨道流 ——
  *   渲染节点开着（`enabled`）并且目录条目里 `hosted.render.streams` 是 true（`streamsOn`）。只是这一项关着的项目照样列、照样连、
- *   快照任务照常认领；工作进程据它不认领这个项目的流任务、切分清单计划时不出自己的那一份流（`project-streams.mjs`）。
+ *   快照任务照常认领；工作进程据它不认领这个项目的流任务、切分清单计划时不出自己的那一份流（`render-node/host.mjs` 文件头「按项目产不产轨道流」）。
  */
 import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';

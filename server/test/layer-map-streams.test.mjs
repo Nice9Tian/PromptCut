@@ -241,7 +241,7 @@ function executorOn(pipeline, entry, { produced = [] } = {}) {
       publishLayerMap: (e) => pipeline.publishLayerMap(e), planForQueue: async () => ({ entry, context: { cardPlan: [] }, streamSpecs: [] }),
       listStreamSpecs: (e, clips) => pipeline.listStreamSpecs(e, clips), streamCapable: async () => true, prerenderPicked: (e, id) => pipeline.prerenderPicked(e, id),
       renderStreamRange: async (e, spec, range) => { produced.push({ streamKey: spec.streamKey, range }); return null; } },
-    projects: { get: async () => entry.project }, projectStreams: null,
+    projects: { get: async () => entry.project },
   });
 }
 

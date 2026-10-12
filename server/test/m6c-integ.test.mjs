@@ -62,8 +62,7 @@ test('MI-no-isIdle:执行器只有 plan / render / forget,不再有 isIdle', () 
   const pipeline = new FramePipeline({ root: '.', origin: () => 'http://127.0.0.1:1' });
   try {
     const executor = createPrerenderExecutor({ pipeline, projects: { get: async () => null } });
-    // M7 契约 D12 加了 afterSplit(切分完成后写层表 v 3);render-queue 契约 A.12〔裁〕加了 laneOf / laneBusy(主机闲时认领);
-    // 任务书「甲三」加了 accepts(托管方的渲染节点按项目的「生成轨道流」认领流任务);isIdle 照旧没有
-    assert.deepEqual(Object.keys(executor).sort(), ['accepts', 'afterSplit', 'forget', 'laneBusy', 'laneOf', 'plan', 'render']);
+    // M7 契约 D12 加了 afterSplit(切分完成后写层表 v 3);render-queue 契约 A.12〔裁〕加了 laneOf / laneBusy(主机闲时认领);isIdle 照旧没有
+    assert.deepEqual(Object.keys(executor).sort(), ['afterSplit', 'forget', 'laneBusy', 'laneOf', 'plan', 'render']);
   } finally { void pipeline.close(); }
 });

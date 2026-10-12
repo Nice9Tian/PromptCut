@@ -97,8 +97,6 @@ import { LOCK_IDLE_TAKEOVER_MS } from '../render-queue/constants.mjs';
  *   抛出的错误带 `retryable === false` 时按不可重试处理,否则可重试
  * @property {(planTask: object, info: { tasks: object[], derived: string[] }) => unknown} [afterSplit]
  *   (M7 D12)切分完成、发布回包都回来之后调一次,`tasks` 是最终发布成功的细任务(TaskInput)。不等它,出错只记事件
- * @property {(task: object) => boolean} [accepts]
- *   (任务书「甲三」)认领之前问一次:回 `false` 就不认领这个任务(同步、不碰网络;每一拍对每个候选任务都会问)
  *
  * @typedef {object} SinkRef
  * @property {string} resultKey
@@ -187,7 +185,7 @@ function mergedLocks(cardLocks, extra) {
  *   - 补渲计划照旧不切流(低内存档不消费流);
  *   - 在线页面的清单计划:执行器给了 `browserStreamsFor`(按清单里的片段算流,`frame-pipeline.mjs` 的 `planForQueue`)时,
  *     这些流给浏览器出一份(单卡流、浏览器做得了的才出)。**切分方自己的那一份**看执行器给的 `ownListStreams`:
- *       - 为真(本机此刻能产流;托管方的渲染节点另要这个项目的「生成轨道流」开着,由执行器按项目收):单卡流连自己的那一份一起出,
+ *       - 为真(本机此刻能产流;托管方的渲染节点另要这个项目的「生成轨道流」开着,由执行器按项目收,`prerender-executor.mjs` 的 `plan`):单卡流连自己的那一份一起出,
  *         与浏览器那一份照 `splitPlan` 的规矩成对(`input.dual`,谁先认领谁得);
  *       - 不为真(本机不能产流、托管方的这一项关着、旧执行器):照旧只给浏览器出(`browserOnly`),切分方自己不产。
  *     组流任何时候都只标 `browserOnly`(浏览器画不了,等于不出):组流的内容键跟着「清单里还有哪些片段」变,流任务回来时
@@ -282,17 +280,7 @@ export function createLocalNode({
   if (isIdle !== undefined) sessionOptions.isIdle = isIdle;
   if (maxConcurrent !== undefined) sessionOptions.maxConcurrent = maxConcurrent;
   if (projects !== undefined) sessionOptions.projects = projects;
-  /*
-   * 执行器可以说「这个任务我不接」(`executor.accepts(task) === false`,可选;任务书「甲三」):托管方的渲染节点对没打开
-   * 「生成轨道流」的项目不认领流任务,快照任务照常。只挡认领,不动手里已有的认领(关掉这一项不放回认领)。
-   * 执行器没有这个方法(测试替身、旧执行器)时不加这道闸,行为与原来逐项相同;它抛错按不接算。
-   */
-  const accepts = typeof executor?.accepts === 'function'
-    ? task => { try { return executor.accepts(task) !== false; } catch { return false; } }
-    : null;
-  if (accepts && canClaim !== undefined) sessionOptions.canClaim = (task, info) => accepts(task) && canClaim(task, info) !== false;
-  else if (accepts) sessionOptions.canClaim = accepts;
-  else if (canClaim !== undefined) sessionOptions.canClaim = canClaim;
+  if (canClaim !== undefined) sessionOptions.canClaim = canClaim;
   if (claimLimit !== undefined) sessionOptions.claimLimit = claimLimit;
   session = createNodeSession(sessionOptions);
 

@@ -17,12 +17,9 @@
  *                    对不上同样抛 `plan-mismatch`;本机不能产流(开关关着、没有编码器)抛 `no-streams`(不可重试)。
  *                    清单计划切出的流任务(任务书「甲三」:切分方自己的那一份)在这一版的流里找不到时,按任务的片段现算它的单卡流再对
  *                    (清单是发布方判的,本机没判重的卡不在本机这一版的流里)。
- *   accepts(task)    (任务书「甲三」)认领之前 local-node 问一次。托管方渲染服务的工作进程里,项目没打开「生成轨道流」时流任务回 false
- *                    (`hosted-render/project-streams.mjs`:向管理进程的代理口问,渲染节点开着并且这一项开着才算开);快照任务、计划任务照常。
- *                    桌面应用与普通的独立渲染主机不归这一项管,一律回 true。带片段清单的计划切分时,切分方自己的那一份流出不出
- *                    (`context.ownListStreams`)同样过这一道。
- *                    按任务的 `source.projectId` 认「哪个项目」:在线页面与云端 Agent 服务发的任务里,它就是共享项目的 id(与管理进程清单里的
- *                    `projectId` 同一个);发布方用了别的项目文档 id 时清单里查不到,按不产算(不知道就不产)。
+ *                    托管方的渲染节点按项目的「生成轨道流」产流(任务书「甲三」):调用方给 `streamsEnabled`(这个执行器所属的项目此刻产不产,
+ *                    `render-node/host.mjs` 文件头「按项目产不产轨道流」)时,带片段清单的计划切分前看它 —— 不产就不出切分方自己的那一份流
+ *                    (`context.ownListStreams`)。认领流任务的闸不在这里,在主机的认领闸上(同一个量)。桌面应用与普通的独立渲染主机不给,不按项目管。
  *                    回 `null`:产物在帧库 / 流库里,sink 自己读(`collectSnapshotResult` / `collectStreamResult`)。
  *                    共享档卡在本机快照库里记过超限帧(`index.json` 的 `oversize`,R6-14)的,交给切分的 control 标
  *                    `snapshotOversize: true`(见 `markSnapshotOversize`),切分据此不给纯浏览器另出一份(M7 契约第 13 节
@@ -56,7 +53,6 @@ import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { isListPlan, CLIPS_KEY_MARK, BACKFILL_KEY_MARK } from './render-queue/index.mjs';
 import { splitCandidatesOf, splitStreamCandidatesOf, streamCandidateKey } from './artifact-transfer.mjs';
-import { workerProjectStreams } from './hosted-render/project-streams.mjs';
 
 /** `cardLocks`(Map、普通对象或缺省)→ `(lockKey) => 锁指纹 | null`(同 `split.mjs` 的读法) */
 function lockReader(cardLocks) {
@@ -106,6 +102,10 @@ export async function markSnapshotOversize(pipeline, context) {
   return { cardPlan: marked.length ? out : cardPlan, marked };
 }
 
+/** 清单计划写着「页面看到『生成轨道流』开着」而本机还没看到时,最多等多久、多久看一眼(三级数字;本机每秒向管理进程对一次账) */
+export const STREAMS_SETTLE_MS = 4000;
+const STREAMS_SETTLE_POLL_MS = 100;
+
 /** 按版本缓存的上下文条数(附件第 3 节:LRU 约 4 条) */
 export const PLAN_CACHE_SIZE = 4;
 
@@ -150,24 +150,34 @@ export function laneBusy(pipeline) {
  *   独立渲染主机没有推送队列,管线自己的 `publishLayerMap` 写不出去,由主机按这条连接的内容库写;PC 节点不给(照旧由推送队列写)
  * @param {() => unknown} [options.codeStamp]  卡片代码的版次(c66-host-cards:`card-code.mjs` 的 `epoch`)。缓存按
  *   「项目版本 + 版次」存:卡片代码变了(同步装上了新卡),同一版项目的上下文要按新代码重算,不然任务对回的还是旧的 control
- * @param {null | { allowed(projectId: string): boolean, fresh?(projectId: string): Promise<boolean> }} [options.projectStreams]
- *   按项目问「产不产轨道流」(任务书「甲三」)。缺省:这个进程是托管方渲染服务的工作进程时用它那一份(`workerProjectStreams()`),
- *   否则是 null —— 不按项目管,本机能产就产(桌面应用、普通的独立渲染主机)
+ * @param {null | (() => boolean)} [options.streamsEnabled]
+ *   这个执行器所属的项目此刻产不产轨道流(任务书「甲三」;现读)。托管方渲染服务的工作进程按项目给(`vite-plugin-frames.ts` 的 `startHostNode`);
+ *   缺省 null —— 不按项目管,本机能产就产(桌面应用、普通的独立渲染主机)
+ * @param {number} [options.streamsSettleMs]  清单计划写着「页面看到这一项开着」(`input.streams`)而本机还没看到时,最多等这么久(见 `plan`)
+ * @param {(ms: number) => Promise<void>} [options.sleep]  测试用
  */
 export function createPrerenderExecutor({ pipeline, projects, prepareProject = project => project, log = () => {}, codeStamp = () => '', publishLayerMap = null,
-  projectStreams = workerProjectStreams() }) {
+  streamsEnabled = null, streamsSettleMs = STREAMS_SETTLE_MS, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   if (!pipeline) throw new Error('createPrerenderExecutor needs a pipeline');
   if (!projects || typeof projects.get !== 'function') throw new Error('createPrerenderExecutor needs a project client');
-  /** 这个项目此刻产不产流(同步,认领闸用);不按项目管时恒为真。问的那一头出错按不产算 */
-  const streamsAllowed = projectId => {
-    if (!projectStreams) return true;
-    try { return projectStreams.allowed(projectId) === true; } catch { return false; }
+  /** 按不按项目管 */
+  const perProject = typeof streamsEnabled === 'function';
+  /** 这个项目此刻产不产流;不按项目管时恒为真。问的那一头出错按不产算 */
+  const streamsOn = () => {
+    if (!perProject) return true;
+    try { return streamsEnabled() === true; } catch { return false; }
   };
-  /** 同上,先问到新的再答(切分时用) */
-  const streamsAllowedFresh = async projectId => {
-    if (!projectStreams) return true;
-    try { return (typeof projectStreams.fresh === 'function' ? await projectStreams.fresh(projectId) : projectStreams.allowed(projectId)) === true; }
-    catch { return false; }
+  /**
+   * 创建者刚打开「生成轨道流」的那一下:在线页面看到开了就重发清单计划(结果键带这一项,`render-queue/messages.mjs` 的 `clipsPlanTaskOf`),
+   * 本机从管理进程的清单里看到开了要晚一拍(一秒以内)。计划先到的话,照本机手里的「关着」切就漏掉自己的那一份流,而这一版的计划做完了不会再切。
+   * 所以计划写着 `input.streams: true`、本机还是关着时等一等,等到本机也看到开了、或等满 `streamsSettleMs` 为止。
+   * 页面写的这一项只决定「要不要等」,产不产仍只看本机从目录来的那一项(页面自报的不作数)。
+   */
+  const streamsSettled = async (planTask, signal) => {
+    if (streamsOn() || planTask?.input?.streams !== true) return streamsOn();
+    const until = Date.now() + Math.max(0, streamsSettleMs);
+    while (!streamsOn() && Date.now() < until && !signal?.aborted) await sleep(STREAMS_SETTLE_POLL_MS);
+    return streamsOn();
   };
   /** `projectId@projectRev` → Promise<{ entry, context }>;Map 的插入顺序就是 LRU 顺序 */
   const cache = new Map();
@@ -259,7 +269,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   }
 
   async function plan(planTask, { signal } = {}) {
-    const { id, projectId } = versionOf(planTask);
+    const { id } = versionOf(planTask);
     const resolved = await contextFor(planTask, signal);
     if (planTask && typeof planTask === 'object') planned.set(planTask, resolved);
     const { entry, rev, drifted } = resolved;
@@ -267,8 +277,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     let context = drifted ? { ...resolved.context, actualRev: rev } : resolved.context;
     // 任务书「甲三」:清单计划里切分方自己的那一份流出不出 —— 本机能产(`planForQueue` 给的 `ownListStreams`)并且这个项目此刻产流
     // (托管方的渲染节点看「生成轨道流」;别的节点不按项目管)。每次切分现问,不进按版本的缓存
-    if (isListPlan(planTask) && projectStreams) {
-      const on = await streamsAllowedFresh(projectId);
+    if (isListPlan(planTask) && perProject) {
+      const on = await streamsSettled(planTask, signal);
       // 这个项目此刻不产流:本机写层表时不列自己这一版的流(列了没人产,页面白取清单);已经派过的流照候选记录列,产出的保留
       // (`frame-pipeline.mjs` 的 `layerMapStreamOptions` 读 `entry.ownStreamsOff`)。只有按项目管的进程才写这个记号
       if (entry && typeof entry === 'object') entry.ownStreamsOff = !on;
@@ -471,10 +481,5 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
    * `'queue'` lane、还没落定的工作数(包括已经被中止、管线还没收手的那一件)。
    */
   const laneOf = task => (task?.kind === 'snapshot' || task?.kind === 'plan' ? 'queue' : null);
-  /**
-   * 认领之前 local-node 问一次(任务书「甲三」):流任务要这个项目此刻产流才接;别的任务照常。只挡认领 ——
-   * 已经认领的流任务照做完(关掉「生成轨道流」不放回手里的认领),`render` 里不再看这一项。
-   */
-  const accepts = task => task?.kind !== 'stream' || streamsAllowed(task?.source?.projectId);
-  return { plan, render, afterSplit, accepts, forget: () => { cache.clear(); newest.clear(); }, laneOf, laneBusy: () => laneBusy(pipeline) };
+  return { plan, render, afterSplit, forget: () => { cache.clear(); newest.clear(); }, laneOf, laneBusy: () => laneBusy(pipeline) };
 }

@@ -3,11 +3,12 @@
  * 「生成轨道流」(项目记录 `hosted.render.streams`,缺省关)定;在线页面发的清单计划连切分方自己的那一份流一起出。
  *
  *   HRS-01  管理进程给工作进程的清单:每一项的 `streams` = 渲染节点开着并且这一项显式开着(`broker.mjs` 的 `selectProjects`)
- *   HRS-02  工作进程一侧问「这个项目产不产流」(`project-streams.mjs`):没问到过、过期了按不产;每次被问顺手更新
+ *   HRS-02  主机按项目「产不产轨道流」(`render-node/host.mjs`):不产的项目不认领流任务、快照与计划照常;按连接所属的项目认,
+ *           不看任务里写的 `source.projectId`;运行中开、关当拍生效;关掉不放回手里的认领;「等着的任务数」不数没人做的流任务;
+ *           对账把清单里的 `streams` 带到每个项目上;不带这一项的配置(普通的独立渲染主机)不按项目管
  *   HRS-03  `listPlanOverrides`:`ownListStreams` 为真才出切分方自己的那一份,而且只给单卡流;不为真照旧只给浏览器
  *   HRS-04  local-node 切清单计划:自己的一份与浏览器的一份成对(`dual`),自己那一份要本机转码
- *   HRS-05  local-node 的认领闸:执行器说不接(`accepts`)的流任务不认领,快照任务照常;没有 `accepts` 的执行器行为不变
- *   HRS-06  执行器:`accepts` 按项目问;不按项目管(桌面、普通渲染主机)时都接;切分清单计划时按项目收 `ownListStreams`
+ *   HRS-06  执行器切清单计划:按项目收 `ownListStreams`;计划写着「页面看到这一项开着」而本机还没看到时等一等
  *   HRS-07  执行器把清单计划的流任务对回这一版:本机这一版的流里没有它,按任务的片段现算单卡流再对;不是清单计划的照旧对不上
  *   HRS-08  管理进程的配置:`PROMPTCUT_RENDER_STREAMS=1` 才以能产流的方式起
  *
@@ -16,7 +17,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selectProjects, streamsOn } from '../hosted-render/broker.mjs';
-import { createProjectStreams, workerProjectStreams, BROKER_URL_ENV, BROKER_KEY_ENV } from '../hosted-render/project-streams.mjs';
+import { createRenderHost, reconcileHostProjects } from '../render-node/host.mjs';
 import { renderServiceConfig } from '../hosted-render/main.mjs';
 import { createLocalNode, listPlanOverrides } from '../render-node/local-node.mjs';
 import { createPrerenderExecutor } from '../prerender-executor.mjs';
@@ -55,100 +56,145 @@ test('HRS-01 清单里每一项的 streams:渲染节点开着并且「生成轨�
 
 /* ================================================================== HRS-02 */
 
-function fakeBroker() {
-  const state = { projects: [], status: 200, calls: 0, auth: [], fail: false, hold: null };
-  const fetch = async (url, init) => {
-    state.calls += 1;
-    state.auth.push([String(url), init?.headers?.authorization]);
-    if (state.hold) await state.hold;
-    if (state.fail) throw Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' });
-    return { status: state.status, json: async () => (state.status === 200 ? { ok: true, docUrl: 'ws://x', paused: false, projects: state.projects } : { ok: false, error: 'unauthorized' }) };
-  };
-  return { state, fetch };
-}
 const turn = () => new Promise((resolve) => setImmediate(resolve));
-
-test('HRS-02 工作进程问「产不产流」:没问到过、过期了都按不产;每次被问顺手更新;问不到时手里没过期的照用;口令只进请求头', async () => {
-  const { state, fetch } = fakeBroker();
-  let t = 1000;
-  const ps = createProjectStreams({ url: 'http://127.0.0.1:5399/', key: 'k-secret', fetch, now: () => t, refreshAfterMs: 300, maxAgeMs: 1200 });
-  state.projects = [{ projectId: 'sp_on', streams: true }, { projectId: 'sp_off', streams: false }, { projectId: 'sp_old' }];
-  assert.equal(ps.allowed('sp_on'), false, '从没问到过:不认领');
-  assert.equal(state.calls, 1, '顺手在后台问了一次');
-  await turn(); await turn();
-  assert.equal(ps.allowed('sp_on'), true, '下一拍:照问到的清单');
-  assert.equal(ps.allowed('sp_off'), false);
-  assert.equal(ps.allowed('sp_old'), false, '清单里没带这一项:不产');
-  assert.equal(ps.allowed('sp_unknown'), false, '清单里没有这个项目:不产');
-  assert.equal(state.calls, 1, '刚问到的不重复问');
-  assert.deepEqual(state.auth[0], ['http://127.0.0.1:5399/projects', 'Bearer k-secret']);
-
-  // 认领闸每一拍(500 ms)问一次:每一拍答的是上一拍问到的,同时再问一次
-  // 创建者在这两拍之间关掉这一项:这一拍还按上一拍的答(最多晚一拍),下一拍就是 false
-  t += 500;
-  state.projects = [{ projectId: 'sp_on', streams: false }];
-  assert.equal(ps.allowed('sp_on'), true, '这一拍按上一拍问到的');
-  assert.equal(state.calls, 2, '同时再问一次');
-  await turn(); await turn();
-  t += 500;
-  assert.equal(ps.allowed('sp_on'), false, '下一拍生效');
-  await turn(); await turn();
-
-  // 手里占满、一阵子没问过:清单过期,腾出手来的第一拍不认领(哪怕上一次问到的是开着),先问到新的
-  state.projects = [{ projectId: 'sp_on', streams: true }];
-  t += 500;
-  ps.allowed('sp_on');
-  await turn(); await turn();
-  assert.equal(ps.allowed('sp_on'), true);
-  state.projects = [{ projectId: 'sp_on', streams: false }];
-  t += 5000;
-  assert.equal(ps.allowed('sp_on'), false, '过期的清单不作数:这一拍不认领');
-  await turn(); await turn();
-  assert.equal(ps.allowed('sp_on'), false, '问到新的:确实关了');
-
-  // fresh:先问到新的再答
-  state.projects = [{ projectId: 'sp_on', streams: true }];
-  t += 500;
-  const before = state.calls;
-  assert.equal(await ps.fresh('sp_on'), true);
-  assert.equal(state.calls, before + 1);
-  assert.equal(await ps.fresh('sp_on'), true);
-  assert.equal(state.calls, before + 1, '刚问到的不重复问');
-
-  // 问不到(管理进程不在):手里的还没过期就照用,不抛;过期了答 false
-  state.fail = true;
-  t += 500;
-  assert.equal(await ps.fresh('sp_on'), true);
-  assert.equal(ps.status().lastError, 'ECONNREFUSED');
-  t += 1000;
-  assert.equal(await ps.fresh('sp_on'), false, '问不到、手里的又过期了:不产');
-  assert.equal(ps.allowed('sp_on'), false);
-  await turn(); await turn();
-  // 被拒(口令不对):同样
-  state.fail = false; state.status = 401;
-  assert.equal(await ps.fresh('sp_on'), false);
-  assert.equal(ps.status().lastError, 'unauthorized');
-  assert.equal(JSON.stringify(ps.status()).includes('k-secret'), false, '诊断里没有口令');
-
-  // 同一时刻只问一次
-  state.status = 200;
-  let release;
-  state.hold = new Promise((resolve) => { release = resolve; });
-  t += 1000;
-  const n = state.calls;
-  ps.allowed('sp_on'); ps.allowed('sp_on');
-  const waiting = ps.fresh('sp_on');
-  assert.equal(state.calls, n + 1);
-  release(); state.hold = null;
-  assert.equal(await waiting, true);
+const open = (task) => ({ ...task, state: 'open', version: 1, source: { ...task.source, userId: 'u@d' } });
+const streamTaskFor = (projectId = 'p1') => ({
+  id: `stream:${rk('sk-a', OWN)}:3-10`, kind: 'stream', resultKey: rk('sk-a', OWN), range: { unit: 'segment', from: 3, to: 10 },
+  source: { projectId, projectRev: 1, derivedFrom: clipsPlan({ projectId, clips: ['a'] }).id },
+  input: { clipId: 'a', cardId: null, entryKey: null, contentKey: 'sk-a' }, weight: { class: 'medium', estMs: null, frames: 120 },
+  requires: { envFingerprint: OWN, codeVersion: 'cv-1', cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false, capabilities: { streams: true } },
+  priority: 10,
+});
+const snapTaskFor = (projectId = 'p1') => ({
+  id: `snapshot:${rk('ck-a', OWN)}:0-59`, kind: 'snapshot', tier: 'shared', resultKey: rk('ck-a', OWN), range: { unit: 'localFrame', from: 0, to: 59 },
+  source: { projectId, projectRev: 1, derivedFrom: clipsPlan({ projectId, clips: ['a'] }).id },
+  input: { clipId: 'a', cardId: 'card-a', entryKey: null, contentKey: 'ck-a', canvasHeavy: false }, weight: { class: 'medium', estMs: null, frames: 60 },
+  requires: { envFingerprint: OWN, codeVersion: 'cv-1', cardSources: {}, transcode: false, userCards: false, graphCards: false, belowDependent: false },
+  priority: 10,
 });
 
-test('HRS-02 不是托管方渲染服务的工作进程(没有代理口的环境变量):没有这道闸', () => {
-  assert.equal(workerProjectStreams({}), null);
-  assert.equal(workerProjectStreams({ [BROKER_URL_ENV]: '  ' }), null);
-  const a = workerProjectStreams({ [BROKER_URL_ENV]: 'http://127.0.0.1:1', [BROKER_KEY_ENV]: 'k1' });
-  assert.equal(typeof a.allowed, 'function');
-  assert.equal(workerProjectStreams({ [BROKER_URL_ENV]: 'http://127.0.0.1:1', [BROKER_KEY_ENV]: 'k1' }), a, '同一个进程里共用一份');
+/** 假端点上的一台主机:每个项目一条假连接,记它发出去的消息,留往里塞消息的口子。`hold` 给了就带(诊断里才有 pending / claimable) */
+function hostOn(entries, { maxConcurrent = 1, hold = null, dynamic = false } = {}) {
+  const wires = new Map();
+  const host = createRenderHost({
+    entries, dynamic, maxConcurrent, envFingerprint: OWN, codeVersion: 'cv-1', capabilities: { userCards: false, graphCards: false, transcode: true, streams: true }, now: () => 1000,
+    nodeIdOf: (entry) => `n-${entry.projectId}`,
+    connect: (entry, index, live) => {
+      const sent = [];
+      let handler = () => {};
+      const handlers = [];
+      const endpoint = { send: (m) => { sent.push(m); }, onMessage: (h) => { handlers.push(h); handler = (m) => { for (const f of handlers) f(m); }; } };
+      wires.set(entry.projectId, { sent, deliver: (m) => handler(m), live, claims: () => sent.filter((m) => m.type === 'task.claim').map((m) => m.id) });
+      return { endpoint, executor: { plan: async () => ({}), render: () => new Promise(() => {}) }, sink: { has: async () => false, put: async () => ({ complete: false }) }, ...(hold ? { hold } : {}) };
+    },
+  });
+  host.start();
+  for (const [projectId, w] of wires) w.deliver({ type: 'node.welcome', nodeId: `n-${projectId}`, epoch: 1 });
+  return { host, wires, of: (projectId) => wires.get(projectId) };
+}
+const snapshotOf = (w, tasks) => w.deliver({ type: 'queue.snapshot', epoch: 1, tasks });
+
+test('HRS-02 主机按项目产不产轨道流:不产的项目不认领流任务、快照任务照常;按连接所属的项目认,不看任务里写的项目 id;开了当拍认领', () => {
+  const stream = open(streamTaskFor('p_off')), snap = open(snapTaskFor('p_off'));
+  // 只有流任务:这个项目不产,一拍也不认领
+  const a = hostOn([{ projectId: 'p_off', streams: false }]);
+  snapshotOf(a.of('p_off'), [stream]);
+  a.host.tick(); a.host.tick();
+  assert.deepEqual(a.of('p_off').claims(), [], '没打开:不认领流任务');
+  assert.equal(a.host.nodes()[0].streams, false, '诊断里看得到这一项');
+  // 创建者打开(清单变了,对账调 setStreams):下一拍认领
+  a.host.setStreams('p_off', true);
+  a.host.tick();
+  assert.deepEqual(a.of('p_off').claims(), [stream.id]);
+
+  // 流任务与快照任务都在:不产时只认领快照
+  const b = hostOn([{ projectId: 'p_off', streams: false }]);
+  snapshotOf(b.of('p_off'), [stream, snap]);
+  b.host.tick();
+  assert.deepEqual(b.of('p_off').claims(), [snap.id], '快照任务照常');
+
+  // 任务里写的 source.projectId 与连接所属的项目不是同一个 id(发布方用了别的项目文档 id):照连接所属的项目办
+  const odd = open(streamTaskFor('some-other-doc-id'));
+  const c = hostOn([{ projectId: 'sp_on', streams: true }, { projectId: 'sp_off', streams: false }], { maxConcurrent: 2 });
+  snapshotOf(c.of('sp_on'), [odd]);
+  snapshotOf(c.of('sp_off'), [{ ...odd, id: `${odd.id}x`, resultKey: `${odd.resultKey}x` }]);
+  c.host.tick();
+  assert.deepEqual(c.of('sp_on').claims(), [odd.id], '开着的项目:认领,哪怕任务里写的是别的项目文档 id');
+  assert.deepEqual(c.of('sp_off').claims(), [], '关着的项目:不认领');
+
+  // 两个项目各有一个流任务:一个开着一个关着,互不影响
+  const d = hostOn([{ projectId: 'p1', streams: true }, { projectId: 'p2', streams: false }], { maxConcurrent: 2 });
+  snapshotOf(d.of('p1'), [open(streamTaskFor('p1'))]);
+  snapshotOf(d.of('p2'), [open(streamTaskFor('p2'))]);
+  d.host.tick(); d.host.tick();
+  assert.equal(d.of('p1').claims().length, 1);
+  assert.equal(d.of('p2').claims().length, 0);
+});
+
+test('HRS-02 关掉这一项:手里的流任务不放回、不中止,只是不再认领新的;连接照旧', () => {
+  const first = open(streamTaskFor('p1'));
+  const second = { ...first, id: first.id.replace(':3-10', ':11-18'), range: { unit: 'segment', from: 11, to: 18 } };
+  const h = hostOn([{ projectId: 'p1', streams: true }], { maxConcurrent: 2 });
+  const w = h.of('p1');
+  snapshotOf(w, [first, second]);
+  h.host.tick();
+  const claimed = w.claims()[0];
+  w.deliver({ type: 'task.claimed', id: claimed, token: 1, task: claimed === first.id ? first : second, epoch: 1 });
+  assert.deepEqual(h.host.nodes()[0].held, [claimed], '手里有一个流任务');
+  h.host.setStreams('p1', false);
+  h.host.tick(); h.host.tick();
+  assert.deepEqual(w.claims(), [claimed], '另一个不再认领');
+  assert.equal(w.sent.filter((m) => m.type === 'task.release').length, 0, '没有放回');
+  assert.deepEqual(h.host.nodes()[0].held, [claimed], '手里的还在');
+  assert.equal(h.host.nodes()[0].released, 0);
+  assert.equal(h.host.projects().length, 1, '项目还连着');
+  // 只认布尔:别的值不改
+  h.host.setStreams('p1', 'yes');
+  assert.equal(h.host.nodes()[0].streams, false);
+});
+
+test('HRS-02 「等着的任务数」不数没人做的流任务(不然管理进程会为它们起隔离工作进程);开着时照数', () => {
+  const stream = open(streamTaskFor('p1')), snap = open(snapTaskFor('p1'));
+  const h = hostOn([{ projectId: 'p1', streams: false }], { hold: () => true });
+  snapshotOf(h.of('p1'), [stream, snap]);
+  h.host.tick();
+  let n = h.host.nodes()[0];
+  assert.deepEqual([n.hold, n.pending, n.claimable], [true, 1, 1], '关着:只数快照任务');
+  const keyOff = n.pendingKey;
+  // 只剩流任务:一个也不算
+  snapshotOf(h.of('p1'), [stream]);
+  n = h.host.nodes()[0];
+  assert.deepEqual([n.pending, n.claimable, n.pendingKey], [0, 0, ''], '关着、只有流任务:没有等着的');
+  h.host.setStreams('p1', true);
+  snapshotOf(h.of('p1'), [stream, snap]);
+  n = h.host.nodes()[0];
+  assert.deepEqual([n.pending, n.claimable], [2, 2], '开着:流任务也数');
+  assert.notEqual(n.pendingKey, keyOff);
+});
+
+test('HRS-02 对账把清单里的 streams 带到每个项目上;接线时拿到现读的口子;不带这一项的配置不按项目管', () => {
+  const h = hostOn([], { dynamic: true });
+  const entryOf = (item) => ({ url: 'ws://x', projectId: item.projectId, members: item.members === true, nodeId: `n-${item.projectId}`, streams: item.streams === true });
+  reconcileHostProjects(h.host, { projects: [{ projectId: 'p1', members: true, streams: false }, { projectId: 'p2', members: true }] }, entryOf);
+  assert.deepEqual(h.host.nodes().map((n) => [n.projectId, n.streams]), [['p1', false], ['p2', false]], '清单里没有这一项按不产算');
+  assert.equal(h.of('p1').live.streams(), false);
+  // 清单变了:已经在的项目跟着改,不重连
+  reconcileHostProjects(h.host, { projects: [{ projectId: 'p1', members: true, streams: true }, { projectId: 'p2', members: true, streams: false }] }, entryOf);
+  assert.deepEqual(h.host.nodes().map((n) => [n.projectId, n.streams]), [['p1', true], ['p2', false]]);
+  assert.equal(h.of('p1').live.streams(), true, '执行器手里的口子读到的是现值');
+  assert.equal(h.wires.size, 2, '没有重新接线');
+  reconcileHostProjects(h.host, { projects: [{ projectId: 'p1', members: true, streams: false }, { projectId: 'p2', members: true, streams: false }] }, entryOf);
+  assert.equal(h.of('p1').live.streams(), false);
+
+  // 普通的独立渲染主机(配置项不带 streams):不按项目管,流任务照认领,诊断里没有这一项
+  const plain = hostOn([{ projectId: 'p1' }]);
+  assert.equal(plain.of('p1').live.streams(), null);
+  assert.equal('streams' in plain.host.nodes()[0], false);
+  snapshotOf(plain.of('p1'), [open(streamTaskFor('p1'))]);
+  plain.host.tick();
+  assert.equal(plain.of('p1').claims().length, 1);
+  plain.host.setStreams('p1', false);
+  assert.equal(plain.host.nodes()[0].streams, false, '之后明说了才按它');
 });
 
 /* ================================================================== HRS-03 */
@@ -188,7 +234,7 @@ test('HRS-03 listPlanOverrides:ownListStreams 为真才出切分方自己的那�
   assert.deepEqual(listPlanOverrides({ id: 'plan:p1@1', kind: 'plan', resultKey: 'p1@1', input: {} }, { browserStreamsFor, ownListStreams: true }), {});
 });
 
-/* ================================================================== HRS-04 / HRS-05 */
+/* ================================================================== HRS-04 */
 
 /** 假端点上的一个节点:回它发出去的消息与往里塞消息的口子 */
 function nodeOn({ executor, canClaim, capabilities = { transcode: true, streams: true }, profile = 'host', planOnly = false }) {
@@ -205,8 +251,6 @@ function nodeOn({ executor, canClaim, capabilities = { transcode: true, streams:
   handler({ type: 'node.welcome', nodeId: 'n-host', epoch: 1 });
   return { node, sent, deliver: (m) => handler(m) };
 }
-const open = (task) => ({ ...task, state: 'open', version: 1, source: { ...task.source, userId: 'u@d' } });
-
 async function publishedBy({ planTask, plan, planOnly = false }) {
   const { node, sent, deliver } = nodeOn({ executor: { plan: async () => plan, render: async () => null }, profile: 'pc', planOnly });
   const view = open(planTask);
@@ -242,72 +286,6 @@ test('HRS-04 local-node 切清单计划:ownListStreams 为真时流出两份(自
   assert.deepEqual(planOnly.map((t) => t.requires.envFingerprint), [BR]);
 });
 
-const streamTaskFor = (projectId = 'p1') => ({
-  id: `stream:${rk('sk-a', OWN)}:3-10`, kind: 'stream', resultKey: rk('sk-a', OWN), range: { unit: 'segment', from: 3, to: 10 },
-  source: { projectId, projectRev: 1, derivedFrom: clipsPlan({ projectId, clips: ['a'] }).id },
-  input: { clipId: 'a', cardId: null, entryKey: null, contentKey: 'sk-a' }, weight: { class: 'medium', estMs: null, frames: 120 },
-  requires: { envFingerprint: OWN, codeVersion: 'cv-1', cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false, capabilities: { streams: true } },
-  priority: 10,
-});
-const snapTaskFor = (projectId = 'p1') => ({
-  id: `snapshot:${rk('ck-a', OWN)}:0-59`, kind: 'snapshot', tier: 'shared', resultKey: rk('ck-a', OWN), range: { unit: 'localFrame', from: 0, to: 59 },
-  source: { projectId, projectRev: 1, derivedFrom: clipsPlan({ projectId, clips: ['a'] }).id },
-  input: { clipId: 'a', cardId: 'card-a', entryKey: null, contentKey: 'ck-a', canvasHeavy: false }, weight: { class: 'medium', estMs: null, frames: 60 },
-  requires: { envFingerprint: OWN, codeVersion: 'cv-1', cardSources: {}, transcode: false, userCards: false, graphCards: false, belowDependent: false },
-  priority: 10,
-});
-
-test('HRS-05 认领闸:执行器说不接的流任务不认领,快照任务照常;放开后下一拍就认领;没有 accepts 的执行器行为不变', () => {
-  let allow = false;
-  const asked = [];
-  const executor = { plan: async () => ({}), render: () => new Promise(() => {}), accepts: (task) => { asked.push(task.kind); return task.kind !== 'stream' || allow; } };
-  const stream = open(streamTaskFor()), snap = open(snapTaskFor());
-
-  // 只有流任务:关着时一拍也不认领
-  const a = nodeOn({ executor });
-  a.deliver({ type: 'queue.snapshot', epoch: 1, tasks: [stream] });
-  a.node.tick(); a.node.tick();
-  assert.equal(a.sent.filter((m) => m.type === 'task.claim').length, 0, '没打开:不认领流任务');
-  assert.ok(asked.includes('stream'));
-  // 打开之后下一拍认领
-  allow = true;
-  a.node.tick();
-  assert.deepEqual(a.sent.filter((m) => m.type === 'task.claim').map((m) => m.id), [stream.id]);
-  a.node.stop();
-
-  // 流任务与快照任务都在:关着时只认领快照
-  allow = false;
-  const b = nodeOn({ executor });
-  b.deliver({ type: 'queue.snapshot', epoch: 1, tasks: [stream, snap] });
-  b.node.tick();
-  assert.deepEqual(b.sent.filter((m) => m.type === 'task.claim').map((m) => m.id), [snap.id], '快照任务照常');
-  b.node.stop();
-
-  // 调用方另给了 canClaim(独立渲染主机的 lane 闸):两道都过才认领
-  allow = true;
-  const seen = [];
-  const c = nodeOn({ executor, canClaim: (task) => { seen.push(task.id); return false; } });
-  c.deliver({ type: 'queue.snapshot', epoch: 1, tasks: [stream] });
-  c.node.tick();
-  assert.equal(c.sent.filter((m) => m.type === 'task.claim').length, 0);
-  assert.deepEqual(seen, [stream.id], '执行器接了才问到调用方那一道');
-  c.node.stop();
-
-  // accepts 抛错按不接
-  const d = nodeOn({ executor: { ...executor, accepts: () => { throw new Error('boom'); } } });
-  d.deliver({ type: 'queue.snapshot', epoch: 1, tasks: [snap] });
-  d.node.tick();
-  assert.equal(d.sent.filter((m) => m.type === 'task.claim').length, 0);
-  d.node.stop();
-
-  // 没有 accepts(测试替身、旧执行器):与原来相同,流任务照认领
-  const e = nodeOn({ executor: { plan: async () => ({}), render: () => new Promise(() => {}) } });
-  e.deliver({ type: 'queue.snapshot', epoch: 1, tasks: [stream] });
-  e.node.tick();
-  assert.deepEqual(e.sent.filter((m) => m.type === 'task.claim').map((m) => m.id), [stream.id]);
-  e.node.stop();
-});
-
 /* ================================================================== HRS-06 / HRS-07 */
 
 /** 最小的 entry:两张独立卡,`planStreams` 认得的形状(同 browser-stream-split.test.mjs 的 entryOf) */
@@ -341,62 +319,76 @@ function fakePipeline({ entry = entryOf(), ownSpecs = [], ownListStreams = true,
   return { pipeline, produced, backfilled, entry };
 }
 const projectsOf = (entry) => ({ get: async () => entry.project });
-const gate = (table) => ({ allowed: (id) => table[id] === true, fresh: async (id) => table[id] === true });
-
-test('HRS-06 执行器 accepts:托管方的工作进程按项目问,没打开的项目不接流任务、快照与计划照常;不按项目管时都接', async () => {
-  const { pipeline, entry } = fakePipeline();
-  const table = { p_on: true, p_off: false };
-  const hosted = createPrerenderExecutor({ pipeline, projects: projectsOf(entry), projectStreams: gate(table) });
-  assert.equal(hosted.accepts(streamTaskFor('p_on')), true);
-  assert.equal(hosted.accepts(streamTaskFor('p_off')), false);
-  assert.equal(hosted.accepts(streamTaskFor('p_unknown')), false, '问不到的项目按不产');
-  assert.equal(hosted.accepts(snapTaskFor('p_off')), true, '快照任务照常');
-  assert.equal(hosted.accepts(clipsPlan({ projectId: 'p_off' })), true, '计划任务照常');
-  // 创建者中途关掉:下一次问就不接;手里已经认领的不归这里管(render 里不看这一项)
-  table.p_on = false;
-  assert.equal(hosted.accepts(streamTaskFor('p_on')), false);
-  // 问的那一头出错:按不产
-  const broken = createPrerenderExecutor({ pipeline, projects: projectsOf(entry), projectStreams: { allowed: () => { throw new Error('x'); } } });
-  assert.equal(broken.accepts(streamTaskFor('p_on')), false);
-  assert.equal(broken.accepts(snapTaskFor('p_on')), true);
-  // 桌面应用、普通的独立渲染主机:这一项不管它们
-  const desktop = createPrerenderExecutor({ pipeline, projects: projectsOf(entry), projectStreams: null });
-  assert.equal(desktop.accepts(streamTaskFor('p_off')), true);
-  // 缺省(这个测试进程不是托管方的工作进程):同上
-  assert.equal(createPrerenderExecutor({ pipeline, projects: projectsOf(entry) }).accepts(streamTaskFor('p_off')), true);
-});
-
 test('HRS-06 执行器 plan:清单计划里切分方自己的那一份,托管方按项目收;本机不能产时不出;桌面照自己能不能产来', async () => {
-  const table = { p1: false };
+  let on = false;
+  const enabled = () => on;
   const list = clipsPlan({ projectId: 'p1', clips: ['a'] });
-  const mk = (opts, projectStreams) => { const f = fakePipeline(opts); return createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(f.entry), projectStreams }); };
-  assert.equal((await mk({ ownListStreams: true }, gate(table)).plan(list)).ownListStreams, false, '托管方、这一项关着:不出自己的那一份');
-  table.p1 = true;
-  assert.equal((await mk({ ownListStreams: true }, gate(table)).plan(list)).ownListStreams, true, '托管方、这一项开着:出');
-  assert.equal((await mk({ ownListStreams: false }, gate(table)).plan(list)).ownListStreams, false, '本机不能产流(没有编码器、关着流开关):这一项开着也不出');
+  const mk = (opts, streamsEnabled) => { const f = fakePipeline(opts); return createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(f.entry), ...(streamsEnabled === undefined ? {} : { streamsEnabled }) }); };
+  assert.equal((await mk({ ownListStreams: true }, enabled).plan(list)).ownListStreams, false, '托管方、这一项关着:不出自己的那一份');
+  on = true;
+  assert.equal((await mk({ ownListStreams: true }, enabled).plan(list)).ownListStreams, true, '托管方、这一项开着:出');
+  assert.equal((await mk({ ownListStreams: false }, enabled).plan(list)).ownListStreams, false, '本机不能产流(没有编码器、关着流开关):这一项开着也不出');
   assert.equal((await mk({ ownListStreams: true }, null).plan(list)).ownListStreams, true, '桌面:本机能产就出');
+  assert.equal((await mk({ ownListStreams: true }).plan(list)).ownListStreams, true, '缺省不按项目管');
   assert.equal((await mk({ ownListStreams: false }, null).plan(list)).ownListStreams, false, '桌面:本机不能产就不出');
+  assert.equal((await mk({ ownListStreams: true }, () => { throw new Error('x'); }).plan(list)).ownListStreams, false, '问的那一头出错按不产');
   // 同一个执行器、同一版(上下文有缓存):关掉之后再切,跟着变;缓存里的上下文没被改
   const f = fakePipeline({ ownListStreams: true });
-  const exec = createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(f.entry), projectStreams: gate(table) });
+  const exec = createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(f.entry), streamsEnabled: enabled });
   assert.equal((await exec.plan(list)).ownListStreams, true);
-  table.p1 = false;
+  on = false;
   assert.equal((await exec.plan(list)).ownListStreams, false);
-  table.p1 = true;
+  on = true;
   assert.equal((await exec.plan(list)).ownListStreams, true);
   // 这一版的 entry 上记着「这个项目此刻不产流」(本机写层表时不列自己这一版的流);桌面不按项目管,不写这个记号
   assert.equal(f.entry.ownStreamsOff, false);
-  table.p1 = false;
+  on = false;
   await exec.plan(list);
   assert.equal(f.entry.ownStreamsOff, true);
   const d = fakePipeline({ ownListStreams: true });
-  await createPrerenderExecutor({ pipeline: d.pipeline, projects: projectsOf(d.entry), projectStreams: null }).plan(list);
+  await createPrerenderExecutor({ pipeline: d.pipeline, projects: projectsOf(d.entry), streamsEnabled: null }).plan(list);
   assert.equal('ownStreamsOff' in d.entry, false);
   // 这道闸接到 listPlanOverrides 上:关着 → 只给浏览器
-  table.p1 = false;
   assert.ok(listPlanOverrides(list, await exec.plan(list)).streams.every((s) => s.browserOnly === true));
-  table.p1 = true;
+  on = true;
   assert.deepEqual(listPlanOverrides(list, await exec.plan(list)).streams.map((s) => 'browserOnly' in s), [false]);
+  // 执行器不再有认领的钩子:认领闸在主机上(HRS-02),不留两条路
+  assert.equal('accepts' in exec, false);
+});
+
+test('HRS-06 创建者刚打开的那一下:清单计划写着「页面看到这一项开着」而本机还没看到,等到本机也看到再切;等满了照本机手里的切;没写这一项不等', async () => {
+  const marked = clipsPlan({ projectId: 'p1', clips: ['a'], input: { streams: true } });
+  const plain = clipsPlan({ projectId: 'p1', clips: ['a'] });
+  const run = async ({ planTask, turnsOnAfter = Infinity, settleMs = 1000 }) => {
+    let on = false, sleeps = 0;
+    const f = fakePipeline({ ownListStreams: true });
+    const exec = createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(f.entry), streamsEnabled: () => on, streamsSettleMs: settleMs,
+      sleep: async () => { sleeps += 1; if (sleeps >= turnsOnAfter) on = true; await turn(); } });
+    const started = Date.now();
+    const ctx = await exec.plan(planTask);
+    return { own: ctx.ownListStreams, sleeps, ms: Date.now() - started, off: f.entry.ownStreamsOff };
+  };
+  // 页面先到、本机的清单晚几拍:等到了,出自己的那一份
+  const late = await run({ planTask: marked, turnsOnAfter: 3 });
+  assert.deepEqual([late.own, late.sleeps, late.off], [true, 3, false]);
+  // 没写这一项(旧页面、这一项关着的项目):不等,照本机手里的
+  const unmarked = await run({ planTask: plain, turnsOnAfter: 3 });
+  assert.deepEqual([unmarked.own, unmarked.sleeps], [false, 0]);
+  // 写了但本机一直看不到(页面自报的不作数:创建者其实没开,或刚又关了):等满就照关着切,不出自己的那一份
+  const never = await run({ planTask: marked, settleMs: 30 });
+  assert.equal(never.own, false);
+  assert.ok(never.sleeps >= 1 && never.ms < 2000, '等了、但有上限');
+  // 本机已经看到开着:不等
+  let on = true, sleeps = 0;
+  const f = fakePipeline({ ownListStreams: true });
+  const exec = createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(f.entry), streamsEnabled: () => on, sleep: async () => { sleeps += 1; } });
+  assert.equal((await exec.plan(marked)).ownListStreams, true);
+  assert.equal(sleeps, 0);
+  // 不按项目管的(桌面):这一项对它没有意义,不等
+  const desk = fakePipeline({ ownListStreams: true });
+  let deskSleeps = 0;
+  await createPrerenderExecutor({ pipeline: desk.pipeline, projects: projectsOf(desk.entry), sleep: async () => { deskSleeps += 1; } }).plan(marked);
+  assert.equal(deskSleeps, 0);
 });
 
 test('HRS-07 执行器把清单计划的流任务对回这一版:本机没判重的卡按任务的片段现算单卡流;结果键、分段范围照核;不是清单计划的照旧对不上', async () => {
@@ -410,7 +402,7 @@ test('HRS-07 执行器把清单计划的流任务对回这一版:本机没判重
   });
   // 本机这一版一条流都没有(渲染服务不判重):照任务的片段对上,交给生产者
   const f = fakePipeline({ entry, ownSpecs: [] });
-  const exec = createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(entry), projectStreams: null });
+  const exec = createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(entry) });
   await exec.render(taskOf(), { progress: () => {} });
   assert.deepEqual(f.produced, [{ streamKey: single.streamKey, kind: 'card', clipIds: ['a'], range: { from: 3, to: 10 } }]);
   assert.deepEqual(f.backfilled, ['a'], '这张卡记进预渲染集合(本机写的层表才列得出这条流)');
@@ -418,15 +410,15 @@ test('HRS-07 执行器把清单计划的流任务对回这一版:本机没判重
   const grouped = planStreams(entry, { budget: 1, envFingerprint: OWN, codeVersion: 'cv' });
   assert.deepEqual(grouped.map((s) => s.kind), ['group']);
   const g = fakePipeline({ entry, ownSpecs: grouped });
-  await createPrerenderExecutor({ pipeline: g.pipeline, projects: projectsOf(entry), projectStreams: null }).render(taskOf(), { progress: () => {} });
+  await createPrerenderExecutor({ pipeline: g.pipeline, projects: projectsOf(entry) }).render(taskOf(), { progress: () => {} });
   assert.equal(g.produced[0].streamKey, single.streamKey);
   // 本机这一版里本来就有这条流:照旧直接对上
   const h = fakePipeline({ entry, ownSpecs: [single] });
-  await createPrerenderExecutor({ pipeline: h.pipeline, projects: projectsOf(entry), projectStreams: null }).render(taskOf(), { progress: () => {} });
+  await createPrerenderExecutor({ pipeline: h.pipeline, projects: projectsOf(entry) }).render(taskOf(), { progress: () => {} });
   assert.equal(h.produced.length, 1);
 
   const rejects = async (task, pattern, fake = fakePipeline({ entry, ownSpecs: [] })) => {
-    await assert.rejects(() => createPrerenderExecutor({ pipeline: fake.pipeline, projects: projectsOf(entry), projectStreams: null }).render(task, { progress: () => {} }),
+    await assert.rejects(() => createPrerenderExecutor({ pipeline: fake.pipeline, projects: projectsOf(entry) }).render(task, { progress: () => {} }),
       (error) => error.code === 'plan-mismatch' && error.retryable === false && pattern.test(error.message));
     assert.equal(fake.produced.length, 0);
   };
@@ -440,7 +432,7 @@ test('HRS-07 执行器把清单计划的流任务对回这一版:本机没判重
   await rejects(taskOf({ range: { unit: 'segment', from: 3, to: 99 } }), /分段范围/);
   // 本机不能产流:不可重试的 no-streams(照旧)
   const no = fakePipeline({ entry, capable: false });
-  await assert.rejects(() => createPrerenderExecutor({ pipeline: no.pipeline, projects: projectsOf(entry), projectStreams: null }).render(taskOf(), { progress: () => {} }), (e) => e.code === 'no-streams');
+  await assert.rejects(() => createPrerenderExecutor({ pipeline: no.pipeline, projects: projectsOf(entry) }).render(taskOf(), { progress: () => {} }), (e) => e.code === 'no-streams');
 });
 
 /* ================================================================== HRS-08 */
