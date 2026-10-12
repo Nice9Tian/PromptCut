@@ -23,6 +23,7 @@
 
 - **DOM 卡**。
 - **canvas 卡**：2D canvas，或 three.js 等 WebGL。
+- **Lottie 画在 SVG 上，属于 DOM 卡**（2026-10-10 用户定）。播放库也能画在画布上，不用它：实测自带素材里带遮罩层的那一个用画布画出来是错的，SVG 的兼容性更好；要像素时把 SVG 直接变成像素，速度够用。实测与数字见 `../../plan/render-standard.md` 的「Lottie 动效」。
 
 ### 轴三：依不依赖下层
 

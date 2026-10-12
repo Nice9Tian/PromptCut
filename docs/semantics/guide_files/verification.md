@@ -12,6 +12,13 @@
 | 导出与快照重放一致 | `node scripts/verify-unified-frames.mjs` | 整条通过 | 改到快照、预渲染、渲染 |
 | 画面 | 看图，或跑 `scripts/probes/` 下对应的探针（用法见各脚本文件头） | 画面正确、探针全过 | 改到用户看得见的画面 |
 
+全量测试里有一批账号服务的测试要用到 VisuHive 仓库（官网与账号后端）的源码，靠两个环境变量指路，跑 `npm test` 之前要设好；不设的话其中一部分会跳过，另一部分会失败（2026-10-12 用户同意写入）：
+
+- `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`：VisuHive 仓库的根目录。
+- `PROMPTCUT_PASSWORD_ORDER_MODULE`：VisuHive 仓库里 `account/password-order.mjs` 这个文件。
+
+这两个变量在每台机器上指到哪，属于本机信息，写在 `docs/local.md`，不写在这里。
+
 ## 按改动范围验证（2026-10-06 用户定）
 
 - 渲染附加项（导出确定性、快照重放、与 main 的像素比对、预渲染探针，即主计划第 8 节的 G0-R）只在改到**画面**时跑：渲染管线、舞台、快照与预渲染、导出的取帧，或某张卡、某个部件的画面。
