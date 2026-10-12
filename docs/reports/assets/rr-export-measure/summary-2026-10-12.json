@@ -1,0 +1,1768 @@
+{
+  "ok": false,
+  "probe": "export-paths-measure",
+  "startedAt": "2026-10-12T14:48:35.209Z",
+  "argv": [
+    "--runs",
+    "3",
+    "--work",
+    "out/final1",
+    "--json",
+    "out/final1/summary.json",
+    "--assets",
+    "docs/reports/assets/rr-export-measure"
+  ],
+  "work": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1",
+  "options": {
+    "runs": 3,
+    "projects": [
+      "demo",
+      "heavy"
+    ],
+    "frames": null,
+    "workers": "auto",
+    "split": true
+  },
+  "projects": {
+    "demo": {
+      "spec": {
+        "name": "export-paths-demo",
+        "note": "像素基线的演示项目(按 docs/archive/topics/export-baseline-compare.md 第 1 节重建)",
+        "layers": [
+          "media",
+          "particles",
+          "scene-3d",
+          "growth-curve",
+          "chapter-bar",
+          "mu-word-rotate",
+          "odometer",
+          "punch-pill"
+        ],
+        "width": 1280,
+        "height": 720,
+        "fps": 30,
+        "duration": 8,
+        "frames": 240,
+        "frameRange": "0-239"
+      },
+      "desktop": {
+        "runs": [
+          {
+            "k": 1,
+            "before": {
+              "cpuPct": 68.9,
+              "freeMemGB": 8.4,
+              "procs": {
+                "node": 33,
+                "chrome": 77,
+                "ffmpeg": 0,
+                "python": 2
+              }
+            },
+            "totalMs": 21110.5336,
+            "cpuDuring": {
+              "meanPct": 69.2,
+              "maxPct": 100,
+              "samples": 41
+            },
+            "shards": 1,
+            "segments": {
+              "startupToFirstFrameMs": 1312.9184,
+              "captureAndProresMs": 17170.1198,
+              "proresFinishMs": 176.4887000000017,
+              "composeAndX264Ms": 900,
+              "afterComposeMs": 84.41509999999835,
+              "composeSetupMs": 1493.9683000000005
+            },
+            "intermediateBytes": {
+              "overlayMovBytes": 154900981
+            },
+            "video": {
+              "bytes": 1548708,
+              "durationSec": 8,
+              "bitrateKbps": 1549,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\demo-desktop-1.mp4",
+            "log": [
+              {
+                "t": 241,
+                "line": "Launching Puppeteer (chrome-headless-shell)..."
+              },
+              {
+                "t": 416,
+                "line": "Navigating to http://127.0.0.1:7460/?export=1&timeline=/@export/demo-d1/project.json..."
+              },
+              {
+                "t": 433,
+                "line": "Waiting for window.__pcReady..."
+              },
+              {
+                "t": 1257,
+                "line": "分片导出:1 段 0-239"
+              },
+              {
+                "t": 1268,
+                "line": "Warm-up 3 frames..."
+              },
+              {
+                "t": 18516,
+                "line": "Export finished in 17.2s (240 frames)."
+              },
+              {
+                "t": 18660,
+                "line": "Running ffmpeg to generate video files..."
+              },
+              {
+                "t": 18660,
+                "line": "Creating overlay.mov..."
+              },
+              {
+                "t": 20153,
+                "line": "Creating preview.mp4: compositing 0 media clip(s) with ffmpeg..."
+              },
+              {
+                "t": 21026,
+                "line": "Composited 240 frames in 0.9s."
+              },
+              {
+                "t": 21094,
+                "line": "No audio clips; preview.mp4 stays silent."
+              },
+              {
+                "t": 21094,
+                "line": "Video synthesis complete."
+              }
+            ],
+            "progressLines": 240,
+            "fileSha256": "6659221874f72716786e14d1a24b7687cba3ce9b35d621442a4563da813d635b",
+            "failedAttempts": [
+              "in/Documents/PromptCut/.worktrees/rr-export-measure/server/bakery/export-unified.mjs:101:22)\n    at async Promise.all (index 0)\n    at async exportUnified (file:///C:/Users/admin/Documents/PromptCut/.worktrees/rr-export-measure/server/bakery/export-unified.mjs:135:19)\n    at async exportFrames (file:///C:/Users/admin/Documents/PromptCut/.worktrees/rr-export-measure/server/bakery/export.mjs:64:15)\n",
+              "in/Documents/PromptCut/.worktrees/rr-export-measure/server/bakery/export-unified.mjs:101:22)\n    at async Promise.all (index 0)\n    at async exportUnified (file:///C:/Users/admin/Documents/PromptCut/.worktrees/rr-export-measure/server/bakery/export-unified.mjs:135:19)\n    at async exportFrames (file:///C:/Users/admin/Documents/PromptCut/.worktrees/rr-export-measure/server/bakery/export.mjs:64:15)\n"
+            ]
+          },
+          {
+            "k": 2,
+            "before": {
+              "cpuPct": 61.1,
+              "freeMemGB": 5.4,
+              "procs": {
+                "node": 39,
+                "chrome": 133,
+                "ffmpeg": 0,
+                "python": 2
+              }
+            },
+            "totalMs": 25588.1994,
+            "cpuDuring": {
+              "meanPct": 91.2,
+              "maxPct": 100,
+              "samples": 50
+            },
+            "shards": 1,
+            "segments": {
+              "startupToFirstFrameMs": 1850.6671,
+              "captureAndProresMs": 19807.431800000002,
+              "proresFinishMs": 1378.4526000000005,
+              "composeAndX264Ms": 900,
+              "afterComposeMs": 98.75970000000234,
+              "composeSetupMs": 1581.4434
+            },
+            "intermediateBytes": {
+              "overlayMovBytes": 154900981
+            },
+            "video": {
+              "bytes": 1548708,
+              "durationSec": 8,
+              "bitrateKbps": 1549,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\demo-desktop-2.mp4",
+            "log": [
+              {
+                "t": 219,
+                "line": "Launching Puppeteer (chrome-headless-shell)..."
+              },
+              {
+                "t": 454,
+                "line": "Navigating to http://127.0.0.1:7460/?export=1&timeline=/@export/demo-d2/project.json..."
+              },
+              {
+                "t": 479,
+                "line": "Waiting for window.__pcReady..."
+              },
+              {
+                "t": 1767,
+                "line": "分片导出:1 段 0-239"
+              },
+              {
+                "t": 1784,
+                "line": "Warm-up 3 frames..."
+              },
+              {
+                "t": 21702,
+                "line": "Export finished in 19.9s (240 frames)."
+              },
+              {
+                "t": 23037,
+                "line": "Running ffmpeg to generate video files..."
+              },
+              {
+                "t": 23037,
+                "line": "Creating overlay.mov..."
+              },
+              {
+                "t": 24618,
+                "line": "Creating preview.mp4: compositing 0 media clip(s) with ffmpeg..."
+              },
+              {
+                "t": 25489,
+                "line": "Composited 240 frames in 0.9s."
+              },
+              {
+                "t": 25571,
+                "line": "No audio clips; preview.mp4 stays silent."
+              },
+              {
+                "t": 25571,
+                "line": "Video synthesis complete."
+              }
+            ],
+            "progressLines": 240,
+            "fileSha256": "6659221874f72716786e14d1a24b7687cba3ce9b35d621442a4563da813d635b"
+          },
+          {
+            "k": 3,
+            "before": {
+              "cpuPct": 61.5,
+              "freeMemGB": 10.9,
+              "procs": {
+                "node": 26,
+                "chrome": 84,
+                "ffmpeg": 0,
+                "python": 2
+              }
+            },
+            "totalMs": 20412.4556,
+            "cpuDuring": {
+              "meanPct": 70.5,
+              "maxPct": 100,
+              "samples": 40
+            },
+            "shards": 1,
+            "segments": {
+              "startupToFirstFrameMs": 1272.0706,
+              "captureAndProresMs": 16732.5814,
+              "proresFinishMs": 179.06360000000132,
+              "composeAndX264Ms": 800,
+              "afterComposeMs": 58.684400000001915,
+              "composeSetupMs": 1385.5905999999995
+            },
+            "intermediateBytes": {
+              "overlayMovBytes": 154900981
+            },
+            "video": {
+              "bytes": 1548708,
+              "durationSec": 8,
+              "bitrateKbps": 1549,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\demo-desktop-3.mp4",
+            "log": [
+              {
+                "t": 192,
+                "line": "Launching Puppeteer (chrome-headless-shell)..."
+              },
+              {
+                "t": 376,
+                "line": "Navigating to http://127.0.0.1:7460/?export=1&timeline=/@export/demo-d3/project.json..."
+              },
+              {
+                "t": 393,
+                "line": "Waiting for window.__pcReady..."
+              },
+              {
+                "t": 1216,
+                "line": "分片导出:1 段 0-239"
+              },
+              {
+                "t": 1228,
+                "line": "Warm-up 3 frames..."
+              },
+              {
+                "t": 18044,
+                "line": "Export finished in 16.8s (240 frames)."
+              },
+              {
+                "t": 18184,
+                "line": "Running ffmpeg to generate video files..."
+              },
+              {
+                "t": 18184,
+                "line": "Creating overlay.mov..."
+              },
+              {
+                "t": 19569,
+                "line": "Creating preview.mp4: compositing 0 media clip(s) with ffmpeg..."
+              },
+              {
+                "t": 20354,
+                "line": "Composited 240 frames in 0.8s."
+              },
+              {
+                "t": 20400,
+                "line": "No audio clips; preview.mp4 stays silent."
+              },
+              {
+                "t": 20400,
+                "line": "Video synthesis complete."
+              }
+            ],
+            "progressLines": 240,
+            "fileSha256": "6659221874f72716786e14d1a24b7687cba3ce9b35d621442a4563da813d635b"
+          }
+        ],
+        "repeatability": [
+          {
+            "run": 2,
+            "vsRun": 1,
+            "frames": 240,
+            "frameCountEqual": true,
+            "identicalFrames": 240,
+            "differentFrames": 0,
+            "firstDifferentFrame": null,
+            "fileSha256Equal": true
+          },
+          {
+            "run": 3,
+            "vsRun": 1,
+            "frames": 240,
+            "frameCountEqual": true,
+            "identicalFrames": 240,
+            "differentFrames": 0,
+            "firstDifferentFrame": null,
+            "fileSha256Equal": true
+          }
+        ],
+        "summary": {
+          "runs": 3,
+          "totalMs": {
+            "median": 21111,
+            "min": 20412,
+            "max": 25588,
+            "spreadPct": 24.5
+          },
+          "msPerFrame": {
+            "median": 88,
+            "min": 85,
+            "max": 107,
+            "spreadPct": 24.5
+          },
+          "segments": {
+            "startupToFirstFrameMs": {
+              "median": 1313,
+              "min": 1272,
+              "max": 1851
+            },
+            "captureAndProresMs": {
+              "median": 17170,
+              "min": 16733,
+              "max": 19807
+            },
+            "proresFinishMs": {
+              "median": 179,
+              "min": 176,
+              "max": 1378
+            },
+            "composeAndX264Ms": {
+              "median": 900,
+              "min": 800,
+              "max": 900
+            },
+            "afterComposeMs": {
+              "median": 84,
+              "min": 59,
+              "max": 99
+            },
+            "composeSetupMs": {
+              "median": 1494,
+              "min": 1386,
+              "max": 1581
+            }
+          },
+          "videoBytes": {
+            "median": 1548708,
+            "min": 1548708,
+            "max": 1548708,
+            "spreadPct": 0
+          },
+          "bitrateKbps": {
+            "median": 1549,
+            "min": 1549,
+            "max": 1549,
+            "spreadPct": 0
+          },
+          "cpuBeforePct": {
+            "median": 62,
+            "min": 61,
+            "max": 69,
+            "spreadPct": 12.7
+          },
+          "cpuDuringMeanPct": {
+            "median": 71,
+            "min": 69,
+            "max": 91,
+            "spreadPct": 31.2
+          },
+          "shards": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      "online": {
+        "runs": [
+          {
+            "k": 1,
+            "before": {
+              "cpuPct": 63.9,
+              "freeMemGB": 5.9,
+              "procs": {
+                "node": 37,
+                "chrome": 108,
+                "ffmpeg": 0,
+                "python": 2
+              }
+            },
+            "totalMs": 61755.5,
+            "evalWallMs": 61923.3237,
+            "cpuDuring": {
+              "meanPct": 74.2,
+              "maxPct": 100,
+              "samples": 121
+            },
+            "segments": {
+              "startupBeforeOpenMs": 107,
+              "openExportPageMs": 679.6999999992549,
+              "stepMs": 2791.499999988824,
+              "snapshotMs": 25337.30000001192,
+              "mediaMs": 4660.100000023842,
+              "rasterMs": 12210.799999970943,
+              "getImageDataMs": 10704.09999999404,
+              "toYuvMs": 5109.600000005215,
+              "encodeSubmitMs": 8.499999981373549,
+              "waitEncodeQueueMs": 5.300000011920929,
+              "flushMs": 3.300000000745058,
+              "muxMs": 3.9000000208616257,
+              "otherMs": 134.3999999910593
+            },
+            "frameStats": {
+              "frames": 240,
+              "heavyReplaced": 0,
+              "mediaFrames": 240,
+              "manualTicks": 756,
+              "rafFallbacks": 0
+            },
+            "video": {
+              "bytes": 3304665,
+              "durationSec": 8,
+              "bitrateKbps": 3305,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\demo-online-1.mp4",
+            "videoCodec": "avc1.640028",
+            "chunks": 240,
+            "fileSha256": "c1aa46428cca441ba6fe5a2efa5630d9835887a36e78057066e713e74f79a568"
+          },
+          {
+            "k": 2,
+            "before": {
+              "cpuPct": 87.9,
+              "freeMemGB": 3.6,
+              "procs": {
+                "node": 43,
+                "chrome": 137,
+                "ffmpeg": 2,
+                "python": 2
+              }
+            },
+            "totalMs": 66983.80000000075,
+            "evalWallMs": 67141.3976,
+            "cpuDuring": {
+              "meanPct": 80.8,
+              "maxPct": 99.7,
+              "samples": 132
+            },
+            "segments": {
+              "startupBeforeOpenMs": 107.89999999850988,
+              "openExportPageMs": 1040.199999999255,
+              "stepMs": 3013.200000040233,
+              "snapshotMs": 27941.39999995753,
+              "mediaMs": 5003.300000026822,
+              "rasterMs": 12825.900000009686,
+              "getImageDataMs": 11618.59999999404,
+              "toYuvMs": 5229.700000029057,
+              "encodeSubmitMs": 9.19999998435378,
+              "waitEncodeQueueMs": 6.699999995529652,
+              "flushMs": 2.599999997764826,
+              "muxMs": 2.699999999254942,
+              "otherMs": 182.39999996870756
+            },
+            "frameStats": {
+              "frames": 240,
+              "heavyReplaced": 0,
+              "mediaFrames": 240,
+              "manualTicks": 756,
+              "rafFallbacks": 0
+            },
+            "video": {
+              "bytes": 3304665,
+              "durationSec": 8,
+              "bitrateKbps": 3305,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\demo-online-2.mp4",
+            "videoCodec": "avc1.640028",
+            "chunks": 240,
+            "fileSha256": "c1aa46428cca441ba6fe5a2efa5630d9835887a36e78057066e713e74f79a568"
+          },
+          {
+            "k": 3,
+            "before": {
+              "cpuPct": 50.8,
+              "freeMemGB": 10.5,
+              "procs": {
+                "node": 26,
+                "chrome": 88,
+                "ffmpeg": 0,
+                "python": 2
+              }
+            },
+            "totalMs": 59541.60000000149,
+            "evalWallMs": 59705.0244,
+            "cpuDuring": {
+              "meanPct": 61.2,
+              "maxPct": 100,
+              "samples": 117
+            },
+            "segments": {
+              "startupBeforeOpenMs": 98.5,
+              "openExportPageMs": 624.9000000022352,
+              "stepMs": 2695.199999999255,
+              "snapshotMs": 24828.19999999553,
+              "mediaMs": 4636.899999979883,
+              "rasterMs": 11688.20000000298,
+              "getImageDataMs": 9937.39999999851,
+              "toYuvMs": 4891.099999982864,
+              "encodeSubmitMs": 7.700000021606684,
+              "waitEncodeQueueMs": 4.500000022351742,
+              "flushMs": 2.5,
+              "muxMs": 2.9000000096857548,
+              "otherMs": 123.59999998658895
+            },
+            "frameStats": {
+              "frames": 240,
+              "heavyReplaced": 0,
+              "mediaFrames": 240,
+              "manualTicks": 756,
+              "rafFallbacks": 0
+            },
+            "video": {
+              "bytes": 3304665,
+              "durationSec": 8,
+              "bitrateKbps": 3305,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\demo-online-3.mp4",
+            "videoCodec": "avc1.640028",
+            "chunks": 240,
+            "fileSha256": "c1aa46428cca441ba6fe5a2efa5630d9835887a36e78057066e713e74f79a568"
+          }
+        ],
+        "repeatability": [
+          {
+            "run": 2,
+            "vsRun": 1,
+            "frames": 240,
+            "frameCountEqual": true,
+            "identicalFrames": 240,
+            "differentFrames": 0,
+            "firstDifferentFrame": null,
+            "fileSha256Equal": true
+          },
+          {
+            "run": 3,
+            "vsRun": 1,
+            "frames": 240,
+            "frameCountEqual": true,
+            "identicalFrames": 240,
+            "differentFrames": 0,
+            "firstDifferentFrame": null,
+            "fileSha256Equal": true
+          }
+        ],
+        "summary": {
+          "runs": 3,
+          "totalMs": {
+            "median": 61756,
+            "min": 59542,
+            "max": 66984,
+            "spreadPct": 12.1
+          },
+          "msPerFrame": {
+            "median": 257,
+            "min": 248,
+            "max": 279,
+            "spreadPct": 12.1
+          },
+          "segments": {
+            "startupBeforeOpenMs": {
+              "median": 107,
+              "min": 99,
+              "max": 108
+            },
+            "openExportPageMs": {
+              "median": 680,
+              "min": 625,
+              "max": 1040
+            },
+            "stepMs": {
+              "median": 2791,
+              "min": 2695,
+              "max": 3013
+            },
+            "snapshotMs": {
+              "median": 25337,
+              "min": 24828,
+              "max": 27941
+            },
+            "mediaMs": {
+              "median": 4660,
+              "min": 4637,
+              "max": 5003
+            },
+            "rasterMs": {
+              "median": 12211,
+              "min": 11688,
+              "max": 12826
+            },
+            "getImageDataMs": {
+              "median": 10704,
+              "min": 9937,
+              "max": 11619
+            },
+            "toYuvMs": {
+              "median": 5110,
+              "min": 4891,
+              "max": 5230
+            },
+            "encodeSubmitMs": {
+              "median": 8,
+              "min": 8,
+              "max": 9
+            },
+            "waitEncodeQueueMs": {
+              "median": 5,
+              "min": 5,
+              "max": 7
+            },
+            "flushMs": {
+              "median": 3,
+              "min": 3,
+              "max": 3
+            },
+            "muxMs": {
+              "median": 3,
+              "min": 3,
+              "max": 4
+            },
+            "otherMs": {
+              "median": 134,
+              "min": 124,
+              "max": 182
+            }
+          },
+          "videoBytes": {
+            "median": 3304665,
+            "min": 3304665,
+            "max": 3304665,
+            "spreadPct": 0
+          },
+          "bitrateKbps": {
+            "median": 3305,
+            "min": 3305,
+            "max": 3305,
+            "spreadPct": 0
+          },
+          "cpuBeforePct": {
+            "median": 64,
+            "min": 51,
+            "max": 88,
+            "spreadPct": 58.1
+          },
+          "cpuDuringMeanPct": {
+            "median": 74,
+            "min": 61,
+            "max": 81,
+            "spreadPct": 26.4
+          }
+        }
+      },
+      "warmup": {
+        "desktopNoVideoMs": 18498,
+        "onlineFirst60Ms": 15541
+      },
+      "crossPathDiff": {
+        "framesCompared": 240,
+        "framesA": 240,
+        "framesB": 240,
+        "frameCountEqual": true,
+        "meanAbsDiff": 3.102,
+        "medianMeanAbsDiff": 3.658,
+        "maxChannelDiff": 255,
+        "fracPixelsOver8": 13.151,
+        "fracPixelsOver32": 3.791,
+        "worstFrameFracOver32": 8.841,
+        "meanPsnr": 30.92,
+        "minPsnr": 23.09,
+        "worstFrame": {
+          "i": 194,
+          "meanAbsDiff": 5.591,
+          "maxChannelDiff": 233,
+          "fracOver32": 8.313
+        },
+        "images": [
+          {
+            "frame": 5,
+            "file": "docs/reports/assets/rr-export-measure/demo-f005.png",
+            "bytes": 208655
+          },
+          {
+            "frame": 194,
+            "file": "docs/reports/assets/rr-export-measure/demo-f194.png",
+            "bytes": 218024
+          },
+          {
+            "frame": 60,
+            "file": "docs/reports/assets/rr-export-measure/demo-f060.png",
+            "bytes": 203522
+          }
+        ],
+        "perFrameSample": [
+          {
+            "i": 0,
+            "mean": 3.705,
+            "max": 163,
+            "over32Pct": 6.194,
+            "psnr": 27.7
+          },
+          {
+            "i": 30,
+            "mean": 3.91,
+            "max": 155,
+            "over32Pct": 5.265,
+            "psnr": 28.03
+          },
+          {
+            "i": 60,
+            "mean": 1.667,
+            "max": 120,
+            "over32Pct": 0.958,
+            "psnr": 35.36
+          },
+          {
+            "i": 90,
+            "mean": 1.872,
+            "max": 143,
+            "over32Pct": 1.237,
+            "psnr": 34.27
+          },
+          {
+            "i": 120,
+            "mean": 1.693,
+            "max": 121,
+            "over32Pct": 1.027,
+            "psnr": 35.18
+          },
+          {
+            "i": 150,
+            "mean": 1.758,
+            "max": 128,
+            "over32Pct": 1.079,
+            "psnr": 35
+          },
+          {
+            "i": 180,
+            "mean": 4.823,
+            "max": 189,
+            "over32Pct": 7.909,
+            "psnr": 26.05
+          },
+          {
+            "i": 210,
+            "mean": 4.5,
+            "max": 188,
+            "over32Pct": 6.858,
+            "psnr": 26.71
+          }
+        ]
+      },
+      "split": {
+        "captureOnlyPng": {
+          "wallMs": 21918,
+          "frames": 240,
+          "startupToFirstFrameMs": 1934,
+          "captureMs": 19756,
+          "note": "只截图落 PNG(--no-video)，不编码；截图自身的墙钟，含写盘"
+        },
+        "pngToProres": {
+          "wallMs": 1629,
+          "bytes": 154900981,
+          "note": "读 PNG 序列再编 ProRes 4444(单独跑；主流程里是边截边编)"
+        },
+        "proresDecodeOnly": {
+          "wallMs": 334,
+          "note": "只解 ProRes 到空输出"
+        },
+        "proresDecodeAndX264": {
+          "wallMs": 927,
+          "bytes": 1522932,
+          "note": "解 ProRes 加 libx264(同主流程的编码参数，没有素材层)；减去上一项近似 libx264 本身"
+        },
+        "x264Approx": {
+          "wallMs": 593,
+          "note": "近似值：两次单测相减，两次读盘与解码有重叠，仅作量级"
+        }
+      },
+      "faster": {
+        "faster": "desktop",
+        "ratio": 2.93,
+        "desktopMedianMs": 21111,
+        "onlineMedianMs": 61756
+      }
+    },
+    "heavy": {
+      "spec": {
+        "name": "export-paths-heavy",
+        "note": "带重卡(WebGL、stateful)和画布卡(粒子)的项目",
+        "layers": [
+          "media",
+          "particles",
+          "scene-3d",
+          "terminal-3d",
+          "growth-curve",
+          "rank-bars",
+          "chapter-bar",
+          "punch-pill"
+        ],
+        "width": 1280,
+        "height": 720,
+        "fps": 30,
+        "duration": 8,
+        "frames": 240,
+        "frameRange": "0-239"
+      },
+      "desktop": {
+        "runs": [
+          {
+            "k": 1,
+            "before": {
+              "cpuPct": 31.9,
+              "freeMemGB": 12.4,
+              "procs": {
+                "node": 26,
+                "chrome": 58,
+                "ffmpeg": 0,
+                "python": 2
+              }
+            },
+            "totalMs": 33921.2038,
+            "cpuDuring": {
+              "meanPct": 53.8,
+              "maxPct": 99.9,
+              "samples": 66
+            },
+            "shards": 1,
+            "segments": {
+              "startupToFirstFrameMs": 1550.1742,
+              "captureAndProresMs": 29488.1976,
+              "proresFinishMs": 188.59649999999965,
+              "composeAndX264Ms": 900,
+              "afterComposeMs": 76.24120000000403,
+              "composeSetupMs": 1691.3795000000027
+            },
+            "intermediateBytes": {
+              "overlayMovBytes": 233213591
+            },
+            "video": {
+              "bytes": 3425118,
+              "durationSec": 8,
+              "bitrateKbps": 3425,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\heavy-desktop-1.mp4",
+            "log": [
+              {
+                "t": 280,
+                "line": "Launching Puppeteer (chrome-headless-shell)..."
+              },
+              {
+                "t": 449,
+                "line": "Navigating to http://127.0.0.1:7460/?export=1&timeline=/@export/heavy-d1/project.json..."
+              },
+              {
+                "t": 466,
+                "line": "Waiting for window.__pcReady..."
+              },
+              {
+                "t": 1289,
+                "line": "分片导出:1 段 0-239"
+              },
+              {
+                "t": 1302,
+                "line": "Warm-up 3 frames..."
+              },
+              {
+                "t": 31099,
+                "line": "Export finished in 29.8s (240 frames)."
+              },
+              {
+                "t": 31227,
+                "line": "Running ffmpeg to generate video files..."
+              },
+              {
+                "t": 31227,
+                "line": "Creating overlay.mov..."
+              },
+              {
+                "t": 32918,
+                "line": "Creating preview.mp4: compositing 0 media clip(s) with ffmpeg..."
+              },
+              {
+                "t": 33845,
+                "line": "Composited 240 frames in 0.9s."
+              },
+              {
+                "t": 33909,
+                "line": "No audio clips; preview.mp4 stays silent."
+              },
+              {
+                "t": 33909,
+                "line": "Video synthesis complete."
+              }
+            ],
+            "progressLines": 240,
+            "fileSha256": "96b3671b5c3cbe51c049ccbaad7c000cc14f767488f9a7dfd6e1309f36325d11"
+          },
+          {
+            "k": 2,
+            "before": {
+              "cpuPct": 87.9,
+              "freeMemGB": 4.3,
+              "procs": {
+                "node": 38,
+                "chrome": 155,
+                "ffmpeg": 1,
+                "python": 2
+              }
+            },
+            "totalMs": 43737.8602,
+            "cpuDuring": {
+              "meanPct": 89.6,
+              "maxPct": 100,
+              "samples": 85
+            },
+            "shards": 1,
+            "segments": {
+              "startupToFirstFrameMs": 1890.3388,
+              "captureAndProresMs": 37350.731400000004,
+              "proresFinishMs": 471.0717999999979,
+              "composeAndX264Ms": 1900,
+              "afterComposeMs": 153.6464000000051,
+              "composeSetupMs": 1922.4879
+            },
+            "intermediateBytes": {
+              "overlayMovBytes": 233213591
+            },
+            "video": {
+              "bytes": 3425118,
+              "durationSec": 8,
+              "bitrateKbps": 3425,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\heavy-desktop-2.mp4",
+            "log": [
+              {
+                "t": 286,
+                "line": "Launching Puppeteer (chrome-headless-shell)..."
+              },
+              {
+                "t": 514,
+                "line": "Navigating to http://127.0.0.1:7460/?export=1&timeline=/@export/heavy-d2/project.json..."
+              },
+              {
+                "t": 539,
+                "line": "Waiting for window.__pcReady..."
+              },
+              {
+                "t": 1556,
+                "line": "分片导出:1 段 0-239"
+              },
+              {
+                "t": 1578,
+                "line": "Warm-up 3 frames..."
+              },
+              {
+                "t": 39310,
+                "line": "Export finished in 37.7s (240 frames)."
+              },
+              {
+                "t": 39712,
+                "line": "Running ffmpeg to generate video files..."
+              },
+              {
+                "t": 39712,
+                "line": "Creating overlay.mov..."
+              },
+              {
+                "t": 41635,
+                "line": "Creating preview.mp4: compositing 0 media clip(s) with ffmpeg..."
+              },
+              {
+                "t": 43584,
+                "line": "Composited 240 frames in 1.9s."
+              },
+              {
+                "t": 43691,
+                "line": "No audio clips; preview.mp4 stays silent."
+              },
+              {
+                "t": 43691,
+                "line": "Video synthesis complete."
+              }
+            ],
+            "progressLines": 240,
+            "fileSha256": "96b3671b5c3cbe51c049ccbaad7c000cc14f767488f9a7dfd6e1309f36325d11"
+          },
+          {
+            "k": 3,
+            "before": {
+              "cpuPct": 89.5,
+              "freeMemGB": 8.1,
+              "procs": {
+                "node": 39,
+                "chrome": 134,
+                "ffmpeg": 0,
+                "python": 2
+              }
+            },
+            "totalMs": 49340.3416,
+            "cpuDuring": {
+              "meanPct": 97.5,
+              "maxPct": 100,
+              "samples": 96
+            },
+            "shards": 1,
+            "segments": {
+              "startupToFirstFrameMs": 1834.457,
+              "captureAndProresMs": 43676.1169,
+              "proresFinishMs": 372.34909999999945,
+              "composeAndX264Ms": 1300,
+              "afterComposeMs": 100.83039999999892,
+              "composeSetupMs": 2075.2632999999987
+            },
+            "intermediateBytes": {
+              "overlayMovBytes": 233213591
+            },
+            "video": {
+              "bytes": 3425118,
+              "durationSec": 8,
+              "bitrateKbps": 3425,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\heavy-desktop-3.mp4",
+            "log": [
+              {
+                "t": 274,
+                "line": "Launching Puppeteer (chrome-headless-shell)..."
+              },
+              {
+                "t": 469,
+                "line": "Navigating to http://127.0.0.1:7460/?export=1&timeline=/@export/heavy-d3/project.json..."
+              },
+              {
+                "t": 503,
+                "line": "Waiting for window.__pcReady..."
+              },
+              {
+                "t": 1480,
+                "line": "分片导出:1 段 0-239"
+              },
+              {
+                "t": 1522,
+                "line": "Warm-up 3 frames..."
+              },
+              {
+                "t": 45586,
+                "line": "Export finished in 44.1s (240 frames)."
+              },
+              {
+                "t": 45883,
+                "line": "Running ffmpeg to generate video files..."
+              },
+              {
+                "t": 45883,
+                "line": "Creating overlay.mov..."
+              },
+              {
+                "t": 47958,
+                "line": "Creating preview.mp4: compositing 0 media clip(s) with ffmpeg..."
+              },
+              {
+                "t": 49240,
+                "line": "Composited 240 frames in 1.3s."
+              },
+              {
+                "t": 49315,
+                "line": "No audio clips; preview.mp4 stays silent."
+              },
+              {
+                "t": 49315,
+                "line": "Video synthesis complete."
+              }
+            ],
+            "progressLines": 240,
+            "fileSha256": "96b3671b5c3cbe51c049ccbaad7c000cc14f767488f9a7dfd6e1309f36325d11"
+          }
+        ],
+        "repeatability": [
+          {
+            "run": 2,
+            "vsRun": 1,
+            "frames": 240,
+            "frameCountEqual": true,
+            "identicalFrames": 240,
+            "differentFrames": 0,
+            "firstDifferentFrame": null,
+            "fileSha256Equal": true
+          },
+          {
+            "run": 3,
+            "vsRun": 1,
+            "frames": 240,
+            "frameCountEqual": true,
+            "identicalFrames": 240,
+            "differentFrames": 0,
+            "firstDifferentFrame": null,
+            "fileSha256Equal": true
+          }
+        ],
+        "summary": {
+          "runs": 3,
+          "totalMs": {
+            "median": 43738,
+            "min": 33921,
+            "max": 49340,
+            "spreadPct": 35.3
+          },
+          "msPerFrame": {
+            "median": 182,
+            "min": 141,
+            "max": 206,
+            "spreadPct": 35.3
+          },
+          "segments": {
+            "startupToFirstFrameMs": {
+              "median": 1834,
+              "min": 1550,
+              "max": 1890
+            },
+            "captureAndProresMs": {
+              "median": 37351,
+              "min": 29488,
+              "max": 43676
+            },
+            "proresFinishMs": {
+              "median": 372,
+              "min": 189,
+              "max": 471
+            },
+            "composeAndX264Ms": {
+              "median": 1300,
+              "min": 900,
+              "max": 1900
+            },
+            "afterComposeMs": {
+              "median": 101,
+              "min": 76,
+              "max": 154
+            },
+            "composeSetupMs": {
+              "median": 1922,
+              "min": 1691,
+              "max": 2075
+            }
+          },
+          "videoBytes": {
+            "median": 3425118,
+            "min": 3425118,
+            "max": 3425118,
+            "spreadPct": 0
+          },
+          "bitrateKbps": {
+            "median": 3425,
+            "min": 3425,
+            "max": 3425,
+            "spreadPct": 0
+          },
+          "cpuBeforePct": {
+            "median": 88,
+            "min": 32,
+            "max": 90,
+            "spreadPct": 65.5
+          },
+          "cpuDuringMeanPct": {
+            "median": 90,
+            "min": 54,
+            "max": 98,
+            "spreadPct": 48.8
+          },
+          "shards": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      "online": {
+        "runs": [
+          {
+            "k": 1,
+            "before": {
+              "cpuPct": 57.3,
+              "freeMemGB": 10.2,
+              "procs": {
+                "node": 28,
+                "chrome": 74,
+                "ffmpeg": 0,
+                "python": 2
+              }
+            },
+            "totalMs": 150126.69999999925,
+            "evalWallMs": 150312.0118,
+            "cpuDuring": {
+              "meanPct": 94.8,
+              "maxPct": 100,
+              "samples": 295
+            },
+            "segments": {
+              "startupBeforeOpenMs": 120.80000000074506,
+              "openExportPageMs": 914.3000000007451,
+              "stepMs": 8849.700000032783,
+              "snapshotMs": 50653.29999997839,
+              "mediaMs": 15788.299999985844,
+              "rasterMs": 39226.39999999106,
+              "getImageDataMs": 28401.59999997914,
+              "toYuvMs": 6037.600000012666,
+              "encodeSubmitMs": 9.800000000745058,
+              "waitEncodeQueueMs": 7.500000026077032,
+              "flushMs": 4.600000001490116,
+              "muxMs": 3.300000000745058,
+              "otherMs": 109.49999998882413
+            },
+            "frameStats": {
+              "frames": 240,
+              "heavyReplaced": 0,
+              "mediaFrames": 240,
+              "manualTicks": 754,
+              "rafFallbacks": 0
+            },
+            "video": {
+              "bytes": 2718532,
+              "durationSec": 8,
+              "bitrateKbps": 2719,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\heavy-online-1.mp4",
+            "videoCodec": "avc1.640028",
+            "chunks": 240,
+            "fileSha256": "77b8f7d1ea4469d044bffff133baab8c9528fa142a84f95df084ace6e874d7d1"
+          },
+          {
+            "k": 2,
+            "before": {
+              "cpuPct": 100,
+              "freeMemGB": 1.4,
+              "procs": {
+                "node": 66,
+                "chrome": 151,
+                "ffmpeg": 1,
+                "python": 3
+              }
+            },
+            "totalMs": 151264.8999999985,
+            "evalWallMs": 151441.3592,
+            "cpuDuring": {
+              "meanPct": 93.8,
+              "maxPct": 100,
+              "samples": 297
+            },
+            "segments": {
+              "startupBeforeOpenMs": 178.30000000074506,
+              "openExportPageMs": 1505.199999999255,
+              "stepMs": 10632.599999982864,
+              "snapshotMs": 49856.79999998212,
+              "mediaMs": 15691.50000000745,
+              "rasterMs": 38813.899999987334,
+              "getImageDataMs": 28350.399999976158,
+              "toYuvMs": 6116.900000024587,
+              "encodeSubmitMs": 13.400000028312206,
+              "waitEncodeQueueMs": 7.200000014156103,
+              "flushMs": 3.699999999254942,
+              "muxMs": 3.700000010430813,
+              "otherMs": 91.2999999858439
+            },
+            "frameStats": {
+              "frames": 240,
+              "heavyReplaced": 0,
+              "mediaFrames": 240,
+              "manualTicks": 754,
+              "rafFallbacks": 0
+            },
+            "video": {
+              "bytes": 2716144,
+              "durationSec": 8,
+              "bitrateKbps": 2716,
+              "codec": "h264",
+              "profile": "High",
+              "pixFmt": "yuv420p",
+              "width": 1280,
+              "height": 720,
+              "frames": 240,
+              "fps": "30/1",
+              "color": {
+                "range": null,
+                "space": null,
+                "primaries": null,
+                "transfer": null
+              },
+              "audioStreams": 0
+            },
+            "file": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\rr-export-measure\\out\\final1\\heavy-online-2.mp4",
+            "videoCodec": "avc1.640028",
+            "chunks": 240,
+            "fileSha256": "edbb195198cdec3825bd1211c190684ce5ff772023c0bb6c55dd7c676066bb74"
+          }
+        ],
+        "repeatability": [
+          {
+            "run": 2,
+            "vsRun": 1,
+            "frames": 240,
+            "frameCountEqual": true,
+            "identicalFrames": 39,
+            "differentFrames": 201,
+            "firstDifferentFrame": 36,
+            "fileSha256Equal": false
+          }
+        ],
+        "summary": {
+          "runs": 2,
+          "totalMs": {
+            "median": 150696,
+            "min": 150127,
+            "max": 151265,
+            "spreadPct": 0.8
+          },
+          "msPerFrame": {
+            "median": 628,
+            "min": 626,
+            "max": 630,
+            "spreadPct": 0.8
+          },
+          "segments": {
+            "startupBeforeOpenMs": {
+              "median": 150,
+              "min": 121,
+              "max": 178
+            },
+            "openExportPageMs": {
+              "median": 1210,
+              "min": 914,
+              "max": 1505
+            },
+            "stepMs": {
+              "median": 9741,
+              "min": 8850,
+              "max": 10633
+            },
+            "snapshotMs": {
+              "median": 50255,
+              "min": 49857,
+              "max": 50653
+            },
+            "mediaMs": {
+              "median": 15740,
+              "min": 15692,
+              "max": 15788
+            },
+            "rasterMs": {
+              "median": 39020,
+              "min": 38814,
+              "max": 39226
+            },
+            "getImageDataMs": {
+              "median": 28376,
+              "min": 28350,
+              "max": 28402
+            },
+            "toYuvMs": {
+              "median": 6077,
+              "min": 6038,
+              "max": 6117
+            },
+            "encodeSubmitMs": {
+              "median": 12,
+              "min": 10,
+              "max": 13
+            },
+            "waitEncodeQueueMs": {
+              "median": 7,
+              "min": 7,
+              "max": 8
+            },
+            "flushMs": {
+              "median": 4,
+              "min": 4,
+              "max": 5
+            },
+            "muxMs": {
+              "median": 4,
+              "min": 3,
+              "max": 4
+            },
+            "otherMs": {
+              "median": 100,
+              "min": 91,
+              "max": 109
+            }
+          },
+          "videoBytes": {
+            "median": 2717338,
+            "min": 2716144,
+            "max": 2718532,
+            "spreadPct": 0.1
+          },
+          "bitrateKbps": {
+            "median": 2718,
+            "min": 2716,
+            "max": 2719,
+            "spreadPct": 0.1
+          },
+          "cpuBeforePct": {
+            "median": 79,
+            "min": 57,
+            "max": 100,
+            "spreadPct": 54.3
+          },
+          "cpuDuringMeanPct": {
+            "median": 94,
+            "min": 94,
+            "max": 95,
+            "spreadPct": 1.1
+          }
+        }
+      },
+      "warmup": {
+        "desktopFailures": 1,
+        "desktopNoVideoMs": 36430,
+        "onlineFirst60Ms": 26464
+      },
+      "crossPathDiff": {
+        "framesCompared": 240,
+        "framesA": 240,
+        "framesB": 240,
+        "frameCountEqual": true,
+        "meanAbsDiff": 3.827,
+        "medianMeanAbsDiff": 3.537,
+        "maxChannelDiff": 234,
+        "fracPixelsOver8": 20.531,
+        "fracPixelsOver32": 2.679,
+        "worstFrameFracOver32": 6.846,
+        "meanPsnr": 31.12,
+        "minPsnr": 26.42,
+        "worstFrame": {
+          "i": 24,
+          "meanAbsDiff": 7.077,
+          "maxChannelDiff": 167,
+          "fracOver32": 6.846
+        },
+        "images": [
+          {
+            "frame": 184,
+            "file": "docs/reports/assets/rr-export-measure/heavy-f184.png",
+            "bytes": 308963
+          },
+          {
+            "frame": 24,
+            "file": "docs/reports/assets/rr-export-measure/heavy-f024.png",
+            "bytes": 427914
+          },
+          {
+            "frame": 60,
+            "file": "docs/reports/assets/rr-export-measure/heavy-f060.png",
+            "bytes": 251769
+          }
+        ],
+        "perFrameSample": [
+          {
+            "i": 0,
+            "mean": 4.911,
+            "max": 153,
+            "over32Pct": 4.836,
+            "psnr": 28.12
+          },
+          {
+            "i": 30,
+            "mean": 5.501,
+            "max": 160,
+            "over32Pct": 4.519,
+            "psnr": 27.96
+          },
+          {
+            "i": 60,
+            "mean": 2.481,
+            "max": 117,
+            "over32Pct": 0.99,
+            "psnr": 34.2
+          },
+          {
+            "i": 90,
+            "mean": 2.146,
+            "max": 146,
+            "over32Pct": 1.302,
+            "psnr": 33.8
+          },
+          {
+            "i": 120,
+            "mean": 2.311,
+            "max": 117,
+            "over32Pct": 1.225,
+            "psnr": 33.86
+          },
+          {
+            "i": 150,
+            "mean": 2.497,
+            "max": 129,
+            "over32Pct": 1.35,
+            "psnr": 33.49
+          },
+          {
+            "i": 180,
+            "mean": 3.59,
+            "max": 159,
+            "over32Pct": 2.964,
+            "psnr": 30.13
+          },
+          {
+            "i": 210,
+            "mean": 4.396,
+            "max": 141,
+            "over32Pct": 3.328,
+            "psnr": 29.25
+          }
+        ]
+      },
+      "split": {
+        "captureOnlyPng": {
+          "wallMs": 40987,
+          "frames": 240,
+          "startupToFirstFrameMs": 1952,
+          "captureMs": 36113,
+          "note": "只截图落 PNG(--no-video)，不编码；截图自身的墙钟，含写盘"
+        },
+        "pngToProres": {
+          "wallMs": 1797,
+          "bytes": 233213591,
+          "note": "读 PNG 序列再编 ProRes 4444(单独跑；主流程里是边截边编)"
+        },
+        "proresDecodeOnly": {
+          "wallMs": 460,
+          "note": "只解 ProRes 到空输出"
+        },
+        "proresDecodeAndX264": {
+          "wallMs": 1189,
+          "bytes": 3324751,
+          "note": "解 ProRes 加 libx264(同主流程的编码参数，没有素材层)；减去上一项近似 libx264 本身"
+        },
+        "x264Approx": {
+          "wallMs": 729,
+          "note": "近似值：两次单测相减，两次读盘与解码有重叠，仅作量级"
+        }
+      },
+      "faster": {
+        "faster": "desktop",
+        "ratio": 3.45,
+        "desktopMedianMs": 43738,
+        "onlineMedianMs": 150696
+      }
+    }
+  },
+  "failures": [
+    "heavy online 第 3 遍失败(试了 3 次)：在线导出失败：Video frame was not presented (target=2.2 current=2.202 readyState=4 seeking=false rejectedPresentations=[0.000@rs1S]): /@media/392128b6b4d1ba0f32751a1fb23df75e9f08cfc3981b1a19a457c5ff4ebb7e95"
+  ],
+  "machine": {
+    "cpu": "Intel(R) Core(TM) i7-14700KF",
+    "logicalCores": 20,
+    "ramGB": 31.8,
+    "gpu": [
+      "NVIDIA GeForce RTX 3080 (驱动 32.0.15.9636)"
+    ],
+    "os": "Windows_NT 10.0.26200 x64",
+    "node": "v24.19.0",
+    "ffmpeg": "ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+    "onlineChrome": "Chrome/152.0.7977.75",
+    "desktopChromeHeadlessShell": "152.0.7977.75",
+    "puppeteer": "25.10.0",
+    "onlineBrowserEncoder": {
+      "secureContext": true,
+      "preferHardware": true,
+      "preferSoftware": true,
+      "noPreference": true,
+      "webglRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 (0x00002206) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "config": "avc1.640028 1280x720@30 约 2.76 Mbps，latencyMode quality(src/export/capability.ts 的 videoConfigOf，不指定硬件偏好)"
+    }
+  },
+  "finishedAt": "2026-10-12T15:10:26.440Z"
+}
