@@ -25,7 +25,9 @@
  *      画布卡(`input.canvasHeavy`)也不收:浏览器逐帧顺推生成快照,画布卡与桌面 4 帧一批的结果不等价(M7 探针 P2,主会话裁定)
  *      用户卡、图卡的任务(块 N)另要 `requires.cardSources` 非空:用户卡一定有代码身份,空了说明切分方没给身份可对
  *      纯浏览器的流任务同理,只收切分方按浏览器的形状出的单卡流:`input.stream` 是 `{ kind: 'card', plane: 'local' }`、带 `input.bake`、
- *      独立卡、不是画布卡(组流要连摆放一起画,浏览器这条路画不了);不只靠规则 2 挡
+ *      独立卡、不是画布卡(组流要连摆放一起画,浏览器这条路画不了);不只靠规则 2 挡。
+ *      依赖下层的流(`requires.belowDependent: true` 的流任务,`docs/plan/prerender-products-contract.md` 第 5.1 节)要整场景的
+ *      下层和素材,纯浏览器一律不收(`below-dependent`);桌面应用和渲染主机照规则 1～5 收
  *   8  仅供测试(M7 契约 D15):节点描述带 `planOnly: true` 时只认领 `plan`、不认领细任务 —— 验收时切分方只切分,
  *      不和纯浏览器抢同一批卡。只在测试环境变量 `PROMPTCUT_TEST_PLAN_ONLY=1` 时由调用方设(`testPlanOnly`),生产不设
  *
@@ -134,6 +136,8 @@ export function checkClaimable(task, node) {
 
   // 7(续):纯浏览器的流任务只收浏览器形状的单卡流(切分方在浏览器那一份里写 `input.stream`、`input.bake`、`input.compositing`)
   if (browser && task?.kind === 'stream') {
+    // 依赖下层的流:要整场景的下层和素材,浏览器节点不产(不看它带没带浏览器形状的输入)
+    if (requires.belowDependent === true) return reject(7, 'below-dependent');
     if (task.input?.stream?.kind !== 'card' || task.input.stream.plane !== 'local') return reject(7, 'not-card-stream');
     if (!task.input.bake || typeof task.input.bake !== 'object') return reject(7, 'no-bake-input');
     if (task.input.compositing !== 'independent') return reject(7, 'not-independent');

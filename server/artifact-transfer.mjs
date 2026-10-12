@@ -261,8 +261,12 @@ export const streamCandidateKey = contentKey => (typeof contentKey === 'string' 
  * (内容库 `render-manifest`,键 `<结果键>:<起>-<止>`,分段号从 `firstSegment` 起每 `segmentsPerTask` 段一份,最后一份到 `lastSegment`,
  * 与 `render-node/split.mjs`、推送队列同一种切法)。每行:
  *
- *   `{ topClipId, clipIds, kind: 'card' | 'group', plane: 'local' | 'stage', contentKey,
+ *   `{ topClipId, clipIds, kind: 'card' | 'group' | 'below', plane: 'local' | 'stage', contentKey,
  *      candidates: [{ envFingerprint, resultKey }], firstSegment, lastSegment, segmentsPerTask, inputSig? }`
+ *
+ *   - 依赖下层的流(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.2 节):`clipIds` 只有目标卡一张,`plane` 是 `stage`;
+ *     算进键里的下层不列在这一行里 —— 页面按当前项目自己找下层算 `inputSig`(下层多了一层也认得出)。`planStreams` 的开关关着时
+ *     没有这种流,这张表与原来逐字相同;读这张表的页面遇到不认识的 `kind` 跳过那一行;
  *
  *   - `streams` 是 `frame-stream.mjs` 的 `planStreams` 的结果(调用方算好给进来:要预算、代码版本、环境指纹,这里不引它)。
  *     两个片段共用一条流(同一张卡、同参数同入点)时 `planStreams` 回两项,这里也是两行,`topClipId` 不同、键相同;
@@ -283,8 +287,10 @@ export function layerStreamsOf(entry, { streams = null, fingerprint = null, cand
     const clipIds = Array.isArray(spec?.clipIds) ? spec.clipIds.filter(id => typeof id === 'string' && id) : [];
     if (!contentKey || !clipIds.length || clipIds.length !== spec.clipIds.length) continue;
     const topClipId = str(spec.topClipId) ?? clipIds[clipIds.length - 1];
-    const kind = spec.kind === 'group' ? 'group' : spec.kind === 'card' ? 'card' : null;
+    const kind = spec.kind === 'group' ? 'group' : spec.kind === 'card' ? 'card' : spec.kind === 'below' ? 'below' : null;
     const plane = spec.plane === 'stage' ? 'stage' : spec.plane === 'local' ? 'local' : null;
+    // 依赖下层的流只有目标卡一个成员、按舞台坐标;形状不对的不列
+    if (kind === 'below' && (clipIds.length !== 1 || plane !== 'stage')) continue;
     const firstSegment = Number(spec.firstSegment), lastSegment = Number(spec.lastSegment);
     if (!kind || !plane || !Number.isInteger(firstSegment) || !Number.isInteger(lastSegment) || firstSegment < 0 || lastSegment < firstSegment) continue;
     // `ownCandidate: false`:切分给别的指纹出过键、本机自己不产的流(`FramePipeline.issuedStreamSpecs`),候选只列切分实际出键的指纹

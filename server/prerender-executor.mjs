@@ -338,6 +338,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   /**
    * M6c X1:把流任务对回这一版的流。流按内容键认(`input.contentKey`,即 `planStreams` 的 `contentKey`);
    * 结果键必须是本机指纹乘出来的(节点侧过滤已经按指纹挡过,这里再核一次);分段范围在这条流之内。
+   * 依赖下层的流(`requires.belowDependent: true`,`docs/plan/prerender-products-contract.md` 第 5 节)同样按内容键认:
+   * 它的内容键里带着目标卡和每个下层,下层改了键就换,对不上(项目往前走了)按作废处理;任务说的种类和这一版的流对不上不产。
    */
   function matchStream(task, specs, { drifted = false, entry = null } = {}) {
     const input = task.input ?? {};
@@ -352,7 +354,9 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
     if (!spec && drifted) throw superseded('新版本里没有这条流');
     const why = [];
-    if (!spec) why.push(`这一版没有内容键为 ${String(input.contentKey).slice(0, 16)}… 的流`);
+    const wantsBelow = task.requires?.belowDependent === true;
+    if (!spec) why.push(`这一版没有内容键为 ${String(input.contentKey).slice(0, 16)}… 的${wantsBelow ? '依赖下层的流(本机没有打开这种流,或目标卡、下层和切分时不同)' : '流'}`);
+    else if (wantsBelow !== (spec.kind === 'below')) why.push(`流的种类对不上(任务${wantsBelow ? '要' : '不要'}整场景的下层,这一版的流是 ${spec.kind})`);
     else {
       const own = pipeline.envFingerprint;
       const from = task.range?.from, to = task.range?.to;
