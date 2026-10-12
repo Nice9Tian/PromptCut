@@ -4,10 +4,17 @@
  * 跑:node --test server/test/layer-map-streams.test.mjs
  */
 import { test } from 'node:test';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { layerMapOf, layerStreamsOf, splitCandidatesOf, splitStreamCandidatesOf, streamCandidateKey, STREAM_CANDIDATE_PREFIX, LAYER_MAP_VERSION } from '../artifact-transfer.mjs';
-import { resultKeyOf } from '../render-node/fingerprint.mjs';
-import { planStreams } from '../frame-stream.mjs';
+import { resultKeyOf, describeEnvironment } from '../render-node/fingerprint.mjs';
+import { planStreams, queueStreamOf, STREAM_CODE_VERSION } from '../frame-stream.mjs';
+import { FramePipeline } from '../frame-pipeline.mjs';
+import { splitPlan } from '../render-node/split.mjs';
+import { createPrerenderExecutor } from '../prerender-executor.mjs';
+import { clipsPlan } from './m7-kit.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { streamInputSig } from '../../src/render/streamInputSig.mjs';
 
@@ -154,4 +161,173 @@ test('执行器 afterSplit:流的候选记在同一份记录里(键带 stream: �
   recorded.length = 0;
   await exec.afterSplit(planTask, { tasks: [snap, str(OWN), str(BROWSER)] });
   assert.deepEqual(recorded, [[['ck-card', [OWN]]], [['stream:sk-1', [OWN, BROWSER]]]]);
+});
+
+/* ------------------------------------------------------------------ 清单计划给浏览器出的流进层表(集成那一环) */
+
+test('layerStreamsOf:标了 ownCandidate: false 的流只列切分实际出键的指纹,不补自己的;没人被派过就不列', () => {
+  const entry = entryOf();
+  const [spec] = specsOf(entry);
+  const issued = { ...spec, ownCandidate: false };
+  const [row] = layerStreamsOf(entry, { streams: [issued], fingerprint: OWN, candidatesOf: () => [BROWSER] });
+  assert.deepEqual(row.candidates, [{ envFingerprint: BROWSER, resultKey: resultKeyOf(spec.contentKey, BROWSER) }], '只有浏览器那一个候选');
+  assert.equal(row.contentKey, spec.contentKey);
+  assert.equal(row.inputSig, streamInputSig(entry.project, { clipIds: spec.clipIds, kind: 'card' }));
+  assert.deepEqual(layerStreamsOf(entry, { streams: [issued], fingerprint: OWN, candidatesOf: () => [] }), [], '记录里没有:不列');
+  assert.deepEqual(layerStreamsOf(entry, { streams: [issued], fingerprint: OWN }), [], '没给 candidatesOf:不列');
+  // 切分连自己的指纹也出过键(以后桌面替清单计划产流):照记录列
+  assert.deepEqual(layerStreamsOf(entry, { streams: [issued], fingerprint: OWN, candidatesOf: () => [BROWSER, OWN] })[0].candidates.map((c) => c.envFingerprint), [BROWSER, OWN]);
+});
+
+/**
+ * 管线一级:真的 `FramePipeline`(不开 Chrome)、真的切分(`splitPlan`)、真的执行器 `afterSplit`,层表经假的推送队列收下。
+ * `streams`:'none' 没有生产者(编辑器进程、关着交互的渲染主机);'off' 有生产者但 `PROMPTCUT_STREAMS=0`;'on' 流开着。
+ */
+const PIPE_ENV = describeEnvironment({ platform: 'win32', renderer: 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)',
+  vendor: 'Google Inc. (Google)', chromeVersion: 'HeadlessChrome/138.0.7204.49' });
+const PIPE_FP = PIPE_ENV.fingerprint;
+const CAPTURE = 'cap-1';
+const STREAM_CODE = `${STREAM_CODE_VERSION}:${CAPTURE}`;
+
+async function withPipeline(streams, fn, { decoders = null } = {}) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-layer-streams-'));
+  const saved = { streams: process.env.PROMPTCUT_STREAMS, decoders: process.env.PROMPTCUT_STREAM_DECODERS };
+  const put = (name, value) => { if (value === undefined || value === null) delete process.env[name]; else process.env[name] = value; };
+  put('PROMPTCUT_STREAMS', streams === 'off' ? '0' : null);
+  put('PROMPTCUT_STREAM_DECODERS', decoders);
+  const maps = [];
+  const made = [];
+  const make = (options = {}) => {
+    const p = new FramePipeline({ root, origin: () => 'http://127.0.0.1:1', environment: PIPE_ENV, dataRoot: root, interactive: streams !== 'none', captureCode: () => CAPTURE,
+      pushQueue: { putLayerMap: (projectId, body) => { maps.push({ projectId, body }); return true; } }, ...options });
+    made.push(p);
+    return p;
+  };
+  try {
+    const pipeline = make();
+    if (streams === 'none') assert.equal(pipeline.streamProducer(), null, '没有生产者');
+    else assert.equal(pipeline.streamProducer().enabled, streams === 'on');
+    return await fn({ pipeline, maps, make });
+  } finally {
+    put('PROMPTCUT_STREAMS', saved.streams);
+    put('PROMPTCUT_STREAM_DECODERS', saved.decoders);
+    await Promise.allSettled(made.map((p) => p.close()));
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+}
+/** 浏览器做得了的两张卡(共享档、独立卡、内置卡);`base` 是本机判重的片段,`listed` 是清单计划补进预渲染集合的 */
+function pipelineEntry({ base = [], listed = [] } = {}) {
+  const ctl = (clipId, firstFrame, count, start, end) => ({ ...control(clipId, firstFrame, count), cardId: `card-${clipId}`, snapshotKey: resultKeyOf(`ck-${clipId}`, PIPE_FP), envFingerprint: PIPE_FP,
+    start, end, compositing: 'independent' });
+  return { key: 'entry-1', project: project(), cardPlan: [ctl('clip-a', 0, 60, 0, 2), ctl('clip-b', 30, 120, 1, 5)],
+    basePrerenderSet: new Set(base), prerenderSet: new Set([...base, ...listed]) };
+}
+/** 照清单计划那条路切一次(`listStreamSpecs` → `queueStreamOf` → `browserOnly`,同 `local-node.mjs` 的 `listPlanOverrides`),回细任务 */
+function splitListPlan(pipeline, entry, clips) {
+  const streams = pipeline.listStreamSpecs(entry, new Set(clips)).map(queueStreamOf).map((s) => ({ ...s, browserOnly: true }));
+  return splitPlan({ planTask: clipsPlan({ clips }), entryKey: entry.key, cardPlan: entry.cardPlan, prerenderSet: new Set(clips), streams, envFingerprint: PIPE_FP, codeVersion: 'cv-1',
+    weightOf: () => ({ class: 'medium', estMs: null }), browser: { nodeId: 'n-br', envFingerprint: BROWSER } });
+}
+/** 真的执行器 `afterSplit`(记候选、写层表)。没开 Chrome:`planForQueue` 由替身回这一版的 entry,其余方法都是真管线的 */
+async function afterSplit(pipeline, entry, tasks) {
+  const exec = createPrerenderExecutor({
+    pipeline: { recordSplitCandidates: (m) => pipeline.recordSplitCandidates(m), publishLayerMap: (e) => pipeline.publishLayerMap(e), planForQueue: async () => ({ entry, context: { cardPlan: [] }, streamSpecs: [] }) },
+    projects: { get: async () => entry.project },
+  });
+  await exec.afterSplit(clipsPlan({ clips: [...entry.prerenderSet] }), { tasks });
+}
+
+for (const mode of ['none', 'off']) {
+  test(`切分方自己不产流(${mode === 'none' ? '没有生产者' : '关着流开关'}):清单计划给浏览器出的单卡流照样进层表,候选是浏览器指纹`, async () => {
+    await withPipeline(mode, async ({ pipeline, maps, make }) => {
+      const entry = pipelineEntry({ listed: ['clip-a', 'clip-b'] });
+      // 切分之前(`addBackfill` 那一次写层表):没有人被派过流,层表不带 streams,与不认识流的时候逐字相同
+      pipeline.publishLayerMap(entry);
+      assert.equal(maps.length, 1);
+      const plain = layerMapOf(entry, { picked: (id) => entry.prerenderSet.has(id), fingerprint: PIPE_FP, candidatesOf: () => null, now: maps[0].body.at });
+      assert.deepEqual(maps[0].body, plain, '没有流时层表与以前逐字相同');
+      assert.equal('streams' in maps[0].body, false);
+      assert.deepEqual(pipeline.layerMapStreamOptions(entry), {});
+
+      const tasks = splitListPlan(pipeline, entry, ['clip-a', 'clip-b']);
+      const streamTasks = tasks.filter((t) => t.kind === 'stream');
+      assert.equal(streamTasks.length, 2, '两张卡各一个浏览器流任务');
+      assert.ok(streamTasks.every((t) => t.requires.envFingerprint === BROWSER && t.requires.transcode === false), '只有浏览器那一份');
+      await afterSplit(pipeline, entry, tasks);
+      assert.equal(maps.length, 2, '切分完成后写了一次层表');
+      const map = maps[1].body;
+      assert.equal(map.v, LAYER_MAP_VERSION);
+      assert.deepEqual(map.layers.map((l) => l.clipId), ['clip-a', 'clip-b']);
+      assert.equal(map.streams.length, 2);
+      for (const task of streamTasks) {
+        const row = map.streams.find((r) => r.topClipId === task.input.clipId);
+        assert.ok(row, `层表里有 ${task.input.clipId} 的流`);
+        assert.equal(row.kind, 'card');
+        assert.equal(row.plane, 'local');
+        assert.deepEqual(row.clipIds, [task.input.clipId]);
+        assert.equal(row.contentKey, task.input.contentKey, '内容键就是任务里的那一个');
+        assert.deepEqual(row.candidates, [{ envFingerprint: BROWSER, resultKey: task.resultKey }], '候选只有实际出键的浏览器指纹,结果键就是任务的结果键');
+        assert.equal(row.firstSegment, task.range.from);
+        assert.equal(row.lastSegment, task.range.to);
+        assert.equal(row.segmentsPerTask, QUEUE_DEFAULTS.STREAM_SEGMENTS);
+        assert.equal(row.inputSig, streamInputSig(entry.project, { clipIds: [task.input.clipId], kind: 'card' }));
+      }
+      // 进程重启(候选记录落在库根):新管线照样列得出
+      const again = make({ pushQueue: null });
+      assert.deepEqual(again.layerMapStreamOptions(entry).streams.map((s) => s.topClipId).sort(), ['clip-a', 'clip-b']);
+      // 这张卡改了内容(内容键换了):旧记录对不上,不再列
+      const edited = { ...entry, cardPlan: entry.cardPlan.map((c) => (c.clipId === 'clip-a' ? { ...c, contentKey: 'ck-clip-a-v2' } : c)) };
+      assert.deepEqual(pipeline.layerMapStreamOptions(edited).streams.map((s) => s.topClipId), ['clip-b']);
+    });
+  });
+}
+
+test('切分方流开着:本机没判重的卡(清单计划补进来的)照样列,只有浏览器候选;本机判重的那张照旧(浏览器在前、自己在后)', async () => {
+  await withPipeline('on', async ({ pipeline, maps }) => {
+    const entry = pipelineEntry({ base: ['clip-b'], listed: ['clip-a'] });
+    const before = pipeline.layerMapStreamOptions(entry);
+    assert.deepEqual(before.streams.map((s) => s.topClipId), ['clip-b'], '补这一环之前就有的:只列本机判重的卡');
+    await afterSplit(pipeline, entry, splitListPlan(pipeline, entry, ['clip-a', 'clip-b']));
+    const map = maps[maps.length - 1].body;
+    assert.deepEqual(map.streams.map((r) => r.topClipId), ['clip-b', 'clip-a'], '本机自己的流排在前面');
+    const a = map.streams.find((r) => r.topClipId === 'clip-a'), b = map.streams.find((r) => r.topClipId === 'clip-b');
+    assert.deepEqual(a.candidates.map((c) => c.envFingerprint), [BROWSER], '本机没判重、不产它:不列自己的指纹');
+    assert.deepEqual(b.candidates.map((c) => c.envFingerprint), [BROWSER, PIPE_FP], '本机判重的:切分实际出键的在前,再补自己的');
+    assert.equal(b.candidates[1].resultKey, before.streams[0].streamKey);
+  });
+});
+
+test('切分方流开着、没有另列的流:层表与只按本机流计划写的逐字相同', async () => {
+  await withPipeline('on', async ({ pipeline, maps }) => {
+    const entry = pipelineEntry({ base: ['clip-a', 'clip-b'] });
+    // 记录里只有快照的候选,和一条不属于这一版的流
+    pipeline.recordSplitCandidates(new Map([['ck-clip-a', [PIPE_FP, BROWSER]], [streamCandidateKey('sk-else'), [BROWSER]]]));
+    pipeline.publishLayerMap(entry);
+    const specs = planStreams(entry, { picked: (id) => entry.basePrerenderSet.has(id), budget: pipeline.streamProducer().budget, codeVersion: STREAM_CODE, envFingerprint: PIPE_FP });
+    assert.equal(specs.length, 2);
+    assert.deepEqual(pipeline.layerMapStreamOptions(entry).streams, specs, '交给层表的就是本机的流计划,没有多出来的项');
+    const expect = layerMapOf(entry, { picked: (id) => entry.prerenderSet.has(id), fingerprint: PIPE_FP, candidatesOf: (c) => pipeline.splitCandidatesFor(c?.contentKey), now: maps[0].body.at, streams: specs });
+    assert.deepEqual(maps[0].body, expect);
+    assert.deepEqual(maps[0].body.streams.map((r) => r.candidates.map((c) => c.envFingerprint)), [[PIPE_FP], [PIPE_FP]]);
+  });
+});
+
+test('另列的流不与本机的流重叠(成员卡已在本机的组流里就不再另列);预渲染集合之外的卡不列', async () => {
+  const recordSingles = (pipeline, entry) => {
+    const singles = planStreams(entry, { budget: Infinity, codeVersion: STREAM_CODE, envFingerprint: PIPE_FP });
+    assert.equal(singles.length, 2);
+    pipeline.recordSplitCandidates(new Map(singles.map((s) => [streamCandidateKey(s.contentKey), [BROWSER]])));
+  };
+  await withPipeline('on', async ({ pipeline }) => {
+    const entry = pipelineEntry({ base: ['clip-a', 'clip-b'] });
+    recordSingles(pipeline, entry);
+    const { streams } = pipeline.layerMapStreamOptions(entry);
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0].kind, 'group', '解码器预算 1:本机并成一条组流,两张成员卡不再另列单卡流');
+  }, { decoders: '1' });
+  await withPipeline('none', async ({ pipeline }) => {
+    const entry = pipelineEntry({ listed: ['clip-a'] });
+    recordSingles(pipeline, entry);
+    assert.deepEqual(pipeline.layerMapStreamOptions(entry).streams.map((s) => s.topClipId), ['clip-a'], 'clip-b 不在预渲染集合里(层表里没有它的快照层):不列');
+  });
 });

@@ -268,7 +268,8 @@ export const streamCandidateKey = contentKey => (typeof contentKey === 'string' 
  *     两个片段共用一条流(同一张卡、同参数同入点)时 `planStreams` 回两项,这里也是两行,`topClipId` 不同、键相同;
  *   - `candidates` 照快照层的做法:`candidatesOf(spec)` 回这条流最近一次切分实际出键的指纹(按发布顺序,`splitStreamCandidatesOf` 收集),
  *     再补上这条流自己的指纹(`spec.envFingerprint`,没有就用 `fingerprint`;没出现过的排在最后)。结果键 = 内容键 × 指纹。
- *     一个候选也凑不出(没有任何指纹)的流不列;
+ *     流标了 `ownCandidate: false`(切分只给别的指纹出过键、本机自己不产,在线页面的清单计划给浏览器出的那一份就是)时不补自己的指纹,
+ *     候选只有切分实际出键的那些。一个候选也凑不出(没有任何指纹)的流不列;
  *   - `inputSig`:这条流的输入签名(`src/render/streamInputSig.mjs`),页面按当前项目算同一个签名,对不上就不播。算不出不写。
  * 形状不对的项跳过,不抛。
  */
@@ -286,7 +287,8 @@ export function layerStreamsOf(entry, { streams = null, fingerprint = null, cand
     const plane = spec.plane === 'stage' ? 'stage' : spec.plane === 'local' ? 'local' : null;
     const firstSegment = Number(spec.firstSegment), lastSegment = Number(spec.lastSegment);
     if (!kind || !plane || !Number.isInteger(firstSegment) || !Number.isInteger(lastSegment) || firstSegment < 0 || lastSegment < firstSegment) continue;
-    const own = str(spec.envFingerprint) ?? str(fingerprint);
+    // `ownCandidate: false`:切分给别的指纹出过键、本机自己不产的流(`FramePipeline.issuedStreamSpecs`),候选只列切分实际出键的指纹
+    const own = spec.ownCandidate === false ? null : str(spec.envFingerprint) ?? str(fingerprint);
     let listed = [];
     if (typeof candidatesOf === 'function') {
       try { listed = candidatesOf(spec) ?? []; } catch { listed = []; }
