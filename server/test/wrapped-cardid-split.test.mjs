@@ -13,6 +13,10 @@
  *   WC-02  改过源码的内置卡(改动层):任务要这张卡的代码身份,挂了也要;不给浏览器节点
  *   WC-03  用户卡:`requires.userCards` 为真、要全部定制卡的代码,挂了也一样
  *   WC-04  普通内置卡:给浏览器节点,`input.cardId` 是这张卡,挂了也一样
+ *   WC-05  强调和滤镜都挂(套两层):照样认得出里面那张
+ *   WC-06  不套一层的片段:补出来的 `cardId` 与 main 的写法相同,切出的任务逐字段相同
+ *   WC-07  `innerCardIds` / `withInnerCards` 的取法:里面不止一张卡、拿不准时
+ *   WC-08  里面不止一张卡、拿不准的控件:不给浏览器节点;要里面每张卡的代码 / 全部定制卡的代码
  *
  * 跑:npm test -- server/test/wrapped-cardid-split.test.mjs
  */
@@ -20,7 +24,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CardFrameCache } from '../card-cache.mjs';
 import { planStreams, queueStreamOf } from '../frame-stream.mjs';
-import { splitPlan } from '../render-node/split.mjs';
+import { splitPlan, withInnerCards, innerCardIds, isUserCardControl, cardIdsOf } from '../render-node/split.mjs';
 import { snapshotTier } from '../snapshot-store.mjs';
 import { projectCardGraph } from '../../src/kernel/cardGraph.mjs';
 import { clipsPlan } from './m7-kit.mjs';
@@ -70,13 +74,17 @@ const weightOf = control => {
   return { class: 'medium', estMs: null };
 };
 
-/** `planForQueue` 给控件补卡片 id 的那一步(改之前的写法:只看输出节点) */
-function queueCardPlan(controls, graph) {
+/** `planForQueue` 给控件补卡片 id 的那一步(同一个函数) */
+const queueCardPlan = (controls, graph) => withInnerCards(controls.filter(queueHandles), graph);
+/** `planForQueue` 的 `isUserCard`(同一个函数) */
+const isUserCardOf = sourceVersions => control => isUserCardControl(control, sourceVersions);
+
+/** main(53e7a9ca)上 `planForQueue` 的写法:只看输出节点。对照用 */
+function mainCardPlan(controls, graph) {
   const cardIdOf = new Map((graph?.nodes ?? []).map(node => [node?.id, node?.cardId ?? null]));
   return controls.filter(queueHandles).map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
 }
-/** `planForQueue` 的 `isUserCard`(改之前的写法) */
-const isUserCardOf = sourceVersions => control => String(sourceVersions[control?.cardId] ?? '').startsWith('user:');
+const mainIsUserCardOf = sourceVersions => control => String(sourceVersions[control?.cardId] ?? '').startsWith('user:');
 
 /** 照 `planForQueue` 拼出切分的输入,切分;`cardSources` 是这一版用到的定制卡的代码身份(`entry.cardSources`) */
 function splitOf(card, { cardSources = {}, sourceVersions = SOURCE_VERSIONS, extra } = {}) {
@@ -154,4 +162,135 @@ test('WC-04 普通内置卡:挂了也给浏览器节点,input.cardId 是这张�
     assert.equal(item.userCards, false);
   }
   for (const clipId of ['clip-bare', ...WRAPPED]) assert.ok(browserTasks(tasks, clipId).some(task => task.kind === 'snapshot'), `${clipId} 的快照给浏览器`);
+});
+
+test('WC-05 强调和滤镜都挂(套两层):照样认得出里面那张', () => {
+  const both = { filter: { id: 'f-warm', params: {} }, emphasis: EMPHASIS };
+  for (const [cardId, cardSources] of [['lottie', {}], ['punch-pill', { 'punch-pill': 'override:abc' }], ['my-card', { 'my-card': 'user:mine-v1' }], ['punch-pill', {}]]) {
+    const project = projectOf({ cardId, params: {} });
+    project.tracks[2].clips[0] = { ...project.tracks[2].clips[0], ...both };
+    const graph = projectCardGraph(project, getCard);
+    const controls = new CardFrameCache({ root: 'unused', project, envFingerprint: OWN }).plan({ graph, sourceVersions: SOURCE_VERSIONS, environment: ENVIRONMENT });
+    const cardPlan = queueCardPlan(controls, graph);
+    const two = cardPlan.find(control => control.clipId === 'clip-filt');
+    assert.equal(two.nodeId, '@clip/clip-filt/emphasis');
+    assert.equal(two.cardId, cardId);
+    assert.deepEqual(two.cardIds, [cardId]);
+    const streams = planStreams({ project, cardPlan: controls }, { envFingerprint: OWN, codeVersion: 'test-code', budget: 8, below: false }).map(queueStreamOf);
+    const tasks = splitPlan({
+      planTask: clipsPlan({ clips: cardPlan.map(control => control.clipId) }), entryKey: 'entry-1', cardPlan, prerenderSet: null, streams,
+      envFingerprint: OWN, codeVersion: 'cv-1', cardSourceVersions: cardSources, weightOf, isUserCard: isUserCardOf(SOURCE_VERSIONS),
+      browser: { nodeId: 'n-br', envFingerprint: BR },
+    });
+    assert.deepEqual(shapeOf(tasks, 'clip-filt'), shapeOf(tasks, 'clip-bare'), `${cardId}:套两层的任务和不挂的逐项相同`);
+  }
+});
+
+test('WC-06 不套一层的片段:cardId 与 main 的写法相同,切出的任务逐字段相同', () => {
+  const cards = ['lottie', 'punch-pill', 'focus-card', 'my-card'];
+  const project = {
+    id: 'p', width: 1920, height: 1080, fps: 30, duration: 6, themeId: 'dark', style: {}, media: [], filters: FILTERS, audioFx: [], pixelMaps: [], cardNodes: [],
+    tracks: cards.map((cardId, n) => ({ id: `tr-${n}`, hidden: false, clips: [{ id: `clip-${cardId}`, start: 0.5 + n, end: 2.5 + n, frame: FRAME, cardId, params: {} }] })),
+  };
+  const graph = projectCardGraph(project, getCard);
+  const controls = new CardFrameCache({ root: 'unused', project, envFingerprint: OWN }).plan({ graph, sourceVersions: SOURCE_VERSIONS, environment: ENVIRONMENT });
+  const before = mainCardPlan(controls, graph), after = queueCardPlan(controls, graph);
+  assert.equal(after.length, cards.length);
+  // 控件只多了 cardIds 一栏(就是它自己那一张),别的逐字段相同
+  assert.deepEqual(after.map(({ cardIds, ...rest }) => rest), before);
+  for (const control of after) assert.deepEqual(control.cardIds, [control.cardId]);
+  const streams = planStreams({ project, cardPlan: controls }, { envFingerprint: OWN, codeVersion: 'test-code', budget: 8, below: false }).map(queueStreamOf);
+  for (const cardSources of [{}, { 'punch-pill': 'override:abc', 'my-card': 'user:mine-v1' }]) {
+    const args = { planTask: clipsPlan({ clips: after.map(control => control.clipId) }), entryKey: 'entry-1', prerenderSet: null, streams,
+      envFingerprint: OWN, codeVersion: 'cv-1', cardSourceVersions: cardSources, weightOf, browser: { nodeId: 'n-br', envFingerprint: BR } };
+    const tasksBefore = splitPlan({ ...args, cardPlan: before, isUserCard: mainIsUserCardOf(SOURCE_VERSIONS) });
+    const tasksAfter = splitPlan({ ...args, cardPlan: after, isUserCard: isUserCardOf(SOURCE_VERSIONS) });
+    assert.ok(tasksBefore.length > 0);
+    assert.deepEqual(tasksAfter, tasksBefore);
+  }
+});
+
+/** 手写的图:外面一层接着两张卡(转场的样子)、一层接着找不到的节点 */
+const HAND_GRAPH = { nodes: [
+  { id: 'a', cardId: 'punch-pill', inputs: {} },
+  { id: 'b', cardId: 'my-card', inputs: {} },
+  { id: 'media', adapter: 'media', inputs: {} },
+  { id: 'wrap-a', adapter: 'emphasis', inputs: { source: { nodeId: 'a' } } },
+  { id: 'wrap-wrap-a', adapter: 'filter', inputs: { source: { nodeId: 'wrap-a' } } },
+  { id: 'wrap-media', adapter: 'emphasis', inputs: { source: { nodeId: 'media' } } },
+  { id: 'mix', adapter: 'transition', inputs: { to: { nodeId: 'b' }, from: { nodeId: 'a' } } },
+  { id: 'wrap-mix', adapter: 'emphasis', inputs: { source: { nodeId: 'mix' } } },
+  { id: 'fx', cardId: 'fx-tint', inputs: { source: { nodeId: 'a' } } },
+  { id: 'same', adapter: 'transition', inputs: { from: { nodeId: 'a' }, to: 'a' } },
+  { id: 'lost', adapter: 'emphasis', inputs: { source: { nodeId: 'gone' } } },
+] };
+
+test('WC-07 innerCardIds / withInnerCards 的取法', () => {
+  const inner = innerCardIds(HAND_GRAPH);
+  assert.deepEqual(inner('a'), { cardIds: ['punch-pill'], unsure: false });
+  assert.deepEqual(inner('wrap-wrap-a'), { cardIds: ['punch-pill'], unsure: false });
+  assert.deepEqual(inner('wrap-media'), { cardIds: [], unsure: false });
+  // 输入按名字排序(from 在 to 前面),与写的先后无关
+  assert.deepEqual(inner('wrap-mix'), { cardIds: ['punch-pill', 'my-card'], unsure: false });
+  assert.deepEqual(inner('fx'), { cardIds: ['fx-tint', 'punch-pill'], unsure: false });
+  assert.deepEqual(inner('same'), { cardIds: ['punch-pill'], unsure: false });
+  assert.deepEqual(inner('lost'), { cardIds: [], unsure: true });
+  assert.deepEqual(inner('nowhere'), { cardIds: [], unsure: true });
+
+  const pick = nodeId => { const [out] = withInnerCards([{ clipId: 'c', nodeId }], HAND_GRAPH); return [out.cardId, out.cardIds, out.cardIdsUnsure === true]; };
+  assert.deepEqual(pick('a'), ['punch-pill', ['punch-pill'], false]);
+  assert.deepEqual(pick('wrap-wrap-a'), ['punch-pill', ['punch-pill'], false]);
+  assert.deepEqual(pick('wrap-media'), [null, [], false]);
+  // 里面两张:input.cardId 不取(null),两张都记着
+  assert.deepEqual(pick('wrap-mix'), [null, ['punch-pill', 'my-card'], false]);
+  // 输出节点自己是卡片:cardId 还是它自己(与原来相同),上游的卡也记着
+  assert.deepEqual(pick('fx'), ['fx-tint', ['fx-tint', 'punch-pill'], false]);
+  assert.deepEqual(pick('lost'), [null, [], true]);
+  // 控件上已经写了 cardId 的照旧以它为准
+  assert.deepEqual(withInnerCards([{ clipId: 'c', nodeId: 'wrap-a', cardId: 'given' }], HAND_GRAPH)[0].cardIds, ['given', 'punch-pill']);
+  // 没有 cardIds 的控件(旧调用方):就是 cardId 那一张
+  assert.deepEqual(cardIdsOf({ cardId: 'x' }), ['x']);
+  assert.deepEqual(cardIdsOf({ cardId: null }), []);
+  assert.deepEqual(cardIdsOf({ cardId: 'x', cardIds: ['y', 'y', ''] }), ['y']);
+  const versions = { 'punch-pill': 'builtin:1', 'my-card': 'user:1' };
+  assert.equal(isUserCardControl({ cardId: null, cardIds: ['punch-pill', 'my-card'] }, versions), true);
+  assert.equal(isUserCardControl({ cardId: 'punch-pill', cardIds: ['punch-pill'] }, versions), false);
+  assert.equal(isUserCardControl({ cardId: null, cardIds: [], cardIdsUnsure: true }, versions), true);
+  assert.equal(isUserCardControl({ cardId: null, cardIds: [], cardIdsUnsure: true }, { 'punch-pill': 'builtin:1' }), false);
+});
+
+test('WC-08 里面不止一张卡、拿不准的控件:不给浏览器节点,代码身份往多里要', () => {
+  const base = { snapshotKey: 'sk', contentKey: 'ck', tier: 'shared', start: 1, end: 3, count: 60,
+    sampling: { firstFrame: 30, phase: { numerator: 0, denominator: 1 } }, compositing: 'independent', capabilities: { compositing: 'independent' } };
+  const cardSources = { 'punch-pill': 'override:abc', 'focus-card': 'override:def', 'my-card': 'user:mine-v1' };
+  const run = (control, sources = cardSources) => splitPlan({
+    planTask: clipsPlan({ clips: [control.clipId] }), entryKey: 'entry-1', cardPlan: [control], prerenderSet: null, streams: [],
+    envFingerprint: OWN, codeVersion: 'cv-1', cardSourceVersions: sources, weightOf, isUserCard: isUserCardOf(SOURCE_VERSIONS),
+    browser: { nodeId: 'n-br', envFingerprint: BR },
+  });
+  // 对照:一张没改过的内置卡,给浏览器
+  const one = run({ ...base, clipId: 'c1', cardId: 'focus-card', cardIds: ['focus-card'] }, {});
+  assert.ok(one.some(task => task.requires.envFingerprint === BR));
+  // 两张都没改过的内置卡:也不给浏览器(页面的隔离单卡工程只认一张)
+  const two = run({ ...base, clipId: 'c2', cardId: null, cardIds: ['focus-card', 'punch-pill'] }, {});
+  assert.ok(two.length > 0 && two.every(task => task.requires.envFingerprint === OWN));
+  // 两张里有改过的、有用户卡:两张的代码身份都要,算用户卡
+  const mixed = run({ ...base, clipId: 'c3', cardId: null, cardIds: ['punch-pill', 'my-card'] });
+  assert.ok(mixed.length > 0);
+  for (const task of mixed) {
+    assert.equal(task.requires.envFingerprint, OWN);
+    assert.deepEqual(task.requires.cardSources, { 'punch-pill': 'override:abc', 'my-card': 'user:mine-v1' });
+    assert.equal(task.requires.userCards, true);
+    assert.equal(task.input.cardId, null);
+  }
+  // 拿不准:全部定制卡的代码都要,不给浏览器
+  const unsure = run({ ...base, clipId: 'c4', cardId: null, cardIds: [], cardIdsUnsure: true });
+  assert.ok(unsure.length > 0);
+  for (const task of unsure) {
+    assert.equal(task.requires.envFingerprint, OWN);
+    assert.deepEqual(task.requires.cardSources, cardSources);
+    assert.equal(task.requires.userCards, true);
+  }
+  const unsureClean = run({ ...base, clipId: 'c5', cardId: null, cardIds: [], cardIdsUnsure: true }, {});
+  assert.ok(unsureClean.length > 0 && unsureClean.every(task => task.requires.envFingerprint === OWN), '拿不准的即使没有定制卡也不给浏览器');
 });
