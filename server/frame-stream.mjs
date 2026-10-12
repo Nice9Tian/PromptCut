@@ -41,6 +41,7 @@ import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
+import { belowLayersOf } from '../src/render/streamInputSig.mjs';
 
 import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
 export { StreamStore, readySegmentRanges, publicManifest, handleStreamRequest } from './asset-store/stream-store.mjs';
@@ -69,6 +70,19 @@ export const QUEUE_SEGMENT_ATTEMPTS = 3;
 /** `streams` 开关(任务书:默认开;`PROMPTCUT_STREAMS=0` 关) */
 export function streamsEnabled(env = process.env) {
   return String(env.PROMPTCUT_STREAMS ?? '1').trim() !== '0';
+}
+
+/**
+ * 「依赖下层的流」(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5 节)出不出。**缺省关**〔裁〕。
+ *
+ * 这种流现在只做了计划、键、隔离工程、切分与认领;流里的像素怎么取、怎么贴回舞台、在线页面怎么读都还没做。关着的时候
+ * `planStreams` 不出这种流,于是切分不出这种任务、层表里没有这种行、生产者不产它,行为和加这种流之前一字不差。
+ * 只给单测和探针一个打开的办法:环境变量 `PROMPTCUT_TEST_BELOW_STREAMS=1`(照 `PROMPTCUT_TEST_PLAN_ONLY` 的写法,生产环境不设),
+ * 或者直接给 `planStreams` 传 `below: true`。贴回舞台那一块合入时把这个开关去掉(常量改成 true、删掉环境变量)。
+ */
+export const BELOW_STREAMS_DEFAULT = false;
+export function belowStreamsEnabled(env = process.env) {
+  return BELOW_STREAMS_DEFAULT || String(env?.PROMPTCUT_TEST_BELOW_STREAMS ?? '').trim() === '1';
 }
 
 /** 解码器预算。只给探针压低它(`PROMPTCUT_STREAM_DECODERS`),产品里就是 6 */
@@ -312,6 +326,32 @@ export function streamEligible(control, clip, track) {
 }
 
 /**
+ * 「依赖下层的流」收哪些卡(契约第 5.1 节)之外,另外两类卡进不进。现在都不进;以后要并进这条路,把对应的一项改成 true 就行
+ * (`docs/plan/html-snapshot-removal-dryrun.md` 第 0 节第 7 条,用户在定):
+ *   - `sourceDependent`:源依赖卡(转场、接素材的素材效果卡)。隔离工程里它的源片段都留着(藏起来的序列仍是 `sourceOnly`),
+ *     键里目标卡的缓存内容键已经顺着输入带上了整条源链;
+ *   - `frame3d`:框用了三维的卡(含独立卡 —— 它进不了单卡流)。这种流按舞台坐标产,三维摆放照原样画进去。
+ */
+export const BELOW_STREAM_RULES = Object.freeze({ sourceDependent: false, frame3d: false });
+
+/**
+ * 这张卡进不进「依赖下层的流」。收:依不依赖下层这一样是「依赖下层」(`belowDependent`)、旧的统称 `context`、
+ * 或「未知」(`unknown`,审阅表没覆盖到的卡;没写、认不出的值也按未知)的卡。平面的独立卡走单卡流(`streamEligible`),不进这里;
+ * 源依赖卡和框用了三维的卡看 `rules`。和 `streamEligible` 不会同时为真。
+ */
+export function belowStreamEligible(control, clip, track, rules = BELOW_STREAM_RULES) {
+  if (!control?.clipId || !clip || !track) return false;
+  if (track.hidden || track.sourceOnly) return false;
+  if (!clip.cardId) return false;
+  const spatial = frame3d(clip.frame);
+  if (spatial && rules?.frame3d !== true) return false;
+  const compositing = control.capabilities?.compositing ?? control.compositing;
+  if (compositing === 'independent') { if (!spatial) return false; }
+  else if (compositing === 'sourceDependent') { if (rules?.sourceDependent !== true) return false; }
+  return Number.isInteger(control.count) && control.count > 0;
+}
+
+/**
  * 场景里全部**画面层**(卡片段 + 画面素材段),按画家顺序排:和 `FrameScene` 一样,
  * `project.tracks` 倒着数(第一条序列在最上面),同一条序列里按片段顺序。
  * 组流「只由 z 序相邻的卡组成」—— 相邻要连素材层一起看。
@@ -334,13 +374,16 @@ export function paintLayers(project, fps) {
   return out.sort((a, b) => a.order - b.order);
 }
 
-/** 区间集合在同一帧上的最大重叠数,以及峰值出现在哪一帧 */
-export function peakConcurrency(intervals) {
+/**
+ * 区间集合在同一帧上的最大重叠数,以及峰值出现在哪一帧。`skip`(帧号的集合)给了,就不把这些帧当候选:
+ * 回的是剩下的帧里重叠最多的那一帧(`groupStreams` 在有不参加合并的流时用它换一帧再找)。
+ */
+export function peakConcurrency(intervals, skip = null) {
   const events = [];
   for (const it of intervals) { events.push([it.from, 1]); events.push([it.to + 1, -1]); }
   events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   let cur = 0, peak = 0, at = 0;
-  for (const [frame, d] of events) { cur += d; if (cur > peak) { peak = cur; at = frame; } }
+  for (const [frame, d] of events) { cur += d; if (cur > peak && !skip?.has(frame)) { peak = cur; at = frame; } }
   return { peak, at };
 }
 
@@ -351,12 +394,18 @@ export function peakConcurrency(intervals) {
  * 贪心:在重叠峰值那一帧上,挑画家顺序里**紧挨着**的两条流(两者之间、在它们合并后的时间段里
  * 没有别的画面层插着)合并;反复直到峰值 ≤ 预算或者再也找不到可合并的一对。
  * 回合并后的列表(每项 `clipIds` 按画家顺序,最后一个是最上面那张)。
+ *
+ * `fixed`:不参加合并、但同样各占一个解码器的流(依赖下层的流,契约第 5.1 节)`[{ from, to }]`。它们只算进重叠峰值,
+ * 不会被挑去合并,也不出现在结果里;不给(或给空)时和原来完全一样。它们在 `layers` 里本来就有自己那一层,
+ * 夹在两张卡中间时照旧挡住那两张卡合并。有它们的时候,峰值那一帧上可能没有能合的一对(挤在那里的都是不能合的流),
+ * 而别的超预算的帧上有:这一帧找不到就记进 `tried`、换下一个超预算的帧,合成一次以后从头再看。
  */
-export function groupStreams(streams, layers, budget = STREAM_DECODER_BUDGET) {
+export function groupStreams(streams, layers, budget = STREAM_DECODER_BUDGET, fixed = []) {
   let list = streams.map(s => ({ ...s, clipIds: [...s.clipIds] }));
   const overlaps = (a, b) => a.from <= b.to && b.from <= a.to;
+  const tried = new Set();
   for (let guard = 0; guard < 1000; guard++) {
-    const { peak, at } = peakConcurrency(list);
+    const { peak, at } = fixed.length ? peakConcurrency([...list, ...fixed], tried) : peakConcurrency(list);
     if (peak <= budget) break;
     const active = list.map((s, i) => ({ s, i })).filter(({ s }) => s.from <= at && at <= s.to).sort((a, b) => a.s.order - b.s.order);
     let merged = false;
@@ -374,7 +423,8 @@ export function groupStreams(streams, layers, budget = STREAM_DECODER_BUDGET) {
       list.sort((a, b) => a.order - b.order);
       merged = true;
     }
-    if (!merged) break;
+    if (!merged && !fixed.length) break;
+    if (merged) tried.clear(); else tried.add(at);
   }
   return list;
 }
@@ -421,8 +471,12 @@ export function streamNeedsReplay(controls) {
  * M4(契约 E.4):`contentKey` 是流的内容键(成员取 card plan 的**内容键**,不含环境),
  * `streamKey = resultKeyOf(contentKey, envFingerprint)` 是落盘和路由用的结果键。同一个项目在两种
  * 环境下 `contentKey` 相同、`streamKey` 不同。没有指纹就不产流(回 `[]`),理由同 `CardFrameCache.plan()`。
+ *
+ * `below`(缺省取 `belowStreamsEnabled()`,**缺省关**):打开时预渲染集合里依赖下层、`context`、未知的重卡各出一条
+ * `kind: 'below'` 的流(`belowStreamSpec`),排在单卡流和组流后面;它们不参加组流合并,但占解码器预算。
+ * 关着时结果与没有这种流时逐项相同。
  */
-export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint } = {}) {
+export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint, below = belowStreamsEnabled() } = {}) {
   if (typeof envFingerprint !== 'string' || !envFingerprint) return [];
   const project = entry?.project;
   const plan = entry?.cardPlan;
@@ -447,7 +501,9 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
   }
   singles.sort((a, b) => a.order - b.order);
   const byClip = new Map(singles.map(s => [s.clipIds[0], s]));
-  const grouped = groupStreams(singles, layers, budget);
+  // 依赖下层的流的目标卡(开关关着时是空的):不参加组流合并,但各占一个解码器
+  const belows = below ? belowTargets(plan, { picked, where, fps, total, orderOf }) : [];
+  const grouped = groupStreams(singles, layers, budget, belows);
   const specs = [];
   for (const g of grouped) {
     const members = g.clipIds.map(id => byClip.get(id));
@@ -477,6 +533,7 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'group', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view), members: members.map(m => m.control) });
     }
   }
+  if (belows.length) specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion, envFingerprint }));
   return specs;
 }
 
@@ -492,6 +549,8 @@ export function queueStreamOf(spec) {
     kind: spec.kind, plane: spec.plane, clipIds: [...(spec.clipIds ?? [])], fps: spec.fps,
     bound: spec.bound ? { ...spec.bound } : null, offset: spec.offset ? { ...spec.offset } : null,
     firstFrame: spec.firstFrame, lastFrame: spec.lastFrame, total: spec.total,
+    // 依赖下层的流另带算进键里的下层(切分据此知道这条流要整场景的下层和素材);别的流不带这一项,形状与原来相同
+    ...(spec.kind === 'below' ? { belowClipIds: [...(spec.belowClipIds ?? [])] } : {}),
   };
 }
 
@@ -515,6 +574,7 @@ export function planListStreams(entry, clips, options = {}) {
  * 都去掉):这些在舞台上由包裹层加。组流原样保留(外观画进流里)。
  */
 export function isolatedStreamProject(project, spec) {
+  if (spec?.kind === 'below') return isolatedBelowProject(project, spec);
   const members = new Set(spec.clipIds);
   const ids = new Set((project.tracks ?? []).map(t => t.id));
   const tracks = [];
@@ -544,6 +604,156 @@ function localClip(clip, spec) {
     : undefined;
   if (out.frame === undefined) delete out.frame;
   return out;
+}
+
+/* ======================================================================== *
+ * 依赖下层的流(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.1、5.2 节)
+ *
+ * 这一节只有计划、键和隔离工程;流里的像素怎么取(第 5.3 节)、怎么贴回舞台(第 5.4 节)不在这里。
+ * 出不出这种流由 `belowStreamsEnabled` 管,缺省关。
+ * ======================================================================== */
+
+/** 这一版里要出「依赖下层的流」的目标卡,按画家顺序。每项带它占解码器的那一段 `from..to`(同单卡流的算法) */
+function belowTargets(plan, { picked, where, fps, total, orderOf }) {
+  const out = [];
+  const seen = new Set();
+  for (const control of plan) {
+    if (!control?.clipId || seen.has(control.clipId) || !picked(control.clipId)) continue;
+    const at = where.get(control.clipId);
+    if (!at || !belowStreamEligible(control, at.clip, at.track)) continue;
+    const firstFrame = control.sampling?.firstFrame ?? Math.ceil(at.clip.start * fps - 1e-9);
+    const lastFrame = Math.min(total - 1, firstFrame + control.count - 1);
+    if (lastFrame < firstFrame) continue;
+    seen.add(control.clipId);
+    out.push({ control, clip: at.clip, order: orderOf.get(control.clipId) ?? 0, firstFrame, from: Math.min(mountFrameOf(at.clip, fps), firstFrame), to: lastFrame });
+  }
+  return out.sort((a, b) => a.order - b.order);
+}
+
+/**
+ * 一层的缓存内容键(`control.cacheContentKey`)没管到、又会改这一层画面的项目数据;没有回 undefined(摘要里不出现这一项)。
+ *
+ * 现在只有一样:素材段挂的**像素映射**(`clip.pixelMap`、项目里那一条定义、定义里引用到的别的素材)。缓存内容键来自卡片图
+ * (`src/kernel/cardGraph.mjs` 的 `projectCardGraph`),图里只把滤镜、音频效果、强调串成了节点,像素映射不在图里;
+ * 不补这一项,改了下层素材的像素映射,依赖下层的流的键不变,旧流会被接着贴。
+ */
+export function belowLayerExtra(project, clip) {
+  const ref = clip?.pixelMap;
+  if (!ref) return undefined;
+  const def = (project?.pixelMaps ?? []).find(x => x?.id === ref.id) ?? null;
+  const ids = new Set();
+  const walk = value => {
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    if (!value || typeof value !== 'object') return;
+    for (const [name, inner] of Object.entries(value)) {
+      if (name === 'mediaId' && typeof inner === 'string' && inner) ids.add(inner);
+      else walk(inner);
+    }
+  };
+  walk(def);
+  const media = [...ids].sort().map(id => {
+    const m = (project?.media ?? []).find(x => x?.id === id);
+    return [id, m ? (m.hash ?? m.url ?? m.path ?? null) : null];
+  });
+  return { pixelMap: ref, def, media };
+}
+
+/**
+ * 每个目标卡一条**依赖下层的流**。`targets` 是 `belowTargets` 的结果;回的每一项形状照组流(舞台坐标,`plane: 'stage'`、
+ * `offset` 是零、`bound` 是整个画面,收紧留给产流那一趟量),另外:
+ *
+ *   - `clipIds` 只有目标卡一张(这条流挂在它身上);`belowClipIds` 是算进键里的那些下层,按画家顺序(下面的在前);
+ *   - 键:`cardStreamIdentity({ kind: 'below' })`。下层取 `belowLayersOf`(与页面的输入签名、与隔离工程同一份认定),每层用它在
+ *     card plan 里的缓存内容键加采样窗口,再加 `belowLayerExtra`。有一层在 card plan 里找不到键(预渲染间不认识的卡)时,
+ *     整条退回用整个项目的键 `entry.key`(`belowScene: true`;更粗,但不会错);连 `entry.key` 也没有就不出这条流;
+ *   - `replay` / `mountFrame`:目标卡和下层里的卡片段(含图卡片段)有一张是 motion 式的就要回放,从这些有状态的卡里最早的
+ *     挂载帧起(在 card plan 里找不到的按有状态算)。纯素材段按时间直接取帧,不算;
+ *   - `hasMedia`:项目里有没有画面素材(有的话产流那一趟截图前要等素材就位,`bakeStream` 的 `hasMedia`;
+ *     藏起来的源片段也算,图卡可能接着它们)。
+ */
+function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envFingerprint }) {
+  const project = entry.project;
+  const controlOf = new Map();
+  for (const control of entry.cardPlan ?? []) if (control?.clipId && !controlOf.has(control.clipId)) controlOf.set(control.clipId, control);
+  const visualMedia = new Set((project.media ?? []).filter(m => m && m.kind !== 'audio').map(m => m.id));
+  const hasMedia = (project.tracks ?? []).some(track => (track.clips ?? []).some(c => c?.mediaId && visualMedia.has(c.mediaId)));
+  const view = { x: 0, y: 0, w: stage.width, h: stage.height };
+  const specs = [];
+  for (const target of targets) {
+    const { control, clip } = target;
+    const found = belowLayersOf(project, control.clipId);
+    const targetKey = control.cacheContentKey ?? control.key;
+    if (!found || typeof targetKey !== 'string' || !targetKey) continue;
+    const layers = [];
+    let whole = false;
+    for (const layer of found.below) {
+      const lower = controlOf.get(layer.id);
+      const key = lower?.cacheContentKey ?? lower?.key;
+      if (typeof key !== 'string' || !key) { whole = true; break; }
+      layers.push({ key, sampling: lower.sampling, count: lower.count, extra: belowLayerExtra(project, layer.clip) });
+    }
+    if (whole && (typeof entry.key !== 'string' || !entry.key)) continue;
+    const contentKey = cardStreamIdentity({ kind: 'below', fps, stage, codeVersion,
+      members: [{ key: targetKey, sampling: control.sampling, count: control.count, extra: belowLayerExtra(project, clip) }],
+      below: whole ? { scene: entry.key } : { layers } });
+    let mountFrame = target.from;
+    const stateful = [control];
+    for (const layer of found.below) {
+      if (!layer.clip.cardId && !layer.clip.nodeId) continue;
+      const lower = controlOf.get(layer.id) ?? null;
+      stateful.push(lower);
+      if (streamNeedsReplay([lower])) mountFrame = Math.min(mountFrame, mountFrameOf(layer.clip, fps));
+    }
+    specs.push({
+      clipIds: [control.clipId], topClipId: control.clipId, mountFrame,
+      firstFrame: target.firstFrame, lastFrame: target.to,
+      firstSegment: Math.floor(Math.max(0, target.firstFrame) / SEGMENT_FRAMES), lastSegment: Math.floor(target.to / SEGMENT_FRAMES),
+      fps, stage, total,
+      replay: streamNeedsReplay(stateful),
+      streamKey: resultKeyOf(contentKey, envFingerprint), contentKey, envFingerprint,
+      kind: 'below', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view),
+      members: [control],
+      belowClipIds: found.below.map(layer => layer.id), belowScene: whole, hasMedia,
+    });
+  }
+  return specs;
+}
+
+/**
+ * 依赖下层的流的**隔离工程**(契约第 5.3 节头一段):留着目标卡和画家顺序排在它下面的全部层,只把上面的层藏起来。
+ * `isolatedStreamProject` 遇到 `kind: 'below'` 的流走这里;单卡流、组流那一种(非成员全藏)不变。
+ *
+ *   - 目标卡上面的序列:整条变成隐藏的 `sourceOnly` 序列(不出画,图卡按源片段解输入时还找得到);
+ *   - 目标卡所在的序列:它前面的片段(画家顺序在它下面)和它自己留着,它后面的片段挪到一条隐藏的 `sourceOnly` 序列里;
+ *   - 目标卡下面的序列:原样(本来隐藏的照旧隐藏),卡片、素材、它们的外观都不动;
+ *   - 目标卡的外观原样保留(这种流按舞台坐标产,外观画进流里);时间不平移。
+ * 「上面 / 下面」和流键、输入签名用的是同一个画家顺序(`src/render/streamInputSig.mjs` 的 `belowLayersOf`)。
+ *
+ * `withTarget: false`:连目标卡也藏起来(挪进那条隐藏的序列),只剩下层 —— 差分取层要的那一张「不带目标卡」的画面。
+ */
+export function isolatedBelowProject(project, spec, { withTarget = true } = {}) {
+  const targetId = spec?.topClipId ?? spec?.clipIds?.[0];
+  const source = project.tracks ?? [];
+  let ti = -1, ci = -1;
+  source.forEach((track, i) => (track.clips ?? []).forEach((clip, j) => { if (ti < 0 && clip.id === targetId) { ti = i; ci = j; } }));
+  if (ti < 0) throw new Error(`隔离工程:项目里没有片段 ${targetId}`);
+  const ids = new Set(source.map(t => t.id));
+  const tracks = [];
+  source.forEach((track, i) => {
+    if (i < ti) { tracks.push({ ...structuredClone(track), hidden: true, sourceOnly: true }); return; }
+    if (i > ti) { tracks.push(structuredClone(track)); return; }
+    const clips = track.clips ?? [];
+    const kept = clips.filter((_, j) => j < ci || (j === ci && withTarget));
+    const hiddenClips = clips.filter((_, j) => j > ci || (j === ci && !withTarget));
+    tracks.push({ ...structuredClone(track), hidden: false, sourceOnly: false, clips: structuredClone(kept) });
+    if (hiddenClips.length) {
+      let id = `__pc_source_${track.id}`, n = 1;
+      while (ids.has(id)) id = `__pc_source_${track.id}_${n++}`;
+      ids.add(id);
+      tracks.push({ ...structuredClone(track), id, hidden: true, sourceOnly: true, clips: structuredClone(hiddenClips) });
+    }
+  });
+  return { ...structuredClone(project), tracks, _cardRender: { mode: 'final', frames: {}, missing: {} } };
 }
 
 /* ======================================================================== *
