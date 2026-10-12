@@ -17,6 +17,8 @@ import {
 import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
 import { cardCodePreimage, localImportsOf, CARD_CODE_ID_HEX } from '../src/render/cardCodeIdentity.mjs';
 import { checkSyncedSource, rejectedStub, hostedWorkerKind, normalizeBrowserCssImports } from './hosted-render/source-gate.mjs';
+import { remotionStyleErrors } from './remotion-style-check.mjs';
+import { remotionLockSuffix } from '../src/online/cardRuntime/remotionLock.mjs';
 
 /* ────────────────────────────────────────────────────────────────────
  * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
@@ -148,7 +150,17 @@ export function checkSourceEdit(rel: string, before: string, after: string): { o
       errors.push(`语法错误${pos ? `(第 ${pos} 行)` : ''}:${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`);
     }
   }
+  /*
+   * 声明成 remotion 式(`frameMode: "direct"`)的卡片文件:按 remotion 式的规矩查(`remotion-style-check.mjs`),每条带行号。
+   * 内置卡都不是用框架写的,所以这里是差量口径:只拒绝这次编辑新增的违规,原来就有的不追究。
+   * 这类文件上,下面那张表里说时间与定时器的几条由它代替(那几条的文案在劝人用 Motion,对 remotion 式的卡不对)。
+   */
+  const remotion = /\.(tsx|ts)$/.test(rel) && hasCardDefObject(after)
+    ? remotionStyleErrors(after, { before, fileName: rel, legacyAbsolute: false })
+    : null;
+  if (remotion) errors.push(...remotion.errors);
   for (const [re, why] of RISKY_PATTERNS) {
+    if (remotion?.remotionStyle && re !== COMPOSITING_INDEPENDENT) continue;
     const n0 = (before.match(re) || []).length;
     const n1 = (after.match(re) || []).length;
     if (n1 > n0) errors.push(`这次编辑新加了 ${why}。`);
@@ -574,7 +586,7 @@ export function stripComments(src: string): string {
   return out;
 }
 
-export function reviewCardSource(source: string, hints?: { vendored?: boolean }): CardFinding[] {
+export function reviewCardSource(source: string, hints?: { vendored?: boolean; remotionStyle?: boolean }): CardFinding[] {
   const f: CardFinding[] = [];
   const push = (tier: CardFinding['tier'], rule: string, detail: string) => f.push({ tier, rule, detail });
 
@@ -625,7 +637,10 @@ export function reviewCardSource(source: string, hints?: { vendored?: boolean })
     push(3, '鼠标/滚动事件', '导出时没有鼠标也没有滚动,这类效果只会停在初态。把「光标在哪」「滚到哪」改成一个由 t 驱动的参数,效果就能进导出。');
   }
   if (/\bwhile(Hover|Tap|Drag|Focus|InView)\s*=/.test(source)) {
-    push(3, 'whileHover/whileTap/whileInView', '同上:hover / tap / 进入视口在导出里都不会发生。要它播就用 initial + animate,不要挂在交互上。');
+    // remotion 式的卡不许用 Motion,文案不往 Motion 上引(那边另有带行号的一条,见 remotion-style-check.mjs)
+    push(3, 'whileHover/whileTap/whileInView', hints?.remotionStyle
+      ? '同上:hover / tap / 进入视口在导出里都不会发生。要它出现就写成 t 的条件,不要挂在交互上。'
+      : '同上:hover / tap / 进入视口在导出里都不会发生。要它播就用 initial + animate,不要挂在交互上。');
   }
   if (/\buse(Scroll|Velocity)\s*\(|window\.scrollY|scrollTop/.test(source)) {
     push(3, '滚动驱动', '同上:导出页不会滚动。');
@@ -637,7 +652,9 @@ export function reviewCardSource(source: string, hints?: { vendored?: boolean })
     if (!ALLOWED_IMPORTS.some((re) => re.test(spec))) {
       push('deps', `import "${spec}"`, spec.startsWith('@/')
         ? `别名 ${spec} 指向的是原项目的文件,这里没有。@/lib/utils 会自动改到本地的 cn;别的要么去掉,要么把用到的那几行搬进来。`
-        : `没装 ${spec}。装了的是 react、motion/react、three、lottie-web、@tsparticles/engine|slim,加上 Tailwind class 和相对路径引的 kernel/types、native/hud、magicui/vendor/*。`);
+        : hints?.remotionStyle
+          ? `没装 ${spec}。remotion 式的卡能引用的是框架 "../../kernel/remotionStyle"、react,以及相对路径引的 kernel/types、kernel/frameReady、kernel/soundEffects、render/cards/graphValues、native/hud、native/sound-effects、magicui/vendor/cn。`
+          : `没装 ${spec}。装了的是 react、motion/react、three、lottie-web、@tsparticles/engine|slim,加上 Tailwind class 和相对路径引的 kernel/types、native/hud、magicui/vendor/*。`);
     }
   }
 
@@ -646,7 +663,9 @@ export function reviewCardSource(source: string, hints?: { vendored?: boolean })
   for (const m of source.matchAll(/\banimate-([a-z][a-z0-9-]*)/g)) usedAnimates.add(m[1]);
   for (const name of usedAnimates) {
     if (BUILTIN_ANIMATES.has(name) || VENDORED_ANIMATES.has(name)) continue;
-    push('keyframes', `animate-${name}`, `这个动画 class 没有定义(Tailwind 自带的只有 spin/ping/pulse/bounce,MagicUI 那 22 组已经搬进 magicui-animations.css)。把它的 @keyframes 和 .animate-${name} 写进那个文件,或改用 motion/react。`);
+    push('keyframes', `animate-${name}`, hints?.remotionStyle
+      ? `这个动画 class 没有定义(Tailwind 自带的只有 spin/ping/pulse/bounce,MagicUI 那 22 组已经搬进 magicui-animations.css)。remotion 式的卡不用 CSS 动画:把随时间变的样式写成 t 的函数。`
+      : `这个动画 class 没有定义(Tailwind 自带的只有 spin/ping/pulse/bounce,MagicUI 那 22 组已经搬进 magicui-animations.css)。把它的 @keyframes 和 .animate-${name} 写进那个文件,或改用 motion/react。`);
   }
 
   // ── 来源与许可证:搬来的代码必须声明,且许可证要能分发 ──
@@ -770,15 +789,28 @@ export function checkCardSource(
     }
   }
 
-  // 这几条是硬约束:导出时用的是虚拟时钟,拿真实时间的卡导出会不同步
-  if (/\bDate\.now\s*\(/.test(source)) {
-    errors.push('不要用 Date.now():导出时走的是虚拟时间,会和画面对不上。动画交给 motion/react,需要读时间就用组件收到的 t。');
-  }
-  if (/\bsetTimeout\s*\(|\bsetInterval\s*\(/.test(source)) {
-    errors.push('不要用 setTimeout / setInterval 驱动动画:导出时它们不受虚拟时钟控制。用 motion/react 的 animate,或读组件参数 t。');
-  }
-  if (/\bIntersectionObserver\b/.test(source)) {
-    errors.push('不要用 IntersectionObserver:卡片挂载即播放,不存在「滚动进入视口」这回事。');
+  /*
+   * remotion 式的卡(`frameMode: "direct"`)另有一套带行号的检查(`remotion-style-check.mjs`):只许引用框架、不读真实时间、
+   * 不用定时器与逐帧回调、不用 Motion 与 CSS 动画、不用不带种子的随机、不把东西带到下一帧、顶层只写常量。
+   * 只在建卡、改卡时查(`author`);装卡不查,已经在库里的卡照旧载入。声明成 motion 式的卡不走这一套,检查和原来一样。
+   */
+  const remotion = authoring
+    ? remotionStyleErrors(source, { before: hints.before, fileName: `src/cards/user/${ID_RE.test(id) ? id : 'card'}.tsx` })
+    : null;
+  const remotionStyle = remotion?.remotionStyle === true;
+
+  // 这几条是硬约束:导出时用的是虚拟时钟,拿真实时间的卡导出会不同步。
+  // remotion 式的卡由上面那一套查(同样出现即拒,带行号,文案不往 Motion 上引),这里不重复报
+  if (!remotionStyle) {
+    if (/\bDate\.now\s*\(/.test(source)) {
+      errors.push('不要用 Date.now():导出时走的是虚拟时间,会和画面对不上。动画交给 motion/react,需要读时间就用组件收到的 t。');
+    }
+    if (/\bsetTimeout\s*\(|\bsetInterval\s*\(/.test(source)) {
+      errors.push('不要用 setTimeout / setInterval 驱动动画:导出时它们不受虚拟时钟控制。用 motion/react 的 animate,或读组件参数 t。');
+    }
+    if (/\bIntersectionObserver\b/.test(source)) {
+      errors.push('不要用 IntersectionObserver:卡片挂载即播放,不存在「滚动进入视口」这回事。');
+    }
   }
 
   // 语法检查:让写坏的文件在这里就被挡住,而不是存进去把 HMR 打挂
@@ -794,7 +826,13 @@ export function checkCardSource(
 
   // 审查门:分档的发现也算拒绝理由,并且把档位写进文案 —— 模型只看得到 error 字符串,
   // 得让它一眼分清「这是管线的限制」「这是要改成参数驱动」「这是许可证问题」。
-  const findings = reviewCardSource(source, hints);
+  if (remotion) errors.push(...remotion.errors);
+  // remotion 式的检查已经带行号拒过的导入与 CSS 动画,审查门那两类笼统的发现不再重复报
+  const rejectedRules = new Set((remotion?.violations ?? []).map((v) => v.rule));
+  const findings = reviewCardSource(source, { ...hints, remotionStyle }).filter((x) => !(
+    (x.tier === 'deps' && (rejectedRules.has('import') || rejectedRules.has('motion')))
+    || (x.tier === 'keyframes' && rejectedRules.has('css-animation'))
+  ));
   const TIER_LABEL: Record<string, string> = {
     2: '[第二档·管线暂不支持]', 3: '[第三档·交互驱动]', deps: '[依赖]', keyframes: '[动画 class]', license: '[来源/许可证]',
   };
@@ -1328,6 +1366,22 @@ function cardOverridesLoader(): Plugin {
       if (/[?&]raw\b/.test(id)) return `export default ${JSON.stringify(text.replace(/\r\n/g, "\n"))}`;
       if (hostedKind === 'isolated' && file.endsWith('.css')) return normalizeBrowserCssImports(text);
       return text;
+    },
+    /*
+     * 载入时把顶层锁成只读(remotion 式的框架,三道只读里的第二道):用户卡目录下「声明成 remotion 式并且引用了框架」的文件,
+     * 在源码末尾接一句调用,模块载入时把文件顶层的对象冻住(运行时那一半在 `src/kernel/remotionStyle/lock.ts`,
+     * 接什么由 `src/online/cardRuntime/remotionLock.mjs` 定,在线页面转译时接的是同一段)。只接在末尾、前面一个字符都不动,
+     * 所以不交新的源码映射(`map: null` = 沿用原来的),`inspect_card_dom` 的行号不受影响。
+     * 别的文件一律原样:框架出现之前建的卡不可能引用它,内置卡不在用户卡目录下。
+     */
+    transform(code, id) {
+      if (/[?&](raw|url|inline|worker|sharedworker)\b/.test(id)) return null;
+      const file = id.split('?')[0];
+      if (!/\.tsx?$/.test(file) || !path.isAbsolute(file)) return null;
+      const rel = toRel(projectRoot, file);
+      if (!rel.startsWith('src/cards/user/')) return null;
+      const suffix = remotionLockSuffix(rel, code);
+      return suffix ? { code: code + suffix, map: null } : null;
     },
   };
 }

@@ -9,6 +9,7 @@
  */
 import { transform } from "sucrase";
 import { unsupportedSyntax } from "./precheck.ts";
+import { REMOTION_LOCK_CACHE_TAG, remotionLockSuffix } from "./remotionLock.mjs";
 import { resolveCardImport, type ResolveEnv } from "./resolve.ts";
 import { classCandidates, type CardCssCompiler } from "./tailwind.ts";
 import type { BundleResult, CardBundle, CardModule, CardRunState, ResolvedImport } from "./protocol.ts";
@@ -31,14 +32,17 @@ export function requireSpecifiers(js: string): string[] {
   return [...out];
 }
 
-/** 转一个文件。`key` 只用来报错与给转译器当文件名。 */
-export function transpileCardFile(key: string, source: string): FileResult {
+/**
+ * 转一个文件。`key` 用来报错、给转译器当文件名，以及算「把顶层锁成只读」那一段里的相对路径。
+ * `lockSuffix`：要接在源码末尾的那一段（`remotionLock.mjs`）；不给就现算。该锁的卡才有，别的卡是空串、源码原样。
+ */
+export function transpileCardFile(key: string, source: string, lockSuffix?: string): FileResult {
   if (typeof source !== "string") return { ok: false, state: { state: "load-error", detail: "源码取不到", file: key } };
   if (source.length > MAX_SOURCE_CHARS) return { ok: false, state: { state: "unsupported-syntax", detail: `文件太大(超过 ${MAX_SOURCE_CHARS / 1024} KB)`, file: key } };
   try {
     const bad = unsupportedSyntax(source);
     if (bad.length) return { ok: false, state: { state: "unsupported-syntax", detail: `${bad[0].what}(第 ${bad[0].line} 行)`, file: key } };
-    const js = transform(source, {
+    const js = transform(source + (lockSuffix ?? remotionLockSuffix(key, source)), {
       transforms: ["typescript", "jsx", "imports"], jsxRuntime: "automatic", production: true,
       preserveDynamicImport: true, filePath: key,
     }).code;
@@ -87,10 +91,17 @@ export async function bundleCard(input: BundleInput): Promise<BundleResult> {
     const file = read(key);
     if (!file) return fail({ state: "missing-module", detail: key, file: entry });
     hashes.set(key, file.hash);
-    let out = cache?.get(key, file.hash);
+    /*
+     * 该锁的卡(声明成 remotion 式并且引用了框架)在源码末尾接一句「把顶层锁成只读」,转出来的文本与不接时不同,
+     * 所以它在转译缓存里另用一个键(内容哈希后面带一个标记):别的卡的键不变,旧缓存照常命中;
+     * 该锁的卡不会命中「没接这一段」时存下的旧结果。运行时版本(`version.ts`)因此不用动。
+     */
+    const lockSuffix = remotionLockSuffix(key, file.body);
+    const cacheHash = lockSuffix ? `${file.hash}${REMOTION_LOCK_CACHE_TAG}` : file.hash;
+    let out = cache?.get(key, cacheHash);
     if (!out) {
-      out = transpileCardFile(key, file.body);
-      cache?.set(key, file.hash, out);
+      out = transpileCardFile(key, file.body, lockSuffix);
+      cache?.set(key, cacheHash, out);
     }
     if (!out.ok) return fail(out.state);
     sources.push(file.body);

@@ -193,7 +193,7 @@ export const ITEMS = [
     tasks: ['R1', 'C11'],
     steps: [
       [node, '{vite}', 'build', '--mode', 'online', '--outDir', '{dist}'],
-      [node, '-e', 'const fs=require("fs"),cp=require("child_process");fs.writeFileSync(process.argv[1]+"/.built-from",cp.execSync("git rev-parse HEAD",{encoding:"utf8"}).trim())', '{dist}'],
+      [node, '-e', 'const fs=require("fs"),cp=require("child_process");fs.writeFileSync(process.argv[1]+"/.built-from",cp.execSync("git rev-parse HEAD",{encoding:"utf8",windowsHide:true}).trim())', '{dist}'],
     ],
     pass: { exit: 0 }, timeoutMin: 15,
   },

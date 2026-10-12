@@ -9,6 +9,8 @@
  *   CA-HT-03  建卡改卡(整条链,模拟模型):create_card 把源码放进这个项目的内容库 → 同一轮里 list_cards / add_clip 认得它
  *             → get_card_source 读回 → edit_card 局部替换 → 重复建被拒;审查不过的源码不入库;
  *             卡片的定义只在进锁时临时登记、出锁撤掉;卡片代码没有在服务进程里执行(跨项目由隔离探针 T5 验)
+ *   CA-HT-03b remotion 式的卡(`frameMode: "direct"`):云端 Agent 建卡与桌面走同一道检查,违规的被拒并指出行号、不入库;
+ *             用框架写的合规的卡入库;改卡时新加违规同样被拒
  *   CA-HT-04  创造力等级:「中」建不了新卡,但能重写这个项目里已有的卡(按项目内容库判有没有)
  *   CA-HT-05  导入素材:没配素材服务时在最前面回明确的原因,不下载(出网闸与素材写入由 CA-EGRESS、CA-ASSET-01 与隔离探针 T1、T3 验)
  *   CA-HT-06  用量:外部服务的调用单记一类,不占 token 额度、不混进模型的调用次数;汇总里按服务与成员单列
@@ -168,6 +170,52 @@ test('CA-HT-03 / CA-HT-04 / CA-HT-05 建卡改卡、创造力等级、导入素�
     assert.equal(logged.some((l) => l.includes(marker)), false);
     assert.equal(globalThis.__PC_TEST_CARD_RAN, undefined);
     assert.equal(fs.existsSync(path.join(kit.vite.config.root, key)), false, '检出目录里没有多出这张卡的文件');
+  });
+
+  await t.test('CA-HT-03b remotion 式的卡:违规的被拒并指出行号、不入库;用框架写的入库;改卡新加违规被拒', async () => {
+    const FIX = path.join(kit.vite.config.root, 'server', 'test', 'fixtures', 'remotion-style');
+    const fixture = (name) => fs.readFileSync(path.join(FIX, name), 'utf8').replace(/\r\n/g, '\n');
+    const lineOf = (source, needle) => source.slice(0, source.indexOf(needle)).split('\n').length;
+    const inst = svc._instance(A);
+    await svc.send(A, 'c-rs', { creativity: 'high', prompt: script([{ sleepMs: 60_000 }]) });
+    const call = (tool, args) => inst.callTool(tool, args, 'c-rs').catch((err) => ({ ok: false, error: String(err?.message ?? err), errors: err?.errors }));
+    // 每条规矩的违规样例:云端这条路同样拒绝,报错带行号,源码不进内容库
+    const cases = [
+      ['random.tsx', 'Math.random()', /不带种子的随机/], ['real-time.tsx', 'performance.now()', /真实时间/], ['timer.tsx', 'setTimeout(', /定时器/],
+      ['frame-callback.tsx', 'requestAnimationFrame(', /逐帧回调/], ['motion.tsx', '<motion.div', /Motion/], ['presence.tsx', '<AnimatePresence>', /进出场组件/],
+      ['css-animation.tsx', 'transition: "opacity', /CSS 的动画和过渡/], ['state.tsx', 'useState(0)', /活得比一帧长/], ['top-level.tsx', 'let frames = 0', /顶层写了 let/],
+      ['import.tsx', 'from "lottie-web"', /只许引用框架/],
+    ];
+    for (const [file, needle, says] of cases) {
+      const source = fixture(`violations/${file}`);
+      const id = /\bid:\s*"([^"]+)"/.exec(source)[1];
+      const r = await call('create_card', { id, source });
+      assert.equal(r.ok, false, file);
+      const text = String(r.error ?? '');
+      assert.match(text, new RegExp(`\\[remotion 式\\] 第 ${lineOf(source, needle)} 行：`), `${file}: ${text.slice(0, 400)}`);
+      assert.match(text, says, file);
+      assert.doesNotMatch(text, /交给 motion|用 motion\/react|改用 motion|initial \+ animate/, file);
+      const stored = await call('get_card_source', { cardId: id });
+      assert.equal(stored.ok, false, `${file} 被拒的源码不该入库`);
+    }
+    // 用框架写的示例卡:入库,同一轮里认得它
+    for (const file of ['rs-title-reveal.tsx', 'rs-bar-race.tsx', 'rs-orbit-canvas.tsx']) {
+      const source = fixture(file);
+      const id = /\bid:\s*"([^"]+)"/.exec(source)[1];
+      const r = await call('create_card', { id, source });
+      assert.equal(r.ok, true, `${file}: ${String(r.error ?? '').slice(0, 400)}`);
+      const stored = await call('get_card_source', { cardId: id });
+      assert.equal(stored.source, source, '入库的源码与交上来的一字不差');
+      assert.equal((await call('list_cards', { cardId: id }))[0].id, id);
+    }
+    // 改卡:往合规的卡里新加一条违规,被拒并指出行号;改文案照常
+    const edit = await call('edit_card', { cardId: 'rs-bar-race', find: '  const count = Math.max(', replace: '  const jitter = Math.random();\n  const count = Math.max(' });
+    assert.equal(edit.ok, false);
+    assert.match(String(edit.error), /\[remotion 式\] 第 \d+ 行：用了不带种子的随机（Math\.random）/);
+    const rename = await call('edit_card', { cardId: 'rs-bar-race', find: 'name: "随机柱状起伏"', replace: 'name: "随机柱子"' });
+    assert.equal(rename.ok, true, String(rename.error ?? ''));
+    assert.equal(fs.existsSync(path.join(kit.vite.config.root, 'src/cards/user/rs-bar-race.tsx')), false, '检出目录里没有多出文件');
+    svc.abort(A, 'c-rs');
   });
 
   await t.test('CA-HT-04 创造力「中」:建不了新卡,能重写这个项目里已有的卡', async () => {
