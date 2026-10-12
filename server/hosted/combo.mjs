@@ -49,6 +49,9 @@ import { startAssetAnnounce } from '../asset-announce.mjs';
 import { createAssetReadyProbe } from './asset-doc-client.mjs';
 import { createDocAssembly } from './doc-assembly.mjs';
 import { createDocAgentAssembly } from './doc-agent-assembly.mjs';
+import { createRunAssetPrivateClient } from './run-assets-metadata-client.mjs';
+import { createRunAssetCheckpoint } from './run-assets-checkpoint.mjs';
+import { createRunAssetObserverAuthority } from './run-assets-observer-authority.mjs';
 
 export const HOSTED_NAMESPACES = Object.freeze(['media', 'snap', 'px']);
 /** 登记素材服务地址用的登记者身份 */
@@ -232,6 +235,7 @@ export async function startHostedCombo({
   account = null,
   accountRequired = false,
   assetStatus = null,
+  runAssets = null,
 } = /** @type {any} */ ({})) {
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响服务 */ } };
   const root = checkDataDir(dataDir);
@@ -239,6 +243,11 @@ export async function startHostedCombo({
   if (trustLoopback === false && !tokenGiven) throw new HostedConfigError('cluster-token-required');
   if (accountRequired && !account) throw new HostedConfigError('account-v2-required');
   if (accountRequired && !account?.order?.witnessKeys) throw new HostedConfigError('doc-assembly-configuration');
+  if (runAssets && (!account?.agent || !assetStatus ||
+      !(runAssets.rootRegistry || typeof runAssets.currentAsset === 'function' && typeof runAssets.resolveObserver === 'function') ||
+      !Number.isSafeInteger(runAssets.ticketTtlMs) ||
+      runAssets.ticketTtlMs < 1 || !Number.isSafeInteger(runAssets.maxBodyBytes) || runAssets.maxBodyBytes < 1))
+    throw new HostedConfigError('run-assets-unconfigured');
   const paths = hostedPaths(root);
   if (account && assetStatus && !assetPublicUrl) throw new HostedConfigError('asset-public-url', { detail: 'separate-service-unset' });
   const loopbackBind = host === '127.0.0.1' || host === '::1' || host === 'localhost';
@@ -319,6 +328,9 @@ export async function startHostedCombo({
   let accountRuntime = null;
   let docAssembly = null;
   let docAgentAssembly = null;
+  let runPrivateClient = null;
+  let runObserverAuthority = null;
+  let checkpointForRunAssets = null;
   let docService = null;
   let accountProjects = null;
   let accountInternalServer = null;
@@ -348,8 +360,44 @@ export async function startHostedCombo({
         runtime: accountRuntime, serviceRegistry, getDocAssembly: () => docAssembly,
         getService: () => docService, now, onDiagnostic: event => say('run.diagnostic', event) });
       await accountRuntime.start();
+      if (account.agent && assetStatus) runPrivateClient = createRunAssetPrivateClient(assetStatus);
       if (account.order) docAssembly = createDocAssembly({ dataDir: paths.docservice,
-        authority: accountRuntime.authority, account, runProvider: docAgentAssembly?.runProvider, now });
+        authority: accountRuntime.authority, account, runProvider: docAgentAssembly?.runProvider, now,
+        contentTypeForExt: media.contentTypeForExt,
+        resolveTierAssetRef: runPrivateClient ? async input => {
+          const rootBefore = checkpointForRunAssets?.current();
+          const before = await runPrivateClient.identity();
+          if (rootBefore && (before.authorityId !== rootBefore.authorityId || before.epoch !== rootBefore.epoch ||
+              before.instanceId !== rootBefore.instance.instanceId ||
+              before.serviceIdentity !== rootBefore.instance.serviceIdentity ||
+              before.pid !== rootBefore.instance.pid)) throw new HostedConfigError('run-asset-tier-metadata-unavailable');
+          const value = await runPrivateClient.resolveTierAssetRef(input);
+          const after = await runPrivateClient.identity();
+          const rootAfter = checkpointForRunAssets?.current();
+          if (before.instanceId !== after.instanceId || value.assetInstanceId !== before.instanceId ||
+              before.serviceIdentity !== after.serviceIdentity ||
+              (rootBefore && (rootAfter?.recordDigest !== rootBefore.recordDigest ||
+                after.authorityId !== rootAfter.authorityId || after.epoch !== rootAfter.epoch ||
+                after.pid !== rootAfter.instance.pid))) throw new HostedConfigError('run-asset-tier-metadata-unavailable');
+          return value;
+        } : undefined });
+      if (runAssets?.rootRegistry) {
+        checkpointForRunAssets = createRunAssetCheckpoint({ ledger, files: runAssets.rootRegistry.files,
+          expected: runAssets.rootRegistry.expected });
+        runObserverAuthority = createRunAssetObserverAuthority({ checkpoint: checkpointForRunAssets, privateClient: runPrivateClient,
+          assetFingerprint256: assetStatus.serverFingerprint256 });
+      }
+      if (runAssets) docAgentAssembly.mountRunAssets({ assetFingerprint256: assetStatus.serverFingerprint256,
+        currentAsset: runObserverAuthority?.currentAsset ?? runAssets.currentAsset,
+        resolveObserver: runObserverAuthority ? async input => {
+          // Only the completed root publication may advance this same doc
+          // ledger. A newer active filename without the marker/lock barrier
+          // cannot relabel an old TLS observer channel.
+          checkpointForRunAssets.acceptCurrent();
+          return runObserverAuthority.resolveObserver(input);
+        } : runAssets.resolveObserver,
+        privateClient: runPrivateClient, ticketTtlMs: runAssets.ticketTtlMs,
+        maxBodyBytes: runAssets.maxBodyBytes, now });
       accountProjects = mountAccountProjects({ authority: accountRuntime.authority,
         membersSnapshot: (actor, body) => accountRuntime.membersSnapshot(actor, body),
         issueSession: input => accountRuntime.issueSession(input),
@@ -365,7 +413,7 @@ export async function startHostedCombo({
           if (await docAgentAssembly?.handleInternal(req, res)) return;
           if (docService?.handleTransportHttp(req, res)) return;
           const route = new URL(req.url ?? '/', 'https://internal.invalid').pathname;
-          if (route.startsWith('/internal/v2/runs/') || route.startsWith('/internal/v2/conversations/') ||
+          if (route.startsWith('/internal/v2/run-assets/') || route.startsWith('/internal/v2/runs/') || route.startsWith('/internal/v2/conversations/') ||
               route.startsWith('/internal/v2/instances/')) {
             res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             res.end(JSON.stringify({ ok: false, code: 'doc-agent-unavailable' })); return;
@@ -389,6 +437,7 @@ export async function startHostedCombo({
     } catch (error) {
       await docAgentAssembly?.close();
       await docAssembly?.close();
+      runObserverAuthority?.close(); runPrivateClient?.close();
       accountRuntime?.close();
       assetReadyProbe?.close();
       throw new HostedConfigError('account-v2', { code: error?.code ?? 'configuration' });
@@ -432,7 +481,7 @@ export async function startHostedCombo({
     try { await docAgentAssembly.start(); }
     catch (error) {
       await service.close(); await closeAccountInternal(); await docAgentAssembly.close();
-      await docAssembly?.close(); accountRuntime?.close(); assetReadyProbe?.close(); throw error;
+      await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close(); throw error;
     }
   }
 
@@ -501,7 +550,7 @@ export async function startHostedCombo({
     docAddr = await service.listen(docPort, host);
   } catch (err) {
     await service.close().catch(() => {});
-    await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); accountRuntime?.close(); assetReadyProbe?.close();
+    await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
   let assetAddr;
@@ -515,7 +564,7 @@ export async function startHostedCombo({
     });
   } catch (err) {
     await service.close().catch(() => {});
-    await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); accountRuntime?.close(); assetReadyProbe?.close();
+    await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
 
@@ -564,6 +613,7 @@ export async function startHostedCombo({
     accountRuntime,
     docAssembly,
     docAgentAssembly,
+    runAssetsMounted: Boolean(runAssets),
     accountInternalPort,
     inventory,
     async close() {
@@ -581,6 +631,7 @@ export async function startHostedCombo({
       await closeAccountInternal();
       await docAgentAssembly?.close();
       await docAssembly?.close();
+      runObserverAuthority?.close(); runPrivateClient?.close();
       accountRuntime?.close();
       assetReadyProbe?.close();
     },
