@@ -1,182 +1,242 @@
-# 卡片能力审阅表（`capabilities.json` 的注释本）
+# 卡片分类登记表（`capabilities.json` 的注释本）
 
-JSON 放不下注释，所以审阅结论和理由写在这里。**改 `capabilities.json` 必须同时改这份文档。**
+JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capabilities.json` 必须同时改这份文档。**
 
-审阅日期：2026-09-17（目标 A0）。范围：仓库默认注册的 **89 张卡**
-（`docs/archive/topics/default-animation-card-inventory.md`：MagicUI 6 + 自家功能卡 24 + Lottie 素材卡 5 + 粒子素材卡 53 + 探针 1）。
+三个轴的定义在 `docs/semantics/mechanism/cards.md`「三个划分轴」。这张表把每张内置卡在三个轴上的取值登记在一处。
+
+- 第一次审阅：2026-09-17，只登记了「依不依赖下层」和「是不是画布卡」。
+- 2026-10-12（渲染重构「丁」，`docs/plan/render-refactor-task.md`）：三样登记全，补登记四张，加守门测试。
 
 ## 1. 这张表管什么
 
-| 字段 | 取值 | 谁说了算 |
-|---|---|---|
-| `compositing` | `independent` / `sourceDependent` / `belowDependent` | **只有这张表**。源码里写的这三个值一律忽略（`frameMode.mjs` 的 `reviewedCompositing`） |
-| `canvasHeavy` | `true` | 表优先，表里没有才读 `CardDef.canvasHeavy` |
-| `frameMode` | `direct` / `stateful` | 表优先，表里没有才读 `CardDef.frameMode`（A0.1 已经把 31 个文件写死了，所以这张表**一条都不写** `frameMode`，避免两处真相） |
+范围是**内置卡**：`src/cards/index.ts` 里和 `registerCards` 一起注册的四组，现在 101 张。
 
-轴三（pinned「卡片划分」轴三）的口径：
+| 组 | 张数 | 在哪 |
+|---|---:|---|
+| 自家卡 | 27 | `src/cards/native/` |
+| MagicUI | 5 | `src/cards/magicui/` |
+| 素材封装卡 | 58 | `src/cards/assets/`，由素材目录生成：Lottie 5 张、粒子 53 张 |
+| 探针卡 | 11 | `src/cards/_probe/`，只给探针脚本用 |
 
-- `independent` —— 只画自己。可以单独预渲染、上云共享。
-- `sourceDependent` —— 拿指定的另一段画面当输入（转场）。向上追溯整条链路，链上任一控件的参数哈希变了就失效。
-- `belowDependent` —— 毛玻璃 / 后处理：同一时刻下层任一控件的参数哈希变了就失效。
-- 表里没有、`CardDef` 也没有 → `unknown`（A0.5）：按重管线处理但没有死素材（透明）、不进任何缓存、不进流。
+用户建的卡（含项目内嵌的卡）不进这张表，见第 8 节。
 
-`context` 是 `sourceDependent` / `belowDependent` 的旧统称，只为读老 `.proc` 保留，**新审阅不许再写**。
+### 每条登记三样
+
+| 字段 | 轴 | 取值 | 谁说了算 |
+|---|---|---|---|
+| `writing` | 轴一：哪种写法 | `remotion` / `motion` | **卡的声明**。`remotion` 对应声明里的 `frameMode: "direct"`，`motion` 对应 `"stateful"`。表里登记的值取自声明；两边对不上算错，守门测试会红，改表不改卡 |
+| `surface` | 轴二：画在什么上 | `dom` / `canvas2d` / `webgl` / `none` | **这张表** |
+| `compositing` | 轴三：依不依赖下层 | `independent` / `sourceDependent` / `belowDependent`，另有两个记号 `unknown`、`fromParts` | **这张表**。源码里写的这三个值一律忽略 |
+
+另有一个旧字段 `canvasHeavy: true`：画布卡（`surface` 是 `canvas2d` 或 `webgl`）必须同时写上，别的卡不写。原因见第 3 节。
+
+`surface` 的四个值：
+
+- `dom`：画在 DOM 上。SVG 也算（Lottie 用的是 SVG 画法，见 `mechanism/cards.md` 轴二）。
+- `canvas2d`：画在 2D 画布上。
+- `webgl`：画在 WebGL 上（three.js 等）。
+- `none`：没有画面，只出声音的卡。
+
+`compositing` 的取值：
+
+- `independent`：只画自己。可以单独预渲染、经素材服务共享。
+- `sourceDependent`：拿指定的另一段画面当输入（转场）。向上追溯整条链路，链上任一控件的参数哈希变了就失效。
+- `belowDependent`：毛玻璃、后处理。同一时刻下层任一控件的参数哈希变了就失效。
+- `unknown`（记号）：登记了，但**故意不审**。只给三张探针卡用（`r6-unknown`、`probe-css`、`probe-motion-js`），它们的用处就是「一张没审过的卡」。运行时和不在表里一样：按下层依赖卡处理，不进共享缓存、不进流。别的卡不许写。
+- `fromParts`（记号）：组合卡 `composite` 专用，轴三由部件推导，见第 6 节。
+
+`context` 是 `sourceDependent` / `belowDependent` 的旧统称，只为读老 `.proc` 里的声明保留，**表里不许写**。
 
 ### 通配
 
 键可以写成 `前缀-*`。查表顺序：先精确 id，再取**最长**的 `前缀-*`。
-表里只有一条通配 `"particles-*"`，覆盖 53 张粒子素材卡。注意 `particles-*` 的前缀带连字符，
+表里只有一条通配 `"particles-*"`，覆盖 53 张粒子素材封装卡。`particles-*` 的前缀带连字符，
 所以它**不**匹配通用粒子卡 `particles`（那张单列了一条）。
 
-### 一改就作废
+### 谁在读
 
-`cardCapabilities` 的结果经 `cardGraph.mjs` 的 `capabilities` 进身份 digest。
-**改这张表 = 全部共享键和本地缓存作废**，这是 A0.1(b) 接受的代价。
+- `src/kernel/frameMode.mjs`：`reviewedCard(id)` 把条目原样带出来（新字段也在里面）；`cardCapabilities` 用其中的 `compositing` 和 `canvasHeavy`。
+- `server/vision-project.mjs`：Node 一侧另有一份加载。`reviewedCapabilities(id)` 带出原条目；`reviewedClassification(id)` 把三样整理好（写法、对应的 `frameMode`、画在什么上、是不是画布卡、轴三）。三样的取值表也是那里的常量。
 
-## 2. 结论汇总
+守门测试核对两处查到的是同一份。
 
-| compositing | 张数 | 卡 |
+## 2. 改这张表会让哪些键变
+
+`cardCapabilities` 的返回整个进卡片身份的摘要（`src/kernel/cardGraph.mjs` 把它写在节点的 `capabilities` 上）。它只有五项：`frameMode`、`need_prerendering`、`compositing`、`canvasHeavy`、`independentCache`。
+
+- **改一张卡的 `compositing` 或画布与否**：这张卡的能力表变了，它的预渲染结果的键、成本键全部换新，旧缓存不再命中。
+- **`writing`、`surface` 不进摘要**。它们是登记，不是 `cardCapabilities` 的输入；守门测试看着 `cardCapabilities` 的返回仍只有那五项。
+- **新增条目**：只影响原来查不到、现在查得到的卡。
+
+核对办法：`node scripts/probes/card-table-digest-compare.mjs`，对全部内置卡在基准提交和当前工作区各算一遍能力表、源码版本和三个键，逐张比。改表之后跑一遍，把结果写进报告。
+
+## 3. 为什么 `frameMode.mjs` 没跟着改、`canvasHeavy` 还留着
+
+`src/kernel/frameMode.mjs` 在每张内置卡的**源码导入闭包**里（卡片 → `kernel/types.ts` → `frameMode.mjs`，中间只是一句类型导入）。卡片的源码版本是闭包里全部文件的全文（`src/render/cardSourceVersion.mjs`），它进每一个预渲染结果的键。所以这个文件**改一个字**，按 id 找得到自己源文件的 42 张内置卡的键就全变（2026-10-12 实测：只加一行注释，42 张的键变了；其余 59 张是 58 张素材封装卡和 `composite`，源文件里找不到写死的 id，源码版本走另一条算法，没变）。`src/kernel/cardGraph.mjs` 也在这个闭包里，同理。
+
+「丁」要求别的卡的键不因为表里多了字段而变，所以这次这两个文件一个字没动。由此留下两处不够干净的地方：
+
+1. **表里不许出现 `frameMode` 这个键。** `cardCapabilities` 里有一句旧代码：表里写了 `frameMode` 就拿它盖过卡的声明。写法应以声明为准，所以表里登记写法用的是另一个名字 `writing`，那句旧代码永远读不到值。守门测试拦着：谁往表里写 `frameMode` 就红。
+2. **`canvasHeavy` 和 `surface` 重复。** 运行时判画布卡读的还是 `canvasHeavy`，`surface` 是登记。守门测试核对两者一致。
+
+下一次有别的改动本来就要动这两个文件（或者本来就要让全部缓存作废）时，顺手收掉：`cardCapabilities` 删掉读表里 `frameMode` 的那一句，`canvasHeavy` 改成由 `surface` 推出，表里的 `canvasHeavy` 删掉。
+
+## 4. 结论汇总（101 张内置卡）
+
+| 写法 | 张数 | 卡 |
 |---|---:|---|
-| `independent` | 77 | 除下面 12 张之外的全部（含 53 张粒子、5 张 Lottie、组合卡） |
-| `belowDependent` | 12 | 12 个用 `hud-glass` 的自家卡 |
-| `sourceDependent` | 0 | 仓库里现在没有「拿另一段画面当输入」的注册卡 |
-| `unknown` | 0 | 验收要求 |
+| `remotion` | 5 | `caption-track`、`av-pulse`、`sound-notification`、`sound-keyboard`、`probe-slow` |
+| `motion` | 96 | 其余全部 |
 
-`canvasHeavy: true` 共 **55** 张：53 张粒子素材卡（通配）+ 通用粒子卡 `particles` + `scene-3d`。
+| 画在什么上 | 张数 | 卡 |
+|---|---:|---|
+| `dom` | 43 | 除下面三行之外的全部（含 Lottie 的 6 张） |
+| `canvas2d` | 55 | 通用粒子卡 `particles`、53 张粒子素材封装卡（通配）、探针卡 `r6-canvas` |
+| `webgl` | 1 | `scene-3d` |
+| `none` | 2 | `sound-notification`、`sound-keyboard` |
 
-## 3. 判据
+| 依不依赖下层 | 张数 | 卡 |
+|---|---:|---|
+| `independent` | 85 | 除下面三行之外的全部 |
+| `belowDependent` | 12 | 12 张用 `hud-glass` 的自家卡 |
+| `sourceDependent` | 0 | 内置卡里现在没有「拿另一段画面当输入」的 |
+| `unknown`（故意不审） | 3 | `r6-unknown`、`probe-css`、`probe-motion-js` |
+| `fromParts` | 1 | `composite` |
 
-**`belowDependent` 的唯一来源是 `hud-glass`。** `src/cards/native/hud.css:30` 的 `.hud-glass`
-带 `backdrop-filter: blur(var(--pc-glass-blur, 24px))` —— 它采样自己身后已经合成好的画面，
-所以下层任何一张卡的参数变了，这张卡的预渲染结果就不作数。全仓库 `backdrop-filter` 只有这一处
-（另一处 `src/ExportView.tsx:218` 是注释，`src/themes/index.ts:10` 是变量说明）。
-用 `className="hud-glass"` 的正好 12 个文件，和规格里说的「12 个 `hud-glass` 文件」对上。
+表里还有一条不属于这 101 张的：`mu-animated-shiny-text`。它是随仓库带的一张 `src/cards/user/` 下的卡（原先算在 MagicUI 里），登记保留，三样照它的声明和画法填。
 
-**读像素零命中。** `getImageData` / 跨层 `drawImage(` 在 `src/cards` 下没有卡片使用。
-`scene-3d.tsx:148` 出现 `drawImage(canvas)` 是注释，讲的是**编辑器**去读这张卡的画布，
+## 5. 判据
+
+**`belowDependent` 的唯一来源是 `hud-glass`。** `src/cards/native/hud.css` 的 `.hud-glass`
+带 `backdrop-filter: blur(var(--pc-glass-blur, 24px))`，它采样自己身后已经合成好的画面，
+所以下层任何一张卡的参数变了，这张卡的预渲染结果就不作数。全仓库 `backdrop-filter` 只有这一处。
+用 `className="hud-glass"` 的正好 12 个卡片文件。
+
+**读像素零命中。** `getImageData`、跨层 `drawImage(` 在 `src/cards` 下没有卡片使用。
+`scene-3d.tsx` 里出现的 `drawImage(canvas)` 是注释，讲的是**编辑器**去读这张卡的画布，
 方向相反，不构成对下层的依赖。
 
-**`canvasHeavy` 的判据是「画面载体是 canvas / WebGL」**，不是「重」。
-`particles`（tsParticles，Canvas 2D）和 `scene-3d`（three.js，WebGL）是仅有的两张；
-`terminal-3d` 的立体感来自 CSS 透视，**没有 canvas**；Lottie 用的是 SVG renderer，按 DOM 卡算
-（和 A0.3「Lottie 5 张按 DOM 卡」一致）。`focus-card` 里的是 `<video>`，不是 canvas。
+**画布卡的判据是「画面载体是 canvas / WebGL」**，不是「重」。
+`particles`（tsParticles，2D 画布，声明里 `canvas.kind` 是 `dom2d`）和 `scene-3d`（three.js，WebGL，`canvas.kind` 是 `three`）；
+`terminal-3d` 的立体感来自 CSS 透视，**没有 canvas**；Lottie 用的是 SVG 画法，按 DOM 卡算；
+`focus-card` 里的是 `<video>`，不是 canvas。卡片声明了画布契约（`canvas`）的，表里的 `surface` 要和它对得上，守门测试核对。
 
-**自身 `filter: blur()` 不算依赖下层。** `punch-pill.tsx:17` 和 `blur-text.tsx:34` 的 `blur()`
+**自身 `filter: blur()` 不算依赖下层。** `punch-pill.tsx` 和 `blur-text.tsx` 的 `blur()`
 模糊的是自己的元素，不采样身后画面。`blur-text` 判 `belowDependent` 是因为它另外用了 `hud-glass`，
 不是因为这个 `filter`。
 
-## 4. 高频清单逐张（62 张）
+**写法不在这里判。** 写法取自卡的声明；声明对不对由建卡检查和卡片作者负责。
 
-高频清单 = inventory `:19` 的「首次面板展示 62 张」= 36 张非粒子卡 + 26 张精选粒子卡。
+### 逐张
 
-### 4.1 MagicUI（6 张，全 `independent`）
+**MagicUI（5 张，全是 `motion` / `dom` / `independent`）**
 
-| id | 决定 | 理由 |
-|---|---|---|
-| `mu-number-ticker` | independent | Motion 弹簧改数字，纯 DOM 文本 |
-| `mu-blur-fade` | independent | Motion 对自身做 `filter: blur` + 位移，不采样身后 |
-| `mu-circular-progress` | independent | rAF 插值 + SVG 描边 |
-| `mu-typing` | independent | rAF 改已显示字符，纯文本 |
-| `mu-word-rotate` | independent | AnimatePresence 换词 |
-| `mu-animated-shiny-text` | independent | CSS keyframes 高光，`background-clip` 作用在自己身上 |
+| id | 理由 |
+|---|---|
+| `mu-number-ticker` | Motion 弹簧改数字，纯 DOM 文本 |
+| `mu-blur-fade` | Motion 对自身做 `filter: blur` 加位移，不采样身后 |
+| `mu-circular-progress` | rAF 插值加 SVG 描边 |
+| `mu-typing` | rAF 改已显示字符，纯文本 |
+| `mu-word-rotate` | AnimatePresence 换词 |
 
-### 4.2 自家功能卡（24 张）
+`mu-animated-shiny-text`（`src/cards/user/` 下那张）：CSS 关键帧高光，`background-clip` 作用在自己身上，同上三样。
 
-| id | 决定 | 理由 |
-|---|---|---|
-| `composite` | **不进表**，由部件推导 | 见第 5 节 |
-| `lottie` | independent | `LottieView` 走 SVG renderer，只画自己；非 canvas |
-| `particles` | independent + `canvasHeavy` | tsParticles 画在自己的 canvas 上；画布不透明区之外是透明的，不读下层 |
-| `scene-3d` | independent + `canvasHeavy` | three.js WebGL，按 `t` 算姿态后显式 render；只画自己 |
-| `caption-track` | independent | 唯一的 `direct` 卡，纯文本字幕；虽然 `import "./hud.css"`，但没有用 `hud-glass` |
-| `entity-chips` | independent | 同上：引了 hud.css，用的是定位类，不是玻璃板 |
-| `pin-board` | independent | 同上 |
-| `punch-pill` | independent | 同上；`filter: blur(32px)` 是自己的辉光底 |
-| `quote-lockup` | independent | 同上 |
-| `type-shift` | independent | 同上 |
-| `ui-callout` | independent | 同上（DOM + SVG 引导线） |
-| `focus-card` | independent | 人物窗口用 `<video>` + Motion，画自己。放的是它自己参数里的素材，不是别的片段的画面，所以不是 `sourceDependent` |
-| `blur-text` | **belowDependent** | `blur-text.tsx:29` `<div className="hud-glass">` |
-| `chapter-bar` | **belowDependent** | `chapter-bar.tsx:55` |
-| `checklist` | **belowDependent** | `checklist.tsx:60` |
-| `growth-curve` | **belowDependent** | `growth-curve.tsx:95` |
-| `odometer` | **belowDependent** | `odometer.tsx:44` |
-| `rank-bars` | **belowDependent** | `rank-bars.tsx:48` |
-| `ring-metric` | **belowDependent** | `ring-metric.tsx:41` |
-| `stat-proof` | **belowDependent** | `stat-proof.tsx:42` |
-| `step-timeline` | **belowDependent** | `step-timeline.tsx:21` |
-| `term-card` | **belowDependent** | `term-card.tsx:16` |
-| `terminal-3d` | **belowDependent** | `terminal-3d.tsx:62`；它的 3D 是 CSS 透视，不是 canvas |
-| `versus-card` | **belowDependent** | `versus-card.tsx:31`、`:57` 两块玻璃板 |
+**自家卡（27 张）**
 
-### 4.3 Lottie 素材卡（5 张，全 `independent`）
+| id | 写法 | 画在什么上 | 依不依赖下层 | 理由 |
+|---|---|---|---|---|
+| `composite` | motion | dom | `fromParts` | 见第 6 节 |
+| `lottie` | motion | dom | independent | `LottieView` 走 SVG 画法，只画自己 |
+| `particles` | motion | canvas2d | independent | tsParticles 画在自己的画布上；画布不透明区之外是透明的，不读下层 |
+| `scene-3d` | motion | webgl | independent | three.js WebGL，按 `t` 算姿态后显式渲染；只画自己 |
+| `caption-track` | remotion | dom | independent | 纯文本字幕；虽然引了 `hud.css`，但没有用 `hud-glass` |
+| `av-pulse` | remotion | dom | independent | 一个按 `t` 算大小和不透明度的圆环（自己的边框），不采样身后；同片段另有声音（2026-10-12 补登记） |
+| `sound-notification` | remotion | none | independent | 只有 `audio()`，没有画面（2026-10-12 补登记） |
+| `sound-keyboard` | remotion | none | independent | 同上（2026-10-12 补登记） |
+| `entity-chips` | motion | dom | independent | 引了 `hud.css`，用的是定位类，不是玻璃板 |
+| `pin-board` | motion | dom | independent | 同上 |
+| `punch-pill` | motion | dom | independent | 同上；`filter: blur(32px)` 是自己的辉光底 |
+| `quote-lockup` | motion | dom | independent | 同上 |
+| `type-shift` | motion | dom | independent | 同上 |
+| `ui-callout` | motion | dom | independent | 同上（DOM 加 SVG 引导线） |
+| `focus-card` | motion | dom | independent | 人物窗口用 `<video>` 加 Motion，画自己。放的是它自己参数里的素材，不是别的片段的画面，所以不是 `sourceDependent` |
+| `blur-text` | motion | dom | **belowDependent** | 用了 `hud-glass` |
+| `chapter-bar` | motion | dom | **belowDependent** | 同上 |
+| `checklist` | motion | dom | **belowDependent** | 同上 |
+| `growth-curve` | motion | dom | **belowDependent** | 同上 |
+| `odometer` | motion | dom | **belowDependent** | 同上 |
+| `rank-bars` | motion | dom | **belowDependent** | 同上 |
+| `ring-metric` | motion | dom | **belowDependent** | 同上 |
+| `stat-proof` | motion | dom | **belowDependent** | 同上 |
+| `step-timeline` | motion | dom | **belowDependent** | 同上 |
+| `term-card` | motion | dom | **belowDependent** | 同上 |
+| `terminal-3d` | motion | dom | **belowDependent** | 同上；它的 3D 是 CSS 透视，不是 canvas |
+| `versus-card` | motion | dom | **belowDependent** | 同上，两块玻璃板 |
 
-`lottie-adrock` / `lottie-bodymovin` / `lottie-gatin` / `lottie-happy2016` / `lottie-navidad`。
-五张共用 `LottieView`（SVG renderer），各自只画自己的动画，互不采样，也不是 canvas 卡。
+**Lottie 素材封装卡（5 张，全是 `motion` / `dom` / `independent`）**
 
-### 4.4 探针（1 张）
+`lottie-adrock`、`lottie-bodymovin`、`lottie-gatin`、`lottie-happy2016`、`lottie-navidad`。
+五张共用 `LottieView`（SVG 画法），各自只画自己的动画，互不采样，也不是画布卡。
 
-`probe` —— 一个绝对定位的文本 div，`independent`。
+**粒子素材封装卡（53 张，通配 `particles-*`，全是 `motion` / `canvas2d` / `independent`）**
 
-`probe-slow-stepped` —— 可调成本的探针卡（每次渲染忙等 `burnMs` 毫秒）的推帧版，只画自己那一块绝对定位的色块，`independent`。C10 的本机验收（`scripts/probes/c10-browser-probe.mjs`）要一张在哪台机器上都稳定判重、又由渲染节点产快照的卡。
+53 张全部共用 `ParticlesView` 加 `translateParticlesConfig`，差别只在 JSON 配置：同一个渲染器、
+同一块自有画布、同一套「只画自己」的结论，声明也是同一段代码生成的，所以合并成一条通配。
 
-### 4.5 精选粒子卡（26 张，通配 `particles-*` 覆盖）
+> 配置名里的 `mouse*`、`clickPause`、`lightHover` 是上游示例的交互演示。舞台上没有鼠标，
+> 这些交互不触发；它们仍然只画自己的画布，`independent` 不受影响。
 
-`basic` `big` `bigBlend` `bubble` `colorAnimation` `fallingConfetti` `gradients` `groups` `lch`
-`life` `linkTriangles` `nasa` `orbit` `parallax` `plasma` `poisson` `random` `repulse` `slow`
-`snow` `spin` `star` `strokeAnimation` `triangles` `twinkle` `vibrate`（id 前缀 `particles-`）。
+**探针卡（11 张）**
 
-53 张全部共用 `ParticlesView` + `translateParticlesConfig`，差别只在 JSON 配置：同一个渲染器、
-同一块自有 canvas、同一套「只画自己」的结论，所以合并成一条通配。非精选的另外 27 张
-（`backgroundCanvas` `bigBlendCombo` `clickPause` `collisionsAbsorb` `collisionsBounce` `delay`
-`delayColor` `delayOpacity` `delaySize` `delayStrokeColor` `destroy` `destroyExplode` `effectBubble`
-`effectFilter` `effectParticles` `effectTrailTransform` `grabRandomColor` `lightHover` `mouseAttract`
-`mouseDestroy` `mouseDrag` `mouseParticle2` `moveAngle` `moveDistance` `moveInside` `moveOutside`
-`noClear`）走同一条通配，结论相同。
+| id | 写法 | 画在什么上 | 依不依赖下层 | 说明 |
+|---|---|---|---|---|
+| `probe` | motion | dom | independent | 一个绝对定位的文本 div |
+| `probe-countdown`、`probe-typewriter` | motion | dom | independent | 定时器探针，只画自己的文本 |
+| `probe-slow` | remotion | dom | independent | 可调成本的探针卡（每次渲染忙等 `burnMs` 毫秒），只画自己那一块色块（2026-10-12 补登记） |
+| `probe-slow-stepped` | motion | dom | independent | 上一张的推帧版，画法相同 |
+| `r6-stateful`、`r6-huge` | motion | dom | independent | 只画自己 |
+| `r6-canvas` | motion | canvas2d | independent | 自己的一块 2D 画布 |
+| `r6-unknown` | motion | dom | `unknown` | 故意不审：探针要一张「没审过的卡」 |
+| `probe-css`、`probe-motion-js` | motion | dom | `unknown` | 故意不审：这两张要走「按下层依赖卡处理、判轻就活渲」那条路 |
 
-> 配置名里的 `mouse*` / `clickPause` / `lightHover` 是上游示例的交互演示。舞台上没有鼠标，
-> 这些交互不触发；它们仍然只画自己的 canvas，`independent` 不受影响。
+## 6. 组合卡
 
-## 5. 组合卡（A0.4）
-
-`composite` **不写进表**，由部件树推导，最保守者胜
+`composite` 在表里登记成 `fromParts`：轴三由部件树推导，最保守者胜
 （保守程度 `independent` < `sourceDependent` < `belowDependent` < `context` < `unknown`）。
-实现：`frameMode.mjs` 的 `derivedCompositing(parts)` + `DERIVED_FROM_PARTS`。
+实现：`frameMode.mjs` 的 `derivedCompositing(parts)` 加 `DERIVED_FROM_PARTS`。登记进表没有改变推导：`fromParts` 不是审阅结论，`cardCapabilities` 照旧走推导。
 
-推导拿的是**部件出处的卡 id**（`PartDef.from`，26 个部件全都写了）。
+推导拿的是**部件出处的卡 id**（`PartDef.from`）。
 但是 `clip.parts` 上存的是 `PartInstance.partId`（部件 id），要换成卡 id 得查部件注册表
 （`src/kernel/partRegistry.ts`，只有浏览器侧的 `.tsx` 能加载）。`cardGraph.mjs` 两端都跑，
-**不能一端查得到、一端查不到**，否则身份 digest 会在浏览器和 Node 之间分叉。
+**不能一端查得到、一端查不到**，否则身份摘要会在浏览器和 Node 之间分叉。
 所以 `cardGraph.mjs` 只把 `clip.parts` 原样传进去，解析不出卡 id 的部件按 `unknown` 计：
 
-- 没有部件的组合卡（只有占位文字）→ `independent`；
-- 有部件的组合卡 → `unknown`（A0.5 的保守档），等把部件注册表接到两端之后再收紧。
+- 没有部件的组合卡（只有占位文字）是 `independent`；
+- 有部件的组合卡是 `unknown`，等把部件注册表接到两端之后再收紧。
 
-真出现「审阅表说 independent、实际却有毛玻璃」的情况，由第 6 节的运行期兜底接住。
+`surface` 登记的是 `dom`：组合卡现在一律不当画布卡处理，部件里有画布也一样。
 
-## 6. 运行期兜底（A0.2 末句）
+真出现「表里说 independent、实际却有毛玻璃」的情况，由第 7 节的运行期兜底接住。
 
-`src/render/capabilityGuard.ts` 在卡片挂载后扫一遍子树的 computed style，
-量到 `backdrop-filter !== 'none'` 而审阅表说 `independent` 的，`console.warn` 并调
+## 7. 运行期兜底
+
+`src/render/capabilityGuard.ts` 在卡片挂载后扫一遍子树的计算样式，
+量到 `backdrop-filter !== 'none'` 而表里说 `independent` 的，`console.warn` 并调
 `degradeCard(id)`。`cardCapabilities` 读这张降级表，本次会话内把它当 `belowDependent`。
-闸门在 `shouldGuard()`：只有 `import.meta.env.DEV`、且 URL 上没有 `export=` / `frames=` / `bake=` 才跑；
-每张卡一辈子只量一次（`resetGuardScans` 只给单测用）。导出、预渲染、生成快照那条路上
-一个 `getComputedStyle` 都不会执行，逐像素基线不受影响。`Stage.tsx` 只多了一个 `ref`，DOM 一个字不变。
+只在开发模式、且地址上没有 `export=` / `frames=` / `bake=` 时才跑；
+每张卡只量一次。导出、预渲染、生成快照那条路上一个 `getComputedStyle` 都不会执行，逐像素基线不受影响。
 
-## 7. 不在这张表里的卡
+## 8. 不在这张表里的卡
 
-**用户项目内嵌卡。** `.pc-work/opened/` 下 27 个 `.proc` 一共内嵌 4 张卡，已经审过：
+**用户建的卡、项目内嵌的卡。** 这份表随仓库发布，不能被某一台机器上的项目改写。它们的写法取自源码里的声明；
+依不依赖下层一律当 `unknown`，比审过的结论更保守，不会画错，只是不进共享缓存。审阅结果随源码同步是 `docs/plan/TODO.md` 里另立的专项。
 
-| id | 画面 | 该判 |
-|---|---|---|
-| `wa-texture` | 源码里有 `backdrop-filter` | `belowDependent` |
-| `tokyo7-cta` | 纯 DOM | `independent` |
-| `tokyo7-map` | 纯 DOM / SVG | `independent` |
-| `zen-title` | 纯 DOM | `independent` |
+**部件（`src/parts/lib/*`）** 不是卡片定义，不进这张表；它们的轴三经第 6 节的推导从出处卡带过来。
 
-它们**不写进 `capabilities.json`**：这份表随仓库发布，不能被某一台机器上的项目改写；
-项目内嵌卡跟着 `.proc` 走，该有自己的随项目审阅表（后续目标）。在那之前它们按 A0.5 判
-`unknown` —— 比上表的结论更保守，不会画错，只是不进缓存。
+## 9. 新增或改一张内置卡时
 
-**部件（`src/parts/lib/*`，26 个）** 不是 `CardDef`，不单独计入 89 张，也不进这张表；
-它们的能力经第 5 节的推导从出处卡带过来。
+1. 在 `capabilities.json` 里加一条，三样写全；画布卡同时写 `canvasHeavy: true`。素材封装卡的 id 落在已有通配里就不用加。
+2. `writing` 照卡的声明填。之后改了卡的声明，表跟着改。
+3. `compositing` 要有审阅结论，照第 5 节的判据审，把理由写进本文档的逐张表。
+4. 跑守门测试 `node --test src/cards/capabilities.test.mjs`。没登记、三样不全、写法和声明对不上、画布卡两处不一致、表里有对不上任何卡的键，它都会红。
+5. 改了现有卡的 `compositing` 或画布与否，跑第 2 节的比对脚本，把哪些卡的键变了写进报告。
