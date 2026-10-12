@@ -2,9 +2,13 @@
  * 探针:Lottie「覆盖随机数种子」——直接跳到第 N 帧和从头顺着推到第 N 帧,画面相同不相同。
  * 出处:`docs/plan/render-refactor-task.md`「癸:Lottie 改成 remotion 式」的「要留意的一处」;用户 2026-10-12:「我觉得可以覆盖随机数种子。」
  * 同日用户又提了另一种做法:「能不能用替换方式直接覆盖,比如替换 random 为 random_in_card()」,即下面的开关三。
- * 原型在 `src/cards/native/lottie.tsx`(`loadLottie`,三个开关缺省都关)和 `src/kernel/pinEntropy.ts`(`withSeededRandom`)。
+ * 做法在 `src/cards/native/lottie.tsx`(`loadLottie`)和 `src/kernel/pinEntropy.ts`(`withSeededRandom`)。
+ * 渲染重构「癸」合入以后,正式的一组(开关三、外面那一层、开关二)缺省开着,开关一缺省关;本探针照旧五种开法各做一遍,
+ * 开法由探针显式指定(直接调 `loadLottie` 的传 mode,挂真卡片的在页面地址上写 `lottieExpr=0` 之类),不靠缺省。
+ * **升级播放库(lottie-web)之前先跑本探针和 `lottie-seed-extra-probe.mjs`**:版本和下面核对过的不一样时本探针直接判失败,
+ * 重跑通过以后把 `LOTTIE_WEB_VERIFIED` 改成新版本号。
  *
- *   node scripts/probes/lottie-seed-probe.mjs [--port 5750] [--assets fixture,fixtureasync,fixtureip,exprcases,textrandom,adrock,bodymovin,gatin,happy2016,navidad]
+ *   node scripts/probes/lottie-seed-probe.mjs [--port 27601] [--assets fixture,fixtureasync,fixtureip,exprcases,textrandom,adrock,bodymovin,gatin,happy2016,navidad]
  *        [--out <目录>]       存结果 result.json,以及对不上的那几帧的 SVG 文本(缺省放系统临时目录)
  *        [--before 7e7ae968]  「开关关着和改之前一样」拿哪个提交的 lottie.tsx 当改之前
  *        [--skip-sweep]       不跑「全长逐帧,开和关比」那一项(最慢)
@@ -80,8 +84,10 @@ import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const arg = (name, dflt) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : dflt; };
 const flag = (name) => process.argv.includes(name);
-const PORT = Number(arg('--port', '5750'));
-if (!Number.isInteger(PORT) || PORT < 5750 || PORT > 5759) throw new Error('--port 只能用 5750～5759');
+const PORT = Number(arg('--port', '27601'));
+if (!Number.isInteger(PORT) || PORT < 20000 || PORT > 65000) throw new Error('--port 要用 20000 以上的端口(这台机器的临时端口段在 15000 以下,低的端口会被碰巧占住)');
+/** 核对过的播放库版本。升级以后重跑本探针和 lottie-seed-extra-probe.mjs,通过了再改这个数 */
+const LOTTIE_WEB_VERIFIED = '5.13.0';
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const BEFORE = arg('--before', '7e7ae968');
 const OUT = arg('--out', fs.mkdtempSync(path.join(os.tmpdir(), 'pc-lottie-seed-')));
@@ -366,6 +372,19 @@ try {
   browser = await puppeteer.launch({ headless: true, protocolTimeout: 900000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
   report.chrome = await browser.version();
   report.lottieWeb = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.resolve('lottie-web'))), '..', '..', 'package.json'), 'utf8')).version;
+  if (report.lottieWeb !== LOTTIE_WEB_VERIFIED) fail(`播放库是 ${report.lottieWeb},核对过的是 ${LOTTIE_WEB_VERIFIED}:下面各项都过了再把 LOTTIE_WEB_VERIFIED 改成新版本号`);
+  // 跳帧一律走 loadLottie 给的入口:src/ 里除了卡片自己,不许别处引播放库或直接调它的跳帧
+  {
+    // 这两个不是在放 Lottie:前一个把播放库交给在线页面里用户自己写的卡(用户卡直接引播放库的只能声明成 motion 式,见建卡指南第 3 节),
+    // 后一个只在注释里举例。再有别的文件出现,先想清楚它为什么不走 LottieView
+    const ALLOWED_IMPORTERS = ['src/online/cardRuntime/hostModules.ts', 'src/online/cardRuntime/soundStub.ts'];
+    const offenders = [];
+    const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const full = path.join(dir, e.name); if (e.isDirectory()) { if (e.name !== 'node_modules') walk(full); continue; } if (!/\.(ts|tsx|mjs|js|jsx)$/.test(e.name) || /\.test\./.test(e.name)) continue; const rel = path.relative(ROOT, full).split(path.sep).join('/'); if (rel === 'src/cards/native/lottie.tsx' || ALLOWED_IMPORTERS.includes(rel)) continue; const text = fs.readFileSync(full, 'utf8'); if (/from\s+["']lottie-web["']|import\(\s*["']lottie-web["']\s*\)|\.goToAndStop\s*\(|\.goToAndPlay\s*\(/.test(text)) offenders.push(rel); } };
+    walk(path.join(ROOT, 'src'));
+    report.bypassers = offenders;
+    if (offenders.length) fail(`src/ 里除 src/cards/native/lottie.tsx 外还有文件引播放库或直接调它的跳帧:${offenders.join('、')}(要走 LottieView / loadLottie)`);
+    console.log(`跳帧入口 / src/ 里除卡片自己外引播放库或直接调跳帧的文件:${offenders.length} 个`);
+  }
 
   /** 每个用例一个新页面:全页那一串随机数、播放库内部那一串、节点 id 计数器都从头来 */
   const open = async (query = '') => {
@@ -672,27 +691,36 @@ try {
       }
       rows.push(row);
     }
-    console.log(`真卡片 / ${label}(地址带 ${query}):第 ${ns.join('、')} 帧,直接挂、从第 0 帧推过来、别的卡在前 —— ${rows.every((r) => r.same) ? '都和 loadLottie 直接跳的那一份相同' : '有不同'}`);
+    console.log(`真卡片 / ${label}(地址带 ${query || '(什么都不带)'}):第 ${ns.join('、')} 帧,直接挂、从第 0 帧推过来、别的卡在前 —— ${rows.every((r) => r.same) ? '都和 loadLottie 直接跳的那一份相同' : '有不同'}`);
     return rows;
   };
-  if (ASSETS.includes('fixture')) report.card.seed = await cardOn('种子,fixture(内联 JSON)', '?lottieSeed=1', { seed: true, exact: false }, inlineParams, 30, [9, 21, 41, 59], 'fixture', 'seed');
+  if (ASSETS.includes('fixture')) report.card.seed = await cardOn('种子,fixture(内联 JSON)', '?lottieSeed=1&lottieExpr=0&lottieExact=0', { seed: true, exact: false }, inlineParams, 30, [9, 21, 41, 59], 'fixture', 'seed');
   // 装载是异步的那一份:卡片在装载完成之前就调过一次跳帧,播放库装完那一下画的就是那一帧
-  if (ASSETS.includes('fixtureasync')) report.card.seedAsync = await cardOn('种子,fixtureasync(内联 JSON,装载是异步的)', '?lottieSeed=1', { seed: true, exact: false }, { ...inlineParams, json: dataText('fixtureasync') }, 30, [21, 41], 'fixtureasync', 'seed');
-  if (ASSETS.includes('fixtureip')) report.card.seedIp = await cardOn('种子,fixtureip(内联 JSON,起点不在第 0 帧)', '?lottieSeed=1', { seed: true, exact: false }, { ...inlineParams, json: dataText('fixtureip') }, 30, [0, 2, 17], 'fixtureip', 'seed');
+  if (ASSETS.includes('fixtureasync')) report.card.seedAsync = await cardOn('种子,fixtureasync(内联 JSON,装载是异步的)', '?lottieSeed=1&lottieExpr=0&lottieExact=0', { seed: true, exact: false }, { ...inlineParams, json: dataText('fixtureasync') }, 30, [21, 41], 'fixtureasync', 'seed');
+  if (ASSETS.includes('fixtureip')) report.card.seedIp = await cardOn('种子,fixtureip(内联 JSON,起点不在第 0 帧)', '?lottieSeed=1&lottieExpr=0&lottieExact=0', { seed: true, exact: false }, { ...inlineParams, json: dataText('fixtureip') }, 30, [0, 2, 17], 'fixtureip', 'seed');
   // 开关三:同样三份
-  if (ASSETS.includes('fixture')) report.card.expr = await cardOn('替换,fixture(内联 JSON)', '?lottieExpr=1', { seed: false, exact: false, expr: true }, inlineParams, 30, [9, 21, 41, 59], 'fixture', 'expr');
-  if (ASSETS.includes('fixtureasync')) report.card.exprAsync = await cardOn('替换,fixtureasync(内联 JSON,装载是异步的)', '?lottieExpr=1', { seed: false, exact: false, expr: true }, { ...inlineParams, json: dataText('fixtureasync') }, 30, [21, 41], 'fixtureasync', 'expr');
-  if (ASSETS.includes('fixtureip')) report.card.exprIp = await cardOn('替换,fixtureip(内联 JSON,起点不在第 0 帧)', '?lottieExpr=1', { seed: false, exact: false, expr: true }, { ...inlineParams, json: dataText('fixtureip') }, 30, [0, 2, 17], 'fixtureip', 'expr');
+  if (ASSETS.includes('fixture')) report.card.expr = await cardOn('替换,fixture(内联 JSON)', '?lottieExpr=1&lottieExact=0', { seed: false, exact: false, expr: true }, inlineParams, 30, [9, 21, 41, 59], 'fixture', 'expr');
+  if (ASSETS.includes('fixtureasync')) report.card.exprAsync = await cardOn('替换,fixtureasync(内联 JSON,装载是异步的)', '?lottieExpr=1&lottieExact=0', { seed: false, exact: false, expr: true }, { ...inlineParams, json: dataText('fixtureasync') }, 30, [21, 41], 'fixtureasync', 'expr');
+  if (ASSETS.includes('fixtureip')) report.card.exprIp = await cardOn('替换,fixtureip(内联 JSON,起点不在第 0 帧)', '?lottieExpr=1&lottieExact=0', { seed: false, exact: false, expr: true }, { ...inlineParams, json: dataText('fixtureip') }, 30, [0, 2, 17], 'fixtureip', 'expr');
   if (ASSETS.includes('textrandom')) {
-    report.card.exprText = await cardOn('替换,textrandom(内联 JSON,随机顺序的文字)', '?lottieExpr=1', { seed: false, exact: false, expr: true }, { ...inlineParams, json: dataText('textrandom') }, 30, [15, 31, 45], 'textrandom', 'expr');
-    report.card.seedText = await cardOn('种子,textrandom(内联 JSON,随机顺序的文字)', '?lottieSeed=1', { seed: true, exact: false }, { ...inlineParams, json: dataText('textrandom') }, 30, [15, 31, 45], 'textrandom', 'seed');
+    report.card.exprText = await cardOn('替换,textrandom(内联 JSON,随机顺序的文字)', '?lottieExpr=1&lottieExact=0', { seed: false, exact: false, expr: true }, { ...inlineParams, json: dataText('textrandom') }, 30, [15, 31, 45], 'textrandom', 'expr');
+    report.card.seedText = await cardOn('种子,textrandom(内联 JSON,随机顺序的文字)', '?lottieSeed=1&lottieExpr=0&lottieExact=0', { seed: true, exact: false }, { ...inlineParams, json: dataText('textrandom') }, 30, [15, 31, 45], 'textrandom', 'seed');
   }
   if (ASSETS.includes('happy2016')) {
     const a = report.assets.happy2016;
     report.card.exprBoth = await cardOn('替换+不留旧数,happy2016(src 加载)', '?lottieExpr=1&lottieExact=1', { seed: false, exact: true, expr: true }, srcParams('happy2016'), a.fr, [a.picks[4], a.picks[a.picks.length - 1]], 'happy2016', 'exprboth');
-    report.card.both = await cardOn('种子+不留旧数,happy2016(src 加载)', '?lottieSeed=1&lottieExact=1', { seed: true, exact: true }, srcParams('happy2016'), a.fr, [a.picks[4], a.picks[a.picks.length - 1]], 'happy2016', 'both');
+    report.card.both = await cardOn('种子+不留旧数,happy2016(src 加载)', '?lottieSeed=1&lottieExact=1&lottieExpr=0', { seed: true, exact: true }, srcParams('happy2016'), a.fr, [a.picks[4], a.picks[a.picks.length - 1]], 'happy2016', 'both');
   }
-  // 关着:和 --before 那个提交的卡片逐帧原文相同(内联 JSON 的 fixture,和走 src 加载的 navidad)
+  // 缺省(地址上什么都不带):就是正式的一组「替换+不留旧数」
+  {
+    const dflt = { seed: false, exact: true, expr: true };
+    if (ASSETS.includes('fixture')) report.card.dflt = await cardOn('缺省,fixture(内联 JSON)', '', dflt, inlineParams, 30, [9, 21, 41, 59], 'fixture', 'exprboth');
+    if (ASSETS.includes('fixtureasync')) report.card.dfltAsync = await cardOn('缺省,fixtureasync(内联 JSON,装载是异步的)', '', dflt, { ...inlineParams, json: dataText('fixtureasync') }, 30, [21, 41], 'fixtureasync', 'exprboth');
+    if (ASSETS.includes('fixtureip')) report.card.dfltIp = await cardOn('缺省,fixtureip(内联 JSON,起点不在第 0 帧)', '', dflt, { ...inlineParams, json: dataText('fixtureip') }, 30, [0, 2, 17], 'fixtureip', 'exprboth');
+    if (ASSETS.includes('textrandom')) report.card.dfltText = await cardOn('缺省,textrandom(内联 JSON,随机顺序的文字)', '', dflt, { ...inlineParams, json: dataText('textrandom') }, 30, [15, 31, 45], 'textrandom', 'exprboth');
+    if (ASSETS.includes('happy2016')) { const a = report.assets.happy2016; report.card.dfltHappy = await cardOn('缺省,happy2016(src 加载)', '', dflt, srcParams('happy2016'), a.fr, [a.picks[4], a.picks[a.picks.length - 1]], 'happy2016', 'exprboth'); }
+  }
+  // 关着(地址带 lottieExpr=0&lottieExact=0):和 --before 那个提交的卡片逐帧原文相同(内联 JSON 的 fixture,和走 src 加载的 navidad)
   {
     const cases = [];
     if (ASSETS.includes('fixture')) cases.push(['fixture(内联 JSON)', inlineParams, 30, 30]);
@@ -703,7 +731,7 @@ try {
     for (const [label, params, count, rate] of cases) {
       const seqs = {};
       for (const which of ['before', 'current']) {
-        const p = await open(); const switches = await call(p, 'switches'); if (switches.seed || switches.exact || switches.expr) fail(`真卡片/关:不带开关时读到 ${JSON.stringify(switches)}`);
+        const p = await open('?lottieExpr=0&lottieExact=0'); const switches = await call(p, 'switches'); if (switches.seed || switches.exact || switches.expr) fail(`真卡片/关:地址带 lottieExpr=0&lottieExact=0 时读到 ${JSON.stringify(switches)}`);
         // 关着比的是原文:连看不见的图层上留着的旧属性也要一样
         const out = [sha((await call(p, 'mountCard', which, params, 0, 0)).r)];
         for (let f = 1; f < count; f++) out.push(sha((await call(p, 'cardFrame', f / rate)).r));

@@ -9,10 +9,20 @@ import { withSeededRandom } from "../../kernel/pinEntropy";
 /**
  * Lottie 卡:把一段 Lottie 动画(After Effects 导出的 JSON)放到舞台上,按时间轴逐帧定位。
  *
- * 为什么它天生适合确定性导出:lottie-web 的 goToAndStop(frame, true) 是「跳到第几帧并渲染」,
- * 每一帧都是 t 的纯函数,不靠任何时钟自己往前走。所以这张卡**读 t**,每帧把 t 换算成帧号
- * 直接跳过去;不用 autoplay,导出页里再把 lottie 的 rAF 循环冻住(它只服务 autoplay 的动画,
- * 这里没有)。
+ * 这张卡是 remotion 式的(`frameMode: "direct"`,2026-10-10 用户定,渲染重构「癸」落到代码上):lottie-web 的
+ * goToAndStop(frame, true) 是「跳到第几帧并渲染」,不靠任何时钟自己往前走。所以这张卡**读 t**,每帧把 t 换算成帧号
+ * 直接跳过去;不用 autoplay,导出页里再把 lottie 的 rAF 循环冻住(它只服务 autoplay 的动画,这里没有)。
+ * 光这样还不够「每一帧只由素材、参数、帧号决定」:播放库里有随机数,还有一处属性值会留旧数。下面
+ * 「画面只由素材、参数、帧号决定」那一段把它们固定住,缺省就开着。
+ *
+ * **建实例和跳帧一律走 `loadLottie` 和它给的 `goTo`**,不要绕过去直接调播放库的 `loadAnimation`、`goToAndStop`:
+ * 绕过去的话表达式各用各的一串随机数,属性值也会留旧数,顺着推和直接跳就可能不同。别的文件要放 Lottie 用
+ * `LottieView`(部件 `src/parts/lib/media-lottie.tsx`、素材封装卡 `src/cards/assets/index.ts` 都是)。
+ * 探针 `scripts/probes/lottie-seed-probe.mjs` 会查 `src/` 里除本文件外没有别处引播放库。
+ *
+ * **升级播放库(`lottie-web`,现在 5.13.0)之前先重跑两个探针**:`scripts/probes/lottie-seed-probe.mjs` 和
+ * `scripts/probes/lottie-seed-extra-probe.mjs`。下面的做法靠着播放库的几处内部细节(表达式怎么编译、建属性的口子、
+ * 算文字排版的函数名),换版本可能悄悄失效;失效时控制台会有 `[lottie]` 开头的警告,探针把警告算失败。
  *
  * 数据两个来源:json(内联的 JSON 文本,优先)或 src(URL)。内联的没有网络,导出最稳;
  * src 走 fetch,导出脚本的 pauseIfNetworkFetchesPending 会等它加载完再推进虚拟时间。
@@ -52,12 +62,20 @@ const DEMO_JSON = JSON.stringify({
 });
 
 /*
- * ── 画面只由素材、参数、帧号决定(原型,三个开关,缺省都关,互相独立)──
+ * ── 画面只由素材、参数、帧号决定(三个开关,互相独立)──
  *
  * 要的是:从头顺着推到第 N 帧,和新建一份直接跳到第 N 帧,画面相同;和页面里别的卡取过几次随机数无关。
  * 播放库(lottie-web 5.13.0)里有三处让它做不到。前两处是随机数,开关一和开关三是对付它的两种办法(可以只开一个,
  * 也可以都开);第三处和随机数无关,归开关二。
- * 实测与数字见 `scripts/probes/lottie-seed-probe.mjs` 和 docs/reports/AGENT-lottie-seed.md。
+ *
+ * **正式用的一组缺省就开着**(2026-10-12 用户定):开关三(换掉表达式里的随机函数)、外面那一层、开关二(属性值不留旧数)。
+ * 开关一缺省关,只留着给探针做对照。舞台、导出页、在线页面用的是同一份代码、同一个缺省,所以预览和导出取到的是同一串数。
+ * 关掉只为探针对照:页面地址带 `lottieExpr=0` / `lottieExact=0`,或建实例之前把 `window.__pcLottieExpr` / `__pcLottieExact` 设成 false。
+ * 实测与数字见 `scripts/probes/lottie-seed-probe.mjs`、`scripts/probes/lottie-seed-extra-probe.mjs` 和
+ * `docs/plan/render-standard.md`「Lottie 动效」。
+ *
+ * 已知而没处理的一处,是播放库现在就有的毛病:表达式第一次求值就抛错时,那一帧画到一半中止,之后这个属性被锁住不再求值;
+ * 错落在哪一帧取决于怎么到达,所以带坏表达式的素材画面仍可能随到达方式变。
  *
  * ── 开关一:覆盖随机数种子(2026-10-12 用户:「我觉得可以覆盖随机数种子。」)──
  *
@@ -93,7 +111,7 @@ const DEMO_JSON = JSON.stringify({
  * 观感照播放库现在的不变(2026-10-12 用户定的原则,见 `lottieExprRuntime` 的说明):卡片这边同样是「同一帧里各表达式
  * 共用一串、按求值先后接着取」,wiggle 照旧逐帧跳,seedRandom 照旧不看第二个参数,同一个合成放几份照旧各动各的;
  * 改掉的只有一处:这一串每一帧的起点由(素材、帧号)定,不再接着上一帧剩下的取。
- * 和开关一比:不用取播放库内部的随机源、不用给它播种、不用装载后重画。
+ * 和开关一比:不用取播放库内部的随机源、不用给它播种。
  *
  * ── 外面那一层(开关一、开关三只要开了一个就有;2026-10-12 用户:「你帮我在外面也兜住,把播放库的随机数也固定。」)──
  *
@@ -104,7 +122,7 @@ const DEMO_JSON = JSON.stringify({
  *     只按帧号播种反而会让顺着推和直接跳不同。
  * 播放库里所有取随机数的地方、各归哪一层管,列在 docs/reports/AGENT-lottie-seed.md「播放库里的随机来源」。
  *
- * ── 开关二:属性值不留旧数(任务书没要求,查自带素材 happy2016 那 0.0036% 的像素差时找到的)──
+ * ── 开关二:属性值不留旧数(查自带素材 happy2016 那 0.0036% 的像素差时找到的;2026-10-12 用户:「不要差像素。」)──
  *
  *   3. 播放库更新一个属性的值时,新值和手里的旧值差不到 0.00001 就**不更新**(`setVValue`)。顺着推时值一点点变,
  *      最后几步每步都不到这个门槛,就停在离终点差一点的地方;直接跳过去拿到的是准确的终点。两边差不到 0.00001,
@@ -112,29 +130,51 @@ const DEMO_JSON = JSON.stringify({
  *
  * 做法:播放库自己就是靠换掉 `PropertyFactory.getProp` 来给属性加表达式的,这里用同一个口子(`lottie.__getFactory`)
  * 再包一层:本开关开着的实例在建属性时,把它的 `setVValue` 换成「不相等就更新」。别的实例不受影响。
+ *
+ * ── 浏览器不重画嵌套的蒙版(2026-10-13 留底时查到;和播放库无关,是浏览器的毛病)──
+ *
+ *   4. 播放库把图层蒙版画成 SVG 的 `<mask>`。蒙版里面再套一层(`<g>`,里面的路径又挂着别的裁剪)时,里面那一层变了,
+ *      Chrome(152 实测)不重画用这张蒙版的图层:DOM 是对的,屏幕上留着旧画面,直到别的改动碰巧让它重画。
+ *      自带的 `navidad` 顺着推时第 51～81 帧脸上那块底色一直不出来(最多 17 万个像素),直接跳到这些帧却是对的。
+ *      截图、预览、导出走的都是浏览器这一次绘制,所以都中招。
+ *
+ * 做法:装载完成后找出里面套了东西的蒙版(含 `<g>`、`<use>`,或挂着裁剪、蒙版、滤镜的),每跳一帧把它们各自的第一个子节点
+ * 摘下来再原位放回去。DOM 序列化出来一个字不变,浏览器却会照新内容重画用它的图层;实测画出来的和直接跳的逐像素相同。
+ * 只动这几张蒙版,不逼整棵 SVG 重排(那样画出来的边缘像素会和不逼时差一点)。
  */
 
-/** 读一个开关:`window[key]` 是布尔就用它,否则看页面地址里的同名参数是不是 1。缺省关 */
-function flagOf(key: "__pcLottieSeed" | "__pcLottieExact" | "__pcLottieExpr", query: string): boolean {
-  if (typeof window === "undefined") return false;
+/** 读一个开关:`window[key]` 是布尔就用它,否则看页面地址里的同名参数(1 开、0 关),都没有就用缺省 */
+function flagOf(key: "__pcLottieSeed" | "__pcLottieExact" | "__pcLottieExpr" | "__pcLottieRepaint", query: string, dflt: boolean): boolean {
+  if (typeof window === "undefined") return dflt;
   const flag = (window as unknown as Record<string, unknown>)[key];
   if (typeof flag === "boolean") return flag;
-  try { return new URLSearchParams(window.location.search).get(query) === "1"; } catch { return false; }
+  try {
+    const q = new URLSearchParams(window.location.search).get(query);
+    return q === "1" ? true : q === "0" ? false : dflt;
+  } catch { return dflt; }
 }
 
-/** 开关一:缺省关。开法:页面地址带 `lottieSeed=1`,或在建实例之前设 `window.__pcLottieSeed = true`(设成 false 压过地址) */
+/** 开关一:缺省关,只给探针对照用。开法:页面地址带 `lottieSeed=1`,或在建实例之前设 `window.__pcLottieSeed = true`(设成 false 压过地址) */
 export function lottieSeedEnabled(): boolean {
-  return flagOf("__pcLottieSeed", "lottieSeed");
+  return flagOf("__pcLottieSeed", "lottieSeed", false);
 }
 
-/** 开关二:缺省关。开法:页面地址带 `lottieExact=1`,或在建实例之前设 `window.__pcLottieExact = true`(设成 false 压过地址) */
+/** 开关二:**缺省开**。关掉只为探针对照:页面地址带 `lottieExact=0`,或在建实例之前设 `window.__pcLottieExact = false` */
 export function lottieExactEnabled(): boolean {
-  return flagOf("__pcLottieExact", "lottieExact");
+  return flagOf("__pcLottieExact", "lottieExact", true);
 }
 
-/** 开关三:缺省关。开法:页面地址带 `lottieExpr=1`,或在建实例之前设 `window.__pcLottieExpr = true`(设成 false 压过地址) */
+/** 开关三:**缺省开**。关掉只为探针对照:页面地址带 `lottieExpr=0`,或在建实例之前设 `window.__pcLottieExpr = false` */
 export function lottieExprEnabled(): boolean {
-  return flagOf("__pcLottieExpr", "lottieExpr");
+  return flagOf("__pcLottieExpr", "lottieExpr", true);
+}
+
+/**
+ * 逐帧提醒浏览器重画嵌套的蒙版(见下「浏览器不重画嵌套的蒙版」):**缺省开**。
+ * 关掉只为探针对照:页面地址带 `lottieRepaint=0`,或在建实例之前设 `window.__pcLottieRepaint = false`
+ */
+export function lottieRepaintEnabled(): boolean {
+  return flagOf("__pcLottieRepaint", "lottieRepaint", true);
 }
 
 /** 素材内容 → 32 位种子(FNV-1a)。要在交给播放库**之前**算:播放库会原地改这份数据 */
@@ -458,7 +498,22 @@ const OUTER_BUILD = 11, OUTER_FRAME = 12, OUTER_TEXT = 13;
  * 为 null 时(别的没开开关的 Lottie)播放库照原样算。
  */
 let textSeedNow: number | null = null;
+/**
+ * 文字内容的表达式要不要照「不留旧内容」的办法算(见 `hookTextOrder` 第二段)。只在某份开着外面那一层的实例被包住的
+ * 那一段同步代码里为 true。
+ */
+let textFreshNow = false;
 let textOrderHooked: boolean | undefined;
+
+/** 素材里有没有文字内容带表达式的文字图层(`t.d.x`) */
+function hasTextExpression(node: unknown): boolean {
+  if (!node || typeof node !== "object") return false;
+  if (Array.isArray(node)) return node.some(hasTextExpression);
+  const o = node as Record<string, unknown>;
+  const doc = (o.ty === 5 ? (o.t as { d?: { x?: unknown } } | undefined)?.d : undefined);
+  if (doc && typeof doc.x === "string") return true;
+  return Object.keys(o).some((key) => hasTextExpression(o[key]));
+}
 
 /** 素材里有没有「随机顺序」的文字动画器(选择器上 `rn: 1`) */
 function hasRandomTextOrder(node: unknown): boolean {
@@ -477,7 +532,13 @@ function hasRandomTextOrder(node: unknown): boolean {
  *
  * 这里把这一处单独固定:算哪一份,就用(素材种子、图层、文字内容)播种,和在哪一帧算、之前算过什么都无关。
  * `TextProperty` 没有导出,所以建一份只有一个文字图层的一次性动画,从它身上取到原型,包住 `completeTextData`。
- * 全页只包一次;素材里没有随机顺序的文字时不做。
+ * 全页只包一次;素材里没有随机顺序的文字、也没有带表达式的文字内容时不做。
+ *
+ * 同一个原型上另包一处,和随机数无关(2026-10-13 补测「表达式改了文字内容再配随机顺序」时查到的):文字内容带表达式时,
+ * 播放库每帧先把手里那份排版结果的文字改写成关键帧上的原文,再拿它和表达式算出的文字比,一样就**原样留用手里那份**
+ * (`getExpressionValue`)。手里那份要是上一帧表达式换出来的另一段文字的排版,这一帧表达式又回到了原文,画出来的仍是
+ * 上一段文字——顺着推和直接跳就不同。这里改成不看手里那份:表达式算出原文就用关键帧自己那份排版,算出别的就从关键帧
+ * 那份另起一份。只对包住的那一段里的实例生效,别的(没开外面那一层的)照原样。
  */
 function hookTextOrder(): boolean {
   if (textOrderHooked !== undefined) return textOrderHooked;
@@ -505,7 +566,16 @@ function hookTextOrder(): boolean {
         },
         rendererSettings: { progressiveLoad: false },
       });
-      type TextProp = { completeTextData?: (doc: { t?: unknown }) => unknown; elem?: { data?: { ind?: unknown }; comp?: { data?: { refId?: unknown } } } };
+      type TextDoc = { t?: unknown; __complete?: boolean };
+      type TextProp = {
+        completeTextData?: (doc: TextDoc) => unknown;
+        getExpressionValue?: (current: TextDoc, text: unknown) => TextDoc;
+        calculateExpression?: (text: unknown) => unknown;
+        copyData?: (into: TextDoc, from: TextDoc) => TextDoc;
+        keysIndex?: number;
+        data?: { d?: { k?: Array<{ s: TextDoc }> } };
+        elem?: { data?: { ind?: unknown }; comp?: { data?: { refId?: unknown } } };
+      };
       const text = (a as unknown as { renderer?: { elements?: Array<{ textProperty?: TextProp }> } }).renderer?.elements?.[0]?.textProperty;
       const proto = text ? (Object.getPrototypeOf(text) as TextProp) : null;
       const original = proto?.completeTextData;
@@ -517,6 +587,21 @@ function hookTextOrder(): boolean {
           return withSeededRandom(mixSeed(textSeedNow, OUTER_TEXT, layer, lottieSeedOf(String(doc?.t ?? ""))), () => original.call(this, doc));
         };
         textOrderHooked = true;
+        // 文字内容的表达式:不留旧内容(见上第二段)。播放库没有这个函数(关了表达式的构建)时不包,也不算失败
+        const originalValue = proto.getExpressionValue;
+        if (typeof originalValue === "function") {
+          proto.getExpressionValue = function getExpressionValueFresh(this: TextProp, current: TextDoc, text: unknown) {
+            const key = this.data?.d?.k?.[this.keysIndex ?? 0]?.s;
+            if (!textFreshNow || !key || typeof this.calculateExpression !== "function" || typeof this.copyData !== "function") return originalValue.call(this, current, text);
+            const next = this.calculateExpression(text);
+            if (key.t === next) return key;
+            const doc: TextDoc = {};
+            this.copyData(doc, key);
+            doc.t = String(next);
+            doc.__complete = false;
+            return doc;
+          };
+        }
       }
       a.destroy();
     });
@@ -526,10 +611,10 @@ function hookTextOrder(): boolean {
 }
 
 /**
- * 三个开关各开没开(expr 不写当关)。
+ * 三个开关各开没开(expr 不写当关);repaint 是「逐帧提醒浏览器重画嵌套的蒙版」,不写时看 `lottieRepaintEnabled()`。
  * debug 只给探针对照用:"no-outer" 不要外面那一层;"no-text-key" 外面那一层照旧按帧播种,但不单独固定文字的随机顺序。
  */
-export interface LottieMode { seed: boolean; exact: boolean; expr?: boolean; debug?: "no-outer" | "no-text-key" }
+export interface LottieMode { seed: boolean; exact: boolean; expr?: boolean; repaint?: boolean; debug?: "no-outer" | "no-text-key" }
 
 /** 一份建好的动画:跳帧一律走 goTo。seed 是素材种子,开关一、开关三都没开时为 null */
 export interface LottieHandle {
@@ -542,8 +627,8 @@ export interface LottieHandle {
 }
 
 /**
- * 建一份动画实例。三个开关都关着(缺省)时就是原来那两句:`lottie.loadAnimation` 和 `goToAndStop(frame, true)`,
- * 一个字不多。开着时照上面那段说明办。开关三会原地改写 data 里的表达式。
+ * 建一份动画实例。缺省(不传 mode)是正式的一组:开关三、外面那一层、开关二开着,开关一关着;照上面那段说明办。
+ * 开关三会原地改写 data 里的表达式。三个开关都关着时就是原来那两句:`lottie.loadAnimation` 和 `goToAndStop(frame, true)`。
  */
 export function loadLottie(container: HTMLElement, data: any, fit: string, mode: LottieMode = { seed: lottieSeedEnabled(), exact: lottieExactEnabled(), expr: lottieExprEnabled() }): LottieHandle {
   const seed = mode.seed || mode.expr ? lottieSeedOf(data) : null;
@@ -576,7 +661,9 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
   let built: AnimationItem | null = null;
   // 外面那一层(开关一、开关三都有):播放库直接调全页 `Math.random()` 的地方
   const outerOn = seed !== null && mode.debug !== "no-outer";
-  const textKeyed = outerOn && mode.debug !== "no-text-key" && hasRandomTextOrder(data) && hookTextOrder();
+  const randomText = hasRandomTextOrder(data);
+  const textHooked = outerOn && (randomText || hasTextExpression(data)) && hookTextOrder();
+  const textKeyed = textHooked && randomText && mode.debug !== "no-text-key";
   /**
    * 播放库里可能建图层、可能画一帧的同步代码都从这里过:建实例、装载完成(含异步装载的那个回调)、跳帧。
    * key 是这一段用哪一串:建图层用 "build",画一帧用它的帧号。
@@ -587,11 +674,13 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
    *   - 开关三另外定好「这一帧里各表达式共用的那一串」的起点(见 `lottieExprRuntime`)。
    */
   const guarded = <T,>(key: "build" | number, fn: () => T): T => {
-    const outerExact = exactBuilding, outerText = textSeedNow, outerShared = exprShared;
+    const outerExact = exactBuilding, outerText = textSeedNow, outerFresh = textFreshNow, outerShared = exprShared;
     exactBuilding = exact;
     textSeedNow = textKeyed ? seed : null;
+    textFreshNow = textHooked;
     // 开关三:这一帧里各表达式共用的那一串,起点 =(素材种子、帧号)。建实例 / 装载完成那一段里播放库会自己画一次当前帧
-    // (建图层本身不求值表达式),所以那一段用的也是当前帧的帧号,和以后再跳回这一帧时一样,不用重画
+    // (建图层本身不求值表达式),所以那一段用的也是当前帧的帧号。外面那一层在那一段里用的却是建图层那一串,所以装载完成后
+    // 还要按帧号重画一遍(见 redraw)
     const frame = key === "build" ? Number((built as unknown as { currentRawFrame?: number } | null)?.currentRawFrame) || 0 : key;
     exprShared = mode.expr && seed !== null ? { next: streamOf(mixSeed(seed, STREAM_FRAME, ...bitsOf(frame))) } : null;
     try {
@@ -602,18 +691,40 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
     } finally {
       exactBuilding = outerExact;
       textSeedNow = outerText;
+      textFreshNow = outerFresh;
       exprShared = outerShared;
     }
   };
   /**
-   * 只有开关一需要:装载完成那一下播放库会自己画一次当前帧,表达式接着用的是建图层取剩的那一串,不是「种子 + 帧号」
-   * 那一串;以后再跳回这一帧画出来的就可能不一样。所以装载完成后按帧号重新播种,原地重画一遍
-   * (`renderFrame(null)` 是播放库里「当前帧再画一次」的写法)。开关三下那一段的起点用的就是当前帧的帧号,不用重画。
+   * 装载完成那一下播放库会自己画一次当前帧,那一次是在「建图层」那一段里画的:全页的 `Math.random` 用的是建图层那一串
+   * (而且前面被各表达式的 randSeed 取走几个,取走几个还跟页面里之前有没有别的 Lottie 播过种有关),开关一下播放库内部那一串
+   * 也是建图层取剩的。以后再跳回这一帧,用的是「种子 + 帧号」那一串,画出来就可能不一样。所以装载完成后按帧号原地重画一遍
+   * (`renderFrame(null)` 是播放库里「当前帧再画一次」的写法),和以后跳到这一帧走同一条路。
+   * 只开开关三、表达式又规规矩矩用 random / wiggle 的素材,两次画出来本来就一样(那一段里表达式共用的那一串起点已经是当前帧);
+   * 差别出在表达式绕过去直接用全局的 `Math.random`、`crypto` 的素材上(2026-10-13 补测时查到),所以一律重画。
    */
   const redraw = () => {
-    if (!mode.seed) return;
-    const item = anim as unknown as { currentRawFrame: number; renderer?: { renderFrame?: (frame: number | null) => void } };
-    guarded(Number(item.currentRawFrame) || 0, () => item.renderer?.renderFrame?.(null));
+    if (mode.seed || outerOn) {
+      const item = anim as unknown as { currentRawFrame: number; renderer?: { renderFrame?: (frame: number | null) => void } };
+      guarded(Number(item.currentRawFrame) || 0, () => item.renderer?.renderFrame?.(null));
+    }
+    repaintMasks();
+  };
+  /** 浏览器不重画嵌套的蒙版(见文件头第 4 条):这份实例里要逐帧提醒的那几张。装载完成以后图层才建全,那时才找 */
+  const repaintOn = mode.repaint ?? lottieRepaintEnabled();
+  let nestedMasks: Element[] | null = null;
+  const repaintMasks = () => {
+    if (!repaintOn) return;
+    if (nestedMasks === null) {
+      if (!built?.isLoaded) return;
+      nestedMasks = Array.from(container.querySelectorAll("mask")).filter((m) => m.querySelector("g, use, [clip-path], [mask], [filter]"));
+    }
+    for (const m of nestedMasks) {
+      const first = m.firstChild;
+      if (!first) continue;
+      m.removeChild(first);
+      m.insertBefore(first, m.firstChild);
+    }
   };
   const anim: AnimationItem = guarded("build", build);
   built = anim;
@@ -628,7 +739,7 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
       if (!was && item.isLoaded) redraw();
     };
   }
-  return { anim, seed, exact, rewritten, goTo: (frame) => guarded(frame, () => anim.goToAndStop(frame, true)) };
+  return { anim, seed, exact, rewritten, goTo: (frame) => { guarded(frame, () => anim.goToAndStop(frame, true)); repaintMasks(); } };
 }
 
 /** LottieView 的输入:和卡片参数同名,素材封装卡(src/cards/assets)把 src 固定后也用它 */
@@ -669,7 +780,7 @@ export function LottieView(params: LottieViewProps) {
       if (dead || !box.current) return;
       anim.current?.anim.destroy();
       box.current.innerHTML = "";
-      // 建实例和跳帧都经 loadLottie:两个开关都关着时就是原来的 loadAnimation / goToAndStop(见上)
+      // 建实例和跳帧都经 loadLottie(见文件头):随机数和属性值在那里固定住
       const handle = loadLottie(box.current, data, params.fit);
       const a = handle.anim;
       meta.current = { fr: Number(data.fr) || 30, total: Math.max(0, (Number(data.op) || 0) - (Number(data.ip) || 0)) };
@@ -731,8 +842,9 @@ export const lottieCard: CardDef<Params> = {
   useWhen: "要放一段现成的 Lottie 动画时用。软件自带几段素材(片头字标、角色亮相、节日装饰等),列在 src 控件的 options 里,把那个 URL 填进 src 就行;手上有别的 Lottie 文件(LottieFiles 下载的、设计师用 AE 导出的)也可以直接用。把 JSON 文本贴进 json 参数,或者给一个 URL。它不会自己「播」,是按 clip 时间逐帧定位:clip 多长动画就走多长,speed 调快慢,loop 决定到头了循环还是停在最后一帧。不适合自己从零画动效 —— 那用别的卡。素材文件的许可证要自己核对。",
   tags: ["lottie", "动画文件", "AE", "素材"],
   source: "native",
-  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
-  frameMode: "stateful",
+  // 帧模式:remotion 式(渲染重构「癸」)。每一帧由素材、参数、帧号直接算出,不用从挂载帧推过来;
+  // 随机数和属性值留旧数那几处在 loadLottie 里固定住了(见文件头),所以顺着推和直接跳是同一个画面。
+  frameMode: "direct",
   defaults: { json: DEMO_JSON, src: "", speed: 1, loop: "no", fit: "contain" },
   controls: [
     { key: "json", label: "Lottie JSON 文本(优先)", type: "text", hint: "整个 .json 文件的内容;留空则用 src" },

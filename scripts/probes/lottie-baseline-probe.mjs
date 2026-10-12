@@ -45,6 +45,9 @@ async function capture() {
   const OUT = path.resolve(ROOT, arg('--out', 'out/lottie-baseline/run'));
   const ASSETS = arg('--assets', [...BUNDLED, 'demo'].join(',')).split(',').filter(Boolean);
   const POKE = arg('--poke', '');
+  const REFLOW = process.argv.includes('--reflow');
+  const JUMP_ALL = process.argv.includes('--jump-all');
+  const QUERY = arg('--query', '');
   fs.mkdirSync(OUT, { recursive: true });
 
   const HARNESS = String.raw`<!doctype html><meta charset="utf-8">
@@ -135,11 +138,13 @@ async function capture() {
       await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
       page.on('pageerror', (e) => index.pageErrors.push(String(e?.message ?? e).slice(0, 300)));
       page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') index.pageErrors.push(`console.${m.type()}: ${m.text().slice(0, 300)}`); });
-      await page.goto(`http://127.0.0.1:${PORT}/harness`, { waitUntil: 'load' });
+      await page.goto(`http://127.0.0.1:${PORT}/harness${QUERY}`, { waitUntil: 'load' });
       await page.waitForFunction('window.ready === true', { timeout: 120000 });
       return page;
     };
     const shot = async (page, file, vis) => {
+      // --reflow:截图前逼浏览器把 SVG 整个重画一遍(诊断用,见文件头)
+      if (REFLOW) await page.evaluate(() => { const svg = document.querySelector('#card svg'); if (svg) { svg.style.display = 'none'; void svg.getBoundingClientRect(); svg.style.display = 'block'; } return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); });
       const png = Buffer.from(await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width: 1920, height: 1080 } }));
       fs.writeFileSync(file, png);
       return { png: sha(png), vis: sha(vis), empty: vis === '' };
@@ -156,19 +161,31 @@ async function capture() {
       for (let f = 0; f < total; f++) {
         const vis = await page.evaluate((n, t, first) => (first ? window.api.mount(n, t) : window.api.frame(t)), name, f / fr, f === 0);
         entry.seq.push(await shot(page, path.join(dir, `seq-${pad(f)}.png`), vis));
-        if (POKE === `${name}:${f}`) {
-          // 诊断用:顺推到这一帧以后,用几种办法逼浏览器重画,各存一张,看哪一种能让画面变成直接跳的那一张
-          const tricks = {
-            wait: () => new Promise((r) => setTimeout(r, 500)),
-            reflow: () => { const svg = document.querySelector('#card svg'); svg.style.display = 'none'; void svg.getBoundingClientRect(); svg.style.display = 'block'; },
-            reattach: () => { const svg = document.querySelector('#card svg'); const parent = svg.parentNode; parent.removeChild(svg); parent.appendChild(svg); },
-          };
-          for (const [trick, fn] of Object.entries(tricks)) {
-            await page.evaluate(`(${fn.toString()})()`);
-            await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-            const r = await shot(page, path.join(dir, `poke-${pad(f)}-${trick}.png`), vis);
-            console.log(`  poke ${trick}: ${r.png}(顺推那张 ${entry.seq[f].png})`);
-          }
+      }
+      if (POKE.startsWith(`${name}:`)) {
+        // 诊断用(见文件头 --poke):顺推到这一帧以后,用几种办法逼浏览器重画,每种办法各开一页,看哪一种能让画面变成直接跳的那一张
+        const f = Number(POKE.split(':')[1]);
+        const reset = (attr) => `(() => { let n = 0; for (const el of document.querySelectorAll('#card svg [${attr}]')) { const v = el.getAttribute('${attr}'); el.removeAttribute('${attr}'); void el.getBoundingClientRect(); el.setAttribute('${attr}', v); n++; } return n; })()`;
+        const tricks = {
+          wait: `new Promise((r) => setTimeout(r, 500))`,
+          mask: reset('mask'), clip: reset('clip-path'), filter: reset('filter'),
+          maskContent: `(() => { let n = 0; for (const m of document.querySelectorAll('#card svg mask, #card svg clipPath')) { const first = m.firstChild; if (first) { m.removeChild(first); m.insertBefore(first, m.firstChild); n++; } } return n; })()`,
+          describe: `(() => { const out = {}; for (const m of document.querySelectorAll('#card svg mask')) { const kids = [...m.children].map((c) => c.localName + (c.style.display ? '[' + c.style.display + ']' : '')).join(','); const deep = m.querySelectorAll('*').length; const hidden = m.querySelectorAll('[style*="display"]').length; const key = kids.slice(0, 60) + ' | deep ' + (deep > 5 ? 'many' : deep) + ' | styled ' + (hidden ? 'yes' : 'no'); out[key] = (out[key] || 0) + 1; } return JSON.stringify(out, null, 1); })()`,
+          maskWithLayers: `(() => { let n = 0; for (const m of document.querySelectorAll('#card svg mask')) { if (!m.querySelector('g')) continue; const first = m.firstChild; if (first) { m.removeChild(first); m.insertBefore(first, m.firstChild); n++; } } return n; })()`,
+          maskPathsOnly: `(() => { let n = 0; for (const m of document.querySelectorAll('#card svg mask')) { if (m.querySelector('g')) continue; const first = m.firstChild; if (first) { m.removeChild(first); m.insertBefore(first, m.firstChild); n++; } } return n; })()`,
+          maskOnly: `(() => { let n = 0; for (const m of document.querySelectorAll('#card svg mask')) { const first = m.firstChild; if (first) { m.removeChild(first); m.insertBefore(first, m.firstChild); n++; } } return n; })()`,
+          reflow: `(() => { const svg = document.querySelector('#card svg'); svg.style.display = 'none'; void svg.getBoundingClientRect(); svg.style.display = 'block'; })()`,
+        };
+        for (const [trick, code] of Object.entries(tricks)) {
+          const p2 = await open();
+          let vis = '';
+          for (let g = 0; g <= f; g++) vis = await p2.evaluate((n, t, first) => (first ? window.api.mount(n, t) : window.api.frame(t)), name, g / fr, g === 0);
+          const before = await shot(p2, path.join(dir, `poke-${pad(f)}-${trick}-0.png`), vis);
+          const touched = await p2.evaluate(code);
+          await p2.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+          const after = await shot(p2, path.join(dir, `poke-${pad(f)}-${trick}-1.png`), vis);
+          console.log(`  poke ${trick}:动了 ${touched ?? '-'} 处;之前 ${before.png},之后 ${after.png}`);
+          await p2.close();
         }
       }
       await page.evaluate(() => window.api.frame(0));
@@ -182,6 +199,16 @@ async function capture() {
         const vis = await fresh.evaluate((n, t) => window.api.mount(n, t), name, f / fr);
         entry.jump[f] = await shot(fresh, path.join(dir, `jump-${pad(f)}.png`), vis);
         await fresh.close();
+      }
+      if (JUMP_ALL) {
+        // --jump-all:每一帧都新开一个页面直接挂在那一帧(全长的「直接跳」),用来和另一份的顺推逐帧比
+        entry.jumpall = [];
+        for (let f = 0; f < total; f++) {
+          const fresh = await open();
+          const vis = await fresh.evaluate((n, t) => window.api.mount(n, t), name, f / fr);
+          entry.jumpall.push(await shot(fresh, path.join(dir, `jumpall-${pad(f)}.png`), vis));
+          await fresh.close();
+        }
       }
       const empties = entry.seq.filter((s) => s.empty).length;
       console.log(`${name}:${total} 帧(帧率 ${fr}),顺推 ${entry.seq.length} 张,回跳 ${Object.keys(entry.back).length} 张,直接跳 ${Object.keys(entry.jump).length} 张(第 ${picks.join('、')} 帧);没有 SVG 的 ${empties} 张`);
@@ -203,6 +230,8 @@ async function compare() {
   const A = path.resolve(ROOT, arg('--a', '')), B = path.resolve(ROOT, arg('--b', ''));
   const ia = JSON.parse(fs.readFileSync(path.join(A, 'index.json'), 'utf8')), ib = JSON.parse(fs.readFileSync(path.join(B, 'index.json'), 'utf8'));
   const result = { a: A, b: B, assets: {}, problems: [] };
+  // --pairs seq:jumpall 表示拿前一份的 seq 和后一份的 jumpall 比;不写就是 seq、back、jump 各比各的
+  const PAIRS = arg('--pairs', 'seq,back,jump').split(',').filter(Boolean);
   const pixels = (fa, fb) => {
     const pa = PNG.sync.read(fs.readFileSync(fa)), pb = PNG.sync.read(fs.readFileSync(fb));
     if (pa.width !== pb.width || pa.height !== pb.height) return { pixels: -1, max: 255 };
@@ -218,14 +247,17 @@ async function compare() {
     if (!eb) { result.problems.push(`${name}:后一份里没有`); continue; }
     if (ea.total !== eb.total) { result.problems.push(`${name}:帧数对不上 ${ea.total} / ${eb.total}`); continue; }
     const out = { total: ea.total };
-    for (const group of ['seq', 'back', 'jump']) {
-      const keys = group === 'seq' ? ea.seq.map((_, i) => i) : Object.keys(ea[group]).map(Number);
+    for (const pair of PAIRS) {
+      const [ga, gb] = pair.split(':'); const group = ga === (gb ?? ga) ? ga : `${ga}→${gb}`;
+      const la = ea[ga], lb = eb[gb ?? ga];
+      if (!la || !lb) { result.problems.push(`${name}:没有 ${!la ? ga : gb} 这一组`); continue; }
+      const keys = Array.isArray(la) ? la.map((_, i) => i) : Object.keys(la).map(Number);
       const g = { count: keys.length, same: 0, textOnly: [], pixelDiff: [] };
       for (const f of keys) {
-        const sa = ea[group][f], sb = eb[group][f];
+        const sa = la[f], sb = lb[f];
         if (!sa || !sb) { result.problems.push(`${name} ${group} 第 ${f} 帧:缺图`); continue; }
         if (sa.png === sb.png) { if (sa.vis === sb.vis) g.same++; else g.textOnly.push(f); continue; }
-        const d = pixels(path.join(A, name, `${group}-${pad(f)}.png`), path.join(B, name, `${group}-${pad(f)}.png`));
+        const d = pixels(path.join(A, name, `${ga}-${pad(f)}.png`), path.join(B, name, `${gb ?? ga}-${pad(f)}.png`));
         if (d.pixels === 0) { if (sa.vis === sb.vis) g.same++; else g.textOnly.push(f); } else g.pixelDiff.push({ f, pixels: d.pixels, max: d.max, textSame: sa.vis === sb.vis });
       }
       out[group] = g;
