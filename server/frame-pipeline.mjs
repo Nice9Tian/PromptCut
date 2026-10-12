@@ -33,7 +33,7 @@ import { applyResult, manifestKindOf, manifestKeyOf, manifestMatches, spansOf } 
 export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { createSmallRenderer, SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
-import { layerMapOf } from './artifact-transfer.mjs';
+import { layerMapOf, streamCandidateKey } from './artifact-transfer.mjs';
 import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServesAgent, modeServesPrerender } from './prerender-mode.mjs';
 
 /**
@@ -2095,9 +2095,27 @@ export class FramePipeline {
         picked: clipId => this.prerenderPicked(entry, clipId),
         fingerprint: this.envFingerprint,
         candidatesOf: control => this.splitCandidatesFor(control?.contentKey),
+        ...this.layerMapStreamOptions(entry),
       });
       return queue.putLayerMap(projectId, body);
     } catch { return false; }
+  }
+  /**
+   * 层表的 `streams` 表要的两样(`artifact-transfer.mjs` 的 `layerStreamsOf`;`docs/plan/browser-stream-task.md` 第五处):这一版的全部流
+   * (与生产者、与队列切分同一组参数的 `planStreams`,所以流键相同)和每条流最近一次切分实际出键的指纹。在线页面按这张表找流清单。
+   * 本机没有生产者或开关关着(`PROMPTCUT_STREAMS=0`)时回空对象,层表里不带 `streams`。这里不探编码器(那是异步的):
+   * 列了而没人产的流,页面取不到清单,照旧每拍换快照。写层表的两处(本机推送队列、独立渲染主机)都经这里。
+   */
+  layerMapStreamOptions(entry) {
+    const producer = this.streamProducer();
+    if (!producer?.enabled || !entry) return {};
+    let streams = [];
+    try {
+      streams = planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
+        codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
+    } catch { streams = []; }
+    if (!streams.length) return {};
+    return { streams, streamCandidatesOf: spec => this.splitCandidatesFor(streamCandidateKey(spec?.contentKey)) };
   }
   /**
    * M7 契约 D12:队列切分完成后记下每张共享档卡实际出键的指纹(`artifact-transfer.mjs` 的 `splitCandidatesOf`,

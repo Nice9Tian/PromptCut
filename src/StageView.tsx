@@ -35,7 +35,7 @@ import { budgetOf, CATCHUP_STEPS_PER_BEAT, clipWeight, pipelineAt } from "./rend
 import { beatAt, createK6State, noteK6Beat, scheduleNextBeat } from "./render/beatLoop.mjs";
 import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
-import { StreamPlayer } from "./render/streamPlayer";
+import { PushedStreamSource, StreamPlayer } from "./render/streamPlayer";
 import {
   applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, onlineBrowserMode, setPlaceholderViewScale, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
   resetPlaceholderGeometry, setCatchingUpClips, setLocalOnlyConfirmed, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
@@ -388,7 +388,12 @@ export default function StageView() {
      * `close()` 全部 `VideoFrame`;`back` 不收 `streamPlanes`,也就不建 decoder、不画(K5)。
      * 它往 `Stage` 已经渲好的 `[data-pc-stream-plane]` / `[data-pc-group-plane]` 上画。
      */
-    const player = new StreamPlayer({ root: () => rootRef.current });
+    /*
+     * 字节从哪来:桌面直连预渲染进程(缺省的字节源);在线页面没有预渲染进程,清单与字节由父页随流平面推来
+     * (理由见 `streamPlayer.ts`「在线页面:清单与字节由父页推来」)—— 这里给一个只认推来的块的源,
+     * 没带清单的平面(父页还没取到)在它这里取不到东西,不会去请求不存在的预渲染进程。
+     */
+    const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}) });
     // 占位符的几何首选流清单的实体框(product/rendering.md「兜底顺序」;`placeholderHost` 的 `geometryFor`)
     setStreamBoxSource((clipId) => player.boxOf(clipId));
 
@@ -2191,16 +2196,26 @@ export default function StageView() {
           commitPlanes();
           return { ok: true as const };
         }
-        ref.current.streamPlanes = (Array.isArray(planes) ? planes : [])
-          .filter((g) => Array.isArray(g?.clipIds) && g.clipIds.length)
-          .map((g) => ({
-            clipIds: g.clipIds.map(String),
-            ...(typeof g.key === "string" && g.key ? { key: g.key } : {}),
-            ...(Array.isArray(g.ranges) ? { ranges: g.ranges.map((r) => [Number(r[0]), Number(r[1])] as [number, number]) } : {}),
-          }));
-        commitPlanes();
+        const incoming = (Array.isArray(planes) ? planes : []).filter((g) => Array.isArray(g?.clipIds) && g.clipIds.length);
+        const groupsOf = (list: readonly { clipIds: readonly string[] }[]) => list.map((g) => g.clipIds.join(",")).join("|");
+        const before = groupsOf(ref.current.streamPlanes);
+        ref.current.streamPlanes = incoming.map((g) => ({
+          clipIds: g.clipIds.map(String),
+          ...(typeof g.key === "string" && g.key ? { key: g.key } : {}),
+          ...(Array.isArray(g.ranges) ? { ranges: g.ranges.map((r) => [Number(r[0]), Number(r[1])] as [number, number]) } : {}),
+        }));
+        /*
+         * 在线页面的流平面另带清单与字节(`streamPlayer.ts` 的 `PushedStreamSource`),播放中每取到一段就来一次;
+         * `Stage` 只看每条平面的 `clipIds`,分组没变就不为它多做一次 React 提交(占位符的显隐下面照样当场重算)。桌面照旧每次都提交。
+         */
+        if (!ONLINE || groupsOf(ref.current.streamPlanes) !== before) commitPlanes();
         const fps = Math.max(1, ref.current.project?.fps || 30);
-        player.setPlanes(ref.current.streamPlanes, fps);
+        // 清单与字节只交给播放器,不进 `ref.current.streamPlanes`(那一份会进 React 的 props)
+        player.setPlanes(ref.current.streamPlanes.map((p, i) => {
+          const g = incoming[i];
+          const manifest = g.manifest && typeof g.manifest === "object" && g.manifest.bound && g.manifest.segments && g.manifest.inits ? g.manifest : null;
+          return manifest ? { ...p, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : p;
+        }), fps);
         // 画布刚随这次提交挂上:当场画一次,不等下一拍
         presentStreams(ref.current.t);
         refreshPlaceholders();

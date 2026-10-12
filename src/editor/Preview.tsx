@@ -24,7 +24,8 @@ import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
 import { backfillHooks } from "./sync/backfillUpload";
 import { currentReadyIndex, deliverSnapshots, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
-import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
+import { OnlineSnapshotSource, activeOnlineSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
+import { StreamPlaneSender } from "../render/streamPlayer";
 import { notePlayFrame, notePlayRunStart, playingSwapTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
@@ -774,6 +775,17 @@ export function Preview() {
         const untrusted = ONLINE && dualRef.current && targetOrigin !== location.origin;
         const client = createStageRpc(win, targetOrigin, { untrusted, maxSec: () => getState().project.duration });
         if (ONLINE) {
+          /*
+           * 轨道流(`docs/plan/browser-stream-task.md` 第七处):在线页面的舞台不自己取流的字节,父页发流平面时把清单和这台舞台还没有的
+           * 块一起带过去(`streamPlayer.ts` 的 `StreamPlaneSender` / `PushedStreamSource`;为什么不让舞台自己取,见那里的说明)。
+           * 接在这台舞台的 RPC 客户端上:每一处发流平面的(下面的 `pumpFeed`、`stageSwap.ts` 换班时那一次)都经过它,不用各改一遍。
+           * 一台舞台一本账;调用失败(舞台在换)就清账,下一次全部重发。
+           */
+          const sender = new StreamPlaneSender((key) => activeOnlineSource()?.streamPlane(key) ?? null);
+          const sendPlanes = client.setStreamPlanes.bind(client);
+          client.setStreamPlanes = (planes) => sendPlanes(sender.decorate(planes)).catch((err: unknown) => { sender.reset(); throw err; });
+        }
+        if (ONLINE) {
           // 隔离会话:这一台是新文档,先清掉旧的自检结果与取档方式;它的结果要是已经到了(预热期间)就补交
           const iso = pageStageIsolation(() => onlineStageState().cardExec);
           iso.setDual(dualRef.current);
@@ -1064,6 +1076,8 @@ export function Preview() {
   const suppressedRef = useRef("");
   /** 上一次发出去的流平面(R8;同样拼成字符串比) */
   const streamPlanesRef = useRef("[]");
+  /** 上一次的流平面发给了哪一台舞台(在线页面:换了一台就得重发,新的那台手里没有清单和字节) */
+  const streamPlanesStageRef = useRef<StageRpcClient | null>(null);
   const pumpFeed = useCallback(async () => {
     // 低内存档界限搜索正占着唯一那个舞台测量:不投快照、不发抑制(测完由 restore 重投)
     if (!liveRef.current || lowMemoryMeasuring()) return;
@@ -1082,9 +1096,15 @@ export function Preview() {
     }
     // R8:和抑制集合同一处发流平面(播放中贴流;暂停 / 拖动时清空,改贴快照)
     const planes = streamPlanesAt(head);
-    const planesKey = JSON.stringify(planes);
-    if (planesKey !== streamPlanesRef.current) {
+    /*
+     * 在线页面:流的清单与字节随流平面发给舞台(见握手那里的 `StreamPlaneSender`)。有流平面时把在线来源的 `streamRev` 也算进比较键 ——
+     * 同一段换了文件(稀疏段换成满密度)时就绪区间一个字不变,光比区间不会重发;可见舞台换了一台同样要重发。
+     */
+    const pushed = ONLINE && planes.length > 0;
+    const planesKey = JSON.stringify(planes) + (pushed ? `#${activeOnlineSource()?.streamRev ?? 0}` : "");
+    if (planesKey !== streamPlanesRef.current || (pushed && streamPlanesStageRef.current !== s)) {
       streamPlanesRef.current = planesKey;
+      streamPlanesStageRef.current = s;
       void s.setStreamPlanes(planes).catch(() => {});
     }
     await deliverSnapshots(s, "front", head);

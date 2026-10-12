@@ -920,7 +920,9 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
         if (!key || (service as any).pushQueue) return;
         // M7 D12:层表 v 3 的候选按切分实际出键(管线 recordSplitCandidates 记的);执行器在切分完成后才调这里
         const body = layerMapOf(entry, { picked: (clipId: string) => (service as any).prerenderPicked(entry, clipId), fingerprint: (service as any).envFingerprint,
-          candidatesOf: (control: any) => (service as any).splitCandidatesFor?.(control?.contentKey) ?? null });
+          candidatesOf: (control: any) => (service as any).splitCandidatesFor?.(control?.contentKey) ?? null,
+          // 轨道流:这一版的流与它们的候选(主机缺省不产流,这时是空对象,层表不带 `streams`)
+          ...((service as any).layerMapStreamOptions?.(entry) ?? {}) });
         void content.put("snapshot-manifest", key, body).then(
           () => log("host.layer-map", { project: index, key: key.slice(0, 24), layers: body.layers.length }),
           (error: any) => log("host.layer-map-failed", { project: index, message: String(error?.message ?? error) }),

@@ -1,5 +1,7 @@
 import type { PickedSnapshot, ReadyKind, ReadyLayer, ReadyRange } from "./snapshotPick.mjs";
 import { cachedClipInputSig, inputSigStale } from "./layerInputSig.mjs";
+import { streamInputSig, streamSigStale } from "./streamInputSig.mjs";
+import { SEGMENT_FRAMES, type StreamManifest, type StreamRect } from "./streamPlayer.ts";
 
 /**
  * J3 舞台侧的快照来源接口。
@@ -211,6 +213,13 @@ export class HttpSnapshotSource implements SnapshotSource {
  * 5. **缓存**:只在内存里按 LRU 存小尺寸,上限 `ONLINE_CACHE_MAX_BYTES`(64 MiB,契约第 8 节〔裁〕,不做 IndexedDB)。
  *    预取:播放头前后各 2 秒、当前可见的重层。导出前 `clearCache()` 释放(契约第 11.1 节)。
  *
+ * 6. **轨道流**(`docs/plan/browser-stream-task.md` 第六处;只在普通档):层表另带一张 `streams` 表(每条流一行:成员、候选的结果键、
+ *    分段范围、每份清单几段)。页面按播放头附近的分段去内容库取流清单(`render-manifest`,键 `<结果键>:<起>-<止>`),清单里列着的
+ *    开头文件与分段按哈希从素材服务取到本页内存(`px/<hash>`,同一张只读票据);**字节到了本页的分段才算就绪**,照 C3 的
+ *    `layer` 消息(`kind: 'stream'`,单位是分段号,组流带 `groupClipIds`)交给订阅方 —— 和桌面的就绪索引同一种消息,`snapshotFeed` 不用改。
+ *    舞台不自己取:父页发流平面时把清单和字节一起带过去(`streamPlane`,配 `streamPlayer.ts` 的 `StreamPlaneSender`)。
+ *    候选的认定、输入签名过期的处理照快照层的规矩;流这一段没取到时这一层照旧每拍换快照。
+ *
  * 文档服务与素材服务都经注入的依赖访问(页面里由 `Preview` 接到 `assetTiers.ts` 的 `docRequest` / `assetAuthHeaders`),
  * 这里不认识 `/api`,单测注入假的。
  */
@@ -227,6 +236,12 @@ export const MANIFEST_POLL_MS = 2000;
 export const ONLINE_FETCH_CONCURRENCY = 4;
 /** 层表在内容库里的键前缀(与 `server/artifact-transfer.mjs` 的 `LAYER_MAP_PREFIX` 同值) */
 export const LAYER_MAP_PREFIX = "layers:";
+/** 轨道流的分段字节在本页内存里最多留这么多(按最近用过的留;三级数字:6 条流、每条前后 6 段、每段不超过 512 KB 约 18 MiB,留三倍余量) */
+export const STREAM_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+/** 轨道流预取:播放头所在分段往回这么多段(刚播过的那一段留着,往回拖一点不用重取) */
+export const STREAM_BEHIND_SEGMENTS = 1;
+/** 一块流字节取失败之后,过这么久才再取(缺块、票据过期:不每一轮都打素材服务) */
+export const STREAM_RETRY_MS = 2000;
 
 export interface OnlineLayer {
   clipId: string;
@@ -260,6 +275,33 @@ export interface LayerCandidate {
   key: string;
 }
 
+/** 轨道流的一个候选:一种环境产的一条流。流在就绪索引线上的键就是结果键 */
+export interface StreamCandidate {
+  envFingerprint: string;
+  resultKey: string;
+}
+
+/**
+ * 层表 `streams` 表的一行(`server/artifact-transfer.mjs` 的 `layerStreamsOf`):一条轨道流。
+ * 流清单在内容库里按 `<结果键>:<起>-<止>` 存,分段号从 `firstSegment` 起每 `segmentsPerTask` 段一份、最后一份到 `lastSegment`。
+ */
+export interface OnlineStream {
+  /** 就绪消息挂在哪张卡上:单卡流是它自己,组流是组里最上面那张 */
+  topClipId: string;
+  /** 成员(画家顺序,最后一个在最上面) */
+  clipIds: string[];
+  kind: "card" | "group";
+  plane: "local" | "stage";
+  contentKey: string;
+  /** 候选:切分实际出键的那几种环境,再补上写层表的节点自己的。哪一份活着的认定同快照层 */
+  candidates: StreamCandidate[];
+  firstSegment: number;
+  lastSegment: number;
+  segmentsPerTask: number;
+  /** 生成这条流的项目输入的签名(`streamInputSig.mjs`);页面算的对不上就不播。没有这一项照播 */
+  inputSig?: string | null;
+}
+
 export interface LayerMap {
   /** 层表的版本(`server/artifact-transfer.mjs` 的 `LAYER_MAP_VERSION`);没写当 1 */
   v: number;
@@ -267,6 +309,8 @@ export interface LayerMap {
   fps: number;
   span: number;
   layers: OnlineLayer[];
+  /** 轨道流表;旧节点写的层表没有这一项,解析成空表(页面行为和以前一样) */
+  streams: OnlineStream[];
 }
 
 /** 在线普通档认的层表版本(C10 契约第 18 节第 3 条);低内存档 v 1、v 2 都认 */
@@ -338,9 +382,49 @@ export function layerCandidates(layer: OnlineLayer): LayerCandidate[] {
   return [];
 }
 
+/** 层表的 `streams` 表:形状不对的行跳过,不抛;不是数组回空表 */
+export function parseLayerStreams(raw: unknown): OnlineStream[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OnlineStream[] = [];
+  const str = (x: unknown): x is string => typeof x === "string" && !!x;
+  for (const r of raw as Record<string, unknown>[]) {
+    if (!r || typeof r !== "object") continue;
+    const clipIds = Array.isArray(r.clipIds) ? (r.clipIds as unknown[]).filter(str) : [];
+    if (!clipIds.length || clipIds.length !== (r.clipIds as unknown[]).length) continue;
+    const kind = r.kind === "group" ? "group" : r.kind === "card" ? "card" : null;
+    const plane = r.plane === "stage" ? "stage" : r.plane === "local" ? "local" : null;
+    const firstSegment = Number(r.firstSegment), lastSegment = Number(r.lastSegment), segmentsPerTask = Number(r.segmentsPerTask);
+    if (!kind || !plane || !str(r.contentKey)) continue;
+    if (!Number.isInteger(firstSegment) || !Number.isInteger(lastSegment) || firstSegment < 0 || lastSegment < firstSegment) continue;
+    if (!Number.isInteger(segmentsPerTask) || segmentsPerTask < 1) continue;
+    const candidates: StreamCandidate[] = [];
+    for (const c of Array.isArray(r.candidates) ? (r.candidates as Record<string, unknown>[]) : []) {
+      if (c && typeof c === "object" && str(c.envFingerprint) && str(c.resultKey)) candidates.push({ envFingerprint: c.envFingerprint, resultKey: c.resultKey });
+    }
+    if (!candidates.length) continue;
+    const topClipId = str(r.topClipId) ? r.topClipId : clipIds[clipIds.length - 1];
+    out.push({ topClipId, clipIds, kind, plane, contentKey: r.contentKey, candidates, firstSegment, lastSegment, segmentsPerTask,
+      ...(str(r.inputSig) ? { inputSig: r.inputSig } : {}) });
+  }
+  return out;
+}
+
+/**
+ * 一条流落在分段号 `[loSeg, hiSeg]`(闭区间)里的那几份清单的范围:从 `firstSegment` 起每 `segmentsPerTask` 段一份、最后一份到
+ * `lastSegment`(与 `server/render-node/split.mjs`、推送队列同一种切法)。
+ */
+export function streamSpansInWindow(row: Pick<OnlineStream, "firstSegment" | "lastSegment" | "segmentsPerTask">, loSeg: number, hiSeg: number): Array<[number, number]> {
+  const lo = Math.max(row.firstSegment, loSeg), hi = Math.min(row.lastSegment, hiSeg);
+  if (hi < lo) return [];
+  const per = Math.max(1, row.segmentsPerTask);
+  const out: Array<[number, number]> = [];
+  for (let from = row.firstSegment + Math.floor((lo - row.firstSegment) / per) * per; from <= hi; from += per) out.push([from, Math.min(row.lastSegment, from + per - 1)]);
+  return out;
+}
+
 /** 内容库回包里的层表;形状不对回 null */
 export function parseLayerMap(body: unknown): LayerMap | null {
-  const b = body as { v?: unknown; kind?: unknown; projectId?: unknown; fps?: unknown; span?: unknown; layers?: unknown } | null;
+  const b = body as { v?: unknown; kind?: unknown; projectId?: unknown; fps?: unknown; span?: unknown; layers?: unknown; streams?: unknown } | null;
   if (!b || b.kind !== "layer-map" || !Array.isArray(b.layers)) return null;
   // 不认得的版本整张当没有(C10 契约第 18 节第 3 条);没写版本的是 v 1(C10a 的形状)
   const v = b.v === undefined ? 1 : Number(b.v);
@@ -361,7 +445,9 @@ export function parseLayerMap(body: unknown): LayerMap | null {
       ...(candidates.length ? { candidates } : {}),
       ...(inputSig ? { inputSig } : {}) });
   }
-  return { v, projectId: typeof b.projectId === "string" ? b.projectId : null, fps: Number(b.fps) || 30, span, layers };
+  // 轨道流表是 v 3 起才可能有的(候选的概念从 v 3 起);更早的版本不读
+  const streams = v >= LAYER_MAP_V3 ? parseLayerStreams(b.streams) : [];
+  return { v, projectId: typeof b.projectId === "string" ? b.projectId : null, fps: Number(b.fps) || 30, span, layers, streams };
 }
 
 /**
@@ -468,6 +554,123 @@ export class ByteLru {
   clear(): void { this.map.clear(); this.bytes = 0; }
 }
 
+/** 按字节计的 LRU,存原始字节(轨道流的开头文件与分段) */
+export class BlockLru {
+  private map = new Map<string, Uint8Array>();
+  private bytes = 0;
+  private max: number;
+  constructor(max: number) { this.max = max; }
+  get(id: string): Uint8Array | undefined {
+    const hit = this.map.get(id);
+    if (hit === undefined) return undefined;
+    this.map.delete(id);
+    this.map.set(id, hit);
+    return hit;
+  }
+  /** 放进去;回这一次被挤掉的键 */
+  set(id: string, value: Uint8Array): string[] {
+    const old = this.map.get(id);
+    if (old !== undefined) { this.bytes -= old.byteLength; this.map.delete(id); }
+    this.map.set(id, value);
+    this.bytes += value.byteLength;
+    const dropped: string[] = [];
+    while (this.bytes > this.max && this.map.size > 1) {
+      const first = this.map.keys().next().value as string;
+      this.bytes -= this.map.get(first)!.byteLength;
+      this.map.delete(first);
+      dropped.push(first);
+    }
+    return dropped;
+  }
+  has(id: string): boolean { return this.map.has(id); }
+  get size(): number { return this.map.size; }
+  get total(): number { return this.bytes; }
+  clear(): void { this.map.clear(); this.bytes = 0; }
+}
+
+/** 流清单里的一个开头文件(变体) */
+interface StreamInitMeta { hash: string; codec: string; width: number; height: number; rect: StreamRect }
+/** 流清单里的一个分段 */
+interface StreamSegMeta { hash: string; init: string; stride: number; samples: number }
+/** 一份流清单(`render-manifest`,`<结果键>:<起>-<止>`)取回来之后的样子 */
+interface StreamManifestState {
+  resultKey: string;
+  header: { kind: "card" | "group"; plane: "local" | "stage"; clipIds: string[]; fps: number; bound: StreamRect; tight: StreamRect | null } | null;
+  inits: Map<string, StreamInitMeta>;
+  segments: Map<number, StreamSegMeta>;
+  /** 这一份里每个分段都有、而且都是满密度的:不必再取(稀疏段以后会被满密度的换掉,所以还要再取) */
+  full: boolean;
+  fetchedAt: number;
+  sig: string;
+}
+/** 选定了候选的一条流 */
+interface ChosenStream { row: OnlineStream; resultKey: string; envFingerprint: string }
+
+const HASH_RE = /^[0-9a-f]{64}$/;
+const rectOf = (r: unknown): StreamRect | null => {
+  const o = r as Partial<StreamRect> | null;
+  if (!o || typeof o !== "object") return null;
+  const { x, y, w, h } = o;
+  return [x, y, w, h].every((n) => typeof n === "number" && Number.isFinite(n)) && (w as number) > 0 && (h as number) > 0 ? { x: x as number, y: y as number, w: w as number, h: h as number } : null;
+};
+
+/** 内容库回的一份流清单 → 状态;形状不对的开头文件、分段跳过。`seg` 是这份清单该盖住的分段范围 */
+function parseStreamManifest(body: unknown, resultKey: string, seg: [number, number], now: number): StreamManifestState {
+  const b = body as { kind?: unknown; resultKey?: unknown; header?: Record<string, unknown>; inits?: Record<string, Record<string, unknown>>; segments?: Record<string, Record<string, unknown>> } | null;
+  const state: StreamManifestState = { resultKey, header: null, inits: new Map(), segments: new Map(), full: false, fetchedAt: now, sig: "" };
+  if (!b || typeof b !== "object" || b.kind !== "stream" || b.resultKey !== resultKey) return state;
+  const h = b.header;
+  const bound = rectOf(h?.bound);
+  const clipIds = Array.isArray(h?.clipIds) ? (h!.clipIds as unknown[]).filter((x): x is string => typeof x === "string" && !!x) : [];
+  if (h && bound && clipIds.length && Number(h.fps) > 0) {
+    state.header = { kind: h.kind === "group" ? "group" : "card", plane: h.plane === "stage" ? "stage" : "local", clipIds, fps: Number(h.fps), bound, tight: rectOf(h.tight) };
+  }
+  for (const [id, meta] of Object.entries(b.inits && typeof b.inits === "object" ? b.inits : {})) {
+    const rect = rectOf(meta?.rect);
+    if (!/^[0-9a-f]{16}$/.test(id) || !HASH_RE.test(String(meta?.hash)) || !rect || typeof meta.codec !== "string") continue;
+    state.inits.set(id, { hash: String(meta.hash), codec: meta.codec, width: Number(meta.width) || 0, height: Number(meta.height) || 0, rect });
+  }
+  for (const [name, meta] of Object.entries(b.segments && typeof b.segments === "object" ? b.segments : {})) {
+    const n = Number(name);
+    if (!Number.isInteger(n) || n < seg[0] || n > seg[1] || !HASH_RE.test(String(meta?.hash)) || !state.inits.has(String(meta.init))) continue;
+    const stride = Number(meta.stride), samples = Number(meta.samples);
+    if (!Number.isInteger(stride) || stride < 1 || !Number.isInteger(samples) || samples < 1) continue;
+    state.segments.set(n, { hash: String(meta.hash), init: String(meta.init), stride, samples });
+  }
+  let full = !!state.header;
+  for (let n = seg[0]; n <= seg[1] && full; n++) full = state.segments.get(n)?.stride === 1;
+  state.full = full;
+  state.sig = JSON.stringify([state.header, [...state.inits], [...state.segments]]);
+  return state;
+}
+
+/** 取回来的字节是不是这个哈希(浏览器没有 WebCrypto 时不核,当是) */
+async function bytesMatchHash(bytes: Uint8Array, hash: string): Promise<boolean> {
+  const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle;
+  if (!subtle) return true;
+  try {
+    const digest = new Uint8Array(await subtle.digest("SHA-256", bytes as unknown as BufferSource));
+    let hex = "";
+    for (const v of digest) hex += v.toString(16).padStart(2, "0");
+    return hex === hash;
+  } catch {
+    return true;
+  }
+}
+
+/** 每份项目(不可变对象)一张「流 → 签名」的缓存 */
+const streamSigCache = new WeakMap<object, Map<string, string | null>>();
+function cachedStreamSig(project: unknown, row: Pick<OnlineStream, "clipIds" | "kind">): string | null {
+  if (!project || typeof project !== "object") return null;
+  let byRow = streamSigCache.get(project);
+  if (!byRow) { byRow = new Map(); streamSigCache.set(project, byRow); }
+  const id = `${row.kind}:${row.clipIds.join(",")}`;
+  if (byRow.has(id)) return byRow.get(id) ?? null;
+  const sig = streamInputSig(project, row);
+  byRow.set(id, sig);
+  return sig;
+}
+
 interface ManifestState {
   /** 本地帧 → 小位图哈希 */
   small: Map<number, string>;
@@ -519,6 +722,16 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private mapSig = "";
   private manifests = new Map<string, ManifestState>();
   private manifestFlying = new Set<string>();
+  /** 轨道流:各份流清单(`<结果键>:<起>-<止>` → 状态) */
+  private streamManifests = new Map<string, StreamManifestState>();
+  /** 轨道流:已取到本页的开头文件与分段(哈希 → 字节) */
+  private streamBlocks = new BlockLru(STREAM_CACHE_MAX_BYTES);
+  private streamFlying = new Map<string, Promise<void>>();
+  /** 取失败的块:哈希 → 失败的时刻(过 `STREAM_RETRY_MS` 再取) */
+  private streamFailedAt = new Map<string, number>();
+  private streamPlaneMemo = new Map<string, { rev: number; plane: { manifest: StreamManifest; blocks: Map<string, Uint8Array> } | null }>();
+  /** 流的清单或字节变了就加一:父页据此重发流平面(同一段换了文件时就绪区间一个字不变,光比区间看不出来) */
+  streamRev = 0;
   /** 各层最后发出去的就绪(`<kind>:<clipId>` → 签名与撤层要用的键);层不能用了(过期、没了)就发空层撤掉 */
   private emitted = new Map<string, { sig: string; clipId: string; kind: ReadyKind; key: string }>();
   /** 页面此刻的项目(按它算各片段的输入签名,stale-layer);没给就不比签名 */
@@ -551,7 +764,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private mapKnown = false;
   /** 覆盖情况可能变了(层表换了、清单到了)时叫的订阅方 */
   private coverageListeners = new Set<() => void>();
-  readonly stats = { mapFetches: 0, manifestFetches: 0, smallFetches: 0, smallBytes: 0, snapFetches: 0, snapBytes: 0, l2Hits: 0, errors: 0 };
+  readonly stats = { mapFetches: 0, manifestFetches: 0, smallFetches: 0, smallBytes: 0, snapFetches: 0, snapBytes: 0, l2Hits: 0, errors: 0,
+    streamManifestFetches: 0, streamFetches: 0, streamBytes: 0, streamFailures: 0 };
 
   constructor(deps: OnlineSnapshotDeps, { maxBytes = ONLINE_CACHE_MAX_BYTES, tier = "small", store = null }: OnlineSourceOptions = {}) {
     this.deps = deps;
@@ -636,6 +850,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
     if (next === this.inputProject) return;
     this.inputProject = next;
     const changed = this.noteStale();
+    // 流的输入签名跟着项目变:过期的流在 publishLayers 里撤掉(发空层),对回来了照发
+    this.streamPlaneMemo.clear();
     this.publishLayers();
     if (changed) this.coverageChanged();
   }
@@ -692,6 +908,10 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.mapSig = "";
     this.mapKnown = false;
     this.manifests.clear();
+    this.streamManifests.clear();
+    this.streamFailedAt.clear();
+    this.streamPlaneMemo.clear();
+    this.streamRev++;
     this.emitted.clear();
     this.staleSince.clear();
     this.lastMapAt = -Infinity;
@@ -707,6 +927,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
   refresh(): void {
     this.lastMapAt = -Infinity;
     for (const st of this.manifests.values()) if (!st.full) st.fetchedAt = -Infinity;
+    for (const st of this.streamManifests.values()) if (!st.full) st.fetchedAt = -Infinity;
     this.kick();
   }
 
@@ -722,6 +943,10 @@ export class OnlineSnapshotSource implements SnapshotSource {
     try { onMessage({ type: "reset", localRev: 0 }); } catch { /* 订阅方坏了 */ }
     for (const layer of this.layers()) {
       try { onMessage(this.layerMessage(layer)); } catch { /* 同上 */ }
+    }
+    for (const s of this.streamsNow()) {
+      const msg = this.streamMessage(s);
+      if (msg.type === "layer" && msg.ranges.length) { try { onMessage(msg); } catch { /* 同上 */ } }
     }
     this.kick();
     return () => { this.listeners.delete(onMessage); };
@@ -827,8 +1052,32 @@ export class OnlineSnapshotSource implements SnapshotSource {
       deadKeys: this.deadKeys.size,
       skipped: (this.map?.layers ?? []).filter((l) => !usable.includes(l)).map((l) => l.clipId),
       manifests: this.manifests.size,
+      streams: this.streamsNow().map((s) => ({ clipId: s.row.topClipId, kind: s.row.kind, members: s.row.clipIds.length, resultKey: s.resultKey, envFingerprint: s.envFingerprint,
+        candidates: s.row.candidates.length, firstSegment: s.row.firstSegment, lastSegment: s.row.lastSegment, ready: this.streamReady(s).length, inputSig: s.row.inputSig ?? null })),
+      staleStreams: (this.map?.streams ?? []).filter((r) => this.streamStale(r)).map((r) => r.topClipId),
+      streamManifests: this.streamManifests.size, streamBlocks: this.streamBlocks.size, streamBlockBytes: this.streamBlocks.total, streamRev: this.streamRev,
       cacheBytes: this.cache.total, cacheSize: this.cache.size, ...this.stats,
     };
+  }
+
+  /* ---------------- 轨道流(对外) ---------------- */
+
+  /**
+   * 父页给舞台发流平面时要带过去的东西(`streamPlayer.ts` 的 `StreamPlaneSender` 来问):这条流(就绪索引线上的键 = 结果键)此刻的清单
+   * 与字节。清单只列字节已在本页的分段(与发出去的就绪区间同一个口径),分段的 `file` 就是它的哈希,开头文件另带 `hash`;
+   * `blocks` 是清单用到的全部块。这条流不在层表里、过期了、或一段都没取到回 null。
+   */
+  streamPlane(key: string): { manifest: StreamManifest; blocks: Map<string, Uint8Array> } | null {
+    const memo = this.streamPlaneMemo.get(key);
+    if (memo && memo.rev === this.streamRev) {
+      // 用到的块算最近用过(不让正在播的这几段被挤掉)
+      if (memo.plane) for (const hash of memo.plane.blocks.keys()) this.streamBlocks.get(hash);
+      return memo.plane;
+    }
+    const plane = this.buildStreamPlane(key);
+    if (this.streamPlaneMemo.size > 64) this.streamPlaneMemo.clear();
+    this.streamPlaneMemo.set(key, { rev: this.streamRev, plane });
+    return plane;
   }
 
   stop(): void {
@@ -838,6 +1087,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.listeners.clear();
     this.coverageListeners.clear();
     this.queue.length = 0;
+    this.streamBlocks.clear();
+    this.streamPlaneMemo.clear();
     this.storeOff?.();
     this.storeOff = null;
   }
@@ -847,8 +1098,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
 
   /** 单测用:等在飞的取块都落定 */
   async idle(): Promise<void> {
-    for (let i = 0; i < 50 && (this.inflight.size || this.active || this.queue.length); i++) {
-      await Promise.allSettled([...this.inflight.values()]);
+    for (let i = 0; i < 50 && (this.inflight.size || this.streamFlying.size || this.active || this.queue.length); i++) {
+      await Promise.allSettled([...this.inflight.values(), ...this.streamFlying.values()]);
     }
   }
 
@@ -898,6 +1149,18 @@ export class OnlineSnapshotSource implements SnapshotSource {
       const sig = `${msg.key}|${JSON.stringify(msg.ranges)}`;
       if (this.emitted.get(id)?.sig === sig) continue;
       this.emitted.set(id, { sig, clipId: layer.clipId, kind: layer.kind, key: layer.key });
+      this.emit(msg);
+    }
+    // 轨道流:每条流一层(`kind: 'stream'`,区间单位是分段号)。一段都没取到的不发;发过、现在没了的在下面撤掉
+    for (const s of this.streamsNow()) {
+      const msg = this.streamMessage(s);
+      if (msg.type !== "layer" || !msg.ranges.length) continue;
+      const id = `stream:${s.row.topClipId}`;
+      if (live.has(id)) continue;   // 同一张卡在表里列了两行:只认第一行
+      live.add(id);
+      const sig = `${msg.key}|${JSON.stringify(msg.ranges)}|${msg.groupClipIds?.join(",") ?? ""}`;
+      if (this.emitted.get(id)?.sig === sig) continue;
+      this.emitted.set(id, { sig, clipId: s.row.topClipId, kind: "stream", key: s.resultKey });
       this.emit(msg);
     }
     for (const [id, prev] of [...this.emitted]) {
@@ -1001,6 +1264,219 @@ export class OnlineSnapshotSource implements SnapshotSource {
     await this.loadStoreRanges();
     await this.loadWindow(now);
     this.prefetchWindow();
+    await this.loadStreamWindow(now);
+    this.prefetchStreams();
+  }
+
+  /* ---------------- 轨道流(内部) ---------------- */
+
+  /** 这条流是旧输入的结果(行里带签名,页面也算得出,两者不同) */
+  private streamStale(row: OnlineStream): boolean {
+    return !!row.inputSig && !!this.inputProject && streamSigStale(row.inputSig, cachedStreamSig(this.inputProject, row));
+  }
+
+  /**
+   * 此刻能用的流(只在普通档;低内存档不消费流),各自选定一个候选:认定活着的优先,都没认定时取第一个没作废的,
+   * 全作废照旧用第一个 —— 同快照层的 `chosen`。旧输入的流不算。
+   */
+  private streamsNow(): ChosenStream[] {
+    const map = this.map;
+    if (!map || this.tier !== "original" || !map.streams.length) return [];
+    const out: ChosenStream[] = [];
+    for (const row of map.streams) {
+      if (this.streamStale(row)) continue;
+      const pick = row.candidates.find((c) => this.aliveKeys.has(c.resultKey)) ?? row.candidates.find((c) => !this.deadKeys.has(c.resultKey)) ?? row.candidates[0];
+      if (pick) out.push({ row, resultKey: pick.resultKey, envFingerprint: pick.envFingerprint });
+    }
+    return out;
+  }
+
+  private streamManifestKey(resultKey: string, seg: [number, number]) { return `${resultKey}:${seg[0]}-${seg[1]}`; }
+
+  /** 第 n 段在哪一份清单里(那份清单取到过才有) */
+  private streamSegment(s: ChosenStream, n: number): { seg: StreamSegMeta; init: StreamInitMeta; state: StreamManifestState } | null {
+    const span = streamSpansInWindow(s.row, n, n)[0];
+    if (!span) return null;
+    const state = this.streamManifests.get(this.streamManifestKey(s.resultKey, span));
+    const seg = state?.segments.get(n);
+    const init = seg ? state!.inits.get(seg.init) : undefined;
+    return state && seg && init ? { seg, init, state } : null;
+  }
+
+  /** 这条流就绪的分段号:清单里列着、而且分段与它的开头文件的字节都已在本页 */
+  private streamReady(s: ChosenStream): number[] {
+    const out: number[] = [];
+    for (const state of this.streamManifests.values()) {
+      if (state.resultKey !== s.resultKey || !state.header) continue;
+      for (const [n, seg] of state.segments) {
+        if (n < s.row.firstSegment || n > s.row.lastSegment) continue;
+        const init = state.inits.get(seg.init);
+        if (init && this.streamBlocks.has(seg.hash) && this.streamBlocks.has(init.hash)) out.push(n);
+      }
+    }
+    return out;
+  }
+
+  private streamMessage(s: ChosenStream): ReadyMessage {
+    return { type: "layer", clipId: s.row.topClipId, kind: "stream", key: s.resultKey, ranges: framesToRanges(this.streamReady(s)),
+      ...(s.row.kind === "group" ? { groupClipIds: [...s.row.clipIds] } : {}) };
+  }
+
+  /** 流的清单或字节变了:记一笔、重发就绪、叫宿主重投(流平面要带上新到的字节) */
+  private streamChanged(): void {
+    this.streamRev++;
+    this.streamPlaneMemo.clear();
+    if (this.stopped) return;
+    this.publishLayers();
+    try { this.onFetched?.(); } catch { /* 宿主坏了 */ }
+  }
+
+  /** 播放头这一窗口的分段号:往回 `STREAM_BEHIND_SEGMENTS` 段,往前 `PREFETCH_SEC` 秒 */
+  private streamWindow(): [number, number] {
+    const fps = this.map?.fps || this.playhead.fps;
+    const g = Math.max(0, Math.floor(this.playhead.t * fps + 1e-6));
+    const cur = Math.floor(g / SEGMENT_FRAMES);
+    return [Math.max(0, cur - STREAM_BEHIND_SEGMENTS), Math.floor((g + Math.ceil(PREFETCH_SEC * fps)) / SEGMENT_FRAMES)];
+  }
+
+  /** 取这一窗口里各条流的清单(没取过的、还没满的隔 `MANIFEST_POLL_MS` 再取) */
+  private async loadStreamWindow(now: number): Promise<void> {
+    const map = this.map;
+    const streams = this.streamsNow();
+    if (!map || !streams.length) return;
+    const [lo, hi] = this.streamWindow();
+    const wanted: { resultKey: string; seg: [number, number]; key: string }[] = [];
+    for (const s of streams) {
+      for (const seg of streamSpansInWindow(s.row, lo, hi)) {
+        const key = this.streamManifestKey(s.resultKey, seg);
+        const st = this.streamManifests.get(key);
+        if (st?.full) continue;
+        if (st && now - st.fetchedAt < MANIFEST_POLL_MS) continue;
+        if (this.manifestFlying.has(`stream|${key}`) || wanted.some((w) => w.key === key)) continue;
+        wanted.push({ resultKey: s.resultKey, seg, key });
+      }
+    }
+    if (!wanted.length) return;
+    let changed = false;
+    await Promise.all(wanted.map(async ({ resultKey, seg, key }) => {
+      this.manifestFlying.add(`stream|${key}`);
+      try {
+        const reply = await this.request({ type: "content.get", kind: "render-manifest", key });
+        this.stats.streamManifestFetches++;
+        const prev = this.streamManifests.get(key);
+        const next = reply?.type === "content.item" && !reply.missing
+          ? parseStreamManifest(reply.body, resultKey, seg, this.now())
+          : parseStreamManifest(null, resultKey, seg, this.now());
+        // 内容库这一次没回(或回了个空的)而手里有:留着手里的,只记下取过的时刻
+        if (!next.segments.size && prev?.segments.size) { prev.fetchedAt = this.now(); return; }
+        if (!prev || prev.sig !== next.sig) changed = true;
+        this.streamManifests.set(key, next);
+      } catch {
+        this.stats.errors++;
+      } finally {
+        this.manifestFlying.delete(`stream|${key}`);
+      }
+    }));
+    if (changed && this.map === map && !this.stopped) this.streamChanged();
+  }
+
+  /** 预取:这一窗口里各条流的分段与它们的开头文件,离播放头近的先取;已在本页的、在飞的、刚失败过的不取 */
+  private prefetchStreams(): void {
+    const map = this.map;
+    if (!map || !this.deps.assetBase()) return;
+    const streams = this.streamsNow();
+    if (!streams.length) return;
+    const [lo, hi] = this.streamWindow();
+    const fps = map.fps || this.playhead.fps;
+    const cur = Math.floor(Math.max(0, Math.floor(this.playhead.t * fps + 1e-6)) / SEGMENT_FRAMES);
+    const now = this.now();
+    const wanted: { hash: string; dist: number }[] = [];
+    const want = (hash: string, dist: number) => {
+      if (this.streamBlocks.has(hash) || this.streamFlying.has(hash)) return;
+      const failed = this.streamFailedAt.get(hash);
+      if (failed !== undefined && now - failed < STREAM_RETRY_MS) return;
+      wanted.push({ hash, dist });
+    };
+    for (const s of streams) {
+      for (let n = Math.max(lo, s.row.firstSegment); n <= Math.min(hi, s.row.lastSegment); n++) {
+        const hit = this.streamSegment(s, n);
+        if (!hit) continue;
+        // 往回的那一段排在往前的后面
+        const dist = n >= cur ? n - cur : hi - cur + (cur - n);
+        want(hit.init.hash, dist);
+        want(hit.seg.hash, dist);
+      }
+    }
+    wanted.sort((a, b) => a.dist - b.dist);
+    const seen = new Set<string>();
+    for (const w of wanted) {
+      if (seen.has(w.hash)) continue;
+      seen.add(w.hash);
+      this.fetchStreamBlock(w.hash);
+    }
+  }
+
+  /** 取一块流字节(`px/<hash>`,只读票据),核对哈希后放进本页内存;失败记下时刻,过一会儿再取 */
+  private fetchStreamBlock(hash: string): void {
+    if (this.streamBlocks.has(hash) || this.streamFlying.has(hash)) return;
+    const work = new Promise<void>((resolve) => {
+      this.queue.push(async () => {
+        try {
+          const block = await this.fetchAsset("px", hash);
+          if (!(await bytesMatchHash(block.bytes, hash))) throw new Error(`流字节与哈希对不上:${hash}`);
+          if (this.stopped) return;
+          this.stats.streamFetches++;
+          this.stats.streamBytes += block.bytes.length;
+          this.streamBlocks.set(hash, block.bytes);
+          this.streamFailedAt.delete(hash);
+          this.streamChanged();
+        } catch {
+          this.stats.errors++;
+          this.stats.streamFailures++;
+          this.streamFailedAt.set(hash, this.now());
+          if (this.streamFailedAt.size > 4096) this.streamFailedAt.clear();
+        } finally {
+          resolve();
+        }
+      });
+      this.pump();
+    }).finally(() => { this.streamFlying.delete(hash); });
+    this.streamFlying.set(hash, work);
+  }
+
+  /** `streamPlane` 的本体:把这条流各份清单里字节已在本页的分段合成一份舞台认得的清单 */
+  private buildStreamPlane(key: string): { manifest: StreamManifest; blocks: Map<string, Uint8Array> } | null {
+    const s = this.streamsNow().find((x) => x.resultKey === key);
+    if (!s) return null;
+    let header: StreamManifestState["header"] = null;
+    let headerAt = -Infinity;
+    const inits: StreamManifest["inits"] = {};
+    const segments: StreamManifest["segments"] = {};
+    const blocks = new Map<string, Uint8Array>();
+    for (const state of this.streamManifests.values()) {
+      if (state.resultKey !== key || !state.header) continue;
+      let used = false;
+      for (const [n, seg] of state.segments) {
+        if (n < s.row.firstSegment || n > s.row.lastSegment) continue;
+        const init = state.inits.get(seg.init);
+        if (!init) continue;
+        const segBytes = this.streamBlocks.get(seg.hash), initBytes = this.streamBlocks.get(init.hash);
+        if (!segBytes || !initBytes) continue;
+        segments[String(n)] = { init: seg.init, file: seg.hash, stride: seg.stride, samples: seg.samples };
+        inits[seg.init] = { codec: init.codec, width: init.width, height: init.height, rect: init.rect, hash: init.hash };
+        blocks.set(seg.hash, segBytes);
+        blocks.set(init.hash, initBytes);
+        used = true;
+      }
+      // 头(矩形上界、收紧矩形)取最近取到的那一份清单的
+      if (used && state.fetchedAt >= headerAt) { header = state.header; headerAt = state.fetchedAt; }
+    }
+    if (!header || !blocks.size) return null;
+    return {
+      manifest: { streamKey: key, kind: s.row.kind, plane: s.row.plane, clipIds: [...s.row.clipIds], fps: header.fps, segmentFrames: SEGMENT_FRAMES,
+        bound: header.bound, tight: header.tight, inits, segments },
+      blocks,
+    };
   }
 
   private request(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -1029,7 +1505,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const map = parseLayerMap(reply.body);
     if (!map) return;
     this.mapKnown = true;
-    const sig = `v${map.v}|` + JSON.stringify(map.layers) + `|${map.span}`;
+    const sig = `v${map.v}|` + JSON.stringify(map.layers) + `|${map.span}|` + JSON.stringify(map.streams);
     if (sig === this.mapSig) return;
     const prevLayers = this.layers();
     this.map = map;
@@ -1043,6 +1519,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
       this.emit({ type: "layer", clipId: old.clipId, kind: old.kind, key: old.key, ranges: [] });
     }
     this.noteStale();
+    this.streamRev++;
+    this.streamPlaneMemo.clear();
     // 换了键的层(重渲之后):就绪区间按新键重算、全量发;新键的清单还没到时区间是空的,页面按兜底顺序显示占位
     this.publishLayers();
     this.coverageChanged();

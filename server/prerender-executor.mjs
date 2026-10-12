@@ -47,7 +47,7 @@
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { isListPlan, CLIPS_KEY_MARK, BACKFILL_KEY_MARK } from './render-queue/index.mjs';
-import { splitCandidatesOf } from './artifact-transfer.mjs';
+import { splitCandidatesOf, splitStreamCandidatesOf, streamCandidateKey } from './artifact-transfer.mjs';
 
 /** `cardLocks`(Map、普通对象或缺省)→ `(lockKey) => 锁指纹 | null`(同 `split.mjs` 的读法) */
 function lockReader(cardLocks) {
@@ -366,7 +366,12 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   async function afterSplit(planTask, { tasks = [] } = {}) {
     const { id } = versionOf(planTask);
     const candidates = splitCandidatesOf(tasks);
-    if (typeof pipeline.recordSplitCandidates === 'function') pipeline.recordSplitCandidates(candidates);
+    if (typeof pipeline.recordSplitCandidates === 'function') {
+      pipeline.recordSplitCandidates(candidates);
+      // 轨道流的候选(层表 `streams` 表用)记在同一份记录里,键带 `stream:` 前缀,与卡的内容键分开;这一次切分没有流任务就不记
+      const streamCandidates = splitStreamCandidatesOf(tasks);
+      if (streamCandidates.size) pipeline.recordSplitCandidates(new Map([...streamCandidates].map(([contentKey, fps]) => [streamCandidateKey(contentKey), fps])));
+    }
     if (!isListPlan(planTask)) return;
     try {
       // 层表按切分时实际用的那一版写(项目往前走了时不是 planTask 指的那一版)
