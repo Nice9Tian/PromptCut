@@ -87,7 +87,7 @@ test('HR7 代成员的服务票据：握手得到成员身份加 service 字段�
   assert.equal(await outcome(bob, { type: 'shared.members' }, 'shared.members.list'), 'shared.members.list', '成员自己的连接没断');
   assert.equal(await status(memberServiceTicket(env, proj.projectId, { userId: bobId })), 401, '开关关着进不来');
   const list = await ask(creator, { type: 'shared.members' }, 'shared.members.list');
-  assert.deepEqual(list.hosted, { render: { available: true, enabled: true }, agent: { available: true, enabled: false } });
+  assert.deepEqual(list.hosted, { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: false } });
 
   const badService = await adminOp(creator, proj, 'set-hosted-service', { service: 'backup', enabled: false });
   assert.deepEqual([badService.type, badService.reason], ['error', 'bad-message'], '不认识的服务名');

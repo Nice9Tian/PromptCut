@@ -31,6 +31,11 @@ export const SERVICE_SIG_BYTES = 64;
 export const ACTS_FOR = Object.freeze(['self', 'member']);
 /** 有项目级开关的服务（项目记录 `hosted: { <服务名>: { enabled } }`，没有这一项算开）。登记表里可以有别的服务，它们没有开关 */
 export const HOSTED_SERVICES = Object.freeze(['render', 'agent']);
+/**
+ * 服务下面的子选项（项目记录 `hosted.<服务名>.<选项名>`，布尔，没有这一项算关，只有显式为 `true` 才算开；契约 `docs/plan/hosted-render-contract.md` 第 3.1 节）。
+ * 现在只有渲染节点的 `streams`（为这个项目生成轨道流）。这里只管记下并通知，渲染服务认领任务时看不看它不在这里管。
+ */
+export const HOSTED_OPTIONS = Object.freeze({ render: Object.freeze(['streams']), agent: Object.freeze([]) });
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const KID_RE = /^[A-Za-z0-9_-]{8}$/;
@@ -248,12 +253,23 @@ export function serviceEnabled(record, service) {
 }
 
 /**
+ * 这个项目的某个子选项：项目记录的 `hosted.<服务名>.<选项名>`，**没有这一项算关**，只有显式为 `true` 才算开
+ * （与服务本身的开关相反：服务开关没有算开。2026-10-12 用户定：轨道流缺省不产，省云端资源，要的创建者自己打开）。
+ */
+export function hostedOptionEnabled(record, service, option) {
+  return record?.hosted?.[service]?.[option] === true;
+}
+
+/**
  * 成员列表顶层与目录条目里的 `hosted`：有开关的服务各一项 `{ available, enabled }`。
- * `available`：登记表里有这个服务；`enabled`：这个项目的开关。
+ * `available`：登记表里有这个服务；`enabled`：这个项目的开关。渲染节点另带 `streams`（子选项「生成轨道流」，缺省关）。
  */
 export function hostedStateOf(registry, record) {
   const out = {};
-  for (const name of HOSTED_SERVICES) out[name] = { available: !!registry?.get(name), enabled: serviceEnabled(record, name) };
+  for (const name of HOSTED_SERVICES) {
+    out[name] = { available: !!registry?.get(name), enabled: serviceEnabled(record, name) };
+    for (const option of HOSTED_OPTIONS[name]) out[name][option] = hostedOptionEnabled(record, name, option);
+  }
   return out;
 }
 

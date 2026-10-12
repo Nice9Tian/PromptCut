@@ -34,6 +34,9 @@ module.exports = {
         PROMPTCUT_RENDER_CPU_QUOTA: '{{CPU_QUOTA}}',
         PROMPTCUT_RENDER_USER: '{{RENDER_USER}}',
         PROMPTCUT_RENDER_USER_CARDS: '{{USER_CARDS}}',
+        // 轨道流：1 = 工作进程以能产流的方式起（scripts/render-host.mjs --streams）。能产不等于产：每个项目产不产看它自己的
+        // 「生成轨道流」（项目设置里，缺省关，创建者能改）；没打开的项目只做快照。0 = 这台渲染服务一条流都不产
+        PROMPTCUT_RENDER_STREAMS: '{{STREAMS}}',
         // 看画面（云端 Agent 服务凭服务身份向管理进程要一帧）：on / off；核对它的签名用托管组合的服务登记表（只有公钥）
         PROMPTCUT_RENDER_LOOK: '{{LOOK}}',
         PROMPTCUT_RENDER_LOOK_SERVICES: '{{HOSTED_DATA}}/secrets/services.json',

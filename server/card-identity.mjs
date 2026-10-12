@@ -137,8 +137,12 @@ export function cardSnapshotIdentity(node, {
  * 两种都带上画幅、fps 和 `codeVersion`(生产这条流的代码指纹:截图 / 编码那几份文件一改,
  * 旧流全部作废)。**矩形和编码器不进流键**:它们只决定分段的「变体」(`init` 不同),
  * 页面按分段各自找自己的 `init`,见 `server/frame-stream.mjs`。
+ *
+ * 第三种,**依赖下层的流**(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.2 节):目标卡连同它下面的层一起渲,
+ * 按舞台坐标产。成员只有目标卡一张,键见 `belowStreamIdentity`;上面两种的摘要一个字不变。
  */
-export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {}, codeVersion = '' } = {}) {
+export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {}, codeVersion = '', below = null } = {}) {
+  if (kind === 'below') return belowStreamIdentity({ members, fps, stage, codeVersion, below });
   if (kind !== 'card' && kind !== 'group') throw new Error(`未知的流种类 ${kind}`);
   if (!members.length) throw new Error('流里至少要有一张卡');
   return digest({
@@ -151,5 +155,52 @@ export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {
       count: m.count,
       frame: m.frame,
     })),
+  });
+}
+
+/**
+ * 依赖下层的流里**放的是什么**的版本。现在是 0:这种流的身份(本文件)和计划(`frame-stream.mjs` 的 `planStreams`)定了,
+ * 流里的像素怎么取(差分取层还是原样盖,契约第 5.3 节)还没做。定下来的那一次把它加到 1,之后每改一次流里放的东西再加一 ——
+ * 开关打开时(`belowStreamsEnabled`)用旧办法产出来的分段就不会被新的读法拿去贴。不动 `STREAM_CODE_VERSION`:那一个管所有的流。
+ */
+export const BELOW_STREAM_VERSION = 0;
+
+/**
+ * 依赖下层的流(`kind: 'below'`)的内容键。摘要里是(契约第 5.2 节):
+ *
+ *   - **目标卡**(`members` 恰好一项):带外观的缓存内容键(`control.cacheContentKey`:位置、缩放、旋转、不透明度、淡入淡出、
+ *     轨迹都在里面 —— 这种流按舞台坐标产,外观画进流里),加采样的第一帧、相位、帧数;
+ *   - **下层**(`below.layers`):画家顺序排在目标卡下面、活跃时间和它有重叠的每一个画面层,各自的缓存内容键、第一帧、相位、帧数,
+ *     **按画家顺序排成一列**(下面的在前)。每项可另带 `extra`:缓存内容键没管到、又会改这一层画面的项目数据
+ *     (现在是素材段的像素映射,见 `frame-stream.mjs` 的 `belowLayerExtra`);
+ *   - 画幅、帧率、`codeVersion`,同别的流;再加 `BELOW_STREAM_VERSION`。
+ *
+ * 所以下层任一层的参数、位置、时间、上下顺序变了,或者下层多了少了一层,键就变;排在上面的层怎么改都不变
+ * (`mechanism/cards.md`「轴三」:下层依赖卡的预渲染结果,同一时刻下层任一控件的参数变了就失效)。
+ *
+ * 算不出某个下层的键时不许拿残缺的一列出键:调用方改传 `below.scene`(整个项目的键 `entry.key`),摘要里就只有目标卡加这一个键 ——
+ * 更粗(项目里任何改动都作废),但不会错。`layers` 与 `scene` 都没有、或哪一项缺键就抛。
+ */
+function belowStreamIdentity({ members = [], fps, stage = {}, codeVersion = '', below = null } = {}) {
+  if (members.length !== 1) throw new Error('依赖下层的流只有目标卡一个成员');
+  const scene = below?.scene;
+  const layers = below?.layers;
+  if (scene !== undefined && scene !== null && (typeof scene !== 'string' || !scene)) throw new Error('依赖下层的流:整个项目的键不对');
+  if (!scene && !Array.isArray(layers)) throw new Error('依赖下层的流:要给下层的键,或者整个项目的键');
+  const item = m => {
+    if (typeof m?.key !== 'string' || !m.key) throw new Error('依赖下层的流:有一层没有键');
+    return {
+      key: m.key,
+      firstFrame: m.sampling?.firstFrame,
+      phase: m.sampling?.phase ? ratio(m.sampling.phase) : undefined,
+      count: m.count,
+      extra: m.extra,
+    };
+  };
+  return digest({
+    stream: 1, kind: 'below', below: BELOW_STREAM_VERSION, fps: ratio(fps), codeVersion,
+    stage: { width: stage.width, height: stage.height, camera3dFov: stage.camera3dFov },
+    members: members.map(item),
+    ...(scene ? { scene } : { layers: layers.map(item) }),
   });
 }

@@ -6,8 +6,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPlanPublisher, clipsPlanTask, clipsSig, CLIPS_KEY_MARK, PLAN_DEBOUNCE_MS, BROWSER_NODE_WAIT_MS } from "./planPublisher.ts";
-import { clipsPlanTaskOf, backfillSig, CLIPS_KEY_MARK as SERVER_MARK, parseInbound } from "../../server/render-queue/messages.mjs";
+import { createPlanPublisher, clipsPlanTask, clipsSig, CLIPS_KEY_MARK, PLAN_DEBOUNCE_MS, BROWSER_NODE_WAIT_MS, LIST_STREAMS_SIG } from "./planPublisher.ts";
+import { clipsPlanTaskOf, backfillSig, CLIPS_KEY_MARK as SERVER_MARK, parseInbound, LIST_STREAMS_SIG as SERVER_STREAMS_SIG } from "../../server/render-queue/messages.mjs";
 
 test("C10-PP-01 形状与队列侧 clipsPlanTaskOf 逐字段相同;入站校验收它", () => {
   const clips = ["c3", "c1", "c2", "c1"];
@@ -208,4 +208,115 @@ test("M7-PP-06 节点一直没报到完:最多等 3 s,超时照发;本页不当�
   assert.equal(q2.sent.filter((m) => m.type === "task.publish").length, 1, "不当节点:防抖到了就发");
   assert.equal(none.debug().log.at(-1).waitedMs, undefined);
   none.dispose();
+});
+
+/* ---------------- 托管方渲染节点的「生成轨道流」(任务书 `docs/plan/render-refactor-task.md`「甲三」):打开后当场生效 ---------------- */
+
+const PAGE_CARDS = { cardEnvFingerprint: "0123456789abcdef", userCards: true, graphCards: false, cardSources: { "user:a": "v1" } };
+
+test("C10-PP-ST-01 这一项关着(或没给):结果键、input 与没有这个参数时逐字相同 —— 一直关着的项目的清单计划不会因为这次改动重切", () => {
+  const clips = ["c3", "c1", "c2"];
+  for (const browser of [undefined, PAGE_CARDS]) {
+    const plain = clipsPlanTask({ projectId: "sp_x", projectRev: 7, clips, codeVersion: "cv", browser });
+    for (const streams of [false, undefined, null, 0, "true"]) {
+      assert.deepEqual(clipsPlanTask({ projectId: "sp_x", projectRev: 7, clips, codeVersion: "cv", browser, streams }), plain);
+      assert.deepEqual(clipsPlanTaskOf({ projectId: "sp_x", projectRev: 7, clips, codeVersion: "cv", browser, streams }), plain);
+    }
+    assert.equal("streams" in plain.input, false);
+  }
+  // 钉住原来的写法:没有附加内容时签名就是清单本身的签名(改动之前的公式)
+  assert.equal(clipsPlanTask({ projectId: "sp_x", projectRev: 7, clips }).resultKey, `sp_x@7${CLIPS_KEY_MARK}${backfillSig(["c1", "c2", "c3"])}`);
+  assert.equal(clipsPlanTask({ projectId: "sp_x", projectRev: 7, clips }).id, "plan:sp_x@7#clips:" + backfillSig(["c1", "c2", "c3"]));
+});
+
+test("C10-PP-ST-02 这一项开着:是另一个计划(结果键不同、input.streams 为 true);页面与队列侧逐字段相同;入站校验收它,只认布尔 true", () => {
+  const clips = ["c2", "c1"];
+  assert.equal(LIST_STREAMS_SIG, SERVER_STREAMS_SIG);
+  for (const browser of [undefined, PAGE_CARDS]) {
+    const off = clipsPlanTask({ projectId: "sp_x", projectRev: 7, clips, codeVersion: "cv", browser });
+    const on = clipsPlanTask({ projectId: "sp_x", projectRev: 7, clips, codeVersion: "cv", browser, streams: true });
+    assert.deepEqual(on, clipsPlanTaskOf({ projectId: "sp_x", projectRev: 7, clips, codeVersion: "cv", browser, streams: true }));
+    assert.notEqual(on.resultKey, off.resultKey);
+    assert.notEqual(on.id, off.id);
+    assert.equal(on.input.streams, true);
+    assert.deepEqual({ ...on.input, streams: undefined }, { ...off.input, streams: undefined }, "别的输入不变");
+    assert.deepEqual([on.requires, on.priority, on.source], [off.requires, off.priority, off.source]);
+    // 新旧文档服务都只看签名的字符集(1～32 位小写字母与数字)与任务 id 的形状:带这一项的键照样合格
+    assert.match(on.resultKey.slice(`sp_x@7${CLIPS_KEY_MARK}`.length), /^[0-9a-z]{1,32}$/);
+    const parsed = parseInbound({ type: "task.publish", tasks: [on] });
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.body.tasks[0].input.streams, true);
+  }
+  // 入站:`input.streams` 不是布尔 true 的去掉(任务照收)
+  const off = clipsPlanTask({ projectId: "sp_x", projectRev: 7, clips });
+  for (const bad of [false, 1, "true", {}, null]) {
+    const parsed = parseInbound({ type: "task.publish", tasks: [{ ...off, input: { ...off.input, streams: bad } }] });
+    assert.equal(parsed.ok, true);
+    assert.equal("streams" in parsed.body.tasks[0].input, false);
+  }
+  // 旧页面(不带这一项)连新文档服务:照旧收,形状不变
+  const legacy = parseInbound({ type: "task.publish", tasks: [off] });
+  assert.equal(legacy.ok, true);
+  assert.deepEqual(legacy.body.tasks[0].input, { clips: ["c1", "c2"] });
+});
+
+test("C10-PP-ST-03 发布:本页看到这一项开着时计划带它;从关变开马上重发(不防抖、同一版项目、不同的任务);再调不重发;关着时与原来逐字相同", async () => {
+  const qd = fakeQueue();
+  const t = timers();
+  let on = false;
+  const pub = createPlanPublisher({ request: qd.request, publisherId: "page-x", clips: () => ["c1"], codeVersion: "cv", streams: () => on, setTimer: t.setTimer, clearTimer: t.clearTimer });
+  const published = () => qd.sent.filter((m) => m.type === "task.publish").map((m) => m.tasks[0]);
+  pub.streamsOn();
+  assert.equal(published().length, 0, "测量没落定:不发");
+  pub.measured({ projectId: "sp_x", projectRev: 3 });
+  await t.flush();
+  assert.equal(published().length, 1);
+  assert.deepEqual(published()[0], clipsPlanTaskOf({ projectId: "sp_x", projectRev: 3, clips: ["c1"], codeVersion: "cv" }), "关着:与没有这个功能时逐字相同");
+  // 关着时宿主误调:任务 id 没变,不重发
+  pub.streamsOn();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(published().length, 1);
+  // 创建者打开:宿主调 streamsOn,不等防抖就发
+  on = true;
+  pub.streamsOn();
+  assert.equal(t.pending(), 0, "不排防抖");
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(published().length, 2, "马上重发");
+  assert.deepEqual(published()[1], clipsPlanTaskOf({ projectId: "sp_x", projectRev: 3, clips: ["c1"], codeVersion: "cv", streams: true }));
+  assert.equal(published()[1].source.projectRev, 3, "同一版项目");
+  assert.notEqual(published()[1].id, published()[0].id);
+  pub.streamsOn();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(published().length, 2, "已经发过这一份:不重发");
+  // 开着时项目改了:新一版照样带这一项
+  pub.changed({ projectId: "sp_x", projectRev: 4 });
+  await t.flush();
+  assert.equal(published().length, 3);
+  assert.equal(published()[2].input.streams, true);
+  assert.equal(qd.sent.filter((m) => m.type === "publisher.hello").length, 1);
+  pub.dispose();
+  pub.streamsOn();
+  assert.equal(published().length, 3, "销毁后不发");
+});
+
+test("C10-PP-ST-04 几个成员同时在线:各自重发的是同一个任务 id(同一版、同一份清单),队列只留一个、只多切一次;读这一项出错按关着", async () => {
+  const mk = (streams) => {
+    const qd = fakeQueue();
+    const t = timers();
+    const pub = createPlanPublisher({ request: qd.request, publisherId: `page-${Math.random()}`, clips: () => ["c2", "c1"], codeVersion: "cv", streams, setTimer: t.setTimer, clearTimer: t.clearTimer });
+    return { qd, t, pub, ids: () => qd.sent.filter((m) => m.type === "task.publish").map((m) => m.tasks[0].id) };
+  };
+  let on = false;
+  const a = mk(() => on), b = mk(() => on);
+  for (const x of [a, b]) { x.pub.measured({ projectId: "sp_x", projectRev: 9 }); await x.t.flush(); }
+  on = true;
+  for (const x of [a, b]) { x.pub.streamsOn(); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0)); }
+  assert.deepEqual(a.ids(), b.ids(), "两个成员发的任务 id 逐个相同");
+  assert.equal(new Set([...a.ids(), ...b.ids()]).size, 2, "一共只有两个不同的任务:关着时的那一个、打开后的那一个");
+  const broken = mk(() => { throw new Error("x"); });
+  broken.pub.measured({ projectId: "sp_x", projectRev: 9 });
+  await broken.t.flush();
+  assert.deepEqual(broken.ids(), [a.ids()[0]], "读不出这一项:按关着发");
+  for (const x of [a, b, broken]) x.pub.dispose();
 });

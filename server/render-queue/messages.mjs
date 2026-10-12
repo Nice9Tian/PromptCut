@@ -186,6 +186,8 @@ function parseTaskInput(v, i) {
       // 在线页面自报的用户卡、图卡运行情况(块 N):只留合格的形状,不合格的整项去掉(任务照发,只是切分方不给浏览器出用户卡、图卡的那一份)
       const browser = browserCardsOf(input.browser);
       if (browser) input = { ...input, browser }; else delete input.browser;
+      // 页面看到这个项目的「生成轨道流」开着(见 `clipsPlanTaskOf`):只认布尔 true,别的值去掉
+      if (input.streams !== true) delete input.streams;
     } else if (resultKey !== base) {
       bad(`${at}.resultKey 必须等于 source 的 projectId@projectRev`);
     }
@@ -291,19 +293,32 @@ export function backfillPlanTaskOf({ projectId, projectRev, clips }) {
   };
 }
 
+/** 清单计划的签名里「页面看到『生成轨道流』开着」的那一段(与页面一侧 `planPublisher.ts` 的写法逐字相同) */
+export const LIST_STREAMS_SIG = 'streams=1';
+/** 签名里几段附加内容之间的分隔(不会出现在卡片摘要里) */
+const SIG_EXTRA_SEP = '\u0001';
+
 /**
  * 清单计划（C10 契约第 7 节、第 18 节第 9 条）：在线页面自己判重的片段清单，normal 档。
  * `requires` 里不写 `envFingerprint`、不写 `preferNode`：任何能切分的节点（桌面版、独立渲染主机）都认领得了，
  * 由认领的节点用自己的指纹切分；`codeVersion` 给了才写（版本不同的节点不认领）。
+ *
+ * `streams: true`（任务书 `docs/plan/render-refactor-task.md`「甲三」，契约 `docs/plan/hosted-render-contract.md` 第 3.1 节）：页面看到这个项目的
+ * 「生成轨道流」开着。这时签名里多一段、`input.streams` 为 true —— **同一版项目、同一份清单，这一项开着是另一个计划**：创建者刚打开时，
+ * 那一版关着时发的计划已经做完，同一个结果键队列不会重切；换了键，托管方的渲染节点才会再切一次、出它自己的那一份流任务。
+ * 不是 true（关着、旧页面、旧文档服务不报这一项）时结果键与 `input` 和没有这个参数时逐字相同，所以这一项一直关着的项目不受影响。
+ * 这只是页面看到的状态：产不产仍由渲染节点照目录里的这一项定，页面自报的不作数。
  */
-export function clipsPlanTaskOf({ projectId, projectRev, clips, codeVersion, browser }) {
+export function clipsPlanTaskOf({ projectId, projectRev, clips, codeVersion, browser, streams }) {
   const list = [...new Set(clips ?? [])].map(String).filter(Boolean).sort();
   const cards = browserCardsOf(browser);
+  const on = streams === true;
   // 带 `input.browser` 时,签名里再加它的摘要:同一份清单,本页能运行的卡变了(转译好一张、换了代)就是另一个计划,切分方重新切
-  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${backfillSig(list, cards ? browserCardsSig(cards) : undefined)}`;
+  const extra = [cards ? browserCardsSig(cards) : null, on ? LIST_STREAMS_SIG : null].filter((x) => x !== null).join(SIG_EXTRA_SEP);
+  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${backfillSig(list, extra || undefined)}`;
   return {
     id: taskIdOf({ kind: 'plan', resultKey, range: null }), kind: 'plan', resultKey, range: null,
-    source: { projectId, projectRev }, input: cards ? { clips: list, browser: cards } : { clips: list }, weight: { class: 'medium', estMs: null, frames: null },
+    source: { projectId, projectRev }, input: { clips: list, ...(cards ? { browser: cards } : {}), ...(on ? { streams: true } : {}) }, weight: { class: 'medium', estMs: null, frames: null },
     requires: typeof codeVersion === 'string' && codeVersion ? { codeVersion } : {}, priority: 'normal',
   };
 }

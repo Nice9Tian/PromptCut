@@ -88,6 +88,16 @@ import { resultKeyOf } from './fingerprint.mjs';
  * 一条流标了 `browserOnly: true` 时不出切分方自己的那一份(在线页面发的清单计划用,见 `local-node.mjs` 的 `listPlanOverrides`):
  * 只出浏览器做得了的那几份,做不了就一份都不出。
  *
+ * # 依赖下层的流(`docs/plan/prerender-products-contract.md` 第 5.1 节)
+ *
+ * `kind: 'below'` 的流(`frame-stream.mjs` 的 `planStreams` 在开关打开时才出)要整场景的下层和素材,只由桌面应用和渲染主机产:
+ *   - 只出切分方自己的一份,浏览器那一份不出(`browserStreamInputOf` 只认单卡流);标了 `browserOnly` 的就一份都不出;
+ *   - `requires.transcode: true`、`requires.belowDependent: true`,`capabilities.streams` 照旧;`cardSources` 照旧是全部定制卡;
+ *   - 重度一律记 `heavy`(整场景渲);
+ *   - 本地档能力闸:`usesLocalMedia` 收到的那一项另带 `streamKind: 'below'` 和 `belowClipIds`(算进键里的下层),
+ *     判据要把下层的素材算进去(`queue-local-media.mjs` 现在对流任务一律判真,已经包含)。
+ * 调用方不给这种流时,切分与原来逐字相同。
+ *
  * 纯函数:不读环境变量、不做 I/O。
  */
 
@@ -388,7 +398,9 @@ export function splitPlan({
     const contentKey = stream.contentKey ?? streamKey;
     const lockKey = `stream:${contentKey}`;
     const keying = keyingOf(lockKey);
-    const weight = weightOf({ clipId: topClipId });
+    // 依赖下层的流:整场景渲,只出切分方自己的一份(下面 `browserStreamInputOf` 不认它,`browser` 恒为 null)
+    const belowStream = stream.kind === 'below';
+    const weight = belowStream ? { ...weightOf(controlOf.get(topClipId) ?? { clipId: topClipId }), class: 'heavy' } : weightOf({ clipId: topClipId });
     // 浏览器那一份(单卡流):成员卡照快照任务的规矩判做不做得了,requires 也照那张卡的快照任务写(只画这一张卡)
     const control = controlOf.get(topClipId) ?? null;
     const streamInput = control ? browserStreamInputOf(stream, control) : null;
@@ -444,10 +456,12 @@ export function splitPlan({
             ? { ...browser.requires, envFingerprint: fingerprint, cardSources: { ...browser.requires.cardSources }, capabilities: { streams: true } }
             : gateLocalMedia({
               envFingerprint: fingerprint, codeVersion, cardSources: allCardSources(),
-              transcode: true, userCards: false, graphCards: false, belowDependent: false,
+              transcode: true, userCards: false, graphCards: false, belowDependent: belowStream,
               // M6c X1:只有报了 `capabilities.streams: true`(探到编码器)的节点能认领(filter.mjs 规则 2)
               capabilities: { streams: true },
-            }, { clipId: topClipId, kind: 'stream' }),
+            }, belowStream
+              ? { clipId: topClipId, kind: 'stream', streamKind: 'below', belowClipIds: Array.isArray(stream.belowClipIds) ? [...stream.belowClipIds] : [] }
+              : { clipId: topClipId, kind: 'stream' }),
           priority: priorityOf(false),
         };
         // 接手只属于切分方自己的那一份;浏览器那一份照快照的规矩不带

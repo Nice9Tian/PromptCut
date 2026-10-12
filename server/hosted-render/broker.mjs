@@ -4,7 +4,7 @@
  * | 路径 | 谁用 | 内容 |
  * |---|---|---|
  * | `GET /status` | 人、探针、部署脚本 | 目录状态、选中的项目、工作进程、资源读数、背压、自检、代码版本；不含票据与密钥。不要口令 |
- * | `GET /projects` | 工作进程 | `{ ok, docUrl, paused, projects: [{ projectId, members, drain, nodeId }] }`：它现在该连哪些项目 |
+ * | `GET /projects` | 工作进程 | `{ ok, docUrl, paused, projects: [{ projectId, members, drain, nodeId, streams }] }`：它现在该连哪些项目；`streams` 是这个项目此刻产不产轨道流 |
  * | `POST /ticket { projectId }` | 工作进程 | `{ ok, ticket }`：一张连接票据（转给目录的 `hosted.ticket`）；只给清单里的项目 |
  * | `POST /report { pid, queue }` | 工作进程 | 把自己的诊断交过来（管理进程不反过来请求工作进程） |
  * | `POST /look { projectId, path, body, cards?, timeoutMs? }` | 云端 Agent 服务 | 要一帧画面（`look.mjs`）；凭服务私钥的签名（`x-pc-service-auth`），不认工作进程的口令 |
@@ -17,6 +17,9 @@
  * - 开关开着、没活了、但手里还有认领的：标 `drain`（做完再断）；
  * - 开关关了或已不在目录里的：不列（工作进程让掉认领后断开）；
  * - 超过 `maxProjects` 时有成员在线的先连，其次按变成有活的先后；排不上的记在 `waiting` 里。
+ * - 每一项的 `streams`（任务书 `docs/plan/render-refactor-task.md`「甲三」，契约第 3.1 节）：这个项目此刻产不产轨道流 ——
+ *   渲染节点开着（`enabled`）并且目录条目里 `hosted.render.streams` 是 true（`streamsOn`）。只是这一项关着的项目照样列、照样连、
+ *   快照任务照常认领；工作进程据它不认领这个项目的流任务、切分清单计划时不出自己的那一份流（`render-node/host.mjs` 文件头「按项目产不产轨道流」）。
  */
 import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -25,13 +28,16 @@ import { LOOK_AUTH_HEADER } from './look.mjs';
 /** 节点 id：`hosted-render:<instanceId 前 12 位>/<projectId 去掉 sp_ 的前 8 位>` */
 export const nodeIdFor = (instanceId, projectId) => `hosted-render:${String(instanceId).slice(0, 12)}/${String(projectId).replace(/^sp_/, '').slice(0, 8)}`;
 
+/** 目录条目说这个项目产不产轨道流：渲染节点开着，并且「生成轨道流」这一项显式开着（缺省关；旧文档服务不报这一项，按关算） */
+export const streamsOn = (p) => p?.enabled === true && p?.hosted?.render?.streams === true;
+
 /**
  * @param {object} o
- * @param {{ projectId, enabled, active, members, since }[]} o.directory 目录清单
+ * @param {{ projectId, enabled, active, members, since, hosted? }[]} o.directory 目录清单
  * @param {Record<string, number>} [o.held] projectId → 工作进程此刻持有的认领数
  * @param {number} o.maxProjects
  * @param {string} o.instanceId
- * @returns {{ projects: { projectId, members, drain, nodeId }[], waiting: string[] }}
+ * @returns {{ projects: { projectId, members, drain, nodeId, streams }[], waiting: string[] }}
  */
 export function selectProjects({ directory, held = {}, maxProjects, instanceId }) {
   const want = [];
@@ -46,8 +52,8 @@ export function selectProjects({ directory, held = {}, maxProjects, instanceId }
   const picked = want.slice(0, room);
   return {
     projects: [
-      ...picked.map((p) => ({ projectId: p.projectId, members: p.members === true, drain: false, nodeId: nodeIdFor(instanceId, p.projectId) })),
-      ...draining.map((p) => ({ projectId: p.projectId, members: p.members === true, drain: true, nodeId: nodeIdFor(instanceId, p.projectId) })),
+      ...picked.map((p) => ({ projectId: p.projectId, members: p.members === true, drain: false, nodeId: nodeIdFor(instanceId, p.projectId), streams: streamsOn(p) })),
+      ...draining.map((p) => ({ projectId: p.projectId, members: p.members === true, drain: true, nodeId: nodeIdFor(instanceId, p.projectId), streams: streamsOn(p) })),
     ],
     waiting: want.slice(room).map((p) => p.projectId),
   };

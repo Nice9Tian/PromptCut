@@ -69,7 +69,8 @@ const size$ = (name, value) => {
  * `PROMPTCUT_RENDER_DIR`（部署目录）、`PROMPTCUT_RENDER_DATA`、`PROMPTCUT_RENDER_SECRETS`、`PROMPTCUT_HOSTED_DATA`（托管数据目录，keygen 写登记表用）、
  * `PROMPTCUT_RENDER_DOC_URL`、`PROMPTCUT_RENDER_PORT`、`PROMPTCUT_RENDER_STATUS_PORT`、`PROMPTCUT_RENDER_MAX_CONCURRENT`、`PROMPTCUT_RENDER_MAX_PROJECTS`、
  * `PROMPTCUT_RENDER_MEMORY_MAX` / `_MEMORY_HIGH`、`PROMPTCUT_RENDER_CPU_QUOTA`、`PROMPTCUT_RENDER_USER`（空串表示与管理进程同一用户）、
- * `PROMPTCUT_RENDER_USER_CARDS`、`PROMPTCUT_RENDER_EDITOR_DIR`、`PROMPTCUT_RENDER_LOOK`（on / off，看画面的口子；off 时云端 Agent 的配置里也不带它的地址）。
+ * `PROMPTCUT_RENDER_USER_CARDS`、`PROMPTCUT_RENDER_EDITOR_DIR`、`PROMPTCUT_RENDER_LOOK`（on / off，看画面的口子；off 时云端 Agent 的配置里也不带它的地址）、
+ * `PROMPTCUT_RENDER_STREAMS`（1 / 0，缺省 1：以能产轨道流的方式部署；每个项目产不产由它自己的「生成轨道流」定，任务书 `docs/plan/render-refactor-task.md`「甲三」）。
  */
 export function renderInstance(env = process.env) {
   const e = (name, fallback) => (env[name] === undefined ? fallback : env[name]);
@@ -79,6 +80,9 @@ export function renderInstance(env = process.env) {
   if (userCards !== 'isolated' && userCards !== 'off') throw new DeployUsageError(`PROMPTCUT_RENDER_USER_CARDS 只能是 isolated 或 off：${userCards}`);
   const look = e('PROMPTCUT_RENDER_LOOK', 'on');
   if (look !== 'on' && look !== 'off') throw new DeployUsageError(`PROMPTCUT_RENDER_LOOK 只能是 on 或 off：${look}`);
+  // 云端的渲染服务以能产轨道流的方式部署（缺省 1）；产不产由每个项目自己的开关定。0 = 整台不产（服务的缺省，部署时要显式给）
+  const streams = String(e('PROMPTCUT_RENDER_STREAMS', '1'));
+  if (streams !== '1' && streams !== '0') throw new DeployUsageError(`PROMPTCUT_RENDER_STREAMS 只能是 1 或 0：${streams}`);
   const docUrl = e('PROMPTCUT_RENDER_DOC_URL', 'ws://127.0.0.1:8787');
   let u;
   try { u = new URL(docUrl); } catch { throw new DeployUsageError(`PROMPTCUT_RENDER_DOC_URL 不是合法的地址：${docUrl}`); }
@@ -94,6 +98,7 @@ export function renderInstance(env = process.env) {
     hostedData: path$('PROMPTCUT_HOSTED_DATA', e('PROMPTCUT_HOSTED_DATA', '/var/lib/promptcut/hosted')),
     editorDir: path$('PROMPTCUT_RENDER_EDITOR_DIR', e('PROMPTCUT_RENDER_EDITOR_DIR', '/opt/promptcut-hosted/editor')),
     look,
+    streams,
     docUrl,
     workerPort: int$('PROMPTCUT_RENDER_PORT', e('PROMPTCUT_RENDER_PORT', 5400), 1024, 65000),
     statusPort: int$('PROMPTCUT_RENDER_STATUS_PORT', e('PROMPTCUT_RENDER_STATUS_PORT', 5399), 1024, 65535),
@@ -132,6 +137,7 @@ export function renderTemplateValues(inst) {
     RENDER_USER: inst.user,
     USER_CARDS: inst.userCards,
     LOOK: inst.look,
+    STREAMS: inst.streams,
     HOSTED_DATA: inst.hostedData,
     MAX_MEMORY_RESTART: inst.maxMemoryRestart,
     KILL_TIMEOUT_MS: String(inst.killTimeoutMs),
