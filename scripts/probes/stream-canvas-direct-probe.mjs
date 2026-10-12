@@ -377,7 +377,7 @@ try {
     check(JSON.stringify(registered) === JSON.stringify(['particles', 'particles-*', 'r6-canvas', 'scene-3d']), '审阅表里登记为画布卡的正好是 particles、particles-*、r6-canvas、scene-3d', registered);
     check(registered.every((id) => ['canvas2d', 'webgl'].includes(table[id].surface)), '登记为画布卡的,「画在什么上」都是 canvas2d 或 webgl', registered.map((id) => table[id].surface));
     const catalog = JSON.parse(await fs.readFile(path.join(ROOT, 'server', 'catalog', 'particles', 'index.json'), 'utf8'));
-    const ids = ['particles', ...catalog.assets.map((a) => `particles-${a.name}`), 'scene-3d', 'r6-canvas'];
+    const ids = ['particles', ...catalog.items.map((a) => `particles-${a.name}`), 'scene-3d', 'r6-canvas'];
     check(ids.length === 56, '画布卡一共 56 张', ids.length);
     const [width, height] = [960, 540];
     const emptyUrl = `${origin}/?export=1&timeline=${encodeURIComponent(`data:application/json,${encodeURIComponent(JSON.stringify({ width, height, fps: 30, duration: 1, tracks: [], media: [] }))}`)}`;
