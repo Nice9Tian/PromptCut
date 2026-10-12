@@ -178,14 +178,26 @@ function mergedLocks(cardLocks, extra) {
 
 /**
  * 带片段清单的计划任务:补渲计划(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」)与在线页面的清单计划
- * (C10 契约第 7 节、第 18 节第 9 条)。清单里的片段当重卡算键 —— 预渲染集合换成清单(与本机的判重无关),
- * 不切轨道流(低内存档与在线页面都不消费流)。细任务的档跟着 plan:补渲计划的一律标 `backfill`,清单计划照 normal 的名次。
- * 不是带清单的 plan 时回空对象,切分照旧。
+ * (C10 契约第 7 节、第 18 节第 9 条)。清单里的片段当重卡算键 —— 预渲染集合换成清单(与本机的判重无关)。
+ * 细任务的档跟着 plan:补渲计划的一律标 `backfill`,清单计划照 normal 的名次。不是带清单的 plan 时回空对象,切分照旧。
+ *
+ * 轨道流(`docs/plan/browser-stream-task.md` 第一处):
+ *   - 补渲计划照旧不切流(低内存档不消费流);
+ *   - 在线页面的清单计划:执行器给了 `browserStreamsFor`(按清单里的片段算流,`frame-pipeline.mjs` 的 `planForQueue`)时,
+ *     这些流只给浏览器出一份(`browserOnly`:单卡流、浏览器做得了的才出),**切分方自己的那一份照旧不出** ——
+ *     清单计划原来就不切流,桌面与渲染主机替在线页面产流是另一件事(任务书「甲三」),这里不改它们的行为。
+ *     执行器没给(旧执行器、测试替身)就不切流,与原来相同。
  */
-function listPlanOverrides(task) {
+function listPlanOverrides(task, plan) {
   if (!isListPlan(task)) return {};
   const clips = Array.isArray(task.input?.clips) ? task.input.clips.filter(id => typeof id === 'string' && id) : [];
-  return { prerenderSet: new Set(clips), streams: [], lane: priorityBand(task.priority) === 'backfill' ? 'backfill' : 'normal' };
+  const backfill = priorityBand(task.priority) === 'backfill';
+  let streams = [];
+  if (!backfill && typeof plan?.browserStreamsFor === 'function') {
+    try { streams = (plan.browserStreamsFor(new Set(clips)) ?? []).filter(s => s && typeof s === 'object').map(s => ({ ...s, browserOnly: true })); }
+    catch { streams = []; }
+  }
+  return { prerenderSet: new Set(clips), streams, lane: backfill ? 'backfill' : 'normal' };
 }
 
 /** 发布回包里一把锁的描述(M7 D2):没有的项不带 */
@@ -374,7 +386,7 @@ export function createLocalNode({
     const cutBy = Number.isSafeInteger(plan?.actualRev) && plan.actualRev !== task?.source?.projectRev
       ? { ...task, source: { ...task.source, projectRev: plan.actualRev } }
       : task;
-    const base = { ...plan, planTask: cutBy, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, ...listPlanOverrides(task) };
+    const base = { ...plan, planTask: cutBy, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, ...listPlanOverrides(task, plan) };
     const outcome = await publishDerived(run, base, plan?.cardLocks);
     if (!holding(run)) return discard();
     const { derived, published, relocked, gaveUp } = outcome;

@@ -68,6 +68,26 @@ import { resultKeyOf } from './fingerprint.mjs';
  *     所以同一台机器上的桌面节点与浏览器节点对同一张用户卡 / 图卡的结果键不同、不串。
  * 不给 `browserCards` 或对不上时,用户卡、图卡不出浏览器那一份,切分与原来相同。内置卡片的切分与结果键一个字不变。
  *
+ * # 单卡轨道流也给浏览器一份(`docs/plan/browser-stream-task.md` 第一处)
+ *
+ * 调用方给的每条流除了流键与分段范围,还可以带这条流的形状(`planStreams` 算出的 `kind`、`plane`、`clipIds`、`fps`、`bound`、
+ * `offset`、`firstFrame`、`total`)。**单卡流**(`kind: 'card'`、`plane: 'local'`、恰好一张成员卡),而且这张成员卡照上面快照那一套
+ * 判下来浏览器做得了(共享档、独立卡、light / medium、不是画布卡、不是 Lottie、不用只在发布方本机的素材;用户卡、素材效果卡要本页
+ * 声明能运行且代码身份对得上),就另出浏览器指纹的一份:
+ *
+ *   结果键 = 流的内容键 × 浏览器指纹(用户卡、素材效果卡用页面的 cardEnvFingerprint),`requires.envFingerprint` 同它;
+ *   `requires.transcode: false`(浏览器用自带的编码器压,不要本机转码),仍要求 `capabilities.streams`;
+ *   `requires.cardSources`、`userCards`、`graphCards` 照这张卡的快照任务写(只画这一张卡);
+ *   `input` 带 `compositing`、`bake`(同快照那一份)和 `stream`:
+ *     `{ kind: 'card', plane: 'local', clipIds, fps, bound, offset, firstFrame, count, total }` —— 页面不自己算这些。
+ *
+ * 锁的规矩同快照:锁键 `stream:<内容键>`;没锁(或锁在自己的指纹上且不接手)才出两份,两份都带 `input.dual`;锁在别的指纹上照锁只出一份,
+ * 锁在浏览器指纹上时那一份是浏览器的形状。组流、成员卡不在 card plan 里的流、缺形状字段的流(旧调用方)只出切分方自己的一份,与原来逐字相同。
+ * 浏览器指纹与切分方自己的相同时不另出(两份的任务 id 会相同,而切分方那一份要本机转码,浏览器做不了)。
+ *
+ * 一条流标了 `browserOnly: true` 时不出切分方自己的那一份(在线页面发的清单计划用,见 `local-node.mjs` 的 `listPlanOverrides`):
+ * 只出浏览器做得了的那几份,做不了就一份都不出。
+ *
  * 纯函数:不读环境变量、不做 I/O。
  */
 
@@ -188,6 +208,26 @@ function bakeInputOf(control) {
   return out;
 }
 
+const isInt = Number.isInteger;
+const isNum = Number.isFinite;
+
+/**
+ * 浏览器那一份流任务的 `input.stream`:只认单卡流(`kind: 'card'`、`plane: 'local'`、成员恰好是这一张卡),字段齐、形状对才给;
+ * 否则回 null(组流、旧调用方只给了流键与分段范围的流,都不出浏览器那一份)。`count` 取成员卡的帧数:本地帧 0 .. count-1 之外的帧是全透明。
+ */
+function browserStreamInputOf(stream, control) {
+  if (stream?.kind !== 'card' || stream.plane !== 'local') return null;
+  const ids = stream.clipIds;
+  if (!Array.isArray(ids) || ids.length !== 1 || ids[0] !== stream.topClipId || control?.clipId !== ids[0]) return null;
+  const { bound, offset } = stream;
+  const fps = Number(stream.fps), firstFrame = stream.firstFrame, total = stream.total, count = Number(control.count);
+  if (!(fps > 0) || !isInt(firstFrame) || !isInt(total) || total < 1 || !isInt(count) || count < 1) return null;
+  if (!bound || !isInt(bound.x) || !isInt(bound.y) || !isInt(bound.w) || !isInt(bound.h) || bound.w < 2 || bound.h < 2 || bound.w % 2 || bound.h % 2) return null;
+  if (!offset || !isNum(offset.x) || !isNum(offset.y)) return null;
+  return { kind: 'card', plane: 'local', clipIds: [ids[0]], fps, bound: { x: bound.x, y: bound.y, w: bound.w, h: bound.h },
+    offset: { x: offset.x, y: offset.y }, firstFrame, count, total };
+}
+
 /** → TaskInput[]:先快照(按 cardPlan 顺序、段升序),后轨道流(按 streams 顺序、段升序);同一 id 只留第一个。 */
 export function splitPlan({
   planTask,
@@ -258,6 +298,17 @@ export function splitPlan({
     for (const [cardId, version] of Object.entries(cardSourceVersions ?? {})) if (typeof version === 'string' && version) out[cardId] = version;
     return out;
   };
+  /**
+   * 这张卡的结果浏览器出哪几份(M7 D1,块 N;快照与单卡流共用):`eligible` 做不做得了;`copyFps` 另出哪些指纹(用户卡、素材效果卡用页面的
+   * cardEnvFingerprint,内置卡片用浏览器的 envFingerprint);`browserOf` 哪些指纹的那一份要带页面要的输入。
+   */
+  const browserPlanOf = ({ tier, compositing, requires, weight, control }) => {
+    const cardTask = runsCardCode(requires);
+    const eligible = (cardTask ? pageCards !== null : browserSet.size > 0) && browserEligible({ tier, compositing, requires, weight, control, pageCards });
+    const copyFps = cardTask ? (pageCards ? [pageCards.cardEnvFingerprint] : []) : browserFps;
+    const browserOf = cardTask ? new Set(copyFps) : browserSet;
+    return { eligible, copyFps, browserOf };
+  };
   const out = [];
   const seen = new Set();
   const emit = task => {
@@ -297,10 +348,7 @@ export function splitPlan({
     const weight = weightOf(control);
     // M7 D1:这张卡出哪几份。没锁(或锁在自己的指纹上)、浏览器做得了时另出浏览器指纹的;锁在别处的照锁只出一份
     // 用户卡、图卡(块 N)的浏览器那一份用页面的 cardEnvFingerprint;内置卡片照旧用浏览器的 envFingerprint
-    const cardTask = runsCardCode(requires);
-    const eligible = (cardTask ? pageCards !== null : browserSet.size > 0) && browserEligible({ tier, compositing, requires, weight, control, pageCards });
-    const copyFps = cardTask ? (pageCards ? [pageCards.cardEnvFingerprint] : []) : browserFps;
-    const browserOf = cardTask ? new Set(copyFps) : browserSet;
+    const { eligible, copyFps, browserOf } = browserPlanOf({ tier, compositing, requires, weight, control });
     const fingerprints = eligible && lockOf(lockKey) == null && keying.fingerprint === envFingerprint ? [keying.fingerprint, ...copyFps] : [keying.fingerprint];
     const dual = fingerprints.length > 1;
     for (const fingerprint of fingerprints) {
@@ -330,30 +378,82 @@ export function splitPlan({
     }
   }
 
+  /** 流的成员卡:clipId → control(card plan 里的那一项,带 cardId 与执行器标的 snapshotOversize) */
+  const controlOf = new Map();
+  for (const control of cardPlan ?? []) if (control?.clipId && !controlOf.has(control.clipId)) controlOf.set(control.clipId, control);
+
   for (const stream of streams ?? []) {
     const { streamKey, topClipId, firstSegment, lastSegment } = stream ?? {};
     if (!streamKey) continue;
     const contentKey = stream.contentKey ?? streamKey;
-    const keying = keyingOf(`stream:${contentKey}`);
-    const resultKey = resultKeyOf(contentKey, keying.fingerprint);
+    const lockKey = `stream:${contentKey}`;
+    const keying = keyingOf(lockKey);
     const weight = weightOf({ clipId: topClipId });
-    for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
-      const range = { unit: 'segment', from, to };
-      const task = {
-        id: taskIdOf({ kind: 'stream', resultKey, range }), kind: 'stream', resultKey, range,
-        source: { projectId, projectRev, derivedFrom },
-        input: { clipId: topClipId, cardId: null, entryKey: null, contentKey },
-        weight: { ...weight, frames: (to - from + 1) * SEGMENT_FRAMES },
-        requires: gateLocalMedia({
-          envFingerprint: keying.fingerprint, codeVersion, cardSources: allCardSources(),
-          transcode: true, userCards: false, graphCards: false, belowDependent: false,
-          // M6c X1:只有报了 `capabilities.streams: true`(探到编码器)的节点能认领(filter.mjs 规则 2)
-          capabilities: { streams: true },
-        }, { clipId: topClipId, kind: 'stream' }),
-        priority: priorityOf(false),
-      };
-      if (keying.takeover) task.takeover = true;
-      emit(task);
+    // 浏览器那一份(单卡流):成员卡照快照任务的规矩判做不做得了,requires 也照那张卡的快照任务写(只画这一张卡)
+    const control = controlOf.get(topClipId) ?? null;
+    const streamInput = control ? browserStreamInputOf(stream, control) : null;
+    let browser = null;
+    if (streamInput) {
+      const tier = control.tier ?? snapshotTier(control.capabilities);
+      const compositing = control.compositing ?? control.capabilities?.compositing;
+      const cardVersion = control.cardId ? cardSourceVersions?.[control.cardId] : undefined;
+      const requires = gateLocalMedia({
+        envFingerprint: keying.fingerprint, codeVersion,
+        cardSources: cardVersion ? { [control.cardId]: cardVersion } : {},
+        transcode: false,
+        userCards: !!isUserCard(control),
+        graphCards: !!isGraphCard(control),
+        belowDependent: compositing === 'belowDependent',
+        capabilities: { streams: true },
+      }, control);
+      const cardWeight = weightOf(control);
+      const plan = browserPlanOf({ tier, compositing, requires, weight: cardWeight, control });
+      if (plan.eligible) {
+        // 流的浏览器那一份不含切分方自己的指纹:同指纹时两份的任务 id 相同,而切分方那一份要本机转码
+        const copyFps = plan.copyFps.filter(fp => fp !== envFingerprint);
+        browser = { copyFps, browserOf: new Set(copyFps), requires, weight: cardWeight, compositing, control, input: streamInput };
+      }
+    }
+    // 出哪几份:没锁(或锁在自己的指纹上且不接手)时切分方一份、浏览器各一份;锁在别处照锁只出一份
+    const wantsOwn = stream.browserOnly !== true;
+    const copies = [];
+    if (browser && lockOf(lockKey) == null && keying.fingerprint === envFingerprint) {
+      if (wantsOwn) copies.push({ fingerprint: keying.fingerprint, forBrowser: false });
+      for (const fingerprint of browser.copyFps) copies.push({ fingerprint, forBrowser: true });
+    } else {
+      const forBrowser = !!browser && browser.browserOf.has(keying.fingerprint);
+      if (forBrowser || wantsOwn) copies.push({ fingerprint: keying.fingerprint, forBrowser });
+    }
+    const dual = copies.length > 1;
+    for (const { fingerprint, forBrowser } of copies) {
+      const resultKey = resultKeyOf(contentKey, fingerprint);
+      for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
+        const range = { unit: 'segment', from, to };
+        const frames = (to - from + 1) * SEGMENT_FRAMES;
+        const input = forBrowser
+          ? { clipId: topClipId, cardId: browser.control.cardId ?? null, entryKey: null, contentKey, canvasHeavy: false }
+          : { clipId: topClipId, cardId: null, entryKey: null, contentKey };
+        if (dual) input.dual = true;
+        if (forBrowser) Object.assign(input, { compositing: browser.compositing, bake: bakeInputOf(browser.control), stream: structuredClone(browser.input) });
+        const task = {
+          id: taskIdOf({ kind: 'stream', resultKey, range }), kind: 'stream', resultKey, range,
+          source: { projectId, projectRev, derivedFrom },
+          input,
+          weight: forBrowser ? { ...browser.weight, frames } : { ...weight, frames },
+          requires: forBrowser
+            ? { ...browser.requires, envFingerprint: fingerprint, cardSources: { ...browser.requires.cardSources }, capabilities: { streams: true } }
+            : gateLocalMedia({
+              envFingerprint: fingerprint, codeVersion, cardSources: allCardSources(),
+              transcode: true, userCards: false, graphCards: false, belowDependent: false,
+              // M6c X1:只有报了 `capabilities.streams: true`(探到编码器)的节点能认领(filter.mjs 规则 2)
+              capabilities: { streams: true },
+            }, { clipId: topClipId, kind: 'stream' }),
+          priority: priorityOf(false),
+        };
+        // 接手只属于切分方自己的那一份;浏览器那一份照快照的规矩不带
+        if (keying.takeover && !forBrowser) task.takeover = true;
+        emit(task);
+      }
     }
   }
   return out;

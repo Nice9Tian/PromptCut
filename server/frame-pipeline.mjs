@@ -23,7 +23,7 @@ import { isFullyTransparentPng } from './frame-validity.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { isolatedCardProject } from '../src/kernel/isolatedCard.mjs';
 import { anchorFrames } from '../src/render/snapshotPick.mjs';
-import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX, STREAM_CODE_VERSION, planStreams } from './frame-stream.mjs';
+import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX, STREAM_CODE_VERSION, planStreams, planListStreams, queueStreamOf, streamDecoderBudget } from './frame-stream.mjs';
 import { dirtyStreamLease } from './bakery/bake.mjs';
 import { createCardLockStore, cardLockDecision, CARD_LOCK_IDLE_MS } from './card-lock.mjs';
 import { QUEUE_DEFAULTS } from './render-queue/index.mjs';
@@ -3038,8 +3038,11 @@ export class FramePipeline {
       prerenderSet: entry.basePrerenderSet instanceof Set ? new Set(entry.basePrerenderSet)
         : entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
       cardPlan,
-      streams: streamSpecs.map(spec => ({ streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: spec.topClipId,
-        firstSegment: spec.firstSegment, lastSegment: spec.lastSegment })),
+      // 每条流连同它的形状(`queueStreamOf`):切分给浏览器出单卡流那一份时要(browser-stream-task.md 第一处)
+      streams: streamSpecs.map(queueStreamOf),
+      // 在线页面的清单计划用(`local-node.mjs` 的 `listPlanOverrides`):按清单里的片段算流,只给浏览器出一份。
+      // 不看本机判没判重、本机能不能产流(`queueStreamSpecs` 那两道闸只管切分方自己产的那一份)
+      browserStreamsFor: clips => this.listStreamSpecs(entry, clips).map(queueStreamOf),
       anchorFrames: anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count),
       // c66-host-cards:全局代码版本(`frameCode`)不再覆盖用户卡与改动层;这一版用到的定制卡的代码身份
       // 由切分写进 requires.cardSources(共享档只写这张卡的,本地档、流写全部),节点手里没有这份代码就不认领
@@ -3062,6 +3065,15 @@ export class FramePipeline {
     if (!producer?.enabled || !(await producer.capable())) return [];
     try {
       return planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
+        codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
+    } catch {
+      return [];
+    }
+  }
+  /** 清单计划里的片段各自的流(与 `queueStreamSpecs` 同一组参数,所以单卡流的内容键相同);算不出回 `[]` */
+  listStreamSpecs(entry, clips) {
+    try {
+      return planListStreams(entry, clips, { budget: this.streamProducer()?.budget ?? streamDecoderBudget(),
         codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
     } catch {
       return [];
