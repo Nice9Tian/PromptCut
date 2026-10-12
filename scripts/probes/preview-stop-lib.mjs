@@ -46,8 +46,8 @@ export async function startIsolatedEditor({ port, work }) {
   const cacheDir = path.join(ROOT, 'out', 'probe-vite-cache', String(port));
   await fs.mkdir(cacheDir, { recursive: true });
   /*
-   * 端口被占是暂时性故障:重试加退避,不算失败。实测刚跑完全量测试的那几秒里,指定的三个端口会被系统当临时端口发给别的连接
-   * (这台机器的动态端口段把它们包在里面),`startDevServer` 当场报「没有全空着」;隔几秒就空出来了。
+   * 端口被占是暂时性故障:重试加退避,不算失败。指定的端口落在系统的动态端口段里时,别的进程连出去的连接可能临时占到它们
+   * (实测紧跟在一遍全量测试之后起探针,`startDevServer` 当场报「没有全空着」,隔几秒就空出来了)。
    * 试 6 次(间隔 3、6、9、12、15 秒)还占着,才照原样抛。
    */
   let server = null;
