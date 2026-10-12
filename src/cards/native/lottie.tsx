@@ -52,10 +52,11 @@ const DEMO_JSON = JSON.stringify({
 });
 
 /*
- * ── 画面只由素材、参数、帧号决定(原型,两个开关,缺省都关)──
+ * ── 画面只由素材、参数、帧号决定(原型,三个开关,缺省都关,互相独立)──
  *
  * 要的是:从头顺着推到第 N 帧,和新建一份直接跳到第 N 帧,画面相同;和页面里别的卡取过几次随机数无关。
- * 播放库(lottie-web 5.13.0)里有三处让它做不到。前两处是随机数,归开关一;第三处和随机数无关,归开关二。
+ * 播放库(lottie-web 5.13.0)里有三处让它做不到。前两处是随机数,开关一和开关三是对付它的两种办法(可以只开一个,
+ * 也可以都开);第三处和随机数无关,归开关二。
  * 实测与数字见 `scripts/probes/lottie-seed-probe.mjs` 和 docs/reports/AGENT-lottie-seed.md。
  *
  * ── 开关一:覆盖随机数种子(2026-10-12 用户:「我觉得可以覆盖随机数种子。」)──
@@ -78,15 +79,29 @@ const DEMO_JSON = JSON.stringify({
  *     字体或外部数据没到齐时,建图层发生在播放库自己的定时器回调里,所以把这份实例的 `checkLoaded` 也包进去。
  *   - 每画一帧之前按「种子 + 帧号」重新播种。这样第 2 条里的 wiggle 拿到的数只跟帧号有关。装载完成那一下播放库
  *     自己画的那一次用的是建图层取剩的数,所以紧接着按帧号重画一遍。
- *   - 以上每一段都再包在 `withSeededRandom(种子, …)` 里:全页共用的那一串不被 Lottie 挪动(页面里第一个 Lottie 建图层时
- *     本来会从它那里取数),播放库里直接调 `Math.random()` 的地方(文字图层的随机顺序)也落在种子里。
+ *   - 以上每一段都再包在「外面那一层」里(见下,开关一和开关三共用)。
  *   - `BMMath` 播放库没有导出。表达式的代码是在它的作用域里求值的,能看到它(名字是 `Math`)和 `globalData`,
  *     所以建一份只有一个空图层的一次性动画,让它的表达式把 `Math` 挂到 `globalData` 上,取出来就销毁。
- *     全页只取一次。取不到(播放库换了版本、关了表达式)就只剩 `withSeededRandom` 那一层,并在控制台说一声:
- *     那一层只在播放库那一串还没被播过种时管用。
+ *     全页只取一次。取不到(播放库换了版本、关了表达式)就只剩外面那一层,并在控制台说一声:
+ *     那一层只在播放库那一串还没被播过种时管得到表达式。
  *
- * 没管到的:文字图层的「随机顺序」动画器(播放库在文字内容变化时直接调 `Math.random()` 打乱字符顺序)。
- * 它在 `withSeededRandom` 里,同一次调用里只有一个这样的图层时是确定的;多个时仍可能和推帧路径有关。自带素材里没有,没测。
+ * ── 开关三:替换表达式里的随机函数(2026-10-12 用户:「能不能用替换方式直接覆盖,比如替换 random 为 random_in_card()」)──
+ *
+ * 不去碰播放库那一串,而是让表达式根本不用它:交给播放库之前改写素材里每个表达式的原文,包一层函数,把
+ * `random`、`gaussRandom`、`seedRandom`、`wiggle`、`Math` 这几个名字遮成卡片自己的(`wrapLottieExpression`、
+ * `lottieExprRuntime`)。卡片自己的每次求值开一串新的随机数,种子由(素材种子、表达式编号、时间)算出,不记任何状态。
+ * 改写以后没有任何表达式再读播放库内部那一串,所以这个开关不取它、不给它播种。表达式以外的随机归外面那一层。
+ * 和开关一比:不用取播放库内部的随机源、不用按帧播种、不用装载后重画;代价是 wiggle 和 seedRandom 的画面和播放库
+ * 现在的不一样(见 `lottieExprRuntime` 的说明)。
+ *
+ * ── 外面那一层(开关一、开关三只要开了一个就有;2026-10-12 用户:「你帮我在外面也兜住,把播放库的随机数也固定。」)──
+ *
+ * 管的是播放库自己直接调全页 `Math.random()` 的地方,不经过表达式:
+ *   - 建实例、装载完成(含异步装载的那个回调)、每次跳帧,都包在 `withSeededRandom` 里。建图层一串(素材种子),
+ *     画第 N 帧一串(素材种子、N)。全页共用的那一串不被 Lottie 挪动。
+ *   - 文字图层的「随机顺序」单独按(素材、图层、文字内容)固定(`hookTextOrder`)。它每份内容只算一次、在哪一帧算不固定,
+ *     只按帧号播种反而会让顺着推和直接跳不同。
+ * 播放库里所有取随机数的地方、各归哪一层管,列在 docs/reports/AGENT-lottie-seed.md「播放库里的随机来源」。
  *
  * ── 开关二:属性值不留旧数(任务书没要求,查自带素材 happy2016 那 0.0036% 的像素差时找到的)──
  *
@@ -99,7 +114,7 @@ const DEMO_JSON = JSON.stringify({
  */
 
 /** 读一个开关:`window[key]` 是布尔就用它,否则看页面地址里的同名参数是不是 1。缺省关 */
-function flagOf(key: "__pcLottieSeed" | "__pcLottieExact", query: string): boolean {
+function flagOf(key: "__pcLottieSeed" | "__pcLottieExact" | "__pcLottieExpr", query: string): boolean {
   if (typeof window === "undefined") return false;
   const flag = (window as unknown as Record<string, unknown>)[key];
   if (typeof flag === "boolean") return flag;
@@ -114,6 +129,11 @@ export function lottieSeedEnabled(): boolean {
 /** 开关二:缺省关。开法:页面地址带 `lottieExact=1`,或在建实例之前设 `window.__pcLottieExact = true`(设成 false 压过地址) */
 export function lottieExactEnabled(): boolean {
   return flagOf("__pcLottieExact", "lottieExact");
+}
+
+/** 开关三:缺省关。开法:页面地址带 `lottieExpr=1`,或在建实例之前设 `window.__pcLottieExpr = true`(设成 false 压过地址) */
+export function lottieExprEnabled(): boolean {
+  return flagOf("__pcLottieExpr", "lottieExpr");
 }
 
 /** 素材内容 → 32 位种子(FNV-1a)。要在交给播放库**之前**算:播放库会原地改这份数据 */
@@ -204,24 +224,261 @@ function hookPropertyFactory(): boolean {
   return propertyFactoryHooked;
 }
 
-/** 两个开关各开没开 */
-export interface LottieMode { seed: boolean; exact: boolean }
+// ── 开关三:替换表达式里的随机函数 ──
 
-/** 一份建好的动画:跳帧一律走 goTo。seed 为 null 表示没开「覆盖随机数种子」 */
+/** mulberry32:和 kernel/pinEntropy.ts 同一个算法,这里每次要一串自己的 */
+function streamOf(state: number): () => number {
+  let s = state | 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 把几个 32 位整数搅成一个种子 */
+function mixSeed(...parts: number[]): number {
+  let h = 0x811c9dc5;
+  for (const p of parts) {
+    h = Math.imul(h ^ (p | 0), 0x85ebca6b);
+    h ^= h >>> 13;
+    h = Math.imul(h, 0xc2b2ae35);
+    h ^= h >>> 16;
+  }
+  return h | 0;
+}
+
+const f64 = new Float64Array(1);
+const u32 = new Uint32Array(f64.buffer);
+/** 一个数(时间、seedRandom 的参数)的 64 位原样拆成两个整数:不取整、不转字符串,同一个数永远得到同一对 */
+function bitsOf(x: number): [number, number] {
+  f64[0] = x;
+  return [u32[0], u32[1]];
+}
+
+/** 各串的用途号,进种子:同一个表达式里不同用途的随机数互不相干 */
+const STREAM_EVAL = 1, STREAM_WIGGLE = 2, STREAM_SEEDED = 3, STREAM_TIMELESS = 4, STREAM_MATH_SEEDED = 5;
+
+/**
+ * 改写后的表达式每次求值调一次,拿到这一次用的五样东西:random、gaussRandom、seedRandom、wiggle、换掉了 random 的 Math。
+ * 都只由(素材种子、表达式编号、时间)决定;不记任何东西,所以和别的表达式、别的 Lottie、别的卡、推帧路径无关。
+ *
+ *   random       调用形式照播放库的:无参 0～1;一个参数是上限;两个参数是下限上限;参数是数组时各分量共用一个随机数。
+ *                这一次求值里连着调,取的是同一串里的下一个。
+ *   seedRandom   照 AE 的语义:`seedRandom(offset, timeless)` 之后的 random 改从(offset)那一串取,timeless 为真时
+ *                种子里不带时间(每帧同一个数),否则带。播放库现在不看第二个参数,只要调了 seedRandom 就不随时间变。
+ *   wiggle       算法照播放库的:频率写死成 5,把前 floor(时间×5) 组随机数累加,再加上下一组乘以小数部分。
+ *                但随机数取自只跟(素材、表达式)有关、不跟时间有关的一串,所以相邻两帧的累加是同一批数,值随时间连续。
+ *                播放库现在每次求值都是新取的数,逐帧乱跳。
+ *   gaussRandom  播放库没有这个函数(表达式里用了会报错)。这里按 AE 的说明补一个:钟形分布,约九成落在下限和上限之间。
+ *   Math         `Math.random()` 也取这一次求值的那一串;别的照旧。
+ *
+ * value 是表达式拿到的属性原值。播放库的 wiggle 用的是 `this.pv`:带关键帧的属性两者是同一个对象;不带关键帧的多维属性
+ * `pv` 是原值存成单精度的样子,所以这里先取单精度再算,结果和用 `pv` 逐位相同(探针核对过)。
+ */
+function lottieExprRuntime(seed: number, id: number, time: number, value: any, math: object): unknown[] {
+  const [t0, t1] = bitsOf(Number(time) || 0);
+  let next = streamOf(mixSeed(seed, id, STREAM_EVAL, t0, t1));
+  const rnd = () => next();
+  /** 照播放库 random 的参数处理,draw 给出 0～1 的那个数 */
+  const ranged = (draw: () => number) => (min?: any, max?: any) => {
+    if (max === undefined) {
+      if (min === undefined) { min = 0; max = 1; } else { max = min; min = undefined; }
+    }
+    if (max.length) {
+      const len = max.length;
+      if (!min) min = new Float32Array(len);
+      const arr = new Float32Array(len);
+      const r = draw();
+      for (let i = 0; i < len; i++) arr[i] = min[i] + r * (max[i] - min[i]);
+      return arr;
+    }
+    if (min === undefined) min = 0;
+    return min + draw() * (max - min);
+  };
+  const random = ranged(rnd);
+  // 0.5 为中心、标准差 0.304:正负 1.645 个标准差(九成)正好是 0～1
+  const gaussRandom = ranged(() => 0.5 + 0.304 * Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd()));
+  const seedRandom = (offset?: any, timeless?: any) => {
+    const [o0, o1] = bitsOf(Number(offset) || 0);
+    next = streamOf(timeless ? mixSeed(seed, id, STREAM_TIMELESS, o0, o1) : mixSeed(seed, id, STREAM_SEEDED, o0, o1, t0, t1));
+  };
+  const wiggle = (_freq: number, amp: number) => {
+    const len = (value && value.length) || 1;
+    const draw = streamOf(mixSeed(seed, id, STREAM_WIGGLE));
+    const added = new Float32Array(len);
+    const periods = (Number(time) || 0) * 5;
+    const iterations = Math.floor(periods);
+    for (let i = 0; i < iterations; i++) for (let j = 0; j < len; j++) added[j] += -amp + amp * 2 * draw();
+    const perc = periods - iterations;
+    if (len > 1) {
+      const arr = new Float32Array(len);
+      for (let j = 0; j < len; j++) arr[j] = Math.fround(value[j]) + added[j] + (-amp + amp * 2 * draw()) * perc;
+      return arr;
+    }
+    return value + added[0] + (-amp + amp * 2 * draw()) * perc;
+  };
+  const shadowMath = Object.create(math) as { random: () => number; seedrandom: (s?: unknown) => void };
+  shadowMath.random = rnd;
+  // 播放库把它的播种函数也挂在 Math 上;表达式里直接调它的话,同样只换这一次求值的这一串
+  shadowMath.seedrandom = (s?: unknown) => { next = streamOf(mixSeed(seed, id, STREAM_MATH_SEEDED, lottieSeedOf(String(s)))); };
+  return [random, gaussRandom, seedRandom, wiggle, shadowMath];
+}
+
+/** 改写后的表达式靠这个全局名字找到上面那个函数。每个页面(舞台、导出页)各自装一次 */
+const EXPR_RUNTIME = "__pcLottieFn";
+function installLottieExprRuntime(): void {
+  const g = globalThis as unknown as Record<string, unknown>;
+  if (typeof g[EXPR_RUNTIME] !== "function") g[EXPR_RUNTIME] = lottieExprRuntime;
+}
+
+/** 改写过的表达式以它开头,用来认出「已经改写过」 */
+const EXPR_MARK = "/*pc-expr*/";
+
+/**
+ * 把一段表达式原文包一层:原文原样放进一个函数体,函数的形参叫 random、gaussRandom、seedRandom、wiggle、Math,
+ * 把播放库作用域里的同名东西遮住;实参在外层求值,所以拿得到播放库的 `time`、`value`、`Math`。
+ * 不去找调用点替换(正则会误伤字符串、属性名、别的标识符);原文里自己再声明同名变量或函数照常遮住形参,不出错。
+ *
+ * `random` 就是标识符 random,只是不写出这个词:播放库看表达式文本里有没有 `random` 这几个字母来决定求值前
+ * 要不要给它自己那一串播种(`_needsRandom`),这样包完以后它的判断和包之前一样,我们不多惊动它。
+ * 原文后面先换行再接 `return`:原文最后一行是 `//` 注释时不会把 return 一起注释掉。
+ */
+function wrapLottieExpression(source: string, seed: number, id: number): string {
+  return `${EXPR_MARK}var $bm_rt = (function (r\\u0061ndom, gaussRandom, seedRandom, wiggle, Math) {\nvar $bm_rt;\n${source}\n;return $bm_rt;\n}).apply(null, ${EXPR_RUNTIME}(${seed}, ${id}, time, value, Math));`;
+}
+
+/**
+ * 改写素材数据里所有表达式(原地改;要在交给播放库之前、算完种子之后做)。返回改写了几个。
+ * 表达式 = 带 `k` 的属性对象上那个字符串 `x`。编号 = 它在 JSON 里的路径的散列:同一份素材里每个表达式一个,
+ * 换个页面、换台机器不变。嵌套合成被引用多次时,里面同一个表达式的各份编号相同,随机数也相同(AE 也是这样)。
+ */
+export function rewriteLottieExpressions(data: unknown, seed: number): number {
+  let count = 0;
+  const walk = (node: unknown, path: string): void => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) walk(node[i], `${path}/${i}`);
+      return;
+    }
+    const o = node as Record<string, unknown>;
+    if (typeof o.x === "string" && "k" in o && !o.x.startsWith(EXPR_MARK)) {
+      o.x = wrapLottieExpression(o.x, seed, lottieSeedOf(path));
+      count++;
+    }
+    for (const key of Object.keys(o)) walk(o[key], `${path}/${key}`);
+  };
+  walk(data, "");
+  return count;
+}
+
+// ── 外面那一层:播放库自己直接取随机数的地方(开关一、开关三共用)──
+
+/** 外面那一层各串的用途号 */
+const OUTER_BUILD = 11, OUTER_FRAME = 12, OUTER_TEXT = 13;
+
+/**
+ * 文字图层「随机顺序」动画器正在给哪份素材算。只在某份实例被包住的那一段同步代码里不为 null;
+ * 为 null 时(别的没开开关的 Lottie)播放库照原样算。
+ */
+let textSeedNow: number | null = null;
+let textOrderHooked: boolean | undefined;
+
+/** 素材里有没有「随机顺序」的文字动画器(选择器上 `rn: 1`) */
+function hasRandomTextOrder(node: unknown): boolean {
+  if (!node || typeof node !== "object") return false;
+  if (Array.isArray(node)) return node.some(hasRandomTextOrder);
+  const o = node as Record<string, unknown>;
+  if (o.rn === 1) return true;
+  return Object.keys(o).some((key) => hasRandomTextOrder(o[key]));
+}
+
+/**
+ * 文字图层的「随机顺序」:播放库在「算一份文字内容的排版」时(`TextProperty.completeTextData`)直接调 `Math.random()`
+ * 打乱字符顺序,每份文字内容只算一次、算完记住。什么时候算不固定:不带关键帧的文字在建图层时算;带关键帧的,
+ * 每个关键帧的内容在**第一次画到它**的那一帧才算。所以只按帧号给外面那一层播种不够——顺着推是在关键帧那一帧算的,
+ * 直接跳是在跳到的那一帧算的,打乱的结果就不同。
+ *
+ * 这里把这一处单独固定:算哪一份,就用(素材种子、图层、文字内容)播种,和在哪一帧算、之前算过什么都无关。
+ * `TextProperty` 没有导出,所以建一份只有一个文字图层的一次性动画,从它身上取到原型,包住 `completeTextData`。
+ * 全页只包一次;素材里没有随机顺序的文字时不做。
+ */
+function hookTextOrder(): boolean {
+  if (textOrderHooked !== undefined) return textOrderHooked;
+  textOrderHooked = false;
+  let why = "没取到文字图层的原型";
+  try {
+    withSeededRandom(0, () => {
+      const zero = { a: 0, k: 0 }, origin = { a: 0, k: [0, 0, 0] };
+      const a = lottie.loadAnimation({
+        container: document.createElement("div"),
+        renderer: "svg",
+        loop: false,
+        autoplay: false,
+        animationData: {
+          v: "5.7.4", fr: 30, ip: 0, op: 1, w: 1, h: 1, nm: "pc-text", ddd: 0, assets: [],
+          fonts: { list: [{ fName: "PcText", fFamily: "PcText", fStyle: "Regular", ascent: 0 }] },
+          // 字形留一个空的组:播放库整理数据时会往 shapes[0].it 里补一项变换
+          chars: [{ ch: "A", size: 1, style: "Regular", w: 1, fFamily: "PcText", data: { shapes: [{ ty: "gr", it: [] }] } }],
+          // 图层的入点在动画之外:只建不画
+          layers: [{
+            ddd: 0, ind: 1, ty: 5, nm: "pc-text", sr: 1, ao: 0, ip: 5, op: 6, st: 0, bm: 0,
+            ks: { o: { a: 0, k: 100 }, r: zero, p: origin, a: origin, s: { a: 0, k: [100, 100, 100] } },
+            t: { d: { k: [{ s: { s: 1, f: "PcText", t: "A", j: 0, tr: 0, lh: 1, ls: 0, fc: [0, 0, 0] }, t: 0 }] }, p: {}, m: { g: 1, a: { a: 0, k: [0, 0] } }, a: [] },
+          }],
+        },
+        rendererSettings: { progressiveLoad: false },
+      });
+      type TextProp = { completeTextData?: (doc: { t?: unknown }) => unknown; elem?: { data?: { ind?: unknown }; comp?: { data?: { refId?: unknown } } } };
+      const text = (a as unknown as { renderer?: { elements?: Array<{ textProperty?: TextProp }> } }).renderer?.elements?.[0]?.textProperty;
+      const proto = text ? (Object.getPrototypeOf(text) as TextProp) : null;
+      const original = proto?.completeTextData;
+      if (proto && typeof original === "function") {
+        proto.completeTextData = function completeTextDataKeyed(this: TextProp, doc: { t?: unknown }) {
+          if (textSeedNow === null) return original.call(this, doc);
+          // 图层 = 它所在的合成(嵌套合成用素材里的 refId)加上它在合成里的序号
+          const layer = lottieSeedOf(`${String(this.elem?.comp?.data?.refId ?? "")}/${String(this.elem?.data?.ind ?? "")}`);
+          return withSeededRandom(mixSeed(textSeedNow, OUTER_TEXT, layer, lottieSeedOf(String(doc?.t ?? ""))), () => original.call(this, doc));
+        };
+        textOrderHooked = true;
+      }
+      a.destroy();
+    });
+  } catch (e) { why = String((e as Error)?.message ?? e); }
+  if (!textOrderHooked) console.warn(`[lottie] 包不上播放库算文字排版的地方:随机顺序的文字仍可能和推帧路径有关(${why})`);
+  return textOrderHooked;
+}
+
+/**
+ * 三个开关各开没开(expr 不写当关)。
+ * debug 只给探针对照用:"no-outer" 不要外面那一层;"no-text-key" 外面那一层照旧按帧播种,但不单独固定文字的随机顺序。
+ */
+export interface LottieMode { seed: boolean; exact: boolean; expr?: boolean; debug?: "no-outer" | "no-text-key" }
+
+/** 一份建好的动画:跳帧一律走 goTo。seed 是素材种子,开关一、开关三都没开时为 null */
 export interface LottieHandle {
   anim: AnimationItem;
   seed: number | null;
   exact: boolean;
+  /** 开关三开着时改写了几个表达式;没开为 null */
+  rewritten: number | null;
   goTo(frame: number): void;
 }
 
 /**
- * 建一份动画实例。两个开关都关着(缺省)时就是原来那两句:`lottie.loadAnimation` 和 `goToAndStop(frame, true)`,
- * 一个字不多。开着时照上面那段说明办。
+ * 建一份动画实例。三个开关都关着(缺省)时就是原来那两句:`lottie.loadAnimation` 和 `goToAndStop(frame, true)`,
+ * 一个字不多。开着时照上面那段说明办。开关三会原地改写 data 里的表达式。
  */
-export function loadLottie(container: HTMLElement, data: any, fit: string, mode: LottieMode = { seed: lottieSeedEnabled(), exact: lottieExactEnabled() }): LottieHandle {
-  const seed = mode.seed ? lottieSeedOf(data) : null;
+export function loadLottie(container: HTMLElement, data: any, fit: string, mode: LottieMode = { seed: lottieSeedEnabled(), exact: lottieExactEnabled(), expr: lottieExprEnabled() }): LottieHandle {
+  const seed = mode.seed || mode.expr ? lottieSeedOf(data) : null;
   const exact = mode.exact && hookPropertyFactory();
+  let rewritten: number | null = null;
+  if (mode.expr && seed !== null) {
+    installLottieExprRuntime();
+    rewritten = rewriteLottieExpressions(data, seed);
+  }
   const build = () => lottie.loadAnimation({
     container,
     // 画在 SVG 上,不用画布(2026-10-10 用户定):自带素材里带遮罩层的那一个用画布画出来是错的,SVG 兼容性更好;
@@ -237,31 +494,42 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
   });
   if (seed === null && !exact) {
     const anim = build();
-    return { anim, seed, exact, goTo: (frame) => anim.goToAndStop(frame, true) };
+    return { anim, seed, exact, rewritten, goTo: (frame) => anim.goToAndStop(frame, true) };
   }
-  const math = seed === null ? null : captureLottieMath();
+  // 播放库内部的随机源只有开关一用;只开开关三时不取它、不给它播种
+  const math = mode.seed ? captureLottieMath() : null;
+  // 外面那一层(开关一、开关三都有):播放库直接调全页 `Math.random()` 的地方
+  const outerOn = seed !== null && mode.debug !== "no-outer";
+  const textKeyed = outerOn && mode.debug !== "no-text-key" && hasRandomTextOrder(data) && hookTextOrder();
   /**
-   * 播放库里可能建图层、可能画一帧的同步代码都从这里过:建实例、装载完成、跳帧。
-   * key 是这一段用哪一串随机数:建图层用 "build",画一帧用它的帧号。
+   * 播放库里可能建图层、可能画一帧的同步代码都从这里过:建实例、装载完成(含异步装载的那个回调)、跳帧。
+   * key 是这一段用哪一串:建图层用 "build",画一帧用它的帧号。
+   *   - 外面那一层:全页的 `Math.random` 在这一段里换成(素材种子、key)那一串,出来放回原样。画第 N 帧时播放库直接取到的
+   *     随机数只跟素材和 N 有关,全页那一串也不被 Lottie 挪动。
+   *   - 文字的随机顺序另按(素材、图层、文字内容)固定,见 `hookTextOrder`。
+   *   - 开关一另外给播放库内部那一串按同一个 key 播种。
    */
-  const guarded = <T,>(key: string | number, fn: () => T): T => {
-    const outer = exactBuilding;
+  const guarded = <T,>(key: "build" | number, fn: () => T): T => {
+    const outerExact = exactBuilding, outerText = textSeedNow;
     exactBuilding = exact;
+    textSeedNow = textKeyed ? seed : null;
     try {
       if (seed === null) return fn();
       math?.seedrandom(`${seed}:${key}`);
-      return withSeededRandom(seed, fn);
+      if (!outerOn) return fn();
+      return withSeededRandom(key === "build" ? mixSeed(seed, OUTER_BUILD) : mixSeed(seed, OUTER_FRAME, ...bitsOf(key)), fn);
     } finally {
-      exactBuilding = outer;
+      exactBuilding = outerExact;
+      textSeedNow = outerText;
     }
   };
   /**
-   * 装载完成那一下播放库会自己画一次当前帧,接着用的是建图层取剩的那一串,不是「种子 + 帧号」那一串;
-   * 以后再跳回这一帧画出来的就可能不一样。所以装载完成后按帧号重新播种,原地重画一遍
-   * (`renderFrame(null)` 是播放库里「当前帧再画一次」的写法)。
+   * 只有开关一需要:装载完成那一下播放库会自己画一次当前帧,表达式接着用的是建图层取剩的那一串,不是「种子 + 帧号」
+   * 那一串;以后再跳回这一帧画出来的就可能不一样。所以装载完成后按帧号重新播种,原地重画一遍
+   * (`renderFrame(null)` 是播放库里「当前帧再画一次」的写法)。开关三下表达式不记状态,不用重画。
    */
   const redraw = () => {
-    if (seed === null) return;
+    if (!mode.seed) return;
     const item = anim as unknown as { currentRawFrame: number; renderer?: { renderFrame?: (frame: number | null) => void } };
     guarded(Number(item.currentRawFrame) || 0, () => item.renderer?.renderFrame?.(null));
   };
@@ -277,7 +545,7 @@ export function loadLottie(container: HTMLElement, data: any, fit: string, mode:
       if (!was && item.isLoaded) redraw();
     };
   }
-  return { anim, seed, exact, goTo: (frame) => guarded(frame, () => anim.goToAndStop(frame, true)) };
+  return { anim, seed, exact, rewritten, goTo: (frame) => guarded(frame, () => anim.goToAndStop(frame, true)) };
 }
 
 /** LottieView 的输入:和卡片参数同名,素材封装卡(src/cards/assets)把 src 固定后也用它 */
