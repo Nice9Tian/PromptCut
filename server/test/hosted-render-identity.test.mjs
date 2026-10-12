@@ -275,10 +275,10 @@ test('HR5 目录：建项目、成员进出、改开关、删项目各推一条�
   const nextFor = (projectId, pred = () => true) => control.next((m) => m.type === 'hosted.project' && m.projectId === projectId && pred(m), 3000);
 
   const proj = await createProject(env, { mode: 'free' });
-  assert.deepEqual(await nextFor(proj.projectId), { type: 'hosted.project', projectId: proj.projectId, enabled: true, active: false, members: false, hosted: { render: { available: true, enabled: true }, agent: { available: false, enabled: true } } }, '建项目');
+  assert.deepEqual(await nextFor(proj.projectId), { type: 'hosted.project', projectId: proj.projectId, enabled: true, active: false, members: false, hosted: { render: { available: true, enabled: true, streams: false }, agent: { available: false, enabled: true } } }, '建项目');
 
   const alice = await join(env, proj, { username: proj.creator.username, as: 'creator' });
-  assert.deepEqual(await nextFor(proj.projectId), { type: 'hosted.project', projectId: proj.projectId, enabled: true, active: true, members: true, hosted: { render: { available: true, enabled: true }, agent: { available: false, enabled: true } } }, '成员进来');
+  assert.deepEqual(await nextFor(proj.projectId), { type: 'hosted.project', projectId: proj.projectId, enabled: true, active: true, members: true, hosted: { render: { available: true, enabled: true, streams: false }, agent: { available: false, enabled: true } } }, '成员进来');
 
   const off = await adminOp(alice, proj, 'set-hosted-service', { service: 'render', enabled: false });
   assert.equal(off.type, 'shared.admin.ok', JSON.stringify(off));
@@ -287,7 +287,7 @@ test('HR5 目录：建项目、成员进出、改开关、删项目各推一条�
   assert.equal((await nextFor(proj.projectId)).enabled, true, '再打开');
 
   alice.close();
-  assert.deepEqual(await nextFor(proj.projectId), { type: 'hosted.project', projectId: proj.projectId, enabled: true, active: true, members: false, hosted: { render: { available: true, enabled: true }, agent: { available: false, enabled: true } } }, '成员走了：保持期内仍 active，但 members 已是 false');
+  assert.deepEqual(await nextFor(proj.projectId), { type: 'hosted.project', projectId: proj.projectId, enabled: true, active: true, members: false, hosted: { render: { available: true, enabled: true, streams: false }, agent: { available: false, enabled: true } } }, '成员走了：保持期内仍 active，但 members 已是 false');
   env.clock.advance(59_000);
   env.tickHosted();
   assert.equal((await control.quiet((m) => m.type === 'hosted.project', 150)).length, 0, '59 s：还在保持期');
@@ -316,7 +316,7 @@ test('HR5 active 的判据：服务自己的连接不算；别的托管方服务
   const agent = await openControl(env, env.keys.agent);
   const entry = async (c) => (await watchDirectory(c)).find((p) => p.projectId === proj.projectId);
   assert.equal((await entry(render)).active, false);
-  assert.deepEqual((await entry(agent)).hosted, { render: { available: true, enabled: true }, agent: { available: true, enabled: true } });
+  assert.deepEqual((await entry(agent)).hosted, { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true } });
   assert.equal(await outcome(agent, { type: 'hosted.ticket', projectId: proj.projectId }), 'error:forbidden', '代成员的服务不带对话委托、又不是发布用的，要不到票据');
 
   // 渲染服务自己连进项目：对它自己不算 active（否则永远不会断开）；对 agent 服务算
@@ -509,7 +509,7 @@ test('HR15 旧行为保持：没有登记表时服务握手 401、挑战端点 4
   const proj2 = await createProject(empty, { mode: 'free' });
   const c2 = await join(empty, proj2, { username: proj2.creator.username, as: 'creator' });
   const list2 = await ask(c2, { type: 'shared.members' }, 'shared.members.list');
-  assert.deepEqual(list2.hosted, { render: { available: false, enabled: true }, agent: { available: false, enabled: true } });
+  assert.deepEqual(list2.hosted, { render: { available: false, enabled: true, streams: false }, agent: { available: false, enabled: true } });
   const r2 = await adminOp(c2, proj2, 'set-hosted-service', { service: 'render', enabled: false });
   assert.deepEqual([r2.type, r2.reason], ['error', 'bad-message']);
 });

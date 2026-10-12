@@ -680,6 +680,19 @@
   font-weight: 500;
   font-size: 12.5px;
 }
+/* 服务那一行下面缩进挂的子选项(渲染节点的「生成轨道流」)；服务那一行关着时整行置灰 */
+.pc-collab-hosted-sub {
+  margin: 6px 0 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pc-collab-hosted-sub .pc-collab-head {
+  font-weight: 400;
+}
+.pc-collab-hosted-sub--off {
+  opacity: 0.45;
+}
 .pc-collab-row > .pc-collab-key {
   min-width: 72px;
   color: var(--ui-fg-muted);

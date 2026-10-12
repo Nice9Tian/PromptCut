@@ -157,6 +157,8 @@ test('HR22b PM2 配置:求值后的字段、环境变量、应用名与入口;�
     PROMPTCUT_RENDER_CPU_QUOTA: '400%',
     PROMPTCUT_RENDER_USER: 'promptcut-render',
     PROMPTCUT_RENDER_USER_CARDS: 'isolated',
+    // 任务书「甲三」:云端的渲染服务以能产轨道流的方式部署(每个项目产不产由它自己的开关定)
+    PROMPTCUT_RENDER_STREAMS: '1',
     PROMPTCUT_RENDER_LOOK: 'on',
     PROMPTCUT_RENDER_LOOK_SERVICES: '/var/lib/promptcut/hosted/secrets/services.json',
     PROMPTCUT_RENDER_EDITOR_DIR: '/opt/promptcut-hosted/editor',
@@ -168,6 +170,9 @@ test('HR22b PM2 配置:求值后的字段、环境变量、应用名与入口;�
   assert.equal(other.cwd, '/srv/r/current');
   assert.equal(other.env.PROMPTCUT_RENDER_MAX_CONCURRENT, '3');
   assert.equal(other.env.PUPPETEER_CACHE_DIR, '/srv/r/current/.cache/puppeteer');
+  // 轨道流:显式给 0 才整台不产;别的值是用法错误
+  assert.equal(evalConfig(renderPm2Config(renderInstance({ PROMPTCUT_RENDER_STREAMS: '0' }))).env.PROMPTCUT_RENDER_STREAMS, '0');
+  assert.throws(() => renderInstance({ PROMPTCUT_RENDER_STREAMS: 'yes' }), /PROMPTCUT_RENDER_STREAMS/);
   // 模板文件本身(占位符版)同样不含秘密
   assertNoSecrets(readTemplate(RENDER_PM2_TEMPLATE), 'PM2 配置模板');
   assertNoSecrets(readTemplate(RENDER_SLICE_TEMPLATE), 'slice 模板');

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { digestOf } from '../account/ledger.mjs';
-import { createAccountAuthority } from '../account/authority.mjs';
+import { createAccountAuthority, accountRenderState } from '../account/authority.mjs';
 import { createProjectMembers } from '../account/project-members.mjs';
 import { accountError } from '../account/client.mjs';
 import { instanceMessageAction } from '../account/agent-instance-internal.mjs';
@@ -210,8 +210,12 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       const registered = hostedConfig?.registry?.get('agent');
       const available = registered?.role === 'agent' && registered?.actsFor === 'member' && registered.keys?.length > 0;
       const url = available && typeof hostedConfig?.urls?.agent === 'string' ? hostedConfig.urls.agent : null;
+      // 托管方的渲染节点(任务书 `docs/plan/render-refactor-task.md`「甲三」):登记表里有渲染服务的公钥才算有;开关与子选项「生成轨道流」照账本里的。
+      // 创建者经 `/hosted/shared/account/admin` 的 `set-hosted-service` / `set-hosted-option` 改,成员只读(页面每次续会话读到)
+      const renderRegistered = hostedConfig?.registry?.get('render');
+      const render = { available: renderRegistered?.role === 'render' && renderRegistered.keys?.length > 0, ...accountRenderState(project) };
       return { projectId: principal.projectId, creator: principal.creator === true, access: principal.access,
-        accessRevision: principal.accessRevision, hosted: { agent: { available: Boolean(available), enabled: project.hosted?.agent === true, url } },
+        accessRevision: principal.accessRevision, hosted: { agent: { available: Boolean(available), enabled: project.hosted?.agent === true, url }, render },
         connectionTicket: issue('conn', principal, deviceId, expiresAt),
         assetTicket: issue('asset', principal, deviceId, expiresAt),
         agentDelegationTicket: issue('agent', principal, deviceId, expiresAt), expiresAt };

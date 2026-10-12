@@ -218,6 +218,36 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 - **再打开**：目录推 `enabled: true`，渲染服务按第 2 节连回来。
 - **界面**：项目设置里多用户协作那一组加一个勾选「托管方的渲染节点」。只在项目放云端且 `available` 时出现；创建者可改（改时照其它创建者操作验证创建者身份），其他成员只读。
 
+### 3.1 子选项：渲染节点的「生成轨道流」〔裁：主会话 2026-10-12 派工，接口是这次新设的；已实现于 `claude/hosted-stream-entry`〕
+
+背景：独立渲染主机缺省不产轨道流（`scripts/render-host.mjs` 要带 `--streams`），云端渲染服务要产流（任务书 `docs/plan/render-refactor-task.md`「甲三」）。入口先做（`claude/hosted-stream-entry`），渲染服务那一半与账号项目那条路后接（`claude/rr-hosted-streams`，2026-10-13），都写在这一节。
+
+- **存在哪**：项目记录 `hosted.render.streams`，布尔，**没有这一项算关，只有显式为 `true` 才算开**〔用户 2026-10-12 看过截图后定：在线浏览器暂停时不靠渲染节点也能看任意一帧，云端缺省不产轨道流以省服务器资源；入口保留，创建者想要更流畅的播放时自己打开。这与服务本身的开关（没有算开）相反，`hostedOptionEnabled` 单独按「`=== true`」判〕。同一个服务下可以有别的字段（`enabled`、`streams`），互不影响：`set-hosted-service` 只改 `enabled`、保留同服务下别的字段（原先是整条换成 `{ enabled }`，会冲掉子选项，已改）。有哪些子选项由 `service-identity.mjs` 的 `HOSTED_OPTIONS` 登记：`render: ['streams']`、`agent: []`。
+- **谁能改**：创建者。新的创建者操作 `shared.admin { op: 'set-hosted-option', service: 'render', option: 'streams', enabled: boolean, proof: { nonce, m } }`；证明的用途串里 `op` 就是 `set-hosted-option`，证明与限速同其它创建者操作；成功回 `shared.admin.ok { op: 'set-hosted-option' }`；**不加代数、不断任何连接、不动服务手里的认领**。`service` 不是 `render` / `agent` 之一、登记表里没有这个服务、`option` 不是这个服务登记过的选项（含 `agent` 没有任何选项、非字符串、原型链上的名字）、`enabled` 不是布尔值，一律回 `error { reason: 'bad-message' }`，不落盘、不通知。渲染节点那一行（`enabled`）关着时服务端不另设限，照样能改 `streams`（界面把它置灰，不让点）。
+- **谁能看**：所有成员，从 `shared.members.list` 顶层的 `hosted.render.streams` 看：`hosted.render` 由 `{ available, enabled }` 变成 `{ available, enabled, streams }`；`hosted.agent` 不变。目录条目（`hosted.project` 推给渲染服务的）里用到同一个 `hostedStateOf`，同样带 `streams`，渲染服务读的就是它（见下「渲染服务怎么用它」）。放本机的项目没有 `hosted` 字段，也没有这个操作（回 `bad-message`）。
+- **通知**：改完给本空间其余成员连接发 `shared.notice { event: 'hosted-option-changed', service, option, enabled }`（打开关闭都发）；不发给发起操作的那条连接，也不发给服务自己的连接；并刷新成员列表。界面只在 `enabled: false` 时给别的成员弹一条提示，打开时不提示（与 `hosted-service-changed` 同一个规矩）。
+- **向后兼容**：
+  - 旧页面连新文档服务：多出来的 `streams` 字段旧页面不读；新通知是新的事件名 `hosted-option-changed`，旧页面按事件名分支，不认识就忽略。旧通知 `hosted-service-changed` 的形状不变。
+  - 新页面连旧文档服务：成员列表里没有 `streams`，「生成轨道流」这一行不显示，渲染节点那一行不受影响；旧文档服务收不到 `set-hosted-option`（界面不会发）。
+  - 账号项目（中心账号那条路）见下「账号项目」。
+- **界面**：渲染节点那一行下面缩进多一行勾选「生成轨道流」。出现条件：项目放云端、`render.available`、文档服务报了 `streams`（旧托管端不报就不出现）。渲染节点那一行关着时这一行置灰、不可点（仍显示它自己的勾选状态）。创建者能改，改之前走和别的行一样的创建者确认；其他成员只读，显示「（只有创建者能改）」。缺省是关（勾选框不勾），关着的说明写明代价：「没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。」；渲染节点那一行关着、这一行置灰时，说明后面加「（渲染节点关着，暂不生效）」。文案在 `hostedServices.ts` 的 `HOSTED_OPTION_TEXT`。
+- **渲染服务怎么用它**〔裁：`claude/rr-hosted-streams`，2026-10-13〕：
+  - 渲染服务以能产流的方式部署：管理进程 `PROMPTCUT_RENDER_STREAMS=1`（部署模板写的就是 1），常驻工作进程与隔离工作进程都带 `--streams`。能产不等于产，产不产按项目。
+  - 管理进程读目录条目，在给工作进程的清单（代理口 `GET /projects`）每一项里带 `streams`：**渲染节点开着（`enabled`）并且 `hosted.render.streams` 是 `true`**（`broker.mjs` 的 `streamsOn`）。只关这一项的项目照样列、照样连。`hosted.project` 的顶层没有另加字段。
+  - 工作进程每秒向代理口对一次账，把清单里的 `streams` 记到每个项目的连接上（`render-node/host.mjs` 文件头「按项目产不产轨道流」；`vite-plugin-frames.ts` 的 `startHostNode`）。按它办两件事：`streams` 不为真的项目，**不认领它的流任务**（主机的认领闸；快照任务、计划任务照常；诊断里「等着的任务数」也不数这些流任务）；切分它的清单计划时**不出渲染服务自己的那一份流**（`prerender-executor.mjs` 的 `plan`，照旧只给浏览器出）。为真时两样都做。按的是连接所属的项目，不看任务里写的 `source.projectId`。
+  - 关这一项：不断开服务的连接、不放回它手里的认领（手里的流任务照做完），只是不再认领新的；已经产出的流保留，层表里照候选记录列着。生效时延：目录当场推给管理进程，工作进程下一次对账跟上（它每秒对一次，机器忙时实测 0.9～1.6 秒）。这一拍里手里的任务碰巧做完时，它还会再认领一个流任务，照做完、产出的保留；看到关着以后不再认领〔裁：主会话 2026-10-13，验收探针 `hosted-render-streams-probe.mjs` 按这个口径判〕。
+  - **打开之后当场开始产**：在线页面看到这一项从关变开（口令项目收 `hosted-option-changed`、创建者自己那一页在操作成功时；账号项目靠续会话），马上重发一份清单计划。本页看到这一项开着时，清单计划带 `input.streams: true`、结果键的签名里多一段（`render-queue/messages.mjs` 的 `clipsPlanTaskOf` 与页面的 `planPublisher.ts` 逐字段相同）——同一版项目、同一份清单，这一项开着是另一个计划，渲染节点再切一次、出它自己的那一份流任务；快照任务的 id 不变，并进已有的。这一项关着（含旧页面、旧文档服务不报这一项）时结果键与 `input` 和原来逐字相同，所以一直关着的项目不会重切。从开变关不重发。几个成员同时在线时各自重发的是同一个结果键，队列只留一个任务。页面写的这一项只是它看到的状态：产不产仍照目录里的那一项；渲染节点切分时如果计划写着开着、自己手里还是关着（清单晚一拍），最多等 4 秒到自己也看到开着再切（`prerender-executor.mjs` 的 `STREAMS_SETTLE_MS`）。新旧互连：旧页面连新服务不带这一项、不重发，退回「下一次改动起生效」；新页面连旧文档服务看不到这一项，同样。
+  - 这一项只管托管方的渲染节点。桌面应用、普通的独立渲染主机、浏览器节点不看它：桌面认领清单计划时出不出自己的那一份流，照它自己能不能产流（有生产者、开关开着、探到编码器）。
+  - 一条流切分方与浏览器各出一份时（成对，谁先认领谁得），层表里候选的先后对着实际是谁产的：切分完成时切分方自己的排在后面；它真产出了一段，才提到最前并重写一次层表（`prerender-executor.mjs` 的 `promoteOwnStream`）。之后才进来的页面取第一个候选。只切分、不认领细任务的节点（测试开关 `planOnly`）不出自己的那一份。
+  - 清单计划里切分方自己的那一份只出单卡流；组流（同时活跃的重卡超过解码器预算时并出来的）不出：它的内容键跟着清单里还有哪些片段变，流任务回来时对不回这一版。
+- **账号项目**〔裁：`claude/rr-hosted-streams`，2026-10-13〕：账号项目的记录在账本里（`server/account/authority.mjs`），不在旧凭证存储里，接口是另一套：
+  - **存在哪**：渲染节点的开关是 `hosted.render`（布尔，新建时为 `false`，原有）；子选项记在 `hostedOptions.render.streams`（布尔，没有算关）。
+  - **谁能改**：创建者，凭账号的登录态（不走创建者密码的证明）：`POST /hosted/shared/account/admin { projectId, op: 'set-hosted-service', service: 'render', enabled, expectedAccessRevision, requestId }`（原有，页面以前只用它改云端 Agent）与新的 `op: 'set-hosted-option', service: 'render', option: 'streams', enabled`。不是创建者回 403 `creator-required`；服务、选项、布尔值不对回 400 `invalid-option`；版本号对不上回 409。改完记一条访问事件（`reason: 'set-hosted-option'`，不带受影响的成员，不停任何任务）。
+  - **谁能看**：所有成员，从会话（`/hosted/shared/account/session`、`join`）的 `hosted.render: { available, enabled, streams }` 看；`available` 是登记表里有渲染服务的公钥。页面每 3 秒续一次会话，创建者改了以后别的成员最迟 3 秒看到；没有 `hosted-option-changed` 这种通知，页面按前后两次读到的状态给提示（只在关闭时，文案同口令项目）。
+  - **界面**：同一组两行；账号项目点勾选不弹「验证创建者身份」，直接到确认。
+  - **兼容**：旧文档服务的会话没有 `hosted.render`，新页面不显示这两行；旧页面不读新字段。
+  - **还没接的**：托管方的渲染服务现在看不到账号项目（目录模块只列旧凭证存储里的项目，服务的连接票据也从那里签）。所以账号项目里这两项现在只是记下、显示，没有渲染节点来干活；0.7.18 把渲染节点接进账号项目时，目录条目要按账本出 `enabled`（`hosted.render`）与 `hosted.render.streams`（`hostedOptions.render.streams`），`authority.mjs` 的 `accountRenderState` 就是这两项的读法。
+
 ---
 
 ## 4. 并发与资源上限
@@ -384,7 +414,7 @@ node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --list
 | `PROMPTCUT_RENDER_DOC_HEALTH_URL` | 由 `DOC_URL` 推出 `http://…/healthz` | 背压用的文档服务自检地址 |
 | `PROMPTCUT_RENDER_EDITOR_DIR` / `_EXPECT_CODE_VERSION` / `_AGENT_STATUS_URL` | `/opt/promptcut-hosted/editor` / 空 / 空 | 比代码版本用（第 7.4 节） |
 | `PROMPTCUT_RENDER_REPORT_TIMEOUT_MS` | 180000 | 工作进程起来后这么久没交过诊断（或中途停交）就结束它重起 |
-| `PROMPTCUT_RENDER_STREAMS` / `_VERBOSE` | 不设 | `1` 开轨道流；`1` 把工作进程的输出原样转出来 |
+| `PROMPTCUT_RENDER_STREAMS` / `_VERBOSE` | 不设（部署模板写 `1`） | `1`：工作进程（常驻的与隔离的）以能产轨道流的方式起；每个项目产不产看它自己的「生成轨道流」（第 3.1 节）。`_VERBOSE` 为 `1` 把工作进程的输出原样转出来 |
 | `PROMPTCUT_RENDER_SAMPLE_MS` / `_SKIP_CHECKS` | 5000 / 空 | 测试与演练用：采样间隔；跳过自检里的 `chrome`、`ffmpeg` |
 | `PROMPTCUT_RENDER_USER_CARDS` | `isolated` | `isolated`（方案 A：内容库里有卡片源码的项目由隔离工作进程做）或 `off`（退回不接用户卡任务：不起隔离工作进程，常驻工作进程照旧不同步卡） |
 | `PROMPTCUT_RENDER_ISO_IDLE_MS` / `_ISO_SLICE_MS` | 60000 / 300000 | 测试与演练用：隔离工作进程闲置多久结束、另有项目在等时一个项目最多连续做多久 |

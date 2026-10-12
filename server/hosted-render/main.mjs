@@ -36,7 +36,10 @@
  *   PROMPTCUT_RENDER_EXPECT_CODE_VERSION   直接给应该一致的代码版本（取不到在线页面构建时用）
  *   PROMPTCUT_RENDER_AGENT_STATUS_URL      云端 Agent 服务的诊断口（回 { codeVersion }）；没配就不比
  *   PROMPTCUT_RENDER_DOC_HEALTH_URL   背压用的文档服务自检地址，缺省由 DOC_URL 推出 http://…/healthz
- *   PROMPTCUT_RENDER_STREAMS          1 开轨道流（缺省不开）
+ *   PROMPTCUT_RENDER_STREAMS          1：工作进程以能产轨道流的方式起（`scripts/render-host.mjs --streams`，常驻的与隔离的都带）。缺省不设 = 不能产。
+ *                                     部署模板写的是 1（`server/hosted/deploy/pm2-promptcut-render.config.cjs`）。能产不等于产：哪个项目产，
+ *                                     看它自己的「生成轨道流」（项目记录 `hosted.render.streams`，缺省关，创建者能改）——渲染节点开着并且这一项开着，
+ *                                     才认领这个项目的流任务、切分它的清单计划时才出自己的那一份流；别的项目只做快照（任务书「甲三」）
  *   PROMPTCUT_RENDER_VERBOSE          1 把工作进程的输出原样转出来
  *   PROMPTCUT_RENDER_REPORT_TIMEOUT_MS  工作进程起来后这么久没交过诊断（或中途停交）就结束它重起，缺省 180000
  *   测试用：PROMPTCUT_RENDER_SAMPLE_MS（采样间隔）、PROMPTCUT_RENDER_SKIP_CHECKS（逗号分隔，跳过自检里的 chrome / ffmpeg）、
@@ -53,7 +56,7 @@ import { fileURLToPath } from 'node:url';
 import { readServiceKeyFile, createServiceRegistry } from '../auth/service-identity.mjs';
 import { createLook, createLookVerifier } from './look.mjs';
 import { createDirectory } from './directory.mjs';
-import { createBroker, selectProjects } from './broker.mjs';
+import { createBroker, selectProjects, streamsOn } from './broker.mjs';
 import { createWorker } from './worker.mjs';
 import { createIsolation, isolationCandidates, isoNodeIdFor, wipeDir, leftoverCount, ISOLATION_DEFAULTS } from './isolation.mjs';
 import { HOSTED_WORKER_ENV } from './source-gate.mjs';
@@ -382,8 +385,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           log: isoLog,
           treeFile: path.join(config.dataDir, 'iso-worker-tree.json'),
           command() {
+            // 隔离工作进程同样以能产流的方式起：带用户卡的项目整个归它做，它不能产流的话这种项目打开了「生成轨道流」也没人产
             const args = [path.join(ROOT, 'scripts', 'render-host.mjs'), '--port', String(config.isoPort), '--data', config.isoDataDir, '--max-concurrent', '1',
-              ...(config.verbose ? ['--verbose'] : [])];
+              ...(config.streams ? ['--streams'] : []), ...(config.verbose ? ['--verbose'] : [])];
             const built = workerCommand({
               node: process.execPath, args, support, user: config.user,
               limits: { memoryMax: config.memoryMax, memoryHigh: config.memoryHigh, cpuQuota: config.cpuQuota },
@@ -423,7 +427,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       exited: () => !isoProc || !isoProc.running,
     },
   });
-  const isoListing = () => ({ docUrl: config.docUrl, paused: backpressure.paused, limit: 1, projects: isolation?.listing() ?? [], waiting: [] });
+  // 隔离工作进程的清单只有它那一个项目；这个项目产不产流照目录条目补上（`isolation.mjs` 的状态机不认识目录）
+  const isoListing = () => ({ docUrl: config.docUrl, paused: backpressure.paused, limit: 1, waiting: [],
+    projects: (isolation?.listing() ?? []).map((p) => ({ ...p, streams: streamsOn(directory.get(p.projectId)) })) });
   /** 「要看画面」的需求（`look.mjs` 登记）：projectId → { until, seq }。到期的随手清掉 */
   const lookWants = new Map();
   let lookSeq = 0;
@@ -554,6 +560,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         worker: { ...worker.status(), concurrency, mode: support.ok ? 'cgroup' : 'in-process', reportAgeMs: reportAt ? Date.now() - reportAt : null },
         queue: report?.queue ?? null,
         userCards: config.userCards,
+        // 工作进程是不是以能产轨道流的方式起的；每个项目此刻产不产看上面 `projects[].streams`
+        streams: config.streams,
         look: { ...look.status(), registry: lookRegistry ? { file: config.lookServicesFile, agentKeys: lookRegistry.get('agent')?.keys.length ?? 0 } : null },
         isolation: !isolation ? { enabled: false } : {
           enabled: true, port: config.isoPort, ...isolation.status(),
@@ -584,7 +592,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     process.stderr.write(line);
     return 1;
   }
-  log('listen', { role: 'hosted-render', look: config.look, statusPort: brokerPort, workerPort: config.port, docUrl: config.docUrl, service: key.service, kid: key.kid, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}`, node: process.version });
+  log('listen', { role: 'hosted-render', look: config.look, streams: config.streams, statusPort: brokerPort, workerPort: config.port, docUrl: config.docUrl, service: key.service, kid: key.kid, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}`, node: process.version });
 
   // 上一次没来得及清的（管理进程自己被杀）：起任何工作进程之前先把隔离工作进程的数据目录清空
   if (isolation) { try { await wipeIso(); } catch (err) { log('isolation.cleanup-failed', { message: String(err?.message ?? err), at: 'startup' }); } }

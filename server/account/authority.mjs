@@ -7,6 +7,10 @@ import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
 const accountIdOK = value => typeof value === 'string' && /^acc_[a-f0-9]{24}$/.test(value);
 const projectIdOK = value => typeof value === 'string' && /^sp_[a-z2-7]{26}$/.test(value);
 const services = ['asset', 'agent', 'render'];
+/** 托管方服务下面有哪些子选项(与口令项目那条路 `auth/service-identity.mjs` 的 `HOSTED_OPTIONS` 同一份登记;这里不引它,账号这条路不依赖旧凭证存储的模块) */
+export const HOSTED_OPTIONS = Object.freeze({ render: Object.freeze(['streams']), agent: Object.freeze([]) });
+/** 账号项目的托管方服务状态里渲染节点那一项:开关(记录里是布尔,缺省关)与子选项「生成轨道流」(缺省关) */
+export const accountRenderState = project => ({ enabled: project?.hosted?.render === true, streams: project?.hostedOptions?.render?.streams === true });
 const reject = (status, code) => { throw accountError(status, code); };
 const agentReadClosureComplete = (state, eventId, receipt) => {
   if (state.agentReadControlRequired !== true) return true;
@@ -288,12 +292,19 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         case 'set-hosted-service':
           if (!['render', 'agent'].includes(body.service) || typeof body.enabled !== 'boolean') reject(400, 'invalid-service');
           p.hosted[body.service] = body.enabled; break;
+        case 'set-hosted-option':
+          // 托管方服务下面的子选项(渲染节点的「生成轨道流」,`docs/plan/hosted-render-contract.md` 第 3.1 节):只记下,不动成员、不停任何任务。
+          // 记在 `hostedOptions.<服务名>.<选项名>`(与服务的开关 `hosted.<服务名>` 分开放,那一项仍是布尔);没有算关,只有显式为 true 才算开
+          if (!Object.hasOwn(HOSTED_OPTIONS, body.service) || !HOSTED_OPTIONS[body.service].includes(body.option) || typeof body.enabled !== 'boolean') reject(400, 'invalid-option');
+          p.hostedOptions = { ...(p.hostedOptions ?? {}), [body.service]: { ...(p.hostedOptions?.[body.service] ?? {}), [body.option]: body.enabled } };
+          break;
         default: reject(400, 'invalid-operation');
       }
       p.accessRevision = ++state.revision;
       const event = appendAccessEvent(state, { type: 'project-access-changed', reason: body.op, projectId: p.projectId,
         accountIds: affected, accessRevision: p.accessRevision, createdAt: now(),
-        ...(body.op === 'set-hosted-service' ? { service: body.service, enabled: body.enabled } : {}) });
+        ...(body.op === 'set-hosted-service' ? { service: body.service, enabled: body.enabled } : {}),
+        ...(body.op === 'set-hosted-option' ? { service: body.service, option: body.option, enabled: body.enabled } : {}) });
       let control = null;
       const fence = { requestId: `access:${event.eventId}`, projectId: p.projectId, accessSeq: event.seq };
       if (body.op === 'delete') control = fenceRuns(state, { ...fence, kind: 'delete' });
