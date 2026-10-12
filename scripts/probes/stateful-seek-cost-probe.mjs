@@ -6,7 +6,9 @@
  *        [--cards punch-pill,odometer,checklist] [--seconds 20] [--targets 30,60,120,240,480,599] [--rounds 3]
  *        [--throttle 4] [--json <文件>]
  *        [--verify 150,240]   另核对:顺着做到第 N 帧的快照,和直接跳到第 N 帧的快照是不是同一份
- *                             (用 `compareSnapshotHtml`,样式数值带容差);给了就不量耗时
+ *                             (用 `compareSnapshotHtml`,样式数值带容差);给了就不量耗时。
+ *                             这一项只报第一处不同;要把所有不同处分档、比像素、看同一帧几次是否一样,
+ *                             用 `stateful-seq-vs-jump-probe.mjs`
  *
  * 要先有在线构建:`npx vite build --mode online`(产出 `dist-online/`)。
  *
