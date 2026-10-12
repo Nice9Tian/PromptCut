@@ -270,7 +270,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         args.push("--no-video");
       }
       
-      const child = spawn(process.execPath, args, { cwd: root });
+      const child = spawn(process.execPath, args, { cwd: root, windowsHide: true });
       job.child = child;
       /*
        * 记账(render-pool-state.mjs):导出也起 Chrome、也吃核,渲染池算槽位时要把它算进去,
@@ -492,7 +492,7 @@ function handleCancel(res: ServerResponse, id: string) {
     job.cancelled = true;
     const pid = job.child.pid;
     if (process.platform === "win32" && pid) {
-      spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+      spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
     } else {
       job.child.kill("SIGTERM");
     }

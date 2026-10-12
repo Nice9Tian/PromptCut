@@ -245,7 +245,7 @@ function killJob(jobId: string): boolean {
   if (!child) return false;
   try {
     if (process.platform === "win32" && child.pid) {
-      spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore" });
+      spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true });
     } else {
       child.kill("SIGKILL");
     }
