@@ -115,7 +115,7 @@ export function killWorker(w: RenderWorker, why: Error) {
   for (const p of w.pending.values()) { clearTimeout(p.timer); p.fail(why); }
   w.pending.clear();
   // 渲染进程自己还拉着一个 Chrome,只杀它会留孤儿
-  if (process.platform === "win32" && w.child.pid) spawn("taskkill", ["/PID", String(w.child.pid), "/T", "/F"], { stdio: "ignore" });
+  if (process.platform === "win32" && w.child.pid) spawn("taskkill", ["/PID", String(w.child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
   else w.child.kill("SIGKILL");
 }
 
@@ -124,6 +124,8 @@ export function spawnWorker(root: string, reserved = false): RenderWorker {
     cwd: root,
     // stdout/stderr 留着当错误信息;协议走第四条 ipc 通道,不和日志混在一起
     stdio: ["ignore", "pipe", "pipe", "ipc"],
+    // 父进程没有控制台时（例如被 vite 脱离控制台起的渲染主机），不加这个会在 Windows 上新开一个可见的控制台窗口
+    windowsHide: true,
     // 前台那个常驻不许闲置退出(0 = 永不),否则用户去改会儿参数回来又要等一次开机
     env: reserved ? { ...process.env, PROMPTCUT_WORKER_IDLE_MS: "0" } : process.env,
   });

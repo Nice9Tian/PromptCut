@@ -70,6 +70,7 @@ async function startVite() {
   vite = spawn(process.execPath, [bin, "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], {
     cwd: ROOT,
     stdio: ["ignore", "ignore", "inherit"],
+    windowsHide: true,
     env: { ...process.env, TEMP: tmp, TMP: tmp },
   });
   const target = `http://127.0.0.1:${PORT}/`;
