@@ -62,7 +62,7 @@ import type { StageSound } from "./online/cardRuntime/stageSound";
 import type { CardBundle } from "./online/cardRuntime/protocol";
 import { announceStageIsolation } from "./online/isolation/stageGuard";
 import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
-import { clipFrameMode } from "./kernel/frameMode.mjs";
+import { cardCapabilities, clipFrameMode } from "./kernel/frameMode.mjs";
 import { resolveFrameSize } from "./kernel/frameSize.mjs";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { pixelRect, renderSmallWebp, renderSnapshotBitmap } from "./render/bakeSmall";
@@ -2329,9 +2329,12 @@ export default function StageView() {
         const cur = bakeCursor;
         bakeCursor = null;
         const targetMs = sec * 1000;
-        // 隔离工程里唯一那张卡是 remotion 式:画面只由时间和参数决定,直接拨到这一帧
+        // 隔离工程里唯一那张卡是 remotion 式:画面只由时间和参数决定,直接拨到这一帧。
+        // 判据和预渲染进程给流定「要不要回放」的那一条相同(`server/frame-stream.mjs` 的 `streamNeedsReplay`):
+        // 取卡的能力表里的写法,声明了要预渲染的、认不出来的卡一律按有状态处理(宁可多推,不可画错)
         const def = clip.cardId ? getCard(clip.cardId) : undefined;
-        const direct = !!def && !unsupportedHere(clip.cardId, def) && clipFrameMode(clip as never, def) === "direct"
+        const caps = def && !unsupportedHere(clip.cardId, def) ? cardCapabilities(def as never, { ...def.defaults, ...clip.params }, clip.parts as never) : null;
+        const direct = !!caps && caps.frameMode === "direct" && caps.need_prerendering !== true
           && p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips).length === 1;
         // 接得上:舞台还挂着这份项目的这个片段,时钟就停在上一帧的时刻上
         const held = !!cur && cur.project === p && cur.clipId === req.clipId && Math.abs(clock.now() - (cur.frame / fps) * 1000) < 1e-6;
