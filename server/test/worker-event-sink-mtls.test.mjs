@@ -77,10 +77,11 @@ test('durable worker → signed actual TLS → durable master → durable ACK; l
     if (errors.length) throw new AggregateError(errors, 'worker-sink-fixture-close');
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(6702, '127.0.0.1', resolve); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const origin = `https://127.0.0.1:${server.address().port}`;
   const open = () => {
     journal = createWorkerEventJournal({ file: path.join(dir, 'worker.sqlite'), ...scope });
-    sink = createWorkerEventSink({ journal, runClient: session, origin: 'https://127.0.0.1:6702', tls: pki.wrong,
+    sink = createWorkerEventSink({ journal, runClient: session, origin, tls: pki.wrong,
       serverFingerprint256: pki.asset.fingerprint256, timeoutMs: 5000, verifyGrant: async () => ({ allowed: true, runGrant: grant }) });
   };
   open(); const writer = await sink.writer({ grant });
@@ -102,5 +103,5 @@ test('durable worker → signed actual TLS → durable master → durable ACK; l
   await assert.rejects(sink.replayPending(), { code: 'current-run-revoked' });
   assert.equal(store.after({ ...binding }).head, 4); assert.equal(journal.pending().length, 1);
   assert.equal(sink.describe().sockets, 0); assert.equal(sink.describe().requests, 0); assert.equal(sink.describe().responses, 0);
-  t.diagnostic('owned master HTTPS 6702; real worker/master FULL journals and exporter signatures; controlled registration/root OS/Doc getter; settlement pending');
+  t.diagnostic('owned master HTTPS on an ephemeral port; real worker/master FULL journals and exporter signatures; controlled registration/root OS/Doc getter; settlement pending');
 });

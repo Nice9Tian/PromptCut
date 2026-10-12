@@ -38,7 +38,7 @@ test('private worker child owns its RAM identity; gateway cannot provide grant o
   const code = `import fs from 'node:fs';
 const dir=${JSON.stringify(dir)}, settings=${JSON.stringify(settings)};
 const tls=name=>({key:fs.readFileSync(dir+'/'+name+'.key'),cert:fs.readFileSync(dir+'/'+name+'.crt'),ca:fs.readFileSync(dir+'/ca.crt')});
-export function createWorkerConfiguration(){const s=JSON.parse(fs.readFileSync(settings));return {listener:{host:'127.0.0.1',port:6703},workerOptions:{
+export function createWorkerConfiguration(){const s=JSON.parse(fs.readFileSync(settings));return {listener:{host:'127.0.0.1',port:0},workerOptions:{
 expected:s.expected,reservation:s.reservation,identityTls:tls('asset'),
 doc:{origin:'https://127.0.0.1:6700',tls:tls('wrong'),serverFingerprint256:${JSON.stringify(pki.doc.fingerprint256)}},
 readRootRecord:async()=>{throw Object.assign(Error('root ready missing'),{status:503,code:'root-ready-missing'});},
@@ -48,7 +48,7 @@ createAssemblyOptions:async()=>{throw Object.assign(Error('must not execute'),{c
   diagnostic('gateway-spawn');
   const gateway = createAccountWorkerGateway({ configurationModule, cwd: path.dirname(fileURLToPath(import.meta.url)), timeoutMs: 10000 });
   t.after(async () => { diagnostic('teardown'); await gateway.close(); diagnostic('child-actual-closed'); fs.rmSync(dir, { recursive: true, force: true }); });
-  const ready = await gateway.ready; assert.notEqual(ready.pid, process.pid); assert.equal(ready.pid, gateway.pid()); assert.equal(ready.port, 6703);
+  const ready = await gateway.ready; assert.notEqual(ready.pid, process.pid); assert.equal(ready.pid, gateway.pid()); assert.ok(ready.port > 0);
   diagnostic('gateway-ready');
   const first = await get(ready.port, pki.account), second = await get(ready.port, pki.account);
   assert.equal(first.status, 200); assert.equal(first.body.pid, ready.pid);
@@ -64,5 +64,5 @@ createAssemblyOptions:async()=>{throw Object.assign(Error('must not execute'),{c
   const closed = await gateway.close(); assert.equal(closed.childClosed, true); assert.equal(closed.exitCode, 0);
   diagnostic('close-returned');
   assert.equal(closed.rootClosureProved, false); assert.equal(gateway.describe().pendingCommands, 0);
-  t.diagnostic('owned hidden independent Node child; identity listener 6703; actual ChildProcess close only, no root cgroup/FIFO proof');
+  t.diagnostic('owned hidden independent Node child; identity listener on an ephemeral port; actual ChildProcess close only, no root cgroup/FIFO proof');
 });

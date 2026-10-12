@@ -61,7 +61,8 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
     if (!errors.length) fs.rmSync(f.dir, { recursive: true, force: true });
     if (errors.length) throw new AggregateError(errors, 'fixture-close-pending');
   });
-  await new Promise((resolve, reject) => { doc.once('error', reject); doc.listen(6700, '127.0.0.1', resolve); });
+  await new Promise((resolve, reject) => { doc.once('error', reject); doc.listen(0, '127.0.0.1', resolve); });
+  const docPort = doc.address().port; let identityPort = 0;
   const originalWrite = m.io.write, originalInspect = m.io.inspect;
   m.io.write = async (name, value, exclusive) => { await originalWrite(name, value, exclusive);
     fs.writeFileSync(path.join(chainDir, name), JSON.stringify(value), { flag: exclusive ? 'wx' : 'w', mode: 0o600 }); };
@@ -73,7 +74,7 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
   m.io.inspect = async reservation => { const value = await originalInspect(reservation); value.instance.pid = process.pid; return value; };
   m.io.start = async reservation => {
     worker = createAccountTaskWorker({ expected: m.expected, reservation, identityTls: pki.asset,
-      doc: { origin: 'https://127.0.0.1:6700', tls: pki.wrong, serverFingerprint256: pki.doc.fingerprint256 },
+      doc: { origin: `https://127.0.0.1:${docPort}`, tls: pki.wrong, serverFingerprint256: pki.doc.fingerprint256 },
       readRootRecord: async () => m.io.read('epoch-1.json'),
       eventSink: { file: path.join(f.dir, 'worker-local-events.sqlite'), origin: 'https://127.0.0.1:6702',
         tls: pki.wrong, serverFingerprint256: pki.asset.fingerprint256 },
@@ -88,16 +89,16 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
         // intentionally lacks readControl/Hosted options: still MUST reject.
         return {};
       } });
-    await worker.listen({ port: 6701 });
+    identityPort = (await worker.listen({ port: 0 })).port;
   };
   m.io.identity = async () => {
-    const result = await getIdentity(6701, pki.account, m.expected.serverFingerprint256);
+    const result = await getIdentity(identityPort, pki.account, m.expected.serverFingerprint256);
     assert.equal(result.status, 200); return result.body;
   };
   await m.run('initialize');
   const record = await m.io.read('epoch-1.json');
   assert.equal(record.instance.pid, process.pid);
-  const wrongController = await getIdentity(6701, pki.wrong, m.expected.serverFingerprint256);
+  const wrongController = await getIdentity(identityPort, pki.wrong, m.expected.serverFingerprint256);
   assert.equal(wrongController.status, 403);
   assert.notEqual(m.expected.clientFingerprint256, workerPin);
   const slot = { expected: m.expected, configuredAnchorDigest: digestOf(await m.io.read('anchor.json')),
@@ -159,5 +160,5 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
   await assert.rejects(worker.prepareTask({ ...task, requestId: 'other-task' }), { code: 'account-worker-task-conflict' });
   assert.equal(Object.keys(f.ledger.read().runGrantsV2).length, 1);
   assert.equal(worker.describe().completionReady, false);
-  t.diagnostic('actual role ports: Doc 6700, worker identity 6701; model calls/read receipts before bound: 0/0; OS publisher controlled');
+  t.diagnostic('actual role ports are ephemeral (Doc, worker identity); model calls/read receipts before bound: 0/0; OS publisher controlled');
 });
