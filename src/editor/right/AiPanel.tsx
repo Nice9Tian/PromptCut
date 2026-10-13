@@ -25,7 +25,7 @@ import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { DesktopSessionsStrip } from "./DesktopSessionsStrip";
 import { Composer } from "./chat/Composer";
 import { CloudAiPanel } from "./CloudAiPanel";
-import { useCloudAgent, useCloudDigest } from "../../ai/cloud/useCloud";
+import { useCloudAgent, useCloudDigest, useCloudNotices } from "../../ai/cloud/useCloud";
 import { selectCloudTab, useCloudTab } from "../../ai/cloud/tabMode";
 import { cloudErrorText } from "../../ai/cloud/cloudApi";
 import type { RewindHandlers } from "./chat/UserBubble";
@@ -83,6 +83,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const cloud = useCloudAgent();
   const cloudTab = useCloudTab(tabId);
   const digest = useCloudDigest(cloud, cloud.available);
+  useCloudNotices(cloud, cloud.available);
 
   // 顶栏标题就是这一页的页签名:Agent 用 declare_scope 声明范围之后会跟着改名
   const { tabs } = useAgentTabs();

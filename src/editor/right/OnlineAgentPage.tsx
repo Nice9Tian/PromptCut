@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { onLowMemoryChange, lowMemoryMode } from "../../online/lowMemory";
-import { useCloudAgent } from "../../ai/cloud/useCloud";
+import { useCloudAgent, useCloudNotices } from "../../ai/cloud/useCloud";
 import { CloudAiPanel } from "./CloudAiPanel";
 
 /**
@@ -19,5 +19,6 @@ export function OnlineAgentPage(props: { tabId: string; active: boolean; placeho
 
 function OnlineCloudPanel(props: { tabId: string; active: boolean }) {
   const cloud = useCloudAgent();
+  useCloudNotices(cloud, cloud.available);
   return <CloudAiPanel tabId={props.tabId} active={props.active} cloud={cloud} />;
 }

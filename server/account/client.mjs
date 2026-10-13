@@ -85,5 +85,10 @@ export function createAccountClient({ origin, tls, serverFingerprint256, timeout
       requireRequestId(receipt.receiptId);
       return request('POST', `${INTERNAL_PATHS.events}/${encodeURIComponent(eventId)}/ack`, receipt);
     },
+    /** 退出确认超时后报给账号服务的进度（只是调试信息，不算确认）：哪几样确认了、哪几样没有、原因码、等了多久。 */
+    logoutReport(eventId, report) {
+      requireRequestId(report.reportId);
+      return request('POST', `${INTERNAL_PATHS.events}/${encodeURIComponent(eventId)}/logout-report`, report);
+    },
   };
 }
