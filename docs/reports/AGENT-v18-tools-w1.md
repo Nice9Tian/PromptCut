@@ -316,12 +316,12 @@ const web = createHostedBrowserTools({
 | 命令 | 退出码 | 结果 |
 |---|---|---|
 | `npm test -- server/test/cloud-tools-w1-{browser,egress,restart,host,process}.test.mjs` | 0 | 42 条通过（真浏览器 31 条：browser 15、egress 14、restart 2；不起浏览器的 11 条：host 6、process 5），0 失败，0 跳过 |
-| 同上五份，加 `W1_BROWSER=<chrome-headless-shell 152 的 Windows 版>` | 见文末 | 见文末 |
+| 同上五份，加 `W1_BROWSER=<chrome-headless-shell 152 的 Windows 版>` | 0 | 42 条通过，0 失败，0 跳过 |
 | `npm test -- server/test/windows-hide-silent-spawn.test.mjs server/test/bakery-deps.test.mjs` | 0 | 7 条通过 |
-| `node scripts/probes/cloud-tools-w1-browser-probe.mjs` | 见文末 | 见文末 |
+| `node scripts/probes/cloud-tools-w1-browser-probe.mjs` | 0 | 「全部通过」：五份测试 42 条、真实公网（example.com 经代理，记录里有到 443 的隧道）、浏览器自己解析不了主机名、探针前后可见窗口都是 `[]`、残留浏览器进程 0 |
 | `node scripts/probes/cloud-tools-w1-linux-demo.mjs`（本机，`W1_BROWSER` 指 chrome-headless-shell） | 0 | 全部通过；标「只有 Linux」的四项打印的是跳过 |
-| `npx tsc -b --force` | 见文末 | 见文末 |
-| `npm test`（全量） | 见文末 | 见文末 |
+| `npx tsc -b --force` | 0 | 零错误 |
+| `npm test`（全量，最后一遍，在最后一次改代码之后） | 1 | 6227 条，通过 6218，失败 1，取消 0，跳过 8（都不是本包的），116 秒。失败的是 `server/test/account-runner-process.test.mjs` 的「真实运行器在任务进程里…」（等停止接口超时，`503/agent-fence-pending`，跑了 116 秒）；单独重跑这个文件：1 条通过、退出码 0。它不引用本包的任何文件（网页操作还没接线）。本包 42 条全过 |
 
 ### 第二轮之后仍没做成的
 
@@ -337,3 +337,5 @@ const web = createHostedBrowserTools({
    这些情形下 `web_type` 会照常输入模型给的字。输入的是**模型自己给的字**（云端 Agent 手里没有用户的口令）；撞上登录页时结果里有固定的提醒（`wall` / `wallNote`）。
 4. 第一轮「没做成的」第 2～5 条照旧（没有真 mTLS 与真模型、没有用量记账、系统提示词与工具表归 G 包、`web_handoff` 不在本包）。
 5. **本机跑节点自验脚本时用了分给本包的端口段之外的端口**：脚本按要求用系统分配的随机端口（这次是 1564、1565 等，都在回环上），和派活指令「端口只用 28380～28419」对不上。只跑了这一遍；三份真浏览器测试与探针仍只用分给本包的端口（新增 28393、28401）。
+
+做第二轮时测试自己也出过几次偶发，都查了原因并改了测试而不是放宽产品：`W1-TOOL-05` 里「一聚焦就消失的框」原先靠定时器消失，在 chrome-headless-shell 上定时器来得晚、字先进了它自己（没有进别处）——改成同步消失；「报的按键数等于两个框里的字数」不成立（焦点正在换的那一下，个别按键哪个框都没收到）——改成断言「落到框里的不多于报的」，口令框里最多一个字的断言没有动。
