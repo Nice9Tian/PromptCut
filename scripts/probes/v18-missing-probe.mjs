@@ -6,7 +6,8 @@
  *   - 一个假的云端文档服务入口：真的账号账本（临时目录里的 SQLite）、真的签发方（`server/account/authority.mjs`）、
  *     真的公开入口处理函数（`server/docservice/modules/account-projects.mjs`）；墓碑经真的登记脚本
  *     `server/hosted/deploy/legacy-tombstones.mjs` 的 plan / apply / verify 写入与核对；
- *   - 一台编辑器（开发服务器，自己的临时数据目录，内容库起初是空的），信任表经 `VITE_PC_GONE_AUTHORITIES` 指到上面那个入口。
+ *   - 一台编辑器（开发服务器，自己的临时数据目录，内容库起初是空的）。信任表不经产品代码注入：探针在自己起的浏览器里
+ *     拦下页面对证明模块的请求换内容（`lib/gone-trust-intercept.mjs`），把页面指到上面那个入口。
  *
  * 合成的旧文件矩阵（每格的预期照任务书）：
  *   过期且有证明（素材全在 / 部分缺 / 全缺）、过期但证明对不上、服务说得清没有墓碑（没过期，这台设备上没有身份 → 要认证）、
@@ -29,6 +30,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startDevServer, REPO } from '../lib/dev-server.mjs';
+import { interceptGoneTrust } from './lib/gone-trust-intercept.mjs';
 import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 import { openAccountLedger } from '../../server/account/ledger.mjs';
 import { createAccountAuthority } from '../../server/account/authority.mjs';
@@ -164,13 +166,15 @@ try {
   for (const d of Object.values(dirs)) await fs.mkdir(d, { recursive: true });
   log(`起编辑器(${PORT})`);
   server = await startDevServer({ port: PORT, logFile: path.join(OUT, 'vite.log'), log,
-    env: { PROMPTCUT_EXPORT_DIR: dirs.exportDir, PROMPTCUT_DATA_DIR: dirs.dataDir, PROMPTCUT_PROJECTS_DIR: dirs.projectsDir, PROMPTCUT_NO_PORT_FILE: '1', VITE_PC_GONE_AUTHORITIES: JSON.stringify(authorities) } });
+    env: { PROMPTCUT_EXPORT_DIR: dirs.exportDir, PROMPTCUT_DATA_DIR: dirs.dataDir, PROMPTCUT_PROJECTS_DIR: dirs.projectsDir, PROMPTCUT_NO_PORT_FILE: '1' } });
   browser = await puppeteer.launch({ headless: true, protocolTimeout: 900000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
   const events = [];
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });
   page.on('dialog', async (d) => { events.push({ type: d.type(), message: d.message() }); await d.accept().catch(() => {}); });
   page.on('pageerror', (e) => events.push({ type: 'pageerror', message: String(e?.message || e) }));
+  // 信任表不经产品代码注入：在这只浏览器里拦下页面对证明模块的请求，换成带测试签发方的内容
+  const trust = await interceptGoneTrust(page, authorities);
   await page.goto(server.origin + '/?editor&nosetup=1', { waitUntil: 'domcontentloaded', timeout: 180000 });
   await page.waitForFunction(async () => !!(await import('/src/editor/stageBridge.ts')).frontStage(), { timeout: 180000, polling: 500 });
 
@@ -434,6 +438,7 @@ try {
   cells.broken['.procp 截断'] = procp.error;
   check(!!procp.error && procp.same, '坏文件「.procp 截断」：报错，当前项目原样', procp);
 
+  check(trust.served >= 1 && !trust.error, '信任表是探针在浏览器里拦截换上的（产品代码里没有注入口）', trust);
   check(!events.some((e) => e.type === 'pageerror'), '页面没有报错', events);
   out.docHits = docHits.length;
 } catch (e) {

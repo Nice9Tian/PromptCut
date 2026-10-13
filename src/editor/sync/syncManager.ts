@@ -24,7 +24,7 @@ import { client, errorStatus, route, hosted, type Candidate, type SharedMode, ty
 import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor } from "./recoveryAssociation";
 import { convertGoneProject, type GoneProof } from "./cloudGone";
 // @ts-expect-error Browser-safe proof verification, shared with the server-side tooling.
-import { queryGone, TRUSTED_GONE_AUTHORITIES, validAuthority } from "../../../server/recovery/gone-proof.mjs";
+import { queryGone } from "../../../server/recovery/gone-proof.mjs";
 // @ts-expect-error Browser-safe recovery state machine.
 import { RecoveryCoordinator } from "../../../server/recovery/coordinator.mjs";
 // @ts-expect-error Browser-safe service identity validation.
@@ -1519,19 +1519,6 @@ async function saveRecoveryIdentity(descriptor: CollaborationDescriptor, record:
   await recoveryRequest("identity", descriptor, { record, contentId: getState().project.id });
 }
 /**
- * 「已不存在」证明的信任表：随软件分发的那一份。开发服务器上（`import.meta.env.DEV`，发出去的构建里整段没有）
- * 可以用环境变量 `VITE_PC_GONE_AUTHORITIES`（JSON 数组）追加，给探针和本机验收指到自己起的假文档服务。
- */
-function goneAuthorities(): unknown[] {
-  const extra: unknown[] = [];
-  if (typeof import.meta.env !== "undefined" && import.meta.env.DEV && import.meta.env.VITE_PC_GONE_AUTHORITIES) {
-    try { const parsed = JSON.parse(String(import.meta.env.VITE_PC_GONE_AUTHORITIES)); if (Array.isArray(parsed)) extra.push(...parsed.filter(validAuthority)); }
-    catch { /* 写错了就当没设 */ }
-  }
-  return [...TRUSTED_GONE_AUTHORITIES, ...extra];
-}
-
-/**
  * 文档服务确认原云端项目已不存在（证明已核对过）：把手上这份内容转成一个独立的本地项目。
  * 内容用正在保留的那一份（文件里的内容，加上这台设备上还没发出去的离线修改）；换新的本地项目号；清掉协作关联
  * （多用户协作缺省关）；本机存的旧房间身份一并注销；保存落点与草稿归属由订阅者清掉（原文件保留）；界面提示一次。
@@ -1558,7 +1545,9 @@ const recoveryCoordinator = new RecoveryCoordinator({
     if (reopenState === "gone" && detail?.proof) { becomeLocalAfterGone(detail); return; }
     patch({ reopenState });
   },
-  gone: (descriptor: CollaborationDescriptor, signal: AbortSignal) => queryGone(descriptor, { authorities: goneAuthorities(), signal }),
+  // 信任表只有随软件分发的那一张（`gone-proof.mjs` 的 `TRUSTED_GONE_AUTHORITIES`，`queryGone` 的缺省值）：这里不传、也不许传别的表。
+  // 守门测试 `server/test/gone-trust-source.test.mjs` 会拦。
+  gone: (descriptor: CollaborationDescriptor, signal: AbortSignal) => queryGone(descriptor, { signal }),
   identity: async (descriptor: CollaborationDescriptor, contentId: string, signal: AbortSignal) => {
     if (ONLINE) {
       const identities = Object.values(readJson<Record<string, RecoveryIdentity>>("pc.shared.identities", {})).filter(r => descriptorOf(r.candidate).service === descriptor.service && r.candidate.projectId === descriptor.roomId);

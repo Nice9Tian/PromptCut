@@ -28,10 +28,21 @@ export function canonicalJson(value) {
  * - `origin`：向哪里问（公网上文档服务的入口，路径固定为 `/hosted/shared/account/gone`）；
  * - `keys`：`kid` → Ed25519 公钥（32 字节原始公钥的 base64url）。**空表示这个签发方的证明一律不认。**
  *
+ * 这张表是产品里信任表的**唯一来源**：页面（`src/editor/sync/syncManager.ts`）调 `queryGone` 时不传别的表，
+ * 也没有环境变量、配置文件、页面钩子能扩充它（桌面版就是开发服务器，`import.meta.env` 能被运行目录的 `.env.local` 改，
+ * 所以连「只在开发时生效」的口子也不留）。探针要指到自己起的假文档服务时，在自己起的浏览器里拦下本模块的请求换内容
+ * （`scripts/probes/lib/gone-trust-intercept.mjs`），不经产品代码。`queryGone` 的 `authorities` 参数只给命令行工具和单测用。
+ *
  * 生产签发方的 `authorityId` 与公钥要在部署后由主会话填进来（公钥不是秘密；取法见
  * `server/hosted/deploy/legacy-tombstones.mjs --print-public-key`）。没填之前旧文件一律不转换，只提示。
  */
-export const TRUSTED_GONE_AUTHORITIES = Object.freeze([]);
+export const TRUSTED_GONE_AUTHORITIES = deepFreeze([]);
+
+/** 信任表连同里面每一条都冻住：运行时没有任何代码能往里加签发方或钥匙 */
+function deepFreeze(value) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) { for (const v of Object.values(value)) deepFreeze(v); Object.freeze(value); }
+  return value;
+}
 
 const b64url = text => {
   if (typeof text !== 'string' || !/^[A-Za-z0-9_-]+$/.test(text)) throw new TypeError('base64url');
