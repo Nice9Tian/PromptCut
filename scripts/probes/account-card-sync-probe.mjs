@@ -156,6 +156,8 @@ async function startEditor(tag, port) {
     PROMPTCUT_DEVICE_NAME: `account-card-sync-${tag}`,
     // 编辑器进程自己连夹具的公网入口(自签根证书);真环境里是正式证书,不需要这一项
     NODE_EXTRA_CA_CERTS: fixture.caFile,
+    // 账号项目的卡片同步只许连账号云端的文档服务;探针的账号服务是夹具,显式放行它的源
+    PROMPTCUT_ACCOUNT_CLOUD_ORIGIN: ORIGIN,
   });
   const origin = `http://127.0.0.1:${port}`;
   await waitFor(async () => {
@@ -314,11 +316,11 @@ async function openDesktop(ed, state) {
   const frames = (wsLog[ed.tag] = []);
   const cdp = await page.createCDPSession();
   await cdp.send('Network.enable');
-  const note = (dir) => ({ response }) => {
+  const note = (dir) => ({ requestId, response }) => {
     if (response.opcode !== 1) return;
     let m; try { m = JSON.parse(response.payloadData); } catch { return; }
-    if (!['project.op', 'project.ops', 'project.overwritten', 'project.op.ok'].includes(m?.type)) return;
-    frames.push({ dir, at: Date.now(), type: m.type, rev: m.rev ?? null, opId: m.opId ?? null, entity: m.entity ?? null,
+    if (!['project.op', 'project.ops', 'project.overwritten', 'project.op.ok', 'selection.set', 'selection.ok', 'project.open'].includes(m?.type)) return;
+    frames.push({ dir, sock: requestId, at: Date.now(), type: m.type, rev: m.rev ?? null, opId: m.opId ?? null, entity: m.entity ?? null, pageId: m.pageId ?? null,
       by: (m.by ?? m.actor)?.accountId ?? null, bySession: (m.by ?? m.actor)?.session ?? m.session ?? null,
       paths: Array.isArray(m.ops) ? m.ops.map((o) => `${o.op} ${String(o.path).slice(0, 80)}`).slice(0, 12) : null, overwrote: m.overwrote ?? null });
     if (frames.length > 3000) frames.shift();
@@ -405,8 +407,10 @@ const onlineDiag = (page, cardId) => P(page, (cardId) => {
  * 页面那条文档连接的寿命(真实的 120 秒访问令牌)。时间都从甲登录算起:
  *   约 15 秒  乙(桌面)断一次传输:几秒内接回,之后照常收到甲的改动
  *   30 / 130 / 250 / 400 秒  甲(桌面)各改一次、在线页面各改一次:别的成员看得到,服务端版本前进
- *   135～270 秒  在线页面冻结(模拟电脑睡眠,超过一个令牌寿命);醒来后追上别人的改动,自己再改一次别人看得到
- *                (冻的是在线页面:桌面这两页是开发服务器给的,冻结会让热更新通道断开、醒来整页重载,那是开发服务器的行为)
+ *   135～270 秒  在线页面挂起(浏览器把页面的脚本与计时器停掉,模拟电脑睡眠,超过一个令牌寿命);醒来后先显示离线、重连上,
+ *                追上别人的改动,自己再改一次别人看得到
+ *                (挂起的是在线页面:桌面这两页是开发服务器给的,挂起会让热更新通道断开、醒来整页重载,那是开发服务器的行为)
+ *   全程        甲每换一次会话,都在新连接上重新发布选区(同一个页面号)并得到确认
  *   400 秒之后  甲的账号服务不通:到期后页面转离线(不显示在线),离线时改一次;恢复后补发,别人看得到
  */
 async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLoginAt }) {
@@ -470,7 +474,7 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
   // ---- 四个时刻各改一次
   for (const at of [30, 130, 250, 400]) {
     if (at === 250) {
-      // 130 秒那一轮之后乙冻结,到这里还冻着:这一轮乙不看
+      // 130 秒那一轮之后在线页面被挂起,到这里还没醒:这一轮它不看、不改
     }
     await until(at);
     const revBefore = await serverRev(stateA);
@@ -478,7 +482,7 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
     const observers = { 乙桌面: () => hasDesktop(pageB, idA), ...(frozen ? {} : { 在线页面: () => hasOnline(idA) }) };
     const seenA = {};
     for (const [name, fn] of Object.entries(observers)) seenA[name] = !!(await waitFor(fn, 15_000, `${name} 看到甲在 ${at} 秒的改动`).catch(() => false));
-    // 在线页面睡着的那一轮由乙(桌面)来改
+    // 在线页面挂起的那一轮由乙(桌面)来改
     const idC = frozen ? await addDesktop(pageB, slot += 2) : await addOnline(slot += 2);
     const seenC = !!(await waitFor(() => hasDesktop(pageA, idC), 15_000, `甲看到别人在 ${at} 秒的改动`).catch(() => false));
     await sleep(500);
@@ -487,13 +491,13 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
     L.checkpoints.push(cp);
     check(Object.values(seenA).every(Boolean) && seenC && revAfter >= revBefore + 2, `登录 ${at} 秒:甲改一次、${frozen ? '乙' : '在线页面'}改一次,别的成员看得到,版本前进`, cp);
     if (at === 130) {
-      // 在线页面睡着:冻结页面(计时器、脚本全停),超过一个令牌寿命
+      // 在线页面睡着:挂起页面(计时器、脚本全停),超过一个令牌寿命
       const cdpB = await pageC.createCDPSession();
       await cdpB.send('Page.enable');
       await cdpB.send('Page.setWebLifecycleState', { state: 'frozen' });
       frozen = cdpB;
       L.sleep = { frozenAt: since() };
-      say('link.online-frozen', { at: since() });
+      say('link.online-suspended', { at: since() });
     }
     if (at === 250) {
       await until(272);
@@ -508,7 +512,7 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
       const idB = await addOnline(slot += 2);
       const seenB = await waitFor(() => hasDesktop(pageA, idB).then((v) => (v ? Date.now() : null)), 30_000, '甲看到在线页面醒来后的改动').catch(() => null);
       L.sleep = { ...L.sleep, sleptSeconds: L.sleep.wokeAt - L.sleep.frozenAt, caughtUpMs: caught ? caught - t0 : null, editSeenByAMs: seenB ? seenB - t0 : null };
-      check(L.sleep.sleptSeconds >= 125 && !!caught && !!seenB, '睡眠醒来(在线页面冻结超过一个令牌寿命):追上别人的改动,自己再改别人看得到', L.sleep);
+      check(L.sleep.sleptSeconds >= 125 && !!caught && !!seenB, '睡眠醒来(在线页面挂起超过一个令牌寿命):追上别人的改动,自己再改别人看得到', L.sleep);
       await cdp.detach().catch(() => {});
     }
   }
@@ -522,6 +526,13 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
     check((lifeA?.renews ?? 0) >= 4 && lifeA.expires === 0, '甲 400 秒里按时换了至少 4 次会话,连接没有作废过', lifeA);
     check(L.steady.statusesA.every((s) => s === 'online' || s === 'connecting'), '甲的页面这 400 秒只显示过在线(换会话的瞬间是连接中),没有离线', L.steady.statusesA);
     check(toastA === 1, '「已进入云端项目」只提示一次(换会话不重复提示)', toastA);
+    // 选区:甲每条到文档服务的连接上都发布过选区、都得到确认,而且是同一个页面号
+    const fr = wsLog.a ?? [];
+    const socks = [...new Set(fr.filter((f) => f.type === 'project.open').map((f) => f.sock))];
+    const perSock = socks.map((s) => ({ set: fr.filter((f) => f.sock === s && f.type === 'selection.set').length, ok: fr.filter((f) => f.sock === s && f.type === 'selection.ok').length }));
+    const pageIds = [...new Set(fr.filter((f) => f.type === 'selection.set').map((f) => f.pageId))];
+    L.selection = { connections: socks.length, perConnection: perSock, pageIds: pageIds.length };
+    check(socks.length >= (lifeA?.renews ?? 0) + 1 && perSock.every((x) => x.set >= 1 && x.ok >= 1) && pageIds.length === 1, '甲每换一次会话都在新连接上重新发布了选区并得到确认,页面号不变', L.selection);
   }
 
   // ---- 账号服务不通(只对甲的页面):到期后如实转离线;离线时的改动恢复后补发
@@ -664,6 +675,20 @@ try {
   res.bRecordV1 = bStatus1.records?.[CARD_REL] ?? null;
   check(res.bRecordV1?.rev === res.aRecord.rev && res.bRecordV1?.mine === false, '2-乙记下的是甲那一版', res.bRecordV1);
   await shot(pageB, '2-b-desktop-v1');
+  // ---------- 舞台窗口里的代码(用户卡就在这里跑)调不到卡片同步的绑定、交票据接口;编辑器页面自己也只能绑到账号云端的文档服务
+  {
+    const stageFrame = pageB.frames().find((f) => f !== pageB.mainFrame() && /[?&]stage=/.test(f.url()));
+    const fromStage = stageFrame ? await stageFrame.evaluate(async (projectId) => {
+      const call = async (ep, body) => (await fetch(`/api/cards/sync/${ep}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).status;
+      return { origin: location.origin, bind: await call('bind', { mode: 'account', projectId, url: 'wss://attacker.invalid/hosted/' }), bindLegacy: await call('bind', { mode: 'ticket', projectId, url: 'wss://attacker.invalid/' }),
+        ticket: await call('ticket', { reqId: 'ct1', ticket: 'x' }), unbind: await call('unbind', {}) };
+    }, projectId).catch((e) => ({ error: String(e?.message ?? e) })) : { error: '没有舞台窗口' };
+    const fromPage = await P(pageB, async (projectId) => (await fetch('/api/cards/sync/bind', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'account', projectId, url: 'wss://attacker.invalid/hosted/' }) })).status, projectId);
+    const still = await cardStatus(B);
+    res.stageGuard = { fromStage, fromPageForeignUrl: fromPage, stillBound: still.projectId === projectId && still.connected === true };
+    check(fromStage.bind === 403 && fromStage.bindLegacy === 403 && fromStage.ticket === 403 && fromStage.unbind === 403 && new URL(fromStage.origin).port !== String(B_PORT), '必3-舞台窗口里调卡片同步的绑定、解绑、交票据接口全部被拒(403)', fromStage);
+    check(fromPage === 400 && res.stageGuard.stillBound, '必3-编辑器页面把账号项目绑到别的地址被拒(400),原来的绑定不受影响', { fromPage, stillBound: res.stageGuard.stillBound });
+  }
   if (STOP_AFTER <= 2) throw new Error('stop-after 2');
 
   // ---------- 4(核对)乙也装上直接写进内容库的那张卡、画得出来

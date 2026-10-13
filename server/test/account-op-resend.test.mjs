@@ -9,6 +9,7 @@
  *   1 旧连接上提交一条,落地
  *   2 同一张令牌、另一条连接重发:回 ok、duplicate、同一个版本号
  *   3 续令牌(凭证号变了)、再开一条连接重发:同样回 ok、duplicate、同一个版本号;服务端版本没有再前进(内容只落一次)
+ *   3b 带上期望版本再重发(断线重连后离线批次的第一条就是这样):同样按重复提交认;没落地过的带了对不上的期望版本照旧回 stale
  *   4 页面一侧(换连接之后收到这条回包):没有被拒的通知、没有未确认的、撤销步还在
  *   5 换了内容用同一个 opId、另一个账号用同一个 opId 同样内容:照旧回 operation-id-mismatch
  */
@@ -114,6 +115,16 @@ test('已落地的提交在续访问令牌之后重发:按重复提交认(ok、d
     assert.equal(ds.canUndo(), true, '撤销步还在');
     assert.equal(ds.project.resendProbe, 'v1');
     t.diagnostic(`4 页面一侧:通知 ${JSON.stringify(notices)},未确认 ${ds.unconfirmed},撤销步还在 ${ds.canUndo()}`);
+
+    // ---- 3b 断线重连后的重发会带期望版本(离线批次的第一条),而第一次发的时候没带:已落地的照样按重复提交认
+    c3.send({ ...op, expectRev: ok1.rev - 1 });
+    const r3b = await c3.next((m) => m.opId === op.opId || m.type === 'error');
+    assert.deepEqual([r3b.type, r3b.rev, r3b.duplicate], ['project.op.ok', ok1.rev, true], `带期望版本重发已落地的提交被拒:${JSON.stringify(r3b)}`);
+    t.diagnostic(`3b 带期望版本重发已落地的那一条:${r3b.type} rev ${r3b.rev} duplicate ${r3b.duplicate}`);
+    // 没落地过的提交带了对不上的期望版本:照旧回 stale
+    c3.send({ type: 'project.op', projectId, opId: 'rs-page:fresh:1', session: 'rs-page', ops: [{ op: 'set', path: '/freshProbe', value: 1 }], expectRev: ok1.rev - 1 });
+    const stale = await c3.next((m) => m.opId === 'rs-page:fresh:1' || m.type === 'error');
+    assert.equal(stale.reason, 'stale', JSON.stringify(stale));
 
     // ---- 5 身份里别的部分照旧把关
     c3.send({ ...op, ops: [{ op: 'set', path: '/resendProbe', value: 'other' }] });

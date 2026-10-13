@@ -7,13 +7,14 @@
  *
  * 一条用例(服务只起一次;访问令牌是真实的 120 秒寿命,全程约 150 秒):
  *   1  登录 30 秒时甲改一次:乙看得到,服务端版本前进
- *   2  换会话不丢改动(把到期时刻报成 8 秒后,真服务上连换几次):丙连续改 24 次、乙同时连续改 24 次,
- *      换了至少 4 次会话,两边与服务端最后一致,48 处改动一处不少,没有被拒、没有转离线、没有重同步
+ *   2  换会话不丢改动(把到期时刻报成 26 秒后、提前 14 秒换,真服务上连换几次):丙连续改 48 次、乙同时连续改 48 次,
+ *      换了至少 4 次会话,两边与服务端最后一致,96 处改动一处不少,没有被拒、没有转离线
  *   1b 传输断一次:几秒内在同一个会话上接回(原问题:接续带了票据,文档服务回 400,白等 60 秒保留期过完才重建会话)
  *   3  账号服务一时不通:到期还没换成 → 页面如实转离线(不是「在线」);离线时的改动不丢,通了之后补发
  *   4  登录 130 秒时(原问题:161 秒时放片段,服务端版本 10 → 10、对方看不到、页面仍显示在线)甲再改一次:
  *      乙看得到,服务端版本前进;甲的连接按时换过、从头到尾没被闸拒过
- *   5  睡眠醒来:丁的计时器从进项目起就停着(不换会话),130 秒后改一次 → 被闸拒 → 当场换会话 → 补发成功,乙看得到
+ *   5  睡眠醒来:丁的计时器从进项目起就停着(不换会话),130 秒后改一次 → 被闸拒 → 这条连接按作废处理(转离线,不是悄悄换会话)
+ *      → 照离线重连:那一条带期望版本补发,期间没人改过所以落地,乙看得到
  *   5b 可写改只读:服务端关掉旧连接(4003),页面凭新票据重新连上(不当成被踢),照常收到别人的改动;改回可写后照常写
  *   6  被踢:连接被服务端关,重连时取票据回 403 banned,不再重连,页面不在线
  *   7  项目被删:连接被关、不在线
@@ -125,6 +126,10 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     link.ds.on('notice', (n) => n.kind !== 'remote' && p.notices.push(n.kind === 'rejected' ? `rejected:${n.reason}` : n.kind === 'resync' ? `resync:${n.reason}` : n.kind));
     if (process.env.PL_DEBUG) { const r = link.ds.receive.bind(link.ds); link.ds.receive = (m) => { console.log(name, '<-', m.type, m.rev ?? '', m.reason ?? ''); return r(m); }; }
     link.ds.on('status', (s) => p.statuses.push(s));
+    // 记下发出去的提交(看带没带期望版本)
+    p.opsSent = [];
+    const rawSend = link.send.bind(link);
+    link.send = (msg) => { if (msg?.type === 'project.op') p.opsSent.push({ opId: msg.opId, expectRev: msg.expectRev }); return rawSend(msg); };
     const timer = setInterval(() => { if (p.ticking && renewing) void life.tick(); }, 500);
     // 页面每 3 秒续一次会话读项目的状态(`enterAccountProject` 的那个定时),读到自己的权限就报给寿命模块
     const poll = setInterval(() => { if (p.ticking && renewing && link.connected) void session(who).then((s) => life.accessSeen(s.access), () => undefined); }, 2000);
@@ -163,19 +168,19 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     const dLoginAt = Date.now();
     await waitFor(() => A.online() && B.online() && D.online(), '三个页面进项目');
 
-    // ---- 2 换会话不丢改动(先做,等真到期的那一百来秒里跑):丙把到期时刻报成 8 秒后
+    // ---- 2 换会话不丢改动(先做,等真到期的那一百来秒里跑):丙把到期时刻报成 26 秒后、提前 14 秒换
     const carol = await login(1, 'pl-c');
-    const C = page('丙', carol, { reportExpiry: () => Date.now() + 8_000, lifeOptions: { renewMarginMs: 3_000, minTicketLifeMs: 5_000 } });
+    const C = page('丙', carol, { reportExpiry: () => Date.now() + 26_000, lifeOptions: { renewMarginMs: 14_000, minTicketLifeMs: 5_000, minRenewGapMs: 1_000 } });
     await waitFor(() => C.online(), '丙进项目');
     const revBefore2 = (await serverRev(bob)).rev;
     // 文档服务对账号连接的每次提交都要问账号服务,这台机器上一秒落不了几条,所以改得不快(人手的速度)
-    const N = 24;
+    const N = 48;
     for (let i = 0; i < N; i++) {
       C.set(`c${i}`, `丙-${i}`);
       B.set(`b${i}`, `乙-${i}`);
       await sleep(1200);
     }
-    await waitFor(() => C.link.ds.unconfirmed === 0 && B.link.ds.unconfirmed === 0, '丙、乙的改动都确认', 60_000);
+    await waitFor(() => C.link.ds.unconfirmed === 0 && B.link.ds.unconfirmed === 0, '丙、乙的改动都确认', 60_000).catch((e) => { throw new Error(`${e.message}:` + [C, B].map((x) => `${x.name} ${JSON.stringify({ un: x.link.ds.unconfirmed, st: x.ds.status, connected: x.link.connected, notices: x.notices.slice(-6), statuses: x.statuses.slice(-8), life: x.life.describe(), closes: x.closes, auth: x.authExpired, stats: x.link.stats() && { opens: x.link.stats().opens, sent: x.link.stats().sent, received: x.link.stats().received, detached: x.link.stats().detached } })}`).join(' | ')); });
     const after2 = await serverRev(bob);
     const swaps = C.life.describe().renews;
     assert.ok(swaps >= 4, `丙换了 ${swaps} 次会话`);
@@ -186,7 +191,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     const canon = (v) => JSON.stringify(Object.fromEntries(Object.entries(v).sort(([x], [y]) => (x < y ? -1 : 1))));
     await waitFor(() => canon(C.ds.project) === canon(after2.project) && canon(B.ds.project) === canon(after2.project), '丙、乙与服务端一致');
     assert.equal(after2.rev, revBefore2 + 2 * N, `${2 * N} 次改动各落一次`);
-    assert.deepEqual(C.notices, [], '丙没有被拒、没有重同步、没有丢弃');
+    assert.deepEqual(C.notices.filter((x) => !x.startsWith('resync')), [], '丙没有被拒、没有丢弃(确认先后颠倒时整份重取是允许的)');
     assert.ok(!C.statuses.includes('offline') && !C.statuses.includes('paused'), `丙没有转离线(${[...new Set(C.statuses)].join(',')})`);
     assert.equal(C.closes.length, 0, '换会话不算断线');
     assert.equal(C.life.describe().expires, 0);
@@ -219,7 +224,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     // ---- 3 账号服务一时不通:到期还没换成 → 如实转离线;离线时的改动通了之后补发
     {
       carol.down = true;
-      const offlineAt = await waitFor(() => (C.ds.status === 'offline' ? Date.now() : null), '丙换不成会话、到期后转离线', 20_000);
+      const offlineAt = await waitFor(() => (C.ds.status === 'offline' ? Date.now() : null), '丙换不成会话、到期后转离线', 45_000);
       assert.equal(C.life.describe().expires, 1);
       assert.ok(C.closes.some((c) => c.code === 4401 && c.fatal === false), `按连接作废报(${JSON.stringify(C.closes)})`);
       assert.equal(C.terminal.length, 0, '一时不通不是登录失效');
@@ -257,17 +262,21 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       assert.equal(D.life.describe().renews, 0, '丁睡着,没换过会话');
       const rev = (await serverRev(bob)).rev;
       D.set('woke', '丁醒来改的');
-      await waitFor(() => B.get('woke') === '丁醒来改的', '丁被闸拒后当场换会话、补发,乙看得到', 15_000);
+      await waitFor(() => B.get('woke') === '丁醒来改的', '丁被闸拒后按连接作废重连、补发,乙看得到', 20_000);
       assert.equal((await serverRev(bob)).rev, rev + 1);
       assert.ok(D.authExpired.length >= 1, '丁确实被闸拒过');
-      assert.equal(D.life.describe().renews, 1);
-      assert.equal(D.link.ds.unconfirmed, 0);
+      assert.equal(D.life.describe().renews, 0, '已经过期的连接不走换会话');
+      assert.equal(D.life.describe().expires, 1);
+      assert.ok(D.closes.some((c) => c.code === 4401), '按连接作废报');
+      assert.ok(D.statuses.includes('offline'), '期间如实显示过离线');
+      assert.ok(D.opsSent.filter((m) => m.expectRev !== undefined).length >= 1, '补发的那一条带期望版本(离线重入的版本核对)');
+      await waitFor(() => D.online() && D.link.ds.unconfirmed === 0, '丁回到在线');
       assert.deepEqual(D.notices, [], '丁的改动没有被撤回或丢弃');
       // 醒来之后计时器恢复,照常
       D.ticking = true;
       D.set('woke2', '丁醒来之后');
       await waitFor(() => B.get('woke2') === '丁醒来之后', '丁之后的改动照常');
-      t.diagnostic(`5 睡眠醒来:丁的连接过期后被闸拒(${D.authExpired[0]}),当场换会话补发成功,版本 ${rev} → ${rev + 1}`);
+      t.diagnostic(`5 睡眠醒来:丁的连接过期后被闸拒(${D.authExpired[0]}),按连接作废转离线、重连后带期望版本补发成功,版本 ${rev} → ${rev + 1}`);
     }
 
     // ---- 5b 可写改只读:服务端把乙的连接关掉(同样是 4003),乙凭新票据重新连上,能收不能写;改回可写后照常
