@@ -80,6 +80,49 @@
 
 块五（删对话「有任务在跑先停再删」）可以用同一个办法：在对话权威里对这个对话下一条围栏（`runHooks.fenceInState`，`kind: 'stop'` 带 `runId`，和现在的停止一样），等那条控制记录 `complete` 再删、再让出名额。
 
+### 5. 运行素材的调用方该挂在哪（给后面接这条线的人）
+
+「运行素材」是云端 Agent 的一条任务凭这条任务的授权读写所在项目的素材（块六的报告 `AGENT-v18-assets.md` 第 5.1 节，还差五处里的第 1 处是「Agent 服务一侧没有调用方」）。这次没有接，下面是从本块的装配看该怎么接。
+
+**挂在哪**
+
+1. 传输层挂在 `server/agent-service/account-executor-assembly.mjs` 的 `createAccountExecutorAssembly` 里，紧跟 `resources = createRunResources({ runClient, … })` 之后、`createHostedAgentService(…)` 之前：
+   `createRunAssetTransport({ runClient, assetOrigin, assetTls, assetFingerprint256, resources })`，再包一层 `createRunAssetClient({ transport, maxResponseBytes })`。
+2. 「项目素材」对象（`createProjectAssets`）要的工作区和导入额度是在 `server/agent/service/account-runner.mjs` 的 `createExistingHostedRunnerFactory` 里建的（`workspaces`、`gate`），所以它在那里建，和 `createHostedTools` 并排；把第 1 步的客户端经装配的 `runnerOptions` 传下去。
+3. 文档服务一侧的入口是 `doc-agent-assembly.mjs` 的 `mountRunAssets`，这次合并后它和独立任务进程并存（见「把 main 合进来」）。
+
+**要传什么**
+
+- `runClient` 必须是这个进程自己的那一个（装配收到的那个参数）。运行素材的每个请求都用进程内存里的钥匙签，文档服务据此认「是哪一个实例、哪一条任务」。在任务进程里它就是任务身份；主身份（只做控制）不能用运行素材，会话层和文档服务两头都会拒。
+- `resources` 必须是装配里同一个 `createRunResources` 对象：素材的连接和流登记在它名下，任务被下围栏时 `abortForFence` 才关得到它们。现在 `createAccountRunnerService` 把 `resources` 只交给了任务管理器，没有交给运行器工厂，要补传。
+- 每条任务的上下文（`resources.contextFor({ projectId, runGrantId })` 的返回值，执行器里是 `entry.context`）现在没有交给运行器工厂；工具调「项目素材」时每次都要带它，要在 `runnerFactory({ grant, record, … })` 的参数里加上。
+- `assetOrigin / assetTls / assetFingerprint256`：素材服务的内部地址、这个进程连素材服务用的客户端证书、素材服务证书的指纹。只从入口的本机配置来（任务进程是配置模块里的 `createAssemblyOptions`），不从进程间消息或任何请求体来。任务进程连素材服务的证书和它连文档服务的是同一个任务身份，文档服务那边 `mountRunAssets` 认的是 `account.agent.fingerprint256`。
+- 导入用的 `reserveImport`、`maxImportBytes`、`verifySourceJob` 由工具包那一侧定，这里不规定。
+
+**和收尾记录的先后（必须守）**
+
+本块的收尾记录写的是「本机资源已收干净」。素材的连接和流也是本机资源，所以「项目素材」的关闭（`projectAssets.close()`，等它名下的流真的关完）要放进运行器的 `drain()` 里，在执行器形成收尾记录之前完成。放在别处，收尾记录就会在还有素材连接开着的时候形成。
+
+**接的人要先定的一件事**
+
+任务报了「结束」以后，文档服务就不再给这条任务签发新的素材访问（授权检查里有这一条）。但素材服务那一侧已经发出去的租约什么时候算关完，和文档服务签终态之间没有先后约束：现在签终态只等文档服务自己那一侧的连接关完，不等素材租约。要不要等，是接这条线时要定的；要等的话加在 `agent-run-scope-doc.mjs` 的 `docClosed` 所看的清单里。
+
+### 6. 把 main 合进来（2026-10-13，`main` 在 `173ea252`）
+
+主会话在本工作区执行了 `git merge main`，只有 `server/hosted/doc-agent-assembly.mjs` 冲突，五处。`main` 那一侧是块六带进来的运行素材（鉴权适配、挂载、处理函数），我这一侧是独立任务进程（两套证书、任务范围、结算）。五处都是两边都留：
+
+| 处 | 两边各是什么 | 怎么解 |
+|---|---|---|
+| 一（引入） | 我：任务范围模块；`main`：运行素材的四个模块 | 五行都留 |
+| 二（状态与「当前服务」检查） | 我：任务范围、主身份的证书指纹与编号、`currentService(编号)`；`main`：运行素材的三个状态变量、不带参数的 `currentService()` 并要它返回任务身份 | 状态变量都留；`currentService` 合成一个：不带参数时核任务身份并返回它（运行素材这样调，行为和 `main` 一样），带参数时核指定的身份（任务身份或主身份） |
+| 三（按账本核服务） | 我：按来者的编号核；`main`：经素材服务观察到的来者先走运行素材的适配 | 先走 `main` 的适配分支，其余按编号核 |
+| 四（实例登记的处理函数之后） | 我：处理函数多认一个主身份的指纹；`main`：新增 `createRunAssetAuthentication`、`mountRunAssets` 两个函数 | 处理函数用我的，两个函数原样留下 |
+| 五（返回对象） | 我：`start()` 里多做任务范围的对账；`main`：多导出两个函数、`handleInternal` 先问运行素材、`close()` 多关两样 | 并集 |
+
+没有哪一处两边互斥。只加了一行两边交汇处才有的判断〔裁 9〕：运行素材的直连鉴权（`authenticateDirect`）明确只认任务身份。原因：开了「一条任务一个进程」以后，这个入口认得的证书多了主身份那一张；虽然后面按实例用途也会拒，这里先拒掉，不依赖后面。没开这个模式时只有任务身份一张证书，行为和 `main` 完全一样。
+
+合并后的验证见文末「合并 main 以后的重跑」。
+
 ## 验证结果
 
 ### 基线
@@ -161,6 +204,8 @@ ChatGPT 的报告里写的「相关 175 项」「联合 219 项」没有留下�
 7. 单任务进程装配时不再要求「读取控制通道」和「对话客户端」（那是主服务接待人用的），给了反而拒绝；进程里任何给人用的对话接口都明确拒绝。
 8. 三个测试文件的端口改成系统分配。**这一条没有照「端口只用 28000～28039」办**：新测试和改过的测试都不写死端口，由系统分配，没有占用任何固定端口；我认为这样比在测试里写死 280xx 更不容易和别人撞。主会话如果要求写死在分配的段里，改起来是几行。
 
+9. 运行素材的直连鉴权只认任务身份（合并 `main` 时加的一行，见「把 main 合进来」）。
+
 ChatGPT 自己做的裁定我没有推翻任何一条，照现状接的。
 
 ## 对任务书或语义的更正建议
@@ -229,3 +274,15 @@ ChatGPT 自己做的裁定我没有推翻任何一条，照现状接的。
 **第二次**（最终代码提交 `a2e4de5c`）：类型检查退出码 0，零错误；全量 **5977 条，5973 过、0 失败、0 取消、4 跳过，退出码 0**，耗时 77 秒。4 条跳过都是原有的（和合并后第一次的 4 条跳过数目相同），其中能从日志里认出的有：账号项目的只读后端不可用那一条、Windows 上不申请符号链接权限那一条、`/api/cards/layout` 的集成那一条。
 
 日志在 `out/v18-worker/`（不入库）：`test-merge.log`（合并后第一次）、`test-final.log`（第一次最终）、`rerun-1.log`（单独重跑）、`test-final2.log`（第二次最终）。
+
+## 合并 main 以后的重跑
+
+都在合并提交 `81889fe4` 上（`main` 在 `173ea252`）。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
+| 定向 | `npm test -- <39 个文件>`：`asset-project-entries`、14 份 `cloud-run-assets-*`、3 份 `run-assets-*`、`account-worker-lifecycle`、`account-slot-scheduler`、`worker-settlement`，以及装配、任务范围、实例登记、部署清单那几类 | 退出码 0，246 条全过、0 跳过 |
+| 全量 | `npm test`（带两个环境变量） | 退出码 0；**6023 条，6020 过、0 失败、0 取消、3 跳过**，耗时 79 秒。一遍过，没有重跑 |
+
+日志在 `out/v18-worker/`（不入库）：`tsc-m2.log`、`m2-related.log`、`test-m2.log`。跑完查过：没有可见窗口，没有残留的任务子进程。
