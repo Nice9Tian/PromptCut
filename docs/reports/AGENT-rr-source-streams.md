@@ -267,7 +267,7 @@ node scripts/probes/scrub-stream-probe.mjs --port 27060 --tilt --out out/rr-sour
 - `4e64d534` 合并 main
 - 之后一个只改报告的提交
 
-`git diff --stat main...HEAD`：9 个文件，新增约 1600 行、删约 30 行；逐个看过，没有哪个已有文件是整份被换的（入库的都是 LF）。
+`git diff --stat main...HEAD`：9 个文件，新增约 1800 行、删约 30 行；逐个看过，没有哪个已有文件是整份被换的（入库的都是 LF）。
 
 ### 10.4 收尾
 
