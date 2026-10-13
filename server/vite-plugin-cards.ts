@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
-import { originOk as guardOriginOk } from './http-guard.mjs';
+import { originOk as guardOriginOk, viaStagePort } from './http-guard.mjs';
 import { isPrerender } from './render-role.mjs';
 import { proxyToPrerender } from './prerender-client.mjs';
 import {
@@ -15,7 +15,7 @@ import {
   setCardHasher, setCardIdentifier, emitCardSourceChange,
 } from './card-overrides.mjs';
 import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
-import { accountCardProtocols, cardSyncConnect } from './account-card-link.mjs';
+import { accountCardProtocols, accountDocUrlAllowed, cardSyncConnect } from './account-card-link.mjs';
 import { cardCodePreimage, localImportsOf, CARD_CODE_ID_HEX } from '../src/render/cardCodeIdentity.mjs';
 import { checkSyncedSource, rejectedStub, hostedWorkerKind, normalizeBrowserCssImports } from './hosted-render/source-gate.mjs';
 import { remotionStyleErrors } from './remotion-style-check.mjs';
@@ -1623,9 +1623,19 @@ export default function vitePluginCards(): Plugin[] {
         cardSync?.saved(rel);
       };
 
+      /*
+       * 绑定、解绑、交票据这三个口只给编辑器页面用,舞台窗口里的代码(用户卡,可能是别的成员写的)不许碰:
+       * 它们决定编辑器进程凭成员本人的连接票据连到哪里去。舞台端口对舞台窗口是同源,`originOk` 拦不住,所以另按「是不是经舞台端口来的」拦。
+       */
+      const fromStage = (req: any, res: any): boolean => {
+        if (!viaStagePort(req)) return false;
+        sendJson(res, 403, { ok: false, error: '舞台窗口不能调这个接口' });
+        return true;
+      };
       server.middlewares.use('/api/cards/sync/bind', (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        if (fromStage(req, res)) return;
         let body = '';
         req.on('data', (c) => { body += c; if (body.length > 256 * 1024) req.destroy(); });
         req.on('end', () => {
@@ -1640,6 +1650,8 @@ export default function vitePluginCards(): Plugin[] {
             const projectId = typeof input.projectId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(input.projectId) ? input.projectId : null;
             if (!projectId) return sendJson(res, 400, { ok: false, error: 'projectId 不合法' });
             if (typeof input.url !== 'string' || !/^wss?:\/\//.test(input.url)) return sendJson(res, 400, { ok: false, error: 'mode 为 ticket 时要给文档服务的 ws(s):// 地址' });
+            // 账号项目:只能连账号云端的文档服务(票据是成员本人权限的凭证,不能送到绑定请求随便说的地址去)
+            if (mode === 'account' && !accountDocUrlAllowed(input.url)) return sendJson(res, 400, { ok: false, error: '账号项目只能连账号云端的文档服务' });
             let first: string | null = typeof input.ticket === 'string' && input.ticket.length > 0 && input.ticket.length <= 2048 ? input.ticket : null;
             syncProjectId = projectId;
             cardSync.bind({
@@ -1664,6 +1676,7 @@ export default function vitePluginCards(): Plugin[] {
       server.middlewares.use('/api/cards/sync/unbind', (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        if (fromStage(req, res)) return;
         req.resume();
         req.on('end', () => {
           bindLocal();
@@ -1673,6 +1686,7 @@ export default function vitePluginCards(): Plugin[] {
       server.middlewares.use('/api/cards/sync/ticket', (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        if (fromStage(req, res)) return;
         let body = '';
         req.on('data', (c) => { body += c; if (body.length > 8192) req.destroy(); });
         req.on('end', () => {

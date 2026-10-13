@@ -173,3 +173,27 @@ test('ACL-07 cardSyncConnect:账号项目用本端点,别的原样交给缺省�
   legacy.close();
   assert.ok(logged.length > 0 && logged.every(([event]) => event.startsWith('doc.')));
 });
+
+test('ACL-08 账号项目的绑定地址只能是账号云端的文档服务;探针与联调要显式放行别的源', async () => {
+  const { accountDocUrlAllowed } = await import('../account-card-link.mjs');
+  assert.equal(accountDocUrlAllowed('wss://visuhive.com/hosted/', {}), true);
+  for (const bad of ['wss://attacker.invalid/hosted/', 'ws://visuhive.com/hosted/', 'wss://visuhive.com.attacker.invalid/hosted/', 'wss://visuhive.com:8443/hosted/',
+    'wss://user@visuhive.com/hosted/', 'wss://visuhive.com/hosted/?x=1', 'wss://visuhive.com/other/', 'wss://visuhive.com/hosted', 'https://visuhive.com/hosted/', '', null, 'not a url']) {
+    assert.equal(accountDocUrlAllowed(bad, {}), false, String(bad));
+  }
+  const env = { PROMPTCUT_ACCOUNT_CLOUD_ORIGIN: 'https://127.0.0.1:28656, http://insecure.example' };
+  assert.equal(accountDocUrlAllowed('wss://127.0.0.1:28656/hosted/', env), true);
+  assert.equal(accountDocUrlAllowed('wss://127.0.0.1:28657/hosted/', env), false);
+  assert.equal(accountDocUrlAllowed('wss://insecure.example/hosted/', env), false, '放行名单里的 http 源不算');
+  assert.equal(accountDocUrlAllowed('wss://visuhive.com/hosted/', env), true);
+});
+
+test('ACL-09 经舞台端口来的请求认得出(舞台窗口里的卡片代码不许碰取票据、改绑定的接口)', async () => {
+  const { viaStagePort, STAGE_CLIENT_HEADER, originOk } = await import('../http-guard.mjs');
+  // 舞台窗口发的同源请求:Origin 与 Host 都是舞台端口,originOk 拦不住;代理写上的头认得出
+  const stage = { headers: { origin: 'http://127.0.0.1:5191', host: '127.0.0.1:5191', [STAGE_CLIENT_HEADER]: '127.0.0.1' } };
+  assert.equal(originOk(stage), true);
+  assert.equal(viaStagePort(stage), true);
+  assert.equal(viaStagePort({ headers: { origin: 'http://127.0.0.1:5190', host: '127.0.0.1:5190' } }), false);
+  assert.equal(viaStagePort({ headers: { [STAGE_CLIENT_HEADER]: '' } }), true, '代理写的是空串也算');
+});

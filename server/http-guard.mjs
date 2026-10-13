@@ -80,6 +80,16 @@ export { forwardedHops, isLocalOrigin, remoteTagOf } from "./auth/origin.mjs";
 
 export const STAGE_CLIENT_HEADER = "x-pc-stage-client";
 
+/**
+ * 这条请求是不是经舞台端口进来的(舞台窗口里的代码发的)。舞台端口的代理给每个转来的请求都写上 `STAGE_CLIENT_HEADER`
+ * (覆盖请求自带的),直连编辑器端口的请求没有它。舞台窗口里跑的是用户卡的代码(可能是别的成员写的),对它来说舞台端口是同源,
+ * `originOk` 拦不住;不该让卡片代码碰的接口(取票据、改绑定)用这个判据另拦一道。
+ * 直连编辑器端口时自己加这个头只会让自己被拦,绕不过去;舞台窗口直接打编辑器端口是跨源,过不了 `originOk`。
+ */
+export function viaStagePort(req) {
+  return req.headers?.[STAGE_CLIENT_HEADER] !== undefined;
+}
+
 /** 回环地址:127.0.0.0/8、::1、IPv4 映射的 ::ffff:127.x */
 export function isLoopbackAddress(address) {
   const a = String(address || "").toLowerCase();

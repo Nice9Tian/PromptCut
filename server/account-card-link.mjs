@@ -169,3 +169,19 @@ export function cardSyncConnect(say = () => {}, { WebSocket = undefined } = {}) 
     ? accountCardEndpoint({ url, getTicket: protocols.accountTicket, log, ...(WebSocket ? { WebSocket } : {}) })
     : createDocEndpoint({ url, protocols, log, ...(WebSocket ? { WebSocket } : {}) }));
 }
+
+/** 账号云端项目的文档服务地址:正式环境只有这一个(桌面外壳的账号桥也只认它,`desktop/src-tauri/src/lib.rs` 的 `account_cloud_binding`) */
+export const ACCOUNT_CLOUD_ORIGIN = 'https://visuhive.com';
+
+/**
+ * 编辑器进程凭账号票据连出去的地址只能是账号云端的文档服务(`wss://<云端主机>/hosted/`)。
+ * 票据是成员本人权限的凭证,绑定请求里的地址不能说连哪就连哪 —— 否则谁能调到绑定接口,谁就能让编辑器进程把票据送到他指定的服务器。
+ * `PROMPTCUT_ACCOUNT_CLOUD_ORIGIN`(逗号分隔的 https 源)只给本机联调与探针换成测试用的账号服务,不设就只认正式环境。
+ */
+export function accountDocUrlAllowed(url, env = process.env) {
+  let u;
+  try { u = new URL(String(url)); } catch { return false; }
+  if (u.protocol !== 'wss:' || u.username || u.password || u.search || u.hash || u.pathname !== '/hosted/') return false;
+  const allowed = [ACCOUNT_CLOUD_ORIGIN, ...String(env?.PROMPTCUT_ACCOUNT_CLOUD_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean)];
+  return allowed.some((origin) => { try { const o = new URL(origin); return o.protocol === 'https:' && o.host === u.host; } catch { return false; } });
+}
