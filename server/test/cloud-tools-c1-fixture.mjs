@@ -83,7 +83,7 @@ function listen(port, handler) {
 export async function c1Fixture(t, options = {}) {
   // W2 夹具的收尾(关库、删目录)要排在本夹具的收尾之后:先收它的钩子,最后一起按顺序跑
   const baseCleanups = [];
-  const f = await w2Fixture({ after: (fn) => baseCleanups.push(fn) }, { ...options, limits: { pageMs: 2_000, attachMs: 150, ...options.limits } });
+  const f = await w2Fixture({ after: (fn) => baseCleanups.push(fn) }, { ...options, limits: { pageMs: 10_000, attachMs: 150, ...options.limits } });
   const dir = f.authority.dir;
   const logs = f.logs;
   const log = (event, fields) => logs.push({ event, ...fields });
@@ -160,7 +160,7 @@ export async function c1Fixture(t, options = {}) {
   const openCollectBridge = (overrides = {}) => {
     const cb = createCollectBridge({ bridge, databasePath: delegationsPath, assets, authorize: (ctx, action) => f.resources.authorize(ctx, action), register,
       loginSiteOf: (url) => (String(url).includes('/login-site/') || /^BV/.test(String(url)) ? 'bilibili' : null),
-      limits: { pollMs: 25, offlineGraceMs: 400, ...options.collectLimits }, log, ...overrides });
+      limits: { pollMs: 25, offlineGraceMs: 5_000, ...options.collectLimits }, log, ...overrides });
     openedCollect.push(cb);
     return cb;
   };

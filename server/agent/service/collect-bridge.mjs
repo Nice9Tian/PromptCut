@@ -485,7 +485,8 @@ export function createCollectBridge({ bridge, databasePath, assets, authorize, r
             return end('rejected', why, notDelegated(poll.why === 'result-invalid' ? 'receipt-invalid' : 'failed'));
           }
           if (['initiator-revoked', 'no-page'].includes(poll.why)) return end('fallback', 'initiator-offline', notDelegated('initiator-offline'));
-          // 页面一时连不上(断线重连、文档服务一时答不上):宽限内接着问
+          // 页面一时连不上(断线重连、文档服务一时答不上):宽限内接着问;整次委托的时限先到就按超时办
+          if (Number(now()) - started > limits.delegateMs) { await cancelPage(); return end('fallback', 'timeout', notDelegated('timeout')); }
           if (Number(now()) - lastSeen > limits.offlineGraceMs) return end('fallback', 'initiator-offline', notDelegated('initiator-offline'));
           continue;
         }
