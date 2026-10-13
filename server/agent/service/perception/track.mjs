@@ -255,12 +255,13 @@ const errorMessageOf = (code) => JOB_ERROR_MESSAGE[code] ?? `追踪失败(${code
  *   部署者配置的 Python 运行环境;`packageRoot` 是放着 `promptcut_*` 包的目录。null = 这台节点没配
  * @param {(context: object) => Promise<{ media: Array<{ id: string, kind?: string, hash?: string }> } | null>} [d.readProject]
  *   项目副本的只读视图;给了才能提前核「素材存在、是视频」和判轨迹是否过期
- * @param {{ enabled?: boolean, env?: Record<string, string> }} [d.install] 部署者开了才能装
+ * @param {{ enabled?: boolean, direct?: boolean, env?: Record<string, string> }} [d.install] 部署者开了才能装;没给 `egress` 时还要 `direct: true`(部署者声明节点层已管住这个进程的出网)才装
+ * @param {{ startProxy(): Promise<{ url: string, close(): Promise<void> }> } | null} [d.egress] 出网闸(`egress.mjs`):安装时 pip 只经它起的回环代理连网
  * @param {object} [d.limits]
  */
 export function createTrackTools({
   contextAccess, resources, jobs, assets, workspace, databasePath, results: resultsIn = null, python = null,
-  readProject = null, install = {}, limits: limitsIn = {}, now = Date.now,
+  readProject = null, install = {}, egress = null, limits: limitsIn = {}, now = Date.now,
 } = {}) {
   for (const [name, dep, methods] of [
     ['contextAccess', contextAccess, ['authorize']], ['resources', resources, ['register']],
@@ -503,14 +504,24 @@ export function createTrackTools({
 
   async function runInstallJob(context, jobId) {
     const cursor = cursorFor(context, jobId);
+    let proxy = null;
     activeJobs.add(jobId);
     try {
       await cursor.update({ state: 'running', stage: 'install', progress: 0.05 });
       const ws = await workspace(context);
       const tail = [];
+      // 模型触发的下载只经出网闸:pip 子进程的代理指向闸起的回环代理,别的网络它出不去
+      const env = { ...(install.env ?? {}) };
+      if (egress) {
+        proxy = await egress.startProxy();
+        Object.assign(env, {
+          HTTP_PROXY: proxy.url, HTTPS_PROXY: proxy.url, ALL_PROXY: proxy.url,
+          http_proxy: proxy.url, https_proxy: proxy.url, all_proxy: proxy.url, NO_PROXY: '', no_proxy: '',
+        });
+      }
       const outcome = await runPython(context, ws, ['install'], {
         timeoutMs: limits.installTimeoutMs,
-        env: install.env ?? {},
+        env,
         preamble: python?.requirements ? ['--requirements', python.requirements] : [],
         onEvent: (ev) => {
           if (ev.event === 'log' && typeof ev.line === 'string') {
@@ -540,6 +551,7 @@ export function createTrackTools({
       if (error?.detail) { try { store.setDetail(jobId, error.detail); } catch { /* 表已关 */ } }
       await finishWith(cursor, jobId, { state: error?.terminal ?? (code === 'RUN_CANCELLED' ? 'cancelled' : 'error'), stage: 'done', errorCode: code });
     } finally {
+      if (proxy) await proxy.close().catch(() => {});
       installing = null;
       activeJobs.delete(jobId);
     }
@@ -616,6 +628,12 @@ export function createTrackTools({
       };
     }
     if (!python?.executable) throw new TrackToolError('TRACK_UNCONFIGURED', '这台云节点没有配置运动追踪的 Python 运行环境。请告诉用户联系托管方。');
+    if (!egress && install.direct !== true) {
+      return {
+        ok: false, cloudUnavailable: true, code: 'TRACK_INSTALL_NO_EGRESS', started: false,
+        error: '这台云节点没有给安装配出网闸,运动追踪拓展不能由 Agent 触发下载。请告诉用户联系托管方在节点上装。',
+      };
+    }
     if (installing) {
       return { ok: true, started: false, alreadyRunning: true, jobId: installing, hint: '拓展正在安装,不要重复启动;用 track_status 看进度。' };
     }

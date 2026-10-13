@@ -351,10 +351,18 @@ test('P3-04 没装模型或依赖时的回应:每一种缺都说得清,没有「
     assert.equal(closedEnv.spawns.length, 0);
     await closedEnv.close();
 
-    const env = await buildTrackEnv(tt, { install: { enabled: true }, python: undefined });
+    const env = await buildTrackEnv(tt);
     const python = { ...env.pythonConfig, requirements };
-    const tracks = env.openTracks({ python, install: { enabled: true } });
     const ctx2 = env.access.trust(contextOf({ conversationId: 'conv_i' }));
+    // 开了安装但节点没给出网闸、部署者也没声明节点层管着出网:不装,说明原因,不起进程
+    const noGate = env.openTracks({ python, install: { enabled: true } });
+    const ungated = await noGate.call('track_install', {}, ctx2);
+    assert.equal(ungated.code, 'TRACK_INSTALL_NO_EGRESS');
+    assert.equal(env.spawns.length, 0);
+    // 给了出网闸:pip 子进程的代理指向闸起的回环代理,装完闸起的代理被关
+    const proxyLog = [];
+    const egress = { async startProxy() { proxyLog.push('start'); return { url: 'http://127.0.0.1:9', async close() { proxyLog.push('close'); } }; } };
+    const tracks = env.openTracks({ python, install: { enabled: true }, egress });
     const out = await tracks.call('track_install', { requirements: 'evil.txt', args: ['--index-url', 'http://evil.example'], pip: 'x' }, ctx2);
     assert.equal(out.started, true);
     const duplicate = await tracks.call('track_install', {}, ctx2);
@@ -369,6 +377,10 @@ test('P3-04 没装模型或依赖时的回应:每一种缺都说得清,没有「
     assert.deepEqual(argv.filter((a) => a !== requirements && !a.startsWith(env.root) && a !== runtime.ffmpeg),
       ['-m', 'promptcut_track', '--pylibs', '--models', '--ffmpeg', '--requirements', 'install']);
     assert.ok(!argv.some((a) => /evil|index-url/.test(a)));
+    const installEnv = env.spawns.find((s) => s.args.includes('install')).options.env;
+    assert.equal(installEnv.HTTPS_PROXY, 'http://127.0.0.1:9');
+    assert.equal(installEnv.NO_PROXY, '');
+    assert.deepEqual(proxyLog, ['start', 'close'], '出网闸的代理起一次、用完关');
     assert.ok(fs.existsSync(path.join(env.root, 'pylibs')), 'pip --target 的目录是部署配置给的那个');
     await tracks.close('end');
     await env.close();

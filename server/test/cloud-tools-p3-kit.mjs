@@ -247,7 +247,7 @@ export async function buildTrackEnv(t, { access = makeAccess(), runtime = findTe
     const original = ws.spawn;
     ws.spawn = (command, args, options) => {
       const child = original(command, args, options);
-      spawns.push({ command, args: [...args], pid: child.pid, child });
+      spawns.push({ command, args: [...args], options, pid: child.pid, child });
       return child;
     };
     return ws;
