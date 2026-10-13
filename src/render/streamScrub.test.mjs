@@ -107,7 +107,24 @@ globalThis.VideoDecoder = FakeDecoder;
 globalThis.EncodedVideoChunk = class { constructor(o) { this.type = o.type; this.timestamp = o.timestamp; this.duration = o.duration; this.data = Uint8Array.from(o.data); } };
 globalThis.CSS = { escape: (s) => s };
 
-/* ---------------------------------------------------------------- 假的画布(WebGL 只记下画了哪一帧) */
+/* ---------------------------------------------------------------- 假的画布(只记下画了哪一帧) */
+
+/*
+ * 全部流平面共用一个 WebGL 上下文,建在一块离屏画布上(`streamPlayer.ts` 的 `SharedGl`):假的只记下最近上传的是哪一帧;
+ * 平面自己是 2D 画布,`drawImage` 取走时把那一帧记成它画的。
+ */
+const sharedGl = { last: null, contexts: 0 };
+globalThis.OffscreenCanvas = class {
+  constructor(w, h) { this.width = w; this.height = h; }
+  getContext() {
+    sharedGl.contexts++;
+    return new Proxy({
+      getShaderParameter: () => true, getProgramParameter: () => true, createShader: () => ({}), createProgram: () => ({}),
+      createBuffer: () => ({}), createTexture: () => ({}), getAttribLocation: () => 0, getUniformLocation: () => ({}), getExtension: () => null,
+      texImage2D: (...a) => { sharedGl.last = a[a.length - 1]; },
+    }, { get: (t, k) => (k in t ? t[k] : typeof k === 'string' && /^[A-Z_0-9]+$/.test(k) ? 0 : () => {}) });
+  }
+};
 
 function fakeCanvas() {
   const canvas = { draws: [], clears: 0, width: 0, height: 0, parentElement: null,
@@ -115,8 +132,8 @@ function fakeCanvas() {
   const gl = new Proxy({
     getShaderParameter: () => true, getProgramParameter: () => true, createShader: () => ({}), createProgram: () => ({}),
     createBuffer: () => ({}), createTexture: () => ({}), getAttribLocation: () => 0, getUniformLocation: () => ({}), getExtension: () => null,
-    texImage2D: (...a) => { canvas.draws.push(a[a.length - 1]); },
-    clear: () => { canvas.clears++; },
+    drawImage: () => { canvas.draws.push(sharedGl.last); },
+    clearRect: () => { canvas.clears++; },
   }, { get: (t, k) => (k in t ? t[k] : typeof k === 'string' && /^[A-Z_0-9]+$/.test(k) ? 0 : () => {}) });
   canvas.getContext = () => gl;
   return canvas;

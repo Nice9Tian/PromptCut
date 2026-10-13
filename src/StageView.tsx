@@ -411,7 +411,9 @@ export default function StageView() {
      */
     /** 某条流的画面有无变了(异步解出第一帧、留到时限清空);实现在下面,等用到的函数都定义了再接上 */
     let onStreamShowing: () => void = () => {};
-    const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}), onShowingChange: () => onStreamShowing() });
+    const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}), onShowingChange: () => onStreamShowing(),
+      // 流平面共用的 WebGL 上下文建在一块不在文档里的离屏画布上,它丢了的事件到不了下面 `document` 上的监听:由播放器直接报
+      onContextLost: () => { if (ONLINE) postStageTrouble("webglcontextlost"); } });
     // 占位符的几何首选流清单的实体框(product/rendering.md「兜底顺序」;`placeholderHost` 的 `geometryFor`)
     setStreamBoxSource((clipId) => player.boxOf(clipId));
 

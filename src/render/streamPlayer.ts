@@ -497,18 +497,52 @@ void main(){
   gl_FragColor = vec4(min(rgb, vec3(a)), a);
 }`;
 
-class PlaneCompositor {
-  readonly canvas: HTMLCanvasElement;
-  private gl: WebGLRenderingContext;
-  private tex: WebGLTexture;
-  private uAlphaTop: WebGLUniformLocation | null;
-  private uHalf: WebGLUniformLocation | null;
-  private blank = true;
-  constructor(canvas: HTMLCanvasElement) {
-    this.canvas = canvas;
-    const gl = canvas.getContext("webgl", { premultipliedAlpha: true, alpha: true, preserveDrawingBuffer: true, antialias: false });
-    if (!gl) throw new Error("轨道流拿不到 WebGL 上下文");
-    this.gl = gl;
+/** 共用的那块离屏画布:建不出来、或丢了上下文迟迟不还时,隔这么久(真实毫秒)再重建一次 */
+export const GL_RETRY_MS = 1000;
+
+type GlCanvas = OffscreenCanvas | HTMLCanvasElement;
+const newGlCanvas = (): GlCanvas | null => {
+  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(2, 2);
+  if (typeof document !== "undefined") return document.createElement("canvas");
+  return null;
+};
+
+/**
+ * **全部流平面共用的一个 WebGL 上下文**(一台舞台一个,`StreamPlayer` 拿着)。
+ *
+ * 为什么不是每块平面一个:浏览器一页最多给 16 个 WebGL 上下文,超出的把最早建的那个丢掉、不还
+ * (`docs/reports/AGENT-rr-merged-eval.md` 第 4 节:24 层丢 8 个、30 层丢 14 个,丢了的层一帧没画);
+ * 舞台里 canvas 卡的共享渲染器、卡片自己的 WebGL 也占名额。
+ *
+ * 做法:一块**不挂进文档**的离屏画布建上下文;每画一帧,把这一帧上传成纹理、照原来的着色器拆两半画到离屏画布的左上角
+ * (`rect.w × rect.h`,一比一),平面自己的 2D 画布当场 `drawImage` 取走。选它而不选 `transferToImageBitmap` 加
+ * `bitmaprenderer`:后者每次交出去都要给离屏画布重新分配一块后备缓冲,各平面尺寸不同还得每帧改离屏画布的尺寸;
+ * 2D 取走是显卡上的一次拷贝,离屏画布只长不缩。画面与每块平面一个上下文时逐像素相同(同一份报告第 4 节,差 0):
+ * 离屏画布按预乘色输出(`premultipliedAlpha: true`),2D 画布内部存的也是预乘色,先清空再一比一不缩放地画上去,数值原样过去。
+ *
+ * 上下文丢了(显卡进程重启、名额被别的画布挤掉):平面的 2D 画布不受影响,上一张画面还在;这期间新的一帧画不上,
+ * 照「这一拍画不出来」办(留着上一张、到时占位符)。浏览器还回来(`webglcontextrestored`)就重建着色器和纹理;
+ * `GL_RETRY_MS` 以后还没还(被挤掉的不还)就扔掉这块离屏画布另建一块。两种情况都叫播放器把这一帧再走一遍(暂停着没有下一拍)。
+ */
+class SharedGl {
+  private canvas: GlCanvas | null = null;
+  private gl: WebGLRenderingContext | null = null;
+  private tex: WebGLTexture | null = null;
+  private uAlphaTop: WebGLUniformLocation | null = null;
+  private uHalf: WebGLUniformLocation | null = null;
+  private lostAt: number | null = null;
+  private failedAt: number | null = null;
+  private onLost: () => void;
+  private onBack: () => void;
+  stats = { creates: 0, losses: 0, restores: 0, draws: 0, lastError: "" };
+
+  constructor(onLost: () => void, onBack: () => void) {
+    this.onLost = onLost;
+    this.onBack = onBack;
+  }
+
+  /** 着色器、顶点、纹理(新建上下文和上下文还回来以后各做一次) */
+  private setup(gl: WebGLRenderingContext): void {
     const shader = (type: number, src: string) => {
       const s = gl.createShader(type)!;
       gl.shaderSource(s, src);
@@ -539,6 +573,102 @@ class PlaneCompositor {
     this.uAlphaTop = gl.getUniformLocation(prog, "alphaTop");
     this.uHalf = gl.getUniformLocation(prog, "half_");
   }
+
+  private drop(): void {
+    this.canvas = null;
+    this.gl = null;
+    this.tex = null;
+    this.lostAt = null;
+  }
+
+  private ensure(): WebGLRenderingContext | null {
+    const now = realNow();
+    if (this.gl && this.lostAt === null) return this.gl;
+    if (this.gl) {
+      // 丢了:先等浏览器还;等够了还没还(被别的画布挤掉的不还)就另建
+      if (now - (this.lostAt as number) < GL_RETRY_MS) return null;
+      this.drop();
+    }
+    if (this.failedAt !== null && now - this.failedAt < GL_RETRY_MS) return null;
+    try {
+      const canvas = newGlCanvas();
+      const gl = canvas?.getContext("webgl", { premultipliedAlpha: true, alpha: true, preserveDrawingBuffer: true, antialias: false }) as WebGLRenderingContext | null;
+      if (!canvas || !gl) throw new Error("轨道流拿不到 WebGL 上下文");
+      this.setup(gl);
+      const target = canvas as unknown as Partial<EventTarget>;
+      target.addEventListener?.("webglcontextlost", (e) => {
+        if (this.canvas !== canvas) return;
+        e.preventDefault();
+        this.lostAt = realNow();
+        this.stats.losses++;
+        this.onLost();
+      });
+      target.addEventListener?.("webglcontextrestored", () => {
+        if (this.canvas !== canvas) return;
+        try { this.setup(gl); this.lostAt = null; this.stats.restores++; }
+        catch (e) { this.stats.lastError = String((e as Error)?.message || e); this.drop(); }
+        this.onBack();
+      });
+      this.canvas = canvas;
+      this.gl = gl;
+      this.failedAt = null;
+      this.stats.creates++;
+      return gl;
+    } catch (e) {
+      this.failedAt = now;
+      this.stats.lastError = String((e as Error)?.message || e);
+      return null;
+    }
+  }
+
+  /**
+   * 把一帧(上下拼合)拆两半、合成预乘色,画到离屏画布左上角的 `w × h`(一比一)。回离屏画布,调用方**当场**取走那一块;
+   * 画不了(没有上下文、上下文丢着)回 null。`w`、`h` 是这一帧所在变体的矩形的宽高。
+   */
+  render(frame: VideoFrame, w: number, h: number): GlCanvas | null {
+    const gl = this.ensure();
+    const c = this.canvas;
+    if (!gl || !c) return null;
+    // 只长不缩:改 WebGL 画布的尺寸要重新分配后备缓冲
+    if (c.width < w) c.width = w;
+    if (c.height < h) c.height = h;
+    const total = frame.displayHeight || frame.codedHeight;
+    // WebGL 的原点在左下:画布左上角的 w × h
+    gl.viewport(0, c.height - h, w, h);
+    gl.uniform1f(this.uAlphaTop, (h + 8) / total);
+    gl.uniform1f(this.uHalf, h / total);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    if (typeof gl.isContextLost === "function" && gl.isContextLost() === true) return null;
+    this.stats.draws++;
+    return c;
+  }
+
+  /** 舞台退到 `back`:离屏画布缩回最小(放掉后备缓冲),上下文留着,下一次当 `front` 不用重建 */
+  shrink(): void {
+    const c = this.canvas;
+    if (!c || this.lostAt !== null) return;
+    if (c.width !== 2) c.width = 2;
+    if (c.height !== 2) c.height = 2;
+  }
+
+  get state(): "none" | "ready" | "lost" { return !this.gl ? "none" : this.lostAt !== null ? "lost" : "ready"; }
+}
+
+/** 一块流平面:自己只有一个 2D 上下文,合成在共用的 `SharedGl` 里做 */
+class PlaneCompositor {
+  readonly canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private shared: SharedGl;
+  private blank = true;
+  constructor(canvas: HTMLCanvasElement, shared: SharedGl) {
+    this.canvas = canvas;
+    this.shared = shared;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("轨道流平面拿不到 2D 上下文");
+    this.ctx = ctx;
+  }
   /** 画布的位置和尺寸 = 流的矩形上界(平面坐标)。只在变了的时候写 */
   place(bound: StreamRect): void {
     const c = this.canvas;
@@ -548,37 +678,24 @@ class PlaneCompositor {
     const want: Record<string, string> = { left: `${bound.x}px`, top: `${bound.y}px`, width: `${bound.w}px`, height: `${bound.h}px` };
     for (const [k, v] of Object.entries(want)) if (s.getPropertyValue(k) !== v) s.setProperty(k, v);
   }
-  /** 画一帧。`rect` 是这一帧所在变体的矩形(平面坐标),`bound` 是画布覆盖的矩形 */
-  draw(frame: VideoFrame, rect: StreamRect, bound: StreamRect): void {
-    const gl = this.gl;
-    const total = frame.displayHeight || frame.codedHeight;
-    const H = rect.h;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    // WebGL 的原点在左下
-    const vx = rect.x - bound.x;
-    const vy = bound.y + bound.h - (rect.y + rect.h);
-    gl.viewport(vx, vy, rect.w, rect.h);
-    gl.uniform1f(this.uAlphaTop, (H + 8) / total);
-    gl.uniform1f(this.uHalf, H / total);
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  /** 画一帧。`rect` 是这一帧所在变体的矩形(平面坐标),`bound` 是画布覆盖的矩形。共用的上下文这一刻画不了回 false,画布上原来那一张不动 */
+  draw(frame: VideoFrame, rect: StreamRect, bound: StreamRect): boolean {
+    const src = this.shared.render(frame, rect.w, rect.h);
+    if (!src) return false;
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    // 一比一、不缩放:离屏画布左上角的 rect.w × rect.h 原样搬到平面上这一帧的矩形里
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(src, 0, 0, rect.w, rect.h, rect.x - bound.x, rect.y - bound.y, rect.w, rect.h);
     this.blank = false;
+    return true;
   }
   clear(): void {
     if (this.blank) return;
-    const gl = this.gl;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.blank = true;
   }
   get isBlank(): boolean { return this.blank; }
-  dispose(): void {
-    try { this.gl.getExtension("WEBGL_lose_context")?.loseContext(); } catch { /* 已经丢了 */ }
-  }
 }
 
 /* ======================================================================== *
@@ -669,8 +786,7 @@ class StreamTrack {
 
   private ensureCompositor(): PlaneCompositor | null {
     if (this.compositor && this.compositor.canvas === this.canvas) return this.compositor;
-    this.compositor?.dispose();
-    try { this.compositor = new PlaneCompositor(this.canvas); }
+    try { this.compositor = new PlaneCompositor(this.canvas, this.player.gl); }
     catch (e) { this.compositor = null; this.stats.lastError = String((e as Error)?.message || e); }
     return this.compositor;
   }
@@ -890,7 +1006,8 @@ class StreamTrack {
     const compositor = this.ensureCompositor();
     if (!rect || !compositor || !this.manifest || !this.planeFits) return false;
     compositor.place(this.manifest.bound);
-    compositor.draw(frame, rect, this.manifest.bound);
+    // 共用的上下文这一刻画不了(丢着):当这一拍没画上,留着上一张
+    if (!compositor.draw(frame, rect, this.manifest.bound)) return false;
     const was = this.lastDrawn;
     this.lastDrawn = f;
     this.stats.drawn++;
@@ -928,7 +1045,7 @@ class StreamTrack {
     const compositor = shown ? this.ensureCompositor() : null;
     if (!shown || !rect || !compositor || !this.manifest || !this.planeFits) return false;
     compositor.place(this.manifest.bound);
-    compositor.draw(shown.frame, rect, this.manifest.bound);
+    if (!compositor.draw(shown.frame, rect, this.manifest.bound)) return false;
     this.lastDrawn = shown.f;
     this.coverSnapshot(true);
     return true;
@@ -1213,7 +1330,6 @@ class StreamTrack {
     try { if (this.decoder && this.decoder.state !== "closed") this.decoder.close(); } catch { /* 已经关了 */ }
     this.decoder = null;
     this.compositor?.clear();
-    this.compositor?.dispose();
     this.compositor = null;
     this.segments.clear();
   }
@@ -1250,18 +1366,38 @@ export class StreamPlayer {
   private lastFrame: number | null = null;
   private onShowingChange: (() => void) | null;
   private showingQueued = false;
+  private onContextLost: (() => void) | null;
+  /** 全部流平面共用的那个 WebGL 上下文(头一次真的要画时才建;`back` 角色的舞台从不画,也就不建) */
+  readonly gl: SharedGl;
 
-  constructor({ root, source = new HttpStreamSource(), onShowingChange }: {
+  constructor({ root, source = new HttpStreamSource(), onShowingChange, onContextLost }: {
     root: () => Element | null; source?: StreamSource;
     /**
      * 某条流的画面从无到有、或从有到无(异步解出来了、留到时限清空了)时叫一次;同一个微任务里只叫一次。
      * 暂停着没有下一拍:宿主靠它撤占位符、把等着第一张画面的活子树藏起来。
      */
     onShowingChange?: () => void;
+    /** 共用的 WebGL 上下文丢了(那块画布不在文档里,事件到不了 `document`;在线页面靠它报「运行中出事了」) */
+    onContextLost?: () => void;
   }) {
     this.root = root;
     this.source = source;
     this.onShowingChange = onShowingChange ?? null;
+    this.onContextLost = onContextLost ?? null;
+    /*
+     * 共用的上下文丢了 / 回来了:把这一帧再走一遍(暂停着没有下一拍)。丢了以后浏览器不一定还(被别的画布挤掉的不还),
+     * 所以丢的那一刻另排一个真定时器,到 `GL_RETRY_MS` 再走一遍 —— 那时 `SharedGl` 会另建一块。
+     */
+    this.gl = new SharedGl(
+      () => { this.onContextLost?.(); realTimeout(() => this.represent(), GL_RETRY_MS + 20); },
+      () => this.represent(),
+    );
+  }
+
+  /** 把上一拍要的那一帧再走一遍(共用的上下文回来了) */
+  private represent(): void {
+    if (this.stopped || this.proxy || this.lastFrame === null) return;
+    for (const track of this.tracks.values()) track.present(this.lastFrame);
   }
 
   /** 轨道报:画面有无变了。攒到微任务里叫宿主(`present` 的循环里不重入宿主) */
@@ -1379,6 +1515,7 @@ export class StreamPlayer {
     this.stopped = true;
     this.planes = [];
     this.disposeAll();
+    this.gl.shrink();
   }
 
   /**
@@ -1423,7 +1560,7 @@ export class StreamPlayer {
 
   diag() {
     return { stopped: this.stopped, proxy: this.proxy, fps: this.fps, lastFrame: this.lastFrame, planes: this.planes.length,
-      heldBytes: this.heldBytes(), pushed: { blocks: this.pushed.size, bytes: this.pushed.bytes },
+      heldBytes: this.heldBytes(), gl: { state: this.gl.state, ...this.gl.stats }, pushed: { blocks: this.pushed.size, bytes: this.pushed.bytes },
       tracks: [...this.tracks.values()].map((t) => t.diag()) };
   }
 }
