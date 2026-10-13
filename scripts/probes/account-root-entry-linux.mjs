@@ -17,7 +17,9 @@
  *        --user <系统用户>     任务进程用哪个已有的非 root 用户跑，缺省 nobody（脚本不建用户）
  *        --protect a.service,b.service   点名几个现有单元：跑前跑后它们的主进程号与重启次数必须一样，不一样算失败
  *        --keep-on-failure     有检查不过时不清理，留给人看（之后用 --cleanup <编号> 清）
- *        --cleanup <编号>      只做清理：把某一次没清干净的（编号在那一次开头的 `probe id` 一行里）清掉，可以重复跑
+ *        --cleanup <编号>      只做清理：把某一次没清干净的（编号在那一次开头的 `probe id` 一行里；输出丢了的话 `ls -d /run/pc-claude-probe-*`
+ *                              看目录名的后八位）清掉，可以重复跑
+ *      建议放在 tmux / screen 里跑：SSH 掉线时脚本收到 SIGHUP 会照样清理，但你看不到输出。Ctrl-C（SIGINT）、SIGTERM 同样先清理再退。
  *   4. 跑完删掉第 2 步的目录：rm -rf /root/pc-claude-probe-src
  *
  * ── 它会碰什么（全部带本次的编号 <id>，8 位十六进制）──────────────────────────────────
@@ -27,12 +29,12 @@
  *   slice     pcclaudeprobe<id><代>n<随机>.slice    每一代一个临时 slice，cgroup 在 /sys/fs/cgroup/ 下
  *             （slice 名里不能有连字符——连字符在 systemd 里表示层级，发布器也不许——所以前缀是 pcclaudeprobe）
  *   端口      回环上向系统要来的三个空闲端口（一个给任务进程听，另两个故意没人听）
- *   全局动作  `systemctl daemon-reload`（发布器每开一代都做一次；只重读单元文件，不重启任何服务）
+ *   全局动作  `systemctl daemon-reload` 共 7 次：布置 1 次、发布器每开一代 1 次（共 5 代）、清理 1 次。只重读单元文件，不重启任何服务
  * 不碰：任何现有单元、端口、数据目录、用户；不改防火墙、网络、时间。
  *
  * ── 输出 ────────────────────────────────────────────────────────────────────────────
  *   每一步一行：`ok <序号> <名字>`，或 `FAIL <名字> <原因码>`（后面跟几行 `  diag …` 现场）。一步不过，后面的记 `skip`，直接去清理。
- *   末尾：`cleanup …` 若干行、`left …` 一行（清理后还剩什么，全空才算干净）、
+ *   末尾：`cleanup …` 若干行、`left …` 一行（清理后还剩什么，全空才算干净；有一步超时或被信号打断时会等后台落定、清理两遍再盘点）、
  *   最后一行 `PASS account-root-entry-linux <过的数>/<总数>` 或 `FAIL account-root-entry-linux <过的数>/<总数>`。退出码 0 / 1。
  *
  * ── 核的是什么 ──────────────────────────────────────────────────────────────────────
@@ -61,7 +63,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createPublicKey, generateKeyPairSync, randomBytes, sign, X509Certificate } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { PREFIX, PROBE_SOURCE_PATHS, parseProbeArguments, probePlan, requireLinuxRoot, realSystem, leftovers, cleanup } from '../../server/agent-service/account-root-probe-support.mjs';
+import { PREFIX, PROBE_SOURCE_PATHS, parseProbeArguments, probePlan, requireLinuxRoot, realSystem, finishProbe } from '../../server/agent-service/account-root-probe-support.mjs';
 
 const TOTAL = 11;
 const here = path.dirname(fileURLToPath(import.meta.url)), REPO = path.resolve(here, '..', '..');
@@ -71,7 +73,8 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /* ------------------------------ 以下只在 Linux root 上走得到 ------------------------------ */
 
-const say = text => process.stdout.write(`${text}\n`);
+const say = text => { try { process.stdout.write(`${text}\n`); } catch { /* 终端已经断开 */ } };
+const SIGNALS = ['SIGINT', 'SIGHUP', 'SIGTERM'];
 const freePorts = async count => {
   const servers = await Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => { const server = net.createServer();
     server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve(server)); })));
@@ -84,24 +87,31 @@ async function main(options) {
   const sys = realSystem();
   if (options.cleanupId) {
     const plan = probePlan(options.cleanupId);
-    for (const row of await cleanup(plan, sys)) say(`cleanup ${row}`);
-    const left = await leftovers(plan, sys);
-    say(`left ${JSON.stringify(left)}`);
-    return Object.values(left).every(list => list.length === 0) ? 0 : 1;
+    return (await finishProbe({ plan, sys, say })).clean ? 0 : 1;
   }
   const plan = probePlan(randomBytes(4).toString('hex'));
   say(`probe id ${plan.id}  (dir ${plan.dir}, unit ${plan.unit}, slices ${plan.namespace}*.slice, user ${options.user})`);
-  let passed = 0, failedAt = null, ports = [], child = null;
-  const diag = [];
+  // 发布器每开一代做一次 daemon-reload（只重读单元文件，不重启任何服务）；这支脚本一共开五代
+  say('note 这次会执行 systemctl daemon-reload 共 7 次：布置 1 次、每开一代 1 次（共 5 代）、清理 1 次');
+  let passed = 0, failedAt = null, ports = [], child = null, timedOut = false, interrupted = null, interrupt = () => {};
+  const diag = [], running = new Set();
+  // Ctrl-C、终端断开（SSH 掉线）、被叫停：不再往下做，直接去清理。清理和正常结束走的是同一段
+  const interruption = new Promise((_, reject) => { interrupt = name => { if (interrupted) return; interrupted = name; failedAt ??= `interrupted-by-${name}`;
+    say(`FAIL interrupted ${name}`); reject(Object.assign(new Error('interrupted'), { code: 'interrupted' })); }; });
+  interruption.catch(() => {});
+  for (const name of SIGNALS) process.on(name, () => interrupt(name));
   const check = async (name, fn) => {
     if (failedAt) { say(`skip ${name}`); return; }
+    const work = fn(); work.catch(() => {}); running.add(work); void work.finally(() => running.delete(work)).catch(() => {});
     try {
       // 每一步最多等三分钟（发布器自己等 cgroup 空最多两分钟）；到时就算不过，去清理
-      const work = fn(); work.catch(() => {});
       let timer;
-      await Promise.race([work, new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error('check-timeout'), { code: 'check-timeout' })), 180_000); })]).finally(() => clearTimeout(timer));
+      await Promise.race([work, interruption, new Promise((_, reject) => { timer = setTimeout(() => { timedOut = true; reject(Object.assign(new Error('check-timeout'), { code: 'check-timeout' })); }, 180_000); })]).finally(() => clearTimeout(timer));
       passed += 1; say(`ok ${passed} ${name}`);
-    } catch (error) { failedAt = name; say(`FAIL ${name} ${codeOf(error)}`); for (const row of diag.splice(0)) say(`  diag ${row}`); await dump().catch(() => {}); }
+    } catch (error) {
+      if (interrupted) { say(`skip ${name}`); return; }
+      failedAt = name; say(`FAIL ${name} ${codeOf(error)}`); for (const row of diag.splice(0)) say(`  diag ${row}`); await dump().catch(() => {});
+    }
   };
   const need = (condition, code) => { if (!condition) fail(code); };
   // 现场：单元的状态、最近的日志、登记目录里有什么。只读。
@@ -174,6 +184,7 @@ async function main(options) {
       serviceIdentity: 'agent', uid, unit: plan.unit, clientFingerprint256: pin('controller'), serverFingerprint256: pin('identity'),
       closurePolicy: { kind: 'systemd-slice', unitNamespace: plan.namespace, cgroupRoot: '/sys/fs/cgroup', placement: 'direct-child', singleEpoch: true } };
     const rendered = renderTaskUnit({ slot: plan.slotId, user: options.user, group, dir: plan.repoDir, node: process.execPath, settingsFile: plan.settingsFile, heapMb: 512, unit: plan.unit });
+    need(!interrupted, 'interrupted');
     fs.writeFileSync(plan.unitFile, rendered.text, { mode: 0o644, flag: 'wx' });
     need((await sys.systemctl(['daemon-reload'])).code === 0, 'setup-daemon-reload');
     const controllerFiles = { keyFile: `${plan.pkiDir}/controller.key`, certFile: `${plan.pkiDir}/controller.crt`, caFile: `${plan.pkiDir}/ca.crt` };
@@ -371,19 +382,21 @@ async function main(options) {
   } catch (error) { say(`note 现有单元的前后对比没做成：${codeOf(error)}`); }
 
   // ---------- 清理 ----------
+  // 被信号打断、或者有一步超时：那一步可能还在后台跑。清理一遍、等它落定（最多 40 秒）、再清理再盘点一遍。
   if (child) { try { child.kill('SIGKILL'); } catch { /* 已经退出 */ } }
-  if (failedAt && options.keepOnFailure) say(`cleanup skipped (--keep-on-failure)。之后清理：node scripts/probes/account-root-entry-linux.mjs --cleanup ${plan.id}`);
-  else for (const row of await cleanup(plan, sys)) say(`cleanup ${row}`);
-  const left = await leftovers(plan, sys, { ports });
-  say(`left ${JSON.stringify(left)}`);
-  const clean = Object.values(left).every(list => list.length === 0);
+  const settle = () => Promise.race([Promise.allSettled([...running]), delay(40_000)]).then(() => delay(1_000));
+  const { clean } = await finishProbe({ plan, sys, say, ports, keep: Boolean(failedAt && options.keepOnFailure && !interrupted),
+    unsettled: timedOut || interrupted !== null, settle });
+  for (const name of SIGNALS) process.removeAllListeners(name);
   const good = !failedAt && !disturbed && passed === TOTAL && clean;
-  say(`${good ? 'PASS' : 'FAIL'} account-root-entry-linux ${passed}/${TOTAL}${clean ? '' : ' (清理后还有剩余，见 left 一行)'}`);
+  say(`${good ? 'PASS' : 'FAIL'} account-root-entry-linux ${passed}/${TOTAL}${clean ? '' : ' (清理后还有剩余，见 left 一行)'}${interrupted ? ` (被 ${interrupted} 打断)` : ''}`);
   return good ? 0 : 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   let code = 1;
+  // 终端断开（SIGHUP）以后标准输出写不出去：不让它变成未处理的错，清理照做
+  process.stdout.on('error', () => {});
   try {
     const options = parseProbeArguments(process.argv.slice(2));
     requireLinuxRoot();

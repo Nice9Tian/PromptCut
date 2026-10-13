@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PREFIX, SLICE_PREFIX, PROBE_SOURCE_PATHS, parseProbeArguments, probePlan, requireLinuxRoot, cleanup, leftovers } from '../agent-service/account-root-probe-support.mjs';
+import { PREFIX, SLICE_PREFIX, PROBE_SOURCE_PATHS, parseProbeArguments, probePlan, requireLinuxRoot, cleanup, leftovers, finishProbe } from '../agent-service/account-root-probe-support.mjs';
 import { renderTaskUnit, parseTaskUnitArguments } from '../agent-service/account-task-unit.mjs';
 
 // 节点自检脚本（scripts/probes/account-root-entry-linux.mjs）里在这台机器上验得到的部分：参数、名字、清理的幂等、非 Linux 明确拒绝；
@@ -120,6 +120,46 @@ test('清理：只动本次编号的东西；可以重复跑；一步出错接�
   const gone = fakeSystem(plan); gone.state.units.set(plan.unit, 'not-found inactive'); gone.state.units.delete(gone.slice); gone.state.cgroups.delete(gone.slice);
   gone.state.files.clear(); gone.state.processes.delete(4242);
   assert.deepEqual((await leftovers(plan, gone.sys)).units, []);
+});
+
+test('收场：有一步没等到结果时，清理一遍、等后台落定、再清理再盘点；后台晚造出来的东西不会漏报', async () => {
+  const plan = probePlan('0a1b2c3d');
+  // 正常收场：一遍
+  const normal = fakeSystem(plan), said = [];
+  const done = await finishProbe({ plan, sys: normal.sys, say: text => said.push(text), ports: [] });
+  assert.deepEqual({ clean: done.clean, passes: done.passes }, { clean: true, passes: 1 });
+  assert.equal(said.at(-1), 'left {"units":[],"unitFiles":[],"cgroups":[],"processes":[],"listeners":[],"directory":[]}');
+  assert.equal(said.some(text => text.startsWith('cleanup(第')), false);
+
+  // 某一步超时或被信号打断：那一步的发布器事务还在后台跑。第一遍清理之后它又起了单元、建了新的 slice、写了 drop-in
+  const late = fakeSystem(plan), lines = [], lateSlice = `${plan.namespace}4n${'cd'.repeat(16)}.slice`;
+  let settled = 0;
+  const result = await finishProbe({ plan, sys: late.sys, say: text => lines.push(text), unsettled: true, settle: async () => { settled += 1;
+    late.state.units.set(plan.unit, 'loaded active'); late.state.units.set(lateSlice, 'loaded active'); late.state.cgroups.add(lateSlice);
+    late.state.files.add(plan.dropInDir); late.state.files.add(`${plan.dropInDir}/90-promptcut-root-slice.conf`); late.state.files.add(plan.unitFile); } });
+  assert.equal(settled, 1); assert.deepEqual({ clean: result.clean, passes: result.passes }, { clean: true, passes: 2 });
+  assert.ok(lines.includes(`cleanup(第2遍) stop ${lateSlice}: stopped`) && lines.includes(`cleanup(第2遍) stop ${plan.unit}: stopped`), lines.join(' | '));
+  assert.equal(lines.filter(text => text.startsWith('left ')).length, 1, '「还剩什么」只在最后印一次，印的是落定以后的');
+  assert.equal(late.state.units.has(lateSlice), false);
+
+  // 清不掉的：最多三遍，如实报还剩什么、不算干净
+  const stuck = fakeSystem(plan, { failing: [`stop ${plan.unit}`, `unlink ${plan.unitFile}`] }), tail = [];
+  const failed = await finishProbe({ plan, sys: stuck.sys, say: text => tail.push(text) });
+  assert.deepEqual({ clean: failed.clean, passes: failed.passes }, { clean: false, passes: 3 });
+  assert.deepEqual(failed.left.units, [plan.unit]); assert.deepEqual(failed.left.unitFiles, [plan.unitFile]);
+
+  // --keep-on-failure：不清理，只盘点，并告诉人之后怎么清
+  const kept = fakeSystem(plan), notes = [];
+  const keep = await finishProbe({ plan, sys: kept.sys, say: text => notes.push(text), keep: true });
+  assert.equal(keep.clean, false); assert.equal(keep.passes, 0); assert.equal(kept.calls.some(call => call[0] !== 'systemctl' || call[1] !== 'list-units'), false);
+  assert.match(notes[0], /--cleanup 0a1b2c3d/);
+
+  // 脚本接了 Ctrl-C、终端断开、被叫停三种信号，收场走同一段；开头说明 daemon-reload 的次数
+  const source = fs.readFileSync(script, 'utf8');
+  for (const signal of ['SIGINT', 'SIGHUP', 'SIGTERM']) assert.ok(source.includes(`'${signal}'`), signal);
+  assert.match(source, /for \(const name of SIGNALS\) process\.on\(name, \(\) => interrupt\(name\)\)/);
+  assert.match(source, /finishProbe\(\{ plan, sys, say, ports/);
+  assert.match(source, /daemon-reload 共 7 次/);
 });
 
 test('任务槽的单元模板：占位符都填上，发布器逐项核的那几样原样在；不许是 root、不许带空格和转义；模板被改坏就拒', () => {

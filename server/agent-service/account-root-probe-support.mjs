@@ -117,3 +117,41 @@ export async function cleanup(plan, sys) {
   return rows;
 }
 
+
+/**
+ * 收场：清理，然后盘点还剩什么。可以被信号打断后调、也可以在某一步超时后调。
+ * 有一步没等到结果（超时、被打断）时，那一步的发布器事务可能还在后台跑、还会接着造东西（起单元、建 slice）：
+ * 所以清理一遍以后先等它落定（`settle`，有时限），**再清理一遍、再盘点一遍**；盘点不干净也再来，最多三遍。
+ * 不这样做，「还剩什么」那一行可能在后台事务造出东西之前就印出来了，漏报。
+ * @param {object} o
+ * @param {object} o.plan `probePlan` 的结果
+ * @param {object} o.sys `realSystem()` 那样的一组系统调用
+ * @param {(text: string) => void} o.say
+ * @param {number[]} [o.ports]
+ * @param {boolean} [o.keep] 不清理（--keep-on-failure），只盘点
+ * @param {boolean} [o.unsettled] 有一步没等到结果
+ * @param {() => Promise<void>} [o.settle] 等后台那一步落定（调用方给时限）
+ * @returns {Promise<{ left: object, clean: boolean, passes: number }>}
+ */
+export async function finishProbe({ plan, sys, say, ports = [], keep = false, unsettled = false, settle = async () => {} }) {
+  const empty = left => Object.values(left).every(list => list.length === 0);
+  if (keep) {
+    say(`cleanup skipped (--keep-on-failure)。之后清理：node scripts/probes/account-root-entry-linux.mjs --cleanup ${plan.id}`);
+    const left = await leftovers(plan, sys, { ports });
+    say(`left ${JSON.stringify(left)}`);
+    return { left, clean: empty(left), passes: 0 };
+  }
+  let left = null, passes = 0;
+  for (;;) {
+    passes += 1;
+    const label = passes === 1 ? 'cleanup' : `cleanup(第${passes}遍)`;
+    for (const row of await cleanup(plan, sys)) say(`${label} ${row}`);
+    left = await leftovers(plan, sys, { ports });
+    // 第一遍之后：有没等到结果的步骤就等它落定再来一遍；没有的话，干净了就收
+    if (passes === 1 && unsettled) { say('note 有一步没等到结果，等它在后台落定以后再清理、再盘点一遍'); await settle(); continue; }
+    if (empty(left) || passes >= 3) break;
+    await settle();
+  }
+  say(`left ${JSON.stringify(left)}`);
+  return { left, clean: empty(left), passes };
+}
