@@ -1003,6 +1003,14 @@ export default function StageView() {
       task.onEnd = undefined;
       try { onEnd?.(caughtUp); } catch { /* 收摊回调出错不影响收摊 */ }
       task.finishing = false;
+      /*
+       * 这一次追帧已经收过摊,或者已经被同一张卡后来的那一次顶掉了:不再动表里那一条和 `.pc-settling`。
+       * 连着两次「停下」(刚暂停时父页常常隔一两毫秒发两次带 settle 的 `setTime`)就会走到这里:前一次的循环被 `abortCatchUps` 收过摊,
+       * 它让出的那个宏任务醒来发现代数变了,又来收一次 —— 以前这一下把后来那一次的表项和 `.pc-settling` 一起摘了,那张卡的子树
+       * 掉一拍布局盒(回到 `.pc-suppressed` / `.pc-snapshot` 的 `display: none`),CSS 动画被取消、从那一步重新起跑,
+       * 追完以后露出来的画面落后好几帧(`scrub-stream-probe` 第 3 步实测落后 10 帧)。
+       */
+      if (ref.current.catchUps.get(task.clipId) !== task) return;
       ref.current.catchUps.delete(task.clipId);
       setSettlingAt(task.clipId, null);
       let announce: string[] = [];

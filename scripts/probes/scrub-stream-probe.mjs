@@ -12,6 +12,9 @@
  *   0. 编辑器 `?editor&nosetup=1&preview=stage`;新建项目,放一张每帧横移 10 像素的卡(`r6-stateful`),**从第 40 帧开始**
  *      (不是 15 的倍数),时长 3 秒。等它的成本记录,钉成重卡,触发预渲染,等它的轨道流全部分段满密度。
  *      另起一个渲染用的浏览器把同一份项目逐帧导出,作参照。
+ *      **活渲的参照**(第 5 步):最后把这张卡放回轻卡(不贴流),点几处,量出预览里活渲的画面最像导出页的第几帧。这张探针卡是
+ *      从挂载起跑的 CSS 动画,`main` 上预览的活渲就比导出页多走一帧(与流无关,见报告「顺带查到的」);前面每一处「停下以后的画面」
+ *      先记下、到这时按量出来的差一起判 —— 要核的是「贴流再停下」得到的活渲和不贴流时的活渲是同一张,不是在这里判活渲与导出谁对。
  *   1. **点时间轴跳过去**(暂停着,带「停下」):几处。全程按动画帧采样:这张卡没有「活子树藏着、流又没有画面」的时刻,
  *      占位符没有显示出来,**一张快照都没有挂**(有流不读快照)。停下以后回到精确活渲:不再抑制、活子树露着、流平面藏着
  *      而且已经把这一帧解好(父页照发着流平面);截图和导出页同一帧最像。
@@ -245,7 +248,7 @@ try {
     const shot = { width: png.width, height: png.height, data: png.data };
     const scores = [...new Set(candidates)].filter((c) => exported.has(c)).map((c) => {
       const key = `${c}|${png.width}x${png.height}`;
-      if (!refCache.has(key)) { refCache.set(key, resized(exported.get(c), png.width, png.height)); if (refCache.size > 40) refCache.delete(refCache.keys().next().value); }
+      if (!refCache.has(key)) { refCache.set(key, resized(exported.get(c), png.width, png.height)); if (refCache.size > 80) refCache.delete(refCache.keys().next().value); }
       return [c, round2(opaqueDiff(shot, refCache.get(key)))];
     });
     const sorted = [...scores].sort((x, y) => x[1] - y[1]);
@@ -369,6 +372,13 @@ try {
     return { ok: true, ms: Date.now() - began, frontId: p.frontId };
   };
 
+  /**
+   * 停下以后的画面(精确活渲)先只记下最像导出页的哪一帧;等最后把这张卡放回轻卡、量出「不贴流时活渲比导出页差几帧」再一起判
+   * (见文件头「活渲的参照」)。
+   */
+  const liveChecks = [];
+  const noteLive = (label, frame, score) => { liveChecks.push({ label, frame, best: score.best ?? null, mean: score.mean ?? null, runnerUp: score.runnerUp ?? null, scores: score.scores }); };
+
   /* ---------------------------------------------------------------- 1. 点时间轴跳过去 */
   await store(`actions.pause(); actions.seek(args[0]);`, (FIRST + 5) / FPS);
   await waitSettled('起步', FIRST + 5);
@@ -380,8 +390,8 @@ try {
     const settled = await waitSettled(`点到第 ${f} 帧`, f);
     const sampler = await collectSampler();
     checkSampler(`点到第 ${f} 帧`, sampler);
-    const score = await shootAndScore([f - 1, f, f + 1], f === CLICKS[0] ? `click-${f}-settled.png` : null);
-    check(score.best === f, `点到第 ${f} 帧:停下以后的画面和导出页同一帧最像`, score);
+    const score = await shootAndScore([f - 1, f, f + 1, f + 2], f === CLICKS[0] ? `click-${f}-settled.png` : null);
+    noteLive(`点到第 ${f} 帧`, f, score);
     out.click.push({ frame: f, settledMs: settled.ms, wallMs: Date.now() - began, waitingRuns: sampler.waitingRuns, streamDrawn: sampler.drawn, best: score.best, mean: score.mean, runnerUp: score.runnerUp, log: sampler.log.slice(0, 14) });
   }
   say('1-click', { clicks: out.click.map((c) => ({ frame: c.frame, settledMs: c.settledMs, drawn: c.streamDrawn, best: c.best })) });
@@ -465,21 +475,21 @@ try {
     const settled = await waitSettled('松手', last);
     const sampler = await collectSampler();
     checkSampler('拖动全程', sampler);
-    const score = await shootAndScore([last - 1, last, last + 1], `drag-${last}-settled.png`);
-    check(score.best === last, '松手以后的画面(精确活渲)和导出页同一帧最像', score);
+    const score = await shootAndScore([last - 1, last, last + 1, last + 2], `drag-${last}-settled.png`);
+    noteLive('拖动松手', last, score);
     out.drag = { steps, releaseMs: settled.ms, waitingRuns: sampler.waitingRuns, samples: sampler.samples, drawn: sampler.drawn, settledBest: score.best, log: sampler.log.slice(0, 60) };
     say('2-drag', { steps: steps.map((s) => ({ target: s.target, landed: s.landed, wallMs: s.wallMs, seekMs: s.seekMs, best: s.best, mean: s.mean, runnerUp: s.runnerUp })), releaseMs: settled.ms, waitingRuns: sampler.waitingRuns });
   }
 
-  /* ---------------------------------------------------------------- 3. 暂停着起播;播放中暂停 */
-  {
-    const from = 60;
+  /* ---------------------------------------------------------------- 3. 暂停着起播;播放中暂停(几轮,起点和播多久都不一样) */
+  out.play = [];
+  for (const [round, [from, playMs]] of [[60, 900], [45, 500], [72, 1100], [50, 700]].entries()) {
     await store(`actions.pause(); actions.seek(args[0]);`, from / FPS);
-    await waitSettled('起播之前', from);
+    await waitSettled(`第 ${round} 轮起播之前`, from);
     await installSampler();
     for (const f of stageFrames()) await f.evaluate(() => { window.__pcFallbackTrace = []; }).catch(() => {});
     await store(`actions.play();`);
-    await sleep(900);
+    await sleep(playMs);
     await store(`actions.pause();`);
     await sleep(60);
     const traces = [];
@@ -490,18 +500,25 @@ try {
     }
     const beats = traces.map((b) => ({ frame: Math.round(b.sec * FPS), level: b.levels[clipId] ?? null, snapshots: b.snapshots }));
     const stopped = frameOf(await storeT());
-    const settled = await waitSettled('播放中暂停', stopped);
+    const settled = await waitSettled(`第 ${round} 轮播放中暂停`, stopped);
     const sampler = await collectSampler();
-    checkSampler('起播到暂停全程', sampler);
+    checkSampler(`第 ${round} 轮起播到暂停全程`, sampler);
     const notDense = beats.filter((b) => b.level !== 'dense');
-    check(beats.length >= 8, '播了一段', beats.length);
-    check(beats[0]?.frame === from + 1 && beats[0]?.level === 'dense', '起播:头一拍这张卡就是流的画面(暂停着已经把这一帧解好)', beats.slice(0, 3));
-    check(notDense.length === 0, '播放:每一拍都是满密度流的画面(没有空拍、没有占位符、没有快照)', notDense.slice(0, 5));
-    check(beats.every((b) => b.snapshots === 0), '播放:舞台上一张快照都没有', beats.filter((b) => b.snapshots).slice(0, 3));
-    const score = await shootAndScore([stopped - 1, stopped, stopped + 1], `pause-${stopped}-settled.png`);
-    check(score.best === stopped, '播放中暂停:停下以后的画面和导出页停住的那一帧最像', score);
-    out.play = { from, stoppedAt: stopped, beats: beats.length, firstBeat: beats[0] ?? null, notDense: notDense.length, settleMs: settled.ms, waitingRuns: sampler.waitingRuns, best: score.best, log: sampler.log.slice(0, 20) };
-    say('3-play', out.play);
+    check(beats.length >= 8, `第 ${round} 轮:播了一段`, beats.length);
+    check(beats[0]?.frame === from + 1 && beats[0]?.level === 'dense', `第 ${round} 轮起播:头一拍这张卡就是流的画面(暂停着已经把这一帧解好)`, beats.slice(0, 3));
+    check(notDense.length === 0, `第 ${round} 轮播放:每一拍都是满密度流的画面(没有空拍、没有占位符、没有快照)`, notDense.slice(0, 5));
+    check(beats.every((b) => b.snapshots === 0), `第 ${round} 轮播放:舞台上一张快照都没有`, beats.filter((b) => b.snapshots).slice(0, 3));
+    const score = await shootAndScore([stopped - 1, stopped, stopped + 1, stopped + 2], round === 0 ? `pause-${stopped}-settled.png` : null);
+    noteLive(`第 ${round} 轮播放中暂停`, stopped, score);
+    const entry = { from, stoppedAt: stopped, beats: beats.length, firstBeat: beats[0] ?? null, notDense: notDense.length, settleMs: settled.ms, waitingRuns: sampler.waitingRuns, best: score.best, mean: score.mean };
+    if (!(score.mean < 12 && score.runnerUp > 1.8 * score.mean)) {
+      // 哪一帧都不像:存图,放宽到前后 12 帧找它到底像哪一帧,并留下舞台和父页那一刻的样子
+      await sleep(400);
+      const wide = await shootAndScore(Array.from({ length: 25 }, (_, i) => stopped - 12 + i), `pause-${stopped}-mismatch.png`);
+      Object.assign(entry, { wideBest: [...wide.scores].sort((x, y) => x[1] - y[1]).slice(0, 3), setTimeLog: (await parentDiag()).setTimeLog.slice(-4), logTail: sampler.log.slice(-16), card: await cardState() });
+    }
+    out.play.push(entry);
+    say('3-play', entry);
   }
 
   /* ---------------------------------------------------------------- 4. 只认全局时钟的卡:后台整场景补跑后互换 */
@@ -516,14 +533,42 @@ try {
     const settled = await waitSettled('互换以后', f);
     const sampler = await collectSampler();
     const after = await frontId();
-    const score = await shootAndScore([f - 1, f, f + 1], `swap-${f}-settled.png`);
+    const score = await shootAndScore([f - 1, f, f + 1, f + 2], `swap-${f}-settled.png`);
     out.swap = { frame: f, before, after, swapped: !!swapped, settleMs: settled.ms, best: score.best, empty: sampler.empty, placeholder: sampler.placeholder, snapshot: sampler.snapshot, both: sampler.both, log: sampler.log.slice(0, 30) };
     say('4-swap', out.swap);
     check(!!swapped && after !== before, '只认全局时钟的重卡:停下以后可见舞台换了一台', out.swap);
     check(sampler.empty === 0 && sampler.placeholder === 0 && sampler.snapshot === 0, '互换这一路:全程没有空着的时刻、没有占位符、没有快照', { empty: sampler.empty, placeholder: sampler.placeholder, snapshot: sampler.snapshot, log: sampler.log.slice(0, 40) });
     check(sampler.both === 0, '互换这一路:流没有盖回已经精确的活画面上', { both: sampler.both, log: sampler.log.slice(0, 40) });
-    check(score.best === f, '互换以后的画面和导出页同一帧最像', score);
+    noteLive('后台补跑互换以后', f, score);
     await pinHeavy(false, { vtOk: out.costRecord.vtOk ?? true });
+  }
+  /* ---------------------------------------------------------------- 5. 活渲的参照:放回轻卡(不贴流),量活渲比导出页差几帧,再判上面记下的每一处 */
+  {
+    await pinHeavy(false, { pinnedHeavy: false, vtOk: out.costRecord.vtOk ?? true });
+    await until('这张卡回到轻卡(父页不再判重)', async () => { const p = await parentDiag(); return p && !p.heavy.includes(clipId) ? true : null; }, 20000, 100);
+    const seen = [];
+    let shift = null;
+    for (const f of [85, 110, 64, 97, 73, 118, 52, 104]) {
+      await store(`actions.pause(); actions.seek(args[0]);`, f / FPS);
+      const score = await until(`轻卡:点到第 ${f} 帧的活渲对得上导出页的某一帧`, async () => {
+        const st = await cardState();
+        if (!st || st.error || st.suppressed || st.settling || st.liveHidden) return null;
+        const r = await shootAndScore([f - 2, f - 1, f, f + 1, f + 2]);
+        return r.best !== null && r.mean < 12 && r.runnerUp > 1.8 * r.mean ? r : null;
+      }, 8000, 300, true);
+      seen.push({ frame: f, best: score?.best ?? null, mean: score?.mean ?? null });
+      // 连着三处的差相同就定下来
+      const last3 = seen.slice(-3).map((x) => (x.best === null ? null : x.best - x.frame));
+      if (last3.length === 3 && last3[0] !== null && last3.every((d) => d === last3[0])) { shift = last3[0]; break; }
+    }
+    out.liveReference = { seen, shift };
+    say('5-live-reference', out.liveReference);
+    if (check(shift !== null && Math.abs(shift) <= 1, '不贴流时(轻卡)预览的活渲和导出页的差是个固定的数,不超过一帧', seen)) {
+      const wrong = liveChecks.filter((c) => c.best !== c.frame + shift);
+      out.liveChecks = { total: liveChecks.length, shift, wrong: wrong.slice(0, 6), wrongCount: wrong.length, means: liveChecks.map((c) => c.mean) };
+      say('5-live-checks', out.liveChecks);
+      check(liveChecks.length >= 8 && wrong.length === 0, `贴流再停下以后的画面,每一处都是不贴流时活渲的那一张(共 ${liveChecks.length} 处;和导出页差 ${shift} 帧是这张探针卡在 main 上就有的)`, wrong.slice(0, 4));
+    }
   }
   out.pageErrors = pageErrors.slice(0, 5);
   check(pageErrors.length === 0, '页面没有未捕获的错误', pageErrors.slice(0, 3));
