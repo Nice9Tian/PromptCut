@@ -111,13 +111,33 @@ test('ACC018-DMG-6 未知的 .proc 文件版本:不能当 v1 静默读入再按 
   assert.ok(outcome === 'refused' || outcome === 'preserved', outcome);
 });
 
-test('ACC018-DMG-7 .procp 里某个条目的字节被改坏(CRC 对不上):必须报包损坏,不能当好文件读', { todo: '产品问题:readZip/inflate 从不校验 CRC,store 条目被改一个字节照样读出改坏的内容(见地图「产品问题」3)' }, async () => {
+test('ACC018-DMG-7 .procp 里某个条目的字节被改坏(CRC 对不上):必须报包损坏,不能当好文件读', async () => {
   const text = wrap({ tracks: [], name: 'AAAA-original' });
   const zip = await procp.writeZip([{ name: 'project.proc', blob: new Blob([text]) }]);
   const buf = new Uint8Array(await zip.arrayBuffer());
   const at = Buffer.from(buf).indexOf('AAAA-original');
   buf[at] = 'B'.charCodeAt(0);
-  await assert.rejects(procp.loadProcpFile(new Blob([buf])), Error, '改坏的包应报错');
+  await assert.rejects(procp.loadProcpFile(new Blob([buf])), (e) => e.message === procp.PROCP_DAMAGED_MESSAGE, '改坏的包应报「包损坏」');
+});
+
+test('ACC018-DMG-7b .procp 里素材条目被改坏:整包不读,不向内容库落任何素材,也不读出编排', async () => {
+  const text = wrap({ tracks: [], name: 'packed-ok' });
+  const media = new TextEncoder().encode('MEDIA-BYTES-0123456789');
+  const zip = await procp.writeZip([{ name: 'project.proc', blob: new Blob([text]) }, { name: 'media/' + 'd'.repeat(64) + '.bin', blob: new Blob([media]) }, { name: 'media/' + 'e'.repeat(64) + '.bin', blob: new Blob([media]) }]);
+  const buf = new Uint8Array(await zip.arrayBuffer());
+  const first = Buffer.from(buf).indexOf('MEDIA-BYTES');
+  buf[Buffer.from(buf).indexOf('MEDIA-BYTES', first + 1) + 3] ^= 0xff; // 第二份素材的一个字节
+  const before = seedCurrent();
+  const realFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async () => { calls++; return new Response('{}', { status: 200 }); };
+  try {
+    await assert.rejects(procp.loadProcpFile(new Blob([buf])), (e) => e.message === procp.PROCP_DAMAGED_MESSAGE);
+    assert.equal(calls, 0, '核对在落库之前:好的那份素材也不落');
+  } finally { globalThis.fetch = realFetch; }
+  unchanged(before);
+  // 没改坏的同一个包照常能读
+  const okZip = await procp.writeZip([{ name: 'project.proc', blob: new Blob([text]) }]);
+  assert.equal((await procp.loadProcpFile(okZip)).name, 'packed-ok');
 });
 
 // ------------------------------------------------------------------ .procp
