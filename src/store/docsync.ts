@@ -224,6 +224,11 @@ interface Pending {
   ackRev?: number;
   /** 已发出、但在最新的已确认副本上重放失败 —— 文档服务那边也会拒 */
   brokenLocally?: boolean;
+  /**
+   * 计划内换连接时已经在旧连接上发出过(`handover`):它可能早就落地、已经含在新连接拿到的状态里,只是这边还不知道
+   * (要等新连接上重发的回音)。排在它后面的提交先拿到确认时不算乱序。
+   */
+  handed?: boolean;
 }
 
 interface Step {
@@ -447,12 +452,32 @@ export class DocSync {
     const before = this.status;
     this.connected = false;
     this.awaitingState = false;
+    this.handingOver = false;
     this.partial = null;
     if (this.confirmed && this.offlineRev === null) this.offlineRev = this.confirmedRev;
     this.gateOpId = null;
     for (const p of this.pending) if (p.ackRev === undefined) p.sent = false;
     this.statusChanged(before);
   }
+
+  /**
+   * 计划内换连接(账号云端项目的连接到期前换到新会话上,`src/editor/sync/link.ts` 的 `renew`):新连接已经建好、旧连接作废的那一刻调。
+   * 和断线重连的区别是**不记成离线**:在途的提交当没发、在新连接上重新 `project.open`,拿到状态后未确认的照常补发
+   * (文档服务按 opId 去重),不走离线批次的版本闸 —— 这一下不是用户离线,别人恰好在这时改了项目也不该弹离线对话框。
+   * 拿到的状态版本与手里已确认的相同(换的这一下没有别人的改动)时,手里的项目对象原样留着,不换新对象。
+   * 本来就在离线批次里(已有离线版本、或正暂停着)的,照离线的规矩走,这里不改。
+   */
+  handover() {
+    const before = this.status;
+    this.connected = true;
+    this.awaitingState = true;
+    this.handingOver = true;
+    this.partial = null;
+    for (const p of this.pending) if (p.ackRev === undefined) { if (p.sent) p.handed = true; p.sent = false; }
+    this.sendMsg({ type: "project.open", projectId: this.projectId });
+    this.statusChanged(before);
+  }
+  private handingOver = false;
 
   /** 收到文档服务的一条消息 */
   receive(msg: ServerMsg) {
@@ -496,6 +521,8 @@ export class DocSync {
   private onState(msg: StateMsg) {
     if (!this.awaitingState) return;
     this.awaitingState = false;
+    const handover = this.handingOver;
+    this.handingOver = false;
     if (this.gateOpId) {
       // 离线批次的第一条还没回音就重新同步了:按没发处理,下面重新试
       const g = this.pending.find((p) => p.opId === this.gateOpId);
@@ -524,6 +551,11 @@ export class DocSync {
     }
     // 已经在这份快照里的(拿过 ok、rev 不超过快照)不再重放
     this.pending = this.pending.filter((p) => p.ackRev === undefined || p.ackRev > msg.rev);
+    if (handover && this.confirmed !== null && msg.rev === this.confirmedRev && this.offlineRev === null && !this.paused) {
+      // 计划内换连接、期间没有新版本:同一个版本的内容必然相同,手里的对象(已确认副本与本地副本)原样留着,只把没确认的补发
+      this.flush();
+      return;
+    }
     this.confirmed = msg.project;
     this.confirmedRev = msg.rev;
     this.beforeRemote.clear();
@@ -642,7 +674,9 @@ export class DocSync {
       else if (!this.gateOpId && !this.paused && this.confirmed) this.setLocal(this.replay(this.confirmed), "commit");
       return;
     }
-    if (idx !== 0 || msg.rev !== this.confirmedRev + 1 || entry.brokenLocally) {
+    // 排在前面的都是换连接时在旧连接上发过的(可能已经含在状态里,回音还没到):这一条先确认不算乱序,按文档服务的顺序并进已确认副本
+    const ahead = idx !== 0 && this.pending.slice(0, idx).every((p) => p.handed);
+    if ((idx !== 0 && !ahead) || msg.rev !== this.confirmedRev + 1 || entry.brokenLocally) {
       this.resync(`确认乱序或与本地不一致:${entry.opId} rev ${msg.rev}`);
       return;
     }
@@ -660,7 +694,7 @@ export class DocSync {
       this.confirmed = r.value;
     }
     this.confirmedRev = msg.rev;
-    this.pending.shift();
+    this.pending.splice(idx, 1);
     this.localWrites.push({ rev: msg.rev, entities: entitiesOf(entry.ops) });
     this.pruneRemoteWrites();
     if (this.gateOpId === entry.opId) {

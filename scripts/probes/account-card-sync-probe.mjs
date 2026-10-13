@@ -48,6 +48,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'out', 'v18-cardsync', 'dist-online')));
 const OUT = path.resolve(arg('--out', path.join(ROOT, 'docs', 'reports', 'assets', 'v18-cardsync')));
 const A_PORT = 28640, B_PORT = 28645;
+/** `cards`(缺省):卡片源码同步那一套;`link`:页面那条文档连接的寿命(到期前换会话、断一次传输、睡眠醒来、账号服务不通) */
+const SCENARIO = arg('--scenario', 'cards');
 /** 排查用:做完第几步就停(缺省做完) */
 const STOP_AFTER = Number(arg('--stop-after', '99'));
 const FIXTURE_PORTS = [28650, 28651, 28652, 28653, 28654, 28655, 28656];
@@ -101,6 +103,7 @@ const fails = [];
 const navigations = [];
 const res = { runId: RUN, cardId: CARD_ID, ports: { a: A_PORT, b: B_PORT, fixture: FIXTURE_PORTS, stages: STAGE_PORTS }, shots: [] };
 let fixture = null, browser = null, ca = null;
+const wsLog = {};
 const stageServers = [];
 /** 舞台源拒掉的 `/media-s/…` 请求(状态码与路径形状) */
 const stageRejects = [];
@@ -204,6 +207,8 @@ function nativeBridge(state) {
         return v;
       }
       if (operation === 'request') {
+        // 探针模拟「账号服务一时不通」:会话接口回 503
+        if (state.blockSession && args.path === '/hosted/shared/account/session') return { ok: false, status: 503, code: 'account-unavailable' };
         const consent = args.path === '/api/account/cloud-agent-consent';
         if ((!ROUTES.includes(args.path) && !consent) || !args.accessToken) throw new Error('bad-path');
         state.requests[args.path] = (state.requests[args.path] ?? 0) + 1;
@@ -323,6 +328,21 @@ async function openDesktop(ed, state) {
   page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations.push({ tag: ed.tag, at: Date.now() }); });
   // 各编辑器有自己的依赖预构建目录,第一次打开要等预构建
   page.setDefaultNavigationTimeout(300_000);
+  // 这一页与文档服务之间的项目消息(只留类型、版本、谁写的、改了哪些路径):查「你的近期修改已被…覆盖」是谁的哪一步引起的
+  const frames = (wsLog[ed.tag] = []);
+  const cdp = await page.createCDPSession();
+  await cdp.send('Network.enable');
+  const note = (dir) => ({ response }) => {
+    if (response.opcode !== 1) return;
+    let m; try { m = JSON.parse(response.payloadData); } catch { return; }
+    if (!['project.op', 'project.ops', 'project.overwritten', 'project.op.ok'].includes(m?.type)) return;
+    frames.push({ dir, at: Date.now(), type: m.type, rev: m.rev ?? null, opId: m.opId ?? null, entity: m.entity ?? null,
+      by: (m.by ?? m.actor)?.accountId ?? null, bySession: (m.by ?? m.actor)?.session ?? m.session ?? null,
+      paths: Array.isArray(m.ops) ? m.ops.map((o) => `${o.op} ${String(o.path).slice(0, 80)}`).slice(0, 12) : null, overwrote: m.overwrote ?? null });
+    if (frames.length > 3000) frames.shift();
+  };
+  cdp.on('Network.webSocketFrameReceived', note('in'));
+  cdp.on('Network.webSocketFrameSent', note('out'));
   await page.exposeFunction('__probeNative', nativeBridge(state));
   await page.goto(`${ed.origin}/?editor`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => P(page, () => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 180_000, `${ed.tag} 页面接上本机文档服务`);
@@ -399,6 +419,148 @@ const onlineDiag = (page, cardId) => P(page, (cardId) => {
   const preview = window.__pcPreviewDiag?.();
   return { dual: preview?.dual ?? null, cardExec: preview?.cardExec ?? null, available: d?.available ?? null, visual: d?.visual ?? null, run: d?.run?.[cardId] ?? null, cards: (sources?.cards ?? []).map((c) => c.id), frames: [...document.querySelectorAll('iframe')].map((f) => { try { return new URL(f.src).origin; } catch { return null; } }) };
 }, cardId).catch((e) => ({ error: String(e?.message ?? e).slice(0, 200) }));
+/**
+ * 页面那条文档连接的寿命(真实的 120 秒访问令牌)。时间都从甲登录算起:
+ *   约 15 秒  乙(桌面)断一次传输:几秒内接回,之后照常收到甲的改动
+ *   30 / 130 / 250 / 400 秒  甲(桌面)各改一次、在线页面各改一次:别的成员看得到,服务端版本前进
+ *   135～270 秒  在线页面冻结(模拟电脑睡眠,超过一个令牌寿命);醒来后追上别人的改动,自己再改一次别人看得到
+ *                (冻的是在线页面:桌面这两页是开发服务器给的,冻结会让热更新通道断开、醒来整页重载,那是开发服务器的行为)
+ *   400 秒之后  甲的账号服务不通:到期后页面转离线(不显示在线),离线时改一次;恢复后补发,别人看得到
+ */
+async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLoginAt }) {
+  const since = () => Math.round((Date.now() - aLoginAt) / 1000);
+  const L = (res.link = { checkpoints: [], scenario: 'link' });
+  // 在线页面(乙的账号)
+  const ctxC = await browser.createBrowserContext();
+  await ctxC.overridePermissions(ORIGIN, []);
+  const pageC = await ctxC.newPage();
+  pageC.setDefaultTimeout(90_000); pageC.setDefaultNavigationTimeout(120_000);
+  pageC.on('pageerror', (e) => say('pageerror', { tag: 'online', message: String(e?.message ?? e).slice(0, 300) }));
+  const typeInto = async (selector, value) => { const input = await pageC.waitForSelector(selector, { visible: true }); await input.click({ clickCount: 3 }); await pageC.keyboard.press('Backspace'); await input.type(value); };
+  await pageC.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+  await typeInto('[data-pc="account-projects"] input[name="username"]', fixture.accounts[1].name);
+  await typeInto('[data-pc="account-projects"] input[name="password"]', fixture.accounts[1].password);
+  await pageC.waitForFunction(() => { const b = document.querySelector('[data-pc="account-projects"] form button.sp-primary-btn'); return Boolean(b && !b.disabled); });
+  await pageC.click('[data-pc="account-projects"] form button.sp-primary-btn');
+  await pageC.waitForSelector('[data-pc="account-name"]', { visible: true });
+  await typeInto('[data-pc="cloud-project-link"]', `${ORIGIN}/editor?project=${projectId}`);
+  await pageC.click('[data-pc="cloud-join"]');
+  await pageC.waitForSelector('[data-pc="editor"]', { visible: true });
+  await waitFor(() => P(pageC, () => !!window.__pcStore), 30_000, '在线页面的时间轴');
+  say('link.online-entered', { at: since() });
+
+  // 三个页面各记一份状态流水(每 250 毫秒看一眼页面显示的同步状态)
+  const watch = (page) => P(page, () => {
+    window.__linkLog = [];
+    const read = () => (window.__pcSyncTest ? window.__pcSyncTest.view().status : document.querySelector('[data-pc="sync-status"]')?.getAttribute('data-status') ?? null);
+    setInterval(() => { const s = read(); const log = window.__linkLog; if (!log.length || log[log.length - 1].s !== s) log.push({ at: Date.now(), s }); }, 250);
+  });
+  await watch(pageA); await watch(pageB);
+  const statusLog = (page) => P(page, () => window.__linkLog ?? []).catch(() => []);
+
+  const addDesktop = (page, at) => P(page, async (at) => { const S = await import('/src/store/project.ts'); return S.actions.addCardClip('av-pulse', at, { duration: 1 })?.id ?? null; }, at);
+  const hasDesktop = (page, id) => P(page, async (id) => (await import('/src/store/project.ts')).getState().project.tracks.some((t) => t.clips.some((c) => c.id === id)), id).catch(() => false);
+  const addOnline = (at) => P(pageC, (at) => window.__pcStore.actions.addCardClip('av-pulse', at, { duration: 1 })?.id ?? null, at);
+  const hasOnline = (id) => P(pageC, (id) => window.__pcStore.getState().project.tracks.some((t) => t.clips.some((c) => c.id === id)), id).catch(() => false);
+  const serverRev = async (state) => { const t = await sessionOf(state, projectId); const m = await rawDoc(t.body.connectionTicket, { type: 'project.open', projectId }); return m.rev ?? null; };
+  const lifeOf = (page) => P(page, () => window.__pcSyncTest?.accountLife?.() ?? null).catch(() => null);
+  const until = (seconds) => waitFor(() => since() >= seconds, 600_000, `甲登录满 ${seconds} 秒`);
+  let slot = 20;
+  let frozen = false;
+
+  // ---- 断一次传输(乙的桌面页面、在线页面)
+  await until(12);
+  {
+    const cutOne = async (label, cut, stats, hasFn) => {
+      const before = await stats();
+      const t0 = Date.now();
+      const did = await cut();
+      const back = await waitFor(async () => { const s = await stats(); return s && s.resumes > (before?.resumes ?? 0) && s.transport === 'ws' ? Date.now() : null; }, 90_000, `${label} 接回`).catch(() => null);
+      const id = await addDesktop(pageA, slot += 2);
+      const seen = await waitFor(() => hasFn(id).then((v) => (v ? Date.now() : null)), 90_000, `${label} 收到断线之后甲的改动`).catch(() => null);
+      const out = { did, resumeMs: back ? back - t0 : null, sawEditMs: seen ? seen - t0 : null, opens: (await stats())?.opens ?? null };
+      L[`cut-${label}`] = out;
+      check(did === true && out.resumeMs !== null && out.resumeMs < 10_000 && out.sawEditMs !== null && out.sawEditMs < 15_000, `断一次传输-${label}:几秒内接回并收到之后的改动`, out);
+    };
+    await cutOne('desktop', () => P(pageB, () => window.__pcSyncTest.cut()), () => P(pageB, () => window.__pcSyncTest.link()), (id) => hasDesktop(pageB, id));
+  }
+
+  // ---- 四个时刻各改一次
+  for (const at of [30, 130, 250, 400]) {
+    if (at === 250) {
+      // 130 秒那一轮之后乙冻结,到这里还冻着:这一轮乙不看
+    }
+    await until(at);
+    const revBefore = await serverRev(stateA);
+    const idA = await addDesktop(pageA, slot += 2);
+    const observers = { 乙桌面: () => hasDesktop(pageB, idA), ...(frozen ? {} : { 在线页面: () => hasOnline(idA) }) };
+    const seenA = {};
+    for (const [name, fn] of Object.entries(observers)) seenA[name] = !!(await waitFor(fn, 15_000, `${name} 看到甲在 ${at} 秒的改动`).catch(() => false));
+    // 在线页面睡着的那一轮由乙(桌面)来改
+    const idC = frozen ? await addDesktop(pageB, slot += 2) : await addOnline(slot += 2);
+    const seenC = !!(await waitFor(() => hasDesktop(pageA, idC), 15_000, `甲看到别人在 ${at} 秒的改动`).catch(() => false));
+    await sleep(500);
+    const revAfter = await serverRev(stateA);
+    const cp = { at, atActual: since(), aEdit: seenA, [frozen ? 'bEdit' : 'onlineEdit']: { 甲桌面: seenC }, rev: [revBefore, revAfter], lifeA: await lifeOf(pageA), lifeB: await lifeOf(pageB) };
+    L.checkpoints.push(cp);
+    check(Object.values(seenA).every(Boolean) && seenC && revAfter >= revBefore + 2, `登录 ${at} 秒:甲改一次、${frozen ? '乙' : '在线页面'}改一次,别的成员看得到,版本前进`, cp);
+    if (at === 130) {
+      // 在线页面睡着:冻结页面(计时器、脚本全停),超过一个令牌寿命
+      const cdpB = await pageC.createCDPSession();
+      await cdpB.send('Page.enable');
+      await cdpB.send('Page.setWebLifecycleState', { state: 'frozen' });
+      frozen = cdpB;
+      L.sleep = { frozenAt: since() };
+      say('link.online-frozen', { at: since() });
+    }
+    if (at === 250) {
+      await until(272);
+      const missed = idA;
+      await frozen.send('Page.setWebLifecycleState', { state: 'active' });
+      L.sleep.wokeAt = since();
+      const cdp = frozen; frozen = false;
+      const t0 = Date.now();
+      const caught = await waitFor(() => hasOnline(missed).then((v) => (v ? Date.now() : null)), 60_000, '在线页面醒来后追上睡着时别人的改动').catch(() => null);
+      const idB = await addOnline(slot += 2);
+      const seenB = await waitFor(() => hasDesktop(pageA, idB).then((v) => (v ? Date.now() : null)), 30_000, '甲看到在线页面醒来后的改动').catch(() => null);
+      L.sleep = { ...L.sleep, sleptSeconds: L.sleep.wokeAt - L.sleep.frozenAt, caughtUpMs: caught ? caught - t0 : null, editSeenByAMs: seenB ? seenB - t0 : null };
+      check(L.sleep.sleptSeconds >= 125 && !!caught && !!seenB, '睡眠醒来(在线页面冻结超过一个令牌寿命):追上别人的改动,自己再改别人看得到', L.sleep);
+      await cdp.detach().catch(() => {});
+    }
+  }
+
+  // 到这里甲在线 400 多秒:换过几次会话、页面显示过哪些状态、进项目的提示有没有重复弹
+  {
+    const logA = await statusLog(pageA);
+    const lifeA = await lifeOf(pageA);
+    const toastA = await P(pageA, () => (document.querySelector('[data-pc="sync-toasts"]')?.textContent ?? '').split('已进入云端项目').length - 1);
+    L.steady = { lifeA, statusesA: [...new Set(logA.map((x) => x.s))], toastEntered: toastA };
+    check((lifeA?.renews ?? 0) >= 4 && lifeA.expires === 0, '甲 400 秒里按时换了至少 4 次会话,连接没有作废过', lifeA);
+    check(L.steady.statusesA.every((s) => s === 'online' || s === 'connecting'), '甲的页面这 400 秒只显示过在线(换会话的瞬间是连接中),没有离线', L.steady.statusesA);
+    check(toastA === 1, '「已进入云端项目」只提示一次(换会话不重复提示)', toastA);
+  }
+
+  // ---- 账号服务不通(只对甲的页面):到期后如实转离线;离线时的改动恢复后补发
+  {
+    stateA.blockSession = true;
+    const t0 = Date.now();
+    const offline = await waitFor(() => P(pageA, () => (window.__pcSyncTest.view().status === 'offline' ? Date.now() : null)), 150_000, '甲换不成会话、到期后转离线').catch(() => null);
+    const lifeA = await lifeOf(pageA);
+    const idOff = await addDesktop(pageA, slot += 2);
+    await sleep(3000);
+    const during = { status: await P(pageA, () => window.__pcSyncTest.view().status), seenByB: await hasDesktop(pageB, idOff), toasts: await P(pageA, () => [...document.querySelectorAll('[data-pc="sync-toasts"] > *')].map((e) => e.textContent?.trim().slice(0, 40)).slice(-4)) };
+    await dismissDialogs(pageA);
+    await shot(pageA, 'link-a-account-service-down');
+    stateA.blockSession = false;
+    const back = await waitFor(() => hasDesktop(pageB, idOff).then((v) => (v ? Date.now() : null)), 60_000, '账号服务恢复后甲离线时的改动补发,乙看得到').catch(() => null);
+    const after = await waitFor(() => P(pageA, () => (window.__pcSyncTest.view().status === 'online' ? 'online' : null)), 30_000, '甲回到在线').catch(() => P(pageA, () => window.__pcSyncTest.view().status));
+    L.outage = { offlineAfterMs: offline ? offline - t0 : null, expires: lifeA?.expires ?? null, during, recovered: !!back, statusAfter: after };
+    check(!!offline && during.status === 'offline' && during.seenByB === false, '账号服务不通:到期后甲的页面如实显示离线,不是在线', L.outage);
+    check(!!back && after === 'online', '账号服务恢复:甲离线时的改动补发成功,乙看得到,甲回到在线', { recovered: !!back, statusAfter: after });
+    await shot(pageA, 'link-a-recovered');
+  }
+}
+
 const cardStatus = (ed) => getJson(`${ed.origin}/api/cards/sync/status`);
 const cardSourceOf = async (ed, id) => { const s = await getJson(`${ed.origin}/api/cards/source?id=${id}`).catch(() => null); return s?.ok ? s.source : null; };
 const overrideOf = (ed, rel) => { try { return fs.readFileSync(path.join(ed.overrides, rel), 'utf8'); } catch { return null; } };
@@ -463,6 +625,11 @@ try {
   await enterDesktop(pageB, projectId, projectName, false);
   const t2 = Date.now();
   await waitFor(() => P(pageB, async (clipId) => (await import('/src/store/project.ts')).getState().project.tracks.some((t) => t.clips.some((c) => c.id === clipId)), clipId), 30_000, '乙看到甲的片段');
+
+  if (SCENARIO === 'link') {
+    await linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLoginAt });
+    throw Object.assign(new Error('link scenario done'), { done: true });
+  }
 
   // ---------- 4(先做写项目的那半)另一条账号连接直接写内容库(模拟云端 Agent 建卡);甲认出后放一个片段
   {
@@ -708,8 +875,15 @@ try {
     await shot(pageA, '8-a-desktop-logged-out');
   }
   res.navigations = navigations.length;
+  // 「你的近期修改已被…覆盖」:文档服务发给甲、乙的 project.overwritten,连同同一版本的那次提交改了哪些路径
+  res.overwritten = Object.fromEntries(Object.entries(wsLog).map(([tag, frames]) => [tag, frames.filter((f) => f.type === 'project.overwritten').map((o) => ({
+    entity: o.entity, rev: o.rev, by: o.by === accountA ? '甲' : o.by === accountB ? '乙' : o.by, bySession: o.bySession,
+    op: frames.find((f) => f.type === 'project.ops' && f.rev === o.rev)?.paths ?? null,
+    mineBefore: frames.filter((f) => f.dir === 'out' && f.type === 'project.op' && f.at < o.at).slice(-3).map((f) => f.paths),
+  }))]));
+  say('observe.overwritten', res.overwritten);
 } catch (err) {
-  fails.push(`error:${String(err?.message ?? err)}`);
+  if (!err?.done) fails.push(`error:${String(err?.message ?? err)}`);
   say('error', { message: String(err?.stack ?? err).slice(0, 1500) });
   for (const p of procs) {
     const lines = p.text().split(/\r?\n/).filter((l) => /\[cards\]|error|Error/.test(l)).slice(-25);

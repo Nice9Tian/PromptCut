@@ -99,8 +99,9 @@ export function createAccountClient(options: AccountClientOptions) {
     return login;
   }
   async function website() { const value = await request('/api/account/me'); csrf = value.csrfToken || ''; websiteAccount = value.account ?? null; return websiteAccount; }
-  async function ensureLogin(): Promise<EditorLogin> {
-    if (login && login.accessExpiresAt > now() + 10_000) return login;
+  /** `minRemainingMs`:手里的访问令牌至少还要剩这么久,不够就先续(缺省 10 秒;页面换连接时要一张寿命足够的票据,会给得更大) */
+  async function ensureLogin(minRemainingMs = 10_000): Promise<EditorLogin> {
+    if (login && login.accessExpiresAt > now() + minRemainingMs) return login;
     if (renewTask) return renewTask;
     renewTask = (async () => {
       if (!options.online) return accept(check(await native('recover', options.device)));
@@ -204,7 +205,7 @@ export function createAccountClient(options: AccountClientOptions) {
       return { eventId: value.eventId, accessRevision: value.accessRevision, completed: false, state: 'pending-services' };
     },
     async join(projectId: string, requestId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/join', { projectId, deviceId: options.device.deviceId, requestId }, current.accessToken), now(), projectId); },
-    async session(projectId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now(), projectId); },
+    async session(projectId: string, { minRemainingMs }: { minRemainingMs?: number } = {}): Promise<ProjectSession> { const current = await ensureLogin(minRemainingMs); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now(), projectId); },
   };
 }
 function validateMembers(value: Record<string, any>, projectId: string, accountId: string): AccountMembersSnapshot {

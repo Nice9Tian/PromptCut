@@ -596,3 +596,129 @@ test("协议-两人同时删同一片段:后到的照常落地(空操作),三份
   assert.equal(svc.project.name, "A 同批的其它修改");
   assertSame(svc, A, B);
 });
+
+/* ---------------- 计划内换连接(handover;账号云端项目的连接到期前换到新会话上) ---------------- */
+
+/** 能换连接的页面:`swap()` = 新连接已经建好,旧连接作废(旧连接上没处理的上行按 `dropUp` 丢或不丢、没投的下行一律丢) */
+function swappable(svc, session, initial) {
+  const notices = [];
+  const projects = [];
+  let link = null;
+  const sent = [];
+  const ds = new DocSync(initial, { projectId: "P", session, send: (msg) => { sent.push(msg); link?.send(msg); }, saveBackup: () => {} });
+  ds.on("notice", (n) => notices.push(n));
+  ds.on("project", (p, cause) => projects.push(cause));
+  link = svc.connect(session, (msg) => ds.receive(msg));
+  ds.connect();
+  const swap = (opts) => {
+    const old = link;
+    link = svc.connect(session, (msg) => ds.receive(msg));
+    svc.disconnect(old.conn, opts);
+    ds.handover();
+  };
+  return { ds, notices, projects, sent, swap };
+}
+
+test("HO-01 换连接时没确认的提交(发了没回音的、换的那一下新做的)换完都补发并确认;别人在这期间的改动也收到;不走离线批次", () => {
+  const svc = new MemDocService({ project: clipsProject(), rev: 1 });
+  const A = swappable(svc, "A", clipsProject());
+  const B = page(svc, "B", clipsProject());
+  svc.drain();
+  const rev0 = svc.rev;
+  // A 发了一条,服务端还没处理(换连接时丢在旧连接上);B 同时改了另一个片段并已落地
+  A.ds.commit(withText(A.ds.project, "c1", "A 换之前"));
+  B.ds.commit(withText(B.ds.project, "c2", "B 期间"));
+  while (svc.conns.size && [...svc.conns].find((c) => c.session === "B").up.length) svc.handle([...svc.conns].find((c) => c.session === "B"), [...svc.conns].find((c) => c.session === "B").up.shift());
+  A.sent.length = 0;
+  A.swap({ dropUp: true });
+  // 换的那一下(新连接还在等状态)又做了一条
+  A.ds.commit(withText(A.ds.project, "c1", "A 换的时候"));
+  assert.notEqual(A.ds.status, "offline", "计划内换连接不显示离线");
+  svc.drain();
+  assert.equal(A.ds.status, "online");
+  assert.equal(A.ds.unconfirmed, 0);
+  assert.equal(svc.rev, rev0 + 3);
+  assert.equal(textOf(svc.project, "c1"), "A 换的时候");
+  assert.equal(textOf(svc.project, "c2"), "B 期间");
+  assert.equal(textOf(A.ds.project, "c2"), "B 期间", "别人的改动收到了");
+  const ops = A.sent.filter((m) => m.type === "project.op");
+  assert.equal(ops.length, 2);
+  assert.ok(ops.every((m) => m.expectRev === undefined), "不带期望版本:别人恰好这时改了也不会被判成离线冲突");
+  assert.equal(A.notices.filter((n) => n.kind === "rejected" || n.kind === "resync" || n.kind === "replay-dropped").length, 0);
+  assertSame(svc, A, B);
+});
+
+test("HO-02 旧连接上已经落地、只是确认没收到的提交:换完按 opId 去重,不落第二次", () => {
+  const svc = new MemDocService({ project: clipsProject(), rev: 1 });
+  const A = swappable(svc, "A", clipsProject());
+  svc.drain();
+  const rev0 = svc.rev;
+  A.ds.commit(withText(A.ds.project, "c1", "已落地"));
+  // 旧连接上行照常处理(dropUp: false),确认丢在旧连接的下行里
+  A.swap({ dropUp: false });
+  assert.equal(svc.rev, rev0 + 1);
+  svc.drain();
+  assert.equal(svc.rev, rev0 + 1, "没有落第二次");
+  assert.equal(A.ds.unconfirmed, 0);
+  assert.equal(textOf(A.ds.project, "c1"), "已落地");
+  assert.equal(A.notices.length, 0);
+});
+
+test("HO-03 换的这一下没有新版本:手里的项目对象原样留着(不换新对象,界面不重算)", () => {
+  const svc = new MemDocService({ project: clipsProject(), rev: 1 });
+  const A = swappable(svc, "A", clipsProject());
+  svc.drain();
+  const before = A.ds.project;
+  A.projects.length = 0;
+  A.swap({ dropUp: true });
+  svc.drain();
+  assert.equal(A.ds.project, before);
+  assert.deepEqual(A.projects, []);
+  assert.equal(A.ds.status, "online");
+  // 之后照常提交
+  A.ds.commit(withText(A.ds.project, "c1", "换完之后"));
+  svc.drain();
+  assert.equal(textOf(svc.project, "c1"), "换完之后");
+});
+
+test("HO-04 本来就在离线批次里:换连接不改离线的规矩(第一条仍带期望版本)", () => {
+  const { svc, A } = setupClips();
+  const rev0 = svc.rev;
+  A.down();
+  A.ds.commit(withText(A.ds.project, "c1", "离线改的"));
+  A.sent.length = 0;
+  A.up();
+  A.ds.handover();
+  svc.drain();
+  const ops = A.sent.filter((m) => m.type === "project.op");
+  assert.equal(ops.at(-1).expectRev, rev0);
+  assert.equal(textOf(svc.project, "c1"), "离线改的");
+  assert.equal(A.ds.status, "online");
+});
+
+test("HO-05 换连接时旧连接上有两条在途:前一条已含在新状态里、后一条换完才落地并先回来 —— 不算乱序,不重同步", () => {
+  const svc = new MemDocService({ project: clipsProject(), rev: 1 });
+  const A = swappable(svc, "A", clipsProject());
+  svc.drain();
+  const rev0 = svc.rev;
+  const connA = () => [...svc.conns].filter((c) => c.session === "A");
+  A.ds.commit(withText(A.ds.project, "c1", "X"));
+  A.ds.commit(withText(A.ds.project, "c2", "Y"));
+  const old = connA()[0];
+  // X 在旧连接上先落地(确认留在旧连接的下行里,换完就丢)
+  svc.handle(old, old.up.shift());
+  const yMsg = old.up.shift();
+  A.swap({ dropUp: true });
+  const fresh = connA()[0];
+  // 新连接先拿到状态(含 X);这时 Y 才经旧连接落地,回发给新连接;重发的 X、Y 的回音在后面
+  svc.handle(fresh, fresh.up.shift());
+  fresh.onMessage(fresh.down.shift());
+  svc.handle({ ...old, open: true, down: [] }, yMsg);
+  svc.drain();
+  assert.equal(svc.rev, rev0 + 2);
+  assert.equal(A.ds.unconfirmed, 0);
+  assert.equal(textOf(A.ds.project, "c1"), "X");
+  assert.equal(textOf(A.ds.project, "c2"), "Y");
+  assert.deepEqual(A.notices.filter((n) => n.kind !== "remote").map((n) => n.kind), []);
+  assert.equal(JSON.stringify(A.ds.project), JSON.stringify(svc.project));
+});

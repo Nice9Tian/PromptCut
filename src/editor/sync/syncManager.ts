@@ -32,6 +32,7 @@ import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } fr
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync, detachCardSync } from "./cardSync";
 import { accountCardTicket } from "./accountCardSync";
+import { createAccountLinkLife } from "./accountLinkLife";
 import { bindAgentSide, releaseAgentSide } from "./agentSideBinding";
 import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, setPresenceLink } from "./presence";
@@ -251,6 +252,8 @@ interface Current {
   /** 账号项目:创建者改托管方的渲染节点的开关,或它下面的子选项(「生成轨道流」)。成员调用被服务端拒(403) */
   setAccountHosted?: (change: { service: "render"; enabled: boolean } | { service: "render"; option: HostedOptionName; enabled: boolean }) => Promise<void>;
   accountMembers?: () => Promise<AccountMembersSnapshot>;
+  /** 诊断:账号项目里这条连接的寿命 */
+  accountLife?: () => { expiresAt: number | null; renews: number; expires: number; busy: boolean };
   accountMemberAdmin?: (operation: AccountMemberOperation) => Promise<AccountMemberResult>;
 }
 
@@ -964,6 +967,8 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
     docProjectId: () => currentDocProjectId(),
     rev: () => cur?.link.ds.rev ?? null,
     agentOp: (callId: string) => agentOpFor(callId),
+    /** 账号云端项目:这条连接能用到什么时候、换过几次会话(`accountLinkLife.ts`) */
+    accountLife: () => cur?.accountLife?.() ?? null,
     events: () => eventRecordList(),
   };
 }
@@ -1127,8 +1132,15 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   const renew = () => renewing ??= options.client.session(options.projectId).then(value => {
     current = value; projectSession(value); return value;
   }).finally(() => { renewing = null; });
+  // 页面这条连接只能用到票据背后的访问令牌到期:到期前换到新会话上,换不成如实转离线(`accountLinkLife.ts`)
+  const life = createAccountLinkLife({
+    session: ({ minRemainingMs }) => options.client.session(options.projectId, { minRemainingMs }).then(value => { current = value; projectSession(value); return value; }),
+    link: () => link,
+    onTerminal: error => fail(error),
+  });
   const protocols = async () => { if (stopped) throw new AccountFailure(401, 'credential-revoked');
-    if (first) first = false; else await renew(); return accountConnectionProtocols(current); };
+    const ticket = await life.ticket(first ? current : null); first = false;
+    return accountConnectionProtocols({ connectionTicket: ticket } as ProjectSession); };
   const ticket = Object.assign(async () => (await ticket.info())?.ticket ?? null, {
     info: async ({ force = false }: { force?: boolean } = {}) => {
       if (stopped || cur?.link !== link) return null;
@@ -1152,7 +1164,10 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
     saveBackup: b => void saveBackup(b), onMessage: onSideMessage,
     onProtocolError: error => { const e = error as { status?: number }; if (e.status === 401 || e.status === 403) { fail(error); return true; }
       pushToast(error instanceof Error ? error.message : '云端服务暂时不可用，正在等待重连。', 'warn'); return false; },
-    onOpen: () => { void (async () => {
+    onAuthExpired: () => { void life.authExpired(); },
+    onOpen: () => { life.opened(); void (async () => {
+      // 重新建成会话(断线重连、到期前换会话):进项目时接好的东西都还在,只把跟着连接走的订阅补上
+      if (ready) { if (!stopped) { link.send({ type: 'events.list' }); refreshStatus(); } return; }
       await sharedStateReady(link);
       if (stopped) return;
       const account = options.client.account;
@@ -1166,6 +1181,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         if (current.expiresAt <= Date.now() + 60_000) await renew();
         return current;
       } }));
+      if (cur?.link === link) cur.accountLife = () => life.describe();
       if (cur?.link === link) cur.setAccountAgentEnabled = async enabled => {
         if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
         await renew();
@@ -1207,6 +1223,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         const metadataTimer = setInterval(() => {
           if (!isCurrent()) return;
           void renew().catch(error => { if (error instanceof AccountFailure && (error.status === 401 || error.status === 403)) fail(error); });
+          void life.tick();
         }, 3000);
         cur.offs.push(() => clearInterval(metadataTimer));
       }
