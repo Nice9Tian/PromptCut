@@ -114,7 +114,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   const history = openOperationHistory(path.join(dir, 'operations.db')); history.createProject(projectId, { id: projectId });
   const unavailable = () => { throw Error('no-account-operation'); };
   const operations = createPasswordOrder({ history, account: { get: unavailable }, verifyWitness: unavailable, checkGate: unavailable });
-  const gates = { holdTerminalDelivery: false };
+  const gates = { holdTerminalDelivery: false, rejectWorkerEvents: false };
   const deliveries = new Map();
   let provider;
   function deliver(control) {
@@ -177,6 +177,8 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   const eventHandler = createWorkerEventInternalHandler({ eventStore, resolveWorker: input => master.workerEventSource(input) });
   const masterSockets = new Set();
   const masterServer = https.createServer({ ...pki.asset, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, (req, res) => {
+    // gates.rejectWorkerEvents：主服务收事件的口一时答不上（任务进程那边的事件交不上去）
+    if (gates.rejectWorkerEvents) { req.resume(); res.writeHead(503, { 'content-type': 'application/json' }); res.end('{"ok":false,"code":"master-unavailable"}'); return; }
     void eventHandler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }).catch(() => res.destroy());
   });
   masterServer.on('connection', socket => { masterSockets.add(socket); socket.once('close', () => masterSockets.delete(socket)); });
