@@ -18,7 +18,7 @@
  * # 页面只算哪些流
  *
  * 只算单卡流,而且只算切分方会给浏览器出一份的那些(`browser-stream-task.md` 第一处):共享档(有状态的卡)、独立卡、
- * 不是画布卡、不是 Lottie、框不带三维、序列没有隐藏。清单里的卡超过解码器预算时照切分方同一个办法合并(`groupStreams`),
+ * 不是画布卡、框不带三维、序列没有隐藏。清单里的卡超过解码器预算时照切分方同一个办法合并(`groupStreams`),
  * 并进组流的卡页面不产(组流浏览器画不了)。另有两条比切分方更紧的(〔裁〕,见 `browser-stream-task.md`「本页产流」):
  * 只算页面自带的内置卡片(源码版本以 `builtin:` 开头;同步来的用户卡的源码版本页面一侧算不准,算错了改卡以后键不变),
  * 只算输出节点就是这张卡自己的片段(片段上另挂了滤镜、强调时输出节点是外面那一层,键里没有卡的参数)。
@@ -47,8 +47,6 @@ export const PAGE_STREAM_SEGMENTS_PER_TASK = 8;
 /** 层表的版本、快照段长(与 `server/artifact-transfer.mjs` 的 `LAYER_MAP_VERSION`、`QUEUE_DEFAULTS.SNAPSHOT_SPAN` 同值) */
 export const PAGE_LAYER_MAP_VERSION = 3;
 export const PAGE_SNAPSHOT_SPAN = 60;
-/** 纯浏览器不做的卡种(与 `server/render-node/split.mjs` 的 `BROWSER_EXCLUDED_CARD` 同一个式子) */
-export const PAGE_EXCLUDED_CARD = /^lottie(?:-|$)/;
 
 /* ------------------------------------------------------------------ 在线构建嵌进页面的代码指纹 */
 
@@ -399,10 +397,9 @@ export function pageStreamBlock(control: PageControl, at: { clip: AnyClip; track
   if (control.compositing !== "independent") return "not-independent";
   if (frame3d(at.clip.frame)) return "frame-3d";
   if (!Number.isInteger(control.count) || control.count <= 0) return "no-frames";
-  // 浏览器做不做得了(`split.mjs` 的 `browserEligible`):共享档、不是画布卡、不是 Lottie(重度在这几条之下一定是 medium)
+  // 浏览器做不做得了(`split.mjs` 的 `browserEligible`):共享档、不是画布卡(重度在这几条之下一定是 medium)
   if (control.tier !== "shared") return "not-shared-tier";
   if (control.capabilities?.canvasHeavy === true) return "canvas";
-  if (PAGE_EXCLUDED_CARD.test(String(control.cardId ?? ""))) return "lottie";
   // 〔裁〕比切分方更紧的两条:只算页面自带的内置卡片;只算输出节点就是这张卡自己的片段
   if (control.node.adapter !== "chrome" || control.node.clipId !== control.clipId) return "wrapped-node";
   if (!control.cardId || !String(sourceVersions[control.cardId] ?? "").startsWith("builtin:")) return "not-builtin";
