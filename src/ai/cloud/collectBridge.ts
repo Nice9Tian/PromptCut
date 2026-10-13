@@ -76,7 +76,7 @@ export interface CollectBridgeLocal {
 export interface CollectBridgeUpload {
   /** 这张页面此刻开着的账号项目;没有是 null */
   projectId(): string | null;
-  /** 按哈希交给上传队列;本机内容库里没有、或没有上传目标时回 false */
+  /** 按哈希交给上传队列(已经在队列里、已经传完的再交一次也算交了);本机内容库里没有、或没有上传目标时回 false */
   push(items: { hash: string; name: string }[]): Promise<boolean>;
   /** 这份字节在这个项目的素材服务里是不是已经齐了 */
   stored(hash: string): Promise<boolean>;
