@@ -90,8 +90,12 @@ export function toneWav({ hz = 440, seconds = 0.25, rate = 8000 } = {}) {
  * @param {boolean} [o.productionMaster] 主服务这一侧改用生产的装配（`account-master-assembly.mjs`：事件库、内部口、附件存储、
  *        页面的事件流从事件库读），槽调度经内部口用 root 那张证书去问（`account-master-scheduler-client.mjs`）——
  *        和 Linux 上 root 入口的接法相同。缺省仍是夹具自己拼的那一份。
+ * @param {Record<string, string>} [o.tools] 任务进程设置文件里的 `tools` 一节（工具要的节点依赖：ffmpeg、浏览器等的绝对路径）
+ * @param {object} [o.runnerOptions] 交给真实运行器的其它选项（例如出网闸的测试例外）；只给探针与测试
+ * @param {object} [o.toolLimits] 工具提供者的时限与上限（探针把它们调短）
  */
-export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false } = {}) {
+export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false,
+  tools = null, runnerOptions = null, toolLimits = null } = {}) {
   const log = [], say = (event, fields) => log.push({ at: Date.now(), event, ...fields });
   const docKey = pair(), masterKey = generateServiceKeyPair(), m = scopeModel(slotId);
   const generations = new Map(), stops = [];
@@ -232,8 +236,10 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       // 任务进程连素材服务的内部口，用的是它连文档服务的同一张任务证书
       runAssets: { origin: `https://127.0.0.1:${ports.assetInternal}/`, fingerprint256: pki.asset.fingerprint256,
         // 全量测试时机器很忙：一次素材请求里素材服务要回文档服务核好几趟，缺省的 5 秒无动静时限不够宽
-        maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024, timeoutMs: 30_000 } };
-    fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile, lookLimits: { pollWaitMs: 300 } }), { mode: 0o600 });
+        maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024, timeoutMs: 30_000 },
+      ...(tools ? { tools } : {}) };
+    fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile, lookLimits: { pollWaitMs: 300 },
+      ...(runnerOptions ? { runnerOptions } : {}), ...(toolLimits ? { toolLimits } : {}) }), { mode: 0o600 });
     // 子进程不带父子通道（和 systemd 起的一样）：指令走它那个只认 root 证书的本机 HTTPS 口
     const gateway = createAccountWorkerHttpsGateway({ configurationModule: path.join(here, 'account-runner-child-config.mjs'), cwd: path.resolve(here, '..', '..', '..'),
       env: { ...process.env, PROMPTCUT_RUNNER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 30_000, port: worker.identity.port,
