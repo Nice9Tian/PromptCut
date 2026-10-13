@@ -15,6 +15,13 @@ class EngineNotInstalled(Exception):
     """引擎的第三方依赖没装。消息里要写清楚下一步该干什么。"""
 
 
+class ModelNotInstalled(Exception):
+    """离线模式（--offline）下，要用的模型权重不在模型目录里。
+
+    离线模式不许联网下载权重：云节点的权重由部署者预先放好，缺了如实报告。
+    """
+
+
 def cuda_available() -> bool:
     """有没有可用的 CUDA。没装 torch、torch 装坏了都算没有。
 
