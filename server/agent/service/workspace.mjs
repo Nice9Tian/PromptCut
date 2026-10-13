@@ -15,6 +15,8 @@
  *   - 对话删除、项目删除时整棵删掉;
  *   - 子进程(Python、ffmpeg、下载器)只经 `spawn()` 起:工作目录是对话目录,环境变量是一张**白名单**重建的,
  *     不带 Agent 服务的私钥目录、数据目录、文档服务地址、委托与模型 Key(这些本来也只在内存里,这里连同名的环境变量一起不传)。
+ *     起出来的是一棵杀得掉的进程树(`perception/runner.mjs` 的 `spawnTree`):非 Windows 上是新进程组的组长,
+ *     `child.kill()` 与自带的超时杀的都是整棵树(Python 再起的 ffmpeg 一起死)。
  *
  * 这只是进程内的一道:节点上应当再用独立的非特权用户跑这些子进程(部署说明里写),本模块不假设它存在。
  * 纯 Node,不引用 `src/`。
@@ -22,6 +24,9 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { killTree, spawnTree } from './perception/runner.mjs';
+
+export { killTree };
 
 export const WORKSPACE_DEFAULTS = Object.freeze({
   /** 一个对话的工作目录总量上限 */
@@ -262,21 +267,17 @@ export function createWorkspaces({ dataDir, limits: limitsIn = {}, log = () => {
       usage: () => treeSize(dir),
       /**
        * 起子进程:工作目录是对话目录,环境变量按白名单重建,不弹窗口。`args` 里的路径由调用方用 `resolve()` 得到。
+       * 回的 `child.kill()` 杀整棵进程树;`timeoutMs` 到点也杀整棵树。起 Python 时参数用 `isolatedPythonArgs()` 拼(隔离模式)。
        * @param {string} command
        * @param {string[]} args
        * @param {{ env?: Record<string, string>, stdio?: any, timeoutMs?: number }} [options]
        */
       spawn(command, args = [], options = {}) {
         const cwd = ensure();
-        const child = spawnImpl(command, args, {
-          cwd,
-          env: childEnv(cwd, options.env),
-          stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-          shell: false,
-        });
+        // 起成一棵杀得掉的树(`perception/runner.mjs`):非 Windows 上是新进程组的组长;回的 `child.kill()` 杀整棵树
+        const child = spawnTree(command, args, { cwd, env: childEnv(cwd, options.env), stdio: options.stdio }, { spawnImpl });
         if (Number(options.timeoutMs) > 0) {
-          const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 已经退了 */ } }, Number(options.timeoutMs));
+          const timer = setTimeout(() => { killTree(child); }, Number(options.timeoutMs));
           timer.unref?.();
           child.once('exit', () => clearTimeout(timer));
         }

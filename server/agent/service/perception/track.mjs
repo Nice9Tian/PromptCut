@@ -10,8 +10,11 @@
  *     服务重启后 `running` 的变成 `interrupted`,不会凭内存里的 Map 消失成 404。
  *   - 轨迹结果持久在本模块自己的表里,键是「项目 × 对话 × 素材 × 素材版本」,不是全局 `mediaId` 的 Map;
  *     只有作业表里是 `done` 的作业,它的结果才读得到(写结果之后作业推进失败,结果跟着删)。
- *   - Python 子进程只经工作区的受限 `spawn()` 起(环境变量白名单、不弹窗口),再登记进 F0 的运行资源表:
- *     fence 变了(私有、停止、Agent 关闭、被踢……)由资源表杀掉它,`close()` 等到 close 事件才算收干净。
+ *   - Python 子进程只经工作区的受限 `spawn()` 起(环境变量白名单、不弹窗口、起成一棵杀得掉的进程树),再登记进 F0 的运行资源表:
+ *     fence 变了(私有、停止、Agent 关闭、被踢……)由资源表杀掉整棵树(Python 再起的 ffmpeg 一起),`close()` 等到 close 事件才算收干净。
+ *     杀树、等收尾、登记用公共实现 `runner.mjs`。
+ *   - Python 用隔离模式起(`-I`,`runner.mjs` 的 `isolatedPythonArgs`):工作目录是对话工作区,不让它排进模块搜索路径;
+ *     包目录只来自部署配置(`python.packageRoot`),经引导代码递进去。
  *   - 云端 `track_install` 只跑包里随发的(或部署者指定的锁定)依赖清单,模型给不了任何 pip 或 shell 参数;
  *     部署者没开安装时回明确的原因(节点上的拓展由托管方统一装)。
  *
@@ -25,6 +28,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { isolatedPythonArgs, splitRoots, superviseChild } from './runner.mjs';
 
 export const TRACK_TOOL_NAMES = Object.freeze(['track_status', 'track_install', 'track_points', 'get_track']);
 
@@ -276,7 +280,7 @@ export function createTrackTools({
 
   const slots = createSlots(limits.maxConcurrentJobs);
   const runners = new Set();        // 还在跑的作业(含排队的)
-  const children = new Set();       // 还没 close 的子进程
+  const children = new Set();       // 还没 close 的子进程(`{ kill }`,杀的是整棵树)
   const activeJobs = new Set();     // 本进程里有 runner 的 jobId
   let installing = null;            // 本进程里正在装的 jobId(进程级单例)
   let closing = false;
@@ -294,57 +298,50 @@ export function createTrackTools({
   };
 
   /**
-   * 经工作区的受限 spawn 起 `python -m promptcut_track …`,登记进运行资源表,逐行解析 stdout 的 JSON 事件。
-   * 回 `{ code, signal, timedOut, aborted, events, stderrTail }`;子进程 close 之后才返回。
+   * 经工作区的受限 spawn 起 `promptcut_track …`(隔离模式),登记进运行资源表,逐行解析 stdout 的 JSON 事件。
+   * 回 `{ code, signal, timedOut, aborted, events, stderrTail }`;子进程 exit + close 之后才返回。
    */
   async function runPython(context, ws, args, { timeoutMs, onEvent = () => {}, env = {}, preamble = [] } = {}) {
     if (!python?.executable) throw new TrackToolError('TRACK_UNCONFIGURED', '这台云节点没有配置运动追踪的 Python 运行环境。请告诉用户联系托管方。');
     if (closing) throw new TrackToolError('TRACK_CLOSED', '服务正在关闭');
-    const argv = ['-m', 'promptcut_track', ...pythonFlags(), ...preamble, ...args];
-    const child = ws.spawn(python.executable, argv, {
-      env: { PYTHONPATH: python.packageRoot ?? '', PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', ...env },
-    });
-    children.add(child);
-    const closedEvent = new Promise((resolve) => child.once('close', (code, signal) => { children.delete(child); resolve({ code, signal }); }));
-    const state = { events: [], stderrTail: '', timedOut: false, buffer: '' };
-    child.stdout?.on('data', (chunk) => {
-      state.buffer += chunk.toString('utf8');
-      const lines = state.buffer.split(/\r?\n/);
-      state.buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.startsWith('{')) continue;
-        let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
-        if (!isPlain(ev)) continue;
-        state.events.push(ev.event === 'log' ? { event: 'log' } : ev);
-        try { onEvent(ev); } catch { /* 回调出错不影响进程收尾 */ }
-      }
-    });
-    child.stderr?.on('data', (chunk) => { state.stderrTail = (state.stderrTail + chunk.toString('utf8')).slice(-2000); });
-    let spawnError = null;
-    child.once('error', (error) => { spawnError ??= error; });
-    if (child.pid === undefined) {
-      // 起都没起来(解释器路径不对):没有进程可登记,Node 只发 error 与 close,不发 exit,登记了会等不到收尾
-      await closedEvent;
-      throw Object.assign(new Error('python-spawn-failed'), { code: spawnError?.code ?? 'SPAWN_FAILED', jobCode: 'TRACK_ENGINE_UNAVAILABLE', detail: 'Python 解释器起不来' });
-    }
-    let timer = null;
-    let registration = null;
+    // PYTHON* 环境变量在隔离模式下不生效(包目录、UTF-8 都由命令行给),这里不设
+    const argv = isolatedPythonArgs('promptcut_track', { roots: splitRoots(python.packageRoot), args: [...pythonFlags(), ...preamble, ...args] });
+    const child = ws.spawn(python.executable, argv, { env: { ...env } });
+    const entry = { kill: () => child.kill() };
+    children.add(entry);
+    child.once('close', () => children.delete(entry));
+    const state = { events: [], stderrTail: '', buffer: '' };
+    let run;
     try {
-      registration = await resources.register(context, { kind: 'child', resource: child });
+      run = await superviseChild(child, {
+        resources, context, timeoutMs,
+        onStdout: (chunk) => {
+          state.buffer += chunk.toString('utf8');
+          const lines = state.buffer.split(/\r?\n/);
+          state.buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.startsWith('{')) continue;
+            let ev;
+            try { ev = JSON.parse(line); } catch { continue; }
+            if (!isPlain(ev)) continue;
+            state.events.push(ev.event === 'log' ? { event: 'log' } : ev);
+            try { onEvent(ev); } catch { /* 回调出错不影响进程收尾 */ }
+          }
+        },
+        onStderr: (chunk) => { state.stderrTail = (state.stderrTail + chunk.toString('utf8')).slice(-2000); },
+      });
     } catch (error) {
-      // 注册失败时资源表已经杀过它;这里再保险一次,再等 close
-      try { child.kill(); } catch { /* 已经退了 */ }
-      await closedEvent;
+      // 登记被拒:superviseChild 已经杀掉整棵树并等到它收干净
+      children.delete(entry);
       throw error;
     }
-    if (Number(timeoutMs) > 0) {
-      timer = setTimeout(() => { state.timedOut = true; try { child.kill(); } catch { /* 已经退了 */ } }, Number(timeoutMs));
+    const end = await run.done;
+    children.delete(entry);
+    if (end.spawnError) {
+      // 起都没起来(解释器路径不对):没有进程可登记
+      throw Object.assign(new Error('python-spawn-failed'), { code: end.spawnError?.code ?? 'SPAWN_FAILED', jobCode: 'TRACK_ENGINE_UNAVAILABLE', detail: 'Python 解释器起不来' });
     }
-    const { code, signal } = await closedEvent;
-    clearTimeout(timer);
-    await registration.closed;
-    return { code, signal, timedOut: state.timedOut, aborted: registration.signal.aborted, events: state.events, stderrTail: state.stderrTail };
+    return { code: end.code, signal: end.signal, timedOut: end.timedOut, aborted: end.aborted, events: state.events, stderrTail: state.stderrTail };
   }
 
   /* ---- 作业状态推进 ---- */
@@ -816,7 +813,7 @@ export function createTrackTools({
       if (closeReceipt) return closeReceipt;
       closing = true;
       closeReceipt = (async () => {
-        for (const child of [...children]) { try { child.kill(); } catch { /* 已经退了 */ } }
+        for (const child of [...children]) { try { child.kill(); } catch { /* 已经退了 */ } } // 每个都是杀整棵树
         await Promise.allSettled([...runners]);
         const receipt = { childrenClosed: children.size === 0, streamsClosed: true, workPending: runners.size, reason };
         if (ownsStore) store.close();

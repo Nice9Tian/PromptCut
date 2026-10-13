@@ -3,14 +3,17 @@
  * 拆包表 `docs/plan/cloud-agent-tools-implementation.md` 的 P4)。
  *
  * 桌面版里这四个工具打编辑器进程的 `/api/subject/*`(`server/vite-plugin-subject.ts`),作业放在 RAM 里,结果由页面写回项目。
- * 云节点上没有编辑器进程,这里照同一份命令行与 JSONL 约定起同一个 Python 包(`python -m promptcut_subject`),规矩是:
+ * 云节点上没有编辑器进程,这里照同一份命令行与 JSONL 约定起同一个 Python 包(`promptcut_subject`,隔离模式起),规矩是:
  *
  *   - **上下文只来自 F0**:每个调用带的 `context` 是 `tool-context.mjs` 发的可信八字段;每次读素材、起进程、写项目之前,
  *     都用 `run-resources.mjs` 的 `authorize` 重验 doc 的当前 grant / fence,不信工具参数里的任何项目或路径;
  *   - **素材只经 `project-assets.mjs` 的 `openRead`**(带哈希核对)取到这个对话的工作目录(`subject/<作业号>/`),
  *     跑完删;Python 只读这份本地文件,并且加 `--local-only`,ffmpeg / ffprobe 只准读本地文件;
- *   - **子进程只经工作区的受限子进程起**(`workspace.mjs` 的 `spawn`:环境变量白名单、不弹窗口),并登记到
- *     `run-resources.mjs`(kind `child`):这一轮被停、转私有、Agent 关闭、服务关闭时,进程树真被杀掉、`exit` 与 `close` 都到了才算关;
+ *   - **子进程只经工作区的受限子进程起**(`workspace.mjs` 的 `spawn`:环境变量白名单、不弹窗口、起成一棵杀得掉的进程树),并登记到
+ *     `run-resources.mjs`(kind `child`):这一轮被停、转私有、Agent 关闭、服务关闭时,进程树真被杀掉、`exit` 与 `close` 都到了才算关
+ *     (杀树、等收尾、登记用公共实现 `runner.mjs`);
+ *   - **Python 用隔离模式起**(`-I`,`runner.mjs` 的 `isolatedPythonArgs`):工作目录是对话工作区,里面是成员和模型弄进来的文件,
+ *     不让它排进模块搜索路径;包目录与受控安装的目录只来自部署配置,经引导代码递进去;
  *   - **作业记在 `tool-jobs.mjs` 的持久账本里**(`subject.detect` / `subject.install`):服务重启后 `running` 变 `interrupted`,
  *     不是「找不到」;账本只存状态与进度,中文的失败原因与采样点数等放在对话工作区的 `subject/jobs.json`;
  *   - **结果写项目素材的当前版本**:`project.setMediaSubjects` 带上取字节时的 `mediaRev` 做版本预期,素材中途被换掉就丢弃这次结果,
@@ -25,10 +28,9 @@
  * 纯 Node,不引用浏览器;只在取采样时刻与建议位置时懒加载 `src/kernel/project.ts`(`kernel` 可注入)。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn as nodeSpawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isolatedPythonArgs, splitRoots, superviseChild } from './runner.mjs';
 
 export const SUBJECT_TOOL_NAMES = Object.freeze(['subject_status', 'subject_install', 'detect_subjects', 'list_subjects']);
 
@@ -75,6 +77,8 @@ const REQUEST_RE = /^[A-Za-z0-9_-]{8,128}$/;
 const OUTPUT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/;
 const INDEX_FILE = 'subject/jobs.json';
 const RESERVED = Symbol('reserved');
+/** 进程没起来时没有登记,也就没有取消信号:给一个永远不响的 */
+const NEVER_ABORTED = Object.freeze({ aborted: false });
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 
 /**
@@ -82,7 +86,7 @@ const sha = (text) => createHash('sha256').update(text).digest('hex');
  *
  *   PROMPTCUT_AGENT_SUBJECT_PYTHON       装了依赖的 Python 解释器(绝对路径)。配了主体识别才可用
  *   PROMPTCUT_AGENT_SUBJECT_MODELS       权重目录(绝对路径;yunet.onnx、rtdetr_r18vd.onnx、grounding-dino-tiny/)
- *   PROMPTCUT_AGENT_SUBJECT_PYLIBS       可选:受控安装的目标目录(同时进 PYTHONPATH)
+ *   PROMPTCUT_AGENT_SUBJECT_PYLIBS       可选:受控安装的目标目录(同时进 Python 的模块搜索路径)
  *   PROMPTCUT_AGENT_SUBJECT_REQUIREMENTS 可选:受控安装用的锁定版本清单(绝对路径);与 PYLIBS 都给了才允许 `subject_install`
  *   PROMPTCUT_AGENT_SUBJECT_WHEELHOUSE   可选:受控安装只从这个本地轮子目录装(`pip --no-index --find-links`),不连网
  *   PROMPTCUT_FFMPEG                     ffmpeg 的绝对路径,取它所在目录进 PATH
@@ -108,29 +112,6 @@ export function readSubjectConfig(env, { root }) {
     ...(ffmpegDir ? { ffmpegDir } : {}),
     ...(pylibs && requirements ? { install: { pylibs, requirements, ...(env.PROMPTCUT_AGENT_SUBJECT_WHEELHOUSE ? { wheelhouse: env.PROMPTCUT_AGENT_SUBJECT_WHEELHOUSE } : {}) } } : {}),
   };
-}
-
-/** 杀掉整棵进程树(Windows 上 `child.kill()` 只杀得掉 python.exe,它起的 ffmpeg 会变孤儿) */
-function killTree(child) {
-  if (!child || child.exitCode !== null || child.signalCode) return;
-  if (process.platform === 'win32' && child.pid) {
-    try { nodeSpawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }); return; } catch { /* 退回下面 */ }
-  }
-  try { child.kill('SIGKILL'); } catch { /* 已经退了 */ }
-}
-
-/** 给 `run-resources` 登记用的子进程外壳:`kill()` 杀整棵树;`exit` 与 `close` 都到了才算关(起不来也要给) */
-function childResource(child) {
-  const handle = new EventEmitter();
-  let exited = false;
-  let closed = false;
-  const fireExit = () => { if (!exited) { exited = true; handle.emit('exit'); } };
-  const fireClose = () => { fireExit(); if (!closed) { closed = true; handle.emit('close'); } };
-  child.once('exit', fireExit);
-  child.once('close', fireClose);
-  child.once('error', () => { if (!child.pid) setImmediate(fireClose); });
-  handle.kill = () => killTree(child);
-  return handle;
 }
 
 const jsonLines = (onEvent) => {
@@ -183,8 +164,12 @@ export function createSubjectTools({
   if (typeof workspace !== 'function') throw new SubjectToolError('主体识别缺少依赖:workspace', 'subject-unconfigured');
   const limits = { ...SUBJECT_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
-  const prefix = config ? (Array.isArray(config.args) && config.args.length ? config.args : ['-m', 'promptcut_subject']) : [];
+  /** `config.args` 只给单测与探针(把解释器整个换成替身脚本);正式的一律隔离模式,包目录来自部署配置 */
+  const stubArgs = config && Array.isArray(config.args) && config.args.length ? config.args : null;
   const globalArgs = config ? ['--models-dir', config.modelsDir, '--local-only'] : [];
+  const pythonArgv = (subArgs) => (stubArgs
+    ? [...stubArgs, ...globalArgs, ...subArgs]
+    : isolatedPythonArgs('promptcut_subject', { roots: splitRoots(config.pythonPath), args: [...globalArgs, ...subArgs] }));
   const loadKernel = async () => kernel ?? defaultKernel();
 
   /** 正在跑的作业(本进程):jobId -> 状态。close 要等它们的子进程真关 */
@@ -237,53 +222,44 @@ export function createSubjectTools({
   /* ---------------------------------------------------------------- 起 Python */
 
   /**
-   * 起一次 `python -m promptcut_subject <子命令>`。登记到 run-resources(子进程真关了才算关),
-   * 逐行读 JSONL。回 `{ done, kill, signal }`:`done` 解析成 `{ code, events, stderrTail, timedOut }`。
+   * 起一次 `promptcut_subject <子命令>`(隔离模式)。登记到 run-resources(整棵进程树真关了才算关),
+   * 逐行读 JSONL。回 `{ done, kill, signal, closed }`:`done` 解析成 `{ code, events, stderrTail, timedOut }`。
    */
   async function runPython(context, ws, subArgs, { timeoutMs, env: extraEnv = {}, onEvent = () => {} } = {}) {
     if (!config) throw new SubjectToolError(NOT_CONFIGURED, 'subject-unavailable');
     const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH';
+    // PYTHON* 环境变量在隔离模式下不生效(无缓冲、UTF-8、不写字节码、包目录都由命令行给),这里不设
     const env = {
-      PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1',
-      PYTHONPATH: config.pythonPath,
       ...(config.ffmpegDir ? { [pathKey]: `${config.ffmpegDir}${path.delimiter}${process.env[pathKey] ?? ''}` } : {}),
       ...extraEnv,
     };
-    const child = ws.spawn(config.python, [...prefix, ...globalArgs, ...subArgs], { env });
-    let registration;
-    try { registration = await resources.register(context, { kind: 'child', resource: childResource(child) }); }
-    catch (error) {
-      killTree(child);
-      throw new SubjectToolError('这一轮已经没有权限继续(被停止、转私有或 Agent 关闭),主体识别进程没有启动。', 'subject-forbidden');
-    }
+    const child = ws.spawn(config.python, pythonArgv(subArgs), { env });
     const events = [];
     const stderrTail = [];
     const feed = jsonLines((ev) => { events.push(ev); if (events.length > 2000) events.splice(0, 500); onEvent(ev); });
-    child.stdout?.on('data', (d) => feed(d.toString('utf8')));
-    child.stderr?.on('data', (d) => {
-      for (const l of d.toString('utf8').split(/\r?\n/)) if (l.trim()) { stderrTail.push(l.trim().slice(0, 300)); if (stderrTail.length > 20) stderrTail.shift(); }
+    let run;
+    try {
+      run = await superviseChild(child, {
+        resources, context, timeoutMs,
+        onStdout: (d) => feed(d.toString('utf8')),
+        onStderr: (d) => {
+          for (const l of d.toString('utf8').split(/\r?\n/)) if (l.trim()) { stderrTail.push(l.trim().slice(0, 300)); if (stderrTail.length > 20) stderrTail.shift(); }
+        },
+      });
+    } catch {
+      // 登记被拒:superviseChild 已经杀掉整棵树并等它收干净
+      throw new SubjectToolError('这一轮已经没有权限继续(被停止、转私有或 Agent 关闭),主体识别进程没有启动。', 'subject-forbidden');
+    }
+    const done = run.done.then((end) => {
+      feed.flush();
+      if (end.spawnError) stderrTail.push(String(end.spawnError?.message ?? end.spawnError).slice(0, 300));
+      return { code: end.spawnError ? -1 : (end.code ?? -1), events, stderrTail, timedOut: end.timedOut };
     });
-    let timedOut = false;
-    const timer = Number(timeoutMs) > 0 ? setTimeout(() => { timedOut = true; killTree(child); }, Number(timeoutMs)) : null;
-    timer?.unref?.();
-    const done = new Promise((resolve) => {
-      let finished = false;
-      const finish = (code) => {
-        if (finished) return;
-        finished = true;
-        if (timer) clearTimeout(timer);
-        feed.flush();
-        resolve({ code, events, stderrTail, timedOut });
-      };
-      child.once('error', (err) => { stderrTail.push(String(err?.message ?? err).slice(0, 300)); if (!child.pid) finish(-1); });
-      child.once('close', (code) => finish(code ?? -1));
-    });
-    const closed = new Promise((resolve) => { if (child.exitCode !== null || child.signalCode) resolve(); else child.once('close', resolve); });
-    const entry = { kill: () => killTree(child), closed: Promise.all([closed, registration.closed]).then(() => undefined) };
+    const entry = { kill: run.kill, closed: done.then(() => undefined) };
     children.add(entry);
     void entry.closed.then(() => children.delete(entry));
     if (closing) entry.kill();
-    return { done, kill: entry.kill, signal: registration.signal, closed: entry.closed };
+    return { done, kill: entry.kill, signal: run.signal ?? NEVER_ABORTED, closed: entry.closed };
   }
 
   /** 路径与盘符不回给模型 */
