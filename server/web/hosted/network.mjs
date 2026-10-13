@@ -93,11 +93,14 @@ export async function admitWebTarget(gate, input) {
     if (!(err instanceof WebTargetError)) throw err;
     return { ok: false, result: { ok: false, error: err.code === 'empty' ? err.message : `没有打开:${err.message}`, refused: err.code } };
   }
-  try { await gate.admitUrl(target); } catch (err) {
+  try {
+    // 交给浏览器的是出网闸解析、规范化之后的那个地址(主机名小写、十进制 IP 还原成点分等),不是模型给的原字符串:核的和开的是同一个
+    const { url } = await gate.admitUrl(target);
+    return { ok: true, target: url.href };
+  } catch (err) {
     if (!err?.egress) throw err;
     return { ok: false, result: { ok: false, error: `没有打开:${egressRefusalText(err.code)}`, egress: err.code } };
   }
-  return { ok: true, target };
 }
 
 /**

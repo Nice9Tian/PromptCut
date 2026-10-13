@@ -29,7 +29,7 @@ import { childEnv } from '../../agent/service/workspace.mjs';
 import { spawnTree, killTree, whenClosed, groupAlive } from '../../agent/service/perception/runner.mjs';
 import { startBrowserProxy, hostedNetworkArgs, filterExtraArgs, pageRequestAllowed, isWebUrl, admitWebTarget, egressRefusalText } from './network.mjs';
 import { captureHostedView, parseUid, PAGE_DATA_NOTICE } from './view.mjs';
-import { resolveAt, explain, locate, focusElement, clearElement, explainStale, explainSecret } from './hit.mjs';
+import { resolveAt, explainPick, locate, focusElement, focusState, clearElement, explainStale, explainSecret } from './hit.mjs';
 
 /** 记这份用户数据目录是哪个进程起的浏览器在用(清孤儿用) */
 const OWNER_FILE = 'owner.json';
@@ -660,6 +660,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     if (state.blocked.length) {
       // 自上一版清单以来被拦下的东西(含两次动作之间页面自己干的);交出去就清掉
       out.blocked = state.blocked.splice(0);
+      // blocked 里的对话框文字、下载文件名是网页给的,只当数据看(结果里带着 dataNotice);这句说明是固定的
       out.blockedNote = '这一步里有东西被云端拦下了:'
         + [...new Set(out.blocked.map((b) => ({ download: '下载(云端的浏览器不下载文件)', protocol: '非 http(s) 的地址', popup: '新开的标签页', dialog: '页面弹出的对话框(已自动关掉)', egress: '页面要跳去的地址被出网限制拒绝(云节点本机、内网等不许访问)' })[b.kind] ?? b.kind))].join('、') + '。';
     }
@@ -692,7 +693,11 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     return { mark };
   }
 
-  const stale = (reason, detail = {}) => ({ ok: false, stale: true, reason, error: explainStale(reason, detail) });
+  /** 编号过期的回话。句子固定;盖住它的那一层写着什么是网页上的字,单独放在 coveredBy 里并标明是数据 */
+  const stale = (reason, detail = {}) => ({
+    ok: false, stale: true, reason, error: explainStale(reason, detail),
+    ...(reason === 'covered' && typeof detail.by === 'string' && detail.by ? { coveredBy: detail.by, dataNotice: PAGE_DATA_NOTICE } : {}),
+  });
 
   /* ---------------------------------------------------------------- 动作 */
 
@@ -739,9 +744,15 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     }
     if (failure) {
       if (failure instanceof HostedSessionError) throw failure;
+      // 浏览器报的原文里带着地址等页面能左右的字,不拼进句子:只取出它的错误码(固定的大写字母串)单独放
       const text = String(failure?.message ?? failure);
       const timedOut = /timeout|timed out/i.test(text);
-      return { ok: false, error: timedOut ? `这个页面 ${Math.round(limits.navigationMs / 1000)} 秒没有加载出来,没有打开。` : `没有打开:${text.replace(/\s+at\s+https?:\S+/i, '').slice(0, 160)}` };
+      const netError = /net::(ERR_[A-Z0-9_]{1,60})/.exec(text)?.[1] ?? null;
+      return {
+        ok: false,
+        error: timedOut ? `这个页面 ${Math.round(limits.navigationMs / 1000)} 秒没有加载出来,没有打开。` : '没有打开:页面加载失败(连不上、证书不对、地址不存在这一类)。可以换一个地址,或稍后再试。',
+        ...(netError ? { netError } : {}),
+      };
     }
     return finish({ navigated: target });
   }, '打开网页');
@@ -764,9 +775,17 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
         return { ok: false, error: '要么给 u,要么给 x,y。x,y 是上一次 web_view 返回的那张图上的像素坐标。' };
       }
       if (!state.hasView) return stale('no_view');
-      if (state.viewEpoch !== state.epoch) return stale('navigated', { u: '图上的坐标' });
+      if (state.viewEpoch !== state.epoch) return stale('navigated');
       const res = await resolveAt(page, x, y, { expect: typeof expect === 'string' && expect ? expect : null });
-      if (!res.ok) return { ok: false, error: explain(res), ...(res.cands ? { candidates: res.cands } : {}) };
+      if (!res.ok) {
+        // 句子是固定的;候选元素的名字、那个位置上看到的字是网页上的,只放在单独的字段里
+        return {
+          ok: false, reason: res.reason, error: explainPick(res),
+          ...(res.cands ? { candidates: res.cands } : {}),
+          ...(typeof res.saw === 'string' && res.saw ? { seen: res.saw } : {}),
+          dataNotice: PAGE_DATA_NOTICE,
+        };
+      }
       uid = res.pick.u;
       positional = true;
     }
@@ -782,7 +801,11 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     return finish({ clicked: { u: uid, n: spot.label } });
   }, '点击');
 
-  /** 往输入框里打字。口令、验证码、卡号这类字段不填 */
+  /**
+   * 往输入框里打字。口令、验证码、卡号这类字段不填。
+   * 字只许进这一个输入框:聚焦之后重新核一遍(核不过就不打),打字分小段,每一段之前、全部打完之后都看焦点还在不在它上面——
+   * 页面中途把焦点挪到别的框(比如口令框)就停,如实回,不按回车。
+   */
   const type = ({ u, text, append = false, submit = false } = {}, { guard } = {}) => enqueue(async (check) => {
     if (!state.opened) return { ok: false, error: '浏览器里还没有打开网页。先用 web_open 打开一条链接。' };
     if (typeof u !== 'string' || !u) return { ok: false, error: '要给 u:clickable 清单里那个输入框的编号。' };
@@ -793,18 +816,44 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     const spot = await locate(page, u, checked.mark);
     if (!spot.ok) return stale(spot.reason, { u, by: spot.by });
     if (spot.secret) return { ok: false, refused: 'credentials', error: explainSecret(spot.secret) };
-    if (!spot.editable) return { ok: false, error: `${u} 不是能打字的输入框(是 <${spot.tag}>)。` };
-    if (spot.disabled) return { ok: false, error: `${u} 这个输入框现在不能改(禁用或只读)。` };
+    if (!spot.editable) return { ok: false, error: '这个编号指的元素不是能打字的输入框。' };
+    if (spot.disabled) return { ok: false, error: '这个输入框现在不能改(禁用或只读)。' };
     check(guard);
     await page.mouse.click(spot.x, spot.y);
     // 焦点没落在这个输入框上就不打:字不能进了别处
     if (!await focusElement(page, u)) return stale('covered', { u });
-    // 点了之后它要是变成了口令框(有的站点聚焦时才换类型),同样不填
+    // 点了之后重新核一遍:它不在了、换了内容、被盖住了——一律按过期拒;变成了口令框(有的站点聚焦时才换类型)——不填
     const again = await locate(page, u, checked.mark);
-    if (again.ok && again.secret) return { ok: false, refused: 'credentials', error: explainSecret(again.secret) };
+    if (!again.ok) return stale(again.reason, { u, by: again.by });
+    if (again.secret) return { ok: false, refused: 'credentials', error: explainSecret(again.secret) };
+    if (!again.editable || again.disabled) return stale('changed', { u });
+    /** 焦点离开了、或者它中途变成了口令框:停下,如实回 */
+    const stopped = (focus, typedChars) => {
+      state.viewEpoch = -1;
+      if (focus.ok && focus.secret) return { ok: false, refused: 'credentials', typedChars, error: explainSecret(focus.secret) };
+      return {
+        ok: false, reason: 'focus_moved', typedChars,
+        error: `输入到一半,焦点已经不在这个输入框上了(页面把它挪走了,或者输入框没了),已经停下:后面的字没有输入,也没有按回车。已经输入了 ${typedChars} 个字。先 web_view 看看页面现在的样子。`,
+      };
+    };
     check(guard);
+    let focus = await focusState(page, u);
+    if (!focus.ok || !focus.focused || focus.secret) return stopped(focus, 0);
     if (!append) await clearElement(page, u);
-    await page.keyboard.type(value, { delay: limits.typeDelayMs });
+    let typedChars = 0;
+    const chars = Array.from(value);
+    for (let at = 0; at < chars.length; at += limits.typeChunkChars) {
+      if (at > 0) {
+        focus = await focusState(page, u);
+        if (!focus.ok || !focus.focused || focus.secret) return stopped(focus, typedChars);
+      }
+      check(guard);
+      const chunk = chars.slice(at, at + limits.typeChunkChars);
+      await page.keyboard.type(chunk.join(''), { delay: limits.typeDelayMs });
+      typedChars += chunk.length;
+    }
+    focus = await focusState(page, u);
+    if (!focus.ok || !focus.focused || focus.secret) return stopped(focus, typedChars);
     if (submit) {
       check(guard);
       const epoch = state.epoch;

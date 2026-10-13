@@ -61,6 +61,8 @@ export const HOSTED_BROWSER_DEFAULTS = Object.freeze({
   /** 一次最多输入多少字、每个字之间隔多久 */
   maxTypeChars: 2_000,
   typeDelayMs: 5,
+  /** 打字分小段,每段之前核一次焦点还在那个输入框上。缺省一个字一段:页面中途把焦点挪走时,最多有一个字进了别处 */
+  typeChunkChars: 1,
   /** `web_read` 一次最多给多少字 */
   maxReadChars: 20_000,
   /** 一次最多滚多少页面像素 */
@@ -407,14 +409,19 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
       if (registration.signal.aborted || entry.retired === 'fence') {
         throw new HostedBrowserError('这一轮对话的权限已被收回,网页操作已停止。', { code: 'run-resource-fenced', status: 403 });
       }
+      // 出错的回话也是固定句子:异常原文里可能带着页面上的字,不拼进去(日志里也只记异常的类名)。
+      // 不在这里 return:出错的结果同样要过下面「交结果前」的那次授权复核
       const mapped = failure(error);
-      if (mapped instanceof HostedBrowserError && (mapped.code === 'web-timeout' || mapped.code === 'web-closed')) {
-        return { ok: false, error: mapped.code === 'web-timeout' ? `${mapped.message}。可以 web_view 看看页面现在的样子,或换一个地址。` : NOT_OPEN, ...(mapped.code === 'web-closed' ? { notOpen: true } : {}) };
+      if (mapped instanceof HostedBrowserError && mapped.code === 'web-timeout') {
+        result = { ok: false, code: 'ACTION_TIMEOUT', error: `这一步超过 ${Math.round(cfg.actionMs / 1000)} 秒没有完成,已经停下。可以 web_view 看看页面现在的样子,或换一个地址。` };
+      } else if ((mapped instanceof HostedBrowserError && mapped.code === 'web-closed') || entry.session.closed) {
+        result = { ok: false, error: NOT_OPEN, notOpen: true };
+      } else if (mapped instanceof HostedBrowserError) {
+        throw mapped;
+      } else {
+        say('agent.web.action-failed', { tool: name, kind: String(error?.name ?? 'Error').slice(0, 40) });
+        result = { ok: false, code: 'ACTION_FAILED', error: '这一步没有做成(浏览器那边出了错)。可以 web_view 看看页面现在的样子,再决定下一步。' };
       }
-      if (entry.session.closed) return { ok: false, error: NOT_OPEN, notOpen: true };
-      if (mapped instanceof HostedBrowserError) throw mapped;
-      say('agent.web.action-failed', { tool: name, message: String(error?.message ?? error).slice(0, 160) });
-      return { ok: false, error: `这一步没有做成:${String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 160)}。可以 web_view 看看页面现在的样子。` };
     } finally {
       touch(entry);
     }
