@@ -281,6 +281,7 @@ function compareRuns(a, b, { frames = null, rect = null } = {}) {
 }
 const sameBytes = (a, b) => a.every((buf, i) => !!buf && !!b[i] && buf.equals(b[i]));
 const firstDiff = (a, b) => a.findIndex((buf, i) => !buf || !b[i] || !buf.equals(b[i]));
+const diffFrames = (a, b) => a.map((buf, i) => (!buf || !b[i] || !buf.equals(b[i]) ? i : -1)).filter((i) => i >= 0);
 const saveFrame = (dir, name, buf) => { if (buf) fs.writeFileSync(path.join(dir, name), buf); };
 const rangeOf = (w) => Array.from({ length: w.last - w.first + 1 }, (_, i) => w.first + i);
 
@@ -467,7 +468,11 @@ try {
   check(l2?.nodeClips === 1 && l2?.perClip?.[CLIPS.S.id]?.frames === COUNT.S, `S 的 ${COUNT.S} 帧贴的都是渲染节点逐帧渲的位图`, l2);
   check(l2?.streamPictures === 0, '完整导出:一张流都没取', l2);
   check(!!full3.result && l3?.perClip?.[CLIPS.S.id]?.frames === COUNT.S, '第二遍完整导出同样', { error: full3.error, layers: l3 });
-  check(full2.frames.every(Boolean) && full3.frames.every(Boolean) && sameBytes(full2.frames, full3.frames), '完整导出两遍逐帧逐字节相同', { firstDiff: firstDiff(full2.frames, full3.frames) });
+  // 两遍不同的帧:列出来,并逐帧量差多少(哪一块在变)
+  const fullDiffs = diffFrames(full2.frames, full3.frames);
+  out.diffs.fullTwice = { differFrames: fullDiffs, detail: fullDiffs.slice(0, 6).map((i) => ({ i, ...diffOf(flatten(decode(full2.frames[i])), flatten(decode(full3.frames[i]))) })) };
+  for (const i of fullDiffs.slice(0, 2)) { saveFrame(SHOTS, `step3-full-run1-f${i}.png`, full2.frames[i]); saveFrame(SHOTS, `step3-full-run2-f${i}.png`, full3.frames[i]); }
+  check(full2.frames.every(Boolean) && full3.frames.every(Boolean) && sameBytes(full2.frames, full3.frames), '完整导出两遍逐帧逐字节相同', out.diffs.fullTwice);
   // 内容库与素材服务:导出位图的清单、PNG 块;层表里没有多出导出用的行
   const planEvents = await P(page, () => null).catch(() => null);
   void planEvents;
@@ -540,7 +545,8 @@ try {
   check(f2?.perClip?.[CLIPS.A.id]?.stream === COUNT.A && f2?.perClip?.[CLIPS.B.id]?.stream === COUNT.B, 'A、B 的每一帧都取的是流', f2?.perClip);
   check(f2?.perClip?.[CLIPS.S.id]?.frames === COUNT.S && !(f2?.perClip?.[CLIPS.S.id]?.stream > 0), 'S 没有流:照完整导出的办法,贴渲染节点的位图', f2?.perClip);
   check(f2?.wrapperOnly >= 3 && f2?.streamClips >= 2 && f2?.nodeClips === 1, 'A、B、S 三张都不由导出页活渲(只挂包裹层;页面把别的卡也判重、产满了流的话它也算在内)', f2);
-  check(!!fast3.result && fast2.frames.every(Boolean) && sameBytes(fast2.frames, fast3.frames), '快速导出两遍逐帧逐字节相同', { firstDiff: firstDiff(fast2.frames, fast3.frames), error: fast3.error });
+  out.diffs.fastTwice = { differFrames: diffFrames(fast2.frames, fast3.frames) };
+  check(!!fast3.result && fast2.frames.every(Boolean) && sameBytes(fast2.frames, fast3.frames), '快速导出两遍逐帧逐字节相同', { ...out.diffs.fastTwice, error: fast3.error });
   out.diffs.fastVsFull = compareRuns(fast2.frames, full2.frames);
   out.diffs.fastVsFull_bFrames = compareRuns(fast2.frames, full2.frames, { frames: rangeOf(WIN.B) });
   check(out.diffs.fastVsFull.minPsnr >= 30, '快速导出对完整导出:差在压缩视频的范围内(PSNR ≥ 30;数字见输出)', out.diffs.fastVsFull);

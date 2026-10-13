@@ -85,7 +85,7 @@ test("XM-03 只为导出的清单计划:队列收它,和平时那份不是一个
   const task = F.exportPlanTask({ projectId: "proj-1", projectRev: 7, clips: ["c2", "c1", "c2"], codeVersion: "cv-1" });
   assert.deepEqual(task.input, { clips: ["c1", "c2"], exportOnly: true });
   assert.deepEqual(task.requires, { codeVersion: "cv-1" });
-  assert.equal(task.priority, "normal");
+  assert.equal(task.priority, 70, "排在所有细任务前面(整数名次仍是 normal 档)");
   const parsed = parseInbound({ type: "task.publish", tasks: [task] });
   assert.equal(parsed.ok, true, parsed.detail);
   assert.equal(parsed.body.tasks[0].input.exportOnly, true);

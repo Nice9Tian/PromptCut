@@ -61,8 +61,14 @@ export interface ExportPlanTask {
   input: { clips: string[]; exportOnly: true };
   weight: { class: "medium"; estMs: null; frames: null };
   requires: { codeVersion?: string };
-  priority: "normal";
+  priority: number;
 }
+
+/**
+ * 只为导出的计划在队列里的名次:排在所有细任务前面(锚帧 50、导出位图任务 60)。用户正等着导出;名次低的话,节点手里别的快照、
+ * 轨道流任务没做完就轮不到它(实测同一个项目里等了五分钟)。整数名次仍属 normal 档(`server/render-queue/messages.mjs` 的 `priorityBand`)。
+ */
+export const EXPORT_PLAN_PRIORITY = 70;
 
 /** 只为导出的清单计划(队列按清单计划收:结果键的形状、`input.clips` 的形状都照它的规矩) */
 export function exportPlanTask({ projectId, projectRev, clips, codeVersion }: { projectId: string; projectRev: number; clips: readonly string[]; codeVersion?: string | null }): ExportPlanTask {
@@ -71,7 +77,7 @@ export function exportPlanTask({ projectId, projectRev, clips, codeVersion }: { 
   return {
     id: `plan:${resultKey}`, kind: "plan", resultKey, range: null,
     source: { projectId, projectRev }, input: { clips: list, exportOnly: true }, weight: { class: "medium", estMs: null, frames: null },
-    requires: typeof codeVersion === "string" && codeVersion ? { codeVersion } : {}, priority: "normal",
+    requires: typeof codeVersion === "string" && codeVersion ? { codeVersion } : {}, priority: EXPORT_PLAN_PRIORITY,
   };
 }
 
