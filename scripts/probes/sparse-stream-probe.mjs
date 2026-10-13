@@ -23,12 +23,11 @@
  *   5. 放行以后补满密度:每个分段换成 `stride` 1,`box` 原样留着;每个分段的头、中、尾各抽一个样本,最像的是它自己那一帧;
  *      **不裁内容**:这个分段里每一帧的参照画面的不透明区域都落在这个分段的矩形里(字每帧横移,稀疏那一趟量不到两张之间走到哪,
  *      补密时顶到收紧矩形的边要放大重来;记放大了几次)。
- *   6. 舞台在分段边界换上满密度(甲):舞台正贴着稀疏版时满密度补齐了。从那一帧起逐帧往后走(每一步就是播放的一拍):
- *      先一直是稀疏版(每段第一帧的画面);流播放器按它自己的节流(`MANIFEST_REFRESH_MS`,按舞台的虚拟时钟算)再问一次清单以后,
- *      在**某个分段的第一帧**换上满密度,从那一拍起每一帧画的都是这一帧自己,中间没有一拍画错。换上的那一拍记在结果里。
- *      (被换掉的稀疏分段文件,生产者过 `REPLACED_DELETE_MS`(5 秒,真实时间)才删;真的播放时流播放器每 2 秒(播放时间)再问一次清单,
- *      赶得上。这里一拍要截两张图、比真的播放慢十倍,所以探针把被换掉的稀疏分段留一份、文件删了以后照样给,
- *      相当于把那 5 秒也放慢十倍 —— 不这样的话,拿着旧清单的播放器去取已经删掉的稀疏分段,要等到它下一次问清单才画得出来。)
+ *   6. 舞台换上满密度(甲):舞台停在一个分段中间、正贴着稀疏版时,满密度补齐了。不动播放头,等流播放器自己再问一次清单
+ *      (它停在稀疏段上时按 `MANIFEST_REFRESH_MS` 定时重问):这一帧从「分段第一帧的画面」换成这一帧自己的画面。之后逐帧往后走
+ *      (每一步就是播放的一拍,走过十来个分段边界):每一拍画的都是这一帧自己,没有一拍画错、没有一拍退回稀疏版。
+ *      (被换掉的稀疏分段文件,生产者过 `REPLACED_DELETE_MS` 才删;探针把它们留一份、文件删了以后照样给,免得播放器重问清单之前
+ *      去取一个刚删掉的文件。给过几次记在结果里。)
  *   7. 队列那条路(丙):稀疏流任务产出稀疏的分段(带 `box`);再做一次一帧都不截;满密度任务在同一条流上补成满密度;
  *      之后再来稀疏流任务不降级。
  *
@@ -494,8 +493,20 @@ try {
   out.a.widenLog = A.producer.status().log.filter((line) => /放大/.test(String(line?.message ?? line))).length;
   say('a-dense', { ms: out.a.denseMs, order: out.a.order, dense: out.a.dense });
 
-  // ---------- 舞台在分段边界换上满密度(第 6 条):从第 48 帧起逐帧往后走(每一步一拍),看 clip-b 那一条哪一拍换上
+  // ---------- 舞台换上满密度(第 6 条):先不动播放头,等停着的那一帧自己换上;再从第 48 帧起逐帧往后走(每一步一拍)
   {
+    // 停在第 47 帧不动:流播放器停在稀疏段上会定时重问清单,问到满密度就把这一帧换成它自己的画面
+    const tWait = Date.now();
+    let upgraded = null, lastSeen = null;
+    while (Date.now() - tWait < 20_000) {
+      await rpc('setStreamPlanes', planesAt(47));
+      lastSeen = bestOf(await shotStage(), 'clip-b', [40, 46, 47, 48]);
+      if (lastSeen.best === 47) { upgraded = Date.now() - tWait; break; }
+      await sleep(400);
+    }
+    check(upgraded !== null, '舞台换满密度:停着的那一帧(第 47 帧)不用动播放头,自己从稀疏版换成了这一帧的画面', lastSeen);
+    if (upgraded !== null) { await fs.writeFile(path.join(OUT, 'stage-upgraded-47.png'), toPng(await shotStage())); }
+
     const rows = [];
     const LAST_STEP = 212;
     for (let f = 48; f <= LAST_STEP; f++) {
@@ -506,30 +517,21 @@ try {
       const r = bestOf(stage, 'clip-b', [first, f - 1, f, f + 1]);
       // 分段的第一帧上稀疏版和满密度是同一幅画面,分不出来(记 either)
       rows.push({ frame: f, segmentFirst: first, best: r.best, shows: f === first ? 'either' : r.best === f ? 'dense' : r.best === first ? 'sparse' : `frame-${r.best}`, scores: r.scores });
-      // 换上以后第一张「这一帧自己」的截图留下来看
-      if (rows.at(-1).shows === 'dense' && !rows.slice(0, -1).some((x) => x.shows === 'dense')) {
-        await fs.writeFile(path.join(OUT, `stage-swap-first-dense-${f}.png`), toPng(stage));
-        await fs.writeFile(path.join(OUT, `export-${f}.png`), toPng(exportOf(f)));
-      }
+      if (f === 116) { await fs.writeFile(path.join(OUT, 'stage-dense-116.png'), toPng(stage)); await fs.writeFile(path.join(OUT, 'export-116.png'), toPng(exportOf(116))); }
       if (onStage(f).includes('clip-a')) {
         const a = bestOf(stage, 'clip-a', [segFirst('clip-a', f), f - 1, f, f + 1]);
         rows[rows.length - 1].clipA = a.best;
       }
     }
-    const firstDense = rows.find((r) => r.shows === 'dense')?.frame ?? null;
-    // 换上的那一拍:第一个画出「这一帧自己」的帧所在分段的第一帧
-    const swapAt = firstDense === null ? null : segFirst('clip-b', firstDense);
-    const wrong = rows.filter((r) => r.shows !== 'either' && (swapAt === null || r.frame < swapAt ? r.shows !== 'sparse' : r.shows !== 'dense'));
-    out.a.stageSwap = { from: 48, to: rows.at(-1)?.frame ?? null, swapAt, firstDenseFrame: firstDense, sparseBeats: rows.filter((r) => r.shows === 'sparse').length,
-      denseBeats: rows.filter((r) => r.shows === 'dense').length, wrong: wrong.slice(0, 6).map((r) => ({ frame: r.frame, shows: r.shows, scores: r.scores })),
-      clipA: rows.filter((r) => r.clipA !== undefined).map((r) => [r.frame, r.clipA]).filter(([f, b]) => f !== b) };
-    out.a.stageSwap.servedKeptSparse = servedKept;
+    const wrong = rows.filter((r) => r.shows !== 'either' && r.shows !== 'dense');
+    out.a.stageSwap = { upgradedAt47Ms: upgraded, from: 48, to: rows.at(-1)?.frame ?? null, boundaries: rows.filter((r) => r.shows === 'either').length,
+      denseBeats: rows.filter((r) => r.shows === 'dense').length, sparseBeats: rows.filter((r) => r.shows === 'sparse').length,
+      wrong: wrong.slice(0, 6).map((r) => ({ frame: r.frame, shows: r.shows, scores: r.scores })),
+      clipA: rows.filter((r) => r.clipA !== undefined).map((r) => [r.frame, r.clipA]).filter(([f, b]) => f !== b), servedKeptSparse: servedKept };
     say('a-stage-swap', out.a.stageSwap);
     check(rows.length === LAST_STEP - 47, '舞台换满密度:每一拍都比过了', rows.length);
-    check(swapAt !== null && swapAt > 55 && swapAt <= 205, '舞台换满密度:走着走着换上了满密度', out.a.stageSwap);
-    check(firstDense === (swapAt ?? -1) + 1, '舞台换满密度:是在一个分段的第一帧换上的(不在段中间)', { swapAt, firstDense });
-    check(wrong.length === 0, '舞台换满密度:换上之前每一拍是稀疏版、换上那一拍起每一拍都是这一帧自己,没有一拍画错', out.a.stageSwap.wrong);
-    check(out.a.stageSwap.sparseBeats >= 5 && out.a.stageSwap.denseBeats >= 5, '舞台换满密度:换上前后都看了好几拍', out.a.stageSwap);
+    check(wrong.length === 0 && out.a.stageSwap.denseBeats >= 140, '舞台换满密度:换上以后逐帧往后走,每一拍画的都是这一帧自己(没有画错的、没有退回稀疏版的)', out.a.stageSwap);
+    check(out.a.stageSwap.boundaries >= 10, '舞台换满密度:走过了十来个分段边界', out.a.stageSwap.boundaries);
     check(out.a.stageSwap.clipA.length === 0, '舞台换满密度:clip-a 入场时满密度已经齐了,一入场每一帧就是它自己', out.a.stageSwap.clipA);
   }
   await rpc('setRole', 'back', { job: 'probe' });
