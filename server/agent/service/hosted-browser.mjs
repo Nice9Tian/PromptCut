@@ -502,6 +502,18 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     return true;
   }
 
+  /**
+   * 这个对话的云端浏览器此刻开着的网页地址(`hosted-handoff.mjs` 的 `web_handoff` 只用这一个口子)。
+   * 先过这一轮的授权;没有开着的页、浏览器已经退了回 null。只回地址,不回页面内容。
+   */
+  async function handoffTarget(context) {
+    await resources.authorize(context, 'read');
+    const entry = sessions.get(keyOf({ projectId: context.projectId, conversationId: context.conversationId }));
+    if (!entry || entry.retired || entry.session.closed || entry.session.processExited) return null;
+    const url = typeof entry.session.currentUrl === 'function' ? entry.session.currentUrl() : null;
+    return url && /^https?:///i.test(url) ? { url } : null;
+  }
+
   /** 一个对话的浏览器的出网记录(每个目标放行还是拒绝;给探针、测试与排障取证。主机名只在这里,不进服务日志) */
   function egressJournal(scope) {
     const entry = sessions.get(keyOf(scope));
@@ -541,5 +553,5 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     return closePromise;
   }
 
-  return Object.freeze({ handles, call, close, closeConversation, removeProject, treeClosed, describe, egressJournal, ready: swept });
+  return Object.freeze({ handles, call, close, closeConversation, removeProject, treeClosed, describe, egressJournal, handoffTarget, ready: swept });
 }

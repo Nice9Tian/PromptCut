@@ -1007,6 +1007,8 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     /** 此刻还活着的:主进程的退出事件到没到、记下的进程号里还活着的、进程组里还有没有活进程(给关闭之后的重核用) */
     leftovers: () => ({ exited, alivePids: [...new Set([...pids, ...helpers])].filter((pid) => pidLive(pid)), groupLive: browserGroupLive(browserPid) }),
     processGone,
+    /** 当前页此刻的地址(只给「把网页交给本人」取地址用);没有页、已经关了回 null。不碰页面内容 */
+    currentUrl: () => { try { return state.closed || !state.opened ? null : String(page.url() || '') || null; } catch { return null; } },
     open, view, click, type, scroll, read, close,
   };
 }

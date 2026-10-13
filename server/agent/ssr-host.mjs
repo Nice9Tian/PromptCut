@@ -21,7 +21,7 @@ const EMPTY_PROJECT = new WeakMap();
  */
 export async function loadSsrHost(load, { apiBase } = {}) {
   for (const id of REGISTRIES) await load(id);
-  const [core, api, routes, diff, common, apiUrl, duration, registry, cardParse, store, soundRequest, soundGeneration, soundEffects, cardAudioActions] = await Promise.all([
+  const [core, api, routes, diff, common, apiUrl, duration, registry, cardParse, store, soundRequest, soundGeneration, soundEffects, cardAudioActions, kernelProject, kernelLayout] = await Promise.all([
     load('/src/store/core.ts'),
     load('/src/mcp/api.ts'),
     load('/src/mcp/routes.mjs'),
@@ -36,6 +36,8 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     load('/src/audio/soundGeneration.ts'),
     load('/src/kernel/soundEffects.ts'),
     load('/src/store/actions/cardAudio.ts'),
+    load('/src/kernel/project.ts'),
+    load('/src/kernel/layout.ts'),
   ]);
   if (apiBase) apiUrl.setApiBase(apiBase);
   if (!EMPTY_PROJECT.has(core)) EMPTY_PROJECT.set(core, core.getState().project);
@@ -179,6 +181,32 @@ export async function loadSsrHost(load, { apiBase } = {}) {
     audio: {
       measureRequest: (args) => common.measureAudioRequest(args),
       measureFinish: (req, data) => common.measureAudioFinish(req, data),
+    },
+    /**
+     * 感知与一键流程的工具包(镜头、主体、一键流程;`server/agent/service/perception/`、`hosted-workflow.mjs`)要用的内核函数。
+     * 那些文件不引用 `src/`:宿主从这里取来,经工厂参数 `kernel` 注入(契约第 2.1 节「载入缝」)。都是只读项目数据的纯函数。
+     */
+    kernel: Object.freeze({
+      subjectForRange: kernelProject.subjectForRange,
+      suggestPosition: kernelProject.suggestPosition,
+      MAX_SUBJECT_TIMES: kernelProject.MAX_SUBJECT_TIMES,
+      subjectSampleTimes: kernelProject.subjectSampleTimes,
+      rectForSafeSide: kernelLayout.rectForSafeSide,
+      getCard: registry.getCard,
+    }),
+    /**
+     * 感知结果写回素材(与桌面版同一份 store 动作:换新对象,不原地改)。只在放好项目的 store 上、进程级的锁里用。
+     */
+    media: {
+      setTranscript: (mediaId, transcript) => store.actions.setMediaTranscript(mediaId, transcript),
+      setShots: (mediaId, shots) => store.actions.setMediaShots(mediaId, shots),
+      setSubjects: (mediaId, subjects) => store.actions.setMediaSubjects(mediaId, subjects),
+    },
+    /** 一键流程落卡用的三个 store 动作(与桌面版 `src/mcp/tools/autoWorkflow.ts` 用的是同一份);只在进程级的锁里用 */
+    workflow: {
+      addCardClip: (cardId, start, opts = {}) => store.actions.addCardClip(cardId, start, opts),
+      ensureCaptionTrack: () => store.actions.ensureCaptionTrack(),
+      setProjectMeta: (meta) => store.actions.setProjectMeta(meta),
     },
     /** 此刻 store 里项目内容的末尾(秒):新导入的视频接在后面放 */
     contentEnd() {
