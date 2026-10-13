@@ -7,6 +7,10 @@
  *   邀请码状态、创建者操作（作废并重新生成邀请码，每次当场输入创建者密码；以及 C6.5 的改项目密码、改名单、踢人、删项目）。
  * - 取消勾选再「确定」：确认后放云端的先拉回本机再删云端项目，放本机的停本机托管；中途失败恢复为开启。
  *
+ * - 「搬到云端」（桌面版）：目标是这台桌面版配置的账号云端时走账号办法（`accountMoveFlow.ts`）——云端新建一个属于登录账号的项目、
+ *   内容与本机一致，编辑器接着就在云端项目里；本机协作房间搬完即关闭、旧邀请码作废。两个入口：没开协作时勾上并选「云端」点「确定」；
+ *   已开本机协作时点「搬到云端」。没登录先在这里登录。目标是别的节点（用户自己填的地址）时照旧办法。
+ *
  * 房间关联写进普通项目文件，凭证只在设备保护存储中；连接状态取自同步管理（`syncManager.ts`）与本机记录（`collab.ts`）。
  */
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
@@ -18,6 +22,9 @@ import { ListEditor, LanRestartHint, readHostedUrl, writeHostedUrl } from "./Sha
 import { CreatorFlow, type Flow } from "./MembersPanel";
 import { HostedServiceRows } from "./HostedServiceRows";
 import { useSync, moveSharedToHosted, moveSharedToLan } from "./syncManager";
+import { ACCOUNT_MOVE_TEXT, moveFailureText } from "./accountMove";
+import { accountCloud, accountCloudLogin, accountCloudSignIn, moveCurrentToAccountCloud, pendingMove, targetsAccountCloud, type AccountCloud } from "./accountMoveFlow";
+import { projectLink, type Account } from "../../account/client";
 import {
   createInvite, defaultCreatorName, disableCollab, enableCollab, fetchInviteStatus, generatePassword, localCollab,
   type InviteInfo, type InviteStatus,
@@ -85,6 +92,21 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const [cancelPw, setCancelPw] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
   const [flow, setFlow] = useState<Flow | null>(null);
+  // 账号办法的「搬到云端」：这台桌面版配置的账号云端（没有账号桥是 null）、登录的账号（undefined = 还在查）
+  const [acct, setAcct] = useState<AccountCloud | null>(null);
+  const [acctUser, setAcctUser] = useState<Account | null | undefined>(undefined);
+  /** 要先登录：登录成功后接着搬（`name` 是那一次要用的云端项目名） */
+  const [loginFor, setLoginFor] = useState<{ name: string } | null>(null);
+  const [loginName, setLoginName] = useState("");
+  const [loginPw, setLoginPw] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  /** 协作房间搬到云端：云端项目名（重名时改）、创建者密码（本机没存时填） */
+  const [cloudName, setCloudName] = useState("");
+  const [askCloudName, setAskCloudName] = useState(false);
+  const [movePw, setMovePw] = useState("");
+  const [askMovePw, setAskMovePw] = useState(false);
+  /** 搬完（或云端项目已建好但没做完）时给的项目链接 */
+  const [moveLink, setMoveLink] = useState<string | null>(null);
 
   const local = shared ? localCollab(shared.projectId) : null;
   const iAmCreator = !!shared?.creator;
@@ -116,6 +138,19 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setList([]);
     setHostedUrl(readHostedUrl());
     void defaultCreatorName().then(setCreator);
+    setLoginFor(null); setLoginPw(""); setLoginBusy(false);
+    setCloudName(""); setAskCloudName(false); setMovePw(""); setAskMovePw(false); setMoveLink(null);
+    // 账号云端与登录状态：打开设置时查一次（没有账号桥就没有这一套，「云端」照旧办法）
+    let live = true;
+    setAcctUser(undefined);
+    void accountCloud().then(async (c) => {
+      if (!live) return;
+      setAcct(c);
+      if (!c) { setAcctUser(null); return; }
+      try { const user = await accountCloudLogin(c); if (live) setAcctUser(user); }
+      catch { if (live) setAcctUser(null); }
+    });
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -149,6 +184,14 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     async apply(projectName: string) {
       if (busy) return true;
       if (checked && !isOn) {
+        // 放云端、目标是账号云端：把当前项目搬成账号的云端项目（不用创建者用户名和密码）
+        if (where === "hosted") {
+          const c = acct ?? await accountCloud();
+          if (targetsAccountCloud(hostedUrl, c)) {
+            void startAccountMove(c!, projectName);
+            return true;
+          }
+        }
         if (!creator.trim() || !creatorPw || (mode === "free" && !projectPw)) {
           setStatus({ text: "创建者用户名和密码不能为空。", tone: "err" });
           return true;
@@ -206,7 +249,48 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
       }
       return false;
     },
-  }), [busy, checked, isOn, creator, creatorPw, projectPw, mode, where, lanOk, hostedUrl, list, iAmCreator, local, cancelPw]);
+  }), [busy, checked, isOn, creator, creatorPw, projectPw, mode, where, lanOk, hostedUrl, list, iAmCreator, local, cancelPw, acct, movePw, shared]);
+
+  /** 账号办法的搬到云端：查登录 → （协作房间）确认 → 逐步做，状态行跟着走；失败说清本机现在是什么样 */
+  const startAccountMove = async (c: AccountCloud, name: string) => {
+    if (busy) return;
+    const room = !!shared;
+    setBusy(true); setMoveLink(null);
+    setStatus({ text: ACCOUNT_MOVE_TEXT.stage.check, tone: "info" });
+    let user: Account | null;
+    try { user = await accountCloudLogin(c); }
+    catch (e) { setBusy(false); setStatus({ text: e instanceof Error ? e.message : "连接云端失败，请检查网络后重试。", tone: "err" }); return; }
+    setAcctUser(user);
+    if (!user) { setBusy(false); setLoginFor({ name }); setStatus({ text: ACCOUNT_MOVE_TEXT.needLogin, tone: "info" }); return; }
+    setLoginFor(null);
+    if (room && !window.confirm(ACCOUNT_MOVE_TEXT.roomConfirm(user.name))) { setBusy(false); setStatus(null); return; }
+    const r = await moveCurrentToAccountCloud(c, { name, creatorPassword: movePw, onStage: (stage) => setStatus({ text: ACCOUNT_MOVE_TEXT.stage[stage], tone: "info" }) });
+    setBusy(false);
+    if (r.ok) {
+      setChecked(true); setAskCloudName(false); setAskMovePw(false); setMovePw("");
+      setMoveLink(r.link);
+      setStatus({ text: r.kind === "room" ? ACCOUNT_MOVE_TEXT.doneRoom : ACCOUNT_MOVE_TEXT.doneLocal, tone: "ok" });
+      return;
+    }
+    if (r.error === "login-required") { setAcctUser(null); setLoginFor({ name }); }
+    if (r.error === "name-taken" || r.error === "invalid-name") setAskCloudName(true);
+    if (r.error === "creator-password" || r.error === "bad-password") setAskMovePw(true);
+    if (r.cloud && (r.localClosed || r.error === "enter-failed")) setMoveLink(projectLink(c.origin, r.cloud.projectId));
+    setStatus({ text: moveFailureText(r, r.kind), tone: r.error === "login-required" || r.error === "creator-password" ? "info" : "err" });
+  };
+  const signIn = async () => {
+    if (!acct || loginBusy || !loginName.trim() || !loginPw) return;
+    setLoginBusy(true); setStatus({ text: ACCOUNT_MOVE_TEXT.loginBusy, tone: "info" });
+    try {
+      const user = await accountCloudSignIn(acct, loginName.trim(), loginPw);
+      setLoginPw(""); setAcctUser(user); setStatus(null);
+      const resume = loginFor; setLoginFor(null); setLoginBusy(false);
+      if (resume) void startAccountMove(acct, resume.name);
+    } catch (e) {
+      setLoginBusy(false);
+      setStatus({ text: e instanceof Error ? e.message : "登录失败，请重试。", tone: "err" });
+    }
+  };
 
   const regen = async () => {
     if (regenPw === null) {
@@ -228,6 +312,13 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setStatus({ text: COLLAB_TEXT.regenDone, tone: "ok" });
   };
   const moveHosted = async () => {
+    // 房间登记的云端就是账号云端：走账号办法（云端新建账号项目、搬完关本机协作）；别的节点照旧办法
+    const c = acct ?? await accountCloud();
+    if (shared && targetsAccountCloud(association?.service, c)) {
+      if (!iAmCreator) { setStatus({ text: moveFailureText({ ok: false, error: "not-creator", stage: "check", localClosed: false, cloud: null }, "room"), tone: "err" }); return; }
+      void startAccountMove(c!, (askCloudName ? cloudName.trim() : "") || shared.name);
+      return;
+    }
     setMovingHosted(true); setBusy(true); setStatus({ text: "正在搬到云端，完成后自动连接原房间…", tone: "info" });
     const result = await moveSharedToHosted(); setBusy(false);
     if (!result.ok) { setMovingHosted(false); setStatus({ text: result.error === "not-original-host" ? "请在当前实际主机上执行搬到云端。"
@@ -246,6 +337,32 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   );
 
   const on = checked;
+  // 「云端」指的是不是账号云端（是：显示登录状态，不要创建者用户名和密码）
+  const accountTarget = where === "hosted" && targetsAccountCloud(hostedUrl, acct);
+  /** 上一次没做完、云端项目已经建好的那次搬迁（再点「确定」接着做） */
+  const resumable = accountTarget && acctUser && !isOn ? pendingMove(acctUser.id) : null;
+  /** 登录状态一行；没登录是登录表单（字段与开始页「云端项目」的登录相同） */
+  const accountRow = !acct ? null : acctUser === undefined ? (
+    <div className="pc-sync-hint" data-pc="collab-account-user">{ACCOUNT_MOVE_TEXT.checkingLogin}</div>
+  ) : acctUser ? (
+    <div className="pc-collab-row" data-pc="collab-account-user"><span>{ACCOUNT_MOVE_TEXT.loggedIn(acctUser.name)}</span></div>
+  ) : (
+    <div data-pc="collab-account-login">
+      <div className="pc-sync-field">
+        <label htmlFor="pc-collab-acct-name">账号名</label>
+        <input id="pc-collab-acct-name" className="pc-dialog-input" data-pc="collab-account-name" autoComplete="username" value={loginName} onChange={(e) => setLoginName(e.target.value)} />
+      </div>
+      <div className="pc-sync-field">
+        <label htmlFor="pc-collab-acct-pw">密码</label>
+        <input id="pc-collab-acct-pw" type="password" className="pc-dialog-input" data-pc="collab-account-password" autoComplete="current-password" value={loginPw}
+          onChange={(e) => setLoginPw(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void signIn(); }} />
+      </div>
+      <div className="pc-collab-actions">
+        <button type="button" className="pc-dialog-opt" data-pc="collab-account-submit" disabled={loginBusy || busy || !loginName.trim() || !loginPw} onClick={() => void signIn()}>{ACCOUNT_MOVE_TEXT.loginButton}</button>
+        <a href={`${acct.origin}/account`} target="_blank" rel="noopener noreferrer">注册账号 / 忘记密码</a>
+      </div>
+    </div>
+  );
   return (
     <div className="pc-collab" data-pc="collab-section">
       <label className="pc-collab-head">
@@ -283,6 +400,14 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
               </div>
             </div>
           )}
+          {accountTarget ? (
+            <>
+              <div className="pc-sync-hint" data-pc="collab-account-intro">{ACCOUNT_MOVE_TEXT.intro}</div>
+              {accountRow}
+              {resumable ? <div className="pc-sync-hint" data-pc="collab-move-pending">{ACCOUNT_MOVE_TEXT.pending(resumable.name)}</div> : null}
+            </>
+          ) : (
+          <>
           <div className="pc-collab-row">
             <span className="pc-collab-key">进入方式</span>
             <button type="button" className={`pc-dialog-opt${mode === "free" ? " pc-dialog-opt--on" : ""}`} onClick={() => setMode("free")}>自由进入</button>
@@ -314,6 +439,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
               rowErr={rowErr}
               hint="如果有独立渲染主机，记得在这里给它也加一条名单。"
             />
+          )}
+          </>
           )}
           <div className="pc-sync-hint">点「确定」开始设置。</div>
         </>
@@ -350,6 +477,19 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
               <div className="pc-sync-warn">{COLLAB_TEXT.localNote}</div>
               <div className="pc-sync-hint" data-pc="host-registration" data-state={hostRegistration ?? "member"}>{hostRegistration === "online" ? "原房间已登记上线，中继接入已就绪。" : hostRegistration === "host-conflict" ? "主机占用冲突，未自动接管。" : COLLAB_TEXT.localLimit}</div>
               {!ONLINE ? <button type="button" className="pc-dialog-opt" data-pc="collab-move-hosted" disabled={busy} onClick={() => void moveHosted()}>搬到云端</button> : null}
+              {askCloudName ? (
+                <div className="pc-sync-field">
+                  <label htmlFor="pc-collab-cloud-name">{ACCOUNT_MOVE_TEXT.nameLabel}</label>
+                  <input id="pc-collab-cloud-name" className="pc-dialog-input" data-pc="collab-cloud-name" maxLength={200} value={cloudName} placeholder={shared.name} onChange={(e) => setCloudName(e.target.value)} />
+                </div>
+              ) : null}
+              {askMovePw ? (
+                <div className="pc-sync-field">
+                  <label htmlFor="pc-collab-move-pw">创建者密码</label>
+                  <input id="pc-collab-move-pw" type="password" className="pc-dialog-input" data-pc="collab-move-password" value={movePw} onChange={(e) => setMovePw(e.target.value)} />
+                </div>
+              ) : null}
+              {loginFor ? accountRow : null}
             </>
           ) : null}
           {shared.where === "hosted" && iAmCreator ? (
@@ -410,6 +550,12 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
 
       {status ? (
         <div className={`pc-sync-status-line${status.tone === "err" ? " is-err" : status.tone === "ok" ? " is-ok" : ""}`} data-pc="collab-status">{status.text}</div>
+      ) : null}
+      {moveLink ? (
+        <div className="pc-collab-actions">
+          <button type="button" className="pc-dialog-opt" data-pc="collab-move-link" onClick={() => copy(moveLink, () => setCopied("move-link"))}>{ACCOUNT_MOVE_TEXT.copyLink}</button>
+          {copied$("move-link")}
+        </div>
       ) : null}
       {flow ? <CreatorFlow flow={flow} onClose={() => setFlow(null)} /> : null}
     </div>

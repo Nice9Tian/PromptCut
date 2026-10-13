@@ -230,13 +230,14 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
  * 开启「放云端」后把项目里已有的素材交给上传队列:先把没有哈希、本机还取得到字节的老素材补入库
  * (`ingestUnhashedMedia`,写回素材表并同步到文档服务),再按哈希入队。补不上的、本机内容库里没有的
  * 传不上去,别的成员拿不到:用气泡把这些素材的名字列给用户(控制台那一行不算告知)。
+ * 回交给队列的个数与传不上去的名字(账号办法的「搬到云端」`accountMoveFlow.ts` 也用它);没交成回 null。
  */
-async function queueExistingMedia(): Promise<void> {
-  if (ONLINE) return;
+export async function queueExistingMedia(): Promise<{ queued: number; missing: string[] } | null> {
+  if (ONLINE) return null;
   try { await ingestUnhashedMedia(); } catch (e) { console.warn("[collab] 补入库没做完:", (e as Error)?.message); }
   const media = getState().project.media ?? [];
   const r = await enqueueExistingMedia(media, { post: postEnqueue });
-  if (!r) { console.warn("[collab] 已有素材没交给上传队列(等不到上传目标,或没有本机编辑器)"); return; }
+  if (!r) { console.warn("[collab] 已有素材没交给上传队列(等不到上传目标,或没有本机编辑器)"); return null; }
   const nameOfHash = new Map<string, string>();
   for (const m of media) {
     const h = String(m.tiers?.original || m.hash || "").toLowerCase();
@@ -246,9 +247,10 @@ async function queueExistingMedia(): Promise<void> {
     ...(r.skipped ?? []).filter((s) => !s.pending).map((s) => s.name),
     ...r.missing.map((h) => nameOfHash.get(String(h).toLowerCase()) ?? String(h)),
   ];
-  if (!names.length) return;
+  if (!names.length) return { queued: r.queued.length, missing: [] };
   console.warn("[collab] 这些素材传不上去:", names);
   pushToast(uploadMissingMessage(names), "warn", Infinity);
+  return { queued: r.queued.length, missing: names };
 }
 
 /** 放云端时传不上去的素材:给用户的那句话(名字去重,太多时只列前面若干条) */
@@ -278,7 +280,7 @@ export const postEnqueue = ONLINE ? null : async (body: unknown): Promise<Enqueu
 export type DisableError = "forbidden" | "rate-limited" | "pull-failed" | "offline" | "online-page";
 
 /** 拉回素材原尺寸：交给编辑器进程的预取队列，轮询本地内容库直到到齐；一分钟没有进展算失败 */
-async function pullOriginals(hashes: string[], onProgress?: (done: number, total: number) => void): Promise<boolean> {
+export async function pullOriginals(hashes: string[], onProgress?: (done: number, total: number) => void): Promise<boolean> {
   if (ONLINE) return false; // 在线页面没有本机素材库
   if (!hashes.length) return true;
   try {

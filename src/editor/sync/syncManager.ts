@@ -222,11 +222,12 @@ export function useSync<T>(selector: (v: SyncView) => T): T {
 }
 
 let toastSeq = 0;
-/** `ms` 给 `Infinity` 就不自己消失(用户点 × 关) */
-export function pushToast(text: string, tone: Toast["tone"] = "info", ms = 6000, action?: Toast["action"]) {
+/** `ms` 给 `Infinity` 就不自己消失(用户点 × 关)。回这条气泡的号(`dismissToast` 用) */
+export function pushToast(text: string, tone: Toast["tone"] = "info", ms = 6000, action?: Toast["action"]): number {
   const t: Toast = { id: ++toastSeq, text, tone, ...(action ? { action } : {}) };
   patch({ toasts: [...view.toasts, t] });
   if (Number.isFinite(ms)) setTimeout(() => dismissToast(t.id), ms);
+  return t.id;
 }
 
 export function dismissToast(id: number) {
@@ -1130,7 +1131,9 @@ export type EnterResult = { ok: true } | { ok: false; error: EnterError; retryAf
 
 /** Account v2 cloud entry. Server projection wins; no local root upload or legacy password proof. */
 export async function enterAccountProject(options: { client: CloudAccountClient; origin: string; projectId: string;
-  name: string; initial: Project; firstSession?: ProjectSession }): Promise<void> {
+  name: string; initial: Project; firstSession?: ProjectSession;
+  /** 进来之后那条带「复制项目链接」的气泡换一句话(账号办法的「搬到云端」用,`accountMoveFlow.ts`);不给是缺省那句 */
+  enteredText?: string }): Promise<void> {
   await ensureDevice();
   const origin = new URL(options.origin).origin, base = `${origin}/hosted/`, url = hostedWsUrlOf(base);
   let current = options.firstSession ?? await options.client.session(options.projectId);
@@ -1274,7 +1277,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       // 成员名字(提示气泡里「谁改的」)进来就取一次,之后成员有变化再取
       projectSession(current);
       const linkText = `${origin}/editor?project=${encodeURIComponent(options.projectId)}`;
-      pushToast('已进入云端项目，可以将项目链接发给另一位已登录成员。', 'info', Infinity, {
+      pushToast(options.enteredText ?? '已进入云端项目，可以将项目链接发给另一位已登录成员。', 'info', Infinity, {
         label: '复制项目链接', pc: 'cloud-project-copy', run: () => { void navigator.clipboard.writeText(linkText).then(
           () => pushToast('项目链接已复制。', 'info'), () => pushToast(`项目链接：${linkText}`, 'info', Infinity)); },
       });
