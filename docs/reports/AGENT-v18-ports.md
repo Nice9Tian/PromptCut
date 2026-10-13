@@ -63,3 +63,21 @@ account-executor-assembly 的 6640/6641（命令行拒绝配置的输入，根�
 ## 四、两处偶发超时（只调时限）
 - agent-live-selection 第 101 行（等 8000 ms）：等的是模型脚本调用 get_selection 后的 `tool_result` 事件。`onEvent` 在 `startHostedRun` 时就挂上，事件不会漏；慢的是第一次用到代理工具时 vite `ssrLoadModule` 现编译一批 ts 模块，吃 CPU。单独跑整份文件 1.5 秒。结论：时限紧，没有时序问题。放宽到 30000 ms。
 - cloud-agent-runs CA-PAGE-01（第 603 行等 20000 ms）：等 c-p1 的 `tool_result`。订阅用 `subscribe(..., 0, ...)` 从头回放，订阅晚了也不丢；脚本先睡 400 ms 再调 add_cut，同样首次加载工具模块。单独跑该用例 1.9 秒。结论：时限紧，没有时序问题。放宽到 60000 ms（整个用例超时 240 s 不变）。时限只防卡死，不是通过条件。
+
+# 第三批：real-runner 忙时失败并卡住、npm test 看门
+
+## 一、为什么失败
+`account-real-runner.test.mjs` 等一轮真实运行结束（`runner_done` 且 `activeRuns===0`），时限 40 秒，整条用例时限 90 秒。机器忙时（五六个子 Agent 同时跑测试）这一轮要跑得更久，于是 40 秒超时抛 `actual-runner-output-timeout`（加上启动约 6 秒，对上"46 秒后失败"）。单独跑 11 秒。**和第二批改的 `fixtures/account-real-runner.mjs` 的端口参数无关**：端口只是换了取法，不影响耗时；失败原因是时限紧加这一轮没跑完。没有发现时序问题（轮询 `rows` 是读当前状态，不是等一次性事件）。
+
+## 二、为什么失败后进程不退出（已用小实验复现）
+把等待时限临时改成 300 毫秒让它必然失败，复现了"进程不退出"（120 秒仍在，被 timeout 杀掉）。根因：失败时这一轮还在跑，`finally` 里关执行器会被产品拒绝（`account-runner-pending`，因为不许在运行中收尾），`fixture.close()` 在 `cloud-queue-user-path.mjs` 的 `close()` 里关到一半抛出，后面的 HTTPS 入口、combo、账号服务等端口（`TCPServerWrap` 等）都没关，进程因此退不出。`close()` 里是顺序 await，前面一个抛出就跳过后面所有收尾——这个文件现在有别的子 Agent 在改，我没碰。
+
+改法（只动测试）：`finally` 里先等 `activeRuns===0`（最多 90 秒）再收尾，这样关的时候是干净的；等待时限 40 秒放宽到 120 秒、用例时限 90 秒放宽到 240 秒（只防卡死）。未做的：`cloud-queue-user-path.mjs` 的 `close()` 应改成每一步各自 try/catch、全部执行完再汇总抛出，建议归另一个子 Agent。同类"失败就不收尾"的写法：我查了用这批底座的测试，其余都用 `try/finally` 或 `t.after` 收尾；唯一的共同隐患就是上面这个 `close()` 的"中途抛出跳过后面"。
+
+## 三、npm test 的保险
+评估：
+- (a) node 自带 `--test-force-exit` + `--test-timeout`（node v24.19.0 支持）。小实验：失败后还有监听的文件，加 `--test-force-exit` 后 0.16 秒退出，仍记失败；永不结束的测试靠 `--test-timeout` 在时限到时记为失败（`test timed out after N ms`）并退出；测试自己写了更长 `timeout` 的不受影响（实验：自带 30 秒时限的测试跑 6 秒通过，没时限的被 3 秒时限判失败）；通过但留着监听的文件仍记通过、整体零失败。对每个文件的子进程都生效。
+- (b) 在 `scripts/test-suite.mjs` 自己做看门：node 的测试运行器只启一个父进程，每个文件是它的孙进程，要从事件流里找出文件对应的进程再杀进程树，实现复杂，且容易误杀。
+选 (a)：`scripts/test-suite.mjs` 的 `baseArgs` 加了 `--test-force-exit` 和 `--test-timeout=1200000`（20 分钟，环境变量 `PROMPTCUT_TEST_TIMEOUT_MS` 可改，验证看门时改小用）。不改变通过与失败的判定。限制：被强制退出的文件不会单独点名（强制退出只发生在测试都结束之后，失败仍按失败点名）；因超时失败的测试按名字出现在"failing tests"里。
+
+验证（用完已删，不在仓库里）：`out/zz/` 下三个小文件。①失败且留着监听的文件，②永不结束且有定时器的测试，两者一起用 `PROMPTCUT_TEST_TIMEOUT_MS=8000 npm test -- …`：在 8 秒内结束，列出两个失败（含 `test timed out after 8000ms`），最终"仍有失败"，退出码 1。③通过但留着监听的文件：通过、"零失败"、退出码 0。
