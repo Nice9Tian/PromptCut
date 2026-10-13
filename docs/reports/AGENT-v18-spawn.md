@@ -115,7 +115,11 @@ cmd = [sys.executable, *isolated, "-m", "pip", "install", "--target", …]
 ### 2.4 基线
 
 - `npx tsc -b --force` → 退出码 0,零输出。
-- `npm test`(设了那两个环境变量)→ FULL_TEST_RESULT
+- `npm test`(设了那两个环境变量)→ 没有拿到零失败的一次:机器上同时有别的子 Agent 在跑全量,跑了两遍,失败的都与本分支改的文件无关,单独重跑都过。
+  - 第一遍:`tests 6147 / pass 6140 / fail 3 / skipped 4`,退出码 1。失败的三条:`agent-live-selection.test.mjs`(等 actual model tool route 超时 8000 ms;在通用规矩的已知偶发名单里)、`card-lock-pipeline.test.mjs` 的 L9(计时器重判的时序断言)、`reopen-hosting.test.mjs` 的「真实中继 free」(`expiresAt` 读到 null)。后两个**不在已知偶发名单里**,请主会话留意。
+  - 三个文件各自单独重跑:`agent-live-selection` 1/1 过、`card-lock-pipeline` 21/21 过、`reopen-hosting` 3/3 过。三个文件都不引用本分支改的任何文件。
+  - 第二遍:`tests 6147 / pass 6142 / fail 1 / skipped 4`,退出码 1。失败的只有 `agent-live-selection.test.mjs` 同一条(同样是等 8000 ms 超时)。
+  - 另:第一次我把 `npm test` 放在工具的后台里跑,被工具的 10 分钟上限掐掉了(没跑完,不算一遍);后两遍是脱离工具、隐藏窗口起的。
 - windows-hide 守门(`server/test/windows-hide-silent-spawn.test.mjs`)在上面 15 个文件那一次里跑过,过。
 
 ## 3. Linux 的进程组:要主会话到节点上跑
@@ -153,6 +157,7 @@ server/agent/service/perception/runner.mjs
 
 ## 4. 没做成的及原因
 
+- **`npm test` 没有拿到零失败的一次**:见 2.4,两遍分别有 3 条、1 条与本分支无关的时序类失败,单独重跑都过。
 - **Linux 上的按组杀没有真跑**:原因见第 3 节。平台分支的决定用注入的杀法单测过,但那不能替代节点上的那一次。
 - **Windows 上「根进程自己先退、留下孙进程」收不回来**:Windows 没有进程组,`taskkill /T` 只在根还活着时找得到整棵树;要管住得用作业对象(Job Object),Node 标准库没有,要原生模块(新增依赖,不在这次范围)。生产节点是 Linux,不受影响;桌面版不经这条路。
 - **`run-resources.mjs` 的 `childTreeWitness`(「整棵树都退了」的凭据)没有接**:那是登记器的配置项,由宿主给,归接线包;我留了 `groupAlive(pid)` 可以拿去做。现在登记器的回执里 `witnessMissing` 仍是 true。
