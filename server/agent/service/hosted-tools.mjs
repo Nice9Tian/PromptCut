@@ -282,6 +282,9 @@ export function createHostedTools({
    * @param {{ authorizeWrite(): Promise<any>, import(source, o): Promise<any>, openRead(mediaId, o?): Promise<any> }} [c.runAssets]
    *   账号模式下这条任务的「项目素材」(`project-assets.mjs`,凭任务授权,不借成员票据)。给了它,入库与按素材读取都走它,
    *   不再向文档服务要成员的素材票据(任务的数据连接要不到那种票据)
+   * @param {() => (null | { download: Function, login: Function, loginCheck: Function })} [c.collectDelegate]
+   *   账号模式下这一轮的采集委托口子(`collect-bridge.mjs` 的 `forRun(context)`):给了它,要登录的站点先试着由发起人的电脑代下,
+   *   `collect_login`、`collect_login_check` 也经它;不给时采集的行为与原来一模一样,这两个登录工具也不在这里
    */
   function forConversation(c) {
     const { identity, conversationId } = c;
@@ -847,6 +850,7 @@ export function createHostedTools({
 
     const collect = collector.forConversation({
       state: c.shared.collect, workspace, ensureCanWrite, record: usageRow, ToolError: HostedToolError, conversationId,
+      ...(typeof c.collectDelegate === 'function' ? { delegate: c.collectDelegate } : {}),
       // 下载物进素材库:与 import_media 同一条路(成员本人的素材票据、在项目副本上登记;视频照桌面版放上时间轴)
       importFile: async (rel, name) => {
         const kind = kindOfName(rel) ?? kindOfName(name);
@@ -865,6 +869,8 @@ export function createHostedTools({
       collect_download: collect.collect_download,
       collect_job: collect.collect_job,
       collect_logout: collect.collect_logout,
+      // 只有给了委托口子(账号模式)才在这里:没有口子时这两个仍是「要操作发起人界面」的那一类,由工具表按原来的话答
+      ...(typeof c.collectDelegate === 'function' ? { collect_login: collect.collect_login, collect_login_check: collect.collect_login_check } : {}),
       measure_audio: audio.measure_audio,
       render_card_audio: cardAudio.render_card_audio,
       cancel_card_audio: cardAudio.cancel_card_audio,

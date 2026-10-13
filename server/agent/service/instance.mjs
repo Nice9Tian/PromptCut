@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { overLimit } from '../../http-guard.mjs';
 import { createCallPairing } from '../call-pairing.mjs';
 import { createAgentSessions, CREATIVITY_HINT, CREATIVITY_LABEL, normalizeCreativity, projectCreativity } from '../agent-sessions.mjs';
@@ -23,8 +24,8 @@ import { annotateError, annotateResult, createUserEditingBoard, userEditingFor }
 import { effectiveIsFile } from '../../card-overrides.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
-  CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PAGE_TOOLS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,
-  cloudSystemNote, cloudLookResult, lookUnavailable, lookSourceUnavailable,
+  CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PAGE_TOOLS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,
+  cloudSystemNote, cloudOpenTools, cloudLookResult, lookUnavailable, lookSourceUnavailable,
 } from './cloud-tools.mjs';
 import { attachmentsPrompt } from './hosted-tools.mjs';
 
@@ -59,6 +60,14 @@ export function createAgentInstance(env) {
   const { server, prerenderPost, latestMirror, latestPlayhead } = env;
   /** 托管档:没有页面、没有命令行驱动与桌面会话;工具按开放清单放行,凭证由宿主给(契约第 3、4、9 节) */
   const HOSTED = env.profile === 'hosted';
+  /**
+   * 账号模式下这条任务的工具提供者(`account-tools.mjs`,宿主按这个进程里真的建出来的给);旧托管档与桌面档没有。
+   * 工具算不算「已接上」只看它:`accountProvided` 里有才交给模型、才执行,否则照静态表回「还没接上」或走原来的路。
+   */
+  const accountTools = HOSTED && env.accountMode === true && env.accountTools && typeof env.accountTools.call === 'function' ? env.accountTools : null;
+  const accountProvided = accountTools?.names instanceof Set && accountTools.names.size ? accountTools.names : null;
+  /** 这一次工具调用的调用号(模型那一侧的 tool_use id):提供者拿它当请求号,宿主重试同一次调用不会开第二个作业 */
+  const toolCallScope = new AsyncLocalStorage();
   let editorRes = null;
   let nextCallId = 1;
   const pendingCalls = new Map                               ();
@@ -321,7 +330,8 @@ export function createAgentInstance(env) {
       ...(env.accountMode === true && env.accountDataWebSocketImpl ? { WebSocketImpl: env.accountDataWebSocketImpl } : {}),
       // 托管档:几个只读项目与注册表的页面工具改在服务端副本上执行;在服务端另有实现的(导入素材、建卡改卡、配音)
       // 标成经「页面」执行——托管档的「页面」就是下面的 hostedCallPage,由它交给 hosted-tools.mjs
-      tools: HOSTED ? tools.map((t) => (CLOUD_AGENT_SIDE.has(t.name) ? { ...t, side: "agent" } : CLOUD_HOSTED_TOOLS.has(t.name) ? { ...t, side: "page" } : t)) : tools,
+      // 这个进程里建出了提供者的工具(账号模式,`account-tools.mjs`)一律交给它(走「经页面执行」那条分派,见 hostedCallPage);其余照旧
+      tools: HOSTED ? tools.map((t) => (accountProvided?.has(t.name) ? { ...t, side: "page" } : CLOUD_AGENT_SIDE.has(t.name) ? { ...t, side: "agent" } : CLOUD_HOSTED_TOOLS.has(t.name) ? { ...t, side: "page" } : t)) : tools,
       toolGroups,
       // 托管档没有编辑器进程:工具实现里漏网的 /api/* 调用指到一个解析不了的地址,立刻失败,不会打到同机别的服务
       loadHost: () => loadSsrHost((id) => server.ssrLoadModule(id), { apiBase: HOSTED ? "http://agent-service.invalid" : `http://127.0.0.1:${editorPortOf()}` }),
@@ -529,7 +539,29 @@ export function createAgentInstance(env) {
     projectCreativity: () => currentProjectCreativity(),
   });
 
-  async function callToolInternal(tool, args, agent, callId) {
+  function callToolInternal(tool, args, agent, callId) {
+    return toolCallScope.run({ callId: typeof callId === 'string' ? callId : undefined }, () => callToolScoped(tool, args, agent, callId));
+  }
+
+  /** 要操作发起人界面的工具在账号模式下的执行:发起人与发起页只取自文档服务确认过的运行授权(提供者里核),不认工具参数 */
+  async function callAccountInitiatorTool(tool, args, agent, callId) {
+    try {
+      // 采集登录的两个由采集那一份执行(它经同一条反向通道让发起人的电脑打开登录窗口)
+      if (accountTools.familyOf?.(tool) === 'collect') {
+        const hosted = hostedContext(agent);
+        if (hosted?.has(tool)) return await hosted.call(tool, args, {});
+        return initiatorUnreachable(tool);
+      }
+      return await accountTools.call(tool, args, { callId });
+    } catch (err) {
+      // 授权不在、内部通道不可用、参数不合规矩:如实说这一步没做成,不退回到别的做法
+      const code = typeof err?.code === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(err.code) ? err.code : 'unavailable';
+      agentLog('agent.page.failed', { tool, code });
+      return { ok: false, cloudUnavailable: true, code, error: `${tool} 这一次没有做成:云端到发起人页面的通道现在用不了(${code})。请按项目内容继续,不要等待。` };
+    }
+  }
+
+  async function callToolScoped(tool, args, agent, callId) {
     const { tools } = await import(new URL('../../mcp-tools.mjs', import.meta.url).href);
     const toolDef = tools.find((t) => t.name === tool);
 
@@ -544,7 +576,7 @@ export function createAgentInstance(env) {
      * 读页面状态的工具按发消息时的快照答;发起方不在线就明说,不等(契约第 9.4 节)。
      */
     if (HOSTED) {
-      const open = checkCloudTool(tool);
+      const open = checkCloudTool(tool, accountProvided);
       if (!open.ok) {
         agentLog('agent.cloud-unavailable', { tool });
         return open;
@@ -562,6 +594,7 @@ export function createAgentInstance(env) {
       // 其余四个(网页接管、扫码登录两个、开子 Agent 页签)不在线回「发起方不在线」,在线回做不了的原因
       if (CLOUD_INITIATOR_TOOLS.has(tool)) {
         if (env.accountMode === true && tool === 'get_selection') return hostedAccountSelection(agent || '');
+        if (accountProvided?.has(tool)) return callAccountInitiatorTool(tool, args, agent || '', callId);
         if (CLOUD_PAGE_TOOLS.has(tool)) return hostedPageTool(tool, args, agent || '');
         if (!hostedInitiatorOnline(agent || '')) return initiatorOffline(tool);
         return initiatorUnreachable(tool);
@@ -1298,6 +1331,10 @@ export function createAgentInstance(env) {
       const t = hostedInitiatorOnline(agent) ? Number(hostedPageStates.get(agent)?.t) : 0;
       return { result: { t: Number.isFinite(t) ? t : 0 }, opIds: [] };
     }
+    // 这个进程里建出了提供者的工具(账号模式):交给它。请求号用这次工具调用的调用号,落地的写入记在这次调用的事件上下文上
+    if (accountProvided?.has(tool)) {
+      return { result: await accountTools.call(tool, args, { callId: toolCallScope.getStore()?.callId, track: ctx?.track }), opIds: [] };
+    }
     // 在服务端另有实现的工具(导入素材、建卡改卡、配音):交给 hosted-tools.mjs,落地的写入记在这次调用的事件上下文上
     const hosted = hostedContext(typeof ctx?.agent === 'string' ? ctx.agent : '');
     if (hosted?.has(tool)) return { result: await hosted.call(tool, args, ctx?.track), opIds: [] };
@@ -1334,6 +1371,8 @@ export function createAgentInstance(env) {
         look: () => prerenderPost ?? null,
         // 账号模式:这条任务的「项目素材」(凭任务授权读写本项目素材)。没给时素材那几个工具照旧走成员票据
         ...(env.accountMode === true && env.accountRunAssets ? { runAssets: env.accountRunAssets } : {}),
+        // 账号模式:这一轮的采集委托口子(要登录的站点由发起人的电脑代下;`collect-bridge.mjs`)。没建出来就不给,采集照旧只在云端匿名做
+        ...(accountTools && typeof accountTools.collectDelegate === 'function' ? { collectDelegate: () => accountTools.collectDelegate() } : {}),
       });
       hostedContexts.set(agent, ctx);
     }
@@ -1476,7 +1515,7 @@ export function createAgentInstance(env) {
       } catch {
         systemPrompt = 'System prompt missing.';
       }
-      systemPrompt += `\n\n${cloudSystemNote({ look: !!prerenderPost })}`;
+      systemPrompt += `\n\n${cloudSystemNote({ look: !!prerenderPost, provided: accountProvided })}`;
       if (typeof o.script === 'string' && o.script.trim()) {
         systemPrompt += `\n\n## 本片剧本(用户写的,每一步都要照它来)\n\n${o.script.trim()}\n\n` +
           '这是这条片子的主线。做任何编排、配字幕、配动效的决定时都要对照它;' +
@@ -1551,7 +1590,8 @@ export function createAgentInstance(env) {
           fetchImpl: o.fetchImpl,
           localTools: false,
           // 没配看画面的口子时,看画面的四个不交给模型
-          toolFilter: prerenderPost ? CLOUD_OPEN_TOOLS : CLOUD_OPEN_TOOLS_NO_LOOK,
+          // 这个进程里建出了提供者的工具(账号模式)一并交给模型;没有提供者时就是原来的那两张表
+          toolFilter: cloudOpenTools({ look: !!prerenderPost, provided: accountProvided }),
           // 每完成一次工具往返落一次模型历史(进程被杀也接得上);每次模型请求前后过宿主的闸、记用量(契约第 6.2、7.1 节)
           checkpoint: true,
           ...(typeof o.onModelCall === 'function' ? { onModelCall: o.onModelCall } : {}),
@@ -1629,6 +1669,12 @@ export function createAgentInstance(env) {
     unbindAgent,
     callTool: callToolInternal,
     startHostedRun,
+    /** 账号模式:`seek` 在发起人的页面上做成了,把这个对话记着的播放头改成新的 */
+    notePlayhead(agent, t) {
+      if (typeof agent !== 'string' || typeof t !== 'number' || !Number.isFinite(t) || t < 0) return;
+      const ps = hostedPageStates.get(agent);
+      hostedPageStates.set(agent, { ...(ps && typeof ps === 'object' ? ps : {}), t });
+    },
     /** 这个实例绑着的项目副本与各对话读到的版本(诊断);没绑回 null */
     describe: () => (agentBinding ? agentBinding.side.describe() : null),
     /** 托管档:这个项目的内容库里有没有卡片源码(有的话由渲染服务的隔离工作进程渲,补渲要排队) */

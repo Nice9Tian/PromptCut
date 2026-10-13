@@ -27,6 +27,12 @@
  *   look       { url, keyDir }                          可不写；渲染服务的回环口、签看画面请求用的服务私钥目录
  *   runAssets  { origin, fingerprint256, maxResponseBytes, maxImportBytes, timeoutMs? }   可不写；素材服务的内部口
  *                              （timeoutMs：一次素材请求里连接多久没有动静就放弃，缺省 5 秒）
+ *   tools      { PROMPTCUT_FFMPEG?, PROMPTCUT_AGENT_BROWSER?, … }   可不写；工具要的节点依赖（键名见 `account-tools.mjs` 的
+ *                              `ACCOUNT_TOOL_SETTING_KEYS`，都是这台节点上的绝对路径或开关）。没写的那一族照样交给模型，
+ *                              工具自己回「这台节点没配」；写了但路径不在、键不认，直接拒绝启动。
+ *
+ * 写了 `runAssets` 就会建工具提供者（感知、一键流程、网页操作、发起人页面的反向通道、采集代下；`account-tools.mjs`）：
+ * 它们读写素材只凭这条任务的授权，所以没有 `runAssets` 就不建（那些工具照旧回「还没接上」）。反向通道经 `master` 那个内部口问主服务。
  *
  * 只在 Linux 上能用：root 写的文件要核属主（`rootRead`）。别的平台直接拒绝。测试经 `buildWorkerConfiguration`
  * 换掉「读 root 记录」和「模型配置」这两处，其余走同一份代码。
@@ -38,6 +44,7 @@ import { readModelConfig } from '../agent/service/model-config.mjs';
 import { readServiceKeyFile } from '../auth/service-identity.mjs';
 import { rootRead } from '../hosted/deploy/asset-root-registry-publisher.mjs';
 import { createLookClient, parseLookUrl } from './look-client.mjs';
+import { readAccountToolConfig, validateAccountToolSettings } from '../agent/service/account-tools.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
@@ -52,7 +59,7 @@ const positive = value => Number.isSafeInteger(value) && value > 0;
 /** 只核形状与路径。记录本身的内容由 `createAccountTaskWorker` 用 root 的模式去核。 */
 export function validateWorkerSettings(settings) {
   if (!exact(settings, ['v', 'expected', 'reservation', 'rootRecordFile', 'identity', 'doc', 'master', 'journalFile', 'dataDir', 'stateDir'],
-    ['modelConfigDir', 'controlPort', 'look', 'runAssets']) || settings.v !== 1 ||
+    ['modelConfigDir', 'controlPort', 'look', 'runAssets', 'tools']) || settings.v !== 1 ||
       !absolute(settings.rootRecordFile) || !absolute(settings.journalFile) || !absolute(settings.dataDir) || !absolute(settings.stateDir) ||
       (settings.modelConfigDir !== undefined && !absolute(settings.modelConfigDir)) ||
       (settings.controlPort !== undefined && !port(settings.controlPort)) ||
@@ -69,6 +76,7 @@ export function validateWorkerSettings(settings) {
       !positive(settings.runAssets.maxResponseBytes) || !positive(settings.runAssets.maxImportBytes) ||
       (settings.runAssets.timeoutMs !== undefined && !positive(settings.runAssets.timeoutMs))))
     fail('account-worker-settings-run-assets');
+  if (settings.tools !== undefined) { try { validateAccountToolSettings(settings.tools); } catch { fail('account-worker-settings-tools'); } }
   return settings;
 }
 
@@ -82,8 +90,9 @@ export function validateWorkerSettings(settings) {
  * @param {(event: string, fields?: object) => void} [seams.log]
  * @param {object} [seams.runnerOptions] 交给真实运行器的其它选项（工作区上限、工具时限等）
  * @param {object} [seams.lookLimits] 看画面客户端的时限（测试把「一趟最多挂多久」调短）
+ * @param {object} [seams.toolLimits] 工具提供者的时限与上限（测试调短；各族一节，见 `account-tools.mjs`）
  */
-export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig = null, root = ROOT, log = () => {}, runnerOptions = {}, lookLimits = {} } = {}) {
+export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig = null, root = ROOT, log = () => {}, runnerOptions = {}, lookLimits = {}, toolLimits = {} } = {}) {
   validateWorkerSettings(settings);
   if (typeof readRootRecord !== 'function') fail('account-worker-settings');
   const read = file => fs.readFileSync(file);
@@ -100,6 +109,12 @@ export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig
     try { key = readServiceKeyFile(settings.look.keyDir); } catch { fail('account-worker-settings-look-key'); }
     if (key.service !== 'agent') fail('account-worker-settings-look-key');
     look = createLookClient({ url: settings.look.url, key, log, limits: lookLimits });
+  }
+  // 工具要的节点依赖：在这里读一次。写了但不对（路径不在、键不认）就拒绝启动，不悄悄变成「没配」。
+  let toolConfig = null;
+  if (settings.runAssets) {
+    try { toolConfig = readAccountToolConfig(settings.tools ?? {}, { root }); }
+    catch (error) { log('agent.account-tools.config-error', { code: 'account-worker-settings-tools', detail: String(error?.message ?? '').slice(0, 200) }); fail('account-worker-settings-tools'); }
   }
   let vite = null;
   return { listener: { host: '127.0.0.1', port: settings.identity.port }, workerOptions: {
@@ -124,6 +139,9 @@ export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig
           assetFingerprint256: settings.runAssets.fingerprint256, maxResponseBytes: settings.runAssets.maxResponseBytes,
           maxImportBytes: settings.runAssets.maxImportBytes,
           ...(settings.runAssets.timeoutMs ? { timeoutMs: settings.runAssets.timeoutMs } : {}) } } : {}),
+        // 工具提供者：反向通道的薄客户端经主服务那个内部口（和交事件同一个口、同一张任务证书）
+        ...(toolConfig ? { accountTools: { config: toolConfig, limits: toolLimits,
+          pageBridge: { origin: settings.master.origin, tls: docTls, serverFingerprint256: settings.master.fingerprint256 } } } : {}),
         log,
         // 这个进程收尾时（执行器关完之后）关掉 vite
         async close() { const owned = vite; vite = null; await owned?.close(); } };
