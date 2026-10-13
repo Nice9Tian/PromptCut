@@ -513,6 +513,20 @@ test('X1-sparse 稀疏流任务:每个分段只截第一帧、清单与满密度
   assert.equal(mergeStreamResult({ ...denseBody, resultKey: 'f'.repeat(64) }, lateSparse), lateSparse);
   assert.equal(mergeStreamResult({ ...denseBody, range: { from: 0, to: 7 } }, lateSparse), lateSparse);
   assert.equal(mergeStreamResult(null, lateSparse), lateSparse);
+
+  // 另一台同指纹的节点本机只有稀疏版:拉稀疏的清单不换(两边都是稀疏),拉满密度的清单升成满密度
+  const B = await streamPipeline();
+  const executorB = executorFor(B);
+  await executorB.plan(planView(), { signal: signalNone() });
+  await executorB.render(view(sparse), { signal: signalNone(), progress: () => {} });
+  const stateB = B.streamProducer().streams.get(dense.resultKey);
+  assert.equal(B.streamProducer().segmentState(stateB, first), 'sparse');
+  assert.equal((await applyResult(B, client, structuredClone(put.result))).written, 0, '对方也是稀疏的:不收');
+  assert.equal((await applyResult(B, client, structuredClone(denseBody))).written, segs, '对方是满密度的:升上去');
+  for (let n = dense.range.from; n <= dense.range.to; n++) {
+    assert.equal(B.streamProducer().segmentState(stateB, n), 'dense');
+    assert.equal(stateB.manifest.segments[n].adopted, true);
+  }
 });
 
 test('X1-mismatch 流任务对不上这一版的流:内容键、结果键(别的指纹)、分段范围越界 → plan-mismatch(不可重试),不截图', { timeout: 30_000 }, async (t) => {

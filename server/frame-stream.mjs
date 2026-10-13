@@ -1214,6 +1214,17 @@ export class StreamProducer {
     return seg.stride > 1 ? 'sparse' : 'dense';
   }
 
+  /**
+   * 别处产的这个分段(`seg`,清单里的那一项)本机要不要收:本机没有、已判旧,或者本机只有稀疏版而对方是满密度的(升上去)。
+   * 本机已经是满密度的、或者两边都是稀疏的,不收。
+   */
+  adoptable(state, n, seg) {
+    if (!state?.manifest?.segments?.[n]) return true;
+    const mine = this.segmentState(state, n);
+    if (mine === 'stale' || mine === 'none') return true;
+    return mine === 'sparse' && !(Number(seg?.stride) > 1);
+  }
+
   /** 还要不要做稀疏那一趟(整条流有没有哪一段连稀疏的都没有) */
   needsSparse(state, n) { return this.segmentState(state, n) === 'none'; }
   needsDense(state, n) { const s = this.segmentState(state, n); return s !== 'dense'; }
@@ -1653,7 +1664,7 @@ export class StreamProducer {
     // 先挑出要写的分段(本机没有,或者已判旧),核对字节;一个块不对就整个不写
     const pending = [];
     for (const [n, seg] of plan.segments) {
-      if (state.manifest.segments?.[n] && this.segmentState(state, n) !== 'stale') continue;
+      if (!this.adoptable(state, n, seg)) continue;
       const initMeta = plan.inits[seg.init] ?? state.manifest.inits?.[seg.init];
       if (!initMeta) throw new Error(`分段 ${n} 用的 init ${seg.init} 不在清单里`);
       pending.push({ n, seg, bytes: blobOf(seg.hash) });
@@ -1683,7 +1694,7 @@ export class StreamProducer {
     for (const p of pending) {
       const old = manifest.segments[p.n];
       // 写盘期间本机刚产好了这一段:不覆盖,刚写的文件没人引用就删掉
-      if (old && old.file !== p.file && this.segmentState(state, p.n) !== 'stale') {
+      if (old && old.file !== p.file && !this.adoptable(state, p.n, p.seg)) {
         skipped++;
         if (!Object.values(manifest.segments).some(s => s.file === p.file)) void fs.rm(this.store.segFile(key, p.file), { force: true }).catch(() => {});
         continue;
@@ -1737,7 +1748,7 @@ export class StreamProducer {
     const state = this.streams.get(plan.key) ?? { spec: { streamKey: plan.key }, manifest: await this.store.load(plan.key) };
     const segments = [], hashes = new Set();
     for (const [n, seg] of plan.segments) {
-      if (state.manifest?.segments?.[n] && this.segmentState(state, n) !== 'stale') continue;
+      if (!this.adoptable(state, n, seg)) continue;
       segments.push(n);
       hashes.add(seg.hash);
       if (!state.manifest?.inits?.[seg.init] && plan.inits[seg.init]) hashes.add(plan.inits[seg.init].hash);
