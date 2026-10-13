@@ -25,7 +25,8 @@
  * 没有配 `pylibs` 与 `requirements` 就不装(回「用不了」)。full 档(torch + 690 MB 权重)本来就不走在线装,只随部署送达。
  *
  * 表里本包列的四个工具名在 `SUBJECT_TOOL_NAMES`。工具总表(`cloud-tools.mjs`)的接线归 G 包,本文件不碰它。
- * 纯 Node,不引用浏览器;只在取采样时刻与建议位置时懒加载 `src/kernel/project.ts`(`kernel` 可注入)。
+ * 纯 Node,不引用浏览器,也不直接 import `src/`(独立入口对前端代码只经 `server/agent/ssr-host.mjs` 的载入缝):
+ * 取采样时刻与建议位置要的内核函数由宿主经 `kernel` 参数注入,没注入就是「没配置全」,工厂直接拒绝。
  */
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -137,9 +138,6 @@ function topBoxes(boxes, limit = 4) {
   }));
 }
 
-let kernelPromise;
-const defaultKernel = () => (kernelPromise ??= import(new URL('../../../../src/kernel/project.ts', import.meta.url).href));
-
 /**
  * @param {object} d
  * @param {object | null} d.config `readSubjectConfig` 的结果;没有就是 null(工具如实回「没配」)
@@ -151,7 +149,7 @@ const defaultKernel = () => (kernelPromise ??= import(new URL('../../../../src/k
  *   `getMedia(context, mediaId)` -> 项目当前副本里的素材记录或 null(带 `mediaRev` 更好);
  *   `setMediaSubjects(context, { mediaId, expectedMediaRev, subjects, jobId })` -> `{ projectRev? }`,版本对不上抛带 `code: 'media-changed'` 的错
  * @param {{ startProxy(): Promise<{ url: string, close(): Promise<void> }> } | null} [d.egress] 受控安装连网时才要
- * @param {object} [d.kernel] `{ MAX_SUBJECT_TIMES, subjectSampleTimes, suggestPosition }`;缺省懒加载 `src/kernel/project.ts`
+ * @param {object} d.kernel 宿主经 ssr-host 载入缝取来注入:`{ MAX_SUBJECT_TIMES, subjectSampleTimes, suggestPosition }`(必需)
  */
 export function createSubjectTools({
   config = null, resources, assets, jobs, workspace, project, egress = null,
@@ -162,6 +160,9 @@ export function createSubjectTools({
     if (!dep || methods.some((m) => typeof dep[m] !== 'function')) throw new SubjectToolError(`主体识别缺少依赖:${name}`, 'subject-unconfigured');
   }
   if (typeof workspace !== 'function') throw new SubjectToolError('主体识别缺少依赖:workspace', 'subject-unconfigured');
+  for (const [name, type] of [['MAX_SUBJECT_TIMES', 'number'], ['subjectSampleTimes', 'function'], ['suggestPosition', 'function']]) {
+    if (typeof kernel?.[name] !== type) throw new SubjectToolError(`主体识别没配置全:缺内核项 ${name}(宿主要经 ssr-host 载入缝取来注入 kernel)`, 'subject-unconfigured');
+  }
   const limits = { ...SUBJECT_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
   /** `config.args` 只给单测与探针(把解释器整个换成替身脚本);正式的一律隔离模式,包目录来自部署配置 */
@@ -170,7 +171,7 @@ export function createSubjectTools({
   const pythonArgv = (subArgs) => (stubArgs
     ? [...stubArgs, ...globalArgs, ...subArgs]
     : isolatedPythonArgs('promptcut_subject', { roots: splitRoots(config.pythonPath), args: [...globalArgs, ...subArgs] }));
-  const loadKernel = async () => kernel ?? defaultKernel();
+  const loadKernel = async () => kernel;
 
   /** 正在跑的作业(本进程):jobId -> 状态。close 要等它们的子进程真关 */
   const live = new Map();

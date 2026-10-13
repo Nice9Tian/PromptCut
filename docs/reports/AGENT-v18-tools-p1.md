@@ -154,3 +154,15 @@
 - **修法**:探针里 scdet 超时单独起一个 0.4 秒时限的实例(足够小,启动加解码都跑不完),并加严检查:error、`超时`、账本 `SHOTS_TIMEOUT`、进程数回到开始前、没写项目,都要成立。没有放宽。
 - **顺带修了一个产品小问题**:不到 1 秒的时限,超时提示写成「超过 0 秒」(`Math.round`);现在小于 10 秒的时限保留一位小数,写「超过 0.4 秒」。单测的 scdet 超时用例同步改成 0.4 秒并断言这句。
 - **复测**:`npx tsc -b --force` 退出码 0;两个测试文件 38 条全过;探针连跑三遍都是 38/38(退出码 0),日志 `docs/reports/assets/v18-tools-p1/probe.log` 换成第三遍。
+
+## 闸门第二次:不许直接 import `src/`(已改)
+
+`accept-018-rest-ssr-seam` 的 SEAM-3 棘轮拦住了 `shots.mjs -> src/kernel/{project,layout}.ts`。独立入口对前端代码只经 `server/agent/ssr-host.mjs` 的载入缝,所以:
+
+- `shots.mjs` 不再 import `src/` 下任何文件,也没有「缺省去 import」的退路;内核函数由宿主经工厂参数 `kernel` 注入,缺任何一个,工厂直接抛 `shots-unconfigured`「没配置全:缺内核函数 xxx」。
+- 顺手把已合入的 `subject.mjs`(`defaultKernel` 懒加载 `src/kernel/project.ts`)按同一办法改掉,缺项抛 `subject-unconfigured`「没配置全」;从 `accept-018-rest-ssr-seam.test.mjs` 的 `KNOWN` 清单里删掉了它那一行。
+- 测试底座(`cloud-tools-p1-fixture.mjs`、`cloud-tools-p4-fixture.mjs`)新增 `loadTestKernel()`,由测试代码自己从 `src/` 取函数注入(测试与探针不在棘轮的扫描范围内:棘轮只扫独立入口的传递闭包)。两个包各加一条「没注入就拒绝」的单测。
+- **G 包接线时还要填**:经 `ssr-host.mjs` 的载入缝从前端代码取下面这些函数,注入工厂的 `kernel`:
+  - `createShotsTools({ kernel: { subjectForRange, suggestPosition, rectForSafeSide } })`:前两个来自 `src/kernel/project.ts`,`rectForSafeSide` 来自 `src/kernel/layout.ts`;
+  - `createSubjectTools({ kernel: { MAX_SUBJECT_TIMES, subjectSampleTimes, suggestPosition } })`:都来自 `src/kernel/project.ts`。
+  - 载入缝里没有这些模块时,需要在 `ssr-host.mjs` 里加这两处载入(该文件归 G 包)。

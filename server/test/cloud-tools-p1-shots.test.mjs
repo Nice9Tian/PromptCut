@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { makeP1Fixture, tmpDir, projectId } from './cloud-tools-p1-fixture.mjs';
+import { makeP1Fixture, loadTestKernel, tmpDir, projectId } from './cloud-tools-p1-fixture.mjs';
 import { readShotsConfig, SHOTS_TOOL_NAMES, ShotsToolError, createShotsTools } from '../agent/service/perception/shots.mjs';
 
 const stubPath = fileURLToPath(new URL('./fixtures/shots-stub.mjs', import.meta.url));
@@ -88,6 +88,14 @@ test('工具名与拆包表一致;配置读取只认绝对路径,模型档要 Py
 
 test('依赖没给齐,工厂直接拒绝(不静默降级)', () => {
   assert.throws(() => createShotsTools({}), (e) => e instanceof ShotsToolError && e.code === 'shots-unconfigured');
+});
+
+test('没注入内核函数(宿主没经 ssr-host 载入缝取来):工厂直接拒绝并说「没配置全」,不去直接 import src/', async (t) => {
+  const fx = await makeP1Fixture(t, { config: null });
+  const deps = { config: null, resources: fx.resources, assets: fx.assets, jobs: fx.jobs, workspace: async () => fx.ws, project: fx.project };
+  assert.throws(() => createShotsTools(deps), (e) => e.code === 'shots-unconfigured' && /没配置全/.test(e.message));
+  const k = await loadTestKernel();
+  assert.throws(() => createShotsTools({ ...deps, kernel: { subjectForRange: k.subjectForRange, suggestPosition: k.suggestPosition } }), (e) => /没配置全.*rectForSafeSide/.test(e.message));
 });
 
 test('没配镜头识别的节点:detect_shots 如实说明并指向 see_frames,不起作业;list_shots 没检测过就是 null', async (t) => {

@@ -155,12 +155,6 @@ const textLines = (onLine) => {
   return feed;
 };
 
-let kernelPromise;
-const defaultKernel = () => (kernelPromise ??= Promise.all([
-  import(new URL('../../../../src/kernel/project.ts', import.meta.url).href),
-  import(new URL('../../../../src/kernel/layout.ts', import.meta.url).href),
-]).then(([p, l]) => ({ subjectForRange: p.subjectForRange, suggestPosition: p.suggestPosition, rectForSafeSide: l.rectForSafeSide })));
-
 /** 框按面积取前几个并取整(与桌面版 `topBoxes` 同一口径) */
 function topBoxes(boxes, limit = 4) {
   return [...boxes].sort((a, b) => b.w * b.h - a.w * a.h).slice(0, limit).map((b) => ({
@@ -187,7 +181,7 @@ function parseRate(raw) {
  *   `getMedia(context, mediaId)` -> 项目当前副本里的素材记录或 null(带 `mediaRev`);
  *   `setMediaShots(context, { mediaId, expectedMediaRev, shots, jobId })` -> `{ projectRev? }`,版本对不上抛带 `code: 'media-changed'` 的错;
  *   `getStage(context)` -> `{ width, height }`(可选;折叠主体情况时给 suggestedRect 用,没有就不给 suggestedRect)
- * @param {object} [d.kernel] `{ subjectForRange, suggestPosition, rectForSafeSide }`;缺省懒加载 `src/kernel/`
+ * @param {object} d.kernel 宿主经 ssr-host 载入缝取来注入:`{ subjectForRange, suggestPosition, rectForSafeSide }`(必需)
  */
 export function createShotsTools({
   config = null, resources, assets, jobs, workspace, project,
@@ -198,6 +192,9 @@ export function createShotsTools({
     if (!dep || methods.some((m) => typeof dep[m] !== 'function')) throw new ShotsToolError(`镜头识别缺少依赖:${name}`, 'shots-unconfigured');
   }
   if (typeof workspace !== 'function') throw new ShotsToolError('镜头识别缺少依赖:workspace', 'shots-unconfigured');
+  for (const fn of ['subjectForRange', 'suggestPosition', 'rectForSafeSide']) {
+    if (typeof kernel?.[fn] !== 'function') throw new ShotsToolError(`镜头识别没配置全:缺内核函数 ${fn}(宿主要经 ssr-host 载入缝取来注入 kernel)`, 'shots-unconfigured');
+  }
   const limits = { ...SHOTS_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
   /** `config.args` 只给单测与探针(把解释器整个换成替身脚本);正式的一律隔离模式,包目录来自部署配置 */
@@ -209,7 +206,7 @@ export function createShotsTools({
   /** `config.ffmpegArgs` / `config.ffprobeArgs` 同样只给单测与探针(把可执行文件换成替身脚本) */
   const ffmpegArgv = (args) => [...(Array.isArray(config?.ffmpegArgs) ? config.ffmpegArgs : []), ...args];
   const ffprobeArgv = (args) => [...(Array.isArray(config?.ffprobeArgs) ? config.ffprobeArgs : []), ...args];
-  const loadKernel = async () => kernel ?? defaultKernel();
+  const loadKernel = async () => kernel;
 
   /** 正在跑的作业(本进程):jobId -> 状态。close 要等它们的子进程真关 */
   const live = new Map();

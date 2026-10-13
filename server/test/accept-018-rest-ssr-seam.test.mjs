@@ -109,7 +109,6 @@ const KNOWN = [
   'server/agent/agent-roles.mjs -> src/ai/roles',
   'server/agent/agent-sessions.mjs -> src/kernel/creativity.mjs',
   'server/agent/creativity-gate.mjs -> src/kernel/creativity.mjs',
-  'server/agent/service/perception/subject.mjs -> src/kernel/project.ts',
   'server/vite-plugin-cards.ts -> src/audio/cardAudioHost.ts',
   'server/vite-plugin-cards.ts -> src/online/cardRuntime/remotionLock.mjs',
   'server/vite-plugin-cards.ts -> src/render/cardCodeIdentity.mjs',
