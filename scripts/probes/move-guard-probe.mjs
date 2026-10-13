@@ -190,11 +190,12 @@ async function scenarioB(page, editor, serviceUrl, name, cloudDir, { prefix = 'e
   await sleep(4000); // 让后台续传、协调器多走几步，看它最终停在哪
   const text = await statusText(page); const image = await shot(page, `${prefix}-after-click`);
   const after = await localState(page, editor, roomId);
+  const moveLanButtonShown = await page.$('[data-pc="collab-move-lan"]') !== null; // 旧办法搬完的云端房间仍应显示「搬回本机」
   await closeSettings(page);
   const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 0));
   void bodyText;
   const filesAfter = cloudDir ? dirListing(cloudDir) : null;
-  return { roomId, outcome, statusText: text, image, requests: page.net.slice(netFrom), cloud: logged ? since(logFrom) : '(旧模式节点是普通 http，不在探针的云端请求记录里)', before, after,
+  return { roomId, outcome, moveLanButtonShown, statusText: text, image, requests: page.net.slice(netFrom), cloud: logged ? since(logFrom) : '(旧模式节点是普通 http，不在探针的云端请求记录里)', before, after,
     cloudFilesAdded: filesBefore && filesAfter ? filesAfter.filter(f => !filesBefore.includes(f)) : null };
 }
 
@@ -245,7 +246,14 @@ async function scenarioC(page, fixture, cloudDir) {
   const stateBefore = await localState(page, null, null);
   const filesBefore = dirListing(cloudDir);
   await openSettings(page).catch(async e => { await shot(page, 'move-back-settings-missing'); throw e; });
-  await page.waitForSelector('[data-pc="collab-move-lan"]', { timeout: 10000 });
+  // 用户 2026-10-13 定：账号办法的云端项目里不显示「搬回本机」。修之前它露着、点了只是失败；修之后应当不在。
+  const present = await page.$('[data-pc="collab-move-lan"]') !== null;
+  if (!present) {
+    await shot(page, 'move-back-button-hidden');
+    const gap = await page.evaluate(() => { const row = document.querySelector('[data-pc="collab-section"]'); return { children: [...row.children].map(c => c.className + ':' + (c.textContent || '').slice(0, 12)) }; });
+    await closeSettings(page);
+    return { entered, moveBackButtonPresent: false, sectionChildren: gap.children, requests: page.net.slice(netFrom), cloud: since(logFrom), stateBefore };
+  }
   await shot(page, 'move-back-before-click');
   const from = mark();
   await page.click('[data-pc="collab-move-lan"]');
@@ -254,7 +262,7 @@ async function scenarioC(page, fixture, cloudDir) {
   const text = await statusText(page); const image = await shot(page, 'move-back-after-click');
   const stateAfter = await localState(page, null, null);
   await closeSettings(page);
-  return { entered, statusText: text, image, requests: page.net.slice(netFrom), cloud: since(from), stateBefore, stateAfter, cloudFilesAdded: dirListing(cloudDir).filter(f => !filesBefore.includes(f)) };
+  return { entered, moveBackButtonPresent: true, statusText: text, image, requests: page.net.slice(netFrom), cloud: since(from), stateBefore, stateAfter, cloudFilesAdded: dirListing(cloudDir).filter(f => !filesBefore.includes(f)) };
 }
 
 let fixture, legacy, editorA, accountEditor;

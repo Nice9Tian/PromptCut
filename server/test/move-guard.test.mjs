@@ -155,3 +155,11 @@ test('旧模式节点：搬到云端照旧走完，本机房间记为已搬走�
   assert.equal(roomUnavailableReason(cloud.credentialStore.peek(room.rec.projectId)), null);
   assert.ok(cloud.credentialStore.peek(room.rec.projectId), '云端拿到原房间');
 });
+
+test('账号办法的云端项目不显示「搬回本机」，旧办法的云端房间照旧显示（界面真实表现见探针 move-guard-probe.mjs）', () => {
+  const source = fs.readFileSync(new URL('../../src/editor/sync/CollabSection.tsx', import.meta.url), 'utf8');
+  const line = source.split(/\r?\n/).find(l => l.includes('data-pc="collab-move-lan"'));
+  assert.ok(line, '旧办法那条代码路径还在');
+  assert.match(line, /shared\.where === "hosted" && !ONLINE && !shared\.accountId/);
+  assert.ok(source.includes('onClick={() => void moveLan()}') && source.includes('moveSharedToLan'), '功能代码没删');
+});
