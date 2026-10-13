@@ -175,3 +175,65 @@
 ## 改了哪些文件
 
 `src/cards/native/lottie.tsx`、`src/cards/assets/index.ts`、`src/kernel/pinEntropy.ts` 与 `src/kernel/pinEntropy.test.mjs`(原型带来的,我没再改)、`src/cards/capabilities.json`、`src/cards/capabilities.md`、`server/card-authoring-guide.md`、`docs/plan/render-standard.md`(Lottie 一节)、`scripts/probes/lottie-seed-probe.mjs`、新增 `scripts/probes/lottie-baseline-probe.mjs`、`lottie-seed-extra-probe.mjs`、`lottie-pipeline-probe.mjs`、原型的三份测试素材 `scripts/probes/fixtures/lottie-seed/`、原型的报告 `docs/reports/AGENT-lottie-seed.md`、本报告。十个不许改的文件没有碰。
+
+## 合入前的准备(2026-10-13)
+
+背景:用户 2026-10-13 已对「癸一让 `lottie-navidad` 有 31 帧画面和原来不同」点头(`docs/plan/user-decisions-2026-10-13.md` 第 1 节第 17 条),这一节是合入前的准备:合并最新的 `main`、改对前提不成立的探针、重跑验收和基线、重新确认变了的帧。机器:同上,PC;量的时候别的子 Agent 在跑。端口只用了 27940～27960。
+
+### 提交
+
+| 提交 | 内容 |
+|---|---|
+| `d67249ff` | `git merge main`(合入时 main 在 `b09b4733`,几十块) |
+| 合并第二次 | main 在做的过程中多了一条只改 `docs/plan/` 的提交(`8163c6cb`),又合了一次 |
+| `探针:stream-produce-probe 的探针项目…` | 探针项目换卡,见下 |
+| `探针:lottie-baseline-probe 放宽端口范围…` | 见下;外加改前改后对比图 |
+| 本次 | 本节 |
+
+### 合并冲突
+
+**没有冲突**,两次合并都是自动完成。没有两边逻辑要取舍的地方。
+
+### 前提不成立的探针和测试
+
+- **`scripts/probes/stream-probe-project.mjs`(`stream-produce-probe.mjs`、`stream-play-probe.mjs`、`scripts/acceptance/four-stage-manifest.mjs` 里的 GR-7/GR-8 共用的探针项目)**:原来三张重卡之一是通用 `lottie` 卡(0.5～2 秒,框 800×450)。Lottie 声明成 remotion 式以后按声明是轻卡,没有成本记录时不进预渲染集合,流数少一条。**换成 `entity-chips`(实体名牌)**:审阅表里是 `motion` / `independent`,声明仍是 `stateful`,没有成本记录时按声明进集合;时间、框、轨道位置照旧(0.5～2 秒,框 800×450,入点不在分段边界上),探针要验的东西不变:三条流、入点不在分段边界、和粒子背景叠着时的隔离(检查的是药丸的蓝不出现在粒子流里,与这张卡无关)。选它而不是 `focus-card`:`focus-card` 是丙组五个 id 之一,键本来就可能被别的块改,用 `entity-chips` 不受牵连。只改了项目文件和它文件头的注释,另外两支探针和清单一个字没动。
+- **`scripts/probes/snapshot-hash-probe.mjs`**(清单里标「历史」,不在整套里):默认的 10 张卡里有 `lottie-adrock`,注释写「审阅表里 independent、stateful 的卡」,现在不成立。换成同样是 MagicUI 的 `mu-blur-fade`(`motion` / `independent`),注释里去掉「SVG(lottie)」。**这一项没有重跑**:要起两套编辑器和预渲染进程、约 20 分钟,它测的是即将作废的每张卡的 HTML 快照,换卡只保证默认列表里没有现在不产快照的卡。
+- `scripts/probes/lottie-baseline-probe.mjs`:`--port` 原来只认 27600～27619,放宽到「20000 以上」(同别的 Lottie 探针)。别的用到 `lottie` 卡 id 的探针(`m7-bake-*` 用的是「异步装载的 DOM 卡」这个性质,`seek-back-exact-probe` 比的是回跳到达方式,`swap-cost-probe`、`snapshot-*`、`queue-single-pass-probe` 只是列卡)不依赖「Lottie 是有状态卡」,没动。
+- 测试:`npm test` 里没有哪个测试因此红(见下)。`server/test/page-stream-plan.test.mjs`、`browser-stream-split.test.mjs`、`wrapped-cardid-split.test.mjs` 里的 `lottie` 是它们自己注入的假审阅表,不受声明影响。
+
+### 验证结果
+
+| 项 | 命令(`--origin` / 端口都是自己的) | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force`(第一次合并后) | 退出码 0,零输出 |
+| 流生产 | `node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:27940` | 退出码 0,`PASS`,`fails: []`,三条流,满密度 70.3 秒 |
+| 流生产,组流 | 同上加 `--group` | 退出码 0,`PASS` |
+| 流播放 | `node scripts/probes/stream-play-probe.mjs --origin …` | 第一遍退出码 1,唯一一条失败是「冷 seek 到解出目标帧 ≤ 60 ms」:91 ms(机器忙时的耗时,耗时不当闸门);原样重跑一遍:退出码 0,`PASS`,`fails: []` |
+| 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:27940/?export=1"` | 退出码 0,1800 帧,Identical 1800,Different 0 |
+| 导出与快照重放 | `PC_FRAME_TEST_URL=http://127.0.0.1:27940 node scripts/verify-unified-frames.mjs` | 退出码 0,`PASS` |
+| 种子原型探针 | `node scripts/probes/lottie-seed-probe.mjs --port 27950 --out out/lottie-seed-probe` | 退出码 0,`{"ok":true,"fails":[]}` |
+| 补测探针 | `node scripts/probes/lottie-seed-extra-probe.mjs --port 27951` | 退出码 0,`{"ok":true,"fails":[]}` |
+| 真管线探针 | `lottie-pipeline-probe.mjs --port 27960 --only export / stage / streams` 各一次 | 三次退出码都是 0,都是 `{"ok":true,"fails":[]}`(导出:372 帧缺 0,单路对 4 路不同 0 帧,单路对抽帧不同 0 帧;舞台:78 次暂停点击全部和导出页相同;预渲染:4 条流 `replay=false`、`replayedFrames=0`) |
+| 源码版本比对 | `node scripts/probes/card-source-version-compare.mjs --base main` | 入口文件变了 5 个:`src/cards/assets/index.ts`、`src/cards/index.ts`、`src/cards/native/index.ts`、`src/cards/native/lottie.tsx`、`src/parts/lib/media-lottie.tsx`;服务端代码身份变了 2 个 id:`lottie`、`animation`;`added`、`removed` 都是空。和合并前一样,main 带来的几十块没有让这条口径多出别的 |
+| 能力表比对 | `node scripts/probes/card-table-digest-compare.mjs --base main --expect ,` | `--expect ,` 时退出码非 0(列出 7 张):`lottie`、`lottie-adrock`、`lottie-bodymovin`、`lottie-gatin`、`lottie-happy2016`、`lottie-navidad`、`particles`。能力表变的是 6 张 Lottie 卡(`stateful`→`direct`,`need_prerendering` true→false,`compositing`、`canvasHeavy`、`independentCache` 不变);`particles` 能力表和注册表定义都没变,只有源码版本(及键)变,原因同上一节「键的核对」。用 `--expect lottie,lottie-adrock,lottie-bodymovin,lottie-gatin,lottie-happy2016,lottie-navidad,particles` 重跑:退出码 0,「其余 94 张的能力表、源码版本、三个键逐张相同」 |
+| 全量测试 | `npm test`(设了两个环境变量) | 6483 条,通过 6463,失败 2,跳过 12,todo 6。失败 2 条是同一个测试(`server/test/user-editing.test.mjs` 的 UE-S7 及其外层 UE-S7～S10,等了 20 秒超时,机器忙);单独 `npm test -- server/test/user-editing.test.mjs`:11 条通过 11,失败 0,退出码 0。另有一条 `accept-018-files-proc-damage` 的 ACC018-DMG-5 标「⚠ 产品问题」,是 todo 条目,不算失败 |
+
+演示项目(导出确定性、统一帧用的)里有没有用到这几张 Lottie 卡:我在 `src/`、`server/`、`scripts/` 里没有找到演示项目数据引用任何 `lottie*` 的卡 id;确定性那一遍 1800 帧零差异也佐证。导出像素基线由主会话合入前跑,这里不报。
+
+### 变了的帧重新确认(`lottie-baseline-probe.mjs`,真页面 1920×1080 截图)
+
+做法:改前用 `main` 的完整检出(`git archive main` 解出的临时目录,探针文件拷过去)、改后用本分支,各对 `navidad` 和 `happy2016` 跑 `capture`(顺推全长、回跳 8 帧、直接跳 8 帧),再 `compare`。
+
+- **`navidad`(125 帧)**:顺推逐帧比,像素不同的帧是第 51～81 帧(31 帧,最大差 255,最多 172421 个像素)加第 48 帧(只差 **1 个像素**,是这把尺子的底噪,上一轮就写过);回跳 8 张、直接跳 8 张改前改后逐像素相同。原因没变:`main` 上顺着推到这些帧时,Chrome 不重画嵌套的蒙版,小怪物脸上的底色不出来;改后每跳一帧提醒浏览器重画。**再核了一遍原因**:在 `main` 上对 125 帧每一帧都新开页面直接跳(`--jump-all`,存成 `jumpall-NNNN.png`),拿它和改后的顺推逐帧逐像素比:**125 帧 0 帧不同**;同一份 `main` 的直接跳和它自己的顺推比:第 48(1 个像素)、51～81 帧不同。就是说改后的顺推画面 = 改前「直接跳到这一帧」的画面,没有造出新画面。
+- **`happy2016`(99 帧)**:顺推第 23～98 帧共 76 帧和改前不同:其中 67 帧像素不同(第 29、33～98 帧,最多 **3 个像素**,最大差 30),另 9 帧(第 23～28、30～32 帧)只是 SVG 文本不同、像素相同(属性值不留旧数);回跳、直接跳各 8 张相同。和上次一样。
+- 对比图(左改前 `main`,右改后本分支,各缩成 960 宽并排):`docs/reports/assets/rr-lottie/navidad-f55-before-after.png`、`navidad-f62-before-after.png`、`navidad-f75-before-after.png`。我都看过:改前小怪物的脸是黑的(第 62 帧只露出嘴和一根签子,第 75 帧整张脸缺失只看到零散的五官),改后脸上有奶油色的底色,和「直接跳」的画面一致,第 55 帧改后多出了一块奶油色的身子。
+
+### 进程和窗口
+
+自己起过一台 vite(27940)、三个探针自己起的 vite 和无头 Chrome、基线探针自己起的 vite(27952、27953)。都已收掉;27940～27965 现在没有监听;每次跑前后查过可见窗口,没有。没有起过不带 `PROMPTCUT_NO_PORT_FILE=1` 的编辑器(27940 的 vite 带了)。临时目录 `.worktrees/_rr-main-tmp`(`git archive main` 的解出物,不入库,仅为了渲「改前」)已删除。
+
+### 要主会话注意的
+
+1. 全量测试这一遍有 1 个文件(`user-editing`)忙时超时,单独重跑过;没有一次零失败的全量,请机器空下来时自己重跑为准。
+2. `snapshot-hash-probe.mjs` 改了默认卡但没重跑(见上)。
+3. 合并后没有再改过 `src/`、`server/`;探针项目换卡是 `scripts/` 下的改动,不进「代码版本」口径。
