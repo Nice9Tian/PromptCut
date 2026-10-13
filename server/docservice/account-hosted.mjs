@@ -22,7 +22,8 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
 export function createAccountHostedRuntime({ ledger, accountClient, dataDir, authorityUrl, signingKey, keyId,
   now = Date.now, pollMs = 1000, onDiagnostic = () => {}, assetReadyProbe = null,
   assetInstanceId = null, allowFixtureAssetReady = false, runHooks = null,
-  getRunProvider = () => null, onRunControl = null, onPageFence = null }) {
+  getRunProvider = () => null, onRunControl = null, onPageFence = null,
+  getDocBarrier = undefined, verifyDocBarrier = undefined }) {
   if (!ledger || !accountClient) fail(503, 'account-configuration');
   if (typeof getRunProvider !== 'function' || (onRunControl !== null && typeof onRunControl !== 'function')) fail(503, 'run-authority-unavailable');
   if (assetReadyProbe !== null && typeof assetReadyProbe !== 'function') fail(503, 'asset-configuration');
@@ -35,6 +36,9 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   let service = null;
   let hostedConfig = null;
   let assetReady = false;
+  // 这个进程开始接连接那一刻账本里的访问事件位置。位置不超过它的「旧登录作废」事件，这个进程从没放进过那些登录的连接
+  // （每个入口都先查账本里的作废名单），所以不需要、也不会有这个进程自己的关连接记录。
+  let accessHeadAtBind = null;
   async function requireAssetReady({ expectedInstanceId } = {}) {
     if (!assetReadyProbe) {
       if (allowFixtureAssetReady && assetReady) return { instanceId: 'fixture-asset', accessHead: authority.eventsSince(0).headSeq };
@@ -62,6 +66,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   const storeOf = projectId => dataDir ? createFileStore({ dir: path.join(dataDir, 'tenants', projectId), log: () => {} }) :
     (memoryStores.get(projectId) ?? memoryStores.set(projectId, createMemoryStore()).get(projectId));
   const authority = createAccountAuthority({ ledger, accountClient, authorityUrl, signingKey, keyId, now, pollMs, onDiagnostic, runHooks,
+    getDocBarrier, verifyDocBarrier,
     async initializeProject({ projectId, initialProject }) {
       const store = storeOf(projectId);
       const body = initialProject ?? null;
@@ -134,6 +139,10 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
         ...(event.loginIds?.length ? { loginIds: event.loginIds } : {}),
         ...(event.accountIds?.length ? { accountIds: event.accountIds } : {}) };
       if (criteria.projectId || criteria.loginIds || criteria.accountIds) {
+        // 关之前先记下这批连接各是哪个登录的：关闭回执里只有连接号，退出确认要逐条写明「哪个登录的哪条连接已永久拒绝」。
+        const closingLogins = Object.fromEntries(service.describe().conns
+          .filter(conn => conn.principal?.realm === 'account' && typeof conn.principal.loginId === 'string')
+          .map(conn => [conn.connId, conn.principal.loginId]));
         const closing = service.fencePrincipals(criteria).then(async receipt => {
           ledger.transaction(state => {
             const persisted = state.accessEvents.find(value => value.eventId === event.eventId);
@@ -142,6 +151,8 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
             const record = (state.docTransportClosuresV2 ??= {})[event.eventId] ??= {
               eventId: event.eventId, seq: event.seq, eventDigest: digestOf(event), instances: {} };
             record.instances[docInstanceId] ??= { docInstanceId, criteria, receipt, recordedAt: now(),
+              connections: (receipt.connections ?? []).filter(row => closingLogins[row.connectionId])
+                .map(row => ({ connectionId: row.connectionId, loginId: closingLogins[row.connectionId] })),
               // Actual current-instance doc resources are closed. A complete
               // multi-service logout/old-instance barrier is a different proof.
               complete: false, docClosed: true };
@@ -195,7 +206,18 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       assetReady = value === true;
     },
     requireAssetReady,
-    bindService(value, config = null) { service = value; hostedConfig = config; },
+    bindService(value, config = null) { service = value; hostedConfig = config; accessHeadAtBind = ledger.read().accessHead; },
+    /** 文档服务自己这一侧对一条访问事件的关闭证据（只读）：这个进程亲手关掉并记进账本的那一份，
+     * 或者「这个进程开始接连接时这条事件已经在账本里」。两样都没有就是还没办完，回 null。 */
+    docTransportEvidence(accessEventId) {
+      const state = ledger.read(), event = state.accessEvents.find(value => value.eventId === accessEventId);
+      if (!event || service === null || accessHeadAtBind === null) return null;
+      const own = state.docTransportClosuresV2?.[accessEventId]?.instances?.[docInstanceId];
+      if (own?.docClosed === true && own.receipt?.actualClosed === true)
+        return { kind: 'closed', docInstanceId, connections: structuredClone(own.connections ?? []), recordedAt: own.recordedAt };
+      if (event.seq <= accessHeadAtBind) return { kind: 'started-after-revocation', docInstanceId, connections: [], accessHeadAtStart: accessHeadAtBind };
+      return null;
+    },
     membersSnapshot: createProjectMembers({ ledger, authority, getConnections: () => service?.describe().conns }),
     async pageFenceReceipt(eventId) { return pageFences.get(eventId) ?? null; },
     async start() { return authority.start(); },

@@ -6,7 +6,7 @@ import { isProjectId } from '../auth/protocol.mjs';
 import { openOperationHistory, historyError } from '../docservice/modules/operation-history.mjs';
 import { createOperationWiring, createDurableProjectProjection } from '../docservice/operation-wiring.mjs';
 import { mountSelection } from '../docservice/modules/selection.mjs';
-import { createAccountOrderClient, createWitnessVerifier } from '../account/password-order.mjs';
+import { createAccountOrderClient, createWitnessVerifier, signDocProof } from '../account/password-order.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
 import { describeRunMedia, materializeRunMedia } from './media-selector.mjs';
 import { digestOf } from '../account/ledger.mjs';
@@ -127,6 +127,32 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
     async fence(value) {
       requireOpen();
       return ensureTenant(value?.projectId).fence(value);
+    },
+    /** 退出确认用：把这些旧登录还没走完的操作各自办结（定序的落地、没定序的作废），再报它们在各项目里停在哪。
+     * `pendingSeals` 不是 0 就是还有操作没办结（例如保留下来继续跑的共有任务正好在提交一步），调用方过一会儿再问。 */
+    async settleLogins(loginIds) {
+      requireOpen();
+      const open = op => ['prepared', 'reserved', 'accepted'].includes(op.state);
+      for (const projectId of new Set(history.byLogins(loginIds).filter(open).map(op => op.projectId))) {
+        try { await ensureTenant(projectId).recover(projectId); } catch (error) { if (error.status !== 503 && error.code !== 'pending-operation') throw error; }
+      }
+      const rows = history.byLogins(loginIds), sealed = op => Number.isSafeInteger(op.witness?.orderSeq) && ['accepted', 'materialized'].includes(op.state);
+      const last = list => list.filter(sealed).reduce((max, op) => Math.max(max, op.witness.orderSeq), 0);
+      return { pendingSeals: rows.filter(open).length,
+        projectCursors: [...new Set(rows.map(op => op.projectId))].sort().map(projectId => {
+          const mine = rows.filter(op => op.projectId === projectId);
+          return { projectId, projectRev: mine[0].currentProjectRev, lastAcceptedOrderSeq: last(mine) };
+        }),
+        lastAcceptedOrderSeq: Object.fromEntries(loginIds.map(loginId => [loginId, last(rows.filter(op => op.actor.loginId === loginId))])) };
+    },
+    /** 向账号服务登记「这次退出到此为止」的顺序见证。证明由文档服务的证明钥签；同一个请求号重发得到同一份见证。 */
+    async sealLogout({ eventId, requestId, proof }) {
+      requireOpen();
+      const signed = signDocProof({ ...proof, v: 1, domain: 'promptcut.logout-order', eventId, requestId, docAuthorityId: authority.authorityId }, attestationKey);
+      const witness = verifyWitness(await client.logoutComplete({ eventId, requestId, proof: signed }));
+      if (witness.kind !== 'logout-complete' || witness.state !== 'sealed' || witness.eventId !== eventId || witness.requestId !== requestId)
+        throw historyError('bad-witness', 403);
+      return { proof: signed, witness };
     },
     async close() {
       if (closing) return closing;

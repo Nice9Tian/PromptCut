@@ -99,19 +99,26 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     }, checkReadInState: conversationReadInState,
     onProgress: () => { try { completeReadAccessEvents(); } catch (error) {
       onDiagnostic({ code: error.code ?? 'agent-read-close-pending' }); } } });
+  /** Agent 这一项对一条访问事件的确认：读取都关了，并且要中止的任务都凭 root 的关闭记录结清了，才往文档服务的账本里记
+   * 「Agent 已确认」。没办完就保持待办，下次再试；办完以后重复调用不会记第二次。
+   * 判断任务那一半见 `agent-read-control.mjs` 的 `accessEventRunClosure`：保留下来继续跑的共有已读任务不在等的范围里。 */
   function completeReadAccessEvents() {
-    const state = ledger.read();
+    const state = ledger.read(), pending = [];
     for (const event of state.accessEvents) {
       if (runtime.authority.hasAgentReadClosure(event.eventId) ||
           !state.agentReadsV1?.controls.some(c => c.accessSeq === event.seq)) continue;
       try {
-        const closure = readControl.finalizeAccessEvent({ eventId: event.eventId });
+        const closure = readControl.finalizeAccessEvent({ eventId: event.eventId, scoped: Boolean(scopeAuthority) });
         runtime.authority.ackAccessEvent(event.eventId, 'agent', { receiptId: `agent-read:${event.eventId}`,
           cursor: event.seq, complete: true, agentReadClosureDigest: closure.digest,
           closedStreams: closure.payload.receipts.flatMap(r => r.closedReadHandleIds),
-          stoppedRuns: [], rejectedCredentials: event.loginIds ?? [] });
-      } catch (error) { if (!['read-close-pending', 'agent-run-closure-pending'].includes(error.code)) throw error; }
+          stoppedRuns: (closure.payload.stoppedRuns ?? []).map(run => run.runId), rejectedCredentials: event.loginIds ?? [] });
+      } catch (error) {
+        if (!['read-close-pending', 'agent-run-closure-pending'].includes(error.code)) throw error;
+        pending.push({ eventId: event.eventId, code: error.code });
+      }
     }
+    return { pending };
   }
   // Operation and doc-transport closure are real partial evidence. Until the
   // registered Agent instance/resource witness exists, no control is ACKed.
@@ -435,6 +442,12 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       return { conversations: rows, ...(scopeAuthority ? { scopeControls: runAuthority.listScopeControls({ servicePrincipal }) } : {}) };
     } });
   return { conversations, readControl, runProvider: provider, runHooks, deliver, createRunAssetAuthentication, mountRunAssets,
+    /** 退出确认的续办口：把读取已关、任务已结清的访问事件记成「Agent 已确认」。开了「一条任务一个进程」时先读一次
+     * root 的关闭记录，这样主身份还没来问的时候（比如文档服务刚重启）也能结清。 */
+    async completeAccessEvents() {
+      if (scopeAuthority) await runAuthority.reconcileScopeClosures();
+      return completeReadAccessEvents();
+    },
     transportAuthenticate, transportConnected, dispatchInvocation,
     async handleInternal(req, res) { return await runAssetsHandler?.(req, res) || await instancesHandler(req, res) || await readControlsHandler(req, res) ||
       await runsHandler(req, res) || await conversationsHandler(req, res); },

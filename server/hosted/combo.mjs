@@ -49,6 +49,7 @@ import { startAssetAnnounce } from '../asset-announce.mjs';
 import { createAssetReadyProbe } from './asset-doc-client.mjs';
 import { createDocAssembly } from './doc-assembly.mjs';
 import { createDocAgentAssembly } from './doc-agent-assembly.mjs';
+import { createLogoutConfirmer } from '../account/logout-confirmer.mjs';
 import { createRunAssetPrivateClient } from './run-assets-metadata-client.mjs';
 import { createRunAssetCheckpoint } from './run-assets-checkpoint.mjs';
 import { createRunAssetObserverAuthority } from './run-assets-observer-authority.mjs';
@@ -328,6 +329,7 @@ export async function startHostedCombo({
   let accountRuntime = null;
   let docAssembly = null;
   let docAgentAssembly = null;
+  let logoutConfirmer = null;
   let runPrivateClient = null;
   let runObserverAuthority = null;
   let checkpointForRunAssets = null;
@@ -355,11 +357,26 @@ export async function startHostedCombo({
           return docAgentAssembly.runHooks.fenceInState(state, fence);
         } }, getRunProvider: () => docAgentAssembly?.runProvider,
         onRunControl: control => docAgentAssembly.deliver(control) } : {}),
+        // 退出确认里文档服务自己那一项的证据，由下面的续办器给；它还没建好时一律当作没办完。
+        getDocBarrier: barrier => logoutConfirmer ? logoutConfirmer.getDocBarrier(barrier) : null,
+        verifyDocBarrier: (proof, barrier) => logoutConfirmer ? logoutConfirmer.verifyDocBarrier(proof, barrier) : false,
+        onPageFence: () => logoutConfirmer?.kick(),
         onDiagnostic: event => say('account.diagnostic', event) });
       if (account.agent) docAgentAssembly = createDocAgentAssembly({ ledger, accountClient: client, account,
         runtime: accountRuntime, serviceRegistry, getDocAssembly: () => docAssembly,
         getService: () => docService, now, onDiagnostic: event => say('run.diagnostic', event) });
       await accountRuntime.start();
+      // 退出确认的续办：四样确认齐了才向账号服务报办完（`server/account/logout-confirmer.mjs`）。
+      // 〔裁〕渲染服务这一版以服务自己的身份工作，不代任何登录持有连接或流，由文档服务写明原因代为登记；
+      // 没配 Agent 的部署里 Agent 服务根本不存在，同样办。配了 Agent 就必须等它那一项真的收口。
+      logoutConfirmer = createLogoutConfirmer({ ledger, authority: accountRuntime.authority, now,
+        transportEvidence: accessEventId => accountRuntime.docTransportEvidence(accessEventId),
+        operations: () => docAssembly,
+        completeAgent: account.agent ? () => docAgentAssembly.completeAccessEvents() : null,
+        attestedServices: { render: 'service-identity-only: holds no login-bound connection or stream in this version',
+          ...(account.agent ? {} : { agent: 'not-deployed: no agent service is registered with this document authority' }) },
+        pollMs: account.logoutConfirmPollMs ?? 1000,
+        onDiagnostic: event => say('logout.diagnostic', event) });
       if (account.agent && assetStatus) runPrivateClient = createRunAssetPrivateClient(assetStatus);
       if (account.order) docAssembly = createDocAssembly({ dataDir: paths.docservice,
         authority: accountRuntime.authority, account, runProvider: docAgentAssembly?.runProvider, now,
@@ -435,6 +452,7 @@ export async function startHostedCombo({
         });
       });
     } catch (error) {
+      await logoutConfirmer?.close();
       await docAgentAssembly?.close();
       await docAssembly?.close();
       runObserverAuthority?.close(); runPrivateClient?.close();
@@ -480,7 +498,7 @@ export async function startHostedCombo({
   if (docAgentAssembly) {
     try { await docAgentAssembly.start(); }
     catch (error) {
-      await service.close(); await closeAccountInternal(); await docAgentAssembly.close();
+      await logoutConfirmer?.close(); await service.close(); await closeAccountInternal(); await docAgentAssembly.close();
       await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close(); throw error;
     }
   }
@@ -550,7 +568,7 @@ export async function startHostedCombo({
     docAddr = await service.listen(docPort, host);
   } catch (err) {
     await service.close().catch(() => {});
-    await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close();
+    await logoutConfirmer?.close(); await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
   let assetAddr;
@@ -564,7 +582,7 @@ export async function startHostedCombo({
     });
   } catch (err) {
     await service.close().catch(() => {});
-    await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close();
+    await logoutConfirmer?.close(); await closeAccountInternal(); await docAgentAssembly?.close(); await docAssembly?.close(); runObserverAuthority?.close(); runPrivateClient?.close(); accountRuntime?.close(); assetReadyProbe?.close();
     throw err;
   }
 
@@ -597,6 +615,8 @@ export async function startHostedCombo({
   const announceOk = await announced;
   say('asset.announce', { ok: announceOk, url: publicUrl, via: tokenDigest ? 'cluster-token' : 'loopback-local' });
 
+  // 两个端口都在听了才开始续办退出确认；上一个进程留下没办完的从这里接着办。
+  logoutConfirmer?.start();
   let closed = false;
   return {
     paths,
@@ -613,6 +633,7 @@ export async function startHostedCombo({
     accountRuntime,
     docAssembly,
     docAgentAssembly,
+    logoutConfirmer,
     runAssetsMounted: Boolean(runAssets),
     accountInternalPort,
     inventory,
@@ -627,6 +648,7 @@ export async function startHostedCombo({
         assetServer.close(() => resolve());
         assetServer.closeAllConnections?.();
       });
+      await logoutConfirmer?.close();
       await service.close();
       await closeAccountInternal();
       await docAgentAssembly?.close();
