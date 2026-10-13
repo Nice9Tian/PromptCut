@@ -68,6 +68,10 @@ test('OCS-N-03 票据换 cookie 的两条路由与 stagePolicy.mjs 的判定同�
   assert.ok(grant.match.includes(`(?<pc_sid>${SID_PATTERN})`));
   assert.ok(mediaS.match.includes(`(?<pc_sid>${SID_PATTERN})`) && mediaS.match.includes(`(?<pc_mpath>${MEDIA_S_PATH_PATTERN})`));
   assert.ok(conf.includes(`"~^Bearer (?<pc_gt>${TICKET_PATTERN})$" $pc_gt;`));
+  // 两种票据都认(旧共享项目的 v1.<…>.<…>、账号云端项目的 43 个字符);发 cookie 的那条不再另写一遍形状(形状不对时上一条给的是空串)
+  assert.ok(TICKET_PATTERN.includes(String.raw`v1\.`) && TICKET_PATTERN.includes('[A-Za-z0-9_-]{43}'));
+  assert.ok(conf.includes(String.raw`"~^POST\|1\|(?<pc_gt2>.+)$" "pc_rt=$pc_gt2;`));
+  assert.ok(!conf.includes('(?<pc_gt2>v1'));
   // 交接:只认编辑器页的源(整串相等,不是正则)、只认 POST、票据形状不对 400;cookie 的属性
   assert.ok(conf.includes('map $http_origin $pc_grant_origin_ok {\n  default 0;\n  "https://{{DOMAIN}}" 1;\n}'));
   assert.ok(/if \(\$pc_grant_origin_ok = 0\) \{ return 403; \}/.test(grant.body));

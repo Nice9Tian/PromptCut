@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 const { SyncLink } = await import(srcUrl("editor/sync/link.ts"));
 const { createEmptyProject } = await import(srcUrl("kernel/project.ts"));
 const { accountConnectionProtocols } = await import(srcUrl("account/client.ts"));
+const { parseSessionItem } = await import("../../../server/docservice/session.mjs");
 const pause = ms => new Promise(r => setTimeout(r, ms));
 function link(protocols, onProtocolError) {
   return new SyncLink({ url: "ws://isolated.invalid", projectId: "room", session: "probe", initial: createEmptyProject("saved-content"),
@@ -29,7 +30,7 @@ test("离开后迟到的取证明错误不能修改新页面", async () => {
   assert.equal(classified, 0);
 });
 
-test("账号初连和续接保留标准v1与当前票据，实际socket欢迎后发送project.open", async t => {
+test("账号初连出示当前票据;接续只带会话项、不带票据(文档服务对「接续项旁边有鉴权项」回 400);实际socket欢迎后发送project.open", async t => {
   const sockets = [];
   class Socket extends EventTarget {
     constructor(url, protocols) { super(); this.url = url; this.protocols = protocols; this.readyState = 0; this.sent = []; sockets.push(this); }
@@ -45,8 +46,8 @@ test("账号初连和续接保留标准v1与当前票据，实际socket欢迎后
   let current = { connectionTicket:'a'.repeat(43), assetTicket:'b'.repeat(43), expiresAt:Date.now() + 60_000 }, renewals = 0;
   const c = new SyncLink({ url:'wss://isolated.invalid/hosted/', projectId:'account-room', session:'account-page', initialize:false,
     initial:createEmptyProject('account-entry'), WebSocketImpl:Socket,
-    protocols:() => accountConnectionProtocols(current),
-    resumeProtocols:async () => { renewals++; current = { ...current, connectionTicket:'c'.repeat(43) }; return accountConnectionProtocols(current); },
+    // 与 `syncManager.ts` 的 `enterAccountProject` 相同:只给 protocols,不给 resumeProtocols
+    protocols:() => { renewals++; return accountConnectionProtocols(current); },
     reconnect:{ minMs:1, maxMs:3 } });
   t.after(() => c.stop()); c.start(); await wait(() => sockets.length === 1);
   assert.equal(sockets[0].url, 'wss://isolated.invalid/hosted/');
@@ -55,8 +56,11 @@ test("账号初连和续接保留标准v1与当前票据，实际socket欢迎后
   const opened = sockets[0].sent.find(msg => msg.type === 'project.open');
   assert.equal(opened.projectId, 'account-room'); assert.equal(opened.seq, 1);
   sockets[0].drop(); await wait(() => sockets.length === 2);
-  assert.equal(renewals, 1);
-  assert.deepEqual(sockets[1].protocols, ['promptcut.v1', `promptcut.session.${'s'.repeat(43)}.0`, `promptcut.account.${'c'.repeat(43)}`]);
+  assert.equal(renewals, 1, '接续不取票据');
+  assert.deepEqual(sockets[1].protocols, ['promptcut.v1', `promptcut.session.${'s'.repeat(43)}.0`]);
+  // 与文档服务握手时的判定对上:这份子协议是合法的接续项;旧写法(旁边带账号票据)被判成写法不对,握手回 400
+  assert.equal(parseSessionItem(sockets[1].protocols).kind, 'resume');
+  assert.equal(parseSessionItem([...sockets[1].protocols, `promptcut.account.${'c'.repeat(43)}`]).kind, 'bad');
   sockets[1].welcome(true, 1); await pause(5);
   assert.equal(c.connected, true); assert.equal(c.stats().resumes, 1);
   assert.equal(sockets[1].sent.some(msg => msg.type === 'project.open'), false, '接续不重新open或重放已确认消息');
