@@ -379,7 +379,7 @@ export async function makeP5Fixture(t, {
       await store.complete(hash);
     }
     projects.get(forProject).set(id, { id, name, kind, hash, size: buf.length, ext, duration: 20.5, ...extra });
-    if (onTimeline && forProject === projectId && kind !== 'image') state.tracks[0].clips.push({ id: `tl_${id}`, mediaId: id, start: 0, end: 20.5, mediaOffset: 0 });
+    if (onTimeline && forProject === projectId && kind !== 'image') state.tracks[0].clips.push({ id: `tl_${id}`, mediaId: id, start: 0, end: extra.duration ?? 20.5, mediaOffset: 0 });
     return { id, hash, size: buf.length };
   }
 

@@ -939,6 +939,8 @@ export function createWorkflowTools({
     } finally { reserving -= 1; }
     if (closing) {
       byMedia.delete(mediaKey);
+      // 刚登记的作业不留在排队里:标「被中断」,免得重启后看着像还在等
+      if (started.state === 'queued') await jobs.update(context, started.jobId, 0, { state: 'interrupted', errorCode: 'SERVICE_CLOSING' }).catch(() => {});
       throw new WorkflowToolError('云端 Agent 服务正在关闭,一键流程不再接新活。', { code: 'workflow-closed', status: 503 });
     }
     if (started.state !== 'queued' || live.has(started.jobId)) {
