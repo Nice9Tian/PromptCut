@@ -178,9 +178,15 @@ node scripts/probes/stream-below-probe.mjs --origin http://127.0.0.1:27860 --med
   - `node scripts/probes/card-table-digest-compare.mjs --expect ,`：变了 6 张：`focus-card`、`lottie`、`probe-slow`、`probe-slow-stepped`、`terminal-3d`（丙组五个 id，预料中），和 **`particles`**（不在契约列的五个里，原因见第 10 节第 2 条，不是这次引入的）。六张都是「能力表同、注册表里的定义同、源码版本变、键（定源码）同」。三张有声卡没变，卡片声音不受影响。
 - 流的键全部换（代码版本 2 → 3），预料中。生成快照的代码指纹、截图代码的指纹都没变（没有动 `server/bakery/` 和 `SNAPSHOT_FILES` 里的文件）。
 
-### 5.4 验收 4：基线（合并 `main` 之后）
+### 5.4 验收 4：基线（合并 `main` 之后，`8e5b8c67` 起）
 
-（等全量测试跑完填）
+- `npx tsc -b --force`：退出码 0，零错误。
+- `npm test`（设了那两个环境变量）：6615 条，通过 6597，失败 2，取消 2，跳过 12，退出码 1。失败和取消的落在五个文件：
+  - `src/editor/snapshotFeed.test.mjs` 的 K6 一条：**我漏改的**（流的层没带第一帧）。已改，补了一句「没带第一帧的流层不算就绪」。
+  - `server/test/asset-project-workers.test.mjs`（20 秒超时）、`server/test/c66-integ.test.mjs`（60 秒超时）、`server/test/cloud-tools-p4-subject.test.mjs`（「不要重复启动」一条）：和这次的改动无关，机器忙时的失败（当时别的子 Agent 也在跑）。
+  - `server/test/accept-018-rest-ssr-seam.test.mjs` 的 SEAM-2：它本来就标着「现状不成立」（待办项），不计失败。
+- 这五个文件连同 `snapshotFallback.test.mjs` 单独重跑：`npm test -- <六个文件>`，79 条，通过 77，失败 0，待办 2，退出码 0。全量没有再跑第二遍（省额度）。
+- 合并以后重跑 `stream-origin-probe`（两遍，不带与带 `--group`）：退出码都是 0，PASS，数字和合并前相同（产流逐帧错 0，舞台逐帧 110 帧错 0）。别的探针合并以后没有重跑；`main` 这一段进来的改动和我改的文件没有重叠（`git diff --name-only` 两边取交集是空的）。
 
 ## 6. 没做成的与原因
 
@@ -229,4 +235,17 @@ node scripts/probes/stream-below-probe.mjs --origin http://127.0.0.1:27860 --med
 
 ## 11. 提交与收尾
 
-（等基线跑完填）
+提交（`git log --oneline main..HEAD --first-parent`，不含合并提交）：
+
+- `967040b7` 报告：开工，建报告文件
+- `b6b8af69` 流：分段的起点从项目的第 0 帧换成这条流自己的第一帧（产品代码、单测）
+- `6efa964d` 探针：新增 `stream-origin-probe`；`stream-produce-probe`、`stream-below-probe` 跟上
+- `d543413d` 探针：在线一侧四支探针跟上
+- `2f401106` 探针：`stream-play`、`stream-noreplay`、`browser-stream-node` 跟上；舞台 RPC 的注释
+- `8e5b8c67` 合并 `main`
+- `eba8860e` 测试：`snapshotFeed` 的 K6 用例；报告
+- 之后一个只改报告的提交
+
+`git diff --stat main...HEAD`：52 个文件左右，新增约 2100 行、删约 400 行；逐个看过增删行数，没有哪个已有文件是整份被换的（入库的都是 LF）。
+
+收尾：我起的开发服务器（端口 27860，另占 27861、27862）交活前按进程号停掉；探针自己起的进程（开发服务器、托管组合、渲染服务、Chrome）都由探针收掉。跑探针前后各查过一次可见窗口，没有新冒出来的命令行、node、chrome、ffmpeg 窗口。产物都在工作区的 `out/rr-sparse/`（不入库）。没有推送、没有动 `main`。
