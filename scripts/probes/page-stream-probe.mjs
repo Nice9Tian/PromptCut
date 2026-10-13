@@ -235,7 +235,9 @@ function orangeOf(png) {
   return +(orange / (png.width * png.height)).toFixed(5);
 }
 /** 暂停在 `sec`、等这张卡追到精确活渲,截一张 */
-async function liveShot(page, id, sec, dir, name, { allowTrack = false } = {}) {
+/* 停着时这张卡的流轨道可能还留着(「暂停和拖动贴流」之后:播放头下这一帧先解好、留着等换满密度);判据看包裹层没被抑制(画的是活渲)。
+ * 调用处都在这条流补成满密度以后,轨道就算露出来也是这一帧自己的画面。`allowTrack: false` 可以要求轨道已经撤掉 */
+async function liveShot(page, id, sec, dir, name, { allowTrack = true } = {}) {
   await store(page, `S.actions.pause(); return true;`);
   await delay(500);
   let ok = null, last = null;
@@ -552,7 +554,7 @@ async function sceneSolo(M) {
     const box = ruler ? await ruler.boundingBox() : null;
     if (check(!!box, '让路:找到时间轴标尺')) {
       // 等至少推完两个分段再拖:让路之后回来,这两段不该重做
-      const b2 = await until('推完了两个分段(拖动前)', async () => { const s = await pageStreams(pageA); return s?.state === 'producing' && s.segments >= 2 && s.frames > (resumed?.frames ?? 0) + 3 ? s : null; }, 180_000, 50);
+      const b2 = await until('推完了两个分段(拖动前)', async () => { const s = await pageStreams(pageA); return s?.state === 'producing' && s.segments >= (started?.segments ?? 0) + 2 && s.frames > (resumed?.frames ?? 0) + 3 ? s : null; }, 180_000, 50);
       const y = box.y + box.height / 2;
       await pageA.mouse.move(box.x + 60, y);
       await pageA.mouse.down();
