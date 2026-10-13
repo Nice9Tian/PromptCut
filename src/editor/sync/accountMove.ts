@@ -13,11 +13,15 @@
  *               也是 1 MiB,而且同一个请求号重放时内容必须一字不差)。请求号、项目名、占位内容先记在本机(`MoveAttemptStore`),
  *               失败后再点一次用的是同一个请求号 —— 新建接口对它幂等,云端不会多出一个重名的项目。
  *   3 传内容    另开一条文档连接(不是编辑器正在用的那条),把项目内容以一次根替换写进去;超过单次提交上限的由 `DocSync` 分片上传。
- *   4 核对      再开一条连接把云端的内容读回来,和本机那一份逐字段比;不一样就停。这期间本机又有新修改的,再传、再核对。
+ *   4 核对      再开一条连接把云端的内容读回来,和本机那一份逐字段比;不一样就停。这期间本机又有新修改的,再传、再核对;
+ *               传了几轮本机还在变(有 Agent 或工具在连着改)就停下,不往下走。
  *   —— 到这里为止,本机的项目文件、房间记录、协作状态一个字都没动。任何一步失败,本机原样可用。——
  *   5 协作房间  先把这台电脑上没有的素材拉齐(搬的人不在主机那台电脑上时),再关掉本机协作(删房间:旧成员的连接断开、
- *               旧邀请码作废、云端托管服务上的登记注销)。关掉之后本机这一份与云端不一致的(关的那一下别人刚改过),再补传一次。
+ *               旧邀请码作废、云端托管服务上的登记注销)。**关掉之后第一件事是把当前内容存到本机**(不带房间关联的普通本地项目),
+ *               然后才补传关的那一下别人刚改过的;补传失败时本机这一份是全的,之后从本地项目再点一次,用原来的请求号接着补。
  *   6 进项目    编辑器接到云端项目上;素材交给上传队列在后台传(先小尺寸、再原尺寸)。
+ *               **换过去的那一刻再比一次**(`MoveDeps.enter` 的约定):编辑器里的内容与云端核对过的那一份不同就不换、回来再传,
+ *               所以不会出现「报了成功、云端却比本机旧」。
  *
  * 不随项目上云的东西(旧房间的成员与名单、项目密码、创建者口令、邀请码、禁入表、撤销栈、云端 Agent 对话等)列在报告里。
  */
@@ -41,6 +45,10 @@ export type MoveErrorCode =
   /** 协作房间:创建者密码不对 */
   | "bad-password"
   | "rate-limited"
+  /** 另一个窗口正在搬同一个项目 */
+  | "busy"
+  /** 搬的过程中项目一直在被修改(Agent、工具还在改),传了几轮都追不上 */
+  | "busy-editing"
   /** 本机的修改还没落定(等不到文档服务确认) */
   | "save-pending"
   /** 项目内容超过一次根替换的上限 */
@@ -75,6 +83,8 @@ export type MoveResult =
     ok: false; error: MoveErrorCode; stage: MoveStage; detail?: string;
     /** 本机协作已经关掉(只有第 5 步之后的失败才是 true);false = 本机的项目、房间、协作状态原样没动 */
     localClosed: boolean;
+    /** 本机协作关掉之后,当前内容存到本机文件了没有(只在 `localClosed` 时有) */
+    localSaved?: boolean;
     /** 云端已经建好的那个项目(再点一次接着用它);没有建成是 null */
     cloud: { projectId: string; name: string } | null;
     /** 限速时服务端给的冷却秒数 */
@@ -164,8 +174,14 @@ export interface AttemptStorage {
 }
 
 export const MOVE_ATTEMPTS_KEY = "pc.account.move";
-/** 结果不确定(没拿到项目号)的记录留多久:过了就当没建成,另起一个请求号 */
-export const UNKNOWN_ATTEMPT_TTL_MS = 60 * 60_000;
+/** 「正在搬」的占位(同一台电脑上开了两个窗口时互相看得见);键同上,值是 `{ owner, at }` */
+export const MOVE_LOCKS_KEY = "pc.account.move.lock";
+/** 占位多久没续就算那个窗口不在了(搬的时候每 `LOCK_BEAT_MS` 续一次) */
+export const LOCK_STALE_MS = 30_000;
+export const LOCK_BEAT_MS = 5_000;
+/** 搬到云端时关掉的本机协作房间(房间号 → 时刻):带着这些房间关联的旧文件重开时当普通本地项目开 */
+export const MOVED_ROOMS_KEY = "pc.account.moved-rooms";
+const MOVED_ROOMS_KEEP = 200;
 
 const attemptKey = (accountId: string, contentId: string) => `${accountId}|${contentId}`;
 
@@ -174,6 +190,12 @@ export function createAttemptStore(storage: AttemptStorage | null) {
     try {
       const value = JSON.parse(storage?.getItem(MOVE_ATTEMPTS_KEY) ?? "");
       return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, MoveAttempt> : {};
+    } catch { return {}; }
+  };
+  const readJson = (key: string): Record<string, unknown> => {
+    try {
+      const value = JSON.parse(storage?.getItem(key) ?? "");
+      return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
     } catch { return {}; }
   };
   const writeAll = (all: Record<string, MoveAttempt>) => {
@@ -196,11 +218,37 @@ export function createAttemptStore(storage: AttemptStorage | null) {
       const back = readAll()[attemptKey(a.accountId, a.contentId)];
       if (!back || back.requestId !== a.requestId || back.projectId !== a.projectId) throw new Error("搬迁记录没有存下来");
     },
-    drop(accountId: string, contentId: string): void {
+    /** 只删自己那一次的记录:请求号对不上(另一个窗口后来记的)不动 */
+    drop(accountId: string, contentId: string, requestId: string): void {
       const all = readAll();
-      if (!(attemptKey(accountId, contentId) in all)) return;
+      if (all[attemptKey(accountId, contentId)]?.requestId !== requestId) return;
       delete all[attemptKey(accountId, contentId)];
       try { writeAll(all); } catch { /* 删不掉:下次按它接着用同一个项目,不会多建 */ }
+    },
+    /** 占住「正在搬这个项目」(自己已经占着就是续一次)。别的窗口占着、还没过期回 false */
+    lock(accountId: string, contentId: string, owner: string, at: number): boolean {
+      const all = readJson(MOVE_LOCKS_KEY) as Record<string, { owner?: string; at?: number }>;
+      const held = all[attemptKey(accountId, contentId)];
+      if (held && held.owner !== owner && typeof held.at === "number" && at - held.at < LOCK_STALE_MS && at >= held.at) return false;
+      all[attemptKey(accountId, contentId)] = { owner, at };
+      try { storage?.setItem(MOVE_LOCKS_KEY, JSON.stringify(all)); } catch { /* 占不上位:照常做,记录按请求号各管各的 */ }
+      return true;
+    },
+    unlock(accountId: string, contentId: string, owner: string): void {
+      const all = readJson(MOVE_LOCKS_KEY) as Record<string, { owner?: string }>;
+      if (all[attemptKey(accountId, contentId)]?.owner !== owner) return;
+      delete all[attemptKey(accountId, contentId)];
+      try { if (Object.keys(all).length) storage?.setItem(MOVE_LOCKS_KEY, JSON.stringify(all)); else storage?.removeItem(MOVE_LOCKS_KEY); } catch { /* 过期后自然失效 */ }
+    },
+    /** 记下「这个本机协作房间是搬到云端时关掉的」 */
+    noteMovedRoom(roomId: string, at: number): void {
+      const all = readJson(MOVED_ROOMS_KEY) as Record<string, number>;
+      all[roomId] = at;
+      const keep = Object.entries(all).sort((a, b) => b[1] - a[1]).slice(0, MOVED_ROOMS_KEEP);
+      try { storage?.setItem(MOVED_ROOMS_KEY, JSON.stringify(Object.fromEntries(keep))); } catch { /* 记不下:那种旧文件重开时显示「原房间已删除」 */ }
+    },
+    isMovedRoom(roomId: string): boolean {
+      return typeof (readJson(MOVED_ROOMS_KEY) as Record<string, unknown>)[roomId] === "number";
     },
   };
 }
@@ -214,6 +262,8 @@ export interface MoveSource {
   contentId: string;
   /** 协作房间:本页面是不是以创建者身份进入的 */
   creator?: boolean;
+  /** 协作房间:房间号 */
+  roomId?: string;
 }
 
 /** 账号接口的失败:`status` 0 = 没连上 */
@@ -240,12 +290,20 @@ export interface MoveDeps {
   pullMedia?(project: Project): Promise<{ ok: boolean; missing: number }>;
   /** 协作房间:关掉本机协作(删房间),编辑器回到本机项目 */
   closeRoom?(password: string): Promise<{ ok: true } | { ok: false; error: string }>;
-  /** 把本机这一份存回它原来的草稿(有草稿才存;尽力而为) */
+  /**
+   * 把本机这一份照现在的内容存到本机文件(不带房间关联)。本地项目:有草稿才存。协作房间(刚关掉):一定要存下来,
+   * 没有草稿就新开一份 —— 房间已经删了,这是唯一一份全的。存不下抛错
+   */
   saveLocal?(): Promise<void>;
-  /** 编辑器接到云端项目上 */
+  /**
+   * 编辑器接到云端项目上。**换过去的那一刻**要再比一次:编辑器里的内容、云端发来的内容,有一样与 `snapshot` 不同就不换,
+   * 抛带 `code: "content-changed"` 的错(流程回头再传、再来)。别的失败抛带 `status` 的错
+   */
   enter(o: { projectId: string; name: string; snapshot: Project; kind: "local" | "room" }): Promise<void>;
-  /** 项目引用到的素材交给上传队列;不抛错 */
+  /** 项目引用到的素材交给上传队列;交不上回 null(调用方自己提示并重试);不抛错 */
   queueMedia(): Promise<MediaReport | null>;
+  /** 这个窗口的号(同一台电脑上两个窗口同时搬同一个项目时互相认得出);不给用一个随机的 */
+  owner?: string;
   attempts: AttemptStore;
   newRequestId(): string;
   /** 新建时带的占位内容:一份完整的空白项目(编辑器打得开) */
@@ -279,10 +337,14 @@ const detailOf = (error: unknown): string => {
   return String(e?.code || e?.message || error || "").slice(0, 200);
 };
 
-/** 新建接口的失败:这个请求号**肯定没有**建出项目(4xx 都是先拒绝、不落账的) */
+/**
+ * 新建接口的失败:这个请求号**肯定没有**建出项目。只认四种:名字重、名字不合法、账号不许建(403)、没有这条路由 ——
+ * 它们都是落账之前就拒绝的。别的一律当「结果不确定」留着请求号:401 也是(云端先记下项目、占住名字,初始化完再核一次登录,
+ * 那时回 401 项目已经落账,`server/account/authority.mjs` 的 `createProject`),丢了请求号再点就是对着自己看不见的项目报重名。
+ */
 function createDefinitelyFailed(error: unknown): boolean {
-  const s = statusOf(error);
-  return s !== undefined && s >= 400 && s < 500;
+  const kind = createErrorCode(error);
+  return kind === "name-taken" || kind === "invalid-name" || kind === "create-refused" || kind === "not-account-cloud";
 }
 
 function createErrorCode(error: unknown): MoveErrorCode {
@@ -298,26 +360,28 @@ function createErrorCode(error: unknown): MoveErrorCode {
 
 /**
  * 搬到云端。不抛错:结果里写清停在哪一步、本机协作关了没有、云端有没有已经建好的项目。
- * 同一时间只做一次(调用方保证);中途失败后再调一次按本机记下的请求号接着做。
+ * 同一个项目同一时间只做一次(同一台电脑上的别的窗口也算);中途失败后再调一次按本机记下的请求号接着做。
  */
 export async function moveToAccountCloud(deps: MoveDeps, input: MoveInput): Promise<MoveResult> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let stage: MoveStage = "check";
   let localClosed = false;
+  let localSaved: boolean | undefined;
   let cloud: { projectId: string; name: string } | null = null;
   const at = (s: MoveStage) => { stage = s; deps.onStage?.(s); };
   const fail = (error: MoveErrorCode, detail?: string, extra: { retryAfter?: number | null } = {}): MoveResult =>
-    ({ ok: false, error, stage, localClosed, cloud, ...(detail ? { detail } : {}), ...extra });
+    ({ ok: false, error, stage, localClosed, ...(localClosed ? { localSaved: localSaved === true } : {}), cloud, ...(detail ? { detail } : {}), ...extra });
 
   /* 1 核对 */
   at("check");
   const source = deps.source();
   if (!source || !source.contentId) return fail("not-ready");
-  let account: { id: string; name: string } | null;
-  try { account = await deps.account(); }
+  let found: { id: string; name: string } | null;
+  try { found = await deps.account(); }
   catch (error) { return fail(statusOf(error) === 401 ? "login-required" : "network", detailOf(error)); }
-  if (!account) return fail("login-required");
+  if (!found) return fail("login-required");
+  const account = found;
   const password = input.creatorPassword ?? "";
   if (source.kind === "room") {
     if (!source.creator) return fail("not-creator");
@@ -326,115 +390,154 @@ export async function moveToAccountCloud(deps: MoveDeps, input: MoveInput): Prom
     const checked = await deps.checkCreator(password);
     if (!checked.ok) return fail(checked.error);
   }
-  let snapshot: Project;
-  try { snapshot = await deps.snapshot(); }
-  catch (error) { return fail("save-pending", detailOf(error)); }
-  const tooLarge = (p: Project) => JSON.stringify(p).length > MAX_CONTENT_CHARS;
-  if (tooLarge(snapshot)) return fail("too-large", String(JSON.stringify(snapshot).length));
+  // 同一个项目同一时间只做一次:另一个窗口正在搬就不动(它的记录、它建的项目都不碰)
+  const owner = deps.owner ?? `w-${Math.random().toString(36).slice(2)}-${now()}`;
+  if (!deps.attempts.lock(account.id, source.contentId, owner, now())) return fail("busy");
+  const beat = setInterval(() => { deps.attempts.lock(account.id, source.contentId, owner, now()); }, LOCK_BEAT_MS);
+  (beat as { unref?: () => void }).unref?.();
+  try { return await run(); }
+  finally { clearInterval(beat); deps.attempts.unlock(account.id, source.contentId, owner); }
 
-  /* 2 建项目(或接着用上一次建好的那个) */
-  at("create");
-  const name = input.name.trim();
-  let attempt = deps.attempts.get(account.id, source.contentId);
-  if (attempt && !attempt.projectId && now() - attempt.at > UNKNOWN_ATTEMPT_TTL_MS) { deps.attempts.drop(account.id, source.contentId); attempt = null; }
-  if (attempt && !attempt.projectId) {
-    // 上一次的请求结果不确定(没收到回包):先用原样的请求问清楚,免得换了名字又建一个
-    try {
-      const made = await deps.create(attempt.name, attempt.stub, attempt.requestId);
-      attempt = { ...attempt, projectId: made.projectId };
-      deps.attempts.put(attempt);
-    } catch (error) {
-      if (!createDefinitelyFailed(error)) return fail(createErrorCode(error), detailOf(error));
-      // 那一次确实没建成:记录作废。名字没换、原因就是名字本身的,直接报给用户;否则按这一次填的名字重新来
-      deps.attempts.drop(account.id, source.contentId);
-      if (attempt.name === name || statusOf(error) === 401 || statusOf(error) === 403) return fail(createErrorCode(error), detailOf(error));
-      attempt = null;
-    }
-  }
-  if (!attempt) {
-    if (!name || name.length > 200 || /[\u0000-\u001f]/.test(name)) return fail("invalid-name");
-    attempt = { v: 1, accountId: account.id, contentId: source.contentId, requestId: deps.newRequestId(), name, stub: deps.stub(name, source.contentId), at: now() };
-    // 先记下请求号再发请求:发出去之后回包丢了,下一次也知道该问哪个请求
-    try { deps.attempts.put(attempt); } catch (error) { return fail("not-ready", detailOf(error)); }
-    try {
-      const made = await deps.create(attempt.name, attempt.stub, attempt.requestId);
-      attempt = { ...attempt, projectId: made.projectId };
-      deps.attempts.put(attempt);
-    } catch (error) {
-      if (createDefinitelyFailed(error)) deps.attempts.drop(account.id, source.contentId);
-      return fail(createErrorCode(error), detailOf(error));
-    }
-  }
-  const projectId = attempt.projectId!;
-  cloud = { projectId, name: attempt.name };
-  /** 云端说这个项目不在了(被删了):记录作废,下次重新建 */
-  const goneCheck = (error: unknown) => { if (statusOf(error) === 404) deps.attempts.drop(account!.id, source.contentId); };
-
-  /* 3、4 传内容、读回来核对;这期间本机又改了就再来一轮 */
-  const push = async (content: Project): Promise<MoveResult | null> => {
-    at(localClosed ? "sync-last" : "upload");
-    try { await deps.upload(projectId, content); }
-    catch (error) {
-      goneCheck(error);
-      if (statusOf(error) === 401) return fail("login-required", detailOf(error));
-      return fail(localClosed ? "sync-last-failed" : "upload-failed", detailOf(error));
-    }
-    if (!localClosed) at("verify");
-    let back: Project;
-    try { back = await deps.read(projectId); }
-    catch (error) { goneCheck(error); return fail(localClosed ? "sync-last-failed" : "verify-failed", detailOf(error)); }
-    if (!sameContent(back, content)) return fail(localClosed ? "sync-last-failed" : "verify-failed", "content-mismatch");
-    return null;
-  };
-  for (let round = 1; ; round++) {
-    const failed = await push(snapshot);
-    if (failed) return failed;
-    if (sameContent(deps.current(), snapshot) || round >= MAX_CONTENT_ROUNDS) break;
+  async function run(): Promise<MoveResult> {
+    if (!source) return fail("not-ready");
+    let snapshot: Project;
     try { snapshot = await deps.snapshot(); }
     catch (error) { return fail("save-pending", detailOf(error)); }
+    const tooLarge = (p: Project) => JSON.stringify(p).length > MAX_CONTENT_CHARS;
     if (tooLarge(snapshot)) return fail("too-large", String(JSON.stringify(snapshot).length));
-  }
 
-  /* 5 协作房间:拉齐素材、关掉本机协作、补传关的那一下之前别人刚改的 */
-  if (source.kind === "room") {
-    if (deps.pullMedia) {
-      at("pull-media");
-      let pulled: { ok: boolean; missing: number };
-      try { pulled = await deps.pullMedia(snapshot); } catch (error) { return fail("media-pull-failed", detailOf(error)); }
-      if (!pulled.ok) return fail("media-pull-failed", String(pulled.missing));
+    /* 2 建项目(或接着用上一次建好的那个) */
+    at("create");
+    const name = input.name.trim();
+    let attempt = deps.attempts.get(account.id, source.contentId);
+    if (attempt && !attempt.projectId) {
+      // 上一次的请求结果不确定(没收到回包):先用原样的请求问清楚,免得换了名字又建一个。
+      // 云端的请求账本不过期,原样重放一直安全,所以这条记录也不设过期
+      try {
+        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId);
+        attempt = { ...attempt, projectId: made.projectId };
+        deps.attempts.put(attempt);
+      } catch (error) {
+        if (!createDefinitelyFailed(error)) return fail(createErrorCode(error), detailOf(error));
+        // 那一次确实没建成:记录作废。名字没换、或者不是名字的问题,直接报给用户;换了名字的按这一次填的重新来
+        deps.attempts.drop(account.id, source.contentId, attempt.requestId);
+        const kind = createErrorCode(error);
+        if (attempt.name === name || (kind !== "name-taken" && kind !== "invalid-name")) return fail(kind, detailOf(error));
+        attempt = null;
+      }
     }
-    at("close-local");
-    let closed: { ok: true } | { ok: false; error: string };
-    try { closed = await deps.closeRoom!(password); } catch (error) { closed = { ok: false, error: detailOf(error) }; }
-    if (!closed.ok) return fail(closed.error === "forbidden" ? "bad-password" : closed.error === "rate-limited" ? "rate-limited" : "close-failed", closed.error);
-    localClosed = true;
-    const final = deps.current();
-    if (!sameContent(final, snapshot)) {
-      snapshot = structuredClone(final);
+    if (!attempt) {
+      if (!name || name.length > 200 || /[\u0000-\u001f]/.test(name)) return fail("invalid-name");
+      attempt = { v: 1, accountId: account.id, contentId: source.contentId, requestId: deps.newRequestId(), name, stub: deps.stub(name, source.contentId), at: now() };
+      // 先记下请求号再发请求:发出去之后回包丢了,下一次也知道该问哪个请求
+      try { deps.attempts.put(attempt); } catch (error) { return fail("not-ready", detailOf(error)); }
+      try {
+        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId);
+        attempt = { ...attempt, projectId: made.projectId };
+        deps.attempts.put(attempt);
+      } catch (error) {
+        if (createDefinitelyFailed(error)) deps.attempts.drop(account.id, source.contentId, attempt.requestId);
+        return fail(createErrorCode(error), detailOf(error));
+      }
+    }
+    const made = attempt;
+    const projectId = made.projectId!;
+    cloud = { projectId, name: made.name };
+    /** 云端说这个项目不在了(被删了):记录作废,下次重新建 */
+    const goneCheck = (error: unknown) => { if (statusOf(error) === 404) deps.attempts.drop(account.id, source.contentId, made.requestId); };
+
+    /* 3、4 传内容、读回来核对 */
+    const push = async (content: Project): Promise<MoveResult | null> => {
+      at(localClosed ? "sync-last" : "upload");
+      try { await deps.upload(projectId, content); }
+      catch (error) {
+        goneCheck(error);
+        if (statusOf(error) === 401) return fail("login-required", detailOf(error));
+        return fail(localClosed ? "sync-last-failed" : "upload-failed", detailOf(error));
+      }
+      if (!localClosed) at("verify");
+      let back: Project;
+      try { back = await deps.read(projectId); }
+      catch (error) { goneCheck(error); return fail(localClosed ? "sync-last-failed" : "verify-failed", detailOf(error)); }
+      if (!sameContent(back, content)) return fail(localClosed ? "sync-last-failed" : "verify-failed", "content-mismatch");
+      return null;
+    };
+    // 这期间本机又改了就再来一轮;传了几轮还在变(有 Agent 或工具连着改)就停下 —— 本机还没动过,不往下走
+    for (let round = 1; ; round++) {
       const failed = await push(snapshot);
       if (failed) return failed;
+      if (sameContent(deps.current(), snapshot)) break;
+      if (round >= MAX_CONTENT_ROUNDS) return fail("busy-editing");
+      try { snapshot = await deps.snapshot(); }
+      catch (error) { return fail("save-pending", detailOf(error)); }
+      if (tooLarge(snapshot)) return fail("too-large", String(JSON.stringify(snapshot).length));
     }
-  }
-  // 本机那一份照现在的样子存回原来的草稿:搬完之后它是一个普通的本地项目(协作已关)
-  try { await deps.saveLocal?.(); } catch { /* 存不下:本机文件停在上一次保存的样子,内容已经在云端 */ }
 
-  /* 6 进项目 */
-  at("enter");
-  for (let tries = 1; ; tries++) {
-    try { await deps.enter({ projectId, name: attempt.name, snapshot, kind: source.kind }); break; }
-    catch (error) {
-      const s = statusOf(error);
-      goneCheck(error);
-      if (s === 401 || s === 403 || s === 404 || tries >= ENTER_TRIES) return fail("enter-failed", detailOf(error));
-      await sleep(1000 * tries);
+    /** 存过本机文件的那一份(对象身份);和 `snapshot` 不是同一个就还要再存 */
+    let savedFor: Project | null = null;
+    const saveLocal = async () => {
+      try { await deps.saveLocal?.(); localSaved = true; savedFor = snapshot; }
+      catch { localSaved = false; savedFor = null; }
+    };
+
+    /* 5 协作房间:拉齐素材、关掉本机协作,关完第一件事是把当前内容存到本机 */
+    if (source.kind === "room") {
+      if (deps.pullMedia) {
+        at("pull-media");
+        let pulled: { ok: boolean; missing: number };
+        try { pulled = await deps.pullMedia(snapshot); } catch (error) { return fail("media-pull-failed", detailOf(error)); }
+        if (!pulled.ok) return fail("media-pull-failed", String(pulled.missing));
+      }
+      at("close-local");
+      // 先记下「这个房间是搬到云端时关的」:带着它的关联、这次又写不回去的旧文件(从别处打开的那份),重开时当普通本地项目开
+      if (source.roomId) deps.attempts.noteMovedRoom(source.roomId, now());
+      let closed: { ok: true } | { ok: false; error: string };
+      try { closed = await deps.closeRoom!(password); } catch (error) { closed = { ok: false, error: detailOf(error) }; }
+      if (!closed.ok) return fail(closed.error === "forbidden" ? "bad-password" : closed.error === "rate-limited" ? "rate-limited" : "close-failed", closed.error);
+      localClosed = true;
+      await saveLocal();
+      if (!sameContent(deps.current(), snapshot)) savedFor = null;
     }
+
+    /* 6 进项目。换过去之前、换过去的那一刻都再比:本机这一份与云端核对过的不同,就先补传再来 */
+    let chases = 0;
+    for (let tries = 1; ;) {
+      if (!sameContent(deps.current(), snapshot)) {
+        if (++chases > MAX_CONTENT_ROUNDS) return fail("busy-editing");
+        try { snapshot = await deps.snapshot(); }
+        catch (error) { return fail(localClosed ? "sync-last-failed" : "save-pending", detailOf(error)); }
+        if (tooLarge(snapshot)) return fail("too-large", String(JSON.stringify(snapshot).length));
+        // 本机协作已经关了的:先存本机、再补传 —— 补传失败时本机这一份是全的
+        if (localClosed) await saveLocal();
+        const failed = await push(snapshot);
+        if (failed) return failed;
+        continue;
+      }
+      // 本机那一份照现在的样子存一次:搬完之后它是一个普通的本地项目
+      if (savedFor !== snapshot) await saveLocal();
+      at("enter");
+      try { await deps.enter({ projectId, name: made.name, snapshot, kind: source.kind }); break; }
+      catch (error) {
+        if (codeOf(error) === "content-changed") {
+          // 换过去的那一刻内容对不上(刚又改了):没有换。回到上面补传;连着几次都这样就停
+          if (++chases > MAX_CONTENT_ROUNDS) return fail("busy-editing");
+          continue;
+        }
+        const s = statusOf(error);
+        goneCheck(error);
+        if (s === 401 || s === 403 || s === 404 || tries >= ENTER_TRIES) return fail("enter-failed", detailOf(error));
+        await sleep(1000 * tries);
+        tries++;
+      }
+    }
+    deps.attempts.drop(account.id, source.contentId, made.requestId);
+    at("queue-media");
+    let media: MediaReport | null = null;
+    // 交不上(上传通道没就绪)是 null:调用方自己提示「还没开始上传」并重试到交上为止
+    try { media = await deps.queueMedia(); } catch { media = null; }
+    at("done");
+    return { ok: true, kind: source.kind, projectId, name: made.name, link: deps.linkOf(projectId), media };
   }
-  deps.attempts.drop(account.id, source.contentId);
-  at("queue-media");
-  let media: MediaReport | null = null;
-  try { media = await deps.queueMedia(); } catch { /* 素材没交上:进项目后后台补入库那一路还会再交 */ }
-  at("done");
-  return { ok: true, kind: source.kind, projectId, name: attempt.name, link: deps.linkOf(projectId), media };
 }
 
 /* ---------------- 内容的上传与读回(真的文档连接) ---------------- */
@@ -562,14 +665,26 @@ export const ACCOUNT_MOVE_TEXT = {
   toastLocal: "已搬到云端，可以将项目链接发给其他已登录成员。",
   toastRoom: "已搬到云端。本机协作已关闭、旧邀请码已作废，请把新的项目链接发给原来的成员。",
   copyLink: "复制项目链接",
-  uploading: (n: number) => `素材还在后台上传（共 ${n} 个，先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。`,
-  uploaded: "素材已全部传到云端。",
+  uploading: (n: number) => `素材还在后台上传（共 ${n} 个，含卡片声音；先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。`,
+  uploaded: "素材和卡片源码都已传到云端。",
+  uploadedWithMissing: (n: number) => `上传已结束，但有 ${n} 份素材文件在这台电脑上找不到，没有传上去，其他成员看不到它们。`,
+  mediaNotQueued: "素材还没开始上传（上传通道还没就绪），正在自动重试；传上去之前，其他成员看到的是占位。",
+  mediaRetrying: "素材上传出错，正在自动重试，会一直试到传上去。",
+  cardsUploading: "卡片源码还在同步到云端。",
+  cardsStuck: "卡片源码还没同步到云端（卡片同步没连上），其他成员暂时画不出自定义卡；连上后会自动补传。",
+  /** 旧文件带着搬到云端时关掉的那个房间的关联:重开时当普通本地项目开,提示一次 */
+  reopenedLocal: "这个文件原来的本机协作已在搬到云端时关闭，现在按普通的本地项目打开。",
 } as const;
 
 const unchanged = (kind: "local" | "room") => (kind === "room" ? "本机协作没有改动，原房间照常可用。" : "本机项目没有改动。");
 const resume = "再点一次会接着用云端已经建好的那个项目，不会多建一个。";
 /** 本机协作已经关掉之后的失败:现在打开的是本地项目,入口是设置里的「多用户协作 → 云端」 */
 const again = "在项目设置里勾「多用户协作」、选云端、点「确定」，会接着用云端已经建好的那个项目，不会多建一个。";
+
+/** 本机协作已经关掉之后的失败:当前内容存到本机文件了没有 */
+const savedNote = (r: Extract<MoveResult, { ok: false }>) => (r.localSaved === false
+  ? "最新内容还在这个窗口里、没能存到本机文件，请先手动保存；"
+  : "最新内容已存在本机这份文件里；");
 
 /** 失败时给用户的那句话:说清停在哪、本机现在是什么状态 */
 export function moveFailureText(r: Extract<MoveResult, { ok: false }>, kind: "local" | "room"): string {
@@ -581,6 +696,10 @@ export function moveFailureText(r: Extract<MoveResult, { ok: false }>, kind: "lo
     case "creator-password": return "要创建者密码才能搬到云端（搬完会关闭本机协作）。";
     case "bad-password": return r.localClosed ? "密码错误。" : `密码错误。${local}`;
     case "rate-limited": return `尝试太多次，等 60 秒后再试。${local}`;
+    case "busy": return "另一个窗口正在搬这个项目，等它做完再试。";
+    case "busy-editing": return r.localClosed
+      ? `项目一直在被修改（可能有 Agent 或工具还在改），最后的修改没有追上。本机协作已关闭，${savedNote(r)}先让它停下，再搬一次：${again}`
+      : `搬的过程中项目一直在被修改（可能有 Agent 或工具还在改），没有搬成。${local}先让它停下，再点一次；${r.cloud ? resume : "不会多建项目。"}`;
     case "save-pending": return `本机的修改还没保存完，没有开始搬。${local}`;
     case "too-large": return `项目内容太大（约 ${(Number(r.detail) / 1_000_000 || 0).toFixed(1)} 百万字符，上限 ${(MAX_CONTENT_CHARS / 1_000_000).toFixed(1)} 百万），暂时搬不上云端。${local}`;
     case "name-taken": return `这个项目名已被使用，请换一个名字。${local}`;
@@ -593,7 +712,7 @@ export function moveFailureText(r: Extract<MoveResult, { ok: false }>, kind: "lo
     case "verify-failed": return `云端内容核对没通过，已停下。${local}${resume}`;
     case "media-pull-failed": return `有 ${Number(r.detail) || "一些"} 个素材还没拉到这台电脑，没有关闭本机协作。${local}等素材拉完再点一次。`;
     case "close-failed": return `云端项目已经建好并核对过，但本机协作没有关掉，现在仍是原来的房间。${resume}`;
-    case "sync-last-failed": return `本机协作已关闭，云端项目已建好，但最后的几处修改还没传上去。${again}`;
+    case "sync-last-failed": return `本机协作已关闭，${savedNote(r)}云端项目已建好，但缺最后的几处修改。再补一次：${again}`;
     case "enter-failed": return `已搬到云端${r.localClosed ? "，本机协作已关闭" : ""}，但这次没能进入云端项目「${r.cloud?.name ?? ""}」。${again}也可以回开始页用项目链接打开它。`;
   }
 }

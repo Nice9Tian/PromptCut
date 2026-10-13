@@ -14,13 +14,13 @@ import { getState } from "../../store/project";
 import { hostedWsUrlOf } from "../../online/invite";
 import { originalHashOf, smallHashOf } from "../../render/mediaTier";
 import { remoteAssetBase } from "../media/assetTiers";
-import { getActiveDraftId, saveDraft, setActiveDraftId } from "../io/drafts";
-import { forgetSaveTarget } from "../io/proc";
-import { adminOp, dismissToast, ensureDevice, enterAccountProject, getSyncView, pushToast, whenSaved } from "./syncManager";
+import { ensureActiveDraftId, getActiveDraftId, saveDraft, setActiveDraftId } from "../io/drafts";
+import { forgetSaveTarget, hasSaveTarget, serializeProc, writeProcToDisk } from "../io/proc";
+import { adminOp, dismissToast, ensureDevice, enterAccountProject, getSyncView, pageSession, pushToast, whenSaved } from "./syncManager";
 import { disableCollab, localCollab, pullOriginals, queueExistingMedia } from "./collab";
 import { hosted } from "./sharedApi";
 import {
-  ACCOUNT_MOVE_TEXT, createAttemptStore, isAccountCloudTarget, moveToAccountCloud, readProjectContent, uploadProjectContent,
+  ACCOUNT_MOVE_TEXT, createAttemptStore, isAccountCloudTarget, moveToAccountCloud, readProjectContent, sameContent, uploadProjectContent,
   type ContentLinkOptions, type MoveAttempt, type MoveResult, type MoveSource, type MoveStage,
 } from "./accountMove";
 
@@ -80,7 +80,7 @@ export function moveSource(): MoveSource | null {
   const v = getSyncView();
   const contentId = getState().project.id ?? "";
   if (!contentId) return null;
-  if (v.shared) return !v.shared.accountId && v.shared.where === "lan" ? { kind: "room", contentId, creator: v.shared.creator } : null;
+  if (v.shared) return !v.shared.accountId && v.shared.where === "lan" ? { kind: "room", contentId, creator: v.shared.creator, roomId: v.shared.projectId } : null;
   if (v.association || v.kind !== "local") return null;
   return { kind: "local", contentId };
 }
@@ -121,28 +121,75 @@ async function pullRoomMedia(project: Project): Promise<{ ok: boolean; missing: 
   return { ok: false, missing: Math.max(1, hashes.length - have) };
 }
 
-/** 素材还在后台上传的提示:队列空了换成「已全部传到云端」;离开这个项目就收掉 */
-function watchUploads(projectId: string, count: number) {
+/** 多久看一次后台上传的进度 */
+const WATCH_MS = 3000;
+/** 素材没交上(上传通道没就绪)时隔多久再交一次 */
+const REQUEUE_MS = 15_000;
+/** 卡片源码同步多久还没连上云端项目就说出来 */
+const CARDS_STUCK_MS = 30_000;
+
+/**
+ * 搬完之后还在后台传的东西:素材(两档;卡片声音也是素材表里的一条)走上传队列,卡片源码走编辑器进程的卡片源码同步。
+ * 一条不自己消失的气泡跟着说:还在传、出错在重试、素材还没开始传(上传通道没就绪,这里自己隔一会儿再交,交上为止)、
+ * 卡片源码还没连上;都传完换成一句结束的话(有本机找不到文件的档,在那句话里说出来)。离开这个项目就收掉。
+ *
+ * 判「素材传完」看的是上传队列空了:传失败的素材不出队(队列按退避一直重试),所以不会把失败当成传完;
+ * 进了队、到要传时本机文件又没了的那一档,队列会跳过它,这里按队列的「找不到」计数在结束的那句话里说出来。
+ */
+function watchBackground(projectId: string, first: { queued: number; missing: string[] } | null) {
   if (ONLINE_BUILD) return;
-  const toast = pushToast(ACCOUNT_MOVE_TEXT.uploading(count), "info", Infinity);
-  let idle = 0;
-  const timer = setInterval(() => {
-    void (async () => {
-      if (getSyncView().shared?.projectId !== projectId) { clearInterval(timer); dismissToast(toast); return; }
-      let left: number;
-      try {
-        const r = await fetch("/api/media/upload-queue", { cache: "no-store" });
-        const j = (await r.json()) as { queue?: { items?: unknown[] } | null };
-        left = j.queue?.items?.length ?? 0;
-      } catch { return; }
-      idle = left === 0 ? idle + 1 : 0;
-      // 连着两次是空的才算传完(小尺寸还在转码的素材是转完才进队的)
-      if (idle < 2) return;
-      clearInterval(timer);
-      dismissToast(toast);
-      pushToast(ACCOUNT_MOVE_TEXT.uploaded, "info", 8000);
-    })();
-  }, 3000);
+  let queued = first !== null, count = first?.queued ?? 0;
+  let toast: number | null = null, shown = "", everShown = false;
+  let idle = 0, missingBase: number | null = null, lastRequeue = Date.now(), requeueing = false;
+  const startedAt = Date.now();
+  const show = (text: string, tone: "info" | "warn") => {
+    if (text === shown) return;
+    if (toast !== null) dismissToast(toast);
+    shown = text; everShown = true;
+    toast = pushToast(text, tone, Infinity);
+  };
+  const stop = (final: { text: string; tone: "info" | "warn" } | null) => {
+    clearInterval(timer);
+    if (toast !== null) dismissToast(toast);
+    if (final && everShown) pushToast(final.text, final.tone, final.tone === "warn" ? Infinity : 8000);
+  };
+  const tick = async () => {
+    if (getSyncView().shared?.projectId !== projectId) { stop(null); return; }
+    if (!queued && !requeueing && Date.now() - lastRequeue >= REQUEUE_MS) {
+      requeueing = true;
+      try { const r = await queueExistingMedia(); if (r) { queued = true; count = r.queued; } }
+      finally { requeueing = false; lastRequeue = Date.now(); }
+    }
+    let left = 0, missing = 0, failing = false;
+    try {
+      const j = (await (await fetch("/api/media/upload-queue", { cache: "no-store" })).json()) as { queue?: { items?: unknown[]; missing?: number; lastError?: { at?: number } | null } | null };
+      left = j.queue?.items?.length ?? 0;
+      missing = Number(j.queue?.missing) || 0;
+      failing = left > 0 && Number(j.queue?.lastError?.at) > startedAt;
+    } catch { return; }
+    missingBase ??= missing;
+    let cards: "ok" | "pending" | "stuck" = "ok";
+    try {
+      const c = (await (await fetch("/api/cards/sync/status", { cache: "no-store" })).json()) as { enabled?: boolean; projectId?: string; connected?: boolean; pending?: unknown[] };
+      if (c.enabled !== false) {
+        const bound = c.projectId === projectId && c.connected === true;
+        cards = bound ? ((c.pending?.length ?? 0) > 0 ? "pending" : "ok") : Date.now() - startedAt > CARDS_STUCK_MS ? "stuck" : "pending";
+      }
+    } catch { /* 问不到卡片同步的状态:这一轮不算它 */ }
+    const parts: string[] = [];
+    if (!queued) parts.push(ACCOUNT_MOVE_TEXT.mediaNotQueued);
+    else if (left > 0) parts.push(failing ? ACCOUNT_MOVE_TEXT.mediaRetrying : ACCOUNT_MOVE_TEXT.uploading(Math.max(count, left)));
+    if (cards === "pending") parts.push(ACCOUNT_MOVE_TEXT.cardsUploading);
+    if (cards === "stuck") parts.push(ACCOUNT_MOVE_TEXT.cardsStuck);
+    if (parts.length) { idle = 0; show(parts.join(""), !queued || failing || cards === "stuck" ? "warn" : "info"); return; }
+    // 连着两次都没有要传的才算传完(小尺寸还在转码的素材是转完才进队的)
+    if (++idle < 2) return;
+    const lost = missing - (missingBase ?? missing);
+    stop(lost > 0 ? { text: ACCOUNT_MOVE_TEXT.uploadedWithMissing(lost), tone: "warn" } : { text: ACCOUNT_MOVE_TEXT.uploaded, tone: "info" });
+  };
+  const timer = setInterval(() => { void tick(); }, WATCH_MS);
+  if (!queued) show(ACCOUNT_MOVE_TEXT.mediaNotQueued, "warn");
+  else if (count > 0) show(ACCOUNT_MOVE_TEXT.uploading(count), "info");
 }
 
 /* ---------------- 搬 ---------------- */
@@ -176,7 +223,8 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
   const password = request.creatorPassword || (shared ? localCollab(shared.projectId)?.creatorPassword : "") || "";
   const url = hostedWsUrlOf(`${origin}/hosted/`);
   // 探针用(只在开发模式):把内容连接的等待上限调短,好在几秒内看到「中途云端不可用」的失败
-  const testTimeout = import.meta.env?.DEV ? (window as unknown as { __pcMoveTest?: { contentTimeoutMs?: number } }).__pcMoveTest?.contentTimeoutMs : undefined;
+  const testHook = import.meta.env?.DEV ? (window as unknown as { __pcMoveTest?: { contentTimeoutMs?: number; onStage?: (stage: MoveStage) => void } }).__pcMoveTest : undefined;
+  const testTimeout = testHook?.contentTimeoutMs;
   const linkTo = (projectId: string): ContentLinkOptions => ({
     url, ...(testTimeout ? { timeoutMs: testTimeout } : {}),
     // 每建一个会话取一张票据;背后的访问令牌至少还剩一分钟(传到一半到期的,连接按断线重建、凭新票据接着传)
@@ -196,18 +244,30 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
     },
     pullMedia: pullRoomMedia,
     closeRoom: (pw) => disableCollab(pw),
-    saveLocal: ONLINE_BUILD ? undefined : async () => { const id = getActiveDraftId(); if (id) await saveDraft(id); },
+    saveLocal: ONLINE_BUILD ? undefined : async () => {
+      // 本地项目:有草稿才存(不替用户新开草稿)。协作房间(这时已经关掉、编辑器在本机项目里):一定存下来,没有草稿就新开一份 ——
+      // 房间删了,这是唯一一份全的;存出来的不带房间关联
+      const id = kind === "room" ? ensureActiveDraftId() : getActiveDraftId();
+      if (id) await saveDraft(id);
+      // 这一次打开期间存过磁盘文件的,那个文件也照现在的样子写一遍(不然它里面还记着已经删掉的房间)
+      if (kind === "room" && hasSaveTarget()) await writeProcToDisk(serializeProc(), `${getState().project.name || "未命名"}.proc`);
+    },
     enter: async ({ projectId, name, snapshot, kind: from }) => {
       await enterAccountProject({ client, origin, projectId, name, initial: snapshot,
-        enteredText: from === "room" ? ACCOUNT_MOVE_TEXT.toastRoom : ACCOUNT_MOVE_TEXT.toastLocal });
+        enteredText: from === "room" ? ACCOUNT_MOVE_TEXT.toastRoom : ACCOUNT_MOVE_TEXT.toastLocal,
+        // 换过去的那一刻再比一次:编辑器里的内容、云端发来的内容,有一样和核对过的那份不同就不换(流程回头再传)
+        guard: (cloudNow) => {
+          if (!sameContent(getState().project, snapshot) || !sameContent(cloudNow, snapshot)) throw Object.assign(new Error("content-changed"), { code: "content-changed" });
+        } });
       // 之后的「保存」不再写回本机那份草稿或文件(它留作普通的本地项目);与从开始页进云端项目一致
       setActiveDraftId(null);
       forgetSaveTarget();
     },
     queueMedia: async () => {
+      // 交不上(上传通道 30 秒没就绪)回 null:后台那条气泡明说「还没开始上传」,并隔一会儿再交,交上为止
       const r = await queueExistingMedia();
       const projectId = getSyncView().shared?.projectId;
-      if (r && r.queued > 0 && projectId) watchUploads(projectId, r.queued);
+      if (projectId) watchBackground(projectId, r);
       return r;
     },
     attempts,
@@ -215,7 +275,8 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
     // 占位内容:一份完整的空白项目(只有 `{ tracks: [] }` 的话编辑器打不开);项目号沿用本机那一份的
     stub: (name, contentId) => ({ ...createEmptyProject(name), id: contentId }),
     linkOf: (projectId) => projectLink(origin, projectId),
-    onStage: request.onStage,
+    onStage: (stage) => { testHook?.onStage?.(stage); request.onStage?.(stage); },
+    owner: pageSession(),
   }, { name: request.name, creatorPassword: password });
   return { ...result, kind };
 }

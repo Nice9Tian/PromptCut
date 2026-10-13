@@ -56,6 +56,7 @@ import type { CloudAccountClient, ProjectSession, AccountMembersSnapshot, Accoun
 import { hostedWsUrlOf } from "../../online/invite";
 import { AccountFailure, accountConnectionProtocols } from "../../account/client";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
+import { ACCOUNT_MOVE_TEXT, createAttemptStore } from "./accountMove";
 import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
 
 /* ---------------- 界面状态 ---------------- */
@@ -1133,7 +1134,12 @@ export type EnterResult = { ok: true } | { ok: false; error: EnterError; retryAf
 export async function enterAccountProject(options: { client: CloudAccountClient; origin: string; projectId: string;
   name: string; initial: Project; firstSession?: ProjectSession;
   /** 进来之后那条带「复制项目链接」的气泡换一句话(账号办法的「搬到云端」用,`accountMoveFlow.ts`);不给是缺省那句 */
-  enteredText?: string }): Promise<void> {
+  enteredText?: string;
+  /**
+   * 换过去的那一刻(云端内容已经到手、编辑器还没接上去)调一次,给的是云端发来的内容;抛错就不换、整次进入失败,编辑器留在原来的项目里。
+   * 「搬到云端」用它保证换过去时编辑器里的内容与云端一致(`accountMove.ts` 的 `MoveDeps.enter`)。同步调用,中间没有空当
+   */
+  guard?: (cloud: Project) => void }): Promise<void> {
   await ensureDevice();
   const origin = new URL(options.origin).origin, base = `${origin}/hosted/`, url = hostedWsUrlOf(base);
   let current = options.firstSession ?? await options.client.session(options.projectId);
@@ -1209,6 +1215,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       if (stopped) return;
       const account = options.client.account;
       if (!account) throw new AccountFailure(401, 'login-required');
+      options.guard?.(link.ds.project);
       recoveryCoordinator.cancel(); releaseHolding(); setAssociation(null); clearSharedResume();
       patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
         username: account.name, accountId: account.id, creator: current.creator }, members: [], hosted: current.hosted, blocked: null, association: null, reopenState: null });
@@ -1619,9 +1626,32 @@ async function becomeLocalAfterGone(answer: { proof: GoneProof }) {
   publishGoneConversion({ projectId: converted.project.id!, name: converted.project.name, from: converted.from });
 }
 
+const movedRooms = createAttemptStore(typeof localStorage === "undefined" ? null : localStorage);
+function movedRoomAssociation(): CollaborationDescriptor | null {
+  const d = currentAssociation();
+  return !ONLINE_BUILD && !ONLINE && d?.version === 1 && d.where === "lan" && d.roomId && movedRooms.isMovedRoom(d.roomId) ? d : null;
+}
+/**
+ * 文件里记着的本机协作房间已经在「搬到云端」时关掉(这台设备的保护存储里是已注销,页面存储里记着是搬迁关的):
+ * 用手上这份内容当一个普通的本地项目开,清掉房间关联;之后保存出来的文件不再带它。
+ */
+function becomeLocalAfterMove() {
+  const descriptor = movedRoomAssociation();
+  if (!descriptor) return;
+  const kept = holding;
+  const source = kept && kept.ds.projectId === descriptor.roomId ? kept.ds.project : getState().project;
+  recoveryCoordinator.cancel(); releaseHolding(); setAssociation(null); clearSharedResume();
+  detach(); disconnectSharedAssets();
+  patch({ association: null, reopenState: null, shared: null, members: [], hosted: null, blocked: null });
+  actions.loadProject(source, getState().filePath);
+  pushToast(ACCOUNT_MOVE_TEXT.reopenedLocal, "info", 10_000);
+}
+
 const recoveryCoordinator = new RecoveryCoordinator({
   state: (reopenState: string, detail?: { proof: GoneProof }) => {
     if (reopenState === "gone" && detail?.proof) { void becomeLocalAfterGone(detail); return; }
+    // 本机协作房间是「搬到云端」时关掉的:带着它的关联的旧文件(当时写不回去的那份)按普通本地项目开,不停在「原房间已删除」
+    if (reopenState === "deleted" && movedRoomAssociation()) { queueMicrotask(becomeLocalAfterMove); return; }
     patch({ reopenState });
   },
   // 信任表只有随软件分发的那一张（`gone-proof.mjs` 的 `TRUSTED_GONE_AUTHORITIES`，`queryGone` 的缺省值）：这里不传、也不许传别的表。
