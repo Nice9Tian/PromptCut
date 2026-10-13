@@ -1,5 +1,5 @@
 // 复制自 server/test/fixtures/account-real-runner.mjs(那份写死 6700 段端口，不在本组端口段内)，改动只有三处：
-// 端口由 base 推出、模型配置可传、页面连接把收到的全部帧记进 frames(看别人的写入广播)。其余逻辑逐字相同。
+// 端口向系统要空闲的、模型配置可传、页面连接把收到的全部帧记进 frames(看别人的写入广播)。其余逻辑逐字相同。
 import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
@@ -8,10 +8,10 @@ import { createServer } from 'vite';
 import WebSocket from 'ws';
 import { startCloudQueueUserFixture } from './fixtures/cloud-queue-user-path.mjs';
 import { createAccountExecutorAssembly } from '../agent-service/account-executor-assembly.mjs';
+import { freePorts } from './free-ports.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
-/** 本组端口段 28580～28589：前七个给站点、账号、文档、素材与入口，agent 一个，任务控制一个。 */
-export const ACCEPT_BASE_PORT = 28580;
+/** 端口向系统要空闲的九个：前七个给站点、账号、文档、素材与入口，agent 一个，任务控制一个。 */
 export const REAL_RUNNER_TEXT = '真实文档短任务已执行；关闭结算仍在等待。';
 export const REAL_RUNNER_NAME = 'Agent actual document edit';
 export const REAL_RUNNER_PROMPT = '验证真实工具与项目修改。\n```mock-script\n' + JSON.stringify([
@@ -25,9 +25,10 @@ export const REAL_RUNNER_PROMPT = '验证真实工具与项目修改。\n```mock
 // True VH + hosted doc/order/instance/read control + independent asset. Only
 // model responses use the existing scripted mock provider; runner/tools/SSR/WSS
 // and accepted operation projection are the real product implementations.
-export async function startAccountRealRunnerFixtureAt({ base = ACCEPT_BASE_PORT, publicHandler = null, diagnostic = () => {}, modelConfig = { vendor: 'mock', model: 'scripted-local-response' } } = {}) {
+export async function startAccountRealRunnerFixtureAt({ publicHandler = null, diagnostic = () => {}, modelConfig = { vendor: 'mock', model: 'scripted-local-response' } } = {}) {
+  const [site, account, doc, docInternal, asset, assetInternal, edge, agentPort, controlPort] = await freePorts(9);
   let executor, vite, runClient; const logs = [], humanSockets = new Set();
-  const fixture = await startCloudQueueUserFixture({ ports: [0, 1, 2, 3, 4, 5, 6].map(n => base + n), agentPort: base + 7, publicHandler,
+  const fixture = await startCloudQueueUserFixture({ ports: [site, account, doc, docInternal, asset, assetInternal, edge], agentPort, publicHandler,
     diagnostic, async createAgentService({ agentOptions, agentClient, agentRunClient, agentReadControl, dir, combo: actualCombo }) {
       runClient = agentRunClient;
       vite = await createServer({ configFile: false, root: ROOT, cacheDir: path.join(dir, 'agent-vite-cache'),
@@ -36,7 +37,7 @@ export async function startAccountRealRunnerFixtureAt({ base = ACCEPT_BASE_PORT,
       try {
         executor = await createAccountExecutorAssembly({ dataDir: path.join(dir, 'actual-agent'), doc: agentOptions,
           runClient: agentRunClient, conversationClient: agentClient, readControl: agentReadControl,
-          controlPort: base + 8, root: ROOT, loadModule: id => vite.ssrLoadModule(id),
+          controlPort, root: ROOT, loadModule: id => vite.ssrLoadModule(id),
           modelConfig: async () => modelConfig,
           log: (event, fields) => logs.push({ event, code: fields?.code }) });
         return { service: executor.service, async close() {
