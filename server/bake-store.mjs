@@ -1,5 +1,8 @@
 /**
  * 卡片快照(`bake_card`、3D 视图与空闲预渲染的贴图)经素材服务存取。
+ * 这里说的「卡片快照」是一张 **PNG 位图**(单张卡片某一刻的画面,当场渲出来,见 `vision/card-bitmap.ts`),不是 HTML:
+ * 本模块只收发 PNG,任何地方都不存这张卡的 HTML(`docs/semantics/glossary.md`「快照」、`mechanism/asset-service.md`
+ * 「不经任务队列的单张卡片画面」)。标识符和报错文字里的旧叫法没有改。
  *
  * 语义:`docs/semantics/product/asset-service.md`「预渲染的产物」(渲染生成的所有预渲染产物生成后都无条件推送到素材服务,
  * 素材服务就在本机时也一样)、「职责」第三条与 `product/agent.md`「素材与产物」(Agent 进程和预渲染进程经素材服务的接口
