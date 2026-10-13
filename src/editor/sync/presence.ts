@@ -13,7 +13,7 @@
  * 不认识 store 以外的界面;连接由 syncManager 交进来(`setPresenceLink`),免得两边互相引用。
  */
 import { useSyncExternalStore } from "react";
-import { setSelectionLink } from "./selectionPresence.ts";
+import { republishSelection, setSelectionLink } from "./selectionPresence.ts";
 
 interface LinkLike {
   request(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
@@ -70,6 +70,19 @@ export function setPresenceLink(link: LinkLike | null, projectId: string | null,
     void refresh();
     if (lastEditing && lastEditing.entities.length) publishEditing(lastEditing.session, lastEditing.entities);
   }
+}
+
+/**
+ * 同一条 `SyncLink` 底下换了一条连接(断线重连、账号项目到期前换会话):跟着连接走的在场状态在新连接上重建 ——
+ * 选区重发;「正在编辑」重发(文档服务按连接记是谁发的,旧连接关掉时只撤它自己发的那条,新连接续上的不受影响);
+ * 别的成员那边的 Agent 重新取一次(断着的那一会儿可能漏了变化)。
+ */
+export function resyncPresenceLink(): void {
+  const c = current;
+  if (!c) return;
+  republishSelection();
+  void refresh();
+  if (lastEditing && lastEditing.entities.length) publishEditing(lastEditing.session, lastEditing.entities);
 }
 
 /** 页面「正在编辑」的片段(A2 的汇总每次变化、每次心跳调一次);空数组 = 撤掉 */
