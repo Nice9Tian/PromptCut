@@ -105,6 +105,15 @@ export function remoteAssetBase(): string | null {
 }
 
 /**
+ * 当前远程素材服务是不是账号云端项目的(是就回那个项目号,不是回 null)。账号项目的素材票据由账号会话签发
+ * (`syncManager.ts` 的 `enterAccountProject`),读写是同一张、权限跟着成员走;旧的 `auth.ticket` 在账号连接上被拒,
+ * 要写素材的地方据此改用 `remoteAssetTicketInfo`。
+ */
+export function remoteAccountProjectId(): string | null {
+  return remote?.accountProjectId ?? null;
+}
+
+/**
  * 当前远程素材服务的只读票据连同过期时刻(C10 契约第 12 节:逐帧导出续签票据的 `fetchTicket`,`src/export/ticketRenewal.ts`)。
  * `force`:不管手里那张还剩多久,换一张新的。本地素材服务、取不到给 null。
  */
