@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createLookClient } from '../agent-service/look-client.mjs';
+import { createLookClient, LOOK_CLIENT_MESSAGES } from '../agent-service/look-client.mjs';
 import { createLook, createLookVerifier, signLookRequest, LOOK_AUTH_HEADER } from '../hosted-render/look.mjs';
 import { createRenderRequests } from '../hosted-render/render-requests.mjs';
 import { generateServiceKeyPair, newInstanceId } from '../auth/service-identity.mjs';
@@ -76,6 +76,18 @@ test('RW1 看画面绑运行授权：每趟都过授权闸；失权就撤回排�
   r.seen.length = 0;
   await assert.rejects(post('/api/vision/snapshot', { project: { id: P, tracks: [] }, t: 3 }), /这次没看成：这条任务已经被停止/);
   assert.equal(r.seen.length, 0, '没有发出任何请求');
+  // 文档服务一时问不到（不是没权限）：按退避再问几次；都问不到才说「确认不了」，不说成「被停止或没权限」
+  let asked = 0, down = 2;
+  const flaky = r.client.forProject(P, { run: RUN, instance: 'instance-task-7', authorize: async () => { asked += 1;
+    if (down > 0) { down -= 1; throw Object.assign(new Error('run-authority-unavailable'), { code: 'run-authority-unavailable' }); } return { allowed: true }; } });
+  held = false;
+  assert.deepEqual(await flaky('/api/vision/snapshot', { project: { id: P, tracks: [] }, t: 4 }), { ok: true, frame: 1 }, '问不到两次、第三次问到了：照常出图');
+  assert.ok(asked >= 3);
+  down = Infinity; r.seen.length = 0;
+  await assert.rejects(flaky('/api/vision/snapshot', { project: { id: P, tracks: [] }, t: 5 }), error => error.message === LOOK_CLIENT_MESSAGES.AUTHORITY_UNAVAILABLE);
+  assert.equal(r.seen.length, 0, '确认不了权限时不登记');
+  assert.deepEqual([r.client.describe().revoked, r.client.describe().unverified], [2, 1]);
+  assert.notEqual(LOOK_CLIENT_MESSAGES.AUTHORITY_UNAVAILABLE, LOOK_CLIENT_MESSAGES.REVOKED);
   // 形状不对的绑定不收
   assert.throws(() => r.client.forProject(P, { run: { runGrantId: 'g' } }), /run 不对/);
   assert.throws(() => r.client.forProject(P, { authorize: 'yes' }), /authorize/);

@@ -27,7 +27,10 @@
  * - **账号模式绑运行授权**(0.7.18;`forProject` 的 `authorize` / `run` / `instance`):项目号取自文档服务签的任务授权;登记之前、
  *   每一趟去问之前都先过一次 `authorize()`(执行器去问文档服务「这条任务现在还能不能读」),不过就把排着的请求撤回并抛错——
  *   任务被停、被撤销以后不再出图。请求体里带上 `run`(任务授权号、任务号、对话号),渲染服务把它记在这条请求上;
- *   签名里的实例号用这条任务所在进程在文档服务登记的那一个,所以一个任务进程问不到、撤不了别的任务进程登记的请求。
+ *   签名里的实例号填这条任务所在进程在文档服务登记的那一个,渲染服务按它给请求分主人(问、撤只认主人)。
+ *   **这不是隔离**:实例号是调用方自己填的,渲染服务不核它和钥匙的对应,而各任务进程用的是同一把私钥——一个任务进程
+ *   填别人的实例号也签得出来。实际挡着别的任务进程来问、来撤的,是请求号是现生成的随机串(144 位),别人猜不到。
+ *   授权闸答「不行」和「文档服务一时问不到」是两回事,给模型的话分开(问不到先按退避再问几次)。
  *   渲染服务那一侧现在只核服务私钥的签名,**不向文档服务核这条任务授权**(它还没有账号模式下连文档服务的身份),见报告。
  */
 import { randomBytes } from 'node:crypto';
@@ -46,11 +49,18 @@ export const LOOK_CLIENT_DEFAULTS = Object.freeze({
   reconnectMs: 5 * 60_000,
   /** 渲染服务说不认识这个请求时,照原样再登记最多几次 */
   maxResubmits: 3,
+  /** 授权闸说「文档服务一时问不到」时,按退避再问最多几次;都问不到才告诉模型没看成 */
+  authorizeRetries: 3,
 });
 
 const UNREACHABLE = '这次没看成：连不上这台云节点的渲染服务。先按项目内容继续，并在汇报里说明没有看过画面。';
 const NOT_ACCEPTED = '这次没看成：这台云节点的渲染服务没有接受看画面的请求。先按项目内容继续，并在汇报里说明没有看过画面。';
 const REVOKED = '这次没看成：这条任务已经被停止，或者不再有读这个项目的权限。';
+const AUTHORITY_UNAVAILABLE = '这次没看成：暂时确认不了这条任务的权限（文档服务一时连不上）。先按项目内容继续，稍后可以再看一次。';
+/** 给模型看的话集中在这里（措辞是一处改处处改；测试按它断言） */
+export const LOOK_CLIENT_MESSAGES = Object.freeze({ UNREACHABLE, NOT_ACCEPTED, REVOKED, AUTHORITY_UNAVAILABLE });
+/** 授权闸抛这个码表示「文档服务一时问不到」（`tool-context.mjs`），不是「没权限」 */
+const AUTHORITY_UNAVAILABLE_CODE = 'run-authority-unavailable';
 const RUN_REF = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /** 只许回环上的 http 地址,不带路径;不合格回 null */
@@ -77,7 +87,7 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
   if (!base) throw new TypeError('createLookClient: url 要是回环上的 http 地址(如 http://127.0.0.1:5399)');
   if (!key || typeof key.priv !== 'string') throw new TypeError('createLookClient: 要服务私钥');
   const limits = { ...LOOK_CLIENT_DEFAULTS, ...limitsIn };
-  const stats = { requests: 0, ok: 0, refused: 0, failed: 0, queued: 0, reconnects: 0, resubmits: 0, cancelled: 0, revoked: 0 };
+  const stats = { requests: 0, ok: 0, refused: 0, failed: 0, queued: 0, reconnects: 0, resubmits: 0, cancelled: 0, revoked: 0, unverified: 0 };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
   const sleep = sleepIn ?? ((ms, signal) => new Promise((resolve) => {
     const t = setTimeout(done, ms);
@@ -126,15 +136,26 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
       if (signal?.aborted) { if (submitted) cancel(requestId, instance); throw signal.reason ?? new Error('aborted'); }
       // 账号模式:这条任务现在还读得了这个项目才登记、才接着问;不行就把排着的撤回
       if (authorize) {
-        let allowed = false;
-        try { allowed = (await authorize())?.allowed !== false; } catch { allowed = false; }
-        if (!allowed) {
-          if (submitted) cancel(requestId, instance);
-          stats.revoked += 1;
-          say('agent.look.revoked', { projectId, submitted });
-          throw new Error(REVOKED);
+        // 三种结果:行;不行(任务被停、被撤销、没权限)——撤回并照实说;文档服务一时问不到——按退避再问几次,
+        // 都问不到也撤回,但说的是「确认不了」,不说成「被停止或没权限」
+        let allowed = false, unreachable = 0;
+        for (;;) {
+          try { allowed = (await authorize())?.allowed !== false; break; }
+          catch (err) {
+            if (err?.code !== AUTHORITY_UNAVAILABLE_CODE) { allowed = false; break; }
+            unreachable += 1;
+            if (unreachable > limits.authorizeRetries || signal?.aborted) break;
+            await sleep(limits.backoffMs[Math.min(unreachable - 1, limits.backoffMs.length - 1)], signal);
+          }
         }
         if (signal?.aborted) continue;
+        if (!allowed) {
+          if (submitted) cancel(requestId, instance);
+          const unknown = unreachable > limits.authorizeRetries;
+          if (unknown) stats.unverified += 1; else stats.revoked += 1;
+          say(unknown ? 'agent.look.unverified' : 'agent.look.revoked', { projectId, submitted });
+          throw new Error(unknown ? AUTHORITY_UNAVAILABLE : REVOKED);
+        }
       }
       let out;
       try {
