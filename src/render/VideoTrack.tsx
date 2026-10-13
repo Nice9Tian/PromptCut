@@ -7,6 +7,8 @@ import { driveMedia, filterOf, lastSeekAt, releaseMedia, targetTimeOf } from "./
 import { frontTimeAtDisplay, planSlots, reloadOnComplete, tierAligned, type SlotClip } from "./mediaSync";
 import { chooseTier, hashFromUrl, playbackUrl } from "./mediaTier";
 import { playabilityVersion, subscribePlayability } from "./playability";
+import { confirmedMissingVisual, missingMaterialLabel } from "../audio/missingMaterial";
+import { MissingMaterial } from "./MissingMaterial";
 
 /**
  * 一条序列的画面层(视频 / 图片)。E7 第 1 条:素材层搬进舞台,由 `FrameScene` 的 `live` 变体渲。
@@ -131,8 +133,9 @@ export function VideoTrack({
   useSyncExternalStore(subscribePlayability, playabilityVersion, playabilityVersion);
   const warmKey = useRef({}).current;
   const canWarm = warming.has(warmKey) || warming.size < MAX_WARMING;
-  const curV = cur ? slotClipOf(cur.clip, cur.media, localHashes) : null;
-  const nextV = next ? slotClipOf(next.clip, next.media, localHashes) : null;
+  const missing = cur && confirmedMissingVisual(cur.media) ? cur : null;
+  const curV = cur && !missing ? slotClipOf(cur.clip, cur.media, localHashes) : null;
+  const nextV = next && !confirmedMissingVisual(next.media) ? slotClipOf(next.clip, next.media, localHashes) : null;
   // 浏览器已解出可见帧、但本组件的首个回调还没到时，也要按「有上一档画面」规划换档。
   const planningSlots = slots.current.map((s, i) => i === shownRef.current && (els[i].current?.readyState ?? 0) >= 2 ? { ...s, ready: true } : s);
   if (shownRef.current !== null && curV && slots.current[shownRef.current].clip?.id === curV.id && slots.current[shownRef.current].clip?.url !== curV.url) {
@@ -343,14 +346,15 @@ export function VideoTrack({
    * 以前素材层不认这个字段,于是给视频摆位置写进去了却一动不动,只有卡片才看得出效果。
    */
   const boxOf = (clip: TrackClip | null) => ({ position: "absolute" as const, overflow: "hidden" as const, ...frameCss(clip?.frame, stage) });
-  const image = cur && isImageMedia(cur.media) && cur.media.url && playbackUrl(cur.media, localHashes) ? cur : null;
+  const image = cur && !missing && isImageMedia(cur.media) && cur.media.url && playbackUrl(cur.media, localHashes) ? cur : null;
   // A1:入库(上传 + 边落盘边算哈希)还没完成的素材没有地址,这一层画「上传中」占位 ——
   // 不挂空 src(空 src 会被当成页面地址,<img> 出裂图、<video> 报解码错)。
   // 传完 media.url 变成 /@media/<hash>,占位自动消失。
   const uploading = cur && cur.media.pending && !cur.media.url ? cur : null;
   // C6.6:轮询回过、而这一层要挂的那一档在当前素材服务上还没到齐 —— 画面透明,角上提示「等待上传方」
   // (A1「那一层透明并提示」;rendering.md「预览里任何一层都不无提示地透明」)
-  const awaiting = cur && !uploading && cur.media.url && chooseTier(cur.media, localHashes, { probe: false }).awaiting ? cur : null;
+  // 认定过「确认缺失」的素材不会再到齐:这一层已经画了「找不到素材」的占位,不再叠「等待上传方」
+  const awaiting = cur && !missing && !uploading && cur.media.url && chooseTier(cur.media, localHashes, { probe: false }).awaiting ? cur : null;
   return (
     <>
       {[0, 1].map((i) => {
@@ -361,8 +365,8 @@ export function VideoTrack({
           // 不显示的槽位用 visibility 藏:实测 Chrome 152 对 visibility:hidden 的暂停视频照样解码、照样回调 rVFC
           // D3 第 4 步:**显示着的那个槽位**写 data-pc-clip,素材段才进 rects() / hitTest;隐藏槽位不写
           // (写了就有两个同 clipId 的包裹层,rects 按 clipId 去重会挑到藏着的那个)。
-          <div key={i} data-pc-clip={shown && clip ? clip.id : undefined} data-pc-media={shown && clip ? "" : undefined}
-            style={{ ...boxOf(clip), visibility: shown ? "visible" : "hidden" }}>
+          <div key={i} data-pc-clip={shown && clip && !missing ? clip.id : undefined} data-pc-media={shown && clip && !missing ? "" : undefined}
+            style={{ ...boxOf(clip), visibility: shown && !missing ? "visible" : "hidden" }}>
             <video
               ref={els[i]}
               src={plan.load[i]?.url}
@@ -374,6 +378,9 @@ export function VideoTrack({
           </div>
         );
       })}
+      {missing && <div data-pc-clip={missing.clip.id} data-pc-media="" data-pc-confirmed-missing="1" style={{ ...boxOf(missing.clip), opacity: missing.opacity, filter: filterOf(missing.clip, filters, t), pointerEvents: "none" }}>
+        <MissingMaterial name={missingMaterialLabel(missing.media)} />
+      </div>}
       {image && (
         <div key={`${image.clip.id}:${awaiting ? "wait" : "ok"}`} data-pc-clip={image.clip.id} data-pc-media="" style={boxOf(image.clip)}>
           <img src={playbackUrl(image.media, localHashes)} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: filterOf(image.clip, filters, t) }} />

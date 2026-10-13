@@ -96,13 +96,16 @@ test('GA-01b 三个 remotion 式的例子和测试夹具里的示例卡保持一
   }
 });
 
-test('GA-01c 三个素材效果卡例子不引用框架，只引名单里的模块', () => {
+test('GA-01c 三个素材效果卡例子用不到框架的工具，各写一行裸导入；只引名单里的模块', () => {
   for (const id of ['invert-filter', 'crossfade', 'gain-audio']) {
     const source = FULL.find((s) => idOf(s) === id);
     assert.ok(source, `缺例子 ${id}`);
-    assert.ok(!/remotionStyle/.test(source), `${id} 不需要引用框架`);
+    assert.match(source, /^import "\.\.\/\.\.\/kernel\/remotionStyle";$/m, `${id} 要有一行裸导入`);
+    assert.ok(!/from\s+"[^"]*remotionStyle"/.test(source), `${id} 用不到框架的工具，只写裸导入`);
     assert.match(source, /frameMode:\s*"direct"/);
-    const specs = [...source.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(inspectRemotionStyle(source).violations, [], id);
+    assert.deepEqual(inspectRemotionStyle(source.replace('import "../../kernel/remotionStyle";\n', '')).violations.map((v) => v.rule), ['framework'], `${id} 去掉裸导入就该被拒`);
+    const specs = [...source.matchAll(/(?:from|^import)\s+"([^"]+)"/gm)].map((m) => m[1]);
     for (const spec of specs) {
       const at = path.posix.normalize(path.posix.join('src/cards/user', spec)).replace(/\/index$/, '');
       assert.ok(REMOTION_IMPORT_ALLOW.includes(at), `${id} 引了名单之外的 ${spec}`);
@@ -113,8 +116,9 @@ test('GA-01c 三个素材效果卡例子不引用框架，只引名单里的模�
 /* ------------------------------------------------------------------ GA-02 */
 
 /** 一张最小的合规 remotion 式的卡，样例在它的某个位置塞一条违规 */
-function cardWith({ imports = '', top = '', body = '', jsx = '<div style={{ opacity: t }} />', mode = '"direct"' } = {}) {
+function cardWith({ imports = '', top = '', body = '', jsx = '<div style={{ opacity: t }} />', mode = '"direct"', framework = true } = {}) {
   return [
+    framework ? 'import "../../kernel/remotionStyle";' : '',
     'import { useMemo, useRef, useLayoutEffect } from "react";',
     'import type { CardDef, CardProps } from "../../kernel/types";',
     imports,
@@ -149,6 +153,7 @@ const REJECTED = [
   { guide: '顶层的 `let` / `var` / `class` / `enum`、直接执行的语句，顶层初始化式里的 `new`、`await`、赋值', rule: 'top-level', source: cardWith({ top: 'let n = 0;' }) },
   { guide: '`IntersectionObserver`', rule: 'viewport', source: cardWith({ body: '  const o = new IntersectionObserver(() => {});' }) },
   { guide: '`frameMode` 写成变量或算出来的值', rule: 'frame-mode', source: cardWith({ top: 'const MODES = ["direct"] as const;', mode: 'MODES[0]' }) },
+  { guide: '没有一句引用框架的 import（只带类型的 `import type …` 不算）', rule: 'framework', source: cardWith({ framework: false }) },
 ];
 
 test('GA-02 指南第 2.4 节每一行对应一个检查的规则代号，样例真的被拒并指出行号', () => {
@@ -175,7 +180,7 @@ test('GA-02 指南第 2.4 节每一行对应一个检查的规则代号，样例
 test('GA-02b 检查里的每个规则代号在指南里都有对应的行；对照表里的代号都真实存在', () => {
   const source = read('server/remotion-style-check.mjs');
   const inCode = new Set([...source.matchAll(/\bhit\(\s*[^,]+,\s*'([a-z-]+)'/g)].map((m) => m[1]));
-  assert.ok(inCode.size >= 12, `从检查源码里应读到全部 12 个规则代号，实际 ${[...inCode]}`);
+  assert.ok(inCode.size >= 13, `从检查源码里应读到全部 13 个规则代号，实际 ${[...inCode]}`);
   const inGuide = new Set(REJECTED.map((r) => r.rule));
   assert.deepEqual([...inGuide].sort(), [...inCode].sort(), '指南第 2.4 节覆盖检查里的每一个规则代号，一个不多一个不少');
   // 检查文件头那张规则表里列的代号也是这些
@@ -276,6 +281,7 @@ test('GA-05 指南里 beginFrameWork 的片段放进一张卡里能过建卡检�
   const importLine = block.split('\n').find((l) => l.startsWith('import '));
   const body = block.split('\n').slice(block.split('\n').findIndex((l) => l.includes('// 组件里')) + 1).join('\n');
   const source = [
+    'import "../../kernel/remotionStyle";',
     'import { useLayoutEffect, useMemo } from "react";',
     'import type { CardDef, CardProps } from "../../kernel/types";',
     importLine,
