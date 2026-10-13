@@ -61,7 +61,8 @@
 |---|---|
 | `npx tsc -b --force` | 退出码 0，零错误（最后一次提交后重跑过） |
 | `npm test`（第一次，在最后一处改动之前） | 6047 条，6045 通过，2 条失败：① `cloud-run-assets-current-vertical-tls.test.mjs` 的 `original asset TLS channel alone answers…`，`listen EADDRINUSE 6448`——机器忙时的端口撞车，单独重跑 2 条全过；② `CAU-REV-06`（`src/ai/cloud/page-requests.test.mjs`）：它用正则钉住 `useCloud.ts` 里 `createCloudSession({ api, store, accountMode, pageId, onPageRequest })` 那一处的写法，我往里加了一个字段就破了。没有改测试，改成「那一处不动，另用 `session.setOnConversationDeleted(...)` 登记」，重跑 11 条全过 |
-| `npm test`（第二次，最终代码） | 见文末「最终全量」 |
+| `npm test`（第二次，最终代码） | 6048 条，6047 通过，1 条失败：`cloud-run-assets-current-observer-tls.test.mjs` 的 `actual original pinned TLS channel…`，同样是 `listen EADDRINUSE 6448`。**原因：`cloud-run-assets-current-observer-tls.test.mjs` 和 `cloud-run-assets-current-vertical-tls.test.mjs` 两个文件都把端口写死在 6448，全量里恰好同时跑就撞**（第一次撞掉的是 vertical，第二次是 observer）。单独重跑 observer：通过；两个文件一起 `npm test -- a b`：3 条全过 |
+| `npm test`（第三次，最终代码） | **6048 条全部通过，0 失败，退出码 0** |
 
 ### 这一块自己的测试
 
@@ -142,6 +143,8 @@ node scripts/probes/conversation-delete-probe.mjs --dist dist-online --site-root
 
 - **既有问题**（不是这一块引入的，截图里能看到）：打开一个还没发过消息的新云端对话时，`server/agent-service/http.mjs` 的 `accountEvents` 对「还没有这个对话」先写 200 再结束，被 `conversation-transports.mjs` 当成未授权的 200 拦下、连接被掐，探针夹具的边缘代理回 502，页面于是一直显示「和云端 Agent 的连接断了，正在重新连接」。我没有改（会动读取通道和页面的约定），已用一个任务芯片提给用户。
 - 合并时注意：`server/test/fixtures/account-conversation-controls-user-path.mjs` 我动了一处断言（〔裁 9〕）；`docs/reports/assets/v18-chats/` 有 13 个文件（12 张截图加探针结果），约 1.4 MB。
+- **全量测试里有一对必撞的测试**：`server/test/cloud-run-assets-current-observer-tls.test.mjs` 和 `…-vertical-tls.test.mjs` 都写死端口 6448（vertical 还用 6449），全量里两个文件恰好同时跑就 `EADDRINUSE`（我的三次全量里有两次撞，换着撞）。单独或一起指定文件跑都过。建议改成系统分配端口。
+- 创建者把「云端 Agent」开关关掉以后，这个项目里所有对话（含删除）都回 403 `agent-disabled`，和现有的读、发消息一致；关着开关时没法删对话腾名额，要先打开。
 - 删除接口需要文档服务装配里已有的 `onFence`；在没有 `onFence` 又有任务在跑时会 503 `agent-fence-unavailable` 且什么都不动。生产装配（`server/hosted/doc-agent-assembly.mjs`）里 `onFence` 是配了的，这块我没改它。
 
 ## 要用户定的事
@@ -178,4 +181,6 @@ a409675a 对话:50 个上限去掉自动删最旧、加删除(权限/先停再�
 
 ## 最终全量
 
-待补。
+`npm test`：第一次 6045/6047（2 条：端口撞车 1 条〔那两个文件写死同一个端口 6448〕、守门测试 `CAU-REV-06` 1 条〔已按上面改法解决〕）；第二次 6047/6048（又是 6448 撞车，另一个文件）；第三次（最终提交）6048/6048 通过，0 失败，退出码 0。`npx tsc -b --force` 退出码 0。
+
+（`cloud-run-assets-current-observer-tls` 与 `…-vertical-tls` 两个测试写死同一个端口的问题不是这一块引入的，建议主会话把其中一个改成系统分配；我没动，因为它们属于块一合入的文件。）
