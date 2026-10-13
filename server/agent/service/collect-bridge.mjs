@@ -318,6 +318,11 @@ export function createCollectBridge({ bridge, databasePath, assets, authorize, r
   const notDelegated = (why, note = fallbackNote(why)) => Object.freeze({ delegated: false, why, note });
   const stopped = (why, message) => Object.freeze({ delegated: false, stop: true, why, message });
 
+  /** 这一轮此刻还能不能往项目里写(每次都问文档服务;问不到按不能办) */
+  const canWrite = async (context) => {
+    try { const auth = await authorize(context, 'write'); return auth?.allowed === true; } catch { return false; }
+  };
+
   /**
    * 收一份回执:核写权限 → 向素材服务核字节 → 再核写权限 → 登记。同一份回执重复到达回同一个结果,不登记两次;
    * 已经有别的结论的委托(退回了、被拒了、被取消了、重启中断了)之后到的回执一律不登记。
@@ -345,9 +350,7 @@ export function createCollectBridge({ bridge, databasePath, assets, authorize, r
         return notDelegated('receipt-invalid');
       }
       mark(id, 'verifying', null, { refs });
-      const writable = async () => {
-        try { const auth = await authorize(context, 'write'); return auth?.allowed === true; } catch { return false; }
-      };
+      const writable = () => canWrite(context);
       // 这一轮此刻还能往项目里写吗(被停止、转私有后被撤销、发起人被踢出或没有写权限:不登记;字节留在素材库里没有人引用)
       if (!(await writable())) {
         mark(id, 'rejected', 'run-revoked', { refs });
@@ -474,7 +477,13 @@ export function createCollectBridge({ bridge, databasePath, assets, authorize, r
         if (!poll.delivered) {
           if (local.aborted || poll.state === 'cancelled') { if (local.aborted) await cancelPage(); return end('cancelled', 'run-cancelled', stopped('run-cancelled', '已取消')); }
           // 交回时被拒(对话转私有、被停止、发起人被踢出、授权换了栅栏、答案不合规矩):这一次委托到此为止,晚到的回执不登记
-          if (poll.state === 'rejected') { await cancelPage(); return end('rejected', poll.why === 'result-invalid' ? 'receipt-invalid' : `late-${codeOf(poll.why, 'rejected')}`.slice(0, 40), notDelegated(poll.why === 'result-invalid' ? 'receipt-invalid' : 'failed')); }
+          if (poll.state === 'rejected') {
+            await cancelPage();
+            const why = poll.why === 'result-invalid' ? 'receipt-invalid' : `late-${codeOf(poll.why, 'rejected')}`.slice(0, 40);
+            // 这一轮自己也不能写了(被停止、被撤销):不再退回去匿名下载;还能写(例如主人把自己的对话转私有)才接着匿名
+            if (!(await canWrite(context))) return end('rejected', why, stopped('run-revoked', COLLECT_BRIDGE_TEXT.revoked));
+            return end('rejected', why, notDelegated(poll.why === 'result-invalid' ? 'receipt-invalid' : 'failed'));
+          }
           if (['initiator-revoked', 'no-page'].includes(poll.why)) return end('fallback', 'initiator-offline', notDelegated('initiator-offline'));
           // 页面一时连不上(断线重连、文档服务一时答不上):宽限内接着问
           if (Number(now()) - lastSeen > limits.offlineGraceMs) return end('fallback', 'initiator-offline', notDelegated('initiator-offline'));
