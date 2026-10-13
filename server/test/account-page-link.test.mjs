@@ -9,6 +9,7 @@
  *   1  登录 30 秒时甲改一次:乙看得到,服务端版本前进
  *   2  换会话不丢改动(把到期时刻报成 8 秒后,真服务上连换几次):丙连续改 24 次、乙同时连续改 24 次,
  *      换了至少 4 次会话,两边与服务端最后一致,48 处改动一处不少,没有被拒、没有转离线、没有重同步
+ *   1b 传输断一次:几秒内在同一个会话上接回(原问题:接续带了票据,文档服务回 400,白等 60 秒保留期过完才重建会话)
  *   3  账号服务一时不通:到期还没换成 → 页面如实转离线(不是「在线」);离线时的改动不丢,通了之后补发
  *   4  登录 130 秒时(原问题:161 秒时放片段,服务端版本 10 → 10、对方看不到、页面仍显示在线)甲再改一次:
  *      乙看得到,服务端版本前进;甲的连接按时换过、从头到尾没被闸拒过
@@ -18,7 +19,8 @@
  *   8  退出登录:连接被关、换会话取票据回 401,页面不在线
  *
  * 复现原问题(先红):`ACCOUNT_PAGE_LINK_REPRO_OLD=1 npm test -- server/test/account-page-link.test.mjs`
- * —— 甲、丁不换会话也不理会「凭证到期」(改之前的页面就是这样),第 4 步红:130 秒时的改动服务端版本不动、乙看不到、甲仍显示在线。
+ * —— 甲、丁不换会话也不理会「凭证到期」、乙接续时带票据(改之前的页面就是这样):
+ *    第 1b 步红(接续不上);去掉 1b 的断言再跑,第 4 步红(130 秒时的改动服务端版本不动、乙看不到、甲仍显示在线)。
  */
 import { srcUrl } from '../../src/testing/registerTs.mjs';
 import test from 'node:test';
@@ -96,7 +98,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
    * 一个页面。`reportExpiry`:把票据的到期时刻报成什么(缺省照实);`ticking`:计时器走不走(假 = 睡着);
    * `renewing`:换不换会话、理不理会「凭证到期」(假 = 改之前的页面)。
    */
-  function page(name, who, { reportExpiry = (real) => real, ticking = true, renewing = true, lifeOptions = {} } = {}) {
+  function page(name, who, { reportExpiry = (real) => real, ticking = true, renewing = true, resumeWithTicket = false, lifeOptions = {} } = {}) {
     const p = { name, who, terminal: [], closes: [], notices: [], authExpired: [], statuses: [], sessions: 0, ticking };
     const life = createAccountLinkLife({
       session: async ({ minRemainingMs }) => { const s = await session(who, minRemainingMs); p.sessions += 1; return { connectionTicket: s.connectionTicket, expiresAt: reportExpiry(s.expiresAt) }; },
@@ -107,6 +109,8 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     const link = new SyncLink({
       url: wsUrl, projectId, session: `page-${who.deviceId}-${++seq}`, initial: { tracks: [] }, initialize: false, WebSocketImpl: CaWebSocket,
       protocols: async () => ['promptcut.v1', `promptcut.account.${await life.ticket()}`],
+      // 改之前的页面接续时也带票据(文档服务回 400)
+      ...(resumeWithTicket ? { resumeProtocols: async () => ['promptcut.v1', `promptcut.account.${(await session(who, 10_000)).connectionTicket}`] } : {}),
       onOpen: () => life.opened(),
       onAuthExpired: (reason) => { p.authExpired.push(reason); if (renewing) void life.authExpired(); },
       onClosed: (info) => p.closes.push({ code: info.code, reason: info.reason, fatal: info.fatal }),
@@ -148,7 +152,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     const since = () => Math.round((Date.now() - loggedInAt) / 1000);
     const bob = await login(1, 'pl-b');
     const A = page('甲', alice, { renewing: !OLD });
-    const B = page('乙', bob);
+    const B = page('乙', bob, { resumeWithTicket: OLD });
     // 丁:甲的另一个页面,计时器从头就停着(睡着的电脑)
     const D = page('丁', await login(0, 'pl-d'), { ticking: false, renewing: !OLD });
     const dLoginAt = Date.now();
@@ -191,6 +195,20 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       await waitFor(() => typeof B.get('at30') === 'string', '乙看到甲 30 秒时的改动');
       assert.equal((await serverRev(bob)).rev, rev + 1);
       t.diagnostic(`1 登录 ${since()} 秒:甲改一次,乙看得到,版本 ${rev} → ${rev + 1}`);
+    }
+
+    // ---- 1b 传输断一次(换网、代理掐断):几秒内在同一个会话上接回,不重建会话
+    {
+      const before = B.link.stats();
+      const t0 = Date.now();
+      assert.equal(B.link.cutTransport(), true);
+      const resumed = await waitFor(() => (B.link.stats()?.resumes === (before.resumes ?? 0) + 1 && B.link.stats().transport === 'ws' ? Date.now() : null), '乙断一次传输后接回', 10_000).catch(() => null);
+      A.set('afterCut', '甲在乙断线之后');
+      const seen = await waitFor(() => (B.get('afterCut') ? Date.now() : null), '乙收到断线之后甲的改动', 90_000);
+      t.diagnostic(`1b 传输断一次:乙${resumed ? `${resumed - t0} 毫秒接回` : '没接回'},${seen - t0} 毫秒后收到甲之后的改动,${B.closes.length ? `会话丢过(${JSON.stringify(B.closes)})` : '会话没断'}`);
+      assert.ok(resumed, '传输断一次之后接续不上(白等保留期过完才重建会话)');
+      assert.equal(B.closes.length, 0, '会话没有丢');
+      assert.ok(seen - t0 < 10_000);
     }
 
     // ---- 3 账号服务一时不通:到期还没换成 → 如实转离线;离线时的改动通了之后补发
@@ -253,7 +271,10 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       const kicked = await admin(alice, { op: 'kick', accountId: bob.accountId });
       assert.equal(kicked.status, 200, JSON.stringify(kicked.body));
       await waitFor(() => !B.link.connected && !C.link.connected, '乙、丙的连接被关');
-      await waitFor(() => B.closes.some((c) => c.fatal) && C.closes.some((c) => c.fatal), '关闭码是不再重连的那种');
+      // 页面知道这是终局有两条路:服务端关连接时给的关闭码(4003),或者正好在换会话 / 重连时取票据回 403;产品里两条路都走同一个收场
+      const final = (p) => p.closes.some((c) => c.fatal) || p.terminal.some((e) => e.status === 403);
+      await waitFor(() => final(B) && final(C), '乙、丙都知道是终局(不再重连)')
+        .catch((e) => { throw new Error(`${e.message}:乙 ${JSON.stringify(B.closes)} ${JSON.stringify(B.terminal)} ${JSON.stringify(B.link.stats())};丙 ${JSON.stringify(C.closes)} ${JSON.stringify(C.terminal)}`); });
       assert.ok(!B.online() && !C.online(), '被踢后不显示在线');
       await assert.rejects(session(bob), (e) => e.status === 403 && e.code === 'banned');
       A.set('afterKick', 1);

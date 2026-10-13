@@ -1160,7 +1160,9 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   } if (!ready) rejectEntry(error);
     else { disconnectSharedAssets(); pushToast(error instanceof Error ? error.message : '云端登录已失效，请重新登录。', 'warn', Infinity); } };
   const link = new SyncLink({ url, projectId: options.projectId, initial: options.initial, initialize: false, session,
-    protocols, resumeProtocols: async () => { await renew(); return accountConnectionProtocols(current); },
+    // 接续不带票据:文档服务规定接续项旁边不能有鉴权项(带了握手回 400,只能白等保留期过完再重建会话);
+    // 接续时服务端按会话里记下的身份重新核对登录与成员资格。票据只在建新会话时出示(`protocols`)
+    protocols,
     saveBackup: b => void saveBackup(b), onMessage: onSideMessage,
     onProtocolError: error => { const e = error as { status?: number }; if (e.status === 401 || e.status === 403) { fail(error); return true; }
       pushToast(error instanceof Error ? error.message : '云端服务暂时不可用，正在等待重连。', 'warn'); return false; },
