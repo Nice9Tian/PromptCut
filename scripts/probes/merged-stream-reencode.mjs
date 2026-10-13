@@ -101,8 +101,7 @@ for (const kind of KINDS) {
     let out = null;
     for (let r = 0; r < REPEATS; r++) {
       out = await runFfmpeg([...inputs, '-filter_complex', `xstack=inputs=${n}:layout=${layout}:fill=black,format=yuv420p`, ...PRODUCT_X264, ...COLOR_TAGS, '-video_track_timescale', String(FPS), ...FMP4_FLAGS, 'pipe:1'], { bench: true });
-      if (out.code !== 0) throw new Error(`拼 ${n} 格失败：${out.stderr.split(/?
-/).slice(-3).join(' | ')}`);
+      if (out.code !== 0) throw new Error(`拼 ${n} 格失败：${out.stderr.split(/\r?\n/).slice(-3).join(' | ')}`);
       times.push(out.ms); cpus.push(out.cpuMs);
     }
     const mergedFile = path.join(dir, `${kind.id}-merged-${n}.mp4`);
@@ -127,8 +126,7 @@ for (const kind of KINDS) {
       }
       const dt = [], dc = [];
       let d = null;
-      for (let r = 0; r < REPEATS; r++) { d = await runFfmpeg(productArgs(mergedW, kind.h), { input: wide, bench: true }); if (d.code !== 0) throw new Error(`丙 失败：${d.stderr.split(/?
-/).slice(-3).join(' | ')}`); dt.push(d.ms); dc.push(d.cpuMs); }
+      for (let r = 0; r < REPEATS; r++) { d = await runFfmpeg(productArgs(mergedW, kind.h), { input: wide, bench: true }); if (d.code !== 0) throw new Error(`丙 失败：${d.stderr.split(/\r?\n/).slice(-3).join(' | ')}`); dt.push(d.ms); dc.push(d.cpuMs); }
       const dBytes = splitFmp4(d.stdout).segments[0].length;
       row.direct.push({ n, size: `${mergedW}x${H}`, msPerSegment: { median: round(median(dt), 0), min: round(Math.min(...dt), 0) }, cpuMsPerSegment: round(median(dc), 0), bytes: dBytes });
       console.log(`丙 直接编 ${n} 格（${mergedW}×${H}）：每段墙钟 ${round(median(dt), 0)} ms（最快 ${round(Math.min(...dt), 0)}）、处理器时间 ${round(median(dc), 0)} ms，${(dBytes / 1024).toFixed(1)} KB`);
