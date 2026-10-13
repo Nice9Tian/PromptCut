@@ -1253,12 +1253,21 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
           if (!isCurrent()) return;
           void renew().catch(error => { if (error instanceof AccountFailure && (error.status === 401 || error.status === 403)) fail(error); });
           void life.tick();
-        }, 3000);
+        }, 3000);
         cur.offs.push(() => clearInterval(metadataTimer));
+        // 页面回到前台、网络恢复、电脑睡眠醒来:不等定时器(后台标签页的定时器会被浏览器压到一分钟一次),当场看一眼连接到期没有
+        const wake = () => { if (isCurrent() && (typeof document === "undefined" || document.visibilityState !== "hidden")) void life.tick(); };
+        if (typeof window !== "undefined") {
+          window.addEventListener("online", wake); window.addEventListener("focus", wake); window.addEventListener("pageshow", wake);
+          document.addEventListener("visibilitychange", wake);
+          cur.offs.push(() => { window.removeEventListener("online", wake); window.removeEventListener("focus", wake); window.removeEventListener("pageshow", wake); document.removeEventListener("visibilitychange", wake); });
+        }
       }
       await connectSharedAssets(link, base, { online: ONLINE_BUILD || ONLINE, account: { base: `${origin}/media/api/asset`, projectId: options.projectId, ticket } });
       link.send({ type: 'events.list' });
       ready = true; resolveEntry();
+      // 成员名字(提示气泡里「谁改的」)进来就取一次,之后成员有变化再取
+      projectSession(current);
       const linkText = `${origin}/editor?project=${encodeURIComponent(options.projectId)}`;
       pushToast('已进入云端项目，可以将项目链接发给另一位已登录成员。', 'info', Infinity, {
         label: '复制项目链接', pc: 'cloud-project-copy', run: () => { void navigator.clipboard.writeText(linkText).then(

@@ -40,7 +40,7 @@ import { randomUUID } from 'node:crypto';
 import WS from 'ws';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startAccountDualUserFixture } from './account-dual-user-path-probe.mjs';
-import { ASSET_API_PREFIX, MEDIA_COOKIE, MEDIA_S_PREFIX, cookieValue, editorSecurityHeaders, mediaGrantCookie, mediaGrantCorsHeaders, mediaSRoute, stageSecurityHeaders } from '../../src/online/stagePolicy.mjs';
+import { editorSecurityHeaders, mediaSRoute, stageSecurityHeaders } from '../../src/online/stagePolicy.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -266,13 +266,6 @@ function staticHandler(stage) {
  * 舞台源(与 `scripts/probes/lib/hosted-proxy.mjs` 的舞台角色同样的路由,判定取自 `src/online/stagePolicy.mjs`):
  * 舞台自检用的两条、`/media-s/<sid>/…`(票据交接成 HttpOnly cookie、再换成 Authorization 头转给素材服务)、在线构建的静态文件。
  */
-/**
- * 舞台源认不认账号办法的素材票据。产品里(`stagePolicy.mjs` 的 `TICKET_PATTERN`,nginx 的舞台配置由它生成)只认旧票据的形状
- * `v1.<…>.<…>`,账号会话签发的素材票据是 43 个字符的随机串,交接被拒(400),在线页面因此不执行用户卡 —— 这是现状,不在这次改动的清单里。
- * 探针先按现状跑一遍记下来(`strict`),再把自己这两个舞台源放宽成也认 43 字符的票据(`widened`)看卡画不画得出来。
- */
-let stageTickets = 'strict';
-const ACCOUNT_TICKET = /^[A-Za-z0-9_-]{43}$/;
 function stageHandler(origin) {
   const fallback = staticHandler(true);
   return (req, res) => {
@@ -286,17 +279,6 @@ function stageHandler(origin) {
       req.pipe(up);
     };
     const route = mediaSRoute({ method: req.method, pathname: p, origin: req.headers.origin ?? null, authorization: req.headers.authorization ?? null, cookie: req.headers.cookie ?? null }, { editorOrigin: ORIGIN, secure: true });
-    if (route.kind === 'reject' && stageTickets === 'widened') {
-      const m = new RegExp(`^${MEDIA_S_PREFIX}/([^/]+)/(.*)$`).exec(p);
-      const bearer = /^Bearer[ \t]+(\S+)$/i.exec(String(req.headers.authorization ?? '').trim())?.[1] ?? '';
-      if (m && route.status === 400 && req.method === 'POST' && m[2] === '_grant' && req.headers.origin === ORIGIN && ACCOUNT_TICKET.test(bearer))
-        return end(204, { ...mediaGrantCorsHeaders(ORIGIN), 'set-cookie': mediaGrantCookie(m[1], bearer, { secure: true }), 'cache-control': 'no-store' });
-      const cookie = cookieValue(req.headers.cookie ?? null, MEDIA_COOKIE) ?? '';
-      if (m && route.status === 401 && ['GET', 'HEAD'].includes(req.method) && ACCOUNT_TICKET.test(cookie)) {
-        const headers = { ...req.headers, authorization: `Bearer ${cookie}` }; delete headers.cookie;
-        return forward(`${ASSET_API_PREFIX}/${m[2]}`, headers);
-      }
-    }
     if (route.kind === 'reject') { stageRejects.push({ status: route.status, path: p.replace(/[a-f0-9]{16,}/g, '…') }); return end(route.status); }
     if (route.kind === 'preflight' || route.kind === 'grant') return end(204, route.headers);
     if (route.kind === 'proxy') { const headers = { ...req.headers, authorization: route.authorization }; delete headers.cookie; return forward(route.path, headers); }
@@ -518,6 +500,8 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
       const missed = idA;
       await frozen.send('Page.setWebLifecycleState', { state: 'active' });
       L.sleep.wokeAt = since();
+      // 用户回到这个标签页(醒来的电脑上标签页回到前台);不这么做,后台标签页的定时器被浏览器压到一分钟一次
+      await pageC.bringToFront();
       const cdp = frozen; frozen = false;
       const t0 = Date.now();
       const caught = await waitFor(() => hasOnline(missed).then((v) => (v ? Date.now() : null)), 60_000, '在线页面醒来后追上睡着时别人的改动').catch(() => null);
@@ -590,8 +574,7 @@ try {
   check(agentBefore.bound === true && agentBefore.mode === 'local', '0-甲进账号项目前 Agent 服务端绑着本机项目', res.agentBefore);
 
   // ---------- 1 甲登录、建云端项目、进去;建卡、放片段
-  // 甲这个页面往项目里写的几步(放片段、生成声音)都赶在登录后 100 秒内做完:页面自己那条账号连接在访问令牌到期(120 秒)后写不进去,
-  // 那是页面连接的现状(不在这次改动范围里,本探针最后单独记一笔),不能让它搅进卡片源码同步的结论
+  // 甲这个页面往项目里写的几步(放片段、生成声音)排在前面做;页面连接过了访问令牌的 120 秒之后还写得进去,在后面「连接的寿命」一步单独核
   const accountA = await loginDesktop(pageA, fixture.accounts[0]);
   const aLoginAt = Date.now();
   const projectName = `账号卡片同步-${RUN}`;
@@ -740,18 +723,11 @@ try {
   say('online.entered');
   const cKnows = await waitFor(async () => { const d = await onlineDiag(pageC, CARD_ID); return d.cards?.includes(CARD_ID) && d.cards.includes(AGENT_CARD_ID) ? d : null; }, 60_000, '在线页面拿到两张卡的源码').catch(() => null);
   check(!!cKnows, '2-在线页面经自己的账号连接拿到两张卡的源码');
-  // 现状:舞台源只认旧票据的形状,账号票据交接被拒,在线页面不执行用户卡
-  const strict = await waitFor(async () => { const d = await onlineDiag(pageC, CARD_ID); return d.cardExec && d.cardExec.reason !== 'pending' ? d : null; }, 60_000, '在线页面的执行闸门出结果').catch(() => onlineDiag(pageC, CARD_ID));
-  res.onlineAsIs = { cardExec: strict?.cardExec ? { enabled: strict.cardExec.enabled, reason: strict.cardExec.reason } : null, run: strict?.run ?? null, drawn: !!(await stageHas(pageC, MARK('v1'))), grantRejects: stageRejects.filter((r) => r.path.endsWith('/_grant')).map((r) => r.status) };
-  say('observe.online-as-is', res.onlineAsIs);
-  await shot(pageC, '2-c-online-as-is');
-  // 把探针自己的舞台源放宽成也认账号票据,重进一次
-  stageTickets = 'widened';
-  await enterOnline({ login: false });
   const cStage1 = await waitFor(() => stageHas(pageC, MARK('v1')), 120_000, '在线页面的舞台画出 v1').catch(() => null);
-  if (!check(!!cStage1, '2-在线页面的舞台画出 v1(探针的舞台源放宽成也认账号票据之后)')) say('diag.online', await onlineDiag(pageC, CARD_ID));
+  if (!check(!!cStage1, '2-在线页面的舞台画出 v1')) say('diag.online', await onlineDiag(pageC, CARD_ID));
   res.onlineStage = cStage1 ? new URL(cStage1).origin : null;
-  res.onlineWidened = await onlineDiag(pageC, CARD_ID).then((d) => ({ cardExec: d.cardExec ? { enabled: d.cardExec.enabled, reason: d.cardExec.reason } : null, run: d.run ?? null }));
+  res.online = await onlineDiag(pageC, CARD_ID).then((d) => ({ cardExec: d.cardExec ? { enabled: d.cardExec.enabled, reason: d.cardExec.reason } : null, run: d.run ?? null, grantRejects: stageRejects.filter((r) => r.path.endsWith('/_grant')).map((r) => r.status) }));
+  check(res.online.cardExec?.enabled === true && res.online.run?.state === 'ready' && res.online.grantRejects.length === 0, '2-在线页面的执行闸门开着(舞台源收下账号办法的素材票据)', res.online);
   await shot(pageC, '2-c-online-v1');
   if (STOP_AFTER <= 2.5) throw new Error('stop-after 2.5');
 
@@ -773,12 +749,13 @@ try {
   check(await P(pageB, () => window.__pcSyncTest.view().kind) === 'shared', '3-乙仍在账号项目里');
   const bStatus2 = await cardStatus(B);
   res.bNotices = (bStatus2.notices ?? []).filter((n) => n.key === CARD_REL).map((n) => ({ type: n.type, rev: n.rev, byAccount: n.actor?.accountId === accountA ? '甲' : n.actor?.accountId === accountB ? '乙' : null, role: n.actor?.role ?? null }));
-  check(res.bNotices.some((n) => n.type === 'installed' && n.rev === 2 && n.byAccount === '甲' && n.role === 'page'), '3-乙装上的 rev 2 是甲写的、角色 page', res.bNotices);
+  // 版本号不写死:甲建卡时「保存」与「项目用到」两路可能各传一次(原有行为),第一版可能是 rev 1 也可能是 rev 2
+  check(res.bNotices.some((n) => n.type === 'installed' && n.rev === bStatus2.records?.[CARD_REL]?.rev && n.rev > res.bRecordV1.rev && n.byAccount === '甲' && n.role === 'page'), '3-乙装上的新版本是甲写的、角色 page', res.bNotices);
   await dismissDialogs(pageB);
   await shot(pageB, '3-b-desktop-v2');
   const cStage2 = await waitFor(() => stageHas(pageC, MARK('v2')), 60_000, '在线页面的舞台画出 v2').catch(() => null);
   res.onlineV2 = !!cStage2;
-  check(res.onlineV2, '3-在线页面也换成 v2(舞台源放宽之后)');
+  check(res.onlineV2, '3-在线页面也换成 v2');
   await shot(pageC, '3-c-online-v2');
 
   // ---------- 连接的寿命:到这里甲、乙的编辑器进程都过了访问令牌的 120 秒
@@ -791,7 +768,7 @@ try {
     if (!edit25.ok) throw new Error(`甲改卡失败:${edit25.error}`);
     const late = await waitFor(() => (overrideOf(B, CARD_REL)?.includes(MARK('v2b')) ? true : null), 30_000, '过了 120 秒之后乙照常装上').catch(() => null);
     check(!!late, '寿命-登录 150 秒之后甲改卡,乙照常装上');
-    // 现状记录(不计入通过与否):页面自己那条账号连接过了 120 秒之后还写不写得进项目
+    // 页面自己那条账号连接过了 120 秒之后还写得进项目(到期前换过会话)
     const serverRev = async () => { const t = await sessionOf(stateA, projectId); const m = await rawDoc(t.body.connectionTicket, { type: 'project.open', projectId }); return m.rev ?? null; };
     const revBefore = await serverRev();
     const mark = await P(pageA, async () => { const S = await import('/src/store/project.ts'); const c = S.actions.addCardClip('av-pulse', 30, { duration: 1 }); return c?.id ?? null; });
@@ -803,7 +780,7 @@ try {
         rejectedToast: /没被文档服务接受\(([^)]*)\)/.exec(toasts)?.[1] ?? null };
     }, mark).catch(() => null);
     res.pageWriteAfterExpiry = { secondsSinceLogin: Math.round((Date.now() - aLoginAt) / 1000), deliveredToB: !!seen, serverRevBefore: revBefore, serverRevAfter: await serverRev(), a: aSide };
-    say('observe.page-write-after-expiry', res.pageWriteAfterExpiry);
+    check(res.pageWriteAfterExpiry.deliveredToB && res.pageWriteAfterExpiry.serverRevAfter > revBefore, '寿命-登录 150 秒之后甲在页面里放片段,乙看得到,服务端版本前进(原问题:版本 10 → 10)', res.pageWriteAfterExpiry);
   }
 
   // ---------- 6 乙改成只读
@@ -813,6 +790,7 @@ try {
     await waitFor(async () => (await sessionOf(stateB, projectId)).body?.access === 'r', 15_000, '乙的会话变成只读');
     await waitFor(async () => { const s = await cardStatus(B); return s.projectId === projectId && s.connected; }, 90_000, '乙的同步在只读下重新连上');
     const logMark = B.proc.text().length;
+    const revBeforeB = (await cardStatus(A)).records?.[CARD_REL]?.rev ?? null;
     const editB = await postJson(`${B.origin}/api/cards/edit`, { id: CARD_ID, find: MARK('v2b'), replace: MARK('v3') });
     if (!editB.ok) throw new Error(`乙改卡失败:${editB.error}`);
     // 权限一变服务端先把乙的连接关一次,第一下上传可能撞在断线上(disconnected);重连之后补传才轮到闸来拒
@@ -823,7 +801,7 @@ try {
     await sleep(1500);
     const s = await sessionOf(stateA, projectId);
     const lib = await rawDoc(s.body.connectionTicket, { type: 'content.get', kind: 'card-source', key: CARD_REL });
-    check(lib.rev === 3 && String(lib.body).includes(MARK('v2b')), '6-内容库仍是甲的版本', { rev: lib.rev });
+    check(lib.rev === revBeforeB && String(lib.body).includes(MARK('v2b')), '6-内容库仍是甲的版本', { rev: lib.rev, before: revBeforeB });
     check((await cardSourceOf(A, CARD_ID))?.includes(MARK('v2b')), '6-甲那边没有被只读成员改动');
     const toRw = await admin(stateA, projectId, { op: 'set-list', members: [{ accountId: accountB, access: 'rw' }] });
     check(toRw.status === 200, '6-改回可写', { status: toRw.status });
@@ -846,9 +824,10 @@ try {
     check(res.bBlocked === 'kicked', '7-乙的页面知道自己被踢', res.bBlocked);
     const refusedB = await sessionOf(stateB, projectId);
     check(refusedB.status === 403 && refusedB.body?.code === 'banned', '7-乙再取会话被拒(403 banned)', { status: refusedB.status, code: refusedB.body?.code ?? null });
+    const revBeforeV4 = (await cardStatus(A)).records?.[CARD_REL]?.rev ?? 0;
     const editA = await postJson(`${A.origin}/api/cards/edit`, { id: CARD_ID, find: MARK('v3'), replace: MARK('v4') });
     if (!editA.ok) throw new Error(`甲改卡失败:${editA.error}`);
-    await waitFor(async () => { const s = await cardStatus(A); return s.records?.[CARD_REL]?.rev >= 5 && !s.pending.includes(CARD_REL); }, 30_000, '甲传上 v4');
+    await waitFor(async () => { const s = await cardStatus(A); return s.records?.[CARD_REL]?.rev > revBeforeV4 && !s.pending.includes(CARD_REL); }, 30_000, '甲传上 v4');
     await sleep(4000);
     check(overrideOf(B, CARD_REL)?.includes(MARK('v3')) && !overrideOf(B, CARD_REL)?.includes(MARK('v4')), '7-被踢之后的版本乙拿不到');
     const bAfter = await cardStatus(B);
