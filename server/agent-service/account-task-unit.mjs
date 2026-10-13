@@ -22,7 +22,7 @@ const posixAbsolute = value => typeof value === 'string' && path.posix.isAbsolut
  * @param {object} o
  * @param {string} o.slot 槽号（进单元名和说明）
  * @param {string} o.user 任务进程的系统用户（不能是 root）
- * @param {string} [o.group] 缺省同用户名
+ * @param {string} [o.group] 任务进程的组：任务用户和主服务用户共有的那个组（共用数据目录是它的）。缺省同用户名
  * @param {string} o.dir 这份检出在节点上的目录（里面有 server/）
  * @param {string} o.node node 可执行文件的绝对路径
  * @param {string} o.settingsFile root 入口给这个槽写设置的固定位置
@@ -42,7 +42,7 @@ export function renderTaskUnit({ slot, user, group = user, dir, node, settingsFi
   const values = { SLOT: slot, UNIT: unit, TASK_USER: user, TASK_GROUP: group, DIR: dir, NODE: node, SETTINGS_FILE: settingsFile, HEAP_MB: String(heapMb) };
   const text = template.replaceAll('\r\n', '\n').replace(/\{\{([A-Z_]+)\}\}/g, (whole, name) => (Object.hasOwn(values, name) ? values[name] : fail('task-unit-template')));
   // 发布器逐项核的那几样必须原样在：模板被改坏了宁可在这里就拒
-  for (const line of ['Restart=no', 'KillMode=control-group', 'Delegate=no', 'RemainAfterExit=yes', `User=${user}`])
+  for (const line of ['Restart=no', 'KillMode=control-group', 'Delegate=no', 'RemainAfterExit=yes', 'UMask=0007', `User=${user}`, `Group=${group}`])
     if (!text.split('\n').includes(line)) fail('task-unit-template');
   if (/^\s*Slice=/m.test(text) || /^\[Install\]/m.test(text)) fail('task-unit-template');
   return { unit, path: `/etc/systemd/system/${unit}`, text, sha256: createHash('sha256').update(text).digest('hex') };

@@ -127,7 +127,7 @@ test('任务槽的单元模板：占位符都填上，发布器逐项核的那�
   const unit = renderTaskUnit(options), lines = unit.text.split('\n');
   assert.equal(unit.unit, 'promptcut-agent-task-slot-a.service'); assert.equal(unit.path, '/etc/systemd/system/promptcut-agent-task-slot-a.service');
   assert.doesNotMatch(unit.text, /\{\{|\}\}|\r/); assert.match(unit.sha256, /^[a-f0-9]{64}$/);
-  for (const line of ['User=promptcut-agent-task', 'Group=promptcut-agent-task', 'Restart=no', 'KillMode=control-group', 'Delegate=no', 'RemainAfterExit=yes', 'KillSignal=SIGKILL',
+  for (const line of ['User=promptcut-agent-task', 'Group=promptcut-agent-task', 'UMask=0007', 'Restart=no', 'KillMode=control-group', 'Delegate=no', 'RemainAfterExit=yes', 'KillSignal=SIGKILL',
     'OOMPolicy=continue', 'Environment=PROMPTCUT_AGENT_WORKER_SETTINGS=/etc/promptcut/agent-slots/slot-a/worker-settings.json', 'WorkingDirectory=/opt/promptcut-render/current'])
     assert.ok(lines.includes(line), line);
   const exec = lines.find(line => line.startsWith('ExecStart='));
@@ -142,8 +142,17 @@ test('任务槽的单元模板：占位符都填上，发布器逐项核的那�
     { settingsFile: '/etc/a/../b.json' }, { settingsFile: '/etc/%h/x.json' }, { heapMb: 1 }, { unit: 'not-a-unit' }])
     assert.throws(() => renderTaskUnit({ ...options, ...bad }), { code: 'task-unit-arguments' }, JSON.stringify(bad));
   for (const broken of [template.replace(/^Restart=no$/m, 'Restart=always'), template.replace(/^KillMode=control-group$/m, 'KillMode=process'), `${template}Slice=system.slice\n`,
-    `${template}\n[Install]\nWantedBy=multi-user.target\n`, template.replace(/^RemainAfterExit=yes$/m, ''), template.replace(/^Delegate=no$/m, 'Delegate=yes'), template.replace('{{NODE}}', '{{UNKNOWN}}')])
+    `${template}\n[Install]\nWantedBy=multi-user.target\n`, template.replace(/^RemainAfterExit=yes$/m, ''), template.replace(/^Delegate=no$/m, 'Delegate=yes'), template.replace(/^UMask=0007$/m, ''), template.replace(/^Group=.*$/m, 'Group=root'), template.replace('{{NODE}}', '{{UNKNOWN}}')])
     assert.throws(() => renderTaskUnit({ ...options, template: broken }), { code: 'task-unit-template' });
+  // 主服务的单元模板：和任务进程不是同一个用户，同一个组，同一个 UMask（共用数据目录里谁建的目录另一个都写得进）
+  const master = fs.readFileSync(path.join(repo, 'server', 'hosted', 'deploy', 'systemd-promptcut-agent-master.service'), 'utf8').split(/\r?\n/);
+  for (const line of ['User={{MASTER_USER}}', 'Group={{SHARED_GROUP}}', 'UMask=0007', 'Restart=always', 'ExecStart={{NODE}} {{DIR}}/server/agent-service/main.mjs']) assert.ok(master.includes(line), line);
+  // root 入口的单元：常驻，退出了就拉起来（它不在，排着的消息没人去开）
+  const rootUnit = fs.readFileSync(path.join(repo, 'server', 'hosted', 'deploy', 'systemd-promptcut-agent-root.service'), 'utf8').split(/\r?\n/);
+  for (const line of ['User=root', 'Restart=always', 'StartLimitIntervalSec=0']) assert.ok(rootUnit.includes(line), line);
+  assert.equal(rootUnit.some(line => /^Restart=on-failure$/.test(line)), false);
+  const readme = fs.readFileSync(path.join(repo, 'server', 'hosted', 'deploy', 'README.md'), 'utf8');
+  assert.doesNotMatch(readme, /或两者用同一个用户/, '主服务和任务进程不许是同一个用户');
   assert.deepEqual(parseTaskUnitArguments(['--slot', 'slot-a', '--user', 'u', '--dir', '/d', '--node', '/n', '--settings', '/s', '--heap-mb', '512']),
     { slot: 'slot-a', user: 'u', dir: '/d', node: '/n', settingsFile: '/s', heapMb: 512 });
   for (const argv of [['--slot'], ['--slot', 'a', '--slot', 'b'], ['--unknown', 'x']]) assert.throws(() => parseTaskUnitArguments(argv), { code: 'task-unit-arguments' });

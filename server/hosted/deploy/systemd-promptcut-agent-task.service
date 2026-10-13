@@ -15,6 +15,9 @@ Description=PromptCut agent task slot {{SLOT}}
 Type=simple
 User={{TASK_USER}}
 Group={{TASK_GROUP}}
+# 共用数据目录是任务用户和主服务用户共有的那个组的(带 setgid):这里新建的目录和文件要组内可读写,
+# 主服务存进来的附件才接得上、主服务也才写得进任务进程建的对话目录。主服务的单元里有同一行。
+UMask=0007
 WorkingDirectory={{DIR}}
 Environment=NODE_ENV=production
 Environment=PROMPTCUT_AGENT_WORKER_SETTINGS={{SETTINGS_FILE}}

@@ -247,7 +247,7 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 
 文档服务那一侧要开对应的模式：`PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE` 指向一份配置（`doc-agent-run-scopes.example.json`）。
 
-模板与工具（都在本目录或 `server/agent-service/`）：`systemd-promptcut-agent-task.service`（任务槽单元，用 `account-task-unit.mjs` 填）、`systemd-promptcut-agent-root.service`、`agent-root.example.json`（root 入口的配置）、`doc-agent-run-scopes.example.json`、`agent-account.env.example`（主服务的环境变量）。
+模板与工具（都在本目录或 `server/agent-service/`）：`systemd-promptcut-agent-task.service`（任务槽单元，用 `account-task-unit.mjs` 填）、`systemd-promptcut-agent-master.service`（主服务）、`systemd-promptcut-agent-root.service`、`agent-root.example.json`（root 入口的配置）、`doc-agent-run-scopes.example.json`、`agent-account.env.example`（主服务的环境变量）。
 
 ### 身份与证书
 
@@ -272,9 +272,11 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 | `/etc/promptcut/agent-task/`（`task.key/.crt`、`identity.key/.crt`、`ca.crt`） | 目录 root 0755；两把私钥属任务用户 0600 | 任务进程 |
 | `/etc/promptcut/agent-master/`（`master.key/.crt`、`ca.crt`） | 私钥属主服务的用户 0600 | 主服务 |
 | `/var/lib/promptcut/agent-root/<槽>/` | root 0755，文件由发布器写成 0644 | root 入口写；文档服务的用户、任务用户只读。**新建时必须是空的** |
-| `/var/lib/promptcut/agent-shared/` | 属任务用户；主服务的用户要能写（同一个组加 2770，或两者用同一个用户） | 各代任务进程共用、长期保留：对话的模型历史、工作目录（含用户上传的附件）、用量流水、额度、模型配置 |
+| `/var/lib/promptcut/agent-shared/` | 属任务用户，组是**共用组**，`chmod 2770`（带 setgid，里面新建的东西都归这个组） | 各代任务进程共用、长期保留：对话的模型历史、工作目录（含用户上传的附件）、用量流水、额度、模型配置。主服务往里存附件，任务进程读它、也往同一个对话目录里写 |
 | `/var/lib/promptcut/agent-task-state/` | 属任务用户 0700 | 每一代自己的状态：`<槽>/epoch-<n>/`（本机事件日志等）。不会自动清，隔一段时间清掉早已关闭的代 |
 | `/var/lib/promptcut/agent/` | 属主服务的用户 0700 | 主服务自己的：事件库 `master-run-events.sqlite`、读取收口记录 |
+
+**主服务和任务进程必须是两个不同的用户**（主身份的私钥任务进程读不到；任务进程里跑的是模型驱动的工具）。两个用户都加进一个**共用组**（例如 `groupadd --system promptcut-agent`，`usermod -aG`），共用数据目录归这个组；两个单元都带 `UMask=0007`（模板里已经写了，任务槽单元的 `--group` 填共用组），这样谁新建的对话目录另一个都写得进。不带这一行的话，按缺省的 umask 建出来的目录组不可写：主服务先存了附件，任务进程就写不进那个对话的工作目录，反过来也一样。
 
 模型配置与额度要放在**共用数据目录**里（任务进程读的是那一份）：`PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent-shared node server/agent-service/set-key.mjs …`、`import-key.mjs`、`admin.mjs quota …` 都指到它，并保证任务用户读得到 `config/`。
 
@@ -282,15 +284,15 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 
 前提：账号、文档、素材三个服务已经按账号版跑着；代码检出（与渲染服务同一份）在 `DIR/current`。下面的「槽」以 `slot-a` 为例，多个槽每个重复第 3、4 步，身份口端口各用一个。
 
-1. 建任务用户与主服务用户（`useradd --system --no-create-home --shell /usr/sbin/nologin …`）、上表的目录、三张证书、文档服务的任务槽签名钥匙、主身份在服务登记表里的钥匙。
+1. 建任务用户、主服务用户（两个不同的用户，`useradd --system --no-create-home --shell /usr/sbin/nologin …`）和它们共有的组、上表的目录、三张证书、文档服务的任务槽签名钥匙、主身份在服务登记表里的钥匙。
 2. 先在节点上跑一遍自检（不碰现有服务）：`scripts/probes/account-root-entry-linux.mjs`，文件头写了怎么拷、怎么跑、期望输出。它过了再往下。
 3. 填任务槽单元：
-   `node server/agent-service/account-task-unit.mjs --slot slot-a --user <任务用户> --dir DIR/current --node "$(command -v node)" --settings /etc/promptcut/agent-slots/slot-a/worker-settings.json --out /etc/systemd/system/promptcut-agent-task-slot-a.service`，
+   `node server/agent-service/account-task-unit.mjs --slot slot-a --user <任务用户> --group <共用组> --dir DIR/current --node "$(command -v node)" --settings /etc/promptcut/agent-slots/slot-a/worker-settings.json --out /etc/systemd/system/promptcut-agent-task-slot-a.service`，
    记下它打印的 `sha256`；`systemctl daemon-reload`。**不要** `enable`、不要手工 `start`。
 4. 写 root 入口的配置 `/etc/promptcut/agent-root/agent-root.json`（照 `agent-root.example.json`）：`expected.uid` 是任务用户的 uid；`expected.authorityId` 每次重新初始化都要换一个没用过的（见下「节点重启以后」）；`unitFragment.sha256` 填上一步的；`configuredAnchorDigest` 先写 `null`。
 5. 初始化各槽：`node server/agent-service/account-root-main.mjs --config /etc/promptcut/agent-root/agent-root.json --bootstrap`。每个槽打印一行 `root.slot.bootstrap { slotId, anchorDigest, epoch: 1, phase: "closed" }`。它会真的把任务槽单元起一次再关掉，所以这一步也验了单元、证书、目录权限。把 `anchorDigest` 填回配置里这个槽的 `configuredAnchorDigest`。
 6. 写文档服务的任务槽配置（照 `doc-agent-run-scopes.example.json`，`expected` 与 root 入口配置里的逐字相同、`configuredAnchorDigest` 同上一步），文档服务的环境里加 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE=<这份文件>`，按「重启托管服务前先确认没有正在写入的客户端」的规矩重启文档服务。配置不对它会拒绝启动（`config.error agent-run-scopes`）。
-7. 起 Agent 主服务（环境变量见 `agent-account.env.example`）。看到 `agent.master.registered` 与 `agent.ready { taskProcesses: true }`；`curl -s http://127.0.0.1:8790/healthz` 里 `taskProcesses: true, scheduler: false`（root 入口还没起）。缺配置它会拒绝启动并说缺哪一样（`config.error account-task-processes`）。
+7. 起 Agent 主服务：照 `agent-account.env.example` 写环境文件，放好 `systemd-promptcut-agent-master.service`（`User` 是主服务用户、`Group` 是共用组），`systemctl daemon-reload && systemctl enable --now promptcut-agent`。文档服务这时不在它会等着（日志里隔两秒一行 `agent.master.pending`），不会退出。看到 `agent.master.registered` 与 `agent.ready { taskProcesses: true }`；`curl -s http://127.0.0.1:8790/healthz` 里 `taskProcesses: true, scheduler: false`（root 入口还没起）。缺配置它会拒绝启动并说缺哪一样（`config.error account-task-processes`）。
 8. 放好 `systemd-promptcut-agent-root.service`，`systemctl daemon-reload && systemctl enable --now promptcut-agent-root`。看到 `root.ready`；`/healthz` 的 `scheduler` 变成 `true`。
 9. 用模拟模型发一条云端对话验一遍（`set-key.mjs --mock`，数据目录指共用目录）：消息做完、同一对话的第二条接着做、点「停止」任务被中断。
 
