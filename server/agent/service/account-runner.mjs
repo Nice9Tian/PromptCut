@@ -536,7 +536,8 @@ export function createAccountRunnerService({ conversationClient, runClient, read
     const preflight = runnerFactory ? async () => true : async () => modelReady(await runnerOptions.modelConfig());
     const manager = createAccountRunManager({ runClient, readIntents, runnerFactory: factory, preflight, serviceKid, instanceId,
       runEvents, resources, connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, now, log });
-    const base = createAccountConversationService({ conversationClient, now });
+    const base = createAccountConversationService({ conversationClient, now,
+      usageDir: typeof runnerOptions.dataDir === 'string' && runnerOptions.dataDir ? path.join(runnerOptions.dataDir, 'usage') : null });
     return { ...base, runManager: manager, runEvents,
       // `/healthz` 据此报看画面接没接：只有真实运行器、并且给了看画面的客户端才算
       look: !runnerFactory && !!runnerOptions.look,

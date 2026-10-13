@@ -225,8 +225,10 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     if (pathname === '/v1/info' && req.method === 'GET') return sendJson(res, 200, { ok: true, ...await service.info(identity) }, CORS);
     if (pathname === '/v1/conversations' && req.method === 'GET') return sendJson(res, 200, { ok: true,
       items: await service.conversations(identity) }, CORS);
-    if (pathname === '/v1/usage' && req.method === 'GET') return sendJson(res, 200, { ok: true,
-      ...await service.usage(identity) }, CORS);
+    if (pathname === '/v1/usage' && req.method === 'GET') {
+      const since = Number(url.searchParams.get('since'));
+      return sendJson(res, 200, { ok: true, ...await service.usage(identity, Number.isFinite(since) && since > 0 ? since : null) }, CORS);
+    }
     const one = /^\/v1\/conversations\/([^/]+)$/.exec(pathname);
     if (one) {
       const conversationId = decodeURIComponent(one[1]);
