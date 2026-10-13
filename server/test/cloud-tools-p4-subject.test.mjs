@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { makeP4Fixture, tmpDir, projectId } from './cloud-tools-p4-fixture.mjs';
+import { makeP4Fixture, loadTestKernel, tmpDir, projectId } from './cloud-tools-p4-fixture.mjs';
 import { readSubjectConfig, SUBJECT_TOOL_NAMES, SubjectToolError, createSubjectTools } from '../agent/service/perception/subject.mjs';
 
 const stubPath = fileURLToPath(new URL('./fixtures/subject-stub.mjs', import.meta.url));
@@ -70,6 +70,13 @@ test('工具名与表里 P4 一行一致;配置读取只认绝对路径', () => 
 
 test('依赖没给齐,工厂直接拒绝(不静默降级)', () => {
   assert.throws(() => createSubjectTools({}), (e) => e instanceof SubjectToolError && e.code === 'subject-unconfigured');
+});
+
+test('没注入内核函数(宿主没经 ssr-host 载入缝取来):工厂直接拒绝并说「没配置全」,不去直接 import src/', async (t) => {
+  const fx = await makeP4Fixture(t, { config: null });
+  const deps = { config: null, resources: fx.resources, assets: fx.assets, jobs: fx.jobs, workspace: async () => fx.ws, project: fx.project };
+  assert.throws(() => createSubjectTools(deps), (e) => e.code === 'subject-unconfigured' && /没配置全/.test(e.message));
+  assert.throws(() => createSubjectTools({ ...deps, kernel: { MAX_SUBJECT_TIMES: 200 } }), (e) => /没配置全.*subjectSampleTimes/.test(e.message));
 });
 
 test('没配主体识别的节点:四个工具如实说明,不起作业', async (t) => {
@@ -482,7 +489,7 @@ test('subject_install:失败有原因;给了出网闸时 pip 只走它的代理�
   const egress = { async startProxy() { proxy.started += 1; return { url: 'http://127.0.0.1:1', async close() { proxy.closed += 1; } }; } };
   const fx = await makeP4Fixture(t, { config: cfg });
   // 用带出网闸的工具实例(同一底座)
-  const tools = createSubjectTools({ config: cfg, resources: fx.resources, assets: fx.assets, jobs: fx.jobs, workspace: async () => fx.ws, project: fx.project, egress });
+  const tools = createSubjectTools({ config: cfg, resources: fx.resources, assets: fx.assets, jobs: fx.jobs, workspace: async () => fx.ws, project: fx.project, kernel: await loadTestKernel(), egress });
   const started = await tools.call('subject_install', {}, fx.context);
   await until(async () => (await ledger(fx, started.jobId)).state === 'error', 15000, 'install error');
   const row = await ledger(fx, started.jobId);
@@ -499,11 +506,11 @@ test('subject_install:失败有原因;给了出网闸时 pip 只走它的代理�
   const hang = path.join(reqDir, 'hang.txt');
   fs.writeFileSync(hang, 'hang');
   const cfg2 = { ...cfg, install: { ...cfg.install, requirements: hang } };
-  const tools2 = createSubjectTools({ config: cfg2, resources: fx.resources, assets: fx.assets, jobs: fx.jobs, workspace: async () => fx.ws, project: fx.project, limits: { installMs: 500 } });
+  const tools2 = createSubjectTools({ config: cfg2, resources: fx.resources, assets: fx.assets, jobs: fx.jobs, workspace: async () => fx.ws, project: fx.project, kernel: await loadTestKernel(), limits: { installMs: 500 } });
   const s2 = await tools2.call('subject_install', {}, fx.context);
   await until(async () => (await ledger(fx, s2.jobId)).state === 'error', 15000, 'install timeout');
   assert.equal((await ledger(fx, s2.jobId)).errorCode, 'SUBJECT_TIMEOUT');
-  const tools3 = createSubjectTools({ config: cfg2, resources: fx.resources, assets: fx.assets, jobs: fx.jobs, workspace: async () => fx.ws, project: fx.project });
+  const tools3 = createSubjectTools({ config: cfg2, resources: fx.resources, assets: fx.assets, jobs: fx.jobs, workspace: async () => fx.ws, project: fx.project, kernel: await loadTestKernel() });
   const s3 = await tools3.call('subject_install', {}, fx.context);
   await until(() => fx.readConfigCalls().filter((c) => c.sub === 'install').length >= 3, 10000, 'third install started');
   const receipt = await tools3.close('shutdown');

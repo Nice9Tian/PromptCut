@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { AgentServiceError } from './create-agent-service.mjs';
+import { queryUsage } from './usage.mjs';
 
 const translated = error => {
   if (error instanceof AgentServiceError) return error;
@@ -17,7 +18,7 @@ const requireIdentity = identity => {
 /** Account-v2 HTTP surface. It relies on doc mTLS for every read and write. Runs stay queued
  * until the run-authority/read-intent executor is mounted; this module never fabricates ACKs.
  */
-export function createAccountConversationService({ conversationClient, now = Date.now } = {}) {
+export function createAccountConversationService({ conversationClient, usageDir = null, now = Date.now } = {}) {
   if (!conversationClient || ['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename']
     .some(name => typeof conversationClient[name] !== 'function')) throw new AgentServiceError('conversation-unavailable', 'doc conversation client is required', 503);
   const call = async (fn, identity, conversationId, fields = {}) => {
@@ -43,7 +44,23 @@ export function createAccountConversationService({ conversationClient, now = Dat
     rename: (identity, conversationId, title) => call('rename', identity, conversationId, { title }),
     abort: (identity, conversationId, runId, requestId = randomUUID()) => call('stop', identity, conversationId, { runId, requestId }),
     async info(identity) { await call('identity', identity); return { enabled: true, accountMode: true, executorMounted: false, running: [] }; },
-    async usage(identity) { await call('identity', identity); throw new AgentServiceError('usage-unavailable', 'usage authority is not mounted', 503); },
+    /** 本项目的用量(契约第 6.3 节:项目内的成员可查总量与各成员、各模型的量)。身份由文档服务按账号核对:
+     * `identity` 对不上这个项目的成员(没登录、不是成员、被踢)就在这里抛错,不回任何数字;只回自己项目的流水。
+     * 没挂用量目录(没有执行器)仍然回 503,不编造零。成员只给显示名,不给账号编号。 */
+    async usage(identity, since = null) {
+      await call('identity', identity);
+      if (typeof usageDir !== 'string' || !usageDir) throw new AgentServiceError('usage-unavailable', 'usage authority is not mounted', 503);
+      const q = queryUsage(usageDir, { projectId: identity.projectId, since: Number.isFinite(since) && since > 0 ? since : null });
+      const p = q.projects[identity.projectId];
+      const people = (members, pick) => Object.entries(members ?? {}).map(([userId, m]) => ({ username: m.username || '', ...pick(m) }));
+      return {
+        project: { tokens: p?.tokens ?? 0, calls: p?.calls ?? 0, input: p?.input ?? 0, output: p?.output ?? 0 },
+        members: people(p?.members, m => ({ tokens: m.tokens, calls: m.calls })),
+        models: Object.entries(p?.models ?? {}).map(([model, m]) => ({ model, tokens: m.tokens, calls: m.calls })),
+        services: Object.entries(p?.services ?? {}).map(([key, sv]) => ({ service: key.split('/')[0], vendor: key.split('/').slice(1).join('/'),
+          calls: sv.calls, units: sv.units, unit: sv.unit, members: people(sv.members, m => ({ calls: m.calls, units: m.units })) })),
+      };
+    },
     async attach(identity) { await call('identity', identity); throw new AgentServiceError('attachment-unavailable', 'attachment authority is not mounted', 503); },
     async pageResult(identity) { await call('identity', identity); throw new AgentServiceError('run-unavailable', 'run authority is not mounted', 503); },
     async remove(identity) { await call('identity', identity); throw new AgentServiceError('deletion-pending', 'conversation deletion policy is pending', 503); },
