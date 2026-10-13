@@ -225,7 +225,8 @@ const PYTHON_ERROR_CODE = {
 /** 这些错误码说明任务的授权或 fence 变了:作业记成「随任务取消」,不当成追踪自己失败 */
 const CANCEL_CODES = new Set(['run-resource-fenced', 'run-resource-unauthorized', 'forbidden', 'fence-rejected', 'fence-changed', 'job-scope-mismatch']);
 
-const JOB_ERROR_MESSAGE = {
+/** 作业错误码 → 给模型看的话。导出给「后台作业状态」(`hosted-workflow.mjs` 的 `errorTexts`)用,两处说的是同一句 */
+export const TRACK_ERROR_TEXT = Object.freeze({
   TRACK_TIMEOUT: '这次追踪超过了时限,已被停掉。请减少点数或把素材剪短后再追。',
   TRACK_TOO_LONG: '素材太长,超出这台节点一次能追的帧数。请先把素材剪短再追。',
   TRACK_ENGINE_UNAVAILABLE: '这台节点上追踪用的 Python 运行环境不可用(缺 numpy 或 ffmpeg)。请告诉用户联系托管方。',
@@ -240,7 +241,8 @@ const JOB_ERROR_MESSAGE = {
   RUN_CANCELLED: '这次追踪随任务一起被取消了。',
   FENCE_CANCELLED: '这次追踪随任务一起被取消了。',
   TRACK_INSTALL_FAILED: '拓展安装失败。',
-};
+});
+const JOB_ERROR_MESSAGE = TRACK_ERROR_TEXT;
 
 const errorMessageOf = (code) => JOB_ERROR_MESSAGE[code] ?? `追踪失败(${code})。`;
 

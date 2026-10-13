@@ -212,8 +212,11 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
   try {
     const at = Number(now());
     if (!Number.isSafeInteger(at) || at < 0) fail('bad-clock');
+    // 排着的(queued)和在跑的(running)都是上一个进程里的事:这个进程里没有任何东西会去做它,两种都如实标成被中断。
+    // 被中断是终态:这一行不会再动。要重做就重新发起一次(新的一次工具调用,请求号不同,得到新作业;各工具包都按「已中断的可以重新发起」处理),
+    // 不会凭一行排着的记录一直等下去。同一个请求号原样重发拿到的仍是这条被中断的记录,不会悄悄开第二份工。
     db.prepare(`UPDATE tool_jobs SET state='interrupted', revision=revision+1,
-      error_code='INTERRUPTED_ON_RESTART', updated_at=? WHERE state='running'`).run(at);
+      error_code='INTERRUPTED_ON_RESTART', updated_at=? WHERE state IN ('queued','running')`).run(at);
     db.exec('COMMIT;');
   } catch (error) {
     db.exec('ROLLBACK;');
@@ -393,6 +396,24 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
         if (!row) fail('job-not-found');
         return row;
       }));
+    },
+
+    /** 这一轮名下还没结束的作业(排着的、在跑的)。宿主在一轮收尾前据此等后台作业做完;只看这一轮自己的。 */
+    active(contextValue) {
+      const context = canonicalContext(contextValue);
+      return enqueue(() => authorizedRead(context, () => db.prepare(
+        `SELECT job_id, kind, state FROM tool_jobs WHERE ${contextWhere()} AND state IN ('queued','running') ORDER BY created_at`)
+        .all(...contextColumns(context)).map((row) => ({ jobId: row.job_id, kind: row.kind, state: row.state }))));
+    },
+
+    /**
+     * 这一轮名下还没结束的作业有几个。只给宿主自己数(一轮收尾前等后台作业用):不出这个进程、不带作业的任何内容,
+     * 所以这里不向文档服务问授权;这一轮还算不算数由宿主按它自己的节奏另核(`account-tools.mjs` 的 `settle`)。
+     */
+    pending(contextValue) {
+      const context = canonicalContext(contextValue);
+      return enqueue(() => Number(db.prepare(
+        `SELECT COUNT(*) AS n FROM tool_jobs WHERE ${contextWhere()} AND state IN ('queued','running')`).get(...contextColumns(context))?.n ?? 0));
     },
 
     cancelForFence(contextValue, fenceRevisionValue) {

@@ -9,6 +9,8 @@ import { exactScope, validateAgentScopeExpected, validateAgentScopeRecord,
   validateAgentScopeAssignment, validateAgentScopeTerminal } from '../../hosted/agent-run-scope-schema.mjs';
 import { WORKER_EVENT_PROOF_HEADER, workerEventRequest, workerEventProofPayload,
   workerEventTlsBinding } from '../../agent-service/worker-event-internal.mjs';
+import { WORKER_PAGE_PROOF_HEADER, WORKER_PAGE_BINDING_FIELDS, workerPageRequest, workerPageProofPayload,
+  workerPageTlsBinding } from '../../agent-service/worker-page-internal.mjs';
 
 const fail = code => { throw accountError(503, code); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -289,8 +291,33 @@ export function createAgentInstanceSession({ requestRegistration, scopePrepareSo
     return { name: WORKER_EVENT_PROOF_HEADER, value: Buffer.from(JSON.stringify({ v: 1, nonce,
       signature: signatureOf(payload) })).toString('base64url') };
   }
+  /**
+   * 「向发起人的页面要一件事」的内部请求(`worker-page-internal.mjs`)的信封:权威号、root 的槽与代、任务绑定的摘要、任务的八个字段
+   * 都由这里按**已经绑定的任务范围**填,调用方只给请求号与请求内容,改不了这条请求算在哪条任务名下。
+   */
+  function workerPageEnvelopeFor({ requestId, request }) {
+    if (closed || !registered) fail('instance-not-registered');
+    if (registered.purpose === 'control-only' || !boundScope) fail('instance-scope-unbound');
+    const scope = boundScope, target = scope.assignment.target;
+    return { v: 1, authorityId: registered.authorityId, rootScopeRef: rootRefOf(scope), assignmentDigest: digestOf(scope.assignment),
+      binding: Object.fromEntries(WORKER_PAGE_BINDING_FIELDS.map(k => [k, target[k]])), requestId, request: structuredClone(request) };
+  }
+  /** 给上面那条内部请求签名:和交事件同一把进程内存里的钥匙,签进这条 TLS 连接的导出值与一次性随机数。 */
+  function workerPageProofFor({ socket, envelope, bodyText, nonce }) {
+    if (closed || !registered) fail('instance-not-registered');
+    if (registered.purpose === 'control-only' || !boundScope) fail('instance-scope-unbound');
+    const scope = boundScope, request = workerPageRequest({ body: envelope, bodyText });
+    const e = request.envelope, target = scope.assignment.target;
+    if (e.authorityId !== registered.authorityId || canonicalJson(e.rootScopeRef) !== canonicalJson(rootRefOf(scope)) ||
+        e.assignmentDigest !== digestOf(scope.assignment) ||
+        WORKER_PAGE_BINDING_FIELDS.some(k => e.binding[k] !== target[k])) fail('instance-worker-page-binding');
+    const payload = workerPageProofPayload({ request, channelBinding: workerPageTlsBinding(socket), nonce });
+    return { name: WORKER_PAGE_PROOF_HEADER, value: Buffer.from(JSON.stringify({ v: 1, nonce,
+      signature: signatureOf(payload) })).toString('base64url') };
+  }
   return { register, proofFor, dataProofFor, runAssetIssueProofFor, runAssetHttpProofFor, conversationControlProofFor,
     scopeIdentity, configureRegistrationScope, bindScope, scopePrepareFor, scopeIntentFor, workerEventProofFor,
+    workerPageEnvelopeFor, workerPageProofFor,
     identity: () => registered ? { ...registered } : null,
     close() { closed = true; registered = null; challenge = null; boundScope = null; prepared = null; registrationScope = null; } };
 }

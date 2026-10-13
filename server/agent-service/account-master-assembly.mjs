@@ -10,6 +10,11 @@
  *        - 槽调度来问「哪些对话在排队、哪些任务要强制关」「这一条强制终态」（只认 root 那张证书；主服务原样转问文档服务，
  *          回来的终态是文档服务签的，root 的发布器自己验签，主服务改不了）；
  *   4. 用户上传的附件：存进**各代任务进程共用**的数据目录里这个对话的工作目录（任务进程的工具从那里读）。
+ *   5. 发起人页面的反向通道的登记表（`page-bridge.mjs`：哪张页面在线、哪条请求在等、请求的状态落盘）。页面的事件流与交回请求
+ *      都落在这个进程；工具在任务进程里跑，它经内部口上的另一类请求（`worker-page-internal.mjs`，鉴权与交事件同一套）来问，
+ *      这里等发起页交回再答。主服务重启时在等的请求在登记表里标成被中断，任务进程那一头得到的是连接断开，按「发起人不在线」收。
+ *   6. 对话转私有时把这个对话的云端浏览器数据清掉（浏览器在任务进程里跑，数据目录在共用数据目录里）：没有任务进程正占着就当场删，
+ *      有（发起人自己正在跑的那一轮被保留）就留一个记号，由那个任务进程在下一次网页操作前或收尾时清。
  *
  * 槽调度不在这个进程里。它有没有在问，这里记着（`schedulerAlive()`）：没有调度在问时消息仍然持久排队，
  * `GET /v1/info` 的 `executorMounted` 与 `/healthz` 如实报「没有」，不装作在执行。
@@ -25,6 +30,13 @@ import { createWorkspaces } from '../agent/service/workspace.mjs';
 import { createConversationPurger } from '../agent/service/conversation-purge.mjs';
 import { saveAttachment } from '../agent/service/hosted-tools.mjs';
 import { createWorkerEventInternalHandler, WORKER_EVENT_PATH } from './worker-event-internal.mjs';
+import { createWorkerPageInternalHandler, WORKER_PAGE_PATH } from './worker-page-internal.mjs';
+import { createPageBridge, PageBridgeError, BRIDGE_PAGE_ID_RE } from '../agent/service/page-bridge.mjs';
+import { collectPageTools } from '../agent/service/collect-bridge.mjs';
+import { hostedBrowserDir } from '../agent/service/hosted-browser.mjs';
+import { writeBrowserPurgeMark, removeMarkedBrowserData } from '../agent/service/account-tools.mjs';
+import { reapOrphan, OWNER_FILE } from '../web/hosted/session.mjs';
+import fs from 'node:fs';
 import { MASTER_SCHEDULER_PENDING_PATH, MASTER_SCHEDULER_CONTROL_PATH } from './account-master-scheduler-client.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
@@ -102,6 +114,133 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   eventStore = createAccountRunEvents({ file: path.join(dataDir, 'master-run-events.sqlite'), now, authorityId,
     verifyGrant: async () => { throw Object.assign(new Error('not-a-human-gate'), { status: 403 }); } });
 
+  // ---------- 发起人页面的反向通道（登记表在这个进程） ----------
+  // 这一轮的权威信息：向文档服务现问（主身份的 workerEventSource：任务还在、还是那一代进程；回的里面有发送者账号和发消息时的页面号）。
+  // 问的时候要带任务绑定的摘要：它来自任务进程那条已经验过签名的内部请求，只在那条请求还在办的时候留着。
+  const pageScopes = new Map();
+  const pageDenied = () => new PageBridgeError('run-access-denied', 403);
+  const pageAuthority = { signalFor: () => null,
+    async current(context) {
+      const scope = pageScopes.get(context.runGrantId);
+      if (!scope) throw pageDenied();
+      let source;
+      try { source = await runClient.workerEventSource({ projectId: context.projectId, runGrantId: context.runGrantId, assignmentDigest: scope.assignmentDigest }); }
+      catch (error) { if ([400, 401, 403, 404, 409].includes(error?.status)) throw pageDenied(); throw new PageBridgeError('run-authority-unavailable', 503); }
+      const grant = source?.runGrant;
+      if (source?.allowed !== true || !grant || ['projectId', 'conversationId', 'runId', 'runGrantId', 'messageId', 'instanceId', 'instanceGeneration'].some(k => grant[k] !== context[k]) ||
+          grant.accountId !== context.senderAccountId || !['active', 'retained'].includes(grant.state) ||
+          !Number.isSafeInteger(source.fenceRevision) || source.message?.messageId !== context.messageId || source.message?.senderAccountId !== grant.accountId) throw pageDenied();
+      const snapshot = source.message.selectionSnapshot;
+      let pageId = null;
+      if (snapshot !== null && snapshot !== undefined) {
+        if (typeof snapshot !== 'object' || snapshot.source !== 'sent-snapshot' || snapshot.projectId !== context.projectId || snapshot.accountId !== context.senderAccountId ||
+            typeof snapshot.pageId !== 'string' || !BRIDGE_PAGE_ID_RE.test(snapshot.pageId) ||
+            (snapshot.messageId !== undefined && snapshot.messageId !== context.messageId)) throw new PageBridgeError('run-page-binding-invalid', 403);
+        pageId = snapshot.pageId;
+      }
+      return { accountId: grant.accountId, pageId, fenceRevision: source.fenceRevision, grantState: grant.state };
+    } };
+  let pageBridge = null;
+  try {
+    pageBridge = createPageBridge({ databasePath: path.join(dataDir, 'page-requests.sqlite'), runAuthority: pageAuthority, now, log: say,
+      // 发起页此刻在不在文档服务的在场表里：任务进程用这一轮自己的数据连接问来的（随内部请求带过来）；发给谁仍只看文档服务给的账号与页面号
+      presence: async context => { const scope = pageScopes.get(context.runGrantId);
+        return { members: scope ? [{ accountId: context.senderAccountId, isInitiator: true, pages: scope.pages }] : [] }; },
+      // 交回的人此刻读不读得到这个对话：和事件流用的是同一个核对（凭他的委托票据问文档服务）
+      checkSubmitter: (identity, conversationId) => base.access(identity, conversationId, 'read'),
+      extraTools: collectPageTools() });
+  } catch (error) { await eventStore.close().catch(() => {}); throw Object.assign(new Error('account-master-page-bridge'), { status: 503, code: 'account-master-page-bridge', cause: error }); }
+  const pageHandler = createWorkerPageInternalHandler({ authorityId, resolveWorker: input => runClient.workerEventSource(input),
+    async onRequest({ context, envelope, signal }) {
+      const key = context.runGrantId, scope = pageScopes.get(key) ?? { uses: 0 };
+      scope.assignmentDigest = envelope.assignmentDigest; scope.pages = envelope.request.initiatorPages; scope.uses += 1; pageScopes.set(key, scope);
+      try {
+        const who = await pageBridge.initiator(context);
+        return await pageBridge.requestPage({ run: context, initiatorAccountId: who.initiatorAccountId, pageId: who.pageId,
+          tool: envelope.request.tool, args: envelope.request.args, requestId: envelope.requestId, deadline: now() + envelope.request.timeoutMs, signal });
+      } finally { scope.uses -= 1; if (scope.uses <= 0 && pageScopes.get(key) === scope) pageScopes.delete(key); }
+    } });
+
+  // ---------- 对话的云端浏览器数据（在共用数据目录里；浏览器进程在任务进程里） ----------
+  // 谁来清：一定删得动的是任务用户那一侧。生产上主服务和任务进程是两个系统用户、同在一个组里，浏览器在用户数据目录下建的
+  // 子目录只有属主进得去，主服务删不动。所以主服务做的是**留记号**（组内可读写，见 `account-tools.mjs` 的 `BROWSER_PURGE_MARK`），
+  // 然后顺手删一次：删得动就删（同一个用户的机器、测试），删不动不算错——那个对话的任务进程下次用浏览器之前照记号清，
+  // 别的对话的任务进程开工时也顺手清。
+  // 去留的规矩照网页操作那一包：对话转私有删（留清单版本的计数）、对话或项目被删全删；停止、Agent 被关只关浏览器进程，数据留着，不归这里管。
+  const purging = new Map();
+  const purgeAll = reason => ['conversation-deleted', 'project-deleted'].includes(reason);
+  /** 起这个目录里浏览器的那个任务进程还在不在（别的用户的进程也问得出来：没权限发信号同样说明它在） */
+  const ownerAlive = dir => {
+    let owner = null;
+    try { owner = JSON.parse(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8')); } catch { return false; }
+    const pid = owner?.servicePid;
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false;
+    try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
+  };
+  /**
+   * 给一个对话的浏览器数据留「要清」的记号，再尽力删一次。回 `{ existed, marked, removed, deferred, held }`：
+   * `removed` 删干净了；`deferred` 没删干净、留给任务用户那一侧照记号清；`held` 是因为有任务进程正占着。
+   */
+  function purgeBrowser(scope, reason) {
+    let dir;
+    try { dir = hostedBrowserDir(sharedDataDir, scope); } catch { return Promise.resolve({ existed: false, marked: false, removed: false, deferred: false, held: false }); }
+    const prior = purging.get(dir);
+    const work = (prior ?? Promise.resolve()).catch(() => {}).then(async () => {
+      if (!fs.existsSync(dir)) return { existed: false, marked: false, removed: false, deferred: false, held: false };
+      try { writeBrowserPurgeMark(dir, reason, now()); }
+      catch (error) {
+        // 记号都留不下（目录不是组内可写的）：数据清不了，也没法交给任务用户那一侧——如实记下，不装作清了
+        if (!fs.existsSync(dir)) return { existed: false, marked: false, removed: false, deferred: false, held: false };
+        say('agent.master.browser-purge', { reason, marked: false, code: typeof error?.code === 'string' ? error.code : 'error' });
+        return { existed: true, marked: false, removed: false, deferred: true, held: false };
+      }
+      if (ownerAlive(dir)) { say('agent.master.browser-purge', { reason, deferred: true, held: true }); return { existed: true, marked: true, removed: false, deferred: true, held: true }; }
+      let held = false, removed = false;
+      try {
+        const reaped = await reapOrphan(dir, { respectLiveOwner: true, timeoutMs: 1_500 });
+        held = reaped.liveOwner === true || reaped.stillHeld === true;
+        // 尽力而为：删不动的（属主才进得去的子目录）很快就知道，不在这里久等
+        if (!held) removed = await removeMarkedBrowserData(dir, { all: purgeAll(reason), timeoutMs: 1_500 });
+      } catch { removed = false; }
+      say('agent.master.browser-purge', { reason, removed, ...(removed ? {} : { deferred: true, held }) });
+      return { existed: true, marked: true, removed, deferred: !removed, held };
+    });
+    purging.set(dir, work);
+    void work.finally(() => { if (purging.get(dir) === work) purging.delete(dir); }).catch(() => {});
+    return work;
+  }
+  /**
+   * 清，清不成就隔一会儿再来：任务进程正占着的（那一轮正在被 root 关、或发起人自己的那一轮被保留着在跑）最多再试两分钟；
+   * 只是删不动的再试三次。到时仍没清掉的留给任务用户那一侧（记号已经留下）。回第一次尝试的结果。
+   */
+  function purgeBrowserEventually(scope, reason) {
+    const first = purgeBrowser(scope, reason);
+    void first.then(result => {
+      if (!result.deferred || !result.marked) return;
+      let left = result.held ? 60 : 3;
+      const again = () => {
+        if (stopped || left-- <= 0) return;
+        const timer = setTimeout(() => { void purgeBrowser(scope, reason).then(next => { if (next.deferred && next.marked) again(); }, () => {}); }, 2_000);
+        timer.unref?.();
+      };
+      again();
+    }, () => {});
+    return first;
+  }
+
+  /**
+   * 对话被删(文档服务确认删掉之后,`conversation-policy.mjs` 的 `onConversationDeleted`;重复删、对账补清都会再来,所以幂等)。
+   * 这个对话留在共用数据目录里的东西(对话目录连同作业账本、工作目录、云端浏览器目录)由清理器管(`conversation-purge.mjs`：
+   * 记进待清的单子、主服务尽力删、删不动的由任务用户一侧照单子清)。这里只多做一件：给浏览器目录留「要清」的记号——
+   * 万一这个对话还有一条任务的进程占着浏览器(删的时候正在被 root 关)，它自己收尾时照记号清。
+   * 进程不用在这里收：删的时候还在跑的任务已经被文档服务叫停、root 把整组进程(浏览器、感知子进程)关掉了。
+   */
+  async function conversationDeleted({ projectId, conversationId }) {
+    const scope = { projectId, conversationId };
+    try { await purgeBrowser(scope, 'conversation-deleted'); } catch { /* 留不下记号不挡删除:单子上已经有这个对话 */ }
+    await onConversationDeleted?.(scope);
+  }
+
   // ---------- 内部口 ----------
   const eventHandler = createWorkerEventInternalHandler({ eventStore, resolveWorker: input => runClient.workerEventSource(input) });
   const reply = (res, status, body) => { if (res.headersSent || res.destroyed) return;
@@ -132,6 +271,7 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     void (async () => {
       if (stopped) return reply(res, 503, { ok: false, code: 'master-unavailable' });
       if (req.url === WORKER_EVENT_PATH) { if (!await eventHandler(req, res)) reply(res, 404, { ok: false, code: 'no-route' }); return; }
+      if (req.url === WORKER_PAGE_PATH) { if (!await pageHandler(req, res)) reply(res, 404, { ok: false, code: 'no-route' }); return; }
       if (req.url === MASTER_SCHEDULER_PENDING_PATH || req.url === MASTER_SCHEDULER_CONTROL_PATH) return schedulerRoute(req, res);
       reply(res, 404, { ok: false, code: 'no-route' });
     })().catch(() => { try { res.destroy(); } catch { /* 已经关了 */ } });
@@ -139,17 +279,48 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(internalPort, internalHost, () => { server.off('error', reject); resolve(); }); });
-  } catch (error) { await eventStore.close().catch(() => {}); throw Object.assign(new Error('account-master-listen'), { status: 503, code: 'account-master-listen', cause: error }); }
+  } catch (error) { try { pageBridge.close('listen-failed'); } catch { /* 已经关了 */ } await eventStore.close().catch(() => {}); throw Object.assign(new Error('account-master-listen'), { status: 503, code: 'account-master-listen', cause: error }); }
 
   // ---------- 接待人的那一面 ----------
-  const base = createAccountConversationService({ conversationClient, now, deleteWaitMs: stopWaitMs, onConversationDeleted,
-    purger: createConversationPurger({ eventStore, sharedDataDir, log: say }) });
+  // 用量:任务进程把每次模型请求、每次外部服务与工具调用记在共用数据目录的 usage/ 下(`account-runner.mjs`),成员查用量读的就是那里。
+  // 主服务自己不跑任务、不写这份流水,只读。
+  const base = createAccountConversationService({ conversationClient, now, usageDir: path.join(sharedDataDir, 'usage'), deleteWaitMs: stopWaitMs, onConversationDeleted: conversationDeleted,
+    purger: createConversationPurger({ eventStore, sharedDataDir, log: say, now }) });
   const workspaces = createWorkspaces({ dataDir: sharedDataDir, limits: workspaceLimits, log: say });
   const workspaceFor = (identity, conversationId) => workspaces.open({ projectId: identity.projectId, conversationId,
     ownerKey: accountWorkspaceOwnerKey(identity.projectId, conversationId) });
   const mirror = (identity, conversationId) => eventStore.mirrorAccepted({ projectId: identity?.projectId, conversationId,
     read: () => base.conversation(identity, conversationId, 0) });
   const service = { ...base,
+    /** 页面的事件流挂上反向通道用（`http.mjs` 的 `accountEvents`）；只有这三样，登记表本身不外露 */
+    pageBridge: Object.freeze({ attach: input => pageBridge.attach(input) }),
+    /** 发起页交回一次请求的结果。身份是 HTTP 层核过委托票据的；发起人、页面号、一次性随机数、这一轮的授权在登记表里逐样重核 */
+    async pageResult(identity, conversationId, body) {
+      if (!identity || identity.accountMode !== true || typeof identity.accountId !== 'string' || !identity.accountId ||
+          typeof identity.projectId !== 'string' || !identity.projectId) throw new AgentServiceError('unauthorized', 'unauthorized', 401);
+      // 先核交的人此刻读得到这个对话(读不到、对话不存在:和读对话的接口一样的回法,不进登记表)。登记表里还会再核一次并对权限版本
+      await base.access(identity, conversationId, 'read');
+      try { return await pageBridge.acceptResult({ identity, conversationId, body }); }
+      catch (error) {
+        if (error instanceof PageBridgeError) throw new AgentServiceError(error.code, error.code, error.status);
+        throw error;
+      }
+    },
+    /** 转私有、转共有。转成私有以后把这个对话的云端浏览器数据清掉（能看这个对话的人换了一批，之前攒下的状态不带过去）。 */
+    async switchVisibility(identity, conversationId, visibility, requestId) {
+      let out, failure = null;
+      try { out = await base.switchVisibility(identity, conversationId, visibility, requestId); }
+      catch (error) { failure = error; }
+      // 文档服务回「还在办」（503 agent-fence-pending）时对话已经是私有的了，只是别人那一轮的进程还没被 root 关完：同样要清
+      if (visibility === 'private' && typeof identity?.projectId === 'string' && (!failure || failure.code === 'agent-fence-pending')) {
+        const first = purgeBrowserEventually({ projectId: identity.projectId, conversationId }, 'private');
+        if (!failure) { try { await first; } catch (error) { say('agent.master.browser-purge', { reason: 'private', code: error?.code ?? 'error' }); } }
+      }
+      if (failure) throw failure;
+      return out;
+    },
+    /** 这个对话的云端浏览器数据清掉（对话被删时调；账号模式的删对话接口本身还没有开放，这里先把收场备好） */
+    purgeConversationBrowser: (scope, reason = 'conversation-deleted') => purgeBrowserEventually(scope, reason),
     runEvents: eventStore,
     // 看画面由任务进程自己接（它的设置里写没写）；主服务不跑任务，这里如实是「没有」
     look: false,
@@ -216,6 +387,11 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
       }
     },
     async info(identity) { return { ...await base.info(identity), executorMounted: schedulerAlive() }; },
+    /** 用量。流水在但读不到（主服务和任务进程是两个用户，权限没配对；或盘出了问题）时照实回 503，日志里留下是哪一种读不到 */
+    async usage(identity, since) {
+      try { return await base.usage(identity, since); }
+      catch (error) { if (error?.code === 'usage-unavailable' && error.errno) say('agent.master.usage-unreadable', { code: error.errno }); throw error; }
+    },
     describe: () => ({ accountMode: true, runAuthorityMounted: true, taskProcesses: true, schedulerAlive: schedulerAlive(), at: now() }),
     close() { /* 由装配的 close 统一收 */ },
   };
@@ -233,6 +409,8 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     const closedSockets = [...sockets].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); }));
     const results = await Promise.allSettled([...closedSockets,
       server.listening ? new Promise(resolve => server.close(resolve)) : null, readControl.close()]);
+    // 在等发起页的请求全部收掉（登记表里标成取消）；在清的浏览器数据等它清完
+    results.push(...await Promise.allSettled([Promise.resolve().then(() => pageBridge.close('master-close')), ...purging.values()]));
     results.push(...await Promise.allSettled([eventStore.close()]));
     const errors = results.filter(row => row.status === 'rejected').map(row => row.reason);
     if (errors.length) throw new AggregateError(errors, 'account-master-close-pending');
@@ -241,5 +419,7 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     /** 不经内部口、在同一个进程里直接给调度用的那两条（没有 root 分离的机器和测试）。 */
     master: { async pending() { const value = await runClient.pending(); lastSchedulerAt = now(); return value; },
       scopeControl: row => runClient.scopeControl(row) },
-    describe: () => ({ registered, schedulerAlive: schedulerAlive(), lastSchedulerAt, internalSockets: sockets.size, internalPort: server.address()?.port ?? null }) };
+    pageBridge, purgeBrowser, conversationDeleted,
+    describe: () => ({ registered, schedulerAlive: schedulerAlive(), lastSchedulerAt, internalSockets: sockets.size, internalPort: server.address()?.port ?? null,
+      pageBridge: pageBridge.describe() }) };
 }

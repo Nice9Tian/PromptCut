@@ -90,8 +90,12 @@ export function toneWav({ hz = 440, seconds = 0.25, rate = 8000 } = {}) {
  * @param {boolean} [o.productionMaster] 主服务这一侧改用生产的装配（`account-master-assembly.mjs`：事件库、内部口、附件存储、
  *        页面的事件流从事件库读），槽调度经内部口用 root 那张证书去问（`account-master-scheduler-client.mjs`）——
  *        和 Linux 上 root 入口的接法相同。缺省仍是夹具自己拼的那一份。
+ * @param {Record<string, string>} [o.tools] 任务进程设置文件里的 `tools` 一节（工具要的节点依赖：ffmpeg、浏览器等的绝对路径）
+ * @param {object} [o.runnerOptions] 交给真实运行器的其它选项（例如出网闸的测试例外）；只给探针与测试
+ * @param {object} [o.toolLimits] 工具提供者的时限与上限（探针把它们调短）
  */
-export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false, publicHandler = null } = {}) {
+export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false, publicHandler = null,
+  tools = null, runnerOptions = null, toolLimits = null } = {}) {
   const log = [], say = (event, fields) => log.push({ at: Date.now(), event, ...fields });
   const docKey = pair(), masterKey = generateServiceKeyPair(), m = scopeModel(slotId);
   const generations = new Map(), stops = [];
@@ -148,7 +152,8 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
         fs.mkdirSync(sharedDataDir, { recursive: true }); fs.mkdirSync(masterDataDir, { recursive: true });
         masterAssembly = await createAccountMasterAssembly({ dataDir: masterDataDir, sharedDataDir, runClient: agentRunClient,
           conversationClient: agentClient, readControl: agentReadControl, tls: pki.master, internalPort: P.masterEvents,
-          controllerFingerprint256: pki.rootctl.fingerprint256, log: (event, fields) => say(`master.${event}`, { code: fields?.code ?? null }) });
+          controllerFingerprint256: pki.rootctl.fingerprint256, log: (event, fields) => say(`master.${event}`, { code: fields?.code ?? null,
+            ...(String(event).startsWith('agent.page.') ? { why: fields?.why ?? null, tool: fields?.tool ?? null } : {}) }) });
         eventStore = masterAssembly.eventStore;
         await until(() => readControl.describe().connected, { timeoutMs: 10_000, what: '主身份的读取控制连接' });
         schedulerMaster = createMasterSchedulerClient({ origin: `https://127.0.0.1:${P.masterEvents}`, tls: pki.rootctl,
@@ -232,8 +237,10 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       // 任务进程连素材服务的内部口，用的是它连文档服务的同一张任务证书
       runAssets: { origin: `https://127.0.0.1:${ports.assetInternal}/`, fingerprint256: pki.asset.fingerprint256,
         // 全量测试时机器很忙：一次素材请求里素材服务要回文档服务核好几趟，缺省的 5 秒无动静时限不够宽
-        maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024, timeoutMs: 30_000 } };
-    fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile, lookLimits: { pollWaitMs: 300 } }), { mode: 0o600 });
+        maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024, timeoutMs: 30_000 },
+      ...(tools ? { tools } : {}) };
+    fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile, lookLimits: { pollWaitMs: 300 },
+      ...(runnerOptions ? { runnerOptions } : {}), ...(toolLimits ? { toolLimits } : {}) }), { mode: 0o600 });
     // 子进程不带父子通道（和 systemd 起的一样）：指令走它那个只认 root 证书的本机 HTTPS 口
     const gateway = createAccountWorkerHttpsGateway({ configurationModule: path.join(here, 'account-runner-child-config.mjs'), cwd: path.resolve(here, '..', '..', '..'),
       env: { ...process.env, PROMPTCUT_RUNNER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 30_000, port: worker.identity.port,
@@ -320,38 +327,85 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       if (changed.status !== 200) throw Error('runner-fixture-enable-agent');
       session = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: 'runner-enabled-session' });
     }
-    const ws = new WebSocket(fixture.origin.replace('https:', 'wss:') + '/hosted/', ['promptcut.v1', `promptcut.account.${session.body.connectionTicket}`], { ca, origin: fixture.origin });
-    const closed = new Promise(resolve => ws.once('close', resolve)); humanSockets.add(ws); ws.once('close', () => humanSockets.delete(ws));
-    const send = frame => new Promise((resolve, reject) => { const reqId = `human-${Math.random().toString(36).slice(2)}`;
-      const timer = setTimeout(() => { ws.off('message', receive); reject(Error('runner-fixture-page-timeout')); }, 10_000);
+    // 页面连接可以重开（长时间的探针里连接票据会到期，文档服务把旧连接关掉）：`ws`、`closed` 指的是当前这一条
+    let ws, closed, selectionRevision = 0;
+    const openPage = async ticket => {
+      const socket = new WebSocket(fixture.origin.replace('https:', 'wss:') + '/hosted/', ['promptcut.v1', `promptcut.account.${ticket}`], { ca, origin: fixture.origin });
+      const done = new Promise(resolve => socket.once('close', resolve)); humanSockets.add(socket); socket.once('close', () => humanSockets.delete(socket));
+      await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+      ws = socket; closed = done;
+    };
+    const send = frame => new Promise((resolve, reject) => { const reqId = `human-${Math.random().toString(36).slice(2)}`, socket = ws;
+      const timer = setTimeout(() => { socket.off('message', receive); reject(Error('runner-fixture-page-timeout')); }, 10_000);
       const receive = bytes => { const reply = JSON.parse(bytes.toString()); if (reply.reqId !== reqId) return;
-        clearTimeout(timer); ws.off('message', receive); resolve(reply); };
-      ws.on('message', receive); ws.send(JSON.stringify({ ...frame, reqId })); });
-    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+        clearTimeout(timer); socket.off('message', receive); resolve(reply); };
+      socket.on('message', receive); socket.send(JSON.stringify({ ...frame, reqId })); });
+    await openPage(session.body.connectionTicket);
     const opened = await send({ type: 'project.open', projectId });
     const pageId = `runner-page-${index}`;
-    const selection = await send({ type: 'selection.set', projectId, pageId, revision: 1, selection: { clipIds: [] } });
-    if (selection.type !== 'selection.ok') throw Error('runner-fixture-selection');
+    // 版本号只增不减（重连以后也接着往上编）；刚重连时文档服务可能还没把旧连接那一条拿掉，不认就隔一会儿再报
+    const announce = async () => { for (let attempt = 0; ; attempt++) {
+      const reply = await send({ type: 'selection.set', projectId, pageId, revision: ++selectionRevision, selection: { clipIds: [] } });
+      if (reply.type === 'selection.ok') return;
+      if (attempt >= 5) throw Error('runner-fixture-selection');
+      await new Promise(resolve => setTimeout(resolve, 300)); } };
+    await announce();
     // 委托票据有时限；机器很忙时一条测试会跑过它。快到期就凭同一个登录重新要一份（和页面的做法一样）
-    let renewals = 0;
+    // 登录续过一次以后，页面到文档服务的那条连接要跟着重开（旧连接凭的是上一份票据）
+    let renewals = 0, pageStale = false;
     const tickets = async () => {
       if (session.body.expiresAt - Date.now() < 30_000) {
-        let renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-renew-${++renewals}` });
-        if (renewed.status === 401) {
-          // 编辑器这一侧的短期凭证也到期了：凭网站登录再换一份
-          const again = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}-renew-${renewals}` });
-          if (again.status !== 200) throw Error('runner-fixture-editor-session-renew');
-          editor = again;
+        // 向文档服务重新要一份会话。它一时答不上（503：正在办别的事，例如刚收回一批任务）隔一会儿再要；
+        // 编辑器这一侧的短期凭证到期或被换掉了（401）就凭网站登录再换一份，然后再要。最多半分钟。
+        let renewed = null;
+        for (let attempt = 0; attempt < 60; attempt++) {
           renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-renew-${++renewals}` });
+          if (renewed.status === 200) break;
+          if (renewed.status === 401) {
+            const again = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}-renew-${renewals}` });
+            if (again.status !== 200) throw Error(`runner-fixture-editor-session-renew ${again.status}`);
+            editor = again; continue;
+          }
+          if (renewed.status !== 503) break;
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
-        if (renewed.status !== 200) throw Error('runner-fixture-doc-session-renew');
-        session = renewed;
+        if (renewed.status !== 200) throw Error(`runner-fixture-doc-session-renew ${renewed.status} ${String(renewed.body?.code ?? '').slice(0, 60)}`);
+        session = renewed; pageStale = true;
       }
       return session.body;
     };
+    let pageLock = Promise.resolve(), ensurePageNow = null;
     return { opened, pageId, send, session: session.body,
       project: async () => (await send({ type: 'project.open', projectId })),
+      /** 项目管理操作（创建者才做得成）：例如关、开云端 Agent。期望的权限版本现取，回文档服务的原样回包 */
+      admin: async (body) => { session = { ...session, body: { ...session.body, expiresAt: 0 } }; await tickets();
+        return doc('admin', { projectId, expectedAccessRevision: session.body.accessRevision, ...body }); },
+      /** 这张页面到文档服务的连接是不是还连着；断了（连接票据到期）或登录刚续过，就重开一条，照旧报同一个在场页面号。
+       * 同一时刻只做一次：两处同时来叫不会各开一条连接（同一个页面号挂着两条连接时文档服务不认）。 */
+      ensurePage: () => { const work = pageLock.then(ensurePageNow); pageLock = work.catch(() => {}); return work; },
+      __ensure: ensurePageNow = async () => {
+        const renewed = pageStale;
+        if (!renewed && ws.readyState === WebSocket.OPEN) { try { await announce(); return false; } catch { /* 连着但不认了：重开 */ } }
+        // 先把旧的那条关掉并等文档服务收到（它收到连接断开时会把这张页面从在场表里拿掉；后关的话会把新连接刚报上去的那一条也拿掉）
+        { const oldClosed = closed; try { ws.terminate(); } catch { /* 已经关了 */ } await oldClosed; await new Promise(resolve => setTimeout(resolve, 300)); }
+        for (let attempt = 0; ; attempt++) {
+          // 票据刚续过就直接用；不然（或者上一次没连上）先续一次（会处理编辑器凭证也到期的情形）
+          if (!renewed || attempt > 0) { session = { ...session, body: { ...session.body, expiresAt: 0 } }; await tickets(); }
+          pageStale = false;
+          try { await openPage(session.body.connectionTicket); await send({ type: 'project.open', projectId }); await announce(); return true; }
+          catch (error) { if (attempt >= 1) throw error; try { ws?.terminate(); } catch { /* 没连上 */ } }
+        }
+      },
+      /** 现在就把登录续一次（新的委托票据、新的页面连接）：之后一段时间里不会再自己续。要把票据交给别处长时间用（探针里的浏览器页面）之前调 */
+      renew: async () => { session = { ...session, body: { ...session.body, expiresAt: 0 } }; await tickets();
+        const work = pageLock.then(ensurePageNow); pageLock = work.catch(() => {}); await work; return session.body.agentDelegationTicket; },
+      /** 页面到文档服务的连接此刻是不是开着 */
+      pageOpen: () => ws.readyState === WebSocket.OPEN,
+      /** 此刻的委托票据（快到期会先续） */
+      delegation: async () => (await tickets()).agentDelegationTicket,
       agent: async (route, body) => request('/agent/v1' + route, { method: body ? 'POST' : 'GET', body, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
+      /** 删对话(账号模式的 DELETE;请求体带请求号,没办完时用同一个请求号重试) */
+      remove: async (conversationId, requestId) => request(`/agent/v1/conversations/${conversationId}`, { method: 'DELETE', body: { requestId }, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
       /** 照页面的做法传一个附件：字节直接是请求体，文件名在查询串里 */
       upload: async (conversationId, name, bytes) => new Promise((resolve, reject) => { void tickets().then(ticket => {
         const req = https.request(`${fixture.origin}/agent/v1/conversations/${conversationId}/attachments?name=${encodeURIComponent(name)}`, { method: 'POST', ca, timeout: 15_000,
@@ -375,7 +429,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       /** 凭成员自己的素材票据直接问素材服务（不经 Agent）：用来核对任务写进去的字节 */
       asset: async hash => { const res = await fetch(`http://127.0.0.1:${ports.asset}/api/asset/media/${hash}`, { headers: { authorization: `Bearer ${(await tickets()).assetTicket}` } });
         return { status: res.status, bytes: Buffer.from(await res.arrayBuffer()) }; },
-      async close() { ws.terminate(); await closed; } };
+      async close() { try { ws.terminate(); } catch { /* 已经关了 */ } await closed; } };
   }
   // 文档服务的账本：另开一个只读连接看（账本是文档服务进程内的对象，这里不碰它、只读盘上已经提交的那一份）
   const ledgerFile = path.join(hostedPaths(path.join(dir, 'doc')).docservice, 'account-v2.sqlite');

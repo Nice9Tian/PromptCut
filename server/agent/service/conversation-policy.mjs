@@ -36,14 +36,21 @@ export function createAccountConversationService({ conversationClient, usageDir 
     try { return await conversationClient[fn]({ ...context(identity, conversationId), ...fields }); }
     catch (error) { throw translated(error); }
   };
-  /** 文档服务确认删掉以后，Agent 一侧各处清干净；任何一处失败都抛 503，页面重试同一个请求会再来一遍 */
+  /**
+   * 文档服务确认删掉以后，Agent 一侧各处清干净；清失败抛 503，页面重试同一个请求会再来一遍。
+   * 清理器回 `pending`(这一方删不动的目录已经记进待清的单子、等任务用户一侧清，见 conversation-purge.mjs)**不算失败**：
+   * 这次请求照样办完，只是先不给文档服务回执——对账下一轮再来，看到任务用户一侧留的回执那一次才回执。返回这次回执了没有。
+   */
   async function afterDeleted(projectId, conversationId) {
+    let cleared;
     try {
-      await purger?.purge({ projectId, conversationId });
+      cleared = await purger?.purge({ projectId, conversationId });
       await onConversationDeleted?.({ projectId, conversationId });
     } catch (error) { throw new AgentServiceError('purge-failed', 'purge-failed', 503); }
+    if (cleared?.pending === true) return false;
     // 回执文档服务：这个已删对话在 Agent 一侧清完了(墓碑上记下，对账就不再列它)。回执失败不要紧：下一次对账会再清一遍(幂等)
     try { await conversationClient.purgeAck?.({ projectId, conversationId }); } catch { /* 下次对账补 */ }
+    return true;
   }
   /**
    * 对账：问文档服务「哪些已删的对话在 Agent 一侧还没确认清理」，逐个补清。补它崩了、回包丢了、清到一半出错漏掉的。
@@ -52,7 +59,8 @@ export function createAccountConversationService({ conversationClient, usageDir 
   async function reconcilePurges() {
     if (typeof conversationClient.purges !== 'function') return 0;
     let done = 0;
-    for (const row of await conversationClient.purges()) { await afterDeleted(row.projectId, row.conversationId); done++; }
+    // 只数这一轮真的清完并回执的；还等着任务用户一侧清的不算(下一轮再来问)
+    for (const row of await conversationClient.purges()) { if (await afterDeleted(row.projectId, row.conversationId)) done++; }
     return done;
   }
   return {
@@ -79,11 +87,17 @@ export function createAccountConversationService({ conversationClient, usageDir 
     async info(identity) { await call('identity', identity); return { enabled: true, accountMode: true, executorMounted: false, running: [] }; },
     /** 本项目的用量(契约第 6.3 节:项目内的成员可查总量与各成员、各模型的量)。身份由文档服务按账号核对:
      * `identity` 对不上这个项目的成员(没登录、不是成员、被踢)就在这里抛错,不回任何数字;只回自己项目的流水。
-     * 没挂用量目录(没有执行器)仍然回 503,不编造零。成员只给显示名,不给账号编号。 */
+     * 没挂用量目录(没有执行器)、或者流水在但读不到,都回 503,不编造零。成员只给显示名,不给账号编号。 */
     async usage(identity, since = null) {
       await call('identity', identity);
       if (typeof usageDir !== 'string' || !usageDir) throw new AgentServiceError('usage-unavailable', 'usage authority is not mounted', 503);
-      const q = queryUsage(usageDir, { projectId: identity.projectId, since: Number.isFinite(since) && since > 0 ? since : null });
+      // 流水是任务进程(另一个系统用户)写的:读不到(权限没配对、盘出了问题)就明说查不了,不拿零冒充「没有用量」
+      let q;
+      try { q = queryUsage(usageDir, { projectId: identity.projectId, since: Number.isFinite(since) && since > 0 ? since : null, strict: true }); }
+      catch (error) {
+        if (error?.code !== 'usage-unreadable') throw error;
+        throw Object.assign(new AgentServiceError('usage-unavailable', 'usage ledger is unreadable', 503), { errno: error.errno });
+      }
       const p = q.projects[identity.projectId];
       const people = (members, pick) => Object.entries(members ?? {}).map(([userId, m]) => ({ username: m.username || '', ...pick(m) }));
       return {
