@@ -41,6 +41,8 @@ export function accountErrorText(status: number, code: string): string {
     'access-revision-mismatch': '成员状态已变化，请刷新并重新选择操作。', 'creator-required': '只有项目创建者可以管理成员。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
+/** 在线页面一次账号请求最多等多久(桌面版走外壳的账号桥,那边自己有 20 秒的时限) */
+export const REQUEST_TIMEOUT_MS = 20_000;
 type Native = (operation: string, args?: Record<string, unknown>) => Promise<unknown>;
 export interface AccountClientOptions { online: boolean; origin: string; device: { deviceId: string; deviceName: string }; fetch?: typeof fetch; native?: Native; now?: () => number }
 export function projectIdFromLink(text: string, origin: string): string {
@@ -81,11 +83,13 @@ export function createAccountClient(options: AccountClientOptions) {
     if (token) headers.Authorization = `Bearer ${token}`;
     else if (body !== undefined) headers['X-CSRF-Token'] = csrf;
     let response: Response;
+    // 请求挂住不回(网络半断)时按连不上算:不设时限的话,等它的那一方(页面换连接、续会话)会一直卡着
+    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined;
     try { response = await fetcher(new URL(path, origin), { method: body === undefined ? 'GET' : 'POST', headers,
-      credentials: token ? 'omit' : 'same-origin', cache: 'no-store', redirect: 'error', ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }); }
+      credentials: token ? 'omit' : 'same-origin', cache: 'no-store', redirect: 'error', ...(signal ? { signal } : {}), ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }); }
     catch { throw new AccountFailure(0, 'network'); }
     let result: Record<string, any>;
-    try { result = await response.json(); } catch { throw new AccountFailure(response.status, 'account-protocol'); }
+    try { result = await response.json(); } catch (error) { throw (error as { name?: string })?.name === 'TimeoutError' ? new AccountFailure(0, 'network') : new AccountFailure(response.status, 'account-protocol'); }
     if (!response.ok || result.ok !== true) throw new AccountFailure(response.status, String(result.code || result.error || 'account-unavailable'));
     return result;
   }
@@ -99,8 +103,9 @@ export function createAccountClient(options: AccountClientOptions) {
     return login;
   }
   async function website() { const value = await request('/api/account/me'); csrf = value.csrfToken || ''; websiteAccount = value.account ?? null; return websiteAccount; }
-  async function ensureLogin(): Promise<EditorLogin> {
-    if (login && login.accessExpiresAt > now() + 10_000) return login;
+  /** `minRemainingMs`:手里的访问令牌至少还要剩这么久,不够就先续(缺省 10 秒;页面换连接时要一张寿命足够的票据,会给得更大) */
+  async function ensureLogin(minRemainingMs = 10_000): Promise<EditorLogin> {
+    if (login && login.accessExpiresAt > now() + minRemainingMs) return login;
     if (renewTask) return renewTask;
     renewTask = (async () => {
       if (!options.online) return accept(check(await native('recover', options.device)));
@@ -204,7 +209,7 @@ export function createAccountClient(options: AccountClientOptions) {
       return { eventId: value.eventId, accessRevision: value.accessRevision, completed: false, state: 'pending-services' };
     },
     async join(projectId: string, requestId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/join', { projectId, deviceId: options.device.deviceId, requestId }, current.accessToken), now(), projectId); },
-    async session(projectId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now(), projectId); },
+    async session(projectId: string, { minRemainingMs }: { minRemainingMs?: number } = {}): Promise<ProjectSession> { const current = await ensureLogin(minRemainingMs); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now(), projectId); },
   };
 }
 function validateMembers(value: Record<string, any>, projectId: string, accountId: string): AccountMembersSnapshot {

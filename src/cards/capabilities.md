@@ -6,6 +6,7 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 
 - 第一次审阅：2026-09-17，只登记了「依不依赖下层」和「是不是画布卡」。
 - 2026-10-12（渲染重构「丁」，`docs/plan/render-refactor-task.md`）：三样登记全，补登记四张，加守门测试。
+- 2026-10-13（渲染重构「干净版那一次合入」）：`cardCapabilities` 的写法只取卡的声明；是不是画布卡改由 `surface` 推出，表里的 `canvasHeavy` 删掉。
 
 ## 1. 这张表管什么
 
@@ -28,7 +29,7 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 | `surface` | 轴二：画在什么上 | `dom` / `canvas2d` / `webgl` / `none` | **这张表** |
 | `compositing` | 轴三：依不依赖下层 | `independent` / `sourceDependent` / `belowDependent`，另有两个记号 `unknown`、`fromParts` | **这张表**。源码里写的这三个值一律忽略 |
 
-另有一个旧字段 `canvasHeavy: true`：画布卡（`surface` 是 `canvas2d` 或 `webgl`）必须同时写上，别的卡不写。原因见第 3 节。
+是不是画布卡由 `surface` 推出：`canvas2d` 或 `webgl` 就是画布卡。旧字段 `canvasHeavy` 不许再写进表里（守门测试拦），经过见第 3 节。
 
 `surface` 的四个值：
 
@@ -55,7 +56,7 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 
 ### 谁在读
 
-- `src/kernel/frameMode.mjs`：`reviewedCard(id)` 把条目原样带出来（新字段也在里面）；`cardCapabilities` 用其中的 `compositing` 和 `canvasHeavy`。
+- `src/kernel/frameMode.mjs`：`reviewedCard(id)` 把条目原样带出来；`reviewedCanvas(id)` 由 `surface` 推出是不是画布卡；`cardCapabilities` 用其中的 `compositing` 和 `surface`（只用来推出画布与否）。
 - `server/vision-project.mjs`：Node 一侧另有一份加载。`reviewedCapabilities(id)` 带出原条目；`reviewedClassification(id)` 把三样整理好（写法、对应的 `frameMode`、画在什么上、是不是画布卡、轴三）。三样的取值表也是那里的常量。
 
 守门测试核对两处查到的是同一份。
@@ -65,28 +66,28 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 `cardCapabilities` 的返回整个进卡片身份的摘要（`src/kernel/cardGraph.mjs` 把它写在节点的 `capabilities` 上）。它只有五项：`frameMode`、`need_prerendering`、`compositing`、`canvasHeavy`、`independentCache`。
 
 - **改一张卡的 `compositing` 或画布与否**：这张卡的能力表变了，它的预渲染结果的键、成本键全部换新，旧缓存不再命中。
-- **`writing`、`surface` 不进摘要**。它们是登记，不是 `cardCapabilities` 的输入；守门测试看着 `cardCapabilities` 的返回仍只有那五项。
+- **`writing` 不进摘要**：它是登记，写法只取卡的声明。**`surface` 只经「是不是画布卡」这一位进摘要**：`dom` 和 `none` 互换、`canvas2d` 和 `webgl` 互换，摘要不变。守门测试看着 `cardCapabilities` 的返回仍只有那五项。
 - **新增条目**：只影响原来查不到、现在查得到的卡。
 
 核对办法：`node scripts/probes/card-table-digest-compare.mjs`，对全部内置卡在基准提交和当前工作区各算一遍能力表、源码版本和三个键，逐张比。改表之后跑一遍，把结果写进报告。
 
-## 3. 为什么 `frameMode.mjs` 没跟着改、`canvasHeavy` 还留着
+## 3. `frameMode.mjs` 那两处是怎么收掉的
 
-`src/kernel/frameMode.mjs` 在每张内置卡的**源码导入闭包**里（卡片 → `kernel/types.ts` → `frameMode.mjs`，中间只是一句类型导入）。卡片的源码版本是闭包里全部文件的全文（`src/render/cardSourceVersion.mjs`），它进每一个预渲染结果的键。所以这个文件**改一个字**，按 id 找得到自己源文件的 42 张内置卡的键就全变（2026-10-12 实测：只加一行注释，42 张的键变了；其余 59 张是 58 张素材封装卡和 `composite`，源文件里找不到写死的 id，源码版本走另一条算法，没变）。`src/kernel/cardGraph.mjs` 也在这个闭包里，同理。
+`src/kernel/frameMode.mjs` 在每张内置卡的**源码导入闭包**里（卡片 → `kernel/types.ts` → `frameMode.mjs`，中间只是一句类型导入）。卡片的源码版本是闭包里全部文件的全文（`src/render/cardSourceVersion.mjs`），它进每一个预渲染结果的键，也进卡片声音的身份。所以这个文件**改一个字**，按 id 找得到自己源文件的内置卡的键就全变，已生成的卡片声音被判「已过期，请重新生成」一次（2026-10-12 实测：只加一行注释，42 张的键变了；其余是 58 张素材封装卡和 `composite`，源文件里找不到写死的 id，源码版本走另一条算法，没变）。`src/kernel/cardGraph.mjs` 也在这个闭包里，同理。
 
-「丁」要求别的卡的键不因为表里多了字段而变，所以这次这两个文件一个字没动。由此留下两处不够干净的地方：
+2026-10-12「丁」为了不让别的卡换键，这两个文件一个字没动，留下两处不够干净的地方。2026-10-13 用户同意卡片声音过期一次（`docs/plan/user-decisions-2026-10-13.md` 第 1 节第 14 条选乙），在「干净版那一次合入」里一起收掉：
 
-1. **表里不许出现 `frameMode` 这个键。** `cardCapabilities` 里有一句旧代码：表里写了 `frameMode` 就拿它盖过卡的声明。写法应以声明为准，所以表里登记写法用的是另一个名字 `writing`，那句旧代码永远读不到值。守门测试拦着：谁往表里写 `frameMode` 就红。
-2. **`canvasHeavy` 和 `surface` 重复。** 运行时判画布卡读的还是 `canvasHeavy`，`surface` 是登记。守门测试核对两者一致。
+1. **写法只取声明。** `cardCapabilities` 里原有一句旧代码：表里写了 `frameMode` 就拿它盖过卡的声明。这一句删了。表里照旧不许出现 `frameMode` 这个键（写了也没人读），登记写法用 `writing`。
+2. **画布卡由 `surface` 推出。** 运行时判画布卡原来读表里的 `canvasHeavy`，和 `surface` 重复。现在 `frameMode.mjs` 的 `reviewedCanvas(id)` 由 `surface` 推出（`canvas2d` / `webgl`），表里的 `canvasHeavy` 删掉，守门测试拦着不许再写。卡片定义上的 `canvasHeavy`（`CardDef.canvasHeavy`）还在：表里不是画布卡或没登记的卡，照旧看卡自己写的这一项（用户卡走这条）。
 
-下一次有别的改动本来就要动这两个文件（或者本来就要让全部缓存作废）时，顺手收掉：`cardCapabilities` 删掉读表里 `frameMode` 的那一句，`canvasHeavy` 改成由 `surface` 推出，表里的 `canvasHeavy` 删掉。
+两处都不改任何一张卡的能力对象（改前改后逐张比过，见 `docs/reports/AGENT-rr-clean.md`）。以后再动这两个文件，同样要先得到用户同意：守门测试 `src/render/audioCardSourceVersion.test.mjs` 钉着。
 
 ## 4. 结论汇总（101 张内置卡）
 
 | 写法 | 张数 | 卡 |
 |---|---:|---|
-| `remotion` | 5 | `caption-track`、`av-pulse`、`sound-notification`、`sound-keyboard`、`probe-slow` |
-| `motion` | 96 | 其余全部 |
+| `remotion` | 11 | `caption-track`、`av-pulse`、`sound-notification`、`sound-keyboard`、`probe-slow`，以及 Lottie 的 6 张：`lottie`、`lottie-adrock`、`lottie-bodymovin`、`lottie-gatin`、`lottie-happy2016`、`lottie-navidad`（2026-10-13 渲染重构「癸」把声明改成 remotion 式） |
+| `motion` | 90 | 其余全部 |
 
 | 画在什么上 | 张数 | 卡 |
 |---|---:|---|
@@ -146,7 +147,7 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 | id | 写法 | 画在什么上 | 依不依赖下层 | 理由 |
 |---|---|---|---|---|
 | `composite` | motion | dom | `fromParts` | 见第 6 节 |
-| `lottie` | motion | dom | independent | `LottieView` 走 SVG 画法，只画自己 |
+| `lottie` | remotion | dom | independent | `LottieView` 走 SVG 画法，只画自己。每一帧把 `t` 换算成帧号直接跳过去；播放库里的随机数和「属性值留旧数」在 `loadLottie` 里固定住了，顺着推和直接跳是同一个画面（2026-10-13 改登记） |
 | `particles` | motion | canvas2d | independent | tsParticles 画在自己的画布上；画布不透明区之外是透明的，不读下层 |
 | `scene-3d` | motion | webgl | independent | three.js WebGL，按 `t` 算姿态后显式渲染；只画自己 |
 | `caption-track` | remotion | dom | independent | 纯文本字幕；虽然引了 `hud.css`，但没有用 `hud-glass` |
@@ -173,10 +174,10 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 | `terminal-3d` | motion | dom | **belowDependent** | 同上；它的 3D 是 CSS 透视，不是 canvas |
 | `versus-card` | motion | dom | **belowDependent** | 同上，两块玻璃板 |
 
-**Lottie 素材封装卡（5 张，全是 `motion` / `dom` / `independent`）**
+**Lottie 素材封装卡（5 张，全是 `remotion` / `dom` / `independent`）**
 
 `lottie-adrock`、`lottie-bodymovin`、`lottie-gatin`、`lottie-happy2016`、`lottie-navidad`。
-五张共用 `LottieView`（SVG 画法），各自只画自己的动画，互不采样，也不是画布卡。
+五张共用 `LottieView`（SVG 画法），各自只画自己的动画，互不采样，也不是画布卡。写法跟着通用 Lottie 卡，2026-10-13 一起改成 remotion 式。
 
 **粒子素材封装卡（53 张，通配 `particles-*`，全是 `motion` / `canvas2d` / `independent`）**
 
@@ -235,8 +236,8 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 
 ## 9. 新增或改一张内置卡时
 
-1. 在 `capabilities.json` 里加一条，三样写全；画布卡同时写 `canvasHeavy: true`。素材封装卡的 id 落在已有通配里就不用加。
+1. 在 `capabilities.json` 里加一条，三样写全（不写 `canvasHeavy`）。素材封装卡的 id 落在已有通配里就不用加。
 2. `writing` 照卡的声明填。之后改了卡的声明，表跟着改。
 3. `compositing` 要有审阅结论，照第 5 节的判据审，把理由写进本文档的逐张表。
-4. 跑守门测试 `node --test src/cards/capabilities.test.mjs`。没登记、三样不全、写法和声明对不上、画布卡两处不一致、表里有对不上任何卡的键，它都会红。
+4. 跑守门测试 `node --test src/cards/capabilities.test.mjs`。没登记、三样不全、写法和声明对不上、画在什么上和卡的声明打架、表里写了 `frameMode` 或 `canvasHeavy`、表里有对不上任何卡的键，它都会红。
 5. 改了现有卡的 `compositing` 或画布与否，跑第 2 节的比对脚本，把哪些卡的键变了写进报告。

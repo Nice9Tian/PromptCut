@@ -14,6 +14,11 @@
  *   3. 闭包里每个文件的全文哈希(只用来在 1 红的时候说清是哪个文件变了)。
  *
  * 红了怎么办:这不是普通的测试失败。先停,问过用户,再改下面的钉住值。
+ *
+ * 钉住值改过的记录:
+ *   2026-10-13「干净版那一次合入」(分支 claude/rr-clean):用户同意卡片声音过期一次
+ *   (`docs/plan/user-decisions-2026-10-13.md` 第 1 节第 14～16 条)。变的只有 `src/kernel/frameMode.mjs` 一个文件
+ *   (写法只取声明;画布卡由审阅表的 surface 推出),三张卡的源码版本跟着变;闭包的文件清单没有变。
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -31,7 +36,7 @@ const WHY = '这个值进卡片声音的身份(cardAudioIdentity)。变了会让
 const AUDIO_CARDS = {
   'av-pulse': {
     entry: '/src/cards/native/av-pulse.tsx',
-    version: 'c3404bf589753a29168438e4ec29b84f487782f3e3937edff4ad4f8e80c2749b',
+    version: '535ba03a7f19c0270c176c9bdbe84b4e698f8ae9bc2f75a6266431830d996e92',
     closure: [
       '/src/cards/native/av-pulse.tsx', '/src/cards/native/sound-effects.ts', '/src/kernel/cardGpu.ts', '/src/kernel/cardGraph.mjs',
       '/src/kernel/emphasis.ts', '/src/kernel/frameMode.mjs', '/src/kernel/soundEffects.ts', '/src/kernel/types.ts',
@@ -40,7 +45,7 @@ const AUDIO_CARDS = {
   },
   'sound-notification': {
     entry: '/src/cards/native/sound-effects.ts',
-    version: '7e159196fa213ea4b28d736d36e2a48936be32c2c9be461d016c48ca84f99338',
+    version: '1a663d9c7b086d16d9988114246eb4e876f375845d2d1f4e248f63b9fb431a81',
     closure: [
       '/src/cards/native/sound-effects.ts', '/src/kernel/cardGpu.ts', '/src/kernel/cardGraph.mjs', '/src/kernel/emphasis.ts',
       '/src/kernel/frameMode.mjs', '/src/kernel/soundEffects.ts', '/src/kernel/types.ts', '/src/kernel/typingEvents.ts',
@@ -49,7 +54,7 @@ const AUDIO_CARDS = {
   },
   'sound-keyboard': {
     entry: '/src/cards/native/sound-effects.ts',
-    version: '7e159196fa213ea4b28d736d36e2a48936be32c2c9be461d016c48ca84f99338',
+    version: '1a663d9c7b086d16d9988114246eb4e876f375845d2d1f4e248f63b9fb431a81',
     closure: [
       '/src/cards/native/sound-effects.ts', '/src/kernel/cardGpu.ts', '/src/kernel/cardGraph.mjs', '/src/kernel/emphasis.ts',
       '/src/kernel/frameMode.mjs', '/src/kernel/soundEffects.ts', '/src/kernel/types.ts', '/src/kernel/typingEvents.ts',
@@ -65,7 +70,7 @@ const FILE_HASHES = {
   '/src/kernel/cardGpu.ts': 'e0565a932d84d3609ac30ddede25514864259ae89c528917e4d7e58bf9c32303',
   '/src/kernel/cardGraph.mjs': 'b169185628d1fab39f21535c9b1b09b4b69032cab776b608c740af4979174e61',
   '/src/kernel/emphasis.ts': 'b868ea9adbe15e878b71c4864a7c783cad3e64b6dc4aef7a2702acd1e020506b',
-  '/src/kernel/frameMode.mjs': '008d7ccc4fdc80c5f833580e170ceef4b115d872afe4661d0d77a4aeb9111d72',
+  '/src/kernel/frameMode.mjs': '45b246838e3a3d571e9cdcb2f869d257de0d6c78bbd44b94ccc3cbe392b2da31',
   '/src/kernel/soundEffects.ts': '7724b629e74053993de7002535fe573b786259c8f5afa958df831d793aaba350',
   '/src/kernel/types.ts': 'c78a5db7a8c0df5d12cb52ed5bf4b02280a832de430e761c51d886fbf52f5f94',
   '/src/kernel/typingEvents.ts': '1273354a9e3c3e2ff6c6d58b36c20d27d002aadc68287c268493fefcb07fc774',

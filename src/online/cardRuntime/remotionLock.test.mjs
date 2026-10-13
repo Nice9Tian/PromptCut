@@ -9,6 +9,7 @@
  *          没引用框架的卡（老卡）同样的写法照旧能跑
  *   RL-05  锁不住的东西放在顶层：载入时当场报错，这张卡不生效，说得出是哪一个
  *   RL-06  接上去的这一段在桌面那条路上也是合法的源码（TypeScript 转得过）；源码前面的部分一个字符都不动
+ *   RL-08  只有一行裸导入的卡（用不到框架的工具）：认成引用了框架、载入时照样锁；只有声音的卡在声音线程里载入时同样接锁
  *
  * 桌面那条路（开发服务器的转换钩子）在真 Chrome 里由探针 `scripts/probes/remotion-style-probe.mjs` 验。
  */
@@ -130,7 +131,7 @@ test("RL-02 老卡一张都不碰：仓库里现有的每个卡片与部件文�
   // 声明成 remotion 式的内置卡确实在这批文件里（它们不是用框架写的，所以同样不锁）
   assert.ok(direct >= 4, `声明成 remotion 式的内置文件 ${direct} 个`);
   // 违规样例与对照卡里，没引用框架的那几张同样不锁
-  for (const name of ["rs-stateful-control.tsx", "violations/css-animation.tsx", "violations/motion.tsx"]) assert.equal(K.remotionLockSuffix(`${U}x.tsx`, fixture(name)), "", name);
+  for (const name of ["rs-stateful-control.tsx", "violations/framework.tsx"]) assert.equal(K.remotionLockSuffix(`${U}x.tsx`, fixture(name)), "", name);
 });
 
 test("RL-03 在线页面：用框架写的示例卡转得出、载得进、渲得出来；先渲第 N 帧再渲第 M 帧与顺着渲相同", async () => {
@@ -243,4 +244,58 @@ test("RL-07 转译缓存：该锁的卡另用一个键，别的卡的键不变�
   assert.match(again.bundle.modules[0].js, /lockTopLevel/);
   // 这一代的签名里还是内容哈希本身：同一份源码在哪儿算都是同一代
   assert.equal(marked.bundle.generation, T.generationOf(RUNTIME, [[`${U}m.tsx`, hashOf(MARKED)]]));
+});
+
+test("RL-08 只有一行裸导入的卡：认成引用了框架，载入时照样锁；只有声音的卡在声音线程里载入时同样接锁", async () => {
+  // 裸导入：该锁；它是「只为副作用的导入」，算真的会载入的模块
+  const source = fixture("rs-bare-import.tsx");
+  assert.deepEqual(K.remotionLockPlan(source), { names: ["COUNTER", "C", "card"], specifiers: ["../../kernel/remotionStyle"] });
+  assert.notEqual(K.remotionLockSuffix(`${U}rs-bare-import.tsx`, source), "");
+  // 去掉那一行就不锁（没引用框架的违规样例同理）
+  assert.equal(K.remotionLockPlan(source.replace('import "../../kernel/remotionStyle";\n', "")), null);
+  assert.equal(K.remotionLockPlan(fixture("violations/framework.tsx")), null);
+
+  // 在线页面：载得进，顶层锁住，绕一道变量往里写当场报错
+  const entry = `${U}rs-bare-import.tsx`;
+  const { out, loader, res } = await load({ [entry]: source }, entry);
+  assert.equal(res.ok, true, JSON.stringify(res.state));
+  assert.deepEqual(out.bundle.modules[0].imports["../../kernel/remotionStyle"], { kind: "builtin", path: "src/kernel/remotionStyle/index.ts" });
+  assert.deepEqual(out.bundle.modules[0].imports["../../kernel/remotionStyle/lock"], { kind: "builtin", path: "src/kernel/remotionStyle/lock.ts" });
+  const [def] = loader.cards();
+  assert.ok(Object.isFrozen(def) && Object.isFrozen(def.defaults), "卡片定义锁住了");
+  assert.equal(def.Component({ params: { text: "read-only" }, playToken: 0, t: 0.2 }).type, "div");
+  assert.throws(() => def.Component({ params: { text: "write-object" }, playToken: 0, t: 0.2 }), (err) => err instanceof TypeError);
+  assert.deepEqual(def.Component({ params: { text: "read-only" }, playToken: 0, t: 0.2 }).props.children, ["read-only", 0]);
+
+  // 只有 audio() 的卡：声音线程用的是同一个打包函数和同一个加载器（`soundThread.ts`），模块表里 `src/kernel/` 是真的
+  // （`soundModules.ts`）。这里用同样形状的模块表载一遍：接了锁，顶层的对象写不进去
+  const sound = `import "../../kernel/remotionStyle";
+import type { CardDef } from "../../kernel/types";
+import { createNotificationRecipe, renderSoundEffectBlock } from "../../kernel/soundEffects";
+const CACHE = { calls: 0 };
+export const card: CardDef<{}> = {
+  id: "rs-sound-only", name: "只有声音", description: "d", source: "user", kind: "animation", inputs: {}, frameMode: "direct", defaults: {}, controls: [],
+  audio: (_sources, range) => {
+    const cache = CACHE;
+    cache.calls += 1;
+    return renderSoundEffectBlock(createNotificationRecipe({ frequency: 660, gain: 0.5, duration: 0.2 }), { start: range.start, count: range.count });
+  },
+};
+`;
+  assert.deepEqual(K.remotionLockPlan(sound), { names: ["CACHE", "card"], specifiers: ["../../kernel/remotionStyle", "../../kernel/soundEffects"] });
+  const TH = await import(srcUrl("online/cardRuntime/soundThread.ts"));
+  const soundEntry = `${U}rs-sound-only.tsx`;
+  const bundled = await bundle({ [soundEntry]: sound }, soundEntry);
+  assert.equal(bundled.ok, true, JSON.stringify(bundled.state));
+  assert.deepEqual(bundled.bundle.modules[0].imports["../../kernel/remotionStyle/lock"], { kind: "builtin", path: "src/kernel/remotionStyle/lock.ts" });
+  const posted = [];
+  const thread = TH.createSoundThread({ runtime: RUNTIME, host: host(), post: (m) => posted.push(m) });
+  await thread.handle({ t: "load", seq: 1, bundles: [bundled.bundle] });
+  const loaded = posted.find((m) => m.t === "loaded");
+  assert.deepEqual([loaded.audioCards, loaded.blocked], [["rs-sound-only"], {}], JSON.stringify(loaded));
+  const project = { version: 1, id: "p", name: "p", width: 640, height: 360, fps: 30, duration: 2, media: [], tracks: [{ id: "t", name: "t", clips: [{ id: "c1", cardId: "rs-sound-only", start: 0, end: 0.5, params: {} }] }] };
+  await thread.handle({ t: "project", key: "k1", project });
+  await thread.handle({ t: "render", id: 1, key: "k1", nodeId: "@clip/c1", start: 0, count: 64, sampleRate: 48000 });
+  const answer = posted.find((m) => m.id === 1);
+  assert.equal(answer.t, "error", `往锁住的顶层对象里写：这一块合成不了，报错而不是悄悄带着状态。实际：${JSON.stringify(answer?.t)}`);
 });

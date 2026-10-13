@@ -33,7 +33,24 @@ export interface SpringConfig {
 
 interface Resolved { k: number; c: number; m: number; from: number; to: number; delay: number; v0: number; clampOvershoot: boolean }
 
+/** Remotion 的 `spring({ frame, fps, config })` 里的三个键：出现在这里的第二个参数里一定是照那边的写法写的 */
+const REMOTION_KEYS = ["frame", "fps", "config"];
+
+/** 报错里把收到的第一个参数的类型写成人看得懂的样子 */
+function typeName(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "number") return "NaN";
+  if (Array.isArray(value)) return "数组";
+  return ({ undefined: "undefined", string: "字符串", object: "对象", boolean: "布尔值", function: "函数", bigint: "bigint", symbol: "symbol" } as Record<string, string>)[typeof value];
+}
+
 function resolve(config: SpringConfig | undefined): Resolved {
+  if (config !== null && typeof config === "object") {
+    const key = REMOTION_KEYS.find((name) => Object.hasOwn(config, name));
+    if (key) {
+      throw new Error(`spring 的参数里有 ${key}：这是 Remotion 的写法。这里时间用秒、当第一个参数传，不用帧号和帧率；\`stiffness\`、\`damping\`、\`mass\` 直接写在第二个参数里，不要再包一层 \`config\`。写法：\`spring(t, { stiffness: 100, damping: 10, mass: 1 })\`。`);
+    }
+  }
   const k = config?.stiffness ?? 100, c = config?.damping ?? 10, m = config?.mass ?? 1;
   if (!(k > 0) || !(m > 0) || !(c >= 0)) throw new Error(`spring 的参数不对：stiffness、mass 要大于 0，damping 不能是负数（收到 ${k}、${m}、${c}）`);
   return { k, c, m, from: config?.from ?? 0, to: config?.to ?? 1, delay: config?.delay ?? 0, v0: config?.velocity ?? 0, clampOvershoot: config?.clamp === true };
@@ -59,8 +76,14 @@ function displacement(s: number, r: Resolved): number {
  * 弹簧在第 t 秒的位置，直接算，不依赖前一帧。开始之前（t 早于 `delay`）是 `from`。
  *
  * 例：`spring(t, { from: 0.6, to: 1, stiffness: 180, damping: 12 })` —— 从 0.6 弹到 1，略微过冲。
+ *
+ * 第一个参数不是数（照 Remotion 的 `spring({ frame, fps, config })` 写就会这样）直接报错；
+ * 第二个参数里出现 `frame`、`fps`、`config` 也直接报错（`springDuration` 同）。
  */
 export function spring(t: number, config?: SpringConfig): number {
+  if (typeof t !== "number" || Number.isNaN(t)) {
+    throw new Error(`spring 的第一个参数要是时间（秒），收到 ${typeName(t)}。这里的写法是 \`spring(t, { stiffness, damping, mass, from, to, delay })\`，\`t\` 是片段本地秒；不是 Remotion 的 \`spring({ frame, fps, config })\`。改成：\`spring(t, { stiffness: 100, damping: 10 })\`。`);
+  }
   const r = resolve(config);
   const s = t - r.delay;
   if (!(s > 0)) return r.from;

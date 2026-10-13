@@ -22,8 +22,13 @@
  * | `top-level` | 文件顶层只许写常量 | 顶层的 `let` / `var` / `class` / `enum`、直接执行的语句；顶层初始化式里的 `new`、`await`、赋值 |
  * | `viewport` | 卡片挂载即播放 | `IntersectionObserver`（所有卡原来就不许，这里只是带上行号） |
  * | `frame-mode` | 写法以声明为准 | `frameMode` 写成了读不出字面量的东西 |
+ * | `framework` | 必须引用框架 | 声明成 remotion 式，却没有一句会留到运行时的框架导入（只带类型的导入不算）。用不到工具的卡（只用 `t` 做算术、只用 GLSL 的素材效果卡、只有声音的卡）写一行裸导入 `import "../../kernel/remotionStyle";` |
  *
  * 看源码查不出来的那一类（依赖「谁先加载好」：字体、图片先画一版再变）不在这里，见报告与 `server/bakery/frame-ready.mjs`。
+ *
+ * 为什么必须引用框架：载入时只给「声明成 remotion 式、并且引用了框架」的卡把文件顶层锁成只读
+ * （`src/online/cardRuntime/remotionLock.mjs`）。不引用框架的卡不上锁，绕一道变量往自己顶层的对象里写就查不出来。
+ * 让「该不该锁」和「合不合法」用同一个判据，不另加记号（`docs/plan/html-snapshot-removal-dryrun.md` 第 8.2 节）。
  *
  * 新建卡（没有改之前的版本）与引用了框架的卡：每一条都拒绝。改一张框架出现之前建的、没引用框架的卡：只拒绝这次编辑
  * **新增**的违规（按规则数个数），原来就有的不追究——和 `compositing: 'independent'` 的差量口径一样；
@@ -179,12 +184,14 @@ export function inspectRemotionStyle(source, o = {}) {
     return null;
   };
   let declared = 'none';
+  /** 写着 `frameMode: "direct"` 的那一处（`framework` 这条规则的报错指到它） */
+  let directNode = null;
   const unreadable = [];
   const noteMode = (node, init) => {
     const e = unwrap(init);
     const value = stringOf(e) ?? (e && ts.isIdentifier(e) ? topConstString(e.text) : null);
     if (value === null) { unreadable.push(node); if (declared === 'none') declared = 'other'; return; }
-    if (value === 'direct') declared = 'direct';
+    if (value === 'direct') { declared = 'direct'; directNode ??= node; }
     else if (declared === 'none') declared = 'other';
   };
   const findMode = (node) => {
@@ -198,11 +205,22 @@ export function inspectRemotionStyle(source, o = {}) {
     hit(node, 'frame-mode', 'frameMode 要直接写成字面量："direct"（remotion 式）或 "stateful"（motion 式）。写成变量或算出来的值，建卡时读不出这张卡是哪种写法');
   }
 
-  let usesFramework = false;
+  /** usesFramework：有一句指向框架的导入（含只带类型的）；loadsFramework：其中有会留到运行时的（裸导入、带值的导入） */
+  let usesFramework = false, loadsFramework = false;
   for (const st of sf.statements) {
-    if (ts.isImportDeclaration(st) && normalizeSpecifier(fileName, stringOf(st.moduleSpecifier) ?? '') === REMOTION_FRAMEWORK) usesFramework = true;
+    if (!ts.isImportDeclaration(st) || normalizeSpecifier(fileName, stringOf(st.moduleSpecifier) ?? '') !== REMOTION_FRAMEWORK) continue;
+    usesFramework = true;
+    const clause = st.importClause;
+    const typeOnly = !!clause && (clause.isTypeOnly || (!clause.name && !!clause.namedBindings && ts.isNamedImports(clause.namedBindings)
+      && clause.namedBindings.elements.every((el) => el.isTypeOnly)));
+    if (!typeOnly) loadsFramework = true;
   }
   if (declared !== 'direct') return { declared, usesFramework, violations };
+
+  /* ---------- 必须引用框架 ---------- */
+  if (!loadsFramework) {
+    hit(directNode ?? sf, 'framework', `这张卡声明的是 remotion 式，但没有引用框架。在文件开头加一行 \`import ${FRAMEWORK_IMPORT};\`；用到工具时写成 \`import { tween } from ${FRAMEWORK_IMPORT};\`。引用以后，这张卡载入时文件顶层的对象会被锁成只读`);
+  }
 
   /* ---------- 导入 ---------- */
   const checkSpecifier = (node, spec, typeOnly) => {

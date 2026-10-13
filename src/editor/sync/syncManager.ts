@@ -21,18 +21,24 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { classifyEnterFailure, classifyProtocolError } from "./enterFailure";
 import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
-import { currentAssociation, setAssociation, takeLoadedAssociation, type CollaborationDescriptor } from "./recoveryAssociation";
+import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor } from "./recoveryAssociation";
+import { convertGoneProject, restoreOfflineEdits, type GoneProof } from "./cloudGone";
+// @ts-expect-error Browser-safe proof verification, shared with the server-side tooling.
+import { queryGone } from "../../../server/recovery/gone-proof.mjs";
 // @ts-expect-error Browser-safe recovery state machine.
 import { RecoveryCoordinator } from "../../../server/recovery/coordinator.mjs";
 // @ts-expect-error Browser-safe service identity validation.
 import { serviceIdentity } from "../../../server/recovery/descriptor.mjs";
 // @ts-expect-error Browser-safe hosting discovery and ticket delegation.
 import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/hosting/client.mjs";
-import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
+import { accountNameKey, clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync, detachCardSync } from "./cardSync";
+import { accountCardTicket } from "./accountCardSync";
+import { createAccountLinkLife } from "./accountLinkLife";
+import { bindAgentSide, releaseAgentSide } from "./agentSideBinding";
 import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
-import { receivePresence, setPresenceLink } from "./presence";
+import { receivePresence, resyncPresenceLink, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
 import { applyHostedChange, applyHostedOptionChange, hostedChangeNotices, HOSTED_SERVICE_TEXT, hostedOptionText, parseHosted, type HostedOptionName, type HostedServiceName, type HostedView } from "./hostedServices";
@@ -249,6 +255,8 @@ interface Current {
   /** 账号项目:创建者改托管方的渲染节点的开关,或它下面的子选项(「生成轨道流」)。成员调用被服务端拒(403) */
   setAccountHosted?: (change: { service: "render"; enabled: boolean } | { service: "render"; option: HostedOptionName; enabled: boolean }) => Promise<void>;
   accountMembers?: () => Promise<AccountMembersSnapshot>;
+  /** 诊断:账号项目里这条连接的寿命 */
+  accountLife?: () => { expiresAt: number | null; trusted: boolean | null; renews: number; expires: number; busy: boolean };
   accountMemberAdmin?: (operation: AccountMemberOperation) => Promise<AccountMemberResult>;
 }
 
@@ -302,7 +310,20 @@ export function me(): Me {
 export function displayNames(): DisplayNames {
   const m: DisplayNames = new Map();
   for (const row of view.members) if (row.deviceId) m.set(`${row.username}@${row.deviceId}`, row.displayName);
+  // 账号云端项目:`view.members` 是空的(成员名单另走账号接口),名字按账号记在 `accountNames` 里
+  for (const [accountId, name] of accountNames) m.set(accountNameKey(accountId), name);
   return m;
+}
+
+/**
+ * 账号云端项目里各成员账号的名字(提示气泡里「谁改的」用):进项目时取一次成员名单,之后成员有变化(会话里的权限版本变了)再取。
+ * 离开项目清掉。取不到就没有名字,气泡照原来的退路显示。
+ */
+let accountNames = new Map<string, string>();
+function accountNamesFrom(snapshot: AccountMembersSnapshot): void {
+  const next = new Map<string, string>();
+  for (const row of snapshot.members) if (row.accountName) next.set(row.accountId, row.accountName);
+  accountNames = next;
 }
 
 function localWsUrl(): string {
@@ -481,34 +502,7 @@ function tickOnline() {
   if (unconfirmed !== view.unconfirmed || recoveryState.phase !== view.recovery) patch({ unconfirmed, recovery: recoveryState.phase });
 }
 
-/* ---------------- Agent 服务端的项目副本(server/vite-plugin-ai.ts 的 /api/agent/bind) ---------------- */
-
-let agentBoundKey: string | null = null;
-let agentBindingWrite: Promise<unknown> = Promise.resolve();
-
-/**
- * 页面挂上 DocSync 之后告诉 Agent 服务端「我在编辑哪个项目、连的是哪个文档服务」(c65-integ2 接线;
- * 接口见 docs/archive/agent-reports/AGENT-c65-agent.md 第 7 节):绑上之后 side: "agent" 的工具在服务端的项目副本上执行,
- * 写入以 Agent 对话的身份直接进文档服务(D1)。本机项目用 local(回环 + 本机信任);共享项目用 ticket:
- * Agent 服务端每开一条对话连接,经 SSE 向本页面要一张连接票据(issueAgentTicket)。同样的绑定不重发。
- */
-function bindAgentSide(kind: "local" | "shared", docProjectId: string, url: string) {
-  const body = kind === "local" ? { projectId: docProjectId, mode: "local" } : { projectId: docProjectId, mode: "ticket", url };
-  const key = JSON.stringify(body);
-  if (key === agentBoundKey) return;
-  agentBoundKey = key;
-  agentBindingWrite = agentBindingWrite.catch(() => undefined).then(() => fetch("/api/agent/bind", { method: "POST", headers: { "Content-Type": "application/json" }, body: key }))
-    .then((r) => r.json().catch(() => null))
-    .then((j) => {
-      if (!j?.ok) {
-        if (agentBoundKey === key) agentBoundKey = null;
-        console.warn("[sync] Agent 服务端没绑上项目副本:", j?.error ?? "无回包");
-      }
-    })
-    .catch(() => {
-      if (agentBoundKey === key) agentBoundKey = null;
-    });
-}
+/* ---------------- Agent 服务端的项目副本:绑定与解绑在 `agentSideBinding.ts`,这里只答它要的票据 ---------------- */
 
 /**
  * SSE 里的 `agent.ticket`:Agent 服务端要一张 agent 角色的连接票据(k:'conn', r:'agent', c:对话号)。
@@ -593,6 +587,7 @@ export function pageOpIdsSince(mark: number | null): string[] {
 function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string, accountClient: CloudAccountClient | null = null) {
   const account = accountClient !== null;
   const prev = cur;
+  if (!account) accountNames = new Map();
   if (prev) {
     for (const off of prev.offs) off();
     prev.unbind();
@@ -646,13 +641,34 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     if (prev?.kind === "shared" && (kind !== "shared" || prev.docProjectId !== docProjectId)) unbindRenderNode(prev.docProjectId, kind === "shared" ? "switched" : "left");
     if (kind === "shared") bindRenderNode({ url, projectId: docProjectId, contentId: getState().project.id || null }, renderNodeHooks);
   }
+  // 账号云端项目(桌面版):解掉 Agent 服务端留着的旧绑定,卡片源码同步凭账号办法的票据接上(渲染节点这次不接)
+  if (accountClient && !ONLINE_BUILD && !ONLINE) bindAccountEditorSide(link, docProjectId, url, accountClient);
   if (prev && prev.link !== link) retire(prev.link);
+}
+
+/**
+ * 桌面版进账号云端项目时编辑器进程那一侧要做的事(渲染节点不在内):
+ * - Agent 服务端:账号项目里不绑(本机 Agent 走「页面代做」),但上一个项目留在服务端的绑定要解掉(`agentSideBinding.ts`);
+ * - 卡片源码同步:编辑器进程要票据时,页面凭登录另取一份项目会话,交出其中的连接票据(`accountCardSync.ts`)。
+ */
+function bindAccountEditorSide(link: SyncLink, docProjectId: string, url: string, client: CloudAccountClient) {
+  releaseAgentSide();
+  const accountId = client.account?.id;
+  bindCardSync({ kind: "shared", projectId: docProjectId, url, account: true }, getState().project, {
+    ...cardSyncHooks,
+    ticket: accountCardTicket({
+      session: (projectId) => client.session(projectId),
+      isCurrent: () => cur?.link === link && !!accountId && client.account?.id === accountId,
+      stop: detachCardSync,
+    }),
+  });
 }
 
 /** 在线页面离开共享项目:没有本机文档服务可回,解开当前连接,store 回到快照栈(C10a) */
 function detach() {
   const prev = cur;
   cur = null;
+  accountNames = new Map();
   setCloudIdentity(null);
   setCloudConsentSource(null);
   clearHostedAgent();
@@ -662,9 +678,9 @@ function detach() {
     prev.unbind();
     retire(prev.link);
     if (prev.kind === "shared" && !ONLINE_BUILD && !ONLINE) unbindRenderNode(prev.docProjectId, "left");
-    if (!ONLINE_BUILD && !ONLINE && !view.shared?.accountId) {
-      agentBoundKey = null;
-      agentBindingWrite = agentBindingWrite.catch(() => undefined).then(() => fetch("/api/agent/unbind", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
+    if (!ONLINE_BUILD && !ONLINE) {
+      // 账号项目进来时已经解过 Agent 服务端的绑定,这里只解卡片源码同步
+      if (!view.shared?.accountId) releaseAgentSide();
       detachCardSync();
     }
   }
@@ -969,6 +985,8 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
     docProjectId: () => currentDocProjectId(),
     rev: () => cur?.link.ds.rev ?? null,
     agentOp: (callId: string) => agentOpFor(callId),
+    /** 账号云端项目:这条连接能用到什么时候、换过几次会话(`accountLinkLife.ts`) */
+    accountLife: () => cur?.accountLife?.() ?? null,
     events: () => eventRecordList(),
   };
 }
@@ -1128,12 +1146,27 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
     if (ownHostedChange === 0 && view.shared) for (const text of hostedChangeNotices(view.hosted, value.hosted)) pushToast(text, "info", 6000);
     patch({ shared: view.shared ? { ...view.shared, creator: value.creator } : null, hosted: value.hosted });
     setHostedAgent(options.projectId, value.hosted.agent);
+    // 自己的权限变了(只读改可写):换一个会话,新连接才写得进去
+    if (ready) void life.accessSeen(value.access);
+    // 成员有变化(有人加入、被踢、改权限)时重取一次名字
+    if (ready && value.accessRevision !== namesRevision) {
+      namesRevision = value.accessRevision;
+      void options.client.members(options.projectId).then(snapshot => { if (isCurrent()) accountNamesFrom(snapshot); }, () => { if (namesRevision === value.accessRevision) namesRevision = null; });
+    }
   };
+  let namesRevision: number | null = null;
   const renew = () => renewing ??= options.client.session(options.projectId).then(value => {
     current = value; projectSession(value); return value;
   }).finally(() => { renewing = null; });
+  // 页面这条连接只能用到票据背后的访问令牌到期:到期前换到新会话上,换不成如实转离线(`accountLinkLife.ts`)
+  const life = createAccountLinkLife({
+    session: ({ minRemainingMs }) => options.client.session(options.projectId, { minRemainingMs }).then(value => { current = value; projectSession(value); return value; }),
+    link: () => link,
+    onTerminal: error => fail(error),
+  });
   const protocols = async () => { if (stopped) throw new AccountFailure(401, 'credential-revoked');
-    if (first) first = false; else await renew(); return accountConnectionProtocols(current); };
+    const ticket = await life.ticket(first ? current : null); first = false;
+    return accountConnectionProtocols({ connectionTicket: ticket } as ProjectSession); };
   const ticket = Object.assign(async () => (await ticket.info())?.ticket ?? null, {
     info: async ({ force = false }: { force?: boolean } = {}) => {
       if (stopped || cur?.link !== link) return null;
@@ -1146,16 +1179,29 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   let resolveEntry!: () => void, rejectEntry!: (error: unknown) => void;
   const opened = new Promise<void>((resolve, reject) => { resolveEntry = resolve; rejectEntry = reject; });
   const fail = (error: unknown) => { stopped = true; link.stop(); if (cur?.link === link) { setCloudConsentSource(null); setCloudIdentity(null);
+    // 登录失效、被踢、项目没了:编辑器进程那条卡片源码同步的连接一起停(回本机空间,不再向本页面要票据)
+    if (!ONLINE_BUILD && !ONLINE) detachCardSync();
     if (error instanceof AccountFailure && error.status === 403 && ['banned', 'not-listed'].includes(error.code))
       patch({ blocked: error.code === 'banned' ? 'kicked' : 'removed' });
   } if (!ready) rejectEntry(error);
     else { disconnectSharedAssets(); pushToast(error instanceof Error ? error.message : '云端登录已失效，请重新登录。', 'warn', Infinity); } };
   const link = new SyncLink({ url, projectId: options.projectId, initial: options.initial, initialize: false, session,
-    protocols, resumeProtocols: async () => { await renew(); return accountConnectionProtocols(current); },
+    // 接续不带票据:文档服务规定接续项旁边不能有鉴权项(带了握手回 400,只能白等保留期过完再重建会话);
+    // 接续时服务端按会话里记下的身份重新核对登录与成员资格。票据只在建新会话时出示(`protocols`)
+    protocols,
     saveBackup: b => void saveBackup(b), onMessage: onSideMessage,
+    // 服务端关连接的码不当终局(可写改只读时也是 4003):退避着凭新票据重连,取票据的接口说不行才收场 ——
+    // 401 登录失效、403 被踢 / 不在名单、404 项目没了(文案用客户端里已有的那句「这个云端项目已不存在。」)
+    isFatalClose: () => false,
     onProtocolError: error => { const e = error as { status?: number }; if (e.status === 401 || e.status === 403) { fail(error); return true; }
+      if (e.status === 404) { fail(new AccountFailure(404, 'project-gone')); return true; }
       pushToast(error instanceof Error ? error.message : '云端服务暂时不可用，正在等待重连。', 'warn'); return false; },
-    onOpen: () => { void (async () => {
+    onAuthExpired: () => { void life.authExpired(); },
+    onOpen: () => { life.opened(); void (async () => {
+      // 重新建成会话(断线重连、到期前换会话):进项目时接好的东西都还在,只把跟着连接走的那几样在新连接上重建 ——
+      // 选区与在场(`resyncPresenceLink`)、工具调用记录(`events.list`);发布方登记由 `SyncLink.renew` 自己重报;
+      // 其余(素材票据、成员名单、云端 Agent 的身份、卡片源码同步)不走这条连接。清单见 `docs/reports/AGENT-v18-cardsync.md`
+      if (ready) { if (!stopped && cur?.link === link) { resyncPresenceLink(); link.send({ type: 'events.list' }); refreshStatus(); } return; }
       await sharedStateReady(link);
       if (stopped) return;
       const account = options.client.account;
@@ -1169,6 +1215,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         if (current.expiresAt <= Date.now() + 60_000) await renew();
         return current;
       } }));
+      if (cur?.link === link) cur.accountLife = () => life.describe();
       if (cur?.link === link) cur.setAccountAgentEnabled = async enabled => {
         if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
         await renew();
@@ -1210,12 +1257,22 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         const metadataTimer = setInterval(() => {
           if (!isCurrent()) return;
           void renew().catch(error => { if (error instanceof AccountFailure && (error.status === 401 || error.status === 403)) fail(error); });
+          void life.tick();
         }, 3000);
         cur.offs.push(() => clearInterval(metadataTimer));
+        // 页面回到前台、网络恢复、电脑睡眠醒来:不等定时器(后台标签页的定时器会被浏览器压到一分钟一次),当场看一眼连接到期没有
+        const wake = () => { if (isCurrent() && (typeof document === "undefined" || document.visibilityState !== "hidden")) void life.tick(); };
+        if (typeof window !== "undefined") {
+          window.addEventListener("online", wake); window.addEventListener("focus", wake); window.addEventListener("pageshow", wake);
+          document.addEventListener("visibilitychange", wake);
+          cur.offs.push(() => { window.removeEventListener("online", wake); window.removeEventListener("focus", wake); window.removeEventListener("pageshow", wake); document.removeEventListener("visibilitychange", wake); });
+        }
       }
       await connectSharedAssets(link, base, { online: ONLINE_BUILD || ONLINE, account: { base: `${origin}/media/api/asset`, projectId: options.projectId, ticket } });
       link.send({ type: 'events.list' });
       ready = true; resolveEntry();
+      // 成员名字(提示气泡里「谁改的」)进来就取一次,之后成员有变化再取
+      projectSession(current);
       const linkText = `${origin}/editor?project=${encodeURIComponent(options.projectId)}`;
       pushToast('已进入云端项目，可以将项目链接发给另一位已登录成员。', 'info', Infinity, {
         label: '复制项目链接', pc: 'cloud-project-copy', run: () => { void navigator.clipboard.writeText(linkText).then(
@@ -1515,8 +1572,58 @@ async function saveRecoveryIdentity(descriptor: CollaborationDescriptor, record:
   }
   await recoveryRequest("identity", descriptor, { record, contentId: getState().project.id });
 }
+/**
+ * 文档服务确认原云端项目已不存在（证明已核对过）：把手上这份内容转成一个独立的本地项目。
+ * 内容用正在保留的那一份（文件里的内容，加上这台设备上还没发出去的离线修改）；换新的本地项目号；清掉协作关联
+ * （多用户协作缺省关）；本机存的旧房间身份一并注销；保存落点与草稿归属由订阅者清掉（原文件保留）；界面提示一次。
+ */
+let goneConversion = 0;
+async function becomeLocalAfterGone(answer: { proof: GoneProof }) {
+  const descriptor = currentAssociation();
+  if (!descriptor || descriptor.where !== "hosted" || answer?.proof?.projectId !== descriptor.roomId) return;
+  const kept = holding?.ds.projectId === descriptor.roomId ? holding : null;
+  const contentId = getState().project.id ?? "";
+  const ticket = ++goneConversion;
+  const stillHere = () => ticket === goneConversion && currentAssociation() === descriptor && holding === kept;
+  // 先把这台设备上没发出去的离线修改并进来，再转换；并不进来就不转、不注销本机身份，内容原样保留
+  if (kept && !ONLINE_BUILD && !ONLINE) {
+    try {
+      await restoreOfflineEdits({ restored: kept.restored,
+        readJournal: async () => (await recoveryRequest("select", descriptor, { contentId })).journal ?? null,
+        restoreJournal: (journal) => kept.ds.restoreJournal(journal as Parameters<DocSync["restoreJournal"]>[0]) });
+      kept.restored = true;
+    } catch (e) {
+      if (!stillHere()) return;
+      if ((e as { reason?: string }).reason === "offline-edits-unreadable") {
+        patch({ reopenState: "waiting-storage" });
+        setTimeout(() => { if (stillHere()) recoveryCoordinator.start(descriptor, contentId); }, 3000);
+      } else patch({ reopenState: "damaged" });
+      return;
+    }
+    if (!stillHere()) return;
+  }
+  const source = kept ? kept.ds.project : getState().project;
+  let converted;
+  try { converted = convertGoneProject(source, descriptor, answer.proof); }
+  catch { patch({ reopenState: "damaged" }); return; }
+  recoveryCoordinator.cancel(); releaseHolding(); setAssociation(null); clearSharedResume();
+  detach(); disconnectSharedAssets();
+  patch({ association: null, reopenState: null, shared: null, members: [], hosted: null, blocked: null });
+  if (!ONLINE_BUILD && !ONLINE) void recoveryRequest("revoke", descriptor).catch(() => undefined);
+  noteConvertedFrom(converted.project, converted.from);
+  // 走载入：没有关联的项目由 onLoad 接到本机空间（文件内容为准的一次根替换）
+  actions.loadProject(converted.project, getState().filePath);
+  publishGoneConversion({ projectId: converted.project.id!, name: converted.project.name, from: converted.from });
+}
+
 const recoveryCoordinator = new RecoveryCoordinator({
-  state: (reopenState: string) => patch({ reopenState }),
+  state: (reopenState: string, detail?: { proof: GoneProof }) => {
+    if (reopenState === "gone" && detail?.proof) { void becomeLocalAfterGone(detail); return; }
+    patch({ reopenState });
+  },
+  // 信任表只有随软件分发的那一张（`gone-proof.mjs` 的 `TRUSTED_GONE_AUTHORITIES`，`queryGone` 的缺省值）：这里不传、也不许传别的表。
+  // 守门测试 `server/test/gone-trust-source.test.mjs` 会拦。
+  gone: (descriptor: CollaborationDescriptor, signal: AbortSignal) => queryGone(descriptor, { signal }),
   identity: async (descriptor: CollaborationDescriptor, contentId: string, signal: AbortSignal) => {
     if (ONLINE) {
       const identities = Object.values(readJson<Record<string, RecoveryIdentity>>("pc.shared.identities", {})).filter(r => descriptorOf(r.candidate).service === descriptor.service && r.candidate.projectId === descriptor.roomId);

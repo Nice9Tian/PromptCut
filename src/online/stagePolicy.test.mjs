@@ -113,3 +113,27 @@ test("OCS-P-09 从 Cookie 头里取值", () => {
   assert.equal(cookieValue(null, "pc_rt"), null);
   assert.equal(cookieValue("pc_rt=a=b", "pc_rt"), "a=b");
 });
+
+test("OCS-P-09 票据的两种形状各自写死:旧共享项目的 v1.<…>.<…>,账号云端项目的恰好 43 个 base64url 字符;别的一概不认", () => {
+  const opts = { editorOrigin: EDITOR };
+  const grant = `/media-s/${SID}/_grant`;
+  const read = `/media-s/${SID}/media/${HASH}`;
+  const ACCOUNT = "Aa0_-".repeat(8) + "xyz"; // 43 个字符
+  assert.equal(ACCOUNT.length, 43);
+  assert.equal(isTicketShaped(ACCOUNT), true);
+  assert.equal(isTicketShaped(TICKET), true);
+  // 交接:账号票据换成同样属性的 cookie;读素材:cookie 里的账号票据换成 Authorization 头
+  const ok = mediaSRoute({ method: "POST", pathname: grant, origin: EDITOR, authorization: `Bearer ${ACCOUNT}` }, opts);
+  assert.equal(ok.kind, "grant");
+  assert.equal(ok.headers["set-cookie"], `${MEDIA_COOKIE}=${ACCOUNT}; Path=/media-s/${SID}/; HttpOnly; Secure; SameSite=Strict; Max-Age=900`);
+  assert.deepEqual(mediaSRoute({ method: "GET", pathname: read, cookie: `${MEDIA_COOKIE}=${ACCOUNT}` }, opts), { kind: "proxy", path: `/api/asset/media/${HASH}`, authorization: `Bearer ${ACCOUNT}` });
+  // 来源、方法的限制对账号票据同样有效
+  assert.deepEqual(mediaSRoute({ method: "POST", pathname: grant, origin: "https://evil.io", authorization: `Bearer ${ACCOUNT}` }, opts), { kind: "reject", status: 403 });
+  // 不是这两种形状的:长度差一个、带别的字符、两种拼在一起、v1 缺段
+  const bad = [ACCOUNT.slice(1), `${ACCOUNT}a`, `${ACCOUNT.slice(0, 42)}.`, `${ACCOUNT.slice(0, 42)}=`, `${ACCOUNT}.${ACCOUNT}`, "v1.abc", "v1..abc", `v2.${ACCOUNT}.abc`, "", "a".repeat(2049)];
+  for (const t of bad) {
+    assert.equal(isTicketShaped(t), false, JSON.stringify(t.slice(0, 50)));
+    assert.deepEqual(mediaSRoute({ method: "POST", pathname: grant, origin: EDITOR, authorization: `Bearer ${t}` }, opts), { kind: "reject", status: 400 }, JSON.stringify(t.slice(0, 50)));
+    assert.deepEqual(mediaSRoute({ method: "GET", pathname: read, cookie: `${MEDIA_COOKIE}=${t}` }, opts), { kind: "reject", status: 401 }, JSON.stringify(t.slice(0, 50)));
+  }
+});

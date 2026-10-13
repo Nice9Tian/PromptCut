@@ -9,6 +9,7 @@ import path from "node:path";
 import { frameService, renderProject } from "../vite-plugin-frames";
 import { postFrame } from "../png-post.mjs";
 import { outRoot } from "./http";
+import { cardBitmapScratch, renderCardBitmaps } from "./card-bitmap";
 import { runExport } from "./worker-pool";
 import type { RenderJob2, Runner } from "./worker-pool";
 
@@ -70,6 +71,12 @@ export interface RenderOpts {
    * `runner` 旁路不看它。
    */
   lane?: "agent" | "preview" | "prerender";
+  /**
+   * 单张卡片画面(`bake_card`、3D 视图的贴图):当场渲出位图,不建帧库条目、不查也不写帧库、不生成快照
+   * (`card-bitmap.ts`;`mechanism/asset-service.md`「不经任务队列的单张卡片画面」)。不附实体矩形。`runner` 旁路不看它
+   * (那条路本来就只在临时目录里出 PNG、用完删)。
+   */
+  bitmapOnly?: boolean;
 }
 
 const fmtBox = (b: readonly number[] | null) => (b ? `[${b.join(", ")}]` : "null");
@@ -136,6 +143,25 @@ export async function renderOneFrame(root: string, origin: string, project: any,
  * 也就是说同一张卡的第 2 个时刻起,成本从 4400ms 掉到 78ms。
  */
 export async function renderFrames(root: string, origin: string, project: any, times: number[], notes: string[], priority = 0, o: RenderOpts = {}): Promise<Map<number, FrameResult>> {
+  if (!o.runner && o.bitmapOnly) {
+    const shots = await renderCardBitmaps(root, origin, project, times, { signal: o.signal, lane: o.lane ?? "agent" });
+    const result = new Map<number, FrameResult>();
+    const wantPost = !!(o.post && (o.post.shrink || o.post.bg || o.post.stats));
+    const scratch = cardBitmapScratch(root);
+    for (const [frame, buf] of shots) {
+      if (!wantPost) { result.set(frame, { buf, width: project.width, height: project.height }); continue; }
+      // 压底色、数透明像素照旧交给 postFrame(它按文件收发);临时文件放在这条路自己的空目录里,用完就删
+      const stem = path.join(scratch, "post-" + process.pid + "-" + counter++);
+      const file = stem + "-input.png", out = stem + ".png";
+      try {
+        await fsp.mkdir(scratch, { recursive: true });
+        await fsp.writeFile(file, buf);
+        const info = await postFrame({ cards: file, layers: [], out, bg: o.post?.bg ?? null, shrink: !!o.post?.shrink, stats: !!o.post?.stats });
+        result.set(frame, { ...info, buf: await fsp.readFile(out) });
+      } finally { await Promise.all([fsp.rm(out, { force: true }), fsp.rm(file, { force: true })]); }
+    }
+    return result;
+  }
   if (!o.runner) {
     const service = frameService(root, origin);
     const normalized = renderProject(project);

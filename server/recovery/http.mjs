@@ -10,6 +10,7 @@ import { roomUnavailableReason } from './relocation.mjs';
 import { prepareRelocationSnapshot } from './relocation-files.mjs';
 import { transferRelocationToHosted } from './relocation-transfer.mjs';
 import { pullRelocationToLocal } from './relocation-pull.mjs';
+import { legacyImportAccepted } from './relocation-preflight.mjs';
 
 /** Local-only identity API. Its root and protection backend are owned by the app. */
 export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf, assets, reloadSpace, onClose }) {
@@ -142,6 +143,11 @@ export function recoveryHttp({ dir, dataDir, store, device, baseOf, assetBaseOf,
         if (!rec) return reply(res, 409, { ok: false, error: 'host-data-missing' });
         const unavailable = roomUnavailableReason(rec);
         if (unavailable === 'relocated') return reply(res, 200, { ok: true, state: 'complete', descriptor: { ...descriptor, where: rec.relocation.target.where } });
+        // 新开一次搬迁之前先问目标节点接受不接受旧办法的导入；不接受或问不到，就停在这里：本机房间不封锁、不停托管、不写云端。
+        if (p.endsWith('/move-hosted') && !unavailable) {
+          const accepted = await legacyImportAccepted({ service: descriptor.service });
+          if (!accepted.ok) return reply(res, accepted.error === 'account-mode' ? 409 : 503, { ok: false, error: accepted.error });
+        }
         try {
           let move = moves.get(descriptor.roomId);
           if (p.endsWith('/move-hosted')) move = startMove(descriptor, rec.relocation?.txnId ?? `move_${randomBytes(16).toString('hex')}`);

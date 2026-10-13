@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { MediaAsset } from "../../kernel/project";
+import { confirmedMissing } from "../../audio/missingMaterialRecord";
 import { mediaTierPolicy, previewMediaUrl, subscribeMediaTierPolicy, type MediaTierPolicy } from "../../render/mediaTier";
 
 /**
@@ -12,6 +13,8 @@ export function useMediaTierPolicy(): MediaTierPolicy {
 
 export function usePreviewMediaUrl(media: Pick<MediaAsset, "url" | "hash" | "tiers" | "ext" | "kind"> | undefined | null): string {
   const policy = useMediaTierPolicy();
+  // 认定过「确认缺失」的素材地址留着没清(记录要和它对得上),但那个地址取不到东西:缩略、波形一律不挂、不发请求
+  if (media && confirmedMissing(media as MediaAsset)) return "";
   return media ? previewMediaUrl(media, policy) : "";
 }
 

@@ -174,6 +174,15 @@ export interface MediaAsset {
    * 导出上传本地文件时靠它找回源文件(见 editor/io/index.ts)。
    */
   soundOf?: string;
+  /** Only an explicit, serialized recovery result may activate a missing-material proxy. */
+  missingMaterial?: {
+    v: 1;
+    mediaId: string;
+    original: { kind: "video" | "audio" | "image"; name: string; url: string; hash?: string; path?: string };
+    reason: "confirmed-missing";
+    visual: boolean;
+    audio: boolean;
+  };
 }
 
 /**

@@ -5,8 +5,8 @@
  * 用真的 `src/editor/io/proc.ts`、`procp.ts`、`recoveryAssociation.ts`、`server/recovery/coordinator.mjs` 和真的草稿落盘/按路径打开的服务端插件
  * (`server/vite-plugin-projects.ts`、`server/vite-plugin-skill.ts`),不连网、不起服务。
  *
- * 通过的几条锁住「不以空项目覆盖、原文件不动」;带 `todo` 的几条是 main 上**目前不成立**的预期(产品问题,见地图「产品问题」),
- * 修好之后它们会转绿,届时把 todo 去掉即可。todo 失败不让 `npm test` 变红。
+ * 前几条锁住「不以空项目覆盖、原文件不动」;DMG-5、DMG-6 原来带 `todo`(地图「产品问题」1、2),
+ * 并入 claude/v18-missing 以后成立了,todo 已去掉(2026-10-13)。
  *
  * 跑:npm test -- server/test/accept-018-files-proc-damage.test.mjs
  */
@@ -89,16 +89,16 @@ test('ACC018-DMG-4 未知的协作关联版本:项目内容照常读出,关联�
   assoc.setAssociation(null);
 });
 
-// ------------------------------------------------------------------ 产品问题(todo):现在不成立
+// ------------------------------------------------------------------ 原来的产品问题:并入 claude/v18-missing 后成立
 
-test('ACC018-DMG-5 坏关联(房间号不合法):读取失败时不能先把当前项目的剧本和对话换掉', { todo: '产品问题:loadProc 在 applyProjectAi 之后才解析关联,关联坏就抛错,但当前会话的剧本/对话已被文件里的覆盖(见地图「产品问题」1)' }, () => {
+test('ACC018-DMG-5 坏关联(房间号不合法):读取失败时不能先把当前项目的剧本和对话换掉', () => {
   const before = seedCurrent();
   const bad = wrap({ tracks: [], name: 'bad-assoc' }, { ai: { script: 'FILE-SCRIPT', messages: [] }, collaboration: { version: 1, roomId: 'bad-room', where: 'hosted', service: 'https://x.example' } });
   assert.throws(() => proc.loadProc(bad), /协作房间关联无效/);
   unchanged(before);
 });
 
-test('ACC018-DMG-6 未知的 .proc 文件版本:不能当 v1 静默读入再按 v1 存回(会丢掉不认识的字段)', { todo: '产品问题:version 99 被当 v1 载入,重存成 version 1 并丢掉未知的顶层字段(见地图「产品问题」2)' }, () => {
+test('ACC018-DMG-6 未知的 .proc 文件版本:不能当 v1 静默读入再按 v1 存回(会丢掉不认识的字段)', () => {
   seedCurrent();
   const doc = { format: proc.PROC_FORMAT, version: 99, futureTopLevel: { keep: 'me' }, project: { tracks: [], name: 'v99-file' } };
   let outcome = 'refused';
