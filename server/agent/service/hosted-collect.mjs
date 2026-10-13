@@ -399,8 +399,9 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
 
 /**
  * 从环境变量读节点上的采集工具(部署决定)。没配回 null。
- *   PROMPTCUT_AGENT_COLLECT_PYTHON     装了 yt-dlp 的 Python 解释器(绝对路径;`-m promptcut_collect` 用检出里的 `python/` 目录)
- *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS  **只给探针与单测**:JSON 数组,替换掉 `-m promptcut_collect`(把解释器换成一个替身脚本)。
+ *   PROMPTCUT_AGENT_COLLECT_PYTHON     装了 yt-dlp 的 Python 解释器(绝对路径;隔离模式起 `promptcut_collect`,包目录是检出里的 `python/`。
+ *                                      隔离模式不看用户 site:yt-dlp 要装在这个解释器自己的 site-packages 或虚拟环境里)
+ *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS  **只给探针与单测**:JSON 数组,替换掉隔离模式的开关与包名(把解释器换成一个替身脚本)。
  *                                      生产不设;设了日志里有 `agent.collect.test-runner`
  */
 export function readCollectConfig(env, { root }) {

@@ -46,6 +46,12 @@ async function waitGone(pids, ms = 8000) {
 }
 function pgidOf(pid) {
   if (win) return null;
+  try {
+    // /proc/<pid>/stat:最后一个 ')' 之后依次是 状态、父进程号、进程组号
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const pgrp = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2]);
+    if (Number.isInteger(pgrp)) return pgrp;
+  } catch { /* 没有 /proc(macOS):退回 ps */ }
   const r = spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf8', windowsHide: true });
   return r.status === 0 ? Number(r.stdout.trim()) : null;
 }
