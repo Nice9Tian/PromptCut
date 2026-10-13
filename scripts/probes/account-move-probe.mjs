@@ -145,9 +145,12 @@ async function stopAll() {
 async function startEditor(tag, port) {
   const dataDir = path.join(TMP, tag);
   const overrides = path.join(dataDir, 'card-overrides');
-  for (const d of [overrides, path.join(dataDir, 'vite-cache')]) fs.mkdirSync(d, { recursive: true });
+  // 依赖预构建目录放在一个名字里带 node_modules 的路径下:舞台端口的闸(`server/stage-gate.mjs`)对项目根之外的文件只放行路径里带
+  // /node_modules/ 的,放在别处舞台窗口取不到预构建好的依赖(403),舞台是空白的
+  const viteCache = path.join(dataDir, 'node_modules', '.vite-probe');
+  for (const d of [overrides, viteCache]) fs.mkdirSync(d, { recursive: true });
   const proc = start(`editor-${tag}`, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'], reopenEditorEnv(dataDir, {
-    PROMPTCUT_VITE_CACHE_DIR: path.join(dataDir, 'vite-cache'),
+    PROMPTCUT_VITE_CACHE_DIR: viteCache,
     PROMPTCUT_CARD_OVERRIDES: overrides,
     PROMPTCUT_DEVICE_ID: `move-${tag}-${RUN}`.padEnd(16, '0'),
     PROMPTCUT_DEVICE_NAME: `account-move-${tag}`,
