@@ -25,10 +25,10 @@ import fs from 'node:fs';
 import https from 'node:https';
 import WS from 'ws';
 import { startAccountDualUserFixture } from './fixtures/account-dual-user-path.mjs';
+import { freePorts } from './free-ports.mjs';
 import { createCardSync, CARD_SOURCE } from '../card-sync.mjs';
 import { accountCardProtocols, cardSyncConnect } from '../account-card-link.mjs';
 
-const PORTS = [28670, 28671, 28672, 28673, 28674, 28675, 28676];
 const CARD = 'src/cards/user/acct-sync-probe.tsx';
 const AGENT_CARD = 'src/cards/user/acct-sync-agent.tsx';
 const src = (mark) => `export const mark = "${mark}";\n`;
@@ -44,7 +44,7 @@ const waitFor = async (check, label, ms = 20_000) => {
 };
 
 test('账号云端项目的卡片源码同步:上传、装上、只读、别的项目、被踢、项目被删、退出登录', { timeout: 420_000 }, async (t) => {
-  const fixture = await startAccountDualUserFixture({ ports: PORTS });
+  const fixture = await startAccountDualUserFixture({ ports: await freePorts(7) });
   const ca = fs.readFileSync(fixture.caFile);
   const origin = fixture.origin;
   const wsUrl = `${origin.replace(/^https:/, 'wss:')}/hosted/`;

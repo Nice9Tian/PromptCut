@@ -30,11 +30,11 @@ import fs from 'node:fs';
 import https from 'node:https';
 import WS from 'ws';
 import { startAccountDualUserFixture } from './fixtures/account-dual-user-path.mjs';
+import { freePorts } from './free-ports.mjs';
 
 const { SyncLink } = await import(srcUrl('editor/sync/link.ts'));
 const { createAccountLinkLife } = await import(srcUrl('editor/sync/accountLinkLife.ts'));
 
-const PORTS = [28660, 28661, 28662, 28663, 28664, 28665, 28666];
 const OLD = process.env.ACCOUNT_PAGE_LINK_REPRO_OLD === '1';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitFor = async (check, label, ms = 20_000) => {
@@ -48,7 +48,7 @@ const waitFor = async (check, label, ms = 20_000) => {
 };
 
 test('账号云端项目里页面的文档连接:到期前换会话、换的时候不丢改动、换不成如实转离线、过期后自己恢复', { timeout: 420_000 }, async (t) => {
-  const fixture = await startAccountDualUserFixture({ ports: PORTS });
+  const fixture = await startAccountDualUserFixture({ ports: await freePorts(7) });
   const ca = fs.readFileSync(fixture.caFile);
   const origin = fixture.origin;
   const wsUrl = `${origin.replace(/^https:/, 'wss:')}/hosted/`;
