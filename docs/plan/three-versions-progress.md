@@ -108,6 +108,12 @@ Claude 主会话接手后的工作区用 `v18-` 开头（`018-` 开头的是 Cha
 
 还没派的：工具包里的镜头识别（P1 不含素材拼图的那一半，等加固那一块出了公共的运行器再派）、一键流程（P5，等 P1）、采集代下（C1，等 W2）、桌面薄壳（D）、最后的工具表接线（G）；官网上改密退出的三句话（等用户定字）。
 
+## 分支去向
+
+2026-10-13 清掉的（都是 `main` 的祖先，提交全在 `main` 里；清之前核过没有未提交的文件、没有目录联接）：本机和远端的 `codex/018-account-path-main`、`codex/018-agent-worker-doc`、`codex/018-agent-worker-runtime`（三条同一个提交，随块一进了 `main`，三个工作区一并清了）、`codex/018-run-assets-current-v2`、`codex/018-run-assets-current`（随块六进了 `main`）、`codex/018-instance-http-repair-verification`；只在远端的 `codex/018-account-public-path`、`codex/018-asset-root-publisher`、`codex/018-cloud-consent-user-path`、`codex/018-member-native-route`、`codex/018-root-registry-stage`、`codex/render-scheduling-doc-sync`、`claude/render-service`。
+
+还留着的：`codex/018-missing-material-user-path`（内容已并进 `claude/v18-missing`，等那条分支进 `main` 以后清）；`codex/018-cloud-assets-central-glue`、`codex/018-agent-immediate-revoke`、`codex/018-browser-doc-read`、`codex/018-agent-real-runner`（各有 `main` 里没有的内容，发版前逐条判）；`claude/four-stage`（只有合并提交，内容和 `main` 一样）、`claude/cloud-agent-3`（一个没有文件改动的提交，说明里记着 `get_gif` 可视记录的选型笔记，做那一块时要看）。交接计划书第 5.4 节那几条不属于这次任务，不动。
+
 ## 没做到的与原因
 
 - 开工前原普通档探针也失败：独立主机等待超时及两个后续断言；强化探针又遇旧夹具不适配新账号入口，尚未通过，不挡其它已验阶段。
