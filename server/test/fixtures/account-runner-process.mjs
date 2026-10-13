@@ -280,7 +280,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       if (result.cookie) cookie = result.cookie; if (result.body.csrfToken) csrf = result.body.csrfToken; return result; };
     await site('/me'); const login = await site('/login', fixture.accounts[index]);
     if (login.status !== 200) throw Error('runner-fixture-login');
-    const editor = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}` });
+    let editor = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}` });
     if (editor.status !== 200) throw Error('runner-fixture-editor-session');
     const doc = (route, body) => request('/hosted/shared/account/' + route, { method: 'POST', body, headers: { authorization: `Bearer ${editor.body.accessToken}` } });
     const consent = await site('/cloud-agent-consent', { accept: true, noticeVersion: 1, requestId: `runner-consent-${index}` });
@@ -305,11 +305,28 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     const pageId = `runner-page-${index}`;
     const selection = await send({ type: 'selection.set', projectId, pageId, revision: 1, selection: { clipIds: [] } });
     if (selection.type !== 'selection.ok') throw Error('runner-fixture-selection');
+    // 委托票据有时限；机器很忙时一条测试会跑过它。快到期就凭同一个登录重新要一份（和页面的做法一样）
+    let renewals = 0;
+    const tickets = async () => {
+      if (session.body.expiresAt - Date.now() < 30_000) {
+        let renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-renew-${++renewals}` });
+        if (renewed.status === 401) {
+          // 编辑器这一侧的短期凭证也到期了：凭网站登录再换一份
+          const again = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}-renew-${renewals}` });
+          if (again.status !== 200) throw Error('runner-fixture-editor-session-renew');
+          editor = again;
+          renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-renew-${++renewals}` });
+        }
+        if (renewed.status !== 200) throw Error('runner-fixture-doc-session-renew');
+        session = renewed;
+      }
+      return session.body;
+    };
     return { opened, pageId, send, session: session.body,
       project: async () => (await send({ type: 'project.open', projectId })),
-      agent: (route, body) => request('/agent/v1' + route, { method: body ? 'POST' : 'GET', body, headers: { authorization: `Bearer ${session.body.agentDelegationTicket}` } }),
+      agent: async (route, body) => request('/agent/v1' + route, { method: body ? 'POST' : 'GET', body, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
       /** 凭成员自己的素材票据直接问素材服务（不经 Agent）：用来核对任务写进去的字节 */
-      asset: async hash => { const res = await fetch(`http://127.0.0.1:${ports.asset}/api/asset/media/${hash}`, { headers: { authorization: `Bearer ${session.body.assetTicket}` } });
+      asset: async hash => { const res = await fetch(`http://127.0.0.1:${ports.asset}/api/asset/media/${hash}`, { headers: { authorization: `Bearer ${(await tickets()).assetTicket}` } });
         return { status: res.status, bytes: Buffer.from(await res.arrayBuffer()) }; },
       async close() { ws.terminate(); await closed; } };
   }
