@@ -81,7 +81,8 @@ export async function prepareExportLayers({ project, projectId, mode, nonRunnabl
   const clips = project.tracks.flatMap((tr) => tr.clips).filter((c) => !!c.cardId).map((c) => ({ id: c.id, start: c.start, end: c.end, cardId: c.cardId }));
   const blocked = new Set(nonRunnable);
   const streams: ReadableStream[] = mode === "fast" && canDecodeStreams()
-    ? await loadReadableStreams(projectId, project, deps.stream, { clipIds: new Set(clips.map((c) => c.id)) })
+    // 层表按项目自己的 id 存(`layers:<project.id>`,渲染节点按它认下的那一版项目写);任务队列按文档服务的项目号(`projectId`)。两个号不一定相同
+    ? await loadReadableStreams(project.id || null, project, deps.stream, { clipIds: new Set(clips.map((c) => c.id)) })
     : [];
   const plan: LayerPlan = planCardLayers({ clips, fps, total, mode, nonRunnable: blocked, streams });
   const stats: ExportLayerStats = { mode, streamClips: plan.streamOf.size, wrapperOnly: plan.wrapperOnly.length, nodeClips: plan.needFrames.length,

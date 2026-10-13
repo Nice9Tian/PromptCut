@@ -329,6 +329,8 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
     if (failure) throw failure;
     if (!muxer) throw new Error("编码器一帧都没给出");
     const bytes = await (muxer as Mp4Muxer).finalize();
+    // 先收掉合成器(连同卡片画面的来源):解码用时、取了多少字节这几项统计在收的时候才落定
+    compositor.close();
     return { frames: total, bytes, audio: !!audio, videoCodec: cap.videoCodec, ms: performance.now() - t0, stats: { ...compositor.stats }, mode, layers: layers ? { ...layers.stats } : null };
   } finally {
     try { if (encoder.state !== "closed") encoder.close(); } catch { /* 已经关了 */ }

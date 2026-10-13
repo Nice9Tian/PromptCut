@@ -36,9 +36,9 @@
  *    参数面板说明「图形能力不够」、舞台不挂图卡的画布,DOM 用户卡不受影响。
  * E8 源码更新后在线页面跟着换:创建者把 `oce-visual` 的源码换一版,10 秒内舞台里的画面是新版的、成本身份(测量记录里的 identityKey)换了、
  *    浏览器节点报的代码身份换了。
- * E10 导出页不执行卡片代码、贴同步卡的预渲染原尺寸:另开一个只有一张同步画面卡的项目,渲染节点的预渲染原尺寸由探针替它写;在线逐帧导出(`exportVideoBrowser`,
- *     同源 `?export=1` 的导出页)进行中采样导出页:没有卡片模块的顶层记号(编辑页面里也没有)、同步卡的包裹层挂出来但没有活内容、每一帧都换成预渲染原尺寸;导出完成,成片第一帧
- *     左上角像素是预渲染原尺寸的颜色。
+ * E10 导出:同步卡的画面要渲染节点逐帧渲(2026-10-13 起在线导出不再取每张卡存好的 HTML 快照)。另开一个只有一张同步画面卡的项目,没有渲染节点:在线逐帧导出
+ *     (`exportVideoBrowser`)停在等待、提示「没有渲染节点在线」、不开导出页、编辑页面里没有卡片模块的顶层记号。有渲染节点时「导出页不执行卡片代码、贴节点渲的位图」
+ *     在 `online-export-modes-probe.mjs` 里核。
  * E9 手机低内存档(仿手机)按现有规则走:运行状态 `low-memory`、参数面板说明「低内存档」、两个文档里都没有执行卡片代码的记号,没有预渲染结果的卡显示图标。
  *
  * 耗时只记录,不当通过条件(verification.md「耗时只记录,不当闸门」):E8 换成新版的用时写进 TIMINGS 行;等待时限只为防卡死。不打印令牌、口令(输出里的票据形状串一律抹掉)。
@@ -725,7 +725,7 @@ try {
 
   }
 
-  /* ============================================================ E10 导出页不执行卡片代码、贴同步卡的预渲染原尺寸 */
+  /* ============================================================ E10 导出:同步卡要渲染节点逐帧渲,没有节点时停在等待 */
   console.log('\n== E10 导出页');
   {
     const NAME2 = `${NAME}-x`;
@@ -756,42 +756,22 @@ try {
     await until('X 同步卡载入成功', async () => (await X.run())?.run['oce-visual']?.state === 'ready', 120_000, 500);
     const live2 = await until('X 导出前预览里是活 DOM', async () => (await X.stageState(['oce-exp-v'], { 'oce-exp-v': '[data-oce-visual]' }))?.['oce-exp-v']?.live, 60_000, 500);
     check('E10 导出前:预览里这张判轻的同步卡是活 DOM', !!live2);
-    // 预渲染原尺寸:纯色快照(左上角没有文字,取像素用)
-    const layer2 = makeLayer('oce-exp-v', '#0a8c3c', EXP_FPS, 30, 0);
-    await writeManifests(layer2, conn2);
-    await writeLayerMap(setup2.projectId, EXP_FPS, [layer2], conn2);
-    await until('X 层表到了', async () => (await X.page.evaluate(() => window.__pcOnlineSnapshots?.()?.layers?.some((l) => l.clipId === 'oce-exp-v' && l.ready > 0))), 60_000, 500);
-    // 导出:一边导出一边在导出页(同源 iframe)里看
-    const seen = { frames: 0, marks: new Set(), live: false, snap: false, urls: new Set() };
+    // 2026-10-13 起在线导出不再取每张卡存好的 HTML 快照:同步来的卡导出时由渲染节点逐帧渲(完整流程在 `online-export-modes-probe.mjs`,那里有真的渲染节点)。
+    // 这里没有渲染节点,核的是:导出停在等待、提示说清楚在等什么、导出页没被打开、两个文档里都没有执行卡片代码
+    const seen = { frames: 0 };
     let done = false;
-    const exportPromise = X.page.evaluate(() => window.__pcIo.exportVideoBrowser({ maxFrames: 15, originals: true })).then((r) => { done = true; return r; }, (e) => { done = true; return { error: String(e?.message ?? e) }; });
+    const exportPromise = X.page.evaluate(() => window.__pcIo.exportVideoBrowser({ maxFrames: 15, originals: true, waitLimit: 2 })).then((r) => { done = true; return r; }, (e) => { done = true; return { error: String(e?.message ?? e) }; });
     const t0 = Date.now();
     while (!done && Date.now() - t0 < 180_000) {
-      for (const fr of X.page.frames()) {
-        if (!/[?&]export=1/.test(fr.url())) continue;
-        seen.urls.add(new URL(fr.url()).origin + new URL(fr.url()).pathname);
-        const st = await fr.evaluate(() => ({ wrappers: [...document.querySelectorAll('[data-pc-clip]')].map((w) => w.getAttribute('data-pc-clip') + ':' + w.childElementCount), mark: globalThis.__pcOceMark ?? null, live: !!document.querySelector('[data-oce-visual]'), snap: /SNAP oce-exp-v/.test(document.body?.innerText ?? '') || !!document.querySelector('[data-probe-snap="oce-exp-v"]') })).catch(() => null);
-        if (st) { seen.wrappers = st.wrappers; seen.frames++; seen.marks.add(String(st.mark)); seen.live ||= st.live; seen.snap ||= st.snap; }
-      }
+      for (const fr of X.page.frames()) if (/[?&]export=1/.test(fr.url())) seen.frames++;
       await sleep(80);
     }
     const exp = await exportPromise;
     const topMark = await X.page.evaluate(() => globalThis.__pcOceMark ?? null);
-    summary.E10 = { frames: exp?.result?.frames ?? null, error: exp?.error ?? null, waits: exp?.waits ?? null, stats: exp?.result?.stats ?? null, seen: { wrappers: seen.wrappers ?? null, frames: seen.frames, marks: [...seen.marks], live: seen.live, snap: seen.snap, urls: [...seen.urls] }, topMark };
-    check('E10 导出页(同源 ?export=1 的 iframe)被采样到,里面没有卡片模块的顶层记号,编辑页面里也没有', seen.frames > 0 && seen.marks.size === 1 && seen.marks.has('null') && topMark === null, summary.E10);
-    // 预渲染原尺寸是合成器在导出页给出的场景快照里换进包裹层的(不在导出页的活文档里):导出页里这张卡的包裹层挂着、里面没有任何活内容;每一帧都换了一次
-    check('E10 导出页里同步卡的包裹层挂出来了、里面没有活内容(没有执行卡片代码),每一帧都换成了预渲染原尺寸(heavyReplaced = 15)', seen.live === false && (seen.wrappers ?? []).includes('oce-exp-v:0') && exp?.result?.stats?.heavyReplaced === 15, summary.E10);
-    check('E10 导出完成(15 帧),没有等待提示', exp?.result?.frames === 15 && !exp?.error && (exp?.waits ?? []).length === 0, summary.E10);
-    // 成片第一帧左上角是预渲染原尺寸的颜色
-    let color = null;
-    if (exp?.base64) {
-      const mp4 = path.join(tmp, 'e10.mp4'), png = path.join(OUT, 'e10-frame0.png');
-      fs.writeFileSync(mp4, Buffer.from(exp.base64, 'base64'));
-      const r = spawnSync(ffmpeg, ['-y', '-i', mp4, '-vframes', '1', png], { windowsHide: true, timeout: 60_000 });
-      if (r.status === 0) { const img = PNG.sync.read(fs.readFileSync(png)); const i = (100 * img.width + 100) * 4; color = { rgb: [img.data[i], img.data[i + 1], img.data[i + 2]], size: [img.width, img.height], file: png }; }
-    }
-    summary.E10.frame0 = color;
-    check(`E10 成片第一帧(左上角像素)是预渲染原尺寸的颜色 (${EXP_COLOR}),容差 ±30,且尺寸是项目画幅`, !!color && near(color.rgb, EXP_COLOR, 30) && color.size[0] === 1920 && color.size[1] === 1080, color);
+    summary.E10 = { result: exp?.result ?? null, error: exp?.error ?? null, cancelled: exp?.cancelled ?? null, waits: exp?.waits ?? null, exportFrames: seen.frames, topMark };
+    check('E10 没有渲染节点:导出停在等待、没有出成片', !exp?.result && exp?.cancelled === true && !exp?.base64, summary.E10);
+    check('E10 等待提示说清楚在等渲染节点(「没有渲染节点在线」那一句,带片段数)', (exp?.waits ?? []).length > 0 && exp.waits.every((w) => /没有渲染节点在线/.test(w) && /1 个片段/.test(w)), exp?.waits);
+    check('E10 没到齐不开导出页(不出半截的成片),编辑页面里没有卡片模块的顶层记号', seen.frames === 0 && topMark === null, summary.E10);
     check('E10 导出页那一页没有页面错误', X.pageErrors.length === 0, X.pageErrors.slice(0, 3));
     try { ws2.close(); } catch { /* 已关 */ }
     await X.close();

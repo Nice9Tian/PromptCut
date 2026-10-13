@@ -51,6 +51,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const KEEP = argv.includes('--keep-temp');
+/** 排障用:做到第几步为止(`one` / `two` / `three`;不给 = 全做) */
+const STOP_AFTER = arg('--until', null);
+class StopHere extends Error {}
 const BASE = Number(arg('--base-port', 27220));
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4, host: BASE + 10 };
 const BAND = [BASE, BASE + 19];
@@ -72,8 +75,10 @@ const PROJECT = { width: 1280, height: 720, fps: 30, duration: 3 };
 const FPS = PROJECT.fps, TOTAL = PROJECT.duration * FPS;
 const CLIPS = {
   L: { id: 'xe-light', cardId: 'punch-pill', start: 0, end: 3, params: { text: `导出探针 ${RUN}` }, frame: { x: 320, y: 620, w: 560, h: 120, anchor: [0.5, 0.5] } },
-  A: { id: 'xe-heavy-a', cardId: 'probe-slow-stepped', start: 0.4, end: 1.9, params: { burnMs: 40, label: 'A' }, frame: { x: 330, y: 250, w: 520, h: 300, anchor: [0.5, 0.5] } },
-  B: { id: 'xe-heavy-b', cardId: 'probe-slow-stepped', start: 1.0, end: 2.0, params: { burnMs: 900, label: 'B' }, frame: { x: 950, y: 250, w: 520, h: 300, anchor: [0.5, 0.5] } },
+  // 探针卡把橙块画在自己框里的 (480, 420) 起 320×240 的地方:A 不设框(铺满舞台),B 的框整个上移 360(橙块落在画面上半),两张不重叠。
+  // (单卡流只装得下「框外扩 32 像素」以内的画面,框设小了橙块会落在流的矩形外面,预览里贴流时同样看不到)
+  A: { id: 'xe-heavy-a', cardId: 'probe-slow-stepped', start: 0.4, end: 1.9, params: { burnMs: 40, label: 'A' } },
+  B: { id: 'xe-heavy-b', cardId: 'probe-slow-stepped', start: 1.0, end: 2.0, params: { burnMs: 900, label: 'B' }, frame: { x: 0, y: -360, w: 1280, h: 720, anchor: [0, 0] } },
   G: { id: 'xe-glass', cardId: 'chapter-bar', start: 0, end: 3, params: {} },
   S: { id: 'xe-synced-clip', cardId: 'xe-synced', start: 0.2, end: 2.2, params: { tint: '#ff8800' }, frame: { x: 900, y: 560, w: 520, h: 240, anchor: [0.5, 0.5] } },
 };
@@ -85,6 +90,7 @@ const COUNT = Object.fromEntries(Object.entries(WIN).map(([k, w]) => [k, w.last 
 const SYNCED_KEY = 'src/cards/user/xe-synced.tsx';
 const SYNCED_SOURCE = `/** 导出探针:同步来的用户卡(画面只由时间和参数决定) */
 import type { CardDef, CardProps } from "../../kernel/types";
+(globalThis as any).__pcXeMark = ((globalThis as any).__pcXeMark ?? 0) + 1;
 interface Params { tint: string }
 function XeSynced({ params, t }: CardProps<Params>) {
   const sec = t ?? 0;
@@ -375,7 +381,8 @@ try {
   out.diffs.fastVsFull_seams = seam.map((i) => ({ i, ...diffOf(flatten(decode(fast1.frames[i])), flatten(decode(full1.frames[i]))) }));
   check(out.diffs.fastVsFull_seams.every((d) => d.over32 < 0.01 * d.pixels), '衔接处(取流的头尾、取流与逐帧渲交界):画面不跳', out.diffs.fastVsFull_seams);
   for (const i of [WIN.A.first + 10, WIN.B.first + 5]) { saveFrame(SHOTS, `step1-fast-f${i}.png`, fast1.frames[i]); saveFrame(SHOTS, `step1-full-f${i}.png`, full1.frames[i]); }
-  say('one.done', { ms: Date.now() - t1, fast: fl?.perClip, fastMs: fast1.ms, fullMs: full1.ms });
+  say('one.done', { ms: Date.now() - t1, fast: fl ?? null, full: ul ?? null, fastMs: fast1.ms, fullMs: full1.ms, errors: [fast1.error, full1.error], stats: fast1.result?.stats ?? null });
+  if (STOP_AFTER === 'one') throw new StopHere();
 
   /* ---------------- 二:放上 S,没有渲染节点 */
   tag = '[二] ';
@@ -416,6 +423,7 @@ try {
     out.steps[`noNode_${mode}`] = { waits: r.waits.slice(0, 1), error: r.error };
   }
   say('two.done', { ms: Date.now() - t2 });
+  if (STOP_AFTER === 'two') throw new StopHere();
 
   /* ---------------- 三:起渲染主机,完整导出 */
   tag = '[三] ';
@@ -428,7 +436,27 @@ try {
   host = await startRenderHost({ port: PORTS.host, dir: hostDir, config, maxConcurrent: 2, band: BAND });
   out.timings.hostUpMs = Date.now() - t3;
   say('host.up', { ms: Date.now() - t3 });
+  // 一边导出一边看导出页(同源 `?export=1` 的 iframe):它不执行同步卡的代码,这张卡只有包裹层
+  const seen = { samples: 0, marks: new Set(), live: false, wrappers: new Set() };
+  let exporting = true;
+  const watch = (async () => {
+    while (exporting) {
+      for (const fr of page.frames()) {
+        if (!/[?&]export=1/.test(fr.url())) continue;
+        const st = await fr.evaluate((id) => ({ mark: globalThis.__pcXeMark ?? null, live: !!document.querySelector('[data-xe-synced]'),
+          wrap: [...document.querySelectorAll('[data-pc-clip]')].filter((w) => w.getAttribute('data-pc-clip') === id).map((w) => w.childElementCount) }), CLIPS.S.id).catch(() => null);
+        if (st) { seen.samples++; seen.marks.add(String(st.mark)); seen.live ||= st.live; for (const n of st.wrap) seen.wrappers.add(n); }
+      }
+      await delay(60);
+    }
+  })();
   const full2 = await runExport(page, 'full');
+  exporting = false;
+  await watch;
+  const topMark = await P(page, () => globalThis.__pcXeMark ?? null);
+  out.steps.exportPage = { samples: seen.samples, marks: [...seen.marks], live: seen.live, wrapperChildren: [...seen.wrappers], topMark };
+  check(seen.samples > 0 && seen.marks.size === 1 && seen.marks.has('null') && topMark === null, '导出页与编辑页面里都没有执行同步卡的代码(没有它的顶层记号)', out.steps.exportPage);
+  check(seen.live === false && seen.wrappers.has(0), '导出页里这张卡只挂了包裹层、里面没有活内容', out.steps.exportPage);
   const full3 = await runExport(page, 'full');
   out.timings.fullMs = [full2.ms, full3.ms];
   const l2 = full2.result?.layers, l3 = full3.result?.layers;
@@ -495,6 +523,7 @@ try {
     saveFrame(SHOTS, `step3-desktop-f${WIN.S.first + 3}.png`, desk[WIN.S.first + 3]);
   }
   say('three.done', { ms: Date.now() - t3, layers: l2, diff: out.diffs.fullVsDesktop });
+  if (STOP_AFTER === 'three') throw new StopHere();
 
   /* ---------------- 四:B 也满密度,快速导出两遍 */
   tag = '[四] ';
@@ -523,7 +552,8 @@ try {
   check(page.errors.length === 0, '页面没有未捕获的错误', page.errors.slice(0, 3));
   out.ok = fails.length === 0;
 } catch (e) {
-  fails.push(`异常:${String(e?.stack ?? e).slice(0, 800)}`);
+  if (e instanceof StopHere) out.stoppedAfter = STOP_AFTER;
+  else fails.push(`异常:${String(e?.stack ?? e).slice(0, 800)}`);
 } finally {
   try { await browser?.close(); } catch { /* 已关 */ }
   try { await host?.stop(); } catch { /* 已停 */ }
