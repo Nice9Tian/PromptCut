@@ -1,7 +1,7 @@
 /**
  * 本页产流(任务书 `docs/plan/render-refactor-task.md`「甲二」:线上没有能切分的节点时,在线页面自己产单卡轨道流,不经过任务队列)的端到端验收。
  *
- *   node scripts/probes/page-stream-probe.mjs [--dist <在线构建目录>] [--base-port 27740] [--out <目录>] [--keep-temp] [--only solo|splitter|desk]
+ *   node scripts/probes/page-stream-probe.mjs [--dist <在线构建目录>] [--base-port 27740] [--out <目录>] [--keep-temp] [--only solo|splitter|desk|mask|slow]
  *        端口(整段 +0～+9):+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 桌面编辑器(及它的舞台端口)。都只绑 127.0.0.1。
  *
  * 角色都在本机,页面用**在线构建**(进项目走「刷新后回到项目」那条产品路径,`lib/online-resume-entry.mjs`):
@@ -9,7 +9,9 @@
  *   - 在线页面:甲、乙各在一个浏览器里(同一个浏览器里只有一个标签页在前台);
  *   - 桌面预渲染进程(`m8/procs.mjs` 的 `startQueueEditor`:队列模式、测试指纹),只在点名的步骤里起。
  *
- * 三场,各用一个新项目(`--only` 只跑一场):
+ * 五场,各用一个新项目(`--only` 只跑一场)。前三场的卡是进了编辑才加的:空项目里加第一张卡,加载遮罩照样出现一轮(「打开项目的第一轮」
+ * 按「有卡片段的第一轮」算),所以这张卡的稀疏版在测量时就由本页产了(`pageStreams.ts` 的 `measure()`),满密度那一趟才走下面说的等待与让路。
+ * 后两场(`mask`、`slow`)是「在线页面打开项目、测量时就产稀疏版」(`docs/semantics/mechanism/rendering.md`「测量」)的验收,见各自的说明。
  *
  *   solo      只有文档服务、素材服务和在线页面,没有桌面、没有渲染主机。
  *     一  甲自己产出流:清单计划发出去没人认领,等满等待时间才动手;内容库里有流清单(过桌面的 `manifestMatches`,满密度),素材服务 `px` 里
@@ -24,8 +26,19 @@
  *   desk      素材服务里已经有这条流(先由桌面产好:一个不当节点的页面加卡,桌面认领计划、自己产流、推素材服务),桌面下线后页面打开项目:
  *             直接贴,不产 —— 没有起编码器、没有往素材服务推任何块;播放时画的就是桌面产的那条流。页面一侧算的内容键与桌面写进层表的相同
  *
+ *   mask      项目里先有三张判重的内置卡(由一个不当节点的页面加好),电脑身份的页面甲再打开它:
+ *     一  加载遮罩下,每测完一张卡紧接着产它的稀疏版:遮罩撤下的那一刻三条流的稀疏版都在内容库与素材服务里(每个分段一张、带位置矩形),
+ *         层表里有本页的三行;这些都发生在清单计划发出去之前,甲的节点一个队列任务都没认领
+ *     二  进编辑时已经能贴:马上播放,舞台上画的是这些流;逐张截图比像素 —— 稀疏段贴的是分段第一帧那一张(与分段第一帧的精确活渲相符,
+ *         与这一帧自己的精确活渲差得更多)
+ *     三  播放中不产(一帧不送、不开工),保活在发:render 连接上发出 `node.active { busy: 'play' }`
+ *     四  停下以后:稀疏的都落定了满密度才开始;最后满密度齐、位置矩形还在
+ *     五  乙(第二个页面)后进来:遮罩下先查到这三条流已经有了,直接用甲产的,不起编码器、不推块;播放时画的就是甲产的流
+ *   slow      项目里一张快的重卡、一张人为拖慢的重卡(稀疏版一趟要一分钟):遮罩等稀疏版满 50 秒(墙上时钟,从第一次等稀疏版起算)就撤下、
+ *             照样进编辑;没产完的闲时接着产(已推完的分段不重做);稀疏的都齐了以后满密度才开始
+ *
  * 任一断言不成立退出码 1。耗时只记录。不打印令牌、口令。
- * 输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, scenes: { solo, splitter, desk } }`;截图在 `--out/<场>/`。
+ * 输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, scenes: { solo, splitter, desk, mask, slow } }`;截图在 `--out/<场>/`。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { spawnSync } from 'node:child_process';
@@ -126,7 +139,7 @@ async function startLocalSite() {
 }
 
 /** 给刚建好的共享项目写进一份空项目(替创建者的桌面版) */
-async function seedProject({ projectId, creator, name }) {
+async function seedProject({ projectId, creator, name, duration = PROJECT.duration }) {
   const { buildAuthProtocols } = await import('../../server/auth/client.mjs');
   const protocols = await buildAuthProtocols({ base: DOC_DIRECT, projectId, username: creator.username, deviceId: 'psp-seed-node-0001', deviceName: 'probe-seed', as: 'creator', password: creator.password, role: 'page' });
   const ws = new WebSocket(DOC_DIRECT.replace(/^http/, 'ws'), protocols);
@@ -139,7 +152,7 @@ async function seedProject({ projectId, creator, name }) {
   });
   try {
     const opened = await ask({ type: 'project.open', projectId });
-    const body = { version: 1, id: `seed-${projectId.slice(-8)}`, name, ...PROJECT, themeId: 'midnight', media: [], tracks: [{ id: 't-1', name: '序列 1', clips: [] }] };
+    const body = { version: 1, id: `seed-${projectId.slice(-8)}`, name, ...PROJECT, duration, themeId: 'midnight', media: [], tracks: [{ id: 't-1', name: '序列 1', clips: [] }] };
     const seeded = await ask({ type: 'project.op', projectId, opId: randomBytes(16).toString('base64url'), ops: [{ op: 'set', path: '', value: body }] });
     const bad = (m) => /error|reject/i.test(String(m?.type ?? ''));
     return { ok: !bad(opened) && !bad(seeded) };
@@ -231,8 +244,9 @@ async function liveShot(page, id, sec, dir, name) {
     const t0 = Date.now();
     while (Date.now() - t0 < 8000 && !ok) {
       const s = await stageState(page, id);
-      last = s ? { t: s.t, tracks: s.tracks.length, clip: { suppressed: s.clip.suppressed, snapshot: s.clip.snapshot, placeholder: s.clip.placeholder } } : null;
-      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && !s.tracks.length && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
+      last = s ? { t: s.t, tracks: s.tracks.map((x) => x.clips.join()), own: !!s.clip.stream, clip: { suppressed: s.clip.suppressed, snapshot: s.clip.snapshot, placeholder: s.clip.placeholder } } : null;
+      // 这张卡自己没有流的轨道在(别的卡的轨道不管:几张卡的项目里,播放头不在的那几张的轨道可以留着)
+      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && !s.clip.stream && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
       else await delay(100);
     }
   }
@@ -349,9 +363,10 @@ const editorPxWrites = () => hostedProxy.requests.filter((r) => r.role === 'edit
 let browserA = null, browserB = null, editor = null, chk = null;
 const LAUNCH_ARGS = ['--no-first-run', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required', '--site-per-process', '--window-position=-32000,-32000'];
 
-async function openMember(browser, { projectId, name, username, password, deviceId, userAgent = null }) {
+async function openMember(browser, { projectId, name, username, password, deviceId, userAgent = null, before = null }) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
+  if (before) await before(page);
   page.on('dialog', (d) => void d.accept());
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e?.message ?? e).slice(0, 240)));
@@ -364,23 +379,23 @@ async function openMember(browser, { projectId, name, username, password, device
   await until(`${username} 的页面双舞台握上手`, async () => P(page, () => { const d = window.__pcPreviewDiag?.(); return d?.dual && d.onlineStages?.handshake === 'ok'; }), 120_000, 500);
   return { ctx, page };
 }
-const addCard = (page) => store(page, `
+const addCard = (page, clip = CLIP, label = LABEL, burnMs = 40) => store(page, `
   const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: args[0].start, duration: args[0].duration });
-  S.actions.setClipParams(c.id, { burnMs: 40, label: args[1] });
+  S.actions.setClipParams(c.id, { burnMs: args[2], label: args[1] });
   S.actions.seek(args[0].start + args[0].duration + 1);
   // 取消选中:选中框是编辑器叠在舞台上的,截图比像素时会被算进去
   S.actions.select([]);
-  return c.id;`, CLIP, LABEL);
+  return c.id;`, clip, label, burnMs);
 const nodeReady = (page, who) => until(`${who} 当节点、报到拿到指纹、探到编码器`, async () => { const d = await nodeDiag(page); return d?.ready === 'ready' && d.envFingerprint && d.streams?.capable ? d : null; }, 240_000, 500);
 
 /** 建一个项目、写进空项目、开一条核对用的连接(创建者,render 角色:读内容库、签素材票据) */
-async function newProject(M, scene) {
+async function newProject(M, scene, { duration } = {}) {
   const projName = `本页产流-${scene}-${RUN}`;
   const creator = { username: 'psp-creator', password: `pw-${randomBytes(6).toString('hex')}` };
   const projectPassword = `pp-${randomBytes(6).toString('hex')}`;
   const made = await M.createSharedProject({ base: DOC_DIRECT, name: projName, mode: 'free', creator, password: projectPassword });
   const projectId = made.projectId;
-  check((await seedProject({ projectId, creator, name: projName })).ok, '替创建者写进空项目');
+  check((await seedProject({ projectId, creator, name: projName, duration })).ok, '替创建者写进空项目');
   const chkEntry = M.normalizeEntry({ url: M.wsBaseOf(HOSTED), projectId, username: creator.username, password: creator.password, as: 'creator', role: 'render',
     deviceId: `psp-chk-${scene}-${RUN}`.padEnd(16, '0'), deviceName: '本页产流探针 核对' });
   chk = M.createWsEndpoint({ url: chkEntry.url, protocols: M.sharedProtocols(chkEntry, { role: 'render' }), log: () => {} });
@@ -495,19 +510,26 @@ async function sceneSolo(M) {
     const ready = await nodeReady(pageA, '甲');
     const fpA = ready?.envFingerprint ?? null;
     R.jia = { envFingerprint: fpA, encoder: ready?.streams && { probe: ready.streams.probe, mode: ready.streams.mode } };
-    // 等的那一段:计划发出去、队列里是 open、还没开工
-    const waiting = await until('甲的清单计划发出去了,本页在等有没有切分方', async () => { const s = await pageStreams(pageA); return s && s.planId && s.streams.length >= 1 ? s : null; }, 120_000, 100);
+    // 这张卡是空项目里的第一张:遮罩那一轮里它的稀疏版在测量时就由本页产了(不等计划、不问切分方)
+    const measured = await until('甲在测量时把这张卡的稀疏版产完', async () => { const s = await pageStreams(pageA); return s && (s.measure?.results?.ok ?? 0) >= 1 ? s : null; }, 180_000, 100);
+    R.measure = measured && { ...measured.measure, log: undefined, planId: String(measured.planId).slice(0, 24), claims: measured.claims };
+    check(!!measured && measured.measure.produced === 2 && measured.claims === 0, '一:测量时本页产了这条流稀疏的两段,没有认领过队列任务', R.measure);
+    // 等的那一段:计划发出去、队列里是 open、满密度的还没开工
+    const isPlan = (s) => !!s && String(s.planId ?? '').startsWith('plan:');
+    const denseRunning = (s) => isPlan(s) && s.state === 'producing' && !!s.running && !String(s.running.id).endsWith(':sparse');
+    const waiting = await until('甲的清单计划发出去了,本页在等有没有切分方', async () => { const s = await pageStreams(pageA); return isPlan(s) && s.streams.length >= 1 ? s : null; }, 120_000, 100);
     R.plan = waiting && { planId: String(waiting.planId).slice(0, 40), streams: waiting.streams.length, skipped: waiting.skipped, firstSeen: { state: waiting.state, planState: waiting.planState, waitedMs: waiting.waitedMs } };
     check(!!waiting && waiting.streams.length === 1 && waiting.streams[0].clipId === clipId, '一:本页算出这张卡的单卡流(一条)', waiting?.streams);
     check(!!waiting && (waiting.state !== 'producing' || waiting.waitedMs >= WAIT_MS), '一:没等满等待时间不动手', R.plan?.firstSeen);
-    const started = await until('甲开始自己产', async () => { const s = await pageStreams(pageA); return s?.state === 'producing' ? s : null; }, 120_000, 50);
+    const started = await until('甲开始自己产满密度的一趟', async () => { const s = await pageStreams(pageA); return denseRunning(s) ? s : null; }, 120_000, 50);
+    check(!!started && started.jobs.filter((j) => j.pass === 'sparse').every((j) => j.state === 'have'), '一:稀疏的两段先查查到(测量时产的),不重产', started?.jobs);
     R.start = started && { waitedMs: started.waitedMs, planState: started.planState, starts: started.counters.starts, rowsWritten: started.counters.rowsWritten };
     check(!!started && started.waitedMs >= WAIT_MS && started.planState === 'open', `一:计划发出去 ${WAIT_MS} 毫秒以上仍是 open(没人认领),本页才开工`, R.start);
     check(!!started && started.counters.rowsWritten >= 1, '一:开工前本页把自己的那一行写进了层表', R.start);
     say('jia.started', { ...R.start });
 
     /* ---------------- 让路:播放 */
-    const before = await until('产了几帧(让路前)', async () => { const s = await pageStreams(pageA); return s?.state === 'producing' && s.frames >= 6 ? s : null; }, 120_000, 50);
+    const before = await until('产了几帧(让路前)', async () => { const s = await pageStreams(pageA); return s?.state === 'producing' && s.frames >= (started?.frames ?? 0) + 6 ? s : null; }, 120_000, 50);
     const tPlay = Date.now();
     await playFrom(pageA, 0.5);
     const tPlayed = Date.now();
@@ -554,7 +576,8 @@ async function sceneSolo(M) {
       streams: diagA?.streams && { encoders: diagA.streams.encoders, frames: diagA.streams.frames, blank: diagA.streams.blank, segments: diagA.streams.segments, inits: diagA.streams.inits, bytes: diagA.streams.bytes, resumedSegments: diagA.streams.resumedSegments,
         pixelsMs: diagA.streams.pixelsMs, encodeMs: diagA.streams.encodeMs }, stageFrameMs: diagA?.stage?.frameMs ?? null, lastError: done?.lastError ?? null };
     say('jia.produced', { ms: R.produce.ms, counters: done?.counters });
-    check(!!done && done.jobs.length === 2 && done.jobs.every((j) => j.state === 'produced') && done.counters.produced === 2 && done.counters.failed === 0, '一:这条流的两段都由本页产完,没有做不成的', R.produce.jobs);
+    check(!!done && done.jobs.length === 4 && done.jobs.every((j) => j.state === (j.pass === 'sparse' ? 'have' : 'produced')) && done.counters.produced === 4 && done.counters.failed === 0,
+      '一:这条流的两段都由本页产完(稀疏两段在测量时、满密度两段在闲时),没有做不成的', done?.jobs.map((j) => ({ pass: j.pass, state: j.state })));
     check(diagA?.counters?.claims === 0 && diagA.counters.streamTasks === 0 && diagA.counters.completed === 0, '一:甲的节点一个队列任务都没认领过(这条流不是经队列产的)', R.produce.node);
     check(done?.planState === 'open', '一:清单计划一直没人认领(线上没有能切分的节点)', { planState: done?.planState });
     check((diagA?.streams?.resumedSegments ?? 0) >= 1, '让路:让路之前推完的分段没有重做', R.produce.streams);
@@ -598,7 +621,7 @@ async function sceneSolo(M) {
       streams: diagB?.streams && { encoders: diagB.streams.encoders, frames: diagB.streams.frames, segments: diagB.streams.segments, inits: diagB.streams.inits }, upload: diagB?.upload && { pushed: diagB.upload.pushed, bytes: diagB.upload.bytes },
       pxWrites: editorPxWrites().length - writesBeforeYi };
     say('yi.checked', { ...R.yi });
-    check(!!doneB && doneB.jobs.length === 2 && doneB.jobs.every((j) => (j.state === 'have' || j.state === 'elsewhere') && j.via === key1), '二:乙查到这条流已经有了(两段都是),用的就是甲产的那一条', R.yi.jobs);
+    check(!!doneB && doneB.jobs.length === 4 && doneB.jobs.every((j) => (j.state === 'have' || j.state === 'elsewhere') && j.via === key1), '二:乙查到这条流已经有了(稀疏、满密度各两段都是),用的就是甲产的那一条', R.yi.jobs);
     check(!!doneB && doneB.counters.starts === 0 && doneB.counters.produced === 0, '二:乙没有重产(一次都没开工)', doneB?.counters);
     check(diagB?.streams?.encoders === 0 && diagB.streams.frames === 0 && diagB.streams.segments === 0 && diagB.streams.inits === 0, '二:乙没有起编码器、没有送帧、没有推分段', R.yi.streams);
     check((diagB?.upload?.pushed ?? -1) === 0 && R.yi.pxWrites === 0, '二:乙没有往素材服务推任何块', { upload: R.yi.upload, pxWrites: R.yi.pxWrites });
@@ -707,26 +730,35 @@ async function sceneSplitter(M) {
     const docId = await store(pageA, `return S.getState().project.id;`);
     const ready = await nodeReady(pageA, '甲');
     const fpA = ready?.envFingerprint ?? null;
-    // 从加卡起一直看着:本页产流这条路一次都不许开工
-    const seen = { states: new Set(), planStates: new Set(), starts: 0, running: 0, samples: 0 };
+    // 从加卡起一直看着:稀疏版在测量时由本页产(那一趟不问有没有切分方);清单计划那一份记账下,本页一次都不许开工
+    const seen = { states: new Set(), planStates: new Set(), starts: 0, running: 0, samples: 0, dense: 0 };
+    const look = (s) => {
+      if (!s) return;
+      seen.samples++; seen.planStates.add(s.planState); seen.starts = Math.max(seen.starts, s.counters.starts);
+      const plan = String(s.planId ?? '').startsWith('plan:');
+      if (plan) seen.states.add(s.state);
+      if (s.running && plan) seen.running++;
+      if (s.running && !String(s.running.id).endsWith(':sparse')) seen.dense++;
+    };
     const doneQueue = await until('这条流经队列产出来(甲的节点做完两个流任务)', async () => {
-      const s = await pageStreams(pageA);
-      if (s) { seen.samples++; seen.states.add(s.state); seen.planStates.add(s.planState); seen.starts = Math.max(seen.starts, s.counters.starts); if (s.running) seen.running++; }
+      look(await pageStreams(pageA));
       const d = await nodeDiag(pageA);
       return d?.counters?.streamTasks >= 2 && d.state !== 'baking' ? d : null;
     }, 900_000, 200);
     // 做完之后再看一阵:过了等待时间也不开工
-    for (let i = 0; i < 40; i++) { const s = await pageStreams(pageA); if (s) { seen.samples++; seen.states.add(s.state); seen.planStates.add(s.planState); seen.starts = Math.max(seen.starts, s.counters.starts); if (s.running) seen.running++; } await delay(200); }
+    for (let i = 0; i < 40; i++) { look(await pageStreams(pageA)); await delay(200); }
     const last = await pageStreams(pageA);
     const deskQ = await editor.queue().catch(() => null);
-    R.page = { envFingerprint: fpA, samples: seen.samples, states: [...seen.states], planStates: [...seen.planStates], starts: seen.starts, runningSamples: seen.running, counters: last?.counters ?? null, streams: last?.streams?.length ?? null,
+    R.page = { envFingerprint: fpA, samples: seen.samples, states: [...seen.states], planStates: [...seen.planStates], starts: seen.starts, runningSamples: seen.running, denseSamples: seen.dense,
+      measure: last?.measure && { ...last.measure, log: undefined }, counters: last?.counters ?? null, streams: last?.streams?.length ?? null,
       node: doneQueue?.counters && { claims: doneQueue.counters.claims, completed: doneQueue.counters.completed, streamTasks: doneQueue.counters.streamTasks }, ms: Date.now() - t0 };
     R.desk.stats = deskQ?.stats ?? null;
     say('splitter.done', R.page);
     check(!!doneQueue && doneQueue.counters.streamTasks >= 2 && doneQueue.counters.failed === 0, '三:这条流经队列产出来(桌面切分,甲的节点认领并完成流任务)', doneQueue?.counters);
     check((deskQ?.stats?.planSplit ?? 0) >= 1, '三:桌面认领并切分了甲的清单计划', deskQ?.stats);
-    check(seen.samples >= 30 && seen.starts === 0 && seen.running === 0 && !seen.states.has('producing'), '三:页面没有走本页产流这条路(从头到尾一次都没开工)', R.page);
-    check(last?.counters?.produced === 0 && last.counters.rowsWritten === 0, '三:本页没有自己产过一段、没有写过层表(层表归切分方)', last?.counters);
+    const atMeasure = last?.measure?.produced ?? -1;
+    check(seen.samples >= 30 && seen.running === 0 && seen.dense === 0 && !seen.states.has('producing'), '三:清单计划发出去以后页面没有走本页产流这条路(一次都没开工;满密度的一帧没产)', R.page);
+    check(atMeasure >= 1 && last?.counters?.produced === atMeasure && last.counters.starts === atMeasure, '三:本页自己产的只有测量时那一趟稀疏版(开工次数 = 测量时产的段数)', { atMeasure, counters: last?.counters });
     check(last?.state === 'taken' && (last.planState === 'done' || last.planState === 'claimed'), '三:本页看到的是「有切分方接了活」', last && { state: last.state, planState: last.planState });
     const row = (await rowOf(P0.content, docId, clipId)).row;
     R.row = briefRow(row);
@@ -839,6 +871,330 @@ async function sceneDesk(M) {
   }
 }
 
+/* ================================================================== 第四、五场:打开项目、测量时就产稀疏版 */
+
+/** 与 `src/online/pageStreams.ts` 的 `MEASURE_SPARSE_MAX_MS` 同值:遮罩等稀疏版最多这么久 */
+const MASK_SPARSE_MS = 50_000;
+
+/**
+ * 页面一建好就装上:页面里每 100 毫秒记一次「遮罩在不在、本页产流到哪了」(只在有变化时记一条),render 连接上发出的 `node.active` 记在 `acts` 里。
+ * 时刻都是页面里的 `Date.now()`,与 `pageStreams` 的时钟同一个。
+ */
+async function instrument(page) {
+  const acts = [];
+  const cdp = await page.createCDPSession();
+  await cdp.send('Network.enable');
+  cdp.on('Network.webSocketFrameSent', (e) => {
+    const text = String(e?.response?.payloadData ?? '');
+    if (!text.includes('"node.active"')) return;
+    try { const m = JSON.parse(text); if (m?.type === 'node.active') acts.push({ at: Date.now(), busy: m.busy ?? null }); } catch { /* 不是整条 JSON */ }
+  });
+  await page.evaluateOnNewDocument(() => {
+    if (window.top !== window) return;
+    const log = [];
+    let last = '';
+    window.__pspMaskLog = log;
+    setInterval(() => {
+      try {
+        const d = window.__pcBrowserNode?.();
+        const ps = d?.pageStreams ?? null;
+        const jobs = {};
+        for (const j of ps?.jobs ?? []) { const k = `${j.pass}:${j.state}`; jobs[k] = (jobs[k] ?? 0) + 1; }
+        const row = {
+          mask: !!document.querySelector('[data-pc="probe-gate"]'), state: ps?.state ?? null, plan: ps?.planId ? String(ps.planId).slice(0, 8) : null,
+          running: ps?.running ? (String(ps.running.id).endsWith(':sparse') ? 'sparse' : 'dense') : null, jobs,
+          m: ps ? { calls: ps.measure.calls, results: ps.measure.results, startedAt: ps.measure.startedAt, produced: ps.measure.produced, have: ps.measure.have, elsewhere: ps.measure.elsewhere, left: ps.measure.left } : null,
+          segments: d?.streams?.segments ?? null, encoders: d?.streams?.encoders ?? null, claims: d?.counters?.claims ?? null, playing: !!window.__pcStore?.getState?.().playing,
+        };
+        const text = JSON.stringify(row);
+        if (text === last) return;
+        last = text;
+        log.push({ at: Date.now(), frames: d?.streams?.frames ?? null, ...row });
+        if (log.length > 4000) log.splice(0, 1000);
+      } catch { /* 页面还没起来 */ }
+    }, 100);
+  });
+  return { acts };
+}
+const maskLog = (page) => P(page, () => JSON.parse(JSON.stringify(window.__pspMaskLog ?? []))).catch(() => []);
+/** 等遮罩出现过、又撤下;回 { log, shownAt, goneAt } */
+async function waitMaskGone(page, who, timeoutMs) {
+  return until(`${who} 的加载遮罩出现过又撤下`, async () => {
+    const log = await maskLog(page);
+    const first = log.findIndex((e) => e.mask);
+    if (first < 0) return null;
+    let lastOn = -1;
+    for (let i = log.length - 1; i >= 0; i--) if (log[i].mask) { lastOn = i; break; }
+    const gone = log[lastOn + 1];
+    // 遮罩撤下后稳了半秒才算(两轮测量之间它会闪一下不在)
+    return gone && Date.now() - gone.at >= 500 && !log.slice(lastOn + 1).some((e) => e.mask) ? { log, shownAt: log[first].at, goneAt: gone.at, atGone: gone } : null;
+  }, timeoutMs, 200);
+}
+/** 这条流此刻在内容库里的清单:每份任务范围一份;回各分段的密度、有没有位置矩形 */
+async function manifestState(P0, row, resultKey) {
+  const segs = {};
+  let manifests = 0;
+  for (const [from, to] of spansOf(row)) {
+    const m = await P0.getManifest(resultKey, from, to);
+    if (!m) continue;
+    manifests++;
+    for (const n of Object.keys(m.segments ?? {})) segs[n] = { stride: m.segments[n].stride, samples: m.segments[n].samples, box: m.segments[n].box ?? (('box' in m.segments[n]) ? null : undefined) };
+  }
+  const list = Object.values(segs);
+  return { manifests, want: row.lastSegment + 1, have: list.length, sparse: list.filter((x) => x.stride > 1).length, dense: list.filter((x) => x.stride === 1).length,
+    boxed: list.filter((x) => x.box && x.box.w > 0 && x.box.h > 0).length, strides: [...new Set(list.map((x) => x.stride))] };
+}
+/** 准备:一个不当节点的页面(报非 Chromium 内核)把卡加好、关掉。它照常测量,但不产流 */
+async function seedCards(P0, cards) {
+  const x = await P0.member(browserB, 'psp-seed', { userAgent: NON_NODE_UA });
+  const ids = [];
+  try {
+    for (const c of cards) ids.push(await addCard(x.page, { start: c.start, duration: c.duration }, c.label, c.burnMs ?? 40));
+    const docId = await store(x.page, `return S.getState().project.id;`);
+    const rev = await until('加的卡都被文档服务确认', () => P(x.page, (n) => { const p = window.__pcStore?.getState?.().project; return p && p.tracks.flatMap((t) => t.clips).filter((c) => c.cardId === 'probe-slow-stepped').length === n; }, cards.length), 60_000, 300);
+    await delay(2500);
+    const d = await nodeDiag(x.page);
+    check(d?.eligibility?.reason === 'not-chromium' && (d?.streams?.frames ?? 0) === 0, '(准备)加卡的页面不当节点、一帧没产', d && { eligibility: d.eligibility, frames: d.streams?.frames, measureSparse: d.measureSparse });
+    return { ids, docId, ok: !!rev };
+  } finally { try { await x.ctx.close(); } catch { /* 已关 */ } }
+}
+
+async function sceneMask(M) {
+  tag = '[mask] ';
+  const R = {};
+  out.scenes.mask = R;
+  const dir = path.join(OUT, 'mask');
+  fs.mkdirSync(dir, { recursive: true });
+  const t0 = Date.now();
+  let ctxA = null, ctxB = null;
+  try {
+    const P0 = await newProject(M, 'mask');
+    // 三张卡一前一后排开(各 2 秒 = 60 帧 = 4 个分段,一份任务),互不重叠
+    const CARDS = [{ start: 0.4, duration: 2, label: 'aa' }, { start: 2.6, duration: 2, label: 'bb' }, { start: 4.8, duration: 2, label: 'cc' }];
+    const seeded = await seedCards(P0, CARDS);
+    const [clipA, , clipC] = seeded.ids;
+    R.clips = seeded.ids;
+
+    /* ---------------- 一:甲打开项目,遮罩下产稀疏版 */
+    let instA = null;
+    const a = await P0.member(browserA, 'psp-jia', { before: async (page) => { instA = await instrument(page); } });
+    ctxA = a.ctx;
+    const pageA = a.page;
+    debugProbe = async () => ({ ps: await pageStreams(pageA), log: (await maskLog(pageA)).slice(-3) });
+    const gone = await waitMaskGone(pageA, '甲', 600_000);
+    if (!gone) throw new Error('甲的遮罩没有撤下');
+    // 进编辑的那一刻马上播放:播放时不产,稀疏版就一直是稀疏版,好比像素
+    await playFrom(pageA, CARDS[0].start);
+    const tPlay = Date.now();
+    const atGone = gone.atGone;
+    const masked = gone.log.filter((e) => e.mask);
+    const diag0 = await nodeDiag(pageA);
+    const fpA = diag0?.envFingerprint ?? null;
+    R.maskJia = { maskMs: gone.goneAt - gone.shownAt, sparseStartedAfterMaskMs: atGone.m?.startedAt ? atGone.m.startedAt - gone.shownAt : null, atGone: { ...atGone, jobs: undefined }, framesUnderMask: masked.length ? [masked[0].frames, masked[masked.length - 1].frames] : null,
+      plansUnderMask: [...new Set(masked.map((e) => e.plan))], envFingerprint: fpA, measureSparse: diag0?.measureSparse ?? null };
+    say('mask.gone', R.maskJia);
+    check(atGone.m?.calls === 3 && atGone.m.results?.ok === 3 && atGone.m.produced === 3 && atGone.m.left === 0, '一:遮罩下三张卡各调了一次、稀疏版都产完(每条流一份任务)', atGone.m);
+    check(masked.some((e) => e.running === 'sparse') && !gone.log.some((e) => e.running === 'dense'), '一:遮罩下在产的是稀疏的一趟,满密度的一帧没产', { sparse: masked.filter((e) => e.running === 'sparse').length });
+    check(masked.every((e) => !e.plan || e.plan.startsWith('measure')) && atGone.claims === 0, '一:这些都发生在清单计划发出去之前(不等计划),甲的节点没有认领过队列任务', R.maskJia.plansUnderMask);
+    check(atGone.frames === 12 * SEG && atGone.encoders === 3, '一:遮罩下送进编码器 3 条流 × 4 个分段 × 15 个样本(每段只向舞台取一帧)', { frames: atGone.frames, encoders: atGone.encoders, segments: atGone.segments });
+    // 内容库与素材服务:遮罩撤下时三条流的稀疏版都在(此刻在播放,本页不会接着产,看到的就是遮罩下产的)
+    const ps0 = await pageStreams(pageA);
+    const rows = {};
+    for (const id of seeded.ids) rows[id] = (await rowOf(P0.content, seeded.docId, id)).row;
+    const keyOf = (id) => rows[id]?.candidates.find((c) => c.envFingerprint === fpA)?.resultKey ?? null;
+    R.sparse = {};
+    for (const id of seeded.ids) R.sparse[id] = rows[id] ? { key: String(keyOf(id)).slice(0, 12), originFrame: rows[id].originFrame, ...(await manifestState(P0, rows[id], keyOf(id))) } : null;
+    check(seeded.ids.every((id) => rows[id] && keyOf(id)), '一:层表里有本页的三行(候选是甲的指纹)', Object.fromEntries(seeded.ids.map((id) => [id, briefRow(rows[id])])));
+    check(seeded.ids.every((id) => { const x = R.sparse[id]; return x && x.want === 4 && x.have === 4 && x.sparse === 4 && x.dense === 0 && x.boxed === 4 && x.strides.join() === String(SEG); }),
+      '一:三条流的清单都在内容库里:每个分段都是稀疏版(每段一张)、都带位置矩形', R.sparse);
+    const up0 = diag0?.upload ?? null;
+    check((up0?.pushed ?? 0) >= 12 && (up0?.failed ?? 1) === 0, '一:分段与开头文件都推到了素材服务', up0 && { pushed: up0.pushed, failed: up0.failed });
+    void ps0;
+
+    /* ---------------- 二:进编辑时已经能贴;稀疏段贴的是分段第一帧 */
+    const keyA = keyOf(clipA);
+    const atEnter = ((await onlineDiag(pageA))?.streams ?? []).filter((x) => seeded.ids.includes(x.clipId) && x.ready >= 4).length;
+    const readyA = await until('甲认出自己产的流、分段就绪', async () => { const d = await onlineDiag(pageA); const list = (d?.streams ?? []).filter((x) => seeded.ids.includes(x.clipId) && x.ready >= 4); return list.length === 3 ? list : null; }, 20_000, 100);
+    R.ready = { readyStreamsAtFirstLook: atEnter, firstLookAfterGoneMs: tPlay - gone.goneAt, ms: Date.now() - tPlay, streams: (readyA ?? []).map((x) => ({ clipId: x.clipId, ready: x.ready, key: String(x.resultKey).slice(0, 12) })) };
+    check(!!readyA && readyA.every((x) => x.resultKey === keyOf(x.clipId)), '二:进编辑后在线来源认的就是本页产的三条流(分段都就绪)', R.ready);
+    // 播放中截图:每张记下截图前后舞台的时刻,两头落在同一个分段、离分段第一帧够远的才要
+    const origin = Math.round(CARDS[0].start * FPS);
+    const shots = [];
+    for (let round = 0; round < 12 && shots.length < 3; round++) {
+      await playFrom(pageA, CARDS[0].start);
+      const tr = Date.now();
+      while (Date.now() - tr < 2600 && shots.length < 3) {
+        const before = await stageState(pageA, clipA);
+        const tb = drawing(before, keyA);
+        const fb = Math.round((before?.t ?? -1) * FPS) - origin;
+        if (!tb || before.clip.placeholder || fb < 0 || fb >= 60 || fb % SEG < 7 || fb % SEG > 11 || shots.some((x) => x.seg === Math.floor(fb / SEG))) { await delay(15); continue; }
+        const shot = await stageShot(pageA, dir, `mask-sparse-${shots.length}`);
+        const after = await stageState(pageA, clipA);
+        const fa = Math.round((after?.t ?? -1) * FPS) - origin;
+        if (!shot || !drawing(after, keyA) || after.clip.placeholder || Math.floor(fa / SEG) !== Math.floor(fb / SEG)) continue;
+        shots.push({ shot, seg: Math.floor(fb / SEG), fb, fa, lastDrawn: [tb.lastDrawn, drawing(after, keyA).lastDrawn] });
+      }
+    }
+    // 保活要播满一个间隔(队列给的是 10 秒):接着循环播放,同时看本页有没有在产
+    const framesAtPlay = (await nodeDiag(pageA))?.streams?.frames ?? null;
+    const during = [];
+    while (Date.now() - tPlay < 14_000) {
+      if (!(await store(pageA, `return S.getState().playing;`))) await playFrom(pageA, CARDS[0].start);
+      const s = await pageStreams(pageA);
+      if (s) during.push({ playing: s.playing, frames: s.frames, running: !!s.running, starts: s.counters.starts });
+      await delay(250);
+    }
+    const playActs = instA.acts.filter((x) => x.at >= tPlay);
+    const nodeAfterPlay = await nodeDiag(pageA);
+    R.play = { ms: Date.now() - tPlay, samples: during.length, playingSamples: during.filter((x) => x.playing).length, framesDuring: [...new Set(during.map((x) => x.frames))], runningSamples: during.filter((x) => x.running).length,
+      startsDuring: [...new Set(during.map((x) => x.starts))], nodeActive: { all: instA.acts.length, busyAll: [...new Set(instA.acts.map((x) => x.busy))], duringPlay: playActs.map((x) => ({ afterMs: x.at - tPlay, busy: x.busy })), counter: nodeAfterPlay?.counters?.active ?? null } };
+    say('mask.play', R.play);
+    check(during.filter((x) => x.playing).length >= 12 && during.every((x) => !x.running && x.frames === framesAtPlay && x.starts === 3), '三:播放中本页不产(一帧不送、不开工)', R.play);
+    check(playActs.some((x) => x.busy === 'play'), '三:播放中保活在发(render 连接上发出 node.active { busy: "play" })', R.play.nodeActive);
+    /* ---------------- 四:停下以后,稀疏的都落定了满密度才开始;最后满密度齐、位置矩形还在 */
+    await pauseAt(pageA, 7.5);
+    const tIdle = Date.now();
+    const doneA = await until('甲把三条流补成满密度', async () => { const s = await pageStreams(pageA); return s?.state === 'done' && String(s.planId).startsWith('plan:') ? s : null; }, 900_000, 250);
+    const logA = await maskLog(pageA);
+    const firstDense = logA.find((e) => e.running === 'dense') ?? null;
+    R.dense = { ms: Date.now() - tIdle, firstDenseAfterGoneMs: firstDense ? firstDense.at - gone.goneAt : null, jobsAtFirstDense: firstDense?.jobs ?? null, jobs: doneA?.jobs.map((j) => ({ pass: j.pass, state: j.state })), counters: doneA?.counters, planState: doneA?.planState ?? null };
+    check(!!firstDense && firstDense.at > gone.goneAt && !firstDense.mask && !firstDense.playing, '四:满密度的一趟在进编辑、停下之后才开始(闲时)', firstDense && { afterGoneMs: firstDense.at - gone.goneAt, playing: firstDense.playing });
+    check(!!firstDense && !firstDense.jobs['sparse:todo'] && (firstDense.jobs['sparse:have'] ?? 0) === 3, '四:满密度开始时稀疏的三段都已落定(先查查到测量时产的,不重产)', firstDense?.jobs);
+    check(!!doneA && doneA.jobs.length === 6 && doneA.jobs.every((j) => j.state === (j.pass === 'sparse' ? 'have' : 'produced')) && doneA.counters.failed === 0, '四:满密度三段由本页闲时产完', R.dense.jobs);
+    R.denseManifests = {};
+    for (const id of seeded.ids) R.denseManifests[id] = await manifestState(P0, rows[id], keyOf(id));
+    check(seeded.ids.every((id) => { const x = R.denseManifests[id]; return x.have === 4 && x.dense === 4 && x.boxed === 4; }), '四:三条流都补成满密度,稀疏那一趟量的位置矩形还在', R.denseManifests);
+    const nodeA = await nodeDiag(pageA);
+    check(nodeA?.counters?.claims === 0, '四:全程没有经过任务队列(线上没有能切分的节点)', nodeA?.counters && { claims: nodeA.counters.claims });
+
+    // 比像素(参照在满密度补齐以后截:停在稀疏段上时流的轨道留着等换满密度,`liveShot` 等的是轨道撤掉):稀疏段贴的是分段第一帧那一张
+    R.pixels = [];
+    if (check(shots.length >= 2, '二:播放中截到稀疏流在画的帧(至少两个分段)', shots.map((x) => ({ seg: x.seg, fb: x.fb, fa: x.fa })))) {
+      for (const [i, x] of shots.entries()) {
+        const first = origin + x.seg * SEG, own = origin + x.fa;
+        const liveFirst = await liveShot(pageA, clipA, first / FPS, dir, `mask-live-first-${i}`);
+        const liveOwn = await liveShot(pageA, clipA, own / FPS, dir, `mask-live-own-${i}`);
+        if (!check(!!liveFirst && !!liveOwn, `二:截到第 ${i} 张的两张精确活渲参照`)) continue;
+        const dFirst = diffOf(x.shot.png, liveFirst.png), dOwn = diffOf(x.shot.png, liveOwn.png);
+        R.pixels.push({ seg: x.seg, frameAtShot: [origin + x.fb, own], segmentFirstFrame: first, lastDrawn: x.lastDrawn, vsSegmentFirst: dFirst, vsOwnFrame: dOwn, orange: orangeOf(x.shot.png) });
+        check(dFirst.mad <= 1.5 && dFirst.bad <= 0.002, `二:第 ${i} 张(分段 ${x.seg})画面与分段第一帧的精确活渲相符`, dFirst);
+        check(dOwn.bad >= dFirst.bad * 3 + 0.001, `二:第 ${i} 张与它自己那一帧(晚 ${x.fa % SEG} 帧)的精确活渲差得更多:贴的是分段第一帧,不是这一帧`, { first: dFirst, own: dOwn });
+      }
+    }
+
+
+    /* ---------------- 五:乙后进来,直接用甲产的 */
+    const writesBefore = editorPxWrites().length;
+    let instB = null;
+    const b = await P0.member(browserB, 'psp-yi', { before: async (page) => { instB = await instrument(page); } });
+    ctxB = b.ctx;
+    const pageB = b.page;
+    const goneB = await waitMaskGone(pageB, '乙', 600_000);
+    await playFrom(pageB, CARDS[2].start);
+    const diagB = await nodeDiag(pageB);
+    R.yi = { sameFingerprintAsJia: diagB?.envFingerprint === fpA, maskMs: goneB ? goneB.goneAt - goneB.shownAt : null, atGone: goneB && { ...goneB.atGone, jobs: undefined },
+      streams: diagB?.streams && { encoders: diagB.streams.encoders, frames: diagB.streams.frames, segments: diagB.streams.segments, inits: diagB.streams.inits }, upload: diagB?.upload && { pushed: diagB.upload.pushed }, pxWrites: editorPxWrites().length - writesBefore };
+    say('mask.yi', R.yi);
+    const mB = goneB?.atGone?.m ?? null;
+    check(!!mB && mB.calls === 3 && mB.results?.ok === 3 && mB.produced === 0 && mB.have + mB.elsewhere === 3, '五:乙在遮罩下先查到三条流都已经有了(甲产的),一段没产', mB);
+    check(diagB?.streams?.encoders === 0 && diagB.streams.frames === 0 && (diagB?.upload?.pushed ?? -1) === 0 && R.yi.pxWrites === 0, '五:乙没有起编码器、没有送帧、没有往素材服务推任何块', R.yi);
+    const keyC = keyOf(clipC);
+    const readyB = await until('乙认出甲产的流、分段就绪', async () => { const d = await onlineDiag(pageB); const x = (d?.streams ?? []).find((z) => z.clipId === clipC); return x && x.ready >= 4 ? x : null; }, 60_000, 200);
+    check(!!readyB && readyB.resultKey === keyC, '五:乙的就绪索引里选中的就是甲产的那条流', readyB && { resultKey: String(readyB.resultKey).slice(0, 12) });
+    const playB = await playAndSample(pageB, clipC, { from: CARDS[2].start + 0.2, to: CARDS[2].start + 1.6, key: keyC });
+    R.playYi = checkStreamPlaying('五 乙', playB, { key: keyC });
+    await pauseAt(pageB, 7.5);
+    void instB;
+    R.pageErrors = { jia: pageA.errors.slice(0, 5), yi: pageB.errors.slice(0, 5) };
+    check(pageA.errors.length === 0 && pageB.errors.length === 0, '两个页面都没有未捕获的错误', R.pageErrors);
+    R.ms = Date.now() - t0;
+  } catch (e) {
+    fails.push(`${tag}异常:${String(e?.stack ?? e).slice(0, 800)}`);
+    try { if (debugProbe) R.atFailure = await debugProbe(); } catch { /* 页面不在了 */ }
+  } finally {
+    debugProbe = null;
+    try { chk?.close(); } catch { /* 已关 */ }
+    chk = null;
+    try { await ctxA?.close(); } catch { /* 已关 */ }
+    try { await ctxB?.close(); } catch { /* 已关 */ }
+    say('scene.done', { scene: 'mask', ms: Date.now() - t0, fails: fails.length });
+  }
+}
+
+async function sceneSlow(M) {
+  tag = '[slow] ';
+  const R = {};
+  out.scenes.slow = R;
+  const dir = path.join(OUT, 'slow');
+  fs.mkdirSync(dir, { recursive: true });
+  const t0 = Date.now();
+  let ctxA = null;
+  try {
+    const P0 = await newProject(M, 'slow', { duration: 24 });
+    // 拖慢的那张:舞台里每推一帧烧 80 毫秒,600 帧 = 40 个分段(5 份任务);稀疏版每个分段要推 15 帧(实测一段两秒多),一趟一分半,超过 50 秒。
+    // 后加的排在前面(先测):快的那张先测、先产完,遮罩最后等的是慢的那张
+    const CARDS = [{ start: 3, duration: 20, label: 'slow', burnMs: 80 }, { start: 0.4, duration: 2, label: 'fast' }];
+    const seeded = await seedCards(P0, CARDS);
+    const [slowId, fastId] = seeded.ids;
+    R.clips = { slow: slowId, fast: fastId };
+    let inst = null;
+    const a = await P0.member(browserA, 'psp-jia', { before: async (page) => { inst = await instrument(page); } });
+    ctxA = a.ctx;
+    const pageA = a.page;
+    debugProbe = async () => ({ ps: await pageStreams(pageA), log: (await maskLog(pageA)).slice(-3) });
+    const gone = await waitMaskGone(pageA, '甲', 900_000);
+    if (!gone) throw new Error('甲的遮罩没有撤下');
+    const atGone = gone.atGone;
+    const startedAt = atGone.m?.startedAt ?? null;
+    const diag0 = await nodeDiag(pageA);
+    const fpA = diag0?.envFingerprint ?? null;
+    const entered = await pageA.$('[data-pc="members-button"]').then((el) => !!el, () => false);
+    R.mask = { maskMs: gone.goneAt - gone.shownAt, sparseWaitMs: startedAt ? gone.goneAt - startedAt : null, atGone: { ...atGone, jobs: undefined }, measureLog: (await pageStreams(pageA))?.measure?.log ?? null, entered };
+    say('slow.gone', R.mask);
+    check(atGone.m?.results?.deadline === 1 && atGone.m.left >= 1, '到时了:慢的那张卡的稀疏版没产完,那一次以「到时」收场', atGone.m);
+    check(atGone.m?.results?.ok === 1, '快的那张卡的稀疏版在遮罩下产完了', atGone.m);
+    check(R.mask.sparseWaitMs !== null && R.mask.sparseWaitMs >= MASK_SPARSE_MS - 300 && R.mask.sparseWaitMs <= MASK_SPARSE_MS + 10_000,
+      `遮罩从第一次等稀疏版起满 ${MASK_SPARSE_MS / 1000} 秒就撤下(实测 ${R.mask.sparseWaitMs} 毫秒;慢的那张拖不住它)`, { sparseWaitMs: R.mask.sparseWaitMs });
+    check(entered, '50 秒到了照样进编辑(编辑界面在、遮罩不在)');
+    const rowSlow = await until('层表里有慢的那张卡的一行', async () => (await rowOf(P0.content, seeded.docId, slowId)).row, 30_000, 500);
+    const keySlow = rowSlow?.candidates.find((c) => c.envFingerprint === fpA)?.resultKey ?? null;
+    const m0 = rowSlow ? await manifestState(P0, rowSlow, keySlow) : null;
+    R.atGone = { segmentsPushed: atGone.segments, manifest: m0 };
+    check(!!m0 && m0.have < m0.want && m0.dense === 0, '进编辑时慢的那条流的稀疏版只有一部分(整份任务做完才写清单)', m0);
+    /* 之后闲时补齐;稀疏的都齐了以后满密度才开始 */
+    const firstDense = await until('稀疏的补齐、满密度的一趟开始', async () => { const log = await maskLog(pageA); return log.find((e) => e.running === 'dense') ?? null; }, 900_000, 500);
+    const logA = await maskLog(pageA);
+    const afterGone = logA.filter((e) => e.at >= gone.goneAt);
+    const sparseAfter = afterGone.filter((e) => e.running === 'sparse');
+    const m1 = rowSlow ? await manifestState(P0, rowSlow, keySlow) : null;
+    const d1 = await nodeDiag(pageA);
+    R.idle = { firstDenseAfterGoneMs: firstDense ? firstDense.at - gone.goneAt : null, sparseSamplesAfterGone: sparseAfter.length, jobsAtFirstDense: firstDense?.jobs ?? null, manifestAtFirstDense: m1,
+      resumedSegments: d1?.streams?.resumedSegments ?? null, counters: (await pageStreams(pageA))?.counters ?? null, nodeActive: [...new Set(inst.acts.map((x) => x.busy))] };
+    say('slow.idle', R.idle);
+    check(sparseAfter.some((e) => String(e.plan ?? '').startsWith('plan:')) && sparseAfter.every((e) => !e.mask), '没产完的稀疏版进编辑以后闲时接着产(清单计划那一份记账下)', { samples: sparseAfter.length, plans: [...new Set(sparseAfter.map((e) => e.plan))] });
+    check(!!firstDense && !firstDense.jobs['sparse:todo'], '稀疏的都落定了满密度才开始', firstDense?.jobs);
+    check(!!firstDense && !logA.some((e) => e.running === 'dense' && e.at < firstDense.at) && !logA.filter((e) => e.at < firstDense.at).some((e) => (e.jobs['dense:produced'] ?? 0) > 0), '在那之前满密度的一段都没产', firstDense && { at: firstDense.at - gone.goneAt });
+    check(!!m1 && m1.have === m1.want && m1.boxed === m1.want && m1.sparse + m1.dense === m1.want && m1.sparse >= m1.want - 8, '满密度开始时慢的那条流稀疏版 40 个分段都在(带位置矩形)', m1);
+    // 到时的那一刻正做着的那份任务里已经推完的分段(推了的总数 − 快的那条 4 段 − 已经写进清单的):回来只补缺的
+    const partial = Math.max(0, (atGone.segments ?? 0) - 4 - (m0?.have ?? 0));
+    R.idle.partialAtDeadline = partial;
+    if (partial > 0) check((d1?.streams?.resumedSegments ?? 0) >= partial, '遮罩下推完的分段没有重做(到时那一份任务回来只补缺的)', { partial, resumedSegments: d1?.streams?.resumedSegments });
+    else say('slow.note', { note: '到时的那一刻正做着的那份任务一个分段都还没推完,没有可留的;「不重做」这一条这一遍没有测到' });
+    check(d1?.counters?.claims === 0, '全程没有经过任务队列', d1?.counters && { claims: d1.counters.claims });
+    check(pageA.errors.length === 0, '页面没有未捕获的错误', pageA.errors.slice(0, 5));
+    R.ms = Date.now() - t0;
+  } catch (e) {
+    fails.push(`${tag}异常:${String(e?.stack ?? e).slice(0, 800)}`);
+    try { if (debugProbe) R.atFailure = await debugProbe(); } catch { /* 页面不在了 */ }
+  } finally {
+    debugProbe = null;
+    try { chk?.close(); } catch { /* 已关 */ }
+    chk = null;
+    try { await ctxA?.close(); } catch { /* 已关 */ }
+    say('scene.done', { scene: 'slow', ms: Date.now() - t0, fails: fails.length });
+  }
+}
+
 /* ================================================================== 开跑 */
 
 try {
@@ -863,8 +1219,8 @@ try {
   const launch = () => puppeteer.launch({ headless: true, protocolTimeout: 900_000, args: [...PROBE_CHROME_ARGS, ...LAUNCH_ARGS] });
   [browserA, browserB] = await Promise.all([launch(), launch()]);
 
-  const scenes = { solo: sceneSolo, splitter: sceneSplitter, desk: sceneDesk };
-  for (const name of ONLY ? [ONLY] : ['solo', 'splitter', 'desk']) {
+  const scenes = { solo: sceneSolo, splitter: sceneSplitter, desk: sceneDesk, mask: sceneMask, slow: sceneSlow };
+  for (const name of ONLY ? ONLY.split(',') : ['solo', 'splitter', 'desk', 'mask', 'slow']) {
     if (!scenes[name]) throw new Error(`不认识的场:${name}`);
     await scenes[name](M);
   }
