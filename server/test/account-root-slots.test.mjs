@@ -10,6 +10,7 @@ import { validateWorkerSettings } from '../agent-service/account-task-worker-con
 import { createAccountSlotScheduler } from '../agent-service/account-slot-scheduler.mjs';
 import { validateRootConfiguration, workerSettingsFor, createRootSlotAdapter } from '../agent-service/account-root-slots.mjs';
 import { parseRootArguments, requireLinuxRoot } from '../agent-service/account-root-main.mjs';
+import { assertRootOwnedCode } from '../agent-service/account-root-code-trust.mjs';
 import { scopeModel, signed } from './agent-run-scope-fixture.mjs';
 
 // root 这一侧的任务槽：配置、给任务进程写的设置、槽的适配（接发布器与指令通道）、root 入口的参数与平台闸。
@@ -278,4 +279,58 @@ test('文档服务这一侧的任务槽配置：只在 Linux 上开；主身份�
   bad(c => { c.slots.push(structuredClone(c.slots[0])); }, 'run-scopes-slot-duplicate');
   bad(c => { c.signingKeyFile = path.resolve('/etc/promptcut/doc/missing.pem'); }, 'run-scopes-signing-key');
   assert.throws(() => loadAgentRunScopesConfig({ file, agent, authorityId, platform: 'linux', read: () => Buffer.from('not json') }), { code: 'run-scopes-file' });
+});
+
+/** 一棵受控的文件系统：路径 → { type: 'dir' | 'file' | 'link', uid, mode, target? } */
+function fakeTree(entries) {
+  const at = file => { const row = entries[file]; if (!row) throw Object.assign(new Error(`ENOENT ${file}`), { code: 'ENOENT' }); return row; };
+  return {
+    lstat: async file => { const row = at(file); return { uid: row.uid ?? 0, mode: row.mode ?? (row.type === 'dir' ? 0o755 : 0o644),
+      isDirectory: () => row.type === 'dir', isFile: () => row.type === 'file', isSymbolicLink: () => row.type === 'link' }; },
+    readlink: async file => at(file).target,
+    readdir: async dir => Object.keys(entries).filter(file => file !== dir && path.posix.dirname(file) === dir).map(file => path.posix.basename(file)),
+  };
+}
+const goodTree = () => ({ '/': { type: 'dir' }, '/usr': { type: 'dir' }, '/usr/bin': { type: 'dir' }, '/usr/bin/node': { type: 'file', mode: 0o755 },
+  '/opt': { type: 'dir' }, '/opt/promptcut-root': { type: 'dir' }, '/opt/promptcut-root/current': { type: 'link', target: 'releases/abc123' },
+  '/opt/promptcut-root/releases': { type: 'dir' }, '/opt/promptcut-root/releases/abc123': { type: 'dir' },
+  '/opt/promptcut-root/releases/abc123/server': { type: 'dir' }, '/opt/promptcut-root/releases/abc123/server/agent-service': { type: 'dir' },
+  '/opt/promptcut-root/releases/abc123/server/agent-service/account-root-main.mjs': { type: 'file' },
+  '/opt/promptcut-root/releases/abc123/server/hosted': { type: 'dir' }, '/opt/promptcut-root/releases/abc123/server/hosted/deploy': { type: 'dir' },
+  '/opt/promptcut-root/releases/abc123/server/hosted/deploy/agent-run-scope-publisher.mjs': { type: 'file' } });
+const ENTRY = '/opt/promptcut-root/current/server/agent-service/account-root-main.mjs';
+
+test('root 入口启动时核自己要执行的代码只有 root 改得了：路径上每一级、整棵 server/、node 本身；不满足就拒，带上是哪个路径', async () => {
+  const ok = await assertRootOwnedCode({ entryFile: ENTRY, node: '/usr/bin/node', fs: fakeTree(goodTree()) });
+  assert.equal(ok.entry, '/opt/promptcut-root/releases/abc123/server/agent-service/account-root-main.mjs', '顺着 current 这个链接核到真实位置');
+  assert.equal(ok.codeRoot, '/opt/promptcut-root/releases/abc123/server'); assert.equal(ok.node, '/usr/bin/node'); assert.ok(ok.checked > 12);
+  const refused = async (mutate, file, why) => { const tree = goodTree(); mutate(tree);
+    await assert.rejects(assertRootOwnedCode({ entryFile: ENTRY, node: '/usr/bin/node', fs: fakeTree(tree) }), { code: 'root-code-untrusted', file, why }, `${why} ${file}`); };
+  const R = '/opt/promptcut-root/releases/abc123';
+  // 部署目录归别的用户（和渲染服务共用的那种）
+  await refused(t => { t['/opt/promptcut-root'].uid = 1001; }, '/opt/promptcut-root', 'owner');
+  // 上级目录组可写、别人可写
+  await refused(t => { t['/opt'].mode = 0o775; }, '/opt', 'writable');
+  await refused(t => { t[`${R}`].mode = 0o757; }, R, 'writable');
+  // current 这个链接不是 root 的（别人能把它改指到别处）
+  await refused(t => { t['/opt/promptcut-root/current'].uid = 1001; }, '/opt/promptcut-root/current', 'symlink-owner');
+  // 链接指向的地方不归 root
+  await refused(t => { t['/opt/promptcut-root/releases'].uid = 1001; }, '/opt/promptcut-root/releases', 'owner');
+  // 入口文件本身
+  await refused(t => { t[`${R}/server/agent-service/account-root-main.mjs`].mode = 0o664; }, `${R}/server/agent-service/account-root-main.mjs`, 'writable');
+  // server/ 里别的文件（root 入口会 import 的）：git archive 解出来缺省组可写
+  await refused(t => { t[`${R}/server/hosted/deploy/agent-run-scope-publisher.mjs`].mode = 0o664; }, `${R}/server/hosted/deploy/agent-run-scope-publisher.mjs`, 'writable');
+  await refused(t => { t[`${R}/server/hosted/deploy/agent-run-scope-publisher.mjs`].uid = 1001; }, `${R}/server/hosted/deploy/agent-run-scope-publisher.mjs`, 'owner');
+  await refused(t => { t[`${R}/server/hosted`].mode = 0o777; }, `${R}/server/hosted`, 'writable');
+  // server/ 里的符号链接（可以指到别人改得了的地方）
+  await refused(t => { t[`${R}/server/hosted/link.mjs`] = { type: 'link', target: '/tmp/x.mjs' }; }, `${R}/server/hosted/link.mjs`, 'symlink');
+  // node 本身
+  await refused(t => { t['/usr/bin/node'].uid = 1001; }, '/usr/bin/node', 'owner');
+  await refused(t => { t['/usr/bin'].mode = 0o777; }, '/usr/bin', 'writable');
+  // 入口不在 server/agent-service/ 下、链接成环、相对路径
+  await assert.rejects(assertRootOwnedCode({ entryFile: '/usr/bin/node', fs: fakeTree(goodTree()) }), { code: 'root-code-untrusted', why: 'layout' });
+  await refused(t => { t['/opt/promptcut-root/current'].target = 'current'; }, ENTRY, 'symlink-loop');
+  await assert.rejects(assertRootOwnedCode({ entryFile: 'server/agent-service/account-root-main.mjs', fs: fakeTree(goodTree()) }), { code: 'root-code-untrusted', why: 'path' });
+  // 不给 node 就不核 node
+  assert.equal((await assertRootOwnedCode({ entryFile: ENTRY, fs: fakeTree(goodTree()) })).node, null);
 });

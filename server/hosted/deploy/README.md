@@ -267,6 +267,7 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 
 | 路径（示例） | 属主与权限 | 谁读写 |
 |---|---|---|
+| root 入口执行的那份代码（`DIR/current` 指向的检出里的 `server/`，连同路径上每一级目录、`current` 这个链接、node 本身） | 属主 root，组和别人不可写 | root 入口以 root 执行它，启动时自己核一遍，不满足就拒绝启动（`config.error root-code-untrusted`，带上是哪个路径）。部署目录和渲染服务共用、又不归 root 的话，给 root 入口单独放一份 root 的检出（同一个提交），单元里的 `DIR` 指到它；`git archive` 解出来的文件缺省组可写，要 `chown -R root:root` 加 `chmod -R go-w` |
 | `/etc/promptcut/agent-root/`（`agent-root.json`、`controller.key/.crt`、`ca.crt`） | root，目录 0755、配置与私钥 0600 | root 入口。它读的每个文件、每一级上级目录都必须属主是 root、别人写不了 |
 | `/etc/promptcut/agent-slots/<槽>/worker-settings.json` | root，目录 0755、文件 0644 | root 入口每开一代写一次；任务用户只读。里面没有秘密 |
 | `/etc/promptcut/agent-task/`（`task.key/.crt`、`identity.key/.crt`、`ca.crt`） | 目录 root 0755；两把私钥属任务用户 0600 | 任务进程 |

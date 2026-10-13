@@ -23,6 +23,8 @@
  *       只读：逐槽打印现在停在第几代、什么阶段、单元的状态。
  *
  * 只在 Linux 上、以 root 跑；别的平台、别的用户直接拒绝（退出码 1，一行 `config.error`）。
+ * 它执行的这份代码（入口所在的整棵 `server/`、路径上的每一级目录、node 本身）必须属主是 root、别人写不了，
+ * 启动时自己核，不满足就拒绝（`root-code-untrusted`，带上是哪个路径）：部署目录归别的用户的话，那个用户改一个文件就是 root。
  * 失败即关：配置读不了、形状不对、哪个槽的运行时建不起来，都打一行 `config.error { reason }` 退出，不带着半套槽跑。
  */
 import fs from 'node:fs/promises';
@@ -37,6 +39,7 @@ import { createAccountSlotScheduler } from './account-slot-scheduler.mjs';
 import { createWorkerControlClient } from './account-worker-control-client.mjs';
 import { createMasterSchedulerClient } from './account-master-scheduler-client.mjs';
 import { validateRootConfiguration, workerSettingsFor, createRootSlotAdapter } from './account-root-slots.mjs';
+import { assertRootOwnedCode } from './account-root-code-trust.mjs';
 import { validateWorkerSettings } from './account-task-worker-config.mjs';
 
 const line = (event, fields = {}) => { process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event, ...fields })}\n`); };
@@ -153,7 +156,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   try {
     // 先核平台和身份，再看参数：在别的平台上不管怎么写参数，回答都是「只在 Linux root 上跑」
     requireLinuxRoot();
+    // 再核这份要以 root 执行的代码只有 root 改得了（见 `account-root-code-trust.mjs`）；三种跑法都核
+    await assertRootOwnedCode({ entryFile: path.resolve(process.argv[1]), node: process.execPath });
     started = await runRoot(parseRootArguments(process.argv.slice(2)));
-  } catch (error) { failed(safe(error), error?.slots ? { slots: error.slots } : {}); }
+  } catch (error) { failed(safe(error), { ...(error?.slots ? { slots: error.slots } : {}), ...(error?.code === 'root-code-untrusted' ? { file: error.file, why: error.why } : {}) }); }
   if (started) installRootStop(started);
 }

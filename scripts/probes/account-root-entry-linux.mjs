@@ -49,7 +49,7 @@
  *    7 主进程自己退出（收尾指令）且从没绑定过：写失败观察，按「没领过任务」退掉
  *    8 上一个 root 进程留下的一代：新的接线没有它的通道，先停它的主进程、写失败观察，再强制关
  *    9 文档服务读这条记录链的那段代码（只读）读得通：五代、都关了、三份失败观察；记录文件别的用户读得到
- *   10 root 入口 `--status` 读配置、列出槽的现状
+ *   10 root 入口 `--status`：它要执行的代码有一个文件组可写就拒绝启动；收回以后读配置、列出槽的现状
  *   11 root 入口常驻：起来以后一直在——槽空着、主服务连不上（每轮记一行）时空闲八秒以上还活着、问过三轮以上还在接着问；
  *      收到 SIGTERM 才退，退出码 0，不动任何槽
  */
@@ -136,6 +136,11 @@ async function main(options) {
     await fsp.cp(path.join(REPO, 'server'), `${plan.repoDir}/server`, { recursive: true, filter: source => !/[\\/]server[\\/]test([\\/]|$)/.test(source) });
     fs.mkdirSync(`${plan.repoDir}/src/kernel`, { recursive: true, mode: 0o755 });
     for (const name of ['agentScopes.mjs', 'creativity.mjs']) fs.copyFileSync(path.join(REPO, 'src', 'kernel', name), `${plan.repoDir}/src/kernel/${name}`);
+    // 这份副本只有 root 改得了（root 入口启动时要核）：目录 0755、文件 0644。解包出来的文件常常是组可写的
+    const tighten = dir => { fs.chmodSync(dir, 0o755);
+      for (const item of fs.readdirSync(dir, { withFileTypes: true })) { const file = `${dir}/${item.name}`;
+        if (item.isSymbolicLink()) fail('setup-symlink-in-source'); else if (item.isDirectory()) tighten(file); else fs.chmodSync(file, 0o644); } };
+    tighten(plan.repoDir);
     fs.chownSync(plan.dataDir, uid, gid); fs.chownSync(plan.stateRoot, uid, gid);
     const openssl = args => { const result = spawnSync('openssl', args, { cwd: plan.pkiDir, stdio: 'ignore', timeout: 60_000, windowsHide: true }); need(result.status === 0, 'setup-openssl'); };
     openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=pc claude probe CA', '-keyout', 'ca.key', '-out', 'ca.crt']);
@@ -308,8 +313,15 @@ async function main(options) {
       need(asUser.status === 0, 'registry-not-readable-by-user');
     });
     fs.writeFileSync(plan.configFile, JSON.stringify(config), { mode: 0o600, flag: 'wx' });
-    const rootMain = path.join(REPO, 'server', 'agent-service', 'account-root-main.mjs');
-    await check('root 入口 --status：读配置、列出槽的现状', async () => {
+    // root 入口从 /run 下那份副本里跑：它启动时要核自己执行的代码只有 root 改得了，那份副本的权限上面已经收紧过
+    const rootMain = `${plan.repoDir}/server/agent-service/account-root-main.mjs`;
+    await check('root 入口 --status：代码有一个文件组可写就拒绝启动；收回以后读配置、列出槽的现状', async () => {
+      const loose = `${plan.repoDir}/server/agent-service/account-root-slots.mjs`;
+      fs.chmodSync(loose, 0o664);
+      const refused = spawnSync(process.execPath, [rootMain, '--config', plan.configFile, '--status'], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+      fs.chmodSync(loose, 0o644);
+      diag.push(`status with group-writable code: exit ${refused.status} ${String(refused.stdout).trim().slice(0, 300)}`);
+      need(refused.status === 1 && /"reason":"root-code-untrusted"/.test(refused.stdout) && refused.stdout.includes(loose), 'untrusted-code-not-refused');
       const result = spawnSync(process.execPath, [rootMain, '--config', plan.configFile, '--status'], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
       diag.push(`status exit ${result.status} ${String(result.stdout).trim().slice(0, 400)}`);
       need(result.status === 0, 'status-exit');
