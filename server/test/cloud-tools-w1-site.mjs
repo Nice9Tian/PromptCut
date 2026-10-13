@@ -67,7 +67,7 @@ if (q.get('shift')) setTimeout(function(){ document.getElementById('pad').style.
   '/focus-tricks': () => html('W1 焦点把戏', `
 <h1>焦点把戏</h1>
 <input id="shy" aria-label="一碰就躲" onfocus="var d=document.createElement('div');d.id='cover';document.body.appendChild(d)">
-<input id="poof" aria-label="一碰就没" onfocus="var s=this;setTimeout(function(){s.remove();document.getElementById('pass').focus()},0)">
+<input id="poof" aria-label="一碰就没" onfocus="this.remove();document.getElementById('pass').focus()">
 <input id="hop" aria-label="跳走的框" onfocus="setTimeout(function(){document.getElementById('pass').focus()},600)">
 <input id="pass" type="password" aria-label="口令框">
 <button id="go">提交</button>
