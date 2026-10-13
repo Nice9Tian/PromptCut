@@ -2301,7 +2301,6 @@ export default function StageView() {
        */
       async setSuppressed(clipIds) {
         const before = ref.current.suppressed;
-        const named = ref.current.parentSuppressed;
         ref.current.parentSuppressed = new Set(clipIds);
         /*
          * 这一次**新**点名的卡,挂着流平面而流还没画出第一帧:先不藏它原来的画面(`streamWaiting`),等流画出来再藏
@@ -2340,9 +2339,15 @@ export default function StageView() {
         if (ref.current.settling.size) {
           const rest = new Map(ref.current.settling);
           let changed = false;
-          // 只有这一次**新**点名的才打断它的追帧(K6 把追帧中的轻卡降为重)。上一次就点着名的是停下以后贴着流追精确活渲的重卡,
-          // 父页重发抑制集合(别的卡变了)不打断它
-          for (const id of next) if (!named.has(id) && rest.delete(id)) changed = true;
+          /*
+           * 打断的是轻卡的追帧(K6 把追帧中的轻卡降为重)。停下以后追精确活渲的重卡(`announce` 的那种)不打断:它本来就贴着流、
+           * 被点着名,父页重发抑制集合(别的卡变了;或者它上一次追上的 `settled` 迟到,父页按新位置又把它点上)都不该让它停在流上 ——
+           * 它追上时照常由 `releaseSettled` 撤抑制。组流里先追上、等着同组的成员同理。
+           */
+          for (const id of next) {
+            if (ref.current.catchUps.get(id)?.announce || ref.current.settledHeld.has(id)) continue;
+            if (rest.delete(id)) changed = true;
+          }
           if (changed) {
             ref.current.settling = rest;
             catchUpGen.current++;
