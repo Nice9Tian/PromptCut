@@ -563,8 +563,8 @@ if (typeof window !== "undefined") {
   // 临时验证出口：puppeteer 无头验证时直接调用这四个函数（不用模拟 <input type=file>）。
   window.__pcIo = { importVideoFiles, importProjectFile, importSrtFile, parseSrt, exportProjectJson, exportVideo, setMediaTranscript: (mediaId: string, transcript: any) => actions.setMediaTranscript(mediaId, transcript) };
   // c10a 探针(`scripts/probes/lowmem-export-probe.mjs`):在当前页面上跑一次浏览器逐帧导出,回产物字节(base64)与统计。
-  // 不经「另存为」、不下载;`originals: false` 时重卡照活渲(桌面运行环境没有渲染节点的层表)
-  window.__pcIo.exportVideoBrowser = async (o: { maxFrames?: number; originals?: boolean; sounds?: boolean } = {}) => (await import("../../export/onlineExport")).exportVideoBrowserProbe(o);
+  // 不经「另存为」、不下载;`originals: false` 时卡片一律由导出页活渲(桌面运行环境没有文档服务);参数见 `exportVideoBrowserProbe`
+  window.__pcIo.exportVideoBrowser = async (o: { maxFrames?: number; originals?: boolean; sounds?: boolean; mode?: "fast" | "full"; capture?: number[]; waitLimit?: number } = {}) => (await import("../../export/onlineExport")).exportVideoBrowserProbe(o);
   // 声音探针(`scripts/probes/sound-ab-probe.mjs`):在线构建里没有 `/src/…` 可引,生成、判定、导出前补齐声音从这里拿
   Object.assign(window.__pcIo, { cancelExport, fetchExportFile });
   window.__pcIo.sound = async () => {
