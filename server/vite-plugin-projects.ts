@@ -37,6 +37,25 @@ export function draftFileFor(root: string, id: string): string | null {
   return fileFor(root, id);
 }
 
+/**
+ * 原子写草稿:同目录写一份临时文件、落盘、再改名盖上去。写到一半进程没了,旧草稿还是完整的那一份;
+ * 任何一步失败都把临时文件清掉,不留半份。
+ */
+function writeFileAtomic(file: string, body: string): void {
+  // 目标已存在却不可写(只读):直接报错,不靠改名绕过只读(各平台改名对只读文件的行为不一样)
+  if (fs.existsSync(file)) fs.accessSync(file, fs.constants.W_OK);
+  const tmp = `${file}.${process.pid}-${Math.random().toString(36).slice(2, 8)}.tmp`;
+  try {
+    fs.writeFileSync(tmp, body, "utf8");
+    const fd = fs.openSync(tmp, "r+");
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 清不掉也不改变要报的错 */ }
+    throw e;
+  }
+}
+
 function fileFor(root: string, id: string): string | null {
   if (!isValidDraftId(id)) return null;
   return path.join(projectsDir(root), id + EXT);
@@ -204,7 +223,7 @@ export function projectsPlugin(): Plugin {
             const body = await readBody(req as never);
             // 先解析一次:宁可这里报错,也不要把坏 JSON 写成草稿
             JSON.parse(body);
-            fs.writeFileSync(file, body, "utf8");
+            writeFileAtomic(file, body);
             return sendJson(res, 200, { ok: true, ...summarize(id, file) });
           }
 

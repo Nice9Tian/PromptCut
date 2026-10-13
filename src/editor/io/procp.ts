@@ -25,6 +25,13 @@ const PROC_ENTRY = "project.proc";
 const MEDIA_PREFIX = "media/";
 
 /**
+ * 包里某个条目的内容校验不通过时,给用户看的那句话(一级文字,用户尚未定稿)。
+ * 任务书和设计里没有这句的原文,句式沿用读包失败的那一类(「这不是一个 .procp 包(…)」),
+ * 草稿见 docs/reports/AGENT-v18-fixes.md「要用户定的事」。
+ */
+export const PROCP_DAMAGED_MESSAGE = ".procp 包已损坏(里面有条目的内容校验不通过),没有打开它";
+
+/**
  * 这个文件是不是 .procp 包。
  *
  * 名字对不上也再看一眼头四个字节(`PK\x03\x04`)—— 用户可能把包改了名,
@@ -142,7 +149,7 @@ export async function writeZip(entries: PackEntry[]): Promise<Blob> {
   return new Blob([...parts, ...central, end.buf], { type: "application/zip" });
 }
 
-interface ReadEntry { name: string; method: number; size: number; blob: Blob }
+interface ReadEntry { name: string; method: number; size: number; crc: number; blob: Blob }
 
 async function sliceView(blob: Blob, start: number, end: number): Promise<DataView> {
   return new DataView(await blob.slice(start, end).arrayBuffer());
@@ -168,6 +175,7 @@ export async function readZip(file: Blob): Promise<ReadEntry[]> {
   for (let i = 0; i < count; i++) {
     if (cd.getUint32(p, true) !== 0x02014b50) break;
     const method = cd.getUint16(p + 10, true);
+    const crc = cd.getUint32(p + 16, true);
     const size = cd.getUint32(p + 24, true);
     const csize = cd.getUint32(p + 20, true);
     const nameLen = cd.getUint16(p + 28, true);
@@ -177,18 +185,30 @@ export async function readZip(file: Blob): Promise<ReadEntry[]> {
     const name = new TextDecoder().decode(new Uint8Array(cd.buffer, p + 46, nameLen));
     const head = await sliceView(file, local, local + 30);
     const dataStart = local + 30 + head.getUint16(26, true) + head.getUint16(28, true);
-    out.push({ name, method, size, blob: file.slice(dataStart, dataStart + csize) });
+    out.push({ name, method, size, crc, blob: file.slice(dataStart, dataStart + csize) });
     p += 46 + nameLen + extraLen + commentLen;
   }
   return out;
 }
 
-/** 条目的原始字节。store 直接给,deflate 走浏览器自带的解压流(别人用普通 zip 工具压的包也认) */
-export function inflate(entry: ReadEntry): Blob | Promise<Blob> {
-  if (entry.method === 0) return entry.blob;
-  if (entry.method !== 8) throw new Error(`.procp 里有不认识的压缩方式(${entry.method}):${entry.name}`);
-  const ds = new DecompressionStream("deflate-raw");
-  return new Response(entry.blob.stream().pipeThrough(ds)).blob();
+/**
+ * 条目的原始字节,并按中央目录里登记的 CRC32 核对。store 直接用,deflate 走浏览器自带的解压流
+ * (别人用普通 zip 工具压的包也认)。内容对不上就抛 PROCP_DAMAGED_MESSAGE,不把改坏的字节交出去。
+ * 解压流本身报错(deflate 数据坏)同样按包损坏处理。
+ */
+export async function inflate(entry: ReadEntry): Promise<Blob> {
+  let body: Blob;
+  if (entry.method === 0) body = entry.blob;
+  else if (entry.method !== 8) throw new Error(`.procp 里有不认识的压缩方式(${entry.method}):${entry.name}`);
+  else {
+    try {
+      body = await new Response(entry.blob.stream().pipeThrough(new DecompressionStream("deflate-raw"))).blob();
+    } catch {
+      throw new Error(PROCP_DAMAGED_MESSAGE);
+    }
+  }
+  if (body.size !== entry.size || (await crc32OfBlob(body)) !== entry.crc) throw new Error(PROCP_DAMAGED_MESSAGE);
+  return body;
 }
 
 /* ------------------------------ 装包 / 拆包 ------------------------------ */
@@ -309,7 +329,12 @@ export async function unpackProcp(file: Blob): Promise<UnpackResult> {
   const entries = await readZip(file);
   const proc = entries.find((e) => e.name === PROC_ENTRY) || entries[0];
   if (!proc) throw new Error("这不是一个 .procp 包(里面是空的)");
-  const procText = await (await inflate(proc)).text();
+  // 先把每个条目都核一遍 CRC,再碰编排和素材:有一条坏就整个包不读,不落任何素材
+  const bodies = new Map<ReadEntry, Blob>();
+  for (const e of entries) {
+    if (e === proc || e.name.startsWith(MEDIA_PREFIX)) bodies.set(e, await inflate(e));
+  }
+  const procText = await bodies.get(proc)!.text();
 
   const media = entries.filter((e) => e.name.startsWith(MEDIA_PREFIX) && e !== proc);
   const hashOf = (name: string) => name.slice(MEDIA_PREFIX.length).split(".")[0].toLowerCase();
@@ -323,7 +348,7 @@ export async function unpackProcp(file: Blob): Promise<UnpackResult> {
     if (have.has(hash)) { deduped += 1; landed.add(hash); continue; }
     const name = entry.name.slice(MEDIA_PREFIX.length);
     try {
-      const body = await inflate(entry);
+      const body = bodies.get(entry)!;
       const res = await fetch(`/api/media/upload/${encodeURIComponent(name)}`, { method: "POST", body });
       if (!res.ok) { console.warn(`[procp] 素材落库失败: ${name}`); continue; }
       const data = await res.json();

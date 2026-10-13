@@ -140,13 +140,9 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
   /** Account-v2 stream: authorize before headers and on every poll/event. Doc remains
    * the source of the durable queue; this stream has no model output until run wiring. */
   async function accountEvents(req, res, identity, conversationId, after) {
-    let view;
-    try { view = await service.conversation(identity, conversationId, 0); }
-    catch (error) {
-      if (error?.status !== 404) throw error;
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', ...CORS });
-      res.end('data: {"type":"end","state":"none","seq":0}\n\n'); return;
-    }
+    // 对话不存在(含别的项目的、看不到的)：doc 回 404，原样走统一的错误回包，和 GET /v1/conversations/<id> 一致，
+    // 不区分「不存在」与「没权限」。不能先写 200 的流头：读通道在还没有任何一次读取被受理时会把 2xx 回包当越权掐掉连接。
+    let view = await service.conversation(identity, conversationId, 0);
     if (!view) return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
     if (service.runEvents) {
       await service.mirrorAccepted(identity, conversationId);
@@ -225,8 +221,10 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     if (pathname === '/v1/info' && req.method === 'GET') return sendJson(res, 200, { ok: true, ...await service.info(identity) }, CORS);
     if (pathname === '/v1/conversations' && req.method === 'GET') return sendJson(res, 200, { ok: true,
       items: await service.conversations(identity) }, CORS);
-    if (pathname === '/v1/usage' && req.method === 'GET') return sendJson(res, 200, { ok: true,
-      ...await service.usage(identity) }, CORS);
+    if (pathname === '/v1/usage' && req.method === 'GET') {
+      const since = Number(url.searchParams.get('since'));
+      return sendJson(res, 200, { ok: true, ...await service.usage(identity, Number.isFinite(since) && since > 0 ? since : null) }, CORS);
+    }
     const one = /^\/v1\/conversations\/([^/]+)$/.exec(pathname);
     if (one) {
       const conversationId = decodeURIComponent(one[1]);

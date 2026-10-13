@@ -90,7 +90,7 @@ test('2.3-6 账号模式端到端：改文案、挪片段、调卡片参数各�
 
   // 产品问题(见段落「产品问题」)：两个成员的 Agent 同时改同一处，后写的那个被正确拒绝了(项目没被覆盖)，
   // 但账号模式下文档服务的拒绝回包不带当前版本号和期间的改动，模型读到的是「现在是 rev undefined」。
-  await t.test('过期写入被拒时，回给模型的话里要有当前版本号', { todo: '账号模式的 project.op.rejected(stale) 回包缺 currentRev/since，见 server/docservice/modules/project.mjs 第 1042 行一带' }, async () => {
+  await t.test('过期写入被拒时，回给模型的话里要有当前版本号', async () => {
     const [, staleRows] = await Promise.all([
       post(a, 'e2e_stale_a', [{ sleepMs: 800 }, { tool: 'update_clip', input: { clipId: clip.id, label: '抢先写' } }, { say: '甲写完' }]),
       post(b, 'e2e_stale_b', [{ tool: 'get_project', input: {} }, { sleepMs: 3000 }, { tool: 'update_clip', input: { clipId: clip.id, label: '后写的' } }, { say: '乙写完' }]),

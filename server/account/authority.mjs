@@ -40,13 +40,38 @@ const permission = (project, accountId, action) => {
   return access;
 };
 
+/**
+ * 「谁可以新建云端项目、每人能建多少」的判断口子（online-browser-task.md 第一步第 4 条）。
+ * 调用方（`createProject`）只问这一个函数；以后要限制，改配置或换规则，不改调用方。〔裁：v18-fixes 子 Agent〕
+ *
+ * 配置 `createPolicy`（传给 `createAccountAuthority`，缺省 `{}`，缺省行为：登录了的账号都能建、不限数量）：
+ *   - `maxProjectsPerAccount`：`null` / 不给 = 不限；非负整数 N = 一个账号名下（创建者是它、状态不是已删除）最多 N 个，
+ *     已经有 N 个时第 N+1 个被拒，错误码 `project-limit-reached`（403）。0 等于谁都不能建。
+ *   - `canCreate({ accountId, accountName, ownedCount, requestId })`：可选的自定义判断，回 `true` 放行；
+ *     回 `false` 或 `{ code }` 拒绝，错误码取 `code`（缺省 `create-not-allowed`，403）。先于数量上限判。
+ * 「要登录」不在这里：没有登录的账号过不了 `verify`，到不了这一步。
+ */
+export function checkCreateProject(policy, { accountId, accountName, ownedCount, requestId }) {
+  const max = policy?.maxProjectsPerAccount ?? null;
+  if (typeof policy?.canCreate === 'function') {
+    const verdict = policy.canCreate({ accountId, accountName, ownedCount, requestId });
+    if (verdict !== true) reject(403, typeof verdict?.code === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(verdict.code) ? verdict.code : 'create-not-allowed');
+  }
+  if (max !== null && ownedCount >= max) reject(403, 'project-limit-reached');
+}
+const validCreatePolicy = policy => policy !== null && typeof policy === 'object' &&
+  (policy.maxProjectsPerAccount === undefined || policy.maxProjectsPerAccount === null ||
+    (Number.isSafeInteger(policy.maxProjectsPerAccount) && policy.maxProjectsPerAccount >= 0)) &&
+  (policy.canCreate === undefined || typeof policy.canCreate === 'function');
+
 /** Sole v2 cloud project authority. No LAN records, account passwords, or usable tokens on disk.
  * initializeProject must durably create the real doc/content snapshot before an active commit.
  * This factory is deliberately not mounted in the legacy shared service by itself.
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
   signingKey, keyId, now = Date.now, pollMs = 1000, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
-  runHooks = null }) {
+  runHooks = null, createPolicy = {} }) {
+  if (!validCreatePolicy(createPolicy)) reject(503, 'create-policy-configuration');
   if (runHooks !== null && typeof runHooks?.fenceInState !== 'function') reject(503, 'run-authority-unavailable');
   const refs = new Map(); const subscriptions = new Set(); const creating = new Map();
   let syncing = null, timer = null, closed = false, ready = false;
@@ -190,6 +215,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const pending = ledger.transaction(state => {
       const previous = replay(state, key, digest);
       if (previous) return { projectId: previous.projectId, result: previous.result ?? null };
+      // 重复的 requestId 已在上面原样回放，不占名额；新建才过策略口子（数量从账本里数，不另建表）
+      checkCreateProject(createPolicy, { accountId: actor.accountId, accountName: actor.accountName, requestId: body.requestId,
+        ownedCount: Object.values(state.projects).filter(p => p.status !== 'deleted' && p.creatorAccountId === actor.accountId).length });
       if (Object.values(state.projects).some(p => p.status !== 'deleted' && p.name === name)) reject(409, 'name-taken');
       let projectId; do { projectId = newProjectId(); } while (state.projects[projectId]);
       state.projects[projectId] = { v: 2, identityRealm: 'account', projectId, authorityId: ledger.authorityId,
