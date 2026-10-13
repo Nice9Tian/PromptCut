@@ -8,13 +8,13 @@
  *   node scripts/probes/account-card-sync-probe.mjs --dist out/v18-cardsync/dist-online [--out <截图目录>] [--keep-temp]
  *   (要设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE,同账号那几条测试)
  *
- * 端口:甲的编辑器 28640(舞台 +1、+2)、乙的编辑器 28645(+1、+2)、夹具 28650～28656(公网入口 28656)、在线页面的两个舞台源 28657、28658。
+ * 端口:甲的编辑器 28640(舞台 +1、+2)、乙的编辑器 28645(+1、+2)、夹具 28650～28656(公网入口 28656)、在线页面的两个舞台源 28657、28658(https,同主机)。
  *
  * 没有用真的桌面外壳:页面不点登录表单,直接调 `createAccountClient` 与 `enterAccountProject`(登录表单背后的那两个调用);
  * 外壳的账号桥(`desktop/src-tauri/src/account_vault.rs`)由探针在 Node 一侧照它的接口代答(login / recover / request / logout,
  * 同样的路径白名单),密码与令牌只在内存里。在线页面走真的登录表单。
  *
- * 步骤与核对(`fails` 为空才算过):
+ * 步骤与核对(`fails` 为空才算过;甲页面往项目里写的几步集中在登录后 100 秒内做,原因见正文第 1 步的注释):
  *   0  甲的编辑器在本机项目里:Agent 服务端绑着本机项目(`/api/agent/status`);进账号项目后变成没绑(原问题:还绑着本机项目)
  *   1  甲建云端项目、建一张用户卡(只在甲的改动层里)、放一个片段 → 甲把源码传上内容库
  *   2  乙进项目 → 乙的改动层里装上源码、页面注册表认得、舞台画出 v1;在线页面也画出 v1
@@ -40,7 +40,7 @@ import { randomUUID } from 'node:crypto';
 import WS from 'ws';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startAccountDualUserFixture } from './account-dual-user-path-probe.mjs';
-import { editorSecurityHeaders, stageSecurityHeaders } from '../../src/online/stagePolicy.mjs';
+import { ASSET_API_PREFIX, MEDIA_COOKIE, MEDIA_S_PREFIX, cookieValue, editorSecurityHeaders, mediaGrantCookie, mediaGrantCorsHeaders, mediaSRoute, stageSecurityHeaders } from '../../src/online/stagePolicy.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -48,10 +48,18 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'out', 'v18-cardsync', 'dist-online')));
 const OUT = path.resolve(arg('--out', path.join(ROOT, 'docs', 'reports', 'assets', 'v18-cardsync')));
 const A_PORT = 28640, B_PORT = 28645;
+/** 排查用:做完第几步就停(缺省做完) */
+const STOP_AFTER = Number(arg('--stop-after', '99'));
 const FIXTURE_PORTS = [28650, 28651, 28652, 28653, 28654, 28655, 28656];
 const STAGE_PORTS = [28657, 28658];
 const ORIGIN = `https://127.0.0.1:${FIXTURE_PORTS[6]}`;
-const STAGES = [`http://s1.pc.localhost:${STAGE_PORTS[0]}`, `http://s2.pc.localhost:${STAGE_PORTS[1]}`];
+/*
+ * 在线页面的两个舞台源:与编辑器页同一个主机、不同端口的 https(用夹具公网入口的那张自签证书)。
+ * 编辑器页向舞台源交接素材票据靠一个 HttpOnly cookie,要求两边同站且同为 https(真环境是 `https://<主机>` 与 `https://s1.<主机>`);
+ * 夹具的公网入口只认 `https://127.0.0.1:<端口>` 这一个源,所以舞台只能摆在同主机的别的端口上。
+ * cookie 不分端口,这种摆法测不出「舞台看不见编辑器页的 cookie」,那不是本探针要核的(隔离本身见 `online-card-isolation-*` 那几条探针)。
+ */
+const STAGES = [`https://127.0.0.1:${STAGE_PORTS[0]}`, `https://127.0.0.1:${STAGE_PORTS[1]}`];
 fs.mkdirSync(OUT, { recursive: true });
 
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ step, t: Date.now(), ...fields })}\n`);
@@ -94,6 +102,8 @@ const navigations = [];
 const res = { runId: RUN, cardId: CARD_ID, ports: { a: A_PORT, b: B_PORT, fixture: FIXTURE_PORTS, stages: STAGE_PORTS }, shots: [] };
 let fixture = null, browser = null, ca = null;
 const stageServers = [];
+/** 舞台源拒掉的 `/media-s/…` 请求(状态码与路径形状) */
+const stageRejects = [];
 const check = (ok, name, detail) => { if (!ok) { fails.push(detail === undefined ? name : `${name}(${typeof detail === 'string' ? detail : JSON.stringify(detail)})`); say('FAIL', { name, detail }); } else say('ok', { name }); return !!ok; };
 
 /* ---------------- 进程 ---------------- */
@@ -247,10 +257,53 @@ function staticHandler(stage) {
     res.writeHead(404, headers); res.end(); return true;
   };
 }
-async function startStage(port) {
-  const handler = staticHandler(true);
+/**
+ * 舞台源(与 `scripts/probes/lib/hosted-proxy.mjs` 的舞台角色同样的路由,判定取自 `src/online/stagePolicy.mjs`):
+ * 舞台自检用的两条、`/media-s/<sid>/…`(票据交接成 HttpOnly cookie、再换成 Authorization 头转给素材服务)、在线构建的静态文件。
+ */
+/**
+ * 舞台源认不认账号办法的素材票据。产品里(`stagePolicy.mjs` 的 `TICKET_PATTERN`,nginx 的舞台配置由它生成)只认旧票据的形状
+ * `v1.<…>.<…>`,账号会话签发的素材票据是 43 个字符的随机串,交接被拒(400),在线页面因此不执行用户卡 —— 这是现状,不在这次改动的清单里。
+ * 探针先按现状跑一遍记下来(`strict`),再把自己这两个舞台源放宽成也认 43 字符的票据(`widened`)看卡画不画得出来。
+ */
+let stageTickets = 'strict';
+const ACCOUNT_TICKET = /^[A-Za-z0-9_-]{43}$/;
+function stageHandler(origin) {
+  const fallback = staticHandler(true);
+  return (req, res) => {
+    const sec = stageSecurityHeaders(ORIGIN);
+    const url = new URL(req.url, origin);
+    const p = url.pathname;
+    const end = (status, headers = {}, body = '') => { res.writeHead(status, { ...sec, ...headers }); res.end(body); };
+    const forward = (upstreamPath, headers) => {
+      const up = http.request({ host: '127.0.0.1', port: fixture.ports.asset, method: req.method, path: upstreamPath, headers }, (r) => { res.writeHead(r.statusCode ?? 502, { ...r.headers, ...sec }); r.pipe(res); });
+      up.on('error', () => { if (!res.headersSent) end(502); else res.destroy(); });
+      req.pipe(up);
+    };
+    const route = mediaSRoute({ method: req.method, pathname: p, origin: req.headers.origin ?? null, authorization: req.headers.authorization ?? null, cookie: req.headers.cookie ?? null }, { editorOrigin: ORIGIN, secure: true });
+    if (route.kind === 'reject' && stageTickets === 'widened') {
+      const m = new RegExp(`^${MEDIA_S_PREFIX}/([^/]+)/(.*)$`).exec(p);
+      const bearer = /^Bearer[ \t]+(\S+)$/i.exec(String(req.headers.authorization ?? '').trim())?.[1] ?? '';
+      if (m && route.status === 400 && req.method === 'POST' && m[2] === '_grant' && req.headers.origin === ORIGIN && ACCOUNT_TICKET.test(bearer))
+        return end(204, { ...mediaGrantCorsHeaders(ORIGIN), 'set-cookie': mediaGrantCookie(m[1], bearer, { secure: true }), 'cache-control': 'no-store' });
+      const cookie = cookieValue(req.headers.cookie ?? null, MEDIA_COOKIE) ?? '';
+      if (m && route.status === 401 && ['GET', 'HEAD'].includes(req.method) && ACCOUNT_TICKET.test(cookie)) {
+        const headers = { ...req.headers, authorization: `Bearer ${cookie}` }; delete headers.cookie;
+        return forward(`${ASSET_API_PREFIX}/${m[2]}`, headers);
+      }
+    }
+    if (route.kind === 'reject') { stageRejects.push({ status: route.status, path: p.replace(/[a-f0-9]{16,}/g, '…') }); return end(route.status); }
+    if (route.kind === 'preflight' || route.kind === 'grant') return end(204, route.headers);
+    if (route.kind === 'proxy') { const headers = { ...req.headers, authorization: route.authorization }; delete headers.cookie; return forward(route.path, headers); }
+    if (p === '/editor/_iso/ok') return end(204, { 'cache-control': 'no-store' });
+    if (p === '/editor/_iso/redirect') return end(302, { 'cache-control': 'no-store', location: '/editor/_iso/ok' });
+    return fallback(req, res);
+  };
+}
+async function startStage(port, origin) {
+  const handler = stageHandler(origin);
   const sockets = new Set();
-  const server = http.createServer((req, res) => { try { handler(req, res); } catch { if (!res.headersSent) res.writeHead(500); res.end(); } });
+  const server = https.createServer({ key: fs.readFileSync(path.join(fixture.fixtureDir, 'wrong.key')), cert: fs.readFileSync(path.join(fixture.fixtureDir, 'wrong.crt')) }, (req, res) => { try { handler(req, res); } catch { if (!res.headersSent) res.writeHead(500); res.end(); } });
   server.on('connection', (s) => { sockets.add(s); s.once('close', () => sockets.delete(s)); });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
   stageServers.push({ server, sockets });
@@ -312,10 +365,40 @@ async function stageHas(page, text) {
   return null;
 }
 async function shot(page, name) {
+  // 测量遮罩挡着舞台时先等它退下(等不到就照拍)
+  await waitFor(() => P(page, () => !document.querySelector('[data-pc="probe-gate"]')), 60_000, '测量遮罩退下').catch(() => null);
   const file = path.join(OUT, `${name}.png`);
   await page.screenshot({ path: file });
   res.shots.push(path.relative(ROOT, file).split(path.sep).join('/'));
 }
+/** 关掉挡在舞台上的对话框(首启的 AI 助手设置;里面有本机配置的痕迹,不该进截图) */
+async function dismissDialogs(page) {
+  for (let i = 0; i < 3; i++) {
+    const closed = await P(page, () => { let n = 0; for (const b of document.querySelectorAll('[role="dialog"] button, .ais-dialog button')) if (b.textContent?.trim() === '关闭') { b.click(); n++; } return n; }).catch(() => 0);
+    if (!closed) break;
+    await sleep(200);
+  }
+  if (await P(page, () => !!document.querySelector('.ais-dialog')).catch(() => false)) throw new Error('AI 助手设置对话框关不掉,不截图');
+}
+/** 舞台没画出来时:每个舞台 frame 里注册表认不认得这张卡、页面上写着什么 */
+async function stageDiag(page, cardId) {
+  const out = [];
+  for (const f of page.frames()) {
+    if (f === page.mainFrame()) continue;
+    out.push(await f.evaluate(async (cardId) => {
+      let known = null;
+      try { known = (await import('/src/kernel/registry.ts')).getCard(cardId) != null; } catch (e) { known = `import-failed:${String(e?.message ?? e).slice(0, 80)}`; }
+      return { url: location.href.slice(0, 80), known, text: (document.body?.innerText ?? '').slice(0, 120), diag: (() => { try { const d = window.__pcStageDiag?.(); return d ? Object.keys(d) : null; } catch { return null; } })() };
+    }, cardId).catch((e) => ({ url: f.url().slice(0, 80), error: String(e?.message ?? e).slice(0, 120) })));
+  }
+  return out;
+}
+const onlineDiag = (page, cardId) => P(page, (cardId) => {
+  const d = window.__pcCardExecDiag?.();
+  const sources = window.__pcCardSources?.();
+  const preview = window.__pcPreviewDiag?.();
+  return { dual: preview?.dual ?? null, cardExec: preview?.cardExec ?? null, available: d?.available ?? null, visual: d?.visual ?? null, run: d?.run?.[cardId] ?? null, cards: (sources?.cards ?? []).map((c) => c.id), frames: [...document.querySelectorAll('iframe')].map((f) => { try { return new URL(f.src).origin; } catch { return null; } }) };
+}, cardId).catch((e) => ({ error: String(e?.message ?? e).slice(0, 200) }));
 const cardStatus = (ed) => getJson(`${ed.origin}/api/cards/sync/status`);
 const cardSourceOf = async (ed, id) => { const s = await getJson(`${ed.origin}/api/cards/source?id=${id}`).catch(() => null); return s?.ok ? s.source : null; };
 const overrideOf = (ed, rel) => { try { return fs.readFileSync(path.join(ed.overrides, rel), 'utf8'); } catch { return null; } };
@@ -325,7 +408,7 @@ try {
   if (!fs.existsSync(path.join(DIST, 'index.html'))) throw new Error(`没有在线构建:${DIST}(先跑 npx vite build --mode online --outDir …)`);
   fixture = await startAccountDualUserFixture({ ports: FIXTURE_PORTS, publicHandler: staticHandler(false) });
   ca = fs.readFileSync(fixture.caFile);
-  for (const port of STAGE_PORTS) await startStage(port);
+  for (const [i, port] of STAGE_PORTS.entries()) await startStage(port, STAGES[i]);
   res.fixture = { origin: fixture.origin, assetPid: fixture.assetPid };
   say('fixture.ready', res.fixture);
   const stateA = { requests: {} }, stateB = { requests: {} };
@@ -345,7 +428,10 @@ try {
   check(agentBefore.bound === true && agentBefore.mode === 'local', '0-甲进账号项目前 Agent 服务端绑着本机项目', res.agentBefore);
 
   // ---------- 1 甲登录、建云端项目、进去;建卡、放片段
+  // 甲这个页面往项目里写的几步(放片段、生成声音)都赶在登录后 100 秒内做完:页面自己那条账号连接在访问令牌到期(120 秒)后写不进去,
+  // 那是页面连接的现状(不在这次改动范围里,本探针最后单独记一笔),不能让它搅进卡片源码同步的结论
   const accountA = await loginDesktop(pageA, fixture.accounts[0]);
+  const aLoginAt = Date.now();
   const projectName = `账号卡片同步-${RUN}`;
   const projectId = await enterDesktop(pageA, null, projectName, true);
   res.projectId = projectId;
@@ -370,51 +456,140 @@ try {
   const aPushed = await waitFor(async () => { const s = await cardStatus(A); return s.records?.[CARD_REL]?.rev >= 1 ? s : null; }, 30_000, '甲把卡传上内容库');
   res.aRecord = aPushed.records[CARD_REL];
   check(res.aRecord.mine === true, '1-甲把源码传上云端内容库', res.aRecord);
-  await waitFor(() => stageHas(pageA, MARK('v1')), 60_000, '甲的舞台画出 v1').catch(() => null);
-  await shot(pageA, '1-a-desktop-v1');
 
-  // ---------- 2 乙进项目:装上源码、画出来;在线页面也画出来
+  // ---------- 2 乙进项目
   const accountB = await loginDesktop(pageB, fixture.accounts[1]);
   check(!!accountA && !!accountB && accountA !== accountB, '2-两个不同的账号');
   await enterDesktop(pageB, projectId, projectName, false);
-  await waitFor(() => P(pageB, async (clipId) => (await import('/src/store/project.ts')).getState().project.tracks.some((t) => t.clips.some((c) => c.id === clipId)), clipId), 30_000, '乙看到甲的片段');
   const t2 = Date.now();
+  await waitFor(() => P(pageB, async (clipId) => (await import('/src/store/project.ts')).getState().project.tracks.some((t) => t.clips.some((c) => c.id === clipId)), clipId), 30_000, '乙看到甲的片段');
+
+  // ---------- 4(先做写项目的那半)另一条账号连接直接写内容库(模拟云端 Agent 建卡);甲认出后放一个片段
+  {
+    const s = await sessionOf(stateA, projectId);
+    const put = await rawDoc(s.body.connectionTicket, { type: 'content.put', kind: 'card-source', key: AGENT_CARD_REL, body: cardSource(AGENT_CARD_ID, MARK('agent'), '#252'), session: 'cloud-agent-sim' });
+    check(put.type === 'content.stored', '4-直接写进内容库', { type: put.type, reason: put.reason ?? null });
+    const aKnows = await waitFor(async () => ((await pageCard(pageA, AGENT_CARD_ID)).known ? true : null), 30_000, '甲页面认出直接写进内容库的卡').catch(() => null);
+    check(!!aKnows, '4-甲的桌面装上直接写进内容库的卡、页面认得', { override: !!overrideOf(A, AGENT_CARD_REL) });
+    await P(pageA, async (id) => { const S = await import('/src/store/project.ts'); S.actions.addCardClip(id, 6, { duration: 4 }); }, AGENT_CARD_ID);
+  }
+
+  // ---------- 5(先做生成与上传)卡片声音:甲放一张带声音的内置卡、生成声音
+  let audio = null;
+  {
+    const requestsBefore = stateA.requests['/hosted/shared/account/session'] ?? 0;
+    audio = await P(pageA, async () => {
+      const S = await import('/src/store/project.ts');
+      const G = await import('/src/editor/io/cardAudioGeneration.ts');
+      const T = await import('/src/editor/media/assetTiers.ts');
+      const clip = S.actions.addCardClip('av-pulse', 11, { duration: 2 });
+      if (!clip) return { ok: false, error: '没放上 av-pulse' };
+      try {
+        const r = await G.generateCardAudio(clip.id);
+        const media = S.getState().project.media.find((m) => m.id === r.mediaId);
+        return { ok: r.ok, reused: r.reused ?? null, hash: media?.hash ?? null, size: media?.size ?? null, base: T.remoteAssetBase(), accountProject: T.remoteAccountProjectId() };
+      } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+    });
+    res.audio = { ...audio, sessionRequests: (stateA.requests['/hosted/shared/account/session'] ?? 0) - requestsBefore };
+    check(audio.ok === true && /^[a-f0-9]{64}$/.test(audio.hash ?? ''), '5-甲在账号项目里生成卡片声音并上传成功', audio.ok ? { hash: audio.hash.slice(0, 12), size: audio.size } : audio);
+    check(audio.accountProject === projectId, '5-用的是账号项目的素材服务', { base: audio.base, accountProject: audio.accountProject });
+  }
+  res.aPageWritesDoneMs = Date.now() - aLoginAt;
+  check(res.aPageWritesDoneMs < 100_000, '甲页面写项目的几步在登录后 100 秒内做完(探针自己的前提)', res.aPageWritesDoneMs);
+  await dismissDialogs(pageA);
+  await waitFor(() => stageHas(pageA, MARK('v1')), 60_000, '甲的舞台画出 v1').catch(() => null);
+  await shot(pageA, '1-a-desktop-v1');
+
+  // ---------- 2(核对)乙装上源码、画出来
   const bInstalled = await waitFor(() => (overrideOf(B, CARD_REL)?.includes(MARK('v1')) ? Date.now() : null), 30_000, '乙的改动层里装上源码').catch(() => null);
   check(!!bInstalled, '2-乙的桌面拿到源码(改动层里)');
-  res.bInstallMs = bInstalled ? bInstalled - t2 : null;
+  res.bInstallMs = bInstalled ? Math.max(0, bInstalled - t2) : null;
   const bKnown = await waitFor(async () => { const s = await pageCard(pageB, CARD_ID); return s.known && s.src?.includes(MARK('v1')) ? s : null; }, 30_000, '乙页面认出这张卡').catch(() => null);
   check(!!bKnown, '2-乙页面的注册表里有这张卡的 v1 源码');
+  await dismissDialogs(pageB);
   await P(pageB, async () => (await import('/src/store/project.ts')).actions.seek(1));
   const bStage1 = await waitFor(() => stageHas(pageB, MARK('v1')), 90_000, '乙的舞台画出 v1').catch(() => null);
-  check(!!bStage1, '2-乙的舞台画出 v1');
+  if (!check(!!bStage1, '2-乙的舞台画出 v1')) say('diag.stage', { b: await stageDiag(pageB, CARD_ID) });
   const bStatus1 = await cardStatus(B);
   res.bRecordV1 = bStatus1.records?.[CARD_REL] ?? null;
   check(res.bRecordV1?.rev === res.aRecord.rev && res.bRecordV1?.mine === false, '2-乙记下的是甲那一版', res.bRecordV1);
   await shot(pageB, '2-b-desktop-v1');
+  if (STOP_AFTER <= 2) throw new Error('stop-after 2');
 
-  // 在线页面:真的登录表单(乙的账号,另一个浏览器环境),凭项目链接进
+  // ---------- 4(核对)乙也装上直接写进内容库的那张卡、画得出来
+  {
+    const both = await waitFor(() => (overrideOf(A, AGENT_CARD_REL)?.includes(MARK('agent')) && overrideOf(B, AGENT_CARD_REL)?.includes(MARK('agent')) ? true : null), 30_000, '甲、乙都装上直接写进内容库的卡').catch(() => null);
+    check(!!both, '4-甲、乙的改动层都装上直接写进内容库的卡', { a: !!overrideOf(A, AGENT_CARD_REL), b: !!overrideOf(B, AGENT_CARD_REL) });
+    const known = await waitFor(async () => ((await pageCard(pageB, AGENT_CARD_ID)).known ? true : null), 30_000, '乙页面认出它').catch(() => null);
+    check(!!known, '4-乙页面的注册表也认出它');
+    await P(pageB, async () => (await import('/src/store/project.ts')).actions.seek(7));
+    const drawn = await waitFor(() => stageHas(pageB, MARK('agent')), 60_000, '乙的舞台画出这张卡').catch(() => null);
+    if (!check(!!drawn, '4-乙的舞台画出直接写进内容库的那张卡')) say('diag.stage', { b: await stageDiag(pageB, AGENT_CARD_ID) });
+    await shot(pageB, '4-b-desktop-agent-card');
+  }
+
+  // ---------- 5(核对)乙凭自己的素材票据取到同样的字节并能解码
+  if (audio?.ok) {
+    await waitFor(() => P(pageB, async (hash) => (await import('/src/store/project.ts')).getState().project.media.some((m) => m.hash === hash), audio.hash), 30_000, '乙的项目里出现这段声音');
+    const got = await P(pageB, async (hash) => {
+      const T = await import('/src/editor/media/assetTiers.ts');
+      const ticket = await T.remoteAssetTicket();
+      const r = await fetch(`${T.remoteAssetBase()}/media/${hash}?t=${encodeURIComponent(ticket ?? '')}`, { credentials: 'omit', cache: 'no-store' });
+      if (!r.ok) return { status: r.status };
+      const buf = await r.arrayBuffer();
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const decoded = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(buf.slice(0));
+      let peak = 0; const ch = decoded.getChannelData(0); for (let i = 0; i < ch.length; i++) peak = Math.max(peak, Math.abs(ch[i]));
+      return { status: r.status, bytes: buf.byteLength, sameHash: digest === hash, duration: decoded.duration, sampleRate: decoded.sampleRate, peak };
+    }, audio.hash);
+    res.audio.b = got;
+    check(got.status === 200 && got.sameHash && got.bytes === audio.size && got.duration > 0 && got.peak > 0, '5-乙凭自己的素材票据取到同样的字节、解码出有声音的音频', got);
+  }
+
+  // ---------- 2(在线页面)真的登录表单(乙的账号,另一个浏览器环境),凭项目链接进
   const ctxC = await browser.createBrowserContext();
   await ctxC.overridePermissions(ORIGIN, []);
   const pageC = await ctxC.newPage();
   pageC.setDefaultTimeout(90_000);
+  pageC.setDefaultNavigationTimeout(120_000);
   pageC.on('pageerror', (e) => say('pageerror', { tag: 'online', message: String(e?.message ?? e).slice(0, 300) }));
   const typeInto = async (selector, value) => { const input = await pageC.waitForSelector(selector, { visible: true }); await input.click({ clickCount: 3 }); await pageC.keyboard.press('Backspace'); await input.type(value); };
-  await pageC.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
-  await typeInto('[data-pc="account-projects"] input[name="username"]', fixture.accounts[1].name);
-  await typeInto('[data-pc="account-projects"] input[name="password"]', fixture.accounts[1].password);
-  await pageC.waitForFunction(() => { const b = document.querySelector('[data-pc="account-projects"] form button.sp-primary-btn'); return Boolean(b && !b.disabled); });
-  await pageC.click('[data-pc="account-projects"] form button.sp-primary-btn');
-  await pageC.waitForSelector('[data-pc="account-name"]', { visible: true });
-  await typeInto('[data-pc="cloud-project-link"]', `${ORIGIN}/editor?project=${projectId}`);
-  await pageC.click('[data-pc="cloud-join"]');
-  await pageC.waitForSelector('[data-pc="editor"]', { visible: true });
+  const enterOnline = async ({ login }) => {
+    await pageC.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    if (login) {
+      await typeInto('[data-pc="account-projects"] input[name="username"]', fixture.accounts[1].name);
+      await typeInto('[data-pc="account-projects"] input[name="password"]', fixture.accounts[1].password);
+      await pageC.waitForFunction(() => { const b = document.querySelector('[data-pc="account-projects"] form button.sp-primary-btn'); return Boolean(b && !b.disabled); });
+      await pageC.click('[data-pc="account-projects"] form button.sp-primary-btn');
+    }
+    await pageC.waitForSelector('[data-pc="account-name"]', { visible: true });
+    await typeInto('[data-pc="cloud-project-link"]', `${ORIGIN}/editor?project=${projectId}`);
+    await pageC.click('[data-pc="cloud-join"]');
+    await pageC.waitForSelector('[data-pc="editor"]', { visible: true });
+    await waitFor(() => P(pageC, () => !!window.__pcStore), 30_000, '在线页面的时间轴').catch(() => null);
+    await P(pageC, () => window.__pcStore?.actions.seek(1)).catch(() => null);
+  };
+  await enterOnline({ login: true });
   say('online.entered');
+  const cKnows = await waitFor(async () => { const d = await onlineDiag(pageC, CARD_ID); return d.cards?.includes(CARD_ID) && d.cards.includes(AGENT_CARD_ID) ? d : null; }, 60_000, '在线页面拿到两张卡的源码').catch(() => null);
+  check(!!cKnows, '2-在线页面经自己的账号连接拿到两张卡的源码');
+  // 现状:舞台源只认旧票据的形状,账号票据交接被拒,在线页面不执行用户卡
+  const strict = await waitFor(async () => { const d = await onlineDiag(pageC, CARD_ID); return d.cardExec && d.cardExec.reason !== 'pending' ? d : null; }, 60_000, '在线页面的执行闸门出结果').catch(() => onlineDiag(pageC, CARD_ID));
+  res.onlineAsIs = { cardExec: strict?.cardExec ? { enabled: strict.cardExec.enabled, reason: strict.cardExec.reason } : null, run: strict?.run ?? null, drawn: !!(await stageHas(pageC, MARK('v1'))), grantRejects: stageRejects.filter((r) => r.path.endsWith('/_grant')).map((r) => r.status) };
+  say('observe.online-as-is', res.onlineAsIs);
+  await shot(pageC, '2-c-online-as-is');
+  // 把探针自己的舞台源放宽成也认账号票据,重进一次
+  stageTickets = 'widened';
+  await enterOnline({ login: false });
   const cStage1 = await waitFor(() => stageHas(pageC, MARK('v1')), 120_000, '在线页面的舞台画出 v1').catch(() => null);
-  check(!!cStage1, '2-在线页面的舞台画出 v1');
+  if (!check(!!cStage1, '2-在线页面的舞台画出 v1(探针的舞台源放宽成也认账号票据之后)')) say('diag.online', await onlineDiag(pageC, CARD_ID));
   res.onlineStage = cStage1 ? new URL(cStage1).origin : null;
+  res.onlineWidened = await onlineDiag(pageC, CARD_ID).then((d) => ({ cardExec: d.cardExec ? { enabled: d.cardExec.enabled, reason: d.cardExec.reason } : null, run: d.run ?? null }));
   await shot(pageC, '2-c-online-v1');
+  if (STOP_AFTER <= 2.5) throw new Error('stop-after 2.5');
 
   // ---------- 3 甲改卡:乙热更新
+  await P(pageB, async () => (await import('/src/store/project.ts')).actions.seek(1));
   const navBefore = navigations.length;
   const t3 = Date.now();
   const edit = await postJson(`${A.origin}/api/cards/edit`, { id: CARD_ID, find: MARK('v1'), replace: MARK('v2') });
@@ -432,62 +607,36 @@ try {
   const bStatus2 = await cardStatus(B);
   res.bNotices = (bStatus2.notices ?? []).filter((n) => n.key === CARD_REL).map((n) => ({ type: n.type, rev: n.rev, byAccount: n.actor?.accountId === accountA ? '甲' : n.actor?.accountId === accountB ? '乙' : null, role: n.actor?.role ?? null }));
   check(res.bNotices.some((n) => n.type === 'installed' && n.rev === 2 && n.byAccount === '甲' && n.role === 'page'), '3-乙装上的 rev 2 是甲写的、角色 page', res.bNotices);
+  await dismissDialogs(pageB);
   await shot(pageB, '3-b-desktop-v2');
   const cStage2 = await waitFor(() => stageHas(pageC, MARK('v2')), 60_000, '在线页面的舞台画出 v2').catch(() => null);
   res.onlineV2 = !!cStage2;
-  check(res.onlineV2, '3-在线页面也换成 v2');
+  check(res.onlineV2, '3-在线页面也换成 v2(舞台源放宽之后)');
   await shot(pageC, '3-c-online-v2');
 
-  // ---------- 4 另一条账号连接直接写内容库(模拟云端 Agent 建卡)
+  // ---------- 连接的寿命:到这里甲、乙的编辑器进程都过了访问令牌的 120 秒
   {
-    const s = await sessionOf(stateA, projectId);
-    const put = await rawDoc(s.body.connectionTicket, { type: 'content.put', kind: 'card-source', key: AGENT_CARD_REL, body: cardSource(AGENT_CARD_ID, MARK('agent'), '#252'), session: 'cloud-agent-sim' });
-    check(put.type === 'content.stored', '4-直接写进内容库', { type: put.type, reason: put.reason ?? null });
-    const both = await waitFor(() => (overrideOf(A, AGENT_CARD_REL)?.includes(MARK('agent')) && overrideOf(B, AGENT_CARD_REL)?.includes(MARK('agent')) ? true : null), 30_000, '甲、乙都装上直接写进内容库的卡').catch(() => null);
-    check(!!both, '4-甲、乙的改动层都装上直接写进内容库的卡', { a: !!overrideOf(A, AGENT_CARD_REL), b: !!overrideOf(B, AGENT_CARD_REL) });
-    const known = await waitFor(async () => ((await pageCard(pageA, AGENT_CARD_ID)).known && (await pageCard(pageB, AGENT_CARD_ID)).known ? true : null), 30_000, '两个页面都认出它').catch(() => null);
-    check(!!known, '4-两个桌面页面的注册表都认出它');
-    await P(pageA, async (id) => { const S = await import('/src/store/project.ts'); S.actions.addCardClip(id, 6, { duration: 4 }); }, AGENT_CARD_ID);
-    await P(pageB, async () => (await import('/src/store/project.ts')).actions.seek(7));
-    const drawn = await waitFor(() => stageHas(pageB, MARK('agent')), 60_000, '乙的舞台画出这张卡').catch(() => null);
-    check(!!drawn, '4-乙的舞台画出直接写进内容库的那张卡');
-    await shot(pageB, '4-b-desktop-agent-card');
-  }
-
-  // ---------- 5 卡片声音:甲生成并上传,乙取到同样的字节并能解码
-  {
-    const requestsBefore = stateA.requests['/hosted/shared/account/session'] ?? 0;
-    const made = await P(pageA, async () => {
+    await waitFor(() => Date.now() - aLoginAt > 150_000, 200_000, '甲登录满 150 秒');
+    const renewsOf = (ed) => ed.proc.text().split(/\r?\n/).filter((l) => l.includes('doc.account.renew')).map((l) => /"why":"([^"]+)"/.exec(l)?.[1] ?? '?');
+    res.renews = { a: renewsOf(A), b: renewsOf(B) };
+    check(res.renews.a.length >= 1 && res.renews.a.every((w) => w === 'ticket-expiring'), '寿命-甲的同步连接按票据到期换过会话、没被闸拒过', res.renews.a);
+    const edit25 = await postJson(`${A.origin}/api/cards/edit`, { id: CARD_ID, find: MARK('v2'), replace: MARK('v2b') });
+    if (!edit25.ok) throw new Error(`甲改卡失败:${edit25.error}`);
+    const late = await waitFor(() => (overrideOf(B, CARD_REL)?.includes(MARK('v2b')) ? true : null), 30_000, '过了 120 秒之后乙照常装上').catch(() => null);
+    check(!!late, '寿命-登录 150 秒之后甲改卡,乙照常装上');
+    // 现状记录(不计入通过与否):页面自己那条账号连接过了 120 秒之后还写不写得进项目
+    const serverRev = async () => { const t = await sessionOf(stateA, projectId); const m = await rawDoc(t.body.connectionTicket, { type: 'project.open', projectId }); return m.rev ?? null; };
+    const revBefore = await serverRev();
+    const mark = await P(pageA, async () => { const S = await import('/src/store/project.ts'); const c = S.actions.addCardClip('av-pulse', 30, { duration: 1 }); return c?.id ?? null; });
+    const seen = mark ? await waitFor(() => P(pageB, async (id) => (await import('/src/store/project.ts')).getState().project.tracks.some((t) => t.clips.some((c) => c.id === id)), mark), 10_000, '乙看到甲页面在 150 秒后放的片段').catch(() => null) : null;
+    const aSide = await P(pageA, async (id) => {
       const S = await import('/src/store/project.ts');
-      const G = await import('/src/editor/io/cardAudioGeneration.ts');
-      const T = await import('/src/editor/media/assetTiers.ts');
-      const clip = S.actions.addCardClip('av-pulse', 11, { duration: 2 });
-      if (!clip) return { ok: false, error: '没放上 av-pulse' };
-      try {
-        const r = await G.generateCardAudio(clip.id);
-        const media = S.getState().project.media.find((m) => m.id === r.mediaId);
-        return { ok: r.ok, reused: r.reused ?? null, hash: media?.hash ?? null, size: media?.size ?? null, base: T.remoteAssetBase(), accountProject: T.remoteAccountProjectId() };
-      } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
-    });
-    res.audio = { ...made, sessionRequests: (stateA.requests['/hosted/shared/account/session'] ?? 0) - requestsBefore };
-    check(made.ok === true && /^[a-f0-9]{64}$/.test(made.hash ?? ''), '5-甲在账号项目里生成卡片声音并上传成功', made.ok ? { hash: made.hash.slice(0, 12), size: made.size } : made);
-    check(made.accountProject === projectId, '5-用的是账号项目的素材服务', { base: made.base, accountProject: made.accountProject });
-    if (made.ok) {
-      await waitFor(() => P(pageB, async (hash) => (await import('/src/store/project.ts')).getState().project.media.some((m) => m.hash === hash), made.hash), 30_000, '乙的项目里出现这段声音');
-      const got = await P(pageB, async (hash) => {
-        const T = await import('/src/editor/media/assetTiers.ts');
-        const ticket = await T.remoteAssetTicket();
-        const r = await fetch(`${T.remoteAssetBase()}/media/${hash}?t=${encodeURIComponent(ticket ?? '')}`, { credentials: 'omit', cache: 'no-store' });
-        if (!r.ok) return { status: r.status };
-        const buf = await r.arrayBuffer();
-        const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map((b) => b.toString(16).padStart(2, '0')).join('');
-        const audio = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(buf.slice(0));
-        let peak = 0; const ch = audio.getChannelData(0); for (let i = 0; i < ch.length; i++) peak = Math.max(peak, Math.abs(ch[i]));
-        return { status: r.status, bytes: buf.byteLength, sameHash: digest === hash, duration: audio.duration, sampleRate: audio.sampleRate, peak };
-      }, made.hash);
-      res.audio.b = got;
-      check(got.status === 200 && got.sameHash && got.bytes === made.size && got.duration > 0 && got.peak > 0, '5-乙凭自己的素材票据取到同样的字节、解码出有声音的音频', got);
-    }
+      const toasts = document.querySelector('[data-pc="sync-toasts"]')?.textContent ?? '';
+      return { clipStillThere: S.getState().project.tracks.some((t) => t.clips.some((c) => c.id === id)), status: window.__pcSyncTest.view().status, unconfirmed: window.__pcSyncTest.view().unconfirmed ?? null,
+        rejectedToast: /没被文档服务接受\(([^)]*)\)/.exec(toasts)?.[1] ?? null };
+    }, mark).catch(() => null);
+    res.pageWriteAfterExpiry = { secondsSinceLogin: Math.round((Date.now() - aLoginAt) / 1000), deliveredToB: !!seen, serverRevBefore: revBefore, serverRevAfter: await serverRev(), a: aSide };
+    say('observe.page-write-after-expiry', res.pageWriteAfterExpiry);
   }
 
   // ---------- 6 乙改成只读
@@ -497,16 +646,18 @@ try {
     await waitFor(async () => (await sessionOf(stateB, projectId)).body?.access === 'r', 15_000, '乙的会话变成只读');
     await waitFor(async () => { const s = await cardStatus(B); return s.projectId === projectId && s.connected; }, 90_000, '乙的同步在只读下重新连上');
     const logMark = B.proc.text().length;
-    const editB = await postJson(`${B.origin}/api/cards/edit`, { id: CARD_ID, find: MARK('v2'), replace: MARK('v3') });
+    const editB = await postJson(`${B.origin}/api/cards/edit`, { id: CARD_ID, find: MARK('v2b'), replace: MARK('v3') });
     if (!editB.ok) throw new Error(`乙改卡失败:${editB.error}`);
-    const refusedLine = await waitFor(() => B.proc.text().slice(logMark).split(/\r?\n/).find((l) => l.includes('cards.sync.put-failed') && l.includes(CARD_ID)) ?? null, 30_000, '乙的上传被拒').catch(() => null);
-    res.readonlyRefusal = refusedLine ? (/"code":"([^"]+)"/.exec(refusedLine)?.[1] ?? null) : null;
-    check(res.readonlyRefusal === 'not-listed', '6-只读成员上传被拒(not-listed)', res.readonlyRefusal);
+    // 权限一变服务端先把乙的连接关一次,第一下上传可能撞在断线上(disconnected);重连之后补传才轮到闸来拒
+    const failures = () => B.proc.text().slice(logMark).split(/\r?\n/).filter((l) => l.includes('cards.sync.put-failed') && l.includes(CARD_ID)).map((l) => /"code":"([^"]+)"/.exec(l)?.[1] ?? '?');
+    await waitFor(() => failures().includes('not-listed'), 60_000, '乙的上传被闸拒').catch(() => null);
+    res.readonlyRefusals = [...new Set(failures())];
+    check(res.readonlyRefusals.includes('not-listed') && res.readonlyRefusals.every((c) => c === 'not-listed' || c === 'disconnected'), '6-只读成员上传被拒(not-listed)', res.readonlyRefusals);
     await sleep(1500);
     const s = await sessionOf(stateA, projectId);
     const lib = await rawDoc(s.body.connectionTicket, { type: 'content.get', kind: 'card-source', key: CARD_REL });
-    check(lib.rev === 2 && String(lib.body).includes(MARK('v2')), '6-内容库仍是甲的 v2', { rev: lib.rev });
-    check((await cardSourceOf(A, CARD_ID))?.includes(MARK('v2')), '6-甲那边没有被只读成员改动');
+    check(lib.rev === 3 && String(lib.body).includes(MARK('v2b')), '6-内容库仍是甲的版本', { rev: lib.rev });
+    check((await cardSourceOf(A, CARD_ID))?.includes(MARK('v2b')), '6-甲那边没有被只读成员改动');
     const toRw = await admin(stateA, projectId, { op: 'set-list', members: [{ accountId: accountB, access: 'rw' }] });
     check(toRw.status === 200, '6-改回可写', { status: toRw.status });
     const aV3 = await waitFor(async () => ((await cardSourceOf(A, CARD_ID))?.includes(MARK('v3')) ? true : null), 60_000, '改回可写后乙的版本传上去、甲装上').catch(() => null);
@@ -523,17 +674,19 @@ try {
     check(kicked.ok, '7-创建者在页面里把乙踢出', kicked);
     const bStopped = await waitFor(async () => { const s = await cardStatus(B); return s.local === true ? s : null; }, 60_000, '乙的同步回到本机空间').catch(() => null);
     check(!!bStopped, '7-乙被踢后卡片源码同步停下(回本机空间)', bStopped ? undefined : await cardStatus(B).then((s) => ({ local: s.local, connected: s.connected, projectId: s.projectId })));
-    res.bBlocked = await P(pageB, () => window.__pcSyncTest.view().blocked ?? null).catch(() => null);
+    // 页面自己每 3 秒续一次会话才发现被踢,比编辑器进程那条连接被关晚一点
+    res.bBlocked = await waitFor(() => P(pageB, () => window.__pcSyncTest.view().blocked ?? null), 20_000, '乙的页面发现被踢').catch(() => null);
     check(res.bBlocked === 'kicked', '7-乙的页面知道自己被踢', res.bBlocked);
     const refusedB = await sessionOf(stateB, projectId);
     check(refusedB.status === 403 && refusedB.body?.code === 'banned', '7-乙再取会话被拒(403 banned)', { status: refusedB.status, code: refusedB.body?.code ?? null });
     const editA = await postJson(`${A.origin}/api/cards/edit`, { id: CARD_ID, find: MARK('v3'), replace: MARK('v4') });
     if (!editA.ok) throw new Error(`甲改卡失败:${editA.error}`);
-    await waitFor(async () => { const s = await cardStatus(A); return s.records?.[CARD_REL]?.rev >= 4 && !s.pending.includes(CARD_REL); }, 30_000, '甲传上 v4');
+    await waitFor(async () => { const s = await cardStatus(A); return s.records?.[CARD_REL]?.rev >= 5 && !s.pending.includes(CARD_REL); }, 30_000, '甲传上 v4');
     await sleep(4000);
     check(overrideOf(B, CARD_REL)?.includes(MARK('v3')) && !overrideOf(B, CARD_REL)?.includes(MARK('v4')), '7-被踢之后的版本乙拿不到');
     const bAfter = await cardStatus(B);
     check(bAfter.local === true && bAfter.projectId == null, '7-乙的编辑器进程没有再连回项目', { local: bAfter.local, projectId: bAfter.projectId ?? null });
+    await dismissDialogs(pageB);
     await shot(pageB, '7-b-desktop-kicked');
   }
 
@@ -549,8 +702,9 @@ try {
     check(!!aStopped, '8-甲的卡片源码同步停下(回本机空间)', aStopped ? undefined : await cardStatus(A).then((s) => ({ local: s.local, connected: s.connected, projectId: s.projectId })));
     const after = await sessionOf(stateA, projectId);
     check(after.status === 401, '8-退出登录后再取会话回 401', { status: after.status, code: after.body?.code ?? null });
-    const old = await rawDoc(held.body.connectionTicket, { type: 'content.list', kind: 'card-source' }).then((m) => ({ connected: true, type: m.type }), (e) => ({ connected: false, error: String(e?.message ?? e).slice(0, 80) }));
-    check(old.connected === false, '8-退出前取的、没过期的连接票据连不进去', old);
+    const old = await rawDoc(held.body.connectionTicket, { type: 'content.list', kind: 'card-source' }).then((m) => ({ connected: true, type: m.type, reason: m.reason ?? null }), (e) => ({ connected: false, error: String(e?.message ?? e).slice(0, 80) }));
+    check(old.connected === false || old.type === 'error', '8-退出前取的、没过期的连接票据用不了', old);
+    await dismissDialogs(pageA);
     await shot(pageA, '8-a-desktop-logged-out');
   }
   res.navigations = navigations.length;
