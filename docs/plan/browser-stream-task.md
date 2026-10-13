@@ -71,11 +71,11 @@
 
 ```
 { topClipId, clipIds, kind: 'card' | 'group', plane: 'local' | 'stage', contentKey,
-  candidates: [{ envFingerprint, resultKey }], firstSegment, lastSegment, segmentsPerTask, inputSig? }
+  candidates: [{ envFingerprint, resultKey }], originFrame, lastSegment, segmentsPerTask, inputSig? }
 ```
 
 - 候选照快照层的做法：切分实际出键的指纹在前（按发布顺序，`splitStreamCandidatesOf` 收集，记在管线的切分候选记录里，键带 `stream:` 前缀），再补上这条流自己的指纹。
-- `inputSig` 是流的输入签名（`src/render/streamInputSig.mjs`）：比快照层的签名多算了片段在时间轴上的位置（流按全局帧号分段）；组流另算成员的摆放和上下顺序。页面按当前项目算同一个签名，对不上就不播。
+- `inputSig` 是流的输入签名（`src/render/streamInputSig.mjs`）：比快照层的签名多算了片段在时间轴上的位置（分段从这条流自己的第一帧 `originFrame` 起每 15 帧一段，分段号恒从 0 起，不再按全局帧号分；挪动以后流不失效记在待办里）〔裁：主会话 2026-10-14，`AGENT-rr-sparse-streams.md`〕；组流另算成员的摆放和上下顺序。页面按当前项目算同一个签名，对不上就不播。
 - 旧页面只读 `layers`，不认识的字段会忽略，所以没升版本号（仍是 3）。没有流时不带 `streams` 这一项，层表与以前逐字相同。
 - **哪些流进表**（`server/frame-pipeline.mjs` 的 `layerMapStreamOptions`，写层表的两处都经它）：一是切分方自己这一版要产的流（与生产者同一份流计划；没有生产者或关着流开关时没有这一部分）；二是切分给别的指纹出过键、切分方自己不产的单卡流（`issuedStreamSpecs`：按切分候选记录认，清单计划给浏览器出的那一份就在这里）。第二部分的候选只列实际出键的指纹，不补切分方自己的。
 

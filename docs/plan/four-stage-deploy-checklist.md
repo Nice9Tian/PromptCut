@@ -30,7 +30,7 @@
 | 关卡 / 旧项 | 新增覆盖与版本 | 状态 |
 |---|---|---|
 | A1本地产品交互、S3资源/隔离、S4看画面及cloud-agent-look | .18合格本地成功/失格/全离线/执行中离线→云端兜底、云端单活跃项目；取消和迟到隔离、界面播放头不变、完整自定义卡路径 | 已规划；新增能力未由本次实现、测试、通过 |
-| A1、原CA-CHAT-03、Agent界面 | .18同项目同创建者49/50/第51、并发创建阻满额、新旧历史保留、删除入口；删除权限/确认/共有计数与释放时机待答复后补 | 已规划；旧自动淘汰断言取代，未跑 |
+| A1、原CA-CHAT-03、Agent界面 | .18同项目同创建者49/50/第51、并发创建阻满额、新旧历史保留、删除入口；删除权限/确认/共有计数与释放时机待答复后补〔更新：主会话 2026-10-14，`AGENT-v18-chats.md`——用户 2026-10-13 对块五定了七条（`user-decisions-2026-10-13.md` 第 2 节「块五」），删除入口与 50 个上限已实现、已合入 main；机制见 `mechanism/agent.md` 的「删除对话」〕 | 已规划；旧自动淘汰断言取代，未跑 |
 | A1/S3资源实验 | .19真实自定义卡组合项目及总体预算、完整进程树与系统余量；仅通过组合可双项目并行 | 待实验，未跑 |
 | A1/S3轮换实验 | .20至少三自定义卡项目持续推进、无长期饥饿、磁盘缓存/读盘/重建/轮转成本；不要求三重型常驻 | 待设计/实验，未跑 |
 | C4/C5之后、S3-r4/r7和S4-r2/r4/r5/r6点名体验 | 部署时按对应版本新增映射复核真实网络路径、反代证书、服务版本、节点内存与所有本地离线后的兜底；旧网络16项不足新增完整覆盖 | 待部署时另执行，本次未跑 |
@@ -41,7 +41,7 @@
 
 ## A. 合入 main 之前
 
-- [ ] **A1 最终提交上的本地验证全过。** 集成分支最终提交上跑 `node scripts/acceptance/four-stage-acceptance.mjs --out work/four-stage/final/<时间戳> --flaky-rerun 1 --release-timings "0.7.18"`（缺省只跑本地验证这一级；清单 `scripts/acceptance/four-stage-manifest.mjs`，用法见文件头；`--list`、`--matrix` 先看一遍）。过的标准：G0 五项、G0-R 的 GR-1～GR-12（像素比对 GR-3 要「0 不同、0 缺失」）、全部探针行、四段各自的行都是「过」；标「manual」的行逐条人工核对。时间数字只记录、不决定过不过，在哪台机器上跑都一样判，没有待复核的项；跑完把 `<out>/release-timings-section.md` 贴进 `docs/reports/release-timings.md`。真实网络验证的 16 项不在这一步，留到本文 D 节、部署时做。`--matrix` 要显示两份任务书的每一条编号验收都有行覆盖。
+- [ ] **A1 最终提交上的本地验证全过。** 集成分支最终提交上跑 `node scripts/acceptance/four-stage-acceptance.mjs --out work/four-stage/final/<时间戳> --flaky-rerun 1 --release-timings "0.7.18"`（缺省只跑本地验证这一级；清单 `scripts/acceptance/four-stage-manifest.mjs`，用法见文件头；`--list`、`--matrix` 先看一遍）。（0.7.18 的依据是清单里的 `V18` 类，整套的写法要加 `--rows`、`--no-optional`，例如 `--only V18,G0-1,G0-2,G0-3,G0-4,G0-6,S4-4 --no-optional --rows --flaky-rerun 1 --dev-port <端口> --out <目录>`；端口写死、要备依赖的探针标了 optional，缺省不跑，要另跑；〔裁：主会话 2026-10-14，`AGENT-v18-runner-list.md`〕）过的标准：G0 五项、G0-R 的 GR-1～GR-12（像素比对 GR-3 要「0 不同、0 缺失」）、全部探针行、四段各自的行都是「过」；标「manual」的行逐条人工核对。时间数字只记录、不决定过不过，在哪台机器上跑都一样判，没有待复核的项；跑完把 `<out>/release-timings-section.md` 贴进 `docs/reports/release-timings.md`。真实网络验证的 16 项不在这一步，留到本文 D 节、部署时做。`--matrix` 要显示两份任务书的每一条编号验收都有行覆盖。
 - [ ] **A2 release 的三条合入条件**（`git_and_release.md`「release 分支」）：
   1. 基线全绿（A1）；
   2. `npm run build` 成功（清单 G0-3）；
@@ -246,6 +246,7 @@
 
 - 看画面：`worker.look = { url, keyDir }`。`url` 是渲染服务诊断口的回环 http 地址（缺省端口 5399）。`keyDir` 里是 `service-key.json`，服务名必须是 `agent`，权限不得宽于 0600，否则拒绝启动（`account-worker-settings-look-key`）。0600 意味着只有属主读得到，所以属主要是任务用户：每个任务进程都读得到这把私钥，主服务用户读不到。用哪一把已登记的 `agent` 钥匙、文件怎么放，待部署时核对。要不要改成任务进程不持私钥、由主服务代签，用户待定（AGENT-v18-runner.md「要用户定的事」第 1 条）。渲染服务现在看不到账号项目（见 C5 第 8 步表第 2 行），所以先不写。
 - 运行素材（凭任务授权读写项目素材，不借成员的票据）：`worker.runAssets = { origin, fingerprint256, maxResponseBytes, maxImportBytes, timeoutMs? }`，`origin` 是素材服务内部口（`https://127.0.0.1:<素材服务的 PROMPTCUT_ASSET_INTERNAL_PORT>/`），`fingerprint256` 是素材服务内部证书的指纹。两侧还各有开关：文档服务 `PROMPTCUT_DOC_RUN_ASSETS_ENABLED=1`（同时要 `PROMPTCUT_DOC_RUN_ASSET_REGISTRY_DIR`、`_UID`、`_TICKET_TTL_MS`、`_MAX_BODY_BYTES`、`_UNIT`、`_CGROUP_PATH`、`_SERVICE_IDENTITY`），素材服务 `PROMPTCUT_ASSET_RUN_ENABLED=1`（同时要 `PROMPTCUT_ASSET_AGENT_FINGERPRINT256`、`PROMPTCUT_ASSET_AGENT_SERVICE_KID`、`PROMPTCUT_ASSET_RUN_TIMEOUT_MS`、`_RUN_MAX_RESPONSE_BYTES`、`_RUN_MAX_BODY_BYTES`、`PROMPTCUT_ASSET_ROOT_UNIT`、`_ROOT_CGROUP_PATH`、`_ROOT_RESERVATION_FILE`）；两侧都要 Linux 和 root 写的登记文件。账号版安装计划不生成这些变量，也不初始化素材一侧的 root 登记目录，所以这一项在节点上还没有部署办法，各变量的取值与登记目录的初始化待部署时核对；没配时素材那几个工具回明确的原因。主服务不再认 `PROMPTCUT_AGENT_RUN_ASSET_*`、`PROMPTCUT_AGENT_ACCOUNT_LOOK`、`PROMPTCUT_AGENT_CONTROL_PORT`，设了就拒绝启动。
+- 工具表接线（0.7.18，`53f15c6e`）：`worker.tools`，键值表，键名沿用各包的环境变量名（清单在 `server/agent-service/account-tool-settings.mjs`，root 入口启动时核，键写错或值形状不对就拒绝并指出哪个键），值是节点上的绝对路径或开关；都可选，写了但路径不在，任务进程拒绝启动。有 `worker.runAssets` 才会建这些提供者；任务进程不读环境变量，所以派活时说的「部署要配的环境变量」在账号版都改成这一节。节点上要装什么（ffmpeg、Python、权重、chrome-headless-shell、`puppeteer-core`、yt-dlp，哪些可选）见 `server/hosted/deploy/README.md`「工具要的节点依赖」。代下缺省关着（`PROMPTCUT_AGENT_COLLECT_DELEGATE` 写 `1` 才开，开之前要补撤回接口并由用户定提示）。主服务不用新加变量（反向通道的登记表放在它原有的数据目录里）；nginx 不用改。部署后在节点上以 root 跑一遍 `node scripts/probes/account-tools-perms-linux.mjs`（期望末行 `PASS 26/26`；只在 Linux 上、以 root 跑），核对主服务与任务用户之间的目录权限。〔裁：主会话 2026-10-14，`AGENT-v18-wire.md`〕
 
 **要留意的。**
 
@@ -267,6 +268,11 @@
 3. 渲染服务：`status-render` 里 `codeVersion` 一栏（渲染服务、在线页面并排，`match` 应为真，不一致标红）；发布目录名 `releases/<SHA 前 12 位>` 与 `current` 链接指向。
 4. Agent 服务：`status-agent` 里与渲染服务的代码版本并排（不一致标红）；它用的就是 `current` 那份检出。账号版没有 PM2，不用 `status-agent`，核对办法见 C5b 的「同一个提交的核对」。
 5. 不一致的后果：渲染服务一个任务也不认领、队列也不报错；Agent 服务发布的预渲染任务没有渲染节点认领、在线页面按另一个代码版本找预渲染结果找不到。管理进程每 5 分钟比一次，不一致会打 `selfcheck.warn { reason: 'code-version' }`。
+
+渲染重构新增的两条部署次序（〔裁：主会话 2026-10-14〕）：
+
+- **稀疏流任务：文档服务先于渲染节点和桌面升级。** 文档服务不认稀疏流任务时，只是不切这种任务、不出错（`AGENT-rr-sparse-streams-2.md` 第 10 节第 2 条）。
+- **在线导出的导出位图：文档服务和任务队列不用改。** 导出位图沿用现有的流任务形状（`input.exportFrames`），已经部署的文档服务不用动；但要有渲染节点（本机 PC 或独立渲染主机，纯浏览器节点不做）带着这一版代码，在线页面的「完整导出」才有节点替它渲同步来的用户卡与素材效果卡；没有节点时页面停在等待（`AGENT-rr-online-export.md` 第 2、3 节）。
 
 ## D. 真实网络验证：每部署一样之后，在新节点上做的实测
 
@@ -304,7 +310,7 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
   2. 网页读的状态接口 `GET /api/account/password-events/<事件号>` 先回 `logout.state` 为 `revoking`（页面是「正在退出」一类的字），文档、素材、Agent、渲染四样确认齐了才回 `complete`（页面变成「已退出」一类的字）；
   3. 素材服务停着时再做一遍：状态一直是 `revoking`，页面不变成已退出；素材服务重新起来以后接着办完。素材服务用 `systemctl stop` 正常停，不要 `kill -9`（硬结束后能不能再起来，没有在 Linux 上验过）。
 
-  判的是接口的 `logout.state`，页面上的字还没定稿（AGENT-v18-logout.md「要用户定的事」第 1 条）。文档服务一起来就会接着办账本里以前所有没办完的退出，第一次会集中给账号服务发一批请求，网站上测试账号的「正在退出」会陆续变成「已退出」。先部署 PromptCut 的文档服务并核对一次退出能办完，再推 VisuHive 的网页改字。没配 Agent 的部署里，Agent 和渲染两样由文档服务写明原因代为登记，文档、素材两样是真确认。〔裁〕：见 AGENT-v18-logout.md。
+  判的是接口的 `logout.state`，页面上的字还没定稿（AGENT-v18-logout.md「要用户定的事」第 1 条）。文档服务一起来就会接着办账本里以前所有没办完的退出，第一次会集中给账号服务发一批请求，网站上测试账号的「正在退出」会陆续变成「已退出」。先部署 PromptCut 的文档服务并核对一次退出能办完，再推 VisuHive 的网页改字。没配 Agent 的部署里，Agent 和渲染两样由文档服务写明原因代为登记，文档、素材两样是真确认。〔裁〕：见 AGENT-v18-logout.md。账号后端另有一个可选环境变量 `ACCOUNT_LOGOUT_CONFIRM_TIMEOUT_MS`（可不设，缺省 120 秒，等各服务确认的时限；不要设得比一次服务重启的时间短），文档服务一侧对应 `account.logoutConfirmTimeoutMs`。〔裁：主会话 2026-10-14，`AGENT-v18-logout2.md`；环境变量在 VisuHive 仓库，没有在本仓库核实〕
 
 **C4（部署渲染服务）之后**
 

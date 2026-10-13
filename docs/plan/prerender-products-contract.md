@@ -50,7 +50,7 @@
 
 甲一的两条分支（`claude/rr-a1-produce`、`claude/rr-a1-play`）写本文时还没合入。本文对齐的是它们 2026-10-12 的样子，合入后以合入的代码为准，对不上的地方由后做的一方改：
 
-- 层表的 `streams` 表（`rr-a1-play` 上 `server/artifact-transfer.mjs` 的 `layerStreamsOf`）：每条流一行 `{ topClipId, clipIds, kind: 'card' | 'group', plane: 'local' | 'stage', contentKey, candidates: [{ envFingerprint, resultKey }], firstSegment, lastSegment, segmentsPerTask, inputSig? }`。
+- 层表的 `streams` 表（`rr-a1-play` 上 `server/artifact-transfer.mjs` 的 `layerStreamsOf`）：每条流一行 `{ topClipId, clipIds, kind: 'card' | 'group', plane: 'local' | 'stage', contentKey, candidates: [{ envFingerprint, resultKey }], originFrame, lastSegment, segmentsPerTask, inputSig? }`（`originFrame` 是这条流自己的第一帧，取代原来的 `firstSegment`，分段号恒从 0 起；不带 `originFrame` 的旧行页面不认。〔裁：主会话 2026-10-14，`AGENT-rr-sparse-streams.md` 第 8 节第 6 条〕）。
 - 流的输入签名（`rr-a1-play` 上新加的 `src/render/streamInputSig.mjs`）：在线页面按当前项目算同一个签名，对不上的流不播。
 - 浏览器那一份流任务只给单卡流（`rr-a1-produce` 上 `server/render-node/split.mjs` 的 `browserStreamInputOf`，只认 `kind: 'card'`、`plane: 'local'`）。
 
@@ -143,7 +143,7 @@
 
 不按「这一帧选不出快照」判（所有重卡都不存快照）：
 
-- 所有重卡：不在播放、还没追到精确活渲时，这一帧有流盖着就抑制并贴流的目标帧（有满密度版的贴这一帧，只有稀疏版的贴不晚于这一帧的最近一张）。它们不进 `awaiting`、不报快照缺口。没有流盖着时：R 类露出活组件当场算（现状）；其余显示占位符，不露出没推到位的活组件。
+- 所有重卡：不在播放、还没追到精确活渲时，这一帧有流盖着就抑制并贴流的目标帧（有满密度版的贴这一帧，只有稀疏版的贴不晚于这一帧的最近一张）。它们不进 `awaiting`、不报快照缺口。没有流盖着时：R 类露出活组件当场算（现状）；其余显示占位符，不露出没推到位的活组件。〔现状：后半句没有做，快照还在，照现状；留给撤快照那一块。主会话 2026-10-14，`AGENT-rr-scrub.md`〕
 - 判据在父页一侧：这张卡是重卡，并且有流盖着。原型里探针用的「当作没有快照」钩子（`setPretendNoSnapshot`）保留给探针。
 - 低内存档的分支照现状保留（任务书「不在范围里」）。
 
@@ -151,7 +151,7 @@
 
 - 同时活着的解码器仍不超过 `DECODER_BUDGET`（6，`src/render/streamPlayer.ts` 第 43 行），和播放时是同一个数。
 - 暂停和拖动时每条流只要目标那一帧：解出来画到平面的画布上以后，解码器可以让给下一条流，画布上的画面留着。所以同屏走流的卡不设上限，超出 6 条的按从上到下的层序排队。
-- 排队中的那一层：留着上一张画面，最多 `SCRUB_HOLD_MS`（原型定的 500 毫秒）；到时还没画上就显示占位符。不露出没推到位的活组件。
+- 排队中的那一层：留着上一张画面，最多 `SCRUB_HOLD_MS`（原型定的 500 毫秒）；到时还没画上就显示占位符。不露出没推到位的活组件。〔现状：排队没有做。暂停和拖动时超出解码器预算的层和播放时一样显示占位符；留给后面的块或下一块定。留着上一张画面现在按真实时间最多一个分段（`HOLD_FRAMES`），常量 `SCRUB_HOLD_MS` 已不存在。主会话 2026-10-14，`AGENT-rr-scrub.md`〕
 - 这是本文的判断，原型没有做（原型照搬播放时的预算，超出的卡不抑制、露出活组件）。要补单测和探针：同屏 8 张这类卡，逐张拖到位。
 
 ### 3.3 起步那一下（第 3、4 条）〔裁〕
@@ -162,7 +162,7 @@
 
 - 重卡被点名抑制时，流的第一帧画出来之前不藏活子树，最多等 `SCRUB_HOLD_MS`；画出来或到时才藏。适用于三处：拖动起步、点一下跳过去、起播和播放中跳转后的第一拍。
 - 点一下跳过去时，舞台对这类卡的不可见追帧等到流的第一帧画出来（或到时）再开始，这段时间里露着的是跳之前那一刻的活画面。
-- 暂停着的时候，把播放头附近这类卡的流清单和开头文件先取好（不建解码器），缩短第一帧的等待。取多大范围由执行方定。
+- 暂停着的时候，把播放头附近这类卡的流清单和开头文件先取好（不建解码器），缩短第一帧的等待。取多大范围由执行方定。〔现状：已过时。现在暂停着就建解码器、把这一帧解好；已经回到精确活渲的重卡，流平面藏着、照样解这一帧，占解码器预算里的名额。主会话 2026-10-14，`AGENT-rr-scrub.md`〕
 
 没有垫着的快照以后，播放中流这一拍画不出来：留着它上一张画面，最多留一个分段的时长，再没有才落到占位符（满 120 毫秒才显示）。这是对照文档第 2.3 节「兜底顺序」第 4 条的写法。
 
@@ -228,8 +228,8 @@
 
 ### 5.1 哪些卡、谁能产
 
-- 进这条路的卡：预渲染集合里、依不依赖下层这一样是「依赖下层」「旧的统称 `context`」或「未知」的卡（审阅表没覆盖到的卡按未知，用户和 Agent 建的卡都是）。源依赖卡（转场、接素材的素材效果卡）现在不进流，这次是否一并走这条路，未定，缺省不进。
-- 框用了三维的卡照旧不进（`streamEligible` 里的 `frame3d`）。
+- 进这条路的卡：预渲染集合里、依不依赖下层这一样是「依赖下层」「旧的统称 `context`」或「未知」的卡（审阅表没覆盖到的卡按未知，用户和 Agent 建的卡都是）。源依赖卡（转场、接素材的素材效果卡）不走这条路：它们各出一条单卡流（`frame-stream.mjs` 的 `soloStreamKind`，不并进组流，各占一个解码器，只由桌面应用和渲染主机产），贴的时候套在视频上的素材效果卡整段画面由流给，转场的流盖在转场自己那一层。〔裁：主会话 2026-10-14，`AGENT-rr-source-streams.md`，取代原来的「未定，缺省不进」〕
+- 框用了三维的独立卡出单卡流（流里是变形之前的画面，贴的时候由包裹层再做变形）；依赖下层（或没审阅过又没接输入）而外框又带三维的卡仍然没有流（`BELOW_STREAM_RULES.frame3d` 为 `false`，打开与否待用户定）。浏览器节点和在线页面本页不产三维外框的独立卡。〔裁：主会话 2026-10-14，`AGENT-rr-source-streams.md`，取代原来的「照旧不进」〕
 - 这种流不参加组流合并（`groupStreams` 现在拿到的都是独立卡的流，实现时把这种流排除在合并之外），但占解码器预算；超出预算的层照现有规则从快照那一步开始兜底。
 - 谁能产：桌面应用和渲染主机。浏览器节点和本页产流不产。`split.mjs` 里这种流的任务：`requires.transcode: true`、`requires.belowDependent: true`、`capabilities.streams` 照旧；浏览器那一份不会出（甲一的 `browserStreamInputOf` 只认单卡流）；用到只在发布方本机的素材时带 `requires.localMedia`（`usesLocalMedia` 要把下层的素材算进去）。
 
@@ -268,7 +268,7 @@
 
 ### 5.4 贴回舞台时怎么盖、和上面的层怎么叠〔裁〕
 
-- 平面：舞台坐标，照组流平面的现成机制（`src/render/Stage.tsx` 第 480～487 行的 `[data-pc-group-plane]`）：挂在舞台根下，层序取目标卡那一层的 `zIndex`，`pointer-events: none`。流清单的 `header.kind` 是 `below`，`plane` 是 `stage`。
+- 平面：舞台坐标，照组流平面的现成机制（`src/render/Stage.tsx` 第 480～487 行的 `[data-pc-group-plane]`）：挂在舞台根下，层序取目标卡那一层的 `zIndex`，`pointer-events: none`。流清单的 `header.kind` 是 `below`，`plane` 是 `stage`。就绪索引里这一层另带 `streamKind` 与 `inputSig`，父页据此发 `plane: "stage"` 的流平面；页面按当前项目算的签名对不上就不贴。互换舞台时先发流平面、后发抑制。〔裁：主会话 2026-10-14，`AGENT-rr-below-paste.md`〕
 - 目标卡的包裹层照播放时的规则抑制（藏子树）。平面不受包裹层的不透明度、滤镜、轨迹影响，这些已经画进流里。
 - 下层不动：照常活渲或贴它们自己的流、快照。平面按普通的叠加盖在它们上面。
 - 上面的层不动：层序比目标卡高，照常画在平面上面。
@@ -403,7 +403,7 @@
 
 - **类别**：两处声明改掉以后（`src/cards/native/lottie.tsx` 第 162 行、`src/cards/assets/index.ts` 第 46、86 行），Lottie 是 R 类：不产快照；测量走抽样那一支；判重时产轨道流；登记位置矩形。它画在 SVG 上，不是 C 类，产流走截图，不走第 6 节的直取。丁的表里 6 条 Lottie 现在登记的是 `writing: "motion"`，声明改了表要一起改，不然丁的守门测试会红。
 - **判重时的流**：Lottie 在审阅表里是独立卡，走现有的单卡流；产流时不从挂载帧回放（第 4.2 节），这就是「预渲染不再从挂载帧重推」的证据来源。
-- **浏览器节点**：`split.mjs` 的 `BROWSER_EXCLUDED_CARD` 照旧把 Lottie 排除在外（任务书：缺省不放开，评估写进报告）。
+- **浏览器节点**：Lottie 素材卡已放开，浏览器节点和在线页面本页都产它的单卡流（`split.mjs` 的 `BROWSER_EXCLUDED_CARD` 与 `pageStreamPlan.ts` 的 `PAGE_EXCLUDED_CARD` 都已去掉；评估见 `render-standard.md` 的 Lottie 一节，提交 `fb3a6c94`）。〔裁：主会话 2026-10-14，`AGENT-rr-lottie-2.md`，取代原来的「照旧排除、缺省不放开」〕
 - **键**：声明一改，能力对象里的写法就变，Lottie 卡的节点身份、快照内容键、流键、成本记录的键都跟着变，旧的预渲染结果自然不再命中。
 - **随机数那三样缺省打开**（改写表达式里的随机函数、外面那一层、属性值不留旧数）：会改画面（带随机表达式的素材换一次数，`happy2016` 有 76 帧微变），所以键也必须变。通用 Lottie 卡 `lottie` 的源码版本走导入闭包，`lottie.tsx` 改了它的键就变。5 张封装卡不一样：它们的源码版本不走闭包，只取声明里的几项（第 9.2 节），`lottie.tsx` 怎么改它们的键都不变；它们的键只在声明里的 `frameMode` 改掉的那一次变。
 - **所以两件事必须同一次合入**：声明改写和随机数缺省打开放在同一次合入里。分开合的话，后合的那一次 5 张封装卡「键没变、画面变了」，旧的流和 PNG 会被错用。
@@ -450,7 +450,7 @@
 结论和规矩：
 
 - **五项都不需要改甲、乙两组的文件，照做的话已生成的卡片声音不受牵连。** 甲、乙两组的文件五项一律不改，注释也不加。哪一块发现非改不可，停下报主会话，不自己改：那会让卡片声音被判过期，用户没有同意过。
-- **丙组躲不开。** 那几个文件正是这五项要改的地方（甲一也改到了 `streamPlayer.ts`、`stageRpc.ts`）。五个 id 的键每合入一块换一次，开发用的帧库重渲这几张卡；对用户仍是发版时一次，而且只是预渲染结果。
+- **丙组躲不开。** 那几个文件正是这五项要改的地方（甲一也改到了 `streamPlayer.ts`、`stageRpc.ts`）。五个 id 的键每合入一块换一次，开发用的帧库重渲这几张卡；对用户仍是发版时一次，而且只是预渲染结果。实测变的不止五个：通用粒子卡 `particles` 的键也跟着丙组变，因为 `cardSourceVersion` 按「文件里有没有 `id: "particles"`」找入口文件，`src/cards/assets/index.ts` 里的 `parts: [{ id: "particles" … }]` 先被匹配上，它引了 `lottie.tsx`，闭包里就有了丙组的文件；卡的 node、cost 不变，比对脚本里变的是六张（丙组五个加 `particles`）。〔裁：主会话 2026-10-14，`AGENT-rr-sparse-streams.md` 第 8 节第 5 条、第 10 节第 2 条〕
 - 新加的模块（`snapshotGrid.mjs`、`diffSnapshot.ts`、己取像素的页面钩子）不要让甲、乙两组的文件去引，否则等于改了它们的闭包。
 - 守住的办法两条：每一块合入前跑丁的比对脚本，「源码版本变了」的卡只许是上表里列的，写进报告；另加一条守门测试，钉住三张内置有声卡的源码版本，值一变就红（要改这个值，先问过用户）。后一条排在第 13 节。
 
@@ -599,7 +599,7 @@
 |---|---|
 | 一：流的计划与生产 | `server/frame-stream.mjs`、`server/bakery/bake.mjs`、`server/bakery/ffmpeg.mjs`、`server/bakery/capture-frame.mjs`、`server/card-identity.mjs`、`server/card-cache.mjs`、`server/frame-code.mjs`、`server/render-node/split.mjs`、`server/render-node/filter.mjs`、`src/render/streamInputSig.mjs`（甲一加的）；己取像素的页面钩子：`src/ExportView.tsx`、`src/render/gl/` |
 | 二：快照库与清单 | `server/frame-pipeline.mjs`、`server/snapshot-store.mjs`、`server/snapshot-tier.mjs`、`server/artifact-transfer.mjs`、`server/artifact-push.mjs`、`server/prerender-executor.mjs`、`server/ready-index.mjs`、`server/vite-plugin-frames.ts`、`src/render/snapshotGrid.mjs`（新）、`src/render/createSnapshot.ts`、`src/render/snapshot/` |
-| 三：舞台与父页 | `src/StageView.tsx`、`src/render/Stage.tsx`、`src/render/streamPlayer.ts`、`src/render/planeStyle.ts`、`src/render/placeholderHost.ts`、`src/render/stageRpc.ts`、`src/editor/snapshotFeed.ts`、`src/editor/Preview.tsx`、`src/editor/probeRunner.ts`、`scripts/probe-card-costs.mjs` |
+| 三：舞台与父页 | `src/StageView.tsx`、`src/render/Stage.tsx`、`src/render/streamPlayer.ts`、`src/render/planeStyle.ts`、`src/render/placeholderHost.ts`、`src/render/stageRpc.ts`、`src/editor/snapshotFeed.ts`、`src/editor/stageSwap.ts`（播放态互换给新的可见舞台摆平面的顺序，先发流平面后发抑制；〔裁：主会话 2026-10-14，`AGENT-rr-scrub.md`、`AGENT-rr-below-paste.md`〕）、`src/editor/Preview.tsx`、`src/editor/probeRunner.ts`、`scripts/probe-card-costs.mjs` |
 | 四：在线来源与浏览器节点 | `src/render/snapshotSource.ts`、`src/online/bakeTask.ts`、`src/online/browserNode.ts`、`src/editor/browserNodeHost.ts`、`src/editor/stageBake.ts`、`src/online/l2.ts` |
 | 五：Lottie | `src/cards/native/lottie.tsx`、`src/cards/assets/index.ts`、`src/kernel/pinEntropy.ts`、`src/cards/capabilities.json` 与 `capabilities.md` 里 Lottie 的 6 条、`scripts/probes/lottie-*`、`render-standard.md` 的 Lottie 一节 |
 | 六：粒子卡 | `src/cards/native/particles.tsx` 和它用的粒子视图；根因落在舞台时钟时加 `src/render/stageClock.ts`。根因落在 `src/StageView.tsx` 的追帧一段时，这一块并进道三，排在道三最前面 |
@@ -634,7 +634,7 @@
 | 下层一 | 戊二 | 依赖下层的流：计划、键、输入签名的 `below` 一支、隔离工程、切分与认领（第 5.1、5.2 节）。层表的 `layerStreamsOf` 认 `below` 是道二的一行改动，交给道二当时在做的那一块 | 一 | 不回放、甲一 | 单测：下层改一处键和输入签名就变、上层改不变；切分出的任务浏览器节点认领不了 | Opus high |
 | 下层二 | 戊二 | 差分取层的产流（第 5.3 节）；先做探针量耗时和编码后的误差，再定用不用 | 一 | 下层一 | 任务书戊二的探针；另加一个带半透明下层的场景，比差分取层和原样盖的误差 | Opus Extra |
 | 下层三 | 戊二 | 贴回舞台（第 5.4 节） | 三 | 下层二、己三 | 同上 | Opus medium |
-| 下层四 | 戊二 | 在线来源读 `below` 的行和清单、按输入签名判过期（甲一的解析现在只认 `card`、`group`，别的行跳过） | 四 | 下层一、甲一 | 在线页面：桌面产好依赖下层的流，页面播放时贴上；改下层一张卡，旧流立刻不贴 | Sonnet high |
+| 下层四 | 戊二 | 在线来源读 `below` 的行和清单、按输入签名判过期（甲一的解析现在只认 `card`、`group`，别的行跳过）〔现状：已做，`snapshotSource.ts` 的 `parseLayerStreams` 现在认 `below`，且要求单成员、`plane` 为 `stage`；主会话 2026-10-14，`AGENT-rr-below-online.md`〕 | 四 | 下层一、甲一 | 在线页面：桌面产好依赖下层的流，页面播放时贴上；改下层一张卡，旧流立刻不贴 | Sonnet high |
 | 庚一 | 庚 | `diffSnapshot.ts`、落盘、存法版本（第 7.1、7.2、9.3 节） | 二 | 稀疏一、矩形一 | 还原出的整帧 HTML 和旧存法逐字节相同；整场景 `html` 不变；占用空间改前改后 | Opus high |
 | 庚二 | 庚 | 清单 `v: 2`、推送拉取、读口（第 7.3、7.5 节的服务端） | 二 | 庚一 | 两台节点之间推拉一段再贴；旧清单照旧能读 | Opus medium |
 | 庚三 | 庚 | 舞台贴法、压住过渡、投递（第 7.5 节的页面一半） | 三 | 庚二、下层三 | 任务书庚的验收：逐节点相同、跳着贴、贴一帧的耗时改前改后 | Opus high |
@@ -706,16 +706,16 @@
 | 8 没有切分节点时位置矩形谁写 | 甲：甲二的页面写层表时一并写 | 写进甲二的派活指令 |
 | 9 在线测量出的快照推不推素材服务 | 甲：跟着甲二 | 同上 |
 | 10 低内存档下画布卡和 remotion 式重卡没有小尺寸 | 甲：接受〔裁，二级〕 | 低内存档在 0.7.19 撤掉，这次照任务书不动它的分支；用户说过现在没有外部用户。随「己二」合入时播报，记待用户项 |
-| 11 暂停时同屏第 7 张走流的卡 | 甲：解完一帧让出解码器、排队〔裁〕 | |
+| 11 暂停时同屏第 7 张走流的卡 | 甲：解完一帧让出解码器、排队〔裁〕（现状：排队这次没有做，超出预算的层显示占位符，见第 3.2 节；主会话 2026-10-14，`AGENT-rr-scrub.md`） | |
 | 12 画布之外还有别的元素的画布卡 | 甲：算画布卡，不存快照，流走截图 | 「己一」把现有画布卡逐张实测的结果记进报告 |
 | 13 新旧节点轮流改写层表 | 甲：靠部署规矩 | 0.7.18 部署时几样服务用同一个提交 |
-| 14 源依赖卡进不进戊二的流 | 不进 | |
+| 14 源依赖卡进不进戊二的流 | 不进（它们没有进依赖下层的流，另出各自的单卡流，见第 5.1 节） | |
 | 15 庚还做不做全套 | 照任务书全做 | 用户定的是十项全做。收益变小这件事写进总报告，由用户知道 |
 | 16 非改第 9.2 节甲、乙两组的文件不可时 | 甲：不改，换做法；换不了就停下报主会话 | 每一块的派活指令里都写这十个文件不许碰 |
 | 17 丙组五个 id 每合入一块换一次键 | 甲：接受 | |
 
 另外三件：
 
-- 甲一的「产」合入时定了：在线页面发的清单计划只给浏览器出流任务，切分方自己的那一份不出。所以托管方的渲染节点、桌面应用替在线页面产流（含第 5 节依赖下层的流）要在「甲三」「下层一」里让清单计划也出切分方自己的那一份，并让本机只为清单里的片段产流（`FramePipeline.streamPicked` 现在只认本机判重的卡）。
+- 甲一的「产」合入时定了：在线页面发的清单计划只给浏览器出流任务，切分方自己的那一份不出。所以托管方的渲染节点、桌面应用替在线页面产流（含第 5 节依赖下层的流）要在「甲三」「下层一」里让清单计划也出切分方自己的那一份，并让本机只为清单里的片段产流（`FramePipeline.streamPicked` 现在只认本机判重的卡）。〔现状：单卡流那一半「甲三」做了，依赖下层的流这一半「下层一」「下层四」做完；`streamPicked` 最后没有改，清单里的片段走 `listStreamSpecs`。主会话 2026-10-14，`AGENT-rr-below-online.md`〕
 - 桌面把别的环境（浏览器节点）产的流拉回去以后，自己的舞台不播它（桌面按自己的指纹出键）。「甲二」的验收点名要做到，放在甲二里。
 - 第 2.6 节末尾「播放中要保留一条音讯」那一处未查清的，由「稀疏二」核对并写进报告：做不到「播放时不产」就是没做成。

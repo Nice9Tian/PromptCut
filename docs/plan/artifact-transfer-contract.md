@@ -86,7 +86,7 @@ StreamResult = {
   v: 1, kind: 'stream',
   resultKey,                 // = streamKey
   range: { from, to },       // 分段号，闭区间
-  header: { kind, plane, clipIds, fps, bound, offset, tight },     // 取自 stream.json 顶层
+  header: { kind, plane, clipIds, fps, bound, offset, tight, originFrame },     // 取自 stream.json 顶层；originFrame 是这条流自己的第一帧，分段号从它起算〔裁：主会话 2026-10-14，rr-sparse-streams〕
   inits: { [initId]: { hash, bytes, codec, width, height, timescale, rect, encoder } },   // 只列本段分段用到的 init
   segments: { [n]: { hash, bytes, init, stride, samples, sig, encoder } },               // 本段里已产出的分段
 }

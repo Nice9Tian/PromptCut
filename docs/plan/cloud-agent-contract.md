@@ -33,7 +33,7 @@
 
 > **看画面口径更正：** 第 23.1 节留下的“云端 Agent 第一版没有渲染能力，也不经素材服务拉取产物来看”是被后续第 25 节取代的旧句。目标分工是云端 Agent 服务请求同机托管渲染服务即时出图，Agent 服务自身不运行 renderer；具体部署是否具备该能力仍须按实际节点验收，不能仅凭本历史契约宣称已部署。
 
-> **发起人本机工具口径更正：** 第 28.3 节 `web_handoff` 与 `collect_login`/`collect_login_check` 的“没接”是实现状态，不是产品能力禁用或新的选型问题。`web_handoff` 目标只操作发起人自己的页面/本机界面，发起人离线时明确回 offline；素材采集默认匿名，需要登录时由发起人的电脑代下，登录信息不离开其电脑，代下失败或发起人离线则回退匿名，不上传登录信息。所需的本机桥接（服务端与页面一侧）已实现但未挂载，接线待最后的接线包做，见第 9.4d、28.8 节；旧“评估后保持现状”的结论已被取代。
+> **发起人本机工具口径更正：** 第 28.3 节 `web_handoff` 与 `collect_login`/`collect_login_check` 的“没接”是实现状态，不是产品能力禁用或新的选型问题。`web_handoff` 目标只操作发起人自己的页面/本机界面，发起人离线时明确回 offline；素材采集默认匿名，需要登录时由发起人的电脑代下，登录信息不离开其电脑，代下失败或发起人离线则回退匿名，不上传登录信息。所需的本机桥接（服务端与页面一侧）已实现并已挂载（0.7.18 工具表接线，`53f15c6e`；代下缺省关着，见第 9.4d 节），见第 9.4d、28.8 节；〔裁：主会话 2026-10-14，`AGENT-v18-wire.md`〕旧“评估后保持现状”的结论已被取代。
 
 > **托管方读取告知：** 第 7.2 节与第 19 节 U5 的“托管方读得到”补充为：首次使用云端 Agent 前告知托管方可读取含私有对话的全部记录，用户选“我知道了”后按账号记住；选“拒绝”不发送消息、不使用云端 Agent，下次再提示。该流程是产品目标，尚待实现。
 
@@ -609,6 +609,8 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 
 ### 9.2 逐个工具
 
+〔裁：主会话 2026-10-14，`AGENT-v18-wire.md`〕以下各表是接线之前（main `f18e33ef`）的写法。0.7.18 的工具表接线（`53f15c6e`）合入以后：`pending` 这一类里的感知四族（镜头、语音转写、主体识别、运动追踪）、一键流程、网页操作七个、`seek`、`play`、`pause`、`web_handoff`、`collect_login`、`collect_login_check` 在账号模式下不再按静态表的 `mode` 答，而是按任务进程里有没有真的建出它的提供者答（工具上多一个 `provider: '<族>'` 标记，静态表没有改 `mode`；见 `mechanism/agent.md` 的「账号模式的工具提供者」）；建出来的交给模型，没建出来的照旧回「云端这一版还用不了」。下表和后面各节里「已实现、未挂载」「还没接上」指这些工具的，现在都读成「已挂载，按进程里建没建出提供者判」；不给 `provided`（旧托管档、桌面）时仍是原来的答法。不在这一期的：`measure_audio_js`、`see_frames` 的素材拼图、`get_gif` 的可视记录、`spawn_agent`。
+
 | 分组 | 在副本上执行 | 服务端另有实现 | 要操作发起人的界面 | 这一版还没接上（差什么） |
 |---|---|---|---|---|
 | project（7） | `get_project`、`list_media`、`set_project_meta`、`set_theme`、`list_media_effects` | `import_media` | `get_selection`（在线：经反向通道读页面当下的选区；第 28 节） | — |
@@ -618,8 +620,8 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption`、`list_shots`、`list_subjects` | — | — | `stt_status`、`stt_install`、`transcribe_media`（语音识别）、`detect_shots`（镜头）、`track_points`、`get_track`、`track_status`、`track_install`（追踪）、`detect_subjects`、`subject_status`、`subject_install`（主体）：要节点上的 Python 运行环境与模型权重，并把页面里的作业表搬到服务端。`attach_clip_motion`：要一份追踪结果 |
 | cards（8） | `list_cards`（含本项目的用户卡）、`apply_card`；`bake_card`、`inspect_card_dom`（看画面，9.8） | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | — |
 | vision（2） | `see_frames`（时间轴的画面）、`get_gif`（看画面，9.8） | — | — | `see_frames` 的素材镜头拼图（`source: "media"`）：要节点上的镜头识别，回明确的原因 |
-| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check`：发起电脑代下的桥接已实现（`collect-bridge.mjs`，9.4d、28.3）、未挂载，云端仍回 `initiatorOnly` 或 `initiatorOffline`；目标为素材采集默认匿名，需登录时由发起电脑代下，失败/离线退回匿名且不上传登录信息（见首部补记） | — |
-| browser（8） | — | — | `web_handoff`：已实现（`hosted-handoff.mjs`）、未挂载，账号模式下仍回「发起方不在线」；目标只作用发起人自己的页面/本机界面，离线明确回 offline（见首部补记与第 28.8 节） | 其余七个（`web_*`）：已实现（`server/agent/service/hosted-browser.mjs`，浏览器只经出网闸的代理出网、按「项目 × 对话」隔离用户数据目录，9.5、9.6）、未挂载：`CLOUD_TOOL_PLAN` 里仍归「这一版还没接上」，Agent 服务的启动也没有建它。节点上要配 chrome-headless-shell 的绝对路径（环境变量名由接线包定，W1 报告建议 `PROMPTCUT_AGENT_BROWSER`，代码里还没有谁读它）；没配时这七个工具回「这台节点没有配置浏览器」。〔裁：见 AGENT-v18-tools-w1.md〕 |
+| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check`：发起电脑代下的桥接已实现（`collect-bridge.mjs`，9.4d、28.3）、已挂载（代下缺省关着），登录那两个工具回发起人本机的登录结果，发起人不在线仍回 `initiatorOffline`；目标为素材采集默认匿名，需登录时由发起电脑代下，失败/离线退回匿名且不上传登录信息（见首部补记） | — |
+| browser（8） | — | — | `web_handoff`：已实现（`hosted-handoff.mjs`）、已挂载，发起页没连着时回「发起方不在线」，网页版回做不了；目标只作用发起人自己的页面/本机界面，离线明确回 offline（见首部补记与第 28.8 节） | 其余七个（`web_*`）：已实现（`server/agent/service/hosted-browser.mjs`，浏览器只经出网闸的代理出网、按「项目 × 对话」隔离用户数据目录，9.5、9.6）、已挂载：`CLOUD_TOOL_PLAN` 的静态表里仍归「这一版还没接上」，但账号模式下按任务进程里建出的提供者判可用。节点上要配 chrome-headless-shell 的绝对路径（环境变量名由接线包定，W1 报告建议 `PROMPTCUT_AGENT_BROWSER`，代码里还没有谁读它）；没配时这七个工具回「这台节点没有配置浏览器」。〔裁：见 AGENT-v18-tools-w1.md〕 |
 | agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（0.7.18、0.7.19、0.7.20 全部关闭，统一提示“云端暂不支持开子 Agent”） | 0.7.20 之后待办 |
 | core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause`（在线：经反向通道在发起人的页面上执行；第 28 节） | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
 
@@ -695,7 +697,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - **上限**：一个作业的下载物合计 512 MiB（边下边量，超了就停）、片子时长 2 小时、墙钟 15 分钟、最多入库 20 个文件；一位成员在一个项目里同时只跑 1 个下载，整个进程同时 2 个。超限的不入库、不留文件，作业记 `error` 与原因。
 - **`collect_install` 在云端不装东西**：节点上有没有采集工具由部署决定（`PROMPTCUT_AGENT_COLLECT_PYTHON`，9.9）。没装时 `collect_status` 回 `{ ok: true, ready: false, ytdlp: { installed: false }, hint: '这台云节点没有装采集工具…' }`，`collect_install` 与 `collect_download` 回 `{ ok: false, cloudUnavailable: true, error }`，`collect_probe`、`collect_search` 报同一句原因；一个子进程也不起。装了时 `collect_install` 回 `{ ok: true, alreadyInstalled: true }`，同样不起安装的子进程。
 - **登录态**：`collect_login`、`collect_login_check` 要用户自己扫码，是「要操作发起人界面」的工具（9.2）。云端不存任何站点的 cookies：下载按未登录的画质，`collect_download` 的 `cookies` 参数不用（结果的 `notes` 里注明），`collect_logout` 回 `{ ok: true, loggedOut: false, note }`。
-- **需要登录的站点由发起人的电脑代下**（0.7.18，`server/agent/service/collect-bridge.mjs`；现状：已实现、未挂载，`hosted-collect.mjs` 的 `delegate` 口子没有人传，工具表里这两个工具仍是「要操作发起人界面」，现在实际的行为仍是上一条：云端匿名下载）：`collect_download` 先问委托口子，链接属于有登录支持的站点（`server/collect-cookies.mjs` 的站点表，现在只有哔哩哔哩）、发起人本人在线且用桌面版、他的电脑上有没过期的登录态时，由他的电脑调本机采集下载，文件按哈希直接经他的账号会话传进这个项目的素材库，登录信息不离开他的电脑。云端用 `开始、轮询（每 2 秒）、取消` 三种短请求经反向通道（28.8）发起，因为一次下载可能几分钟而一次页面请求最多等 60 秒；整次委托最多 15 分钟。回执是一次页面请求的答案：`{ requestId, jobId, assetRef: { projectId, hash, size }, result: { items: [{ assetRef, name, kind, title?, duration?, width?, height?, vcodec? }], cookiesUsed? } }`。云端收到后核回执属于这次委托、这一轮此刻能写、素材服务里这份字节哈希与大小对得上，再登记进项目（同一个登记请求号不登记两次）。任何一步不成、发起人不在线或用网页版，回「没委托成」加原因，接着在云端匿名下载，原因与画质差别写进作业的 `notes`；这一轮自己已不能写（被停止、被撤销）就不再下载，作业记失败。`collect_login`、`collect_login_check` 在这条路上只拿回「登录框开没开」「登没登」「是不是过期」这类真假值。〔裁：见 AGENT-v18-tools-c1.md 第 2.1、2.3 节〕
+- **需要登录的站点由发起人的电脑代下**（0.7.18，`server/agent/service/collect-bridge.mjs`；现状：已实现，口子接上了但缺省关着（部署开关 `PROMPTCUT_AGENT_COLLECT_DELEGATE`，写 `1` 才开；开之前要补「撤回已经交给本机上传队列的文件」的接口，并由用户定桌面版代下的提示），现在实际的行为仍是上一条：云端匿名下载）：`collect_download` 先问委托口子，链接属于有登录支持的站点（`server/collect-cookies.mjs` 的站点表，现在只有哔哩哔哩）、发起人本人在线且用桌面版、他的电脑上有没过期的登录态时，由他的电脑调本机采集下载，文件按哈希直接经他的账号会话传进这个项目的素材库，登录信息不离开他的电脑。云端用 `开始、轮询（每 2 秒）、取消` 三种短请求经反向通道（28.8）发起，因为一次下载可能几分钟而一次页面请求最多等 60 秒；整次委托最多 15 分钟。回执是一次页面请求的答案：`{ requestId, jobId, assetRef: { projectId, hash, size }, result: { items: [{ assetRef, name, kind, title?, duration?, width?, height?, vcodec? }], cookiesUsed? } }`。云端收到后核回执属于这次委托、这一轮此刻能写、素材服务里这份字节哈希与大小对得上，再登记进项目（同一个登记请求号不登记两次）。任何一步不成、发起人不在线或用网页版，回「没委托成」加原因，接着在云端匿名下载，原因与画质差别写进作业的 `notes`；这一轮自己已不能写（被停止、被撤销）就不再下载，作业记失败。`collect_login`、`collect_login_check` 在这条路上只拿回「登录框开没开」「登没登」「是不是过期」这类真假值。〔裁：见 AGENT-v18-tools-c1.md 第 2.1、2.3 节〕
 - **用量**：每次调用记一行 `service: 'collect'`、`vendor: 'yt-dlp'`、`model: <子命令>`、`units: <下载的字节数，查状态 / 探测 / 搜索是 0>`、`unit: 'bytes'`；汇总里的 `calls` 就是次数。
 - **残余面**（照实写）：代理只管「经它出去的」；下载器若不认环境里的代理、自己去连，或往工作目录以外写文件，代码这一层拦不住——靠节点上用独立的非特权用户跑子进程与系统级的出站限制兜底（9.5、9.6 的同一条）。yt-dlp 与它调用的 ffmpeg 都认环境里的代理。
 - 对话被删时还在跑的下载不会被主动停掉（它的作业目录随对话的工作目录删掉，之后入库会失败并记 `error`）。
@@ -708,7 +710,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - 工具给的相对路径先在字面上拒掉绝对路径、盘符、UNC 与设备路径、`..`、NUL、Windows 保留设备名、备用数据流、结尾的点与空格；再解析并核对在对话目录之内；再对已存在的最深一层取真实路径（跟符号链接、junction），核对仍在对话目录的真实路径之内；
 - 上限：单个文件 1 GiB、一个对话 2 GiB、一个项目 8 GiB、一个对话 2000 个文件，超了拒写；
 - 对话删除、项目删除时整棵删掉；
-- **网页操作的浏览器目录不在工作区里**（`hosted-browser.mjs`，已实现、未挂载，见 9.2）：工作区的文件工具列得出、读得到里面的文件，cookie 库不该让模型读到。浏览器的目录是 `<数据目录>/web/<项目>/<对话>/`（两段目录名都是清洗后的 id 加原文哈希），用户数据目录是它下面的 `profile/`，每个「项目 × 对话」一个浏览器进程、一份目录、一个出网代理。去留：`web_close`、闲置十分钟、点停止、Agent 被关、服务关闭，都留着（模型手里「登录态还在」的说法才成立）；对话被设为私有，删到只剩清单版本计数（能看这个对话的人换了一批，之前攒下的状态不带过去）；对话或项目被删，连版本计数一起删；超过 512 MiB，关闭时删。〔裁：见 AGENT-v18-tools-w1.md 第 5 节〔裁 2〕和第 11 节〕
+- **网页操作的浏览器目录不在工作区里**（`hosted-browser.mjs`，已实现、已挂载，见 9.2）：工作区的文件工具列得出、读得到里面的文件，cookie 库不该让模型读到。浏览器的目录是 `<数据目录>/web/<项目>/<对话>/`（两段目录名都是清洗后的 id 加原文哈希），用户数据目录是它下面的 `profile/`，每个「项目 × 对话」一个浏览器进程、一份目录、一个出网代理。去留：`web_close`、闲置十分钟、点停止、Agent 被关、服务关闭，都留着（模型手里「登录态还在」的说法才成立）；对话被设为私有，删到只剩清单版本计数（能看这个对话的人换了一批，之前攒下的状态不带过去）；对话或项目被删，连版本计数一起删；超过 512 MiB，关闭时删。〔裁：见 AGENT-v18-tools-w1.md 第 5 节〔裁 2〕和第 11 节〕
 - 子进程只经 `spawn()` 起：工作目录是对话目录，环境变量按白名单重建（不带任何 `PROMPTCUT_*`、代理、别的凭证变量），临时目录在对话目录里，不弹窗口。节点上应当再用独立的非特权用户跑这些子进程（部署说明里写），代码不假设它存在。
 
 ### 9.6 出网闸
@@ -720,13 +722,13 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - 按解析结果连接、不二次解析（连接的 `lookup` 钉死在核过的地址上）；
 - 重定向每一跳重查，最多 5 跳，跨源的跳不带鉴权头；响应体上限 512 MiB（各工具可以更小）、整体有时限；
 - 给子进程用的正向代理（只绑回环、随机端口）过同一道闸；
-- **浏览器（网页操作，已实现、未挂载）要额外堵的几条**：浏览器在模型手里，去哪由网页决定，所以它的一切出网只留一条路——`server/web/hosted/network.mjs` 起的、只绑回环的正向代理（每个目标过出网闸），其余途径在启动参数里逐条堵：回环与链路本地地址缺省不走代理（去掉缺省，再由代理拒）、浏览器自己解析主机名（一个名字都不让它解析，只交给代理）、WebRTC、QUIC、下载（一律拒）、非 http(s) 协议、调试端口（用管道连，不开端口）。每条的做法与对应测试在 `network.mjs` 文件头的表；启动参数只认白名单。残余面同 9.4d：代码这一层管的是经代理出去的，其余靠节点上的系统级出站限制兜底。〔裁：见 AGENT-v18-tools-w1.md 第 3 节、第 11 节〕
+- **浏览器（网页操作，已实现、已挂载）要额外堵的几条**：浏览器在模型手里，去哪由网页决定，所以它的一切出网只留一条路——`server/web/hosted/network.mjs` 起的、只绑回环的正向代理（每个目标过出网闸），其余途径在启动参数里逐条堵：回环与链路本地地址缺省不走代理（去掉缺省，再由代理拒）、浏览器自己解析主机名（一个名字都不让它解析，只交给代理）、WebRTC、QUIC、下载（一律拒）、非 http(s) 协议、调试端口（用管道连，不开端口）。每条的做法与对应测试在 `network.mjs` 文件头的表；启动参数只认白名单。残余面同 9.4d：代码这一层管的是经代理出去的，其余靠节点上的系统级出站限制兜底。〔裁：见 AGENT-v18-tools-w1.md 第 3 节、第 11 节〕
 - **测试例外**：环境变量 `PROMPTCUT_AGENT_EGRESS_TEST_ALLOW`（逗号分隔的「IP:端口」）只给探针与演练，生产不设；设了日志里有 `agent.egress.test-allow`，`/healthz` 的 `egressTestAllow` 为 `true`（部署后的核对看它）。
 - 托管方自己配置的地址（模型接口、配音服务、同机的文档服务与素材服务）不经出网闸：它们不是模型给的。
 
 ### 9.7 系统提示词
 
-`cloudSystemNote({ look })` 只写与本机真实的差别：用户可能已经离开（「发起方不在线」时不要等）；网页采集经托管方的出口出网、不带登录态、节点没装时不能由模型来装；声音（音效与测响度照常用，卡片声音由渲染服务生成）；看画面（节点配了口子：照常用但比本机慢，带自定义卡片的项目第一次要等十来秒、别的项目在渲时要排队，工具回「这次没看成」时不要反复重试、按规定框继续并在汇报里说明；没配：看不了画面，要求看画面的步骤一律跳过、汇报里说明）；这一版还没有的工具；附件与素材的地址写法；建卡要写成字面量、不能引用外链；配音会产生费用。不再有「只能用内置卡」「云端暂不支持」这类话。第 22.3 节列的五个缺口：1、2、4 已写进提示词；3 不再成立（可以建卡）；5（摘要里没标哪些内置卡需要素材）没有做。
+`cloudSystemNote({ look })` 只写与本机真实的差别（〔更新：主会话 2026-10-14，`AGENT-v18-wire.md`〕接线以后签名是 `cloudSystemNote({ look, provided, collectDelegate })`，给模型看的话按这个进程里接上了哪几族来写；后台作业没做完时的排队与一小时上限、追踪要节点配了运行环境、代下关着时的登录说明、作业账本打不开时的说明都在里面，改了哪些见该报告「给模型看的话」两节）：用户可能已经离开（「发起方不在线」时不要等）；网页采集经托管方的出口出网、不带登录态、节点没装时不能由模型来装；声音（音效与测响度照常用，卡片声音由渲染服务生成）；看画面（节点配了口子：照常用但比本机慢，带自定义卡片的项目第一次要等十来秒、别的项目在渲时要排队，工具回「这次没看成」时不要反复重试、按规定框继续并在汇报里说明；没配：看不了画面，要求看画面的步骤一律跳过、汇报里说明）；这一版还没有的工具；附件与素材的地址写法；建卡要写成字面量、不能引用外链；配音会产生费用。不再有「只能用内置卡」「云端暂不支持」这类话。第 22.3 节列的五个缺口：1、2、4 已写进提示词；3 不再成立（可以建卡）；5（摘要里没标哪些内置卡需要素材）没有做。
 
 ### 9.8 看画面（即时渲染）
 
@@ -750,7 +752,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | 素材小尺寸一档 | ffmpeg | 没接上 |
 | 语音识别、镜头、追踪、主体 | Python 3 与各扩展包、模型权重（`python/` 下各包的 `requirements-*.txt`），`PROMPTCUT_PYTHON` | 没接上 |
 | 网页采集 | Python 3 与 yt-dlp（`PROMPTCUT_AGENT_COLLECT_PYTHON` 指解释器的绝对路径）、ffmpeg（`PROMPTCUT_FFMPEG`）；步骤见 27.4 | 已接上；没配时工具回「这台云节点没有装采集工具」 |
-| 网页操作（`web_*` 七个） | chrome-headless-shell 的绝对路径（环境变量名由接线包定，W1 报告建议 `PROMPTCUT_AGENT_BROWSER`）；Linux 上以 root 跑要加 `--no-sandbox`，建议改用非特权用户；节点上用系统级出站限制兜底（9.6） | 工具已实现（`hosted-browser.mjs`）、未挂载；没配时工具回「这台节点没有配置浏览器」〔裁：见 AGENT-v18-tools-w1.md〕 |
+| 网页操作（`web_*` 七个） | chrome-headless-shell 的绝对路径（账号模式下写在 root 入口配置的 `worker.tools` 里，键名 `PROMPTCUT_AGENT_BROWSER`；任务进程不读环境变量）；Linux 上以 root 跑要加 `--no-sandbox`，建议改用非特权用户；节点上用系统级出站限制兜底（9.6） | 工具已实现（`hosted-browser.mjs`）、未挂载；没配时工具回「这台节点没有配置浏览器」〔裁：见 AGENT-v18-tools-w1.md〕 |
 | `measure_audio_js` | 断网的无头浏览器 | 没接上 |
 | 音效合成 | 不用装东西（纯计算） | 已接上 |
 | 卡片声音 | 同「看画面」：同机的渲染服务与 `PROMPTCUT_AGENT_LOOK_URL` | 已接上 |
@@ -1815,9 +1817,9 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 | `pause` | 页面停下，回 `{ ok: true }` | `initiatorOffline` | 做成 |
 | `get_selection` | 旧行为：只读发起页面 | 旧行为：有同成员其它窗口时回消息快照 | **旧实现说明已由用户新决定取代**：当前目标为读取所有在线成员选区并标用户名、发起人标“当前用户”；发起人离线用消息快照并注明非实时。接口待设计，不把旧两列当成目标行为 |
 | `spawn_agent` | 云端暂不支持 | 云端暂不支持 | 用户已定：0.7.18、0.7.19、0.7.20 关闭，提示「云端暂不支持开子 Agent」，列 0.7.20 之后；不再等待用户选型 |
-| `web_handoff` | `initiatorOnly` | `initiatorOffline` | **账号模式：桥接已实现（`hosted-handoff.mjs`）、未挂载，见 28.8**。目标仅操作发起人自己的页面/本机界面；发起人离线时明确回 offline。旧“转交 Agent 自己的网页窗口，再决定远程画面或地址交回”的未定描述不再是当前目标 |
-| `collect_login` | `initiatorOnly` | `initiatorOffline` | **桥接已实现（`collect-bridge.mjs`）、未挂载**：挂上之后，发起页在线时让他的电脑弹出本机的登录窗口（`method: 'qr'` 或 `'browser'`），云端只拿回「开没开」「登没登」；发起页不在线回 `initiatorOffline`，用网页版回 `initiatorOnly`。素材采集默认匿名；需登录时由发起人电脑代下，登录信息不上传节点；代下失败或发起人离线回退匿名（9.4d）。旧“评估后保持现状”已被取代 |
-| `collect_login_check` | `initiatorOnly` | `initiatorOffline` | **桥接已实现、未挂载**：挂上之后云端只拿回「登没登」「是不是过期了」；其余同 `collect_login` |
+| `web_handoff` | `initiatorOnly` | `initiatorOffline` | **账号模式：桥接已实现（`hosted-handoff.mjs`）、已挂载，见 28.8**。目标仅操作发起人自己的页面/本机界面；发起人离线时明确回 offline。旧“转交 Agent 自己的网页窗口，再决定远程画面或地址交回”的未定描述不再是当前目标 |
+| `collect_login` | `initiatorOnly` | `initiatorOffline` | **桥接已实现（`collect-bridge.mjs`）、已挂载**：发起页在线时让他的电脑弹出本机的登录窗口（`method: 'qr'` 或 `'browser'`），云端只拿回「开没开」「登没登」；发起页不在线回 `initiatorOffline`，用网页版回 `initiatorOnly`。素材采集默认匿名；需登录时由发起人电脑代下，登录信息不上传节点；代下失败或发起人离线回退匿名（9.4d）。旧“评估后保持现状”已被取代 |
+| `collect_login_check` | `initiatorOnly` | `initiatorOffline` | **桥接已实现、已挂载**：云端只拿回「登没登」「是不是过期了」；其余同 `collect_login` |
 
 `initiatorOnly` 的 `error` 逐个写了上面「差什么」的那一句（`CLOUD_TOOL_PLAN[工具].online`），不再是原来那句笼统的「还不能反过来操作他的页面」。
 
@@ -1854,9 +1856,9 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 - 本段原记录的 `spawn_agent` “需要用户定做法”已由用户决定取代：三个版本关闭、0.7.20 后再做。`web_handoff` 仍未接；`collect_login` 与 `collect_login_check` 仍不可用，登录态按主机代下的新决定处理（见首部补记）。
 - 发起的那张页面刷新之后，这一轮余下的时间里它不再是「发起的那张」（页面号变了）。要让它接回来得把页面号存进会话存储并防别的页签冒用，这一版没做。
 
-### 28.8 账号模式的新形状（0.7.18，`server/agent/service/page-bridge.mjs`；已实现、未挂载）
+### 28.8 账号模式的新形状（0.7.18，`server/agent/service/page-bridge.mjs`；已实现、已挂载）
 
-〔裁：见 AGENT-v18-tools-w2.md 第 2、5、10 节、AGENT-v18-tools-c1.md〕账号模式下反向通道的规矩和旧通道（28.1 到 28.7，只用于本地与局域网）不同。现状：服务端本体、页面一侧的执行器都在，测试与探针是在同一个进程里跑通的；Agent 服务的启动和路由没有建它，账号模式的运行器里 `initiatorOnline` 仍写死为不在线、`pageCall` 回 `{ offline: true }`，所以账号模式下 `seek`、`play`、`pause`、`web_handoff` 现在都回「发起方不在线」，等最后的接线包挂上。
+〔裁：见 AGENT-v18-tools-w2.md 第 2、5、10 节、AGENT-v18-tools-c1.md〕账号模式下反向通道的规矩和旧通道（28.1 到 28.7，只用于本地与局域网）不同。现状（2026-10-14 更新）：已挂载。登记表在主服务（`account-master-assembly.mjs` 建 `page-bridge.mjs` 的桥），任务进程里是一个薄客户端（`server/agent-service/worker-page-client.mjs`），经主服务那个只绑回环、双向 TLS 的内部口（`worker-page-internal.mjs`）问发起人的页面；`POST /v1/conversations/<id>/page-results` 先核交的人此刻读得到这个对话，再在登记表里核发起人、页面号、一次性随机数和这一轮的授权，这一轮已经结束、内容对不上的回 409 或 410，没挂登记表的装配仍回 503。账号模式的运行器里 `initiatorOnline` 仍写死为不在线、切剪辑的三个工具仍按播放头 0 算，但 `seek` 做成后 Agent 服务记下这个对话的播放头，`seek`、`play`、`pause`、`web_handoff` 经反向通道到发起人的页面，发起人不在线时回「发起方不在线」。旧通道（28.1 到 28.7）只用于本地与局域网。〔裁：主会话 2026-10-14，`AGENT-v18-wire.md`〕
 
 - **发起人与发起页都取自文档服务确认过的东西**：发消息时页面只报一个「在场页面号」（页面连文档服务时自己起的随机号），文档服务核过「这张页面此刻连着、属于这次登录」才把它记进消息；这一轮的运行授权里带着它和发送者账号。`requestPage` 的发起人账号、页面号两个参数只是调用方的断言，与授权对不上回 `page-binding-mismatch`；模型的工具参数里多带任何字段都被拒；页面交回的请求体指定不了页面。
 - **「现在确实在线」要两样同时成立**：文档服务的在场表里这张页面此刻连着；并且这张页面有一条到 Agent 服务的事件流（`GET …/events` 的查询串带 `page=<在场页面号>`）挂在这个对话上，账号是 HTTP 层核过委托票据的。同账号的别的页面、别的成员的页面（含谎报页面号的）都收不到。
