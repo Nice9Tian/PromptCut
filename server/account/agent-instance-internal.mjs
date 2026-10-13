@@ -57,8 +57,9 @@ export function instanceDataRequest({ projectId, runGrantId, connId, nonce, kind
     ...(action !== undefined ? { action } : {}) };
 }
 
-export function createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256, resolveServicePrincipal } = {}) {
+export function createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256, masterFingerprint256, resolveServicePrincipal } = {}) {
   const pin = certificateFingerprint(agentFingerprint256);
+  const pins = new Set([pin, ...(masterFingerprint256 ? [certificateFingerprint(masterFingerprint256)] : [])]);
   if (!/^[a-f0-9]{64}$/.test(pin) || typeof resolveServicePrincipal !== 'function' ||
       typeof instanceAuthority?.beginRegistration !== 'function' || typeof instanceAuthority?.register !== 'function')
     fail(503, 'instance-internal-configuration');
@@ -67,7 +68,7 @@ export function createAgentInstanceInternalHandler({ instanceAuthority, agentFin
     if (!route.startsWith(ROOT)) return false;
     try {
       assertInstanceDirectTransport(req);
-      if (req.socket?.authorized !== true || certificateFingerprint(req.socket?.getPeerCertificate?.()?.fingerprint256) !== pin)
+      if (req.socket?.authorized !== true || !pins.has(certificateFingerprint(req.socket?.getPeerCertificate?.()?.fingerprint256)))
         fail(403, 'service-forbidden');
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = route.slice(ROOT.length);
@@ -76,11 +77,12 @@ export function createAgentInstanceInternalHandler({ instanceAuthority, agentFin
       for await (const chunk of req) { size += chunk.length; if (size > 16 * 1024) fail(413, 'instance-body-too-large'); chunks.push(chunk); }
       let body;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail(400, 'invalid-body'); }
-      if (!exact(body, action === 'challenge' ? ['requestId', 'publicKey'] : ['challenge', 'signature']))
+      if (!exact(body, action === 'challenge' ? ['requestId', 'publicKey',
+        ...(Object.hasOwn(body ?? {}, 'rootScopeRef') ? ['rootScopeRef'] : [])] : ['challenge', 'signature']))
         fail(400, 'invalid-instance-body');
       const servicePrincipal = await resolveServicePrincipal({ socket: req.socket });
-      const result = action === 'challenge' ? instanceAuthority.beginRegistration({ ...body, servicePrincipal }) :
-        instanceAuthority.register({ ...body, servicePrincipal });
+      const result = await (action === 'challenge' ? instanceAuthority.beginRegistration({ ...body, servicePrincipal }) :
+        instanceAuthority.register({ ...body, servicePrincipal }));
       // Only persistent public challenge/registration results reach the wire.
       reply(res, 200, { ok: true, result });
     } catch (error) { reply(res, error.status ?? 503, { ok: false, code: error.code ?? 'instance-unavailable' }); }

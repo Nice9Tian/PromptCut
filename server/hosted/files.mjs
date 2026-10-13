@@ -34,6 +34,10 @@ export const HOSTED_DEPLOY_FILES = Object.freeze([
   'server/render-node/ws-transport.mjs',
   // 成本记录模块按原始环境算指纹（与预渲染结果键同一套归一规则，C10 其余第 3 节）
   'server/render-node/fingerprint.mjs',
+  // 文档服务按「一条任务一个进程」核对 root 发布的记录链时，`server/hosted/agent-run-scope-reader.mjs` 要用这个文件里
+  // 读 root 所有的目录与文件的两个函数（rootDirectory、rootRead）。`deploy/` 目录整体不拷（见下 skip），所以单列这一个；
+  // 它被引入时不执行任何发布动作（发布入口只在它被当作主脚本运行时才走）。
+  'server/hosted/deploy/asset-root-registry-publisher.mjs',
 ]);
 
 /** 暂存目录根上的 package.json 内容 */
@@ -82,8 +86,13 @@ export function stageHostedFiles(repoRoot, outDir) {
 
 /** 独立asset入口的literal import闭包；不改变旧hosted打包策略，不携带私钥/依赖安装。 */
 export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
+  'server/account/agent-instance-authority.mjs',
+  'server/account/agent-instance-internal.mjs',
+  'server/account/agent-read-control.mjs',
   'server/account/client.mjs',
+  'server/account/ledger.mjs',
   'server/account/protocol.mjs',
+  'server/account/run-asset-protocol.mjs',
   'server/asset-announce.mjs',
   'server/asset-client.ts',
   'server/asset-service.ts',
@@ -118,7 +127,16 @@ export const HOSTED_ASSET_DEPLOY_FILES = Object.freeze([
   'server/hosted/asset-doc-client.mjs',
   'server/hosted/asset-lifecycle.mjs',
   'server/hosted/asset-main.mjs',
+  'server/hosted/asset-root-registry-schema-v2.mjs',
+  'server/hosted/asset-run-access.mjs',
+  'server/hosted/asset-run-client.mjs',
   'server/hosted/asset-runtime.mjs',
+  'server/hosted/run-assets-metadata.mjs',
+  'server/hosted/run-assets-metadata-rpc.mjs',
+  'server/hosted/run-assets-head-client.mjs',
+  'server/hosted/run-assets-current-registry.mjs',
+  'server/hosted/run-assets-current-registry-v2.mjs',
+  'server/hosted/run-assets-observer-binding.mjs',
   'server/hosted/ts-resolve.mjs',
   'server/http-guard.mjs',
   'server/media-pull.mjs',

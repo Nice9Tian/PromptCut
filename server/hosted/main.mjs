@@ -198,6 +198,32 @@ async function main() {
       }
     } catch { return configError('account-v2'); }
   }
+  let runAssets = null;
+  if (env.PROMPTCUT_DOC_RUN_ASSETS_ENABLED !== undefined && !['0', '1'].includes(env.PROMPTCUT_DOC_RUN_ASSETS_ENABLED))
+    return configError('run-assets');
+  if (env.PROMPTCUT_DOC_RUN_ASSETS_ENABLED === '1') {
+    try {
+      if (process.platform !== 'linux' || !account?.agent || !assetStatus) throw Error('run-assets');
+      const dir = env.PROMPTCUT_DOC_RUN_ASSET_REGISTRY_DIR;
+      const uid = Number(env.PROMPTCUT_DOC_RUN_ASSET_UID);
+      const ticketTtlMs = Number(env.PROMPTCUT_DOC_RUN_ASSET_TICKET_TTL_MS);
+      const maxBodyBytes = Number(env.PROMPTCUT_DOC_RUN_ASSET_MAX_BODY_BYTES);
+      if (!path.isAbsolute(dir ?? '') || !Number.isSafeInteger(uid) || uid < 1 ||
+          !Number.isSafeInteger(ticketTtlMs) || ticketTtlMs < 1 ||
+          !Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1 ||
+          !env.PROMPTCUT_DOC_RUN_ASSET_UNIT || !env.PROMPTCUT_DOC_RUN_ASSET_CGROUP_PATH ||
+          !env.PROMPTCUT_DOC_RUN_ASSET_SERVICE_IDENTITY) throw Error('run-assets');
+      const assetPin = account.services.find(service => service.serviceId === 'asset')?.fingerprint256;
+      runAssets = { ticketTtlMs, maxBodyBytes, rootRegistry: {
+        files: { registryFile: path.join(dir, 'current.json'), anchorFile: path.join(dir, 'anchor.json'),
+          reservationFile: path.join(dir, 'reservation.json'), publisherLockFile: path.join(dir, '.publisher.lock') },
+        expected: { authorityId: account.authorityId, serviceIdentity: env.PROMPTCUT_DOC_RUN_ASSET_SERVICE_IDENTITY,
+          uid, unit: env.PROMPTCUT_DOC_RUN_ASSET_UNIT,
+          cgroupPath: env.PROMPTCUT_DOC_RUN_ASSET_CGROUP_PATH,
+          clientFingerprint256: assetPin,
+          serverFingerprint256: pinOf(assetStatus.serverFingerprint256) } } };
+    } catch { return configError('run-assets'); }
+  }
   try {
     combo = await startHostedCombo({
       dataDir,
@@ -211,6 +237,7 @@ async function main() {
       account,
       accountRequired,
       assetStatus,
+      runAssets,
       trustLoopback,
       localDevice: localDeviceInfo(),
       log,
