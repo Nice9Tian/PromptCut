@@ -398,5 +398,6 @@ test("CAU-ACC-07 守门:账号模式的执行器只在 accountPage.ts 一处接�
     }
   };
   walkCallers(SRC);
-  assert.deepEqual(callers.sort(), ["ai/cloud/useCloud.ts"]);
+  // (单测文件不算接线)
+  assert.deepEqual(callers.filter((name) => !name.endsWith(".test.mjs")).sort(), ["ai/cloud/useCloud.ts"]);
 });
