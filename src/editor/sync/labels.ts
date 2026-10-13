@@ -88,7 +88,12 @@ export interface Me {
   userId: string | null;
 }
 
-type Actor = { userId?: string; username?: string; deviceId?: string; deviceName?: string; role?: string; conversation?: number; session?: string; service?: string };
+type Actor = { userId?: string; username?: string; deviceId?: string; deviceName?: string; role?: string; conversation?: number; session?: string; service?: string;
+  /** 账号云端项目的写入身份带账号号(`server/docservice/modules/actor.mjs`);`userId` 是 `account:<账号号>@<设备号>`,不是给人看的 */
+  accountId?: string };
+
+/** 账号云端项目里显示名表的键:按账号查(同一个账号在哪台设备上都是同一个名字) */
+export const accountNameKey = (accountId: string): string => `account:${accountId}`;
 
 /** `用户名@设备` 里的用户名(写入身份里不带用户名,发起成员不在线时成员列表里也查不到) */
 const usernameOf = (userId: string | undefined): string => {
@@ -124,5 +129,7 @@ export function writerLabel(by: Writer | undefined, me: Me, names: DisplayNames 
   if (session === me.session && (sameUser || !actor.userId)) return "你在这个页面";
   if (sameUser) return "你在另一个页面";
   if (actor.userId && names.has(actor.userId)) return names.get(actor.userId)!;
+  // 账号云端项目:成员名单按账号给名字(`syncManager.ts` 的 `displayNames`)
+  if (typeof actor.accountId === "string" && names.has(accountNameKey(actor.accountId))) return names.get(accountNameKey(actor.accountId))!;
   return actor.username ?? actor.userId ?? "别人";
 }
