@@ -243,7 +243,12 @@ test('BM-04 稀疏流任务:每几帧截一张照任务的密度定;清单的分
   assert.equal(streamManifestCovers(denseManifest, dense, { dense: true }), true);
   // 合并:已有满密度、新的稀疏 → 留已有的;已有稀疏、新的满密度 → 用新的;新清单里没有的分段留着
   assert.deepEqual(mergeStreamManifest(denseManifest, sparseManifest).segments, denseManifest.segments);
-  assert.equal(mergeStreamManifest(sparseManifest, denseManifest), denseManifest, '没有可留的:原样回新的');
+  // 已有稀疏、新的满密度:用新的分段,稀疏的一趟量的位置矩形带过来(没量过的那一段不带)
+  const upgraded = mergeStreamManifest(sparseManifest, denseManifest);
+  assert.deepEqual(Object.values(upgraded.segments).map((x) => [x.hash, x.stride]), Object.values(denseManifest.segments).map((x) => [x.hash, x.stride]));
+  assert.deepEqual([upgraded.segments[0].box, upgraded.segments[1].box, 'box' in upgraded.segments[3]], [{ x: 2, y: 3, w: 20, h: 10 }, null, false]);
+  assert.deepEqual(mergeStreamResult(sparseManifest, denseManifest), upgraded);
+  assert.equal(mergeStreamManifest(denseManifest, denseManifest), denseManifest, '没有可留的:原样回新的');
   const partial = { ...denseManifest, segments: { 1: denseManifest.segments[1] } };
   const up = mergeStreamManifest(sparseManifest, partial);
   assert.deepEqual(Object.keys(up.segments).sort(), ['0', '1', '2', '3']);

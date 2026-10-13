@@ -625,7 +625,8 @@ const sparseSegment = seg => Number(seg?.stride) > 1;
  * 写流清单前和内容库里已有的那一份合并(同一个键:结果键、范围相同),**不降级**:
  *   - 新清单里某一段是稀疏的、已有的那一段是满密度的:留已有的(稀疏流任务晚到、别的节点已经补过满密度);
  *   - 新清单里没有、已有的清单里有的分段:留着(边产边写的清单只列了本机已经产出的那几段);
- *   - 其余用新的。留下的分段连它的开头文件一起带过来。
+ *   - 其余用新的。留下的分段连它的开头文件一起带过来;
+ *   - 新的分段没带位置矩形(`box`,只在稀疏的一趟量)而已有的那一段带着:把它带过来(补成满密度以后位置矩形还在)。
  * 已有的清单对不上(不是流、键或范围不同、形状不对)就原样用新的。没有可留的时回 `next` 本身。
  */
 export function mergeStreamResult(existing, next) {
@@ -639,7 +640,10 @@ export function mergeStreamResult(existing, next) {
     const init = old && typeof old === 'object' ? existing.inits[old.init] : null;
     if (!init || !KEY_RE.test(String(old.hash)) || !KEY_RE.test(String(init.hash))) continue;
     const cur = segments[n];
-    if (cur && (!sparseSegment(cur) || sparseSegment(old))) continue;
+    if (cur && (!sparseSegment(cur) || sparseSegment(old))) {
+      if (cur.box === undefined && old.box !== undefined) { segments[n] = { ...cur, box: old.box }; kept++; }
+      continue;
+    }
     segments[n] = old;
     if (!inits[old.init]) inits[old.init] = init;
     kept++;

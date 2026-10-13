@@ -293,7 +293,8 @@ export function streamManifest(
 
 /**
  * 写流清单前和内容库里已有的那一份合并(同一个键),不降级:新清单里某一段是稀疏的而已有的是满密度的,留已有的;新清单里没有、
- * 已有的清单里有的分段留着;其余用新的。留下的分段连它的开头文件一起带过来。与桌面 `server/artifact-transfer.mjs` 的 `mergeStreamResult` 同一个规矩。
+ * 已有的清单里有的分段留着;其余用新的。留下的分段连它的开头文件一起带过来。新的分段没带位置矩形(`box`,只在稀疏的一趟量)而已有的
+ * 那一段带着,把它带过来 —— 补成满密度以后位置矩形还在。与桌面 `server/artifact-transfer.mjs` 的 `mergeStreamResult` 同一个规矩。
  * 已有的对不上(键、范围、形状)就原样回新的。
  */
 export function mergeStreamManifest(existing: unknown, next: StreamManifestOut): StreamManifestOut {
@@ -306,7 +307,10 @@ export function mergeStreamManifest(existing: unknown, next: StreamManifestOut):
     const init = seg && typeof seg === "object" ? old.inits[seg.init] : undefined;
     if (!init || !HEX64.test(String(seg.hash)) || !HEX64.test(String(init.hash))) continue;
     const cur = segments[n];
-    if (cur && (!(cur.stride > 1) || seg.stride > 1)) continue;
+    if (cur && (!(cur.stride > 1) || seg.stride > 1)) {
+      if (cur.box === undefined && seg.box !== undefined) { segments[n] = { ...cur, box: seg.box }; kept++; }
+      continue;
+    }
     segments[n] = seg;
     if (!inits[seg.init]) inits[seg.init] = init;
     kept++;

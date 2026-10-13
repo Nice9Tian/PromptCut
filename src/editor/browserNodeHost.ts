@@ -531,14 +531,12 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   /** 流任务全部分段齐后:清单写内容库(`render-manifest`,键 `<结果键>:<起>-<止>`);失败只记诊断(同快照、同桌面 writeManifest) */
   const putStreamManifest = async (task: NodeTask, manifest: Record<string, unknown>): Promise<boolean> => {
     const key = manifestKey(task);
-    // 清单里有稀疏的分段时,先和内容库里已有的那一份合并(不降级:已有的满密度分段留着,`mergeStreamManifest`);全是满密度的直接写
+    // 先和内容库里已有的那一份合并(`mergeStreamManifest`):不降级(已有的满密度分段留着),稀疏的一趟量的位置矩形带到满密度的清单里
     const own = manifest as unknown as StreamManifestOut;
-    if (Object.values(own.segments ?? {}).some((seg) => seg.stride > 1)) {
-      try {
-        const got = await docRequest({ type: "content.get", kind: "render-manifest", key });
-        if (got.type === "content.item" && got.body) manifest = mergeStreamManifest(got.body, own) as unknown as Record<string, unknown>;
-      } catch { /* 取不到就照新的写 */ }
-    }
+    try {
+      const got = await docRequest({ type: "content.get", kind: "render-manifest", key });
+      if (got.type === "content.item" && got.body) manifest = mergeStreamManifest(got.body, own) as unknown as Record<string, unknown>;
+    } catch { /* 取不到就照新的写 */ }
     try {
       const r = await docRequest({ type: "content.put", kind: "render-manifest", key, body: manifest });
       if (r.type === "content.stored") { manifestStats.written++; return true; }
