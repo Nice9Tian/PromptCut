@@ -738,7 +738,7 @@ try {
             if (at > ms) { if (emptySince !== null) emptyMs += at - emptySince; return { log, emptyMs: Math.round(emptyMs), firstHidden, firstShowing, placeholder: log.some((l) => l.endsWith('|ph')) }; }
             await wait(2);
           }
-        }, target, 1200);
+        }, target, 600);   // 只看起播后的 0.6 秒:丙的目标卡 1.66 秒长,采久了会采到它出场以后
         await sleep(40);
         const planes = planesAt(f0);
         if (order === 'planes-first') { await rpc('setStreamPlanes', planes); await rpc('setSuppressed', cards); }

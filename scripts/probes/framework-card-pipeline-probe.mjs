@@ -77,6 +77,7 @@ import { exportUrlOf } from './export-baseline-compare.mjs';
 import { openEditorPage } from './preview-stop-lib.mjs';
 import { FramePipeline } from '../../server/frame-pipeline.mjs';
 import { SEGMENT_FRAMES, planStreams, splitFmp4 } from '../../server/frame-stream.mjs';
+import { streamSegmentFirstFrame, streamSegmentLastFrame } from '../../src/render/streamSegments.mjs';
 import { bakeFrames, bakeStream } from '../../server/bakery/bake.mjs';
 import { openBakery } from '../../server/bakery/chrome.mjs';
 import { openStreamSegmentEncoder } from '../../server/bakery/ffmpeg.mjs';
@@ -615,7 +616,13 @@ try {
     if (DEFAULT_REVIEW) {
       pr.defaultOnly = true;
       pr.msToFirstStream = Date.now() - t0;
-      const all = await until('默认就有的三条流满密度', dense, 1_800_000, 1000);
+      const all = await until('默认就有的三条流满密度', dense, 420_000, 1000);
+      if (!all) {
+        // 没产完:留下每条流此刻的样子(哪几段还没满密度、差分取层有没有判死、生产者最近的日志),好查原因
+        const st = producer.status();
+        pr.defaultStuck = { streams: st.streams.map((s) => ({ clipIds: s.clipIds, kind: s.kind, strides: Array.from({ length: s.lastSegment + 1 }, (_, n) => s.segments[n]?.stride ?? 0), below: s.below ?? null })), log: (st.log ?? []).slice(-12) };
+        say('default-stuck', pr.defaultStuck);
+      }
       pr.msToPillDense = Date.now() - t0;
       check(!!all, '默认行为：三条流产完');
       if (all) {
@@ -698,7 +705,8 @@ try {
         // 开头（动画在跑）、开头之后第三段（接近落定）、中间、倒数第二段（落定以后）；每条流五段以内
         const segs = [...new Set([s, s + 1, s + 3, Math.floor((s + e) / 2), e - 1])].filter((n) => n >= s && n <= e);
         const shoot = async (segment, replay) => {
-          const fromFrame = segment * SEGMENT_FRAMES, toFrame = Math.min(fromFrame + SEGMENT_FRAMES - 1, spec.total - 1);
+          // 分段从这条流自己的第一帧起数(`streamSegments.mjs`),不是项目帧号 × 15
+          const fromFrame = streamSegmentFirstFrame(segment, spec.originFrame), toFrame = streamSegmentLastFrame(segment, spec.originFrame, spec.lastFrame);
           await lease.reset(state.isolated, pipeline.emptyUrl(state.isolated), { deferCards: true });
           lease.streamLease = null;
           const pngs = [];
@@ -725,7 +733,7 @@ try {
             check(rec.diffPixelsMax === 0, `${clipId}#${segment}：不回放直接产和回放着产逐帧相同（像素）`, diffs);
             check(rec.inkMax > 0, `${clipId}#${segment}：画面不是空的`, ink);
             // 分段起点不在挂载帧之后（挂载帧就在这一段里）时，回放着产也没有可回放的帧
-            if (spec.mountFrame < segment * SEGMENT_FRAMES) check(replay.stats.replayed > 0, `${clipId}#${segment}：B 路确实回放了（replayed > 0；挂载帧 ${spec.mountFrame}）`, replay.stats.replayed);
+            if (spec.mountFrame < streamSegmentFirstFrame(segment, spec.originFrame)) check(replay.stats.replayed > 0, `${clipId}#${segment}：B 路确实回放了（replayed > 0；挂载帧 ${spec.mountFrame}）`, replay.stats.replayed);
             else check(replay.stats.replayed === 0, `${clipId}#${segment}：挂载帧 ${spec.mountFrame} 就在这一段里，B 路没有可回放的帧`, replay.stats.replayed);
             await fs.writeFile(path.join(SHOTS, `stream-${clipId}-seg${segment}-A-direct.png`), direct.pngs[Math.min(7, direct.pngs.length - 1)]);
             await fs.writeFile(path.join(SHOTS, `stream-${clipId}-seg${segment}-B-replay.png`), replay.pngs[Math.min(7, replay.pngs.length - 1)]);
