@@ -6,6 +6,8 @@
  *
  * 产物(PNG)经素材服务的接口写进 `px` 命名空间,缓存键 → 内容哈希记在小索引里(`server/bake-store.mjs`),
  * 不再直接写、列、删素材目录(`docs/semantics/product/asset-service.md`「预渲染的产物」)。
+ * 画面是当场渲出的位图(`card-bitmap.ts`):不经帧库,落盘和推送的只有这张 PNG,不存这张卡的 HTML
+ * (`docs/semantics/mechanism/asset-service.md`「不经任务队列的单张卡片画面」)。
  * 依赖方向:bake → render / render-queue,单向。
  */
 import path from "node:path";
@@ -28,6 +30,9 @@ import type { Runner } from "./worker-pool";
  * 「34/34 张卡挪位置逐字节相同」。
  */
 const BAKE_LEAD = 0.5;
+
+/** 单张卡片位图的出法版本,进缓存键(见 bakeTarget 里 `store` 那段说明)。出法换了、旧图不该再命中时加一 */
+export const BAKE_STORE_VERSION = 2;
 
 /**
  * 正在渲的:键 → 那次渲染的 promise。同一个键同时被要好几次时共用一次渲染。
@@ -208,8 +213,13 @@ export function bakeTarget(
    * code:这张卡此刻代码的哈希(定义文件 + 依赖闭包的生效内容,见 card-overrides.mjs)。
    * 没有它的时候改了卡片源码,预渲染的旧图照样命中,3D 视图里贴的一直是改之前的样子。
    */
+  /*
+   * store:这张图是哪一版出法产的。2 = 当场渲出位图(`card-bitmap.ts`,2026-10-13 起):不经帧库、不存这张卡的 HTML。
+   * 没有这个字段的旧键(经帧库的 `see_frames` 出的,有的是拿存下来的 HTML 重放栅格化的)从此不再命中,
+   * 新旧两种出法的图不混用;旧键的索引条目按「这个项目用不到的旧版本」被盘点淘汰,字节留在素材服务里按容量上限淘汰。
+   */
   const key = createHash("sha1")
-    .update(JSON.stringify({ clip: plainClip, graph: iso.clip.nodeId ? { nodes: project.cardNodes, media: project.media, tracks: project.tracks, style: project.style } : undefined, theme: project.themeId, at, renderBox, fit, bg: rgb ? rgb[1].toLowerCase() : null, code: cardCodeHash(iso.clip.cardId), graphCode: graphCardCode(project, iso.clip.nodeId) }))
+    .update(JSON.stringify({ clip: plainClip, graph: iso.clip.nodeId ? { nodes: project.cardNodes, media: project.media, tracks: project.tracks, style: project.style } : undefined, theme: project.themeId, at, renderBox, fit, bg: rgb ? rgb[1].toLowerCase() : null, code: cardCodeHash(iso.clip.cardId), graphCode: graphCardCode(project, iso.clip.nodeId), store: BAKE_STORE_VERSION }))
     .digest("hex").slice(0, 12);
   /*
    * 老格式的文件名(以前落在素材目录里的 `bake-<clipId>-<键>.png`)。现在字节在素材服务的 `px` 里、地址按内容哈希

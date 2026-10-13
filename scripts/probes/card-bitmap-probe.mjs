@@ -386,9 +386,12 @@ try {
   await page.evaluate(() => { [...document.querySelectorAll('[data-pc="preview-tabs"] button')].find((b) => b.textContent === '3D').click(); });
   await page.waitForSelector('.pc-3d-checker canvas', { timeout: 60000 });
   const cardClips = Object.values(CLIP);
-  const allSeen = await until('3D 视图四块板子的贴图都到了', async () => cardClips.every((id) => seen.some((s) => s.clipId === id && /^\/api\/asset\/px\//.test(s.url || ''))) || null, 240000, 500);
+  // 等待时限只为防卡死(机器忙时热备渲染器一张要一两分钟);用了多久记下来,不当通过条件
+  const b1Started = Date.now();
+  const allSeen = await until('3D 视图四块板子的贴图都到了', async () => cardClips.every((id) => seen.some((s) => s.clipId === id && /^\/api\/asset\/px\//.test(s.url || ''))) || null, 600000, 500);
+  const b1Ms = Date.now() - b1Started;
   await delay(4000); // 让空闲预取再走几轮,多收几张(收到多少比多少)
-  out.b1 = { seen: seen.length, byRoute: { ui: seen.filter((s) => s.route === 'ui').length, prefetch: seen.filter((s) => s.route === 'prefetch').length }, clips: cardClips.map((id) => ({ id, got: seen.filter((s) => s.clipId === id).length })) };
+  out.b1 = { ms: b1Ms, seen: seen.length, byRoute: { ui: seen.filter((s) => s.route === 'ui').length, prefetch: seen.filter((s) => s.route === 'prefetch').length }, clips: cardClips.map((id) => ({ id, got: seen.filter((s) => s.clipId === id).length })) };
   check(!!allSeen, 'B1 3D 视图开着:四张卡的贴图都出来了(页面收到 px 地址)', out.b1);
   const uniq = new Map();
   for (const s of seen) if (s.url && !uniq.has(`${s.clipId}@${s.t}`)) uniq.set(`${s.clipId}@${s.t}`, s);
