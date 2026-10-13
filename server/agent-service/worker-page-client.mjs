@@ -107,7 +107,7 @@ export function createWorkerPageClient({ runClient, resources, origin, tls, serv
 
   async function initiatorPages(context, binding) {
     let state;
-    try { state = await presence(context); } catch { return null; }
+    try { state = await presence(context); } catch (error) { say('agent.page.presence', { code: typeof error?.code === 'string' ? error.code.slice(0, 80) : 'error' }); return null; }
     if (!state || !Array.isArray(state.members)) return null;
     const mine = state.members.find((member) => member?.accountId === binding.accountId && member.isInitiator === true && Array.isArray(member.pages));
     return (mine?.pages ?? []).filter((page) => typeof page?.pageId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(page.pageId) && typeof page.live === 'boolean')

@@ -115,6 +115,7 @@ function makeHarness(f) {
   async function run(actor, conversationId, steps, { attachments, waitSettled = true, timeoutMs = 240_000, selection = true } = {}) {
     const requestId = `wire-${++seq}`;
     const before = toolRounds(conversationId).length;
+    await actor.delegation(); await actor.ensurePage();
     const sent = await actor.agent(`/conversations/${conversationId}/messages`, { requestId, ...(selection ? { selectionSnapshot: { pageId: actor.pageId } } : {}),
       ...(attachments ? { attachments } : {}), prompt: script(steps) });
     if (sent.status === 403 && sent.body?.code === 'selection-page-unavailable' && !arguments[3]?.retried) {
@@ -144,41 +145,49 @@ function makeHarness(f) {
  * 执行请求的是产品自己的模块:accountPage.ts 的账号模式执行器,加本机的播放头实现(改的是编辑器自己的 store)。
  * 发起页的在场页面号用的是夹具里这位成员连文档服务时报的那一个(在场表那一头在 Node 里连着)。服务端一侧全是产品接线。
  */
-async function pageHarness({ agentUrl, conversation, pageId, ticket, holdAnswers = false }) {
+async function pageHarness({ agentUrl, conversation, pageId, holdAnswers = false }) {
   if (window.__wire?.stop) window.__wire.stop();
   const AP = await import('/src/ai/cloud/accountPage.ts');
   const PB = await import('/src/mcp/handlers/playback.ts');
   const UE = await import('/src/editor/userEditing.ts');
   const controller = new AbortController();
-  const state = (window.__wire = { agentUrl, conversation, ticket, pageId, attached: false, status: null, received: [], posted: [], answers: [], error: null, stop: () => controller.abort() });
+  const state = (window.__wire = { agentUrl, conversation, pageId, attached: false, status: null, opens: 0, received: [], posted: [], answers: [], error: null, stop: () => controller.abort() });
   const handler = AP.createAccountPageHandler({ pageId: () => pageId,
     exec: { seek: (a) => PB.playbackHandlers.seek(a), play: () => PB.playbackHandlers.play(), pause: () => PB.playbackHandlers.pause(), begin: UE.beginAgentTool, end: UE.endAgentTool } });
+  // 委托票据每次现取(登录续过以后旧票据作废);事件流断了隔一会儿重开,和产品的会话控制器一个做法
+  const auth = async () => ({ authorization: `Bearer ${await window.wireTicket()}` });
   void (async () => {
-    const res = await fetch(`${agentUrl}/v1/conversations/${conversation}/events?after=0&page=${encodeURIComponent(pageId)}`, { headers: { authorization: `Bearer ${ticket}` }, signal: controller.signal });
-    state.status = res.status; state.attached = res.ok;
-    const reader = res.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let at;
-      while ((at = buffer.indexOf('\n\n')) >= 0) {
-        const row = buffer.slice(0, at).split('\n').find((l) => l.startsWith('data: '));
-        buffer = buffer.slice(at + 2);
-        if (!row) continue;
-        let ev; try { ev = JSON.parse(row.slice(6)); } catch { continue; }
-        if (ev.type !== 'page.request') continue;
-        state.received.push({ id: ev.id, tool: ev.tool });
-        if (holdAnswers) continue;
-        const answer = await handler(ev);
-        if (!answer) continue;
-        state.answers.push(answer);
-        const r = await fetch(`${agentUrl}/v1/conversations/${conversation}/page-results`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${ticket}` }, body: JSON.stringify(answer) });
-        state.posted.push({ id: ev.id, status: r.status });
-      }
+    while (!controller.signal.aborted) {
+      try {
+        const res = await fetch(`${agentUrl}/v1/conversations/${conversation}/events?after=0&page=${encodeURIComponent(pageId)}`, { headers: await auth(), signal: controller.signal });
+        state.status = res.status; state.attached = res.ok; state.opens += 1;
+        if (!res.ok) { await new Promise((r) => setTimeout(r, 400)); continue; }
+        const reader = res.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let at;
+          while ((at = buffer.indexOf('\n\n')) >= 0) {
+            const row = buffer.slice(0, at).split('\n').find((l) => l.startsWith('data: '));
+            buffer = buffer.slice(at + 2);
+            if (!row) continue;
+            let ev; try { ev = JSON.parse(row.slice(6)); } catch { continue; }
+            if (ev.type !== 'page.request') continue;
+            state.received.push({ id: ev.id, tool: ev.tool });
+            if (holdAnswers) continue;
+            const answer = await handler(ev);
+            if (!answer) continue;
+            state.answers.push(answer);
+            const r = await fetch(`${agentUrl}/v1/conversations/${conversation}/page-results`, { method: 'POST', headers: { 'content-type': 'application/json', ...(await auth()) }, body: JSON.stringify(answer) });
+            state.posted.push({ id: ev.id, status: r.status });
+          }
+        }
+      } catch (e) { if (!controller.signal.aborted) state.error = String(e?.message ?? e); }
+      state.attached = false;
+      if (!controller.signal.aborted) await new Promise((r) => setTimeout(r, 300));
     }
-    state.attached = false;
-  })().catch((e) => { state.attached = false; state.error = String(e?.message ?? e); });
+  })();
   return { pageId };
 }
 
@@ -198,10 +207,8 @@ async function main() {
   const h = makeHarness(f);
   const actors = [];
   let failed = null;
-  // 长时间的探针里页面到文档服务的连接票据会到期(文档服务把旧连接关掉,在场表里这张页面就不在了):隔几秒看一眼,断了就凭同一个登录重连
-  const reconnecting = new Set();
-  const keepPages = setInterval(() => { for (const actor of actors) { if (reconnecting.has(actor)) continue; reconnecting.add(actor);
-    void actor.ensurePage().catch(() => {}).finally(() => reconnecting.delete(actor)); } }, 8_000);
+  // 长时间的探针里页面到文档服务的连接票据会到期:每条消息发出去之前先续票据、再让页面连接跟着重开(见 run 与夹具的 ensurePage)。
+  // 不在任务跑着的时候重连:重连要向文档服务重新要一次会话,那会让正在跑的那一轮被当成「发起人换了登录」收回。
   let pageTab = null, uiBrowser = null, desktop = null;
   try {
     const a = await f.connectActor(0); actors.push(a);
@@ -211,7 +218,9 @@ async function main() {
     const profileDir = (conversationId) => hostedBrowserDir(f.dataDir, { projectId: f.projectId, conversationId });
     const profileState = (conversationId) => { const dir = profileDir(conversationId); try { return fs.readdirSync(dir).sort(); } catch { return null; } };
     const browsersOf = (conversationId) => processesUnder(profileDir(conversationId));
-    const mediaOf = async (actor) => ((await actor.project()).project.media ?? []);
+    // 读文档服务里的项目(经这位成员的页面连接;连接刚好在重开就再来一次)
+    const mediaOf = async (actor) => { for (let i = 0; ; i++) { try { const reply = await actor.project(); if (reply?.project) return reply.project.media ?? []; if (i >= 6) throw new Error(`读项目没有读到:${brief(reply, 160)}`); }
+      catch (error) { if (i >= 6) throw error; } await sleep(500); await actor.ensurePage().catch(() => {}); } };
     let mediaId = null, clipId = null, shotsJobId = null;
 
     /* ===== 一、感知四族、后台作业、一键流程 ===== */
@@ -301,59 +310,10 @@ async function main() {
       }
     }
 
-    /* ===== 三、发起人页面的反向通道(真的无头浏览器里的真编辑器页面) ===== */
-    if (wants('page')) {
-      const conv = 'wire_page';
-      try {
-        const ui = await import('./cloud-agent-ui-lib.mjs');
-        desktop = await ui.startDesktop({ port: DEV_PORT, dir: path.join(f.dir, 'editor') });
-        uiBrowser = await ui.launchBrowser();
-        const ctx = await uiBrowser.createBrowserContext();
-        const page = await ctx.newPage();
-        await page.setViewport({ width: 1280, height: 720 });
-        page.on('dialog', (d) => void d.accept());
-        await ui.openDesktopEditor(page, desktop.origin);
-        await page.waitForFunction(() => !!window.__pcStore && window.__pcStore.getState().project.duration > 0, { timeout: 240_000, polling: 500 });
-        // 对话要先存在(事件流对不存在的对话回 404):先发一条不碰页面的消息
-        await h.run(a, conv, [{ say: '开个头' }]);
-        // 页面里接上:事件流挂到主服务(带发起页的在场页面号),收到的请求交给产品自己的执行器(accountPage.ts + 本机的播放头实现),答案原样交回
-        const info = await page.evaluate(pageHarness, { agentUrl: `http://127.0.0.1:${PORTS.agent}`, conversation: conv, pageId: a.pageId, ticket: await a.delegation() });
-        pageTab = { page, ui };
-        await until(async () => (await page.evaluate(() => window.__wire.attached)) === true, { what: '页面的事件流挂上主服务', timeoutMs: 20_000 });
-        const duration = await page.evaluate(() => window.__pcStore.getState().project.duration);
-        const target = Math.round(Math.min(5, duration / 2) * 100) / 100;
-        const before = await page.evaluate(() => window.__pcStore.getState().t);
-        const r = await h.run(a, conv, [{ tool: 'seek', input: { t: target } }, { tool: 'play', input: {} }, { tool: 'pause', input: {} }, { say: '动过播放头了' }]);
-        const after = await page.evaluate(() => ({ t: window.__pcStore.getState().t, playing: window.__pcStore.getState().playing, wire: window.__wire }));
-        check('反向通道:模型调 seek → 任务进程 → 主服务的登记表 → 发起人的真编辑器页面,播放头真的变了',
-          // seek 之后脚本还放了一小会儿又暂停,所以停下来的位置在目标之后不远处
-          r.of('seek')?.ok === true && after.t >= target && after.t < target + 5 && before !== after.t && after.wire.received.filter((x) => x.tool === 'seek').length === 1 && after.wire.posted.every((p) => p.status === 200),
-          brief({ info, target, before, after: after.t, seek: r.of('seek'), received: after.wire.received.map((x) => x.tool), posted: after.wire.posted.map((p) => p.status) }));
-        check('反向通道:play / pause 也到了发起页并交回', after.wire.received.some((x) => x.tool === 'play') && after.wire.received.some((x) => x.tool === 'pause') && r.of('pause')?.ok !== false && after.playing === false, brief({ play: r.of('play'), pause: r.of('pause'), playing: after.playing }));
-        try { await page.screenshot({ path: path.join(ROOT, 'docs', 'reports', 'assets', 'v18-wire', 'page-after-seek.png') }); } catch { /* 截图只是留证 */ }
-        // 页面晚到的回答:拿上一条已经结束的请求再交一次(换一个结果),主服务拒收
-        const late = await page.evaluate(async () => {
-          const last = window.__wire.answers[window.__wire.answers.length - 1];
-          const res = await fetch(`${window.__wire.agentUrl}/v1/conversations/${window.__wire.conversation}/page-results`, { method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${window.__wire.ticket}` }, body: JSON.stringify({ ...last, ok: true, result: { ok: true, forged: 1 } }) });
-          return { status: res.status, body: await res.json().catch(() => null) };
-        });
-        check('反向通道:这一轮结束之后页面再交(内容不同)被拒', [409, 410].includes(late.status), brief(late));
-        // 发起页关掉:再调就是「发起方不在线」
-        const received = after.wire.received.length;
-        await page.evaluate(() => window.__wire.stop());
-        await sleep(500);
-        const off = await h.run(a, conv, [{ tool: 'seek', input: { t: 0 } }, { say: '页面不在了' }]);
-        const still = await page.evaluate(() => ({ t: window.__pcStore.getState().t, received: window.__wire.received.length }));
-        check('反向通道:发起页的事件流断开后再调 seek,回「发起方不在线」,页面没有动', off.of('seek')?.initiatorOffline === true && still.received === received && Math.abs(still.t - after.t) < 0.01, brief({ seek: off.of('seek'), still }));
-      } catch (error) {
-        check('反向通道:真编辑器页面这一段', false, String(error?.stack ?? error).slice(0, 600));
-      }
-    }
-
     /* ===== 四、收场 ===== */
     const longWeb = (extra = []) => [{ tool: 'web_open', input: { url: `http://127.0.0.1:${SITE_PORT}/` } }, ...extra, { sleepMs: 60_000 }, { say: '不该说到这里' }];
-    const waitBrowser = async (conv) => until(() => (browsersOf(conv).length > 0 ? browsersOf(conv) : null), { what: `${conv} 的浏览器起来`, timeoutMs: 90_000, everyMs: 500 });
+    const waitBrowser = async (conv) => { try { return await until(() => (browsersOf(conv).length > 0 ? browsersOf(conv) : null), { what: `${conv} 的浏览器起来`, timeoutMs: 120_000, everyMs: 500 }); }
+      catch (error) { error.message += ` :: rounds=${brief(h.toolRounds(conv))} worker=${brief(h.lastWorkerLog(12))} sched=${brief(f.scheduler.describe())}`; throw error; } };
     const waitNoBrowser = async (conv, timeoutMs = 60_000) => { try { await until(() => browsersOf(conv).length === 0, { what: 'gone', timeoutMs, everyMs: 500 }); return true; } catch { return false; } };
     const epochNow = () => f.headRecord()?.head?.epoch;
 
@@ -472,11 +432,72 @@ async function main() {
       if (on.status !== 200) console.log(`# 重新打开云端 Agent 没成:${on.status}`);
     }
 
+    /* ===== 五、发起人页面的反向通道(真的无头浏览器里的真编辑器页面;放在收场各段之后,免得编辑器的 dev server 一直占着机器) ===== */
+    if (wants('page')) {
+      const conv = 'wire_page';
+      // 乙的页面连接到这里已经用完,先关掉。留着的话它的登录会在这一段里到期,而文档服务查在场表时会逐条核每条连接的登录:
+      // 有一条核不过(不是「没权限」而是「登录过期」)整次查询就回「核不了」,甲的页面请求也跟着按不在线办(见报告「顺带发现」)
+      if (b) { await b.close().catch(() => {}); actors.splice(actors.indexOf(b), 1); b = null; await sleep(500); }
+      try {
+        const ui = await import('./cloud-agent-ui-lib.mjs');
+        desktop = await ui.startDesktop({ port: DEV_PORT, dir: path.join(f.dir, 'editor') });
+        uiBrowser = await ui.launchBrowser();
+        const ctx = await uiBrowser.createBrowserContext();
+        const page = await ctx.newPage();
+        await page.setViewport({ width: 1280, height: 720 });
+        page.on('dialog', (d) => void d.accept());
+        await page.exposeFunction('wireTicket', () => a.delegation());
+        await ui.openDesktopEditor(page, desktop.origin);
+        await page.waitForFunction(() => !!window.__pcStore && window.__pcStore.getState().project.duration > 0, { timeout: 240_000, polling: 500 });
+        // 编辑器起来花了不少时间:先把登录续一次(续的时候旧的委托票据作废,页面拿着旧票据的事件流会被关掉),之后这一段里不会再续
+        await a.renew();
+        // 对话要先存在(事件流对不存在的对话回 404):先发一条不碰页面的消息
+        await h.run(a, conv, [{ say: '开个头' }]);
+        // 页面里接上:事件流挂到主服务(带发起页的在场页面号),收到的请求交给产品自己的执行器(accountPage.ts + 本机的播放头实现),答案原样交回
+        const info = await page.evaluate(pageHarness, { agentUrl: `http://127.0.0.1:${PORTS.agent}`, conversation: conv, pageId: a.pageId });
+        pageTab = { page, ui };
+        await until(async () => (await page.evaluate(() => window.__wire.attached)) === true, { what: '页面的事件流挂上主服务', timeoutMs: 20_000 });
+        const duration = await page.evaluate(() => window.__pcStore.getState().project.duration);
+        const target = Math.round(Math.min(5, duration / 2) * 100) / 100;
+        const before = await page.evaluate(() => window.__pcStore.getState().t);
+        const r = await h.run(a, conv, [{ tool: 'seek', input: { t: target } }, { tool: 'play', input: {} }, { tool: 'pause', input: {} }, { say: '动过播放头了' }]);
+        const after = await page.evaluate(() => ({ t: window.__pcStore.getState().t, playing: window.__pcStore.getState().playing, wire: window.__wire }));
+        check('反向通道:模型调 seek → 任务进程 → 主服务的登记表 → 发起人的真编辑器页面,播放头真的变了',
+          // seek 之后脚本还放了一会儿又暂停(放多久看机器忙不忙),所以停下来的位置在目标之后
+          r.of('seek')?.ok === true && after.t >= target && before !== after.t && after.wire.received.filter((x) => x.tool === 'seek').length === 1 && after.wire.posted.every((p) => p.status === 200),
+          brief({ info, target, before, after: after.t, seek: r.of('seek'), received: after.wire.received.map((x) => x.tool), posted: after.wire.posted.map((p) => p.status),
+            // 没到页面时把两头各自记的原因带出来
+            ...(after.wire.received.length ? {} : { opens: after.wire.opens, attached: after.wire.attached, worker: h.workerLogOf(epochNow()).filter((row) => String(row.event).startsWith('agent.page.')).map((row) => `${row.event}:${row.why ?? ''}:${row.code ?? ''}`),
+              master: f.log.filter((row) => String(row.event).startsWith('master.agent.page.')).slice(-6).map((row) => `${row.event}:${row.why ?? row.code}`) }) }, 900));
+        check('反向通道:play / pause 也到了发起页并交回', after.wire.received.some((x) => x.tool === 'play') && after.wire.received.some((x) => x.tool === 'pause') && r.of('pause')?.ok !== false && after.playing === false, brief({ play: r.of('play'), pause: r.of('pause'), playing: after.playing,
+          worker: h.workerLogOf(epochNow()).filter((row) => String(row.event).startsWith('agent.page.')).map((row) => `${row.event}:${row.why ?? ''}:${row.code ?? ''}`),
+          master: f.log.filter((row) => String(row.event).startsWith('master.agent.page.')).slice(-6).map((row) => `${row.event}:${row.why ?? ''}`) }, 900));
+        try { await page.screenshot({ path: path.join(ROOT, 'docs', 'reports', 'assets', 'v18-wire', 'page-after-seek.png') }); } catch { /* 截图只是留证 */ }
+        // 页面晚到的回答:拿上一条已经结束的请求再交一次(换一个结果),主服务拒收
+        const late = await page.evaluate(async () => {
+          const last = window.__wire.answers[window.__wire.answers.length - 1];
+          const res = await fetch(`${window.__wire.agentUrl}/v1/conversations/${window.__wire.conversation}/page-results`, { method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${await window.wireTicket()}` }, body: JSON.stringify({ ...last, ok: true, result: { ok: true, forged: 1 } }) });
+          return { status: res.status, body: await res.json().catch(() => null) };
+        });
+        check('反向通道:这一轮结束之后页面再交(内容不同)被拒', [409, 410].includes(late.status), brief(late));
+        // 发起页关掉:再调就是「发起方不在线」
+        const received = after.wire.received.length;
+        await page.evaluate(() => window.__wire.stop());
+        await sleep(500);
+        const off = await h.run(a, conv, [{ tool: 'seek', input: { t: 0 } }, { say: '页面不在了' }]);
+        const still = await page.evaluate(() => ({ t: window.__pcStore.getState().t, received: window.__wire.received.length }));
+        check('反向通道:发起页的事件流断开后再调 seek,回「发起方不在线」,页面没有动', off.of('seek')?.initiatorOffline === true && still.received === received && Math.abs(still.t - after.t) < 0.01, brief({ seek: off.of('seek'), still }));
+      } catch (error) {
+        check('反向通道:真编辑器页面这一段', false, String(error?.stack ?? error).slice(0, 600));
+      }
+    }
+
     if (wants('master-restart') && pageTab) {
       // 主服务关闭时有一条页面请求在等:任务进程那一头如实得到「发起方不在线」,登记表里那一行不是「在等」
       const conv = 'wire_page';
-      await fresh(a);
-      await pageTab.page.evaluate(pageHarness, { agentUrl: `http://127.0.0.1:${PORTS.agent}`, conversation: conv, pageId: a.pageId, ticket: await a.delegation(), holdAnswers: true });
+      await a.renew();
+      await pageTab.page.evaluate(pageHarness, { agentUrl: `http://127.0.0.1:${PORTS.agent}`, conversation: conv, pageId: a.pageId, holdAnswers: true });
       await until(async () => (await pageTab.page.evaluate(() => window.__wire.attached)) === true, { what: '页面重新挂上', timeoutMs: 20_000 });
       const before = h.toolRounds(conv).length;
       await h.run(a, conv, [{ tool: 'seek', input: { t: 2 } }, { say: '主服务没了' }], { waitSettled: false });
@@ -496,7 +517,6 @@ async function main() {
     console.log(`PROBE 探针自己出错 FAIL ${String(error?.stack ?? error).slice(0, 1500)}`);
     results.push({ name: '探针自己出错', state: 'FAIL' });
   } finally {
-    clearInterval(keepPages);
     if (pageTab || uiBrowser || desktop) {
       try {
         const ui = await import('./cloud-agent-ui-lib.mjs');
@@ -509,7 +529,9 @@ async function main() {
     const closed = await f.close().catch((error) => ({ errors: [error], alive: -1 }));
     await site.close().catch(() => {});
     check('收尾:夹具关干净、没有活着的任务子进程', closed.alive === 0 && (closed.errors?.length ?? 0) === 0, `alive=${closed.alive} errors=${(closed.errors ?? []).map((e) => e?.code ?? e?.message).join('|').slice(0, 300)}`);
-    const leftovers = processesUnder(f.dir);
+    // 刚被结束的进程树(编辑器 dev server 起的预渲染浏览器等)要几秒才从进程表里消失:等它,最多半分钟
+    let leftovers = processesUnder(f.dir);
+    for (let i = 0; i < 60 && leftovers.length; i++) { await sleep(500); leftovers = processesUnder(f.dir); }
     check('收尾:数据目录名下没有残留进程(浏览器、ffmpeg、python、node)', leftovers.length === 0, leftovers.join(' ').slice(0, 300));
     const windowsAfter = visibleWindows();
     const extra = windowsAfter.filter((w) => !windowsBefore.includes(w));

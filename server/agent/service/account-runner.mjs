@@ -159,7 +159,11 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
         presence: async () => {
           const reply = await bound.side.executor.request(grant.conversationId, { type: 'selection.query', projectId: grant.projectId, runGrantId: grant.runGrantId },
             (message) => message?.type === 'selection.state' || message?.type === 'error');
-          if (reply?.type !== 'selection.state' || !Array.isArray(reply.members)) throw Object.assign(new Error('selection-unavailable'), { code: 'selection-unavailable' });
+          if (reply?.type !== 'selection.state' || !Array.isArray(reply.members)) {
+            // 文档服务拒了或回的不是在场表:原因的代号留给日志(只有代号,没有正文)
+            const reason = typeof reply?.reason === 'string' && /^[A-Za-z0-9_.:-]{1,60}$/.test(reply.reason) ? reply.reason : 'reply';
+            throw Object.assign(new Error('selection-unavailable'), { code: `selection-${reason}` });
+          }
           return { members: reply.members };
         }, limits: toolOptions.pageLimits ?? {}, log }) : null;
       toolset = await createAccountToolset({ root, dataDir, context, resources, projectAssets, workspaces, ownerKey, egress,

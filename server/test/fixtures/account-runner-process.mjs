@@ -152,7 +152,8 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
         fs.mkdirSync(sharedDataDir, { recursive: true }); fs.mkdirSync(masterDataDir, { recursive: true });
         masterAssembly = await createAccountMasterAssembly({ dataDir: masterDataDir, sharedDataDir, runClient: agentRunClient,
           conversationClient: agentClient, readControl: agentReadControl, tls: pki.master, internalPort: P.masterEvents,
-          controllerFingerprint256: pki.rootctl.fingerprint256, log: (event, fields) => say(`master.${event}`, { code: fields?.code ?? null }) });
+          controllerFingerprint256: pki.rootctl.fingerprint256, log: (event, fields) => say(`master.${event}`, { code: fields?.code ?? null,
+            ...(String(event).startsWith('agent.page.') ? { why: fields?.why ?? null, tool: fields?.tool ?? null } : {}) }) });
         eventStore = masterAssembly.eventStore;
         await until(() => readControl.describe().connected, { timeoutMs: 10_000, what: '主身份的读取控制连接' });
         schedulerMaster = createMasterSchedulerClient({ origin: `https://127.0.0.1:${P.masterEvents}`, tls: pki.rootctl,
@@ -342,51 +343,64 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     await openPage(session.body.connectionTicket);
     const opened = await send({ type: 'project.open', projectId });
     const pageId = `runner-page-${index}`;
-    const announce = async () => { const reply = await send({ type: 'selection.set', projectId, pageId, revision: ++selectionRevision, selection: { clipIds: [] } });
-      if (reply.type !== 'selection.ok') throw Error('runner-fixture-selection'); };
+    // 版本号只增不减（重连以后也接着往上编）；刚重连时文档服务可能还没把旧连接那一条拿掉，不认就隔一会儿再报
+    const announce = async () => { for (let attempt = 0; ; attempt++) {
+      const reply = await send({ type: 'selection.set', projectId, pageId, revision: ++selectionRevision, selection: { clipIds: [] } });
+      if (reply.type === 'selection.ok') return;
+      if (attempt >= 5) throw Error('runner-fixture-selection');
+      await new Promise(resolve => setTimeout(resolve, 300)); } };
     await announce();
     // 委托票据有时限；机器很忙时一条测试会跑过它。快到期就凭同一个登录重新要一份（和页面的做法一样）
-    let renewals = 0;
+    // 登录续过一次以后，页面到文档服务的那条连接要跟着重开（旧连接凭的是上一份票据）
+    let renewals = 0, pageStale = false;
     const tickets = async () => {
       if (session.body.expiresAt - Date.now() < 30_000) {
-        let renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-renew-${++renewals}` });
-        if (renewed.status === 401) {
-          // 编辑器这一侧的短期凭证也到期了：凭网站登录再换一份
-          const again = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}-renew-${renewals}` });
-          if (again.status !== 200) throw Error('runner-fixture-editor-session-renew');
-          editor = again;
+        // 向文档服务重新要一份会话。它一时答不上（503：正在办别的事，例如刚收回一批任务）隔一会儿再要；
+        // 编辑器这一侧的短期凭证到期或被换掉了（401）就凭网站登录再换一份，然后再要。最多半分钟。
+        let renewed = null;
+        for (let attempt = 0; attempt < 60; attempt++) {
           renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-renew-${++renewals}` });
+          if (renewed.status === 200) break;
+          if (renewed.status === 401) {
+            const again = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}-renew-${renewals}` });
+            if (again.status !== 200) throw Error(`runner-fixture-editor-session-renew ${again.status}`);
+            editor = again; continue;
+          }
+          if (renewed.status !== 503) break;
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
-        if (renewed.status !== 200) throw Error('runner-fixture-doc-session-renew');
-        session = renewed;
+        if (renewed.status !== 200) throw Error(`runner-fixture-doc-session-renew ${renewed.status} ${String(renewed.body?.code ?? '').slice(0, 60)}`);
+        session = renewed; pageStale = true;
       }
       return session.body;
     };
+    let pageLock = Promise.resolve(), ensurePageNow = null;
     return { opened, pageId, send, session: session.body,
       project: async () => (await send({ type: 'project.open', projectId })),
       /** 项目管理操作（创建者才做得成）：例如关、开云端 Agent。期望的权限版本现取，回文档服务的原样回包 */
-      admin: async (body) => { const now = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-admin-session-${index}-${++renewals}` });
-        if (now.status !== 200) throw Error('runner-fixture-admin-session');
-        session = now;
-        return doc('admin', { projectId, expectedAccessRevision: now.body.accessRevision, ...body }); },
-      /** 这张页面到文档服务的连接是不是还连着；断了（连接票据到期）就凭同一个登录重开一条，照旧报同一个在场页面号 */
-      ensurePage: async () => {
-        if (ws.readyState === WebSocket.OPEN) { try { await announce(); return false; } catch { /* 连着但不认了：重开 */ } }
-        try { ws.terminate(); } catch { /* 已经关了 */ }
-        let renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-page-${++renewals}` });
-        if (renewed.status === 401) {
-          const again = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}-page-${renewals}` });
-          if (again.status !== 200) throw Error('runner-fixture-editor-session-renew');
-          editor = again;
-          renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-page-${++renewals}` });
+      admin: async (body) => { session = { ...session, body: { ...session.body, expiresAt: 0 } }; await tickets();
+        return doc('admin', { projectId, expectedAccessRevision: session.body.accessRevision, ...body }); },
+      /** 这张页面到文档服务的连接是不是还连着；断了（连接票据到期）或登录刚续过，就重开一条，照旧报同一个在场页面号。
+       * 同一时刻只做一次：两处同时来叫不会各开一条连接（同一个页面号挂着两条连接时文档服务不认）。 */
+      ensurePage: () => { const work = pageLock.then(ensurePageNow); pageLock = work.catch(() => {}); return work; },
+      __ensure: ensurePageNow = async () => {
+        const renewed = pageStale;
+        if (!renewed && ws.readyState === WebSocket.OPEN) { try { await announce(); return false; } catch { /* 连着但不认了：重开 */ } }
+        // 先把旧的那条关掉并等文档服务收到（它收到连接断开时会把这张页面从在场表里拿掉；后关的话会把新连接刚报上去的那一条也拿掉）
+        { const oldClosed = closed; try { ws.terminate(); } catch { /* 已经关了 */ } await oldClosed; await new Promise(resolve => setTimeout(resolve, 300)); }
+        for (let attempt = 0; ; attempt++) {
+          // 票据刚续过就直接用；不然（或者上一次没连上）先续一次（会处理编辑器凭证也到期的情形）
+          if (!renewed || attempt > 0) { session = { ...session, body: { ...session.body, expiresAt: 0 } }; await tickets(); }
+          pageStale = false;
+          try { await openPage(session.body.connectionTicket); await send({ type: 'project.open', projectId }); await announce(); return true; }
+          catch (error) { if (attempt >= 1) throw error; try { ws?.terminate(); } catch { /* 没连上 */ } }
         }
-        if (renewed.status !== 200) throw Error('runner-fixture-doc-session-renew');
-        session = renewed; selectionRevision = 0;
-        await openPage(session.body.connectionTicket);
-        await send({ type: 'project.open', projectId });
-        await announce();
-        return true;
       },
+      /** 现在就把登录续一次（新的委托票据、新的页面连接）：之后一段时间里不会再自己续。要把票据交给别处长时间用（探针里的浏览器页面）之前调 */
+      renew: async () => { session = { ...session, body: { ...session.body, expiresAt: 0 } }; await tickets();
+        const work = pageLock.then(ensurePageNow); pageLock = work.catch(() => {}); await work; return session.body.agentDelegationTicket; },
+      /** 页面到文档服务的连接此刻是不是开着 */
+      pageOpen: () => ws.readyState === WebSocket.OPEN,
       /** 此刻的委托票据（快到期会先续） */
       delegation: async () => (await tickets()).agentDelegationTicket,
       agent: async (route, body) => request('/agent/v1' + route, { method: body ? 'POST' : 'GET', body, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
