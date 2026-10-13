@@ -263,4 +263,13 @@
 
 ## 最终验证
 
-（跑完填）
+都在合 main（f952e969）之后跑的。代码的最后一次改动是 `4ca7b613` 里 `CollabSection.tsx` 的两行（本机协作已经关掉才失败时，表单停在「云端」上）；它在探针和全量测试开跑之后才改，下面逐项写明是在它之前还是之后跑的。
+
+- `npx tsc -b --force`：退出码 0，零错误（`4ca7b613` 上）。
+- 这一块自己的测试加相关守门（`4ca7b613` 上）：`npm test -- src/editor/sync/accountMove.test.mjs server/test/account-move.test.mjs server/test/recovery-vault-large.test.mjs server/test/move-guard.test.mjs server/test/windows-hide-silent-spawn.test.mjs server/test/c10a-online-build.test.mjs src/online/onlinePrune.test.mjs server/test/reopen-recovery.test.mjs`，退出码 0，97 条全过。
+- 探针 `node scripts/probes/account-move-probe.mjs`：退出码 0，66 项全过（那两行之前跑的；那两行走的是「关掉本机协作之后补传或进项目失败」这条路，探针没有走到）。
+- `npm test`（设了两个环境变量，那两行之前开跑）：**退出码 1**。6839 条：6798 通过、22 条失败、3 条取消、15 跳过、1 待办。跑的时候机器上另有别的会话在跑，我自己也同时跑了一次 `tsc`。失败落在 14 个文件里，没有一个是这一块加的或改的：`accept-018-rest-ssr-seam`、`account-master-production`、`c66-integ`、`card-lock-pipeline`、`cloud-agent-audio`、`cloud-agent-look`、`cloud-agent-page`、`cloud-agent-runs`、`cloud-agent-scope`、`cloud-agent-service`、`collect-plugin`、`docservice-http-transport`、`multi-agent-presence`、`reopen-hosting`。这一块自己的测试在全量里都过。
+  - 把这 14 个文件放在一条命令里重跑：136 条里 6 条失败、1 条取消，落在 `c66-integ`、`cloud-agent-page`、`cloud-agent-scope`、`cloud-agent-service`、`multi-agent-presence`、`reopen-hosting`。
+  - 这 6 个文件各自单跑：`reopen-hosting`、`cloud-agent-page`、`cloud-agent-scope`、`multi-agent-presence`、`cloud-agent-service` 一遍过；`c66-integ` 单跑第一遍仍失败（`C66-I2-01`，等小尺寸生成 60 秒超时），之后连跑两遍都是 6 条全过。
+  - 所以：14 个文件单独跑都能过，**没有拿到一遍零失败的全量**。`reopen-hosting` 用到我改过的 `vault.mjs`，它单跑 3 条全过，同样用到它的 `reopen-recovery.test.mjs` 在上面那 97 条里。
+- 收尾：没有新冒出来的可见窗口；28950～28999 没有监听；探针起的编辑器进程、无头浏览器、夹具都已按进程号收掉。
