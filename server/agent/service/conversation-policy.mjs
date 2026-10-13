@@ -50,11 +50,17 @@ export function createAccountConversationService({ conversationClient, usageDir 
     async info(identity) { await call('identity', identity); return { enabled: true, accountMode: true, executorMounted: false, running: [] }; },
     /** 本项目的用量(契约第 6.3 节:项目内的成员可查总量与各成员、各模型的量)。身份由文档服务按账号核对:
      * `identity` 对不上这个项目的成员(没登录、不是成员、被踢)就在这里抛错,不回任何数字;只回自己项目的流水。
-     * 没挂用量目录(没有执行器)仍然回 503,不编造零。成员只给显示名,不给账号编号。 */
+     * 没挂用量目录(没有执行器)、或者流水在但读不到,都回 503,不编造零。成员只给显示名,不给账号编号。 */
     async usage(identity, since = null) {
       await call('identity', identity);
       if (typeof usageDir !== 'string' || !usageDir) throw new AgentServiceError('usage-unavailable', 'usage authority is not mounted', 503);
-      const q = queryUsage(usageDir, { projectId: identity.projectId, since: Number.isFinite(since) && since > 0 ? since : null });
+      // 流水是任务进程(另一个系统用户)写的:读不到(权限没配对、盘出了问题)就明说查不了,不拿零冒充「没有用量」
+      let q;
+      try { q = queryUsage(usageDir, { projectId: identity.projectId, since: Number.isFinite(since) && since > 0 ? since : null, strict: true }); }
+      catch (error) {
+        if (error?.code !== 'usage-unreadable') throw error;
+        throw Object.assign(new AgentServiceError('usage-unavailable', 'usage ledger is unreadable', 503), { errno: error.errno });
+      }
       const p = q.projects[identity.projectId];
       const people = (members, pick) => Object.entries(members ?? {}).map(([userId, m]) => ({ username: m.username || '', ...pick(m) }));
       return {

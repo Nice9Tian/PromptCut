@@ -19,58 +19,52 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { createToolJobs } from './tool-jobs.mjs';
+import { reapOrphan, removeDirFully, REV_FILE } from '../../web/hosted/session.mjs';
 import { createShotsTools, readShotsConfig } from './perception/shots.mjs';
 import { createSubjectTools, readSubjectConfig } from './perception/subject.mjs';
 import { createSttTools } from './perception/stt.mjs';
 import { createTrackTools, TRACK_ERROR_TEXT } from './perception/track.mjs';
 import { createMotionTools } from './hosted-motion.mjs';
 import { createWorkflowTools } from './hosted-workflow.mjs';
-import { createHostedBrowserTools, hostedBrowserDir } from './hosted-browser.mjs';
+import { createHostedBrowserTools, hostedBrowserDir, hostedBrowserRoot } from './hosted-browser.mjs';
 import { createPageControlTools } from './page-bridge.mjs';
 import { createHandoffTools } from './hosted-handoff.mjs';
-import { createCollectBridge, collectPageTools } from './collect-bridge.mjs';
+import { createCollectBridge, COLLECT_BRIDGE_TEXT } from './collect-bridge.mjs';
 import { readCollectConfig } from './hosted-collect.mjs';
 import { CLOUD_PROVIDER_FAMILIES } from './cloud-tools.mjs';
+import { ACCOUNT_TOOL_SETTING_KEYS, validateAccountToolSettings } from '../../agent-service/account-tool-settings.mjs';
 
 export const ACCOUNT_TOOL_DEFAULTS = Object.freeze({
   /** 一轮说完话以后,最多等它名下还没做完的后台作业多久(各作业自己另有时限;这只是防卡死的兜底) */
   settleMs: 60 * 60_000,
-  /** 等后台作业时多久看一次账本 */
-  settlePollMs: 500,
+  /** 等后台作业时多久数一次账本(只读本进程里的账本,不问文档服务) */
+  settlePollMs: 2_000,
+  /** 等后台作业时多久向文档服务核一次「这一轮还算数」 */
+  settleAuthMs: 30_000,
+  /** 核的时候文档服务一时答不上:隔这么久再核,一次比一次久;答不上不算「不算数」,作业接着做 */
+  settleAuthBackoffMs: Object.freeze([2_000, 5_000, 15_000, 30_000]),
+  /** 开工时顺手清别的对话留着记号的浏览器数据,一次最多看几个 */
+  sweepMax: 64,
 });
 
-/** 设置文件里 `tools` 一节认的键(部署者写;都是这台节点上的路径与开关,不是模型给的) */
-export const ACCOUNT_TOOL_SETTING_KEYS = Object.freeze([
-  'PROMPTCUT_FFMPEG', 'PROMPTCUT_FFPROBE',
-  'PROMPTCUT_AGENT_SHOTS_PYTHON', 'PROMPTCUT_AGENT_SHOTS_MODELS', 'PROMPTCUT_AGENT_SHOTS_PYLIBS',
-  'PROMPTCUT_AGENT_SUBJECT_PYTHON', 'PROMPTCUT_AGENT_SUBJECT_MODELS', 'PROMPTCUT_AGENT_SUBJECT_PYLIBS',
-  'PROMPTCUT_AGENT_SUBJECT_REQUIREMENTS', 'PROMPTCUT_AGENT_SUBJECT_WHEELHOUSE',
-  'PROMPTCUT_AGENT_STT_PYTHON', 'PROMPTCUT_AGENT_STT_MODELS', 'PROMPTCUT_AGENT_STT_PYLIBS',
-  'PROMPTCUT_AGENT_STT_REQUIREMENTS', 'PROMPTCUT_AGENT_STT_INDEX_URL',
-  'PROMPTCUT_AGENT_TRACK_PYTHON', 'PROMPTCUT_AGENT_TRACK_MODELS', 'PROMPTCUT_AGENT_TRACK_PYLIBS',
-  'PROMPTCUT_AGENT_BROWSER', 'PROMPTCUT_AGENT_BROWSER_ARGS',
-  'PROMPTCUT_AGENT_COLLECT_PYTHON',
-  'PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES',
-]);
+/** 代下没开放时,登录那两个工具回给模型的话(委托那一包原来的两句会说「之后由他的电脑带着登录态下载」,这时不成立) */
+export const LOGIN_WITHOUT_DELEGATE_TEXT = Object.freeze({
+  already: '发起人的电脑上已经有这个站点没过期的登录态,不用再登录。注意:云端的 collect_download 这一版用不到他电脑上的登录态,仍按未登录的画质下载;要登录后的画质,得由他在自己电脑上的 PromptCut 里下载。',
+  checked: '发起人的电脑上已经登录,登录态只留在他的电脑上。注意:云端的 collect_download 这一版用不到它,仍按未登录的画质下载;要登录后的画质,得由他在自己电脑上的 PromptCut 里下载。',
+});
+
+/** 后台作业的账本打不开时,用到作业的工具回给模型的话 */
+export const TOOL_JOBS_BROKEN_TEXT = '这个对话的后台作业记录在云节点上打不开(文件坏了或读不了),语音识别、镜头识别、主体识别、运动追踪和一键流程这次用不了。不要重试,告诉用户这一步云端现在做不了,能换做法就换;别的工具照常用。';
+
+// 设置文件里 `tools` 一节认的键与形状检查:和 root 入口共用一张名单(`account-tool-settings.mjs`),这里只是转出
+export { ACCOUNT_TOOL_SETTING_KEYS, validateAccountToolSettings };
 
 const coded = (code, message = code, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const absoluteFile = (value) => typeof value === 'string' && path.isAbsolute(value) && fs.existsSync(value);
-
-/** 形状检查:只许上面列的键,值都是不带换行的字符串。回整理过的那一份;不合规矩抛错(入口据此拒绝启动) */
-export function validateAccountToolSettings(tools) {
-  if (tools === undefined || tools === null) return {};
-  if (typeof tools !== 'object' || Array.isArray(tools)) throw coded('account-worker-settings-tools');
-  const out = {};
-  for (const [key, value] of Object.entries(tools)) {
-    if (!ACCOUNT_TOOL_SETTING_KEYS.includes(key) || typeof value !== 'string' || !value || value.length > 2000 || /[\r\n\0]/.test(value))
-      throw coded('account-worker-settings-tools', `tools 里的 ${String(key).slice(0, 60)} 不认或值不对`);
-    out[key] = value;
-  }
-  return out;
-}
 
 /**
  * 把设置里的 `tools` 一节读成各工具包要的节点配置。写了但不对(路径不存在等)抛错:入口拒绝启动,不悄悄变成「没配」。
@@ -123,20 +117,75 @@ export function readAccountToolConfig(tools, { root }) {
   const optionalStages = stages ? stages.split(',').map((name) => name.trim()).filter(Boolean) : null;
   if (optionalStages && optionalStages.some((name) => !['transcribe', 'shots', 'subjects', 'compose', 'prerender'].includes(name)))
     bad('PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES 只能是 transcribe、shots、subjects、compose、prerender 里的几个,用逗号隔开');
-  return { shots, subject, stt, track, browser, collect, ...(optionalStages ? { workflow: { optionalStages } } : {}) };
+  const delegate = env.PROMPTCUT_AGENT_COLLECT_DELEGATE;
+  if (delegate !== undefined && !['0', '1'].includes(delegate)) bad('PROMPTCUT_AGENT_COLLECT_DELEGATE 只能是 0 或 1');
+  return { shots, subject, stt, track, browser, collect, collectDelegate: delegate === '1', ...(optionalStages ? { workflow: { optionalStages } } : {}) };
 }
 
 /** 这个对话放工具状态(账本、追踪结果、委托记录)的目录 */
 export const accountToolStateDir = (dataDir, projectId, conversationId) =>
   path.join(dataDir, 'tenants', projectId, 'conversations', conversationId, 'tools');
 
-/** 主服务(或别的进程)留给这个对话的「浏览器数据要清」记号。放在浏览器目录里,清的时候一起没 */
+/**
+ * 「这个对话的浏览器数据要清」的记号,放在这个对话的浏览器目录里。
+ *
+ * 谁留、谁清:主服务(对话转私有、对话或项目被删时)留记号;**清由任务用户一侧做**——生产上主服务和任务进程是两个系统用户、
+ * 同在一个组里,浏览器在用户数据目录下建的子目录只有属主进得去(0700),主服务删不动。主服务留完记号也顺手删一次,
+ * 删得动就删(同一个用户的机器、测试),删不动不算错:任务进程在这个对话下一次用浏览器之前照记号清,
+ * 别的对话的任务进程开工时也顺手清(`sweepMarkedBrowsers`)。
+ * 所以记号必须组内读得到(0660),读不到不许当成「没有记号」。
+ */
 export const BROWSER_PURGE_MARK = 'purge.json';
-export function readBrowserPurgeMark(dataDir, scope) {
+const PURGE_ALL_REASONS = Object.freeze(['conversation-deleted', 'project-deleted']);
+
+/** 留记号:先写临时文件再改名(读的一方不会读到半截),组内可读写 */
+export function writeBrowserPurgeMark(dir, reason, at = Date.now()) {
+  const file = path.join(dir, BROWSER_PURGE_MARK);
+  const tmp = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify({ reason, at }), { mode: 0o660 });
+  // 进程的 umask 比部署说明要求的(0007)严时,上面那一下会少给权限:这里补到组内可读写
+  try { fs.chmodSync(tmp, 0o660); } catch { /* 改不了:读的一方会照「读不到」报出来 */ }
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * 读一个浏览器目录里的记号。没有记号回 null;有记号回 `{ reason }`;记号在但读不到、读不懂回 `{ reason: 'private', unreadable: true, code }`
+ * ——照「要清」办(留着数据等于没清),并由调用方记日志。
+ */
+export function readBrowserPurgeMarkIn(dir) {
+  let text;
+  try { text = fs.readFileSync(path.join(dir, BROWSER_PURGE_MARK), 'utf8'); }
+  catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return null;
+    return { reason: 'private', unreadable: true, code: typeof error?.code === 'string' ? error.code : 'error' };
+  }
   try {
-    const mark = JSON.parse(fs.readFileSync(path.join(hostedBrowserDir(dataDir, scope), BROWSER_PURGE_MARK), 'utf8'));
-    return mark && typeof mark.reason === 'string' ? mark : null;
-  } catch { return null; }
+    const mark = JSON.parse(text);
+    if (mark && typeof mark.reason === 'string') return { reason: mark.reason, ...(Number.isFinite(mark.at) ? { at: mark.at } : {}) };
+  } catch { /* 下面按读不懂办 */ }
+  return { reason: 'private', unreadable: true, code: 'bad-mark' };
+}
+export const readBrowserPurgeMark = (dataDir, scope) => readBrowserPurgeMarkIn(hostedBrowserDir(dataDir, scope));
+
+/**
+ * 照记号清一个浏览器目录:除了记号和清单版本的计数,别的先删;全删掉了才撤记号(删到一半停下、或有删不动的,记号还在,下次接着清)。
+ * 中途发现记号没了(别的进程已经清完)就停手,不去删它之后新建的东西。`all`:对话或项目没了,连计数和目录本身一起删。
+ * 调用方先确认没有浏览器进程占着这个目录。回「是不是清干净了」。
+ */
+export async function removeMarkedBrowserData(dir, { all = false, timeoutMs = 8_000 } = {}) {
+  const mark = path.join(dir, BROWSER_PURGE_MARK);
+  let names;
+  try { names = fs.readdirSync(dir); } catch (error) { return error?.code === 'ENOENT'; }
+  let ok = true;
+  for (const name of names) {
+    if (name === BROWSER_PURGE_MARK || name === REV_FILE) continue;
+    if (!fs.existsSync(mark)) return true;
+    ok = await removeDirFully(path.join(dir, name), { timeoutMs }) && ok;
+  }
+  if (!ok) return false;
+  if (all) return removeDirFully(dir, { timeoutMs });
+  try { fs.rmSync(mark, { force: true }); } catch { return false; }
+  return !fs.existsSync(mark);
 }
 
 /**
@@ -344,23 +393,42 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     }
   };
 
-  const jobs = createToolJobs({ databasePath: path.join(stateDir, 'tool-jobs.db'), authorize, verifyFence, now });
-  closers.push(() => jobs.close());
+  /** 这次工具调用的事件上下文(落地的写入记在它上面,宿主据此发预渲染重试计划)。按调用各一份:并行的工具调用互不相扰 */
+  const trackScope = new AsyncLocalStorage();
+  const callTrack = () => trackScope.getStore() ?? {};
 
-  const stt = mount('stt', () => createSttTools({ resources: trackedResources, assets, jobs, workspace: workspaceFor, commitTranscript,
+  // 后台作业的账本。打不开(文件坏了、读不了)不拖垮这条任务:用到作业的那几族换成一个只会如实回「用不了」的替身,
+  // 网页操作、发起人页面那几族和不用工具的对话照常。
+  let jobs = null;
+  try {
+    jobs = createToolJobs({ databasePath: path.join(stateDir, 'tool-jobs.db'), authorize, verifyFence, now });
+    closers.push(() => jobs.close());
+  } catch (error) {
+    skipped.jobs = typeof error?.code === 'string' ? error.code : 'error';
+    say('agent.account-tools.ledger-broken', { code: skipped.jobs, detail: String(error?.message ?? '').slice(0, 160) });
+  }
+  /** 账本打不开时顶上去的替身:这一族的工具全认,一律回同一句明确的话;没有要收的东西 */
+  const brokenLedger = (family) => Object.freeze({
+    handles: new Set(CLOUD_PROVIDER_FAMILIES[family] ?? []),
+    call: async () => ({ ok: false, cloudUnavailable: true, code: 'TOOL_JOBS_UNAVAILABLE', error: TOOL_JOBS_BROKEN_TEXT }),
+    close: async () => ({ childrenClosed: true, streamsClosed: true, workPending: 0 }),
+  });
+  const withJobs = (family, build) => mount(family, jobs ? build : () => brokenLedger(family));
+
+  const stt = withJobs('stt', () => createSttTools({ resources: trackedResources, assets, jobs, workspace: workspaceFor, commitTranscript,
     runtime: config.stt ?? {}, limits: { engines: ['faster-whisper'], ...(limitsIn.stt ?? {}) }, now }));
-  const shots = mount('shots', () => createShotsTools({ config: config.shots ?? null, resources: trackedResources, assets, jobs, workspace: workspaceFor,
+  const shots = withJobs('shots', () => createShotsTools({ config: config.shots ?? null, resources: trackedResources, assets, jobs, workspace: workspaceFor,
     project, kernel, limits: limitsIn.shots ?? {}, now, log }));
-  const subject = mount('subject', () => createSubjectTools({ config: config.subject ?? null, resources: trackedResources, assets, jobs, workspace: workspaceFor,
+  const subject = withJobs('subject', () => createSubjectTools({ config: config.subject ?? null, resources: trackedResources, assets, jobs, workspace: workspaceFor,
     project, egress, kernel, limits: limitsIn.subject ?? {}, now, log }));
-  const track = mount('track', () => createTrackTools({ contextAccess: trackedResources.contextAccess, resources: trackedResources, jobs, assets, workspace: workspaceFor,
+  const track = withJobs('track', () => createTrackTools({ contextAccess: trackedResources.contextAccess, resources: trackedResources, jobs, assets, workspace: workspaceFor,
     databasePath: path.join(stateDir, 'track-results.db'), python: config.track ?? null,
     readProject: async (ctx) => { same(ctx); return (await snapshot()).project; },
     // 云端不替用户安装拓展:缺省不开(部署者要开得另给出网闸与锁定清单,这一期不接)
     install: { enabled: false, env: {} }, egress, limits: limitsIn.track ?? {}, now }));
-  mount('motion', () => (track ? createMotionTools({ contextAccess: trackedResources.contextAccess, tracks: track,
+  withJobs('motion', () => (track ? createMotionTools({ contextAccess: trackedResources.contextAccess, tracks: track,
     commit: ({ context: ctx, fenceRevision, tool, apply }) => { same(ctx); return commit(tool, apply, { fenceRevision, track: callTrack() }); } }) : null));
-  mount('workflow', () => createWorkflowTools({ resources: trackedResources, jobs, workspace: workspaceFor,
+  withJobs('workflow', () => createWorkflowTools({ resources: trackedResources, jobs, workspace: workspaceFor,
     providers: { stt: stt ?? null, shots: shots ?? null, subject: subject ?? null }, project,
     // 「发布预渲染任务」这一阶段保持注入的接缝,这一期不配(渲染那一带另有改动):阶段标「用不了」,不算失败
     prerender: null, kernel: { getCard: kernel.getCard }, errorTexts: { 'track.': TRACK_ERROR_TEXT },
@@ -372,7 +440,8 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     mount('page', () => createPageControlTools({ bridge: pageBridge, now,
       onPlayhead: (ctx, t) => { if (ctx?.runGrantId === context.runGrantId) { try { onPlayhead?.(t); } catch { /* 宿主的事 */ } } } }));
     mount('handoff', () => (web ? createHandoffTools({ bridge: pageBridge, browser: web, now }) : null));
-    // 采集登录与代下:委托逻辑在这个进程里(它要用这条任务的「项目素材」与写权限核对),经薄客户端问主服务的反向通道
+    // 采集登录与代下:委托逻辑在这个进程里(它要用这条任务的「项目素材」与写权限核对),经薄客户端问主服务的反向通道。
+    // 登录那两个工具照常接(登录窗口开在发起人自己的桌面上,他看得见);代下缺省不交出去,见下面的 `collectDelegate`
     try {
       collectBridge = createCollectBridge({ bridge: pageBridge, databasePath: path.join(stateDir, 'collect-delegations.sqlite'),
         assets: { verifyRef: (ctx, ref) => projectAssets.verifyRef(ctx, ref) }, authorize,
@@ -382,13 +451,11 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
   } else {
     for (const family of ['page', 'handoff', 'collect']) skipped[family] = 'no-internal-channel';
   }
+  const delegateDownload = config.collectDelegate === true;
   const names = Object.freeze(new Set(byTool.keys()));
 
   /* ---------- 调用 ---------- */
 
-  /** 这次工具调用的事件上下文(落地的写入记在它上面,宿主据此发补渲计划);同一时刻只有一个工具调用在进锁前后用它 */
-  let currentTrack = null;
-  const callTrack = () => currentTrack ?? {};
   /** 宿主的工具调用号 → 提供者要的请求号(8～64 个安全字符);没有调用号就现起一个(那次调用不幂等) */
   const requestIdOf = (callId) => {
     const raw = typeof callId === 'string' ? callId.replace(/[^A-Za-z0-9_-]/g, '') : '';
@@ -397,14 +464,53 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
   };
   const USAGE_VENDOR = { web: 'chromium', stt: 'python', shots: 'ffmpeg', subject: 'python', track: 'python', motion: 'builtin', workflow: 'builtin' };
 
-  /** 浏览器数据要不要先清(主服务在对话转私有、Agent 被关时留的记号;也可能是上一个进程没清完) */
+  const browserDir = hostedBrowserDir(dataDir, scope);
+  const closeMs = Number.isFinite(limitsIn.web?.closeMs) ? limitsIn.web.closeMs : 8_000;
+  /**
+   * 这个对话的浏览器数据要不要先清(主服务在对话转私有、对话或项目被删时留的记号;也可能是上一个进程没清完)。
+   * 这个进程是任务用户:这里是一定删得动的那一方。先把这个对话的浏览器关掉、确认没有残留进程占着,再照记号清。
+   */
   async function purgeBrowserIfMarked() {
-    if (!web) return;
-    const mark = readBrowserPurgeMark(dataDir, scope);
-    if (!mark) return;
-    const reason = ['conversation-deleted', 'project-deleted'].includes(mark.reason) ? mark.reason : 'private';
-    const out = await web.closeConversation(scope, { reason, removeProfile: true });
-    say('agent.account-tools.browser-purged', { reason: mark.reason, removed: out.profileRemoved === true });
+    const mark = readBrowserPurgeMarkIn(browserDir);
+    if (!mark) return false;
+    if (mark.unreadable) say('agent.account-tools.purge-mark-unreadable', { code: mark.code });
+    const all = PURGE_ALL_REASONS.includes(mark.reason);
+    // 关不成(这个进程里的浏览器已经整体收掉了等)不挡后面:下面按进程号再确认一遍没有残留的占着
+    if (web) { try { await web.closeConversation(scope, { reason: all ? mark.reason : 'private', removeProfile: false }); } catch { /* 见上 */ } }
+    const reaped = await reapOrphan(browserDir, { timeoutMs: closeMs });
+    const removed = reaped.stillHeld === true ? false : await removeMarkedBrowserData(browserDir, { all, timeoutMs: closeMs });
+    say('agent.account-tools.browser-purged', { reason: mark.reason, removed, ...(reaped.stillHeld === true ? { held: true } : {}) });
+    return removed;
+  }
+
+  /**
+   * 别的对话留着记号的浏览器数据:主服务删不动的那些(见 `BROWSER_PURGE_MARK` 的说明),由碰巧在跑的任务进程顺手清掉,
+   * 这样对话或项目被删以后,即使那个对话再也没有任务,数据也不会一直留在盘上。正被别的任务进程用着的不动(它自己会清)。
+   */
+  async function sweepMarkedBrowsers() {
+    let seen = 0, removed = 0, unreadable = 0;
+    let projects = [];
+    try { projects = fs.readdirSync(hostedBrowserRoot(dataDir), { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return { seen, removed }; }
+    outer: for (const project of projects) {
+      let conversations = [];
+      try { conversations = fs.readdirSync(path.join(hostedBrowserRoot(dataDir), project.name), { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { continue; }
+      for (const conversation of conversations) {
+        if (fencing || closing) break outer;
+        const dir = path.join(hostedBrowserRoot(dataDir), project.name, conversation.name);
+        if (dir === browserDir) continue;
+        const mark = readBrowserPurgeMarkIn(dir);
+        if (!mark) continue;
+        if (++seen > limits.sweepMax) break outer;
+        if (mark.unreadable) unreadable += 1;
+        try {
+          const reaped = await reapOrphan(dir, { timeoutMs: closeMs, respectLiveOwner: true });
+          if (reaped.liveOwner === true || reaped.stillHeld === true) continue;
+          if (await removeMarkedBrowserData(dir, { all: PURGE_ALL_REASONS.includes(mark.reason), timeoutMs: closeMs })) removed += 1;
+        } catch { /* 这一个下次再清 */ }
+      }
+    }
+    if (seen) say('agent.account-tools.browser-swept', { marked: Math.min(seen, limits.sweepMax), removed, ...(unreadable ? { unreadable } : {}) });
+    return { seen, removed };
   }
 
   async function call(tool, args, { callId, track: trackCtx = null } = {}) {
@@ -417,15 +523,13 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     let ok = true;
     try {
       if (family === 'web') await purgeBrowserIfMarked();
-      currentTrack = trackCtx;
-      const out = family === 'web' || family === 'motion'
-        ? await provider.call(tool, args ?? {}, context)
-        : await provider.call(tool, args ?? {}, context, { requestId });
+      const out = await trackScope.run(trackCtx ?? {}, () => (family === 'web' || family === 'motion'
+        ? provider.call(tool, args ?? {}, context)
+        : provider.call(tool, args ?? {}, context, { requestId })));
       if (out && typeof out === 'object' && out.ok === false) ok = false;
       return out;
     } catch (error) { ok = false; throw error; }
     finally {
-      currentTrack = null;
       // 用量:照外部服务调用的那一种记法,每次调用一行(不占模型额度);操作发起人页面的那一族不产生托管方的开销,不记
       if (USAGE_VENDOR[family]) {
         try {
@@ -441,7 +545,11 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
 
   let fencing = null;
   let closing = null;
-  /** 文档服务的控制(种类)→ 浏览器数据的去留。停止、发起人被踢或退出登录:留(登录态还在);转私有、Agent 被关、删除:删 */
+  let sweeping = null;
+  /**
+   * 文档服务的控制(种类)→ 浏览器数据的去留,照网页操作那一包原来的规矩(`hosted-browser.mjs` 文件头的表):
+   * 停止、Agent 被关、发起人被踢或退出登录:浏览器进程关掉,数据留着;对话转私有:删(留清单版本的计数);项目被删:全删。
+   */
   const browserReason = (kind) => (kind === 'private' ? 'private' : kind === 'delete' ? 'project-deleted' : kind === 'agent-disabled' ? 'agent-off' : 'stop');
 
   /**
@@ -456,11 +564,14 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
       const step = async (name, fn) => { try { results[name] = await fn(); } catch (error) { results[name] = { error: typeof error?.code === 'string' ? error.code : 'error' }; } };
       await step('pageRequests', async () => pageBridge?.cancelRun?.(scope) ?? 0);
       await step('delegations', async () => collectBridge?.cancelRun(scope) ?? 0);
-      await step('jobs', async () => { if (lastFence === null) return 'no-fence-seen'; await jobs.cancelForFence(context, lastFence); return 'cancelled'; });
+      await step('jobs', async () => { if (!jobs) return 'ledger-broken'; if (lastFence === null) return 'no-fence-seen'; await jobs.cancelForFence(context, lastFence); return 'cancelled'; });
       await step('browser', async () => {
         if (!web) return 'unmounted';
         const reason = browserReason(kind);
-        const out = await web.closeConversation(scope, { reason, removeProfile: reason !== 'stop' });
+        const remove = reason === 'private' || reason === 'project-deleted';
+        const out = await web.closeConversation(scope, { reason, removeProfile: remove });
+        // 该删而没删干净(进程一时没退完):留记号,这个对话的下一条任务、或别的任务进程开工时接着清
+        if (remove && out.profileRemoved !== true && fs.existsSync(browserDir)) { try { writeBrowserPurgeMark(browserDir, reason, now()); } catch { /* 目录刚好没了 */ } }
         return { wasOpen: out.wasOpen, exited: out.exited, profileRemoved: out.profileRemoved };
       });
       say('agent.account-tools.fenced', { kind, ...Object.fromEntries(Object.entries(results).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v).slice(0, 120) : v])) });
@@ -471,17 +582,54 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
 
   /**
    * 这一轮说完话了:等它名下还没做完的后台作业(转写、镜头、主体、追踪、一键流程)做完再往下收。
-   * `signal` 触发(这一轮被叫停)、到了兜底时限、或授权已经不在时不再等。
+   *
+   * 每隔几秒数一次本进程里的账本(不问文档服务)。另外每隔半分钟向文档服务核一次「这一轮还算数」:
+   * 文档服务**明确说不算数了**才停止等待(随后的收尾会把还在跑的作业中断);它一时答不上(断线、重启、超时)不算拒绝,
+   * 隔一会儿再核、一次比一次久,作业接着做。`signal` 触发(这一轮被叫停)或到了兜底时限(一小时)也不再等。
    */
   async function settle(signal = null) {
+    if (!jobs) return { waited: true, pending: 0 };
     const deadline = now() + limits.settleMs;
+    const backoff = Array.isArray(limits.settleAuthBackoffMs) && limits.settleAuthBackoffMs.length ? limits.settleAuthBackoffMs : [limits.settleAuthMs];
+    let nextAuthAt = now() + limits.settleAuthMs;
+    let authFailures = 0;
+    let ledgerFailures = 0;
+    const nap = (ms) => new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); signal?.removeEventListener?.('abort', done); resolve(); };
+      const timer = setTimeout(done, ms); timer.unref?.();
+      signal?.addEventListener?.('abort', done, { once: true });
+    });
     for (;;) {
       if (signal?.aborted || fencing || closing) return { waited: false, reason: 'cancelled' };
-      let open;
-      try { open = await jobs.active(context); } catch { return { waited: false, reason: 'unauthorized' }; }
-      if (!open.length) return { waited: true, pending: 0 };
-      if (now() > deadline) { say('agent.account-tools.settle-timeout', { pending: open.length }); return { waited: false, reason: 'timeout', pending: open.length }; }
-      await new Promise((resolve) => { const timer = setTimeout(resolve, limits.settlePollMs); timer.unref?.(); });
+      let pending;
+      try { pending = await jobs.pending(context); ledgerFailures = 0; }
+      catch (error) {
+        // 账本一时读不了:再试几次;一直读不了就不等了(如实记下),免得这条任务永远收不了尾
+        if (++ledgerFailures >= 5) { say('agent.account-tools.settle-ledger', { code: typeof error?.code === 'string' ? error.code : 'error' }); return { waited: false, reason: 'ledger-unavailable' }; }
+        await nap(limits.settlePollMs);
+        continue;
+      }
+      if (!pending) return { waited: true, pending: 0 };
+      if (now() > deadline) { say('agent.account-tools.settle-timeout', { pending }); return { waited: false, reason: 'timeout', pending }; }
+      if (now() >= nextAuthAt) {
+        try {
+          const auth = await authorize(context, 'read');
+          if (auth?.allowed !== true || !['active', 'retained'].includes(auth.grantState)) { say('agent.account-tools.settle-revoked', { pending }); return { waited: false, reason: 'unauthorized', pending }; }
+          authFailures = 0;
+          nextAuthAt = now() + limits.settleAuthMs;
+        } catch (error) {
+          // 明确的拒绝(这一轮已经被收回、不认这个上下文)才停;别的都当暂时性故障
+          if (['run-access-denied', 'tool-context-untrusted', 'tool-context-invalid'].includes(error?.code) || [401, 403].includes(error?.status)) {
+            say('agent.account-tools.settle-revoked', { pending, code: error?.code ?? null });
+            return { waited: false, reason: 'unauthorized', pending };
+          }
+          const wait = backoff[Math.min(authFailures, backoff.length - 1)];
+          authFailures += 1;
+          nextAuthAt = now() + wait;
+          say('agent.account-tools.settle-auth-retry', { pending, failures: authFailures, code: typeof error?.code === 'string' ? error.code : 'error', retryInMs: wait });
+        }
+      }
+      await nap(limits.settlePollMs);
     }
   }
 
@@ -496,11 +644,10 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
         if (provider) await shut(family, () => provider.close(reason));
       }
       if (collectBridge) await shut('collect', () => collectBridge.close(reason));
-      if (web) {
-        await shut('web', () => web.close(reason));
-        // 上一步把浏览器关了;主服务留了「要清」的记号(这一轮跑着的时候对话被转成了私有)就在这里清掉
-        try { if (readBrowserPurgeMark(dataDir, scope)) await web.closeConversation(scope, { reason: 'private', removeProfile: true }); } catch { /* 下一轮开头再清 */ }
-      }
+      if (web) await shut('web', () => web.close(reason));
+      // 浏览器已经关了;主服务留了「要清」的记号(这一轮跑着的时候对话被转成了私有)就在这里清掉。清不成记号还在,下一轮开头再清
+      try { await purgeBrowserIfMarked(); } catch (error) { say('agent.account-tools.browser-purge-failed', { code: typeof error?.code === 'string' ? error.code : 'error' }); }
+      if (sweeping) await sweeping.catch(() => {});
       for (const family of ['handoff', 'page']) { const provider = providers.get(family); if (provider) await shut(family, () => provider.close(reason)); }
       if (pageBridge) await shut('pageBridge', async () => pageBridge.close(reason));
       for (const closer of closers.reverse()) { try { await closer(); } catch { /* 账本关不上:下面的回执照实 */ } }
@@ -514,7 +661,10 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
   // 上一个进程没来得及清的浏览器数据(主服务留了记号):开工前先清
   try { await purgeBrowserIfMarked(); } catch (error) { say('agent.account-tools.browser-purge-failed', { code: typeof error?.code === 'string' ? error.code : 'error' }); }
   if (web) void web.ready?.catch?.(() => {});
-  say('agent.account-tools.mounted', { families: [...providers.keys(), ...(collectBridge ? ['collect'] : [])].join(','), skipped: Object.keys(skipped).join(',') });
+  // 别的对话留着记号、主服务删不动的浏览器数据:不挡这条任务,在后面慢慢清;收尾时等它清完
+  sweeping = sweepMarkedBrowsers().catch(() => ({ seen: 0, removed: 0 }));
+  say('agent.account-tools.mounted', { families: [...providers.keys(), ...(collectBridge ? ['collect'] : [])].join(','), skipped: Object.keys(skipped).join(','),
+    ledger: Boolean(jobs), delegateDownload: delegateDownload && Boolean(collectBridge) });
 
   return Object.freeze({
     names,
@@ -522,11 +672,21 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     familyOf: (tool) => byTool.get(tool) ?? null,
     call,
     /** 交给 `hosted-collect.mjs` 的委托口子(这一轮的);没建出来是 null */
-    collectDelegate: () => (collectBridge && !fencing && !closing ? collectBridge.forRun(context) : null),
+    collectDelegate: () => {
+      if (!collectBridge || fencing || closing) return null;
+      const full = collectBridge.forRun(context);
+      // 代下缺省不开:只交登录那两样,`collect_download` 照旧只在云端按未登录的身份下
+      if (delegateDownload) return full;
+      const honest = (out) => (out?.hint === COLLECT_BRIDGE_TEXT.loginAlready ? { ...out, hint: LOGIN_WITHOUT_DELEGATE_TEXT.already }
+        : out?.hint === COLLECT_BRIDGE_TEXT.loginChecked ? { ...out, hint: LOGIN_WITHOUT_DELEGATE_TEXT.checked } : out);
+      return Object.freeze({ login: async (...a) => honest(await full.login(...a)), loginCheck: async (...a) => honest(await full.loginCheck(...a)) });
+    },
+    /** 这个进程里代下开没开(部署配置显式打开、并且采集那一族建出来了) */
+    delegateDownload: () => delegateDownload && Boolean(collectBridge),
     /** 运行资源登记器的回执要的「这条任务名下的浏览器进程树是不是确实没了」 */
     treeClosed: async (ctx) => (web ? web.treeClosed(ctx) : true),
     fence, settle, close,
-    describe: () => ({ mounted: [...new Set(byTool.values())], skipped: { ...skipped }, tools: names.size, lastFence,
+    describe: () => ({ mounted: [...new Set(byTool.values())], skipped: { ...skipped }, tools: names.size, lastFence, ledger: Boolean(jobs), delegateDownload: delegateDownload && Boolean(collectBridge),
       web: web ? { configured: web.describe().configured, open: web.describe().open } : null }),
   });
 }

@@ -16,6 +16,7 @@ import path from 'node:path';
 import { digestOf } from '../account/ledger.mjs';
 import { agentScopeRef } from '../account/agent-run-scope-doc.mjs';
 import { validateAgentScopeExpected, validateAgentScopeReservation } from '../hosted/agent-run-scope-schema.mjs';
+import { validateAccountToolSettings } from './account-tool-settings.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
 const exact = (value, required, optional = []) => value && typeof value === 'object' && !Array.isArray(value) &&
@@ -54,9 +55,13 @@ export function validateRootConfiguration(config) {
       (config.pollMs !== undefined && (!Number.isInteger(config.pollMs) || config.pollMs < 50 || config.pollMs > 60_000)) ||
       !Array.isArray(config.slots) || !config.slots.length || config.slots.length > 64) fail('root-configuration');
   const w = config.worker;
+  // `tools` 一节和任务进程用同一张名单核(`account-tool-settings.mjs`):键写错了在这里就拒绝并指出是哪个键,
+  // 不然 root 起得来、每一代任务进程都拒绝启动,整台节点的云端任务都起不来
+  if (w && typeof w === 'object' && w.tools !== undefined) {
+    try { validateAccountToolSettings(w.tools === null ? [] : w.tools); }
+    catch (error) { throw Object.assign(new Error('root-configuration-worker-tools'), { status: 503, code: 'root-configuration-worker-tools', key: error?.key ?? null, detail: String(error?.message ?? '').slice(0, 200) }); }
+  }
   if (!exact(w, ['doc', 'dataDir', 'stateRoot'], ['modelConfigDir', 'look', 'runAssets', 'tools']) || !absolute(w.dataDir) || !absolute(w.stateRoot) ||
-      (w.tools !== undefined && (!w.tools || typeof w.tools !== 'object' || Array.isArray(w.tools) ||
-        Object.entries(w.tools).some(([key, value]) => !/^PROMPTCUT_[A-Z0-9_]{1,64}$/.test(key) || typeof value !== 'string' || !value || /[\r\n\0]/.test(value)))) ||
       w.dataDir === w.stateRoot || (w.modelConfigDir !== undefined && !absolute(w.modelConfigDir)) ||
       !exact(w.doc, ['origin', 'fingerprint256', 'keyFile', 'certFile', 'caFile']) || !loopback(w.doc.origin) || !pin(w.doc.fingerprint256) ||
       ['keyFile', 'certFile', 'caFile'].some(key => !absolute(w.doc[key]))) fail('root-configuration-worker');

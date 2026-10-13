@@ -1515,7 +1515,7 @@ export function createAgentInstance(env) {
       } catch {
         systemPrompt = 'System prompt missing.';
       }
-      systemPrompt += `\n\n${cloudSystemNote({ look: !!prerenderPost, provided: accountProvided })}`;
+      systemPrompt += `\n\n${cloudSystemNote({ look: !!prerenderPost, provided: accountProvided, collectDelegate: accountTools?.delegateDownload?.() === true })}`;
       if (typeof o.script === 'string' && o.script.trim()) {
         systemPrompt += `\n\n## 本片剧本(用户写的,每一步都要照它来)\n\n${o.script.trim()}\n\n` +
           '这是这条片子的主线。做任何编排、配字幕、配动效的决定时都要对照它;' +

@@ -86,7 +86,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       (toolOptions.pageBridge != null && (typeof runClient?.workerPageEnvelopeFor !== 'function' || typeof toolOptions.pageBridge.origin !== 'string' ||
         !toolOptions.pageBridge.tls?.key || typeof toolOptions.pageBridge.serverFingerprint256 !== 'string'))))
     fail(503, 'account-runner-tools-configuration');
-  const usage = createUsageLog({ dir: path.join(dataDir, 'usage'), now, log });
+  // 用量流水由主服务读(成员查用量):主服务是同组的另一个用户,流水要组内可读
+  const usage = createUsageLog({ dir: path.join(dataDir, 'usage'), now, log, shared: true });
   const gate = createGate({ limitsFile: limitsFileOf(dataDir), usage, now, log });
   const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log });
   const egress = createEgressGate({ ...egressOptions, log });

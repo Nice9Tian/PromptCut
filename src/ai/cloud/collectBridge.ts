@@ -24,6 +24,9 @@
  *      本机接口回的别的字段(`path`、`userId`、`message`、`stderrTail`……)一样都不带;没做成只回代号;
  *      文件名只取最后一段;登录态文件的路径只在本机的两个接口之间传(查到的那一份交给本机的下载),不出这台电脑;
  *   4. 本机下载好的文件不由这张页面登记进项目:登记由云端核实之后经文档服务做,所有成员(包括本人)照常同步看到。
+ *   5. **云端不来问了就停**:云端在办一次委托时每隔几秒来问一次进度(`collect_delegate_poll`)。超过 `quietMs`(缺省 30 秒)没人来问
+ *      (云端那条任务被停止、任务进程被关掉、连接断了——这些情况下「取消」是发不过来的),这张页面自己把本机的这次下载停掉,
+ *      还没交给上传队列的不再交,已经交了的请上传一侧撤回(上传一侧给了 `cancel` 才撤得回)。之后云端再来问,得到的是「没做成」。
  */
 import type { CloudEvent } from "./types.ts";
 
@@ -80,6 +83,8 @@ export interface CollectBridgeUpload {
   push(items: { hash: string; name: string }[]): Promise<boolean>;
   /** 这份字节在这个项目的素材服务里是不是已经齐了 */
   stored(hash: string): Promise<boolean>;
+  /** 把已经交给上传队列、还没传完的撤回(云端不再等这次委托时调)。上传一侧撤不回就不给 */
+  cancel?(hashes: string[]): Promise<void>;
 }
 
 export interface CollectPageAnswer {
@@ -111,6 +116,8 @@ type Delegation = {
   id: string; jobId: string; projectId: string; localJobId: string | null;
   phase: "running" | "done" | "error";
   stage: string; percent: number; code: string | null; receipt: CollectReceipt | null; cancelled: boolean;
+  /** 云端最近一次来问这次委托(开始、问进度)的时刻 */
+  lastAsk: number;
 };
 
 export interface CollectBridgePageDeps {
@@ -125,6 +132,8 @@ export interface CollectBridgePageDeps {
   downloadMs?: number;
   /** 下载好之后等上传多久 */
   uploadMs?: number;
+  /** 云端多久不来问这次委托就算它不要了:停掉本机的下载与上传 */
+  quietMs?: number;
   remember?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -160,6 +169,8 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
   const pollMs = deps.pollMs ?? 1000;
   const downloadMs = deps.downloadMs ?? 15 * 60_000;
   const uploadMs = deps.uploadMs ?? 10 * 60_000;
+  // 云端每 2 秒问一次、页面连不上时最多等 20 秒就退回匿名下载:30 秒没人问,云端那一头已经不等这次委托了
+  const quietMs = deps.quietMs ?? 30_000;
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
   const done = new Map<string, { nonce: string; answer: Promise<CollectPageAnswer> }>();
@@ -168,11 +179,14 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
   /** 本机下载 → 上传 → 回执。任何一步不成只记代号 */
   async function track(d: Delegation, local: CollectBridgeLocal, upload: CollectBridgeUpload): Promise<void> {
     const fail = (code: string) => { if (d.phase === "running") { d.phase = "error"; d.code = code; } };
+    /** 云端不来问了(见文件头第 5 条) */
+    const abandoned = () => now() - d.lastAsk > quietMs;
     try {
       const started = now();
       let job: LocalCollectJob | null = null;
       for (;;) {
         if (d.cancelled) return fail("cancelled");
+        if (abandoned()) { await local.cancel(d.localJobId as string).catch(() => {}); return fail("abandoned"); }
         job = await local.job(d.localJobId as string);
         if (!job) return fail("local-download-failed");
         if (job.status !== "running") break;
@@ -201,15 +215,20 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
           ...(typeof it.vcodec === "string" && /^[A-Za-z0-9_.-]{1,32}$/.test(it.vcodec) ? { vcodec: it.vcodec } : {}),
         });
       }
+      // 下载的这段时间里云端已经不等了:下好的文件留在本机内容库里,不往项目的素材服务传
+      if (d.cancelled) return fail("cancelled");
+      if (abandoned()) return fail("abandoned");
       // 项目换了(用户切到了别的项目):不往别的项目里传
       if (upload.projectId() !== d.projectId) return fail("upload-failed");
       d.stage = "upload";
       d.percent = 92;
       if (!(await upload.push(items.map((it) => ({ hash: it.assetRef.hash, name: it.name }))))) return fail("upload-failed");
       const uploadStarted = now();
+      const withdraw = async () => { try { await upload.cancel?.(items.map((it) => it.assetRef.hash)); } catch { /* 撤不回:上传一侧自己传完,云端不会登记它 */ } };
       for (const it of items) {
         for (;;) {
-          if (d.cancelled) return fail("cancelled");
+          if (d.cancelled) { await withdraw(); return fail("cancelled"); }
+          if (abandoned()) { await withdraw(); return fail("abandoned"); }
           if (upload.projectId() !== d.projectId) return fail("upload-failed");
           if (await upload.stored(it.assetRef.hash)) break;
           if (now() - uploadStarted > uploadMs) return fail("timeout");
@@ -238,7 +257,7 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
     const quality = typeof raw.quality === "number" && QUALITIES.includes(raw.quality) ? raw.quality : null;
     if (!delegationId || !jobId || !url || !site || !quality || typeof raw.projectId !== "string") return { ok: false, code: "bad-args" };
     const existing = delegations.get(delegationId);
-    if (existing) return { ok: true, result: { accepted: true } };
+    if (existing) { existing.lastAsk = now(); return { ok: true, result: { accepted: true } }; }
     // 云端说的项目必须就是这张页面此刻开着的账号项目:别的项目的委托不接
     if (upload.projectId() !== raw.projectId) return { ok: true, result: { accepted: false, code: "wrong-project" } };
     if ([...delegations.values()].some((d) => d.phase === "running")) return { ok: true, result: { accepted: false, code: "local-busy" } };
@@ -263,7 +282,7 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
     } catch {
       return { ok: true, result: { accepted: false, code: "local-not-ready" } };
     }
-    const d: Delegation = { id: delegationId, jobId, projectId: raw.projectId, localJobId, phase: "running", stage: "starting", percent: 0, code: null, receipt: null, cancelled: false };
+    const d: Delegation = { id: delegationId, jobId, projectId: raw.projectId, localJobId, phase: "running", stage: "starting", percent: 0, code: null, receipt: null, cancelled: false, lastAsk: now() };
     delegations.set(delegationId, d);
     if (delegations.size > 50) delegations.delete(delegations.keys().next().value as string);
     void track(d, local, upload);
@@ -273,6 +292,7 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
   function poll(raw: Record<string, unknown>): { ok: boolean; result?: unknown; code?: string } {
     const d = typeof raw.delegationId === "string" ? delegations.get(raw.delegationId) : undefined;
     if (!d) return { ok: true, result: { state: "unknown" } };
+    d.lastAsk = now();
     if (d.phase === "done" && d.receipt) return { ok: true, result: { state: "done", receipt: d.receipt } };
     if (d.phase === "error") return { ok: true, result: { state: "error", code: d.code ?? "failed" } };
     return { ok: true, result: { state: "running", stage: d.stage, percent: d.percent } };

@@ -260,9 +260,10 @@ const LOOK_NOTE_OFF = '- **这台云节点上看不了画面。** `see_frames`�
  * 拼进系统提示词的一段:只写与本机真实的差别(契约第 9.7 节)。
  * 不给 `provided`(旧托管档)时逐字是原来的那一段;给了(账号模式的任务进程)就按这个进程里真的接上了哪些族来写:
  * 接上的不再列进「这一版还没有」,并补上它在云端与本机不一样的地方。
- * @param {{ look?: boolean, provided?: Iterable<string> | null }} [o] `look`:这台节点配没配看画面的口子
+ * @param {{ look?: boolean, provided?: Iterable<string> | null, collectDelegate?: boolean }} [o] `look`:这台节点配没配看画面的口子;
+ *   `collectDelegate`:代下(请发起人的电脑带登录态替云端下载)在这个进程里开没开——缺省不开,部署配置显式打开才是 true
  */
-export function cloudSystemNote({ look = false, provided = null } = {}) {
+export function cloudSystemNote({ look = false, provided = null, collectDelegate = false } = {}) {
   const has = providedTools(provided);
   const family = (name) => (CLOUD_PROVIDER_FAMILIES[name] ?? []).every((tool) => has.has(tool));
   const lines = [];
@@ -270,7 +271,7 @@ export function cloudSystemNote({ look = false, provided = null } = {}) {
     if (line === LOOK_LINE) lines.push(look ? LOOK_NOTE_ON : LOOK_NOTE_OFF);
     else if (line === INITIATOR_LINE) lines.push(initiatorNote({ handoff: family('handoff'), login: family('collect') }));
     else if (line === PENDING_LINE) lines.push(...pendingNotes({ stt: family('stt'), shots: family('shots'), subject: family('subject'), track: family('track') && family('motion'), workflow: family('workflow'), web: family('web'), handoff: family('handoff') }));
-    else if (line === COLLECT_LINE) lines.push(family('collect') ? COLLECT_NOTE_DELEGATE : COLLECT_NOTE_ANONYMOUS);
+    else if (line === COLLECT_LINE) lines.push(!family('collect') ? COLLECT_NOTE_ANONYMOUS : collectDelegate === true ? COLLECT_NOTE_DELEGATE : COLLECT_NOTE_ANONYMOUS + COLLECT_NOTE_LOGIN_ONLY);
     else lines.push(line);
   }
   return lines.join('\n');
@@ -303,10 +304,10 @@ function pendingNotes(on) {
   const perception = [on.stt ? '语音识别' : null, on.shots ? '镜头识别' : null, on.subject ? '主体识别' : null, on.track ? '运动追踪' : null].filter(Boolean);
   if (perception.length) {
     lines.push('- **' + perception.join('、') + '照常用,在云节点上跑。** 它们是后台作业:发起后用各自的状态工具' + (on.workflow ? '或 `background_job_status` ' : '') + '查进度,两次之间用 `wait` 等。'
-      + '这一轮说完话时还没做完的作业会接着做完,做完之前这个对话的下一条消息排在后面。'
+      + '这一轮说完话时还没做完的作业会接着做完,做完之前这个对话的下一条消息排在后面;最多接着等一小时,到时还没做完的作业会被中断(之后查状态看到的是「被中断」,要重新发起)。'
       + '这台节点没装对应的运行环境或模型时,工具会明说「这台节点用不了」:不要重试,换做法(例如用 `see_frames` 看画面自己判断)或告诉用户;不要凭空编结果。'
       + '云端不替用户安装拓展(`*_install` 只有托管方开放时才会装,没开放会明说)。'
-      + (on.track ? '追踪没装模型时走模板匹配兜底;追踪结果按对话保存,素材换过以后会标过期,要 `track_points({ force: true })` 重追。' : ''));
+      + (on.track ? '运动追踪要这台节点配了追踪的运行环境才能用(没配时 `track_status` 和 `track_points` 会明说);配了运行环境但没装模型时走模板匹配兜底。追踪结果按对话保存,素材换过以后会标过期,要 `track_points({ force: true })` 重追。' : ''));
   }
   if (on.workflow) {
     lines.push('- **一键流程(`auto_workflow`)在云端分五个阶段:** 语音转写 → 镜头识别 → 主体识别 → 生成字幕与卡片 → 发布预渲染任务。'
@@ -325,6 +326,8 @@ function pendingNotes(on) {
 }
 
 const COLLECT_NOTE_ANONYMOUS = '- **网页采集:** `collect_*` 经托管方的出口出网,不带任何站点的登录态(按未登录的画质);这台节点没装采集工具时 `collect_status` 会明说,云端不能由你来装(`collect_install` 不装东西)。下载物直接进这个项目的素材库。';
+/** 登录那两个工具接上了、代下没开时,接在「不带登录态」那一条后面 */
+const COLLECT_NOTE_LOGIN_ONLY = '`collect_login`、`collect_login_check` 只是请发起人在他自己的电脑上登录、查登录(要他在线、用的是电脑上的 PromptCut);云端的下载这一版用不到他电脑上的登录态,不要为了提高云端下载的画质去让他登录。';
 const COLLECT_NOTE_DELEGATE = '- **网页采集:** `collect_*` 经托管方的出口出网。有登录支持的站点(目前是哔哩哔哩)的链接,在发起人在线、用的是电脑上的 PromptCut、并且他的电脑上已经登录时,`collect_download` 由他的电脑用本机的登录态代下并直接传进这个项目的素材库(登录信息不离开他的电脑);否则在云端按未登录的画质下载,作业的 `notes` 里会写明原因。'
   + '`collect_probe`、`collect_search` 仍只在云端按未登录的身份做,看到的清晰度可能比代下拿得到的低。这台节点没装采集工具时 `collect_status` 会明说,云端不能由你来装(`collect_install` 不装东西)。下载物直接进这个项目的素材库。';
 

@@ -112,6 +112,10 @@ export function createCloudSession(deps: CloudSessionDeps) {
   const currentPage = (): string | undefined => (typeof pageSource === "function" ? pageSource() ?? undefined : pageSource);
   /** 现在这条事件流是带着哪个页面号开的 */
   let streamPage: string | undefined;
+  /** 事件流此刻是不是开着(在读) */
+  let streamOpen = false;
+  /** `syncPage` 为了换页面号自己掐了这条流:不是断线,循环照「接着读」办(不清正文、不显示重连、不退避) */
+  let repaging = false;
   /** 执行过的请求 id:同一条请求重复到达只执行一次 */
   const answered = new Set<string>();
 
@@ -235,15 +239,19 @@ export function createCloudSession(deps: CloudSessionDeps) {
   async function loop(myGen: number, id: string) {
     loopAlive = true;
     let attempt = 0;
+    let resuming = false;
     try {
       while (!closed && myGen === gen) {
         const ctl = new AbortController();
         ac = ctl;
         const streamReadEpoch = readEpoch;
-        setConnection(attempt === 0 ? "connecting" : "reconnecting");
+        // 换页面号的那一次重开(见 `syncPage`):界面上还是「连着」,不闪「连接中 / 重连中」
+        if (!resuming) setConnection(attempt === 0 ? "connecting" : "reconnecting");
+        resuming = false;
         let sawNone = false;
         try {
           streamPage = currentPage();
+          streamOpen = true;
           for await (const ev of api.events(id, lastSeq, ctl.signal, streamPage)) {
             if (myGen !== gen || streamReadEpoch !== readEpoch) return;
             attempt = 0;
@@ -261,7 +269,10 @@ export function createCloudSession(deps: CloudSessionDeps) {
             handle(ev);
           }
         } catch (err) {
+          streamOpen = false;
           if (myGen !== gen) return;
+          // 自己为了换页面号掐的:不是故障,不走下面的判断
+          if (repaging && ctl.signal.aborted) err = null;
           const status = err instanceof CloudError ? err.status : Number((err as { status?: unknown })?.status ?? 0);
           const accountAuthFailure = Boolean(deps.accountMode &&
             ((status === 401 || status === 403) || (err instanceof CloudError && FATAL.has(err.code))));
@@ -287,7 +298,14 @@ export function createCloudSession(deps: CloudSessionDeps) {
             return;
           }
         }
+        streamOpen = false;
         if (myGen !== gen || closed) return;
+        if (repaging) {
+          repaging = false;
+          // 换页面号:正文、已读到的序号、排队状态都留着,马上带着新页面号从刚才读到的位置接着读(服务端照常重新核这一次读取)。
+          // 重开要是没成,下一圈就是普通的断线,照下面的规矩清正文、显示重连。
+          if (ctl.signal.aborted) { resuming = true; continue; }
+        }
         // 账号对话的 EOF/断连不保留旧正文，也不续用旧 seq；下一次连接会重新取票并从头重放。
         if (deps.accountMode) clearAccountReadState();
         if (sawNone) {
@@ -313,6 +331,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
 
   function stopLoop() {
     gen++;
+    repaging = false; streamOpen = false;
     ac?.abort();
     ac = null;
     wake?.();
@@ -404,11 +423,14 @@ export function createCloudSession(deps: CloudSessionDeps) {
 
     /**
      * 账号模式:这张页面的在场页面号变了(刚连上、或重连了文档服务)——现在这条流是带着旧页面号开的,云端的请求发不到这里。
-     * 掐掉它,让循环带着新的页面号重开。页面号没变、没有流在开着时什么都不做。
+     * 要做的只是让服务端知道新的页面号:掐掉这条流、马上带着新页面号从刚才读到的位置接着读。**正文不清、不显示重连提示、不退避**
+     * (这不是断线)。页面号没变、没有流在开着(正在退避等重连:下一次开流本来就会带新页面号)时什么都不做。
      */
     syncPage() {
-      if (!deps.accountMode || closed || !loopAlive || !pageSource) return;
-      if (currentPage() !== streamPage) ac?.abort();
+      if (!deps.accountMode || closed || !loopAlive || !pageSource || !streamOpen) return;
+      if (currentPage() === streamPage) return;
+      repaging = true;
+      ac?.abort();
     },
 
     /** 马上重连(网络恢复、页面回到前台时用) */

@@ -406,6 +406,16 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
         .all(...contextColumns(context)).map((row) => ({ jobId: row.job_id, kind: row.kind, state: row.state }))));
     },
 
+    /**
+     * 这一轮名下还没结束的作业有几个。只给宿主自己数(一轮收尾前等后台作业用):不出这个进程、不带作业的任何内容,
+     * 所以这里不向文档服务问授权;这一轮还算不算数由宿主按它自己的节奏另核(`account-tools.mjs` 的 `settle`)。
+     */
+    pending(contextValue) {
+      const context = canonicalContext(contextValue);
+      return enqueue(() => Number(db.prepare(
+        `SELECT COUNT(*) AS n FROM tool_jobs WHERE ${contextWhere()} AND state IN ('queued','running')`).get(...contextColumns(context))?.n ?? 0));
+    },
+
     cancelForFence(contextValue, fenceRevisionValue) {
       const context = canonicalContext(contextValue);
       const fenceRevision = checkedFenceRevision(fenceRevisionValue);
