@@ -13,7 +13,7 @@ import { projectModule, stateBlobName } from '../docservice/modules/project.mjs'
 import { createDocService } from '../docservice/service.mjs';
 import { wsClient } from './fake-ws-kit.mjs';
 
-export async function runOperationFixture({ port = 5730, request, afterGate, waitPastAccessExpiry = false, failpoint = () => {}, accountFailpoint = () => {} } = {}) {
+export async function runOperationFixture({ port = 0, request, afterGate, waitPastAccessExpiry = false, failpoint = () => {}, accountFailpoint = () => {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-run-operation-'));
   const providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT;
   if (!providerRoot || !process.env.PROMPTCUT_PASSWORD_ORDER_MODULE) throw new Error('actual providers required');
@@ -85,5 +85,5 @@ export async function runOperationFixture({ port = 5730, request, afterGate, wai
       await Promise.allSettled(controls); await wiring.idle(); authority.close(); history.close(); f.close(); accountStore.close();
       fs.rmSync(dir, { recursive: true });
     } };
-  await service.listen(port, '127.0.0.1'); return result;
+  port = (await service.listen(port, '127.0.0.1')).port; return result;
 }

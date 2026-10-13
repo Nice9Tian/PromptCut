@@ -224,7 +224,7 @@ window.__identify = async (jobs) => {
       const durationFrames = Math.max(1, Math.round(job.lenSec * job.fps));
       return { ...job, durationFrames,
         identityKey: kit.cardCostKey(node, kit.sourceVersionOf(def), job.fps, durationFrames),
-        canvasHeavy: !!kit.reviewedCard(job.cardId)?.canvasHeavy,
+        canvasHeavy: ['canvas2d', 'webgl'].includes(kit.reviewedCard(job.cardId)?.surface),
         mode: kit.cardFrameMode(def, def.defaults) };
     } catch (err) { return { ...job, error: String(err && err.message || err) }; }
   });

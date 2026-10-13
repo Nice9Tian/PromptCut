@@ -197,15 +197,23 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
     const { conversation, creatorReadOnly } = read(principal, projectId, conversationId);
     return { ...publicConversation(conversation, creatorReadOnly), messages: conversation.messages.filter(m => m.arrivalSeq > after).map(publicMessage) };
   }
-  async function send({ principalRef, projectId, conversationId, requestId, content, selectionInput = null }) {
+  async function send({ principalRef, projectId, conversationId, requestId, content, selectionInput = null, attachments: attached }) {
     if (!idOK(conversationId) || !requestOK(requestId) || typeof content !== 'string' || !content.trim() ||
       Buffer.byteLength(content) > 256 * 1024) fail(400, 'invalid-message');
+    // 这条消息带的附件：只是几个引用（名字、对话工作目录里的地址、大小），字节在 Agent 节点上、不经文档服务。
+    // 文档服务核不了文件在不在，只核形状并原样记下；Agent 主服务在发之前已经核过这些文件确实在这个对话的工作目录里。
+    const attachments = attached === undefined ? [] : attached;
+    if (!Array.isArray(attachments) || attachments.length > 32 || attachments.some(a => !a || typeof a !== 'object' || Array.isArray(a) ||
+        Object.keys(a).sort().join(',') !== 'name,size,url' || typeof a.name !== 'string' || !a.name || a.name.length > 200 || /[\\/\0\r\n]/.test(a.name) ||
+        a.url !== `work:attachments/${a.name}` || !Number.isSafeInteger(a.size) || a.size < 1) ||
+        new Set(attachments.map(a => a.url)).size !== attachments.length) fail(400, 'invalid-message');
     const principal = await verify(principalRef, projectId, 'write');
     if (typeof checkConsent !== 'function') fail(503, 'consent-unavailable');
     const consent = await checkConsent({ accountId: principal.accountId, principal });
     if (consent?.accountId !== principal.accountId || consent.accepted !== true || consent.noticeVersion !== 1) fail(403, 'consent-required');
     const key = requestKey('send', { projectId, conversationId, accountId: principal.accountId, requestId });
-    const digest = digestOf({ projectId, conversationId, requestId, content });
+    // 不带附件时摘要和原来一样（丢了回应后重发的旧请求照旧对得上）
+    const digest = digestOf({ projectId, conversationId, requestId, content, ...(attachments.length ? { attachments } : {}) });
     const prior = ledger.read().conversationRequestsV2?.[key];
     if (prior) {
       if (prior.digest !== digest) fail(409, 'request-mismatch');
@@ -246,7 +254,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
       const message = { messageId, requestId, arrivalSeq, senderAccountId: principal.accountId,
         senderNameAtSend: principal.accountName ?? principal.username ?? principal.accountId, loginId: principal.loginId,
         credentialId: principal.credentialId, loginGeneration: principal.loginGeneration, createdAt: now(),
-        content, contentDigest: digestOf(content), selectionSnapshot: { ...snapshot, messageId }, attachments: [], queueState: 'queued' };
+        content, contentDigest: digestOf(content), selectionSnapshot: { ...snapshot, messageId }, attachments: structuredClone(attachments), queueState: 'queued' };
       conversation.messages.push(message); conversation.queueRevision = arrivalSeq; conversation.updatedAt = now();
       const result = { messageId, runId: null, seq: arrivalSeq, queuePosition: queued(conversation).findIndex(row => row.messageId === messageId) + 1,
         queueRevision: conversation.queueRevision, conversation: publicConversation(conversation) };

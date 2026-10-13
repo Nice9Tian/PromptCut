@@ -548,6 +548,28 @@ export function projectModule({
     return { ops: out, used };
   }
 
+  /**
+   * `stale` 回包里的 `expectRev`、`since`（期间别人的提交摘要）、`sinceComplete`。
+   * 非账号路径与账号路径共用，模型读到的「你读到的是 rev X，现在是 rev Y，期间谁改了什么」都靠它。
+   */
+  function staleDetail(st, expectRev) {
+    const later = st.history.filter((h) => h.rev > expectRev && h.rev <= st.projectRev);
+    const covered = expectRev >= st.projectRev || (later.length > 0 && later[0].rev === expectRev + 1)
+      || (later.length === 0 && st.projectRev === expectRev);
+    const shown = later.slice(-PROJECT_LIMITS.SINCE_MAX);
+    return {
+      expectRev,
+      since: shown.map((h) => {
+        const s = { rev: h.rev, actor: h.actor, paths: h.paths, entities: h.entities, at: h.at };
+        if (h.opId !== undefined) s.opId = h.opId;
+        if (h.undoOf !== undefined) s.undoOf = h.undoOf;
+        if (h.announce) s.announce = true;
+        return s;
+      }),
+      sinceComplete: covered && shown.length === later.length,
+    };
+  }
+
   function submit(ctx, connId, msg, reqId) {
     const projectId = checkProjectId(msg.projectId);
     const opId = checkToken(msg.opId, 'opId');
@@ -581,21 +603,7 @@ export function projectModule({
     }
 
     if (expectRev !== undefined && expectRev !== st.projectRev) {
-      const later = st.history.filter((h) => h.rev > expectRev && h.rev <= st.projectRev);
-      const covered = expectRev >= st.projectRev || (later.length > 0 && later[0].rev === expectRev + 1)
-        || (later.length === 0 && st.projectRev === expectRev);
-      const shown = later.slice(-PROJECT_LIMITS.SINCE_MAX);
-      return reject('stale', {
-        expectRev,
-        since: shown.map((h) => {
-          const s = { rev: h.rev, actor: h.actor, paths: h.paths, entities: h.entities, at: h.at };
-          if (h.opId !== undefined) s.opId = h.opId;
-          if (h.undoOf !== undefined) s.undoOf = h.undoOf;
-          if (h.announce) s.announce = true;
-          return s;
-        }),
-        sinceComplete: covered && shown.length === later.length,
-      });
+      return reject('stale', staleDetail(st, expectRev));
     }
 
     let ops;
@@ -1039,7 +1047,11 @@ export function projectModule({
           const reason = error instanceof BadMessage ? 'bad-message' : error.code ?? 'operation-unavailable';
           if (msg.type === 'project.op') {
             stats.rejected++;
-            return reply(ctx, connId, { type: 'project.op.rejected', projectId: msg.projectId, opId: msg.opId, reason }, reqId);
+            // 过期（stale）是在授权通过、进了有序提交之后才判的：和非账号路径一样带上当前版本和期间的改动，模型据此重读。
+            // 其它拒绝理由（没授权、顺序服务不可用……）不带版本号，不向没通过授权的连接透露项目的进度。
+            const stale = reason === 'stale' && Number.isSafeInteger(msg.expectRev) && msg.expectRev >= 0 && PROJECT_ID_RE.test(String(msg.projectId))
+              ? (() => { const st = stateOf(msg.projectId); return { currentRev: st.projectRev, ...staleDetail(st, msg.expectRev) }; })() : {};
+            return reply(ctx, connId, { type: 'project.op.rejected', projectId: msg.projectId, opId: msg.opId, reason, ...stale }, reqId);
           }
           return reply(ctx, connId, { type: 'error', reason }, reqId);
         });

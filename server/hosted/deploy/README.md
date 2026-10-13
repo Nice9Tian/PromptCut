@@ -232,3 +232,84 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 - 只停 Agent 服务：`stop-agent`（托管服务与渲染服务不动）；在线页面的「云端」一项会报连不上。要让页面不出这一项，去掉托管组合的 `PROMPTCUT_AGENT_PUBLIC_URL` 并重启它，或撤掉 `agent` 的公钥（`keygen-agent --retire <kid>`）。
 - 换服务密钥：`keygen-agent`（新旧公钥并存）→ `pm2 restart promptcut-agent` → `keygen-agent --retire <旧 kid>`。
 - 四个子命令都收 `--dry-run`：只打印要交给远端的脚本，不连任何远端。
+
+## Agent 服务（账号版：一条任务一个进程）
+
+账号模式（项目放云端、成员身份由账号服务核对）下，云端 Agent 的每条任务在一个单独的进程里跑：任务做完或被停，由 root 把这个进程关掉、文档服务读到关闭记录后结清，同一个对话的下一条才开始。上一节（PM2、服务私钥连文档服务）是旧模式；账号模式不用它的 `deploy-agent`，下面几样目前**都是手工装**（没有部署脚本）。只在 Linux、有 systemd 和 cgroup v2 的节点上能用。
+
+节点上多出三样东西：
+
+| 是什么 | 入口 | 以谁跑 | 做什么 |
+|---|---|---|---|
+| Agent 主服务 | `server/agent-service/main.mjs`（`PROMPTCUT_ACCOUNT_V2=1`） | 一个非 root 的用户 | 只接待人、只做控制：发消息与停止转给文档服务、事件库、任务进程交事件的内部口、附件。**自己不跑任务** |
+| root 入口 | `server/agent-service/account-root-main.mjs` | root | 槽调度：开任务进程、凭文档服务签的终态关任务进程、写关闭记录 |
+| 任务槽 | 每个槽一个 systemd 单元，入口 `server/agent-service/account-task-worker-cli.mjs --control https` | 另一个非 root 的用户（任务用户） | 一次装一代任务进程，一代只跑一条任务。槽的个数就是全节点同时跑的任务数 |
+
+文档服务那一侧要开对应的模式：`PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE` 指向一份配置（`doc-agent-run-scopes.example.json`）。
+
+模板与工具（都在本目录或 `server/agent-service/`）：`systemd-promptcut-agent-task.service`（任务槽单元，用 `account-task-unit.mjs` 填）、`systemd-promptcut-agent-master.service`（主服务）、`systemd-promptcut-agent-root.service`、`agent-root.example.json`（root 入口的配置）、`doc-agent-run-scopes.example.json`、`agent-account.env.example`（主服务的环境变量）。
+
+### 身份与证书
+
+三张叶证书，同一个私有 CA 签发（就是账号、文档、素材服务用的那个 CA）；SAN 带 `IP:127.0.0.1`，用途 `serverAuth,clientAuth`：
+
+| 证书 | 谁持有私钥 | 用在哪 |
+|---|---|---|
+| 主身份（master） | 主服务的用户 | 连文档服务内部口（只做控制）；主服务内部口的服务端证书 |
+| 任务证书（task）与身份证书（identity） | 任务用户（各槽共用） | task：任务进程连文档服务内部口、往主服务交事件。identity：任务进程本机指令口的服务端证书 |
+| root 证书（controller） | root | 连各任务进程的指令口；连主服务的内部口去问排队与强制终态 |
+
+服务登记表（托管数据目录的 `secrets/services.json`）里 `agent` 名下要有两把钥匙：跑任务的那一把（已有的 `PROMPTCUT_DOC_AGENT_SERVICE_KID`）和主身份的一把（新加，只登记公钥：`node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --secrets <一个新目录> --service agent`，记下它打印的钥匙号）。文档服务内部口的服务清单里 `agent` 的证书指纹是**任务证书**的；主身份证书的指纹写在任务槽配置里。
+
+另要一把文档服务给分配与终态签名的 Ed25519 私钥（`openssl genpkey -algorithm ed25519 -out agent-run-scope-signing.pem`，文档服务的用户可读、0600）。它的公钥（SPKI DER 的 base64：`openssl pkey -in … -pubout -outform DER | base64 -w0`）写进每个槽的 `expected.docPublicKey`。
+
+### 用户、目录、权限
+
+| 路径（示例） | 属主与权限 | 谁读写 |
+|---|---|---|
+| root 入口执行的那份代码（`DIR/current` 指向的检出里的 `server/`，连同路径上每一级目录、`current` 这个链接、node 本身） | 属主 root，组和别人不可写 | root 入口以 root 执行它，启动时自己核一遍，不满足就拒绝启动（`config.error root-code-untrusted`，带上是哪个路径）。部署目录和渲染服务共用、又不归 root 的话，给 root 入口单独放一份 root 的检出（同一个提交），单元里的 `DIR` 指到它；`git archive` 解出来的文件缺省组可写，要 `chown -R root:root` 加 `chmod -R go-w` |
+| `/etc/promptcut/agent-root/`（`agent-root.json`、`controller.key/.crt`、`ca.crt`） | root，目录 0755、配置与私钥 0600 | root 入口。它读的每个文件、每一级上级目录都必须属主是 root、别人写不了 |
+| `/etc/promptcut/agent-slots/<槽>/worker-settings.json` | root，目录 0755、文件 0644 | root 入口每开一代写一次；任务用户只读。里面没有秘密 |
+| `/etc/promptcut/agent-task/`（`task.key/.crt`、`identity.key/.crt`、`ca.crt`） | 目录 root 0755；两把私钥属任务用户 0600 | 任务进程 |
+| `/etc/promptcut/agent-master/`（`master.key/.crt`、`ca.crt`） | 私钥属主服务的用户 0600 | 主服务 |
+| `/var/lib/promptcut/agent-root/<槽>/` | root 0755，文件由发布器写成 0644 | root 入口写；文档服务的用户、任务用户只读。**新建时必须是空的** |
+| `/var/lib/promptcut/agent-shared/` | 属任务用户，组是**共用组**，`chmod 2770`（带 setgid，里面新建的东西都归这个组） | 各代任务进程共用、长期保留：对话的模型历史、工作目录（含用户上传的附件）、用量流水、额度、模型配置。主服务往里存附件，任务进程读它、也往同一个对话目录里写 |
+| `/var/lib/promptcut/agent-task-state/` | 属任务用户 0700 | 每一代自己的状态：`<槽>/epoch-<n>/`（本机事件日志等）。不会自动清，隔一段时间清掉早已关闭的代 |
+| `/var/lib/promptcut/agent/` | 属主服务的用户 0700 | 主服务自己的：事件库 `master-run-events.sqlite`、读取收口记录 |
+
+**主服务和任务进程必须是两个不同的用户**（主身份的私钥任务进程读不到；任务进程里跑的是模型驱动的工具）。两个用户都加进一个**共用组**（例如 `groupadd --system promptcut-agent`，`usermod -aG`），共用数据目录归这个组；两个单元都带 `UMask=0007`（模板里已经写了，任务槽单元的 `--group` 填共用组），这样谁新建的对话目录另一个都写得进。不带这一行的话，按缺省的 umask 建出来的目录组不可写：主服务先存了附件，任务进程就写不进那个对话的工作目录，反过来也一样。
+
+模型配置与额度要放在**共用数据目录**里（任务进程读的是那一份）：`PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent-shared node server/agent-service/set-key.mjs …`、`import-key.mjs`、`admin.mjs quota …` 都指到它，并保证任务用户读得到 `config/`。
+
+### 第一次部署（按顺序）
+
+前提：账号、文档、素材三个服务已经按账号版跑着；代码检出（与渲染服务同一份）在 `DIR/current`。下面的「槽」以 `slot-a` 为例，多个槽每个重复第 3、4 步，身份口端口各用一个。
+
+1. 建任务用户、主服务用户（两个不同的、专门建的用户，`useradd --system --no-create-home --shell /usr/sbin/nologin …`；**任务用户不要用 `nobody`**——别的无主进程也以它跑，systemd 会告警 `Special user nobody configured, this is not safe!`，填单元的小工具也会拒）和它们共有的组、上表的目录、三张证书、文档服务的任务槽签名钥匙、主身份在服务登记表里的钥匙。
+2. 先在节点上跑一遍自检（不碰现有服务）：`scripts/probes/account-root-entry-linux.mjs`，文件头写了怎么拷、怎么跑、期望输出。它过了再往下。
+3. 填任务槽单元：
+   `node server/agent-service/account-task-unit.mjs --slot slot-a --user <任务用户> --group <共用组> --dir DIR/current --node "$(command -v node)" --settings /etc/promptcut/agent-slots/slot-a/worker-settings.json --out /etc/systemd/system/promptcut-agent-task-slot-a.service`，
+   记下它打印的 `sha256`；`systemctl daemon-reload`。**不要** `enable`、不要手工 `start`。
+4. 写 root 入口的配置 `/etc/promptcut/agent-root/agent-root.json`（照 `agent-root.example.json`）：`expected.uid` 是任务用户的 uid；`expected.authorityId` 每次重新初始化都要换一个没用过的（见下「节点重启以后」）；`unitFragment.sha256` 填上一步的；`configuredAnchorDigest` 先写 `null`。
+5. 初始化各槽：`node server/agent-service/account-root-main.mjs --config /etc/promptcut/agent-root/agent-root.json --bootstrap`。每个槽打印一行 `root.slot.bootstrap { slotId, anchorDigest, epoch: 1, phase: "closed" }`。它会真的把任务槽单元起一次再关掉，所以这一步也验了单元、证书、目录权限。把 `anchorDigest` 填回配置里这个槽的 `configuredAnchorDigest`。
+6. 写文档服务的任务槽配置（照 `doc-agent-run-scopes.example.json`，`expected` 与 root 入口配置里的逐字相同、`configuredAnchorDigest` 同上一步），文档服务的环境里加 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE=<这份文件>`，按「重启托管服务前先确认没有正在写入的客户端」的规矩重启文档服务。配置不对它会拒绝启动（`config.error agent-run-scopes`）。
+7. 起 Agent 主服务：照 `agent-account.env.example` 写环境文件，放好 `systemd-promptcut-agent-master.service`（`User` 是主服务用户、`Group` 是共用组），`systemctl daemon-reload && systemctl enable --now promptcut-agent`。文档服务这时不在它会等着（日志里隔两秒一行 `agent.master.pending`），不会退出。看到 `agent.master.registered` 与 `agent.ready { taskProcesses: true }`；`curl -s http://127.0.0.1:8790/healthz` 里 `taskProcesses: true, scheduler: false`（root 入口还没起）。缺配置它会拒绝启动并说缺哪一样（`config.error account-task-processes`）。
+8. 放好 `systemd-promptcut-agent-root.service`，`systemctl daemon-reload && systemctl enable --now promptcut-agent-root`。看到 `root.ready`；`/healthz` 的 `scheduler` 变成 `true`。
+9. 用模拟模型发一条云端对话验一遍（`set-key.mjs --mock`，数据目录指共用目录）：消息做完、同一对话的第二条接着做、点「停止」任务被中断。
+
+### 日常
+
+- **看现状**：`node server/agent-service/account-root-main.mjs --config … --status`（各槽停在第几代、什么阶段、单元状态）；`journalctl -u promptcut-agent-root`、`journalctl -u promptcut-agent-task-slot-a`。
+- **重启 root 入口**：停它只停调度，不关任务进程；但它再起来时，上一次留下的还在跑的那一代会被停下并记成「失败」（它没有那一代的通道了）。所以先等各槽都是 `closed` 再重启。**主服务重启也一样要先等槽空**：正在跑的任务每一步都要把事件交给主服务，交不上去它就放弃正常结算，被记成「失败」。
+- **换代码版本**：正在跑的任务进程用的是旧代码，做完那一条就结束；新开的一代用新代码。任务槽单元文件的内容不变就不用动配置里的 `sha256`；模板变了要重新填、改 `sha256`、`daemon-reload`。
+- **槽停住了**：root 入口的日志里出现 `slot.stuck`，或 `--status` 长时间停在同一代的 `ready` / `bound`。发布器任何一步出错都故意把锁（登记目录里的 `.publisher.lock`）留着、不自动重试，要人看过再处理。最常见的触发是**开一代的时候**：任务槽单元起不来或起来就退了（证书、目录权限、设置文件读不到，看 `journalctl -u <单元>`）、单元文件被改过或被 `systemctl edit` 加了 drop-in（`publisher-unit-config-changed` / `publisher-foreign-dropin`）、节点很忙时任务进程迟迟没开始监听（root 入口会先等它最多 30 秒，日志里有 `root.slot.listener.slow`）、root 入口在一次发布做到一半时被结束。恢复照下面做（这套步骤没有在节点上演练过，第一次用请对着实际目录核对）：
+  1. 停 `promptcut-agent-root`。`--status` 记下这个槽停在第几代（设为 N）和阶段；`ls <登记目录>`。
+  2. **停在 `closed`，锁还在**（开第 N+1 代时出的错）：`systemctl stop <任务槽单元>`；`systemctl list-units --all '<slice 名字空间>*'` 里还 active 的 slice 逐个 `systemctl stop`。
+     - 登记目录里**没有** `reservation-<N+1>.json`：这次发布什么都没写下。修掉原因后删 `.publisher.lock`，起 root 入口。
+     - **有** `reservation-<N+1>.json`：这一代开到一半。发布器没有「接着做」也没有「撤回」，这条记录链不能再用：按「节点重启以后」的办法给这个槽换新的 `authorityId` 和空的登记目录重新初始化（要改文档服务的任务槽配置并重启它），并删掉 `/run/systemd/system/<任务槽单元>.d/`。旧的那一代从没领过任务，不会丢任务。
+  3. **停在 `ready` 或 `bound`，锁还在**（关这一代时出的错）：
+     - 登记目录里**没有** `terminal-<N>.json`：关的动作还没写下任何东西。确认任务槽单元的状态（`systemctl status`）后删 `.publisher.lock`，起 root 入口；它会把这一代当成上一次留下的，停掉、写失败观察，等文档服务签强制终态后关（那条任务记「失败」）。
+     - **有** `terminal-<N>.json` 而没有 `publication-<N>-closed.json`：关到一半。这条记录链不能再用，换槽同上；**而且这一代绑着的那条任务在文档服务里结不了**，对应的对话会一直显示有任务在跑——现在没有工具能处理这种情况，要开发介入。
+  4. 没有锁、只是长时间停在 `bound`：那是任务还在跑，或者任务进程放弃了结算正在等文档服务（root 入口日志里的 `slot.settlement.abandoned` / `slot.failure.pending` 会说明），不要动登记目录。
+- **节点重启以后**：记录链钉在这一次开机上，重启后**原来的槽不能接着用**（发布器会报 `agent-scope-boot-transition`）。要给每个槽换一个新的 `expected.authorityId`（或 `slotId`）、换一个空的登记目录，重做第 4～6 步（含重启文档服务）和第 8 步。重启前还没结清的任务结不了，对应的对话要到文档服务里处理。这是现在这套设计的限制，不是配置问题。
+- **回退**：停 `promptcut-agent-root`（任务不再开始，排着的消息留在文档服务里）；主服务停掉后页面的「云端」一项报连不上。文档服务去掉 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE` 并重启就回到「不开这个模式」（那时云端任务领不到分配，不会退回别的跑法）。

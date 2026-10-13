@@ -28,6 +28,12 @@ import {
 } from './cloud-tools.mjs';
 import { attachmentsPrompt } from './hosted-tools.mjs';
 
+/**
+ * 托管档里向渲染服务要画面(与卡片声音)的工具,单次最多等多久。这类请求在渲染服务那边排队(`server/hosted-render/look.mjs`):
+ * 排队最多 30 分钟,之后渲染每次一分钟、重试三次,都由它回明确的结果;这里只是兜底,所以取得比它长(35 分钟)。
+ */
+const LOOK_QUEUE_TOOL_MS = 35 * 60_000;
+
 function sendJson(res, code, data) {
   if (res.headersSent) return;
   res.statusCode = code;
@@ -1326,6 +1332,8 @@ export function createAgentInstance(env) {
         shared: hostedShared,
         // 卡片声音:卡片代码交给同机的渲染服务执行(与看画面同一个口子);节点没配时是 null
         look: () => prerenderPost ?? null,
+        // 账号模式:这条任务的「项目素材」(凭任务授权读写本项目素材)。没给时素材那几个工具照旧走成员票据
+        ...(env.accountMode === true && env.accountRunAssets ? { runAssets: env.accountRunAssets } : {}),
       });
       hostedContexts.set(agent, ctx);
     }
@@ -1557,8 +1565,13 @@ export function createAgentInstance(env) {
             activeTools.add(work);
             void work.finally(() => activeTools.delete(work)).catch(() => {});
             // 看画面的工具另给时限:带用户卡的项目要等隔离工作进程起来,别的项目在渲时还要排队;渲染服务那一侧自己有更短的时限并回明确的原因
-            const isLook = CLOUD_LOOK_TOOLS.has(name) || name === 'get_layout' || CLOUD_SLOW_TOOLS.has(name);
-            const limitMs = isLook && Number(o.lookTimeoutMs) > 0 ? Number(o.lookTimeoutMs) : Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
+            const isQueuedLook = CLOUD_LOOK_TOOLS.has(name) || name === 'get_layout' || name === 'render_card_audio';
+            const isLook = isQueuedLook || CLOUD_SLOW_TOOLS.has(name);
+            // 向渲染服务要画面的那几个(0.7.18 起在它那边排队):排多久、每次渲多久、重试几次都由渲染服务定并回明确的结果
+            // (`server/hosted-render/look.mjs`:排队最多 30 分钟,渲染每次一分钟、重试三次)。这里的时限只是兜底,要比它长——
+            // 不然别的项目占着隔离工作进程时(空闲满五分钟才让位),这一步会在轮到之前被掐掉,模型以为没看成,而请求还在队列里
+            const limitMs = isQueuedLook ? (Number(o.lookQueueTimeoutMs) > 0 ? Number(o.lookQueueTimeoutMs) : LOOK_QUEUE_TOOL_MS)
+              : isLook && Number(o.lookTimeoutMs) > 0 ? Number(o.lookTimeoutMs) : Number(o.toolTimeoutMs) > 0 ? Number(o.toolTimeoutMs) : 60_000;
             let timer = null;
             const timeout = new Promise((resolve) => {
               timer = setTimeout(() => {

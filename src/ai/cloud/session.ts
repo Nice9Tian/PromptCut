@@ -56,6 +56,23 @@ export const defaultBackoff = (attempt: number) => Math.min(8000, 400 * 2 ** Mat
 /** 身份、权限这类重试也没用的错误:停下来把原因给用户,不无限重连 */
 const FATAL = new Set(["unauthorized", "no-identity", "forbidden", "disabled"]);
 
+/**
+ * 服务端回「没有这个对话」:账号模式下 Agent 服务对看不到的对话回 404 `no-conversation`(文档服务按账号核对的结果;路由不存在的 404 是 `not-found`,是故障,不在此列)(读取通道在没有任何读取被受理时不放行 2xx,
+ * 所以不能用 200 加结束事件表达)。「还没发过第一条消息」「别人设为私有」「已删除」是同一种回应,页面靠自己知不知道这个对话存在过来分辨:
+ * 只有调用方说它是页面刚建的、还没发过消息的新对话(`open(id, { fresh: true })`)才当正常状态。
+ */
+const isAbsent = (err: unknown) => err instanceof CloudError && err.status === 404 && err.code === "no-conversation";
+
+/** 账号读取被撤销(设为私有、被踢、退出登录、Agent 被关、对话被删)时给用户看的话(已有的句子,不新增) */
+const REVOKED_TEXT = "当前账号已无法读取这个对话，请重新选择有权限的对话。";
+/** 账号模式下文档服务明确拒绝读取的 403 错误码:被踢、不在成员名单里 → 同一句「已无法读取」;Agent 被关用它自己已有的句子;别的原样 */
+const deniedText = (err: unknown): string => {
+  const code = err instanceof CloudError ? err.code : "";
+  if (code === "not-listed" || code === "banned") return REVOKED_TEXT;
+  if (code === "agent-disabled") return cloudErrorText("disabled");
+  return err instanceof Error ? err.message : cloudErrorText("network");
+};
+
 const isDelta = (ev: CloudEvent) => (ev.type === "text" || ev.type === "thinking") && typeof ev.delta === "string" && ev.delta !== "";
 
 export function createCloudSession(deps: CloudSessionDeps) {
@@ -72,6 +89,12 @@ export function createCloudSession(deps: CloudSessionDeps) {
   let problem: string | null = null;
   let wake: (() => void) | null = null;
   let closed = false;
+  /** 调用方说这是页面刚建的、还没发过消息的新对话;只有这时「服务端还没有它」才是正常状态 */
+  let fresh = false;
+  /** 这次 open 之后,页面有没有理由认为这个对话在服务端存在:读到过它的事件,或这一页发消息被收下了 */
+  let known = false;
+  /** 这次 open 之后真读到过它的事件(不含「发消息被收下」):之后文档服务说「没有这个对话」就不是新对话,而是被设为私有或删除 */
+  let seenLive = false;
   let queue: CloudQueueSnapshot | null = null;
   let senders: Record<string, CloudSender> = {};
   let queued: CloudEvent[] = [];
@@ -156,7 +179,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
   function handle(ev: CloudEvent) {
     if (ev.type === 'access.revoked') {
       queue = null; senders = {}; queued = []; store.set([]);
-      problem = '当前账号已无法读取这个对话，请重新选择有权限的对话。'; publish(); return;
+      problem = REVOKED_TEXT; publish(); return;
     }
     if (ev.type === 'queue.state' && conversationId) {
       const snapshot = queueSnapshot(ev, conversationId);
@@ -215,6 +238,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
           for await (const ev of api.events(id, lastSeq, ctl.signal, pageId)) {
             if (myGen !== gen || streamReadEpoch !== readEpoch) return;
             attempt = 0;
+            known = true; seenLive = true;
             if (connection !== "live") { problem = null; setConnection("live"); }
             if (ev.type === "end" && ev.state === "none") { sawNone = true; continue; }
             // 反向通道的请求不是对话记录的一部分(没有 seq):不折进消息,交给页面执行
@@ -228,7 +252,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
             }
             if (deps.accountMode && ev.type === "access.revoked") {
               clearAccountReadState();
-              problem = "当前账号已无法读取这个对话，请重新选择有权限的对话。";
+              problem = REVOKED_TEXT;
               setConnection("idle");
               return;
             }
@@ -241,7 +265,22 @@ export function createCloudSession(deps: CloudSessionDeps) {
             ((status === 401 || status === 403) || (err instanceof CloudError && FATAL.has(err.code))));
           if (accountAuthFailure) clearAccountReadState();
           if (accountAuthFailure || (err instanceof CloudError && FATAL.has(err.code))) {
-            problem = err instanceof Error ? err.message : cloudErrorText("network");
+            problem = deps.accountMode ? deniedText(err) : err instanceof Error ? err.message : cloudErrorText("network");
+            setConnection("idle");
+            return;
+          }
+          // 账号模式下读到过的对话,现在文档服务说「没有这个对话」(或项目已不在):被设为私有、被删除、项目被删(围栏掐断旧流后重连才会遇到)。
+          // 这是明确的没权限,不是故障:清掉正文、给「已无法读取」那句、停止读,不一直重连。
+          if (deps.accountMode && seenLive && (isAbsent(err) || (err instanceof CloudError && err.status === 404 && err.code === "no-project"))) {
+            clearAccountReadState();
+            problem = REVOKED_TEXT;
+            setConnection("idle");
+            return;
+          }
+          // 新对话(还没发过第一条消息)服务端还没有它:安静地停下,等第一条消息;不当故障、不重试。
+          // 不是新对话、或读到过/发过消息之后再 404(被删、被设为私有)不在此列,照原样重连提示。
+          if (fresh && !known && isAbsent(err)) {
+            problem = null;
             setConnection("idle");
             return;
           }
@@ -286,12 +325,14 @@ export function createCloudSession(deps: CloudSessionDeps) {
       return () => { listeners.delete(l); };
     },
 
-    /** 打开一个对话:对话 store 清空,从头读事件流(新对话读到「没有」就停下,等第一条消息) */
-    open(id: string) {
+    /** 打开一个对话:对话 store 清空,从头读事件流(新对话读到「没有」就停下,等第一条消息)。`fresh`:这是页面刚建的、还没发过消息的新对话 */
+    open(id: string, opts?: { fresh?: boolean }) {
       if (closed) return;
       stopLoop();
       conversationId = id;
       lastSeq = 0;
+      fresh = opts?.fresh === true;
+      known = false; seenLive = false;
       queued = [];
       pendingAttachments.clear();
       queue = null; senders = {};
@@ -319,6 +360,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
         throw new CloudError("network", cloudErrorText("network"));
       }
       problem = null;
+      known = true;
       // 带了附件:气泡里照桌面版显示附件名(服务端的 user 事件自己带了就以它为准)
       if (shown?.length && accepted.runId) {
         pendingAttachments.set(accepted.runId, shown);

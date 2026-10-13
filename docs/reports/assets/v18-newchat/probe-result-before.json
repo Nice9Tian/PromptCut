@@ -1,0 +1,810 @@
+{
+  "label": "before",
+  "scenarios": [
+    {
+      "scenario": "A-fresh-initial",
+      "who": "creator",
+      "ms": 30000,
+      "eventsRequests": 9,
+      "statuses": {
+        "403": 1,
+        "404": 8
+      },
+      "errorBodies": [
+        "{\"ok\":false,\"code\":\"disabled\",\"message\":\"cloud Agent is disabled\"}",
+        "{\"ok\":false,\"code\":\"no-conversation\",\"message\":\"no-conversation\"}"
+      ],
+      "requestsInLast10s": 2,
+      "bannerSeen": 29,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "connecting",
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6acjow-ff2a",
+        "connection": "reconnecting",
+        "problem": "项目创建者已关闭云端 Agent。",
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": null,
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    },
+    {
+      "scenario": "B-new-chat-click",
+      "who": "creator",
+      "ms": 30000,
+      "eventsRequests": 8,
+      "statuses": {
+        "404": 8
+      },
+      "errorBodies": [
+        "{\"ok\":false,\"code\":\"no-conversation\",\"message\":\"no-conversation\"}"
+      ],
+      "requestsInLast10s": 2,
+      "bannerSeen": 29,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "connecting",
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "reconnecting",
+        "problem": null,
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": null,
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    },
+    {
+      "scenario": "C-first-message",
+      "conversationId": "cc-mv6ad7yf-sizk",
+      "replyVisible": true,
+      "eventsStatuses": [
+        200
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "live",
+        "problem": null,
+        "lastSeq": 4,
+        "banner": null,
+        "notice": null,
+        "statusDot": "已连接云端",
+        "userMessages": 1,
+        "assistantMessages": 1
+      }
+    },
+    {
+      "scenario": "D1-reload-on-conversation-with-messages",
+      "who": "creator",
+      "ms": 10000,
+      "eventsRequests": 1,
+      "statuses": {
+        "200": 1
+      },
+      "errorBodies": [],
+      "requestsInLast10s": 0,
+      "bannerSeen": 0,
+      "bannerAtEnd": false,
+      "connectionsSeen": [
+        "live"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "live",
+        "problem": null,
+        "lastSeq": 10,
+        "banner": null,
+        "notice": null,
+        "statusDot": "已连接云端",
+        "userMessages": 1,
+        "assistantMessages": 1
+      }
+    },
+    {
+      "scenario": "D2-new-chat-after-reload",
+      "who": "creator",
+      "ms": 10000,
+      "eventsRequests": 5,
+      "statuses": {
+        "404": 5
+      },
+      "errorBodies": [
+        "{\"ok\":false,\"code\":\"no-conversation\",\"message\":\"no-conversation\"}"
+      ],
+      "requestsInLast10s": 4,
+      "bannerSeen": 9,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "connecting",
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6aece2-3tt0",
+        "connection": "reconnecting",
+        "problem": null,
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": null,
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    },
+    {
+      "scenario": "D3-reload-on-unsent-new-chat",
+      "who": "creator",
+      "ms": 15000,
+      "eventsRequests": 7,
+      "statuses": {
+        "404": 7
+      },
+      "errorBodies": [
+        "{\"ok\":false,\"code\":\"no-conversation\",\"message\":\"no-conversation\"}"
+      ],
+      "requestsInLast10s": 1,
+      "bannerSeen": 15,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6aece2-3tt0",
+        "connection": "reconnecting",
+        "problem": null,
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": null,
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    },
+    {
+      "scenario": "D4-switch-back-to-conversation-with-messages",
+      "who": "creator",
+      "ms": 8000,
+      "eventsRequests": 1,
+      "statuses": {
+        "200": 1
+      },
+      "errorBodies": [],
+      "requestsInLast10s": 0,
+      "bannerSeen": 0,
+      "bannerAtEnd": false,
+      "connectionsSeen": [
+        "live"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "live",
+        "problem": null,
+        "lastSeq": 10,
+        "banner": null,
+        "notice": null,
+        "statusDot": "已连接云端",
+        "userMessages": 1,
+        "assistantMessages": 1
+      }
+    },
+    {
+      "scenario": "D5-switch-to-another-new-chat",
+      "who": "creator",
+      "ms": 8000,
+      "eventsRequests": 5,
+      "statuses": {
+        "404": 5
+      },
+      "errorBodies": [
+        "{\"ok\":false,\"code\":\"no-conversation\",\"message\":\"no-conversation\"}"
+      ],
+      "requestsInLast10s": 4,
+      "bannerSeen": 7,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "connecting",
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6afaem-v5u0",
+        "connection": "reconnecting",
+        "problem": null,
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": null,
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    },
+    {
+      "scenario": "D6-switch-back-again",
+      "who": "creator",
+      "ms": 6000,
+      "eventsRequests": 1,
+      "statuses": {
+        "200": 1
+      },
+      "errorBodies": [],
+      "requestsInLast10s": 0,
+      "bannerSeen": 0,
+      "bannerAtEnd": false,
+      "connectionsSeen": [
+        "connecting",
+        "live"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "live",
+        "problem": null,
+        "lastSeq": 10,
+        "banner": null,
+        "notice": null,
+        "statusDot": "已连接云端",
+        "userMessages": 1,
+        "assistantMessages": 1
+      }
+    },
+    {
+      "scenario": "E0-member-own-fresh-chat",
+      "who": "member",
+      "ms": 10000,
+      "eventsRequests": 5,
+      "statuses": {
+        "404": 5
+      },
+      "errorBodies": [
+        "{\"ok\":false,\"code\":\"no-conversation\",\"message\":\"no-conversation\"}"
+      ],
+      "requestsInLast10s": 5,
+      "bannerSeen": 9,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "idle",
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6afmxn-eqh7",
+        "connection": "reconnecting",
+        "problem": null,
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": null,
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    },
+    {
+      "scenario": "E1-member-views-shared-conversation",
+      "who": "member",
+      "ms": 5000,
+      "eventsRequests": 1,
+      "statuses": {
+        "200": 1
+      },
+      "errorBodies": [],
+      "requestsInLast10s": 0,
+      "bannerSeen": 0,
+      "bannerAtEnd": false,
+      "connectionsSeen": [
+        "live"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "live",
+        "problem": null,
+        "lastSeq": 10,
+        "banner": null,
+        "notice": null,
+        "statusDot": "已连接云端",
+        "userMessages": 1,
+        "assistantMessages": 1
+      }
+    },
+    {
+      "scenario": "E2-member-after-creator-set-private",
+      "who": "member",
+      "ms": 20000,
+      "eventsRequests": 0,
+      "statuses": {},
+      "errorBodies": [],
+      "requestsInLast10s": 0,
+      "bannerSeen": 0,
+      "bannerAtEnd": false,
+      "connectionsSeen": [
+        "live"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "live",
+        "problem": null,
+        "lastSeq": 10,
+        "banner": null,
+        "notice": null,
+        "statusDot": "已连接云端",
+        "userMessages": 1,
+        "assistantMessages": 1
+      }
+    },
+    {
+      "scenario": "E3-member-reloads-onto-now-private-conversation",
+      "who": "member",
+      "ms": 15000,
+      "eventsRequests": 7,
+      "statuses": {
+        "404": 7
+      },
+      "errorBodies": [
+        "{\"ok\":false,\"code\":\"no-conversation\",\"message\":\"no-conversation\"}"
+      ],
+      "requestsInLast10s": 2,
+      "bannerSeen": 15,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "reconnecting",
+        "problem": null,
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": null,
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    },
+    {
+      "scenario": "F0-before-agent-down",
+      "who": "creator",
+      "ms": 3000,
+      "eventsRequests": 1,
+      "statuses": {
+        "200": 1
+      },
+      "errorBodies": [],
+      "requestsInLast10s": 0,
+      "bannerSeen": 0,
+      "bannerAtEnd": false,
+      "connectionsSeen": [
+        "connecting",
+        "live"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "live",
+        "problem": null,
+        "lastSeq": 10,
+        "banner": null,
+        "notice": null,
+        "statusDot": "已连接云端",
+        "userMessages": 1,
+        "assistantMessages": 1
+      }
+    },
+    {
+      "scenario": "F1-agent-down-on-open-conversation",
+      "who": "creator",
+      "ms": 55000,
+      "eventsRequests": 4,
+      "statuses": {
+        "502": 4
+      },
+      "errorBodies": [],
+      "requestsInLast10s": 4,
+      "bannerSeen": 10,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "live",
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6ad7yf-sizk",
+        "connection": "reconnecting",
+        "problem": null,
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": null,
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    },
+    {
+      "scenario": "F2-new-chat-while-agent-down",
+      "who": "creator",
+      "ms": 15000,
+      "eventsRequests": 6,
+      "statuses": {
+        "502": 6
+      },
+      "errorBodies": [],
+      "requestsInLast10s": 2,
+      "bannerSeen": 14,
+      "bannerAtEnd": true,
+      "connectionsSeen": [
+        "connecting",
+        "reconnecting"
+      ],
+      "final": {
+        "conversationId": "cc-mv6aibaz-orei",
+        "connection": "reconnecting",
+        "problem": null,
+        "lastSeq": 0,
+        "banner": "和云端 Agent 的连接断了,正在重新连接。云端的这一轮仍在继续,连上后会把错过的过程补齐。",
+        "notice": "云端 Agent 暂时连不上文档服务,请稍后再试。",
+        "statusDot": "连接中断,重新连接中…",
+        "userMessages": 0,
+        "assistantMessages": 0
+      }
+    }
+  ],
+  "checks": [
+    {
+      "name": "no-page-errors",
+      "pass": true
+    }
+  ],
+  "screenshots": [
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-A-fresh-initial-t3s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-A-fresh-initial-t29s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-A-fresh-initial-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-B-new-chat-click-t3s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-B-new-chat-click-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-C-after-first-message.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D1-reload-on-conversation-with-messages-t4s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D1-reload-on-conversation-with-messages-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D2-new-chat-after-reload-t4s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D2-new-chat-after-reload-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D3-reload-on-unsent-new-chat-t4s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D3-reload-on-unsent-new-chat-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D4-switch-back-to-conversation-with-messages-t3s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D4-switch-back-to-conversation-with-messages-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D5-switch-to-another-new-chat-t3s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D5-switch-to-another-new-chat-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D6-switch-back-again-t3s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-D6-switch-back-again-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E0-member-own-fresh-chat-t4s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E0-member-own-fresh-chat-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E1-member-views-shared-conversation-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E2-member-after-creator-set-private-t3s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E2-member-after-creator-set-private-t19s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E2-member-after-creator-set-private-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E3-member-reloads-onto-now-private-conversation-t4s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E3-member-reloads-onto-now-private-conversation-t14s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-E3-member-reloads-onto-now-private-conversation-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-F0-before-agent-down-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-F1-agent-down-on-open-conversation-t5s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-F1-agent-down-on-open-conversation-t54s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-F1-agent-down-on-open-conversation-end.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-F2-new-chat-while-agent-down-t4s.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-newchat\\out-before\\shots\\before-F2-new-chat-while-agent-down-end.png"
+  ],
+  "pageErrors": [],
+  "notes": [
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 403,
+      "path": "/agent/v1/info"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 403,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 403,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "A_conversationId": "cc-mv6acjow-ff2a"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/info"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "POST",
+      "status": 202,
+      "path": "/agent/v1/conversations/:id/messages"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/info"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/info"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "D3_reloadOnUnsentChatKeepsId": true
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/info"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "E_toggleButtonText": "设为私有"
+    },
+    {
+      "page": "creator",
+      "method": "POST",
+      "status": 200,
+      "path": "/agent/v1/conversations/:id/visibility"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "E_creatorControlStatus": "已切为私有。"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/info"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "F_agentStoppedAt": 1791872253644
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 502,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 502,
+      "path": "/agent/v1/conversations"
+    }
+  ],
+  "completed": true,
+  "cleanup": {
+    "fixtureClosed": true,
+    "portsFree": {
+      "28850": true,
+      "28851": true,
+      "28852": true,
+      "28853": true,
+      "28854": true,
+      "28855": true,
+      "28856": true,
+      "28857": true,
+      "28858": true,
+      "28860": true,
+      "28861": true
+    }
+  }
+}

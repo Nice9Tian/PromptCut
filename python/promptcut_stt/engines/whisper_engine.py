@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from typing import Any, Callable, Dict, List, Optional
 
-from . import EngineNotInstalled, cuda_available
+from . import EngineNotInstalled, ModelNotInstalled, cuda_available
 
 ENGINE_NAME = "whisper"
 
@@ -56,6 +57,20 @@ def _resolve_device(device: Optional[str]) -> str:
     return "cuda" if cuda_available() else "cpu"
 
 
+def local_models(models_dir: Optional[str], catalog: List[str]) -> List[str]:
+    """模型目录里已经有 <名字>.pt 的模型（只认 catalog 里的名字）。绝不抛异常。"""
+    found: List[str] = []
+    if not models_dir or not os.path.isdir(models_dir):
+        return found
+    for name in catalog:
+        try:
+            if os.path.isfile(os.path.join(models_dir, name + ".pt")):
+                found.append(name)
+        except Exception:
+            continue
+    return found
+
+
 def _load():
     try:
         import whisper  # type: ignore
@@ -76,9 +91,17 @@ def transcribe(
     models_dir: Optional[str],
     on_segment: Callable[[Dict[str, Any]], None],
     on_progress: Callable[[float, Optional[float]], None],
+    offline: bool = False,
+    catalog: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     whisper = _load()
     dev = _resolve_device(device)
+
+    if offline and model not in local_models(models_dir, catalog or []):
+        raise ModelNotInstalled(
+            f"这台机器上没有 whisper 的 {model} 模型权重，离线模式不会联网下载。"
+            "请联系部署者把权重放进模型目录。"
+        )
 
     whisper_model = whisper.load_model(model, device=dev, download_root=models_dir)
     result = whisper_model.transcribe(

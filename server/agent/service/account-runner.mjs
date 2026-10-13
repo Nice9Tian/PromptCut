@@ -15,10 +15,44 @@ import { canonicalReadRecord, acceptedMessageRef } from '../../account/run-autho
 import { canonicalJson } from '../../account/ledger.mjs';
 import { PROTOCOL } from '../../auth/protocol.mjs';
 import { createRunDrainRecord } from '../../agent-service/worker-settlement.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createProjectAssets } from './project-assets.mjs';
+import { WorkspaceError } from './workspace.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const idOK = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 const keyOf = (projectId, conversationId) => `${projectId}\n${conversationId}`;
+
+/** 运行素材导入时的额度。「项目素材」每读到一块就来问一次；这里一次导入只在第一块时看一次工作目录还剩多少
+ * （`workspace.room()`，要同步扫两遍目录树），之后只做累计，超了照旧拒。大文件不会每一小块都去扫目录、堵住事件循环。
+ *
+ * 导入总要先在工作目录的 `.tmp/` 里落一份再上传。来源如果本来就是工作目录里的文件（用户的附件、下载下来的文件），
+ * 它当初进工作目录时已经按额度核过、也已经算在占用里；临时的那一份上传完就删。这种来源不再按额度算第二遍——
+ * 否则大于剩余额度一半的文件永远导不进去。只限它不超过声明的大小（源文件中途变大就拒）。〔裁〕代价是导入期间
+ * 磁盘上短暂多出一份，最多一个单文件上限。来源是内存里现生成的字节（音效、配音）时，临时那一份就是唯一的一份，照额度算。
+ * @param {() => { room(): number }} workspace 这条任务的对话工作目录
+ */
+export function createImportReservation(workspace) {
+  const scope = new AsyncLocalStorage();
+  return {
+    /** 在一次导入的范围里跑 fn。`origin.inWorkspace`：来源已经是工作目录里的文件；`origin.size`：来源的大小（知道的话） */
+    run(origin, fn) {
+      const size = Number.isSafeInteger(origin?.size) && origin.size >= 0 ? origin.size : null;
+      return scope.run({ counted: origin?.inWorkspace === true && size !== null, size, reserved: 0, room: null }, fn);
+    },
+    reserve(bytes) {
+      if (!Number.isSafeInteger(bytes) || bytes < 0) throw new WorkspaceError('bad-path', '字节数不对');
+      // 不在任何一次导入的范围里（不该发生）：按最保守的办，当场看一次
+      const state = scope.getStore() ?? { counted: false, size: null, reserved: 0, room: null };
+      if (state.room === null) {
+        state.room = state.counted ? state.size : workspace().room();
+        if (!state.counted && state.size !== null && state.size > state.room) throw new WorkspaceError('quota', '工作目录放不下这个文件');
+      }
+      state.reserved += bytes;
+      if (state.reserved > state.room) throw new WorkspaceError('quota', state.counted ? '要导入的文件在导入过程中变大了' : '工作目录放不下这个文件');
+    },
+  };
+}
 
 /** Actual existing hosted Agent instance, one isolated instance per doc-owned run.
  * The doc-admitted grant binds this run's signed data connection; creator is never inferred.
@@ -26,12 +60,22 @@ const keyOf = (projectId, conversationId) => `${projectId}\n${conversationId}`;
 export function createExistingHostedRunnerFactory({ root, loadModule, dataClient, dataDir, modelConfig,
   assetBase = null, look = null, voiceConfig = async () => null, collect = null,
   egress: egressOptions = {}, workspaceLimits = {}, toolLimits = {}, toolFetch,
+  resources = null, runAssets = null,
   now = Date.now, log = () => {} } = {}) {
   if (typeof root !== 'string' || typeof loadModule !== 'function' ||
     typeof dataClient?.wsUrl !== 'string' || !/^wss:\/\//.test(dataClient.wsUrl) ||
     typeof dataClient.webSocketFor !== 'function' ||
     typeof dataDir !== 'string' || !path.isAbsolute(dataDir) || typeof modelConfig !== 'function' ||
     typeof dataClient.openCount !== 'function') fail(503, 'account-runner-configuration');
+  // 运行素材：这条任务凭自己的授权读写所在项目的素材。给了就必须配齐，缺一样直接拒绝，不退回成员票据那条旧路。
+  if (runAssets !== null && (['issue', 'request', 'json'].some(name => typeof runAssets?.client?.[name] !== 'function') ||
+      !Number.isSafeInteger(runAssets.maxImportBytes) || runAssets.maxImportBytes < 1 ||
+      typeof resources?.contextAccess?.authorize !== 'function' || typeof resources.register !== 'function'))
+    fail(503, 'account-runner-run-assets-configuration');
+  // 看画面同理：账号模式下每个请求都要绑这条任务的授权（登记前、每趟去问前过授权闸，带任务号）。
+  // 给了看画面的客户端而没有能问授权的 resources，直接拒绝；不退回不过闸、不带任务号的老路。
+  if (look !== null && (typeof look?.forProject !== 'function' || typeof resources?.authorize !== 'function'))
+    fail(503, 'account-runner-look-configuration');
   const usage = createUsageLog({ dir: path.join(dataDir, 'usage'), now, log });
   const gate = createGate({ limitsFile: limitsFileOf(dataDir), usage, now, log });
   const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log });
@@ -41,10 +85,13 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     recordService: row => gate.record(row) });
   let lock = Promise.resolve();
   const execSerial = fn => { const work = lock.then(fn, fn); lock = work.catch(() => {}); return work; };
-  return async ({ grant, record, onModelCall, beforeToolCall, onEvent = () => {}, signal }) => {
+  return async ({ grant, record, onModelCall, beforeToolCall, onEvent = () => {}, signal, context = null }) => {
     if (!idOK(grant.projectId) || !idOK(grant.conversationId) || !idOK(grant.runId) ||
       grant.messageId !== record.messageId || grant.runId !== record.runId) fail(503, 'run-record-mismatch');
-    let inst, DataWebSocket;
+    // 看画面要绑的那条任务上下文必须是执行器给的、和这条授权对得上；没有就不开这一轮（不带着不过闸的看画面往下跑）
+    if (look && (!context || context.projectId !== grant.projectId || context.runGrantId !== grant.runGrantId))
+      fail(503, 'look-context-unavailable');
+    let inst, DataWebSocket, projectAssets = null;
     let removeAbort = () => {};
     const aborted = new Promise((_, reject) => {
       if (!signal) return;
@@ -75,13 +122,36 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     // page messages never choose the run or supply a selection snapshot.
     const accountSelection = Object.freeze({ projectId: grant.projectId, conversationId: grant.conversationId,
       runId: grant.runId, runGrantId: grant.runGrantId });
+    // 「项目素材」只认执行器给的这条任务的上下文（由文档服务当前的任务授权算出），工具自己拿不到、也换不了。
+    // 它名下的连接和流登记在同一个 resources 里，任务被下围栏时一起关。
+    let accountRunAssets = null;
+    if (runAssets) {
+      if (!context || context.projectId !== grant.projectId || context.runGrantId !== grant.runGrantId)
+        fail(503, 'run-assets-context-unavailable');
+      const workspace = () => workspaces.open({ projectId: grant.projectId, ownerKey, conversationId: grant.conversationId });
+      const reservation = createImportReservation(workspace);
+      projectAssets = createProjectAssets({ contextAccess: resources.contextAccess, runAssetClient: runAssets.client,
+        resources, workspace: async () => { const ws = workspace(); ws.dir(); return ws; }, maxImportBytes: runAssets.maxImportBytes,
+        // 导入先落到这个对话的工作目录里再上传，所以额度就是工作目录原有的那几条上限〔裁〕；怎么算见 createImportReservation
+        reserveImport: async (_context, bytes) => { reservation.reserve(bytes); } });
+      accountRunAssets = Object.freeze({
+        authorizeWrite: () => resources.authorize(context, 'write'),
+        import: (source, options, origin = {}) => reservation.run(origin, () => projectAssets.import(context, source, options)),
+        openRead: (mediaId, options) => projectAssets.openRead(context, mediaId, options),
+      });
+    }
     inst = createAgentInstance({ profile: 'hosted', server: { httpServer: null, ssrLoadModule: loadModule,
       config: { root }, middlewares: { use() {} } },
-      prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {} }) : null,
+      // 这一轮被停掉(signal)时,它排在渲染服务队列里的看画面请求一并撤回,不占着队列、不在失权之后还出图
+      // 看画面绑这条任务的授权:项目号来自授权;登记前、每趟去问前都问一次文档服务这条任务还能不能读
+      prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {}, signal: signal ?? null,
+        authorize: () => resources.authorize(context, 'read'), instance: grant.instanceId,
+        run: { runGrantId: grant.runGrantId, runId: grant.runId, conversationId: grant.conversationId } }) : null,
       latestMirror: () => null, latestPlayhead: () => null, projectId: grant.projectId,
       identity: { userId: grant.accountId, username: grant.initiatorName ?? record.senderNameAtSend }, ownerKey,
       hostedTools, docUrl: dataClient.wsUrl, protocolsFor, execSerial, accountMode: true, accountSelection,
       accountDataRequired: true, accountDataWebSocketImpl: DataWebSocket, initiatorOnline: () => false,
+      ...(accountRunAssets ? { accountRunAssets } : {}),
       pageCall: async () => ({ offline: true, why: 'initiator-unavailable' }),
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
       const binding = await Promise.race([inst.bindAgent({ projectId: grant.projectId, mode: 'hosted', signal }), aborted]);
@@ -114,14 +184,21 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
           }, beforeToolCall, onEvent });
         return handle;
       },
-      async drain() { try { if (handle) await handle.drain(); }
-        finally { removeAbort(); inst.close('run-drained'); await DataWebSocket.closeOwned(); }
+      async drain() {
+        try { if (handle) await handle.drain(); }
+        finally {
+          // 素材的连接和流也是本机资源：等它们真的关完才算收完，收尾记录在这之后才形成。
+          // 关不干净就抛出去，执行器据此不形成收尾记录，这条任务只能由强制路径收口。
+          try { await projectAssets?.close(); }
+          finally { removeAbort(); inst.close('run-drained'); await DataWebSocket.closeOwned(); }
+        }
         return { runId: grant.runId, dispatchesOpen: 0 }; },
       close() { removeAbort(); inst.close('run-finished'); },
     };
     } catch (error) {
       removeAbort();
       try { inst?.close('bind-failed'); } catch { /* The socket witness remains mandatory. */ }
+      try { await projectAssets?.close(); } catch { /* Registered resources stay owned by resources.abortForFence. */ }
       if (DataWebSocket) await DataWebSocket.closeOwned();
       throw error;
     }
@@ -216,7 +293,7 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
         if (entry.cancelled || closed) fail(403, 'run-fenced');
         return result;
       };
-      const runner = await runnerFactory({ grant, record: prompt,
+      const runner = await runnerFactory({ grant, record: prompt, context,
         onModelCall: gated, beforeToolCall: gated,
         ...(events ? { onEvent: event => {
           if (!selectedTask) return void events.emit(event?.type === 'done'
@@ -361,8 +438,31 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       throw error;
     } finally { waking.delete(key); }
   }
+  /** 单任务进程：领取、等绑定、已读确认这几步都是凭固定请求号可以原样重发的。文档服务一时答不上（503）就退避重试，
+   * 不把一次暂时性故障变成「这条任务再也不会做、也结不了」。已读确认之后（事件通道已经建起来、运行器可能已经开跑）不重试：
+   * 那以后只有一次执行，失败如实记成失败或交给强制路径。 */
+  async function resumeTask() {
+    const key = keyOf(selectedTask.projectId, selectedTask.conversationId);
+    for (let delay = 250; ; delay = Math.min(delay * 2, 5_000)) {
+      try { return await wake(selectedTask.projectId, selectedTask.conversationId); }
+      catch (error) {
+        const slot = pending.get(key);
+        if (closed || taskConsumed || error?.status !== 503 || runEvents?.failure?.() ||
+            // 这几种不是「文档服务一时答不上」：执行结果不明、事件没落盘、进程在收、配置不对，
+            // 以及「还没绑定」「没配模型」「记录对不上」这类要调用方或人来处理的状态——照旧原样抛出，不在这里空转。
+            ['run-execution-uncertain', 'run-outcome-unavailable', 'run-events-persistence', 'account-runner-closed',
+              'account-worker-task-consumed', 'account-runner-configuration', 'account-worker-task-configuration',
+              'account-worker-assignment-pending', 'account-worker-not-bound', 'account-worker-grant', 'account-worker-closed',
+              'account-worker-task-binding', 'no-model-key', 'run-record-mismatch', 'run-admit-protocol'].includes(error?.code) ||
+            !(slot?.admitRequestId || slot?.grant)) throw error;
+        log('agent.account.task.retry', { code: error?.code ?? 'unavailable' });
+        await new Promise(resolve => { const timer = setTimeout(resolve, delay); timer.unref?.(); });
+        if (closed) throw error;
+      }
+    }
+  }
   async function resumeQueued() {
-    if (selectedTask) return wake(selectedTask.projectId, selectedTask.conversationId);
+    if (selectedTask) return resumeTask();
     const listed = await runClient.pending();
     if (!Array.isArray(listed?.conversations)) fail(503, 'run-pending-protocol');
     const targets = new Map(listed.conversations.map(({ projectId, conversationId }) =>
@@ -432,12 +532,15 @@ export function createAccountRunnerService({ conversationClient, runClient, read
     } else if (!runnerFactory || runEventsFile) runEvents = createAccountRunEvents({ file: runEventsFile,
       authorityId: runEventsAuthorityId, now, verifyGrant: grant => runClient.checkAccess({
         projectId: grant.projectId, runGrantId: grant.runGrantId, action: 'write' }) });
-    const factory = runnerFactory ?? createExistingHostedRunnerFactory({ ...runnerOptions, runClient, now, log });
+    const factory = runnerFactory ?? createExistingHostedRunnerFactory({ ...runnerOptions, runClient, resources, now, log });
     const preflight = runnerFactory ? async () => true : async () => modelReady(await runnerOptions.modelConfig());
     const manager = createAccountRunManager({ runClient, readIntents, runnerFactory: factory, preflight, serviceKid, instanceId,
       runEvents, resources, connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, now, log });
-    const base = createAccountConversationService({ conversationClient, now });
+    const base = createAccountConversationService({ conversationClient, now,
+      usageDir: typeof runnerOptions.dataDir === 'string' && runnerOptions.dataDir ? path.join(runnerOptions.dataDir, 'usage') : null });
     return { ...base, runManager: manager, runEvents,
+      // `/healthz` 据此报看画面接没接：只有真实运行器、并且给了看画面的客户端才算
+      look: !runnerFactory && !!runnerOptions.look,
       // Internal assembly seam only. A production caller must already own a
       // genuine conversation read-control invocation owned by HTTP/SSE.
       async mirrorAccepted(identity, conversationId) {

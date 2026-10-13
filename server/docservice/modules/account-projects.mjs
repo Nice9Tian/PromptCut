@@ -18,8 +18,9 @@ async function readBody(req) {
   try { const body = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (!body || typeof body !== 'object' || Array.isArray(body)) bad(400, 'invalid-body'); return body; }
   catch (error) { if (error.status) throw error; bad(400, 'invalid-body'); }
 }
-const send = (res, status, value) => {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+const send = (res, status, value, cors = false) => {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+    ...(cors ? { 'access-control-allow-origin': '*' } : {}) });
   res.end(JSON.stringify(value));
 };
 
@@ -53,6 +54,7 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
   async function dispatch(req, res, internal, context) {
     const url = new URL(req.url, 'http://route.invalid');
     if (internal ? !url.pathname.startsWith(INTERNAL) : !url.pathname.startsWith(PUBLIC)) return false;
+    let cors = false;
     try {
       let result, status = 200;
       if (internal) {
@@ -82,6 +84,11 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
             result = authority.ackAccessEvent(decodeURIComponent(ack[1]), service, receipt);
           }
         } else bad(403, 'service-forbidden');
+      } else if (req.method === 'GET' && url.pathname === `${PUBLIC}/gone`) {
+        // 旧办法建的云端项目没有账号成员可核：这一项不带登录也答，只答登记过墓碑的旧项目号（`authority.legacyGoneStatus`）。
+        // 回的是签名过的证明，桌面版的页面跨源来问，所以连同错误一起放开只读的跨源读取（不带凭证）。
+        cors = true;
+        result = authority.legacyGoneStatus({ authorityId: url.searchParams.get('authorityId'), projectId: url.searchParams.get('projectId') });
       } else {
         const actor = bearer(req);
         if (req.method === 'POST') {
@@ -115,10 +122,10 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
           result ??= authority.status({ authorityId: url.searchParams.get('authorityId'), projectId: identityProject });
         } else bad(405, 'method-not-allowed');
       }
-      send(res, status, { ok: true, ...result });
+      send(res, status, { ok: true, ...result }, cors);
     } catch (error) {
       const code = error.code ?? 'authority-unavailable';
-      send(res, error.status ?? (error.code?.startsWith('bad-') ? 400 : 503), { ok: false, error: code, code, message: code });
+      send(res, error.status ?? (error.code?.startsWith('bad-') ? 400 : 503), { ok: false, error: code, code, message: code }, cors);
     }
     return true;
   }

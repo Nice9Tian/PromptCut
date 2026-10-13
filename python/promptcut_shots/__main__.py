@@ -130,6 +130,19 @@ def cmd_install(_args: argparse.Namespace) -> int:
     return 0
 
 
+def apply_globals(args: argparse.Namespace) -> None:
+    """云端 Agent 服务起这个包时,环境变量里的 PROMPTCUT_* 一个都不传(工作区的白名单),
+    所以模型目录、依赖目录改走命令行。桌面版不用这几个选项,行为不变。"""
+    if getattr(args, "models_dir", None):
+        os.environ["PROMPTCUT_MODELS"] = args.models_dir
+    if getattr(args, "pylibs", None):
+        os.environ["PROMPTCUT_PYLIBS"] = args.pylibs
+    if getattr(args, "local_only", False):
+        from . import detector as D
+
+        D.LOCAL_ONLY = True
+
+
 def cmd_detect(args: argparse.Namespace) -> int:
     paths = env_paths()
     add_pylibs(paths["pylibs"])
@@ -139,6 +152,9 @@ def cmd_detect(args: argparse.Namespace) -> int:
         return 3
     if not paths["ffmpeg"]:
         emit_error("找不到 ffmpeg，无法解码视频。")
+        return 2
+    if getattr(args, "local_only", False) and is_media_url(args.video):
+        emit_error("本次只允许读本地文件，不能连网络地址。")
         return 2
     if not (is_media_url(args.video) or os.path.isfile(args.video)):
         emit_error(f"找不到视频文件：{args.video}")
@@ -188,6 +204,10 @@ def cmd_detect(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(prog="promptcut_shots")
+    parser.add_argument("--models-dir", default=None, help="权重目录(盖掉 PROMPTCUT_MODELS)")
+    parser.add_argument("--pylibs", default=None, help="依赖目录(盖掉 PROMPTCUT_PYLIBS)")
+    parser.add_argument("--local-only", action="store_true",
+                        help="ffmpeg 只读本地文件,不连任何网络地址")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", help="报告拓展是否就绪").set_defaults(func=cmd_status)
@@ -201,6 +221,7 @@ def main(argv: Optional[list] = None) -> int:
     d.set_defaults(func=cmd_detect)
 
     args = parser.parse_args(argv)
+    apply_globals(args)
     try:
         return args.func(args)
     except KeyboardInterrupt:

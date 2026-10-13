@@ -8,7 +8,8 @@
  *     → 用工作区的受限子进程起 ffprobe / ffmpeg 量(`server/audio-loudness.mjs`,与桌面版同一份参数与解析)
  *     → 量完删掉取来的文件。
  *
- * 子进程:工作目录是对话目录、环境变量按白名单重建、不弹窗口(`workspace.mjs` 的 `spawn`);每个输入前加
+ * 子进程:工作目录是对话目录、环境变量按白名单重建、不弹窗口(`workspace.mjs` 的 `spawn`);起出来的是一棵杀得掉的进程树
+ * (`perception/runner.mjs`),超时杀的是整棵树(`audio-loudness.mjs` 里的 `child.kill()` 与工作区自带的超时都是);每个输入前加
  * `-protocol_whitelist file`——素材是成员传的,伪装成媒体的播放列表不能让 ffmpeg 去连网络地址。
  * 整个进程里同时只跑一个测量(`slot`)。只读成员也能测(只读不写)。
  */

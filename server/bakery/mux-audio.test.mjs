@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAudioPlan, buildFfmpegArgs, isCardAudioNode, playableAudioPlan } from "./mux-audio.mjs";
+import fs from "node:fs";
+import { buildAudioPlan, buildFfmpegArgs, isCardAudioNode, MISSING_MATERIAL_WAV, playableAudioPlan } from "./mux-audio.mjs";
 
 test("generated-only and video-backed card audio replace source entries without timing quantization", () => {
   const project = {
@@ -46,3 +47,42 @@ test("持久化合成 WAV 保留采样定位，缺文件或无音轨必须报错
   const args = buildFfmpegArgs("v.mp4", plan, "out.mp4", 2);
   assert.match(args[args.indexOf("-filter_complex") + 1], /aresample=48000,adelay=17S:all=1/);
 });
+
+test("只有匹配的 confirmed-missing 音频使用软件内固定 WAV 且从片段起点播放", () => {
+  const project = {
+    media: [{ id: "gone", kind: "audio", name: "旁白.wav", url: "/@media/original", missingMaterial: {
+      v: 1, mediaId: "gone", original: { kind: "audio", name: "旁白.wav", url: "/@media/original" }, reason: "confirmed-missing", visual: false, audio: true,
+    } }],
+    tracks: [{ id: "audio", clips: [{ id: "lost-clip", mediaId: "gone", start: 4, end: 8, mediaOffset: 53, audioVolume: .4, fadeIn: .2, fadeOut: .3 }] }],
+  };
+  const plan = buildAudioPlan(project, ".", (file) => file.endsWith("missing-material.wav"), () => { throw new Error("must not resolve original media"); });
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].missingMaterial, true);
+  assert.equal(plan[0].offset, 0);
+  assert.equal(plan[0].start, 4);
+  assert.equal(plan[0].dur, 4);
+  assert.equal(plan[0].volume, .4);
+  assert.equal(plan[0].fadeIn, .2);
+  assert.equal(plan[0].fadeOut, .3);
+  assert.match(plan[0].file, /src[\\/]audio[\\/]assets[\\/]missing-material\.wav$/);
+  assert.ok(requireFileExists(plan[0].file));
+});
+
+test("分离的声音引用已确认缺失视频的音轨时仍只计划固定占位人声", () => {
+  const project = {
+    media: [
+      { id: "video", kind: "video", name: "scene.mp4", url: "/@media/scene", missingMaterial: {
+        v: 1, mediaId: "video", original: { kind: "video", name: "scene.mp4", url: "/@media/scene" }, reason: "confirmed-missing", visual: true, audio: true,
+      } },
+      { id: "sound", kind: "audio", name: "scene · 声音", url: "/@media/scene", soundOf: "video" },
+    ],
+    tracks: [{ id: "audio", clips: [{ id: "separated", mediaId: "sound", start: 2, end: 4, mediaOffset: 19 }] }],
+  };
+  const plan = buildAudioPlan(project, ".", (file) => file.endsWith("missing-material.wav"), () => { throw new Error("must not resolve the source video"); });
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].missingMaterial, true);
+  assert.equal(plan[0].offset, 0);
+  assert.equal(plan[0].file, MISSING_MATERIAL_WAV);
+});
+
+function requireFileExists(file) { return fs.existsSync(file); }

@@ -127,10 +127,10 @@ async function openHostedProjectOverWebSocket({ origin, ca, ticket, projectId })
 export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 6683, 6684, 6685, 6686], agentPort = 6687, keepOpen = false,
   providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT,
   passwordOrderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE,
-  publicHandler = null,
+  publicHandler = null, logoutConfirmPollMs = undefined, assetEntry = null,
   diagnostic = () => {} } = {}) {
   assert.equal(ports.length, 7);
-  assert.ok(Number.isInteger(agentPort) && agentPort >= 6680 && agentPort <= 6689 && !ports.includes(agentPort), 'agentPort must be a free probe-owned port');
+  assert.ok(Number.isInteger(agentPort) && agentPort > 1024 && agentPort < 65536 && !ports.includes(agentPort), 'agentPort must be a free probe-owned port');
   assert.ok(path.isAbsolute(providerRoot ?? '') && fs.existsSync(path.join(providerRoot, 'account/internal.mjs')),
     'real v2 account provider root is required');
   assert.ok(path.isAbsolute(passwordOrderModule ?? '') && fs.existsSync(passwordOrderModule),
@@ -178,6 +178,7 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
   const docDir = path.join(dir, 'doc');
   const assetDir = path.join(dir, 'asset');
   let store, docAuthorityClient, accountServer, siteServer, edgeServer, combo, child, childClose;
+  const accountInternalSeen = [], accountInternalFaults = [];
   let childStdout = '', childStderr = '';
   let cleanupComplete = false, handedOff = false, assetPid = null;
   const upgradePairs = new Set();
@@ -234,6 +235,22 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
       docAttestationPublicKey: orderKeys.doc.publicKey });
     accountServer = internalModule.createInternalServer({ tls: pki.account, store, credentials, order,
       services: [{ serviceId: 'doc', fingerprint256: pki.doc.fingerprint256 }] });
+    // 测试钩子：在账号服务的内部口上数请求、按需丢请求或丢回应（应用层掐这条连接，不动网络）。缺省什么都不丢。
+    const accountHandlers = accountServer.listeners('request');
+    accountServer.removeAllListeners('request');
+    accountServer.on('request', (req, res) => {
+      const route = `${req.method} ${new URL(req.url, 'https://internal.invalid').pathname}`;
+      accountInternalSeen.push(route);
+      const fault = accountInternalFaults.find(entry => entry.remaining > 0 && entry.match.test(route));
+      if (fault) {
+        fault.remaining -= 1; fault.applied += 1;
+        if (fault.kind === 'drop-request') { req.socket.destroy(); return; }
+        // drop-response：账号服务照常办完，回应在路上丢了。
+        const drop = () => { req.socket.destroy(); return res; };
+        res.writeHead = drop; res.write = () => { req.socket.destroy(); return false; }; res.end = drop;
+      }
+      for (const handler of accountHandlers) handler.call(accountServer, req, res);
+    });
     await listen(accountServer, accountPort);
     docAuthorityClient = internalModule.createDocAuthorityClient({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.account, serverFingerprint256: pki.doc.fingerprint256 });
     siteServer = http.createServer(appModule.createApp({ store, credentials, mailer,
@@ -324,7 +341,7 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
     const statusConfig = { origin: `https://127.0.0.1:${assetInternalPort}`, tls: pki.doc,
       serverFingerprint256: pki.asset.fingerprint256 };
     addServiceKey(hostedPaths(docDir).servicesFile, { service: 'agent', role: 'agent', actsFor: 'member', kid: agentKey.kid, pub: agentKey.pub });
-    combo = await startHostedCombo({ dataDir: docDir, docPort, assetPort: 6539, host: '127.0.0.1',
+    const startCombo = () => startHostedCombo({ dataDir: docDir, docPort, assetPort: 6539, host: '127.0.0.1',
       trustLoopback: false, clusterToken: 'dual-path-test-cluster-token-32-characters',
       accountRequired: true, docPublicUrl: `${edgeOrigin}/hosted/`,
       assetPublicUrl: `${assetOrigin}/media/api/asset`, assetStatus: statusConfig,
@@ -335,8 +352,10 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
         services: [{ serviceId: 'account', fingerprint256: pki.account.fingerprint256 },
           { serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 }, { serviceId: 'agent', fingerprint256: pki.wrong.fingerprint256 }],
         agent: { fingerprint256: pki.wrong.fingerprint256, serviceKid: agentKey.kid },
+        ...(logoutConfirmPollMs === undefined ? {} : { logoutConfirmPollMs }),
         order: { witnessKeys: { 'dual-path-order': orderKeys.account.publicKey },
           docAttestationPrivateKey: orderKeys.doc.privateKey } } });
+    combo = await startCombo();
     assert.equal(combo.assetPort, null, 'account mode uses the separate asset process');
     const agentOptions = { origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong,
       serverFingerprint256: pki.doc.fingerprint256 };
@@ -446,16 +465,22 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
       PROMPTCUT_ASSET_CLIENT_CERT_FILE: path.join(dir, 'asset.crt'),
       PROMPTCUT_ASSET_INTERNAL_KEY_FILE: path.join(dir, 'asset.key'),
       PROMPTCUT_ASSET_INTERNAL_CERT_FILE: path.join(dir, 'asset.crt') };
-    child = spawn(process.execPath, ['server/hosted/asset-main.mjs'], { cwd: staged, env,
-      windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    assetPid = child.pid;
-    childClose = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
-    child.stdout.on('data', bytes => { childStdout += bytes; });
-    child.stderr.on('data', bytes => { childStderr += bytes; });
-    await waitFor(async () => {
-      if (child.exitCode !== null) throw Error(`asset child exited: ${child.exitCode}; ${childStdout}${childStderr}`);
-      try { return (await jsonRequest(`http://127.0.0.1:${assetPort}/healthz`)).status === 200; } catch { return false; }
-    }, 'independent asset process');
+    const startAsset = async () => {
+      assert.equal(child ?? null, null, 'asset child already running');
+      // 缺省起生产入口。assetEntry 是测试要让素材服务正常停、再起时用的入口（asset-entry-restartable.mjs），多开一条进程间通道。
+      const started = spawn(process.execPath, [assetEntry ?? 'server/hosted/asset-main.mjs'], { cwd: staged, env,
+        windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', ...(assetEntry ? ['ipc'] : [])] });
+      child = started; assetPid = started.pid;
+      childClose = new Promise(resolve => started.once('close', (code, signal) => resolve({ code, signal })));
+      started.stdout.on('data', bytes => { childStdout += bytes; });
+      started.stderr.on('data', bytes => { childStderr += bytes; });
+      await waitFor(async () => {
+        if (started.exitCode !== null) throw Error(`asset child exited: ${started.exitCode}; ${childStdout}${childStderr}`);
+        try { return (await jsonRequest(`http://127.0.0.1:${assetPort}/healthz`)).status === 200; } catch { return false; }
+      }, 'independent asset process');
+      return started.pid;
+    };
+    await startAsset();
     const probe = createAssetReadyProbe(statusConfig);
     let readiness;
     try {
@@ -548,6 +573,38 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
           const codes = issuedCodes.get(`${email}:${purpose}`) ?? [];
           return codes[afterCount] ?? null;
         },
+        // ---- 以下只给退出确认的集成测试用 ----
+        accountIds: accounts.slice(), creatorEditorToken: editors[0],
+        get combo() { return combo; },
+        /** 素材服务进程：按进程号停掉（这是测试自己起的进程）、在同一个数据目录上再起。 */
+        async stopAsset() {
+          if (!child) return null;
+          assert.ok(assetEntry && child.connected, 'clean asset stop needs the restartable test entry');
+          child.send({ type: 'close' });
+          const exit = await childClose; child = null;
+          assert.equal(exit.code, 0, `asset clean close: ${childStdout.slice(-400)}${childStderr.slice(-400)}`);
+          return exit;
+        },
+        startAsset,
+        /** 文档服务：关掉整个进程内的组合，在同一个数据目录上再起（账本、操作历史都在盘上）。 */
+        async restartDoc() { await combo.close(); combo = await startCombo(); return combo; },
+        /** Agent 服务这一侧关读取的那一步：换成先等 gate 再关，模拟它迟迟没关完。返回还原函数。 */
+        holdAgentReadClose(gate) {
+          const transports = agentReadControl.transports, original = transports.fence;
+          transports.fence = ids => { const waiting = (async () => { await gate; return original.call(transports, ids); })();
+            waiting.catch(() => {}); return waiting; };
+          return () => { transports.fence = original; };
+        },
+        /** 账号服务内部口上的故障：route 是对「方法 路径」的正则；kind 是 drop-request（没送到）或 drop-response（办了但回应丢了）。 */
+        accountFault({ match, kind, times = 1 }) {
+          assert.ok(match instanceof RegExp && ['drop-request', 'drop-response'].includes(kind) && Number.isInteger(times) && times > 0);
+          const entry = { match, kind, remaining: times, applied: 0 }; accountInternalFaults.push(entry); return entry;
+        },
+        accountInternalSeen: match => accountInternalSeen.filter(route => match.test(route)).length,
+        /** 账号服务库里这次退出收到的各服务确认（只读）。 */
+        accountAcks: eventId => store.acks(eventId).map(ack => ({ service: ack.service, receiptId: ack.receiptId,
+          appliedSeq: ack.appliedSeq, logoutComplete: ack.logoutComplete,
+          ...(ack.service === 'doc' ? { transport: ack.clockEvidence?.transport ?? null, connections: ack.connections?.length ?? null } : {}) })),
         close };
     }
     const result = { provider: 'actual-v2-app-store-internal', accountCount: accounts.length,

@@ -40,13 +40,14 @@ test('run-assets internal route mounts only with trusted live asset observer and
       serviceRegistry: { refresh() {}, get(id) { return id === 'agent' ?
         { role: 'agent', actsFor: 'member', keys: [{ kid: 'agent-key' }] } : null; } },
       getDocAssembly: () => ({ async resolveRunMedia() { throw Error('not-used'); } }), getService: () => null });
+    let ownedPort = 0;
     t.after(async () => {
       await assembly.close();
       for (const socket of sockets) socket.destroy();
       await Promise.all([...socketCloses]);
       if (service?.listening) await closeServer(service);
       ledger.close(); fs.rmSync(dir, { recursive: true, force: true });
-      t.diagnostic(`owned-run-asset-port=6447; sockets=${sockets.size}; listening=${service?.listening === true}`);
+      t.diagnostic(`owned-run-asset-port=${ownedPort}; sockets=${sockets.size}; listening=${service?.listening === true}`);
     });
     const actual = ({ socket }) => {
       if (!current || socket.destroyed || socket.authorized !== true ||
@@ -63,11 +64,12 @@ test('run-assets internal route mounts only with trusted live asset observer and
     });
     service.on('secureConnection', socket => { sockets.add(socket);
       socketCloses.add(once(socket, 'close').then(() => sockets.delete(socket))); });
-    service.listen(6447, '127.0.0.1'); await once(service, 'listening');
-    const page = await request(6447, pki.asset);
+    service.listen(0, '127.0.0.1'); await once(service, 'listening');
+    ownedPort = service.address().port;
+    const page = await request(ownedPort, pki.asset);
     assert.equal(page.status, 200); assert.equal(page.body.ok, true);
     assert.deepEqual(page.body.result, { events: [], headSeq: 0 });
-    assert.equal((await request(6447, pki.account)).status, 403);
+    assert.equal((await request(ownedPort, pki.account)).status, 403);
     current = false;
-    assert.equal((await request(6447, pki.asset)).status, 403);
+    assert.equal((await request(ownedPort, pki.asset)).status, 403);
   });

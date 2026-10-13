@@ -40,13 +40,38 @@ const permission = (project, accountId, action) => {
   return access;
 };
 
+/**
+ * 「谁可以新建云端项目、每人能建多少」的判断口子（online-browser-task.md 第一步第 4 条）。
+ * 调用方（`createProject`）只问这一个函数；以后要限制，改配置或换规则，不改调用方。〔裁：v18-fixes 子 Agent〕
+ *
+ * 配置 `createPolicy`（传给 `createAccountAuthority`，缺省 `{}`，缺省行为：登录了的账号都能建、不限数量）：
+ *   - `maxProjectsPerAccount`：`null` / 不给 = 不限；非负整数 N = 一个账号名下（创建者是它、状态不是已删除）最多 N 个，
+ *     已经有 N 个时第 N+1 个被拒，错误码 `project-limit-reached`（403）。0 等于谁都不能建。
+ *   - `canCreate({ accountId, accountName, ownedCount, requestId })`：可选的自定义判断，回 `true` 放行；
+ *     回 `false` 或 `{ code }` 拒绝，错误码取 `code`（缺省 `create-not-allowed`，403）。先于数量上限判。
+ * 「要登录」不在这里：没有登录的账号过不了 `verify`，到不了这一步。
+ */
+export function checkCreateProject(policy, { accountId, accountName, ownedCount, requestId }) {
+  const max = policy?.maxProjectsPerAccount ?? null;
+  if (typeof policy?.canCreate === 'function') {
+    const verdict = policy.canCreate({ accountId, accountName, ownedCount, requestId });
+    if (verdict !== true) reject(403, typeof verdict?.code === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(verdict.code) ? verdict.code : 'create-not-allowed');
+  }
+  if (max !== null && ownedCount >= max) reject(403, 'project-limit-reached');
+}
+const validCreatePolicy = policy => policy !== null && typeof policy === 'object' &&
+  (policy.maxProjectsPerAccount === undefined || policy.maxProjectsPerAccount === null ||
+    (Number.isSafeInteger(policy.maxProjectsPerAccount) && policy.maxProjectsPerAccount >= 0)) &&
+  (policy.canCreate === undefined || typeof policy.canCreate === 'function');
+
 /** Sole v2 cloud project authority. No LAN records, account passwords, or usable tokens on disk.
  * initializeProject must durably create the real doc/content snapshot before an active commit.
  * This factory is deliberately not mounted in the legacy shared service by itself.
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
   signingKey, keyId, now = Date.now, pollMs = 1000, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
-  runHooks = null }) {
+  runHooks = null, createPolicy = {} }) {
+  if (!validCreatePolicy(createPolicy)) reject(503, 'create-policy-configuration');
   if (runHooks !== null && typeof runHooks?.fenceInState !== 'function') reject(503, 'run-authority-unavailable');
   const refs = new Map(); const subscriptions = new Set(); const creating = new Map();
   let syncing = null, timer = null, closed = false, ready = false;
@@ -190,6 +215,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const pending = ledger.transaction(state => {
       const previous = replay(state, key, digest);
       if (previous) return { projectId: previous.projectId, result: previous.result ?? null };
+      // 重复的 requestId 已在上面原样回放，不占名额；新建才过策略口子（数量从账本里数，不另建表）
+      checkCreateProject(createPolicy, { accountId: actor.accountId, accountName: actor.accountName, requestId: body.requestId,
+        ownedCount: Object.values(state.projects).filter(p => p.status !== 'deleted' && p.creatorAccountId === actor.accountId).length });
       if (Object.values(state.projects).some(p => p.status !== 'deleted' && p.name === name)) reject(409, 'name-taken');
       let projectId; do { projectId = newProjectId(); } while (state.projects[projectId]);
       state.projects[projectId] = { v: 2, identityRealm: 'account', projectId, authorityId: ledger.authorityId,
@@ -345,9 +373,31 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const p = projectOf(ledger.read(), projectId);
     if (p.status === 'pending') reject(404, 'no-project');
     if (p.status !== 'deleted') return { state: p.status === 'active' ? 'exists' : p.status, authorityId, projectId, accessRevision: p.accessRevision };
+    return goneProofOf(authorityId, projectId, p.tombstone);
+  }
+  /** 「这个项目已不存在」的证明：只对账本里留有墓碑的项目签。客户端的核对见 `server/recovery/gone-proof.mjs`。 */
+  function goneProofOf(authorityId, projectId, tombstone) {
     if (!signingKey || typeof keyId !== 'string' || !keyId) reject(503, 'gone-proof-unavailable');
-    const payload = { v: 1, authorityId, projectId, state: 'gone', tombstoneRevision: p.tombstone.revision, issuedAt: p.tombstone.deletedAt, kid: keyId };
+    if (!Number.isSafeInteger(tombstone?.revision) || !Number.isSafeInteger(tombstone?.deletedAt)) reject(503, 'gone-proof-unavailable');
+    const payload = { v: 1, authorityId, projectId, state: 'gone', tombstoneRevision: tombstone.revision, issuedAt: tombstone.deletedAt, kid: keyId };
     return { ...payload, signature: sign(null, Buffer.from(canonicalJson(payload)), signingKey).toString('base64url') };
+  }
+  /**
+   * 旧办法（不带账号）建的云端项目的墓碑：这些项目从来不在本账本的 `projects` 里，节点上清掉它们时由
+   * `server/hosted/deploy/legacy-tombstones.mjs` 把项目号登记进 `legacyTombstones`。它们没有账号成员可核，
+   * 所以这一项不带登录也答；但只答登记过墓碑的旧项目号——账号项目（不论在不在、删没删）、没登记过的项目号一律回
+   * `no-tombstone`，不签任何东西，也不透露账号项目存不存在。
+   */
+  function legacyGoneStatus({ authorityId, projectId }) {
+    // 不看账号事件有没有追平：旧项目的墓碑和账号服务无关，账号服务停着也答得出来；这一项不带登录，也不该替匿名请求去问账号服务。
+    if (closed) reject(503, 'authority-closed');
+    if (authorityId !== ledger.authorityId) reject(409, 'wrong-authority');
+    if (!projectIdOK(projectId)) reject(400, 'invalid-project');
+    const state = ledger.read();
+    const tombstone = Object.hasOwn(state.legacyTombstones ?? {}, projectId) && !Object.hasOwn(state.projects, projectId)
+      ? state.legacyTombstones[projectId] : null;
+    if (!tombstone) reject(404, 'no-tombstone');
+    return goneProofOf(authorityId, projectId, tombstone);
   }
   function revocationStatus(eventId) {
     const state = ledger.read(); const barrier = state.barriers[`event:${eventId}`];
@@ -355,8 +405,29 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const serviceAcks = Object.fromEntries(services.map(service => [service, state.accessAcks[`ack:${barrier.accessEventId}:${service}`] ?? null]));
     // Preserve legacy rows on disk, but they are not proof under the required protocol.
     if (!agentReadClosureComplete(state, barrier.accessEventId, serviceAcks.agent)) serviceAcks.agent = null;
-    return { ...barrier, serviceAcks, pendingServices: ['doc', ...services.filter(s => !serviceAcks[s]?.complete || serviceAcks[s].cursor < barrier.accessSeq)],
-      logoutComplete: false };
+    // 文档服务自己这一项：带着关闭证据的那份回执已经送到账号服务才算。整条退出办完另看账号服务回来的结束见证。
+    const docAck = state.accountAcks[`seq:${barrier.accountEventSeq}`];
+    const docConfirmed = docAck?.sent === true && docAck.receipt?.logoutComplete === true;
+    return { ...barrier, serviceAcks, docConfirmed,
+      pendingServices: [...(docConfirmed ? [] : ['doc']), ...services.filter(s => !serviceAcks[s]?.complete || serviceAcks[s].cursor < barrier.accessSeq)],
+      logoutComplete: barrier.state === 'complete' };
+  }
+  /** 账号服务已经为这次退出签了结束见证（它那边要四个服务的确认都齐了才签）。只记一次，重复记同一份不报错。 */
+  function completeLogoutBarrier(eventId, witness) {
+    if (typeof witness?.witnessId !== 'string' || !witness.witnessId || !Number.isSafeInteger(witness.orderSeq) ||
+        witness.kind !== 'logout-complete' || witness.state !== 'sealed' || witness.eventId !== eventId) reject(400, 'invalid-logout-witness');
+    return ledger.transaction(state => {
+      const barrier = state.barriers[`event:${eventId}`]; if (!barrier) reject(404, 'no-event');
+      const docAck = state.accountAcks[`seq:${barrier.accountEventSeq}`];
+      if (docAck?.sent !== true || docAck.receipt?.logoutComplete !== true) reject(409, 'logout-ack-pending');
+      const record = { witnessId: witness.witnessId, orderSeq: witness.orderSeq, utcMs: witness.utcMs ?? null };
+      if (barrier.state === 'complete') {
+        if (canonicalJson(barrier.logoutWitness) !== canonicalJson(record)) reject(409, 'logout-witness-mismatch');
+        return structuredClone(barrier);
+      }
+      barrier.state = 'complete'; barrier.logoutWitness = record; barrier.completedAt = now();
+      return structuredClone(barrier);
+    });
   }
   async function statusForPrincipal(input, query) {
     const actor = await verify(input);
@@ -428,7 +499,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
-    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, flushAccountAcknowledgements,
+    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);

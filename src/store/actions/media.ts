@@ -51,6 +51,11 @@ export const media = {
       if (v === undefined) delete next[k];
       else next[k] = v;
     }
+    // 认定过「确认缺失」的素材只改名字时,记录里记的名字跟着改:占位核对的是记录与素材现状逐项相同,
+    // 名字只是显示用的,改名不该让占位失效(地址、类别、哈希变了是另一回事,那由后台检查重新判)。
+    if (cur.missingMaterial && typeof patch.name === "string" && !("missingMaterial" in patch) && cur.missingMaterial.original?.name === cur.name) {
+      next.missingMaterial = { ...cur.missingMaterial, original: { ...cur.missingMaterial.original, name: patch.name } };
+    }
     setProject({ ...p, media: p.media.map((m) => (m === cur ? (next as unknown as MediaAsset) : m)) }, { undoable: false });
   },
   setMediaPath(mediaId: string, path: string) {

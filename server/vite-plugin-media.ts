@@ -56,6 +56,11 @@ function allowedMediaRoots(root: string): string[] {
   return roots;
 }
 
+/** 「没有这个文件」的那几种系统错误码;别的(没权限、设备错误)都是没读成,不是不存在 */
+const ABSENT_CODES = new Set(["ENOENT", "ENOTDIR", "EISDIR"]);
+/** 素材读接口给页面的判词:`absent` = 确实没有这个文件;`outside` = 路径不在素材目录里,这个接口不会给 */
+const MEDIA_VERDICT_HEADER = "X-PC-Media-Verdict";
+
 async function handleMediaFile(req: Connect.IncomingMessage, res: ServerResponse, root: string) {
   try {
     const query = new URL(req.url || "/", "http://promptcut.local").searchParams;
@@ -65,6 +70,8 @@ async function handleMediaFile(req: Connect.IncomingMessage, res: ServerResponse
     const roots = allowedMediaRoots(root);
     if (!roots.some((dir) => inside(file, dir))) {
       res.statusCode = 403;
+      // 页面判「本机取不取得到」时要分得清:这是「这条路径不在素材目录里,这个接口永远不会给」,不是一次读取失败
+      res.setHeader(MEDIA_VERDICT_HEADER, "outside");
       return res.end("Media path is outside PromptCut media folders");
     }
     return serveFile(file, req, res);
@@ -804,8 +811,11 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
     }
   } catch (err) {
     if (res.headersSent) { res.destroy(); return; }
-    res.statusCode = (err as any)?.status ?? 404;
-    res.end("Not found");
+    // 只有「确实没有这个文件」才回 404;没权限读、磁盘出错之类回 500 —— 页面据此判素材缺失,不能把读取失败说成不存在
+    const absent = ABSENT_CODES.has((err as any)?.code);
+    res.statusCode = (err as any)?.status ?? (absent || !(err as any)?.code ? 404 : 500);
+    if (absent) res.setHeader(MEDIA_VERDICT_HEADER, "absent");
+    res.end(res.statusCode === 404 ? "Not found" : "Media read failed");
   } finally {
     await handle?.close().catch(() => {});
     finish?.();
@@ -838,7 +848,15 @@ export function mediaMiddleware(root: string, options: ProjectMediaOptions = {})
         const file = path.resolve(raw);
         if (!allowedMediaRoots(root).some((dir) => inside(file, dir))) {
           res.statusCode = 403;
+          res.setHeader(MEDIA_VERDICT_HEADER, "outside");
           return res.end("Media path is outside PromptCut media folders");
+        }
+        // 文件确实不在:明确回 404(别的失败照旧 500),页面才分得清「没有」和「没读成」
+        try { await fs.stat(file); }
+        catch (err: any) {
+          if (!ABSENT_CODES.has(err?.code)) throw err;
+          res.statusCode = 404; res.setHeader(MEDIA_VERDICT_HEADER, "absent");
+          return res.end("Not found");
         }
         let stored = await adoptMediaFile(root, file);
         let extra: Record<string, unknown> = {};

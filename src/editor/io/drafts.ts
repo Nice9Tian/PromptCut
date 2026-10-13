@@ -3,6 +3,7 @@ import { acquireDraftLock, releaseDraftLock } from "./procLock";
 import { isViewOnly } from "./viewOnly";
 import { actions } from "../../store/project";
 import type { Project } from "../../kernel/project";
+import { onGoneConversion } from "../sync/recoveryAssociation";
 
 /** 本地草稿:服务端 `.pc-projects/` 目录里的一个 .proc 文件 */
 export interface DraftInfo {
@@ -102,3 +103,5 @@ export function ensureActiveDraftId(): string {
 export function getActiveDraftId(): string | null {
   return activeDraftId;
 }
+// 过期的云端项目转成本地项目之后,原来那份草稿保留:转出来的项目不再属于它,保存时另开一份
+onGoneConversion(() => setActiveDraftId(null));

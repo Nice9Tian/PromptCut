@@ -163,6 +163,10 @@ export function createAgentInstanceAuthority({ ledger, verifyTransportInState,
     const instance = current(state, proof?.instanceId, proof?.instanceGeneration, svc);
     if (instance.purpose === 'control-only' && ![...Object.values(conversationControlOperations), 'pendingRuns', 'workerEventSource', 'scopeControl'].includes(operation))
       deny(403, 'instance-purpose-forbidden');
+    // 只跑一条任务的进程不接待人：给人读对话用的那组接口（打开读取、关闭读取、订阅与确认读取控制）它一个都不能用。
+    // 所以它名下不会有读取，退出确认清点读取时也就不用等它（见 agent-read-control.mjs 的 fenceInState）；它占着的进程由 root 的关闭记录管。
+    if (instance.purpose === 'run-worker' && Object.values(conversationControlOperations).includes(operation))
+      deny(403, 'instance-purpose-forbidden');
     const payload = instanceProofPayload({ authorityId: ledger.authorityId, ...instance,
       channelBinding: svc.channelBinding, method, path, operation, requestDigest: digestOf(request) });
     if (!signed(payload, proof?.signature, instance.publicKey)) deny(403, 'instance-proof-invalid');

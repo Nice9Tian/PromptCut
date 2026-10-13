@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "signingKeyFile": "/etc/promptcut/doc/agent-run-scope-signing.pem",
+  "masterServiceKid": "<主身份在服务登记表里的钥匙号>",
+  "masterFingerprint256": "<Agent 主服务证书的指纹>",
+  "slots": [
+    {
+      "expected": "<和 root 入口配置里这个槽的 publisher.expected 逐字相同的那个对象>",
+      "registryDir": "/var/lib/promptcut/agent-root/slot-a",
+      "configuredAnchorDigest": "<--bootstrap 打印的 anchorDigest>"
+    }
+  ]
+}

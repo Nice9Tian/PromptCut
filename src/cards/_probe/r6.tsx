@@ -8,7 +8,7 @@ import type { CardDef, CardProps } from "../../kernel/types";
  * 四张卡各自钉一条 R6 的判据:
  *
  *   `r6-stateful` stateful 的 DOM 卡,审阅表 `independent` → **共享档**(`kind: 'html'`);
- *   `r6-canvas`   canvas 卡(审阅表 `canvasHeavy`)→ 共享档,但体积上限走 1 MB 那一档;
+ *   `r6-canvas`   canvas 卡(审阅表 `surface: canvas2d`)→ 共享档,但体积上限走 1 MB 那一档;
  *   `r6-unknown`  **不进审阅表** → `compositing: 'unknown'` → 按下层依赖卡处理、
  *                 只有**本地档**(`kind: 'local'`),不上云、不进流(计划 3.1(2));
  *   `r6-huge`     故意让单帧快照超过 300 KB:照常落盘,但**不进就绪索引**(A3c)。

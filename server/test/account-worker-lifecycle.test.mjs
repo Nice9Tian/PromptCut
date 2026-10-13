@@ -37,6 +37,8 @@ test('正常结束：第一条被 root 关掉、文档服务结清之后，第�
   assert.equal(f.chain(1).assignment.target.runGrantId, g1.runGrantId, 'root 绑定的就是文档服务签给这一条的分配');
 
   // 第一条还占着：再问多少轮，第二条都领不到，也不会另开进程。
+  // 文档服务也不把这个对话报给调度（上一条还没结清；报了也领不到，调度却会为它白开一代再退掉）。
+  assert.deepEqual((await f.master.pending()).conversations, []);
   for (let i = 0; i < 6; i++) await f.scheduler.tick();
   assert.equal(message(f, second).queueState, 'queued');
   assert.equal(f.grantOf(second), null); assert.equal(f.marker(`started-${second}`), null);
@@ -174,7 +176,14 @@ test('交错二：终态和意向都有了、root 正要正常关时来了停止
   assert.equal(f.log.some(row => row.event === 'slot.stuck'), false);
   await until(() => finished(f, second), { what: '后一条结清' });
   assert.equal(f.grantOf(second).terminalOutcome.status, 'done');
-  assert.equal(f.marker(`started-${second}`).epoch, 2);
+  // 第二条在第一代关掉之后才开始，用的是另一个进程。
+  const started2 = f.marker(`started-${second}`), stop1 = f.stops.find(row => row.epoch === 1);
+  assert.ok(started2.at >= stop1.at && f.grantOf(second).admittedAt >= stop1.at, '第二条的领取和开始都不早于第一代被关掉');
+  assert.notEqual(started2.pid, stop1.pid);
+  // 没有为它白开过进程：原来文档服务在第一条结清之前就把这个对话报给调度，调度开出来的那一代领不到（run-not-ready）被退掉，
+  // 第二条落到第 3 代——机器忙时出现过。现在没结清的对话不报，所以它就在第 2 代。
+  assert.deepEqual(f.log.filter(row => row.event === 'slot.no-task').map(row => row.code), []);
+  assert.equal(started2.epoch, 2);
   assert.deepEqual(f.scheduler.describe().map(row => row.phase), ['idle']);
 });
 
@@ -190,6 +199,34 @@ test('任务进程中途死掉：root 写失败观察，文档服务据此强制
   assert.equal(chain1.closure.protocol, 'promptcut.agent-run-scope.forced-closure.v1');
   await until(() => finished(f, second), { what: '后一条结清' });
   assert.equal(f.grantOf(second).terminalOutcome.status, 'done'); assert.equal(f.marker(`started-${second}`).epoch, 2);
+});
+
+test('已读之后出了暂时性故障、任务进程放弃了正常结算，又没有人按停止：调度让它停下、写失败观察，结果是「失败」，槽让出来', { timeout: 120_000 }, async t => {
+  const f = await fixture(t);
+  const first = f.enqueue([{ say: '开工' }, { hold: 'broken' }, { say: '这句交不上去' }]), second = f.enqueue([{ say: '下一条' }]);
+  await f.scheduler.start();
+  const held = await until(() => f.marker('held-broken'), { what: '第一条在跑' });
+  assert.equal(f.grantOf(first).state, 'active', '已经读到、授权有效');
+  // 主服务收事件的口从这时起答不上：任务进程的事件交不上去，它没法形成收尾记录，只能放弃正常结算
+  f.gates.rejectWorkerEvents = true; f.release('broken');
+  await until(() => f.log.some(row => row.event === 'slot.settlement.abandoned'), { what: '任务进程报放弃' });
+  // 没有人按停止，文档服务没有要强制关它：授权还有效，进程还活着。原来槽会一直停在「在跑」
+  assert.equal(f.grantOf(first).state, 'active'); assert.equal(f.ledger.read().runControlsV2 ? Object.values(f.ledger.read().runControlsV2).length : 0, 0);
+  await until(() => f.log.some(row => row.event === 'slot.settlement.abandoned.failing'), { what: '调度判定这一代不会自己收口' });
+  f.gates.rejectWorkerEvents = false;
+  await until(() => finished(f, first), { what: '放弃的那一条结清' });
+  const done1 = f.grantOf(first), chain1 = f.chain(1), stop1 = f.stops.find(row => row.epoch === 1);
+  assert.equal(done1.terminalOutcome.status, 'failed'); assert.equal(done1.terminalOutcome.reason, 'worker-failed');
+  assert.equal(chain1.failure.observed.kind, 'main-birth-gone'); assert.equal(chain1.failure.assignmentDigest, digestOf(chain1.assignment));
+  assert.equal(chain1.terminal.fence.kind, 'worker-failed'); assert.equal(chain1.intent, null, '没有任务进程的意向：它没走完正常结算');
+  assert.equal(chain1.closure.protocol, 'promptcut.agent-run-scope.forced-closure.v1');
+  assert.equal(stop1.pid, held.pid); assert.equal(f.stops.filter(row => row.epoch === 1).length, 1, '这一代只被关一次');
+  assert.equal(f.generations.get(1).gateway.describe().childClosed, true);
+  assert.equal(f.events().some(row => row.event.type === 'text' && String(row.event.delta).includes('这句交不上去')), false);
+  // 槽让出来了：后一条在第 2 代里照常做完
+  await until(() => finished(f, second), { what: '后一条结清' });
+  assert.equal(f.grantOf(second).terminalOutcome.status, 'done'); assert.equal(f.marker(`started-${second}`).epoch, 2);
+  assert.equal(f.scheduler.describe()[0].phase, 'idle');
 });
 
 test('改密选退出：共有对话里已读的当前任务继续做完，旧登录排着的下一条不再执行；切私有：别人的任务被中断', { timeout: 120_000 }, async t => {
@@ -229,6 +266,58 @@ test('改密选退出：共有对话里已读的当前任务继续做完，旧�
   assert.equal(f.ledger.read().runControlsV2[f.grantOf(others).closureControlId].state, 'complete');
   assert.equal(f.events().some(row => row.event.type === 'text' && row.event.delta === '这句不该出现'), false);
   assert.ok(fenced);
+});
+
+test('退出确认里 Agent 这一项：私有任务被 root 关掉、文档服务结清之后才算确认；共有已读任务不用等它做完', { timeout: 120_000 }, async t => {
+  const f = await fixture(t);
+  await f.startReadControl();
+  // ---- 这个账号自己的私有对话里的任务：退出时中止 ----
+  f.addConversation('conversation_private', { ownerAccountId: 'sender', visibility: 'private' });
+  const own = f.enqueue([{ say: '私有任务开工' }, { hold: 'own' }, { say: '这句不该出现' }], 'sender', 'conversation_private');
+  const grantIn = id => Object.values(f.ledger.read().runGrantsV2 ?? {}).find(g => g.messageId === id) ?? null;
+  await f.scheduler.start();
+  const held = await until(() => f.marker('held-own'), { what: '私有任务在跑' });
+  const exited = f.exit('sender'), control = exited[0], eventId = exited.event.eventId, g = grantIn(own);
+  assert.deepEqual(control.revoked, [g.runGrantId]); assert.deepEqual(control.retained, []);
+  assert.equal(grantIn(own).state, 'revoked', '权限在退出那一刻就撤了');
+  // 进程还没被 root 关掉：Agent 这一项不能算确认。读取那一半已经齐了（这里没有人读对话），卡的是任务的关闭。
+  const before = f.agentConfirmation(eventId);
+  assert.deepEqual(before, { confirmed: false, code: 'agent-run-closure-pending' });
+  assert.equal(f.generations.get(1).gateway.describe().childClosed, false);
+  // 调度从文档服务读到强制终态，让 root 关掉这一代；文档服务读到关闭记录后结清。
+  await until(() => grantIn(own).state === 'finished', { what: '私有任务被关掉并结清' });
+  const after = f.agentConfirmation(eventId);
+  assert.equal(after.confirmed, true);
+  const witness = f.ledger.read().runScopeClosuresV1[g.runGrantId].closureWitnessDigest;
+  assert.deepEqual(after.closure.payload.stoppedRuns, [{ runId: g.runId, closureWitnessDigest: witness }]);
+  assert.deepEqual(after.closure.payload.retainedRuns, []);
+  assert.equal(grantIn(own).terminalOutcome.status, 'interrupted'); assert.equal(grantIn(own).terminalOutcome.reason, 'credential');
+  assert.equal(f.chain(1).terminal.protocol, 'promptcut.agent-run-scope.forced-terminal.v1');
+  assert.equal(f.stops.find(row => row.epoch === 1).how, 'killed'); assert.equal(f.stops[0].pid, held.pid);
+  assert.equal(f.events('conversation_private').some(row => row.event.type === 'text' && row.event.delta === '这句不该出现'), false);
+  // 再判一次是同一份结果：不重复办，也不会换内容。
+  assert.deepEqual(f.agentConfirmation(eventId), after);
+  t.diagnostic(`private: epoch1 pid ${held.pid} killed; agent confirmed only after closure ${witness.slice(0, 12)}`);
+
+  // ---- 共有对话里已读的当前任务：继续做完，确认不用等它 ----
+  const shared = f.enqueue([{ say: '共有任务开工' }, { hold: 'shared' }, { say: '退出以后继续做完' }], 'other');
+  f.scheduler.kick();
+  const heldShared = await until(() => f.marker('held-shared'), { what: '共有任务在跑' });
+  const exitedOther = f.exit('other'), g2 = grantIn(shared);
+  assert.deepEqual(exitedOther[0].retained, [g2.runGrantId]); assert.deepEqual(exitedOther[0].revoked, []);
+  const confirmedWhileRunning = f.agentConfirmation(exitedOther.event.eventId);
+  assert.equal(confirmedWhileRunning.confirmed, true, '保留的共有任务还在跑，Agent 这一项已经可以确认');
+  assert.deepEqual(confirmedWhileRunning.closure.payload.retainedRuns, [g2.runId]);
+  assert.deepEqual(confirmedWhileRunning.closure.payload.stoppedRuns, []);
+  const epoch = f.marker(`started-${shared}`).epoch;
+  assert.equal(f.generations.get(epoch).gateway.describe().childClosed, false, '确认的时候这条任务的进程还活着');
+  assert.equal(grantIn(shared).state, 'retained');
+  f.release('shared');
+  await until(() => grantIn(shared).state === 'finished', { what: '共有任务做完并结清' });
+  assert.equal(grantIn(shared).terminalOutcome.status, 'done');
+  assert.equal(f.stops.find(row => row.epoch === epoch).how, 'graceful'); assert.equal(f.stops.find(row => row.epoch === epoch).pid, heldShared.pid);
+  assert.ok(f.events().some(row => row.event.type === 'text' && row.event.delta === '退出以后继续做完'));
+  t.diagnostic(`shared: confirmed while pid ${heldShared.pid} still running; later finished done`);
 });
 
 test('没领到任务的一代：退掉、槽回收，不占名额；之后的任务照常', { timeout: 120_000 }, async t => {

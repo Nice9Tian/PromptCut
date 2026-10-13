@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
+import { freePorts } from './free-ports.mjs';
 import { openAccountLedger } from '../account/ledger.mjs';
 import { agentReadControlFixture } from './agent-read-control-fixture.mjs';
 import { createConversationClient } from '../agent-service/conversation-client.mjs';
@@ -55,6 +56,7 @@ async function readUntil(reader, pattern, ms = 3000) {
 test('real mTLS doc + HTTP Agent: two accounts, private fence, consent, ACK replay, revocation', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-agent-http-'));
   const cert = certs(dir);
+  const [docPort, publicPort] = await freePorts(2);
   const ledger = openAccountLedger({ file: path.join(dir, 'state.sqlite'), authorityId: 'agent-http-fixture' });
   ledger.transaction(state => { state.projects[pid] = { status: 'active', creatorAccountId: c,
     members: { [a]: { access: 'rw' }, [b]: { access: 'rw' }, [c]: { access: 'rw' } }, bans: {}, hosted: { agent: true } }; });
@@ -63,7 +65,7 @@ test('real mTLS doc + HTTP Agent: two accounts, private fence, consent, ACK repl
     accountId: id, accountName: id === a ? 'Alice' : id === b ? 'Bob' : 'Creator', loginId: `login:${id}`,
     credentialId: `cred:${id}`, loginGeneration: 1 }]));
   const fixture = agentReadControlFixture({ ledger, directory: dir, docTls: cert.doc, agentTls: cert.agent,
-    docPin: cert.doc.pin, agentPin: cert.agent.pin, port: 5790,
+    docPin: cert.doc.pin, agentPin: cert.agent.pin, port: docPort,
     accountAuthority: { async authorizePrincipal(ref, { projectId, action }) {
     const p = principals[ref.authorizationId];
     if (!p || p.projectId !== projectId || ledger.read().revokedLogins[`login:${p.loginId}`]) throw Object.assign(new Error('revoked'), { status: 401, code: 'credential-revoked' });
@@ -80,47 +82,47 @@ test('real mTLS doc + HTTP Agent: two accounts, private fence, consent, ACK repl
       return { authorizationId: `auth:${ticket.includes('alice') ? a : ticket.includes('bob') ? b : c}`, projectId: pid };
     } });
   const client = fixture.client;
-  const wrong = createConversationClient({ origin: 'https://127.0.0.1:5790', tls: cert.wrong, serverFingerprint256: cert.doc.pin });
+  const wrong = createConversationClient({ origin: `https://127.0.0.1:${docPort}`, tls: cert.wrong, serverFingerprint256: cert.doc.pin });
   const wiring = createHostedWiring({ accountMode: true, conversationClient: client });
   const service = createHostedAgentService({ accountMode: true, conversationClient: client });
   const publicServer = http.createServer(createAgentHttp({ service, authenticate: wiring.authenticate }).handle);
   t.after(async () => { wrong.close(); await fixture.close(); wiring.close(); service.close(); if (publicServer.listening) await close(publicServer);
     ledger.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  await fixture.start(); await listen(publicServer, 5791);
+  await fixture.start(); await listen(publicServer, publicPort);
   const alice = 'delegation_alice_1234567890', bob = 'delegation_bob_1234567890', creator = 'delegation_creator_1234567890';
   await assert.rejects(wrong.identity({ delegation: alice }), { status: 403 });
-  const spoof = await request(5791, bob, 'POST', '/v1/conversations/c1/messages', { prompt: 'Bob text', requestId: 'b1',
+  const spoof = await request(publicPort, bob, 'POST', '/v1/conversations/c1/messages', { prompt: 'Bob text', requestId: 'b1',
     accountId: a, selectionSnapshot: { pageId: 'page_123', accountId: a } });
   assert.equal(spoof.status, 400);
-  const first = await request(5791, bob, 'POST', '/v1/conversations/c1/messages', { prompt: 'Bob text', requestId: 'b1',
+  const first = await request(publicPort, bob, 'POST', '/v1/conversations/c1/messages', { prompt: 'Bob text', requestId: 'b1',
     selectionSnapshot: { pageId: 'page_123' } });
   assert.equal(first.status, 202);
   assert.equal(first.body.conversation.ownerAccountId, b);
   const falseClaim = await client.send({ delegation: alice, projectId: pid, conversationId: 'c1', requestId: 'x1', content: 'X',
     principalRef: { authorizationId: `auth:${b}` } }).then(() => null, error => error);
   assert.equal(falseClaim.status, 400);
-  const missingConsent = await (async () => { consent = false; return request(5791, alice, 'POST', '/v1/conversations/c2/messages',
+  const missingConsent = await (async () => { consent = false; return request(publicPort, alice, 'POST', '/v1/conversations/c2/messages',
     { prompt: 'No consent', requestId: 'a0', selectionSnapshot: { pageId: 'page_123' } }); })();
   assert.equal(missingConsent.status, 403); assert.equal(missingConsent.body.code, 'consent-required');
   consent = true;
-  const sent = await request(5791, alice, 'POST', '/v1/conversations/c1/messages', { prompt: 'Alice text', requestId: 'a1',
+  const sent = await request(publicPort, alice, 'POST', '/v1/conversations/c1/messages', { prompt: 'Alice text', requestId: 'a1',
     selectionSnapshot: { pageId: 'page_123' } });
   assert.equal(sent.status, 202); assert.equal(sent.body.queuePosition, 2);
-  const retry = await request(5791, alice, 'POST', '/v1/conversations/c1/messages', { prompt: 'Alice text', requestId: 'a1',
+  const retry = await request(publicPort, alice, 'POST', '/v1/conversations/c1/messages', { prompt: 'Alice text', requestId: 'a1',
     selectionSnapshot: { pageId: 'page_123' } });
   assert.equal(retry.body.messageId, sent.body.messageId);
-  assert.equal((await request(5791, bob, 'GET', '/v1/conversations/c1')).body.meta.messages.length, 2);
+  assert.equal((await request(publicPort, bob, 'GET', '/v1/conversations/c1')).body.meta.messages.length, 2);
   const streamAbort = new AbortController();
-  const stream = await fetch('http://127.0.0.1:5791/v1/conversations/c1/events?after=0', {
+  const stream = await fetch(`http://127.0.0.1:${publicPort}/v1/conversations/c1/events?after=0`, {
     headers: { authorization: `Bearer ${alice}` }, signal: streamAbort.signal,
   });
   assert.equal(stream.status, 200);
   const reader = stream.body.getReader();
   t.after(() => streamAbort.abort());
   assert.match(await readUntil(reader, /Alice text/), /Bob text/);
-  const privateAttempt = await request(5791, alice, 'POST', '/v1/conversations/c1/visibility', { visibility: 'private', requestId: 'a-switch' });
+  const privateAttempt = await request(publicPort, alice, 'POST', '/v1/conversations/c1/visibility', { visibility: 'private', requestId: 'a-switch' });
   assert.equal(privateAttempt.status, 403);
-  const privateResult = await request(5791, bob, 'POST', '/v1/conversations/c1/visibility', { visibility: 'private', requestId: 'b-switch' });
+  const privateResult = await request(publicPort, bob, 'POST', '/v1/conversations/c1/visibility', { visibility: 'private', requestId: 'b-switch' });
   assert.equal(privateResult.status, 200); assert.deepEqual(privateResult.body.cancelled, [sent.body.messageId]);
   // The signed control closes the real old transport before the private ACK.
   // It cannot enqueue a friendly tail event after installing its output fence.
@@ -130,11 +132,11 @@ test('real mTLS doc + HTTP Agent: two accounts, private fence, consent, ACK repl
   catch { ended = true; }
   assert.equal(ended, true);
   streamAbort.abort();
-  assert.equal((await request(5791, alice, 'GET', '/v1/conversations/c1')).status, 404);
-  const creatorView = await request(5791, creator, 'GET', '/v1/conversations/c1');
+  assert.equal((await request(publicPort, alice, 'GET', '/v1/conversations/c1')).status, 404);
+  const creatorView = await request(publicPort, creator, 'GET', '/v1/conversations/c1');
   assert.equal(creatorView.status, 200); assert.equal(creatorView.body.meta.creatorReadOnly, true);
-  assert.equal((await request(5791, creator, 'POST', '/v1/conversations/c1/messages', { prompt: 'No', requestId: 'c1',
+  assert.equal((await request(publicPort, creator, 'POST', '/v1/conversations/c1/messages', { prompt: 'No', requestId: 'c1',
     selectionSnapshot: { pageId: 'page_123' } })).status, 404);
   ledger.transaction(state => { state.revokedLogins[`login:login:${b}`] = { seq: 1 }; });
-  assert.equal((await request(5791, bob, 'GET', '/v1/conversations')).status, 401);
+  assert.equal((await request(publicPort, bob, 'GET', '/v1/conversations')).status, 401);
 });

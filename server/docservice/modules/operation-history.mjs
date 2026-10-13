@@ -195,6 +195,13 @@ export function openOperationHistory(file, { failpoint = () => {}, maxBytes = 25
     }); },
     pending: (projectId) => q("SELECT * FROM operations WHERE project_id=? AND state IN ('prepared','reserved','accepted')").all(projectId).map(decode),
     accepted: (projectId) => q("SELECT * FROM operations WHERE project_id=? AND state IN ('accepted','materialized') ORDER BY json_extract(prepared,'$.projectRev')").all(projectId).map(decode),
+    /** 这些登录在所有项目里留下的操作(只读):退出确认用它判「旧登录有没有还没定序的操作」并取各项目的结束位置。 */
+    byLogins(loginIds) {
+      const ids = new Set(loginIds);
+      if (!ids.size) return [];
+      return q("SELECT o.*, p.rev AS project_rev FROM operations o JOIN projects p ON p.id=o.project_id").all()
+        .map((row) => ({ ...decode(row), currentProjectRev: row.project_rev })).filter((op) => ids.has(op.actor?.loginId));
+    },
     fences: (projectId) => q('SELECT * FROM fences WHERE project_id=?').all(projectId).map((row) => ({ ...JSON.parse(row.payload), state: row.state })),
     journal: (projectId) => q('SELECT * FROM journal WHERE project_id=? ORDER BY seq').all(projectId).map((row) => ({ ...JSON.parse(row.payload), seq: row.seq, kind: row.kind })),
     checkpoint: () => db.exec('PRAGMA wal_checkpoint(TRUNCATE)'),

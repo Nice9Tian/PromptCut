@@ -92,7 +92,7 @@ test('two asynchronous WS authentications cannot exceed maxConnections=1', async
   const both = new Promise(resolve => { reached = resolve; });
   const service = createDocService({ maxConnections: 1, autoTick: false, log: () => {},
     authenticate: async () => { if (++entered === 2) reached(); await barrier; return { userId: 'capacity-fixture' }; } });
-  const addr = await service.listen(5827, '127.0.0.1');
+  const addr = await service.listen(0, '127.0.0.1');
   const clients = [new WebSocket(`ws://127.0.0.1:${addr.port}`, ['promptcut.v1']),
     new WebSocket(`ws://127.0.0.1:${addr.port}`, ['promptcut.v1'])];
   t.after(async () => { release(); for (const client of clients) client.close(); await service.close(); });
@@ -112,7 +112,7 @@ test('two asynchronous HTTP long-poll authentications cannot exceed maxConnectio
   const both = new Promise(resolve => { reached = resolve; });
   const service = createDocService({ maxConnections: 1, enableHttpTransport: true, autoTick: false, log: () => {},
     authenticate: async () => { if (++entered === 2) reached(); await barrier; return { userId: 'capacity-fixture' }; } });
-  const addr = await service.listen(5828, '127.0.0.1');
+  const addr = await service.listen(0, '127.0.0.1');
   t.after(async () => { release(); await service.close(); });
   const requests = [0, 1].map(() => fetch(`http://127.0.0.1:${addr.port}/lp/open`, {
     method: 'POST', headers: { 'x-promptcut-protocols': 'promptcut.v1, promptcut.session.new' }, body: '{}',
@@ -162,7 +162,8 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
     const editorB2 = credentials.createEditor({ account: provider.accountById(idB), deviceId: 'device-b2', requestId: 'login-b2' });
     const accountServer = internalModule.createInternalServer({ tls: tls.account, store: provider, credentials,
       services: [{ serviceId: 'doc', fingerprint256: new X509Certificate(tls.doc.cert).fingerprint256 }] });
-    await listen(accountServer, 5823);
+    await listen(accountServer, 0);
+    const accountPort = accountServer.address().port; // 之后要关掉再在同一端口重开，所以记下系统分到的端口
     const client = createAccountClient({ origin: `https://127.0.0.1:${accountServer.address().port}`, tls: tls.doc,
       serverFingerprint256: new X509Certificate(tls.account.cert).fingerprint256 });
     const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'doc-wiring-fixture' });
@@ -175,7 +176,7 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
       issueSession: input => runtime.issueSession(input), resolveAssetTicket: ticket => runtime.resolveAssetTicket(ticket) });
     const doc = createSharedDocService({ mode: 'hosted', dataDir: path.join(dir, 'docservice'), accountRuntime: runtime, accountProjects,
       trustLoopback: false, service: { autoTick: false }, log: () => {} });
-    const addr = await doc.service.listen(5824, '127.0.0.1');
+    const addr = await doc.service.listen(0, '127.0.0.1');
     const origin = `http://127.0.0.1:${addr.port}`;
     assert.deepEqual(await web(origin, 'GET', '/healthz').then(({ body }) =>
       [body.accountMode, body.accountRequired, body.assetReady]), ['v2', false, false]);
@@ -183,7 +184,7 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
       resolveAssetTicket: ticket => runtime.resolveAssetTicket(ticket),
       services: [{ serviceId: 'account', fingerprint256: new X509Certificate(tls.accountCaller.cert).fingerprint256 },
         { serviceId: 'asset', fingerprint256: new X509Certificate(tls.asset.cert).fingerprint256 }] });
-    await listen(internal, 5825);
+    await listen(internal, 0);
     const privateOrigin = `https://127.0.0.1:${internal.address().port}`;
     let ws, wsB, wsB2, sessionWs, resumedWs, recovery, probeRuntime, probeDoc, statusServer;
     t.after(async () => {
@@ -308,7 +309,7 @@ test('hosted account v2: mTLS credential, durable create, WS/HTTP admission, mes
     const unavailableWsClose = await timeout(new Promise(resolve => unavailableWs.addEventListener('close', resolve, { once: true })),
       'unavailable WS resume');
     assert.equal(unavailableWsClose.code, 1012);
-    await listen(accountServer, 5823);
+    await listen(accountServer, accountPort);
     const crashRoot = path.join(dir, 'crash'); fs.mkdirSync(crashRoot);
     const crashLedgerFile = path.join(crashRoot, 'ledger.sqlite');
     const crashDataDir = path.join(crashRoot, 'docservice');
@@ -350,7 +351,7 @@ process.exit(0);
     const crashResult = await new Promise(resolve => {
       const child = spawn(process.execPath, [childFile], { windowsHide: true,
         env: { ...process.env, PC_CRASH_ROOT: dir, PC_CRASH_LEDGER: crashLedgerFile, PC_CRASH_DATA: crashDataDir,
-          PC_ACCOUNT_ORIGIN: `https://127.0.0.1:5823`,
+          PC_ACCOUNT_ORIGIN: `https://127.0.0.1:${accountPort}`,
           PC_ACCOUNT_PIN: new X509Certificate(tls.account.cert).fingerprint256,
           PC_ACCOUNT_TOKEN: editorA.accessToken } });
       let output = ''; child.stdout.on('data', chunk => { output += chunk.toString(); });
@@ -365,7 +366,7 @@ process.exit(0);
     const persisted = createFileStore({ dir: path.join(crashDataDir, 'tenants', pending[0].projectId), log: () => {} });
     assert.ok(persisted.readBlob(stateBlobName(pending[0].projectId)));
     assert.equal(persisted.read(`projects/${pending[0].projectId}`).length, 1);
-    const recoveryClient = createAccountClient({ origin: `https://127.0.0.1:5823`, tls: tls.doc,
+    const recoveryClient = createAccountClient({ origin: `https://127.0.0.1:${accountPort}`, tls: tls.doc,
       serverFingerprint256: new X509Certificate(tls.account.cert).fingerprint256 });
     recovery = createAccountHostedRuntime({ ledger: recoveryLedger, accountClient: recoveryClient, dataDir: crashDataDir,
       authorityUrl: 'https://fixture.invalid/editor', signingKey: fs.readFileSync(privateKeyFile), keyId: 'fixture', pollMs: 0 });
@@ -386,12 +387,12 @@ process.exit(0);
       res.end(JSON.stringify({ ok: true, ready: true, authorityId: probeLedger.authorityId,
         instanceId: statusInstance, accessCursor: head, accessHead: head }));
     });
-    await listen(statusServer, 5829);
-    const statusOrigin = 'https://127.0.0.1:5829';
+    await listen(statusServer, 0);
+    const statusOrigin = `https://127.0.0.1:${statusServer.address().port}`;
     const assetFingerprint = new X509Certificate(tls.asset.cert).fingerprint256;
     let afterStatus = null;
     const readinessCalls = [];
-    const probeClient = createAccountClient({ origin: `https://127.0.0.1:5823`, tls: tls.doc,
+    const probeClient = createAccountClient({ origin: `https://127.0.0.1:${accountPort}`, tls: tls.doc,
       serverFingerprint256: new X509Certificate(tls.account.cert).fingerprint256 });
     probeRuntime = createAccountHostedRuntime({ ledger: probeLedger, accountClient: probeClient,
       dataDir: path.join(dir, 'probe-docservice'), authorityUrl: 'https://fixture.invalid/editor',
@@ -421,14 +422,15 @@ process.exit(0);
     probeDoc = createSharedDocService({ mode: 'hosted', dataDir: path.join(dir, 'probe-docservice'),
       accountRuntime: probeRuntime, accountProjects: mountedProbe, trustLoopback: false,
       service: { autoTick: false }, log: () => {} });
-    await probeDoc.service.listen(5826, '127.0.0.1');
+    const probeAddr = await probeDoc.service.listen(0, '127.0.0.1');
+    const probeOrigin = `http://127.0.0.1:${probeAddr.port}`;
     statusMode = 'lag'; statusHead = 0;
-    const lagJoin = await web('http://127.0.0.1:5826', 'POST', '/hosted/shared/account/join',
+    const lagJoin = await web(probeOrigin, 'POST', '/hosted/shared/account/join',
       { projectId: raceProject.projectId, deviceId: 'device-b', requestId: 'probe-lag-join' }, bearerB);
     assert.equal(lagJoin.status, 503);
     assert.equal(probeRuntime.authority.listProjects(idB).joined.length, 0);
     statusMode = 'auto';
-    const readyJoin = await web('http://127.0.0.1:5826', 'POST', '/hosted/shared/account/join',
+    const readyJoin = await web(probeOrigin, 'POST', '/hosted/shared/account/join',
       { projectId: raceProject.projectId, deviceId: 'device-b', requestId: 'probe-ready-join' }, bearerB);
     assert.equal(readyJoin.status, 200, readyJoin.body.code ?? readyJoin.body.error);
     assert.equal(probeRuntime.authority.listProjects(idB).joined.length, 1);

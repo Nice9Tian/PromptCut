@@ -8,10 +8,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { freePorts } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { createAccountV2InstallPlan, formatEnvironmentFile, formatUnitSinglePath } from '../hosted/deploy/account-v2-install-plan.mjs';
 
-function fixture(t, { cleanup = true } = {}) {
+async function fixture(t, { cleanup = true } = {}) {
+  const [accountPort, docPort, assetPort, accountInternalPort, docInternalPort, assetInternalPort] = await freePorts(6);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-account-v2-install-'));
   const removeFixture = () => {
     if (!path.resolve(dir).startsWith(path.resolve(os.tmpdir()) + path.sep)) throw Error('outside-temp');
@@ -48,11 +50,11 @@ function fixture(t, { cleanup = true } = {}) {
   const manifest = {
     v: 1, authorityId: 'production-doc-test', enabledServices: ['account', 'doc', 'asset'],
     roles: { account: role('account'), doc: role('doc'), asset: role('asset') },
-    internalOrigins: { account: 'https://127.0.0.1:6443/', doc: 'https://127.0.0.1:6444/',
-      asset: 'https://127.0.0.1:6445/' },
+    internalOrigins: { account: `https://127.0.0.1:${accountInternalPort}/`, doc: `https://127.0.0.1:${docInternalPort}/`,
+      asset: `https://127.0.0.1:${assetInternalPort}/` },
     publicUrls: { accountOrigin: 'https://example.test/', docPublicUrl: 'wss://example.test/hosted/',
       assetPublicUrl: 'https://example.test/media/api/asset', authorityUrl: 'https://example.test/editor' },
-    ports: { account: 6440, doc: 6441, asset: 6442 },
+    ports: { account: accountPort, doc: docPort, asset: assetPort },
     paths: { accountRegistryFile: path.join(publicDir, 'account-registry.json'),
       docRegistryFile: path.join(publicDir, 'doc-registry.json'), orderWitnessKeysFile: path.join(publicDir, 'order-keys.json'),
       accountCredentialKeyFile: credential, accountDataDir, docDataDir, assetDataDir,
@@ -117,8 +119,8 @@ const portClosed = port => new Promise(resolve => {
   socket.once('error', () => resolve(true));
 });
 
-test('account v2 install plan emits exactly three independent path-only units and retains old token', t => {
-  const { manifest, options, token, load } = fixture(t);
+test('account v2 install plan emits exactly three independent path-only units and retains old token', async t => {
+  const { manifest, options, token, load } = await fixture(t);
   const result = load();
   assert.deepEqual(Object.keys(result.units), ['account', 'doc', 'asset']);
   assert.deepEqual(result.publicConfig.enabledServices, ['account', 'doc', 'asset']);
@@ -163,8 +165,8 @@ test('systemd WorkingDirectory keeps one raw path with internal space, percent a
     error => error.code === 'unit-single-path');
 });
 
-test('systemd EnvironmentFile is also a single raw absolute path', t => {
-  const { dir, options, load } = fixture(t);
+test('systemd EnvironmentFile is also a single raw absolute path', async t => {
+  const { dir, options, load } = await fixture(t);
   options.installDir = path.join(dir, 'install path 100%');
   const result = load();
   for (const role of ['account', 'doc', 'asset']) {
@@ -174,8 +176,8 @@ test('systemd EnvironmentFile is also a single raw absolute path', t => {
   }
 });
 
-test('systemd EnvironmentFile rejects paths with glob syntax', t => {
-  const { dir, options, load } = fixture(t);
+test('systemd EnvironmentFile rejects paths with glob syntax', async t => {
+  const { dir, options, load } = await fixture(t);
   for (const suffix of ['install[glob]', 'install?glob', 'install*glob']) {
     options.installDir = path.join(dir, suffix);
     assert.throws(load, error => error.code === 'environment-file-path', suffix);
@@ -185,8 +187,8 @@ test('systemd EnvironmentFile rejects paths with glob syntax', t => {
       error => error.code === 'environment-file-path', suffix);
 });
 
-test('account v2 install plan rejects unsafe users, missing old token and shared private directories', t => {
-  const { manifest, options, token, load } = fixture(t);
+test('account v2 install plan rejects unsafe users, missing old token and shared private directories', async t => {
+  const { manifest, options, token, load } = await fixture(t);
   options.users.asset = options.users.doc;
   assert.throws(load, error => error.code === 'service-users');
   options.users.asset = 'pc_asset';
@@ -197,8 +199,8 @@ test('account v2 install plan rejects unsafe users, missing old token and shared
   assert.throws(load, error => ['role-certificate', 'duplicate-role-identity'].includes(error.code));
 });
 
-test('account v2 install plan rejects nested account, doc and asset data roots', t => {
-  const { manifest, load } = fixture(t);
+test('account v2 install plan rejects nested account, doc and asset data roots', async t => {
+  const { manifest, load } = await fixture(t);
   const nestedAsset = path.join(manifest.paths.docDataDir, 'asset-data');
   fs.mkdirSync(nestedAsset);
   manifest.paths.assetDataDir = nestedAsset;
@@ -206,7 +208,7 @@ test('account v2 install plan rejects nested account, doc and asset data roots',
 });
 
 test('production main rejects unknown, missing and repeated internal service identities', async t => {
-  const { dir, manifest, options, load } = fixture(t);
+  const { dir, manifest, options, load } = await fixture(t);
   const plan = load();
   for (const [file, contents] of Object.entries(plan.files)) {
     if (!Object.hasOwn(plan, 'units') || ![manifest.paths.accountRegistryFile, manifest.paths.docRegistryFile,
@@ -242,7 +244,7 @@ test('production main rejects unknown, missing and repeated internal service ide
 });
 
 test('root-provisioned three-role env starts real account, main doc and separate asset with actual project query', async t => {
-  const { dir, manifest, options, load, removeFixture } = fixture(t, { cleanup: false });
+  const { dir, manifest, options, load, removeFixture } = await fixture(t, { cleanup: false });
   const plan = load();
   for (const [file, contents] of Object.entries(plan.files)) if ([manifest.paths.accountRegistryFile,
     manifest.paths.docRegistryFile, manifest.paths.orderWitnessKeysFile].includes(file)) fs.writeFileSync(file, contents);
@@ -256,19 +258,19 @@ test('root-provisioned three-role env starts real account, main doc and separate
   t.after(async () => {
     const closed = await Promise.all([asset, doc, account].filter(Boolean).map(value => value.stop()));
     assert.equal(closed.every(Boolean), true);
-    for (const port of [6440, 6441, 6442, 6443, 6444, 6445]) assert.equal(await portClosed(port), true,
+    for (const port of [...Object.values(manifest.ports), ...Object.values(manifest.internalOrigins).map(url => Number(new URL(url).port))]) assert.equal(await portClosed(port), true,
       `owned port ${port} remained open`);
-    t.diagnostic(`closed account/doc/asset pids; ports 6440-6445 clear`);
+    t.diagnostic(`closed account/doc/asset pids; owned ports clear`);
     try { removeFixture(); }
     catch (error) { t.diagnostic(`temporary fixture cleanup pending: ${error.code ?? 'unknown'}`); }
   });
-  await waitFor(async () => (await request(6440, 'GET', '/api/account/me')).status === 200, 'actual-account');
+  await waitFor(async () => (await request(manifest.ports.account, 'GET', '/api/account/me')).status === 200, 'actual-account');
   doc = child(options.nodePath, path.join(options.pcSourceDir, 'server/hosted/main.mjs'), options.pcSourceDir,
     configEnv(plan.files[plan.units.doc.envFile]));
-  await waitFor(async () => (await request(6441, 'GET', '/healthz')).status === 200, 'actual-doc');
+  await waitFor(async () => (await request(manifest.ports.doc, 'GET', '/healthz')).status === 200, 'actual-doc');
   const actor = { cookie: '', csrf: '' };
   const accountRequest = async (method, route, body) => {
-    const result = await request(6440, method, `/api/account${route}`, body, {
+    const result = await request(manifest.ports.account, method, `/api/account${route}`, body, {
       ...(actor.cookie ? { cookie: actor.cookie } : {}),
       ...(method === 'POST' ? { origin: 'https://example.test', 'sec-fetch-site': 'same-origin',
         'x-csrf-token': actor.csrf } : {}),
@@ -285,20 +287,20 @@ test('root-provisioned three-role env starts real account, main doc and separate
   const editor = await accountRequest('POST', '/editor/session', {
     deviceId: 'install-device', deviceName: 'Install fixture', requestId: 'install-editor' });
   assert.equal(editor.status, 200, `editor:${editor.status}`);
-  const create = await request(6441, 'POST', '/hosted/shared/account/create',
+  const create = await request(manifest.ports.doc, 'POST', '/hosted/shared/account/create',
     { name: 'Installed real account project', requestId: 'install-create', allowLinkJoin: true,
       initialProject: { tracks: [] } }, { authorization: `Bearer ${editor.body.accessToken}` });
   assert.equal(create.status, 201, `create:${create.status}`);
-  const beforeAsset = await request(6441, 'POST', '/hosted/shared/account/session',
+  const beforeAsset = await request(manifest.ports.doc, 'POST', '/hosted/shared/account/session',
     { projectId: create.body.projectId, deviceId: 'install-device', requestId: 'install-before-asset' },
     { authorization: `Bearer ${editor.body.accessToken}` });
   assert.equal(beforeAsset.status, 503);
   asset = child(options.nodePath, path.join(options.pcSourceDir, 'server/hosted/asset-main.mjs'), options.pcSourceDir,
     configEnv(plan.files[plan.units.asset.envFile]));
-  await waitFor(async () => (await request(6442, 'GET', '/healthz')).status === 200, 'actual-asset');
+  await waitFor(async () => (await request(manifest.ports.asset, 'GET', '/healthz')).status === 200, 'actual-asset');
   let session;
   await waitFor(async () => {
-    session = await request(6441, 'POST', '/hosted/shared/account/session',
+    session = await request(manifest.ports.doc, 'POST', '/hosted/shared/account/session',
       { projectId: create.body.projectId, deviceId: 'install-device', requestId: 'install-after-asset' },
       { authorization: `Bearer ${editor.body.accessToken}` });
     return session.status === 200;
