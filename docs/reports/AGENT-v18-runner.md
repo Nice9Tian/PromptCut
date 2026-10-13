@@ -254,6 +254,31 @@ ChatGPT 自己做的裁定我没有推翻任何一条；B、G、E、F 改的是�
 | `34e886be` | 集成测试里人这一侧的票据快到期就续 |
 | 本提交 | 报告正文 |
 
+## 审查后补做的（2026-10-13，主会话审查意见八条）
+
+主会话已把 `main`（`31e5b781`）合进本分支（`2c7e380c`）。下面七个提交在它之后；最后再执行 `git merge main` 时是「Already up to date」——审查意见里说的「测试改用空闲端口的那个合并」这时还没有进 `main`，所以这一步没有冲突可解，等它进了 `main` 要再合一次。
+
+| 提交 | 对应意见 | 改了什么 |
+|---|---|---|
+| `d9e044d3` | 1 | `account-runner.mjs`：给了看画面的客户端而没有能问授权的 `resources`，构造时拒（`account-runner-look-configuration`）；没有这条任务的上下文，这一轮不开（`look-context-unavailable`）；去掉「有就过闸、没有就不过」的条件。测试 RW5 |
+| `17a18187` | 2 | `main.mjs`：账号模式另要 `PROMPTCUT_AGENT_ACCOUNT_LOOK=1` 才接看画面，缺省忽略地址；`resolveAccountLook()`；`agent.ready` 的 `look` 如实报。`account-runner.mjs`：账号服务对象带 `look`，`/healthz` 据此报。测试 RW6 |
+| `b6d775a4` | 3 | `account-runner.mjs` 新增 `createImportReservation`：一次导入只看一次目录、之后累计；工作目录里已有的文件不按两份算。`workspace.mjs`：`reserve()` 换成 `room()`（只动这几行）。`hosted-tools.mjs` 把来源告诉它。测试 RW7 |
+| `26c1bc61` | 4 | `hosted-tools.mjs` 新增 `runAssetImportWithRetry`：请求号整次导入只生成一次。测试 RW8。素材服务一侧暂存目录没有清理路径，记在「没做成的」第 10 条 |
+| `18a9b7d2` | 5 | `hosted-tools.mjs`：`RUN_ASSET_TRANSIENT_CODES` 白名单，只重试这些错误码。测试 RW9 |
+| `3de0d985` | 6 | `look-client.mjs` 文件头与本报告照实改写（实例号不是隔离）；授权闸「不行」与「问不到」分成两句，集中成 `LOOK_CLIENT_MESSAGES`；问不到先按退避再问三次。RW1 加断言 |
+| `f9b30d57` | 7 | RW10（导入按写核权限的反例）；集成测试的强制停那一条改成走真实运行器的看画面失权路径；任务进程配置加测试用的 `lookLimits`；本报告「没做成的」第 9 条照实改写测试覆盖 |
+
+合并之后的三条命令（机器上同时有别的子 Agent 在跑全量）：
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npx tsc -b --force` | 0 | 零错误 |
+| `npm test -- <我的两个文件，加前三块点名的那几组>`（`account-runner-process`、`account-runner-wiring`、`account-worker-lifecycle`、`account-logout-confirmation`、`hosted-render-queue`、`cloud-run-assets-*`、`asset-project-entries`、`run-asset*`、`run-assets-*`、`asset-run-*`、`project-assets-client`、`agent-worker-task`、`hosted-render-look`、`cloud-agent-look`） | 0 | 128 条全过，0 跳过 |
+| `npm test`（全量），第一遍 | 1 | 6159 条：6149 过、**2 失败**、8 跳过。`reopen-hosting.test.mjs`（邀请一秒过期，读目录时已经过期，`expiresAt` 读到空）和 `reopen-relocation-files.test.mjs`（`EADDRINUSE 127.0.0.1:3492`）。两个文件和它们测的中继代码这一块都没碰。单独重跑两遍：第一遍 10 条里 `reopen-hosting` 的另一个变体又败一次（同一个原因），第二遍 10/10 |
+| `npm test`（全量），第二遍 | 1 | 6159 条：6145 过、**6 失败**、8 跳过。`account-real-runner`（`EADDRINUSE 6700`）、`agent-live-selection`（等 8 秒超时）、`artifact-push` 的 W4、`user-editing` 的 UE-S7——这四个文件单独重跑 20/20。另一条是 `account-worker-lifecycle` 的「交错二」：最后一句断言「后一条在第 2 代里开始」读到的是第 3 代（第 2 代没领到任务被退掉了）。单独重跑三遍都是 8/8；再把这个文件十二份并着跑：十一份全过，一份败在另一条上（夹具读标记文件时子进程正写到一半，JSON 不完整）。我的两个测试文件这两遍全量里都过 |
+
+**没能给出一遍零失败的全量。** 「交错二」那一次没有复现，原因没有查清：它和我改的任务范围刷新（按槽排队）、单任务重试在同一条链上，我不能排除有关；但这条断言本身要求「调度一次都不白开进程」，机器很忙时块一的调度有可能在文档服务结清之前就去开了下一代。请主会话在机器不忙时重跑全量确认。
+
 ## 要主会话到 Linux 上跑的
 
 都在节点自己的临时目录里跑，不碰生产单元、端口、数据目录。
