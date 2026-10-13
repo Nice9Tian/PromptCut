@@ -30,6 +30,8 @@ const fail = code => { throw Object.assign(new Error(code), { status: 503, code 
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const safe = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 const delay = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
+/** 拉得住进程的等待：启动时等文档服务用。那时这个进程还没有任何监听口，用不拉住进程的定时器等，进程会自己以退出码 0 退出。 */
+const holdingDelay = ms => new Promise(resolve => { setTimeout(resolve, ms); });
 /** 对话的工作目录在共用数据目录里的位置：和任务进程里算的是同一个（`account-runner.mjs`） */
 export const accountWorkspaceOwnerKey = (projectId, conversationId) =>
   createHash('sha256').update(`account-v2\n${projectId}\n${conversationId}`).digest('hex').slice(0, 32);
@@ -69,7 +71,8 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
 
   // ---------- 主身份：登记、读取控制 ----------
   // 事件库钉在文档服务的权威号上，登记成功才知道它：所以启动要等到第一次登记成功。文档服务这时连不上不算故障，
-  // 隔一会儿再试（`onWaiting` 让入口记一行日志）；登记出来的不是「只做控制」的身份才是配置错，直接拒绝。
+  // 隔一会儿再试（每次记一行 `agent.master.pending`），一直等、进程不退；文档服务明确不认（4xx）、
+  // 或者登记出来的不是「只做控制」的身份才是配置错，直接拒绝。
   let authorityId = null;
   for (;;) {
     try {
@@ -81,7 +84,7 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     } catch (error) {
       if (error?.code === 'account-master-purpose' || [400, 401, 403].includes(error?.status)) throw error;
       say('agent.master.pending', { code: error?.code ?? 'unavailable' });
-      await delay(registerRetryMs);
+      await holdingDelay(registerRetryMs);
     }
   }
   // 读取控制连接自己退避重连；第一次起不来也一样隔一会儿再试
