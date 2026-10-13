@@ -1,0 +1,63 @@
+[p5] 开始前:可见窗口 1,残留的转写/镜头/主体进程 0
+[p5] clip {"duration":20.019592,"cuts":[6.68,13.36]}
+[p5] phases seen transcribe:转写中 | shots:镜头识别中 | subjects:主体识别中 | done:已完成
+[p5] final {"ok":true,"state":"done","error":null,"stages":{"transcribe":"done","shots":"done","subjects":"done","compose":"done","prerender":"done"}}
+[p5] transcript 去年我们的用户增长了三百倍,这是一个了不起的结果。所谓流存率,指的是用户回来的比例。第一步,打开软件,第二步,导入素材,第三步,导出视频。
+[p5] shots [[0,6.68],[6.68,13.36],[13.36,20.02]]
+[p5] subject labels face,person samples 9
+[p5] cards [["odometer","0.00","6.00"],["term-card","6.00","11.00"],["step-timeline","11.00","20.00"]] caption lines 3
+✔ real short clip: speech → shots → subjects → captions and cards in the project → prerender publish, every stage reported (14947.5701ms)
+[p5] stopped 一键流程在「主体识别」阶段失败了:这台云节点上主体识别两档都用不了(依赖或权重没装好),没有兜底档。位置和遮挡的判断请退回 see_frames 看真实画面,不要假装检测过;请用户联系托管方补装。后面的阶段(生成字幕与卡片、发布预渲染任务)没有做。
+✔ real chain, a dependency not ready: subjects cannot run (no onnxruntime in this Python) → the flow stops there, shots stay done, the project gets nothing (5973.6314ms)
+[p5] receipt {"complete":false,"witnessMissing":true,"pendingRegistrations":0,"connectionsOpen":0,"streamsOpen":0,"childrenOpen":1,"reason":"private"}
+[p5] rows ["workflow.auto:cancelled","stt.transcribe:cancelled"]
+✔ real chain, stopped mid-transcription (host path): the Python process is really gone, the flow never moves on, nothing is committed (4940.0434ms)
+[p5] after restart {"state":"interrupted","stage":"transcribe","stages":{"transcribe":"interrupted","shots":"pending","subjects":"pending","compose":"pending","prerender":"pending"},"error":"一键流程在「语音转写」阶段被中断了:Agent 服务关闭时这个作业正在跑,已中断;可以重新发起。后面的阶段(镜头识别、主体识别、生成字幕与卡片、发布预渲染任务)没有做。重新调用 auto_workflow 可以接着做:已经做完的阶段(文字稿、镜头、主体)会直接复用。"}
+✔ real chain, the service shuts down mid-run, then comes back: "interrupted" at the right stage; a new call finishes the job (17116.7324ms)
+✔ plan: groups, cards and captions follow the desktop rules on a hand-checked script (1.5867ms)
+✔ plan: a clip placed later on the timeline shifts the segments and drops what falls outside it (0.3367ms)
+✔ plan: maxCards caps the cards, unknown card definitions get empty params, an empty transcript gives nothing (0.1645ms)
+✔ plan: the rules are the desktop ones — every regular expression in the grouping and card-picking code matches src/mcp/tools/autoWorkflow.ts (0.5963ms)
+✔ factory: refuses to be built without its seams; handles exactly the three tools; never mentions spawn_agent (36.5199ms)
+✔ arguments: media id, style and maxCards are checked; unknown arguments are refused; nothing is started (129.1084ms)
+✔ auto_workflow: all five stages run in order, the project really gains captions and cards, and the status matches stage by stage (643.5989ms)
+✔ auto_workflow: a second run on the same media reuses what is already there and does not place the cards twice (629.3234ms)
+✔ auto_workflow: audio has no picture, so shots and subjects are skipped honestly (not marked done) and the rest runs (297.7027ms)
+✔ auto_workflow: maxCards 0 still lays the caption track; a transcript with nothing inside the clip commits nothing (1038.7778ms)
+✔ auto_workflow: a long run answers with a job id after the wait and finishes in the background; asking again does not start a second one (771.9985ms)
+✔ a failed stage stops the flow there: later stages are not run, nothing half-committed, the failure is in the words of the package (522.4769ms)
+✔ a stage whose capability is not ready on this node says so and stops there — no placeholder job, no pretending (555.8151ms)
+✔ a perception package that is not wired on this node is "not available" for its stage (and only that stage) (380.239ms)
+✔ optionalStages lets the host decide which unready stages may be left out; the leftover is reported as not done, never as done (598.6021ms)
+✔ transcription that is not ready (engine missing) stops at the first stage with the package words (180.3804ms)
+✔ a stage job that fails with a coded error is explained in the package words (transcription table) (306.0584ms)
+✔ a stage that waits too long is stopped with a timeout reason, its job is asked to stop, and nothing after it runs (494.0151ms)
+✔ a perception package that refuses the call (bad media kind, busy) stops the flow at that stage with its own words (334.8344ms)
+✔ the prerender stage: no seam / no render node is "not done" but not a failure; a publishing error after the commit says the commit is in (2171.2232ms)
+✔ commit: the project moved on under us — re-read, re-plan and commit once; if it keeps moving, give up with no half commit (2084.1716ms)
+✔ commit: a failing commit leaves the project untouched and the flow in error; the media being swapped is reported as such (1654.6611ms)
+✔ commit: cards the project cannot place are counted as skipped (same as the desktop flow) (988.5641ms)
+✔ cancel in the middle of a stage: it stops, the next stage never starts, nothing is committed, the child is asked to stop (1163.9991ms)
+✔ the run is stopped (host path: abortForFence then cancelForFence): the stage stops, no next stage, no commit, the ledger says cancelled (667.485ms)
+✔ the grant is revoked without the host killing anything: the next ledger check notices and the flow stops quietly (531.8175ms)
+✔ close() while a stage is running: the flow is "interrupted" at that stage; after reopening the status says which stage, and a new call picks up the finished work (1021.046ms)
+✔ a process that died while a flow was running: the reopened ledger says interrupted and the persisted stages say where (158.0869ms)
+✔ background_job_status: every kind of package job is visible by job id, with the package words for failures (456.7994ms)
+✔ background_job_status: an unknown error code still says something, and a queued job left by an earlier process is "interrupted" (88.9436ms)
+✔ background_job_status / auto_workflow_status: another project's job, another conversation's job, a made-up job and a malformed id all get the same answer (963.763ms)
+✔ a read-only member can look at job status but cannot start the flow (and nothing is started) (835.0374ms)
+✔ a forged or incomplete context is refused by every tool, before anything happens (121.0159ms)
+✔ the document service cannot be reached: 503, nothing started; when it comes back, the tools work again (799.2957ms)
+✔ a media id from another project is not found, and does not tell whether it exists there (49.8158ms)
+✔ every workflow error code that reaches the model has words, and the stage/phase names are the documented ones (0.2097ms)
+ℹ tests 40
+ℹ suites 0
+ℹ pass 40
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 43144.1831
+
+[p5] 结束后:可见窗口 1,残留的转写/镜头/主体进程 0
+[p5] 全部通过
