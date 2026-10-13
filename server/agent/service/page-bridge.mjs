@@ -166,20 +166,75 @@ function openLedger(databasePath, now, retainMs) {
 }
 
 /**
+ * 这一轮的权威信息从哪来:缺省向文档服务取当前授权,并从里面取发送者与发消息时的页面号。任何对不上都拒绝。
+ * 单独做成一个口子,是因为账号模式的生产形态里「跑这一轮的进程」(一条任务一个工作进程,授权登记在它名下)与
+ * 「接着页面事件流的进程」(主服务)可以不是同一个:反向通道放在主服务里时,宿主换一个 `runAuthority`
+ * (向持有这一轮登记的工作进程问同样的东西)即可,本文件其余部分不变。回的形状固定:
+ * `{ accountId, pageId, fenceRevision, grantState }`;授权不在抛 `PageBridgeError`(403),上游不可达抛 503。
+ */
+export function createRunPageAuthority({ resources, runClient } = {}) {
+  if (typeof resources?.authorize !== 'function' || typeof runClient?.checkAccess !== 'function') fail('page-bridge-configuration', 503);
+  async function current(context) {
+    let auth;
+    try { auth = await resources.authorize(context, 'read'); } catch (error) {
+      if (error?.code === 'run-authority-unavailable') fail('run-authority-unavailable', 503);
+      fail(error?.code === 'tool-context-untrusted' || error?.code === 'tool-context-invalid' ? error.code : 'run-access-denied', 403);
+    }
+    if (auth?.allowed !== true || !Number.isSafeInteger(auth.fenceRevision) || !['active', 'retained'].includes(auth.grantState)) fail('run-access-denied', 403);
+    let raw;
+    try { raw = await runClient.checkAccess({ projectId: context.projectId, runGrantId: context.runGrantId, action: 'read' }); } catch (error) {
+      if ([400, 401, 403, 404].includes(error?.status)) fail('run-access-denied', 403);
+      fail('run-authority-unavailable', 503);
+    }
+    const grant = raw?.runGrant;
+    if (raw?.allowed !== true || !grant || grant.projectId !== context.projectId || grant.conversationId !== context.conversationId ||
+        grant.runId !== context.runId || grant.runGrantId !== context.runGrantId || grant.messageId !== context.messageId ||
+        grant.accountId !== context.senderAccountId || grant.initiatorAccountId !== grant.accountId ||
+        grant.instanceId !== context.instanceId || grant.instanceGeneration !== context.instanceGeneration ||
+        grant.fenceRevision !== auth.fenceRevision || grant.state !== auth.grantState) fail('run-access-denied', 403);
+    const snapshot = grant.selectionSnapshot;
+    let pageId = null;
+    if (snapshot !== null && snapshot !== undefined) {
+      if (!plain(snapshot) || snapshot.source !== 'sent-snapshot' || snapshot.projectId !== context.projectId ||
+          snapshot.accountId !== context.senderAccountId || typeof snapshot.pageId !== 'string' || !BRIDGE_PAGE_ID_RE.test(snapshot.pageId) ||
+          (snapshot.messageId !== undefined && snapshot.messageId !== context.messageId)) fail('run-page-binding-invalid', 403);
+      pageId = snapshot.pageId;
+    }
+    return Object.freeze({ accountId: grant.accountId, pageId, fenceRevision: auth.fenceRevision, grantState: auth.grantState });
+  }
+
+  return Object.freeze({
+    current,
+    signalFor(context) { try { return resources.signalFor?.(context) ?? null; } catch { return null; } },
+  });
+}
+
+/**
  * @param {object} o
  * @param {string} o.databasePath 请求记录的 SQLite 文件(私有数据目录里)
- * @param {{ authorize(context: object, action: 'read'|'write'): Promise<{allowed: true, fenceRevision: number, grantState: string}>, signalFor?(context: object): AbortSignal }} o.resources
+ * @param {{ current(context: object): Promise<{accountId: string, pageId: string|null, fenceRevision: number, grantState: string}>, signalFor?(context: object): AbortSignal|null }} [o.runAuthority]
+ *   这一轮的权威信息;不给就用 `createRunPageAuthority({ resources, runClient })`(本进程持有这一轮的授权登记时)
+ * @param {{ authorize(context: object, action: 'read'|'write'): Promise<{allowed: true, fenceRevision: number, grantState: string}>, signalFor?(context: object): AbortSignal }} [o.resources]
  *   F0 的运行资源登记器(`run-resources.mjs`):每次都向文档服务重核当前授权与实例登记
- * @param {{ checkAccess(input: {projectId: string, runGrantId: string, action: string}): Promise<object> }} o.runClient
+ * @param {{ checkAccess(input: {projectId: string, runGrantId: string, action: string}): Promise<object> }} [o.runClient]
  *   文档服务的运行授权接口;这里只用它取授权里的发送者与发消息时的页面号
  * @param {(context: object) => Promise<{members: Array<{accountId: string, isInitiator: boolean, pages: Array<{pageId: string, live: boolean}>}>}>} o.presence
  *   文档服务的在场表(全员选区查询 `selection.query` 的回答);取不到按不在线办
  * @param {(identity: object, conversationId: string) => Promise<{allowed: boolean, aclRevision: number}>} o.checkSubmitter
  *   交回的人此刻读不读得到这个对话(HTTP 层对事件流用的同一个核对);取不到按拒收办
  */
-export function createPageBridge({ databasePath, resources, runClient, presence, checkSubmitter, limits: limitOverrides = {}, now = Date.now, log = () => {}, randomNonce = () => randomBytes(18).toString('base64url') } = {}) {
-  if (typeof resources?.authorize !== 'function' || typeof runClient?.checkAccess !== 'function' ||
-      typeof presence !== 'function' || typeof checkSubmitter !== 'function' || typeof now !== 'function') fail('page-bridge-configuration', 503);
+export function createPageBridge({ databasePath, resources, runClient, runAuthority = null, presence, checkSubmitter, limits: limitOverrides = {}, now = Date.now, log = () => {}, randomNonce = () => randomBytes(18).toString('base64url') } = {}) {
+  if (typeof presence !== 'function' || typeof checkSubmitter !== 'function' || typeof now !== 'function') fail('page-bridge-configuration', 503);
+  const authority = runAuthority ?? createRunPageAuthority({ resources, runClient });
+  if (typeof authority?.current !== 'function') fail('page-bridge-configuration', 503);
+  /** 每次都重取;回的东西形状不对一律当作授权不在 */
+  async function current(context) {
+    const value = await authority.current(context);
+    if (!value || typeof value.accountId !== 'string' || !REFERENCE.test(value.accountId) || value.accountId !== context.senderAccountId ||
+        (value.pageId !== null && (typeof value.pageId !== 'string' || !BRIDGE_PAGE_ID_RE.test(value.pageId))) ||
+        !Number.isSafeInteger(value.fenceRevision) || !['active', 'retained'].includes(value.grantState)) fail('run-access-denied', 403);
+    return Object.freeze({ accountId: value.accountId, pageId: value.pageId, fenceRevision: value.fenceRevision, grantState: value.grantState });
+  }
   const limits = Object.freeze({ ...PAGE_BRIDGE_DEFAULTS, ...limitOverrides });
   const db = openLedger(databasePath, now, limits.retainMs);
   const say = (event, fields) => { try { log(event, fields); } catch { /* 日志的事 */ } };
@@ -210,36 +265,6 @@ export function createPageBridge({ databasePath, resources, runClient, presence,
       return offline('answer-unreadable', 'rejected');
     }
     return offline(row.reason ?? row.state, row.state);
-  }
-
-  /** 向文档服务取当前授权,并从里面取发送者与发消息时的页面号。任何对不上都拒绝 */
-  async function current(context) {
-    let auth;
-    try { auth = await resources.authorize(context, 'read'); } catch (error) {
-      if (error?.code === 'run-authority-unavailable') fail('run-authority-unavailable', 503);
-      fail(error?.code === 'tool-context-untrusted' || error?.code === 'tool-context-invalid' ? error.code : 'run-access-denied', 403);
-    }
-    if (auth?.allowed !== true || !Number.isSafeInteger(auth.fenceRevision) || !['active', 'retained'].includes(auth.grantState)) fail('run-access-denied', 403);
-    let raw;
-    try { raw = await runClient.checkAccess({ projectId: context.projectId, runGrantId: context.runGrantId, action: 'read' }); } catch (error) {
-      if ([400, 401, 403, 404].includes(error?.status)) fail('run-access-denied', 403);
-      fail('run-authority-unavailable', 503);
-    }
-    const grant = raw?.runGrant;
-    if (raw?.allowed !== true || !grant || grant.projectId !== context.projectId || grant.conversationId !== context.conversationId ||
-        grant.runId !== context.runId || grant.runGrantId !== context.runGrantId || grant.messageId !== context.messageId ||
-        grant.accountId !== context.senderAccountId || grant.initiatorAccountId !== grant.accountId ||
-        grant.instanceId !== context.instanceId || grant.instanceGeneration !== context.instanceGeneration ||
-        grant.fenceRevision !== auth.fenceRevision || grant.state !== auth.grantState) fail('run-access-denied', 403);
-    const snapshot = grant.selectionSnapshot;
-    let pageId = null;
-    if (snapshot !== null && snapshot !== undefined) {
-      if (!plain(snapshot) || snapshot.source !== 'sent-snapshot' || snapshot.projectId !== context.projectId ||
-          snapshot.accountId !== context.senderAccountId || typeof snapshot.pageId !== 'string' || !BRIDGE_PAGE_ID_RE.test(snapshot.pageId) ||
-          (snapshot.messageId !== undefined && snapshot.messageId !== context.messageId)) fail('run-page-binding-invalid', 403);
-      pageId = snapshot.pageId;
-    }
-    return Object.freeze({ accountId: grant.accountId, pageId, fenceRevision: auth.fenceRevision, grantState: auth.grantState });
   }
 
   async function pageLive(context, binding) {
@@ -340,7 +365,7 @@ export function createPageBridge({ databasePath, resources, runClient, presence,
       if (signal.aborted) handler();
     };
     watch(input.signal);
-    try { watch(resources.signalFor?.(context)); } catch { /* 这一轮没有登记过资源:没有可听的信号 */ }
+    try { watch(authority.signalFor?.(context)); } catch { /* 这一轮没有登记过资源:没有可听的信号 */ }
     if (!waiter.settled) {
       say('agent.page.request', { projectId: context.projectId, runId: context.runId, tool: input.tool });
       try {

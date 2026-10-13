@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { w2Fixture, projectId, conversationId, sleep, until } from './cloud-tools-w2-fixture.mjs';
-import { createPageBridge, createPageControlTools, PageBridgeError, PAGE_BRIDGE_TOOLS, PAGE_CONTROL_TOOL_NAMES, checkedPageArgs } from '../agent/service/page-bridge.mjs';
+import { createPageBridge, createPageControlTools, createRunPageAuthority, PageBridgeError, PAGE_BRIDGE_TOOLS, PAGE_CONTROL_TOOL_NAMES, checkedPageArgs } from '../agent/service/page-bridge.mjs';
 import { createHandoffTools, HANDOFF_TEXT, HANDOFF_TOOL_NAMES } from '../agent/service/hosted-handoff.mjs';
 import { initiatorOffline } from '../agent/service/cloud-tools.mjs';
 
@@ -370,6 +370,39 @@ test('W2 close(): waiting requests are cancelled, nothing is left pending, and l
   await assert.rejects(f.initiatorPage.answer(f.bridge, event), { code: 'page-bridge-closed', status: 503 });
   await assert.rejects(f.control.call('play', {}, f.context), { code: 'page-bridge-closed' });
   assert.deepEqual(await f.control.close('agent-off'), { childrenClosed: true, streamsClosed: true, workPending: 0 });
+});
+
+test('W2 the run authority is a replaceable seam: whatever it answers is re-read on every step and a malformed or denying answer fails closed', async (t) => {
+  const f = await w2Fixture(t, { limits: { pageMs: 5_000 } });
+  const real = createRunPageAuthority({ resources: f.resources, runClient: f.runClient });
+  const mode = { answer: null, calls: 0 };
+  const bridge = f.openBridge({ databasePath: `${f.dbPath}.seam`, resources: undefined, runClient: undefined,
+    runAuthority: { current: async (context) => { mode.calls += 1; return mode.answer ? mode.answer(await real.current(context)) : real.current(context); } } });
+  f.initiatorPage.attach(bridge);
+  const who = await bridge.initiator(f.context);
+  const ask = (requestId) => bridge.requestPage({ run: f.context, initiatorAccountId: who.initiatorAccountId, pageId: who.pageId, tool: 'play', args: {}, requestId });
+  // 发之前、交回时各重取一次
+  const before = mode.calls;
+  const pending = ask(RID(180));
+  const event = await firstEvent(f.initiatorPage);
+  assert.equal(mode.calls, before + 1);
+  assert.deepEqual(await f.initiatorPage.answer(bridge, event), { ok: true });
+  assert.equal(mode.calls, before + 2);
+  assert.equal((await pending).delivered, true);
+  // 权威换了说法(另一个账号、另一张页面、形状不对):一律拒绝,不发
+  for (const answer of [(v) => ({ ...v, accountId: 'other' }), (v) => ({ ...v, pageId: 'page-second-tab' }), (v) => ({ ...v, fenceRevision: 'x' }), (v) => ({ ...v, grantState: 'revoked' }), () => null]) {
+    mode.answer = answer;
+    await assert.rejects(ask(RID(181)), (e) => e.status === 403 && ['run-access-denied', 'page-binding-mismatch'].includes(e.code));
+  }
+  // 交回时权威说栅栏版本变了:拒收
+  mode.answer = null;
+  const second = ask(RID(182));
+  const next = await until(() => f.initiatorPage.events[1], { what: 'second request' });
+  mode.answer = (v) => ({ ...v, fenceRevision: v.fenceRevision + 1 });
+  await assert.rejects(f.initiatorPage.answer(bridge, next), { code: 'page-request-fence-changed', status: 410 });
+  assert.deepEqual(await second, { delivered: false, offline: true, why: 'fence-changed', state: 'rejected' });
+  assert.equal(f.initiatorPage.events.length, 2);
+  assert.throws(() => createPageBridge({ databasePath: `${f.dbPath}.none`, presence: async () => ({}), checkSubmitter: async () => ({}) }), { code: 'page-bridge-configuration' });
 });
 
 test('W2-HANDOFF web_handoff asks only the initiator page, carries the cloud browser address, and never claims success it did not get', async (t) => {
