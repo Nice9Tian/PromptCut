@@ -37,7 +37,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     serverFingerprint256: account.serverFingerprint256 });
   const scopeAuthority = account.agent.runScopes ? createAgentRunScopeDoc({ ledger,
     signingKey: account.agent.runScopes.signingKey, slots: account.agent.runScopes.slots,
-    masterServiceKid: account.agent.runScopes.masterServiceKid, masterFingerprint256: account.agent.runScopes.masterFingerprint256 }) : null;
+    masterServiceKid: account.agent.runScopes.masterServiceKid, masterFingerprint256: account.agent.runScopes.masterFingerprint256,
+    // 〔裁〕只给受控测试：换掉「读 root 记录」的来源（生产的读端只在 Linux 上跑，核文件属主是 root）。
+    // 这一项只有在进程内直接调本函数的调用方给得了；`main.mjs` 从环境变量拼配置时不设它，也没有对应的环境变量。
+    ...(typeof account.agent.runScopes.sourceFactory === 'function' ? { sourceFactory: account.agent.runScopes.sourceFactory } : {}) }) : null;
   const masterPin = scopeAuthority ? certificateFingerprint(account.agent.runScopes.masterFingerprint256) : null;
   const masterKid = scopeAuthority ? account.agent.runScopes.masterServiceKid : null;
   if (scopeAuthority && (masterPin === pin || masterKid === kid)) fail(503, 'doc-agent-role-configuration');
@@ -407,7 +410,13 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       currentService(); return runtime.resolveAgentDelegation(ticket);
     } });
   const readControlsHandler = createAgentReadControlHandler({ control: readControl, resolveServicePrincipal, instanceAuthority });
-  const runsHandler = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: pin,
+  // 「一条任务一个进程」要的那几个接口（领分配、查结束、签准备、取终态、主身份取强制终态与事件来源）只在开了这个模式时
+  // 交给内部口；不开时内部口对它们照旧回 503。交给别处（数据连接、运行素材）的 provider 不变。
+  const internalRunAuthority = scopeAuthority ? { ...provider,
+    queryFinish: input => runAuthority.queryFinish(input), scopeAssignment: input => runAuthority.scopeAssignment(input),
+    scopePrepare: input => runAuthority.scopePrepare(input), scopeTerminal: input => runAuthority.scopeTerminal(input),
+    scopeControl: input => runAuthority.scopeControl(input), workerEventSource: input => runAuthority.workerEventSource(input) } : provider;
+  const runsHandler = createRunInternalHandler({ runAuthority: internalRunAuthority, agentFingerprint256: pin,
     masterFingerprint256: masterPin, requirePendingProof: Boolean(scopeAuthority), includeScopeControls: Boolean(scopeAuthority), resolveServicePrincipal,
     authenticateInvocation({ req, servicePrincipal, body, operation }) {
       const cap = instanceAuthority.authenticate({ servicePrincipal, method: req.method,

@@ -16,9 +16,9 @@ import https from 'node:https';
 import { randomBytes } from 'node:crypto';
 import WebSocket from 'ws';
 import { fileURLToPath } from 'node:url';
+import { freePorts } from './free-ports.mjs';
 import { startAccountPasswordUserFixture } from './fixtures/account-password-user-path.mjs';
 
-const ports = [28140, 28141, 28142, 28143, 28144, 28145, 28146], agentPort = 28147;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(check, what, ms = 30_000) {
   const until = Date.now() + ms; let last;
@@ -42,6 +42,7 @@ function jsonRequest(url, { method = 'GET', body, headers = {}, ca } = {}) {
 }
 
 test('退出确认：四个服务都确认以后网页才显示成功；缺一个不显示；丢通知、重复、重启后续办', { timeout: 300_000 }, async t => {
+  const [agentPort, ...ports] = await freePorts(8);
   const fixture = await startAccountPasswordUserFixture({ ports, agentPort, logoutConfirmPollMs: 250,
     assetEntry: fileURLToPath(new URL('./fixtures/asset-entry-restartable.mjs', import.meta.url)) });
   t.after(() => fixture.close());

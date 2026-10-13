@@ -1,19 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { freePorts } from './free-ports.mjs';
 import { startAccountRealRunnerFixture, REAL_RUNNER_PROMPT, REAL_RUNNER_NAME, REAL_RUNNER_TEXT } from './fixtures/account-real-runner.mjs';
 
 test('actual hosted factory signs WSS/project.open, executes real tools and commits doc revision; settlement stays pending',
-  { timeout: 90000 }, async () => {
+  { timeout: 240000 }, async () => {
     let fixture, actor, failure;
     try {
-      fixture = await startAccountRealRunnerFixture(); actor = await fixture.connectActor(0);
+      { const [agentPort, controlPort, ...ports] = await freePorts(9); fixture = await startAccountRealRunnerFixture({ ports, agentPort, controlPort }); } actor = await fixture.connectActor(0);
       const conversationId = 'actual_runner_conversation';
       const posted = await actor.agent('/conversations/' + conversationId + '/messages', {
         prompt: REAL_RUNNER_PROMPT, requestId: 'actual_runner_message', selectionSnapshot: { pageId: actor.pageId } });
       assert.equal(posted.status, 202, 'send status; safe code=' +
         (/^[a-z0-9-]{1,80}$/.test(posted.body?.code ?? '') ? posted.body.code : 'unclassified'));
       assert.equal(posted.body.runId, null);
-      const deadline = Date.now() + 40000; let rows;
+      const deadline = Date.now() + 120000; let rows;
       for (;;) {
         rows = fixture.rows(fixture.projectId, conversationId);
         if (rows.some(row => row.event.type === 'runner_done') && fixture.describe().activeRuns === 0) break;
@@ -36,6 +37,12 @@ test('actual hosted factory signs WSS/project.open, executes real tools and comm
       assert.equal(fixture.describe().dataConnections, 0);
     } catch (error) { failure = error;
     } finally {
+      // 这一轮还在跑时关执行器会被拒（account-runner-pending），关到一半抛出，后面的服务和端口都留着，进程就退不出来。
+      // 所以先等这一轮自己结束（忙时只是慢），再收尾；等不到就照旧收尾，由 npm test 的看门兜底。
+      for (const until = Date.now() + 90000; fixture && Date.now() < until;) {
+        try { if (fixture.describe().activeRuns === 0) break; } catch { break; }
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
       const cleanup = await Promise.allSettled([actor?.close()]);
       const close = await Promise.allSettled([fixture?.close()]);
       const errors = [...cleanup, ...close].filter(row => row.status === 'rejected').map(row => row.reason);
