@@ -86,8 +86,8 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 
 | 写法 | 张数 | 卡 |
 |---|---:|---|
-| `remotion` | 5 | `caption-track`、`av-pulse`、`sound-notification`、`sound-keyboard`、`probe-slow` |
-| `motion` | 96 | 其余全部 |
+| `remotion` | 11 | `caption-track`、`av-pulse`、`sound-notification`、`sound-keyboard`、`probe-slow`，以及 Lottie 的 6 张：`lottie`、`lottie-adrock`、`lottie-bodymovin`、`lottie-gatin`、`lottie-happy2016`、`lottie-navidad`（2026-10-13 渲染重构「癸」把声明改成 remotion 式） |
+| `motion` | 90 | 其余全部 |
 
 | 画在什么上 | 张数 | 卡 |
 |---|---:|---|
@@ -147,7 +147,7 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 | id | 写法 | 画在什么上 | 依不依赖下层 | 理由 |
 |---|---|---|---|---|
 | `composite` | motion | dom | `fromParts` | 见第 6 节 |
-| `lottie` | motion | dom | independent | `LottieView` 走 SVG 画法，只画自己 |
+| `lottie` | remotion | dom | independent | `LottieView` 走 SVG 画法，只画自己。每一帧把 `t` 换算成帧号直接跳过去；播放库里的随机数和「属性值留旧数」在 `loadLottie` 里固定住了，顺着推和直接跳是同一个画面（2026-10-13 改登记） |
 | `particles` | motion | canvas2d | independent | tsParticles 画在自己的画布上；画布不透明区之外是透明的，不读下层 |
 | `scene-3d` | motion | webgl | independent | three.js WebGL，按 `t` 算姿态后显式渲染；只画自己 |
 | `caption-track` | remotion | dom | independent | 纯文本字幕；虽然引了 `hud.css`，但没有用 `hud-glass` |
@@ -174,10 +174,10 @@ JSON 放不下注释，所以登记的结论和理由写在这里。**改 `capab
 | `terminal-3d` | motion | dom | **belowDependent** | 同上；它的 3D 是 CSS 透视，不是 canvas |
 | `versus-card` | motion | dom | **belowDependent** | 同上，两块玻璃板 |
 
-**Lottie 素材封装卡（5 张，全是 `motion` / `dom` / `independent`）**
+**Lottie 素材封装卡（5 张，全是 `remotion` / `dom` / `independent`）**
 
 `lottie-adrock`、`lottie-bodymovin`、`lottie-gatin`、`lottie-happy2016`、`lottie-navidad`。
-五张共用 `LottieView`（SVG 画法），各自只画自己的动画，互不采样，也不是画布卡。
+五张共用 `LottieView`（SVG 画法），各自只画自己的动画，互不采样，也不是画布卡。写法跟着通用 Lottie 卡，2026-10-13 一起改成 remotion 式。
 
 **粒子素材封装卡（53 张，通配 `particles-*`，全是 `motion` / `canvas2d` / `independent`）**
 

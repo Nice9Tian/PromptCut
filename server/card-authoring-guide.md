@@ -25,8 +25,8 @@ PromptCut 的卡都在两种写法里二选一（动效卡、素材效果卡一�
 |---|---|---|
 | 声明 | `frameMode: "direct"` | `frameMode: "stateful"` |
 | 画面怎么得到 | 只由时间 `t`、参数和输入素材算出来；跳到哪一帧都是直接算，代价一样 | 有状态：要从片段起点一帧帧推进，才得到目标帧 |
-| 怎么写 | 只用 react、PromptCut 自带的 remotion 式框架（`interpolate`、`tween`、`spring`、`stagger`、`random` 等）和第 2.5 节名单里的模块。**必须有一句引用框架的 import**：纯算术、GLSL 的卡（素材效果卡）也写 `"direct"`，用不到工具就写一行裸导入 `import "../../kernel/remotionStyle";`。第 2 节 | 可以用 Motion 的动画、弹簧、`AnimatePresence`，CSS 动画，`lottie-web`，粒子，three，也可以自己累积状态。用了第 2.5 节名单之外的库（`lottie-web`、three 等）的卡也写 `"stateful"`，不要求它真的累积状态。第 3 节 |
-| 适合 | 画面能写成「t 的函数」：标题与字幕的进出场、数字与柱图、按种子摆出来的一批元素、画布上按公式算位置的图形 | 要用 Motion 或 CSS 现成的动画而不想自己写曲线；要用粒子、物理模拟这类一帧依赖上一帧的效果；要用 `lottie-web`、three |
+| 怎么写 | 只用 react、PromptCut 自带的 remotion 式框架（`interpolate`、`tween`、`spring`、`stagger`、`random` 等）和第 2.5 节名单里的模块。**必须有一句引用框架的 import**：纯算术、GLSL 的卡（素材效果卡）也写 `"direct"`，用不到工具就写一行裸导入 `import "../../kernel/remotionStyle";`。第 2 节 | 可以用 Motion 的动画、弹簧、`AnimatePresence`，CSS 动画，`lottie-web`，粒子，three，也可以自己累积状态。用了第 2.5 节名单之外的库（three、自己直接引的 `lottie-web` 等）的卡也写 `"stateful"`，不要求它真的累积状态。放一段 Lottie 动画不用自己引 `lottie-web`：用现成的 `lottie` 卡，它是内置的 remotion 式卡。第 3 节 |
+| 适合 | 画面能写成「t 的函数」：标题与字幕的进出场、数字与柱图、按种子摆出来的一批元素、画布上按公式算位置的图形 | 要用 Motion 或 CSS 现成的动画而不想自己写曲线；要用粒子、物理模拟这类一帧依赖上一帧的效果；要用 three |
 | 代价 | 只能用框架里有的工具，框架外的写法建卡时当场拒绝（第 2.4 节）；弹簧、缓动、错开进场要用框架自己的 | 暂停、拖动到片段中间时，要从片段起点重新推进到那一帧，片段越长越慢；预渲染要为它存每一帧的快照 |
 | 建卡时的检查 | 严格，逐条指出哪一行不行 | 硬约束与通用合规：必填字段、没装的依赖、没定义的动画 class、来源与许可证等（第 6、8 节） |
 
@@ -332,7 +332,7 @@ useLayoutEffect(() => {
 | `../native/hud` | 位置与主色的约定 |
 | `../magicui/vendor/cn` | 拼类名 |
 
-只带类型的导入（`import type …`）不限。**不在名单里的**：`motion`、`motion/react`；`lottie-web`、`@tsparticles/*`（它们自带时钟或内部取随机）；`three`；同目录的别的文件与样式文件（样式文件里的动画建卡时看不见）。
+只带类型的导入（`import type …`）不限。**不在名单里的**：`motion`、`motion/react`；`lottie-web`、`@tsparticles/*`（它们自带时钟或内部取随机；放 Lottie 动画用内置的 `lottie` 卡和素材封装卡，那两种是 remotion 式的，播放库的随机数由卡片固定住，见第 3 节）；`three`；同目录的别的文件与样式文件（样式文件里的动画建卡时看不见）。
 
 ### 2.6 检查查不出来、但同样不许的写法
 
@@ -354,7 +354,7 @@ useLayoutEffect(() => {
 - 用 Motion 现成的动画：`initial` / `animate` / `transition`、弹簧、`AnimatePresence` 进出场、布局动画。写起来省力，曲线现成。
 - CSS 关键帧与过渡。
 - 一帧依赖上一帧的效果：粒子（`@tsparticles`）、物理模拟、自己累积状态的 JS。
-- `lottie-web`（按帧定位用 `goToAndStop(frame, true)`，不要 autoplay；参考 `src/cards/native/lottie.tsx`）。素材目录里的 Lottie 已经是现成的卡，见 4.6 节，不要重写。
+- 自己直接引 `lottie-web` 的卡（按帧定位用 `goToAndStop(frame, true)`，不要 autoplay）。**放一段 Lottie 动画不需要这样做**：通用的 `lottie` 卡（把 JSON 文本或 URL 填进参数）是内置的 remotion 式卡，播放库表达式里的 `random()`、`wiggle()` 和文字的随机顺序由卡片固定住，跳到哪一帧都和顺着播到那一帧相同；素材目录里的 Lottie 已经是现成的卡，见 4.6 节，不要重写。自己引 `lottie-web` 的卡拿不到这层固定（带随机表达式的素材，画面会随推进的方式变），而且 `lottie-web` 不在 remotion 式的模块名单里（第 2.5 节），只能声明 `"stateful"`。
 - three（三维画面写成 t 的纯函数，t 变了再显式 render 一次；参考 `src/cards/native/scene-3d.tsx`）。three 不在 remotion 式的模块名单里（第 2.5 节），所以用它的卡声明 `"stateful"`。
 
 **代价：**
@@ -370,7 +370,7 @@ useLayoutEffect(() => {
 - 不用 `IntersectionObserver`：卡片挂载即播放。
 - 不自己跑帧循环（`setAnimationLoop`、`requestAnimationFrame` 配三维），不靠鼠标、滚动、hover 驱动（第 6 节的审查表）。
 - 可以用 `Math.random`（舞台把它钉成了带种子的），但它每调一次往前走一步，结果取决于调用的先后。要让同一个 `t` 不管怎么跳转都得到同一个随机数，用框架的 `random(种子, 序号)`（第 2.1 节；它只依赖种子和序号，motion 式的卡也可以引用）。
-- 挂载即播放：`motion` 自己会把动画走完，**绝大多数用 Motion 的卡不需要读 `t`**。只有「跟着时间轴走」的卡（字幕轨按时间切换当前句、章节导航按时间高亮）和按 `t` 显式渲染的卡（三维卡；按帧号定位的 `lottie-web` 卡把 `t` 换算成帧号）才读 `t`；这样的卡在 `useWhen` 里说明它需要 clip 覆盖整段时间，而不是一小截。
+- 挂载即播放：`motion` 自己会把动画走完，**绝大多数用 Motion 的卡不需要读 `t`**。只有「跟着时间轴走」的卡（字幕轨按时间切换当前句、章节导航按时间高亮）和按 `t` 显式渲染的卡（三维卡；自己引 `lottie-web` 按帧号定位的卡把 `t` 换算成帧号）才读 `t`；这样的卡在 `useWhen` 里说明它需要 clip 覆盖整段时间，而不是一小截。
 - Motion 的其它写法（`type: "spring"` 的弹簧、关键帧数组、`delay`、`repeat`）都可以用，照 Motion 自己的文档写。导出时舞台的虚拟时钟管着 Motion 的帧循环，也把 CSS 与 Web Animations 的动画钉在「舞台时间减去它出现时的舞台时间」上，所以无限循环（`repeat: Infinity`）的动画在导出里的相位也只由时间决定；这样的卡落定之后的行为写 `after: "loop"` 或 `"evolve"`（第 4.4 节）。
 
 ### 3.1 例子：价格标签
@@ -666,6 +666,7 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 对外只有翻译出来的旋钮(粒子卡露出配置里真有的数量 / 速度 / 大小 / 颜色 / 不透明度 / 连线)。
 想用某个素材就 `add_clip({ cardId: "lottie-adrock" })`,**不要**去读素材 JSON、不要用 create_card 再包一层;
 `lottie-` / `particles-` 前缀是保留命名空间。
+Lottie 的封装卡和通用的 `lottie` 卡是 remotion 式的(每一帧把时间换算成帧号直接算,播放库里的随机数由卡片固定住);粒子的封装卡是 motion 式的。
 
 ### 4.7 引用素材库里的图片 / 视频
 
@@ -772,7 +773,7 @@ interface CardProps<P> {
 ```
 
 - **remotion 式的卡一定要读 `t`**：画面就是 t 的函数。`t` 在 `CardProps` 里是可选属性，所以解构时写 `{ params, t = 0 }`。
-- **用 Motion 的卡绝大多数不需要 `t`**——挂载即播，`motion` 自己会把动画走完。只有「跟着时间轴走」的卡才读 `t`：字幕轨（按时间切换当前句）、章节导航（按时间高亮当前章节），以及按 `t` 显式渲染的卡（三维卡、按帧号定位的 `lottie-web` 卡）。
+- **用 Motion 的卡绝大多数不需要 `t`**——挂载即播，`motion` 自己会把动画走完。只有「跟着时间轴走」的卡才读 `t`：字幕轨（按时间切换当前句）、章节导航（按时间高亮当前章节），以及按 `t` 显式渲染的卡（三维卡、自己引 `lottie-web` 按帧号定位的卡）。
   如果你的卡要读 `t`，在 `useWhen` 里说明它需要 clip 覆盖整段时间，而不是一小截。
 - **不要往 `params` 里写**（所有卡都一样）：它是宿主交来的输入，往里写会把状态带到下一帧或别的片段。
 - `t` 的起点：普通卡是片段本地秒；写了 `audio()` 的卡，`t` 已经加上片段开头被裁掉的那一段，见第 10 节。
