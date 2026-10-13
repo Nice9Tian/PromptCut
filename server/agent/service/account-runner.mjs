@@ -77,7 +77,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       runId: grant.runId, runGrantId: grant.runGrantId });
     inst = createAgentInstance({ profile: 'hosted', server: { httpServer: null, ssrLoadModule: loadModule,
       config: { root }, middlewares: { use() {} } },
-      prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {} }) : null,
+      // 这一轮被停掉(signal)时,它排在渲染服务队列里的看画面请求一并撤回,不占着队列、不在失权之后还出图
+      prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {}, signal: signal ?? null }) : null,
       latestMirror: () => null, latestPlayhead: () => null, projectId: grant.projectId,
       identity: { userId: grant.accountId, username: grant.initiatorName ?? record.senderNameAtSend }, ownerKey,
       hostedTools, docUrl: dataClient.wsUrl, protocolsFor, execSerial, accountMode: true, accountSelection,

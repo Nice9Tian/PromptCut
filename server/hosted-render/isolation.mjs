@@ -7,7 +7,10 @@
  *     只把「这个项目要隔离、此刻有几个任务等着」报上来；
  *   - 这样的项目由**隔离工作进程**做：同一时刻最多一个，只连这一个项目，代理口只给它这一个项目的票据（口令每轮现生成）；
  *     有自己的检出副本、数据目录与端口，开卡片同步，报 `userCards: true`；
- *   - 这个项目 `idleMs`（60 s）没有它能做的任务就结束；几个项目都在等时轮流，每个最多 `sliceMs`（5 分钟）一换；
+ *   - 让位的规矩（2026-10-09 用户定「满五分钟才让位」，`docs/plan/account-binding-task.md`「提前让位」一行）：装着的项目
+ *     **空闲满 `idleMs`（5 分钟）才结束**，别的项目在排队、有人等着看画面也不提前；
+ *   - 〔裁，三级〕一直有活的项目不算空闲，上面那条管不到它：另有项目在等时它最多连续做 `sliceMs`（5 分钟）就排空让位，不然别的项目
+ *     （连同等着看画面的）会一直排不上。到了 `sliceMs` 而它此刻正闲着的，不按这一条换，照上一条等它闲满 `idleMs`；
  *   - 换项目之前把数据目录整个清空、检出副本重建（装进来的用户卡都在数据目录的改动层里，副本一并重建是兜底）。
  *
  * **现状：本文件只有编排的状态机与目录操作，带单测（HR23），还没有接进管理进程（`main.mjs` 不引它）。**
@@ -22,12 +25,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export const ISOLATION_DEFAULTS = Object.freeze({
-  /** 这个项目这么久没有隔离工作进程能做的任务（手里没有、也没有可认领的）就结束 */
-  IDLE_MS: 60_000,
-  /** 另有项目在等时，一个项目最多连续做这么久 */
+  /**
+   * 这个项目这么久没有隔离工作进程能做的任务（手里没有、没有可认领的、也没有人要看它的画面）才结束。
+   * 2026-10-09 用户定：空闲满五分钟才让位，别的项目在排队也不提前（原来是 60 秒）
+   */
+  IDLE_MS: 5 * 60_000,
+  /** 另有项目在等、而这个项目一直有活（不空闲）时，它最多连续做这么久就排空让位〔裁，见文件头〕 */
   SLICE_MS: 5 * 60_000,
-  /** 等着的项目里有「要看画面」的（有人正等着一帧）时，当前这个项目最多再连续做这么久就轮换 */
-  LOOK_SLICE_MS: 45_000,
   /** 轮换时等手里的任务做完的上限；到点还没完就让掉认领结束 */
   DRAIN_MS: 120_000,
   /** 起来这么久还没交过诊断就算起不来 */
@@ -83,7 +87,7 @@ export function isolationCandidates({ directory = [], residentNodes = [], looks 
  */
 export function createIsolation({
   runner, nodeIdOf, now = Date.now, log = () => {},
-  idleMs = ISOLATION_DEFAULTS.IDLE_MS, sliceMs = ISOLATION_DEFAULTS.SLICE_MS, drainMs = ISOLATION_DEFAULTS.DRAIN_MS, lookSliceMs = ISOLATION_DEFAULTS.LOOK_SLICE_MS,
+  idleMs = ISOLATION_DEFAULTS.IDLE_MS, sliceMs = ISOLATION_DEFAULTS.SLICE_MS, drainMs = ISOLATION_DEFAULTS.DRAIN_MS,
   startTimeoutMs = ISOLATION_DEFAULTS.START_TIMEOUT_MS, retryIdleMs = ISOLATION_DEFAULTS.RETRY_IDLE_MS,
 } = {}) {
   /** @type {null | { projectId, members, phase: 'preparing'|'starting'|'running'|'draining'|'stopping', startedAt, readyAt, lastBusyAt, drainAt, worked, pendingKey }} */
@@ -110,7 +114,7 @@ export function createIsolation({
       return false;
     });
     if (usable.length === 0) return null;
-    // 要看画面的先（有人正等着这一帧）；其余轮流：上一轮做的那个排到最后
+    // 轮到下一个时，要看画面的先（云端 Agent 的请求优先于预渲染任务）；其余轮流：上一轮做的那个排到最后
     const urgent = usable.find((c) => c.look === true);
     if (urgent) return urgent;
     const others = usable.filter((c) => c.projectId !== lastServed);
@@ -172,7 +176,6 @@ export function createIsolation({
      */
     tick({ candidates = [], eligible = () => true, report = null, looks = null } = {}) {
       waiting = candidates.filter((c) => c.projectId !== current?.projectId).map((c) => c.projectId);
-      const lookWaiting = candidates.some((c) => c.look === true && c.projectId !== current?.projectId);
       if (op) return;
       if (!current) {
         const c = pick(candidates);
@@ -198,10 +201,14 @@ export function createIsolation({
       // 出过图也算这一轮干了活（不然只为看画面起的一轮会被记成「什么都没认领到」而暂不再起）
       if (looking) cur.worked = true;
       if (cur.phase === 'running') {
-        if (held > 0 || (node?.claimable ?? 0) > 0 || lookWanted) cur.lastBusyAt = now();
+        const busyNow = held > 0 || (node?.claimable ?? 0) > 0 || lookWanted;
+        if (busyNow) cur.lastBusyAt = now();
         if (!eligible(cur.projectId) && held === 0 && !looking) { void end('not-listed'); return; }
+        // 空闲满 idleMs 才让位：别的项目在排队、有人等着看画面都不提前（2026-10-09 用户定）
         if (now() - cur.lastBusyAt >= idleMs) { void end('idle'); return; }
-        if (waiting.length > 0 && !looking && now() - cur.readyAt >= (lookWaiting ? Math.min(sliceMs, lookSliceMs) : sliceMs)) {
+        // 一直有活、又有别的项目在等：连续做满 sliceMs 就排空让位。此刻正闲着的不走这一条（等它闲满 idleMs）；
+        // 等着的项目里有没有「要看画面」的不影响这个时限（原来有人等着看画面时 45 秒就换，已按用户的决定取消）
+        if (waiting.length > 0 && busyNow && !looking && now() - cur.readyAt >= sliceMs) {
           cur.phase = 'draining';
           cur.drainAt = now();
           log('isolation.rotate', { projectId: cur.projectId, waiting, held });

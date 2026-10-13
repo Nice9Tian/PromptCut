@@ -295,7 +295,7 @@ test('HR23 交给工作进程的环境：没有管理进程的配置、集群令
   assert.deepEqual(Object.keys(env).sort(), ['HOME', 'KEYBOARD_LAYOUT', 'LANG', 'MONKEY', 'PATH', 'PC_CHROME_ARGS', 'PROMPTCUT_PAGE_GATE', 'PROMPTCUT_TEST_ENV_FINGERPRINT', 'PUPPETEER_EXECUTABLE_PATH']);
   const base = { PROMPTCUT_RENDER_DATA: path.join(ROOT, 'out', 'x-render') };
   const c = renderServiceConfig(base);
-  assert.deepEqual([c.userCards, c.isoPort, c.isoIdleMs, c.isoSliceMs, c.loadHigh], ['isolated', 5410, 60_000, 300_000, null]);
+  assert.deepEqual([c.userCards, c.isoPort, c.isoIdleMs, c.isoSliceMs, c.loadHigh], ['isolated', 5410, 300_000, 300_000, null]);
   assert.equal(c.isoDataDir, path.join(c.dataDir, 'iso'));
   const d = renderServiceConfig({ ...base, PROMPTCUT_RENDER_USER_CARDS: 'off', PROMPTCUT_RENDER_PORT: '5730', PROMPTCUT_RENDER_ISO_PORT: '5733', PROMPTCUT_RENDER_ISO_IDLE_MS: '8000', PROMPTCUT_RENDER_LOAD_HIGH: '4' });
   assert.deepEqual([d.userCards, d.isoPort, d.isoIdleMs, d.loadHigh], ['off', 5733, 8000, 4]);

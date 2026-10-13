@@ -5,7 +5,7 @@
  * 接线（主机搁着不认领、代理口分口令、闸装到开发服务器上、同步文件预检）的单测在 `hosted-render-usercards.test.mjs`；
  * 端到端的验收是 `scripts/probes/hosted-render-isolation-probe.mjs`。
  *
- *   HR23  隔离工作进程的编排（状态机）：一次只做一个项目；60 s 没有它能做的任务就结束；几个项目都在等时轮流、每个最多 5 分钟一换；
+ *   HR23  隔离工作进程的编排（状态机）：一次只做一个项目；空闲满 5 分钟（没有它能做的任务）才结束；一直有活而别的项目在等时最多连续做 5 分钟；
  *         换项目之前清空；起不来、什么都没认领到的不反复重来；检出副本与数据目录的建与清（只清带记号的目录、Windows 上不建链接）
  *         清空清到一半失败（某一项删不掉）：记号还在、再调一次能清完、没有记号的非空目录照旧不清（`wipeDir` 先清记号以外的每一项，记号最后才动）
  *   HR28  页面请求闸（纯函数）：浏览器发来的请求——编辑器的 Vite 一律拒；预渲染的 Vite 只认同源，`/api/**` 只放行表里的几条；
@@ -76,8 +76,10 @@ function isoRig(overrides = {}) {
   };
 }
 
-test('HR23 一次只做一个项目：先清空再起；60 s 没有它能做的任务就结束，结束后再清一遍；清单里最多一项', async () => {
+test('HR23 一次只做一个项目：先清空再起；空闲满五分钟（没有它能做的任务）才结束，结束后再清一遍；清单里最多一项', async () => {
   const r = isoRig();
+  const IDLE = ISOLATION_DEFAULTS.IDLE_MS;
+  assert.equal(IDLE, 5 * 60_000, '2026-10-09 用户定：空闲满五分钟才让位');
   assert.deepEqual(r.iso.listing(), []);
   r.iso.tick({ candidates: [r.cand('pA'), r.cand('pB')] });
   await r.flush();
@@ -93,15 +95,18 @@ test('HR23 一次只做一个项目：先清空再起；60 s 没有它能做的�
   r.advance(20_000);
   r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { held: ['t1'], claimed: 1 }) });
   assert.equal(r.iso.current.phase, 'running');
-  r.advance(59_000);
+  r.advance(60_000);
   r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { held: ['t1'], claimed: 1 }) });
-  r.advance(59_000);
+  r.advance(60_000);
   r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { claimable: 1, claimed: 1 }) });
   assert.equal(r.iso.current.phase, 'running', '还有可认领的任务：不算闲');
-  // 60 s 既没有手里的、也没有可认领的 → 结束
-  r.advance(59_000);
+  // 既没有手里的、也没有可认领的：闲了一分钟（原来的时限）不结束，pB 在等也不提前；闲满五分钟才结束
+  r.advance(60_000);
   r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { claimed: 1 }) });
-  assert.equal(r.iso.current.phase, 'running');
+  assert.equal(r.iso.current.phase, 'running', '闲了一分钟：不让位');
+  r.advance(IDLE - 60_000 - 1000);
+  r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { claimed: 1 }) });
+  assert.equal(r.iso.current.phase, 'running', '差一秒满五分钟：不让位，别的项目在排队也一样');
   r.advance(1_000);
   r.iso.tick({ candidates: [r.cand('pB')], report: r.report('pA', { claimed: 1 }) });
   await r.flush();
@@ -155,7 +160,7 @@ test('HR23 不反复重来：一轮下来什么都没认领到（等着的任务
   r.iso.tick({ candidates: [r.cand('pA')] });
   await r.flush();
   r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA') });
-  r.advance(60_000);
+  r.advance(ISOLATION_DEFAULTS.IDLE_MS);
   r.iso.tick({ candidates: [r.cand('pA')], report: r.report('pA') });
   await r.flush();
   assert.deepEqual(r.calls, ['prepare:pA', 'start:pA', 'stop:idle', 'cleanup:pA']);
