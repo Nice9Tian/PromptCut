@@ -2,7 +2,8 @@ import { createNodeSession } from './session.mjs';
 import { lockKeyOf, splitPlan } from './split.mjs';
 import { createTaskRunner, untilAborted } from './task-runner.mjs';
 import { browserCardsOf, isListPlan, priorityBand } from '../render-queue/messages.mjs';
-import { LOCK_IDLE_TAKEOVER_MS } from '../render-queue/constants.mjs';
+import { LOCK_IDLE_TAKEOVER_MS, QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
+import { exportIndexOf, isExportOnlyPlan } from './export-plan.mjs';
 
 /**
  * 本机渲染节点的编排(分布式预渲染 M3,契约 `docs/plan/render-queue-contract.md` D 节)。
@@ -197,10 +198,21 @@ function mergedLocks(cardLocks, extra) {
  *     本来就不出(浏览器做不了:要隔离工程加差分取层),所以这种流只按切分方自己的指纹出、由切分方自己产;标了 `browserOnly` 就一份都不出。
  *     它的内容键只由目标卡和它下面的层决定,与清单里还有哪些片段无关,流任务回来时按目标卡现算一条就对得回(`prerender-executor.mjs` 的 `matchStream`)。
  *     执行器没给 `browserStreamsFor`(旧执行器、测试替身)就不切流,与原来相同。
+ *
+ * 只为导出的清单计划(`input.exportOnly: true`,在线浏览器导出时为本页不执行的卡发的;`../export-frames.mjs`):
+ *   预渲染集合是空的(不切快照)、不切轨道流,只按清单里的片段出导出位图任务(`exportStreams`,执行器的 `exportStreamsFor` 给;
+ *   出不了的片段和原因在 `exportUnsupported`)。执行器没给 `exportStreamsFor`(旧执行器)时全部记成出不了(`no-executor`)。
  */
 export function listPlanOverrides(task, plan) {
   if (!isListPlan(task)) return {};
   const clips = Array.isArray(task.input?.clips) ? task.input.clips.filter(id => typeof id === 'string' && id) : [];
+  if (isExportOnlyPlan(task)) {
+    let found = null;
+    if (typeof plan?.exportStreamsFor === 'function') { try { found = plan.exportStreamsFor(new Set(clips)); } catch { found = null; } }
+    const exportStreams = Array.isArray(found?.streams) ? found.streams.filter(s => s && typeof s === 'object') : [];
+    const exportUnsupported = found ? (Array.isArray(found.unsupported) ? found.unsupported : []) : clips.map(clipId => ({ clipId, reason: 'no-executor' }));
+    return { prerenderSet: new Set(), streams: [], exportStreams, exportUnsupported, lane: 'normal' };
+  }
   const backfill = priorityBand(task.priority) === 'backfill';
   let streams = [];
   if (!backfill && typeof plan?.browserStreamsFor === 'function') {
@@ -425,7 +437,12 @@ export function createLocalNode({
         emit({ type: 'after-split-failed', id, error: String(error?.message ?? error) });
       }
     }
-    session.complete(id, { ranges: null, derived });
+    // 只为导出的计划:把每条导出位图的键与形状随完成一起回给页面(页面从 `task.done` 读,`export-plan.mjs` 的 `exportIndexOf`)
+    const exportIndex = isExportOnlyPlan(task)
+      ? exportIndexOf({ exportStreams: base.exportStreams, exportUnsupported: base.exportUnsupported, published, projectRev: cutBy?.source?.projectRev,
+        segmentsPerTask: constants?.STREAM_SEGMENTS ?? QUEUE_DEFAULTS.STREAM_SEGMENTS })
+      : null;
+    session.complete(id, { ranges: null, derived, ...(exportIndex ? { exportIndex } : {}) });
     emit({ type: 'plan-split', id, derived });
   }
 

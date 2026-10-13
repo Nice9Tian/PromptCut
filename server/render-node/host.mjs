@@ -90,6 +90,7 @@ import { createHash } from 'node:crypto';
 import { createLocalNode, idleLockTakeover } from './local-node.mjs';
 import { checkClaimable } from './filter.mjs';
 import { isSparseStreamTask } from '../render-queue/index.mjs';
+import { isExportFramesTask } from './export-plan.mjs';
 import { normalizeEntry, SHARED_CONFIG_ENV } from '../auth/shared-config.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
 
@@ -266,7 +267,8 @@ export function createRenderHost({
    * 这个项目的这个任务过不过「生成轨道流」这一道:只挡**满密度的**流任务,只在这个项目明说关着时挡。
    * 稀疏流任务不挡:这一项关着时渲染节点仍然产稀疏版,只是不补满密度(语义 `workflow/project.md`「项目设置」)。
    */
-  const streamsPass = (m, task) => task?.kind !== 'stream' || m.streams !== false || isSparseStreamTask(task);
+  // 导出专用的逐帧位图任务(`../export-frames.mjs`;种类也是流任务)不是轨道流,不归这一项管:这一项关着的项目照样能导出
+  const streamsPass = (m, task) => task?.kind !== 'stream' || m.streams !== false || isSparseStreamTask(task) || isExportFramesTask(task);
 
   /** 这个项目此刻是不是搁着不认领(见文件头);判不出来按搁着算 */
   const held = (m) => {

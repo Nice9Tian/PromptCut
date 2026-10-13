@@ -256,8 +256,11 @@ test("OCE-L-07 导出期间请渲染节点补同步卡的原尺寸:记下、去�
   } finally { off(); W.setExportWantedClips([]); }
   const read = (rel) => fs.readFileSync(fileURLToPath(srcUrl(rel)), "utf8");
   const exp = read("export/onlineExport.ts");
-  assert.match(exp, /setExportWantedClips\(syncedCardClips\(p\)\)/, "导出开始时记下同步卡片段");
-  assert.match(exp, /finally \{\s*setExportWantedClips\(\[\]\);/, "导出结束(成功、失败、取消)清掉");
-  assert.match(exp, /requiredOriginals: \(\) => syncedCardClips\(p\)/, "它们必须用预渲染原尺寸");
-  assert.match(read("editor/Preview.tsx"), /\[\.\.\.plan\.prerenderSet, \.\.\.exportWantedClips\(\)\]/, "页面发布的清单计划并上它们");
+  // 2026-10-13 起在线导出分「快速导出」「完整导出」:同步卡的画面不再靠平时的清单计划补「预渲染原尺寸」(每张卡的 HTML 快照),
+  // 改由导出自己发一份只为导出的计划、请渲染节点逐帧渲(`export/exportFrames.ts`)。导出不再往这张表里记东西;
+  // 表与 `Preview.tsx` 里并清单的那一处留着(恒为空),等撤快照那一块一并删
+  assert.doesNotMatch(exp, /setExportWantedClips/, "导出不再把同步卡片段并进平时的清单计划");
+  assert.match(exp, /nonRunnable: \(\) => nonRunnableClips\(p\)/, "同步来的卡照「本页不执行」处理");
+  assert.match(exp, /cardLayers: cardLayerDeps\(\)/, "卡片画面的现成来源由导出自己备");
+  assert.match(read("editor/Preview.tsx"), /\[\.\.\.plan\.prerenderSet, \.\.\.exportWantedClips\(\)\]/, "页面发布的清单计划并上这张表(现在恒为空)");
 });
