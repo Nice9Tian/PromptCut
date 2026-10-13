@@ -276,6 +276,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     if (r.error === "name-taken" || r.error === "invalid-name") setAskCloudName(true);
     if (r.error === "creator-password" || r.error === "bad-password") setAskMovePw(true);
     if (r.cloud && (r.localClosed || r.error === "enter-failed")) setMoveLink(projectLink(c.origin, r.cloud.projectId));
+    // 本机协作已经关掉才失败的:现在打开的是本地项目,表单直接停在「云端」上,再点「确定」就接着做
+    if (r.localClosed) setWhere("hosted");
     setStatus({ text: moveFailureText(r, r.kind), tone: r.error === "login-required" || r.error === "creator-password" ? "info" : "err" });
   };
   const signIn = async () => {
