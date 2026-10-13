@@ -13,8 +13,9 @@
  *   SEAM-4 闭包里没有文件 import `desktop/` 下的东西(独立入口不依赖桌面壳);
  *   SEAM-5 扫描器自检:对一段合成文本能抓到各种写法的 import;ssr-host 自己确实在用 `load('/src/…')`(缝还在)。
  *
- * SEAM-1、SEAM-2 是 `todo`:它们如实断言「应当没有违反」,现状有违反,所以会失败,但 todo 的失败不让 `npm test` 变红。
- * 修好产品代码(或把例外正式写进契约)以后,把 todo 去掉。
+ * SEAM-1 已是硬断言(0.7.18 工具表接线之后两个入口目录里不再有直接引用)。SEAM-2 仍是 `todo`:它如实断言「应当没有违反」,
+ * 现状闭包里还有 7 处(都在两个入口目录之外:`server/agent/` 下桌面与云端共用的四个文件、`server/vite-plugin-cards.ts`),
+ * 所以会失败,但 todo 的失败不让 `npm test` 变红。修好产品代码(或把例外正式写进契约)以后,把 todo 去掉。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -114,7 +115,9 @@ const KNOWN = [
   'server/vite-plugin-cards.ts -> src/render/cardCodeIdentity.mjs',
 ].sort();
 
-test('SEAM-1 独立入口两个目录(含子目录)里除 ssr-host 外没有指向 src/ 的 import', { todo: '现状不成立:server/agent/service/perception/subject.mjs 直接 import src/kernel/project.ts;已有守门 CA-SEAM-01 不进子目录所以没拦住' }, () => {
+test('SEAM-1 独立入口两个目录(含子目录)里除 ssr-host 外没有指向 src/ 的 import', () => {
+  // 0.7.18 工具表接线之后是硬断言:镜头、主体两个工具包要的内核函数经 ssr-host 的载入缝取来、由宿主(account-tools.mjs)注入,
+  // 两个独立入口目录里(含 perception 子目录)不再有任何文件直接引用 src/
   assert.ok(entryFiles.length > 40, `应扫到不少文件,实际 ${entryFiles.length}`);
   assert.ok(entryFiles.some((f) => rel(f).startsWith('server/agent/service/perception/')), '应包含 perception 子目录');
   assert.deepEqual(srcImportsOf(entryFiles), []);

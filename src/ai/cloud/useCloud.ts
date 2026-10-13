@@ -22,6 +22,10 @@ import { bubbleAttachments, type CloudAttachmentInfo } from "./attach";
 import type { ChatAttachment } from "../types";
 import type { CloudChatItem, CloudInfo, CloudSendBody } from "./types";
 import { newPageId, runPageRequest, type PageRequestExec } from "./pageRequests";
+import { createAccountPageHandler } from "./accountPage";
+import { desktopCollectLocal, desktopCollectUpload } from "./collectLocal";
+import { webHandoff, webOpen } from "../web";
+import { requestAgentBrowser, closeAgentBrowser } from "../agentBrowserStore";
 import { playbackHandlers } from "../../mcp/handlers/playback";
 import { projectHandlers } from "../../mcp/handlers/project";
 import { beginAgentTool, endAgentTool } from "../../editor/userEditing";
@@ -124,6 +128,38 @@ const pageExec: PageRequestExec = {
   begin: beginAgentTool,
   end: endAgentTool,
 };
+
+/**
+ * 账号模式的反向通道:页面号是这张页面在文档服务在场表里的那一个(每次现取);播放头三件用本机同一份实现。
+ * 网页接管与采集的代下、登录要本机的浏览器与编辑器进程,只在桌面版给;在线页面如实回「做不了」。不执行读选区(账号模式读全员选区走文档服务)。
+ */
+const accountPageHandler = createAccountPageHandler({
+  pageId: () => selectionPresenceStatus().pageId,
+  exec: {
+    seek: (args) => playbackHandlers.seek(args),
+    play: () => playbackHandlers.play(),
+    pause: () => playbackHandlers.pause(),
+    begin: beginAgentTool,
+    end: endAgentTool,
+    ...(ONLINE_BUILD ? {} : {
+      // 把云端浏览器当前页的地址交给本机的 Agent 浏览器,再照本机 web_handoff 的做法交给用户(壳模式下点亮「浏览器」页签)
+      webHandoff: async (args: { reason?: string; hide?: boolean; url?: string }) => {
+        if (args.url && !args.hide) {
+          const opened = await webOpen({ url: args.url });
+          if (opened && (opened as { ok?: unknown }).ok === false) return opened;
+        }
+        const r = await webHandoff({ ...(args.reason ? { reason: args.reason } : {}), ...(args.hide ? { hide: true } : {}) });
+        if (r && (r as { shell?: boolean }).shell) {
+          if (args.hide) closeAgentBrowser();
+          else requestAgentBrowser(args.reason ?? "");
+        }
+        return r;
+      },
+    }),
+  },
+  local: ONLINE_BUILD ? null : desktopCollectLocal(),
+  upload: ONLINE_BUILD ? null : desktopCollectUpload(() => currentDocProjectId() || null),
+});
 
 export function useCloudApi(url: string | null, projectId: string | null = null): CloudApi {
   return useMemo(() => createCloudApi({ baseUrl: () => url, projectId: () => projectId }), [url, projectId]);
@@ -265,7 +301,11 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     if (cloud.accountMode) { setInfo(null); setHistItems([]); setNotice(null); }
     const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : lsGet(chatKey(projectId, tabId, accountScope));
     const first = stored && CHAT_ID_RE.test(stored) ? stored : newCloudChatId();
-    const session = createCloudSession({ api, store, accountMode: cloud.accountMode, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
+    const session = cloud.accountMode
+      ? createCloudSession({ api, store, accountMode: true, pageId: () => selectionPresenceStatus().pageId, onPageRequest: (ev) => accountPageHandler(ev) })
+      : createCloudSession({ api, store, accountMode: false, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
+    // 账号模式:在场页面号连上文档服务之后才有、重连会变。隔一会儿对一下,变了就让事件流带着新的页面号重开
+    const pageWatch = cloud.accountMode ? setInterval(() => session.syncPage(), 1000) : null;
     sessionRef.current = session;
     sessionKeyRef.current = key;
     const off = session.subscribe(() => setView(session.getView()));
@@ -293,6 +333,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     return () => {
       dead = true;
       off();
+      if (pageWatch !== null) clearInterval(pageWatch);
       session.close();
       if (cloud.accountMode) store.set([]);
       if (sessionRef.current === session) { sessionRef.current = null; sessionKeyRef.current = ""; }

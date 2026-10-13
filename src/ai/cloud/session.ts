@@ -19,6 +19,9 @@ import type { PageRequestAnswer } from "./pageRequests.ts";
 
 export type CloudConnection = "idle" | "connecting" | "live" | "reconnecting";
 
+/** 页面执行器交回的答案:旧通道是 `PageRequestAnswer`;账号模式的执行器另带版本号、一次性随机数与页面号 */
+export type PageRequestReply = PageRequestAnswer | ({ id: string; ok: boolean; pageId: string } & Record<string, unknown>);
+
 export interface CloudSessionView {
   conversationId: string | null;
   /** 对话里有没有没收尾的一轮(服务端还在跑,不论此刻流连没连着) */
@@ -38,9 +41,11 @@ export interface CloudSessionDeps {
   /**
    * 反向通道(契约第 28 节):这张页面的页面号与执行请求的函数。两样都给了,发消息与开事件流时才报页面号,
    * 事件流里来的 `page.request` 才会被执行并交回;不给就是只看不动的页面。
+   * 账号模式下页面号是这张页面在文档服务在场表里的那一个:连上文档服务之后才有、重连会变,所以给一个每次现取的函数;
+   * 执行器的答案(带着请求号、一次性随机数与页面号)**原样**交回,不改页面号。
    */
-  pageId?: string;
-  onPageRequest?: (ev: CloudEvent) => Promise<PageRequestAnswer | null> | PageRequestAnswer | null;
+  pageId?: string | (() => string | null);
+  onPageRequest?: (ev: CloudEvent) => Promise<PageRequestReply | null> | PageRequestReply | null;
   store: ChatStore;
   /** 文字与思考的增量攒批的间隔(毫秒);0 = 来一条折一条 */
   flushMs?: number;
@@ -79,7 +84,11 @@ export function createCloudSession(deps: CloudSessionDeps) {
   const pendingAttachments = new Map<string, ChatAttachment[]>();
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   /** 反向通道:两样都给了才开 */
-  const pageId = deps.pageId && deps.onPageRequest && api.pageResult ? deps.pageId : undefined;
+  const pageSource = deps.pageId && deps.onPageRequest && api.pageResult ? deps.pageId : undefined;
+  /** 这张页面此刻的页面号(账号模式每次现取;还没连上文档服务时没有) */
+  const currentPage = (): string | undefined => (typeof pageSource === "function" ? pageSource() ?? undefined : pageSource);
+  /** 现在这条事件流是带着哪个页面号开的 */
+  let streamPage: string | undefined;
   /** 执行过的请求 id:同一条请求重复到达只执行一次 */
   const answered = new Set<string>();
 
@@ -88,12 +97,12 @@ export function createCloudSession(deps: CloudSessionDeps) {
    * 交回失败(已经不在等了、网络断了)不重试——服务端到时会回「发起方不在线」,Agent 自己继续。
    */
   async function answerPageRequest(ev: CloudEvent, id: string, myGen: number, myReadEpoch: number) {
-    if (!pageId || !deps.onPageRequest || !api.pageResult) return;
+    if (!pageSource || !deps.onPageRequest || !api.pageResult) return;
     const reqId = typeof ev.id === "string" ? ev.id : "";
     if (!reqId || answered.has(reqId)) return;
     answered.add(reqId);
     if (answered.size > 200) answered.delete(answered.values().next().value as string);
-    let answer: PageRequestAnswer | null = null;
+    let answer: PageRequestReply | null = null;
     try {
       answer = await deps.onPageRequest(ev);
     } catch (err) {
@@ -101,7 +110,10 @@ export function createCloudSession(deps: CloudSessionDeps) {
     }
     if (!answer || closed || myGen !== gen || id !== conversationId || myReadEpoch !== readEpoch) return;
     try {
-      await api.pageResult(id, { ...answer, pageId });
+      // 账号模式:答案原样交回(页面号是执行器按在场页面号填的,服务端按它与一次性随机数核对);旧通道补上这张页面自己起的页面号
+      const page = currentPage();
+      if (deps.accountMode) await api.pageResult(id, { ...(answer as { id: string; ok: boolean; pageId: string } & Record<string, unknown>) });
+      else if (page) await api.pageResult(id, { ...answer, pageId: page });
     } catch { /* 不在等了或网络断了:不重试 */ }
   }
 
@@ -208,7 +220,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
         setConnection(attempt === 0 ? "connecting" : "reconnecting");
         let sawNone = false;
         try {
-          for await (const ev of api.events(id, lastSeq, ctl.signal, pageId)) {
+          streamPage = currentPage();
+          for await (const ev of api.events(id, lastSeq, ctl.signal, streamPage)) {
             if (myGen !== gen || streamReadEpoch !== readEpoch) return;
             attempt = 0;
             if (connection !== "live") { problem = null; setConnection("live"); }
@@ -299,7 +312,9 @@ export function createCloudSession(deps: CloudSessionDeps) {
       const seenBefore = lastSeq;
       let accepted: CloudSendAccepted;
       try {
-        accepted = await api.send(conversationId, pageId ? { ...body, pageId } : body);
+        // 旧通道在发消息时报页面号;账号模式的页面号由文档服务从选区快照里取(`selectionSnapshot.pageId`),这里不另报
+        const page = deps.accountMode ? undefined : currentPage();
+        accepted = await api.send(conversationId, page ? { ...body, pageId: page } : body);
       } catch (err) {
         if (err instanceof CloudError) throw err;
         throw new CloudError("network", cloudErrorText("network"));
@@ -343,6 +358,15 @@ export function createCloudSession(deps: CloudSessionDeps) {
       setConnection("idle");
       offStore();
       listeners.clear();
+    },
+
+    /**
+     * 账号模式:这张页面的在场页面号变了(刚连上、或重连了文档服务)——现在这条流是带着旧页面号开的,云端的请求发不到这里。
+     * 掐掉它,让循环带着新的页面号重开。页面号没变、没有流在开着时什么都不做。
+     */
+    syncPage() {
+      if (!deps.accountMode || closed || !loopAlive || !pageSource) return;
+      if (currentPage() !== streamPage) ac?.abort();
     },
 
     /** 马上重连(网络恢复、页面回到前台时用) */

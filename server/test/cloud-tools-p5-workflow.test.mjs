@@ -579,11 +579,13 @@ test('background_job_status: every kind of package job is visible by job id, wit
   f.perception.stt.ctl.failCode = 'FFMPEG_MISSING';
   f.perception.shots.ctl.failCode = 'SHOTS_TIMEOUT';
   f.perception.shots.ctl.failMessage = '镜头识别超时(超过 4 秒),已强制结束。素材可能太长。';
+  // 另开的这一份账本要在别的作业登记之前打开:账本一打开就把库里排着的、在跑的作业都按「上一个进程留下的」标成被中断
+  // (0.7.18 工具表接线起排着的也标;生产上一个对话同一时刻只有一个进程开着它的账本)
+  const side = f.foreignJobs();
   const stt = await f.perception.stt.call('transcribe_media', { mediaId: 'm1' }, f.context, { requestId: 'a-request-0001' });
   const shots = await f.perception.shots.call('detect_shots', { mediaId: 'm1' }, f.context, { requestId: 'a-request-0002' });
   f.perception.subject.ctl.hold = true;
   const subject = await f.perception.subject.call('detect_subjects', { mediaId: 'm1' }, f.context, { requestId: 'a-request-0003' });
-  const side = f.foreignJobs();
   const track = await side.start(f.context, 'track.points', 'b'.repeat(64), 'a-request-0004');
   await side.update(f.context, track.jobId, 0, { state: 'running', stage: 'track', progress: 0.3 });
   await side.update(f.context, track.jobId, 1, { state: 'error', errorCode: 'TRACK_TIMEOUT' });

@@ -231,8 +231,12 @@ test("CAU-REV-06 守门:触发执行的入口只有事件流;接口层带委托�
   // useCloud.ts 里只把它交给会话控制器(事件流的唯一读者),没有挂到全局
   const wiring = fs.readFileSync(path.join(HERE, "useCloud.ts"), "utf8");
   assert.equal(wiring.split("runPageRequest").length - 1, 2, "一处引入、一处交给 createCloudSession");
-  assert.match(wiring, /createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*cloud\.accountMode,\s*pageId:\s*PAGE_ID,\s*onPageRequest:\s*\(ev\)\s*=>\s*runPageRequest\(ev,\s*pageExec\)\s*\}\)/,
-    "事件流会话显式绑定当前账号模式，页面请求仍经唯一接线入口执行");
+  // 旧通道(非账号模式)照旧:这张页面自己起的页面号、旧的执行器;账号模式另一支:在场页面号每次现取、账号模式的执行器(accountPage.ts)
+  assert.match(wiring, /createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*false,\s*pageId:\s*PAGE_ID,\s*onPageRequest:\s*\(ev\)\s*=>\s*runPageRequest\(ev,\s*pageExec\)\s*\}\)/,
+    "非账号模式:事件流会话仍绑这张页面自己的页面号,页面请求仍经旧的唯一接线入口执行");
+  assert.match(wiring, /createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*true,\s*pageId:\s*\(\)\s*=>\s*selectionPresenceStatus\(\)\.pageId,\s*onPageRequest:\s*\(ev\)\s*=>\s*accountPageHandler\(ev\)\s*\}\)/,
+    "账号模式:页面号取文档服务在场表里的那一个(每次现取),页面请求交给账号模式的执行器");
+  assert.match(wiring, /cloud\.accountMode\s*\?\s*createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*true/, "两支按 cloud.accountMode 分");
   assert.equal(/__pcCloud[^\n]*(runPageRequest|pageExec|PAGE_ID)/.test(wiring), false, "探针的只读口子里没有它");
 
   // 接口层:交回带委托票据、不带 Cookie;事件流的查询串带页面号
@@ -372,7 +376,7 @@ test("CAU-ACC-06 web_handoff:没有本机浏览器回 unsupported;有的调本�
   assert.deepEqual([f.ok, f.error], [false, "浏览器没起来"]);
 });
 
-test("CAU-ACC-07 守门:账号模式的执行器此刻还没有接线,src/ 里引用它的只有本文件与 pageRequests.ts", () => {
+test("CAU-ACC-07 守门:账号模式的执行器只在 accountPage.ts 一处接线,src/ 里引用它的只有本文件、pageRequests.ts 与那一处", () => {
   const users = [];
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -382,6 +386,17 @@ test("CAU-ACC-07 守门:账号模式的执行器此刻还没有接线,src/ 里�
     }
   };
   walk(SRC);
-  // 最后的接线包把它接到 useCloud.ts 时,这里加上那一个文件(仍然只许一处)
-  assert.deepEqual(users.sort(), ["ai/cloud/page-requests.test.mjs", "ai/cloud/pageRequests.ts"]);
+  // 接线在 accountPage.ts(它把这个执行器与采集的页面执行器合成一个入口,交给 useCloud.ts 的会话控制器);仍然只许这一处
+  assert.deepEqual(users.sort(), ["ai/cloud/accountPage.ts", "ai/cloud/page-requests.test.mjs", "ai/cloud/pageRequests.ts"]);
+  // 那个入口只被 useCloud.ts 引用,而且只交给账号模式的会话控制器
+  const callers = [];
+  const walkCallers = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walkCallers(p);
+      else if (/\.(ts|tsx|mjs)$/.test(e.name) && /^import[^\n]*createAccountPageHandler/m.test(fs.readFileSync(p, "utf8"))) callers.push(path.relative(SRC, p).replaceAll("\\", "/"));
+    }
+  };
+  walkCallers(SRC);
+  assert.deepEqual(callers.sort(), ["ai/cloud/useCloud.ts"]);
 });

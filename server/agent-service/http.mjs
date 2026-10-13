@@ -139,7 +139,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
 
   /** Account-v2 stream: authorize before headers and on every poll/event. Doc remains
    * the source of the durable queue; this stream has no model output until run wiring. */
-  async function accountEvents(req, res, identity, conversationId, after) {
+  async function accountEvents(req, res, identity, conversationId, after, pageId = null) {
     // 对话不存在(含别的项目的、看不到的)：doc 回 404，原样走统一的错误回包，和 GET /v1/conversations/<id> 一致，
     // 不区分「不存在」与「没权限」。不能先写 200 的流头：读通道在还没有任何一次读取被受理时会把 2xx 回包当越权掐掉连接。
     let view = await service.conversation(identity, conversationId, 0);
@@ -156,9 +156,19 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       'X-Accel-Buffering': 'no', ...CORS });
     res.flushHeaders?.();
     let cursor = after; let released = false; let polling = false; let queueRevision = -1; let aclRevision = -1;
+    // 反向通道（只在挂了登记表的主服务上）：这条流报了在场页面号，就登记成「这张页面在线」。发给它的 `page.request`
+    // 不带 seq、不进事件记录；发给谁由登记表按文档服务确认过的发起人与页面号定，这里报的页面号只是候选
+    let attachment = null;
+    if (typeof pageId === 'string' && pageId && typeof service.pageBridge?.attach === 'function') {
+      try {
+        attachment = service.pageBridge.attach({ identity, conversationId, pageId, aclRevision: view.aclRevision,
+          send: (ev) => { if (!released && !res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify(ev)}\n\n`); } });
+      } catch { attachment = null; }
+    }
     const release = () => {
       if (released) return;
       released = true; clearInterval(timer); openStreams.delete(entry);
+      try { attachment?.detach(); } catch { /* 登记表已经关了 */ }
       streams -= 1; const left = (streamsByOwner.get(owner) ?? 1) - 1;
       if (left > 0) streamsByOwner.set(owner, left); else streamsByOwner.delete(owner);
     };
@@ -200,6 +210,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
             items: (view.messages ?? []).map(row => ({ messageId: row.messageId, arrivalSeq: row.arrivalSeq,
               state: row.queueState, position: positions.get(row.messageId) ?? null, runId: row.runId ?? null })) })}\n\n`);
           queueRevision = view.queueRevision; aclRevision = view.aclRevision;
+          try { attachment?.update({ aclRevision: view.aclRevision }); } catch { /* 登记表已经关了 */ }
         }
         if (!released && !res.destroyed) res.write(': ping\n\n');
       } catch {
@@ -249,7 +260,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       if (sub[2] === 'events' && req.method === 'GET') {
         const after = Number(url.searchParams.get('after') ?? 0);
         if (!Number.isSafeInteger(after) || after < 0) throw new AgentServiceError('bad-request', 'invalid cursor');
-        return accountEvents(req, res, identity, conversationId, after);
+        return accountEvents(req, res, identity, conversationId, after, url.searchParams.get('page'));
       }
       if (sub[2] === 'visibility' && req.method === 'POST') {
         const body = await readBody(req);
@@ -267,7 +278,12 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         const attachment = await service.attach(identity, conversationId, name, req);
         return sendJson(res, 200, { ok: true, attachment }, CORS);
       }
-      if (sub[2] === 'page-results' && req.method === 'POST') { await service.pageResult(identity); }
+      if (sub[2] === 'page-results' && req.method === 'POST') {
+        // 发起页交回反向通道上一次请求的结果。请求体原样交给登记表（它自己核形状、发起人、页面号、一次性随机数与这一轮的授权）；
+        // 没挂登记表的服务（`conversation-policy.mjs` 的那一份）在这里照旧抛 503
+        const body = await readBody(req);
+        return sendJson(res, 200, await service.pageResult(identity, conversationId, body), CORS);
+      }
     }
     return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
   }
