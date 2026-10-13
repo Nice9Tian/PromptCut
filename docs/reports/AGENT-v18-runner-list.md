@@ -11,7 +11,7 @@
 3. **`--check-coverage` 变成真守门**,四类问题任一类出现退出码 1:① `scripts/probes` 下每个文件登记(`covers`)或写明排除原因(原来的 66 个没登记的,有 37 个写了排除原因,其余登记进新项);② 38 行每行至少有一项;③ 清单项引用的测试文件与探针脚本在仓库里(标了等分支合入的单列,按分支分组);④ 全量测试的跳过名单每条写全。现在的输出:`守门:通过`,等分支合入缺的文件单列了 26 个。
 4. **问题 17(跳过数)**:不再是「`skipped ≤ 2`」,改成逐条名单(`G0_2_SKIPS`),输出里每条被跳过的测试都得在名单里,多出一条 G0-2 就不过(单测 V18-04)。名单见第 3 节。G0-2 还要求设了账号后端的两个环境变量,没设记「跑不了」,不让用到账号后端的测试悄悄整文件多跳。
 5. **问题 16(旧探针)**:`cloud-agent-ui-probe.mjs` 改走账号入口,S4-4 能跑通,见第 4 节。
-6. 小改动(都是测试或夹具,默认值不变):`accept-018-conv-endtoend`、`accept-018-files-account-fixture`、`accept-018-conv-password-probe` 的写死端口改成可由环境变量或 `--base-port` 换;`accept-018-auth-kit` 放宽端口基数的范围检查;`account-runner-process.mjs` 夹具多认一个 `publicHandler`;`bakery-deps.test.mjs` 的名单放行新单测;`four-stage-acceptance.test.mjs` 里几处写死的 104/16 项数改成按老清单算。
+6. 小改动(都是测试或夹具,默认值不变):`accept-018-conv-password-probe` 的写死端口改成可由 `--base-port` 换(`accept-018-conv-endtoend`、`accept-018-files-account-fixture` 原来也加过环境变量口子,后来 main 把它们改成自取空闲端口〔27160d3b〕,合并时以 main 为准、口子已收掉);`accept-018-auth-kit` 放宽端口基数的范围检查;`account-runner-process.mjs` 夹具多认一个 `publicHandler`;`bakery-deps.test.mjs` 的名单放行新单测;`four-stage-acceptance.test.mjs` 里几处写死的 104/16 项数改成按老清单算。
 
 ## 2. 命令
 
@@ -170,3 +170,7 @@ node scripts/acceptance/four-stage-acceptance.mjs --rows-from <目录>/results.j
 | 窗口 | 跑探针前后查可见窗口 | 无;28990～29049 收尾无残留监听 |
 
 没有 `git diff --stat main...HEAD` 里整份被换行尾的已有文件(`cloud-agent-ui-probe.mjs` 是整份重写,正常)。
+
+## 10. 合入 main 27160d3b 之后(第二次合并)
+
+两个冲突文件(`accept-018-conv-endtoend.test.mjs`、`accept-018-files-account-fixture.test.mjs`)取 main 的版本;收掉了清单里传给它们的 `ACCEPT018_E2E_BASE`、`ACCEPT018_FILES_BASE`。**还靠 0.7.18 端口段的**:`--v18-port-base` 现在只管这些项——`V18-auth-*` 三个(`ACCEPT018_AUTH_PORT_BASE`,夹具里 main 仍保留这个口子,我把它的范围检查放宽到 20000～65000)、`V18-asset-isolation`、`V18-conv-password-probe`、两支排队探针与隔离探针(都是 `--base-port` 参数)、`S4-4` 与 `V18-ui-reverse-channel`(`cloud-agent-ui-probe` 自己给任务进程夹具传一组连续端口)。这些夹具内部或探针自己仍要连续段,没有改成自取空闲端口。

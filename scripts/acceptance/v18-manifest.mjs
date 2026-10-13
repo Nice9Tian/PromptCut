@@ -140,6 +140,8 @@ export const V18_ITEMS = [
     { account: true, needs: ['online-build'], prereq: ['G0-4'], optional: true, timeoutMin: 30, known: '端口写死 6528～6531;不在 0.7.18 的端口段里,本次没跑' }),
   PR('V18-newchat-probe', '新开的空对话是安静的(不一直重试事件流、没有断线提示);发第一条消息、刷新、切换、私有化、Agent 服务停掉', ['2.3-5'], 'newchat-events-probe', ['--dist', DIST, '--site-root', `${VISU}/site`, '--out', '{item}/o'],
     { account: true, needs: ['online-build'], prereq: ['G0-4'], optional: true, timeoutMin: 20, known: '端口写死 28850～28861(不在 0.7.18 的端口段里),本次没跑;配套单测 src/ai/cloud/newchat-absent.test.mjs 在 V18-cloud-chat-tests 里' }),
+  PR('V18-move-guard-probe', '「搬到云端」旧流程防呆:账号模式节点上两个入口与「搬回本机」各点一遍(请求、界面原文、本机房间前后状态)', ['2.1-6'], 'move-guard-probe', ['--tag', 'runner'],
+    { account: true, optional: true, timeoutMin: 20, known: '端口写死 28950～28989(不在 0.7.18 的端口段里),本次没跑;它把截图与证据写进 docs/reports/assets/v18-move-guard/(会改工作区),所以缺省不跑;配套单测 move-guard.test.mjs 在 V18-local-legacy-tests 里' }),
   PR('V18-consent-probe', '首次使用云端 Agent 告知托管方可读(真浏览器)', ['2.3-5'], 'cloud-agent-consent-user-path-probe', ['--out', '{item}'],
     { optional: true, timeoutMin: 20, known: '端口写死 6650～6659;不在 0.7.18 的端口段里,本次没跑' }),
   PR('V18-member-controls-probe', '成员控制(创建者踢人、关 Agent 开关)的真浏览器探针', ['2.1-2'], 'project-member-controls-probe', ['--dist', DIST, '--site-root', `${VISU}/site`, '--out', '{item}'],
@@ -151,7 +153,7 @@ export const V18_ITEMS = [
   T('V18-files-local-regression', '本地项目不要求账号(账号模式开着时局域网自由/限定进入、邀请码、主机/成员照旧)', ['2.1-6'], ['server/test/accept-018-files-local-regression.test.mjs'], { account: true }),
   T('V18-local-legacy-tests', '本地项目的老证据:握手、建项目、成员、邀请码、局域网发现、隔离中继、页面同步与重连', ['2.1-6'],
     ['server/test/auth-handshake.test.mjs', 'server/test/auth-create.test.mjs', 'server/test/auth-members.test.mjs', 'server/test/c10a-invite.test.mjs', 'server/test/invite-impl.test.mjs',
-      'server/test/sp-lan.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/reopen-hosting.test.mjs', 'src/editor/sync/presence.test.mjs', 'src/editor/sync/reconnect.test.mjs',
+      'server/test/sp-lan.test.mjs', 'server/test/asset-lan-discover.test.mjs', 'server/test/reopen-hosting.test.mjs', 'server/test/move-guard.test.mjs', 'src/editor/sync/presence.test.mjs', 'src/editor/sync/reconnect.test.mjs',
       'src/editor/sync/enterFailure.test.mjs', 'src/editor/sync/onlineSync.test.mjs', 'src/editor/sync/hostedServices.test.mjs'], { timeoutMin: 30, known: '局域网发现是本机替身(回环加单播),不是真实多机组播' }),
   REMOTE('V18-lan-real', '局域网真实组播/子网广播(两台机器)', ['2.1-6'], 'network',
     '要第二台机器:node scripts/probes/shared-project-lan.mjs 与 asset-lan-probe.mjs(按文件头分角色);运行器老清单把它们排除在整套外(要第二台机器)', { known: '本机替身(sp-lan、asset-lan-discover)已在 V18-local-legacy-tests' }),
@@ -315,6 +317,9 @@ export const V18_EXCLUDED = {
   'online-remotion-card-probe.mjs': RENDER_REFACTOR, 'online-runtime-harness.html': RENDER_REFACTOR + '(页面夹具)', 'online-stream-play-probe.mjs': RENDER_REFACTOR, 'page-stream-probe.mjs': RENDER_REFACTOR,
   'preview-stop-lib.mjs': 'seek-back-exact-probe 与 scrub-hold-snapshot-probe 共用的搭法,不单独运行', 'remotion-style-harness.html': RENDER_REFACTOR + '(页面夹具)', 'remotion-style-probe.mjs': RENDER_REFACTOR,
   'scrub-hold-snapshot-probe.mjs': RENDER_REFACTOR, 'seek-back-exact-probe.mjs': RENDER_REFACTOR, 'stage-push-before-after-probe.mjs': RENDER_REFACTOR, 'stateful-seq-vs-jump-probe.mjs': RENDER_REFACTOR,
+  'lottie-baseline-probe.mjs': RENDER_REFACTOR, 'lottie-pipeline-probe.mjs': RENDER_REFACTOR, 'lottie-seed-extra-probe.mjs': RENDER_REFACTOR, 'lottie-seed-probe.mjs': RENDER_REFACTOR,
+  'merged-stream-bitstream.mjs': RENDER_REFACTOR, 'merged-stream-capacity.mjs': RENDER_REFACTOR, 'merged-stream-common.mjs': RENDER_REFACTOR, 'merged-stream-decode-limits.mjs': RENDER_REFACTOR,
+  'merged-stream-h264.mjs': RENDER_REFACTOR, 'merged-stream-play-page.js': RENDER_REFACTOR, 'merged-stream-play.mjs': RENDER_REFACTOR, 'merged-stream-reencode.mjs': RENDER_REFACTOR,
   'stream-below-probe.mjs': RENDER_REFACTOR, 'stream-canvas-direct-probe.mjs': RENDER_REFACTOR, 'stream-noreplay-probe.mjs': RENDER_REFACTOR,
 };
 
