@@ -2,7 +2,7 @@
  * 本机采集代下在页面这一侧(0.7.18,工具包 C1;服务端是 `server/agent/service/collect-bridge.mjs`)。没有 React、没有 store,Node 单测直接用。
  *
  * 云端 Agent 的 `collect_download` 遇到要登录的站点、而发起人本人在线时,经**这个对话的事件流**(账号模式的反向通道,
- * 与 `pageRequests.ts` 的 `createAccountPageRequests` 同一份协议:`page.request { v: 2, id, nonce, runId, pageId, tool, args, timeoutMs }`)
+ * 与 `pageRequests.ts` 里账号模式的页面执行器同一份协议:`page.request { v: 2, id, nonce, runId, pageId, tool, args, timeoutMs }`)
  * 请这张页面代为下载。页面用本机同一套采集(`/api/collect/*`,带本机存着的登录态)下载,下载完把文件**直接**传进这个项目的素材服务
  * (账号会话签发的素材票据、本机的上传队列),云端只拿到一份回执。
  *
@@ -147,7 +147,7 @@ const finite = (value: unknown, max: number): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= max ? value : undefined;
 
 /**
- * 页面一侧的采集请求执行器。`handles(ev)` 说这条事件归不归它(接线的一侧据此在它与 `createAccountPageRequests` 之间分流);
+ * 页面一侧的采集请求执行器。`handles(ev)` 说这条事件归不归它(接线的一侧据此在它与 `pageRequests.ts` 里账号模式的页面执行器之间分流);
  * `run(ev)` 回 null 表示这条不是给这张页面的合格请求:不执行、不答。
  */
 export function createCollectBridgePage(deps: CollectBridgePageDeps): {
