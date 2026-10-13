@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { freePort } from './free-ports.mjs';
 import assert from 'node:assert/strict';
 import { Readable, Writable } from 'node:stream';
 import fs from 'node:fs';
@@ -50,8 +51,9 @@ test('real account SSE publishes queue revisions without duplicates and fences a
     async events() { return { events: [], headSeq: 0 }; } },
     runHooks: { fenceInState: (state, fence) => fixture.control.hooks.fenceInState(state, fence) } });
   const trusted = await authority.authorizePrincipal({ accessToken: a }, { projectId, action: 'read' });
+  const queueDocPort = await freePort();
   fixture = agentReadControlFixture({ ledger, directory: dir, docTls: pki.doc, agentTls: pki.asset,
-    docPin: pki.doc.fingerprint256, agentPin: pki.asset.fingerprint256, port: 6602, accountAuthority: authority,
+    docPin: pki.doc.fingerprint256, agentPin: pki.asset.fingerprint256, port: queueDocPort, accountAuthority: authority,
     resolveDelegation: async value => { assert.equal(value, 'queue-delegation'); return trusted; },
     checkConsent: async ({ accountId }) => ({ accountId, accepted: true, noticeVersion: 1 }),
     verifySelectionSnapshot: async ({ principal }) => ({ projectId, accountId: principal.accountId, source: 'sent-snapshot',
@@ -64,14 +66,14 @@ test('real account SSE publishes queue revisions without duplicates and fences a
   t.after(async () => { releaseHeld?.(); request?.destroy(); await fixture.close();
     if (server.listening) await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
     service.close(); authority.close(); ledger.close(); fs.rmSync(dir, { recursive: true }); });
-  await fixture.start(); await new Promise(resolve => server.listen(6603, '127.0.0.1', resolve));
+  await fixture.start(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const send = (accountId, content, requestId) => fixture.conversations.send({ principalRef: { accessToken: accountId },
     projectId, conversationId, content, requestId });
   const first = await send(a, 'first', 'one'), second = await send(b, 'second', 'two');
   assert.equal((await service.info(identity)).executorMounted, false);
   let wire = '', responseStatus, transportClosed = false;
   const closed = new Promise(resolve => {
-    request = http.get('http://127.0.0.1:6603/v1/conversations/conversation/events?after=0', res => {
+    request = http.get(`http://127.0.0.1:${server.address().port}/v1/conversations/conversation/events?after=0`, res => {
       responseStatus = res.statusCode; res.on('data', chunk => { wire += chunk; });
       res.on('error', () => {}); res.once('close', () => { transportClosed = true; resolve(); });
     }); request.on('error', () => {});

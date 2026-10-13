@@ -67,16 +67,21 @@ export function createAssetRunConsumer({ client, file, assetInstanceId, serviceI
     state.cursor = state.pending.receipt.cursor; state.pending = null; await persist();
   }
   async function drain() {
-    ready = false;
+    // 不在这里先把 ready 放下。定时的那一趟对账大多数时候什么新事件都没有；它一开始就放下 ready，
+    // 正好撞上的素材请求会被判成「账还没对上」(503)，接着那条租约被记成「不明」，运行素材从此停摆直到重启。
+    // 该放下的时候才放：生命周期核不过、有不明的租约、有没确认完的回执、读到了新事件（处理完之前）、或者这一趟出错（sync 里）。
+    // 没看到的新事件不会因此被放过：每个素材请求都另拿文档服务当场给的两个账头和这里的游标比（run-assets-head-client.mjs）。
     lifecycleVerified = false;
-    if (stopped || await verifyLifecycle({ state: structuredClone(state) }) !== true) fail(503, 'asset-run-recovery-pending');
+    if (stopped || await verifyLifecycle({ state: structuredClone(state) }) !== true) { ready = false; fail(503, 'asset-run-recovery-pending'); }
     lifecycleVerified = true;
-    if (Object.values(state.leases).some(l => l.state === 'unknown')) fail(503, 'asset-run-recovery-pending');
+    if (Object.values(state.leases).some(l => l.state === 'unknown')) { ready = false; fail(503, 'asset-run-recovery-pending'); }
+    if (state.pending) ready = false;
     await acknowledgePending();
     for (;;) {
       const page = await client.eventsSince(state.cursor); head = page?.headSeq;
       if (!Number.isSafeInteger(head) || head < state.cursor || !Array.isArray(page.events)) fail(503, 'asset-run-event-gap');
       if (!page.events.length) { if (head !== state.cursor) fail(503, 'asset-run-event-gap'); ready = true; return head; }
+      ready = false;
       for (const event of page.events) {
         if (event.v !== 1 || event.seq !== state.cursor + 1 || event.eventId !== `run-asset:${event.controlId}` ||
             !hashOf(event.payloadDigest) || !Array.isArray(event.control?.retained) || !Array.isArray(event.control.revoked) ||

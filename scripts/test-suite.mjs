@@ -11,7 +11,7 @@
  * 升级到包含 nodejs/node#65778 的 Node 后可移除：v26.10.0 起，或合入回移
  * nodejs/node#66168 的 v24.x 发布版。
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,11 +24,59 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'promptcut-test-'));
 const files = process.argv.length > 2 ? process.argv.slice(2) : ['server/test/*.test.mjs', 'src/**/*.test.mjs', 'tools/report-worker/*.test.mjs'];
 const baseArgs = ['--experimental-test-module-mocks', '--test-global-setup=server/test/global-setup.mjs', '--test'];
 
+// 看门：某个测试文件的进程超过时限还没结束（常见原因：测试失败后没关服务，进程退不出来），就杀掉它的进程树。
+// 被杀的文件由测试运行器记成文件级失败；这里再点名，并在最终汇总前列出。不改变其它文件的通过与失败判定。
+// 不用 node 自带的 --test-force-exit：实验里它会让本来通过的文件（asset-announce 等）被记成文件级失败。
+const WATCHDOG_MS = Number(process.env.PROMPTCUT_TEST_FILE_LIMIT_MS) || 15 * 60 * 1000;
+const WATCHDOG_POLL_MS = Number(process.env.PROMPTCUT_TEST_WATCHDOG_POLL_MS) || 30 * 1000;
+const killedByWatchdog = [];
+
+function listChildren(parentPid) {
+  const rows = [];
+  if (process.platform === 'win32') {
+    const script = `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${parentPid}' | ForEach-Object { '{0}|{1}|{2}' -f $_.ProcessId, [int]((Get-Date) - $_.CreationDate).TotalMilliseconds, $_.CommandLine }`;
+    const out = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+    for (const line of (out.stdout ?? '').split(/\r?\n/)) {
+      const [pid, age, ...cmd] = line.split('|');
+      if (pid && age !== undefined) rows.push({ pid: Number(pid), ageMs: Number(age), cmd: cmd.join('|') });
+    }
+  } else {
+    const out = spawnSync('ps', ['-o', 'pid=,etimes=,args=', '--ppid', String(parentPid)], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+    for (const line of (out.stdout ?? '').split('\n')) {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (match) rows.push({ pid: Number(match[1]), ageMs: Number(match[2]) * 1000, cmd: match[3] });
+    }
+  }
+  return rows;
+}
+
+function killTree(pid) {
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 20000 });
+  else { spawnSync('pkill', ['-KILL', '-P', String(pid)], { windowsHide: true }); try { process.kill(pid, 'SIGKILL'); } catch {} }
+}
+
+function watchdog(runnerPid) {
+  const timer = setInterval(() => {
+    for (const row of listChildren(runnerPid)) {
+      const file = /([^\s"']+\.test\.mjs)/.exec(row.cmd)?.[1];
+      if (!file || row.ageMs < WATCHDOG_MS) continue;
+      console.error(`
+⏱ 看门：${file} 的进程（pid ${row.pid}）已运行 ${Math.round(row.ageMs / 1000)} 秒仍未结束，超过 ${Math.round(WATCHDOG_MS / 1000)} 秒的限度，强制结束它的进程树`);
+      killedByWatchdog.push(file);
+      killTree(row.pid);
+    }
+  }, WATCHDOG_POLL_MS);
+  timer.unref();
+  return timer;
+}
+
 async function run(testFiles, attempt) {
   const report = path.join(temp, `events-${attempt}.ndjson`);
   const args = [...baseArgs, '--test-reporter=spec', '--test-reporter-destination=stdout', `--test-reporter=${pathToFileURL(reporter).href}`, `--test-reporter-destination=${report}`, ...testFiles];
   const code = await new Promise((resolve) => {
     const child = spawn(process.execPath, args, { cwd: root, stdio: 'inherit', windowsHide: true });
+    const dog = watchdog(child.pid);
+    child.once('close', () => clearInterval(dog));
     child.once('error', (error) => { console.error(`测试进程启动失败：${error.message}`); resolve(1); });
     child.once('close', (exitCode, signal) => resolve(signal ? 1 : exitCode ?? 1));
   });
@@ -49,6 +97,10 @@ function note(file, attempt, retriable) {
   const status = signal ? `signal=${signal}` : `exitCode=${exitDescription(exitCode)}`;
   console.error(`\n${retriable ? '⚠ 测试文件进程异常' : '✖ 文件级失败（不重跑）'}：${file.file}（第 ${attempt} 次）`);
   console.error(`  ${status}；已报用例=${file.testCases}；stderr=${file.stderrLines} 行${retriable ? '；参考 nodejs/node#65756：https://github.com/nodejs/node/issues/65756' : ''}`);
+}
+
+function reportKilled() {
+  if (killedByWatchdog.length) console.error(`⏱ 被看门强制结束的测试文件（记为失败）：${[...new Set(killedByWatchdog)].join('、')}`);
 }
 
 async function main() {
@@ -99,6 +151,7 @@ async function main() {
 
 try {
   process.exitCode = await main();
+  reportKilled();
 } finally {
   const relative = path.relative(path.resolve(os.tmpdir()), temp);
   if (!relative.startsWith('promptcut-test-') || relative.includes(path.sep)) throw new Error(`拒绝清理非本次测试临时目录：${temp}`);

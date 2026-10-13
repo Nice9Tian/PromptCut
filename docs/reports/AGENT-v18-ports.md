@@ -30,3 +30,56 @@
 - 改之后：同样办法连做三轮，每个进程 64 条全过、0 失败、0 个 EADDRINUSE、退出码 0。
 - `npx tsc -b --force` 退出码 0。
 - 整套 `npm test`（设两个环境变量）：6121 条，通过 6113，失败 0，跳过 8，与 main 一致。
+
+# 第二批
+
+先 `git merge main`（快进到 a21c1db1）。新增 20 个文件的批量验证（`scripts` 外，清单见下）：改之前两个进程同时跑，A 进程 109 条里失败 22、B 进程 105 条里失败 25，大量 `EADDRINUSE`（34 与 38 处）；改之后连做三轮，6 个进程都是 109 条全过、0 失败、0 个 EADDRINUSE。`npx tsc -b --force` 退出码 0；整套 `npm test` 6121 条，通过 6113，失败 0，跳过 8，没有触发重跑。
+
+## 一、测试里的写死端口（都在 server/test/ 下）
+| 文件 | 原来 | 现在（只列取端口的改动） |
+|---|---|---|
+| account-assembly-central | 5770～5775、5779（账号、doc、doc 内部、asset 公共、asset 内部、读控制、combo 的 asset） | 开头 `freePorts(7)`（第一个"必需拒绝"用例 `freePorts(2)`），所有字符串、环境变量改用变量 |
+| account-assembly-fence-transport | 5775、5776、5777、5778、5779 | `setup` 传 0，把读回的端口存成 `service.testPort`，其余处引用它（含 ws 地址） |
+| account-real-runner-sse | 6707 | 监听 0，请求地址读 `server.address().port`，仅 2 行 |
+| account-real-runner（测试） + fixtures/account-real-runner.mjs | 6700～6706、6708、6709 | 夹具给 `startAccountRealRunnerFixture` 加可选参数 `ports`、`agentPort`、`controlPort`，缺省仍是旧值（探针 account-real-runner-probe 依赖旧值）；测试传 `freePorts(9)`。夹具改了 3 行：函数签名、`ports: [...ports], agentPort,`、`controlPort,` |
+| agent-access-http | 5790、5791 | `freePorts(2)` |
+| agent-read-control-transport | 6600、6601 | `freePorts(2)` |
+| agent-runner-control | 5795、5796、5797 | 都改为监听 0 再读回 |
+| agent-run-scope-doc | 6712 | 监听 0，读回成 `ownedPort` |
+| agent-worker-settlement-client | 6713 | `freePort()`，origin 与监听、诊断文字都用它 |
+| cloud-queue-http | 6602、6603 | 6602 用 `freePort()`，6603 监听 0 读回 |
+| asset-project-close-boundary、asset-project-workers、asset-project-entries + fixtures/asset-project-service.mjs | 5780～5784、28090 | 夹具默认端口改 0 并读回实际端口，三个测试不再传 port；其余本地监听改 0 |
+| operation-wiring-fixture、operation-wiring-child、operation-wiring-crash、run-authority-operation-fixture | 5760、5761、5730 | 夹具默认 0 并读回；child 与 crash 测试不再传 5761 |
+| project-selections | 5920 | 监听 0 |
+| account-password-user-path、account-logout-confirmation | 6680～6687、28140～28147 | 测试内 `freePorts(8)`（一个给 Agent，七个给底座） |
+| account-dual-user-path | 夹具缺省 6380～6388 | 测试传 `freePorts(7)` |
+
+## 二、没有改的数字（不是监听端口）
+account-executor-assembly 的 6640/6641（命令行拒绝配置的输入，根本不监听，所以也不碰另一个子 Agent 在改的文件）；account-task-worker-child 6700、agent-worker-session 6700、agent-worker-registration-mtls 6702、cloud-run-assets-current-registry-v2 6553（假配置或"监听前就拒绝"）；agent-run-scope-core 6540（解析 /proc 文本的输入）；hosted-render-*、sp-*、c10-*、api-guard 等里的 5xxx、8xxx（地址字符串或假返回）。夹具缺省值 account-conversation-controls-user-path、cloud-queue-user-path、account-dual-user-path、account-password-user-path 的默认端口表保留，因为 scripts/probes 下的其他探针（account-user-pages、cloud-queue-user-pages、project-member-controls、account-conversation-controls、account-real-runner）把同一批端口写进浏览器地址和舞台地址，改缺省值会连带坏它们；这些探针不是本批范围，仍写死，会和同时跑的探针互撞，留给主会话决定。
+
+## 三、account-password-user-path-probe.mjs（只做了 node --check，没有真跑）
+改了：文件开头用 `await freePorts(10)`（导入自 server/test/free-ports.mjs）取代 `PORTS`；`ORIGIN` 取第 7 个端口（HTTPS 入口）；两个舞台端口取第 9、10 个，`STAGES` 由它们拼出 `http://s1.pc.localhost:<端口>`；起舞台处循环 `STAGE_PORTS`；启动底座时传 `ports: PORTS.slice(0,7), agentPort: PORTS[7]`。底座 `fixtures/account-password-user-path.mjs` 本身不用改（本来就接受 `ports`、`agentPort`）。主会话重跑时注意：浏览器的 `--host-resolver-rules` 只映射 s1/s2.pc.localhost 到 127.0.0.1，端口无关，不用改；开头"端口可用"检查现在对刚要到的端口恒真；结果里的 `cleanup.portsFree` 检查的是这次的端口；日志、结果里的端口号每次不同，别拿固定号去匹配。
+
+## 四、两处偶发超时（只调时限）
+- agent-live-selection 第 101 行（等 8000 ms）：等的是模型脚本调用 get_selection 后的 `tool_result` 事件。`onEvent` 在 `startHostedRun` 时就挂上，事件不会漏；慢的是第一次用到代理工具时 vite `ssrLoadModule` 现编译一批 ts 模块，吃 CPU。单独跑整份文件 1.5 秒。结论：时限紧，没有时序问题。放宽到 30000 ms。
+- cloud-agent-runs CA-PAGE-01（第 603 行等 20000 ms）：等 c-p1 的 `tool_result`。订阅用 `subscribe(..., 0, ...)` 从头回放，订阅晚了也不丢；脚本先睡 400 ms 再调 add_cut，同样首次加载工具模块。单独跑该用例 1.9 秒。结论：时限紧，没有时序问题。放宽到 60000 ms（整个用例超时 240 s 不变）。时限只防卡死，不是通过条件。
+
+# 第三批：real-runner 忙时失败并卡住、npm test 看门
+
+## 一、为什么失败
+`account-real-runner.test.mjs` 等一轮真实运行结束（`runner_done` 且 `activeRuns===0`），时限 40 秒，整条用例时限 90 秒。机器忙时（五六个子 Agent 同时跑测试）这一轮要跑得更久，于是 40 秒超时抛 `actual-runner-output-timeout`（加上启动约 6 秒，对上"46 秒后失败"）。单独跑 11 秒。**和第二批改的 `fixtures/account-real-runner.mjs` 的端口参数无关**：端口只是换了取法，不影响耗时；失败原因是时限紧加这一轮没跑完。没有发现时序问题（轮询 `rows` 是读当前状态，不是等一次性事件）。
+
+## 二、为什么失败后进程不退出（已用小实验复现）
+把等待时限临时改成 300 毫秒让它必然失败，复现了"进程不退出"（120 秒仍在，被 timeout 杀掉）。根因：失败时这一轮还在跑，`finally` 里关执行器会被产品拒绝（`account-runner-pending`，因为不许在运行中收尾），`fixture.close()` 在 `cloud-queue-user-path.mjs` 的 `close()` 里关到一半抛出，后面的 HTTPS 入口、combo、账号服务等端口（`TCPServerWrap` 等）都没关，进程因此退不出。`close()` 里是顺序 await，前面一个抛出就跳过后面所有收尾——这个文件现在有别的子 Agent 在改，我没碰。
+
+改法（只动测试）：`finally` 里先等 `activeRuns===0`（最多 90 秒）再收尾，这样关的时候是干净的；等待时限 40 秒放宽到 120 秒、用例时限 90 秒放宽到 240 秒（只防卡死）。未做的：`cloud-queue-user-path.mjs` 的 `close()` 应改成每一步各自 try/catch、全部执行完再汇总抛出，建议归另一个子 Agent。同类"失败就不收尾"的写法：我查了用这批底座的测试，其余都用 `try/finally` 或 `t.after` 收尾；唯一的共同隐患就是上面这个 `close()` 的"中途抛出跳过后面"。
+
+## 三、npm test 的保险（最终采用自己的看门，不用 node 自带开关）
+先试了办法 (a) node 自带 `--test-force-exit`（加 `--test-timeout`）：小实验里能让失败后留着监听的文件退出，但**全量跑时发现它会把本来通过的文件记成文件级失败**（asset-announce、asset-harness-lifecycle、cloud-agent-spawn-disabled、prerender-proxy 等，单独跑不加该开关全过），改变了判定，所以放弃并撤掉。
+
+改用办法 (b)：`scripts/test-suite.mjs` 里加看门。每 30 秒（`PROMPTCUT_TEST_WATCHDOG_POLL_MS`）查测试运行器的直接子进程，凡是命令行带 `*.test.mjs` 且已运行超过 15 分钟（`PROMPTCUT_TEST_FILE_LIMIT_MS`）的，杀它的进程树（Windows 用 `taskkill /T /F`，Linux 用 `pkill -P` 加 SIGKILL），打印一行"看门：<文件> …"，并在最终汇总后再点名一次"被看门强制结束的测试文件（记为失败）"。被杀的文件由测试运行器照常记成文件级失败，其它文件的判定不变；起进程都带 `windowsHide`（守门测试 windows-hide-silent-spawn 扫过）。
+
+验证（用完已删，不在仓库里）：`out/zz/` 下一个"失败并留着监听、进程退不出来"的文件和一个普通通过的文件，用 `PROMPTCUT_TEST_FILE_LIMIT_MS=10000 PROMPTCUT_TEST_WATCHDOG_POLL_MS=3000 npm test -- …`：12 秒时看门杀掉前者并点名，通过的文件仍通过，最终"仍有失败"并再次点名，退出码 1，整体不再挂住。
+
+## 四、三个进程同时跑全量 npm test
+每遍 245 秒左右正常结束，三遍都没有卡死（之前会无限挂住）。过程中为减少"忙时才有的"失败，又放宽了几处只防卡死的等待：cloud-agent-runs 里 CA-RENDER 的几处等待（20/5 秒到 60/30 秒），multi-agent-presence 的 3 秒等待改 20 秒、在场状态的存活期 15 秒改 60 秒（忙时用例跑到 19 秒，存活期先过期了，所以读不到"正在编辑"）。三个进程同时跑加上机器上别的子 Agent，每遍仍有 4～9 条因负载超时的失败（artifact-push 的 W4、cloud-agent-service、reopen-hosting、user-editing、ai-visual-shared、hosted-render-queue、cloud-tools-p4-subject 等，每遍不完全相同）；把这些文件逐个单独重跑，79 条全部通过。未再逐条放宽，这类用例的时限在三倍负载下本来就偏紧，建议主会话需要时另议。

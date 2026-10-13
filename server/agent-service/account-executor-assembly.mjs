@@ -3,6 +3,8 @@ import { createHostedAgentService } from '../agent/service/create-agent-service.
 import { createRunDataClient } from './run-data-client.mjs';
 import { createRunResources } from '../agent/service/run-resources.mjs';
 import { createRunControlServer } from './run-control.mjs';
+import { createRunAssetTransport } from './run-asset-transport.mjs';
+import { createRunAssetClient } from '../agent/service/run-asset-client.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
 const reference = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
@@ -16,6 +18,7 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
   readyTimeoutMs = 5000, resumeIntervalMs = 2000, runnerFactory = null,
   connectionsClosed = null, childrenClosed = null, childTreeWitness = null,
   task = null, registrationScope = null, assignmentReady = null, onTaskDrained = null, runEventsSink = null,
+  runAssets = null, stateDir = null,
   log = () => {}, ...runnerOptions } = {}) {
   if (typeof dataDir !== 'string' || !path.isAbsolute(dataDir) ||
       !doc?.tls?.key || !doc.tls.cert || !doc.tls.ca || typeof doc.origin !== 'string' ||
@@ -31,7 +34,21 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
       controlHost !== '127.0.0.1' || !Number.isFinite(readyTimeoutMs) || readyTimeoutMs <= 0 ||
       !Number.isFinite(resumeIntervalMs) || resumeIntervalMs < 100)
     fail('account-executor-configuration');
-  let service, dataClient, resources, controlServer, timer, resumeWork = null, stopped = false, closing = null;
+  // 本机状态（已读意向、事件库）缺省和 dataDir 放一起。一条任务一个进程时 dataDir 是各代共用的（对话的模型历史、
+  // 工作目录要跨代保留），这些只属于这一代的文件另放一个目录，免得几个槽的进程同时写同一个库〔裁〕。
+  if (stateDir !== null && (typeof stateDir !== 'string' || !path.isAbsolute(stateDir))) fail('account-executor-configuration');
+  const localDir = stateDir ?? dataDir;
+  // 运行素材缺省不接。给了就必须配齐（素材服务的内部地址、这个进程连它用的证书、它证书的指纹、两个上限），
+  // 而且只能和真实运行器一起用：受控的运行器工厂不会去用它。这些值只来自入口的本机配置。
+  if (runAssets !== null && (runnerFactory !== null || typeof runAssets?.assetOrigin !== 'string' ||
+      !runAssets.assetTls?.key || !runAssets.assetTls.cert || !runAssets.assetTls.ca ||
+      typeof runAssets.assetFingerprint256 !== 'string' ||
+      !Number.isSafeInteger(runAssets.maxResponseBytes) || runAssets.maxResponseBytes < 1 ||
+      !Number.isSafeInteger(runAssets.maxImportBytes) || runAssets.maxImportBytes < 1 ||
+      (runAssets.timeoutMs !== undefined && (!Number.isSafeInteger(runAssets.timeoutMs) || runAssets.timeoutMs < 1)) ||
+      Object.keys(runAssets).some(key => !['assetOrigin', 'assetTls', 'assetFingerprint256', 'maxResponseBytes', 'maxImportBytes', 'timeoutMs'].includes(key))))
+    fail('account-executor-run-assets-configuration');
+  let service, dataClient, resources, assetTransport = null, controlServer, timer, resumeWork = null, stopped = false, closing = null;
   const controlSockets = new Set();
   const closeServer = async () => {
     if (!controlServer) return;
@@ -46,7 +63,7 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
     // Stop admission immediately, before awaiting a read stream or model drain.
     service?.runManager.close();
     const results = await Promise.allSettled([
-      closeServer(), readControl?.close(), dataClient?.close(), resources?.close(),
+      closeServer(), readControl?.close(), dataClient?.close(), assetTransport?.close(), resources?.close(),
       Promise.resolve(resumeWork).catch(() => {}), service?.close(),
     ]);
     const errors = results.filter(row => row.status === 'rejected').map(row => row.reason);
@@ -85,13 +102,24 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
       .map(name => [name, humanUnavailable]));
     dataClient = createRunDataClient({ ...doc, runClient });
     resources = createRunResources({ runClient, ...(childTreeWitness ? { childTreeWitness } : {}) });
+    // 运行素材的传输层用这个进程自己的那一个 runClient（每个请求用它内存里的钥匙签）和同一个 resources
+    // （素材的连接和流登记在它名下，任务被下围栏时 abortForFence 才关得到它们）。
+    let runAssetOptions = null;
+    if (runAssets) {
+      assetTransport = createRunAssetTransport({ runClient, resources, assetOrigin: runAssets.assetOrigin,
+        assetTls: runAssets.assetTls, assetFingerprint256: runAssets.assetFingerprint256,
+        ...(runAssets.timeoutMs ? { timeoutMs: runAssets.timeoutMs } : {}) });
+      runAssetOptions = { client: createRunAssetClient({ transport: assetTransport, maxResponseBytes: runAssets.maxResponseBytes }),
+        maxImportBytes: runAssets.maxImportBytes };
+    }
     service = createHostedAgentService({ ...runnerOptions, root, loadModule, modelConfig, dataDir,
       accountMode: true, requireAccountRunner: true, conversationClient: task ? taskConversationClient : conversationClient,
       runClient, dataClient, resources,
-      readIntentsFile: path.join(dataDir, 'run-read-intents.sqlite'),
-      runEventsFile: path.join(dataDir, 'run-events.sqlite'), runEventsAuthorityId: identity.authorityId,
+      readIntentsFile: path.join(localDir, 'run-read-intents.sqlite'),
+      runEventsFile: path.join(localDir, 'run-events.sqlite'), runEventsAuthorityId: identity.authorityId,
       serviceKid: identity.serviceKid, instanceId: identity.instanceId,
-      runnerFactory, connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, runEventsSink, log });
+      runnerFactory, connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, runEventsSink,
+      ...(runAssetOptions ? { runAssets: runAssetOptions } : {}), log });
     controlServer = createRunControlServer({ tls: doc.tls, docFingerprint256: doc.serverFingerprint256,
       serviceKid: identity.serviceKid, instanceId: identity.instanceId, manager: service.runManager });
     controlServer.on('connection', socket => { controlSockets.add(socket);
@@ -112,7 +140,8 @@ export async function createAccountExecutorAssembly({ dataDir, doc, runClient, c
       controlPort: controlServer.address().port, close,
       ...(task ? { taskWork } : {}),
       describe: () => ({ ...service.describe(), readControlConnected: task ? false : readConnected(),
-        runDataProofMounted: true, completionReady: false, controlSockets: controlSockets.size }) };
+        runDataProofMounted: true, completionReady: false, controlSockets: controlSockets.size,
+        runAssetsMounted: assetTransport !== null }) };
   } catch (error) {
     try { await close(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'account-executor-start-close-pending'); }
     throw error;

@@ -9,7 +9,6 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { startAssetProjectFixture } from './fixtures/asset-project-service.mjs';
 
-const PORT = 28090;
 const bytes = Buffer.from('project owned media for the remaining entries');
 const hash = crypto.createHash('sha256').update(bytes).digest('hex');
 const request = (f, project, url, options = {}) => fetch(`${f.base}${url}`, { ...options, headers: { Authorization: `Bearer ${project}-rw`, ...options.headers } });
@@ -38,7 +37,7 @@ function stalledRead(f, project, url) {
 }
 
 test('真实HTTP：小尺寸补转、上传队列、预取、原尺寸检查、带扩展名的旧读口都不越项目', async t => {
-  const f = await startAssetProjectFixture({ port: PORT }); t.after(() => f.close());
+  const f = await startAssetProjectFixture(); t.after(() => f.close());
   await upload(f, 'A', 'media');
   assert.equal(await status(f, 'A', `/@media/${hash}.wav`), 200);
   assert.equal(await status(f, 'B', `/@media/${hash}.wav`), 404);
@@ -56,7 +55,7 @@ test('真实HTTP：小尺寸补转、上传队列、预取、原尺寸检查、�
 });
 
 test('真实HTTP：A 传了一片没收尾的，B 看不到也收不了尾；只读票据与查询串票据不能写', async t => {
-  const f = await startAssetProjectFixture({ port: PORT }); t.after(() => f.close());
+  const f = await startAssetProjectFixture(); t.after(() => f.close());
   for (const ns of ['media', 'snap', 'px']) {
     const url = `/api/asset/${ns}/${hash}`;
     assert.equal(await status(f, 'A', `${url}/0`, { method: 'PUT', headers: { 'X-Media-Size': String(bytes.length), 'X-Media-Ext': 'wav' }, body: bytes }), 200);
@@ -73,7 +72,7 @@ test('真实HTTP：A 传了一片没收尾的，B 看不到也收不了尾；只
 });
 
 test('真实HTTP：撤销后 A 在 /api/asset 三命名空间与 /@media 上正在读的流都被关，B 同哈希的流读完整件', { timeout: 60000 }, async t => {
-  const f = await startAssetProjectFixture({ port: PORT }); t.after(() => f.close());
+  const f = await startAssetProjectFixture(); t.after(() => f.close());
   const big = Buffer.alloc(20 * 1024 * 1024); for (let i = 0; i < big.length; i += 4096) big.writeUInt32LE((i * 2654435761) >>> 0, i);
   let key;
   for (const ns of ['media', 'snap', 'px']) key = await upload(f, 'A', ns, big, 'bin');

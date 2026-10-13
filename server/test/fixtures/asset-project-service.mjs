@@ -31,7 +31,7 @@ export function compileAssetModules(out) {
   return Promise.all([import(compile(path.join(ROOT, 'server/asset-service.ts'))), import(compile(path.join(ROOT, 'server/vite-plugin-media.ts'))), import(compile(path.join(ROOT, 'server/vite-plugin-shots.ts')))]).then(([asset, media, shots]) => ({ asset, media, shots }));
 }
 
-export async function startAssetProjectFixture({ port = 5780, out = null, wrapStore = null } = {}) {
+export async function startAssetProjectFixture({ port = 0, out = null, wrapStore = null } = {}) {
   out ??= await fsp.mkdtemp(path.join(os.tmpdir(), 'pc-asset-project-http-'));
   await fsp.mkdir(out, { recursive: true });
   const { asset, media, shots } = await compileAssetModules(out);
@@ -62,6 +62,7 @@ export async function startAssetProjectFixture({ port = 5780, out = null, wrapSt
   const thumbnail = shots.shotsThumbMiddleware(out, opts);
   const server = http.createServer((req, res) => { void a(req, res, () => { void m(req, res, () => { void thumbnail(req, res, () => { res.statusCode = 404; res.end('no route'); }); }); }); });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+  port = server.address().port;
   return {
     out, base: `http://127.0.0.1:${port}`, factory, projectAccess, authority, media, shots,
     get checks() { return checks; },
