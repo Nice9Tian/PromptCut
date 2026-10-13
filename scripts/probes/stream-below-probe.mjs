@@ -16,7 +16,8 @@
  *
  *   1. 这种流产得出来:计划里有一条 `kind: 'below'`、`plane: 'stage'` 的流挂在毛玻璃卡上,全部分段满密度;
  *      差分取层的记录里实测没有不过的(`below.failed` 为空、没有打开「下张先丢一张」);
- *   2. 流只含目标卡改动的那一块:稀疏那一趟量出的收紧矩形明显小于整幅;毛玻璃卡入场前的帧解出来是全透明的;
+ *   2. 流只含目标卡改动的那一块:稀疏那一趟量出的收紧矩形明显小于整幅;流从毛玻璃卡自己的第一帧(第 6 帧,不是 15 的倍数)起分段,
+ *      里面没有它入场之前的帧(原来按项目帧号分段时,头一个分段里有 6 帧是入场之前的、全透明);
  *      收紧矩形里目标卡没有改动的像素(带目标卡和不带目标卡两幅导出画面逐像素相同的地方)解出来也是透明的;
  *   3. 把解出来的每一帧盖回「同一时刻只有下层的导出画面」上,和「同一时刻整幅的导出画面」比(预乘色,满分 255):
  *      差不超过「整幅的导出画面原样过一遍同一个编码器」的差(这就是编码误差);带对照:和 7 帧以后的整幅画面比明显更大;
@@ -37,6 +38,7 @@ import { flagArg } from './probe-connect.mjs';
 import { FramePipeline } from '../../server/frame-pipeline.mjs';
 import { SEGMENT_FRAMES, splitFmp4, isolatedBelowProject, belowStreamsEnabled, BELOW_STREAMS_DEFAULT } from '../../server/frame-stream.mjs';
 import { BELOW_STREAM_VERSION } from '../../server/card-identity.mjs';
+import { streamSegmentFirstFrame, streamSegmentFrameCount } from '../../src/render/streamSegments.mjs';
 import { openBakery } from '../../server/bakery/chrome.mjs';
 import { bakeFrames } from '../../server/bakery/bake.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, dropStreamEncoderSpares } from '../../server/bakery/ffmpeg.mjs';
@@ -137,7 +139,11 @@ try {
     check(row.below && row.below.failed === null && row.below.primeLower === false, `${tag}:差分取层的实测没有不过的`, row.below);
     check(row.below?.checks >= 2 * run.stream.segments, `${tag}:稀疏、满密度两趟的每个分段都实测过`, row.below?.checks);
     check(row.below?.glassFrames > 0, `${tag}:量到了毛玻璃的外框`, row.below?.glassFrames);
-    check(row.below?.absent > 0, `${tag}:入场前的帧记成了「目标卡不在页面上」`, row.below?.absent);
+    // 分段从目标卡自己的第一帧起数(0.2 秒入场 → 第 6 帧),流里没有它入场之前的帧
+    const ENTRY = Math.ceil(0.2 * FPS - 1e-9);
+    check(spec.originFrame === ENTRY && spec.firstSegment === 0 && manifest.originFrame === ENTRY && ENTRY % SEGMENT_FRAMES !== 0,
+      `${tag}:流的第一帧是毛玻璃卡入场的那一帧(第 ${ENTRY} 帧,不是 15 的倍数),清单记着它`, { originFrame: spec.originFrame, firstSegment: spec.firstSegment, manifest: manifest.originFrame });
+    check(row.below?.absent === 0, `${tag}:截的帧里没有「目标卡不在页面上」的(流不再含入场之前的帧)`, row.below?.absent);
     const lowerCard = kind === 'a' ? 'clip-move' : 'clip-block';
     check(status.streams.some((s) => s.kind === 'card' && s.clipIds[0] === lowerCard), `${tag}:下层那张独立卡照旧有自己的单卡流`, run.kinds);
     // 2a. 只含目标卡改动的那一块
@@ -185,12 +191,15 @@ try {
       const frameBytes = rect.w * 2 * (rect.h + 8) * 3;
       if (!check(decoded.length === seg.samples * frameBytes, `${tag}#${n}:解出 ${seg.samples} 帧`, decoded.length / frameBytes)) continue;
       // 参照:整幅的导出画面裁到同一个矩形,原样过一遍同一个编码器
+      // 第 n 段盖住的帧:从这条流自己的第一帧起数(`src/render/streamSegments.mjs`),末段到它的最后一帧为止
+      const firstFrame = streamSegmentFirstFrame(n, spec.originFrame);
+      check(seg.samples === streamSegmentFrameCount(n, spec.originFrame, spec.lastFrame), `${tag}#${n}:样本数 = 这一段盖住的帧数`, { samples: seg.samples, firstFrame, lastFrame: spec.lastFrame });
       const plain = openStreamSegmentEncoder(ffmpeg, { encoder: status.encoder, fps: FPS, raw: { width: rect.w, height: rect.h } });
-      for (let k = 0; k < seg.samples; k++) await plain.write(cropRgba(await load('whole', n * SEGMENT_FRAMES + k), width, rect));
+      for (let k = 0; k < seg.samples; k++) await plain.write(cropRgba(await load('whole', firstFrame + k), width, rect));
       const plainParts = splitFmp4((await plain.finish()).bytes);
       const plainDecoded = await decodeSegment(ffmpeg, plainParts.init, plainParts.segments[0], dir, `plain-${n}`);
       for (let k = 0; k < seg.samples; k++) {
-        const f = n * SEGMENT_FRAMES + k;
+        const f = firstFrame + k;
         const picture = decoded.subarray(k * frameBytes, (k + 1) * frameBytes);
         const whole = await load('whole', f), lower = await load('lower', f);
         tallyDecoded(after, picture, rect, lower, whole, width);
@@ -223,10 +232,11 @@ try {
     };
     say('compare', { tag, ...run.error, transparent: run.transparent });
     const got = run.error.盖回去对整幅的导出画面, ref = run.error.参照_整幅画面原样过一遍编码器, ctl = run.error.对照_七帧以后的整幅画面;
-    check(got.pixels === N * tight.w * tight.h, `${tag}:${N} 帧都比过了`, got.pixels / (tight.w * tight.h));
+    const streamFrames = spec.lastFrame - spec.originFrame + 1;
+    check(got.pixels === streamFrames * tight.w * tight.h, `${tag}:这条流的 ${streamFrames} 帧(第 ${spec.originFrame}～${spec.lastFrame} 帧)都比过了`, got.pixels / (tight.w * tight.h));
     check(got.mean <= ref.mean + 0.5 && got.bad <= ref.bad * 1.25 + got.pixels * 0.001, `${tag}:盖回去和整幅的导出画面的差在编码误差以内(不超过整幅画面原样过一遍编码器的差)`, { got, ref });
     check(ctl.mean > 3 * got.mean && ctl.bad > 5 * (got.bad + 1), `${tag}:对照(别的时刻的整幅画面)明显更大`, { got, ctl });
-    check(quiet.before.frames === 6 && quiet.before.alphaMax <= 8, `${tag}:入场前的 6 帧解出来是全透明的`, run.transparent.入场前的帧);
+    check(quiet.before.frames === 0, `${tag}:流里没有入场之前的帧`, run.transparent.入场前的帧);
     check(quiet.unchanged.pixels > 0 && quiet.unchanged.alphaSum / quiet.unchanged.pixels < 1.5 && quiet.unchanged.over16 / quiet.unchanged.pixels < 0.01,
       `${tag}:收紧矩形里目标卡没有改动的像素解出来是透明的`, run.transparent.收紧矩形里没被改动的像素);
 
