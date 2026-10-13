@@ -17,6 +17,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from . import ffmpeg_input
+
 MODEL_FILENAME = "bootstapir_v2.pt"
 
 # 模型是按 256×256 训练的，喂别的尺寸精度会掉。查询点和输出轨迹都在这个
@@ -36,13 +38,13 @@ def decode_frames(ffmpeg: str, video: str, size: int = INPUT_SIZE) -> Tuple[np.n
     让有效像素变少。坐标换算在 scale_points 里按同样的拉伸做逆变换。
     """
     probe = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", video],
+        [ffmpeg, "-hide_banner", *ffmpeg_input(video)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     src_w, src_h = _parse_size(probe.stderr.decode("utf-8", "replace"))
 
     proc = subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", video,
+        [ffmpeg, "-hide_banner", "-loglevel", "error", *ffmpeg_input(video),
          "-vf", f"scale={size}:{size}", "-pix_fmt", "rgb24",
          "-f", "rawvideo", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -64,6 +66,23 @@ def _parse_size(stderr: str) -> Tuple[int, int]:
 
     m = re.search(r"Stream #.*Video:.*?(\d{2,5})x(\d{2,5})", stderr)
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def estimate_frames(ffmpeg: str, video: str) -> Optional[int]:
+    """从 ffmpeg 的探测日志里估视频总帧数(时长 × 帧率)。估不出来回 None,不阻止追踪。"""
+    import re
+
+    probe = subprocess.run(
+        [ffmpeg, "-hide_banner", *ffmpeg_input(video)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    text = probe.stderr.decode("utf-8", "replace")
+    d = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
+    f = re.search(r"Stream #.*Video:.*?(\d+(?:\.\d+)?)\s*fps", text)
+    if not d or not f:
+        return None
+    seconds = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))
+    return int(round(seconds * float(f.group(1))))
 
 
 def scale_points(points: Sequence[Sequence[float]], src: Tuple[int, int],

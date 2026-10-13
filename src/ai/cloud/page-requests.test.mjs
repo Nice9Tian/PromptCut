@@ -11,16 +11,26 @@
  *   CAU-REV-05  对账:页面的白名单与服务端经反向通道的工具表是同一组;
  *   CAU-REV-06  守门:页面上触发执行的入口只有事件流这一处——`src/` 里引用 `runPageRequest` 的只有接线的那一个文件,
  *               `pageRequests.ts` 自己不挂全局、不听 `postMessage` 与自定义事件;接口层带委托票据交回。
+ *
+ * 账号模式(0.7.18 工具包 W2;服务端是 `server/agent/service/page-bridge.mjs`):
+ *   CAU-ACC-01  白名单是 seek / play / pause / web_handoff,各调到本机实现;`get_selection` 与别的一律拒绝、什么都不执行;
+ *   CAU-ACC-02  只认发给这张页面的:版本号不是 2、没有一次性随机数、页面号对不上、这张页面还没有在场页面号的,不执行也不答;
+ *   CAU-ACC-03  答案原样带回请求号、一次性随机数、页面号、这一轮的号;参数按本机的规矩查,多带的字段不往下传;
+ *   CAU-ACC-04  同一个请求号重复到达只执行一次并回第一次的答案;同号不同随机数的不答;
+ *   CAU-ACC-05  对账:页面的账号模式白名单与服务端 `PAGE_BRIDGE_TOOLS` 是同一组,且都没有 `get_selection`;
+ *   CAU-ACC-06  `web_handoff`:没有本机浏览器的页面回 unsupported;有的调本机实现,只回交没交出去,不带本机细节;地址不合格的不执行;
+ *   CAU-ACC-07  守门:`src/` 里引用 `createAccountPageRequests` 的此刻只有本文件与 `pageRequests.ts`(接线归最后的接线包)。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CLOUD_PAGE_REQUEST_TOOLS, PAGE_ID_RE, newPageId, runPageRequest } from "./pageRequests.ts";
+import { CLOUD_PAGE_REQUEST_TOOLS, PAGE_ID_RE, newPageId, runPageRequest, ACCOUNT_PAGE_REQUEST_TOOLS, ACCOUNT_PAGE_TEXT, createAccountPageRequests } from "./pageRequests.ts";
 import { createCloudSession } from "./session.ts";
 import { createCloudApi } from "./cloudApi.ts";
 import { CLOUD_PAGE_TOOLS } from "../../../server/agent/service/cloud-tools.mjs";
+import { PAGE_BRIDGE_TOOLS, PAGE_REQUEST_VERSION } from "../../../server/agent/service/page-bridge.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(HERE, "..", "..");
@@ -245,4 +255,133 @@ test("CAU-REV-06 守门:触发执行的入口只有事件流;接口层带委托�
   const it2 = api.events("c-a", 7);
   await it2.next().catch(() => {});
   assert.equal(seen[2][0], "https://node.example/agent/v1/conversations/c-a/events?after=7", "没有页面号时查询串与原来一样");
+});
+
+/* ====================================================================== 账号模式 */
+
+const PAGE = "5f0c7c1e-8f43-4b53-9d5b-2f6a8f3f6c11";
+const NONCE = "n0nceN0NCEn0nceN0NCEn0nc";
+const req = (over = {}) => ({ type: "page.request", v: 2, id: ID, nonce: NONCE, runId: "run_1", pageId: PAGE, tool: "seek", args: { t: 2.5 }, timeoutMs: 15000, ...over });
+function accountExec() {
+  const exec = fakeExec();
+  delete exec.getSelection;
+  return exec;
+}
+
+test("CAU-ACC-01 账号模式白名单:三个播放控制各调到本机实现;get_selection 与别的一律拒绝、什么都不执行", async () => {
+  const exec = accountExec();
+  const page = createAccountPageRequests({ pageId: () => PAGE, exec });
+  assert.deepEqual(await page.run(req()), { v: 2, id: ID, nonce: NONCE, pageId: PAGE, runId: "run_1", ok: true, result: { ok: true } });
+  assert.equal((await page.run(req({ id: `${ID}1`, tool: "play", args: {} }))).ok, true);
+  assert.equal((await page.run(req({ id: `${ID}2`, tool: "pause" }))).ok, true);
+  assert.deepEqual(exec.calls, [["begin"], ["seek", { t: 2.5 }], ["end"], ["begin"], ["play"], ["end"], ["begin"], ["pause"], ["end"]]);
+  const strict = accountExec();
+  strict.getSelection = () => { strict.calls.push(["getSelection"]); return { id: "c1" }; };
+  const guarded = createAccountPageRequests({ pageId: () => PAGE, exec: strict });
+  let n = 0;
+  for (const tool of ["get_selection", "remove_clip", "update_clip", "collect_login", "spawn_agent", "toString", "__proto__", "", "SEEK", "seek ", 42]) {
+    const out = await guarded.run(req({ id: `${ID}x${n++}`, tool, args: { t: 1, clipId: "c1" } }));
+    assert.equal(out.ok, false, String(tool));
+    assert.match(out.error, /这个页面不执行/);
+  }
+  assert.deepEqual(strict.calls, [], "白名单之外的什么都没执行;页面不交自己这一张的选区");
+});
+
+test("CAU-ACC-02 只认发给这张页面的:版本、随机数、页面号任何一样不对都不执行也不答", async () => {
+  const exec = accountExec();
+  let mine = PAGE;
+  const page = createAccountPageRequests({ pageId: () => mine, exec });
+  for (const ev of [
+    null, { ...req(), type: "tool_call" }, req({ v: 1 }), req({ v: undefined }), req({ nonce: undefined }), req({ nonce: "short" }), req({ nonce: 7 }),
+    req({ id: "短" }), req({ id: "../../etc/passwd" }), req({ pageId: "another-page-of-the-same-account" }), req({ pageId: undefined }), req({ pageId: [PAGE] }),
+    // 旧通道的形状(没有版本号、没有随机数):账号模式不认
+    { type: "page.request", id: ID, runId: "run_1", tool: "seek", args: { t: 3 }, timeoutMs: 15000 },
+  ]) assert.equal(await page.run(ev), null);
+  mine = null;
+  assert.equal(await page.run(req()), null, "这张页面还没连上文档服务(没有在场页面号):不执行");
+  mine = "不合格 的页面号";
+  assert.equal(await page.run(req({ pageId: mine })), null);
+  assert.deepEqual(exec.calls, []);
+});
+
+test("CAU-ACC-03 参数的规矩;多带的字段不往下传;实现抛错只回原因", async () => {
+  const exec = accountExec();
+  const page = createAccountPageRequests({ pageId: () => PAGE, exec });
+  let n = 0;
+  const next = (over) => page.run(req({ id: `${ID}a${n++}`, ...over }));
+  assert.deepEqual(await next({ id: `${ID}zz`, args: {} }), { v: 2, id: `${ID}zz`, nonce: NONCE, pageId: PAGE, runId: "run_1", ok: false, error: "缺少必填参数：t。请补齐后重试。" });
+  for (const t of [-1, "3", Number.NaN, Infinity, {}, true]) assert.equal((await next({ args: { t } })).ok, false, String(t));
+  assert.equal((await next({ args: [3] })).ok, false);
+  assert.deepEqual(exec.calls, []);
+  await next({ args: { t: 0, pageId: "x", projectId: "p", clipId: "c1" } });
+  assert.deepEqual(exec.calls[1], ["seek", { t: 0 }]);
+  const boom = { ...accountExec(), play: () => { throw new Error("播放器坏了"); } };
+  const broken = createAccountPageRequests({ pageId: () => PAGE, exec: boom });
+  const out = await broken.run(req({ tool: "play" }));
+  assert.deepEqual([out.ok, out.error], [false, "播放器坏了"]);
+  assert.deepEqual(boom.calls, [["begin"], ["end"]]);
+  assert.equal((await page.run(req({ id: `${ID}nr`, runId: undefined }))).runId, undefined, "没有这一轮的号就不带");
+});
+
+test("CAU-ACC-04 同一个请求号只执行一次,再到时回第一次的答案;同号不同随机数的不答", async () => {
+  const exec = accountExec();
+  let t = 0;
+  exec.seek = (args) => { exec.calls.push(["seek", args]); return { ok: true, n: ++t }; };
+  const page = createAccountPageRequests({ pageId: () => PAGE, exec });
+  const [a, b] = await Promise.all([page.run(req()), page.run(req())]);
+  const c = await page.run(req());
+  assert.deepEqual(a.result, { ok: true, n: 1 });
+  assert.deepEqual([b, c], [a, a]);
+  assert.equal(exec.calls.filter((x) => x[0] === "seek").length, 1);
+  assert.equal(await page.run(req({ nonce: "another-nonce-AAAAAAAAAA" })), null);
+  assert.equal(exec.calls.filter((x) => x[0] === "seek").length, 1);
+});
+
+test("CAU-ACC-05 对账:账号模式的白名单与服务端是同一组,都没有 get_selection;版本号一致", () => {
+  assert.deepEqual([...ACCOUNT_PAGE_REQUEST_TOOLS].sort(), [...PAGE_BRIDGE_TOOLS].sort());
+  assert.equal(ACCOUNT_PAGE_REQUEST_TOOLS.includes("get_selection"), false);
+  assert.equal(PAGE_BRIDGE_TOOLS.includes("get_selection"), false);
+  assert.equal(PAGE_REQUEST_VERSION, 2);
+  assert.equal(CLOUD_PAGE_REQUEST_TOOLS.includes("get_selection"), true, "旧通道(本地与局域网)不变");
+});
+
+test("CAU-ACC-06 web_handoff:没有本机浏览器回 unsupported;有的调本机实现,只回交没交出去;地址不合格的不执行", async () => {
+  const none = accountExec();
+  const web = createAccountPageRequests({ pageId: () => PAGE, exec: none });
+  const out = await web.run(req({ tool: "web_handoff", args: { reason: "B 站扫码登录", url: "https://example.com/login" } }));
+  assert.deepEqual([out.ok, out.code, out.error], [false, "unsupported", ACCOUNT_PAGE_TEXT.unsupported]);
+  assert.deepEqual(none.calls, [], "连钩子都没调");
+
+  const exec = accountExec();
+  exec.webHandoff = (args) => { exec.calls.push(["webHandoff", args]); return { ok: true, visible: true, shell: true, message: "浏览器已经显示在编辑台主窗口里", windowHandle: 4242 }; };
+  const desk = createAccountPageRequests({ pageId: () => PAGE, exec });
+  const shown = await desk.run(req({ tool: "web_handoff", args: { reason: "B 站扫码登录", url: "https://example.com/login?x=1", cookie: "secret", hide: false } }));
+  assert.deepEqual(shown.result, { ok: true, visible: true }, "本机窗口的细节不往云端带");
+  assert.deepEqual(exec.calls, [["begin"], ["webHandoff", { reason: "B 站扫码登录", url: "https://example.com/login?x=1" }], ["end"]]);
+  const hidden = await desk.run(req({ id: `${ID}h`, tool: "web_handoff", args: { hide: true } }));
+  assert.deepEqual(hidden.result, { ok: true, visible: false });
+  let n = 0;
+  for (const args of [{ url: "file:///C:/Users/a/secret.txt" }, { url: "javascript:alert(1)" }, { url: "https://user:pw@example.com/" }, { url: "not a url" }, { url: "x".repeat(3000) }, { reason: "x".repeat(201) }, { reason: 5 }, { hide: "yes" }]) {
+    const bad = await desk.run(req({ id: `${ID}b${n++}`, tool: "web_handoff", args }));
+    assert.equal(bad.ok, false, JSON.stringify(args).slice(0, 60));
+  }
+  assert.equal(exec.calls.filter((x) => x[0] === "webHandoff").length, 2, "不合格的一次都没执行");
+  const failing = accountExec();
+  failing.webHandoff = () => ({ ok: false, error: "浏览器没起来" });
+  const f = await createAccountPageRequests({ pageId: () => PAGE, exec: failing }).run(req({ tool: "web_handoff", args: {} }));
+  assert.deepEqual([f.ok, f.error], [false, "浏览器没起来"]);
+});
+
+test("CAU-ACC-07 守门:账号模式的执行器此刻还没有接线,src/ 里引用它的只有本文件与 pageRequests.ts", () => {
+  const users = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(ts|tsx|mjs)$/.test(e.name) && fs.readFileSync(p, "utf8").includes("createAccountPageRequests")) users.push(path.relative(SRC, p).replaceAll("\\", "/"));
+    }
+  };
+  walk(SRC);
+  // 最后的接线包把它接到 useCloud.ts 时,这里加上那一个文件(仍然只许一处)
+  assert.deepEqual(users.sort(), ["ai/cloud/page-requests.test.mjs", "ai/cloud/pageRequests.ts"]);
 });

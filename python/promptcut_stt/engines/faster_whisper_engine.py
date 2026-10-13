@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from typing import Any, Callable, Dict, List, Optional
 
-from . import EngineNotInstalled, resolve_device
+from . import EngineNotInstalled, ModelNotInstalled, resolve_device
 
 ENGINE_NAME = "faster-whisper"
 
@@ -44,6 +45,34 @@ def probe() -> Dict[str, Any]:
     return result
 
 
+def _snapshot_has_model(models_dir: str, repo_dir: str) -> bool:
+    """huggingface 缓存布局：<models_dir>/<repo_dir>/snapshots/<rev>/model.bin 和 config.json 都在才算权重齐全。"""
+    snapshots = os.path.join(models_dir, repo_dir, "snapshots")
+    try:
+        revisions = os.listdir(snapshots)
+    except OSError:
+        return False
+    for revision in revisions:
+        base = os.path.join(snapshots, revision)
+        if os.path.exists(os.path.join(base, "model.bin")) and os.path.exists(os.path.join(base, "config.json")):
+            return True
+    return False
+
+
+def local_models(models_dir: Optional[str], catalog: List[str]) -> List[str]:
+    """模型目录里已经放齐权重的目录名（只认 catalog 里的名字）。绝不抛异常。"""
+    found: List[str] = []
+    if not models_dir or not os.path.isdir(models_dir):
+        return found
+    for name in catalog:
+        try:
+            if _snapshot_has_model(models_dir, "models--Systran--faster-whisper-" + name):
+                found.append(name)
+        except Exception:
+            continue
+    return found
+
+
 def _load():
     try:
         from faster_whisper import WhisperModel  # type: ignore
@@ -64,15 +93,24 @@ def transcribe(
     models_dir: Optional[str],
     on_segment: Callable[[Dict[str, Any]], None],
     on_progress: Callable[[float, Optional[float]], None],
+    offline: bool = False,
+    catalog: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     WhisperModel = _load()
     dev, compute_type = resolve_device(device)
+
+    if offline and model not in local_models(models_dir, catalog or []):
+        raise ModelNotInstalled(
+            f"这台机器上没有 faster-whisper 的 {model} 模型权重，离线模式不会联网下载。"
+            "请联系部署者把权重放进模型目录。"
+        )
 
     whisper_model = WhisperModel(
         model,
         device=dev,
         compute_type=compute_type,
         download_root=models_dir,
+        local_files_only=bool(offline),
     )
 
     kwargs: Dict[str, Any] = {"beam_size": 5, "vad_filter": False}

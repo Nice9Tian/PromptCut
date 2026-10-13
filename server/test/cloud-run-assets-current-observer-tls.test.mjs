@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import tls from 'node:tls';
 import { once } from 'node:events';
+import { freePorts } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { instanceTlsBinding } from '../account/agent-instance-authority.mjs';
 import { createAssetObserverChannels, assetObserverExporterDigest,
@@ -12,7 +13,7 @@ import { createAssetObserverChannels, assetObserverExporterDigest,
 
 test('actual original pinned TLS channel proves domain-separated exporter to opposite socket', { timeout: 45000 }, async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-run-asset-observer-'));
-  const pki = assetWiringPki(dir), port = 6448;
+  const pki = assetWiringPki(dir), [port] = await freePorts(1);
   const server = tls.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' });
   const owned = new Set(), closed = new Set(); let client, channels, closing = false;
   server.on('tlsClientError', error => t.diagnostic(`tls-client-error=${error.code ?? 'unknown'}`));

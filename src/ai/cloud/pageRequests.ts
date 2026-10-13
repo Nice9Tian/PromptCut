@@ -85,3 +85,148 @@ export async function runPageRequest(ev: CloudEvent, exec: PageRequestExec): Pro
     exec.end?.();
   }
 }
+
+/* ====================================================================== 账号模式(0.7.18,工具包 W2)
+ *
+ * 账号模式下服务端的反向通道是 `server/agent/service/page-bridge.mjs`:发起人与发起页都从文档服务确认过的运行授权里取,
+ * 请求带版本号 2、这张页面在文档服务在场表里的页面号、一个只出现在这条事件流上的一次性随机数:
+ *   `page.request { v: 2, id, nonce, runId, pageId, tool, args, timeoutMs }`
+ * 页面执行后经 `POST …/page-results` 交回 `{ v: 2, id, nonce, pageId, runId, ok, result?, error?, code? }`。
+ *
+ * 与旧通道(上面的 `runPageRequest`)的不同:
+ *   1. 白名单是 `seek`、`play`、`pause`、`web_handoff`,**没有 `get_selection`**:账号模式下它走文档服务的全员选区查询,
+ *      页面不再交自己这一张的选区(那是旧的单人快照);
+ *   2. 请求里的页面号必须就是这张页面此刻的在场页面号(`selectionPresenceStatus().pageId`,由接线的一侧给),对不上的不执行也不答
+ *      (同一个账号的另一个页签、别的成员的页面收到了也不会动);
+ *   3. 同一个请求号重复到达只执行一次,再到时回第一次的答案(交回没成功时可以原样再交,服务端按幂等处理)。
+ * 入口同样只有事件流那一处;本文件不挂全局、不听消息。
+ */
+
+/** 账号模式下页面肯执行的请求。与服务端 `page-bridge.mjs` 的 `PAGE_BRIDGE_TOOLS` 对账(单测 CAU-ACC-05) */
+export const ACCOUNT_PAGE_REQUEST_TOOLS = Object.freeze(["seek", "play", "pause", "web_handoff"] as const);
+export type AccountPageRequestTool = (typeof ACCOUNT_PAGE_REQUEST_TOOLS)[number];
+export const ACCOUNT_PAGE_REQUEST_VERSION = 2;
+
+/** 在场页面号的形状(文档服务 `selection` 模块的同一条规矩) */
+const PRESENCE_PAGE_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const NONCE_RE = /^[A-Za-z0-9_-]{16,64}$/;
+const MAX_REASON_CHARS = 200;
+const MAX_URL_CHARS = 2048;
+
+/** 页面做不了时回给服务端的话(服务端按 `code` 换成给模型看的说明,这句只是兜底) */
+export const ACCOUNT_PAGE_TEXT = Object.freeze({
+  unsupported: "这个页面没有可以交给用户的本机浏览器。",
+});
+
+export interface AccountPageExec {
+  seek(args: { t: number }): unknown;
+  play(): unknown;
+  pause(): unknown;
+  /** 本机那份 `web_handoff`(桌面版才有);`url` 是云端浏览器当前页的公开地址。纯网页的环境不给这个函数 */
+  webHandoff?(args: { reason?: string; hide?: boolean; url?: string }): unknown;
+  begin?(): void;
+  end?(): void;
+}
+
+export interface AccountPageAnswer {
+  v: 2;
+  id: string;
+  nonce: string;
+  pageId: string;
+  runId?: string;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+  code?: string;
+}
+
+function handoffArgs(args: Record<string, unknown>): { reason?: string; hide?: boolean; url?: string } | string {
+  const out: { reason?: string; hide?: boolean; url?: string } = {};
+  if (args.reason !== undefined) {
+    if (typeof args.reason !== "string" || args.reason.length > MAX_REASON_CHARS) return "web_handoff 的 reason 要是一句不太长的话。";
+    if (args.reason) out.reason = args.reason;
+  }
+  if (args.hide !== undefined) {
+    if (typeof args.hide !== "boolean") return "web_handoff 的 hide 要是 true 或 false。";
+    if (args.hide) out.hide = true;
+  }
+  if (args.url !== undefined) {
+    if (typeof args.url !== "string" || args.url.length > MAX_URL_CHARS) return "web_handoff 的地址不合格。";
+    let parsed: URL;
+    try { parsed = new URL(args.url); } catch { return "web_handoff 的地址不合格。"; }
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password) return "web_handoff 的地址不合格。";
+    out.url = parsed.href;
+  }
+  return out;
+}
+
+/**
+ * 账号模式的页面请求执行器。`pageId` 每次现取(这张页面此刻的在场页面号;没连上文档服务时是 null,那时什么都不执行)。
+ * `run` 回 null 表示这条不是给这张页面的合格请求:不执行、不答。
+ */
+export function createAccountPageRequests(deps: { pageId: () => string | null; exec: AccountPageExec; remember?: number }): {
+  run(ev: CloudEvent): Promise<AccountPageAnswer | null>;
+} {
+  const remember = deps.remember ?? 200;
+  /** 请求号 → 一次性随机数与第一次的答案 */
+  const done = new Map<string, { nonce: string; answer: Promise<AccountPageAnswer> }>();
+
+  async function execute(base: { v: 2; id: string; nonce: string; pageId: string; runId?: string }, tool: string, raw: Record<string, unknown>): Promise<AccountPageAnswer> {
+    if (!(ACCOUNT_PAGE_REQUEST_TOOLS as readonly string[]).includes(tool)) {
+      return { ...base, ok: false, error: `这个页面不执行 ${tool.slice(0, 40) || "(空)"}:反向通道只做 ${ACCOUNT_PAGE_REQUEST_TOOLS.join("、")}。` };
+    }
+    let seekArgs: { t: number } | null = null;
+    let handoff: { reason?: string; hide?: boolean; url?: string } | null = null;
+    if (tool === "seek") {
+      if (raw.t === undefined || raw.t === null) return { ...base, ok: false, error: "缺少必填参数：t。请补齐后重试。" };
+      if (typeof raw.t !== "number" || !Number.isFinite(raw.t) || raw.t < 0) return { ...base, ok: false, error: "seek 的 t 要是不小于 0 的数(秒)。" };
+      seekArgs = { t: raw.t };
+    } else if (tool === "web_handoff") {
+      const checked = handoffArgs(raw);
+      if (typeof checked === "string") return { ...base, ok: false, error: checked };
+      if (!deps.exec.webHandoff) return { ...base, ok: false, code: "unsupported", error: ACCOUNT_PAGE_TEXT.unsupported };
+      handoff = checked;
+    }
+    deps.exec.begin?.();
+    try {
+      if (tool === "web_handoff") {
+        const r = await deps.exec.webHandoff!(handoff!);
+        const failed = !!r && typeof r === "object" && (r as { ok?: unknown }).ok === false;
+        if (failed) return { ...base, ok: false, error: String((r as { error?: unknown }).error ?? "web_handoff 没有做成").slice(0, 300) };
+        // 本机实现回的窗口细节不往云端带,只说交没交出去
+        return { ...base, ok: true, result: { ok: true, visible: !handoff!.hide } };
+      }
+      let result: unknown;
+      if (tool === "seek") result = deps.exec.seek(seekArgs!);
+      else if (tool === "play") result = deps.exec.play();
+      else result = deps.exec.pause();
+      result = await result;
+      return { ...base, ok: true, result: result === undefined ? null : result };
+    } catch (err) {
+      return { ...base, ok: false, error: (err instanceof Error ? err.message : String(err)).slice(0, 300) };
+    } finally {
+      deps.exec.end?.();
+    }
+  }
+
+  return {
+    async run(ev: CloudEvent): Promise<AccountPageAnswer | null> {
+      if (!ev || ev.type !== "page.request" || ev.v !== ACCOUNT_PAGE_REQUEST_VERSION) return null;
+      const id = typeof ev.id === "string" && REQUEST_ID_RE.test(ev.id) ? ev.id : null;
+      const nonce = typeof ev.nonce === "string" && NONCE_RE.test(ev.nonce) ? ev.nonce : null;
+      if (!id || !nonce) return null;
+      const mine = deps.pageId();
+      // 不是发给这张页面的(页面号对不上、这张页面还没连上文档服务):不执行也不答
+      if (!mine || !PRESENCE_PAGE_ID_RE.test(mine) || ev.pageId !== mine) return null;
+      const seen = done.get(id);
+      if (seen) return seen.nonce === nonce ? seen.answer : null;
+      const tool = typeof ev.tool === "string" ? ev.tool : "";
+      const raw = ev.args && typeof ev.args === "object" && !Array.isArray(ev.args) ? (ev.args as Record<string, unknown>) : {};
+      const base = { v: ACCOUNT_PAGE_REQUEST_VERSION as 2, id, nonce, pageId: mine, ...(typeof ev.runId === "string" ? { runId: ev.runId } : {}) };
+      const answer = execute(base, tool, raw);
+      done.set(id, { nonce, answer });
+      if (done.size > remember) done.delete(done.keys().next().value as string);
+      return answer;
+    },
+  };
+}
