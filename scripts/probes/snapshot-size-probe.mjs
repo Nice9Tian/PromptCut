@@ -145,7 +145,7 @@ window.__knownIds = async () => (await window.__kit).allCards().map((c) => c.id)
 window.__cardMeta = async (ids) => {
   const kit = await window.__kit;
   return ids.map((id) => { const def = kit.getCard(id); return def ? { id, source: def.source || 'native',
-    mode: kit.cardFrameMode(def, def.defaults), canvasHeavy: !!kit.reviewedCard(id)?.canvasHeavy } : { id, missing: true }; });
+    mode: kit.cardFrameMode(def, def.defaults), canvasHeavy: ['canvas2d', 'webgl'].includes(kit.reviewedCard(id)?.surface) } : { id, missing: true }; });
 };
 
 window.__mkProject = (cardId, fps, lenSec) => ({
@@ -176,7 +176,7 @@ function keep(id, html) {
  * 等卡片真正挂起来再开测。canvas 卡(three.js / tsParticles)是**异步装载**的:
  * 模块 import、WebGL 上下文、纹理都要跨任务边界,只等 120 ms 的话经常测到一个还没有画布的空壳
  * ——实测同一张 particles-basic,等得够就是 658 KB(内联位图),等不够就是 18 KB(什么都没有)。
- * 所以按审阅表的 canvasHeavy 轮询到画布出现为止。
+ * 所以按审阅表登记的画布卡(surface 是 canvas2d / webgl)轮询到画布出现为止。
  */
 window.__settleMount = async (job) => {
   const w = f.contentWindow;
@@ -214,7 +214,7 @@ window.__measure = async (job) => {
       lossy: snap.lossy, controls: snap.controls.length,
       controlBytes: bytes(html), sceneBytes: bytes(snap.html),
       // createSnapshot 已经把 <canvas> 换成同尺寸的 <img data:…>,所以不能按标签判;
-      // 用审阅表的 canvasHeavy,再用「有没有内联位图」兜一层
+      // 用审阅表登记的画布卡,再用「有没有内联位图」兜一层
       hasCanvas: !!job.canvasHeavy || dataImageBytes(html) > 0,
       imgBytes: dataImageBytes(html), styleBytes: styleBytes(html),
       nodes: control ? (html.match(/</g) || []).length : 0,

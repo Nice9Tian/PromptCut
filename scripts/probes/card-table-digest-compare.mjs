@@ -21,6 +21,8 @@
  *             out/card-table-digest/<提交>/ 下(out/ 不入库),不动任何工作区与分支。
  *   --expect  允许变的卡片 id(逗号分隔)。缺省是「丁」补登记的四张。
  *   --json    把两边逐张的结果写成 JSON。
+ *   --caps-only  只核「能力表和节点」这一路:能力表、注册表里的定义、键(定源码)三栏一张都不许变(--expect 里的除外),
+ *             源码版本和真实的键变不变不管。用在本来就要让源码版本变的改动上(例如动了 `src/kernel/frameMode.mjs`)。
  *
  * 退出码:0 = 只有 --expect 里的卡变了(键与能力表),并且它们确实都变了;1 = 别的卡变了,
  * 或者该变的没变;2 = 跑不起来。
@@ -37,6 +39,7 @@ const arg = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? 
 const BASE = arg('--base', 'main');
 const EXPECT = new Set(arg('--expect', 'av-pulse,sound-notification,sound-keyboard,probe-slow').split(',').filter(Boolean));
 const JSON_OUT = arg('--json', null);
+const CAPS_ONLY = args.includes('--caps-only');
 
 const git = (...a) => execFileSync('git', a, { cwd: HERE, windowsHide: true, encoding: 'utf8', maxBuffer: 1 << 28 }).trim();
 
@@ -118,7 +121,7 @@ async function main() {
     const changed = diff.capabilities || diff.registered || diff.keys || diff.keysFixedSource || diff.sourceVersion;
     if (!changed) { unchanged++; continue; }
     rows.push({ id, group: a.group, ...diff, before: b, after: a });
-    if (!EXPECT.has(id)) bad.push(id);
+    if (!EXPECT.has(id) && (!CAPS_ONLY || diff.capabilities || diff.registered || diff.keysFixedSource)) bad.push(id);
   }
   const missed = [...EXPECT].filter(id => !rows.some(r => r.id === id && (r.keys || r.capabilities)));
 
@@ -126,7 +129,13 @@ async function main() {
   console.log(`生成快照的代码指纹:改前 ${before.snapshotCode} 改后 ${after.snapshotCode}${before.snapshotCode === after.snapshotCode ? '(相同)' : '(不同!)'}`);
   console.log(`内置卡:改前 ${Object.keys(before.cards).length} 张,改后 ${Object.keys(after.cards).length} 张;逐张相同 ${unchanged} 张,有变化 ${rows.length} 张`);
   const yn = v => v ? '变' : '同';
+  if (CAPS_ONLY) {
+    const count = key => rows.filter(r => r[key]).length;
+    console.log(`只核能力表这一路:能力表变 ${count('capabilities')} 张 / 注册表里的定义变 ${count('registered')} 张 / 键(定源码)变 ${count('keysFixedSource')} 张 / 源码版本变 ${count('sourceVersion')} 张 / 键变 ${count('keys')} 张`);
+    console.log(`源码版本变了的: ${rows.filter(r => r.sourceVersion).map(r => r.id).join(', ') || '(无)'}`);
+  }
   for (const r of rows) {
+    if (CAPS_ONLY && !r.note && !r.capabilities && !r.registered && !r.keysFixedSource) continue;
     if (r.note) { console.log(`  ${r.id}: ${r.note}`); continue; }
     console.log(`  ${r.id}(${r.group}): 能力表 ${yn(r.capabilities)} / 注册表里的定义 ${yn(r.registered)} / 源码版本 ${yn(r.sourceVersion)} / 键 ${yn(r.keys)} / 键(定源码) ${yn(r.keysFixedSource)}`);
     if (r.capabilities) console.log(`      能力表  改前 ${JSON.stringify(r.before.capabilities)}\n              改后 ${JSON.stringify(r.after.capabilities)}`);
@@ -135,7 +144,8 @@ async function main() {
   if (JSON_OUT) { fs.mkdirSync(path.dirname(path.resolve(JSON_OUT)), { recursive: true }); fs.writeFileSync(JSON_OUT, JSON.stringify({ base: base.sha, head, before, after }, null, 1)); }
   if (bad.length) console.log(`✖ 不在 --expect 里却变了的卡 ${bad.length} 张: ${bad.slice(0, 20).join(', ')}${bad.length > 20 ? ' …' : ''}`);
   if (missed.length) console.log(`✖ --expect 里列了却没变的卡: ${missed.join(', ')}`);
-  if (!bad.length && !missed.length) console.log(`✔ 只有 --expect 里的 ${EXPECT.size} 张变了,其余 ${unchanged} 张的能力表、源码版本、三个键逐张相同`);
+  if (CAPS_ONLY && !bad.length && !missed.length) console.log(`✔ 能力表、注册表里的定义、键(定源码)三栏:除 --expect 里的 ${EXPECT.size} 张外一张没变`);
+  else if (!bad.length && !missed.length) console.log(`✔ 只有 --expect 里的 ${EXPECT.size} 张变了,其余 ${unchanged} 张的能力表、源码版本、三个键逐张相同`);
   return bad.length || missed.length ? 1 : 0;
 }
 

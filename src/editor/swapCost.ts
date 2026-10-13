@@ -3,12 +3,12 @@
  * 认不出卡种的按缺省 `SWAP_MS`。播放时按拍装箱(`snapshotFeed.ts` 的 `fitBeatSwaps`)与分派时每张重卡的固定成本
  * (`planDispatch.ts` 的 `planPipelines` `deadMs`)用同一个数。
  *
- * 卡种按这个页面上的卡片定义判:定义里声明了画布契约(`dom2d` 除外)或审阅表 / 定义标了 `canvasHeavy` 的算画布卡;
+ * 卡种按这个页面上的卡片定义判:定义里声明了画布契约(`dom2d` 除外)或审阅表登记成画布(`surface` 是 canvas2d / webgl)、定义标了 `canvasHeavy` 的算画布卡;
  * 页面上没有定义的(代码不在这里的用户卡、未知卡片)与图卡(只有 `nodeId`)认不出来,走兜底。
  */
 import type { Project } from "../kernel/project";
 import { cardsRegistryGen, getCard, syncedUserCardsGen } from "../kernel/registry";
-import { reviewedCard } from "../kernel/frameMode.mjs";
+import { reviewedCanvas } from "../kernel/frameMode.mjs";
 import { swapCostOf, swapKindOf } from "../render/beatSwap.mjs";
 
 type Kind = ReturnType<typeof swapKindOf>;
@@ -28,7 +28,7 @@ function kindsOf(project: Project): Map<string, Kind> {
         known: !!def,
         source: def?.source,
         canvas: !!(def?.canvas && def.canvas.kind !== "dom2d"),
-        canvasHeavy: (reviewedCard(clip.cardId)?.canvasHeavy ?? def?.canvasHeavy) === true,
+        canvasHeavy: reviewedCanvas(clip.cardId) === true || def?.canvasHeavy === true,
       }));
     }
   }
