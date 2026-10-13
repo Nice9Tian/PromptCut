@@ -422,11 +422,16 @@ test('稀疏分段每 3 帧一张:第 F 帧贴第 floor((F−起点)/3)×3 张;�
 test('停在稀疏段上,这一段换成了满密度的文件:过了清单的刷新间隔自己换上这一帧的精确画面,不等用户操作', async () => {
   const stream = streamOf(100, 189, { stride: SEGMENT_FRAMES });
   const h = playerFor(stream);
+  h.seek(110);                 // 先在别处停一下:刷新的定时器从这里就排上了
+  await drawn(h, 110);
+  await advance(MANIFEST_REFRESH_MS - 300);
   h.seek(137);
   await until(() => h.track().picture === 130, '稀疏:第 130 帧那一张');
   await drawn(h, 137);
   assert.deepEqual(h.last().mark, [2, 0, SEGMENT_FRAMES], '稀疏的那份文件:这一段只有第 0 张');
   stream.densify(2);
+  // 刷新的定时器是早先(拖到别的帧时)排的、到点时播放头刚停下不久:它接着排,不能就此断了
+  await advance(MANIFEST_REFRESH_MS + 100);
   await advance(MANIFEST_REFRESH_MS + 100);
   await until(() => h.last().mark[1] === 7 && h.last().mark[2] === 1, '满密度的那份文件:第 2 段的第 7 个样本');
   assert.equal(h.last().mark[0] === 2 && h.last().intact, true);

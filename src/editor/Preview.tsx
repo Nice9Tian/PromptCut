@@ -1775,8 +1775,10 @@ export function Preview() {
          */
         const named = e.clipIds.length > 0;
         if (named) suppressedRef.current = "\u0000";
-        // 只认这一次停下的那一秒:迟到的(用户又拖走了,舞台在新的跳转里已经把它们放回抑制)不算精确
-        if ((lowMemRef.current || named) && Math.abs(e.sec - tRef.current) > 1e-6) {
+        // 只认这一次停下的那一秒:迟到的(用户又拖走了,舞台在新的跳转里已经把它们放回抑制)不算精确。
+        // 贴流的卡按 store 此刻的播放头比(`tRef` 要等下一次渲染才更新,刚暂停的那一下会慢一步);低内存档照旧
+        const stale = lowMemRef.current ? Math.abs(e.sec - tRef.current) > 1e-6 : named && Math.abs(e.sec - getState().t) > 1e-6;
+        if (stale) {
           if (named) void pumpRef.current();
           break;
         }

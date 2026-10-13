@@ -287,7 +287,8 @@ try {
           const ms = +(now() - t0).toFixed(1);
           await wait(0);
           const after = window.__pcStageDiag();
-          return { ms, placeholders: after.placeholders, levels: Object.fromEntries(ids.map((id) => [id, of(id).level])), waiting: after.streamWaiting };
+          return { ms, placeholders: after.placeholders, levels: Object.fromEntries(ids.map((id) => [id, of(id).level])), waiting: after.streamWaiting,
+            standIns: Object.fromEntries(ids.map((id) => [id, of(id).standIns])) };
         }
         if (now() - t0 > 8000) return { ms: null, tracks: tracks.map((t) => ({ id: t.id.split('#')[0], lastDrawn: t.lastDrawn, picture: t.picture, stale: t.stale, err: t.lastError })) };
         await wait(2);
@@ -305,11 +306,12 @@ try {
 
   /* ------------------------------------------------------------ A. 只有稀疏版 */
   {
-    const rec = { frames: 0, wrong: [], notDrawn: [], later: [], placeholders: [], levels: new Set(), seekMs: [], sameMean: 0, n: 0 };
+    const rec = { frames: 0, wrong: [], notDrawn: [], later: [], placeholders: [], levels: new Set(), seekMs: [], sameMean: 0, n: 0, standIns: {} };
     for (const f of shuffled(FIRST, LAST)) {
       const { want, got } = await seekTo(f);
       if (got.ms === null) { rec.notDrawn.push({ frame: f, ...got }); continue; }
       rec.seekMs.push(got.ms);
+      for (const [id, n] of Object.entries(got.standIns)) rec.standIns[id] = Math.max(rec.standIns[id] ?? 0, n);
       if (got.placeholders.length) rec.placeholders.push({ frame: f, placeholders: got.placeholders });
       for (const level of Object.values(got.levels)) rec.levels.add(level);
       const stage = await shotStage();
@@ -323,9 +325,8 @@ try {
       rec.frames++;
       if (f === 107 || f === 52) await fs.writeFile(path.join(OUT, `sparse-stage-${f}.png`), toPng(stage));
     }
-    const tracks = (await diagA()).tracks;
     out.sparseScrub = { frames: rec.frames, wrongCount: rec.wrong.length, wrong: rec.wrong.slice(0, 5), notDrawn: rec.notDrawn.slice(0, 5), later: rec.later.slice(0, 5), placeholdersLeft: rec.placeholders.slice(0, 5),
-      levels: [...rec.levels], seekMs: stats(rec.seekMs), 对该贴的那一张的平均差: round2(rec.sameMean / Math.max(1, rec.n)), standIns: tracks.map((t) => t.standIns) };
+      levels: [...rec.levels], seekMs: stats(rec.seekMs), 对该贴的那一张的平均差: round2(rec.sameMean / Math.max(1, rec.n)), 没解到目标帧就先画上的次数: rec.standIns };
     say('A-sparse', out.sparseScrub);
     check(rec.notDrawn.length === 0 && rec.frames === LAST - FIRST + 1, `只有稀疏版:第 ${FIRST}～${LAST} 帧每一帧都贴出了画面`, { frames: rec.frames, notDrawn: rec.notDrawn.slice(0, 3) });
     check(rec.wrong.length === 0, '只有稀疏版:每一帧贴的都是不晚于它的最近一张(和导出页那一帧最像)', { wrong: rec.wrong.length, first: rec.wrong.slice(0, 3) });
@@ -471,11 +472,10 @@ try {
     await sleep(120);
     const idleDom = await domA();
     const idleDiag = await diagA();
-    const idleShot = scoreBands(await shotStage(), Object.fromEntries(both.map((id) => [id, [f0 - 1, f0, f0 + 1]])));
-    out.prewarm = { frame: f0, dom: idleDom, tracks: idleDiag.tracks.map((t) => ({ id: t.id, lastDrawn: t.lastDrawn })), live: Object.fromEntries(Object.entries(idleShot).map(([id, r]) => [id, r.best])) };
+    // (这里的活画面不拿去比像素:测试页只是撤了抑制,没有走「停下追到精确活渲」那一步 —— 那一步连同停下以后的像素在 scrub-stream-probe 里核)
+    out.prewarm = { frame: f0, dom: idleDom, tracks: idleDiag.tracks.map((t) => ({ id: t.id, lastDrawn: t.lastDrawn })) };
     check(both.every((id) => idleDom[id] && idleDom[id].canvas === 'none' && !/pc-suppressed/.test(idleDom[id].cls)), '不抑制的时候流平面藏着(不占框)、活画面露着', idleDom);
     check(idleDiag.tracks.length === 2 && idleDiag.tracks.every((t) => t.lastDrawn === f0), '暂停着:播放头下这一帧已经解好、画在藏着的流平面上', out.prewarm.tracks);
-    check(Object.values(idleShot).every((r) => r.best === f0), '这时看到的是活画面,和导出同一帧最像', idleShot);
     // 起播:流平面(没变)→ 抑制 → play;逐拍记录每张卡落在哪一级
     await frameA().evaluate(() => { window.__pcFallbackTrace = []; });
     await page.evaluate(() => { window.__frames = []; });
@@ -530,8 +530,8 @@ try {
     const firstHidden = named.find((e) => e.hidden.length === 2);
     out.coldStart = { log: coldLog, waitedMs: waitingSpan.length && firstHidden ? firstHidden.at - waitingSpan[0].at : null };
     say('E-cold-start', out.coldStart);
-    check(waitingSpan.length > 0 && waitingSpan.every((e) => e.hidden.length === 0), '流还没画出第一帧:点名抑制了也先不藏原来的画面', coldLog.slice(0, 4));
-    check(!!firstHidden && firstHidden.showing.length === 2, '流画出来的那一刻才藏活子树(同时流已经有画面)', firstHidden);
+    check(waitingSpan.length > 0 && named.every((e) => e.waiting.every((id) => !e.hidden.includes(id))), '流还没画出第一帧的卡:点名抑制了也先不藏原来的画面', coldLog.slice(0, 4));
+    check(!!firstHidden && firstHidden.showing.length === 2 && named.every((e) => e.hidden.every((id) => e.showing.includes(id))), '流画出来的那一刻才藏活子树(藏着的卡流都已经有画面)', firstHidden);
     check(coldLog.every((e) => e.empty.length === 0 && e.placeholders.length === 0), '全程没有「活子树藏着、流又没画面」的时刻,也没有占位符', coldLog.filter((e) => e.empty.length || e.placeholders.length).slice(0, 3));
 
     // 一直画不出来:到时才藏,占位符顶上

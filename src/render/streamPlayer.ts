@@ -1041,10 +1041,13 @@ class StreamTrack {
   private armRefresh(): void {
     if (this.refreshTimer || this.plane.manifest) return;
     this.refreshTimer = true;
-    const f = this.wantFrame;
     realTimeout(() => {
       this.refreshTimer = false;
-      if (!this.disposed && f !== null && this.wantFrame === f) this.present(f);
+      if (this.disposed || this.wantFrame === null) return;
+      // 这一会儿播放头没动(暂停着):再走一遍(问清单、换文件;还是稀疏的话 `present` 会再排下一次)。
+      // 还在动(播放、拖动)就不插手 —— 但要接着排:它一停下就没有人再来叫了
+      if (realNow() - this.wantAt >= MANIFEST_REFRESH_MS) this.present(this.wantFrame);
+      else this.armRefresh();
     }, MANIFEST_REFRESH_MS + 50);
   }
 
