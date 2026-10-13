@@ -73,7 +73,9 @@ export class StreamStore {
 export function publicManifest(manifest) {
   if (!manifest) return null;
   const segments = {};
-  for (const [n, s] of Object.entries(manifest.segments ?? {})) segments[n] = { init: s.init, file: s.file, stride: s.stride, samples: s.samples };
+  // `stride`:1 = 满密度,大于 1 = 稀疏(只截了分段的第一帧,其余样本重复它)。`box`:这个分段的位置矩形(平面坐标,和 `bound` 同一个
+  // 坐标系;产稀疏版时量的那一张里不透明像素的外接框,`null` = 那一张全透明;没量过的分段不带这一项)
+  for (const [n, s] of Object.entries(manifest.segments ?? {})) segments[n] = { init: s.init, file: s.file, stride: s.stride, samples: s.samples, ...(s.box !== undefined ? { box: s.box } : {}) };
   const inits = {};
   for (const [id, i] of Object.entries(manifest.inits ?? {})) inits[id] = { codec: i.codec, width: i.width, height: i.height, rect: i.rect };
   return { streamKey: manifest.streamKey, kind: manifest.kind, plane: manifest.plane, clipIds: manifest.clipIds, fps: manifest.fps,

@@ -11,6 +11,7 @@
  *   - 流的划分(G1):哪些卡进流、裁剪矩形的上界、超出解码器预算时合并成组流、每条流的隔离工程;
  *   - 流库(`<库根>/streams/<streamKey>/`):`stream.json` 清单 + `init-<id>.mp4` + `<n>-<hash>.m4s`;
  *   - 生产调度 `StreamProducer`(G4):只在空闲时生产、`streamPool` 个会话、先稀疏后补密、租约延续;
+ *     稀疏版每个分段只截分段的第一帧、其余帧重复它,顺带量这一张的位置矩形记进清单(`segments[n].box`);
  *   - 校验与替换(G6):分段签名不对的重新生产,新分段到达后换用,旧文件延迟 5 秒删除;
  *   - 分段字节的 HTTP 读口 `handleStreamRequest`(路由挂在 `vite-plugin-frames.ts` 上,见报告)。
  *
@@ -25,8 +26,8 @@
  *
  * # 分段的「变体」
  *
- * 一条流的所有分段不一定同一个矩形:稀疏那一趟用上界矩形、顺带量实体框的并集(G1:「第一趟生产
- * 顺带量各帧实体框的并集,第二段起收紧到它」),补密那一趟用收紧后的矩形。矩形或编码器不同,
+ * 一条流的所有分段不一定同一个矩形:稀疏那一趟用上界矩形、每个分段量一个位置矩形(这一张里不透明像素的外接框),
+ * 整条流的稀疏版齐了以后把它们的并集定成收紧矩形,补密那一趟用收紧后的矩形(补密时发现画面顶到了收紧矩形的边,就把它放大重来)。矩形或编码器不同,
  * `init.mp4` 就不同 —— 每个分段在清单里记着自己用哪个 `init`,页面按分段各自配置解码器。
  * 同一个变体里,后续分段算出来的 `ftyp + moov` 必须和已存的逐字节相同,不同就是新变体(换签名)。
  */
@@ -51,8 +52,11 @@ import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-st
 export { StreamStore, readySegmentRanges, publicManifest, handleStreamRequest } from './asset-store/stream-store.mjs';
 
 export const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;
-/** G0-b 结论 1:先按 stride 3 把整段快速铺满 */
-export const SPARSE_STRIDE = 3;
+/**
+ * 稀疏版的间隔:就是一个分段的帧数 —— 每个分段只截分段的第一帧,其余帧重复它(只有这一档;原来「每 3 帧一张」那一档去掉了)。
+ * 清单里稀疏分段的 `stride` 记这个数,满密度的记 1;读的一侧只看它是不是大于 1。
+ */
+export const SPARSE_STRIDE = STREAM_SEGMENT_FRAMES;
 /** G1 / G0-b (4):同时活跃的解码器预算 */
 export const STREAM_DECODER_BUDGET = 6;
 /** G0-b 结论 1:`streamPool` 缺省 1,最多 2 */
@@ -66,12 +70,16 @@ export const REPLACED_DELETE_MS = 5000;
  * (`docs/plan/prerender-products-contract.md` 第 9.3 节,这两样同一次换)。
  * 3:分段从这条流自己的第一帧起每 15 帧一段(原来从项目的第 0 帧起),最后一段到这条流自己的最后一帧为止
  * (`src/render/streamSegments.mjs`;`docs/plan/html-snapshot-removal-dryrun.md` 第 10.5 节)。分段号的含义变了,旧流全部重产。
+ * 4:稀疏版每个分段只截第一帧(原来每 3 帧一张);清单里每个分段带位置矩形 `box`;收紧矩形改由各分段的位置矩形定、
+ * 补密时顶到边就放大。旧清单里的稀疏分段没有位置矩形、收紧矩形的来历也不同,不混着用,重产一次(这一版还没有发出去过)。
  */
-export const STREAM_CODE_VERSION = 3;
+export const STREAM_CODE_VERSION = 4;
 /** 单卡流的矩形上界:框外再留这么多像素给溢出框的内容(阴影、描边) */
 export const LOCAL_OVERFLOW_PX = 32;
-/** 实测实体框并集再外扩这么多(稀疏趟只量了三分之一的帧,中间帧可能略微超出) */
+/** 各分段位置矩形的并集再外扩这么多(稀疏版每个分段只量了第一帧,中间帧可能略微超出;超出得多由补密那一趟发现、放大) */
 export const MEASURE_PAD_PX = 8;
+/** 补密时画面顶到了收紧矩形的某一边:这一边往外放这么多像素,或这个方向现有尺寸的一半,取大的 */
+export const TIGHT_WIDEN_STEP_PX = 64;
 /** 收紧后的面积超过上界的这个比例就不收紧(白换一个变体没有收益) */
 export const TIGHTEN_MIN_SAVING = 0.15;
 /** X1:队列的流任务里,一个分段最多连着产几次(失败或被中途作废)才放弃这个任务(可重试) */
@@ -298,6 +306,21 @@ export const intersectRect = (a, b) => rectOf(Math.max(a.x, b.x), Math.max(a.y, 
 export const unionRect = (a, b) => !a ? b : !b ? a : rectOf(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x + a.w, b.x + b.w), Math.max(a.y + a.h, b.y + b.h));
 export const padRect = (r, pad) => rectOf(r.x - pad, r.y - pad, r.x + r.w + pad, r.y + r.h + pad);
 export const rectArea = r => Math.max(0, r?.w || 0) * Math.max(0, r?.h || 0);
+/** 是不是一个矩形(四个有限数,宽高为正);位置矩形 `box` 的形状 */
+export const isBox = r => !!r && typeof r === 'object' && [r.x, r.y, r.w, r.h].every(Number.isFinite) && r.w > 0 && r.h > 0;
+
+/**
+ * 一张按 `rect` 截的图里,不透明像素的外接框 `local`(图片像素坐标)顶到了 `rect` 的哪几边 —— 只算还没到上界 `bound` 的边
+ * (已经贴着上界的边再往外就不是这条流的范围了)。有顶到的回 `{ left?, top?, right?, bottom? }`,没有回 null。
+ */
+export function tightOverflowSides(local, rect, bound) {
+  const sides = {};
+  if (local.x <= 0 && rect.x > bound.x) sides.left = true;
+  if (local.y <= 0 && rect.y > bound.y) sides.top = true;
+  if (local.x + local.w >= rect.w && rect.x + rect.w < bound.x + bound.w) sides.right = true;
+  if (local.y + local.h >= rect.h && rect.y + rect.h < bound.y + bound.h) sides.bottom = true;
+  return Object.keys(sides).length ? sides : null;
+}
 
 /**
  * 整数化并外扩到**偶数宽、偶数高**(G1:`format=yuv420p` 严格要求宽高都是偶数;取整做在截图矩形上,
@@ -868,7 +891,7 @@ export function anchorManifest(manifest, spec) {
  *     legacy 播放热池在用)时每 250 ms 看一次,不开新分段;
  *   - **`streamPool` 个会话**,缺省 1、最多 2,按实测自适应(带编码器的每帧耗时超过空闲时的 2 倍就不再加);
  *     会话经 `pipeline.leaseStreamBakery()` / `returnStreamBakery()` 拿,不经 `acquireUser`、不进 `laneChains`;
- *   - **先稀疏后补密**:所有流先按 `stride = 3` 铺满,再用满密度分段替换;
+ *   - **先稀疏后补密**:所有流的稀疏版(每个分段只截第一帧)都铺满,才开始用满密度分段替换;
  *   - 每个 worker 在流之间按「离播放头最近的未就绪分段」轮转,**但优先延续自己的租约**(`planStreamSegments`);
  *   - **同时存活的分段编码器 ≤ 2 × streamPool**(双缓冲)。
  */
@@ -930,7 +953,8 @@ export class StreamProducer {
         replay: state.spec.replay !== false, replayedFrames: state.replayedFrames ?? 0,
         direct: state.direct ? { ...state.direct } : null, capture: state.capture ? { ...state.capture } : null,
         below: state.below ? { ...state.below } : null,
-        segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs }])),
+        segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs,
+          ...(s.box !== undefined ? { box: s.box } : {}), at: s.at ?? null }])),
         inits: Object.keys(state.manifest?.inits ?? {}),
       })),
       log: this.log.slice(-40),
@@ -1351,9 +1375,17 @@ export class StreamProducer {
     const captureRect = { x: rect.x + spec.offset.x, y: rect.y + spec.offset.y, w: rect.w, h: rect.h };
     // 依赖下层的流:两张截图都按上界截,算完再裁到 `captureRect`
     const viewRect = below ? { x: manifest.bound.x + spec.offset.x, y: manifest.bound.y + spec.offset.y, w: manifest.bound.w, h: manifest.bound.h } : captureRect;
+    const sparse = stride > 1;
+    const replay = spec.replay !== false;
+    /*
+     * 稀疏的分段只截这一段的第一帧。要回放的流(motion 式)照旧把这一段的每一帧都推过去(下一段接着租约推,不然每段都要从挂载帧重来);
+     * 不要回放的流(remotion 式)只推到第一帧就停,下一段直接跳过去 —— 同一条流、同一个页面上跳,不重灌工程。
+     */
+    const bakeTo = sparse && !replay ? fromFrame : toFrame;
     const lease = bakery.streamLease;
-    const continues = !!lease && !lease.dirty && lease.page === bakery.page && lease.streamSignature === spec.streamKey && lease.lastFrame + 1 === fromFrame;
-    if (!continues) {
+    const samePage = !!lease && !lease.dirty && lease.page === bakery.page && lease.streamSignature === spec.streamKey;
+    const continues = samePage && lease.lastFrame + 1 === fromFrame;
+    if (!continues && !(sparse && !replay && samePage)) {
       await bakery.reset(state.isolated, this.pipeline.emptyUrl(state.isolated), { deferCards: true });
       bakery.streamLease = null;
       this.stats.resets++;
@@ -1368,18 +1400,20 @@ export class StreamProducer {
     guard.unref?.();
     let enc = null;
     let firstCapture = true;
-    const measuring = stride > 1 && !manifest.tight;
+    /** 这个分段的位置矩形(平面坐标):`undefined` = 没量出来,`null` = 这一张全透明 */
+    let segmentBox;
+    // 补密时每一帧都看一眼画面有没有顶到收紧矩形的边(依赖下层的流有自己的办法,见 `below-overflow`);矩形就是上界时不用看
+    const guardTight = !sparse && !below && JSON.stringify(rect) !== JSON.stringify(manifest.bound);
     try {
       /*
        * 不要回放的流(成员全是 remotion 式,`spec.replay === false`):不传 `mountFrame`、预热帧数传 0。
        * `bakeStream` 对「没给 `mountFrame`」就是从 `fromFrame` 起挂载,接不上租约只付一次重灌页面的钱,
        * 不再从挂载帧逐帧推过来;所以分段不必按顺序产。`server/bakery/bake.mjs` 一个字不动(代码指纹)。
        */
-      const replay = spec.replay !== false;
       // 画布直取:这个分段的帧不截图,从画布取像素(过不了实测的照旧截图);`shot` 是 PNG,或 `{ rgba, width, height }`
       const direct = this.directOf(state);
       const result = await bakeStream(bakery, {
-        streamSignature: spec.streamKey, fromFrame, toFrame, stride, fps,
+        streamSignature: spec.streamKey, fromFrame, toFrame: bakeTo, stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
         clip: viewRect, hasMedia: below && spec.hasMedia === true, signal: abort.signal,
         ...(below ? { capture: belowSegmentCapture(bakery, { clipId: spec.topClipId, view: viewRect, rect: captureRect, record: state.below ||= newBelowRecord(), signal: abort.signal,
@@ -1389,7 +1423,16 @@ export class StreamProducer {
         onFrame: async (frame, shot) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
           const raw = shot?.rgba ? shot : null;
-          if (measuring) { if (raw) this.measureRgba(state, frame, raw, rect); else this.measurePng(state, frame, shot, rect); }
+          if (sparse || frame === fromFrame || guardTight) {
+            // 这一张里不透明像素的外接框(截图矩形里的像素坐标)
+            const local = raw ? rgbaAlphaBox(raw.rgba, raw.width, raw.height) : pngAlphaBox(shot);
+            if (sparse) segmentBox = this.measureBox(state, frame, local, rect);
+            else if (frame === fromFrame && !local?.full) segmentBox = local ? { x: rect.x + local.x, y: rect.y + local.y, w: local.w, h: local.h } : null;
+            if (guardTight && local && !local.full) {
+              const sides = tightOverflowSides(local, rect, manifest.bound);
+              if (sides) throw Object.assign(new Error(`第 ${frame} 帧的画面顶到了收紧矩形的边(${Object.keys(sides).join('、')})`), { code: 'tight-overflow', sides });
+            }
+          }
           if (!enc) {
             // 第一张图出来时还没有这个分段的编码器在跑:这一张的出图耗时算「空闲」样本
             await this.encoderSlot();
@@ -1418,12 +1461,14 @@ export class StreamProducer {
       bakery.streamLease = null;
       // 差分取层发现目标卡改到了收紧矩形外面(稀疏那一趟没量到的帧):把收紧矩形放大,这个分段按新矩形重来,不算失败
       if (below && error?.code === 'below-overflow' && this.widenTight(state, error.box)) error.cancelled = true;
+      // 别的流:补密时画面顶到了收紧矩形的边(稀疏版每段只量了第一帧),同样放大重来
+      if (error?.code === 'tight-overflow' && this.widenTightSides(state, error.sides)) error.cancelled = true;
       throw error;
     } finally { clearInterval(guard); }
     if (!enc) return false;
     void firstCapture;
     const job = enc.finish()
-      .then(out => this.storeSegment(state, generation, { segment, stride, rect, encoder, samples, out }))
+      .then(out => this.storeSegment(state, generation, { segment, stride, rect, encoder, samples, out, box: segmentBox }))
       .catch(error => {
         this.stats.failures++;
         state.failures.set(segment, (state.failures.get(segment) ?? 0) + 1);
@@ -1437,26 +1482,21 @@ export class StreamProducer {
   }
 
   /**
-   * 稀疏那一趟顺带量实体框(G1):这一张截图里 alpha > 0 的包围盒,换回平面坐标并进并集。
-   * 截图矩形就是 `rect`(平面坐标),所以图片像素 (x, y) 在平面上是 (rect.x + x, rect.y + y)。
+   * 稀疏那一趟每个分段量一个位置矩形:这一张(分段的第一帧)里 alpha > 0 的像素的外接框,换回平面坐标,不外扩。
+   * 截图矩形就是 `rect`(平面坐标),所以图片像素 (x, y) 在平面上是 (rect.x + x, rect.y + y)。`local` 是 `pngAlphaBox` / `rgbaAlphaBox`
+   * 的结果。回这个分段的位置矩形(`null` = 全透明;读不懂的图回 `undefined`,并记 `measureFailed`:这条流不收紧)。顺带并进整条流的并集。
    */
-  measurePng(state, frame, png, rect) {
-    const box = pngAlphaBox(png);
-    if (box?.full) { state.measureFailed = true; return; }
-    if (box) state.measured = unionRect(state.measured, { x: rect.x + box.x, y: rect.y + box.y, w: box.w, h: box.h });
+  measureBox(state, frame, local, rect) {
+    if (local?.full) { state.measureFailed = true; return undefined; }
+    const box = local ? { x: rect.x + local.x, y: rect.y + local.y, w: local.w, h: local.h } : null;
+    if (box) state.measured = unionRect(state.measured, box);
     state.measuredSegments.add(streamSegmentOf(frame, state.spec.originFrame));
+    return box;
   }
-
-  /** 同 `measurePng`,这一帧是画布直取的原始像素(`{ rgba, width, height }`) */
-  measureRgba(state, frame, raw, rect) {
-    const box = rgbaAlphaBox(raw.rgba, raw.width, raw.height);
-    if (box) state.measured = unionRect(state.measured, { x: rect.x + box.x, y: rect.y + box.y, w: box.w, h: box.h });
-    state.measuredSegments.add(streamSegmentOf(frame, state.spec.originFrame));
-  }
-
   /**
-   * 稀疏那一趟整条流量完之后定收紧矩形:并集外扩一点、夹回上界、外扩到偶数。面积省不到
-   * `TIGHTEN_MIN_SAVING` 就不收紧(白换一个变体)。一个实体框都没量到(整条流透明)时也不收紧。
+   * 整条流的稀疏版齐了以后定收紧矩形:各分段位置矩形(清单里的 `box`)的并集外扩一点、夹回上界、外扩到偶数。面积省不到
+   * `TIGHTEN_MIN_SAVING` 就不收紧(白换一个变体)。有哪个分段没有位置矩形(拉来的旧分段、读不懂的图)、整条流都透明、
+   * 或者已经有按上界产的满密度分段(收紧会把它们判旧重产),都不收紧。
    */
   maybeTighten(state) {
     const manifest = state.manifest;
@@ -1464,10 +1504,15 @@ export class StreamProducer {
     const { spec } = state;
     for (let n = spec.firstSegment; n <= spec.lastSegment; n++) if (this.needsSparse(state, n)) return;
     const bound = manifest.bound;
-    // 并集必须覆盖**每一个**分段:有的稀疏分段是上一个进程产的(这次没量到),收紧就可能裁掉它的内容
-    for (let n = spec.firstSegment; n <= spec.lastSegment; n++) if (!state.measuredSegments.has(n)) { manifest.tight = bound; return; }
-    if (!state.measured) { manifest.tight = bound; return; }
-    const tight = evenRect(intersectRect(padRect(state.measured, MEASURE_PAD_PX), bound), bound);
+    let union = null;
+    for (let n = spec.firstSegment; n <= spec.lastSegment; n++) {
+      const seg = manifest.segments[n];
+      // 并集必须覆盖**每一个**分段,而且不能把已经按上界产好的满密度分段判旧
+      if (!seg || seg.box === undefined || (seg.stride === 1 && !seg.adopted)) { manifest.tight = bound; return; }
+      if (seg.box) union = unionRect(union, seg.box);
+    }
+    if (!union) { manifest.tight = bound; return; }
+    const tight = evenRect(intersectRect(padRect(union, MEASURE_PAD_PX), bound), bound);
     manifest.tight = rectArea(tight) <= rectArea(bound) * (1 - TIGHTEN_MIN_SAVING) ? tight : bound;
     this.note(`流 ${spec.streamKey.slice(0, 8)} 收紧到 ${JSON.stringify(manifest.tight)}(上界 ${JSON.stringify(bound)})`);
   }
@@ -1490,8 +1535,27 @@ export class StreamProducer {
     return true;
   }
 
+  /**
+   * 补密时画面顶到了收紧矩形的边(`sides`:`{ left, top, right, bottom }` 里为真的那几边):这几边各往外放
+   * `TIGHT_WIDEN_STEP_PX` 或这个方向现有尺寸的一半(取大的),夹回上界。已经按旧矩形产好的满密度分段签名对不上,会按新矩形重产。
+   * 回有没有真的放大。
+   */
+  widenTightSides(state, sides) {
+    const manifest = state.manifest;
+    if (!manifest?.tight || !sides) return false;
+    const { tight, bound } = manifest;
+    const dx = Math.max(TIGHT_WIDEN_STEP_PX, Math.ceil(tight.w / 2)), dy = Math.max(TIGHT_WIDEN_STEP_PX, Math.ceil(tight.h / 2));
+    const grown = rectOf(tight.x - (sides.left ? dx : 0), tight.y - (sides.top ? dy : 0), tight.x + tight.w + (sides.right ? dx : 0), tight.y + tight.h + (sides.bottom ? dy : 0));
+    const wider = evenRect(intersectRect(grown, bound), bound);
+    if (rectArea(wider) <= rectArea(tight)) return false;
+    this.note(`流 ${state.spec.streamKey.slice(0, 8)} 的收紧矩形放大到 ${JSON.stringify(wider)}(原来 ${JSON.stringify(tight)},补密时画面顶到了${Object.keys(sides).filter(k => sides[k]).join('、')}边)`);
+    manifest.tight = wider;
+    state.widened = (state.widened ?? 0) + 1;
+    return true;
+  }
+
   /** 编完一个分段:切分、校验、落盘、改清单、发 `layer`;被替换的旧文件 5 秒后删(G6) */
-  async storeSegment(state, generation, { segment, stride, rect, encoder, samples, out }) {
+  async storeSegment(state, generation, { segment, stride, rect, encoder, samples, out, box }) {
     await this.ownership?.assert();
     const { spec } = state;
     const { init, segments, dropped } = splitFmp4(out.bytes);
@@ -1518,8 +1582,10 @@ export class StreamProducer {
     const file = `${segment}-${sha(segments[0], 16)}.m4s`;
     await this.store.writeFile(this.store.segFile(spec.streamKey, file), segments[0]);
     const old = manifest.segments[segment];
+    // 位置矩形:稀疏的分段记这一趟量的;满密度的沿用它替换掉的那个稀疏分段的(没有就记这一趟第一帧量的)
+    const kept = stride > 1 ? box : (old?.box !== undefined ? old.box : box);
     manifest.segments[segment] = { file, init: initId, stride, samples, bytes: segments[0].length, encodeMs: out.encodeMs, tailMs: out.tailMs,
-      sig: segmentSignature({ streamKey: spec.streamKey, segment, stride, encoder, rect }), dropped, at: Date.now() };
+      sig: segmentSignature({ streamKey: spec.streamKey, segment, stride, encoder, rect }), dropped, at: Date.now(), ...(kept !== undefined ? { box: kept } : {}) };
     if (stride > 1) this.maybeTighten(state);
     await this.store.save(manifest);
     this.stats.segments++;
@@ -1625,9 +1691,12 @@ export class StreamProducer {
           rect: meta.rect ?? null, encoder: meta.encoder ?? null, bytes: meta.bytes ?? initBytes.get(p.seg.init)?.length ?? null, adopted: true };
         inits++;
       }
+      // 位置矩形:对方清单里带着就用对方的;没带、而本机被它换掉的那个分段有,就留着本机的
+      const adoptedBox = isBox(p.seg.box) || p.seg.box === null ? p.seg.box : old?.box;
       manifest.segments[p.n] = { file: p.file, init: p.seg.init, stride: p.seg.stride, samples: p.seg.samples, bytes: p.bytes.length,
         // 分段的 `encoder` 取它所用 init 的(契约第 11 节第 6 条)
-        sig: p.seg.sig ?? null, encoder: manifest.inits[p.seg.init]?.encoder ?? p.seg.encoder ?? null, adopted: true, at: Date.now() };
+        sig: p.seg.sig ?? null, encoder: manifest.inits[p.seg.init]?.encoder ?? p.seg.encoder ?? null, adopted: true, at: Date.now(),
+        ...(adoptedBox !== undefined ? { box: adoptedBox } : {}) };
       if (old && old.file !== p.file) replaced.push(old.file);
       written++;
     }

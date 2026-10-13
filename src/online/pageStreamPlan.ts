@@ -35,9 +35,10 @@ import type { NodeTask, StreamTaskInput } from "./browserNode.ts";
 
 /**
  * 与 `server/frame-stream.mjs` 的 `STREAM_CODE_VERSION` 同值(对拍)。2:「己一」起单卡流的成员键不带生成快照的代码指纹;
- * 3:分段从这条流自己的第一帧起每 15 帧一段(`render/streamSegments.mjs`),旧流全部重产。
+ * 3:分段从这条流自己的第一帧起每 15 帧一段(`render/streamSegments.mjs`),旧流全部重产;
+ * 4:稀疏版每个分段只截第一帧、清单里每个分段带位置矩形 `box`。
  */
-export const PAGE_STREAM_CODE_VERSION = 3;
+export const PAGE_STREAM_CODE_VERSION = 4;
 /** 与 `server/frame-stream.mjs` 的 `STREAM_DECODER_BUDGET`、`LOCAL_OVERFLOW_PX` 同值 */
 export const PAGE_STREAM_DECODER_BUDGET = 6;
 export const PAGE_LOCAL_OVERFLOW_PX = 32;

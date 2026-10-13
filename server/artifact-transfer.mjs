@@ -548,8 +548,9 @@ export async function collectStreamResult(pipeline, task, opts = {}) {
       inits[seg.init] = { hash: initBlob.hash, bytes: initBlob.bytes, codec: initMeta.codec ?? null, width: initMeta.width ?? null, height: initMeta.height ?? null,
         timescale: initMeta.timescale ?? null, rect: initMeta.rect ?? null, encoder: initMeta.encoder ?? null };
     }
+    // `box`:这个分段的位置矩形(平面坐标;产稀疏版时量的),清单里有才带
     segments[n] = { hash: segBlob.hash, bytes: segBlob.bytes, init: seg.init, stride: seg.stride, samples: seg.samples,
-      sig: seg.sig ?? null, encoder: initMeta.encoder ?? null };
+      sig: seg.sig ?? null, encoder: initMeta.encoder ?? null, ...(seg.box !== undefined ? { box: seg.box } : {}) };
   }
   const result = {
     v: RESULT_VERSION, kind: 'stream', resultKey: key, range: { from, to },

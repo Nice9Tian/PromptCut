@@ -63,7 +63,7 @@ mock.module(new URL('../bakery/bake.mjs', import.meta.url).href, {
         shots.push(frame);
         await opts.onFrame?.(frame, shotOf(frame));
       }
-      bakes.push({ streamSignature, fromFrame, toFrame, stride, continues, shots });
+      bakes.push({ streamSignature, fromFrame, toFrame, stride, continues, shots, hasMountFrame: Object.hasOwn(opts, 'mountFrame'), warm: opts.warm, clip: opts.clip });
       bakery.streamLease = { streamSignature, lastFrame: toFrame, lastShot: toFrame, dirty: false, page: bakery.page };
       return { reset: !continues, replayed: 0, captured: shots.length, captureMs: shots.length, stepMs: 0 };
     },
@@ -107,7 +107,7 @@ const { FramePipeline } = await import('../frame-pipeline.mjs');
 const { describeEnvironment } = await import('../render-node/fingerprint.mjs');
 const { planTaskOf, splitPlan } = await import('../render-node/split.mjs');
 const { createPrerenderExecutor } = await import('../prerender-executor.mjs');
-const { SPARSE_STRIDE, publicManifest } = await import('../frame-stream.mjs');
+const { SPARSE_STRIDE, publicManifest, tightOverflowSides, StreamProducer } = await import('../frame-stream.mjs');
 const { layerStreamsOf } = await import('../artifact-transfer.mjs');
 const { streamSegmentFirstFrame, streamSegmentLastFrame, streamSegmentOf } = await import('../../src/render/streamSegments.mjs');
 
@@ -141,7 +141,8 @@ const CAPS = {
   'clip-top': { compositing: 'independent', frameMode: 'stateful' },
   'clip-g': { compositing: 'belowDependent', frameMode: 'stateful' },
   'clip-a': { compositing: 'independent', frameMode: 'stateful' },
-  'clip-b': { compositing: 'independent', frameMode: 'stateful' },
+  // clip-b 是 remotion 式(画面只由时间和参数决定):产流时不从挂载帧回放
+  'clip-b': { compositing: 'independent', frameMode: 'direct', need_prerendering: false },
 };
 function projectJson() {
   return {
@@ -309,47 +310,149 @@ test('SO-03 依赖下层的流(开关打开):第一帧是目标卡的第一帧(�
   });
 });
 
-test('SO-04 稀疏的分段(自动生产那条路,行为照旧):每 3 帧截一张、每张重复写满,都相对分段自己的第一帧数;末段不满时最后一张只重复到流的最后一帧', { timeout: 60_000 }, async (t) => {
+test('SO-04 稀疏的分段:每个分段只截分段的第一帧、重复写满这一段;motion 式的流照旧把每一帧都推过去(租约接得上下一段);位置矩形记进清单;稀疏的齐了才定收紧矩形,补密沿用位置矩形', { timeout: 60_000 }, async (t) => {
   t.after(cleanup);
   await withBelow(false, async () => {
+    assert.equal(SPARSE_STRIDE, 15, '稀疏只有一档:间隔就是分段的帧数');
     const A = await streamPipeline();
     const executor = executorFor(A);
     await executor.plan(view(planTaskOf({ projectId: PID, projectRev: REV })), { signal: signalNone() });
     const entry = [...A.entries.values()][0];
     const spec = (await A.queueStreamSpecs(entry)).find((s) => s.topClipId === 'clip-a');
+    assert.equal(spec.replay, true, 'clip-a 是 motion 式');
     const producer = A.streamProducer();
     const state = await producer.queueState(entry, spec);
     const bakery = await A.leaseStreamBakery();
     try {
-      for (const segment of [0, 3]) {
+      // 假截图是 4×4、中间 2×2 不透明:位置矩形 = 截图矩形(上界)的左上角 + (1, 1),2×2
+      const bound = state.manifest.bound;
+      const expectBox = { x: bound.x + 1, y: bound.y + 1, w: 2, h: 2 };
+      const resets0 = producer.stats.resets;
+      for (const segment of [0, 1, 2, 3]) {
         const mark = bakes.length;
         const task = { state, segment, stride: SPARSE_STRIDE };
         assert.equal(await producer.runSegment(bakery, task), true);
         await task.job;
         const [run] = bakes.slice(mark);
         const from = 100 + segment * 15, to = Math.min(from + 14, 149);
-        assert.deepEqual([run.fromFrame, run.toFrame, run.stride], [from, to, SPARSE_STRIDE]);
-        const shots = [];
-        for (let f = from; f <= to; f += SPARSE_STRIDE) shots.push(f);
-        assert.deepEqual(run.shots, shots, `分段 ${segment} 截的帧`);
+        assert.deepEqual([run.fromFrame, run.toFrame, run.stride], [from, to, 15], 'motion 式:这一段的每一帧都推过去');
+        assert.deepEqual(run.shots, [from], `分段 ${segment} 只截第一帧`);
+        assert.equal(run.continues, segment > 0, '接着上一段的租约推,不重灌');
         const seg = state.manifest.segments[segment];
-        assert.deepEqual([seg.stride, seg.samples], [SPARSE_STRIDE, to - from + 1]);
-        // 每一帧位置上放的是不晚于它的最近一张
-        const expected = Array.from({ length: to - from + 1 }, (_, i) => from + Math.floor(i / SPARSE_STRIDE) * SPARSE_STRIDE);
-        assert.deepEqual(await framesInSegment(A, spec.streamKey, seg.file), expected, `分段 ${segment} 里每个样本是哪一帧的画面`);
-        assert.equal(state.measuredSegments.has(segment), true, '量实体框记的是这条流自己的分段号');
+        assert.deepEqual([seg.stride, seg.samples], [15, to - from + 1]);
+        assert.deepEqual(await framesInSegment(A, spec.streamKey, seg.file), Array(to - from + 1).fill(from), `分段 ${segment} 里每个样本都是第一帧的画面`);
+        assert.deepEqual(seg.box, expectBox, `分段 ${segment} 的位置矩形(平面坐标)`);
+        if (segment < 3) assert.equal(state.manifest.tight, null, '稀疏的没齐之前不收紧');
       }
-      assert.deepEqual([...state.measuredSegments].sort(), [0, 3]);
-      // 「接得上租约」按这条流自己的分段边界判:租约停在第 129 帧(第 1 段的最后一帧)时接着做第 2 段(第 130 帧起),
-      // 哪怕更靠前的第 1 段还没有;停在第 128 帧(不在分段边界上)就不算接得上,照常从播放头往后找第一个没有的(第 1 段)。
-      // 按项目帧号判的话边界在第 134、149 帧,这两种情形分不出来
+      assert.equal(producer.stats.resets - resets0, 1, '四个分段只重灌一次页面');
+      // 稀疏的齐了:收紧矩形 = 各分段位置矩形的并集外扩 8、夹回上界、凑偶数
+      const tight = state.manifest.tight;
+      assert.ok(tight && tight.w <= 2 + 16 + 2 && tight.h <= 2 + 16 + 2 && tight.w % 2 === 0 && tight.h % 2 === 0, `收紧到 ${JSON.stringify(tight)}`);
+      assert.ok(tight.x <= expectBox.x && tight.x + tight.w >= expectBox.x + expectBox.w);
+      assert.deepEqual(publicManifest(state.manifest).segments[2], { init: state.manifest.segments[2].init, file: state.manifest.segments[2].file, stride: 15, samples: 15, box: expectBox }, '页面读到的清单每个分段带着间隔和位置矩形');
+      // 补密:按收紧矩形截,每帧一张;位置矩形沿用稀疏那一趟量的
+      const mark = bakes.length;
+      const dense = { state, segment: 3, stride: 1 };
+      assert.equal(await producer.runSegment(bakery, dense), true);
+      await dense.job;
+      assert.deepEqual(bakes.slice(mark).map((b) => [b.fromFrame, b.toFrame, b.stride, b.shots.length]), [[145, 149, 1, 5]]);
+      assert.deepEqual([state.manifest.segments[3].stride, state.manifest.segments[3].samples], [1, 5]);
+      assert.deepEqual(state.manifest.segments[3].box, expectBox);
+      // (假编码器的开头文件不随尺寸变,清单里登记的矩形看不出来;看截图矩形:宽高是收紧矩形的,位置是它加上隔离工程里的偏移)
+      const denseClip = bakes.slice(mark)[0].clip;
+      assert.deepEqual(denseClip, { x: tight.x + spec.offset.x, y: tight.y + spec.offset.y, w: tight.w, h: tight.h }, '满密度的分段按收紧矩形截');
+      assert.deepEqual(await framesInSegment(A, spec.streamKey, state.manifest.segments[3].file), [145, 146, 147, 148, 149]);
+      // 「接得上租约」按这条流自己的分段边界判(把第 1、2 段清掉当作还没有)
+      delete state.manifest.segments[1]; delete state.manifest.segments[2];
       delete state.queueOnly;   // 这条流是按队列任务建的;去掉这个标记,自动生产才会挑它
       const leaseAt = (lastFrame) => { bakery.streamLease = { streamSignature: spec.streamKey, lastFrame, dirty: false, page: bakery.page }; return producer.nextTask(bakery); };
-      const mine = (task) => (task?.state === state ? task.segment : null);
-      assert.equal(mine(leaseAt(129)), 2, '第 129 帧是第 1 段的最后一帧:接着做第 2 段');
-      assert.equal(mine(leaseAt(128)), 1, '第 128 帧不在分段边界上:不算接得上');
-      assert.equal(mine(leaseAt(134)), 1, '第 134 帧是按项目帧号数的分段边界,不是这条流的');
-      assert.equal(mine(leaseAt(149)), 1, '第 149 帧是末段的最后一帧:后面没有分段了,回头补第 1 段');
+      const mine = (task) => (task?.state === state ? [task.segment, task.stride] : null);
+      assert.deepEqual(mine(leaseAt(129)), [2, 15], '第 129 帧是第 1 段的最后一帧:接着做第 2 段;还有分段连稀疏的都没有,先做稀疏');
+      assert.deepEqual(mine(leaseAt(128)), [1, 15], '第 128 帧不在分段边界上:不算接得上');
+      assert.deepEqual(mine(leaseAt(134)), [1, 15], '第 134 帧是按项目帧号数的分段边界,不是这条流的');
     } finally { A.returnStreamBakery(bakery); }
   });
+});
+
+test('SO-05 稀疏的分段,remotion 式的流:只推到分段的第一帧就停,下一段直接跳过去、不重灌页面', { timeout: 60_000 }, async (t) => {
+  t.after(cleanup);
+  await withBelow(false, async () => {
+    const A = await streamPipeline();
+    const executor = executorFor(A);
+    await executor.plan(view(planTaskOf({ projectId: PID, projectRev: REV })), { signal: signalNone() });
+    const entry = [...A.entries.values()][0];
+    const spec = (await A.queueStreamSpecs(entry)).find((s) => s.topClipId === 'clip-b');
+    assert.equal(spec.replay, false, 'clip-b 是 remotion 式');
+    const producer = A.streamProducer();
+    const state = await producer.queueState(entry, spec);
+    const bakery = await A.leaseStreamBakery();
+    try {
+      const resets0 = producer.stats.resets;
+      // 不按顺序也行:0、1、5、2
+      for (const segment of [0, 1, 5, 2]) {
+        const mark = bakes.length;
+        const task = { state, segment, stride: SPARSE_STRIDE };
+        assert.equal(await producer.runSegment(bakery, task), true);
+        await task.job;
+        const [run] = bakes.slice(mark);
+        const from = 40 + segment * 15;
+        assert.deepEqual([run.fromFrame, run.toFrame, run.shots, run.hasMountFrame, run.warm], [from, from, [from], false, 0], `分段 ${segment}:只推到第一帧,不传挂载帧`);
+        const seg = state.manifest.segments[segment];
+        assert.deepEqual([seg.stride, seg.samples], [15, 15]);
+        assert.deepEqual(await framesInSegment(A, spec.streamKey, seg.file), Array(15).fill(from));
+      }
+      assert.equal(producer.stats.resets - resets0, 1, '只在头一段重灌一次页面,之后都是在同一个页面上跳');
+      // 别的调用动过这个会话(租约脏了):照旧重灌
+      bakery.streamLease.dirty = true;
+      const again = { state, segment: 3, stride: SPARSE_STRIDE };
+      assert.equal(await producer.runSegment(bakery, again), true);
+      await again.job;
+      assert.equal(producer.stats.resets - resets0, 2);
+      // 满密度的分段不走「跳」这条路:接不上租约照旧重灌一次(行为和原来相同)
+      const dense = { state, segment: 0, stride: 1 };
+      assert.equal(await producer.runSegment(bakery, dense), true);
+      await dense.job;
+      assert.equal(producer.stats.resets - resets0, 3);
+    } finally { A.returnStreamBakery(bakery); }
+  });
+});
+
+test('SO-06 收紧矩形:画面顶到哪几边(只算还没到上界的边);顶到了就往那几边放大;已有按上界产的满密度分段、或有分段没量过位置矩形时不收紧', () => {
+  const bound = { x: -32, y: -32, w: 464, h: 304 };
+  const rect = { x: 100, y: 50, w: 120, h: 80 };
+  assert.equal(tightOverflowSides({ x: 10, y: 10, w: 50, h: 40 }, rect, bound), null, '画面在矩形里面,四边都留着空');
+  assert.deepEqual(tightOverflowSides({ x: 0, y: 10, w: 50, h: 40 }, rect, bound), { left: true });
+  assert.deepEqual(tightOverflowSides({ x: 70, y: 0, w: 50, h: 80 }, rect, bound), { top: true, right: true, bottom: true });
+  // 这一边已经贴着上界:再往外不是这条流的范围,不算
+  assert.equal(tightOverflowSides({ x: 0, y: 0, w: 464, h: 304 }, bound, bound), null);
+  assert.equal(tightOverflowSides({ x: 0, y: 5, w: 60, h: 20 }, { x: -32, y: 50, w: 120, h: 80 }, bound), null, '左边贴着上界');
+
+  const producer = new StreamProducer({ root: os.tmpdir(), ready: { stageByKey() {}, publish() {} } }, { env: {} });
+  const state = { spec: { streamKey: 'k'.repeat(64), firstSegment: 0, lastSegment: 2 }, manifest: { bound, tight: { ...rect }, segments: {} } };
+  assert.equal(producer.widenTightSides(state, { right: true }), true);
+  assert.deepEqual(state.manifest.tight, { x: 100, y: 50, w: 184, h: 80 }, '右边放 64(比宽的一半 60 大)');
+  assert.equal(producer.widenTightSides(state, { left: true, top: true }), true);
+  assert.deepEqual(state.manifest.tight, { x: 8, y: -14, w: 276, h: 144 }, '左边放宽的一半 92、上边放 64');
+  for (let i = 0; i < 6; i++) producer.widenTightSides(state, { left: true, top: true, right: true, bottom: true });
+  assert.deepEqual(state.manifest.tight, bound, '放到上界为止');
+  assert.equal(producer.widenTightSides(state, { left: true }), false, '已经是上界:不再放大');
+
+  // maybeTighten:各分段位置矩形的并集
+  const seg = (box, extra = {}) => ({ file: 'f', init: 'i', stride: 15, samples: 15, sig: null, adopted: true, ...(box !== undefined ? { box } : {}), ...extra });
+  const fresh = (segments) => ({ spec: { streamKey: 'k'.repeat(64), firstSegment: 0, lastSegment: 2 }, manifest: { streamKey: 'k'.repeat(64), bound, tight: null, segments } });
+  const ok = fresh({ 0: seg({ x: 100, y: 60, w: 40, h: 30 }), 1: seg(null), 2: seg({ x: 180, y: 70, w: 40, h: 30 }) });
+  producer.maybeTighten(ok);
+  assert.deepEqual(ok.manifest.tight, { x: 92, y: 52, w: 136, h: 56 }, '并集 100..220 × 60..100 外扩 8;全透明的那一段不参与');
+  const missing = fresh({ 0: seg({ x: 100, y: 60, w: 40, h: 30 }), 1: seg(undefined), 2: seg({ x: 180, y: 70, w: 40, h: 30 }) });
+  producer.maybeTighten(missing);
+  assert.deepEqual(missing.manifest.tight, bound, '有一段没量过位置矩形:不收紧');
+  const hasDense = fresh({ 0: seg({ x: 100, y: 60, w: 40, h: 30 }, { stride: 1, adopted: false }), 1: seg(null), 2: seg({ x: 180, y: 70, w: 40, h: 30 }) });
+  producer.maybeTighten(hasDense);
+  assert.deepEqual(hasDense.manifest.tight, bound, '本机已经有按上界产的满密度分段:不收紧(收紧会把它判旧重产)');
+  const partial = fresh({ 0: seg({ x: 100, y: 60, w: 40, h: 30 }), 2: seg({ x: 180, y: 70, w: 40, h: 30 }) });
+  producer.maybeTighten(partial);
+  assert.equal(partial.manifest.tight, null, '稀疏的还没齐:先不定');
+  const allClear = fresh({ 0: seg(null), 1: seg(null), 2: seg(null) });
+  producer.maybeTighten(allClear);
+  assert.deepEqual(allClear.manifest.tight, bound, '整条流都透明:不收紧');
 });
