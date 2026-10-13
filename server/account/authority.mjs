@@ -355,8 +355,29 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const serviceAcks = Object.fromEntries(services.map(service => [service, state.accessAcks[`ack:${barrier.accessEventId}:${service}`] ?? null]));
     // Preserve legacy rows on disk, but they are not proof under the required protocol.
     if (!agentReadClosureComplete(state, barrier.accessEventId, serviceAcks.agent)) serviceAcks.agent = null;
-    return { ...barrier, serviceAcks, pendingServices: ['doc', ...services.filter(s => !serviceAcks[s]?.complete || serviceAcks[s].cursor < barrier.accessSeq)],
-      logoutComplete: false };
+    // 文档服务自己这一项：带着关闭证据的那份回执已经送到账号服务才算。整条退出办完另看账号服务回来的结束见证。
+    const docAck = state.accountAcks[`seq:${barrier.accountEventSeq}`];
+    const docConfirmed = docAck?.sent === true && docAck.receipt?.logoutComplete === true;
+    return { ...barrier, serviceAcks, docConfirmed,
+      pendingServices: [...(docConfirmed ? [] : ['doc']), ...services.filter(s => !serviceAcks[s]?.complete || serviceAcks[s].cursor < barrier.accessSeq)],
+      logoutComplete: barrier.state === 'complete' };
+  }
+  /** 账号服务已经为这次退出签了结束见证（它那边要四个服务的确认都齐了才签）。只记一次，重复记同一份不报错。 */
+  function completeLogoutBarrier(eventId, witness) {
+    if (typeof witness?.witnessId !== 'string' || !witness.witnessId || !Number.isSafeInteger(witness.orderSeq) ||
+        witness.kind !== 'logout-complete' || witness.state !== 'sealed' || witness.eventId !== eventId) reject(400, 'invalid-logout-witness');
+    return ledger.transaction(state => {
+      const barrier = state.barriers[`event:${eventId}`]; if (!barrier) reject(404, 'no-event');
+      const docAck = state.accountAcks[`seq:${barrier.accountEventSeq}`];
+      if (docAck?.sent !== true || docAck.receipt?.logoutComplete !== true) reject(409, 'logout-ack-pending');
+      const record = { witnessId: witness.witnessId, orderSeq: witness.orderSeq, utcMs: witness.utcMs ?? null };
+      if (barrier.state === 'complete') {
+        if (canonicalJson(barrier.logoutWitness) !== canonicalJson(record)) reject(409, 'logout-witness-mismatch');
+        return structuredClone(barrier);
+      }
+      barrier.state = 'complete'; barrier.logoutWitness = record; barrier.completedAt = now();
+      return structuredClone(barrier);
+    });
   }
   async function statusForPrincipal(input, query) {
     const actor = await verify(input);
@@ -428,7 +449,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
-    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, flushAccountAcknowledgements,
+    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);

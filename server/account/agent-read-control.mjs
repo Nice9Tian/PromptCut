@@ -12,6 +12,37 @@ export const CONVERSATION_CONTROL_ROOT = '/internal/v2/conversation-controls/';
 export const conversationControlOperations = Object.freeze({ subscribe: 'conversationControlSubscribe',
   open: 'conversationReadOpen', close: 'conversationReadClose', ack: 'conversationControlAck' });
 
+/** 一条访问事件（旧登录作废、被踢等）在 Agent 这一侧的任务是否都收口了。只读账本，不改。
+ *
+ * 看的是请求号为 `access:<事件号>` 的任务控制记录：
+ * - 没开「一条任务一个进程」（`scoped` 为假）：这一档没有任何办法证明一条任务占着的进程资源已经关掉，
+ *   所以只有任务清单是空的（没有要中止的、没有保留的、没有牵涉到的实例）才算收口。
+ * - 开了（`scoped` 为真）：要中止的每一条任务（私有对话里的、还没被读到的）都凭 root 的关闭记录结清了才算；
+ *   还没绑到进程上就被撤掉的任务没有进程可关，不用等。保留下来继续跑的任务（共有对话里已读的当前任务）
+ *   不在等的范围里：确认设备已退出不要求等它做完（`docs/plan/account-binding-contract.md`「改密、退出动画与延迟撤回」）。
+ */
+export function accessEventRunClosure(state, eventId, { scoped = false } = {}) {
+  const controls = Object.values(state.runControlsV2 ?? {}).filter(c => c.requestId === `access:${eventId}`);
+  const stoppedRuns = [], retainedRuns = [], pending = [];
+  for (const control of controls) {
+    if (!scoped) {
+      if (control.instances.length || control.revoked.length || control.retained.length) pending.push(control.controlId);
+      continue;
+    }
+    for (const id of control.retained) retainedRuns.push(state.runGrantsV2[id].runId);
+    for (const id of control.revoked) {
+      const grant = state.runGrantsV2?.[id], closure = state.runScopeClosuresV1?.[id];
+      if (!grant) { pending.push(control.controlId); continue; }
+      if (!grant.scopeBinding) continue;
+      if (grant.state !== 'finished' || !closure?.closureWitnessDigest) { pending.push(control.controlId); continue; }
+      stoppedRuns.push({ runId: grant.runId, closureWitnessDigest: closure.closureWitnessDigest });
+    }
+  }
+  const byRun = (a, b) => (a.runId ?? a) < (b.runId ?? b) ? -1 : 1;
+  return { complete: pending.length === 0, pending: [...new Set(pending)].sort(),
+    stoppedRuns: stoppedRuns.sort(byRun), retainedRuns: [...new Set(retainedRuns)].sort() };
+}
+
 /** The whole exact request is the capability scope, including the fresh nonce.
  * Ordinary run metadata/read/write capabilities cannot authorize these APIs. */
 export function conversationControlScope(operation, body) {
@@ -248,17 +279,18 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
       waiters.add(wake); wake();
     });
   }
-  function finalizeAccessEvent({ eventId }) {
+  function finalizeAccessEvent({ eventId, scoped = false }) {
     return ledger.transaction(state => {
       const event = state.accessEvents.find(row => row.eventId === eventId);
       if (!event) fail(404, 'read-control-event-missing');
       const controls = tables(state).controls.filter(c => c.accessSeq === event.seq);
       if (!controls.length || controls.some(c => Object.values(c.targets).some(target => !target.receipt))) fail(503, 'read-close-pending');
-      // This phase cannot certify an active/retained/historical run's resources.
-      const runs = Object.values(state.runControlsV2 ?? {}).filter(c => c.requestId === `access:${event.eventId}`);
-      if (runs.some(c => c.instances.length || c.revoked.length || c.retained.length)) fail(503, 'agent-run-closure-pending');
+      const runs = accessEventRunClosure(state, eventId, { scoped });
+      if (!runs.complete) fail(503, 'agent-run-closure-pending');
       const payload = { source: 'doc-agent-read-control', complete: true, eventId, accessSeq: event.seq,
-        controlIds: controls.map(c => c.controlId), receipts: controls.flatMap(c => Object.values(c.targets).map(t => t.receipt)) };
+        controlIds: controls.map(c => c.controlId), receipts: controls.flatMap(c => Object.values(c.targets).map(t => t.receipt)),
+        // 只有「一条任务一个进程」时才有任务的关闭记录可填；没开这个模式时任务清单必须是空的，这两项不出现，摘要和原来一样。
+        ...(scoped ? { stoppedRuns: runs.stoppedRuns, retainedRuns: runs.retainedRuns } : {}) };
       const result = { payload, digest: digestOf(payload) }, rows = state.agentReadAccessClosuresV1 ??= {};
       if (rows[eventId] && canonicalJson(rows[eventId]) !== canonicalJson(result)) fail(409, 'read-control-closure-mismatch');
       rows[eventId] = result; return result;
