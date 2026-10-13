@@ -77,7 +77,7 @@ P3 Agent 调 seek:只有发起页的播放头真的变了  ok  target 10, seekRe
    before A/B/C = 0/0/0;after A = {t:10, received 1, posted [200]},B = {t:0, received 0, posted []},C = {t:0, received 0, posted []}
 P4 别的成员拿着发起页的请求号与页面号交结果:410 page-request-gone;发起页那一次照常做成  ok
 P5 play / pause:发起页开始播、停下;另两张页面没在播、播放头不动  ok
-P6 发起页关掉后再请求:{ok:false, initiatorOffline:true, error:"发起方不在线,seek 要用到他的播放头。请按项目内容继续,不要等待。"},17～19 毫秒;B、C 不动  ok
+P6 发起页关掉后再请求:{ok:false, initiatorOffline:true, error:"发起方不在线,seek 要用到他的播放头。请按项目内容继续,不要等待。"},16 毫秒(三次运行 19、17、16);B、C 不动  ok
 P7 收尾:探针起的浏览器、编辑器都按进程号结束,端口放回  ok
 {"summary":true,"total":7,"passed":7,"failed":[]}
 ```
@@ -175,4 +175,11 @@ P7 收尾:探针起的浏览器、编辑器都按进程号结束,端口放回  o
 
 ## 最终基线
 
-(交活前在最终提交上跑一遍后填写。)
+在提交 `c44542fc`(代码与测试的最终状态;之后只改了本报告的这一节)上:
+
+- `npx tsc -b --force`:退出码 0,零错误。
+- `npm test` 第一遍:退出码 1,6096 项、通过 6087、失败 1、跳过 8,耗时 153 秒(机器正忙,平时约 80 秒)。失败的是 `server/test/agent-live-selection.test.mjs`(「等 actual model tool route 超时(8000 ms)」),在通用规矩列的「机器忙时偶发失败」名单里,本包没有改它用到的任何文件。
+- 单独重跑 `npm test -- server/test/agent-live-selection.test.mjs`:1 项通过(1.2 秒)。
+- `npm test` 第二遍:退出码 0,6096 项、通过 6088、失败 0、取消 0、跳过 8,耗时 81 秒,末行「✓ npm test 最终结果:零失败」。
+- 跳过的 8 项都不是本包的:P2 真 Python 的 5 项(本工作区没有准备 `out/p2-stt/` 的依赖)、两项只在 Linux 上验的权限与符号链接、一项卡片布局的集成测试。
+- 重构(把权威信息做成可替换的口子)之前还跑过一遍全量:6095 项、通过 6087、失败 0、跳过 8。
