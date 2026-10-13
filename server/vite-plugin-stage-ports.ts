@@ -3,7 +3,8 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import type { Plugin, ViteDevServer } from "vite";
 import { STAGE_PORTS, stagePortsOf } from "./stage-ports.mjs";
-import { STAGE_CLIENT_HEADER } from "./http-guard.mjs";
+import { STAGE_CLIENT_HEADER, viaStagePort } from "./http-guard.mjs";
+import { stageRequestAllowed, stageGateLog, STAGE_DENY_BODY } from "./stage-gate.mjs";
 
 /**
  * 两个舞台端口(E1)。编辑器端口 +1 / +2 各起一个**透明反向代理**,原样转回同一份 vite,
@@ -44,6 +45,12 @@ import { STAGE_CLIENT_HEADER } from "./http-guard.mjs";
  * 舞台 iframe 的地址按 `location.hostname` 拼(`previewMode.ts`),舞台端口也得在局域网上。
  * 转回 vite 一律走 127.0.0.1,所以 vite 看到的对端永远是回环:代理把真实对端写进
  * `STAGE_CLIENT_HEADER`(覆盖请求自带的同名头),`/api/**` 的本机判据据此分辨(`http-guard.mjs` 的 `fromLocalClient`)。
+ *
+ * # 只转白名单里的请求
+ *
+ * 舞台窗口里跑的是卡片代码(含用户自己写的、别的成员写的)。舞台端口对它是同源,所以代理**缺省全拒**,
+ * 只把 `server/stage-gate.mjs` 白名单里的请求转给编辑器进程,别的当场回 403;WebSocket 升级同理(只放行热更新那一条)。
+ * 编辑器进程那一侧按代理写的头再判一次(下面 `configureServer` 里的第一个中间件),是第二道。
  */
 
 /** 页面靠这个全局知道有哪几个舞台端口真的起来了;起不来就是空表,页面退回同源单舞台 */
@@ -62,6 +69,14 @@ export function stagePortsPlugin(): Plugin {
   const makeProxy = (listenHost: string, listenPort: number, targetPort: number): Promise<http.Server | null> =>
     new Promise((resolve) => {
       const proxy = http.createServer((req, res) => {
+        const ok = stageRequestAllowed(req.method, req.url, { headers: req.headers });
+        stageGateLog(req.method, req.url, false, ok);
+        if (!ok) {
+          // 请求体不读:回完就让这条连接收掉,不把字节转给编辑器进程
+          res.writeHead(403, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "origin-agent-cluster": "?1", connection: "close" });
+          res.end(STAGE_DENY_BODY);
+          return;
+        }
         const up = http.request(
           { host: "127.0.0.1", port: targetPort, method: req.method, path: req.url, headers: forwardHeaders(req) },
           (pres) => {
@@ -79,6 +94,12 @@ export function stagePortsPlugin(): Plugin {
       });
       // vite 的 HMR WebSocket:客户端打的是舞台端口,原样接到 vite 上
       proxy.on("upgrade", (req, socket: Duplex, head: Buffer) => {
+        const ok = stageRequestAllowed(req.method, req.url, { upgrade: true, headers: req.headers });
+        stageGateLog(req.method, req.url, true, ok);
+        if (!ok) {
+          socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+          return;
+        }
         const up = http.request({ host: "127.0.0.1", port: targetPort, method: req.method, path: req.url, headers: forwardHeaders(req) });
         up.on("upgrade", (pres, psocket, phead) => {
           const lines = [`HTTP/1.1 ${pres.statusCode} ${pres.statusMessage}`];
@@ -105,6 +126,19 @@ export function stagePortsPlugin(): Plugin {
     apply: "serve",
 
     configureServer(server: ViteDevServer) {
+      /*
+       * 第二道:带着舞台端口那个头进来、又不在白名单里的请求,编辑器进程自己也拒(所有路径,不只 `/api`)。
+       * 正常情况下走不到 —— 代理已经拒过了;留着是防将来另有一处也写这个头、却忘了过闸。
+       * 直连编辑器端口的请求没有这个头,这里直接放过,行为一个字不变。
+       */
+      server.middlewares.use((req, res, next) => {
+        if (!viaStagePort(req) || stageRequestAllowed(req.method, req.url, { headers: req.headers })) return next();
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store");
+        res.end(STAGE_DENY_BODY);
+      });
+
       // 探针和桌面壳从这里问「舞台端口是哪两个」(页面走下面注入的全局,不用打接口)
       server.middlewares.use("/api/stage/ports", (_req, res) => {
         void ready.then(() => {

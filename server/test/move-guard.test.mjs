@@ -32,10 +32,23 @@ let seq = 0;
 const ask = async (client, body) => { const reqId = `move-guard-${++seq}`; client.send({ ...body, reqId }); return client.next(m => m.reqId === reqId); };
 const DEVICE = 'isolated-original-host-01';
 
+/**
+ * 起一份进程内的托管组合，回 `{ combo, root }`。端口是先挑好再去占的（`hostedPorts`），挑中到占上之间被同一台机器上别的测试进程
+ * 占走时（`EADDRINUSE`；全量测试、几份测试同时跑时会遇到）换一对端口、换一个数据目录重起，不让这种相撞算成用例失败。
+ * 别的错照抛。
+ */
+async function startCombo(extra = {}) {
+  const options = { host: '127.0.0.1', trustLoopback: false, clusterToken: key(), log: () => {}, ...extra };
+  for (let attempt = 1; ; attempt += 1) {
+    const root = temp();
+    try { return { combo: await startHostedCombo({ ...options, ...await hostedPorts(), dataDir: root }), root }; }
+    catch (error) { if (error?.code !== 'EADDRINUSE' || attempt >= 5) throw error; }
+  }
+}
+
 /** 桌面版一侧的替身：一个旧办法的本机房间（真实的托管组合当本机文档服务）、房间里已有内容、加上本机恢复接口 */
 async function desktopRoom(t, { service, registerWith = null }) {
-  const root = temp(), options = { host: '127.0.0.1', docPort: 0, assetPort: 0, trustLoopback: false, clusterToken: key(), log: () => {} };
-  const source = await startHostedCombo({ ...options, ...await hostedPorts(), dataDir: root });
+  const { combo: source, root } = await startCombo();
   const rec = source.credentialStore.create({ name: 'move-guard-room', mode: 'free', kdf: { alg: 'pbkdf2-sha256', iter: 100000 }, creator: cred('host'), project: cred() });
   const base = `http://127.0.0.1:${source.docPort}`;
   const protocols = await buildAuthProtocols({ base, projectId: rec.projectId, username: 'host', as: 'creator', deviceId: DEVICE, deviceName: 'isolated-device', key: rec.creator.key });
@@ -140,9 +153,9 @@ test('预检问不到节点：同样停在动手之前，本机房间不变', { 
   assert.equal(roomUnavailableReason(room.source.credentialStore.peek(room.rec.projectId)), null);
 });
 
-test('旧模式节点：搬到云端照旧走完，本机房间记为已搬走，云端拿到原房间', { timeout: 60_000 }, async t => {
-  const root = temp(), options = { host: '127.0.0.1', docPort: 0, assetPort: 0, trustLoopback: false, clusterToken: key(), log: () => {} };
-  const cloud = await startHostedCombo({ ...options, ...await hostedPorts(), dataDir: root, localDevice: { deviceId: 'isolated-cloud-device-01', deviceName: 'isolated-cloud' } });
+// 两个时限只为防卡死(机器很忙时整条搬迁要四五十秒,实测 20 份并发加 10 个占满处理器的进程):放宽到不会因机器快慢误报,断言不变
+test('旧模式节点：搬到云端照旧走完，本机房间记为已搬走，云端拿到原房间', { timeout: 240_000 }, async t => {
+  const { combo: cloud } = await startCombo({ localDevice: { deviceId: 'isolated-cloud-device-01', deviceName: 'isolated-cloud' } });
   t.after(() => cloud.close());
   const service = `http://127.0.0.1:${cloud.docPort}`;
   const health = await (await fetch(`${service}/healthz`)).json();
@@ -150,7 +163,7 @@ test('旧模式节点：搬到云端照旧走完，本机房间记为已搬走�
   const room = await desktopRoom(t, { service, registerWith: service });
   const moved = await room.call('move-hosted');
   assert.equal(moved.status, 200, JSON.stringify(moved.result)); assert.equal(moved.result.ok, true);
-  await waitFor(async () => (await room.call('move-status', { taskVersion: 3 })).result.state === 'complete', 30000, 'move complete');
+  await waitFor(async () => (await room.call('move-status', { taskVersion: 3 })).result.state === 'complete', 180_000, 'move complete');
   assert.equal(roomUnavailableReason(room.source.credentialStore.peek(room.rec.projectId)), 'relocated');
   assert.equal(roomUnavailableReason(cloud.credentialStore.peek(room.rec.projectId)), null);
   assert.ok(cloud.credentialStore.peek(room.rec.projectId), '云端拿到原房间');
