@@ -19,6 +19,7 @@ import { certificateFingerprint } from '../account/client.mjs';
 import { createConversationClient } from '../agent-service/conversation-client.mjs';
 import { createAccountConversationService } from '../agent/service/conversation-policy.mjs';
 import { createAgentHttp } from '../agent-service/http.mjs';
+import { freePorts } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -86,7 +87,8 @@ test('Agent history cannot send an old real access RPC result after a private fe
     if (!await instancesHandler(req, res) && !await controlsHandler(req, res) && !await conversationsHandler(req, res)) {
       res.writeHead(404); res.end(); }
   });
-  const options = { origin: 'https://127.0.0.1:6600', tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 };
+  const [docPort, agentPort] = await freePorts(2);
+  const options = { origin: `https://127.0.0.1:${docPort}`, tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 };
   const client = createConversationClient(options), runClient = createRunClient(options);
   const controlClient = createConversationControlClient({ ...options, runClient, receiptFile: path.join(dir, 'agent-read.sqlite') });
   client.useReadControl(controlClient);
@@ -105,13 +107,13 @@ test('Agent history cannot send an old real access RPC result after a private fe
   t.after(async () => { release.resolve(); request?.destroy(); await controlClient.close(); client.close(); runClient.close();
     readControl.close(); await close(agent); await close(doc); instances.close();
     account.close(); ledger.close(); fs.rmSync(dir, { recursive: true }); });
-  await listen(doc, 6600); await listen(agent, 6601);
+  await listen(doc, docPort); await listen(agent, agentPort);
   await controlClient.start();
   const deadline = Date.now() + 5000;
   while (!controlClient.describe().connected) { if (Date.now() > deadline) throw new Error('control-not-ready');
     await new Promise(resolve => setTimeout(resolve, 5)); }
   const body = new Promise((resolve, reject) => {
-    request = http.get(`http://127.0.0.1:6601/v1/conversations/${conversationId}/events`, res => {
+    request = http.get(`http://127.0.0.1:${agentPort}/v1/conversations/${conversationId}/events`, res => {
       const chunks = []; res.on('data', bytes => chunks.push(bytes));
       res.once('close', () => resolve(Buffer.concat(chunks).toString('utf8'))); res.on('error', () => {});
     }); request.once('error', reject);

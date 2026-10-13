@@ -132,7 +132,9 @@ export function createRunAssetTransport({ runClient, assetOrigin, assetTls, asse
       if (!((method === 'PUT' && /^\/internal\/v2\/asset\/run\/media\/[a-f0-9]{64}\/(?:0|[1-9][0-9]*)$/.test(url)) ||
           (method === 'POST' && url === `${mediaRoot}/complete`)) || !url.startsWith(`${mediaRoot}/`))
         fail(403, 'resource-scope-mismatch');
-    } else if (method !== 'POST' || url !== '/internal/v2/asset/run/refs/verify')
+    // 核对引用的票据：除了核对本身，还许凭它问「这份字节收到哪几片了」（导入前的对账，只读）。
+    // 「项目素材」的导入就是这样问的；原来这里只放行核对那一条，导入在本机就被拒了。
+    } else if (!((method === 'POST' && url === '/internal/v2/asset/run/refs/verify') || (method === 'GET' && url === `${mediaRoot}/chunks`)))
       fail(403, 'resource-scope-mismatch');
     const tuple = assetHttpTuple({ projectId: context.projectId, runGrantId: context.runGrantId,
       action: held.body.action, ticketDigest: ticketDigest(held.ticket), resourceRev: held.resourceRev,

@@ -36,7 +36,7 @@ test('operation-wiring real WS subprocess crashes recover original store from ex
     const result = await closed; clearTimeout(timer);
     fs.writeFileSync(path.join(dir, 'child.log'), Buffer.concat(output));
     assert.equal(result.code, 73, `${phase}: actual abrupt exit not reached (see ${path.join(dir, 'child.log')})`);
-    const f = await operationFixture({ dir, port: 5761 });
+    const f = await operationFixture({ dir });
     try {
       const b = await f.connect('b');
       const hasFence = phase.includes('fence-') && phase !== 'history:fence-request-before-commit';

@@ -120,6 +120,7 @@ export const LOOK_WORKER_PREFIXES = Object.freeze(['/api/vision/', '/api/ai/visu
 const sha256hex = (text) => createHash('sha256').update(text).digest('hex');
 const NONCE_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const PROJECT_ID_RE = /^sp_[a-z2-7]{26}$/;
+const RUN_REF_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /** 用途串：与握手的 `promptcut.service.v1` 不同，签名不能互相挪用 */
 export function lookPurpose({ service, instanceId, ts, nonce, digest }) {
@@ -458,18 +459,31 @@ export function createLook({
         for (const [k, v] of Object.entries(msg.cards).slice(0, 512)) if (typeof k === 'string' && k.length <= 256) cards[k] = Number.isFinite(v) ? v : null;
       }
       const timeoutMs = Math.min(limits.maxTimeoutMs, Math.max(2000, Number.isFinite(msg.timeoutMs) ? msg.timeoutMs : limits.timeoutMs));
+      // 账号模式的 Agent 服务随请求报「这是哪条任务要的」。形状不对就拒；对了只是记在这条请求上（状态口与日志看得到），
+      // 这里不向文档服务核它——渲染服务认的仍是服务私钥的签名
+      let run = null;
+      if (msg.run !== undefined) {
+        const r = msg.run;
+        if (!r || typeof r !== 'object' || Array.isArray(r) || Object.keys(r).sort().join(',') !== 'conversationId,runGrantId,runId'
+          || Object.values(r).some((v) => typeof v !== 'string' || !RUN_REF_RE.test(v))) {
+          stats.refused += 1;
+          return { status: 400, body: { ok: false, error: 'bad-request' } };
+        }
+        run = { runGrantId: r.runGrantId, runId: r.runId, conversationId: r.conversationId };
+      }
       const added = requests.add({
         id: queued ? msg.requestId : `sync-${(syncSeq += 1).toString(36).padStart(4, '0')}-${randomBytes(9).toString('base64url')}`,
         owner: who.instanceId, projectId: msg.projectId, path: msg.path, tool: route0.tool, cards, body: msg.body,
         persist: queued, deadline: queued ? null : now() + timeoutMs,
         attemptMs: route0.attempt === 'caller' ? timeoutMs : null, retries: Number.isInteger(route0.retries) ? route0.retries : null,
+        run,
       });
       if (added.conflict) { stats.refused += 1; return { status: 409, body: { ok: false, error: 'request-id-taken' } }; }
       // 登记的已经到了上限（防磁盘被占满的硬上限）：调用方过一会儿再登记；它不把这当成「没看成」
       if (added.full) { stats.refused += 1; log('look.refused', { projectId: msg.projectId, reason: 'queue-full' }); return fail(503, 'busy'); }
       const e = added.entry;
       requests.touch(e);
-      if (added.created) log('look.queued', { id: e.id.slice(0, 8), projectId: e.projectId, tool: e.tool, mode: queued ? 'poll' : 'sync', position: requests.position(e), persisted: e.persisted });
+      if (added.created) log('look.queued', { id: e.id.slice(0, 8), projectId: e.projectId, tool: e.tool, mode: queued ? 'poll' : 'sync', position: requests.position(e), persisted: e.persisted, ...(e.run ? { runGrant: e.run.runGrantId.slice(0, 12) } : {}) });
       kick();
       if (queued) return isFinal(e.state) ? deliver(e) : pending202(requests, e);
       // 同步等：连接一直挂到出结果。到点由 pump 按时限结掉

@@ -6,7 +6,9 @@
  * 云节点上没有编辑器进程,这里照同一份命令行与 JSONL 约定起同一个包,规矩是:
  *
  *   - **外部程序只经工作区的受限子进程起**(`workspace.mjs` 的 `spawn`):工作目录是这个对话的工作目录,环境变量按白名单重建,
- *     不带任何 `PROMPTCUT_*`、服务的私钥目录与数据目录;
+ *     不带任何 `PROMPTCUT_*`、服务的私钥目录与数据目录;起出来的是一棵杀得掉的进程树,超时、取消、超限时杀的是整棵树
+ *     (Python 再起的下载与 ffmpeg 一起),等到 exit + close 才算完(公共实现 `perception/runner.mjs`);
+ *   - **Python 用隔离模式起**(`-I`):工作目录里是成员和模型弄进来的文件,不让它排进模块搜索路径;包目录只来自部署配置;
  *   - **只经出网闸的代理出网**(`egress.mjs` 的 `startProxy`):子进程的环境里只有指向这个回环代理的 `HTTP_PROXY` / `HTTPS_PROXY`,
  *     代理对每个目标做与出网闸相同的检查——回环、内网、云厂商元数据地址、同机服务一律到不了。每次调用起一个代理、用完关掉;
  *   - **下载物只落在对话的工作目录**(`collect/<作业号>/`),进素材库走 `import_media` 的那条路(凭成员本人的素材票据写素材服务、
@@ -19,9 +21,9 @@
  * 登录态(`collect_login`)要用户自己扫码,是「要操作发起人界面」的工具;云端不存任何站点的 cookies,下载按未登录的画质。
  */
 import { randomBytes } from 'node:crypto';
-import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isolatedPythonArgs, splitRoots, superviseChild } from './perception/runner.mjs';
 
 export const COLLECT_DEFAULTS = Object.freeze({
   /** 查状态、探测、搜索的时限 */
@@ -64,34 +66,29 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
   const limits = { ...COLLECT_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
   let running = 0;
-  const prefix = config ? (Array.isArray(config.args) && config.args.length ? config.args : ['-m', 'promptcut_collect']) : [];
-
-  function killTree(child) {
-    if (!child || child.exitCode !== null) return;
-    if (process.platform === 'win32' && child.pid) {
-      try { nodeSpawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }); return; } catch { /* 退回下面 */ }
-    }
-    try { child.kill('SIGKILL'); } catch { /* 已经退了 */ }
-  }
+  /** `config.args` 只给探针与单测(把解释器整个换成替身脚本,见 `readCollectConfig`);正式的一律隔离模式,包目录来自部署配置 */
+  const stubArgs = config && Array.isArray(config.args) && config.args.length ? config.args : null;
+  const pythonArgv = (sub, args) => (stubArgs
+    ? [...stubArgs, sub, ...args]
+    : isolatedPythonArgs('promptcut_collect', { roots: splitRoots(config.pythonPath), args: [sub, ...args] }));
 
   /**
-   * 起一次采集子进程:经工作区(工作目录、环境白名单)、只给它出网闸的代理。逐行读 JSONL。
-   * 回 `{ code, events, stderrTail, kill }` 的承诺与 `child`。
+   * 起一次采集子进程:经工作区(工作目录、环境白名单、进程树)、只给它出网闸的代理。逐行读 JSONL。
+   * 回 `{ child, done, kill }`:`done` 在整棵进程树 exit + close、代理也关了之后解析成 `{ code, events, stderrTail }`;`kill` 杀整棵树。
    */
   async function runCollect(ws, sub, args, { timeoutMs, onEvent = () => {}, signal } = {}) {
     if (!config) throw Object.assign(new Error(NOT_INSTALLED), { notInstalled: true });
     const proxy = await egress.startProxy();
     const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH';
+    // PYTHON* 环境变量在隔离模式下不生效(无缓冲、UTF-8、不写字节码、包目录都由命令行给),这里不设
     const env = {
       HTTP_PROXY: proxy.url, HTTPS_PROXY: proxy.url, ALL_PROXY: proxy.url, http_proxy: proxy.url, https_proxy: proxy.url, all_proxy: proxy.url,
       NO_PROXY: '', no_proxy: '',
-      PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1',
-      ...(config.pythonPath ? { PYTHONPATH: config.pythonPath } : {}),
       ...(config.ffmpegDir ? { [pathKey]: `${config.ffmpegDir}${path.delimiter}${process.env[pathKey] ?? ''}` } : {}),
     };
     let child;
     try {
-      child = ws.spawn(config.python, [...prefix, sub, ...args], { env, timeoutMs });
+      child = ws.spawn(config.python, pythonArgv(sub, args), { env });
     } catch (err) {
       await proxy.close().catch(() => {});
       throw err;
@@ -110,23 +107,19 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
         if (events.length > 5000) events.splice(0, 1000);
       }
     };
-    child.stdout?.on('data', (d) => feed(d.toString('utf8')));
-    child.stderr?.on('data', (d) => { for (const l of d.toString('utf8').split(/\r?\n/)) if (l.trim()) { stderrTail.push(l.trim().slice(0, 300)); if (stderrTail.length > 20) stderrTail.shift(); } });
-    const onAbort = () => killTree(child);
-    signal?.addEventListener('abort', onAbort, { once: true });
-    const done = new Promise((resolve) => {
-      let settled = false;
-      const finish = (code) => {
-        if (settled) return;
-        settled = true;
-        if (buf.trim()) feed('\n');
-        signal?.removeEventListener('abort', onAbort);
-        void proxy.close().catch(() => {}).then(() => resolve({ code, events, stderrTail }));
-      };
-      child.once('error', (err) => { stderrTail.push(String(err?.message ?? err).slice(0, 300)); finish(-1); });
-      child.once('close', (code) => finish(code ?? -1));
+    // 采集还没有接运行资源登记器(它拿不到这一轮的可信上下文,接线归最后的接线包):取消走调用方给的信号,超时在这里
+    const run = await superviseChild(child, {
+      timeoutMs, signal,
+      onStdout: (d) => feed(d.toString('utf8')),
+      onStderr: (d) => { for (const l of d.toString('utf8').split(/\r?\n/)) if (l.trim()) { stderrTail.push(l.trim().slice(0, 300)); if (stderrTail.length > 20) stderrTail.shift(); } },
     });
-    return { child, done, kill: () => killTree(child) };
+    const done = run.done.then(async (end) => {
+      if (buf.trim()) feed('\n');
+      if (end.spawnError) stderrTail.push(String(end.spawnError?.message ?? end.spawnError).slice(0, 300));
+      await proxy.close().catch(() => {});
+      return { code: end.spawnError ? -1 : (end.code ?? -1), events, stderrTail };
+    });
+    return { child, done, kill: run.kill };
   }
 
   const pickError = (events, stderrTail, code) => {
@@ -406,8 +399,9 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
 
 /**
  * 从环境变量读节点上的采集工具(部署决定)。没配回 null。
- *   PROMPTCUT_AGENT_COLLECT_PYTHON     装了 yt-dlp 的 Python 解释器(绝对路径;`-m promptcut_collect` 用检出里的 `python/` 目录)
- *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS  **只给探针与单测**:JSON 数组,替换掉 `-m promptcut_collect`(把解释器换成一个替身脚本)。
+ *   PROMPTCUT_AGENT_COLLECT_PYTHON     装了 yt-dlp 的 Python 解释器(绝对路径;隔离模式起 `promptcut_collect`,包目录是检出里的 `python/`。
+ *                                      隔离模式不看用户 site:yt-dlp 要装在这个解释器自己的 site-packages 或虚拟环境里)
+ *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS  **只给探针与单测**:JSON 数组,替换掉隔离模式的开关与包名(把解释器换成一个替身脚本)。
  *                                      生产不设;设了日志里有 `agent.collect.test-runner`
  */
 export function readCollectConfig(env, { root }) {

@@ -137,6 +137,7 @@ export function createRenderRequests({ dir = null, now = Date.now, log = () => {
           // 停机的那一段没人能来问：从现在起算「调用方多久没来问」
           lastPollAt: now(), blockedReason: null, result: null, waiters: new Set(), restored: true, deadline: null,
           attemptMs: Number.isFinite(req.attemptMs) ? req.attemptMs : null, retries: Number.isInteger(req.retries) ? req.retries : null,
+          run: req.run && typeof req.run === 'object' ? req.run : null,
         });
         nextSeq = Math.max(nextSeq, seq + 1);
         out.restored += 1;
@@ -150,7 +151,7 @@ export function createRenderRequests({ dir = null, now = Date.now, log = () => {
      * 登记一个请求。同一个 `id` 再登记回原来那一条（幂等：调用方没收到回执就重发）。
      * @returns {{ entry: object, created: boolean } | { full: true } | { conflict: true }} `conflict`：这个 id 是别的调用方登记的
      */
-    add({ id, owner = null, projectId, path: pathname, tool = null, cards = {}, body, persist = false, deadline = null, attemptMs = null, retries = null }) {
+    add({ id, owner = null, projectId, path: pathname, tool = null, cards = {}, body, persist = false, deadline = null, attemptMs = null, retries = null, run = null }) {
       const had = entries.get(id);
       if (had) return had.owner === owner ? { entry: had, created: false } : { conflict: true };
       if (active().length >= limits.maxQueued) { counts.full += 1; return { full: true }; }
@@ -161,12 +162,14 @@ export function createRenderRequests({ dir = null, now = Date.now, log = () => {
         lastPollAt: at, blockedReason: null, result: null, waiters: new Set(), deadline,
         // 这条接口自己的时限与重试次数（没有就用调度的缺省：一分钟、三次）
         attemptMs, retries,
+        // 账号模式下调用方报的「这是哪条任务要的」（任务授权号、任务号、对话号）。是调用方的说法，这里只记不核
+        run,
       };
       nextSeq += 1;
       if (persist && dir !== null) {
         try {
           if (!ensureDir()) throw new Error('dir');
-          writeAtomic(reqFile(id), JSON.stringify({ v: 1, id, seq: e.seq, owner, projectId, path: pathname, tool, cards, createdAt: at, ...(attemptMs !== null ? { attemptMs } : {}), ...(retries !== null ? { retries } : {}), body }));
+          writeAtomic(reqFile(id), JSON.stringify({ v: 1, id, seq: e.seq, owner, projectId, path: pathname, tool, cards, createdAt: at, ...(attemptMs !== null ? { attemptMs } : {}), ...(retries !== null ? { retries } : {}), ...(run ? { run } : {}), body }));
           e.persisted = true;
           diskOk = true;
         } catch (err) {

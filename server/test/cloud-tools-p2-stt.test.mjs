@@ -64,7 +64,8 @@ test('stt_status reports environment without disk paths; a read-only member may 
   assert.ok(!JSON.stringify(status).includes('secret'), 'no executable, pylibs, models or ffmpeg paths in the answer');
   const spawn = f.calls.spawns[0];
   assert.deepEqual(spawn.sub, ['status']);
-  assert.deepEqual(spawn.args.slice(0, 3), ['-I', '-m', 'promptcut_stt']);
+  assert.deepEqual(spawn.args.slice(0, 7), ['-I', '-X', 'utf8', '-u', '-B', '-m', 'promptcut_stt'], '隔离模式起(runner.mjs 的 isolatedPythonArgs)');
+  assert.deepEqual(Object.keys(spawn.env).filter((k) => /^PYTHON/i.test(k)), [], '隔离模式下 PYTHON* 环境变量不生效,不再设');
   assert.equal(spawn.cwd, f.ws.dir());
   assert.deepEqual(Object.keys(spawn.env).filter((k) => /^PROMPTCUT_/i.test(k)).sort(), ['PROMPTCUT_MODELS', 'PROMPTCUT_PYLIBS']);
   assert.equal(spawn.env.AGENT_DELEGATION_TOKEN_TEST, undefined);

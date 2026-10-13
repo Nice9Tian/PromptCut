@@ -4,7 +4,7 @@ import { operationFixture } from './operation-wiring-fixture.mjs';
 import { stateBlobName } from '../docservice/modules/project.mjs';
 const [dir, cut] = process.argv.slice(2);
 const fault = prefix => phase => { if (`${prefix}:${phase}` === cut) process.exit(73); };
-const f = await operationFixture({ dir, port: 5761, failpoint: fault('doc'), historyFailpoint: fault('history'),
+const f = await operationFixture({ dir, failpoint: fault('doc'), historyFailpoint: fault('history'),
   accountFailpoint: fault('account'), projectionFailpoint: fault('projection'), acknowledgeFence: async () => {
     const saved = JSON.parse(f.store.readBlob(stateBlobName(f.projectId)));
     if (saved.rev !== 2 || saved.project.title !== 'complete tool result') throw Error('projection-not-complete');

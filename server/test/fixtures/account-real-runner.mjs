@@ -22,9 +22,9 @@ export const REAL_RUNNER_PROMPT = '验证真实工具与项目修改。\n```mock
 // True VH + hosted doc/order/instance/read control + independent asset. Only
 // model responses use the existing scripted mock provider; runner/tools/SSR/WSS
 // and accepted operation projection are the real product implementations.
-export async function startAccountRealRunnerFixture({ publicHandler = null, diagnostic = () => {} } = {}) {
+export async function startAccountRealRunnerFixture({ publicHandler = null, diagnostic = () => {}, ports = REAL_RUNNER_PORTS, agentPort = 6706, controlPort = 6709 } = {}) {
   let executor, vite, runClient; const logs = [], humanSockets = new Set();
-  const fixture = await startCloudQueueUserFixture({ ports: [...REAL_RUNNER_PORTS], agentPort: 6706, publicHandler,
+  const fixture = await startCloudQueueUserFixture({ ports: [...ports], agentPort, publicHandler,
     diagnostic, async createAgentService({ agentOptions, agentClient, agentRunClient, agentReadControl, dir, combo: actualCombo }) {
       runClient = agentRunClient;
       vite = await createServer({ configFile: false, root: ROOT, cacheDir: path.join(dir, 'agent-vite-cache'),
@@ -33,7 +33,7 @@ export async function startAccountRealRunnerFixture({ publicHandler = null, diag
       try {
         executor = await createAccountExecutorAssembly({ dataDir: path.join(dir, 'actual-agent'), doc: agentOptions,
           runClient: agentRunClient, conversationClient: agentClient, readControl: agentReadControl,
-          controlPort: 6709, root: ROOT, loadModule: id => vite.ssrLoadModule(id),
+          controlPort, root: ROOT, loadModule: id => vite.ssrLoadModule(id),
           modelConfig: async () => ({ vendor: 'mock', model: 'scripted-local-response' }),
           log: (event, fields) => logs.push({ event, code: fields?.code }) });
         return { service: executor.service, async close() {
