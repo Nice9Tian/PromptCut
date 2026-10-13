@@ -4,10 +4,10 @@
  * 跑:npm test -- server/test/cloud-tools-w1-egress.test.mjs
  *
  * 真的:puppeteer 自带的 Chrome for Testing(无头);本测试在 127.0.0.1 上起的三个服务——
- *   「公网上的站」127.0.0.1:28390(出网闸的测试例外只放行这一个「IP:端口」)、
- *   「内网里的服务」127.0.0.1:28391(没有放行;它被连上一次就算漏)、
- *   「重绑定后的内网地址」127.0.0.2:28390(同端口、另一个回环地址,没有放行);
- *   另有一个收 UDP 的假 STUN(127.0.0.1:28392)。DNS 用可注入的解析函数模拟。全程不连公网。
+ *   「公网上的站」127.0.0.1:<站点端口>(出网闸的测试例外只放行这一个「IP:端口」)、
+ *   「内网里的服务」127.0.0.1:<内网端口>(没有放行;它被连上一次就算漏)、
+ *   「重绑定后的内网地址」127.0.0.2:<站点端口>(同端口、另一个回环地址,没有放行);
+ *   另有一个收 UDP 的假 STUN(127.0.0.1:<STUN 端口>)。DNS 用可注入的解析函数模拟。全程不连公网。
  *
  *   W1-EGRESS-01  纯函数:地址规范化(只收 http/https)、页面请求按协议放行、部署者追加的启动参数过滤、启动参数里该有的都有
  *   W1-EGRESS-02  代理自己(不起浏览器):明文与 CONNECT 每个目标过闸;同一条连接上换目标照样重查;隧道数上限;关闭后连接都断
@@ -47,11 +47,9 @@ import { createEgressGate } from '../agent/service/egress.mjs';
 import { normalizeWebTarget, pageRequestAllowed, filterExtraArgs, ALLOWED_EXTRA_ARGS, hostedNetworkArgs, startBrowserProxy, egressRefusalText } from '../web/hosted/network.mjs';
 import { launchHostedSession, HOSTED_BROWSER_ARG_PREFIX } from '../web/hosted/session.mjs';
 import { HOSTED_BROWSER_DEFAULTS } from '../agent/service/hosted-browser.mjs';
+import { freePorts } from './free-ports.mjs';
 
-const SITE_PORT = 28390;
-const INTERNAL_PORT = 28391;
-const STUN_PORT = 28392;
-const TURN_PORT = 28393;
+const [SITE_PORT, INTERNAL_PORT, STUN_PORT, TURN_PORT, OTHER_PORT] = await freePorts(5);
 const ORIGIN = `http://127.0.0.1:${SITE_PORT}`;
 const INTERNAL = `http://127.0.0.1:${INTERNAL_PORT}`;
 const ALLOW = [`127.0.0.1:${SITE_PORT}`];
@@ -190,7 +188,7 @@ test('W1-EGRESS-02 代理自己:每个目标过闸,同一条连接上换目标�
     assert.equal((await via('http://169.254.169.254/latest/meta-data/')).refused, 'blocked-address');
     assert.equal((await via('http://10.1.2.3/')).refused, 'blocked-address');
     assert.equal((await via('http://[::1]/')).refused, 'blocked-address');
-    assert.equal((await via('http://mixed.test:28390/')).refused, 'port', '一个名字同时指着放行的与内网的:整个拒');
+    assert.equal((await via(`http://mixed.test:${SITE_PORT}/`)).refused, 'port', '一个名字同时指着放行的与内网的:整个拒');
     assert.equal((await via('http://nowhere.test/')).refused, 'unresolved');
     assert.equal((await via(`${ORIGIN}/page2`)).status, 200, '拒过之后放行的照常');
     agent.destroy();
@@ -318,7 +316,7 @@ test('W1-EGRESS-04 工具入口:内网、metadata、IPv6、非 http(s) 协议当
     ['http://[fe80::1]/', 'blocked-address'], ['http://[fc00::1]/', 'blocked-address'], ['http://[64:ff9b::a9fe:a9fe]/', 'blocked-address'], ['http://[2002:a9fe:a9fe::1]/', 'blocked-address'],
     ['http://metadata.google.internal/', 'blocked-address'], ['http://intranet.corp/', 'blocked-address'], [`http://mixed.test:${SITE_PORT}/`, 'port'],
     ['http://nowhere.test/', 'unresolved'], ['https://example.com:22/', 'unresolved'], [`http://user:pw@127.0.0.1:${SITE_PORT}/`, 'credentials'],
-    [`http://site.test:${SITE_PORT + 5}/`, 'port'],
+    [`http://site.test:${OTHER_PORT}/`, 'port'],
   ];
   for (const [url, code] of cases) {
     const result = await f.tools.call('web_open', { url }, context);
@@ -452,7 +450,7 @@ test('W1-EGRESS-08 DNS 重绑定:页面开着的时候把名字改指内网,之�
   const { context } = await f.newRun();
   const before = { rebound: rebound.state.connections, site: site.count('/whoami') };
 
-  // 第一次解析:放行的地址。页面开在 http://rebind.test:28390 这个源上
+  // 第一次解析:放行的地址。页面开在 http://rebind.test:<站点端口> 这个源上
   let view = await f.tools.call('web_open', { url: `http://rebind.test:${SITE_PORT}/rebind` }, context);
   assert.equal(view.ok, true, view.error);
   view = await f.tools.call('web_click', { u: item(view, '再取一次').u }, context);
