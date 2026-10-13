@@ -3237,7 +3237,7 @@ export class FramePipeline {
       // 本机能不能产流(`queueStreamSpecs` 那两道闸只管切分方自己产的那一份)
       browserStreamsFor: clips => this.listStreamSpecs(entry, clips).map(queueStreamOf),
       // 只为导出的清单计划用(`local-node.mjs` 的 `listPlanOverrides`):清单里每个片段的导出位图怎么出、哪些出不了
-      exportStreamsFor: clips => { const { specs, unsupported } = this.exportStreamSpecs(entry, clips); return { streams: specs.map(exportStreamOf), unsupported }; },
+      exportStreamsFor: (clips, salt) => { const { specs, unsupported } = this.exportStreamSpecs(entry, clips, salt); return { streams: specs.map(exportStreamOf), unsupported }; },
       // 任务书「甲三」:清单计划里切分方自己的那一份出不出,看本机此刻能不能产流(有生产者、开关开着、探到了编码器 ——
       // 与 `node.hello` 报的 `capabilities.streams` 同一个判据)。托管方的渲染节点另看这个项目的「生成轨道流」(执行器按项目再收一道)。
       // 本机判没判重不看:清单是发布方判的,流任务回来时执行器按清单里的片段把它对回这一版(`prerender-executor.mjs` 的 `matchStream`)
@@ -3291,7 +3291,7 @@ export class FramePipeline {
    * `unsupported` 是出不了的片段和原因 —— `no-card`(这一版的卡片计划里没有它:节点手里没有这张卡的代码,或片段已经不在)、
    * `no-stream`(这张卡没有任何一种流的形状,例如依赖下层又带三维外框)。本机还没有环境指纹时全部算 `no-fingerprint`。
    */
-  exportStreamSpecs(entry, clips) {
+  exportStreamSpecs(entry, clips, salt = '') {
     const wanted = [...new Set((Array.isArray(clips) ? clips : [...(clips ?? [])]).filter(id => typeof id === 'string' && id))];
     const own = this.envFingerprint;
     if (!own) return { specs: [], unsupported: wanted.map(clipId => ({ clipId, reason: 'no-fingerprint' })) };
@@ -3307,7 +3307,7 @@ export class FramePipeline {
       const hit = planned.find(spec => Array.isArray(spec?.clipIds) && spec.clipIds.length === 1 && spec.clipIds[0] === clipId);
       let inputSig = null;
       try { inputSig = hit ? streamInputSig(entry.project, { clipIds: [clipId], kind: hit.kind }) : null; } catch { inputSig = null; }
-      const spec = hit ? exportSpecOf({ ...hit, ...(inputSig ? { inputSig } : {}) }, own) : null;
+      const spec = hit ? exportSpecOf({ ...hit, ...(inputSig ? { inputSig } : {}) }, own, salt) : null;
       if (spec) specs.push(spec);
       else unsupported.push({ clipId, reason: controls.has(clipId) ? 'no-stream' : 'no-card' });
     }

@@ -42,9 +42,17 @@ const KEY_RE = /^[a-f0-9]{64}$/;
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const fail = (message, extra = {}) => Object.assign(new Error(message), extra);
 
+/**
+ * 重新做的标识(`salt`):页面上一次导出失败之后再点导出,计划里带一个新的标识(`input.exportSalt`),导出键跟着换,
+ * 这一次的任务就是新任务 —— 队列里失败的任务在保留期内不会重开,不换键的话重新导出也只会拿到上一次的失败。
+ * 只认小写字母与数字、最多 32 位;别的当没带。平时(没失败过)不带,同一份内容的结果键不变、再导出时直接用。
+ */
+export const exportSaltOf = value => (typeof value === 'string' && /^[0-9a-z]{1,32}$/.test(value) ? value : '');
+
 /** 流的内容键 → 导出位图的内容键 */
-export function exportFramesKey(streamContentKey) {
-  return sha256(`export-frames:${EXPORT_FRAMES_VERSION}\n${streamContentKey ?? ''}`);
+export function exportFramesKey(streamContentKey, salt = '') {
+  const tail = exportSaltOf(salt);
+  return sha256(`export-frames:${EXPORT_FRAMES_VERSION}\n${streamContentKey ?? ''}${tail ? `\n${tail}` : ''}`);
 }
 
 /* ------------------------------------------------------------------ PNG */
@@ -98,13 +106,14 @@ export function shotToPng(shot) {
  * 一条流的计划(`frame-stream.mjs` 的 `planStreams` 的一项)→ 导出位图的计划。只认单卡流(平面的独立卡、源依赖卡、三维外框的卡)
  * 和依赖下层的流;组流不认(导出位图一张卡一份,调用方算流时不合并)。回 null = 这条流出不了导出位图。
  */
-export function exportSpecOf(spec, envFingerprint) {
+export function exportSpecOf(spec, envFingerprint, salt = '') {
   if (!spec || typeof spec !== 'object') return null;
   if (!(spec.kind === 'card' || spec.kind === 'below') || !Array.isArray(spec.clipIds) || spec.clipIds.length !== 1) return null;
   if (typeof spec.contentKey !== 'string' || !spec.contentKey || typeof envFingerprint !== 'string' || !envFingerprint) return null;
   if (!isStreamOrigin(spec.originFrame) || !Number.isInteger(spec.lastFrame) || !Number.isInteger(spec.lastSegment) || spec.lastSegment < 0) return null;
-  const exportKey = exportFramesKey(spec.contentKey);
-  return { ...spec, exportKey, exportResultKey: sha256(`${exportKey}\n${envFingerprint}`) };
+  const tail = exportSaltOf(salt);
+  const exportKey = exportFramesKey(spec.contentKey, tail);
+  return { ...spec, exportKey, exportResultKey: sha256(`${exportKey}\n${envFingerprint}`), ...(tail ? { exportSalt: tail } : {}) };
 }
 
 /** 交给切分和回给页面的那一份(不带成员卡的控件等大对象) */
@@ -115,6 +124,7 @@ export function exportStreamOf(spec) {
     fps: spec.fps, rect: spec.bound ? { ...spec.bound } : null, offset: spec.offset ? { ...spec.offset } : null,
     ...(spec.kind === 'below' ? { belowClipIds: [...(spec.belowClipIds ?? [])] } : {}),
     ...(spec.inputSig ? { inputSig: spec.inputSig } : {}),
+    ...(spec.exportSalt ? { salt: spec.exportSalt } : {}),
   };
 }
 

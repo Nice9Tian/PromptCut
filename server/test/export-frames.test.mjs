@@ -158,7 +158,9 @@ test('EF-05 计划完成时回给页面的索引', () => {
   const index = exportIndexOf({ exportStreams: [s1, s2], exportUnsupported: [{ clipId: 'c3', reason: 'no-card' }], published, projectRev: 9, segmentsPerTask: 8 });
   assert.equal(index.projectRev, 9);
   assert.equal(index.streams.length, 1);
-  assert.deepEqual(index.streams[0], { clipId: 'c1', kind: 'card', plane: 'local', resultKey: resultKeyOf(s1.exportKey, FP), envFingerprint: FP,
+  const { tasks: indexTasks, ...row } = index.streams[0];
+  assert.equal(indexTasks.length, 2, '每条流的任务原样带一份');
+  assert.deepEqual(row, { clipId: 'c1', kind: 'card', plane: 'local', resultKey: resultKeyOf(s1.exportKey, FP), envFingerprint: FP,
     originFrame: 12, lastFrame: 143, lastSegment: 8, segmentsPerTask: 8, fps: 30, rect: s1.rect, offset: s1.offset, inputSig: 's1-abc' });
   assert.deepEqual(index.unsupported, [{ clipId: 'c3', reason: 'no-card' }, { clipId: 'c2', reason: 'publish-failed' }]);
 });

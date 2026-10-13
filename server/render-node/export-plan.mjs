@@ -20,7 +20,10 @@ export const isExportOnlyPlan = task => isObj(task) && task.kind === 'plan' && i
  * 只为导出的计划完成时回给页面的索引(随 `task.complete` 的 `result.exportIndex`,页面从 `task.done` 读):
  *
  *   { v, projectRev, streams: [{ clipId, kind, plane, solo?, resultKey, envFingerprint, originFrame, lastFrame, lastSegment, segmentsPerTask,
- *                                fps, rect, offset, inputSig? }], unsupported: [{ clipId, reason }] }
+ *                                fps, rect, offset, inputSig?, tasks }], unsupported: [{ clipId, reason }] }
+ *
+ * `tasks`:这条流的每一份导出位图任务原样带上(发布时的那一份)。页面等清单的时候隔一会儿把还没到的任务原样再发布一次:
+ * 回包里的状态告诉它任务失败了没有(失败的不会再有通知);任务已经不在了(页面断线太久,订阅被清、任务被删)就此重建。
  *
  * `streams` 只列任务全部发布成功的那几条(每条流的每一段任务都在 `published` 里);没发全的记进 `unsupported`(`publish-failed`)。
  * `projectRev` 是切分实际按的那一版(项目往前走了时不是计划指的那一版);页面拿 `inputSig` 和自己手里那一版项目算的比。
@@ -50,6 +53,7 @@ export function exportIndexOf({ exportStreams = [], exportUnsupported = [], publ
       originFrame: stream.originFrame, lastFrame: stream.lastFrame, lastSegment: stream.lastSegment, segmentsPerTask: per,
       fps: stream.fps, rect: stream.rect, offset: stream.offset ?? null,
       ...(stream.inputSig ? { inputSig: stream.inputSig } : {}),
+      tasks: tasks.map(t => ({ id: t.id, kind: t.kind, resultKey: t.resultKey, range: t.range, source: t.source, input: t.input, weight: t.weight, requires: t.requires, priority: t.priority })),
     });
   }
   return { v: EXPORT_INDEX_VERSION, projectRev: Number.isSafeInteger(projectRev) ? projectRev : null, streams, unsupported };

@@ -131,9 +131,10 @@ const manifestOf = (from, to, origin, last) => {
   return { v: 1, kind: "export-frames", resultKey: RK, range: { from, to }, header: {}, frames };
 };
 const indexOf = (over = {}) => ({ v: 1, projectRev: 7, unsupported: [], streams: [{ clipId: "s", kind: "card", plane: "local", resultKey: RK, envFingerprint: "f".repeat(16),
-  originFrame: 12, lastFrame: 143, lastSegment: 8, segmentsPerTask: 8, fps: 30, rect: { x: -32, y: -32, w: 704, h: 424 }, offset: { x: 0, y: 0 } }], ...over });
+  originFrame: 12, lastFrame: 143, lastSegment: 8, segmentsPerTask: 8, fps: 30, rect: { x: -32, y: -32, w: 704, h: 424 }, offset: { x: 0, y: 0 }, inputSig: "s1-abc" }], ...over });
 
 test("XM-04 请渲染节点、等到齐、按帧取", async () => {
+  F.resetExportRetry();
   const svc = fakeService({ project: {} });
   const statuses = [];
   const task = F.exportPlanTask({ projectId: "p1", projectRev: 7, clips: ["s"] });
@@ -166,6 +167,7 @@ test("XM-04 请渲染节点、等到齐、按帧取", async () => {
 
 test("XM-05 出不了、失败、不是这一版:各自停下并说明", async () => {
   const run = async (prepare) => {
+    F.resetExportRetry();
     const svc = fakeService({ project: {} });
     const task = F.exportPlanTask({ projectId: "p1", projectRev: 7, clips: ["s"] });
     let step = 0;
@@ -196,6 +198,7 @@ test("XM-05 出不了、失败、不是这一版:各自停下并说明", async (
   });
   assert.equal(ok.coverage.get("s").frames.size, 9);
   // 取消
+  F.resetExportRetry();
   const svc = fakeService({ project: {} });
   const ac = new AbortController();
   svc.hooks.onSleep = async () => { ac.abort(); };

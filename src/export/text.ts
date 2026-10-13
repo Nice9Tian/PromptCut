@@ -6,6 +6,7 @@
 const NODE_REASON: Record<string, string> = {
   "no-card": "渲染节点上没有这张卡片的代码",
   "no-stream": "这张卡片的画面依赖下面的层、外框又用了三维变形，暂时不能单独渲染",
+  "publish-failed": "上一次没渲成的记录还在，再点一次导出会重新渲染",
 };
 
 export const ONLINE_EXPORT_TEXT = {
@@ -27,6 +28,8 @@ export const ONLINE_EXPORT_TEXT = {
   nodeCannot: (n: number, reason: string) => `有 ${n} 个片段渲染节点渲染不了（${NODE_REASON[reason] ?? "渲染节点暂时不可用"}），这次导不出来。`,
   /** 导出：渲染节点没渲完 */
   nodeFailed: (reason: string) => `渲染节点没能渲完这次导出要的画面（${reason}），请重新导出。`,
+  /** 导出：渲染节点一直没有进展(节点退出了、或一直没空) */
+  nodeStalled: (ms: number) => `渲染节点已经 ${ms >= 60_000 ? `${Math.round(ms / 60_000)} 分钟` : `${Math.round(ms / 1000)} 秒`}没有进展（可能已经离线），这次没导出来。请确认渲染节点在线后重新导出。`,
   /** 导出：等渲染节点期间项目被改了 */
   projectChanged: "导出期间项目被改动了，请重新导出。",
   /** 导出：要请渲染节点,但这个页面没有连着项目 */
