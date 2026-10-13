@@ -82,8 +82,8 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
     runnerFactory: async () => ({
       async start() {
         server = net.createServer(peer => { socket = peer; });
-        await listen(server, 5796);
-        const local = net.connect(5796, '127.0.0.1');
+        await listen(server, 0);
+        const local = net.connect(server.address().port, '127.0.0.1');
         await once(local, 'connect');
         child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true, stdio: 'ignore' });
         await once(child, 'spawn');
@@ -109,7 +109,7 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
   const controlServer = createRunControlServer({ tls: pki.asset, docFingerprint256: pki.doc.fingerprint256,
     serviceKid: 'kid-fixture', instanceId: agentProcess.registration.instanceId, manager });
   try {
-    await listen(controlServer, 5795);
+    await listen(controlServer, 0); const controlPort = controlServer.address().port;
     await authority.send({ principalRef: { authorizationId: 'valid' }, projectId,
       conversationId: 'conv1', requestId: 'send1', content: 'Stop the live process' });
     const work = manager.wake(projectId, 'conv1');
@@ -119,9 +119,9 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
     const control = { controlId: 'control-1', fenceRevision: 1, kind: 'stop', projectId,
       scope: { conversationId: 'conv1' }, operationFences: [{ runIds: [grant.runId] }] };
     const body = { control, targetInstanceId: agentProcess.registration.instanceId, targetServiceKid: 'kid-fixture' };
-    assert.equal((await post(5795, pki.wrong, body)).status, 403);
-    assert.equal((await post(5795, pki.doc, { ...body, targetInstanceId: 'forged' })).status, 403);
-    const receipt = await post(5795, pki.doc, body);
+    assert.equal((await post(controlPort, pki.wrong, body)).status, 403);
+    assert.equal((await post(controlPort, pki.doc, { ...body, targetInstanceId: 'forged' })).status, 403);
+    const receipt = await post(controlPort, pki.doc, body);
     assert.equal(receipt.status, 200);
     assert.equal(receipt.body.result.complete, true);
     assert.deepEqual(receipt.body.result.closedRunIds, [grant.runId]);
@@ -133,8 +133,8 @@ test('doc-pinned mTLS control waits for real socket and child closure; wrong cer
         drainControl: async () => ({ instanceId: agentProcess.registration.instanceId, serviceKid: 'kid-fixture', closedRunIds: [grant.runId],
           dispatchesOpen: 0, connectionsOpen: 1, childrenOpen: 0, oldInstanceUnknown: false }),
       } });
-    await listen(missingWitness, 5797);
-    try { assert.equal((await post(5797, pki.doc, body)).status, 503); }
+    await listen(missingWitness, 0);
+    try { assert.equal((await post(missingWitness.address().port, pki.doc, body)).status, 503); }
     finally { await close(missingWitness); }
   } finally {
     manager.close(); await close(controlServer);

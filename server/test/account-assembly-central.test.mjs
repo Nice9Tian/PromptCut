@@ -24,6 +24,7 @@ import { instanceHttpRequest, registerHttpInstance } from './fixtures/agent-inst
 import { instanceWsClient, instanceDataHttpRequest } from './fixtures/agent-instance-data.mjs';
 import { exerciseInstanceData } from './fixtures/agent-instance-data-target.mjs';
 import { stageHostedAssetFiles } from '../hosted/files.mjs';
+import { freePorts } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { wsClient, waitFor } from './fake-ws-kit.mjs';
 
@@ -41,15 +42,17 @@ const received = async (client, body) => { client.send(body); return client.next
 
 test('v2 required refuses missing order before opening any cloud entry', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-doc-assembly-required-'));
+  const [docPort, comboAssetPort] = await freePorts(2);
   try {
     await assert.rejects(startHostedCombo({ dataDir: dir, host: '127.0.0.1', accountRequired: true,
-      account: {}, docPort: 5771, assetPort: 5779 }), error => error.reason === 'doc-assembly-configuration');
+      account: {}, docPort, assetPort: comboAssetPort }), error => error.reason === 'doc-assembly-configuration');
     assert.equal(fs.existsSync(path.join(dir, 'docservice')), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 for (const agentConfigured of [false, true]) test(`actual provider/order → central doc → independent asset → two pages${agentConfigured ? ' + real conversation/run factories' : ''}: durable op, readonly selection, restart and revoked resume`, actual, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-doc-assembly-central-'));
+  const [accountPort, docPort, docInternalPort, assetPort, assetInternalPort, readPort, comboAssetPort] = await freePorts(7);
   const pki = assetWiringPki(dir), pair = { account: generateKeyPairSync('ed25519'), doc: generateKeyPairSync('ed25519') };
   let provider, accountServer, combo, child, childClosed, childLog = '', closed = false, agentTransport,
     readControl, readClient, readServer;
@@ -85,34 +88,34 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     accountOrderSigningKey: pair.account.privateKey, accountOrderKeyId: 'assembly-account', docAttestationPublicKey: pair.doc.publicKey });
   accountServer = internalModule.createInternalServer({ tls: pki.account, store: provider, credentials, order,
     services: [{ serviceId: 'doc', fingerprint256: pki.doc.fingerprint256 }] });
-  await new Promise(resolve => accountServer.listen(5770, '127.0.0.1', resolve));
+  await new Promise(resolve => accountServer.listen(accountPort, '127.0.0.1', resolve));
   const docDir = path.join(dir, 'doc'), assetDir = path.join(dir, 'asset'), app = path.join(dir, 'app');
   fs.mkdirSync(docDir); fs.mkdirSync(assetDir); stageHostedAssetFiles(path.resolve('.'), app);
   const agentKey = generateServiceKeyPair();
   if (agentConfigured) addServiceKey(hostedPaths(docDir).servicesFile, {
     service: 'agent', role: 'agent', actsFor: 'member', kid: agentKey.kid, pub: agentKey.pub });
-  const config = { dataDir: docDir, docPort: 5771, assetPort: 5779, host: '127.0.0.1', trustLoopback: false,
+  const config = { dataDir: docDir, docPort, assetPort: comboAssetPort, host: '127.0.0.1', trustLoopback: false,
     clusterToken: 'assembly-fixture-cluster-token-32', accountRequired: true,
-    assetPublicUrl: 'http://127.0.0.1:5773/api/asset',
-    assetStatus: { origin: 'https://127.0.0.1:5774', tls: pki.doc, serverFingerprint256: pki.asset.fingerprint256 },
-    account: { origin: 'https://127.0.0.1:5770', clientTls: pki.doc, serverFingerprint256: pki.account.fingerprint256,
+    assetPublicUrl: `http://127.0.0.1:${assetPort}/api/asset`,
+    assetStatus: { origin: `https://127.0.0.1:${assetInternalPort}`, tls: pki.doc, serverFingerprint256: pki.asset.fingerprint256 },
+    account: { origin: `https://127.0.0.1:${accountPort}`, clientTls: pki.doc, serverFingerprint256: pki.account.fingerprint256,
       authorityId: 'assembly-doc', authorityUrl: 'https://fixture.invalid/editor', signingKey: pair.doc.privateKey,
-      keyId: 'assembly-doc', internalTls: pki.doc, internalPort: 5772,
+      keyId: 'assembly-doc', internalTls: pki.doc, internalPort: docInternalPort,
       services: [{ serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 },
         ...(agentConfigured ? [{ serviceId: 'agent', fingerprint256: pki.wrong.fingerprint256 }] : [])],
       ...(agentConfigured ? { agent: { fingerprint256: pki.wrong.fingerprint256, serviceKid: agentKey.kid } } : {}),
       order: { witnessKeys: { 'assembly-account': pair.account.publicKey }, docAttestationPrivateKey: pair.doc.privateKey } } };
   combo = await startHostedCombo(config);
-  const origin = 'http://127.0.0.1:5771';
+  const origin = `http://127.0.0.1:${docPort}`;
   const call = (i, route, body) => web(origin, 'POST', '/hosted/shared/account/' + route, body, editors[i].accessToken);
   const created = await call(0, 'create', { name: 'Central history', requestId: 'create', initialProject: { title: 'before', tracks: [] } });
   assert.equal(created.status, 201, JSON.stringify(created.body)); const projectId = created.body.projectId;
   assert.equal((await call(1, 'join', { projectId, deviceId: 'page-1', requestId: 'unready' })).status, 503);
   assert.equal(combo.accountRuntime.authority.listProjects(ids[1]).joined.length, 0);
   child = spawn(process.execPath, ['server/hosted/asset-main.mjs'], { cwd: app, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, PROMPTCUT_ASSET_DATA_DIR: assetDir, PROMPTCUT_ASSET_HOST: '127.0.0.1', PROMPTCUT_ASSET_PORT: '5773',
-      PROMPTCUT_ASSET_INTERNAL_PORT: '5774', PROMPTCUT_ASSET_PUBLIC_URL: 'http://127.0.0.1:5773/api/asset',
-      PROMPTCUT_ASSET_DOC_AUTHORITY_ID: 'assembly-doc', PROMPTCUT_ASSET_DOC_ORIGIN: 'https://127.0.0.1:5772',
+    env: { ...process.env, PROMPTCUT_ASSET_DATA_DIR: assetDir, PROMPTCUT_ASSET_HOST: '127.0.0.1', PROMPTCUT_ASSET_PORT: String(assetPort),
+      PROMPTCUT_ASSET_INTERNAL_PORT: String(assetInternalPort), PROMPTCUT_ASSET_PUBLIC_URL: `http://127.0.0.1:${assetPort}/api/asset`,
+      PROMPTCUT_ASSET_DOC_AUTHORITY_ID: 'assembly-doc', PROMPTCUT_ASSET_DOC_ORIGIN: `https://127.0.0.1:${docInternalPort}`,
       PROMPTCUT_ASSET_DOC_FINGERPRINT256: pki.doc.fingerprint256, PROMPTCUT_ASSET_DOC_CLIENT_FINGERPRINT256: pki.doc.fingerprint256,
       PROMPTCUT_ASSET_DOC_CA_FILE: path.join(dir, 'ca.crt'), PROMPTCUT_ASSET_CLIENT_KEY_FILE: path.join(dir, 'asset.key'),
       PROMPTCUT_ASSET_CLIENT_CERT_FILE: path.join(dir, 'asset.crt'), PROMPTCUT_ASSET_INTERNAL_KEY_FILE: path.join(dir, 'asset.key'),
@@ -121,7 +124,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   child.stdout.on('data', bytes => { childLog += bytes; }); child.stderr.on('data', bytes => { childLog += bytes; });
   await waitFor(async () => {
     if (child.exitCode !== null) throw Error('independent asset exited: ' + childLog);
-    try { return (await fetch('http://127.0.0.1:5773/healthz')).ok; } catch { return false; }
+    try { return (await fetch(`http://127.0.0.1:${assetPort}/healthz`)).ok; } catch { return false; }
   }, 10000, 'independent asset');
   assert.equal((await call(1, 'join', { projectId, deviceId: 'page-1', requestId: 'join' })).status, 200);
   const session = async i => {
@@ -129,7 +132,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     assert.equal(result.status, 200, JSON.stringify(result.body)); return result.body;
   };
   const sessions = [await session(0), await session(1)];
-  const connect = async ticket => { const client = wsClient(`ws://127.0.0.1:5771`, ['promptcut.v1', `promptcut.account.${ticket}`]);
+  const connect = async ticket => { const client = wsClient(`ws://127.0.0.1:${docPort}`, ['promptcut.v1', `promptcut.account.${ticket}`]);
     clients.push(client); await client.opened; return client; };
   let a = await connect(sessions[0].connectionTicket), b = await connect(sessions[1].connectionTicket);
   for (const [i, client] of [a, b].entries()) assert.equal((await received(client, { type: 'project.open', projectId, reqId: `open-${i}` })).rev, 1);
@@ -147,7 +150,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
   await assert.rejects(combo.docAssembly.runProvider.checkAccess({ principal: delegation, projectId, action: 'read' }),
     agentConfigured ? /run-principal-invalid/ : /run-authority-unavailable/);
   if (!agentConfigured) {
-    agentTransport = createAssetMtlsTransport({ origin: 'https://127.0.0.1:5772', tls: pki.asset,
+    agentTransport = createAssetMtlsTransport({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.asset,
       serverFingerprint256: pki.doc.fingerprint256 });
     await assert.rejects(agentTransport.request('POST', '/internal/v2/instances/challenge', {
       requestId: 'not-configured', publicKey: pair.account.publicKey.export({ type: 'spki', format: 'pem' }).toString() }), /doc-agent-unavailable/);
@@ -158,7 +161,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
       expectedAccessRevision: combo.accountRuntime.authority.listProjects(ids[0]).owned.find(item => item.projectId === projectId).accessRevision,
       requestId: `agent-${enabled}-${Date.now()}` });
     assert.equal((await enable(true)).status, 200);
-    agentTransport = createAssetMtlsTransport({ origin: 'https://127.0.0.1:5772', tls: pki.wrong,
+    agentTransport = createAssetMtlsTransport({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong,
       serverFingerprint256: pki.doc.fingerprint256 });
     const rpc = (action, body) => agentTransport.request('POST', '/internal/v2/' + action, body);
     for (const [index, client] of [a, b].entries()) assert.equal((await received(client, {
@@ -176,8 +179,8 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     assert.deepEqual(pending.conversations.map(row => row.conversationId), ['actual-conversation']);
     assert.equal(Object.keys(pending.conversations[0]).length, 3);
     await assert.rejects(rpc('runs/admit', { projectId, conversationId: 'actual-conversation', requestId: 'wake' }), /instance-proof-required/);
-    const instance = await registerHttpInstance({ port: 5772, tls: pki.wrong, requestId: 'actual-agent-os-a' });
-    const readOptions = { origin: 'https://127.0.0.1:5772', tls: pki.wrong, serverFingerprint256: pki.doc.fingerprint256 };
+    const instance = await registerHttpInstance({ port: docInternalPort, tls: pki.wrong, requestId: 'actual-agent-os-a' });
+    const readOptions = { origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong, serverFingerprint256: pki.doc.fingerprint256 };
     // Share the original real fixture RAM key with its WS/LP proofs; do not
     // register a substitute instance merely to read conversation metadata.
     const sameInstance = { registerInstance: async () => Object.fromEntries(['authorityId', 'serviceId', 'serviceKid',
@@ -199,8 +202,8 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
       authenticate: async () => ({ accountMode: true, projectId, accountId: ids[0], userId: ids[0],
         delegation: sessions[0].agentDelegationTicket }) });
     readServer = http.createServer((req, res) => { void readApi.handle(req, res); });
-    await new Promise(resolve => readServer.listen(5775, '127.0.0.1', resolve));
-    const signedRpc = (action, operation, body, os = instance) => instanceHttpRequest({ port: 5772, tls: pki.wrong,
+    await new Promise(resolve => readServer.listen(readPort, '127.0.0.1', resolve));
+    const signedRpc = (action, operation, body, os = instance) => instanceHttpRequest({ port: docInternalPort, tls: pki.wrong,
       path: '/internal/v2/runs/' + action, operation, body, instance: os });
     const admitted = await signedRpc('admit', 'admit', { projectId, conversationId: 'actual-conversation', requestId: 'signed-wake' });
     assert.equal(admitted.status, 200, JSON.stringify(admitted.body));
@@ -219,24 +222,24 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     assert.equal(checked.body.result.principal.creator, false); assert.equal(checked.body.result.principal.accountId, ids[0]);
     assert.equal(JSON.stringify(checked.body).includes('instanceSession'), false);
     assert.equal(JSON.stringify(checked.body).includes('authenticationId'), false);
-    const dataResult = await exerciseInstanceData({ port: 5772, tls: pki.wrong, instance, grant, own: client => dataClients.push(client) });
+    const dataResult = await exerciseInstanceData({ port: docInternalPort, tls: pki.wrong, instance, grant, own: client => dataClients.push(client) });
     const actualAgentHistory = combo.docAssembly.history.accepted(projectId);
     assert.equal(actualAgentHistory.length, 2);
     assert.equal(actualAgentHistory[1].actor.runGrantId, grant.runGrantId);
     assert.equal(actualAgentHistory[1].actor.accountId, ids[0]);
     assert.equal(actualAgentHistory[1].after.agentVerified, true);
     assert.equal(actualAgentHistory[1].after.shouldNotExist, undefined);
-    const pageSession = await session(0), pageWithSid = wsClient(`ws://127.0.0.1:5771`,
+    const pageSession = await session(0), pageWithSid = wsClient(`ws://127.0.0.1:${docPort}`,
       ['promptcut.v1', `promptcut.account.${pageSession.connectionTicket}`, 'promptcut.session.new']); clients.push(pageWithSid);
     await pageWithSid.opened; const pageWelcome = await pageWithSid.next(message => message.type === 'session.welcome');
     assert.equal(pageWelcome.connId, undefined);
-    const wrongPage = await instanceWsClient({ port: 5772, tls: pki.wrong, instance, projectId, runGrantId: grant.runGrantId, nonce: 100,
+    const wrongPage = await instanceWsClient({ port: docInternalPort, tls: pki.wrong, instance, projectId, runGrantId: grant.runGrantId, nonce: 100,
       protocols: ['promptcut.v1', `promptcut.session.${pageWelcome.sid}.0`], sessionItem: { sid: pageWelcome.sid, ack: 0 } });
     dataClients.push(wrongPage); assert.equal(wrongPage.status, 101); await wrongPage.ended;
     assert.equal(wrongPage.closeFrame.code, 4003); assert.equal(wrongPage.all.some(message => message.type === 'session.welcome'), false);
-    const otherOs = await registerHttpInstance({ port: 5772, tls: pki.wrong, requestId: 'actual-agent-os-b' });
+    const otherOs = await registerHttpInstance({ port: docInternalPort, tls: pki.wrong, requestId: 'actual-agent-os-b' });
     assert.equal((await signedRpc('check', 'checkAccess', checkInput, otherOs)).status, 403, 'same cert new OS cannot consume old grant');
-    const newOsOldSid = await instanceWsClient({ port: 5772, tls: pki.wrong, instance: otherOs, projectId, runGrantId: grant.runGrantId, nonce: 110,
+    const newOsOldSid = await instanceWsClient({ port: docInternalPort, tls: pki.wrong, instance: otherOs, projectId, runGrantId: grant.runGrantId, nonce: 110,
       protocols: ['promptcut.v1', `promptcut.session.${dataResult.resumeIdentity.sid}.0`],
       sessionItem: { sid: dataResult.resumeIdentity.sid, ack: 0 } }); dataClients.push(newOsOldSid);
     assert.equal(newOsOldSid.status, 101); await newOsOldSid.ended;
@@ -252,13 +255,13 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     const otherPrompt = canonicalReadRecord(otherGrant.message, otherGrant);
     assert.equal((await signedRpc('read', 'confirmRead', { ...otherBinding, requestId: 'second-read', readIntentId: 'second-read-intent',
       prompt: otherPrompt, promptDigest: digestOf(otherPrompt) })).status, 200);
-    const waitingWs = await instanceWsClient({ port: 5772, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId, nonce: 1 });
+    const waitingWs = await instanceWsClient({ port: docInternalPort, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId, nonce: 1 });
     dataClients.push(waitingWs); await waitingWs.next(message => message.type === 'session.welcome');
-    const lp = await instanceDataHttpRequest({ port: 5772, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId,
+    const lp = await instanceDataHttpRequest({ port: docInternalPort, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId,
       kind: 'connection', nonce: 1, url: `/lp/open?projectId=${projectId}&runGrantId=${otherGrant.runGrantId}&nonce=1`, body: {},
       headers: { 'x-promptcut-protocols': 'promptcut.v1, promptcut.session.new' } });
     assert.equal(lp.status, 200, JSON.stringify(lp.body));
-    const waitingLp = instanceDataHttpRequest({ port: 5772, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId,
+    const waitingLp = instanceDataHttpRequest({ port: docInternalPort, tls: pki.wrong, instance, projectId, runGrantId: otherGrant.runGrantId,
       kind: 'recv', nonce: 2, connId: lp.body.connId, url: '/lp/recv?ack=0&wait=5000',
       headers: { authorization: `Bearer ${lp.body.sid}` } }).then(value => ({ value }), error => ({ error }));
     // Receipt asserts below require an actually tracked pending HTTP request;
@@ -281,7 +284,7 @@ for (const agentConfigured of [false, true]) test(`actual provider/order → cen
     } finally { fencedAudit.close(); }
     await assert.rejects(rpc('conversations/get', { delegation: sessions[0].agentDelegationTicket, projectId,
       conversationId: 'actual-conversation' }), /read-control-required/);
-    const historyRead = await web('http://127.0.0.1:5775', 'GET', '/v1/conversations/actual-conversation');
+    const historyRead = await web(`http://127.0.0.1:${readPort}`, 'GET', '/v1/conversations/actual-conversation');
     assert.equal(historyRead.status, 200, JSON.stringify(historyRead.body));
     const messages = historyRead.body.meta.messages;
     assert.equal(messages.find(message => message.messageId !== sent.messageId).queueState, 'cancelled');

@@ -24,9 +24,9 @@ test('actual SSE normal polls survive; synchronous fenced dispatch is supervised
     server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
     let request, response, responseClosed = false, socketClosed = false;
     try {
-      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(6707, '127.0.0.1', resolve); });
+      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
       response = await new Promise((resolve, reject) => {
-        request = http.get('http://127.0.0.1:6707/v1/conversations/timer-conversation/events', resolve);
+        request = http.get(`http://127.0.0.1:${server.address().port}/v1/conversations/timer-conversation/events`, resolve);
         request.once('error', reject);
       });
       assert.equal(response.statusCode, 200); response.on('error', () => {}); response.resume();

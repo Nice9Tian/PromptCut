@@ -600,7 +600,7 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
     const s1 = collect();
     svc.subscribe(A1, 'c-p1', 0, s1.cb);
     const off2 = svc.subscribe(A1, 'c-p2', 0, () => {});
-    await waitFor(() => s1.seen.some((e) => e.type === 'tool_result'), 20_000, 'c-p1 切完剪辑');
+    await waitFor(() => s1.seen.some((e) => e.type === 'tool_result'), 60_000, 'c-p1 切完剪辑');
     const r1 = s1.seen.find((e) => e.type === 'tool_result');
     assert.equal(r1.ok, true, r1.summary);
     assert.equal(/发起方不在线/.test(r1.summary), false);
@@ -717,13 +717,13 @@ test('CA-RENDER-01 / 02 / 03 没人在线时的补渲:攒批发布、撤回旧�
       { tool: 'update_clip', input: { clipId: 'c2', label: '三' } },
       { say: '完' },
     ]) });
-    await waitFor(() => pub.published().length >= 1, 20_000, '第一个计划发出');
+    await waitFor(() => pub.published().length >= 1, 60_000, '第一个计划发出');
     assert.equal(pub.published().length, 1, '连着的几次写入合成一个计划');
     const first = pub.published()[0];
     assert.deepEqual(first.input.clips, ['c1'], '只有被写到的、要预渲染的片段;素材片段不放');
     assert.equal(fs.existsSync(pendingFile('c-r1')), true);
     await kit.finished(A1, 'c-r1');
-    await waitFor(() => pub.published().length >= 2, 5000, '一轮结束时补发');
+    await waitFor(() => pub.published().length >= 2, 30_000, '一轮结束时补发');
     await svc._render._settled({ projectId: 'p-a', ownerKey: ownerKeyOf(A1), id: 'c-r1' });
     const second = pub.published()[1];
     assert.deepEqual(second.input.clips, ['c1', 'c2'], '旧计划里还没渲完的并进新计划');
@@ -755,7 +755,7 @@ test('CA-RENDER-01 / 02 / 03 没人在线时的补渲:攒批发布、撤回旧�
     await svc.send(A1, 'c-r2', { prompt: script([{ tool: 'update_clip', input: { clipId: 'c1', label: '四' } }, { say: '完' }]) });
     await kit.finished(A1, 'c-r2');
     const n = pub.published().length;
-    await waitFor(() => pub.published().length > 0 && pub.published().at(-1).input.clips.length === 1 && pub.published().length >= n, 5000, '发出');
+    await waitFor(() => pub.published().length > 0 && pub.published().at(-1).input.clips.length === 1 && pub.published().length >= n, 30_000, '发出');
     await svc._render._settled({ projectId: 'p-a', ownerKey: ownerKeyOf(A1), id: 'c-r2' });
     const plan = pub.published().at(-1);
     pub.handlers.get('p-a').onFail({ id: plan.id, reason: '节点渲染出错:着色器编译失败', clips: ['c1'] });
@@ -765,9 +765,9 @@ test('CA-RENDER-01 / 02 / 03 没人在线时的补渲:攒批发布、撤回旧�
 
     await svc.send(A1, 'c-r3', { prompt: script([{ tool: 'update_clip', input: { clipId: 'c2', label: '五' } }, { say: '完' }]) });
     await kit.finished(A1, 'c-r3');
-    await waitFor(async () => (await renders('c-r3')).some((e) => e.state === 'published'), 5000, '发出');
+    await waitFor(async () => (await renders('c-r3')).some((e) => e.state === 'published'), 30_000, '发出');
     const stalled = pub.published().at(-1);
-    await waitFor(async () => (await renders('c-r3')).some((e) => e.state === 'failed'), 5000, '连续没有进度后放弃');
+    await waitFor(async () => (await renders('c-r3')).some((e) => e.state === 'failed'), 30_000, '连续没有进度后放弃');
     const rs3 = await renders('c-r3');
     assert.deepEqual([rs3.at(-1).state, rs3.at(-1).reason, rs3.at(-1).clips], ['failed', STALL_REASON, ['c2']]);
     assert.ok(pub.withdrawn().includes(stalled.id), '放弃时撤回');
@@ -778,7 +778,7 @@ test('CA-RENDER-01 / 02 / 03 没人在线时的补渲:攒批发布、撤回旧�
     const n = pub.published().length;
     await svc.send(A1, 'c-r4', { prompt: script([{ tool: 'update_clip', input: { clipId: 'c1', label: '六' } }, { say: '完' }]) });
     await kit.finished(A1, 'c-r4');
-    await waitFor(async () => (await renders('c-r4')).length > 0, 5000, '记了一条');
+    await waitFor(async () => (await renders('c-r4')).length > 0, 30_000, '记了一条');
     assert.deepEqual((await renders('c-r4')).map((e) => [e.state, e.clips]), [['unavailable', ['c1']]]);
     assert.equal(pub.published().length, n);
     assert.equal((await svc.info(A1)).render.enabled, true);

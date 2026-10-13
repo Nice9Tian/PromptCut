@@ -119,15 +119,16 @@ test('real mTLS parser separates master/worker, signs full assignment/read reque
     if (!await registration(req, res) && !await runs(req, res)) { res.writeHead(404); res.end(); }
   });
   const accepted = new Set(); server.on('connection', socket => { accepted.add(socket); socket.once('close', () => accepted.delete(socket)); });
+  let ownedPort = 0;
   try {
-    server.listen(6712, '127.0.0.1'); await once(server, 'listening');
-    const challenge = await instanceHttpRequest({ port: 6712, tls: pki.asset, path: '/internal/v2/instances/challenge',
+    server.listen(0, '127.0.0.1'); await once(server, 'listening'); ownedPort = server.address().port;
+    const challenge = await instanceHttpRequest({ port: ownedPort, tls: pki.asset, path: '/internal/v2/instances/challenge',
       body: { requestId: f.request.requestId, publicKey: f.request.publicKey, rootScopeRef: f.ref } });
     assert.equal(challenge.status, 200); assert.deepEqual(challenge.body.result, f.challenge);
-    const master = await registerHttpInstance({ port: 6712, tls: pki.account, requestId: 'actual-master' });
+    const master = await registerHttpInstance({ port: ownedPort, tls: pki.account, requestId: 'actual-master' });
     assert.equal(master.purpose, 'control-only');
     const worker = { ...f.registration, privateKey: f.m.workerKey.privateKey };
-    const call = (tls, instance, route, operation, body, extra = {}) => instanceHttpRequest({ port: 6712, tls, instance,
+    const call = (tls, instance, route, operation, body, extra = {}) => instanceHttpRequest({ port: ownedPort, tls, instance,
       path: `/internal/v2/runs/${route}`, operation, body, ...extra });
     assert.deepEqual((await call(pki.account, master, 'pending', 'pendingRuns', {})).body.result.scopeControls, []);
     assert.equal((await call(pki.asset, worker, 'pending', 'pendingRuns', {})).status, 403);
@@ -219,7 +220,7 @@ test('real mTLS parser separates master/worker, signs full assignment/read reque
     const closing = [...accepted].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); }));
     await Promise.all(closing); await new Promise(resolve => server.close(resolve));
     instances.close(); fs.rmSync(dir, { recursive: true, force: true });
-    t.diagnostic(`actual owned TLS close: sockets=${accepted.size}, listening=${server.listening}, port=6712`);
+    t.diagnostic(`actual owned TLS close: sockets=${accepted.size}, listening=${server.listening}, port=${ownedPort}`);
   }
 });
 

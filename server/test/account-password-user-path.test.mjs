@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import https from 'node:https';
 import { randomUUID } from 'node:crypto';
+import { freePorts } from './free-ports.mjs';
 import { startAccountPasswordUserFixture } from './fixtures/account-password-user-path.mjs';
 
-const ports = [6680, 6681, 6682, 6683, 6684, 6685, 6686];
 
 function jsonRequest(url, { method = 'GET', body, headers = {}, ca } = {}) {
   return new Promise((resolve, reject) => {
@@ -52,7 +52,8 @@ async function logoutCompleted(actor, eventId, ms = 30_000) {
 }
 
 test('改密退出只保留发起网站会话并撤销其它网站与在线编辑器登录', async t => {
-  const fixture = await startAccountPasswordUserFixture({ ports, agentPort: 6687,
+  const [agentPort, ...ports] = await freePorts(8);
+  const fixture = await startAccountPasswordUserFixture({ ports, agentPort,
     diagnostic: data => t.diagnostic(JSON.stringify(data)) });
   try {
     const accounts = fixture.accounts;

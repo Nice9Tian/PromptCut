@@ -31,7 +31,7 @@ test('018 project selection provider over real WS: all pages, authority, revoke,
       ...(service ? { service } : { role: 'page', accountId, accountName: 'AUTH-INITIAL', loginId: q.get('login') ?? 'L1' }) };
   };
   const doc = createDocService({ modules: [selection], authenticate, autoTick: false, log: () => {} });
-  const { port } = await doc.listen(5920, '127.0.0.1');
+  const { port } = await doc.listen(0, '127.0.0.1');
   const clients = [];
   t.after(async () => {
     for (const c of clients) c.close();

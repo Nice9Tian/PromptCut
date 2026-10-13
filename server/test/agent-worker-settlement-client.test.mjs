@@ -20,17 +20,18 @@ import { certificateFingerprint } from '../account/client.mjs';
 import { canonicalJson, digestOf } from '../account/ledger.mjs';
 import { runFixture, projectId, conversationId, servicePrincipal } from './run-authority-fixture.mjs';
 import { scopeModel } from './agent-run-scope-fixture.mjs';
+import { freePort } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 
 // Real clients/original non-exported RAM keys, mTLS/exporter, Doc handlers,
 // SQLite authority and product Doc closure inventory. Root OS and accepted
 // account issuance are explicit controlled fixtures, not a production executor.
 async function fixture(t, { source = true } = {}) {
-  const f = await runFixture(), pki = assetWiringPki(f.dir), m = scopeModel();
+  const f = await runFixture(), pki = assetWiringPki(f.dir), m = scopeModel(), listenPort = await freePort();
   const workerPin = certificateFingerprint(pki.asset.fingerprint256);
   const masterPin = certificateFingerprint(pki.account.fingerprint256);
   let expectedPrepare = null;
-  const config = { origin: 'https://127.0.0.1:6713', serverFingerprint256: pki.doc.fingerprint256 };
+  const config = { origin: `https://127.0.0.1:${listenPort}`, serverFingerprint256: pki.doc.fingerprint256 };
   const worker = createRunClient({ ...config, tls: pki.asset, registrationPurpose: 'run-worker',
     ...(source ? { scopePrepareSource: async value => {
       // Explicit private source adapter. No model/drain producer is claimed.
@@ -94,9 +95,9 @@ async function fixture(t, { source = true } = {}) {
     instances.close(); f.close();
     assert.equal(accepted.size, 0); assert.equal(transports.size, 0); assert.equal(server.listening, false);
     fs.rmSync(f.dir, { recursive: true, force: true });
-    t.diagnostic('6713 actual owned TLS sockets/transports=0; server listening=false; root OS is controlled');
+    t.diagnostic(`${listenPort} actual owned TLS sockets/transports=0; server listening=false; root OS is controlled`);
   });
-  server.listen(6713, '127.0.0.1'); await once(server, 'listening');
+  server.listen(listenPort, '127.0.0.1'); await once(server, 'listening');
   f.enqueue(); f.enqueue('message2');
   const grant = await worker.admit({ projectId, conversationId, requestId: 'admit' });
   const binding = Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(k => [k, grant[k]]));
