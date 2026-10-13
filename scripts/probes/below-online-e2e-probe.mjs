@@ -23,8 +23,10 @@
  *             父页发的流平面带 `plane: stage`;画布挂在舞台根下,不在包裹层里
  *   D 拖动    按住标尺拖到若干帧(跨分段、分段的第一帧和上一段的最后一帧、往回):每一帧流画出这一帧(满密度)、卡被抑制、没有占位符和快照;
  *             截图记下来,和 E 的参照比
- *   E 像素    同样这些帧,松手停下追到精确活渲再截;拖动时贴流的那一张与同一帧的精确活渲比:毛玻璃卡那一块的平均差在编码误差的量级,
- *             而且比它与隔 8 帧的精确活渲的差小;播放中截的一张同样比
+ *   E 像素    参照是**精确活渲**:这张卡还没钉重(轻卡,一直活渲)时,同一个场景停在每一帧截的图(旧的一版在甲那里截,改过下层的一版在乙钉重之前截)。
+ *             拖动时贴流的那一张只看毛玻璃卡那一块:与同一帧的参照的平均差在编码误差的量级(≤ 4,满分 255),比它与前一帧、后一帧的参照都像,
+ *             比它与隔 8 帧的参照明显更像。另外记一个数(不判):同一帧钉重以后停下追到的活渲与贴流那一张的差 —— 重卡停下追帧走的是另一条路,
+ *             入场动画没放完的帧上它比轻卡时的活渲多走一帧(`main` 上就有,`docs/reports/AGENT-rr-below-paste.md` 第 7 节第 3 条)
  *   F 暂停    播放中暂停:停下的那一刻卡还贴着流(抑制、舞台平面),随后追到精确活渲、不再抑制
  *   G 改下层  甲把下面那张卡的参数改一处:父页当场不再发旧流的流平面(记毫秒),在线来源把旧流撤了,舞台上没有旧键的轨道;
  *             切分方按新的一版重产,层表换成新的一行(内容键、签名都换了),甲认出新流并贴它;像素同 E 那样比(新流对新一版的活渲)
@@ -153,8 +155,10 @@ const onlineDiag = (page) => P(page, () => { try { return JSON.parse(JSON.string
 const parentDiag = (page) => P(page, () => {
   const d = window.__pcPreviewDiag?.();
   return d ? { suppressed: d.suppressed, heavy: d.snapshotFeed?.heavy ?? [], scrub: d.snapshotFeed?.scrub ?? [], streams: d.snapshotFeed?.streams ?? [], staleBelow: d.snapshotFeed?.staleBelow ?? [],
-    picks: (d.snapshotFeed?.picks ?? []).map((p) => p.clipId), planes: (d.streamPlanes ?? []).map((p) => ({ clipIds: p.clipIds, key: String(p.key ?? '').slice(0, 12), plane: p.plane ?? null })) } : null;
+    picks: (d.snapshotFeed?.picks ?? []).map((p) => p.clipId), settled: d.snapshotFeed?.settled ?? [], settledAll: !!d.snapshotFeed?.settledAll } : null;
 }).catch(() => null);
+/** 父页这一刻给这张卡发的流平面(按当前播放头现算的那一份,`snapshotFeedDebug` 的 `streams`) */
+const planeOf = (p, id) => (p?.streams ?? []).find((x) => (x.clipIds ?? []).join() === id) ?? null;
 const storeT = (page) => store(page, `return S.getState().t;`);
 const frameOf = (t) => Math.floor(t * FPS + 1e-6);
 const playFrom = (page, t) => store(page, `S.actions.pause(); S.actions.seek(args[0]); S.actions.play(); return true;`, t);
@@ -187,7 +191,13 @@ async function stageState(page, id) {
         placeholder: !!slot && !slot.hidden, canvasInWrapper: !!w.querySelector(':scope > canvas[data-pc-stream-plane]'),
         stagePlanes: planes.length, stagePlaneShown: planes.some(visible), stream: tracks.find((t) => t.clips.includes(cid)) ?? null };
     }
-    return { t: diag?.t ?? null, clip, tracks, origin: location.origin };
+    const cards = [...document.querySelectorAll('[data-pc-clip]:not([data-pc-media])')].map((el) => {
+      const slot = el.querySelector(':scope > [data-pc-placeholder-slot]');
+      const snap = el.querySelector(':scope > [data-pc-snapshot-plane]');
+      return { id: el.getAttribute('data-pc-clip'), suppressed: el.classList.contains('pc-suppressed'), placeholder: !!slot && !slot.hidden,
+        snapshot: !!snap && snap.childElementCount > 0 && getComputedStyle(snap).visibility !== 'hidden' };
+    });
+    return { t: diag?.t ?? null, clip, cards, tracks, origin: location.origin };
   }, id).catch(() => null);
 }
 async function stageShot(page, name) {
@@ -254,7 +264,8 @@ async function openMember(browser, { projectId, name, username, password, device
 async function liveShot(page, id, frame, name = null) {
   await store(page, `S.actions.pause(); return true;`);
   await delay(300);
-  const sec = (frame + 0.5) / FPS;
+  // 停在这一帧的起点:轨道流(和导出)每一帧是按帧的起点渲的,活渲的卡按播放头的时刻画,停在帧中间会多走半帧
+  const sec = frame / FPS + 1e-3;
   let ok = null, last = null;
   for (let round = 0; round < 5 && !ok; round++) {
     await pauseAt(page, sec);
@@ -262,14 +273,31 @@ async function liveShot(page, id, frame, name = null) {
     while (Date.now() - t0 < 10_000 && !ok) {
       const s = await stageState(page, id);
       last = s ? { t: s.t, clip: { suppressed: s.clip.suppressed, snapshot: s.clip.snapshot, placeholder: s.clip.placeholder } } : null;
-      if (s && frameOf(s.t ?? -1) === frame && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
+      // 场上每张卡都是活渲(下面那张卡要是判重,停下以后同样要追上)
+      const live = s && s.cards.length > 0 && s.cards.every((c) => !c.suppressed && !c.snapshot && !c.placeholder);
+      // 判重的卡停下以后先不可见地追帧,追上了父页才记进 `settled`(这之前包裹层不抑制、但子树还藏着)
+      const p = live ? await parentDiag(page) : null;
+      const caught = !!p && (p.heavy.length === 0 || p.settledAll || p.heavy.every((h) => p.settled.includes(h)));
+      if (s && frameOf(s.t ?? -1) === frame && s.clip.wrapper && live && caught) ok = s;
       else await delay(100);
     }
   }
   if (!ok) { fails.push(`等不到:停在第 ${frame} 帧后追到精确活渲 :: ${JSON.stringify(last).slice(0, 300)}`); return null; }
-  await delay(400);
+  await delay(450);
   return stageShot(page, name);
 }
+/** 一组帧的精确活渲(这张卡是轻卡时截;停在每一帧、等场上的卡都活渲着、视频落位) */
+async function liveRefs(page, id, frames, tag) {
+  const refs = new Map();
+  for (const f of [...new Set(frames)].filter((x) => x >= 0 && x < TOTAL).sort((x, y) => x - y)) {
+    const png = await liveShot(page, id, f, KEEP_REFS.has(f) ? `${tag}-ref-${f}` : null);
+    if (png) refs.set(f, png);
+  }
+  return refs;
+}
+const KEEP_REFS = new Set([28, 40, 66]);
+/** 比像素要的帧:每个要比的帧、它的前一帧后一帧、隔 `FAR` 帧的那一帧 */
+const refFramesFor = (frames) => frames.flatMap((f) => [f - 1, f, f + 1, f + FAR < TOTAL - 1 ? f + FAR : f - FAR]);
 
 /** 这一刻这张卡是不是它的流在画(舞台平面、种类对得上) */
 const drawing = (s, key = null) => {
@@ -427,9 +455,16 @@ try {
   const order = await store(pageA, `return S.getState().project.tracks.map((t) => t.clips.map((c) => c.id));`);
   out.scene = { glassId, moverId, videoClip, order };
   check(order[0]?.[0] === glassId && order[1]?.[0] === moverId, '序列从上到下:毛玻璃卡、会动的卡、(视频)', order);
+  // 钉重之前(毛玻璃卡是轻卡,一直活渲):截旧的一版的参照
+  const lightBefore = await parentDiag(pageA);
+  check(!!lightBefore, '读得到父页的诊断', lightBefore);
+  const refsOld = await liveRefs(pageA, glassId, refFramesFor(DRAG), 'old');
+  out.refsOld = { frames: refsOld.size, heavyThen: (await (async () => { await pauseAt(pageA, 1); await delay(300); return (await parentDiag(pageA))?.heavy ?? null; })()) };
+  check(out.refsOld.heavyThen && !out.refsOld.heavyThen.includes(glassId), '截参照的时候毛玻璃卡是轻卡(活渲)', out.refsOld);
   // 钉成重卡(人工钉重的现成口子),刷新后生效:已有记录的卡不再测
   await costRecords(pageA, glassKeys);
   await enter(pageA, 'blo-jia(刷新)');
+  await pauseAt(pageA, 1);
   const heavyA = await until('甲的分派表里毛玻璃卡判重', async () => { const p = await parentDiag(pageA); return p?.heavy.includes(glassId) ? p : null; }, 120_000, 500);
   check(!!heavyA, 'A:甲这一页里毛玻璃卡判重', heavyA?.heavy);
   out.heavy = heavyA?.heavy ?? null;
@@ -458,7 +493,7 @@ try {
       manifests.push(m);
     }
     return { ...x, cand, manifests };
-  }, 900_000, 1000);
+  }, 360_000, 1000);
   const tProduce = Date.now();
   const got1 = await waitRow('A:层表里出现毛玻璃卡的流,流清单满密度齐');
   const row1 = got1?.row ?? null;
@@ -478,9 +513,8 @@ try {
   out.desk.stats = deskQ?.stats ?? null;
   check(deskQ && deskQ.stats.planSplit >= 1 && deskQ.stats.completed >= 2, 'A:切分方切了清单计划,自己做完了流任务(稀疏、满密度)', deskQ?.stats);
   const diagA = await nodeDiag(pageA);
-  const heldA = (diagA?.log ?? []).filter((e) => String(e?.id ?? '').startsWith(`stream:${key1}:`));
   out.jia = { envFingerprint: fpA, counters: diagA?.counters ?? null };
-  check(fpA !== deskFp && heldA.length === 0, 'A:甲的浏览器节点没有碰这种流的任务(它的指纹下没有这种流)', { fpA, heldA: heldA.length });
+  check((diagA?.counters?.streamTasks ?? 0) === 0 && fpA !== deskFp, 'A:甲的浏览器节点没有做过流任务(这种流它认领不了)', { fpA, counters: diagA?.counters ?? null });
   // 层表里别的行(下面那张卡如果判重,会有它的单卡流)只记录
   out.otherRows = ((await rowNow()).body?.streams ?? []).filter((r) => r.topClipId !== glassId).map(briefRow);
   // 毛玻璃卡那一块占画面的比例(比像素只看这一块,四周各留一点)
@@ -504,8 +538,8 @@ try {
   // F:暂停的那一刻(还没追上活渲)卡仍贴着流
   const atPause = await stageState(pageA, glassId);
   out.playJia = checkPlaying('C 甲', playA, key1);
-  check(parentPlaying?.planes.some((p) => p.clipIds.join() === glassId && p.plane === 'stage' && p.key === short(key1)) && parentPlaying.suppressed.includes(glassId) && !parentPlaying.picks.includes(glassId),
-    'C:父页发的流平面带 plane: stage,这张卡被抑制,没有选它的快照', parentPlaying && { planes: parentPlaying.planes, suppressed: parentPlaying.suppressed, picks: parentPlaying.picks });
+  check(planeOf(parentPlaying, glassId)?.plane === 'stage' && planeOf(parentPlaying, glassId)?.key === short(key1) && parentPlaying.suppressed.includes(glassId) && !parentPlaying.picks.includes(glassId),
+    'C:父页发的流平面带 plane: stage,这张卡被抑制,没有选它的快照', parentPlaying && { streams: parentPlaying.streams, suppressed: parentPlaying.suppressed, picks: parentPlaying.picks });
   const pauseFrame = frameOf(await storeT(pageA));
   const settled = await until('F:暂停以后追到精确活渲', async () => { const s = await stageState(pageA, glassId); return s && s.clip.wrapper && !s.clip.suppressed && !s.clip.placeholder ? s : null; }, 20_000, 60);
   out.pause = { frame: pauseFrame, atPause: atPause && { suppressed: atPause.clip.suppressed, track: trackBrief(atPause.clip.stream), stagePlaneShown: atPause.clip.stagePlaneShown }, settled: !!settled };
@@ -530,11 +564,12 @@ try {
   let xZero = tk0.x - tk0.sec * pxPerSec;
   out.ruler = { pxPerSec: +pxPerSec.toFixed(2), framePx: +(pxPerSec / FPS).toFixed(2) };
   check(pxPerSec / FPS >= 2, '标尺上一帧至少 2 像素(指针落得准)', out.ruler);
-  const xOf = (frame) => xZero + ((frame + 0.5) / FPS) * pxPerSec;
+  // 落在这一帧里最靠左的那个像素:下层是活渲的(按播放头的时刻画),离帧的起点越近,和「这一帧的精确活渲」越可比
+  const xOf = (frame) => Math.ceil(xZero + (frame / FPS) * pxPerSec + 0.15);
   const moveToFrame = async (page, frame, down) => {
     let landed = null;
     for (const dx of [0, 1, -1, 2, -2, 3, -3]) {
-      await page.mouse.move(Math.round(xOf(frame)) + dx, ruler.y);
+      await page.mouse.move(xOf(frame) + dx, ruler.y);
       if (down && landed === null) await page.mouse.down();
       const end = Date.now() + 600;
       while (Date.now() < end && frameOf(await storeT(page)) !== frame) await delay(30);
@@ -560,8 +595,10 @@ try {
         const s = await until(`${who}:拖到第 ${target} 帧,流画出这一帧`, async () => {
           const st = await stageState(page, glassId);
           const t = st?.clip?.stream;
-          return t && t.key === key && t.lastDrawn === target && !t.stale && frameOf(st.t ?? -1) === target ? st : null;
+          // 抑制着才是在贴流(停着没被抑制时这一帧也会先解好,那不算)
+          return t && t.key === key && t.lastDrawn === target && !t.stale && frameOf(st.t ?? -1) === target && st.clip.suppressed ? st : null;
         }, 15_000, 20);
+        step.offset = +(((await storeT(page)) * FPS) - target).toFixed(2);
         const p = await parentDiag(page);
         if (s) {
           const t = s.clip.stream;
@@ -571,8 +608,8 @@ try {
           check(!s.clip.placeholder && !s.clip.snapshot, `${who}:拖到第 ${target} 帧:没有占位符、没有快照`, s.clip);
           check((t.errors ?? 0) === 0, `${who}:拖到第 ${target} 帧:解码没有报错`, step.track);
         }
-        check(!!p && p.suppressed.includes(glassId) && p.planes.some((x) => x.clipIds.join() === glassId && x.plane === 'stage') && !p.picks.includes(glassId) && p.staleBelow.length === 0,
-          `${who}:拖到第 ${target} 帧:父页抑制这张卡、发它的流平面(舞台坐标)、不选它的快照`, p && { suppressed: p.suppressed, planes: p.planes, picks: p.picks, staleBelow: p.staleBelow });
+        check(!!p && p.suppressed.includes(glassId) && planeOf(p, glassId)?.plane === 'stage' && planeOf(p, glassId)?.key === short(key) && !p.picks.includes(glassId) && p.staleBelow.length === 0,
+          `${who}:拖到第 ${target} 帧:父页抑制这张卡、发它的流平面(舞台坐标)、不选它的快照`, p && { suppressed: p.suppressed, streams: p.streams, picks: p.picks, staleBelow: p.staleBelow });
         await delay(120);
         const png = await stageShot(page, `${tag}-drag-${target}-stream`);
         if (png) shots.set(target, png);
@@ -583,27 +620,32 @@ try {
     }
     return { shots, steps };
   }
-  /** 贴流的那一张对同一帧的精确活渲、对隔 `FAR` 帧的精确活渲(只看毛玻璃卡那一块) */
-  async function comparePixels(page, who, shots, tag) {
+  /**
+   * 贴流的那一张对精确活渲(`refs`:这张卡是轻卡时停在每一帧截的)。只看毛玻璃卡那一块。
+   * 另记(不判)`settle`:这一页此刻(卡钉重着)停在同一帧追到的活渲与贴流那一张的差。
+   */
+  async function comparePixels(page, who, shots, refs, tag) {
     const rows = [];
     for (const [frame, png] of shots) {
-      const same = await liveShot(page, glassId, frame, `${tag}-live-${frame}`);
       const farFrame = frame + FAR < TOTAL - 1 ? frame + FAR : frame - FAR;
-      const far = await liveShot(page, glassId, farFrame, null);
-      if (!same || !far) continue;
-      rows.push({ frame, same: meanDiff(png, same, region), far: meanDiff(png, far, region), whole: meanDiff(png, same), liveVsFar: meanDiff(same, far, region) });
+      const same = refs.get(frame), prev = refs.get(frame - 1), next = refs.get(frame + 1), far = refs.get(farFrame);
+      if (!same || !prev || !next || !far) continue;
+      const settled = await liveShot(page, glassId, frame, `${tag}-settled-${frame}`);
+      rows.push({ frame, same: meanDiff(png, same, region), prev: meanDiff(png, prev, region), next: meanDiff(png, next, region), far: meanDiff(png, far, region),
+        whole: meanDiff(png, same), settle: settled ? meanDiff(png, settled, region) : null, settleVsRef: settled ? meanDiff(settled, same, region) : null });
     }
-    const worst = Math.max(...rows.map((r) => r.same));
-    check(rows.length === shots.size && rows.length > 0, `${who}:每一帧都截到了精确活渲的参照`, { rows: rows.length, shots: shots.size });
-    // 贴流的画面里:毛玻璃那一层是编码过的(H.264、上下拼合 alpha),下层是舞台上活着的;活渲那一张两样都是当场画的。差在编码误差的量级
-    check(rows.every((r) => r.same <= 6), `${who}:贴流的画面与同一帧的精确活渲相符(毛玻璃卡那一块平均差 ≤ 6,满分 255)`, rows);
-    // 对照:下层在动(粒子、视频),隔几帧的活渲差得更多 —— 贴的确实是这一帧
-    check(rows.filter((r) => r.far > r.same).length >= Math.ceil(rows.length * 0.8), `${who}:与隔 ${FAR} 帧的精确活渲比,差更大(对照)`, rows);
+    const worst = rows.length ? Math.max(...rows.map((r) => r.same)) : null;
+    check(rows.length === shots.size && rows.length > 0, `${who}:每一帧都有精确活渲的参照`, { rows: rows.length, shots: shots.size });
+    // 贴流的画面里:毛玻璃那一层是编码过的(H.264、上下拼合 alpha);参照里它是当场画的。差在编码误差的量级
+    check(rows.every((r) => r.same <= 4), `${who}:贴流的画面与同一帧的精确活渲相符(毛玻璃卡那一块平均差 ≤ 4,满分 255)`, rows);
+    // 下层在动(粒子、视频):贴的确实是这一帧 —— 比前一帧、后一帧的参照都像(差比最小的只多出 5% 以内算它最像),比隔几帧的明显更像
+    check(rows.every((r) => r.same <= Math.min(r.prev, r.next) * 1.05 + 0.05), `${who}:贴流的画面最像同一帧的精确活渲(比前一帧、后一帧都像)`, rows);
+    check(rows.every((r) => r.far > r.same * 1.3 + 0.3), `${who}:与隔 ${FAR} 帧的精确活渲比,差明显更大(对照)`, rows);
     return { rows, worst };
   }
   const dragA = await dragThrough(pageA, 'D 甲', DRAG, key1, 'jia');
   out.dragJia = dragA.steps;
-  out.pixelsJia = await comparePixels(pageA, 'E 甲', dragA.shots, 'jia');
+  out.pixelsJia = await comparePixels(pageA, 'E 甲', dragA.shots, refsOld, 'jia');
   say('jia.pixels', { rows: out.pixelsJia.rows });
 
   /* ---------------------------------------------------------------- 6. G 改下层:旧流当场撤下,新流到了再贴 */
@@ -622,6 +664,7 @@ try {
     edit = await P(pageA, async (spec) => {
       const S = window.__pcStore;
       const feed = () => window.__pcPreviewDiag?.().snapshotFeed ?? null;
+      const hadBefore = (feed()?.streams ?? []).some((p) => (p.clipIds ?? []).includes(spec.glassId) && p.plane === 'stage');
       const t0 = performance.now();
       S.actions.setClipParams(spec.moverId, spec.patch);
       let goneMs = null, staleSeen = false;
@@ -632,12 +675,14 @@ try {
         if (!has) { goneMs = performance.now() - t0; break; }
         await new Promise((r) => setTimeout(r, 4));
       }
-      return { goneMs: goneMs === null ? null : Math.round(goneMs), staleSeen };
+      return { hadBefore, goneMs: goneMs === null ? null : Math.round(goneMs), staleSeen };
     }, { moverId, glassId, patch: MOVER_EDIT });
+    const tEdited = Date.now();
     const withdrawn = await until('G:在线来源把旧流撤了', async () => { const d = await onlineDiag(pageA); return d && !(d.streams ?? []).some((x) => x.resultKey === key1) ? d : null; }, 10_000, 30);
     const gone = await until('G:舞台上没有旧键的轨道', async () => { const s = await stageState(pageA, glassId); return s && !s.tracks.some((t) => t.key === key1) ? s : null; }, 10_000, 30);
-    out.edit = { ...edit, sourceStale: withdrawn?.staleStreams ?? null, stageGone: !!gone, clipAfter: gone && { suppressed: gone.clip.suppressed, placeholder: gone.clip.placeholder, snapshot: gone.clip.snapshot } };
-    check(edit?.goneMs !== null && edit.goneMs <= 1000, 'G:改下层以后父页当场不再发旧流的流平面(1 秒以内;实测毫秒记在结果里)', edit);
+    // 舞台那一侧:从页面里改完(上面那一段返回)到探针读到「旧键的轨道没了」,含探针自己一来一回的耗时,只记录
+    out.edit = { ...edit, sourceStale: withdrawn?.staleStreams ?? null, stageGone: !!gone, stageGoneWithinMs: gone ? Date.now() - tEdited : null, clipAfter: gone && { suppressed: gone.clip.suppressed, placeholder: gone.clip.placeholder, snapshot: gone.clip.snapshot } };
+    check(edit?.hadBefore === true && edit.goneMs !== null && edit.goneMs <= 1000 && edit.staleSeen === true, 'G:改之前父页在发这条流;改下层以后当场不再发、认它过期(1 秒以内;实测毫秒记在结果里)', edit);
     check(!!withdrawn && withdrawn.staleStreams.includes(glassId), 'G:在线来源认出旧流过期、不再列它', withdrawn && { stale: withdrawn.staleStreams, streams: withdrawn.streams.map((x) => short(x.resultKey)) });
     check(!!gone, 'G:舞台上旧流的轨道关掉了', (await stageState(pageA, glassId))?.tracks.map(trackBrief));
     out.edit.oldShot = !!oldShot;
@@ -664,9 +709,6 @@ try {
     const playNew = await playAndSample(pageA, glassId, { from: 0.5, to: 1.8, key: key2 });
     await store(pageA, `S.actions.pause(); return true;`);
     out.playNew = checkPlaying('G 甲·新流', playNew, key2);
-    const dragNew = await dragThrough(pageA, 'G 甲·新流', [gFrame, 28, 66], key2, 'jia-new');
-    out.pixelsNew = await comparePixels(pageA, 'G 甲·新流', dragNew.shots, 'jia-new');
-    say('jia.pixels-new', { rows: out.pixelsNew.rows });
   }
 
   /* ---------------------------------------------------------------- 7. H 乙后进来,直接贴 */
@@ -674,11 +716,30 @@ try {
   const b = await openMember(browserB, { projectId, name: projName, username: 'blo-yi', password: projectPassword, deviceId: `blo-yi-${RUN}`.padEnd(16, '0') });
   const pageB = b.page;
   await until('乙收到这张卡', () => store(pageB, `return S.getState().project.tracks.some((t) => t.clips.some((c) => c.id === args[0]));`, glassId), 60_000, 300);
-  // 乙这台浏览器自己测出来也是轻卡:同样把这张卡(同一个卡片身份)钉重、刷新
+  check(await store(pageB, `return S.getState().project.tracks.some((t) => t.clips.some((c) => c.id === args[0] && c.params && c.params.color === args[1]));`, moverId, MOVER_EDIT.color), '乙拿到的是改过下层的那一版');
+  // 乙这台浏览器自己测出来也是轻卡:先趁它是轻卡截新一版的参照(甲的新流、乙自己都拿它比),再把这张卡(同一个卡片身份)钉重、刷新
   await until('乙测出毛玻璃卡的成本记录', async () => ((await costRecords(pageB)).some((r) => glassKeys.includes(r.identityKey)) ? true : null), 240_000, 500);
+  const NEW_A = [gFrame, 28, 66], NEW_B = [28, 21, 66];
+  const refsNew = await liveRefs(pageB, glassId, refFramesFor([...NEW_A, ...NEW_B]), 'new');
+  await pauseAt(pageB, 1);
+  await delay(300);
+  const heavyThenB = (await parentDiag(pageB))?.heavy ?? null;
+  out.refsNew = { frames: refsNew.size, heavyThen: heavyThenB };
+  check(heavyThenB && !heavyThenB.includes(glassId), '乙截参照的时候毛玻璃卡是轻卡(活渲)', out.refsNew);
+  if (key2) {
+    const dragNew = await dragThrough(pageA, 'G 甲·新流', NEW_A, key2, 'jia-new');
+    out.dragNew = dragNew.steps;
+    out.pixelsNew = await comparePixels(pageA, 'G 甲·新流', dragNew.shots, refsNew, 'jia-new');
+    say('jia.pixels-new', { rows: out.pixelsNew.rows });
+    // 新流画的是新的一版:拿改之前的参照比,差明显更大
+    const vsOld = [...dragNew.shots].filter(([f]) => refsOld.has(f)).map(([f, png]) => ({ frame: f, vsNew: meanDiff(png, refsNew.get(f), region), vsOld: meanDiff(png, refsOld.get(f), region) }));
+    out.newVsOld = vsOld;
+    check(vsOld.length > 0 && vsOld.every((r) => r.vsOld > r.vsNew * 1.3 + 0.3), 'G:新流贴的是改过以后的画面(拿改之前的精确活渲比,差明显更大)', vsOld);
+  }
   await costRecords(pageB, glassKeys);
   const tEnter = Date.now();
   await enter(pageB, 'blo-yi(刷新)');
+  await pauseAt(pageB, 1);
   const heavyB = await until('乙的分派表里毛玻璃卡判重', async () => { const p = await parentDiag(pageB); return p?.heavy.includes(glassId) ? p : null; }, 120_000, 500);
   check(!!heavyB, 'H:乙这一页里毛玻璃卡判重', heavyB?.heavy);
   const wantKey = key2 ?? key1;
@@ -692,8 +753,9 @@ try {
   await store(pageB, `S.actions.pause(); return true;`);
   out.playYi = checkPlaying('H 乙', playB, wantKey);
   check(new Set(ORIGINS.stages).has(playB.drawn[0]?.origin ?? playB.samples[0]?.origin), 'H:乙的舞台在自己的源上(跨源、隔离的那一种)', { origin: playB.samples[0]?.origin ?? null });
-  const dragB = await dragThrough(pageB, 'H 乙', [28, 21, 66], wantKey, 'yi');
-  out.pixelsYi = await comparePixels(pageB, 'H 乙', dragB.shots, 'yi');
+  const dragB = await dragThrough(pageB, 'H 乙', NEW_B, wantKey, 'yi');
+  out.dragYi = dragB.steps;
+  out.pixelsYi = await comparePixels(pageB, 'H 乙', dragB.shots, key2 ? refsNew : refsOld, 'yi');
   say('yi.pixels', { rows: out.pixelsYi.rows });
   const deskAfter = (await editor.queue().catch(() => null))?.stats ?? null;
   out.desk.duringYi = deskBefore && deskAfter ? { completed: deskAfter.completed - deskBefore.completed, planSplit: deskAfter.planSplit - deskBefore.planSplit } : null;
