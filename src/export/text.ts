@@ -5,7 +5,7 @@
 /** 渲染节点说渲不了的原因(`server/frame-pipeline.mjs` 的 `exportStreamSpecs`)→ 给用户看的话 */
 const NODE_REASON: Record<string, string> = {
   "no-card": "渲染节点上没有这张卡片的代码",
-  "no-stream": "这张卡片的画面依赖下面的层、外框又用了三维变形，暂时不能单独渲染",
+  "no-stream": "这张卡片暂时不能单独渲染",
   "publish-failed": "上一次没渲成的记录还在，再点一次导出会重新渲染",
 };
 

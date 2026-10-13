@@ -428,7 +428,7 @@ export function graphCardWithInputs(project, clip) {
  *     贴的时候流平面是包裹层的子元素,包裹层照常带着三维变形,所以画面跟着变形。三维那几项不进流键(它们不在流里)。
  *
  * 两类同时成立时算 `'source'`(框的三维照样不在流里)。别的卡回 null:平面的独立卡走 `streamEligible`,
- * 依赖下层的、没审阅过又没接输入的走 `belowStreamEligible`。
+ * 依赖下层的、没审阅过又没接输入的走 `belowStreamEligible`(外框带不带三维都走那条路:带三维时三维摆放画进流里)。
  *
  * 不参加组流合并:组流按舞台坐标产,成员的外观(含三维)全画进流里,和「流里是变形之前的画面」对不上;源依赖卡多半整幅不透明,
  * 并进组流会把夹在中间的层关系压平。它们各占一个解码器,算进预算。
@@ -475,21 +475,26 @@ function sourceNeedsReplay(project, clip, control) {
 }
 
 /**
- * 「依赖下层的流」收哪些卡(契约第 5.1 节)之外,另外两类卡进不进。现在都不进;以后要并进这条路,把对应的一项改成 true 就行
- * (`docs/plan/html-snapshot-removal-dryrun.md` 第 0 节第 7 条):
- *   - `sourceDependent`:源依赖卡(转场、接素材的素材效果卡)。隔离工程里它的源片段都留着(藏起来的序列仍是 `sourceOnly`),
- *     键里目标卡的缓存内容键已经顺着输入带上了整条源链;
- *   - `frame3d`:框用了三维的卡(含独立卡 —— 它进不了单卡流)。这种流按舞台坐标产,三维摆放照原样画进去。
- * 用户 2026-10-13 定了这两类的做法:源依赖卡和三维外框的独立卡各自单独成流(上面的 `soloStreamKind`),不走这条路,
- * `planStreams` 先把它们挑走。还剩一种没有流:**依赖下层(或没审阅过、又没接输入)而外框又用了三维的卡** —— 它的画面取决于
- * 它在屏幕上盖住了什么,产不出「变形之前的画面」;要给它流只能把 `frame3d` 打开(流里是带着三维的舞台坐标画面),见报告。
+ * 「依赖下层的流」收哪些卡(契约第 5.1 节)之外,另外两类卡进不进:
+ *   - `sourceDependent`(不进):源依赖卡(转场、接素材的素材效果卡)。用户 2026-10-13 定它单独成流(上面的 `soloStreamKind`),
+ *     `planStreams` 先把它挑走;
+ *   - `frame3d`(**进**):**依赖下层(或没审阅过、又没接输入)而外框又用了三维变形的卡**。它的画面取决于它在屏幕上盖住了什么,
+ *     产不出「变形之前的画面」,所以照普通的依赖下层的流产:按舞台坐标,三维摆放(`rotateX`、`rotateY`、`translateZ`,
+ *     连同项目的透视 `camera3dFov`)照原样画进流里;贴的时候平面挂在舞台根下,不再做变形(舞台的透视只作用在带三维变形的
+ *     直接子元素上,平面没有变形,不受它影响)。后果:改一下三维角度流就要重产 —— 三维那几项在目标卡的缓存内容键里
+ *     (`server/card-cache.mjs` 的 `appearance.frame`),也在页面的输入签名里(`streamInputSig.mjs` 的 `frame`),
+ *     改了键和签名都变,旧流当场不再贴。〔裁:主会话 2026-10-14,按建议的「甲」定,用户可以推翻;`AGENT-rr-below-3d.md`〕
+ *     差分取层对它照旧成立(两张都是整幅截图逐像素算,不看卡摆成什么样);只是毛玻璃外框的掩码不收带三维的
+ *     (`capture-below.mjs` 的 `axisAligned`:投影以后外框不是圆角矩形),那一块照最小不透明度算,盖回去仍然等于原画面。
+ * 外框用了三维的**独立卡**不走这条路(它的流里是变形之前的画面,`soloStreamKind` 的 `'spatial'`),不管这里怎么设。
  */
-export const BELOW_STREAM_RULES = Object.freeze({ sourceDependent: false, frame3d: false });
+export const BELOW_STREAM_RULES = Object.freeze({ sourceDependent: false, frame3d: true });
 
 /**
  * 这张卡进不进「依赖下层的流」。收:依不依赖下层这一样是「依赖下层」(`belowDependent`)、旧的统称 `context`、
- * 或「未知」(`unknown`,审阅表没覆盖到的卡;没写、认不出的值也按未知)的卡。平面的独立卡走单卡流(`streamEligible`),不进这里;
- * 源依赖卡和框用了三维的卡看 `rules`。和 `streamEligible` 不会同时为真。
+ * 或「未知」(`unknown`,审阅表没覆盖到的卡;没写、认不出的值也按未知)的卡,外框带三维的也收(`rules.frame3d`)。
+ * 独立卡一律不进这里(平面的走单卡流 `streamEligible`,带三维的单独成流 `soloStreamKind`);源依赖卡看 `rules`。
+ * 和 `streamEligible` 不会同时为真。
  */
 export function belowStreamEligible(control, clip, track, rules = BELOW_STREAM_RULES) {
   if (!control?.clipId || !clip || !track) return false;
@@ -498,7 +503,7 @@ export function belowStreamEligible(control, clip, track, rules = BELOW_STREAM_R
   const spatial = frame3d(clip.frame);
   if (spatial && rules?.frame3d !== true) return false;
   const compositing = control.capabilities?.compositing ?? control.compositing;
-  if (compositing === 'independent') { if (!spatial) return false; }
+  if (compositing === 'independent') return false;
   else if (compositing === 'sourceDependent') { if (rules?.sourceDependent !== true) return false; }
   return Number.isInteger(control.count) && control.count > 0;
 }
