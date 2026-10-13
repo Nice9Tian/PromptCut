@@ -311,7 +311,8 @@ async function main() {
         const r = await h.run(a, conv, [{ tool: 'seek', input: { t: target } }, { tool: 'play', input: {} }, { tool: 'pause', input: {} }, { say: '动过播放头了' }]);
         const after = await page.evaluate(() => ({ t: window.__pcStore.getState().t, playing: window.__pcStore.getState().playing, wire: window.__wire }));
         check('反向通道:模型调 seek → 任务进程 → 主服务的登记表 → 发起人的真编辑器页面,播放头真的变了',
-          r.of('seek')?.ok !== false && Math.abs(after.t - target) < 0.5 && before !== after.t && after.wire.received.filter((x) => x.tool === 'seek').length === 1 && after.wire.posted.every((p) => p.status === 200),
+          // seek 之后脚本还放了一小会儿又暂停,所以停下来的位置在目标之后不远处
+          r.of('seek')?.ok === true && after.t >= target && after.t < target + 5 && before !== after.t && after.wire.received.filter((x) => x.tool === 'seek').length === 1 && after.wire.posted.every((p) => p.status === 200),
           brief({ info, target, before, after: after.t, seek: r.of('seek'), received: after.wire.received.map((x) => x.tool), posted: after.wire.posted.map((p) => p.status) }));
         check('反向通道:play / pause 也到了发起页并交回', after.wire.received.some((x) => x.tool === 'play') && after.wire.received.some((x) => x.tool === 'pause') && r.of('pause')?.ok !== false && after.playing === false, brief({ play: r.of('play'), pause: r.of('pause'), playing: after.playing }));
         try { await page.screenshot({ path: path.join(ROOT, 'docs', 'reports', 'assets', 'v18-wire', 'page-after-seek.png') }); } catch { /* 截图只是留证 */ }

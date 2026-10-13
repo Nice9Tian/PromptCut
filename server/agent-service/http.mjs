@@ -387,7 +387,8 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     const route = new URL(req.url || '/', 'http://agent.invalid').pathname.replace(/\/+$/, '') || '/';
     const history = req.method === 'GET' && /^\/v1\/conversations(?:\/[^/]+(?:\/events)?)?$/.test(route);
     // 发消息后要读回已接受的原文、传附件前要核这个人读得到这个对话：这两种也是对话读取，放在同一种读取范围里
-    const messageRead = !!service.runEvents && req.method === 'POST' && /^\/v1\/conversations\/[^/]+\/(?:messages|attachments)$/.test(route);
+    // 页面交回反向通道的结果时要核「交的人此刻读得到这个对话」：同样是对话读取，放在同一种读取范围里
+    const messageRead = !!service.runEvents && req.method === 'POST' && /^\/v1\/conversations\/[^/]+\/(?:messages|attachments|page-results)$/.test(route);
     if (service.accountMode !== true || (!history && !messageRead)) return handle(req, res);
     if (!service.readTransports) return sendJson(res, 503, { ok: false, code: 'read-control-unavailable' }, CORS);
     try { return await service.readTransports.run(req, res, () => handle(req, res)); }

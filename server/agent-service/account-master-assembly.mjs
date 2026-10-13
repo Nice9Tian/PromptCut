@@ -266,6 +266,8 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     async pageResult(identity, conversationId, body) {
       if (!identity || identity.accountMode !== true || typeof identity.accountId !== 'string' || !identity.accountId ||
           typeof identity.projectId !== 'string' || !identity.projectId) throw new AgentServiceError('unauthorized', 'unauthorized', 401);
+      // 先核交的人此刻读得到这个对话(读不到、对话不存在:和读对话的接口一样的回法,不进登记表)。登记表里还会再核一次并对权限版本
+      await base.access(identity, conversationId, 'read');
       try { return await pageBridge.acceptResult({ identity, conversationId, body }); }
       catch (error) {
         if (error instanceof PageBridgeError) throw new AgentServiceError(error.code, error.code, error.status);
