@@ -91,7 +91,7 @@ export function toneWav({ hz = 440, seconds = 0.25, rate = 8000 } = {}) {
  *        页面的事件流从事件库读），槽调度经内部口用 root 那张证书去问（`account-master-scheduler-client.mjs`）——
  *        和 Linux 上 root 入口的接法相同。缺省仍是夹具自己拼的那一份。
  */
-export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false } = {}) {
+export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false, publicHandler = null } = {}) {
   const log = [], say = (event, fields) => log.push({ at: Date.now(), event, ...fields });
   const docKey = pair(), masterKey = generateServiceKeyPair(), m = scopeModel(slotId);
   const generations = new Map(), stops = [];
@@ -100,7 +100,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
   const masterSockets = new Set(), lookSockets = new Set(), renderSockets = new Set(), humanSockets = new Set();
   const lookCalls = [], renderGate = { hold: false };
 
-  const fixture = await startCloudQueueUserFixture({ ports: [...P.combo], agentPort: P.agent,
+  const fixture = await startCloudQueueUserFixture({ ports: [...P.combo], agentPort: P.agent, publicHandler,
     variant: {
       pkiNames: ['master', 'rootctl', 'workerid'],
       async configure(ctx) {

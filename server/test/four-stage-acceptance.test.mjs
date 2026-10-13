@@ -102,7 +102,7 @@ test('FSA-04 validateManifest:逐项抓错', () => {
 });
 
 test('FSA-05 清单自洽:prereq 都在、占位符都认得、端口不踩禁区、命令里的脚本存在或标了 requires', () => {
-  const known = new Set(['node', 'repo', 'out', 'tsc', 'vite', 'dist', 'main', 'mainWorkspace', 'item', 'dev.origin', 'dev.port', 'dev-main.origin', 'dev-main.port']);
+  const known = new Set(['node', 'repo', 'out', 'tsc', 'vite', 'dist', 'main', 'mainWorkspace', 'item', 'dev.origin', 'dev.port', 'dev-main.origin', 'dev-main.port', 'visuhive']);
   const forbidden = [[5190, 5192], [5203, 5205], [5210, 5212], [5720, 5839], [8770, 8799]];
   const inForbidden = (n) => forbidden.some(([a, b]) => n >= a && n <= b);
   const ids = new Set(ITEMS.map((i) => i.id));
@@ -152,10 +152,11 @@ test('FSA-07 清单里记耗时的项都写了记什么;每项都标了级别;�
     if (it.manual) assert.ok(!it.cmd && !it.steps, it.id);
   }
   assert.ok(ITEMS.filter((i) => i.timing === 'record').length >= 14);
-  assert.equal(ITEMS.filter((i) => i.level === 'network').length, 16);
+  // 老清单(0.7.17 以前四段)的真实网络验证 16 项不变;0.7.18 的项(category V18)另算
+  assert.equal(ITEMS.filter((i) => i.level === 'network' && i.category !== 'V18').length, 16);
   // 运行器没有「待笔记本复核」这一档判定
   assert.ok(!VERDICTS.some((v) => v.startsWith('ref-')));
-  assert.deepEqual([...DONE_VERDICTS], ['pass']);
+  assert.deepEqual([...DONE_VERDICTS], ['pass', 'na']); // na = 写死的「不适用」,续跑时不用重跑
   assert.throws(() => parseArgs(['--authoritative']), /看不懂的参数/);
 });
 
@@ -332,8 +333,10 @@ test('FSA-20 summaryText 与 listText 不出错、带关键信息', () => {
   assert.match(l, /GR-3/);
   assert.ok(!/笔记本复核|待笔记本/.test(l));
   // 两级分明:先本地验证,后真实网络验证
-  const a = l.indexOf('# 本地验证(104 项)');
-  const b = l.indexOf('# 真实网络验证(16 项)');
+  const nLocal = ITEMS.filter((i) => levelOf(i) === 'local').length;
+  const nNet = ITEMS.filter((i) => levelOf(i) === 'network').length;
+  const a = l.indexOf(`# 本地验证(${nLocal} 项)`);
+  const b = l.indexOf(`# 真实网络验证(${nNet} 项)`);
   assert.ok(a === 0 && b > a, l.slice(0, 80));
   assert.ok(l.indexOf('S1-r2') > b && l.indexOf('GR-3') < b);
   assert.match(l, /只记录的耗时:/);
@@ -357,7 +360,8 @@ test('FSA-26 selectItems 按级别:缺省 all;local 不含真实网络验证的�
   assert.throws(() => parseArgs(['--timings-from', 'x.json']), /--release-timings/);
   // 真清单:本地验证 104 项里可跑的缺省项都不带 remoteOnly
   assert.ok(selectItems(ITEMS, { level: 'local' }).every((i) => !i.remoteOnly));
-  assert.equal(selectItems(ITEMS, { level: 'network', includeOptional: true }).length, 16);
+  assert.equal(selectItems(ITEMS, { level: 'network', includeOptional: true }).length, ITEMS.filter((i) => levelOf(i) === 'network').length);
+  assert.equal(selectItems(ITEMS, { level: 'network', includeOptional: true }).filter((i) => i.category !== 'V18').length, 16);
 });
 
 test('FSA-27 releaseTimingsSection:版本与提交、机器配置、各项用时、探针量的耗时;放大过的数字不进记录', () => {
@@ -553,7 +557,9 @@ test('FSA-24 真清单:--list 与 --matrix 能跑,两份任务书的编号一条
   const run = (args) => spawnSync(process.execPath, [RUNNER, ...args], { cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: 100_000 });
   const l = run(['--list']);
   assert.equal(l.status, 0, l.stderr);
-  assert.match(l.stdout, new RegExp(`共 ${ITEMS.length} 项:本地验证 104,真实网络验证 16`));
+  const nLocal = ITEMS.filter((i) => levelOf(i) === 'local').length;
+  const nNet = ITEMS.filter((i) => levelOf(i) === 'network').length;
+  assert.match(l.stdout, new RegExp(`共 ${ITEMS.length} 项:本地验证 ${nLocal},真实网络验证 ${nNet}`));
   assert.ok(!/待笔记本复核|笔记本复核/.test(l.stdout));
   const m = run(['--matrix']);
   assert.equal(m.status, 0, m.stderr);
