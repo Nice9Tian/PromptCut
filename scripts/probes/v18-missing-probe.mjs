@@ -91,6 +91,10 @@ const SERVICE_OK = 'https://old-hosted-ok.invalid/hosted';
 const SERVICE_BADKEY = 'https://old-hosted-badkey.invalid/hosted';
 const SERVICE_OFFLINE = 'https://old-hosted-offline.invalid/hosted';
 const SERVICE_UNKNOWN = 'https://someone-else.invalid/hosted';
+// 下面两格要走到「服务端答复」那一步，所以旧文件里记的服务指到探针自己起的入口（它对旧协议的发现请求一律答「没有这个项目」）或没人听的端口
+const SERVICE_REJECT = `http://127.0.0.1:${DOC_PORT}/legacy-badkey`;
+const SERVICE_DOWN = `http://127.0.0.1:${DEAD_PORT}/legacy-down`;
+const SERVICE_EDITED = `http://127.0.0.1:${DEAD_PORT}/legacy-edited`;
 
 const out = { ok: false, run: RUN, out: OUT, shots: SHOTS };
 let browser = null, server = null, docServer = null, ledger = null;
@@ -109,26 +113,40 @@ try {
   const docHits = [];
   docServer = http.createServer(async (req, res) => {
     docHits.push(req.url);
+    // 旧协议的发现请求（`…/hosting/challenge`）：这个入口上没有任何旧项目，一律明确答「没有这个项目」
+    if (/\/hosting\//.test(req.url)) {
+      const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-pc-hosting-access', 'access-control-allow-methods': 'POST, OPTIONS' };
+      if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
+      res.writeHead(404, { ...cors, 'content-type': 'application/json' }); res.end('{"ok":false,"error":"no-project"}'); return;
+    }
     if (!await mounted.handlePublic(req, res)) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"ok":false,"error":"no-route"}'); }
   });
   await new Promise((resolve, reject) => { docServer.once('error', reject); docServer.listen(DOC_PORT, '127.0.0.1', resolve); });
   const hitsFor = (id) => docHits.filter((u) => u.includes(id)).length;
 
-  const rooms = { full: roomId(), partial: roomId(), all: roomId(), alive: roomId(), badkey: roomId(), offline: roomId(), unknown: roomId() };
+  const rooms = { full: roomId(), partial: roomId(), all: roomId(), alive: roomId(), badkey: roomId(), offline: roomId(), unknown: roomId(), edited: roomId() };
   // 墓碑登记脚本：先空跑、再真写、再从「公网」核对（这里的公网就是上面那个入口）
   const idsFile = path.join(OUT, 'legacy-ids.txt');
   await fs.writeFile(idsFile, `# 探针：要登记墓碑的旧项目号\n${rooms.full}\n${rooms.partial}\n${rooms.all}\n${rooms.badkey}\n${rooms.offline}\n`);
   const absentFile = path.join(OUT, 'absent-ids.txt');
   await fs.writeFile(absentFile, `${rooms.alive}\n`);
   const cli = path.join(REPO, 'server', 'hosted', 'deploy', 'legacy-tombstones.mjs');
-  const common = ['--ledger', ledgerFile, '--authority-id', 'doc-probe', '--ids', idsFile];
+  // 旧托管数据目录（只读核对用）：清单里的号都登记在这里
+  const legacyDir = path.join(OUT, 'old-hosted'); const legacyProjects = path.join(legacyDir, 'docservice', 'auth', 'projects');
+  await fs.mkdir(legacyProjects, { recursive: true });
+  for (const id of [rooms.full, rooms.partial, rooms.all, rooms.badkey, rooms.offline, rooms.edited]) await fs.writeFile(path.join(legacyProjects, `${id}.json`), JSON.stringify({ v: 1, projectId: id, name: 'probe' }));
+  const common = ['--ledger', ledgerFile, '--authority-id', 'doc-probe', '--ids', idsFile, '--legacy-data', legacyDir];
+  const ledgerBytes = sha256(await fs.readFile(ledgerFile));
   const plan = node([cli, 'plan', ...common]);
+  check(sha256(await fs.readFile(ledgerFile)) === ledgerBytes, '登记脚本：空跑之后账本文件一个字节都没变');
+  const refused = node([cli, 'apply', ...common, '--source', 'probe']);
+  check(refused.status === 1 && /先停掉旧服务/.test(refused.stderr) && ledger.read().legacyTombstones === undefined, '登记脚本：没明说旧服务已停就不写', refused);
   check(plan.status === 0 && /空跑，没有写/.test(plan.stdout) && /新登记 5/.test(plan.stdout), '登记脚本：空跑报 5 个要新登记', plan);
   check(ledger.read().legacyTombstones === undefined, '登记脚本：空跑没有写账本');
   check((await fetch(`http://127.0.0.1:${DOC_PORT}/hosted/shared/account/gone?authorityId=doc-probe&projectId=${rooms.full}`)).status === 404, '登记之前：公开入口答没有墓碑');
-  const apply = node([cli, 'apply', ...common, '--source', `probe ${RUN}`]);
+  const apply = node([cli, 'apply', ...common, '--source', `probe ${RUN}`, '--old-service-stopped', 'yes']);
   check(apply.status === 0 && /已写入/.test(apply.stdout) && /墓碑 0 → 5/.test(apply.stdout), '登记脚本：真写 5 个', apply);
-  const again = node([cli, 'apply', ...common, '--source', `probe ${RUN} again`]);
+  const again = node([cli, 'apply', ...common, '--source', `probe ${RUN} again`, '--old-service-stopped', 'yes']);
   check(again.status === 0 && /已登记过 5/.test(again.stdout) && /墓碑 5 → 5/.test(again.stdout), '登记脚本：重复跑不重复写', again);
   const pub = node([cli, 'print-public-key', '--signing-key-file', keyFile]);
   const publicKey = pub.stdout.trim();
@@ -141,7 +159,9 @@ try {
   const authorities = [
     { authorityId: 'doc-probe', origin: `http://127.0.0.1:${DOC_PORT}`, services: [SERVICE_OK], keys: { k1: publicKey } },
     { authorityId: 'doc-probe', origin: `http://127.0.0.1:${DOC_PORT}`, services: [SERVICE_BADKEY], keys: { k1: otherKey } },
-    { authorityId: 'doc-probe', origin: `http://127.0.0.1:${DEAD_PORT}`, services: [SERVICE_OFFLINE], keys: { k1: publicKey } },
+    { authorityId: 'doc-probe', origin: `http://127.0.0.1:${DEAD_PORT}`, services: [SERVICE_OFFLINE, SERVICE_DOWN], keys: { k1: publicKey } },
+    { authorityId: 'doc-probe', origin: `http://127.0.0.1:${DOC_PORT}`, services: [SERVICE_REJECT], keys: { k1: otherKey } },
+    { authorityId: 'doc-probe', origin: `http://127.0.0.1:${DOC_PORT}`, services: [SERVICE_EDITED], keys: { k1: publicKey } },
   ];
 
   // ── 素材：现场生成 ──
@@ -223,6 +243,8 @@ try {
       clips: p.tracks.flatMap((t) => t.clips.map((c) => ({ mediaId: c.mediaId ?? null, start: c.start, end: c.end }))),
       media: p.media.map((m) => ({ id: m.id, kind: m.kind, name: m.name, url: m.url, hash: m.hash ?? null, missing: confirmedMissing(m) })),
       association: A.currentAssociation(), convertedFrom: A.convertedFromOf(p),
+      script: (await import('/src/ai/projectAi.ts')).collectProjectAi().script,
+      tracks: p.tracks.map((t) => t.name), mediaJson: JSON.stringify(p.media),
       chip: chip ? { kind: chip.getAttribute('data-kind'), text: chip.textContent } : null,
       goneDialog: document.querySelector('[data-pc="cloud-gone-dialog"]')?.textContent ?? null,
       missingDialog: [...document.querySelectorAll('[data-pc="missing-material-item"]')].map((el) => el.textContent),
@@ -378,10 +400,19 @@ try {
   await shot('11-all-missing-image-placeholder.png');
 
   // ════ 不转的各格：内容照常载入、关联保留、不换项目号、不提示 ════
-  const notConverted = async (label, file, wantChip) => {
-    const before = full.projectId;
-    await open(file); await sleep(3500);
+  /** 给这台设备存一个这个房间的身份（指到 `service`），打开文件时才走得到「服务端答复」那一步 */
+  const plantIdentity = (descriptor, contentId) => page.evaluate(async (d, c) => {
+    const S = await import('/src/editor/sync/syncManager.ts');
+    const record = { as: 'member', username: 'probe-user', key: 'K'.repeat(43), candidate: { where: 'hosted', service: d.service, base: `${d.service}/hosting/relay/${d.roomId}/doc`, projectId: d.roomId, name: 'probe', mode: 'free' } };
+    await S.recoveryRequest('identity', d, { record, contentId: c });
+  }, descriptor, contentId);
+  const notConverted = async (label, file, wantChip, { wait = 3500, source = full } = {}) => {
+    const before = source.projectId;
+    await open(file);
+    const expectedMedia = (await snap()).mediaJson;
+    await sleep(wait);
     const x = await snap();
+    check(x.mediaJson === expectedMedia && x.media.every((m) => !m.missing && !m.name.startsWith('(缺失)')) && x.missingDialog.length === 0, `${label}：素材表一个字没动，没有认定缺失，不弹窗`, x.media);
     cells[label] = { id: x.id, association: x.association?.roomId ?? null, chip: x.chip, goneDialog: x.goneDialog, clips: x.clips.length };
     check(x.id === before, `${label}：项目号没变（没有转成本地项目）`, [x.id, before]);
     check(x.association !== null, `${label}：云端关联保留`, x.association);
@@ -393,11 +424,56 @@ try {
   // 服务说得清没有墓碑（项目没过期）：这台设备上没有这个项目的身份 → 要认证
   await notConverted('alive', hostedFile(full.text, rooms.alive), ['needs-auth']);
   await shot('12-not-expired-needs-auth.png');
-  // 过期但证明对不上（信任表里的钥匙不是签发方的）
-  await notConverted('badkey', hostedFile(full.text, rooms.badkey, SERVICE_BADKEY), ['needs-auth', 'proof-rejected']);
-  // 暂时离线（签发方连不上）
-  await notConverted('offline', hostedFile(full.text, rooms.offline, SERVICE_OFFLINE), ['needs-auth', 'waiting-host', 'recovering']);
+  // 同一格，换一份素材全不在本机的文件（素材只在远端）：等够后台检查的时间，不认定缺失、不弹窗、项目不被改
+  await notConverted('aliveRemoteOnly', hostedFile(all.text, rooms.alive), ['needs-auth'], { wait: 6000, source: all });
+  await shot('17-not-converted-remote-only-materials-untouched.png');
+  // 过期但证明对不上（信任表里的钥匙不是签发方的），这台设备上没有身份 → 停在要认证
+  await notConverted('badkey', hostedFile(full.text, rooms.badkey, SERVICE_BADKEY), ['needs-auth']);
+  // 同上，但这台设备上有身份、旧服务明确答「没有这个项目」：去问证明，证明核对不过 → 状态条如实说
+  const rejectFile = hostedFile(all.text, rooms.badkey, SERVICE_REJECT);
+  await plantIdentity(JSON.parse(rejectFile).collaboration, all.projectId);
+  const rejected = await notConverted('proofRejected', rejectFile, ['proof-rejected'], { wait: 6000, source: all });
+  check(/核对不通过/.test(rejected.chip?.text ?? ''), '证明对不上：状态条说的是证明核对不通过', rejected.chip);
+  await shot('18-proof-rejected.png');
+  // 暂时离线：这台设备上有身份，旧服务和签发方都连不上 → 等着重试，不下结论；素材只在远端，同样不认定
+  const downFile = hostedFile(all.text, rooms.offline, SERVICE_DOWN);
+  await plantIdentity(JSON.parse(downFile).collaboration, all.projectId);
+  await notConverted('offline', downFile, ['waiting-host', 'recovering'], { wait: 6000, source: all });
+  const waiting = await until((v) => v.chip?.kind === 'waiting-host', 12000);
+  check(waiting.chip?.kind === 'waiting-host' && waiting.association?.roomId === rooms.offline, '暂时离线：状态条是「等待…将自动重试」', waiting.chip);
   await shot('13-offline-not-converted.png');
+  // 暂时离线、这台设备上没有身份
+  await notConverted('offlineNoIdentity', hostedFile(full.text, rooms.offline, SERVICE_OFFLINE), ['needs-auth', 'waiting-host', 'recovering']);
+
+  // ════ 离线改过、没另存，之后项目被清掉：转换后的本地项目里有这些修改 ════
+  {
+    const editedFile = hostedFile(full.text, rooms.edited, SERVICE_EDITED);
+    const descriptor = JSON.parse(editedFile).collaboration;
+    await plantIdentity(descriptor, full.projectId);
+    await open(editedFile);
+    let x = await until((v) => ['waiting-host'].includes(v.chip?.kind), 15000);
+    check(x.chip?.kind === 'waiting-host' && x.association?.roomId === rooms.edited, '离线修改：先是连不上原项目（还没有墓碑），等着重试', x.chip);
+    // 离线改：加一条序列
+    await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.addTrack('离线加的序列'); });
+    const journalOf = () => page.evaluate(async (d, c) => { const S = await import('/src/editor/sync/syncManager.ts'); const r = await S.recoveryRequest('select', d, { contentId: c }); return { revoked: !!r.revoked, pending: r.journal?.pending?.length ?? 0 }; }, descriptor, full.projectId);
+    let j = { pending: 0 }; for (let i = 0; i < 40 && !j.pending; i++) { await sleep(250); j = await journalOf(); }
+    check(j.pending >= 1, '离线修改：记进了这台设备的恢复数据', j);
+    // 没另存就换到别的项目（相当于关掉）；随后节点上清掉了这个旧项目、登记了墓碑
+    await open(all.text, 'something-else.proc'); await sleep(600); await dismiss();
+    const idsEdited = path.join(OUT, 'edited-ids.txt'); await fs.writeFile(idsEdited, `${rooms.edited}\n`);
+    const reg = node([cli, 'apply', '--ledger', ledgerFile, '--authority-id', 'doc-probe', '--ids', idsEdited, '--legacy-data', legacyDir, '--source', `probe ${RUN} edited`, '--old-service-stopped', 'yes']);
+    check(reg.status === 0 && /新登记 1/.test(reg.stdout), '离线修改：之后才登记墓碑', reg);
+    // 再打开原文件（文件里没有那条序列）
+    check(!JSON.parse(editedFile).project.tracks.some((t) => t.name === '离线加的序列'), '离线修改：原文件里没有这处修改');
+    await open(editedFile);
+    x = await until((v) => v.goneDialog !== null, 20000);
+    cells.offlineEdits = { converted: x.goneDialog !== null, id: x.id, tracks: x.tracks, association: x.association, journalAfter: await journalOf() };
+    check(x.goneDialog !== null && x.association === null && x.id !== full.projectId, '离线修改：转成了本地项目', [x.goneDialog, x.id]);
+    check(x.tracks.includes('离线加的序列'), '离线修改：转换后的本地项目里有离线加的那条序列', x.tracks);
+    check(x.clips.length === 3, '离线修改：文件里原有的片段都在', x.clips);
+    await shot('19-offline-edits-kept-after-conversion.png');
+    await dismiss();
+  }
   // 文件里记的服务不在信任表里
   await notConverted('unknownService', hostedFile(full.text, rooms.unknown, SERVICE_UNKNOWN), ['needs-auth', 'waiting-host', 'recovering']);
   // 协作关联的版本不认识：内容照常载入，关联原样留着
@@ -406,7 +482,9 @@ try {
 
   // ════ 文件损坏：报错、当前项目原样、不拿空项目顶 ════
   await open(full.text, 'baseline.proc'); await sleep(500); await dismiss();
+  await page.evaluate(async () => { (await import('/src/ai/projectAi.ts')).applyProjectAi({ script: '探针写的剧本：打开坏文件之后它必须还在', messages: [] }); });
   const baseline = await snap();
+  check(baseline.script.startsWith('探针写的剧本'), '坏文件之前：当前项目有一段剧本');
   const good = hostedFile(full.text, rooms.full);
   const broken = {
     'JSON 截断': good.slice(0, Math.floor(good.length / 2)),
@@ -424,6 +502,7 @@ try {
     check(r.ok === false && !!r.error, `坏文件「${label}」：报错`, r);
     check(x.id === baseline.id && x.clips.length === baseline.clips.length && x.name === baseline.name, `坏文件「${label}」：当前项目原样，没有被空项目顶掉`, [x.id, x.clips.length]);
     check(x.goneDialog === null, `坏文件「${label}」：不转成本地项目`);
+    check(x.script === baseline.script, `坏文件「${label}」：当前项目的剧本和对话没被换掉`, x.script);
   }
   // .procp 包截断
   const procp = await page.evaluate(async (t) => {
@@ -437,6 +516,34 @@ try {
   }, good);
   cells.broken['.procp 截断'] = procp.error;
   check(!!procp.error && procp.same, '坏文件「.procp 截断」：报错，当前项目原样', procp);
+  check((await snap()).script === baseline.script, '坏文件「.procp 截断」：当前项目的剧本和对话没被换掉');
+
+  // ════ 占位是不透明的全幅画面：缺失的片段在上层时会盖住下层（以前是跳过不画）。两张对比图 ════
+  {
+    const cover = await build(`盖住下层-${RUN}`, [M.video, { ...M.lost, key: 'top', name: `上层缺失-${RUN}.mp4`, hash: crypto.randomBytes(32).toString('hex') }], [{ key: 'video', track: '下层', start: 0, duration: 3 }]);
+    void cover;
+    await page.evaluate(async () => {
+      const { actions, getState } = await import('/src/store/project.ts');
+      const top = getState().project.media.find((m) => m.name.startsWith('上层缺失'));
+      const track = actions.addTrack('上层', { index: 0 });
+      actions.addMediaClip(top.id, 0, { trackId: track.id, duration: 3 });
+      actions.seek(1);
+    });
+    let x = await until((v) => v.media.some((m) => m.missing), 15000);
+    await dismiss(); await sleep(1200);
+    check((await stageText()).some((t) => t.text.startsWith('找不到素材上层缺失')), '盖住下层：上层缺失片段的占位画出来了');
+    await shot('20-placeholder-covers-lower-layer.png');
+    // 对照：去掉记录、清空地址（0.7.18 之前的做法，那时缺失的片段不画），下层的画面露出来。后台检查 1.5 秒后会重新认定，所以马上截
+    await page.evaluate(async () => {
+      const { actions, getState } = await import('/src/store/project.ts');
+      const top = getState().project.media.find((m) => m.name.includes('上层缺失'));
+      actions.updateMedia(top.id, { missingMaterial: undefined, url: '' });
+    });
+    await sleep(700);
+    check((await stageText()).length === 0, '盖住下层（对照）：没有记录时不画占位');
+    await shot('21-before-0718-missing-clip-not-drawn.png');
+    x = await until((v) => v.media.some((m) => m.missing), 15000); void x; await dismiss();
+  }
 
   check(trust.served >= 1 && !trust.error, '信任表是探针在浏览器里拦截换上的（产品代码里没有注入口）', trust);
   check(!events.some((e) => e.type === 'pageerror'), '页面没有报错', events);

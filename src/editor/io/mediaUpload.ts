@@ -233,7 +233,8 @@ export async function backfillSmallTiers(project = getState().project): Promise<
   if (ONLINE_BUILD || isViewOnly()) return 0; // 在线页面没有本机转码;只读页面不改项目
   const want: { mediaId: string; hash: string; name: string }[] = [];
   for (const m of project.media ?? []) {
-    if (m.kind !== "video" || m.pending || m.tiers?.small) continue;
+    // 认定过「确认缺失」的不问:内容库里没有它,转不出小尺寸
+    if (m.kind !== "video" || m.pending || m.tiers?.small || confirmedMissing(m)) continue;
     const hash = String(m.tiers?.original ?? m.hash ?? "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(hash) || backfillAsked.has(hash)) continue;
     backfillAsked.add(hash);
