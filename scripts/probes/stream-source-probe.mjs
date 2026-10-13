@@ -276,7 +276,6 @@ function createStageRpc(target, targetOrigin) {
   return c;
 }
 window.__frames = [];
-window.__settled = [];
 const waitReady = (frame, targetOrigin) => new Promise((res) => {
   window.addEventListener('message', (e) => {
     if (e.source !== frame.contentWindow || e.data?.type !== 'pc-stage-ready') return;
@@ -284,7 +283,7 @@ const waitReady = (frame, targetOrigin) => new Promise((res) => {
   });
 });
 window.__ready = Promise.all([waitReady(document.getElementById('a'), '${oa}'), waitReady(document.getElementById('b'), '${ob}')])
-  .then(([a, b]) => { window.__rpc = a; window.__rpcB = b; a.onEvent((ev) => { if (ev.type === 'frame') window.__frames.push({ sec: ev.sec, at: performance.now() }); if (ev.type === 'settled') window.__settled.push({ sec: ev.sec, clipIds: ev.clipIds }); }); return true; });
+  .then(([a, b]) => { window.__rpc = a; window.__rpcB = b; a.onEvent((ev) => { if (ev.type === 'frame') window.__frames.push({ sec: ev.sec, at: performance.now() }); }); return true; });
 </script></body></html>`;
 
 /* ------------------------------------------------------------------ 主流程 */
