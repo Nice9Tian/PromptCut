@@ -117,7 +117,8 @@ import { EXPORT_FRAMES_PRIORITY } from './export-plan.mjs';
  * 调用方给 `exportStreams`(只为导出的清单计划才有,`local-node.mjs` 的 `listPlanOverrides`;每项是 `exportStreamOf` 的结果)时,
  * 每条另出一组**导出位图任务**:沿用流任务的种类与范围(`kind: 'stream'`,分段号 0 .. lastSegment 按 STREAM_SEGMENTS 切),
  * `input.exportFrames: true`、`input.exportKey`(导出位图的内容键)、`input.stream`(这条流的形状),结果键 = `exportKey × 自己的指纹`。
- *   - 只出切分方自己的一份,不给浏览器(`requires.transcode: true` 把纯浏览器挡在外面;不要求 `capabilities.streams` —— 不用编码器);
+ *   - 只出切分方自己的一份,不给浏览器(纯浏览器节点只收带 `input.bake` 的浏览器形状的流任务,`filter.mjs` 规则 7,这种任务它不收);
+ *     不要求本机转码、不要求 `capabilities.streams`(取位图不用 ffmpeg、不用编码器;不带 `--streams` 的独立渲染主机也做得了);
  *   - `input` 里**不带 `contentKey`**:不参加卡片级指纹锁(这份产物只给这一次导出用,和这张卡的轨道流不是一个键);
  *   - 名次 `EXPORT_FRAMES_PRIORITY`,排在所有别的细任务前面(用户正等着导出)。
  * 不给 `exportStreams` 时切分与原来逐字相同。
@@ -640,7 +641,7 @@ export function splitPlan({
         weight: { ...weight, frames },
         requires: gateLocalMedia({
           envFingerprint, codeVersion, cardSources: allCardSources(),
-          transcode: true, userCards: false, graphCards: false, belowDependent: belowStream,
+          transcode: false, userCards: false, graphCards: false, belowDependent: belowStream,
         }, belowStream
           ? { clipId, kind: 'stream', streamKind: 'below', belowClipIds: Array.isArray(stream.belowClipIds) ? [...stream.belowClipIds] : [] }
           : { clipId, kind: 'stream' }),

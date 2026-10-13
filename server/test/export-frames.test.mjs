@@ -22,6 +22,7 @@ import { collectExportResult, createExportFramesSink, exportFramesKey, exportRes
 import { exportIndexOf, isExportFramesTask, isExportOnlyPlan, EXPORT_FRAMES_PRIORITY } from '../render-node/export-plan.mjs';
 import { splitPlan, SPARSE_STREAM_PRIORITY } from '../render-node/split.mjs';
 import { listPlanOverrides } from '../render-node/local-node.mjs';
+import { checkClaimable } from '../render-node/filter.mjs';
 import { resultKeyOf } from '../render-node/fingerprint.mjs';
 import { parseInbound, lockKeyOf, isSparseStreamTask, clipsPlanTaskOf, backfillSig, CLIPS_KEY_MARK } from '../render-queue/messages.mjs';
 import { decodePngRgba } from '../bakery/capture-canvas.mjs';
@@ -86,8 +87,16 @@ test('EF-03 只为导出的计划只切导出位图任务', () => {
   assert.equal(lockKeyOf(a), null);
   assert.deepEqual(a.input.stream, { clipId: 'c1', kind: 'card', plane: 'local', fps: 30, originFrame: 12, lastFrame: 143, rect: spec.bound, offset: spec.offset });
   assert.equal(a.requires.envFingerprint, FP);
-  assert.equal(a.requires.transcode, true, '纯浏览器节点(不能本机转码)认领不了');
+  assert.equal(a.requires.transcode, false, '不要求本机转码');
   assert.equal(a.requires.capabilities, undefined, '不要求能产流:取位图不用编码器');
+  // 谁能认领:不带 --streams 的独立渲染主机(不能转码、不报能产流)能;纯浏览器节点不能(它只收带 input.bake 的浏览器形状的流任务)
+  const node = over => ({ nodeId: 'n1', userId: 'u1', envFingerprint: FP, codeVersions: ['cv1'], cardSourceVersions: { 'user-x': ['v1'] }, ...over });
+  const mine = { ...a, source: { ...a.source, userId: 'u1' } };
+  assert.equal(checkClaimable(mine, node({ profile: 'host', capabilities: { userCards: true, graphCards: false, transcode: false, streams: false } })).ok, true);
+  assert.equal(checkClaimable(mine, node({ profile: 'pc', capabilities: { transcode: true, streams: true } })).ok, true);
+  assert.deepEqual(checkClaimable({ ...mine, weight: { class: 'medium' } }, node({ profile: 'browser', capabilities: { streams: true, userCards: true } })), { ok: false, rule: 7, reason: 'no-bake-input' });
+  assert.equal(checkClaimable(mine, node({ profile: 'browser', capabilities: { streams: true, userCards: true } })).ok, false);
+  assert.equal(checkClaimable(mine, node({ profile: 'host', capabilities: {}, cardSourceVersions: {} })).ok, false, '手里没有这张卡的代码的节点不认领');
   assert.deepEqual(a.requires.cardSources, { 'user-x': 'v1' });
   assert.equal(a.priority, EXPORT_FRAMES_PRIORITY);
   assert.ok(EXPORT_FRAMES_PRIORITY > 50 && EXPORT_FRAMES_PRIORITY > SPARSE_STREAM_PRIORITY, '排在锚帧、稀疏流任务前面');
