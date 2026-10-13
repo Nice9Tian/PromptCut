@@ -1,17 +1,25 @@
 /**
- * 测试里向系统要空闲端口：同时监听若干个端口 0、读回实际端口再一起关掉，保证同一次要到的端口两两不同。
+ * 测试里要空闲端口：自己挑一个并试着监听确认空着，一次要多个时两两不同。
  * 不写死端口号，所以同一次 npm test 里的各文件之间、同一台机器上同时跑的两个 npm test 之间都不会撞端口。
- * 系统分配的是临时端口区间（Windows 49152 起），不会落在 5xxx、58xx、59xx 这些保留段。
+ * 端口在 20000～49151 里随机挑，不会落在 5xxx、58xx、59xx 这些保留段。
  */
 import net from 'node:net';
 
 export async function freePorts(count = 1, host = '127.0.0.1') {
-  const servers = await Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, host, () => resolve(server));
-  })));
-  const ports = servers.map(server => server.address().port);
+  // 这台机器的系统临时端口区间是 1024～15000，会落进 58xx 这类保留段，所以自己在 20000～49151 里随机挑、逐个试着监听确认空着。
+  const servers = [], ports = [];
+  while (ports.length < count) {
+    const port = 20000 + Math.floor(Math.random() * (49152 - 20000));
+    if (ports.includes(port)) continue;
+    try {
+      servers.push(await new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.once('error', reject);
+        server.listen(port, host, () => resolve(server));
+      }));
+      ports.push(port);
+    } catch { /* 被占了，换一个 */ }
+  }
   await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
   return ports;
 }
@@ -21,7 +29,7 @@ export async function freePort(host = '127.0.0.1') {
 }
 
 /**
- * 要一段连续的、都空闲的端口（夹具里「基准端口 + 代号」那种用法）：先让系统给一个，再试它后面 count-1 个是否也空闲，不行就换一个重来。
+ * 要一段连续的、都空闲的端口（夹具里「基准端口 + 代号」那种用法）：先挑一个空闲的，再试它后面 count-1 个是否也空闲，不行就换一个重来。
  * 返回起点。
  */
 export async function freePortRange(count, host = '127.0.0.1') {
