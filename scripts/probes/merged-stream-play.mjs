@@ -90,6 +90,7 @@ const page0 = `<!doctype html><meta charset="utf-8"><title>merged-stream-play</t
 const server = await serveLocal(PORT, { '/': page0, '/demux.js': fs.readFileSync(path.join(here, 'stream-demux-browser.js')), '/play.js': fs.readFileSync(path.join(here, 'merged-stream-play-page.js')), ...blobs });
 const handle = await launchHeadless(WHICH, ['--window-size=1920,1080']);
 const MODES = ['per', 'per-shared', 'merged-crop', 'merged-shared'];
+const SEEK_COUNTS = ['small6', 'small30', 'full6', 'full12'];
 try {
   report.gpu = await gpuInfo(handle.browser);
   console.log('浏览器：', report.gpu.product, '|', report.gpu.angle);
@@ -114,7 +115,19 @@ try {
     console.log(`像素核对 ${plan.kind}（第 20 帧，和现状做法比，第 0 层 / 最后一层）：`, JSON.stringify(row));
   }
 
-  for (const plan of plans) {
+  // 跳转的代价：从分段的关键帧解到分段的最后一帧（第 14 帧，最坏情况）要多久。每种做法量 3 次取中间值
+  report.seeks = [];
+  for (const plan of plans.filter((p) => SEEK_COUNTS.includes(`${p.kind}${p.n}`))) {
+    for (const mode of ['per', 'merged-crop']) {
+      const ms = [];
+      for (let i = 0; i < 3; i++) { const r = await runOne(plan, mode, FPS_SRC, { snapshotAt: 14 }); if (r.snapshotMs != null && r.lastDrawn === 14) ms.push(r.snapshotMs); }
+      ms.sort((a, b) => a - b);
+      const row = { kind: plan.kind, layers: plan.n, mode, msToFrame14: ms[ms.length >> 1] ?? null, all: ms };
+      report.seeks.push(row);
+      console.log(`跳转到分段最后一帧 ${plan.kind} ×${plan.n} ${mode.padEnd(11)}：${row.msToFrame14} ms（三次 ${ms.join(' / ')}）`);
+    }
+  }
+  if (!arg('seek-only')) for (const plan of plans) {
     for (const fps of [30, 60]) {
       for (const mode of MODES) {
         const busy = await cpuBusy(300);

@@ -120,6 +120,8 @@
         for (let k = 0; k < m.cells && i < K; k++, i++) cellOf.push({ feed, x: (k % m.cols) * cellW, y: Math.floor(k / m.cols) * cellH, w: s.init.width, h: s.init.height });
       }
     }
+    const tDecodeStart = performance.now();
+    let snapshotMs = null;
     for (const f of feeds) f.pump();
 
     const drawCell = (g, frame, srcRect, dstRect) => {
@@ -198,6 +200,8 @@
       const tSnap = performance.now();
       while (!tick(opts.snapshotAt) && performance.now() - tSnap < 20000) await new Promise((r) => setTimeout(r, 5));
       lastDrawn = stat.exact ? opts.snapshotAt : -1;
+      // 从解码器开工（喂第 0 帧，也就是分段的关键帧）到指定的那一帧画上去：跳转到分段中间时要等的时间
+      snapshotMs = +(performance.now() - tDecodeStart).toFixed(1);
     } else await new Promise((resolve) => {
       let start = null, prev = null;
       const step = (now) => {
@@ -237,7 +241,7 @@
       raf: { count: stat.rafGaps.length, meanGap: mean(stat.rafGaps), p95Gap: q(stat.rafGaps, 0.95), over25ms: stat.rafGaps.filter((g) => g > 25).length },
       uploadsPerDraw: stat.exact ? +(stat.uploads / stat.exact).toFixed(1) : null,
       contextsLostEvents: lost.count, contextsLostAtEnd: lostNow, layersWithoutGl: noGl, layersNeverDrawn: everDrawn.filter((d) => !d).length,
-      decoderErrors: errors, frameFormats: formats, startupMs: +startupMs.toFixed(0), lastDrawn, patches,
+      decoderErrors: errors, frameFormats: formats, startupMs: +startupMs.toFixed(0), lastDrawn, snapshotMs, patches,
     };
   };
 })();
