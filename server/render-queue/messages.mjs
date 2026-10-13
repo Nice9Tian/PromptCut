@@ -67,11 +67,24 @@ export const CLIPS_KEY_MARK = '#clips:';
 /**
  * 任务 id 由内容决定（设计第 2 节）：同一个结果只会有一个任务，重复发布才能幂等合并。
  * `plan` 任务没有范围，id 就是 `plan:<projectId>@<projectRev>`（补渲计划任务是 `plan:<projectId>@<projectRev>#backfill:<sig>`）。
+ *
+ * 稀疏流任务（`kind: 'stream'`、`input.density: 'sparse'`，见 `STREAM_DENSITY_SPARSE`）的 id 在末尾多一段 `:sparse`：
+ * 它和同一条流、同一段的满密度任务是两个任务（先后各做一次），结果键、范围、内容库里的清单键都相同。
  */
-export function taskIdOf({ kind, resultKey, range }) {
+export function taskIdOf({ kind, resultKey, range, density }) {
   if (kind === 'plan') return `plan:${resultKey}`;
-  return `${kind}:${resultKey}:${range.from}-${range.to}`;
+  const id = `${kind}:${resultKey}:${range.from}-${range.to}`;
+  return kind === 'stream' && density === STREAM_DENSITY_SPARSE ? `${id}:${STREAM_DENSITY_SPARSE}` : id;
 }
+
+/**
+ * 流任务的密度（`input.density`）：`'sparse'` 是稀疏流任务——每个分段只截分段的第一帧、其余帧重复它
+ * （语义 `mechanism/rendering.md`「重管线：预渲染」）；不带这一项的是满密度任务。别的值在入站时去掉（当满密度）。
+ */
+export const STREAM_DENSITY_SPARSE = 'sparse';
+/** 这个任务是不是稀疏流任务。入站任务、TaskView、切分出来的任务都能传(没带 `input` 的摘要按 id 的结尾认) */
+export const isSparseStreamTask = (task) => isObj(task) && task.kind === 'stream'
+  && ((isObj(task.input) && task.input.density === STREAM_DENSITY_SPARSE) || (typeof task.id === 'string' && task.id.endsWith(`:${STREAM_DENSITY_SPARSE}`)));
 
 /**
  * 卡片级指纹锁的锁键（F.1）：`<kind>:<input.contentKey>`，一张卡的一种结果一把锁。
@@ -194,7 +207,12 @@ function parseTaskInput(v, i) {
   } else {
     range = parseRange(v.range, `${at}.range`);
   }
-  const expected = taskIdOf({ kind, resultKey, range });
+  // 流任务的密度只认 `'sparse'`;别的值去掉(当满密度),id 也照去掉之后的算
+  if (input.density !== undefined && !(kind === 'stream' && input.density === STREAM_DENSITY_SPARSE)) {
+    input = { ...input };
+    delete input.density;
+  }
+  const expected = taskIdOf({ kind, resultKey, range, density: input.density });
   if (id !== expected) bad(`${at}.id 必须是 ${expected}`);
   return {
     // takeover 只决定这一次发布怎么处理锁（F.1），不存进任务，TaskView 里也没有

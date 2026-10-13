@@ -165,11 +165,13 @@ function expectedDerived(ctx, fp) {
   }
   for (const s of ctx.streams) {
     const resultKey = resultKeyOf(s.streamKey, fp);
-    for (let from = s.firstSegment; from <= s.lastSegment; from += 8) {
+    // 每一段先出稀疏流任务(id 末尾多 `:sparse`)、再出满密度任务,范围相同(`split.mjs` 文件头「稀疏流任务」)
+    for (const density of ['sparse', null]) for (let from = s.firstSegment; from <= s.lastSegment; from += 8) {
       const to = Math.min(s.lastSegment, from + 7);
       out.push({
-        id: `stream:${resultKey}:${from}-${to}`, kind: 'stream', tier: null, resultKey, contentKey: s.streamKey,
+        id: `stream:${resultKey}:${from}-${to}${density ? `:${density}` : ''}`, kind: 'stream', tier: null, resultKey, contentKey: s.streamKey,
         range: { unit: 'segment', from, to }, weightClass: ctx.weightOf({ clipId: s.topClipId }).class, clipId: s.topClipId,
+        ...(density ? { density } : {}),
       });
     }
   }
@@ -360,7 +362,7 @@ test('I1 全链路：页面发布 plan，两个 pc 节点认领、切分、执�
 
   const planId = planIdOf('p1', 1);
   const expected = expectedDerived(planContextFor('p1'), FP_A);
-  assert.equal(expected.length, 8, '夹具应切出 8 个细任务');
+  assert.equal(expected.length, 10, '夹具应切出 10 个细任务(6 个快照、2 个稀疏流、2 个满密度流)');
   assert.ok(expected.some(t => t.kind === 'snapshot') && expected.some(t => t.kind === 'stream'));
   const ids = [planId, ...expected.map(t => t.id)];
 
@@ -418,7 +420,8 @@ test('I1 全链路：页面发布 plan，两个 pc 节点认领、切分、执�
   const completer = new Map(rig.out('task.completed').map(e => [e.message.id, rig.nodes.find(n => n.connId === e.connId).nodeId]));
   for (const t of expected) {
     assert.ok(rig.sink.holds(t.resultKey, t.range), `${t.id}：产物库里应有这一段`);
-    const puts = rig.sink.puts().filter(p => p.resultKey === t.resultKey && p.range.from === t.range.from && p.range.to === t.range.to);
+    // 一条流的稀疏流任务和满密度任务推的是同一个键、同一段,各推一次:按任务 id 分开数
+    const puts = rig.sink.puts().filter(p => p.resultKey === t.resultKey && p.range.from === t.range.from && p.range.to === t.range.to && p.meta?.taskId === t.id);
     assert.equal(puts.length, 1, `${t.id}：应恰好推一次`);
     assert.equal(puts[0].meta.taskId, t.id);
     assert.equal(puts[0].meta.nodeId, completer.get(t.id), `${t.id}：meta.nodeId 应是完成它的节点`);
@@ -427,7 +430,8 @@ test('I1 全链路：页面发布 plan，两个 pc 节点认领、切分、执�
     assert.deepEqual(page.done(t.id).result.ranges, [[t.range.from, t.range.to]], `${t.id}：ranges`);
     assert.equal(page.done(t.id).resultKey, t.resultKey);
   }
-  assert.equal(rig.sink.entries().length, expected.length);
+  // 产物库按「结果键 + 范围」存:一条流的稀疏流任务和满密度任务共用一项
+  assert.equal(rig.sink.entries().length, expected.filter(t => !t.density).length);
   hygiene(rig, { unhandledBefore: before });
 });
 
@@ -441,10 +445,13 @@ test('I2 产物库已有部分结果：这些段不调 executor.render，直接�
   const seeded3 = [
     expected.find(t => t.clipId === 'clip-title' && t.range.from === 0),
     expected.find(t => t.clipId === 'clip-lower' && t.range.from === 60),
-    expected.find(t => t.kind === 'stream' && t.range.from === 8),
+    expected.find(t => t.kind === 'stream' && t.range.from === 8 && !t.density),
   ];
   assert.ok(seeded3.every(Boolean));
   for (const t of seeded3) rig.sink.seed({ resultKey: t.resultKey, range: t.range });
+  // 轨道流第二段预置的是满密度的那一版:同一个键、同一段的稀疏流任务也走去重(每段有一版就算数)
+  const seededAll = expected.filter(t => seeded3.some(s => s.resultKey === t.resultKey && s.range.from === t.range.from && s.range.to === t.range.to));
+  assert.equal(seededAll.length, 4);
 
   // 这一条先发布、后让节点报到：节点经 queue.snapshot 看到 plan
   const page = rig.addPage('page', { publisherId: 'page-u1' });
@@ -463,14 +470,14 @@ test('I2 产物库已有部分结果：这些段不调 executor.render，直接�
 
   assertCompletedOnce(rig, page, ids);
   const dedupIds = rig.nodes.flatMap(n => n.eventsOf('dedup').map(e => e.id));
-  for (const t of seeded3) {
+  for (const t of seededAll) {
     assert.equal(rig.exec.renderCount(t.id), 0, `${t.id}：已在产物库里，不应渲染`);
     assert.equal(page.done(t.id).result.dedup, true, `${t.id}：task.done 的 result 应带 dedup: true`);
     assert.deepEqual(page.done(t.id).result.ranges, [[t.range.from, t.range.to]]);
     assert.equal(rig.sink.puts().filter(p => p.meta?.taskId === t.id).length, 0, `${t.id}：不应再推产物`);
     assert.ok(dedupIds.includes(t.id), `${t.id}：应报 dedup 事件`);
   }
-  for (const t of expected.filter(t => !seeded3.includes(t))) {
+  for (const t of expected.filter(t => !seededAll.includes(t))) {
     assert.equal(rig.exec.renderCount(t.id), 1, `${t.id}：应恰好渲染一次`);
     assert.notEqual(page.done(t.id).result.dedup, true, `${t.id}：不是去重完成的`);
     assert.ok(rig.sink.holds(t.resultKey, t.range));

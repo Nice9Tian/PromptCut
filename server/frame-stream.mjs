@@ -1046,13 +1046,18 @@ export class StreamProducer {
   }
 
   /**
-   * 队列的流任务:按段产出 `[from, to]` 这几个分段(满密度,`stride = 1`),每段等编码收尾、落盘、发层
-   * (`storeSegment`,C6.4 的推送钩子照常)之后才算完。已经是满密度而且不旧的分段跳过;自动生产那边正在做的
+   * 队列的流任务:按段产出 `[from, to]` 这几个分段,每段等编码收尾、落盘、发层
+   * (`storeSegment`,C6.4 的推送钩子照常)之后才算完。`density: 'sparse'` 是稀疏流任务(`SPARSE_STRIDE`,每个分段只截第一帧):
+   * 这一段已经有稀疏的或满密度的就跳过;不给是满密度任务(`stride = 1`):已经是满密度而且不旧的分段跳过。自动生产那边正在做的
    * (`reserved`)等它做完。一个分段连续 `QUEUE_SEGMENT_ATTEMPTS` 次没产成抛可重试的错误。
    * 预渲染间与自动生产共用 `leaseStreamBakery` 的池,整段只借一次:相邻分段接着租约推,不重灌工程。
    * `progress(done)`:这一段里已经就绪的帧数(每个分段按它实际的帧数,流的末段可以不满 15 帧)。回 `{ produced, skipped }`。
    */
-  async produceRange(entry, spec, range, { signal, progress } = {}) {
+  async produceRange(entry, spec, range, { signal, progress, density = null } = {}) {
+    const sparse = density === 'sparse';
+    const stride = sparse ? SPARSE_STRIDE : 1;
+    /** 这一段还要不要产:稀疏任务只补一张都没有的(和签名对不上的),满密度任务补到满密度为止 */
+    const pending = (state, n) => { const s = this.segmentState(state, n); return sparse ? (s === 'none' || s === 'stale') : s !== 'dense'; };
     const cancelled = () => Object.assign(new Error('Queue task cancelled'), { cancelled: true });
     if (!this.enabled || this.closed) throw Object.assign(new Error('本机的轨道流关着'), { code: 'streams-disabled', retryable: false });
     if (!this.routeAttached) throw Object.assign(new Error('轨道流的分段读口还没接上'), { code: 'streams-not-ready', retryable: true });
@@ -1065,7 +1070,7 @@ export class StreamProducer {
     try {
       for (let n = from; n <= to; n++) {
         let attempts = 0, made = false;
-        while (this.segmentState(state, n) !== 'dense') {
+        while (pending(state, n)) {
           if (signal?.aborted || this.closed) throw cancelled();
           // 差分取层实测没过的流(`belowSegmentCapture`):这张卡的这种流产不出来,换一台同样的节点也一样,不重试
           if (state.below?.failed) throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 的差分取层没过(${state.below.failed})`), { code: 'below-capture-failed', retryable: false });
@@ -1073,7 +1078,7 @@ export class StreamProducer {
           if (attempts++ >= QUEUE_SEGMENT_ATTEMPTS) {
             throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 分段 ${n} 连续 ${QUEUE_SEGMENT_ATTEMPTS} 次没产成`), { code: 'stream-segment-failed', retryable: true });
           }
-          const task = { state, segment: n, stride: 1, queue: { signal } };
+          const task = { state, segment: n, stride, queue: { signal } };
           state.reserved.add(n);
           let handedOff = false;
           try {

@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { CardFrameCache } from '../card-cache.mjs';
 import { captureCode } from '../frame-code.mjs';
 import { planListStreams, queueStreamOf, STREAM_CODE_VERSION, STREAM_DECODER_BUDGET, LOCAL_OVERFLOW_PX, SEGMENT_FRAMES } from '../frame-stream.mjs';
-import { splitPlan, BROWSER_EXCLUDED_CARD } from '../render-node/split.mjs';
+import { splitPlan, BROWSER_EXCLUDED_CARD, SPARSE_STREAM_PRIORITY } from '../render-node/split.mjs';
 import { clipsPlanTaskOf } from '../render-queue/index.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { layerStreamsOf, manifestMatches, LAYER_MAP_VERSION } from '../artifact-transfer.mjs';
@@ -37,7 +37,7 @@ import { streamManifest, STREAM_SEGMENT_FRAMES } from '../../src/online/browserN
 import {
   planPageStreams, pageStreamTasks, pageStreamRow, mergeLayerStreams, layerStreamCandidates, candidateSpans, pageControls, streamMemberKey, resultKeyOf,
   PAGE_STREAM_CODE_VERSION, PAGE_STREAM_DECODER_BUDGET, PAGE_LOCAL_OVERFLOW_PX, PAGE_STREAM_SEGMENTS_PER_TASK, PAGE_LAYER_MAP_VERSION,
-  PAGE_SNAPSHOT_SPAN, PAGE_EXCLUDED_CARD,
+  PAGE_SNAPSHOT_SPAN, PAGE_EXCLUDED_CARD, PAGE_SPARSE_STREAM_PRIORITY,
 } from '../../src/online/pageStreamPlan.ts';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '../../..');
@@ -63,7 +63,7 @@ function valueOf(project, sourceVersions = null) {
 }
 
 /** 服务端这条链:card plan → 清单计划的流 → 切分给浏览器出的那一份 */
-function serverSide(project, value, clips, { budget = STREAM_DECODER_BUDGET } = {}) {
+function serverSide(project, value, clips, { budget = STREAM_DECODER_BUDGET, sparseStreams = false } = {}) {
   // 经调试协议取回来的图是 JSON 往返过的
   const wire = JSON.parse(JSON.stringify(value));
   const cache = new CardFrameCache({ root: path.join(os.tmpdir(), 'pc-page-stream-plan'), project, envFingerprint: OWN });
@@ -76,7 +76,7 @@ function serverSide(project, value, clips, { budget = STREAM_DECODER_BUDGET } = 
     planTask, entryKey: entry.key, cardPlan, prerenderSet: new Set(clips),
     // 清单计划:切分方自己不产,流只给浏览器出一份(`local-node.mjs` 的 `listPlanOverrides`)
     streams: specs.map(queueStreamOf).map(s => ({ ...s, browserOnly: true })),
-    envFingerprint: OWN, codeVersion: CODE_VERSION, browserFingerprints: [BROWSER],
+    envFingerprint: OWN, codeVersion: CODE_VERSION, browserFingerprints: [BROWSER], sparseStreams,
     weightOf: control => ({ class: control?.capabilities?.canvasHeavy === true || ['belowDependent', 'unknown'].includes(control?.compositing ?? control?.capabilities?.compositing) ? 'heavy' : 'medium', estMs: null }),
     isUserCard: control => String(wire.sourceVersions[control?.cardId] ?? '').startsWith('user:'),
   }).filter(t => t.kind === 'stream');
@@ -335,4 +335,37 @@ test('PSP-10 并进现有的层表', async () => {
   // 别的项目的表、不认识的版本:当没有,重写
   assert.deepEqual(mergeLayerStreams({ ...existing, projectId: 'someone-else' }, { project, rows, now: 9 }).layers, []);
   assert.deepEqual(mergeLayerStreams({ ...existing, v: 9 }, { project, rows, now: 9 }).layers, []);
+});
+
+test('PSP-sparse 稀疏流任务:页面按 density 组出来的任务与切分方给浏览器出的稀疏流任务逐字段相同;满密度的那一组不变', async () => {
+  const project = BASIC();
+  const value = valueOf(project);
+  const clips = ['clip-a', 'clip-b', 'clip-c'];
+  const server = serverSide(project, value, clips, { sparseStreams: true });
+  const plainServer = serverSide(project, value, clips);
+  const page = await pageSide(project, value, clips);
+  const opts = { projectId: project.id, projectRev: 7, codeVersion: CODE_VERSION, derivedFrom: server.planTask.id };
+  const sparse = page.specs.flatMap(spec => pageStreamTasks(spec, { ...opts, density: 'sparse' }));
+  const dense = page.specs.flatMap(spec => pageStreamTasks(spec, opts));
+  const wantSparse = server.tasks.filter(t => t.input.density === 'sparse');
+  const wantDense = server.tasks.filter(t => t.input.density === undefined);
+  assert.equal(PAGE_SPARSE_STREAM_PRIORITY, SPARSE_STREAM_PRIORITY, '稀疏流任务的名次与切分方同一个数');
+  assert.ok(wantSparse.length >= 3 && wantSparse.length === wantDense.length, '每个满密度任务都有一个同范围的稀疏流任务');
+  assert.equal(sparse.length, wantSparse.length);
+  const norm = v => JSON.parse(JSON.stringify(v));
+  for (const want of wantSparse) {
+    const got = sparse.find(t => t.id === want.id);
+    assert.ok(got, `页面有任务 ${want.id}`);
+    assert.ok(want.id.endsWith(':sparse'));
+    assert.deepEqual(norm(got), norm(want), want.id);
+    // 同范围的满密度任务:结果键、范围相同(内容库里的清单键相同),id 只差结尾
+    const twin = wantDense.find(t => `${t.id}:sparse` === want.id);
+    assert.ok(twin, '有同范围的满密度任务');
+    assert.equal(twin.resultKey, want.resultKey);
+    assert.deepEqual(twin.range, want.range);
+    assert.ok(want.priority > twin.priority);
+  }
+  // 满密度的那一组与不切稀疏流任务时逐字相同
+  assert.deepEqual(norm(wantDense), norm(plainServer.tasks));
+  for (const want of wantDense) assert.deepEqual(norm(dense.find(t => t.id === want.id)), norm(want), want.id);
 });

@@ -68,8 +68,9 @@
  * `window.__pcBrowserNode()`:资格与原因、节点状态与计数(`browserNode.ts` 的 `debug()`)、推了几块 / 跳过几块 / 多少字节、
  * 小尺寸几帧、舞台每帧耗时 p50 / p95 与被门挡住的时长、连接状态、最近一次错误;`pageStreams` 是本页产流的状态与计数。
  */
-import { browserNodeEligibility, createBrowserNode, streamManifest, streamManifestBlocks, streamManifestCovers, streamTaskFrames, BROWSER_STREAM_ENCODER,
-  type BrowserNode, type EligibilityInput, type FrameRecord, type NodeTask, type StreamInitMeta, type StreamSegmentMeta } from "../online/browserNode";
+import { alphaBoxOf, browserNodeEligibility, createBrowserNode, isSparseStreamTask, mergeStreamManifest, streamManifest, streamManifestBlocks, streamManifestCovers, streamTaskFrames, streamTaskStride,
+  BROWSER_STREAM_ENCODER,
+  type BrowserNode, type EligibilityInput, type FrameRecord, type NodeTask, type StreamInitMeta, type StreamManifestOut, type StreamRectLike, type StreamSegmentMeta } from "../online/browserNode";
 import { openStreamEncoder, probeStreamEncoder } from "../render/streamEncode";
 import { manifestBlocks, manifestCovers, manifestKey, snapshotManifest } from "../online/bakeTask";
 import { createSnapUploader, sha256Hex, type SnapUploader } from "../online/snapUploader";
@@ -383,13 +384,15 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   const closeStreamLease = () => { streamBaker.close(); dropPixels(); pixelRectNow = null; };
 
   /**
-   * `stride`:每几帧向舞台取一张(缺省 1,每帧都取,满密度)。大于 1 时取到的那一张连着送 `stride` 次(分段的样本数不变),清单里这一段记这个 `stride`。
-   * 现在两条路(认领来的任务、本页产流)都只用 1;「先产一趟稀疏的」以后从这里接。
+   * `stride`:每几帧向舞台取一张。大于 1 时取到的那一张连着送 `stride` 次(分段的样本数不变),清单里这一段记这个 `stride`。
+   * 不给时照任务的密度定(`streamTaskStride`):认领来的稀疏流任务(`input.density: 'sparse'`)是一个分段的帧数——每段只截分段的第一帧;
+   * 满密度任务是 1。本页产流(`pageStreams.ts`)自己给。
+   * 稀疏的一趟(`stride > 1`)另量每个分段的位置矩形(`box`,截的那一张里不透明像素的外接框,平面坐标),记进清单里这个分段的条目。
    */
   const bakeStream = async ({ task, project, signal, progress, yielding, stride: strideIn }: {
     task: NodeTask; project: unknown; signal: AbortSignal; progress: (frames: number) => void; yielding: () => boolean; stride?: number;
   }): Promise<{ manifest: Record<string, unknown> } | { yielded: true }> => {
-    const stride = Number.isInteger(strideIn) && (strideIn as number) > 1 ? (strideIn as number) : 1;
+    const stride = Number.isInteger(strideIn) && (strideIn as number) >= 1 ? (strideIn as number) : streamTaskStride(task);
     const plan = streamTaskFrames(task);
     if (!plan) throw Object.assign(new Error("任务没有 input.stream(切分方没给浏览器那一份的参数)"), { retryable: false });
     const { input } = plan;
@@ -415,6 +418,25 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     pixelRectNow = { ...input.bound };
     const blank = new OffscreenCanvas(input.bound.w, input.bound.h);
     const timescale = Math.round(input.fps);
+    /** 稀疏的一趟里量到的位置矩形:分段号 → 框(平面坐标)/ null(那一张全透明);量不出来的不记 */
+    const boxes = new Map<number, StreamRectLike | null>();
+    const measureBox = (bitmap: ImageBitmap): StreamRectLike | null | undefined => {
+      try {
+        const w = bitmap.width, h = bitmap.height;
+        if (!(w > 0) || !(h > 0)) return undefined;
+        const canvas = new OffscreenCanvas(w, h);
+        const g = canvas.getContext("2d", { willReadFrequently: true });
+        if (!g) return undefined;
+        g.drawImage(bitmap, 0, 0);
+        const local = alphaBoxOf(g.getImageData(0, 0, w, h).data, w, h);
+        if (!local) return null;
+        // 位图和平面矩形一般一样大;不一样大(按倍率取的)就换算回平面坐标,往外取整
+        const sx = input.bound.w / w, sy = input.bound.h / h;
+        const x0 = Math.floor(local.x * sx), y0 = Math.floor(local.y * sy);
+        const x1 = Math.min(input.bound.w, Math.ceil((local.x + local.w) * sx)), y1 = Math.min(input.bound.h, Math.ceil((local.y + local.h) * sy));
+        return { x: input.bound.x + x0, y: input.bound.y + y0, w: x1 - x0, h: y1 - y0 };
+      } catch { return undefined; }
+    };
     // 缺的分段按连续的几段分组:每组一个编码器(每段段首是关键帧,组与组之间不相干)
     const runs: (typeof plan.segments)[] = [];
     for (const s of plan.segments) {
@@ -439,7 +461,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
           if (seg.samples !== expected.get(seg.index) || !initId) return;
           const hash = await sha256Hex(seg.bytes);
           await uploader.put("px", hash, seg.bytes, "m4s");
-          parts.segments[seg.index] = { hash, bytes: seg.bytes.length, init: initId, stride, samples: seg.samples, sig: null, encoder: BROWSER_STREAM_ENCODER };
+          parts.segments[seg.index] = { hash, bytes: seg.bytes.length, init: initId, stride, samples: seg.samples, sig: null, encoder: BROWSER_STREAM_ENCODER,
+            ...(boxes.has(seg.index) ? { box: boxes.get(seg.index) ?? null } : {}) };
           streamStats.segments++;
           streamStats.bytes += seg.bytes.length;
         },
@@ -462,6 +485,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
             const t0 = performance.now();
             if (local === null) {
               streamStats.blank += repeat;
+              if (stride > 1 && at === 0) boxes.set(seg.index, null);
               for (let k = 0; k < repeat; k++) await enc.add(blank);
             } else {
               const { reply } = await streamBaker.bakeFrame({ task: frameTask, project, localFrame: local, signal });
@@ -476,6 +500,10 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
               stage.pausedMs += reply.pausedMs;
               if (reply.remounted) stage.remounts++;
               streamStats.pixelsMs.push(reply.pixelsMs ?? 0);
+              if (stride > 1 && at === 0) {
+                const box = measureBox(bitmap);
+                if (box !== undefined) boxes.set(seg.index, box);
+              }
               const e0 = performance.now();
               try { for (let k = 0; k < repeat; k++) await enc.add(bitmap); } finally { try { bitmap.close(); } catch { /* 已经关了 */ } }
               streamStats.encodeMs.push(performance.now() - e0);
@@ -503,6 +531,14 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   /** 流任务全部分段齐后:清单写内容库(`render-manifest`,键 `<结果键>:<起>-<止>`);失败只记诊断(同快照、同桌面 writeManifest) */
   const putStreamManifest = async (task: NodeTask, manifest: Record<string, unknown>): Promise<boolean> => {
     const key = manifestKey(task);
+    // 清单里有稀疏的分段时,先和内容库里已有的那一份合并(不降级:已有的满密度分段留着,`mergeStreamManifest`);全是满密度的直接写
+    const own = manifest as unknown as StreamManifestOut;
+    if (Object.values(own.segments ?? {}).some((seg) => seg.stride > 1)) {
+      try {
+        const got = await docRequest({ type: "content.get", kind: "render-manifest", key });
+        if (got.type === "content.item" && got.body) manifest = mergeStreamManifest(got.body, own) as unknown as Record<string, unknown>;
+      } catch { /* 取不到就照新的写 */ }
+    }
     try {
       const r = await docRequest({ type: "content.put", kind: "render-manifest", key, body: manifest });
       if (r.type === "content.stored") { manifestStats.written++; return true; }
@@ -546,7 +582,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
         const r = await docRequest({ type: "content.get", kind: "render-manifest", key });
         found = r.type === "content.item" ? r.body : null;
       } catch { return null; }
-      if (!streamManifestCovers(found, task as Parameters<typeof streamManifestCovers>[1])) return null;
+      // 满密度任务要每个分段都是满密度;稀疏流任务每段有一版就算数
+      if (!streamManifestCovers(found, task as Parameters<typeof streamManifestCovers>[1], { dense: !isSparseStreamTask(task) })) return null;
       for (const b of streamManifestBlocks(found)) if (!(await uploader.has(b.ns, b.hash))) return null;
       return found as unknown as Record<string, unknown>;
     }

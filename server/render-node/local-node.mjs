@@ -187,7 +187,9 @@ function mergedLocks(cardLocks, extra) {
  *     这些流给浏览器出一份(单卡流、浏览器做得了的才出)。**切分方自己的那一份**看执行器给的 `ownListStreams`:
  *       - 为真(本机此刻能产流;托管方的渲染节点另要这个项目的「生成轨道流」开着,由执行器按项目收,`prerender-executor.mjs` 的 `plan`):单卡流连自己的那一份一起出,
  *         与浏览器那一份照 `splitPlan` 的规矩成对(`input.dual`,谁先认领谁得);
- *       - 不为真(本机不能产流、托管方的这一项关着、旧执行器):照旧只给浏览器出(`browserOnly`),切分方自己不产。
+ *       - 不为真而执行器给了 `ownListSparseStreams: true`(托管方的渲染节点能产流、这个项目的「生成轨道流」关着):单卡流标 `ownSparseOnly`,
+ *         切分方自己的那一份只出稀疏流任务(`splitPlan` 文件头「稀疏流任务」),浏览器那一份照常;
+ *       - 都不为真(本机不能产流、旧执行器):照旧只给浏览器出(`browserOnly`),切分方自己不产。
  *     组流任何时候都只标 `browserOnly`(浏览器画不了,等于不出):组流的内容键跟着「清单里还有哪些片段」变,流任务回来时
  *     对不回这一版,层表也列不出它(`frame-pipeline.mjs` 的 `issuedStreamSpecs` 只认单卡流)。
  *     执行器没给 `browserStreamsFor`(旧执行器、测试替身)就不切流,与原来相同。
@@ -199,10 +201,11 @@ export function listPlanOverrides(task, plan) {
   let streams = [];
   if (!backfill && typeof plan?.browserStreamsFor === 'function') {
     const own = plan.ownListStreams === true;
+    const sparseOwn = !own && plan.ownListSparseStreams === true;
     const single = s => s.kind === 'card' && s.plane === 'local' && Array.isArray(s.clipIds) && s.clipIds.length === 1;
     try {
       streams = (plan.browserStreamsFor(new Set(clips)) ?? []).filter(s => s && typeof s === 'object')
-        .map(s => (own && single(s) ? { ...s } : { ...s, browserOnly: true }));
+        .map(s => (own && single(s) ? { ...s } : sparseOwn && single(s) ? { ...s, ownSparseOnly: true } : { ...s, browserOnly: true }));
     } catch { streams = []; }
   }
   return { prerenderSet: new Set(clips), streams, lane: backfill ? 'backfill' : 'normal' };
@@ -260,6 +263,8 @@ export function createLocalNode({
   /** 在等回包的发布:reqId → { run, message, resolve, reject } */
   const publishes = new Map();
   let publishSeq = 0;
+  /** 队列认不认稀疏流任务(`node.welcome.sparseStreams`;旧队列不带):为真才切稀疏流任务(`splitPlan` 的 `sparseStreams`) */
+  let sparseStreams = false;
   let attached = false;
   const takesOverLocked = takeoverLockedTest(takeoverLocked);
 
@@ -395,8 +400,10 @@ export function createLocalNode({
       ? { ...task, source: { ...task.source, projectRev: plan.actualRev } }
       : task;
     // 只切分、不认领细任务的节点(`planOnly`,仅供测试,filter.mjs 规则 8)不出自己的那一份流:它不会去做,出了只是多一个永远没人产的候选
-    const listPlan = node?.planOnly === true && plan?.ownListStreams === true ? { ...plan, ownListStreams: false } : plan;
-    const base = { ...plan, planTask: cutBy, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, ...listPlanOverrides(task, listPlan) };
+    const listPlan = node?.planOnly === true && (plan?.ownListStreams === true || plan?.ownListSparseStreams === true)
+      ? { ...plan, ownListStreams: false, ownListSparseStreams: false } : plan;
+    const base = { ...plan, planTask: cutBy, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, browserCards, browserCardEnvFingerprints, sparseStreams,
+      ...listPlanOverrides(task, listPlan) };
     const outcome = await publishDerived(run, base, plan?.cardLocks);
     if (!holding(run)) return discard();
     const { derived, published, relocked, gaveUp } = outcome;
@@ -417,6 +424,7 @@ export function createLocalNode({
 
   function handle(message) {
     if (runner.stopped()) return;
+    if (message?.type === 'node.welcome') sparseStreams = message.sparseStreams === true;
     session.receive(message);
     const waiter = message?.reqId != null ? publishes.get(message.reqId) : undefined;
     if (waiter && message.type === 'task.published') {
