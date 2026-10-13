@@ -87,7 +87,9 @@ async function bakeSharded(opts, n) {
     console.log(`分片导出:${shards.length} 个进程,段 ${shards.map(([a, b]) => `${a}-${b}`).join(' ')}`);
     while (bakeries.length < shards.length) bakeries.push(await openBakery(opts));
     const t0 = Date.now();
-    const results = await Promise.all(shards.map(([a, b], k) => bakeFrames(bakeries[k], { ...opts, frames: `${a}-${b}` })));
+    // 推帧补画(`bake.mjs` 文件头):第二片起不补,理由同 `export-unified.mjs`(切点前面推过去的卡到切点都已卸掉)
+    const results = await Promise.all(shards.map(([a, b], k) => bakeFrames(bakeries[k], { ...opts, frames: `${a}-${b}`,
+      ...(k > 0 && typeof opts.pushDraw !== 'boolean' ? { pushDraw: false } : {}) })));
     const r0 = results[0];
     const totalFrames = end - start + 1;
     const merged = {

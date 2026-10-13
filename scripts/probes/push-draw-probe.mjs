@@ -5,20 +5,21 @@
  *        [--variants glass,user,plain,alone] [--paths range,targets,see,layout,stream,shards] [--legacy]
  *        [--cost] [--out <目录>] [--json <文件>] [--keep]
  *
- * 项目(960×540,30 帧每秒,4 秒):一枚 `punch-pill` 在 1 秒进场;另有一张更早挂载、要回放的卡(`rank-bars`,0.2 秒进场,在最下面)。
- * 四档:
+ * 项目(960×540,30 帧每秒,5 秒):一枚 `punch-pill` 在 1 秒进场;另有一张更早挂载、要回放的卡(`rank-bars`,0.2 秒进场,在最下面);
+ * 3 秒时再进场第二枚药丸 —— 它前面有一段画面静止的帧(静止的帧不补画,见 `bake.mjs` 的 `pushDrawNeeded`),核对「静止一段以后
+ * 再挂载的卡」也对。四档:
  *   glass  药丸上面压一张毛玻璃卡(里程表 `odometer`,0.2 秒进场)
  *   user   药丸上面压一张用框架写的用户卡(remotion 式,探针经真的 `/api/cards/create` 建;只有探针自己起的开发服务器、
  *          或者加了 `--with-user` 才做:它往那台开发服务器的数据目录里写一张卡)
  *   plain  药丸上面什么都不压(更早挂载的那张卡在它下面)
- *   alone  只有药丸一张卡(对照:页面上没有更早挂载的卡)
+ *   alone  只有第一枚药丸一张卡(对照:页面上没有更早挂载的卡)
  *
- * 参照:同一个项目从第 0 帧起每帧都截的整段导出(`bakeFrames`,`frames: 0-119`)。
+ * 参照:同一个项目从第 0 帧起每帧都截的整段导出(`bakeFrames`,`frames: 0-149`)。
  *
  * 逐条查产品里「推过去不截图」的路,每条路给结论:取到的那一帧和参照的同一帧差多少(RGBA 四个通道的平均绝对差,满分 255)、
  * 最像参照的哪一帧(落后几帧):
- *   range    只导一段:`exportUnified({ frames: '51-70' })`(从第 0 帧推过去,只截 51～70)
- *   targets  只取几帧的导出:`exportUnified({ targetFrames: [51, 52, 80] })`
+ *   range    只导一段:`exportUnified({ frames: '51-70' })`、`'100-104'`(从第 0 帧推过去,只截这一段)
+ *   targets  只取几帧的导出:`exportUnified({ targetFrames: [51, 52, 80, 100, 101] })`
  *   see      抽帧:`FramePipeline.see_frames`(Agent 的 see_frames;get_gif 走同一条,只是时刻多几个)
  *   layout   `FramePipeline.layout`(Agent 的 get_layout):药丸的实体框,和只有药丸的项目同一时刻的框比
  *   stream   流的推帧(`bakeStream`,一页上两张卡 = 组流的页面形状;alone 档是单卡流的形状):断了租约从挂载帧回放过来的分段、
@@ -62,16 +63,16 @@ const { exportUnified } = await import('../../server/bakery/export-unified.mjs')
 const { decodePngRgba } = await import('../../server/bakery/capture-canvas.mjs');
 const { mountFrameOf } = await import('../../src/render/frameWindow.mjs');
 
-const W = 960, H = 540, FPS = 30, SECONDS = 4, N = SECONDS * FPS;
+const W = 960, H = 540, FPS = 30, SECONDS = 5, N = SECONDS * FPS;
 const RUN = Date.now().toString(36);
 const USER_CARD = `pd-cover-${RUN}`;
 const ownServer = !ORIGIN;
 const VARIANTS = String(flagArg('variants', ownServer || WITH_USER ? 'glass,user,plain,alone' : 'glass,plain,alone', args)).split(',').filter(Boolean);
 const PATHS = new Set(String(flagArg('paths', 'range,targets,see,layout,stream,shards', args)).split(',').filter(Boolean));
 /** 取帧的那几帧:药丸 30 帧进场,51 帧时入场动画正在半路上(弹簧还没停、光晕还在散) */
-const RANGE = [51, 70];
-const TARGETS = [51, 52, 80];
-const SEE = [35, 51, 80];
+const RANGES = [[51, 70], [100, 104]];
+const TARGETS = [51, 52, 80, 100, 101];
+const SEE = [35, 51, 80, 100];
 /** 问实体框的那一帧(不在 `SEE` 里;药丸的光晕这时还在放大,框逐帧在变) */
 const LAYOUT_FRAME = 57;
 /** 差到这个数以内算相同(同一条路上逐字节相同就是 0;留一点余量给 see_frames 那条路可能的再编码) */
@@ -86,6 +87,7 @@ const scaleOf = (w) => w / 1920;
 const pillClip = (w = W) => ({ id: 'clip-p', kind: 'card', cardId: 'punch-pill', start: 1, end: SECONDS, params: { text: '对照卡' },
   frame: { x: Math.round(w / 3), y: Math.round(w * 150 / 960), w: 560, h: 200, anchor: [0.5, 0.5], scale: w / 960 } });
 const fullFrame = (w) => ({ frame: { x: 0, y: 0, w: 1920, h: 1080, anchor: [0, 0], scale: scaleOf(w) } });
+const secondPill = (w = W) => ({ ...pillClip(w), id: 'clip-q', start: 3, params: { text: '第二枚' }, frame: { ...pillClip(w).frame, x: Math.round(w * 0.7), y: Math.round(w * 400 / 960) } });
 const earlyClip = (w = W) => ({ id: 'clip-e', kind: 'card', cardId: 'rank-bars', start: 0.2, end: SECONDS, params: {}, ...fullFrame(w) });
 const glassClip = (w = W) => ({ id: 'clip-t', kind: 'card', cardId: 'odometer', start: 0.2, end: SECONDS, params: { position: 'left', value: 86420, label: 'x' }, ...fullFrame(w) });
 const userClip = (w = W) => ({ id: 'clip-u', kind: 'card', cardId: USER_CARD, start: 0.2, end: SECONDS, params: { label: '框架卡' }, ...fullFrame(w) });
@@ -94,9 +96,9 @@ const base = (id, w, h, seconds, tracks) => ({ id: `${id}-${RUN}`, name: `推帧
   themeId: 'dark', media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {}, tracks });
 /** 第一条序列在最上面 */
 function variantProject(variant, w = W, h = H) {
-  const tracks = variant === 'glass' ? [track('tr-t', [glassClip(w)]), track('tr-p', [pillClip(w)]), track('tr-e', [earlyClip(w)])]
-    : variant === 'user' ? [track('tr-u', [userClip(w)]), track('tr-p', [pillClip(w)]), track('tr-e', [earlyClip(w)])]
-      : variant === 'plain' ? [track('tr-p', [pillClip(w)]), track('tr-e', [earlyClip(w)])]
+  const tracks = variant === 'glass' ? [track('tr-t', [glassClip(w)]), track('tr-q', [secondPill(w)]), track('tr-p', [pillClip(w)]), track('tr-e', [earlyClip(w)])]
+    : variant === 'user' ? [track('tr-u', [userClip(w)]), track('tr-q', [secondPill(w)]), track('tr-p', [pillClip(w)]), track('tr-e', [earlyClip(w)])]
+      : variant === 'plain' ? [track('tr-q', [secondPill(w)]), track('tr-p', [pillClip(w)]), track('tr-e', [earlyClip(w)])]
         : [track('tr-p', [pillClip(w)])];
   return base(`pd-${variant}-${w}`, w, h, SECONDS, tracks);
 }
@@ -232,10 +234,17 @@ try {
 
     if (PATHS.has('range')) {
       const got = new Map();
-      await quiet(() => exportUnified(project, { url: exportUrl(project), out: path.join(OUT, 'scratch', `range-${variant}`), frames: `${RANGE[0]}-${RANGE[1]}`, workers: 1, noVideo: true, writeFrames: false,
-        onFrame: async (i, buf) => { got.set(i, rgba(buf)); if (i === 51 && variant !== 'alone') await shot('range-f51', Buffer.from(buf)); } }));
-      row.只导一段 = settle(variant, 'range 只导一段', verdict(judge(got, ref)));
+      const pushes = [];
+      for (const [a, b] of RANGES) {
+        const result = await quiet(() => exportUnified(project, { url: exportUrl(project), out: path.join(OUT, 'scratch', `range-${variant}-${a}`), frames: `${a}-${b}`, workers: 1, noVideo: true, writeFrames: false,
+          onFrame: async (i, buf) => { got.set(i, rgba(buf)); if (i === 51 && variant !== 'alone') await shot('range-f51', Buffer.from(buf)); } }));
+        pushes.push({ 段: `${a}-${b}`, 推过去的帧数: a, 补画的拍数: result.pushDrawn ?? null });
+      }
+      row.只导一段 = { ...settle(variant, 'range 只导一段', verdict(judge(got, ref))), 推帧: pushes };
       row.只导一段.各帧 = row.只导一段.各帧.filter((r, k) => k < 3 || r.对同一帧 > TOL).slice(0, 6);
+      // 静止的帧不补画:补画的拍数比推过去的帧数少(只有药丸的那一档,药丸进场以前整个画面都是空的)
+      if (!LEGACY) check(pushes.every((x) => x.补画的拍数 > 0 && x.补画的拍数 < x.推过去的帧数 + 2), `${variant}:只导一段时静止的帧没有补画`, pushes);
+      else check(pushes.every((x) => x.补画的拍数 === 0), `${variant}:关掉以后一拍都不补`, pushes);
     }
     if (PATHS.has('targets')) {
       const got = new Map();
@@ -273,15 +282,17 @@ try {
       };
       const dense = await stream([{ fromFrame: first, toFrame: N - 1, stride: 1 }]);
       const replay = await stream([{ fromFrame: first + 60, toFrame: first + 74, stride: 1 }]);
+      // 再回放一段更晚的:第二枚药丸在静止了一段以后才挂载,这一段正在它的入场动画里
+      const replayLate = await stream([{ fromFrame: first + 90, toFrame: first + 104, stride: 1 }]);
       const segments = [];
       for (let a = first; a < N; a += 15) segments.push({ fromFrame: a, toFrame: Math.min(N - 1, a + 14), stride: 15 });
       const sparse = await stream(segments);
       const page = variant === 'plain' ? '两张卡的页面' : '只有药丸的页面';
-      const a = verdict(judge(replay.frames, dense.frames));
+      const a = verdict(judge(new Map([...replay.frames, ...replayLate.frames]), dense.frames));
       const b = verdict(judge(sparse.frames, dense.frames));
       a.各帧 = a.各帧.filter((r, k) => k < 2 || r.对同一帧 > TOL).slice(0, 5);
       b.各帧 = b.各帧.filter((r, k) => k < 2 || r.对同一帧 > TOL).slice(0, 8);
-      row.流_断租约回放的分段 = { ...settle(variant, `stream 回放的分段(${page})`, a), 回放了几帧: replay.stats[0].replayed, 补画的拍数: replay.stats[0].pushDrawn };
+      row.流_断租约回放的分段 = { ...settle(variant, `stream 回放的分段(${page})`, a), 回放了几帧: [replay.stats[0].replayed, replayLate.stats[0].replayed], 补画的拍数: [replay.stats[0].pushDrawn, replayLate.stats[0].pushDrawn] };
       row.流_稀疏那一趟 = { ...settle(variant, `stream 稀疏那一趟(${page})`, b), 分段数: segments.length, 补画的拍数: sparse.stats.reduce((s, x) => s + x.pushDrawn, 0),
         补画一共毫秒: sparse.stats.reduce((s, x) => s + x.pushDrawMs, 0), 推帧一共毫秒: sparse.stats.reduce((s, x) => s + x.stepMs, 0) };
     }

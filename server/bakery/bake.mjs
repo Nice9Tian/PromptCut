@@ -26,12 +26,22 @@ import { prepareFrameMedia } from './frame-media.mjs';
  *     在下面、不重叠都一样),再推过一张中途进场的卡。只导一段(`--frames a-b`)、抽帧(`targetFrames`)、
  *     流的回放段和稀疏那一趟(一页上不止一张卡时)都是这样推的。整段导出每帧都截图,不受影响。
  *
- * 做法:推过去的帧在 `step` 之后补一拍带截图的 `beginFrame`(最便宜的 JPEG,立刻丢掉),拍数和「这一帧取了图」
- * 完全一样(上一帧没画过时同样先多画一拍,见 `captureFrame` 的 `prime`)。于是页面经历的拍子与整段导出逐拍相同,
- * 取图的那几帧和整段导出里的同一帧一致。
+ * 量到的规律(同一支探针的记录):带截图的一拍之后,渲染器还能再跑两三次「画面有变化」的主线程帧,之后就停住等下一次带截图的
+ * 一拍;画面没有变化的拍不占这个余量。整段导出每帧一张截图,永远在余量里。
+ *
+ * 做法:推过去的帧在 `step` 之后补一拍带截图的 `beginFrame`(最便宜的 JPEG,立刻丢掉),和「这一帧取了图」时多出来的那一拍
+ * 一样。于是页面经历的拍子与整段导出相同,取图的那几帧和整段导出里的同一帧逐像素一致。
+ *   - **这一帧画面没有变化就不补**(`pushDrawNeeded`):`step` 判了静止(没有在跑的动画、DOM 没动、没有新的 rAF 请求、
+ *     没有可见的 canvas 和视频,见 `ExportView` 的 `__pcStaticProbe`),这一拍也没有报告画面有变化(`hasDamage`),而且这一趟里
+ *     前面已经画过一拍。真的画一帧不便宜(1920×1080 的重场景每帧几十毫秒,和取一张图差不多),静止的那些帧不用付。
+ *     实际上页面上挂着卡的帧几乎都判「在变」(卡挂着时每帧至少有一处 DOM 改动),省下来的主要是没有卡的那些帧;
  *   - 每帧都取图的那些路(整段导出、接着租约产的满密度分段)一拍都不多走,逐字节不变;
- *   - 预热(`warmUpAt`)不动;
+ *   - 预热(`warmUpAt`)不动;预热留下没画的东西由这一趟的第一帧收掉(第一帧一定画,而且和取图的第一帧一样画两拍);
  *   - 素材不在补画的帧上加载(`prepareFrameMedia` 只在真取图的帧前面);丢掉的图不交给 `onFrame`、不写盘、不进编码器。
+ *
+ * 并行导出的分片不补(`export-unified.mjs`、`shards.mjs` 给它们传 `pushDraw: false`):分片只在「没有有状态的卡跨着」的帧上切
+ * (`src/render/shardPlan.mjs`),切点前面推过去的卡到切点都已经卸掉,不补也对(探针的 shards 一项核对);补的话每个分片要把
+ * 前面的帧真的再画一遍,三片比单进程还慢(量过,见报告)。
  *
  * `PROMPTCUT_PUSH_DRAW=0`(或 `opts.pushDraw === false`)关掉,只给探针对照「修之前」用,产品里不设。
  */
@@ -41,7 +51,18 @@ export function pushDrawEnabled(opts = {}, env = process.env) {
   return String(env?.PROMPTCUT_PUSH_DRAW ?? '1').trim() !== '0';
 }
 /**
- * 画一拍丢掉。`prime`:紧挨着的上一帧没画过时先多画一拍(和 `captureFrame` 同一个判据、同样的拍数)。
+ * 推过去的这一帧要不要补画(见文件头)。`isStatic`:`step` 的返回值;`damaged`:这一帧的拍子里有没有哪一拍报告了画面有变化
+ * (`step.last.damaged`);`drawnBefore`:这一趟(或这份租约)里前面画过没有 —— 没画过的第一帧一定画;
+ * `previousDrawn`:紧挨着的上一帧画过没有。
+ *
+ * 报告的变化只在上一帧没画过时才算:带截图的一拍之后,下一拍不带截图的总会报告一次变化(量到的,空页面上也是),那是上一拍的回声。
+ * 它是给 `__pcStaticProbe` 看不见的变化(会动的图片之类)兜底的:这样的页面每隔一帧补一拍,渲染器的余量用不完。
+ */
+export function pushDrawNeeded({ isStatic, damaged, drawnBefore, previousDrawn }) {
+  return !drawnBefore || !isStatic || (!!damaged && !previousDrawn);
+}
+/**
+ * 画一拍丢掉。`prime`:先多画一拍 —— 只在这一趟的第一帧用(取图的第一帧就是画两拍,见 `captureFrame` 的 `prime`)。
  * 和 `captureFrame` 一样,这一拍没交回画面就在同一个时间点再发,最多四拍;交不回来不报错(这张图本来就不要)。
  * 回一共发了几拍。
  */
@@ -289,9 +310,9 @@ export async function bakeFrames(bakery, opts = {}) {
         console.log(`Exported frame ${i} (${i - startFrame + 1}/${totalFrames})`);
       }
       if (!wantShot || opts.snapshotOnly) {
-        // 推帧补画(见文件头):这一帧不取图,也没有为生成快照画过,就画一拍丢掉。当它「截过」记账,下一帧不用再先丢一张
-        if (pushDraw && lastDrawnFrame !== i) {
-          pushDrawn += await drawDiscarded(bakery, lastShotFrame !== i - 1, opts.signal);
+        // 推帧补画(见文件头):这一帧不取图,也没有为生成快照画过,画面又有变化,就画一拍丢掉。当它「截过」记账,下一帧不用再先丢一张
+        if (pushDraw && lastDrawnFrame !== i && pushDrawNeeded({ isStatic, damaged: step.last.damaged, drawnBefore: lastDrawnFrame !== null, previousDrawn: lastDrawnFrame === i - 1 })) {
+          pushDrawn += await drawDiscarded(bakery, lastDrawnFrame === null, opts.signal);
           lastShotFrame = lastDrawnFrame = i;
         }
         continue;
@@ -383,8 +404,12 @@ export async function bakeFrames(bakery, opts = {}) {
  * `frameWindow` 留在调用方。
  */
 export function createStepper(bakery, { fps, directFrameAt = frame => frame, signal, trace = null }) {
-  const { page, beginFrame, waitNet } = bakery;
-  return async (frameIndex, wantTrace) => {
+  const { page, waitNet } = bakery;
+  // 推帧补画要知道这一帧的拍子里有没有哪一拍报告了画面有变化(`hasDamage`);拍子本身照旧,只是把回执看一眼
+  const beginFrame = async (extra) => { const result = await bakery.beginFrame(extra); if (result?.hasDamage) step.last.damaged = true; return result; };
+  const readyHost = { page, beginFrame, waitNet };
+  const step = async (frameIndex, wantTrace) => {
+    step.last = { frame: frameIndex, damaged: false };
     // 两个计数器要在推进之前取、推进之后比;取值和下发时间合并成一次 evaluate
     const before = await page.evaluate(({ sec, directSec }) => {
       const n = { raf: window.__pcRafCount ?? 0, mut: window.__pcMutationCount ?? 0 };
@@ -434,7 +459,8 @@ export function createStepper(bakery, { fps, directFrameAt = frame => frame, sig
     // 再等一次网络:这一拍里新挂的组件发出的请求,requestWillBeSent 事件和 beginFrame 的回复谁先到 Node 没有保证,
     // 上面那次 waitNet 可能正好看见 0 个在途。经过一次页面内往返,事件已经追上;没有请求时这里不花时间。
     await waitNet();
-    await waitFrameReady(bakery, signal);
+    // 等就绪时补发的拍子(异步的加载器要靠它们往前走)也经同一个包装:它们报告的画面变化一样要记
+    await waitFrameReady(readyHost, signal);
     // 四个条件同时成立才算静止,少一个都会渲出坏帧 —— 理由见 ExportView 的 __pcStaticProbe。
     // finished:这一帧被 __pcSyncAnims 收束的动画数。动画在这一帧跳到终态,画面变了,但收束后 anims 里
     // 已经没有它、DOM 也没动 —— 只看 anims 会在动画结束那一帧误判静止。
@@ -443,8 +469,12 @@ export function createStepper(bakery, { fps, directFrameAt = frame => frame, sig
     if (process.env.PC_STATIC_TRACE) {
       console.log(`  静态判定 帧${frameIndex}: anims=${probe?.anims} finished=${probe?.finished} mut=${before.mut}->${probe?.mut} raf=${before.raf}->${probe?.raf} video=${probe?.video} canvas=${probe?.canvas} => ${isStatic ? '静止' : '在变'}`);
     }
+    step.last.isStatic = isStatic;
     return isStatic;
   };
+  /** 最近一次推的那一帧:`{ frame, damaged, isStatic }`(给推帧补画用) */
+  step.last = { frame: null, damaged: false, isStatic: false };
+  return step;
 }
 
 /**
@@ -542,22 +572,24 @@ export async function bakeStream(bakery, opts) {
   }
   const stats = { reset, replayed: 0, captured: 0, captureMs: 0, stepMs: 0, pushDrawn: 0, pushDrawMs: 0 };
   const pushDraw = pushDrawEnabled(opts);
-  /** 推帧补画(见文件头):回放的帧、稀疏分段里不取图的帧各画一拍丢掉;当它「截过」记账,下一帧不用再先丢一张 */
-  const drawPushed = async (frame) => {
+  /** 推帧补画(见文件头):回放的帧、稀疏分段里不取图的帧,画面有变化的各画一拍丢掉;当它「截过」记账,下一帧不用再先丢一张 */
+  const drawPushed = async (frame, isStatic) => {
     if (!pushDraw) return;
+    const drawnBefore = lease.lastShot !== null;
+    if (!pushDrawNeeded({ isStatic, damaged: lease.stepper.last?.damaged, drawnBefore, previousDrawn: lease.lastShot === frame - 1 })) return;
     const started = Date.now();
-    stats.pushDrawn += await drawDiscarded(bakery, lease.lastShot !== frame - 1, signal);
+    stats.pushDrawn += await drawDiscarded(bakery, !drawnBefore, signal);
     lease.lastShot = frame;
     stats.pushDrawMs += Date.now() - started;
   };
   for (let frame = lease.lastFrame + 1; frame <= toFrame; frame++) {
     if (signal?.aborted) throw cancelled();
     const stepStarted = Date.now();
-    await lease.stepper(frame, false);
+    const isStatic = await lease.stepper(frame, false);
     stats.stepMs += Date.now() - stepStarted;
     lease.lastFrame = frame;
-    if (frame < fromFrame) { stats.replayed++; await drawPushed(frame); continue; }
-    if ((frame - fromFrame) % stride !== 0) { await drawPushed(frame); continue; }
+    if (frame < fromFrame) { stats.replayed++; await drawPushed(frame, isStatic); continue; }
+    if ((frame - fromFrame) % stride !== 0) { await drawPushed(frame, isStatic); continue; }
     const shotStarted = Date.now();
     await opts.beforeCapture?.(frame);
     if (opts.hasMedia) await prepareFrameMedia(bakery);
