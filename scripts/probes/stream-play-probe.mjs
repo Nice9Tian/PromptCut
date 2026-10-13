@@ -126,11 +126,12 @@ try {
   out.produceMs = produced.produceMs;
   if (!producer) throw new Error('轨道流没生产完');
   const layers = latestLayers(produced.layers);
-  out.layers = layers.map(l => ({ clipId: l.clipId, key: l.key.slice(0, 12), ranges: l.ranges, groupClipIds: l.groupClipIds ?? null }));
+  out.layers = layers.map(l => ({ clipId: l.clipId, key: l.key.slice(0, 12), ranges: l.ranges, originFrame: l.originFrame ?? null, groupClipIds: l.groupClipIds ?? null }));
   // 播放中被抑制的:有流的那几张(毛玻璃的里程表不进流,照常活渲 —— 它要模糊的正是下面的流画布)
   const heavy = [...new Set(layers.flatMap(l => l.groupClipIds?.length ? l.groupClipIds : [l.clipId]))];
   // 父页那一侧的合成:就绪索引里 `stream` 层 → 平面(有 groupClipIds 的一条组流)
-  const planes = layers.map(l => ({ clipIds: l.groupClipIds?.length ? l.groupClipIds : [l.clipId], key: l.key, ranges: l.ranges }));
+  // 每条平面带着这条流自己的第一帧(舞台按它把帧号换成分段号;不带的平面舞台不解码)
+  const planes = layers.map(l => ({ clipIds: l.groupClipIds?.length ? l.groupClipIds : [l.clipId], key: l.key, ranges: l.ranges, originFrame: l.originFrame }));
   out.planes = planes.map(p => ({ clipIds: p.clipIds, ranges: p.ranges }));
 
   const [originA, originB] = await stageOrigins();
