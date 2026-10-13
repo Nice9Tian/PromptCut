@@ -100,7 +100,7 @@
 
 - 队列在 `card-locked` 的发布回包与认领回包里另带 `lockIdleMs`（此刻减 `touchedAt`）与 `lockedByProfile`。
 - pc、host 切分时：`lockIdleMs > CARD_LOCK_IDLE_MS`（30 s，与本机锁库同一个数，`server/card-lock.mjs`）就带 `takeover` 按自己的指纹重发（给 `local-node.mjs` 的 `takeoverLocked` 传判定函数）。
-- 建议续约（`task.progress`）也刷新 `touchedAt`：一段 60 帧的重卡在浏览器上要几秒到几十秒（M7 探针 P1 实测：每帧烧 40 ms 的推帧卡顺推约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃，这类卡不派给浏览器，见第 13 节「探针之后的更正」第 6 条），产出中不该被判闲置。
+- 建议续约（`task.progress`）也刷新 `touchedAt`：一段 60 帧的重卡在浏览器上要几秒到几十秒（M7 探针 P1 实测：每帧烧 40 ms 的推帧卡顺推约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃，这类卡不派给浏览器，见第 13 节「探针之后的更正」第 6 条；〔更正：Lottie 素材卡之后已放开给浏览器节点，见第 13 节第 6 条的更正。主会话 2026-10-14，`AGENT-rr-lottie-2.md`〕），产出中不该被判闲置。
 - 限制：接手只在有人重新切分时发生（有页面或编辑器发布新计划）。没人发布时，锁在走掉的浏览器身上的卡一直缺。M7 接受并写进报告，M8 混沌项复测。
 - **页面只是忙不算闲置**〔裁，2026-09-30，`claude/queue-maint`，报告 `docs/reports/AGENT-queue-maint.md` 任务 D〕：M7 实测（`REPORT-M7.md` 第 4 节第 7 条、第 11 节第 1 行）页面锁着卡 h1、手里在做别的锚帧段（经公网慢），这张卡 30 s 没有产出就被 pc 接手，已做的帧白费。只看产出分不出「页面还在、只是忙」与「页面走了」。改法（三级，形状向后兼容）：
   - `node.welcome` 多带 `activeIntervalMs`（10 s，`NODE_ACTIVE_INTERVAL_MS`，三级数字，须明显小于 30 s）；
@@ -373,7 +373,7 @@ G0 + G0-R（改了预渲染与快照路径）；桌面导出像素基线不变�
 | 3 | 第 4.3 节 | 用逐帧顺推（DOM、Motion 卡与桌面等价且便宜 4～7 倍）；`canvasHeavy` 卡顺推不等价，节点侧 `filter.mjs` 的纯浏览器规则再挡一次 | 缺省 `mode: 'seq'`；`filter.mjs` 规则 7 加 `canvas-heavy`；切分也不给浏览器另出画布卡那一份 |
 | 4 | D1 (d)、D10 | 在线构建关掉 CSS 压缩，再用 `m7-bake-probe` 的 compare 比在线构建与桌面；`will-change` 若仍有差异照实报，是否在快照序列化里去掉它另定（会让现有快照键一次性失效） | `vite.config.ts` 在线构建 `build.cssMinify: false`，另关 Tailwind 插件的构建期优化（`optimize: false`：Lightning CSS 不压缩也把 `0.4` 改写成 `.4`）。compare 结果见 `docs/archive/agent-reports/AGENT-rq-m7-node.md`：ticker、slow 60/60 逐字节相同；pill 46/60 相同，其余 14 帧只差 `will-change`（未动） |
 | 5 | D5、第 4.4 节 | 小尺寸必须内嵌页面的全局样式表；外部字体的顾虑改述为「只影响用户卡」 | `src/render/bakeSmall.ts` 把舞台页的样式表整份放进 `foreignObject` |
-| 6 | 第 3.4 节 | 「60 帧 8～15 s」换成实测（40 ms 推帧卡约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃）；切分方不把这类卡（Lottie 素材卡、预计帧超体积上限的）派给纯浏览器 | `split.mjs` 的浏览器可做判定挡掉 `lottie` / `lottie-*`、画布卡、执行器标了 `snapshotOversize` 的卡（只出切分方那一份）。标记由执行器（`server/prerender-executor.mjs` 的 `markSnapshotOversize`）每次切分前按本机快照库现读：共享档卡在本机指纹的键、或锁定方指纹的键下有 `oversize` 记录就整张卡标（不按段：卡片级指纹锁下按段挡不住，浏览器认领任一段就锁住整张卡）；记录只在本机，别的机器渲过或拉回过才有（2026-09-30，`claude/queue-maint` 任务 E） |
+| 6 | 第 3.4 节 | 「60 帧 8～15 s」换成实测（40 ms 推帧卡约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃）；切分方不把这类卡（Lottie 素材卡、预计帧超体积上限的）派给纯浏览器〔更正：Lottie 素材卡已放开——`split.mjs` 的 `BROWSER_EXCLUDED_CARD` 与 `pageStreamPlan.ts` 的 `PAGE_EXCLUDED_CARD` 已去掉（提交 `fb3a6c94`），浏览器节点和在线页面本页产它的单卡流；预计帧超体积上限的（执行器标 `snapshotOversize` 的）仍不派。主会话 2026-10-14，`AGENT-rr-lottie-2.md`〕 | `split.mjs` 的浏览器可做判定挡掉 `lottie` / `lottie-*`、画布卡、执行器标了 `snapshotOversize` 的卡（只出切分方那一份）。标记由执行器（`server/prerender-executor.mjs` 的 `markSnapshotOversize`）每次切分前按本机快照库现读：共享档卡在本机指纹的键、或锁定方指纹的键下有 `oversize` 记录就整张卡标（不按段：卡片级指纹锁下按段挡不住，浏览器认领任一段就锁住整张卡）；记录只在本机，别的机器渲过或拉回过才有（2026-09-30，`claude/queue-maint` 任务 E） |
 | 7 | （M7 之外） | 在线构建与托管端没带 `/catalog/`，Lottie 素材卡在线是空白 | 主会话另派人修；修之前第 2 条的就绪闸把这些段 `fail` 掉（实测 `not-ready: 控件尚未就绪 (lottie): HTTP 404`） |
 | 8 | 第 4.5 节 | 上传器按哈希单飞；`complete` 回 `incomplete` 时先重查 chunks 再重试 | `src/online/snapUploader.ts` |
 | 9 | 第 3.3 节 | 删掉「复用测量帧」这项优化 | 已删 |
