@@ -42,8 +42,10 @@ function lottieCardOf(a: CatalogAsset): CardDef<any> {
     useWhen: `${whenToUse(a)}动画本身 ${a.seconds ?? "?"}s(${a.w}×${a.h});clip 给到这个时长就完整播一遍,更长就停在最后一帧或循环。`,
     tags: ["lottie", "素材", ...a.tags],
     source: "asset",
-    // 帧模式:审计固化(A0.1)。Lottie 播放器按自己的时间线推进,任何参数下都是 stateful。
-    frameMode: "stateful",
+    // 帧模式:remotion 式(渲染重构「癸」)。LottieView 不让播放器自己走,每一帧把 t 换算成帧号直接跳过去;
+    // 随机数和属性值留旧数那几处在 loadLottie 里固定住了(见 native/lottie.tsx 文件头),任何参数下都是 direct。
+    // 本文件里素材封装卡的源码版本只取声明里的几项:这一行改掉的那一次,5 张 Lottie 封装卡的键才变。
+    frameMode: "direct",
     defaults: { speed: 1, loop: "no", fit: "contain" },
     controls: [
       { key: "speed", label: "速度倍率", type: "number", min: 0.1, max: 8, step: 0.1 },

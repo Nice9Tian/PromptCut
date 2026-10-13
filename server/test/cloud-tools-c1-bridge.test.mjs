@@ -22,8 +22,9 @@ import { createCollectBridge, collectPageTools, COLLECT_PAGE_TOOLS, COLLECT_BRID
 import { PAGE_BRIDGE_TOOLS } from '../agent/service/page-bridge.mjs';
 import { initiatorOffline } from '../agent/service/cloud-tools.mjs';
 import { COLLECT_PAGE_REQUEST_TOOLS } from '../../src/ai/cloud/collectBridge.ts';
+import { freePort } from './free-ports.mjs';
 
-const SOURCE_PORT = 28830;
+const SOURCE_PORT = await freePort();
 const noLeak = (text, what) => { for (const [name, value] of Object.entries(LOCAL_ONLY)) assert.equal(text.includes(value) || text.includes(JSON.stringify(value).slice(1, -1)), false, `${what} 里出现了本机的 ${name}`); };
 const states = (f) => f.delegationRows().map((r) => [r.state, r.reason]);
 
