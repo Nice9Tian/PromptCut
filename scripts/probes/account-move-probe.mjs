@@ -21,6 +21,10 @@
  *   协作房间   甲(已登录)开一个本机协作房间(同样的内容),设置里点「搬到云端」→ 确认框 → 头一次新建的回包丢了(断连接):
  *              失败、本机房间逐项不变(记录、能编辑能保存、成员还能连);再点一次:同一个请求号、同一个云端项目,搬成;
  *              本机房间记录没了、旧凭证连不进去;乙凭新链接加入看到同样的内容。
+ *   搬的时候又改了  本地项目那一遍最后成功的那一次里,在「正要换到云端项目」的那一刻改一处:编辑器不换过去、补传后再进,云端与本机相同。
+ *   关了以后断     另开一个小的本机协作房间:关本机协作的那一下改一处,随后云端不可用 → 补传失败。这时本机协作已关、最新内容已存在
+ *                  本机草稿里(不带房间关联)、云端缺最后的修改;**刷新页面**重开那份草稿:是普通的本地项目(不停在「原房间已删除」),
+ *                  设置里选云端点确定,用原来的请求号接着补上。再把搬之前那份带房间关联的旧草稿原样放回去打开:按本地项目开。
  * 每遍截图:搬之前、进行中、失败的提示、成功后的提示(`docs/reports/assets/v18-move/`)。
  * 输出:过程写 stderr;stdout 最后一行是一行 JSON(`fails` 为空才算过)。不打印密码、令牌、票据。
  */
@@ -47,7 +51,7 @@ const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OUT = path.resolve(arg('--out', path.join(ROOT, 'docs', 'reports', 'assets', 'v18-move')));
-const ONLY = arg('--only', 'local,room').split(',');
+const ONLY = arg('--only', 'local,room,resume').split(',');
 const KEEP = argv.includes('--keep-temp');
 const FIXTURE_PORTS = [28950, 28951, 28952, 28953, 28954, 28955, 28956], AGENT_PORT = 28957;
 const A_PORT = 28960, B_PORT = 28965;
@@ -243,7 +247,7 @@ function cloudProjects() {
 /* ---------------- 页面 ---------------- */
 
 const P = (page, fn, ...args) => page.evaluate(fn, ...args);
-const getJson = (url) => fetch(url, { signal: AbortSignal.timeout(5000) }).then((r) => r.json());
+const getJson = (url) => fetch(url, { signal: AbortSignal.timeout(30000) }).then((r) => r.json());
 const postJson = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) }).then((r) => r.json());
 
 async function openDesktop(ed, state, label) {
@@ -260,7 +264,7 @@ async function openDesktop(ed, state, label) {
   // 桌面外壳的全局对象:只给账号桥这一个命令(别的命令回 null,等于没有外壳)
   await page.evaluateOnNewDocument(() => {
     window.__TAURI__ = { core: { invoke: async (command, payload) => (command === 'account_bridge' ? window.__probeNative(payload?.operation, payload?.args ?? {}) : null) } };
-    window.__pcMoveTest = { contentTimeoutMs: 6000 };
+    window.__pcMoveTest = {};
   });
   await page.goto(`${ed.base}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => P(page, () => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 240_000, `${label} 页面接上本机文档服务`);
@@ -296,7 +300,7 @@ async function stageHas(page, text) {
 }
 const overrideOf = (ed, rel) => { try { return fs.readFileSync(path.join(ed.overrides, rel), 'utf8'); } catch { return null; } };
 const cardStatus = (ed) => getJson(`${ed.base}/api/cards/sync/status`);
-const draftText = (ed, id) => fetch(`${ed.base}/api/projects/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(5000) }).then((r) => (r.ok ? r.text() : null));
+const draftText = (ed, id) => fetch(`${ed.base}/api/projects/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(30000) }).then((r) => (r.ok ? r.text() : null));
 
 /** 在页面里搭一个项目:一张用户卡的片段、一段视频、一段卡片声音、大于 1 MiB 的正文(转写文本);回各样东西的号 */
 async function buildProject(page, ed, name, videoB64) {
@@ -449,6 +453,8 @@ async function scenarioLocal({ A, B, stateA, stateB, video }) {
 
   // —— 登录后接着搬;头一次云端中途不可用(取连接票据一直回 503)
   stateA.fault = (p) => (p === '/hosted/shared/account/session' ? 503 : null);
+  // 内容连接的等待上限调到 6 秒(产品里是 3 分钟),好在几秒内看到失败;恢复之后放回去
+  await P(page, () => { window.__pcMoveTest.contentTimeoutMs = 6000; });
   await page.type('[data-pc="collab-account-name"]', fixture.accounts[0].name);
   await page.type('[data-pc="collab-account-password"]', fixture.accounts[0].password);
   const t0 = Date.now();
@@ -480,11 +486,29 @@ async function scenarioLocal({ A, B, stateA, stateB, video }) {
   stateA.fault = null;
   const pendingHint = await P(page, () => document.querySelector('[data-pc="collab-move-pending"]')?.textContent ?? null);
   check(/已经建好/.test(pendingHint ?? ''), '本地-设置里提示上次没做完、云端项目已建好', pendingHint);
+  // 这一次在「正要换到云端项目」的那一刻改一处(模拟 Agent 或工具恰好在这时写项目):不许带着旧内容换过去
+  const editedName = `${name}-进项目前改的`;
+  await P(page, async (editedName) => {
+    const S = await import('/src/store/project.ts');
+    window.__moveStages = [];
+    window.__pcMoveTest.contentTimeoutMs = undefined;
+    window.__pcMoveTest.onStage = (stage) => {
+      window.__moveStages.push(stage);
+      if (stage === 'enter' && !window.__moveEdited) { window.__moveEdited = true; S.actions.setProjectMeta({ name: editedName }); }
+    };
+  }, editedName);
   await clickConfirm(page);
-  await waitFor(async () => { const t = await statusText(page); return t && !/^正在/.test(t) && t !== out.failText; }, 90_000, '第二次的结果');
+  await waitFor(async () => { const t = await statusText(page); return t && !/^正在/.test(t) && t !== out.failText; }, 90_000, '第二次的结果')
+    .catch(async (e) => { say('diag', { status: await statusText(page), stages: await P(page, () => window.__moveStages), view: await viewOf(page), toasts: await toastsOf(page) }); throw e; });
   out.doneText = await statusText(page);
   res.timings.localMoveMs = Date.now() - t0;
   check(out.doneText === M.ACCOUNT_MOVE_TEXT.doneLocal, '本地-成功的提示', out.doneText);
+  out.stages = await P(page, () => window.__moveStages);
+  const enters = out.stages.filter((x) => x === 'enter').length, firstEnter = out.stages.indexOf('enter');
+  check(enters === 2 && out.stages.slice(firstEnter + 1).includes('upload'), '本地-换过去的那一刻改了一处:第一次没有换过去,补传之后才进', out.stages);
+  // 「搬上去的那一份」现在是含这处修改的内容
+  built.text = await contentOf(page);
+  check(JSON.parse(built.text).name === editedName, '本地-那一刻的修改没有丢(编辑器里还在)', JSON.parse(built.text).name);
   const vDone = await waitFor(async () => { const v = await viewOf(page); return v.shared?.accountId ? v : null; }, 20_000, '甲进入云端项目');
   check(vDone.shared.where === 'hosted' && vDone.shared.projectId === made[0] && vDone.shared.creator === true && vDone.association === null, '本地-编辑器接着就在这个云端项目里(创建者,同一个项目号)', vDone.shared);
   check(stateA.requests.filter((q) => q.path === '/hosted/shared/account/create').length === 1, '本地-第二次没有再发新建请求');
@@ -495,7 +519,7 @@ async function scenarioLocal({ A, B, stateA, stateB, video }) {
   await shot(page, 'local-5-done');
   await closeSettings(page);
   const cloudNow = await cloudContent(stateA, made[0]);
-  check(M.sameContent(cloudNow, JSON.parse(built.text)), '本地-云端内容与搬之前本机那一份逐字段相同');
+  check(cloudNow.name === editedName && M.sameContent(cloudNow, JSON.parse(built.text)), '本地-云端内容与本机逐字段相同(含换过去那一刻的修改)', cloudNow.name);
   check((await contentOf(page)) === built.text || M.sameContent(JSON.parse(await contentOf(page)), JSON.parse(built.text)), '本地-甲编辑器里的内容没变');
   // 本机那份草稿:仍是普通的本地项目(没有协作关联),内容就是搬之前那一份
   const draftAfter = JSON.parse(await draftText(A, draftId));
@@ -503,8 +527,8 @@ async function scenarioLocal({ A, B, stateA, stateB, video }) {
   out.draftDiff = { vsBefore: differing(draftAfter.project, JSON.parse(draftBefore).project), vsMoved: differing(draftAfter.project, JSON.parse(built.text)) };
   // 素材表里的元数据(波形、缩略图等)是导入之后在后台陆续回填的,两次存盘之间会多出几个字段;素材本身按号和哈希比
   const mediaKeys = (p) => (p.media ?? []).map((m) => `${m.id}:${m.hash ?? ''}`).sort().join(',');
-  check(!draftAfter.collaboration && draftAfter.project.id === built.contentId && out.draftDiff.vsBefore.every((k) => k === 'media') &&
-    mediaKeys(draftAfter.project) === mediaKeys(JSON.parse(built.text)),
+  check(!draftAfter.collaboration && draftAfter.project.id === built.contentId && out.draftDiff.vsBefore.every((k) => k === 'media' || k === 'name') &&
+    draftAfter.project.name === editedName && mediaKeys(draftAfter.project) === mediaKeys(JSON.parse(built.text)),
     '本地-本机草稿仍是普通的本地项目(没有协作关联),内容就是搬上去的那一份', { collaboration: draftAfter.collaboration ?? null, id: draftAfter.project.id, ...out.draftDiff });
   check(await P(page, async () => (await import('/src/editor/io/drafts.ts')).getActiveDraftId() === null), '本地-搬完之后的保存不再写回那份草稿');
 
@@ -635,6 +659,106 @@ async function scenarioRoom({ A, B, stateA, stateB, video }) {
   return { out };
 }
 
+/* ---------------- 关掉本机协作以后补传失败、刷新页面、从本地项目接着补 ---------------- */
+
+async function scenarioResume({ A, stateA }) {
+  const out = {};
+  if (!stateA.recovery) await nativeBridge(stateA)('login', { ...fixture.accounts[0], deviceId: `move-a-${RUN}`.padEnd(16, '0'), deviceName: 'account-move-a', requestId: randomUUID() });
+  const page = await openDesktop(A, stateA, '甲(续搬)');
+  const name = `搬到云端-续搬-${RUN}`;
+  const contentId = await P(page, async (name) => (await import('/src/editor/io/proc.ts')).newProject(name).id, name);
+  await waitFor(() => P(page, (id) => window.__pcSyncTest.docProjectId() === id && window.__pcSyncTest.view().status === 'online', contentId), 20_000, '本机项目接上');
+  await P(page, async () => { const S = await import('/src/store/project.ts'); S.actions.addCardClip('punch-pill', 0, { duration: 3 }); });
+  const created = await P(page, async (o) => (await import('/src/editor/sync/collab.ts')).enableCollab(o), { where: 'lan', mode: 'free', name, creator: { username: 'host', password: secret() }, projectPassword: secret(), hostedUrl: `${ORIGIN}/hosted` });
+  if (!created.ok) throw new Error(`本机协作房间没开成:${created.error}`);
+  const roomId = (await viewOf(page)).shared.projectId;
+  await sleep(1000);
+  const draftId = await P(page, async () => { const D = await import('/src/editor/io/drafts.ts'); const id = D.newDraftId(); D.setActiveDraftId(id); await D.saveDraft(id); return id; });
+  const oldDraft = await draftText(A, draftId);
+  check(JSON.parse(oldDraft).collaboration?.roomId === roomId, '续搬-搬之前本机草稿里记着房间关联');
+  const recordFile = path.join(A.dataDir, 'docservice', 'auth', 'projects', `${roomId}.json`);
+  const cloudBefore = cloudProjects();
+  const createsBefore = stateA.requests.filter((q) => q.path === '/hosted/shared/account/create').length;
+
+  // 关本机协作的那一下改一处;从那以后云端不可用(取连接票据回 503)
+  const editedName = `${name}-关的那一下改的`;
+  await page.exposeFunction('__probeStage', (stage) => { if (stage === 'close-local') stateA.fault = (p) => (p === '/hosted/shared/account/session' ? 503 : null); });
+  await P(page, async (editedName) => {
+    const S = await import('/src/store/project.ts');
+    window.__pcMoveTest.contentTimeoutMs = 6000;
+    window.__pcMoveTest.onStage = (stage) => {
+      void window.__probeStage(stage);
+      if (stage === 'close-local' && !window.__moveEdited) { window.__moveEdited = true; S.actions.setProjectMeta({ name: editedName }); }
+    };
+  }, editedName);
+  await openSettings(page);
+  await page.waitForSelector('[data-pc="collab-move-hosted"]');
+  await page.click('[data-pc="collab-move-hosted"]');
+  await waitFor(async () => { const t = await statusText(page); return t && !/^正在/.test(t); }, 90_000, '关掉以后补传的结果');
+  out.failText = await statusText(page);
+  check(/本机协作已关闭/.test(out.failText) && /最新内容已存在本机这份文件里/.test(out.failText) && /缺最后的几处修改/.test(out.failText) && /不会多建一个/.test(out.failText),
+    '续搬-失败的提示:本机协作已关、最新内容已存本机、云端缺最后的修改、再点一次补上', out.failText);
+  await shot(page, 'resume-1-closed-failed');
+  const vFail = await viewOf(page);
+  check(vFail.kind === 'local' && vFail.shared === null && vFail.association === null, '续搬-这时编辑器在本机项目里,没有房间关联', vFail);
+  check(!fs.existsSync(recordFile), '续搬-本机房间记录已删除');
+  const savedDraft = JSON.parse(await draftText(A, draftId));
+  check(!savedDraft.collaboration && savedDraft.project.name === editedName, '续搬-本机草稿已经存成不带房间关联的本地项目,内容是最新的(含关的那一下的修改)', { collaboration: savedDraft.collaboration ?? null, name: savedDraft.project.name });
+  const made = cloudProjects().filter((id) => !cloudBefore.includes(id));
+  check(made.length === 1, '续搬-云端建了一个项目', made.length);
+  stateA.fault = null;
+  const cloudOld = made.length === 1 ? await cloudContent(stateA, made[0]) : null;
+  check(!!cloudOld && cloudOld.name === name, '续搬-这时云端确实缺最后的修改(名字还是旧的)', cloudOld?.name);
+
+  // 刷新页面,重开那份草稿
+  await page.goto(`${A.base}/?editor&nosetup=1&draft=${encodeURIComponent(draftId)}`, { waitUntil: 'domcontentloaded' });
+  await waitFor(() => P(page, (id) => !!window.__pcSyncTest && window.__pcSyncTest.docProjectId() === id && window.__pcSyncTest.view().status === 'online', contentId), 120_000, '刷新后草稿打开');
+  await sleep(1500);
+  const vReopen = await viewOf(page);
+  check(vReopen.kind === 'local' && vReopen.association === null && vReopen.reopenState === null && vReopen.shared === null, '续搬-刷新后重开草稿:普通的本地项目,没有停在「原房间已删除」', vReopen);
+  await P(page, () => { for (const b of document.querySelectorAll('.ais-dialog button')) if (b.textContent?.trim() === '关闭') b.click(); });
+  await openSettings(page);
+  await page.click('[data-pc="collab-toggle"]');
+  await page.waitForSelector('[data-pc="collab-where-hosted"]');
+  await page.click('[data-pc="collab-where-hosted"]');
+  await page.waitForSelector('[data-pc="collab-move-pending"]', { timeout: 20_000 });
+  out.pendingHint = await P(page, () => document.querySelector('[data-pc="collab-move-pending"]').textContent);
+  await shot(page, 'resume-2-reopened');
+  await clickConfirm(page);
+  await waitFor(async () => { const t = await statusText(page); return t && !/^正在/.test(t); }, 90_000, '续搬的结果');
+  out.doneText = await statusText(page);
+  check(out.doneText === M.ACCOUNT_MOVE_TEXT.doneLocal, '续搬-从本地项目再点一次:搬成', out.doneText);
+  const vDone = await waitFor(async () => { const v = await viewOf(page); return v.shared?.accountId ? v : null; }, 20_000, '甲进入云端项目').catch(() => viewOf(page));
+  check(vDone.shared?.projectId === made[0], '续搬-进的是原来建好的那个云端项目', vDone.shared);
+  const creates = stateA.requests.filter((q) => q.path === '/hosted/shared/account/create').slice(createsBefore);
+  check(creates.length === 1, '续搬-新建只发过一次(刷新后没有再发,用的是本机记下的那一次)', creates.length);
+  check(cloudProjects().filter((id) => !cloudBefore.includes(id)).length === 1, '续搬-云端没有多出第二个项目');
+  const cloudNow = await cloudContent(stateA, made[0]);
+  check(cloudNow.name === editedName && M.sameContent(cloudNow, JSON.parse(await contentOf(page))), '续搬-云端补上了最后的修改,与本机逐字段相同', cloudNow.name);
+  await shot(page, 'resume-3-done');
+  await closeSettings(page);
+
+  // 搬之前那份带房间关联的旧文件(当时没法写回去的那种):原样放回去打开,按普通本地项目开
+  const oldId = `${draftId}-old`;
+  const put = await P(page, async (id, text) => (await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: text })).status, oldId, oldDraft);
+  check(put === 200, '续搬-带旧房间关联的草稿放回去了', put);
+  // 用同一个页面(同一份页面存储:「这个房间是搬迁关的」记在那里;真的桌面版只有一个窗口存储)
+  const page2 = page;
+  await page2.goto(`${A.base}/?editor&nosetup=1&draft=${encodeURIComponent(oldId)}`, { waitUntil: 'domcontentloaded' });
+  // 页面刚载入时先接的是本机空间里的空项目,要等到草稿真的打开、恢复流程走完:以那条提示出现为准
+  const seenOld = [];
+  await waitFor(async () => { const t = await toastsOf(page2).catch(() => []); seenOld.push(...t); return t.includes(M.ACCOUNT_MOVE_TEXT.reopenedLocal); }, 60_000, '旧文件按本地项目打开').catch(() => null);
+  const vOld = await viewOf(page2);
+  const oldName = await P(page2, async () => (await import('/src/store/project.ts')).getState().project.name);
+  check(vOld.kind === 'local' && vOld.association === null && vOld.reopenState === null && oldName === name, '续搬-带着已关房间关联的旧文件重开:按普通本地项目开(内容是文件里那一份),不停在「原房间已删除」', { ...vOld, name: oldName });
+  const oldToasts = [...new Set(seenOld)];
+  check(oldToasts.includes(M.ACCOUNT_MOVE_TEXT.reopenedLocal), '续搬-重开旧文件时提示一次', oldToasts);
+  const editOld = await editAndSave(page2);
+  check(editOld.ok, '续搬-这样打开的旧文件照常能改、能存', editOld);
+  await shot(page2, 'resume-4-old-file');
+  return { out };
+}
+
 /* ---------------- 主流程 ---------------- */
 
 try {
@@ -665,6 +789,7 @@ try {
 
   if (ONLY.includes('local')) { const r = await scenarioLocal({ A, B, stateA, stateB, video }); res.local = r.out; await r.page.close().catch(() => undefined); await r.pageB.close().catch(() => undefined); }
   if (ONLY.includes('room')) { const r = await scenarioRoom({ A, B, stateA, stateB, video }); res.room = r.out; }
+  if (ONLY.includes('resume')) { const r = await scenarioResume({ A, stateA }); res.resume = r.out; }
   check(!fs.existsSync(path.join(ROOT, CARD_REL)), '探针没有往仓库里写卡片文件');
 } catch (error) {
   fails.push(`探针中断:${String(error?.message ?? error).slice(0, 300)}`);

@@ -16,7 +16,7 @@ import { originalHashOf, smallHashOf } from "../../render/mediaTier";
 import { remoteAssetBase } from "../media/assetTiers";
 import { ensureActiveDraftId, getActiveDraftId, saveDraft, setActiveDraftId } from "../io/drafts";
 import { forgetSaveTarget, hasSaveTarget, serializeProc, writeProcToDisk } from "../io/proc";
-import { adminOp, dismissToast, ensureDevice, enterAccountProject, getSyncView, pageSession, pushToast, whenSaved } from "./syncManager";
+import { adminOp, dismissToast, ensureDevice, enterAccountProject, getSyncView, leaveSharedToLocal, pageSession, pushToast, whenSaved } from "./syncManager";
 import { disableCollab, localCollab, pullOriginals, queueExistingMedia } from "./collab";
 import { hosted } from "./sharedApi";
 import {
@@ -230,20 +230,35 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
     // 每建一个会话取一张票据;背后的访问令牌至少还剩一分钟(传到一半到期的,连接按断线重建、凭新票据接着传)
     ticket: async () => (await client.session(projectId, { minRemainingMs: 60_000 })).connectionTicket,
   });
+  // 搬的过程中登录的账号换了(退出后登了另一个):后面的每一步都拒掉,不把内容写到另一个账号名下
+  let startedAs: string | null = null;
+  const sameAccount = () => {
+    if (startedAs && client.account?.id !== startedAs) throw Object.assign(new Error("credential-revoked"), { status: 401, code: "credential-revoked" });
+  };
   const result = await moveToAccountCloud({
     source: moveSource,
-    account: () => accountCloudLogin(c),
-    create: (name, stub, requestId) => client.create(name, stub, requestId),
+    account: async () => { const a = await accountCloudLogin(c); startedAs = a?.id ?? null; return a; },
+    create: (name, stub, requestId) => { sameAccount(); return client.create(name, stub, requestId); },
     snapshot: async () => { await whenSaved(10_000); return structuredClone(getState().project); },
     current: () => getState().project,
-    upload: (projectId, snapshot) => uploadProjectContent(linkTo(projectId), projectId, snapshot),
+    upload: (projectId, snapshot) => { sameAccount(); return uploadProjectContent(linkTo(projectId), projectId, snapshot); },
     read: async (projectId) => (await readProjectContent(linkTo(projectId), projectId, getState().project)).project,
     checkCreator: async (pw) => {
       const r = await adminOp("list-bans", { password: pw });
       return r.ok ? { ok: true } : { ok: false, error: r.error === "rate-limited" ? "rate-limited" : r.error === "offline" ? "network" : "bad-password" };
     },
     pullMedia: pullRoomMedia,
-    closeRoom: (pw) => disableCollab(pw),
+    closeRoom: async (pw) => {
+      const closed = await disableCollab(pw);
+      if (closed.ok || closed.error === "forbidden" || closed.error === "rate-limited") return closed;
+      // 删除的回包丢了(连接先被服务端按「项目已删除」关掉)时 `disableCollab` 报的是失败,而房间其实已经删了:
+      // 页面随后会收到那个关闭码、进「项目被删除」的状态。等几秒看是不是这样;是就把手里的内容接回本机项目,按关成了往下走
+      // (否则界面会说「仍是原来的房间」,而房间已经没了)。这一支按代码推断写的,没有端到端验过
+      for (let i = 0; i < 20 && getSyncView().blocked !== "deleted"; i++) await new Promise((r) => setTimeout(r, 150));
+      if (getSyncView().blocked !== "deleted") return closed;
+      leaveSharedToLocal(structuredClone(getState().project));
+      return { ok: true };
+    },
     saveLocal: ONLINE_BUILD ? undefined : async () => {
       // 本地项目:有草稿才存(不替用户新开草稿)。协作房间(这时已经关掉、编辑器在本机项目里):一定存下来,没有草稿就新开一份 ——
       // 房间删了,这是唯一一份全的;存出来的不带房间关联
@@ -253,6 +268,7 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
       if (kind === "room" && hasSaveTarget()) await writeProcToDisk(serializeProc(), `${getState().project.name || "未命名"}.proc`);
     },
     enter: async ({ projectId, name, snapshot, kind: from }) => {
+      sameAccount();
       await enterAccountProject({ client, origin, projectId, name, initial: snapshot,
         enteredText: from === "room" ? ACCOUNT_MOVE_TEXT.toastRoom : ACCOUNT_MOVE_TEXT.toastLocal,
         // 换过去的那一刻再比一次:编辑器里的内容、云端发来的内容,有一样和核对过的那份不同就不换(流程回头再传)

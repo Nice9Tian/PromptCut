@@ -340,12 +340,15 @@ export async function disableCollab(creatorPassword: string, onProgress?: (done:
     return { ok: false, error: del.error === "rate-limited" ? "rate-limited" : del.error === "forbidden" ? "forbidden" : "pull-failed" };
   }
   dropLocal(s.projectId);
+  // 拉回本机的是删除落地那一刻页面手里的内容,不是上面动手之前拷的那一份:从拷贝到删除落地之间房间收下的修改
+  // (别的成员的、自己还没确认的)都在同一条连接上先于删除的回包到了页面,用早先那份拷贝会把它们丢掉
+  const final = structuredClone(getState().project);
   const descriptor = getSyncView().association;
   if (descriptor) {
     try { await recoveryRequest("revoke", descriptor); }
     catch { pushToast("房间已经删除，但本机注销记录未能保存。请保留项目并检查磁盘；旧房间不会重新创建。", "warn", Infinity); }
   }
-  leaveSharedToLocal(project);
+  leaveSharedToLocal(final);
   return { ok: true };
 }
 

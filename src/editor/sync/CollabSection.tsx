@@ -272,6 +272,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
       setStatus({ text: r.kind === "room" ? ACCOUNT_MOVE_TEXT.doneRoom : ACCOUNT_MOVE_TEXT.doneLocal, tone: "ok" });
       return;
     }
+    console.warn("[collab] 搬到云端没成:", r.error, r.stage, r.detail ?? "", r.localClosed ? "(本机协作已关)" : "");
     if (r.error === "login-required") { setAcctUser(null); setLoginFor({ name }); }
     if (r.error === "name-taken" || r.error === "invalid-name") setAskCloudName(true);
     if (r.error === "creator-password" || r.error === "bad-password") setAskMovePw(true);
