@@ -794,3 +794,4 @@
 .pc-account-members-error { padding: 8px; color: var(--ui-warn, #e0a030); }
 .pc-account-member-confirm { padding: 8px; border: 1px solid var(--ui-border-strong); border-radius: 8px; }
 .pc-account-member-confirm button { margin: 6px 6px 0 0; }
+.pc-account-member-clear { display: block; margin: 6px 0 2px; font-size: 12px; cursor: pointer; }

@@ -157,6 +157,66 @@
       "pass": true
     },
     {
+      "name": "owner-two-pages-show-same-count-at-start",
+      "pass": true
+    },
+    {
+      "name": "both-pages-show-limit-hint-after-live-update",
+      "pass": true
+    },
+    {
+      "name": "new-chat-button-not-disabled-at-limit",
+      "pass": true
+    },
+    {
+      "name": "owner-page-1-delete-200",
+      "pass": true
+    },
+    {
+      "name": "page-2-row-disappeared-without-reload",
+      "pass": true
+    },
+    {
+      "name": "page-2-limit-hint-gone-without-reload",
+      "pass": true
+    },
+    {
+      "name": "page-1-count-back-to-50-after-page-2-created",
+      "pass": true
+    },
+    {
+      "name": "member-has-one-private-and-one-shared",
+      "pass": true
+    },
+    {
+      "name": "clear-private-option-unchecked-by-default",
+      "pass": true
+    },
+    {
+      "name": "clear-private-option-text",
+      "pass": true
+    },
+    {
+      "name": "clear-private-http-200",
+      "pass": true
+    },
+    {
+      "name": "only-the-private-conversation-removed",
+      "pass": true
+    },
+    {
+      "name": "kicked-members-shared-conversation-kept",
+      "pass": true
+    },
+    {
+      "name": "kicked-members-private-conversation-gone",
+      "pass": true
+    },
+    {
+      "name": "ledger-has-no-text-of-cleared-private-conversation",
+      "pass": true
+    },
+    {
       "name": "no-page-errors",
       "pass": true
     }
@@ -267,20 +327,14 @@
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "owner",
@@ -297,14 +351,14 @@
     {
       "page": "owner",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "owner",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "member",
@@ -321,7 +375,7 @@
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
@@ -355,10 +409,10 @@
       "path": "/agent/v1/conversations"
     },
     {
-      "page": "creator",
+      "page": "member",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "member",
@@ -379,6 +433,12 @@
       "path": "/agent/v1/conversations/:id/messages"
     },
     {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
       "page": "owner",
       "method": "GET",
       "status": 200,
@@ -391,61 +451,19 @@
       "path": "/agent/v1/conversations"
     },
     {
-      "page": "member",
-      "method": "GET",
-      "status": 200,
-      "path": "/agent/v1/conversations"
-    },
-    {
       "page": "creator",
       "method": "GET",
       "status": 200,
       "path": "/agent/v1/conversations"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 200,
-      "path": "/agent/v1/conversations"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 200,
-      "path": "/agent/v1/conversations"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
       "method": "GET",
       "status": 200,
       "path": "/agent/v1/conversations"
@@ -465,8 +483,14 @@
     {
       "page": "owner",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "owner",
@@ -481,19 +505,7 @@
       "path": "/agent/v1/conversations"
     },
     {
-      "page": "creator",
-      "method": "GET",
-      "status": 200,
-      "path": "/agent/v1/notices"
-    },
-    {
-      "page": "owner",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
-    },
-    {
-      "page": "owner",
+      "page": "member",
       "method": "GET",
       "status": 200,
       "path": "/agent/v1/conversations"
@@ -508,13 +520,7 @@
       "page": "owner",
       "method": "GET",
       "status": 200,
-      "path": "/agent/v1/notices"
-    },
-    {
-      "page": "owner",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "owner",
@@ -535,10 +541,10 @@
       "path": "/agent/v1/conversations"
     },
     {
-      "page": "member",
+      "page": "owner",
       "method": "GET",
       "status": 200,
-      "path": "/agent/v1/notices"
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "owner",
@@ -574,12 +580,6 @@
       "page": "creator",
       "method": "GET",
       "status": 200,
-      "path": "/agent/v1/conversations"
-    },
-    {
-      "page": "creator",
-      "method": "GET",
-      "status": 200,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
@@ -590,6 +590,30 @@
     },
     {
       "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
       "method": "GET",
       "status": 200,
       "path": "/agent/v1/conversations"
@@ -621,7 +645,19 @@
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
@@ -645,8 +681,8 @@
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "member",
@@ -657,49 +693,55 @@
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
@@ -707,6 +749,12 @@
       "method": "GET",
       "status": 200,
       "path": "/agent/v1/notices"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "owner",
@@ -721,21 +769,33 @@
       "path": "/agent/v1/notices/ack"
     },
     {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
       "page": "member",
       "method": "GET",
       "status": 200,
       "path": "/agent/v1/notices"
     },
     {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
       "page": "creator",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
@@ -753,7 +813,7 @@
     {
       "page": "owner",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
@@ -825,12 +885,6 @@
     {
       "page": "owner",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
-    },
-    {
-      "page": "owner",
-      "method": "GET",
       "status": 200,
       "path": "/agent/v1/notices"
     },
@@ -849,8 +903,182 @@
     {
       "page": "owner",
       "method": "GET",
-      "status": 502,
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/notices"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/info"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "POST",
+      "status": 200,
+      "path": "/agent/v1/notices/ack"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/notices"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "member",
@@ -878,62 +1106,422 @@
     },
     {
       "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/notices"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/notices"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/notices"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/notices"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/notices"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "DELETE",
+      "status": 200,
+      "path": "/agent/v1/conversations/:id"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/notices"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 404,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "POST",
+      "status": 202,
+      "path": "/agent/v1/conversations/:id/messages"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
       "method": "POST",
       "status": 200,
-      "path": "/agent/v1/notices/ack"
+      "path": "/agent/v1/conversations/:id/visibility"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
-    },
-    {
-      "page": "owner",
-      "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
-      "page": "owner",
+      "page": "member",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "owner",
       "method": "GET",
-      "status": 502,
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "member",
+      "method": "POST",
+      "status": 202,
+      "path": "/agent/v1/conversations/:id/messages"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
+      "status": 200,
+      "path": "/agent/v1/conversations/:id/events"
+    },
+    {
+      "page": "member",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
@@ -946,10 +1534,16 @@
       "page": "member",
       "method": "GET",
       "status": 200,
-      "path": "/agent/v1/info"
+      "path": "/agent/v1/conversations"
     },
     {
-      "page": "member",
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
       "method": "GET",
       "status": 200,
       "path": "/agent/v1/conversations"
@@ -967,10 +1561,10 @@
       "path": "/agent/v1/notices"
     },
     {
-      "page": "member",
+      "page": "creator",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "owner",
@@ -979,55 +1573,102 @@
       "path": "/agent/v1/notices"
     },
     {
-      "page": "member",
+      "page": "owner",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
     },
     {
       "page": "owner",
       "method": "GET",
-      "status": 502,
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
       "page": "creator",
       "method": "GET",
-      "status": 502,
-      "path": "/agent/v1/conversations/:id/events"
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "POST",
+      "status": 200,
+      "path": "/agent/v1/members/clear-private"
     },
     {
       "page": "member",
       "method": "GET",
-      "status": 502,
+      "status": 401,
       "path": "/agent/v1/conversations/:id/events"
     },
     {
-      "page": "member",
+      "page": "creator",
       "method": "GET",
-      "status": 502,
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "creator",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 200,
+      "path": "/agent/v1/conversations"
+    },
+    {
+      "page": "owner",
+      "method": "GET",
+      "status": 404,
       "path": "/agent/v1/conversations/:id/events"
     }
   ],
   "screenshots": [
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\01-member-history-no-delete-button.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\02-creator-history-delete-buttons.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\03-owner-history-50-limit-hint.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\04-owner-51st-rejected-limit-text.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\05-owner-delete-confirm-dialog.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\06-owner-after-delete-slot-freed.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\07-owner-created-again-after-delete.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\08-creator-delete-others-confirm-dialog.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\09-member-bubble-after-creator-delete.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\10-owner-bubble-after-creator-delete.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\11-creator-no-bubble.png",
-    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-10\\shots\\12-member-reopened-replayed-bubble.png"
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\01-member-history-no-delete-button.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\02-creator-history-delete-buttons.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\03-owner-history-50-limit-hint.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\04-owner-51st-rejected-limit-text.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\05-owner-delete-confirm-dialog.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\06-owner-after-delete-slot-freed.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\07-owner-created-again-after-delete.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\08-creator-delete-others-confirm-dialog.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\09-member-bubble-after-creator-delete.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\10-owner-bubble-after-creator-delete.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\11-creator-no-bubble.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\12-member-reopened-replayed-bubble.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\13-owner-second-page-live-count-50.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\14-owner-second-page-live-count-49.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\15-owner-first-page-live-count-50-after-other-page-created.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\16-creator-kick-confirm-with-clear-private-option.png",
+    "C:\\Users\\admin\\AppData\\Local\\Temp\\pc-conv-delete-probe-20\\shots\\17-creator-after-clear-private.png"
   ],
   "pageErrors": [],
   "notes": [
@@ -1037,7 +1678,7 @@
     },
     {
       "page": "creator",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/51b7314a623190a5043cb6456db86527/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c5ae1984fc5df477cf5238c16c77646c/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "creator",
@@ -1045,7 +1686,7 @@
     },
     {
       "page": "creator",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/51b7314a623190a5043cb6456db86527/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c5ae1984fc5df477cf5238c16c77646c/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "creator",
@@ -1069,7 +1710,7 @@
     },
     {
       "page": "creator",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/51b7314a623190a5043cb6456db86527/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c5ae1984fc5df477cf5238c16c77646c/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "creator",
@@ -1077,27 +1718,7 @@
     },
     {
       "page": "creator",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/51b7314a623190a5043cb6456db86527/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    },
-    {
-      "page": "creator",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/51b7314a623190a5043cb6456db86527/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "creator",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/51b7314a623190a5043cb6456db86527/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/c5ae1984fc5df477cf5238c16c77646c/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "creator",
@@ -1113,7 +1734,11 @@
     },
     {
       "page": "owner",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/6b0a550907d74e30d3daf64f7b8884c3/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Failed to load resource: the server responded with a status of 403 (Forbidden)"
+    },
+    {
+      "page": "owner",
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/5e9e08f2e65c6516b3bc5b38f7437715/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "owner",
@@ -1121,7 +1746,7 @@
     },
     {
       "page": "owner",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/6b0a550907d74e30d3daf64f7b8884c3/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/5e9e08f2e65c6516b3bc5b38f7437715/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "owner",
@@ -1137,7 +1762,7 @@
     },
     {
       "page": "owner",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/6b0a550907d74e30d3daf64f7b8884c3/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/5e9e08f2e65c6516b3bc5b38f7437715/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "owner",
@@ -1145,10 +1770,26 @@
     },
     {
       "page": "owner",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/6b0a550907d74e30d3daf64f7b8884c3/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/5e9e08f2e65c6516b3bc5b38f7437715/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "owner",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "creator",
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c5ae1984fc5df477cf5238c16c77646c/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "creator",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "creator",
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/c5ae1984fc5df477cf5238c16c77646c/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "creator",
       "console": "Failed to load resource: net::ERR_FAILED"
     },
     {
@@ -1157,7 +1798,7 @@
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/56a6c9cf042fb916c8eda9a99dd089fa/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/335fa320c368779cab6ba172c1abc641/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1165,26 +1806,10 @@
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/56a6c9cf042fb916c8eda9a99dd089fa/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/335fa320c368779cab6ba172c1abc641/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "owner",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/6b0a550907d74e30d3daf64f7b8884c3/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "owner",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "owner",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/6b0a550907d74e30d3daf64f7b8884c3/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "owner",
       "console": "Failed to load resource: net::ERR_FAILED"
     },
     {
@@ -1205,7 +1830,7 @@
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/56a6c9cf042fb916c8eda9a99dd089fa/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/335fa320c368779cab6ba172c1abc641/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1213,27 +1838,7 @@
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/56a6c9cf042fb916c8eda9a99dd089fa/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "member",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/56a6c9cf042fb916c8eda9a99dd089fa/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "member",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "member",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/56a6c9cf042fb916c8eda9a99dd089fa/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/335fa320c368779cab6ba172c1abc641/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1241,19 +1846,43 @@
     },
     {
       "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/5e9e08f2e65c6516b3bc5b38f7437715/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "owner",
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/5e9e08f2e65c6516b3bc5b38f7437715/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "member",
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/335fa320c368779cab6ba172c1abc641/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "member",
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/335fa320c368779cab6ba172c1abc641/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "ownerAccountId": "redacted",
@@ -1261,121 +1890,70 @@
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "openHistoryRetry": 0,
-      "drawer": false,
-      "dialog": false,
-      "panel": 1,
-      "conn": true
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "owner",
       "console": "Failed to load resource: the server responded with a status of 409 (Conflict)"
     },
     {
-      "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
       "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "memberReopen": "logged-in"
     },
     {
-      "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/35f5650edbf0ef08724f8a960ed19487/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/7ed47f4155c56850ebf6d2789323266a/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1383,27 +1961,7 @@
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/35f5650edbf0ef08724f8a960ed19487/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "member",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-    },
-    {
-      "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/35f5650edbf0ef08724f8a960ed19487/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "member",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "member",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/35f5650edbf0ef08724f8a960ed19487/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/7ed47f4155c56850ebf6d2789323266a/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1411,19 +1969,11 @@
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/35f5650edbf0ef08724f8a960ed19487/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "member",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "member",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/35f5650edbf0ef08724f8a960ed19487/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/7ed47f4155c56850ebf6d2789323266a/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1431,38 +1981,74 @@
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/7ed47f4155c56850ebf6d2789323266a/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/7ed47f4155c56850ebf6d2789323266a/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "member",
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/7ed47f4155c56850ebf6d2789323266a/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: net::ERR_FAILED"
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "memberReload": "logged-in"
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/4fa83087229150dcf93e81fce43ed416/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c520fae296fcb1537d89c46aaa41efa2/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1470,7 +2056,7 @@
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/4fa83087229150dcf93e81fce43ed416/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c520fae296fcb1537d89c46aaa41efa2/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1478,19 +2064,11 @@
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/4fa83087229150dcf93e81fce43ed416/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
-    },
-    {
-      "page": "member",
-      "console": "Failed to load resource: net::ERR_FAILED"
-    },
-    {
-      "page": "member",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/4fa83087229150dcf93e81fce43ed416/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c520fae296fcb1537d89c46aaa41efa2/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1498,7 +2076,7 @@
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/4fa83087229150dcf93e81fce43ed416/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/c520fae296fcb1537d89c46aaa41efa2/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1506,7 +2084,11 @@
     },
     {
       "page": "member",
-      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/4fa83087229150dcf93e81fce43ed416/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c520fae296fcb1537d89c46aaa41efa2/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
@@ -1514,27 +2096,141 @@
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/c520fae296fcb1537d89c46aaa41efa2/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "owner",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "creator",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "creator",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
     },
     {
       "page": "member",
-      "console": "Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "creator",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "creator",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "creator",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "creator",
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/c5ae1984fc5df477cf5238c16c77646c/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "creator",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "creator",
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/c5ae1984fc5df477cf5238c16c77646c/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "creator",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "owner",
+      "console": "Access to fetch at 'http://s1.pc.localhost:28188/media-s/5e9e08f2e65c6516b3bc5b38f7437715/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "page": "owner",
+      "console": "Access to fetch at 'http://s2.pc.localhost:28189/media-s/5e9e08f2e65c6516b3bc5b38f7437715/_grant' from origin 'https://127.0.0.1:28186' has been blocked by CORS policy: Response to preflight request d"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: net::ERR_FAILED"
+    },
+    {
+      "openHistoryRetry": 0,
+      "drawer": false,
+      "dialog": false,
+      "panel": 1,
+      "conn": false
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "page": "member",
+      "console": "Failed to load resource: the server responded with a status of 403 (Forbidden)"
+    },
+    {
+      "page": "owner",
+      "console": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "openHistoryRetry": 0,
+      "drawer": false,
+      "dialog": false,
+      "panel": 1,
+      "conn": false
     }
   ],
   "completed": true,

@@ -424,6 +424,7 @@ async function main() {
     const convSh = await currentConversationId(member);
     check(convPv !== convSh, 'member-has-one-private-and-one-shared');
     await waitRow(creator, convPv); await closeHistory(creator);
+    await creator.setViewport({ width: 1500, height: 1300 });   // 成员面板很长，放高一点才看得到整个确认框
     await creator.click('[data-pc="members-button"]');
     await creator.waitForSelector(`[data-pc="account-member"][data-account-id="${memberAccountId}"] [data-pc="account-member-kick"]`, { visible: true, timeout: TIMEOUT });
     await creator.click(`[data-pc="account-member"][data-account-id="${memberAccountId}"] [data-pc="account-member-kick"]`);
@@ -431,6 +432,7 @@ async function main() {
     check(await creator.$eval('[data-pc="account-member-clear-option"] input', e => e.checked === false), 'clear-private-option-unchecked-by-default');
     check((await creator.$eval('[data-pc="account-member-clear-option"]', e => e.textContent?.trim())) === CLOUD_CHAT_TEXT.clearPrivateOption, 'clear-private-option-text');
     await creator.click('[data-pc="account-member-clear-option"] input');
+    await creator.evaluate(() => { const pop = document.querySelector('[data-pc="members-pop"]'); if (pop) pop.scrollTop = pop.scrollHeight; });   // 成员面板自己带滚动条(原来就这样)：滚到底才看得到确认框
     await shot(creator, '16-creator-kick-confirm-with-clear-private-option');
     const clearResponse = creator.waitForResponse(r => new URL(r.url()).pathname.endsWith('/members/clear-private'), { timeout: TIMEOUT });
     await creator.click('[data-pc="account-member-submit"]');
