@@ -301,7 +301,7 @@ function startSupervisor(extraEnv = {}) {
     PROMPTCUT_RENDER_EDITOR_DIR: path.join(TMP, 'no-editor'),
     // 看画面的口子核对 Agent 服务签名用的登记表：这个临时托管组合的那一份
     PROMPTCUT_RENDER_LOOK_SERVICES: hostedPaths(HOSTED_DATA).servicesFile,
-    // 换项目快一点：闲置 8 s 就结束这一轮（生产缺省 60 s）
+    // 换项目快一点：空闲 8 s 就结束这一轮（生产缺省五分钟：空闲满五分钟才让位）
     PROMPTCUT_RENDER_ISO_IDLE_MS: String(T(8000)),
     // 预渲染进程的全部输出（含渲染页的页面日志）追加进这个文件：探针从这里取回越权探测卡的结果对象
     PROMPTCUT_PRERENDER_LOG: PRERENDER_LOG,

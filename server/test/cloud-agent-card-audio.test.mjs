@@ -224,7 +224,8 @@ test('CA-CAU-06 工具表与渲染服务的口子', () => {
   }
   assert.deepEqual([...CLOUD_RENDER_TOOLS].sort(), ['cancel_card_audio', 'render_card_audio']);
   assert.ok(CLOUD_SLOW_TOOLS.has('render_card_audio'));
-  assert.deepEqual(LOOK_ROUTES['/api/cards/audio'], { tool: 'render_card_audio' });
+  // 卡片声音不是看画面：这一次最多等调用方给的时限、没成不自动重试（不套看画面的「每次一分钟、重试三次」）
+  assert.deepEqual(LOOK_ROUTES['/api/cards/audio'], { tool: 'render_card_audio', attempt: 'caller', retries: 0 });
   assert.equal(Object.keys(LOOK_ROUTES).length, 7, '口子上只多了卡片声音这一条');
   assert.ok(LOOK_WORKER_PREFIXES.includes('/api/cards/audio'));
   assert.equal(isLookPath('/api/cards/audio'), true, '工作进程里这条接口与看画面那一批一样要口令');

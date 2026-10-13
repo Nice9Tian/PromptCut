@@ -7,7 +7,8 @@
  * | `GET /projects` | 工作进程 | `{ ok, docUrl, paused, projects: [{ projectId, members, drain, nodeId, streams }] }`：它现在该连哪些项目；`streams` 是这个项目此刻产不产轨道流 |
  * | `POST /ticket { projectId }` | 工作进程 | `{ ok, ticket }`：一张连接票据（转给目录的 `hosted.ticket`）；只给清单里的项目 |
  * | `POST /report { pid, queue }` | 工作进程 | 把自己的诊断交过来（管理进程不反过来请求工作进程） |
- * | `POST /look { projectId, path, body, cards?, timeoutMs? }` | 云端 Agent 服务 | 要一帧画面（`look.mjs`）；凭服务私钥的签名（`x-pc-service-auth`），不认工作进程的口令 |
+ * | `POST /look { projectId, path, body, cards?, requestId?, timeoutMs? }` | 云端 Agent 服务 | 要一帧画面（`look.mjs`）；凭服务私钥的签名（`x-pc-service-auth`），不认工作进程的口令。带 `requestId` 的登记进队列立刻回 202 |
+ * | `POST /look/poll { requestId, waitMs? }`、`POST /look/cancel { requestId }` | 云端 Agent 服务 | 问一个登记过的看画面请求出了结果没有 / 撤回它；同样凭服务私钥的签名 |
  *
  * 中间三条要 `Authorization: Bearer <这次启动随机生成的口令>`（经环境变量交给工作进程）。卡片代码跑在 Chrome 页面里，
  * 读不到工作进程的环境变量，所以即使它能请求这个端口也过不了这一关。
@@ -99,8 +100,8 @@ function readText(req, max) {
  * @param {(body: object) => void} o.report
  * @param {() => object} o.status
  * @param {() => { name: string, key: string, listing: () => object, report: (body: object) => void }[]} [o.clients] 另外的工作进程（隔离工作进程）
- * @param {null | { limits: { maxBodyBytes: number }, handle(input: { auth: unknown, bodyText: string }): Promise<{ status: number, body: object }> }} [o.look]
- *   看画面的口子（`look.mjs` 的 `createLook`）；不给就没有这条路
+ * @param {null | { limits: { maxBodyBytes: number }, handle(input: { auth: unknown, bodyText: string }): Promise<{ status: number, body: object }>, poll?: Function, cancel?: Function }} [o.look]
+ *   看画面的口子（`look.mjs` 的 `createLook`）；不给就没有这条路。`poll` / `cancel` 是排队之后来问、撤回的那两条
  * @param {(event: string, fields?: object) => void} [o.log]
  */
 export function createBroker({ key, listing, ticket, report, status, clients = null, look = null, log = () => {} }) {
@@ -130,11 +131,14 @@ export function createBroker({ key, listing, ticket, report, status, clients = n
       if (fromBrowser(req)) { req.resume(); log('broker.browser-refused', { path: url.pathname.slice(0, 80) }); return send(res, 403, { ok: false, error: 'forbidden' }); }
       if (req.method === 'GET' && url.pathname === '/status') return send(res, 200, { ok: true, ...status() });
       // 看画面：云端 Agent 服务凭服务私钥的签名来要，不走工作进程的口令（工作进程的口令要不到画面，Agent 服务的签名也要不到清单与票据）
-      if (req.method === 'POST' && url.pathname === '/look') {
-        if (!look) { req.resume(); return send(res, 404, { ok: false, error: 'not-found' }); }
-        const bodyText = await readText(req, look.limits.maxBodyBytes);
+      const lookOp = req.method === 'POST' ? { '/look': 'handle', '/look/poll': 'poll', '/look/cancel': 'cancel' }[url.pathname] : undefined;
+      if (lookOp) {
+        if (!look || typeof look[lookOp] !== 'function') { req.resume(); return send(res, 404, { ok: false, error: 'not-found' }); }
+        // 问结果、撤回的请求体只有一个 id：不给它项目内容那么大的上限
+        const bodyText = await readText(req, lookOp === 'handle' ? look.limits.maxBodyBytes : 4096);
         if (bodyText === null) return send(res, 413, { ok: false, error: 'too-large' });
-        const out = await look.handle({ auth: req.headers[LOOK_AUTH_HEADER], bodyText });
+        // 调用方等不及先断了（同步等的那种）不影响别的：结果写不回去而已
+        const out = await look[lookOp]({ auth: req.headers[LOOK_AUTH_HEADER], bodyText });
         return send(res, out.status, out.body);
       }
       const client = clientOf(req);
