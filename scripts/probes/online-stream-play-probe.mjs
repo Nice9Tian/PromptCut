@@ -24,7 +24,7 @@
  *
  * 摆法(一个共享项目,1920×1080、30 fps、6 秒):两张内置重卡 `probe-slow-stepped`(每帧烧 40 ms,在线页面判重;画面是一块随时间平移的橙块)
  *   a  框在左上,0 ～ 5 秒
- *   b  框在右下,0.5 ～ 5 秒(入点不在分段边界上)
+ *   b  框在右下,0.6 ～ 5 秒(从第 18 帧起,不是 15 的倍数;它的流从这一帧起分段)
  *
  * 断言:
  *   S1 层表:内容库里的层表带 `streams` 表,两张卡各一条单卡流,候选的结果键查得到流清单。
@@ -395,7 +395,7 @@ async function produce({ label, project, link, decoders }) {
     for (const s of status.streams) for (let n = s.firstSegment; n <= s.lastSegment; n++) if (s.segments[n]?.stride !== 1) return null;
     return !producer.workers.size && !producer.encoding.size ? status : null;
   }, 900_000, 1000);
-  rec.streams = (done?.streams ?? []).map((s) => ({ streamKey: s.streamKey, contentKey: s.contentKey, kind: s.kind, clipIds: s.clipIds, firstSegment: s.firstSegment, lastSegment: s.lastSegment }));
+  rec.streams = (done?.streams ?? []).map((s) => ({ streamKey: s.streamKey, contentKey: s.contentKey, kind: s.kind, clipIds: s.clipIds, originFrame: s.originFrame, firstSegment: s.firstSegment, lastSegment: s.lastSegment }));
   rec.encoder = done?.encoder ?? null;
   // 快照也要齐(流画不出来时露出的就是它,暂停时页面也贴它)
   const controls = () => [...pipeline.entries.values()].flatMap((e) => e.cardPlan ?? []).filter((c) => c.snapshotKey);
@@ -473,7 +473,7 @@ try {
   const setup = await store(page, `
     S.actions.editCardProject((p) => ({ ...p, duration: 6, tracks: [
       { id: 'osp-t-a', name: '序列 a', clips: [{ id: 'osp-a', cardId: 'probe-slow-stepped', start: 0, end: 5, params: { burnMs: 40, label: 'A' }, frame: { x: 0, y: 0, w: 960, h: 720 } }] },
-      { id: 'osp-t-b', name: '序列 b', clips: [{ id: 'osp-b', cardId: 'probe-slow-stepped', start: 0.5, end: 5, params: { burnMs: 40, label: 'B' }, frame: { x: 960, y: 360, w: 960, h: 720 } }] },
+      { id: 'osp-t-b', name: '序列 b', clips: [{ id: 'osp-b', cardId: 'probe-slow-stepped', start: 0.6, end: 5, params: { burnMs: 40, label: 'B' }, frame: { x: 960, y: 360, w: 960, h: 720 } }] },
     ] }));
     S.actions.seek(5.5);
     const p = S.getState().project;
@@ -517,7 +517,7 @@ try {
   const layerKey = `layers:${setup.projectId}`;
   const map1 = (await link.content.get('snapshot-manifest', layerKey))?.body ?? null;
   out.map1 = map1 ? { v: map1.v, layers: (map1.layers ?? []).length, streams: (map1.streams ?? []).map((r) => ({ topClipId: r.topClipId, kind: r.kind, plane: r.plane, clipIds: r.clipIds,
-    candidates: (r.candidates ?? []).map((c) => ({ envFingerprint: c.envFingerprint, resultKey: String(c.resultKey).slice(0, 12) })), firstSegment: r.firstSegment, lastSegment: r.lastSegment,
+    candidates: (r.candidates ?? []).map((c) => ({ envFingerprint: c.envFingerprint, resultKey: String(c.resultKey).slice(0, 12) })), originFrame: r.originFrame ?? null, firstSegment: r.firstSegment ?? null, lastSegment: r.lastSegment,
     segmentsPerTask: r.segmentsPerTask, inputSig: r.inputSig ?? null })) } : null;
   check(map1?.v === 3 && Array.isArray(map1.streams) && map1.streams.length === 2, 'S1 层表(v 3,没升版本)带 streams 表,两行', out.map1);
   for (const id of IDS) {
@@ -525,22 +525,25 @@ try {
     const spec = specOf(id);
     check(rowOf && spec && rowOf.kind === 'card' && rowOf.plane === 'local' && rowOf.clipIds.join() === id && rowOf.contentKey === spec.contentKey
       && rowOf.candidates.length === 1 && rowOf.candidates[0].resultKey === spec.streamKey && rowOf.candidates[0].envFingerprint === one.envFingerprint
-      && rowOf.firstSegment === spec.firstSegment && rowOf.lastSegment === spec.lastSegment && /^s1-/.test(rowOf.inputSig ?? ''), `S1 ${id} 那一行:成员、内容键、候选(结果键 = 流键)、分段范围、输入签名`, { rowOf, spec });
+      && Number.isInteger(spec.originFrame) && rowOf.originFrame === spec.originFrame && !('firstSegment' in rowOf) && spec.firstSegment === 0
+      && rowOf.lastSegment === spec.lastSegment && /^s1-/.test(rowOf.inputSig ?? ''), `S1 ${id} 那一行:成员、内容键、候选(结果键 = 流键)、这条流的第一帧、分段范围(从 0 起,行里不写 firstSegment)、输入签名`, { rowOf, spec });
     if (rowOf) {
-      const first = [rowOf.firstSegment, Math.min(rowOf.lastSegment, rowOf.firstSegment + rowOf.segmentsPerTask - 1)];
+      const first = [0, Math.min(rowOf.lastSegment, rowOf.segmentsPerTask - 1)];
       const manifest = (await link.content.get('render-manifest', `${rowOf.candidates[0].resultKey}:${first[0]}-${first[1]}`))?.body ?? null;
       check(manifest?.kind === 'stream' && Object.keys(manifest.segments ?? {}).length === first[1] - first[0] + 1, `S1 ${id}:按这一行的键查得到流清单,分段齐`, { key: `${String(rowOf.candidates[0].resultKey).slice(0, 12)}:${first[0]}-${first[1]}`, segments: Object.keys(manifest?.segments ?? {}).length });
     }
   }
-  // b 从 0.5 秒起:第一段是 1(入点不在分段边界上)
-  check(map1?.streams?.find((r) => r.topClipId === B)?.firstSegment === Math.floor((0.5 * FPS) / SEGMENT_FRAMES), 'S1 b 的流从第 1 段起', map1?.streams?.find((r) => r.topClipId === B)?.firstSegment);
+  // b 从 0.6 秒起:它的流的第一帧是第 18 帧(不是 15 的倍数),分段从这一帧起数;a 从第 0 帧起
+  check(map1?.streams?.find((r) => r.topClipId === B)?.originFrame === Math.ceil(0.6 * FPS - 1e-9) && Math.ceil(0.6 * FPS - 1e-9) % SEGMENT_FRAMES !== 0,
+    'S1 b 的流的第一帧是第 18 帧', map1?.streams?.find((r) => r.topClipId === B)?.originFrame);
+  check(map1?.streams?.find((r) => r.topClipId === A)?.originFrame === 0, 'S1 a 的流的第一帧是第 0 帧', map1?.streams?.find((r) => r.topClipId === A)?.originFrame);
 
   /* ---------------- S5 的准备:a 的第 4 段(2.0～2.5 秒)在素材服务上「没有」。页面还停在 5.5 秒,没碰过这条流的任何一段 ---------------- */
   const MISSING_SEG = 4;
   let missingHash = null;
   {
     const rowA = map1?.streams?.find((r) => r.topClipId === A);
-    const manifest = rowA ? (await link.content.get('render-manifest', `${rowA.candidates[0].resultKey}:${rowA.firstSegment}-${Math.min(rowA.lastSegment, rowA.firstSegment + rowA.segmentsPerTask - 1)}`))?.body : null;
+    const manifest = rowA ? (await link.content.get('render-manifest', `${rowA.candidates[0].resultKey}:0-${Math.min(rowA.lastSegment, rowA.segmentsPerTask - 1)}`))?.body : null;
     const hash = manifest?.segments?.[MISSING_SEG]?.hash ?? null;
     missingHash = hash;
     if (check(/^[0-9a-f]{64}$/.test(String(hash)), 'S5 准备:取到 a 第 4 段的哈希', { hash: String(hash).slice(0, 12) })) blocked.add(hash);
@@ -696,7 +699,7 @@ try {
     check((two.streams ?? []).length === 1 && g?.kind === 'group' && g.clipIds.length === 2, 'S6 解码器预算压到 1:两张卡并成一条组流', two.streams);
     const map2 = (await link.content.get('snapshot-manifest', layerKey))?.body ?? null;
     const rowG = map2?.streams?.[0] ?? null;
-    out.map2 = map2 ? { streams: (map2.streams ?? []).map((r) => ({ topClipId: r.topClipId, kind: r.kind, plane: r.plane, clipIds: r.clipIds, firstSegment: r.firstSegment, lastSegment: r.lastSegment, inputSig: r.inputSig ?? null })) } : null;
+    out.map2 = map2 ? { streams: (map2.streams ?? []).map((r) => ({ topClipId: r.topClipId, kind: r.kind, plane: r.plane, clipIds: r.clipIds, originFrame: r.originFrame ?? null, lastSegment: r.lastSegment, inputSig: r.inputSig ?? null })) } : null;
     check(map2?.streams?.length === 1 && rowG.kind === 'group' && rowG.plane === 'stage' && g && rowG.clipIds.join() === g.clipIds.join() && rowG.topClipId === g.clipIds[g.clipIds.length - 1]
       && rowG.candidates[0].resultKey === g.streamKey && /^s1-/.test(rowG.inputSig ?? ''), 'S6 层表换成一行组流:成员按画家顺序,挂在最上面那张上', out.map2);
     await pauseAt(page, 0.8);
