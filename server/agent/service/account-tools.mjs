@@ -184,7 +184,8 @@ export async function removeMarkedBrowserData(dir, { all = false, timeoutMs = 8_
   }
   if (!ok) return false;
   if (all) return removeDirFully(dir, { timeoutMs });
-  try { fs.rmSync(mark, { force: true }); } catch { return false; }
+  // 记号的位置上不管是什么(正常是个文件)都撤掉
+  try { fs.rmSync(mark, { force: true, recursive: true }); } catch { return false; }
   return !fs.existsSync(mark);
 }
 
@@ -595,6 +596,7 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     let authFailures = 0;
     let ledgerFailures = 0;
     const nap = (ms) => new Promise((resolve) => {
+      if (signal?.aborted) { resolve(); return; }
       const done = () => { clearTimeout(timer); signal?.removeEventListener?.('abort', done); resolve(); };
       const timer = setTimeout(done, ms); timer.unref?.();
       signal?.addEventListener?.('abort', done, { once: true });

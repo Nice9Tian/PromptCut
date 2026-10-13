@@ -3,8 +3,11 @@
  * 跑:npm test -- server/test/cloud-tools-wire.test.mjs
  *
  *   WIRE-TABLE  工具表:没有提供者时逐项是原来的回答;这个进程里建出了提供者的才算可用、才交给模型;给模型看的那一段跟着变
- *   WIRE-JOBS   作业账本:重开时排着的、在跑的都标成被中断;`active` 只列这一轮名下没结束的
- *   WIRE-CONF   任务进程设置里的 `tools` 一节:只认列出的键;写了但路径不在就拒绝
+ *   WIRE-JOBS   作业账本:重开时排着的、在跑的都标成被中断;`active` 只列这一轮名下没结束的;`pending` 只数数、不问文档服务
+ *   WIRE-CONF   任务进程设置里的 `tools` 一节:只认列出的键;写了但路径不在就拒绝;root 入口用同一张名单,键写错在 root 启动时就拒绝
+ *   WIRE-SET    一条任务的工具提供者(用替身搭,不起进程):账本打不开不拖垮对话;等后台作业时暂时性故障接着等、明确拒绝才停;
+ *               浏览器数据的记号组内读得到、读不到不当成没有、由任务进程一侧照记号清;停止与关 Agent 留数据、转私有删、项目被删全删;代下缺省不开
+ *   WIRE-USAGE  用量流水给同组的主服务读;读不到时报错,不拿零冒充
  *   WIRE-PAGE   任务进程到主服务的页面请求内部通道:签名、连接绑定、一次性随机数、文档服务的现问,一样不对都拒,
  *               并且交给反向通道的运行上下文取自文档服务的回答,不取自请求体
  * 整条链(模型发工具调用 → 提供者 → 文档与素材;停止、转私有、关 Agent 的收场;隔离)在探针 scripts/probes/cloud-tools-wire-probe.mjs。
@@ -19,7 +22,14 @@ import { EventEmitter } from 'node:events';
 import { CLOUD_TOOL_PLAN, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_PROVIDER_TOOLS, CLOUD_PROVIDER_FAMILIES, CLOUD_SYSTEM_NOTE,
   checkCloudTool, cloudOpenTools, cloudSystemNote, providedTools } from '../agent/service/cloud-tools.mjs';
 import { createToolJobs } from '../agent/service/tool-jobs.mjs';
-import { ACCOUNT_TOOL_SETTING_KEYS, readAccountToolConfig, validateAccountToolSettings } from '../agent/service/account-tools.mjs';
+import { ACCOUNT_TOOL_SETTING_KEYS, readAccountToolConfig, validateAccountToolSettings, createAccountToolset, accountToolStateDir, BROWSER_PURGE_MARK,
+  readBrowserPurgeMarkIn, writeBrowserPurgeMark, removeMarkedBrowserData, TOOL_JOBS_BROKEN_TEXT, LOGIN_WITHOUT_DELEGATE_TEXT } from '../agent/service/account-tools.mjs';
+import { ACCOUNT_TOOL_SETTING_KEYS as SHARED_KEYS } from '../agent-service/account-tool-settings.mjs';
+import { validateRootConfiguration } from '../agent-service/account-root-slots.mjs';
+import { hostedBrowserDir } from '../agent/service/hosted-browser.mjs';
+import { COLLECT_PAGE_TOOLS, COLLECT_BRIDGE_TEXT } from '../agent/service/collect-bridge.mjs';
+import { queryUsage, createUsageLog } from '../agent/service/usage.mjs';
+import { createAccountConversationService } from '../agent/service/conversation-policy.mjs';
 import { validateWorkerSettings } from '../agent-service/account-task-worker-config.mjs';
 import { WORKER_PAGE_PATH, WORKER_PAGE_PROOF_HEADER, WORKER_PAGE_BINDING_FIELDS, createWorkerPageInternalHandler,
   validateWorkerPageEnvelope, workerPageProofPayload, workerPageRequest, workerPageTlsBinding } from '../agent-service/worker-page-internal.mjs';
@@ -77,11 +87,21 @@ test('WIRE-TABLE 这个进程里建出了提供者的才可用:只翻建出来�
 });
 
 test('WIRE-TABLE 给模型看的那一段跟着接上的族变:接上的不再说「还没有」,并写明云端与本机不一样的地方', () => {
-  const all = cloudSystemNote({ look: true, provided: CLOUD_PROVIDER_TOOLS });
+  const all = cloudSystemNote({ look: true, provided: CLOUD_PROVIDER_TOOLS, collectDelegate: true });
   assert.match(all, /这一版在云端还没有:\*\* 自定义测量\(measure_audio_js\)。/);
   assert.doesNotMatch(all, /网页接管和扫码登录在云端做不了/);
   for (const phrase of ['语音识别、镜头识别、主体识别、运动追踪照常用', '一键流程(`auto_workflow`)在云端分五个阶段', '网页操作(`web_*`)在云节点的无头浏览器里做',
-    '由他的电脑用本机的登录态代下', '登录信息只留在他的电脑上', '云端暂不支持开子 Agent', '素材的镜头拼图(`source: "media"`)云端还没有']) assert.ok(all.includes(phrase), phrase);
+    '由他的电脑用本机的登录态代下', '登录信息只留在他的电脑上', '云端暂不支持开子 Agent', '素材的镜头拼图(`source: "media"`)云端还没有',
+    // 等作业有上限、到点会中断;模板匹配兜底只在配了追踪的运行环境时成立
+    '最多接着等一小时,到时还没做完的作业会被中断', '运动追踪要这台节点配了追踪的运行环境才能用', '配了运行环境但没装模型时走模板匹配兜底']) assert.ok(all.includes(phrase), phrase);
+  // 代下缺省不开(部署配置没有显式打开):采集那一条仍说「不带登录态」,并说明登录那两个工具帮不了云端的下载;不说「由他的电脑代下」
+  const plain = cloudSystemNote({ look: true, provided: CLOUD_PROVIDER_TOOLS });
+  assert.ok(plain.includes('不带任何站点的登录态(按未登录的画质)'));
+  assert.ok(plain.includes('云端的下载这一版用不到他电脑上的登录态'));
+  assert.doesNotMatch(plain, /由他的电脑用本机的登录态代下/);
+  assert.ok(plain.includes('站点登录(`collect_login`、`collect_login_check`)'), '登录那两个工具照常说可以请他本人处理');
+  // 登录那一族没接上时,「代下开着」这个说法不起作用
+  assert.doesNotMatch(cloudSystemNote({ look: false, provided: CLOUD_PROVIDER_FAMILIES.web, collectDelegate: true }), /代下|用不到他电脑上的登录态/);
   // 只接上网页操作、没有反向通道(没有内部通道的进程):不说可以交给他本人
   const webOnly = cloudSystemNote({ look: false, provided: CLOUD_PROVIDER_FAMILIES.web });
   assert.match(webOnly, /这一版在云端还没有:\*\* 语音识别与一键流程、镜头与主体识别、运动追踪、自定义测量\(measure_audio_js\)。/);
@@ -110,6 +130,7 @@ test('WIRE-JOBS 账本重开:上一个进程里排着的、在跑的都标成被
   const foreign = await jobs.start(other, 'shots.detect', 'd'.repeat(64), 'request-0004');
   assert.deepEqual((await jobs.active(CONTEXT)).map((j) => [j.jobId, j.state]).sort(), [[queued.jobId, 'queued'], [running.jobId, 'running']].sort());
   assert.deepEqual((await jobs.active(other)).map((j) => j.jobId), [foreign.jobId], '别的一轮的不混进来');
+  assert.deepEqual([await jobs.pending(CONTEXT), await jobs.pending(other), await jobs.pending({ ...CONTEXT, runGrantId: 'g9', runId: 'r9', messageId: 'm9' })], [2, 1, 0]);
   await jobs.close();
 
   jobs = openJobs(file);
@@ -119,6 +140,7 @@ test('WIRE-JOBS 账本重开:上一个进程里排着的、在跑的都标成被
   }
   assert.equal((await jobs.get(CONTEXT, done.jobId)).state, 'done');
   assert.deepEqual(await jobs.active(CONTEXT), []);
+  assert.equal(await jobs.pending(CONTEXT), 0);
   // 被中断是终态:旧的那一行不会复活;同一个请求号原样重发拿到的还是它,换一个请求号(新的一次工具调用)才是新作业
   await assert.rejects(jobs.update(CONTEXT, queued.jobId, 1, { state: 'running' }), { code: 'terminal-job' });
   assert.deepEqual(await jobs.start(CONTEXT, 'shots.detect', 'a'.repeat(64), 'request-0001'), { jobId: queued.jobId, state: 'interrupted' });
@@ -276,4 +298,340 @@ test('WIRE-PAGE 任务进程把连接断掉:等待中的那一次收到取消信
   release({ delivered: false, offline: true, why: 'run-cancelled', state: 'cancelled' });
   await pending;
   assert.equal(createHash('sha256').update('x').digest('hex').length, 64);
+});
+
+/* ---------- 一条任务的工具提供者:账本、等作业、浏览器数据的去留、代下的开关 ---------- */
+
+const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..');
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const until = async (check, what, ms = 20_000) => { const end = Date.now() + ms; for (;;) { const value = await check(); if (value) return value; if (Date.now() > end) throw new Error(`等不到:${what}`); await sleep(5); } };
+
+/** 用替身搭一份工具提供者(不起任何进程、不连任何服务)。`authorize` 可换:等作业那几条用它演文档服务的各种回答 */
+async function toolsetKit(t, { authorize = async () => ({ allowed: true, fenceRevision: 3, grantState: 'active' }), limits = {}, config = {}, pageBridge = null, prepare = null } = {}) {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-set-'));
+  const log = [];
+  const resources = { authorize: (...a) => authorize(...a), register: async () => ({ signal: new AbortController().signal, closed: Promise.resolve() }),
+    contextAccess: { authorize: (...a) => authorize(...a), fromGrant: () => CONTEXT }, signalFor: () => null };
+  prepare?.(dataDir);
+  const toolset = await createAccountToolset({ root: REPO_ROOT, dataDir, context: CONTEXT, resources,
+    projectAssets: { openRead: async () => { throw new Error('no-assets'); }, verifyRef: async () => false }, workspaces: { open: () => ({}) }, ownerKey: 'owner',
+    egress: { admit: async () => {}, admitUrl: async () => {} }, exec: () => ({ snapshot: async () => ({ project: {}, rev: 1 }), mutate: async () => ({}) }),
+    host: async () => ({ kernel: {} }), config, pageBridge, limits, log: (event, fields) => log.push({ event, ...fields }) });
+  // 收尾的次序:先关测试自己另开的东西(同一个账本文件的第二个连接),再收工具提供者,最后删目录
+  const closers = [];
+  t.after(async () => { for (const closer of closers.reverse()) await Promise.resolve().then(closer).catch(() => {});
+    await toolset.close('test-end').catch(() => {}); fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  return { dataDir, toolset, log, events: (name) => log.filter((row) => row.event === name), onCleanup: (closer) => closers.push(closer) };
+}
+const browserDirOf = (dataDir, conversationId, projectId = 'p1') => hostedBrowserDir(dataDir, { projectId, conversationId });
+const seedBrowser = (dataDir, conversationId, { mark = null, projectId = 'p1' } = {}) => {
+  const dir = browserDirOf(dataDir, conversationId, projectId);
+  fs.mkdirSync(path.join(dir, 'profile', 'Default'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'profile', 'Default', 'Cookies'), 'login-state');
+  fs.writeFileSync(path.join(dir, 'rev'), '7');
+  if (mark) writeBrowserPurgeMark(dir, mark);
+  return dir;
+};
+const listing = (dir) => { try { return fs.readdirSync(dir).sort(); } catch { return null; } };
+
+test('WIRE-SET 作业账本打不开:不拖垮这条任务;用到作业的工具回一句明确的话,网页操作照常,收尾干净', async (t) => {
+  const kit = await toolsetKit(t, { prepare: (dataDir) => {
+    // 账本的位置上放一个目录:数据库打不开
+    fs.mkdirSync(path.join(accountToolStateDir(dataDir, 'p1', 'c1'), 'tool-jobs.db'), { recursive: true });
+  } });
+  assert.equal(kit.toolset.describe().ledger, false);
+  assert.equal(kit.events('agent.account-tools.ledger-broken').length, 1, '日志里记了账本打不开');
+  for (const tool of ['stt_status', 'transcribe_media', 'track_points', 'attach_clip_motion', 'detect_shots', 'detect_subjects', 'auto_workflow', 'background_job_status']) {
+    assert.equal(kit.toolset.handles(tool), true, `${tool} 仍然算接上(由替身答)`);
+    const out = await kit.toolset.call(tool, {}, { callId: `call-${tool}-0001` });
+    assert.deepEqual([out.ok, out.cloudUnavailable, out.code, out.error], [false, true, 'TOOL_JOBS_UNAVAILABLE', TOOL_JOBS_BROKEN_TEXT], tool);
+  }
+  // 不用作业的那一族照常:浏览器没配,答的是它自己的话
+  const view = await kit.toolset.call('web_view', {}, { callId: 'call-web-view-0001' });
+  assert.notEqual(view?.code, 'TOOL_JOBS_UNAVAILABLE');
+  assert.doesNotMatch(JSON.stringify(view), /后台作业记录/);
+  assert.deepEqual(await kit.toolset.settle(), { waited: true, pending: 0 }, '没有账本就没有要等的作业');
+  const closed = await kit.toolset.close('run-drained');
+  assert.deepEqual([closed.childrenClosed, closed.streamsClosed, closed.workPending], [true, true, 0]);
+});
+
+/** 往这份工具提供者的账本里放一条这一轮名下还在跑的作业(另开一个连接写;同一个文件) */
+async function seedRunningJob(kit) {
+  const jobs = createToolJobs({ databasePath: path.join(accountToolStateDir(kit.dataDir, 'p1', 'c1'), 'tool-jobs.db'),
+    authorize: async () => ({ allowed: true, fenceRevision: 3, grantState: 'active' }), verifyFence: async (_c, rev) => rev === 3 });
+  const job = await jobs.start(CONTEXT, 'shots.detect', 'a'.repeat(64), 'request-settle-01');
+  await jobs.update(CONTEXT, job.jobId, 0, { state: 'running', progress: 0.1 });
+  kit.onCleanup(() => jobs.close());
+  return { jobs, finish: () => jobs.update(CONTEXT, job.jobId, 1, { state: 'done', progress: 1 }) };
+}
+const FAST = { settlePollMs: 5, settleAuthMs: 10, settleAuthBackoffMs: [5, 10] };
+
+test('WIRE-SET 等后台作业:文档服务一时答不上不算拒绝,接着等、隔一会儿再核;作业做完才往下收', async (t) => {
+  let mode = 'ok', asked = 0;
+  const kit = await toolsetKit(t, { limits: FAST, authorize: async () => {
+    asked += 1;
+    if (mode === 'down') throw Object.assign(new Error('doc service unreachable'), { code: 'run-authority-unavailable' });
+    return { allowed: true, fenceRevision: 3, grantState: 'active' };
+  } });
+  const seeded = await seedRunningJob(kit);
+  mode = 'down';
+  let settled = null;
+  const waiting = kit.toolset.settle().then((out) => { settled = out; });
+  // 文档服务连着答不上好几次:一直在等,没有把这一轮当成「不算数」
+  await until(() => kit.events('agent.account-tools.settle-auth-retry').length >= 3, '核授权重试了几次');
+  assert.equal(settled, null, '暂时性故障不停止等待');
+  assert.deepEqual(kit.events('agent.account-tools.settle-auth-retry').slice(0, 3).map((row) => row.retryInMs), [5, 10, 10], '重试的间隔一次比一次久,到头不再涨');
+  assert.equal(kit.events('agent.account-tools.settle-revoked').length, 0);
+  mode = 'ok';
+  await seeded.finish();
+  await waiting;
+  assert.deepEqual(settled, { waited: true, pending: 0 });
+});
+
+test('WIRE-SET 等后台作业:文档服务明确说这一轮不算数了才停;叫停信号、兜底时限也停', async (t) => {
+  // 明确的拒绝(抛出来的)
+  let denied = false;
+  const a = await toolsetKit(t, { limits: FAST, authorize: async () => {
+    if (denied) throw Object.assign(new Error('revoked'), { code: 'run-access-denied' });
+    return { allowed: true, fenceRevision: 3, grantState: 'active' };
+  } });
+  await seedRunningJob(a);
+  denied = true;
+  assert.deepEqual(await a.toolset.settle(), { waited: false, reason: 'unauthorized', pending: 1 });
+  assert.equal(a.events('agent.account-tools.settle-revoked').length, 1);
+
+  // 明确的拒绝(回答里写着不允许)
+  let allowed = true;
+  const b = await toolsetKit(t, { limits: FAST, authorize: async () => ({ allowed, fenceRevision: 3, grantState: allowed ? 'active' : 'finished' }) });
+  await seedRunningJob(b);
+  allowed = false;
+  assert.equal((await b.toolset.settle()).reason, 'unauthorized');
+
+  // 叫停信号:马上不等了(不用等到下一次数账本)
+  const c = await toolsetKit(t, { limits: { ...FAST, settlePollMs: 60_000, settleAuthMs: 60_000 } });
+  await seedRunningJob(c);
+  const stop = new AbortController();
+  const stopped = c.toolset.settle(stop.signal);
+  stop.abort();
+  assert.deepEqual(await stopped, { waited: false, reason: 'cancelled' });
+  // 等到一半(已经睡下去了)再叫停:同样马上醒
+  const c2 = await toolsetKit(t, { limits: { ...FAST, settlePollMs: 60_000, settleAuthMs: 60_000 } });
+  await seedRunningJob(c2);
+  const stop2 = new AbortController();
+  const stopped2 = c2.toolset.settle(stop2.signal);
+  await sleep(20);
+  stop2.abort();
+  assert.deepEqual(await stopped2, { waited: false, reason: 'cancelled' });
+
+  // 兜底时限
+  const d = await toolsetKit(t, { limits: { ...FAST, settleMs: 1, settleAuthMs: 60_000 } });
+  await seedRunningJob(d);
+  assert.deepEqual(await d.toolset.settle(), { waited: false, reason: 'timeout', pending: 1 });
+  assert.equal(d.events('agent.account-tools.settle-timeout').length, 1);
+});
+
+test('WIRE-SET 浏览器数据的记号:组内读得到;读不到、读不懂不当成「没有记号」;照记号清时记号最后撤', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-mark-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const make = (name) => { const d = path.join(dir, name); fs.mkdirSync(path.join(d, 'profile', 'Default'), { recursive: true }); fs.writeFileSync(path.join(d, 'profile', 'Default', 'Cookies'), 'x'); fs.writeFileSync(path.join(d, 'rev'), '3'); return d; };
+  const plain = make('plain');
+  assert.equal(readBrowserPurgeMarkIn(plain), null, '没有记号');
+  assert.equal(readBrowserPurgeMarkIn(path.join(dir, 'no-such-dir')), null, '目录都没有也是没有记号');
+  writeBrowserPurgeMark(plain, 'private', 123);
+  assert.deepEqual(readBrowserPurgeMarkIn(plain), { reason: 'private', at: 123 });
+  assert.deepEqual(listing(plain), ['profile', BROWSER_PURGE_MARK, 'rev'].sort(), '没有留下临时文件');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(plain, BROWSER_PURGE_MARK)).mode & 0o060, 0o060, '记号组内可读写(主服务写、任务用户读)');
+  // 读不懂
+  const garbled = make('garbled');
+  fs.writeFileSync(path.join(garbled, BROWSER_PURGE_MARK), '{"reason":');
+  assert.deepEqual(readBrowserPurgeMarkIn(garbled), { reason: 'private', unreadable: true, code: 'bad-mark' });
+  // 读不到(这里用「记号的位置上是个目录」来演;生产上是别的用户按 0600 写的文件)
+  const blocked = make('blocked');
+  fs.mkdirSync(path.join(blocked, BROWSER_PURGE_MARK));
+  const unreadable = readBrowserPurgeMarkIn(blocked);
+  assert.deepEqual([unreadable.reason, unreadable.unreadable, typeof unreadable.code], ['private', true, 'string']);
+
+  // 照记号清:留清单版本的计数,记号也撤了
+  assert.equal(await removeMarkedBrowserData(plain), true);
+  assert.deepEqual(listing(plain), ['rev']);
+  assert.equal(await removeMarkedBrowserData(blocked), true, '读不到的记号一样清得掉');
+  assert.deepEqual(listing(blocked), ['rev']);
+  // 对话或项目没了:整个目录都删
+  const gone = make('gone');
+  writeBrowserPurgeMark(gone, 'conversation-deleted');
+  assert.equal(await removeMarkedBrowserData(gone, { all: true }), true);
+  assert.equal(listing(gone), null);
+  // 记号已经没了(别的进程清完了):不去删它之后新建的东西
+  const fresh = make('fresh');
+  assert.equal(await removeMarkedBrowserData(fresh), true);
+  assert.deepEqual(listing(fresh), ['profile', 'rev']);
+});
+
+test('WIRE-SET 浏览器数据的记号:有删不动的东西时记号留着,下次接着清', { skip: process.platform === 'win32' ? '要靠目录权限演「删不动」,Windows 上演不出;Linux 上两个用户之间的真情形由 scripts/probes/account-tools-perms-linux.mjs 验' : process.getuid?.() === 0 ? 'root 不受目录权限限制,演不出「删不动」' : false }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-stuck-'));
+  const locked = path.join(dir, 'conv', 'profile', 'Default');
+  t.after(() => { try { fs.chmodSync(locked, 0o700); } catch { /* 已经没了 */ } fs.rmSync(dir, { recursive: true, force: true }); });
+  fs.mkdirSync(locked, { recursive: true });
+  fs.writeFileSync(path.join(locked, 'Cookies'), 'x');
+  fs.writeFileSync(path.join(dir, 'conv', 'rev'), '3');
+  writeBrowserPurgeMark(path.join(dir, 'conv'), 'private');
+  fs.chmodSync(locked, 0o500);   // 里面的文件删不掉
+  assert.equal(await removeMarkedBrowserData(path.join(dir, 'conv'), { timeoutMs: 200 }), false);
+  assert.ok(listing(path.join(dir, 'conv')).includes(BROWSER_PURGE_MARK), '没清干净:记号还在');
+  fs.chmodSync(locked, 0o700);
+  assert.equal(await removeMarkedBrowserData(path.join(dir, 'conv')), true);
+  assert.deepEqual(listing(path.join(dir, 'conv')), ['rev']);
+});
+
+test('WIRE-SET 任务进程一侧照记号清:自己这个对话开工前清;别的对话留着记号的也顺手清;没有记号的不动', async (t) => {
+  let dirs = null;
+  const kit = await toolsetKit(t, { prepare: (dataDir) => {
+    dirs = { own: seedBrowser(dataDir, 'c1', { mark: 'private' }), otherPrivate: seedBrowser(dataDir, 'c2', { mark: 'private' }),
+      otherDeleted: seedBrowser(dataDir, 'c3', { mark: 'conversation-deleted' }), otherProject: seedBrowser(dataDir, 'c9', { mark: 'project-deleted', projectId: 'p2' }),
+      kept: seedBrowser(dataDir, 'c4') };
+    // 一个读不到的记号(演主服务按别的权限写的那种):也要清,并记一行日志
+    dirs.blocked = seedBrowser(dataDir, 'c5');
+    fs.mkdirSync(path.join(dirs.blocked, BROWSER_PURGE_MARK));
+  } });
+  assert.deepEqual(listing(dirs.own), ['rev'], '自己这个对话:建好之前就清了,只剩清单版本的计数');
+  assert.equal(kit.events('agent.account-tools.browser-purged').length, 1);
+  // 顺手清的那一趟不挡这条任务,在后面做:等它做完
+  await until(() => kit.events('agent.account-tools.browser-swept').length > 0, '顺手清的那一趟做完');
+  assert.deepEqual(listing(dirs.otherPrivate), ['rev']);
+  assert.equal(listing(dirs.otherDeleted), null, '对话被删:整个目录没了');
+  assert.equal(listing(dirs.otherProject), null, '别的项目的也一样(都是任务用户的文件)');
+  assert.deepEqual(listing(dirs.blocked), ['rev']);
+  assert.deepEqual(listing(dirs.kept), ['profile', 'rev'], '没有记号的不动');
+  const swept = kit.events('agent.account-tools.browser-swept')[0];
+  assert.deepEqual([swept.marked, swept.removed, swept.unreadable], [4, 4, 1]);
+});
+
+test('WIRE-SET 被叫停时浏览器数据的去留:停止、Agent 被关留着;对话转私有删(留计数);项目被删全删', async (t) => {
+  const run = async (kind) => {
+    let dir = null;
+    const kit = await toolsetKit(t, { prepare: (dataDir) => { dir = seedBrowser(dataDir, 'c1'); } });
+    const out = await kit.toolset.fence({ kind });
+    return { left: listing(dir), browser: out.browser, fenced: kit.events('agent.account-tools.fenced')[0] };
+  };
+  assert.deepEqual((await run('stop')).left, ['profile', 'rev']);
+  const off = await run('agent-disabled');
+  assert.deepEqual(off.left, ['profile', 'rev'], '创建者关掉云端 Agent:浏览器进程关掉,数据留着(登录态还在)');
+  assert.equal(off.browser.profileRemoved, false);
+  assert.deepEqual((await run('private')).left, ['rev']);
+  assert.equal((await run('delete')).left, null);
+});
+
+test('WIRE-SET 代下缺省不开:只交登录那两样,回给模型的话不许诺「之后由他的电脑代下」;部署配置显式打开才交代下', async (t) => {
+  const asked = [];
+  const bridge = () => ({ limits: { pageMs: 15_000 }, extraTools: [...COLLECT_PAGE_TOOLS], cancelRun: () => 0, close: async () => ({ childrenClosed: true, streamsClosed: true, workPending: 0 }),
+    initiator: async () => ({ initiatorAccountId: 'a1', pageId: 'page-1', grantState: 'active' }),
+    requestPage: async ({ tool }) => { asked.push(tool); return { delivered: true, answer: { ok: true, result: tool === 'collect_login' ? { opened: false, alreadyLoggedIn: true } : { loggedIn: true } } }; } });
+  const off = await toolsetKit(t, { pageBridge: bridge() });
+  assert.equal(off.toolset.delegateDownload(), false);
+  assert.equal(off.toolset.describe().delegateDownload, false);
+  const login = off.toolset.collectDelegate();
+  assert.deepEqual(Object.keys(login).sort(), ['login', 'loginCheck'], '没有 download:采集那一侧照旧只在云端匿名下载');
+  assert.equal((await login.login({ site: 'bilibili' })).hint, LOGIN_WITHOUT_DELEGATE_TEXT.already);
+  assert.equal((await login.loginCheck({ site: 'bilibili' })).hint, LOGIN_WITHOUT_DELEGATE_TEXT.checked);
+  for (const text of Object.values(LOGIN_WITHOUT_DELEGATE_TEXT)) assert.doesNotMatch(text, /会由他的电脑带着登录态下载/);
+  assert.deepEqual(asked, ['collect_login', 'collect_login_check'], '登录那两样照常经反向通道到发起人的页面');
+
+  const on = await toolsetKit(t, { pageBridge: bridge(), config: { collectDelegate: true } });
+  assert.equal(on.toolset.delegateDownload(), true);
+  const full = on.toolset.collectDelegate();
+  assert.equal(typeof full.download, 'function');
+  assert.equal((await full.loginCheck({ site: 'bilibili' })).hint, COLLECT_BRIDGE_TEXT.loginChecked, '开了代下:原来那句话成立,不改');
+  // 没有内部通道(没有反向通道)的进程:两样都没有
+  const none = await toolsetKit(t, { config: { collectDelegate: true } });
+  assert.equal(none.toolset.collectDelegate(), null);
+  assert.equal(none.toolset.delegateDownload(), false);
+});
+
+/* ---------- 用量流水:任务进程写、主服务读 ---------- */
+
+test('WIRE-USAGE 流水读不到时不拿零冒充:明确报错;目录还没有才是「确实没有」;成员查用量得到 503', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-usage-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const usageDir = path.join(dir, 'usage');
+  // 目录还没有(这台节点还没有任务进程起来过):确实没有流水
+  assert.deepEqual(queryUsage(usageDir, { projectId: 'p1', strict: true }).projects, {});
+  // 任务进程按「给同组的主服务读」建:写一行,主服务一侧读得到
+  const usage = createUsageLog({ dir: usageDir, shared: true, flushMs: 3_600_000 });
+  t.after(() => usage.close());
+  usage.append({ t: Date.now(), projectId: 'p1', userId: 'a1', username: '甲', conversationId: 'c1', runId: 'r1', kind: 'service', service: 'web', vendor: 'chromium', model: 'web_open', units: 1, unit: 'calls', ok: true, ms: 5 });
+  assert.equal(queryUsage(usageDir, { projectId: 'p1', strict: true }).projects.p1.services['web/chromium'].calls, 1);
+  if (process.platform !== 'win32') {
+    const month = fs.readdirSync(usageDir).find((name) => name.endsWith('.jsonl'));
+    assert.equal(fs.statSync(usageDir).mode & 0o050, 0o050, '目录组内可读可进');
+    assert.equal(fs.statSync(path.join(usageDir, month)).mode & 0o040, 0o040, '流水组内可读');
+    assert.equal(fs.statSync(usageDir).mode & 0o007, 0, '组外的人仍然读不到');
+  }
+  // 流水在但读不了(这里用「流水的位置上是个目录」来演;生产上是别的用户按 0600 写的文件、0700 的目录)
+  fs.mkdirSync(path.join(usageDir, '1999-01.jsonl'));
+  assert.throws(() => queryUsage(usageDir, { projectId: 'p1', strict: true }), { code: 'usage-unreadable' });
+  assert.equal(queryUsage(usageDir, { projectId: 'p1' }).projects.p1.services['web/chromium'].calls, 1, '不带 strict 的老用法(托管档、命令行)不变:跳过读不了的');
+  // 目录本身列不了(位置上是个文件)
+  const notDir = path.join(dir, 'usage-file');
+  fs.writeFileSync(notDir, 'x');
+  assert.throws(() => queryUsage(notDir, { strict: true }), { code: 'usage-unreadable' });
+  assert.deepEqual(queryUsage(notDir, {}).projects, {});
+
+  // 成员经主服务查用量:读不到是 503 usage-unavailable,不是 200 加全零
+  const client = Object.fromEntries(['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename'].map((name) => [name, async () => ({ access: 'rw' })]));
+  const service = createAccountConversationService({ usageDir, conversationClient: client });
+  await assert.rejects(service.usage({ accountMode: true, accountId: 'a1', projectId: 'p1', delegation: 'ticket' }), (error) => {
+    assert.deepEqual([error.code, error.status, typeof error.errno], ['usage-unavailable', 503, 'string']);
+    return true;
+  });
+  fs.rmdirSync(path.join(usageDir, '1999-01.jsonl'));
+  const ok = await service.usage({ accountMode: true, accountId: 'a1', projectId: 'p1', delegation: 'ticket' });
+  assert.deepEqual(ok.services.map((row) => [row.service, row.calls]), [['web', 1]]);
+});
+
+test('WIRE-USAGE 以前按 0700 / 0600 建的目录和流水:任务进程起来时补成组内可读', { skip: process.platform === 'win32' ? 'Windows 没有这一套权限位;Linux 上两个用户之间的真情形由 scripts/probes/account-tools-perms-linux.mjs 验' : false }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-usage-old-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const usageDir = path.join(dir, 'usage');
+  fs.mkdirSync(usageDir, { mode: 0o700 });
+  fs.writeFileSync(path.join(usageDir, '2026-09.jsonl'), '', { mode: 0o600 });
+  fs.chmodSync(usageDir, 0o700); fs.chmodSync(path.join(usageDir, '2026-09.jsonl'), 0o600);
+  const usage = createUsageLog({ dir: usageDir, shared: true, flushMs: 3_600_000 });
+  t.after(() => usage.close());
+  assert.equal(fs.statSync(usageDir).mode & 0o777, 0o750);
+  assert.equal(fs.statSync(path.join(usageDir, '2026-09.jsonl')).mode & 0o777, 0o640);
+  // 不给 shared(旧托管档:写和读是同一个用户)照旧只有自己读得到
+  const own = path.join(dir, 'own');
+  const alone = createUsageLog({ dir: own, flushMs: 3_600_000 });
+  t.after(() => alone.close());
+  alone.append({ t: Date.now(), projectId: 'p1', userId: 'a1', vendor: 'mock', model: 'm', input: 1, output: 1, ok: true, ms: 1 });
+  assert.equal(fs.statSync(own).mode & 0o077, 0);
+});
+
+/* ---------- root 入口与任务进程用同一张名单核 tools 一节 ---------- */
+
+test('WIRE-CONF root 入口:tools 里的键写错、值不对,启动时就拒绝并指出是哪个键;和任务进程认的是同一张名单', () => {
+  const abs = (p) => `/pc/${p}`;
+  const config = (tools) => ({ v: 1, master: { origin: 'https://127.0.0.1:1/', fingerprint256: 'a'.repeat(64) }, controller: { keyFile: abs('k'), certFile: abs('c'), caFile: abs('ca') },
+    worker: { doc: { origin: 'https://127.0.0.1:2/', fingerprint256: 'b'.repeat(64), keyFile: abs('k'), certFile: abs('c'), caFile: abs('ca') }, dataDir: abs('data'), stateRoot: abs('state'), tools },
+    slots: [{}] });
+  const rejected = (tools) => { try { validateRootConfiguration(config(tools)); } catch (error) { return error; } return null; };
+  // 形状像、但不在名单上的键(以前 root 只按 PROMPTCUT_ 开头的模式收,这种会放过去,然后每一代任务进程都拒绝启动)
+  const typo = rejected({ PROMPTCUT_AGENT_BROWSR: '/usr/bin/chromium' });
+  assert.deepEqual([typo?.code, typo?.key], ['root-configuration-worker-tools', 'PROMPTCUT_AGENT_BROWSR']);
+  assert.match(typo.detail, /PROMPTCUT_AGENT_BROWSR/);
+  assert.deepEqual([rejected({ PROMPTCUT_FFMPEG: '' })?.code, rejected({ PROMPTCUT_FFMPEG: '' })?.key], ['root-configuration-worker-tools', 'PROMPTCUT_FFMPEG']);
+  assert.equal(rejected({ PROMPTCUT_AGENT_COLLECT_DELEGATE: 'yes' })?.key, 'PROMPTCUT_AGENT_COLLECT_DELEGATE');
+  assert.equal(rejected({ PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES: 'shots,nope' })?.key, 'PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES');
+  assert.equal(rejected(null)?.code, 'root-configuration-worker-tools');
+  assert.equal(rejected(['x'])?.code, 'root-configuration-worker-tools');
+  // 名单上的键 root 都收(这一节过了以后,后面核的是槽,这里给的是空槽,所以停在槽那一步——不是 tools)
+  const all = Object.fromEntries(ACCOUNT_TOOL_SETTING_KEYS.map((key) => [key, key === 'PROMPTCUT_AGENT_COLLECT_DELEGATE' ? '1' : key === 'PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES' ? 'shots,prerender' : '/opt/x']));
+  assert.notEqual(rejected(all)?.code, 'root-configuration-worker-tools');
+  // 两处是同一张名单:任务进程不认的键 root 一定不认,反过来也是
+  for (const key of ACCOUNT_TOOL_SETTING_KEYS) assert.deepEqual(Object.keys(validateAccountToolSettings({ [key]: all[key] })), [key]);
+  assert.equal(SHARED_KEYS, ACCOUNT_TOOL_SETTING_KEYS, 'account-tools.mjs 转出的就是 account-tool-settings.mjs 的那一张');
+  // 代下的开关:缺省关
+  assert.equal(readAccountToolConfig({}, { root: REPO_ROOT }).collectDelegate, false);
+  assert.equal(readAccountToolConfig({ PROMPTCUT_AGENT_COLLECT_DELEGATE: '0' }, { root: REPO_ROOT }).collectDelegate, false);
+  assert.equal(readAccountToolConfig({ PROMPTCUT_AGENT_COLLECT_DELEGATE: '1' }, { root: REPO_ROOT }).collectDelegate, true);
 });
