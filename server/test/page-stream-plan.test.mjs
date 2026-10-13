@@ -157,6 +157,8 @@ test('PSP-03 成员键只有一处:与切分方用的成员键相同', async () 
 
 test('PSP-04 流任务与切分方给浏览器出的那一份相同;PSP-05 清单相同', async () => {
   const project = BASIC();
+  // clip-b 拉长到第 38～185 帧(148 帧):从它自己的第一帧起分段是 0～9,超过 8 段,分两个任务;末段只有 13 帧
+  project.tracks.find(t => t.id === 't-b').clips[0].end = 6.2;
   const value = valueOf(project);
   const clips = ['clip-a', 'clip-b', 'clip-c'];
   const server = serverSide(project, value, clips);
@@ -164,6 +166,9 @@ test('PSP-04 流任务与切分方给浏览器出的那一份相同;PSP-05 清�
   const mine = page.specs.flatMap(spec => pageStreamTasks(spec, { projectId: project.id, projectRev: 7, codeVersion: CODE_VERSION, derivedFrom: server.planTask.id }));
   assert.ok(server.tasks.length >= 4, '服务端切出了流任务(clip-b 跨 8 段以上,分两个任务)');
   assert.equal(mine.length, server.tasks.length);
+  const bTasks = server.tasks.filter(t => t.input.clipId === 'clip-b');
+  assert.deepEqual(bTasks.map(t => [t.range.from, t.range.to, t.weight.frames]), [[0, 7, 120], [8, 9, 28]], '分段从 clip-b 自己的第一帧起数;帧数按实际算(末段不满)');
+  assert.deepEqual([bTasks[0].input.stream.originFrame, bTasks[0].input.stream.lastFrame], [38, 185]);
   assert.ok(server.tasks.every(t => t.requires.envFingerprint === BROWSER), '清单计划只给浏览器出');
   const norm = v => JSON.parse(JSON.stringify(v));
   for (const want of server.tasks) {
@@ -179,6 +184,7 @@ test('PSP-04 流任务与切分方给浏览器出的那一份相同;PSP-05 清�
     for (let n = want.range.from; n <= want.range.to; n++) segments[n] = { hash: (n % 10).toString().repeat(64), bytes: 1000 + n, init: 'aaaaaaaaaaaaaaaa', stride: 1, samples: 15, sig: null, encoder: 'webcodecs-avc' };
     const a = streamManifest(got, { inits, segments }), b = streamManifest(want, { inits, segments });
     assert.deepEqual(a, b);
+    assert.equal(a.header.originFrame, want.input.stream.originFrame, '清单的头带着这条流的第一帧');
     assert.equal(manifestMatches(a, { kind: 'stream', resultKey: want.resultKey, range: want.range }), true);
   }
 });
@@ -314,6 +320,11 @@ test('PSP-10 并进现有的层表', async () => {
   assert.deepEqual(layerStreamCandidates({ ...existing, streams: [{ ...foreign, inputSig: undefined }] }, rowB).map(c => c.resultKey), ['their-key'], '那一行没带输入签名:照播,也认');
   assert.deepEqual(layerStreamCandidates(existing, { ...rowB, topClipId: 'clip-q' }), []);
   assert.deepEqual(layerStreamCandidates({ ...existing, streams: [{ ...foreign, kind: 'group' }] }, rowB), [], '组流不算');
+  // 没带这条流第一帧的行(改分段规则之前的节点写的,分段按项目帧号数):在线来源不播它,这里也不当现成的
+  const { originFrame: _origin, ...oldForeign } = foreign;
+  assert.equal(Number.isInteger(foreign.originFrame), true);
+  assert.deepEqual(layerStreamCandidates({ ...existing, streams: [{ ...oldForeign, firstSegment: 2 }] }, rowB), [], '旧形状的行不算');
+  assert.deepEqual(layerStreamCandidates({ ...existing, streams: [foreign] }, rowB).map(c => [c.firstSegment, c.lastSegment]), [[0, foreign.lastSegment]], '分段号从 0 起');
   // 候选的清单按它那一行的范围分份:盖住本页这一段的是哪几份
   const cand = { envFingerprint: OWN, resultKey: 'k', firstSegment: 2, lastSegment: 20, segmentsPerTask: 8 };
   assert.deepEqual(candidateSpans(cand, 2, 9), [[2, 9]]);

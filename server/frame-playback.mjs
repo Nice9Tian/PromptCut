@@ -1,3 +1,5 @@
+import { STREAM_SEGMENT_FRAMES, streamSegmentOf } from '../src/render/streamSegments.mjs';
+
 /** Deadline planning is independent of Chrome and of the client clock. Costs
  * are wall milliseconds; rate is timeline seconds per wall second. */
 export function planPlaybackBatch({ frame, fps, rate = 1, count, workers = 3, firstMs = 500, frameMs = 60, jitterMs = 0, deliveryMs = 250, ready = () => false, reserved = new Set() }) {
@@ -170,8 +172,8 @@ export class FramePlayback {
  * `frameMs` / `resetMs` / `jitterMs` / `deliveryMs` 是**生产侧**的墙钟毫秒,`rate` 是时间轴秒 / 墙钟秒。
  * ======================================================================== */
 
-/** 一个分段恰好 15 帧(G2) */
-export const STREAM_SEGMENT = 15;
+/** 一个分段 15 帧(G2;流的末段可以不满)。数和换算都取 `src/render/streamSegments.mjs` 的 */
+export const STREAM_SEGMENT = STREAM_SEGMENT_FRAMES;
 
 /**
  * G4 的 `firstMs`(**不是常数**):只在租约断掉时付 ——
@@ -212,14 +214,17 @@ export function streamFeasibility({ n = 1, firstMs = 0, frameMs, fps, workers = 
  *   3. 后面都齐了再从流的第一段往后找(补播放头之前的洞)。
  *
  * `ready(n)` / `reserved` 由调用方给(`ready` 已经把「稀疏还是满密度」算进去了)。
+ *
+ * `playheadFrame` 是项目帧号,`originFrame` 是这条流自己的第一帧(分段从它起数,`streamSegments.mjs`):
+ * 播放头还没到这条流时按它的第 0 段算。
  */
-export function planStreamSegments({ playheadFrame = 0, fps, rate = 1, firstSegment = 0, lastSegment, stride = 1,
+export function planStreamSegments({ playheadFrame = 0, originFrame = 0, fps, rate = 1, firstSegment = 0, lastSegment, stride = 1,
   frameMs = 30, firstMs = 0, jitterMs = 100, deliveryMs = 250, ready = () => false, reserved = new Set(), leaseLastSegment = null }) {
   const segMs = STREAM_SEGMENT * frameMs / Math.max(1, stride);
   const leadSegments = Math.max(0, Math.ceil((firstMs + segMs + jitterMs + deliveryMs) * rate * fps / (STREAM_SEGMENT * 1000)));
   const free = (n) => n >= firstSegment && n <= lastSegment && !ready(n) && !reserved.has(n);
   if (leaseLastSegment !== null && free(leaseLastSegment + 1)) return { segment: leaseLastSegment + 1, leadSegments, continues: true };
-  const head = Math.floor(Math.max(0, playheadFrame) / STREAM_SEGMENT);
+  const head = Math.max(0, streamSegmentOf(Math.max(0, playheadFrame), originFrame));
   const from = Math.max(firstSegment, Math.min(lastSegment, head + leadSegments));
   for (let n = from; n <= lastSegment; n++) if (free(n)) return { segment: n, leadSegments, continues: false };
   for (let n = firstSegment; n < from; n++) if (free(n)) return { segment: n, leadSegments, continues: false };

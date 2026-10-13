@@ -32,7 +32,7 @@ function planeData(key, segs, { drop = [] } = {}) {
     blocks,
   };
 }
-const plane = (segs) => ({ clipIds: ['a'], key: 'K', ranges: segs.length ? [[segs[0], segs[segs.length - 1]]] : [] });
+const plane = (segs) => ({ clipIds: ['a'], key: 'K', ranges: segs.length ? [[segs[0], segs[segs.length - 1]]] : [], originFrame: 0 });
 
 test('manifestBlockHashes:开头文件 + 分段;桌面的清单(文件名、没有 hash)一块都不列', () => {
   assert.deepEqual(new Set(manifestBlockHashes(planeData('K', [0, 1]).manifest)), new Set([INIT, H(0x100), H(0x101)]));
@@ -117,7 +117,7 @@ test('缺块:舞台手里没有的清单、开头文件、分段,取的时候当
 test('父页没有这条流的清单(还没取到):平面原样发,不带清单;调用失败后清账,全部重发', () => {
   let data = null;
   const sender = new StreamPlaneSender(() => data);
-  assert.deepEqual(sender.decorate([plane([0])]), [{ clipIds: ['a'], key: 'K', ranges: [[0, 0]] }]);
+  assert.deepEqual(sender.decorate([plane([0])]), [{ clipIds: ['a'], key: 'K', ranges: [[0, 0]], originFrame: 0 }]);
   assert.deepEqual(sender.decorate([{ clipIds: ['x'] }]), [{ clipIds: ['x'] }], '没有流键的平面(只占位)不问');
   data = planeData('K', [0]);
   assert.equal(Object.keys(sender.decorate([plane([0])])[0].blocks).length, 2);
@@ -129,7 +129,7 @@ test('父页没有这条流的清单(还没取到):平面原样发,不带清单;
 test('两条平面用到同一块(同一条流挂在两张卡上):一次只发一份', () => {
   const data = planeData('K', [0]);
   const sender = new StreamPlaneSender(() => data);
-  const sent = sender.decorate([{ clipIds: ['a'], key: 'K', ranges: [[0, 0]] }, { clipIds: ['b'], key: 'K', ranges: [[0, 0]] }]);
+  const sent = sender.decorate([{ clipIds: ['a'], key: 'K', ranges: [[0, 0]], originFrame: 0 }, { clipIds: ['b'], key: 'K', ranges: [[0, 0]], originFrame: 0 }]);
   assert.equal(Object.keys(sent[0].blocks).length, 2);
   assert.equal('blocks' in sent[1], false);
   const stage = new PushedStreamSource();
@@ -182,13 +182,13 @@ test('父页带来新的清单(多了分段):同一条轨道当场换上,不重�
   await flush();
   const seeks = player.diag().tracks[0].seeks;
   // 播到第 1 段:清单里还没有它(父页还没取到)→ 这一拍没有流画面,不出错
-  player.setPlanes(sender.decorate([{ clipIds: ['a'], key: 'K', ranges: [[0, 1]] }]), 30);
+  player.setPlanes(sender.decorate([{ clipIds: ['a'], key: 'K', ranges: [[0, 1]], originFrame: 0 }]), 30);
   player.present(15 / 30);
   await flush();
   assert.deepEqual([...player.showingClips()], []);
   // 父页取到了第 1 段,带着新清单再发一次
   data = planeData('K', [0, 1]);
-  player.setPlanes(sender.decorate([{ clipIds: ['a'], key: 'K', ranges: [[0, 1]] }]), 30);
+  player.setPlanes(sender.decorate([{ clipIds: ['a'], key: 'K', ranges: [[0, 1]], originFrame: 0 }]), 30);
   player.present(16 / 30);
   await flush();
   assert.ok(asked.includes(H(0x101)), '新清单里有第 1 段了:去要它的字节');
@@ -200,7 +200,7 @@ test('父页带来新的清单(多了分段):同一条轨道当场换上,不重�
 test('桌面的流平面(不带清单)照旧问播放器的字节源', async () => {
   const http = spySource();
   const player = new StreamPlayer({ root: () => fakeRoot({ a: fakeCanvas() }), source: http });
-  player.setPlanes([{ clipIds: ['a'], key: 'K', ranges: [[0, 0]] }], 30);
+  player.setPlanes([{ clipIds: ['a'], key: 'K', ranges: [[0, 0]], originFrame: 0 }], 30);
   player.present(0);
   await flush();
   assert.deepEqual(http.calls, [['manifest', 'K']]);

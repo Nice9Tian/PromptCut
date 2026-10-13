@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { rangeHas } from './snapshot-store.mjs';
 import { clipInputSig } from '../src/render/layerInputSig.mjs';
 import { streamInputSig } from '../src/render/streamInputSig.mjs';
+import { isStreamOrigin } from '../src/render/streamSegments.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { MovFrameStore, signatureMatches } from './frame-mov.mjs';
 import { readRenderRecord } from './png-record.mjs';
@@ -142,7 +143,7 @@ export function manifestKeyOf(ref) {
 
 /**
  * 内容库取回的清单能不能当这一段用:`v`、`kind`、`resultKey`、`range` 都对得上;快照另查 `frames` 的形状、
- * 流另查 `streamAdoption` 要的那几样(`header.clipIds`)。不认识的字段忽略(C6.2 第 3 节)。
+ * 流另查 `streamAdoption` 要的那几样(`header.clipIds`、`header.originFrame`)。不认识的字段忽略(C6.2 第 3 节)。
  */
 export function manifestMatches(body, ref) {
   if (!body || typeof body !== 'object' || body.v !== RESULT_VERSION) return false;
@@ -155,7 +156,7 @@ export function manifestMatches(body, ref) {
     return body.frames.every(item => Array.isArray(item) && Number.isInteger(item[0]) && KEY_RE.test(String(item[1])));
   }
   if (body.kind === 'stream') {
-    if (!body.header || !Array.isArray(body.header.clipIds)) return false;
+    if (!body.header || !Array.isArray(body.header.clipIds) || !isStreamOrigin(body.header.originFrame)) return false;
     if (!body.segments || typeof body.segments !== 'object' || !body.inits || typeof body.inits !== 'object') return false;
     return true;
   }
@@ -258,11 +259,15 @@ export const streamCandidateKey = contentKey => (typeof contentKey === 'string' 
 
 /**
  * 层表的 `streams` 表(`docs/plan/browser-stream-task.md` 第五处):这一版的每条轨道流一行,在线页面按它找流清单
- * (内容库 `render-manifest`,键 `<结果键>:<起>-<止>`,分段号从 `firstSegment` 起每 `segmentsPerTask` 段一份,最后一份到 `lastSegment`,
+ * (内容库 `render-manifest`,键 `<结果键>:<起>-<止>`,分段号从 0 起每 `segmentsPerTask` 段一份,最后一份到 `lastSegment`,
  * 与 `render-node/split.mjs`、推送队列同一种切法)。每行:
  *
  *   `{ topClipId, clipIds, kind: 'card' | 'group' | 'below', plane: 'local' | 'stage', contentKey,
- *      candidates: [{ envFingerprint, resultKey }], firstSegment, lastSegment, segmentsPerTask, inputSig? }`
+ *      candidates: [{ envFingerprint, resultKey }], originFrame, lastSegment, segmentsPerTask, inputSig? }`
+ *
+ *   - `originFrame`:这条流自己的第一帧(项目帧号)。分段从它起每 15 帧一段(`src/render/streamSegments.mjs`),页面按它把播放头的
+ *     帧号换成分段号。行里**不再写 `firstSegment`**(它恒为 0)〔裁〕:改分段规则之前的页面认 `firstSegment`、按项目帧号找分段,
+ *     读到新的行会把画面贴错位;不写这一项,旧页面的解析就跳过这一行(当作这张卡没有流),新页面则只认带 `originFrame` 的行;
  *
  *   - 依赖下层的流(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.2 节):`clipIds` 只有目标卡一张,`plane` 是 `stage`;
  *     算进键里的下层不列在这一行里 —— 页面按当前项目自己找下层算 `inputSig`(下层多了一层也认得出)。`planStreams` 的开关关着时
@@ -291,8 +296,9 @@ export function layerStreamsOf(entry, { streams = null, fingerprint = null, cand
     const plane = spec.plane === 'stage' ? 'stage' : spec.plane === 'local' ? 'local' : null;
     // 依赖下层的流只有目标卡一个成员、按舞台坐标;形状不对的不列
     if (kind === 'below' && (clipIds.length !== 1 || plane !== 'stage')) continue;
-    const firstSegment = Number(spec.firstSegment), lastSegment = Number(spec.lastSegment);
-    if (!kind || !plane || !Number.isInteger(firstSegment) || !Number.isInteger(lastSegment) || firstSegment < 0 || lastSegment < firstSegment) continue;
+    const firstSegment = Number(spec.firstSegment), lastSegment = Number(spec.lastSegment), originFrame = spec.originFrame;
+    // 分段从这条流自己的第一帧起数,`firstSegment` 恒为 0;不是这样的(改分段规则之前的计划)不列
+    if (!kind || !plane || !isStreamOrigin(originFrame) || firstSegment !== 0 || !Number.isInteger(lastSegment) || lastSegment < 0) continue;
     // `ownCandidate: false`:切分给别的指纹出过键、本机自己不产的流(`FramePipeline.issuedStreamSpecs`),候选只列切分实际出键的指纹
     const own = spec.ownCandidate === false ? null : str(spec.envFingerprint) ?? str(fingerprint);
     let listed = [];
@@ -303,7 +309,7 @@ export function layerStreamsOf(entry, { streams = null, fingerprint = null, cand
     if (!fps.length) continue;
     const candidates = fps.map(f => ({ envFingerprint: f, resultKey: resultKeyOf(contentKey, f) }));
     const inputSig = streamInputSig(project, { clipIds, kind });
-    out.push({ topClipId, clipIds, kind, plane, contentKey, candidates, firstSegment, lastSegment, segmentsPerTask: per, ...(inputSig ? { inputSig } : {}) });
+    out.push({ topClipId, clipIds, kind, plane, contentKey, candidates, originFrame, lastSegment, segmentsPerTask: per, ...(inputSig ? { inputSig } : {}) });
   }
   return out;
 }
@@ -547,7 +553,9 @@ export async function collectStreamResult(pipeline, task, opts = {}) {
   }
   const result = {
     v: RESULT_VERSION, kind: 'stream', resultKey: key, range: { from, to },
-    header: { kind: manifest.kind, plane: manifest.plane, clipIds: manifest.clipIds, fps: manifest.fps, bound: manifest.bound,
+    // `originFrame`:这条流自己的第一帧(分段从它起数)。清单里没有这一项的(改分段规则之前落盘的)不写,那样的结果别处不收
+    header: { kind: manifest.kind, plane: manifest.plane, clipIds: manifest.clipIds, fps: manifest.fps,
+      ...(isStreamOrigin(manifest.originFrame) ? { originFrame: manifest.originFrame } : {}), bound: manifest.bound,
       offset: manifest.offset ?? null, tight: manifest.tight ?? null },
     inits, segments,
   };

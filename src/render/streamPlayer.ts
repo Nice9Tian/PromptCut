@@ -26,13 +26,18 @@
  *
  * # 时间
  *
- * 流按**全局帧号**分段:第 F 帧在第 `floor(F / 15)` 段的第 `F % 15` 个样本,
- * `EncodedVideoChunk.timestamp = F × 1e6 / fps`(微秒,取整)。这一拍要的帧没解出来时,
+ * 流从**它自己的第一帧**(`originFrame`,项目帧号)起每 15 帧一段:项目的第 F 帧在第 `floor((F − originFrame) / 15)` 段的
+ * 第 `(F − originFrame) % 15` 个样本(换算只在 `./streamSegments.mjs` 一处,产流的一侧用的是同一份)。`originFrame` 由父页随
+ * 流平面带来(`StreamPlaneRequest.originFrame`,源头是流的计划),**不从清单取**:清单里那一项记的是产流时的位置。
+ * `EncodedVideoChunk.timestamp = F × 1e6 / fps`(微秒,取整;F 是项目帧号)。这一拍要的帧没解出来时,
  * 最近 3 帧内画过的那一帧留着不动(「沿用旧的预渲染结果」是允许的退化),再远就清空流平面、这一拍落到兜底顺序的下一步(父页垫着的快照,没有就占位符) ——
  * **播放头从不为它停**。
  */
 
-export const SEGMENT_FRAMES = 15;
+import { isStreamOrigin, STREAM_SEGMENT_FRAMES, streamSegmentFirstFrame, streamSegmentOf } from "./streamSegments.mjs";
+
+/** 一个分段的帧数;数和换算都在 `./streamSegments.mjs`,这里只是照旧的名字再导出一次 */
+export const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;
 /** G0-b (4):单个解码器同时持有的帧数上限(硬约束) */
 export const MAX_FRAMES_PER_DECODER = 8;
 /** G5:解码帧总预算 */
@@ -59,6 +64,11 @@ export interface StreamPlaneRequest {
   /** 就绪的**分段号**闭区间(C3 的 `stream` 表单位是分段号) */
   ranges?: Array<[number, number]>;
   /**
+   * 这条流自己的第一帧(项目帧号):分段从它起每 15 帧一段。来自就绪索引那一层(桌面)/ 层表那一行(在线),
+   * 都是计划的一侧按当前项目给的。没有它的平面不建解码器、不画(`planesWithinBudget`)。
+   */
+  originFrame?: number;
+  /**
    * 在线页面(`docs/plan/browser-stream-task.md` 第七处):这条流的清单由父页随流平面带过来,舞台不自己去取。
    * 带了它,这条流的字节也只从父页推来的块里拿(`PushedStreamSource`),不碰预渲染进程的地址。桌面不带,照旧。
    */
@@ -74,6 +84,8 @@ export interface StreamManifest {
   clipIds: string[];
   fps: number;
   segmentFrames: number;
+  /** 清单里记的第一帧(产这条流时它在项目的第几帧)。只作记录:播放时的换算用流平面带来的 `originFrame` */
+  originFrame?: number | null;
   bound: StreamRect;
   tight: StreamRect | null;
   /** `hash`:在线页面推来的清单才有,开头文件的内容哈希(字节按它在推来的块里找) */
@@ -183,7 +195,7 @@ export function parseSegment(buf: ArrayBuffer): SegmentSample[] {
   return samples;
 }
 
-/** G5:`timestamp = (分段号 × 15 + 样本序号) × 1e6 / fps` = 全局帧号 × 1e6 / fps */
+/** G5:`timestamp = (originFrame + 分段号 × 15 + 样本序号) × 1e6 / fps` = 项目帧号 × 1e6 / fps */
 export const chunkTimestamp = (frame: number, fps: number): number => Math.round((frame * 1e6) / fps);
 export const frameOfTimestamp = (timestamp: number, fps: number): number => Math.round((timestamp * fps) / 1e6);
 
@@ -196,38 +208,47 @@ export function rangesHave(ranges: ReadonlyArray<readonly number[]> | undefined,
 /**
  * 父页那一侧的纯算(C3 末段):就绪索引里 `kind: 'stream'` 的层 → `setStreamPlanes` 的实参。
  * 有 `groupClipIds` 的一条 `{ clipIds: groupClipIds }`、没有的 `{ clipIds: [clipId] }`;
- * 只给**这一刻被抑制**、而且这一段已经就绪的卡(播放中贴流,K5)。
+ * 只给**这一刻被抑制**、而且这一段已经就绪的卡(播放中贴流,K5)。「这一段」按每一层自己的 `originFrame` 换算;
+ * 没带 `originFrame` 的层(改分段规则之前的生产者发的)不出流平面。
  * 父页在发 `setSuppressed(H(t))` 的同一处调它(见报告:这一处在 `src/editor/`,不在本任务可改的文件里)。
  */
 export function streamPlanesFor(
-  layers: Iterable<{ clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[] }>,
+  layers: Iterable<{ clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame?: number }>,
   suppressed: ReadonlySet<string>,
   globalFrame: number,
 ): StreamPlaneRequest[] {
-  const seg = Math.floor(Math.max(0, globalFrame) / SEGMENT_FRAMES);
   const out: StreamPlaneRequest[] = [];
   for (const layer of layers) {
     const members = layer.groupClipIds?.length ? layer.groupClipIds : [layer.clipId];
     if (!members.every((id) => suppressed.has(id))) continue;
-    if (!rangesHave(layer.ranges, seg)) continue;
-    out.push({ clipIds: [...members], key: layer.key, ranges: layer.ranges.map((r) => [r[0], r[1]] as [number, number]) });
+    if (!streamLayerHas(layer, globalFrame)) continue;
+    out.push({ clipIds: [...members], key: layer.key, ranges: layer.ranges.map((r) => [r[0], r[1]] as [number, number]), originFrame: layer.originFrame });
   }
   return out;
 }
 
 /**
+ * 这一层(就绪索引里 `kind: 'stream'` 的层)在项目的第 `globalFrame` 帧有没有就绪的分段。父页判「这一帧有没有流」只走这一处,
+ * 舞台的播放器用同一份换算(`./streamSegments.mjs`)。没带 `originFrame` 的层一律算没有。
+ */
+export function streamLayerHas(layer: { ranges?: ReadonlyArray<readonly number[]>; originFrame?: number }, globalFrame: number): boolean {
+  if (!isStreamOrigin(layer.originFrame)) return false;
+  return rangesHave(layer.ranges, streamSegmentOf(globalFrame, layer.originFrame));
+}
+
+/**
  * 解码器预算(兜底顺序第 1、2 步的预算,mechanism/rendering.md「兜底顺序」):这一拍**真的会建解码器**的那几条平面。
  *
- * 只收有流键的(没有键的只占位、不解码),按传进来的顺序取前 `DECODER_BUDGET` 条 ——
+ * 只收有流键、带着第一帧(`originFrame`)的(没有键的只占位、不解码;没有第一帧的没法把帧号换成分段号),按传进来的顺序取前 `DECODER_BUDGET` 条 ——
  * 舞台的 `sync()` 和父页的 `streamPlanesAt` 用同一个函数,两边对「谁超预算」的判断一致:
  * 超预算的卡父页当「无流」、每拍换最近的快照(兜底顺序直接从第 3 步开始)。
  * 画布还没挂上的平面照样占着它的预算位(父页不知道画布到没到),那一拍按流 blank 处理。
  */
-export function planesWithinBudget<P extends { clipIds?: readonly string[]; key?: string }>(planes: readonly P[]): P[] {
+export function planesWithinBudget<P extends { clipIds?: readonly string[]; key?: string; originFrame?: number }>(planes: readonly P[]): P[] {
   const out: P[] = [];
   for (const p of planes) {
     if (out.length >= DECODER_BUDGET) break;
-    if (!Array.isArray(p?.clipIds) || !p.clipIds.length || typeof p.key !== "string" || !p.key) continue;
+    if (!Array.isArray(p?.clipIds) || !p.clipIds.length || typeof p.key !== "string" || !p.key || !isStreamOrigin(p.originFrame)) continue;
     out.push(p);
   }
   return out;
@@ -377,7 +398,8 @@ export class StreamPlaneSender {
     const sending = new Set<string>();
     const out: StreamPlaneRequest[] = [];
     for (const p of planes) {
-      const base: StreamPlaneRequest = { clipIds: [...p.clipIds], ...(p.key ? { key: p.key } : {}), ...(p.ranges ? { ranges: p.ranges } : {}) };
+      const base: StreamPlaneRequest = { clipIds: [...p.clipIds], ...(p.key ? { key: p.key } : {}), ...(p.ranges ? { ranges: p.ranges } : {}),
+        ...(isStreamOrigin(p.originFrame) ? { originFrame: p.originFrame } : {}) };
       const data = p.key ? this.lookup(p.key) : null;
       if (!data) { out.push(base); continue; }
       const blocks: Record<string, ArrayBuffer> = {};
@@ -559,6 +581,12 @@ class StreamTrack {
 
   get key(): string { return this.plane.key ?? ""; }
   private get fps(): number { return this.manifest?.fps || this.player.fps; }
+  /** 这条流自己的第一帧(项目帧号);播放器只收带着它的平面(`StreamPlayer.setPlanes`) */
+  private get origin(): number { return this.plane.originFrame as number; }
+  /** 项目帧号 → 这条流的分段号(早于第一帧的是负数,就绪区间里不会有) */
+  private segmentOf(f: number): number { return streamSegmentOf(f, this.origin); }
+  /** 这个分段的第一帧(项目帧号) */
+  private segmentStart(seg: number): number { return streamSegmentFirstFrame(seg, this.origin); }
   /** 此刻占着解码器输出池的帧:手里没关的 + 喂进去还没出来的 */
   get heldCount(): number { return this.frames.size + this.pending; }
 
@@ -674,7 +702,7 @@ class StreamTrack {
     if (this.disposed || f < this.discardBefore || this.frames.has(f)) {
       frame.close();
     } else {
-      this.frames.set(f, { frame, segment: Math.floor(f / SEGMENT_FRAMES) });
+      this.frames.set(f, { frame, segment: this.segmentOf(f) });
       this.stats.decoded++;
       this.stats.maxHeld = Math.max(this.stats.maxHeld, this.heldCount);
       // 随机访问:目标帧出来了就立刻画,不等下一拍
@@ -697,13 +725,13 @@ class StreamTrack {
     }
     this.pending = 0;
     this.configuredInit = null;
-    this.nextFeed = Math.floor(f / SEGMENT_FRAMES) * SEGMENT_FRAMES;
+    this.nextFeed = this.segmentStart(this.segmentOf(f));
     this.discardBefore = f;
   }
 
   /** 这一帧所在分段的变体矩形 */
   private rectOf(f: number): StreamRect | null {
-    const seg = this.manifest?.segments[String(Math.floor(f / SEGMENT_FRAMES))];
+    const seg = this.manifest?.segments[String(this.segmentOf(f))];
     const init = seg ? this.manifest!.inits[seg.init] : null;
     return init?.rect ?? null;
   }
@@ -758,7 +786,7 @@ class StreamTrack {
   /** 这一拍画的是满帧段还是稀疏段(兜底顺序第 1 / 2 步;探针按它分级)。没画面时 null */
   get level(): "dense" | "sparse" | null {
     if (this.lastDrawn === null) return null;
-    const meta = this.manifest?.segments[String(Math.floor(this.lastDrawn / SEGMENT_FRAMES))];
+    const meta = this.manifest?.segments[String(this.segmentOf(this.lastDrawn))];
     return (meta?.stride ?? 1) > 1 ? "sparse" : "dense";
   }
 
@@ -768,7 +796,7 @@ class StreamTrack {
   /** 这一拍:画第 F 帧(或留着最近一张 / 清成透明),再往后多解几帧 */
   present(f: number): void {
     this.wantFrame = f;
-    const seg = Math.floor(f / SEGMENT_FRAMES);
+    const seg = this.segmentOf(f);
     if (!rangesHave(this.plane.ranges, seg)) {
       // 这一段还没就绪:流清空,这一层当拍落到兜底顺序的下一步(父页垫的快照 / 占位符),播放头不停
       this.blank();
@@ -826,13 +854,13 @@ class StreamTrack {
       // 目标帧及以后的要留着画,按本流的配额喂
       const limit = this.nextFeed < this.discardBefore ? MAX_FRAMES_PER_DECODER : cap;
       if (this.heldCount >= limit) break;
-      const seg = Math.floor(this.nextFeed / SEGMENT_FRAMES);
+      const seg = this.segmentOf(this.nextFeed);
       if (!rangesHave(this.plane.ranges, seg)) break;
       const meta = this.manifest.segments[String(seg)];
       if (!meta) { this.loadManifest(true); break; }
       const data = this.segments.get(seg);
       // 清单里这一段换了文件(稀疏 → 满帧,疑点 G):只在分段起点换,段中间接着用手里这份(差分帧不能跨编码)
-      const replaced = !!data && data.file !== meta.file && this.nextFeed === seg * SEGMENT_FRAMES;
+      const replaced = !!data && data.file !== meta.file && this.nextFeed === this.segmentStart(seg);
       if (!data || replaced) {
         if (data) this.segments.delete(seg);
         this.loadSegment(seg);
@@ -856,12 +884,12 @@ class StreamTrack {
         this.configuredInit = data.init;
         this.bytesPerFrame = init.bytesPerFrame;
         // 换了变体必须从这一段的 IDR 起
-        const segStart = seg * SEGMENT_FRAMES;
+        const segStart = this.segmentStart(seg);
         if (this.nextFeed !== segStart) this.nextFeed = segStart;
       }
-      const index = this.nextFeed - seg * SEGMENT_FRAMES;
+      const index = this.nextFeed - this.segmentStart(seg);
       const sample = data.samples[index];
-      if (!sample) { this.nextFeed = (seg + 1) * SEGMENT_FRAMES; continue; }
+      if (!sample) { this.nextFeed = this.segmentStart(seg + 1); continue; }
       try {
         this.pending++;
         this.stats.maxHeld = Math.max(this.stats.maxHeld, this.heldCount);
@@ -883,7 +911,8 @@ class StreamTrack {
   }
 
   setPlane(plane: StreamPlaneRequest, canvas: HTMLCanvasElement): void {
-    if (plane.key !== this.plane.key) {
+    // 换了流,或者同一条流被摆到了别的帧上(第一帧变了:手里解好的帧是按旧位置记的项目帧号):从头来
+    if (plane.key !== this.plane.key || plane.originFrame !== this.plane.originFrame) {
       this.manifest = null;
       this.segments.clear();
       this.seek(0);
@@ -948,7 +977,7 @@ export class StreamPlayer {
 
   /** 父页的 `setStreamPlanes`。只存,下一次 `present` 才绑画布(画布要等 React 提交之后才在) */
   setPlanes(planes: readonly StreamPlaneRequest[], fps: number): void {
-    const list = planes.filter((p) => Array.isArray(p?.clipIds) && p.clipIds.length && typeof p.key === "string" && p.key);
+    const list = planes.filter((p) => Array.isArray(p?.clipIds) && p.clipIds.length && typeof p.key === "string" && p.key && isStreamOrigin(p.originFrame));
     // 在线页面:先收下随平面推来的块(没用到的旧块当场丢),平面自己不留着字节
     this.pushed.accept(list);
     this.planes = list.map((p) => {

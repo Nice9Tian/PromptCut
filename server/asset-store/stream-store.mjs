@@ -66,7 +66,10 @@ export class StreamStore {
   segFile(key, file) { return path.join(this.dir(key), file); }
 }
 
-/** 页面要的清单形状(不带签名等内部字段) */
+/**
+ * 页面要的清单形状(不带签名等内部字段)。`originFrame`:清单里记的这条流的第一帧(项目帧号,分段从它起每 15 帧一段);
+ * 改分段规则之前落盘的清单没有这一项,这里回 null。
+ */
 export function publicManifest(manifest) {
   if (!manifest) return null;
   const segments = {};
@@ -74,7 +77,7 @@ export function publicManifest(manifest) {
   const inits = {};
   for (const [id, i] of Object.entries(manifest.inits ?? {})) inits[id] = { codec: i.codec, width: i.width, height: i.height, rect: i.rect };
   return { streamKey: manifest.streamKey, kind: manifest.kind, plane: manifest.plane, clipIds: manifest.clipIds, fps: manifest.fps,
-    segmentFrames: SEGMENT_FRAMES, bound: manifest.bound, tight: manifest.tight ?? null, inits, segments };
+    segmentFrames: SEGMENT_FRAMES, originFrame: Number.isInteger(manifest.originFrame) && manifest.originFrame >= 0 ? manifest.originFrame : null, bound: manifest.bound, tight: manifest.tight ?? null, inits, segments };
 }
 
 /**
