@@ -237,7 +237,9 @@ test('BLQ-on 打开以后:计划多出毛玻璃的那一条;切出的任务带 b
     await executor.render(view(task), { signal: signalNone(), progress: () => {} });
     const bakes = streamBakes.slice(markBakes);
     assert.ok(bakes.length > 0 && bakes.every((b) => b.streamSignature === q.streamKey), '产的就是这条流');
-    assert.deepEqual(bakes.map((b) => b.fromFrame), [30, 45, 60, 75, 90, 105], '分段 0～5(第 30 帧起每 15 帧一段),满密度');
+    // 这种流推过去的每一拍都要画一张(下层的动画不画就不往前走):头一段接不上租约,从回放的起点(第 0 帧)起每一帧都交给取帧钩子,
+    // 第 30 帧之前的画完就丢、不进编码器;后面几段接着租约,从各自的第一帧起
+    assert.deepEqual(bakes.map((b) => b.fromFrame), [0, 45, 60, 75, 90, 105], '分段 0～5(第 30 帧起每 15 帧一段),满密度;头一段从回放的起点画起');
     assert.ok(bakes.every((b) => b.stride === 1));
     assert.deepEqual(bakes[0].clip, { x: 0, y: 0, w: 320, h: 180 }, '按舞台坐标截(上界是整个画面)');
     assert.equal(bakes[0].mountFrame, 0, '下层那张卡是 motion 式,从它的挂载帧推过来');

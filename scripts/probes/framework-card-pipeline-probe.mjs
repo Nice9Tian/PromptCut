@@ -640,9 +640,9 @@ try {
         const rowOfClip = (id) => all.streams.find((s) => s.kind === 'below' && s.clipIds[0] === id);
         check(all.streams.length === 3 && !!rowOfClip('clip-title') && !rowOfClip('clip-title').below?.failed,
           '默认行为：fw-title 的依赖下层的流真的产出来了（差分取层没有判死）', pr.defaultStreams);
-        // fw-colors 下面的 punch-pill 是中途进场的 motion 式卡:产的一侧现在会在它进场后的那个分段把这条流判死（upper-changed，
-        // 复现见 `below-late-lower-probe.mjs`;不是贴的一侧的事,已报主会话）。这里照实记下来,产出来了或者判死了都不算这支探针不过
-        check(!!rowOfClip('clip-colors'), '默认行为：fw-colors 有一条依赖下层的流（计划里）', pr.defaultStreams);
+        // fw-colors 下面的 punch-pill 是中途进场的 motion 式卡:这种排法查出过「推过去不画的那几拍下层的动画不往前走、流被自检判死」
+        // (`frame-stream.mjs` 的 `BELOW_DISCARD_SHOT`,复现与逐帧核对在 `below-late-lower-probe.mjs`);修了以后它必须产得出来
+        check(!!rowOfClip('clip-colors') && !rowOfClip('clip-colors').below?.failed, '默认行为：fw-colors 的依赖下层的流真的产出来了（差分取层没有判死）', pr.defaultStreams);
         pr.colorsStream = rowOfClip('clip-colors')?.below?.failed ? `被差分取层的自检判死:${rowOfClip('clip-colors').below.failed}` : '产出来了';
         check(all.streams.find((s) => s.clipIds[0] === 'clip-title')?.replayedFrames === 0, '默认行为：fw-title 的流回放 0 帧', pr.defaultStreams);
       }

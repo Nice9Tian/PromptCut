@@ -42,6 +42,7 @@ import { createHash } from 'node:crypto';
 import { bakeStream } from './bakery/bake.mjs';
 import { directCaptureMode, directSegmentCapture, newDirectRecord, rgbaAlphaBox } from './bakery/capture-canvas.mjs';
 import { belowSegmentCapture, newBelowRecord } from './bakery/capture-below.mjs';
+import { prepareFrameMedia } from './bakery/frame-media.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
@@ -109,6 +110,20 @@ export function belowStreamsEnabled(env = process.env) {
   if (flag === '1') return true;
   return BELOW_STREAMS_DEFAULT;
 }
+
+/**
+ * 依赖下层的流:推过去而不取图的帧(回放的帧、稀疏那一趟分段里第一帧以外的帧)也要真的画一次,用这张丢掉的截图来画。
+ *
+ * 原因(2026-10-14 在导出页上单独量的,不经过产流):下层有一张中途挂载的 motion 式卡、上面压着毛玻璃(`backdrop-filter`)时,
+ * 只推帧不截图(`beginFrame` 不带 `screenshot`)的那几拍里,这张卡的动画在画面上不往前走 —— 动画的时刻在页面里是对的,
+ * 可合成出来的像素停在它挂载的那一帧,要到下一次真的截图才起步,之后一直落后那么多帧;没有毛玻璃压着时没有这回事。
+ * 每一拍都截一张(哪怕是最便宜的)就对了。质量 1 的 JPEG 在 960×540 上每张约 4 毫秒。
+ * 不这样做的后果:稀疏版和断了租约重产的满密度分段里,下层那张卡落后好几帧(流里的画面是错的);画面还在一拍一拍地追,
+ * 差分取层的自检(藏起目标卡再露出来,带目标卡的那张要不变)有时就过不了,整条流被判死。
+ */
+const BELOW_DISCARD_SHOT = Object.freeze({ format: 'jpeg', quality: 1 });
+/** 上面那种丢掉的帧在 `bakeStream` 的 `capture` → `onFrame` 之间的记号 */
+const BELOW_SKIPPED = Object.freeze({ skipped: true });
 
 /** 解码器预算。只给探针压低它(`PROMPTCUT_STREAM_DECODERS`),产品里就是 6 */
 export function streamDecoderBudget(env = process.env) {
@@ -1566,6 +1581,15 @@ export class StreamProducer {
       state.resets = state.resets ?? { sparse: 0, dense: 0 };
       state.resets[stride > 1 ? 'sparse' : 'dense']++;
     }
+    /*
+     * 依赖下层、要回放的流:每一拍都画(`BELOW_DISCARD_SHOT` 的说明)。做法是让 `bakeStream` 把「推过去的帧」也当成要取的帧
+     * (从它本来要回放的起点起、间隔 1),在取帧钩子里把不是这个分段要的帧画一张丢掉;`bakeStream` 和截图代码一个字不动。
+     * `drawFrom`:接得上租约时就是这个分段的第一帧,接不上时是回放的起点(与 `bakeStream` 自己算的 `startFrame` 同一个数)。
+     */
+    const drawAll = below && replay;
+    const drawFrom = drawAll && !continues && Number.isInteger(spec.mountFrame) ? Math.max(0, Math.min(fromFrame, spec.mountFrame)) : fromFrame;
+    const wanted = frame => frame >= fromFrame && (frame - fromFrame) % stride === 0;
+    let discarded = 0, discardedBefore = 0;
     const abort = new AbortController();
     const stale = () => this.closed || this.streams.get(spec.streamKey) !== state
       || (queue ? queue.signal?.aborted === true : state.generation !== generation);
@@ -1587,16 +1611,30 @@ export class StreamProducer {
        */
       // 画布直取:这个分段的帧不截图,从画布取像素(过不了实测的照旧截图);`shot` 是 PNG,或 `{ rgba, width, height }`
       const direct = this.directOf(state);
+      const belowCapture = below ? belowSegmentCapture(bakery, { clipId: spec.topClipId, view: viewRect, rect: captureRect, record: state.below ||= newBelowRecord(), signal: abort.signal,
+        note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) : null;
       const result = await bakeStream(bakery, {
-        streamSignature: spec.streamKey, fromFrame, toFrame: bakeTo, stride, fps,
+        streamSignature: spec.streamKey, fromFrame: drawAll ? drawFrom : fromFrame, toFrame: bakeTo, stride: drawAll ? 1 : stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
-        clip: viewRect, hasMedia: below && spec.hasMedia === true, signal: abort.signal,
-        ...(below ? { capture: belowSegmentCapture(bakery, { clipId: spec.topClipId, view: viewRect, rect: captureRect, record: state.below ||= newBelowRecord(), signal: abort.signal,
-          note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) }
+        // 每一拍都画的那一种:素材只在真要取的帧前面等(丢掉的那几张不用等视频就位),所以不交给 `bakeStream` 逐帧等
+        clip: viewRect, hasMedia: below && !drawAll && spec.hasMedia === true, signal: abort.signal,
+        ...(drawAll ? { capture: async (frame, shoot, info) => {
+          if (!wanted(frame)) {
+            await bakery.beginFrame({ screenshot: BELOW_DISCARD_SHOT });
+            discarded++;
+            if (frame < fromFrame) discardedBefore++;
+            return BELOW_SKIPPED;
+          }
+          if (spec.hasMedia === true) await prepareFrameMedia(bakery);
+          return belowCapture(frame, shoot, info);
+        } }
+        : below ? { capture: belowCapture }
         : direct ? { capture: directSegmentCapture(bakery, { clipId: spec.topClipId, rect: captureRect, record: direct, stride, captures: Math.ceil(samples / stride), always: this.direct === 'always',
           note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) } : {}),
         onFrame: async (frame, shot) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
+          // 画一张丢掉的帧(不是这个分段要的)不进编码器
+          if (shot === BELOW_SKIPPED || (drawAll && !wanted(frame))) return;
           const raw = shot?.rgba ? shot : null;
           if (sparse || frame === fromFrame || guardTight || remeasure) {
             // 这一张里不透明像素的外接框(截图矩形里的像素坐标)
@@ -1622,8 +1660,12 @@ export class StreamProducer {
       });
       if (result.reset) this.stats.bakeStreamResets = (this.stats.bakeStreamResets ?? 0) + 1;
       // 这条流取图那一段的累计(诊断:`status()` 每条流的 `capture`;取了几帧、取图和推帧各花多少毫秒)
+      // 画一张丢掉的那些帧不算取了的帧;分段第一帧之前的那些就是回放的帧(`bakeStream` 把它们数进了 `captured`)
+      result.captured -= discarded;
+      result.replayed = (result.replayed ?? 0) + discardedBefore;
       const taken = state.capture ||= { frames: 0, captureMs: 0, stepMs: 0 };
       taken.frames += result.captured; taken.captureMs += result.captureMs; taken.stepMs += result.stepMs;
+      if (discarded) taken.discarded = (taken.discarded ?? 0) + discarded;
       // 回放过的帧数(`bakeStream` 的 `replayed`):不回放的流恒为 0,探针读 `status()` 核对
       this.stats.replayedFrames = (this.stats.replayedFrames ?? 0) + (result.replayed ?? 0);
       state.replayedFrames = (state.replayedFrames ?? 0) + (result.replayed ?? 0);
