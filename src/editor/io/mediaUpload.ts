@@ -95,16 +95,37 @@ export async function uploadMediaFile(file: File): Promise<UploadedMedia | null>
  * 失败给 null,那条素材就按没有 hash 的迁移期素材走(仍然能按文件名播)。
  */
 export async function adoptServerMedia(filePath: string): Promise<UploadedMedia | null> {
-  if (ONLINE_BUILD) return null;
+  return (await adoptServerMediaVerdict(filePath)).up;
+}
+
+/**
+ * 编辑器进程对「这个文件取不取得到」的回答,只有两种算明确的「没有」:
+ * - `absent`:404,确实没有这个文件(以及落到页面回退的 html);
+ * - `outside`:403 且带 `X-PC-Media-Verdict: outside`,路径不在素材目录里,这个接口永远不会给(另一台机器上的路径多半如此)。
+ * 其余一律 `unsure`:别的 403、5xx、限速、请求本身出错 —— 没读成不等于不存在,不据此认定缺失。
+ */
+export type MediaVerdict = "found" | "absent" | "outside" | "unsure";
+export function mediaVerdictOf(res: { ok: boolean; status: number; headers: { get(name: string): string | null } }): MediaVerdict {
+  if (res.ok) return HTML_TYPE.test(res.headers.get("content-type") || "") ? "absent" : "found";
+  if (res.status === 404) return "absent";
+  if (res.status === 403 && res.headers.get("x-pc-media-verdict") === "outside") return "outside";
+  return "unsure";
+}
+const HTML_TYPE = new RegExp("text/html", "i");
+
+/** 同 adoptServerMedia,另带判词:没拿到时分得清是「没有」还是「说不清」 */
+export async function adoptServerMediaVerdict(filePath: string): Promise<{ up: UploadedMedia | null; verdict: MediaVerdict }> {
+  if (ONLINE_BUILD) return { up: null, verdict: "unsure" };
   try {
     const res = await fetch(`/api/media/adopt?path=${encodeURIComponent(filePath)}&tiers=1`, { method: "POST" });
     if (!res.ok) {
       console.warn(`[io] 补算素材哈希失败(HTTP ${res.status}): ${filePath}`);
-      return null;
+      const verdict = mediaVerdictOf(res);
+      return { up: null, verdict: verdict === "found" ? "unsure" : verdict };
     }
     const data = await res.json();
-    if (!data?.ok || typeof data.hash !== "string") return null;
-    return {
+    if (!data?.ok || typeof data.hash !== "string") return { up: null, verdict: "unsure" };
+    return { verdict: "found", up: {
       hash: data.hash,
       ext: String(data.ext || ""),
       name: String(data.name || ""),
@@ -113,10 +134,10 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
       bytes: Number(data.bytes) || 0,
       deduped: !!data.deduped,
       ...tiersOf(data),
-    };
+    } };
   } catch (err) {
     console.warn(`[io] 补算素材哈希异常: ${filePath}`, err);
-    return null;
+    return { up: null, verdict: "unsure" };
   }
 }
 
@@ -357,20 +378,25 @@ function uploadNameOf(m: Pick<MediaAsset, "name" | "path">): string {
 
 /**
  * 补一条:能 adopt 就 adopt,不行再取字节上传。都不行 `up` 为 null。
- * `unreachable`:每个读地址都明确答了「没有」(非 2xx,或落到页面回退) —— 本机确实取不到这个文件;
- * 取到了字节但上传失败、或请求本身出错(编辑器进程不在)的不算,那时说不清文件在不在。
+ * `unreachable`:每条路径、每个读地址都**明确**答了「没有」(判词见 `mediaVerdictOf`:404、落到页面回退、路径不在素材目录里)
+ * —— 本机确实取不到这个文件;别的非 2xx(没权限、5xx、限速)、取到了字节但上传失败、请求本身出错(编辑器进程不在)都不算,
+ * 那时说不清文件在不在。
  */
 async function ingestOne(m: MediaAsset): Promise<{ up: UploadedMedia | null; unreachable: boolean }> {
   const { paths, urls } = localSourcesOf(m);
-  for (const p of paths) {
-    const up = await adoptServerMedia(p);
-    if (up) return { up, unreachable: false };
-  }
   let unsure = false;
+  for (const p of paths) {
+    const { up, verdict } = await adoptServerMediaVerdict(p);
+    if (up) return { up, unreachable: false };
+    if (verdict === "unsure") unsure = true;
+  }
   for (const u of urls) {
     try {
       const res = await fetch(u);
-      if (!res.ok) continue;
+      const verdict = mediaVerdictOf(res);
+      // 明确没有(404、页面回退、路径不在素材目录里):看下一个地址;别的失败是没读成,说不清
+      if (verdict === "unsure") { unsure = true; continue; }
+      if (verdict !== "found") continue;
       // 兜底:落到页面回退(index.html)的不是素材
       if (/text\/html/i.test(res.headers.get("content-type") || "")) continue;
       unsure = true; // 字节取到了:文件在,只是没入上库
@@ -530,6 +556,8 @@ export async function checkHashedMedia(opts: { allowed?: () => boolean } = {}): 
   // 内容库里没有的,再按原来记的本机路径找一次(素材找回的先后:包里落库的、内容库里已有的都先于它,见 `workflow/materials.md`):
   // 文件还在原处、内容也对得上,就地挂回内容库,不算缺失;原处的文件内容变了(哈希对不上)记下来,弹窗里单独说明。
   const changed = new Set<string>();
+  /** 按原路径找的时候没读成(没权限、5xx、请求出错)的:说不清文件在不在,这一轮不认定 */
+  const unsure = new Set<string>();
   const triedPath = new Set<string>();
   for (const m of getState().project.media ?? []) {
     if (m.pending || !hasMediaHash(m) || !m.path) continue;
@@ -538,10 +566,11 @@ export async function checkHashedMedia(opts: { allowed?: () => boolean } = {}): 
 ${m.path}`)) continue;
     triedPath.add(`${h}
 ${m.path}`);
-    const up = await adoptServerMedia(m.path);
+    const { up, verdict } = await adoptServerMediaVerdict(m.path);
     if (!go()) return out;
     if (up && up.hash.toLowerCase() === h) hashPresent.add(h);
     else if (up) changed.add(h);
+    else if (verdict === "unsure") unsure.add(h);
   }
   if (!go()) return out;
   const notices: MissingMaterialNotice[] = [];
@@ -554,7 +583,7 @@ ${m.path}`);
         actions.updateMedia(m.id, { name: nameWithoutMissing(m.name), url: m.url || url, missingMaterial: undefined });
         out.restored.push(m.id);
       }
-    } else if (answered.has(h)) {
+    } else if (answered.has(h) && !unsure.has(h)) {
       // 已经认定过、记录也还对得上的不重复写(保存重开后就是这种:占位一直在,不再弹窗)
       if (m.name.startsWith(MISSING_PREFIX) && confirmedMissing(m)) continue;
       console.warn(`[io] 缺失素材: ${m.name} (${m.hash})`);

@@ -21,7 +21,7 @@ const get = (id) => getState().project.media.find((m) => m.id === id);
 const fileUrl = (p) => `/api/media/file?path=${encodeURIComponent(p)}`;
 
 /** 假编辑器进程。`library`:内容库里有的哈希;`files`:原路径 → 那里的文件现在的哈希;`down`:整个进程不应答 */
-function editor({ library = [], files = {}, down = false, localStatus = 200 } = {}) {
+function editor({ library = [], files = {}, down = false, localStatus = 200, adoptFail = null, fileStatus = 404 } = {}) {
   const calls = [];
   const lib = new Set(library);
   globalThis.fetch = async (url) => {
@@ -35,11 +35,12 @@ function editor({ library = [], files = {}, down = false, localStatus = 200 } = 
     if (u.startsWith("/api/media/adopt")) {
       const p = new URL(u, "http://x").searchParams.get("path");
       const hash = files[p];
-      if (!hash) return new Response("Media path is outside PromptCut media folders", { status: 403 });
+      if (!hash && adoptFail) return new Response("failed", { status: adoptFail });
+      if (!hash) return new Response("Media path is outside PromptCut media folders", { status: 403, headers: { "X-PC-Media-Verdict": "outside" } });
       lib.add(hash); // 就地挂进内容库
       return Response.json({ ok: true, hash, ext: p.split(".").pop(), name: p.split(/[/\\]/).pop(), path: p, url: `/@media/${hash}`, bytes: 10 });
     }
-    if (u.startsWith("/api/media/file?")) return new Response("not found", { status: 404 });
+    if (u.startsWith("/api/media/file?")) return new Response("not found", { status: fileStatus });
     if (u.startsWith("/@media/")) return new Response("<!doctype html>", { headers: { "Content-Type": "text/html" } });
     return new Response(null, { status: 404 });
   };
@@ -226,4 +227,48 @@ test("检查到一半换了项目(同一份文件进了云端项目、素材号�
   assert.equal(getState().project, after, "新项目一个字段都没被写");
   assert.equal(getState().project.media.some((m) => m.missingMaterial || m.name.startsWith("(缺失)")), false);
   assert.deepEqual(takeMissingMaterials(), []);
+});
+
+/* ---------------- 只有明确的「没有」才认定;没读成(没权限、5xx、限速)不认定 ---------------- */
+
+const { mediaVerdictOf } = await import(srcUrl("editor/io/mediaUpload.ts"));
+
+test("判词:404、页面回退、路径不在素材目录里是「没有」;别的非 2xx 都是说不清", () => {
+  const res = (status, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: { get: (k) => headers[k.toLowerCase()] ?? null } });
+  assert.equal(mediaVerdictOf(res(200, { "content-type": "video/mp4" })), "found");
+  assert.equal(mediaVerdictOf(res(200, { "content-type": "text/html; charset=utf-8" })), "absent", "落到页面回退的不是素材");
+  assert.equal(mediaVerdictOf(res(404)), "absent");
+  assert.equal(mediaVerdictOf(res(403, { "x-pc-media-verdict": "outside" })), "outside");
+  for (const status of [400, 401, 403, 408, 409, 423, 429, 500, 502, 503, 507]) assert.equal(mediaVerdictOf(res(status)), "unsure", String(status));
+});
+
+test("没读成不认定:原路径 403(不是「不在素材目录」那种)、500、503、429;读接口同理", async () => {
+  for (const status of [403, 500, 503, 429]) {
+    resetTierBackfillForTest(); takeMissingMaterials();
+    actions.newProject(`没读成-${status}`);
+    const hashed = actions.addMedia({ kind: "video", name: "h.mp4", url: `/@media/${H("a")}`, hash: H("a"), path: "D:/pc/media/h.mp4" });
+    const old = actions.addMedia({ kind: "audio", name: "o.mp3", url: fileUrl("D:/pc/media/o.mp3"), path: "D:/pc/media/o.mp3" });
+    editor({ adoptFail: status, fileStatus: status });
+    assert.deepEqual(await checkHashedMedia(), { missing: [], restored: [] }, `带哈希 ${status}`);
+    const r = await ingestUnhashedMedia({ markMissing: true });
+    assert.equal(r.failed[0].unreachable, undefined, `老素材 ${status}`);
+    for (const m of [hashed, old]) { assert.equal(get(m.id).missingMaterial, undefined, `${m.name} ${status}`); assert.equal(get(m.id).name, m.name); }
+    assert.deepEqual(takeMissingMaterials(), []);
+  }
+  // 对照:同样的两条,回答是明确的「没有」时才认定
+  resetTierBackfillForTest();
+  actions.newProject("明确没有");
+  const hashed = actions.addMedia({ kind: "video", name: "h.mp4", url: `/@media/${H("a")}`, hash: H("a"), path: "D:/pc/media/h.mp4" });
+  const old = actions.addMedia({ kind: "audio", name: "o.mp3", url: fileUrl("D:/pc/media/o.mp3"), path: "D:/pc/media/o.mp3" });
+  editor({ adoptFail: 404, fileStatus: 404 });
+  assert.deepEqual((await checkHashedMedia()).missing, [hashed.id]);
+  assert.equal((await ingestUnhashedMedia({ markMissing: true })).failed[0].unreachable, true);
+  assert.equal(confirmedMissing(get(hashed.id)) && confirmedMissing(get(old.id)), true);
+  // 原路径没读成、读接口明确没有:仍然说不清(文件可能就在那儿)
+  resetTierBackfillForTest();
+  actions.newProject("一半说不清");
+  const mixed = actions.addMedia({ kind: "audio", name: "m.mp3", url: fileUrl("D:/pc/media/m.mp3"), path: "D:/pc/media/m.mp3" });
+  editor({ adoptFail: 500, fileStatus: 404 });
+  assert.equal((await ingestUnhashedMedia({ markMissing: true })).failed[0].unreachable, undefined);
+  assert.equal(get(mixed.id).missingMaterial, undefined);
 });

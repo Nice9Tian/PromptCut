@@ -34,7 +34,7 @@ function fakeEditor({ files = {}, throws = [], enqueue = null } = {}) {
       if (throws.includes(p)) throw new TypeError("fetch failed");
       const hit = files[p];
       if (hit) return Response.json({ ok: true, hash: hit, ext: p.split(".").pop(), name: p.split(/[/\\]/).pop(), path: `C:/store/${hit}`, url: `/@media/${hit}`, bytes: 10 });
-      return new Response("Media path is outside PromptCut media folders", { status: 403 });
+      return new Response("Media path is outside PromptCut media folders", { status: 403, headers: { "X-PC-Media-Verdict": "outside" } });
     }
     if (u.startsWith("/api/media/file?")) {
       const p = new URL(u, "http://x").searchParams.get("path");
@@ -149,8 +149,8 @@ test("MP-M5 带哈希、本地内容库里没有这份字节的素材标「(缺�
       asked.push(new URL(u, "http://x").searchParams.get("hashes").split(","));
       return Response.json({ ok: true, hashes: [H("a"), H("c")] });
     }
-    // 内容库里没有的,按原路径再找一次(0.7.18):这里原路径上也没有
-    if (u.startsWith("/api/media/adopt?")) return new Response("not found", { status: 500 });
+    // 内容库里没有的,按原路径再找一次(0.7.18):这里原路径上也明确没有(404)
+    if (u.startsWith("/api/media/adopt?")) return new Response("Not found", { status: 404 });
     throw new Error(`没料到的请求 ${u}`);
   };
   const r = await checkHashedMedia();
