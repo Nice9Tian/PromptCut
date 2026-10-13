@@ -6,7 +6,7 @@ import path from 'node:path';
 import https from 'node:https';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createAccountWorkerHttpsGateway, createWorkerControlClient } from '../agent-service/account-worker-control-client.mjs';
+import { createAccountWorkerHttpsGateway, createWorkerControlClient, WORKER_SCOPE_HEADERS } from '../agent-service/account-worker-control-client.mjs';
 import { createAccountTaskWorker } from '../agent-service/account-task-worker.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { scopeModel } from './agent-run-scope-fixture.mjs';
@@ -26,6 +26,9 @@ const raw = (port, tls, { method = 'GET', route, body, headers = {} }) => new Pr
   });
   req.on('error', reject); req.on('timeout', () => req.destroy(Error('raw-timeout'))); req.end(text ?? undefined);
 });
+/** 这一代是哪个槽、第几代、哪个实例（root 的预留里写的）；指令要带着它 */
+const scopeOf = model => ({ slotId: model.expected.slotId, epoch: 1, instanceId: model.files.get('reservation-1.json').instanceId });
+const scopeHeaders = scope => ({ [WORKER_SCOPE_HEADERS.slotId]: scope.slotId, [WORKER_SCOPE_HEADERS.epoch]: String(scope.epoch), [WORKER_SCOPE_HEADERS.instanceId]: scope.instanceId });
 function environment(t, name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `pc-worker-https-${name}-`));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -50,14 +53,15 @@ createAssemblyOptions:async()=>{throw Object.assign(Error('must not execute'),{c
 // 配置模块想自己关掉或换掉指令通道都不行：开不开只由入口的起法定
 control:{onClose(){throw new Error('configuration must not own the control channel');}}
 }};}`, { mode: 0o600 });
-  return { configurationModule, serverFingerprint256: model.expected.serverFingerprint256 };
+  return { configurationModule, serverFingerprint256: model.expected.serverFingerprint256, scope: scopeOf(model) };
 }
 
 test('任务子进程不带父子通道：领取、开跑、收尾、结算结果都走只认 root 证书的本机 HTTPS 口', { timeout: 60_000 }, async t => {
   const env = environment(t, 'https'), port = await freePort();
-  const { configurationModule, serverFingerprint256 } = await childConfig(env, port);
+  const { configurationModule, serverFingerprint256, scope } = await childConfig(env, port);
   const gateway = createAccountWorkerHttpsGateway({ configurationModule, cwd: here, timeoutMs: 15_000, port,
-    controllerTls: env.pki.account, serverFingerprint256, settlementWaitMs: 500 });
+    controllerTls: env.pki.account, serverFingerprint256, settlementWaitMs: 500, scope });
+  const mine = scopeHeaders(scope);
   t.after(async () => { await gateway.terminate().catch(() => {}); });
   const ready = await gateway.ready;
   assert.notEqual(ready.pid, process.pid); assert.equal(ready.pid, gateway.pid()); assert.equal(ready.port, port);
@@ -77,7 +81,7 @@ test('任务子进程不带父子通道：领取、开跑、收尾、结算结�
     assert.equal(answer.status, 403, request.route); assert.equal(answer.body.code, 'account-worker-controller-forbidden');
   }
   // 经过反向代理转来的（带转发头）也不认，哪怕证书对
-  const forwarded = await raw(port, env.pki.account, { method: 'POST', route: '/internal/v2/agent/run-scope/control/start', body: {}, headers: { 'x-forwarded-for': '127.0.0.1' } });
+  const forwarded = await raw(port, env.pki.account, { method: 'POST', route: '/internal/v2/agent/run-scope/control/start', body: {}, headers: { ...mine, 'x-forwarded-for': '127.0.0.1' } });
   assert.equal(forwarded.status, 403);
   // 不认识的指令、带查询串的指令：没有这条路
   assert.equal((await raw(port, env.pki.account, { method: 'POST', route: '/internal/v2/agent/run-scope/control/assign', body: {} })).status, 404);
@@ -89,11 +93,26 @@ test('任务子进程不带父子通道：领取、开跑、收尾、结算结�
   await assert.rejects(gateway.prepare({ projectId: 'project', conversationId: 'conversation-child', requestId: 'one' }), { code: 'root-ready-missing' });
   await assert.rejects(gateway.prepare({ projectId: 'project', conversationId: 'conversation-child', requestId: 'one', runGrantId: 'master-grant' }), { code: 'account-worker-task' });
   // 开跑的请求体不是空对象：拒
-  assert.equal((await raw(port, env.pki.account, { method: 'POST', route: '/internal/v2/agent/run-scope/control/start', body: { grant: 'x' } })).body.code, 'account-worker-command');
+  assert.equal((await raw(port, env.pki.account, { method: 'POST', route: '/internal/v2/agent/run-scope/control/start', body: { grant: 'x' }, headers: mine })).body.code, 'account-worker-command');
+
+  // 指令要写明是给哪个槽、第几代、哪个实例的：没写、写的是别的一代、别的实例、别的槽，一律不做，回应里带着这一代自己是谁
+  for (const headers of [{}, { ...mine, [WORKER_SCOPE_HEADERS.epoch]: '2' }, { ...mine, [WORKER_SCOPE_HEADERS.instanceId]: 'another-instance' },
+    { ...mine, [WORKER_SCOPE_HEADERS.slotId]: 'another-slot' }]) {
+    for (const request of [{ method: 'POST', route: '/internal/v2/agent/run-scope/control/close', body: {} }, { route: '/internal/v2/agent/run-scope/control/settlement?waitMs=10' },
+      { method: 'POST', route: '/internal/v2/agent/run-scope/control/prepare', body: { projectId: 'project', conversationId: 'conversation-child', requestId: 'one' } }]) {
+      const answer = await raw(port, env.pki.account, { ...request, headers });
+      assert.equal(answer.status, 409, JSON.stringify(headers)); assert.deepEqual(answer.body, { ok: false, code: 'account-worker-scope-mismatch', scope });
+    }
+  }
+  assert.equal(gateway.describe().childClosed, false, '写错代号的「收尾」没有把进程收掉');
+  // 上一代的调度方（代号差一）拿着同一张证书来问：任务进程不做，客户端也不认它的回应
+  const stale = createWorkerControlClient({ origin: `https://127.0.0.1:${port}`, tls: env.pki.account, serverFingerprint256, timeoutMs: 5000, scope: { ...scope, epoch: 2 } });
+  await assert.rejects(stale.close(), { code: 'worker-control-scope-mismatch' }); await assert.rejects(stale.start(), { code: 'worker-control-scope-mismatch' });
+  stale.stop(); assert.equal(gateway.describe().childClosed, false);
 
   // 结算结果：没有就回「还没有」，不编
-  const pending = await raw(port, env.pki.account, { route: '/internal/v2/agent/run-scope/control/settlement?waitMs=50' });
-  assert.deepEqual(pending.body, { ok: true, result: { settled: false } });
+  const pending = await raw(port, env.pki.account, { route: '/internal/v2/agent/run-scope/control/settlement?waitMs=50', headers: mine });
+  assert.deepEqual(pending.body, { ok: true, result: { settled: false }, scope });
   let settled = false; void gateway.settlement.then(() => { settled = true; });
   await new Promise(resolve => setTimeout(resolve, 800));
   assert.equal(settled, false, '长挂到时限以后接着问，不把「还没有」当成结果');
@@ -118,7 +137,11 @@ test('指令通道本身：收尾的回应先到、进程没了以后结算结�
     control: { onClose: () => { closeAsked += 1; }, settlementWaitMs: 300 } });
   const { port } = await worker.listen({ port: 0 });
   const client = createWorkerControlClient({ origin: `https://127.0.0.1:${port}`, tls: env.pki.account,
-    serverFingerprint256: env.model.expected.serverFingerprint256, timeoutMs: 5000, settlementWaitMs: 300 });
+    serverFingerprint256: env.model.expected.serverFingerprint256, timeoutMs: 5000, settlementWaitMs: 300, scope: scopeOf(env.model) });
+  // 客户端必须知道自己连的是哪一代
+  assert.throws(() => createWorkerControlClient({ origin: `https://127.0.0.1:${port}`, tls: env.pki.account, serverFingerprint256: env.model.expected.serverFingerprint256 }), { code: 'worker-control-configuration' });
+  assert.throws(() => createWorkerControlClient({ origin: `https://127.0.0.1:${port}`, tls: env.pki.account, serverFingerprint256: env.model.expected.serverFingerprint256,
+    scope: { slotId: 'slot', epoch: 0, instanceId: 'x' } }), { code: 'worker-control-configuration' });
   let gone = false;
   const settlement = client.settlement({ gone: () => gone });
   assert.equal(client.settlement({ gone: () => true }), settlement, '同一个客户端只开一条');
@@ -164,11 +187,14 @@ test('入口的起法：没有父子通道又没写 --control https 直接退出
   assert.equal((await run(['--configuration-module', missing, '--control', 'http'])).code, 1);
   // 起不来时网关把入口报的原因码带给调用方
   const port = await freePort();
+  const anyScope = { slotId: 'slot-entry', epoch: 1, instanceId: 'instance-entry' };
   const gateway = createAccountWorkerHttpsGateway({ configurationModule: missing, cwd: here, timeoutMs: 15_000, port,
-    controllerTls: env.pki.account, serverFingerprint256: certificateFingerprint(env.pki.asset.fingerprint256) });
+    controllerTls: env.pki.account, serverFingerprint256: certificateFingerprint(env.pki.asset.fingerprint256), scope: anyScope });
   await assert.rejects(gateway.ready);
   assert.equal((await gateway.closed).exitCode, 1);
   assert.deepEqual(await gateway.settlement, { kind: 'closed' });
   assert.throws(() => createAccountWorkerHttpsGateway({ configurationModule: missing, cwd: here, port: 0, controllerTls: env.pki.account,
-    serverFingerprint256: certificateFingerprint(env.pki.asset.fingerprint256) }), { code: 'worker-gateway-configuration' });
+    serverFingerprint256: certificateFingerprint(env.pki.asset.fingerprint256), scope: anyScope }), { code: 'worker-gateway-configuration' });
+  assert.throws(() => createAccountWorkerHttpsGateway({ configurationModule: missing, cwd: here, port, controllerTls: env.pki.account,
+    serverFingerprint256: certificateFingerprint(env.pki.asset.fingerprint256) }), { code: 'worker-control-configuration' }, '网关也必须知道子进程是哪一代');
 });

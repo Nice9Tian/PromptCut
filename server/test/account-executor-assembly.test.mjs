@@ -39,6 +39,9 @@ test('actual account CLI rejects incomplete or legacy task-process configuration
       [{ ...complete, PROMPTCUT_AGENT_SHARED_DATA: path.join(dir, 'no-such-dir') }, /PROMPTCUT_AGENT_SHARED_DATA/],
       // 在主进程里跑任务那一路的变量
       [{ ...complete, PROMPTCUT_AGENT_CONTROL_PORT: '6643' }, /"legacy":\["PROMPTCUT_AGENT_CONTROL_PORT"\]/],
+      // 开关写成 0 / 1 以外的值：拒，不当成没设
+      [{ ...complete, PROMPTCUT_AGENT_ACCOUNT_LOOK: 'yes' }, /PROMPTCUT_AGENT_ACCOUNT_LOOK 只能是 0 或 1/],
+      [{ ...complete, PROMPTCUT_AGENT_ACCOUNT_LOOK: '' }, /PROMPTCUT_AGENT_ACCOUNT_LOOK 只能是 0 或 1/],
       [{ ...complete, PROMPTCUT_AGENT_ACCOUNT_LOOK: '1' }, /"legacy":\["PROMPTCUT_AGENT_ACCOUNT_LOOK"\]/],
       [{ ...complete, PROMPTCUT_AGENT_RUN_ASSET_ORIGIN: 'https://127.0.0.1:6644/' }, /"legacy":\["PROMPTCUT_AGENT_RUN_ASSET_ORIGIN"\]/],
     ];

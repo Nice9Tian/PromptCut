@@ -90,7 +90,8 @@ export async function buildSlots(config, controllerTls) {
     };
     const adapter = createRootSlotAdapter({ expected, io, publish: publishAgentScope,
       anchorDigest: () => slot.publisher.configuredAnchorDigest,
-      connect: () => createWorkerControlClient({ origin: slot.publisher.identity.origin, tls: controllerTls, serverFingerprint256: expected.serverFingerprint256 }),
+      connect: record => createWorkerControlClient({ origin: slot.publisher.identity.origin, tls: controllerTls, serverFingerprint256: expected.serverFingerprint256,
+        scope: { slotId: expected.slotId, epoch: record.epoch, instanceId: record.instance.instanceId } }),
       host: { alive: sameMain,
         // 只动这个槽的单元的主进程（不按进程号发信号）；整组进程由发布器停单元、看 cgroup 空了来关
         async stop(record) { if (await sameMain(record)) await systemctl(['kill', '--kill-who=main', '--signal=SIGKILL', expected.unit]); } },

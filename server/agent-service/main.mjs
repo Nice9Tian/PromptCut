@@ -131,6 +131,9 @@ export function accountTaskProcessConfig({ env, port }) {
   const names = ['PROMPTCUT_AGENT_INTERNAL_PORT', 'PROMPTCUT_AGENT_ROOT_FINGERPRINT256', 'PROMPTCUT_AGENT_SHARED_DATA'];
   const missing = names.filter(name => !env[name]);
   if (missing.length) return { error: { missing, detail: `账号版要在任务进程里跑任务，缺这几样配置：${missing.join('、')}` } };
+  // 这个开关只认 0 / 1（和原来一样，写成别的值拒绝启动，不当成没设）；1 属于旧路，在下面拒
+  if (env.PROMPTCUT_AGENT_ACCOUNT_LOOK !== undefined && !['0', '1'].includes(env.PROMPTCUT_AGENT_ACCOUNT_LOOK))
+    return { error: { detail: 'PROMPTCUT_AGENT_ACCOUNT_LOOK 只能是 0 或 1' } };
   const legacy = ['PROMPTCUT_AGENT_CONTROL_PORT', 'PROMPTCUT_AGENT_RUN_ASSET_ORIGIN', 'PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256', 'PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES']
     .filter(name => env[name] !== undefined).concat(env.PROMPTCUT_AGENT_ACCOUNT_LOOK === '1' ? ['PROMPTCUT_AGENT_ACCOUNT_LOOK'] : []);
   if (legacy.length) return { error: { legacy, detail: `这几样属于在主进程里跑任务的旧路，账号版不再接：${legacy.join('、')}（看画面与运行素材写进 root 入口的配置）` } };

@@ -198,7 +198,8 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
     // 子进程不带父子通道（和 systemd 起的一样）：领取、开跑、收尾、结算结果都走它那个只认 root 证书的本机 HTTPS 口
     const gateway = createAccountWorkerHttpsGateway({ configurationModule: path.join(here, 'account-worker-child-config.mjs'), cwd: here,
       env: { ...process.env, PROMPTCUT_WORKER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 15_000, port: identityPort,
-      controllerTls: pki.account, serverFingerprint256: m.expected.serverFingerprint256 });
+      controllerTls: pki.account, serverFingerprint256: m.expected.serverFingerprint256,
+      scope: { slotId: m.expected.slotId, epoch: reservation.epoch, instanceId: reservation.instanceId } });
     const ready = await gateway.ready;
     generations.set(reservation.epoch, { gateway, pid: ready.pid, port: ready.port, journalFile: path.join(dir, `worker-journal-${reservation.epoch}.sqlite`) });
     say('root.started', { epoch: reservation.epoch, pid: ready.pid });

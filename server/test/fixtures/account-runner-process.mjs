@@ -237,7 +237,8 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     // 子进程不带父子通道（和 systemd 起的一样）：指令走它那个只认 root 证书的本机 HTTPS 口
     const gateway = createAccountWorkerHttpsGateway({ configurationModule: path.join(here, 'account-runner-child-config.mjs'), cwd: path.resolve(here, '..', '..', '..'),
       env: { ...process.env, PROMPTCUT_RUNNER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 30_000, port: worker.identity.port,
-      controllerTls: pki.rootctl, serverFingerprint256: m.expected.serverFingerprint256 });
+      controllerTls: pki.rootctl, serverFingerprint256: m.expected.serverFingerprint256,
+      scope: { slotId: m.expected.slotId, epoch: reservation.epoch, instanceId: reservation.instanceId } });
     const ready = await gateway.ready;
     generations.set(epoch, { gateway, pid: ready.pid, port: ready.port, logFile, journalFile: worker.journalFile });
     say('root.started', { epoch, pid: ready.pid });

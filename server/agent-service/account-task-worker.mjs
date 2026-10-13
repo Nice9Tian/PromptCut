@@ -9,6 +9,7 @@ import { createAccountExecutorAssembly } from './account-executor-assembly.mjs';
 import { createWorkerEventJournal } from './worker-event-journal.mjs';
 import { createWorkerEventSink } from './worker-event-sink.mjs';
 import { createWorkerSettlement, createTerminalPrepareSource } from './worker-settlement.mjs';
+import { WORKER_SCOPE_HEADERS } from './account-worker-control-client.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
 const ref = v => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(v);
@@ -118,6 +119,7 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     minVersion: 'TLSv1.3' }, (req, res) => {
     const reply = (status, body) => { if (res.headersSent || res.destroyed) return;
       res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', connection: 'close' }); res.end(JSON.stringify(body)); };
+    const mine = { slotId: e.slotId, epoch: r.epoch, instanceId: r.instanceId }; let scoped = false;
     void (async () => {
       const url = new URL(req.url ?? '/', 'https://worker.invalid');
       const isIdentity = req.method === 'GET' && req.url === '/internal/v2/agent/run-scope/identity';
@@ -130,9 +132,15 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
       // root 的发布器读的就是这个形状（`asset-root-registry-publisher.mjs` 的 freshIdentity）：{ ok, result }。
       // result 里没有 PEM、没有请求里带来的任何东西。
       if (isIdentity) return reply(200, { ok: true, result: identity() });
-      return command(req, res, reply, name, url);
+      // 指令要写明是给哪个槽、第几代、哪个实例的；不是给这一代的一律不做（上一代的调度方问到了这一代，或者配置串了）。
+      // 回应（包括这条拒绝）都带上这一代自己是谁，对方据此核对。
+      if (req.headers[WORKER_SCOPE_HEADERS.slotId] !== mine.slotId || req.headers[WORKER_SCOPE_HEADERS.epoch] !== String(mine.epoch) ||
+          req.headers[WORKER_SCOPE_HEADERS.instanceId] !== mine.instanceId)
+        return reply(409, { ok: false, code: 'account-worker-scope-mismatch', scope: mine });
+      scoped = true;
+      return command(req, res, (status, body) => reply(status, { ...body, scope: mine }), name, url);
     })().catch(error => reply(Number.isInteger(error?.status) && error.status >= 400 && error.status < 600 ? error.status : 503,
-      { ok: false, code: safeCode(error) }));
+      { ok: false, code: safeCode(error), ...(scoped ? { scope: mine } : {}) }));
   });
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   async function prepareTask(input) {

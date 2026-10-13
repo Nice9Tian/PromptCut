@@ -290,7 +290,15 @@ async function main(options) {
     });
     await check('主进程自己退出且从没绑定过：写失败观察，按「没领过任务」退掉', async () => {
       const worker = (await adapter.open()).worker;
-      const client = createWorkerControlClient({ origin: slotConfig.publisher.identity.origin, tls: controllerTls, serverFingerprint256: expected.serverFingerprint256, timeoutMs: 10_000 });
+      const fourth = await record(4);
+      const client = createWorkerControlClient({ origin: slotConfig.publisher.identity.origin, tls: controllerTls, serverFingerprint256: expected.serverFingerprint256, timeoutMs: 10_000,
+        scope: { slotId: expected.slotId, epoch: 4, instanceId: fourth.instance.instanceId } });
+      // 写错代号的指令（上一代的调度方问到了这一代）：任务进程不做，客户端也不认它的回应
+      const stale = createWorkerControlClient({ origin: slotConfig.publisher.identity.origin, tls: controllerTls, serverFingerprint256: expected.serverFingerprint256, timeoutMs: 10_000,
+        scope: { slotId: expected.slotId, epoch: 3, instanceId: fourth.instance.instanceId } });
+      let staleCode = null; try { await stale.close(); } catch (error) { staleCode = codeOf(error); } finally { stale.stop(); }
+      diag.push(`stale-epoch close rejected with ${staleCode}`);
+      need(staleCode === 'worker-control-scope-mismatch' && Number((await unitNow()).MainPID) === fourth.instance.pid, 'stale-scope-accepted');
       try { need((await client.close())?.stopping === true, 'close-command'); } finally { client.stop(); }
       await waitExited(worker);
       const unit = await unitNow(); diag.push(`after self exit: unit ${unit.ActiveState}/${unit.SubState} MainPID=${unit.MainPID}`);
