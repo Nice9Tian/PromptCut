@@ -9,7 +9,8 @@ const resources = {
   register: async () => ({ signal: new AbortController().signal, closed: new Promise(() => {}) }),
 };
 const gate = createEgressGate({ testAllow: [allow], resolve: async () => { throw new Error('ENOTFOUND'); } });
-const tools = createHostedBrowserTools({ resources, egress: gate, dataDir, runtime: { executablePath } });
+const extraArgs = String(process.env.W1_EXTRA_ARGS ?? '').split(/\s+/).filter(Boolean);
+const tools = createHostedBrowserTools({ resources, egress: gate, dataDir, runtime: { executablePath, extraArgs } });
 const context = { projectId: 'sp_restart', conversationId: 'conversation_restart', runId: 'run1', runGrantId: 'grant1', instanceId: 'instance1', instanceGeneration: 1, senderAccountId: 'sender', messageId: 'message1' };
 const view = await tools.call('web_open', { url }, context);
 const session = tools.describe().sessions[0];

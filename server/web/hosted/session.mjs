@@ -124,30 +124,68 @@ export function profileHolder(userDataDir) {
   } catch { return { held: false, pid: null }; }
 }
 
+/** 一个进程的命令行(查不到回 null)。Linux 读 /proc,不起子进程;Windows、macOS 要问系统,只在清残留时用 */
+export async function processCommandLine(pid, { timeoutMs = 15_000 } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  if (process.platform === 'linux') {
+    try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim() || null; } catch { return null; }
+  }
+  const [command, args] = process.platform === 'win32'
+    ? ['powershell', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`]]
+    : ['ps', ['-o', 'command=', '-p', String(pid)]];
+  return new Promise((resolve) => {
+    let text = '';
+    let child;
+    try { child = nodeSpawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }); } catch { resolve(null); return; }
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 已经退了 */ } }, timeoutMs);
+    timer.unref?.();
+    child.stdout.on('data', (chunk) => { text += chunk; });
+    child.once('error', () => { clearTimeout(timer); resolve(null); });
+    child.once('close', () => { clearTimeout(timer); resolve(text.trim() || null); });
+  });
+}
+
+/**
+ * 这个进程是不是一个正用着这份用户数据目录的浏览器。
+ * 完整的 Chrome 会锁住目录(`profileHolder`);chrome-headless-shell 不锁(实测),所以再看它的命令行里有没有这份目录。
+ */
+export async function browserHoldsProfile(pid, userDataDir) {
+  if (!pidAlive(pid)) return false;
+  const holder = profileHolder(userDataDir);
+  if (holder.held && (holder.pid === null || holder.pid === pid)) return true;
+  const line = await processCommandLine(pid);
+  if (!line) return false;
+  return process.platform === 'win32' ? line.toLowerCase().includes(userDataDir.toLowerCase()) : line.includes(userDataDir);
+}
+
 /**
  * 清掉上一个 Agent 服务进程留下的浏览器(正常不会有:管道一断浏览器自己退;这是兜底)。
- * 只杀「登记过、还活着、而且这份目录确实还被占着」的那个,免得进程号被系统回收后误杀别人。
+ * 只杀「登记过(或锁文件里写着)、还活着、而且确实正用着这份目录」的那个,免得进程号被系统回收后误杀别人。
  * @returns {Promise<{ found: boolean, killed: number[], stillHeld: boolean }>}
  */
 export async function reapOrphan(sessionDir, { timeoutMs = 8_000 } = {}) {
   const userDataDir = path.join(sessionDir, 'profile');
+  const forget = () => { try { fs.rmSync(path.join(sessionDir, OWNER_FILE), { force: true }); } catch { /* 删不掉不影响 */ } };
   let owner = null;
   try { owner = JSON.parse(fs.readFileSync(path.join(sessionDir, OWNER_FILE), 'utf8')); } catch { /* 没有登记 */ }
   const holder = profileHolder(userDataDir);
-  if (!holder.held) {
-    try { fs.rmSync(path.join(sessionDir, OWNER_FILE), { force: true }); } catch { /* 删不掉不影响 */ }
+  const browserPid = holder.pid ?? (Number.isSafeInteger(owner?.browserPid) && owner.browserPid > 0 ? owner.browserPid : null);
+  if (!browserPid || !await browserHoldsProfile(browserPid, userDataDir)) {
+    // 目录被锁着却认不出是谁(没有登记、登记的进程不在了):杀不了,照实报「还被占着」
+    if (holder.held) return { found: true, killed: [], stillHeld: true };
+    forget();
     return { found: false, killed: [], stillHeld: false };
   }
-  const browserPid = holder.pid ?? (Number.isSafeInteger(owner?.browserPid) ? owner.browserPid : null);
-  const pids = [browserPid, ...(Array.isArray(owner?.pids) ? owner.pids : [])].filter((p) => Number.isSafeInteger(p) && p > 0);
-  if (browserPid && pidAlive(browserPid)) killProcessTree(browserPid);
-  for (const pid of pids) if (pid !== browserPid && pidAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ } }
-  await waitPidsGone(pids, timeoutMs);
+  // 主进程直接结束(立刻生效),再让系统按父子关系补杀一遍。
+  // 登记里的子进程号不直接杀:它们可能早就退了、号被系统分给了别的进程;主进程一没,浏览器的子进程自己会退
+  try { process.kill(browserPid, 'SIGKILL'); } catch { /* 已经退了 */ }
+  killProcessTree(browserPid);
+  const left = await waitPidsGone([browserPid], timeoutMs);
   const end = Date.now() + timeoutMs;
-  let stillHeld = profileHolder(userDataDir).held;
-  while (stillHeld && Date.now() < end) { await sleep(100); stillHeld = profileHolder(userDataDir).held; }
-  if (!stillHeld) { try { fs.rmSync(path.join(sessionDir, OWNER_FILE), { force: true }); } catch { /* 删不掉不影响 */ } }
-  return { found: true, killed: pids, stillHeld };
+  let stillHeld = left.length > 0 || profileHolder(userDataDir).held;
+  while (stillHeld && Date.now() < end) { await sleep(100); stillHeld = pidAlive(browserPid) || profileHolder(userDataDir).held; }
+  if (!stillHeld) forget();
+  return { found: true, killed: [browserPid], stillHeld };
 }
 
 /** 删目录,删到真的没了(Windows 上进程刚退时文件句柄要过一会儿才放) */
@@ -281,10 +319,12 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
    * Windows 上后者(taskkill)在机器忙时要好几秒,不能只靠它。
    */
   const killAll = () => {
+    const mainAlive = pidAlive(browserPid);
     if (process.platform === 'win32') {
       for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ } }
     }
-    killProcessTree(browserPid, null);
+    // 主进程已经没了就不用再按树杀(按树杀要靠它的进程号);子进程上面逐个结束过了
+    if (mainAlive || process.platform !== 'win32') killProcessTree(browserPid, null);
   };
   let exited = !proc;
   let procClosed = !proc;
@@ -344,7 +384,14 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       } catch { /* 拦截句柄失效(页面跳走了):不用管 */ }
     });
     const navEnded = (request) => {
-      try { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) state.lastNavEndedAt = now(); } catch { /* 请求已经没了 */ }
+      try {
+        if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
+        state.lastNavEndedAt = now();
+        // 主框架的跳转被代理拒了:明文的回 403 并带原因码;https 的是隧道建不起来
+        const code = request.response()?.headers()?.['x-egress-refused'];
+        if (code) noteBlocked({ kind: 'egress', code: String(code).slice(0, 40) });
+        else if (/ERR_TUNNEL_CONNECTION_FAILED/.test(String(request.failure()?.errorText ?? ''))) noteBlocked({ kind: 'egress', code: 'refused' });
+      } catch { /* 请求已经没了 */ }
     };
     page.on('requestfinished', navEnded);
     page.on('requestfailed', navEnded);
@@ -395,7 +442,6 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     const run = async () => {
       if (state.closed) throw new HostedSessionError('closed', '浏览器已经关了。');
       state.busy += 1;
-      state.blocked = [];
       // 超时以后这个动作不许再碰页面:它后面每次动手之前都要过 check()
       const token = { dead: false };
       const check = (guard) => {
@@ -431,9 +477,10 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     void refreshPids();
     const out = { ...result, ...extra, ok: true };
     if (state.blocked.length) {
-      out.blocked = state.blocked.slice();
+      // 自上一版清单以来被拦下的东西(含两次动作之间页面自己干的);交出去就清掉
+      out.blocked = state.blocked.splice(0);
       out.blockedNote = '这一步里有东西被云端拦下了:'
-        + [...new Set(state.blocked.map((b) => ({ download: '下载(云端的浏览器不下载文件)', protocol: '非 http(s) 的地址', popup: '新开的标签页', dialog: '页面弹出的对话框(已自动关掉)' })[b.kind] ?? b.kind))].join('、') + '。';
+        + [...new Set(out.blocked.map((b) => ({ download: '下载(云端的浏览器不下载文件)', protocol: '非 http(s) 的地址', popup: '新开的标签页', dialog: '页面弹出的对话框(已自动关掉)', egress: '页面要跳去的地址被出网限制拒绝(云节点本机、内网等不许访问)' })[b.kind] ?? b.kind))].join('、') + '。';
     }
     return out;
   }
@@ -479,6 +526,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     const target = admitted.target;
     check(guard);
     const mark = proxy.seq;
+    const blockedBefore = state.blocked.length;
     let response = null;
     let failure = null;
     try {
@@ -492,14 +540,20 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       try { await page.goto('about:blank', { timeout: 5_000 }); } catch { /* 退不回去也照实报 */ }
       return { ok: false, error: '没有打开:云端 Agent 的浏览器只打开 http / https 地址。', refused: 'protocol' };
     }
+    // 被出网闸拒了:明文的(含跳转到的那一跳)最后一个回应带着原因码;https 的是隧道建不起来,原因码在代理的记录里。
+    // 代理记录里别的拒绝(浏览器自己的后台请求)不算数:只认「隧道失败」这一种失败。
     const proxyRefusedMain = response?.headers?.()['x-egress-refused'];
-    if (proxyRefusedMain || (failure && refused.length)) {
-      const code = proxyRefusedMain ?? refused[refused.length - 1].code;
+    const tunnelRefused = failure && /ERR_TUNNEL_CONNECTION_FAILED/.test(String(failure?.message ?? '')) && refused.filter((e) => e.kind === 'connect').pop();
+    if (proxyRefusedMain || tunnelRefused) {
+      const code = proxyRefusedMain ?? tunnelRefused.code;
+      // 这次拒绝已经在这里说了,不用再在下一版清单里提一遍
+      state.blocked.splice(blockedBefore);
       return { ok: false, error: `没有打开:这个地址(或它跳转到的地址)被拒绝了。${egressRefusalText(code)}`, egress: code };
     }
     // 下载被拒时浏览器报的是「跳转中止」,「这是个下载」的事件晚一拍才到
     if (failure && /ERR_ABORTED/.test(String(failure?.message ?? '')) && !state.blocked.some((b) => b.kind === 'download')) await sleep(400);
     if (failure && state.blocked.some((b) => b.kind === 'download')) {
+      state.blocked.splice(blockedBefore);
       return { ok: false, refused: 'download', error: '没有打开:这个地址是一个文件下载,云端 Agent 的浏览器不下载文件。要把网上的素材放进项目,用素材采集或按地址导入素材的工具。' };
     }
     if (failure) {
@@ -638,7 +692,8 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       if (graceful && browser.connected !== false) {
         try { await withDeadline(browser.close(), limits.gracefulCloseMs, '关浏览器'); } catch { /* 不肯退就杀 */ }
       }
-      if (browserPid && pidAlive(browserPid)) killAll();
+      // 不管它自己退没退,记下的每个进程都直接结束一遍:主进程自己退了以后,子进程在忙的机器上要拖好几秒才跟着退
+      killAll();
       await Promise.race([processGone(), sleep(limits.closeMs)]);
       // 主进程退了以后子进程可能还要一瞬;逐个核,还在的直接杀
       let alive = await waitPidsGone(known, 1_500);

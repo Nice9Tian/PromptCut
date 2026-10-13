@@ -34,10 +34,23 @@ export async function hermeticResolve(hostname) {
   throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' });
 }
 
+/**
+ * 在节点上验时用:`W1_BROWSER` 指节点上装的浏览器(绝对路径),`W1_EXTRA_ARGS` 是追加的启动参数(空格分隔,如 `--no-sandbox`)。
+ * 不设就用 puppeteer 自带的 Chrome for Testing。
+ */
+export const TEST_EXTRA_ARGS = Object.freeze(String(process.env.W1_EXTRA_ARGS ?? '').split(/\s+/).filter(Boolean));
+export const isHeadlessShell = (file) => /headless[-_]shell/i.test(path.basename(String(file ?? '')));
+/** 测试里不经产品代码、直接用 puppeteer 起对照浏览器时的选项 */
+export const rawLaunchOptions = (executablePath) => ({ headless: isHeadlessShell(executablePath) ? 'shell' : true, executablePath, pipe: true });
+
 let chromePathPromise = null;
-/** 本机测试用的浏览器:puppeteer 自带的 Chrome for Testing。没有就抛(测试不跳过) */
+/** 测试用的浏览器:缺省是 puppeteer 自带的 Chrome for Testing。没有就抛(测试不跳过) */
 export function testChromePath() {
   chromePathPromise ??= (async () => {
+    if (process.env.W1_BROWSER) {
+      if (!fs.existsSync(process.env.W1_BROWSER)) throw new Error(`W1_BROWSER 指的浏览器不在:${process.env.W1_BROWSER}`);
+      return process.env.W1_BROWSER;
+    }
     const puppeteer = (await import('puppeteer')).default;
     const file = await puppeteer.executablePath();
     if (!file || !fs.existsSync(file)) throw new Error(`puppeteer 自带的 Chrome for Testing 不在:${file}`);
@@ -49,6 +62,7 @@ export function testChromePath() {
 /** 同版本的 chrome-headless-shell(节点上装的是它);本机没有就回 null */
 export async function testHeadlessShellPath() {
   const chrome = await testChromePath();
+  if (isHeadlessShell(chrome)) return chrome;
   // …/puppeteer/chrome/win64-152.x/chrome-win64/chrome.exe → …/puppeteer/chrome-headless-shell/win64-152.x/chrome-headless-shell-win64/chrome-headless-shell.exe
   const build = path.basename(path.dirname(path.dirname(chrome)));
   const platformDir = path.basename(path.dirname(chrome)).replace(/^chrome-/, 'chrome-headless-shell-');
@@ -131,7 +145,7 @@ export async function w1Fixture(t, options = {}) {
   const openTools = (overrides = {}) => {
     const tools = createHostedBrowserTools({
       resources, egress: gate, dataDir,
-      runtime: { argPrefix: [...TEST_CHROME_ARG_PREFIX], ...options.runtime, executablePath, ...overrides.runtime },
+      runtime: { argPrefix: [...TEST_CHROME_ARG_PREFIX], extraArgs: [...TEST_EXTRA_ARGS], ...options.runtime, executablePath, ...overrides.runtime },
       limits: { ...options.limits, ...overrides.limits },
       log: (event, fields) => serviceLog.push({ event, ...fields }),
     });

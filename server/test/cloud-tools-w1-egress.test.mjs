@@ -37,7 +37,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { w1Fixture, item, sleep, until, testChromePath, testHeadlessShellPath, projectId, conversationId, TEST_CHROME_ARG_PREFIX } from './cloud-tools-w1-fixture.mjs';
+import { w1Fixture, item, sleep, until, testChromePath, testHeadlessShellPath, projectId, conversationId, TEST_CHROME_ARG_PREFIX, TEST_EXTRA_ARGS, isHeadlessShell, rawLaunchOptions } from './cloud-tools-w1-fixture.mjs';
 import { startFakeSite, startInternalService } from './cloud-tools-w1-site.mjs';
 import { createEgressGate } from '../agent/service/egress.mjs';
 import { normalizeWebTarget, pageRequestAllowed, filterExtraArgs, hostedNetworkArgs, startBrowserProxy, egressRefusalText } from '../web/hosted/network.mjs';
@@ -247,7 +247,7 @@ test('W1-EGRESS-03 起浏览器时交给它的东西:管道、无头、白名单
   }
   const o = captured[0];
   assert.equal(o.pipe, true, '用管道连,不开调试端口');
-  assert.equal(o.headless, true, '只用无头');
+  assert.equal(o.headless, isHeadlessShell(chrome) ? 'shell' : true, '只用无头');
   assert.equal(o.executablePath, chrome);
   assert.equal(o.userDataDir, path.join(dir, 's', 'profile'));
   assert.deepEqual(o.args.slice(0, HOSTED_BROWSER_ARG_PREFIX.length), [...HOSTED_BROWSER_ARG_PREFIX]);
@@ -356,8 +356,8 @@ test('W1-EGRESS-06 对照:去掉「回环与链路本地也走代理」的参数
   const gate = createEgressGate({ testAllow: ALLOW, resolve });
   const proxy = await startBrowserProxy({ gate });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-w1-control-'));
-  const args = [...TEST_CHROME_ARG_PREFIX, ...hostedNetworkArgs(proxy.url).filter((a) => !a.startsWith('--proxy-bypass-list='))];
-  const browser = await puppeteer.launch({ headless: true, executablePath: await testChromePath(), userDataDir: dir, pipe: true, args });
+  const args = [...TEST_CHROME_ARG_PREFIX, ...hostedNetworkArgs(proxy.url).filter((a) => !a.startsWith('--proxy-bypass-list=')), ...TEST_EXTRA_ARGS];
+  const browser = await puppeteer.launch({ ...rawLaunchOptions(await testChromePath()), userDataDir: dir, args });
   t.after(async () => {
     const pid = browser.process()?.pid;
     await browser.close().catch(() => {});
@@ -400,8 +400,9 @@ test('W1-EGRESS-07 跳转到内网、跳到 file::都没到', async (t) => {
   await sleep(1500);
   const after = await f.tools.call('web_view', {}, context);
   assert.doesNotMatch(await readText(f, context), new RegExp(SECRET));
-  assert.ok(meta.ok === true || meta.ok === false);
-  assert.ok(after.ok === true || after.ok === false);
+  // 那一跳发生在 web_open 里或它之后:哪一次的结果里说了「被出网限制拒绝」都算,但必须说过
+  const said = [meta, after].some((r) => r.egress || (r.blocked ?? []).some((b) => b.kind === 'egress'));
+  assert.ok(said, `页面自己跳去内网被拒这件事告诉了模型:${JSON.stringify([meta, after].map((r) => ({ ok: r.ok, egress: r.egress, blocked: r.blocked })))}`);
   assert.equal(internal.state.connections, before, '「内网里的服务」零连接');
   const journal = f.tools.egressJournal(scope);
   assert.ok(refusedFor(journal, '127.0.0.1').some((e) => e.port === INTERNAL_PORT), '跳转的那一跳到了代理并被拒');
@@ -478,8 +479,8 @@ test('W1-EGRESS-09 WebRTC:不泄露本机地址,不发不走代理的 UDP;对照
   const gate = createEgressGate({ testAllow: ALLOW, resolve });
   const proxy = await startBrowserProxy({ gate });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-w1-rtc-'));
-  const args = [...TEST_CHROME_ARG_PREFIX, ...hostedNetworkArgs(proxy.url).filter((a) => !/webrtc-ip-handling-policy/.test(a))];
-  const browser = await puppeteer.launch({ headless: true, executablePath: await testChromePath(), userDataDir: dir, pipe: true, args });
+  const args = [...TEST_CHROME_ARG_PREFIX, ...hostedNetworkArgs(proxy.url).filter((a) => !/webrtc-ip-handling-policy/.test(a)), ...TEST_EXTRA_ARGS];
+  const browser = await puppeteer.launch({ ...rawLaunchOptions(await testChromePath()), userDataDir: dir, args });
   t.after(async () => {
     const pid = browser.process()?.pid;
     await browser.close().catch(() => {});
@@ -531,6 +532,7 @@ test('W1-EGRESS-12 节点上装的那种浏览器(chrome-headless-shell):出网�
   const { context } = await f.newRun();
   await leakRound(f, context);
   assert.equal(f.tools.describe().sessions[0].mode, 'shell');
+  if (process.env.W1_VERBOSE) console.log('[w1] chrome-headless-shell:', path.basename(path.dirname(path.dirname(shell))), path.basename(shell));
   // 七个工具在它身上也走得通(看、点、输入、读)
   let view = await f.tools.call('web_open', { url: `${ORIGIN}/` }, context);
   assert.equal(view.ok, true, view.error);
