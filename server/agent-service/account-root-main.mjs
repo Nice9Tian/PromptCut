@@ -29,6 +29,7 @@
  */
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -59,6 +60,22 @@ export function requireLinuxRoot({ platform = process.platform, uid = process.ge
   if (platform !== 'linux' || uid !== 0 || euid !== 0) throw Object.assign(new Error('root-linux-root-required'), { code: 'root-linux-root-required' });
 }
 
+/** 等回环上某个端口开始接受连接（只连一下就断，不发任何字节）。等到了回 true，到时限回 false。 */
+export async function waitForLoopbackListener(port, timeoutMs, { everyMs = 100 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const open = await new Promise(resolve => {
+      const socket = net.connect({ host: '127.0.0.1', port });
+      const done = value => { socket.removeAllListeners(); socket.on('error', () => {}); socket.destroy(); resolve(value); };
+      socket.once('connect', () => done(true)); socket.once('error', () => done(false));
+      socket.setTimeout(1000, () => done(false));
+    });
+    if (open) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, everyMs));
+  }
+}
+
 const systemctl = args => new Promise((resolve, reject) => execFile('/usr/bin/systemctl', args,
   { windowsHide: true, timeout: 30_000, maxBuffer: 65536, encoding: 'utf8' }, error => error ? reject(Object.assign(new Error('root-systemctl-failed'), { code: 'root-systemctl-failed' })) : resolve()));
 
@@ -81,7 +98,16 @@ export async function buildSlots(config, controllerTls) {
     const expected = slot.publisher.expected, io = await createAgentScopeRuntime(slot.publisher);
     // 每开一代之前：先把这一代的设置写好，再起单元。单元里的 PROMPTCUT_AGENT_WORKER_SETTINGS 指向这个固定位置。
     const start = io.start;
-    io.start = async reservation => { await writeSettings(slot.workerSettingsFile, validateWorkerSettings(workerSettingsFor({ config, slot, reservation }))); return start(reservation); };
+    // 起了单元以后先等任务进程真的开始监听它的身份口，再把控制权交回发布器。发布器自己核「监听口归这一代主进程」时只重试几秒，
+    // 节点忙时任务进程起得慢一点就会被它判成失败——而它失败以后故意留着锁，这个槽要人处理才能再用。这里只是多等，
+    // 等不到（30 秒）照旧交回去让发布器按它的规矩判；发布器核的东西一样都没少。
+    const identityPort = Number(new URL(slot.publisher.identity.origin).port);
+    io.start = async reservation => {
+      await writeSettings(slot.workerSettingsFile, validateWorkerSettings(workerSettingsFor({ config, slot, reservation })));
+      const result = await start(reservation);
+      if (!await waitForLoopbackListener(identityPort, 30_000)) line('root.slot.listener.slow', { slotId: expected.slotId, epoch: reservation.epoch });
+      return result;
+    };
     const sameMain = async record => {
       const unit = await systemUnitV2(expected.unit);
       if (Number(unit.MainPID) !== record.instance.pid || unit.InvocationID !== record.instance.unitInvocationId) return false;

@@ -9,7 +9,9 @@ import { loadAgentRunScopesConfig } from '../hosted/agent-run-scope-config.mjs';
 import { validateWorkerSettings } from '../agent-service/account-task-worker-config.mjs';
 import { createAccountSlotScheduler } from '../agent-service/account-slot-scheduler.mjs';
 import { validateRootConfiguration, workerSettingsFor, createRootSlotAdapter } from '../agent-service/account-root-slots.mjs';
-import { parseRootArguments, requireLinuxRoot } from '../agent-service/account-root-main.mjs';
+import net from 'node:net';
+import { parseRootArguments, requireLinuxRoot, waitForLoopbackListener } from '../agent-service/account-root-main.mjs';
+import { freePorts } from './free-ports.mjs';
 import { assertRootOwnedCode } from '../agent-service/account-root-code-trust.mjs';
 import { scopeModel, signed } from './agent-run-scope-fixture.mjs';
 
@@ -333,4 +335,20 @@ test('root 入口启动时核自己要执行的代码只有 root 改得了：路
   await assert.rejects(assertRootOwnedCode({ entryFile: 'server/agent-service/account-root-main.mjs', fs: fakeTree(goodTree()) }), { code: 'root-code-untrusted', why: 'path' });
   // 不给 node 就不核 node
   assert.equal((await assertRootOwnedCode({ entryFile: ENTRY, fs: fakeTree(goodTree()) })).node, null);
+});
+
+test('开一代以后先等任务进程开始监听再交回发布器：等到了回 true；一直没人听到时限回 false；只连不发', async () => {
+  const [port] = await freePorts(1);
+  assert.equal(await waitForLoopbackListener(port, 300, { everyMs: 50 }), false, '没人在听：到时限回 false，不抛');
+  const seen = [];
+  const server = net.createServer(socket => { seen.push(socket); socket.on('data', () => seen.push('data')); socket.on('error', () => {}); });
+  // 过一会儿才开始监听（任务进程起得慢）
+  const later = setTimeout(() => server.listen(port, '127.0.0.1'), 400);
+  try {
+    const started = Date.now();
+    assert.equal(await waitForLoopbackListener(port, 5000, { everyMs: 50 }), true);
+    assert.ok(Date.now() - started >= 300, '是等到它开始听才回的');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(seen.includes('data'), false, '只连一下就断，不往里发任何字节');
+  } finally { clearTimeout(later); await new Promise(resolve => server.close(resolve)); }
 });

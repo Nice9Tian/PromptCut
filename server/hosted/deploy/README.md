@@ -302,6 +302,14 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 - **看现状**：`node server/agent-service/account-root-main.mjs --config … --status`（各槽停在第几代、什么阶段、单元状态）；`journalctl -u promptcut-agent-root`、`journalctl -u promptcut-agent-task-slot-a`。
 - **重启 root 入口**：停它只停调度，不关任务进程；但它再起来时，上一次留下的还在跑的那一代会被停下并记成「失败」（它没有那一代的通道了）。所以先等各槽都是 `closed` 再重启。**主服务重启也一样要先等槽空**：正在跑的任务每一步都要把事件交给主服务，交不上去它就放弃正常结算，被记成「失败」。
 - **换代码版本**：正在跑的任务进程用的是旧代码，做完那一条就结束；新开的一代用新代码。任务槽单元文件的内容不变就不用动配置里的 `sha256`；模板变了要重新填、改 `sha256`、`daemon-reload`。
-- **槽停住了**：root 入口的日志里出现 `slot.stuck`，或 `--status` 长时间停在同一代的 `ready` / `bound`。发布器出错时故意把锁（登记目录里的 `.publisher.lock`）留着，不自动重试，要人看过再处理——不要直接删锁。常见原因：任务槽单元起不来（看它的日志）、单元文件被改过（`sha256` 对不上）、目录权限不对。
+- **槽停住了**：root 入口的日志里出现 `slot.stuck`，或 `--status` 长时间停在同一代的 `ready` / `bound`。发布器任何一步出错都故意把锁（登记目录里的 `.publisher.lock`）留着、不自动重试，要人看过再处理。最常见的触发是**开一代的时候**：任务槽单元起不来或起来就退了（证书、目录权限、设置文件读不到，看 `journalctl -u <单元>`）、单元文件被改过或被 `systemctl edit` 加了 drop-in（`publisher-unit-config-changed` / `publisher-foreign-dropin`）、节点很忙时任务进程迟迟没开始监听（root 入口会先等它最多 30 秒，日志里有 `root.slot.listener.slow`）、root 入口在一次发布做到一半时被结束。恢复照下面做（这套步骤没有在节点上演练过，第一次用请对着实际目录核对）：
+  1. 停 `promptcut-agent-root`。`--status` 记下这个槽停在第几代（设为 N）和阶段；`ls <登记目录>`。
+  2. **停在 `closed`，锁还在**（开第 N+1 代时出的错）：`systemctl stop <任务槽单元>`；`systemctl list-units --all '<slice 名字空间>*'` 里还 active 的 slice 逐个 `systemctl stop`。
+     - 登记目录里**没有** `reservation-<N+1>.json`：这次发布什么都没写下。修掉原因后删 `.publisher.lock`，起 root 入口。
+     - **有** `reservation-<N+1>.json`：这一代开到一半。发布器没有「接着做」也没有「撤回」，这条记录链不能再用：按「节点重启以后」的办法给这个槽换新的 `authorityId` 和空的登记目录重新初始化（要改文档服务的任务槽配置并重启它），并删掉 `/run/systemd/system/<任务槽单元>.d/`。旧的那一代从没领过任务，不会丢任务。
+  3. **停在 `ready` 或 `bound`，锁还在**（关这一代时出的错）：
+     - 登记目录里**没有** `terminal-<N>.json`：关的动作还没写下任何东西。确认任务槽单元的状态（`systemctl status`）后删 `.publisher.lock`，起 root 入口；它会把这一代当成上一次留下的，停掉、写失败观察，等文档服务签强制终态后关（那条任务记「失败」）。
+     - **有** `terminal-<N>.json` 而没有 `publication-<N>-closed.json`：关到一半。这条记录链不能再用，换槽同上；**而且这一代绑着的那条任务在文档服务里结不了**，对应的对话会一直显示有任务在跑——现在没有工具能处理这种情况，要开发介入。
+  4. 没有锁、只是长时间停在 `bound`：那是任务还在跑，或者任务进程放弃了结算正在等文档服务（root 入口日志里的 `slot.settlement.abandoned` / `slot.failure.pending` 会说明），不要动登记目录。
 - **节点重启以后**：记录链钉在这一次开机上，重启后**原来的槽不能接着用**（发布器会报 `agent-scope-boot-transition`）。要给每个槽换一个新的 `expected.authorityId`（或 `slotId`）、换一个空的登记目录，重做第 4～6 步（含重启文档服务）和第 8 步。重启前还没结清的任务结不了，对应的对话要到文档服务里处理。这是现在这套设计的限制，不是配置问题。
 - **回退**：停 `promptcut-agent-root`（任务不再开始，排着的消息留在文档服务里）；主服务停掉后页面的「云端」一项报连不上。文档服务去掉 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE` 并重启就回到「不开这个模式」（那时云端任务领不到分配，不会退回别的跑法）。
