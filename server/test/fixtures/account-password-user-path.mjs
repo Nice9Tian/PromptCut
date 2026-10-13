@@ -127,7 +127,7 @@ async function openHostedProjectOverWebSocket({ origin, ca, ticket, projectId })
 export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 6683, 6684, 6685, 6686], agentPort = 6687, keepOpen = false,
   providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT,
   passwordOrderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE,
-  publicHandler = null, logoutConfirmPollMs = undefined, assetEntry = null,
+  publicHandler = null, logoutConfirmPollMs = undefined, logoutConfirmTimeoutMs = undefined, assetEntry = null,
   diagnostic = () => {} } = {}) {
   assert.equal(ports.length, 7);
   assert.ok(Number.isInteger(agentPort) && agentPort > 1024 && agentPort < 65536 && !ports.includes(agentPort), 'agentPort must be a free probe-owned port');
@@ -225,8 +225,10 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
     await Promise.all([fsp.mkdir(docDir), fsp.mkdir(assetDir)]);
     stageHostedAssetFiles(path.resolve('.'), staged);
     const load = name => import(pathToFileURL(path.join(providerRoot, `account/${name}.mjs`)));
-    const [storeModule, credentialsModule, internalModule, appModule, orderModule] = await Promise.all([
-      load('store'), load('credentials'), load('internal'), load('app'), import(pathToFileURL(passwordOrderModule))]);
+    const [storeModule, credentialsModule, internalModule, appModule, orderModule, eventsModule] = await Promise.all([
+      load('store'), load('credentials'), load('internal'), load('app'), import(pathToFileURL(passwordOrderModule)), load('events')]);
+    // 账号后端有没有「退出确认的时限」这一版（VisuHive 分支 claude/v18-logout-text 起有）。
+    const providerSupportsLogoutTimeout = typeof eventsModule.LOGOUT_CONFIRM_TIMEOUT_MS === 'number';
     store = storeModule.openStore(path.join(dir, 'accounts.sqlite'));
     const credentials = credentialsModule.createCredentials({ store, key: randomBytes(32) });
     const orderKeys = { account: generateKeyPairSync('ed25519'), doc: generateKeyPairSync('ed25519') };
@@ -254,7 +256,8 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
     await listen(accountServer, accountPort);
     docAuthorityClient = internalModule.createDocAuthorityClient({ origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.account, serverFingerprint256: pki.doc.fingerprint256 });
     siteServer = http.createServer(appModule.createApp({ store, credentials, mailer,
-      origins: [edgeOrigin], cookieSecure: true, docAuthority: docAuthorityClient }));
+      origins: [edgeOrigin], cookieSecure: true, docAuthority: docAuthorityClient,
+      ...(logoutConfirmTimeoutMs === undefined ? {} : { logoutConfirmTimeoutMs }) }));
     await listen(siteServer, sitePort);
     edgeServer = https.createServer({ key: pki.wrong.key, cert: pki.wrong.cert, minVersion: 'TLSv1.3' }, (req, res) => {
       const incoming = new URL(req.url, edgeOrigin), route = incoming.pathname;
@@ -353,6 +356,7 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
           { serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 }, { serviceId: 'agent', fingerprint256: pki.wrong.fingerprint256 }],
         agent: { fingerprint256: pki.wrong.fingerprint256, serviceKid: agentKey.kid },
         ...(logoutConfirmPollMs === undefined ? {} : { logoutConfirmPollMs }),
+        ...(logoutConfirmTimeoutMs === undefined ? {} : { logoutConfirmTimeoutMs }),
         order: { witnessKeys: { 'dual-path-order': orderKeys.account.publicKey },
           docAttestationPrivateKey: orderKeys.doc.privateKey } } });
     combo = await startCombo();
@@ -574,7 +578,9 @@ export async function runAccountPasswordUserPath({ ports = [6680, 6681, 6682, 66
           return codes[afterCount] ?? null;
         },
         // ---- 以下只给退出确认的集成测试用 ----
-        accountIds: accounts.slice(), creatorEditorToken: editors[0],
+        accountIds: accounts.slice(), creatorEditorToken: editors[0], providerSupportsLogoutTimeout,
+        /** 模拟 Agent 服务的进程带着开着的读取被结束：它的读取控制连接没了，手里的读取没来得及向文档服务关掉。 */
+        async dropAgentInstance() { const control = agentReadControl; agentReadControl = null; await control?.close(); },
         get combo() { return combo; },
         /** 素材服务进程：按进程号停掉（这是测试自己起的进程）、在同一个数据目录上再起。 */
         async stopAsset() {
