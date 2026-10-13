@@ -213,7 +213,8 @@ export function createToolJobs({ databasePath, authorize, verifyFence, now = Dat
     const at = Number(now());
     if (!Number.isSafeInteger(at) || at < 0) fail('bad-clock');
     // 排着的(queued)和在跑的(running)都是上一个进程里的事:这个进程里没有任何东西会去做它,两种都如实标成被中断。
-    // 之后同一个请求重新发起会得到新作业(各工具包按「已中断的可以重新发起」处理),不会凭一行排着的记录一直等下去。
+    // 被中断是终态:这一行不会再动。要重做就重新发起一次(新的一次工具调用,请求号不同,得到新作业;各工具包都按「已中断的可以重新发起」处理),
+    // 不会凭一行排着的记录一直等下去。同一个请求号原样重发拿到的仍是这条被中断的记录,不会悄悄开第二份工。
     db.prepare(`UPDATE tool_jobs SET state='interrupted', revision=revision+1,
       error_code='INTERRUPTED_ON_RESTART', updated_at=? WHERE state IN ('queued','running')`).run(at);
     db.exec('COMMIT;');

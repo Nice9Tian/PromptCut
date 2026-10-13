@@ -279,7 +279,9 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   } catch (error) { try { pageBridge.close('listen-failed'); } catch { /* 已经关了 */ } await eventStore.close().catch(() => {}); throw Object.assign(new Error('account-master-listen'), { status: 503, code: 'account-master-listen', cause: error }); }
 
   // ---------- 接待人的那一面 ----------
-  const base = createAccountConversationService({ conversationClient, now });
+  // 用量:任务进程把每次模型请求、每次外部服务与工具调用记在共用数据目录的 usage/ 下(`account-runner.mjs`),成员查用量读的就是那里。
+  // 主服务自己不跑任务、不写这份流水,只读。
+  const base = createAccountConversationService({ conversationClient, now, usageDir: path.join(sharedDataDir, 'usage') });
   const workspaces = createWorkspaces({ dataDir: sharedDataDir, limits: workspaceLimits, log: say });
   const workspaceFor = (identity, conversationId) => workspaces.open({ projectId: identity.projectId, conversationId,
     ownerKey: accountWorkspaceOwnerKey(identity.projectId, conversationId) });

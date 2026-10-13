@@ -19,17 +19,17 @@
 | `nginx-mime-wasm.conf` | `/etc/nginx/mime.types` 的 `types { }` 里 | 只在 mime.types 没有 wasm 时加 |
 | `sysctl-90-promptcut-bbr.conf` | `/etc/sysctl.d/90-promptcut-bbr.conf`，再 `modprobe tcp_bbr`、`echo tcp_bbr > /etc/modules-load.d/promptcut-bbr.conf`、`sysctl -p /etc/sysctl.d/90-promptcut-bbr.conf` | BBR 与 MTU 探测：高延迟、有丢包的线路上 cubic 会把单连接压到每秒十几 KB |
 
-## 在线执行用户卡与图卡的隔离
+## 在线执行用户卡与素材效果卡的隔离
 
-在线浏览器在两个舞台源里执行用户卡与图卡的代码（`docs/plan/online-card-exec-contract.md` 第 3、4 节）。隔离靠舞台源的响应头与两条 `/media-s/` 路由，都在上面的模板里：
+在线浏览器在两个舞台源里执行用户卡与素材效果卡的代码（`docs/plan/online-card-exec-contract.md` 第 3、4 节）。隔离靠舞台源的响应头与两条 `/media-s/` 路由，都在上面的模板里：
 
 - 两个片段由 `node scripts/gen-stage-policy-nginx.mjs` 从 `src/online/stagePolicy.mjs` 生成（`--check` 只核对），不要手改；本机仿 nginx 的代理 `scripts/probes/lib/hosted-proxy.mjs` 与在线构建里舞台入口的 `<meta>` 取的是同一份策略。片段里的 `{{DOMAIN}}` 与站点配置一起替换，放到 `/etc/nginx/snippets/` 下。
 - `/media-s/<会话号>/_grant`：编辑页面把只读素材票据交来，换成 HttpOnly cookie，卡片代码读不到；只认主站的源。`/media-s/<会话号>/media/<哈希>`：凭 cookie 读素材，nginx 把 cookie 换成 `Authorization` 头转给素材服务。素材服务不用改；原来的 `/media` 保留。
 - **顺序：先改 nginx 再换页面。** 先放两个片段、换两份站点配置，`nginx -t` 通过后 `systemctl reload nginx`（不重启托管服务），再换在线页面。
   - 旧页面在新 nginx 下照常工作：它的舞台地址仍是 `/editor/?stage=1`，素材照旧走 `/media` 加 `?t=`；新加的响应头里不含 Trusted Types，不影响它。
-  - 新页面在旧 nginx 下不会裸奔：舞台入口自带同文的 `<meta>` 策略，但舞台自检只认响应头那一份，判「没有隔离」，本页不执行用户卡与图卡，素材照旧走 `?t=`。
+  - 新页面在旧 nginx 下不会裸奔：舞台入口自带同文的 `<meta>` 策略，但舞台自检只认响应头那一份，判「没有隔离」，本页不执行用户卡与素材效果卡，素材照旧走 `?t=`。
 - 改完后核一遍：`curl -sI https://s1.{{DOMAIN}}/editor/stage.html` 有 `Content-Security-Policy`（含 `frame-ancestors https://{{DOMAIN}}`）与 `Connection-Allowlist`；`curl -sI https://s1.{{DOMAIN}}/editor/_iso/ok` 是 204、`/editor/_iso/redirect` 是 302；`curl -s -o /dev/null -w '%{http_code}' -X POST https://s1.{{DOMAIN}}/media-s/0123456789abcdef0123456789abcdef/_grant` 是 403（没有主站的 `Origin`）；`curl -sI https://{{DOMAIN}}/editor` 有 `frame-src`。
-- **托管方的总开关**：`/opt/promptcut-hosted/editor/runtime-config.json` 里加一项 `"onlineCardExec": false`（例如 `{ "v": 1, "stageOrigins": [...], "onlineCardExec": false }`），在线页面就整体退回原来的做法，不执行用户卡与图卡；删掉这一项或写 `true` 就是开（缺省）。页面每次打开时读，不用重启任何服务。`deploy-hosted --stage-origins` 会重写这个文件，重新部署后要把这一项加回去。
+- **托管方的总开关**：`/opt/promptcut-hosted/editor/runtime-config.json` 里加一项 `"onlineCardExec": false`（例如 `{ "v": 1, "stageOrigins": [...], "onlineCardExec": false }`），在线页面就整体退回原来的做法，不执行用户卡与素材效果卡；删掉这一项或写 `true` 就是开（缺省）。页面每次打开时读，不用重启任何服务。`deploy-hosted --stage-origins` 会重写这个文件，重新部署后要把这一项加回去。
 - WebRTC 由 `Connection-Allowlist` 在浏览器里拦下（Chrome 152、154 实测）；不认这个响应头的浏览器靠页面里的脚本加固，那不是浏览器的保证。
 
 证书：先装好站点配置里不含 ssl 的部分或用发行版默认站点占住 80 端口，再 `certbot certonly --nginx -d {{DOMAIN}} -d s1.{{DOMAIN}} -d s2.{{DOMAIN}}` 签一张三个名字的证书，路径与模板里的 `/etc/letsencrypt/live/{{DOMAIN}}/` 一致。删掉发行版的 `sites-enabled/default`。
@@ -142,9 +142,9 @@ pm2 resurrect && pm2 list                     # 期望 list 里有 promptcut-ren
 
 ### 先决条件：与在线页面、渲染服务同一个提交
 
-Agent 服务不单独上传代码：它用 `deploy-render` 放上去的那份检出（完整仓库加依赖，要 vite 与 `src/`）。Agent 服务发布的补渲计划带着这份检出的代码版本，渲染服务只认领代码版本相同的计划，在线页面也按同一个代码版本找预渲染的结果。所以**三者必须出自同一个提交**：先换在线页面、`deploy-render`，再 `deploy-agent`。`status-agent` 把 Agent 服务与渲染服务的代码版本并排，不一致标红。
+Agent 服务不单独上传代码：它用 `deploy-render` 放上去的那份检出（完整仓库加依赖，要 vite 与 `src/`）。Agent 服务发布的预渲染重试计划带着这份检出的代码版本，渲染服务只认领代码版本相同的计划，在线页面也按同一个代码版本找预渲染的结果。所以**三者必须出自同一个提交**：先换在线页面、`deploy-render`，再 `deploy-agent`。`status-agent` 把 Agent 服务与渲染服务的代码版本并排，不一致标红。
 
-Agent 服务自己不开 Chrome；预渲染用的 chrome-headless-shell 只属于渲染服务（见上面「渲染服务」一节）。含用户卡的项目由渲染服务的隔离工作进程渲（同时最多一个、冷启动约 10 秒），所以云端 Agent 建卡、改到用户卡片段之后的补渲比只有内置卡的项目慢。
+Agent 服务自己不开 Chrome；预渲染用的 chrome-headless-shell 只属于渲染服务（见上面「渲染服务」一节）。含用户卡的项目由渲染服务的隔离工作进程渲（同时最多一个、冷启动约 10 秒），所以云端 Agent 建卡、改到用户卡片段之后的预渲染重试比只有内置卡的项目慢。
 
 **云端 Agent 的工具与本机一致**（契约第 9 节）。与节点有关的几件事：
 

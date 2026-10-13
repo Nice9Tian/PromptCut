@@ -117,6 +117,10 @@ function makeHarness(f) {
     const before = toolRounds(conversationId).length;
     const sent = await actor.agent(`/conversations/${conversationId}/messages`, { requestId, ...(selection ? { selectionSnapshot: { pageId: actor.pageId } } : {}),
       ...(attachments ? { attachments } : {}), prompt: script(steps) });
+    if (sent.status === 403 && sent.body?.code === 'selection-page-unavailable' && !arguments[3]?.retried) {
+      await actor.ensurePage();
+      return run(actor, conversationId, steps, { attachments, waitSettled, timeoutMs, selection, retried: true });
+    }
     if (sent.status !== 202) throw new Error(`发消息没有被接受:${sent.status} ${brief(sent.body)}`);
     const message = await until(() => f.messageOf(conversationId, requestId), { what: `消息 ${requestId} 入账`, timeoutMs: 20_000 });
     if (!waitSettled) return { requestId, messageId: message.messageId };
@@ -194,6 +198,11 @@ async function main() {
   const h = makeHarness(f);
   const actors = [];
   let failed = null;
+  // 长时间的探针里页面到文档服务的连接票据会到期(文档服务把旧连接关掉,在场表里这张页面就不在了):隔几秒看一眼,断了就凭同一个登录重连
+  const reconnecting = new Set();
+  const keepPages = setInterval(() => { for (const actor of actors) { if (reconnecting.has(actor)) continue; reconnecting.add(actor);
+    void actor.ensurePage().catch(() => {}).finally(() => reconnecting.delete(actor)); } }, 8_000);
+  let pageTab = null, uiBrowser = null, desktop = null;
   try {
     const a = await f.connectActor(0); actors.push(a);
     await f.scheduler.start();
@@ -281,12 +290,18 @@ async function main() {
         check('网页操作:读到页面上的那段字', JSON.stringify(read ?? '').includes('WIRE-PROBE-MARKER-7391'), brief(read, 200));
         check('网页接管:发起人的页面没有连着事件流,如实回「发起方不在线」', handoff?.initiatorOffline === true, brief(handoff));
         check('网页操作:关掉', closed?.ok === true && closed.closed === true, brief(closed));
-        check('网页操作:任务结束后这个对话名下没有残留的浏览器进程;用户数据目录留着(登录态保留)', browsersOf(conv).length === 0 && (profileState(conv) ?? []).includes('profile'), brief({ procs: browsersOf(conv), dir: profileState(conv) }));
+        // 用量:这条任务里网页操作的三次调用各记了一行(发起人页面那一族不记),成员经主服务查得到
+        const usage = await a.agent('/usage');
+        const webRow = (usage.body.services ?? []).find((row) => row.service === 'web');
+        check('用量:成员经主服务查用量,拿到这条任务记的网页操作那几行(三次调用,按次数记)', usage.status === 200 && webRow?.vendor === 'chromium' && webRow.calls === 3 && webRow.unit === 'calls' && webRow.units === 3 && usage.body.project.calls >= 5,
+          brief({ status: usage.status, web: webRow, modelCalls: usage.body.project?.calls, services: (usage.body.services ?? []).map((row) => `${row.service}:${row.calls}`) }));
+        // 浏览器的帮手进程(崩溃上报那一个)在主进程退出后还会多活几秒:等它,最多半分钟
+        const webGone = await (async () => { try { await until(() => browsersOf(conv).length === 0, { what: 'gone', timeoutMs: 30_000, everyMs: 500 }); return true; } catch { return false; } })();
+        check('网页操作:任务结束后这个对话名下没有残留的浏览器进程;用户数据目录留着(登录态保留)', webGone && (profileState(conv) ?? []).includes('profile'), brief({ procs: browsersOf(conv), dir: profileState(conv) }));
       }
     }
 
     /* ===== 三、发起人页面的反向通道(真的无头浏览器里的真编辑器页面) ===== */
-    let pageTab = null, uiBrowser = null, desktop = null;
     if (wants('page')) {
       const conv = 'wire_page';
       try {
@@ -465,7 +480,8 @@ async function main() {
       await until(async () => (await pageTab.page.evaluate(() => window.__wire.attached)) === true, { what: '页面重新挂上', timeoutMs: 20_000 });
       const before = h.toolRounds(conv).length;
       await h.run(a, conv, [{ tool: 'seek', input: { t: 2 } }, { say: '主服务没了' }], { waitSettled: false });
-      await until(async () => (await pageTab.page.evaluate(() => window.__wire.received.length)) > 0, { what: '页面收到请求(压着不答)', timeoutMs: 60_000 });
+      try { await until(async () => (await pageTab.page.evaluate(() => window.__wire.received.length)) > 0, { what: '页面收到请求(压着不答)', timeoutMs: 60_000 }); }
+      catch (error) { error.message += ` :: rounds=${brief(h.toolRounds(conv).slice(before))} wire=${brief(await pageTab.page.evaluate(() => ({ attached: window.__wire.attached, status: window.__wire.status, error: window.__wire.error })))} worker=${brief(h.lastWorkerLog(10))} sched=${brief(f.scheduler.describe())}`; throw error; }
       const epoch = epochNow();
       await f.masterAssembly.close();
       const round = await until(() => h.toolRounds(conv).slice(before).find((r) => r.name === 'seek') ?? null, { what: '任务进程里的 seek 有了结果', timeoutMs: 30_000 }).catch(() => null);
@@ -475,17 +491,20 @@ async function main() {
       check('主服务关闭(重启)时在等的页面请求:任务进程如实得到「发起方不在线」,没有一直挂着;登记表里那一行已经不是「在等」',
         round?.result?.initiatorOffline === true && rows[0]?.state && rows[0].state !== 'pending', brief({ seek: round?.result, row: rows[0], epoch }));
     }
-    if (pageTab || uiBrowser || desktop) {
-      const ui = await import('./cloud-agent-ui-lib.mjs');
-      const b1 = uiBrowser ? await ui.killBrowser(uiBrowser) : { gone: true };
-      const d1 = desktop ? await ui.killDesktop(desktop) : { gone: true };
-      check('探针自己起的无头浏览器与编辑器 dev server 都按进程号收掉', b1.gone !== false && d1.gone !== false, brief({ browser: b1, editor: d1 }));
-    }
   } catch (error) {
     failed = error;
     console.log(`PROBE 探针自己出错 FAIL ${String(error?.stack ?? error).slice(0, 1500)}`);
     results.push({ name: '探针自己出错', state: 'FAIL' });
   } finally {
+    clearInterval(keepPages);
+    if (pageTab || uiBrowser || desktop) {
+      try {
+        const ui = await import('./cloud-agent-ui-lib.mjs');
+        const b1 = uiBrowser ? await ui.killBrowser(uiBrowser) : { gone: true };
+        const d1 = desktop ? await ui.killDesktop(desktop) : { gone: true };
+        check('探针自己起的无头浏览器与编辑器 dev server 都按进程号收掉', b1.gone !== false && d1.gone !== false, brief({ browser: b1, editor: d1 }));
+      } catch (error) { check('探针自己起的无头浏览器与编辑器 dev server 都按进程号收掉', false, String(error?.message ?? error).slice(0, 200)); }
+    }
     for (const actor of actors) await actor.close().catch(() => {});
     const closed = await f.close().catch((error) => ({ errors: [error], alive: -1 }));
     await site.close().catch(() => {});

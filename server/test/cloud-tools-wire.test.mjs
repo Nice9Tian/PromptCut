@@ -119,8 +119,11 @@ test('WIRE-JOBS 账本重开:上一个进程里排着的、在跑的都标成被
   }
   assert.equal((await jobs.get(CONTEXT, done.jobId)).state, 'done');
   assert.deepEqual(await jobs.active(CONTEXT), []);
-  // 被中断的是终态:同一个请求号重新发起得到新作业(各工具包按「可以重新发起」处理),旧的那一行不会复活
+  // 被中断是终态:旧的那一行不会复活;同一个请求号原样重发拿到的还是它,换一个请求号(新的一次工具调用)才是新作业
   await assert.rejects(jobs.update(CONTEXT, queued.jobId, 1, { state: 'running' }), { code: 'terminal-job' });
+  assert.deepEqual(await jobs.start(CONTEXT, 'shots.detect', 'a'.repeat(64), 'request-0001'), { jobId: queued.jobId, state: 'interrupted' });
+  const again = await jobs.start(CONTEXT, 'shots.detect', 'a'.repeat(64), 'request-0009');
+  assert.notEqual(again.jobId, queued.jobId); assert.equal(again.state, 'queued');
 });
 
 test('WIRE-CONF tools 一节:只认列出的键;值要是不带换行的字符串;写了但路径不在就拒绝,没写的族是「没配」', () => {

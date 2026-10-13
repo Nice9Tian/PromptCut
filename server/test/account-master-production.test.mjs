@@ -93,6 +93,15 @@ test('生产的主服务装配：任务在任务进程里跑；停止真的停�
     // 任务进程读到了主服务存的那个附件，并把它导入了项目素材库
     const results = rowsOf(shared).filter(row => kind(row) === 'tool_result').map(row => [row.event.name, row.event.ok !== false]);
     assert.deepEqual(results, [['get_project', true], ['import_media', true]]);
+    // 用量:任务进程把这条任务的模型请求记在共用数据目录里;成员经主服务(生产的装配)查得到,是这条任务记的那几行
+    const usageA = await a.agent('/usage');
+    assert.equal(usageA.status, 200, safeCode(usageA.body));
+    assert.ok(usageA.body.project.calls >= 3, `脚本三个回合各一次模型请求,实际 ${usageA.body.project.calls}`);
+    assert.deepEqual(usageA.body.models.map(row => row.model), ['scripted-local-response']);
+    assert.equal(usageA.body.models[0].calls, usageA.body.project.calls);
+    assert.equal(usageA.body.members.length, 1, '这时只有甲发起过任务');
+    assert.equal(usageA.body.members[0].calls, usageA.body.project.calls);
+    assert.equal(JSON.stringify(usageA.body).includes(grantA.accountId), false, '成员只给显示名,不给账号编号');
     const media = (await a.project()).project.media ?? [];
     assert.ok(media.some(item => item.hash === wavHash || item.sha256 === wavHash || JSON.stringify(item).includes(wavHash)), '附件进了项目素材库');
     // 页面的事件流是从主服务的事件库读的：用户消息、工具过程、模型的话、结束都在流里
@@ -112,6 +121,12 @@ test('生产的主服务装配：任务在任务进程里跑；停止真的停�
     await waitFor(() => f.grantOf(messageB)?.state === 'finished', 'B 的任务结清');
     const grantB = f.grantOf(messageB);
     assert.notEqual(grantB.accountId, grantA.accountId, '第二条是另一位成员发起的，凭他自己的授权跑');
+    // 乙的任务跑完以后,乙查用量:两位成员各有各的行,总量是两条任务的和
+    const usageB = await b.agent('/usage');
+    assert.equal(usageB.status, 200, safeCode(usageB.body));
+    assert.equal(usageB.body.members.length, 2);
+    assert.ok(usageB.body.project.calls > usageA.body.project.calls);
+    assert.equal(usageB.body.members.reduce((sum, row) => sum + row.calls, 0), usageB.body.project.calls);
     assert.ok(grantB.admittedAt >= stopA.at, `B 的任务领取 ${grantB.admittedAt} 不早于 A 那一代被关掉 ${stopA.at}`);
     assert.notEqual(f.generations.get(2).pid, f.generations.get(1).pid, '另一个进程');
     const rows = rowsOf(shared), firstDone = rows.findIndex(row => kind(row) === 'runner_done');
