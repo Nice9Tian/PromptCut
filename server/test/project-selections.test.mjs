@@ -176,3 +176,84 @@ test('018 read-only selection and strict authority/grant fences', async () => {
   await assert.rejects(noFence.querySelections({ principal: agent, projectId,
     runGrantId: 'run1' }), err => err.code === 'run-fence-unavailable');
 });
+
+test('一位成员的登录过期或被撤销:这一位不算,别的成员的选区照常读到;权威不可用仍然整次失败', async () => {
+  const projectId = 'p1';
+  const pageOf = accountId => ({ role: 'page', tenantId: projectId, accountId, accountName: accountId, loginId: `L-${accountId}` });
+  const agent = { service: 'agent', tenantId: projectId };
+  const project = { bodyOf: () => ({ tracks: [{ id: 't', clips: [{ id: 'c1' }, { id: 'c2' }] }] }), revOf: () => 7 };
+  const grant = { projectId, runGrantId: 'run1', fenceRevision: 1, initiatorAccountId: 'alice', initiatorName: 'alice',
+    selectionSnapshot: { source: 'sent-snapshot', projectId, accountId: 'alice', pageId: 'sent', selection: { clipIds: ['c2'] }, sentAt: 10 } };
+  /** 每位成员此刻问权威会得到什么:`true` 放行,函数就照它抛或回 */
+  const answers = new Map();
+  const fail = (status, code) => () => { throw Object.assign(new Error(code), status === undefined ? {} : { status, code }); };
+  const selection = mountSelection({ project,
+    checkAccess: async ({ principal }) => { const a = answers.get(principal.accountId); return typeof a === 'function' ? a(principal) : a; },
+    authorizeQuery: async () => grant, now: () => 2000 });
+  const ctx = { replies: new Map(), send(connId, reply) { this.replies.set(connId, reply); } };
+  const members = ['alice', 'bob', 'carol', 'dave', 'erin'];
+  for (const id of members) {
+    answers.set(id, true);
+    selection.connect(ctx, `conn-${id}`, pageOf(id));
+    await selection.handle(ctx, `conn-${id}`, { type: 'selection.set', projectId, pageId: `page-${id}`, revision: 1, selection: { clipIds: ['c1'] } });
+    assert.equal(ctx.replies.get(`conn-${id}`).type, 'selection.ok');
+  }
+  const query = () => selection.querySelections({ principal: agent, projectId, runGrantId: 'run1' });
+  const liveOf = state => state.members.filter(m => m.pages.some(p => p.live)).map(m => m.accountId);
+  assert.deepEqual(liveOf(await query()), members);
+
+  // bob 登录过期、carol 被撤销、dave 凭证对不上:三位都是 401。改之前这里整次查询抛 authority-unavailable,云端 Agent 看到的是「发起方不在线」
+  answers.set('bob', fail(401, 'authorization-expired'));
+  answers.set('carol', fail(401, 'credential-revoked'));
+  answers.set('dave', fail(401, 'principal-mismatch'));
+  let state = await query();
+  assert.deepEqual(liveOf(state), ['alice', 'erin'], '过期、被撤销的三位不算,发起方和另一位照常');
+  assert.equal(state.members.find(m => m.accountId === 'alice').isInitiator, true);
+  assert.deepEqual(state.members.find(m => m.accountId === 'alice').pages.map(p => [p.pageId, p.live, p.selection.clipIds]), [['page-alice', true, ['c1']]],
+    '发起方读到的是它页面上实时的选区,不是发消息时的那一份');
+  assert.equal(/page-(bob|carol|dave)/.test(JSON.stringify(state)), false, '不算的成员的选区一个字都不在结果里');
+  assert.equal(selection.describe().pages, 2, '不算的那三条连接的在场记录撤掉了');
+
+  // 权限没有放松:那条连接凭过期的登录再发选区照旧被拒,进不了表
+  await selection.handle(ctx, 'conn-bob', { type: 'selection.set', projectId, pageId: 'page-bob', revision: 2, selection: { clipIds: ['c2'] } });
+  assert.deepEqual([ctx.replies.get('conn-bob').type, ctx.replies.get('conn-bob').reason], ['error', 'authorization-expired']);
+  assert.deepEqual(liveOf(await query()), ['alice', 'erin']);
+  // 换一条连接重新登录(页面续登录就是这样):重新发选区之后回到表里
+  answers.set('bob', true);
+  selection.disconnect(ctx, 'conn-bob');
+  selection.connect(ctx, 'conn-bob-2', pageOf('bob'));
+  await selection.handle(ctx, 'conn-bob-2', { type: 'selection.set', projectId, pageId: 'page-bob-2', revision: 1, selection: { clipIds: ['c2'] } });
+  assert.deepEqual(liveOf(await query()), ['alice', 'bob', 'erin']);
+
+  // 发起方自己的登录过期:它不算在线成员,结果里给的是文档服务自己存的发消息时的那一份(不是实时的),别的成员照常
+  answers.set('alice', fail(401, 'authorization-expired'));
+  state = await query();
+  assert.deepEqual(liveOf(state), ['bob', 'erin']);
+  assert.deepEqual(state.members.find(m => m.accountId === 'alice').pages.map(p => [p.pageId, p.live, p.source, p.selection.clipIds]), [['sent', false, 'sent-snapshot', ['c2']]]);
+
+  // 没权限(403)照旧是这一位不算;答非所问(权威回的不是放行、或回的是别人的账号)也是
+  answers.set('erin', fail(403, 'not-listed'));
+  assert.deepEqual(liveOf(await query()), ['bob']);
+  selection.connect(ctx, 'conn-frank', pageOf('frank'));
+  answers.set('frank', () => ({ allowed: true, accountId: 'bob', projectId }));
+  selection.connect(ctx, 'conn-gina', pageOf('gina'));
+  answers.set('gina', () => 'yes');
+  state = await query();
+  assert.deepEqual(liveOf(state), ['bob'], '答非所问的两位不算');
+  assert.equal(state.members.find(m => m.accountId === 'bob').pages.length, 1, '也没有被算成别人的页面');
+  assert.equal(selection.describe().pages, 1);
+
+  // 查询途中断线的那一位不算,别的照常
+  selection.connect(ctx, 'conn-hank', pageOf('hank'));
+  answers.set('hank', () => { selection.disconnect(ctx, 'conn-hank'); return true; });
+  assert.deepEqual(liveOf(await query()), ['bob']);
+
+  // 不是哪一位成员的事:权威不可用(5xx)、超时或连不上(没有状态码)、项目没了(404)、正在搬迁(409)、请求写错(400) —— 整次失败,不给缺人的表
+  for (const [status, code] of [[503, 'account-event-gap'], [500, 'internal'], [undefined, 'timeout'], [404, 'no-project'], [409, 'relocating'], [400, 'invalid-action'], [429, 'busy']]) {
+    answers.set('bob', fail(status, code));
+    await assert.rejects(query(), err => err.status === 503 && err.code === 'authority-unavailable', `${status ?? '没有状态码'} ${code} 应该整次失败`);
+    assert.equal(selection.describe().pages, 1, '整次失败时不撤任何人的记录');
+  }
+  answers.set('bob', true);
+  assert.deepEqual(liveOf(await query()), ['bob'], '权威恢复后照常');
+});
