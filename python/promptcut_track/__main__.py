@@ -24,12 +24,19 @@ from .tracker import MODEL_FILENAME
 REQUIREMENTS = "requirements-track.txt"
 
 
+# 命令行总开关(放在子命令前面)覆盖环境变量。云端 Agent 服务经工作区起这个进程时,
+# 工作区会把所有 PROMPTCUT_* 环境变量剥掉(不让服务自己的配置泄进子进程),
+# 所以解释器、依赖目录、权重目录、ffmpeg 由服务按部署配置用这几个参数递进来。
+# 它们只来自部署者的配置,从不来自模型给的参数。
+_OVERRIDES: Dict[str, Optional[str]] = {}
+
+
 def env_paths() -> Dict[str, Optional[str]]:
     return {
-        "pylibs": os.environ.get("PROMPTCUT_PYLIBS") or None,
-        "models": os.environ.get("PROMPTCUT_MODELS") or None,
+        "pylibs": _OVERRIDES.get("pylibs") or os.environ.get("PROMPTCUT_PYLIBS") or None,
+        "models": _OVERRIDES.get("models") or os.environ.get("PROMPTCUT_MODELS") or None,
         "data_dir": os.environ.get("PROMPTCUT_DATA_DIR") or None,
-        "ffmpeg": os.environ.get("PROMPTCUT_FFMPEG") or shutil.which("ffmpeg"),
+        "ffmpeg": _OVERRIDES.get("ffmpeg") or os.environ.get("PROMPTCUT_FFMPEG") or shutil.which("ffmpeg"),
     }
 
 
@@ -103,12 +110,13 @@ def cmd_install(_args: argparse.Namespace) -> int:
     paths = env_paths()
     target = paths["pylibs"]
     if not target:
-        emit_error("没有设置 PROMPTCUT_PYLIBS，不知道该把依赖装到哪。")
+        emit_error("没有设置 PROMPTCUT_PYLIBS，不知道该把依赖装到哪。", code="pylibs-missing")
         return 2
 
-    req = os.path.join(os.path.dirname(os.path.abspath(__file__)), REQUIREMENTS)
+    # --requirements 只给部署者用(指向锁定了版本与哈希的清单);缺省是包里随发的那份
+    req = _OVERRIDES.get("requirements") or os.path.join(os.path.dirname(os.path.abspath(__file__)), REQUIREMENTS)
     if not os.path.isfile(req):
-        emit_error(f"找不到依赖清单 {REQUIREMENTS}")
+        emit_error(f"找不到依赖清单 {REQUIREMENTS}", code="requirements-missing")
         return 2
 
     os.makedirs(target, exist_ok=True)
@@ -220,25 +228,39 @@ def cmd_track(args: argparse.Namespace) -> int:
     paths = env_paths()
     info = probe(paths)
     if not paths["ffmpeg"]:
-        emit_error("找不到 ffmpeg，无法解码视频。")
+        emit_error("找不到 ffmpeg，无法解码视频。", code="ffmpeg-missing")
         return 2
     if not (is_media_url(args.video) or os.path.isfile(args.video)):
-        emit_error(f"找不到视频文件：{args.video}")
+        emit_error(f"找不到视频文件：{args.video}", code="video-missing")
         return 2
 
     try:
         queries_px = _parse_points(args.points)
     except ValueError as exc:
-        emit_error(str(exc))
+        emit_error(str(exc), code="bad-points")
         return 2
 
     engine = args.engine or info["engine"]
     if engine is None:
-        emit_error("既没装运动追踪拓展，兜底档也用不了", detail=info)
+        emit_error("既没装运动追踪拓展，兜底档也用不了", code="engine-unavailable", detail=info)
         return 2
     if engine == "bootstapir" and not info["ready"]:
-        emit_error("运动追踪拓展未就绪", detail=info)
+        emit_error("运动追踪拓展未就绪", code="engine-unavailable", detail=info)
         return 2
+
+    # 整段视频要解进内存:先估一下帧数,超过上限**直接拒**,不截断。
+    # 截断会让轨迹只盖住视频的前半段,而 attach_clip_motion 按「轨迹覆盖整段素材」对时间,
+    # 悄悄截断等于悄悄对错时间。
+    if args.max_frames:
+        from .tracker import estimate_frames
+
+        est = estimate_frames(paths["ffmpeg"], args.video)
+        if est is not None and est > args.max_frames:
+            emit_error(
+                f"视频约 {est} 帧,超过这台机器一次能追的 {args.max_frames} 帧;请先把素材剪短再追。",
+                code="too-long", frames=est, limit=args.max_frames,
+            )
+            return 2
     if engine == "template":
         return _track_template(paths, args.video, queries_px)
 
@@ -292,6 +314,10 @@ def cmd_track(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="promptcut_track")
+    parser.add_argument("--pylibs", default=None, help="第三方库目录(覆盖 PROMPTCUT_PYLIBS)")
+    parser.add_argument("--models", default=None, help="权重目录(覆盖 PROMPTCUT_MODELS)")
+    parser.add_argument("--ffmpeg", default=None, help="ffmpeg 可执行文件(覆盖 PROMPTCUT_FFMPEG)")
+    parser.add_argument("--requirements", default=None, help="install 用的依赖清单(缺省是包里随发的)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", help="报告拓展是否就绪").set_defaults(func=cmd_status)
@@ -303,9 +329,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help='JSON：[[帧号, x, y], ...]，坐标为原始视频像素')
     t.add_argument("--engine", choices=["bootstapir", "template"], default=None,
                    help="强制用哪一档。默认按 status 报的 engine 自动选")
+    t.add_argument("--max-frames", type=int, default=0,
+                   help="视频超过这么多帧就拒绝(0 = 不限)")
     t.set_defaults(func=cmd_track)
 
     args = parser.parse_args(argv)
+    _OVERRIDES.clear()
+    for key in ("pylibs", "models", "ffmpeg", "requirements"):
+        value = getattr(args, key, None)
+        if value:
+            _OVERRIDES[key] = value
     try:
         return args.func(args)
     except Exception as exc:  # noqa: BLE001

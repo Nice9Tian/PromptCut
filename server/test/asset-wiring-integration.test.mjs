@@ -13,6 +13,7 @@ import { stageHostedAssetFiles } from '../hosted/files.mjs';
 import { createAssetDocClient, createAssetReadyProbe } from '../hosted/asset-doc-client.mjs';
 import { StreamStore } from '../asset-store/stream-store.mjs';
 import { publicationMarker } from '../asset-store/project-io.mjs';
+import { freePorts } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 
 const providerDir = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? '';
@@ -25,6 +26,8 @@ const wav = () => { const b = Buffer.alloc(44 + 4800 * 2); b.write('RIFF'); b.wr
 
 test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全读写隔离、PCM/stream/thumb与重启', { skip: !available && 'account provider unavailable; set PROMPTCUT_ACCOUNT_PROVIDER_ROOT (VisuHive repo root) and PROMPTCUT_PASSWORD_ORDER_MODULE', timeout: 60000 }, async t => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pc-asset-wire-real-'));
+  // 七个端口都向系统要：账号内部、doc、combo 的 asset、doc 内部、asset 公共、asset 内部、丢 ACK 代理
+  const [accountPort, docPort, comboAssetPort, docInternalPort, assetPort, assetInternalPort, proxyPort] = await freePorts(7);
   let accountServer, combo, provider, proxy, child, childClosed, stdout = '', stderr = '';
   const children = [];
   t.after(async () => { for (const c of children) { if (c.exitCode === null && c.signalCode === null) c.kill(); await c.closed; }
@@ -43,25 +46,25 @@ test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全�
   const ids = ['acc_0123456789abcdef01234567', 'acc_abcdef0123456789abcdef01'];
   const editors = ids.map((id, i) => { provider.createAccount({ id, name: `Asset Fixture ${i}`, nameKey: `asset-fixture-${i}`, pw: 'fixture-only', now: Date.now() }); return credentials.createEditor({ account: provider.accountById(id), deviceId: `asset-device-${i}`, requestId: `asset-login-${i}` }); });
   accountServer = modules[2].createInternalServer({ tls: pki.account, store: provider, credentials, order, services: [{ serviceId: 'doc', fingerprint256: pki.doc.fingerprint256 }] });
-  await new Promise(resolve => accountServer.listen(5860, '127.0.0.1', resolve));
+  await new Promise(resolve => accountServer.listen(accountPort, '127.0.0.1', resolve));
   const docDir = path.join(dir, 'doc'), assetDir = path.join(dir, 'asset'), app = path.join(dir, 'app'); await fsp.mkdir(docDir); await fsp.mkdir(assetDir); stageHostedAssetFiles(path.resolve('.'), app);
-  const authorityId = 'asset-wire-doc', statusConfig = { origin: 'https://127.0.0.1:5864', tls: pki.doc, serverFingerprint256: pki.asset.fingerprint256 };
-  combo = await startHostedCombo({ dataDir: docDir, docPort: 5861, assetPort: 5869, host: '127.0.0.1', trustLoopback: false, clusterToken: 'fixture-cluster-token-32-characters',
-    accountRequired: true, assetPublicUrl: 'http://127.0.0.1:5863/api/asset', assetStatus: statusConfig,
-    account: { origin: 'https://127.0.0.1:5860', clientTls: pki.doc, serverFingerprint256: pki.account.fingerprint256, authorityId,
-      authorityUrl: 'https://fixture.invalid/editor', signingKey: generateKeyPairSync('ed25519').privateKey, keyId: 'fixture', internalTls: pki.doc, internalPort: 5862,
+  const authorityId = 'asset-wire-doc', statusConfig = { origin: `https://127.0.0.1:${assetInternalPort}`, tls: pki.doc, serverFingerprint256: pki.asset.fingerprint256 };
+  combo = await startHostedCombo({ dataDir: docDir, docPort, assetPort: comboAssetPort, host: '127.0.0.1', trustLoopback: false, clusterToken: 'fixture-cluster-token-32-characters',
+    accountRequired: true, assetPublicUrl: `http://127.0.0.1:${assetPort}/api/asset`, assetStatus: statusConfig,
+    account: { origin: `https://127.0.0.1:${accountPort}`, clientTls: pki.doc, serverFingerprint256: pki.account.fingerprint256, authorityId,
+      authorityUrl: 'https://fixture.invalid/editor', signingKey: generateKeyPairSync('ed25519').privateKey, keyId: 'fixture', internalTls: pki.doc, internalPort: docInternalPort,
       services: [{ serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 }],
       order: { witnessKeys: { 'asset-fixture-order': orderKeys.account.publicKey }, docAttestationPrivateKey: orderKeys.doc.privateKey } } });
   assert.equal(combo.assetPort, null, 'combo does not mount v1 public assets in account mode');
-  const origin = 'http://127.0.0.1:5861', assetOrigin = 'http://127.0.0.1:5863';
+  const origin = `http://127.0.0.1:${docPort}`, assetOrigin = `http://127.0.0.1:${assetPort}`;
   const projects = [];
   for (let i = 0; i < 2; i++) { const created = await web(origin, 'POST', '/hosted/shared/account/create', { name: `Project ${i}`, requestId: `create-${i}`, allowLinkJoin: true, initialProject: { tracks: [] } }, editors[i].accessToken); assert.equal(created.status, 201, JSON.stringify(created.body)); projects.push(created.body.projectId); }
   const session = (i, requestId) => web(origin, 'POST', '/hosted/shared/account/session', { projectId: projects[i], deviceId: `asset-device-${i}`, requestId }, editors[i].accessToken);
   assert.equal((await session(0, 'before-asset')).status, 503);
   assert.equal((await web(origin, 'POST', '/hosted/shared/account/join', { projectId: projects[0], requestId: 'unready-join' }, editors[1].accessToken)).status, 503);
   assert.equal(combo.accountRuntime.authority.listProjects(ids[1]).joined.length, 0);
-  const env = { ...process.env, PROMPTCUT_ASSET_DATA_DIR: assetDir, PROMPTCUT_ASSET_HOST: '127.0.0.1', PROMPTCUT_ASSET_PORT: '5863', PROMPTCUT_ASSET_INTERNAL_PORT: '5864',
-    PROMPTCUT_ASSET_PUBLIC_URL: assetOrigin + '/api/asset', PROMPTCUT_ASSET_DOC_AUTHORITY_ID: authorityId, PROMPTCUT_ASSET_DOC_ORIGIN: 'https://127.0.0.1:5862',
+  const env = { ...process.env, PROMPTCUT_ASSET_DATA_DIR: assetDir, PROMPTCUT_ASSET_HOST: '127.0.0.1', PROMPTCUT_ASSET_PORT: String(assetPort), PROMPTCUT_ASSET_INTERNAL_PORT: String(assetInternalPort),
+    PROMPTCUT_ASSET_PUBLIC_URL: assetOrigin + '/api/asset', PROMPTCUT_ASSET_DOC_AUTHORITY_ID: authorityId, PROMPTCUT_ASSET_DOC_ORIGIN: `https://127.0.0.1:${docInternalPort}`,
     PROMPTCUT_ASSET_DOC_FINGERPRINT256: pki.doc.fingerprint256, PROMPTCUT_ASSET_DOC_CLIENT_FINGERPRINT256: pki.doc.fingerprint256,
     PROMPTCUT_ASSET_DOC_CA_FILE: path.join(dir, 'ca.crt'), PROMPTCUT_ASSET_CLIENT_KEY_FILE: path.join(dir, 'asset.key'), PROMPTCUT_ASSET_CLIENT_CERT_FILE: path.join(dir, 'asset.crt'),
     PROMPTCUT_ASSET_INTERNAL_KEY_FILE: path.join(dir, 'asset.key'), PROMPTCUT_ASSET_INTERNAL_CERT_FILE: path.join(dir, 'asset.crt') };
@@ -91,10 +94,10 @@ test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全�
   assert.equal((await fetch(assetOrigin + `/api/asset/media/${hash}?t=${sessions[0].assetTicket}`)).status, 200);
   assert.equal((await request(0, '/internal/v2/asset/status')).status, 404);
   assert.equal((await request(0, '/admin/')).status, 404);
-  const docClient = createAssetDocClient({ origin: 'https://127.0.0.1:5862', authorityId, tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 }); t.after(() => docClient.close());
+  const docClient = createAssetDocClient({ origin: `https://127.0.0.1:${docInternalPort}`, authorityId, tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 }); t.after(() => docClient.close());
   await assert.rejects(docClient.resolveAssetTicket('fake-ticket'), { status: 401 });
-  const wrongClient = createAssetDocClient({ origin: 'https://127.0.0.1:5862', authorityId, tls: pki.wrong, serverFingerprint256: pki.doc.fingerprint256 }); t.after(() => wrongClient.close()); await assert.rejects(wrongClient.resolveAssetTicket(sessions[0].assetTicket), { status: 403 });
-  const noCertificate = await new Promise(resolve => { const req = https.request('https://127.0.0.1:5862/internal/v2/access/events', { ca: pki.ca, agent: false, timeout: 3000 }, res => { res.resume(); res.once('end', () => resolve(false)); }); req.once('error', () => resolve(true)); req.once('timeout', () => req.destroy()); req.end(); });
+  const wrongClient = createAssetDocClient({ origin: `https://127.0.0.1:${docInternalPort}`, authorityId, tls: pki.wrong, serverFingerprint256: pki.doc.fingerprint256 }); t.after(() => wrongClient.close()); await assert.rejects(wrongClient.resolveAssetTicket(sessions[0].assetTicket), { status: 403 });
+  const noCertificate = await new Promise(resolve => { const req = https.request(`https://127.0.0.1:${docInternalPort}/internal/v2/access/events`, { ca: pki.ca, agent: false, timeout: 3000 }, res => { res.resume(); res.once('end', () => resolve(false)); }); req.once('error', () => resolve(true)); req.once('timeout', () => req.destroy()); req.end(); });
   assert.equal(noCertificate, true, 'loopback without client certificate fails the actual TLS handshake');
   const upload = await request(0, '/api/media/upload/real.wav', { method: 'POST', body: bytes }); assert.equal(upload.status, 200); assert.equal((await upload.json()).hash, hash);
   const pcm = await request(0, `/@media/${hash}/pcm?start=0&count=480&sampleRate=48000`); assert.equal(pcm.status, 200); const pcmBytes = Buffer.from(await pcm.arrayBuffer()); assert.equal(pcmBytes.length, 480 * 2 * 4); assert.ok(pcmBytes.some(b => b !== 0), 'real ffmpeg PCM contains samples');
@@ -131,21 +134,21 @@ test('真实provider→combo→独立stage asset入口：mTLS/head就绪、全�
   // 受控真实网络丢ACK响应：代理只在doc已经持久接受后断socket，不伪造成功/权限。
   let dropAck = true, dropped = false;
   proxy = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true }, (req, res) => {
-    const upstream = https.request('https://127.0.0.1:5862' + req.url, { ...pki.asset, method: req.method, headers: req.headers, agent: false }, answer => {
+    const upstream = https.request(`https://127.0.0.1:${docInternalPort}` + req.url, { ...pki.asset, method: req.method, headers: req.headers, agent: false }, answer => {
       const chunks = []; answer.on('data', b => chunks.push(b)); answer.on('end', () => {
         if (dropAck && /\/events\/[^/]+\/ack$/.test(req.url) && answer.statusCode === 200) { dropped = true; res.destroy(); return; }
         res.writeHead(answer.statusCode, answer.headers); res.end(Buffer.concat(chunks));
       });
     }); upstream.on('error', () => res.destroy()); req.pipe(upstream);
   });
-  await new Promise(resolve => proxy.listen(5866, '127.0.0.1', resolve));
+  await new Promise(resolve => proxy.listen(proxyPort, '127.0.0.1', resolve));
   const recoveryFence = path.join(dir, 'owned-fence.json'), configFile = path.join(dir, 'controlled.json');
   const fence = async () => { const previous = JSON.parse(await fsp.readFile(path.join(assetDir, 'asset-instance.json')));
     await fsp.writeFile(recoveryFence, JSON.stringify({ v: 1, serviceId: 'asset', previousInstanceId: previous.instanceId, previousPid: previous.pid,
       previousServiceFingerprint256: previous.fingerprint256, closed: true, observedAt: Date.now(), kind: 'owned-tree-close', scope: 'this-test-owned-asset-child' })); };
   await fence();
   await fsp.writeFile(configFile, JSON.stringify({ runtimeFile: path.join(app, 'server/hosted/asset-runtime.mjs'), dataDir: assetDir, authorityId,
-    docOrigin: 'https://127.0.0.1:5866', docPin: pki.doc.fingerprint256, caFile: path.join(dir, 'ca.crt'),
+    docOrigin: `https://127.0.0.1:${proxyPort}`, assetPort, assetInternalPort, docPin: pki.doc.fingerprint256, caFile: path.join(dir, 'ca.crt'),
     assetKey: path.join(dir, 'asset.key'), assetCert: path.join(dir, 'asset.crt'), recoveryFence }));
   const messages = [];
   const controlled = async () => {
