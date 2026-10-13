@@ -46,15 +46,18 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 beforeEach(() => { now = 1_000_000; });
 
 test('planesWithinBudget:只留前 DECODER_BUDGET 条有流键的平面(和舞台 sync() 同一个顺序规则)', () => {
-  const planes = Array.from({ length: DECODER_BUDGET + 2 }, (_, i) => ({ clipIds: [`c${i}`], key: `K${i}`, ranges: [[0, 9]] }));
+  const planes = Array.from({ length: DECODER_BUDGET + 2 }, (_, i) => ({ clipIds: [`c${i}`], key: `K${i}`, ranges: [[0, 9]], originFrame: 0 }));
   const withHole = [{ clipIds: ['nokey'] }, ...planes];
   const kept = planesWithinBudget(withHole);
   assert.equal(kept.length, DECODER_BUDGET);
   assert.deepEqual(kept.map((p) => p.clipIds[0]), planes.slice(0, DECODER_BUDGET).map((p) => p.clipIds[0]), '没有流键的只占位、不占解码器');
+  // 没带这条流第一帧的平面(没法把帧号换成分段号)同样不占解码器
+  const { originFrame: _dropped, ...noOrigin } = planes[0];
+  assert.deepEqual(planesWithinBudget([noOrigin, { ...planes[1], originFrame: -1 }, planes[2]]).map((p) => p.clipIds[0]), ['c2']);
 });
 
 test('舞台 sync() 按 planesWithinBudget 建轨道:画布晚到的平面照样占着预算位,不让第 7 条顶上', () => {
-  const planes = Array.from({ length: DECODER_BUDGET + 1 }, (_, i) => ({ clipIds: [`c${i}`], key: `K${i}`, ranges: [[0, 9]] }));
+  const planes = Array.from({ length: DECODER_BUDGET + 1 }, (_, i) => ({ clipIds: [`c${i}`], key: `K${i}`, ranges: [[0, 9]], originFrame: 0 }));
   const canvases = Object.fromEntries(planes.slice(1).map((p) => [p.clipIds[0], fakeCanvas()]));   // c0 的画布还没挂上
   const player = new StreamPlayer({ root: () => fakeRoot({ canvases }), source: fakeSource([manifestWith(1)]) });
   player.setPlanes(planes, 30);
@@ -66,7 +69,7 @@ test('舞台 sync() 按 planesWithinBudget 建轨道:画布晚到的平面照样
 test('疑点 G:当前段是稀疏段时,每 MANIFEST_REFRESH_MS 再问一次清单;换成满帧段后不再问', async () => {
   const source = fakeSource([manifestWith(3), manifestWith(1)]);
   const player = new StreamPlayer({ root: () => fakeRoot({ canvases: { a: fakeCanvas() } }), source });
-  player.setPlanes([{ clipIds: ['a'], key: 'K', ranges: [[0, 0]] }], 30);
+  player.setPlanes([{ clipIds: ['a'], key: 'K', ranges: [[0, 0]], originFrame: 0 }], 30);
   player.present(0);
   await flush();
   assert.equal(source.calls, 1);
@@ -86,12 +89,12 @@ test('疑点 G:当前段是稀疏段时,每 MANIFEST_REFRESH_MS 再问一次清�
 test('疑点 G:同一个流键的就绪区间变了(新分段发布),允许再问清单', async () => {
   const source = fakeSource([manifestWith(1)]);
   const player = new StreamPlayer({ root: () => fakeRoot({ canvases: { a: fakeCanvas() } }), source });
-  player.setPlanes([{ clipIds: ['a'], key: 'K', ranges: [[0, 0]] }], 30);
+  player.setPlanes([{ clipIds: ['a'], key: 'K', ranges: [[0, 0]], originFrame: 0 }], 30);
   player.present(0);
   await flush();
   assert.equal(source.calls, 1);
   now += MANIFEST_REFRESH_MS + 1;
-  player.setPlanes([{ clipIds: ['a'], key: 'K', ranges: [[0, 1]] }], 30);
+  player.setPlanes([{ clipIds: ['a'], key: 'K', ranges: [[0, 1]], originFrame: 0 }], 30);
   player.present(1 / 30);
   await flush();
   assert.equal(source.calls, 2);
@@ -100,7 +103,7 @@ test('疑点 G:同一个流键的就绪区间变了(新分段发布),允许再�
 test('组流清空(这一段没料)时,把各成员的快照平面露出来 —— 兜底快照不能被组流藏着', () => {
   const snaps = { a: fakeSnap(), b: fakeSnap() };
   const player = new StreamPlayer({ root: () => fakeRoot({ canvases: { 'a,b': fakeCanvas() }, snaps }), source: fakeSource([manifestWith(1)]) });
-  player.setPlanes([{ clipIds: ['a', 'b'], key: 'G', ranges: [[5, 9]] }], 30);
+  player.setPlanes([{ clipIds: ['a', 'b'], key: 'G', ranges: [[5, 9]], originFrame: 0 }], 30);
   player.present(0);   // 第 0 段不在就绪区间里 → blank
   assert.equal(snaps.a.style.visibility, '');
   assert.equal(snaps.b.style.visibility, '');

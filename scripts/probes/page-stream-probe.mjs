@@ -62,10 +62,16 @@ fs.mkdirSync(OUT, { recursive: true });
 const deadline = Date.now() + 75 * 60_000;
 process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 
-/** 探针项目:1280×720、30 fps。卡从第 12 帧起,占 120 帧(全局 12～131,分段 0～8:两段任务 0～7 与 8～8) */
+/**
+ * 探针项目:1280×720、30 fps。卡从第 12 帧起(不是 15 的倍数),占 132 帧(项目的第 12～143 帧)。
+ * 分段从这条流自己的第一帧(第 12 帧)起数:0～8,第 8 段只有 12 帧;两段任务 0～7 与 8～8。
+ */
 const PROJECT = { width: 1280, height: 720, fps: 30, duration: 8 };
 const FPS = PROJECT.fps;
-const CLIP = { start: 0.4, duration: 4.0 };
+const CLIP = { start: 0.4, duration: 4.4 };
+/** 这条流自己的第一帧、它一共多少帧 */
+const ORIGIN_FRAME = Math.round(CLIP.start * 30);
+const STREAM_FRAMES = Math.round(CLIP.duration * 30);
 const SEG = 15;
 const TOTAL = Math.round((CLIP.start + CLIP.duration) * FPS);
 const LABEL = 'solo';
@@ -389,9 +395,9 @@ async function newProject(M, scene) {
   const member = (browser, username, extra = {}) => openMember(browser, { projectId, name: projName, username, password: projectPassword, deviceId: `psp-${username}-${scene}-${RUN}`.slice(0, 40).padEnd(16, '0'), ...extra });
   return { projectId, projName, creator, projectPassword, content, ticket, getManifest, member };
 }
-const spansOf = (row) => { const o = []; for (let f = row.firstSegment; f <= row.lastSegment; f += row.segmentsPerTask) o.push([f, Math.min(row.lastSegment, f + row.segmentsPerTask - 1)]); return o; };
+const spansOf = (row) => { const o = []; for (let f = 0; f <= row.lastSegment; f += row.segmentsPerTask) o.push([f, Math.min(row.lastSegment, f + row.segmentsPerTask - 1)]); return o; };
 const briefRow = (row) => row && { topClipId: row.topClipId, kind: row.kind, plane: row.plane, contentKey: String(row.contentKey).slice(0, 12),
-  candidates: (row.candidates ?? []).map((c) => ({ envFingerprint: c.envFingerprint, resultKey: String(c.resultKey).slice(0, 12) })), firstSegment: row.firstSegment, lastSegment: row.lastSegment,
+  candidates: (row.candidates ?? []).map((c) => ({ envFingerprint: c.envFingerprint, resultKey: String(c.resultKey).slice(0, 12) })), originFrame: row.originFrame ?? null, firstSegment: row.firstSegment ?? null, lastSegment: row.lastSegment,
   segmentsPerTask: row.segmentsPerTask, inputSig: row.inputSig ?? null };
 const rowOf = async (content, docId, clipId) => {
   const body = (await content.get('snapshot-manifest', `layers:${docId}`).catch(() => null))?.body ?? null;
@@ -409,7 +415,7 @@ async function verifyStream(P0, M, row, resultKey, { encoder = null } = {}) {
     const inits = Object.keys(m?.inits ?? {});
     for (const n of segs) { strides.add(m.segments[n].stride); encoders.add(m.segments[n].encoder); }
     const ok = !!m && M.manifestMatches(m, { kind: 'stream', resultKey, range: { from, to } }) && segs.length === to - from + 1 && segs[0] === from && inits.length >= 1
-      && segs.every((n) => m.segments[n].stride === 1 && m.segments[n].samples === Math.min(SEG, TOTAL - n * SEG) && (!encoder || m.segments[n].encoder === encoder));
+      && segs.every((n) => m.segments[n].stride === 1 && m.segments[n].samples === Math.min(SEG, STREAM_FRAMES - n * SEG) && (!encoder || m.segments[n].encoder === encoder));
     if (ok) manifestsOk++;
     for (const id of inits) blocks.push({ hash: m.inits[id].hash, bytes: m.inits[id].bytes });
     for (const n of segs) blocks.push({ hash: m.segments[n].hash, bytes: m.segments[n].bytes, segment: n });
@@ -561,7 +567,8 @@ async function sceneSolo(M) {
     if (!check(got?.body?.v === 3 && got.body.kind === 'layer-map' && !!row1, '一:内容库里的层表(v 3)由本页写了 streams,有这张卡的一行', R.layerMap)) throw new Error('层表里没有这条流');
     check(row1.kind === 'card' && row1.plane === 'local' && row1.clipIds.join() === clipId && row1.contentKey === ck1 && /^s1-/.test(row1.inputSig ?? ''), '一:这一行是这张卡的单卡流,内容键与本页算的相同,带输入签名', R.layerMap.row);
     check(row1.candidates.length === 1 && row1.candidates[0].envFingerprint === fpA && row1.candidates[0].resultKey === key1, '一:候选只有甲的指纹,结果键就是甲产的那条流', R.layerMap.row);
-    check(row1.firstSegment === 0 && row1.lastSegment === 8 && row1.segmentsPerTask === 8, '一:分段范围 0～8,每份清单 8 段(与队列那条路同一种切法)', R.layerMap.row);
+    check(row1.originFrame === ORIGIN_FRAME && !('firstSegment' in row1) && row1.lastSegment === 8 && row1.segmentsPerTask === 8,
+      '一:这一行带着这条流的第一帧(第 12 帧),分段从它起数 0～8,每份清单 8 段(与队列那条路同一种切法);行里不写 firstSegment', R.layerMap.row);
     const v1 = await verifyStream(P0, M, row1, key1, { encoder: 'webcodecs-avc' });
     R.stream = { ...v1, blocks: undefined };
     check(v1.manifestsOk === v1.manifests && v1.manifests === 2, '一:内容库 render-manifest 里两份流清单(过 manifestMatches、分段齐、webcodecs-avc、满密度)', R.stream);

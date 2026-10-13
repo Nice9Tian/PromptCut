@@ -78,10 +78,15 @@ process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 /** 渲染服务报的环境指纹:与本机桌面的、与页面的都不同 */
 const HOST_FP = process.env.PROMPTCUT_TEST_ENV_FINGERPRINT || '7e57c10d000a3001';
 
-/** 项目一:1280×720、30 fps。重卡从第 12 帧起、占 240 帧(全局 12～251,分段 0～16:三个流任务 0～7、8～15、16～16;四个快照任务) */
+/**
+ * 项目一:1280×720、30 fps。重卡从第 12 帧起(不是 15 的倍数)、占 252 帧(项目的第 12～263 帧)。
+ * 分段从这条流自己的第一帧(第 12 帧)起数:0～16,第 16 段只有 12 帧;三个流任务 0～7、8～15、16～16;五个快照任务。
+ */
 const PROJECT = { width: 1280, height: 720, fps: 30, duration: 10 };
 const FPS = PROJECT.fps;
-const CLIP = { start: 0.4, duration: 8.0 };
+const CLIP = { start: 0.4, duration: 8.4 };
+/** 这条流自己的第一帧 */
+const ORIGIN_FRAME = Math.round(CLIP.start * 30);
 /** 块上不放字:流的位图里文字是灰度抗锯齿、精确活渲是子像素抗锯齿(`docs/reports/AGENT-rr-a1-integ.md` 记过),带字时边缘的差贴着 0.2% 的通过线 */
 const LABEL = '';
 /** 甲报的浏览器标识:非 Chromium 内核(带 `Firefox/`),页面据此不当渲染节点 */
@@ -570,7 +575,7 @@ async function main() {
   const layerKey = `layers:${docId}`;
   const layerMap = async () => (await content.get('snapshot-manifest', layerKey).catch(() => null))?.body ?? null;
   const streamRow = (map) => (map?.streams ?? []).find((r) => r.topClipId === clipId) ?? null;
-  const briefRow = (row) => row && { kind: row.kind, plane: row.plane, contentKey: String(row.contentKey).slice(0, 12), firstSegment: row.firstSegment, lastSegment: row.lastSegment,
+  const briefRow = (row) => row && { kind: row.kind, plane: row.plane, contentKey: String(row.contentKey).slice(0, 12), originFrame: row.originFrame ?? null, firstSegment: row.firstSegment ?? null, lastSegment: row.lastSegment,
     candidates: (row.candidates ?? []).map((c) => ({ envFingerprint: c.envFingerprint, resultKey: String(c.resultKey).slice(0, 12) })) };
 
   const tOff = Date.now();
@@ -747,7 +752,7 @@ async function main() {
   const cand = rowD?.candidates?.find((c) => c.envFingerprint === HOST_FP) ?? null;
   const hostKey = cand?.resultKey ?? null;
   D.row = briefRow(rowD);
-  check(!!rowD && rowD.firstSegment === 0 && rowD.lastSegment === 16 && rowD.candidates.every((c) => c.envFingerprint === HOST_FP), 'D:层表里这条流:分段 0～16,候选只有渲染服务(这一页不当节点,没有浏览器那一份)', D.row);
+  check(!!rowD && rowD.originFrame === ORIGIN_FRAME && !('firstSegment' in rowD) && rowD.lastSegment === 16 && rowD.candidates.every((c) => c.envFingerprint === HOST_FP), 'D:层表里这条流:第一帧是第 12 帧,分段 0～16,候选只有渲染服务(这一页不当节点,没有浏览器那一份)', D.row);
   const authHeaders = await assetAuth();
   const blocks = [];
   let manifestsOk = 0;

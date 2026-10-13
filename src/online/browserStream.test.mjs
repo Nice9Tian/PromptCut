@@ -1,7 +1,7 @@
 /**
  * 浏览器节点执行流任务(`docs/plan/browser-stream-task.md` 第三、四处)的页面一侧:
  *
- *   BSN-01  帧号换算(`streamTaskFrames`):全局帧减 firstFrame;不在卡范围里的帧送全透明;最后一段到项目末帧为止
+ *   BSN-01  帧号换算(`streamTaskFrames`):分段从这条流的第一帧起数;项目帧减 firstFrame;不在卡范围里的帧送全透明;最后一段到这条流的最后一帧为止
  *   BSN-02  能力位 streams 由宿主报;报了才认领流任务;认领后整段交给宿主的 bakeStream,清单展开进 task.complete
  *   BSN-03  让路:宿主每帧前问 yielding(),回 { yielded } 就放回一次、不计失败;全部做完之后的让路照常完成
  *   BSN-04  中止与丢认领:页面隐藏立即放回并中止;丢认领中止、迟到的结果丢掉
@@ -22,7 +22,7 @@ import { SEGMENT_FRAMES } from "../render/streamPlayer.ts";
 const flush = async (n = 30) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 const FP = "aaaaaaaaaaaaaaaa";
 const BOUND = { x: -32, y: -32, w: 464, h: 304 };
-const streamInput = (extra = {}) => ({ kind: "card", plane: "local", clipIds: ["c"], fps: 30, bound: BOUND, offset: { x: 760, y: 420 }, firstFrame: 45, count: 120, total: 300, ...extra });
+const streamInput = (extra = {}) => ({ kind: "card", plane: "local", clipIds: ["c"], fps: 30, bound: BOUND, offset: { x: 760, y: 420 }, firstFrame: 45, count: 120, total: 300, originFrame: 45, lastFrame: 164, ...extra });
 const streamTask = ({ from = 3, to = 4, stream = {} } = {}) => ({
   id: `stream:rk:${from}-${to}`, kind: "stream", resultKey: "rk", range: { unit: "segment", from, to },
   source: { projectId: "p1", projectRev: 7, userId: "u@d" },
@@ -32,36 +32,47 @@ const streamTask = ({ from = 3, to = 4, stream = {} } = {}) => ({
   requires: { envFingerprint: FP, codeVersion: "cv", cardSources: {}, transcode: false, userCards: false, graphCards: false, belowDependent: false, capabilities: { streams: true } },
 });
 
-test("BSN-01 帧号换算:全局帧减 firstFrame 得本地帧;不在卡范围里的帧是 null(送全透明);最后一段到项目末帧为止", () => {
+test("BSN-01 帧号换算:分段从这条流的第一帧起数;项目帧减 firstFrame 得本地帧;不在卡范围里的帧是 null(送全透明);最后一段到这条流的最后一帧为止", () => {
   assert.equal(STREAM_SEGMENT_FRAMES, SEGMENT_FRAMES, "分段帧数与播放器同一个数");
-  // 卡占全局帧 45～164(本地 0～119);分段 3 = 全局 45～59,正好从本地 0 起
+  // 卡占项目帧 45～164(本地 0～119),流的第一帧就是 45:分段 0 = 项目帧 45～59 = 本地 0～14
+  const head = streamTaskFrames(streamTask({ from: 0, to: 1 }));
+  assert.deepEqual(head.segments.map((s) => s.index), [0, 1]);
+  assert.deepEqual(head.segments[0].frames, Array.from({ length: 15 }, (_, i) => i));
+  assert.deepEqual(head.segments[1].frames, Array.from({ length: 15 }, (_, i) => 15 + i));
+  assert.equal(head.frames, 30);
+  // 分段 3、4 = 项目帧 90～119 = 本地 45～74(原来按项目帧号分段时,分段 3 是项目帧 45～59)
   const mid = streamTaskFrames(streamTask({ from: 3, to: 4 }));
   assert.deepEqual(mid.segments.map((s) => s.index), [3, 4]);
-  assert.deepEqual(mid.segments[0].frames, Array.from({ length: 15 }, (_, i) => i));
-  assert.deepEqual(mid.segments[1].frames, Array.from({ length: 15 }, (_, i) => 15 + i));
-  assert.equal(mid.frames, 30);
-  // 卡从分段中间开始:firstFrame 50 落在分段 3(全局 45～59)里,前 5 帧不在卡的范围里
-  const head = streamTaskFrames(streamTask({ from: 3, to: 3, stream: { firstFrame: 50 } }));
-  assert.deepEqual(head.segments[0].frames, [null, null, null, null, null, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-  // 卡在分段中间结束:本地帧只到 count - 1,之后是全透明
-  const tail = streamTaskFrames(streamTask({ from: 10, to: 11, stream: { firstFrame: 45, count: 110 } }));   // 卡到全局 154
+  assert.deepEqual(mid.segments[0].frames, Array.from({ length: 15 }, (_, i) => 45 + i));
+  assert.deepEqual(mid.segments[1].frames, Array.from({ length: 15 }, (_, i) => 60 + i));
+  // 片段不从 15 的倍数帧开始、时长不是 15 的倍数:第 100～149 帧共 50 帧 → 分段 0～3,每一帧都在卡的范围里,末段 5 帧
+  const odd = streamTaskFrames(streamTask({ from: 0, to: 3, stream: { firstFrame: 100, originFrame: 100, count: 50, lastFrame: 149 } }));
+  assert.deepEqual(odd.segments.map((s) => s.frames.length), [15, 15, 15, 5]);
+  assert.deepEqual(odd.segments.flatMap((s) => s.frames), Array.from({ length: 50 }, (_, i) => i), "本地帧 0～49 一帧不多、一帧不少,没有全透明的填充帧");
+  assert.equal(odd.frames, 50);
+  // 流的第一帧早于卡的第一帧(单卡流里两者相同,这里只守「照样减」):前 5 帧不在卡的范围里
+  const pad = streamTaskFrames(streamTask({ from: 0, to: 0, stream: { firstFrame: 50, originFrame: 45 } }));
+  assert.deepEqual(pad.segments[0].frames, [null, null, null, null, null, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  // 卡的帧数比流短:本地帧只到 count - 1,之后是全透明
+  const tail = streamTaskFrames(streamTask({ from: 7, to: 7, stream: { count: 110 } }));   // 分段 7 = 项目帧 150～164 = 本地 105～119
   assert.deepEqual(tail.segments[0].frames, [105, 106, 107, 108, 109, null, null, null, null, null, null, null, null, null, null]);
-  assert.deepEqual(tail.segments[1].frames, Array(15).fill(null), "整段都在卡之后:全透明");
-  // 项目末帧:最后一个分段不满(total 290 → 分段 19 是全局 285～289 共 5 帧)
-  const last = streamTaskFrames(streamTask({ from: 18, to: 19, stream: { firstFrame: 200, count: 90, total: 290 } }));
+  // 流的最后一帧:最后一个分段不满(到第 154 帧为止 → 分段 7 是项目帧 150～154 共 5 帧);项目有多长不影响
+  const last = streamTaskFrames(streamTask({ from: 6, to: 7, stream: { lastFrame: 154, total: 9999 } }));
   assert.deepEqual(last.segments.map((s) => s.frames.length), [15, 5]);
-  assert.deepEqual(last.segments[1].frames, [85, 86, 87, 88, 89]);
+  assert.deepEqual(last.segments[1].frames, [105, 106, 107, 108, 109]);
   assert.equal(last.frames, 20);
-  // 任务对不上:整段在项目末帧之后、不是浏览器形状的流任务、范围不对
-  assert.equal(streamTaskFrames(streamTask({ from: 20, to: 20, stream: { total: 290 } })), null);
+  // 任务对不上:整段在这条流的最后一帧之后、不是浏览器形状的流任务、范围不对
+  assert.equal(streamTaskFrames(streamTask({ from: 8, to: 8 })), null);
   assert.equal(streamTaskFrames({ ...streamTask(), input: { clipId: "c" } }), null);
   assert.equal(streamTaskFrames({ ...streamTask(), range: null }), null);
-  for (const bad of [{ kind: "group" }, { plane: "stage" }, { clipIds: ["a", "b"] }, { bound: { x: 0, y: 0, w: 463, h: 304 } }, { bound: null }, { fps: 0 }, { count: 0 }, { firstFrame: 1.5 }, { total: undefined }, { offset: null }]) {
+  for (const bad of [{ kind: "group" }, { plane: "stage" }, { clipIds: ["a", "b"] }, { bound: { x: 0, y: 0, w: 463, h: 304 } }, { bound: null }, { fps: 0 }, { count: 0 }, { firstFrame: 1.5 }, { total: undefined }, { offset: null },
+    // 没带这条流的第一帧 / 最后一帧(改分段规则之前的切分方出的任务):不做,不拿项目的第 0 帧去猜
+    { originFrame: undefined }, { originFrame: -1 }, { originFrame: 1.5 }, { lastFrame: undefined }, { lastFrame: 44 }]) {
     assert.equal(streamInputOf({ input: { stream: streamInput(bad) } }), null, JSON.stringify(bad));
   }
-  // 负的 firstFrame(卡的入点在项目开头之前):照样减
-  const neg = streamTaskFrames(streamTask({ from: 0, to: 0, stream: { firstFrame: -3, count: 10 } }));
-  assert.deepEqual(neg.segments[0].frames, [3, 4, 5, 6, 7, 8, 9, null, null, null, null, null, null, null, null]);
+  // 负的 firstFrame(卡的入点在项目开头之前):流的第一帧是第 0 帧,照样减
+  const neg = streamTaskFrames(streamTask({ from: 0, to: 0, stream: { firstFrame: -3, count: 10, originFrame: 0, lastFrame: 6 } }));
+  assert.deepEqual(neg.segments[0].frames, [3, 4, 5, 6, 7, 8, 9]);
 });
 
 /** 一个节点 + 假宿主。`streams`:宿主此刻报的能不能压流;`bakeStream` 的每次调用记在 `jobs` 里,由用例决定何时回什么 */
@@ -93,7 +104,7 @@ async function rig({ streams = true, withStream = true, task = streamTask() } = 
   };
   return { node, sent, jobs, finished, ended, state, task, of, claim, advance: (ms) => { t += ms; } };
 }
-const MANIFEST = { v: 1, kind: "stream", resultKey: "rk", range: { from: 3, to: 4 }, header: { kind: "card", plane: "local", clipIds: ["c"], fps: 30, bound: BOUND, offset: { x: 760, y: 420 }, tight: null },
+const MANIFEST = { v: 1, kind: "stream", resultKey: "rk", range: { from: 3, to: 4 }, header: { kind: "card", plane: "local", clipIds: ["c"], fps: 30, originFrame: 45, bound: BOUND, offset: { x: 760, y: 420 }, tight: null },
   inits: { ["0".repeat(16)]: { hash: "0".repeat(64) } }, segments: { 3: { hash: "1".repeat(64) }, 4: { hash: "2".repeat(64) } } };
 
 test("BSN-02 宿主报了能压流才认领流任务;整段交给 bakeStream,进度按帧报,清单展开进 task.complete", async () => {

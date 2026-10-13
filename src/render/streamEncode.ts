@@ -320,9 +320,10 @@ export async function openStreamEncoder(opts: StreamEncoderOptions): Promise<Str
       if (closed) throw new Error("轨道流:编码器已经关了");
       if (failure) { close(); throw failure; }
       drawPackedFrame(packed, scratch, scratchCanvas, source, width, height);
-      // 时间戳按整条流里的帧号给,和播放器取帧时用的是同一个算法(`chunkTimestamp`)
-      const globalFrame = firstSegment * SEGMENT_FRAMES + fed;
-      const frame = new env.VideoFrame(packedCanvas, { timestamp: Math.round((globalFrame * 1e6) / fps), duration: Math.round(1e6 / fps) });
+      // 时间戳按「这条流里的第几帧」给(从流自己的第一帧起数,不是项目帧号);它只管编码器内部的先后,
+      // 播放器解码时自己按项目帧号另给时间戳(`streamPlayer.ts` 的 `chunkTimestamp`),不读这里写的
+      const streamFrame = firstSegment * SEGMENT_FRAMES + fed;
+      const frame = new env.VideoFrame(packedCanvas, { timestamp: Math.round((streamFrame * 1e6) / fps), duration: Math.round(1e6 / fps) });
       try {
         encoder.encode(frame, { keyFrame: fed % SEGMENT_FRAMES === 0, ...(mode === "quantizer" ? { avc: { quantizer } } : {}) });
       } finally {
