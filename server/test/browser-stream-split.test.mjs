@@ -1,7 +1,7 @@
 /**
  * 单卡轨道流多出浏览器那一份(`docs/plan/browser-stream-task.md` 第一、二处):切分与节点侧过滤。
  *
- *   BS-01～BS-09  切分:浏览器那一份的形状;只给单卡流;组流、画布卡、Lottie、重度为「重」的卡、锁在别处的卡不出;
+ *   BS-01～BS-09  切分:浏览器那一份的形状;只给单卡流;组流、画布卡、重度为「重」的卡、锁在别处的卡不出;
  *                 切分方自己的那一份一个字不变;锁、接手、用户卡与素材效果卡、`browserOnly`
  *   BS-10～BS-14  过滤:规则 2 只看任务自己写的 `requires.transcode`;切分方的流任务行为不变;规则 7 对浏览器流任务的形状闸
  *   BS-15         调用方:`queueStreamOf` 给切分的形状、清单计划只给浏览器出流(`local-node.mjs` 的 `listPlanOverrides`)
@@ -137,10 +137,9 @@ test('BS-03 只给单卡流:组流、缺形状字段的流、成员卡不在 car
   }
 });
 
-test('BS-04 画布卡、Lottie、重度为「重」的卡、本地档、标了超体积的卡、用到只在发布方本机的素材的卡:不出浏览器那一份', () => {
+test('BS-04 画布卡、重度为「重」的卡、本地档、标了超体积的卡、用到只在发布方本机的素材的卡:不出浏览器那一份', () => {
   const cases = {
     画布卡: control('a', { capabilities: { compositing: 'independent', canvasHeavy: true } }),
-    Lottie: control('a', { cardId: 'lottie-confetti' }),
     '依赖下层(重)': control('a', { compositing: 'belowDependent', capabilities: { compositing: 'belowDependent' } }),
     '不认识的合成方式(重)': control('a', { compositing: 'unknown', capabilities: { compositing: 'unknown' } }),
     本地档: control('a', { tier: 'local' }),

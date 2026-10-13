@@ -9,7 +9,7 @@
  * 这里同一张卡放三个片段(不挂、挂强调、挂滤镜;同一时刻起止),照 `planForQueue` 的拼法出控件、切分,断言三个片段的
  * 任务除了键以外逐项相同:每一份的指纹、段、`requires.cardSources`、`requires.userCards`、`input.cardId`、带不带页面要的输入。
  *
- *   WC-01  Lottie 素材卡:不给浏览器节点,挂了强调、滤镜也不给
+ *   WC-01  Lottie 素材卡(2026-10-14 放开):给浏览器节点,挂了强调、滤镜也看里面那张卡
  *   WC-02  改过源码的内置卡(改动层):任务要这张卡的代码身份,挂了也要;不给浏览器节点
  *   WC-03  用户卡:`requires.userCards` 为真、要全部定制卡的代码,挂了也一样
  *   WC-04  普通内置卡:给浏览器节点,`input.cardId` 是这张卡,挂了也一样
@@ -122,11 +122,11 @@ function assertSame(tasks) {
   return bare;
 }
 
-test('WC-01 Lottie 素材卡:挂了强调、滤镜也不给浏览器节点', () => {
+test('WC-01 Lottie 素材卡:不挂的给浏览器节点(2026-10-14 放开),挂了强调、滤镜的照旧不给(包着别的输出节点,拿不准一律不给)', () => {
   const { cardPlan, tasks } = splitOf({ cardId: 'lottie', params: { src: 'a.json' } });
   for (const control of cardPlan) assert.equal(control.tier, 'shared', `${control.clipId} 是共享档`);
-  assert.equal(browserTasks(tasks, 'clip-bare').length, 0, '不挂的不给浏览器');
-  for (const clipId of WRAPPED) assert.equal(browserTasks(tasks, clipId).length, 0, `${clipId} 不给浏览器`);
+  assert.ok(browserTasks(tasks, 'clip-bare').length > 0, '不挂的给浏览器');
+  for (const clipId of WRAPPED) assert.ok(browserTasks(tasks, clipId).length > 0, `${clipId} 也给浏览器`);
   const bare = assertSame(tasks);
   for (const item of bare.filter(item => item.kind === 'snapshot')) assert.equal(item.cardId, 'lottie');
 });

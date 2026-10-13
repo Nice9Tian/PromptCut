@@ -74,7 +74,7 @@ import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '
  *
  * 调用方给的每条流除了流键与分段范围,还可以带这条流的形状(`planStreams` 算出的 `kind`、`plane`、`clipIds`、`fps`、`bound`、
  * `offset`、`firstFrame`、`total`)。**单卡流**(`kind: 'card'`、`plane: 'local'`、恰好一张成员卡),而且这张成员卡照上面快照那一套
- * 判下来浏览器做得了(共享档、独立卡、light / medium、不是画布卡、不是 Lottie、不用只在发布方本机的素材;用户卡、素材效果卡要本页
+ * 判下来浏览器做得了(共享档、独立卡、light / medium、不是画布卡、不用只在发布方本机的素材;用户卡、素材效果卡要本页
  * 声明能运行且代码身份对得上),就另出浏览器指纹的一份:
  *
  *   结果键 = 流的内容键 × 浏览器指纹(用户卡、素材效果卡用页面的 cardEnvFingerprint),`requires.envFingerprint` 同它;
@@ -185,12 +185,6 @@ function takeoverTest(takeover) {
 const BROWSER_WEIGHTS = new Set(['light', 'medium']);
 
 /**
- * 纯浏览器不做的卡种(M7 探针 P1、P2 之后主会话裁定):Lottie 素材卡在浏览器里每帧生成快照约 0.77 s、每帧 570～660 KB,
- * 超过 300 KB 的体积上限全被丢弃 —— 派给浏览器只会白干。按卡片 id 认(`lottie`、`lottie-*`)。
- */
-export const BROWSER_EXCLUDED_CARD = /^lottie(?:-|$)/;
-
-/**
  * 这个控件里面有哪几张卡(卡片 id,去重)。`planForQueue` 经 `withInnerCards` 给的 `cardIds` 优先;
  * 没有这一栏的(旧调用方、单测只给 `cardId`)就是 `cardId` 那一张,没有就是空。
  */
@@ -276,7 +270,8 @@ export function withInnerCards(cardPlan, graph) {
 /**
  * 这张卡纯浏览器做不做得了(M7 契约 D1、D4):共享档、独立卡、light / medium、不用只在发布方本机的素材;
  * 内置卡片要没改过源码(`cardSources` 为空);用户卡、图卡(块 N)要本页声明能运行(`pageCards`)且这张卡要的代码身份本页都有;
- * 另外不是画布卡(`canvasHeavy`:逐帧顺推与桌面不等价)、里面没有 Lottie 素材卡(片段挂了强调、滤镜时看里面那张)、
+ * 另外不是画布卡(`canvasHeavy`:逐帧顺推与桌面不等价)、
+ * (Lottie 素材卡不再排除:2026-10-14 渲染重构「癸二」量过,浏览器当场生成快照画成位图的体积、耗时和别的内置重卡同一量级,见 `docs/plan/render-standard.md` 的 Lottie 一节)、
  * 里面不超过一张卡且认得出是哪张(`cardIdsOf`、`cardIdsUnsure`;拿不准一律不给)、
  * 调用方没标它的帧超体积上限(`control.snapshotOversize`,执行器按本机快照库里已记为超限的内容键给)。
  * `requires` 是这张卡自己那一份的 requires(已含 localMedia)。
@@ -287,7 +282,6 @@ function browserEligible({ tier, compositing, requires, weight, control, pageCar
     && !('localMedia' in requires)
     && BROWSER_WEIGHTS.has(weight?.class)
     && control?.capabilities?.canvasHeavy !== true && control?.innerCanvasHeavy !== true
-    && !cardIdsOf(control).some(id => BROWSER_EXCLUDED_CARD.test(id))
     && cardIdsOf(control).length <= 1 && control?.cardIdsUnsure !== true
     && control?.snapshotOversize !== true;
 }

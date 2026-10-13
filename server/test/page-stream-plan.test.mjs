@@ -13,7 +13,7 @@
  *   PSP-06  层表的那一行与 `layerStreamsOf` 写出来的相同
  *   PSP-07  超过解码器预算时合并的结果相同:并进组流的卡两边都不出单卡流
  *   PSP-07b 切分方单独成流的两类卡(三维外框的独立卡、源依赖卡)页面不产,但算进解码器预算:合并的结果仍相同
- *   PSP-08  不产的卡:画布卡、Lottie、依赖下层、框带三维、隐藏序列两边都不出;页面另外不产的两种(挂了强调的片段、不是内置卡片)
+ *   PSP-08  不产的卡:画布卡、依赖下层、框带三维、隐藏序列两边都不出;页面另外不产的两种(挂了强调的片段、不是内置卡片)
  *   PSP-09  没有指纹、没有代码指纹:一条都不算
  *   PSP-10  并进现有的层表:别的字段与别的卡的行不动、本页的候选提到最前、同一张卡输入签名过期的行去掉(没过期的留在后面)、没有变化时不写;
  *           「先查」认哪些候选:同内容键的,或输入签名没过期的(与播放那一侧同一个判据)
@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { CardFrameCache } from '../card-cache.mjs';
 import { captureCode } from '../frame-code.mjs';
 import { planListStreams, queueStreamOf, STREAM_CODE_VERSION, STREAM_DECODER_BUDGET, LOCAL_OVERFLOW_PX, SEGMENT_FRAMES } from '../frame-stream.mjs';
-import { splitPlan, BROWSER_EXCLUDED_CARD, SPARSE_STREAM_PRIORITY } from '../render-node/split.mjs';
+import { splitPlan, SPARSE_STREAM_PRIORITY } from '../render-node/split.mjs';
 import { clipsPlanTaskOf } from '../render-queue/index.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { layerStreamsOf, manifestMatches, LAYER_MAP_VERSION } from '../artifact-transfer.mjs';
@@ -38,7 +38,7 @@ import { streamManifest, STREAM_SEGMENT_FRAMES } from '../../src/online/browserN
 import {
   planPageStreams, pageStreamTasks, pageStreamRow, mergeLayerStreams, layerStreamCandidates, candidateSpans, pageControls, streamMemberKey, resultKeyOf,
   PAGE_STREAM_CODE_VERSION, PAGE_STREAM_DECODER_BUDGET, PAGE_LOCAL_OVERFLOW_PX, PAGE_STREAM_SEGMENTS_PER_TASK, PAGE_LAYER_MAP_VERSION,
-  PAGE_SNAPSHOT_SPAN, PAGE_EXCLUDED_CARD, PAGE_SPARSE_STREAM_PRIORITY,
+  PAGE_SNAPSHOT_SPAN, PAGE_SPARSE_STREAM_PRIORITY,
 } from '../../src/online/pageStreamPlan.ts';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '../../..');
@@ -101,7 +101,6 @@ test('PSP-01 照抄的常量与服务端同值', () => {
   assert.equal(PAGE_SNAPSHOT_SPAN, QUEUE_DEFAULTS.SNAPSHOT_SPAN);
   assert.equal(PAGE_LAYER_MAP_VERSION, LAYER_MAP_VERSION);
   assert.equal(STREAM_SEGMENT_FRAMES, SEGMENT_FRAMES);
-  assert.equal(PAGE_EXCLUDED_CARD.source, BROWSER_EXCLUDED_CARD.source);
 });
 
 test('PSP-02 流的键与形状逐字段相同', async () => {
@@ -275,11 +274,13 @@ test('PSP-08 不产的卡', async () => {
   const server = serverSide(project, value, clips);
   const page = await pageSide(project, value, clips);
   const issued = [...new Set(server.tasks.map(t => t.input.clipId))].sort();
-  assert.deepEqual(page.specs.map(s => s.topClipId), ['ok']);
+  // Lottie 素材卡 2026-10-14 起放开:两边都出,和普通独立卡一样
+  assert.deepEqual(page.specs.map(s => s.topClipId).sort(), ['lottie', 'ok']);
   // 两边都不出的
-  for (const id of ['canvas', 'lottie', 'below', 'threed', 'hidden']) assert.equal(issued.includes(id), false, `切分方不给浏览器出 ${id}`);
+  for (const id of ['canvas', 'below', 'threed', 'hidden']) assert.equal(issued.includes(id), false, `切分方不给浏览器出 ${id}`);
   assert.equal(page.skipped.canvas, 'canvas');
-  assert.equal(page.skipped.lottie, 'lottie');
+  assert.equal(page.skipped.lottie, undefined);
+  assert.equal(issued.includes('lottie'), true, '切分方给浏览器出 lottie');
   assert.equal(page.skipped.below, 'not-independent');
   assert.equal(page.skipped.threed, 'frame-3d');
   // 页面比切分方更紧的:不是内置卡片(用户卡在切分方那边要本页声明能运行才出,这里没声明,所以也没出)
