@@ -254,10 +254,17 @@ const fmt = (arr) => JSON.stringify(arr.map((x) => Number(x.toFixed(3))));
     console.log('  TransNetV2 超时 =', r3.error?.message?.slice(0, 120));
     check('TransNetV2 超时:作业 error、原因写明超时与退路、进程树已杀、不写项目', r3.error?.code === 'job-error' && /超时/.test(r3.error.message) && /see_frames/.test(r3.error.message) && liveProcesses() <= before && fx.commits.length === 0);
     check('超时:账本 errorCode=SHOTS_TIMEOUT', (await fx.jobs.get(fx.context, s3.jobId)).errorCode === 'SHOTS_TIMEOUT');
-    const s4 = await detect(scdetOnly, 'long', { force: true });
-    const r4 = await settle(scdetOnly, 'long', 60000);
-    await sleep(400);
-    check('scdet 超时:同样 error、进程没了', r4.error?.code === 'job-error' && /超时/.test(r4.error.message) && liveProcesses() <= before && (await scdetOnly.jobs.get(scdetOnly.context, s4.jobId)).errorCode === 'SHOTS_TIMEOUT');
+    // scdet 在这台机器上解 300 秒 1080p 只要几秒,4 秒的时限不保险(空闲机器上会在时限内跑完):单独给一个 0.4 秒时限的实例,保证跑不完
+    const fast = await makeP1Fixture(null, { config: cfg(null), limits: { minDetectMs: 400, perSecondMs: 1 } });
+    try {
+      await fast.addMedia({ id: 'long', name: 'long.mp4', bytes, extra: { duration: 300 } });
+      const s4 = await detect(fast, 'long');
+      const r4 = await settle(fast, 'long', 60000);
+      await sleep(400);
+      const row4 = await fast.jobs.get(fast.context, s4.jobId);
+      console.log('  scdet 超时实际值 =', JSON.stringify({ state: row4.state, errorCode: row4.errorCode, stage: row4.stage, error: r4.error?.code, message: r4.error?.message?.slice(0, 100), procs: liveProcesses(), before }));
+      check('scdet 超时:同样 error、进程没了、账本 SHOTS_TIMEOUT、没写项目', r4.error?.code === 'job-error' && /超时/.test(r4.error.message) && liveProcesses() <= before && row4.errorCode === 'SHOTS_TIMEOUT' && fast.commits.length === 0);
+    } finally { await fast.dispose(); }
 
     // 5d. 服务重启:close 杀进程树;新实例看到「被中断」
     const s5 = await detect(fx, 'long', { force: true });

@@ -767,7 +767,7 @@ export function createShotsTools({
 
       if (outcome.cancelled || stopped()) return await finishJob(job, ws, track, cancelledNote());
       if (outcome.timedOut) {
-        return await finishJob(job, ws, track, { state: 'error', errorCode: 'SHOTS_TIMEOUT', message: `镜头识别超时(超过 ${Math.round(limitMs / 1000)} 秒),已强制结束。素材可能太长。${FALLBACK_HINT}` });
+        return await finishJob(job, ws, track, { state: 'error', errorCode: 'SHOTS_TIMEOUT', message: `镜头识别超时(超过 ${limitMs < 10_000 ? Number((limitMs / 1000).toFixed(1)) : Math.round(limitMs / 1000)} 秒),已强制结束。素材可能太长。${FALLBACK_HINT}` });
       }
       if (!outcome.ok) {
         return await finishJob(job, ws, track, { state: 'error', errorCode: 'SHOTS_FAILED', message: `镜头识别没成功:${outcome.message}。${FALLBACK_HINT}` });

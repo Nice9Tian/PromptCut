@@ -413,12 +413,13 @@ test('超时:到点杀进程树,作业 error 并点明超时和退路;模型档�
   assert.equal(fx.commits.length, 0);
 
   // scdet 档同样
-  const fx2 = await makeP1Fixture(t, { config: stubConfig(t, { python: false }), limits: { minDetectMs: 2500, perSecondMs: 1 } });
+  const fx2 = await makeP1Fixture(t, { config: stubConfig(t, { python: false }), limits: { minDetectMs: 400, perSecondMs: 1 } });
   await fx2.addMedia({ id: 'm1', bytes: plan({ ffmpeg: 'hang' }), extra: { duration: 10 } });
   await detect(fx2, 'm1');
   const p2 = await waitPids(fx2, 'ffmpeg');
   const r2 = await settle(fx2, 'm1');
   assert.match(r2.error.message, /超时/);
+  assert.match(r2.error.message, /超过 0\.4 秒/, '不到 1 秒的时限不能写成「超过 0 秒」');
   assert.equal(alive(p2.child) || alive(p2.grandchild), false);
 });
 
