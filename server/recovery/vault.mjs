@@ -132,7 +132,8 @@ export function openRecoveryVault({ dir, protector, write = atomic }) {
     list: descriptor => { read(); return Object.values(state.identities).filter(r => roomKey(r) === roomKey(descriptor)).map(r => structuredClone(r)); },
     select(descriptor, contentId) {
       read();
-      if (state.revoked[roomKey(descriptor)]) return { revoked: true, identities: [] };
+      // 已注销的房间不再给身份；这台设备上没发出去的离线修改仍然给（过期的云端项目转成本地项目时要并进去，见 `src/editor/sync/cloudGone.ts`）
+      if (state.revoked[roomKey(descriptor)]) return { revoked: true, identities: [], journal: structuredClone(state.journals[JSON.stringify([roomKey(descriptor), contentId])] ?? null) };
       const identities = Object.values(state.identities).filter(r => roomKey(r) === roomKey(descriptor)).map(r => structuredClone(r));
       const bound = state.bindings[JSON.stringify([roomKey(descriptor), contentId])];
       return { identities, selected: identities.find(r => identityKey(r) === bound) ?? (identities.length === 1 ? identities[0] : null), host: structuredClone(state.hosts[roomKey(descriptor)] ?? null), journal: structuredClone(state.journals[JSON.stringify([roomKey(descriptor), contentId])] ?? null) };
