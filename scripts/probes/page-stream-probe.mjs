@@ -235,7 +235,7 @@ function orangeOf(png) {
   return +(orange / (png.width * png.height)).toFixed(5);
 }
 /** 暂停在 `sec`、等这张卡追到精确活渲,截一张 */
-async function liveShot(page, id, sec, dir, name) {
+async function liveShot(page, id, sec, dir, name, { allowTrack = false } = {}) {
   await store(page, `S.actions.pause(); return true;`);
   await delay(500);
   let ok = null, last = null;
@@ -246,7 +246,7 @@ async function liveShot(page, id, sec, dir, name) {
       const s = await stageState(page, id);
       last = s ? { t: s.t, tracks: s.tracks.map((x) => x.clips.join()), own: !!s.clip.stream, clip: { suppressed: s.clip.suppressed, snapshot: s.clip.snapshot, placeholder: s.clip.placeholder } } : null;
       // 这张卡自己没有流的轨道在(别的卡的轨道不管:几张卡的项目里,播放头不在的那几张的轨道可以留着)
-      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && !s.clip.stream && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
+      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && (allowTrack || !s.clip.stream) && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
       else await delay(100);
     }
   }
@@ -1072,8 +1072,9 @@ async function sceneMask(M) {
     if (check(shots.length >= 2, '二:播放中截到稀疏流在画的帧(至少两个分段)', shots.map((x) => ({ seg: x.seg, fb: x.fb, fa: x.fa })))) {
       for (const [i, x] of shots.entries()) {
         const first = origin + x.seg * SEG, own = origin + x.fa;
-        const liveFirst = await liveShot(pageA, clipA, first / FPS, dir, `mask-live-first-${i}`);
-        const liveOwn = await liveShot(pageA, clipA, own / FPS, dir, `mask-live-own-${i}`);
+        // 几张卡的项目里停着时这张卡的流轨道留着(包裹层没被抑制,画的是活渲;这时流已经是满密度,就算露出来也是这一帧自己的画面)
+        const liveFirst = await liveShot(pageA, clipA, first / FPS, dir, `mask-live-first-${i}`, { allowTrack: true });
+        const liveOwn = await liveShot(pageA, clipA, own / FPS, dir, `mask-live-own-${i}`, { allowTrack: true });
         if (!check(!!liveFirst && !!liveOwn, `二:截到第 ${i} 张的两张精确活渲参照`)) continue;
         const dFirst = diffOf(x.shot.png, liveFirst.png), dOwn = diffOf(x.shot.png, liveOwn.png);
         R.pixels.push({ seg: x.seg, frameAtShot: [origin + x.fb, own], segmentFirstFrame: first, lastDrawn: x.lastDrawn, vsSegmentFirst: dFirst, vsOwnFrame: dOwn, orange: orangeOf(x.shot.png) });
