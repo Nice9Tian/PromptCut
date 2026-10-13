@@ -373,6 +373,8 @@ function fakeBakery({ present = () => true, stale = false, drifting = false, stu
     },
     client: { async send(method, params) { if (method === 'Emulation.setDeviceMetricsOverride') clip = params.viewport ? { x: params.viewport.x, y: params.viewport.y, w: params.viewport.width, h: params.viewport.height } : { x: 0, y: 0, w: STAGE.width, h: STAGE.height }; } },
     async beginFrame(extra = {}) {
+      // 画一张丢掉的(`frame-stream.mjs` 的 `BELOW_DISCARD_SHOT`):只记下在哪一帧画过
+      if (extra.screenshot?.format === 'jpeg') { log.push(`draw:${frame}`); return { screenshotData: '' }; }
       if (extra.screenshot?.format !== 'png') return {};
       if (hidden && failLower) throw new Error('截图坏了');
       const drift = drifting ? shots : 0;
@@ -709,6 +711,44 @@ test('BD-failed 实测判死的流:自动生产记成失败不再白付一次重
   } finally { await close(); }
 });
 
+test('BD-draw 要回放的依赖下层的流:推过去而不取图的每一拍都画一张丢掉(稀疏分段里第一帧以外的帧、断租约以后回放的帧),不进编码器;不回放的流不画', { skip: !ffmpegOk }, async () => {
+  const { producer, specs, stateOf, run, close } = await producerFor(projectOf({ media: true }));
+  try {
+    const spec = specs.find(s => s.kind === 'below');
+    assert.equal(spec.replay, true, '下层是 motion 式的卡:要回放');
+    const state = stateOf(spec);
+    const bakery = fakeBakery();
+    // 画过一张丢掉的帧。换截图矩形时 `bakeStream` 自己也会画一张(在推第一帧之前,帧号还是上一趟留下的),不算:从这一趟推的第一帧之后数
+    const draws = from => { const ops = bakery.log.slice(from); const first = ops.findIndex(op => op.startsWith('step:')); return ops.slice(Math.max(0, first)).filter(op => op.startsWith('draw:')).map(op => Number(op.split(':')[1])); };
+    const hides = from => bakery.log.slice(from).filter(op => op.startsWith('hide:')).map(op => Number(op.split(':')[1]));
+    // 稀疏:第 0、1 段。每段只取第一帧,其余 14 帧各画一张丢掉
+    let mark = bakery.log.length;
+    await run(bakery, state, 0, SPARSE_STRIDE);
+    await run(bakery, state, 1, SPARSE_STRIDE);
+    assert.deepEqual(hides(mark), [0, 15], '取图的只有两个分段的第一帧');
+    assert.deepEqual(draws(mark), [...Array.from({ length: 14 }, (_, i) => 1 + i), ...Array.from({ length: 14 }, (_, i) => 16 + i)], '别的帧各画一张');
+    assert.deepEqual([state.manifest.segments[0].samples, state.manifest.segments[1].samples], [15, 15], '丢掉的那些不进分段:样本数照旧');
+    // 满密度、接着租约:每一帧都是要取的,一张都不用丢
+    for (const n of [0, 1]) delete state.manifest.segments[n];
+    bakery.streamLease = null;
+    mark = bakery.log.length;
+    await run(bakery, state, 0, 1);
+    await run(bakery, state, 1, 1);
+    assert.equal(hides(mark).length, 30);
+    // 满密度、断了租约单独产第 2 段:从挂载帧回放到第 29 帧,每一拍画一张;第 30 帧起才取图
+    bakery.streamLease = null;
+    mark = bakery.log.length;
+    const before = state.replayedFrames ?? 0;
+    await run(bakery, state, 2, 1);
+    assert.deepEqual(draws(mark), Array.from({ length: 30 - spec.mountFrame }, (_, i) => spec.mountFrame + i), '回放的每一帧都画过,第 30 帧起不再丢');
+    assert.deepEqual(hides(mark), Array.from({ length: 15 }, (_, i) => 30 + i));
+    assert.equal(state.manifest.segments[2].samples, 15);
+    assert.equal((state.replayedFrames ?? 0) - before, 30 - spec.mountFrame, '回放的帧数照旧记(丢掉的那些不算取了的帧)');
+    assert.ok(bakery.log.slice(mark).filter(op => op.startsWith('media:')).every(op => Number(op.split(':')[1]) >= 30), '素材只在真要取的帧前面等');
+    assert.equal(producer.status().streams[0].capture.discarded, 28 + 30 - spec.mountFrame);
+  } finally { await close(); }
+});
+
 test('BD-card 单卡流走的路不变:每帧只截一张、不藏任何东西、不等素材、截图矩形照旧是它自己的矩形', { skip: !ffmpegOk }, async () => {
   const { producer, specs, stateOf, run, close } = await producerFor(projectOf({ media: true }));
   try {
@@ -729,8 +769,8 @@ test('BD-card 单卡流走的路不变:每帧只截一张、不藏任何东西�
 
 /* ------------------------------------------------------------ 键 */
 
-test('BD-keys BELOW_STREAM_VERSION 是 1;capture-below.mjs 进截图代码的指纹(流的 codeVersion),不进生成快照的代码指纹', async () => {
-  assert.equal(BELOW_STREAM_VERSION, 1);
+test('BD-keys BELOW_STREAM_VERSION 是 2;capture-below.mjs 进截图代码的指纹(流的 codeVersion),不进生成快照的代码指纹', async () => {
+  assert.equal(BELOW_STREAM_VERSION, 2);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-frame-code-below-'));
   try {
     const file = 'server/bakery/capture-below.mjs';

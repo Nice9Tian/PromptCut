@@ -134,7 +134,8 @@ const REV = 7;
  * 三个片段(5 秒,150 帧):
  *   clip-a  独立卡(independent,有状态),0～5 秒 → 进流,分段 0～9,切成两个流任务(0-7、8-9)
  *   clip-c  独立卡、canvasHeavy,1～2 秒 → 进流
- *   clip-b  毛玻璃(belowDependent,本地档) → 不进流
+ *   clip-b  毛玻璃(belowDependent,本地档),1～4 秒 → 一条依赖下层的流(只有切分方自己的一份,一个流任务);
+ *           这种流经队列怎么走在 `below-stream-queue.test.mjs` 里验,这里只核它在计划和任务表里
  */
 const START = { 'clip-a': 0, 'clip-c': 1, 'clip-b': 1 };
 const END = { 'clip-a': 5, 'clip-c': 2, 'clip-b': 4 };
@@ -295,7 +296,8 @@ test('X1-plan 开关开着、探到编码器:plan 的 streams 是这一版的全
   const A = await streamPipeline();
   const ctx = await executorFor(A).plan(planView(), { signal: signalNone() });
   const clips = ctx.streams.map((s) => s.topClipId).sort();
-  assert.deepEqual(clips, ['clip-a', 'clip-c'], '独立卡进流,毛玻璃不进');
+  assert.deepEqual(clips, ['clip-a', 'clip-b', 'clip-c'], '独立卡各一条单卡流,毛玻璃一条依赖下层的流');
+  assert.deepEqual(ctx.streams.map((s) => `${s.kind}:${s.topClipId}`).sort(), ['below:clip-b', 'card:clip-a', 'card:clip-c']);
   for (const s of ctx.streams) {
     assert.equal(s.streamKey, resultKeyOf(s.contentKey, OWN), '流键 = 内容键 × 本机指纹');
     assert.ok(Number.isInteger(s.firstSegment) && s.lastSegment >= s.firstSegment);
@@ -303,7 +305,8 @@ test('X1-plan 开关开着、探到编码器:plan 的 streams 是这一版的全
   const a = ctx.streams.find((s) => s.topClipId === 'clip-a');
   assert.deepEqual([a.firstSegment, a.lastSegment], [0, 9]);
   assert.equal(await A.streamCapable(), true);
-  assert.deepEqual(streamTasksOf(ctx).map((x) => x.input.clipId).sort(), ['clip-a', 'clip-a', 'clip-c']);
+  assert.deepEqual(streamTasksOf(ctx).map((x) => x.input.clipId).sort(), ['clip-a', 'clip-a', 'clip-b', 'clip-c']);
+  assert.deepEqual(streamTasksOf(ctx).filter((x) => x.requires.belowDependent === true).map((x) => x.input.clipId), ['clip-b']);
 
   const off = await streamPipeline({ env: { PROMPTCUT_STREAMS: '0' } });
   assert.equal(off.streamProducer().enabled, false);
@@ -335,7 +338,8 @@ test('X1-render 执行器按段产出流任务的分段(满密度)、报进度;s
   const B = await streamPipeline({ encoder: 'libx264' });
   const executor = executorFor(A);
   const ctx = await executor.plan(planView(), { signal: signalNone() });
-  const tasks = streamTasksOf(ctx);
+  // 依赖下层的那一条(clip-b)不在这一条用例里产:它每帧截两张,走的取帧钩子在 `below-capture.test.mjs`、`below-stream-queue.test.mjs` 里验
+  const tasks = streamTasksOf(ctx).filter((x) => x.requires.belowDependent !== true);
   assert.equal(tasks.length, 3);
   const client = memoryClient();
   const content = memoryContent();
@@ -622,7 +626,7 @@ test('X1-hold 队列正在产的流:换一版(新计划里没有它)时 state �
   const running = executor.render(view(task), { signal: signalNone(), progress: () => {} });
   await reached;
   const producer = A.streamProducer();
-  // 换一版:只剩毛玻璃那一张(没有可进流的卡)
+  // 换一版:只剩毛玻璃那一张,而且这一版的卡片计划是空的(一条流都不出)
   const other = projectJson();
   other.tracks = other.tracks.filter((tr) => tr.clips[0].id === 'clip-b');
   const otherEntry = await A.entry(other);
