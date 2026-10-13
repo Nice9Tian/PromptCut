@@ -66,6 +66,23 @@ def _parse_size(stderr: str) -> Tuple[int, int]:
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
+def estimate_frames(ffmpeg: str, video: str) -> Optional[int]:
+    """从 ffmpeg 的探测日志里估视频总帧数(时长 × 帧率)。估不出来回 None,不阻止追踪。"""
+    import re
+
+    probe = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", video],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    text = probe.stderr.decode("utf-8", "replace")
+    d = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
+    f = re.search(r"Stream #.*Video:.*?(\d+(?:\.\d+)?)\s*fps", text)
+    if not d or not f:
+        return None
+    seconds = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))
+    return int(round(seconds * float(f.group(1))))
+
+
 def scale_points(points: Sequence[Sequence[float]], src: Tuple[int, int],
                  to_model: bool) -> np.ndarray:
     """原始像素坐标 ↔ 模型的 256×256 坐标。src 是 (宽, 高)。"""
