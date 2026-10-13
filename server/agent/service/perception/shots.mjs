@@ -333,7 +333,7 @@ export function createShotsTools({
   /** 模型档就绪吗:Python 的 `status`(要 onnxruntime 与权重文件都在)。回 `{ ready, why?, reason?, detail? }`;只有权限被撤才抛 */
   async function modelStatus(context, ws, { fresh = false } = {}) {
     if (!config?.python) {
-      return { ready: false, why: 'no-python', reason: '节点没有配置 TransNetV2(没有 Python 解释器与权重),用的是 ffmpeg 的 scdet 兜底。' };
+      return { ready: false, why: 'no-python', reason: '节点没有配置 TransNetV2(没有 Python 解释器与权重)。' };
     }
     if (!fresh && statusCache && now() - statusCache.at < limits.statusCacheMs) return statusCache.value;
     const events = [];
@@ -351,7 +351,7 @@ export function createShotsTools({
     let value;
     if (!ev) {
       const tail = end.stderrTail.slice(-2).join(' ');
-      value = { ready: false, why: 'not-ready', reason: end.timedOut ? '查 TransNetV2 状态超时,用的是 ffmpeg 的 scdet 兜底。' : scrub(tail || '解释器没有返回可解析的状态', ws) };
+      value = { ready: false, why: 'not-ready', reason: end.timedOut ? '查 TransNetV2 状态超时。' : scrub(tail || '解释器没有返回可解析的状态', ws) };
     } else {
       const runtimeOk = ev.runtime?.installed === true;
       const modelOk = ev.model?.exists === true;
@@ -362,7 +362,7 @@ export function createShotsTools({
       value = {
         ready: ev.ready === true && runtimeOk && modelOk,
         why: 'not-ready',
-        ...(missing.length ? { reason: `TransNetV2 用不了:${missing.join(';')}。用的是 ffmpeg 的 scdet 兜底。` } : null),
+        ...(missing.length ? { reason: `TransNetV2 用不了:${missing.join(';')}。` } : null),
         detail: {
           runtime: { installed: runtimeOk, version: ev.runtime?.version ?? null },
           model: { exists: modelOk, ...(Number.isFinite(ev.model?.bytes) ? { bytes: ev.model.bytes } : {}) },
