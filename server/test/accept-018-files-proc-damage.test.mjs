@@ -210,7 +210,7 @@ test('ACC018-DMG-10 按路径打开(双击文件):先复制副本再读,原文�
   assert.equal(fs.readdirSync(path.join(root, '.pc-work', 'opened')).length, 1, '只有成功的那一份有副本');
 });
 
-test('ACC018-DMG-11 落盘中断:保存写到一半进程没了,上一份完整的草稿仍然在(要求先写临时文件再改名)', { todo: '产品问题:草稿 PUT 直接 writeFileSync 覆盖原文件,中断后原草稿被截成半份(见地图「产品问题」4);备份路由是先写 .tmp 再 rename 的,草稿没有' }, async (t) => {
+test('ACC018-DMG-11 落盘中断:保存写到一半进程没了,上一份完整的草稿仍然在(要求先写临时文件再改名)', async (t) => {
   const dir = tmp(); process.env.PROMPTCUT_PROJECTS_DIR = dir;
   const realWrite = fs.writeFileSync;
   t.after(() => { fs.writeFileSync = realWrite; delete process.env.PROMPTCUT_PROJECTS_DIR; fs.rmSync(dir, { recursive: true, force: true }); });
@@ -228,4 +228,15 @@ test('ACC018-DMG-11 落盘中断:保存写到一半进程没了,上一份完整�
   const left = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   assert.doesNotThrow(() => JSON.parse(left), '中断之后草稿文件仍是完整可读的 JSON');
   assert.equal(JSON.parse(left).project.name, 'good-file', '仍是上一份完整的草稿');
+  assert.deepEqual(fs.readdirSync(dir).filter(f => f.endsWith('.tmp')), [], '失败后不留临时文件');
+});
+
+test('ACC018-DMG-11b 保存成功:原子写完不留临时文件,内容是新的一份', async (t) => {
+  const dir = tmp(); process.env.PROMPTCUT_PROJECTS_DIR = dir;
+  t.after(() => { delete process.env.PROMPTCUT_PROJECTS_DIR; fs.rmSync(dir, { recursive: true, force: true }); });
+  const handler = pluginHandlers(projectsPlugin(), dir).get('/api/projects');
+  assert.equal((await request(handler, 'PUT', '/atomic2', GOOD)).statusCode, 200);
+  assert.equal((await request(handler, 'PUT', '/atomic2', wrap({ tracks: [], name: 'second' }))).statusCode, 200);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'atomic2.proc'), 'utf8')).project.name, 'second');
+  assert.deepEqual(fs.readdirSync(dir).filter(f => f.endsWith('.tmp')), []);
 });
