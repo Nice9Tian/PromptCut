@@ -29,9 +29,19 @@
  * 流从**它自己的第一帧**(`originFrame`,项目帧号)起每 15 帧一段:项目的第 F 帧在第 `floor((F − originFrame) / 15)` 段的
  * 第 `(F − originFrame) % 15` 个样本(换算只在 `./streamSegments.mjs` 一处,产流的一侧用的是同一份)。`originFrame` 由父页随
  * 流平面带来(`StreamPlaneRequest.originFrame`,源头是流的计划),**不从清单取**:清单里那一项记的是产流时的位置。
- * `EncodedVideoChunk.timestamp = F × 1e6 / fps`(微秒,取整;F 是项目帧号)。这一拍要的帧没解出来时,
- * 最近 3 帧内画过的那一帧留着不动(「沿用旧的预渲染结果」是允许的退化),再远就清空流平面、这一拍落到兜底顺序的下一步(父页垫着的快照,没有就占位符) ——
- * **播放头从不为它停**。
+ * `EncodedVideoChunk.timestamp = F × 1e6 / fps`(微秒,取整;F 是项目帧号)。
+ *
+ * # 这一拍要的画面画不出来时(播放、暂停、拖动同一套;mechanism/rendering.md「兜底顺序」)
+ *
+ *   - **留着上一张**,最多留一个分段的时长(`HOLD_FRAMES` 帧,按真实时间算);到时还没有新画面才清空流平面,这一层落到占位符。
+ *     **播放头从不为它停**。暂停着没有下一拍,所以到时由一个真定时器来清。
+ *   - **只解最新要的那一帧**。随机跳到一帧要重置解码器、从它所在分段的关键帧解起;连着跳(拖动)时不打断在途的那一次
+ *     (每一步都重置的话一帧也解不出来,最多让它 `SEEK_PATIENCE_MS`),它解到了先画上,再去解**此刻**要的那一帧 ——
+ *     中间经过的那些帧从没排过队,也就没有要丢的。
+ *   - **稀疏分段里只有重复的画面**(清单里这一段的 `stride` 大于 1:每 `stride` 个样本是同一张)。跳进稀疏段时,
+ *     不晚于目标帧的最近一张(`pictureOf`,只往回找)一解出来就先画上,不用一路解到目标帧;不依赖稀疏版多密。
+ *   - 画面从无到有、从有到无时叫宿主一次(`onShowingChange`):帧是异步解出来的,暂停着没有下一拍,
+ *     占位符撤不撤、活子树藏不藏都靠这一下。
  */
 
 import { isStreamOrigin, STREAM_SEGMENT_FRAMES, streamSegmentFirstFrame, streamSegmentOf } from "./streamSegments.mjs";
@@ -48,10 +58,41 @@ export const MIN_FRAMES_PER_STREAM = 3;
 export const DECODER_BUDGET = 6;
 /** G5:每流最多 2 个在途请求 */
 export const MAX_INFLIGHT_PER_STREAM = 2;
-/** 这一拍的帧没到时,最近这么多帧内画过的那张留着 */
-export const HOLD_FRAMES = 3;
+/** 这一拍的画面没画出来时,上一张最多留这么多帧的时长(一个分段;按这条流的帧率换成真实毫秒) */
+export const HOLD_FRAMES = SEGMENT_FRAMES;
 /** 清单多久可以再问一次(分段会被替换:稀疏 → 满密度) */
 export const MANIFEST_REFRESH_MS = 2000;
+/**
+ * 在途的那一次寻帧(重置解码器、从分段的关键帧解到目标帧)最多让它跑这么久不被新的目标打断。
+ * 连着拖时每一步都重置解码器的话一帧也解不出来;超过这个数还没解到,新的目标照样重置。
+ */
+export const SEEK_PATIENCE_MS = 250;
+/**
+ * 还没有画面时,在途那一次寻帧解出来的帧(不是此刻要的那一帧)只有「够新」才画上当第一张:这一次寻帧发起到现在不超过这么久。
+ * 宿主等第一张画面出来才把活子树藏起来,拿一张旧时刻的帧去换正跟着播放头走的活组件,画面会往回跳一下。
+ * (原型 `claude/scrub-streams` 量的:取 50 时快速拖动里第一张画面要等 400 毫秒,取 100 不会。)
+ */
+export const FIRST_PICTURE_LAG_MS = 100;
+
+/** 真实毫秒:舞台里 `performance.now` / `Date.now` 都被接管成舞台时间,留的口子是 `__pcRealNow`;别处(单测)就是 `Date.now` */
+const realNow = (): number => {
+  const hatch = (globalThis as { __pcRealNow?: () => number }).__pcRealNow;
+  return typeof hatch === "function" ? hatch() : Date.now();
+};
+/**
+ * 真定时器:暂停着舞台的虚拟时钟不走,虚拟定时器永远不响。没有口子的地方(Node 里的单测)用普通定时器,并且不让它拖住进程:
+ * 停在稀疏段上的那个刷新定时器是自己接着排的,流不关它就一直在,单测文件会退不出去。
+ */
+const realTimeout = (fn: () => void, ms: number): void => {
+  const hatch = (globalThis as { __pcRealSetTimeout?: (cb: () => void, ms?: number) => unknown }).__pcRealSetTimeout;
+  if (typeof hatch === "function") { hatch(fn, ms); return; }
+  const timer = setTimeout(fn, ms) as unknown as { unref?: () => void };
+  if (typeof timer?.unref === "function") timer.unref();
+};
+/** 再拿一份这一帧的引用(和原来那份指同一块解码输出;两份都关了才放回解码器)。单测里的假帧没有 `clone` */
+const cloneFrame = (frame: VideoFrame): VideoFrame | null => {
+  try { return typeof frame.clone === "function" ? frame.clone() : null; } catch { return null; }
+};
 
 export interface StreamRect { x: number; y: number; w: number; h: number }
 
@@ -553,13 +594,35 @@ class StreamTrack {
   private segments = new Map<number, SegmentData>();
   private fetching = new Map<number, Promise<void>>();
   private lastDrawn: number | null = null;
+  /**
+   * 画布上现在这一张的另一份引用。包裹层被按片段重挂载(停下追帧的起步)时画布会换成一块新的、空的,
+   * 靠它把刚才那张原样画回去,不等解码;换了画面 / 清空时关掉。
+   */
+  private shown: { frame: VideoFrame; f: number } | null = null;
   private wantFrame: number | null = null;
+  /** `wantFrame` 换成现在这个值的真实时刻 */
+  private wantAt = 0;
+  /** 在途的那一次寻帧要解到哪一帧(解出这一帧或更后的帧就清掉)和它发起的真实时刻 */
+  private seekTarget: number | null = null;
+  private seekAt = 0;
+  /** 这一次寻帧以来喂给解码器几块了。一块都还没喂(字节没到、解码器没建)时换目标不花什么,不用让着它 */
+  private fedSinceSeek = 0;
+  /** 寻帧之后还没把要的画面画出来(量「从要这一帧到画出来」用) */
+  private seeking = false;
+  /** 最近一次寻帧:要的哪一帧、从要到画出来的毫秒(只记录;探针量随机跳帧的解码耗时) */
+  private lastSeek: { frame: number; ms: number } | null = null;
+  /** 稀疏段的替身:寻帧时,不晚于目标帧的最近一张是这一帧 —— 它一解出来就先画上 */
+  private standIn: number | null = null;
+  /** 画着的不是要的那一张,从什么时候起(真实毫秒);画上要的那一张就清掉 */
+  private staleSince: number | null = null;
+  private staleTimer = false;
+  private refreshTimer = false;
   /** 喂进解码器、还没出来的帧数(`decodeQueueSize` 只数还没交给解码器的,解码器里正在解的不算) */
   private pending = 0;
   private pumpQueued = false;
   private disposed = false;
   bytesPerFrame = 1920 * 2176 * 1.5;
-  stats = { decoded: 0, drawn: 0, holds: 0, blanks: 0, seeks: 0, errors: 0, maxHeld: 0, lastError: "" };
+  stats = { decoded: 0, drawn: 0, holds: 0, blanks: 0, seeks: 0, deferred: 0, standIns: 0, seekMaxMs: 0, errors: 0, maxHeld: 0, lastError: "" };
 
   constructor(player: StreamPlayer, plane: StreamPlaneRequest, canvas: HTMLCanvasElement) {
     this.player = player;
@@ -572,7 +635,7 @@ class StreamTrack {
   /** 父页随平面带来的清单:直接用,不去问字节源 */
   private adoptPushed(manifest: StreamManifest): void {
     this.manifest = manifest;
-    this.manifestAt = Date.now();
+    this.manifestAt = realNow();
     this.ensureCompositor()?.place(manifest.bound);
   }
 
@@ -587,8 +650,8 @@ class StreamTrack {
   private segmentOf(f: number): number { return streamSegmentOf(f, this.origin); }
   /** 这个分段的第一帧(项目帧号) */
   private segmentStart(seg: number): number { return streamSegmentFirstFrame(seg, this.origin); }
-  /** 此刻占着解码器输出池的帧:手里没关的 + 喂进去还没出来的 */
-  get heldCount(): number { return this.frames.size + this.pending; }
+  /** 此刻占着解码器输出池的帧:手里没关的 + 喂进去还没出来的 + 画布上那一张(它已经不在手里时另算一块) */
+  get heldCount(): number { return this.frames.size + this.pending + (this.shown && !this.frames.has(this.shown.f) ? 1 : 0); }
 
   private ensureCompositor(): PlaneCompositor | null {
     if (this.compositor && this.compositor.canvas === this.canvas) return this.compositor;
@@ -626,7 +689,7 @@ class StreamTrack {
     // 清单由父页推来的流:没有可问的地方,等父页下一次带新的来(`setPlane`)
     if (this.plane.manifest) return false;
     if (!this.key || this.manifestLoading) return false;
-    const now = Date.now();
+    const now = realNow();
     if (this.manifest && !force) return false;
     if (this.manifest && now - this.manifestAt < MANIFEST_REFRESH_MS) return false;
     this.manifestAt = now;
@@ -634,7 +697,7 @@ class StreamTrack {
       .then((m) => {
         if (this.disposed) return;
         this.manifest = m;
-        this.manifestAt = Date.now();
+        this.manifestAt = realNow();
         // 清单一到就把画布摆到流的矩形上界:还没画出第一帧时,被抑制的卡也要有一块能点中的框
         this.ensureCompositor()?.place(m.bound);
         this.wake();
@@ -690,7 +753,7 @@ class StreamTrack {
       error: (e) => {
         this.stats.errors++;
         this.stats.lastError = String(e?.message || e);
-        if (this.decoder === decoder) { this.decoder = null; this.configuredInit = null; this.nextFeed = null; this.pending = 0; }
+        if (this.decoder === decoder) { this.decoder = null; this.configuredInit = null; this.nextFeed = null; this.pending = 0; this.seekTarget = null; this.standIn = null; }
       },
     });
     return decoder;
@@ -699,15 +762,33 @@ class StreamTrack {
   private onFrame(frame: VideoFrame): void {
     if (this.pending > 0) this.pending--;
     const f = frameOfTimestamp(frame.timestamp, this.fps);
-    if (this.disposed || f < this.discardBefore || this.frames.has(f)) {
+    // 在途的那一次寻帧解到了
+    const reached = this.seekTarget !== null && f >= this.seekTarget;
+    if (reached) this.seekTarget = null;
+    if (this.disposed) {
       frame.close();
     } else {
-      this.frames.set(f, { frame, segment: this.segmentOf(f) });
-      this.stats.decoded++;
-      this.stats.maxHeld = Math.max(this.stats.maxHeld, this.heldCount);
-      // 随机访问:目标帧出来了就立刻画,不等下一拍
-      if (this.wantFrame === f) this.drawAt(f);
+      // 稀疏段的替身:此刻要的那一帧和它是同一张画面,先画上(下面照常处理这一帧:多半比目标帧早,画完就关)
+      if (this.standIn === f) {
+        this.standIn = null;
+        if (this.wantFrame !== null && this.wantFrame !== f && this.pictureOf(this.wantFrame) === f && this.drawFrame(frame, f)) this.stats.standIns++;
+      }
+      if (f < this.discardBefore || this.frames.has(f)) {
+        frame.close();
+      } else {
+        this.frames.set(f, { frame, segment: this.segmentOf(f) });
+        this.stats.decoded++;
+        this.stats.maxHeld = Math.max(this.stats.maxHeld, this.heldCount);
+        // 随机访问:目标帧出来了就立刻画,不等下一拍
+        if (this.wantFrame === f) this.drawAt(f);
+        /*
+         * 寻帧期间目标又换了(连着拖):解出来的这一帧先画上,画面跟着走;下面再按此刻要的那一帧重新寻。
+         * 还没有画面时只画「够新」的(`FIRST_PICTURE_LAG_MS`):宿主等第一张画面出来才藏活子树。
+         */
+        else if (reached && (this.lastDrawn !== null || realNow() - this.seekAt <= FIRST_PICTURE_LAG_MS)) this.drawAt(f);
+      }
     }
+    if (reached && !this.disposed && this.wantFrame !== null && this.wantFrame !== f) this.wake();
     // 腾出了位置:接着喂(暂停态没有下一拍来叫它,随机访问要一路解到目标帧)
     if (!this.pumpQueued && !this.disposed) {
       this.pumpQueued = true;
@@ -715,9 +796,8 @@ class StreamTrack {
     }
   }
 
-  /** 跳段 / 起步:从目标所在分段的 IDR 起解,目标之前的帧一出来就关 */
-  private seek(f: number): void {
-    this.stats.seeks++;
+  /** 手里解好的帧全部放掉、解码器重置(下一块必须是关键帧) */
+  private resetDecode(): void {
     for (const h of this.frames.values()) h.frame.close();
     this.frames.clear();
     if (this.decoder && this.decoder.state !== "closed") {
@@ -725,8 +805,23 @@ class StreamTrack {
     }
     this.pending = 0;
     this.configuredInit = null;
+    this.seekTarget = null;
+    this.standIn = null;
+    this.fedSinceSeek = 0;
+  }
+
+  /** 跳段 / 起步:从目标所在分段的 IDR 起解,目标之前的帧一出来就关 */
+  private seek(f: number): void {
+    this.stats.seeks++;
+    this.resetDecode();
     this.nextFeed = this.segmentStart(this.segmentOf(f));
     this.discardBefore = f;
+    this.seekTarget = f;
+    this.seekAt = realNow();
+    this.seeking = true;
+    // 稀疏段:这一帧和不晚于它的最近一张是同一张画面,那一张先解出来(离关键帧更近)
+    const picture = this.pictureOf(f);
+    this.standIn = picture !== f ? picture : null;
   }
 
   /** 这一帧所在分段的变体矩形 */
@@ -736,15 +831,76 @@ class StreamTrack {
     return init?.rect ?? null;
   }
 
-  private drawAt(f: number): boolean {
-    const held = this.frames.get(f);
+  /**
+   * 项目的第 F 帧在这条流里是哪一张画面(项目帧号)。满密度的分段就是它自己;稀疏分段(清单里 `stride` 大于 1)里每 `stride` 个样本
+   * 是同一张,取不晚于这一帧的最近一张 —— **只往回找**,不拿后面的。`stride` 不整除分段帧数时不认(没法确定重复是从哪一个样本数起的),
+   * 当成每个样本各是一张,照样解到这一帧自己。
+   */
+  private pictureOf(f: number): number {
+    const seg = this.segmentOf(f);
+    const stride = this.manifest?.segments[String(seg)]?.stride ?? 1;
+    if (!(stride > 1) || SEGMENT_FRAMES % stride !== 0) return f;
+    const start = this.segmentStart(seg);
+    return start + Math.floor((f - start) / stride) * stride;
+  }
+
+  /** 画布上现在这一张是不是第 F 帧该有的画面(稀疏段里同一张画面管好几帧) */
+  private fresh(f: number): boolean {
+    return this.lastDrawn !== null && this.pictureOf(this.lastDrawn) === this.pictureOf(f);
+  }
+
+  private closeShown(): void {
+    if (!this.shown) return;
+    try { this.shown.frame.close(); } catch { /* 已经关了 */ }
+    this.shown = null;
+  }
+
+  /** 把一帧画到平面上(这一帧记在项目的第 `f` 帧上) */
+  private drawFrame(frame: VideoFrame, f: number): boolean {
     const rect = this.rectOf(f);
     const compositor = this.ensureCompositor();
-    if (!held || !rect || !compositor || !this.manifest) return false;
+    if (!rect || !compositor || !this.manifest) return false;
     compositor.place(this.manifest.bound);
-    compositor.draw(held.frame, rect, this.manifest.bound);
+    compositor.draw(frame, rect, this.manifest.bound);
+    const was = this.lastDrawn;
     this.lastDrawn = f;
     this.stats.drawn++;
+    if (!this.shown || this.shown.f !== f) {
+      const copy = cloneFrame(frame);
+      this.closeShown();
+      if (copy) this.shown = { frame: copy, f };
+    }
+    this.coverSnapshot(true);
+    if (this.wantFrame !== null && this.fresh(this.wantFrame)) {
+      this.staleSince = null;
+      if (this.seeking) {
+        this.seeking = false;
+        const ms = Math.round((realNow() - this.wantAt) * 10) / 10;
+        this.lastSeek = { frame: this.wantFrame, ms };
+        if (ms > this.stats.seekMaxMs) this.stats.seekMaxMs = ms;
+      }
+    } else if (this.staleSince !== null) {
+      // 画上的是在途那一次寻帧的结果,不是此刻要的那一张:算有了新画面,留多久从这一刻重新算
+      this.staleSince = realNow();
+    }
+    if (was === null) this.player.noteShowing();
+    return true;
+  }
+
+  private drawAt(f: number): boolean {
+    const held = this.frames.get(f);
+    return held ? this.drawFrame(held.frame, f) : false;
+  }
+
+  /** 画布换了一块(包裹层重挂载):把刚才那张原样画回去。画不了回 false */
+  private redraw(): boolean {
+    const shown = this.shown;
+    const rect = shown ? this.rectOf(shown.f) : null;
+    const compositor = shown ? this.ensureCompositor() : null;
+    if (!shown || !rect || !compositor || !this.manifest) return false;
+    compositor.place(this.manifest.bound);
+    compositor.draw(shown.frame, rect, this.manifest.bound);
+    this.lastDrawn = shown.f;
     this.coverSnapshot(true);
     return true;
   }
@@ -754,8 +910,32 @@ class StreamTrack {
       this.compositor.clear();
       this.stats.blanks++;
     }
+    const was = this.lastDrawn;
     this.lastDrawn = null;
+    this.staleSince = null;
+    this.closeShown();
     this.coverSnapshot(false);
+    if (was !== null) this.player.noteShowing();
+  }
+
+  /**
+   * 这一拍要的画面没画上:留着上一张,最多留一个分段的时长(`HOLD_FRAMES`,真实时间);到时还没有新画面就清空,
+   * 这一层落到占位符(mechanism/rendering.md「兜底顺序」)。第一次进来时排一个真定时器 —— 暂停着没有下一拍,
+   * 不排的话旧画面会一直留着。本来就没有画面的,保持清空。
+   */
+  private miss(): void {
+    if (this.lastDrawn === null) { this.blank(); return; }
+    const now = realNow();
+    const holdMs = (HOLD_FRAMES * 1000) / this.fps;
+    if (this.staleSince === null) this.staleSince = now;
+    else if (now - this.staleSince >= holdMs) { this.blank(); return; }
+    this.stats.holds++;
+    if (this.staleTimer) return;
+    this.staleTimer = true;
+    realTimeout(() => {
+      this.staleTimer = false;
+      if (!this.disposed && this.staleSince !== null && this.wantFrame !== null) this.present(this.wantFrame);
+    }, Math.max(1, holdMs - (now - this.staleSince)) + 20);
   }
 
   /**
@@ -780,7 +960,7 @@ class StreamTrack {
     }
   }
 
-  /** 这一拍流画面在不在(画了、或留着最近 3 帧内的那张)。占位符 T1 按它判 */
+  /** 这一拍流画面在不在(画了、或留着上一张)。占位符 T1 按它判 */
   get showing(): boolean { return this.lastDrawn !== null; }
 
   /** 这一拍画的是满帧段还是稀疏段(兜底顺序第 1 / 2 步;探针按它分级)。没画面时 null */
@@ -793,40 +973,86 @@ class StreamTrack {
   /** 实体框(清单的收紧矩形,没有就用上界;平面坐标)。占位符的几何按它摆 */
   get box(): StreamRect | null { return this.manifest ? this.manifest.tight ?? this.manifest.bound : null; }
 
-  /** 这一拍:画第 F 帧(或留着最近一张 / 清成透明),再往后多解几帧 */
+  /** 这一拍:画第 F 帧(或留着上一张 / 到时清成透明),再往后多解几帧 */
   present(f: number): void {
+    // 停在同一帧上又来一次(暂停着:料到了、定时器到了、父页重发了流平面)
+    const again = this.wantFrame === f;
+    if (!again) this.wantAt = realNow();
     this.wantFrame = f;
     const seg = this.segmentOf(f);
     if (!rangesHave(this.plane.ranges, seg)) {
-      // 这一段还没就绪:流清空,这一层当拍落到兜底顺序的下一步(父页垫的快照 / 占位符),播放头不停
-      this.blank();
+      // 这一段还没就绪:这一层落到兜底顺序的下一步(留着上一张,到时占位符),播放头不停
+      this.miss();
       this.dropFrames();
       this.nextFeed = null;
+      this.seekTarget = null;
+      this.standIn = null;
       return;
     }
     this.loadManifest();
-    if (!this.manifest) { this.blank(); return; }
+    if (!this.manifest) { this.miss(); return; }
     const meta = this.manifest.segments[String(seg)];
-    if (!meta) { this.loadManifest(true); this.blank(); return; }
+    if (!meta) { this.loadManifest(true); this.miss(); return; }
     /*
      * 疑点 G:以前只在分段缺失或拉取失败时才再问清单 —— 稀疏段被满帧段替换之后,生产者发的就绪区间
      * 一个字不变,页面就一直用着稀疏段(旧文件还在 HTTP 缓存里,拉取也不失败)。现在当前段是稀疏段、
      * 或者同一个流键的就绪区间变了,就按 `MANIFEST_REFRESH_MS` 的节流再问一次;换上的满帧段在
      * 分段边界接上(`pump` 里比对文件名),不在段中间换,免得接到别的编码的差分帧上。
      */
-    if (this.manifestDirty || (meta.stride ?? 1) > 1) {
+    const sparse = (meta.stride ?? 1) > 1;
+    if (this.manifestDirty || sparse) {
       if (this.loadManifest(true)) this.manifestDirty = false;
     }
     // 往回跳(比已经放掉的帧还早)或者往前跳太远(超出已喂进去的一段):从目标所在分段的 IDR 重新解
-    const far = this.nextFeed === null || f < this.discardBefore || f > this.nextFeed + SEGMENT_FRAMES;
-    if (far) this.seek(f);
+    let far = this.nextFeed === null || f < this.discardBefore || f > this.nextFeed + SEGMENT_FRAMES;
+    /*
+     * 停在同一帧上、而手里这一段的文件已经被换掉了(稀疏 → 满密度):从新文件把这一帧重解一遍,更好的结果自己换上。
+     * 播放中每拍的帧号都在变,不走这里 —— 段中间不换(上面那一条)。
+     */
+    const data = this.segments.get(seg);
+    if (again && !far && data && data.file !== meta.file) {
+      this.segments.delete(seg);
+      far = true;
+    }
+    if (far) {
+      if (this.seekTarget !== null && this.seekTarget !== f && this.fedSinceSeek > 0 && realNow() - this.seekAt < SEEK_PATIENCE_MS) {
+        /*
+         * 连着跳(拖动):上一次寻帧已经在解了,不打断它 —— 每一步都重置解码器,一帧也解不出来,画面就不动了。
+         * 它解到之后先画上(`onFrame`),再按那时要的那一帧重新寻(`wake`);这中间要过的帧都不解。
+         * 接着喂的目标是在途的那一帧(`pump`)。上一次还一块都没喂进去(字节没到)的不让:直接换成这一帧。
+         */
+        this.stats.deferred++;
+        this.miss();
+        this.pump();
+        return;
+      }
+      this.seek(f);
+    }
     if (!this.drawAt(f)) {
-      // 没解出来:最近 3 帧内画过的留着(允许的退化),再远就清空、落到下面垫着的快照 / 占位符
-      if (this.lastDrawn === null || f < this.lastDrawn || f - this.lastDrawn > HOLD_FRAMES) this.blank();
-      else this.stats.holds++;
+      // 没解出来。画布上那一张就是这一帧该有的画面(稀疏段里同一张管好几帧)不算缺;否则留着上一张,限时
+      if (this.fresh(f)) this.staleSince = null;
+      else this.miss();
     }
     this.releaseBefore(f);
     this.pump();
+    if (sparse) this.armRefresh();
+  }
+
+  /**
+   * 停在稀疏段上:隔一会儿自己再问一次清单。满密度的分段产出来以后换上,不等用户操作(product/rendering.md「兜底顺序」);
+   * 就绪区间不会因为这一步变,父页不会来叫。清单由父页推来的流不用(父页带着新清单重发流平面时会再走一遍 `present`)。
+   */
+  private armRefresh(): void {
+    if (this.refreshTimer || this.plane.manifest) return;
+    this.refreshTimer = true;
+    realTimeout(() => {
+      this.refreshTimer = false;
+      if (this.disposed || this.wantFrame === null) return;
+      // 这一会儿播放头没动(暂停着):再走一遍(问清单、换文件;还是稀疏的话 `present` 会再排下一次)。
+      // 还在动(播放、拖动)就不插手 —— 但要接着排:它一停下就没有人再来叫了
+      if (realNow() - this.wantAt >= MANIFEST_REFRESH_MS) this.present(this.wantFrame);
+      else this.armRefresh();
+    }, MANIFEST_REFRESH_MS + 50);
   }
 
   /** 放掉目标之前的帧;之后才解出来的更早的帧一出来就关(`discardBefore` 只增不减) */
@@ -846,7 +1072,12 @@ class StreamTrack {
   pump(): void {
     if (this.disposed || this.nextFeed === null || !this.manifest || this.wantFrame === null) return;
     const cap = this.player.capFor(this);
-    const horizon = this.wantFrame + 2 * SEGMENT_FRAMES;
+    /*
+     * 喂到哪:平时往此刻要的那一帧后面多看两个分段。有在途的寻帧、而此刻要的已经是别的帧(连着拖)时,只喂到在途的那一帧为止 ——
+     * 它一解到就要按此刻要的那一帧重新寻,多喂的都白解,还会白取后面的分段。
+     */
+    const chasing = this.seekTarget !== null && this.seekTarget !== this.wantFrame;
+    const horizon = chasing ? (this.seekTarget as number) : this.wantFrame + 2 * SEGMENT_FRAMES;
     let guard = 0;
     for (;;) {
       if (this.nextFeed === null || this.nextFeed > horizon || guard++ >= 64) break;
@@ -892,6 +1123,7 @@ class StreamTrack {
       if (!sample) { this.nextFeed = this.segmentStart(seg + 1); continue; }
       try {
         this.pending++;
+        this.fedSinceSeek++;
         this.stats.maxHeld = Math.max(this.stats.maxHeld, this.heldCount);
         this.decoder.decode(new EncodedVideoChunk({
           type: sample.isSync ? "key" : "delta",
@@ -904,6 +1136,8 @@ class StreamTrack {
         this.stats.errors++;
         this.stats.lastError = String((e as Error)?.message || e);
         this.nextFeed = null;
+        this.seekTarget = null;
+        this.standIn = null;
         break;
       }
       this.nextFeed++;
@@ -915,8 +1149,11 @@ class StreamTrack {
     if (plane.key !== this.plane.key || plane.originFrame !== this.plane.originFrame) {
       this.manifest = null;
       this.segments.clear();
-      this.seek(0);
+      this.resetDecode();
       this.nextFeed = null;
+      this.discardBefore = 0;
+      // 画布上那一张是旧流的(输入变了,或者帧号对不上了):不留
+      this.blank();
     } else if (JSON.stringify(plane.ranges ?? []) !== JSON.stringify(this.plane.ranges ?? [])) {
       // 同键、就绪区间变了:生产者发布了新分段,清单可能也换了(疑点 G)
       this.manifestDirty = true;
@@ -925,7 +1162,14 @@ class StreamTrack {
     if (canvas !== this.canvas) {
       this.coverSnapshot(false);
       this.canvas = canvas;
-      this.lastDrawn = null;
+      // 包裹层重挂载(停下追帧的起步)换了一块新的空画布:把刚才那张原样画回去,不等解码
+      if (!this.redraw()) {
+        const was = this.lastDrawn;
+        this.lastDrawn = null;
+        this.staleSince = null;
+        this.closeShown();
+        if (was !== null) this.player.noteShowing();
+      }
     }
     // 父页带来了新的清单(多了分段、某一段换了文件):当场换上;换了文件的段在分段起点接上(`pump` 里比对文件名)
     if (plane.manifest && plane.manifest !== this.manifest) this.adoptPushed(plane.manifest);
@@ -936,6 +1180,7 @@ class StreamTrack {
     this.coverSnapshot(false);
     for (const h of this.frames.values()) h.frame.close();
     this.frames.clear();
+    this.closeShown();
     try { if (this.decoder && this.decoder.state !== "closed") this.decoder.close(); } catch { /* 已经关了 */ }
     this.decoder = null;
     this.compositor?.clear();
@@ -947,6 +1192,9 @@ class StreamTrack {
   diag() {
     return { id: this.id, key: this.key, pushed: !!this.plane.manifest, held: this.frames.size, queue: this.decoder?.decodeQueueSize ?? 0,
       decoder: this.decoder?.state ?? null, nextFeed: this.nextFeed, lastDrawn: this.lastDrawn,
+      // 要哪一帧、画着的是哪一张画面(稀疏段里是不晚于那一帧的最近一张)、是不是留着的旧画面、在途的寻帧、上一次寻帧的耗时
+      want: this.wantFrame, picture: this.lastDrawn === null ? null : this.pictureOf(this.lastDrawn), level: this.level,
+      stale: this.staleSince !== null, seekTarget: this.seekTarget, lastSeek: this.lastSeek,
       segments: [...this.segments.keys()], manifest: !!this.manifest, bound: this.manifest?.bound ?? null,
       cap: this.player.capFor(this), ...this.stats };
   }
@@ -969,10 +1217,30 @@ export class StreamPlayer {
   private proxy = false;
   private stopped = false;
   private lastFrame: number | null = null;
+  private onShowingChange: (() => void) | null;
+  private showingQueued = false;
 
-  constructor({ root, source = new HttpStreamSource() }: { root: () => Element | null; source?: StreamSource }) {
+  constructor({ root, source = new HttpStreamSource(), onShowingChange }: {
+    root: () => Element | null; source?: StreamSource;
+    /**
+     * 某条流的画面从无到有、或从有到无(异步解出来了、留到时限清空了)时叫一次;同一个微任务里只叫一次。
+     * 暂停着没有下一拍:宿主靠它撤占位符、把等着第一张画面的活子树藏起来。
+     */
+    onShowingChange?: () => void;
+  }) {
     this.root = root;
     this.source = source;
+    this.onShowingChange = onShowingChange ?? null;
+  }
+
+  /** 轨道报:画面有无变了。攒到微任务里叫宿主(`present` 的循环里不重入宿主) */
+  noteShowing(): void {
+    if (!this.onShowingChange || this.showingQueued) return;
+    this.showingQueued = true;
+    queueMicrotask(() => {
+      this.showingQueued = false;
+      if (!this.stopped) this.onShowingChange?.();
+    });
   }
 
   /** 父页的 `setStreamPlanes`。只存,下一次 `present` 才绑画布(画布要等 React 提交之后才在) */
