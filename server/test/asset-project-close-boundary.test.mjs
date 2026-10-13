@@ -17,7 +17,7 @@ async function until(fn) { for (let n = 0; n < 100; n++) { if (fn()) return; awa
 test('真实HTTP finish后source尚未actualclose，持久撤销ACK必须等_destroy gate', { timeout: 10000 }, async t => {
   const bytes = Buffer.from('finished HTTP but open owned source'), hash = crypto.createHash('sha256').update(bytes).digest('hex');
   let source, finishDestroy;
-  const fixture = await startAssetProjectFixture({ port: 5783, wrapStore: (_project, _ns, store) => new Proxy(store, { get(target, key) {
+  const fixture = await startAssetProjectFixture({ wrapStore: (_project, _ns, store) => new Proxy(store, { get(target, key) {
     if (key === 'read') return async () => { source = new Readable({ read() { this.push(bytes); this.push(null); }, destroy(_error, cb) { finishDestroy = cb; } }); return source; };
     return target[key];
   } }) });
@@ -37,7 +37,7 @@ test('真实HTTP finish后source尚未actualclose，持久撤销ACK必须等_des
 });
 
 test('真实media rename在途撤销：先等发布回退完成才收口，未授权新全件不得残留', { timeout: 10000 }, async t => {
-  const fixture = await startAssetProjectFixture({ port: 5783 }); t.after(() => fixture.close());
+  const fixture = await startAssetProjectFixture(); t.after(() => fixture.close());
   const bytes = Buffer.from('rename-boundary-content'), hash = crypto.createHash('sha256').update(bytes).digest('hex');
   const target = path.join(fixture.factory.project('A').dirs.media, `${hash}.wav`), originalRename = fs.rename;
   let entered = false, resume; const gate = new Promise(r => { resume = r; });
@@ -75,15 +75,15 @@ test('真实StreamStore.save在途撤销恢复旧清单和cache，不留晚发�
 });
 
 test('真实frame异步FileHandle读取可撤销：HTTP close不跳过在途读fd与操作收口', { timeout: 10000 }, async t => {
-  const fixture = await startAssetProjectFixture({ port: 5783 }); t.after(() => fixture.close());
+  const fixture = await startAssetProjectFixture(); t.after(() => fixture.close());
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-stream-read-boundary-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   let handle, entered = false, resume; const gate = new Promise(r => { resume = r; });
   const io = { ...fs, open: async (...args) => { handle = await fs.open(...args); const read = handle.readFile.bind(handle); handle.readFile = async options => { entered = true; await gate; return read(options); }; return handle; } };
   const store = new StreamStore(dir, { ownership: { projectId: 'A', assert: async () => {} }, projectAccess: fixture.projectAccess, io });
   const key = 'e'.repeat(64), id = 'f'.repeat(16); await fs.mkdir(store.dir(key), { recursive: true }); await fs.writeFile(store.initFile(key, id), 'actual-file-bytes');
-  const server = http.createServer((req, res) => handleStreamRequest(store, req, res, req.url)); await new Promise(r => server.listen(5784, '127.0.0.1', r));
+  const server = http.createServer((req, res) => handleStreamRequest(store, req, res, req.url)); await new Promise(r => server.listen(0, '127.0.0.1', r));
   t.after(async () => { resume(); server.closeAllConnections(); await new Promise(r => server.close(r)); });
-  const response = fetch(`http://127.0.0.1:5784/stream/${key}/init/${id}`, { headers: { Authorization: 'Bearer A-rw' } }).catch(() => null);
+  const response = fetch(`http://127.0.0.1:${server.address().port}/stream/${key}/init/${id}`, { headers: { Authorization: 'Bearer A-rw' } }).catch(() => null);
   await until(() => entered); let complete = false; const revoked = fixture.revoke('A').then(() => { complete = true; }); await delay(30); assert.equal(complete, false);
   resume(); await response; await revoked; assert.equal(handle.fd, -1);
 });

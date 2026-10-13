@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { freePorts } from './free-ports.mjs';
 import { startAccountRealRunnerFixture, REAL_RUNNER_PROMPT, REAL_RUNNER_NAME, REAL_RUNNER_TEXT } from './fixtures/account-real-runner.mjs';
 
 test('actual hosted factory signs WSS/project.open, executes real tools and commits doc revision; settlement stays pending',
   { timeout: 90000 }, async () => {
     let fixture, actor, failure;
     try {
-      fixture = await startAccountRealRunnerFixture(); actor = await fixture.connectActor(0);
+      { const [agentPort, controlPort, ...ports] = await freePorts(9); fixture = await startAccountRealRunnerFixture({ ports, agentPort, controlPort }); } actor = await fixture.connectActor(0);
       const conversationId = 'actual_runner_conversation';
       const posted = await actor.agent('/conversations/' + conversationId + '/messages', {
         prompt: REAL_RUNNER_PROMPT, requestId: 'actual_runner_message', selectionSnapshot: { pageId: actor.pageId } });
