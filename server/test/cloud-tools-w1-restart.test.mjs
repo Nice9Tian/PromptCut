@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { alive, until, sleep, testChromePath, hermeticResolve, TEST_CHROME_ARG_PREFIX, TEST_EXTRA_ARGS, isHeadlessShell } from './cloud-tools-w1-fixture.mjs';
+import { alive, until, sleep, testChromePath, hermeticResolve, TEST_CHROME_ARG_PREFIX, TEST_EXTRA_ARGS, TEST_CLOSE_MS, isHeadlessShell } from './cloud-tools-w1-fixture.mjs';
 import { startFakeSite } from './cloud-tools-w1-site.mjs';
 import { createEgressGate } from '../agent/service/egress.mjs';
 import { createHostedBrowserTools, hostedBrowserDir } from '../agent/service/hosted-browser.mjs';
@@ -42,7 +42,7 @@ function freshService(t, dataDir, executablePath) {
     register: async () => ({ signal: new AbortController().signal, closed: new Promise(() => {}) }),
   };
   const gate = createEgressGate({ testAllow: [`127.0.0.1:${PORT}`], resolve: hermeticResolve });
-  const tools = createHostedBrowserTools({ resources, egress: gate, dataDir, runtime: { executablePath, argPrefix: [...TEST_CHROME_ARG_PREFIX], extraArgs: [...TEST_EXTRA_ARGS] }, log: (event, fields) => log.push({ event, ...fields }) });
+  const tools = createHostedBrowserTools({ resources, egress: gate, dataDir, runtime: { executablePath, argPrefix: [...TEST_CHROME_ARG_PREFIX], extraArgs: [...TEST_EXTRA_ARGS] }, limits: { closeMs: TEST_CLOSE_MS }, log: (event, fields) => log.push({ event, ...fields }) });
   t.after(async () => { await tools.close('test-end'); });
   return { tools, log };
 }
@@ -66,7 +66,7 @@ test('W1-RESTART-01 服务进程被强杀:浏览器自己退出;重启后不复�
     let text = '';
     child.stdout.on('data', (c) => { text += c; if (text.includes('\n')) resolve(JSON.parse(text.split('\n')[0])); });
     child.once('exit', (code) => reject(new Error(`子进程提前退出 ${code}: ${stderr.slice(-400)}`)));
-    setTimeout(() => reject(new Error(`子进程 60 秒没有报到: ${stderr.slice(-400)}`)), 60_000).unref();
+    setTimeout(() => reject(new Error(`子进程 120 秒没有报到: ${stderr.slice(-400)}`)), 120_000).unref();
   });
   assert.equal(first.ok, true, first.error);
   assert.equal(first.rev, 1);
@@ -78,9 +78,9 @@ test('W1-RESTART-01 服务进程被强杀:浏览器自己退出;重启后不复�
   const exited = new Promise((resolve) => child.once('exit', resolve));
   child.kill('SIGKILL');
   await exited;
-  await until(() => first.pids.every((pid) => !alive(pid)), { ms: 20_000, what: '旧浏览器的进程树自己退出' });
+  await until(() => first.pids.every((pid) => !alive(pid)), { ms: 90_000, step: 200, what: '旧浏览器的进程树自己退出' });
   assert.deepEqual(first.pids.filter(alive), []);
-  await until(() => !profileHolder(path.join(dir, 'profile')).held, { ms: 10_000, what: '用户数据目录放开' });
+  await until(() => !profileHolder(path.join(dir, 'profile')).held, { ms: 30_000, what: '用户数据目录放开' });
 
   // 「重启」:新的服务进程(这里就是本进程)用同一个数据目录
   const { tools, log } = freshService(t, dataDir, chrome);
@@ -120,7 +120,7 @@ test('W1-RESTART-02 兜底:还占着用户数据目录的残留浏览器,新服�
     '--no-first-run', '--disable-background-networking', '--mute-audio', ...TEST_EXTRA_ARGS, 'about:blank'], { stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' });
   orphan.unref();
   t.after(() => { try { process.kill(orphan.pid, 'SIGKILL'); } catch { /* 已经退了 */ } });
-  await until(() => browserHoldsProfile(orphan.pid, profile), { ms: 30_000, step: 500, what: '残留浏览器用上了这个对话的用户数据目录' });
+  await until(() => browserHoldsProfile(orphan.pid, profile), { ms: 90_000, step: 500, what: '残留浏览器用上了这个对话的用户数据目录' });
   fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ servicePid: 999999, browserPid: orphan.pid, pids: [orphan.pid], at: Date.now() }));
   // 另一个对话的目录:没人占着,只有一份过期的登记,登记的进程号是本测试进程——不许误杀
   const idleDir = hostedBrowserDir(dataDir, { projectId: 'sp_restart', conversationId: 'conversation_idle' });

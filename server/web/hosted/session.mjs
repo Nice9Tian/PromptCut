@@ -724,7 +724,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     }
     state.closing = (async () => {
       // 帮手进程的名单要是还在问(刚起来就关),等它一下;问不出来就按已知的办
-      await Promise.race([helpersKnown, sleep(Math.min(limits.closeMs, 6_000))]);
+      await Promise.race([helpersKnown, sleep(limits.closeMs)]);
       const known = [...new Set([...await refreshPids(), ...helpers])];
       state.closed = true;
       if (graceful && browser.connected !== false) {

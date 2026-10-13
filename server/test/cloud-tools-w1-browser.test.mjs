@@ -205,9 +205,10 @@ test('W1-TOOL-02 清单带版本:旧编号、页面变了以后的编号一律�
 
   /* 节点被换了内容(列表复用节点的那种):出清单时那个节点写着「删除甲」,页面自己把它换成了「删除乙」。
      编号的版本是最新的、节点也还是那个节点,但内容不是清单里的了:不点 */
-  const before = await f.tools.call('web_open', { url: `${ORIGIN}/recycle?swap=2500` }, context);
+  const before = await f.tools.call('web_open', { url: `${ORIGIN}/recycle?swap=6000` }, context);
   const row = item(before, '删除甲');
-  await sleep(3000);                                              // 页面里的定时器把它换成「删除乙」,期间没有出过新清单
+  // 等页面里的定时器把它换成「删除乙」。用 web_read 等:读正文不出新清单,所以模型手里的清单这时是过期的
+  await until(async () => /删除乙/.test(await pageText(f, context)), { ms: 60_000, step: 300, what: '页面把节点换了内容' });
   const changed = await f.tools.call('web_click', { u: row.u }, context);
   assert.equal(changed.ok, false);
   assert.equal(changed.stale, true);
@@ -223,9 +224,9 @@ test('W1-TOOL-02 清单带版本:旧编号、页面变了以后的编号一律�
   assert.equal(blind.reason, 'changed');
   assert.equal(await out(), '还没执行');
   // 页面自己把按钮挤走了(没出过新清单):拿着原来的编号按坐标点 → 位置对不上;按编号点 → 还是那个元素,点得到
-  const pushed = await f.tools.call('web_open', { url: `${ORIGIN}/recycle?shift=2500` }, context);
+  const pushed = await f.tools.call('web_open', { url: `${ORIGIN}/recycle?shift=6000` }, context);
   const tgt = item(pushed, '目标按钮');
-  await sleep(3000);
+  await until(async () => /已经挤下去了/.test(await pageText(f, context)), { ms: 60_000, step: 300, what: '页面把按钮挤下去' });
   const movedAway = await f.tools.call('web_click', { x: (tgt.b[0] + tgt.b[2]) / 2, y: (tgt.b[1] + tgt.b[3]) / 2 }, context);
   assert.equal(movedAway.ok, false, '图上那个位置现在不是它了');
   assert.equal(await out(), '还没执行');
@@ -598,7 +599,7 @@ test('W1-CFG-01 没配浏览器:如实回,不起进程', async (t) => {
 });
 
 test('W1-CFG-02 名额与闲置:到上限换下闲着的,都在忙就拒;闲置超时自动关', async (t) => {
-  const f = await w1Fixture(t, { testAllow: ALLOW, limits: { maxBrowsers: 1, evictIdleMs: 400, idleCloseMs: 2_500 } });
+  const f = await w1Fixture(t, { testAllow: ALLOW, limits: { maxBrowsers: 1, evictIdleMs: 3_000, idleCloseMs: 8_000 } });
   const a = (await f.newRun()).context;
   const b = (await f.newRun({ conversation: secondConversationId })).context;
   assert.equal((await f.tools.call('web_open', { url: `${ORIGIN}/` }, a)).ok, true);
@@ -612,7 +613,7 @@ test('W1-CFG-02 名额与闲置:到上限换下闲着的,都在忙就拒;闲置�
   assert.ok(pidsA.every(alive));
 
   // 甲闲够了:乙进来,甲的被换下(进程没了,目录还在)
-  await sleep(500);
+  await sleep(3_300);
   const opened = await f.tools.call('web_open', { url: `${ORIGIN}/page2` }, b);
   assert.equal(opened.ok, true, opened.error);
   assert.deepEqual(pidsA.filter(alive), []);
@@ -622,8 +623,8 @@ test('W1-CFG-02 名额与闲置:到上限换下闲着的,都在忙就拒;闲置�
 
   // 乙闲置超时:自动关
   const pidsB = session(f, projectId, secondConversationId).pids;
-  await until(() => f.tools.describe().open === 0 && pidsB.every((p) => !alive(p)), { ms: 12_000, what: '闲置的浏览器自动关掉' });
-  await until(() => f.serviceLog.some((e) => e.event === 'agent.web.closed' && e.reason === 'idle' && e.exited === true), { ms: 12_000, what: '闲置关闭的记录' });
+  await until(() => f.tools.describe().open === 0 && pidsB.every((p) => !alive(p)), { ms: 90_000, what: '闲置的浏览器自动关掉' });
+  await until(() => f.serviceLog.some((e) => e.event === 'agent.web.closed' && e.reason === 'idle' && e.exited === true), { ms: 90_000, what: '闲置关闭的记录' });
   assert.equal((await f.tools.call('web_read', {}, b)).notOpen, true);
 });
 

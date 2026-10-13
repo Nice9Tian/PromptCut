@@ -47,10 +47,11 @@ const PAGES = {
 <div id="pad"></div>
 <button id="target" onclick="document.getElementById('out').textContent='执行了:目标'">目标按钮</button>
 <p id="out">还没执行</p>
+<p id="note"></p>
 <script>
 var q=new URLSearchParams(location.search);
 if (q.get('swap')) setTimeout(function(){ document.getElementById('row').textContent='删除乙'; }, +q.get('swap'));
-if (q.get('shift')) setTimeout(function(){ document.getElementById('pad').style.height='120px'; }, +q.get('shift'));
+if (q.get('shift')) setTimeout(function(){ document.getElementById('pad').style.height='120px'; document.getElementById('note').textContent='已经挤下去了'; }, +q.get('shift'));
 </script>`),
   '/covered': () => html('W1 被盖住', `
 <h1>被盖住</h1>

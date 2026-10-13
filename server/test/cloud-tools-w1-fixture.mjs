@@ -16,6 +16,8 @@ export const secondConversationId = 'conversation_second';
 /** 启动参数打头的那一个,同 `scripts/probes/probe-chrome.mjs` 的 `PROBE_CHROME_ARGS`(server/ 不引 scripts/,所以抄在这里;探针传的是原件) */
 export const TEST_CHROME_ARG_PREFIX = Object.freeze(['--disable-field-trial-config']);
 
+/** 测试里等浏览器进程树退出的时限(产品缺省是 10 秒) */
+export const TEST_CLOSE_MS = 40_000;
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { return err?.code === 'EPERM'; } };
 export async function until(check, { ms = 15_000, step = 50, what = 'condition' } = {}) {
@@ -146,7 +148,8 @@ export async function w1Fixture(t, options = {}) {
     const tools = createHostedBrowserTools({
       resources, egress: gate, dataDir,
       runtime: { argPrefix: [...TEST_CHROME_ARG_PREFIX], extraArgs: [...TEST_EXTRA_ARGS], ...options.runtime, executablePath, ...overrides.runtime },
-      limits: { ...options.limits, ...overrides.limits },
+      // 等进程树退出的时限放宽:全量测试并行跑时机器很忙,问系统要进程表、等进程退出都会慢;时限只为防卡死,不当通过条件
+      limits: { closeMs: TEST_CLOSE_MS, ...options.limits, ...overrides.limits },
       log: (event, fields) => serviceLog.push({ event, ...fields }),
     });
     opened.push(tools);
