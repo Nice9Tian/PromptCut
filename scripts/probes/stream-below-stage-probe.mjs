@@ -33,6 +33,11 @@
  *   E. **播放**:头一拍起每一拍目标卡都是满密度流的画面;播放中暂停,停住的那一帧贴的是这一帧。
  *   F. **下层改一处**:旧的那一层带的签名和按新项目算的对不上(父页据此不贴);预渲染进程换版本以后旧键不再发,新流产出来,
  *      带着新键、新签名;贴上新流,和新项目的导出页同一帧最像,而且比拿旧项目的导出页比明显更像(这套比法分得出下层变没变)。
+ *   G. **两个舞台互换那一下**(`src/editor/stageSwap.ts` 的 `swapAndDress`,播放态):新的可见舞台手里是补跑出来的精确活画面,
+ *      一条流都还没取。照改过的顺序**先发流平面、后发抑制**再起播:流画出第一帧之前目标卡原来的画面不藏,全程没有
+ *      「活子树藏着、流又没有画面」的时刻,也没有占位符。对照:照原来的顺序(先抑制、后流平面)发一遍,量得出那一段空着的时间
+ *      (分段的字节每次多等 80 毫秒,换一个地址前缀不吃缓存:新舞台第一次取这条流就是这样)。父页发的顺序本身由单测
+ *      `src/editor/stageSwap.test.mjs` 钉住。
  *
  * 输出 JSON 结论,过程写 stderr;任何一条不过就以非零退出。耗时只记录,等待时限只为防卡死。
  */
@@ -298,8 +303,10 @@ try {
     const url = new URL(req.url, 'http://x');
     res.setHeader('Access-Control-Allow-Origin', '*');
     if (url.pathname === HOST_PATH) { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.setHeader('Cache-Control', 'no-store'); res.end(hostHtml(originA)); return; }
-    const m = /^\/(?:s\d+\/)?api\/frames(\/.*)$/.exec(url.pathname);
-    if (!m || !current.producer || !handleStreamRequest(current.producer.store, req, res, m[1])) { res.statusCode = 404; res.end(); }
+    // 地址前缀 `/s<n>/`:换一个前缀浏览器的缓存里就没有;`/d<n>/`:另外每个分段的字节多等 80 毫秒(第 G 条)
+    const m = /^\/(?:([sd])\d+\/)?api\/frames(\/.*)$/.exec(url.pathname);
+    const go = () => { if (!m || !current.producer || !handleStreamRequest(current.producer.store, req, res, m[2])) { res.statusCode = 404; res.end(); } };
+    if (m && m[1] === 'd' && /\/seg\//.test(m[2])) setTimeout(go, 80); else go();
   }, '127.0.0.1');
   const base = `http://127.0.0.1:${hostServer.address().port}`;
   browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
@@ -697,6 +704,61 @@ try {
       check(rows.every((x) => x.mean < 4), `${tag}:重产以后和新项目同一帧的差在编码误差的量级`, rows.map((x) => x.mean));
       const mid = rows.filter((x) => x.frame >= FIRST + 15);
       check(mid.length > 0 && mid.every((x) => x.对旧项目同一帧 > x.mean * 1.3 + 0.3), `${tag}:对照:同一幅画面拿旧项目的导出页比明显更差(这套比法分得出下层变没变)`, mid);
+    }
+
+    /* ---------- G. 两个舞台互换那一下:先发流平面、后发抑制 */
+    {
+      // 这一版(改过下层的那一版)的流平面;目标卡在场的一帧
+      const f0 = FIRST + 20;
+      const dress = async (order) => {
+        await rpc('setSuppressed', []);
+        await rpc('setStreamPlanes', []);
+        await rpc('setTime', f0 / FPS + 1e-4);
+        slot++;
+        await frameA().evaluate((b) => { window.__pcStreamBase = b; }, `${base}/d${slot}`);
+        await sleep(150);
+        const sampler = frameA().evaluate(async (id, ms) => {
+          const now = window.__pcRealNow ?? (() => performance.now());
+          const wait = (n) => new Promise((r) => (window.__pcRealSetTimeout ?? setTimeout)(r, n));
+          const t0 = now();
+          const log = [];
+          let last = '', emptyMs = 0, emptySince = null, firstHidden = null, firstShowing = null;
+          for (;;) {
+            const d = window.__pcStageDiag();
+            const at = now() - t0;
+            const showing = d.streams.tracks.some((t) => t.id.split('#')[0] === id && t.lastDrawn !== null);
+            const hidden = !!document.querySelector(`[data-pc-clip="${id}"]:not([data-pc-media])`)?.classList.contains('pc-suppressed');
+            const empty = hidden && !showing;
+            if (empty && emptySince === null) emptySince = at;
+            if (!empty && emptySince !== null) { emptyMs += at - emptySince; emptySince = null; }
+            if (hidden && firstHidden === null) firstHidden = Math.round(at);
+            if (showing && firstShowing === null) firstShowing = Math.round(at);
+            const key = `${d.parentSuppressed.includes(id) ? 'named' : '-'}|${d.streamWaiting.includes(id) ? 'wait' : '-'}|${hidden ? 'hidden' : 'live'}|${showing ? 'stream' : '-'}|${d.placeholders.includes(id) ? 'ph' : '-'}`;
+            if (key !== last) { last = key; log.push(`${Math.round(at)}ms ${key}`); }
+            if (at > ms) { if (emptySince !== null) emptyMs += at - emptySince; return { log, emptyMs: Math.round(emptyMs), firstHidden, firstShowing, placeholder: log.some((l) => l.endsWith('|ph')) }; }
+            await wait(2);
+          }
+        }, target, 1200);
+        await sleep(40);
+        const planes = planesAt(f0);
+        if (order === 'planes-first') { await rpc('setStreamPlanes', planes); await rpc('setSuppressed', cards); }
+        else { await rpc('setSuppressed', cards); await rpc('setStreamPlanes', planes); }
+        await rpc('setPlaying', true);
+        await rpc('play', f0 / FPS + 1e-4);
+        const seen = await sampler;
+        await rpc('pause');
+        await rpc('setPlaying', false);
+        return seen;
+      };
+      const fixed = await dress('planes-first');
+      const old = await dress('suppress-first');
+      run.swapDress = { frame: f0, 先发流平面后发抑制: fixed, 对照_先发抑制后发流平面: old };
+      say('G-swap-dress', { scene: tag, ...run.swapDress });
+      check(fixed.emptyMs === 0 && !fixed.placeholder, `${tag}:互换后摆平面:先发流平面、后发抑制,全程没有「活子树藏着、流又没有画面」的时刻,也没有占位符`, fixed);
+      check(fixed.firstHidden !== null && fixed.firstShowing !== null && fixed.firstHidden >= fixed.firstShowing, `${tag}:互换后摆平面:流画出第一帧的那一刻才藏原来的画面`, fixed);
+      check(old.emptyMs > 20, `${tag}:对照:照原来的顺序(先抑制、后流平面)这一层确实会空一段(这把尺子量得出空拍)`, old);
+      slot++;
+      await frameA().evaluate((b) => { window.__pcStreamBase = b; }, `${base}/s${slot}`);
     }
 
     await rpc('setStreamPlanes', []);
