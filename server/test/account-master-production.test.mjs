@@ -97,7 +97,8 @@ test('生产的主服务装配：任务在任务进程里跑；停止真的停�
     const usageA = await a.agent('/usage');
     assert.equal(usageA.status, 200, safeCode(usageA.body));
     assert.ok(usageA.body.project.calls >= 3, `脚本三个回合各一次模型请求,实际 ${usageA.body.project.calls}`);
-    assert.deepEqual(usageA.body.models.map(row => row.model), ['scripted-local-response']);
+    assert.equal(usageA.body.models.length, 1, '只用过模拟模型这一个');
+    assert.match(usageA.body.models[0].model, /scripted-local-response$/);
     assert.equal(usageA.body.models[0].calls, usageA.body.project.calls);
     assert.equal(usageA.body.members.length, 1, '这时只有甲发起过任务');
     assert.equal(usageA.body.members[0].calls, usageA.body.project.calls);

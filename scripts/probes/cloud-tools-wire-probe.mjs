@@ -11,11 +11,9 @@
 //
 // 各段验什么见 main() 里的注释。root 看操作系统的那一半在 Windows 上是受控的(见夹具文件头),进程被关用「这个子进程真的退出了」代替。
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import https from 'node:https';
-import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startRunnerProcessFixture, until } from '../../server/test/fixtures/account-runner-process.mjs';
 import { hostedBrowserDir } from '../../server/agent/service/hosted-browser.mjs';
@@ -69,7 +67,7 @@ function processesUnder(dir) {
     { windowsHide: true, encoding: 'utf8' });
     return String(r.stdout ?? '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean).filter((s) => !/^powershell/i.test(s));
   }
-  const r = spawnSync('pgrep', ['-af', needle], { encoding: 'utf8' });
+  const r = spawnSync('pgrep', ['-af', needle], { windowsHide: true, encoding: 'utf8' });
   return String(r.stdout ?? '').split('\n').map((s) => s.trim()).filter(Boolean).filter((s) => !s.includes('pgrep'));
 }
 
