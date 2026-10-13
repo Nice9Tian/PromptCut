@@ -27,6 +27,12 @@
  *                                  (凭代成员的素材票据,权限不超过成员本人)。不设时这些工具回「没有配置素材服务」
  *   PROMPTCUT_AGENT_LOOK_URL       同机渲染服务管理进程的诊断与代理口(回环,如 http://127.0.0.1:5399)。云端 Agent 看画面(`see_frames` 等)时凭服务私钥的
  *                                  签名向它要一帧(`look-client.mjs`;契约第 9.8 节)。不设时看画面的工具不交给模型,系统提示词写「看不了画面」
+ *                                  账号版同样可设:签名用 PROMPTCUT_AGENT_SECRETS 里那把服务私钥(公钥登记在托管数据目录的 services.json),
+ *                                  设了口子而私钥读不到直接拒绝启动;每个请求另绑这条任务的授权(`look-client.mjs` 的说明)
+ *   PROMPTCUT_AGENT_RUN_ASSET_ORIGIN / PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256
+ *                                  只给账号版,缺省不设:素材服务的内部 mTLS 口(回环上的 https://127.0.0.1:<端口>)与它证书的指纹。设了以后
+ *                                  云端 Agent 的任务凭自己的授权读写所在项目的素材(「运行素材」),用的是连文档服务的同一张证书;
+ *                                  两个要一起设,只设一个或格式不对直接拒绝启动。可选 PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES(缺省 2 GiB)
  *   PROMPTCUT_AGENT_COLLECT_PYTHON  装了 yt-dlp 的 Python 解释器(绝对路径)。配了网页采集才可用;采集的子进程只经出网闸的代理出网。
  *                                  没配时采集的工具回「这台云节点没有装采集工具」(模型不能触发往节点上装东西)
  *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS 只给探针:把 `-m promptcut_collect` 换成一个替身脚本。生产不设;设了日志里有 `agent.collect.test-runner`,
@@ -309,10 +315,32 @@ async function main() {
       const controlPort = Number(env.PROMPTCUT_AGENT_CONTROL_PORT);
       if (!Number.isInteger(controlPort) || controlPort < 1 || controlPort > 65535 || controlPort === port)
         throw new AgentConfigError('account-executor', 'separate-control-port-required');
-      accountExecutor = { doc: options, runClient, readControl: conversationControl, controlPort };
+      // 运行素材:缺省不接。两个变量要一起给;给了就用连文档服务的同一张证书去连素材服务的内部口
+      let runAssets = null;
+      if (env.PROMPTCUT_AGENT_RUN_ASSET_ORIGIN !== undefined || env.PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256 !== undefined) {
+        let u = null; try { u = new URL(env.PROMPTCUT_AGENT_RUN_ASSET_ORIGIN); } catch { u = null; }
+        const pin = String(env.PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256 ?? '');
+        const maxImportBytes = env.PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES === undefined ? 2 * 1024 * 1024 * 1024 : Number(env.PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES);
+        if (!u || u.protocol !== 'https:' || u.hostname !== '127.0.0.1' || u.pathname !== '/' || u.search || u.hash ||
+            !/^[A-Fa-f0-9:]{64,95}$/.test(pin) || !Number.isSafeInteger(maxImportBytes) || maxImportBytes < 1)
+          throw new AgentConfigError('run-assets', 'run-assets-configuration');
+        runAssets = { assetOrigin: `${u.origin}/`, assetTls: options.tls, assetFingerprint256: pin, maxResponseBytes: 1024 * 1024, maxImportBytes };
+      }
+      accountExecutor = { doc: options, runClient, readControl: conversationControl, controlPort, ...(runAssets ? { runAssets } : {}) };
       wiring = createHostedWiring({ accountMode: true, conversationClient, log: line });
-    } catch {
-      await conversationControl?.close(); conversationClient?.close(); runClient?.close(); return fail('account-v2');
+    } catch (error) {
+      await conversationControl?.close(); conversationClient?.close(); runClient?.close();
+      return fail(error instanceof AgentConfigError && error.reason === 'run-assets' ? 'run-assets' : 'account-v2');
+    }
+    // 看画面:账号版没有旧的服务控制连接,但向渲染服务签请求仍用那把服务私钥。口子设了而私钥读不到:拒绝启动
+    if (lookUrl) {
+      try {
+        key = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
+        if (key.service !== 'agent') throw new Error('wrong-service-identity');
+      } catch (err) {
+        await conversationControl?.close(); conversationClient?.close(); runClient?.close();
+        return fail('look-key', { detail: String(err?.message ?? err).slice(0, 200) });
+      }
     }
   } else {
     try {
@@ -340,7 +368,7 @@ async function main() {
       renderLimits: { ...(stall ? { stallMs: stall } : {}), ...(debounce ? { debounceMs: debounce } : {}) },
       ...(assetBase ? { assetBase } : {}),
       // 看画面:凭这把服务私钥的签名向同机的渲染服务要一帧
-      ...(!accountMode && lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
+      ...(lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
       ...(collect ? { collect } : {}),
       ...(accountMode ? { accountMode: true, conversationClient, accountExecutor } : {}),
@@ -372,11 +400,12 @@ async function main() {
   if (runClient && !started.executor) void registerInstance();
   line('agent.ready', {
     url: started.url, auth: accountMode ? 'account-v2-mtls' : 'service-identity',
-    service: 'agent', ...(key ? { kid: key.kid } : {}), version, accountMode,
+    service: 'agent', ...(key && !accountMode ? { kid: key.kid } : {}), version, accountMode,
     ...(accountMode ? { runAuthorityMounted: !!started.executor, runDataProofReady: !!started.executor,
       completionReady: false } : {}),
     ...(origin ? { publicOrigin: origin } : {}),
-    assetService: !!assetBase, look: !accountMode && !!lookUrl, egressTestAllow: testAllow.length > 0,
+    assetService: !!assetBase, look: !!lookUrl, egressTestAllow: testAllow.length > 0,
+    ...(accountMode ? { runAssets: !!accountExecutor?.runAssets } : {}),
     collect: !accountMode && !!collect, collectTestRunner: !accountMode && collect?.testRunner === true,
     heapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
   });

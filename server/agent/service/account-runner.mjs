@@ -407,8 +407,12 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       catch (error) {
         const slot = pending.get(key);
         if (closed || taskConsumed || error?.status !== 503 || runEvents?.failure?.() ||
+            // 这几种不是「文档服务一时答不上」：执行结果不明、事件没落盘、进程在收、配置不对，
+            // 以及「还没绑定」「没配模型」「记录对不上」这类要调用方或人来处理的状态——照旧原样抛出，不在这里空转。
             ['run-execution-uncertain', 'run-outcome-unavailable', 'run-events-persistence', 'account-runner-closed',
-              'account-worker-task-consumed', 'account-runner-configuration', 'account-worker-task-configuration'].includes(error?.code) ||
+              'account-worker-task-consumed', 'account-runner-configuration', 'account-worker-task-configuration',
+              'account-worker-assignment-pending', 'account-worker-not-bound', 'account-worker-grant', 'account-worker-closed',
+              'account-worker-task-binding', 'no-model-key', 'run-record-mismatch', 'run-admit-protocol'].includes(error?.code) ||
             !(slot?.admitRequestId || slot?.grant)) throw error;
         log('agent.account.task.retry', { code: error?.code ?? 'unavailable' });
         await new Promise(resolve => { const timer = setTimeout(resolve, delay); timer.unref?.(); });

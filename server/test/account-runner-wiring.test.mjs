@@ -1,0 +1,160 @@
+// 0.7.18「真实运行器进任务进程」这一块的几处接线，单独验（整条链在 account-runner-process.test.mjs）：
+//   RW1 看画面绑运行授权：登记前、每趟去问前都过授权闸；不过就撤回排着的请求；请求带任务授权号；签名里的实例号可换
+//   RW2 渲染服务那一侧：把调用方报的任务记在请求上（落盘、重启后还在）；形状不对的拒
+//   RW3 任务进程的生产设置：形状不对、路径不对、写了一半的看画面与运行素材，一律拒
+//   RW4 任务范围的刷新：并着来的刷新不互相打掉（不出假的 503）；刷新失败时不留更早的结果
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createLookClient } from '../agent-service/look-client.mjs';
+import { createLook, createLookVerifier, signLookRequest, LOOK_AUTH_HEADER } from '../hosted-render/look.mjs';
+import { createRenderRequests } from '../hosted-render/render-requests.mjs';
+import { generateServiceKeyPair, newInstanceId } from '../auth/service-identity.mjs';
+import { validateWorkerSettings, createWorkerConfiguration } from '../agent-service/account-task-worker-config.mjs';
+import { createAgentRunScopeDoc, agentScopeRef } from '../account/agent-run-scope-doc.mjs';
+import { openAccountLedger } from '../account/ledger.mjs';
+import { inspectAgentScopeSource } from '../hosted/agent-run-scope-reader.mjs';
+import { digestOf } from '../account/ledger.mjs';
+import { scopeModel, pair } from './agent-run-scope-fixture.mjs';
+
+const P = `sp_${'a'.repeat(26)}`;
+const RUN = { runGrantId: 'grant_one', runId: 'run_one', conversationId: 'conversation_one' };
+const tmp = t => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-runner-wiring-')); t.after(() => fs.rmSync(d, { recursive: true, force: true })); return d; };
+
+/** 真的签名核对、真的队列与调度；出图的工作进程是替身。`fetch` 直接接到 look 的三个口子上 */
+function renderSide({ dir = null, hold = () => false } = {}) {
+  const key = generateServiceKeyPair(), logs = [];
+  const registry = { get: name => (name === 'agent' ? { role: 'agent', keys: [{ kid: key.kid, pub: key.pub }] } : null) };
+  const requests = createRenderRequests({ dir, log: (event, fields) => logs.push({ event, ...fields }) });
+  const loaded = requests.load();
+  const look = createLook({ verify: createLookVerifier({ registry }), requests,
+    project: id => (id === P ? { enabled: true, active: true, hosted: { agent: { enabled: true } } } : null),
+    resident: () => ({ port: 7000, key: 'resident-key', running: !hold(), node: id => (!hold() && id === P ? { projectId: id, connected: true, cards: { state: 'none' } } : null) }),
+    iso: () => ({ enabled: false, port: 0, key: null, current: null, report: null, lastRun: null }),
+    fetch: async () => ({ status: 200, json: async () => ({ ok: true, frame: 1 }) }),
+    log: (event, fields) => logs.push({ event, ...fields }), limits: { pollMs: 10, settleMs: 60_000 } });
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    const route = new URL(url).pathname, op = { '/look': 'handle', '/look/poll': 'poll', '/look/cancel': 'cancel' }[route];
+    seen.push({ route, auth: JSON.parse(Buffer.from(init.headers[LOOK_AUTH_HEADER].slice(3), 'base64url').toString('utf8')), body: JSON.parse(init.body) });
+    const out = await look[op]({ auth: init.headers[LOOK_AUTH_HEADER], bodyText: init.body });
+    return { status: out.status, json: async () => out.body };
+  };
+  const client = createLookClient({ url: 'http://127.0.0.1:5399', key: { service: 'agent', kid: key.kid, priv: key.priv, instanceId: newInstanceId() },
+    fetch: fetchImpl, limits: { pollWaitMs: 50, backoffMs: [5] } });
+  return { key, look, requests, loaded, logs, seen, client, close: () => look.close() };
+}
+
+test('RW1 看画面绑运行授权：每趟都过授权闸；失权就撤回排着的请求；请求带任务授权号；实例号用任务进程登记的那一个', async t => {
+  let held = false; const r = renderSide({ hold: () => held }); t.after(() => r.close());
+  let checks = 0, allowed = true;
+  const post = r.client.forProject(P, { authorize: async () => { checks += 1; if (!allowed) throw new Error('run-access-denied'); return { allowed: true }; },
+    run: RUN, instance: 'instance-task-7' });
+  // 正常：出图。登记那一趟和去问的每一趟之前都问过授权
+  assert.deepEqual(await post('/api/vision/snapshot', { project: { id: P, tracks: [] }, t: 1 }), { ok: true, frame: 1 });
+  assert.ok(checks >= 2, `授权问了 ${checks} 次`);
+  assert.deepEqual(r.seen[0].body.run, RUN); assert.equal(r.seen[0].body.projectId, P);
+  assert.ok(r.seen.every(row => row.auth.d === 'instance-task-7'), '签名里的实例号是任务进程登记的那一个');
+  assert.equal(r.logs.find(row => row.event === 'look.queued').runGrant, 'grant_one');
+  // 排着的时候失权：下一趟去问之前被闸拦下，排着的请求撤回，工具收到明确的话
+  held = true; r.seen.length = 0;
+  const waiting = post('/api/vision/snapshot', { project: { id: P, tracks: [] }, t: 2 });
+  for (let i = 0; i < 200 && !r.seen.some(row => row.route === '/look/poll'); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  allowed = false;
+  await assert.rejects(waiting, /这次没看成：这条任务已经被停止/);
+  for (let i = 0; i < 200 && r.look.status().queue.queued > 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(r.look.status().queue.queued, 0, '排着的那一条撤回了');
+  assert.ok(r.seen.some(row => row.route === '/look/cancel'));
+  assert.equal(r.client.describe().revoked, 1);
+  // 一开始就没权：根本不登记
+  r.seen.length = 0;
+  await assert.rejects(post('/api/vision/snapshot', { project: { id: P, tracks: [] }, t: 3 }), /这次没看成：这条任务已经被停止/);
+  assert.equal(r.seen.length, 0, '没有发出任何请求');
+  // 形状不对的绑定不收
+  assert.throws(() => r.client.forProject(P, { run: { runGrantId: 'g' } }), /run 不对/);
+  assert.throws(() => r.client.forProject(P, { authorize: 'yes' }), /authorize/);
+});
+test('RW2 渲染服务把调用方报的任务记在请求上，落盘、重启后还在；形状不对的拒', async t => {
+  const dir = tmp(t); let held = true;
+  const a = renderSide({ dir, hold: () => held }); t.after(() => a.close());
+  const post = a.client.forProject(P, { run: RUN, instance: 'instance-task-7' });
+  const pending = post('/api/vision/snapshot', { project: { id: P, tracks: [] }, t: 1 }).catch(error => error);
+  for (let i = 0; i < 200 && a.requests.queued().length === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  const entry = a.requests.queued()[0];
+  assert.deepEqual(entry.run, RUN); assert.equal(entry.owner, 'instance-task-7'); assert.equal(entry.persisted, true);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir).find(name => name.endsWith('.req.json'))), 'utf8'));
+  assert.deepEqual(saved.run, RUN);
+  // 新起的一个管理进程接回这条请求，任务的归属还在
+  const b = createRenderRequests({ dir }); assert.equal(b.load().restored, 1); assert.deepEqual(b.queued()[0].run, RUN);
+  held = false; assert.deepEqual(await pending, { ok: true, frame: 1 });
+  // 形状不对：签名是真的也拒，不登记
+  const before = a.requests.stats().queued;
+  for (const run of [{ runGrantId: 'g' }, { ...RUN, extra: 1 }, { ...RUN, runId: 'has space' }, 'grant_one']) {
+    const text = JSON.stringify({ projectId: P, path: '/api/vision/snapshot', body: { project: { id: P, tracks: [] }, t: 1 }, requestId: `req-bad-${'x'.repeat(16)}`, run });
+    const out = await a.look.handle({ auth: signLookRequest({ service: 'agent', kid: a.key.kid, priv: a.key.priv, instanceId: 'instance-task-7' }, text), bodyText: text });
+    assert.deepEqual([out.status, out.body.error], [400, 'bad-request']);
+  }
+  assert.equal(a.requests.stats().queued, before);
+});
+
+test('RW3 任务进程的生产设置：形状、路径、写了一半的看画面与运行素材一律拒；生产入口只在 Linux 上', async () => {
+  const abs = name => path.resolve(os.tmpdir(), name), pin = 'a'.repeat(64);
+  const good = () => ({ v: 1, expected: {}, reservation: {}, rootRecordFile: abs('epoch-1.json'),
+    identity: { keyFile: abs('i.key'), certFile: abs('i.crt'), caFile: abs('ca.crt'), port: 0 },
+    doc: { origin: 'https://127.0.0.1:8443/', fingerprint256: pin, keyFile: abs('t.key'), certFile: abs('t.crt'), caFile: abs('ca.crt') },
+    master: { origin: 'https://127.0.0.1:8444/', fingerprint256: pin }, journalFile: abs('j.sqlite'), dataDir: abs('data'), stateDir: abs('state') });
+  assert.equal(validateWorkerSettings(good()).v, 1);
+  assert.equal(validateWorkerSettings({ ...good(), look: { url: 'http://127.0.0.1:5399', keyDir: abs('keys') },
+    runAssets: { origin: 'https://127.0.0.1:8445/', fingerprint256: pin, maxResponseBytes: 1024, maxImportBytes: 4096 } }).v, 1);
+  const bad = (change, code) => { const value = good(); change(value); assert.throws(() => validateWorkerSettings(value), error => error.code === code, code); };
+  bad(v => { delete v.master; }, 'account-worker-settings');
+  bad(v => { v.extra = 1; }, 'account-worker-settings');
+  bad(v => { v.dataDir = 'relative/data'; }, 'account-worker-settings');
+  bad(v => { v.doc.origin = 'https://example.com/'; }, 'account-worker-settings');
+  bad(v => { v.doc.origin = 'http://127.0.0.1:8443/'; }, 'account-worker-settings');
+  bad(v => { v.identity.port = 70000; }, 'account-worker-settings');
+  bad(v => { v.look = { url: 'http://10.0.0.1:5399', keyDir: abs('keys') }; }, 'account-worker-settings-look');
+  bad(v => { v.look = { url: 'http://127.0.0.1:5399' }; }, 'account-worker-settings-look');
+  bad(v => { v.runAssets = { origin: 'https://127.0.0.1:8445/', fingerprint256: pin, maxResponseBytes: 1024 }; }, 'account-worker-settings-run-assets');
+  bad(v => { v.runAssets = { origin: 'https://127.0.0.1:8445/x', fingerprint256: pin, maxResponseBytes: 1024, maxImportBytes: 1 }; }, 'account-worker-settings-run-assets');
+  if (process.platform !== 'linux') await assert.rejects(createWorkerConfiguration(), error => error.code === 'account-worker-linux-required');
+});
+
+test('RW4 任务范围的刷新：并着来的不互相打掉；失败的刷新不留更早的结果', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-runner-wiring-')), ledger = openAccountLedger({ file: path.join(dir, 'doc.db'), authorityId: 'doc-refresh' });
+  t.after(() => { ledger.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const m = scopeModel('slot-refresh'), docKey = pair();
+  Object.assign(m.expected, { docAuthorityId: ledger.authorityId, docPublicKey: docKey.publicKey });
+  let slow = 0, broken = false;
+  const scope = createAgentRunScopeDoc({ ledger, signingKey: docKey.privateKey,
+    slots: [{ expected: m.expected, workerServiceKid: 'worker-key', workerFingerprint256: 'b'.repeat(64) }],
+    masterServiceKid: 'master-key', masterFingerprint256: 'c'.repeat(64),
+    sourceFactory: () => ({ async read({ checkpoint }) {
+      // 读 root 记录要一会儿（真的读端要读一串文件）
+      await new Promise(resolve => setTimeout(resolve, slow));
+      if (broken) throw Object.assign(new Error('agent-scope-publisher-locked'), { code: 'agent-scope-publisher-locked' });
+      return inspectAgentScopeSource({ read: m.io.read, expected: m.expected, configuredAnchorDigest: digestOf(m.files.get('anchor.json')), checkpoint });
+    } }) });
+  await m.run('initialize');
+  const ref = agentScopeRef(m.files.get('epoch-1.json'));
+  // 用得着缓存结果的同步读法（登记实例时就这么读）：读得到时因为传输对不上被拒，读不到时回「来源不可用」
+  const probe = () => { try { scope.registrationInState({}, { publicKey: 'x', rootScopeRef: ref,
+    transport: { serviceId: 'agent', serviceKid: 'nobody', fingerprint256: 'd'.repeat(64) } }); return 'accepted'; } catch (error) { return error.code; } };
+  // 一个请求刚刷新完、隔一两拍才用结果；别的请求的刷新这时正好开始。原来后一个一开始就把结果清掉，前一个读不到（503）。
+  slow = 12;
+  const seen = [];
+  await Promise.all(Array.from({ length: 12 }, async (_unused, i) => {
+    await new Promise(resolve => setTimeout(resolve, i * 3));
+    await scope.refresh(ref); await null; await null; seen.push(probe());
+  }));
+  assert.deepEqual([...new Set(seen)], ['run-scope-worker-transport'], '每个请求刷新完都读得到结果');
+  // 刷新失败：结果清掉，不留更早的
+  broken = true;
+  await assert.rejects(scope.refresh(ref), /publisher-locked/);
+  assert.equal(probe(), 'run-scope-source-unavailable');
+  broken = false; slow = 0;
+  assert.equal((await scope.refresh(ref)).phase, 'ready');
+  assert.equal(probe(), 'run-scope-worker-transport');
+});
