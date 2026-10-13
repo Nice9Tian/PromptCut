@@ -7,6 +7,7 @@ import https from 'node:https';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { freePorts } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { certificateFingerprint } from '../account/client.mjs';
 import { startHostedAssetService } from '../hosted/asset-runtime.mjs';
@@ -18,7 +19,7 @@ const close = server => new Promise(resolve => { if (!server?.listening) return 
 test('actual asset runtime serves pinned doc-only physical metadata; no run data or synthetic closure', { timeout: 45000 }, async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-gcentral-private-tls-'));
   const pki = assetWiringPki(dir), assetDir = path.join(dir, 'asset'); await fs.mkdir(assetDir);
-  const sockets = new Set(), socketCloses = new Set(); let docServer, service, privateClient, docPort, internalPort;
+  const sockets = new Set(), socketCloses = new Set(); let docServer, service, privateClient, docPort, assetPort, internalPort;
   const track = server => server.on('secureConnection', socket => {
     sockets.add(socket); const done = once(socket, 'close').then(() => sockets.delete(socket)); socketCloses.add(done);
   });
@@ -35,9 +36,9 @@ test('actual asset runtime serves pinned doc-only physical metadata; no run data
       return send(res, 200, { ok: true, headSeq: 0, events: [] });
     send(res, 503, { ok: false, code: 'unexpected-doc-route' });
   });
-  docPort = 6440; internalPort = 6442;
+  [docPort, assetPort, internalPort] = await freePorts(3);
   track(docServer); docServer.listen(docPort, '127.0.0.1'); await once(docServer, 'listening');
-  service = await startHostedAssetService({ dataDir: assetDir, host: '127.0.0.1', port: 6441, internalPort,
+  service = await startHostedAssetService({ dataDir: assetDir, host: '127.0.0.1', port: assetPort, internalPort,
     serviceIdentity: 'asset-service-test', pollMs: 60000,
     doc: { authorityId: 'gcentral-doc', origin: `https://127.0.0.1:${docPort}`,
       tls: pki.asset, serverFingerprint256: pki.doc.fingerprint256 },
