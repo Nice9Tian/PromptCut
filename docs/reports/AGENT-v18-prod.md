@@ -15,6 +15,8 @@
 
 本机（Windows）能验的六段都做了、都有测试：生产的主服务装配加真子进程、真实运行器跑通了，验收里那两条原先不成立的行为（停止真的停下；共有对话里第二位发送者的任务接着开始）用同样的断言证明成立。**Linux 上的那一半一行都没跑过**：root 入口、任务槽的 systemd 单元模板、发布器看系统的那一半接到真的任务进程上——这些只有主会话到节点上跑自检脚本才知道通不通。所以现在的状态是「代码与部署材料齐了、本机全绿、节点上待验」，不是「可以部署」。
 
+（独立审查之后又改了一轮，见文末「审查后补做的」；下面各节里被那一轮改掉的说法已就地更正。）
+
 ## 做了什么
 
 ### 1. 调度与任务进程之间的通道：加本机 HTTPS 那一种
@@ -130,7 +132,7 @@
 7. **退出登录那一块报告「没做到的」第 1 条没有顺带解决。** 那条要的是「旧的**主服务**进程确实没了」的 root 记录，而我的 root 入口管的是任务进程，主服务不在任何一个槽里。还差三样：主服务也由一个 root 发布器起停并留记录（像素材服务那样）；主身份登记时带上这条记录的引用；文档服务读这条记录并把旧实例名下的读取记为已关（实例权威里的 `confirmClosed` 还没有接验证方）。
 8. **每一代的状态目录不会自动清**（`<stateRoot>/<槽>/epoch-<n>/`，里面是本机事件日志等）。没有让 root 进程去删任务用户可写的目录（有被换成链接的风险），写进了部署说明，要另配定期清理。
 9. **部署没有脚本**。任务槽、root 入口、主服务（账号版）、文档服务的任务槽配置都是照 README 手工装。`scripts/remote/docservice.mjs deploy-agent` 是旧模式的，没改。
-10. **验收文件里那两条 todo 合并后不会自己变绿。** 它们用的夹具是「在主进程里跑任务」的进程内执行器组合，那条路本来就没有关闭结算。要让它们变绿得把夹具换成生产装配（我的集成测试就是这样拼的，可以照抄 `startRunnerProcessFixture({ productionMaster: true })`）。
+10. （已做，见「审查后补做的」）验收文件里那两条 todo 已换成生产装配的夹具、转成硬断言。
 11. **文档服务发消息收 `attachments` 只有集成测试那一条正向和三种拒绝覆盖**，没有给 `conversation-authority.mjs` 单写用例（形状不对、超过 32 个、重复地址）。
 12. **多个槽同时跑没有新验。** 调度的多槽仍只有块一的单测；我的集成测试只有一个槽。
 13. 真实运行器块报告「没做成的」第 3、4、5、7～10 条（渲染服务不核任务授权、运行素材离生产还差的、素材服务暂存目录没人收等）这一块没碰，原样还在。
@@ -151,7 +153,7 @@
 10. 任务槽单元模板的四项：`ExecStart=-`、`RemainAfterExit=yes`、`KillSignal=SIGKILL`、`OOMPolicy=continue`。代价：正常结束时任务进程也是被直接结束的，不走它自己的收尾（那时它已经收完、文档服务已经签了终态）。
 11. 槽的初始化单独一步（`--bootstrap`：开第一代随即退掉），调度不顺手初始化——锚点摘要要先配进文档服务，否则第一代登记不上。
 12. 写失败观察之前主进程还活着就先让它停下（`systemctl kill --kill-who=main`，只动这个槽的单元的主进程）。
-13. 账号版主服务不起 vite（它不载工具实现）。启动时要等到第一次向文档服务登记成功（事件库钉在文档服务的权威号上）；文档服务连不上就隔 2 秒再试，不退出。
+13. 账号版主服务不起 vite（它不载工具实现）。启动时要等到第一次向文档服务登记成功（事件库钉在文档服务的权威号上）；文档服务连不上就隔 2 秒再试，不退出。**初稿这里的「不退出」不成立**（等待用的定时器不拉住进程，而那时还没有监听口，进程会以退出码 0 自己退出），审查后改了并补了测试。
 14. 自检脚本的 slice 前缀是 `pcclaudeprobe` 不是 `pc-claude-probe-`：连字符在 systemd 的 slice 名里表示层级，发布器也不许。单元名和目录名照任务书带 `pc-claude-probe-`。
 15. 集成测试的端口写死在 28680～28725（分给我的段里）。夹具 `account-runner-process.mjs` 加了两个可选参数（换端口、用生产的主服务装配），不给时一切照旧。
 
@@ -166,40 +168,65 @@ ChatGPT 自己做的裁定我没有推翻。它故意收紧的检查我没有放
 5. `AGENT-v18-worker.md`、`AGENT-v18-runner.md`「没做成的」里关于 Linux root 入口、主服务生产装配、放弃结算卡槽的几条，可以改成指向本报告。
 6. 通用规矩的偶发名单建议加 `ai-visual-shared.test.mjs`，并注明 `account-runner-process.test.mjs` 缺省端口写死在 2822x、几个工作区同时跑会撞。
 
-## 要主会话到 Linux 上跑的
+## 要主会话到 Linux 上跑的（最终版）
 
 ### 一、节点自检（先跑这个；不碰现有服务）
 
-拷什么（本机，仓库里）：
+本机打包（不需要 `node_modules`、不需要任何第三方包，有测试钉着这一点）：
 
 ```
 git archive --format=tar.gz -o pc-claude-probe-src.tgz claude/v18-prod server src/kernel/agentScopes.mjs src/kernel/creativity.mjs scripts/probes/account-root-entry-linux.mjs scripts/probes/account-task-worker-config-linux.mjs
 ```
 
-不需要 `node_modules`、不需要任何第三方包（有测试钉着这一点）。拷到节点后：
+拷到节点。**放在 tmux 或 screen 里跑**（SSH 掉线时脚本收到 SIGHUP 会照样清理，但输出就看不到了）：
 
 ```
+tmux new -s pcprobe
 mkdir /root/pc-claude-probe-src && tar -xzf pc-claude-probe-src.tgz -C /root/pc-claude-probe-src
-cd /root/pc-claude-probe-src && node scripts/probes/account-root-entry-linux.mjs --protect <账号、文档、素材三个服务的单元名，逗号分隔>
+cd /root/pc-claude-probe-src && node scripts/probes/account-root-entry-linux.mjs --protect <账号、文档、素材三个服务的单元名，逗号分隔> 2>&1 | tee /root/pc-claude-probe.log
 ```
 
-前提：root；节点上的 `node` 那个非 root 用户也能执行（缺省用 `nobody`；node 装在 `/root` 下的话加 `--user <别的已有用户>` 也不行，要换一个人人可执行的 node）；有 `openssl`。
+前提：root；`node` 要是一个非 root 用户也能执行、并且它自己和路径上每一级目录都归 root 的（比如 `/usr/bin/node`；装在 `/root` 下的不行）；有 `openssl`、`systemctl`、`busctl`、cgroup v2。任务进程缺省以已有的 `nobody` 跑（`--user <别的已有非 root 用户>` 可换；脚本不建用户）。
 
-它会碰什么：`/run/pc-claude-probe-<编号>/`、一个单元 `pc-claude-probe-<编号>-a.service`（文件在 `/run/systemd/system/`）、每一代一个临时 slice `pcclaudeprobe<编号>…slice`、三个向系统要来的回环端口；会执行 `systemctl daemon-reload`（只重读单元文件，不重启任何服务；发布器每开一代也做一次）。不联网、不读任何真实密钥。
+它会碰什么：`/run/pc-claude-probe-<编号>/`（代码副本、临时证书、记录、数据）、一个单元 `pc-claude-probe-<编号>-a.service`（文件在 `/run/systemd/system/`）和它的 drop-in 目录、五个临时 slice `pcclaudeprobe<编号>…slice`（slice 名不许带连字符）、三个向系统要来的回环端口。`systemctl daemon-reload` 共 7 次（布置 1 次、每开一代 1 次共 5 代、清理 1 次；只重读单元文件，不重启任何服务），开头会打印这一句。不联网、不读任何真实密钥、不碰现有单元、端口、数据目录、用户。全程大约一两分钟。
 
-期望输出：开头一行 `probe id <编号>`；十一行 `ok 1 …` 到 `ok 11 …`；一行 `note 跑之前在运行的 N 个服务里，主进程号或重启次数变了的：没有`；若干行 `cleanup …`；一行 `left {"units":[],"unitFiles":[],"cgroups":[],"processes":[],"listeners":[],"directory":[]}`；最后一行 `PASS account-root-entry-linux 11/11`，退出码 0。
+期望输出：
 
-不过的话：`FAIL <哪一步> <原因码>`，后面跟 `  diag …`（单元当时的状态、登记目录里有什么、单元最近 25 行日志），其余步骤记 `skip`，照样清理。请把整段输出带回来。清理没清干净时 `left` 一行会列出来，可以再跑 `node scripts/probes/account-root-entry-linux.mjs --cleanup <编号>`（可重复）。跑完删掉 `/root/pc-claude-probe-src`。
+```
+probe id <8 位编号>  (dir …, unit …, slices …, user nobody)
+note 这次会执行 systemctl daemon-reload 共 7 次：…
+ok 1 初始化槽：…
+…
+ok 11 root 入口常驻：…
+note 跑之前在运行的 N 个服务里，主进程号或重启次数变了的：没有
+cleanup stop pc-claude-probe-<编号>-a.service: stopped
+cleanup …
+left {"units":[],"unitFiles":[],"cgroups":[],"processes":[],"listeners":[],"directory":[]}
+PASS account-root-entry-linux 11/11
+```
 
-最可能先坏的地方：第 1 步（单元起不来：看 `diag journal`）；第 6 步的 `unit-left-active-state`（我对 systemd 的推断不成立，见「没做成的」第 2 条）。
+退出码 0。第 11 步自己要等十秒左右（空闲八秒看它还活着）。
+
+不过的话：`FAIL <哪一步> <原因码>`，后面跟几行 `  diag …`（单元当时的状态、登记目录里有什么、单元最近 25 行日志），其余步骤记 `skip`，照样清理，末行 `FAIL account-root-entry-linux <过的数>/11`，退出码 1。请把整段输出（`/root/pc-claude-probe.log`）带回来。Ctrl-C、SSH 掉线、被 kill 都会先清理再退。
+
+清理没清干净（`left` 一行里有东西），或者输出丢了：
+
+```
+ls -d /run/pc-claude-probe-*          # 目录名的后八位就是编号
+node scripts/probes/account-root-entry-linux.mjs --cleanup <编号>     # 可以重复跑，末尾同样打印 left
+```
+
+跑完：`rm -rf /root/pc-claude-probe-src /root/pc-claude-probe.log`。
+
+最可能先坏的地方：第 1 步（单元起不来，看 `diag journal`）；第 6 步的 `unit-left-active-state`（我对 systemd 的推断不成立，见「没做成的」第 2 条）；第 10 步的 `root-code-untrusted`（node 或 `/run` 的属主、权限不合它的要求，`diag` 里有是哪个路径）。
 
 ### 二、上一块留下的那支（任务进程的生产配置入口，九条）
 
-同一份包里就有：`cd /root/pc-claude-probe-src && node scripts/probes/account-task-worker-config-linux.mjs --dir /run/pc-worker-config-probe`。前提与期望输出见它的文件头（九行 `ok`，末行 `PASS account-task-worker-config-linux 9/9`，目录自己删掉）。它同样不需要 `node_modules`。这支我没改；它和第一支独立，先跑哪支都行。
+同一份包里就有，和第一支独立，先跑哪支都行：`cd /root/pc-claude-probe-src && node scripts/probes/account-task-worker-config-linux.mjs --dir /run/pc-worker-config-probe`。期望九行 `ok`、末行 `PASS account-task-worker-config-linux 9/9`、目录自己删掉；不过时目录留着。它同样不需要 `node_modules`。这支我没改。
 
 ### 三、真的部署
 
-照 `server/hosted/deploy/README.md`「Agent 服务（账号版：一条任务一个进程）」的九步。其中第 5 步 `--bootstrap` 会真的把任务槽单元起一次再关掉，是对生产配置（证书、目录权限、单元文件）的第一次真验。
+照 `server/hosted/deploy/README.md`「Agent 服务（账号版：一条任务一个进程）」的九步。注意三处：主服务和任务进程是两个用户、同一个共用组，两个单元都带 `UMask=0007`；root 入口执行的那份代码要归 root（它启动时自己核，不满足拒绝启动）；第 5 步 `--bootstrap` 会真的把任务槽单元起一次再关掉，是对生产配置的第一次真验。
 
 ## 要主会话决定或注意的事
 
@@ -231,6 +258,69 @@ cd /root/pc-claude-probe-src && node scripts/probes/account-root-entry-linux.mjs
    后果：甲在节点意外重启时云端 Agent 会停摆到有人处理；乙要多做一块。
    建议：0.7.18 先甲（现在没有外部用户），乙排进后面的版本；但请知道有这件事。
 
+## 审查后补做的（2026-10-13，独立审查：必须改一处、应该改四处、顺手四条）
+
+主会话已把 `main` 合进本分支（`e24f907c`）。下面每条一个提交，都在它之后。
+
+| 提交 | 对应 | 改了什么 |
+|---|---|---|
+| `9a966b40` | 必须改 1 | **root 入口常驻起来约一秒后自己以退出码 0 退出**：调度两轮之间的等待、适配里的等待都是不拉住进程的定时器，问主服务是短连接，进程又没有监听口，槽空闲时没有任何东西留得住它。常驻部分抽成 `startRootResident`，里面放一个不 unref 的保活，只在 `close()` 里拿掉；单元改 `Restart=always`、`RestartSec=15s`、`StartLimitIntervalSec=0`。新测试 `account-root-resident.test.mjs` 把常驻部分当独立进程起来（不带父子通道、不读标准输入）：空闲 10.5 秒还活着、还在一轮一轮地问，叫停才退、退出码 0。**改之前这条测试是红的**（`空闲 10501 毫秒后进程自己退出了（退出码 0）`）。自检第 11 步改成：空闲八秒、问过三轮以上还活着且还在接着问，再发 SIGTERM，再断言退出码 0 并且日志里有 `root.stopping` |
+| `0dd321d9` | 应该改 2 | **主服务启动时文档服务不在，同样静默退出 0**（初稿裁定 13 写的「不退出」不成立）。登记重试的等待改用拉得住进程的定时器。新测试 `account-master-startup.test.mjs`：真把命令行入口跑起来、文档服务的口上没人，6.5 秒后进程还在、隔两秒登记一次（**改之前红**：`文档服务不在时主服务自己退出了（退出码 0）`）；装配层面前三次连不上、第四次登记上，等得到；文档服务明确不认（403）或登记出来的不是只做控制的身份才当配置错 |
+| `530e6271` | 应该改 3 | 共用数据目录：README 删掉「两者用同一个用户」，写明主服务和任务进程必须是两个用户、同一个共用组、目录 `2770`；任务槽模板加 `UMask=0007`，新加主服务的单元模板 `systemd-promptcut-agent-master.service`（同一行）。`workspace.mjs` 没改，也不用它配合：它的 `mkdirSync`、`writeFileSync`、`openSync` 都不带 mode，有这一行就够。**没在 Linux 上验**（两个用户互写同一个对话目录要等真部署） |
+| `64d5acc9` | 应该改 4 | root 入口启动时核自己要以 root 执行的代码只有 root 改得了（新文件 `account-root-code-trust.mjs`）：入口路径上每一级目录、`current` 这类链接、整棵 `server/`、node 本身，属主 root、组和别人不可写，`server/` 里不许有符号链接；不满足拒绝启动，`config.error root-code-untrusted` 带上是哪个路径和哪一种。三种跑法都核。README 与单元模板写明；自检第 10 步加「一个文件组可写就拒」。测试 14 种不合格的情形（受控的文件系统） |
+| `db5c1486` | 应该改 5 | 自检脚本接 SIGINT、SIGHUP、SIGTERM，被打断走同一段收场；收场抽成 `finishProbe`：有一步超时或被打断时，清理一遍、等后台那一步落定（最多 40 秒）、再清理再盘点，`left` 只在落定以后印一次；开头打印 `daemon-reload` 的次数。测试：后台晚造出来的单元与 slice 在第二遍被清掉、不漏报；清不掉的最多三遍、如实报 |
+| `e9a39eb8` | 顺手 | 指令和回执带上这一代的槽号、代号、实例号：任务进程核请求头，不是给这一代的回 409 不做；客户端核回应里的代号，对不上就当没答。`PROMPTCUT_AGENT_ACCOUNT_LOOK` 写成 0/1 以外的值恢复成拒绝启动 |
+| `9e63b8df` | 顺手（查出来以后加的） | 开一代以后 root 入口先等任务进程开始监听（最多 30 秒，只连不发）再交回发布器；README「槽停住了」写成运维照着做的恢复步骤 |
+| `93aee316` | 顺手 | 那两条 todo 测试换成生产装配的夹具，去掉 todo，转成硬断言 |
+| `3bb3d164` | 连带 | `accept-018-rest-queue-account-look.test.mjs` 的 Q-ACC-2 是一条读 `main.mjs` 源码的静态检查，钉的是「账号模式的 `lookOn` 看开关回的私钥」（在主进程里跑任务的旧路）。生产入口改了以后它必然不成立，改成核现在的接线：主服务不接；root 入口的配置写了 `worker.look` 就下发给任务进程。**这是我改了别的块的一条验收断言，请主会话过目** |
+
+### 审查让查清的三件事
+
+**一、文档服务的强制清单（`listScopeControls`）是不是对所有围栏种类都在任务进程放弃之前就列出。** 读的是 `server/account/run-authority.mjs` 的 `checkWithScope`、`fenceInState`、`reconcile` 和 `doc-agent-assembly.mjs` 的 `listPendingRuns`。
+
+- **先列出的**（任务进程是因为它才被拒、才放弃的）：停止、切私有（请求自己的事务里当场落账）；改密退出、退出登录、移除成员或封禁、删项目、关 Agent 开关（都是账号事件，任务进程每一步过闸时文档服务先 `sync()`——把账号事件拉回来、落成围栏并提交——再判；主服务来问清单时同样先同步再列）；实例被撤销。这些结果是「被中断」。
+- **晚列或不列的**，这类任务会被记成「失败」而不是「被中断」：
+  1. 账号服务已经不认发送者的登录、而对应的账号事件还没到文档服务（过闸时向账号服务现核的那一步先拒了）。事件随后到：私有对话或还没读的任务会在下一次问清单时被列出（那就仍是「被中断」，因为判据用的是放弃之后才去问的那一次）；**共有对话里已读的当前任务按规矩本该保留继续做**，但任务进程已经放弃了，文档服务不会来强制关，于是被记成「失败」。这是任务进程一侧原有的缝（把一次还没落账的拒绝当成了撤销），不是这一块引入的；这一块之前的后果是槽一直卡着，现在是记失败。
+  2. 服务登记表里把跑任务的那把钥匙撤掉（`service-revoked` 这一种围栏在代码里没有任何地方产生）。任务进程每一步都被拒、放弃，没有围栏，记「失败」。
+- 没有改调度去多等几轮：等多久都是猜。要彻底对上得让任务进程区分「文档服务说这条任务被撤销了」和「这一次核对没过」，那是任务进程和文档服务之间的约定，没动。
+
+**二、正常结束时任务进程报出结算结果以后还在不在往共用数据目录写，`KillSignal=SIGKILL` 会不会截断它。** 不会截断要紧的东西：
+
+- 对话的模型历史（`history.json`）：`server/runners/api.mjs` 的 `saveHistory()` 是同步写，在这一轮返回之前做完；运行器收完（`drain()`）才形成收尾记录，收尾记录封存以后才开始结算。
+- 用量流水：每次模型调用后 `appendFileSync` 同步追加，同上。
+- 本机事件日志：结算之前已封存。
+- **会被截的只有一样**：用量的累计缓存 `usage/totals.json`，它由定时器隔一会儿落一次（写临时文件再改名）。被直接结束时最后一段可能没落，或留下一个 `totals.json.tmp-<进程号>`；下一代起来时按流水文件的偏移补算，数不会错，只是多一个小的临时文件没人收。
+- 被**强制**关的任务另说：那时它可能正写到一半。`history.json` 不是先写临时文件再改名的，写到一半被结束会留下半个文件，下一条任务读它时解析失败、按没有历史开始（模型不记得这个对话之前说过什么）。这和 SIGTERM 还是 SIGKILL 无关，原来的强制停止也一样；要补得改 `api.mjs`，不在这一块。
+
+**三、「发布器失败后一律留锁、开一代的任何失败都要人工处理」在生产上最常见的触发，和运维照着做的恢复步骤。** 最常见的是开一代的时候：任务槽单元起不来或起来就退（证书、目录权限、设置文件读不到）、单元文件被人改过或加了 drop-in、节点很忙时任务进程迟迟没开始监听（发布器自己只重试几秒）、root 入口在一次发布做到一半时被结束。最后两种是日常就会碰到的，所以加了「先等任务进程开始监听」（`9e63b8df`）。恢复步骤写在 `server/hosted/deploy/README.md`「槽停住了」，分四种情形（看停在第几代什么阶段、登记目录里有没有 `reservation-<N+1>.json` / `terminal-<N>.json`）。**两点要知道**：这套步骤没有在节点上演练过；其中「开到一半」「关到一半」两种没有办法接着做，只能给这个槽换新的 `authorityId` 重新初始化（要重启文档服务），而「关到一半」时那一代绑着的任务在文档服务里结不了、现在没有工具能处理。也就是说，发布器的「不重试、不恢复」在生产上的代价比看上去大，值得排一块单独的活。
+
+### 这一轮的验证
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npx tsc -b --force`（`93aee316` 上） | 0 | 零错误 |
+| `npm test`（全量），第一遍 | 1 | 6380 条，37 失败：33 条是别的块写死的端口被占（`cloud-tools-w1-*` 的 28380 共 32 条、`account-runner-process` 的 28221），2 条是 `accept-018-conv-endtoend` 的 28581（它和同组另两个文件 `accept-018-conv-controls`、`accept-018-conv-readexception` 用同一组写死的端口，一次全量里并着跑会撞），1 条 `codex-auth-state`（名单里的偶发），**1 条是我引入的**（Q-ACC-2，见上表最后一行，已改）。写死端口的那几个文件单独重跑：64 条里 62 过，`accept-018-conv-endtoend` 的两条又撞了一次 28581（当时本机没有别的进程在听这个口，是同一时刻别的工作区在跑）；再单独跑一次 4/4 通过 |
+| `npm test`（全量），第二遍，最终代码 `3bb3d164` | 0 | **6381 条：6367 过、0 失败、0 取消、8 跳过、6 条 todo**，146 秒 |
+
+单独跑的：`account-root-resident`（1）、`account-master-startup`（2）、`account-root-slots`（9）、`account-root-entry-probe`（7）、`account-worker-control-https`（3）、`account-worker-lifecycle`（9）、`account-task-worker-child`、`agent-worker-registration-mtls`、`account-executor-assembly`、`account-runner-wiring`、`accept-018-auth-agent-path`（9，含转硬断言的那条，12.7 秒）、`accept-018-conv-endtoend`（4，含转硬断言的「停止」，4.9～9.7 秒），都是退出码 0。
+
+转硬断言时先红了一次，是我的错：在测试文件开头静态引入我的夹具，让底座模块抢在那套组合把文档服务的时钟换成可拨的之前载了进来，同文件里「过期的委托」那条断言因此失败（200 而不是 401）。改成到用的时候才载。
+
+收尾查过：没有可见窗口，没有这个工作区留下的 node 进程，28680～28739 没有残留监听。
+
+### 这一轮新增的裁定〔裁〕
+
+16. root 入口的单元 `Restart=always`：配置不对时它每 15 秒以退出码 1 退出一次、打一行 `config.error`，不会停下不拉。
+17. root 入口执行的代码必须归 root、组和别人不可写（含组是 root 的组可写也不行，和发布器核配置文件的标准一致）。`git archive` 解出来的文件缺省组可写，部署时要收紧。
+18. 指令口的请求头 `x-promptcut-scope-slot / -epoch / -instance` 和回应里的 `scope`。它防串代，不是鉴权；同一个任务用户的别的进程拿得到身份证书和这三样，冒充得了「放弃」（后果是那条任务记失败）——要堵得让「放弃」也带任务进程内存里那把钥匙的签名，没做。
+19. 开一代以后多等任务进程开始监听最多 30 秒。发布器核的东西一样没少，只是在它开始核之前多等。
+20. 两条转硬断言的验收测试各另起一套一条任务一个进程的组合（端口 28691～28712、28713～28734，在分给我的段里），等待时限从原来的 15 秒放宽到 60 秒（每条任务要起一个带 vite 的进程），只为防卡死。
+
+### 还要主会话注意的
+
+- `accept-018-conv-*` 三个文件共用写死的 28580 段，一次全量里可能互相撞；建议改成向系统要端口。不是这一块的文件，没动。
+- 应该改 3 的效果（两个用户互写同一个对话目录）和应该改 4 在真实部署目录上的表现，都要到节点上才看得到。
+
 ## 提交列表
 
 | 提交 | 内容 |
@@ -243,4 +333,7 @@ cd /root/pc-claude-probe-src && node scripts/probes/account-root-entry-linux.mjs
 | `385fd433` | 部署模板、README、填单元的小工具、节点自检脚本与它的单测 |
 | `c22411fc` | 主服务起不来时明确的 `config.error`；README 一处更正 |
 | `222b8a54` | 自检脚本里要在本机测的部分挪到 `server/` 下 |
-| 本提交 | 报告正文 |
+| `2567fdd2` | 报告正文 |
+| `e24f907c` | （主会话）合并 `main` |
+| `9a966b40`～`3bb3d164` | 审查后补做的九个提交，逐个见上表 |
+| 本提交 | 报告补审查后的部分、Linux 一节最终版 |
