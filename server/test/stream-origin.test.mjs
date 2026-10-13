@@ -4,7 +4,7 @@
  * 跑:npm test -- server/test/stream-origin.test.mjs
  *
  * 片段都**不从 15 的倍数帧开始**,有的时长也不是 15 的倍数。三种流各一条:单卡流、组流(解码器预算压到 1)、
- * 依赖下层的流(打开 `PROMPTCUT_TEST_BELOW_STREAMS`)。不用 Chrome、不用 ffmpeg:假的预渲染间 / `bakeStream` / 编码器同
+ * 依赖下层的流(产品里缺省开着;前两种的用例把 `PROMPTCUT_TEST_BELOW_STREAMS` 设成 0 关掉它,只看自己那一种)。不用 Chrome、不用 ffmpeg:假的预渲染间 / `bakeStream` / 编码器同
  * `stream-noreplay.test.mjs`,假 `bakeStream` 把每一趟要出的帧区间记下来,编码器把喂进来的每一帧记进分段的字节里。
  * 真的画面(逐帧比像素)由探针 `scripts/probes/stream-origin-probe.mjs` 核对。
  */
@@ -197,7 +197,7 @@ const view = (task) => ({ ...structuredClone(task), state: 'claimed', version: 1
 const signalNone = () => new AbortController().signal;
 async function withBelow(on, fn) {
   const saved = process.env.PROMPTCUT_TEST_BELOW_STREAMS;
-  if (on) process.env.PROMPTCUT_TEST_BELOW_STREAMS = '1'; else delete process.env.PROMPTCUT_TEST_BELOW_STREAMS;
+  process.env.PROMPTCUT_TEST_BELOW_STREAMS = on ? '1' : '0';
   try { return await fn(); } finally {
     if (saved === undefined) delete process.env.PROMPTCUT_TEST_BELOW_STREAMS; else process.env.PROMPTCUT_TEST_BELOW_STREAMS = saved;
   }
@@ -225,7 +225,9 @@ async function produceAndCheck(pipeline, executor, ctx, spec, { origin, last }) 
   for (const task of tasks) await executor.render(view(task), { signal: signalNone(), progress: () => {} });
   const mine = bakes.slice(mark).filter((b) => b.streamSignature === spec.streamKey);
   const expectRuns = Array.from({ length: lastSegment + 1 }, (_, n) => [origin + n * 15, Math.min(origin + n * 15 + 14, last)]);
-  assert.deepEqual(mine.map((b) => [b.fromFrame, b.toFrame]), expectRuns, `${spec.topClipId}:每一趟出的帧区间`);
+  // 依赖下层、要回放的流:头一趟接不上租约,从回放的起点(挂载帧)起每一拍都画一张,第一帧之前的画完就丢(不进分段,下面逐帧核)
+  const firstRun = spec.kind === 'below' && spec.replay !== false ? [Math.min(origin, spec.mountFrame), expectRuns[0][1]] : expectRuns[0];
+  assert.deepEqual(mine.map((b) => [b.fromFrame, b.toFrame]), [firstRun, ...expectRuns.slice(1)], `${spec.topClipId}:每一趟出的帧区间`);
   assert.ok(mine.every((b) => b.stride === 1));
   const manifest = await manifestOf(pipeline, spec.streamKey);
   assert.equal(manifest.originFrame, origin, '清单记着这条流的第一帧');

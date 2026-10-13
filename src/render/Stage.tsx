@@ -44,11 +44,16 @@ const DirectCard = memo(function DirectCard({ def, params, ...props }: CardProps
 export type ProxyRender = (clipId: string) => { color: string; box: { left: number; top: number; width: number; height: number } | null };
 
 /**
- * G1 的一条流分组:长度 1 = 单卡流,> 1 = 组流(按画家顺序,最后一个是组里最上面那张)。
- * `key` / `ranges` 是 `streamPlayer` 要的(就绪索引里那一层的流键和就绪分段号),`Stage` 只看 `clipIds`。
+ * G1 的一条流分组:长度 1 = 单卡流(或依赖下层的流,看 `plane`),> 1 = 组流(按画家顺序,最后一个是组里最上面那张)。
+ * `key` / `ranges` 是 `streamPlayer` 要的(就绪索引里那一层的流键和就绪分段号),`Stage` 只看 `clipIds` 和 `plane`。
  */
 export interface StreamPlaneGroup {
   clipIds: string[];
+  /**
+   * `"stage"`:只有一张卡、但按舞台坐标产的流(依赖下层的流,`docs/plan/prerender-products-contract.md` 第 5.4 节)。
+   * 画布不挂进包裹层,挂在舞台根下(和组流同一种平面),层序取这张卡那一层。
+   */
+  plane?: "stage";
   key?: string;
   ranges?: Array<[number, number]>;
   /** 这条流自己的第一帧(项目帧号);`streamPlayer` 按它把帧号换成分段号,`Stage` 不看 */
@@ -323,8 +328,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
             awaiting?.has(clip.id) ? "pc-awaiting" : "",
             isSettling ? "pc-settling" : "",
           ].filter(Boolean).join(" ");
-          // 这张卡该不该挂流平面(G1:单卡流挂在包裹层里;组流挂舞台根下的 [data-pc-group-plane])
-          const ownStream = streamPlanes?.some((g) => g.clipIds.length === 1 && g.clipIds[0] === clip.id) ?? false;
+          // 这张卡该不该挂流平面(G1:单卡流挂在包裹层里;组流和依赖下层的流挂舞台根下的 [data-pc-group-plane])
+          const ownStream = streamPlanes?.some((g) => g.clipIds.length === 1 && g.plane !== "stage" && g.clipIds[0] === clip.id) ?? false;
           /*
            * 流平面露不露:这张卡被抑制着、或正在不可见地追帧时才露。别的时候它也可能挂着 —— 暂停着把播放头下这一帧先解好、
            * 等流画出第一帧再藏活子树 —— 那时活子树还露着,流平面要藏起来(`display: none`:不占框,`solid.ts` 的实体框不算它),
@@ -346,8 +351,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            */
           const glContract = !unsupported && def?.canvas && def.canvas.kind !== "dom2d" ? def.canvas : null;
           const glBox = glContract ? frameBox(clip.frame, timeline) : null;
-          // 组流的成员:没有自己的流平面,`hitTest` / `bounds` 对它们退回包裹层框(G1「组流平面的命中与实体框」)
-          const groupMember = streamPlanes?.some((g) => g.clipIds.length > 1 && g.clipIds.includes(clip.id)) ?? false;
+          // 组流的成员、依赖下层的流的目标卡:包裹层里没有流平面,`hitTest` / `bounds` 对它们退回包裹层框(G1「组流平面的命中与实体框」)
+          const groupMember = streamPlanes?.some((g) => (g.clipIds.length > 1 || g.plane === "stage") && g.clipIds.includes(clip.id)) ?? false;
           return (
             <div
               key={`${clip.id}:${gen}`}
@@ -492,8 +497,13 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
         **只渲在组里此刻活跃的最上面那张卡(`host`)所在的那个 `Stage` 里**:live 路每个片段一个
         单片段 `Stage`,每个都渲一块的话同一条组流会叠好几层;z 序取那张卡的那一层。
         `pointer-events: none`:点击落到背后组内被抑制的卡的包裹层上(`solid.ts` 的 `hitTest`)。
+
+        **依赖下层的流**(`plane: "stage"`,只有目标卡一张)也是这种平面:流里是目标卡改动过的那一层(预乘色加不透明度),
+        包裹层的位置、不透明度、淡入淡出、轨迹、强调都已经画在里面,所以同样不能挂进包裹层。它和目标卡的包裹层在同一个
+        层叠上下文里、层序相同,于是照普通的叠加盖在下面那些活着的层(活渲的卡、别的流、视频)上面,上面的层照常画在它上面:
+        毛玻璃后面看到的是舞台上此刻真实的下层。目标卡的子树照抑制的规矩藏着,不会再滤一遍下层。
       */}
-      {streamPlanes?.filter((g) => g.clipIds.length > 1).map((g) => {
+      {streamPlanes?.filter((g) => g.clipIds.length > 1 || g.plane === "stage").map((g) => {
         const hostId = g.host ?? g.clipIds[g.clipIds.length - 1];
         const at = active.findIndex((c) => c.id === hostId);
         if (at < 0) return null;

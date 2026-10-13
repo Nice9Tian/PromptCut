@@ -208,8 +208,10 @@ export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {
  *   0  只有身份(本文件)和计划(`frame-stream.mjs` 的 `planStreams`),流里照单卡流的办法放整幅截图(带着下层);
  *   1  差分取层(契约第 5.3 节,`./bakery/capture-below.mjs`):流里是「盖在只有下层的画面上正好得到带目标卡的画面」的那一层,
  *      目标卡没有改动的地方全透明。
+ *   2  要回放的这种流,推过去而不取图的帧也画一张(`frame-stream.mjs` 的 `BELOW_DISCARD_SHOT`):之前稀疏版和断了租约重产的分段里,
+ *      下层中途挂载的 motion 式卡会落后好几帧。
  */
-export const BELOW_STREAM_VERSION = 1;
+export const BELOW_STREAM_VERSION = 2;
 
 /**
  * 依赖下层的流(`kind: 'below'`)的内容键。摘要里是(契约第 5.2 节):

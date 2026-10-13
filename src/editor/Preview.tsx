@@ -1078,7 +1078,7 @@ export function Preview() {
    * 流平面 / 抑制 / 快照的投递(C4、C5、A3c;排程在 `snapshotFeed.ts`)。
    *
    * 叫它的地方:每拍收到 `frame` 之后(播放中)、`setTime` 发完之后(暂停 / 拖动)、起播之前、舞台报 `settled` 之后,
-   * 以及快照字节 / 新的就绪层到货之后。33 ms 的节流在 `deliverSnapshots` 里,所以可以放心地多叫几次。
+   * 项目改了之后,以及快照字节 / 新的就绪层到货之后。33 ms 的节流在 `deliverSnapshots` 里,所以可以放心地多叫几次。
    */
   const dualRef = useRef(dual);
   dualRef.current = dual;
@@ -1617,6 +1617,16 @@ export function Preview() {
      */
     if (onlineSourceRef.current) void pumpRef.current();
   }, [live, stageReady]);
+  /*
+   * 项目改了(store 换了新的项目对象):流平面和抑制按新项目重算一次。依赖下层的卡的流只对产它时的那一版下层有效 ——
+   * 下层一改,那一层带的输入签名就对不上了(`snapshotFeed.ts` 的 `streamLayers`),旧流要当场撤下,不能等下一次 `setTime`:
+   * 暂停着、手按着标尺不动时改下层,之后没有别的事件会来投。播放中下一拍自己会投,这里多投一次无妨;没变的不会重发
+   * (`syncPlanes` 按内容比,快照那一半有 33 毫秒的节流)。
+   */
+  useEffect(() => {
+    if (!live || !stageReady) return;
+    void pumpRef.current();
+  }, [live, stageReady, project]);
 
   /*
    * K5 (4) 的角色互换。**A / B 只是实例名**,谁是 `front` 由这个 state 说了算 ——
