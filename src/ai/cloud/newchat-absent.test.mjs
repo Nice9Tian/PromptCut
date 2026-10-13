@@ -99,13 +99,20 @@ for (const accountMode of [true, false]) {
     s.close();
   });
 
-  test(`NEWCHAT-4 读到过的对话之后再 404(被删、被设为私有)不是「还没发过消息」:照原样重连并一直重试(${mode})`, async () => {
+  test(`NEWCHAT-4 读到过的对话之后再 404(被删、被设为私有)不是「还没发过消息」(${mode})：${accountMode ? "给「已无法读取」那句并停止读,见 private-revoked.test.mjs" : "照原样重连并一直重试"}`, async () => {
     const store = memStore();
     const { api, log } = fakeApi([{ events: live, then: "throw" }, { fail: absent() }]);
     const s = createCloudSession({ api, store, accountMode, flushMs: 0, backoff: () => 1 });
     s.open("c-1", { fresh: true });
-    await waitFor(() => log.afters.length >= 4);
-    assert.equal(s.getView().connection, "reconnecting");
+    if (accountMode) {
+      await waitFor(() => s.getView().problem !== null);
+      await pause(40);
+      assert.equal(log.afters.length, 2, "不再一直重连");
+      assert.equal(s.getView().connection, "idle");
+    } else {
+      await waitFor(() => log.afters.length >= 4);
+      assert.equal(s.getView().connection, "reconnecting");
+    }
     s.close();
   });
 

@@ -32,11 +32,11 @@
 | 修改前 / 本文旧方案 | 修改后（已确认范围 / 技术草案） |
 |---|---|
 | 渲染容量章的 2 任务/16 项目数字和“不让 editor 改成本机” | 已确认 .18 云端单活跃项目；数字暂沿用并实测，连接/任务数不能突破活跃项目约束；只禁止云端满后的静默回本机，合格本地优先合法 |
-| 202 render-requests、GET/取消/事件接口及 OOM 重排队 | 修改后（草案）：本地资格/一致性/取消/迟到隔离与云端队列组合设计；已有拟接口不是逐项批准或现有能力。故障/无进展的 A 失败手动或 B 有限重试暂停待确认，正常容量等待仍保留任务 |
+| 202 render-requests、GET/取消/事件接口及 OOM 重排队 | 修改后（草案）：本地资格/一致性/取消/迟到隔离与云端队列组合设计；已有拟接口不是逐项批准或现有能力。故障/无进展的 A 失败手动或 B 有限重试暂停待确认，正常容量等待仍保留任务。看画面一路的云端队列已实现，接口与拟的不同（`POST /look/poll`、`POST /look/cancel`，没有 GET 和事件），见「渲染容量排队与Agent优先」〔裁〕：见 AGENT-v18-queue.md |
 | .19 原仅平台闸门/.20 原仅补偿与申请加入的派包计划 | 追加 .19 有条件双项目内存实验与 .20 磁盘轮换包；独占文件与具体接口由后续协调另租，不在本次文档中自定/开工 |
 | Agent ACL 表 rename/remove 的 owner 边界和删除 UI 延期 | 已确认 .18 必要删除入口与 50 满额阻新建；删除权限/确认/共有计数/释放时机待确认，原 API owner 不能代替决定 |
 
-2026-10-09 用户定：不提前回收，装在云端的项目空闲满 5 分钟才让位，有别的项目排队也一样；旧隔离工作进程的 60 秒/45 秒规则照此改。内存 7+7+2 / 5+5+6 GB 是示例，不能默认。具体计时起止、重试、超时和缓存机制均按任务书“修改前/修改后（草案）”落清；semantics 正文未改。
+2026-10-09 用户定：不提前回收，装在云端的项目空闲满 5 分钟才让位，有别的项目排队也一样；旧隔离工作进程的 60 秒/45 秒规则照此改（已改，`isolation.mjs`，main `f18e33ef`〔裁〕：见 AGENT-v18-queue.md）。内存 7+7+2 / 5+5+6 GB 是示例，不能默认。具体计时起止、重试、超时和缓存机制均按任务书“修改前/修改后（草案）”落清；semantics 正文未改。
 
 ## 身份、恢复与唯一权威
 
@@ -203,9 +203,11 @@ account不可达时，云端新修改不能取得可信接受见证，保持未�
 
 ## 素材全链路隔离与工具欠账
 
-### 素材协议（拟实现）
+### 素材协议（成员路径已实现，运行素材未接）
 
-〔裁，卡点8第1行〕选择**托管端按项目物理store**，不在原全球hash库只补一层工具检查。接口外观保留 `/api/asset/<media|snap|px>/<hash>`、`/<hash>/chunks`、`PUT /<hash>/<n>`、`POST /<hash>/complete`；hash仍内容hash，project从已验票据取。`server/asset-service.ts`目前`storeOf(ns)`在admit之前选全局store，必须改为admit返回可信 `{projectId,accountId,loginId,runGrantId?,service,accessRevision}`后 `storeOf(ns,projectId)`；任何请求必须在stat/chunks/read/write/pull之前判project。托管目录拟 `tenants/<projectId>/assets/{media,snap,px}/`及独立 `staging`、index、tiers、jobs。LAN与未共享本地继续旧本机store，不能把整个本地素材库误隔离成账号库。
+〔裁，卡点8第1行〕选择**托管端按项目物理store**，不在原全球hash库只补一层工具检查。接口外观保留 `/api/asset/<media|snap|px>/<hash>`、`/<hash>/chunks`、`PUT /<hash>/<n>`、`POST /<hash>/complete`；hash仍内容hash，project从已验票据取。
+
+**已做（main `f18e33ef`，〔裁〕：见 AGENT-v18-assets.md）**：`server/asset-service.ts` 里 `storeOf(ns)` 在 admit 之前选全局store 的做法已改。账号模式下 `projectStores` 与 `projectAccess` 必须同时给（缺一抛错）；admit 先向 `projectAccess` 取可信的项目与租约（`lease.projectId`），再 `setAssetContext` 记在请求上，后面各入口（stat/chunks/read/write/pull）取库一律走 `assetContextOf(req)` 的项目库（`authorizedAssetStore`），租约撤销时关流。只有没有项目上下文的请求（局域网与未共享的本地项目）才用 `storeOf(ns)` 的旧本机store，不会把整个本地素材库误隔离成账号库。托管目录实际是 `<素材目录>/projects/<projectId 的 sha256>/out/{media,asset-store/snap,asset-store/px}`（`server/asset-store/project-stores.mjs` 的 `createProjectAssetStores`），每个项目独立完整库、分片、index、tiers、队列，同一hash在两个项目里各存一份；不是原拟的 `tenants/<projectId>/assets/…`。可信上下文的字段以 `server/asset-store/project-access.mjs` 为准，下面「必须绑定的范围」表照旧适用。运行素材（云端 Agent 的一条任务凭任务授权读写所在项目的素材）的生产接线没有做，见 `AGENT-v18-assets.md` 第 5.1 节。
 
 | 路径/模块实际入口 | 必须绑定的范围与拒绝条件 |
 |---|---|
@@ -265,9 +267,9 @@ account不可达时，云端新修改不能取得可信接受见证，保持未�
 
 节点收尾还有：import_media小尺寸档、Linux ffmpeg响度/真实yt-dlp、render开关气泡、发起页面刷新后安全恢复page绑定、示例句真做短片、退出软件后云Agent继续及托管渲染入库。都单列探针，不用23项表代替这些产品结果。pageId仍只绑定真实login/run，刷新只本人新page经一次恢复握手取得旧run page-binding，不让别成员看同对话就成为initiator。
 
-### 渲染容量排队与Agent优先（已定，拟接线）
+### 渲染容量排队与Agent优先（已定；看画面一路已实现，预渲染一路的507对齐未做）
 
-真实 `server/hosted-render/limits.mjs LIMIT_DEFAULTS`暂沿用maxConcurrent2/maxProjects16/memoryMax6G/memoryHigh5G、低内存2GiB和30秒恢复；节点部署由root复核实际资源，不自动升级。`broker.mjs pickProjects`已有waiting项目，`look.mjs`目前背压或maxWaiting满回503 busy、等待不足回busy，必须改。超容量不拒项目/请求“已满”，不让editor因云端满而静默改成本机渲染（已确认的合格本地即时查询帧优先另见首部调度补充）：预渲染任务继续留doc持久任务队列；等待接入项目依权威directory恢复；即时look/audio-js等Agent请求进入拟 `render-requests.mjs`持久队列（requestId/runGrant/project/priority/createdSeq/status），回202 `{requestId,state:'queued',queuePosition}`并可受权`GET /requests/<id>`/取消/事件取得结果。look-client支持此202握手和等待，不能把它作失败触发本机降级。正常容量压力是queued/waiting，真正项目删/关/失权是cancelled/forbidden，坏输入仍400；原“临时资源故障是queued/retrying”仅修改前方案，节点故障/持续无进展应选A失败手动还是B有限重试暂停仍待确认，不能由旧拟接口默选；不以无限长HTTP连接充当持久队列。Agent等待本轮请求时不能先报告“已看完”。
+真实 `server/hosted-render/limits.mjs LIMIT_DEFAULTS`暂沿用maxConcurrent2/maxProjects16/memoryMax6G/memoryHigh5G、低内存2GiB和30秒恢复；节点部署由root复核实际资源，不自动升级。`broker.mjs pickProjects`已有waiting项目。`look.mjs`原来背压或maxWaiting满回503 busy、等待不足回busy，现已改成排队（main `f18e33ef`）：`busy` 只在登记着的请求到了64个硬上限时出现。超容量不拒项目/请求“已满”，不让editor因云端满而静默改成本机渲染（已确认的合格本地即时查询帧优先另见首部调度补充）：预渲染任务继续留doc持久任务队列；等待接入项目依权威directory恢复；即时look与卡片声音（`render_card_audio`）等Agent请求进入 `server/hosted-render/render-requests.mjs` 的持久队列（落盘在 `PROMPTCUT_RENDER_LOOK_QUEUE`，管理进程重启后接回）。接口与拟的不同〔裁，见 AGENT-v18-queue.md〕：不是 `GET /requests/<id>` 加事件，而是三条都用 `POST` 加服务签名（签名按请求体算，GET 没有请求体）——`POST /look` 带调用方现生成的 `requestId` 立刻回202 `{ok:true,requestId,state:'queued'|'running',queuePosition,attempts,blockedReason?}`，`POST /look/poll` 一趟一趟问（每趟最多挂25秒），`POST /look/cancel` 撤回；不带 `requestId` 的旧调用法照旧同步等。请求绑的是登记它的Agent服务实例（签名里的 `d`），不是某一轮的授权；请求体可带可选的 `run`（任务授权号、任务号、对话号），渲染服务只记不核，没有 `priority` 字段（看画面优先靠调度：排着的看画面请求先替常驻工作进程留名额，隔离工作进程下一轮先给要看画面的项目）。`server/agent-service/look-client.mjs` 已支持此202握手和等待（渲染服务重启期间按退避接着问，连着五分钟连不上才放弃），不能把它作失败触发本机降级。账号模式下，Agent 一侧每次要画面前先问文档服务这条任务还有没有权限、一轮被停掉时撤回排着的请求；渲染服务一侧核任务授权还没有做。正常容量压力是queued/waiting，真正项目删/关/失权是cancelled/forbidden，坏输入仍400；原“临时资源故障是queued/retrying”仅修改前方案，节点故障/持续无进展应选A失败手动还是B有限重试暂停仍待确认，不能由旧拟接口默选；不以无限长HTTP连接充当持久队列。Agent等待本轮请求时不能先报告“已看完”。
 
 在现有单节点资源看护内优先保证Agent：Agent进程独立slice/OS用户；render工作进程已有低cpuWeight/ioWeight/nice/OOM先终止渲染设置保留，资源压力时暂停新增预渲染认领，把可用渲染名额先交Agent look/audio请求，再做普通发布任务；已执行原子任务可到安全点，〔修改前机制建议，节点故障A/B待确认〕OOM重启未完成任务恢复排队，不丢失队列产物归属。不是本期新增跨服务器调度：项目分配多个服务器只留 `docs/plan/TODO.md`待办；web工具proxy和断网audio worker是节点工具隔离，不是已取消的**浏览器用户卡出口护栏**。正向验2任务+第3排队、16项目+第17等待、重启恢复、内存压力解除继续；反向验无“已满”提示/无云端满后的静默客户端本机降级、不能借队列跨project或失权继续出图。
 
@@ -312,7 +314,7 @@ account不可达时，云端新修改不能取得可信接受见证，保持未�
 | `018-site-last` | Sol；后端已装且cloud/client验过才合VH main；5880～5889 | VH `site/{account,login,register,reset}.html`、`site/assets/{account.js,site.css}`、`site/index.html`；专用site probe；不改account后端 | remember状态、两列表、改密成功后选择/退出中/完成/失败恢复；后端503不可空列表；sameorigin/CSRF/CSP/不同cookie profile实探。**LAST**：先branch验，不提前push main自动上线 |
 | `018-ops-contract-tests` | Luna做确定的清单/测试骨架与参数，Sol审运行机制；可早并行；5890～5899 | PC `scripts/remote/docservice.mjs`、`server/{hosted-render,agent-service}/deploy.mjs`、`server/hosted/deploy/`、`scripts/acceptance/`新增覆盖项、`scripts/probes/account-*`；VH拟`account/test/backup-restore.test.mjs`（本包独占，foundation不写此测试）、`deploy/`、`docs/accounts.md`、`user_readme.md`、`README.md`；PC语义契约由root现行Luna独占同步、Sol审后串行接入 | backup/restore scripts和版本元组，internal身份/端口/健康检查/自动backup；测试骨架不等于业务完成；first部署dry-run实际缺文件检查、network条目必须真执行。删除旧数据和cipher操作只根 |
 | `018-card-guard-reversal` | **独立Sol小包**；无需账号难题前置，可立即；5900～5909 | PC `src/online/isolation/{execGate,harden,isolationCheck,stageGuard}.ts`、`src/online/isolation/isolation.test.mjs`、`src/online/cardRuntime/{gate,stageRuntime}.ts`、`src/online/{stagePolicy.mjs,stagePolicy.test.mjs}`；`server/hosted/stage-policy-nginx.mjs`、`scripts/gen-stage-policy-nginx.mjs`、nginx editor-policy/stage-headers两snippet与stages site模板（ops排除上述两snippet与stages模板）；`server/hosted-render/vite-gate.mjs`、`server/test/{hosted-render-usercards,hosted-render-isolation}.test.mjs`、`scripts/probes/hosted-render-isolation-probe.mjs`、`src/cards/native/particles.tsx`、`src/cards/externalResources.test.mjs` | 删除浏览器与云render worker Connection-Allowlist/fallback、脚本出口拦截/仅本机出口proxy强制args和外链限制；保留分源/握手/editor防护/project asset、页面API闸/管理口认证/OS worker；fixture外链image/font/style/script正常，四浏览器及Linux云worker均执行，NASA背景同桌面；精准particles参数分支逐帧和相关fixture由本包独占。root事后审UI截图，不新打徽标 |
-| `018-render-capacity` | Sol；可与账号/asset并行，最终接doc run接口；5910～5919 | PC `server/hosted-render/{main,broker,limits,isolation,look}.mjs`；拟`server/hosted-render/{render-requests,agent-priority}.mjs`及专用tests/probe；不改visual provider/look-client | `enqueueRenderRequest/getRequest/cancelRequestsForGrant`及202接口先交；2+1并发/16+1项目/内存背压及storage507排队、恢复重试无满或本机降级，Agent优先，重启/ACK丢失/去重/失权取消；此包独占look接audio provider路由，ops部署参数只由其审接口 |
+| `018-render-capacity` | Sol；可与账号/asset并行，最终接doc run接口；5910～5919 | PC `server/hosted-render/{main,broker,limits,isolation,look}.mjs`；拟`server/hosted-render/{render-requests,agent-priority}.mjs`及专用tests/probe；不改visual provider/look-client | `enqueueRenderRequest/getRequest/cancelRequestsForGrant`及202接口先交；2+1并发/16+1项目/内存背压及storage507排队、恢复重试无满或本机降级，Agent优先，重启/ACK丢失/去重/失权取消；此包独占look接audio provider路由，ops部署参数只由其审接口。（已做一部分，〔裁〕：见 AGENT-v18-queue.md；`render-requests.mjs` 已建，接口是 `POST /look` 带 `requestId` 加 `/look/poll`、`/look/cancel`，没有上面三个函数名；`agent-priority.mjs` 没建，Agent 优先靠 `look.mjs` 与 `isolation.mjs` 的调度；`look-client.mjs` 的202握手由这一包改的，不是「不改」） |
 | `018-project-selections` | Sol；doc principal接口，可先fixture并行；5920～5929 | PC拟`server/docservice/modules/selection.mjs`、`src/editor/sync/selectionPresence.ts`；`server/tools/project.mjs`（只get_selection描述/schema兼容）、`src/mcp/handlers/project.ts`（只getSelection多选详情），`src/editor/sync/presence.ts`与专用tests/probe | `mountSelection/querySelections`交cloud-glue挂载，tools-glue接get_selection；AgentUI send写selectionSnapshot由UI owner接。不改中央或pageRequests；全员/多设备/空选区/用户名/当前用户/离线非实时/跨project/失权立即清正反验 |
 
 所有现存路径扩展名已按rg核定，拟新增路径按表派出；根不需要再补模糊的TS/TSX清单。目前已定位聊天视觉入口 `src/editor/right/ToolVisual.tsx`，不得写不存在的 `src/ai/ToolVisual.tsx`。visual后端实际入口已核到 `server/vision/routes.ts`、`server/ai-visual.mjs`；measure-js复用 `server/audio-measure-js.mjs`、`server/audio-sandbox.mjs` 与 `server/vite-plugin-audio.ts`，不能虚构不存在的visual插件。单测文件前缀各包独占，旧公共test如需调整交中央或当前owner，不能两包同时改。接口提供者不改消费者核心，消费者拒绝先写临时自由放行。现行三契约/部署清单、product/agent、mechanism/platforms与rulings由root已派Luna独占精准同步，实施包只提供接口差异回交，不同时改这些文档。guard-reversal实际工作区已由root从461206a3建立，表的统一“根建立”不意味着重复建立它。

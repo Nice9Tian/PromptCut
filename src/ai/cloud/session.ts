@@ -61,6 +61,16 @@ const FATAL = new Set(["unauthorized", "no-identity", "forbidden", "disabled"]);
  */
 const isAbsent = (err: unknown) => err instanceof CloudError && err.status === 404 && err.code === "no-conversation";
 
+/** 账号读取被撤销(设为私有、被踢、退出登录、Agent 被关、对话被删)时给用户看的话(已有的句子,不新增) */
+const REVOKED_TEXT = "当前账号已无法读取这个对话，请重新选择有权限的对话。";
+/** 账号模式下文档服务明确拒绝读取的 403 错误码:被踢、不在成员名单里 → 同一句「已无法读取」;Agent 被关用它自己已有的句子;别的原样 */
+const deniedText = (err: unknown): string => {
+  const code = err instanceof CloudError ? err.code : "";
+  if (code === "not-listed" || code === "banned") return REVOKED_TEXT;
+  if (code === "agent-disabled") return cloudErrorText("disabled");
+  return err instanceof Error ? err.message : cloudErrorText("network");
+};
+
 const isDelta = (ev: CloudEvent) => (ev.type === "text" || ev.type === "thinking") && typeof ev.delta === "string" && ev.delta !== "";
 
 export function createCloudSession(deps: CloudSessionDeps) {
@@ -81,6 +91,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
   let fresh = false;
   /** 这次 open 之后,页面有没有理由认为这个对话在服务端存在:读到过它的事件,或这一页发消息被收下了 */
   let known = false;
+  /** 这次 open 之后真读到过它的事件(不含「发消息被收下」):之后文档服务说「没有这个对话」就不是新对话,而是被设为私有或删除 */
+  let seenLive = false;
   let queue: CloudQueueSnapshot | null = null;
   let senders: Record<string, CloudSender> = {};
   let queued: CloudEvent[] = [];
@@ -163,7 +175,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
   function handle(ev: CloudEvent) {
     if (ev.type === 'access.revoked') {
       queue = null; senders = {}; queued = []; store.set([]);
-      problem = '当前账号已无法读取这个对话，请重新选择有权限的对话。'; publish(); return;
+      problem = REVOKED_TEXT; publish(); return;
     }
     if (ev.type === 'queue.state' && conversationId) {
       const snapshot = queueSnapshot(ev, conversationId);
@@ -222,14 +234,14 @@ export function createCloudSession(deps: CloudSessionDeps) {
           for await (const ev of api.events(id, lastSeq, ctl.signal, pageId)) {
             if (myGen !== gen || streamReadEpoch !== readEpoch) return;
             attempt = 0;
-            known = true;
+            known = true; seenLive = true;
             if (connection !== "live") { problem = null; setConnection("live"); }
             if (ev.type === "end" && ev.state === "none") { sawNone = true; continue; }
             // 反向通道的请求不是对话记录的一部分(没有 seq):不折进消息,交给页面执行
             if (ev.type === "page.request") { void answerPageRequest(ev, id, myGen, streamReadEpoch); continue; }
             if (deps.accountMode && ev.type === "access.revoked") {
               clearAccountReadState();
-              problem = "当前账号已无法读取这个对话，请重新选择有权限的对话。";
+              problem = REVOKED_TEXT;
               setConnection("idle");
               return;
             }
@@ -242,7 +254,15 @@ export function createCloudSession(deps: CloudSessionDeps) {
             ((status === 401 || status === 403) || (err instanceof CloudError && FATAL.has(err.code))));
           if (accountAuthFailure) clearAccountReadState();
           if (accountAuthFailure || (err instanceof CloudError && FATAL.has(err.code))) {
-            problem = err instanceof Error ? err.message : cloudErrorText("network");
+            problem = deps.accountMode ? deniedText(err) : err instanceof Error ? err.message : cloudErrorText("network");
+            setConnection("idle");
+            return;
+          }
+          // 账号模式下读到过的对话,现在文档服务说「没有这个对话」(或项目已不在):被设为私有、被删除、项目被删(围栏掐断旧流后重连才会遇到)。
+          // 这是明确的没权限,不是故障:清掉正文、给「已无法读取」那句、停止读,不一直重连。
+          if (deps.accountMode && seenLive && (isAbsent(err) || (err instanceof CloudError && err.status === 404 && err.code === "no-project"))) {
+            clearAccountReadState();
+            problem = REVOKED_TEXT;
             setConnection("idle");
             return;
           }
@@ -301,7 +321,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       conversationId = id;
       lastSeq = 0;
       fresh = opts?.fresh === true;
-      known = false;
+      known = false; seenLive = false;
       queued = [];
       pendingAttachments.clear();
       queue = null; senders = {};

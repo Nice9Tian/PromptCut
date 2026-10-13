@@ -20,6 +20,7 @@ import { startHostedCombo, hostedPaths } from '../../hosted/combo.mjs';
 import { stageHostedAssetFiles } from '../../hosted/files.mjs';
 import { createAssetReadyProbe } from '../../hosted/asset-doc-client.mjs';
 import { assetWiringPki } from './asset-wiring-pki.mjs';
+import { pipeHttpProxyResponse } from './http-proxy-stream.mjs';
 import WebSocket from 'ws';
 import { addServiceKey, generateServiceKeyPair } from '../../auth/service-identity.mjs';
 import { createConversationClient } from '../../agent-service/conversation-client.mjs';
@@ -230,9 +231,13 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
       if (target === assetPort || target === agentPort) delete headers.cookie;
       const upstream = http.request({ hostname: '127.0.0.1', port: target, method: req.method, path: upstreamPath,
         headers }, response => {
-        res.writeHead(response.statusCode, response.headers); response.pipe(res);
+        // 和生产的反向代理一样：上游中途被掐（被读取通道的围栏关掉、服务停了）时，把下游连接也关掉，不留一条永远没有下文的流
+        pipeHttpProxyResponse(response, res, upstream);
       });
-      upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+      upstream.on('error', () => {
+        if (!res.headersSent && !res.destroyed) { res.writeHead(502); res.end(); }
+        else if (!res.destroyed && !res.writableEnded) res.destroy();
+      });
       req.pipe(upstream);
     });
     edgeServer.on('upgrade', (req, client, head) => {
