@@ -249,7 +249,7 @@ a409675a 对话:50 个上限去掉自动删最旧、加删除(权限/先停再�
 
 - `npx tsc -b --force`：退出码 0。
 - `npm test`（设了两个环境变量和 `PROMPTCUT_NO_PORT_FILE=1`）：**6621 条通过，0 失败，退出码 0**（12 条跳过、2 条待办是仓库原有的；输出里标 ⚠ 的 `accept-018-rest-ssr-seam` SEAM-2 是验收运行器登记的「现状不成立」项，不算失败）。
-- 这一块的测试：`conversation-delete.test.mjs` 26 条、`conversation-delete-running.test.mjs` 3 条、`conversation-delete-http.test.mjs` 1 条、`conversation-delete-agent-side.test.mjs` 4 条、`chat-delete.test.mjs` 8 条、`cloud-agent-runs.test.mjs` 里 `CA-CHAT-03/04`。
+- 这一块的测试：`conversation-delete.test.mjs` 24 条、`conversation-delete-running.test.mjs` 3 条、`conversation-delete-http.test.mjs` 1 条、`conversation-delete-agent-side.test.mjs` 4 条、`chat-delete.test.mjs` 8 条、`cloud-agent-runs.test.mjs` 里 `CA-CHAT-03/04`。
 - 浏览器探针：`{"completed":true,"checks":55,"failed":0,"pageErrors":0,"closed":true}`，截图 18 个文件（17 张图加结果）在 `docs/reports/assets/v18-chats/`，13～17 号是第二轮新增（两页实时对话数、移出成员时清私有对话的确认框与结果），我都看过。
 - 探针这次起的进程全部收掉：无头 Chrome 随探针关闭，素材服务子进程随夹具关闭，28180～28219 无监听；机器上另有别的子 Agent 跑的 node 进程（别的测试），没有碰。
 
