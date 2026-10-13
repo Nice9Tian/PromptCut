@@ -48,8 +48,8 @@
 | 命令 | 退出码 | 结果 |
 |---|---|---|
 | `npx tsc -b --force` | 0 | 零错误 |
-| `npm test`（先设 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`） | 见 2.4 | 见 2.4 |
-| `node scripts/probes/cloud-tools-p2-stt-probe.mjs`（探针：假脚本 21 条 + 真集成 5 条，不接受跳过） | 见 2.4 | 见 2.4 |
+| `npm test`（先设 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`） | 0 | 6064 条，通过 6060，失败 0，取消 0，跳过 4（3 条本来就跳过；第 4 条是真 pip 安装那条，没设 `P2_PIP=1` 时跳过）；末行「npm test 最终结果：零失败」 |
+| `node scripts/probes/cloud-tools-p2-stt-probe.mjs`（探针：假脚本 21 条 + 真集成 5 条，不接受跳过，设 `P2_PIP=1`） | 0 | 26 条通过，失败 0，跳过 0 |
 | `python -m unittest tests.test_stt_offline tests.test_status tests.test_audio tests.test_jsonl`（在 `python/` 下） | 0 | 25 条通过（含新增 9 条） |
 | `npm test -- server/test/windows-hide-silent-spawn.test.mjs`（守门：起子进程都带 `windowsHide`） | 0 | 4 条通过 |
 
@@ -84,9 +84,11 @@
 
 夹具里**真的**：SQLite 运行授权（`run-authority-fixture`）、ToolJobs（SQLite）、运行资源登记器、`ProjectAssets`、项目分库素材库、工作区（路径/配额）。夹具里**假的**：素材 HTTP 通道（没有真 mTLS，用和 `project-assets-client.test.mjs` 同样的受控 wire adapter 直接调真素材库）、文档项目（内存里的 `media` 表）、假脚本版测试里的 Python。
 
-### 2.4 全量基线与探针最终结果
+### 2.4 说明
 
-（交活前补；见本节下一次提交。）
+- 第一次全量里有 2 条红，都是我自己的：真集成测试文件曾 import 了 `scripts/` 下的模块（被「server/** 不 import scripts/」守门拦下），以及我在全量运行中途改那个文件时留下的一处语法错误（被「.mjs 脚本全部能解析」拦下）。已把依赖准备模块挪到 `server/test/cloud-tools-p2-real-lib.mjs`、修了语法，重跑后上表为准。
+- 机器上同时有别的子 Agent 在跑，已知会偶发失败的那些测试（任务书列的）这次全量里没有出现失败，不需要单独重跑。
+- 真取消那条用了 41 秒（等 56 秒音频解到第一段才有进度可取消），耗时只记录。
 
 ## 3. G 包接线时要填什么
 
