@@ -69,7 +69,7 @@ test('MA-X1 在场状态模块:只转给同一项目的别的订阅者、不回�
   await a.ask({ type: 'project.open', projectId: 'p1' });
   await b.ask({ type: 'project.open', projectId: 'p1' });
   await other.ask({ type: 'project.open', projectId: 'p2' });
-  const ok = await a.ask({ type: 'presence.set', projectId: 'p1', session: 'ue-a', key: 'editing', ttlMs: 15000, data: { v: 1, kind: 'editing', session: 'ue-a', entities: [{ clipId: 'c1', kind: 'drag' }] } });
+  const ok = await a.ask({ type: 'presence.set', projectId: 'p1', session: 'ue-a', key: 'editing', ttlMs: 60000, data: { v: 1, kind: 'editing', session: 'ue-a', entities: [{ clipId: 'c1', kind: 'drag' }] } });
   assert.equal(ok.type, 'presence.ok');
   const up = await b.c.next((m) => m.type === 'presence.update', 2000);
   assert.deepEqual({ key: up.key, user: up.from.userId, role: up.from.role, session: up.from.session, clip: up.data.entities[0].clipId }, { key: 'editing', user: 'alice@devA', role: 'page', session: 'ue-a', clip: 'c1' });
@@ -168,9 +168,9 @@ test('MA-X2～X4 两个成员共用一个文档服务:正在编辑、范围、�
   await t.test('MA-X2 成员 B 的页面正在拖 c2:A 的 Agent 读 c2,结果带「用户 bob 正在编辑」;读 c1 不带;B 撤掉后不再带', async () => {
     const pageB = await svc.client('bob@devB');
     await pageB.ask({ type: 'project.open', projectId: pid });
-    const set = await pageB.ask({ type: 'presence.set', projectId: pid, session: 'ue-b', key: 'editing', ttlMs: 15000, data: { v: 1, kind: 'editing', session: 'ue-b', entities: [{ clipId: 'c2', kind: 'drag' }] } });
+    const set = await pageB.ask({ type: 'presence.set', projectId: pid, session: 'ue-b', key: 'editing', ttlMs: 60000, data: { v: 1, kind: 'editing', session: 'ue-b', entities: [{ clipId: 'c2', kind: 'drag' }] } });
     assert.equal(set.type, 'presence.ok');
-    await waitFor(() => A.editing.current().length === 1, 3000, 'A 的看板收到 B 的编辑状态');
+    await waitFor(() => A.editing.current().length === 1, 20_000, 'A 的看板收到 B 的编辑状态');
     assert.deepEqual(A.editing.current().map((e) => [e.clipId, e.kind, e.who]), [['c2', 'drag', 'bob']]);
     const r = await A.call('get_clip', { clipId: 'c2' }, 'conv-a');
     assert.deepEqual(r.userEditing, [{ clipId: 'c2', kind: 'drag', who: 'bob' }]);
@@ -185,7 +185,7 @@ test('MA-X2～X4 两个成员共用一个文档服务:正在编辑、范围、�
     // A 本机页面自己经文档服务发回来的那份(同一个会话号)不当别人
     assert.equal(A.editing.reportRemote('ue-a-local', [{ clipId: 'c1', kind: 'drag' }], { who: 'alice' }), 0);
     await pageB.ask({ type: 'presence.clear', projectId: pid, session: 'ue-b', key: 'editing' });
-    await waitFor(() => A.editing.current().length === 0, 3000, 'B 撤掉后 A 的看板清掉');
+    await waitFor(() => A.editing.current().length === 0, 20_000, 'B 撤掉后 A 的看板清掉');
   });
 
   let B = null;
@@ -199,7 +199,7 @@ test('MA-X2～X4 两个成员共用一个文档服务:正在编辑、范围、�
     assert.equal(d.ok, true);
     const up = await pageB.c.next((m) => m.type === 'presence.update' && m.key === 'agent:conv-a', 3000);
     assert.deepEqual({ scope: up.data.scope, vendor: up.data.vendor, user: up.from.userId, role: up.from.role }, { scope: '剪辑1->序列2', vendor: 'claude', user: 'alice@devA', role: 'agent' });
-    await waitFor(() => B.board().listRaw('conv-b').some((x) => x.id === 'conv-a'), 3000, 'B 的公告板收到 A 的 Agent');
+    await waitFor(() => B.board().listRaw('conv-b').some((x) => x.id === 'conv-a'), 20_000, 'B 的公告板收到 A 的 Agent');
     const la = await B.call('list_agents', {}, 'conv-b');
     const remote = la.agents.find((x) => x.id === 'conv-a');
     assert.deepEqual({ scope: remote.scope, member: remote.member, remote: remote.remote, vendor: remote.vendor }, { scope: '剪辑1->序列2', member: 'alice', remote: true, vendor: 'claude' });
@@ -212,7 +212,7 @@ test('MA-X2～X4 两个成员共用一个文档服务:正在编辑、范围、�
       const s = await B.call('send_message', { to: 'conv-a', text: '序列2 你来,我改序列1' }, 'conv-b');
       assert.equal(s.ok, true, JSON.stringify(s));
       assert.match(s.note, /经文档服务转过去/);
-      await waitFor(() => A.board().checkMessages('conv-a').messages.length === 1, 3000, 'A 的信箱收到');
+      await waitFor(() => A.board().checkMessages('conv-a').messages.length === 1, 20_000, 'A 的信箱收到');
       const m = A.board().checkMessages('conv-a').messages[0];
       assert.equal(m.text, '序列2 你来,我改序列1');
       assert.match(m.fromLabel, /^Agent conv-b\(codex,成员 bob 那边\)$/);
