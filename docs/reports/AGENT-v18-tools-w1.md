@@ -251,7 +251,7 @@ const web = createHostedBrowserTools({
 
 ## 全量基线
 
-命令：`npm test`（同一条命令里设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`）。一共跑了四遍，如实都记在这里；**算数的是第四遍**（提交 `00b4dd18`，之后只改了本报告与截图）。
+命令：`npm test`（同一条命令里设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`）。一共跑了四遍，如实都记在这里；**算数的是第四遍**（提交 `00b4dd18`；之后只改了本报告、截图，和 `server/web/hosted/session.mjs` 里一句注释的用词，改完重跑了三份专用测试与两条守门测试，34 条全过）。
 
 | 遍 | 代码 | 结果 | 说明 |
 |---|---|---|---|
