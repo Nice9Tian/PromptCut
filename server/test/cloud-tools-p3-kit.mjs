@@ -261,11 +261,14 @@ export async function buildTrackEnv(t, { access = makeAccess(), runtime = findTe
     ? (runtime ? { executable: runtime.python, packageRoot: PYTHON_PACKAGE_ROOT, ffmpeg: runtime.ffmpeg, models: path.join(root, 'models'), pylibs: path.join(root, 'pylibs') } : null)
     : pythonOverride;
 
+  const opened = [];
   function openTracks(extra = {}) {
-    return createTrackTools({
+    const provider = createTrackTools({
       contextAccess: { authorize: gateAuthorize }, resources, jobs, assets, workspace, databasePath: resultsPath,
       python: pythonConfig, readProject, install, limits, ...extra,
     });
+    opened.push(provider);
+    return provider;
   }
   const tracks = openTracks();
 
@@ -288,13 +291,13 @@ export async function buildTrackEnv(t, { access = makeAccess(), runtime = findTe
     jobsPath, resultsPath, pythonConfig, runtime,
     /** 幂等:提供者、素材、资源表、作业库依次关 */
     close() {
-      closedAll ??= (async () => { await tracks.close('test-close'); await assets.close(); await resources.close(); await jobs.close(); })();
+      closedAll ??= (async () => { for (const provider of opened) await provider.close('test-close'); await assets.close(); await resources.close(); await jobs.close(); })();
       return closedAll;
     },
   };
   t.after(async () => {
-    await env.close().catch(() => {});
-    if (!keep) await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await env.close().catch((e) => { });
+    if (!keep) await fsp.rm(root, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
   });
   return env;
 }
