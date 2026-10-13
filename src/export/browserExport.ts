@@ -14,7 +14,7 @@ import { assertProjectCardAudio } from "../audio/cardAudio";
 import type { Project } from "../kernel/project";
 import { audioPlanOf } from "../kernel/audioPlan.mjs";
 import { renderMix, encodeWavFloat32, type MixPlan } from "../audio/renderMix";
-import { MISSING_MATERIAL_WAV_URL, confirmedMissingAudio, missingMaterialAudibleDuration } from "../audio/missingMaterial";
+import { MISSING_MATERIAL_WAV_URL, confirmedMissing, confirmedMissingAudio, missingMaterialAudibleDuration } from "../audio/missingMaterial";
 import { awaitingUploaderMessage, type MissingOriginal } from "../render/mediaTier";
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, audioConfigOf, probeExportCapability, videoConfigOf, type EncoderEnv } from "./capability";
 import { Mp4Muxer, type MuxSink } from "./mp4Mux";
@@ -245,7 +245,8 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
   } : null;
 
   const exportProject: Project = deps.mediaUrl
-    ? { ...project, media: project.media.map((m) => ({ ...m, url: m.url ? deps.mediaUrl!(m.url) : m.url })) }
+    // 认定过「确认缺失」的素材地址原样留着:占位核对的是记录与素材的地址逐字相同,换成远程取回地址占位就失效、转去解一个不存在的文件
+    ? { ...project, media: project.media.map((m) => (confirmedMissing(m) ? m : { ...m, url: m.url ? deps.mediaUrl!(m.url) : m.url })) }
     : project;
   const compositor = await ExportCompositor.open({ project: exportProject, exportUrl: deps.exportUrl, originals, signal: deps.signal, freshTicket: deps.freshTicket });
 
