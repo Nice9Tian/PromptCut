@@ -282,6 +282,26 @@ function compareRuns(a, b, { frames = null, rect = null } = {}) {
 const sameBytes = (a, b) => a.every((buf, i) => !!buf && !!b[i] && buf.equals(b[i]));
 const firstDiff = (a, b) => a.findIndex((buf, i) => !buf || !b[i] || !buf.equals(b[i]));
 const diffFrames = (a, b) => a.map((buf, i) => (!buf || !b[i] || !buf.equals(b[i]) ? i : -1)).filter((i) => i >= 0);
+/** 两帧不同的像素落在哪(外接框、个数、最大差) */
+function diffBox(bufA, bufB) {
+  const a = decode(bufA), b = decode(bufB);
+  let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1, count = 0, max = 0;
+  for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
+    const i = (y * a.w + x) * 4;
+    const d = Math.max(Math.abs(a.data[i] - b.data[i]), Math.abs(a.data[i + 1] - b.data[i + 1]), Math.abs(a.data[i + 2] - b.data[i + 2]));
+    if (!d) continue;
+    count++; if (d > max) max = d;
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return { count, max, box: count ? [x0, y0, x1, y1] : null };
+}
+/** 两遍导出不同的帧:帧号、每帧不同的像素落在哪;头、中、尾各存一对图(`<名字>-run1-f<帧>.png` / `-run2-`) */
+function describeTwice(name, a, b) {
+  const frames = diffFrames(a, b);
+  const pick = [...new Set([frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]].filter((i) => i !== undefined))];
+  for (const i of pick) { saveFrame(SHOTS, `${name}-run1-f${i}.png`, a[i]); saveFrame(SHOTS, `${name}-run2-f${i}.png`, b[i]); }
+  return { differFrames: frames, detail: frames.filter((i) => a[i] && b[i]).map((i) => ({ i, ...diffBox(a[i], b[i]) })) };
+}
 const saveFrame = (dir, name, buf) => { if (buf) fs.writeFileSync(path.join(dir, name), buf); };
 const rangeOf = (w) => Array.from({ length: w.last - w.first + 1 }, (_, i) => w.first + i);
 
@@ -438,6 +458,14 @@ try {
   host = await startRenderHost({ port: PORTS.host, dir: hostDir, config, maxConcurrent: 2, band: BAND });
   out.timings.hostUpMs = Date.now() - t3;
   say('host.up', { ms: Date.now() - t3 });
+  // 对照(主机刚起来、正忙着做平时那份清单计划的任务时):全部由导出页活渲导两遍(`originals: false`,不取流、不请节点;
+  // 同步卡这时没有画面)。这条路的代码与改之前相同,两遍若不同,不同就不是这次引入的
+  const liveRun = async () => {
+    const r = await page.evaluate(async (n) => { try { return await window.__pcIo.exportVideoBrowser({ originals: false, capture: Array.from({ length: n }, (_, i) => i) }); } catch (e) { return { error: String(e?.message ?? e) }; } }, TOTAL);
+    return { frames: Array.from({ length: TOTAL }, (_, i) => { const u = r?.captures?.[i]; return u ? Buffer.from(u.slice(u.indexOf(',') + 1), 'base64') : null; }), error: r?.error ?? null };
+  };
+  const live1 = await liveRun();
+  const live2 = await liveRun();
   // 一边导出一边看导出页(同源 `?export=1` 的 iframe):它不执行同步卡的代码,这张卡只有包裹层
   const seen = { samples: 0, marks: new Set(), live: false, wrappers: new Set() };
   let exporting = true;
@@ -469,9 +497,10 @@ try {
   check(l2?.streamPictures === 0, '完整导出:一张流都没取', l2);
   check(!!full3.result && l3?.perClip?.[CLIPS.S.id]?.frames === COUNT.S, '第二遍完整导出同样', { error: full3.error, layers: l3 });
   // 两遍不同的帧:列出来,并逐帧量差多少(哪一块在变)
-  const fullDiffs = diffFrames(full2.frames, full3.frames);
-  out.diffs.fullTwice = { differFrames: fullDiffs, detail: fullDiffs.slice(0, 6).map((i) => ({ i, ...diffOf(flatten(decode(full2.frames[i])), flatten(decode(full3.frames[i]))) })) };
-  for (const i of fullDiffs.slice(0, 2)) { saveFrame(SHOTS, `step3-full-run1-f${i}.png`, full2.frames[i]); saveFrame(SHOTS, `step3-full-run2-f${i}.png`, full3.frames[i]); }
+  out.diffs.fullTwice = describeTwice('step3-full', full2.frames, full3.frames);
+  // 对照:同一份项目全部由导出页活渲的那条路(不取任何现成的画面;这条路的代码和改之前一样)和上面两遍的活渲部分比不比得上
+  out.diffs.liveTwice = describeTwice('step3-live', live1.frames, live2.frames);
+  out.diffs.liveVsFull = describeTwice('step3-live-vs-full', live1.frames, full2.frames).detail.length;
   check(full2.frames.every(Boolean) && full3.frames.every(Boolean) && sameBytes(full2.frames, full3.frames), '完整导出两遍逐帧逐字节相同', out.diffs.fullTwice);
   // 内容库与素材服务:导出位图的清单、PNG 块;层表里没有多出导出用的行
   const planEvents = await P(page, () => null).catch(() => null);
@@ -545,7 +574,7 @@ try {
   check(f2?.perClip?.[CLIPS.A.id]?.stream === COUNT.A && f2?.perClip?.[CLIPS.B.id]?.stream === COUNT.B, 'A、B 的每一帧都取的是流', f2?.perClip);
   check(f2?.perClip?.[CLIPS.S.id]?.frames === COUNT.S && !(f2?.perClip?.[CLIPS.S.id]?.stream > 0), 'S 没有流:照完整导出的办法,贴渲染节点的位图', f2?.perClip);
   check(f2?.wrapperOnly >= 3 && f2?.streamClips >= 2 && f2?.nodeClips === 1, 'A、B、S 三张都不由导出页活渲(只挂包裹层;页面把别的卡也判重、产满了流的话它也算在内)', f2);
-  out.diffs.fastTwice = { differFrames: diffFrames(fast2.frames, fast3.frames) };
+  out.diffs.fastTwice = describeTwice('step4-fast', fast2.frames, fast3.frames);
   check(!!fast3.result && fast2.frames.every(Boolean) && sameBytes(fast2.frames, fast3.frames), '快速导出两遍逐帧逐字节相同', { ...out.diffs.fastTwice, error: fast3.error });
   out.diffs.fastVsFull = compareRuns(fast2.frames, full2.frames);
   out.diffs.fastVsFull_bFrames = compareRuns(fast2.frames, full2.frames, { frames: rangeOf(WIN.B) });
