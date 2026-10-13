@@ -2124,7 +2124,8 @@ export class FramePipeline {
    *      `ownStreamsOff`(`prerender-executor.mjs` 的 `plan`),这一部分同样不列;
    *   2. 切分给别的指纹出过键、本机自己不产的单卡流(`issuedStreamSpecs`):在线页面的清单计划只给浏览器出一份流任务
    *      (`listStreamSpecs`),本机没有生产者、关着流开关、或这张卡本机没判重时第 1 部分里没有它,不列的话别的在线页面找不到
-   *      浏览器产出来的那条流。
+   *      浏览器产出来的那条流。清单计划切出的**依赖下层的流**(只按切分方自己的指纹出、由切分方自己产)同样从这里列:
+   *      清单里的卡本机多半没判重,第 1 部分里没有它。
    *
    * 两部分都空时回空对象,层表里不带 `streams`(与以前逐字相同);只有第 1 部分时结果也与以前逐字相同。
    * 写层表的两处(本机推送队列、独立渲染主机)都经这里。
@@ -2149,6 +2150,8 @@ export class FramePipeline {
    * 执行器在每次切分完成后按最终发布成功的流任务记,键 `stream:<流的内容键>`):这一版某张卡的单卡流的内容键在记录里,
    * 就是「有人被派过这条流」。单卡流的内容键只由这张卡的内容、采样窗口、帧率、画幅、代码版本决定,与同一版里还有哪些卡无关,
    * 所以这里不按解码器预算合并(预算给无穷大),逐张卡算出单卡流去对记录;组流不会派给浏览器,对不上,不列。
+   * 依赖下层的流同样对记录(任务书「戊二」的「下层四」):它的内容键只由目标卡和它下面的层决定,清单计划切出过它的任务就列;
+   * 它的候选是记录里的指纹(切分方自己的)。
    *
    * 只看在预渲染集合里的卡(清单计划的片段由 `addBackfill` 并进集合,层表的 `layers` 里有它的快照层),
    * 已经是 `own` 某条流成员的卡不再另列。每项标 `ownCandidate: false`:本机不产它,层表的候选只列记录里的指纹。
@@ -2165,7 +2168,7 @@ export class FramePipeline {
         codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
     } catch { singles = []; }
     return singles
-      .filter(spec => spec.kind === 'card' && this.splitCandidatesFor(streamCandidateKey(spec.contentKey))?.length)
+      .filter(spec => (spec.kind === 'card' || spec.kind === 'below') && this.splitCandidatesFor(streamCandidateKey(spec.contentKey))?.length)
       .map(spec => ({ ...spec, ownCandidate: false }));
   }
   /**
@@ -3266,7 +3269,7 @@ export class FramePipeline {
   /**
    * 清单计划里的片段各自的流(与 `queueStreamSpecs` 同一组参数,所以单卡流的内容键相同);算不出回 `[]`。
    * 切分时用(`planForQueue` 的 `browserStreamsFor`),流任务回来时执行器也用它把任务对回这一版:清单计划里切分方自己的那一份只出单卡流
-   * (`local-node.mjs` 的 `listPlanOverrides`),单卡流的内容键与清单里还有哪些片段无关,所以只给一个片段也算得出同一条流。
+   * 和依赖下层的流(`local-node.mjs` 的 `listPlanOverrides`),这两种流的内容键与清单里还有哪些片段无关,所以只给一个片段也算得出同一条流。
    */
   listStreamSpecs(entry, clips) {
     try {
