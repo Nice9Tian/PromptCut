@@ -94,3 +94,46 @@ test('EFR-04 差分取层判过失败的记录不跨任务留着', async () => {
   fake.runSegment = async () => { state.below = { failed: 'upper-changed' }; throw Object.assign(new Error('差分取层没过'), { code: 'below-capture-failed', retryable: false }); };
   await assert.rejects(StreamProducer.prototype.produceExportRange.call(fake, { project: {} }, spec, { from: 0, to: 0 }, { onFrame() {} }), e => e.code === 'below-capture-failed' && e.retryable === false);
 });
+
+/* ---------------------------------------------------------------- 对着真的队列 */
+
+const { createRenderQueue } = await import('../render-queue/index.mjs');
+const { createQueueHarness } = await import('./fake-render-queue-env.mjs');
+const { QUEUE_DEFAULTS } = await import('../render-queue/constants.mjs');
+
+test('EFR-05 真队列:失败的导出位图任务原样再发布只回 failed、不重开;带新标识的是新任务', () => {
+  const h = createQueueHarness(createRenderQueue);
+  h.publisher('page', 'page-1');
+  h.node('node', 'n1', { profile: 'host', hello: { envFingerprint: FP, codeVersions: ['cv1'], capabilities: {} } });
+  const page = { ...planTask, source: { projectId: 'p1', projectRev: 7 } };
+  void page;
+  const [task] = splitPlan({ ...base, planTask: { ...planTask, id: null }, exportStreams: [exportStreamOf(exportSpecOf(specOf(), FP))] });
+  const first = h.publish('page', [task]).one('page', 'task.published').results[0];
+  assert.equal(first.created, true);
+  const claimed = h.claim('node', task.id, first.version).one('node', 'task.claimed');
+  const failedStep = h.fail('node', task.id, claimed.token, { error: 'below-capture-failed', retryable: false });
+  assert.equal(failedStep.one('page', 'task.failed').error, 'below-capture-failed');
+  // 页面(早就是订阅者)原样再发布:回包说 failed,不重开,也不再补发通知 —— 页面只能靠回包知道
+  const again = h.publish('page', [task]);
+  assert.deepEqual(again.one('page', 'task.published').results.map(r => [r.state, r.created]), [['failed', false]]);
+  assert.equal(again.of('page', 'task.failed').length, 0);
+  assert.equal(h.task(task.id).state, 'failed');
+  // 带新标识:键换了,是新任务,节点可以重新认领
+  const [retry] = splitPlan({ ...base, planTask: { ...planTask, id: null }, exportStreams: [exportStreamOf(exportSpecOf(specOf(), FP, 'r1abc'))] });
+  assert.notEqual(retry.id, task.id);
+  const fresh = h.publish('page', [retry]).one('page', 'task.published').results[0];
+  assert.deepEqual([fresh.state, fresh.created], ['open', true]);
+});
+
+test('EFR-06 真队列:页面断线超过宽限,没人认领的任务被删;重连后原样再发布就重建', () => {
+  const h = createQueueHarness(createRenderQueue);
+  h.publisher('page', 'page-1');
+  const [task] = splitPlan({ ...base, planTask: { ...planTask, id: null }, exportStreams: [exportStreamOf(exportSpecOf(specOf(), FP))] });
+  h.publish('page', [task]);
+  h.disconnect('page');
+  h.advance(QUEUE_DEFAULTS.RECONNECT_GRACE_MS + 1);
+  assert.equal(h.task(task.id), null, '订阅被清、还 open 的任务删掉了');
+  h.publisher('page2', 'page-1');
+  const back = h.publish('page2', [task]).one('page2', 'task.published').results[0];
+  assert.deepEqual([back.state, back.created], ['open', true]);
+});

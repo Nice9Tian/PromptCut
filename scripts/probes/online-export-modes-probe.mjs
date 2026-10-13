@@ -45,7 +45,7 @@ import { PNG } from 'pngjs';
 import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
 import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
-import { startRenderHost, viteBin, portFree } from './m8/procs.mjs';
+import { startRenderHost, viteBin, portFree, killTree } from './m8/procs.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -89,7 +89,7 @@ const WIN = Object.fromEntries(Object.entries(CLIPS).map(([k, c]) => [k, windowO
 const COUNT = Object.fromEntries(Object.entries(WIN).map(([k, w]) => [k, w.last - w.first + 1]));
 
 const SYNCED_KEY = 'src/cards/user/xe-synced.tsx';
-const SYNCED_SOURCE = `/** 导出探针:同步来的用户卡(画面只由时间和参数决定) */
+const SYNCED_SOURCE = `/** 导出探针:同步来的用户卡。方块和数字按时间算(每帧都在动);底下那一条是从挂载起算的 CSS 动画 */
 import type { CardDef, CardProps } from "../../kernel/types";
 (globalThis as any).__pcXeMark = ((globalThis as any).__pcXeMark ?? 0) + 1;
 interface Params { tint: string }
@@ -97,11 +97,13 @@ function XeSynced({ params, t }: CardProps<Params>) {
   const sec = t ?? 0;
   return <div data-xe-synced="1" className="absolute inset-0" style={{ background: "rgba(20,30,60,0.55)", borderRadius: 18 }}>
     <div style={{ position: "absolute", left: 24 + Math.round(sec * 140), top: 28, width: 150, height: 80, background: params.tint, borderRadius: 14 }} />
-    <div style={{ position: "absolute", left: 28, top: 136, color: "#ffffff", fontSize: 44, fontWeight: 700, fontFamily: "Arial, sans-serif" }}>SYNC {Math.round(sec * 30)}</div>
+    <div style={{ position: "absolute", left: 28, top: 130, color: "#ffffff", fontSize: 40, fontWeight: 700, fontFamily: "Arial, sans-serif" }}>SYNC {Math.round(sec * 30)}</div>
+    <style>{"@keyframes xeSlide{from{transform:translateX(0)}to{transform:translateX(420px)}}"}</style>
+    <div style={{ position: "absolute", left: 20, top: 204, width: 60, height: 20, background: "#33ddff", animation: "xeSlide 2s linear both" }} />
   </div>;
 }
 export const xeSynced: CardDef<Params> = {
-  id: "xe-synced", name: "导出探针同步卡", description: "在线导出探针用", frameMode: "direct",
+  id: "xe-synced", name: "导出探针同步卡", description: "在线导出探针用", frameMode: "stateful",
   defaults: { tint: "#ff8800" },
   controls: [{ key: "tint", label: "颜色", type: "color" }],
   Component: XeSynced,
@@ -280,6 +282,24 @@ function compareRuns(a, b, { frames = null, rect = null } = {}) {
     meanMae: ok.length ? +(ok.reduce((s, p) => s + p.mae, 0) / ok.length).toFixed(4) : null, minPsnr: ok.length ? Math.min(...ok.map((p) => p.psnr)) : null, worst };
 }
 const sameBytes = (a, b) => a.every((buf, i) => !!buf && !!b[i] && buf.equals(b[i]));
+const flatCache = new WeakMap();
+const flatOf = (buf) => { let f = flatCache.get(buf); if (!f) { f = flatten(decode(buf)); flatCache.set(buf, f); } return f; };
+/**
+ * 差不差一帧:`a` 的第 f 帧在 `rect` 这一块里,和 `b` 的第 f−1、f、f+1 帧各比一次(平均绝对误差),看最像哪一帧。
+ * 回 `{ best: { '-1': n, '0': n, '1': n }, mae: { '-1', '0', '1' } }`(`best` 是各帧最像的那个偏移的票数;`mae` 是各偏移的平均)。
+ */
+function offsetVote(a, b, frames, rect) {
+  const best = { '-1': 0, '0': 0, '1': 0 }, sum = { '-1': 0, '0': 0, '1': 0 };
+  let n = 0;
+  for (const f of frames) {
+    if (!a[f] || !b[f - 1] || !b[f] || !b[f + 1]) continue;
+    const scores = [-1, 0, 1].map((d) => [d, diffOf(flatOf(a[f]), flatOf(b[f + d]), rect).mae]);
+    for (const [d, mae] of scores) sum[d] += mae;
+    best[scores.sort((x, y) => x[1] - y[1])[0][0]]++;
+    n++;
+  }
+  return { frames: n, best, mae: Object.fromEntries(Object.entries(sum).map(([d, v]) => [d, n ? +(v / n).toFixed(3) : null])) };
+}
 const firstDiff = (a, b) => a.findIndex((buf, i) => !buf || !b[i] || !buf.equals(b[i]));
 const diffFrames = (a, b) => a.map((buf, i) => (!buf || !b[i] || !buf.equals(b[i]) ? i : -1)).filter((i) => i >= 0);
 /** 两帧不同的像素落在哪(外接框、个数、最大差) */
@@ -548,6 +568,13 @@ try {
   if (check(deskCode === 0 && deskFiles.length === TOTAL, '桌面导出出了同样多的帧', { code: deskCode, frames: deskFiles.length })) {
     const desk = deskFiles.map((f) => fs.readFileSync(path.join(deskFramesDir, f)));
     out.diffs.fullVsDesktop = compareRuns(full2.frames, desk);
+    // 节点渲的位图贴进成片,和桌面导出差不差一帧:同步卡按时间算的那一块(方块、数字)、从挂载起算的那一条(CSS 动画)各比一次
+    const sMid = rangeOf(WIN.S).slice(2, -2);
+    out.offsets = out.offsets ?? {};
+    out.offsets.nodePng_byTime = offsetVote(full2.frames, desk, sMid, { x: 640, y: 460, w: 520, h: 160 });
+    out.offsets.nodePng_byMount = offsetVote(full2.frames, desk, sMid, { x: 640, y: 640, w: 520, h: 34 });
+    check(out.offsets.nodePng_byTime.best['0'] === out.offsets.nodePng_byTime.frames, '节点渲的位图(按时间算的画面)和桌面导出是同一帧,不早不晚', out.offsets.nodePng_byTime);
+    check(out.offsets.nodePng_byMount.best['0'] === out.offsets.nodePng_byMount.frames, '节点渲的位图(从挂载起算的动画)和桌面导出是同一帧,不早不晚', out.offsets.nodePng_byMount);
     // 分开看:只有本页活渲的那几帧(S 不在场)、S 在场的帧
     const sFrames = rangeOf(WIN.S);
     out.diffs.fullVsDesktop_withSynced = compareRuns(full2.frames, desk, { frames: sFrames });
@@ -557,7 +584,36 @@ try {
     saveFrame(SHOTS, `step3-desktop-f${w}.png`, desk[w]); saveFrame(SHOTS, `step3-full-worst-f${w}.png`, full2.frames[w]);
     saveFrame(SHOTS, `step3-desktop-f${WIN.S.first + 3}.png`, desk[WIN.S.first + 3]);
   }
-  say('three.done', { ms: Date.now() - t3, layers: l2, diff: out.diffs.fullVsDesktop });
+  say('three.done', { ms: Date.now() - t3, layers: l2, diff: out.diffs.fullVsDesktop, offsets: out.offsets });
+
+  /* ---------------- 三乙:节点切完计划就退出 → 若干秒后报失败;节点回来后再点一次能重新做并导出来 */
+  tag = '[三乙] ';
+  const t3b = Date.now();
+  // 改一下同步卡的参数:内容换了,这一次的位图要现渲(不然直接用上一次的)
+  await store(page, `const p = S.getState().project; const c = p.tracks.flatMap((t) => t.clips).find((x) => x.id === args[0]); S.actions.setClipParams(c.id, { tint: '#22cc66' }); return true;`, CLIPS.S.id);
+  await delay(4000);
+  // 等主机把平时那份清单计划(改了参数会重发)切完:计划数连着三秒不变,才开始数「只为导出的计划」
+  let plansBefore = -1, steady = 0;
+  await until('主机手里的计划数稳下来', async () => { const n = (await host.queue())?.nodes?.[0]?.plans ?? 0; steady = n === plansBefore ? steady + 1 : 0; plansBefore = n; return steady >= 3; }, 60_000, 1000);
+  const STALL_MS = 8000;
+  const stalledRun = page.evaluate(async (o) => { const t0 = Date.now(); try { const r = await window.__pcIo.exportVideoBrowser(o); return { ...r, base64: r?.base64 ? 'x' : '', ms: Date.now() - t0 }; } catch (e) { return { error: String(e?.message ?? e), ms: Date.now() - t0 }; } },
+    { originals: true, mode: 'full', waitLimit: 60, stallMs: STALL_MS });
+  // 主机切完这份计划(计划数加一 = 索引已经回给页面)就把它整棵进程树结束掉,不走收尾
+  const split = await until('主机切完了只为导出的计划', async () => ((await host.queue())?.nodes?.[0]?.plans ?? 0) > plansBefore, 120_000, 150);
+  const killedAt = Date.now();
+  killTree(host.child);
+  const stalled = await stalledRun;
+  out.steps.nodeGone = { splitSeen: !!split, error: stalled?.error ?? null, result: !!stalled?.result, ms: stalled?.ms ?? null, afterKillMs: Date.now() - killedAt, waits: [...new Set((stalled?.waits ?? []).map((w) => w.replace(/\d+/g, 'N')))].slice(-2) };
+  check(!stalled?.result && /没有进展/.test(String(stalled?.error ?? '')) && !stalled?.base64, '节点切完计划就退出:页面在若干秒后报失败并说明,不一直等、不出成片', out.steps.nodeGone);
+  check((Date.now() - killedAt) < 90_000, '从节点退出到报失败不到一分半(时限注成了 8 秒;中间要等队列判这台节点掉线)', out.steps.nodeGone);
+  try { await host.stop(); } catch { /* 已经结束 */ }
+  await until('主机的端口放出来了', async () => (await Promise.all([0, 1, 2].map((d) => portFree(PORTS.host + d)))).every(Boolean), 30_000, 500);
+  host = await startRenderHost({ port: PORTS.host, dir: hostDir, config, maxConcurrent: 2, band: BAND });
+  const retried = await runExport(page, 'full');
+  out.steps.retryAfterFail = { layers: retried.result?.layers ?? null, error: retried.error, ms: retried.ms };
+  check(!!retried.result && retried.result.frames === TOTAL && retried.result.layers?.perClip?.[CLIPS.S.id]?.frames === COUNT.S, '失败之后再点一次导出:重新做了、导出来了(同步卡的帧都是节点新渲的位图)', out.steps.retryAfterFail);
+  saveFrame(SHOTS, `step3b-retry-f${WIN.S.first + 9}.png`, retried.frames[WIN.S.first + 9]);
+  say('three-b.done', { ms: Date.now() - t3b, nodeGone: out.steps.nodeGone, retry: out.steps.retryAfterFail });
   if (STOP_AFTER === 'three') throw new StopHere();
 
   /* ---------------- 四:B 也满密度,快速导出两遍 */
@@ -590,8 +646,14 @@ try {
   const sameSources = JSON.stringify(f2?.perClip ?? null) === JSON.stringify(f3?.perClip ?? null);
   check(sameSources, '快速导出两遍取的来源相同(每张卡取流、取位图的帧数一样;不同就是两遍之间流变了,下一条不作数)', { first: f2?.perClip, second: f3?.perClip });
   check(!!fast3.result && fast2.frames.every(Boolean) && sameBytes(fast2.frames, fast3.frames), '快速导出两遍逐帧逐字节相同', { differFrames: out.diffs.fastTwice.differFrames.length, first: out.diffs.fastTwice.detail.slice(0, 2), error: fast3.error });
-  out.diffs.fastVsFull = compareRuns(fast2.frames, full2.frames);
-  out.diffs.fastVsFull_bFrames = compareRuns(fast2.frames, full2.frames, { frames: rangeOf(WIN.B) });
+  // 快速导出对的是「三乙」之后那一遍完整导出(同步卡的参数在那一步改过)
+  const fullRef = retried.result ? retried.frames : full2.frames;
+  out.diffs.fastVsFull = compareRuns(fast2.frames, fullRef);
+  // 取流的帧贴进成片差不差一帧:A(按时间算,每帧平移)看它左边那一条;药丸卡(入场动画从挂载起算)页面给它产了流的话看它那一条
+  out.offsets = out.offsets ?? {};
+  out.offsets.stream_byTime = offsetVote(fast2.frames, fullRef, rangeOf(WIN.A).slice(2, -2), { x: 470, y: 410, w: 165, h: 260 });
+  if (f2?.perClip?.[CLIPS.L.id]?.stream > 0) out.offsets.stream_byMount = offsetVote(fast2.frames, fullRef, Array.from({ length: 22 }, (_, i) => i + 2), { x: 230, y: 288, w: 820, h: 120 });
+  out.diffs.fastVsFull_bFrames = compareRuns(fast2.frames, fullRef, { frames: rangeOf(WIN.B) });
   check(out.diffs.fastVsFull.minPsnr >= 30, '快速导出对完整导出:差在压缩视频的范围内(PSNR ≥ 30;数字见输出)', out.diffs.fastVsFull);
   out.timings.fastVsFullMs = { fast: fast2.ms, full: full3.ms };   // 耗时只记录,不当通过条件
   for (const i of [WIN.B.first + 5, WIN.A.first + 10]) saveFrame(SHOTS, `step4-fast-f${i}.png`, fast2.frames[i]);
