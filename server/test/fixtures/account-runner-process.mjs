@@ -41,6 +41,7 @@ import { createRenderRequests } from '../../hosted-render/render-requests.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BOOT = '11111111-1111-1111-1111-111111111111';
+const ASSET_IDENTITY = 'asset-runner-fixture';
 /** 端口都在分给这一块的 28220～28259 里 */
 export const RUNNER_PORTS = Object.freeze({ combo: [28220, 28221, 28222, 28223, 28224, 28225, 28226], agent: 28227,
   masterEvents: 28230, look: 28231, renderWorker: 28232, identityBase: 28240, controlBase: 28250 });
@@ -81,7 +82,7 @@ export function toneWav({ hz = 440, seconds = 0.25, rate = 8000 } = {}) {
   return Buffer.concat([head, data]);
 }
 
-export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, runAssets = null } = {}) {
+export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100 } = {}) {
   const log = [], say = (event, fields) => log.push({ at: Date.now(), event, ...fields });
   const docKey = pair(), masterKey = generateServiceKeyPair(), m = scopeModel(slotId);
   const generations = new Map(), stops = [];
@@ -102,9 +103,24 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
         Object.assign(m.expected, { docAuthorityId: authorityId, docPublicKey: docKey.publicKey,
           clientFingerprint256: certificateFingerprint(pki.rootctl.fingerprint256),
           serverFingerprint256: certificateFingerprint(pki.workerid.fingerprint256) });
-        const extraRunAssets = runAssets ? await runAssets.configure({ ...ctx, workerPin, agentKid: agentKey.kid }) : {};
+        // ---------- 运行素材 ----------
+        // 文档服务要知道「现在活着的素材服务是哪一个进程」。生产上这来自 root 写的登记（只在 Linux 上）；这里换成：
+        // 连过来的确实是钉住的那张素材证书，实例号读素材服务自己起来时落盘的那一份。它还没起来时一律答不上。
+        const assetPin = certificateFingerprint(pki.asset.fingerprint256);
+        const currentAsset = ({ socket }) => {
+          if (!socket || socket.destroyed || socket.authorized !== true ||
+              certificateFingerprint(socket.getPeerCertificate()?.fingerprint256) !== assetPin) return null;
+          let live; try { live = JSON.parse(fs.readFileSync(path.join(ctx.assetDir, 'asset-instance.json'), 'utf8')); } catch { throw new Error('asset-instance-not-started'); }
+          if (live?.state !== 'running' || live.serviceIdentity !== ASSET_IDENTITY || typeof live.instanceId !== 'string') throw new Error('asset-instance-not-started');
+          return { assetInstanceId: live.instanceId, serviceIdentity: ASSET_IDENTITY };
+        };
         return {
+          runAssets: { currentAsset, resolveObserver: async input => currentAsset(input), ticketTtlMs: 120_000, maxBodyBytes: 1024 * 1024 },
+          assetChild: { args: [path.join(here, 'account-runner-asset-entry.mjs')], cwd: path.resolve(here, '..', '..', '..'),
+            env: { PROMPTCUT_ASSET_SERVICE_IDENTITY: ASSET_IDENTITY, PROMPTCUT_ASSET_AGENT_FINGERPRINT256: workerPin, PROMPTCUT_ASSET_AGENT_SERVICE_KID: agentKey.kid } },
           agentTls: pki.master, agentRegistrationPurpose: 'control-only',
+          // 带素材表的空项目（导入素材要往素材表里登记）
+          initialProject: { tracks: [], media: [] },
           comboLog: (event, fields) => { if (!/^(http|ws\.frame)/.test(event)) say(`doc.${event}`, { code: fields?.code ?? fields?.reason ?? null, detail: fields?.detail ?? fields?.type ?? null, controlId: fields?.controlId ?? null }); },
           accountAgent: { runScopes: { signingKey: docKey.privateKey,
             slots: [{ expected: m.expected, workerServiceKid: agentKey.kid, workerFingerprint256: workerPin }],
@@ -112,7 +128,6 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
             // 生产上这一项不存在：文档服务按配置里的目录和锚点摘要去读 root 写的文件（只在 Linux 上）。
             sourceFactory: () => ({ read: ({ checkpoint }) => inspectAgentScopeSource({ read: m.io.read, expected: m.expected,
               configuredAnchorDigest: digestOf(m.files.get('anchor.json')), checkpoint }) }) } },
-          ...extraRunAssets,
         };
       },
     },
@@ -192,7 +207,9 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       journalFile: file(`runner-journal-${epoch}.sqlite`), dataDir, stateDir: file(`runner-state-${epoch}`),
       controlPort: RUNNER_PORTS.controlBase + epoch,
       look: { url: `http://127.0.0.1:${RUNNER_PORTS.look}`, keyDir: lookKeyDir },
-      ...(runAssets ? { runAssets: runAssets.workerSettings() } : {}) };
+      // 任务进程连素材服务的内部口，用的是它连文档服务的同一张任务证书
+      runAssets: { origin: `https://127.0.0.1:${ports.assetInternal}/`, fingerprint256: pki.asset.fingerprint256,
+        maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024 } };
     fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile }), { mode: 0o600 });
     const gateway = createAccountWorkerGateway({ configurationModule: path.join(here, 'account-runner-child-config.mjs'), cwd: path.resolve(here, '..', '..', '..'),
       env: { ...process.env, PROMPTCUT_RUNNER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 30_000 });
@@ -323,7 +340,6 @@ ${conversationId}`).digest('hex').slice(0, 32) });
       await Promise.all([...humanSockets].map(ws => { const done = new Promise(resolve => ws.once('close', resolve)); ws.terminate(); return done; }));
       look.close();
       await attempt(() => closeServer(lookServer, lookSockets)); await attempt(() => closeServer(renderWorker, renderSockets));
-      await attempt(() => runAssets?.close?.());
       const closed = await fixture.close().catch(error => { errors.push(error); return null; });
       return { errors, closed, alive: [...generations.values()].filter(g => !g.gateway.describe().childClosed).length };
     } };

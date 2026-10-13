@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { digestOf } from '../account/ledger.mjs';
-import { startRunnerProcessFixture, until, PNG_B64 } from './fixtures/account-runner-process.mjs';
+import { startRunnerProcessFixture, until, toneWav, PNG_B64 } from './fixtures/account-runner-process.mjs';
 
 // 真实的运行器放进任务进程：一条任务从领取、执行、结束到结清。
 // 哪些是真的、哪些是受控的，写在夹具 fixtures/account-runner-process.mjs 的开头。
@@ -34,15 +35,20 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     const finished = id => f.grantOf(id)?.state === 'finished';
     const diagnose = () => JSON.stringify({ scheduler: f.scheduler.describe(), head: f.headRecord()?.head ?? null,
       log: f.log.filter(row => row.event !== 'slot.forced.pending').slice(-40).map(row => ({ ...row, at: undefined })),
-      worker1: f.workerLog(1).slice(-15), worker2: f.workerLog(2).slice(-10),
+      worker1: f.workerLog(1).slice(-15), worker2: f.workerLog(2).slice(-10), asset: f.assetOutput().slice(-1500),
       events: f.events(conversationId).map(row => [row.event.type, row.event.name ?? null, row.event.ok ?? null, row.event.code ?? null]) });
     const waitFinished = async (id, what) => { try { await until(() => finished(id), { what, timeoutMs: 90_000 }); } catch (error) { error.message += ` :: ${diagnose()}`; throw error; } };
 
-    // ---------- 第一条：读项目、改项目名、看一次画面，然后说完 ----------
+    // 用户随消息带的一个附件：一段真的 WAV，放在这个对话的工作目录里（各代任务进程共用的数据目录）
+    const wav = toneWav(), wavHash = createHash('sha256').update(wav).digest('hex');
+    f.workspaceOf(conversationId).write('attachments/tone.wav', wav);
+
+    // ---------- 第一条：读项目、改项目名、看一次画面、把附件导入项目素材库（写运行素材），然后说完 ----------
     const first = await send('runner_message_1', [
       { tool: 'get_project', input: {} },
       { tool: 'set_project_meta', input: { name: 'Runner process edit' } },
       { tool: 'see_frames', input: { source: 'timeline', t: 0 } },
+      { tool: 'import_media', input: { url: 'work:attachments/tone.wav', name: 'tone.wav' } },
       { say: '第一条做完' }]);
     const second = await send('runner_message_2', [{ tool: 'get_project', input: {} }, { say: '第二条做完' }]);
     await f.scheduler.start();
@@ -55,10 +61,18 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     // 真实的工具在这个进程里跑了：三个工具都成功，项目真的被改了（文档服务的版本往前走了，名字换了）
     const rows1 = f.events(conversationId).filter(row => row.runGrantId === g1.runGrantId);
     assert.deepEqual(rows1.filter(row => row.event.type === 'tool_result').map(row => [row.event.name, row.event.ok]),
-      [['get_project', true], ['set_project_meta', true], ['see_frames', true]], diagnose());
+      [['get_project', true], ['set_project_meta', true], ['see_frames', true], ['import_media', true]],
+      `${JSON.stringify(rows1.filter(row => row.event.type === 'tool_result').map(row => row.event.summary ?? null))} :: ${diagnose()}`);
     assert.equal(rows1.filter(row => row.event.type === 'text').map(row => row.event.delta).join(''), '第一条做完');
     const state = await actor.project();
     assert.equal(state.type, 'project.state'); assert.ok(state.rev > actor.opened.rev); assert.equal(state.project.name, 'Runner process edit');
+    // 写运行素材：字节真的进了素材服务里这个项目的库（凭成员自己的票据另读一遍，逐字节相同），并登记进了项目
+    const media = state.project.media.find(row => row.name === 'tone.wav');
+    assert.ok(media, '导入的素材登记进了项目'); assert.equal(media.hash, wavHash); assert.equal(media.size, wav.length); assert.equal(media.kind, 'audio');
+    const stored = await actor.asset(wavHash);
+    assert.equal(stored.status, 200); assert.ok(stored.bytes.equals(wav), '素材服务里存的就是那段字节');
+    assert.ok(Object.values(f.ledger().runAssetIntentsV1 ?? {}).some(row => row.purpose === 'import' && row.grantBinding.runGrantId === g1.runGrantId && row.resource.hash === wavHash),
+      '文档服务给这条任务签过这次导入的素材访问');
     // 看画面：请求进了渲染服务的队列（落盘的那一种），带着这条任务的授权号；出图的工作进程收到的是这个项目这一版的内容
     const queued = f.log.filter(row => row.event === 'render.look.queued');
     assert.equal(queued.length, 1); assert.equal(queued[0].mode, 'poll'); assert.equal(queued[0].persisted, true);
@@ -95,6 +109,20 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     const all = f.events(conversationId);
     assert.ok(all.findIndex(row => row.runGrantId === g2.runGrantId) > all.indexOf(all.findLast(row => row.runGrantId === g1.runGrantId)), '第二条的事件排在第一条终态之后');
 
+    // ---------- 读运行素材：另一条任务（又一代进程）把刚才导入的素材读回来量响度 ----------
+    const reader = await send('runner_message_read', [{ tool: 'measure_audio', input: { mediaId: media.id } }, { say: '量完了' }]);
+    await waitFinished(reader, '读素材的那一条结清');
+    const gr = f.grantOf(reader), rowsR = f.events(conversationId).filter(row => row.runGrantId === gr.runGrantId);
+    assert.equal(gr.terminalOutcome.status, 'done');
+    assert.deepEqual(rowsR.filter(row => row.event.type === 'tool_result').map(row => [row.event.name, row.event.ok]), [['measure_audio', true]],
+      `measure_audio: ${JSON.stringify(rowsR.filter(row => row.event.type === 'tool_result').map(row => row.event.summary ?? null))} :: ${diagnose()}`);
+    const readIntent = Object.values(f.ledger().runAssetIntentsV1 ?? {}).find(row => row.purpose === 'openRead' && row.grantBinding.runGrantId === gr.runGrantId);
+    assert.ok(readIntent, '文档服务给这条任务签过这次读取'); assert.equal(readIntent.resource.hash, wavHash);
+    // 素材的租约都关了：任务进程每次请求用完就断开，素材服务看到连接关了向文档服务报关闭
+    await until(() => Object.values(f.ledger().runAssetLeasesV1 ?? {}).every(row => row.state === 'closed'), { what: '运行素材的租约都关闭', timeoutMs: 20_000 });
+    const leases = Object.values(f.ledger().runAssetLeasesV1 ?? {});
+    assert.ok(leases.length >= 4, `导入（对账、传片、收尾）与读取各有租约：${leases.length}`);
+
     // ---------- 第三条：做到一半从外面强制停 ----------
     const third = await send('runner_message_3', [
       { tool: 'set_project_meta', input: { name: 'Before forced stop' } },
@@ -104,7 +132,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     const fourth = await send('runner_message_4', [{ say: '第四条做完' }]);
     await until(() => f.events(conversationId).some(row => row.runGrantId === f.grantOf(third)?.runGrantId && row.event.type === 'tool_result'),
       { what: '第三条做完第一个工具', timeoutMs: 90_000 }).catch(error => { error.message += ` :: ${diagnose()}`; throw error; });
-    const g3 = f.grantOf(third), pid3 = f.generations.get(3).pid;
+    const g3 = f.grantOf(third), pid3 = f.generations.get(4).pid;
     assert.equal(g3.state, 'active');
     // 用户按「停止」：经主服务的公开接口到文档服务。权限在文档服务提交围栏的那一刻就没了；
     // 接口要等 root 真的把进程关掉才回成功，没办完时回「还在办」，用同一个请求号再问。
@@ -114,7 +142,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
       return stopReply.status === 200;
     }, { what: '停止接口回成功', timeoutMs: 60_000, everyMs: 300 }).catch(error => { error.message += ` last=${stopReply?.status}/${safeCode(stopReply?.body)} :: ${diagnose()}`; throw error; });
     await waitFinished(third, '强制停止结清');
-    const done3 = f.grantOf(third), chain3 = f.chain(3), stop3 = f.stops.find(row => row.epoch === 3);
+    const done3 = f.grantOf(third), chain3 = f.chain(4), stop3 = f.stops.find(row => row.epoch === 4);
     assert.equal(done3.terminalOutcome.status, 'interrupted'); assert.equal(done3.terminalOutcome.reason, 'stop');
     assert.equal(done3.finishReceiptId, undefined, '没做完的任务没有正常结束的回执');
     assert.equal(chain3.terminal.protocol, 'promptcut.agent-run-scope.forced-terminal.v1');
@@ -122,7 +150,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     assert.equal(chain3.intent, null, '强制关不需要、也不补任务进程的意向');
     assert.equal(chain3.closure.protocol, 'promptcut.agent-run-scope.forced-closure.v1');
     assert.equal(stop3.how, 'killed'); assert.equal(stop3.pid, pid3);
-    assert.equal(f.generations.get(3).gateway.describe().childClosed, true);
+    assert.equal(f.generations.get(4).gateway.describe().childClosed, true);
     const control3 = f.ledger().runControlsV2[chain3.terminal.fence.controlId];
     assert.equal(control3.state, 'complete'); assert.equal(control3.receipt.closures[g3.runGrantId], digestOf(chain3.closure));
     const rows3 = f.events(conversationId).filter(row => row.runGrantId === g3.runGrantId);
@@ -138,5 +166,5 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     assert.equal(g4.terminalOutcome.status, 'done'); assert.ok(g4.admittedAt >= stop3.at);
     assert.equal(f.conversation(conversationId).currentRunId, null);
     assert.deepEqual(f.scheduler.describe().map(row => row.phase), ['idle']);
-    t.diagnostic(`epoch1 pid ${stop1.pid} graceful@${stop1.at}; second admitted ${g2.admittedAt}; epoch3 pid ${pid3} ${stop3.how} (exit ${stop3.exitCode}/${stop3.signal}); look served ${lookStatus.served}`);
+    t.diagnostic(`epoch1 pid ${stop1.pid} graceful@${stop1.at}; second admitted ${g2.admittedAt}; epoch4 pid ${pid3} ${stop3.how} (exit ${stop3.exitCode}/${stop3.signal}); look served ${lookStatus.served}`);
   });

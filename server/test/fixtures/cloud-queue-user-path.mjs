@@ -332,7 +332,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
     assert.notEqual(accounts[0], accounts[1]);
     const project = await doc('POST', '/hosted/shared/account/create', {
       name: 'Shared dual account project', requestId: 'dual-create', allowLinkJoin: true,
-      initialProject: { tracks: [] } }, editors[0]);
+      initialProject: extra.initialProject ?? { tracks: [] } }, editors[0]);
     assert.equal(project.status, 201, JSON.stringify(project.body));
     const projectId = project.body.projectId;
     const siteAFirst = await actors[0].request('GET', '/projects');
@@ -440,6 +440,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
       handedOff = true;
       return { origin: edgeOrigin, leafFingerprint256: pki.wrong.fingerprint256,
         caFile: path.join(dir, 'ca.crt'), projectId, fixtureDir: dir, assetPid,
+        assetOutput: () => `${childStdout}${childStderr}`,
         accounts: [{ name: 'dualUser0', password: 'temporary-dual-password-0' },
           { name: 'dualUser1', password: 'temporary-dual-password-1' }],
         ports: { site: sitePort, accountInternal: accountPort, doc: docPort,
