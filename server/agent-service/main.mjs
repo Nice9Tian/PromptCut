@@ -17,7 +17,16 @@
  *                                  账号版 doc 独立内部 mTLS HTTPS 源与 pinned 服务端证书
  *   PROMPTCUT_AGENT_CLIENT_KEY_FILE / PROMPTCUT_AGENT_CLIENT_CERT_FILE / PROMPTCUT_AGENT_CA_FILE
  *                                  Agent 独占 mTLS 私钥、证书、私有 CA 文件；只读，值不进日志
- *   PROMPTCUT_AGENT_CONTROL_PORT    账号执行器独立回环 mTLS 控制口，必须与公开 HTTP 口不同
+ *   PROMPTCUT_AGENT_INTERNAL_PORT / PROMPTCUT_AGENT_ROOT_FINGERPRINT256 / PROMPTCUT_AGENT_SHARED_DATA
+ *                                  账号版三样都要有（缺哪一样都拒绝启动，`config.error { reason: 'account-task-processes', missing }`）：
+ *                                  主服务内部口的端口（只绑回环、双向 TLS，和公开 HTTP 口不同；任务进程往这里交事件、槽调度来这里问排队与强制终态）、
+ *                                  root 那张证书的指纹（只有它能来问调度要的那两条）、各代任务进程共用的数据目录（已存在、可写；
+ *                                  用户上传的附件存进这里，要和 root 入口给任务进程写的 `dataDir` 是同一个）。
+ *                                  账号版主服务**自己不跑任务**：任务在任务进程里跑（一条任务一个进程），由 root 入口
+ *                                  `account-root-main.mjs` 的槽调度开和关。连文档服务用的那张证书（上面三个文件）是只做控制的主身份。
+ *                                  原来在主进程里跑任务的那一路（PROMPTCUT_AGENT_CONTROL_PORT、PROMPTCUT_AGENT_ACCOUNT_LOOK=1、
+ *                                  PROMPTCUT_AGENT_RUN_ASSET_*）命令行入口不再接：设了其中任何一个也拒绝启动（看画面与运行素材
+ *                                  现在写在 root 入口的配置里，随任务进程的设置下发）
  *   PROMPTCUT_AGENT_SECRETS        服务身份的私钥目录(缺省 /var/lib/promptcut/agent-secrets),里面是 keygen 生成的 service-key.json(服务名 agent)
  *   PROMPTCUT_AGENT_HOST           缺省 127.0.0.1;只许回环(对外只经反向代理)
  *   PROMPTCUT_AGENT_PORT           缺省 8790
@@ -29,14 +38,8 @@
  *                                  签名向它要一帧(`look-client.mjs`;契约第 9.8 节)。不设时看画面的工具不交给模型,系统提示词写「看不了画面」
  *                                  账号版**缺省忽略这个地址**(部署模板固定写着它,而渲染服务还看不到账号项目:接了只会让模型拿到一个
  *                                  每次都看不成的工具)。要接,另设下面的开关
- *   PROMPTCUT_AGENT_ACCOUNT_LOOK   只给账号版,缺省不设(= 0):设成 1 才在账号模式接看画面。这时必须同时有 PROMPTCUT_AGENT_LOOK_URL,
- *                                  签名用 PROMPTCUT_AGENT_SECRETS 里那把服务私钥(公钥登记在托管数据目录的 services.json);开关开了而没有地址(`account-look`)、
- *                                  私钥读不到或服务名不对(`look-key`)都直接拒绝启动。每个请求另绑这条任务的授权(`look-client.mjs` 的说明)。
- *                                  0 / 1 之外的值拒绝启动(`account-look`)。`agent.ready` 与 `/healthz` 的 `look` 如实报接没接
- *   PROMPTCUT_AGENT_RUN_ASSET_ORIGIN / PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256
- *                                  只给账号版,缺省不设:素材服务的内部 mTLS 口(回环上的 https://127.0.0.1:<端口>)与它证书的指纹。设了以后
- *                                  云端 Agent 的任务凭自己的授权读写所在项目的素材(「运行素材」),用的是连文档服务的同一张证书;
- *                                  两个要一起设,只设一个或格式不对直接拒绝启动。可选 PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES(缺省 2 GiB)
+ *   PROMPTCUT_AGENT_ACCOUNT_LOOK   账号版的命令行入口不再认（见上）。`resolveAccountLook()` 留给在进程里直接装配执行器的调用方（测试）：
+ *                                  0 / 1 之外的值、开了而没有地址(`account-look`)、私钥读不到或服务名不对(`look-key`)都抛配置错误
  *   PROMPTCUT_AGENT_COLLECT_PYTHON  装了 yt-dlp 的 Python 解释器(绝对路径)。配了网页采集才可用;采集的子进程只经出网闸的代理出网。
  *                                  没配时采集的工具回「这台云节点没有装采集工具」(模型不能触发往节点上装东西)
  *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS 只给探针:把 `-m promptcut_collect` 换成一个替身脚本。生产不设;设了日志里有 `agent.collect.test-runner`,
@@ -60,8 +63,9 @@
  * 收到 SIGTERM / SIGINT:旧 LAN 模式记「中断」并停下,状态落盘,5 秒内退出。
  * 账号模式等待 owned 资源真实关闭;不以 5 秒超时替代关闭证明或成功退出。
  *
- * 账号版以同一个 RAM 注册客户端装配 run/data/read-control 与持久事件；
- * 真实关闭 producer/终态结算尚未接通，完成状态严格 pending，不能宣称整链 ready。
+ * 账号版的命令行入口装配的是「只做控制的主服务」（`account-master-assembly.mjs`）：主身份、读取控制、事件库、
+ * 收事件与给槽调度问话的内部口、附件存储。任务的执行、关闭与结算在任务进程和 root 入口那一侧。
+ * `startAgentService({ accountExecutor })`（在主进程里跑任务的装配）只留给进程内的调用方（测试夹具），命令行入口不走它。
  * 旧模式鉴权(契约第 4 节):命令行入口凭服务私钥连文档服务的控制连接(`server/auth/service-client.mjs`),每个请求的委托票据、
  * 每一轮的对话委托都交文档服务核验;连文档服务的数据连接用凭对话委托换来的连接票据(`hosted-wiring.mjs`)。
  * 补渲经服务身份的发布连接进文档服务的任务队列(`render-publisher.mjs`)。测试经 `startAgentService({ authenticate, credentials })` 给替身。
@@ -86,6 +90,7 @@ import { createConversationClient } from './conversation-client.mjs';
 import { createRunClient } from './run-client.mjs';
 import { createConversationControlClient } from './conversation-control-client.mjs';
 import { createAccountExecutorAssembly } from './account-executor-assembly.mjs';
+import { createAccountMasterAssembly } from './account-master-assembly.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -115,6 +120,31 @@ export function resolveAccountLook({ env, lookUrl, readKey = readServiceKeyFile 
   } catch (err) { throw new AgentConfigError('look-key', String(err?.message ?? err).slice(0, 200)); }
 }
 
+
+/**
+ * 账号版命令行入口要的那三样（见文件头）。回 `{ internalPort, controllerFingerprint256, sharedDataDir }`，
+ * 或 `{ error: { missing?: string[], detail: string } }`：缺了哪几样、哪一样不对、带着哪一个旧路的变量。
+ * @param {{ env: Record<string, string | undefined>, port: number }} o `port` 是公开 HTTP 口
+ */
+export function accountTaskProcessConfig({ env, port }) {
+  const names = ['PROMPTCUT_AGENT_INTERNAL_PORT', 'PROMPTCUT_AGENT_ROOT_FINGERPRINT256', 'PROMPTCUT_AGENT_SHARED_DATA'];
+  const missing = names.filter(name => !env[name]);
+  if (missing.length) return { error: { missing, detail: `账号版要在任务进程里跑任务，缺这几样配置：${missing.join('、')}` } };
+  const legacy = ['PROMPTCUT_AGENT_CONTROL_PORT', 'PROMPTCUT_AGENT_RUN_ASSET_ORIGIN', 'PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256', 'PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES']
+    .filter(name => env[name] !== undefined).concat(env.PROMPTCUT_AGENT_ACCOUNT_LOOK === '1' ? ['PROMPTCUT_AGENT_ACCOUNT_LOOK'] : []);
+  if (legacy.length) return { error: { legacy, detail: `这几样属于在主进程里跑任务的旧路，账号版不再接：${legacy.join('、')}（看画面与运行素材写进 root 入口的配置）` } };
+  const internalPort = Number(env.PROMPTCUT_AGENT_INTERNAL_PORT);
+  if (!Number.isInteger(internalPort) || internalPort < 1 || internalPort > 65535 || internalPort === port)
+    return { error: { detail: 'PROMPTCUT_AGENT_INTERNAL_PORT 要是 1～65535 的端口号，并且和公开 HTTP 口不同' } };
+  const controllerFingerprint256 = String(env.PROMPTCUT_AGENT_ROOT_FINGERPRINT256).replaceAll(':', '').toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(controllerFingerprint256)) return { error: { detail: 'PROMPTCUT_AGENT_ROOT_FINGERPRINT256 要是 root 那张证书的 SHA-256 指纹' } };
+  const sharedDataDir = env.PROMPTCUT_AGENT_SHARED_DATA;
+  try {
+    if (!path.isAbsolute(sharedDataDir) || !fs.statSync(sharedDataDir).isDirectory()) throw new Error('不是已存在的目录');
+    fs.accessSync(sharedDataDir, fs.constants.W_OK);
+  } catch (err) { return { error: { detail: `PROMPTCUT_AGENT_SHARED_DATA 不可用：${String(err?.message ?? err).slice(0, 160)}` } }; }
+  return { internalPort, controllerFingerprint256, sharedDataDir };
+}
 
 /**
  * 起服务。回 `{ url, port, service, close }`。
@@ -153,6 +183,7 @@ export async function startAgentService({
   accountMode = false,
   conversationClient = null,
   accountExecutor = null,
+  accountMaster = null,
   root = ROOT,
   version = 'dev',
   codeVersion = null,
@@ -169,13 +200,14 @@ export async function startAgentService({
   if (accountMode === true && (!/^wss:\/\//.test(docUrl) || typeof conversationClient?.identity !== 'function'))
     throw new AgentConfigError('account-v2', '账号模式需要真实安全文档连接和对话权威');
   if (!isLoopbackHost(host)) throw new AgentConfigError('bind-public', '这个服务只许绑回环地址,对外经反向代理');
+  if (accountMaster && (accountMode !== true || accountExecutor)) throw new AgentConfigError('account-v2', '只做控制的主服务只在账号模式下装配,并且不和进程内执行器同时给');
 
   // 测试用的换驱动口子不带进这个进程(契约第 2.1 节)
   delete process.env.PROMPTCUT_AI_FAKE_RUNNER;
   delete process.env.PROMPTCUT_AI_RUNNER_MODULE;
 
-  const { createServer } = await import('vite');
-  const vite = await createServer({
+  // 只做控制的主服务不跑工具，不起 vite（工具实现由各任务进程自己载）
+  const vite = accountMaster ? { ssrLoadModule() { throw new Error('这个进程不载工具实现'); }, async close() {} } : await (await import('vite')).createServer({
     configFile: false,
     root,
     logLevel: 'silent',
@@ -211,7 +243,11 @@ export async function startAgentService({
   };
   let executor = null, service;
   try {
-    if (accountMode && accountExecutor) {
+    if (accountMaster) {
+      // 账号版的生产装配：主身份、事件库、内部口、附件存储。这个进程里没有任何一条任务在跑
+      executor = await createAccountMasterAssembly({ ...accountMaster, dataDir, conversationClient, log });
+      service = executor.service;
+    } else if (accountMode && accountExecutor) {
       // CLI supplies its one already-created RAM runClient and read-control
       // client. No secondary tool/model process registers a different instance.
       executor = await createAccountExecutorAssembly({ ...serviceOptions, ...accountExecutor,
@@ -241,6 +277,7 @@ export async function startAgentService({
     url: `http://${host.includes(':') ? `[${host}]` : host}:${actual}`,
     service,
     executor,
+    internalPort: accountMaster ? executor.internalPort : null,
     close() {
       closing ??= (async () => {
         if (executor) {
@@ -309,20 +346,28 @@ async function main() {
   const accountMode = env.PROMPTCUT_ACCOUNT_V2 === '1';
   if (env.PROMPTCUT_ACCOUNT_V2_REQUIRED === '1' && !accountMode) return fail('account-v2-required');
   if (accountMode && !/^wss:\/\//.test(docUrl)) return fail('account-v2', { detail: 'doc-url-must-be-wss' });
-  let key = null, client = null, conversationClient = null, runClient = null, conversationControl = null, wiring, accountExecutor = null;
+  let key = null, client = null, conversationClient = null, runClient = null, conversationControl = null, wiring, accountMaster = null;
   if (accountMode) {
+    // 账号版只装配「只做控制的主服务」。缺哪一样、或者还带着在主进程里跑任务那一路的配置，都拒绝启动并说清是哪一样：
+    // 不留「能发消息、但任务停不了、第二条接不上」的半通状态。
+    let options;
     try {
       const file = name => {
         const filename = env[name];
         if (!filename || !path.isAbsolute(filename)) throw new Error('account-v2-file');
         return fs.readFileSync(filename);
       };
-      const options = { origin: env.PROMPTCUT_AGENT_DOC_INTERNAL_ORIGIN,
+      options = { origin: env.PROMPTCUT_AGENT_DOC_INTERNAL_ORIGIN,
         serverFingerprint256: env.PROMPTCUT_AGENT_DOC_FINGERPRINT256,
         tls: { key: file('PROMPTCUT_AGENT_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_AGENT_CLIENT_CERT_FILE'),
           ca: file('PROMPTCUT_AGENT_CA_FILE') } };
+    } catch { return fail('account-v2'); }
+    const slots = accountTaskProcessConfig({ env, port });
+    if (slots.error) return fail('account-task-processes', slots.error);
+    try {
       conversationClient = createConversationClient(options);
-      runClient = createRunClient(options);
+      // 主身份：只做控制，文档服务不会把任何一条任务交给它跑
+      runClient = createRunClient({ ...options, registrationPurpose: 'control-only' });
       conversationControl = createConversationControlClient({ ...options, runClient,
         receiptFile: path.join(env.PROMPTCUT_AGENT_DATA, 'conversation-read-closures.sqlite'),
         onDiagnostic: event => line('agent.read-control', event) });
@@ -333,31 +378,12 @@ async function main() {
       let readClosing = null;
       conversationControl.close = () => readClosing ??= Promise.resolve().then(closeReadControl);
       conversationClient.useReadControl(conversationControl);
-      const controlPort = Number(env.PROMPTCUT_AGENT_CONTROL_PORT);
-      if (!Number.isInteger(controlPort) || controlPort < 1 || controlPort > 65535 || controlPort === port)
-        throw new AgentConfigError('account-executor', 'separate-control-port-required');
-      // 运行素材:缺省不接。两个变量要一起给;给了就用连文档服务的同一张证书去连素材服务的内部口
-      let runAssets = null;
-      if (env.PROMPTCUT_AGENT_RUN_ASSET_ORIGIN !== undefined || env.PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256 !== undefined) {
-        let u = null; try { u = new URL(env.PROMPTCUT_AGENT_RUN_ASSET_ORIGIN); } catch { u = null; }
-        const pin = String(env.PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256 ?? '');
-        const maxImportBytes = env.PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES === undefined ? 2 * 1024 * 1024 * 1024 : Number(env.PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES);
-        if (!u || u.protocol !== 'https:' || u.hostname !== '127.0.0.1' || u.pathname !== '/' || u.search || u.hash ||
-            !/^[A-Fa-f0-9:]{64,95}$/.test(pin) || !Number.isSafeInteger(maxImportBytes) || maxImportBytes < 1)
-          throw new AgentConfigError('run-assets', 'run-assets-configuration');
-        runAssets = { assetOrigin: `${u.origin}/`, assetTls: options.tls, assetFingerprint256: pin, maxResponseBytes: 1024 * 1024, maxImportBytes };
-      }
-      accountExecutor = { doc: options, runClient, readControl: conversationControl, controlPort, ...(runAssets ? { runAssets } : {}) };
+      accountMaster = { runClient, readControl: conversationControl, tls: options.tls, internalPort: slots.internalPort,
+        controllerFingerprint256: slots.controllerFingerprint256, sharedDataDir: slots.sharedDataDir };
       wiring = createHostedWiring({ accountMode: true, conversationClient, log: line });
     } catch (error) {
       await conversationControl?.close(); conversationClient?.close(); runClient?.close();
-      return fail(error instanceof AgentConfigError && error.reason === 'run-assets' ? 'run-assets' : 'account-v2');
-    }
-    // 看画面:账号版要另开开关才接(缺省忽略 PROMPTCUT_AGENT_LOOK_URL)。开了而条件不齐:拒绝启动
-    try { key = resolveAccountLook({ env, lookUrl }); }
-    catch (err) {
-      await conversationControl?.close(); conversationClient?.close(); runClient?.close();
-      return fail(err instanceof AgentConfigError ? err.reason : 'account-look', { detail: String(err?.message ?? err).slice(0, 200) });
+      return fail('account-v2');
     }
   } else {
     try {
@@ -369,8 +395,8 @@ async function main() {
     void client.ready().catch(() => {});
     wiring = createHostedWiring({ client, docUrl, root: ROOT, log: line });
   }
-  // 看画面接没接:旧模式看有没有地址;账号模式看开关(resolveAccountLook 回了私钥才算接)
-  const lookOn = accountMode ? !!key : !!lookUrl;
+  // 看画面接没接:旧模式看有没有地址。账号版的主服务不跑任务,这里恒为没接(任务进程接没接看它自己的设置)
+  const lookOn = accountMode ? false : !!lookUrl;
   const stall = positiveMs(env.PROMPTCUT_AGENT_RENDER_STALL_MS);
   const debounce = positiveMs(env.PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS);
   let started;
@@ -390,7 +416,7 @@ async function main() {
       ...(lookOn ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
       ...(collect ? { collect } : {}),
-      ...(accountMode ? { accountMode: true, conversationClient, accountExecutor } : {}),
+      ...(accountMode ? { accountMode: true, conversationClient, accountMaster } : {}),
       ...(rehearsal ? { modelConfig: () => readDesktopModelConfig() } : {}),
       version,
       codeVersion: () => wiring.publisher?.codeVersion?.() ?? version,
@@ -403,36 +429,22 @@ async function main() {
     throw err;
   }
   wiring.attach(started.service);
-  let registerTimer = null, registerStopped = false;
-  const registerInstance = async () => {
-    if (registerStopped || !runClient) return;
-    try {
-      const instance = await runClient.registerInstance();
-      await conversationControl?.start();
-      line('agent.instance.registered', { instanceId: instance.instanceId, instanceGeneration: instance.instanceGeneration });
-    } catch (error) {
-      if (registerStopped) return;
-      line('agent.instance.pending', { code: error?.code ?? 'unavailable' });
-      registerTimer = setTimeout(registerInstance, 2_000); registerTimer.unref?.();
-    }
-  };
-  if (runClient && !started.executor) void registerInstance();
   line('agent.ready', {
     url: started.url, auth: accountMode ? 'account-v2-mtls' : 'service-identity',
     service: 'agent', ...(key && !accountMode ? { kid: key.kid } : {}), version, accountMode,
-    ...(accountMode ? { runAuthorityMounted: !!started.executor, runDataProofReady: !!started.executor,
-      completionReady: false } : {}),
+    // 账号版：这个进程只做控制，任务在任务进程里跑；`internalPort` 是任务进程交事件、槽调度来问话的那个口
+    ...(accountMode ? { runAuthorityMounted: true, taskProcesses: true, internalPort: started.internalPort } : {}),
     ...(origin ? { publicOrigin: origin } : {}),
     assetService: !!assetBase, look: lookOn, egressTestAllow: testAllow.length > 0,
-    ...(accountMode ? { runAssets: !!accountExecutor?.runAssets } : {}),
     collect: !accountMode && !!collect, collectTestRunner: !accountMode && collect?.testRunner === true,
     heapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),
   });
   const stop = () => {
-    registerStopped = true; if (registerTimer) clearTimeout(registerTimer);
     if (started.executor) {
       // No five-second successful exit can certify an unobserved old OS tree.
-      void started.close().then(() => { wiring.close(); runClient?.close(); conversationClient?.close(); })
+      void started.close().then(() => { wiring.close(); runClient?.close(); conversationClient?.close();
+        // 只做控制的主服务名下没有任务进程要等：自己的东西关完就退（留一小会儿让句柄收干净）
+        if (accountMaster) setTimeout(() => process.exit(0), 3000).unref(); })
         .catch(error => { line('agent.close.pending', { code: error?.code ?? 'closure-pending' }); process.exitCode = 1; });
       return;
     }

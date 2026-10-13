@@ -36,6 +36,8 @@ import { createWorkspaces } from '../../agent/service/workspace.mjs';
 import { createWorkerEventInternalHandler } from '../../agent-service/worker-event-internal.mjs';
 import { createAccountWorkerHttpsGateway } from '../../agent-service/account-worker-control-client.mjs';
 import { createAccountSlotScheduler } from '../../agent-service/account-slot-scheduler.mjs';
+import { createAccountMasterAssembly } from '../../agent-service/account-master-assembly.mjs';
+import { createMasterSchedulerClient } from '../../agent-service/account-master-scheduler-client.mjs';
 import { createLook, createLookVerifier, LOOK_AUTH_HEADER } from '../../hosted-render/look.mjs';
 import { createRenderRequests } from '../../hosted-render/render-requests.mjs';
 
@@ -82,16 +84,23 @@ export function toneWav({ hz = 440, seconds = 0.25, rate = 8000 } = {}) {
   return Buffer.concat([head, data]);
 }
 
-export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100 } = {}) {
+/**
+ * @param {object} [o]
+ * @param {typeof RUNNER_PORTS} [o.ports] 换一组端口（同一次 npm test 里另一个测试文件也用这个夹具时）
+ * @param {boolean} [o.productionMaster] 主服务这一侧改用生产的装配（`account-master-assembly.mjs`：事件库、内部口、附件存储、
+ *        页面的事件流从事件库读），槽调度经内部口用 root 那张证书去问（`account-master-scheduler-client.mjs`）——
+ *        和 Linux 上 root 入口的接法相同。缺省仍是夹具自己拼的那一份。
+ */
+export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false } = {}) {
   const log = [], say = (event, fields) => log.push({ at: Date.now(), event, ...fields });
   const docKey = pair(), masterKey = generateServiceKeyPair(), m = scopeModel(slotId);
   const generations = new Map(), stops = [];
   let dir, pki, chainDir, agentKey, servicesFile, masterPin, workerPin, authorityId, docInternalPort, ports, statusConfig;
-  let master, readControl, eventStore, masterServer, lookServer, renderWorker, scheduler, slot, look, requests;
+  let master, readControl, eventStore, masterServer, lookServer, renderWorker, scheduler, slot, look, requests, masterAssembly = null, schedulerMaster = null;
   const masterSockets = new Set(), lookSockets = new Set(), renderSockets = new Set(), humanSockets = new Set();
   const lookCalls = [], renderGate = { hold: false };
 
-  const fixture = await startCloudQueueUserFixture({ ports: [...RUNNER_PORTS.combo], agentPort: RUNNER_PORTS.agent,
+  const fixture = await startCloudQueueUserFixture({ ports: [...P.combo], agentPort: P.agent,
     variant: {
       pkiNames: ['master', 'rootctl', 'workerid'],
       async configure(ctx) {
@@ -133,6 +142,19 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     },
     async createAgentService({ agentOptions, agentClient, agentRunClient, agentReadControl, dir: fixtureDir }) {
       master = agentRunClient; readControl = agentReadControl;
+      if (productionMaster) {
+        // 生产的装配：主身份登记、读取控制、事件库、内部口（收事件 + 给槽调度问话）、附件存进各代共用的数据目录
+        const sharedDataDir = path.join(fixtureDir, 'agent-shared-data'), masterDataDir = path.join(fixtureDir, 'agent-master-data');
+        fs.mkdirSync(sharedDataDir, { recursive: true }); fs.mkdirSync(masterDataDir, { recursive: true });
+        masterAssembly = await createAccountMasterAssembly({ dataDir: masterDataDir, sharedDataDir, runClient: agentRunClient,
+          conversationClient: agentClient, readControl: agentReadControl, tls: pki.master, internalPort: P.masterEvents,
+          controllerFingerprint256: pki.rootctl.fingerprint256, log: (event, fields) => say(`master.${event}`, { code: fields?.code ?? null }) });
+        eventStore = masterAssembly.eventStore;
+        await until(() => readControl.describe().connected, { timeoutMs: 10_000, what: '主身份的读取控制连接' });
+        schedulerMaster = createMasterSchedulerClient({ origin: `https://127.0.0.1:${P.masterEvents}`, tls: pki.rootctl,
+          serverFingerprint256: pki.master.fingerprint256 });
+        return { service: masterAssembly.service, async close() { schedulerMaster.close(); await masterAssembly.close(); } };
+      }
       // 主服务这一侧：只接待人（发消息、停止都转给文档服务），自己不跑任务
       const service = createHostedAgentService({ accountMode: true, conversationClient: agentClient });
       await readControl.start();
@@ -144,11 +166,11 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
         void eventHandler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }).catch(() => res.destroy());
       });
       masterServer.on('connection', socket => { masterSockets.add(socket); socket.once('close', () => masterSockets.delete(socket)); });
-      await listenOn(masterServer, RUNNER_PORTS.masterEvents);
+      await listenOn(masterServer, P.masterEvents);
       return { service, async close() { await readControl.close(); await closeServer(masterServer, masterSockets); await eventStore.close(); } };
     } });
   const projectId = fixture.projectId, docOrigin = `https://127.0.0.1:${docInternalPort}`;
-  const dataDir = path.join(dir, 'agent-shared-data'); fs.mkdirSync(dataDir);
+  const dataDir = path.join(dir, 'agent-shared-data'); fs.mkdirSync(dataDir, { recursive: true });
 
   // ---------- 渲染服务的「看画面」口子：签名、队列、调度是真的；出图的工作进程是替身 ----------
   renderWorker = http.createServer((req, res) => {
@@ -166,7 +188,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     });
   });
   renderWorker.on('connection', socket => { renderSockets.add(socket); socket.once('close', () => renderSockets.delete(socket)); });
-  await listenOn(renderWorker, RUNNER_PORTS.renderWorker);
+  await listenOn(renderWorker, P.renderWorker);
   const lookKeyDir = path.join(dir, 'look-key'); fs.mkdirSync(lookKeyDir, { mode: 0o700 });
   // 任务进程签看画面请求用的服务私钥：公钥就是文档服务登记表里 agent 的那一把（渲染服务按同一份登记表核）
   writeServiceKeyFile(lookKeyDir, { service: 'agent', kid: agentKey.kid, priv: agentKey.priv, instanceId: newInstanceId(), instanceName: 'runner fixture' });
@@ -175,7 +197,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
   requests.load();
   look = createLook({ verify: createLookVerifier({ registry }), requests,
     project: id => (id === projectId ? { enabled: true, active: true, hosted: { agent: { enabled: true } } } : null),
-    resident: () => ({ port: RUNNER_PORTS.renderWorker, key: 'resident-key', running: true, node: id => (id === projectId ? { projectId: id, connected: true, cards: { state: 'none' } } : null) }),
+    resident: () => ({ port: P.renderWorker, key: 'resident-key', running: true, node: id => (id === projectId ? { projectId: id, connected: true, cards: { state: 'none' } } : null) }),
     iso: () => ({ enabled: false, port: 0, key: null, current: null, report: null, lastRun: null }),
     log: (event, fields) => say(`render.${event}`, fields), limits: { pollMs: 20 } });
   lookServer = http.createServer((req, res) => {
@@ -189,7 +211,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     });
   });
   lookServer.on('connection', socket => { lookSockets.add(socket); socket.once('close', () => lookSockets.delete(socket)); });
-  await listenOn(lookServer, RUNNER_PORTS.look);
+  await listenOn(lookServer, P.look);
 
   // ---------- root：发布器的事务是真的，看操作系统的那一半换成「真的子进程」 ----------
   const originalWrite = m.io.write, originalInspect = m.io.inspect, originalLock = m.io.lock, originalPin = m.io.pinPrevious;
@@ -201,12 +223,12 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     const epoch = reservation.epoch, settingsFile = file(`runner-worker-${epoch}.json`), logFile = file(`runner-worker-${epoch}.log`);
     // 生产形状的设置文件（`account-task-worker-config.mjs`）
     const worker = { v: 1, expected: m.expected, reservation, rootRecordFile: path.join(chainDir, `epoch-${epoch}.json`),
-      identity: { keyFile: file('workerid.key'), certFile: file('workerid.crt'), caFile: file('ca.crt'), port: RUNNER_PORTS.identityBase + epoch },
+      identity: { keyFile: file('workerid.key'), certFile: file('workerid.crt'), caFile: file('ca.crt'), port: P.identityBase + epoch },
       doc: { origin: `${docOrigin}/`, fingerprint256: pki.doc.fingerprint256, keyFile: file('wrong.key'), certFile: file('wrong.crt'), caFile: file('ca.crt') },
-      master: { origin: `https://127.0.0.1:${RUNNER_PORTS.masterEvents}/`, fingerprint256: pki.master.fingerprint256 },
+      master: { origin: `https://127.0.0.1:${P.masterEvents}/`, fingerprint256: pki.master.fingerprint256 },
       journalFile: file(`runner-journal-${epoch}.sqlite`), dataDir, stateDir: file(`runner-state-${epoch}`),
-      controlPort: RUNNER_PORTS.controlBase + epoch,
-      look: { url: `http://127.0.0.1:${RUNNER_PORTS.look}`, keyDir: lookKeyDir },
+      controlPort: P.controlBase + epoch,
+      look: { url: `http://127.0.0.1:${P.look}`, keyDir: lookKeyDir },
       // 任务进程连素材服务的内部口，用的是它连文档服务的同一张任务证书
       runAssets: { origin: `https://127.0.0.1:${ports.assetInternal}/`, fingerprint256: pki.asset.fingerprint256,
         // 全量测试时机器很忙：一次素材请求里素材服务要回文档服务核好几趟，缺省的 5 秒无动静时限不够宽
@@ -263,7 +285,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     observeFailure: () => m.run('observe-failure'),
   };
   scheduler = createAccountSlotScheduler({ slots: [slot], pollMs,
-    master: { pending: () => master.pending(), scopeControl: row => master.scopeControl(row) }, log: say });
+    master: schedulerMaster ?? { pending: () => master.pending(), scopeControl: row => master.scopeControl(row) }, log: say });
 
   // ---------- 人这一侧：真的登录、真的页面连接、经主服务的公开接口发消息和停止 ----------
   const ca = fs.readFileSync(fixture.caFile);
@@ -329,6 +351,26 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     return { opened, pageId, send, session: session.body,
       project: async () => (await send({ type: 'project.open', projectId })),
       agent: async (route, body) => request('/agent/v1' + route, { method: body ? 'POST' : 'GET', body, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
+      /** 照页面的做法传一个附件：字节直接是请求体，文件名在查询串里 */
+      upload: async (conversationId, name, bytes) => new Promise((resolve, reject) => { void tickets().then(ticket => {
+        const req = https.request(`${fixture.origin}/agent/v1/conversations/${conversationId}/attachments?name=${encodeURIComponent(name)}`, { method: 'POST', ca, timeout: 15_000,
+          headers: { authorization: `Bearer ${ticket.agentDelegationTicket}`, 'content-type': 'application/octet-stream', 'content-length': bytes.length } }, res => {
+          const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.once('error', reject);
+          res.once('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString()) }); } catch (error) { reject(error); } }); });
+        req.once('error', reject); req.once('timeout', () => req.destroy(Error('fixture-upload-timeout'))); req.end(bytes); }, reject); }),
+      /** 照页面的做法开这个对话的事件流；收到的事件逐条放进 `seen`。回 `{ status(), close() }` */
+      stream: async (conversationId, seen, after = 0) => {
+        const ticket = await tickets(); let status = null, buffer = '';
+        const req = https.request(`${fixture.origin}/agent/v1/conversations/${conversationId}/events?after=${after}`, { method: 'GET', ca,
+          headers: { authorization: `Bearer ${ticket.agentDelegationTicket}`, accept: 'text/event-stream' } }, res => {
+          status = res.statusCode; res.setEncoding('utf8');
+          res.on('data', text => { buffer += text; for (;;) { const at = buffer.indexOf('\n\n'); if (at < 0) break;
+            const block = buffer.slice(0, at); buffer = buffer.slice(at + 2);
+            for (const row of block.split('\n')) if (row.startsWith('data: ')) { try { seen.push(JSON.parse(row.slice(6))); } catch { /* 不是事件 */ } } } });
+          res.on('error', () => {}); });
+        req.on('error', () => {}); req.end();
+        return { status: () => status, close: () => req.destroy() };
+      },
       /** 凭成员自己的素材票据直接问素材服务（不经 Agent）：用来核对任务写进去的字节 */
       asset: async hash => { const res = await fetch(`http://127.0.0.1:${ports.asset}/api/asset/media/${hash}`, { headers: { authorization: `Bearer ${(await tickets()).assetTicket}` } });
         return { status: res.status, bytes: Buffer.from(await res.arrayBuffer()) }; },
@@ -347,7 +389,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
 ${projectId}
 ${conversationId}`).digest('hex').slice(0, 32) });
 
-  return { ...fixture, dir, dataDir, projectId, m, scheduler, slot, master, generations, stops, log, lookCalls, renderGate, look, requests,
+  return { ...fixture, dir, dataDir, projectId, m, scheduler, slot, master, generations, stops, log, lookCalls, renderGate, look, requests, masterAssembly, pki, ports: { ...fixture.ports, ...P },
     connectActor, headRecord, workspaceOf, ledger, conversation, messageOf, grantOf, holds,
     chain: epoch => Object.fromEntries(['epoch', 'assignment', 'terminal', 'intent', 'closure', 'failure'].map(k => [k, m.files.get(`${k}-${epoch}.json`) ?? null])),
     events: conversationId => eventStore.after({ projectId, conversationId }).events,

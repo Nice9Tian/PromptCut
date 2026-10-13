@@ -34,9 +34,13 @@ export function createAccountConversationService({ conversationClient, now = Dat
     access: (identity, conversationId, action = 'read') => call('access', identity, conversationId, { action }),
     async send(identity, conversationId, body = {}) {
       if (typeof body.prompt !== 'string' || !body.prompt.trim()) throw new AgentServiceError('bad-request', 'message is empty', 400);
-      if (Array.isArray(body.attachments) && body.attachments.length) throw new AgentServiceError('attachment-unavailable', 'attachment authority is not mounted', 503);
+      // 附件要先由挂了附件存储的服务核过（`account-master-assembly.mjs` 的 send 把核过的引用放在 `verifiedAttachments` 里）；
+      // 没挂存储的这一份照旧拒绝，不把页面自报的地址交给文档服务。
+      const attachments = body.verifiedAttachments ?? null;
+      if (Array.isArray(body.attachments) && body.attachments.length && !attachments) throw new AgentServiceError('attachment-unavailable', 'attachment authority is not mounted', 503);
       const requestId = typeof body.requestId === 'string' ? body.requestId : randomUUID();
-      return call('send', identity, conversationId, { requestId, content: body.prompt, selectionInput: body.selectionSnapshot ?? null });
+      return call('send', identity, conversationId, { requestId, content: body.prompt, selectionInput: body.selectionSnapshot ?? null,
+        ...(attachments?.length ? { attachments } : {}) });
     },
     switchVisibility: (identity, conversationId, visibility, requestId = randomUUID()) =>
       call('switchVisibility', identity, conversationId, { visibility, requestId }),
