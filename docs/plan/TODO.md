@@ -99,6 +99,18 @@
 
 各步的详细状态见 `docs/archive/restructure_planning/hand_off.md`；独立复核的结论见 `docs/archive/restructure_planning/hunman_read.md`。
 
+## 用户 2026-10-13 说记待办的
+
+出处 `docs/plan/user-decisions-2026-10-13.md` 第 4 节。都只记目标，做法到时候再定。
+
+- 做到一半的 Agent 任务被强制结束后，回滚到上一轮对话完成时的状态。
+- 片段在时间轴上挪动以后，轨道流不失效。（用户说明：毛玻璃这类依赖下层的卡挪动后仍然会失效。）
+- 本机协作房间和云端项目同时存在：本机在线时把本机协作的消息转发到云端；项目管理者能管理本机协作和云端协作两套用户。用户补充：本地项目协作有时候本来就走云端转发，所以这一条到时候具体定，不要写死怎么做。
+- 账号办法下的「搬回本机」（0.7.18 先把按钮收起来）。
+- 在线浏览器加入本地项目。
+- 桌面版进账号云端项目时本机 Agent 做到和以前一样完整（撤销这一步、改动记在 Agent 名下、编辑界面关着也能做）。
+- 只读成员的临时会话，退出后自动删。
+
 ## 性能方向（未排期）
 
 - **canvas 卡的预渲染产物经 WebCodecs 直出，不再经截图与三次 PNG 往返**（2026-10-01 用户加，档位未定）。现状：canvas 卡的像素先在生成快照时读回 CPU、`toDataURL()` 压成 PNG、把 canvas 换成 `<img>` 写进快照（`src/render/snapshot/rasterizeCanvas.ts`）；预渲染进程再把快照在 Chrome 里重放、整帧截图成 PNG，管道给 ffmpeg 编成 ProRes MOV 或 H.264 轨道流（`server/bakery/ffmpeg.mjs`）。一张 canvas 卡的像素因此走了「GPU 画布 → 读回 → PNG → HTML → Chrome 重渲 → 截图 → PNG → ffmpeg 解 PNG → 编码」，中间三次 PNG 编解码是纯开销，画布越大越慢。方向：canvas 卡的画面本来就在画布里，可以 `new VideoFrame(canvas)` 直接送 `VideoEncoder`（在线导出 `src/export/frameCompositor.ts` 已经这样用），共享 WebGL 渲染器（R9）落地后画布卡的像素来自 Worker 交回的位图，改造点集中在 `rasterizeCanvas.ts` 与产物那一侧。留意两处：① 轨道流要带 alpha，WebCodecs 编 H.264 不带 alpha，上下拼合那一步得在画布里自己做（做法同现在）；② 快照仍要生成，DOM 卡与判重靠它，canvas 卡改直出只是产物不再经截图，快照里那张 PNG 缩略可留作占位。验收：同一张 canvas 卡两条路的产物逐像素比对（允许编码器差异时先比 PNG 阶段）、预渲染耗时前后对比在笔记本量（`guide_files/verification.md`「性能基准机」）、G0-R 全过、像素基线不变（导出整帧仍走截图，不在本项范围）。
