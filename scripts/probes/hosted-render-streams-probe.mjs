@@ -23,11 +23,13 @@
  * 断言(任一不成立退出码 1):
  *   S 起来    渲染服务以能产流的方式起:`/status` 的 `streams` 为真,工作进程报 `capabilities.streams` 与 `transcode`
  *   A 缺省关  新建的项目:成员列表里 `hosted.render.streams` 是 false,渲染服务给工作进程的清单里这个项目 `streams: false`;
- *             甲加一张重卡 → 清单计划由渲染服务认领并切分,快照任务全部做完(照常);队列里这个项目一条流任务都没有;
- *             层表里有这张卡的快照层、没有它的流;甲的在线来源里没有这张卡的流
+ *             甲加一张重卡 → 清单计划由渲染服务认领并切分,快照任务全部做完(照常);**这一项关着时渲染服务只产稀疏版**:队列里这个项目
+ *             有三个稀疏流任务(分段 0～7、8～15、16～16,id 末尾 `:sparse`)、都由渲染服务做完,一个满密度的流任务都没有;
+ *             内容库里这三段的流清单每个分段都是稀疏版(每段一张)、带位置矩形;层表里有这张卡的快照层和它的流(候选是渲染服务的指纹);
+ *             甲的在线来源里有这张卡的流
  *   B 打开    创建者打开:成员列表、渲染服务的清单跟着变;**只打开、不动项目**,甲的页面看到这一项从关变开就重发一份清单计划
  *             (同一版项目,结果键带这一项),渲染服务据此切出自己的那一份流任务
- *             (三个:分段 0～7、8～15、16～16),渲染服务认领其中一个
+ *             (满密度的三个:分段 0～7、8～15、16～16;下面说的「流任务」都指满密度的),渲染服务认领其中一个
  *   C 再关    手里正有一个流任务时创建者关掉:手里的那个照做完(没有放回),渲染服务与这个项目的连接没断;工作进程对账看到「关着」以后(一秒上下)不再认领:之后一段时间(≥ 15 秒)里剩下的
  *             流任务一直是 open、没有被认领(工作进程看到之前那一拍里碰巧又认领的至多一个,照做完,不算);这期间这个项目新发的清单计划照常被认领、切分(不切流);已经产出的那一段的流清单还在内容库里,
  *             层表里这条流的那一行还在。同一段时间里项目二(这一项开着)的流任务照常被认领并做完
@@ -211,7 +213,10 @@ function queueTasks(projectId) {
   }
   return [];
 }
-const streamTasks = (projectId) => queueTasks(projectId).filter((t) => t.id.startsWith('stream:'));
+/** 满密度的流任务(「生成轨道流」管的就是它们) */
+const streamTasks = (projectId) => queueTasks(projectId).filter((t) => t.id.startsWith('stream:') && !t.id.endsWith(':sparse'));
+/** 稀疏流任务(id 末尾多 `:sparse`;这一项关着渲染服务也照做) */
+const sparseTasks = (projectId) => queueTasks(projectId).filter((t) => t.id.startsWith('stream:') && t.id.endsWith(':sparse'));
 const snapTasks = (projectId) => queueTasks(projectId).filter((t) => t.id.startsWith('snapshot:'));
 const planTasks = (projectId) => queueTasks(projectId).filter((t) => t.id.startsWith('plan:'));
 const briefTasks = (tasks) => tasks.map((t) => `${t.id.slice(0, 8)}…${t.id.slice(-6)}=${t.state}${t.lastError ? `(${t.lastError})` : ''}`);
@@ -595,13 +600,30 @@ async function main() {
   A.queue = { snapshots: briefTasks(snapTasks(P1.projectId)), streams: briefTasks(streamTasks(P1.projectId)), plans: planTasks(P1.projectId).length };
   say('A.rendered', { ms: out.timings.snapshotsMs, node: A.node, streams: A.queue.streams.length });
   check(!!snapsDone && (nA?.plans ?? 0) >= 1 && (nA?.completed ?? 0) >= 4 && (nA?.failed ?? 0) === 0, 'A:清单计划由渲染服务切分,快照任务照常做完,没有失败', A.node);
-  check(streamTasks(P1.projectId).length === 0, 'A:这一项关着:队列里这个项目一条流任务都没有(渲染服务没切自己的那一份)', A.queue.streams);
-  const mapA = await layerMap();
-  A.layerMap = { v: mapA?.v ?? null, layers: (mapA?.layers ?? []).map((l) => l.clipId), streams: (mapA?.streams ?? []).length };
+  // 这一项关着:渲染服务只产稀疏版 —— 三个稀疏流任务都做完,一个满密度的都没切
+  const sparseDone = await until('A:三个稀疏流任务由渲染服务做完', async () => { const st = sparseTasks(P1.projectId); return st.length === 3 && st.every((t) => t.state === 'done') ? st : null; }, 180_000, 300);
+  A.queue.sparse = briefTasks(sparseTasks(P1.projectId));
+  check(!!sparseDone && STREAM_SPANS.every(([f, t]) => sparseDone.some((x) => x.id.endsWith(`:${f}-${t}:sparse`))) && sparseDone.every((t) => t.attempts <= 1),
+    'A:这一项关着:三个稀疏流任务(分段 0～7、8～15、16～16)由渲染服务各做一次', A.queue.sparse);
+  check(streamTasks(P1.projectId).length === 0, 'A:这一项关着:队列里这个项目一个满密度的流任务都没有', briefTasks(streamTasks(P1.projectId)));
+  const mapA = (await until('A:层表里出现这张卡的流', async () => { const m = await layerMap(); return streamRow(m) ? m : null; }, 60_000, 500)) ?? (await layerMap());
+  A.layerMap = { v: mapA?.v ?? null, layers: (mapA?.layers ?? []).map((l) => l.clipId), streams: (mapA?.streams ?? []).length, row: briefRow(streamRow(mapA)) };
   check((mapA?.layers ?? []).some((l) => l.clipId === clipId), 'A:层表里有这张卡的快照层', A.layerMap);
-  check(!streamRow(mapA), 'A:层表里没有这张卡的流', { row: briefRow(streamRow(mapA)) });
-  const diagA = await onlineDiag(page);
-  check(!(diagA?.streams ?? []).some((x) => x.clipId === clipId), 'A:甲的在线来源里没有这张卡的流', (diagA?.streams ?? []).map((x) => x.clipId));
+  const rowA = streamRow(mapA);
+  const candA = rowA?.candidates?.find((c) => c.envFingerprint === HOST_FP) ?? null;
+  check(!!rowA && !!candA && candA.resultKey === M.resultKeyOf(rowA.contentKey, HOST_FP), 'A:层表里有这张卡的流,候选是渲染服务的指纹(它产的稀疏版)', A.layerMap);
+  {
+    const seen = [];
+    for (const [from, to] of STREAM_SPANS) {
+      const m = candA ? await getManifest(candA.resultKey, from, to) : null;
+      for (let n = from; n <= to; n++) seen.push({ n, stride: m?.segments?.[n]?.stride ?? null, samples: m?.segments?.[n]?.samples ?? null, box: m?.segments?.[n]?.box });
+    }
+    A.sparseManifests = { segments: seen.length, strides: [...new Set(seen.map((s) => s.stride))], boxes: seen.slice(0, 3).map((s) => s.box ?? null) };
+    check(seen.length === 17 && seen.every((s) => s.stride === SEG), 'A:内容库里这三段的流清单,每个分段都是稀疏版(每段一张)', A.sparseManifests);
+    check(seen.every((s) => s.box && s.box.w > 0 && s.box.h > 0), 'A:稀疏版的每个分段带着位置矩形', A.sparseManifests);
+  }
+  const diagA = await until('A:甲的在线来源认出这张卡的流', async () => { const d = await onlineDiag(page); return (d?.streams ?? []).some((x) => x.clipId === clipId) ? d : null; }, 60_000, 500);
+  check(!!diagA, 'A:甲的在线来源里有这张卡的流(渲染服务产的稀疏版)', ((await onlineDiag(page))?.streams ?? []).map((x) => x.clipId));
 
   /* -------------------------------------------------------------- B 创建者打开 */
   const B = (out.steps.B = {});
@@ -775,6 +797,17 @@ async function main() {
   D.manifests = manifestsOk;
   D.blocks = { count: uniq.length, bytes: uniq.reduce((s, b) => s + b.bytes, 0), complete, hashOk, encoders: [...new Set(blocks.map((b) => b.encoder).filter(Boolean))] };
   check(manifestsOk === 3, 'D:内容库里三份流清单都在(过 manifestMatches、分段齐)', { manifestsOk });
+  // 同一个键上稀疏版换成了满密度,稀疏那一趟量的位置矩形还在
+  {
+    const seen = [];
+    for (const [from, to] of STREAM_SPANS) {
+      const m = hostKey ? await getManifest(hostKey, from, to) : null;
+      for (let n = from; n <= to; n++) seen.push({ n, stride: m?.segments?.[n]?.stride ?? null, box: m?.segments?.[n]?.box });
+    }
+    D.dense = { segments: seen.length, strides: [...new Set(seen.map((s) => s.stride))], boxes: seen.filter((s) => s.box && s.box.w > 0).length };
+    check(seen.length === 17 && seen.every((s) => s.stride === 1), 'D:打开以后三份流清单(与稀疏版同一个键)每个分段都补成了满密度', D.dense);
+    check(D.dense.boxes === 17, 'D:补成满密度以后每个分段的位置矩形还在', D.dense);
+  }
   check(uniq.length >= 18 && complete === uniq.length && hashOk === uniq.length, 'D:素材服务 px 里开头文件与 17 个分段都 complete,取回的字节哈希与清单一致', D.blocks);
 
   /* -------------------------------------------------------------- E 在线页面播放时贴上 */
