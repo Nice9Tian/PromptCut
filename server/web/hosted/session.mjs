@@ -313,13 +313,14 @@ const SINGLETON_FILES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
  * Windows 上锁文件要是真被谁独占着却认不出是谁,照实报「还被占着」。
  *
  * @param {string} sessionDir
- * @param {{ timeoutMs?: number, deps?: object }} [o] `deps` 只给单测:`holder`、`commandLine`、`alive`、`kill`、`killTree`、`platform`
+ * @param {{ timeoutMs?: number, respectLiveOwner?: boolean, deps?: object }} [o] `respectLiveOwner`:起它的服务进程还活着就不动(启动清扫用);
+ *   `deps` 只给单测:`holder`、`commandLine`、`alive`、`kill`、`killTree`、`platform`、`selfPid`
  * @returns {Promise<{ found: boolean, killed: number[], stillHeld: boolean }>}
  */
-export async function reapOrphan(sessionDir, { timeoutMs = 8_000, deps = {} } = {}) {
+export async function reapOrphan(sessionDir, { timeoutMs = 8_000, respectLiveOwner = false, deps = {} } = {}) {
   const {
     holder = profileHolder, commandLine = processCommandLine, alive = pidLive, platform = process.platform,
-    kill = (pid) => process.kill(pid, 'SIGKILL'), killTree: killTreeOf = killProcessTree,
+    kill = (pid) => process.kill(pid, 'SIGKILL'), killTree: killTreeOf = killProcessTree, selfPid = process.pid,
   } = deps;
   const userDataDir = path.join(sessionDir, 'profile');
   const forget = () => { try { fs.rmSync(path.join(sessionDir, OWNER_FILE), { force: true }); } catch { /* 删不掉不影响 */ } };
@@ -340,6 +341,12 @@ export async function reapOrphan(sessionDir, { timeoutMs = 8_000, deps = {} } = 
     }
     forget();
     return { found: false, killed: [], stillHeld: false };
+  }
+  // 起它的那个 Agent 服务进程还活着(滚动重启时新旧两个服务进程有一段重叠、共用数据目录):这个浏览器不是残留,是旧进程正在用的。
+  // 启动清扫时不动它(`respectLiveOwner`);旧进程退出时管道一断它自己会退。登记里的号要是早被别的进程占了,这里只会少杀、不会误杀,
+  // 真到了要在这个对话里起新浏览器的时候(不带这个开关)照样清掉——那时文档服务已经只认新进程了。
+  if (respectLiveOwner && Number.isSafeInteger(owner?.servicePid) && owner.servicePid > 0 && owner.servicePid !== selfPid && alive(owner.servicePid)) {
+    return { found: false, killed: [], stillHeld: false, liveOwner: true };
   }
   // 主进程直接结束(立刻生效),再按树(Windows)/按组(其它)补杀一遍。
   // 登记里的子进程号不直接杀:它们可能早就退了、号被系统分给了别的进程;主进程一没,浏览器的子进程自己会退

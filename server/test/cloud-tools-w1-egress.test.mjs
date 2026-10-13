@@ -21,9 +21,12 @@
  *   W1-EGRESS-07  跳转到内网:302、页面里的 meta 跳转、跳到 file:——都没到;「内网里的服务」零连接
  *   W1-EGRESS-08  DNS 重绑定:名字先解析到放行的地址、页面开着的时候改解析到内网——之后的请求被拒,重绑定后的地址零连接;
  *                 一个名字同时指着外网与内网的整个拒;解析到 metadata 的名字拒
- *   W1-EGRESS-09  WebRTC:收集不到任何带本机地址的候选,假 STUN 一个 UDP 包都没收到;对照(去掉策略参数)能收到
+ *   W1-EGRESS-09  WebRTC:收集不到任何带本机地址的候选,假 STUN 一个 UDP 包都没收到;对照(去掉策略参数)能收到;
+ *                 走 TCP 的 TURN 中继指向本机假服务:零连接(那条 TCP 也只能经代理,被拒)
  *   W1-EGRESS-10  WebSocket 走的也是代理:连放行的站连得上(代理记录里有这条隧道),连内网被拒
  *   W1-EGRESS-11  页面里的 file: 链接与 iframe 读不到本机文件
+ *   W1-EGRESS-13  下载的对照:把下载行为设成「允许」文件就真的落盘;云端的浏览器里同一个地址被拒、不落盘
+ *   W1-EGRESS-14  弹出页(绕过了并回当前页的那道)抢在被关之前发的请求,也只能到代理:内网服务零连接
  *   W1-EGRESS-12  节点上装的那种浏览器(chrome-headless-shell,同版本):上面第 5、7、9 条在它身上同样成立
  *
  * 下载被拒在 `cloud-tools-w1-browser.test.mjs` 的 W1-TOOL-04。
@@ -48,6 +51,7 @@ import { HOSTED_BROWSER_DEFAULTS } from '../agent/service/hosted-browser.mjs';
 const SITE_PORT = 28390;
 const INTERNAL_PORT = 28391;
 const STUN_PORT = 28392;
+const TURN_PORT = 28393;
 const ORIGIN = `http://127.0.0.1:${SITE_PORT}`;
 const INTERNAL = `http://127.0.0.1:${INTERNAL_PORT}`;
 const ALLOW = [`127.0.0.1:${SITE_PORT}`];
@@ -205,6 +209,11 @@ test('W1-EGRESS-02 代理自己:每个目标过闸,同一条连接上换目标�
     assert.match(await raw(`CONNECT 127.0.0.1:${INTERNAL_PORT} HTTP/1.1\r\n\r\n`), /^HTTP\/1\.1 403 Forbidden\r\nx-egress-refused: port/);
     assert.match(await raw('CONNECT 169.254.169.254:443 HTTP/1.1\r\n\r\n'), /x-egress-refused: blocked-address/);
     assert.match(await raw('CONNECT [fd00:ec2::254]:443 HTTP/1.1\r\n\r\n'), /x-egress-refused: blocked-address/);
+    // 带方括号的 IPv6 字面量:代理把括号原样交给出网闸,出网闸去掉括号再判(回环、唯一本地、包着 IPv4 回环的映射地址)
+    for (const target of ['[::1]:443', '[fd00::1]:443', '[::ffff:127.0.0.1]:443', '[::ffff:7f00:1]:443', '[fe80::1]:443', '[64:ff9b::7f00:1]:443']) {
+      assert.match(await raw(`CONNECT ${target} HTTP/1.1\r\n\r\n`), /^HTTP\/1\.1 403 Forbidden\r\nx-egress-refused: blocked-address/, target);
+    }
+    assert.ok(proxy.journal().some((e) => !e.ok && e.kind === 'connect' && e.host === '::1' && e.port === 443), '记录里的主机名不带括号');
     assert.match(await raw('CONNECT not a target HTTP/1.1\r\n\r\n'), /^HTTP\/1\.1 400/, '不成样子的请求行:拒');
     assert.match(await raw('CONNECT nohost HTTP/1.1\r\n\r\n'), /^HTTP\/1\.1 403 Forbidden\r\nx-egress-refused: protocol/, '没有端口的 CONNECT:拒');
     // 放行的 CONNECT:隧道通到假站;同时最多两条
@@ -499,6 +508,23 @@ test('W1-EGRESS-09 WebRTC:不泄露本机地址,不发不走代理的 UDP;对照
   const result = await webrtcRound(f, context);
   assertNoRtcLeak(result);
 
+  // 走 TCP 的 TURN 中继:浏览器要和「中继服务器」建 TCP 连接。指向本机的一个假服务(没有放行),它一次都不该被连上
+  let turnConnections = 0;
+  const turn = net.createServer((socket) => { turnConnections += 1; socket.destroy(); });
+  await new Promise((r) => turn.listen(TURN_PORT, '127.0.0.1', r));
+  t.after(() => new Promise((r) => turn.close(r)));
+  for (const relay of ['', '&relay=1']) {
+    const opened = await f.tools.call('web_open', { url: `${ORIGIN}/webrtc?stun=127.0.0.1:${STUN_PORT}&turn=127.0.0.1:${TURN_PORT}${relay}` }, context);
+    assert.equal(opened.ok, true, opened.error);
+    const text = await untilText(f, context, 'RTC-DONE');
+    assertNoRtcLeak({ candidates: JSON.parse(/RTC-DONE (\[.*\])/.exec(text)[1]), packets: 0 });
+  }
+  await sleep(500);
+  assert.equal(turnConnections, 0, '假 TURN 服务零连接');
+  const turnTries = f.tools.egressJournal(scope).filter((e) => e.port === TURN_PORT);
+  assert.ok(turnTries.every((e) => !e.ok), '要是去连了,也只到了代理并被拒');
+  if (process.env.W1_VERBOSE) console.log(`[w1] TURN/TCP:假服务被连 ${turnConnections} 次;代理记录里指向它的 ${turnTries.length} 条(都被拒)`);
+
   // 对照:去掉两条 WebRTC 策略参数,同一个页面就向假 STUN 发了 UDP
   const puppeteer = (await import('puppeteer')).default;
   const gate = createEgressGate({ testAllow: ALLOW, resolve });
@@ -574,4 +600,57 @@ test('W1-EGRESS-12 节点上装的那种浏览器(chrome-headless-shell):出网�
   const pids = f.tools.describe().sessions[0].pids;
   await f.tools.call('web_close', {}, context);
   assert.deepEqual(pids.filter((pid) => { try { process.kill(pid, 0); return true; } catch { return false; } }), []);
+});
+
+test('W1-EGRESS-13 下载的对照:不设「拒下载」时文件真的会落盘;云端的浏览器里落不了', async (t) => {
+  // 对照(不经产品代码):同一个假站、同一个代理,把下载行为设成「允许」——文件落到指定目录。证明 W1-TOOL-04 断言的「哪儿都没有这个文件」不是空过
+  const puppeteer = (await import('puppeteer')).default;
+  const gate = createEgressGate({ testAllow: ALLOW, resolve });
+  const proxy = await startBrowserProxy({ gate });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-w1-dlctl-'));
+  const downloads = path.join(dir, 'downloads');
+  fs.mkdirSync(downloads);
+  const args = [...TEST_CHROME_ARG_PREFIX, ...hostedNetworkArgs(proxy.url), ...TEST_EXTRA_ARGS];
+  const browser = await puppeteer.launch({ ...rawLaunchOptions(await testChromePath()), userDataDir: path.join(dir, 'profile'), args });
+  t.after(async () => {
+    const pid = browser.process()?.pid;
+    await browser.close().catch(() => {});
+    await proxy.close();
+    await until(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, { ms: 60_000, what: '对照浏览器退出' });
+    for (let i = 0; i < 20 && fs.existsSync(dir); i += 1) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { await sleep(200); } }
+  });
+  const name = `w1-control-${process.pid}.bin`;
+  const cdp = await browser.target().createCDPSession();
+  await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads });
+  const page = (await browser.pages())[0];
+  await page.goto(`${ORIGIN}/dl?name=${name}`).catch(() => {});
+  await until(() => fs.existsSync(path.join(downloads, name)), { ms: 30_000, what: '对照:文件落盘' });
+  assert.equal(fs.statSync(path.join(downloads, name)).size, 2048);
+
+  // 云端的浏览器:同一个地址,被拒,会话目录里没有这个文件
+  const f = await w1Fixture(t, { testAllow: ALLOW, resolve });
+  const { context } = await f.newRun();
+  await f.tools.call('web_open', { url: `${ORIGIN}/page2` }, context);
+  const refused = await f.tools.call('web_open', { url: `${ORIGIN}/dl?name=${name}` }, context);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.refused, 'download');
+  await sleep(800);
+  const found = [];
+  const walk = (d) => { let list = []; try { list = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of list) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.name.includes('w1-control-')) found.push(p); } };
+  walk(f.dataDir);
+  assert.deepEqual(found, []);
+});
+
+test('W1-EGRESS-14 弹出页抢在被关之前发的请求,也只能到代理', async (t) => {
+  const f = await w1Fixture(t, { testAllow: ALLOW, resolve });
+  const { context } = await f.newRun();
+  const before = internal.state.connections;
+  // 这一页用「程序里直接提交一个 target=_blank 的表单」开新标签页(不触发提交事件,并回当前页的那道拦不住它),新页直奔内网
+  const opened = await f.tools.call('web_open', { url: `${ORIGIN}/popup-leak?to=${encodeURIComponent(`${INTERNAL}/from-popup`)}` }, context);
+  assert.equal(opened.ok, true, opened.error);
+  await until(() => refusedFor(f.tools.egressJournal(scope), '127.0.0.1').some((e) => e.port === INTERNAL_PORT), { ms: 30_000, what: '弹出页的请求到了代理并被拒' });
+  const view = await f.tools.call('web_view', {}, context);
+  assert.equal(internal.state.connections, before, '「内网里的服务」零连接:弹出页用的是同一个浏览器、同一个代理');
+  assert.ok([...(opened.blocked ?? []), ...(view.blocked ?? [])].some((b) => b.kind === 'popup'), '多出来的那一页被关掉了,并且告诉了模型');
+  assert.equal(view.title, 'W1 弹出页', '当前页还是原来那一页');
 });

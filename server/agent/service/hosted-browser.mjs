@@ -147,7 +147,7 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
   const launching = new Map();
   /** 正在关的(含登记器触发的):`close()` 要等它们 */
   const closings = new Set();
-  /** 「项目 对话」→ 这个对话最近一次关闭(含删目录)的 promise。同一个对话的下一次启动、`closeConversation` 都先等它 */
+  /** 「项目×对话」→ 这个对话最近一次关闭(含删目录)的 promise。同一个对话的下一次启动、`closeConversation` 都先等它 */
   const closingByKey = new Map();
   /** 关过的会话(已从 `sessions` 摘掉):还在关的、关了却没拿到退出凭据的留在这里,`treeClosed` 与 `closeConversation` 据此回话 */
   const retired = new Set();
@@ -188,7 +188,8 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
         if (!project.isDirectory()) continue;
         for (const conversation of fs.readdirSync(path.join(root, project.name), { withFileTypes: true })) {
           if (!conversation.isDirectory()) continue;
-          const result = await reapOrphan(path.join(root, project.name, conversation.name), { timeoutMs: cfg.closeMs });
+          // 起它的服务进程还活着的不动:滚动重启时旧进程可能还在用它(见 reapOrphan)
+          const result = await reapOrphan(path.join(root, project.name, conversation.name), { timeoutMs: cfg.closeMs, respectLiveOwner: true });
           if (result.found) reaped += 1;
         }
       }

@@ -153,7 +153,12 @@ export function startFakeSite(port, { internalUrl = 'http://127.0.0.1:1/', host 
   var out = document.getElementById('out');
   if (typeof RTCPeerConnection === 'undefined') { out.textContent = 'RTC-DONE []'; return; }
   var stun = new URLSearchParams(location.search).get('stun');
-  var pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:' + stun }] });
+  var q = new URLSearchParams(location.search);
+  var servers = [];
+  if (stun) servers.push({ urls: 'stun:' + stun });
+  // TURN 走 TCP:浏览器要和中继服务器建一条 TCP 连接
+  if (q.get('turn')) servers.push({ urls: 'turn:' + q.get('turn') + '?transport=tcp', username: 'u', credential: 'p' });
+  var pc = new RTCPeerConnection({ iceServers: servers, iceTransportPolicy: q.get('relay') ? 'relay' : 'all' });
   var got = [];
   pc.onicecandidate = function (e) { if (e.candidate && e.candidate.candidate) got.push(e.candidate.candidate); };
   pc.createDataChannel('x');
@@ -166,6 +171,8 @@ export function startFakeSite(port, { internalUrl = 'http://127.0.0.1:1/', host 
     if (url.pathname === '/rebind') return send(200, 'text/html; charset=utf-8', html('W1 重绑定', `<h1>重绑定</h1><button id="go" onclick="fetch('/whoami?n='+Date.now(),{cache:'no-store'}).then(function(r){return r.text().then(function(t){document.getElementById('out').textContent='取到('+r.status+'):'+t.replace(/<[^>]+>/g,' ').slice(0,80)})}).catch(function(e){document.getElementById('out').textContent='取不到'})">再取一次</button><main><p id="out">还没取</p></main>`));
     // 向本站开一条 WebSocket(证明 WebSocket 走的也是代理)
     if (url.pathname === '/ws') return send(200, 'text/html; charset=utf-8', html('W1 WebSocket', `<main><p id="out">开始</p></main><script>var w=new WebSocket('ws://'+location.host+'/socket');w.onopen=function(){document.getElementById('out').textContent='WS-OPEN'};w.onerror=function(){document.getElementById('out').textContent='WS-ERR'};w.onclose=function(){document.getElementById('out').textContent+=' WS-CLOSED'}</script>`));
+    // 程序里直接提交一个 target=_blank 的表单:不触发提交事件,开出一个新标签页直奔 to= 给的地址
+    if (url.pathname === '/popup-leak') return send(200, 'text/html; charset=utf-8', html('W1 弹出页', `<h1>弹出页</h1><main><p id="out">开始</p></main><script>var f=document.createElement('form');f.method='get';f.target='_blank';f.action=${JSON.stringify(url.searchParams.get('to') ?? '/page2')};document.body.appendChild(f);setTimeout(function(){HTMLFormElement.prototype.submit.call(f);document.getElementById('out').textContent='已提交'},300);</script>`));
     if (url.pathname === '/blank') return send(200, 'text/html; charset=utf-8', html('W1 空页', '<h1>空页</h1><p id="out">等脚本</p>'));
     if (url.pathname === '/slow') return void setTimeout(() => { try { send(200, 'text/html; charset=utf-8', html('慢', '<p>慢</p>')); } catch { /* 对面已经断了 */ } }, 60_000).unref();
     return send(404, 'text/plain; charset=utf-8', 'not found');

@@ -9,7 +9,8 @@
  *               Windows 没有进程组,回「不知道」
  *   W1-PROC-03  认「是不是我们的浏览器」只看命令行里有没有完整的 `--user-data-dir=<这份目录>`;目录名是别人的前缀、子目录都不算
  *   W1-PROC-04  清残留不误杀:锁文件里的进程号活着、但那是别的进程(渲染服务的浏览器、文档服务)——不杀,过期的锁删掉;
- *               登记文件里的进程号被别的对话的浏览器占了——不杀;确实是这份目录的浏览器——杀;Windows 上锁被独占却认不出是谁——照实报还占着
+ *   W1-PROC-05  起它的服务进程还活着的浏览器(滚动重启的重叠期):启动清扫不动;旧服务进程不在了才清;真要在这个对话起新浏览器时照清
+ *               (下面接 W1-PROC-04 的说明)登记文件里的进程号被别的对话的浏览器占了——不杀;确实是这份目录的浏览器——杀;Windows 上锁被独占却认不出是谁——照实报还占着
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -196,4 +197,38 @@ test('W1-PROC-04 清残留不误杀别的进程', async (t) => {
     assert.deepEqual(w.killed, []);
     assert.equal(fs.existsSync(path.join(sessionDir, 'owner.json')), false);
   }
+});
+
+test('W1-PROC-05 起它的服务进程还活着的浏览器:启动清扫不动,真要在这个对话里起新浏览器时才清', async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-w1-owner-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const make = (name, servicePid) => {
+    const sessionDir = path.join(base, name);
+    const profile = path.join(sessionDir, 'profile');
+    fs.mkdirSync(profile, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'owner.json'), JSON.stringify({ servicePid, browserPid: 7101, pids: [7101] }));
+    return { sessionDir, profile };
+  };
+  const run = async (name, servicePid, options) => {
+    const { sessionDir, profile } = make(name, servicePid);
+    const table = { 7101: `/opt/chrome-headless-shell --headless --user-data-dir=${profile}`, 77: 'node /srv/agent/main.mjs' };
+    const killed = [];
+    const result = await reapOrphan(sessionDir, { timeoutMs: 1_000, ...options, deps: {
+      platform: 'linux', selfPid: 4000, holder: () => ({ held: false, pid: null }), commandLine: async (pid) => table[pid] ?? null,
+      alive: (pid) => pid in table, kill: (pid) => { killed.push(pid); delete table[pid]; }, killTree: () => {},
+    } });
+    return { result, killed, sessionDir };
+  };
+  // 滚动重启的重叠期:旧服务进程(77)还活着,它的浏览器在用——新进程的启动清扫不杀
+  const overlap = await run('overlap', 77, { respectLiveOwner: true });
+  assert.deepEqual(overlap.killed, []);
+  assert.equal(overlap.result.liveOwner, true);
+  assert.equal(overlap.result.found, false);
+  assert.equal(fs.existsSync(path.join(overlap.sessionDir, 'owner.json')), true, '登记留着');
+  // 旧服务进程已经不在:是真的残留,清扫时杀
+  assert.deepEqual((await run('dead-owner', 78, { respectLiveOwner: true })).killed, [7101]);
+  // 登记的就是本进程自己(不会发生在清扫时,防一手):照杀
+  assert.deepEqual((await run('self-owner', 4000, { respectLiveOwner: true })).killed, [7101]);
+  // 要在这个对话里起新浏览器(不带开关):旧进程活着也清——同一份目录不能两个浏览器用,文档服务这时已经只认新进程
+  assert.deepEqual((await run('launch-time', 77, {})).killed, [7101]);
 });
