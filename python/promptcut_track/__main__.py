@@ -121,7 +121,9 @@ def cmd_install(_args: argparse.Namespace) -> int:
 
     os.makedirs(target, exist_ok=True)
     # 必须用 sys.executable —— 内置解释器自己的 pip。写死 "python" 会打到系统里
-    cmd = [sys.executable, "-m", "pip", "install", "--target", target, "-r", req]
+    # 本进程是隔离模式(-I)起的(云端 Agent 服务:工作目录是对话工作区),pip 也用隔离模式起,否则 `-m pip` 会把当前目录排进模块搜索路径最前。
+    isolated = ["-I"] if sys.flags.isolated else []
+    cmd = [sys.executable, *isolated, "-m", "pip", "install", "--target", target, "-r", req]
     emit({"event": "log", "line": " ".join(cmd)})
 
     try:

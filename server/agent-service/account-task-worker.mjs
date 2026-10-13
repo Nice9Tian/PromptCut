@@ -43,7 +43,7 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
       if (!journal) fail('account-worker-event-unavailable'); return journal.source(packet);
     } : workerEventSource });
   let record = null, task = null, grant = null, assignment = null, admission = null, assembly = null, starting = null, waiting = null;
-  let stopped = false, closing = null;
+  let stopped = false, closing = null, configuredClose = null;
   // 正常结算的结果只有两种：拿到了文档服务的终态和本进程的意向，或者放弃（交给强制路径）。
   let settle, settlementState = 'none', taskEnded = null, driver = null;
   const settlement = new Promise(resolve => { settle = value => { if (settlementState === 'settled') return;
@@ -167,10 +167,14 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
       // callback or its result from an IPC/HTTP body or a master-provided grant.
       const configured = createAssemblyOptions ? await createAssemblyOptions({ runClient: client,
         runEventsSink: events, task: structuredClone(task), grant: structuredClone(grant) }) : options;
+      // 配置自己起的东西（比如载工具实现用的 vite）由它给的 close 收：排在执行器关完之后。
+      const { close: ownedClose = null, onTaskDrained: configuredDrained, ...assemblyOptions } = configured ?? {};
+      if (ownedClose !== null && typeof ownedClose !== 'function') fail('account-worker-assembly-configuration');
+      configuredClose = ownedClose;
       if (stopped) fail('account-worker-closed');
-      return createAccountExecutorAssembly({ ...configured, ...(events ? { runEventsSink: events } : {}), doc,
+      return createAccountExecutorAssembly({ ...assemblyOptions, ...(events ? { runEventsSink: events } : {}), doc,
         runClient: client, task, registrationScope: { expected: e, record }, assignmentReady,
-        onTaskDrained: value => taskDrained(value, configured.onTaskDrained) });
+        onTaskDrained: value => taskDrained(value, configuredDrained) });
     })();
     // 任务没能走到收尾（没绑定、启动失败、运行器没建起来）就没有正常结算。
     void starting.then(value => Promise.resolve(value.taskWork).then(
@@ -189,7 +193,8 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
     const observedSockets = [...sockets].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); }));
     const serverClosed = server.listening ? new Promise(resolve => server.close(resolve)) : Promise.resolve();
     const results = await Promise.allSettled([client.close(), serverClosed, ...observedSockets,
-      admission?.catch(() => {}), Promise.resolve(waiting).catch(() => {}).then(() => assembly?.close())]);
+      admission?.catch(() => {}), Promise.resolve(waiting).catch(() => {}).then(() => assembly?.close())
+        .finally(() => Promise.resolve(starting).catch(() => {}).then(() => configuredClose?.()))]);
     // Journal/transport cleanup is required even when admission or assembly
     // failed. Sink errors remain observable; no new receipt is invented here.
     results.push(...await Promise.allSettled([events ? events.close() : Promise.resolve().then(() => journal?.close())]));

@@ -9,12 +9,13 @@
  *   - **素材字节只经 ProjectAssets**(F0 的 `project-assets.mjs`):按 mediaId 取到本对话的工作区,边收边核哈希;别的项目的素材取不到。
  *   - **作业记在 ToolJobs 里**(F0 的 `tool-jobs.mjs`,SQLite):同一条消息里同样的请求只开一个作业;重启后跑到一半的标成 interrupted;
  *     撤销/停止时由宿主调 `cancelForFence` 标 cancelled,本模块负责让子进程真的退出。
- *   - **Python 子进程只带固定参数**:`python -I -m promptcut_stt <status|install|transcribe> ...`,参数全由本模块拼,
+ *   - **Python 子进程只带固定参数**:隔离模式(`python -I …`,`runner.mjs` 的 `isolatedPythonArgs`)跑 `promptcut_stt <status|install|transcribe> ...`,参数全由本模块拼,
  *     模型只能选引擎(枚举)、模型名(枚举)、语言(语言代码);没有 pip 参数、索引地址、shell。环境变量按白名单重建,工作目录是本对话的工作区。
  *     转写一律带 `--offline`:权重只用部署者预先放好的,不联网下载;ffmpeg 只读本地文件。
  *   - **安装只装锁定依赖**:`stt_install` 用部署者在节点配置里指定的依赖文件(见 `python/requirements-faster-whisper.lock.txt`),
  *     没配就如实回「这台节点不开放安装」。
  *   - **子进程挂到运行资源登记器**(F0 的 `run-resources.mjs`):撤销、停止、Agent 关闭时一并杀掉整棵进程树,并等到真的 exit + close。
+ *     起进程、杀树、等收尾、登记用的是公共实现 `runner.mjs`(与主体识别、运动追踪、网页采集同一份)。
  *   - **结果写回项目只经宿主给的 `commitTranscript`**(项目写入的缝,由 G 包接到文档服务的 mutate):本模块在提交前重核写权限与素材版本。
  *
  * 本文件不引用 `src/`。节点上的 Python、引擎、权重、ffmpeg 要部署者提供,没有时如实回应而不是假装能用。
@@ -24,6 +25,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs';
 import { childEnv } from '../workspace.mjs';
 import { createSlot } from '../hosted-sound.mjs';
+import { isolatedPythonArgs, killTree, spawnTree, superviseChild } from './runner.mjs';
 
 export const STT_TOOL_NAMES = Object.freeze(['stt_status', 'stt_install', 'transcribe_media']);
 export const STT_ENGINES = Object.freeze(['faster-whisper', 'whisper']);
@@ -85,26 +87,9 @@ const EXT_RE = /^[a-z0-9]{1,8}$/;
 const OUTPUT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/;
 const BAD_JOB = new Set(['error', 'cancelled', 'interrupted']);
 
-/** 用 `-c` 引导而不是 `-m`:让配置里的源码目录排在 sys.path 最前,同时保住 `-I` 隔离(`-I` 会忽略 PYTHONPATH) */
-const BOOTSTRAP = "import sys, runpy; r = sys.argv.pop(1); sys.path.insert(0, r); runpy.run_module('promptcut_stt', run_name='__main__', alter_sys=True)";
-
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const unavailable = (code, error, extra = {}) => ({ ok: false, cloudUnavailable: true, code, error, ...extra });
 const sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
-
-/** 杀整棵进程树:Python 会再起 ffmpeg,只杀 Python 会留下孤儿 */
-function killTree(child) {
-  const pid = child.pid;
-  if (!pid) { try { child.kill('SIGKILL'); } catch { /* 已经退了 */ } return; }
-  if (process.platform === 'win32') {
-    try {
-      const killer = nodeSpawn('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true });
-      killer.on('error', () => { try { child.kill('SIGKILL'); } catch { /* 已经退了 */ } });
-    } catch { try { child.kill('SIGKILL'); } catch { /* 已经退了 */ } }
-  } else {
-    try { process.kill(-pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* 已经退了 */ } }
-  }
-}
 
 /** 探测环境失败(Python 跑不出来)——这类如实回「不可用」;权限被收回等别的错误照常往上抛 */
 const isProbeFailure = (error) => error instanceof SttToolError && (error.code === 'status-failed' || error.code === 'python-missing');
@@ -173,12 +158,14 @@ export function createSttTools({ resources, assets, jobs, workspace, commitTrans
     try { return fs.statSync(runtime.pythonPath).isFile(); } catch { return false; }
   };
 
+  /** 隔离模式:工作区(当前目录)不进模块搜索路径;包的源码目录只来自节点配置,经引导代码递进去 */
   function pythonArgs(sub) {
-    return runtime.sourceRoot ? ['-I', '-c', BOOTSTRAP, runtime.sourceRoot, ...sub] : ['-I', '-m', 'promptcut_stt', ...sub];
+    return isolatedPythonArgs('promptcut_stt', { roots: runtime.sourceRoot ? [runtime.sourceRoot] : [], args: sub });
   }
 
   function pythonEnv(cwd, extra = {}) {
-    const env = childEnv(cwd, { PYTHONNOUSERSITE: '1', PYTHONUTF8: '1', PIP_NO_INPUT: '1', PIP_DISABLE_PIP_VERSION_CHECK: '1', ...extra });
+    // PYTHON* 环境变量在隔离模式下不生效(UTF-8、不看用户 site 都由命令行开关给),这里不设
+    const env = childEnv(cwd, { PIP_NO_INPUT: '1', PIP_DISABLE_PIP_VERSION_CHECK: '1', ...extra });
     if (runtime.ffmpegDir) {
       // Windows 的环境变量名不分大小写,白名单里 PATH/Path 可能都在:每个都加
       const sep = process.platform === 'win32' ? ';' : ':';
@@ -202,41 +189,10 @@ export function createSttTools({ resources, assets, jobs, workspace, commitTrans
     let fenced = false;
     try { fenced = resources.signalFor(context).aborted; } catch { /* 这个对话还没登记过资源:没被收回 */ }
     if (fenced) throw new SttToolError('这一轮对话的权限已被收回。', { code: 'run-resource-fenced', status: 403 });
-    const child = spawnImpl(runtime.pythonPath, pythonArgs(sub), {
-      cwd,
-      env: pythonEnv(cwd, extraEnv),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      shell: false,
-      detached: process.platform !== 'win32',
-    });
-    child.kill = () => { killTree(child); return true; };
+    const child = spawnTree(runtime.pythonPath, pythonArgs(sub), { cwd, env: pythonEnv(cwd, extraEnv) }, { spawnImpl });
     const killer = () => killTree(child);
     killers.add(killer);
     const outcome = { code: null, events: [], stderr: '', timedOut: false, aborted: false };
-    let spawnError = null;
-    const closed = new Promise((resolve) => {
-      child.once('error', (error) => { spawnError = error; resolve(); });
-      child.once('close', (code) => { outcome.code = code; resolve(); });
-    });
-    let registration;
-    try {
-      registration = await resources.register(context, { kind: 'child', resource: child });
-    } catch (error) {
-      // 登记失败时登记器已经杀掉并等过它;这里再兜一次
-      killTree(child);
-      await closed;
-      killers.delete(killer);
-      throw error;
-    }
-    const onAbort = () => { outcome.aborted = true; };
-    registration.signal.addEventListener('abort', onAbort, { once: true });
-    if (registration.signal.aborted) { outcome.aborted = true; killTree(child); }
-    let timer = null;
-    if (timeoutMs > 0) {
-      timer = setTimeout(() => { outcome.timedOut = true; killTree(child); }, timeoutMs);
-      timer.unref?.();
-    }
     let buffer = '';
     const handleLine = (line) => {
       if (!line.trim()) return;
@@ -247,23 +203,28 @@ export function createSttTools({ resources, assets, jobs, workspace, commitTrans
       if (outcome.events.length > 200) outcome.events.splice(0, outcome.events.length - 100);
       try { onEvent?.(event, killer); } catch { /* 回调出错不影响子进程的收尾 */ }
     };
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk.toString('utf8');
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) handleLine(line);
-    });
-    child.stderr.on('data', (chunk) => { outcome.stderr = (outcome.stderr + chunk.toString('utf8')).slice(-2000); });
+    let end;
     try {
-      await closed;
-      if (!spawnError) await registration.closed;
+      // 登记失败(这一轮已经没有权限)时 superviseChild 已经杀掉整棵树并等它收干净,错误原样往上抛
+      const run = await superviseChild(child, {
+        resources, context, timeoutMs,
+        onStdout: (chunk) => {
+          buffer += chunk.toString('utf8');
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) handleLine(line);
+        },
+        onStderr: (chunk) => { outcome.stderr = (outcome.stderr + chunk.toString('utf8')).slice(-2000); },
+      });
+      end = await run.done;
     } finally {
-      if (timer) clearTimeout(timer);
-      registration.signal.removeEventListener('abort', onAbort);
       killers.delete(killer);
     }
     if (buffer.trim()) handleLine(buffer);
-    if (spawnError) throw new SttToolError('语音识别的 Python 起不来。', { code: 'python-missing', status: 503 });
+    if (end.spawnError) throw new SttToolError('语音识别的 Python 起不来。', { code: 'python-missing', status: 503 });
+    outcome.code = end.code;
+    outcome.timedOut = end.timedOut;
+    outcome.aborted = end.aborted;
     return outcome;
   }
 
