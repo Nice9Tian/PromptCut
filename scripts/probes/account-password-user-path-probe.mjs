@@ -709,18 +709,33 @@ try {
     result.deniedHistoryRead.denied = result.deniedHistoryRead.oldIssuedTicketRequest.denied;
   }
   check(result.deniedHistoryRead.denied === true, 'subsequent-real-history-read-denied-after-revocation');
-  const eventStatus = await sitePages[0].evaluate(async () => {
+  // 四样确认（文档、素材、Agent、渲染）齐了，账号服务才把这次退出记成办完，页面才显示已退出；齐之前一直显示正在退出。
+  // 页面自己隔几秒读一次状态，所以这里反复对照「页面上的字」和「接口此刻的状态」。先取页面上的字、后读接口：
+  // 办完是不会退回去的，所以只要页面先显示了已退出、随后读到的接口状态却还没办完，就是页面显示了假成功。
+  const readEventStatus = () => sitePages[0].evaluate(async () => {
     const node = document.querySelector('#password-event-status');
     const eventId = document.querySelector('#password-event')?.dataset.eventId;
+    const text = node?.textContent ?? '';
     const response = await fetch(`/api/account/password-events/${encodeURIComponent(eventId)}`, { credentials:'same-origin' });
     const body = await response.json();
-    return { visible:!!node && node.getClientRects().length > 0, textCode:node?.textContent?.includes('正在退出') ? 'revoking' : 'other',
-      logoutState:body.logout?.state ?? null };
+    return { visible:!!node && node.getClientRects().length > 0,
+      textCode:text.includes('正在退出') ? 'revoking' : text.includes('已退出') ? 'exited' : 'other', logoutState:body.logout?.state ?? null };
   });
-  check(eventStatus.textCode === 'revoking' && eventStatus.logoutState !== 'complete', 'ui-honestly-stays-pending-without-all-service-acks');
+  let eventStatus = await readEventStatus(), exitedBeforeComplete = false;
+  const firstEventStatus = eventStatus;
   currentPhase = 'password-change-pending-screenshot';
   editorStep = 'website-password-pending-screenshot';
   await safeShot(sitePages[0], '06-password-changed-pending');
+  for (const until = Date.now() + TIMEOUT; Date.now() < until;) {
+    if (eventStatus.textCode === 'exited' && eventStatus.logoutState !== 'complete') exitedBeforeComplete = true;
+    if (eventStatus.textCode === 'exited' && eventStatus.logoutState === 'complete') break;
+    await delay(500); eventStatus = await readEventStatus();
+  }
+  check(firstEventStatus.visible && ['revoking', 'exited'].includes(firstEventStatus.textCode) && !exitedBeforeComplete,
+    'ui-never-shows-exited-before-all-service-acks');
+  check(eventStatus.textCode === 'exited' && eventStatus.logoutState === 'complete', 'ui-shows-exited-after-all-service-acks');
+  editorStep = 'website-password-exited-screenshot';
+  await safeShot(sitePages[0], '06b-password-exit-complete');
 
   currentPhase = 'password-reset-with-provider-issued-code';
   editorStep = 'reset-bind-email';

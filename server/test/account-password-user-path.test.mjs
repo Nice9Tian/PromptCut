@@ -39,6 +39,18 @@ function websiteActor(origin, ca) {
   return { request };
 }
 
+/** 等网页读到「退出已办完」。办完之前每一次读到的都必须是进行中，不许出现别的状态。 */
+async function logoutCompleted(actor, eventId, ms = 30_000) {
+  const until = Date.now() + ms;
+  for (;;) {
+    const event = await actor.request('GET', `/password-events/${encodeURIComponent(eventId)}`);
+    if (event.body.logout?.state === 'complete') return event;
+    assert.equal(event.body.logout?.state, 'revoking');
+    if (Date.now() > until) throw Error('logout-not-complete: ' + JSON.stringify(event.body.logout));
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+}
+
 test('改密退出只保留发起网站会话并撤销其它网站与在线编辑器登录', async t => {
   const fixture = await startAccountPasswordUserFixture({ ports, agentPort: 6687,
     diagnostic: data => t.diagnostic(JSON.stringify(data)) });
@@ -88,9 +100,10 @@ test('改密退出只保留发起网站会话并撤销其它网站与在线编�
     await Promise.all([oldPassword, newPassword].map(actor => actor.request('GET', '/me')));
     assert.equal((await oldPassword.request('POST', '/login', { name: accounts[0].name, password: accounts[0].password })).status, 401);
     assert.equal((await newPassword.request('POST', '/login', { name: accounts[0].name, password: accounts[0].nextPassword })).status, 200);
-    const event = await initiator.request('GET', `/password-events/${encodeURIComponent(changed.body.passwordEventId)}`);
+    // 这个环境里文档、素材、Agent 三个服务都是真的在跑：四样确认齐了以后，网页读到的状态才变成办完。
+    const event = await logoutCompleted(initiator, changed.body.passwordEventId);
     assert.equal(event.body.choice, 'exit');
-    assert.notEqual(event.body.logout?.state, 'complete', 'without all real durable service ACKs the UI must remain pending');
+    assert.deepEqual(event.body.logout.pendingServices, []);
 
     await Promise.all([otherOne, otherTwo].map(actor => actor.request('GET', '/me')));
     assert.equal((await otherOne.request('POST', '/login', { name: accounts[0].name, password: accounts[0].nextPassword })).status, 200);
@@ -132,9 +145,9 @@ test('改密退出只保留发起网站会话并撤销其它网站与在线编�
     await Promise.all([preResetPassword, resetPassword].map(actor => actor.request('GET', '/me')));
     assert.equal((await preResetPassword.request('POST', '/login', { name: accounts[0].name, password: accounts[0].nextPassword })).status, 401);
     assert.equal((await resetPassword.request('POST', '/login', { name: accounts[0].name, password: accounts[0].resetPassword })).status, 200);
-    const resetEvent = await initiator.request('GET', `/password-events/${encodeURIComponent(reset.body.passwordEventId)}`);
+    const resetEvent = await logoutCompleted(initiator, reset.body.passwordEventId);
     assert.equal(resetEvent.body.choice, 'exit');
-    assert.notEqual(resetEvent.body.logout?.state, 'complete');
+    assert.deepEqual(resetEvent.body.logout.pendingServices, []);
     t.diagnostic(JSON.stringify({ check: 'password-change-route', eventChoice: event.body.choice,
       logoutState: event.body.logout?.state ?? 'unreported', retainedInitiator: Boolean(initiatorMe.body.account),
       oldSiteSessionsRevoked: !oldOneMe.body.account && !oldTwoMe.body.account, oldEditorRevoked: editorLost.status === 401,
