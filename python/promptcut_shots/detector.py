@@ -22,6 +22,11 @@ MARGIN = 25
 
 FRAME_W, FRAME_H = 48, 27
 
+# 云端 Agent 服务把素材取到对话的工作目录后再递路径来:素材是成员传的,伪装成媒体文件的
+# 播放列表(HLS、concat)不能让 ffmpeg 去连网络地址。置 True 时输入前加 `-protocol_whitelist file`。
+# 桌面版不设(它递的是素材服务上的 http 地址)。
+LOCAL_ONLY = False
+
 
 def decode_frames(ffmpeg: str, video: str):
     """把整段视频解成 48x27 的 RGB 帧。
@@ -33,7 +38,8 @@ def decode_frames(ffmpeg: str, video: str):
     import numpy as np
 
     proc = subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", video,
+        [ffmpeg, "-hide_banner", "-loglevel", "error",
+         *(["-protocol_whitelist", "file"] if LOCAL_ONLY else []), "-i", video,
          "-vf", f"scale={FRAME_W}:{FRAME_H}", "-pix_fmt", "rgb24",
          "-f", "rawvideo", "-"],
         capture_output=True,
