@@ -236,6 +236,16 @@ test('HRS-03 listPlanOverrides:ownListStreams 为真才出切分方自己的那�
   assert.deepEqual(listPlanOverrides(backfill, { browserStreamsFor, ownListStreams: true }).streams, []);
   assert.deepEqual(listPlanOverrides(list, { ownListStreams: true }).streams, []);
   assert.deepEqual(listPlanOverrides({ id: 'plan:p1@1', kind: 'plan', resultKey: 'p1@1', input: {} }, { browserStreamsFor, ownListStreams: true }), {});
+  // 依赖下层的流(一个成员、舞台坐标)照单卡流同一套开关:为真连自己的一份,只有稀疏那一项时标 ownSparseOnly,都不为真只标 browserOnly(等于不出)
+  const belowStream = (extra = {}) => cardStream('g', { streamKey: rk('sk-below', OWN), contentKey: 'sk-below', kind: 'below', plane: 'stage', belowClipIds: ['a'], ...extra });
+  const withBelow = () => [cardStream('a'), belowStream()];
+  const tag = (s) => [s.kind, 'browserOnly' in s, s.ownSparseOnly === true];
+  assert.deepEqual(listPlanOverrides(list, { browserStreamsFor: withBelow, ownListStreams: true }).streams.map(tag), [['card', false, false], ['below', false, false]]);
+  assert.deepEqual(listPlanOverrides(list, { browserStreamsFor: withBelow, ownListSparseStreams: true }).streams.map(tag), [['card', false, true], ['below', false, true]]);
+  assert.deepEqual(listPlanOverrides(list, { browserStreamsFor: withBelow }).streams.map(tag), [['card', true, false], ['below', true, false]]);
+  // 形状不对的(不是舞台坐标、不止一个成员)不认,照旧只标 browserOnly
+  assert.deepEqual(listPlanOverrides(list, { browserStreamsFor: () => [belowStream({ plane: 'local' }), belowStream({ clipIds: ['g', 'a'] })], ownListStreams: true }).streams.map(tag),
+    [['below', true, false], ['below', true, false]]);
 });
 
 /* ================================================================== HRS-04 */

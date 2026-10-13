@@ -757,7 +757,8 @@ export function queueStreamOf(spec) {
 
 /**
  * 在线页面的清单计划用:只按清单里的片段算流(`picked` = 在清单里),不看本机判没判重、本机能不能产流 ——
- * 这些流只给浏览器出一份(`splitPlan` 的 `browserOnly`),切分方自己不产。回 `planStreams` 的结果;`clips` 是片段 id 的集合或数组。
+ * 哪些流出切分方自己的那一份、哪些只给浏览器出,由 `render-node/local-node.mjs` 的 `listPlanOverrides` 定(单卡流、依赖下层的流
+ * 在本机能产流时出自己的那一份;组流只标 `browserOnly`)。回 `planStreams` 的结果;`clips` 是片段 id 的集合或数组。
  */
 export function planListStreams(entry, clips, options = {}) {
   const listed = clips instanceof Set ? clips : new Set(Array.isArray(clips) ? clips : []);

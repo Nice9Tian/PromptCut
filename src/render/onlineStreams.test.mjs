@@ -474,3 +474,120 @@ test('取哪几段按每条流自己的第一帧算:播放头还没到这条流�
   assert.deepEqual(streamPlanesFor(layers, new Set(['c1', 'c2']), 7 + 3 * 15 + 14).map((p) => p.clipIds[0]), ['c2'], 'near 的第 3 段的最后一帧(第 66 帧)');
   src.stop();
 });
+
+/* ---------------- 依赖下层的流(`kind: 'below'`;任务书 `render-refactor-task.md`「戊二」的「下层四」) ---------------- */
+
+/** 三条序列(第一条在最上面):标题、毛玻璃卡 `glass`(第 30 帧起)、下面一张会动的卡 */
+const belowProject = (edit = (p) => p) => edit({ id: 'p1', width: 1920, height: 1080, fps: 30, duration: 20, media: [], tracks: [
+  { id: 'top', clips: [{ id: 'title', cardId: 'c', start: 0, end: 10, params: { text: '标题' } }] },
+  { id: 'mid', clips: [{ id: 'glass', cardId: 'c', start: 1, end: 9, params: {}, frame: { x: 100, y: 100, w: 600, h: 300 } }] },
+  { id: 'low', clips: [{ id: 'mover', cardId: 'c', start: 0, end: 10, params: { speed: 1 } }] },
+] });
+const belowRow = (p, over = {}) => row({ topClipId: 'glass', clipIds: ['glass'], kind: 'below', plane: 'stage', contentKey: 'sk-below',
+  ...(p ? { inputSig: streamInputSig(p, { clipIds: ['glass'], kind: 'below' }) } : {}), ...over });
+
+test('BO-parse 解析 streams 表:依赖下层的流的行认下来(一个成员、舞台坐标);形状不对的跳过', () => {
+  const good = belowRow(null);
+  const parsed = parseLayerStreams([good, { ...good, plane: 'local' }, { ...good, clipIds: ['glass', 'mover'] }, { ...good, inputSig: 's1-x' }]);
+  assert.equal(parsed.length, 2);
+  assert.deepEqual(parsed[0], { ...good, firstSegment: 0 });
+  assert.equal(parsed[0].kind, 'below');
+  assert.equal(parsed[0].plane, 'stage');
+  assert.equal(parsed[1].inputSig, 's1-x');
+});
+
+test('BO-ready 依赖下层的流:就绪消息带 streamKind: below 和层表那一行的签名;给舞台的清单 kind 是 below、plane 是 stage;父页合成的流平面带 plane: stage', async () => {
+  const w = world();
+  const rk = RK(0xb);
+  const p = belowProject();
+  const sig = streamInputSig(p, { clipIds: ['glass'], kind: 'below' });
+  assert.ok(sig);
+  w.putStream(rk, 0, 7, { clipIds: ['glass'], kind: 'below' });
+  w.content.get(`${rk}:0-7`).header.plane = 'stage';
+  w.putMap([belowRow(p, { candidates: [{ envFingerprint: 'fp-a', resultKey: rk }] })]);
+  const { src, streamMessages } = w.source();
+  src.setInputs(p);
+  await w.settle(src);
+  // 和桌面预渲染进程发的那一层同一个形状(`server/frame-stream.mjs` 的 `belowLayerMark`;`src/editor/snapshotFeedBelow.test.mjs` 喂给父页的就是它)
+  assert.deepEqual(last(streamMessages()), { type: 'layer', clipId: 'glass', kind: 'stream', key: rk, ranges: [[0, 2]], originFrame: 30, streamKind: 'below', inputSig: sig });
+  const plane = src.streamPlane(rk);
+  assert.equal(plane.manifest.kind, 'below');
+  assert.equal(plane.manifest.plane, 'stage');
+  assert.deepEqual(plane.manifest.clipIds, ['glass']);
+  assert.equal(plane.manifest.originFrame, 30);
+  // 父页的纯算:就绪索引里那一层带着 streamKind,合成的流平面带 plane: stage(舞台把画布挂在舞台根下)
+  const index = new Map();
+  for (const m of streamMessages()) applyReadyMessage(index, m);
+  const layer = index.get('glass').get('stream');
+  assert.equal(layer.streamKind, 'below');
+  assert.equal(layer.inputSig, sig);
+  const planes = streamPlanesFor([{ clipId: 'glass', ...layer, plane: 'stage' }], new Set(['glass']), 40);
+  assert.deepEqual(planes, [{ clipIds: ['glass'], key: rk, ranges: [[0, 2]], originFrame: 30, plane: 'stage' }]);
+  assert.equal(src.debug().streams[0].kind, 'below');
+  // 没带签名的行:消息里不带 inputSig(父页不比,照贴)
+  const w2 = world();
+  w2.putStream(rk, 0, 7, { clipIds: ['glass'], kind: 'below' });
+  w2.putMap([belowRow(null, { candidates: [{ envFingerprint: 'fp-a', resultKey: rk }] })]);
+  const two = w2.source();
+  two.src.setInputs(p);
+  await w2.settle(two.src);
+  assert.deepEqual(last(two.streamMessages()), { type: 'layer', clipId: 'glass', kind: 'stream', key: rk, ranges: [[0, 2]], originFrame: 30, streamKind: 'below' });
+  src.stop(); two.src.stop();
+});
+
+test('BO-stale 依赖下层的流过期:下层或目标卡改了,旧流撤掉、不再取;上面的层怎么改都不算;改回来照发', async () => {
+  const w = world();
+  const rk = RK(0xb);
+  const p = belowProject();
+  w.putStream(rk, 0, 7, { clipIds: ['glass'], kind: 'below' });
+  w.putMap([belowRow(p, { candidates: [{ envFingerprint: 'fp-a', resultKey: rk }] })]);
+  const { src, streamMessages } = w.source();
+  src.setInputs(p);
+  await w.settle(src);
+  assert.deepEqual(last(streamMessages()).ranges, [[0, 2]]);
+  const stale = {
+    '下层改了一个参数': (q) => { q.tracks[2].clips[0].params = { speed: 2 }; return q; },
+    '下层挪了位置': (q) => { q.tracks[2].clips[0].frame = { x: 10, y: 0, w: 1920, h: 1080 }; return q; },
+    '下层多了一层': (q) => { q.tracks.push({ id: 'bg', clips: [{ id: 'bg', cardId: 'c', start: 0, end: 10, params: {} }] }); return q; },
+    '下层少了一层': (q) => { q.tracks.pop(); return q; },
+    '目标卡自己挪了位置': (q) => { q.tracks[1].clips[0].frame = { x: 300, y: 100, w: 600, h: 300 }; return q; },
+  };
+  for (const [what, edit] of Object.entries(stale)) {
+    src.setInputs(belowProject(edit));
+    assert.deepEqual(last(streamMessages()), { type: 'layer', clipId: 'glass', kind: 'stream', key: rk, ranges: [] }, what);
+    assert.equal(src.streamPlane(rk), null, what);
+    assert.deepEqual(src.debug().staleStreams, ['glass'], what);
+    src.setInputs(belowProject());
+    assert.deepEqual(last(streamMessages()).ranges, [[0, 2]], `${what}:改回来照发`);
+    assert.equal(last(streamMessages()).streamKind, 'below');
+  }
+  // 过期的这段时间里不取清单、不取块
+  src.setInputs(belowProject(stale['下层改了一个参数']));
+  const asked = w.requests.length, got = w.fetches.length;
+  src.focus(3, 30);
+  await w.settle(src);
+  assert.equal(w.requests.filter((r, i) => i >= asked && r.kind === 'render-manifest').length, 0);
+  assert.equal(w.fetches.length, got);
+  src.setInputs(belowProject());
+  // 上面的层怎么改都不算过期
+  const before = streamMessages().length;
+  src.setInputs(belowProject((q) => { q.tracks[0].clips[0].params = { text: '别的' }; q.tracks[0].clips[0].frame = { x: 5, y: 5, w: 100, h: 100 }; return q; }));
+  src.setInputs(belowProject((q) => { q.tracks.shift(); return q; }));
+  src.setInputs(belowProject((q) => { q.tracks.unshift({ id: 'over', clips: [{ id: 'over', cardId: 'c', start: 0, end: 10, params: {} }] }); return q; }));
+  assert.ok(last(streamMessages()).ranges.length > 0);
+  assert.equal(streamMessages().slice(before).some((m) => m.ranges.length === 0), false, '没有撤过');
+  assert.deepEqual(src.debug().staleStreams, []);
+  src.stop();
+});
+
+test('BO-lowmem 低内存档不消费依赖下层的流(这一块不动它)', async () => {
+  const w = world();
+  const rk = RK(0xb);
+  w.putStream(rk, 0, 7, { clipIds: ['glass'], kind: 'below' });
+  w.putMap([belowRow(null, { candidates: [{ envFingerprint: 'fp-a', resultKey: rk }] })]);
+  const { src, streamMessages } = w.source({ tier: 'small' });
+  await w.settle(src);
+  assert.deepEqual(streamMessages(), []);
+  assert.equal(w.requests.some((r) => r.kind === 'render-manifest'), false);
+  src.stop();
+});

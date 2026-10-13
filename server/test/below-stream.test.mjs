@@ -20,7 +20,8 @@ import { cardStreamIdentity, BELOW_STREAM_VERSION } from '../card-identity.mjs';
 import { CardFrameCache } from '../card-cache.mjs';
 import { frameIdentity } from '../frame-identity.mjs';
 import { resultKeyOf } from '../render-node/fingerprint.mjs';
-import { splitPlan, planTaskOf } from '../render-node/split.mjs';
+import { splitPlan, planTaskOf, clipsPlanTaskOf, SPARSE_STREAM_PRIORITY } from '../render-node/split.mjs';
+import { listPlanOverrides } from '../render-node/local-node.mjs';
 import { checkClaimable } from '../render-node/filter.mjs';
 import { layerMapOf, layerStreamsOf } from '../artifact-transfer.mjs';
 import { localMediaGate } from '../queue-local-media.mjs';
@@ -115,8 +116,8 @@ test('BL-off 缺省开:常量是 true,环境变量不设就出;只有明说 0(�
     // 开着:原来那几条流一个字不变,只是后面多出依赖下层的那一条
     assert.deepEqual(on.slice(0, off.length), off, '单卡流的键、形状、先后都不变');
     assert.deepEqual(on.slice(off.length).map(s => `${s.kind}:${s.clipIds}`), ['below:glass']);
-    // 清单计划那条路:计划里有这一条,但清单计划的流一律只给浏览器出一份,而这种流浏览器做不了 —— 切分时一份都不出(`BL-split`),
-    // 所以在线页面的清单还换不来这种流(留给在线页面读这种流的那一块)
+    // 清单计划那条路(在线页面发的清单):计划里有这一条;出不出切分方自己的那一份由 `listPlanOverrides` 按本机能不能产流定(`BL-list`),
+    // 浏览器那一份任何时候都不出
     assert.deepEqual(planListStreams(entry, ['glass', 'mid'], { envFingerprint: FP, codeVersion: CV }).map(s => s.kind), ['card', 'below']);
     assert.deepEqual(planListStreams(entry, ['glass', 'mid'], { envFingerprint: FP, codeVersion: CV, below: false }).map(s => s.kind), ['card']);
     // 环境变量那一个关掉的办法
@@ -565,12 +566,94 @@ test('BL-split 切分:这种流的任务带 requires.transcode、requires.belowD
   assert.ok(streams.filter(t => t.requires.envFingerprint === BROWSER).every(t => t.requires.belowDependent === false && t.input.stream?.kind === 'card'));
   // 别的流任务的 belowDependent 照旧是 false
   assert.ok(streams.filter(t => t.input.contentKey !== spec.contentKey).every(t => t.requires.belowDependent === false));
-  // 只给浏览器出的那条路(在线页面的清单计划):这种流一份都不出
+  // 标了只给浏览器出的(在线页面的清单计划、切分方自己不能产流时,`BL-list`):这种流一份都不出
   const only = splitOf(p, { browserFingerprints: [BROWSER] }, s => ({ ...s, browserOnly: true })).streams;
   assert.deepEqual(only.filter(t => t.input.contentKey === spec.contentKey), []);
   // 锁在别的指纹上:照锁只出一份,还是这种任务
   const locked = splitOf(p, { cardLocks: { [`stream:${spec.contentKey}`]: BROWSER } }).streams.filter(t => t.input.contentKey === spec.contentKey);
   assert.deepEqual(locked.map(t => [t.requires.envFingerprint, t.requires.belowDependent, t.requires.transcode]), [[BROWSER, true, true]]);
+});
+
+/**
+ * 在线页面的清单计划那条路(任务书「戊二」的「下层四」):清单里依赖下层的卡,由切分方按自己的指纹出这种流的任务、自己产。
+ * 照 `local-node.mjs` 切清单计划的做法拼:`listPlanOverrides` 标每条流出哪几份,再交给 `splitPlan`。
+ */
+function splitListOf(p, clips, plan = {}, extra = {}) {
+  const entry = entryOf(p);
+  const listTask = clipsPlanTaskOf({ projectId: 'below-p', projectRev: 3, clips });
+  const browserStreamsFor = set => planListStreams(entry, set, { envFingerprint: OWN, codeVersion: CV }).map(queueStreamOf);
+  const overrides = listPlanOverrides(listTask, { browserStreamsFor, ...plan });
+  const tasks = splitPlan({
+    planTask: listTask, entryKey: entry.key, cardPlan: entry.cardPlan.map(c => ({ ...c, cardId: clipOf(p, c.clipId)?.cardId ?? null })),
+    envFingerprint: OWN, codeVersion: CV, weightOf: () => ({ class: 'medium', estMs: null }), browserFingerprints: [BROWSER], sparseStreams: true,
+    ...overrides, ...extra,
+  });
+  return { entry, overrides, streams: tasks.filter(t => t.kind === 'stream') };
+}
+
+test('BL-list 清单计划:依赖下层的卡由切分方按自己的指纹出这种流(先稀疏后满密度),浏览器那一份不出、浏览器节点认领不了;切分方不能产流时一份都不出', () => {
+  const p = project();
+  // 清单里是页面判重的片段:毛玻璃卡和它下面那张会动的卡
+  const { entry, overrides, streams } = splitListOf(p, ['glass', 'mid'], { ownListStreams: true });
+  assert.deepEqual(overrides.streams.map(s => [s.kind, s.topClipId, 'browserOnly' in s]), [['card', 'mid', false], ['below', 'glass', false]]);
+  // 键和「本机自己这一版」算的是同一个:与清单里还有哪些片段无关(只列目标卡一张、连别的卡一起列、整版全算,三样相同)
+  const whole = planStreams(entry, { envFingerprint: OWN, codeVersion: CV }).find(s => s.kind === 'below');
+  const alone = planListStreams(entry, ['glass'], { envFingerprint: OWN, codeVersion: CV });
+  assert.deepEqual(alone.map(s => s.kind), ['below']);
+  assert.equal(alone[0].contentKey, whole.contentKey);
+  assert.equal(overrides.streams.find(s => s.kind === 'below').contentKey, whole.contentKey);
+  assert.equal(alone[0].inputSig, sigOf(p), '现算的那一条带着页面算的同一个输入签名');
+  const mine = streams.filter(t => t.input.contentKey === whole.contentKey);
+  // 只有切分方自己的指纹;稀疏的排在前面、名次更高;两种任务范围相同
+  assert.deepEqual(mine.map(t => [t.requires.envFingerprint, t.input.density ?? 'dense', `${t.range.from}-${t.range.to}`]), [[OWN, 'sparse', '0-5'], [OWN, 'dense', '0-5']]);
+  assert.equal(mine[0].priority, SPARSE_STREAM_PRIORITY);
+  assert.notEqual(mine[1].priority, SPARSE_STREAM_PRIORITY);
+  const browser = (capabilities, more = {}) => ({ profile: 'browser', envFingerprint: OWN, codeVersions: [CV], capabilities, ownProjectIds: ['below-p'], userId: 'u1', ...more });
+  const desk = profile => ({ profile, envFingerprint: OWN, codeVersions: [CV], capabilities: { userCards: true, transcode: true, streams: true }, ownProjectIds: ['below-p'] });
+  for (const t of mine) {
+    assert.equal(t.resultKey, resultKeyOf(whole.contentKey, OWN));
+    assert.equal(t.requires.transcode, true);
+    assert.equal(t.requires.belowDependent, true);
+    assert.equal(t.weight.class, 'heavy');
+    assert.equal(t.input.clipId, 'glass');
+    assert.ok(!('dual' in t.input) && !('stream' in t.input), '没有浏览器那一份和它成对');
+    // 浏览器节点认领不了(平常的形状规则 2 挡下;转码、重度都放开,规则 7 仍明说不收)
+    const task = { ...t, source: { projectId: 'below-p', projectRev: 3, userId: 'u1' } };
+    assert.equal(checkClaimable(task, browser({ transcode: false, streams: true })).ok, false);
+    assert.deepEqual(checkClaimable(task, browser({ transcode: true, streams: true }, { weightPolicy: { browser: 'all' } })), { ok: false, rule: 7, reason: 'below-dependent' });
+    assert.deepEqual(checkClaimable(task, desk('pc')), { ok: true });
+    assert.deepEqual(checkClaimable(task, desk('host')), { ok: true });
+  }
+  assert.ok(streams.every(t => t.requires.envFingerprint !== BROWSER || t.requires.belowDependent === false), '浏览器的指纹下没有这种流');
+  // 别的卡照旧:单卡流自己一份、浏览器一份,成对
+  const cardTasks = streams.filter(t => t.input.contentKey !== whole.contentKey);
+  assert.deepEqual([...new Set(cardTasks.map(t => t.requires.envFingerprint))].sort(), [OWN, BROWSER].sort());
+  assert.ok(cardTasks.every(t => t.input.dual === true && t.requires.belowDependent === false));
+
+  // 切分方不能产流(没探到编码器、关着开关):这种流一份都不出;单卡流照旧只给浏览器
+  const off = splitListOf(p, ['glass', 'mid'], {});
+  assert.deepEqual(off.overrides.streams.map(s => [s.kind, s.browserOnly === true]), [['card', true], ['below', true]]);
+  assert.deepEqual(off.streams.filter(t => t.input.contentKey === whole.contentKey), []);
+  assert.ok(off.streams.length > 0 && off.streams.every(t => t.requires.envFingerprint === BROWSER));
+
+  // 托管方的渲染节点、这个项目的「生成轨道流」关着:自己的那一份只出稀疏流任务(同单卡流的规矩)
+  const sparseOnly = splitListOf(p, ['glass', 'mid'], { ownListSparseStreams: true });
+  assert.deepEqual(sparseOnly.overrides.streams.map(s => [s.kind, s.ownSparseOnly === true, 'browserOnly' in s]), [['card', true, false], ['below', true, false]]);
+  assert.deepEqual(sparseOnly.streams.filter(t => t.input.contentKey === whole.contentKey).map(t => [t.requires.envFingerprint, t.input.density ?? 'dense']), [[OWN, 'sparse']]);
+  // 队列不认稀疏流任务(旧队列):只有满密度那一个
+  const old = splitListOf(p, ['glass'], { ownListStreams: true }, { sparseStreams: false });
+  assert.deepEqual(old.streams.map(t => [t.requires.envFingerprint, t.input.density ?? 'dense']), [[OWN, 'dense']]);
+
+  // 清单里没有毛玻璃卡(页面没把它判重):不出这种流
+  assert.deepEqual(splitListOf(p, ['mid'], { ownListStreams: true }).overrides.streams.map(s => s.kind), ['card']);
+  // 依赖下层又带三维外框的卡现在没有流(`BELOW_STREAM_RULES.frame3d`,等用户定):清单里有它也不出
+  const tilted = edit((x) => { clipOf(x, 'glass').frame = { x: 100, y: 100, w: 600, h: 300, rotateY: 20 }; });
+  assert.deepEqual(splitListOf(tilted, ['glass'], { ownListStreams: true }).overrides.streams, []);
+  // 预渲染重试计划(低内存档发的)不切流
+  const entry2 = entryOf(p);
+  const listed = clipsPlanTaskOf({ projectId: 'below-p', projectRev: 3, clips: ['glass'] });
+  const backfill = { ...listed, id: listed.id.replace('#clips:', '#backfill:'), resultKey: listed.resultKey.replace('#clips:', '#backfill:'), priority: 'backfill' };
+  assert.deepEqual(listPlanOverrides(backfill, { browserStreamsFor: set => planListStreams(entry2, set, { envFingerprint: OWN, codeVersion: CV }).map(queueStreamOf), ownListStreams: true }).streams, []);
 });
 
 test('BL-split-media 用到只在发布方本机的素材(下层的素材算进去)时带 requires.localMedia', () => {

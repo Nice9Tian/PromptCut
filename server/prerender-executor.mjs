@@ -347,12 +347,13 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     const input = task.input ?? {};
     let spec = (specs ?? []).find(item => item?.contentKey === input.contentKey) ?? null;
     // 任务书「甲三」:清单计划切出的、切分方自己的那一份。清单是发布方判的,本机没判重的卡不在本机这一版的流(`specs`)里;
-    // 这一份只有单卡流(`local-node.mjs` 的 `listPlanOverrides`),它的内容键与清单里还有哪些片段无关,按任务的片段现算一条来对。
+    // 这一份只有单卡流和依赖下层的流(`local-node.mjs` 的 `listPlanOverrides`),它们的内容键与清单里还有哪些片段无关
+    // (单卡流只看这张卡;依赖下层的流看目标卡和它下面的层),按任务的片段现算一条来对。
     // 切分它的可能是别的进程、或本进程重启之前,所以不指望记着当时的清单
     if (!spec && entry && isListWork(task) && typeof input.clipId === 'string' && input.clipId && typeof pipeline.listStreamSpecs === 'function') {
       let listed = [];
       try { listed = pipeline.listStreamSpecs(entry, [input.clipId]) ?? []; } catch { listed = []; }
-      spec = listed.find(item => item?.kind === 'card' && item.contentKey === input.contentKey) ?? null;
+      spec = listed.find(item => (item?.kind === 'card' || item?.kind === 'below') && item.contentKey === input.contentKey) ?? null;
     }
     if (!spec && drifted) throw superseded('新版本里没有这条流');
     const why = [];

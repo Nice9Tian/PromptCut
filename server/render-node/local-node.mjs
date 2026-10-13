@@ -191,7 +191,11 @@ function mergedLocks(cardLocks, extra) {
  *         切分方自己的那一份只出稀疏流任务(`splitPlan` 文件头「稀疏流任务」),浏览器那一份照常;
  *       - 都不为真(本机不能产流、旧执行器):照旧只给浏览器出(`browserOnly`),切分方自己不产。
  *     组流任何时候都只标 `browserOnly`(浏览器画不了,等于不出):组流的内容键跟着「清单里还有哪些片段」变,流任务回来时
- *     对不回这一版,层表也列不出它(`frame-pipeline.mjs` 的 `issuedStreamSpecs` 只认单卡流)。
+ *     对不回这一版,层表也列不出它(`frame-pipeline.mjs` 的 `issuedStreamSpecs` 只认单卡流和依赖下层的流)。
+ *     **依赖下层的流**(`kind: 'below'`,任务书「戊二」的「下层四」):照单卡流同一套开关办 —— `ownListStreams` 为真出切分方自己的那一份
+ *     (稀疏、满密度两种任务),只有 `ownListSparseStreams` 时标 `ownSparseOnly`,都不为真标 `browserOnly`。浏览器那一份 `splitPlan`
+ *     本来就不出(浏览器做不了:要隔离工程加差分取层),所以这种流只按切分方自己的指纹出、由切分方自己产;标了 `browserOnly` 就一份都不出。
+ *     它的内容键只由目标卡和它下面的层决定,与清单里还有哪些片段无关,流任务回来时按目标卡现算一条就对得回(`prerender-executor.mjs` 的 `matchStream`)。
  *     执行器没给 `browserStreamsFor`(旧执行器、测试替身)就不切流,与原来相同。
  */
 export function listPlanOverrides(task, plan) {
@@ -203,9 +207,12 @@ export function listPlanOverrides(task, plan) {
     const own = plan.ownListStreams === true;
     const sparseOwn = !own && plan.ownListSparseStreams === true;
     const single = s => s.kind === 'card' && s.plane === 'local' && Array.isArray(s.clipIds) && s.clipIds.length === 1;
+    // 依赖下层的流:只有目标卡一个成员、按舞台坐标;切分方自己的那一份照单卡流同一套开关出
+    const below = s => s.kind === 'below' && s.plane === 'stage' && Array.isArray(s.clipIds) && s.clipIds.length === 1;
+    const ownable = s => single(s) || below(s);
     try {
       streams = (plan.browserStreamsFor(new Set(clips)) ?? []).filter(s => s && typeof s === 'object')
-        .map(s => (own && single(s) ? { ...s } : sparseOwn && single(s) ? { ...s, ownSparseOnly: true } : { ...s, browserOnly: true }));
+        .map(s => (own && ownable(s) ? { ...s } : sparseOwn && ownable(s) ? { ...s, ownSparseOnly: true } : { ...s, browserOnly: true }));
     } catch { streams = []; }
   }
   return { prerenderSet: new Set(clips), streams, lane: backfill ? 'backfill' : 'normal' };
