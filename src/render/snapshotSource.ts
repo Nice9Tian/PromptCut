@@ -301,9 +301,13 @@ export interface StreamCandidate {
 export interface OnlineStream {
   /** 就绪消息挂在哪张卡上:单卡流是它自己,组流是组里最上面那张 */
   topClipId: string;
-  /** 成员(画家顺序,最后一个在最上面) */
+  /** 成员(画家顺序,最后一个在最上面)。依赖下层的流只有目标卡一张(算进键里的下层不列,页面按当前项目自己找) */
   clipIds: string[];
-  kind: "card" | "group";
+  /**
+   * `below`:依赖下层的流(毛玻璃这一类卡;`docs/plan/prerender-products-contract.md` 第 5 节)。流里只有目标卡改动过的那一层,
+   * 按舞台坐标产(`plane` 是 `stage`);就绪消息带 `streamKind: "below"`,父页据此发 `plane: "stage"` 的流平面。
+   */
+  kind: "card" | "group" | "below";
   plane: "local" | "stage";
   contentKey: string;
   /** 候选:切分实际出键的那几种环境,再补上写层表的节点自己的。哪一份活着的认定同快照层 */
@@ -401,6 +405,7 @@ export function layerCandidates(layer: OnlineLayer): LayerCandidate[] {
 /**
  * 层表的 `streams` 表:形状不对的行跳过,不抛;不是数组回空表。
  * 只认带 `originFrame` 的行:没有它的行是改分段规则之前的节点写的(分段按项目帧号数),照现在的换算贴上去画面会错位。
+ * 依赖下层的流(`kind: "below"`)只认「一个成员、舞台坐标」的行:形状不对的贴上去位置会错,跳过(当作这张卡没有流)。
  */
 export function parseLayerStreams(raw: unknown): OnlineStream[] {
   if (!Array.isArray(raw)) return [];
@@ -410,11 +415,12 @@ export function parseLayerStreams(raw: unknown): OnlineStream[] {
     if (!r || typeof r !== "object") continue;
     const clipIds = Array.isArray(r.clipIds) ? (r.clipIds as unknown[]).filter(str) : [];
     if (!clipIds.length || clipIds.length !== (r.clipIds as unknown[]).length) continue;
-    const kind = r.kind === "group" ? "group" : r.kind === "card" ? "card" : null;
+    const kind = r.kind === "group" ? "group" : r.kind === "card" ? "card" : r.kind === "below" ? "below" : null;
     const plane = r.plane === "stage" ? "stage" : r.plane === "local" ? "local" : null;
     const firstSegment = 0, lastSegment = Number(r.lastSegment), segmentsPerTask = Number(r.segmentsPerTask);
     const originFrame = r.originFrame;
     if (!kind || !plane || !str(r.contentKey)) continue;
+    if (kind === "below" && (clipIds.length !== 1 || plane !== "stage")) continue;
     if (!isStreamOrigin(originFrame) || !Number.isInteger(lastSegment) || lastSegment < firstSegment) continue;
     if (!Number.isInteger(segmentsPerTask) || segmentsPerTask < 1) continue;
     const candidates: StreamCandidate[] = [];
@@ -615,7 +621,7 @@ interface StreamSegMeta { hash: string; init: string; stride: number; samples: n
 /** 一份流清单(`render-manifest`,`<结果键>:<起>-<止>`)取回来之后的样子 */
 interface StreamManifestState {
   resultKey: string;
-  header: { kind: "card" | "group"; plane: "local" | "stage"; clipIds: string[]; fps: number; bound: StreamRect; tight: StreamRect | null } | null;
+  header: { kind: "card" | "group" | "below"; plane: "local" | "stage"; clipIds: string[]; fps: number; bound: StreamRect; tight: StreamRect | null } | null;
   inits: Map<string, StreamInitMeta>;
   segments: Map<number, StreamSegMeta>;
   /** 这一份里每个分段都有、而且都是满密度的:不必再取(稀疏段以后会被满密度的换掉,所以还要再取) */
@@ -643,7 +649,7 @@ function parseStreamManifest(body: unknown, resultKey: string, seg: [number, num
   const bound = rectOf(h?.bound);
   const clipIds = Array.isArray(h?.clipIds) ? (h!.clipIds as unknown[]).filter((x): x is string => typeof x === "string" && !!x) : [];
   if (h && bound && clipIds.length && Number(h.fps) > 0) {
-    state.header = { kind: h.kind === "group" ? "group" : "card", plane: h.plane === "stage" ? "stage" : "local", clipIds, fps: Number(h.fps), bound, tight: rectOf(h.tight) };
+    state.header = { kind: h.kind === "group" ? "group" : h.kind === "below" ? "below" : "card", plane: h.plane === "stage" ? "stage" : "local", clipIds, fps: Number(h.fps), bound, tight: rectOf(h.tight) };
   }
   for (const [id, meta] of Object.entries(b.inits && typeof b.inits === "object" ? b.inits : {})) {
     const rect = rectOf(meta?.rect);
@@ -1178,7 +1184,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       const id = `stream:${s.row.topClipId}`;
       if (live.has(id)) continue;   // 同一张卡在表里列了两行:只认第一行
       live.add(id);
-      const sig = `${msg.key}|${JSON.stringify(msg.ranges)}|${msg.groupClipIds?.join(",") ?? ""}|${msg.originFrame ?? ""}`;
+      const sig = `${msg.key}|${JSON.stringify(msg.ranges)}|${msg.groupClipIds?.join(",") ?? ""}|${msg.originFrame ?? ""}|${msg.streamKind ?? ""}|${msg.inputSig ?? ""}`;
       if (this.emitted.get(id)?.sig === sig) continue;
       this.emitted.set(id, { sig, clipId: s.row.topClipId, kind: "stream", key: s.resultKey });
       this.emit(msg);
@@ -1337,9 +1343,15 @@ export class OnlineSnapshotSource implements SnapshotSource {
     return out;
   }
 
+  /**
+   * 依赖下层的流另带两项(同桌面预渲染进程发的那一层,`server/frame-stream.mjs` 的 `belowLayerMark`):`streamKind: "below"` ——
+   * 父页据此发 `plane: "stage"` 的流平面(`src/editor/snapshotFeed.ts` 的 `streamLayers`),舞台把它挂在舞台根下、按舞台坐标贴;
+   * `inputSig` —— 层表那一行带的输入签名,父页按 store 里当前的项目再比一次(项目一改当场撤,不等本来源收到新项目重发就绪)。
+   */
   private streamMessage(s: ChosenStream): ReadyMessage {
     return { type: "layer", clipId: s.row.topClipId, kind: "stream", key: s.resultKey, ranges: framesToRanges(this.streamReady(s)),
-      originFrame: s.row.originFrame, ...(s.row.kind === "group" ? { groupClipIds: [...s.row.clipIds] } : {}) };
+      originFrame: s.row.originFrame, ...(s.row.kind === "group" ? { groupClipIds: [...s.row.clipIds] } : {}),
+      ...(s.row.kind === "below" ? { streamKind: "below" as const, ...(s.row.inputSig ? { inputSig: s.row.inputSig } : {}) } : {}) };
   }
 
   /** 流的清单或字节变了:记一笔、重发就绪、叫宿主重投(流平面要带上新到的字节) */
