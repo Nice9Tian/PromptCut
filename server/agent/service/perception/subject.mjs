@@ -74,6 +74,7 @@ const MEDIA_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,199}$/;
 const REQUEST_RE = /^[A-Za-z0-9_-]{8,128}$/;
 const OUTPUT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/;
 const INDEX_FILE = 'subject/jobs.json';
+const RESERVED = Symbol('reserved');
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 
 /**
@@ -191,6 +192,8 @@ export function createSubjectTools({
   /** 同一素材同一时刻只一个检测作业:`项目\0素材` -> jobId */
   const byMedia = new Map();
   let installLive = null;
+  /** 正在登记账本、还没进 live 的检测作业数(两个并发调用不能同时越过上限检查) */
+  let reserving = 0;
   let installSummary = null;
   let statusCache = null;
   let closing = false;
@@ -450,12 +453,23 @@ export function createSubjectTools({
       }
       throw new SubjectToolError('这个素材正在做另一次主体检测,等它跑完(用 list_subjects 轮询)再换参数重测。', 'subject-busy');
     }
-    if (live.size >= limits.maxRunning) throw new SubjectToolError('节点上主体检测正在跑的作业太多了,过一会儿再试。', 'subject-busy');
+    if (live.size + reserving >= limits.maxRunning) throw new SubjectToolError('节点上主体检测正在跑的作业太多了,过一会儿再试。', 'subject-busy');
 
     const requestId = REQUEST_RE.test(options.requestId ?? '') ? options.requestId : `sd_${randomUUID().replace(/-/g, '')}`;
+    // 先占位再 await:同一素材的两个并发调用,第二个看到占位就回 busy
+    byMedia.set(mediaKey, RESERVED);
+    reserving += 1;
     let started;
     try { started = await jobs.start(context, 'subject.detect', digest, requestId); }
-    catch (error) { throw new SubjectToolError(`主体检测没能登记作业(${error?.code ?? '账本不可用'})`, 'subject-job'); }
+    catch (error) {
+      byMedia.delete(mediaKey);
+      throw new SubjectToolError(`主体检测没能登记作业(${error?.code ?? '账本不可用'})`, 'subject-job');
+    } finally { reserving -= 1; }
+    if (closing) {
+      byMedia.delete(mediaKey);
+      void tracker(context, started.jobId).patch({ state: 'interrupted', errorCode: 'SERVICE_CLOSING' });
+      throw new SubjectToolError('云端 Agent 服务正在关闭,主体识别不再接新活。', 'subject-closing');
+    }
     const result = {
       jobId: started.jobId, started: true, mediaId,
       samples: times.length,
@@ -470,6 +484,7 @@ export function createSubjectTools({
     };
     if (started.state !== 'queued' || live.has(started.jobId)) {
       // 同一 requestId 的重试:作业已经开了,不再开第二个
+      if (byMedia.get(mediaKey) === RESERVED) byMedia.delete(mediaKey);
       return { ...result, started: false, alreadyRunning: started.state === 'queued' || started.state === 'running', state: started.state };
     }
 
@@ -710,13 +725,17 @@ export function createSubjectTools({
     const ws = await workspace(context);
     const status = await readStatus(context, ws, { fresh: true });
     if (status.engine) return { ok: true, ready: true, alreadyInstalled: true, engine: status.engine, hint: `这台云节点已经有 ${status.engine} 档,不用装。` };
-    if (installLive) return { jobId: installLive.jobId, started: false, alreadyRunning: true, hint: '主体识别正在安装,用 subject_status 看 engine 有没有变。不要重复启动。' };
+    if (installLive) return { jobId: installLive.jobId ?? null, started: false, alreadyRunning: true, hint: '主体识别正在安装,用 subject_status 看 engine 有没有变。不要重复启动。' };
 
     const requestId = REQUEST_RE.test(options.requestId ?? '') ? options.requestId : `si_${randomUUID().replace(/-/g, '')}`;
     let started;
+    installLive = { jobId: null }; // 占位:两个并发的 subject_install 只有一个能往下走
     try { started = await jobs.start(context, 'subject.install', sha('subject.install:light'), requestId); }
-    catch (error) { throw new SubjectToolError(`主体识别安装没能登记作业(${error?.code ?? '账本不可用'})`, 'subject-job'); }
-    if (started.state !== 'queued') return { jobId: started.jobId, started: false, state: started.state };
+    catch (error) { installLive = null; throw new SubjectToolError(`主体识别安装没能登记作业(${error?.code ?? '账本不可用'})`, 'subject-job'); }
+    if (started.state !== 'queued' || closing) {
+      installLive = null;
+      return { jobId: started.jobId, started: false, state: started.state };
+    }
     const job = { jobId: started.jobId, context, cancelRequested: null, kill: null, done: null };
     installLive = job;
     live.set(job.jobId, job);
@@ -779,7 +798,8 @@ export function createSubjectTools({
         return;
       }
       if (!installed) {
-        const message = scrub(errorEvent?.message || logTail.slice(-3).join(' ') || `安装进程退出码 ${outcome.code}`, ws).slice(0, 400);
+        const pipTail = logTail.filter((l) => /error|no matching|could not/i.test(l)).slice(-2).join(' ');
+        const message = scrub([errorEvent?.message || `安装进程退出码 ${outcome.code}`, pipTail].filter(Boolean).join(' '), ws).slice(0, 500);
         installSummary = { state: 'error', finishedAt: now(), message };
         await track.patch({ state: 'error', errorCode: 'SUBJECT_INSTALL_FAILED' });
         return;

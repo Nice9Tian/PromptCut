@@ -518,3 +518,39 @@ test('close:关闭后不再接新活;返回的回执说明子进程都已关', a
   assert.deepEqual({ ...receipt, reason: undefined }, { childrenClosed: true, streamsClosed: true, workPending: 0, reason: undefined });
   await assert.rejects(detect(fx, 'm1'), code('subject-closing'));
 });
+
+test('并发的两个 detect_subjects(同一素材):只有一个起作业,另一个回 busy / alreadyRunning;并发的两个 install 同理', async (t) => {
+  const reqDir = tmpDir('pc-p4-req-');
+  t.after(() => fs.rmSync(reqDir, { recursive: true, force: true }));
+  const req = path.join(reqDir, 'hang.txt');
+  fs.writeFileSync(req, 'hang');
+  const config = stubConfig(t, { engine: 'light', install: { pylibs: path.join(reqDir, 'libs'), requirements: req } });
+  const fx = await makeP4Fixture(t, { config });
+  await fx.addMedia({ id: 'm1', bytes: plan({ mode: 'hang' }), extra: { duration: 6 } });
+  const results = await Promise.allSettled([detect(fx, 'm1', { prompt: 'a .' }), detect(fx, 'm1', { prompt: 'b .' }), detect(fx, 'm1', { prompt: 'a .' })]);
+  const started = results.filter((r) => r.status === 'fulfilled' && r.value.started === true);
+  assert.equal(started.length, 1, '同一时刻只有一个真正起了作业');
+  assert.equal(results.filter((r) => r.status === 'rejected' && r.reason.code === 'subject-busy').length >= 1, true);
+  const db = new DatabaseSync(fx.dbPath, { readOnly: true });
+  try { assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tool_jobs WHERE kind='subject.detect'").get().n, 1); } finally { db.close(); }
+  await waitPids(fx);
+  await fx.tools.cancel(fx.context, started[0].value.jobId);
+
+  // 并发 install:占位让第二个看到「已经在跑」(此时 light 档已就绪,先把引擎文件改成 none 才会走到起作业这一步)
+  fs.writeFileSync(path.join(config.modelsDir, 'engine.txt'), 'none');
+  const [i1, i2] = await Promise.all([fx.tools.call('subject_install', {}, fx.context), fx.tools.call('subject_install', {}, fx.context)]);
+  assert.equal([i1, i2].filter((r) => r.started === true).length, 1);
+  assert.equal([i1, i2].filter((r) => r.alreadyRunning === true).length, 1);
+});
+
+test('素材超过取字节的上限:作业 error(不把大文件落进工作目录),临时文件删净', async (t) => {
+  const fx = await makeP4Fixture(t, { config: stubConfig(t), limits: { maxFetchBytes: 20 } });
+  await fx.addMedia({ id: 'm1', bytes: plan({ mode: 'ok', pad: 'x'.repeat(200) }), extra: { duration: 6 } });
+  const started = await detect(fx, 'm1');
+  const { error } = await settle(fx, 'm1');
+  assert.equal(error.code, 'job-error');
+  assert.match(error.message, /太大/);
+  assert.equal((await ledger(fx, started.jobId)).errorCode, 'MEDIA_FETCH_FAILED');
+  assert.equal(fx.readConfigCalls().filter((c) => c.sub === 'detect').length, 0, '没起 Python');
+  assert.deepEqual(fx.ws.list().map((f) => f.path).filter((p) => p !== 'stub-calls.jsonl'), ['subject/jobs.json']);
+});

