@@ -21,6 +21,11 @@ import { scopeModel, pair } from './agent-run-scope-fixture.mjs';
 import { createExistingHostedRunnerFactory, createImportReservation } from '../agent/service/account-runner.mjs';
 import { createWorkspaces } from '../agent/service/workspace.mjs';
 import { runAssetImportWithRetry } from '../agent/service/hosted-tools.mjs';
+import { generateKeyPairSync } from 'node:crypto';
+import { createDocAssembly } from '../hosted/doc-assembly.mjs';
+import { createFileStore } from '../docservice/store/index.mjs';
+import { bytesDigest } from '../account/run-asset-protocol.mjs';
+import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { resolveAccountLook } from '../agent-service/main.mjs';
 
 const P = `sp_${'a'.repeat(26)}`;
@@ -283,4 +288,46 @@ test('RW9 导入只重试确属暂时性的错：任务被停、配置不对、�
     assert.deepEqual(await run(e(code)), { calls: 3, waits: 2, outcome: code }, code);
   // 没有状态码、只有错误码的那一种（问授权时文档服务不通）也算
   assert.deepEqual(await run(Object.assign(new Error('run-authority-unavailable'), { code: 'run-authority-unavailable' })), { calls: 3, waits: 2, outcome: 'run-authority-unavailable' });
+});
+
+test('RW10 导入按「写」核权限：只读得了、写不了的这一轮导不进素材（读照常）；核的动作就是请求签的那个，不换成别的', { timeout: 30_000 }, async t => {
+  // 真的文档服务装配里解析素材引用的那一段（真的项目协调器、真的历史库）；任务授权那一侧是受控的：记下每次核的是哪个动作，
+  // 并且可以拨成「只许读」。真实的任务授权里读和写的结论目前总是一样的，这里要证的是「导入去核的确实是写」。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-runner-wiring-doc-'));
+  const pki = assetWiringPki(dir), accountKey = generateKeyPairSync('ed25519'), docKey = generateKeyPairSync('ed25519');
+  const dataDir = path.join(dir, 'doc'); fs.mkdirSync(dataDir);
+  const projectId = `sp_${'d'.repeat(26)}`, existing = bytesDigest(Buffer.from('existing')), incoming = bytesDigest(Buffer.from('incoming'));
+  const actor = { realm: 'account', identityVersion: 2, role: 'agent', projectId, accountId: 'sender', loginId: 'login-one', credentialId: 'credential-one',
+    loginGeneration: 1, conversationId: 'conversation-one', messageId: 'message-one', runId: 'run-one', runGrantId: 'grant-one' };
+  let view = { projectRev: 1, value: { media: [{ id: 'media-one', kind: 'audio', name: 'a.wav', hash: existing, size: 8, ext: 'wav', tiers: { original: existing } }] }, versions: {} };
+  const asked = []; let writable = true;
+  const doc = createDocAssembly({ dataDir, authority: { authorityId: 'runner-wiring-doc', checkAccess: async () => ({ allowed: false }) },
+    account: { origin: 'https://127.0.0.1:1', clientTls: pki.doc, serverFingerprint256: pki.account.fingerprint256,
+      order: { witnessKeys: { 'controlled-order': accountKey.publicKey }, docAttestationPrivateKey: docKey.privateKey } },
+    runProvider: { async checkAccess({ action }) { asked.push(action); return { allowed: action === 'read' || writable }; }, async authorizeQuery() { throw Error('not-used'); } },
+    contentTypeForExt: ext => (ext === 'wav' ? 'audio/wav' : undefined),
+    async resolveTierAssetRef(input) { return { projectId, hash: input.hash, size: 8, ext: 'wav', contentType: 'audio/wav' }; } });
+  t.after(async () => { await doc.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const store = createFileStore({ dir: path.join(dataDir, 'tenants', projectId), log: () => {} });
+  doc.coordinatorForSpace({ space: projectId, store, directory: path.join(dataDir, 'tenants', projectId) })
+    .bind({ read: () => structuredClone(view), async materialize(operation) { view = { projectRev: operation.projectRev, value: operation.after, versions: {} }; } });
+  const importSelector = { hash: incoming, size: 8, ext: 'wav', name: 'import.wav', kind: 'audio', importId: 'import:one' };
+  const importing = () => doc.resolveRunMedia({ principal: actor, projectId, purpose: 'import', selector: importSelector, action: 'write' });
+  const reading = () => doc.resolveRunMedia({ principal: actor, projectId, purpose: 'openRead', selector: { mediaId: 'media-one', tier: 'original' }, action: 'read' });
+  // 有写权限：导入解析得出来，核的每一次都是「写」（原来固定按「读」核，和请求签的「写」对不上）
+  const selected = await importing();
+  assert.equal(selected.resource.hash, incoming); assert.equal(selected.resource.projectId, projectId);
+  assert.ok(asked.length >= 4); assert.deepEqual([...new Set(asked)], ['write']);
+  // 这一轮只读得了、写不了：导入被拒；读照常，而且读核的是「读」
+  writable = false; asked.length = 0;
+  await assert.rejects(importing(), { code: 'operation-forbidden' });
+  assert.deepEqual([...new Set(asked)], ['write'], '被拒的那次核的也是写，没有退成读');
+  asked.length = 0;
+  assert.equal((await reading()).resource.hash, existing);
+  assert.deepEqual([...new Set(asked)], ['read']);
+  // 不给动作时按读（老调用方）；不认识的动作拒
+  asked.length = 0;
+  await doc.resolveRunMedia({ principal: actor, projectId, purpose: 'openRead', selector: { mediaId: 'media-one', tier: 'original' } });
+  assert.deepEqual([...new Set(asked)], ['read']);
+  await assert.rejects(doc.resolveRunMedia({ principal: actor, projectId, purpose: 'import', selector: importSelector, action: 'admin' }), { code: 'run-asset-project-forbidden' });
 });

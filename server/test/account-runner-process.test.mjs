@@ -124,19 +124,40 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     const leases = Object.values(f.ledger().runAssetLeasesV1 ?? {}); mark('leases');
     assert.ok(leases.length >= 4, `导入（对账、传片、收尾）与读取各有租约：${leases.length}`);
 
-    // ---------- 第三条：做到一半从外面强制停 ----------
+    // ---------- 第三条：做到一半从外面强制停；停的时候它正有一个看画面的请求排在渲染服务那里 ----------
+    // 出图的工作进程先不回（看画面的请求一直在做）；root 的强制关先压着不动手——为的是看清「进程还活着、权限已经没了」
+    // 的那一段里，真实运行器这条路（account-runner 把 resources.authorize 接给看画面的客户端）自己把排着的请求撤回。
+    let releaseForced; f.holds.forcedClose = new Promise(resolve => { releaseForced = resolve; });
+    f.renderGate.hold = true;
+    const lookCallsBefore = f.lookCalls.length, servedBefore = f.look.status().served;
     const third = await send('runner_message_3', [
       { tool: 'set_project_meta', input: { name: 'Before forced stop' } },
-      { sleepMs: 60_000 },
+      { tool: 'see_frames', input: { source: 'timeline', t: 0 } },
       { tool: 'set_project_meta', input: { name: 'MUST NOT LAND' } },
       { say: '这句不该出现' }]);
     const fourth = await send('runner_message_4', [{ say: '第四条做完' }]);
-    await until(() => f.events(conversationId).some(row => row.runGrantId === f.grantOf(third)?.runGrantId && row.event.type === 'tool_result'),
-      { what: '第三条做完第一个工具', timeoutMs: 90_000 }).catch(error => { error.message += ` :: ${diagnose()}`; throw error; });
+    await until(() => f.lookCalls.length > lookCallsBefore, { what: '第三条的看画面请求到了出图工作进程', timeoutMs: 90_000 })
+      .catch(error => { error.message += ` :: ${diagnose()}`; throw error; });
     const g3 = f.grantOf(third), pid3 = f.generations.get(4).pid;
     assert.equal(g3.state, 'active');
+    assert.equal(f.look.status().inFlight?.projectId, f.projectId, '看画面的请求正在做');
     // 用户按「停止」：经主服务的公开接口到文档服务。权限在文档服务提交围栏的那一刻就没了；
     // 接口要等 root 真的把进程关掉才回成功，没办完时回「还在办」，用同一个请求号再问。
+    const firstStop = await actor.agent(`/conversations/${conversationId}/abort`, { runId: g3.runId, requestId: 'runner_stop_3' });
+    assert.notEqual(firstStop.status, 200, 'root 还没把进程关掉，停止接口不能回成功');
+    assert.equal(f.grantOf(third).state, 'revoked', '权限在文档服务提交围栏时就没了');
+    // 失权路径：任务进程下一趟去问画面之前先过授权闸，文档服务说不行，它把排着的请求撤回。这时进程还活着（root 还压着没动手）。
+    await until(() => f.log.some(row => row.event === 'render.look.cancelled'), { what: '排着的看画面请求被撤回', timeoutMs: 30_000 })
+      .catch(error => { error.message += ` :: ${diagnose()}`; throw error; });
+    assert.equal(f.stops.some(row => row.epoch === 4), false, '撤回发生在进程被关之前：是授权闸撤的，不是进程没了');
+    assert.equal(f.generations.get(4).gateway.describe().childClosed, false);
+    await until(() => f.workerLog(4).some(row => row.event === 'agent.look.revoked'), { what: '任务进程记下看画面失权', timeoutMs: 10_000 });
+    assert.equal(f.look.status().inFlight, null); assert.equal(f.look.status().queue.queued, 0);
+    // 出图的工作进程这时才肯回：晚到的结果没人要，没有多出一帧
+    f.renderGate.hold = false;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(f.look.status().served, servedBefore, '失权之后不再出图');
+    releaseForced(); f.holds.forcedClose = null;
     let stopReply = null;
     await until(async () => {
       stopReply = await actor.agent(`/conversations/${conversationId}/abort`, { runId: g3.runId, requestId: 'runner_stop_3' });
@@ -157,7 +178,8 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     const rows3 = f.events(conversationId).filter(row => row.runGrantId === g3.runGrantId);
     assert.equal(rows3.some(row => row.event.type === 'runner_done'), false);
     assert.equal(rows3.some(row => row.event.type === 'text' && row.event.delta === '这句不该出现'), false);
-    assert.equal(rows3.filter(row => row.event.type === 'tool_result').length, 1, '停止之后的那个工具没有执行');
+    assert.deepEqual(rows3.filter(row => row.event.type === 'tool_result' && row.event.ok === true).map(row => row.event.name), ['set_project_meta'],
+      '成功的只有停止之前的那一次改名：看画面没看成，停止之后的那次改名没有执行成');
     // 停止之前落地的修改保留，停止之后的没有落地
     assert.equal((await actor.project()).project.name, 'Before forced stop');
 

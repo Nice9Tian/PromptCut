@@ -211,7 +211,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       runAssets: { origin: `https://127.0.0.1:${ports.assetInternal}/`, fingerprint256: pki.asset.fingerprint256,
         // 全量测试时机器很忙：一次素材请求里素材服务要回文档服务核好几趟，缺省的 5 秒无动静时限不够宽
         maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024, timeoutMs: 30_000 } };
-    fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile }), { mode: 0o600 });
+    fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile, lookLimits: { pollWaitMs: 300 } }), { mode: 0o600 });
     const gateway = createAccountWorkerGateway({ configurationModule: path.join(here, 'account-runner-child-config.mjs'), cwd: path.resolve(here, '..', '..', '..'),
       env: { ...process.env, PROMPTCUT_RUNNER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 30_000 });
     const ready = await gateway.ready;
@@ -240,6 +240,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
           closureScope: structuredClone(record.closureScope), scopeActive: true, scopeExclusive: true, mainPid: 0, mainBirthGone: true, populated: 0 };
       } };
   };
+  const holds = { forcedClose: null };
   const headRecord = () => { const head = m.files.get('current.json'); return head ? { head, record: m.files.get(`epoch-${head.epoch}.json`) } : null; };
   slot = {
     slotId,
@@ -252,7 +253,8 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     },
     bind: assignment => m.run('bind', { assignment }),
     close: ({ terminal, intent }) => m.run('close', { terminal, intent }),
-    forcedClose: ({ terminal }) => m.run('forced-close', { terminal, intent: null }),
+    // holds.forcedClose：测试可以让 root 晚一点动手强制关（看清「进程还活着时权限已经没了」那一段）
+    async forcedClose({ terminal }) { say('root.forced-close.requested', {}); if (holds.forcedClose) await holds.forcedClose; return m.run('forced-close', { terminal, intent: null }); },
     retire({ reason }) { const { record } = headRecord();
       return m.run('retire', { intent: null, terminal: { v: 1, protocol: 'promptcut.agent-run-scope.unassigned-retirement.v1',
         authorityId: m.expected.authorityId, slotId: m.expected.slotId, epoch: record.epoch, recordDigest: digestOf(record), reason } }); },
@@ -344,7 +346,7 @@ ${projectId}
 ${conversationId}`).digest('hex').slice(0, 32) });
 
   return { ...fixture, dir, dataDir, projectId, m, scheduler, slot, master, generations, stops, log, lookCalls, renderGate, look, requests,
-    connectActor, headRecord, workspaceOf, ledger, conversation, messageOf, grantOf,
+    connectActor, headRecord, workspaceOf, ledger, conversation, messageOf, grantOf, holds,
     chain: epoch => Object.fromEntries(['epoch', 'assignment', 'terminal', 'intent', 'closure', 'failure'].map(k => [k, m.files.get(`${k}-${epoch}.json`) ?? null])),
     events: conversationId => eventStore.after({ projectId, conversationId }).events,
     workerLog: epoch => { try { return fs.readFileSync(generations.get(epoch).logFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } },

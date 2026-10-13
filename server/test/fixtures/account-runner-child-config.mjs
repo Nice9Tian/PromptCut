@@ -20,6 +20,8 @@ export function createWorkerConfiguration() {
   return buildWorkerConfiguration(fixture.worker, {
     readRootRecord: async () => JSON.parse(fs.readFileSync(fixture.worker.rootRecordFile, 'utf8')),
     modelConfig: async () => ({ vendor: 'mock', model: 'scripted-local-response' }),
+    // 看画面排着时每隔这么久回来问一次（每次去问之前都要先过授权闸）；生产是 20 秒，测试调短好看清失权后的撤回
+    lookLimits: fixture.lookLimits ?? {},
     log: (event, fields) => note(event, { code: fields?.code ?? null, reason: fields?.reason ?? null, status: fields?.status ?? null,
       path: fields?.path ?? null, blockedReason: fields?.blockedReason ?? null }),
   });

@@ -81,8 +81,9 @@ export function validateWorkerSettings(settings) {
  * @param {string} [seams.root] 仓库根目录
  * @param {(event: string, fields?: object) => void} [seams.log]
  * @param {object} [seams.runnerOptions] 交给真实运行器的其它选项（工作区上限、工具时限等）
+ * @param {object} [seams.lookLimits] 看画面客户端的时限（测试把「一趟最多挂多久」调短）
  */
-export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig = null, root = ROOT, log = () => {}, runnerOptions = {} } = {}) {
+export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig = null, root = ROOT, log = () => {}, runnerOptions = {}, lookLimits = {} } = {}) {
   validateWorkerSettings(settings);
   if (typeof readRootRecord !== 'function') fail('account-worker-settings');
   const read = file => fs.readFileSync(file);
@@ -98,7 +99,7 @@ export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig
     let key;
     try { key = readServiceKeyFile(settings.look.keyDir); } catch { fail('account-worker-settings-look-key'); }
     if (key.service !== 'agent') fail('account-worker-settings-look-key');
-    look = createLookClient({ url: settings.look.url, key, log });
+    look = createLookClient({ url: settings.look.url, key, log, limits: lookLimits });
   }
   let vite = null;
   return { listener: { host: '127.0.0.1', port: settings.identity.port }, workerOptions: {
