@@ -19,6 +19,12 @@
  *
  * **`collect_install` 在云端不装东西**:节点上有没有采集工具由部署决定(`PROMPTCUT_AGENT_COLLECT_PYTHON`),模型不能触发往节点上装。
  * 登录态(`collect_login`)要用户自己扫码,是「要操作发起人界面」的工具;云端不存任何站点的 cookies,下载按未登录的画质。
+ *
+ * **需要登录的站点(0.7.18,工具包 C1;`collect-bridge.mjs`)**:宿主给了 `delegate`(绑在当前这一轮上的委托口子)时,
+ * `collect_download` 先问它——链接属于有登录支持的站点、发起人本人在线且用的是桌面版、他的电脑上有登录态,就由他的电脑下载并
+ * 直接传进这个项目的素材库,云端核实后登记(作业的 `route` 是 `delegated`);其余情形一律照旧在云端匿名下载(`route` 是 `anonymous`),
+ * 委托没成的原因与画质差别写进作业的 `notes`。`collect_login`、`collect_login_check` 只在本人电脑上操作,也经这个口子。
+ * 不给 `delegate` 时本文件的行为与原来一模一样。
  */
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -47,6 +53,11 @@ export const COLLECT_DEFAULTS = Object.freeze({
   watchMs: 1500,
 });
 
+/** 没有委托口子(没接线,或不是账号模式)时两个登录工具的回答:如实说只能在本人电脑上操作 */
+const LOGIN_LOCAL_ONLY = (tool) => ({
+  ok: false, initiatorOnly: true,
+  error: `${tool} 只能在发起人自己的电脑上操作:站点的登录态只留在他的机器上,云端不存、也拿不到。请告诉用户在电脑上的 PromptCut 里登录;云端照常按未登录的画质采集。`,
+});
 const NOT_INSTALLED = '这台云节点没有装采集工具(yt-dlp)。云端不能由 Agent 往节点上装东西:请告诉用户联系托管方,或在电脑上的 PromptCut 里采集后导入。';
 const QUALITIES = new Set([2160, 1440, 1080, 720, 480, 360]);
 const SITES = new Set(['auto', 'bilibili', 'generic']);
@@ -138,14 +149,19 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
    * @param {(rel: string, name: string) => Promise<{ mediaId: string, kind: string, clipId?: string, duration?: number, width?: number, height?: number, bytes?: number }>} d.importFile
    *   把工作区里的一个文件装进素材库(`import_media` 的那条路)
    * @param {(row: object) => void} d.record
+   * @param {null | (() => (null | { download: Function, login: Function, loginCheck: Function }))} [d.delegate]
+   *   当前这一轮的委托口子(`collect-bridge.mjs` 的 `forRun(context)`);每次调用现取,没有就回 null(照旧只在云端匿名下载)
    */
-  function forConversation({ state, workspace, ensureCanWrite, importFile, record = () => {}, ToolError = Error, conversationId = '' }) {
+  function forConversation({ state, workspace, ensureCanWrite, importFile, record = () => {}, ToolError = Error, conversationId = '', delegate = null }) {
+    const currentDelegate = () => {
+      try { const d = typeof delegate === 'function' ? delegate() : null; return d && typeof d.download === 'function' ? d : null; } catch { return null; }
+    };
     const usage = (model, { bytes = 0, ok = true, ms = 0 } = {}) => {
       try { record({ service: 'collect', vendor: 'yt-dlp', model, units: bytes, unit: 'bytes', ok, ms }); } catch { /* 记用量失败不影响结果 */ }
     };
     const viewOf = (job) => ({
       jobId: job.id, status: job.status, stage: job.stage, percent: job.percent, speed: job.speed ?? null, eta: job.eta ?? null,
-      url: job.url, quality: job.quality, site: job.site,
+      url: job.url, quality: job.quality, site: job.site, ...(job.route ? { route: job.route } : {}),
       ...(job.info ? { info: job.info } : {}), ...(job.notes.length ? { notes: job.notes.slice(-8) } : {}),
       ...(job.status === 'done' ? { items: job.items, mediaIds: job.items.map((it) => it.mediaId) } : {}),
       ...(job.message ? { message: job.message } : {}),
@@ -351,9 +367,64 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
       }
     }
 
+    /**
+     * 一个下载作业从头到尾:有委托口子就先问它;委托成了作业就此做完;没成(或本来就不用委托)接着在云端匿名下载。
+     * 委托口子说「这一轮已经不能写了」时不再匿名下载。
+     */
+    async function runJob(job, args, delegated) {
+      if (delegated) {
+        const t0 = Date.now();
+        let out;
+        try {
+          out = await delegated.download({ id: job.id, url: job.url, quality: job.quality, site: job.site }, args, {
+            signal: job.abort.signal,
+            onProgress: (p) => {
+              if (job.route !== 'delegated') { job.route = 'delegated'; persist(); }
+              if (typeof p?.stage === 'string') job.stage = p.stage;
+              if (typeof p?.percent === 'number') job.percent = Math.max(0, Math.min(99, Math.round(p.percent)));
+            },
+          });
+        } catch (err) {
+          say('agent.collect.delegate-failed', { code: String(err?.code ?? 'error').slice(0, 60) });
+          out = { delegated: false, why: 'failed', note: '委托发起人的电脑下载没有成功;已改为云端按未登录的画质下载,画质可能低于登录后的。' };
+        }
+        if (out?.delegated === true || out?.stop === true) {
+          const ok = out.delegated === true && Array.isArray(out.items) && out.items.length > 0;
+          job.route = 'delegated';
+          if (ok) { job.items = out.items; job.status = 'done'; job.stage = 'done'; job.percent = 100; job.notes.push('这条链接由发起人自己的电脑用他本机的登录态下载,文件由他的电脑直接传进这个项目的素材库;登录信息没有离开他的电脑。'); }
+          else { job.status = 'error'; job.message = job.abort.signal.aborted ? '已取消' : String(out.message ?? '委托发起人的电脑下载没有成功。').slice(0, 300); }
+          job.finishedAt = Date.now();
+          running = Math.max(0, running - 1);
+          usage('delegate', { bytes: ok ? job.items.reduce((sum, it) => sum + (Number(it.bytes) || 0), 0) : 0, ok, ms: Date.now() - t0 });
+          trim();
+          persist();
+          say('agent.collect.job', { status: job.status, route: 'delegated', items: job.items.length, ms: Date.now() - t0 });
+          return;
+        }
+        if (typeof out?.note === 'string' && out.note) job.notes.push(out.note.slice(0, 300));
+      }
+      job.route = 'anonymous';
+      job.stage = 'starting'; job.percent = 0;
+      if (!config) {
+        job.status = 'error'; job.message = NOT_INSTALLED; job.finishedAt = Date.now();
+        running = Math.max(0, running - 1);
+        trim(); persist();
+        return;
+      }
+      if (job.abort.signal.aborted) {
+        job.status = 'error'; job.message = '已取消'; job.finishedAt = Date.now();
+        running = Math.max(0, running - 1);
+        trim(); persist();
+        return;
+      }
+      persist();
+      await runDownload(job, args);
+    }
+
     async function download(args) {
       const url = checkUrl(args?.url);
-      if (!config) return { ok: false, cloudUnavailable: true, error: NOT_INSTALLED };
+      const delegated = currentDelegate();
+      if (!config && !delegated) return { ok: false, cloudUnavailable: true, error: NOT_INSTALLED };
       // 下载物要进素材库:只读成员在下载之前就被拒(不白占带宽)
       await ensureCanWrite();
       const mine = [...state.jobs.values()].filter((j) => j.status === 'running').length;
@@ -363,14 +434,14 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
         id: `collect-${randomBytes(6).toString('hex')}`, conversationId, url,
         quality: QUALITIES.has(Number(args.quality)) ? Number(args.quality) : 1080,
         site: typeof args.site === 'string' && SITES.has(args.site) ? args.site : 'auto',
-        status: 'running', stage: 'starting', percent: 0, speed: null, eta: null, info: null, notes: [], items: [], message: null,
+        status: 'running', stage: 'starting', percent: 0, speed: null, eta: null, info: null, notes: [], items: [], message: null, route: null,
         startedAt: Date.now(), finishedAt: null, abort: new AbortController(), child: null,
       };
       if (typeof args.cookies === 'string' && args.cookies) job.notes.push('云端不存任何站点的登录态,cookies 参数没有用上(按未登录的画质下载)。');
       state.jobs.set(job.id, job);
       running += 1;
       persist();
-      void runDownload(job, args ?? {});
+      void runJob(job, args ?? {}, delegated);
       return { ok: true, jobId: job.id, status: 'running', hint: '下载在云端后台跑。用 collect_job 查进度,两次之间用 wait 等 3 秒;done 且带 mediaIds 才算进了素材库。' };
     }
 
@@ -389,6 +460,9 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
       collect_download: download,
       collect_job: jobOf,
       collect_logout: async () => ({ ok: true, loggedOut: false, note: '云端不存任何站点的登录态,没有可退出的。' }),
+      /** 登录只在本人电脑上操作:有委托口子就经反向通道让发起页打开本机的登录窗口(本人不在线回不在线),没有就如实说 */
+      collect_login: async (args) => { const d = currentDelegate(); return d ? d.login(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login'); },
+      collect_login_check: async (args) => { const d = currentDelegate(); return d ? d.loginCheck(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login_check'); },
       /** 这个对话结束或被删时调:停掉它还在跑的下载 */
       stopAll() { for (const j of state.jobs.values()) if (j.conversationId === conversationId && j.status === 'running') j.abort.abort(); },
     };
