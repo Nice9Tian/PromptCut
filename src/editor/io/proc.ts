@@ -233,6 +233,11 @@ export async function pickSaveTarget(
 
 let saveTarget: FileSystemFileHandle | null = null;
 
+/** 这个项目这一次打开期间存过磁盘文件(记着落点,再存不用问) */
+export function hasSaveTarget(): boolean {
+  return saveTarget !== null;
+}
+
 /** 换项目、换草稿时调用:下次保存重新问路径 */
 export function forgetSaveTarget(): void {
   saveTarget = null;
