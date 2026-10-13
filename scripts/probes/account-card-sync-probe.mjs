@@ -527,7 +527,8 @@ async function linkScenario({ A, B, pageA, pageB, stateA, stateB, projectId, aLo
     check(L.steady.statusesA.every((s) => s === 'online' || s === 'connecting'), '甲的页面这 400 秒只显示过在线(换会话的瞬间是连接中),没有离线', L.steady.statusesA);
     check(toastA === 1, '「已进入云端项目」只提示一次(换会话不重复提示)', toastA);
     // 选区:甲每条到文档服务的连接上都发布过选区、都得到确认,而且是同一个页面号
-    const fr = wsLog.a ?? [];
+    // 只看进账号项目之后的连接(之前那条是本机文档服务的)
+    const fr = (wsLog.a ?? []).filter((f) => f.at >= aLoginAt);
     const socks = [...new Set(fr.filter((f) => f.type === 'project.open').map((f) => f.sock))];
     const perSock = socks.map((s) => ({ set: fr.filter((f) => f.sock === s && f.type === 'selection.set').length, ok: fr.filter((f) => f.sock === s && f.type === 'selection.ok').length }));
     const pageIds = [...new Set(fr.filter((f) => f.type === 'selection.set').map((f) => f.pageId))];
