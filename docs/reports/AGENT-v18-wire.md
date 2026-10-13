@@ -1,6 +1,6 @@
 # AGENT-v18-wire：G 第一期「云端 Agent 工具表接线」
 
-分支 `claude/v18-wire`（从 main `f87e297a` 建，交活前合过两次 main，最后一次在 `18acee56`），工作区 `.worktrees/v18-wire`，端口段 28890～28949。2026-10-13。不推送、不合并。
+分支 `claude/v18-wire`（从 main `f87e297a` 建，交活前合过三次 main，最后一次在 `993492fe`），工作区 `.worktrees/v18-wire`，端口段 28890～28949。2026-10-13。不推送、不合并。
 
 本文里的代号：
 
@@ -88,7 +88,7 @@
 |---|---|
 | 账号模式生产装配下 `GET /v1/usage` 回 503 | 接通了：主服务读**共用数据目录**的 `usage/`（任务进程把每次模型请求、每次外部服务与工具调用记在那里）。`account-master-production.test.mjs` 加了断言：甲的任务跑完后甲查到的调用次数正是这条任务的那几次模型请求、只有甲一位成员、回包里没有账号编号；乙的任务跑完后乙查到两位成员、总量是两条的和。探针另验了网页操作那三行查得到 |
 | 部署 README 的用词 | 四处「图卡」改成「素材效果卡」，「补渲计划」改成「预渲染重试计划」；另有一处「之后的补渲比…慢」也照规矩改成了「预渲染重试」（指令数的是五处，实际六处） |
-| 合 main 时留意重叠 | 合了两次。第一次 `useCloud.ts` 建会话那几行冲突，两边都留（main 的「新对话」判断加我的两支会话）；第二次（含 `869c5805`）自动合上，核过 `http.mjs` 的 `accountEvents` 里两边都在（我挂登记表的几行、main 改的 `catch`）；`session.ts` 两边的改动都在，相关单测全过 |
+| 合 main 时留意重叠 | 合了三次（第三次是 main 又进了三百多个文件之后，只有测试夹具 `account-runner-process.mjs` 的函数签名一行冲突，两边的参数都留）。前两次：第一次 `useCloud.ts` 建会话那几行冲突，两边都留（main 的「新对话」判断加我的两支会话）；第二次（含 `869c5805`）自动合上，核过 `http.mjs` 的 `accountEvents` 里两边都在（我挂登记表的几行、main 改的 `catch`）；`session.ts` 两边的改动都在，相关单测全过 |
 
 ### 收场到底靠什么
 
@@ -182,7 +182,10 @@
 | 上面 7 个文件单独重跑（`npm test -- <七个文件>`，改完我的 3 条之后） | 0 | 50 条：过 49、失败 0、跳过 1 |
 | `npm test` 第二遍（改完之后） | 0 | **6493 条：过 6476、失败 0、取消 0、跳过 12、待办 5**，131 秒，末行「✓ npm test 最终结果：零失败」 |
 | `npm test -- server/test/windows-hide-silent-spawn.test.mjs`（在上面两组里） | 0 | 过：我起的子进程都带 `windowsHide` |
-| `node scripts/probes/cloud-tools-wire-probe.mjs` | 0 | **39 项 OK、0 FAIL、0 SKIP**，229 秒；日志 `docs/reports/assets/v18-wire/probe.log` |
+| `node scripts/probes/cloud-tools-wire-probe.mjs`（第三次合 main 之前） | 0 | 39 项 OK、0 FAIL、0 SKIP，229 秒 |
+| **第三次合 main（`993492fe`，318 个文件）之后**：`npx tsc -b --force` | 0 | 零错误 |
+| 合后 `node scripts/probes/cloud-tools-wire-probe.mjs` | 0 | **39 项 OK、0 FAIL、0 SKIP**，198 秒；日志 `docs/reports/assets/v18-wire/probe.log`（就是这一遍） |
+| 合后 `npm test` 跑了三遍完整的 | 1、1、1 | 每遍 6638 条，都是「过 6624、跳过 12、待办 1」外加**一条**别的文件的偶发，三遍各不相同，单独重跑都过：第一遍 `asset-project-workers`（20 秒超时，取消 1；单跑 9/9 过）；第二遍 `asset-wiring-integration`（`EADDRINUSE 127.0.0.1:24866`；单跑 1/1 过）；第三遍 `account-page-link`（等「乙读到权限变了」超时，这条测试自己要跑两三分钟；单跑 1/1 过，149 秒）。前两个在通用规矩的偶发名单里，第三个是 main 今天新合进来的测试，不在名单里，我没有碰它用到的文件。**合后没有拿到一遍完整的零失败**；合之前那一遍（上面第二遍，6493 条）是零失败。中间还有一遍只输出了 145 行就以退出码 0 结束、没有汇总（验收地图里记过的那个现象），不算数 |
 
 第一遍里我自己的 3 条，都是我改的行为让旧断言或新断言不对，不是产品坏了：`cloud-tool-jobs.test.mjs` 一条原来断言「重开后排着的作业原样留着」（指令要求改成标中断，断言跟着改，标题也改了）；`windows-hide-silent-spawn` 拦下探针里非 Windows 分支的一处 `pgrep` 没带 `windowsHide`（补上）；`account-master-production.test.mjs` 里我新加的用量断言把模型名写死成不带厂商前缀的（实际是 `mock/scripted-local-response`，改成认后缀）。
 
@@ -280,7 +283,8 @@ PROBE-RESULT pass {"total":39,"ok":39,"fail":0,"skip":0}
 | 9 | 三级 | 转私有时主服务回「还在办」（503）也照样去清浏览器数据 | 那时对话已经是私有的了，只是别人那一轮的进程还没关完 | `switchVisibility` |
 | 10 | 三级 | 云端不开放 `track_install`；语音转写只开 faster-whisper；一键流程哪些阶段可跳过照 P5 的缺省（只有「发布预渲染」），部署者可用 `PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES` 放宽 | 都是各包报告里的缺省；P5 的那一条等用户定 | `account-tools.mjs` 建提供者处 |
 | 11 | 三级 | 页面交回结果的请求放进「对话读取」的范围，并先核一次读权限 | 登记表核「交的人此刻读得到这个对话」要走读取通道；不在范围里时这一步一律失败，所有交回都被拒（探针第一遍就是这样） | `http.mjs` 一行、`pageResult` |
-| 12 | 三级 | `cloud-tools-p5-workflow.test.mjs` 一条测试里把「另开一份账本」挪到别的作业登记之前 | 账本打开时现在连排着的也标中断，原来的次序会把刚登记的作业标掉。断言一条没改 | 该测试 |
+| 12 | 三级 | `cloud-tools-p5-workflow.test.mjs` 一条测试里把「另开一份账本」挪到别的作业登记之前；`cloud-tool-jobs.test.mjs` 一条原来断言「重开后排着的原样留着」，改成断言「标成被中断」 | 都是指令要求的那处行为改动带来的。前一条断言没改，只挪了次序；后一条断言跟着行为改了 | 这两条测试 |
+| 13 | 三级 | 主服务查用量读的是共用数据目录的 `usage/` | 流水是任务进程写的，写在那里 | `account-master-assembly.mjs` 一行 |
 
 ## 对任务书或语义的更正建议
 
@@ -324,4 +328,4 @@ PROBE-RESULT pass {"total":39,"ok":39,"fail":0,"skip":0}
 - `69401b91` 接线:账号模式生产主服务的用量查询读共用数据目录里的流水;部署说明用词;探针补用量与页面保活
 - `345d2612` 探针:收场各段先跑、发起人页面一段放后面;页面连接与票据续期在夹具里做稳;整套 39 项通过的日志
 - `2b450eb9` 测试:账本重开的断言跟着改(排着的也标中断);探针的子进程调用都带 windowsHide;用量断言认模型名的前缀
-- 另有两次合并提交（`Merge branch 'main' into claude/v18-wire`）与本报告定稿的提交。
+- 另有三次合并提交（`Merge branch 'main' into claude/v18-wire`）与本报告的两次提交。
