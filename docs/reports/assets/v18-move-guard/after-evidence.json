@@ -1,0 +1,1136 @@
+{
+  "tag": "after",
+  "steps": [
+    {
+      "step": "account-node-up",
+      "origin": "https://127.0.0.1:28956",
+      "service": "https://127.0.0.1:28956/hosted"
+    },
+    {
+      "step": "node-facts",
+      "healthz": {
+        "status": 200,
+        "accountMode": "v2",
+        "accountRequired": true
+      },
+      "sharedCreate": {
+        "status": 403,
+        "body": {
+          "ok": false,
+          "code": "account-required"
+        }
+      },
+      "importInit": {
+        "status": 403,
+        "body": {
+          "ok": false,
+          "error": "account-required"
+        }
+      }
+    },
+    {
+      "step": "A-entry-a-account-node",
+      "statusText": "连不上云端，设置没有完成。",
+      "image": "docs/reports/assets/v18-move-guard/after-entry-a-settings.png",
+      "requests": [
+        {
+          "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "https://127.0.0.1:28956/hosted/shared/create",
+          "method": "OPTIONS",
+          "status": 403
+        },
+        {
+          "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
+          "method": "GET",
+          "status": 200
+        }
+      ],
+      "cloud": [
+        {
+          "method": "OPTIONS",
+          "path": "/hosted/shared/create",
+          "status": 403
+        }
+      ],
+      "local": {
+        "view": {
+          "shared": null,
+          "association": null,
+          "reopenState": null,
+          "status": "online",
+          "blocked": null
+        },
+        "edit": {
+          "renamedLocally": true,
+          "before": "move-guard-a",
+          "saved": true,
+          "statusAfter": "online"
+        },
+        "fence": null,
+        "restoreHost": null
+      }
+    },
+    {
+      "step": "B-entry-b-account-node",
+      "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+      "outcome": "refused",
+      "statusText": "搬迁暂未完成，原房间信息已保留。检查连接或存储后重试。",
+      "image": "docs/reports/assets/v18-move-guard/after-entry-b-after-click.png",
+      "requests": [
+        {
+          "url": "/api/collaboration/journal",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/host-state",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/move-hosted",
+          "method": "POST",
+          "status": 409
+        },
+        {
+          "url": "/api/collaboration/host-state",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/host-state",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/journal",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/journal",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/restore-host",
+          "method": "POST",
+          "status": 200
+        }
+      ],
+      "cloud": [
+        {
+          "method": "GET",
+          "path": "/hosted/healthz",
+          "status": 200
+        }
+      ],
+      "before": {
+        "view": {
+          "shared": {
+            "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "where": "lan",
+            "accountId": null
+          },
+          "association": {
+            "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "where": "lan",
+            "service": "https://127.0.0.1:28956/hosted"
+          },
+          "reopenState": "connected",
+          "status": "online",
+          "blocked": null
+        },
+        "edit": {
+          "renamedLocally": true,
+          "before": "move-guard-b",
+          "saved": true,
+          "statusAfter": "online"
+        },
+        "fence": {
+          "recordFound": true,
+          "relocation": null,
+          "hostingEpoch": 1
+        },
+        "restoreHost": {
+          "status": 200,
+          "body": {
+            "ok": true,
+            "candidate": {
+              "where": "lan",
+              "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+              "name": "move-guard-b-1791876556639",
+              "mode": "free",
+              "base": "http://127.0.0.1:28970/docservice",
+              "service": "https://127.0.0.1:28956/hosted",
+              "hostDeviceName": "isolated-account-side",
+              "originalHost": true
+            }
+          }
+        }
+      },
+      "after": {
+        "view": {
+          "shared": {
+            "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "where": "lan",
+            "accountId": null
+          },
+          "association": {
+            "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "where": "lan",
+            "service": "https://127.0.0.1:28956/hosted"
+          },
+          "reopenState": "connected",
+          "status": "online",
+          "blocked": null
+        },
+        "edit": {
+          "renamedLocally": true,
+          "before": "probe-edit-1791876561806",
+          "saved": true,
+          "statusAfter": "online"
+        },
+        "fence": {
+          "recordFound": true,
+          "relocation": null,
+          "hostingEpoch": 1
+        },
+        "restoreHost": {
+          "status": 200,
+          "body": {
+            "ok": true,
+            "candidate": {
+              "where": "lan",
+              "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+              "name": "move-guard-b-1791876556639",
+              "mode": "free",
+              "base": "http://127.0.0.1:28970/docservice",
+              "service": "https://127.0.0.1:28956/hosted",
+              "hostDeviceName": "isolated-account-side",
+              "originalHost": true
+            }
+          }
+        }
+      },
+      "cloudFilesAdded": []
+    },
+    {
+      "step": "C-enter-account-project",
+      "ok": true,
+      "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik"
+    },
+    {
+      "step": "C-page-after-enter",
+      "text": "文件\n编辑\n视图\n帮助\n−\n□\n×\nPROMPTCUT\naccount project *\n撤销\n重做\n传统式\nSKILL\n成员：1 人 · Agent：0 个\n首页\n项目\n配音设置\n导出视频\n素材库\n动画\n特效\n编辑\n字幕\n素材库\n导入媒体\n所有\n视觉\n音频\n视频\n0 个项\n导入…\n图片\n0 个项\n导入…\n音频\n0 个项\n导入…\n2D\n3D\n1920 × 1080 · 30 fps · 25%\n",
+      "errors": []
+    },
+    {
+      "step": "C-move-back-account-node",
+      "entered": {
+        "ok": true,
+        "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik"
+      },
+      "statusText": "搬迁暂未完成，房间和本机恢复信息已保留。请检查连接、身份或存储后重试。",
+      "image": "docs/reports/assets/v18-move-guard/after-move-back-after-click.png",
+      "requests": [
+        {
+          "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
+          "method": "GET",
+          "status": 200
+        }
+      ],
+      "cloud": [
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/members",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/session",
+          "status": 200
+        }
+      ],
+      "stateBefore": {
+        "view": {
+          "shared": {
+            "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik",
+            "where": "hosted",
+            "accountId": "acc_edd0eefdcc6a9241988fcfc9"
+          },
+          "association": null,
+          "reopenState": null,
+          "status": "online",
+          "blocked": null
+        },
+        "edit": {
+          "renamedLocally": true,
+          "before": "account project",
+          "saved": true,
+          "statusAfter": "online"
+        },
+        "fence": null,
+        "restoreHost": null
+      },
+      "stateAfter": {
+        "view": {
+          "shared": {
+            "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik",
+            "where": "hosted",
+            "accountId": "acc_edd0eefdcc6a9241988fcfc9"
+          },
+          "association": null,
+          "reopenState": null,
+          "status": "online",
+          "blocked": null
+        },
+        "edit": {
+          "renamedLocally": true,
+          "before": "probe-edit-1791876572752",
+          "saved": true,
+          "statusAfter": "online"
+        },
+        "fence": null,
+        "restoreHost": null
+      },
+      "cloudFilesAdded": []
+    },
+    {
+      "step": "L-entry-b-legacy-node",
+      "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+      "outcome": "moved",
+      "statusText": "已搬到云端，仍是原房间。",
+      "image": "docs/reports/assets/v18-move-guard/after-entry-b-after-click.png",
+      "requests": [
+        {
+          "url": "/api/collaboration/journal",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/host-state",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/move-hosted",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/cancel-host",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/select",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/select",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/restore-host",
+          "method": "POST",
+          "status": 409
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/challenge",
+          "method": "OPTIONS",
+          "status": 204
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/challenge",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/resolve",
+          "method": "OPTIONS",
+          "status": 204
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/resolve",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/relay/sp_dwtphn2cmqj3kxyki4qr4z63pq/doc/shared/challenge",
+          "method": "OPTIONS",
+          "status": 204
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/relay/sp_dwtphn2cmqj3kxyki4qr4z63pq/doc/shared/challenge",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/identity",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+          "method": "OPTIONS",
+          "status": 204
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/journal",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/host-update",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/journal",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/journal",
+          "method": "POST",
+          "status": 200
+        },
+        {
+          "url": "/api/collaboration/restore-host",
+          "method": "POST",
+          "status": 409
+        }
+      ],
+      "cloud": [
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/members",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/session",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/members",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/session",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/members",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/session",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/register",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/members",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/shared/account/session",
+          "status": 200
+        }
+      ],
+      "before": {
+        "view": {
+          "shared": {
+            "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "where": "lan",
+            "accountId": null
+          },
+          "association": {
+            "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "where": "lan",
+            "service": "http://127.0.0.1:28960"
+          },
+          "reopenState": "connected",
+          "status": "online",
+          "blocked": null
+        },
+        "edit": {
+          "renamedLocally": true,
+          "before": "move-guard-legacy",
+          "saved": true,
+          "statusAfter": "online"
+        },
+        "fence": {
+          "recordFound": false
+        },
+        "restoreHost": {
+          "status": 200,
+          "body": {
+            "ok": true,
+            "candidate": {
+              "where": "lan",
+              "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+              "name": "move-guard-legacy-1791876576711",
+              "mode": "free",
+              "base": "http://127.0.0.1:28970/docservice",
+              "service": "http://127.0.0.1:28960",
+              "hostDeviceName": "isolated-account-side",
+              "originalHost": true
+            }
+          }
+        }
+      },
+      "after": {
+        "view": {
+          "shared": {
+            "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "where": "hosted",
+            "accountId": null
+          },
+          "association": {
+            "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "where": "hosted",
+            "service": "http://127.0.0.1:28960"
+          },
+          "reopenState": "connected",
+          "status": "online",
+          "blocked": null
+        },
+        "edit": {
+          "renamedLocally": true,
+          "before": "probe-edit-1791876583885",
+          "saved": true,
+          "statusAfter": "online"
+        },
+        "fence": {
+          "recordFound": false
+        },
+        "restoreHost": {
+          "status": 409,
+          "body": {
+            "ok": false,
+            "error": "relocated"
+          }
+        }
+      },
+      "cloudFilesAdded": [
+        "auth/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.json",
+        "relocation/move_a1eceb69b46a7d440a8d2e34734b71a4/doc/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.ops.ndjson",
+        "relocation/move_a1eceb69b46a7d440a8d2e34734b71a4/index.json",
+        "tenants/sp_dwtphn2cmqj3kxyki4qr4z63pq/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.ops.ndjson"
+      ]
+    }
+  ],
+  "entryA": {
+    "statusText": "连不上云端，设置没有完成。",
+    "image": "docs/reports/assets/v18-move-guard/after-entry-a-settings.png",
+    "requests": [
+      {
+        "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "url": "https://127.0.0.1:28956/hosted/shared/create",
+        "method": "OPTIONS",
+        "status": 403
+      },
+      {
+        "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
+        "method": "GET",
+        "status": 200
+      }
+    ],
+    "cloud": [
+      {
+        "method": "OPTIONS",
+        "path": "/hosted/shared/create",
+        "status": 403
+      }
+    ],
+    "local": {
+      "view": {
+        "shared": null,
+        "association": null,
+        "reopenState": null,
+        "status": "online",
+        "blocked": null
+      },
+      "edit": {
+        "renamedLocally": true,
+        "before": "move-guard-a",
+        "saved": true,
+        "statusAfter": "online"
+      },
+      "fence": null,
+      "restoreHost": null
+    }
+  },
+  "entryB": {
+    "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+    "outcome": "refused",
+    "statusText": "搬迁暂未完成，原房间信息已保留。检查连接或存储后重试。",
+    "image": "docs/reports/assets/v18-move-guard/after-entry-b-after-click.png",
+    "requests": [
+      {
+        "url": "/api/collaboration/journal",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/host-state",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/move-hosted",
+        "method": "POST",
+        "status": 409
+      },
+      {
+        "url": "/api/collaboration/host-state",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/host-state",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/journal",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/journal",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/restore-host",
+        "method": "POST",
+        "status": 200
+      }
+    ],
+    "cloud": [
+      {
+        "method": "GET",
+        "path": "/hosted/healthz",
+        "status": 200
+      }
+    ],
+    "before": {
+      "view": {
+        "shared": {
+          "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+          "where": "lan",
+          "accountId": null
+        },
+        "association": {
+          "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+          "where": "lan",
+          "service": "https://127.0.0.1:28956/hosted"
+        },
+        "reopenState": "connected",
+        "status": "online",
+        "blocked": null
+      },
+      "edit": {
+        "renamedLocally": true,
+        "before": "move-guard-b",
+        "saved": true,
+        "statusAfter": "online"
+      },
+      "fence": {
+        "recordFound": true,
+        "relocation": null,
+        "hostingEpoch": 1
+      },
+      "restoreHost": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "candidate": {
+            "where": "lan",
+            "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "name": "move-guard-b-1791876556639",
+            "mode": "free",
+            "base": "http://127.0.0.1:28970/docservice",
+            "service": "https://127.0.0.1:28956/hosted",
+            "hostDeviceName": "isolated-account-side",
+            "originalHost": true
+          }
+        }
+      }
+    },
+    "after": {
+      "view": {
+        "shared": {
+          "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+          "where": "lan",
+          "accountId": null
+        },
+        "association": {
+          "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+          "where": "lan",
+          "service": "https://127.0.0.1:28956/hosted"
+        },
+        "reopenState": "connected",
+        "status": "online",
+        "blocked": null
+      },
+      "edit": {
+        "renamedLocally": true,
+        "before": "probe-edit-1791876561806",
+        "saved": true,
+        "statusAfter": "online"
+      },
+      "fence": {
+        "recordFound": true,
+        "relocation": null,
+        "hostingEpoch": 1
+      },
+      "restoreHost": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "candidate": {
+            "where": "lan",
+            "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "name": "move-guard-b-1791876556639",
+            "mode": "free",
+            "base": "http://127.0.0.1:28970/docservice",
+            "service": "https://127.0.0.1:28956/hosted",
+            "hostDeviceName": "isolated-account-side",
+            "originalHost": true
+          }
+        }
+      }
+    },
+    "cloudFilesAdded": []
+  },
+  "moveBack": {
+    "entered": {
+      "ok": true,
+      "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik"
+    },
+    "statusText": "搬迁暂未完成，房间和本机恢复信息已保留。请检查连接、身份或存储后重试。",
+    "image": "docs/reports/assets/v18-move-guard/after-move-back-after-click.png",
+    "requests": [
+      {
+        "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
+        "method": "GET",
+        "status": 200
+      }
+    ],
+    "cloud": [
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/members",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/session",
+        "status": 200
+      }
+    ],
+    "stateBefore": {
+      "view": {
+        "shared": {
+          "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik",
+          "where": "hosted",
+          "accountId": "acc_edd0eefdcc6a9241988fcfc9"
+        },
+        "association": null,
+        "reopenState": null,
+        "status": "online",
+        "blocked": null
+      },
+      "edit": {
+        "renamedLocally": true,
+        "before": "account project",
+        "saved": true,
+        "statusAfter": "online"
+      },
+      "fence": null,
+      "restoreHost": null
+    },
+    "stateAfter": {
+      "view": {
+        "shared": {
+          "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik",
+          "where": "hosted",
+          "accountId": "acc_edd0eefdcc6a9241988fcfc9"
+        },
+        "association": null,
+        "reopenState": null,
+        "status": "online",
+        "blocked": null
+      },
+      "edit": {
+        "renamedLocally": true,
+        "before": "probe-edit-1791876572752",
+        "saved": true,
+        "statusAfter": "online"
+      },
+      "fence": null,
+      "restoreHost": null
+    },
+    "cloudFilesAdded": []
+  },
+  "entryBLegacy": {
+    "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+    "outcome": "moved",
+    "statusText": "已搬到云端，仍是原房间。",
+    "image": "docs/reports/assets/v18-move-guard/after-entry-b-after-click.png",
+    "requests": [
+      {
+        "url": "/api/collaboration/journal",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/host-state",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/move-hosted",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/cancel-host",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/select",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/select",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/restore-host",
+        "method": "POST",
+        "status": 409
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/challenge",
+        "method": "OPTIONS",
+        "status": 204
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/challenge",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/resolve",
+        "method": "OPTIONS",
+        "status": 204
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/resolve",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/relay/sp_dwtphn2cmqj3kxyki4qr4z63pq/doc/shared/challenge",
+        "method": "OPTIONS",
+        "status": 204
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/relay/sp_dwtphn2cmqj3kxyki4qr4z63pq/doc/shared/challenge",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/identity",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+        "method": "OPTIONS",
+        "status": 204
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/journal",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/host-update",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/journal",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/journal",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "url": "/api/collaboration/restore-host",
+        "method": "POST",
+        "status": 409
+      }
+    ],
+    "cloud": [
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/members",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/session",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/members",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/session",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/members",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/session",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/register",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/members",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/shared/account/session",
+        "status": 200
+      }
+    ],
+    "before": {
+      "view": {
+        "shared": {
+          "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+          "where": "lan",
+          "accountId": null
+        },
+        "association": {
+          "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+          "where": "lan",
+          "service": "http://127.0.0.1:28960"
+        },
+        "reopenState": "connected",
+        "status": "online",
+        "blocked": null
+      },
+      "edit": {
+        "renamedLocally": true,
+        "before": "move-guard-legacy",
+        "saved": true,
+        "statusAfter": "online"
+      },
+      "fence": {
+        "recordFound": false
+      },
+      "restoreHost": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "candidate": {
+            "where": "lan",
+            "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "name": "move-guard-legacy-1791876576711",
+            "mode": "free",
+            "base": "http://127.0.0.1:28970/docservice",
+            "service": "http://127.0.0.1:28960",
+            "hostDeviceName": "isolated-account-side",
+            "originalHost": true
+          }
+        }
+      }
+    },
+    "after": {
+      "view": {
+        "shared": {
+          "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+          "where": "hosted",
+          "accountId": null
+        },
+        "association": {
+          "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+          "where": "hosted",
+          "service": "http://127.0.0.1:28960"
+        },
+        "reopenState": "connected",
+        "status": "online",
+        "blocked": null
+      },
+      "edit": {
+        "renamedLocally": true,
+        "before": "probe-edit-1791876583885",
+        "saved": true,
+        "statusAfter": "online"
+      },
+      "fence": {
+        "recordFound": false
+      },
+      "restoreHost": {
+        "status": 409,
+        "body": {
+          "ok": false,
+          "error": "relocated"
+        }
+      }
+    },
+    "cloudFilesAdded": [
+      "auth/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.json",
+      "relocation/move_a1eceb69b46a7d440a8d2e34734b71a4/doc/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.ops.ndjson",
+      "relocation/move_a1eceb69b46a7d440a8d2e34734b71a4/index.json",
+      "tenants/sp_dwtphn2cmqj3kxyki4qr4z63pq/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.ops.ndjson"
+    ]
+  }
+}
