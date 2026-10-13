@@ -220,7 +220,7 @@ test('BL-plan 预渲染集合里依赖下层、context、未知(含 remotion 式
   });
   const specs = plan(p);
   const below = specs.filter(s => s.kind === 'below');
-  assert.deepEqual(below.map(s => s.topClipId).sort(), ['ctx', 'direct', 'glass', 'user'], '三维框的那张不进');
+  assert.deepEqual(below.map(s => s.topClipId).sort(), ['ctx', 'direct', 'glass', 'tilt', 'user'], '外框带三维的那张也进');
   const g = below.find(s => s.topClipId === 'glass');
   assert.equal(g.plane, 'stage');
   assert.deepEqual(g.clipIds, ['glass'], '成员只有目标卡');
@@ -242,7 +242,7 @@ test('BL-plan 预渲染集合里依赖下层、context、未知(含 remotion 式
   assert.equal(g.streamKey, resultKeyOf(g.contentKey, FP), '结果键 = 内容键 × 环境指纹');
   assert.equal(g.envFingerprint, FP);
   // 只出预渲染集合里的
-  assert.deepEqual(plan(p, { picked: id => id !== 'glass' }).filter(s => s.kind === 'below').map(s => s.topClipId).sort(), ['ctx', 'direct', 'user']);
+  assert.deepEqual(plan(p, { picked: id => id !== 'glass' }).filter(s => s.kind === 'below').map(s => s.topClipId).sort(), ['ctx', 'direct', 'tilt', 'user']);
   // 没有环境指纹照旧什么都不出
   assert.deepEqual(planStreams(entryOf(p), { codeVersion: CV, below: true }), []);
   // 清单计划那条路打开以后也按清单出
