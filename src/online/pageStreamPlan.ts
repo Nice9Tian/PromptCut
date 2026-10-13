@@ -235,22 +235,26 @@ function paintLayers(project: { tracks?: AnyTrack[]; media?: { id: string; kind?
   return out.sort((a, b) => a.order - b.order);
 }
 
-function peakConcurrency(intervals: { from: number; to: number }[]): { peak: number; at: number } {
+function peakConcurrency(intervals: { from: number; to: number }[], skip: Set<number> | null = null): { peak: number; at: number } {
   const events: [number, number][] = [];
   for (const it of intervals) { events.push([it.from, 1]); events.push([it.to + 1, -1]); }
   events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   let cur = 0, peak = 0, at = 0;
-  for (const [frame, d] of events) { cur += d; if (cur > peak) { peak = cur; at = frame; } }
+  for (const [frame, d] of events) { cur += d; if (cur > peak && !skip?.has(frame)) { peak = cur; at = frame; } }
   return { peak, at };
 }
 
 interface Single { clipIds: string[]; order: number; minOrder?: number; from: number; to: number }
-/** 同时活跃的流超过解码器预算时把相邻的合并成组流(与服务端 `groupStreams` 在没有「依赖下层的流」时同一个式子) */
-function groupStreams<T extends Single>(streams: T[], layers: PaintLayer[], budget: number): Single[] {
+/**
+ * 同时活跃的流超过解码器预算时把相邻的合并成组流(与服务端 `groupStreams` 同一个式子)。
+ * `fixed`:不参加合并、但同样各占一个解码器的流(切分方单独成流的两类卡,见 `planPageStreams`);不给时与原来相同。
+ */
+function groupStreams<T extends Single>(streams: T[], layers: PaintLayer[], budget: number, fixed: { from: number; to: number }[] = []): Single[] {
   let list: Single[] = streams.map((s) => ({ ...s, clipIds: [...s.clipIds] }));
   const overlaps = (a: { from: number; to: number }, b: { from: number; to: number }) => a.from <= b.to && b.from <= a.to;
+  const tried = new Set<number>();
   for (let guard = 0; guard < 1000; guard++) {
-    const { peak, at } = peakConcurrency(list);
+    const { peak, at } = fixed.length ? peakConcurrency([...list, ...fixed], tried) : peakConcurrency(list);
     if (peak <= budget) break;
     const active = list.map((s, i) => ({ s, i })).filter(({ s }) => s.from <= at && at <= s.to).sort((a, b) => a.s.order - b.s.order);
     let merged = false;
@@ -268,7 +272,8 @@ function groupStreams<T extends Single>(streams: T[], layers: PaintLayer[], budg
       list.sort((a, b) => a.order - b.order);
       merged = true;
     }
-    if (!merged) break;
+    if (!merged && !fixed.length) break;
+    if (merged) tried.clear(); else tried.add(at);
   }
   return list;
 }
@@ -368,6 +373,23 @@ export interface PageStreamSpec {
 
 const frame3d = (frame: Record<string, any> | undefined) => !!(frame?.rotateX || frame?.rotateY || frame?.translateZ);
 
+/**
+ * 切分方会不会给这张卡**单独成流**(与服务端 `frame-stream.mjs` 的 `soloStreamKind` 同一个判据):源依赖卡
+ * (审阅表写了 `sourceDependent`;或没审阅过而片段挂着接了输入的素材效果卡节点),和外框用了三维变形的独立卡。
+ * 这两类页面自己不产(源依赖卡要解素材、执行素材效果卡;三维外框的卡浏览器取像素的那条路没有验过),切分也不给浏览器出;
+ * 但它们各占一个解码器,算合并时要照切分方算进去,不然两边对「哪几张并进了组流」会说不到一起。
+ */
+function serverSoloStream(project: Record<string, any>, control: PageControl, clip: AnyClip): boolean {
+  if (control.compositing === "sourceDependent") return true;
+  if (control.compositing === "independent") return frame3d(clip.frame);
+  if (control.compositing === "belowDependent") return false;
+  const raw = project?.cardNodes;
+  const nodes: Record<string, any>[] = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? Object.values(raw) : [];
+  const node = typeof clip.nodeId === "string" && clip.nodeId ? nodes.find((n) => n?.id === clip.nodeId) : null;
+  if (!node || node.adapter !== "card" || node.kind === "audio") return false;
+  return !!node.inputs && typeof node.inputs === "object" && Object.keys(node.inputs).length > 0;
+}
+
 /** 为什么这张卡页面不产流(诊断用);能产回 null */
 export function pageStreamBlock(control: PageControl, at: { clip: AnyClip; track: AnyTrack } | undefined, sourceVersions: Readonly<Record<string, string>>): string | null {
   if (!at) return "no-clip";
@@ -423,12 +445,21 @@ export async function planPageStreams(o: {
   const skipped: Record<string, string> = {};
   // 进不进流照切分方的判据(`streamEligible`);合并也照它:预算按「清单里全部进流的卡」算,不只按页面能产的那几张
   const singles: (Single & { control: PageControl; clip: AnyClip })[] = [];
+  // 切分方单独成流的两类卡(`serverSoloStream`):页面不产,只算进解码器预算
+  const fixed: { from: number; to: number }[] = [];
+  const fixedSeen = new Set<string>();
   for (const control of pageControls(project, value)) {
     if (!listed.has(control.clipId)) continue;
     const at = where.get(control.clipId);
     if (!at || at.track.hidden || at.track.sourceOnly || !at.clip.cardId || control.compositing !== "independent" || frame3d(at.clip.frame)
       || !Number.isInteger(control.count) || control.count <= 0) {
       skipped[control.clipId] = pageStreamBlock(control, at, value.sourceVersions ?? {}) ?? "not-eligible";
+      if (at && !at.track.hidden && !at.track.sourceOnly && at.clip.cardId && Number.isInteger(control.count) && control.count > 0
+        && !fixedSeen.has(control.clipId) && serverSoloStream(project, control, at.clip)) {
+        const first = control.sampling.firstFrame;
+        const last = Math.min(total - 1, first + control.count - 1);
+        if (last >= first) { fixedSeen.add(control.clipId); fixed.push({ from: Math.min(mountFrameOf(at.clip, fps), first), to: last }); }
+      }
       continue;
     }
     const firstFrame = control.sampling.firstFrame;
@@ -439,7 +470,7 @@ export async function planPageStreams(o: {
   }
   singles.sort((a, b) => a.order - b.order);
   const byClip = new Map(singles.map((s) => [s.clipIds[0], s]));
-  const grouped = groupStreams(singles, layers, o.budget ?? PAGE_STREAM_DECODER_BUDGET);
+  const grouped = groupStreams(singles, layers, o.budget ?? PAGE_STREAM_DECODER_BUDGET, fixed);
   const codeVersion = streamCodeVersion(codes);
   const environment = (value.environment ?? {}) as Record<string, unknown>;
   const specs: PageStreamSpec[] = [];

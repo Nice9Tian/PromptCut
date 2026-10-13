@@ -3,7 +3,7 @@
  * 舞台那一侧逐帧、稀疏版、留旧画面与占位符的细账在 `stream-scrub-stage-probe.mjs`;这里核父页接得对不对:
  * 哪些卡贴流、什么时候发流平面与抑制、有流不读快照、追到精确活渲以后怎么撤、起播头一拍。
  *
- *   node scripts/probes/scrub-stream-probe.mjs --port 26960 [--out <目录>] [--json <文件>] [--keep]
+ *   node scripts/probes/scrub-stream-probe.mjs --port 26960 [--tilt] [--out <目录>] [--json <文件>] [--keep]
  *   node scripts/probes/scrub-stream-probe.mjs --origin http://127.0.0.1:26960 …   # 接一台已经起好的 dev server
  *
  * 给 `--port` 时自己起一台隔离的编辑器(舞台端口是 +1、+2,三个连号都要空着;数据目录与产物目录指到 `--out` 下),跑完按进程号收掉。
@@ -44,6 +44,12 @@ const args = process.argv.slice(2);
 const GIVEN_ORIGIN = flagArg('origin', null, args);
 const PORT = Number(flagArg('port', '0', args));
 const KEEP = args.includes('--keep');
+/**
+ * `--tilt`:给这张卡的外框加上三维变形(rotateY、rotateX),项目开透视。外框用了三维的独立卡单独成流,流里是变形之前的平面画面,
+ * 贴的时候由包裹层做变形(`server/frame-stream.mjs` 的 `soloStreamKind`);这里核真的编辑器里它走的是同一套:点、拖、起播、暂停都贴流,
+ * 截图和导出页(活的三维变形)同一帧最像。
+ */
+const TILT = args.includes('--tilt');
 const JSON_OUT = flagArg('json', null, args);
 const RUN = Date.now().toString(36);
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-scrub-stream-${RUN}`));
@@ -159,12 +165,22 @@ try {
   /* ---------------------------------------------------------------- 0. 项目 */
   const clipId = await store(`actions.newProject('scrub-stream-${RUN}');
     const c = actions.addCardClip('r6-stateful', args[0], { duration: args[1], params: {} });
+    if (c && args[2]) {
+      const p = getState().project;
+      actions.setProjectMeta({ camera3dFov: 50 });
+      actions.setClipFrame(c.id, { x: p.width / 2, y: p.height / 2, w: Math.round(p.width * 0.7), h: Math.round(p.height * 0.36), anchor: [0.5, 0.5], rotateY: 35, rotateX: 12 });
+    }
     actions.seek(0);
-    return c?.id;`, CLIP_START, CLIP_SECONDS);
+    return c?.id;`, CLIP_START, CLIP_SECONDS, TILT);
   out.clipId = clipId;
   if (!check(!!clipId, '加上了卡')) throw new Error('没有卡');
   const project = await page.evaluate(async () => JSON.parse(JSON.stringify((await import('/src/store/project.ts')).getState().project)));
   out.project = { width: project.width, height: project.height, fps: project.fps, duration: project.duration };
+  if (TILT) {
+    const placed = project.tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
+    out.tilt = { camera3dFov: project.camera3dFov ?? null, frame: placed?.frame ?? null };
+    check(project.camera3dFov === 50 && placed?.frame?.rotateY === 35, '--tilt:这张卡的外框带着三维变形,项目开了透视', out.tilt);
+  }
   check(project.fps === FPS, '项目是 30 帧每秒', project.fps);
   const pinHeavy = (persist = false, patch = {}) => page.evaluate(async (id, persist, patch) => {
     const { getState } = await import('/src/store/project.ts');
