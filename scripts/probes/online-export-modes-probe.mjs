@@ -564,7 +564,19 @@ try {
   tag = '[四] ';
   const t4 = Date.now();
   const bDense = await waitStream('B', 'dense');
-  out.steps.four = { B: bDense, waitMs: Date.now() - t4 };
+  // 快速导出取哪些流是导出开始那一刻定的:页面要是把别的卡(轻卡)也判重、正在给它产流,两遍之间流从没有变成有,两遍取的来源就不同
+  // (实测遇到过:第一遍轻卡活渲、第二遍取了它刚产完的流)。所以等层表里每条单卡流都满密度、而且连着三次看都没再变,才导这两遍
+  let stable = 0, lastSig = '';
+  const settled = await until('层表里的流都满密度、不再变', async () => {
+    const states = [];
+    for (const key of ['L', 'A', 'B', 'G']) states.push(await streamState(content, docId, CLIPS[key].id));
+    const sig = JSON.stringify(states.map((x) => [x.row ? 1 : 0, x.dense, x.sparse, x.segments]));
+    const allDense = states.every((x) => !x.row || x.dense === x.segments);
+    stable = allDense && sig === lastSig ? stable + 1 : 0;
+    lastSig = sig;
+    return stable >= 3 ? states : null;
+  }, 480_000, 3000);
+  out.steps.four = { B: bDense, settled: settled?.map((x) => (x.row ? `${x.dense}/${x.segments}` : null)) ?? null, waitMs: Date.now() - t4 };
   const fast2 = await runExport(page, 'fast');
   const fast3 = await runExport(page, 'fast');
   out.timings.fastMs = [fast2.ms, fast3.ms];
@@ -575,11 +587,13 @@ try {
   check(f2?.perClip?.[CLIPS.S.id]?.frames === COUNT.S && !(f2?.perClip?.[CLIPS.S.id]?.stream > 0), 'S 没有流:照完整导出的办法,贴渲染节点的位图', f2?.perClip);
   check(f2?.wrapperOnly >= 3 && f2?.streamClips >= 2 && f2?.nodeClips === 1, 'A、B、S 三张都不由导出页活渲(只挂包裹层;页面把别的卡也判重、产满了流的话它也算在内)', f2);
   out.diffs.fastTwice = describeTwice('step4-fast', fast2.frames, fast3.frames);
-  check(!!fast3.result && fast2.frames.every(Boolean) && sameBytes(fast2.frames, fast3.frames), '快速导出两遍逐帧逐字节相同', { ...out.diffs.fastTwice, error: fast3.error });
+  const sameSources = JSON.stringify(f2?.perClip ?? null) === JSON.stringify(f3?.perClip ?? null);
+  check(sameSources, '快速导出两遍取的来源相同(每张卡取流、取位图的帧数一样;不同就是两遍之间流变了,下一条不作数)', { first: f2?.perClip, second: f3?.perClip });
+  check(!!fast3.result && fast2.frames.every(Boolean) && sameBytes(fast2.frames, fast3.frames), '快速导出两遍逐帧逐字节相同', { differFrames: out.diffs.fastTwice.differFrames.length, first: out.diffs.fastTwice.detail.slice(0, 2), error: fast3.error });
   out.diffs.fastVsFull = compareRuns(fast2.frames, full2.frames);
   out.diffs.fastVsFull_bFrames = compareRuns(fast2.frames, full2.frames, { frames: rangeOf(WIN.B) });
   check(out.diffs.fastVsFull.minPsnr >= 30, '快速导出对完整导出:差在压缩视频的范围内(PSNR ≥ 30;数字见输出)', out.diffs.fastVsFull);
-  check(fast2.ms < full2.ms, '快速导出比完整导出快(只记录:两个数见输出)', { fast: fast2.ms, full: full2.ms });
+  out.timings.fastVsFullMs = { fast: fast2.ms, full: full3.ms };   // 耗时只记录,不当通过条件
   for (const i of [WIN.B.first + 5, WIN.A.first + 10]) saveFrame(SHOTS, `step4-fast-f${i}.png`, fast2.frames[i]);
   saveFrame(SHOTS, `step4-full-f${WIN.B.first + 5}.png`, full2.frames[WIN.B.first + 5]);
   say('four.done', { ms: Date.now() - t4, perClip: f2?.perClip });
