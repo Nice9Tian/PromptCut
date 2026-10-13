@@ -15,8 +15,9 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createTrackResultStore, scrubPaths, TrackToolError } from '../agent/service/perception/track.mjs';
+import { PYTHON_BOOTSTRAP, PYTHON_ISOLATED_FLAGS } from '../agent/service/perception/runner.mjs';
 import {
-  buildTrackEnv, contextOf, decodeGrayFrame, findTestRuntime, makeAccess, nccAt, pidAlive, untilTracked, waitFor, writeTrackVideo,
+  buildTrackEnv, contextOf, decodeGrayFrame, findTestRuntime, makeAccess, nccAt, pidAlive, PYTHON_PACKAGE_ROOT, untilTracked, waitFor, writeTrackVideo,
 } from './cloud-tools-p3-kit.mjs';
 
 const runtime = findTestRuntime();
@@ -108,7 +109,9 @@ test('P3-01 真视频:状态如实、追出的轨迹对得上真值和真画面�
 
   // 子进程的命令行:只有部署配置给的东西,没有模型给的字符串;环境变量不带服务自己的 PROMPTCUT_*
   const trackCall = env.spawns.find((s) => s.args.includes('track'));
-  assert.deepEqual(trackCall.args.slice(0, 2), ['-m', 'promptcut_track']);
+  // 隔离模式起:包目录经引导代码递进去(不用 -m,也不靠 PYTHONPATH)
+  assert.deepEqual(trackCall.args.slice(0, 10), [...PYTHON_ISOLATED_FLAGS, '-c', PYTHON_BOOTSTRAP, '1', PYTHON_PACKAGE_ROOT, 'promptcut_track']);
+  assert.deepEqual(Object.keys(trackCall.options.env).filter((k) => /^PYTHON/i.test(k)), []);
   assert.ok(trackCall.args.includes('--max-frames'));
 
   // 同样的请求是幂等的;force 才开新作业
@@ -300,7 +303,7 @@ test('P3-04 没装模型或依赖时的回应:每一种缺都说得清,没有「
   });
 
   await t.test('numpy 缺失(包路径前面放一个导入就报错的桩):两档都用不了,追踪作业说缺什么', async (tt) => {
-    // numpy 是包自己 import 的基础依赖:桩要排在包路径前面(PYTHONPATH),放进 --pylibs 来不及(包已经先 import 了真的)
+    // numpy 是包自己 import 的基础依赖:桩要排在包路径前面(部署配置的 packageRoot 里靠前的一项),放进 --pylibs 来不及(包已经先 import 了真的)
     const stubRoot = path.join(os.tmpdir(), `pc-p3-nonumpy-${process.pid}`);
     fs.mkdirSync(path.join(stubRoot, 'numpy'), { recursive: true });
     fs.writeFileSync(path.join(stubRoot, 'numpy', '__init__.py'), "raise ImportError('numpy 没装(测试桩)')\n");
@@ -375,7 +378,7 @@ test('P3-04 没装模型或依赖时的回应:每一种缺都说得清,没有「
     assert.equal(done.engine, 'template');
     const argv = env.spawns.find((s) => s.args.includes('install')).args;
     assert.deepEqual(argv.filter((a) => a !== requirements && !a.startsWith(env.root) && a !== runtime.ffmpeg),
-      ['-m', 'promptcut_track', '--pylibs', '--models', '--ffmpeg', '--requirements', 'install']);
+      [...PYTHON_ISOLATED_FLAGS, '-c', PYTHON_BOOTSTRAP, '1', PYTHON_PACKAGE_ROOT, 'promptcut_track', '--pylibs', '--models', '--ffmpeg', '--requirements', 'install']);
     assert.ok(!argv.some((a) => /evil|index-url/.test(a)));
     const installEnv = env.spawns.find((s) => s.args.includes('install')).options.env;
     assert.equal(installEnv.HTTPS_PROXY, 'http://127.0.0.1:9');
