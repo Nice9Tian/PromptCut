@@ -4,7 +4,7 @@
  * 跑:npm test -- server/test/stream-origin.test.mjs
  *
  * 片段都**不从 15 的倍数帧开始**,有的时长也不是 15 的倍数。三种流各一条:单卡流、组流(解码器预算压到 1)、
- * 依赖下层的流(打开 `PROMPTCUT_TEST_BELOW_STREAMS`)。不用 Chrome、不用 ffmpeg:假的预渲染间 / `bakeStream` / 编码器同
+ * 依赖下层的流(产品里缺省开着;前两种的用例把 `PROMPTCUT_TEST_BELOW_STREAMS` 设成 0 关掉它,只看自己那一种)。不用 Chrome、不用 ffmpeg:假的预渲染间 / `bakeStream` / 编码器同
  * `stream-noreplay.test.mjs`,假 `bakeStream` 把每一趟要出的帧区间记下来,编码器把喂进来的每一帧记进分段的字节里。
  * 真的画面(逐帧比像素)由探针 `scripts/probes/stream-origin-probe.mjs` 核对。
  */
@@ -196,7 +196,7 @@ const view = (task) => ({ ...structuredClone(task), state: 'claimed', version: 1
 const signalNone = () => new AbortController().signal;
 async function withBelow(on, fn) {
   const saved = process.env.PROMPTCUT_TEST_BELOW_STREAMS;
-  if (on) process.env.PROMPTCUT_TEST_BELOW_STREAMS = '1'; else delete process.env.PROMPTCUT_TEST_BELOW_STREAMS;
+  process.env.PROMPTCUT_TEST_BELOW_STREAMS = on ? '1' : '0';
   try { return await fn(); } finally {
     if (saved === undefined) delete process.env.PROMPTCUT_TEST_BELOW_STREAMS; else process.env.PROMPTCUT_TEST_BELOW_STREAMS = saved;
   }

@@ -3,7 +3,7 @@
  *
  * **只在 `front` 角色的舞台文档里跑**(解码器和解码帧预算都在 `front`;`back` 不建 decoder、不画,K5)。
  * 画在 `Stage` 已经渲好的兄弟平面上 —— 单卡流是包裹层里的 `<canvas data-pc-stream-plane>`,
- * 组流是舞台根下的 `<canvas data-pc-group-plane>`;这里只往那块画布上画、按清单设它的位置和尺寸,
+ * 组流和依赖下层的流(都按舞台坐标产)是舞台根下的 `<canvas data-pc-group-plane>`;这里只往那块画布上画、按清单设它的位置和尺寸,
  * **不做外部 `insertBefore`**(任务书「不做」)。
  *
  * # 硬约束(G0-b 定的数)
@@ -98,8 +98,15 @@ export interface StreamRect { x: number; y: number; w: number; h: number }
 
 /** 父页经 `setStreamPlanes` 发来的一条(C3:由就绪索引里 `kind: 'stream'` 的层合成) */
 export interface StreamPlaneRequest {
-  /** 长度 1 = 单卡流;> 1 = 组流(按画家顺序,最后一个在最上面) */
+  /** 长度 1 = 单卡流或依赖下层的流(看 `plane`);> 1 = 组流(按画家顺序,最后一个在最上面) */
   clipIds: string[];
+  /**
+   * `"stage"`:这条只有一张卡的流是按**舞台坐标**产的(依赖下层的流,清单的 `kind` 是 `below`;契约
+   * `prerender-products-contract.md` 第 5.4 节)。它的画布挂在舞台根下(和组流同一种平面),不挂进包裹层:包裹层的位置、
+   * 不透明度、强调都已经画进流里。流里只有目标卡改动过的那一层(预乘色加不透明度),照普通的叠加盖在舞台上活着的下层上面。
+   * 组流不用带(成员多于一张就是舞台坐标)。
+   */
+  plane?: "stage";
   /** 流键(就绪索引里那一层的 `key`) */
   key?: string;
   /** 就绪的**分段号**闭区间(C3 的 `stream` 表单位是分段号) */
@@ -120,7 +127,7 @@ export interface StreamPlaneRequest {
 
 export interface StreamManifest {
   streamKey: string;
-  kind: "card" | "group";
+  kind: "card" | "group" | "below";
   plane: "local" | "stage";
   clipIds: string[];
   fps: number;
@@ -248,13 +255,13 @@ export function rangesHave(ranges: ReadonlyArray<readonly number[]> | undefined,
 
 /**
  * 父页那一侧的纯算(C3 末段):就绪索引里 `kind: 'stream'` 的层 → `setStreamPlanes` 的实参。
- * 有 `groupClipIds` 的一条 `{ clipIds: groupClipIds }`、没有的 `{ clipIds: [clipId] }`;
+ * 有 `groupClipIds` 的一条 `{ clipIds: groupClipIds }`、没有的 `{ clipIds: [clipId] }`;依赖下层的流那一层带着 `plane: "stage"`,原样带过去;
  * 只给**这一刻被抑制**、而且这一段已经就绪的卡(播放中贴流,K5)。「这一段」按每一层自己的 `originFrame` 换算;
  * 没带 `originFrame` 的层(改分段规则之前的生产者发的)不出流平面。
  * 父页在发 `setSuppressed(H(t))` 的同一处调它(见报告:这一处在 `src/editor/`,不在本任务可改的文件里)。
  */
 export function streamPlanesFor(
-  layers: Iterable<{ clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame?: number }>,
+  layers: Iterable<{ clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame?: number; plane?: "stage" }>,
   suppressed: ReadonlySet<string>,
   globalFrame: number,
 ): StreamPlaneRequest[] {
@@ -263,7 +270,8 @@ export function streamPlanesFor(
     const members = layer.groupClipIds?.length ? layer.groupClipIds : [layer.clipId];
     if (!members.every((id) => suppressed.has(id))) continue;
     if (!streamLayerHas(layer, globalFrame)) continue;
-    out.push({ clipIds: [...members], key: layer.key, ranges: layer.ranges.map((r) => [r[0], r[1]] as [number, number]), originFrame: layer.originFrame });
+    out.push({ clipIds: [...members], key: layer.key, ranges: layer.ranges.map((r) => [r[0], r[1]] as [number, number]), originFrame: layer.originFrame,
+      ...(layer.plane === "stage" && members.length === 1 ? { plane: "stage" as const } : {}) });
   }
   return out;
 }
@@ -293,6 +301,11 @@ export function planesWithinBudget<P extends { clipIds?: readonly string[]; key?
     out.push(p);
   }
   return out;
+}
+
+/** 这条平面的画布是不是挂在舞台根下、按舞台坐标画的那一种:组流,和依赖下层的流 */
+export function stagePlane(plane: { clipIds?: readonly string[]; plane?: string } | null | undefined): boolean {
+  return (plane?.clipIds?.length ?? 0) > 1 || plane?.plane === "stage";
 }
 
 /* ======================================================================== *
@@ -440,7 +453,7 @@ export class StreamPlaneSender {
     const out: StreamPlaneRequest[] = [];
     for (const p of planes) {
       const base: StreamPlaneRequest = { clipIds: [...p.clipIds], ...(p.key ? { key: p.key } : {}), ...(p.ranges ? { ranges: p.ranges } : {}),
-        ...(isStreamOrigin(p.originFrame) ? { originFrame: p.originFrame } : {}) };
+        ...(isStreamOrigin(p.originFrame) ? { originFrame: p.originFrame } : {}), ...(p.plane === "stage" ? { plane: "stage" as const } : {}) };
       const data = p.key ? this.lookup(p.key) : null;
       if (!data) { out.push(base); continue; }
       const blocks: Record<string, ArrayBuffer> = {};
@@ -855,11 +868,21 @@ class StreamTrack {
     this.shown = null;
   }
 
+  /**
+   * 清单说的坐标系和这块画布对得上:清单写着 `stage` 的流只画在舞台根下的画布上,写着 `local` 的只画在包裹层里的画布上。
+   * 对不上(父页没说这是依赖下层的流、而清单是)就不画 —— 画上去位置和外观都是错的,宁可落到占位符。清单没写的照旧画。
+   */
+  private get planeFits(): boolean {
+    const said = this.manifest?.plane;
+    if (said !== "stage" && said !== "local") return true;
+    return (said === "stage") === stagePlane(this.plane);
+  }
+
   /** 把一帧画到平面上(这一帧记在项目的第 `f` 帧上) */
   private drawFrame(frame: VideoFrame, f: number): boolean {
     const rect = this.rectOf(f);
     const compositor = this.ensureCompositor();
-    if (!rect || !compositor || !this.manifest) return false;
+    if (!rect || !compositor || !this.manifest || !this.planeFits) return false;
     compositor.place(this.manifest.bound);
     compositor.draw(frame, rect, this.manifest.bound);
     const was = this.lastDrawn;
@@ -897,7 +920,7 @@ class StreamTrack {
     const shown = this.shown;
     const rect = shown ? this.rectOf(shown.f) : null;
     const compositor = shown ? this.ensureCompositor() : null;
-    if (!shown || !rect || !compositor || !this.manifest) return false;
+    if (!shown || !rect || !compositor || !this.manifest || !this.planeFits) return false;
     compositor.place(this.manifest.bound);
     compositor.draw(shown.frame, rect, this.manifest.bound);
     this.lastDrawn = shown.f;
@@ -943,13 +966,13 @@ class StreamTrack {
    * 不等下一次分派)。父页在流覆盖时照样投一张「海报」快照垫在下面(根因 C),
    * 两层同时显示会叠出重影 —— 流在上面,快照从流的透明处漏出来。
    *
-   * 单卡流:同一包裹层里的快照平面。组流(画布在舞台根下):每个成员包裹层里的快照平面。
+   * 单卡流:同一包裹层里的快照平面。组流、依赖下层的流(画布在舞台根下):每个成员包裹层里的快照平面。
    * 只动快照平面自己的 `visibility`,React 不管这个属性,不会冲掉它。
    */
   private coverSnapshot(on: boolean): void {
     const want = on ? "hidden" : "";
     const set = (snap: HTMLElement | null | undefined) => { if (snap && snap.style.visibility !== want) snap.style.visibility = want; };
-    if (this.plane.clipIds.length === 1) {
+    if (!stagePlane(this.plane)) {
       set(this.canvas.parentElement?.querySelector<HTMLElement>(":scope > [data-pc-snapshot-plane]"));
       return;
     }
@@ -1196,11 +1219,13 @@ class StreamTrack {
       want: this.wantFrame, picture: this.lastDrawn === null ? null : this.pictureOf(this.lastDrawn), level: this.level,
       stale: this.staleSince !== null, seekTarget: this.seekTarget, lastSeek: this.lastSeek,
       segments: [...this.segments.keys()], manifest: !!this.manifest, bound: this.manifest?.bound ?? null,
+      // 画在哪种平面上(舞台根下 / 包裹层里),清单是哪一种流、和这块平面对不对得上
+      plane: stagePlane(this.plane) ? "stage" : "local", kind: this.manifest?.kind ?? null, fits: this.planeFits,
       cap: this.player.capFor(this), ...this.stats };
   }
 }
 
-const planeId = (plane: StreamPlaneRequest) => `${plane.clipIds.join(",")}#${plane.key ?? ""}`;
+const planeId = (plane: StreamPlaneRequest) => `${plane.clipIds.join(",")}#${plane.key ?? ""}${plane.plane === "stage" ? "@stage" : ""}`;
 
 /* ======================================================================== *
  * 舞台上的全部流
@@ -1274,7 +1299,8 @@ export class StreamPlayer {
   private canvasOf(plane: StreamPlaneRequest): HTMLCanvasElement | null {
     const root = this.root();
     if (!root) return null;
-    const single = plane.clipIds.length === 1;
+    // 单卡流的画布在它的包裹层里;组流和依赖下层的流的画布在舞台根下(`Stage` 的 `[data-pc-group-plane]`)
+    const single = !stagePlane(plane);
     const key = plane.clipIds.join(",");
     const hit = this.canvasCache.get(key);
     // 还在场景里、仍挂在同一个包裹层(单卡流)/ 同一个组(组流)下就直接用
@@ -1374,10 +1400,10 @@ export class StreamPlayer {
     return out;
   }
 
-  /** 单卡流的实体框(包裹层坐标 = 平面坐标)。组流的框在舞台坐标里,不回 */
+  /** 单卡流的实体框(包裹层坐标 = 平面坐标)。组流、依赖下层的流的框在舞台坐标里,不回 */
   boxOf(clipId: string): StreamRect | null {
     for (const track of this.tracks.values()) {
-      if (track.plane.clipIds.length === 1 && track.plane.clipIds[0] === clipId) return track.box;
+      if (!stagePlane(track.plane) && track.plane.clipIds[0] === clipId) return track.box;
     }
     return null;
   }

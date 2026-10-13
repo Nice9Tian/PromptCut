@@ -44,7 +44,7 @@ import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
-import { belowLayersOf } from '../src/render/streamInputSig.mjs';
+import { belowLayersOf, streamInputSig } from '../src/render/streamInputSig.mjs';
 import { isStreamOrigin, streamSegmentFirstFrame, streamSegmentFrameCount, streamSegmentLastFrame, streamSegmentOf, streamSegmentSpan } from '../src/render/streamSegments.mjs';
 
 import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
@@ -83,17 +83,20 @@ export function streamsEnabled(env = process.env) {
 }
 
 /**
- * 「依赖下层的流」(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5 节)出不出。**缺省关**〔裁〕。
+ * 「依赖下层的流」(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5 节)出不出。**缺省开**。
  *
- * 这种流现在做了计划、键、隔离工程、切分与认领,以及流里的像素怎么取(差分取层,`./bakery/capture-below.mjs`);
- * 怎么贴回舞台、在线页面怎么读还没做。关着的时候
- * `planStreams` 不出这种流,于是切分不出这种任务、层表里没有这种行、生产者不产它,行为和加这种流之前一字不差。
- * 只给单测和探针一个打开的办法:环境变量 `PROMPTCUT_TEST_BELOW_STREAMS=1`(照 `PROMPTCUT_TEST_PLAN_ONLY` 的写法,生产环境不设),
- * 或者直接给 `planStreams` 传 `below: true`。贴回舞台那一块合入时把这个开关去掉(常量改成 true、删掉环境变量)。
+ * 这种流的计划、键、隔离工程、切分与认领、流里的像素怎么取(差分取层,`./bakery/capture-below.mjs`)、怎么贴回舞台
+ * (`src/render/Stage.tsx` 舞台根下的那块平面)都做了,产品里一直出。
+ * 只给单测和探针留一个**关掉**的办法:环境变量 `PROMPTCUT_TEST_BELOW_STREAMS=0`(生产环境不设),或给 `planStreams` 传
+ * `below: false` —— 用来扮「还不认识这种流的旧节点」(队列里新旧节点并存时,旧节点收到这种任务要报对不上、不可重试)。
+ * 关着的时候 `planStreams` 不出这种流,于是切分不出这种任务、层表里没有这种行、生产者不产它。
  */
-export const BELOW_STREAMS_DEFAULT = false;
+export const BELOW_STREAMS_DEFAULT = true;
 export function belowStreamsEnabled(env = process.env) {
-  return BELOW_STREAMS_DEFAULT || String(env?.PROMPTCUT_TEST_BELOW_STREAMS ?? '').trim() === '1';
+  const flag = String(env?.PROMPTCUT_TEST_BELOW_STREAMS ?? '').trim();
+  if (flag === '0') return false;
+  if (flag === '1') return true;
+  return BELOW_STREAMS_DEFAULT;
 }
 
 /** 解码器预算。只给探针压低它(`PROMPTCUT_STREAM_DECODERS`),产品里就是 6 */
@@ -486,9 +489,9 @@ export function streamNeedsReplay(controls) {
  * `streamKey = resultKeyOf(contentKey, envFingerprint)` 是落盘和路由用的结果键。同一个项目在两种
  * 环境下 `contentKey` 相同、`streamKey` 不同。没有指纹就不产流(回 `[]`),理由同 `CardFrameCache.plan()`。
  *
- * `below`(缺省取 `belowStreamsEnabled()`,**缺省关**):打开时预渲染集合里依赖下层、`context`、未知的重卡各出一条
+ * `below`(缺省取 `belowStreamsEnabled()`,**缺省开**):预渲染集合里依赖下层、`context`、未知的重卡各出一条
  * `kind: 'below'` 的流(`belowStreamSpec`),排在单卡流和组流后面;它们不参加组流合并,但占解码器预算。
- * 关着时结果与没有这种流时逐项相同。
+ * 传 `false` 时结果与没有这种流时逐项相同。
  */
 export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint, below = belowStreamsEnabled() } = {}) {
   if (typeof envFingerprint !== 'string' || !envFingerprint) return [];
@@ -515,7 +518,7 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
   }
   singles.sort((a, b) => a.order - b.order);
   const byClip = new Map(singles.map(s => [s.clipIds[0], s]));
-  // 依赖下层的流的目标卡(开关关着时是空的):不参加组流合并,但各占一个解码器
+  // 依赖下层的流的目标卡(`below: false` 时是空的):不参加组流合并,但各占一个解码器
   const belows = below ? belowTargets(plan, { picked, where, fps, total, orderOf }) : [];
   const grouped = groupStreams(singles, layers, budget, belows);
   const specs = [];
@@ -641,8 +644,8 @@ function localClip(clip, spec) {
  * 依赖下层的流(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.1、5.2 节)
  *
  * 这一节只有计划、键和隔离工程。流里的像素怎么取(第 5.3 节:差分取层)在 `./bakery/capture-below.mjs`,
- * 由 `StreamProducer.runSegment` 接上;怎么贴回舞台(第 5.4 节)不在这里。
- * 出不出这种流由 `belowStreamsEnabled` 管,缺省关。
+ * 由 `StreamProducer.runSegment` 接上;怎么贴回舞台(第 5.4 节)在页面一侧(`src/render/Stage.tsx`、`streamPlayer.ts`)。
+ * 出不出这种流由 `belowStreamsEnabled` 管,缺省开。
  * ======================================================================== */
 
 /** 这一版里要出「依赖下层的流」的目标卡,按画家顺序。每项带它占解码器的那一段 `from..to`(同单卡流的算法) */
@@ -746,9 +749,24 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
       kind: 'below', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view),
       members: [control],
       belowClipIds: found.below.map(layer => layer.id), belowScene: whole, hasMedia,
+      // 这一版项目里这条流的输入签名:发层时带给页面(`StreamProducer.publish`),页面按自己手里的项目算同一个签名,
+      // 对不上就是下层已经改过、预渲染进程还没换版本的那一小段 —— 旧流不贴(`src/editor/snapshotFeed.ts`)。算不出不带
+      inputSig: streamInputSig(project, { clipIds: [control.clipId], kind: 'below' }),
     });
   }
   return specs;
+}
+
+/**
+ * 依赖下层的流发给页面的那一层(就绪索引的 `layer`,`kind: 'stream'`)另带的两项;别的流回空对象,发出去的层一个字不变。
+ *
+ *   - `streamKind: 'below'`:页面据此把这条流的平面挂在舞台根下、按舞台坐标贴(契约第 5.4 节),不挂进包裹层;
+ *   - `inputSig`:产这条流的那一版项目的输入签名(`belowStreamSpecs` 算的)。只给这条流自己的目标卡;算不出不带(页面不比)。
+ */
+export function belowLayerMark(spec, clipId) {
+  if (spec?.kind !== 'below') return {};
+  const sig = clipId === spec.topClipId && typeof spec.inputSig === 'string' && spec.inputSig ? { inputSig: spec.inputSig } : {};
+  return { streamKind: 'below', ...sig };
 }
 
 /**
@@ -1166,7 +1184,7 @@ export class StreamProducer {
       const entryKey = state.entryKey ?? this.entryKey;
       for (const clipId of [spec.topClipId, ...(state.aliases ?? [])]) {
         ready.publish(entryKey, { clipId, kind: 'stream', key: spec.streamKey, ranges, ...(isStreamOrigin(spec.originFrame) ? { originFrame: spec.originFrame } : {}),
-          ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}) });
+          ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}), ...belowLayerMark(spec, clipId) });
       }
     } catch {}
   }
@@ -1734,7 +1752,8 @@ export class StreamProducer {
     // C6.2:只是拉来的流(`adoptedOnly`)不属于任何一版,不认领
     return [...this.streams.values()].filter(state => !state.adoptedOnly && (entryKey === undefined || (state.entryKey ?? this.entryKey) === entryKey))
       .flatMap(state => [state.spec.topClipId, ...(state.aliases ?? [])]
-      .map(clipId => ({ clipId, kind: 'stream', key: state.spec.streamKey, ...(isStreamOrigin(state.spec.originFrame) ? { originFrame: state.spec.originFrame } : {}) })));
+      .map(clipId => ({ clipId, kind: 'stream', key: state.spec.streamKey, ...(isStreamOrigin(state.spec.originFrame) ? { originFrame: state.spec.originFrame } : {}),
+        ...belowLayerMark(state.spec, clipId) })));
   }
 
   async close() {
