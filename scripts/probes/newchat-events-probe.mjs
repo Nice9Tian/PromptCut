@@ -325,13 +325,14 @@ async function main() {
     await creator.waitForSelector(toggle, { visible: true, timeout: TIMEOUT });
     const toggleText = await creator.$eval(toggle, e => e.textContent?.trim());
     result.notes.push({ E_toggleButtonText: toggleText });
-    await creator.click(toggle);
-    await sleep(2000);
-    result.notes.push({ E_creatorControlStatus: await creator.$eval('[data-pc="cloud-control-status"]', e => e.textContent?.trim()).catch(() => null) });
-    // 成员页上从「创建者点下设为私有」起算到出现提示用了多久；创建者自己的页面、成员自己的别的对话不受影响
+    // 成员页上从「创建者点下设为私有」起算到出现提示用了多久
     const privateAt = Date.now();
     const sawNotice = member.waitForFunction(text => document.querySelector('[data-pc="cloud-notice"]')?.textContent?.includes(text), { timeout: 30_000 },
       '当前账号已无法读取这个对话').then(() => Date.now() - privateAt, () => null);
+    await creator.click(toggle);
+    await sleep(2000);
+    result.notes.push({ E_creatorControlStatus: await creator.$eval('[data-pc="cloud-control-status"]', e => e.textContent?.trim()).catch(() => null) });
+    // 创建者自己的页面、成员自己的别的对话不受影响
     await observe(member, 'member', 'E2-member-after-creator-set-private', quick ? 12_000 : 20_000, { shotAt: [3000, quick ? 11_000 : 19_000], fromIndex: member.evLog.length });
     result.notes.push({ E2_msUntilRevokedNotice: await sawNotice });
     const creatorAfter = await state(creator);
