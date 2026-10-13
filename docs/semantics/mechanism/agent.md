@@ -64,7 +64,7 @@
 - 一份服务实现两种挂法：桌面档是只有一个实例的特例，托管档（`server/agent-service/main.mjs`）是独立进程，不带编辑页，按「项目 × 成员」分实例，闲置 10 分钟回收（没有进行中的一轮才回收）。托管档对 `src/` 的依赖只经 `server/agent/ssr-host.mjs` 这一处载入缝。（第 2、3 节）账号模式下主服务不跑任务，进程这样分：见下一块「账号模式的进程分工」。
 - 对外接口在 `/v1/` 下（经反向代理是 `/agent/v1/`）：消息、事件流、停止、对话列表与详情、改标题、删除、用量、`info`、`healthz`、传附件、交回反向通道的结果（`page-results`）；回包 JSON，请求体上限 256 KiB。页面不请求编辑器进程的 `/api/*`，在线产物里 `/agent/` 开头的地址字面量只有 `/agent/v1` 一种（守门 C10A-API-05、07、08）。（第 2.3、10 节）账号模式下 `DELETE` 对话回 503 `deletion-pending`（删除入口还没做），`page-results` 回 503 `run-unavailable`（账号模式的反向通道还没挂上，见「对话的状态」里反向通道一条）。
 
-**账号模式的进程分工**（一条任务一个进程；〔裁：主会话 2026-10-13，待用户合入前审；出处 `docs/reports/AGENT-v18-worker.md`、`AGENT-v18-runner.md`、`AGENT-v18-prod.md`〕）
+**账号模式的进程分工**（一条任务一个进程；〔裁：v18-semsync 2026-10-13，待用户合入前审；出处 `docs/reports/AGENT-v18-worker.md`、`AGENT-v18-runner.md`、`AGENT-v18-prod.md`〕）
 
 - **主服务只做控制。** 账号模式下 `server/agent-service/main.mjs` 只装配 `account-master-assembly.mjs`：对页面开 `/v1/` 接口、用只做控制的主身份连文档服务、事件库、附件存储、一个只绑回环的双向 TLS 内部口。这个进程不起 vite、不载工具、不跑任何任务。命令行入口要三样配置，缺哪样都拒绝启动：`PROMPTCUT_AGENT_INTERNAL_PORT`（内部口，不能和公开口相同）、`PROMPTCUT_AGENT_ROOT_FINGERPRINT256`（root 那张证书的 SHA-256 指纹）、`PROMPTCUT_AGENT_SHARED_DATA`（各代任务进程共用的数据目录，已存在、可写）。还带着在主进程里跑任务的旧变量（`PROMPTCUT_AGENT_CONTROL_PORT`、`PROMPTCUT_AGENT_ACCOUNT_LOOK=1`、`PROMPTCUT_AGENT_RUN_ASSET_*`）也拒绝启动。文档服务不认主身份、内部口占不上，同样拒绝启动。打出的 `config.error` 的 `reason` 分别是 `account-task-processes` 与 `account-master`。启动时文档服务连不上不退出，隔 2 秒再试登记。
 - **内部口上的两类请求。** 任务进程交事件（`POST /internal/v2/worker/events/append`，凭任务证书加它内存里钥匙的签名，逐条回文档服务核对）。槽调度来问「哪些对话在排队、哪些任务要强制关」「这一条的强制终态」（`/internal/v2/master/scheduler/pending`、`…/scope-control`），这两条只认 root 的证书；主服务原样转问文档服务，回来的强制终态是文档服务签的，root 的发布器自己验签，主服务改不了。
@@ -94,20 +94,20 @@
 
 - 一轮与连接脱钩；事件先存后发、按 `seq` 补发；每个对话四个文件（元信息、事件记录、模型历史、预渲染任务清单）；每次工具往返落一次盘；收尾五种状态（说完、主人停掉、失败、失效、中断）；重启后不自动续跑。（第 2.4、7 节）
 - 对话归属的主人键（非账号模式，即本地与局域网的托管档）：创建者按「项目 + 创建者」，限定进入的成员按用户名，自由进入的成员按「用户名 + 设备」。（7.2）账号模式按对话账本里的所属账号编号归属，见本册「云端对话权限与发送者」；对话的工作目录在共用数据目录里按项目号与对话号的哈希（`account-master-assembly.mjs` 的 `accountWorkspaceOwnerKey`）取名。〔裁：见 `docs/reports/AGENT-v18-prod.md`〕
-- 切剪辑的工具要的播放头用发消息时的快照（一轮里 `seek` 做成后改用新的）；这里「发起方在线」的判定是此刻有一条来自发起这一轮的那个 `userId` 的事件流连着这个对话，不在线时播放头按 0 记。（9.4）这是本地与局域网的托管档；账号模式下执行器里的「发起方在线」恒为假，播放头一律按 0 记并注明，等账号模式的反向通道挂上才变。〔裁：主会话 2026-10-13，依据 `server/agent/service/account-runner.mjs` 的 `initiatorOnline: () => false`；出处 `docs/reports/AGENT-v18-tools-w2.md` 第 1 节〕
+- 切剪辑的工具要的播放头用发消息时的快照（一轮里 `seek` 做成后改用新的）；这里「发起方在线」的判定是此刻有一条来自发起这一轮的那个 `userId` 的事件流连着这个对话，不在线时播放头按 0 记。（9.4）这是本地与局域网的托管档；账号模式下执行器里的「发起方在线」恒为假，播放头一律按 0 记并注明，等账号模式的反向通道挂上才变。〔裁：v18-semsync 2026-10-13，依据 `server/agent/service/account-runner.mjs` 的 `initiatorOnline: () => false`；出处 `docs/reports/AGENT-v18-tools-w2.md` 第 1 节〕
 - 反向通道，本地与局域网的托管档（要操作发起人界面的 `seek`、`play`、`pause`、`get_selection`；账号模式见下一条）：Agent 服务经这个对话的事件流向**发起这一轮的那张页面**发一条 `page.request`（不带 `seq`、不进事件记录），页面按白名单用本机同一份实现执行，经 `POST …/page-results` 带委托票据交回。「那张页面」按页面号认：页面每次打开起一个随机的页面号，发消息与开事件流时各报一次，两者相同且 `userId` 相同的那条流才算；同一位成员别的设备、别的页签不算。交回按「对话的主人、发起这一轮的 `userId`、页面号、还在等的 `id`」核对，一次有效。等结果 15 秒；页面刚发完消息流还没接上或刚断正在重连时先等它 3 秒；到时、等的中途流断了、这一轮结束了，都回「发起方不在线」。那张页面不在而这位成员还有别的窗口连着看时，`get_selection` 退回发消息时的选区并注明。〔用户 2026-10-07 定：发起方在线时要能用；做法见契约第 28 节〕
 - 反向通道，账号模式（`server/agent/service/page-bridge.mjs`；页面一侧是 `src/ai/cloud/pageRequests.ts` 的 `createAccountPageRequests`）：只管 `seek`、`play`、`pause`、`web_handoff`；`get_selection` 不走这条通道，改向文档服务发选区查询（`selection.query`）读全员选区。发起人与发起页只取自文档服务确认过的运行授权：页面连文档服务时自己起一个随机的在场页面号，发消息时文档服务核过这张页面此刻连着、属于这次登录，才把页面号记在消息上；反向通道只认运行授权里的这个页面号和发送者账号，调用方断言的页面号对不上回 `page-binding-mismatch`，模型的参数和页面交回的请求体都指定不了页面。「在线」要两样同时成立：文档服务的在场表里这张页面此刻连着，并且这张页面有一条到 Agent 服务的事件流挂在这个对话上；请求只写给那一条流，带一个只出现在那条流上的一次性随机数，不带 `seq`、不进事件记录。等页面 15 秒（`pageMs`，调用方给的时限再长也不超过 60 秒的 `maxPageMs`）；在场表说在而事件流还没挂上最多等 3 秒（`attachMs`）；到时、等的中途流断了、这一轮结束，回「发起方不在线」；页面已离开文档服务立刻回。交回走 `POST …/page-results`，请求体 `{ v: 2, id, nonce, pageId, runId?, ok, result?, error?, code? }`，多带字段回 400，结果最多 64 KiB；交回时重核：交的人是发起人且此刻仍读得到这个对话、对话权限版本与发请求时相同、页面号与随机数对得上、这一轮的授权仍是当前的且是「发起人本人有效」、栅栏版本没换、没过时限、请求还在等；任何一样不对都拒收，等的工具按不在线收掉。同一份结果重复交回回 `{ ok: true, duplicate: true }`，内容不同回 409；不是发起页的人来交一律回同一个 410 `page-request-gone`。每次请求在 `page_requests` 表（SQLite）里有一行，状态为 `pending`、`answered`、`offline`、`expired`、`cancelled`、`interrupted`、`rejected`，重启时还在等的标 `interrupted`（原因 `agent-restart`），记录留 7 天，库里只存随机数的哈希。发起人被踢或退出登录后，按「已读共有任务」例外保留着跑的那一轮，页面工具一律回不在线。**现状：已实现，还没挂载。** 主服务的 `page-results` 回 503，账号模式的 `seek`、`play`、`pause` 仍回「发起方不在线」；要挂载得先定反向通道放在哪个进程（请求从任务进程发出、事件流和交回在主服务，两边没有主服务到任务进程的通道）。〔裁：见 `docs/reports/AGENT-v18-tools-w2.md`〕
 - 别的工具包可以经 `createPageBridge({ extraTools })` 在这条通道上加请求：`{ 工具名: { args(宿主给的参数) => 发给页面的参数, answer?(页面交回的答案) => 留下的答案 } }`，名字不能与 `seek`、`play`、`pause`、`web_handoff` 重，重了建桥时报配置错；绑定、交回时的重核、落盘、幂等都还是上一条那一套。采集代下（见下）用它加了五种请求。〔裁：见 `docs/reports/AGENT-v18-tools-c1.md`〕
 - 工具范围：云端与本机一致，只有要操作发起人自己界面的工具可缺省（发起方不在线时回「发起方不在线」）；因节点条件做不了的工具逐项写在契约第 9 节的工具表里，调用时回「云端暂不支持」并说原因。〔用户 2026-10-07 定〕（原先的「开放清单第一版开放 66 个、不在清单里的不交给模型」是按旧的工具范围写的，以第 9 节的工具表为准。）
 - 隔离：工具读写按项目隔离（素材经素材服务、项目经文档服务），读写不到别的项目、系统文件、凭证与别的服务的数据目录；能发网络请求的工具在发出前核对目的地址，回环地址、内网地址与同机别的服务的接口一律拒绝（这道核对管 Agent 服务进程自己发出的请求；起子进程的工具，如采集下载器，子进程的环境里只有指向出网闸起的回环代理的代理变量，代理对每个目标做同样的核对；云端浏览器同理，见「云端网页操作」；另靠部署时的系统级出站限制兜底〔裁：主会话 2026-10-07，待用户合入前审；已起子进程的工具补写：主会话 2026-10-13〕）；配音等花钱的调用用托管方的配置，用量记进与模型调用同一份用量流水。〔用户 2026-10-07 定〕
 
-**云端子进程**（〔裁：主会话 2026-10-13；出处 `docs/reports/AGENT-v18-spawn.md`〕）
+**云端子进程**（〔裁：v18-semsync 2026-10-13；出处 `docs/reports/AGENT-v18-spawn.md`〕）
 
 - Agent 服务起的子进程（语音转写、镜头识别、主体识别、运动追踪、采集用的 Python 包，ffmpeg 与 ffprobe，采集下载器）经 `server/agent/service/perception/runner.mjs` 里的同一份公共实现起，是一棵进程树：不弹窗口、不经 shell；Linux 上子进程是新进程组的组长。
 - 取消、超时、这一轮被收回，都按树杀：Linux 按进程组发信号，Windows 用系统目录里的 `taskkill /F /T`。杀完要等到 `exit` 与 `close` 都到才算关；组长先退而孙进程还握着管道时也照样按组杀；组长自己退出时扫一次进程组，把它起的、没等的孙进程一并结束（只在非 Windows）。登记进运行资源登记器的子进程，登记被拒就杀掉并等收干净才抛错。
 - Python 一律用隔离模式起：`python -I -X utf8 -u -B -c <引导代码> <目录个数> <目录…> <包名> <包自己的参数…>`，没有包目录时是 `-m <包名>`。`-I` 让它不看 `PYTHON*` 环境变量，也不把当前目录（对话工作区，里面是成员和模型弄进来的文件）和用户 site 放进模块搜索路径。包目录只来自部署配置（语音转写的 `runtime.sourceRoot`、主体识别的 `config.pythonPath`、追踪的 `python.packageRoot`、采集的 `config.pythonPath`），不来自工具参数或工作区。包自己再起 pip 时也带 `-I`。
 
-**本机采集代下**（`collect_download` 在要登录的站点上委托发起人自己的电脑下载；`server/agent/service/collect-bridge.mjs`，页面一侧 `src/ai/cloud/collectBridge.ts`；已实现，还没挂载；〔裁：主会话 2026-10-13；出处 `docs/reports/AGENT-v18-tools-c1.md`〕）
+**本机采集代下**（`collect_download` 在要登录的站点上委托发起人自己的电脑下载；`server/agent/service/collect-bridge.mjs`，页面一侧 `src/ai/cloud/collectBridge.ts`；已实现，还没挂载；〔裁：v18-semsync 2026-10-13；出处 `docs/reports/AGENT-v18-tools-c1.md`〕）
 
 - 只有链接属于有登录支持的站点（`server/collect-cookies.mjs` 的站点表，现在只有哔哩哔哩）才委托，其余照旧在云端匿名下载。
 - 过程：云端经反向通道向发起页发 `collect_delegate_start`；发起页（桌面版）查本机采集就绪、这个站点有没有没过期的登录态、项目对不对、是不是正忙，都行就调本机现成的下载并回「接了」，网页版没有本机采集回 `unsupported`。云端每 2 秒（`pollMs`）发一次 `collect_delegate_poll`；本机下载完，页面把文件按哈希交给本机上传队列，由编辑器进程用账号会话签发的素材票据直接传进这个项目的素材服务，字节齐了才在 poll 的答案里交回执 `{ requestId, jobId, assetRef: { projectId, hash, size }, result: { items, cookiesUsed } }`；取消用 `collect_delegate_cancel`。拆成短请求，是因为一次下载可能几分钟，而一次页面请求最多等 60 秒。
@@ -116,7 +116,7 @@
 - 云端拿不到 cookie、请求头、用户数据目录和本机路径：页面交回的答案逐字段拼出，云端再按每种请求的白名单收一遍，多带字段整份拒收（反向通道回 422，页面交来的那一份不落盘）。`collect_login`、`collect_login_check` 云端只拿回「开没开」「登没登」「过没过期」这类真假值。
 - 现状：`hosted-collect.mjs` 的委托口子还没人给，`cloud-tools.mjs` 里 `collect_login`、`collect_login_check` 仍标「云端做不了」，所以云端的采集现在只按匿名下载。
 
-**云端网页操作**（`web_open`、`web_view`、`web_click`、`web_type`、`web_scroll`、`web_read`、`web_close`；`server/agent/service/hosted-browser.mjs` 与 `server/web/hosted/`；已实现，还没挂载，工具表里七个 `web_*` 仍标「还没接上」；〔裁：主会话 2026-10-13；出处 `docs/reports/AGENT-v18-tools-w1.md`〕）
+**云端网页操作**（`web_open`、`web_view`、`web_click`、`web_type`、`web_scroll`、`web_read`、`web_close`；`server/agent/service/hosted-browser.mjs` 与 `server/web/hosted/`；已实现，还没挂载，工具表里七个 `web_*` 仍标「还没接上」；〔裁：v18-semsync 2026-10-13；出处 `docs/reports/AGENT-v18-tools-w1.md`〕）
 
 - 隔离：键是「项目 + 对话」，只取自可信的运行上下文，每个键一个浏览器进程、一个出网代理。用户数据目录是 `<数据目录>/web/<项目>/<对话>/profile`，不放在对话工作区里（工作区的文件工具读得到里面的文件，cookie 库不该让模型读到）。浏览器用管道连接、不开调试端口，环境变量用白名单重建。
 - 绑定这一轮：每次调用在动手前和交结果前各核一次读权限，栅栏版本变了就不交；浏览器进程登记进运行资源登记器，收回时杀整棵树并等进程号都查不到。七个工具都只要读权限，只读成员能用。
@@ -127,7 +127,7 @@
 - 用户数据目录的去留：`web_close`、闲置、停止、Agent 被关、服务关闭时留着；对话设为私有时删（只留一个记版本号的小文件）；对话或项目被删时全删；超过上限关闭时删。
 - 数字（`HOSTED_BROWSER_DEFAULTS`，部署者可逐项覆盖）：全服务进程同时开着的浏览器 2 个，满了换下闲够 60 秒的；闲置 10 分钟自动关；页面加载最多等 30 秒；一次工具调用总共 50 秒（宿主给 60 秒）；点击或回车后页面开始跳转的，最多等它落地 10 秒；起浏览器 30 秒；关浏览器先让它自己退 3 秒、再等进程树退出 10 秒；一次输入 2000 字；`web_read` 一次 20000 字；一次滚动 20000 页面像素；一个浏览器同时开着的隧道 64 个；磁盘缓存 64 MiB；用户数据目录上限 512 MiB。网页操作暂不记用量。
 
-**云端运动追踪**（`track_status`、`track_install`、`track_points`、`get_track`、`attach_clip_motion`；`server/agent/service/perception/track.mjs`、`hosted-motion.mjs`；已实现，还没挂载，工具表里这几项仍标「还没接上」，系统提示词仍说云端没有运动追踪；〔裁：主会话 2026-10-13；出处 `docs/reports/AGENT-v18-tools-p3.md`〕）与本机的差别：
+**云端运动追踪**（`track_status`、`track_install`、`track_points`、`get_track`、`attach_clip_motion`；`server/agent/service/perception/track.mjs`、`hosted-motion.mjs`；已实现，还没挂载，工具表里这几项仍标「还没接上」，系统提示词仍说云端没有运动追踪；〔裁：v18-semsync 2026-10-13；出处 `docs/reports/AGENT-v18-tools-p3.md`〕）与本机的差别：
 
 - 追踪结果按「项目 × 对话 × 素材 × 素材版本」保存在结果表（SQLite）里，同项目换一个对话读不到、要重追；素材换版后读到的结果带 `stale: true`。`track_points` 多一个可选参数 `force: true`（同一请求缺省返回同一个作业，要重追才带），它不在工具定义里，模型从返回的 `hint` 里知道。`get_track` 没追过时回 `{ ok: true, found: false, hint }`，不回 `null`。
 - 素材只经项目素材落到这个对话的工作区，用完删；作业状态写工具作业表，每次推进都重核授权与栅栏版本，被收回时子进程由运行资源登记器杀掉。
@@ -136,7 +136,7 @@
 - 数字（`TRACK_DEFAULTS`，部署者可调）：视频超过 1800 帧（约 60 秒@30fps）直接拒绝、不截断；一次最多 32 个点；同时跑 2 个追踪；单次追踪 10 分钟、安装 30 分钟；素材字节上限 1 GiB。
 - `attach_clip_motion` 在服务端的项目副本上调现成的 `attachClipMotion` 校验，由宿主带期望版本提交；没有轨迹、还在跑、追失败、素材换版过期都拒绝。
 
-**新对话的空对话**（账号模式；〔裁：主会话 2026-10-13；出处 `docs/reports/AGENT-v18-newchat.md`〕）
+**新对话的空对话**（账号模式；〔裁：v18-semsync 2026-10-13；出处 `docs/reports/AGENT-v18-newchat.md`〕）
 
 - 事件流（`GET /v1/conversations/<id>/events`）对看不到的对话回 404，响应体 `{"ok":false,"code":"no-conversation"}`（`server/account/conversation-authority.mjs`）。读取通道在没有任何一次读取被文档服务受理时不放行 2xx，所以不能用 200 加结束事件表达。「页面刚建、还没发过消息」「被别人设为私有」「已删除」是同一种回应；路由不存在的 404 是另一个码 `not-found`，那是故障。
 - 页面（`src/ai/cloud/session.ts` 的 `open(id, { fresh })`）靠自己知不知道这个对话存在过来分辨。只有页面自己刚建、还没发过消息（`fresh`），并且这次打开之后既没读到过它的事件、也没发消息被收下过（`known` 为假）时，收到 404 `no-conversation` 才当作正常的空对话：连接状态停在 `idle`，不报问题、不重试，发出第一条消息后照常接上事件流。其余一律按断线重连并一直重试：不是新对话的 404（历史里选的、记着的旧对话、自动接上的在跑对话）、读到过之后再 404、发完第一条消息后偶尔还读不到、502、连不上、没带错误码的 404、`not-found`。401、403 和身份类错误（`unauthorized`、`no-identity`、`forbidden`、`disabled`）停下并给原因。
