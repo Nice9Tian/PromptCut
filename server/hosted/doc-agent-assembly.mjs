@@ -445,8 +445,13 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       const state = ledger.read(), rows = [];
       for (const [projectId, group] of Object.entries(state.conversationsV2 ?? {})) {
         if (state.projects[projectId]?.status !== 'active' || state.projects[projectId].hosted?.agent !== true) continue;
-        for (const conversation of Object.values(group)) if (conversation.messages.some(message => message.queueState === 'queued'))
-          rows.push({ projectId, conversationId: conversation.id, queueRevision: conversation.queueRevision });
+        for (const conversation of Object.values(group)) {
+          // 一条任务一个进程时：这个对话的上一条还没结清（`currentRunId` 还在）就先不报给调度。报了也领不到（409 `run-not-ready`），
+          // 调度却会为它白开一代进程、再退掉。结清以后这里自然就报出来了。
+          if (scopeAuthority && conversation.currentRunId) continue;
+          if (conversation.messages.some(message => message.queueState === 'queued'))
+            rows.push({ projectId, conversationId: conversation.id, queueRevision: conversation.queueRevision });
+        }
       }
       return { conversations: rows, ...(scopeAuthority ? { scopeControls: runAuthority.listScopeControls({ servicePrincipal }) } : {}) };
     } });

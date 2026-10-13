@@ -3,8 +3,9 @@
  * 对应 cloud-agent-task.md 完成条件第 3、4、7 条（AGENT-018-prep.md 第 2.3 节的 2.3-3、2.3-4、2.3-7）。
  *
  * 搭法：真账号后端源码 + 文档服务 + 独立素材进程 + Agent 公共入口 + 真的任务执行器（只有模型是按脚本回话的替身）。
- * 五个账号、五个项目，每个项目的第一轮任务各自独立（本版「关闭结算」还没接通，同一个项目里第二轮任务不会开始，
- * 所以每个场景用自己的项目，不在同一个项目里复用）。
+ * 五个账号、五个项目，每个项目的第一轮任务各自独立（这套组合是在主进程里跑任务的进程内执行器，没有关闭结算，
+ * 同一个对话里第二轮任务不会开始，所以每个场景用自己的项目）。「第二位发送者的任务接着开始」那一条另起一套
+ * 一条任务一个进程的组合来验（生产的主服务装配），见那一条的说明。
  *
  * 跑法（PowerShell 与 Bash 都要先设两个环境变量，值见 docs/local.md）：
  *   npm test -- server/test/accept-018-auth-agent-path.test.mjs
@@ -244,28 +245,44 @@ test('账号模式云端 Agent：隔离（跨项目、伪造/过期证明、只�
       assert.deepEqual(await gate.admitModelCall({ projectId: P5, userId: A.accountId, model: 'mock/scripted-local-response' }), { ok: true });
       assert.ok(!/"limitTokens": ?1/.test(admin(['quota', 'show', P5]).text), '额度配置里已经没有这个项目的上限');
     });
-    // —— 以下两条是现在不成立的断言，用 todo 留着（不让 npm test 变红）；对应的缺口见分段文件「产品问题」——
-    await t.test('2.3-4 不存在的对话（含别的项目的对话）的事件流：应该回一个 HTTP 响应（200 加一条结束事件，或 404），不应断开连接',
-      { todo: '现状：直接打 Agent 入口时连接被断开（socket hang up），经反向代理是 502；没有泄露内容，但不是干净的拒绝' }, async () => {
+    // —— 以下一条是现在不成立的断言，用 todo 留着（不让 npm test 变红）；对应的缺口见分段文件「产品问题」——
+    await t.test('2.3-4 不存在的对话（含别的项目的对话）的事件流：应该回一个 HTTP 响应（200 加一条结束事件，或 404），不应断开连接', async () => {
       const a = pages.find(p => p.projectId === P1);
       const answer = await bareText(fx.ports.agent, '/v1/conversations/does-not-exist/events?after=0', { authorization: `Bearer ${a.delegation}` });
       assert.ok(answer.status === 200 || answer.status === 404);
+      assert.equal(answer.status, 404, '和 GET /v1/conversations/<不存在> 一致：干净的 404');
     });
 
-    await t.test('2.3-3 共有对话里一个成员的任务结束后，另一个成员后发的消息的任务能按到达顺序开始',
-      { todo: '现状：同一个对话里的第二条消息要等第一轮的「关闭结算」才会开始，而本版关闭结算还没接通（块一：独立任务进程，未合入 main）。同项目里另一个对话的任务不受影响（上面的并行子测试已证）' }, async () => {
-      const created = await A.doc('create', { name: 'Accept Shared Queue', requestId: 'accept-create-shared-queue', allowLinkJoin: true, initialProject: { name: 'Accept Shared Queue', tracks: [] } });
-      assert.equal(created.status, 201);
-      const p9 = created.body.projectId;
-      const first = await A.enter(p9, { page: false, deviceTag: 'setup' });
-      assert.equal((await A.doc('admin', { projectId: p9, op: 'set-hosted-service', service: 'agent', enabled: true, expectedAccessRevision: first.session.body.accessRevision, requestId: 'accept-enable-shared-queue' })).status, 200);
-      const B4 = await fx.openAccount({ ...fx.accounts[1] });
-      assert.equal((await B4.doc('join', { projectId: p9, deviceId: 'accept-b4', requestId: 'accept-join-shared-queue' })).status, 200);
-      const a = await withPage(A, p9, 'queue'), b = await withPage(B4, p9, 'queue');
-      assert.equal((await a.agent('/conversations/shared/messages', { prompt: script([{ say: 'FROM_A' }]), requestId: 'q-a', selectionSnapshot: { pageId: a.pageId } })).status, 202);
-      await waitUntil(() => runnerDone(fx, p9, 'shared'), 'first sender run ends', 60_000);
-      assert.equal((await b.agent('/conversations/shared/messages', { prompt: script([{ say: 'FROM_B' }]), requestId: 'q-b', selectionSnapshot: { pageId: b.pageId } })).status, 202);
-      await waitUntil(() => textOf(fx, p9, 'shared').includes('FROM_B'), 'second sender run speaks', 15_000);
+    // 这一条换了夹具：上面那套组合是「在主进程里跑任务」的进程内执行器，它没有关闭结算，同一个对话的第二条永远等不到（原先这里标着 todo）。
+    // 账号模式真正的跑法是一条任务一个进程：主服务用生产的装配（只做控制），任务在真的子进程里跑，第一条被 root 关掉、文档服务结清以后
+    // 第二条才领得到。所以这里另起一套那样的组合来验（哪些是真的见 fixtures/account-runner-process.mjs 的开头）；它自带一个两位成员都在的项目。
+    // 端口 28713～28734（生产入口那一块的段）。第二条要等新的一代任务进程起来（带一份 vite），等待时限比原来的 15 秒放宽，只为防卡死。
+    await t.test('2.3-3 共有对话里一个成员的任务结束后，另一个成员后发的消息的任务能按到达顺序开始', async () => {
+      // 到这里才载这个夹具：它和上面那套组合共用同一个底座模块，而上面那套要先把底座里文档服务的时钟换成可拨的（验身份证明过期用）。
+      // 在文件开头静态引入会让底座抢先按没换时钟的样子载进来。
+      const { startRunnerProcessFixture } = await import('./fixtures/account-runner-process.mjs');
+      const f = await startRunnerProcessFixture({ productionMaster: true, ports: { combo: [28713, 28714, 28715, 28716, 28717, 28718, 28719], agent: 28725,
+        masterEvents: 28726, look: 28727, renderWorker: 28728, identityBase: 28728, controlBase: 28731 } });
+      const actors = [];
+      try {
+        const a = await f.connectActor(0); actors.push(a);
+        const b = await f.connectActor(1); actors.push(b);
+        const rows = () => f.events('shared'), spoken = () => rows().filter(row => row.event.type === 'text').map(row => row.event.delta).join('');
+        assert.equal((await a.agent('/conversations/shared/messages', { prompt: script([{ say: 'FROM_A' }]), requestId: 'q-a', selectionSnapshot: { pageId: a.pageId } })).status, 202);
+        await f.scheduler.start();
+        await waitUntil(() => rows().some(row => row.event.type === 'runner_done'), 'first sender run ends', 60_000);
+        assert.equal((await b.agent('/conversations/shared/messages', { prompt: script([{ say: 'FROM_B' }]), requestId: 'q-b', selectionSnapshot: { pageId: b.pageId } })).status, 202);
+        await waitUntil(() => spoken().includes('FROM_B'), 'second sender run speaks', 60_000);
+        // 按到达顺序：A 的那一轮先结束，B 的话在它之后；B 的任务是 B 自己发起的
+        const done = rows().findIndex(row => row.event.type === 'runner_done'), second = rows().findIndex(row => row.event.type === 'text' && String(row.event.delta).includes('FROM_B'));
+        assert.ok(done >= 0 && done < second);
+        const grantA = f.grantOf(f.messageOf('shared', 'q-a').messageId), grantB = f.grantOf(f.messageOf('shared', 'q-b').messageId);
+        assert.notEqual(grantA.accountId, grantB.accountId);
+      } finally {
+        for (const actor of actors) await actor.close().catch(() => {});
+        const closed = await f.close();
+        assert.equal(closed.alive, 0, '收尾后不该还有活着的任务子进程');
+      }
     });
   } finally {
     for (const entry of pages) entry.ws?.terminate();

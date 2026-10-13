@@ -41,15 +41,18 @@ function world({ slotIds = ['slot-a'], current = () => null } = {}) {
     return slot;
   });
   const master = {
-    async pending() { calls.push('pending'); return structuredClone(pending); },
+    async pending() { calls.push('pending'); const answer = structuredClone(pending);
+      if (context.masterGate) { const gate = context.masterGate; context.masterGate = null; await gate; } return answer; },
     async scopeControl(row) { calls.push(`scopeControl:${row.controlId}`); const answer = controls.get(row.controlId);
       if (answer instanceof Error) throw answer; return answer; },
   };
-  const log = [];
+  const log = [], context = { masterGate: null };
   const scheduler = createAccountSlotScheduler({ slots, master, pollMs: 10, log: (event, fields) => log.push({ event, ...fields }) });
   const conversation = id => ({ projectId: 'p', conversationId: id, queueRevision: 1 });
   const controlRow = (slot, controlId) => ({ projectId: 'p', controlId, runGrantId: 'g', assignmentDigest: 'b'.repeat(64), rootScopeRef: slot.ref() });
   return { scheduler, slots, calls, pending, controls, log, conversation, controlRow,
+    /** 把下一次 master.pending 的回答压住，直到这个承诺兑现（模拟「回答还在路上」） */
+    holdNextPending(gate) { context.masterGate = gate; },
     phases: () => scheduler.describe().map(row => row.phase), clear: () => { calls.length = 0; } };
 }
 const without = (calls, name) => calls.filter(call => call !== name);
@@ -69,19 +72,86 @@ test('有排队的对话就开一代、领取、绑定、开跑；同一个对�
   assert.deepEqual(without(w.calls, 'pending').slice(0, 2), ['slot-a:open:2', 'slot-a:prepare:2:c1:dispatch:slot-a:2'], '关掉以后才给同一个对话开下一代');
 });
 
-test('任务进程放弃正常结算时什么都不关，等文档服务的强制终态；文档服务没准备好就下一轮再问', async () => {
+test('任务进程放弃正常结算、文档服务已经要强制关它：什么都不另做，等强制终态；文档服务没准备好就下一轮再问', async () => {
   const w = world(); w.pending.conversations = [w.conversation('c1')];
   await w.scheduler.tick(); await quiet();
-  w.slots[0].worker.settlement.open({ kind: 'abandoned', code: 'run-revoked' }); await quiet();
-  assert.equal(w.calls.some(call => /close|forcedClose|retire/.test(call)), false);
+  // 停止先在文档服务落了账（清单里已经有这条），任务进程随后才因此放弃
   w.pending.scopeControls = [w.controlRow(w.slots[0], 'stop-1')];
   w.controls.set('stop-1', Object.assign(Error('run-scope-doc-closure-pending'), { status: 503, code: 'run-scope-doc-closure-pending' }));
+  w.slots[0].worker.settlement.open({ kind: 'abandoned', code: 'run-revoked' }); await quiet();
+  assert.equal(w.calls.some(call => /close|forcedClose|retire|observeFailure|worker-stop/.test(call)), false);
   w.clear(); await w.scheduler.tick(); await quiet();
   assert.deepEqual(w.calls, ['pending', 'scopeControl:stop-1']); assert.deepEqual(w.phases(), ['running']);
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.deepEqual(w.calls, ['pending', 'scopeControl:stop-1'], '多问几轮也一样：不停主进程、不写失败观察');
   w.controls.set('stop-1', { unassigned: false, terminal: { forced: true } });
   w.clear(); await w.scheduler.tick(); await quiet();
   assert.deepEqual(w.calls.slice(0, 3), ['pending', 'scopeControl:stop-1', 'slot-a:forcedClose:1']); assert.deepEqual(w.phases(), ['idle']);
   assert.equal(w.calls.includes('slot-a:observeFailure:1'), false, '自己强制关掉的进程退出不算故障');
+  assert.equal(w.calls.includes('slot-a:worker-stop:1'), false);
+});
+
+test('任务进程放弃正常结算、文档服务没有要强制关它：停主进程、写失败观察，凭「进程故障」的强制终态关；槽不再一直占着', async () => {
+  const w = world(); w.pending.conversations = [w.conversation('c1')];
+  await w.scheduler.tick(); await quiet();
+  // 这一轮问话的回答还在路上的时候任务进程放弃了：这一次的回答是放弃之前去问的，不算数
+  let release; w.holdNextPending(new Promise(resolve => { release = resolve; }));
+  w.clear();
+  const inFlight = w.scheduler.tick(); await quiet(2);
+  w.slots[0].worker.settlement.open({ kind: 'abandoned', code: 'worker-sink-unavailable' }); await quiet();
+  release(); await inFlight; await quiet();
+  assert.deepEqual(w.calls, ['pending'], '放弃之前就去问的那一次回答不作数：不停主进程、不写失败观察');
+  assert.deepEqual(w.phases(), ['running']);
+  assert.ok(w.log.some(row => row.event === 'slot.settlement.abandoned' && row.code === 'worker-sink-unavailable'));
+  // 放弃之后的那一次回答里没有它：这条任务不会自己收口了
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.deepEqual(w.calls, ['pending', 'slot-a:worker-stop:1', 'slot-a:observeFailure:1']);
+  assert.equal(w.scheduler.describe()[0].failureObserved, true); assert.deepEqual(w.phases(), ['failed']);
+  assert.ok(w.log.some(row => row.event === 'slot.settlement.abandoned.failing'));
+  // 文档服务据失败观察签了「进程故障」的强制终态：照强制关，槽回到空闲，排着的下一条接着开
+  w.pending.scopeControls = [w.controlRow(w.slots[0], 'failed-1')];
+  w.controls.set('failed-1', { unassigned: false, terminal: { forced: true, kind: 'worker-failed' } });
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.deepEqual(w.calls.slice(0, 3), ['pending', 'scopeControl:failed-1', 'slot-a:forcedClose:1']); assert.deepEqual(w.phases(), ['idle']);
+  assert.equal(w.calls.includes('slot-a:worker-stop:1'), false, '主进程只停一次');
+  w.pending.scopeControls = []; w.pending.conversations = [w.conversation('c2')];
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.deepEqual(without(w.calls, 'pending'), ['slot-a:open:2', 'slot-a:prepare:2:c2:dispatch:slot-a:2', 'slot-a:bind:2', 'slot-a:start:2']);
+  // 新的一代不带着上一代的「放弃」
+  w.clear(); await w.scheduler.tick(); await quiet(); await w.scheduler.tick(); await quiet();
+  assert.equal(w.calls.some(call => /worker-stop|observeFailure/.test(call)), false);
+});
+
+test('放弃之后失败观察写不成就每一轮再试，不重复停主进程；结算正常的一代不受影响', async () => {
+  const w = world(); w.pending.conversations = [w.conversation('c1')];
+  await w.scheduler.tick(); await quiet();
+  w.slots[0].worker.settlement.open({ kind: 'abandoned', code: 'run-drain-unavailable' }); await quiet();
+  w.slots[0].faults.observeFailure = 'agent-scope-main-still-live';
+  w.clear(); await w.scheduler.tick(); await quiet();
+  // 主进程被停下以后「进程退出」那一路也会来写一次失败观察，所以这一轮里可能试了不止一次；停只停一次
+  assert.deepEqual(without(w.calls, 'slot-a:observeFailure:1'), ['pending', 'slot-a:worker-stop:1']);
+  assert.ok(w.calls.includes('slot-a:observeFailure:1'));
+  assert.equal(w.scheduler.describe()[0].failureObserved, false); assert.deepEqual(w.phases(), ['failed']);
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.deepEqual(w.calls, ['slot-a:observeFailure:1', 'pending'], '下一轮再试写失败观察，不再重复停主进程');
+  delete w.slots[0].faults.observeFailure;
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.equal(w.scheduler.describe()[0].failureObserved, true);
+  // 结算是正常的（终态和意向都有）就按正常关，和「放弃」无关
+  const n = world(); n.pending.conversations = [n.conversation('c1')];
+  await n.scheduler.tick(); await quiet();
+  n.pending.conversations = [];
+  n.slots[0].worker.settlement.open({ kind: 'normal', terminal: { t: 1 }, intent: { i: 1 } }); await quiet();
+  n.clear(); await n.scheduler.tick(); await quiet(); await n.scheduler.tick(); await quiet();
+  assert.equal(n.calls.some(call => /worker-stop|observeFailure/.test(call)), false); assert.deepEqual(n.phases(), ['idle']);
+  // 先放弃、紧接着文档服务把它列进了要强制关的清单（停止和故障几乎同时）：只走强制，不写失败观察
+  const r = world(); r.pending.conversations = [r.conversation('c1')];
+  await r.scheduler.tick(); await quiet();
+  r.slots[0].worker.settlement.open({ kind: 'abandoned', code: 'worker-sink-unavailable' }); await quiet();
+  r.pending.scopeControls = [r.controlRow(r.slots[0], 'stop-9')]; r.controls.set('stop-9', { unassigned: false, terminal: { forced: true } });
+  r.clear(); await r.scheduler.tick(); await quiet();
+  assert.deepEqual(r.calls.slice(0, 3), ['pending', 'scopeControl:stop-9', 'slot-a:forcedClose:1']);
+  assert.equal(r.calls.some(call => /worker-stop|observeFailure/.test(call)), false); assert.deepEqual(r.phases(), ['idle']);
 });
 
 test('正常终态和强制终态一前一后到：一次只做一个，先到的做完这一代就算关了，后到的不再做', async () => {

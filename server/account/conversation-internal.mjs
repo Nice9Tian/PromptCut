@@ -52,7 +52,8 @@ export function createConversationInternalHandler({ conversationAuthority, resol
         case 'list': result = await conversationAuthority.list(input); break;
         case 'get': result = await conversationAuthority.get({ ...input, after: body.after }); break;
         case 'send': result = await conversationAuthority.send({ ...input, requestId: body.requestId,
-          content: body.content, selectionInput: body.selectionInput }); break;
+          content: body.content, selectionInput: body.selectionInput,
+          ...(body.attachments !== undefined ? { attachments: body.attachments } : {}) }); break;
         case 'switch': result = await conversationAuthority.switchVisibility({ ...input, visibility: body.visibility, requestId: body.requestId }); break;
         case 'stop': result = await conversationAuthority.stop({ ...input, runId: body.runId, requestId: body.requestId }); break;
         case 'rename': result = await conversationAuthority.rename({ ...input, title: body.title }); break;

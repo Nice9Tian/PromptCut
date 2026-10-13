@@ -29,7 +29,8 @@ import { openOperationHistory } from '../../docservice/modules/operation-history
 import { createRunClient } from '../../agent-service/run-client.mjs';
 import { createAccountRunEvents } from '../../agent/service/account-run-events.mjs';
 import { createWorkerEventInternalHandler } from '../../agent-service/worker-event-internal.mjs';
-import { createAccountWorkerGateway } from '../../agent-service/account-worker-gateway.mjs';
+import { createAccountWorkerHttpsGateway } from '../../agent-service/account-worker-control-client.mjs';
+import { freePort } from '../free-ports.mjs';
 import { createAccountSlotScheduler } from '../../agent-service/account-slot-scheduler.mjs';
 import { createAgentReadControl, createAgentReadControlHandler } from '../../account/agent-read-control.mjs';
 import { createConversationControlClient } from '../../agent-service/conversation-control-client.mjs';
@@ -113,7 +114,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   const history = openOperationHistory(path.join(dir, 'operations.db')); history.createProject(projectId, { id: projectId });
   const unavailable = () => { throw Error('no-account-operation'); };
   const operations = createPasswordOrder({ history, account: { get: unavailable }, verifyWitness: unavailable, checkGate: unavailable });
-  const gates = { holdTerminalDelivery: false };
+  const gates = { holdTerminalDelivery: false, rejectWorkerEvents: false };
   const deliveries = new Map();
   let provider;
   function deliver(control) {
@@ -155,7 +156,8 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
       await provider.reconcileScopeClosures();
       const state = ledger.read(), rows = [];
       for (const [id, group] of Object.entries(state.conversationsV2 ?? {})) for (const conversation of Object.values(group))
-        if (conversation.messages.some(message => message.queueState === 'queued'))
+        // 和生产的那一份（doc-agent-assembly.mjs 的 listPendingRuns）一样：上一条还没结清的对话先不报给调度
+        if (!conversation.currentRunId && conversation.messages.some(message => message.queueState === 'queued'))
           rows.push({ projectId: id, conversationId: conversation.id, queueRevision: conversation.queueRevision });
       return { conversations: rows, scopeControls: provider.listScopeControls({ servicePrincipal }) };
     } });
@@ -176,6 +178,8 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   const eventHandler = createWorkerEventInternalHandler({ eventStore, resolveWorker: input => master.workerEventSource(input) });
   const masterSockets = new Set();
   const masterServer = https.createServer({ ...pki.asset, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, (req, res) => {
+    // gates.rejectWorkerEvents：主服务收事件的口一时答不上（任务进程那边的事件交不上去）
+    if (gates.rejectWorkerEvents) { req.resume(); res.writeHead(503, { 'content-type': 'application/json' }); res.end('{"ok":false,"code":"master-unavailable"}'); return; }
     void eventHandler(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }).catch(() => res.destroy());
   });
   masterServer.on('connection', socket => { masterSockets.add(socket); socket.once('close', () => masterSockets.delete(socket)); });
@@ -188,12 +192,15 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
     fs.writeFileSync(path.join(chainDir, name), JSON.stringify(value), { flag: exclusive ? 'wx' : 'w', mode: 0o600 }); };
   m.io.lock = async () => { const release = await originalLock(); return options => release(options); };
   m.io.start = async reservation => {
-    const settingsFile = path.join(dir, `worker-${reservation.epoch}.json`);
-    fs.writeFileSync(settingsFile, JSON.stringify({ pkiDir: dir, chainDir, markerDir, expected: m.expected, reservation,
+    const settingsFile = path.join(dir, `worker-${reservation.epoch}.json`), identityPort = await freePort();
+    fs.writeFileSync(settingsFile, JSON.stringify({ pkiDir: dir, chainDir, markerDir, expected: m.expected, reservation, identityPort,
       docOrigin, docFingerprint256: pki.doc.fingerprint256, masterOrigin, masterFingerprint256: pki.asset.fingerprint256,
       journalFile: path.join(dir, `worker-journal-${reservation.epoch}.sqlite`), dataDir: path.join(dir, `worker-data-${reservation.epoch}`) }), { mode: 0o600 });
-    const gateway = createAccountWorkerGateway({ configurationModule: path.join(here, 'account-worker-child-config.mjs'), cwd: here,
-      env: { ...process.env, PROMPTCUT_WORKER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 15_000 });
+    // 子进程不带父子通道（和 systemd 起的一样）：领取、开跑、收尾、结算结果都走它那个只认 root 证书的本机 HTTPS 口
+    const gateway = createAccountWorkerHttpsGateway({ configurationModule: path.join(here, 'account-worker-child-config.mjs'), cwd: here,
+      env: { ...process.env, PROMPTCUT_WORKER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 15_000, port: identityPort,
+      controllerTls: pki.account, serverFingerprint256: m.expected.serverFingerprint256,
+      scope: { slotId: m.expected.slotId, epoch: reservation.epoch, instanceId: reservation.instanceId } });
     const ready = await gateway.ready;
     generations.set(reservation.epoch, { gateway, pid: ready.pid, port: ready.port, journalFile: path.join(dir, `worker-journal-${reservation.epoch}.sqlite`) });
     say('root.started', { epoch: reservation.epoch, pid: ready.pid });
@@ -201,7 +208,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   m.io.inspect = async reservation => { const value = await originalInspect(reservation); value.instance.pid = generations.get(reservation.epoch).pid; return value; };
   m.io.identity = async reservation => {
     const result = await getIdentity(generations.get(reservation.epoch).port, pki.account, m.expected.serverFingerprint256);
-    if (result.status !== 200) throw Error('fixture-identity-status'); return result.body;
+    if (result.status !== 200 || result.body?.ok !== true) throw Error('fixture-identity-status'); return result.body.result;
   };
   const stopped = (record, how, observed) => { stops.push({ epoch: record.epoch, how, pid: observed.pid, exitCode: observed.exitCode,
     signal: observed.signal, at: Date.now() }); say('root.stopped', { epoch: record.epoch, how, exitCode: observed.exitCode }); };

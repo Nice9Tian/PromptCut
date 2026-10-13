@@ -15,6 +15,12 @@
  * 每个槽的关闭动作排成一条队（一次只做一个）。正常终态和强制终态同时到的话先到的先做；
  * 这一代一旦关了，后到的那个不再做。结果算「做完」还是「被中断」由文档服务按它自己的记录定。
  *
+ * 任务进程放弃了正常结算（它报 `abandoned`）以后分两种，分界只看文档服务**在放弃之后**的那一次回答：
+ *   - 文档服务已经要强制关它（任务被停止、被撤销；它就是因此才放弃的）：照第 3 条走，这里不另外做任何事；
+ *   - 文档服务没有要强制关它（已读确认之后出了暂时性故障：事件交不上去、收尾没形成记录、运行器没建起来……）：
+ *     这条任务不会自己收口了，授权却还有效、进程还活着。让这一代主进程停下、写失败观察，
+ *     文档服务据此签「进程故障」的强制终态（结果记「失败」），再照第 3 条关。不这样做，槽会一直占着等人按停止。
+ *
  * slots[i]（root 那一侧的口子，本机测试用受控的实现，Linux 上由 root 进程实现）：
  *   slotId
  *   current()                → { rootScopeRef, phase: 'ready'|'bound'|'closed' } | null   当前这一代
@@ -47,8 +53,8 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
         .some(name => typeof s[name] !== 'function')) || new Set(slots.map(s => s.slotId)).size !== slots.length)
     fail('slot-scheduler-configuration');
   const states = slots.map(adapter => ({ adapter, phase: 'unknown', ref: null, worker: null, conversation: null,
-    lane: Promise.resolve(), closing: false, failure: false, forcing: null, dispatching: null, note: null }));
-  let stopped = false, started = false, loop = null, wake = null, ticking = null;
+    lane: Promise.resolve(), closing: false, failure: false, forcing: null, dispatching: null, note: null, abandoned: null }));
+  let stopped = false, started = false, loop = null, wake = null, ticking = null, tickNo = 0;
   // 一个对话领不到任务（多半是上一条还没结清）时隔一会儿再试，间隔逐次加倍，不为它反复开进程。
   const cooldown = new Map();
   const rest = key => { const delay = Math.min((cooldown.get(key)?.delay ?? pollMs) * 2, 30_000); cooldown.set(key, { delay, until: Date.now() + delay }); };
@@ -63,7 +69,7 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
   }
   function released(slot, how) {
     say('slot.closed', slot, { how });
-    slot.phase = 'idle'; slot.worker = null; slot.conversation = null; slot.closing = false; slot.failure = false; slot.note = how;
+    slot.phase = 'idle'; slot.worker = null; slot.conversation = null; slot.closing = false; slot.failure = false; slot.note = how; slot.abandoned = null;
     kick();
   }
   /** root 的动作失败以后槽上可能留着发布锁，不能再自动往下做：标出来，等人看。 */
@@ -115,8 +121,9 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
     void Promise.resolve(worker.settlement).then(result => {
       if (stopped || !sameRef(slot.ref, ref)) return;
       if (result?.kind === 'normal') return closeNormal(slot, ref, result);
-      // 放弃正常结算：什么都不关，等文档服务的强制终态。
-      if (result?.kind === 'abandoned') say('slot.settlement.abandoned', slot, { code: result.code });
+      // 放弃正常结算：这里什么都不关。记下是在第几轮放弃的；文档服务在这之后的那一次回答里要不要强制关它，
+      // 决定走哪一条（见文件头）。
+      if (result?.kind === 'abandoned') { slot.abandoned = { code: result.code, tick: tickNo }; say('slot.settlement.abandoned', slot, { code: result.code }); kick(); }
     }).catch(() => {});
     void Promise.resolve(worker.exited).then(() => {
       // 自己关的不算；别的情况是这一代主进程没了。
@@ -131,7 +138,7 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
     try { opened = await slot.adapter.open(); }
     catch (error) { slot.ref = null; slot.conversation = null; return stuck(slot, codeOf(error)); }
     const ref = opened.rootScopeRef, worker = opened.worker;
-    slot.ref = ref; slot.worker = worker; slot.failure = false; slot.closing = false;
+    slot.ref = ref; slot.worker = worker; slot.failure = false; slot.closing = false; slot.abandoned = null;
     watch(slot, ref, worker);
     say('slot.opened', slot, target);
     let prepared;
@@ -179,6 +186,7 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
   const ready = () => adopting ??= adopt();
   async function tickOnce() {
     await ready();
+    const thisTick = ++tickNo;
     // 主进程该没而还没写下失败观察的槽（上一个调度进程留下的、领取或启动失败的），每一轮再试一次。
     for (const slot of states) if (['orphan', 'failed'].includes(slot.phase) && !slot.failure) await inLane(slot, () => observe(slot, slot.ref));
     // 每一轮都先问文档服务：它在这一问里读 root 的失败观察和关闭记录，该签强制终态的签、该结清的结清。
@@ -187,6 +195,21 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
     for (const row of listed.scopeControls ?? []) {
       const slot = states.find(s => sameRef(s.ref, row.rootScopeRef));
       if (slot && !['idle', 'stuck', 'unknown'].includes(slot.phase)) void closeForced(slot, slot.ref, row);
+    }
+    // 放弃了正常结算、而这一次回答（它是在放弃之后才去问的）里文档服务没有要强制关它：走失败观察。
+    // 「之后」很要紧：停止先落账、任务进程随后才因此放弃，所以放弃之后再问到的清单里一定已经有它；
+    // 放弃之前就在路上的那一次回答不算数。
+    for (const slot of states) {
+      if (!slot.abandoned || slot.abandoned.tick >= thisTick || slot.phase !== 'running' || slot.closing || slot.forcing) continue;
+      if ((listed.scopeControls ?? []).some(row => sameRef(slot.ref, row.rootScopeRef))) continue;
+      const ref = slot.ref, worker = slot.worker;
+      say('slot.settlement.abandoned.failing', slot, { code: slot.abandoned.code });
+      slot.phase = 'failed';
+      void inLane(slot, async () => {
+        if (!sameRef(slot.ref, ref) || slot.phase !== 'failed') return;
+        try { await worker?.stop?.(); } catch { /* 停不下来就等它自己退出；失败观察每一轮再试 */ }
+        return observe(slot, ref);
+      }).catch(() => {});
     }
     const serving = new Set(states.filter(s => s.conversation).map(s => keyOf(s.conversation)));
     for (const row of listed.conversations) {

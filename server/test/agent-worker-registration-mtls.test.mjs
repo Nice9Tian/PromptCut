@@ -93,7 +93,7 @@ test('actual TLS worker key → root record → Doc scope registration/admit; no
   };
   m.io.identity = async () => {
     const result = await getIdentity(identityPort, pki.account, m.expected.serverFingerprint256);
-    assert.equal(result.status, 200); return result.body;
+    assert.equal(result.status, 200); assert.equal(result.body.ok, true); return result.body.result;
   };
   await m.run('initialize');
   const record = await m.io.read('epoch-1.json');

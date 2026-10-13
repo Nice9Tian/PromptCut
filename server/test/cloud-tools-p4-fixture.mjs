@@ -18,6 +18,12 @@ import { resourceRevision, assetRefId } from '../account/run-asset-protocol.mjs'
 import { createSubjectTools } from '../agent/service/perception/subject.mjs';
 
 export { projectId, conversationId };
+
+/** 测试代码自己从 src/ 取内核函数注入(宿主在生产里经 ssr-host 载入缝取;测试文件不在 SEAM 棘轮范围内) */
+let kernelP;
+export const loadTestKernel = () => (kernelP ??= Promise.all([import('../../src/kernel/project.ts'), import('../../src/kernel/layout.ts')]).then(([p, l]) => ({
+  MAX_SUBJECT_TIMES: p.MAX_SUBJECT_TIMES, subjectSampleTimes: p.subjectSampleTimes, subjectForRange: p.subjectForRange, suggestPosition: p.suggestPosition, rectForSafeSide: l.rectForSafeSide,
+})));
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const closedOf = (stream) => (stream.closed ? Promise.resolve() : new Promise((r) => stream.once('close', r)));
 
@@ -110,7 +116,8 @@ export async function makeP4Fixture(t, { config = null, limits = {}, readOnly = 
     maxImportBytes: 512 * 1024 * 1024, reserveImport: async () => {}, verifySourceJob: async () => true,
   });
 
-  const build = () => createSubjectTools({ config, resources, assets, jobs, workspace: async () => ws, project, kernel, limits });
+  const kernelFns = kernel ?? await loadTestKernel();
+  const build = () => createSubjectTools({ config, resources, assets, jobs, workspace: async () => ws, project, kernel: kernelFns, limits });
   let tools = build();
 
   let counter = 0;

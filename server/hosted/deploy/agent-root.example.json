@@ -1,0 +1,59 @@
+{
+  "v": 1,
+  "master": { "origin": "https://127.0.0.1:8792/", "fingerprint256": "<Agent 主服务证书的 SHA-256 指纹,64 位十六进制>" },
+  "controller": {
+    "keyFile": "/etc/promptcut/agent-root/controller.key",
+    "certFile": "/etc/promptcut/agent-root/controller.crt",
+    "caFile": "/etc/promptcut/agent-root/ca.crt"
+  },
+  "pollMs": 500,
+  "worker": {
+    "doc": {
+      "origin": "https://127.0.0.1:<文档服务内部口>/",
+      "fingerprint256": "<文档服务内部证书的指纹>",
+      "keyFile": "/etc/promptcut/agent-task/task.key",
+      "certFile": "/etc/promptcut/agent-task/task.crt",
+      "caFile": "/etc/promptcut/agent-task/ca.crt"
+    },
+    "dataDir": "/var/lib/promptcut/agent-shared",
+    "stateRoot": "/var/lib/promptcut/agent-task-state"
+  },
+  "slots": [
+    {
+      "workerSettingsFile": "/etc/promptcut/agent-slots/slot-a/worker-settings.json",
+      "identity": {
+        "keyFile": "/etc/promptcut/agent-task/identity.key",
+        "certFile": "/etc/promptcut/agent-task/identity.crt",
+        "caFile": "/etc/promptcut/agent-task/ca.crt"
+      },
+      "publisher": {
+        "v": 1,
+        "expected": {
+          "authorityId": "promptcut-agent-root-<本次开机后的批次,如 20261013a>",
+          "slotId": "slot-a",
+          "docAuthorityId": "<文档服务的权威号,PROMPTCUT_ACCOUNT_AUTHORITY_ID>",
+          "docPublicKey": "<文档服务任务槽签名公钥,SPKI DER 的 base64>",
+          "serviceIdentity": "agent",
+          "uid": 991,
+          "unit": "promptcut-agent-task-slot-a.service",
+          "clientFingerprint256": "<controller.crt 的指纹,小写不带冒号>",
+          "serverFingerprint256": "<identity.crt 的指纹,小写不带冒号>",
+          "closurePolicy": { "kind": "systemd-slice", "unitNamespace": "pcagenttask", "cgroupRoot": "/sys/fs/cgroup", "placement": "direct-child", "singleEpoch": true }
+        },
+        "registryDir": "/var/lib/promptcut/agent-root/slot-a",
+        "identity": {
+          "origin": "https://127.0.0.1:8801/",
+          "keyFile": "/etc/promptcut/agent-root/controller.key",
+          "certFile": "/etc/promptcut/agent-root/controller.crt",
+          "caFile": "/etc/promptcut/agent-root/ca.crt"
+        },
+        "runtimeAdapter": {
+          "unitFragment": { "path": "/etc/systemd/system/promptcut-agent-task-slot-a.service", "sha256": "<account-task-unit.mjs 打印的那一个>" },
+          "baseDropIns": [],
+          "ownDropInPath": "/run/systemd/system/promptcut-agent-task-slot-a.service.d/90-promptcut-root-slice.conf"
+        },
+        "configuredAnchorDigest": null
+      }
+    }
+  ]
+}
