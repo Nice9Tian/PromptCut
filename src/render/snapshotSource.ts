@@ -899,8 +899,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const id = typeof msg?.id === "string" ? msg.id : "";
     const keyOf = () => {
       if (typeof msg.resultKey === "string" && msg.resultKey) return msg.resultKey;
-      // 细任务 id:`<kind>:<resultKey>:<from>-<to>`
-      const m = /^(?:snapshot|stream):(.+):\d+-\d+$/.exec(id);
+      // 细任务 id:`<kind>:<resultKey>:<from>-<to>`;稀疏流任务的 id 末尾多一段 `:sparse`(`server/render-queue/messages.mjs` 的 `taskIdOf`)
+      const m = /^(?:snapshot|stream):(.+):\d+-\d+(?::sparse)?$/.exec(id);
       return m ? m[1] : null;
     };
     let changed = false;

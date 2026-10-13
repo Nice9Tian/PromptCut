@@ -57,6 +57,20 @@
  * 已确认项目算(键与切分方算的相同),每一段照队列里那种流任务的形状组一个任务,交给上面同一个 `bakeStream`(同一份活、同一个编码器、
  * 同一份「已推完的分段」登记),清单同样写内容库;层表里本页的那一行由本页并进去。先查、让路、有切分方接了活就停,都在 `pageStreams.ts`。
  * 两条路共用后台舞台的同一份活:本页在产时节点不认领(`isIdle` 多一条),节点手里有认领时本页不产。
+ * 每条流先产稀疏的一趟(每个分段只截第一帧)、所有流的稀疏版都落定了才补满密度。
+ *
+ * # 测量时就产稀疏版(`docs/semantics/mechanism/rendering.md`「测量」;次序与 50 秒的上限在 `pageStreams.ts` 的 `measure()`)
+ *
+ * 打开项目、加载遮罩下,测量方(`probeRunner.ts`)每测完一张卡调这里接的口子:这张卡判重、本页能单独产它的流,就紧接着把稀疏版产出来
+ * (先查素材服务,有就直接用)。为此 render 连接**在测量落定之前就开**、照常报到拿指纹,但测量落定之前节点不认领、本页闲时那条路不动
+ * (`settled` 为假时两边的 `isIdle` 都是假)——第 2 节「测量落定才当节点」的本意是测量期间后台舞台不被队列的活占着,这一点没有变〔裁〕。
+ * 用哪一版项目:此刻的已确认版本(`deps.confirmed()`),按版本号留存;判重的片段取 `deps.heavyClips()`(与清单计划的清单同一个来源)。
+ *
+ * # 播放保活
+ *
+ * 播放、拖动时本页不产流、不认领(闲的判据),手里锁着的卡没有产出。这时 `busy()` 回 `'play'`,节点照队列给的间隔(10 秒)发
+ * `node.active { busy: 'play' }`:队列据此不把本页锁着的卡判成闲置(闲置超 30 秒会被切分方接手、另一份作废重产)。
+ * 页面隐藏、父页 rAF 断档时不发(同原来的规矩)。本页不经队列自己产的流没有锁、没有认领,别的页面只按产物先查,没有「接手」可言,不用保活。
  *
  * # 项目版本(D6)
  *
@@ -88,7 +102,8 @@ import { currentSharedUrl, me, pageSession } from "./sync/syncManager";
 import type { Project } from "../kernel/project";
 import { createStageBaker } from "./stageBake";
 import type { BakeFrameRequest, StageEvent, StageRpcClient } from "../render/stageRpc";
-import { createPageStreams, type PlanState, type PublishedPlan } from "../online/pageStreams";
+import { createPageStreams, type MeasureOutcome, type PlanState, type PublishedPlan } from "../online/pageStreams";
+import { setCardMeasuredHook, type CardMeasuredInfo } from "./probeRunner";
 import { pageStreamCodes, planPageStreams, type PageCardPlanValue } from "../online/pageStreamPlan";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
 import { getCard, unknownCardClipIds } from "../kernel/registry";
@@ -171,6 +186,10 @@ export interface BrowserNodeHostDeps {
   planState?: () => Promise<string | null>;
   /** 本页产流:这个结果键有了可用的流(本页产的、先查查到的),宿主叫在线来源认它、马上重取层表 */
   onPageStream?: (resultKey: string) => void;
+  /** 测量时就产稀疏版:此刻本页判重的片段(与清单计划的清单同一个来源);不给就不在测量时产 */
+  heavyClips?: () => readonly string[];
+  /** 测量时就产稀疏版:此刻文档服务确认的那一版项目与版本号;没有回 null */
+  confirmed?: () => { rev: number; project: Project } | null;
 }
 
 /**
@@ -444,6 +463,15 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       const last = runs[runs.length - 1];
       if (last && last[last.length - 1].index === s.index - 1) last.push(s); else runs.push([s]);
     }
+    /** 稀疏的一趟里,`seg` 的第 `at` 个样本之后下一个要向舞台取的本地帧(同一组里;没有回 null) */
+    const nextWanted = (seg: (typeof plan.segments)[number], at: number): number | null => {
+      if (at + stride < seg.frames.length) return seg.frames[at + stride];
+      for (const group of runs) {
+        const i = group.indexOf(seg);
+        if (i >= 0) return group[i + 1]?.frames[0] ?? null;
+      }
+      return null;
+    };
     for (const group of runs) {
       let initId: string | null = null;
       streamStats.encoders++;
@@ -488,7 +516,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
               if (stride > 1 && at === 0) boxes.set(seg.index, null);
               for (let k = 0; k < repeat; k++) await enc.add(blank);
             } else {
-              const { reply } = await streamBaker.bakeFrame({ task: frameTask, project, localFrame: local, signal });
+              // 稀疏的一趟先发给舞台的是下一个要截的帧(下一个分段的第一帧),不是下一帧
+              const { reply } = await streamBaker.bakeFrame({ task: frameTask, project, localFrame: local, signal, ...(stride > 1 ? { ahead: nextWanted(seg, at) } : {}) });
               const key = `${session}#${local}`;
               const bitmap = pixelStash.get(key);
               pixelStash.delete(key);
@@ -639,17 +668,25 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     return true;
   };
 
-  /** 报忙(M7 D2 补充):手里没有认领时,后台舞台有没有更急的活在排着或跑着 */
+  /**
+   * 报忙(M7 D2 补充):手里没有认领时,后台舞台有没有更急的活在排着或跑着;
+   * 播放保活:播放、拖动时本页不产不认领,回 `'play'`,队列不把本页锁着的卡判成闲置(文件头「播放保活」)。
+   */
   const busy = (): string | null => {
     const bw = backWorkDiag();
     if (!bw.on && (bw.reason === "hidden" || bw.reason === "raf-gap")) return null;
-    return urgentBackJobs() > 0 ? "stage" : null;
+    if (urgentBackJobs() > 0) return "stage";
+    return getState().playing || isScrubbing() ? "play" : null;
   };
+  /** 打开项目的那一轮测量落定了没有(每拍由 `loop` 更新):落定之前节点不认领、本页闲时那条路不动 */
+  let settled = false;
+  /** 当节点的条件除「测量落定」之外都成立(每拍由 `loop` 更新):render 连接开着 */
+  let connectable = false;
 
   /* ---------------- 本页产流(「甲二」;判据与次序在 pageStreams.ts) ---------------- */
 
-  /** 满密度才算有:清单覆盖这一段、每个分段都是每帧一张、块都在素材服务上 */
-  const streamRangePresent = async (resultKey: string, range: { from: number; to: number }): Promise<boolean> => {
+  /** 清单覆盖这一段、块都在素材服务上;`need.dense`(缺省要):每个分段都是每帧一张才算有,稀疏的一趟不要求 */
+  const streamRangePresent = async (resultKey: string, range: { from: number; to: number }, need: { dense: boolean } = { dense: true }): Promise<boolean> => {
     let found: unknown = null;
     try {
       const r = await docRequest({ type: "content.get", kind: "render-manifest", key: `${resultKey}:${range.from}-${range.to}` });
@@ -657,7 +694,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     } catch { return false; }
     const ref = { resultKey, range };
     if (!streamManifestCovers(found, ref)) return false;
-    for (let n = range.from; n <= range.to; n++) if (found.segments[n]?.stride !== 1) return false;
+    if (need.dense) for (let n = range.from; n <= range.to; n++) if (found.segments[n]?.stride !== 1) return false;
     for (const b of streamManifestBlocks(found)) if (!(await uploader.has(b.ns, b.hash))) return false;
     return true;
   };
@@ -670,7 +707,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   const pages = createPageStreams({
     now: Date.now,
     capable: () => !!deps.pagePlan && !!node && !!node.envFingerprint && readyState === "ready" && streamCap.capable && pageStreamCodes() !== null,
-    isIdle: () => isIdle() && !node?.working(),
+    isIdle: () => settled && isIdle() && !node?.working(),
     plan: () => {
       const p = deps.pagePlan?.() ?? null;
       return p && p.projectId === nodeProject ? p : null;
@@ -689,7 +726,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       const out = await planPageStreams({ project: project as unknown as Record<string, unknown>, value, clips: plan.clips, codes: pageStreamCodes(), envFingerprint: fp });
       return { ...out, project };
     },
-    lookupOwn: async (task) => !!task.range && streamRangePresent(task.resultKey, task.range),
+    lookupOwn: async (task, need) => !!task.range && streamRangePresent(task.resultKey, task.range, need),
     lookupOther: streamRangePresent,
     readLayerMap: async (project) => {
       const r = await docRequest({ type: "content.get", kind: "snapshot-manifest", key: layerMapKey(project) });
@@ -717,6 +754,27 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       try { deps.onPageStream?.(resultKey); } catch { /* 宿主坏了 */ }
     },
   });
+  /* ---------------- 测量时就产稀疏版(文件头同名一节) ---------------- */
+
+  const measureStats = { calls: 0, skipped: {} as Record<string, number>, last: null as (MeasureOutcome & { cardId: string; clips: string[]; ms: number }) | null };
+  const onCardMeasured = async (info: CardMeasuredInfo): Promise<void> => {
+    measureStats.calls++;
+    const skip = (why: string) => { measureStats.skipped[why] = (measureStats.skipped[why] ?? 0) + 1; };
+    // 不当节点的页面(手机身份、退回单舞台、不是 Chromium、开发构建)不产;没有本页产流这条路也不产
+    const projectId = deps.projectId();
+    if (!connectable || !projectId || !deps.heavyClips || !deps.confirmed || !deps.pagePlan) { skip("no-node"); return; }
+    const heavy = [...deps.heavyClips()];
+    const clips = info.clipIds.filter((id) => heavy.includes(id));
+    if (!clips.length) { skip("light"); return; }
+    const at = deps.confirmed();
+    if (!at || !Number.isSafeInteger(at.rev) || at.rev <= 0) { skip("no-confirmed"); return; }
+    keepConfirmedProject(at.rev, at.project);
+    const t0 = Date.now();
+    const out = await pages.measure({ round: info.round, projectId, projectRev: at.rev, clips, heavy, stale: info.stale });
+    measureStats.last = { ...out, cardId: info.cardId, clips, ms: Date.now() - t0 };
+  };
+  const offMeasured = setCardMeasuredHook(onCardMeasured);
+
   /** 让路:认领来的任务与本页产流同一套规矩 */
   const yieldAll = (cause: "play" | "drag" | "urgent" | "hidden") => { node?.yieldFor(cause); pages.yieldFor(cause); };
 
@@ -824,7 +882,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     node = createBrowserNode({
       nodeId, projectId, userId: me().userId ?? "", codeVersion: deps.eligibility().codeVersion ?? null, environment: pageEnvironment(),
       // 本页自己在产流时不认领:两条路共用后台舞台的同一份活
-      now: Date.now, isIdle: () => isIdle() && !pages.running(), busy,
+      // 测量落定之前不认领(连接先开着,为的是测量时就能产稀疏版)
+      now: Date.now, isIdle: () => settled && isIdle() && !pages.running(), busy,
       send: (m) => ep?.send(m) ?? false,
       keptProject: (rev) => kept.get(rev) ?? null,
       fetchSnapshot, bakeFrame, finishTask, lookupResult,
@@ -872,8 +931,13 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     if (raw.measured && projectId) measuredProjects.add(projectId);
     const input = projectId && measuredProjects.has(projectId) ? { ...raw, measured: true } : raw;
     eligibility = browserNodeEligibility(input);
-    if (fatal || !eligibility.ok || !projectId) {
+    settled = eligibility.ok;
+    // 别的条件都成立、只差测量没落定:连接先开、照常报到拿指纹(测量时就产稀疏版要它),不认领(`settled` 为假)
+    connectable = !fatal && !!projectId && (eligibility.ok || eligibility.reason === "measuring");
+    if (!connectable || !projectId) {
       if (node) teardown(fatal ?? eligibility.reason ?? "no-project");
+      // 测量方还在等的那一次要有人推时钟
+      try { pages.tick(); } catch (e) { lastError = String((e as Error)?.message ?? e); }
       return;
     }
     if (node && nodeProject !== projectId) teardown("project-changed");
@@ -928,6 +992,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
         })(),
         // 本页产流(不经队列):状态、这一版的流与每一段的去向、计数
         pageStreams: pages.debug(),
+        // 测量时就产稀疏版:口子被调了几次、没进 `measure()` 的原因、最近一次的结果
+        measureSparse: { calls: measureStats.calls, skipped: { ...measureStats.skipped }, last: measureStats.last, settled, connectable },
         connection: { connected: !!ep?.connected, transport: ep?.stats().transport ?? null, ...conn },
         kept: [...kept.keys()],
         lastError: d?.lastError ?? lastError,
@@ -940,6 +1006,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     stopped = true;
     clearInterval(timer);
     offCardInfo();
+    offMeasured();
     teardown("unmount");
     pages.stop("unmount");
     baker.dispose();

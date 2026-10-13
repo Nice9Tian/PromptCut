@@ -13,12 +13,20 @@
  *   PS-09  口子:产几趟、每趟多密由 passes 定(先稀疏后满密度时,先把每条流的稀疏那一趟都做完)
  *   PS-10  做不成:退避后再试,连着不成放下这一段;没活了不再问队列
  *   PS-11  本页的那一行被别的写层表的一方盖掉、而它整条产好了:不写回去(不来回盖)
+ *   PS-12  缺省两趟:先稀疏后满密度;稀疏的任务是稀疏流任务(id 末尾 `:sparse`);稀疏的都落定了满密度才开始(稀疏的在退避,满密度的也等);
+ *          先查按这一趟的密度认(稀疏的一趟有一版就算,满密度的一趟要满密度)
+ *   PS-13  测量时就产稀疏版(`measure()`):不等清单计划、不问有没有切分方;先查、写层表、产、认;已经有的不产;只做稀疏的一趟
+ *   PS-14  遮罩等稀疏版最多 MEASURE_SPARSE_MAX_MS:从这一轮第一次调起算,到时当场回、在产的做完当前帧就停(迟迟不停就中止),
+ *          这一轮之后再调马上回;换一轮时钟重来
+ *   PS-15  测量时的那一份记账在清单计划发出来之前留着;计划发出来就换成计划的,测量时产的稀疏版查得到、不重产,之后才补满密度
+ *   PS-16  测量时本页还没当上节点:等 MEASURE_READY_WAIT_MS,等到了照常产,等不到回 incapable(归闲时)
  *
  * 跑:npm test -- src/online/pageStreams.test.mjs
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPageStreams, PAGE_STREAM_WAIT_MS, PAGE_STREAM_POLL_MS, PAGE_STREAM_RECHECK_MS, PAGE_STREAM_ROWS_MS, PAGE_STREAM_ATTEMPTS } from "./pageStreams.ts";
+import { createPageStreams, PAGE_STREAM_WAIT_MS, PAGE_STREAM_POLL_MS, PAGE_STREAM_RECHECK_MS, PAGE_STREAM_ROWS_MS, PAGE_STREAM_ATTEMPTS,
+  PAGE_STREAM_PASSES, MEASURE_SPARSE_MAX_MS, MEASURE_READY_WAIT_MS } from "./pageStreams.ts";
 import { YIELD_FRAME_MAX_MS } from "./browserNode.ts";
 
 const flush = async (n = 20) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
@@ -44,9 +52,12 @@ function rig(over = {}) {
     /** 结果键 → 已有清单的范围(`from-to`) */
     present: new Set(), layerMap: null, written: [], alive: [], produced: [], probes: 0, specCalls: 0,
     /** 在产的那一段:测试里手动放行 */
-    current: null, readFails: false,
+    current: null, readFails: false, lookups: [],
   };
+  const has = (key, need) => w.present.has(key) || (need?.dense === false && w.present.has(`${key}#sparse`));
   const deps = {
+    // 旧的条目(PS-01 ～ PS-11)只看满密度的一趟;两趟的次序在 PS-09、PS-12 里看
+    passes: [{ name: "dense", stride: 1 }],
     now: () => w.now,
     capable: () => w.capable,
     isIdle: () => w.idle,
@@ -54,8 +65,9 @@ function rig(over = {}) {
     planState: async () => { w.probes++; return w.state; },
     codeVersion: "cv",
     specs: async () => { w.specCalls++; return { specs: w.specs, skipped: { other: "canvas" }, project: PROJECT }; },
-    lookupOwn: async (task) => w.present.has(`${task.resultKey}:${task.range.from}-${task.range.to}`),
-    lookupOther: async (resultKey, range) => w.present.has(`${resultKey}:${range.from}-${range.to}`),
+    // `present` 里 `<键>:<起>-<止>` 是满密度的清单,后面多 `#sparse` 是只有稀疏版的清单;稀疏的一趟两种都认
+    lookupOwn: async (task, need) => { w.lookups.push({ id: task.id, dense: need?.dense }); return has(`${task.resultKey}:${task.range.from}-${task.range.to}`, need); },
+    lookupOther: async (resultKey, range, need) => has(`${resultKey}:${range.from}-${range.to}`, need),
     readLayerMap: async () => { if (w.readFails) throw new Error("断了"); return w.layerMap; },
     writeLayerMap: async (_project, body) => { w.layerMap = body; w.written.push(body); },
     produce: (job) => new Promise((resolve, reject) => {
@@ -73,7 +85,7 @@ function rig(over = {}) {
   const finish = async () => {
     const c = w.current;
     w.current = null;
-    w.present.add(`${c.job.task.resultKey}:${c.job.task.range.from}-${c.job.task.range.to}`);
+    w.present.add(`${c.job.task.resultKey}:${c.job.task.range.from}-${c.job.task.range.to}${c.job.stride > 1 ? "#sparse" : ""}`);
     c.resolve("done");
     await flush();
   };
@@ -326,7 +338,7 @@ test("PS-09 口子:产几趟、每趟多密由 passes 定", async () => {
   await run(PAGE_STREAM_WAIT_MS + 500);
   for (let i = 0; i < 4; i++) { await finish(); await run(500); }
   assert.deepEqual(w.produced.slice(0, 4), [
-    { id: "stream:rk-ka:0-7", stride: 15 }, { id: "stream:rk-kb:0-1", stride: 15 },
+    { id: "stream:rk-ka:0-7:sparse", stride: 15 }, { id: "stream:rk-kb:0-1:sparse", stride: 15 },
     { id: "stream:rk-ka:0-7", stride: 1 }, { id: "stream:rk-kb:0-1", stride: 1 },
   ], "先把每条流稀疏的那一趟做完,再补满密度");
 });
@@ -380,4 +392,181 @@ test("PS-11 本页的那一行被别的写层表的一方盖掉、而它整条�
   await again.run(PAGE_STREAM_ROWS_MS + 1000);
   assert.equal(again.w.written.length, n + 1);
   assert.deepEqual(again.w.layerMap.streams.map((r) => r.contentKey), ["ka", "their-ka"], "本页的在前,别人没过期的那一行留在后面");
+});
+
+test("PS-12 缺省两趟:稀疏的都落定了满密度才开始;先查按这一趟的密度认", async () => {
+  assert.deepEqual(PAGE_STREAM_PASSES.map((p) => p.stride), [15, 1], "缺省先稀疏(一个分段的帧数)后满密度");
+  const { w, pages, run, finish } = rig({ passes: undefined });
+  w.specs = [specOf("clip-a", "ka", 0, 8), specOf("clip-b", "kb", 120, 2)];
+  await run(PAGE_STREAM_WAIT_MS + 500);
+  assert.deepEqual(w.produced[0], { id: "stream:rk-ka:0-7:sparse", stride: 15 }, "先做稀疏的一趟;任务是稀疏流任务");
+  assert.deepEqual(w.lookups[0], { id: "stream:rk-ka:0-7:sparse", dense: false }, "稀疏的一趟先查不要求满密度");
+  await finish();
+  await run(500);
+  assert.equal(w.produced[1].id, "stream:rk-kb:0-1:sparse");
+  // 第二条流的稀疏那一趟做不成(退避中):满密度的不许先开工
+  const c = w.current;
+  w.current = null;
+  c.reject(Object.assign(new Error("舞台没有交出这一帧的像素"), { retryable: true }));
+  await run(1500);
+  assert.equal(w.produced.length, 2, "稀疏的在退避,满密度的等着");
+  assert.equal(pages.debug().jobs.filter((j) => j.pass === "dense").every((j) => j.state === "todo"), true);
+  await run(1000);
+  assert.equal(w.produced[2].id, "stream:rk-kb:0-1:sparse", "退避完再试的还是稀疏的那一段");
+  await finish();
+  await run(500);
+  assert.deepEqual(w.produced[3], { id: "stream:rk-ka:0-7", stride: 1 }, "稀疏的都齐了才补满密度");
+  assert.equal(w.lookups.find((l) => l.id === "stream:rk-ka:0-7").dense, true, "满密度的一趟先查要满密度:只有稀疏版不算有");
+  await finish();
+  await run(500);
+  await finish();
+  await run(500);
+  assert.equal(pages.debug().state, "done");
+  assert.deepEqual(pages.debug().jobs.map((j) => [j.pass, j.state]), [["sparse", "produced"], ["sparse", "produced"], ["dense", "produced"], ["dense", "produced"]]);
+});
+
+const REQ = { round: 1, projectId: "proj", projectRev: 7, clips: ["clip-a"], heavy: ["clip-a", "clip-b"] };
+
+test("PS-13 测量时就产稀疏版:不等计划、不问切分方、不看闲不闲;先查、写层表、产、认;已经有的不产", async () => {
+  const { w, pages, run, finish } = rig({ passes: undefined });
+  w.plan = null;        // 测量还没落定,清单计划没发
+  w.state = "claimed";  // 就算有切分方也照产(它管的是清单计划)
+  w.idle = false;       // 闲时闸不管测量时这一趟
+  w.specs = [specOf("clip-a", "ka", 0, 10), specOf("clip-b", "kb", 120, 2)];
+  let out = null;
+  void pages.measure(REQ).then((o) => { out = o; });
+  await flush();
+  assert.deepEqual(w.produced, [{ id: "stream:rk-ka:0-7:sparse", stride: 15 }], "只产刚测完的这张卡;稀疏的一趟");
+  assert.equal(pages.running(), true);
+  assert.equal(w.written.length, 1, "开工前写了层表里本页的那一行");
+  assert.deepEqual(w.written[0].streams.map((r) => r.topClipId), ["clip-a"]);
+  assert.equal(out, null, "产完之前遮罩等着");
+  await finish();
+  assert.equal(w.produced[1].id, "stream:rk-ka:8-9:sparse", "这张卡的下一段接着做,不用等节拍");
+  await finish();
+  assert.deepEqual(out, { result: "ok", produced: 2, have: 0, elsewhere: 0, left: 0 });
+  assert.deepEqual([...new Set(w.alive)], ["rk-ka"], "叫宿主认这个结果键(本页先用自己产的)");
+  assert.equal(w.produced.length, 2, "满密度的一趟不在测量时做");
+  assert.equal(w.probes, 0, "不问队列");
+  // 没有计划的时候节拍照走:这一份记账留着,不被当成「没有计划」清掉
+  await run(2000);
+  assert.equal(pages.debug().state, "measuring");
+  assert.equal(pages.debug().streams.length, 1);
+  // 下一张卡:素材服务里已经有稀疏版(别人产的、上次打开产的)就直接用
+  w.present.add("rk-kb:0-1#sparse");
+  const second = await pages.measure({ ...REQ, clips: ["clip-b"] });
+  assert.deepEqual(second, { result: "ok", produced: 0, have: 1, elsewhere: 0, left: 0 });
+  assert.equal(w.produced.length, 2, "已经有的不重产");
+  assert.deepEqual(pages.debug().measure.results, { ok: 2 });
+  // 判轻的卡、本页产不了的卡:没有它的流
+  const none = await pages.measure({ ...REQ, clips: ["clip-x"] });
+  assert.equal(none.result, "none");
+});
+
+test("PS-14 遮罩等稀疏版最多 MEASURE_SPARSE_MAX_MS:到时当场回、在产的停手;之后这一轮马上回;换一轮重来", async () => {
+  assert.equal(MEASURE_SPARSE_MAX_MS, 50_000);
+  const { w, pages, run } = rig({ passes: undefined });
+  w.plan = null;
+  w.specs = [specOf("clip-a", "ka", 0, 10), specOf("clip-b", "kb", 120, 2)];
+  let out = null;
+  const t0 = w.now;
+  void pages.measure(REQ).then((o) => { out = o; });
+  await flush();
+  assert.equal(w.produced.length, 1);
+  await run(MEASURE_SPARSE_MAX_MS - 500);
+  assert.equal(out, null, "没到时遮罩等着");
+  assert.equal(w.current.job.yielding(), false);
+  await run(500);
+  assert.equal(out?.result, "deadline", "到 50 秒当场回(这张卡拖得再久也进编辑)");
+  assert.equal(out.left, 2);
+  assert.equal(w.now - t0, MEASURE_SPARSE_MAX_MS);
+  assert.equal(w.current.job.yielding(), true, "在产的做完当前这一帧就停");
+  assert.equal(w.current.job.signal.aborted, false);
+  // 当前这一帧迟迟做不完:照让路的时限中止
+  await run(YIELD_FRAME_MAX_MS + 250);
+  assert.equal(pages.running(), false);
+  assert.equal(pages.debug().counters.stops.deadline, 1);
+  // 这一轮之后再调:马上回,不产
+  const again = await pages.measure({ ...REQ, clips: ["clip-b"] });
+  assert.equal(again.result, "deadline");
+  assert.equal(w.produced.length, 1);
+  // 时钟从这一轮第一次调起算:第二张卡开始得晚,等的时间也只到同一个时刻
+  const two = rig({ passes: undefined });
+  two.w.plan = null;
+  two.w.specs = w.specs;
+  void two.pages.measure(REQ).then(() => {});
+  await flush();
+  await two.run(30_000);
+  await two.finish(); await two.finish();
+  let late = null;
+  void two.pages.measure({ ...REQ, clips: ["clip-b"] }).then((o) => { late = o; });
+  await flush();
+  await two.run(19_500);
+  assert.equal(late, null);
+  await two.run(500);
+  assert.equal(late?.result, "deadline", "第二张卡只等到这一轮的第 50 秒");
+  // 换一轮(切了帧率,遮罩又出现):时钟重来
+  await two.run(YIELD_FRAME_MAX_MS + 250);
+  let next = null;
+  void two.pages.measure({ ...REQ, round: 2, clips: ["clip-b"] }).then((o) => { next = o; });
+  await flush();
+  assert.equal(next, null, "新的一轮照常产");
+  assert.equal(two.pages.running(), true);
+  two.pages.stop();
+  await flush();
+  assert.equal(next?.result, "stopped", "下线时在等的那一次当场回,不把遮罩挂住");
+});
+
+test("PS-15 计划发出来就换成计划的那一份:测量时产的稀疏版查得到、不重产;之后才补满密度", async () => {
+  const { w, pages, run, finish } = rig({ passes: undefined });
+  w.plan = null;
+  w.specs = [specOf("clip-a", "ka", 0, 8), specOf("clip-b", "kb", 120, 2)];
+  void pages.measure(REQ);
+  await flush();
+  await finish();
+  assert.equal(w.produced.length, 1);
+  // 测量落定,清单计划发出来(发成的时刻晚于测量)
+  w.plan = { ...PLAN, at: w.now + 250 };
+  await run(PAGE_STREAM_WAIT_MS + 1000);
+  assert.equal(pages.debug().planId, PLAN.id);
+  assert.equal(pages.debug().jobs.find((j) => j.id === "stream:rk-ka:0-7:sparse").state, "have", "测量时产的那一段:先查查到,不重产");
+  assert.equal(w.produced[1].id, "stream:rk-kb:0-1:sparse", "没测到的卡的稀疏版闲时接着产");
+  await finish();
+  await run(500);
+  assert.equal(w.produced[2].id, "stream:rk-ka:0-7", "稀疏的都齐了才补满密度");
+  // 旧的计划(发成的时刻早于测量的那一份记账)不把测量的那一份换掉:切帧率重走遮罩时手里还留着上一版计划
+  const old = rig({ passes: undefined });
+  old.w.specs = w.specs;
+  old.w.plan = { ...PLAN, at: old.w.now - 5000 };
+  old.w.idle = false;
+  await old.run(1000);
+  assert.equal(old.pages.debug().planId, PLAN.id);
+  void old.pages.measure(REQ);
+  await flush();
+  await old.run(1000);
+  assert.equal(old.pages.debug().planId, "measure:proj@7");
+  assert.equal(old.pages.running(), true);
+});
+
+test("PS-16 测量时本页还没当上节点:等一会儿,等到了照常产,等不到回 incapable", async () => {
+  const { w, pages, run } = rig({ passes: undefined });
+  w.plan = null;
+  w.capable = false;
+  let out = null;
+  void pages.measure(REQ).then((o) => { out = o; });
+  await run(MEASURE_READY_WAIT_MS - 500);
+  assert.equal(out, null);
+  w.capable = true;
+  await run(500);
+  assert.equal(w.produced.length, 1, "拿到指纹、探到编码器了:照常产");
+  pages.stop();
+  await flush();
+  const never = rig({ passes: undefined });
+  never.w.plan = null;
+  never.w.capable = false;
+  let got = null;
+  void never.pages.measure(REQ).then((o) => { got = o; });
+  await never.run(MEASURE_READY_WAIT_MS + 250);
+  assert.equal(got?.result, "incapable");
+  assert.equal(never.w.produced.length, 0);
 });

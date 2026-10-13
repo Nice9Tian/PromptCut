@@ -48,6 +48,13 @@
  *
  * **项目变了按新项目重排队列**：`syncProbeRun(project)` 递增代数，正在跑的那一张测完就退出，
  * 重新拉一次 `costs`、重新算 `identityKey`、重新排。新添加或 `cardCostKey` 变了的卡自然补测。
+ *
+ * # 测完一张卡之后（在线页面：测量时就产稀疏的轨道流）
+ *
+ * `docs/semantics/mechanism/rendering.md`「测量」：第二趟给判重的卡产一套稀疏的轨道流，在线页面由后台舞台紧接着这张卡的第一趟自己产。
+ * 这里只留一个口子 `setCardMeasuredHook`：加载遮罩挡着的那一轮里，每测完一张卡、记录并进分派表之后调它一次并等它回
+ * （遮罩因此等稀疏版）；产不产、等多久（最多 50 秒）由接的那一方定（`browserNodeHost.ts` → `online/pageStreams.ts` 的 `measure()`）。
+ * 不挡界面的补测不调：之后要补的只在闲时产。没人接（桌面版）时一个字不变。
  */
 import type { Project } from "../kernel/project";
 import { costDeviceString, readGpuRenderer, resolveGlRoute } from "../render/costDevice.mjs";
@@ -115,6 +122,30 @@ const CANVAS_WAIT_STEP_MS = 50;
 const MAX_ATTEMPTS = MAX_PROJECT_RESENDS + 1;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/* ------------------------------------------------------------------ 测完一张卡之后的口子 */
+
+export interface CardMeasuredInfo {
+  /** 测的是哪一版项目(store 里的对象) */
+  project: Project;
+  /** 身份与刚测的这张卡相同的全部片段(同一张卡的多个片段只测一次) */
+  clipIds: string[];
+  cardId: string;
+  identityKey: string;
+  /** 这一轮遮罩的编号:遮罩每出现一轮(打开项目、切帧率)换一个 */
+  round: number;
+  /** 这一轮测量作废了没有(项目变了、换了连接) */
+  stale: () => boolean;
+}
+type CardMeasuredHook = (info: CardMeasuredInfo) => Promise<unknown>;
+let cardMeasuredHook: CardMeasuredHook | null = null;
+/** 接上「测完一张卡之后」的口子;回退订。只有加载遮罩挡着的那一轮会调,调了就等它回(它自己管上限) */
+export function setCardMeasuredHook(hook: CardMeasuredHook | null): () => void {
+  cardMeasuredHook = hook;
+  return () => { if (cardMeasuredHook === hook) cardMeasuredHook = null; };
+}
+/** 这一轮遮罩的编号 */
+let maskRound = 0;
 
 /* ------------------------------------------------------------------ 身份与设备 */
 
@@ -561,7 +592,7 @@ function queueProbeRun(project: Project | null, identity: string | null): void {
    * 空窗期，分派表在那期间还是兜底的那份。所以把 `firstPassDone` 拨回去，
    * 让这一轮重新 `blocking`。预算 `B = 1000/fps × 70%` 也跟着变，重测正是必须的。
    */
-  if (project && currentProject && Number(project.fps) !== Number(currentProject.fps)) firstPassDone = false;
+  if (project && currentProject && Number(project.fps) !== Number(currentProject.fps)) { if (firstPassDone) maskRound++; firstPassDone = false; }
   currentProject = project;
   queuedIdentity = identity;
   queuedBackend = backend;
@@ -608,7 +639,8 @@ async function runLoop(): Promise<void> {
       if (gen !== generation) continue;          // 拉 costs 期间项目又变了：重排
 
       const jobs = planJobs(project, costs, device);
-      setProgress({ running: jobs.length > 0, blocking: !firstPassDone, total: jobs.length, done: 0, card: jobs[0]?.cardId ?? null, failed: [] });
+      const blocking = !firstPassDone;
+      setProgress({ running: jobs.length > 0, blocking, total: jobs.length, done: 0, card: jobs[0]?.cardId ?? null, failed: [] });
 
       const failed: string[] = [];
       let done = 0;
@@ -624,6 +656,15 @@ async function runLoop(): Promise<void> {
           await putCosts([record]);
           // 表跟着新记录走。就地合并,不再 GET 一次 —— 这条记录本来就在手上
           mergePlanCosts([record]);
+          // 遮罩挡着的这一轮:紧接着这张卡的第一趟,给它产稀疏的轨道流(在线页面;判不判重、产不产、等多久由接的一方定)
+          const hook = cardMeasuredHook;
+          if (hook && blocking) {
+            const { identityKeys } = clipIdentityOf(project);
+            const clipIds = Object.keys(identityKeys).filter((id) => identityKeys[id] === job.identityKey);
+            try { await hook({ project, clipIds, cardId: job.cardId, identityKey: job.identityKey, round: maskRound, stale: () => gen !== generation }); }
+            catch (err) { console.warn("[probeRunner] 测完一张卡之后的口子出错", err); }
+            if (gen !== generation) break;
+          }
         } else {
           failed.push(job.cardId);
         }
@@ -693,6 +734,8 @@ export function resetProbeRunner(): void {
   generation = 0;
   settledGeneration = 0;
   firstPassDone = false;
+  maskRound = 0;
+  cardMeasuredHook = null;
   snapshotEndpointMissing = false;
   progress = IDLE;
   listeners.clear();
