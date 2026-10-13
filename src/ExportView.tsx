@@ -7,7 +7,7 @@ import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { themeStyle } from "./themes";
 import { allCards, getCard, setSyncedUserCards, unknownCardClipIds, userCardSources, type SyncedUserCard } from "./kernel/registry";
-import { setExportSyncedMount, setExportWrapperOnly } from "./render/placeholderHost";
+import { setExportSyncedMount } from "./render/placeholderHost";
 import { cardSourceVersion } from "./render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles } from "./render/cardSourceFiles.mjs";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
@@ -299,10 +299,6 @@ export default function ExportView() {
       (window as unknown as { __pcSetSyncedUserCards?: (entries: SyncedUserCard[]) => void }).__pcSetSyncedUserCards = (entries) => {
         setSyncedUserCards(entries);
         setExportSyncedMount(true);
-      };
-      /** 在线逐帧导出:这些片段只挂包裹层、不挂组件(整段的画面由编辑页面贴进快照,`placeholderHost.exportWrapperOnlyFor`) */
-      (window as unknown as { __pcSetExportWrapperOnly?: (clipIds: string[]) => void }).__pcSetExportWrapperOnly = (clipIds) => {
-        setExportWrapperOnly(Array.isArray(clipIds) ? clipIds : []);
       };
       window.__pcLoadProject = async (raw: unknown, options?: { deferCards?: boolean }) => {
         window.__pcReady = false;

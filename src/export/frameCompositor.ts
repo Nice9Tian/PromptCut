@@ -24,7 +24,7 @@
 import type { Project } from "../kernel/project";
 import { renameSnapshotIds } from "../render/snapshotRename";
 import { withTicket } from "./ticketRenewal";
-import { syncedUserCards } from "../kernel/registry";
+import { getCard, syncedUserCards } from "../kernel/registry";
 import type { FrameLayer, FrameLayers } from "./exportLayers";
 
 type ExportWindow = Window & typeof globalThis & {
@@ -40,8 +40,6 @@ type ExportWindow = Window & typeof globalThis & {
   __pcLoadProject?: (p: unknown, o?: unknown) => Promise<void>;
   /** 导出页:接同步来的用户卡的表(在线导出把它们的包裹层挂出来,好换成预渲染原尺寸) */
   __pcSetSyncedUserCards?: (entries: unknown[]) => void;
-  /** 导出页:这些片段只挂包裹层、不挂组件(整段的画面由这里贴进快照) */
-  __pcSetExportWrapperOnly?: (clipIds: string[]) => void;
   __pcRealRaf?: (cb: FrameRequestCallback) => number;
   /** `?rafControl=1` 时由 `src/render/stageClockEntry.ts` 装:跑一轮排着的 rAF 回调(一拍),回跑了几个 */
   __pcBrowserBeginFrame?: () => number;
@@ -77,6 +75,26 @@ export interface CompositorOptions {
 }
 
 const EMPTY = (p: Project) => ({ width: p.width, height: p.height, fps: p.fps, duration: 1, tracks: [], media: [] });
+
+/**
+ * 整段的画面都由合成器贴的卡(`FrameLayers.wrapperOnly`)在导出页里只要一个包裹层,组件不用跑(快速导出快就快在这里)。
+ * 导出页本来就有「没有定义的同步卡只挂包裹层」这条路(`placeholderHost.exportSyncedMountFor`,给同步来的用户卡用);
+ * 所以交给导出页的那份项目里,把这些片段的卡片 id 换成一个只在同步表里、没有定义的占位 id —— 导出页的代码一个字不用改
+ * (舞台那几份文件在好几张卡的源码版本里,改了它们的预渲染结果要重产一遍)。包裹层上的位置、缩放、旋转、不透明度、层序都不看卡片 id。
+ * 只换内置的 DOM 卡:同步来的卡本来就走这条路;挂着节点的片段(素材效果卡)别的卡可能拿它当输入,照旧挂着,有画面的帧照样贴上去。
+ */
+export const WRAPPER_ONLY_CARD = "pc-export-wrapper-only";
+export function withWrapperOnly(project: Project, clipIds: readonly string[]): { project: Project; replaced: number } {
+  const only = new Set(clipIds);
+  if (!only.size) return { project, replaced: 0 };
+  let replaced = 0;
+  const tracks = project.tracks.map((tr) => ({ ...tr, clips: tr.clips.map((c) => {
+    if (!only.has(c.id) || !c.cardId || c.nodeId || !getCard(c.cardId)) return c;
+    replaced++;
+    return { ...c, cardId: WRAPPER_ONLY_CARD };
+  }) }));
+  return replaced ? { project: { ...project, tracks }, replaced } : { project, replaced: 0 };
+}
 
 /**
  * 同源导出页的地址:当前页面的路径 + `?export=1&rafControl=1` + 空项目(项目随后经 `__pcLoadProject` 灌进去)。
@@ -162,7 +180,9 @@ export class ExportCompositor {
 
   /** 开导出页、灌项目、等就绪 */
   static async open(opts: CompositorOptions): Promise<ExportCompositor> {
-    const p = opts.project;
+    // 整段的画面都由这里贴的卡:导出页只挂包裹层,不跑组件(见 `withWrapperOnly`)
+    const wrapped = withWrapperOnly(opts.project, opts.layers?.wrapperOnly ?? []);
+    const p = wrapped.project;
     const el = document.createElement("iframe");
     el.setAttribute("aria-hidden", "true");
     el.title = "逐帧导出";
@@ -175,9 +195,8 @@ export class ExportCompositor {
     try {
       await c.waitFor(() => c.w?.__pcReady === true && typeof c.w.__pcLoadProject === "function", 60_000, "导出页 60 秒没就绪");
       // 同步来的用户卡在导出页里没有定义:把同步表交给它,让这些卡的包裹层挂出来,逐帧换成预渲染原尺寸
-      if (syncedUserCards().size) c.w.__pcSetSyncedUserCards?.([...syncedUserCards().values()]);
-      // 整段的画面都由这里贴的卡:导出页只挂包裹层,不跑组件
-      if (opts.layers?.wrapperOnly.length) c.w.__pcSetExportWrapperOnly?.([...opts.layers.wrapperOnly]);
+      const synced = [...syncedUserCards().values(), ...(wrapped.replaced ? [{ id: WRAPPER_ONLY_CARD, name: "" }] : [])];
+      if (synced.length) c.w.__pcSetSyncedUserCards?.(synced);
       await c.w.__pcLoadProject!(p);
       await c.waitFor(() => c.w.__pcReady === true && typeof c.w.__pcSetT === "function", 60_000, "导出页 60 秒没装好项目");
     } catch (e) {

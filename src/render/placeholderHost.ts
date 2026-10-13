@@ -194,19 +194,6 @@ export function exportSyncedMountFor(cardId: string | undefined, def: unknown): 
 }
 
 /*
- * 在线逐帧导出的导出页里**只挂包裹层、不挂组件**的片段(`src/export/cardLayers.ts` 的 `wrapperOnly`):快速导出里整段都取轨道流的卡。
- * 包裹层要在(位置、缩放、旋转、不透明度、层序都在它上面),组件不用跑 —— 画面每一帧由编辑页面贴进快照。
- * 编辑页面经 `__pcSetExportWrapperOnly` 交过来;缺省是空的,桌面的导出、预渲染、预览一个字不变。
- */
-let exportWrapperOnly: ReadonlySet<string> = new Set();
-export function setExportWrapperOnly(clipIds: Iterable<string>): void {
-  exportWrapperOnly = new Set([...clipIds].filter((id) => typeof id === "string" && !!id));
-}
-export function exportWrapperOnlyFor(clipId: string): boolean {
-  return exportWrapperOnly.size > 0 && exportWrapperOnly.has(clipId);
-}
-
-/*
  * 低内存档不执行用户卡、图卡的代码(`product/platforms.md`「面向的平台」;它的现有规则,不因在线执行放开而变):
  * 构建时就在在线包里的仓库用户卡在低内存档也照旧算运行不了(同步来的卡另有运行状态 `low-memory`)。
  * 档位从两处得知:编辑页面由 `planDispatch.setPlanLowMemory` 写进来;舞台是另一个文档,看它启动时写下的取档策略
