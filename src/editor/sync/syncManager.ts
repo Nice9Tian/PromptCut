@@ -22,7 +22,7 @@ import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { classifyEnterFailure, classifyProtocolError } from "./enterFailure";
 import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
 import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor } from "./recoveryAssociation";
-import { convertGoneProject, type GoneProof } from "./cloudGone";
+import { convertGoneProject, restoreOfflineEdits, type GoneProof } from "./cloudGone";
 // @ts-expect-error Browser-safe proof verification, shared with the server-side tooling.
 import { queryGone } from "../../../server/recovery/gone-proof.mjs";
 // @ts-expect-error Browser-safe recovery state machine.
@@ -1523,10 +1523,32 @@ async function saveRecoveryIdentity(descriptor: CollaborationDescriptor, record:
  * 内容用正在保留的那一份（文件里的内容，加上这台设备上还没发出去的离线修改）；换新的本地项目号；清掉协作关联
  * （多用户协作缺省关）；本机存的旧房间身份一并注销；保存落点与草稿归属由订阅者清掉（原文件保留）；界面提示一次。
  */
-function becomeLocalAfterGone(answer: { proof: GoneProof }) {
+let goneConversion = 0;
+async function becomeLocalAfterGone(answer: { proof: GoneProof }) {
   const descriptor = currentAssociation();
   if (!descriptor || descriptor.where !== "hosted" || answer?.proof?.projectId !== descriptor.roomId) return;
-  const source = holding?.ds.projectId === descriptor.roomId ? holding.ds.project : getState().project;
+  const kept = holding?.ds.projectId === descriptor.roomId ? holding : null;
+  const contentId = getState().project.id ?? "";
+  const ticket = ++goneConversion;
+  const stillHere = () => ticket === goneConversion && currentAssociation() === descriptor && holding === kept;
+  // 先把这台设备上没发出去的离线修改并进来，再转换；并不进来就不转、不注销本机身份，内容原样保留
+  if (kept && !ONLINE_BUILD && !ONLINE) {
+    try {
+      await restoreOfflineEdits({ restored: kept.restored,
+        readJournal: async () => (await recoveryRequest("select", descriptor, { contentId })).journal ?? null,
+        restoreJournal: (journal) => kept.ds.restoreJournal(journal as Parameters<DocSync["restoreJournal"]>[0]) });
+      kept.restored = true;
+    } catch (e) {
+      if (!stillHere()) return;
+      if ((e as { reason?: string }).reason === "offline-edits-unreadable") {
+        patch({ reopenState: "waiting-storage" });
+        setTimeout(() => { if (stillHere()) recoveryCoordinator.start(descriptor, contentId); }, 3000);
+      } else patch({ reopenState: "damaged" });
+      return;
+    }
+    if (!stillHere()) return;
+  }
+  const source = kept ? kept.ds.project : getState().project;
   let converted;
   try { converted = convertGoneProject(source, descriptor, answer.proof); }
   catch { patch({ reopenState: "damaged" }); return; }
@@ -1542,7 +1564,7 @@ function becomeLocalAfterGone(answer: { proof: GoneProof }) {
 
 const recoveryCoordinator = new RecoveryCoordinator({
   state: (reopenState: string, detail?: { proof: GoneProof }) => {
-    if (reopenState === "gone" && detail?.proof) { becomeLocalAfterGone(detail); return; }
+    if (reopenState === "gone" && detail?.proof) { void becomeLocalAfterGone(detail); return; }
     patch({ reopenState });
   },
   // 信任表只有随软件分发的那一张（`gone-proof.mjs` 的 `TRUSTED_GONE_AUTHORITIES`，`queryGone` 的缺省值）：这里不传、也不许传别的表。

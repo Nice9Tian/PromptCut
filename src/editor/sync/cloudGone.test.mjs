@@ -71,3 +71,42 @@ test("转换后的关联:当前关联清空,保存出去的文件不再带旧云
   R.setAssociation(null);
   assert.equal(R.currentAssociation(), null); assert.equal(R.isRecoveringAssociation(), false);
 });
+
+/* ---------------- 转换之前并入这台设备上没发出去的离线修改 ---------------- */
+
+const { restoreOfflineEdits } = await import(srcUrl("editor/sync/cloudGone.ts"));
+const { DocSync } = await import(srcUrl("store/docsync.ts"));
+const { createEmptyProject } = await import(srcUrl("kernel/project.ts"));
+const docCopy = (initial) => new DocSync(initial, { projectId: room, session: "gone-test", initialize: false, send: () => {}, saveBackup: () => {} });
+
+test("离线改过、没另存:转换后的本地项目里有这些修改", async () => {
+  // 上一次打开:连着云端时断了线,离线改了名字和时长,记进本机的恢复数据
+  const file = { ...createEmptyProject("文件里的名字"), id: "old-content-id" };
+  const before = docCopy(file); before.connect(); before.receive({ type: "project.state", projectId: room, project: file, rev: 4 }); before.disconnect();
+  before.commit({ ...before.project, name: "离线改的名字", duration: 42 });
+  const journal = JSON.parse(JSON.stringify(before.recoveryJournal()));
+  // 这一次打开:云端项目已被清掉,一上来就拿到了证明,这时手上只有文件内容
+  const kept = { ds: docCopy(file), restored: false };
+  assert.equal(kept.ds.project.name, "文件里的名字");
+  let reads = 0;
+  const how = await restoreOfflineEdits({ restored: kept.restored, readJournal: async () => { reads++; return journal; }, restoreJournal: (j) => kept.ds.restoreJournal(j) });
+  assert.equal(how, "restored"); assert.equal(reads, 1);
+  const out = convertGoneProject(kept.ds.project, descriptor, proof, { newId: () => "new-local-id" });
+  assert.equal(out.project.name, "离线改的名字"); assert.equal(out.project.duration, 42); assert.equal(out.project.id, "new-local-id");
+  // 不先并进来的话(改之前的做法)拿到的只是文件内容
+  assert.equal(convertGoneProject(docCopy(file).project, descriptor, proof).project.name, "文件里的名字");
+});
+
+test("离线修改读不出来或记录损坏:不转;已经恢复过、本来就没有离线修改:照常转", async () => {
+  const file = { ...createEmptyProject("文件里的名字"), id: "old-content-id" };
+  const kept = { ds: docCopy(file) };
+  await assert.rejects(() => restoreOfflineEdits({ restored: false, readJournal: async () => { throw new Error("vault busy"); }, restoreJournal: () => assert.fail("不该走到这里") }),
+    (e) => e.reason === "offline-edits-unreadable");
+  await assert.rejects(() => restoreOfflineEdits({ restored: false, readJournal: async () => ({ version: 9, garbage: true }), restoreJournal: (j) => kept.ds.restoreJournal(j) }),
+    (e) => e.reason === "offline-edits-damaged");
+  assert.equal(kept.ds.project.name, "文件里的名字", "损坏的记录没有改动手上的内容");
+  assert.equal(await restoreOfflineEdits({ restored: true, readJournal: async () => assert.fail("已经恢复过就不再读"), restoreJournal: () => assert.fail("也不再并") }), "already");
+  let restored = 0;
+  assert.equal(await restoreOfflineEdits({ restored: false, readJournal: async () => null, restoreJournal: () => { restored++; } }), "none");
+  assert.equal(restored, 0);
+});

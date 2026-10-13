@@ -121,3 +121,23 @@ test('取消之后迟到的证明不生效', async t => {
   c.start(hosted, 'content'); await tick(); c.cancel(); release({ state: 'gone', proof }); await tick(); await tick();
   assert.deepEqual(states, ['recovering']);
 });
+
+test('本机身份注销之后，这台设备上没发出去的离线修改仍然读得到（转成本地项目时要并进去）', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { openRecoveryVault } = await import('../recovery/vault.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-gone-vault-'));
+  try {
+    const plain = { kind: 'test-plain', seal: b => b, open: b => b };
+    const vault = openRecoveryVault({ dir, protector: plain });
+    const identity = { ...record, service: hosted.service, roomId: room, key: 'k'.repeat(43) };
+    vault.remember(identity, 'content-one');
+    const journal = { version: 1, projectId: room, pending: [{ opId: 'x' }], project: { tracks: [] } };
+    vault.journal(hosted, 'content-one', journal);
+    assert.deepEqual(vault.select(hosted, 'content-one').journal, journal);
+    vault.revoke(hosted);
+    const after = openRecoveryVault({ dir, protector: plain }).select(hosted, 'content-one');
+    assert.equal(after.revoked, true); assert.deepEqual(after.identities, [], '注销后不再给身份');
+    assert.deepEqual(after.journal, journal, '离线修改还在');
+    assert.equal(openRecoveryVault({ dir, protector: plain }).select(hosted, 'other-content').journal, null, '只给这份内容的');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
