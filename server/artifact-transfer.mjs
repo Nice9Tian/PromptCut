@@ -39,6 +39,7 @@ import { SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
 import { kindOfTier, wireSnapshotKey } from './ready-index.mjs';
 import { QUEUE_DEFAULTS } from './render-queue/constants.mjs';
 import { isSparseStreamTask } from './render-queue/messages.mjs';
+import { createExportFramesSink, isExportFramesTask } from './export-frames.mjs';
 
 /** 清单的版本(契约第 3 节的 `v`) */
 export const RESULT_VERSION = 1;
@@ -831,6 +832,8 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
   /** 查内容库得到的清单:清单键 → 清单 */
   const remembered = new Map();
   const collect = ref => (ref?.kind === 'snapshot' ? collectSnapshotResult(pipeline, ref) : collectStreamResult(pipeline, ref));
+  // 导出专用的逐帧位图任务(`export-frames.mjs`;流任务的种类,`input.exportFrames` 为真)另走一套:它的帧不在流库里、清单是另一种形状
+  const exportFrames = createExportFramesSink({ root: pipeline.root, client, content, log });
   /**
    * 查内容库里这一段的清单能不能直接当结果用:清单在、对得上、覆盖整段、(`requireSmall` 时)小尺寸也列全、块都在素材服务上。
    * 能用回 `{ ok: true, body }` 并记下(`resultFor` 回它);不能用回 `{ ok: false, reason, fields }`(`sink.has-miss` 的原因)。
@@ -865,6 +868,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
   }
   return {
     async has(ref, { report } = {}) {
+      if (isExportFramesTask(ref)) return exportFrames.has(ref);
       /** 回 false 前记一行 `sink.has-miss`(为什么没走去重;诊断,不改行为) */
       const miss = (reason, fields = {}) => {
         safeLog(log, 'sink.has-miss', { resultKey: String(ref?.resultKey ?? '').slice(0, 16), kind: ref?.kind ?? null, range: ref?.range ?? null, reason, ...fields });
@@ -910,6 +914,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
       return found.ok ? true : miss(found.reason, { covered, ...found.fields });
     },
     async resultFor(ref) {
+      if (isExportFramesTask(ref)) return exportFrames.resultFor(ref);
       try {
         if (await coversRange(pipeline, ref)) {
           const { result } = await collect(ref);
@@ -926,6 +931,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
      * 并记一行 `sink.incomplete`;收全时回包带 `stats`。
      */
     async put(ref, { report } = {}) {
+      if (isExportFramesTask(ref)) return exportFrames.put(ref, { report });
       const started = Date.now();
       const tell = (fields) => { try { report?.(fields); } catch { /* 诊断回调出错不影响推送 */ } };
       let progress = { blocks: null, pushed: 0, bytes: 0 };

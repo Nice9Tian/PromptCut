@@ -2,6 +2,7 @@ import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf, backfillPlanTaskOf, isBackfillPlan
 import { snapshotTier } from '../snapshot-tier.mjs';
 import { resultKeyOf } from './fingerprint.mjs';
 import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '../../src/render/streamSegments.mjs';
+import { EXPORT_FRAMES_PRIORITY } from './export-plan.mjs';
 
 /**
  * `plan` 任务 → 细任务(设计第 2 节、Q1,契约 B.4)。
@@ -110,6 +111,16 @@ import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '
  *   - 本地档能力闸:`usesLocalMedia` 收到的那一项另带 `streamKind: 'below'` 和 `belowClipIds`(算进键里的下层),
  *     判据要把下层的素材算进去(`queue-local-media.mjs` 现在对流任务一律判真,已经包含)。
  * 调用方不给这种流时,切分与原来逐字相同。
+ *
+ * # 导出专用的逐帧位图(`../export-frames.mjs`;语义 `product/platforms.md`「在线浏览器」的「导出」)
+ *
+ * 调用方给 `exportStreams`(只为导出的清单计划才有,`local-node.mjs` 的 `listPlanOverrides`;每项是 `exportStreamOf` 的结果)时,
+ * 每条另出一组**导出位图任务**:沿用流任务的种类与范围(`kind: 'stream'`,分段号 0 .. lastSegment 按 STREAM_SEGMENTS 切),
+ * `input.exportFrames: true`、`input.exportKey`(导出位图的内容键)、`input.stream`(这条流的形状),结果键 = `exportKey × 自己的指纹`。
+ *   - 只出切分方自己的一份,不给浏览器(`requires.transcode: true` 把纯浏览器挡在外面;不要求 `capabilities.streams` —— 不用编码器);
+ *   - `input` 里**不带 `contentKey`**:不参加卡片级指纹锁(这份产物只给这一次导出用,和这张卡的轨道流不是一个键);
+ *   - 名次 `EXPORT_FRAMES_PRIORITY`,排在所有别的细任务前面(用户正等着导出)。
+ * 不给 `exportStreams` 时切分与原来逐字相同。
  *
  * 纯函数:不读环境变量、不做 I/O。
  */
@@ -370,6 +381,7 @@ export function splitPlan({
   browserFingerprints = [], // 本项目在线、同一用户的纯浏览器节点的指纹(M7 契约 D1):浏览器可做、没锁的卡另出这些指纹的一份
   browserCards = null,      // 块 N:本页能运行的用户卡、图卡(`browserCardsOf(planTask.input.browser)` 的结果),见上文「用户卡、图卡也可以给浏览器」
   browserCardEnvFingerprints = [], // 块 N:文档服务确认的在线浏览器节点的 cardEnvFingerprint;`browserCards.cardEnvFingerprint` 不在里面就不出用户卡、图卡的浏览器那一份
+  exportStreams = [],       // 导出专用的逐帧位图(只为导出的清单计划才有),见文件头「导出专用的逐帧位图」
   browser = null,           // 同上的另一种写法:`{ nodeId, envFingerprint }` 或它的数组(契约第 3.3 节的形状)。
                             // 注意:切分方不读 `planTask.input.browser`(页面自报的),浏览器指纹以文档服务给的为准
 }) {
@@ -600,6 +612,40 @@ export function splitPlan({
         if (keying.takeover && !forBrowser) task.takeover = true;
         emit(task);
       }
+    }
+  }
+
+  // 导出专用的逐帧位图:每条一组,只出自己的一份(见文件头)
+  for (const stream of exportStreams ?? []) {
+    const { clipId, exportKey, lastSegment } = stream ?? {};
+    if (typeof clipId !== 'string' || !clipId || typeof exportKey !== 'string' || !exportKey || !isInt(lastSegment) || lastSegment < 0) continue;
+    if (typeof envFingerprint !== 'string' || !envFingerprint) continue;
+    const resultKey = resultKeyOf(exportKey, envFingerprint);
+    const belowStream = stream.kind === 'below';
+    const control = controlOf.get(clipId) ?? { clipId };
+    const weight = belowStream ? { ...weightOf(control), class: 'heavy' } : weightOf(control);
+    for (const [from, to] of spans(0, lastSegment, streamSegments)) {
+      const range = { unit: 'segment', from, to };
+      let frames = (to - from + 1) * SEGMENT_FRAMES;
+      if (isStreamOrigin(stream.originFrame) && isInt(stream.lastFrame)) {
+        frames = 0;
+        for (let n = from; n <= to; n++) frames += streamSegmentFrameCount(n, stream.originFrame, stream.lastFrame);
+      }
+      emit({
+        id: taskIdOf({ kind: 'stream', resultKey, range }), kind: 'stream', resultKey, range,
+        source: { projectId, projectRev, derivedFrom },
+        input: { clipId, cardId: null, entryKey: null, exportFrames: true, exportKey,
+          stream: { clipId, kind: stream.kind, plane: stream.plane, fps: stream.fps, originFrame: stream.originFrame, lastFrame: stream.lastFrame,
+            rect: stream.rect ? { ...stream.rect } : null, offset: stream.offset ? { ...stream.offset } : null } },
+        weight: { ...weight, frames },
+        requires: gateLocalMedia({
+          envFingerprint, codeVersion, cardSources: allCardSources(),
+          transcode: true, userCards: false, graphCards: false, belowDependent: belowStream,
+        }, belowStream
+          ? { clipId, kind: 'stream', streamKind: 'below', belowClipIds: Array.isArray(stream.belowClipIds) ? [...stream.belowClipIds] : [] }
+          : { clipId, kind: 'stream' }),
+        priority: EXPORT_FRAMES_PRIORITY,
+      });
     }
   }
   return out;

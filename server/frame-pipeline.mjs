@@ -36,6 +36,8 @@ import { withInnerCards, isUserCardControl } from './render-node/split.mjs';
 import { createSmallRenderer, SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
 import { layerMapOf, streamCandidateKey, STREAM_CANDIDATE_PREFIX, layerMapKeyOf } from './artifact-transfer.mjs';
 import { PRERENDER_MODE, parsePrerenderMode, lanesOfMode, modeRefusal, modeServesAgent, modeServesPrerender } from './prerender-mode.mjs';
+import { exportSpecOf, exportStreamOf, shotToPng, storeExportFrame } from './export-frames.mjs';
+import { streamInputSig } from '../src/render/streamInputSig.mjs';
 
 /**
  * C6.4 推送与换机取用按什么段长切段:与渲染任务队列的切分(`render-node/split.mjs`)完全一致 ——
@@ -3231,6 +3233,8 @@ export class FramePipeline {
       // 在线页面的清单计划用(`local-node.mjs` 的 `listPlanOverrides`):按清单里的片段算流。浏览器那一份不看本机判没判重、
       // 本机能不能产流(`queueStreamSpecs` 那两道闸只管切分方自己产的那一份)
       browserStreamsFor: clips => this.listStreamSpecs(entry, clips).map(queueStreamOf),
+      // 只为导出的清单计划用(`local-node.mjs` 的 `listPlanOverrides`):清单里每个片段的导出位图怎么出、哪些出不了
+      exportStreamsFor: clips => { const { specs, unsupported } = this.exportStreamSpecs(entry, clips); return { streams: specs.map(exportStreamOf), unsupported }; },
       // 任务书「甲三」:清单计划里切分方自己的那一份出不出,看本机此刻能不能产流(有生产者、开关开着、探到了编码器 ——
       // 与 `node.hello` 报的 `capabilities.streams` 同一个判据)。托管方的渲染节点另看这个项目的「生成轨道流」(执行器按项目再收一道)。
       // 本机判没判重不看:清单是发布方判的,流任务回来时执行器按清单里的片段把它对回这一版(`prerender-executor.mjs` 的 `matchStream`)
@@ -3275,6 +3279,47 @@ export class FramePipeline {
     } catch {
       return [];
     }
+  }
+  /**
+   * 导出专用的逐帧位图(`export-frames.mjs`;在线浏览器导出时本页不执行的卡的画面):清单里每个片段各算一条流的计划
+   * (与 `listStreamSpecs` 同一组参数,所以内容键和这张卡的轨道流相同),不按解码器预算合并 —— 一张卡一份。
+   * 平面的独立卡、源依赖卡、三维外框的卡出单卡流的形状(包裹层坐标),依赖下层的卡出依赖下层的流的形状(舞台坐标,差分取层)。
+   * 回 `{ specs, unsupported }`:`specs` 是 `exportSpecOf` 的结果(另带这一版项目的输入签名 `inputSig`);
+   * `unsupported` 是出不了的片段和原因 —— `no-card`(这一版的卡片计划里没有它:节点手里没有这张卡的代码,或片段已经不在)、
+   * `no-stream`(这张卡没有任何一种流的形状,例如依赖下层又带三维外框)。本机还没有环境指纹时全部算 `no-fingerprint`。
+   */
+  exportStreamSpecs(entry, clips) {
+    const wanted = [...new Set((Array.isArray(clips) ? clips : [...(clips ?? [])]).filter(id => typeof id === 'string' && id))];
+    const own = this.envFingerprint;
+    if (!own) return { specs: [], unsupported: wanted.map(clipId => ({ clipId, reason: 'no-fingerprint' })) };
+    const listed = new Set(wanted);
+    let planned = [];
+    try {
+      planned = planStreams(entry, { picked: clipId => listed.has(clipId), budget: Infinity,
+        codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: own });
+    } catch { planned = []; }
+    const controls = new Set((entry?.cardPlan ?? []).map(control => control?.clipId));
+    const specs = [], unsupported = [];
+    for (const clipId of wanted) {
+      const hit = planned.find(spec => Array.isArray(spec?.clipIds) && spec.clipIds.length === 1 && spec.clipIds[0] === clipId);
+      let inputSig = null;
+      try { inputSig = hit ? streamInputSig(entry.project, { clipIds: [clipId], kind: hit.kind }) : null; } catch { inputSig = null; }
+      const spec = hit ? exportSpecOf({ ...hit, ...(inputSig ? { inputSig } : {}) }, own) : null;
+      if (spec) specs.push(spec);
+      else unsupported.push({ clipId, reason: controls.has(clipId) ? 'no-stream' : 'no-card' });
+    }
+    return { specs, unsupported };
+  }
+  /**
+   * 导出位图任务的一段(`[from, to]` 是分段号):逐帧取、存成 PNG 落在 `<库根>/export-frames/<结果键>/`(`storeExportFrame`),
+   * 由产物库那一侧推素材服务、写清单、删本机的帧(`createExportFramesSink`)。回 `null`。
+   */
+  async renderExportFrames(entry, spec, range, { signal, progress } = {}) {
+    const producer = this.streamProducer();
+    if (!producer) throw Object.assign(new Error('这个预渲染实例没有轨道流生产者,取不了导出位图'), { code: 'no-stream-producer', retryable: false });
+    await producer.produceExportRange(entry, spec, range, { signal, progress,
+      onFrame: async (frame, shot) => { await storeExportFrame(this.root, spec.exportResultKey, frame, shotToPng(shot)); } });
+    return null;
   }
   /**
    * M6c X1:本机节点 `node.hello` 的 `capabilities.streams`:有生产者、开关开着、探到了编码器才是 true

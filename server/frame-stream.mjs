@@ -1277,6 +1277,58 @@ export class StreamProducer {
   }
 
   /**
+   * 导出专用的逐帧位图(`./export-frames.mjs`;在线浏览器导出时本页不执行的卡的画面):把 `[from, to]` 这几个分段盖住的每一帧
+   * 按这条流的矩形上界取一张,逐张交给 `onFrame(frame, shot)`(`shot` 是 PNG,或 `{ rgba, width, height }`),不压成视频、不进流库。
+   * 推帧、隔离工程、差分取层都是 `runSegment` 那一套(同一份代码),所以画面和这张卡的轨道流的满密度分段压缩之前逐像素相同。
+   * `spec` 是 `exportSpecOf` 的结果。这一种的状态不登记进 `streams`(预览不读它),按导出的结果键另记,租约的签名也用它,
+   * 不会和同一张卡的轨道流接上同一份租约。一个分段连续 `QUEUE_SEGMENT_ATTEMPTS` 次没取成抛可重试的错误。
+   */
+  async produceExportRange(entry, spec, range, { signal, progress, onFrame } = {}) {
+    const cancelled = () => Object.assign(new Error('Queue task cancelled'), { cancelled: true });
+    if (this.closed) throw cancelled();
+    if (typeof onFrame !== 'function') throw new Error('produceExportRange 要 onFrame');
+    const key = spec.exportResultKey;
+    this.exportStates ||= new Map();
+    let state = this.exportStates.get(key);
+    if (!state) {
+      const own = { ...spec, streamKey: key };
+      state = { spec: own, manifest: this.freshManifest(own), isolated: isolatedStreamProject(entry.project, spec), reserved: new Set(), failures: new Map(), exportOnly: true };
+      this.exportStates.set(key, state);
+      while (this.exportStates.size > 16) this.exportStates.delete(this.exportStates.keys().next().value);
+    }
+    const from = Math.max(range.from, 0), to = Math.min(range.to, spec.lastSegment);
+    let bakery = null, frames = 0;
+    try {
+      for (let n = from; n <= to; n++) {
+        for (let attempts = 0; ;) {
+          if (signal?.aborted || this.closed) throw cancelled();
+          if (state.below?.failed) throw Object.assign(new Error(`导出位图 ${key.slice(0, 8)} 的差分取层没过(${state.below.failed})`), { code: 'below-capture-failed', retryable: false });
+          try {
+            bakery ||= await this.pipeline.leaseStreamBakery();
+            await this.runSegment(bakery, { state, segment: n, stride: 1, queue: { signal }, exportSink: onFrame });
+            break;
+          } catch (error) {
+            if (signal?.aborted || this.closed) throw cancelled();
+            if (error?.retryable === false) throw error;
+            this.stats.failures++;
+            this.note(`导出位图 ${key.slice(0, 8)}#${n} 失败:${error?.message || error}`);
+            if (bakery) { this.pipeline.returnStreamBakery(bakery, { dead: true }); bakery = null; }
+            if (++attempts >= QUEUE_SEGMENT_ATTEMPTS) {
+              throw Object.assign(new Error(`导出位图 ${key.slice(0, 8)} 分段 ${n} 连续 ${QUEUE_SEGMENT_ATTEMPTS} 次没取成:${error?.message || error}`), { code: 'export-frames-failed', retryable: true });
+            }
+          }
+        }
+        frames += streamSegmentFrameCount(n, spec.originFrame, spec.lastFrame);
+        try { progress?.(frames); } catch { /* 进度回调出错不影响生产 */ }
+      }
+    } finally {
+      if (bakery) this.pipeline.returnStreamBakery(bakery);
+    }
+    if (signal?.aborted) throw cancelled();
+    return { frames };
+  }
+
+  /**
    * 新的一版项目 / card plan(`preload` 在锚帧就绪之后调)。重算期望的流(G6:`localRev` 变了
    * 重算受影响流的期望签名),读回盘上已有的分段、发 `layer`,再把 worker 叫起来。
    */
@@ -1550,14 +1602,16 @@ export class StreamProducer {
     const toFrame = streamSegmentLastFrame(segment, spec.originFrame, spec.lastFrame);
     const samples = toFrame - fromFrame + 1;
     if (segment < 0 || samples < 1) throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 没有分段 ${segment}`), { retryable: false });
-    const encoder = await this.encoder();
+    // 导出专用的逐帧位图(`produceExportRange`):同一套推帧与取帧,帧不进编码器、交给 `exportSink`;恒按矩形上界取、不量不收紧、不走画布直取
+    const exportSink = typeof task.exportSink === 'function' ? task.exportSink : null;
+    const encoder = exportSink ? null : await this.encoder();
     const manifest = state.manifest;
     /*
      * 重量的一趟(`state.remeasure`):上一次补这个分段时画面顶到了收紧矩形的边。这一趟把顶到的那几边放到上界、每一帧都量,
      * 量出这一段实际到哪,收紧矩形照量到的放大(`settleTight`);放大后的矩形和这一趟用的不一样,这个分段再按它产一次。
      */
-    const remeasure = stride === 1 && spec.kind !== 'below' && manifest.tight && state.remeasure?.segment === segment ? state.remeasure : null;
-    const rect = stride > 1 ? manifest.bound
+    const remeasure = !exportSink && stride === 1 && spec.kind !== 'below' && manifest.tight && state.remeasure?.segment === segment ? state.remeasure : null;
+    const rect = stride > 1 || exportSink ? manifest.bound
       : remeasure ? evenRect(extendSides(manifest.tight, remeasure.sides, manifest.bound), manifest.bound)
         : (manifest.tight ?? manifest.bound);
     const captureRect = { x: rect.x + spec.offset.x, y: rect.y + spec.offset.y, w: rect.w, h: rect.h };
@@ -1591,7 +1645,7 @@ export class StreamProducer {
     const wanted = frame => frame >= fromFrame && (frame - fromFrame) % stride === 0;
     let discarded = 0, discardedBefore = 0;
     const abort = new AbortController();
-    const stale = () => this.closed || this.streams.get(spec.streamKey) !== state
+    const stale = () => this.closed || (!exportSink && this.streams.get(spec.streamKey) !== state)
       || (queue ? queue.signal?.aborted === true : state.generation !== generation);
     const guard = setInterval(() => { if (stale()) abort.abort(); }, 100);
     guard.unref?.();
@@ -1602,7 +1656,7 @@ export class StreamProducer {
     /** 重量的一趟里这一段每一帧不透明区域的并集(平面坐标) */
     let remeasured = null;
     // 补密时每一帧都看一眼画面有没有顶到收紧矩形的边(依赖下层的流有自己的办法,见 `below-overflow`);矩形就是上界时不用看
-    const guardTight = !sparse && !below && JSON.stringify(rect) !== JSON.stringify(manifest.bound);
+    const guardTight = !exportSink && !sparse && !below && JSON.stringify(rect) !== JSON.stringify(manifest.bound);
     try {
       /*
        * 不要回放的流(成员全是 remotion 式,`spec.replay === false`):不传 `mountFrame`、预热帧数传 0。
@@ -1610,7 +1664,7 @@ export class StreamProducer {
        * 不再从挂载帧逐帧推过来;所以分段不必按顺序产。`server/bakery/bake.mjs` 一个字不动(代码指纹)。
        */
       // 画布直取:这个分段的帧不截图,从画布取像素(过不了实测的照旧截图);`shot` 是 PNG,或 `{ rgba, width, height }`
-      const direct = this.directOf(state);
+      const direct = exportSink ? null : this.directOf(state);
       const belowCapture = below ? belowSegmentCapture(bakery, { clipId: spec.topClipId, view: viewRect, rect: captureRect, record: state.below ||= newBelowRecord(), signal: abort.signal,
         note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) : null;
       const result = await bakeStream(bakery, {
@@ -1635,6 +1689,7 @@ export class StreamProducer {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
           // 画一张丢掉的帧(不是这个分段要的)不进编码器
           if (shot === BELOW_SKIPPED || (drawAll && !wanted(frame))) return;
+          if (exportSink) { await exportSink(frame, shot); return; }
           const raw = shot?.rgba ? shot : null;
           if (sparse || frame === fromFrame || guardTight || remeasure) {
             // 这一张里不透明像素的外接框(截图矩形里的像素坐标)
@@ -1697,6 +1752,8 @@ export class StreamProducer {
         throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)}#${segment} 的收紧矩形重新量过,按新矩形重来`), { cancelled: true });
       }
     }
+    // 导出专用的逐帧位图:帧已经逐张交出去了,没有编码器、不进流库
+    if (exportSink) return true;
     if (!enc) return false;
     void firstCapture;
     const job = enc.finish()

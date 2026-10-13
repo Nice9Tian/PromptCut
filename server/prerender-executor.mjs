@@ -53,6 +53,7 @@ import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { isListPlan, CLIPS_KEY_MARK, BACKFILL_KEY_MARK, isSparseStreamTask, STREAM_DENSITY_SPARSE } from './render-queue/index.mjs';
 import { splitCandidatesOf, splitStreamCandidatesOf, streamCandidateKey } from './artifact-transfer.mjs';
+import { isExportFramesTask, isExportOnlyPlan } from './render-node/export-plan.mjs';
 
 /** `cardLocks`(Map、普通对象或缺省)→ `(lockKey) => 锁指纹 | null`(同 `split.mjs` 的读法) */
 function lockReader(cardLocks) {
@@ -277,7 +278,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     let context = drifted ? { ...resolved.context, actualRev: rev } : resolved.context;
     // 任务书「甲三」:清单计划里切分方自己的那一份流出不出 —— 本机能产(`planForQueue` 给的 `ownListStreams`)并且这个项目此刻产流
     // (托管方的渲染节点看「生成轨道流」;别的节点不按项目管)。每次切分现问,不进按版本的缓存
-    if (isListPlan(planTask) && perProject) {
+    if (isListPlan(planTask) && perProject && !isExportOnlyPlan(planTask)) {
       const on = await streamsSettled(planTask, signal);
       // 这个项目此刻不产流:本机写层表时不列自己这一版的流(列了没人产,页面白取清单);已经派过的流照候选记录列,产出的保留
       // (`frame-pipeline.mjs` 的 `layerMapStreamOptions` 读 `entry.ownStreamsOff`)。只有按项目管的进程才写这个记号
@@ -291,7 +292,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
     // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
     // C10 契约第 18 节第 9 条:在线页面的清单计划同一条路(清单是页面自己判重的片段)
-    if (isListPlan(planTask) && typeof pipeline.addBackfill === 'function') {
+    // 只为导出的清单计划(`export-frames.mjs`)不进预渲染集合:它只出导出位图任务,预览不用它的任何结果
+    if (isListPlan(planTask) && !isExportOnlyPlan(planTask) && typeof pipeline.addBackfill === 'function') {
       const added = pipeline.addBackfill(entry, planTask.input?.clips ?? []);
       say('executor.backfill', { version: id, clips: planTask.input?.clips?.length ?? 0, added });
     }
@@ -372,6 +374,34 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return spec;
   }
 
+  /**
+   * 导出专用的逐帧位图任务(`export-frames.mjs`):按任务的片段现算这一版的导出位图计划来对(内容键里已经带着这张卡的内容与采样窗口,
+   * 依赖下层的另带每个下层),对得上才取。项目往前走了而这张卡的内容换了,这份结果当时不要了(作废,不算失败)。
+   */
+  async function renderExport(task, { signal, progress }) {
+    if (typeof pipeline.exportStreamSpecs !== 'function' || typeof pipeline.renderExportFrames !== 'function') {
+      throw fail('no-export-frames', '本机不会取导出位图', false);
+    }
+    const { entry, drifted } = await contextFor(task, signal);
+    const input = task.input ?? {};
+    let specs = [];
+    try { specs = pipeline.exportStreamSpecs(entry, [input.clipId])?.specs ?? []; } catch { specs = []; }
+    const spec = specs.find(item => item?.exportKey === input.exportKey) ?? null;
+    if (!spec && drifted) throw superseded(`新版本里片段 ${input.clipId} 的内容换了`);
+    const why = [];
+    const from = task.range?.from, to = task.range?.to;
+    if (!spec) why.push(`这一版没有内容键为 ${String(input.exportKey).slice(0, 16)}… 的导出位图`);
+    else {
+      if (task.resultKey !== spec.exportResultKey) why.push('结果键不是本机指纹的键');
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from || to > spec.lastSegment) why.push(`分段范围 ${JSON.stringify(task.range)} 超出 0..${spec.lastSegment}`);
+    }
+    if (why.length) throw fail('plan-mismatch', `任务 ${task.id} 对不上这一版的导出位图:${why.join(';')}`, false);
+    const started = Date.now();
+    await pipeline.renderExportFrames(entry, spec, { from, to }, { signal, progress });
+    say('executor.render', { id: task.id, kind: 'export-frames', clipId: input.clipId, ms: Date.now() - started });
+    return null;
+  }
+
   async function renderStream(task, { signal, progress }) {
     if (typeof pipeline.streamCapable === 'function' && !(await pipeline.streamCapable())) {
       throw fail('no-streams', '本机不能产轨道流(PROMPTCUT_STREAMS=0 或没有能用的 H.264 编码器)', false);
@@ -418,6 +448,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
 
   async function render(task, { signal, progress, phase } = {}) {
     const say = (name, fields) => { try { phase?.(name, fields); } catch { /* 诊断回调出错不影响执行 */ } };
+    if (isExportFramesTask(task)) return renderExport(task, { signal, progress });
     if (task?.kind === 'stream') return renderStream(task, { signal, progress });
     if (task?.kind !== 'snapshot') throw fail('bad-task', `不认识的任务 kind:${task?.kind}`, false);
     say('project');
@@ -470,7 +501,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       };
       if (streamCandidates.size) pipeline.recordSplitCandidates(new Map([...streamCandidates].map(([contentKey, fps]) => [streamCandidateKey(contentKey), ordered(contentKey, fps)])));
     }
-    if (!isListPlan(planTask)) return;
+    // 只为导出的计划不写层表(它的产物预览不读,页面从计划的完成回包里拿索引)
+    if (!isListPlan(planTask) || isExportOnlyPlan(planTask)) return;
     try {
       // 层表按切分时实际用的那一版写(项目往前走了时不是 planTask 指的那一版)
       const { entry } = planned.get(planTask) ?? await contextFor(planTask);
