@@ -15,7 +15,7 @@ import {
   setCardHasher, setCardIdentifier, emitCardSourceChange,
 } from './card-overrides.mjs';
 import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
-import { accountCardProtocols } from './account-card-link.mjs';
+import { accountCardProtocols, cardSyncConnect } from './account-card-link.mjs';
 import { cardCodePreimage, localImportsOf, CARD_CODE_ID_HEX } from '../src/render/cardCodeIdentity.mjs';
 import { checkSyncedSource, rejectedStub, hostedWorkerKind, normalizeBrowserCssImports } from './hosted-render/source-gate.mjs';
 import { remotionStyleErrors } from './remotion-style-check.mjs';
@@ -1521,6 +1521,7 @@ export default function vitePluginCards(): Plugin[] {
        *       (`pc:card-sync` 的 { type: 'ticket', reqId, projectId },页面 POST /api/cards/sync/ticket 交回);
        *     - account:账号云端项目,规则与 ticket 相同,只是票据是页面凭登录向账号会话接口取的那种
        *       (子协议 `promptcut.account.<票据>`,`server/account-card-link.mjs`),每建一个新会话现要一张;
+       *       这种连接只能用到票据到期(账号访问令牌的寿命),页面交回票据时带上 `expiresAt`,到期前换一个会话;
        *     - cardIds:项目用到的卡,其中的用户卡与改过的内置卡(连同它们用到的文件)服务上还没有的会传上去。
        *   POST /api/cards/sync/unbind  回到本机空间
        *   GET  /api/cards/sync/status  诊断:绑定、记账、最近的通知
@@ -1556,8 +1557,9 @@ export default function vitePluginCards(): Plugin[] {
       };
       /** 向页面要一张 page 角色的连接票据(页面在自己那条共享项目连接上签) */
       let ticketSeq = 0;
-      const ticketWaiters = new Map<string, { resolve: (t: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-      const requestPageTicket = (projectId: string) => new Promise<string>((resolve, reject) => {
+      type PageTicket = { ticket: string; expiresAt?: number };
+      const ticketWaiters = new Map<string, { resolve: (t: PageTicket) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+      const requestPageTicket = (projectId: string) => new Promise<PageTicket>((resolve, reject) => {
         const reqId = `ct${++ticketSeq}`;
         const timer = setTimeout(() => {
           ticketWaiters.delete(reqId);
@@ -1596,6 +1598,8 @@ export default function vitePluginCards(): Plugin[] {
         notify: (e: object) => {
           try { server.ws.send({ type: 'custom', event: 'pc:card-sync', data: { type: 'notice', notice: e } }); } catch { /* 没有页面就算了,诊断接口里还看得到 */ }
         },
+        // 账号云端项目的连接有寿命、要按票据到期换会话(`server/account-card-link.mjs`);别的空间与缺省端点相同
+        connect: cardSyncConnect(syncLog),
         log: syncLog,
       }) : null;
       const localDocUrl = () => {
@@ -1646,7 +1650,7 @@ export default function vitePluginCards(): Plugin[] {
               protocols: mode === 'account'
                 ? accountCardProtocols(() => requestPageTicket(projectId))
                 : async () => {
-                  const t = first ?? (await requestPageTicket(projectId));
+                  const t = first ?? (await requestPageTicket(projectId)).ticket;
                   first = null;
                   return ['promptcut.v1', `promptcut.ticket.${t}`];
                 },
@@ -1678,7 +1682,7 @@ export default function vitePluginCards(): Plugin[] {
           if (!w) return sendJson(res, 404, { ok: false, error: '没有在等这张票据' });
           ticketWaiters.delete(data.reqId);
           clearTimeout(w.timer);
-          if (typeof data.ticket === 'string' && data.ticket.length > 0 && data.ticket.length <= 2048) w.resolve(data.ticket);
+          if (typeof data.ticket === 'string' && data.ticket.length > 0 && data.ticket.length <= 2048) w.resolve({ ticket: data.ticket, ...(Number.isSafeInteger(data.expiresAt) ? { expiresAt: data.expiresAt } : {}) });
           else w.reject(new Error(typeof data.error === 'string' ? `页面没签出票据:${data.error}` : '页面交回的票据不合法'));
           sendJson(res, 200, { ok: true });
         });

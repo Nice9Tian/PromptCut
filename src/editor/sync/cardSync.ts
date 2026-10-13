@@ -21,8 +21,11 @@ import { usedCardIds, peekScopes } from "../cardScope";
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
 export interface CardSyncHooks {
-  /** 给一张 page 角色的连接票据(共享项目才会被要);拿不到就抛 */
-  ticket: (projectId: string) => Promise<string>;
+  /**
+   * 给一张 page 角色的连接票据(共享项目才会被要);拿不到就抛。
+   * 账号云端项目的票据带到期时刻(连接只能用到那时,编辑器进程据此提前换会话)。
+   */
+  ticket: (projectId: string) => Promise<string | { ticket: string; expiresAt: number }>;
   /** 气泡 */
   toast: (text: string, tone: "info" | "warn", ms?: number) => void;
   /** 写入身份 → 显示名(「你」「Agent 对话 2」「bob」) */
@@ -168,7 +171,8 @@ async function onTicket(d: Record<string, unknown>) {
   if (!reqId || !b || b.kind !== "shared" || b.projectId !== d.projectId || !hooks) return;
   let reply: Record<string, unknown>;
   try {
-    reply = { reqId, ticket: await hooks.ticket(b.projectId) };
+    const t = await hooks.ticket(b.projectId);
+    reply = typeof t === "string" ? { reqId, ticket: t } : { reqId, ticket: t.ticket, expiresAt: t.expiresAt };
   } catch (e) {
     reply = { reqId, error: (e as Error).message };
   }

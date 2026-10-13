@@ -2,7 +2,7 @@
  * 账号云端项目里卡片源码同步的票据(`accountCardSync.ts`)与 Agent 服务端的绑定(`agentSideBinding.ts`)。报告 `docs/reports/AGENT-v18-cardsync.md`。
  * 跑:npm test -- src/editor/sync/accountCardSync.test.mjs
  *
- *   ACS-01 还在项目里:凭登录取一份会话,交出其中的连接票据;每次要都现取
+ *   ACS-01 还在项目里:凭登录取一份会话,交出其中的连接票据与它的到期时刻;每次要都现取
  *   ACS-02 已经不在项目里(换了项目、换了账号):不取会话,解绑
  *   ACS-03 会话接口回 401 / 403 / 404:解绑并抛;断网、503 只抛不解绑
  *   ACS-04 取票据的途中离开:票据不交出去,解绑
@@ -20,7 +20,7 @@ function harness({ current = true, session } = {}) {
   const calls = { session: 0, stop: 0 };
   const state = { current };
   const ticket = A.accountCardTicket({
-    session: async (projectId) => { calls.session++; return (session ?? (async () => ({ connectionTicket: `${TICKET.slice(0, 42)}${calls.session}` })))(projectId, state); },
+    session: async (projectId) => { calls.session++; return (session ?? (async () => ({ connectionTicket: `${TICKET.slice(0, 42)}${calls.session}`, expiresAt: 1000 + calls.session })))(projectId, state); },
     isCurrent: () => state.current,
     stop: () => { calls.stop++; },
   });
@@ -29,8 +29,8 @@ function harness({ current = true, session } = {}) {
 
 test("ACS-01 还在项目里:每次现取一份会话,交出连接票据", async () => {
   const h = harness();
-  assert.equal(await h.ticket("sp_x"), `${TICKET.slice(0, 42)}1`);
-  assert.equal(await h.ticket("sp_x"), `${TICKET.slice(0, 42)}2`);
+  assert.deepEqual(await h.ticket("sp_x"), { ticket: `${TICKET.slice(0, 42)}1`, expiresAt: 1001 });
+  assert.deepEqual(await h.ticket("sp_x"), { ticket: `${TICKET.slice(0, 42)}2`, expiresAt: 1002 });
   assert.deepEqual(h.calls, { session: 2, stop: 0 });
 });
 
@@ -55,7 +55,7 @@ test("ACS-03 401 / 403 / 404 解绑并抛;断网与 503 只抛", async () => {
 });
 
 test("ACS-04 取票据的途中离开:票据不交出去", async () => {
-  const h = harness({ session: async (_p, state) => { state.current = false; return { connectionTicket: TICKET }; } });
+  const h = harness({ session: async (_p, state) => { state.current = false; return { connectionTicket: TICKET, expiresAt: 1 }; } });
   await assert.rejects(h.ticket("sp_x"), /不在这个云端项目/);
   assert.deepEqual(h.calls, { session: 1, stop: 1 });
 });

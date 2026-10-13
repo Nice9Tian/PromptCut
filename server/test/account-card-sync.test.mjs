@@ -13,6 +13,8 @@
  *   5 乙被改成只读:读照常,写被拒(not-listed),内容库不变;改回可写后能写
  *   6 别的项目:乙拿不到那个项目的会话;在本项目的连接上点名别的项目写被拒(project-mismatch),那个项目的内容库是空的
  *   7 传输断一次:同一个会话接续(不带票据,服务端按会话里的身份重新核对),不重建会话
+ *   7b 连接的寿命:按票据的到期时刻提前换会话,换过之后收发照常(真服务,到期时刻报成 12 秒后)
+ *   7c 真的到期(等访问令牌的 120 秒过去):没按时换的连接被闸拒,端点当场换会话并补传;按时换的连接从头到尾没被拒过
  *   8 乙被踢:连接被服务端关掉,再取票据被拒,甲之后的版本乙拿不到
  *   9 项目被删:连接被关,会话接口回 404
  *  10 甲退出登录:连接被关,会话接口回 401,手里没过期的旧票据也连不进去
@@ -24,8 +26,7 @@ import https from 'node:https';
 import WS from 'ws';
 import { startAccountDualUserFixture } from './fixtures/account-dual-user-path.mjs';
 import { createCardSync, CARD_SOURCE } from '../card-sync.mjs';
-import { accountCardProtocols } from '../account-card-link.mjs';
-import { createDocEndpoint } from '../render-node/session-link.mjs';
+import { accountCardProtocols, cardSyncConnect } from '../account-card-link.mjs';
 
 const PORTS = [28670, 28671, 28672, 28673, 28674, 28675, 28676];
 const CARD = 'src/cards/user/acct-sync-probe.tsx';
@@ -42,7 +43,7 @@ const waitFor = async (check, label, ms = 20_000) => {
   }
 };
 
-test('账号云端项目的卡片源码同步:上传、装上、只读、别的项目、被踢、项目被删、退出登录', { timeout: 180_000 }, async (t) => {
+test('账号云端项目的卡片源码同步:上传、装上、只读、别的项目、被踢、项目被删、退出登录', { timeout: 420_000 }, async (t) => {
   const fixture = await startAccountDualUserFixture({ ports: PORTS });
   const ca = fs.readFileSync(fixture.caFile);
   const origin = fixture.origin;
@@ -68,9 +69,17 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
     const r = await post('/api/account/editor/login', { name: fixture.accounts[i].name, password: fixture.accounts[i].password,
       deviceId, deviceName: `card sync ${i}`, requestId: `cs-login-${i}` });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    return { token: r.body.accessToken, accountId: r.body.account.id, deviceId };
+    return { token: r.body.accessToken, tokenExpiresAt: r.body.accessExpiresAt, recovery: r.body.recoveryToken, accountId: r.body.account.id, deviceId, out: false };
   }
-  const session = (who, projectId) => post('/hosted/shared/account/session', { projectId, deviceId: who.deviceId, requestId: `cs-s-${++seq}` }, who.token);
+  /** 访问令牌剩不到 10 秒就续(页面的账号客户端同一个规矩,`src/account/client.ts` 的 `ensureLogin`);退出登录之后不续 */
+  async function ensureToken(who) {
+    if (who.out || who.tokenExpiresAt > Date.now() + 10_000) return;
+    who.renewing ??= post('/api/account/editor/recover', { recoveryToken: who.recovery, deviceId: who.deviceId, requestId: `cs-rec-${++seq}` }).then((r) => {
+      if (r.status === 200) { who.token = r.body.accessToken; who.tokenExpiresAt = r.body.accessExpiresAt; who.recovery = r.body.recoveryToken; who.tokenRenewals = (who.tokenRenewals ?? 0) + 1; }
+    }).finally(() => { who.renewing = null; });
+    await who.renewing;
+  }
+  const session = async (who, projectId) => { await ensureToken(who); return post('/hosted/shared/account/session', { projectId, deviceId: who.deviceId, requestId: `cs-s-${++seq}` }, who.token); };
   const admin = async (who, projectId, body) => {
     const s = await session(who, projectId);
     assert.equal(s.status, 200, JSON.stringify(s.body));
@@ -78,7 +87,7 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
   };
 
   /** 编辑器进程里的那套同步,文件在内存里 */
-  function editor(who, projectId, initial = {}) {
+  function editor(who, projectId, initial = {}, { expiresAt = (real) => real } = {}) {
     const files = new Map(Object.entries(initial));
     const log = [];
     const tickets = { ok: 0, refused: [] };
@@ -94,21 +103,21 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
         backup: (rel) => `backup/${rel}`,
         install: (rel, source) => { files.set(rel, source); return { ok: true }; },
       },
-      // 与缺省的端点相同(一个会话),只把 WebSocket 换成带根证书的
-      connect: ({ url, protocols }) => createDocEndpoint({ url, protocols, WebSocket: CaWebSocket,
-        log: (event, fields) => log.push({ event: `doc.${event}`, ...fields }) }),
+      // 与编辑器进程里的同一个端点选择(`vite-plugin-cards.ts`),只把 WebSocket 换成带根证书的
+      connect: cardSyncConnect((event, fields) => log.push({ event, ...fields }), { WebSocket: CaWebSocket }),
       log: (event, fields) => log.push({ event, ...fields }),
     });
     const getTicket = async () => {
       const s = await session(who, projectId);
       if (s.status !== 200) { tickets.refused.push({ status: s.status, code: s.body.code }); throw Object.assign(new Error(s.body.code), { status: s.status }); }
       tickets.ok++;
-      return s.body.connectionTicket;
+      return { ticket: s.body.connectionTicket, expiresAt: expiresAt(s.body.expiresAt) };
     };
     sync.bind({ projectId, url: wsUrl, protocols: accountCardProtocols(getTicket), keys: Object.keys(initial) });
     closers.push(() => sync.close());
     const cut = () => { for (const socket of sockets) if (socket.readyState === WS.OPEN) socket.terminate(); };
-    return { sync, files, log, tickets, cut, connected: () => sync.status().connected, record: (rel) => sync.status().records?.[rel] ?? null };
+    const renews = () => log.filter((e) => e.event === 'doc.account.renew');
+    return { sync, files, log, tickets, cut, renews, connected: () => sync.status().connected, record: (rel) => sync.status().records?.[rel] ?? null };
   }
 
   /** 一条裸的账号连接:发一条消息等回包 */
@@ -136,6 +145,7 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
   try {
     const projectId = fixture.projectId;
     const [alice, bob] = [await login(0), await login(1)];
+    const loggedInAt = Date.now();
 
     // ---- 1 甲带着一张用户卡进项目;乙对账时装上
     const a = editor(alice, projectId, { [CARD]: src('v1') });
@@ -218,6 +228,38 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
     await waitFor(() => b.files.get(CARD) === src('v4'), '接续之后乙照常装上');
     t.diagnostic('7 传输断一次:接续 +1、会话数不变、没有再取票据,之后照常同步');
 
+    // ---- 7b 连接的寿命:账号连接只能用到票据到期,到期前换一个会话(这里把到期时刻报成 12 秒后,真服务上连换几次)
+    const c = editor(bob, projectId, {}, { expiresAt: () => Date.now() + 12_000 });
+    await waitFor(() => c.files.get(CARD) === src('v4'), '丙(乙的另一台设备)对账装上');
+    await waitFor(() => c.renews().length >= 2 && c.connected(), '丙按到期时刻换了两次会话', 30_000);
+    assert.ok(c.renews().every((e) => e.why === 'ticket-expiring'));
+    assert.ok(c.tickets.ok >= 3, '每个新会话现取一张票据');
+    a.files.set(CARD, src('v4b'));
+    a.sync.saved(CARD);
+    await waitFor(() => c.files.get(CARD) === src('v4b'), '换过会话之后丙照常装上别人的版本');
+    c.files.set(AGENT_CARD, src('from-c'));
+    c.sync.saved(AGENT_CARD);
+    await waitFor(() => a.files.get(AGENT_CARD) === src('from-c'), '换过会话之后丙的改动照常传上去');
+    assert.equal(c.sync.status().notices.filter((n) => n.type === 'installed' && n.key === CARD && n.rev === 5).length, 1, '同一版只装一次');
+    t.diagnostic(`7b 按票据到期换会话 ${c.renews().length} 次(取票据 ${c.tickets.ok} 次),换过之后收发照常`);
+
+    // ---- 7c 真的到期:一条不按时换的连接(到期时刻故意报成很久以后),访问令牌到期后闸回 credential-revoked,端点当场换会话、补传
+    const d = editor(alice, projectId, {}, { expiresAt: () => Date.now() + 600_000 });
+    await waitFor(() => d.files.get(CARD) === src('v4b'), '丁(甲的另一台设备)对账装上');
+    const dTicketExpiry = loggedInAt + 120_000;
+    assert.equal(d.renews().length, 0);
+    t.diagnostic(`7c 等甲登录时那张访问令牌到期(还有 ${Math.max(0, Math.round((dTicketExpiry - Date.now()) / 1000))} 秒)`);
+    await new Promise((r) => setTimeout(r, Math.max(0, dTicketExpiry - Date.now()) + 2_000));
+    const LATE = 'src/cards/user/acct-sync-late.tsx';
+    d.files.set(LATE, src('after-expiry'));
+    d.sync.saved(LATE);
+    await waitFor(() => d.renews().some((e) => e.why === 'credential-revoked' || e.why === 'authorization-expired'), '到期的连接被闸拒,端点换会话');
+    await waitFor(() => a.files.get(LATE) === src('after-expiry'), '换会话之后补传成功,甲装上', 30_000);
+    assert.ok(alice.tokenRenewals >= 1, '期间访问令牌续过');
+    assert.ok(a.renews().length >= 1 && a.renews().every((e) => e.why === 'ticket-expiring'), '甲那条按时换的连接没等到被拒');
+    assert.ok(!a.log.some((e) => e.event === 'cards.sync.put-failed' && /credential-revoked|authorization-expired/.test(e.code ?? '')), '按时换的连接没有因为到期丢过上传');
+    t.diagnostic(`7c 访问令牌到期后:没按时换的连接被闸拒(${d.renews().map((e) => e.why).join(',')})并当场换会话补传;按时换的连接换了 ${a.renews().length} 次、没被拒过`);
+
     // ---- 8 乙被踢
     const kicked = await admin(alice, projectId, { op: 'kick', accountId: bob.accountId });
     assert.equal(kicked.status, 200, JSON.stringify(kicked.body));
@@ -225,9 +267,11 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
     await waitFor(() => b.tickets.refused.some((r) => r.status === 403 && r.code === 'banned'), '乙再取票据被拒');
     a.files.set(CARD, src('v5'));
     a.sync.saved(CARD);
-    await waitFor(() => a.record(CARD)?.hash && a.sync.status().pending.length === 0 && a.log.some((e) => e.event === 'cards.sync.put' && e.rev === 5), '甲传上 v5');
+    await waitFor(() => a.sync.status().pending.length === 0 && a.log.some((e) => e.event === 'cards.sync.put' && e.key === CARD && e.rev === 6), '甲传上 v5');
     await new Promise((r) => setTimeout(r, 1500));
-    assert.equal(b.files.get(CARD), src('v4'), '被踢之后的版本乙拿不到');
+    assert.equal(b.files.get(CARD), src('v4b'), '被踢之后的版本乙拿不到');
+    assert.equal(c.files.get(CARD), src('v4b'), '乙的另一台设备也拿不到');
+    assert.equal(c.connected(), false);
     assert.equal(b.connected(), false);
     t.diagnostic(`8 乙被踢:连接被关,取票据回 403 banned(${b.tickets.refused.length} 次都被拒),甲的 v5 乙没拿到`);
 
@@ -243,6 +287,7 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
     // ---- 10 甲退出登录
     const held = await session(alice, projectId);
     assert.equal(held.status, 200);
+    alice.out = true;
     const out = await post('/api/account/editor/logout', {}, alice.token);
     assert.equal(out.status, 200, JSON.stringify(out.body));
     await waitFor(() => !a.connected(), '甲退出登录后同步连接被关');
