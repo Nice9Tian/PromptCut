@@ -27,8 +27,12 @@
  *                                  (凭代成员的素材票据,权限不超过成员本人)。不设时这些工具回「没有配置素材服务」
  *   PROMPTCUT_AGENT_LOOK_URL       同机渲染服务管理进程的诊断与代理口(回环,如 http://127.0.0.1:5399)。云端 Agent 看画面(`see_frames` 等)时凭服务私钥的
  *                                  签名向它要一帧(`look-client.mjs`;契约第 9.8 节)。不设时看画面的工具不交给模型,系统提示词写「看不了画面」
- *                                  账号版同样可设:签名用 PROMPTCUT_AGENT_SECRETS 里那把服务私钥(公钥登记在托管数据目录的 services.json),
- *                                  设了口子而私钥读不到直接拒绝启动;每个请求另绑这条任务的授权(`look-client.mjs` 的说明)
+ *                                  账号版**缺省忽略这个地址**(部署模板固定写着它,而渲染服务还看不到账号项目:接了只会让模型拿到一个
+ *                                  每次都看不成的工具)。要接,另设下面的开关
+ *   PROMPTCUT_AGENT_ACCOUNT_LOOK   只给账号版,缺省不设(= 0):设成 1 才在账号模式接看画面。这时必须同时有 PROMPTCUT_AGENT_LOOK_URL,
+ *                                  签名用 PROMPTCUT_AGENT_SECRETS 里那把服务私钥(公钥登记在托管数据目录的 services.json);开关开了而没有地址(`account-look`)、
+ *                                  私钥读不到或服务名不对(`look-key`)都直接拒绝启动。每个请求另绑这条任务的授权(`look-client.mjs` 的说明)。
+ *                                  0 / 1 之外的值拒绝启动(`account-look`)。`agent.ready` 与 `/healthz` 的 `look` 如实报接没接
  *   PROMPTCUT_AGENT_RUN_ASSET_ORIGIN / PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256
  *                                  只给账号版,缺省不设:素材服务的内部 mTLS 口(回环上的 https://127.0.0.1:<端口>)与它证书的指纹。设了以后
  *                                  云端 Agent 的任务凭自己的授权读写所在项目的素材(「运行素材」),用的是连文档服务的同一张证书;
@@ -93,6 +97,23 @@ export class AgentConfigError extends Error {
 }
 
 const isLoopbackHost = (h) => h === 'localhost' || h === '::1' || /^127\./.test(h);
+
+/**
+ * 账号模式下看画面接不接。不接回 null(包括只设了地址、没开开关:忽略那个地址,和没有这项功能时一样);
+ * 接就回签请求用的服务私钥。开关开了而条件不齐,抛配置错误(不悄悄变成「没接」)。
+ * @param {{ env: Record<string, string | undefined>, lookUrl: string | null, readKey?: typeof readServiceKeyFile }} o
+ */
+export function resolveAccountLook({ env, lookUrl, readKey = readServiceKeyFile }) {
+  const flag = env.PROMPTCUT_AGENT_ACCOUNT_LOOK;
+  if (flag !== undefined && flag !== '0' && flag !== '1') throw new AgentConfigError('account-look', 'PROMPTCUT_AGENT_ACCOUNT_LOOK 只能是 0 或 1');
+  if (flag !== '1') return null;
+  if (!lookUrl) throw new AgentConfigError('account-look', '开了 PROMPTCUT_AGENT_ACCOUNT_LOOK 但没有设 PROMPTCUT_AGENT_LOOK_URL');
+  try {
+    const key = readKey(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
+    if (key?.service !== 'agent' || typeof key.priv !== 'string') throw new Error('wrong-service-identity');
+    return key;
+  } catch (err) { throw new AgentConfigError('look-key', String(err?.message ?? err).slice(0, 200)); }
+}
 
 
 /**
@@ -332,15 +353,11 @@ async function main() {
       await conversationControl?.close(); conversationClient?.close(); runClient?.close();
       return fail(error instanceof AgentConfigError && error.reason === 'run-assets' ? 'run-assets' : 'account-v2');
     }
-    // 看画面:账号版没有旧的服务控制连接,但向渲染服务签请求仍用那把服务私钥。口子设了而私钥读不到:拒绝启动
-    if (lookUrl) {
-      try {
-        key = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
-        if (key.service !== 'agent') throw new Error('wrong-service-identity');
-      } catch (err) {
-        await conversationControl?.close(); conversationClient?.close(); runClient?.close();
-        return fail('look-key', { detail: String(err?.message ?? err).slice(0, 200) });
-      }
+    // 看画面:账号版要另开开关才接(缺省忽略 PROMPTCUT_AGENT_LOOK_URL)。开了而条件不齐:拒绝启动
+    try { key = resolveAccountLook({ env, lookUrl }); }
+    catch (err) {
+      await conversationControl?.close(); conversationClient?.close(); runClient?.close();
+      return fail(err instanceof AgentConfigError ? err.reason : 'account-look', { detail: String(err?.message ?? err).slice(0, 200) });
     }
   } else {
     try {
@@ -352,6 +369,8 @@ async function main() {
     void client.ready().catch(() => {});
     wiring = createHostedWiring({ client, docUrl, root: ROOT, log: line });
   }
+  // 看画面接没接:旧模式看有没有地址;账号模式看开关(resolveAccountLook 回了私钥才算接)
+  const lookOn = accountMode ? !!key : !!lookUrl;
   const stall = positiveMs(env.PROMPTCUT_AGENT_RENDER_STALL_MS);
   const debounce = positiveMs(env.PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS);
   let started;
@@ -368,7 +387,7 @@ async function main() {
       renderLimits: { ...(stall ? { stallMs: stall } : {}), ...(debounce ? { debounceMs: debounce } : {}) },
       ...(assetBase ? { assetBase } : {}),
       // 看画面:凭这把服务私钥的签名向同机的渲染服务要一帧
-      ...(lookUrl ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
+      ...(lookOn ? { look: createLookClient({ url: lookUrl, key, log: line }) } : {}),
       ...(testAllow.length ? { egress: { testAllow } } : {}),
       ...(collect ? { collect } : {}),
       ...(accountMode ? { accountMode: true, conversationClient, accountExecutor } : {}),
@@ -404,7 +423,7 @@ async function main() {
     ...(accountMode ? { runAuthorityMounted: !!started.executor, runDataProofReady: !!started.executor,
       completionReady: false } : {}),
     ...(origin ? { publicOrigin: origin } : {}),
-    assetService: !!assetBase, look: !!lookUrl, egressTestAllow: testAllow.length > 0,
+    assetService: !!assetBase, look: lookOn, egressTestAllow: testAllow.length > 0,
     ...(accountMode ? { runAssets: !!accountExecutor?.runAssets } : {}),
     collect: !accountMode && !!collect, collectTestRunner: !accountMode && collect?.testRunner === true,
     heapLimitMb: Math.round(v8.getHeapStatistics().heap_size_limit / (1024 * 1024)),

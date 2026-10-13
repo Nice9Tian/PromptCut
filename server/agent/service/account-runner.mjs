@@ -504,6 +504,8 @@ export function createAccountRunnerService({ conversationClient, runClient, read
       runEvents, resources, connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, now, log });
     const base = createAccountConversationService({ conversationClient, now });
     return { ...base, runManager: manager, runEvents,
+      // `/healthz` 据此报看画面接没接：只有真实运行器、并且给了看画面的客户端才算
+      look: !runnerFactory && !!runnerOptions.look,
       // Internal assembly seam only. A production caller must already own a
       // genuine conversation read-control invocation owned by HTTP/SSE.
       async mirrorAccepted(identity, conversationId) {

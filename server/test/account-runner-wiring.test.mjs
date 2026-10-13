@@ -19,6 +19,7 @@ import { inspectAgentScopeSource } from '../hosted/agent-run-scope-reader.mjs';
 import { digestOf } from '../account/ledger.mjs';
 import { scopeModel, pair } from './agent-run-scope-fixture.mjs';
 import { createExistingHostedRunnerFactory } from '../agent/service/account-runner.mjs';
+import { resolveAccountLook } from '../agent-service/main.mjs';
 
 const P = `sp_${'a'.repeat(26)}`;
 const RUN = { runGrantId: 'grant_one', runId: 'run_one', conversationId: 'conversation_one' };
@@ -181,4 +182,23 @@ test('RW5 账号模式的看画面不能悄悄不过授权闸：没有 resources
   await assert.rejects(start({ projectId: 'project_one', runGrantId: 'grant_other' }), error => error.code === 'look-context-unavailable');
   await assert.rejects(start({ projectId: 'project_other', runGrantId: 'grant_one' }), error => error.code === 'look-context-unavailable');
   assert.equal(calls.length, 0, '没有上下文时一次看画面的绑定都没有建');
+});
+
+test('RW6 账号模式的看画面要显式开关：缺省忽略地址；开了而没有地址或读不到私钥就拒绝启动', () => {
+  const url = 'http://127.0.0.1:5399', good = { service: 'agent', kid: 'k', priv: 'p', instanceId: 'i' };
+  const reads = [], readKey = dir => { reads.push(dir); return good; };
+  // 缺省（部署模板固定写着地址）：不接，也不去读私钥——行为和没有这项功能时一样
+  assert.equal(resolveAccountLook({ env: { PROMPTCUT_AGENT_LOOK_URL: url }, lookUrl: url, readKey }), null);
+  assert.equal(resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: '0' }, lookUrl: url, readKey }), null);
+  assert.equal(resolveAccountLook({ env: {}, lookUrl: null, readKey }), null);
+  assert.equal(reads.length, 0);
+  // 开了：回签名用的私钥，私钥目录取配置的那一个
+  assert.equal(resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: '1', PROMPTCUT_AGENT_SECRETS: '/x/secrets' }, lookUrl: url, readKey }), good);
+  assert.deepEqual(reads, ['/x/secrets']);
+  // 开了而条件不齐：拒绝，原因码分得清
+  const reason = fn => { try { fn(); } catch (error) { return error.reason; } return 'not-rejected'; };
+  assert.equal(reason(() => resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: '1' }, lookUrl: null, readKey })), 'account-look');
+  assert.equal(reason(() => resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: 'yes' }, lookUrl: url, readKey })), 'account-look');
+  assert.equal(reason(() => resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: '1' }, lookUrl: url, readKey: () => { throw new Error('ENOENT'); } })), 'look-key');
+  assert.equal(reason(() => resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: '1' }, lookUrl: url, readKey: () => ({ ...good, service: 'render' }) })), 'look-key');
 });
