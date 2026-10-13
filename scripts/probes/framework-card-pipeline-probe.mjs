@@ -11,7 +11,8 @@
  * （`scripts/lib/dev-server.mjs` 的 `startDevServer`；`no-user-dirs.mjs` 已设 `PROMPTCUT_NO_PORT_FILE=1`；数据目录、导出目录、
  * 卡片改动层都在临时目录里，检出目录里一个文件都不多），做完连子进程一起收掉。`--origin` 接一台已经起好的（只给调试用；
  * 建的卡带本次运行的随机后缀，不会和已有的撞）。`--only` 只跑其中几步（调试用；缺省全跑，验收口径是全跑）。
- * `--default-review`：第 4 步只做 4a（不在探针进程里改计划能力），等 punch-pill 的流产完就收，记下用了多久（只记录）。
+ * `--default-review`：第 4 步只做 4a（不在探针进程里改计划能力），等默认就有的三条流（两张用户卡各一条依赖下层的流、punch-pill 一条单卡流）
+ * 产完就收，记下用了多久（只记录）。
  *
  * 做什么（每步的判据写在后面；耗时只记录，不当通过条件）：
  *
@@ -33,8 +34,10 @@
  *   4. prerender  进程内起一个 `FramePipeline`（同预渲染进程的代码，`interactive: true`，库根放临时目录），把三张卡钉成重卡
  *                 （`streamPicked` 钉成全选；remotion 式的卡声明上是轻卡，不钉就没有流）。分两小步：
  *                 4a 默认行为：用户卡不在审阅表（`src/cards/capabilities.json`）里，计划里 `compositing` 是 unknown，按下层依赖卡处理，
- *                    **不进单卡流**（`docs/semantics/mechanism/cards.md`「分类以审阅表为准」）——所以照默认，两张用户卡没有轨道流。探针用没改过的
- *                    计划算一遍 `planStreams`，核对这个事实（用户卡没有单卡流、punch-pill 有）；
+ *                    **不进单卡流**（`docs/semantics/mechanism/cards.md`「分类以审阅表为准」）——照默认，两张用户卡判重时各有一条
+ *                    **依赖下层的流**（连同下面的层一起渲，流里只存这张卡改动的那一层，按舞台坐标贴回去）。探针用没改过的计划算一遍
+ *                    `planStreams`，核对这个事实（用户卡有依赖下层的流、没有单卡流；punch-pill 有单卡流）。贴得对不对由
+ *                    `stream-below-stage-probe.mjs` 的场景丙（也是一张用框架写的用户卡）用像素核对；
  *                 4b 在**探针进程的内存里**把两张用户卡在计划里的 `compositing` 改成 independent（等于「审阅表登记了它们」；产品代码一个字不动），
  *                    验这种卡的流产出来以后不回放、与回放着产逐帧相同。预渲染完：
  *                   - 三张卡各有一条轨道流；两张用户卡的流 `replay` 是 false，`replayedFrames` 是 0；punch-pill 的流 `replay` 是 true；
@@ -564,7 +567,8 @@ try {
     };
     /*
      * 审阅表（`src/cards/capabilities.json`）里没有登记的卡，`compositing` 一律是 unknown，按下层依赖卡处理、不进单卡流
-     * （`docs/semantics/mechanism/cards.md`「分类以审阅表为准」第 44 行）；用户卡永远不在审阅表里。所以**照默认**，两张用户卡没有轨道流。
+     * （`docs/semantics/mechanism/cards.md`「分类以审阅表为准」第 44 行）；用户卡永远不在审阅表里。所以**照默认**，两张用户卡判重时各有一条
+     * 依赖下层的流（`kind: below`，按舞台坐标），没有单卡流。
      * 第 4a 步记下这个事实（用没改过的计划算一遍 `planStreams`）；第 4b 步在**本进程里**把这两张卡的计划能力改成 independent
      * （等于「审阅表登记了它们」），验这种卡的流产出来以后不回放、与回放着产逐帧相同。改的只是探针进程里的内存，产品代码一个字不动。
      */
@@ -581,7 +585,7 @@ try {
     const ALL = [...USER_CLIPS, 'clip-pill'];
     const t0 = Date.now();
     const entry = await pipeline.preload(PROJECT);
-    const ready = await until('生产者起来、三条流到位', () => (pipeline._streams?.streams.size >= (DEFAULT_REVIEW ? 1 : 3) ? pipeline._streams : null), 1_800_000);
+    const ready = await until('生产者起来、三条流到位', () => (pipeline._streams?.streams.size >= 3 ? pipeline._streams : null), 1_800_000);
     if (!ready) throw new Error('生产者没起来');
     // 4a：默认行为——没改过的计划
     {
@@ -591,19 +595,35 @@ try {
       pr.defaultBehavior = {
         compositing: Object.fromEntries(ALL.map((id) => [id, compOf(id)])),
         streamClips: specs.map((s) => s.clipIds.join('+')),
-        note: '审阅表没登记的卡 compositing 为 unknown，按下层依赖卡处理，不进单卡流（mechanism/cards.md「分类以审阅表为准」）；用户卡永远不在审阅表里',
+        streams: specs.map((s) => ({ clip: s.clipIds.join('+'), kind: s.kind, plane: s.plane, replay: s.replay, belowClipIds: s.belowClipIds ?? null })),
+        note: '审阅表没登记的卡 compositing 为 unknown，按下层依赖卡处理：不进单卡流，判重时走依赖下层的流（mechanism/cards.md「分类以审阅表为准」）；用户卡永远不在审阅表里',
       };
+      const kindOf = (id) => specs.filter((s) => s.clipIds.includes(id)).map((s) => `${s.kind}/${s.plane}`);
       check(compOf('clip-title') === 'unknown' && compOf('clip-colors') === 'unknown', '默认行为：用框架写的用户卡在计划里 compositing 是 unknown（审阅表没登记）', pr.defaultBehavior.compositing);
       check(compOf('clip-pill') === 'independent', '默认行为：内置的 punch-pill 是 independent', pr.defaultBehavior.compositing);
-      check(USER_CLIPS.every((id) => !pr.defaultBehavior.streamClips.includes(id)) && pr.defaultBehavior.streamClips.includes('clip-pill'),
-        '默认行为：用户卡没有单卡流、punch-pill 有（缺省关着的「依赖下层的流」才会收 unknown 卡）', pr.defaultBehavior.streamClips);
+      check(USER_CLIPS.every((id) => kindOf(id).length === 1 && kindOf(id)[0] === 'below/stage'),
+        '默认行为：用户卡判重时各有一条依赖下层的流（按舞台坐标），没有单卡流', pr.defaultBehavior.streams);
+      check(kindOf('clip-pill').length === 1 && kindOf('clip-pill')[0] === 'card/local', '默认行为：punch-pill 有单卡流', pr.defaultBehavior.streams);
+      // remotion 式的目标卡自己不用回放；要不要回放看它和它下面的卡里有没有 motion 式的：
+      // fw-title 下面只有 fw-colors（remotion 式）→ 不回放；fw-colors 下面是 punch-pill（motion 式，时间上有重叠）→ 要回放
+      const specOf = (id) => specs.find((s) => s.clipIds.includes(id));
+      check(specOf('clip-title')?.replay === false && JSON.stringify(specOf('clip-title')?.belowClipIds) === JSON.stringify(['clip-colors']),
+        '默认行为：fw-title 的流不回放（它和它的下层 fw-colors 都是 remotion 式）', pr.defaultBehavior.streams);
+      check(specOf('clip-colors')?.replay === true && JSON.stringify(specOf('clip-colors')?.belowClipIds) === JSON.stringify(['clip-pill']),
+        '默认行为：fw-colors 的流要回放（它下面压着 motion 式的 punch-pill）', pr.defaultBehavior.streams);
     }
     if (DEFAULT_REVIEW) {
       pr.defaultOnly = true;
       pr.msToFirstStream = Date.now() - t0;
-      const pill = await until('punch-pill 的流满密度', dense, 1_800_000, 1000);
+      const all = await until('默认就有的三条流满密度', dense, 1_800_000, 1000);
       pr.msToPillDense = Date.now() - t0;
-      check(!!pill, '默认行为：punch-pill 的流产完');
+      check(!!all, '默认行为：三条流产完');
+      if (all) {
+        pr.defaultStreams = all.streams.map((s) => ({ clipIds: s.clipIds, kind: s.kind, replay: s.replay, replayedFrames: s.replayedFrames, below: s.below ? { failed: s.below.failed ?? null, frames: s.below.frames, checks: s.below.checks } : null }));
+        check(all.streams.length === 3 && USER_CLIPS.every((id) => all.streams.some((s) => s.kind === 'below' && s.clipIds[0] === id && !s.below?.failed)),
+          '默认行为：两张用户卡的依赖下层的流真的产出来了（差分取层没有判死）', pr.defaultStreams);
+        check(all.streams.find((s) => s.clipIds[0] === 'clip-title')?.replayedFrames === 0, '默认行为：fw-title 的流回放 0 帧', pr.defaultStreams);
+      }
       out.steps.prerender = pr;
       throw Object.assign(new Error('default-review-done'), { done: true });
     }
