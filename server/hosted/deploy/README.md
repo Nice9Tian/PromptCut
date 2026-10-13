@@ -297,6 +297,45 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 8. 放好 `systemd-promptcut-agent-root.service`，`systemctl daemon-reload && systemctl enable --now promptcut-agent-root`。看到 `root.ready`；`/healthz` 的 `scheduler` 变成 `true`。
 9. 用模拟模型发一条云端对话验一遍（`set-key.mjs --mock`，数据目录指共用目录）：消息做完、同一对话的第二条接着做、点「停止」任务被中断。
 
+### 工具要的节点依赖（0.7.18 起：感知、一键流程、网页操作、发起人页面的反向通道、采集代下）
+
+这些工具在**任务进程**里执行，所以它们要的东西配在 root 入口的配置 `agent-root.json` 的 `worker` 一节里（root 入口每开一代任务进程，把它们原样写进那一代的设置文件），**不在主服务的环境变量里**：
+
+- `worker.runAssets`（素材服务的内部口，见 `account-task-worker-config.mjs` 文件头）：**写了它才会建这些工具的提供者**——它们读写素材只凭任务自己的授权。没写时这些工具照旧回「还没接上」。
+- `worker.tools`：一个「键 → 值」的表，键是下表里的名字，值是这台节点上的绝对路径（或开关）。**都是可选的**：没写的那一族照样交给模型，工具自己回「这台节点没配」；写了但路径不存在、键不认，任务进程拒绝启动（日志 `agent.account-tools.config-error`，root 入口那一代记失败）。示例见 `agent-root.example.json`。
+
+| 键 | 给谁用 | 不写的后果 |
+|---|---|---|
+| `PROMPTCUT_FFMPEG`（可再给 `PROMPTCUT_FFPROBE`，缺省取同目录的 ffprobe） | 镜头识别的 scdet 档；主体识别、语音转写、运动追踪抽帧与抽音 | 镜头识别回「用不了」；别的几族缺它时各自说明 |
+| `PROMPTCUT_AGENT_SHOTS_PYTHON`、`PROMPTCUT_AGENT_SHOTS_MODELS`（可再给 `…_PYLIBS`） | 镜头识别的模型档（TransNetV2） | 只用 scdet 档（只认硬切），结果里注明 |
+| `PROMPTCUT_AGENT_STT_PYTHON`、`PROMPTCUT_AGENT_STT_PYLIBS`、`PROMPTCUT_AGENT_STT_MODELS`（可再给 `…_REQUIREMENTS`、`…_INDEX_URL`） | 语音转写（faster-whisper） | 语音转写与一键流程的第一阶段回「这台节点做不了」 |
+| `PROMPTCUT_AGENT_SUBJECT_PYTHON`、`PROMPTCUT_AGENT_SUBJECT_MODELS`（可再给 `…_PYLIBS`、`…_REQUIREMENTS`、`…_WHEELHOUSE`） | 主体识别 | 主体识别回「没配」，并指向看画面 |
+| `PROMPTCUT_AGENT_TRACK_PYTHON`（可再给 `…_PYLIBS`、`…_MODELS`） | 运动追踪（没有权重时走模板匹配兜底） | 运动追踪与贴运动回「没配」 |
+| `PROMPTCUT_AGENT_BROWSER`（可再给 `PROMPTCUT_AGENT_BROWSER_ARGS`，空格隔开，只认白名单里的几个，如 `--no-sandbox`） | 网页操作七件 | 网页操作回「这台节点没有配置浏览器」 |
+| `PROMPTCUT_AGENT_COLLECT_PYTHON` | 云端匿名采集（与旧托管档同一个含义） | 采集回「没装」；有登录支持的站点仍可由发起人的电脑代下 |
+| `PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES`（逗号隔开：`transcribe`、`shots`、`subjects`、`compose`、`prerender`） | 一键流程：哪些阶段的能力没就绪时跳过而不是停下 | 缺省只有「发布预渲染任务」可跳过 |
+
+节点上要装的东西（本仓库不装，部署者装；**每一样都是可选的**，缺了只是对应的工具如实回「用不了」）：
+
+| 东西 | 用在哪 | 说明 |
+|---|---|---|
+| ffmpeg 与 ffprobe | 镜头识别（要含 `scdet` 滤镜）、各感知包抽帧抽音 | 开发机验过 9.0.1；别的版本部署者自己确认 |
+| Python 3.11+ | 语音转写、主体识别、运动追踪、镜头识别的模型档、云端匿名采集 | 可以各用各的解释器或虚拟环境；任务用户要读得到 |
+| faster-whisper 及其依赖、Whisper 权重（huggingface 缓存布局） | 语音转写 | 依赖按 `python/requirements-faster-whisper.lock.txt` 在节点的平台上重新解一份带哈希的；转写不联网下载权重 |
+| onnxruntime、numpy、`transnetv2.onnx`（31 MB） | 镜头识别的模型档 | 不装就只有 scdet 档 |
+| onnxruntime 与 light 档权重（YuNet、RT-DETR）；full 档另要 torch、transformers 与 Grounding DINO 权重（约 690 MB） | 主体识别 | full 档只随部署送达，不在线装 |
+| numpy（模板匹配档）；BootsTAPIR 档另要 torch≥2.2、`einshape`、`dm-tree`、`bootstapir_v2.pt`（208 MB） | 运动追踪 | 权重在而 `einshape`、`dm-tree` 缺时状态会报就绪、真追会失败：两样要一起装 |
+| chrome-headless-shell（或 Chrome for Testing）152 | 网页操作 | 建议任务用户是非特权用户（浏览器自己的沙箱能用）；以 root 跑要加 `--no-sandbox` |
+| `puppeteer-core`（或 `puppeteer`） | 网页操作连浏览器的调试协议 | 部署目录的 `node_modules` 里那一份就行，只读着用；不用它自带的浏览器下载 |
+| yt-dlp（装在 `PROMPTCUT_AGENT_COLLECT_PYTHON` 那个解释器里） | 云端匿名采集 | 与旧托管档相同 |
+
+要注意的：
+
+- 这些目录（解释器、权重、`…_PYLIBS`）**不要放在共用数据目录里**（对话的工作目录在那里面，模型的文件工具列得到）；任务用户可读即可，`…_PYLIBS` 只在开了受控安装时才要可写。
+- 网页操作的浏览器数据在共用数据目录的 `web/<项目>/<对话>/`，作业账本与追踪结果在 `tenants/<项目>/conversations/<对话>/tools/`；都随共用数据目录走，不用另建。
+- 发起人页面的反向通道不用另配：任务进程经主服务的那个内部口（和交事件同一个口、同一张任务证书）问主服务，主服务的登记表在它自己的数据目录里（`page-requests.sqlite`）。nginx 不用改：页面交回结果走的是原有的 `/agent/v1/` 那一段。
+- 部署后的核对：用模拟模型发一条消息让它调 `stt_status`、`web_open`（脚本见 `scripts/probes/cloud-tools-wire-probe.mjs`），看回的是「可用」还是「这台节点没配」，和上表对得上。Linux 上的进程组、浏览器沙箱、各依赖的版本本仓库的探针没有验过，按各工具包报告里的节点自验步骤跑（网页操作：`scripts/probes/cloud-tools-w1-linux-demo.mjs`）。
+
 ### 日常
 
 - **看现状**：`node server/agent-service/account-root-main.mjs --config … --status`（各槽停在第几代、什么阶段、单元状态）；`journalctl -u promptcut-agent-root`、`journalctl -u promptcut-agent-task-slot-a`。

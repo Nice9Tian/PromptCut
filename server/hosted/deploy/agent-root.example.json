@@ -16,7 +16,22 @@
       "caFile": "/etc/promptcut/agent-task/ca.crt"
     },
     "dataDir": "/var/lib/promptcut/agent-shared",
-    "stateRoot": "/var/lib/promptcut/agent-task-state"
+    "stateRoot": "/var/lib/promptcut/agent-task-state",
+    "runAssets": {
+      "origin": "https://127.0.0.1:<素材服务内部口>/",
+      "fingerprint256": "<素材服务内部证书的指纹>",
+      "maxResponseBytes": 1048576,
+      "maxImportBytes": 536870912
+    },
+    "tools": {
+      "PROMPTCUT_FFMPEG": "/usr/bin/ffmpeg",
+      "PROMPTCUT_AGENT_BROWSER": "/opt/chrome-headless-shell/chrome-headless-shell",
+      "PROMPTCUT_AGENT_STT_PYTHON": "/opt/promptcut-py/stt/bin/python",
+      "PROMPTCUT_AGENT_STT_MODELS": "/opt/promptcut-models/stt",
+      "PROMPTCUT_AGENT_SUBJECT_PYTHON": "/opt/promptcut-py/subject/bin/python",
+      "PROMPTCUT_AGENT_SUBJECT_MODELS": "/opt/promptcut-models/subject",
+      "PROMPTCUT_AGENT_TRACK_PYTHON": "/opt/promptcut-py/track/bin/python"
+    }
   },
   "slots": [
     {
