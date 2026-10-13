@@ -357,6 +357,13 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
     };
     return { opened, pageId, send, session: session.body,
       project: async () => (await send({ type: 'project.open', projectId })),
+      /** 项目管理操作（创建者才做得成）：例如关、开云端 Agent。期望的权限版本现取，回文档服务的原样回包 */
+      admin: async (body) => { const now = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-admin-session-${index}-${++renewals}` });
+        if (now.status !== 200) throw Error('runner-fixture-admin-session');
+        session = now;
+        return doc('admin', { projectId, expectedAccessRevision: now.body.accessRevision, ...body }); },
+      /** 此刻的委托票据（快到期会先续） */
+      delegation: async () => (await tickets()).agentDelegationTicket,
       agent: async (route, body) => request('/agent/v1' + route, { method: body ? 'POST' : 'GET', body, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
       /** 照页面的做法传一个附件：字节直接是请求体，文件名在查询串里 */
       upload: async (conversationId, name, bytes) => new Promise((resolve, reject) => { void tickets().then(ticket => {
