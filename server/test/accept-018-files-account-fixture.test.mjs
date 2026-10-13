@@ -7,7 +7,7 @@
  *
  * 底座:`fixtures/account-dual-user-path.mjs` 的 `startAccountDualUserFixture`(VisuHive 真账号后端 + 文档服务 + 独立素材进程 +
  * 带证书的边缘,全在本机回环)。需要环境变量 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE,没设就整个跳过。
- * 端口:调用方给的 7 个(这里用 28590～28596)。
+ * 端口:调用方给的 7 个(这里向系统要空闲的)。
  *
  * 关于 ACC018-BACKUP:仓库里**没有**备份/恢复脚本——2026-10-09 在节点上做的那次(docs/archive/three-versions-production-restore-2026-10-09.md)用的是
  * 节点上的一次性脚本。所以这里演练的是**方法**:服务停写 → 数据文件(三个 SQLite、项目日志与状态、素材)逐个列清单 → 备份 → 校验 → 恢复到新目录 →
@@ -28,19 +28,17 @@ import { DatabaseSync } from 'node:sqlite';
 import WebSocketNode from 'ws';
 import { startAccountDualUserFixture } from './fixtures/account-dual-user-path.mjs';
 import { waitFor } from './fake-ws-kit.mjs';
+import { freePorts } from './free-ports.mjs';
 
 const providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? '';
 const orderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE ?? '';
 const available = Boolean(providerRoot) && fs.existsSync(path.join(providerRoot, 'account/internal.mjs')) && Boolean(orderModule) && fs.existsSync(orderModule);
 const skip = !available && '账号后端源码不可用:设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT(VisuHive 仓库根)与 PROMPTCUT_PASSWORD_ORDER_MODULE(其 account/password-order.mjs)';
 
-const FILES_BASE = Number(process.env.ACCEPT018_FILES_BASE) || 28590; // 验收运行器给 ACCEPT018_FILES_BASE=<起点> 时用起点起连着 7 个
-const PORTS = [0, 1, 2, 3, 4, 5, 6].map(n => FILES_BASE + n);
-
 const { SyncLink } = await import(srcUrl('editor/sync/link.ts'));
 const { accountConnectionProtocols } = await import(srcUrl('account/client.ts'));
 
-const fx = skip ? null : await startAccountDualUserFixture({ ports: PORTS });
+const fx = skip ? null : await startAccountDualUserFixture({ ports: await freePorts(7) });
 after(async () => {
   if (!fx) return;
   await fx.close();

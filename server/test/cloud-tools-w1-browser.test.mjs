@@ -3,7 +3,7 @@
  * 计划 `docs/plan/cloud-agent-tools-implementation.md` 的 W1 包)。
  * 跑:npm test -- server/test/cloud-tools-w1-browser.test.mjs
  *
- * 真的:puppeteer 自带的 Chrome for Testing(无头)、本测试在 127.0.0.1:28380 上起的假站、真的出网闸(测试例外只放行这一个「IP:端口」)、
+ * 真的:puppeteer 自带的 Chrome for Testing(无头)、本测试在 127.0.0.1 的一个系统给的空闲端口上起的假站、真的出网闸(测试例外只放行这一个「IP:端口」)、
  * 真 SQLite 的运行授权与运行资源登记器。不真的:没有 mTLS、没有模型(工具由测试直接调)。
  *
  *   W1-TOOL-01  七个工具真实走通:打开、看、点(编号 / 坐标+名字)、输入(含回车提交)、滚动、读正文、关;返回的形状同桌面版,
@@ -34,8 +34,9 @@ import { w1Fixture, item, alive, until, sleep, projectId, conversationId, otherP
 import { startFakeSite } from './cloud-tools-w1-site.mjs';
 import { hostedBrowserDir, WEB_TOOL_NAMES, HOSTED_BROWSER_DEFAULTS } from '../agent/service/hosted-browser.mjs';
 import { browserTools } from '../tools/browser.mjs';
+import { freePort } from './free-ports.mjs';
 
-const PORT = 28380;
+const PORT = await freePort();
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const ALLOW = [`127.0.0.1:${PORT}`];
 const SHOTS = process.env.W1_SHOT_DIR || null;

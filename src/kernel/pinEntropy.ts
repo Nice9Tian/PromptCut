@@ -37,6 +37,17 @@
  * 时间戳来源(见 exportClock.ts「DOM 变动计数」那段),是另一回事。
  *
  * 只在导出视图和渲染面里装。编辑器主文档不能装 —— 它自己的 id、时间戳要真的。
+ *
+ * # 带着指定种子执行一段函数(`withSeededRandom`,原型,2026-10-12)
+ *
+ * 全页共用一个状态,意味着「谁先取、取了几次」会挪动后面所有人拿到的数。`withSeededRandom(seed, fn)`
+ * 让 fn 在一串**自己的**随机数里跑(从 seed 起),跑完把全页的状态放回 fn 开始前的样子:fn 里取了几次,
+ * 外面一次都看不到。只管同步执行的那一段;fn 里排出去的定时器、Promise 回调不在里面。
+ *
+ * 用它的是 `src/cards/native/lottie.tsx`(开关缺省关)。注意它**只是那边的第二层**:Lottie 播放库的表达式用的是
+ * 它自己内部的一串(上面说的 `BMMath.random`),只有页面里还没有任何表达式给那一串播过种时,那一串才等于这里的
+ * `Math.random`。所以那边真正起作用的是直接给播放库内部那一串播种;这里管的是「页面里第一个 Lottie 建图层时
+ * 从全页这一串里取走的数」和播放库里直接调 `Math.random()` 的少数地方。
  */
 
 /** 固定纪元。任何「现在几点」的读数都从这里起算;取一个整点,不为别的,只为好认 */
@@ -50,6 +61,8 @@ export interface EntropyHost {
   __pcExportMs?: number;
   __pcStageClock?: { now(): number };
   __pcResetRandom?: (seed?: number) => void;
+  /** 带着指定种子执行 fn,执行完把全页的随机状态放回 fn 开始前的样子(见文件头) */
+  __pcWithRandomSeed?: <T>(seed: number, fn: () => T) => T;
   __pcEntropyPinned?: boolean;
   /** 接管前的真 `Date.now`(E4b 的口子;舞台那边 stageClock 会更早存一次,这里不覆盖) */
   __pcRealDateNow?: () => number;
@@ -70,6 +83,15 @@ export function installPinnedEntropy(host: EntropyHost = window as unknown as En
   };
   host.__pcResetRandom = (seed = 1) => {
     rngState = seed | 0;
+  };
+  host.__pcWithRandomSeed = <T>(seed: number, fn: () => T): T => {
+    const saved = rngState;
+    rngState = seed | 0;
+    try {
+      return fn();
+    } finally {
+      rngState = saved;
+    }
   };
   host.Math.random = seeded;
 
@@ -114,5 +136,32 @@ export function installPinnedEntropy(host: EntropyHost = window as unknown as En
       const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
       return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
     };
+  }
+}
+
+/**
+ * 带着指定种子执行 fn:fn 里的 `Math.random`(钉住的页面里还有 `crypto.getRandomValues`)从 seed 起出数,
+ * 执行完把随机状态放回 fn 开始前的样子,fn 取了几次对外面没有影响。可以嵌套。
+ *
+ * 钉住的页面(导出视图、渲染面)里换的是那一个共用状态;没钉的页面(编辑器主文档)里临时把 `Math.random`
+ * 换成同一个算法的带种子版本,出来就换回原来那个真随机。
+ *
+ * 只罩同步执行的那一段(见文件头)。
+ */
+export function withSeededRandom<T>(seed: number, fn: () => T, host: EntropyHost = globalThis as unknown as EntropyHost): T {
+  if (host.__pcWithRandomSeed) return host.__pcWithRandomSeed(seed, fn);
+  const real = host.Math.random;
+  let state = seed | 0;
+  host.Math.random = () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  try {
+    return fn();
+  } finally {
+    host.Math.random = real;
   }
 }
