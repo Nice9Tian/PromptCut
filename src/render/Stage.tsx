@@ -326,6 +326,12 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           // 这张卡该不该挂流平面(G1:单卡流挂在包裹层里;组流挂舞台根下的 [data-pc-group-plane])
           const ownStream = streamPlanes?.some((g) => g.clipIds.length === 1 && g.clipIds[0] === clip.id) ?? false;
           /*
+           * 流平面露不露:这张卡被抑制着、或正在不可见地追帧时才露。别的时候它也可能挂着 —— 暂停着把播放头下这一帧先解好、
+           * 等流画出第一帧再藏活子树 —— 那时活子树还露着,流平面要藏起来(`display: none`:不占框,`solid.ts` 的实体框不算它),
+           * 不然两份画面叠在一起。和 `.pc-suppressed` 在同一次提交里翻,画面从活子树换成流中间不空一拍。
+           */
+          const streamShown = isSettling || supNow.has(clip.id);
+          /*
            * 包裹层的本地帧号。平时按 `cardT` 算;**正在追帧(`settling`)的片段按它自己的虚拟时间算**(R9 M4 的配套):
            * 子树虚拟时间下包裹层的帧号不跟着走的话,gl 平面的 `data-pc-gl-frame` 和它永远对不上,
            * 每张 canvas 卡在 K1 两趟布尔探针 / K5 第一路里都被 `rasterizeCanvas` 误判 `lossy`。
@@ -452,7 +458,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               */}
               {ownStream ? (
                 <canvas data-pc-stream-plane="" width={0} height={0}
-                  style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%" }} />
+                  style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", ...(streamShown ? null : { display: "none" }) }} />
               ) : null}
               {/*
                 占位平面(product/rendering.md「兜底顺序」;和快照 / 流平面同级,坐标、旋转、缩放、层级从包裹层继承)。
@@ -491,9 +497,11 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
         const hostId = g.host ?? g.clipIds[g.clipIds.length - 1];
         const at = active.findIndex((c) => c.id === hostId);
         if (at < 0) return null;
+        // 组里有成员被抑制着 / 在不可见地追帧才露(同单卡流的 `streamShown`:暂停着先解好这一帧时组流平面藏着)
+        const shown = g.clipIds.some((id) => supNow.has(id) || (settling?.has(id) ?? false));
         return <canvas key={g.clipIds.join(",")} data-pc-group-plane="" data-pc-stream-group={g.clipIds.join(",")}
           width={0} height={0}
-          style={{ position: "absolute", left: 0, top: 0, width: 0, height: 0, zIndex: at + 1, pointerEvents: "none" }} />;
+          style={{ position: "absolute", left: 0, top: 0, width: 0, height: 0, zIndex: at + 1, pointerEvents: "none", ...(shown ? null : { display: "none" }) }} />;
       })}
     </div>
   );

@@ -2,9 +2,10 @@
  * 轨道流的分段从这条流自己的第一帧起数 —— 产流、播放、拖动的端到端探针,**逐帧比像素**
  * (`docs/plan/html-snapshot-removal-dryrun.md` 第 10.5 节;换算在 `src/render/streamSegments.mjs`)。
  *
- *   node scripts/probes/stream-origin-probe.mjs (--origin http://127.0.0.1:27860 | --port 27860) [--group] [--out <dir>] [--keep] [--json <file>]
+ *   node scripts/probes/stream-origin-probe.mjs (--origin http://127.0.0.1:27860 | --port 27860) [--host-port <端口>] [--group] [--out <dir>] [--keep] [--json <file>]
  *
  * 给了 `--origin` 就用那台 dev server;给 `--port` 就自己在检出根起一台(另占 +1、+2 当舞台端口),用完按进程号收掉。
+ * `--host-port`:扮演父页的测试页和流的字节从哪个端口发(不给就让系统挑一个)。
  * 本进程里直接起 `FramePipeline`(同预渲染进程的代码),库根放临时目录。项目里两张会动的卡,**都不从 15 的倍数帧开始**:
  *
  *   clip-b  探针卡 `r6-stateful`(一块字,每帧横移 10 像素),第 40～129 帧(90 帧)
@@ -23,7 +24,8 @@
  *      对照:和下一帧比、和「按项目帧号数分段」(原来的做法)会对上的那一帧比,都明显更大。
  *   3. **舞台贴流,逐帧(拖动)**:测试页扮演父页,流平面用产品里的 `streamPlanesFor` 按就绪消息合成(带 `originFrame`)。
  *      对这两张卡在场的每一帧:把时间设到这一帧,等流平面画出这一帧,截舞台,和导出页同一帧比;同样拿它去比前后各一帧,
- *      最像的必须是它自己。
+ *      最像的必须是它自己。流的帧是异步解出来的、暂停着没有下一拍:画出来的那一刻舞台上不许还挂着占位符
+ *      (父页不补发任何消息;以前要补发一次流平面才撤)。
  *   4. **真的播放**:从卡入场之前起播一段,暂停;不跳帧;暂停的那一帧同样比。
  *   5. 早于这条流第一帧的帧:流平面什么都不画(没有分段)。
  *
@@ -53,6 +55,7 @@ const PORT = Number(flagArg('port', '0', args));
 const GROUP = args.includes('--group');
 const KEEP = args.includes('--keep');
 const JSON_OUT = flagArg('json', null, args);
+const HOST_PORT = Number(flagArg('host-port', '0', args)) || 0;
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-stream-origin-probe-${Date.now().toString(36)}`));
 if (GROUP) process.env.PROMPTCUT_STREAM_DECODERS = '1';
 process.env.PROMPTCUT_STREAM_POOL = '1';
@@ -308,7 +311,7 @@ try {
   const u = new URL(origin);
   const [originA, originB] = ports.ports.slice(0, 2).map((p) => `${u.protocol}//${u.hostname}:${p}`);
   const HOST_PATH = '/__stream-origin-probe-host';
-  hostServer = await serve(0, (req, res) => {
+  hostServer = await serve(HOST_PORT, (req, res) => {
     const url = new URL(req.url, 'http://x');
     res.setHeader('Access-Control-Allow-Origin', '*');
     if (url.pathname === HOST_PATH) { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.setHeader('Cache-Control', 'no-store'); res.end(hostHtml(originA, originB)); return; }
@@ -347,31 +350,35 @@ try {
     await page.screenshot({ clip: { x: iframeBox.x, y: iframeBox.y, width: WIDTH, height: HEIGHT } });
     return page.screenshot({ clip: { x: iframeBox.x, y: iframeBox.y, width: WIDTH, height: HEIGHT } });
   };
-  /** 把时间设到第 f 帧(流平面照这一帧给),等每条在场的流画出这一帧 */
+  /** 把时间设到第 f 帧,等每条在场的流画出这一帧。照父页的做法:先发流平面,再抑制这一帧贴流的那几张,再设时间 */
   const seekTo = async (f) => {
     const planes = planesAt(f);
     await rpc('setStreamPlanes', planes);
+    await rpc('setSuppressed', [...new Set(planes.flatMap((p) => p.clipIds))]);
     const got = await frameA().evaluate(async (frame, fps, want) => {
       const now = window.__pcRealNow ?? (() => performance.now());
       const wait = (ms) => new Promise((r) => (window.__pcRealSetTimeout ?? setTimeout)(r, ms));
       const t0 = now();
       await window.__pcStage.setTime(frame / fps + 1e-4);
       for (;;) {
-        const tracks = window.__pcStageDiag().streams.tracks;
-        if (tracks.length === want && tracks.every((t) => t.lastDrawn === frame)) return { ms: +(now() - t0).toFixed(1), drawn: tracks.map((t) => t.lastDrawn), errors: tracks.map((t) => t.errors) };
+        const d = window.__pcStageDiag();
+        const tracks = d.streams.tracks;
+        /*
+         * 流的帧是异步解出来的,暂停着没有下一拍。它画上去的那一刻舞台自己重算占位符(`StreamPlayer` 的 `onShowingChange`),
+         * 不用父页再发消息:这里**不补发**流平面,画出来的同时把「此刻显示着占位符的卡」一并带回去,下面断言它是空的。
+         * (以前不补发的话 110 帧里有 7 帧截到的是占位符。)
+         */
+        if (tracks.length === want && tracks.every((t) => t.lastDrawn === frame)) {
+          await wait(0);
+          return { ms: +(now() - t0).toFixed(1), drawn: tracks.map((t) => t.lastDrawn), errors: tracks.map((t) => t.errors), placeholders: window.__pcStageDiag().placeholders };
+        }
         if (now() - t0 > 8000) return { ms: null, drawn: tracks.map((t) => t.lastDrawn), errors: tracks.map((t) => t.lastError), tracks: tracks.length };
         await wait(2);
       }
     }, f, FPS, planes.length);
-    /*
-     * 流的帧是异步解出来的。它画上去以后,舞台要到下一次「父页来消息」才重算占位符(播放中每一拍都有;这里只设了一次时间,没有下一拍):
-     * 上一步留下的占位符(这一层刚才有 120 毫秒以上没有画面)会一直盖在已经画好的流上。照播放中父页每拍都发的那样再发一次流平面,
-     * 让舞台重算一次。(实测:不补这一下,110 帧里有 7 帧截到的是占位符;这是舞台现有的行为,和分段怎么分无关,记在报告里。)
-     */
-    await rpc('setStreamPlanes', planes);
     return { planes, got };
   };
-  const scrub = { frames: 0, wrong: [], notDrawn: [], retried: [], minMargin: Infinity, seekMs: [], same: { mean: 0, bad: 0 }, next: { mean: 0, bad: 0 } };
+  const scrub = { frames: 0, wrong: [], notDrawn: [], retried: [], placeholders: [], minMargin: Infinity, seekMs: [], same: { mean: 0, bad: 0 }, next: { mean: 0, bad: 0 } };
   const toPng = (img) => { const png = new PNG({ width: img.width, height: img.height }); for (let i = 0, j = 0; i < png.data.length; i += 4, j += 3) { png.data[i] = img.rgb[j]; png.data[i + 1] = img.rgb[j + 1]; png.data[i + 2] = img.rgb[j + 2]; png.data[i + 3] = 255; } return PNG.sync.write(png); };
   const scoreStage = (stage, f) => { const scores = [f - 1, f, f + 1].map((c) => [c, rgbDiff(stage, exportOf(c))]); return { scores, best: [...scores].sort((x, y) => x[1].mean - y[1].mean)[0][0] }; };
   // 拖动的顺序:先顺着走一遍太「连续播放」,这里打乱着跳(每一步都跨帧、常常跨分段、有往回跳)
@@ -384,6 +391,7 @@ try {
     if (planes.length !== expectPlanes) { scrub.wrong.push({ frame: f, planes: planes.length, expectPlanes }); continue; }
     if (got.ms === null) { scrub.notDrawn.push({ frame: f, ...got }); continue; }
     scrub.seekMs.push(got.ms);
+    if (got.placeholders?.length) scrub.placeholders.push({ frame: f, placeholders: got.placeholders });
     let stage = rgbOver(await shotStage());
     let { scores, best } = scoreStage(stage, f);
     if (best !== f || scores[1][1].mean >= 3) {
@@ -413,11 +421,15 @@ try {
   const n = Math.max(1, scrub.frames);
   out.scrub = { frames: scrub.frames, wrong: scrub.wrong.slice(0, 6), wrongCount: scrub.wrong.length, notDrawn: scrub.notDrawn.slice(0, 6), notDrawnCount: scrub.notDrawn.length,
     retried: scrub.retried, retriedCount: scrub.retried.length,
+    placeholdersLeft: scrub.placeholders.slice(0, 6), placeholdersLeftCount: scrub.placeholders.length,
+    seekMsMax: scrub.seekMs.length ? Math.max(...scrub.seekMs) : null,
     minMargin: Number.isFinite(scrub.minMargin) ? round2(scrub.minMargin) : null,
     seekMsMedian: scrub.seekMs.length ? [...scrub.seekMs].sort((a, b) => a - b)[scrub.seekMs.length >> 1] : null,
     对导出同一帧: { mean: round2(scrub.same.mean / n), bad: Math.round(scrub.same.bad / n) }, 对照_导出下一帧: { mean: round2(scrub.next.mean / n), bad: Math.round(scrub.next.bad / n) } };
   say('scrub', out.scrub);
   check(scrub.notDrawn.length === 0, '拖动:每一帧流平面都画出了这一帧', out.scrub.notDrawn);
+  check(scrub.placeholders.length === 0, '拖动:流的帧画出来的那一刻占位符已经自己撤了(父页没有补发任何消息)', out.scrub.placeholdersLeft);
+  check(scrub.retried.length === 0, '拖动:没有哪一帧要重截才对得上', scrub.retried.slice(0, 3));
   check(scrub.frames === LAST - FIRST + 1, `拖动:第 ${FIRST}～${LAST} 帧每一帧都比过了`, scrub.frames);
   check(scrub.wrong.length === 0, '拖动逐帧 —— 舞台上贴出来的画面最像的都是导出页的同一帧(不是前一帧、后一帧)', { wrong: scrub.wrong.length, first: scrub.wrong.slice(0, 3) });
   check(out.scrub.对导出同一帧.mean < 3, '拖动:舞台(贴流)与导出同一帧的平均差 < 3/255', out.scrub.对导出同一帧);
@@ -450,6 +462,7 @@ try {
     const forced = layers.map((l) => ({ clipIds: l.groupClipIds?.length ? l.groupClipIds : [l.clipId], key: l.key, ranges: l.ranges, originFrame: l.originFrame }));
     await rpc('setTime', 95 / FPS + 1e-4);
     await rpc('setStreamPlanes', forced);
+    await rpc('setSuppressed', heavy);
     await page.evaluate(() => { window.__frames = []; });
     await rpc('play', 95 / FPS + 1e-4);
     await sleep(900);

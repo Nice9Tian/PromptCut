@@ -1063,11 +1063,10 @@ export function Preview() {
   useEffect(() => () => window.clearTimeout(stallWatchRef.current), []);
 
   /*
-   * 快照 / 抑制的投递(C4、C5、A3c;排程在 `snapshotFeed.ts`)。
+   * 流平面 / 抑制 / 快照的投递(C4、C5、A3c;排程在 `snapshotFeed.ts`)。
    *
-   * 三处叫它:每拍收到 `frame` 之后(播放中)、`setTime` 发完之后(暂停 / 拖动),
-   * 以及快照字节 / 新的就绪层到货之后。33 ms 的节流在 `deliverSnapshots` 里,
-   * 所以这三处可以放心地多叫几次。
+   * 叫它的地方:每拍收到 `frame` 之后(播放中)、`setTime` 发完之后(暂停 / 拖动)、起播之前、舞台报 `settled` 之后,
+   * 以及快照字节 / 新的就绪层到货之后。33 ms 的节流在 `deliverSnapshots` 里,所以可以放心地多叫几次。
    */
   const dualRef = useRef(dual);
   dualRef.current = dual;
@@ -1079,23 +1078,18 @@ export function Preview() {
   const streamPlanesRef = useRef("[]");
   /** 上一次的流平面发给了哪一台舞台(在线页面:换了一台就得重发,新的那台手里没有清单和字节) */
   const streamPlanesStageRef = useRef<StageRpcClient | null>(null);
-  const pumpFeed = useCallback(async () => {
-    // 低内存档界限搜索正占着唯一那个舞台测量:不投快照、不发抑制(测完由 restore 重投)
-    if (!liveRef.current || lowMemoryMeasuring()) return;
-    const s = frontStage();
-    if (!s) return;
-    const head = { project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current };
-    /*
-     * 抑制只在播放中有(C5 / K5:拖动和暂停下不抑制、改贴快照)。
-     * **低内存档例外**(c10a 第 8 节「不追活渲」「缺小尺寸的重层显示占位」):暂停、拖动时重卡也抑制 ——
-     * 子树藏着、不活渲,有小尺寸就贴它,没有就由舞台显示占位符,不露出活渲的精确画面。
-     */
-    const want = head.playing || lowMemRef.current ? suppressedAt({ ...head, playing: true }).join("|") : "";
-    if (want !== suppressedRef.current) {
-      suppressedRef.current = want;
-      void s.setSuppressed(want ? want.split("|") : []).catch(() => {});
-    }
-    // R8:和抑制集合同一处发流平面(播放中贴流;暂停 / 拖动时清空,改贴快照)
+  /**
+   * 流平面与抑制集合各发一次(没变不发),**先发流平面、再发抑制**:重卡贴的是轨道流,播放、暂停、拖动都一样
+   * (mechanism/rendering.md「重管线:预渲染」)。舞台收到抑制时,这张卡的流还没画出第一帧就先不藏它原来的画面
+   * (`StageView` 的 `streamWaiting`),所以流平面要先到 —— 反过来的话那一层先空一下。
+   *
+   *   - 播放中:全部重卡抑制,这一帧有流的发流平面。
+   *   - 暂停 / 拖动:这一帧有流、还没追到精确活渲的重卡抑制、贴流;已经追上的不抑制,流平面照发,
+   *     舞台拿它把播放头下这一帧先解好(起播头一拍就有)。没有流的重卡不抑制,照现状贴快照。
+   *   - **低内存档例外**(c10a 第 8 节「不追活渲」「缺小尺寸的重层显示占位」):暂停、拖动时重卡一律抑制 ——
+   *     子树藏着、不活渲,有小尺寸就贴它,没有就由舞台显示占位符;暂停着不发流平面(`snapshotFeed` 那边按 `lowMemory` 回空)。
+   */
+  const syncPlanes = useCallback((s: StageRpcClient, head: { project: ReturnType<typeof getState>["project"]; t: number; playing: boolean; lowMemory: boolean }) => {
     const planes = streamPlanesAt(head);
     /*
      * 在线页面:流的清单与字节随流平面发给舞台(见握手那里的 `StreamPlaneSender`)。有流平面时把在线来源的 `streamRev` 也算进比较键 ——
@@ -1108,8 +1102,28 @@ export function Preview() {
       streamPlanesStageRef.current = s;
       void s.setStreamPlanes(planes).catch(() => {});
     }
-    await deliverSnapshots(s, "front", head);
+    const want = (!head.playing && head.lowMemory ? suppressedAt({ ...head, playing: true }) : suppressedAt(head)).join("|");
+    if (want !== suppressedRef.current) {
+      suppressedRef.current = want;
+      void s.setSuppressed(want ? want.split("|") : []).catch(() => {});
+    }
   }, []);
+  /** `at`:不按 store 此刻的播放头,按给定的时刻与播放状态投一次(起播之前:按起播的那一秒、当作在播) */
+  const pumpFeed = useCallback(async (at?: { t: number; playing: boolean }) => {
+    // 低内存档界限搜索正占着唯一那个舞台测量:不投快照、不发抑制(测完由 restore 重投)
+    if (!liveRef.current || lowMemoryMeasuring()) return;
+    const s = frontStage();
+    if (!s) return;
+    const head = { project: getState().project, t: at?.t ?? tRef.current, playing: at?.playing ?? playingRef.current, lowMemory: lowMemRef.current };
+    /*
+     * 暂停态第二路(后台整场景补跑后互换)正在跑:这一次不动抑制和流平面。互换那一步新的可见舞台已经是精确活渲,
+     * 而「整台都精确」(`markAllSettled`)要晚几个回包才记上 —— 这中间按「还没精确」重发的话,会把流平面盖回新的可见舞台上。
+     * 用户这时又拖了的话,`sendSetTime` 那一处照发(不经这里)。
+     */
+    const holdForSwap = !head.playing && !head.lowMemory && swapInFlight();
+    if (!holdForSwap) syncPlanes(s, head);
+    await deliverSnapshots(s, "front", head);
+  }, [syncPlanes]);
   const pumpRef = useRef(pumpFeed);
   pumpRef.current = pumpFeed;
 
@@ -1584,6 +1598,8 @@ export function Preview() {
     if (!live || !stageReady) return;
     markBaselineReset("front");
     suppressedRef.current = "";
+    // 暂停着也发流平面了:换了一台舞台,这一份记录同样从零开始(新的那台手里没有)
+    streamPlanesRef.current = "[]";
     /*
      * 在线页面:预渲染小尺寸常常在舞台握手之前就取到了(取到时 `frontStage()` 还是空,那一次投递落空)。
      * 暂停着的页面之后没有别的事件会再投,重卡就一直是占位 —— 舞台一握手就投一次(c10a-demo-probe 实测)。
@@ -1617,8 +1633,9 @@ export function Preview() {
      * 现在 `swapAndDress` 在互换之后补推一次 `syncProject`,按它真正持有的那份算增量。
      */
     swapStageClients({ client: nextFront, caps: hostCapsRef.current[nextId] }, { client: nextBack, caps: hostCapsRef.current[cur] });
-    // 新 front 的抑制集合从零开始记
+    // 新 front 的抑制集合、流平面都从零开始记(暂停态互换时旧 front 挂着流平面,新 front 没有)
     suppressedRef.current = "";
+    streamPlanesRef.current = "[]";
     return { front: nextFront, back: nextBack };
   }, []);
   /* 退回单舞台(握手失败、改判低内存档)时,可见舞台回到 A(B 已经卸掉) */
@@ -1661,6 +1678,8 @@ export function Preview() {
       mediaStallCount: stallCountRef.current,
       mediaGapMaxMs: gapMaxRef.current,
       suppressed: suppressedRef.current ? suppressedRef.current.split("|") : [],
+      // 上一次发给可见舞台的流平面(暂停 / 拖动时也有)
+      streamPlanes: streamPlanesRef.current,
       pendingDemote: [...pendingDemotes()],
       demoted: [...demotedClips()],
       swapInFlight: swapInFlight(),
@@ -1748,12 +1767,26 @@ export function Preview() {
         actions.pause();
         actions.seek(e.sec);
         break;
-      case "settled":
-        // 低内存档:只认这一次停下的那一秒(迟到的、上一次停下画好的不算 —— 舞台在新的跳转里已经把它们放回抑制)
-        if (lowMemRef.current && Math.abs(e.sec - tRef.current) > 1e-6) break;
+      case "settled": {
+        /*
+         * 舞台追上之后自己把这几张卡的抑制撤了(和露出活组件同一次提交,`StageView` 的 `releaseSettled`):
+         * 父页记的「上次发的抑制集合」不再可信,下一次照现状重发。互换转正的那一条(`clipIds` 为空)不走:
+         * 那边由 `swapRoles` 清记录、`markAllSettled` 记整台精确。
+         */
+        const named = e.clipIds.length > 0;
+        if (named) suppressedRef.current = "\u0000";
+        // 只认这一次停下的那一秒:迟到的(用户又拖走了,舞台在新的跳转里已经把它们放回抑制)不算精确。
+        // 贴流的卡按 store 此刻的播放头比(`tRef` 要等下一次渲染才更新,刚暂停的那一下会慢一步);低内存档照旧
+        const stale = lowMemRef.current ? Math.abs(e.sec - tRef.current) > 1e-6 : named && Math.abs(e.sec - getState().t) > 1e-6;
+        if (stale) {
+          if (named) void pumpRef.current();
+          break;
+        }
         // K5:暂停态活渲就绪 —— 把这几张卡从投递基线里删掉(A3c),平面舞台自己摘了
         noteSettled("front", e.clipIds);
+        if (named) void pumpRef.current();
         break;
+      }
       case "demote":
         // K6:这张卡降级,父页整条 PUT { ...旧记录, capped: true, demoted: true }
         void onStageDemote(e.clipId);
@@ -1897,6 +1930,11 @@ export function Preview() {
        */
       const feed = liveRef.current ? pickForSetTime({ project: getState().project, t: sec, playing: false, lowMemory: lowMemRef.current })
         : { snapshots: {} as Record<string, string | null>, awaiting: [] as string[] };
+      /*
+       * 这一刻贴流的重卡:它们的流平面和抑制要**先于**这一次 `setTime` 到舞台 —— 舞台在 `setTime` 里就按新时刻取流的那一帧,
+       * 没推到位的活组件一拍都不露。(`pickForSetTime` 刚把上一次停下的「已精确」作废,所以排在它后面。)
+       */
+      if (liveRef.current) syncPlanes(s, { project: getState().project, t: sec, playing: false, lowMemory: lowMemRef.current });
       // 低内存档的停下追一帧另走 `settleLowMemory`(下面),舞台的 K5 第一路不起
       const { settle: _settle, ...stageOpts } = opts;
       setTimeEpochRef.current++;
@@ -1919,14 +1957,15 @@ export function Preview() {
      * K5 第二路:只要这一刻有一张判重卡是 `vtOk = false`,就让后台舞台整场景补跑、
      * 补完互换成精确活渲。`vtOk` 的那些已经在可见舞台里自己追了(K5 第一路,舞台侧)。
      */
-    if (dualRef.current && opts.settle && !lowMemRef.current) void runSettleSwap(sec).catch(() => { /* 后台舞台正在换:下一次 setTime 会重来 */ });
+    // 互换完了再投一次:新的可见舞台手里没有流平面,把播放头下这一帧先解好(互换期间 `pumpFeed` 不动流平面)
+    if (dualRef.current && opts.settle && !lowMemRef.current) void runSettleSwap(sec).then((swapped) => { if (swapped) void pumpRef.current(); }, () => { /* 后台舞台正在换:下一次 setTime 会重来 */ });
     /*
      * 低内存档停下追当前一帧(c10a 契约第 17 节,取代原来的「不追活渲」):暂停、点击或拖动松开、播放到头的这一次,
      * 舞台在单舞台里把当前这一帧的所有卡活渲一次;画好之前照兜底顺序显示,画好的层替换上去,
      * 到时限(`LOW_MEMORY_SETTLE_MS`)还没画好的维持占位符,直到下一次停下。
      */
     if (liveRef.current && opts.settle && lowMemRef.current) void settleLowMemoryAt(s, sec);
-  }, [stage, refreshRects]);
+  }, [stage, refreshRects, syncPlanes]);
   /** 低内存档停下追一帧的代数(又停了一次 / 又动了:旧的结果不记)与上一次的结果(诊断) */
   const lowMemSettleGenRef = useRef(0);
   const lowMemSettleRef = useRef<(LowMemorySettleResult & { at: number }) | null>(null);
@@ -2043,6 +2082,12 @@ export function Preview() {
           const from = playStartOf();
           // 这一轮播放的起点:起播那一刻已经挂着的卡算「从中间开始」,之后逐拍挂上的算自然进场(播放态互换只给前者)
           notePlayRunStart(from);
+          /*
+           * 起播之前先把这一秒的流平面、抑制、快照摆好(以前等第一拍的 `frame` 才发:头一拍重卡是活渲的,又慢又会和流接不上)。
+           * 暂停着舞台已经把播放头下这一帧先解好了,这里一抑制,头一拍就是流的画面;流还没画出来的,舞台先不藏它原来的画面。
+           * 不等回包:几条消息和下面的 `play` 按发出的先后到。
+           */
+          void pumpRef.current({ t: from, playing: true });
           const reply = await s.play(from);
           if (!alive) return;
           // 首拍的到达间隔以 `play()` 回包时刻为起点(K4)
