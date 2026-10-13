@@ -79,11 +79,15 @@ const realNow = (): number => {
   const hatch = (globalThis as { __pcRealNow?: () => number }).__pcRealNow;
   return typeof hatch === "function" ? hatch() : Date.now();
 };
-/** 真定时器:暂停着舞台的虚拟时钟不走,虚拟定时器永远不响 */
+/**
+ * 真定时器:暂停着舞台的虚拟时钟不走,虚拟定时器永远不响。没有口子的地方(Node 里的单测)用普通定时器,并且不让它拖住进程:
+ * 停在稀疏段上的那个刷新定时器是自己接着排的,流不关它就一直在,单测文件会退不出去。
+ */
 const realTimeout = (fn: () => void, ms: number): void => {
   const hatch = (globalThis as { __pcRealSetTimeout?: (cb: () => void, ms?: number) => unknown }).__pcRealSetTimeout;
-  if (typeof hatch === "function") hatch(fn, ms);
-  else setTimeout(fn, ms);
+  if (typeof hatch === "function") { hatch(fn, ms); return; }
+  const timer = setTimeout(fn, ms) as unknown as { unref?: () => void };
+  if (typeof timer?.unref === "function") timer.unref();
 };
 /** 再拿一份这一帧的引用(和原来那份指同一块解码输出;两份都关了才放回解码器)。单测里的假帧没有 `clone` */
 const cloneFrame = (frame: VideoFrame): VideoFrame | null => {
