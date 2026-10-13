@@ -24,7 +24,7 @@ export const CONVERSATION_STORE_DEFAULTS = Object.freeze({
   degradeBytes: 8 * 1024 * 1024,
   /** 再到这么大这个对话不能再发消息 */
   capBytes: 12 * 1024 * 1024,
-  /** 每个主人每个项目最多这么多个对话,超了删最久没动且不在跑的 */
+  /** 每个主人每个项目最多这么多个对话,满了不让新建、也不自动删历史(2026-10-08 用户定);要新建先由主人自己删旧的 */
   maxPerOwner: 50,
   /** 内存里最多留这么多个没人看、不在跑的对话(别的用到时再从盘上读) */
   maxLoadedIdle: 32,
@@ -164,18 +164,10 @@ export function createConversationStore({ dataDir = null, now = () => Date.now()
     }
   }
 
-  /** 这个主人在这个项目里对话太多时,删最久没动且不在跑的 */
-  function evictOld(projectId, ownerKey) {
-    const metas = listMetas(projectId, ownerKey);
-    if (metas.length < limits.maxPerOwner) return;
-    const victims = metas
-      .filter((m) => m.state !== 'running' && !loaded.get(keyOf(projectId, ownerKey, m.id))?.run)
-      .sort((a, b) => (a.updatedAt ?? 0) - (b.updatedAt ?? 0))
-      .slice(0, metas.length - limits.maxPerOwner + 1);
-    for (const m of victims) {
-      const c = get(projectId, ownerKey, m.id);
-      if (c) remove(c);
-    }
+  /** 满额:不删任何对话,新建的人拿到带 `code: 'conversation-limit'` 的错误(服务层译成 409) */
+  function assertRoomForNew(projectId, ownerKey) {
+    if (listMetas(projectId, ownerKey).length < limits.maxPerOwner) return;
+    throw Object.assign(new Error('conversation-limit'), { code: 'conversation-limit' });
   }
 
   function listMetas(projectId, ownerKey) {
@@ -213,7 +205,7 @@ export function createConversationStore({ dataDir = null, now = () => Date.now()
     if (meta) {
       ({ entries, bytes } = readEvents(path.join(dir, 'events.jsonl')));
     } else {
-      evictOld(projectId, ownerKey);
+      assertRoomForNew(projectId, ownerKey);
       meta = { v: 1, id, title: '', state: 'idle', reason: null, message: null, lastSeq: 0, runId: null, startedAt: null, endedAt: null, startedOn, createdAt: now(), updatedAt: now() };
     }
     conv = {

@@ -442,6 +442,8 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
             await deliver(control).catch(error => onDiagnostic({ code: error.code ?? 'run-control-pending', controlId: control.controlId }));
         await runAuthority.reconcileScopeClosures();
       }
+      // 删到一半的对话：任务已结清就由这里收尾，不等任何人回来点(用户 2026-10-13 定「不给取消」，不能永久卡在「正在删除」)
+      try { conversations.completePendingDeletions(); } catch (error) { onDiagnostic({ code: error?.code ?? 'conversation-delete-complete-pending' }); }
       const state = ledger.read(), rows = [];
       for (const [projectId, group] of Object.entries(state.conversationsV2 ?? {})) {
         if (state.projects[projectId]?.status !== 'active' || state.projects[projectId].hosted?.agent !== true) continue;

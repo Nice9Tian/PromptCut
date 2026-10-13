@@ -109,7 +109,7 @@ export const V18_ITEMS = [
 
   /* ============================== Agent 对话与撤销(组 conv)============================== */
   T('V18-conv-controls', 'Agent 共有/私有、发送者署名、切换、停任务权限、创建者操作被拒、旧授权撤销不误伤;50 个上限与并发创建', ['2.1-3', 'RS18-chat'],
-    ['server/test/accept-018-conv-controls.test.mjs'], { account: true, known: 'RS18-chat 的删除子断言要等 claude/v18-chats 合入(见 V18-chats-wait)' }),
+    ['server/test/accept-018-conv-controls.test.mjs'], { account: true, known: 'RS18-chat 的删除子断言在 V18-chats(云端对话删除的测试)' }),
   T('V18-conv-readexception', '已读消息撤回例外:改密选退出、被踢、已读/未读/伪造已读、重启后;设备退出选「否」', ['2.1-4', '2.1-5'],
     ['server/test/accept-018-conv-readexception.test.mjs'], { account: true }),
   T('V18-conv-endtoend', '账号模式端到端(改文案、挪片段、调卡片参数、署名、两成员互不串、过期写入被拒)与页面背后的接口(发消息、流式、工具过程、重开、停止)', ['2.3-5', '2.3-6'],
@@ -202,11 +202,12 @@ export const V18_ITEMS = [
     '在最终提交加节点(8 核 16 GB)上重跑 RS18 各组并记数;探针只有 6 次样本,算不出分位数;RS-common 在最终提交上没跑出结果之前不计通过'),
   MANUAL('V18-local-first', '本地取帧优先:本地成功、授权/能力/可用性不满足、全部离线、执行中离线、取消、版本切换与迟到结果、播放头不变、云端兜底且单活跃项目', ['RS18-local', 'RS-common'], 'wait',
     '代码没做(块十,等渲染重构),main 上 git grep -nE "本地取帧|本地优先|localFirst|local-first|preferLocal" -- server src 无命中,没有任何测试;合入后要补:选择链的单测加一支要真浏览器的探针(播放头不动)', { waitFor: '块十 本地取帧优先(等渲染重构)' }),
-  T('V18-chats-wait', '50 个对话的删除:删后重建/重开、删后立刻让出名额、谁能删、有任务在跑先停再删、满额提示、被删通知', ['RS18-chat'],
-    ['server/test/conversation-delete.test.mjs', 'server/test/conversation-delete-http.test.mjs', 'server/test/conversation-delete-running.test.mjs', 'src/ai/cloud/chat-delete.test.mjs'],
-    { account: true, where: 'wait', waitFor: 'claude/v18-chats', known: '分支还有一支浏览器探针 conversation-delete-probe(见 V18-chats-probe-wait)' }),
-  PR('V18-chats-probe-wait', '云端对话删除与 50 个上限的浏览器探针(三个账号、40 项检查)', ['RS18-chat'], 'conversation-delete-probe', ['--dist', DIST, '--site-root', `${VISU}/site`, '--out', '{item}'],
-    { account: true, where: 'wait', waitFor: 'claude/v18-chats', needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 30, covers: [], known: '命令照分支报告抄;分支说夹具放宽了探针端口段,合入后核一下它占哪些端口再接进 --v18-port-base' }),
+  T('V18-chats', '50 个对话的删除与清干净:删后重建/重开、删后立刻让出名额、谁能删、有任务在跑先强制结束再删、满额提示、被删通知、账本与 Agent 一侧各处查不到文字、移出成员时清私有对话、对话数实时更新的轮询规矩', ['RS18-chat'],
+    ['server/test/conversation-delete.test.mjs', 'server/test/conversation-delete-http.test.mjs', 'server/test/conversation-delete-running.test.mjs', 'server/test/conversation-delete-agent-side.test.mjs',
+      'src/ai/cloud/chat-delete.test.mjs', 'src/ai/cloud/poll.test.mjs'],
+    { account: true }),
+  PR('V18-chats-probe', '云端对话删除与 50 个上限的浏览器探针(三个账号加同一账号的第二页、55 项检查:满额、删除、气泡与补弹、实时对话数、移出成员时清私有对话)', ['RS18-chat'], 'conversation-delete-probe', ['--dist', DIST, '--site-root', `${VISU}/site`, '--base-port', port(0), '--out', '{item}'],
+    { account: true, needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 30, must: ['"completed":true', '"checks":55', '"failed":0'], known: '探针自己连续占 10 个端口(--base-port 起)' }),
   {
     id: 'V18-doc-contracts', name: '设计与契约的八项章节都在(身份、实例、全局状态、认证、G、通道、对话记录、资源上限)', category: 'V18', level: 'local', taskRef: `${MAP} 2.3-1`, rows: ['2.3-1'], where: 'local', tasks: [],
     cmd: [node, 'scripts/acceptance/v18-doc-checks.mjs', 'contracts'], requires: ['scripts/acceptance/v18-doc-checks.mjs', 'docs/plan/cloud-agent-contract.md'], pass: { exit: 0, must: ['全部章节都在'] },

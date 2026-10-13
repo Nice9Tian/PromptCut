@@ -376,6 +376,8 @@ export async function startHostedCombo({
         attestedServices: { render: 'service-identity-only: holds no login-bound connection or stream in this version',
           ...(account.agent ? {} : { agent: 'not-deployed: no agent service is registered with this document authority' }) },
         pollMs: account.logoutConfirmPollMs ?? 1000,
+        ...(account.logoutConfirmTimeoutMs === undefined ? {} : { timeoutMs: account.logoutConfirmTimeoutMs }),
+        reportTimeout: (eventId, report) => client.logoutReport(eventId, report), docInstanceId: accountRuntime.docInstanceId,
         onDiagnostic: event => say('logout.diagnostic', event) });
       if (account.agent && assetStatus) runPrivateClient = createRunAssetPrivateClient(assetStatus);
       if (account.order) docAssembly = createDocAssembly({ dataDir: paths.docservice,

@@ -18,15 +18,20 @@ import { accountError } from './client.mjs';
 import { canonicalJson, digestOf } from './ledger.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
+/** 一次退出等各服务确认的时限，和账号服务那边（VisuHive 的 account/events.mjs）是同一个数。
+ * 到时只做两件事：把当时的情况记进账本并写一条日志、报给账号服务当调试信息。退出仍然接着办（迟到的确认到齐了照样办完），
+ * 也绝不因为到时把已经作废的登录放回来。网页上显示失败是账号服务按它自己的钟判的，文档服务整个不在了也照样会显示。 */
+export const LOGOUT_CONFIRM_TIMEOUT_MS = 120_000;
 
 export function createLogoutConfirmer({ ledger, authority, transportEvidence, operations = () => null,
-  completeAgent = null, attestedServices = {}, now = Date.now, pollMs = 1000, onDiagnostic = () => {} } = {}) {
+  completeAgent = null, attestedServices = {}, now = Date.now, pollMs = 1000, onDiagnostic = () => {},
+  timeoutMs = LOGOUT_CONFIRM_TIMEOUT_MS, reportTimeout = null, docInstanceId = 'doc' } = {}) {
   if (![ledger?.read, ledger?.transaction, authority?.flushAccountAcknowledgements, authority?.revocationStatus,
     authority?.ackAccessEvent, authority?.completeLogoutBarrier, transportEvidence, operations].every(value => typeof value === 'function') ||
       Object.entries(attestedServices).some(([service, reason]) => !['agent', 'render'].includes(service) || typeof reason !== 'string' || !reason))
     fail(503, 'logout-confirmer-configuration');
   let timer = null, running = null, again = false, stopped = false;
-  const diagnostics = new Map();
+  const diagnostics = new Map(), agentCodes = new Map();
   const note = (eventId, code) => {
     // 同一条事件的同一个原因只报一次，原因变了再报；办完就清掉。
     if (diagnostics.get(eventId) === code) return;
@@ -88,7 +93,10 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
   }
   async function pass() {
     if (!barriers().length) return { pending: [] };
-    try { await completeAgent?.(); } catch (error) { onDiagnostic({ code: error.code ?? 'logout-agent-pending' }); }
+    try {
+      const agent = await completeAgent?.(); agentCodes.clear();
+      for (const row of agent?.pending ?? []) agentCodes.set(row.eventId, row.code);
+    } catch (error) { onDiagnostic({ code: error.code ?? 'logout-agent-pending' }); }
     for (const barrier of barriers()) attest(barrier, authority.revocationStatus(barrier.eventId));
     await authority.flushAccountAcknowledgements();
     for (const barrier of barriers()) {
@@ -96,7 +104,34 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
       if (status.pendingServices.length) note(barrier.eventId, `logout-pending:${status.pendingServices.join(',')}`);
       else await seal(barrier);
     }
+    for (const barrier of barriers()) await timeout(barrier);
     return { pending: barriers().map(barrier => barrier.eventId) };
+  }
+  /** 等过了时限的退出：记一次、报一次。调试信息里只有事件号、服务名、原因码、时长和文档服务实例号，没有登录号、令牌、票据。 */
+  async function timeout(barrier) {
+    const state = ledger.read(), event = state.accessEvents.find(row => row.eventId === barrier.accessEventId);
+    const since = barrier.timeout?.since ?? event?.createdAt;
+    if (!Number.isSafeInteger(since)) return;
+    let record = barrier.timeout;
+    if (!record) {
+      const waitedMs = now() - since;
+      if (waitedMs < timeoutMs) return;
+      const status = authority.revocationStatus(barrier.eventId), all = ['doc', 'asset', 'agent', 'render'];
+      const reasons = [diagnostics.get(barrier.eventId), agentCodes.has(barrier.accessEventId) ? `agent:${agentCodes.get(barrier.accessEventId)}` : null]
+        .filter(code => typeof code === 'string' && /^[A-Za-z0-9_.:,-]{1,96}$/.test(code));
+      record = authority.recordLogoutTimeout(barrier.eventId, { since, at: now(), waitedMs, timeoutMs,
+        confirmed: all.filter(service => !status.pendingServices.includes(service)), pending: status.pendingServices, reasons }).timeout;
+      onDiagnostic({ code: 'logout-timeout', eventId: barrier.eventId, waitedMs, timeoutMs, confirmed: record.confirmed, pending: record.pending, reasons });
+    }
+    if (record.reported || typeof reportTimeout !== 'function') return;
+    try {
+      await reportTimeout(barrier.eventId, { reportId: `logout-timeout:${barrier.accountEventSeq}`, confirmed: record.confirmed, pending: record.pending,
+        reasons: record.reasons, waitedMs: record.waitedMs, docInstanceId });
+      authority.recordLogoutTimeout(barrier.eventId, { reported: true });
+    } catch (error) {
+      // 账号服务还没有这个口（旧版本）或者暂时连不上：下一轮再报；它自己的钟照样会让网页显示失败。
+      note(`${barrier.eventId}:report`, `logout-timeout-report-${error.code ?? 'failed'}`);
+    }
   }
   /** 同一时间只跑一遍；跑的时候又被叫到，就在这一遍结束后再跑一遍。 */
   function tick() {
@@ -116,6 +151,7 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
     status(eventId) {
       const value = authority.revocationStatus(eventId);
       return { eventId, pendingServices: value.pendingServices, docConfirmed: value.docConfirmed, logoutComplete: value.logoutComplete,
+        timeout: value.timeout ? structuredClone(value.timeout) : null,
         services: Object.fromEntries(Object.entries(value.serviceAcks).map(([service, ack]) => [service, ack ? {
           receiptId: ack.receiptId, stoppedRuns: ack.stoppedRuns, attested: ack.attestedBy === 'doc' } : null])) };
     },

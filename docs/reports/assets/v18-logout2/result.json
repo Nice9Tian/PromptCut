@@ -1,0 +1,92 @@
+{
+  "ok": true,
+  "timeoutMs": 8000,
+  "checks": [
+    {
+      "name": "account-backend-has-logout-timeout",
+      "ok": true
+    },
+    {
+      "name": "question-text",
+      "ok": true,
+      "detail": "密码已修改。要退出已登录的其它设备吗？本网站保持登录。"
+    },
+    {
+      "name": "button-texts",
+      "ok": true,
+      "detail": [
+        "不退出",
+        "退出"
+      ]
+    },
+    {
+      "name": "exit-choice-accepted",
+      "ok": true
+    },
+    {
+      "name": "after-choice-text-is-exiting-or-exited",
+      "ok": true,
+      "detail": "正在退出已登录设备"
+    },
+    {
+      "name": "no-debug-block-when-exited",
+      "ok": true
+    },
+    {
+      "name": "timeout-exit-choice-accepted",
+      "ok": true
+    },
+    {
+      "name": "before-timeout-shows-exiting",
+      "ok": true,
+      "detail": "正在退出已登录设备"
+    },
+    {
+      "name": "after-timeout-shows-failure",
+      "ok": true,
+      "detail": {
+        "text": "退出没有确认完成。旧设备已经不能再使用；需要帮助时，请把下面的信息发给我们。",
+        "kind": "msg err"
+      }
+    },
+    {
+      "name": "never-shows-exited-while-unconfirmed",
+      "ok": true,
+      "detail": {
+        "sawExitedWhileUnconfirmed": false,
+        "sawOther": null
+      }
+    },
+    {
+      "name": "failure-not-before-timeout",
+      "ok": true,
+      "detail": {
+        "failedAfterMs": 8300,
+        "TIMEOUT_MS": 8000
+      }
+    },
+    {
+      "name": "debug-block-content",
+      "ok": true,
+      "detail": "event: pw_3b73d2e2f7d66e18823eccb9\nreason: confirmation-timeout\nwaited: 8s (limit 8s)\nconfirmed: -\npending: doc, asset, agent, render\ndoc confirmed: agent, render\ndoc pending: doc, asset\ndoc reasons: logout-pending:doc,asset"
+    },
+    {
+      "name": "debug-block-has-no-secrets",
+      "ok": true
+    },
+    {
+      "name": "late-confirmation-shows-exited",
+      "ok": true,
+      "detail": "设备已退出"
+    }
+  ],
+  "shots": [
+    "01-question.png",
+    "02-exiting-or-exited-right-after-choice.png",
+    "03-exited.png",
+    "04-before-timeout-exiting.png",
+    "05-after-timeout-failed.png",
+    "06-late-confirmation-exited.png"
+  ],
+  "error": null
+}

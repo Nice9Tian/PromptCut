@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AccountFailure, type AccountMembersSnapshot, type AccountMemberOperation } from './client';
 import { accountProjectMembers, accountMemberAdmin, returnToAccountProjectHome, pushToast, useSync } from '../editor/sync/syncManager';
+import { useCloudAgent, useCloudApi } from '../ai/cloud/useCloud';
+import { CLOUD_CHAT_TEXT } from '../ai/cloud/chatTexts';
+import { CloudError } from '../ai/cloud/cloudApi';
 
 /** Account membership is independent of device names and the old LAN passwords. */
 export function AccountMembersPanel() {
@@ -11,6 +14,10 @@ export function AccountMembersPanel() {
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState<{ operation: AccountMemberOperation; name: string; retry: boolean } | null>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
+  // 踢出时可以选「同时清除他的私有对话」(2026-10-13 用户定，缺省不选：他的共有对话一律保留)；踢出成功后再清，清不完可重试
+  const cloud = useCloudAgent(), cloudApi = useCloudApi(cloud.url, cloud.projectId);
+  const [clearPrivate, setClearPrivate] = useState(false);
+  const [clearing, setClearing] = useState<{ accountId: string; name: string; requestId: string; stage: 'working' | 'pending' | 'error'; text: string } | null>(null);
   const button = useRef<HTMLButtonElement>(null), pop = useRef<HTMLDivElement>(null), generation = useRef(0);
   const refresh = useCallback(async () => {
     const own = generation.current;
@@ -47,10 +54,22 @@ export function AccountMembersPanel() {
       if (!latest.self.creator) throw new AccountFailure(403, 'creator-required');
       const target = (op === 'kick' ? latest.members : latest.bans)?.find(row => row.accountId === accountId);
       if (!target || accountId === latest.creatorAccountId) throw new AccountFailure(409, 'access-revision-mismatch');
+      setClearPrivate(false);
       setAttempt({ operation: { op, accountId, expectedAccessRevision: latest.accessRevision, requestId: crypto.randomUUID() },
         name: target.accountName ?? target.accountId, retry: false });
     } catch (e) { if (generation.current === own) setError(e instanceof Error ? e.message : '暂时无法确认成员状态。'); }
     finally { if (generation.current === own) setBusy(false); }
+  };
+  const runClear = async (accountId: string, name: string, requestId: string) => {
+    setClearing({ accountId, name, requestId, stage: 'working', text: CLOUD_CHAT_TEXT.clearPrivateWorking });
+    try {
+      const out = await cloudApi.clearMemberPrivate(accountId, requestId);
+      if (out.pending.length) { setClearing({ accountId, name, requestId, stage: 'pending', text: CLOUD_CHAT_TEXT.clearPrivatePending(out.pending.length) }); return; }
+      setClearing(null);
+      pushToast(CLOUD_CHAT_TEXT.clearPrivateDone(out.removed.length), 'info');
+    } catch (e) {
+      setClearing({ accountId, name, requestId, stage: 'error', text: e instanceof CloudError ? e.message : '暂时无法清除，请重试。' });
+    }
   };
   const submit = async () => {
     if (!attempt) return;
@@ -59,6 +78,7 @@ export function AccountMembersPanel() {
       await accountMemberAdmin(exact.operation);
       if (generation.current !== own) return;
       setAttempt(null);
+      if (exact.operation.op === 'kick' && clearPrivate) void runClear(exact.operation.accountId, exact.name, crypto.randomUUID());
       pushToast(exact.operation.op === 'kick' ? '账号已禁入，正在确认相关服务关闭。' : '已解除账号禁入；该账号可按当前项目权限重新加入。', 'info', Infinity);
       await refresh();
     } catch (e) {
@@ -111,8 +131,14 @@ export function AccountMembersPanel() {
       {attempt && <div className="pc-account-member-confirm" data-pc="account-member-confirm">
         <p>{attempt.operation.op === 'kick' ? `踢出并禁止 ${attempt.name} 再次加入这个项目？该账号的所有设备都会失去项目访问权限。` : `解除 ${attempt.name} 的账号禁入？`}</p>
         <small className="pc-account-member-id">{attempt.operation.accountId}</small>
+        {attempt.operation.op === 'kick' && <label className="pc-account-member-clear" data-pc="account-member-clear-option"><input type="checkbox" checked={clearPrivate} disabled={busy}
+          onChange={event => setClearPrivate(event.target.checked)} /> {CLOUD_CHAT_TEXT.clearPrivateOption}</label>}
         <button type="button" disabled={busy} data-pc="account-member-submit" onClick={() => { void submit(); }}>{busy ? '正在提交…' : attempt.retry ? '重试同一操作' : '确认'}</button>
         <button type="button" disabled={busy} onClick={() => setAttempt(null)}>取消</button>
+      </div>}
+      {clearing && <div className="pc-account-member-confirm" data-pc="account-member-clear-status" data-stage={clearing.stage} role="status">
+        <p>{clearing.name}：{clearing.text}</p>
+        {clearing.stage !== 'working' && <button type="button" data-pc="account-member-clear-retry" onClick={() => { void runClear(clearing.accountId, clearing.name, clearing.requestId); }}>{CLOUD_CHAT_TEXT.clearPrivateRetry}</button>}
       </div>}
       <div className="pc-members-sep" />
       <button type="button" className="pc-members-admin-item" data-pc="account-project-home" disabled={busy} onClick={() => {
