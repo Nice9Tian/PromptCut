@@ -8,7 +8,7 @@
  *   CA-RUN-03     两台设备(同一个主人)同时看同一个对话:内容相同;另一台设备停,两边都收到 end;
  *   CA-RUN-04     主人键:同用户名换设备读得到同一份对话;创建者与同名成员互相读不到;不同用户名读不到;
  *   CA-RUN-05     每种收尾各自的 meta.json 状态、原因与事件记录里的那句话;
- *   CA-CHAT-03    对话的列、取、改标题、删;记录降级与封顶;对话数上限的淘汰不动在跑的;
+ *   CA-CHAT-03    对话的列、取、改标题、删;记录降级与封顶;对话数上限只拦新建、不自动删历史(CA-CHAT-04 是服务层的同一条);
  *   CA-CRASH-01   一轮进行中进程没了再起:标 interrupted、末尾有说明与 end;不自动续跑;接着说能续上,历史里没有悬空的工具调用;
  *   CA-GATE-01    每次模型请求前都过闸,每次请求后都有一行用量;
  *   CA-GATE-02    额度设成很小:超出后下一次模型请求不发,话里带已用与上限;设回不限后恢复;不重启;
@@ -490,6 +490,23 @@ test('CA-CHAT-03 记录降级与封顶;对话数上限只拦新建、不自动�
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test('CA-CHAT-04 旧的(非账号)托管路径:对话数满了新建被 409 conversation-limit 拒绝，原有对话一个不少、不淘汰；删一个以后能新建', { timeout: 120_000 }, async (t) => {
+  const kit = await startKit(t, { extra: { storeLimits: { maxPerOwner: 2 } } });
+  await kit.doc.seed(project('p-a', '甲'));
+  const svc = kit.service;
+  for (const id of ['l1', 'l2']) { await svc.send(A1, id, { model: 'mock-1', prompt: script([{ say: id }]) }); await kit.finished(A1, id); }
+  await assert.rejects(svc.send(A1, 'l3', { model: 'mock-1', prompt: script([{ say: '三' }]) }), { code: 'conversation-limit', status: 409 });
+  assert.deepEqual(svc.conversations(A1).map((c) => c.id).sort(), ['l1', 'l2'], '满额没有淘汰任何对话，被拒的没有留下半个');
+  // 已有的对话照常续写
+  await svc.send(A1, 'l1', { model: 'mock-1', prompt: script([{ say: '续' }]) }); await kit.finished(A1, 'l1');
+  // 同一个项目里另一个主人各算各的
+  await svc.send(BOB, 'b1', { model: 'mock-1', prompt: script([{ say: 'b' }]) }); await kit.finished(BOB, 'b1');
+  // 主人自己删一个以后，名额让出来
+  assert.equal(svc.remove(A1, 'l2'), true);
+  await svc.send(A1, 'l3', { model: 'mock-1', prompt: script([{ say: '三' }]) }); await kit.finished(A1, 'l3');
+  assert.deepEqual(svc.conversations(A1).map((c) => c.id).sort(), ['l1', 'l3']);
 });
 
 test('闸与用量接进一轮;进程没了再起', { timeout: 240_000 }, async (t) => {

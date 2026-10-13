@@ -41,7 +41,7 @@ export interface CloudSessionDeps {
    */
   pageId?: string;
   onPageRequest?: (ev: CloudEvent) => Promise<PageRequestAnswer | null> | PageRequestAnswer | null;
-  /** 正在看的对话被删了（别人删的，或自己在别处删的）：服务端发 `conversation.deleted` 就关流并调它，由界面退到一个新对话 */
+  /** 同 `setOnConversationDeleted`：创建时就给也行 */
   onConversationDeleted?: (conversationId: string) => void;
   store: ChatStore;
   /** 文字与思考的增量攒批的间隔(毫秒);0 = 来一条折一条 */
@@ -84,6 +84,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
   const pageId = deps.pageId && deps.onPageRequest && api.pageResult ? deps.pageId : undefined;
   /** 执行过的请求 id:同一条请求重复到达只执行一次 */
   const answered = new Set<string>();
+  /** 正在看的对话被删了（别人删的，或自己在别处删的）：服务端发 `conversation.deleted` 就关流并调它，由界面退到一个新对话 */
+  let onConversationDeleted: ((conversationId: string) => void) | null = deps.onConversationDeleted ?? null;
 
   /**
    * 事件流里来了一条 `page.request`:执行并交回。只在这条流还是当前对话的那一条时做(换了对话、关了页面就不做);
@@ -221,7 +223,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
               clearAccountReadState();
               problem = null;
               setConnection("idle");
-              deps.onConversationDeleted?.(id);
+              onConversationDeleted?.(id);
               return;
             }
             if (deps.accountMode && ev.type === "access.revoked") {
@@ -298,6 +300,9 @@ export function createCloudSession(deps: CloudSessionDeps) {
       publish();
       ensureLoop();
     },
+
+    /** 登记「正在看的对话被删了」的处理(界面退到新对话)。单独一个方法，免得改动创建会话那一处的接线 */
+    setOnConversationDeleted(fn: ((conversationId: string) => void) | null) { onConversationDeleted = fn; },
 
     /** 对话 id;没打开过是 null */
     get conversationId() { return conversationId; },
