@@ -122,7 +122,7 @@ export const V18_ITEMS = [
       account: true, needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 20, must: ['"passed":\\s*47', '"completed":\\s*true'],
     }),
   T('V18-cloud-chat-tests', '云端 AI 栏的页面逻辑与接口:对话控制、排队、读撤销、守卫与棘轮、真实任务进程的 SSE', ['2.3-5', '2.1-3'],
-    ['src/ai/cloud/cloud-chat.test.mjs', 'src/ai/cloud/account-conversation-controls.test.mjs', 'src/ai/cloud/account-queue.test.mjs', 'src/ai/cloud/account-read-revocation.test.mjs',
+    ['src/ai/cloud/cloud-chat.test.mjs', 'src/ai/cloud/account-conversation-controls.test.mjs', 'src/ai/cloud/account-queue.test.mjs', 'src/ai/cloud/account-read-revocation.test.mjs', 'src/ai/cloud/newchat-absent.test.mjs',
       'src/online/c10a-api-guard.test.mjs', 'src/online/onlinePrune.test.mjs', 'server/test/account-real-runner.test.mjs', 'server/test/account-real-runner-sse.test.mjs'], { account: true, timeoutMin: 30, known: 'account-real-runner 一族写死 6700 段端口;机器忙时偶发' }),
   T('V18-undo-tests', '云端 Agent 的改动能被撤销(账号项目里的署名与逆操作)', ['2.3-6'], ['server/test/c65b-agent.test.mjs', 'server/test/c65-undo.test.mjs', 'server/test/c65b-undo.test.mjs', 'server/test/c65b-creator.test.mjs']),
   PR('V18-real-runner-probe', '真实执行器的浏览器探针(两账号登录、新建、共享对话、工具过程可见)', ['2.3-5', '2.3-6'], 'account-real-runner-probe',
@@ -138,6 +138,8 @@ export const V18_ITEMS = [
     { account: true, needs: ['online-build'], prereq: ['G0-4'], optional: true, timeoutMin: 30, known: '夹具断言端口必须在 6620～6639;不在 0.7.18 的端口段里,本次没跑' }),
   PR('V18-queue-pages-probe', '对话消息排队位置的真浏览器探针(不是渲染看画面的队列)', ['2.3-5'], 'cloud-queue-user-pages-probe', ['--dist', DIST, '--site-root', `${VISU}/site`, '--out', '{item}'],
     { account: true, needs: ['online-build'], prereq: ['G0-4'], optional: true, timeoutMin: 30, known: '端口写死 6528～6531;不在 0.7.18 的端口段里,本次没跑' }),
+  PR('V18-newchat-probe', '新开的空对话是安静的(不一直重试事件流、没有断线提示);发第一条消息、刷新、切换、私有化、Agent 服务停掉', ['2.3-5'], 'newchat-events-probe', ['--dist', DIST, '--site-root', `${VISU}/site`, '--out', '{item}/o'],
+    { account: true, needs: ['online-build'], prereq: ['G0-4'], optional: true, timeoutMin: 20, known: '端口写死 28850～28861(不在 0.7.18 的端口段里),本次没跑;配套单测 src/ai/cloud/newchat-absent.test.mjs 在 V18-cloud-chat-tests 里' }),
   PR('V18-consent-probe', '首次使用云端 Agent 告知托管方可读(真浏览器)', ['2.3-5'], 'cloud-agent-consent-user-path-probe', ['--out', '{item}'],
     { optional: true, timeoutMin: 20, known: '端口写死 6650～6659;不在 0.7.18 的端口段里,本次没跑' }),
   PR('V18-member-controls-probe', '成员控制(创建者踢人、关 Agent 开关)的真浏览器探针', ['2.1-2'], 'project-member-controls-probe', ['--dist', DIST, '--site-root', `${VISU}/site`, '--out', '{item}'],
@@ -332,4 +334,25 @@ export const OLD_ITEM_ROWS = {
  * 在线构建的开始页现在只有账号登录,没有这个表单)。能改成账号入口的已改(S4-4);改不了的在这里写明,运行器把它们记成「不适用」。
  * id → 原因。验证记录见 docs/reports/AGENT-v18-runner-list.md「老项逐条判」。
  */
-export const STALE_OLD_ENTRY = {};
+const JOIN_FORM = '在线构建的开始页现在只有账号登录,探针进项目要等 [data-pc="join-form"](房间号加口令的加入表单)、等不到(2026-10-13 在 main 上用 0.7.18 的端口段实跑确认:日志里是等 join-form 超时或探针自己把它记成失败)。改成走账号入口要把项目的创建者也换成账号项目,不是只改进项目那一步';
+export const STALE_OLD_ENTRY = {
+  'P-c10-browser-a4': 'c10-browser-probe 的成员一半凭 #invite=<邀请码> 进在线页面(第 1512 行等 join-invite-project),开始页上已没有这个控件;创建者一半(桌面 dev server 本机建项目、层表)实跑能走完(318 秒后 step0.done),后面 A1～A5 全靠「创建者桌面节点把层产到同一个共享房间、成员页读」,账号项目只能由在线页面或 Rust 壳账号保管建,所以不是改进项目一步的事,要重写探针主干;它验的是渲染一带(在线普通档:长任务 0、首次打开在遮罩下测完、成本记录、层表与环境指纹、换帧占位、独立渲染主机认领),渲染重构合入后在账号模式下重搭。codex/018-browser-doc-read 修的是 main 里已不存在的强化版探针,不合',
+  'P-c10-browser-full': '同 P-c10-browser-a4(c10-browser-probe 的成员一半进不去)',
+  'P-c10-user-card': '同 P-c10-browser-a4(c10-browser-probe 的成员一半进不去)',
+  'P-online-user-cards': JOIN_FORM, 'P-c10-ui': JOIN_FORM, 'P-online-stage-watch': JOIN_FORM, 'P-online-stage-handshake': JOIN_FORM, 'P-online-nav-stress': JOIN_FORM,
+  'S1-5': JOIN_FORM + ';桌面一半(导出自动生成)能过,在线一半进不去', 'S2-1': JOIN_FORM, 'S2-2': JOIN_FORM, 'S2-3': JOIN_FORM, 'S2-4': JOIN_FORM, 'S2-5': JOIN_FORM,
+  'X-online-join': '这支探针就是测在线开始页的「加入别人的项目」表单(join-form、邀请码),开始页上已经没有(只读代码判定,没实跑;可选项)',
+  'X-c10a-demo-local': '走 join-form 加入本机替身的项目(c10a-demo-probe 里 7 处用到);只读代码判定,没实跑;可选项',
+  'S1-4': '声音预览探针的在线一半凭邀请码进在线页面(等 [data-pc="join-invite-project"]),开始页上已没有这个控件;2026-10-13 在 main 上实跑:62 条检查里桌面一半都过,唯一的失败是等 join-invite-project 超时(桌面一半的证据另由 S1-1～S1-3 与探针本身的桌面段覆盖,在线一半现在没人验)',
+  'S4-6': '界面版「关掉软件照常运转」探针的在线一半用 joinOnline(cloud-agent-ui-lib.mjs)等 join-form 进项目(第 233 行)。2026-10-13 在 main 上实跑:桌面发起那一半的检查能过(它仍然跑在已退役的口令式房间本机组合上),200 秒时限内没走到在线那一步,所以「必然失败」是读代码加这半段实跑得出的;账号入口下的同一件事(发任务后关掉软件照常运转)要搭账号模式的两个页面加关闭发起方,未做',
+};
+
+/**
+ * 老项补充说明(写进小结的「已知」):2026-10-13 在 0.7.18 的端口段里实跑过、结论不是「旧入口已废」的。
+ */
+export const OLD_ITEM_KNOWN = {
+  'P-online-stale-layer': '2026-10-13 在 main 上实跑:能进项目(不走 join-form),6 条断言不过(静置后 u 仍贴着旧层、改参数后…),原因没查,不是入口问题;属渲染一带',
+  'P-m7-node': '2026-10-13 在 main 上实跑:到 node.ready(页面作为渲染节点就绪)后 200 秒时限内没跑完,没判结论;不走 join-form',
+  'P-desktop-auto-node': '2026-10-13 在 main 上实跑:桌面页面测量测完后 200 秒时限内没跑完,没判结论',
+  'P-m7-browser': '没判结论(实跑时 200 秒时限内被我收掉)',
+};

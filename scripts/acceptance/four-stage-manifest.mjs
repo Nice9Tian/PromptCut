@@ -26,7 +26,7 @@
  */
 
 import '../lib/no-user-dirs.mjs'; // 清单里写着会起编辑器与导出的命令;按 no-user-dirs.test.mjs 的规矩,第一个 import 摘掉外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
-import { V18_ITEMS, G0_2_SKIPS, OLD_ITEM_ROWS, STALE_OLD_ENTRY, V18_EXCLUDED, V } from './v18-manifest.mjs';
+import { V18_ITEMS, G0_2_SKIPS, OLD_ITEM_ROWS, STALE_OLD_ENTRY, V18_EXCLUDED, V, OLD_ITEM_KNOWN } from './v18-manifest.mjs';
 import { V18_ROWS } from './v18-rows.mjs';
 import { whereOf } from './acceptance-lib.mjs';
 export { V18_ROWS as ROWS, G0_2_SKIPS };
@@ -811,6 +811,7 @@ const OLD_ITEMS = [
 export const ITEMS = [...OLD_ITEMS, ...V18_ITEMS].map((it) => {
   let out = it;
   if (OLD_ITEM_ROWS[it.id]) out = { ...out, rows: [...new Set([...(out.rows || []), ...OLD_ITEM_ROWS[it.id]])] };
+  if (OLD_ITEM_KNOWN[it.id]) out = { ...out, known: [out.known, OLD_ITEM_KNOWN[it.id]].filter(Boolean).join(';') };
   if (STALE_OLD_ENTRY[it.id]) {
     const { cmd, steps, parallel, needs, prereq, pass, timing, timingNote, timeoutMin, idleKillMin, retryOnIdle, requires, requiresText, env, ...rest } = out;
     out = { ...rest, notApplicable: `旧入口已废,不适用:${STALE_OLD_ENTRY[it.id]}`, was: { cmd, steps } };

@@ -463,7 +463,8 @@ export function listText(items) {
       if (it.category !== cat) { cat = it.category; lines.push('', `## ${cat}`); }
       const flags = describeItem(it);
       lines.push(`${it.id.padEnd(14)} ${it.name}${flags.length ? `  [${flags.join('、')}]` : ''}`);
-      if (it.manual) lines.push(`${' '.repeat(15)}人工:${it.manual}`);
+      if (it.notApplicable) lines.push(`${' '.repeat(15)}不适用:${it.notApplicable}`);
+      else if (it.manual) lines.push(`${' '.repeat(15)}人工:${it.manual}`);
       else if (it.remoteOnly) lines.push(`${' '.repeat(15)}在节点上:${it.remoteOnly}`);
       else lines.push(`${' '.repeat(15)}$ ${commandText(it)}${it.cwd === 'main' ? '  (cwd=main 基准树)' : ''}`);
       lines.push(`${' '.repeat(15)}标准:${passText(it)}${it.timingNote ? `  只记录的耗时:${it.timingNote}` : ''}  ←${it.taskRef}`);
