@@ -176,3 +176,9 @@ node scripts/acceptance/four-stage-acceptance.mjs --rows-from <目录>/results.j
 两个冲突文件(`accept-018-conv-endtoend.test.mjs`、`accept-018-files-account-fixture.test.mjs`)取 main 的版本;收掉了清单里传给它们的 `ACCEPT018_E2E_BASE`、`ACCEPT018_FILES_BASE`。**还靠 0.7.18 端口段的**:`--v18-port-base` 现在只管这些项——`V18-auth-*` 三个(`ACCEPT018_AUTH_PORT_BASE`,夹具里 main 仍保留这个口子,我把它的范围检查放宽到 20000～65000)、`V18-asset-isolation`、`V18-conv-password-probe`、两支排队探针与隔离探针(都是 `--base-port` 参数)、`S4-4` 与 `V18-ui-reverse-channel`(`cloud-agent-ui-probe` 自己给任务进程夹具传一组连续端口)。这些夹具内部或探针自己仍要连续段,没有改成自取空闲端口。
 
 第二次合并之后的重跑:`npx tsc -b --force` 零错误;`four-stage-acceptance` 两份单测 38/38;`--check-coverage` 「守门:通过」(main 新进的 13 个探针:Lottie 4 个、合并流 8 个记渲染一带排除,`move-guard-probe` 登记为可选项、单测 `move-guard.test.mjs` 进 `V18-local-legacy-tests`);经运行器跑 `V18-conv-endtoend`(44 秒)、`V18-files-account-fixture`、`V18-local-legacy-tests`、`V18-auth-agent-path` 都 `pass`;`npm test` 一遍 `tests 6498、pass 6471、fail 6`——6 条是机器忙时的计时偶发(`c66-integ` 两条、`asset-project-workers`、`MA-X2`、`UE-S7`、`move-guard` 旧模式搬云端),五个文件单独重跑 37/37 全过。
+
+## 11. 合入 main 16d2404b(渲染重构干净版连同 `claude/v18-missing`)之后
+
+- `V18-missing-tests`、`V18-missing-bakery-tests`、`V18-missing-probe`、`V18-missing-online-probe` 四项去掉「等分支合入」,成正式的本机项(2.1-8、2.1-9、2.1-12 靠它们),两支探针登记进清单(`v18-missing-probe` 的 `--out` 要新目录,放 `{item}/o`)。「等分支合入」名单里 v18-missing 一组去掉,剩 `claude/v18-chats`、`claude/v18-cardsync`(照旧);`claude/v18-wire` 仍是人工项。Lottie、合并流探针上一次已记渲染一带排除。
+- 地图问题 4、5、8 随合入修好,`DMG-5/6`、`STATE-4/5` 四条 todo 转成硬断言(全量 todo 6 → 2,剩 `SEAM-2` 及已转绿但还带标记的 `SEAM-1`);本报告第 7 节「还没转绿」的说法以此为准。
+- **V18-09 不再因为多了一支没登记的探针而红**:单测只验运行器本身(`--rows-map`、`--rows-from`、覆盖检查的第②③④类);第①类「探针有没有登记」留在命令行 `--check-coverage`(判不过退出码 1,发版前由主会话跑),`--help` 里写明。已用临时加一支未登记探针验证:单测仍过、命令行退出码 1。

@@ -119,7 +119,7 @@ test('V18-08 filesOfCommand:取脚本与测试文件,不取占位符和通配', 
   assert.deepEqual(filesOfCommand(['node', 'scripts/test-suite.mjs', 'server/test/a.test.mjs', 'server/test/*.test.mjs', '{item}/x.mjs', '--out', 'docs/x.md']), ['scripts/test-suite.mjs', 'server/test/a.test.mjs']);
 });
 
-test('V18-09 运行器子进程:--rows-map 列 38 行;--rows-from 用已有结果出结论表并写 Markdown;--check-coverage 通过', { timeout: 120_000 }, () => {
+test('V18-09 运行器子进程:--rows-map 列 38 行;--rows-from 用已有结果出结论表并写 Markdown;--check-coverage 的②③④类过', { timeout: 120_000 }, () => {
   const run = (args) => spawnSync(process.execPath, [RUNNER, ...args], { cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: 100_000 });
   const m = run(['--rows-map']);
   assert.equal(m.status, 0, m.stderr);
@@ -136,7 +136,12 @@ test('V18-09 运行器子进程:--rows-map 列 38 行;--rows-from 用已有结�
     assert.match(md, /\| 2\.1-21 \|[^\n]*\*\*失败\*\*/);
     assert.ok(fs.existsSync(path.join(dir, 'rows-table.json')));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  // --check-coverage 的第②③④类(38 行有项、引用的文件在、跳过名单自检)在单测里判;第①类「探针有没有登记」不在单测里判:
+  // 同时有好几条分支各自往 scripts/probes/ 加探针,它们一合进 main 就会拦住别人的全量。第①类留给命令行(退出码 1),发版前跑。
   const c = run(['--check-coverage']);
-  assert.equal(c.status, 0, c.stdout.slice(-1500));
-  assert.match(c.stdout, /守门:通过/);
+  const body = c.stdout.slice(c.stdout.indexOf('② '));
+  assert.match(body, /② 0\.7\.18 的 38 行:每行至少有一条清单项/);
+  assert.match(body, /③ 清单项引用的测试文件与探针脚本:都在仓库里/);
+  assert.match(body, /④ 全量测试的跳过名单\(G0-2\):\d+ 条;每条都写了名字、所在文件、原因/);
+  assert.ok(!/没有任何清单项|指到不存在的行|有问题:/.test(body), body.slice(-800));
 });

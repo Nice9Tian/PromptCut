@@ -126,7 +126,7 @@ export const USAGE = `用法:node scripts/acceptance/four-stage-acceptance.mjs [
   --include-optional      连带跑标了 optional 的补充项(缺省不跑)
   --no-optional           --only 点到类别或通配时也不带 optional 的项(0.7.18 里端口写死、要备依赖的探针标了 optional;--only V18 --no-optional = 本机缺省能跑的全部)
   --keep-main-worktree    结束时不删 main 基准 worktree
-  --check-coverage        守门:① scripts/probes/ 下每个探针要登记(covers)或写明排除原因;② 0.7.18 的 38 行每行至少有一项;③ 清单项引用的
+  --check-coverage        守门(发版前由主会话跑;单测不拦它,免得别的分支新加探针就让全量变红):① scripts/probes/ 下每个探针要登记(covers)或写明排除原因;② 0.7.18 的 38 行每行至少有一项;③ 清单项引用的
                           测试文件、探针脚本要在仓库里(标了「等分支合入」的单列);④ 全量测试的跳过名单没有失效。有问题退出码 1
   --dry-run               只打印将要跑哪些项与命令,不执行
   --release-timings <版本> 跑完后按这次的结果出一节发版耗时记录(版本与提交、机器配置、各项耗时),写到 <out>/release-timings-section.md 并打印;贴进 docs/reports/release-timings.md
