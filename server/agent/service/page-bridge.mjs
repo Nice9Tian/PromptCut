@@ -119,6 +119,24 @@ export function checkedPageArgs(tool, args, limits = PAGE_BRIDGE_DEFAULTS) {
   return out;
 }
 
+/**
+ * 别的工具包加在这条通道上的请求(C1 的本机采集代下用):`{ 工具名: { args(宿主给的参数) => 发给页面的参数, answer?(页面交回的答案) => 留下的答案 } }`。
+ * 只加不改:名字不能与 `PAGE_BRIDGE_TOOLS` 重;发起人与发起页的绑定、交回时的重核、落盘、幂等都是本文件原来那一套。
+ * `args` 不合规矩时自己抛错;`answer` 抛错或回的不是答案时这一次按拒收办(工具得到「发起方不在线」,页面得到 422),
+ * 页面交来的那一份不落盘。
+ */
+function checkedExtraTools(value) {
+  const out = new Map();
+  if (value === null || value === undefined) return out;
+  if (!plain(value)) fail('page-bridge-configuration', 503);
+  for (const [name, spec] of Object.entries(value)) {
+    if (!/^[a-z][a-z0-9_]{1,63}$/.test(name) || PAGE_BRIDGE_TOOLS.includes(name) || typeof spec?.args !== 'function' ||
+        (spec.answer !== undefined && spec.answer !== null && typeof spec.answer !== 'function')) fail('page-bridge-configuration', 503);
+    out.set(name, { args: spec.args, answer: spec.answer ?? null });
+  }
+  return out;
+}
+
 function sameText(a, b) {
   const x = Buffer.from(String(a)); const y = Buffer.from(String(b));
   return x.length === y.length && timingSafeEqual(x, y);
@@ -223,8 +241,9 @@ export function createRunPageAuthority({ resources, runClient } = {}) {
  * @param {(identity: object, conversationId: string) => Promise<{allowed: boolean, aclRevision: number}>} o.checkSubmitter
  *   交回的人此刻读不读得到这个对话(HTTP 层对事件流用的同一个核对);取不到按拒收办
  */
-export function createPageBridge({ databasePath, resources, runClient, runAuthority = null, presence, checkSubmitter, limits: limitOverrides = {}, now = Date.now, log = () => {}, randomNonce = () => randomBytes(18).toString('base64url') } = {}) {
+export function createPageBridge({ databasePath, resources, runClient, runAuthority = null, presence, checkSubmitter, limits: limitOverrides = {}, now = Date.now, log = () => {}, randomNonce = () => randomBytes(18).toString('base64url'), extraTools = null } = {}) {
   if (typeof presence !== 'function' || typeof checkSubmitter !== 'function' || typeof now !== 'function') fail('page-bridge-configuration', 503);
+  const extra = checkedExtraTools(extraTools);
   const authority = runAuthority ?? createRunPageAuthority({ resources, runClient });
   if (typeof authority?.current !== 'function') fail('page-bridge-configuration', 503);
   /** 每次都重取;回的东西形状不对一律当作授权不在 */
@@ -388,7 +407,8 @@ export function createPageBridge({ databasePath, resources, runClient, runAuthor
       if (!plain(request) || Object.keys(request).some((k) => !['run', 'initiatorAccountId', 'pageId', 'tool', 'args', 'requestId', 'deadline', 'signal'].includes(k))) fail('bad-request');
       const context = canonicalContext(request.run);
       if (typeof request.tool !== 'string') fail('page-tool-unknown', 404);
-      const args = checkedPageArgs(request.tool, request.args, limits);
+      const args = extra.has(request.tool) ? extra.get(request.tool).args(request.args) : checkedPageArgs(request.tool, request.args, limits);
+      if (!plain(args)) fail('bad-args');
       if (typeof request.requestId !== 'string' || !BRIDGE_REQUEST_ID_RE.test(request.requestId)) fail('bad-request-id');
       if (typeof request.initiatorAccountId !== 'string' || !REFERENCE.test(request.initiatorAccountId)) fail('page-binding-mismatch', 403);
       if (request.pageId !== null && (typeof request.pageId !== 'string' || !BRIDGE_PAGE_ID_RE.test(request.pageId))) fail('page-binding-mismatch', 403);
@@ -473,8 +493,15 @@ export function createPageBridge({ databasePath, resources, runClient, runAuthor
         row.initiator_account_id !== identity.accountId || row.page_id !== body.pageId ||
         (body.runId !== undefined && body.runId !== row.run_id) || !sameText(row.nonce_digest, sha256(body.nonce))) throw gone();
 
-    const answer = { ok: body.ok, ...(body.result !== undefined ? { result: body.result } : {}),
+    let answer = { ok: body.ok, ...(body.result !== undefined ? { result: body.result } : {}),
       ...(body.error !== undefined ? { error: body.error.slice(0, 300) } : {}), ...(body.code !== undefined ? { code: body.code.slice(0, 64) } : {}) };
+    // 扩展工具自己规定页面交回的形状:只留它认的字段再落盘;形状不对的整份不收(下面按拒收办)
+    let invalid = false;
+    const shape = extra.get(row.tool)?.answer;
+    if (shape) {
+      try { answer = shape(answer); if (!plain(answer) || typeof answer.ok !== 'boolean') invalid = true; } catch { invalid = true; }
+      if (invalid) answer = { ok: false, code: 'result-invalid' };
+    }
     let text;
     try { text = JSON.stringify(answer); } catch { fail('bad-request'); }
     const answerDigest = sha256(text);
@@ -496,6 +523,11 @@ export function createPageBridge({ databasePath, resources, runClient, runAuthor
       if (latest?.state === 'answered') return terminal(latest);
       fail(latest && latest.state !== 'rejected' ? `page-request-${latest.state}` : code, 410);
     };
+    if (invalid) {
+      settle(waiter, 'rejected', 'result-invalid', offline('result-invalid', 'rejected'));
+      say('agent.page.rejected', { tool: row.tool, why: 'result-invalid' });
+      fail('page-result-invalid', 422);
+    }
     if (Buffer.byteLength(text, 'utf8') > limits.maxResultBytes) {
       settle(waiter, 'rejected', 'result-too-large', offline('result-too-large', 'rejected'));
       fail('page-result-too-large', 413);
@@ -562,7 +594,7 @@ export function createPageBridge({ databasePath, resources, runClient, runAuthor
   }
 
   return Object.freeze({
-    requestPage, initiator, attach, acceptResult, cancelRun, status, close, limits,
+    requestPage, initiator, attach, acceptResult, cancelRun, status, close, limits, extraTools: Object.freeze([...extra.keys()]),
     describe: () => ({ waiting: waiting.size, streams: [...streams.values()].reduce((sum, set) => sum + set.size, 0), closed }),
   });
 }
