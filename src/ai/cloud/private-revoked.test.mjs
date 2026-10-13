@@ -79,6 +79,19 @@ test("PRIV-2 被踢/不在成员名单(403 not-listed、banned)：同一句「�
   }
 });
 
+test("PRIV-2b 项目被删(404 no-project)：同一句「已无法读取」，停止读；没读到过时仍按故障重连", async () => {
+  const gone = () => new CloudError("no-project", "no-project", 404);
+  const a = open([{ events: content, then: "close" }, { fail: gone() }]);
+  await waitFor(() => a.s.getView().problem === REVOKED);
+  await pause(40);
+  assert.equal(a.log.afters.length, 2);
+  a.s.close();
+  const b = open([{ fail: gone() }]);
+  await waitFor(() => b.log.afters.length >= 4);
+  assert.equal(b.s.getView().connection, "reconnecting");
+  b.s.close();
+});
+
 test("PRIV-3 Agent 被关(403 agent-disabled)：用它已有的句子，停止读", async () => {
   const { s, log } = open([{ events: content, then: "close" }, { fail: new CloudError("agent-disabled", "agent-disabled", 403) }]);
   await waitFor(() => s.getView().problem === cloudErrorText("disabled"));

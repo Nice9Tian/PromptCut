@@ -258,9 +258,9 @@ export function createCloudSession(deps: CloudSessionDeps) {
             setConnection("idle");
             return;
           }
-          // 账号模式下读到过的对话,现在文档服务说「没有这个对话」:被设为私有或被删除(围栏掐断旧流后重连才会遇到)。
+          // 账号模式下读到过的对话,现在文档服务说「没有这个对话」(或项目已不在):被设为私有、被删除、项目被删(围栏掐断旧流后重连才会遇到)。
           // 这是明确的没权限,不是故障:清掉正文、给「已无法读取」那句、停止读,不一直重连。
-          if (deps.accountMode && seenLive && isAbsent(err)) {
+          if (deps.accountMode && seenLive && (isAbsent(err) || (err instanceof CloudError && err.status === 404 && err.code === "no-project"))) {
             clearAccountReadState();
             problem = REVOKED_TEXT;
             setConnection("idle");
