@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createTrackResultStore, TrackToolError } from '../agent/service/perception/track.mjs';
+import { createTrackResultStore, scrubPaths, TrackToolError } from '../agent/service/perception/track.mjs';
 import {
   buildTrackEnv, contextOf, decodeGrayFrame, findTestRuntime, makeAccess, nccAt, pidAlive, untilTracked, waitFor, writeTrackVideo,
 } from './cloud-tools-p3-kit.mjs';
@@ -484,8 +484,43 @@ test('P3-07 结果表:换了一个路径只能读到自己写的;关闭后拒绝
   store.close();
   assert.throws(() => store.result('job_1'), (e) => e.code === 'TRACK_CLOSED');
   assert.throws(() => createTrackResultStore({ databasePath: ':memory:' }), (e) => e.code === 'TRACK_UNCONFIGURED');
+  // 报错里的服务器路径一律抹掉(Windows 盘符和 POSIX 路径)
+  assert.equal(scrubPaths(String.raw`找不到视频文件：C:\Users\x\work\a.mp4 之后 see /home/u/work/a.mp4 now`), '找不到视频文件：<路径> 之后 see <路径> now');
+  assert.equal(scrubPaths('no path here, just 1/2 and a/b'), 'no path here, just 1/2 and a/b');
   // 重开,数据还在
   const again = createTrackResultStore({ databasePath: file });
   assert.equal(again.run('job_1', 'p', 'c').mediaId, 'm');
   again.close();
+});
+
+test('P3-08 上一代进程留下的排队作业(登记了、没来得及起 runner 就崩了):读到的是中断,重试时记成 interrupted,force 重追', { skip, timeout: 120_000 }, async (t) => {
+  const { createHash } = await import('node:crypto');
+  const env = await buildTrackEnv(t);
+  const ctx = env.access.trust(contextOf());
+  await env.addMedia('proj_a', 'm1', shared.small.file);
+  const points = [[0, 60, 70]];
+  const digest = createHash('sha256').update(JSON.stringify({ mediaId: 'm1', points })).digest('hex');
+  // 模拟崩溃:作业表和结果表都登记了,但没有 runner
+  const orphan = await env.jobs.start(ctx, 'track.points', digest, `trk-${digest.slice(0, 32)}`);
+  env.tracks.results.registerRun({ jobId: orphan.jobId, kind: 'track', projectId: ctx.projectId, conversationId: ctx.conversationId, mediaId: 'm1', pointCount: 1 });
+  assert.equal(orphan.state, 'queued');
+
+  const read = await asError(env.tracks.call('get_track', { mediaId: 'm1' }, ctx));
+  assert.equal(read.errorCode, 'INTERRUPTED_ON_RESTART');
+  assert.match(read.message, /force:true/);
+  assert.equal((await env.jobs.get(ctx, orphan.jobId)).state, 'queued', '读不写作业表');
+  assert.equal((await asError(env.tracks.readResult(ctx, { mediaId: 'm1' }))).errorCode, 'INTERRUPTED_ON_RESTART');
+
+  const retry = await env.tracks.call('track_points', { mediaId: 'm1', points }, ctx);
+  assert.equal(retry.started, false);
+  assert.equal(retry.state, 'interrupted');
+  assert.equal(retry.jobId, orphan.jobId);
+  assert.equal((await env.jobs.get(ctx, orphan.jobId)).state, 'interrupted');
+  assert.equal(env.spawns.length, 0, '没有为僵尸作业起 Python');
+
+  const forced = await env.tracks.call('track_points', { mediaId: 'm1', points, force: true }, ctx);
+  assert.equal(forced.started, true);
+  await untilTracked(env.tracks, ctx, 'm1');
+  assert.equal((await env.tracks.readResult(ctx, { mediaId: 'm1' })).jobId, forced.jobId);
+  await env.close();
 });

@@ -31,8 +31,11 @@ export const TRACK_TOOL_NAMES = Object.freeze(['track_status', 'track_install', 
 export const TRACK_DEFAULTS = Object.freeze({
   /** 一次最多追几个点 */
   maxPoints: 32,
-  /** 视频超过这么多帧就拒绝(不截断:轨迹要盖住整段素材,`attach_clip_motion` 才对得上时间) */
-  maxFrames: 3600,
+  /**
+   * 视频超过这么多帧就拒绝(不截断:轨迹要盖住整段素材,`attach_clip_motion` 才对得上时间)。
+   * 模板匹配把整段视频解成灰度放内存(720 长边约 0.3 MB 一帧),1800 帧约 0.5 GB;按节点内存由部署者调。
+   */
+  maxFrames: 1800,
   /** 取来的素材字节上限 */
   maxVideoBytes: 1024 * 1024 * 1024,
   /** 同时跑几个追踪作业(其余排队,作业状态是 queued) */
@@ -691,10 +694,20 @@ export function createTrackTools({
   }
 
   /** 这个对话里某素材最近一次追踪的读法:`{ run, job, result? }`;没追过回 null */
+  /**
+   * 本实例名下、还标着排队或进行中,却没有 runner 在跑它(上一代进程没了、或登记完还没来得及起 runner 就崩了)的作业。
+   * 作业表只在启动时把 `running` 转成 `interrupted`,`queued` 不会;这里按「读到的视图」把它们当中断,不写作业表。
+   */
+  function orphaned(job, context) {
+    return (job.state === 'queued' || job.state === 'running') && job.instanceId === context.instanceId
+      && (job.instanceGeneration < context.instanceGeneration || !activeJobs.has(job.jobId));
+  }
+
   async function lookup(context, mediaId) {
     const run = store.latestRun({ projectId: context.projectId, conversationId: context.conversationId, kind: 'track', mediaId });
     if (!run) return null;
-    const job = await jobs.get(context, run.jobId);
+    let job = await jobs.get(context, run.jobId);
+    if (orphaned(job, context)) job = { ...job, state: 'interrupted', errorCode: 'INTERRUPTED_ON_RESTART' };
     if (job.state === 'done') {
       const result = store.result(run.jobId);
       if (!result) return { run, job, result: null };
