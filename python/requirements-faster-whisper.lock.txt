@@ -3,7 +3,7 @@
 # 版本取自 2026-10-13 在开发机上装好并转写通过的那一组（requirements-faster-whisper.txt 解出来的整棵树），
 # 不含 yt_dlp（素材采集用，转写不需要）。
 # 这份没有哈希：部署者在目标节点（Linux）上用 `pip-compile --generate-hashes` 重新解一份、
-# 通过节点配置里的 requirementsFile 指过去，pip 看到哈希会自动开启 --require-hashes。
+# 通过节点配置里的 runtime.requirements[引擎名] 指过去，pip 看到哈希会自动开启 --require-hashes。
 anyio==4.15.1
 av==18.1.0
 certifi==2026.7.22

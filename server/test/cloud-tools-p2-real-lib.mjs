@@ -16,12 +16,28 @@ export const PATHS = {
   media: path.join(OUT, 'media'),
   sourceRoot: path.join(ROOT, 'python'),
 };
-const MAIN = path.resolve(ROOT, '..', '..');
 const MODEL_DIR = 'models--Systran--faster-whisper-small';
 
-export function findPython() {
-  const candidates = [process.env.PROMPTCUT_PYTHON, path.join(MAIN, 'desktop', 'src-tauri', 'runtime', 'python', 'python.exe'),
-    path.join(ROOT, 'desktop', 'src-tauri', 'runtime', 'python', 'python.exe')].filter(Boolean);
+/**
+ * 主工作区目录。在 .worktrees/<名> 里和在 main 自己里都对:用 git 的公共目录(`--git-common-dir`)的上一级求,不靠目录层数猜。
+ * `P2_MAIN_ROOT` 可以覆盖(测试用)。求不出来回 null。
+ */
+export function mainRootOf(root = ROOT) {
+  if (process.env.P2_MAIN_ROOT) return path.resolve(process.env.P2_MAIN_ROOT);
+  const r = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, windowsHide: true, encoding: 'utf8', timeout: 20_000 });
+  if (r.status !== 0 || !r.stdout.trim()) return null;
+  return path.dirname(path.resolve(r.stdout.trim()));
+}
+
+/** 依赖的来源,按顺序找:本树的 out/…,再主工作区的 out/…(同一个目录只列一次);只读 */
+export function depSources(root = ROOT, mainRoot = mainRootOf(root)) {
+  const roots = [...new Set([root, mainRoot].filter(Boolean).map((r) => path.resolve(r)))];
+  return { roots, pylibs: roots.map((r) => path.join(r, 'out', 'pylibs')), models: roots.map((r) => path.join(r, 'out', 'models', MODEL_DIR)) };
+}
+
+export function findPython(root = ROOT, mainRoot = mainRootOf(root)) {
+  const candidates = [process.env.PROMPTCUT_PYTHON,
+    ...depSources(root, mainRoot).roots.map((r) => path.join(r, 'desktop', 'src-tauri', 'runtime', 'python', 'python.exe'))].filter(Boolean);
   return candidates.find((c) => fs.existsSync(c)) ?? null;
 }
 
@@ -40,13 +56,19 @@ export function realDepsMissing() {
   return null;
 }
 
-/** 把主工作区里已装好的 pylibs 和 small 权重复制进 out/p2-stt/(只读主工作区;已有则不动) */
-export function copyDeps() {
-  fs.mkdirSync(PATHS.out, { recursive: true });
-  const todo = [[path.join(MAIN, 'out', 'pylibs'), PATHS.pylibs], [path.join(MAIN, 'out', 'models', MODEL_DIR), path.join(PATHS.models, MODEL_DIR)]];
-  for (const [from, to] of todo) {
+/**
+ * 把已装好的 pylibs 和 small 权重复制进 `<root>/out/p2-stt/`(来源按 `depSources` 的顺序找,只读;目标里已有就不动)。
+ * 在 .worktrees/<名> 里:本树没有就取主工作区的;在 main 里:本树就是主工作区,取自己的 out/pylibs、out/models。
+ */
+export function copyDeps({ root = ROOT, mainRoot = mainRootOf(root) } = {}) {
+  const out = path.join(root, 'out', 'p2-stt');
+  fs.mkdirSync(out, { recursive: true });
+  const sources = depSources(root, mainRoot);
+  const todo = [[sources.pylibs, path.join(out, 'pylibs')], [sources.models, path.join(out, 'models', MODEL_DIR)]];
+  for (const [candidates, to] of todo) {
     if (fs.existsSync(to)) continue;
-    if (!fs.existsSync(from)) throw new Error(`主工作区里没有可复制的 ${from}`);
+    const from = candidates.find((c) => fs.existsSync(c));
+    if (!from) throw new Error(`找不到可复制的来源,找过:${candidates.join('、')}`);
     fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.cpSync(from, to, { recursive: true, filter: (src) => !src.includes('__pycache__') });
   }

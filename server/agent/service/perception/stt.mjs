@@ -150,6 +150,8 @@ export function createSttTools({ resources, assets, jobs, workspace, commitTrans
   const handles = new Set(STT_TOOL_NAMES);
   /** 在跑的后台任务(转写、安装) */
   const pending = new Set();
+  /** 本进程里正在做的转写作业号(防止同一个作业被两个并发调用各开一份工) */
+  const transcribing = new Set();
   /** 节点里同时只允许一个安装;转写同时只跑一个(CPU 活) */
   let installing = null;
   const slot = createSlot();
@@ -496,16 +498,17 @@ export function createSttTools({ resources, assets, jobs, workspace, commitTrans
     const digest = sha256(JSON.stringify({ kind: 'transcribe', mediaId: input.mediaId, mediaRev: read.mediaRev, engine: input.engine, model: input.model, language: input.language ?? null }));
     let started;
     try { started = await startJob(context, 'stt.transcribe', digest, `stt-${digest.slice(0, 32)}`); } catch (error) { await discard(read); throw error; }
-    const mine = pending.has(started.jobId);
-    if (started.state !== 'queued' || mine) {
+    // 同一个作业在本进程里只开一份工:查到与登记之间没有 await(两个一模一样的调用并发时,jobs.start 对还在 queued 的同一个作业会两次都回 queued)
+    if (started.state !== 'queued' || transcribing.has(started.jobId)) {
       await discard(read);
       return { ok: true, started: false, jobId: started.jobId, mediaId: input.mediaId, state: started.state,
         hint: '这一轮里已经发起过同样的转写,不要重复启动。用 get_transcript 取结果,或用 background_job_status 查这个 jobId。' };
     }
+    transcribing.add(started.jobId);
     let revision = 0;
-    try { revision = (await jobs.get(context, started.jobId)).revision; } catch (error) { await discard(read); throw error; }
+    try { revision = (await jobs.get(context, started.jobId)).revision; } catch (error) { transcribing.delete(started.jobId); await discard(read); throw error; }
     const state = { context, jobId: started.jobId, revision };
-    track(runTranscription(state, input, read).catch(() => { /* 内部已处理 */ }));
+    track(runTranscription(state, input, read).catch(() => { /* 内部已处理 */ }).finally(() => transcribing.delete(started.jobId)));
     return { ok: true, started: true, jobId: started.jobId, mediaId: input.mediaId, engine: input.engine, model: input.model,
       hint: '转写已在后台开始,请用 get_transcript 轮询该 mediaId(出现 segments 即完成),或用 background_job_status 查这个 jobId。不要重复启动。' };
   }

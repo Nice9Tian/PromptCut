@@ -14,9 +14,9 @@
 | `python/promptcut_stt/`（本包独占目录，只加不改旧行为） | `transcribe --offline`；`status` 多报 `available_models`（权重放齐的模型名）；`install --requirements <文件>`；错误事件带 `kind`；`audio.py` 的 ffmpeg 抽音在离线模式加 `-protocol_whitelist file`、区分「没有音轨」 |
 | `python/requirements-faster-whisper.lock.txt`（新） | faster-whisper 整棵依赖树的锁定版本（没有哈希，见第 4 节） |
 | `python/tests/test_stt_offline.py`（新） | 9 条 Python 单测 |
-| `server/test/cloud-tools-p2-stt.test.mjs`、`cloud-tools-p2-fixture.mjs`、`cloud-tools-p2-fake-stt.mjs`（新） | 21 条单测：假 Python 脚本把行为定死，其余是真的 |
+| `server/test/cloud-tools-p2-stt.test.mjs`、`cloud-tools-p2-fixture.mjs`、`cloud-tools-p2-fake-stt.mjs`（新） | 22 条单测：假 Python 脚本把行为定死，其余是真的 |
 | `server/test/cloud-tools-p2-stt-real.test.mjs`（新） | 5 条真实集成测试：真 Python + 真 faster-whisper + 真 ffmpeg + 真语音素材（缺依赖时整文件跳过并说明缺什么，npm test 不会因此红） |
-| `scripts/probes/cloud-tools-p2-lib.mjs`、`cloud-tools-p2-stt-probe.mjs`（新） | 可重复跑的探针：准备依赖和素材，跑上面两个测试文件，缺依赖或有跳过就失败 |
+| `server/test/cloud-tools-p2-real-lib.mjs`（新；`server/` 下的测试不许 import `scripts/`，所以放在这里）、`scripts/probes/cloud-tools-p2-stt-probe.mjs`（新） | 可重复跑的探针：准备依赖和素材，跑上面两个测试文件，缺依赖或有跳过就失败 |
 
 没碰：F0 三个模块（只调用）、`server/vite-plugin-stt.ts`、`cloud-tools.mjs` 工具表、`hosted-tools.mjs`、`ssr-host.mjs`、`instance.mjs` 等中央文件、渲染那一带、十个不许改的文件。
 
@@ -49,7 +49,7 @@
 |---|---|---|
 | `npx tsc -b --force` | 0 | 零错误 |
 | `npm test`（先设 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`） | 0 | 6064 条，通过 6060，失败 0，取消 0，跳过 4（3 条本来就跳过；第 4 条是真 pip 安装那条，没设 `P2_PIP=1` 时跳过）；末行「npm test 最终结果：零失败」 |
-| `node scripts/probes/cloud-tools-p2-stt-probe.mjs`（探针：假脚本 21 条 + 真集成 5 条，不接受跳过，设 `P2_PIP=1`） | 0 | 26 条通过，失败 0，跳过 0 |
+| `node scripts/probes/cloud-tools-p2-stt-probe.mjs`（探针：假脚本 22 条 + 真集成 5 条，不接受跳过，设 `P2_PIP=1`）| 0 | 27 条通过，失败 0，跳过 0 |
 | `python -m unittest tests.test_stt_offline tests.test_status tests.test_audio tests.test_jsonl`（在 `python/` 下） | 0 | 25 条通过（含新增 9 条） |
 | `npm test -- server/test/windows-hide-silent-spawn.test.mjs`（守门：起子进程都带 `windowsHide`） | 0 | 4 条通过 |
 
@@ -74,7 +74,7 @@
 | 取消 | 真实：56 秒音频转写到一半（进度 0.178）时私有化对话 + `abortForFence` + `cancelForFence`，Python 进程 246 毫秒内退出，作业 `cancelled`（`FENCE_CANCELLED`），项目没写、工作区干净，`close()` 回 `{childrenClosed:true, streamsClosed:true, workPending:0}`。假脚本版还带一个孙进程，两个进程号都查到已退出 |
 | 超时 | 真实：`transcribeMs=4000`，作业 `error`/`TIMEOUT`，Python 进程已退出，项目没写。假脚本版同样查孙进程已退出 |
 | 失败 | 假脚本：通用失败、缺权重、无音轨、结果格式异常 → 各自的错误码；作业记录里查不到 Python 原始消息（含 `secret` 路径）；失败后同一请求可重新发起并成功；`TRANSCRIPT_TOO_LARGE`；素材在转写期间被换掉 → `MEDIA_CHANGED`，不覆盖 |
-| 单测 + 能重复跑的探针 | `cloud-tools-p2-stt.test.mjs`（21）、`cloud-tools-p2-stt-real.test.mjs`（5）、`cloud-tools-p2-stt-probe.mjs` |
+| 单测 + 能重复跑的探针 | `cloud-tools-p2-stt.test.mjs`（22）、`cloud-tools-p2-stt-real.test.mjs`（5）、`cloud-tools-p2-stt-probe.mjs` |
 | 文档项目转写持久化 | **只验到 `commitTranscript` 缝**：提交带 `mediaId`、`mediaRev`、`assetHash`、`transcript`、`jobId`；假项目核素材哈希。真实文档服务的写入要 G 包接上后验（见第 3 节） |
 | 重启取消 | 假脚本：`close()` 杀进程树；ToolJobs 重开后作业 `interrupted`/`INTERRUPTED_ON_RESTART`；同请求重新发起得到新作业并完成 |
 | 跨项目拒 | 另一个项目里的 mediaId → `media-unavailable`，没有作业、没有子进程；上下文换成别的发送者/别的 run → `tool-context-untrusted` |
@@ -143,3 +143,14 @@
 ## 8. 要用户定的事
 
 没有一级语义（界面文字、用户操作）改动。本包没有需要用户拍板的条目。
+
+## 9. 审查退回后的修改
+
+主会话审查退回三处，已改。
+
+1. **同一条消息里两个一模一样的 `transcribe_media` 并发会各开一份工**（`stt.mjs`）。原来的 `pending.has(started.jobId)` 永远是 false（`pending` 里放的是 Promise）。改成本进程里记正在做的转写作业号 `transcribing`（一个 Set）：`startJob` 一回来、在下一个 `await` 之前同步查，查到已在做就走 `started:false` 那条分支；查不到就当场登记，`runTranscription` 收尾（含 `jobs.get` 抛错那条路）时删掉。`stt_install` 那条路核过：`if (installing) return …; installing = controller;` 之间没有 `await`，是同步占位，没有同类问题，没改。
+   - 新测试：`cloud-tools-p2-stt.test.mjs` 末尾「two identical transcribe_media calls sent at the same time…」，`Promise.all` 同时发两个，断言恰好一个 `started:true`、同一个 `jobId`、转写子进程只起一次、作业 `done`、提交一次、工作区干净。为了稳定造出「两次 `jobs.start` 都拿到 queued」的交错，测试把 `jobs.get` 包了一层拖慢 300 毫秒。
+   - 红：在没改的 `stt.mjs` 上，该测试稳定失败（跑了 2 次，2 次都红），断言 `exactly one call starts the work` 报 `actual: [ true, true ]`，期望 `[ false, true ]`——两个调用都回了 `started:true`。不拖慢 `jobs.get` 时在没改的代码上是绿的（交错太窄），所以拖慢是测试必须的一部分。
+   - 绿：改后同一条测试通过。
+2. **探针在 main 上跑不了**（`server/test/cloud-tools-p2-real-lib.mjs`）。原来的 `path.resolve(ROOT, '..', '..')` 只在 `.worktrees/<名>` 里指向主工作区。改成：`mainRootOf()` 用 `git rev-parse --path-format=absolute --git-common-dir` 的上一级求（`spawnSync` 带 `windowsHide`，`P2_MAIN_ROOT` 可覆盖）；`depSources()` 按顺序找「本树的 `out/pylibs`、`out/models/…`」再「主工作区的 `out/…`」（同一目录只列一次，只读来源）；`findPython()` 的候选同样处理；`copyDeps()` 复制进本树的 `out/p2-stt/`，已有就不动，找不到来源时抛的错里列出找过的所有位置。新增 `cloud-tools-p2-real-lib.test.mjs`（4 条）：用临时 git 仓库和临时 worktree 验 `mainRootOf` 在 main 自己里和在深层 worktree 里都求对；用临时目录模拟「ROOT 就是主工作区」验来源是自己的 `out/…`、拷贝只落在自己的 `out/p2-stt/`、其它文件一个没写；模拟 worktree 时验本树优先、其次主工作区、主工作区目录内容前后不变；`findPython` 两种位置都对。没有真去主工作区里跑，也没往主工作区写东西。
+3. **文字**：报告第 1 节表里的路径改为 `server/test/cloud-tools-p2-real-lib.mjs`；`python/requirements-faster-whisper.lock.txt` 文件头的 `requirementsFile` 改成代码里的 `runtime.requirements[引擎名]`。

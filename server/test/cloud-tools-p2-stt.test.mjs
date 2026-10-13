@@ -386,3 +386,23 @@ test('stt_install says what is true: already installed, not allowed, not enabled
   assert.equal(engineGone.calls.spawns.length, before + 1);
   assert.equal(jobCount(engineGone), 0);
 });
+
+test('two identical transcribe_media calls sent at the same time in one message start exactly one job and one child', async (t) => {
+  const f = await p2Fixture(t);
+  await f.addMedia('media-a', bytes());
+  f.modes.transcribe = 'delay';
+  // 把 jobs.get 拖慢一点,让第二个调用的 jobs.start 落在第一个调用把作业改成 running 之前(两次都拿到 queued 的那种交错)
+  const real = f.currentJobs;
+  const slowGet = { start: (...x) => real.start(...x), update: (...x) => real.update(...x), checkpointRetained: (...x) => real.checkpointRetained(...x),
+    get: async (...x) => { await new Promise((r) => setTimeout(r, 300)); return real.get(...x); } };
+  const tools = f.openTools({ jobs: slowGet });
+  const call = () => tools.call('transcribe_media', { mediaId: 'media-a' }, f.context);
+  const [a, b] = await Promise.all([call(), call()]);
+  assert.deepEqual([a.started, b.started].sort(), [false, true], 'exactly one call starts the work');
+  assert.equal(a.jobId, b.jobId);
+  await finished(f, a.jobId);
+  assert.equal(f.calls.spawns.filter((s) => s.sub[0] === 'transcribe').length, 1, 'the transcription child is started once');
+  assert.equal(rawJob(f, a.jobId).state, 'done');
+  assert.equal(f.doc.commits.length, 1);
+  assert.deepEqual(f.wsFiles(), []);
+});
