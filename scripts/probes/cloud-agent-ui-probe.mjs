@@ -332,10 +332,17 @@ try {
       await listItem.click();
       await B.waitForSelector(CLOUD_PANEL, { timeout: 60_000 }).catch(() => {});
       await until('O4:新环境的云端 AI 栏挂上读取钩子', () => P(B, () => !!window.__pcCloud?.main), 30_000, 200);
-      const history = await B.$(`${CLOUD_PANEL} button[title*="历史"]`);
-      if (history) await history.click();
-      const item = await until('O4:历史列表的「云端」一组里有刚才的对话', async () => (await B.$(`[data-pc="chat-cloud-item"][data-chat-id="${convId}"]`)) ?? null, 20_000, 300);
-      check('O4:历史列表的「云端」一组里列出这个项目里的云端对话(刚才那几轮的)', !!item, { convId: convId ? 'ca_…' : null });
+      // 历史列表是打开时才去取对话列表的:没等到就关上再开一次(最多三次),每次等 10 秒
+      let item = null;
+      for (let attempt = 1; attempt <= 3 && !item; attempt++) {
+        await B.waitForSelector(`${CLOUD_PANEL} button[title*="历史"]`, { timeout: 30_000 }).catch(() => {});
+        const history = await B.$(`${CLOUD_PANEL} button[title*="历史"]`);
+        if (history) await history.click();
+        const t0 = Date.now();
+        while (!item && Date.now() - t0 < 10_000) { item = await B.$(`[data-pc="chat-cloud-item"][data-chat-id="${convId}"]`); if (!item) await sleep(300); }
+        if (!item && history) await history.click().catch(() => {}); // 关上,下一轮再开
+      }
+      check('O4:历史列表打开后找得到刚才那段云端对话(最多开三次,每次等 10 秒)', !!item, { found: !!item });
       if (item) {
         await item.click();
         await B.waitForFunction((id) => window.__pcCloud?.main?.conversationId?.() === id, { timeout: 30_000 }, convId).catch(() => {});
