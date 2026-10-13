@@ -203,8 +203,26 @@ ChatGPT 留下的裁定我没有推翻任何一条。
 
 ## 最终基线
 
-（见下节，交活前最后一遍的结果）
+代码与测试的最终状态是提交 `09ce9952`（之后只改了本报告和存档的探针输出）。机器上同时有别的子 Agent 在跑全量，写死端口的测试会互相撞，所以全量跑了三遍，如实记：
+
+- `npx tsc -b --force`：退出码 0，零错误（最后一遍全量之前刚跑过）。
+- `npm test` 第一遍（在 `2cf5c169` 上）：退出码 1，6376 项、通过 6326、失败 35、跳过 8、todo 7，168 秒。失败的：W1 的两个文件 30 项（`listen EADDRINUSE 127.0.0.1:28390`，别的工作区同时在跑同一组写死端口的测试）、`accept-018-conv-endtoend` 2 项（EADDRINUSE 28581）、`account-runner-process` 1 项（EADDRINUSE 28221）、`artifact-push` 的 W4（偶发名单里的）、**本包的 C1-FALL 1 项**。C1-FALL 是真问题：机器忙时一次进度查询没有及时送达，「掉线宽限」先于「整次委托超时」被判定，原因写成了「不在线」而不是「超时」。改了产品代码（整体时限先判，提交 `09ce9952`）并放宽了夹具的时限，之后单独连跑三次都过。
+- `npm test` 第二遍（在 `09ce9952` 上）：退出码 1，6376 项、通过 6358、失败 2、跳过 8、todo 8，202 秒。失败的是 `accept-018-conv-endtoend`（EADDRINUSE 28581）和 `account-runner-process`（跑了 141 秒后取不到任务）。这两个文件不在通用规矩的偶发名单里，但都是写死端口、与别的工作区同时跑会撞的（`AGENT-v18-runner.md`〔裁 13〕自己写了）。单独重跑 `npm test -- server/test/accept-018-conv-endtoend.test.mjs server/test/account-runner-process.test.mjs`：5 项、通过 4、失败 0（另 1 项是 todo），末行「零失败」。
+- `npm test` 第三遍（最后一遍，在报告提交上，代码同 `09ce9952`）：退出码 1，6377 项、通过 6360、**失败 1**、取消 0、跳过 8、todo 8，125 秒。失败的是 `server/test/codex-auth-state.test.mjs` 第 223 行（`runtime does not invalidate on network disconnected`，`Unexpected end of JSON input`），在通用规矩的偶发名单里，本包没有改它用到的任何文件。单独重跑 `npm test -- server/test/codex-auth-state.test.mjs`：27 项全过，末行「零失败」。本包的 22 项三遍里后两遍都过。
+- **没有拿到一遍「全量零失败」**：三遍各有别处的偶发或撞端口的失败，逐个单独重跑都过。请主会话在机器不忙时自己重跑一遍确认。
+- 跳过的 8 项都不是本包的（P2 真 Python 的 5 项、两项只在 Linux 上验的、一项卡片布局的集成测试）；本包没有带跳过条件的测试。
+- 探针：`node scripts/probes/cloud-tools-c1-probe.mjs` 在 `09ce9952` 上退出码 0，9 条全过。
+- 无窗口守门 `windows-hide-silent-spawn` 3 项过；SEAM-3 过（本包没有新增指向 `src/` 的引用：`collect-bridge.mjs` 引的是 `server/collect-cookies.mjs` 与 `cloud-tools.mjs`；只有测试与探针载入了 `src/ai/cloud/collectBridge.ts`，它们不在独立入口的闭包里）。
+- 交活时没有留后台进程：28810～28849 没有监听，没有可见窗口。
 
 ## 提交列表
 
-（见下节）
+| 提交 | 内容 |
+|---|---|
+| `35f5d156` | 报告：开工 |
+| `366fe296` | 功能：云端 `collect-bridge.mjs`、页面 `collectBridge.ts`、`hosted-collect.mjs` 分流、反向通道的扩展工具口子 |
+| `a4880651` | 测试：夹具与 22 条单测 |
+| `bc583a13` | 探针：假登录站、真 Python 与 yt-dlp、真上传队列、素材服务项目分库 |
+| `2cf5c169` | 修：页面一侧的注释不提 W2 执行器的名字 |
+| `09ce9952` | 修：委托的整体时限先于掉线宽限判定；夹具时限放宽 |
+| 之后两个 | 报告与探针输出存档 |
