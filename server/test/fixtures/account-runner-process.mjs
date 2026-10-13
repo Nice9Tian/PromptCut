@@ -34,7 +34,7 @@ import { createAccountRunEvents } from '../../agent/service/account-run-events.m
 import { createHostedAgentService } from '../../agent/service/create-agent-service.mjs';
 import { createWorkspaces } from '../../agent/service/workspace.mjs';
 import { createWorkerEventInternalHandler } from '../../agent-service/worker-event-internal.mjs';
-import { createAccountWorkerGateway } from '../../agent-service/account-worker-gateway.mjs';
+import { createAccountWorkerHttpsGateway } from '../../agent-service/account-worker-control-client.mjs';
 import { createAccountSlotScheduler } from '../../agent-service/account-slot-scheduler.mjs';
 import { createLook, createLookVerifier, LOOK_AUTH_HEADER } from '../../hosted-render/look.mjs';
 import { createRenderRequests } from '../../hosted-render/render-requests.mjs';
@@ -212,8 +212,10 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
         // 全量测试时机器很忙：一次素材请求里素材服务要回文档服务核好几趟，缺省的 5 秒无动静时限不够宽
         maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024, timeoutMs: 30_000 } };
     fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile, lookLimits: { pollWaitMs: 300 } }), { mode: 0o600 });
-    const gateway = createAccountWorkerGateway({ configurationModule: path.join(here, 'account-runner-child-config.mjs'), cwd: path.resolve(here, '..', '..', '..'),
-      env: { ...process.env, PROMPTCUT_RUNNER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 30_000 });
+    // 子进程不带父子通道（和 systemd 起的一样）：指令走它那个只认 root 证书的本机 HTTPS 口
+    const gateway = createAccountWorkerHttpsGateway({ configurationModule: path.join(here, 'account-runner-child-config.mjs'), cwd: path.resolve(here, '..', '..', '..'),
+      env: { ...process.env, PROMPTCUT_RUNNER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 30_000, port: worker.identity.port,
+      controllerTls: pki.rootctl, serverFingerprint256: m.expected.serverFingerprint256 });
     const ready = await gateway.ready;
     generations.set(epoch, { gateway, pid: ready.pid, port: ready.port, logFile, journalFile: worker.journalFile });
     say('root.started', { epoch, pid: ready.pid });
@@ -221,7 +223,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
   m.io.inspect = async reservation => { const value = await originalInspect(reservation); value.instance.pid = generations.get(reservation.epoch).pid; return value; };
   m.io.identity = async reservation => {
     const result = await getIdentity(generations.get(reservation.epoch).port, pki.rootctl, m.expected.serverFingerprint256);
-    if (result.status !== 200) throw Error('fixture-identity-status'); return result.body;
+    if (result.status !== 200 || result.body?.ok !== true) throw Error('fixture-identity-status'); return result.body.result;
   };
   const stopped = (record, how, observed) => { stops.push({ epoch: record.epoch, how, pid: observed.pid, exitCode: observed.exitCode,
     signal: observed.signal, at: Date.now() }); say('root.stopped', { epoch: record.epoch, how, exitCode: observed.exitCode }); };

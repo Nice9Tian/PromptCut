@@ -22,7 +22,7 @@ const binding = ['projectId', 'conversationId', 'messageId', 'runId', 'runGrantI
  * Master scheduling never supplies an existing grant or signs on this OS's behalf.
  */
 export function createAccountTaskWorker({ doc, expected, reservation, identityTls, readRootRecord,
-  scopePrepareSource = null, workerEventSource = null, eventSink = null, createAssemblyOptions = null } = {}) {
+  scopePrepareSource = null, workerEventSource = null, eventSink = null, createAssemblyOptions = null, control = null } = {}) {
   const e = validateAgentScopeExpected(expected), r = validateAgentScopeReservation(reservation, e);
   if (!identityTls?.key || !identityTls.cert || !identityTls.ca || typeof readRootRecord !== 'function')
     fail('account-worker-configuration');
@@ -32,6 +32,11 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
   if (fingerprint !== e.serverFingerprint256) fail('account-worker-identity-certificate');
   if (eventSink && (workerEventSource !== null || typeof eventSink.file !== 'string')) fail('account-worker-event-configuration');
   if (createAssemblyOptions !== null && typeof createAssemblyOptions !== 'function') fail('account-worker-assembly-configuration');
+  // 指令通道（领取、开跑、收尾、结算结果）缺省不开。开了以后它和核身份走同一个口、同一道闸：只认 root 那张证书。
+  // `onClose` 是入口给的：「收尾」的回应发出去之后由入口把这个进程收掉（这里只负责先把回应送到）。
+  if (control !== null && (typeof control !== 'object' || typeof control.onClose !== 'function' ||
+      (control.settlementWaitMs !== undefined && (!Number.isInteger(control.settlementWaitMs) || control.settlementWaitMs < 1 || control.settlementWaitMs > 60_000))))
+    fail('account-worker-control-configuration');
   let journal = null, events = null;
   // 带本机事件日志时，准备签名只认日志里封存的收尾记录；调用方不能再另给一个来源。
   if (eventSink && scopePrepareSource !== null) fail('account-worker-event-configuration');
@@ -71,18 +76,63 @@ export function createAccountTaskWorker({ doc, expected, reservation, identityTl
       instanceId: r.instanceId, pid: process.pid, publicKey: key.scopePublicKey, publicKeyDigest: key.scopePublicKeyDigest,
       clientFingerprint256: e.clientFingerprint256, serverFingerprint256: e.serverFingerprint256 };
   };
+  const CONTROL = '/internal/v2/agent/run-scope/control/';
+  const safeCode = error => typeof error?.code === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(error.code) ? error.code : 'account-worker-unavailable';
+  // 领取和开跑在这个进程里排成一条队（和原来进程间通道上的次序一样）；收尾不排队，可以打断还在等的那一步。
+  let commandSerial = Promise.resolve();
+  const inOrder = fn => { const work = commandSerial.then(fn); commandSerial = work.catch(() => {}); return work; };
+  async function readBody(req) {
+    const chunks = []; let size = 0;
+    for await (const chunk of req) { size += chunk.length; if (size > 16384) fail('account-worker-command'); chunks.push(chunk); }
+    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); } catch { fail('account-worker-command'); }
+  }
+  async function command(req, res, reply, name, url) {
+    if (name === 'settlement') {
+      if (req.method !== 'GET') return reply(405, { ok: false, code: 'account-worker-command' });
+      // 长挂：结算结果出来了就回；到时限还没有就回「还没有」，对方再来问。这个回应本身不让出名额、不代表进程已关。
+      const limit = control.settlementWaitMs ?? 20_000, asked = Number(url.searchParams.get('waitMs') ?? limit);
+      const waitMs = Number.isInteger(asked) && asked >= 0 ? Math.min(asked, limit) : limit;
+      let timer;
+      const value = await Promise.race([settlement.then(result => ({ settled: true, settlement: result })),
+        new Promise(resolve => { timer = setTimeout(() => resolve({ settled: false }), waitMs); })]).finally(() => clearTimeout(timer));
+      return reply(200, { ok: true, result: value });
+    }
+    if (req.method !== 'POST') return reply(405, { ok: false, code: 'account-worker-command' });
+    const body = await readBody(req);
+    if (name === 'close') {
+      if (!exact(body, [])) fail('account-worker-command');
+      // 先把回应送到，再收：收尾会把这个口上的连接全部关掉，包括这一条。
+      res.once('finish', () => { try { control.onClose(); } catch { /* 入口自己记 */ } });
+      return reply(200, { ok: true, result: { stopping: true, completionReady: false } });
+    }
+    if (stopped) fail('account-worker-closed');
+    if (name === 'prepare') return reply(200, { ok: true, result: await inOrder(() => prepareTask(body)) });
+    if (name === 'start') {
+      if (!exact(body, [])) fail('account-worker-command');
+      const started = await inOrder(() => startTask());
+      return reply(200, { ok: true, result: { started: true, completionReady: false, controlPort: started.controlPort } });
+    }
+    return reply(404, { ok: false, code: 'no-route' });
+  }
   const server = https.createServer({ ...identityTls, requestCert: true, rejectUnauthorized: true,
     minVersion: 'TLSv1.3' }, (req, res) => {
-    const reply = (status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
-    try {
-      if (req.method !== 'GET' || req.url !== '/internal/v2/agent/run-scope/identity')
+    const reply = (status, body) => { if (res.headersSent || res.destroyed) return;
+      res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', connection: 'close' }); res.end(JSON.stringify(body)); };
+    void (async () => {
+      const url = new URL(req.url ?? '/', 'https://worker.invalid');
+      const isIdentity = req.method === 'GET' && req.url === '/internal/v2/agent/run-scope/identity';
+      const name = control && url.pathname.startsWith(CONTROL) ? url.pathname.slice(CONTROL.length) : null;
+      if (!isIdentity && !(name && ['prepare', 'start', 'close', 'settlement'].includes(name) && (name === 'settlement' || !url.search)))
         return reply(404, { ok: false, code: 'no-route' });
       if (req.socket.authorized !== true || certificateFingerprint(req.socket.getPeerCertificate()?.fingerprint256) !== e.clientFingerprint256 ||
           Object.keys(req.headers).some(k => k === 'forwarded' || k === 'x-real-ip' || k.startsWith('x-forwarded-')))
         return reply(403, { ok: false, code: 'account-worker-controller-forbidden' });
-      // Exact original root publisher response: no PEM alias or request identity.
-      reply(200, identity());
-    } catch (error) { reply(error.status ?? 503, { ok: false, code: error.code ?? 'account-worker-unavailable' }); }
+      // root 的发布器读的就是这个形状（`asset-root-registry-publisher.mjs` 的 freshIdentity）：{ ok, result }。
+      // result 里没有 PEM、没有请求里带来的任何东西。
+      if (isIdentity) return reply(200, { ok: true, result: identity() });
+      return command(req, res, reply, name, url);
+    })().catch(error => reply(Number.isInteger(error?.status) && error.status >= 400 && error.status < 600 ? error.status : 503,
+      { ok: false, code: safeCode(error) }));
   });
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   async function prepareTask(input) {

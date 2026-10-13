@@ -29,7 +29,8 @@ import { openOperationHistory } from '../../docservice/modules/operation-history
 import { createRunClient } from '../../agent-service/run-client.mjs';
 import { createAccountRunEvents } from '../../agent/service/account-run-events.mjs';
 import { createWorkerEventInternalHandler } from '../../agent-service/worker-event-internal.mjs';
-import { createAccountWorkerGateway } from '../../agent-service/account-worker-gateway.mjs';
+import { createAccountWorkerHttpsGateway } from '../../agent-service/account-worker-control-client.mjs';
+import { freePort } from '../free-ports.mjs';
 import { createAccountSlotScheduler } from '../../agent-service/account-slot-scheduler.mjs';
 import { createAgentReadControl, createAgentReadControlHandler } from '../../account/agent-read-control.mjs';
 import { createConversationControlClient } from '../../agent-service/conversation-control-client.mjs';
@@ -188,12 +189,14 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
     fs.writeFileSync(path.join(chainDir, name), JSON.stringify(value), { flag: exclusive ? 'wx' : 'w', mode: 0o600 }); };
   m.io.lock = async () => { const release = await originalLock(); return options => release(options); };
   m.io.start = async reservation => {
-    const settingsFile = path.join(dir, `worker-${reservation.epoch}.json`);
-    fs.writeFileSync(settingsFile, JSON.stringify({ pkiDir: dir, chainDir, markerDir, expected: m.expected, reservation,
+    const settingsFile = path.join(dir, `worker-${reservation.epoch}.json`), identityPort = await freePort();
+    fs.writeFileSync(settingsFile, JSON.stringify({ pkiDir: dir, chainDir, markerDir, expected: m.expected, reservation, identityPort,
       docOrigin, docFingerprint256: pki.doc.fingerprint256, masterOrigin, masterFingerprint256: pki.asset.fingerprint256,
       journalFile: path.join(dir, `worker-journal-${reservation.epoch}.sqlite`), dataDir: path.join(dir, `worker-data-${reservation.epoch}`) }), { mode: 0o600 });
-    const gateway = createAccountWorkerGateway({ configurationModule: path.join(here, 'account-worker-child-config.mjs'), cwd: here,
-      env: { ...process.env, PROMPTCUT_WORKER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 15_000 });
+    // 子进程不带父子通道（和 systemd 起的一样）：领取、开跑、收尾、结算结果都走它那个只认 root 证书的本机 HTTPS 口
+    const gateway = createAccountWorkerHttpsGateway({ configurationModule: path.join(here, 'account-worker-child-config.mjs'), cwd: here,
+      env: { ...process.env, PROMPTCUT_WORKER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 15_000, port: identityPort,
+      controllerTls: pki.account, serverFingerprint256: m.expected.serverFingerprint256 });
     const ready = await gateway.ready;
     generations.set(reservation.epoch, { gateway, pid: ready.pid, port: ready.port, journalFile: path.join(dir, `worker-journal-${reservation.epoch}.sqlite`) });
     say('root.started', { epoch: reservation.epoch, pid: ready.pid });
@@ -201,7 +204,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   m.io.inspect = async reservation => { const value = await originalInspect(reservation); value.instance.pid = generations.get(reservation.epoch).pid; return value; };
   m.io.identity = async reservation => {
     const result = await getIdentity(generations.get(reservation.epoch).port, pki.account, m.expected.serverFingerprint256);
-    if (result.status !== 200) throw Error('fixture-identity-status'); return result.body;
+    if (result.status !== 200 || result.body?.ok !== true) throw Error('fixture-identity-status'); return result.body.result;
   };
   const stopped = (record, how, observed) => { stops.push({ epoch: record.epoch, how, pid: observed.pid, exitCode: observed.exitCode,
     signal: observed.signal, at: Date.now() }); say('root.stopped', { epoch: record.epoch, how, exitCode: observed.exitCode }); };
