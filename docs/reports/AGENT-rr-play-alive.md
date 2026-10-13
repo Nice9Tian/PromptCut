@@ -86,7 +86,7 @@ main 上(输出 `out/play-idle-before2.json`,退出码 1):
 ## 7. 基线(合入 main aa5ee127 之后)
 
 - `npx tsc -b --force`:退出码 0,零错误。
-- `npm test`(设了两个环境变量):6762 条,通过 6745,失败 1,其余是已有的跳过项。失败的是 `server/test/account-logout-confirmation.test.mjs` 的「退出确认……」,原因是 `listen EADDRINUSE 127.0.0.1:36722`(随机端口被占,机器忙时偶发,与本改动无关)。单独重跑这个文件加上本次两份新测试:24 条全过、0 失败(第二次)。
+- `npm test`(设了两个环境变量):6762 条,通过 6745,失败 1,其余 15 条跳过、1 条 todo(都是已有的)。失败的是 `server/test/account-logout-confirmation.test.mjs` 的「退出确认……」,原因是 `listen EADDRINUSE 127.0.0.1:36722`(随机端口被占,机器忙时偶发,与本改动无关)。单独重跑这个文件加上本次两份新测试:24 条全过、0 失败。
 - `node scripts/probes/card-source-version-compare.mjs --base main`:退出码 0,88 张卡的源码版本 0 变、61 个身份键 0 变。
 - `node scripts/probes/card-table-digest-compare.mjs --base main --expect ,`:退出码 0,生成快照的代码指纹改前改后相同,101 张内置卡 0 张变。
 - 不跑 `verify-determinism` / `verify-unified-frames`:本改动不碰渲染路径(任务书说明)。
