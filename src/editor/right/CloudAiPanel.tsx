@@ -18,7 +18,7 @@ import { ChatHeader } from "./chat/ChatHeader";
 import { MessageList } from "./chat/MessageList";
 import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { CloudQueueList, QueueList } from "./chat/QueueList";
-import { setAccountAgentEnabled, useSync } from "../sync/syncManager";
+import { pushToast, setAccountAgentEnabled, useSync } from "../sync/syncManager";
 import { Composer } from "./chat/Composer";
 import { CloudModelBar } from "./CloudModelBar";
 import { AgentEventLog } from "../sync/AgentEventLog";
@@ -28,6 +28,9 @@ import { cloudConversationReport } from "../../ai/cloud/report";
 import { CODE_VERSION } from "../../online/buildInfo";
 import { acceptCloudConsent, cloudConsentState, refreshCloudConsent, subscribeCloudConsent } from "../../ai/cloud/consent";
 import { CloudAgentConsentDialog } from "./CloudAgentConsentDialog";
+import { CloudDeleteChatDialog, type CloudDeleteAsk } from "./CloudDeleteChatDialog";
+import { CLOUD_CHAT_TEXT } from "../../ai/cloud/chatTexts";
+import type { CloudChatItem } from "../../ai/cloud/types";
 
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
@@ -481,6 +484,33 @@ export function CloudAiPanel(props: {
     setDiagOpen(true);
   };
 
+  /* ---------- 删除对话（2026-10-12 用户定：开对话的人删自己的，创建者删任何人的；先确认；有任务在跑先停再删） ---------- */
+  const [deleteAsk, setDeleteAsk] = useState<CloudDeleteAsk | null>(null);
+  const canDeleteChat = (item: CloudChatItem) => cloud.accountMode && !!cloud.accountId &&
+    (item.ownerAccountId === cloud.accountId || creator);
+  const askDelete = (item: CloudChatItem) => {
+    if (!canDeleteChat(item)) return;
+    setDeleteAsk({ item, requestId: crypto.randomUUID(), stage: "confirm", text: null, others: item.ownerAccountId !== cloud.accountId });
+  };
+  const confirmDelete = async () => {
+    const ask = deleteAsk;
+    if (!ask || ask.stage === "working" || !stillCurrent()) return;
+    setDeleteAsk({ ...ask, stage: "working", text: null });
+    try {
+      await chat.removeChat(ask.item.id, ask.requestId);
+      if (!stillCurrent()) return;
+      setDeleteAsk(null);
+      pushToast(CLOUD_CHAT_TEXT.deleteDone, "info");
+    } catch (error) {
+      if (!stillCurrent()) return;
+      // 任务还没停稳(503 agent-fence-pending)或云端暂时没确认：对话还在，用同一个请求号重试
+      const pending = error instanceof CloudError && (error.code === "agent-fence-pending" || error.code === "agent-fence-unavailable" || error.status >= 500);
+      setDeleteAsk({ ...ask, stage: pending ? "pending" : "error",
+        text: error instanceof CloudError ? (pending ? CLOUD_CHAT_TEXT.deletePending : error.message) : cloudErrorText("network") });
+      void chat.history.refresh();
+    }
+  };
+
   /* ---------- 历史列表 ---------- */
   const openHistory = () => { setHistoryOpen(true); void chat.history.refresh(); };
   const historyItems = useMemo(() => {
@@ -556,6 +586,9 @@ export function CloudAiPanel(props: {
       {cloud.accountMode ? <CloudQueueList queue={view.queue} messages={chat.messages} senders={view.senders} /> :
         <QueueList tabId={qKey} running={view.streaming} onInsert={insertQueued} onEdit={editQueued} onResume={resumeQueue} hasDraft={hasDraft} />}
 
+      {cloud.accountMode && chat.history.atLimit && !chat.history.items.some((x) => x.id === chat.conversationId) && (
+        <div className="ai-banner" data-pc="cloud-limit-note" role="status">{CLOUD_CHAT_TEXT.limitComposer}</div>
+      )}
       {chat.notice && (
         <div className="ai-toast" data-pc="cloud-notice" role="alert" onClick={chat.clearNotice} title="点一下关掉">{chat.notice}</div>
       )}
@@ -611,6 +644,7 @@ export function CloudAiPanel(props: {
         text={diagReport}
         onClose={() => setDiagOpen(false)}
       />
+      <CloudDeleteChatDialog ask={deleteAsk} onConfirm={() => { void confirmDelete(); }} onCancel={() => setDeleteAsk(null)} />
       <ChatHistoryDrawer
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
@@ -623,7 +657,8 @@ export function CloudAiPanel(props: {
         onDelete={() => {}}
         onNewChat={() => { chat.newChat(); setHistoryOpen(false); }}
         hideLocal
-        cloud={{ items: historyItems, loading: chat.history.loading, currentId: chat.conversationId, onPick: (id) => { chat.openChat(id); setHistoryOpen(false); } }}
+        cloud={{ items: historyItems, loading: chat.history.loading, currentId: chat.conversationId, onPick: (id) => { chat.openChat(id); setHistoryOpen(false); },
+          ...(cloud.accountMode ? { canDelete: canDeleteChat, onDelete: askDelete, limitReached: chat.history.atLimit } : {}) }}
       />
     </aside>
   );

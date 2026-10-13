@@ -1,0 +1,49 @@
+/**
+ * 云端对话的「50 个上限」与「删除」在界面上给用户看的话，集中在这一处。
+ *
+ * 〔草稿，待用户定〕这些句子是一级语义（用户看得到的文字），账号任务书「已拍板」只定了规则，没给原文，
+ * 所以现在写的是起草的字。用户定了原文以后只改这一个文件（服务端那一句满额提示在
+ * `server/agent/service/create-agent-service.mjs` 的 `CONVERSATION_LIMIT_MESSAGE`，要同步改）。
+ */
+import type { CloudNotice } from "./types.ts";
+
+/** 同一个项目里同一个人最多这么多个云端对话（服务端的上限在 `server/account/conversation-authority.mjs`） */
+export const CLOUD_CHAT_LIMIT = 50;
+
+export const CLOUD_CHAT_TEXT = {
+  /** 满额时点发送、或新建被服务端拒了，给的提示 */
+  limitReached: `你在这个项目里的云端对话已满 ${CLOUD_CHAT_LIMIT} 个。请先删除不用的对话，再新建。`,
+  /** 对话历史顶上、当前已满额时的一行提示 */
+  limitHint: `你在这个项目里已有 ${CLOUD_CHAT_LIMIT} 个云端对话，已满。新建前请先删除不用的。`,
+  /** 当前是一段还没发过消息的新对话、又已满额时，输入框上方的提示 */
+  limitComposer: `云端对话已满 ${CLOUD_CHAT_LIMIT} 个，发出第一条消息会被拒绝。请先在「对话历史」里删除不用的对话。`,
+
+  deleteButtonTitle: "删除对话",
+  deleteResumeTitle: "继续删除",
+  deleting: "正在删除…",
+  deleteTitle: "删除这个对话？",
+  deleteBody: (title: string) => `「${title || "云端对话"}」会被删除，删除后不能恢复。`,
+  deleteRunning: "这个对话里有任务正在运行。删除时会先停止它，已经落地的修改会保留。",
+  deleteOthers: "这是其他成员开的对话，删除后他会收到通知。",
+  deleteShared: "这是共有对话，在里面发过消息的其他成员会收到通知。",
+  deleteConfirm: "删除",
+  deleteCancel: "取消",
+  deleteWorking: "正在删除…",
+  deleteRetry: "重试删除",
+  deleteDone: "已删除，名额已经让出。",
+  /** 任务还没停稳，对话停在「正在删除」，重试沿用原来的请求 */
+  deletePending: "对话里的任务还没完全停下，暂时没有删除。稍等一下，点「重试删除」会接着办。",
+  deleteForbidden: "只有开这个对话的人或项目创建者能删除它。",
+  conversationDeleting: "这个对话正在被删除。",
+  currentDeleted: "你正在看的对话已被删除。",
+  noConversation: "没有找到这个对话，它可能已经被删除。",
+} as const;
+
+/** 别人删了和你有关的对话以后弹出的气泡 */
+export function cloudNoticeText(n: Pick<CloudNotice, "recipientRole" | "deletedByRole" | "deletedByName" | "title">): string {
+  const title = n.title || "云端对话";
+  const who = n.deletedByRole === "creator" ? `项目创建者「${n.deletedByName}」` : `「${n.deletedByName}」`;
+  return n.recipientRole === "owner"
+    ? `${who}删除了你的云端对话「${title}」。`
+    : `${who}删除了共有云端对话「${title}」，你在里面发过消息。`;
+}

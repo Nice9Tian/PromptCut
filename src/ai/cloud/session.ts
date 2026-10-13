@@ -41,6 +41,8 @@ export interface CloudSessionDeps {
    */
   pageId?: string;
   onPageRequest?: (ev: CloudEvent) => Promise<PageRequestAnswer | null> | PageRequestAnswer | null;
+  /** 正在看的对话被删了（别人删的，或自己在别处删的）：服务端发 `conversation.deleted` 就关流并调它，由界面退到一个新对话 */
+  onConversationDeleted?: (conversationId: string) => void;
   store: ChatStore;
   /** 文字与思考的增量攒批的间隔(毫秒);0 = 来一条折一条 */
   flushMs?: number;
@@ -215,6 +217,13 @@ export function createCloudSession(deps: CloudSessionDeps) {
             if (ev.type === "end" && ev.state === "none") { sawNone = true; continue; }
             // 反向通道的请求不是对话记录的一部分(没有 seq):不折进消息,交给页面执行
             if (ev.type === "page.request") { void answerPageRequest(ev, id, myGen, streamReadEpoch); continue; }
+            if (deps.accountMode && ev.type === "conversation.deleted") {
+              clearAccountReadState();
+              problem = null;
+              setConnection("idle");
+              deps.onConversationDeleted?.(id);
+              return;
+            }
             if (deps.accountMode && ev.type === "access.revoked") {
               clearAccountReadState();
               problem = "当前账号已无法读取这个对话，请重新选择有权限的对话。";

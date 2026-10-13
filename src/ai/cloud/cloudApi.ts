@@ -8,7 +8,8 @@
 import { parseSseChunks } from "../sse.ts";
 import { CloudDelegationError, CloudIdentityError, cloudGrant, cloudTicket } from "./identity.ts";
 import { CLOUD_ATTACH_TOO_LARGE, normalizeAttachmentInfo, type CloudAttachmentInfo } from "./attach.ts";
-import type { CloudChatItem, CloudChatState, CloudEvent, CloudInfo, CloudQueueSnapshot, CloudSender, CloudSendBody, CloudSendAccepted } from "./types.ts";
+import type { CloudChatItem, CloudChatState, CloudEvent, CloudInfo, CloudNotice, CloudQueueSnapshot, CloudSender, CloudSendBody, CloudSendAccepted } from "./types.ts";
+import { CLOUD_CHAT_TEXT } from "./chatTexts.ts";
 
 export class CloudError extends Error {
   readonly code: string;
@@ -70,6 +71,13 @@ export function cloudErrorText(code: string, serverMessage?: string): string {
     case "bad-grant": return "这次对话的授权已失效,请重新发送。";
     case "unavailable": return serverMessage || "云端 Agent 暂时连不上文档服务,请稍后再试。";
     case "network": return "连不上云端 Agent 服务,请检查网络。";
+    // 50 个上限与删除（文字集中在 chatTexts.ts，待用户定原文）
+    case "conversation-limit": return CLOUD_CHAT_TEXT.limitReached;
+    case "delete-forbidden": return CLOUD_CHAT_TEXT.deleteForbidden;
+    case "conversation-deleting": return CLOUD_CHAT_TEXT.conversationDeleting;
+    case "conversation-deleted":
+    case "no-conversation": return CLOUD_CHAT_TEXT.noConversation;
+    case "agent-fence-pending": return CLOUD_CHAT_TEXT.deletePending;
     default: return serverMessage || `云端 Agent 出错了(${code})。`;
   }
 }
@@ -132,6 +140,21 @@ export function cloudConversationControlPolicy(input: {
   };
 }
 
+export function normalizeNotice(raw: unknown): CloudNotice | null {
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  if (!o || typeof o.noticeId !== "string" || !o.noticeId || typeof o.conversationId !== "string") return null;
+  return {
+    noticeId: o.noticeId,
+    conversationId: o.conversationId,
+    title: typeof o.title === "string" ? o.title : "",
+    deletedByAccountId: typeof o.deletedByAccountId === "string" ? o.deletedByAccountId : "",
+    deletedByName: typeof o.deletedByName === "string" && o.deletedByName ? o.deletedByName : "某位成员",
+    deletedByRole: o.deletedByRole === "creator" ? "creator" : "owner",
+    recipientRole: o.recipientRole === "owner" ? "owner" : "participant",
+    createdAt: num(o.createdAt),
+  };
+}
+
 export function normalizeInfo(raw: Record<string, unknown>): CloudInfo {
   const models = Array.isArray(raw.models)
     ? raw.models
@@ -162,7 +185,9 @@ export function normalizeChatItem(raw: Record<string, unknown>): CloudChatItem |
     ...(raw.v === 2 ? { projectId: typeof raw.projectId === 'string' ? raw.projectId : undefined,
       ownerAccountId: typeof raw.ownerAccountId === 'string' ? raw.ownerAccountId : undefined,
       visibility: raw.visibility === 'private' ? 'private' as const : 'shared' as const,
-      creatorReadOnly: raw.creatorReadOnly === true, queueRevision: num(raw.queueRevision) } : {}),
+      creatorReadOnly: raw.creatorReadOnly === true, queueRevision: num(raw.queueRevision),
+      running: typeof raw.currentRunId === 'string' && raw.currentRunId !== '',
+      ...(raw.deleting === true ? { deleting: true } : {}) } : {}),
     id: raw.id,
     title: typeof raw.title === "string" && raw.title ? raw.title : "云端对话",
     updatedAt: num(raw.updatedAt),
@@ -251,6 +276,30 @@ export function createCloudApi(deps: CloudApiDeps) {
         item.visibility !== visibility || !Number.isSafeInteger(body.aclRevision) || Number(body.aclRevision) < 0)
         throw new CloudError("unavailable", "云端权限切换尚未得到有效确认，请重新读取对话后重试。", res.status || 503);
       return item;
+    },
+
+    /**
+     * 删除一个云端对话（账号模式）。`requestId` 由页面起、一次删除用同一个：没办完（503 `agent-fence-pending`，对话里的任务还没停稳）
+     * 时重试沿用它。回 `{ already }`：`already` 为真表示这个对话早就删掉了（重复点击、两个人同时删）。
+     */
+    async remove(conversationId: string, requestId: string): Promise<{ already: boolean }> {
+      if (!conversationId || !requestId) throw new CloudError("bad-request", "删除请求无效。", 400);
+      const res = await request(`/conversations/${encodeURIComponent(conversationId)}`, { method: "DELETE", json: { requestId } });
+      const body = (await res.json().catch(() => null)) as { ok?: unknown; removed?: unknown; conversationId?: unknown; already?: unknown } | null;
+      if (body?.ok !== true || body.removed !== true || body.conversationId !== conversationId)
+        throw new CloudError("unavailable", "云端尚未确认删除这个对话，请重读对话列表后重试。", res.status || 503);
+      return { already: body.already === true };
+    },
+
+    /** 别人删了和你有关的对话以后留给你的通知；弹完用 `ackNotices` 回执，没弹到的下次打开项目再给 */
+    async notices(): Promise<CloudNotice[]> {
+      const res = await request("/notices");
+      const body = (await res.json()) as { items?: unknown };
+      return (Array.isArray(body.items) ? body.items : []).map(normalizeNotice).filter((x): x is CloudNotice => !!x);
+    },
+    async ackNotices(noticeIds: string[]): Promise<void> {
+      if (!noticeIds.length) return;
+      await request("/notices/ack", { method: "POST", json: { noticeIds: noticeIds.slice(0, 200) } });
     },
 
     /** 发一条消息、起一轮。回 202:这一轮从此与这个请求无关 */

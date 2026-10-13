@@ -41,6 +41,10 @@ export interface CloudChatItem {
   visibility?: 'shared' | 'private';
   creatorReadOnly?: boolean;
   queueRevision?: number;
+  /** 账号模式：对话里此刻有任务在跑(文档服务给的 currentRunId)；删除前的确认据此提醒 */
+  running?: boolean;
+  /** 账号模式：删除办到一半(任务还没停稳)，对话停在「正在删除」，只有删它的人能继续 */
+  deleting?: boolean;
   id: string;
   title: string;
   /** 毫秒;服务端没给时是 0 */
@@ -95,3 +99,17 @@ export interface CloudQueueSnapshot {
   currentRunId: string | null; items: CloudQueueItem[];
 }
 export interface CloudSender { accountId: string; name: string }
+
+/** 别人删了和你有关的对话以后，文档服务留给你的通知（打开项目时取、弹完回执） */
+export interface CloudNotice {
+  noticeId: string;
+  conversationId: string;
+  title: string;
+  deletedByAccountId: string;
+  deletedByName: string;
+  /** 删的人是开这个对话的人(owner)，还是项目创建者(creator) */
+  deletedByRole: "owner" | "creator";
+  /** 你是开这个对话的人(owner)，还是在共有对话里发过消息的成员(participant) */
+  recipientRole: "owner" | "participant";
+  createdAt: number;
+}
