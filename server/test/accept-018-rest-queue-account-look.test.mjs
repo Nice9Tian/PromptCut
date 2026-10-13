@@ -9,7 +9,9 @@
  *
  *   Q-ACC-1a 开关开(= 1):账号模式回签名用的服务私钥,看画面客户端接上
  *   Q-ACC-1b 缺省(不设或 0):账号模式不接,也不去读私钥,哪怕看画面地址设了
- *   Q-ACC-2  自检:这条静态检查确实找得到创建那一行,且它受 lookOn 管(找不到就是 main.mjs 改了写法,这条测试要跟着改)
+ *   Q-ACC-2  接线在哪:账号版的主服务(main.mjs 的命令行入口)只做控制、不跑任务,所以它自己不接看画面(lookOn 在账号模式恒为假);
+ *            看画面由任务进程接——root 入口的配置里写了 `worker.look`,就随每一代任务进程的设置下发,任务进程凭设置建看画面客户端。
+ *            (2026-10-13 生产入口那一块改的:原来这一条钉的是「main.mjs 的 lookOn 在账号模式看开关回的私钥」,那是在主进程里跑任务的旧路。)
  *
  * 端到端的判据(账号模式的 Agent 服务起来后 see_frames 能经队列拿到图)要等接线合入后补一支探针。
  */
@@ -24,11 +26,27 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const mainSrc = fs.readFileSync(path.join(ROOT, 'server/agent-service/main.mjs'), 'utf8');
 const createLine = mainSrc.split('\n').find((l) => l.includes('createLookClient({'));
 
-test('Q-ACC-2 自检:找得到创建看画面客户端的那一行,且它受「lookOn」管;lookOn 在账号模式下看开关回的私钥', () => {
+test('Q-ACC-2 账号版看画面的接线:主服务自己不接(它不跑任务);root 入口的配置写了就随任务进程的设置下发,任务进程凭设置建客户端', async () => {
+  // 旧模式那一行还在,仍受 lookOn 管
   assert.ok(createLine, 'main.mjs 里应有 createLookClient({ … }) 的调用');
   assert.match(createLine, /look:\s*createLookClient\(/);
   assert.match(createLine, /lookOn\s*\?/, `创建看画面客户端要受 lookOn 管:${createLine.trim()}`);
-  assert.match(mainSrc, /const lookOn = accountMode \? !!key : !!lookUrl;/, '账号模式的 lookOn = resolveAccountLook 回了私钥');
+  // 账号版的主服务不接
+  assert.match(mainSrc, /const lookOn = accountMode \? false : !!lookUrl;/, '账号版主服务不跑任务,自己不接看画面');
+  // 任务进程:设置里写了 look 就建客户端(读不到私钥拒绝启动);root 入口把配置里的 worker.look 原样写进每一代的设置
+  const workerSrc = fs.readFileSync(path.join(ROOT, 'server/agent-service/account-task-worker-config.mjs'), 'utf8');
+  assert.match(workerSrc, /look = createLookClient\(\{ url: settings\.look\.url, key,/);
+  const { workerSettingsFor } = await import('../agent-service/account-root-slots.mjs');
+  const { scopeModel } = await import('./agent-run-scope-fixture.mjs');
+  const m = scopeModel('slot-look'); await m.run('initialize');
+  const slot = { workerSettingsFile: '/etc/promptcut/agent-slots/slot-look/worker-settings.json', identity: { keyFile: '/k', certFile: '/c', caFile: '/a' },
+    publisher: { expected: m.expected, registryDir: '/var/lib/promptcut/agent-root/slot-look', identity: { origin: 'https://127.0.0.1:8801/' } } };
+  const base = { master: { origin: 'https://127.0.0.1:8792/', fingerprint256: 'a'.repeat(64) },
+    worker: { doc: { origin: 'https://127.0.0.1:8789/', fingerprint256: 'b'.repeat(64), keyFile: '/k', certFile: '/c', caFile: '/a' }, dataDir: '/data', stateRoot: '/state' } };
+  const reservation = m.files.get('reservation-1.json');
+  assert.equal(workerSettingsFor({ config: base, slot, reservation }).look, undefined, '没写就不接');
+  const look = { url: URL_, keyDir: '/var/lib/promptcut/agent-secrets' };
+  assert.deepEqual(workerSettingsFor({ config: { ...base, worker: { ...base.worker, look } }, slot, reservation }).look, look, '写了就下发给任务进程');
 });
 
 const URL_ = 'http://127.0.0.1:5399';
