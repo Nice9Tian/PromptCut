@@ -144,7 +144,7 @@ pm2 resurrect && pm2 list                     # 期望 list 里有 promptcut-ren
 
 Agent 服务不单独上传代码：它用 `deploy-render` 放上去的那份检出（完整仓库加依赖，要 vite 与 `src/`）。Agent 服务发布的预渲染重试计划带着这份检出的代码版本，渲染服务只认领代码版本相同的计划，在线页面也按同一个代码版本找预渲染的结果。所以**三者必须出自同一个提交**：先换在线页面、`deploy-render`，再 `deploy-agent`。`status-agent` 把 Agent 服务与渲染服务的代码版本并排，不一致标红。
 
-Agent 服务自己不开 Chrome；预渲染用的 chrome-headless-shell 只属于渲染服务（见上面「渲染服务」一节）。含用户卡的项目由渲染服务的隔离工作进程渲（同时最多一个、冷启动约 10 秒），所以云端 Agent 建卡、改到用户卡片段之后的预渲染重试比只有内置卡的项目慢。
+Agent 服务不替预渲染开 Chrome：预渲染用的 chrome-headless-shell 只属于渲染服务（见上面「渲染服务」一节）。（账号模式下云端 Agent 的**网页操作**另有自己的无头浏览器，开在任务进程里、一个对话一个，配法见下面「工具要的节点依赖」；它和预渲染的浏览器不相干。）含用户卡的项目由渲染服务的隔离工作进程渲（同时最多一个、冷启动约 10 秒），所以云端 Agent 建卡、改到用户卡片段之后的预渲染重试比只有内置卡的项目慢。
 
 **云端 Agent 的工具与本机一致**（契约第 9 节）。与节点有关的几件事：
 
@@ -297,12 +297,12 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 8. 放好 `systemd-promptcut-agent-root.service`，`systemctl daemon-reload && systemctl enable --now promptcut-agent-root`。看到 `root.ready`；`/healthz` 的 `scheduler` 变成 `true`。
 9. 用模拟模型发一条云端对话验一遍（`set-key.mjs --mock`，数据目录指共用目录）：消息做完、同一对话的第二条接着做、点「停止」任务被中断。
 
-### 工具要的节点依赖（0.7.18 起：感知、一键流程、网页操作、发起人页面的反向通道、采集代下）
+### 工具要的节点依赖（0.7.18 起：感知、一键流程、网页操作、发起人页面的反向通道、采集登录）
 
 这些工具在**任务进程**里执行，所以它们要的东西配在 root 入口的配置 `agent-root.json` 的 `worker` 一节里（root 入口每开一代任务进程，把它们原样写进那一代的设置文件），**不在主服务的环境变量里**：
 
 - `worker.runAssets`（素材服务的内部口，见 `account-task-worker-config.mjs` 文件头）：**写了它才会建这些工具的提供者**——它们读写素材只凭任务自己的授权。没写时这些工具照旧回「还没接上」。
-- `worker.tools`：一个「键 → 值」的表，键是下表里的名字，值是这台节点上的绝对路径（或开关）。**都是可选的**：没写的那一族照样交给模型，工具自己回「这台节点没配」；写了但路径不存在、键不认，任务进程拒绝启动（日志 `agent.account-tools.config-error`，root 入口那一代记失败）。示例见 `agent-root.example.json`。
+- `worker.tools`：一个「键 → 值」的表，键是下表里的名字，值是这台节点上的绝对路径（或开关）。**都是可选的**：没写的那一族照样交给模型，工具自己回「这台节点没配」；键不认、值的形状不对，**root 入口启动时就拒绝**（`config.error`，`reason` 是 `root-configuration-worker-tools`，`key` 是哪个键）——root 入口和任务进程用的是同一张名单（`server/agent-service/account-tool-settings.mjs`）；键对、但路径在这台节点上不存在，任务进程拒绝启动（日志 `agent.account-tools.config-error`，root 入口那一代记失败）。示例见 `agent-root.example.json`。
 
 | 键 | 给谁用 | 不写的后果 |
 |---|---|---|
@@ -312,7 +312,8 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 | `PROMPTCUT_AGENT_SUBJECT_PYTHON`、`PROMPTCUT_AGENT_SUBJECT_MODELS`（可再给 `…_PYLIBS`、`…_REQUIREMENTS`、`…_WHEELHOUSE`） | 主体识别 | 主体识别回「没配」，并指向看画面 |
 | `PROMPTCUT_AGENT_TRACK_PYTHON`（可再给 `…_PYLIBS`、`…_MODELS`） | 运动追踪（没有权重时走模板匹配兜底） | 运动追踪与贴运动回「没配」 |
 | `PROMPTCUT_AGENT_BROWSER`（可再给 `PROMPTCUT_AGENT_BROWSER_ARGS`，空格隔开，只认白名单里的几个，如 `--no-sandbox`） | 网页操作七件 | 网页操作回「这台节点没有配置浏览器」 |
-| `PROMPTCUT_AGENT_COLLECT_PYTHON` | 云端匿名采集（与旧托管档同一个含义） | 采集回「没装」；有登录支持的站点仍可由发起人的电脑代下 |
+| `PROMPTCUT_AGENT_COLLECT_PYTHON` | 云端匿名采集（与旧托管档同一个含义） | 采集回「没装」 |
+| `PROMPTCUT_AGENT_COLLECT_DELEGATE`（`1` 开，`0` 或不写是关） | 代下：要登录的站点由**发消息那个人的电脑**用他本机的登录态替云端下载，并直接传进共有项目 | **缺省关，现在不要开**：代下时桌面版给不给提示、提示什么还没定（等用户定了桌面版的提示再开）。关着时云端的 `collect_download` 照旧只按未登录的画质下载；`collect_login`、`collect_login_check` 不受影响（登录窗口开在他自己的桌面上，他看得见） |
 | `PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES`（逗号隔开：`transcribe`、`shots`、`subjects`、`compose`、`prerender`） | 一键流程：哪些阶段的能力没就绪时跳过而不是停下 | 缺省只有「发布预渲染任务」可跳过 |
 
 节点上要装的东西（本仓库不装，部署者装；**每一样都是可选的**，缺了只是对应的工具如实回「用不了」）：
@@ -331,8 +332,13 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 
 要注意的：
 
+- `worker.tools` 会被原样写进任务用户读得到的设置文件（`worker-settings.json`，0644，「里面没有秘密」）：**值里不要带口令**。尤其是 `PROMPTCUT_AGENT_STT_INDEX_URL`——私有包索引的地址不要写成 `https://用户:口令@…` 的样子，要认证就用不带口令的内网镜像。
 - 这些目录（解释器、权重、`…_PYLIBS`）**不要放在共用数据目录里**（对话的工作目录在那里面，模型的文件工具列得到）；任务用户可读即可，`…_PYLIBS` 只在开了受控安装时才要可写。
 - 网页操作的浏览器数据在共用数据目录的 `web/<项目>/<对话>/`，作业账本与追踪结果在 `tenants/<项目>/conversations/<对话>/tools/`；都随共用数据目录走，不用另建。
+- **浏览器数据什么时候删、谁来删**：`web_close`、闲置、停止、Agent 被关、服务关闭只关浏览器进程，数据留着；对话转成私有时删（留一个清单版本的计数）；对话或项目被删时全删。删的是**任务用户一侧**：浏览器在用户数据目录下建的子目录只有属主进得去，主服务（另一个用户）删不动，对话目录（0700）它也进不去。所以主服务只留记号——浏览器目录里的 `purge.json`，和共用数据目录下的 `conversation-purges/`（被删的对话一个小文件）——再顺手删一次；删不动的由任务进程照记号清：这个对话下一次用浏览器之前清它自己的，任何一条任务的进程开工时也顺手清别的对话的（被删的对话再也没有任务也清得掉；**节点上一条云端任务都不再起时不会清**，要清就手工以任务用户删 `web/<项目>/<对话>/` 与 `tenants/<项目>/conversations/<对话>/`）。记号和单子都要组内读写得到：两个单元的 `UMask=0007`、共用数据目录的 `2770` 不能改。
+- **用量流水**（`usage/`）由任务进程写、主服务读（成员查用量）：任务进程把目录建成组内可读（0750）、流水 0640，起来时也会把以前按 0700 / 0600 建的补上。主服务读不到时 `GET /v1/usage` 回 503 `usage-unavailable`（日志 `agent.master.usage-unreadable`），不回零。
+- 这几条两个用户之间的权限，在节点上可以用 `sudo node scripts/probes/account-tools-perms-linux.mjs` 自检（不建账号，用两个没登记的数字用户号扮主服务和任务用户，只碰它自己的临时目录；末行 `PASS n/n`）。
+- **已知限制：同时开着的浏览器上限（2 个）是每个任务进程各算各的**。一条任务一个进程，所以它实际上只限住了「一条任务同时开几个」，**没有全节点的上限**：全节点同时开着几个浏览器，等于同时在跑、并且用了网页操作的任务数（受节点的并发上限管）。要不要另做全节点上限以后定；内存紧的节点先把并发上限调小。
 - 发起人页面的反向通道不用另配：任务进程经主服务的那个内部口（和交事件同一个口、同一张任务证书）问主服务，主服务的登记表在它自己的数据目录里（`page-requests.sqlite`）。nginx 不用改：页面交回结果走的是原有的 `/agent/v1/` 那一段。
 - 部署后的核对：用模拟模型发一条消息让它调 `stt_status`、`web_open`（脚本见 `scripts/probes/cloud-tools-wire-probe.mjs`），看回的是「可用」还是「这台节点没配」，和上表对得上。Linux 上的进程组、浏览器沙箱、各依赖的版本本仓库的探针没有验过，按各工具包报告里的节点自验步骤跑（网页操作：`scripts/probes/cloud-tools-w1-linux-demo.mjs`）。
 
