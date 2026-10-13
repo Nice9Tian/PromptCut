@@ -32,12 +32,12 @@ import { captureHostedView, parseUid, PAGE_DATA_NOTICE } from './view.mjs';
 import { resolveAt, explainPick, locate, focusElement, focusState, clearElement, explainStale, explainSecret } from './hit.mjs';
 
 /** 记这份用户数据目录是哪个进程起的浏览器在用(清孤儿用) */
-const OWNER_FILE = 'owner.json';
+export const OWNER_FILE = 'owner.json';
 /**
  * 这个对话的清单出到第几版了。跨浏览器进程接着往下编:关掉重开、服务重启、目录因「设为私有」被清之后,
  * 新浏览器的版本号不会和模型手里旧清单的版本号撞上(撞上的话旧编号会点到新页面的元素上)。里面只有一个数,不是用户数据。
  */
-const REV_FILE = 'rev';
+export const REV_FILE = 'rev';
 
 function readRev(sessionDir) {
   try {
@@ -1007,6 +1007,8 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     /** 此刻还活着的:主进程的退出事件到没到、记下的进程号里还活着的、进程组里还有没有活进程(给关闭之后的重核用) */
     leftovers: () => ({ exited, alivePids: [...new Set([...pids, ...helpers])].filter((pid) => pidLive(pid)), groupLive: browserGroupLive(browserPid) }),
     processGone,
+    /** 当前页此刻的地址(只给「把网页交给本人」取地址用);没有页、已经关了回 null。不碰页面内容 */
+    currentUrl: () => { try { return state.closed || !state.opened ? null : String(page.url() || '') || null; } catch { return null; } },
     open, view, click, type, scroll, read, close,
   };
 }

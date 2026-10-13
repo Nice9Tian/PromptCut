@@ -369,7 +369,7 @@ export function createCloudApi(deps: CloudApiDeps) {
      * 交回反向通道上一次请求的结果(契约第 28 节)。服务端按「这个对话、这位成员、这张页面、还在等的 id」核对,一次有效;
      * 已经不在等了(超时、这一轮结束了)回 410 `page-request-gone`,调用方不用管。
      */
-    async pageResult(conversationId: string, body: { id: string; pageId: string; ok: boolean; result?: unknown; error?: string }): Promise<void> {
+    async pageResult(conversationId: string, body: { id: string; pageId: string; ok: boolean; result?: unknown; error?: string } & Record<string, unknown>): Promise<void> {
       await request(`/conversations/${encodeURIComponent(conversationId)}/page-results`, { method: "POST", json: body });
     },
 

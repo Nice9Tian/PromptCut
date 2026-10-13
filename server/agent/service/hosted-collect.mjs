@@ -149,12 +149,16 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
    * @param {(rel: string, name: string) => Promise<{ mediaId: string, kind: string, clipId?: string, duration?: number, width?: number, height?: number, bytes?: number }>} d.importFile
    *   把工作区里的一个文件装进素材库(`import_media` 的那条路)
    * @param {(row: object) => void} d.record
-   * @param {null | (() => (null | { download: Function, login: Function, loginCheck: Function }))} [d.delegate]
+   * @param {null | (() => (null | { download?: Function, login: Function, loginCheck: Function }))} [d.delegate]
    *   当前这一轮的委托口子(`collect-bridge.mjs` 的 `forRun(context)`);每次调用现取,没有就回 null(照旧只在云端匿名下载)
    */
   function forConversation({ state, workspace, ensureCanWrite, importFile, record = () => {}, ToolError = Error, conversationId = '', delegate = null }) {
     const currentDelegate = () => {
       try { const d = typeof delegate === 'function' ? delegate() : null; return d && typeof d.download === 'function' ? d : null; } catch { return null; }
+    };
+    /** 登录那两个工具用的口子。宿主可以只给登录、不给代下(代下没开放时):那时 `collect_download` 照旧只在云端匿名下载 */
+    const currentLogin = () => {
+      try { const d = typeof delegate === 'function' ? delegate() : null; return d && typeof d.login === 'function' && typeof d.loginCheck === 'function' ? d : null; } catch { return null; }
     };
     const usage = (model, { bytes = 0, ok = true, ms = 0 } = {}) => {
       try { record({ service: 'collect', vendor: 'yt-dlp', model, units: bytes, unit: 'bytes', ok, ms }); } catch { /* 记用量失败不影响结果 */ }
@@ -461,8 +465,8 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
       collect_job: jobOf,
       collect_logout: async () => ({ ok: true, loggedOut: false, note: '云端不存任何站点的登录态,没有可退出的。' }),
       /** 登录只在本人电脑上操作:有委托口子就经反向通道让发起页打开本机的登录窗口(本人不在线回不在线),没有就如实说 */
-      collect_login: async (args) => { const d = currentDelegate(); return d ? d.login(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login'); },
-      collect_login_check: async (args) => { const d = currentDelegate(); return d ? d.loginCheck(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login_check'); },
+      collect_login: async (args) => { const d = currentLogin(); return d ? d.login(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login'); },
+      collect_login_check: async (args) => { const d = currentLogin(); return d ? d.loginCheck(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login_check'); },
       /** 这个对话结束或被删时调:停掉它还在跑的下载 */
       stopAll() { for (const j of state.jobs.values()) if (j.conversationId === conversationId && j.status === 'running') j.abort.abort(); },
     };

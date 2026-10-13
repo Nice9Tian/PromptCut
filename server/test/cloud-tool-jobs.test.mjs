@@ -185,7 +185,9 @@ test('cancelForFence needs the trusted exact fence and cancels only matching act
   assert.equal((await jobs.get(context({ runId: 'run-2', runGrantId: 'grant-2' }), otherFence.jobId)).state, 'queued');
 });
 
-test('reopening preserves queued and terminal rows but marks running work interrupted', async (t) => {
+// 0.7.18 工具表接线起:排着的作业在重开时也标成被中断(上一个进程里排着的,这个进程里没有任何东西会去做它)。
+// 原来这条断言的是「排着的原样留着」。
+test('reopening preserves terminal rows and marks queued and running work interrupted', async (t) => {
   const f = fixture(t);
   let jobs = f.open();
   const ctx = context();
@@ -199,7 +201,10 @@ test('reopening preserves queued and terminal rows but marks running work interr
 
   jobs = f.open({ now: () => 500 });
   t.after(() => jobs.close());
-  assert.equal((await jobs.get(ctx, queued.jobId)).state, 'queued');
+  const queuedRecord = await jobs.get(ctx, queued.jobId);
+  assert.equal(queuedRecord.state, 'interrupted');
+  assert.equal(queuedRecord.errorCode, 'INTERRUPTED_ON_RESTART');
+  assert.equal(queuedRecord.revision, 1);
   const resumedRecord = await jobs.get(ctx, running.jobId);
   assert.equal(resumedRecord.state, 'interrupted');
   assert.equal(resumedRecord.errorCode, 'INTERRUPTED_ON_RESTART');
