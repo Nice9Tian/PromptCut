@@ -165,8 +165,10 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
   const shared = getSyncView().shared;
   const password = request.creatorPassword || (shared ? localCollab(shared.projectId)?.creatorPassword : "") || "";
   const url = hostedWsUrlOf(`${origin}/hosted/`);
+  // 探针用(只在开发模式):把内容连接的等待上限调短,好在几秒内看到「中途云端不可用」的失败
+  const testTimeout = import.meta.env?.DEV ? (window as unknown as { __pcMoveTest?: { contentTimeoutMs?: number } }).__pcMoveTest?.contentTimeoutMs : undefined;
   const linkTo = (projectId: string): ContentLinkOptions => ({
-    url,
+    url, ...(testTimeout ? { timeoutMs: testTimeout } : {}),
     // 每建一个会话取一张票据;背后的访问令牌至少还剩一分钟(传到一半到期的,连接按断线重建、凭新票据接着传)
     ticket: async () => (await client.session(projectId, { minRemainingMs: 60_000 })).connectionTicket,
   });

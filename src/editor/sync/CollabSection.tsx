@@ -359,7 +359,7 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
       </div>
       <div className="pc-collab-actions">
         <button type="button" className="pc-dialog-opt" data-pc="collab-account-submit" disabled={loginBusy || busy || !loginName.trim() || !loginPw} onClick={() => void signIn()}>{ACCOUNT_MOVE_TEXT.loginButton}</button>
-        <a href={`${acct.origin}/account`} target="_blank" rel="noopener noreferrer">注册账号 / 忘记密码</a>
+        <a className="pc-sync-hint" href={`${acct.origin}/account`} target="_blank" rel="noopener noreferrer">注册账号 / 忘记密码</a>
       </div>
     </div>
   );
