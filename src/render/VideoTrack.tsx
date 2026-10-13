@@ -353,7 +353,8 @@ export function VideoTrack({
   const uploading = cur && cur.media.pending && !cur.media.url ? cur : null;
   // C6.6:轮询回过、而这一层要挂的那一档在当前素材服务上还没到齐 —— 画面透明,角上提示「等待上传方」
   // (A1「那一层透明并提示」;rendering.md「预览里任何一层都不无提示地透明」)
-  const awaiting = cur && !uploading && cur.media.url && chooseTier(cur.media, localHashes, { probe: false }).awaiting ? cur : null;
+  // 认定过「确认缺失」的素材不会再到齐:这一层已经画了「找不到素材」的占位,不再叠「等待上传方」
+  const awaiting = cur && !missing && !uploading && cur.media.url && chooseTier(cur.media, localHashes, { probe: false }).awaiting ? cur : null;
   return (
     <>
       {[0, 1].map((i) => {

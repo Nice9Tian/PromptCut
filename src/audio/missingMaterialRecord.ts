@@ -33,3 +33,13 @@ export function missingMaterialLabel(media: MediaAsset): string {
   const name = original?.name || original?.hash || media.name || media.id;
   return name.startsWith(MISSING_NAME_MARK) && name.length > MISSING_NAME_MARK.length ? name.slice(MISSING_NAME_MARK.length) : name;
 }
+
+/**
+ * 导出前「素材原尺寸到齐没有」那道拦截用的项目视图:去掉认定过「确认缺失」的素材。
+ * 这些素材不会再到齐,导出时它们的片段照原位置出占位,不该把整次导出拦在「等待上传方」。
+ */
+export function withoutConfirmedMissing<T extends { media: MediaAsset[] }>(project: T): T {
+  if (!Array.isArray(project?.media)) return project;
+  const media = project.media.filter((m) => !confirmedMissing(m));
+  return media.length === project.media.length ? project : { ...project, media };
+}
