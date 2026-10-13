@@ -19,6 +19,7 @@
  * Node 要和产品用的是同一个(要有 node:sqlite)。
  *
  * 输出:每一项一行 `PERMS OK|FAIL <说明> :: <细节>`,末行 `PASS n/n`(全过,退出码 0)或 `FAIL k/n`(有 k 项没过,退出码 1)。
+ * 这一版全过是 `PASS 26/26`(哪一步自己出错会多记一项没过,分母跟着变)。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -147,7 +148,11 @@ const STEPS = {
       fs.mkdirSync(path.join(conversation, 'tools'), { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(conversation, 'history.json'), '[]', { mode: 0o600 });
       fs.writeFileSync(path.join(conversation, 'tools', 'tool-jobs.db'), 'ledger', { mode: 0o600 });
-      out[conversationId] = { conversation, stat: modeOf(conversation) };
+      // 工作目录(附件、工具下载的文件):产品不指定权限,由 umask 0007 和上级目录的 setgid 定——主服务也往这里存附件,所以它删得动
+      const work = path.join(shared, 'work', PROJECT, 'ownerkey00000001', conversationId, 'attachments');
+      fs.mkdirSync(work, { recursive: true });
+      fs.writeFileSync(path.join(work, 'a.txt'), 'attachment');
+      out[conversationId] = { conversation, stat: modeOf(conversation), work: path.dirname(work) };
     }
     return { ...out, browsers: await STEPS.browserSeed({ shared, conversations }) };
   },
@@ -167,15 +172,36 @@ const STEPS = {
     const { purgeConversationData, listConversationPurges } = await load('server/agent/service/account-tools.mjs');
     const { hostedBrowserDir } = await load('server/agent/service/hosted-browser.mjs');
     const before = listConversationPurges(shared);
-    const out = await purgeConversationData(shared, { projectId: PROJECT, conversationId });
-    return { before, out, browser: listing(hostedBrowserDir(shared, { projectId: PROJECT, conversationId })),
+    // 任务用户一侧清完留回执(`receipt: true`,任务进程开工时照单子清就是这样调的)
+    const { conversationPurgeState } = await load('server/agent/service/conversation-purge.mjs');
+    const out = await purgeConversationData(shared, { projectId: PROJECT, conversationId }, { receipt: true });
+    return { before, out, state: conversationPurgeState(shared, { projectId: PROJECT, conversationId }), work: listing(path.join(shared, 'work', PROJECT, 'ownerkey00000001', conversationId)), browser: listing(hostedBrowserDir(shared, { projectId: PROJECT, conversationId })),
       conversation: listing(path.join(shared, 'tenants', PROJECT, 'conversations', conversationId)), after: listConversationPurges(shared) };
   },
-  /** 主服务:另一处清理(`conversation-purge.mjs`,删对话时先于上面那两步跑)在任务用户的对话目录上的结果。只记录,不计入通过数 */
-  async historyPurgeByMaster({ shared, conversationId }) {
-    const { createConversationPurger } = await load('server/agent/service/conversation-purge.mjs');
-    try { return { ok: true, out: await createConversationPurger({ sharedDataDir: shared }).purge({ projectId: PROJECT, conversationId }) }; }
-    catch (error) { return { ok: false, error: errorOf(error) }; }
+  /**
+   * 主服务:删对话的整套,用产品自己的两层——`conversation-policy.mjs` 的 `remove` / `reconcilePurges` 和 `conversation-purge.mjs` 的清理器。
+   * 文档服务用替身:`unpurged` 是墓碑上「Agent 一侧还没确认清理」的那几个(每一步是一个新的子进程,所以由参数带进来、结果带回去)。
+   * `phase: 'delete'` 发一次删除;`'reconcile'` 是每 60 秒那一趟对账。
+   */
+  async deleteFlowByMaster({ shared, conversationId, phase, unpurged = [] }) {
+    const { createConversationPurger, conversationPurgeState } = await load('server/agent/service/conversation-purge.mjs');
+    const { createAccountConversationService } = await load('server/agent/service/conversation-policy.mjs');
+    const { listConversationPurges } = await load('server/agent/service/account-tools.mjs');
+    const pendingAcks = new Set(unpurged), acks = [], ownStore = [], log = [];
+    const client = { ...Object.fromEntries(['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename'].map((name) => [name, async () => ({ access: 'rw' })])),
+      remove: async (input) => { pendingAcks.add(input.conversationId); return { removed: [input.conversationId] }; },
+      purges: async () => [...pendingAcks].map((id) => ({ projectId: PROJECT, conversationId: id })),
+      purgeAck: async (input) => { acks.push(input.conversationId); pendingAcks.delete(input.conversationId); } };
+    const service = createAccountConversationService({ conversationClient: client,
+      purger: createConversationPurger({ sharedDataDir: shared, log: (event, fields) => log.push({ event, ...fields }),
+        eventStore: { purgeConversation: async (scope) => { ownStore.push(scope.conversationId); return { rows: 1 }; } } }) });
+    const out = { phase };
+    try {
+      if (phase === 'delete') { await service.remove({ accountMode: true, accountId: 'acct-a', projectId: PROJECT, delegation: 'ticket' }, conversationId, 'perms-delete-1'); out.deleted = true; }
+      else out.reconciled = await service.reconcilePurges();
+    } catch (error) { out.error = errorOf(error); }
+    return { ...out, acks, ownStore, unpurged: [...pendingAcks], state: conversationPurgeState(shared, { projectId: PROJECT, conversationId }), list: listConversationPurges(shared),
+      events: log.map((row) => row.event), work: listing(path.join(shared, 'work', PROJECT, 'ownerkey00000001', conversationId)) };
   },
   /** 任务进程:建一份真的工具提供者(`createAccountToolset`,依赖用替身),看它开工时照记号清自己的对话、顺手清别的对话 */
   async toolset({ shared, own, others }) {
@@ -207,9 +233,14 @@ async function runChild(spec) {
   process.setgid(spec.gid);
   process.setuid(spec.uid);
   process.umask(0o007);   // 两个单元都带 UMask=0007
+  // 把事件循环拉住到这一步做完。产品里「删不掉、隔一会儿再看」之间的等待用的是**不拉住进程**的定时器
+  // (`server/web/hosted/session.mjs` 的 `sleep`):主服务、任务进程自己有监听口和连接拉着,照常等得到;
+  // 这里的子进程除了这一步什么都没有,不拉住的话等到一半事件循环就空了,Node 以退出码 13 退出(顶层的 await 没有结果)。
+  const hold = setInterval(() => {}, 1_000);
   let out;
   try { out = { ok: true, value: await STEPS[spec.step](spec.args ?? {}) }; }
   catch (error) { out = { ok: false, error: errorOf(error), stack: String(error?.stack ?? '').slice(0, 600) }; }
+  clearInterval(hold);
   process.stdout.write(`\nPERMS-CHILD ${JSON.stringify(out)}\n`);
 }
 
@@ -337,9 +368,20 @@ async function main() {
         !!byTaskDel && byTaskDel.before.some((row) => row.conversationId === 'c_gone') && byTaskDel.out.removed === true && byTaskDel.browser === null && byTaskDel.conversation === null &&
         !byTaskDel.after.some((row) => row.conversationId === 'c_gone'), byTaskDel);
       step('master', 'conversationDeletedByMaster', { shared, conversationId: 'c_gone2' });
-      // 另一处清理(块五的 `conversation-purge.mjs`,删对话时先跑)在两个用户下的结果:只记录、不计数,给主会话看
-      const history = step('master', 'historyPurgeByMaster', { shared, conversationId: 'c_history' });
-      console.log(`PERMS INFO 另一处清理(conversation-purge.mjs,删对话时先于上面那两步跑)由主服务在任务用户的 0700 对话目录上执行的结果(不计入通过数) :: ${JSON.stringify(history)}`);
+      // 4c) 删对话的整套(产品自己的两层:对话策略加清理器),在两个用户下:这次删除办得完;主服务清自己的库、其余记进单子;
+      //     任务用户一侧清完留回执,对账看到回执那一轮才向文档服务回执
+      const flowDelete = step('master', 'deleteFlowByMaster', { shared, conversationId: 'c_history', phase: 'delete' });
+      check('删对话(整套):主服务删不动任务用户的对话目录和浏览器目录,这次删除照样办完(不回 503);自己的库当场清了、自己删得动的工作目录删了,其余记进单子并如实记下「留给任务用户一侧」,不回执',
+        !!flowDelete && flowDelete.deleted === true && !flowDelete.error && JSON.stringify(flowDelete.ownStore) === '["c_history"]' && flowDelete.work === null && flowDelete.state === 'queued' &&
+        flowDelete.events.includes('agent.conversation.purge-deferred') && !flowDelete.events.includes('agent.conversation.purged') && flowDelete.acks.length === 0 && flowDelete.unpurged.includes('c_history'), flowDelete);
+      const flowWait = step('master', 'deleteFlowByMaster', { shared, conversationId: 'c_history', phase: 'reconcile', unpurged: ['c_history'] });
+      check('删对话(整套):任务用户一侧还没清时对账来问——不报错、不回执,单子上那一条还在', !!flowWait && !flowWait.error && flowWait.reconciled === 0 && flowWait.acks.length === 0 && flowWait.state === 'queued', flowWait);
+      const flowTask = step('task', 'conversationPurgeByTask', { shared, conversationId: 'c_history' });
+      check('删对话(整套):任务用户一侧照单子清完(对话目录连同作业账本、浏览器目录都没了),单子上那一条换成回执',
+        !!flowTask && flowTask.out.removed === true && flowTask.browser === null && flowTask.conversation === null && flowTask.state === 'done', flowTask);
+      const flowAck = step('master', 'deleteFlowByMaster', { shared, conversationId: 'c_history', phase: 'reconcile', unpurged: ['c_history'] });
+      check('删对话(整套):对账看到回执的这一轮才向文档服务回执;回执用过撤掉,单子空了',
+        !!flowAck && !flowAck.error && flowAck.reconciled === 1 && JSON.stringify(flowAck.acks) === '["c_history"]' && flowAck.unpurged.length === 0 && flowAck.state === 'none', flowAck);
       // 5) 真的工具提供者(任务进程里跑的那一份):开工时自己的对话照记号清,别的对话留着记号的顺手清,没记号的不动;单子上被删的对话也清
       step('master', 'markWrite', { dir: dirOf('c_own'), reason: 'private' });
       step('master', 'markWrite', { dir: dirOf('c_swept'), reason: 'conversation-deleted' });

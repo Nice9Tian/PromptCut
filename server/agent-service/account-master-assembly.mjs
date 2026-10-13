@@ -34,7 +34,7 @@ import { createWorkerPageInternalHandler, WORKER_PAGE_PATH } from './worker-page
 import { createPageBridge, PageBridgeError, BRIDGE_PAGE_ID_RE } from '../agent/service/page-bridge.mjs';
 import { collectPageTools } from '../agent/service/collect-bridge.mjs';
 import { hostedBrowserDir } from '../agent/service/hosted-browser.mjs';
-import { writeBrowserPurgeMark, removeMarkedBrowserData, queueConversationPurge, listConversationPurges, purgeConversationData } from '../agent/service/account-tools.mjs';
+import { writeBrowserPurgeMark, removeMarkedBrowserData } from '../agent/service/account-tools.mjs';
 import { reapOrphan, OWNER_FILE } from '../web/hosted/session.mjs';
 import fs from 'node:fs';
 import { MASTER_SCHEDULER_PENDING_PATH, MASTER_SCHEDULER_CONTROL_PATH } from './account-master-scheduler-client.mjs';
@@ -229,31 +229,16 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   }
 
   /**
-   * 对话被删(文档服务确认删掉之后,`conversation-policy.mjs` 的 `onConversationDeleted`;重复删、对账补清都会再来,所以幂等)：
-   * 这个对话的云端浏览器目录、对话目录里的作业账本与追踪结果要全清。它们是任务用户的文件，主服务多半删不动：
-   * 先记进「待清的单子」(任务用户一侧的任何一条任务开工时都照它清，所以这个对话再也没有任务也清得掉)、给浏览器目录留记号，
-   * 再尽力删一次。单子记下了就算办妥(删不动不算错)；单子都记不下、东西又还在，才报没办成(页面得到 503，对账会再来)。
+   * 对话被删(文档服务确认删掉之后,`conversation-policy.mjs` 的 `onConversationDeleted`;重复删、对账补清都会再来,所以幂等)。
+   * 这个对话留在共用数据目录里的东西(对话目录连同作业账本、工作目录、云端浏览器目录)由清理器管(`conversation-purge.mjs`：
+   * 记进待清的单子、主服务尽力删、删不动的由任务用户一侧照单子清)。这里只多做一件：给浏览器目录留「要清」的记号——
+   * 万一这个对话还有一条任务的进程占着浏览器(删的时候正在被 root 关)，它自己收尾时照记号清。
    * 进程不用在这里收：删的时候还在跑的任务已经被文档服务叫停、root 把整组进程(浏览器、感知子进程)关掉了。
    */
   async function conversationDeleted({ projectId, conversationId }) {
     const scope = { projectId, conversationId };
-    let queued = false, code = null;
-    try { queueConversationPurge(sharedDataDir, scope, now()); queued = true; } catch (error) { code = typeof error?.code === 'string' ? error.code : 'error'; }
-    try { await purgeBrowser(scope, 'conversation-deleted'); } catch { /* 下面一并看结果 */ }
-    let out = { removed: false, held: false };
-    try { out = await purgeConversationData(sharedDataDir, scope, { timeoutMs: 1_500 }); } catch (error) { code ??= typeof error?.code === 'string' ? error.code : 'error'; }
-    say('agent.master.conversation-purge', { queued, removed: out.removed, ...(out.held ? { held: true } : {}), ...(code ? { code } : {}) });
-    if (!out.removed && !queued) throw Object.assign(new Error('conversation-purge-pending'), { status: 503, code: 'conversation-purge-pending' });
+    try { await purgeBrowser(scope, 'conversation-deleted'); } catch { /* 留不下记号不挡删除:单子上已经有这个对话 */ }
     await onConversationDeleted?.(scope);
-  }
-  /** 单子上还没清掉的：主服务定时再顺手删一遍(同一个用户的机器上这就清掉了；两个用户的生产上删不动，等任务用户一侧) */
-  async function retryConversationPurges() {
-    let done = 0;
-    for (const entry of listConversationPurges(sharedDataDir).slice(0, 64)) {
-      if (stopped || entry.unreadable) continue;
-      try { if ((await purgeConversationData(sharedDataDir, entry, { timeoutMs: 1_500 })).removed) done += 1; } catch { /* 下一轮再来 */ }
-    }
-    return done;
   }
 
   // ---------- 内部口 ----------
@@ -300,7 +285,7 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   // 用量:任务进程把每次模型请求、每次外部服务与工具调用记在共用数据目录的 usage/ 下(`account-runner.mjs`),成员查用量读的就是那里。
   // 主服务自己不跑任务、不写这份流水,只读。
   const base = createAccountConversationService({ conversationClient, now, usageDir: path.join(sharedDataDir, 'usage'), deleteWaitMs: stopWaitMs, onConversationDeleted: conversationDeleted,
-    purger: createConversationPurger({ eventStore, sharedDataDir, log: say }) });
+    purger: createConversationPurger({ eventStore, sharedDataDir, log: say, now }) });
   const workspaces = createWorkspaces({ dataDir: sharedDataDir, limits: workspaceLimits, log: say });
   const workspaceFor = (identity, conversationId) => workspaces.open({ projectId: identity.projectId, conversationId,
     ownerKey: accountWorkspaceOwnerKey(identity.projectId, conversationId) });
@@ -416,7 +401,6 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   const sweepPurges = async () => {
     try { const n = await service.reconcilePurges(); if (n) say('agent.master.purge-reconciled', { count: n }); }
     catch (error) { say('agent.master.purge-reconcile-pending', { code: error?.code ?? 'unavailable' }); }
-    try { const n = await retryConversationPurges(); if (n) say('agent.master.conversation-purge-retried', { removed: n }); } catch { /* 下一轮再来 */ }
   };
   void sweepPurges();
   const purgeTimer = setInterval(() => { if (!stopped) void sweepPurges(); }, purgeSweepMs); purgeTimer.unref?.();

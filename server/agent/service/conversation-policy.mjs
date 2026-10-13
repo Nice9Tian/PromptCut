@@ -36,14 +36,21 @@ export function createAccountConversationService({ conversationClient, usageDir 
     try { return await conversationClient[fn]({ ...context(identity, conversationId), ...fields }); }
     catch (error) { throw translated(error); }
   };
-  /** 文档服务确认删掉以后，Agent 一侧各处清干净；任何一处失败都抛 503，页面重试同一个请求会再来一遍 */
+  /**
+   * 文档服务确认删掉以后，Agent 一侧各处清干净；清失败抛 503，页面重试同一个请求会再来一遍。
+   * 清理器回 `pending`(这一方删不动的目录已经记进待清的单子、等任务用户一侧清，见 conversation-purge.mjs)**不算失败**：
+   * 这次请求照样办完，只是先不给文档服务回执——对账下一轮再来，看到任务用户一侧留的回执那一次才回执。返回这次回执了没有。
+   */
   async function afterDeleted(projectId, conversationId) {
+    let cleared;
     try {
-      await purger?.purge({ projectId, conversationId });
+      cleared = await purger?.purge({ projectId, conversationId });
       await onConversationDeleted?.({ projectId, conversationId });
     } catch (error) { throw new AgentServiceError('purge-failed', 'purge-failed', 503); }
+    if (cleared?.pending === true) return false;
     // 回执文档服务：这个已删对话在 Agent 一侧清完了(墓碑上记下，对账就不再列它)。回执失败不要紧：下一次对账会再清一遍(幂等)
     try { await conversationClient.purgeAck?.({ projectId, conversationId }); } catch { /* 下次对账补 */ }
+    return true;
   }
   /**
    * 对账：问文档服务「哪些已删的对话在 Agent 一侧还没确认清理」，逐个补清。补它崩了、回包丢了、清到一半出错漏掉的。
@@ -52,7 +59,8 @@ export function createAccountConversationService({ conversationClient, usageDir 
   async function reconcilePurges() {
     if (typeof conversationClient.purges !== 'function') return 0;
     let done = 0;
-    for (const row of await conversationClient.purges()) { await afterDeleted(row.projectId, row.conversationId); done++; }
+    // 只数这一轮真的清完并回执的；还等着任务用户一侧清的不算(下一轮再来问)
+    for (const row of await conversationClient.purges()) { if (await afterDeleted(row.projectId, row.conversationId)) done++; }
     return done;
   }
   return {

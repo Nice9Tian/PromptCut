@@ -25,13 +25,14 @@ import { CLOUD_TOOL_PLAN, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_PROV
 import { createToolJobs } from '../agent/service/tool-jobs.mjs';
 import { ACCOUNT_TOOL_SETTING_KEYS, readAccountToolConfig, validateAccountToolSettings, createAccountToolset, accountToolStateDir, BROWSER_PURGE_MARK,
   readBrowserPurgeMarkIn, writeBrowserPurgeMark, removeMarkedBrowserData, TOOL_JOBS_BROKEN_TEXT, LOGIN_WITHOUT_DELEGATE_TEXT,
-  CONVERSATION_PURGE_DIR, queueConversationPurge, listConversationPurges, purgeConversationData } from '../agent/service/account-tools.mjs';
+  CONVERSATION_PURGE_DIR, queueConversationPurge, listConversationPurges, purgeConversationData, conversationPurgeState } from '../agent/service/account-tools.mjs';
 import { ACCOUNT_TOOL_SETTING_KEYS as SHARED_KEYS } from '../agent-service/account-tool-settings.mjs';
 import { validateRootConfiguration } from '../agent-service/account-root-slots.mjs';
 import { hostedBrowserDir } from '../agent/service/hosted-browser.mjs';
 import { COLLECT_PAGE_TOOLS, COLLECT_BRIDGE_TEXT } from '../agent/service/collect-bridge.mjs';
 import { queryUsage, createUsageLog } from '../agent/service/usage.mjs';
 import { createAccountConversationService } from '../agent/service/conversation-policy.mjs';
+import { createConversationPurger } from '../agent/service/conversation-purge.mjs';
 import { validateWorkerSettings } from '../agent-service/account-task-worker-config.mjs';
 import { WORKER_PAGE_PATH, WORKER_PAGE_PROOF_HEADER, WORKER_PAGE_BINDING_FIELDS, createWorkerPageInternalHandler,
   validateWorkerPageEnvelope, workerPageProofPayload, workerPageRequest, workerPageTlsBinding } from '../agent-service/worker-page-internal.mjs';
@@ -665,10 +666,10 @@ test('WIRE-DEL 对话被删:记进待清的单子;照单子清掉浏览器目录
   }
   for (const bad of [{ projectId: '..', conversationId: 'c7' }, { projectId: 'p1', conversationId: 'a/b' }, { projectId: 'p1' }, null])
     assert.throws(() => queueConversationPurge(dataDir, bad), { code: 'conversation-purge-invalid' }, JSON.stringify(bad));
-  assert.deepEqual(await purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }), { removed: true, held: false });
+  assert.deepEqual(await purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }), { removed: true, held: false, history: true, workspace: false, browser: true });
   assert.deepEqual([fs.existsSync(gone.browser), fs.existsSync(gone.conversation), gone.entry()], [false, false, null], '浏览器目录、对话目录(连同作业账本)都没了,单子上也划掉了');
   assert.deepEqual([fs.existsSync(kept.browser), fs.existsSync(path.join(kept.conversation, 'tools', 'tool-jobs.db'))], [true, true], '别的对话不动');
-  assert.deepEqual(await purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }), { removed: true, held: false }, '再来一遍:什么都不剩,不报错');
+  assert.deepEqual(await purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }), { removed: true, held: false, history: false, workspace: false, browser: false }, '再来一遍:什么都不剩,不报错');
   await assert.rejects(purgeConversationData(dataDir, { projectId: 'p1', conversationId: '../x' }), { code: 'conversation-purge-invalid' });
   // 单子里混进读不懂的、文件名和内容对不上的条目:照实标出来,不照着它去删东西
   fs.writeFileSync(path.join(dataDir, CONVERSATION_PURGE_DIR, `${'0'.repeat(40)}.json`), '{"projectId":');
@@ -686,8 +687,129 @@ test('WIRE-DEL 任务进程开工时照单子清:被删的对话再也没有任�
   } });
   await until(() => kit.events('agent.account-tools.browser-swept').length > 0, '顺手清的那一趟做完');
   for (const row of [seeded.deleted, seeded.otherProject]) assert.deepEqual([fs.existsSync(row.browser), fs.existsSync(row.conversation), row.entry()], [false, false, null]);
+  // 任务用户一侧清完,单子上那一条换成回执:主服务(够不到这些目录)凭它才向文档服务确认
+  assert.deepEqual([conversationPurgeState(kit.dataDir, { projectId: 'p1', conversationId: 'c7' }), conversationPurgeState(kit.dataDir, { projectId: 'p2', conversationId: 'c9' }),
+    conversationPurgeState(kit.dataDir, { projectId: 'p1', conversationId: 'c8' })], ['done', 'done', 'none']);
   assert.deepEqual([fs.existsSync(seeded.alive.browser), fs.existsSync(seeded.alive.conversation)], [true, true], '没被删的对话不动');
   const swept = kit.events('agent.account-tools.browser-swept')[0];
   assert.deepEqual([swept.conversations, swept.conversationsRemoved], [2, 2]);
   assert.deepEqual(listConversationPurges(kit.dataDir), []);
+});
+
+/* ---------- 删对话:主服务删不动任务用户的目录时(两个用户的生产) ---------- */
+
+/**
+ * 演「这一方没有权限删」:把 `fs.rmSync` 换成对指定目录一律抛 EACCES 的桩(别的路径照常)。
+ * 生产上是主服务去删任务用户 0700 的目录;两个用户之间的真情形由 scripts/probes/account-tools-perms-linux.mjs 在 Linux 上验。
+ */
+function denyDeletesUnder(t, roots) {
+  const real = fs.rmSync;
+  let denied = 0;
+  fs.rmSync = (target, options) => {
+    if (roots.some((root) => String(target) === root || String(target).startsWith(root + path.sep))) { denied += 1; throw Object.assign(new Error(`EACCES: permission denied, rm '${target}'`), { code: 'EACCES' }); }
+    return real(target, options);
+  };
+  const restore = () => { fs.rmSync = real; };
+  t.after(restore);
+  return { restore, count: () => denied };
+}
+
+test('WIRE-DEL 删不动(没有权限)时:清理的那几步都会有结果(不悬着),如实回「没清掉」,记号和单子上那一条都还在', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-deny-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const seeded = seedDeletedConversation(dataDir, 'c7');
+  writeBrowserPurgeMark(seeded.browser, 'conversation-deleted');
+  queueConversationPurge(dataDir, { projectId: 'p1', conversationId: 'c7' });
+  const deny = denyDeletesUnder(t, [seeded.browser, seeded.conversation]);
+  // 每一步都限时:悬着不回就是毛病(主服务会有一个请求永远挂着)
+  const settled = (promise, what) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`${what} 一直没有结果`)), 15_000))]);
+  assert.equal(await settled(removeMarkedBrowserData(seeded.browser, { all: true, timeoutMs: 300 }), '照记号清'), false);
+  assert.ok(listing(seeded.browser).includes(BROWSER_PURGE_MARK), '没清干净:记号还在');
+  const out = await settled(purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }, { timeoutMs: 300 }), '照单子清');
+  assert.deepEqual([out.removed, out.held], [false, false]);
+  assert.ok(deny.count() >= 2, '确实是删的时候被拒的');
+  assert.equal(conversationPurgeState(dataDir, { projectId: 'p1', conversationId: 'c7' }), 'queued', '没清掉:单子上那一条还在,也没有留回执');
+  assert.equal(fs.existsSync(path.join(seeded.conversation, 'tools', 'tool-jobs.db')), true);
+  // 权限恢复(换成删得动的那一方)以后照样清得掉
+  deny.restore();
+  assert.equal((await purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }, { receipt: true })).removed, true);
+  assert.equal(conversationPurgeState(dataDir, { projectId: 'p1', conversationId: 'c7' }), 'done');
+});
+
+test('WIRE-DEL 删对话的整套(主服务删不动任务用户的目录):这次删除照样办完、不回 503;清完自己的库、其余记进单子;任务用户一侧清完留回执,对账那一轮才回执', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-delflow-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const seeded = seedDeletedConversation(dataDir, 'c7');
+  const work = path.join(dataDir, 'work', 'p1', 'ownerkey00000001', 'c7');
+  fs.mkdirSync(path.join(work, 'attachments'), { recursive: true });
+  fs.writeFileSync(path.join(work, 'attachments', 'a.txt'), 'x');
+  const deny = denyDeletesUnder(t, [seeded.browser, seeded.conversation, work]);
+  // 文档服务的替身:删掉以后墓碑上记着「Agent 一侧还没确认清理」,回执了才不再列
+  const unpurged = new Set();
+  const acks = [];
+  const client = { ...Object.fromEntries(['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename'].map((name) => [name, async () => ({ access: 'rw' })])),
+    remove: async ({ conversationId }) => { unpurged.add(conversationId); return { removed: [conversationId] }; },
+    purges: async () => [...unpurged].map((conversationId) => ({ projectId: 'p1', conversationId })),
+    purgeAck: async ({ conversationId }) => { acks.push(conversationId); unpurged.delete(conversationId); } };
+  const ownStore = [];   // 主服务自己的库(事件库):当场清
+  const log = [];
+  const seam = [];
+  const service = createAccountConversationService({ conversationClient: client, sleep: async () => {},
+    purger: createConversationPurger({ sharedDataDir: dataDir, timeoutMs: 100, log: (event, fields) => log.push({ event, ...fields }),
+      eventStore: { purgeConversation: async (scope) => { ownStore.push(scope.conversationId); return { rows: 3 }; } } }),
+    onConversationDeleted: async (scope) => { seam.push(scope.conversationId); } });
+  const identity = { accountMode: true, accountId: 'a1', projectId: 'p1', delegation: 'ticket' };
+
+  // 1) 删除这次请求:办完了(不抛 503)
+  await service.remove(identity, 'c7', 'delete-1');
+  assert.deepEqual(ownStore, ['c7'], '主服务自己的库当场清了');
+  assert.deepEqual(seam, ['c7'], '后面的接缝照常调到');
+  assert.deepEqual(listConversationPurges(dataDir), [{ projectId: 'p1', conversationId: 'c7' }], '删不动的那几处记进了待清的单子');
+  assert.equal(log.filter((row) => row.event === 'agent.conversation.purge-deferred').length, 1, '如实记下「留给任务用户一侧」');
+  assert.equal(log.filter((row) => row.event === 'agent.conversation.purged').length, 0, '没有装作清完了');
+  assert.deepEqual(acks, [], '任务用户一侧还没清:不向文档服务回执');
+  assert.equal(fs.existsSync(path.join(seeded.conversation, 'history.json')), true);
+  // 2) 对账来问(每 60 秒一次):还没清,照旧不回执、不报错
+  assert.equal(await service.reconcilePurges(), 0);
+  assert.equal(await service.reconcilePurges(), 0);
+  assert.deepEqual(acks, []);
+  assert.deepEqual([...unpurged], ['c7']);
+  // 3) 任务用户一侧(删得动)照单子清,留回执
+  deny.restore();
+  const cleaned = await purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }, { receipt: true });
+  assert.deepEqual([cleaned.removed, cleaned.history, cleaned.workspace, cleaned.browser], [true, true, true, true]);
+  assert.deepEqual([fs.existsSync(seeded.browser), fs.existsSync(seeded.conversation), fs.existsSync(work)], [false, false, false]);
+  assert.equal(conversationPurgeState(dataDir, { projectId: 'p1', conversationId: 'c7' }), 'done');
+  // 这以后主服务又够不到那些目录了(两个用户下它一直够不到):凭回执就够
+  const again = denyDeletesUnder(t, [path.join(dataDir, 'tenants'), path.join(dataDir, 'web'), path.join(dataDir, 'work')]);
+  assert.equal(await service.reconcilePurges(), 1, '看到回执的这一轮才算清完');
+  assert.deepEqual(acks, ['c7']);
+  assert.deepEqual([...unpurged], []);
+  assert.equal(conversationPurgeState(dataDir, { projectId: 'p1', conversationId: 'c7' }), 'none', '回执用过就撤掉,单子空了');
+  assert.equal(await service.reconcilePurges(), 0);
+  again.restore();
+});
+
+test('WIRE-DEL 主服务自己就删得动(同一个用户:旧托管档、进程内老路)时行为不变:当场清完、当场回执,单子上不留东西', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-delsame-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const seeded = seedDeletedConversation(dataDir, 'c7');
+  const acks = [];
+  const client = { ...Object.fromEntries(['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename'].map((name) => [name, async () => ({ access: 'rw' })])),
+    remove: async ({ conversationId }) => ({ removed: [conversationId] }), purgeAck: async ({ conversationId }) => { acks.push(conversationId); } };
+  const purger = createConversationPurger({ sharedDataDir: dataDir });
+  const service = createAccountConversationService({ conversationClient: client, purger, sleep: async () => {} });
+  await service.remove({ accountMode: true, accountId: 'a1', projectId: 'p1', delegation: 'ticket' }, 'c7', 'delete-1');
+  assert.deepEqual([fs.existsSync(seeded.browser), fs.existsSync(seeded.conversation)], [false, false]);
+  assert.deepEqual(acks, ['c7']);
+  assert.deepEqual(listConversationPurges(dataDir), []);
+  assert.equal(conversationPurgeState(dataDir, { projectId: 'p1', conversationId: 'c7' }), 'none');
+  const out = await purger.purge({ projectId: 'p1', conversationId: 'c7' });
+  assert.deepEqual([out.pending, out.history, out.workspace], [false, false, false], '再来一遍:什么都不剩,不报错');
+  // 单子都记不下、东西又还在:这才是没办成(503)
+  const stuck = seedDeletedConversation(dataDir, 'c9');
+  fs.rmSync(path.join(dataDir, CONVERSATION_PURGE_DIR), { recursive: true, force: true });
+  fs.writeFileSync(path.join(dataDir, CONVERSATION_PURGE_DIR), 'not-a-directory');
+  denyDeletesUnder(t, [stuck.conversation, stuck.browser]);
+  await assert.rejects(createConversationPurger({ sharedDataDir: dataDir, timeoutMs: 100 }).purge({ projectId: 'p1', conversationId: 'c9' }), { code: 'purge-failed', status: 503 });
 });

@@ -36,6 +36,7 @@ import { createCollectBridge, COLLECT_BRIDGE_TEXT } from './collect-bridge.mjs';
 import { readCollectConfig } from './hosted-collect.mjs';
 import { CLOUD_PROVIDER_FAMILIES } from './cloud-tools.mjs';
 import { ACCOUNT_TOOL_SETTING_KEYS, validateAccountToolSettings } from '../../agent-service/account-tool-settings.mjs';
+import { CONVERSATION_PURGE_DIR, queueConversationPurge, listConversationPurges, purgeConversationData, conversationPurgeState } from './conversation-purge.mjs';
 
 export const ACCOUNT_TOOL_DEFAULTS = Object.freeze({
   /** 一轮说完话以后,最多等它名下还没做完的后台作业多久(各作业自己另有时限;这只是防卡死的兜底) */
@@ -189,69 +190,9 @@ export async function removeMarkedBrowserData(dir, { all = false, timeoutMs = 8_
   return !fs.existsSync(mark);
 }
 
-/**
- * 对话被删以后,这个对话在任务用户一侧还留着的东西要全清:云端浏览器的整个目录,以及对话目录
- * (`tenants/<项目>/conversations/<对话>/`:模型历史,和里面 `tools/` 下的作业账本、追踪结果、委托记录)。
- * 这些都是任务用户的文件(对话目录是 0700),主服务够不到。办法和上面的记号是一个:主服务把「这个对话要清」记进一张待清的单子
- * (`<共用数据目录>/conversation-purges/`,一个对话一个小文件,组内可读写),自己尽力删一次;删不动的由任务用户一侧清——
- * 任何一条任务的进程开工时都会照单子清(`sweepMarkedBrowsers`),所以被删的对话再也没有任务也清得掉。
- * 进程不归这里管:对话被删时还在跑的任务已经被文档服务叫停、由 root 把整组进程关掉了。
- */
-export const CONVERSATION_PURGE_DIR = 'conversation-purges';
-const purgeSeg = (value) => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value) && !/^\.+$/.test(value);
-const purgeEntryFile = (dataDir, scope) => path.join(dataDir, CONVERSATION_PURGE_DIR, `${sha256(`${scope.projectId}\n${scope.conversationId}`).slice(0, 40)}.json`);
-
-/** 把一个被删的对话记进待清的单子(主服务调)。同一个对话再记一次只是覆盖 */
-export function queueConversationPurge(dataDir, scope, at = Date.now()) {
-  if (!purgeSeg(scope?.projectId) || !purgeSeg(scope?.conversationId)) throw coded('conversation-purge-invalid');
-  const file = purgeEntryFile(dataDir, scope);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o770 });
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify({ projectId: scope.projectId, conversationId: scope.conversationId, at }), { mode: 0o660 });
-  try { fs.chmodSync(tmp, 0o660); } catch { /* 改不了:读的一方会照「读不到」报出来 */ }
-  fs.renameSync(tmp, file);
-}
-
-/** 待清的单子。读不到、读不懂的那几条照实回 `{ unreadable: true, code }`(不知道是哪个对话,清不了,由调用方记日志) */
-export function listConversationPurges(dataDir) {
-  const dir = path.join(dataDir, CONVERSATION_PURGE_DIR);
-  let names = [];
-  try { names = fs.readdirSync(dir).filter((name) => /^[a-f0-9]{40}\.json$/.test(name)).sort(); }
-  catch (error) { return error?.code === 'ENOENT' ? [] : [{ unreadable: true, code: typeof error?.code === 'string' ? error.code : 'error' }]; }
-  return names.map((name) => {
-    try {
-      const row = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-      if (purgeSeg(row?.projectId) && purgeSeg(row.conversationId) && purgeEntryFile(dataDir, row) === path.join(dir, name)) return { projectId: row.projectId, conversationId: row.conversationId };
-      return { unreadable: true, code: 'bad-entry' };
-    } catch (error) { return { unreadable: true, code: typeof error?.code === 'string' ? error.code : 'bad-entry' }; }
-  });
-}
-
-/**
- * 清一个被删的对话在共用数据目录里留着的东西(见上)。全清掉了就把它从单子上划掉。谁都可以调:任务用户一侧调是真的清;
- * 主服务调是「顺手删一次」,删不动(回 `removed: false`)不算错。浏览器正被一个活着的任务进程用着时不动它(`held`)。
- * @returns {Promise<{ removed: boolean, held: boolean }>}
- */
-export async function purgeConversationData(dataDir, scope, { timeoutMs = 8_000 } = {}) {
-  if (!purgeSeg(scope?.projectId) || !purgeSeg(scope?.conversationId)) throw coded('conversation-purge-invalid');
-  /** 确实不在了才算(够不到、看不见不算「不在」) */
-  const gone = (target) => { try { fs.lstatSync(target); return false; } catch (error) { return error?.code === 'ENOENT'; } };
-  let held = false;
-  let browser = null;
-  try { browser = hostedBrowserDir(dataDir, scope); } catch { browser = null; }
-  if (browser && !gone(browser)) {
-    try {
-      const reaped = await reapOrphan(browser, { timeoutMs, respectLiveOwner: true });
-      held = reaped.liveOwner === true || reaped.stillHeld === true;
-      if (!held) await removeDirFully(browser, { timeoutMs });
-    } catch { /* 下面按「还在」办 */ }
-  }
-  const conversation = path.join(dataDir, 'tenants', scope.projectId, 'conversations', scope.conversationId);
-  if (!gone(conversation)) { try { await removeDirFully(conversation, { timeoutMs }); } catch { /* 下面按「还在」办 */ } }
-  const removed = (!browser || gone(browser)) && gone(conversation);
-  if (removed) { try { fs.rmSync(purgeEntryFile(dataDir, scope), { force: true }); } catch { /* 划不掉:下次再来一遍,什么都不剩也不报错 */ } }
-  return { removed, held };
-}
+// 对话被删以后「待清的单子」:函数在 `conversation-purge.mjs`(删对话的清理都在那里),这里转出给任务进程一侧和测试用。
+// 任务进程是任务用户,是删得动的那一方:开工时照单子清(下面的 `sweepMarkedBrowsers`),清完留回执。
+export { CONVERSATION_PURGE_DIR, queueConversationPurge, listConversationPurges, purgeConversationData, conversationPurgeState };
 
 /**
  * @param {object} o
@@ -561,7 +502,8 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
       if (entry.unreadable) { unreadable += 1; continue; }
       if (entry.projectId === context.projectId && entry.conversationId === context.conversationId) continue;
       deleted += 1;
-      try { if ((await purgeConversationData(dataDir, entry, { timeoutMs: closeMs })).removed) deletedRemoved += 1; } catch { /* 这一个下次再清 */ }
+      // 清完把单子上那一条换成回执:主服务(够不到这些目录)凭回执才向文档服务确认「Agent 一侧清完了」
+      try { if ((await purgeConversationData(dataDir, entry, { timeoutMs: closeMs, receipt: true })).removed) deletedRemoved += 1; } catch { /* 这一个下次再清 */ }
     }
     const report = () => { if (seen || deleted || unreadable) say('agent.account-tools.browser-swept', { marked: Math.min(seen, limits.sweepMax), removed, ...(deleted ? { conversations: deleted, conversationsRemoved: deletedRemoved } : {}), ...(unreadable ? { unreadable } : {}) }); };
     let projects = [];
