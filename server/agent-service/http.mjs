@@ -137,6 +137,9 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     return undefined;
   }
 
+  /** 文档服务对读取的明确拒绝(不是故障),见 accountEvents 里轮询的 catch */
+  const DENIAL_STATUS = new Set([401, 403, 404]);
+
   /** Account-v2 stream: authorize before headers and on every poll/event. Doc remains
    * the source of the durable queue; this stream has no model output until run wiring. */
   async function accountEvents(req, res, identity, conversationId, after, pageId = null) {
@@ -213,8 +216,13 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           try { attachment?.update({ aclRevision: view.aclRevision }); } catch { /* 登记表已经关了 */ }
         }
         if (!released && !res.destroyed) res.write(': ping\n\n');
-      } catch {
-        if (!released && !res.destroyed) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} entry.close(); }
+      } catch (error) {
+        // 只有文档服务明确拒绝(401/403/404:退出登录、被踢、Agent 被关、对话被设为私有或删除)才告诉页面「已无法读取」再关流。
+        // 暂时故障(文档服务一时连不上、超时、读取通道被围栏掐断,状态都是 503 一类)只关流不发这个事件:页面照常重连,不会被说成没权限。
+        if (!released && !res.destroyed) {
+          if (DENIAL_STATUS.has(error?.status)) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} }
+          entry.close();
+        }
       } finally { polling = false; }
     };
     const poll = async () => {
