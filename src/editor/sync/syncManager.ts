@@ -35,7 +35,7 @@ import { accountCardTicket } from "./accountCardSync";
 import { createAccountLinkLife } from "./accountLinkLife";
 import { bindAgentSide, releaseAgentSide } from "./agentSideBinding";
 import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
-import { receivePresence, setPresenceLink } from "./presence";
+import { receivePresence, resyncPresenceLink, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
 import { applyHostedChange, applyHostedOptionChange, hostedChangeNotices, HOSTED_SERVICE_TEXT, hostedOptionText, parseHosted, type HostedOptionName, type HostedServiceName, type HostedView } from "./hostedServices";
@@ -253,7 +253,7 @@ interface Current {
   setAccountHosted?: (change: { service: "render"; enabled: boolean } | { service: "render"; option: HostedOptionName; enabled: boolean }) => Promise<void>;
   accountMembers?: () => Promise<AccountMembersSnapshot>;
   /** 诊断:账号项目里这条连接的寿命 */
-  accountLife?: () => { expiresAt: number | null; renews: number; expires: number; busy: boolean };
+  accountLife?: () => { expiresAt: number | null; trusted: boolean | null; renews: number; expires: number; busy: boolean };
   accountMemberAdmin?: (operation: AccountMemberOperation) => Promise<AccountMemberResult>;
 }
 
@@ -1195,8 +1195,10 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       pushToast(error instanceof Error ? error.message : '云端服务暂时不可用，正在等待重连。', 'warn'); return false; },
     onAuthExpired: () => { void life.authExpired(); },
     onOpen: () => { life.opened(); void (async () => {
-      // 重新建成会话(断线重连、到期前换会话):进项目时接好的东西都还在,只把跟着连接走的订阅补上
-      if (ready) { if (!stopped) { link.send({ type: 'events.list' }); refreshStatus(); } return; }
+      // 重新建成会话(断线重连、到期前换会话):进项目时接好的东西都还在,只把跟着连接走的那几样在新连接上重建 ——
+      // 选区与在场(`resyncPresenceLink`)、工具调用记录(`events.list`);发布方登记由 `SyncLink.renew` 自己重报;
+      // 其余(素材票据、成员名单、云端 Agent 的身份、卡片源码同步)不走这条连接。清单见 `docs/reports/AGENT-v18-cardsync.md`
+      if (ready) { if (!stopped && cur?.link === link) { resyncPresenceLink(); link.send({ type: 'events.list' }); refreshStatus(); } return; }
       await sharedStateReady(link);
       if (stopped) return;
       const account = options.client.account;

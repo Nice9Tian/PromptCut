@@ -14,8 +14,10 @@
  *   还原成原关闭码报上来(`session-link.mjs` 的 `FINAL_CLOSE`,与本文件的 `FATAL_CLOSE` 一致),界面照样弹。
  *
  * - 计划内换会话(`renew()`,账号云端项目用):账号连接只能用到票据背后的访问令牌到期,到期前先凭新票据把新会话建好,
- *   建成的那一刻切过去(`ds.handover()`:不记离线,未确认的在新会话上补发),旧会话再留几秒只为收完已发请求的回包。
- *   连接已经作废(`expire()`:到期了还没换成)按断线处理,走上面的重连。文档服务回「凭证到期」的 `error` 时经 `onAuthExpired` 告诉调用方。
+ *   建成的那一刻切过去(`ds.handover()`:不记离线,未确认的提交在新会话上补发)。旧会话上没有在等回包的请求就当场关掉
+ *   (文档服务按连接记选区、在场这些状态,两条连接并存久了会被当成两个页面),有就留到回包收完、最多 `RENEW_RETIRE_MS`。
+ *   只在旧会话还好用时这么换;旧会话已经作废或传输已经脱开时不换,调用方 `expire()`:按断线处理、走上面的重连
+ *   (那条路带离线批次的版本核对)。文档服务回「凭证到期」的 `error` 时经 `onAuthExpired` 告诉调用方。
  *
  * 不认识 store,也不认识界面:浏览器与 Node(测试)通用,WebSocket 可以注入。
  */
@@ -127,7 +129,7 @@ export const AUTH_EXPIRED_REASONS = new Set(["credential-revoked", "authorizatio
 export const RENEW_OPEN_TIMEOUT_MS = 15_000;
 /** 换会话:新会话建好之后,最多等多久让旧会话上没确认的提交先落定(落定了再切最干净;等不到也切,没确认的在新会话上补发) */
 export const RENEW_SETTLE_MS = 8_000;
-/** 换会话:旧会话再留多久收已发请求的回包 */
+/** 换会话:旧会话上还有在等回包的请求时,最多再留多久 */
 export const RENEW_RETIRE_MS = 5_000;
 /** `expire()` 报给 `onClosed` 的关闭码(本端判定连接作废;不是文档服务发的) */
 export const CLOSE_EXPIRED = 4401;
@@ -145,8 +147,13 @@ export class SyncLink {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private delay: number;
   private waiting = new Map<string, { resolve: (m: AnyMsg) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  /** 换下来的旧会话:只为收完换之前已发请求的回包,留 `RENEW_RETIRE_MS` 就关 */
-  private retiring: { ep: DocEndpoint; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** 换下来的旧会话:只为收完换之前已发请求的回包(`left`),收完就关,最多留 `RENEW_RETIRE_MS` */
+  private retiring: { ep: DocEndpoint; timer: ReturnType<typeof setTimeout>; left: Set<string> } | null = null;
+  /**
+   * 这条连接上报到过的发布方(`publisher.hello`,预渲染任务的发布方登记是跟着连接走的):换会话后在新会话上原样再报一次,
+   * 免得旧会话一关、文档服务按「发布方掉线」过了宽限期把它的订阅撤掉(发布方自己要到下一次发布被拒才会重新报到)。
+   */
+  private publisherHello: AnyMsg | null = null;
   private renewing: Promise<boolean> | null = null;
 
   constructor(o: LinkOptions) {
@@ -213,43 +220,48 @@ export class SyncLink {
    * - 新会话建成之前旧会话照常用;建不成(握手被拒、网络不通、`RENEW_OPEN_TIMEOUT_MS` 内没建成)回 false,旧会话不动;
    * - 取子协议抛错原样抛给调用方(由它分辨是登录失效还是一时不通);
    * - 切换:`ds.handover()`(不记离线;未确认的提交在新会话上补发、文档服务按 opId 去重),然后照建成会话调 `onOpen`(调用方重新订阅);
-   *   切换之前发出、还在等回包的请求由旧会话收完,旧会话留 `RENEW_RETIRE_MS` 后关。
-   * 没有会话(正在断线重连)时不做,回 false:那条路本来就会凭新票据建会话。
-   * `urgent`:旧会话已经作废(发什么都被拒),不等没确认的提交落定,新会话一建成就切。
+   *   切换之前发出、还在等回包的请求由旧会话收完(没有就当场关旧会话)。
+   * 没有会话(正在断线重连)、或传输已经脱开(正在接续)时不做,回 false:前者那条路本来就会凭新票据建会话;
+   * 后者脱开期间的改动要按离线的规矩核对版本,由调用方等接续上再换,或到期后 `expire()`。
    */
-  renew({ urgent = false }: { urgent?: boolean } = {}): Promise<boolean> {
+  renew(): Promise<boolean> {
     if (this.renewing) return this.renewing;
-    if (this.stopped || !this.ep || !this.open) return Promise.resolve(false);
-    const task = this.renewOnce(urgent).finally(() => { if (this.renewing === task) this.renewing = null; });
+    if (this.stopped || !this.ep || !this.open || this.ep.stats().detached) return Promise.resolve(false);
+    const task = this.renewOnce().finally(() => { if (this.renewing === task) this.renewing = null; });
     this.renewing = task;
     return task;
   }
 
-  private async renewOnce(urgent: boolean): Promise<boolean> {
+  private async renewOnce(): Promise<boolean> {
     const old = this.ep;
     const protocols = await this.o.protocols();
     if (this.stopped || this.ep !== old || !old || !this.open) return false;
     let next: DocEndpoint;
     try { next = this.createEndpoint(protocols, () => next); } catch { return false; }
+    // 新会话从建起就盯着它的死活:建成之后、切过去之前(等旧会话上的提交落定的那几秒)被服务端关掉的,不能切过去
+    let nextDead = false;
     const opened = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => resolve(false), RENEW_OPEN_TIMEOUT_MS);
       const done = (ok: boolean) => { clearTimeout(timer); resolve(ok); };
       next.onOpen(() => done(true));
-      next.onClose(() => done(false));
-      next.onConnectFail(() => done(false));
+      next.onClose(() => { nextDead = true; done(false); });
+      next.onConnectFail(() => { nextDead = true; done(false); });
     });
-    const usable = () => !this.stopped && this.ep === old && this.open;
-    // 旧会话还好用时,等它上面没确认的提交落定再切(这一刻两边都没有在途的提交,切换不需要补发);等不到照样切
-    if (opened && usable() && !urgent) await this.ds.whenSettled({ timeoutMs: RENEW_SETTLE_MS }).catch(() => undefined);
+    const usable = () => !this.stopped && this.ep === old && this.open && !old.stats().detached && !nextDead && !next.closed;
+    // 等旧会话上没确认的提交落定再切(这一刻两边都没有在途的提交,切换不需要补发);等不到照样切
+    if (opened && usable()) await this.ds.whenSettled({ timeoutMs: RENEW_SETTLE_MS }).catch(() => undefined);
     if (!opened || !usable()) {
       try { next.close(); } catch { /* 已经关了 */ }
       return false;
     }
-    // 切过去:旧会话只留着收回包
+    // 切过去。旧会话:还有在等回包的请求就留着收完,没有就当场关
     this.dropRetiring();
-    this.retiring = { ep: old, timer: setTimeout(() => { if (this.retiring?.ep === old) this.dropRetiring(); }, RENEW_RETIRE_MS) };
+    const left = new Set(this.waiting.keys());
+    if (left.size) this.retiring = { ep: old, left, timer: setTimeout(() => { if (this.retiring?.ep === old) this.dropRetiring(); }, RENEW_RETIRE_MS) };
     this.ep = next;
     this.attach(next);
+    if (!left.size) { try { old.close(); } catch { /* 已经关了 */ } }
+    if (this.publisherHello) { try { next.send(this.publisherHello); } catch { /* 发不出去:发布方下次发布被拒时自己会重新报到 */ } }
     this.ds.handover();
     this.o.onOpen?.();
     return true;
@@ -270,6 +282,7 @@ export class SyncLink {
   /** 发一条;会话不在就丢(DocSync 自己会在重连后补发它的提交) */
   send(msg: AnyMsg): boolean {
     if (!this.ep || !this.open) return false;
+    if (msg.type === "publisher.hello" && typeof msg.publisherId === "string") this.publisherHello = { type: "publisher.hello", publisherId: msg.publisherId };
     try {
       return this.ep.send(msg) !== false;
     } catch {
@@ -415,8 +428,13 @@ export class SyncLink {
     ep.onMessage((msg) => {
       if (!msg || typeof msg.type !== "string") return;
       if (this.ep !== ep) {
-        // 换下来的旧会话:只认换之前已发请求的回包
-        if (this.retiring?.ep === ep && msg.reqId !== undefined && !msg.type.startsWith("project.") && this.waiting.has(String(msg.reqId))) this.dispatch(msg);
+        // 换下来的旧会话:只认换之前已发请求的回包;收完就关
+        const r = this.retiring;
+        if (r?.ep === ep && msg.reqId !== undefined && !msg.type.startsWith("project.") && r.left.has(String(msg.reqId))) {
+          r.left.delete(String(msg.reqId));
+          if (this.waiting.has(String(msg.reqId))) this.dispatch(msg);
+          if (!r.left.size) this.dropRetiring();
+        }
         return;
       }
       if (msg.type === "error" && typeof msg.reason === "string" && AUTH_EXPIRED_REASONS.has(msg.reason)) {

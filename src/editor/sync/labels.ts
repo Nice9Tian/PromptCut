@@ -119,6 +119,11 @@ export function writerLabel(by: Writer | undefined, me: Me, names: DisplayNames 
   if (!actor.userId && session === me.session) return "你在这个页面";
   if (actor.role === "agent" && actor.service === "agent") {
     if (sameUser) return "你的云端 Agent";
+    // 账号云端项目:云端 Agent 的写入身份是 `account:<账号号>@run:<任务号>`,不带设备,按账号认人、按账号查名字
+    if (typeof actor.accountId === "string") {
+      if (me.userId?.startsWith(`${accountNameKey(actor.accountId)}@`)) return "你的云端 Agent";
+      if (names.has(accountNameKey(actor.accountId))) return cloudAgentLabel(names.get(accountNameKey(actor.accountId))!);
+    }
     return cloudAgentLabel(actor.username ?? usernameOf(actor.userId));
   }
   if (actor.role === "agent") {
