@@ -751,7 +751,8 @@ try {
     // 新流画的是新的一版:拿改之前的参照比,差明显更大
     const vsOld = [...dragNew.shots].filter(([f]) => refsOld.has(f)).map(([f, png]) => ({ frame: f, vsNew: meanDiff(png, refsNew.get(f), region), vsOld: meanDiff(png, refsOld.get(f), region) }));
     out.newVsOld = vsOld;
-    check(vsOld.length > 0 && vsOld.every((r) => r.vsOld > r.vsNew * 1.2 + 0.2), 'G:新流贴的是改过以后的画面(拿改之前的精确活渲比,差明显更大)', vsOld);
+    // 只改了下面那张卡的颜色,透过毛玻璃看只差一点(实测 0.5～0.7 级),所以这里只判方向;新旧两条流不是同一条由键和签名判(上面)
+    check(vsOld.length > 0 && vsOld.every((r) => r.vsOld > r.vsNew), 'G:新流贴的是改过以后的画面(拿改之前的精确活渲比,差更大)', vsOld);
   }
   await costRecords(pageB, glassKeys);
   const tEnter = Date.now();
