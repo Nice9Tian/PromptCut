@@ -600,7 +600,7 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
     const s1 = collect();
     svc.subscribe(A1, 'c-p1', 0, s1.cb);
     const off2 = svc.subscribe(A1, 'c-p2', 0, () => {});
-    await waitFor(() => s1.seen.some((e) => e.type === 'tool_result'), 20_000, 'c-p1 切完剪辑');
+    await waitFor(() => s1.seen.some((e) => e.type === 'tool_result'), 60_000, 'c-p1 切完剪辑');
     const r1 = s1.seen.find((e) => e.type === 'tool_result');
     assert.equal(r1.ok, true, r1.summary);
     assert.equal(/发起方不在线/.test(r1.summary), false);

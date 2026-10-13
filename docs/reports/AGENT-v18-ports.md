@@ -30,3 +30,36 @@
 - 改之后：同样办法连做三轮，每个进程 64 条全过、0 失败、0 个 EADDRINUSE、退出码 0。
 - `npx tsc -b --force` 退出码 0。
 - 整套 `npm test`（设两个环境变量）：6121 条，通过 6113，失败 0，跳过 8，与 main 一致。
+
+# 第二批
+
+先 `git merge main`（快进到 a21c1db1）。新增 20 个文件的批量验证（`scripts` 外，清单见下）：改之前两个进程同时跑，A 进程 109 条里失败 22、B 进程 105 条里失败 25，大量 `EADDRINUSE`（34 与 38 处）；改之后连做三轮，6 个进程都是 109 条全过、0 失败、0 个 EADDRINUSE。`npx tsc -b --force` 退出码 0；整套 `npm test` 6121 条，通过 6113，失败 0，跳过 8，没有触发重跑。
+
+## 一、测试里的写死端口（都在 server/test/ 下）
+| 文件 | 原来 | 现在（只列取端口的改动） |
+|---|---|---|
+| account-assembly-central | 5770～5775、5779（账号、doc、doc 内部、asset 公共、asset 内部、读控制、combo 的 asset） | 开头 `freePorts(7)`（第一个"必需拒绝"用例 `freePorts(2)`），所有字符串、环境变量改用变量 |
+| account-assembly-fence-transport | 5775、5776、5777、5778、5779 | `setup` 传 0，把读回的端口存成 `service.testPort`，其余处引用它（含 ws 地址） |
+| account-real-runner-sse | 6707 | 监听 0，请求地址读 `server.address().port`，仅 2 行 |
+| account-real-runner（测试） + fixtures/account-real-runner.mjs | 6700～6706、6708、6709 | 夹具给 `startAccountRealRunnerFixture` 加可选参数 `ports`、`agentPort`、`controlPort`，缺省仍是旧值（探针 account-real-runner-probe 依赖旧值）；测试传 `freePorts(9)`。夹具改了 3 行：函数签名、`ports: [...ports], agentPort,`、`controlPort,` |
+| agent-access-http | 5790、5791 | `freePorts(2)` |
+| agent-read-control-transport | 6600、6601 | `freePorts(2)` |
+| agent-runner-control | 5795、5796、5797 | 都改为监听 0 再读回 |
+| agent-run-scope-doc | 6712 | 监听 0，读回成 `ownedPort` |
+| agent-worker-settlement-client | 6713 | `freePort()`，origin 与监听、诊断文字都用它 |
+| cloud-queue-http | 6602、6603 | 6602 用 `freePort()`，6603 监听 0 读回 |
+| asset-project-close-boundary、asset-project-workers、asset-project-entries + fixtures/asset-project-service.mjs | 5780～5784、28090 | 夹具默认端口改 0 并读回实际端口，三个测试不再传 port；其余本地监听改 0 |
+| operation-wiring-fixture、operation-wiring-child、operation-wiring-crash、run-authority-operation-fixture | 5760、5761、5730 | 夹具默认 0 并读回；child 与 crash 测试不再传 5761 |
+| project-selections | 5920 | 监听 0 |
+| account-password-user-path、account-logout-confirmation | 6680～6687、28140～28147 | 测试内 `freePorts(8)`（一个给 Agent，七个给底座） |
+| account-dual-user-path | 夹具缺省 6380～6388 | 测试传 `freePorts(7)` |
+
+## 二、没有改的数字（不是监听端口）
+account-executor-assembly 的 6640/6641（命令行拒绝配置的输入，根本不监听，所以也不碰另一个子 Agent 在改的文件）；account-task-worker-child 6700、agent-worker-session 6700、agent-worker-registration-mtls 6702、cloud-run-assets-current-registry-v2 6553（假配置或"监听前就拒绝"）；agent-run-scope-core 6540（解析 /proc 文本的输入）；hosted-render-*、sp-*、c10-*、api-guard 等里的 5xxx、8xxx（地址字符串或假返回）。夹具缺省值 account-conversation-controls-user-path、cloud-queue-user-path、account-dual-user-path、account-password-user-path 的默认端口表保留，因为 scripts/probes 下的其他探针（account-user-pages、cloud-queue-user-pages、project-member-controls、account-conversation-controls、account-real-runner）把同一批端口写进浏览器地址和舞台地址，改缺省值会连带坏它们；这些探针不是本批范围，仍写死，会和同时跑的探针互撞，留给主会话决定。
+
+## 三、account-password-user-path-probe.mjs（只做了 node --check，没有真跑）
+改了：文件开头用 `await freePorts(10)`（导入自 server/test/free-ports.mjs）取代 `PORTS`；`ORIGIN` 取第 7 个端口（HTTPS 入口）；两个舞台端口取第 9、10 个，`STAGES` 由它们拼出 `http://s1.pc.localhost:<端口>`；起舞台处循环 `STAGE_PORTS`；启动底座时传 `ports: PORTS.slice(0,7), agentPort: PORTS[7]`。底座 `fixtures/account-password-user-path.mjs` 本身不用改（本来就接受 `ports`、`agentPort`）。主会话重跑时注意：浏览器的 `--host-resolver-rules` 只映射 s1/s2.pc.localhost 到 127.0.0.1，端口无关，不用改；开头"端口可用"检查现在对刚要到的端口恒真；结果里的 `cleanup.portsFree` 检查的是这次的端口；日志、结果里的端口号每次不同，别拿固定号去匹配。
+
+## 四、两处偶发超时（只调时限）
+- agent-live-selection 第 101 行（等 8000 ms）：等的是模型脚本调用 get_selection 后的 `tool_result` 事件。`onEvent` 在 `startHostedRun` 时就挂上，事件不会漏；慢的是第一次用到代理工具时 vite `ssrLoadModule` 现编译一批 ts 模块，吃 CPU。单独跑整份文件 1.5 秒。结论：时限紧，没有时序问题。放宽到 30000 ms。
+- cloud-agent-runs CA-PAGE-01（第 603 行等 20000 ms）：等 c-p1 的 `tool_result`。订阅用 `subscribe(..., 0, ...)` 从头回放，订阅晚了也不丢；脚本先睡 400 ms 再调 add_cut，同样首次加载工具模块。单独跑该用例 1.9 秒。结论：时限紧，没有时序问题。放宽到 60000 ms（整个用例超时 240 s 不变）。时限只防卡死，不是通过条件。
