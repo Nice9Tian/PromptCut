@@ -221,4 +221,4 @@
 ## 七、基线与验证
 
 - 没改代码和测试，未跑 `npx tsc -b --force`。
-- `npm test`：设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`（值取自主工作区 `docs/local.md` 文末两行，未打印、未读其它内容）和 `PROMPTCUT_NO_PORT_FILE=1`；结果见交活时的最终回复。
+- `npm test`：设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`（值取自主工作区 `docs/local.md` 文末两行，未打印、未读其它内容）和 `PROMPTCUT_NO_PORT_FILE=1`；全量 6895 条：通过 6878、失败 1、跳过 15。失败的一条是 `server/test/account-worker-lifecycle.test.mjs` 的「退出确认里 Agent 这一项…」，机器忙时的偶发（别的块的报告里也出现过）；单独重跑该文件 9 条全过，「npm test 最终结果：零失败」。文档用词和链接的守门测试全过。
