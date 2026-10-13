@@ -166,7 +166,7 @@ node scripts/acceptance/four-stage-acceptance.mjs --rows-from <目录>/results.j
 | 覆盖守门 | `node scripts/acceptance/four-stage-acceptance.mjs --check-coverage` | 「守门:通过」,退出码 0(原来:退出码 1,66 个探针没登记) |
 | `cloud-agent-ui-probe.mjs`(S4-4) | 单跑 28 条检查全过、退出码 0(截图在 `docs/reports/assets/v18-runner-list/`);经运行器 `--only S4-4` 再跑一遍 `pass`(116 秒) | 通过 |
 | G0-6(被无声跳过的 cards-layout 集成) | 运行器里起 dev server 跑 | `pass`,skipped 0 |
-| 全量测试 | `npm test`(设了两个账号环境变量) | 合入 main 前一遍:`tests 6446、fail 0、skipped 12、todo 6`,零失败。合入 main 之后几遍在机器被别的 Agent 占满时各有一条不同的测试失败(`边改写边读…`、`subject_install…`、`account-worker-lifecycle` 的一条、`cloud-tools-*` 的写死端口被占),单独重跑都过;`subject_install` 在满载下反复失败,单独跑 29/29,它的断言「不要重复启动」要求第一个安装作业还在跑,是计时相关,不是这一块的改动(我没碰那个文件)。结果见交活时最后一遍。 |
+| 全量测试 | `npm test`(设了两个账号环境变量) | 合入 main 前一遍:`tests 6446、fail 0、skipped 12、todo 6`,零失败。合入 main 之后几遍在机器被别的 Agent 占满时各有一条不同的测试失败(`边改写边读…`、`subject_install…`、`account-worker-lifecycle` 的一条、`cloud-tools-*` 的写死端口被占),单独重跑都过;`subject_install` 在满载下反复失败,单独跑 29/29,它的断言「不要重复启动」要求第一个安装作业还在跑,是计时相关,不是这一块的改动(我没碰那个文件)。**交活前最后一遍(合入 main 之后,同一份代码):`tests 6470、pass 6452、fail 0、skipped 12、todo 6`,末行「✓ npm test 最终结果:零失败」,退出码 0。**前一遍同代码在别的 Agent 占满机器时 `subject_install` 一条失败,所以如实写两次:一次红一次绿。 |
 | 窗口 | 跑探针前后查可见窗口 | 无;28990～29049 收尾无残留监听 |
 
 没有 `git diff --stat main...HEAD` 里整份被换行尾的已有文件(`cloud-agent-ui-probe.mjs` 是整份重写,正常)。
