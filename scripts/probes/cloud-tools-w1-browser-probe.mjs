@@ -1,11 +1,11 @@
 // W1(云端 Agent 的网页操作七个工具)可重复跑的真实探针。
 //
-//   node scripts/probes/cloud-tools-w1-browser-probe.mjs              # 全部:窗口检查 → 三份专用测试(真浏览器)→ 公网 → 浏览器自己不解析主机名
+//   node scripts/probes/cloud-tools-w1-browser-probe.mjs              # 全部:窗口检查 → 五份专用测试 → 公网 → 浏览器自己不解析主机名
 //   node scripts/probes/cloud-tools-w1-browser-probe.mjs --public     # 只跑「真实公网」那一段
 //   node scripts/probes/cloud-tools-w1-browser-probe.mjs --no-public  # 不连公网的部分
 //
 // 跑之前设好 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE(运行授权夹具要用,值见仓库 docs/local.md 里的说明)。
-// 用到的端口:28380、28390～28392、28400(三份测试)、28410～28411(本探针)。浏览器全是无头的,不开窗口。
+// 用到的端口:28380、28390～28393、28400、28401(专用测试)、28410～28411(本探针)。浏览器全是无头的,不开窗口。
 // 截图落在 docs/reports/assets/v18-tools-w1/。证据行以 [w1] 开头,直接打在输出里。耗时只记录。
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -59,12 +59,13 @@ const context = { projectId: 'sp_probe', conversationId: 'conversation_probe', r
 const scope = { projectId: context.projectId, conversationId: context.conversationId };
 
 async function runTests() {
-  say('—— 三份专用测试(真浏览器、本地假站、真运行授权)——');
+  say('—— 五份专用测试(三份真浏览器 + 本地假站 + 真运行授权;两份不起浏览器的单测)——');
   fs.mkdirSync(SHOTS, { recursive: true });
   const code = await new Promise((resolve) => {
     const child = spawn(process.execPath, [
       '--experimental-test-module-mocks', '--test-global-setup=server/test/global-setup.mjs', '--test', '--test-reporter=spec',
       'server/test/cloud-tools-w1-browser.test.mjs', 'server/test/cloud-tools-w1-egress.test.mjs', 'server/test/cloud-tools-w1-restart.test.mjs',
+      'server/test/cloud-tools-w1-host.test.mjs', 'server/test/cloud-tools-w1-process.test.mjs',
     ], { cwd: ROOT, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, W1_VERBOSE: '1', W1_SHOT_DIR: SHOTS } });
     let text = '';
     child.stdout.on('data', (chunk) => { text += chunk; process.stdout.write(chunk); });
@@ -75,7 +76,7 @@ async function runTests() {
       if (exitCode === 0 && skipped > 0) { say('有被跳过的:探针不接受跳过'); resolve(3); } else resolve(exitCode ?? 1);
     });
   });
-  check(code === 0, '三份专用测试零失败、零跳过');
+  check(code === 0, '五份专用测试零失败、零跳过');
   say('截图:', fs.readdirSync(SHOTS).filter((f) => /^0\d-/.test(f)).join(' '));
 }
 

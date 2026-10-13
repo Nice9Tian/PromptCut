@@ -180,9 +180,10 @@ export function startFakeSite(port, { internalUrl = 'http://127.0.0.1:1/', host 
   server.on('upgrade', (_req, socket) => { hits.push({ path: '<upgrade>', cookie: '', host: '', at: Date.now() }); socket.destroy(); });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
+    // port 给 0 就是让系统分配一个;回的是实际听的那个
     server.listen(port, host, () => resolve({
-      port,
-      origin: `http://${host}:${port}`,
+      port: server.address().port,
+      origin: `http://${host}:${server.address().port}`,
       hits,
       count: (p) => hits.filter((h) => h.path === p).length,
       close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }),
@@ -203,7 +204,7 @@ export function startInternalService(port, { host = '127.0.0.1' } = {}) {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => resolve({
-      port, origin: `http://${host}:${port}`, state,
+      port: server.address().port, origin: `http://${host}:${server.address().port}`, state,
       close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }),
     }));
   });

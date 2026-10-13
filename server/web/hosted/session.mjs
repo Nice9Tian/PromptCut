@@ -473,7 +473,8 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
   let proc;
   let transport = null;
   try {
-    const pptr = puppeteer ?? (await import('puppeteer')).default;
+    // 只用它的两样:算缺省启动参数、经管道连上去。有 puppeteer-core 就用它(不带下载浏览器的那一半),没有再用 puppeteer
+    const pptr = puppeteer ?? (await import('puppeteer-core').catch(() => import('puppeteer'))).default;
     const base = await pptr.defaultArgs({ headless: mode === 'shell' ? 'shell' : true, userDataDir, args: ownArgs });
     args = [...prefix.args, ...base, '--remote-debugging-pipe'];
     proc = spawnBrowser(executablePath, args, { cwd: sessionDir, env: childEnv(sessionDir), stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
