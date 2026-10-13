@@ -126,7 +126,7 @@ window.__knownIds = async () => (await window.__kit).allCards().map((c) => c.id)
 window.__cardMeta = async (ids) => {
   const kit = await window.__kit;
   return ids.map((id) => { const def = kit.getCard(id); return def ? { id, source: def.source || 'native',
-    mode: kit.cardFrameMode(def, def.defaults), canvasHeavy: !!kit.reviewedCard(id)?.canvasHeavy, glCanvas: !!(def.canvas && def.canvas.kind !== 'dom2d') } : { id, missing: true }; });
+    mode: kit.cardFrameMode(def, def.defaults), canvasHeavy: ['canvas2d', 'webgl'].includes(kit.reviewedCard(id)?.surface), glCanvas: !!(def.canvas && def.canvas.kind !== 'dom2d') } : { id, missing: true }; });
 };
 window.__mkProject = (cardId, fps, lenSec, params = {}) => ({
   version: 1, id: 'swap-probe', name: 'swap-probe', width: 1920, height: 1080, fps, duration: lenSec,

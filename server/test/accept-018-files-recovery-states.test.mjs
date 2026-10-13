@@ -7,9 +7,9 @@
  * 界面上每个状态对应的提示文字在 `src/editor/sync/SyncChips.tsx`,这里只验状态归类(文字是一级语义,不在这里定)。
  * 「转本地」本身 main 上没有(见地图 2.1-8),所以「不转本地」在 main 上靠「没有任何转换入口」成立(grep 为证,写在地图里)。
  *
- * 带 `todo` 的两条是 main 上目前不成立的归类(产品问题,见地图「产品问题」5):
+ * STATE-4、STATE-5 原来带 `todo`(产品问题,见地图「产品问题」5),并入 claude/v18-missing 后成立,todo 已去掉(2026-10-13):
  * 错误节点上的「没有此房间」和本机凭证被撤销,协调器都直接报 deleted(即「房间已删除」),而任务书要求它们既不当作已过期、也不触发转换。
- * 分支 claude/v18-missing 的 9de16f81 改了这两处;合入后这两条应转绿,届时去掉 todo。
+ * 分支 claude/v18-missing 的 9de16f81 改了这两处。
  *
  * 跑:npm test -- server/test/accept-018-files-recovery-states.test.mjs
  * 合入前演练:先 `git show claude/v18-missing:server/recovery/coordinator.mjs > <临时>/coordinator.mjs`,再设 ACC018_COORDINATOR_FILE 指过去跑同一个文件。
@@ -74,12 +74,12 @@ test('ACC018-STATE-3 被踢 / 禁入 / 移出名单:被拒(rejected,权限类提
   }
 });
 
-test('ACC018-STATE-4 错误节点上的「没有此房间」(HTTP 404 / no-project):不能当作房间已删除', { todo: '产品问题:coordinator.mjs 第 51 行把 no-project 直接归为 deleted;任务书要求错误节点的 404 既不当过期也不触发转换。分支 claude/v18-missing 的 9de16f81 已改' }, async () => {
+test('ACC018-STATE-4 错误节点上的「没有此房间」(HTTP 404 / no-project):不能当作房间已删除', async () => {
   const { states } = await run({ discover: async () => { throw reason('no-project'); } });
   assert.ok(!states.includes('deleted'), `错误节点的 404 被报成 ${states}`);
 });
 
-test('ACC018-STATE-5 本机凭证被撤销(旧凭证):要认证,不能当作房间已删除', { todo: '产品问题:coordinator.mjs 第 21 行 saved.revoked 直接报 deleted;「旧凭证」应走认证提示。分支 claude/v18-missing 的 9de16f81 已改' }, async () => {
+test('ACC018-STATE-5 本机凭证被撤销(旧凭证):要认证,不能当作房间已删除', async () => {
   const { states } = await run({ identity: async () => ({ revoked: true }) });
   assert.ok(!states.includes('deleted'), `本机凭证被撤销被报成 ${states}`);
 });

@@ -16,6 +16,11 @@ import { getSyncView, pushToast } from "./syncManager";
 import { postEnqueue, uploadMissingMessage } from "./collab";
 
 const shared = () => !!getSyncView().shared;
+/**
+ * 这个文件还带着协作关联(云端或局域网项目,连上了没有都算;被证明转成本地项目之后才没有)。
+ * 没连上时(断网、要认证、等主机)`shared` 是空的,但它仍然不是本机项目:只在远端有的素材不能在这时认定缺失。
+ */
+const associated = () => !!getSyncView().association;
 
 const notify = (names: string[]) => {
   console.warn("[collab] 这些素材传不上去:", names);
@@ -24,6 +29,7 @@ const notify = (names: string[]) => {
 
 export const backfillHooks: BackfillHooks = {
   shared,
+  associated,
   afterIngest: (r) => queueBackfilledMedia(r, getState().project.media ?? [], { post: postEnqueue, shared, notify }),
   afterImport: (media) => queueImportedMedia(media, { post: postEnqueue, shared, notify }),
 };

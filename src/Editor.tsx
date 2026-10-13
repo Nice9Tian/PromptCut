@@ -18,6 +18,8 @@ import { StatusBar } from "./editor/StatusBar";
 import { DependencyPrompt } from "./editor/DependencyPrompt";
 import { motion } from "motion/react";
 import { MediaMigrationDialog } from "./editor/MediaMigrationDialog";
+import { MissingMaterialsDialog } from "./editor/MissingMaterialsDialog";
+import { CloudGoneDialog } from "./editor/sync/CloudGoneDialog";
 import { SyncOverlays } from "./editor/sync/SyncOverlays";
 import { isJoinPage, resumeShared, startSync } from "./editor/sync/syncManager";
 import { undoRedoKey } from "./editor/undoKeys";
@@ -182,6 +184,8 @@ export default function Editor() {
   return (
     <div data-pc="editor" className="h-full min-h-0 flex flex-col" style={{ backgroundColor: "var(--ui-bg)", color: "var(--ui-fg)" }}>
       <MediaMigrationDialog />
+      <MissingMaterialsDialog />
+      <CloudGoneDialog />
       <SyncOverlays />
       <TopBar />
       <DependencyPrompt />
