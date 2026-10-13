@@ -22,6 +22,7 @@
  * 每张卡两组:顺推(第 0、1、2…… 帧连着要;direct 的卡每帧直接拨,有状态的卡接着上一帧推一步)和直接跳(仅 Lottie 卡:每次先 `bakeCancel`,
  * 再要全长里随机抽的帧)。只记录,不判过不过;任何一次 `bakeFrame` 失败退出码 1。
  */
+import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的导出目录 / 数据目录(--fidelity 会起一台隔离的开发服务器)
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
