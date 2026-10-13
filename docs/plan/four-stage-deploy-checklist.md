@@ -10,6 +10,8 @@
 
 > **2026-10-08 对齐补记（main `bf6e48e6`）：** 在线卡片的旧出口保护与外链阻断验收被用户决定取代：浏览器都执行用户卡/素材效果卡、外链照常加载，本期不做卡片出口限制；舞台和编辑页分源、素材按项目隔离保留。P2 素材效果卡任务体积上限照旧。托管渲染容量数字先沿用并在节点复核；任务遇容量压力等待、不报“已满”、不因云端满静默本机降级（本次合格本地优先见调度增量），云端 Agent 优先；渲染产物硬上限不突破，507 是内部容量信号，消费方改为保留任务等待并在可写时重试（尚待容量实施包完成）。该规则不用于账号/素材上传大小错误。选区规则、对话共有私有及托管方读取告知按 `account-binding-task.md`；本清单中的旧 P1/P3/P5 和旧容量失败验收需按此目标更新，未更新的历史测试记录不代表新策略已实施。只有撤销冲突窗口选项仍需用户事后审。
 
+> **2026-10-13 补记（main `f18e33ef`）：** 账号模式（项目放云端、成员身份由账号服务核对）的云端 Agent 是「一条任务一个进程」，部署看 C5b，不用 C5 的 PM2、服务私钥和 `deploy-agent`。账号版的账号、文档、素材三个服务以 systemd 单元跑（`promptcut-account-v2`、`promptcut-doc-v2`、`promptcut-asset-v2`，见 `server/hosted/deploy/account-v2-install-plan.mjs`），B1、C3 里针对 PM2 的 `promptcut-hosted` 和 `deploy-hosted` 的写法在账号版上不适用；账号版文档服务的备份与重启怎么做，待部署时核对。〔裁〕：见 AGENT-v18-prod.md、AGENT-v18-assets.md。
+
 给主会话在「最后一次完整验收」通过之后照着做（任务书 `sound-online-render-task.md`「做法与验收节奏」第 4～6 步）。每一步写：做什么、哪条命令、改动前备份什么、怎么核对、不过怎么退。可以逐条打勾。2026-10-07 起草，同日按任务书更新（云端 Agent 的 F、J、K 与完成条件第 8 条）补入。
 
 先说清几件事：
@@ -84,6 +86,7 @@
   ```
   输出每次采样一行与最后的 `RESULT {…}`。退出码 0 = Agent 对话不再提交、项目版本（`link.replica.rev`）与上传队列计数连续 5 分钟不变、队列空闲，才可以重启托管服务；退出码 3 = 等满 3 小时仍在写，**停下告诉用户，不要重启**。5210 连不上（桌面版没开）时按「没有桌面端在写」退出 0，结论里会写明——但别处的成员看不到，重启前仍要告知用户。**只在 C3 重启托管服务之前跑；C1、C2、C4、C5 的静态与独立进程操作不用等。** 等的时候先做别的步骤。
 - [ ] **B5 用户要做的事清单**（会话不做、写命令给用户）：装补丁（A4）；模型 Key 的加密（C5）；有 systemd 的节点上 `pm2 startup` 打印的那条 `systemctl` 命令若会话没有权限执行时由用户执行；防火墙/安全组不改——本次所有新进程只绑回环、对外只经 nginx 的 443，不需要放行新端口。
+- [ ] **B6 节点重启对账号版 Agent 的影响（先知道，再动手）。** 账号版的任务槽把「这一代任务进程确实关干净了」的记录钉在这一次开机上（发布器 `server/hosted/deploy/agent-run-scope-publisher.mjs` 报 `agent-scope-boot-transition`）：节点重启后原来的槽不能接着用。要给每个槽换新的 `expected.authorityId`（或 `slotId`）、换一个空的登记目录，重做 C5b 第 4～6 步（含重启文档服务）和第 8 步。重启那一刻没结清的任务结不了，对应的对话会一直显示有任务在跑，要到文档服务里处理。所以任何会重启节点的操作（含 C4 第 6 步的真重启）之前，先用 `node server/agent-service/account-root-main.mjs --config /etc/promptcut/agent-root/agent-root.json --status` 等各槽都是 `closed`；意外重启后云端 Agent 停摆，直到有人重新初始化。要不要改成重启后自动接上，用户待定（AGENT-v18-prod.md「要用户定的事」第 3 条）。〔裁〕：见 AGENT-v18-prod.md。
 
 ## C. 部署（按这个顺序）
 
@@ -161,11 +164,13 @@
 - [ ] 3. `node scripts/remote/docservice.mjs keygen-render`：在节点上生成服务私钥（`/var/lib/promptcut/render-secrets/service-key.json`，0600，不离开节点、不打印），公钥原子追加进托管数据目录的 `secrets/services.json`，文档服务按文件修改时刻重读、不用重启托管服务。`keygen-render --list` 核对登记表里有一把 `render`。托管数据目录是上一次从阿里云整份搬来的：若里面有旧的服务公钥，`--retire` 撤掉。
 - [ ] 4. `node scripts/remote/docservice.mjs deploy-render --commit <SHA> --save`：用新发布目录跑 `server/hosted-render/main.mjs --check`（Node 版本、私钥、数据目录、Chrome 能否启动、能否照工作进程的办法开页并出一帧、中文字体、ffmpeg、控制连接握手），**自检过了才换 `current` 并 `pm2 startOrReload`**；退出码 78 = 自检不过、什么都不换，看输出里的 `selfcheck.error`。`--save`：`pm2 save`，并在没装时装 `pm2-root.service`（开机自启）。
 - [ ] 5. `node scripts/remote/docservice.mjs status-render`：PM2 在线；诊断口 `codeVersion` 的渲染服务与在线页面**并排且一致**（不一致标红）；资源组有上限（内存 `MemoryMax`/`MemoryHigh`、`CPUQuota` 缺省 6G/5G/400%）；产物容量记账文件在（`<托管数据目录>/assets/.service-usage/render.ndjson`）。
-- [ ] 6. 开机自启：`systemctl is-enabled pm2-root` 应是 `enabled`，`pm2 resurrect && pm2 list` 里有 `promptcut-render`（和 `promptcut-hosted`）。**真重启节点会中断托管服务，要用户在场授权；不授权就只核对这三条，D 节「节点重启后自动起来」一行记「待用户授权」。**
+- [ ] 6. 开机自启：`systemctl is-enabled pm2-root` 应是 `enabled`，`pm2 resurrect && pm2 list` 里有 `promptcut-render`（和 `promptcut-hosted`）。**真重启节点会中断托管服务，要用户在场授权；不授权就只核对这三条，D 节「节点重启后自动起来」一行记「待用户授权」。账号版 Agent 已经装上时，真重启之后还要按 B6 重新初始化任务槽。**
 - **备份。** 无需（新进程、新目录）；PM2 存档 `~/.pm2/dump.pm2` 在 B1 已备份。
 - **不过怎么退。** `node scripts/remote/docservice.mjs stop-render`（`pm2 stop` 并 `pm2 save`；托管服务不动，项目照常用，只是没有云节点预渲染）；升级后有问题用 `rollback-render`（`current` 换回 `.previous` 再重载）。
 
-### C5 部署 Agent 服务
+### C5 部署 Agent 服务（旧模式：PM2、服务私钥连文档服务）
+
+账号模式不用本节的命令，看后面的 C5b。〔裁〕：见 AGENT-v18-prod.md。
 
 命令与顺序取自 README「Agent 服务」一节（第四段分支上；〔待合流核对〕）。Agent 服务不单独上传代码：用 C4 放上去的那份检出，**三者同一个提交**。
 
@@ -180,10 +185,10 @@
      ```
      ssh "$PROMPTCUT_REMOTE" 'cd /opt/promptcut-render/current && node -e "import(\"./server/runners/machine-id.mjs\").then(m=>console.log(m.machineCode()))"'
      ```
-     注意要用**跑 Agent 服务的那个系统用户**在**那台节点上**取（识别码取自 `/etc/machine-id`，云厂商重装镜像后会变，变了要重做）。
+     注意要在**那台节点上**取。识别码取自 `/etc/machine-id`，不掺主机名、IP、用户名，用哪个系统用户取都一样；云厂商重装镜像后会变，变了要重做。`node scripts/remote/docservice.mjs machine-id-agent` 做的是同一件事。〔裁〕：见 `server/agent-service/machine-id.mjs` 文件头。
   2. **给用户的步骤原文**（把下面一段原样发给用户）：
      > 我把云节点的「机器识别码」（`PCM-` 开头，四组五位）发给你。请在你自己的电脑上：双击仓库根目录的 `make-api-share.bat`（第一次会自己编译，要装有 Rust 的 `cargo`；没有就告诉我）；在打开的窗口里填模型的厂商、接口地址、模型名和 API Key，**识别码填我给你的这一串**；点「加密」生成一段以 `PC` 开头的密文，把这段密文发给我。**不要把 Key 本身发给我，也不要把 Key 写进任何对话、文件或截图。** 密文只有那台节点能解开，转发给别人也没用。
-  3. **会话把密文送到节点导入。** 导入命令〔待第四段补命令〕：节点上读密文、本机解开、用 `server/runners/config-crypt.mjs` 现有的落盘加密（`custom` 一路，机器指纹派生口令）存成 `<数据目录>/config/keys/custom.key`，并更新 `config/ai.json`（厂商、地址、模型清单，不含 Key）。密文经 ssh 标准输入交给节点上的脚本，不上命令行、不回显、不落盘在会话这一侧。
+  3. **会话把密文送到节点导入。** 密文存进本机的一个临时文件（密文本身是加密的），跑 `node scripts/remote/docservice.mjs import-key-agent --file <密文文件> [--service model|voice] [--dry-run]`。密文经 ssh 标准输入交给节点上的 `server/agent-service/import-key.mjs`，不上命令行、不回显；它在节点本机解开，用 `server/runners/config-crypt.mjs` 现有的落盘加密（`custom` 一路，机器指纹派生口令）存成 `<数据目录>/config/keys/custom.key`，并更新 `config/ai.json`（厂商、地址、模型清单，不含 Key）；节点上的临时文件导入完（成功或失败）都删掉。数据目录取本机环境变量 `PROMPTCUT_AGENT_DATA`，缺省是旧模式的 `/var/lib/promptcut/agent`；账号版要先把它设成共用数据目录 `/var/lib/promptcut/agent-shared`，导入后保证任务用户读得到 `config/`（属主与权限待部署时核对）。〔裁〕：见 `server/agent-service/key-deploy.mjs`、`server/hosted/deploy/README.md`。
   4. **导入后核对（只核对末四位与能否调通，不打印 Key）。** 导入命令回的「已保存，末四位 ××××」与用户口头确认的末四位一致；`status-agent` 显示「已配模型」；发一条最短的云端对话（测试项目，如「回复 OK」）看模型调通、用量记录里多一条；用 `admin.mjs usage --project <测试项目>` 查得到。验完删测试项目。
   5. 之后用**真实模型**跑 D 节标「真实模型」的三行。
 - [ ] 8. **Agent 服务的运行条件检查项（J 条：云端 Agent 的工具与本机一致）。** 逐项写「节点上有没有、没有怎么装、装不了记未达成」；这一块第四段还在返工，命令细节留占位〔待第四段返工完成后补〕，依赖清单取自 main 上现有的桌面版：
@@ -191,7 +196,7 @@
   | # | 工具类 | 要什么（来源） | 节点上有没有 | 没有怎么装 | 装不了 |
   |---|---|---|---|---|---|
   | 1 | 建卡改卡、读写项目、效果、素材引用 | Node 与 Vite 载入工具实现（`server/agent/ssr-host.mjs`）；与渲染服务同一份检出（含依赖） | 有（C4 的 `current`） | — | — |
-  | 2 | 看画面（即时渲染，`see_frames`/`query_render`） | `chrome-headless-shell`（与 C4 同一份缓存目录，或 Agent 服务另备）、中文字体、`ffmpeg` | C4 装的是渲染服务用户的缓存目录，**Agent 服务用户能不能读它要核**〔待第四段补〕 | 复用 C4 的 `PUPPETEER_CACHE_DIR` 或为 Agent 服务再装一份 | 记未达成：看画面 |
+  | 2 | 看画面（即时渲染，`see_frames`/`query_render`） | 渲染服务（C4；浏览器、中文字体、`ffmpeg` 都属于它，Agent 服务自己不开 Chrome）。Agent 一侧要渲染服务诊断口的回环地址和一把服务私钥，签名后向它要一帧（`server/agent-service/look-client.mjs`） | 渲染服务有（C4）。旧模式设 `PROMPTCUT_AGENT_LOOK_URL`。账号版在 root 入口配置的 `worker.look` 里写，缺省不写：任务进程没有 `look` 就是没接，模型拿不到看画面的工具。渲染服务在账号模式下还没有连文档服务的身份，看不到账号项目，现在写了也看不成画面。〔裁〕：见 AGENT-v18-runner.md、AGENT-v18-prod.md | 写 `look` 的办法与私钥谁读得到见 C5b 末尾 | 记未达成：看画面 |
   | 3 | 语音转文字（`promptcut_stt`） | Python 3（**本体只依赖标准库加 numpy**，`python/README.md`；`asset-path-probe` 的 P7～P11 也要带 numpy 的 Python）+ `PROMPTCUT_PYLIBS` 里的 `faster-whisper`、`ctranslate2`、`onnxruntime`、`av`、`huggingface-hub`、`tokenizers`（`python/requirements-faster-whisper.txt`）；模型按需下载（`PROMPTCUT_MODELS`，small / large-v3，**节点要能出网访问模型仓库，或预先放好**） | 节点有系统 `python3`（REPORT-cloud-node-deploy 1.1 节：已装 python3），没有这些库与模型 | 建 venv、`pip install -r python/requirements-faster-whisper.txt --target $PROMPTCUT_PYLIBS`；模型预下载到 `$PROMPTCUT_MODELS`〔命令待第四段补〕 | 记未达成：语音转文字 |
   | 4 | 镜头切换识别（`promptcut_shots`） | `onnxruntime` + `transnetv2.onnx`（29.6 MB，来源见 `tools/transnetv2/README.md`） | 没有 | 装 wheel（`light` 档的 5 个 wheel 共 26 MB）、拷模型 | 记未达成 |
   | 5 | 主体检测 light 档（`promptcut_subject`） | `onnxruntime` + `yunet.onnx`、`rtdetr_r18vd.onnx`（共 77.5 MB，来源见 `tools/subject/README.md`） | 没有 | 同上 | 记未达成 |
@@ -200,11 +205,58 @@
   | 8 | 配音（`voice_generate`，服务商 `minimax` / `kling` / `vidu`，`server/voice/`） | 托管方的配音配置（服务商、接口地址、网关令牌，令牌按 `config-crypt.mjs` 的 `voice` 一路落盘）；节点出网到服务商域名；用量记进 G 的用量记录（隔离验收新增第三条） | 没有配置 | 令牌也走加密分发（同 F 条的办法，用户加密、会话导入）〔命令待第四段补〕 | 记未达成：配音 |
   | 9 | 出网限制（隔离验收新增第二条） | 能发网络请求的工具（采集、下载、配音）不能访问节点的回环地址、内网地址、同机别的服务的接口 | 待第四段实现 | 实现方式〔待第四段补〕 | 若做不到，**不开放这些工具并记未达成**，不带着风险上线 |
 
+  - **现状（main `f18e33ef`）：** 第 3～6 行里的工具（语音转文字、镜头切换、主体检测、运动追踪）和网页接管、一键流程，实现都已合入，但还没挂到云端工具清单上：`server/agent/service/cloud-tools.mjs` 的 `CLOUD_TOOL_PLAN` 里仍标 `pending`（不交给模型，调用回明确的原因），部署时不用为它们装任何东西。账号版任务进程的设置文件（`server/agent-service/account-task-worker-config.mjs` 文件头）也还没有 Python、模型目录、采集的配置项。挂上以后再逐行填本表。第 8 行的配音是已挂的（`voice_generate` 标 `hosted`，配音服务的令牌走 `import-key-agent --service voice`）。〔裁〕：见 AGENT-v18-prod.md、AGENT-v18-runner.md。
   - **出网限制怎么核对（节点上的实测，不靠推断）：** 在节点上起一个测试项目的云端对话，让网页采集/下载类工具分别请求：`http://127.0.0.1:8787/healthz`、`http://127.0.0.1:8788/healthz`、渲染服务诊断口 `http://127.0.0.1:5399/status`（缺省，见 README）、Agent 服务自己的端口、`http://169.254.169.254/`（云厂商元数据）、节点内网网段地址，以及一个会 302 重定向到上述地址的外部地址、一个解析到回环的域名（DNS 重绑定）；每一个都要被拒并给出明确原因，且访问日志里这些服务一个请求都没收到。
   - **每项工具的「有没有」怎么核：** 在节点上 `cd /opt/promptcut-render/current` 用 Agent 服务的系统用户跑 `python3 -I -c "import sys,runpy; sys.path.insert(0,'python'); runpy.run_module('promptcut_stt', run_name='__main__', alter_sys=True)" status`（`promptcut_shots`、`promptcut_subject`、`promptcut_track`、`promptcut_collect` 各一遍；输出的 `installed`、`pylibs`、CUDA 等如实报告）；`ffmpeg -version`；`ls $PROMPTCUT_MODELS`。
 
 - **备份。** 无需（新进程、新目录）；托管服务环境变量改动前备份 `pm2.config.cjs`（B1）。
 - **不过怎么退。** `stop-agent`（托管服务与渲染服务不动；页面的「云端」一项会报连不上）；要让页面不出「云端」一项：去掉托管服务的 `PROMPTCUT_AGENT_PUBLIC_URL` 并重启（要等写入停止），或 `keygen-agent --retire <kid>` 撤公钥；在线页面退回上一版（C2 的备份）；Key 有问题：`set-key.mjs --clear` 删掉。
+
+### C5b 部署 Agent 服务（账号版：一条任务一个进程）
+
+账号模式（项目放云端、成员身份由账号服务核对）用这一节。每条任务在一个单独的进程里跑。主服务（`server/agent-service/main.mjs`，`PROMPTCUT_ACCOUNT_V2=1`）只接待页面、只做控制，自己不跑任务。root 入口（`server/agent-service/account-root-main.mjs`）开关任务进程、写「这一代关干净了」的记录。任务进程在任务槽里跑，一个槽是一个 systemd 单元，一代只跑一条任务，槽的个数就是全节点同时跑的任务数。只在 Linux、有 systemd 和 cgroup v2 的节点上能用。目前没有部署脚本，全部手工装；`deploy-agent`、`keygen-agent`、`status-agent` 是旧模式的，这里不用。
+
+每一项的值、路径与权限照 `server/hosted/deploy/README.md`「Agent 服务（账号版：一条任务一个进程）」，本节只列顺序、核对和退路。密钥只写文件位置与权限，不写值。〔裁〕：见 AGENT-v18-prod.md、AGENT-v18-worker.md、AGENT-v18-runner.md。
+
+**先决条件。**
+
+- 账号、文档、素材三个服务已经按账号版跑着；
+- 代码检出（与渲染服务同一份、同一个提交）在 `DIR/current`（缺省 `/opt/promptcut-render`）；
+- root 入口以 root 执行的那份代码（整棵 `server/`、路径上每一级目录、`current` 这个链接、node 本身）属主要是 root、组和别人不可写，不满足它拒绝启动（`config.error root-code-untrusted`，带上是哪个路径）。部署目录和渲染服务共用、又不归 root 时，给 root 入口单独放一份 root 的检出（同一个提交，单元里的 `DIR` 指到它）；`git archive` 解出来的文件缺省组可写，要 `chown -R root:root` 加 `chmod -R go-w`。
+
+**步骤**（序号与 README 的九步一一对应）：
+
+- [ ] 1. 建用户、组、目录、证书、钥匙。
+  - 任务用户、主服务用户是两个专门建的系统用户（不用 `nobody`，填单元的工具会拒），都加进一个共用组；主身份的私钥任务进程读不到，这是两个用户的用意。
+  - 目录：共用数据目录 `/var/lib/promptcut/agent-shared`（属任务用户、组是共用组、`chmod 2770`；对话的模型历史、工作目录与上传的附件、用量流水、额度、模型配置都在这里）；每代状态目录 `/var/lib/promptcut/agent-task-state/`（属任务用户 0700，里面是 `<槽>/epoch-<n>/`）；主服务自己的 `/var/lib/promptcut/agent/`（属主服务用户 0700）。其余目录的属主与权限见 README「用户、目录、权限」。
+  - 证书：master、task、identity、controller 四套，同一个私有 CA 签发，SAN 带 `IP:127.0.0.1`，用途 `serverAuth,clientAuth`。私钥的属主：controller 归 root，master 归主服务用户，task 与 identity 归任务用户，都是 0600。README 开头写「三张」，它的表里列的是这四套，以表为准，部署时对着核。
+  - 钥匙：服务登记表（托管数据目录的 `secrets/services.json`）里 `agent` 名下要有两把，跑任务的那一把（文档服务环境的 `PROMPTCUT_DOC_AGENT_SERVICE_KID`）和主身份的一把（新加：`node server/hosted-render/keygen.mjs --hosted-data <托管数据目录> --secrets <一个新目录> --service agent`，记下它打印的钥匙号）。再备一把文档服务给任务槽分配与终态签名的 Ed25519 私钥（文档服务的用户可读、0600），它的公钥写进每个槽的 `expected.docPublicKey`。
+- [ ] 2. 节点自检（不碰现有服务），**过了再往下，没过之前不部署**。按 `scripts/probes/account-root-entry-linux.mjs` 文件头打包、拷到节点、在 tmux 里以 root 跑，`--protect promptcut-account-v2.service,promptcut-doc-v2.service,promptcut-asset-v2.service`。过的标准：末行 `PASS account-root-entry-linux 11/11`、退出码 0、`left` 一行全空、「跑之前在运行的服务」里主进程号或重启次数变了的是「没有」。再跑 `scripts/probes/account-task-worker-config-linux.mjs --dir /run/pc-worker-config-probe`（九行 `ok`，末行 `PASS account-task-worker-config-linux 9/9`）。不过就把整段输出带回，别硬往下装。
+- [ ] 3. 填任务槽单元：`node server/agent-service/account-task-unit.mjs --slot slot-a --user <任务用户> --group <共用组> --dir DIR/current --node "$(command -v node)" --settings /etc/promptcut/agent-slots/slot-a/worker-settings.json --out /etc/systemd/system/promptcut-agent-task-slot-a.service`。记下它打印的 `sha256`，`systemctl daemon-reload`。**不要** `enable`、不要手工 `start`。多个槽每个重复第 3、4 步，身份口端口各用一个。
+- [ ] 4. 写 root 入口配置 `/etc/promptcut/agent-root/agent-root.json`（照 `server/hosted/deploy/agent-root.example.json`，root 所有）：`expected.uid` 是任务用户的 uid；`expected.authorityId` 每次重新初始化都换一个没用过的（B6）；`unitFragment.sha256` 填第 3 步那个；`configuredAnchorDigest` 先写 `null`；`worker.dataDir` 与主服务环境的 `PROMPTCUT_AGENT_SHARED_DATA` 是同一个目录。`worker.look`、`worker.runAssets` 缺省不写（见本节末）。
+- [ ] 5. 初始化各槽：`node server/agent-service/account-root-main.mjs --config /etc/promptcut/agent-root/agent-root.json --bootstrap`。核对：每个槽打印一行 `root.slot.bootstrap`，里面有 `anchorDigest`，`epoch` 为 1、`phase` 为 `closed`。这一步会真的把任务槽单元起一次再关掉，单元、证书、目录权限在这里第一次真验。把每个槽的 `anchorDigest` 填回配置里它的 `configuredAnchorDigest`。
+- [ ] 6. 写文档服务的任务槽配置（照 `server/hosted/deploy/doc-agent-run-scopes.example.json`）：每个槽的 `expected` 与第 4 步配置里的逐字相同，`configuredAnchorDigest` 同上一步，`masterServiceKid` 是主身份的钥匙号，`masterFingerprint256` 是主服务证书的指纹。文档服务的环境里加 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE=<这份文件>`（还要有 `PROMPTCUT_DOC_AGENT_SERVICE_KID`，没有它文档服务不认 Agent 身份、拒绝启动），页面要出「云端」一项还要 `PROMPTCUT_AGENT_PUBLIC_URL=https://<域名>/agent/v1`。**这是重启文档服务，要先 B4 等写入停止**，中断时长记一次。核对：配置不对它拒绝启动并打 `config.error agent-run-scopes`。账号版文档服务的环境文件由安装计划生成（`account-v2-install-plan.mjs`），它生成的变量里没有这三个变量，手工加的重新生成时会不会被冲掉，待部署时核对。
+- [ ] 7. 起主服务：环境文件照 `server/hosted/deploy/agent-account.env.example` 写（root 所有、0644，里面没有秘密；证书只写路径），放好 `systemd-promptcut-agent-master.service`（`User` 是主服务用户、`Group` 是共用组，花括号占位符手工换），`systemctl daemon-reload && systemctl enable --now promptcut-agent`。核对：文档服务这时不在，它会等着（日志每隔两秒一行 `agent.master.pending`），不退出；起来后有 `agent.master.registered` 和 `agent.ready`（`taskProcesses: true`）；`curl -s http://127.0.0.1:8790/healthz` 里 `taskProcesses: true, scheduler: false`（root 入口还没起）、`egressTestAllow: false`；`curl -s -o /dev/null -w '%{http_code}' https://<域名>/agent/healthz` 回 200（C1 的 nginx 路由）。缺配置它拒绝启动并说缺哪一样（`config.error account-task-processes`）。
+- [ ] 8. 起 root 入口：放好 `systemd-promptcut-agent-root.service`，`systemctl daemon-reload && systemctl enable --now promptcut-agent-root`。核对：日志有 `root.ready`；`/healthz` 的 `scheduler` 变成 `true`。
+- [ ] 9. 用模拟模型验：`PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent-shared node server/agent-service/set-key.mjs --mock`（数据目录指**共用数据目录**，任务进程读的是那一份；保证任务用户读得到 `config/`）。然后在测试项目里发一条云端对话：消息做完、同一对话的第二条接着做、点「停止」任务被中断。点停止时服务器最多替页面等 15 秒（等 root 关掉进程、文档服务结清），超过还没办完，页面显示「已禁止新访问，相关服务关闭待确认。点击重试会沿用原请求。」。验完删测试项目。再按 C5 第 6 步，用模拟模型把 D 节的 Agent 实测跑一遍；真实模型的 Key 按 C5 第 7 步导入（数据目录用共用数据目录）。
+
+**同一个提交的核对（账号版）。** `status-agent` 看的是 PM2，这里不用。看主服务 `/healthz` 的 `codeVersion`，与渲染服务诊断口的 `codeVersion` 对照；root 入口若单独放了一份 root 的检出，它也要是同一个提交。
+
+**可选：看画面与运行素材（缺省都不开）。** 两项都写在 root 入口配置的 `worker` 一节，root 入口每开一代时写进任务进程的设置文件。设置文件是 `/etc/promptcut/agent-slots/<槽>/worker-settings.json`（root 写，目录 0755、文件 0644，里面没有秘密，任务用户只读，不手写；形状见 `server/agent-service/account-task-worker-config.mjs` 文件头）。写了但不全，任务进程拒绝启动。
+
+- 看画面：`worker.look = { url, keyDir }`。`url` 是渲染服务诊断口的回环 http 地址（缺省端口 5399）。`keyDir` 里是 `service-key.json`，服务名必须是 `agent`，权限不得宽于 0600，否则拒绝启动（`account-worker-settings-look-key`）。0600 意味着只有属主读得到，所以属主要是任务用户：每个任务进程都读得到这把私钥，主服务用户读不到。用哪一把已登记的 `agent` 钥匙、文件怎么放，待部署时核对。要不要改成任务进程不持私钥、由主服务代签，用户待定（AGENT-v18-runner.md「要用户定的事」第 1 条）。渲染服务现在看不到账号项目（见 C5 第 8 步表第 2 行），所以先不写。
+- 运行素材（凭任务授权读写项目素材，不借成员的票据）：`worker.runAssets = { origin, fingerprint256, maxResponseBytes, maxImportBytes, timeoutMs? }`，`origin` 是素材服务内部口（`https://127.0.0.1:<素材服务的 PROMPTCUT_ASSET_INTERNAL_PORT>/`），`fingerprint256` 是素材服务内部证书的指纹。两侧还各有开关：文档服务 `PROMPTCUT_DOC_RUN_ASSETS_ENABLED=1`（同时要 `PROMPTCUT_DOC_RUN_ASSET_REGISTRY_DIR`、`_UID`、`_TICKET_TTL_MS`、`_MAX_BODY_BYTES`、`_UNIT`、`_CGROUP_PATH`、`_SERVICE_IDENTITY`），素材服务 `PROMPTCUT_ASSET_RUN_ENABLED=1`（同时要 `PROMPTCUT_ASSET_AGENT_FINGERPRINT256`、`PROMPTCUT_ASSET_AGENT_SERVICE_KID`、`PROMPTCUT_ASSET_RUN_TIMEOUT_MS`、`_RUN_MAX_RESPONSE_BYTES`、`_RUN_MAX_BODY_BYTES`、`PROMPTCUT_ASSET_ROOT_UNIT`、`_ROOT_CGROUP_PATH`、`_ROOT_RESERVATION_FILE`）；两侧都要 Linux 和 root 写的登记文件。账号版安装计划不生成这些变量，也不初始化素材一侧的 root 登记目录，所以这一项在节点上还没有部署办法，各变量的取值与登记目录的初始化待部署时核对；没配时素材那几个工具回明确的原因。主服务不再认 `PROMPTCUT_AGENT_RUN_ASSET_*`、`PROMPTCUT_AGENT_ACCOUNT_LOOK`、`PROMPTCUT_AGENT_CONTROL_PORT`，设了就拒绝启动。
+
+**要留意的。**
+
+- 每代的状态目录不会自动清（`agent-task-state/<槽>/epoch-<n>/`），隔一段时间清掉早已关闭的代。root 入口不去删它（任务用户可写的目录有被换成链接的风险）。
+- 重启 root 入口或主服务之前，先用 `--status` 等各槽都是 `closed`：此时还在跑的任务会被记成「失败」。节点重启另见 B6。
+- 部署或重启 Agent 服务时，若有人开着云端对话页，这个登录之后的改密退出，网页会一直停在「正在退出」（旧实例名下的读取没有「确实关干净了」的证明，现在没有验证方）。先让在线的人关掉云端对话页，或接受这些人下一次退出显示不了办完。〔裁〕：见 AGENT-v18-logout.md「没做成的」第 1 条。
+- 任务槽单元模板没有 `MemoryMax`、`CPUQuota`，只有 V8 堆上限（`account-task-unit.mjs` 的 `--heap-mb`，缺省 1536 MiB）。D1 表 C9 一行里的内存上限，账号版要换成这个口径，待部署时核对。
+- 槽停住了（日志 `slot.stuck`，或 `--status` 长时间停在同一代的 `ready`/`bound`）：停 `promptcut-agent-root`，照 README「槽停住了」分情形处理。那几步没有在节点上演练过，第一次用对着实际目录核对；其中「开到一半」「关到一半」两种没有办法接着做，只能给这个槽换新的 `authorityId` 重新初始化。
+
+- **备份。** 新进程、新目录，无需备份；改文档服务环境（第 6 步）前备份它的环境文件；动 `/etc/promptcut/` 之前整份拷一份。
+- **不过怎么退。** 停 `promptcut-agent-root`（任务不再开始，排着的消息留在文档服务里）；再停 `promptcut-agent`（页面的「云端」一项报连不上）；文档服务去掉 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE` 并重启（要等写入停止），就回到「不开这个模式」，那时云端任务领不到分配，不会退回别的跑法。Key 有问题：`set-key.mjs --clear`（数据目录指共用数据目录）。
 
 ### 先决条件：渲染服务、Agent 服务、在线页面必须出自同一个提交
 
@@ -213,7 +265,7 @@
 1. 本机：`git rev-parse HEAD`（`<SHA>`）。
 2. 在线页面：内嵌的 `__PC_CODE_VERSION__`（`frameCode` 的结果）——从页面脚本里取，或看渲染服务诊断口并排显示的「在线页面」一栏。
 3. 渲染服务：`status-render` 里 `codeVersion` 一栏（渲染服务、在线页面并排，`match` 应为真，不一致标红）；发布目录名 `releases/<SHA 前 12 位>` 与 `current` 链接指向。
-4. Agent 服务：`status-agent` 里与渲染服务的代码版本并排（不一致标红）；它用的就是 `current` 那份检出。
+4. Agent 服务：`status-agent` 里与渲染服务的代码版本并排（不一致标红）；它用的就是 `current` 那份检出。账号版没有 PM2，不用 `status-agent`，核对办法见 C5b 的「同一个提交的核对」。
 5. 不一致的后果：渲染服务一个任务也不认领、队列也不报错；Agent 服务发布的预渲染任务没有渲染节点认领、在线页面按另一个代码版本找预渲染结果找不到。管理进程每 5 分钟比一次，不一致会打 `selfcheck.warn { reason: 'code-version' }`。
 
 ## D. 真实网络验证：每部署一样之后，在新节点上做的实测
@@ -247,6 +299,12 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
 **C3（重部署托管服务）之后**
 
 - [ ] 清单外·R22 中断时长与版本号：D1 表「R22」一行。过：三个 `/healthz` 200、B3 的 `migrate-check --from-inventory` 回 `ok: true`；中断时长记进总报告。
+- [ ] 清单外·改密退出的确认链（账号版，用测试账号）：在网站改密并选「退出别的设备」。过：
+  1. 选了以后，旧网站会话和旧编辑器登录当场不能用；
+  2. 网页读的状态接口 `GET /api/account/password-events/<事件号>` 先回 `logout.state` 为 `revoking`（页面是「正在退出」一类的字），文档、素材、Agent、渲染四样确认齐了才回 `complete`（页面变成「已退出」一类的字）；
+  3. 素材服务停着时再做一遍：状态一直是 `revoking`，页面不变成已退出；素材服务重新起来以后接着办完。素材服务用 `systemctl stop` 正常停，不要 `kill -9`（硬结束后能不能再起来，没有在 Linux 上验过）。
+
+  判的是接口的 `logout.state`，页面上的字还没定稿（AGENT-v18-logout.md「要用户定的事」第 1 条）。文档服务一起来就会接着办账本里以前所有没办完的退出，第一次会集中给账号服务发一批请求，网站上测试账号的「正在退出」会陆续变成「已退出」。先部署 PromptCut 的文档服务并核对一次退出能办完，再推 VisuHive 的网页改字。没配 Agent 的部署里，Agent 和渲染两样由文档服务写明原因代为登记，文档、素材两样是真确认。〔裁〕：见 AGENT-v18-logout.md。
 
 **C4（部署渲染服务）之后**
 
@@ -262,8 +320,9 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
 
 **C5（部署 Agent 服务）之后**
 
-- [ ] **S4-r1** Agent 服务部署并用模拟模型实测：C5 第 1～6 步；D1 表「C5 之后（模拟模型）」的六行（隔离 C4 与 C4a～C4c、端到端 C6、额度 C7、资源 C9、诊断报告 K1）。隔离是**核心项**，任何一条不过就停 Agent 服务。
-- [ ] 清单外·同一个提交：`status-agent` 里与渲染服务的代码版本并排一致。
+- [ ] **S4-r1** Agent 服务部署并用模拟模型实测：C5 第 1～6 步（账号版是 C5b 第 1～9 步）；D1 表「C5 之后（模拟模型）」的六行（隔离 C4 与 C4a～C4c、端到端 C6、额度 C7、资源 C9、诊断报告 K1）。隔离是**核心项**，任何一条不过就停 Agent 服务。
+- [ ] 清单外·同一个提交：`status-agent` 里与渲染服务的代码版本并排一致；账号版看主服务 `/healthz` 的 `codeVersion`（C5b）。
+- [ ] 清单外·改密退出（Agent 配上之后再做一遍）：做法同 C3 之后那一行，过的标准也相同。这时 Agent 一项由真实的读取收口和任务关闭记录判定：私有对话里正在跑的任务要等 root 关掉进程、文档服务结清才算确认；共有对话里已被 Agent 读到的当前任务保留继续，不用等它做完。已知限制：Agent 服务重启时有人开着云端对话页，这个登录之后的改密退出会一直是 `revoking`（C5b「要留意的」）。〔裁〕：见 AGENT-v18-logout.md。
 - [ ] 清单外·节点环境缺不缺东西：C5 第 8 步的运行条件表逐项填「有没有」，做不了的工具逐项记未达成。
 - [ ] **S4-r2** 「关掉软件照常运转」用真实部署走通：D1 表「C8b、U1～U6」一行的做法，先用模拟模型走一遍。
 - [ ] （导入 Key 之后）**S4-r4** 真实模型的端到端：D1 表「C8、C8a」一行。
@@ -295,7 +354,7 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
 | C5 之后（模拟模型） | C4 | 项目/账号授权；共有对话切私时中止他人当前轮并作废其排队消息、已落地修改保留；同一共有对话 FIFO 且显示队位；所有在线成员选区署名、离线发起人用消息快照并标非实时；托管方读取告知与账号记忆授权 | `cloud-agent-auth-probe`、`cloud-agent-isolation-probe` 及新增真地址探针；用两个测试项目、多个成员分别核对共享/私有权限、队列、选区来源和首次同意/拒绝行为并截图 | 真地址 | 机制仍待设计/实施包改写，当前检查项描述目标，不表示已经实现 |
 | C5 之后（模拟模型） | C4a、C4b、C4c（2026-10-07 新增） | 工具读写按项目隔离；出网工具不能访问回环、内网、同机服务；配音记进用量 | 第四段补的探针与上面 C5 第 8 步的出网限制核对 | 真节点 | 命令待第四段补 |
 | C5 之后（模拟模型） | C6 | 端到端：桌面版建协作项目放云端；在线成员在 AI 栏让云端 Agent 改文案、挪片段、调卡片参数；桌面与另一成员都看到、署名「〈成员名〉的云端 Agent」；撤销；两成员同时各开一对话互不串；进程被杀自动拉起、进行中的对话明确报中断可重开 | `cloud-agent-ui-probe` 与 `cloud-agent-ux-ui-probe` 的断言思路，对真地址；被杀自动拉起手工做 | 真地址 | |
-| C5 之后（模拟模型） | C7 | 额度接口：把测试项目额度设成很小，超出被明确拒绝并告知原因，设回不限恢复，用量记录查得到项目、成员、模型与用量 | `cloud-agent-run-probe` 的 D 组思路；节点上用 `admin.mjs quota set/clear/show`、`admin.mjs usage` | 真节点 | 改完即生效，不重启 |
+| C5 之后（模拟模型） | C7 | 额度接口：把测试项目额度设成很小，超出被明确拒绝并告知原因，设回不限恢复，用量记录查得到项目、成员、模型与用量 | `cloud-agent-run-probe` 的 D 组思路；节点上用 `admin.mjs quota set/clear/show`、`admin.mjs usage`（账号版的 `PROMPTCUT_AGENT_DATA` 指共用数据目录 `/var/lib/promptcut/agent-shared`） | 真节点 | 改完即生效，不重启 |
 | C5 之后（模拟模型） | C9 | 节点资源：Agent 服务有并发与内存上限，满载时同机文档服务响应与素材下载速度前后对比 | 同 C4 的量法，Agent 满载用模拟模型的重脚本发满节点级并发（6 轮） | 真节点 | 数字写进总报告 |
 | C5 之后（模拟模型） | K1 | 诊断报告：云端对话出报告，下载与提交；在线页面不经 `/api/*`；不含凭证票据 Key | 页面里点「下载」「报告」；收集端（`report-inbox.bat`）收到后删掉；单测的断言见第四段 | 真地址 | 先核 C2 的收集端配置 |
 | C5 导入 Key 之后 | C8、C8a | **真实模型**：第 6 条端到端再走一遍 | 同 C6 一行，模型是真实提供方 | 真地址 | 用量记录里查得到 |
@@ -310,7 +369,8 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
 | 在线页面（C2） | 换回 B1 的 `editor/` 备份；保留 `runtime-config.json` | 页面回到上一版（0.7.17），舞台不再执行用户卡 |
 | 托管服务（C3） | 放回应用目录备份与 `pm2.config.cjs`，`pm2 startOrReload`；核对 B3 | 渲染与 Agent 服务此时连不上，要先停 |
 | 渲染服务（C4） | `rollback-render` 或 `stop-render`（`--delete` 连登记删） | 项目照常用，没有云节点预渲染 |
-| Agent 服务（C5） | `stop-agent`；页面不出「云端」去掉托管服务环境变量重启（等写入停止）；撤公钥 `keygen-agent --retire <kid>`；Key `set-key.mjs --clear` | AI 栏的「云端」一项不可用 |
+| Agent 服务（C5，旧模式） | `stop-agent`；页面不出「云端」去掉托管服务环境变量重启（等写入停止）；撤公钥 `keygen-agent --retire <kid>`；Key `set-key.mjs --clear` | AI 栏的「云端」一项不可用 |
+| 账号版 Agent 服务（C5b） | 停 `promptcut-agent-root`（任务不再开始，排着的消息留在文档服务里）；再停 `promptcut-agent`；文档服务去掉 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE` 并重启（等写入停止）；要让页面不出「云端」一项，再去掉 `PROMPTCUT_AGENT_PUBLIC_URL` 并重启；Key 有问题 `set-key.mjs --clear`（数据目录指共用数据目录）〔裁〕：见 AGENT-v18-prod.md | AI 栏的「云端」不可用；文档服务去掉任务槽配置后，云端任务领不到分配，不会退回别的跑法；root 入口再起来时，上一次留下的还在跑的那一代会被停下并记成「失败」 |
 | 服务私钥 | 撤销 `keygen-render --retire <kid>` / `keygen-agent --retire <kid>`，连接随即被关 | |
 
 ## F. 部署后要记进本机 `docs/local.md` 的清单（那个文件不入库，这里只列清单）
@@ -318,15 +378,17 @@ node scripts/acceptance/four-stage-acceptance.mjs --level network --out work/fou
 - 新节点上多出的进程：`promptcut-render`（PM2；管理进程与工作进程、诊断口端口）、`promptcut-agent`（PM2；端口 8790，只绑回环）；PM2 存档与 `pm2-root.service`；
 - 多出的目录：`/opt/promptcut-render/`（`releases/`、`current`、`.previous`、`pm2.config.cjs`）、`/var/lib/promptcut/render`（可重建的缓存）、`/var/lib/promptcut/render-secrets`（私钥，0700）、`/var/lib/promptcut/agent`（对话、模型配置与 Key 密文、用量、额度）、`/var/lib/promptcut/agent-secrets`（私钥，0700）、`/etc/systemd/system/promptcut-render.slice`、`/etc/nginx/snippets/promptcut-*.conf`；
 - 多出的系统包与用户：`fonts-noto-cjk`、`fonts-noto-color-emoji`、`fonts-liberation`、`ffmpeg`、Chrome 运行库；系统用户 `promptcut-render`；`chrome-headless-shell` 的版本与位置；Agent 服务用的 Python 环境、`PROMPTCUT_PYLIBS`、`PROMPTCUT_MODELS`（若装了）；
+- 账号版 Agent（C5b）多出的单元：`promptcut-agent`（主服务）、`promptcut-agent-root`（root 入口）、`promptcut-agent-task-<槽>.service`（每槽一个，不 enable）；目录：`/etc/promptcut/agent-root/`、`/etc/promptcut/agent-slots/<槽>/`、`/etc/promptcut/agent-task/`、`/etc/promptcut/agent-master/`、`/var/lib/promptcut/agent-root/<槽>/`、`/var/lib/promptcut/agent-shared/`、`/var/lib/promptcut/agent-task-state/`、`/var/lib/promptcut/agent/`；任务用户、主服务用户、共用组的名字；每个槽的 `authorityId` 批次、`slotId`、身份口端口，主服务内部口端口；任务槽单元的 `sha256` 和各槽的锚点摘要（都不是密钥）；root 入口单独放的 root 检出的位置；`worker.look`、`worker.runAssets` 写没写；
 - 备份的位置与保留期：`/root/nginx-backup-<日期>`、`/opt/promptcut-hosted.bak-<日期>`、`/opt/promptcut-hosted/.editor-backups/editor-0.7.17-<日期>`；
-- 环境变量名（不写值）：托管服务的 `PROMPTCUT_AGENT_PUBLIC_URL`、`PROMPTCUT_HOSTED_RENDER_CAP_BYTES`；渲染服务的 `PROMPTCUT_RENDER_*` 取值；在线构建的 `VITE_DIAG_SUBMIT_URL`、`VITE_DIAG_SUBMIT_TOKEN`（只记「在 `.env.local`」）；
+- 环境变量名（不写值）：托管服务的 `PROMPTCUT_AGENT_PUBLIC_URL`、`PROMPTCUT_HOSTED_RENDER_CAP_BYTES`；账号版文档服务的 `PROMPTCUT_DOC_AGENT_SERVICE_KID`、`PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE`（开了运行素材时再加 `PROMPTCUT_DOC_RUN_ASSETS_ENABLED` 一组）；账号版主服务的 `PROMPTCUT_AGENT_INTERNAL_PORT`、`PROMPTCUT_AGENT_ROOT_FINGERPRINT256`、`PROMPTCUT_AGENT_SHARED_DATA`；渲染服务的 `PROMPTCUT_RENDER_*` 取值；在线构建的 `VITE_DIAG_SUBMIT_URL`、`VITE_DIAG_SUBMIT_TOKEN`（只记「在 `.env.local`」）；
 - 机器识别码只记首组（`redactMachineCode`）；Key 的末四位；
 - 本次的提交 `<SHA>`、三者同一提交的核对结果、补丁的大小与 SHA-256、中断时长、各项目版本号前后对照；
-- 已知坑：`deploy-hosted` 会冲掉手工加的托管服务环境变量（见 C3）；节点上 nginx 是 1.18；云厂商重装镜像会换 `/etc/machine-id`，Key 要重新分发。
+- 已知坑：`deploy-hosted` 会冲掉手工加的托管服务环境变量（见 C3）；节点上 nginx 是 1.18；云厂商重装镜像会换 `/etc/machine-id`，Key 要重新分发；节点重启后账号版的任务槽要重新初始化（B6）。
 
 ## G. 起草时发现的、最终验收前要先处理的问题
 
 1. `deploy-hosted` 每次重新生成 `pm2.config.cjs`，不带 `PROMPTCUT_AGENT_PUBLIC_URL`（C3、C5）。建议第四段让 `deploy-hosted` 接一个参数，或让 `deploy-agent` 负责把这一项写进去。
 2. 第二段新增依赖 `sucrase` 使 0.7.18 补丁会带整份 `node_modules`（A4）：要提前告诉用户补丁变大；若想继续出小补丁，需要另想办法（用户决定）。
 3. 第二段的 `online-card-exec-probe`（任务书第 15 条的功能验收）起草时分支上还没有，现在已有（清单 S2-2）；第三、四段的探针是本机整套，对新节点的实测要么改成对真地址的版本，要么手工逐条做（D0 里逐条写了用哪一行的做法）。
-4. `c10a-demo-probe` 的断言「导出用的是素材原尺寸」在新节点上历史上挂着（`REPORT-cloud-node-deploy.md` 6.5），做 D 节 C2 那一行时会再遇到，已知、不是新问题。
+4. 账号版文档服务的环境文件由安装计划生成（`server/hosted/deploy/account-v2-install-plan.mjs`、`account-v2-config.mjs`），生成的变量里没有 `PROMPTCUT_DOC_AGENT_SERVICE_KID`、`PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE`、`PROMPTCUT_AGENT_PUBLIC_URL`，这三个要手工加（C5b 第 6 步）。再次生成环境文件会不会把它们冲掉，待部署时核对，与第 1 条同类的坑。〔裁〕：见 AGENT-v18-prod.md。
+5. `c10a-demo-probe` 的断言「导出用的是素材原尺寸」在新节点上历史上挂着（`REPORT-cloud-node-deploy.md` 6.5），做 D 节 C2 那一行时会再遇到，已知、不是新问题。
