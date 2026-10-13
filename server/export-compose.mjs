@@ -273,7 +273,7 @@ function emphasisChain(inLabel, outLabel, ops, w, h, k) {
  */
 export function buildComposeArgs(opts) {
   const { width, height, fps, startFrame, endFrame, cardsPattern, out } = opts;
-  const pixelLayer = (opts.layers || []).find((layer) => layer.pixelMap);
+  const pixelLayer = (opts.layers || []).find((layer) => layer.pixelMap && !layer.missingMaterial);
   if (pixelLayer) throw new Error(`片段 ${pixelLayer.clip?.id || "(未知)"} 使用了像素映射,请用默认的 Chrome 导出(--media chrome);ffmpeg 兼容旁路不支持像素级映射`);
   const bg = opts.background || "#333333";
   const untagged = opts.untaggedMatrix || "bt709";
@@ -312,7 +312,7 @@ export function buildComposeArgs(opts) {
     const { clip, media } = layer;
     const range = clipFrameRange(clip, fps, startFrame, endFrame);
     if (!range) continue;
-    if (!layer.src) {
+    if (!layer.src && !layer.missingMaterial) {
       notes.push(`素材「${media.name || media.id}」找不到文件,片段 ${clip.id} 这一层没有画面`);
       continue;
     }
@@ -320,7 +320,9 @@ export function buildComposeArgs(opts) {
     const ta = a / fps;
     const off = clip.mediaOffset ?? 0;
     const k = next++;
-    const isImage = media.kind === "image";
+    const isMissing = !!layer.missingMaterial;
+    const isImage = isMissing || media.kind === "image";
+    const p = placement(clip.frame, stage);
     /*
      * 这一层先摆在**整条时间轴的绝对时间**上(帧号 = 导出帧号),淡入淡出、裁剪都按绝对时间写,最后才整体
      * 挪到段首 t0。反过来先挪的话,导出一段(--frames)时淡入的起点会是负数,fade 不收负的 st。
@@ -328,7 +330,12 @@ export function buildComposeArgs(opts) {
     let shift;
     // 只要画面:素材自带的声音 / 字幕 / 数据流在解复用时就丢掉(声音由 mux-audio 另外混)
     args.push(...R, "-an", "-sn", "-dn");
-    if (isImage) {
+    if (isMissing) {
+      if (!opts.fontFile) throw new Error("确认缺失素材需要显式中文字体文件，不能跳过文字代理。");
+      const len = (b - a + 2) / fps;
+      args.push(...R, "-f", "lavfi", "-i", `color=c=0x20242b:s=${p.w}x${p.h}:r=${fps}:d=${len}`);
+      shift = ta;
+    } else if (isImage) {
       // 图片:循环成一段 fps 的流,第一帧摆在 a 帧上
       const len = (b - a + 2) / fps;
       args.push("-loop", "1", "-framerate", String(fps), "-t", f3(len), "-i", layer.src);
@@ -344,7 +351,6 @@ export function buildComposeArgs(opts) {
       args.push("-ss", f3(ss), "-t", f3(len), "-i", layer.src);
       shift = clip.start - off + ss;
     }
-    const p = placement(clip.frame, stage);
     const chain = [
       `setpts=PTS+${f3(shift)}/TB`,
       `fps=${fps}:round=up`,
@@ -353,6 +359,17 @@ export function buildComposeArgs(opts) {
     // cover:等比放大到盖满框,再居中裁。视频没标色彩空间时按 untagged 解(和 Chrome 对 HD 素材的假设一致)
     const matrix = !isImage && (!layer.colorSpace || layer.colorSpace === "unknown") ? `:in_color_matrix=${untagged}` : "";
     chain.push(`scale=${p.w}:${p.h}:force_original_aspect_ratio=increase${matrix}`, `crop=${p.w}:${p.h}`, "format=gbrap");
+    if (isMissing) {
+      const file = `${String(opts.sidecarDir || ".").replace(/\\/g, "/")}/missing-${k}.txt`;
+      const name = String(layer.missingMaterialName || media.missingMaterial?.original?.name || media.name || media.id).replace(/[\r\n\u0000-\u001f]/g, " ")
+        // 素材库里给缺失素材名字加的「(缺失) 」标记不上画面,只显示原来的名字(与 src/audio/missingMaterial.ts 的 missingMaterialLabel 一致)
+        .replace(/^\(缺失\) (?=.)/, "");
+      sidecars.push({ file, text: `找不到素材${name}` });
+      const escapeFilterPath = (value) => String(value).replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "'\\''");
+      const quoted = escapeFilterPath(file);
+      const font = escapeFilterPath(opts.fontFile);
+      chain.push(`drawtext=textfile='${quoted}':fontfile='${font}':fontcolor=white:fontsize=${Math.max(16, Math.round(Math.min(p.w, p.h) / 16))}:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=0x20242b:boxborderw=18`);
+    }
     /*
      * 滤镜(kernel/filters.mjs,和预览、see_frames 同一份数值):摆框之后、强调和不透明度之前 ——
      * CSS 里 filter 先于 opacity,强调的 drop-shadow 和滤镜写在同一个 filter 里、排在滤镜后面。

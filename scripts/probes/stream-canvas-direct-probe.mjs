@@ -372,10 +372,10 @@ try {
   // ---------- 5. 登记为画布卡的内置卡逐张实测
   if (ALL_CARDS) {
     const table = JSON.parse(await fs.readFile(path.join(ROOT, 'src', 'cards', 'capabilities.json'), 'utf8'));
-    const registered = Object.entries(table).filter(([, v]) => v && v.canvasHeavy === true).map(([k]) => k).sort();
+    const registered = Object.entries(table).filter(([, v]) => v && ['canvas2d', 'webgl'].includes(v.surface)).map(([k]) => k).sort();
     out.registered = registered;
     check(JSON.stringify(registered) === JSON.stringify(['particles', 'particles-*', 'r6-canvas', 'scene-3d']), '审阅表里登记为画布卡的正好是 particles、particles-*、r6-canvas、scene-3d', registered);
-    check(registered.every((id) => ['canvas2d', 'webgl'].includes(table[id].surface)), '登记为画布卡的,「画在什么上」都是 canvas2d 或 webgl', registered.map((id) => table[id].surface));
+    check(Object.values(table).every((v) => !v || !Object.hasOwn(v, 'canvasHeavy')), '审阅表里不再写 canvasHeavy(由 surface 推出)', registered.map((id) => table[id].surface));
     const catalog = JSON.parse(await fs.readFile(path.join(ROOT, 'server', 'catalog', 'particles', 'index.json'), 'utf8'));
     const ids = ['particles', ...catalog.items.map((a) => `particles-${a.name}`), 'scene-3d', 'r6-canvas'];
     check(ids.length === 56, '画布卡一共 56 张', ids.length);

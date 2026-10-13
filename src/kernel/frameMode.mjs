@@ -71,6 +71,14 @@ function reviewedCompositing(id) {
   return REVIEWED_ONLY.includes(value) ? value : undefined;
 }
 
+/** 算画布卡的两种 `surface`(审阅表的轴二)。表里不再另写 `canvasHeavy`,由它推出。 */
+const CANVAS_SURFACES = ['canvas2d', 'webgl'];
+/** 审阅表说这张卡是不是画布卡;表里没有这张卡、或没登记 `surface`,返回 undefined。 */
+export function reviewedCanvas(id) {
+  const surface = reviewedCard(id)?.surface;
+  return typeof surface === 'string' ? CANVAS_SURFACES.includes(surface) : undefined;
+}
+
 /** 运行期兜底(A0.2 末句):审阅表说 independent、渲染时却量到 backdrop-filter 或读像素,
  * 这一节会话里就按 belowDependent 处理。只加不减,和审阅表一样喂给身份 digest。
  */
@@ -88,21 +96,22 @@ export function resetDegradedCards() { DEGRADED.clear(); }
  * card needs prerendering in its scene, never an isolated transparent movie.
  * Independence is an explicit, reviewed declaration, not a source-code guess.
  *
- * 读的顺序:审阅表 → CardDef。`independent` / `sourceDependent` / `belowDependent`
+ * 写法(frameMode)只取卡的声明,审阅表不盖它。
+ * 依不依赖下层的读的顺序:审阅表 → CardDef。`independent` / `sourceDependent` / `belowDependent`
  * 的唯一权威是审阅表,源码里写的这三个值一概忽略(只有旧的 `context` 还读得出来)。
+ * 画布卡:审阅表的 `surface` 是 canvas2d / webgl 就是;表里不是画布卡或没登记的,再看卡自己写的 `canvasHeavy`。
  * `parts` 是组合卡的部件出处卡 id 列表,不传 = 没有部件。
  */
 export function cardCapabilities(def, params = def?.defaults || {}, parts) {
-  const reviewed = reviewedCard(def?.id);
-  const frameMode = normalizeFrameMode(reviewed?.frameMode) ?? cardFrameMode(def, params);
+  const frameMode = cardFrameMode(def, params);
   let compositing = reviewedCompositing(def?.id);
   if (!compositing && DERIVED_FROM_PARTS.includes(def?.id)) compositing = derivedCompositing(parts);
   // 源码声明只剩 `context` 这一个还算数:它是「依赖下层 / 依赖源」的旧统称,不是独立声明。
   if (!compositing) compositing = def?.compositing === 'context' ? 'context' : 'unknown';
   if (compositing === 'independent' && DEGRADED.has(def?.id)) compositing = 'belowDependent';
-  const canvasHeavy = reviewed?.canvasHeavy ?? def?.canvasHeavy ?? false;
+  const canvasHeavy = reviewedCanvas(def?.id) === true || def?.canvasHeavy === true;
   return { frameMode, need_prerendering: frameMode === 'stateful', compositing,
-    canvasHeavy: canvasHeavy === true, independentCache: compositing === 'independent' };
+    canvasHeavy, independentCache: compositing === 'independent' };
 }
 export function clipFrameMode(clip, def) {
   if (clip.parts?.length) return 'stateful';
