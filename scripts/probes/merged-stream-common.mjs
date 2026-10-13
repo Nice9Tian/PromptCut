@@ -34,18 +34,24 @@ export const PRODUCT_X264 = STREAM_ENCODERS.libx264.args;
 export const COLOR_TAGS = ['-color_range', 'tv', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709'];
 export const FMP4_FLAGS = ['-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-an', '-f', 'mp4'];
 
-/** 跑一次 ffmpeg，回 { code, ms, stdout(Buffer), stderr } 。静默（windowsHide）。 */
-export function runFfmpeg(args, { input = null, ffmpeg = findFfmpeg(), collect = true } = {}) {
+/**
+ * 跑一次 ffmpeg，回 { code, ms, cpuMs, stdout(Buffer), stderr } 。静默（windowsHide）。
+ * `ms` 是墙钟（含起进程）；`cpuMs` 是 ffmpeg 自己报的用户态 + 内核态处理器时间（`-benchmark`），机器忙的时候它比墙钟稳得多。
+ */
+export function runFfmpeg(args, { input = null, ffmpeg = findFfmpeg(), collect = true, bench = false } = {}) {
   return new Promise((resolve, reject) => {
     const t0 = performance.now();
-    const proc = spawn(ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const proc = spawn(ffmpeg, ['-y', '-hide_banner', ...(bench ? ['-benchmark', '-loglevel', 'info'] : ['-loglevel', 'error']), ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const chunks = [];
     let err = '';
     proc.stdout.on('data', (d) => { if (collect) chunks.push(d); });
     proc.stderr.on('data', (d) => { err += d; });
     proc.stdin.on('error', () => {});
     proc.on('error', reject);
-    proc.on('close', (code) => resolve({ code, ms: +(performance.now() - t0).toFixed(1), stdout: Buffer.concat(chunks), stderr: err.trim() }));
+    proc.on('close', (code) => {
+      const b = /bench: utime=([\d.]+)s stime=([\d.]+)s rtime=([\d.]+)s/.exec(err);
+      resolve({ code, ms: +(performance.now() - t0).toFixed(1), cpuMs: b ? Math.round((Number(b[1]) + Number(b[2])) * 1000) : null, stdout: Buffer.concat(chunks), stderr: err.trim() });
+    });
     if (input) proc.stdin.end(input); else proc.stdin.end();
   });
 }
