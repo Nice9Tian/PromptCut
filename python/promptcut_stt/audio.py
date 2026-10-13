@@ -24,7 +24,14 @@ class FfmpegNotFound(Exception):
 
 
 class AudioExtractError(Exception):
-    """ffmpeg 跑起来了但抽取失败（文件损坏、没有音轨等）。"""
+    """ffmpeg 跑起来了但抽取失败（文件损坏、没有音轨等）。
+
+    kind：'no-audio'（没有音轨）或 'audio-extract'（其它原因）；node 侧据此给模型一句准话。
+    """
+
+    def __init__(self, message: str, kind: str = "audio-extract"):
+        super().__init__(message)
+        self.kind = kind
 
 
 def _no_window() -> dict:
@@ -93,12 +100,17 @@ def is_wav_16k_mono(path: str) -> bool:
         return False
 
 
-def extract_wav(src: str, dst: str) -> str:
-    """用 ffmpeg 把 src 抽成目标格式的 wav 写到 dst，返回 dst。"""
+def extract_wav(src: str, dst: str, local_only: bool = False) -> str:
+    """用 ffmpeg 把 src 抽成目标格式的 wav 写到 dst，返回 dst。
+
+    local_only（离线模式）：输入前加 -protocol_whitelist file，ffmpeg 只读本地文件。
+    素材是别人传来的，伪装成媒体的播放列表不能借此让 ffmpeg 去连网络地址。
+    """
     ffmpeg = find_ffmpeg()
     cmd = [
         ffmpeg,
         "-y",
+        *(["-protocol_whitelist", "file"] if local_only else []),
         "-i",
         src,
         "-vn",                      # 丢掉视频轨
@@ -118,15 +130,19 @@ def extract_wav(src: str, dst: str) -> str:
     )
     if proc.returncode != 0:
         tail = "\n".join((proc.stderr or "").strip().splitlines()[-20:])
+        no_audio = "does not contain any stream" in tail or (
+            "Stream map" in tail and "matches no streams" in tail
+        )
         raise AudioExtractError(
-            f"ffmpeg 抽取音频失败（退出码 {proc.returncode}）：{src}\n{tail}"
+            f"ffmpeg 抽取音频失败（退出码 {proc.returncode}）：{src}\n{tail}",
+            kind="no-audio" if no_audio else "audio-extract",
         )
     if not os.path.isfile(dst):
         raise AudioExtractError(f"ffmpeg 没有报错，但没有产出文件：{dst}")
     return dst
 
 
-def ensure_wav(src: str, tmpdir: str) -> Tuple[str, bool]:
+def ensure_wav(src: str, tmpdir: str, local_only: bool = False) -> Tuple[str, bool]:
     """保证拿到一个目标格式的 wav。
 
     返回 (路径, 是否是新抽出来的临时文件)。第二个值为 True 时文件在 tmpdir 里，
@@ -135,5 +151,5 @@ def ensure_wav(src: str, tmpdir: str) -> Tuple[str, bool]:
     if is_wav_16k_mono(src):
         return src, False
     dst = os.path.join(tmpdir, "input-16k.wav")
-    extract_wav(src, dst)
+    extract_wav(src, dst, local_only=local_only)
     return dst, True
