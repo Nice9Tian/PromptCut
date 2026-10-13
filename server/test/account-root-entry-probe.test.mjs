@@ -178,6 +178,9 @@ test('任务槽的单元模板：占位符都填上，发布器逐项核的那�
   const template = fs.readFileSync(path.join(repo, 'server', 'hosted', 'deploy', 'systemd-promptcut-agent-task.service'), 'utf8').replaceAll('\r\n', '\n');
   assert.equal(renderTaskUnit({ ...options, template: template.replaceAll('\n', '\r\n') }).sha256, unit.sha256);
   assert.equal(renderTaskUnit({ ...options, group: 'agents', heapMb: 512, unit: 'pc-claude-probe-0a1b2c3d-a.service' }).text.includes('Group=agents'), true);
+  // 任务用户不能是 nobody（只有节点自检可以借用它）
+  assert.throws(() => renderTaskUnit({ ...options, user: 'nobody' }), { code: 'task-unit-user-nobody' });
+  assert.equal(renderTaskUnit({ ...options, user: 'nobody', group: 'nogroup', allowNobody: true }).text.includes('User=nobody'), true);
   for (const bad of [{ user: 'root' }, { user: 'Bad User' }, { slot: 'a b' }, { dir: 'relative' }, { dir: '/opt/with space' }, { node: '/usr/bin/node; rm -rf /' },
     { settingsFile: '/etc/a/../b.json' }, { settingsFile: '/etc/%h/x.json' }, { heapMb: 1 }, { unit: 'not-a-unit' }])
     assert.throws(() => renderTaskUnit({ ...options, ...bad }), { code: 'task-unit-arguments' }, JSON.stringify(bad));

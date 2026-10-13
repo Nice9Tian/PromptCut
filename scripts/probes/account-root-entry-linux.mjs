@@ -47,7 +47,8 @@
  *    3 指令通道：root 证书连得上，领取被如实拒绝（文档服务连不上），进程还活着，结算结果是「还没有」
  *    4 绑定：发布器认脚本签的分配
  *    5 进程还活着时强制关：整组进程被结束，cgroup 空了，写下关闭记录；单元 inactive
- *    6 主进程被结束（SIGKILL）：单元停在 active (exited)、cgroup 还在；写得下失败观察；再凭强制终态关
+ *    6 主进程被结束（SIGKILL）：单元停在 active (exited)、还是这一次启动（服务自己的 cgroup 这时已被 systemd 收掉，
+ *      2026-10-13 第一遍实跑看到的就是这样）；写得下失败观察；再凭强制终态关
  *    7 主进程自己退出（收尾指令）且从没绑定过：写失败观察，按「没领过任务」退掉
  *    8 上一个 root 进程留下的一代：新的接线没有它的通道，先停它的主进程、写失败观察，再强制关
  *    9 文档服务读这条记录链的那段代码（只读）读得通：五代、都关了、三份失败观察；记录文件别的用户读得到
@@ -183,7 +184,7 @@ async function main(options) {
       docPublicKey: createPublicKey(docKey.privateKey).export({ type: 'spki', format: 'der' }).toString('base64'),
       serviceIdentity: 'agent', uid, unit: plan.unit, clientFingerprint256: pin('controller'), serverFingerprint256: pin('identity'),
       closurePolicy: { kind: 'systemd-slice', unitNamespace: plan.namespace, cgroupRoot: '/sys/fs/cgroup', placement: 'direct-child', singleEpoch: true } };
-    const rendered = renderTaskUnit({ slot: plan.slotId, user: options.user, group, dir: plan.repoDir, node: process.execPath, settingsFile: plan.settingsFile, heapMb: 512, unit: plan.unit });
+    const rendered = renderTaskUnit({ allowNobody: true, slot: plan.slotId, user: options.user, group, dir: plan.repoDir, node: process.execPath, settingsFile: plan.settingsFile, heapMb: 512, unit: plan.unit });
     need(!interrupted, 'interrupted');
     fs.writeFileSync(plan.unitFile, rendered.text, { mode: 0o644, flag: 'wx' });
     need((await sys.systemctl(['daemon-reload'])).code === 0, 'setup-daemon-reload');
@@ -274,14 +275,16 @@ async function main(options) {
       need(await phase() === 'closed' && closure?.observed?.populated === 0 && closure.protocol === 'promptcut.agent-run-scope.forced-closure.v1', 'forced-closure');
       need(!fs.existsSync(`/proc/${pid}`), 'main-still-there'); need(await idle(), 'unit-not-inactive'); need(await sliceGone(2), 'slice-not-released');
     });
-    await check('主进程被结束：单元停在 active (exited)、cgroup 还在；写得下失败观察；再凭强制终态关', async () => {
+    await check('主进程被结束：单元停在 active (exited)、还是这一次启动；写得下失败观察；再凭强制终态关', async () => {
       const worker = (await adapter.open()).worker; await adapter.bind(await assignmentFor(3));
       await worker.stop(); await waitExited(worker);
       const unit = await unitNow();
       diag.push(`after main killed: unit ${unit.ActiveState}/${unit.SubState} MainPID=${unit.MainPID} ControlGroup=${unit.ControlGroup}`);
       need(Number(unit.MainPID) === 0, 'main-still-live');
-      // 这一条就是单元模板里「ExecStart 前的 - 加 RemainAfterExit」要保证的：单元没进 failed / inactive，cgroup 没被收掉
-      need(unit.ActiveState === 'active' && unit.ControlGroup !== '', 'unit-left-active-state');
+      // 单元模板里「ExecStart 前的 - 加 RemainAfterExit」要保证的：单元没进 failed / inactive，启动号还是记录里那一个。
+      // 服务自己的 cgroup 在不在不作要求：组里一个进程都不剩时 systemd 会把它收掉（ControlGroup 变空），发布器两种都认。
+      need(unit.ActiveState === 'active' && unit.SubState === 'exited', 'unit-left-active-state');
+      need(unit.InvocationID === (await record(3)).instance.unitInvocationId, 'unit-invocation-changed');
       const published = await adapter.observeFailure();
       need(published.failure?.observed?.kind === 'main-birth-gone' && published.failure.observed.populated === 0, 'failure-observation');
       need(await phase() === 'bound', 'failure-is-not-closure');
@@ -301,7 +304,7 @@ async function main(options) {
       need(staleCode === 'worker-control-scope-mismatch' && Number((await unitNow()).MainPID) === fourth.instance.pid, 'stale-scope-accepted');
       try { need((await client.close())?.stopping === true, 'close-command'); } finally { client.stop(); }
       await waitExited(worker);
-      const unit = await unitNow(); diag.push(`after self exit: unit ${unit.ActiveState}/${unit.SubState} MainPID=${unit.MainPID}`);
+      const unit = await unitNow(); diag.push(`after self exit: unit ${unit.ActiveState}/${unit.SubState} MainPID=${unit.MainPID} ControlGroup=${unit.ControlGroup}`);
       need(unit.ActiveState === 'active' && Number(unit.MainPID) === 0, 'unit-left-active-state');
       const published = await adapter.observeFailure();
       need(published.failure?.assignmentDigest === null, 'failure-observation');

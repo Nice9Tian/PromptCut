@@ -285,7 +285,7 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 
 前提：账号、文档、素材三个服务已经按账号版跑着；代码检出（与渲染服务同一份）在 `DIR/current`。下面的「槽」以 `slot-a` 为例，多个槽每个重复第 3、4 步，身份口端口各用一个。
 
-1. 建任务用户、主服务用户（两个不同的用户，`useradd --system --no-create-home --shell /usr/sbin/nologin …`）和它们共有的组、上表的目录、三张证书、文档服务的任务槽签名钥匙、主身份在服务登记表里的钥匙。
+1. 建任务用户、主服务用户（两个不同的、专门建的用户，`useradd --system --no-create-home --shell /usr/sbin/nologin …`；**任务用户不要用 `nobody`**——别的无主进程也以它跑，systemd 会告警 `Special user nobody configured, this is not safe!`，填单元的小工具也会拒）和它们共有的组、上表的目录、三张证书、文档服务的任务槽签名钥匙、主身份在服务登记表里的钥匙。
 2. 先在节点上跑一遍自检（不碰现有服务）：`scripts/probes/account-root-entry-linux.mjs`，文件头写了怎么拷、怎么跑、期望输出。它过了再往下。
 3. 填任务槽单元：
    `node server/agent-service/account-task-unit.mjs --slot slot-a --user <任务用户> --group <共用组> --dir DIR/current --node "$(command -v node)" --settings /etc/promptcut/agent-slots/slot-a/worker-settings.json --out /etc/systemd/system/promptcut-agent-task-slot-a.service`，

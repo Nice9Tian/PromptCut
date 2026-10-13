@@ -13,6 +13,8 @@ Description=PromptCut agent task slot {{SLOT}}
 
 [Service]
 Type=simple
+# 任务用户要是专门建的一个系统用户。不要用 nobody:别的无主进程也以它跑,等于把任务进程的文件和别人混在一起
+# (systemd 自己也会告警 Special user nobody configured, this is not safe!)。
 User={{TASK_USER}}
 Group={{TASK_GROUP}}
 # 共用数据目录是任务用户和主服务用户共有的那个组的(带 setgid):这里新建的目录和文件要组内可读写,
@@ -23,8 +25,10 @@ Environment=NODE_ENV=production
 Environment=PROMPTCUT_AGENT_WORKER_SETTINGS={{SETTINGS_FILE}}
 # 入口不带父子通道:领取、开跑、收尾、结算结果都走它那个只认 root 证书的本机 HTTPS 口。
 # 开头的「-」:主进程不管怎么退出(退出码非零、被信号结束)都不把单元记成 failed。配合 RemainAfterExit=yes,
-# 主进程没了以后单元停在 active (exited)、它的 cgroup 留着,root 才看得到「原来那一代的主进程不在了」并写下失败观察;
-# 单元一旦进了 failed 或 inactive,systemd 会把 cgroup 收掉,root 核不了,这个槽就只能等人处理。
+# 主进程没了以后单元停在 active (exited)、仍是这一次启动(InvocationID 不变),root 凭它认出「原来那一代的主进程不在了」
+# 并写下失败观察。(组里一个进程都不剩时 systemd 会把这个服务自己的 cgroup 收掉、ControlGroup 变空,这是正常的,
+# root 两种都认;关没关干净看的是包着它的那个临时 slice。)单元一旦进了 failed,之后停它也回不到 inactive,
+# root 关不了这一代,这个槽就只能等人处理。
 ExecStart=-{{NODE}} --max-old-space-size={{HEAP_MB}} {{DIR}}/server/agent-service/account-task-worker-cli.mjs --configuration-module {{DIR}}/server/agent-service/account-task-worker-config.mjs --control https
 RemainAfterExit=yes
 Restart=no

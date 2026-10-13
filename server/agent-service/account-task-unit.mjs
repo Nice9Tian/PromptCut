@@ -21,7 +21,7 @@ const posixAbsolute = value => typeof value === 'string' && path.posix.isAbsolut
 /**
  * @param {object} o
  * @param {string} o.slot 槽号（进单元名和说明）
- * @param {string} o.user 任务进程的系统用户（不能是 root）
+ * @param {string} o.user 任务进程的系统用户（不能是 root，也不要是 nobody：专门建一个）
  * @param {string} [o.group] 任务进程的组：任务用户和主服务用户共有的那个组（共用数据目录是它的）。缺省同用户名
  * @param {string} o.dir 这份检出在节点上的目录（里面有 server/）
  * @param {string} o.node node 可执行文件的绝对路径
@@ -32,7 +32,9 @@ const posixAbsolute = value => typeof value === 'string' && path.posix.isAbsolut
  * @returns {{ unit: string, path: string, text: string, sha256: string }}
  */
 export function renderTaskUnit({ slot, user, group = user, dir, node, settingsFile, heapMb = 1536, unit = `promptcut-agent-task-${slot}.service`,
-  template = fs.readFileSync(TEMPLATE, 'utf8') } = {}) {
+  template = fs.readFileSync(TEMPLATE, 'utf8'), allowNobody = false } = {}) {
+  // 任务用户要是专门建的：nobody 是别的无主进程共用的（systemd 也会告警）。只有节点自检可以借用它（`allowNobody`）
+  if (user === 'nobody' && allowNobody !== true) fail('task-unit-user-nobody');
   if (typeof slot !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,60}$/.test(slot) ||
       typeof user !== 'string' || !/^[a-z_][a-z0-9_-]{0,31}$/.test(user) || user === 'root' ||
       typeof group !== 'string' || !/^[a-z_][a-z0-9_-]{0,31}$/.test(group) ||
