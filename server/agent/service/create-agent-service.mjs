@@ -37,7 +37,7 @@ import { createAccountConversationService } from './conversation-policy.mjs';
 import { createAccountRunnerService } from './account-runner.mjs';
 
 export const CONVERSATION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-/** 〔草稿，待用户定〕满额提示(一级文字)。页面一侧的同一句集中在 `src/ai/cloud/chatTexts.ts` */
+/** 满额提示(一级文字，2026-10-13 用户确认用这一句)。页面一侧的同一句集中在 `src/ai/cloud/chatTexts.ts`，要同步 */
 export const CONVERSATION_LIMIT_MESSAGE = '你在这个项目里的云端对话已满 50 个。请先删除不用的对话，再新建。';
 
 export const HOSTED_DEFAULTS = Object.freeze({

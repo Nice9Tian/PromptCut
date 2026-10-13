@@ -11,6 +11,11 @@ const safePositive = value => Number.isSafeInteger(value) && value > 0;
 export const MAX_CONVERSATIONS_PER_OWNER = 50;
 /** 每个人在每个项目里最多留这么多条还没弹过的删除通知(超了丢最旧的) */
 export const MAX_PENDING_NOTICES = 50;
+/**
+ * 没弹出的删除通知最多留这么久(毫秒)：30 天。依据：通知只是告诉你「你开的/发过言的对话被删了」，一个月没打开过这个项目的人，
+ * 再看到一条一个月前的删除气泡没有意义；而通知里带着对话标题，不为一个不再来的人一直留在账本里。
+ */
+export const NOTICE_TTL_MS = 30 * 24 * 3600 * 1000;
 const clock = state => { state.conversationClockV2 = (state.conversationClockV2 ?? 0) + 1; return state.conversationClockV2; };
 const rows = state => (state.conversationsV2 ??= {});
 const requests = state => (state.conversationRequestsV2 ??= {});
@@ -339,18 +344,31 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
    * (conversation-scrub.mjs)，只留一条不含文字的墓碑(号、开对话的人、可见性、谁删的、什么时候)，用来让重复的删除请求得到「已删」、
    * 让旧对话号不复活；给该通知的人各存一条通知，打开项目时取走。
    * 停不下来(2026-10-13 用户定)：不给「取消删除」；停止围栏就是强制结束那条任务(文档服务出强制终态、root 关进程)，办完才删。 */
-  function finishRemoval(state, { principal, conversation, deleterName, silent = false }) {
+  /** 还在这个项目里的人(创建者、名单里的成员，没被禁入)：只有他们取得到通知 */
+  const stillInProject = (state, projectId, accountId) => {
+    const project = state.projects?.[projectId];
+    return !!project && !Object.hasOwn(project.bans ?? {}, accountId) && (project.creatorAccountId === accountId || !!project.members?.[accountId]?.access);
+  };
+  /** 清掉过期的、和已经不在项目里的人的未弹通知(通知里带着对话标题，不一直留) */
+  function pruneNotices(state) {
+    const limit = now() - NOTICE_TTL_MS;
+    for (const [projectId, byAccount] of Object.entries(state.conversationNoticesV2 ?? {})) for (const [accountId, list] of Object.entries(byAccount)) {
+      const kept = stillInProject(state, projectId, accountId) ? list.filter(n => n.createdAt >= limit) : [];
+      if (kept.length) byAccount[accountId] = kept; else delete byAccount[accountId];
+    }
+  }
+  function finishRemoval(state, { conversation, deleter, deleterName }) {
     const { projectId } = conversation;
-    const deleter = principal.accountId;
     const deletedByRole = conversation.ownerAccountId === deleter ? 'owner' : 'creator';
-    // 通知谁：开对话的人(删的不是他自己时)；共有对话里发过消息的其他成员。删的人自己不通知，没发过消息的成员不通知。
-    // silent：移出成员时顺带清他的私有对话，他已经进不了这个项目、收不到通知，不留一条永远没人取的通知(里面有标题)
+    // 通知谁：开对话的人(删的不是他自己时)；共有对话里发过消息的其他成员。删的人自己不通知，没发过消息的成员不通知；
+    // 已经被移出、禁入的人进不了项目、取不到通知，也不给他存(通知里有标题)
     const recipients = new Map();
-    if (!silent && conversation.ownerAccountId !== deleter) recipients.set(conversation.ownerAccountId, 'owner');
-    if (!silent && conversation.visibility === 'shared') for (const message of conversation.messages) {
+    if (conversation.ownerAccountId !== deleter) recipients.set(conversation.ownerAccountId, 'owner');
+    if (conversation.visibility === 'shared') for (const message of conversation.messages) {
       const sender = message.senderAccountId;
       if (sender !== deleter && !recipients.has(sender)) recipients.set(sender, 'participant');
     }
+    for (const accountId of [...recipients.keys()]) if (!stillInProject(state, projectId, accountId)) recipients.delete(accountId);
     const at = now();
     for (const [accountId, recipientRole] of recipients) {
       const list = ((notices(state)[projectId] ??= {})[accountId] ??= []);
@@ -363,6 +381,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
     delete rows(state)[projectId][conversation.id];
     scrubConversationInState(state, projectId, conversation.id);
     (tombstones(state)[projectId] ??= {})[conversation.id] = stone;
+    pruneNotices(state);
     return removalResult(stone, false);
   }
   const removalResult = (stone, already) => ({ conversationId: stone.id, projectId: stone.projectId, removed: true, already,
@@ -370,7 +389,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
   const liveRunOf = (state, projectId, conversationId) => Object.values(state.runGrantsV2 ?? {}).some(grant =>
     grant.projectId === projectId && grant.conversationId === conversationId && ['preparing', 'active', 'retained'].includes(grant.state));
 
-  async function remove({ principalRef, projectId, conversationId, requestId, memberRemoval = false }) {
+  async function remove({ principalRef, projectId, conversationId, requestId }) {
     if (!idOK(conversationId) || !requestOK(requestId)) fail(400, 'invalid-delete-request');
     const principal = await verify(principalRef, projectId, 'write');
     const deleterName = principal.accountName ?? principal.username ?? principal.accountId;
@@ -384,8 +403,6 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
       requests(state)[key] = { digest, result };
       return { done: result };
     };
-    const isSilent = (state, conversation) => memberRemoval && conversation.visibility === 'private' &&
-      (Object.hasOwn(state.projects[projectId]?.bans ?? {}, conversation.ownerAccountId) || !state.projects[projectId]?.members?.[conversation.ownerAccountId]);
     const begun = ledger.transaction(state => {
       const { project } = projectAccessInState(state, principal, projectId, 'write');
       const prior = requests(state)[key];
@@ -393,7 +410,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
       const conversation = conversationOf(state, projectId, conversationId);
       if (!conversation) return settled(state, project);
       conversationAccessInState(state, principal, projectId, conversationId, 'delete');
-      if (conversation.deletion && conversation.deletion.byAccountId !== principal.accountId) fail(409, 'conversation-deleting');
+      // 删到一半的对话：开对话的人和创建者(上一行已核过有权删)谁来都能接着办，不依赖起头的那个人回来(2026-10-13 审查)
       const runId = conversation.currentRunId;
       // 有任务在跑却没有停任务的口子：什么都不动，不进「正在删除」
       if (runId && typeof runHooks?.fenceInState !== 'function') fail(503, 'run-authority-unavailable');
@@ -411,7 +428,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
         runHooks.fenceInState(state, { kind: 'stop', projectId, conversationId, runId, requestId: `delete:${conversation.deletion.requestId}` });
         return { runId };
       }
-      const result = finishRemoval(state, { principal, conversation, deleterName, silent: isSilent(state, conversation) });
+      const result = finishRemoval(state, { conversation, deleter: principal.accountId, deleterName });
       requests(state)[key] = { digest, result };
       return { done: result };
     });
@@ -423,10 +440,11 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
       const conversation = conversationOf(state, projectId, conversationId);
       if (!conversation) return settled(state, project).done;
       conversationAccessInState(state, principal, projectId, conversationId, 'delete');
-      if (!conversation.deletion || conversation.deletion.byAccountId !== principal.accountId) fail(409, 'conversation-deleting');
+      // 别人先办完了：settled 已处理；删到一半的标记没了就不该走到这里
+      if (!conversation.deletion) fail(409, 'conversation-deleting');
       // 任务没有真停下：不删
       if (conversation.currentRunId || liveRunOf(state, projectId, conversationId)) fail(503, 'agent-fence-pending');
-      const result = finishRemoval(state, { principal, conversation, deleterName, silent: isSilent(state, conversation) });
+      const result = finishRemoval(state, { conversation, deleter: principal.accountId, deleterName });
       requests(state)[key] = { digest, result };
       return result;
     });
@@ -446,7 +464,7 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
       .filter(c => c.ownerAccountId === accountId && c.visibility === 'private').map(c => c.id).sort();
     const removed = [], pending = [];
     for (const id of targets) {
-      try { await remove({ principalRef, projectId, conversationId: id, requestId: `${requestId}.${id}`.slice(0, 128), memberRemoval: true }); removed.push(id); }
+      try { await remove({ principalRef, projectId, conversationId: id, requestId: `${requestId}.${id}`.slice(0, 128) }); removed.push(id); }
       catch (error) { if (error?.status === 503) pending.push(id); else throw error; }
     }
     return { accountId, projectId, removed, pending };
@@ -457,7 +475,8 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
     const principal = await verify(principalRef, projectId, 'read');
     const state = ledger.read();
     projectAccessInState(state, principal, projectId, 'read');
-    return structuredClone(state.conversationNoticesV2?.[projectId]?.[principal.accountId] ?? []);
+    const limit = now() - NOTICE_TTL_MS;
+    return structuredClone((state.conversationNoticesV2?.[projectId]?.[principal.accountId] ?? []).filter(n => n.createdAt >= limit));
   }
   async function ackNotices({ principalRef, projectId, noticeIds }) {
     if (!Array.isArray(noticeIds) || noticeIds.length > 200 || !noticeIds.every(id => typeof id === 'string' && id.length <= 64)) fail(400, 'invalid-notice-ack');
@@ -467,11 +486,50 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
       const byProject = notices(state)[projectId] ??= {};
       const before = byProject[principal.accountId] ?? [];
       const ids = new Set(noticeIds);
-      byProject[principal.accountId] = before.filter(notice => !ids.has(notice.noticeId));
-      return { acked: before.length - byProject[principal.accountId].length };
+      const kept = before.filter(notice => !ids.has(notice.noticeId));
+      byProject[principal.accountId] = kept;
+      pruneNotices(state);
+      return { acked: before.length - kept.length };
     });
   }
-  return { identity, access: auth, list, get, send, switchVisibility, stop, rename, remove, removeMemberPrivate, notices: pendingNotices, ackNotices,
+  /**
+   * 删到一半(任务还没停稳)的对话，任务一结清就由文档服务自己收尾，不等任何人回来点(2026-10-13 审查)。
+   * 条件：没有在跑的一轮、没有活着的运行授权，并且这次删除下的围栏控制记录都办完了(进程真的关了、Agent 一侧确认了)。
+   * 由文档服务装配在主服务每次来问「有什么要办」时调用(doc-agent-assembly.mjs 的 listPendingRuns)。
+   */
+  function completePendingDeletions() {
+    return ledger.transaction(state => {
+      let done = 0;
+      for (const [projectId, group] of Object.entries(rows(state))) for (const conversation of Object.values(group)) {
+        const deletion = conversation.deletion;
+        if (!deletion || conversation.currentRunId || liveRunOf(state, projectId, conversation.id)) continue;
+        const controls = Object.values(state.runControlsV2 ?? {}).filter(c => c.requestId === `delete:${deletion.requestId}` &&
+          c.projectId === projectId && c.scope?.conversationId === conversation.id);
+        if (controls.some(c => c.state !== 'complete')) continue;
+        finishRemoval(state, { conversation, deleter: deletion.byAccountId, deleterName: deletion.byName });
+        done++;
+      }
+      if (done) pruneNotices(state);
+      return done;
+    });
+  }
+  /** Agent 服务一侧还没确认清理的已删对话(墓碑上没有 agentPurgedAt)：Agent 服务起来时和定时来对账，补清它崩了、回包丢了漏掉的 */
+  function listUnpurged({ limit = 500 } = {}) {
+    const out = [];
+    for (const [projectId, group] of Object.entries(ledger.read().conversationTombstonesV2 ?? {})) for (const stone of Object.values(group))
+      if (!stone.agentPurgedAt && out.length < limit) out.push({ projectId, conversationId: stone.id });
+    return out;
+  }
+  function ackPurged({ projectId, conversationId }) {
+    if (!idOK(conversationId) || typeof projectId !== 'string' || !projectId) fail(400, 'invalid-purge-ack');
+    return ledger.transaction(state => {
+      const stone = tombstoneOf(state, projectId, conversationId);
+      if (!stone) fail(404, 'no-conversation');
+      stone.agentPurgedAt ??= now();
+      return { acked: true };
+    });
+  }
+  return { identity, access: auth, completePendingDeletions, listUnpurged, ackPurged, list, get, send, switchVisibility, stop, rename, remove, removeMemberPrivate, notices: pendingNotices, ackNotices,
     hooks: { claimNextInState, markReadInState, finishInState, privateFenceInState },
     describe: () => ({ conversations: Object.values(ledger.read().conversationsV2 ?? {}).reduce((n, group) => n + Object.keys(group).length, 0) }) };
 }

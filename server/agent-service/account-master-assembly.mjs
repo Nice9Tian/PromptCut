@@ -52,7 +52,7 @@ export const accountWorkspaceOwnerKey = (projectId, conversationId) =>
  */
 export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runClient, conversationClient, readControl, tls,
   internalPort, internalHost = '127.0.0.1', controllerFingerprint256, schedulerStaleMs = 15_000, stopWaitMs = 15_000,
-  registerRetryMs = 2_000, workspaceLimits = {}, attachmentLimits = {}, onConversationDeleted = null, now = Date.now, log = () => {} } = {}) {
+  registerRetryMs = 2_000, workspaceLimits = {}, attachmentLimits = {}, onConversationDeleted = null, purgeSweepMs = 60_000, now = Date.now, log = () => {} } = {}) {
   const controllerPin = certificateFingerprint(controllerFingerprint256);
   let ownPin = null;
   try { ownPin = certificateFingerprint(new X509Certificate(tls?.cert).fingerprint256); } catch { ownPin = null; }
@@ -221,8 +221,15 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   };
 
   void startReadControl();
+  // 已删对话在 Agent 一侧的清理对账：起来时一次、之后定时(文档服务按墓碑列「还没确认清理的」，逐个补清、回执；幂等)
+  const sweepPurges = async () => {
+    try { const n = await service.reconcilePurges(); if (n) say('agent.master.purge-reconciled', { count: n }); }
+    catch (error) { say('agent.master.purge-reconcile-pending', { code: error?.code ?? 'unavailable' }); }
+  };
+  void sweepPurges();
+  const purgeTimer = setInterval(() => { if (!stopped) void sweepPurges(); }, purgeSweepMs); purgeTimer.unref?.();
   const close = () => closing ??= (async () => {
-    stopped = true; if (registerTimer) clearTimeout(registerTimer);
+    stopped = true; if (registerTimer) clearTimeout(registerTimer); clearInterval(purgeTimer);
     const closedSockets = [...sockets].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); }));
     const results = await Promise.allSettled([...closedSockets,
       server.listening ? new Promise(resolve => server.close(resolve)) : null, readControl.close()]);

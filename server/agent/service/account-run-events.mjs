@@ -35,6 +35,7 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       CREATE TABLE IF NOT EXISTS run_events (project_id TEXT, conversation_id TEXT, seq INTEGER NOT NULL,
         grant_id TEXT NOT NULL, event_id TEXT NOT NULL, content TEXT NOT NULL, payload TEXT NOT NULL,
         PRIMARY KEY(project_id,conversation_id,seq), UNIQUE(grant_id,event_id));
+      CREATE TABLE IF NOT EXISTS purged_conversations (project_id TEXT, conversation_id TEXT, PRIMARY KEY(project_id,conversation_id));
       CREATE TABLE IF NOT EXISTS worker_source_heads (grant_id TEXT PRIMARY KEY, head INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS worker_source_packets (grant_id TEXT NOT NULL, source_seq INTEGER NOT NULL,
         event_id TEXT NOT NULL, packet TEXT NOT NULL, receipt TEXT NOT NULL,
@@ -134,6 +135,8 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
     }).sort((a, b) => a.arrivalSeq - b.arrivalSeq);
   }
   function mirrorRecords(projectId, conversationId, records) {
+      // 已被清掉的(对话已删)：不再把消息原文写回去
+      if (db.prepare('SELECT 1 FROM purged_conversations WHERE project_id=? AND conversation_id=?').get(projectId, conversationId)) return { appended: 0, head: 0, purged: true };
       let appended = 0;
       for (const record of records) {
         const args = [projectId, conversationId, record.messageId], content = canonicalJson(record);
@@ -263,10 +266,15 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       async beforeCall() { await serial; if (error) throw error; usable(); },
     };
   }
-  /** 对话被删：这个对话的事件、已接受的消息原文、运行绑定、任务进程交上来的来源包全部删掉(2026-10-13 用户定：清干净) */
+  /**
+   * 对话被删：这个对话的事件、已接受的消息原文、运行绑定、任务进程交上来的来源包全部删掉(2026-10-13 用户定：清干净)，并留一个「已清」标记。
+   * 排进和 mirrorAccepted 同一条写队列：事件流每 250 毫秒会镜像一次，删除时若有人正开着这个对话，镜像写入不能排在清理之后又把原文写回去；
+   * 有标记以后镜像对这个对话什么都不写。标记每个已删对话一行(只有号，不含文字)，只增不减。
+   */
   function purgeConversation({ projectId, conversationId }) {
     if (!text(projectId) || !text(conversationId)) fail(400, 'run-event-cursor');
-    return transaction('purge', () => {
+    const work = tail.then(() => transaction('purge', () => {
+      db.prepare('INSERT OR IGNORE INTO purged_conversations VALUES(?,?)').run(projectId, conversationId);
       const grants = new Set(db.prepare('SELECT DISTINCT grant_id FROM run_events WHERE project_id=? AND conversation_id=?').all(projectId, conversationId).map(r => r.grant_id));
       for (const row of db.prepare('SELECT grant_id, binding FROM run_bindings').all()) {
         let b = null; try { b = JSON.parse(row.binding); } catch { /* 坏行留给别处 */ }
@@ -282,7 +290,9 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       rows += db.prepare('DELETE FROM accepted_messages WHERE project_id=? AND conversation_id=?').run(projectId, conversationId).changes;
       rows += db.prepare('DELETE FROM conversation_heads WHERE project_id=? AND conversation_id=?').run(projectId, conversationId).changes;
       return { grants: grants.size, rows };
-    });
+    }));
+    tail = work.catch(() => {});
+    return work;
   }
   return { registerRun, append, appendWorker, after, writer, mirrorAccepted, mirrorRunMessage, purgeConversation, failure: () => fatal,
     inspect: () => ({ synchronous: db.prepare('PRAGMA synchronous').get().synchronous,

@@ -37,6 +37,10 @@ export const CLOUD_CHAT_TEXT = {
   conversationDeleting: "这个对话正在被删除。",
   currentDeleted: "你正在看的对话已被删除。",
   noConversation: "没有找到这个对话，它可能已经被删除。",
+  /** 〔2026-10-13 新起草〕删除已经在文档服务办成，但云端一侧清理这个对话的内容出错了：重试会接着清 */
+  purgeFailed: "这个对话已经删除，但云端还没有清理完它的内容。请再试一次。",
+  /** 〔2026-10-13 新起草〕只有项目创建者能清除别人的私有对话 */
+  creatorRequired: "只有项目创建者能清除成员的私有对话。",
   /** 对话历史里「云端」一组标题后面显示这位账号自己开了多少个：随别人新建、删除实时变 */
   countLabel: (n: number) => `我的 ${n}/${CLOUD_CHAT_LIMIT}`,
 

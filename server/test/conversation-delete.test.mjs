@@ -1,85 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { openAccountLedger } from '../account/ledger.mjs';
-import { createConversationAuthority, claimNextInState, MAX_CONVERSATIONS_PER_OWNER, MAX_PENDING_NOTICES } from '../account/conversation-authority.mjs';
 
 /**
  * 块五(0.7.18):同项目同一个人最多 50 个对话、不自动删历史;删除入口。
  * 规则出处:docs/plan/account-binding-task.md「已拍板」的「云端 Agent 对话的删除」(2026-10-12 用户定)。
  */
-const projectId = 'sp_' + 'a'.repeat(26);
-const otherProjectId = 'sp_' + 'z'.repeat(26);
-const ownerId = 'acc_' + 'a'.repeat(24);
-const memberId = 'acc_' + 'b'.repeat(24);
-const creatorId = 'acc_' + 'c'.repeat(24);
-const bystanderId = 'acc_' + 'd'.repeat(24);
-const readerId = 'acc_' + 'e'.repeat(24);
-const names = { [ownerId]: 'Owner', [memberId]: 'Member', [creatorId]: 'Creator', [bystanderId]: 'Bystander', [readerId]: 'Reader' };
+import { fixture, projectId, otherProjectId, ownerId, memberId, creatorId, bystanderId, readerId } from './conversation-delete-fixture.mjs';
+import { createConversationAuthority, claimNextInState, MAX_CONVERSATIONS_PER_OWNER, MAX_PENDING_NOTICES, NOTICE_TTL_MS } from '../account/conversation-authority.mjs';
+import { openAccountLedger } from '../account/ledger.mjs';
 
-function fixture() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-conv-delete-'));
-  const file = path.join(dir, 'authority.sqlite');
-  const ledger = openAccountLedger({ file, authorityId: 'conversation-delete-test' });
-  ledger.transaction(state => {
-    const members = Object.fromEntries([ownerId, memberId, creatorId, bystanderId].map(id => [id, { access: 'rw' }]));
-    members[readerId] = { access: 'r' };
-    state.projects[projectId] = { projectId, status: 'active', creatorAccountId: creatorId, hosted: { agent: true }, bans: {}, members };
-    state.projects[otherProjectId] = { projectId: otherProjectId, status: 'active', creatorAccountId: creatorId, hosted: { agent: true }, bans: {},
-      members: { [ownerId]: { access: 'rw' }, [creatorId]: { access: 'rw' } } };
-  });
-  const principals = {};
-  for (const id of Object.keys(names)) for (const pid of [projectId, otherProjectId]) principals[`auth:${id}:${pid}`] = { authorizationId: `auth:${id}:${pid}`,
-    projectId: pid, accountId: id, loginId: `login:${id}`, credentialId: `cred:${id}`, loginGeneration: 1, username: names[id] };
-  const accountAuthority = { async authorizePrincipal(ref, { projectId: requested, action }) {
-    const principal = principals[ref.authorizationId];
-    if (!principal || principal.projectId !== requested) throw Object.assign(new Error('login-required'), { status: 401, code: 'principal-mismatch' });
-    if (ledger.read().revokedLogins[`login:${principal.loginId}`]) throw Object.assign(new Error('revoked'), { status: 401, code: 'credential-revoked' });
-    const project = ledger.read().projects[requested];
-    if (action === 'write' && project.members[principal.accountId]?.access !== 'rw') throw Object.assign(new Error('readonly'), { status: 403, code: 'not-listed' });
-    return structuredClone(principal);
-  } };
-  // 受控的「停任务」口子:fenced 记下收到的围栏;stopClears=false 模拟任务进程还没关干净(围栏还在办)
-  const control = { fenced: [], stopClears: true, ackError: null, ackMissing: false, onFenceCalls: [], afterAck: null };
-  const runHooks = { fenceInState(state, input) {
-    control.fenced.push(structuredClone(input));
-    if (input.kind !== 'stop' || !control.stopClears) return;
-    const conv = state.conversationsV2[input.projectId][input.conversationId];
-    const message = conv.messages.find(m => m.runId === input.runId);
-    if (message) { message.queueState = 'cancelled'; message.reason = 'stop'; }
-    conv.currentRunId = null;
-  } };
-  const options = { ledger, accountAuthority, runHooks, now: () => 1000,
-    checkConsent: async ({ accountId }) => ({ accountId, accepted: true, noticeVersion: 1 }),
-    verifySelectionSnapshot: async ({ principal, projectId: id }) => ({ projectId: id, accountId: principal.accountId,
-      pageId: 'page_123', selection: { clipIds: [] }, sentAt: 100, source: 'sent-snapshot' }),
-    async onFence(input) {
-      control.onFenceCalls.push(input);
-      if (control.ackError) throw control.ackError;
-      control.afterAck?.();
-      return control.ackMissing ? { ack: false } : { ack: true, ...input };
-    } };
-  const authority = createConversationAuthority(options);
-  const ref = (accountId, pid = projectId) => ({ authorizationId: `auth:${accountId}:${pid}` });
-  const send = (accountId, conversationId, requestId, content = 'hello', pid = projectId) => authority.send({ principalRef: ref(accountId, pid),
-    projectId: pid, conversationId, requestId, content, selectionInput: { pageId: 'page_123', selection: { clipIds: [] } } });
-  const remove = (accountId, conversationId, requestId = `del-${conversationId}`, pid = projectId) => authority.remove({
-    principalRef: ref(accountId, pid), projectId: pid, conversationId, requestId });
-  const notices = accountId => authority.notices({ principalRef: ref(accountId), projectId });
-  const list = accountId => authority.list({ principalRef: ref(accountId), projectId });
-  /** 把一条消息领成正在跑的一轮(runId 固定),用来造「对话里有任务在跑」 */
-  const startRun = (conversationId, runId = 'run1') => ledger.transaction(state => {
-    const conv = state.conversationsV2[projectId][conversationId];
-    const first = conv.messages.find(m => m.queueState === 'queued');
-    claimNextInState(state, { projectId, conversationId, runId, expectedMessageId: first.messageId });
-  });
-  return { dir, file, ledger, options, authority, control, principals, ref, send, remove, notices, list, startRun, close() {
-    try { this.ledger.close(); } catch { /* 已关 */ }
-    fs.rmSync(dir, { recursive: true, force: true });
-  } };
-}
 const rows = f => f.ledger.read().conversationsV2?.[projectId] ?? {};
 
 /* ---------------------------------------------------------------- 50 个上限 */
@@ -249,8 +178,10 @@ test('RS18-chat 停不下来就不删：围栏没确认、确认了但任务没�
     await assert.rejects(f.send(memberId, 'c1', 'r3', '又来一条'), { status: 409, code: 'conversation-deleting' });
     assert.throws(() => f.ledger.transaction(state => claimNextInState(state, { projectId, conversationId: 'c1', runId: 'run2', expectedMessageId: 'x' })), { code: 'conversation-deleting' });
     await assert.rejects(f.authority.switchVisibility({ principalRef: f.ref(ownerId), projectId, conversationId: 'c1', visibility: 'private', requestId: 'sw' }), { code: 'conversation-deleting' });
-    // 别人(创建者)此时想接手删:被拒，不能和第一个人抢
-    await assert.rejects(f.remove(creatorId, 'c1', 'del-creator'), { status: 409, code: 'conversation-deleting' });
+    // 别人(创建者)此时可以接手办(不依赖起头的人回来)：同样要等任务停稳，所以也是 503 还在办，而不是被拒
+    await assert.rejects(f.remove(creatorId, 'c1', 'del-creator'), { status: 503, code: 'agent-fence-pending' });
+    // 无关的成员不行
+    await assert.rejects(f.remove(memberId, 'c1', 'del-member'), { status: 403, code: 'delete-forbidden' });
     // ② 回了 ack:false
     f.control.ackError = null; f.control.ackMissing = true;
     await assert.rejects(f.remove(ownerId, 'c1', 'del-a'), { status: 503, code: 'agent-fence-pending' });
@@ -557,5 +488,100 @@ test('块五第 5 条 清除成员私有对话时有任务在跑：先强制结�
     f.control.ackError = null; f.ledger.transaction(state => { state.conversationsV2[projectId]['m-pv'].currentRunId = null; });
     const second = await f.authority.removeMemberPrivate({ principalRef: f.ref(creatorId), projectId, accountId: memberId, requestId: 'clear-2' });
     assert.deepEqual([second.removed, second.pending], [['m-pv'], []]);
+  } finally { f.close(); }
+});
+
+/* ---------------------------------------------------------------- 2026-10-13 审查后追加 */
+
+test('审查 2 开对话的人删到一半被踢，创建者勾「清除私有对话」不会被 409 挡住，这个对话能删完', async () => {
+  const f = fixture();
+  try {
+    await f.send(memberId, 'm-pv', 'r1', '私有'); await f.authority.switchVisibility({ principalRef: f.ref(memberId), projectId, conversationId: 'm-pv', visibility: 'private', requestId: 'p' });
+    f.startRun('m-pv'); f.control.stopClears = false;
+    f.control.ackError = Object.assign(new Error('pending'), { status: 503, code: 'agent-fence-pending' });
+    await assert.rejects(f.remove(memberId, 'm-pv', 'own-del'), { code: 'agent-fence-pending' });   // 成员自己起头删，停不下来
+    assert.equal(rows(f)['m-pv'].deletion.byAccountId, memberId);
+    f.ledger.transaction(state => { delete state.projects[projectId].members[memberId]; state.projects[projectId].bans[memberId] = { reason: 'kick' }; });
+    f.control.ackError = null; f.ledger.transaction(state => { state.conversationsV2[projectId]['m-pv'].currentRunId = null; });
+    const out = await f.authority.removeMemberPrivate({ principalRef: f.ref(creatorId), projectId, accountId: memberId, requestId: 'clear-takeover' });
+    assert.deepEqual([out.removed, out.pending], [['m-pv'], []]);
+  } finally { f.close(); }
+});
+
+test('审查 2 没有人再回来也会删完：任务一结清，文档服务自己收尾；围栏还没办完不收尾；收尾后给该通知的人通知，墓碑记起头的人', async () => {
+  const f = fixture();
+  try {
+    await f.send(ownerId, 'c1', 'r1', '开对话'); await f.send(memberId, 'c1', 'r2', '成员发过言');
+    f.startRun('c1'); f.control.stopClears = false;
+    f.control.ackError = Object.assign(new Error('pending'), { status: 503, code: 'agent-fence-pending' });
+    await assert.rejects(f.remove(creatorId, 'c1', 'del-a'), { code: 'agent-fence-pending' });      // 创建者起头，然后再也不回来
+    assert.equal(f.authority.completePendingDeletions(), 0, '任务还在：不收尾');
+    f.ledger.transaction(state => { state.conversationsV2[projectId].c1.currentRunId = null;
+      state.runControlsV2 = { x: { controlId: 'x', requestId: 'delete:del-a', projectId, scope: { conversationId: 'c1' }, state: 'pending' } }; });
+    assert.equal(f.authority.completePendingDeletions(), 0, '没有在跑的了，但停止围栏这条控制还没办完：不收尾');
+    f.ledger.transaction(state => { state.runControlsV2.x.state = 'complete'; });
+    assert.equal(f.authority.completePendingDeletions(), 1);
+    assert.equal(rows(f).c1, undefined);
+    const stone = f.ledger.read().conversationTombstonesV2[projectId].c1;
+    assert.equal(stone.deletedByAccountId, creatorId);
+    assert.equal((await f.notices(ownerId)).length, 1); assert.equal((await f.notices(memberId)).length, 1);
+    assert.equal(f.authority.completePendingDeletions(), 0, '幂等');
+    assert.equal((await f.remove(creatorId, 'c1', 'del-a')).removed, true, '之后任何人重放都得到已删');
+  } finally { f.close(); }
+});
+
+test('审查 5 未弹的通知：不给已被移出的人存；移出后他名下已有的在下一次删除时清掉；超过 30 天的不再给、也清掉', async () => {
+  const f = fixture(); let t = 1_000_000; f.setNow(t);
+  try {
+    await f.send(ownerId, 'a', 'r1', '标题甲'); await f.send(memberId, 'a', 'r2', '成员话');
+    await f.remove(ownerId, 'a', 'd1');
+    assert.equal((await f.notices(memberId)).length, 1);
+    // 成员被移出：他之前没弹的通知，在下一次删除时被清掉；之后给他的通知根本不存
+    f.ledger.transaction(state => { delete state.projects[projectId].members[memberId]; state.projects[projectId].bans[memberId] = { reason: 'kick' }; });
+    await f.send(ownerId, 'b', 'r3', '标题乙'); await f.remove(creatorId, 'b', 'd2');
+    assert.equal(f.ledger.read().conversationNoticesV2[projectId]?.[memberId], undefined, '被移出的人名下没有未弹通知');
+    assert.equal(JSON.stringify(f.ledger.read()).includes('标题甲'), false);
+    // 期限：30 天
+    await f.send(bystanderId, 'c', 'r4', '标题丙'); await f.send(ownerId, 'c', 'r5', '说话'); await f.remove(creatorId, 'c', 'd3');
+    assert.equal((await f.notices(bystanderId)).length, 1);
+    t += NOTICE_TTL_MS + 1; f.setNow(t);
+    assert.equal((await f.notices(bystanderId)).length, 0, '过期的不再给');
+    await f.send(ownerId, 'd', 'r6', 'x'); await f.remove(ownerId, 'd', 'd4');   // 下一次写入顺带清
+    assert.equal(JSON.stringify(f.ledger.read().conversationNoticesV2 ?? {}).includes('标题丙'), false);
+  } finally { f.close(); }
+});
+
+test('审查 4 已删对话在 Agent 一侧是否清过：墓碑上没有回执就列出来，回执后不再列；回执不认没有的号', async () => {
+  const f = fixture();
+  try {
+    await f.send(ownerId, 'c1', 'r1', 'x'); await f.send(ownerId, 'c2', 'r2', 'y');
+    await f.remove(ownerId, 'c1', 'd1'); await f.remove(ownerId, 'c2', 'd2');
+    assert.deepEqual(f.authority.listUnpurged().map(x => x.conversationId).sort(), ['c1', 'c2']);
+    assert.deepEqual(f.authority.ackPurged({ projectId, conversationId: 'c1' }), { acked: true });
+    assert.deepEqual(f.authority.listUnpurged().map(x => x.conversationId), ['c2']);
+    assert.ok(f.authority.ackPurged({ projectId, conversationId: 'c1' }).acked, '重复回执无害');
+    assert.throws(() => f.authority.ackPurged({ projectId, conversationId: 'nope' }), { status: 404 });
+    assert.equal(JSON.stringify(f.authority.listUnpurged()).includes('x'), false);
+  } finally { f.close(); }
+});
+
+test('审查 8 清文字只动确切匹配的记录：别的项目里同一个对话号、同项目别的对话都不动', async () => {
+  const f = fixture();
+  try {
+    await f.send(ownerId, 'same', 'r1', '本项目的话'); await f.send(ownerId, 'same', 'o1', '别的项目的话', otherProjectId);
+    f.ledger.transaction(state => {
+      state.runGrantsV2 = { g1: { runGrantId: 'g1', projectId, conversationId: 'same', selectionSnapshot: { a: 1 } },
+        gOtherProject: { runGrantId: 'gO', projectId: otherProjectId, conversationId: 'same', selectionSnapshot: { b: 2 } },
+        gOtherConv: { runGrantId: 'gC', projectId, conversationId: 'different', selectionSnapshot: { c: 3 } } };
+      // 对话号等于这个对话号、但不是对话的公开形状(没有 v:2 / ownerAccountId)的记录不动
+      state.runRequestsV2 = { k: { digest: 'd', result: { projectId, id: 'same', message: { content: '不是对话形状' } } } };
+    });
+    await f.remove(ownerId, 'same', 'd1');
+    const s = f.ledger.read();
+    assert.equal(s.runGrantsV2.g1.selectionSnapshot, undefined);
+    assert.deepEqual(s.runGrantsV2.gOtherProject.selectionSnapshot, { b: 2 });
+    assert.deepEqual(s.runGrantsV2.gOtherConv.selectionSnapshot, { c: 3 });
+    assert.equal(s.runRequestsV2.k.result.message.content, '不是对话形状');
+    assert.equal(s.conversationsV2[otherProjectId].same.messages[0].content, '别的项目的话');
   } finally { f.close(); }
 });

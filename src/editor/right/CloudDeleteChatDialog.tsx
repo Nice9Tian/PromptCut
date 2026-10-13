@@ -2,7 +2,7 @@ import { CLOUD_CHAT_TEXT } from "../../ai/cloud/chatTexts";
 import type { CloudChatItem } from "../../ai/cloud/types";
 import "./CloudAgentConsentDialog.css";
 
-/** 删除一段云端对话前的确认。文字都在 `src/ai/cloud/chatTexts.ts`（待用户定原文）。 */
+/** 删除一段云端对话前的确认。文字都在 `src/ai/cloud/chatTexts.ts`（用户 2026-10-13 确认）。 */
 export interface CloudDeleteAsk {
   item: CloudChatItem;
   /** 一次删除用同一个请求号：没办完（任务还没停稳）时重试沿用它 */

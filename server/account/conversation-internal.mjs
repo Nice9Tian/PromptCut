@@ -34,12 +34,16 @@ export function createConversationInternalHandler({ conversationAuthority, resol
       if (req.socket?.authorized !== true || certificateFingerprint(cert?.fingerprint256) !== pin) fail(403, 'service-forbidden');
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = url.pathname.slice(ROOT.length);
-      if (!['identity', 'access', 'list', 'get', 'send', 'switch', 'stop', 'rename', 'remove', 'remove-member-private', 'notices', 'ack-notices'].includes(action)) fail(404, 'no-route');
+      if (!['identity', 'access', 'list', 'get', 'send', 'switch', 'stop', 'rename', 'remove', 'remove-member-private', 'notices', 'ack-notices', 'purges', 'purge-ack'].includes(action)) fail(404, 'no-route');
       if (requireReadControl && ['access', 'list', 'get'].includes(action)) fail(503, 'read-control-required');
       const body = await bodyOf(req);
       if (['principal', 'principalRef', 'authorizationId', 'accountId', 'loginId', 'credentialId', 'loginGeneration',
         'senderAccountId', 'senderNameAtSend', 'creator', 'serviceId', 'servicePrincipal', 'readReceiptId', 'runGrantId'].some(k => body[k] !== undefined))
         fail(400, 'invalid-authority-claim');
+      // 服务一级的两个动作(没有用户的委托)：Agent 服务对账「哪些已删的对话还没清 Agent 一侧」、清完回执。只认 Agent 服务那张证书(上面已核)，
+      // 只给项目号与对话号，不带任何内容。
+      if (action === 'purges') { response(res, 200, { ok: true, result: conversationAuthority.listUnpurged() }); return true; }
+      if (action === 'purge-ack') { response(res, 200, { ok: true, result: conversationAuthority.ackPurged({ projectId: body.projectId, conversationId: body.conversationId }) }); return true; }
       if (typeof body.delegation !== 'string' || !body.delegation) fail(401, 'delegation-required');
       const trusted = await resolveDelegation(body.delegation, { serviceId: 'agent', action });
       if (!trusted?.authorizationId || !trusted.projectId || (body.projectId !== undefined && body.projectId !== trusted.projectId)) fail(403, 'project-mismatch');

@@ -31,7 +31,7 @@ export function createConversationPurger({ eventStore = null, readIntents = null
       if (!safeSeg(projectId) || !safeSeg(conversationId)) throw Object.assign(new Error('purge-invalid'), { status: 400, code: 'purge-invalid' });
       const out = { runEvents: null, readIntents: null, history: false, workspace: false };
       try {
-        if (eventStore?.purgeConversation) out.runEvents = eventStore.purgeConversation({ projectId, conversationId });
+        if (eventStore?.purgeConversation) out.runEvents = await eventStore.purgeConversation({ projectId, conversationId });
         if (readIntents?.purgeConversation) out.readIntents = readIntents.purgeConversation({ projectId, conversationId });
         if (sharedDataDir) {
           out.history = rmdir(path.join(sharedDataDir, 'tenants', projectId, 'conversations', conversationId));

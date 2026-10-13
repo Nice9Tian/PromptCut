@@ -30,6 +30,7 @@ import { acceptCloudConsent, cloudConsentState, refreshCloudConsent, subscribeCl
 import { CloudAgentConsentDialog } from "./CloudAgentConsentDialog";
 import { CloudDeleteChatDialog, type CloudDeleteAsk } from "./CloudDeleteChatDialog";
 import { CLOUD_CHAT_TEXT } from "../../ai/cloud/chatTexts";
+import { createPoller, type Poller } from "../../ai/cloud/poll";
 import type { CloudChatItem } from "../../ai/cloud/types";
 
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
@@ -504,24 +505,46 @@ export function CloudAiPanel(props: {
     } catch (error) {
       if (!stillCurrent()) return;
       // 任务还没停稳(503 agent-fence-pending)或云端暂时没确认：对话还在，用同一个请求号重试
-      const pending = error instanceof CloudError && (error.code === "agent-fence-pending" || error.code === "agent-fence-unavailable" || error.status >= 500);
-      setDeleteAsk({ ...ask, stage: pending ? "pending" : "error",
-        text: error instanceof CloudError ? (pending ? CLOUD_CHAT_TEXT.deletePending : error.message) : cloudErrorText("network") });
+      // 5xx 一类(含删除办成了但云端清理出错的 purge-failed)也是可重试的，但话要贴切：只有围栏没办完才说「任务还没完全停下」
+      const retryable = error instanceof CloudError && (error.code === "agent-fence-pending" || error.code === "agent-fence-unavailable" || error.status >= 500);
+      const fencePending = error instanceof CloudError && (error.code === "agent-fence-pending" || error.code === "agent-fence-unavailable");
+      setDeleteAsk({ ...ask, stage: retryable ? "pending" : "error",
+        text: error instanceof CloudError ? (fencePending ? CLOUD_CHAT_TEXT.deletePending : error.message) : cloudErrorText("network") });
       void chat.history.refresh();
     }
   };
 
-  // 删到一半(任务还没停稳)就关了页面的：这位账号再打开页面时静默接着办，不等他再去点「继续删除」(2026-10-13 用户定：不给取消删除)
-  const resumedRef = useRef<Set<string>>(new Set());
+  // 删到一半(任务还没停稳)就关了页面的：这位账号再打开页面时静默接着办，不等他再去点「继续删除」(2026-10-13 用户定：不给取消删除)。
+  // 文档服务那边任务一结清也会自己收尾(conversation-authority.mjs 的 completePendingDeletions)，这里只是让本页尽快看到结果。
+  // 规矩(审查 6)：同一个对话沿用同一个请求号、同时只有一次在途、失败退避(10 秒起翻倍，封顶 5 分钟)、登录失效就停、页面不可见不办；
+  // 同一个账号开了几个页签时，别的页签 20 秒内办过的这次就不办(localStorage 里留一个时间戳)。
+  const removeChatRef = useRef(chat.removeChat);
+  removeChatRef.current = chat.removeChat;
+  const resumeRef = useRef(new Map<string, Poller>());
+  const resumeTabRef = useRef(crypto.randomUUID());
+  const deleteAskId = deleteAsk?.item.id ?? null;
   useEffect(() => {
     if (!cloud.accountMode || !cloud.accountId) return;
-    for (const item of chat.history.items) {
-      if (!item.deleting || item.deletingBy !== cloud.accountId || resumedRef.current.has(item.id) || deleteAsk?.item.id === item.id) continue;
-      resumedRef.current.add(item.id);
-      void chat.removeChat(item.id, crypto.randomUUID()).catch(() => undefined)
-        .finally(() => { setTimeout(() => resumedRef.current.delete(item.id), 10_000); });
+    const wanted = new Set(chat.history.items.filter((i) => i.deleting && i.deletingBy === cloud.accountId && i.id !== deleteAskId).map((i) => i.id));
+    for (const [id, poller] of resumeRef.current) if (!wanted.has(id)) { poller.stop(); resumeRef.current.delete(id); }
+    for (const id of wanted) {
+      if (resumeRef.current.has(id)) continue;
+      const requestId = crypto.randomUUID();
+      const stampKey = `pc.cloudResume:${cloud.projectId}:${id}`;
+      const poller = createPoller({ baseMs: 10_000, maxMs: 300_000, run: async () => {
+        try { const at = JSON.parse(localStorage.getItem(stampKey) ?? "null"); if (at && at.tab !== resumeTabRef.current && Date.now() - at.t < 20_000) return; } catch { /* 读不了就照办 */ }
+        try { localStorage.setItem(stampKey, JSON.stringify({ tab: resumeTabRef.current, t: Date.now() })); } catch { /* 写不了就照办 */ }
+        try { await removeChatRef.current(id, requestId); } catch (error) {
+          if (error instanceof CloudError && (error.status === 401 || error.status === 403)) return "stop";
+          throw error;
+        }
+        return "stop";
+      } });
+      resumeRef.current.set(id, poller);
+      poller.start();
     }
-  }, [cloud.accountMode, cloud.accountId, chat.history.items, chat.removeChat, deleteAsk]);
+  }, [cloud.accountMode, cloud.accountId, cloud.projectId, chat.history.items, deleteAskId]);
+  useEffect(() => () => { for (const poller of resumeRef.current.values()) poller.stop(); resumeRef.current.clear(); }, []);
 
   /* ---------- 历史列表 ---------- */
   const openHistory = () => { setHistoryOpen(true); void chat.history.refresh(); };

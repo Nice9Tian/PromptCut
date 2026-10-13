@@ -9,12 +9,13 @@ import { openReadIntents } from '../agent/service/read-intents.mjs';
 import { createConversationPurger, accountConversationOwnerKey } from '../agent/service/conversation-purge.mjs';
 import { createAccountConversationService } from '../agent/service/conversation-policy.mjs';
 import { digestOf } from '../account/ledger.mjs';
+import { fixture, projectId as docProjectId, ownerId, memberId, creatorId } from './conversation-delete-fixture.mjs';
 
 /**
  * 块五第 2、7 条的 Agent 服务一侧：对话被删以后事件库、已读意向、模型历史、工作目录都清干净；
  * 删除替页面等强制结束办完；删除后留给云端工具表接线的接缝(onConversationDeleted)。
  */
-const projectId = 'sp_agentside', other = 'sp_other';
+const projectId = docProjectId, other = 'sp_other';
 const SECRET = '绝密-agent-9c1';
 const msg = (content, n = 1, conv = 'c1', pid = projectId) => ({ messageId: `m${n}-${conv}`, requestId: `req${n}-${conv}`, arrivalSeq: n, senderAccountId: 'acc1',
   senderNameAtSend: 'A', createdAt: 1, content, contentDigest: digestOf(content), attachments: [],
@@ -110,16 +111,82 @@ test('清理失败回 503 purge-failed，重放同一个删除(文档服务回�
   assert.equal(purged.length, 1, '被拒绝的不清');
 });
 
-test('移出成员时清私有对话：文档服务删完逐个清 Agent 一侧并调接缝；没办完的不清、等同一个请求号再来', async () => {
-  const purged = [], seam = [];
-  const first = client({ async removeMemberPrivate(input) { return { accountId: input.targetAccountId, projectId, removed: ['p1'], pending: ['p2'] }; } });
-  const svc = createAccountConversationService({ conversationClient: first.c, purger: { purge: async x => { purged.push(x.conversationId); } },
-    onConversationDeleted: async x => { seam.push(x.conversationId); }, sleep: async () => {}, deleteWaitMs: 0 });
-  const out = await svc.removeMemberPrivate(identity, 'acc2', 'clear-1');
-  assert.deepEqual([out.removed, out.pending], [['p1'], ['p2']]);
-  assert.deepEqual(purged, ['p1']); assert.deepEqual(seam, ['p1']);
-  const done = client();
-  const svc2 = createAccountConversationService({ conversationClient: done.c, purger: { purge: async x => { purged.push(x.conversationId); } }, sleep: async () => {} });
-  assert.deepEqual((await svc2.removeMemberPrivate(identity, 'acc2', 'clear-1')).removed, ['p1', 'p2']);
-  assert.deepEqual(purged, ['p1', 'p1', 'p2']);
+/** 把真的文档对话权威接成 Agent 服务用的 conversationClient(只做转发，权限与删除都是真的账本在判) */
+function authorityClient(f, who = creatorId) {
+  const ref = { authorizationId: `auth:${who}:${projectId}` };
+  const c = Object.fromEntries(['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename'].map(n => [n, async () => ({})]));
+  return { ...c,
+    remove: input => f.authority.remove({ principalRef: ref, projectId, conversationId: input.conversationId, requestId: input.requestId }),
+    removeMemberPrivate: input => f.authority.removeMemberPrivate({ principalRef: ref, projectId, accountId: input.targetAccountId, requestId: input.requestId }),
+    purges: async () => f.authority.listUnpurged(), purgeAck: async input => f.authority.ackPurged(input) };
+}
+const agentIdentity = { accountMode: true, delegation: 'd', projectId, accountId: creatorId };
+
+test('审查 1 批量清除：对着真的文档权威，有一个对话的任务没停稳，其余已删的对话 Agent 一侧也都清了，回的 removed 是各轮总和', async () => {
+  const f = fixture();
+  try {
+    for (const id of ['p1', 'p2', 'p3']) {
+      await f.send(memberId, id, `r-${id}`, `私有-${id}`);
+      await f.authority.switchVisibility({ principalRef: f.ref(memberId), projectId, conversationId: id, visibility: 'private', requestId: `s-${id}` });
+    }
+    f.startRun('p2'); f.control.stopClears = false;   // p2 里有任务，停不下来
+    f.control.ackError = Object.assign(new Error('pending'), { status: 503, code: 'agent-fence-pending' });
+    const purged = [];
+    let rounds = 0;
+    const svc = createAccountConversationService({ conversationClient: authorityClient(f), purger: { purge: async x => { purged.push(x.conversationId); } },
+      sleep: async () => { rounds++; if (rounds === 3) { f.control.ackError = null; f.ledger.transaction(s => { s.conversationsV2[projectId].p2.currentRunId = null; }); } },
+      deleteWaitMs: 15_000 });
+    const out = await svc.removeMemberPrivate(agentIdentity, memberId, 'clear-batch');
+    assert.deepEqual(out.removed, ['p1', 'p2', 'p3'], '各轮的总和，不只是最后一轮');
+    assert.deepEqual(out.pending, []);
+    assert.deepEqual(purged.sort(), ['p1', 'p2', 'p3'], 'Agent 一侧每个删掉的都清了(第一轮删掉的 p1、p3 不会被后面几轮漏掉)');
+    // 等不到停稳(到时还是 pending)时，已经删掉的照样清
+    await f.send(memberId, 'q1', 'rq1', 'x'); await f.send(memberId, 'q2', 'rq2', 'y');
+    for (const id of ['q1', 'q2']) await f.authority.switchVisibility({ principalRef: f.ref(memberId), projectId, conversationId: id, visibility: 'private', requestId: `s-${id}` });
+    f.startRun('q2'); f.control.ackError = Object.assign(new Error('pending'), { status: 503, code: 'agent-fence-pending' });
+    purged.length = 0;
+    let t = 0;
+    const slow = createAccountConversationService({ conversationClient: authorityClient(f), purger: { purge: async x => { purged.push(x.conversationId); } },
+      sleep: async () => {}, now: () => (t += 5000), deleteWaitMs: 15_000 });
+    const partial = await slow.removeMemberPrivate(agentIdentity, memberId, 'clear-batch-2');
+    assert.deepEqual([partial.removed, partial.pending], [['q1'], ['q2']]);
+    assert.deepEqual(purged, ['q1']);
+  } finally { f.close(); }
+});
+
+test('审查 4 对账：文档服务说还没确认清理的已删对话，Agent 起来时补清并回执；回执后不再列；清理失败不回执、下次再来', async () => {
+  const f = fixture();
+  try {
+    await f.send(ownerId, 'c1', 'r1', 'x'); await f.send(ownerId, 'c2', 'r2', 'y');
+    await f.remove(ownerId, 'c1', 'd1'); await f.remove(ownerId, 'c2', 'd2');     // 文档服务删了，Agent 一侧还没动(模拟崩了、回包丢了)
+    const purged = []; let fail = true;
+    const svc = createAccountConversationService({ conversationClient: authorityClient(f), purger: { purge: async x => { if (fail && x.conversationId === 'c2') throw new Error('disk'); purged.push(x.conversationId); } } });
+    await assert.rejects(svc.reconcilePurges(), { code: 'purge-failed' });
+    assert.deepEqual(purged, ['c1']);
+    assert.deepEqual(f.authority.listUnpurged().map(x => x.conversationId), ['c2'], 'c1 清完已回执，c2 清失败没回执');
+    fail = false;
+    assert.equal(await svc.reconcilePurges(), 1);
+    assert.deepEqual(purged, ['c1', 'c2']);
+    assert.deepEqual(f.authority.listUnpurged(), []);
+    assert.equal(await svc.reconcilePurges(), 0);
+  } finally { f.close(); }
+});
+
+test('审查 3 清理排在镜像写入同一条队列：删除时事件流正好在镜像，清完以后不会把消息原文写回去', async () => {
+  const s = stores();
+  try {
+    const slowRead = async () => { await new Promise(r => setTimeout(r, 30)); return { v: 2, projectId, id: 'c1', messages: [msg(SECRET, 1, 'c1')] }; };
+    // 镜像先读到了原文(慢读)，这时删除来了：清理排在后面，镜像写入先完成、清理再删；之后再来的镜像看到「已清」标记什么都不写
+    const mirror1 = s.eventStore.mirrorAccepted({ projectId, conversationId: 'c1', read: slowRead });
+    const purge = s.eventStore.purgeConversation({ projectId, conversationId: 'c1' });
+    await Promise.all([mirror1, purge]);
+    assert.equal(rawDump(path.join(s.dir, 'events.sqlite')).includes(SECRET), false, '清完查不到');
+    const late = await s.eventStore.mirrorAccepted({ projectId, conversationId: 'c1', read: async () => ({ v: 2, projectId, id: 'c1', messages: [msg(SECRET, 1, 'c1')] }) });
+    assert.equal(late.appended, 0);
+    assert.equal(rawDump(path.join(s.dir, 'events.sqlite')).includes(SECRET), false, '之后再镜像也写不回去');
+    assert.equal(s.eventStore.after({ projectId, conversationId: 'c1' }).head, 0);
+    // 别的对话照常
+    await s.eventStore.mirrorAccepted({ projectId, conversationId: 'c2', read: async () => ({ v: 2, projectId, id: 'c2', messages: [msg('别的', 1, 'c2')] }) });
+    assert.ok(rawDump(path.join(s.dir, 'events.sqlite')).includes('别的'));
+  } finally { await s.close(); }
 });

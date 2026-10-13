@@ -5,7 +5,7 @@
  * 免得在界面上点 49 次发送；第 50、第 51 个都由界面真发。
  *
  * 用法：node scripts/probes/conversation-delete-probe.mjs --dist <dist-online> --site-root <VisuHive/site> --out <os-temp 下的子目录>
- * 需要环境变量 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE。端口 28180～28189。
+ * 需要环境变量 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE。端口：从 --base-port 起连着 10 个(缺省 28180～28189，分给块五的那一段)。
  */
 import '../lib/no-user-dirs.mjs';
 import fs from 'node:fs/promises';
@@ -26,8 +26,9 @@ const arg = flag => { const at = process.argv.indexOf(flag); return at < 0 ? nul
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.wasm': 'application/wasm' };
 const TIMEOUT = 45_000;
-const PORTS = [28180, 28181, 28182, 28183, 28184, 28185, 28186, 28187, 28188, 28189];
-const ORIGIN = 'https://127.0.0.1:28186', STAGES = ['http://s1.pc.localhost:28188', 'http://s2.pc.localhost:28189'];
+const BASE = Number(arg('--base-port') ?? 28180);
+const PORTS = Array.from({ length: 10 }, (_, i) => BASE + i);
+const ORIGIN = `https://127.0.0.1:${BASE + 6}`, STAGES = [`http://s1.pc.localhost:${BASE + 8}`, `http://s2.pc.localhost:${BASE + 9}`];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fill = async (page, selector, text) => {
   await page.waitForSelector(selector, { visible: true, timeout: TIMEOUT });
@@ -141,8 +142,8 @@ async function main() {
     await fs.access(path.join(DIST, 'index.html')); await fs.access(SITE);
     await fs.mkdir(shotDir, { recursive: true });
     for (const port of PORTS) check(await portFree(port), `port-${port}-available`);
-    fixture = await startAccountConversationControlsUserFixture({ ports: PORTS.slice(0, 7).map((_, i) => PORTS[i]), agentPort: 28187, publicHandler: serve(false) });
-    for (const port of [28188, 28189]) {
+    fixture = await startAccountConversationControlsUserFixture({ ports: PORTS.slice(0, 7).map((_, i) => PORTS[i]), agentPort: BASE + 7, publicHandler: serve(false) });
+    for (const port of [BASE + 8, BASE + 9]) {
       const sockets = new Set(), server = http.createServer((req, res) => { void serve(true)(req, res); });
       server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
       stages.push({ server, sockets, port });

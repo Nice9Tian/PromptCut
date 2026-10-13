@@ -71,13 +71,15 @@ export function cloudErrorText(code: string, serverMessage?: string): string {
     case "bad-grant": return "这次对话的授权已失效,请重新发送。";
     case "unavailable": return serverMessage || "云端 Agent 暂时连不上文档服务,请稍后再试。";
     case "network": return "连不上云端 Agent 服务,请检查网络。";
-    // 50 个上限与删除（文字集中在 chatTexts.ts，待用户定原文）
+    // 50 个上限与删除（文字集中在 chatTexts.ts，用户 2026-10-13 确认）；purge-failed 与 creator-required 两句是 2026-10-13 新起草的，列在报告的文字表里
     case "conversation-limit": return CLOUD_CHAT_TEXT.limitReached;
     case "delete-forbidden": return CLOUD_CHAT_TEXT.deleteForbidden;
     case "conversation-deleting": return CLOUD_CHAT_TEXT.conversationDeleting;
     case "conversation-deleted":
     case "no-conversation": return CLOUD_CHAT_TEXT.noConversation;
     case "agent-fence-pending": return CLOUD_CHAT_TEXT.deletePending;
+    case "purge-failed": return CLOUD_CHAT_TEXT.purgeFailed;
+    case "creator-required": return CLOUD_CHAT_TEXT.creatorRequired;
     default: return serverMessage || `云端 Agent 出错了(${code})。`;
   }
 }

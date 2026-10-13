@@ -42,6 +42,18 @@ export function createAccountConversationService({ conversationClient, usageDir 
       await purger?.purge({ projectId, conversationId });
       await onConversationDeleted?.({ projectId, conversationId });
     } catch (error) { throw new AgentServiceError('purge-failed', 'purge-failed', 503); }
+    // 回执文档服务：这个已删对话在 Agent 一侧清完了(墓碑上记下，对账就不再列它)。回执失败不要紧：下一次对账会再清一遍(幂等)
+    try { await conversationClient.purgeAck?.({ projectId, conversationId }); } catch { /* 下次对账补 */ }
+  }
+  /**
+   * 对账：问文档服务「哪些已删的对话在 Agent 一侧还没确认清理」，逐个补清。补它崩了、回包丢了、清到一半出错漏掉的。
+   * 主服务起来时和定时各来一次(account-master-assembly.mjs)。返回这次补清了几个。
+   */
+  async function reconcilePurges() {
+    if (typeof conversationClient.purges !== 'function') return 0;
+    let done = 0;
+    for (const row of await conversationClient.purges()) { await afterDeleted(row.projectId, row.conversationId); done++; }
+    return done;
   }
   return {
     accountMode: true,
@@ -101,14 +113,17 @@ export function createAccountConversationService({ conversationClient, usageDir 
     async removeMemberPrivate(identity, accountId, requestId = randomUUID()) {
       if (typeof conversationClient.removeMemberPrivate !== 'function') throw new AgentServiceError('deletion-unavailable', 'conversation deletion is not mounted', 503);
       const deadline = now() + deleteWaitMs;
+      // 每一轮文档服务只列「这一轮还在账本里」的对话，前一轮已经删掉的不会再出现：所以每一轮删掉的立刻清 Agent 一侧并累计，
+      // 最后回的 removed 是各轮的总和(2026-10-13 审查)
+      const removed = new Set();
       let result;
       for (;;) {
         result = await call('removeMemberPrivate', identity, undefined, { targetAccountId: accountId, requestId });
+        for (const id of result.removed) if (!removed.has(id)) { removed.add(id); await afterDeleted(identity.projectId, id); }
         if (!result.pending?.length || now() >= deadline) break;
         await sleep(200);
       }
-      for (const id of result.removed) await afterDeleted(identity.projectId, id);
-      return result;
+      return { ...result, removed: [...removed].sort() };
     },
     /** 别人删了和你有关的对话时留给你的通知(打开项目时取，弹完回执) */
     async notices(identity) {
@@ -119,6 +134,7 @@ export function createAccountConversationService({ conversationClient, usageDir 
       if (typeof conversationClient.ackNotices !== 'function') throw new AgentServiceError('notices-unavailable', 'conversation notices are not mounted', 503);
       return call('ackNotices', identity, undefined, { noticeIds });
     },
+    reconcilePurges,
     onRevoke: () => () => {},
     close() {},
     describe: () => ({ accountMode: true, runAuthorityMounted: false, at: now() }),

@@ -22,6 +22,7 @@ import { bubbleAttachments, type CloudAttachmentInfo } from "./attach";
 import type { ChatAttachment } from "../types";
 import type { CloudChatItem, CloudInfo, CloudSendBody } from "./types";
 import { CLOUD_CHAT_LIMIT, CLOUD_CHAT_TEXT, cloudNoticeText } from "./chatTexts";
+import { createPoller } from "./poll";
 import { newPageId, runPageRequest, type PageRequestExec } from "./pageRequests";
 import { playbackHandlers } from "../../mcp/handlers/playback";
 import { projectHandlers } from "../../mcp/handlers/project";
@@ -263,6 +264,8 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   /** 进入时的那一次「取 info、定对话」还没做完,用户已经自己选了对话(历史列表里点的、新对话):后到的结果不再改写他的选择 */
   const pickedRef = useRef(false);
   const refreshHistoryRef = useRef<(silent?: boolean) => Promise<boolean>>(async () => false);
+  /** 后台刷新列表最近一次失败的原因(轮询据此判断是退避还是登录失效就停) */
+  const histErrorRef = useRef<unknown>(null);
   /** 自己正在删的对话号：它被删时流上的 conversation.deleted 不再当「别人删了」提示 */
   const selfDeletingRef = useRef<Set<string>>(new Set());
   const onDeletedRef = useRef<(id: string) => void>(() => {});
@@ -476,6 +479,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       setHistItems((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       return true;
     } catch (err) {
+      if (silent) histErrorRef.current = err;
       if (current() && !silent) setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       return false;
     } finally {
@@ -485,14 +489,21 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
 
   refreshHistoryRef.current = refreshHistory;
   // 对话列表与「我的 N/50」实时更新(2026-10-13 用户定)：别人(或自己的另一页)新建、删除以后，这一页不刷新也跟着变。
-  // 每 3 秒(HISTORY_POLL_MS)后台读一次列表(页面看得见时)，回到前台和页面里有人删了对话时立刻读一次。
+  // 后台每 3 秒(HISTORY_POLL_MS)读一次列表；同时只有一次在途、失败退避、登录失效就停、页面不可见就不排(poll.ts)；
+  // 回到前台和页面里有人删了对话时立刻读一次。
   useEffect(() => {
     if (!key || !cloud.accountMode) return;
-    const pull = () => { if (document.visibilityState === "visible") void refreshHistoryRef.current(true); };
-    const timer = setInterval(pull, HISTORY_POLL_MS);
-    document.addEventListener("visibilitychange", pull);
-    window.addEventListener(NOTICES_REFRESH_EVENT, pull);
-    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", pull); window.removeEventListener(NOTICES_REFRESH_EVENT, pull); };
+    const poller = createPoller({ baseMs: HISTORY_POLL_MS, run: async () => {
+      histErrorRef.current = null;
+      const ok = await refreshHistoryRef.current(true);
+      const err = histErrorRef.current;
+      if (!ok && err) { if (authLost(err)) return "stop"; throw err; }
+    } });
+    const kick = () => { if (document.visibilityState === "visible") poller.kick(); };
+    poller.start();
+    document.addEventListener("visibilitychange", kick);
+    window.addEventListener(NOTICES_REFRESH_EVENT, kick);
+    return () => { poller.stop(); document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); };
   }, [key, cloud.accountMode]);
   const setModel = useCallback((m: string) => { setModelState(m); lsSet(MODEL_KEY, m); }, []);
 
@@ -560,6 +571,12 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
 
 /* ---------------- 别人删了和你有关的对话：气泡 ---------------- */
 
+/**
+ * 服务端明确说登录失效(401)：后台轮询停下来(换了账号、重新登录会换 key 重新起)。刚进页面身份还没就绪时的取票失败、403(Agent 被关、暂时没权限)不算，
+ * 那些靠退避(poll.ts)慢慢等。
+ */
+const authLost = (err: unknown) => err instanceof CloudError && err.status === 401;
+
 /** 页面里有人（含自己）刚删了对话时发这个事件，通知钩子立刻再取一次，不等下一次轮询 */
 export const NOTICES_REFRESH_EVENT = "pc-cloud-notices-refresh";
 /** 已经弹过的通知号（跨组件、跨钩子实例；回执失败时防止同一页反复弹） */
@@ -579,37 +596,22 @@ export function useCloudNotices(cloud: CloudAgentState, enabled: boolean): void 
     ? `${cloud.projectId}|${cloud.url}|${cloud.accountId}|${cloud.identityVersion}` : "";
   useEffect(() => {
     if (!key) return;
-    let dead = false;
-    let running = false;
-    const pull = async () => {
-      if (running || dead) return;
-      running = true;
+    // 同时只有一次在途、失败退避(取不到、回执失败)、登录失效就停、页面不可见就不排(poll.ts)；没回执成功的下次还会给，已弹过的本页不重复弹
+    const poller = createPoller({ baseMs: NOTICES_POLL_MS, run: async () => {
       try {
         const items = await api.notices();
-        if (dead || !items.length) return;
         for (const n of items) {
           if (shownNoticeIds.has(n.noticeId)) continue;
           shownNoticeIds.add(n.noticeId);
           pushToast(cloudNoticeText(n), "info", Infinity);
         }
-        await api.ackNotices(items.map((n) => n.noticeId));
-      } catch {
-        /* 取不到、回执失败：下一次再来；没回执成功的下次还会给，已弹过的本页不重复弹 */
-      } finally {
-        running = false;
-      }
-    };
-    void pull();
-    const timer = setInterval(() => { void pull(); }, NOTICES_POLL_MS);
-    const onVisible = () => { if (document.visibilityState === "visible") void pull(); };
-    const onRefresh = () => { void pull(); };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener(NOTICES_REFRESH_EVENT, onRefresh);
-    return () => {
-      dead = true;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener(NOTICES_REFRESH_EVENT, onRefresh);
-    };
+        if (items.length) await api.ackNotices(items.map((n) => n.noticeId));
+      } catch (err) { if (authLost(err)) return "stop"; throw err; }
+    } });
+    const kick = () => { if (document.visibilityState === "visible") poller.kick(); };
+    poller.start();
+    document.addEventListener("visibilitychange", kick);
+    window.addEventListener(NOTICES_REFRESH_EVENT, kick);
+    return () => { poller.stop(); document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); };
   }, [api, key]);
 }
