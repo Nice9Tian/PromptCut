@@ -36,6 +36,8 @@ import { changedClips, projectHash, type ProjectPatch } from "./changedClips.mjs
  *   看到的一定是改完的那份(读后写一致)。取帧之前也会对齐(alignMirror)。
  * - 播放头 `{t, playing}` 走 `/api/data/playhead`,和项目分开:它是「停下来报一次当前时刻」,
  *   混进项目那条路的话,拖一次播放头要带着整份项目再飞一趟。
+ * - **播放中每 2 秒发一条保活**(`PLAYHEAD_KEEPALIVE_MS`,下面「播放保活」一节):预渲染进程靠这条路上的音讯判断用户还在播放,
+ *   播放头下没有缺口时 `wanted` 不发,不保活的话连播 5 秒就被当成用户走了。
  * - **推送一次只飞一个**,后一次等前一次落地再发:两次同时在路上的话,到达顺序没保证,
  *   旧的可能把新的盖掉。链上最多排一个等着的 —— 它跑起来时读的是最新状态,排十个没有意义。
  * - **推失败(网络错误、HTTP 非 2xx)就当没推过**,过一会儿自己再推;不然镜像会一直停在旧版。
@@ -191,17 +193,64 @@ let wantedTimer: ReturnType<typeof setTimeout> | null = null;
 let wantedPending: WantedFrame[] | null = null;
 let wantedSentAt = 0;
 
-function sendWanted(wanted: WantedFrame[]) {
-  wantedSentAt = Date.now();
+/**
+ * 轻路的一次发送:`wanted` 和下面的播放保活共用。不 await、不读响应、`keepalive: true`、失败静默 ——
+ * 它是一份提示,晚一拍到也只是少插一次队(保活晚一拍到,服务端还有 5 秒的余量)。
+ */
+function sendPlayheadLight(body: Record<string, unknown>) {
   try {
-    // 不 await、不读 body:它是一份提示,晚一拍到也只是少插一次队。
     void fetch("/api/data/playhead", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session, t: getState().t, playing: getState().playing, wanted }),
+      body: JSON.stringify(body),
       keepalive: true,
     }).catch(() => {});
   } catch { /* 页面正在卸载 / 网络断了:下一拍再说 */ }
+}
+
+function sendWanted(wanted: WantedFrame[]) {
+  wantedSentAt = Date.now();
+  sendPlayheadLight({ session, t: getState().t, playing: getState().playing, wanted });
+}
+
+/* ------------------------------------------------------------------ 播放保活 */
+
+/**
+ * 播放保活的间隔。预渲染进程判断「用户在不在播放」只看这条路上最近一次音讯:`playing` 且 5 秒内有过
+ * (`FramePipeline.streamBusy()`、`server/queue-idle.mjs` 的 `interactionReason`),所以连续播放时得有音讯不断地来。
+ * 原来播放中能刷新它的只有上面的 `wanted`,而播放头下每一层都有流盖着时没有缺口、`wanted` 不发 ——
+ * 连着播放超过 5 秒,预渲染进程就当成用户走了,在播放中接着把别的卡的流补成满密度,违反「播放时不产」。
+ *
+ * 取 2 秒:明显小于服务端的 5 秒窗口,丢一两拍(页面卡一下、请求晚到)也不会过期;比 `wanted` 的 100 毫秒稀得多,
+ * 一分钟 30 条小请求。服务端的两个窗口(5 秒、800 毫秒)不改。
+ */
+export const PLAYHEAD_KEEPALIVE_MS = 2000;
+
+let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+/** 页面此刻在后台(标签页切走、窗口最小化):用户没在看,不发保活,预渲染进程可以恢复产流 */
+function pageHidden(): boolean {
+  try { return typeof document !== "undefined" && document.visibilityState === "hidden"; } catch { return false; }
+}
+
+function sendKeepalive() {
+  if (!started) return stopKeepalive();
+  const s = getState();
+  if (!s.playing) return stopKeepalive();
+  if (pageHidden()) return;
+  // 不带 `wanted`:服务端沿用上一次的缺口提示(和「停下推一次」那条一样),保活既不刷新也不清掉它
+  sendPlayheadLight({ session, t: s.t, playing: true });
+}
+
+function startKeepalive() {
+  if (keepaliveTimer !== null) return;
+  keepaliveTimer = setInterval(sendKeepalive, PLAYHEAD_KEEPALIVE_MS);
+}
+
+function stopKeepalive() {
+  if (keepaliveTimer === null) return;
+  clearInterval(keepaliveTimer);
+  keepaliveTimer = null;
 }
 
 /**
@@ -247,6 +296,7 @@ export function startDataMirror(): () => void {
   let lastPlaying = getState().playing;
   schedule(0);
   schedulePlayhead(0);
+  if (lastPlaying) startKeepalive();
   const off = subscribe(() => {
     const s = getState();
     if (s.project !== lastProject) {
@@ -261,6 +311,9 @@ export function startDataMirror(): () => void {
     } else if (s.playing !== pushedPlaying) {
       schedulePlayhead(0);
     }
+    // 播放保活的计时器跟着 `playing` 起停(重复进来无副作用)
+    if (s.playing) startKeepalive();
+    else stopKeepalive();
     lastPlaying = s.playing;
   });
   return () => {
@@ -269,6 +322,7 @@ export function startDataMirror(): () => void {
     if (headTimer) clearTimeout(headTimer);
     timer = null;
     headTimer = null;
+    stopKeepalive();
     resetWantedThrottle();
     started = false;
   };
