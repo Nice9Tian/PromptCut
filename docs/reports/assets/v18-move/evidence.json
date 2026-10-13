@@ -1,6 +1,6 @@
 {
-  "runId": "mv76ibz1",
-  "cardId": "move-probe-mv76ibz1",
+  "runId": "mv76ofsy",
+  "cardId": "move-probe-mv76ofsy",
   "ports": {
     "fixture": [
       28950,
@@ -16,6 +16,12 @@
     "b": 28965
   },
   "shots": [
+    "docs/reports/assets/v18-move/local-1-before.png",
+    "docs/reports/assets/v18-move/local-2-login.png",
+    "docs/reports/assets/v18-move/local-3-progress.png",
+    "docs/reports/assets/v18-move/local-4-failed.png",
+    "docs/reports/assets/v18-move/local-5-done.png",
+    "docs/reports/assets/v18-move/local-6-second-account.png",
     "docs/reports/assets/v18-move/room-1-before.png",
     "docs/reports/assets/v18-move/room-2-failed.png",
     "docs/reports/assets/v18-move/room-3-progress.png",
@@ -23,23 +29,51 @@
     "docs/reports/assets/v18-move/room-6-second-account.png"
   ],
   "timings": {
-    "roomMoveMs": 13303
+    "localMoveMs": 11420,
+    "roomMoveMs": 40539
   },
   "video": {
     "bytes": 781730,
-    "sha256": "d43d34f05e8c"
+    "sha256": "bc461999f725"
   },
-  "room": {
-    "confirm": "搬到云端后，云端会新建一个属于账号「dualUser0」的项目，内容和现在一样。\n本机协作会关闭，旧邀请码作废，原来的成员要用新的项目链接、登录自己的网站账号重新加入。\n确认搬到云端？",
-    "failText": "连不上云端，云端项目没有建成。本机协作没有改动，原房间照常可用。稍后再点一次。",
-    "progressText": "正在搬到云端：检查登录和项目…",
-    "doneText": "已搬到云端。本机协作已关闭，旧邀请码已作废；请把新的项目链接发给原来的成员，他们登录自己的网站账号后加入。",
+  "local": {
+    "built": {
+      "contentId": "p-mv76oxd4-e153672f",
+      "bytes": 1708779,
+      "tiers": true,
+      "audio": "ok"
+    },
+    "introText": "云端项目属于你的网站账号。点「确定」后把当前项目搬到云端，编辑器接着就在云端项目里；本机这一份保留为普通的本地项目。",
+    "progressText": "正在搬到云端：上传项目内容…",
+    "failText": "项目内容没有传完。本机项目没有改动。再点一次会接着用云端已经建好的那个项目，不会多建一个。",
+    "createRequests": [
+      {
+        "bytes": 389
+      }
+    ],
+    "doneText": "已搬到云端，现在编辑的是云端项目。本机那一份保留为普通的本地项目。",
     "toasts": [
-      "已搬到云端。本机协作已关闭、旧邀请码已作废，请把新的项目链接发给原来的成员。",
+      "已搬到云端，可以将项目链接发给其他已登录成员。",
       "素材还在后台上传（共 2 个，先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。"
     ],
+    "draftDiff": {
+      "vsBefore": [],
+      "vsMoved": [
+        "media",
+        "_note"
+      ]
+    },
+    "uploadToasts": [
+      "素材还在后台上传（共 2 个，先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。",
+      "素材已全部传到云端。"
+    ],
+    "uploadOrder": [
+      "small:344f0329",
+      "original:c6b91118",
+      "original:54f51c7c"
+    ],
     "b": {
-      "projectId": "sp_4pasai7go6h3hndgemcygz24af",
+      "projectId": "sp_lpt6z2upgw5glay5ixsdfe5uuw",
       "assets": {
         "small": {
           "status": 200,
@@ -58,7 +92,38 @@
         }
       }
     },
-    "projectId": "sp_4pasai7go6h3hndgemcygz24af"
+    "projectId": "sp_lpt6z2upgw5glay5ixsdfe5uuw"
+  },
+  "room": {
+    "confirm": "搬到云端后，云端会新建一个属于账号「dualUser0」的项目，内容和现在一样。\n本机协作会关闭，旧邀请码作废，原来的成员要用新的项目链接、登录自己的网站账号重新加入。\n确认搬到云端？",
+    "failText": "连不上云端，云端项目没有建成。本机协作没有改动，原房间照常可用。稍后再点一次。",
+    "progressText": "正在搬到云端：检查登录和项目…",
+    "doneText": "已搬到云端。本机协作已关闭，旧邀请码已作废；请把新的项目链接发给原来的成员，他们登录自己的网站账号后加入。",
+    "toasts": [
+      "已搬到云端。本机协作已关闭、旧邀请码已作废，请把新的项目链接发给原来的成员。",
+      "素材还在后台上传（共 2 个，先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。"
+    ],
+    "b": {
+      "projectId": "sp_zuh2ytvfnx6s6pcg4idchzmovn",
+      "assets": {
+        "small": {
+          "status": 200,
+          "bytes": 116819,
+          "sameHash": true
+        },
+        "original": {
+          "status": 200,
+          "bytes": 781730,
+          "sameHash": true
+        },
+        "cardAudio": {
+          "status": 200,
+          "bytes": 768044,
+          "sameHash": true
+        }
+      }
+    },
+    "projectId": "sp_zuh2ytvfnx6s6pcg4idchzmovn"
   },
   "fails": []
 }
