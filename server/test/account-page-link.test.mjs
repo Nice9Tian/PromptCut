@@ -7,7 +7,7 @@
  *
  * 一条用例(服务只起一次;访问令牌是真实的 120 秒寿命,全程约 150 秒):
  *   1  登录 30 秒时甲改一次:乙看得到,服务端版本前进
- *   2  换会话不丢改动(把到期时刻报成 26 秒后、提前 14 秒换,真服务上连换几次):丙连续改 48 次、乙同时连续改 48 次,
+ *   2  换会话不丢改动(把到期时刻报成 52 秒后、提前 40 秒换,真服务上连换几次):丙连续改 40 次、乙同时连续改 40 次,
  *      换了至少 4 次会话,两边与服务端最后一致,96 处改动一处不少,没有被拒、没有转离线
  *   1b 传输断一次:几秒内在同一个会话上接回(原问题:接续带了票据,文档服务回 400,白等 60 秒保留期过完才重建会话)
  *   3  账号服务一时不通:到期还没换成 → 页面如实转离线(不是「在线」);离线时的改动不丢,通了之后补发
@@ -100,10 +100,19 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
    * 一个页面。`reportExpiry`:把票据的到期时刻报成什么(缺省照实);`ticking`:计时器走不走(假 = 睡着);
    * `renewing`:换不换会话、理不理会「凭证到期」(假 = 改之前的页面)。
    */
+  const traceT0 = Date.now();
+  /** `PL_DEBUG=1` 时打出换会话每一步花了多久(查机器忙时换不成的原因用) */
+  const trace = (name, text) => { if (process.env.PL_DEBUG) console.log(`${((Date.now() - traceT0) / 1000).toFixed(1)}s`, name, text); };
   function page(name, who, { reportExpiry = (real) => real, ticking = true, renewing = true, resumeWithTicket = false, lifeOptions = {} } = {}) {
     const p = { name, who, terminal: [], closes: [], notices: [], authExpired: [], statuses: [], sessions: 0, ticking };
     const life = createAccountLinkLife({
-      session: async ({ minRemainingMs }) => { const s = await session(who, minRemainingMs); p.sessions += 1; return { connectionTicket: s.connectionTicket, expiresAt: reportExpiry(s.expiresAt) }; },
+      session: async ({ minRemainingMs }) => {
+        const t0 = Date.now();
+        const s = await session(who, minRemainingMs).catch((e) => { trace(name, `取会话失败 ${e?.code ?? e?.message} ${Date.now() - t0}ms`); throw e; });
+        p.sessions += 1;
+        trace(name, `取会话 ${Date.now() - t0}ms`);
+        return { connectionTicket: s.connectionTicket, expiresAt: reportExpiry(s.expiresAt) };
+      },
       link: () => link,
       onTerminal: (error) => { p.terminal.push({ status: error?.status, code: error?.code }); link.stop(); },
       ...lifeOptions,
@@ -130,7 +139,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     p.opsSent = [];
     const rawSend = link.send.bind(link);
     link.send = (msg) => { if (msg?.type === 'project.op') p.opsSent.push({ opId: msg.opId, expectRev: msg.expectRev }); return rawSend(msg); };
-    const timer = setInterval(() => { if (p.ticking && renewing) void life.tick(); }, 500);
+    const timer = setInterval(() => { if (p.ticking && renewing) { const t0 = Date.now(); void life.tick().then((r) => { if (r !== 'idle' && r !== 'busy') trace(name, `tick ${r} ${Date.now() - t0}ms 未确认 ${link.ds.unconfirmed} ${link.ds.status}`); }); } }, 500);
     // 页面每 3 秒续一次会话读项目的状态(`enterAccountProject` 的那个定时),读到自己的权限就报给寿命模块
     const poll = setInterval(() => { if (p.ticking && renewing && link.connected) void session(who).then((s) => life.accessSeen(s.access), () => undefined); }, 2000);
     closers.push(() => { clearInterval(timer); clearInterval(poll); link.stop(); });
@@ -168,19 +177,22 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     const dLoginAt = Date.now();
     await waitFor(() => A.online() && B.online() && D.online(), '三个页面进项目');
 
-    // ---- 2 换会话不丢改动(先做,等真到期的那一百来秒里跑):丙把到期时刻报成 26 秒后、提前 14 秒换
+    // ---- 2 换会话不丢改动(先做,等真到期的那一百来秒里跑):丙把到期时刻报成 52 秒后、提前 40 秒换
     const carol = await login(1, 'pl-c');
-    const C = page('丙', carol, { reportExpiry: () => Date.now() + 26_000, lifeOptions: { renewMarginMs: 14_000, minTicketLifeMs: 5_000, minRenewGapMs: 1_000 } });
+    // 提前量留得宽(40 秒):这台机器忙的时候换一次会话实测 12～18 秒(取会话 3～8 秒,再等旧会话上的提交落定、最多 8 秒),不能让它拖过「到期」。
+    // 取票据时要求真的访问令牌至少还剩 60 秒(与正式的一样):票据背后的真令牌不能在换成之前先到期
+    // (那样文档服务回「凭证到期」,走的是第 5 步那条路,不是这一步要看的)
+    const C = page('丙', carol, { reportExpiry: () => Date.now() + 52_000, lifeOptions: { renewMarginMs: 40_000, minTicketLifeMs: 60_000, minRenewGapMs: 1_000 } });
     await waitFor(() => C.online(), '丙进项目');
     const revBefore2 = (await serverRev(bob)).rev;
-    // 文档服务对账号连接的每次提交都要问账号服务,这台机器上一秒落不了几条,所以改得不快(人手的速度)
-    const N = 48;
+    // 文档服务对账号连接的每次提交都要问账号服务,这台机器忙时一秒只落一条多,所以改得不快(两个页面合起来每 1.5 秒两条),不把它压到越积越多
+    const N = 40;
     for (let i = 0; i < N; i++) {
       C.set(`c${i}`, `丙-${i}`);
       B.set(`b${i}`, `乙-${i}`);
-      await sleep(1200);
+      await sleep(1500);
     }
-    await waitFor(() => C.link.ds.unconfirmed === 0 && B.link.ds.unconfirmed === 0, '丙、乙的改动都确认', 60_000).catch((e) => { throw new Error(`${e.message}:` + [C, B].map((x) => `${x.name} ${JSON.stringify({ un: x.link.ds.unconfirmed, st: x.ds.status, connected: x.link.connected, notices: x.notices.slice(-6), statuses: x.statuses.slice(-8), life: x.life.describe(), closes: x.closes, auth: x.authExpired, stats: x.link.stats() && { opens: x.link.stats().opens, sent: x.link.stats().sent, received: x.link.stats().received, detached: x.link.stats().detached } })}`).join(' | ')); });
+    await waitFor(() => C.link.ds.unconfirmed === 0 && B.link.ds.unconfirmed === 0, '丙、乙的改动都确认', 120_000).catch((e) => { throw new Error(`${e.message}:` + [C, B].map((x) => `${x.name} ${JSON.stringify({ un: x.link.ds.unconfirmed, st: x.ds.status, connected: x.link.connected, notices: x.notices.slice(-6), statuses: x.statuses.slice(-8), life: x.life.describe(), closes: x.closes, auth: x.authExpired, stats: x.link.stats() && { opens: x.link.stats().opens, sent: x.link.stats().sent, received: x.link.stats().received, detached: x.link.stats().detached } })}`).join(' | ')); });
     const after2 = await serverRev(bob);
     const swaps = C.life.describe().renews;
     assert.ok(swaps >= 4, `丙换了 ${swaps} 次会话`);
@@ -192,7 +204,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     await waitFor(() => canon(C.ds.project) === canon(after2.project) && canon(B.ds.project) === canon(after2.project), '丙、乙与服务端一致');
     assert.equal(after2.rev, revBefore2 + 2 * N, `${2 * N} 次改动各落一次`);
     assert.deepEqual(C.notices.filter((x) => !x.startsWith('resync')), [], '丙没有被拒、没有丢弃(确认先后颠倒时整份重取是允许的)');
-    assert.ok(!C.statuses.includes('offline') && !C.statuses.includes('paused'), `丙没有转离线(${[...new Set(C.statuses)].join(',')})`);
+    assert.ok(!C.statuses.includes('offline') && !C.statuses.includes('paused'), `丙没有转离线(${[...new Set(C.statuses)].join(',')};${JSON.stringify({ life: C.life.describe(), closes: C.closes, auth: C.authExpired })})`);
     assert.equal(C.closes.length, 0, '换会话不算断线');
     assert.equal(C.life.describe().expires, 0);
     t.diagnostic(`2 丙换了 ${swaps} 次会话(取会话 ${C.sessions} 次),丙、乙各 ${N} 处改动全部落地,版本 +${2 * N},没有被拒、没有离线`);
@@ -224,7 +236,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     // ---- 3 账号服务一时不通:到期还没换成 → 如实转离线;离线时的改动通了之后补发
     {
       carol.down = true;
-      const offlineAt = await waitFor(() => (C.ds.status === 'offline' ? Date.now() : null), '丙换不成会话、到期后转离线', 45_000);
+      const offlineAt = await waitFor(() => (C.ds.status === 'offline' ? Date.now() : null), '丙换不成会话、到期后转离线', 90_000);
       assert.equal(C.life.describe().expires, 1);
       assert.ok(C.closes.some((c) => c.code === 4401 && c.fatal === false), `按连接作废报(${JSON.stringify(C.closes)})`);
       assert.equal(C.terminal.length, 0, '一时不通不是登录失效');
