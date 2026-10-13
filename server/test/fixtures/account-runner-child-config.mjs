@@ -22,7 +22,15 @@ export function createWorkerConfiguration() {
     modelConfig: async () => ({ vendor: 'mock', model: 'scripted-local-response' }),
     // 看画面排着时每隔这么久回来问一次（每次去问之前都要先过授权闸）；生产是 20 秒，测试调短好看清失权后的撤回
     lookLimits: fixture.lookLimits ?? {},
+    // 探针与测试才给：交给真实运行器的其它选项（出网闸的测试例外等）、工具提供者的时限
+    ...(fixture.runnerOptions ? { runnerOptions: fixture.runnerOptions } : {}),
+    ...(fixture.toolLimits ? { toolLimits: fixture.toolLimits } : {}),
     log: (event, fields) => note(event, { code: fields?.code ?? null, reason: fields?.reason ?? null, status: fields?.status ?? null,
-      path: fields?.path ?? null, blockedReason: fields?.blockedReason ?? null }),
+      path: fields?.path ?? null, blockedReason: fields?.blockedReason ?? null,
+      // 工具提供者的事件（建出了哪几族、收场做了什么）；都是代号，没有正文
+      ...(String(event).startsWith('agent.account-tools.') || String(event).startsWith('agent.page.') || String(event).startsWith('agent.collect.')
+        ? { families: fields?.families ?? null, skipped: fields?.skipped ?? null, family: fields?.family ?? null, kind: fields?.kind ?? null,
+          tool: fields?.tool ?? null, why: fields?.why ?? null, browser: fields?.browser ?? null, jobs: fields?.jobs ?? null,
+          pageRequests: fields?.pageRequests ?? null, removed: fields?.removed ?? null, pending: fields?.pending ?? null } : {}) }),
   });
 }

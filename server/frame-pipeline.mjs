@@ -3288,10 +3288,10 @@ export class FramePipeline {
    * M6c X1:流任务的一段(`[from, to]` 是分段号):交给轨道流生产者按段产出(`StreamProducer.produceRange`),
    * 每个分段落盘、发层之后才回。回 `null`:产物在流库里,sink 自己读(`collectStreamResult`)。
    */
-  async renderStreamRange(entry, spec, range, { signal, progress } = {}) {
+  async renderStreamRange(entry, spec, range, { signal, progress, density = null } = {}) {
     const producer = this.streamProducer();
     if (!producer) throw Object.assign(new Error('这个预渲染实例没有轨道流生产者'), { code: 'no-stream-producer', retryable: false });
-    await producer.produceRange(entry, spec, range, { signal, progress });
+    await producer.produceRange(entry, spec, range, { signal, progress, density });
     return null;
   }
   /** 细任务的重度(附件第 2 节):`canvasHeavy`、`belowDependent`、`unknown`、本地档记 `heavy`,其余 `medium` */

@@ -189,14 +189,14 @@ export function streamFirstMs({ leaseContinues = false, runStartFrame, mountFram
 /**
  * G4 的可行性条件:`firstMs + n × 15 × frameMs / stride ≤ n × (15000 / fps) × workers`。
  * **`frameMs` 必须用有编码器在跑时的数**(G0-b 结论 7:是空闲时的 2.26 倍)。
- * 不满足时先加 `stride`、再合并流 —— 这里只回判定和建议的 `stride`(15 的因数:1 / 3 / 5 / 15)。
+ * 不满足时改产稀疏版(每个分段只截第一帧,`stride` = 分段的帧数;只有这一档)、再合并流 —— 这里只回判定和建议的 `stride`。
  */
 export function streamFeasibility({ n = 1, firstMs = 0, frameMs, fps, workers = 1, stride = 1 }) {
   const need = (s) => firstMs + n * STREAM_SEGMENT * frameMs / s;
   const budget = n * (STREAM_SEGMENT * 1000 / fps) * Math.max(1, workers);
   const feasible = need(stride) <= budget;
   let suggest = stride;
-  if (!feasible) for (const s of [3, 5, 15]) if (s > stride && need(s) <= budget) { suggest = s; break; }
+  if (!feasible && STREAM_SEGMENT > stride && need(STREAM_SEGMENT) <= budget) suggest = STREAM_SEGMENT;
   if (!feasible && need(suggest) > budget) suggest = null;
   return { feasible, needMs: need(stride), budgetMs: budget, stride: suggest };
 }

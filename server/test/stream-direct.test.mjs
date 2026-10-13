@@ -207,7 +207,8 @@ test('没登记成画布卡的卡不问画布;稀疏那一趟直取量出的实�
   const all = [0, 1, 2, 3];
   const off = await produce({ mode: 'off', stride: SPARSE_STRIDE, segments: all });
   const on = await produce({ mode: 'always', stride: SPARSE_STRIDE, segments: all });
-  assert.equal(on.bakery.log.grabs.length, all.length * (SEGMENT_FRAMES / SPARSE_STRIDE), '稀疏的分段每 3 帧取一次');
+  assert.equal(on.bakery.log.grabs.length, all.length * (SEGMENT_FRAMES / SPARSE_STRIDE), '稀疏的分段只取分段的第一帧');
+  assert.equal(SPARSE_STRIDE, SEGMENT_FRAMES);
   assert.ok(on.state.measured, '量到了实体框');
   assert.deepEqual(on.state.measured, off.state.measured);
   assert.deepEqual(on.state.manifest.tight, off.state.manifest.tight, '收紧出同一个矩形');
@@ -244,8 +245,8 @@ test('directOf:只有单卡流、成员登记为画布卡才走;组流、实测�
 
 /* ------------------------------------------------------------ 键(契约第 9.3 节) */
 
-test('STREAM_CODE_VERSION 是 3(2:画布直取与成员键;3:分段从流自己的第一帧起数);单卡流的成员键用 streamMemberKey,不再跟着快照的内容键变', () => {
-  assert.equal(STREAM_CODE_VERSION, 3);
+test('STREAM_CODE_VERSION 是 4(2:画布直取与成员键;3:分段从流自己的第一帧起数;4:稀疏版每段只截第一帧、清单带位置矩形);单卡流的成员键用 streamMemberKey,不再跟着快照的内容键变', () => {
+  assert.equal(STREAM_CODE_VERSION, 4);
   const project = projectOf([{ id: 'a', cardId: 'x', start: 0, end: 2 }]);
   const key = (ctl, budget = 6) => planStreams({ key: 'E', project, cardPlan: [ctl] }, { budget, envFingerprint: ENV_FP })[0]?.streamKey;
   const base = control('a', 0, 2, DOM_CAPS, { contentKey: 'C-with-snapshot-code', streamMemberKey: 'M-content-only' });

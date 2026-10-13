@@ -113,8 +113,8 @@ const { describeEnvironment, resultKeyOf } = await import('../render-node/finger
 const { splitPlan, planTaskOf } = await import('../render-node/split.mjs');
 const { checkClaimable } = await import('../render-node/filter.mjs');
 const { createPrerenderExecutor } = await import('../prerender-executor.mjs');
-const { createAssetSink, applyResult } = await import('../artifact-transfer.mjs');
-const { segmentSignature, SEGMENT_FRAMES, QUEUE_SEGMENT_ATTEMPTS } = await import('../frame-stream.mjs');
+const { createAssetSink, applyResult, mergeStreamResult, wantsDenseStream, writeManifest } = await import('../artifact-transfer.mjs');
+const { segmentSignature, SEGMENT_FRAMES, QUEUE_SEGMENT_ATTEMPTS, SPARSE_STRIDE } = await import('../frame-stream.mjs');
 
 /* ------------------------------------------------------------------ 场景 */
 
@@ -420,15 +420,117 @@ test('X1-render-skip 已经是满密度、不旧的分段不重产;本机只有�
   await executor.render(view(task), { signal: signalNone(), progress: () => {} });
   assert.equal(streamBakes.length, mark, '第二次一帧都不截');
   assert.deepEqual(await segmentHashes(A, task.resultKey, 8), first);
-  // 把分段 9 改成稀疏(stride 3)的样子:要补成满密度
+  // 把分段 9 改成稀疏版的样子:要补成满密度
   const producer = A.streamProducer();
   const state = producer.streams.get(task.resultKey);
-  state.manifest.segments[9] = { ...state.manifest.segments[9], stride: 3,
-    sig: segmentSignature({ streamKey: task.resultKey, segment: 9, stride: 3, encoder: producer.encoderName, rect: state.manifest.bound }) };
+  state.manifest.segments[9] = { ...state.manifest.segments[9], stride: SPARSE_STRIDE,
+    sig: segmentSignature({ streamKey: task.resultKey, segment: 9, stride: SPARSE_STRIDE, encoder: producer.encoderName, rect: state.manifest.bound }) };
   assert.equal(producer.segmentState(state, 9), 'sparse');
   await executor.render(view(task), { signal: signalNone(), progress: () => {} });
   assert.equal(producer.segmentState(state, 9), 'dense');
   assert.deepEqual(streamBakes.slice(mark).map((b) => [b.fromFrame, b.stride]), [[9 * SEGMENT_FRAMES, 1]], '只补产分段 9');
+});
+
+test('X1-sparse 稀疏流任务:每个分段只截第一帧、清单与满密度同一个键;sink 认它完成、不拿它当满密度任务的结果;满密度任务随后在同一个键上补成满密度;晚到的稀疏流任务不降级', { timeout: 60_000 }, async (t) => {
+  t.after(cleanup);
+  const A = await streamPipeline();
+  const executor = executorFor(A);
+  const ctx = await executor.plan(planView(), { signal: signalNone() });
+  const all = splitPlan({ ...ctx, planTask: planTaskOf({ projectId: PID, projectRev: REV }), envFingerprint: OWN, codeVersion: CV, sparseStreams: true }).filter((x) => x.kind === 'stream');
+  const dense = all.find((x) => x.input.clipId === 'clip-a' && x.range.from === 8 && !x.input.density);
+  const sparse = all.find((x) => x.input.clipId === 'clip-a' && x.range.from === 8 && x.input.density === 'sparse');
+  assert.ok(dense && sparse);
+  assert.equal(sparse.id, `${dense.id}:sparse`);
+  assert.equal(sparse.resultKey, dense.resultKey);
+  assert.deepEqual(sparse.range, dense.range);
+  assert.ok(sparse.priority > dense.priority, '稀疏流任务排在满密度任务前面');
+  // 同一条流里稀疏流任务排在满密度任务前面发
+  const order = all.filter((x) => x.resultKey === dense.resultKey).map((x) => x.input.density ?? 'dense');
+  assert.deepEqual(order, [...order.filter((d) => d === 'sparse'), ...order.filter((d) => d === 'dense')]);
+  assert.equal(wantsDenseStream(dense), true);
+  assert.equal(wantsDenseStream(sparse), false);
+
+  const client = memoryClient();
+  const content = memoryContent();
+  const sink = createAssetSink({ pipeline: A, client, content });
+  const refOf = (task) => ({ resultKey: task.resultKey, kind: 'stream', tier: null, range: task.range, input: task.input, requires: task.requires });
+  const key = `render-manifest\u0000${dense.resultKey}:${dense.range.from}-${dense.range.to}`;
+  const segs = dense.range.to - dense.range.from + 1;
+  const producer = A.streamProducer();
+
+  // 稀疏流任务:每个分段一趟、stride 是一个分段的帧数;清单里这几段记着稀疏
+  let mark = streamBakes.length;
+  await executor.render(view(sparse), { signal: signalNone(), progress: () => {} });
+  assert.deepEqual(streamBakes.slice(mark).map((b) => b.stride), Array(segs).fill(SPARSE_STRIDE));
+  const state = producer.streams.get(dense.resultKey);
+  for (let n = dense.range.from; n <= dense.range.to; n++) {
+    assert.equal(producer.segmentState(state, n), 'sparse');
+    assert.equal(state.manifest.segments[n].stride, SPARSE_STRIDE);
+    assert.equal(state.manifest.segments[n].samples, SEGMENT_FRAMES, '样本数照满:一张重复到整段');
+  }
+  // sink:稀疏流任务算完成、写清单;同一份本机产物不能当满密度任务的结果
+  assert.equal(await sink.has(refOf(dense)), false, '只有稀疏版:满密度任务不走去重');
+  const put = await sink.put({ ...refOf(sparse), artifacts: null, meta: { taskId: sparse.id, nodeId: 'A', token: 1 } });
+  assert.equal(put.complete, true);
+  assert.ok(Object.values(content.items.get(key).segments).every((seg) => seg.stride === SPARSE_STRIDE), '内容库里这个键下是稀疏版');
+  assert.equal(await sink.has(refOf(sparse)), true, '稀疏流任务:有一版就算有');
+  assert.equal(await sink.has(refOf(dense)), false, '内容库里只有稀疏版:满密度任务仍不走去重');
+  const densePutEarly = await sink.put({ ...refOf(dense), artifacts: null, meta: { taskId: dense.id, nodeId: 'A', token: 1 } });
+  assert.equal(densePutEarly.complete, false, '满密度任务拿稀疏版交不了差');
+  // 再做一次稀疏流任务:一帧都不截
+  mark = streamBakes.length;
+  await executor.render(view(sparse), { signal: signalNone(), progress: () => {} });
+  assert.equal(streamBakes.length, mark);
+
+  // 满密度任务:同一个键上补成满密度
+  await executor.render(view(dense), { signal: signalNone(), progress: () => {} });
+  assert.deepEqual(streamBakes.slice(mark).map((b) => b.stride), Array(streamBakes.length - mark).fill(1));
+  for (let n = dense.range.from; n <= dense.range.to; n++) assert.equal(producer.segmentState(state, n), 'dense');
+  const putDense = await sink.put({ ...refOf(dense), artifacts: null, meta: { taskId: dense.id, nodeId: 'A', token: 1 } });
+  assert.equal(putDense.complete, true);
+  assert.ok(Object.values(content.items.get(key).segments).every((seg) => seg.stride === 1), '同一个键换成了满密度的');
+  assert.equal(await sink.has(refOf(dense)), true);
+  assert.equal(await sink.has(refOf(sparse)), true);
+  // 稀疏流任务晚到(本机已经是满密度):不截、不降级
+  mark = streamBakes.length;
+  await executor.render(view(sparse), { signal: signalNone(), progress: () => {} });
+  assert.equal(streamBakes.length, mark, '已经有满密度的:稀疏流任务一帧都不截');
+
+  // 不降级:别的节点(同指纹)晚到的稀疏清单写同一个键,已有的满密度分段留着;它多出来的分段并进去
+  const denseBody = content.items.get(key);
+  const first = dense.range.from;
+  const lateSparse = structuredClone(denseBody);
+  for (const seg of Object.values(lateSparse.segments)) { seg.stride = SPARSE_STRIDE; seg.hash = 'e'.repeat(64); }
+  const merged = mergeStreamResult(denseBody, lateSparse);
+  assert.deepEqual(merged.segments, denseBody.segments, '已有的满密度分段一个都没被稀疏的换掉');
+  assert.equal(await writeManifest(content, lateSparse), true);
+  assert.deepEqual(content.items.get(key).segments, denseBody.segments);
+  // 新清单只列了一段(边产边写):已有清单里别的分段留着;新的满密度分段盖掉已有的稀疏分段
+  const partial = structuredClone(denseBody);
+  for (const n of Object.keys(partial.segments)) if (Number(n) !== first) delete partial.segments[n];
+  const sparseBody = structuredClone(lateSparse);
+  const up = mergeStreamResult(sparseBody, partial);
+  assert.equal(up.segments[first].stride, 1);
+  assert.equal(Object.keys(up.segments).length, segs);
+  assert.ok(Object.entries(up.segments).every(([n, seg]) => (Number(n) === first ? seg.stride === 1 : seg.stride === SPARSE_STRIDE)));
+  // 对不上的(键不同、范围不同、不是流)原样用新的
+  assert.equal(mergeStreamResult({ ...denseBody, resultKey: 'f'.repeat(64) }, lateSparse), lateSparse);
+  assert.equal(mergeStreamResult({ ...denseBody, range: { from: 0, to: 7 } }, lateSparse), lateSparse);
+  assert.equal(mergeStreamResult(null, lateSparse), lateSparse);
+
+  // 另一台同指纹的节点本机只有稀疏版:拉稀疏的清单不换(两边都是稀疏),拉满密度的清单升成满密度
+  const B = await streamPipeline();
+  const executorB = executorFor(B);
+  await executorB.plan(planView(), { signal: signalNone() });
+  await executorB.render(view(sparse), { signal: signalNone(), progress: () => {} });
+  const stateB = B.streamProducer().streams.get(dense.resultKey);
+  assert.equal(B.streamProducer().segmentState(stateB, first), 'sparse');
+  assert.equal((await applyResult(B, client, structuredClone(put.result))).written, 0, '对方也是稀疏的:不收');
+  assert.equal((await applyResult(B, client, structuredClone(denseBody))).written, segs, '对方是满密度的:升上去');
+  for (let n = dense.range.from; n <= dense.range.to; n++) {
+    assert.equal(B.streamProducer().segmentState(stateB, n), 'dense');
+    assert.equal(stateB.manifest.segments[n].adopted, true);
+  }
 });
 
 test('X1-mismatch 流任务对不上这一版的流:内容键、结果键(别的指纹)、分段范围越界 → plan-mismatch(不可重试),不截图', { timeout: 30_000 }, async (t) => {

@@ -51,7 +51,7 @@
  */
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
-import { isListPlan, CLIPS_KEY_MARK, BACKFILL_KEY_MARK } from './render-queue/index.mjs';
+import { isListPlan, CLIPS_KEY_MARK, BACKFILL_KEY_MARK, isSparseStreamTask, STREAM_DENSITY_SPARSE } from './render-queue/index.mjs';
 import { splitCandidatesOf, splitStreamCandidatesOf, streamCandidateKey } from './artifact-transfer.mjs';
 
 /** `cardLocks`(Map、普通对象或缺省)→ `(lockKey) => 锁指纹 | null`(同 `split.mjs` 的读法) */
@@ -283,8 +283,10 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       // (`frame-pipeline.mjs` 的 `layerMapStreamOptions` 读 `entry.ownStreamsOff`)。只有按项目管的进程才写这个记号
       if (entry && typeof entry === 'object') entry.ownStreamsOff = !on;
       if (!on && context.ownListStreams === true) {
-        context = { ...context, ownListStreams: false };
-        say('executor.list-streams-off', { version: id });
+        // 这一项关着:自己的那一份只出稀疏流任务,不出满密度的(语义 `workflow/project.md`「项目设置」;`local-node.mjs` 的 `listPlanOverrides`)。
+        // 派出去的稀疏流按切分候选记录列进层表(`issuedStreamSpecs`),所以上面的 `ownStreamsOff` 照旧记
+        context = { ...context, ownListStreams: false, ownListSparseStreams: true };
+        say('executor.list-streams-off', { version: id, sparse: true });
       }
     }
     // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
@@ -384,7 +386,8 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     }
     const range = { from: task.range.from, to: task.range.to };
     const started = Date.now();
-    await pipeline.renderStreamRange(entry, spec, range, { signal, progress });
+    // 稀疏流任务(`input.density: 'sparse'`):每个分段只截第一帧;满密度任务不带这一项
+    await pipeline.renderStreamRange(entry, spec, range, { signal, progress, density: isSparseStreamTask(task) ? STREAM_DENSITY_SPARSE : null });
     say('executor.render', { id: task.id, kind: 'stream', streamKey: spec.streamKey.slice(0, 12), ms: Date.now() - started });
     promoteOwnStream(entry, spec);
     return null;

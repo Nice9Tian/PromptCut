@@ -25,7 +25,10 @@ const { collectStreamResult, manifestMatches, manifestKeyOf, manifestKindOf, app
 const { createAssetClient } = await import('../asset-store/client.mjs');
 const { resultKeyOf } = await import('../render-node/fingerprint.mjs');
 const F = await import('./fake-artifact-fixtures.mjs');
-const { streamManifest, streamManifestCovers, streamManifestBlocks, streamTaskFrames, BROWSER_STREAM_ENCODER, STREAM_SEGMENT_FRAMES } = await import('../../src/online/browserNode.ts');
+const { streamManifest, streamManifestCovers, streamManifestBlocks, streamTaskFrames, BROWSER_STREAM_ENCODER, STREAM_SEGMENT_FRAMES,
+  alphaBoxOf, mergeStreamManifest, streamTaskStride, isSparseStreamTask } = await import('../../src/online/browserNode.ts');
+const { mergeStreamResult } = await import('../artifact-transfer.mjs');
+const { rgbaAlphaBox } = await import('../bakery/capture-canvas.mjs');
 const { buildStreamInit, buildStreamSegment, codecOfAvcC } = await import('../../src/render/streamMux.ts');
 const { packedSize } = await import('../../src/render/streamEncode.ts');
 
@@ -209,4 +212,68 @@ test('BM-03 浏览器封的字节,服务端读得出清单里写的那几项(编
   const seg = parts.segments[7];
   assert.equal(seg.samples, 5);
   assert.deepEqual(segmentInfo(parts.blobs.get(seg.hash)), { moofs: 1, sampleCount: 5, firstSampleIsSync: true });
+});
+
+test('BM-04 稀疏流任务:每几帧截一张照任务的密度定;清单的分段带位置矩形;满密度任务不认稀疏版的清单;合并不降级,与桌面 mergeStreamResult 同一个结果', () => {
+  const h = c => c.repeat(64);
+  const input = { stream: { kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: { x: -8, y: -8, w: 64, h: 48 }, offset: { x: 10, y: 20 }, firstFrame: 30, count: 60, total: 300, originFrame: 30, lastFrame: 89 } };
+  const dense = { kind: 'stream', resultKey: h('a'), range: { unit: 'segment', from: 0, to: 3 }, input };
+  const sparse = { ...dense, input: { ...input, density: 'sparse' } };
+  assert.equal(isSparseStreamTask(sparse), true);
+  assert.equal(isSparseStreamTask(dense), false);
+  assert.equal(isSparseStreamTask({ ...sparse, kind: 'snapshot' }), false);
+  assert.equal(streamTaskStride(sparse), STREAM_SEGMENT_FRAMES, '稀疏流任务:一个分段只截一张');
+  assert.equal(streamTaskStride(dense), 1);
+
+  const inits = { i1: { hash: h('1'), bytes: 10, codec: 'avc1.640020', width: 64, height: 96, timescale: 30, rect: { x: -8, y: -8, w: 64, h: 48 }, encoder: BROWSER_STREAM_ENCODER } };
+  const seg = (c, stride, box) => ({ hash: h(c), bytes: 5, init: 'i1', stride, samples: 15, sig: null, encoder: BROWSER_STREAM_ENCODER, ...(box !== undefined ? { box } : {}) });
+  const sparseParts = { inits, segments: { 0: seg('b', 15, { x: 2, y: 3, w: 20, h: 10 }), 1: seg('c', 15, null), 2: seg('d', 15, { x: 0, y: 0, w: 4, h: 4 }), 3: seg('e', 15) } };
+  const sparseManifest = streamManifest(sparse, sparseParts);
+  assert.deepEqual(sparseManifest.segments[0].box, { x: 2, y: 3, w: 20, h: 10 }, '位置矩形进清单(平面坐标)');
+  assert.equal(sparseManifest.segments[1].box, null, '全透明的那一张记 null');
+  assert.equal('box' in sparseManifest.segments[3], false, '没量过的不带这一项');
+  assert.equal(sparseManifest.segments[0].stride, 15);
+  // 稀疏版的清单:稀疏流任务认,满密度任务不认
+  assert.equal(streamManifestCovers(sparseManifest, sparse), true);
+  assert.equal(streamManifestCovers(sparseManifest, dense), true, '不要求密度时照旧只看分段在不在');
+  assert.equal(streamManifestCovers(sparseManifest, dense, { dense: true }), false);
+
+  const denseParts = { inits, segments: { 0: seg('f', 1), 1: seg('0', 1), 2: seg('2', 1), 3: seg('3', 1) } };
+  const denseManifest = streamManifest(dense, denseParts);
+  assert.equal(streamManifestCovers(denseManifest, dense, { dense: true }), true);
+  // 合并:已有满密度、新的稀疏 → 留已有的;已有稀疏、新的满密度 → 用新的;新清单里没有的分段留着
+  assert.deepEqual(mergeStreamManifest(denseManifest, sparseManifest).segments, denseManifest.segments);
+  // 已有稀疏、新的满密度:用新的分段,稀疏的一趟量的位置矩形带过来(没量过的那一段不带)
+  const upgraded = mergeStreamManifest(sparseManifest, denseManifest);
+  assert.deepEqual(Object.values(upgraded.segments).map((x) => [x.hash, x.stride]), Object.values(denseManifest.segments).map((x) => [x.hash, x.stride]));
+  assert.deepEqual([upgraded.segments[0].box, upgraded.segments[1].box, 'box' in upgraded.segments[3]], [{ x: 2, y: 3, w: 20, h: 10 }, null, false]);
+  assert.deepEqual(mergeStreamResult(sparseManifest, denseManifest), upgraded);
+  assert.equal(mergeStreamManifest(denseManifest, denseManifest), denseManifest, '没有可留的:原样回新的');
+  const partial = { ...denseManifest, segments: { 1: denseManifest.segments[1] } };
+  const up = mergeStreamManifest(sparseManifest, partial);
+  assert.deepEqual(Object.keys(up.segments).sort(), ['0', '1', '2', '3']);
+  assert.deepEqual([up.segments[0].stride, up.segments[1].stride, up.segments[2].stride], [15, 1, 15]);
+  assert.deepEqual(up.segments[0].box, { x: 2, y: 3, w: 20, h: 10 });
+  assert.equal(mergeStreamManifest({ ...denseManifest, resultKey: h('z') }, sparseManifest), sparseManifest);
+  assert.equal(mergeStreamManifest(null, sparseManifest), sparseManifest);
+  // 与桌面的合并同一个结果
+  assert.deepEqual(mergeStreamResult(denseManifest, sparseManifest), mergeStreamManifest(denseManifest, sparseManifest));
+  assert.deepEqual(mergeStreamResult(sparseManifest, partial), up);
+});
+
+test('BM-05 位置矩形的量法:不透明像素(alpha > 0)的外接框,全透明回 null;与桌面 rgbaAlphaBox 量出来的相同', () => {
+  const W = 9, H = 7;
+  const blank = () => new Uint8ClampedArray(W * H * 4);
+  const dot = (data, x, y, a = 255) => { data[(y * W + x) * 4 + 3] = a; };
+  assert.equal(alphaBoxOf(blank(), W, H), null);
+  const one = blank(); dot(one, 4, 3, 1);
+  assert.deepEqual(alphaBoxOf(one, W, H), { x: 4, y: 3, w: 1, h: 1 }, 'alpha 只有 1 也算');
+  const many = blank(); dot(many, 2, 1); dot(many, 7, 5, 9); dot(many, 0, 4, 200);
+  assert.deepEqual(alphaBoxOf(many, W, H), { x: 0, y: 1, w: 8, h: 5 });
+  const full = blank(); for (let i = 3; i < full.length; i += 4) full[i] = 255;
+  assert.deepEqual(alphaBoxOf(full, W, H), { x: 0, y: 0, w: W, h: H });
+  for (const data of [one, many]) {
+    const desk = rgbaAlphaBox(Buffer.from(data.buffer), W, H);
+    assert.deepEqual(alphaBoxOf(data, W, H), { x: desk.x, y: desk.y, w: desk.w, h: desk.h });
+  }
 });

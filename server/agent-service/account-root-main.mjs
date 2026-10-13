@@ -186,6 +186,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     // 再核这份要以 root 执行的代码只有 root 改得了（见 `account-root-code-trust.mjs`）；三种跑法都核
     await assertRootOwnedCode({ entryFile: path.resolve(process.argv[1]), node: process.execPath });
     started = await runRoot(parseRootArguments(process.argv.slice(2)));
-  } catch (error) { failed(safe(error), { ...(error?.slots ? { slots: error.slots } : {}), ...(error?.code === 'root-code-untrusted' ? { file: error.file, why: error.why } : {}) }); }
+  } catch (error) { failed(safe(error), { ...(error?.slots ? { slots: error.slots } : {}), ...(error?.code === 'root-code-untrusted' ? { file: error.file, why: error.why } : {}),
+    // `worker.tools` 里有不认的键、或值不对:指出是哪个键
+    ...(error?.code === 'root-configuration-worker-tools' ? { key: error.key, detail: error.detail } : {}) }); }
   if (started) installRootStop(started);
 }

@@ -140,8 +140,9 @@ test('C1-PAGE-06 guard: no global hooks in the page module; nothing in src/ wire
   for (const word of ['window.', 'globalThis.', 'postMessage', 'addEventListener', 'localStorage', 'document.', 'fetch(']) assert.equal(text.includes(word), false, word);
   assert.deepEqual([...COLLECT_PAGE_REQUEST_TOOLS], ['collect_delegate_start', 'collect_delegate_poll', 'collect_delegate_cancel', 'collect_login', 'collect_login_check']);
   const users = [];
-  const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else if (/\.(ts|tsx|mjs)$/.test(e.name) && fs.readFileSync(p, 'utf8').includes('createCollectBridgePage')) users.push(path.relative(SRC, p).replaceAll('\\', '/')); } };
+  const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else if (/\.(ts|tsx|mjs)$/.test(e.name) && !/\.test\.mjs$/.test(e.name) && fs.readFileSync(p, 'utf8').includes('createCollectBridgePage')) users.push(path.relative(SRC, p).replaceAll('\\', '/')); } };
   walk(SRC);
   // 最后的接线包把它接到 useCloud.ts / session.ts 时,这里加上那一个文件
-  assert.deepEqual(users, ['ai/cloud/collectBridge.ts']);
+  // 接线在 accountPage.ts 一处(它把采集的页面执行器与播放头、网页接管的执行器合成一个入口)
+  assert.deepEqual(users.sort(), ['ai/cloud/accountPage.ts', 'ai/cloud/collectBridge.ts']);
 });

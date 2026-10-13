@@ -1,7 +1,7 @@
 /**
  * 用量记录(契约 `docs/plan/cloud-agent-contract.md` 第 6.3 节)。
  *
- *   usage/<yyyy-mm>.jsonl   每次模型请求一行,追加写,0600。不含提示词、回复、工具参数、Key
+ *   usage/<yyyy-mm>.jsonl   每次模型请求一行,追加写,0600(`shared` 时 0640,见下)。不含提示词、回复、工具参数、Key
  *   usage/totals.json       各项目、各成员的累计(检查点):定时落、退出时落;起来时用它加上之后的流水重建,
  *                           坏了就从流水全量重算
  *
@@ -14,6 +14,11 @@
  * `vendor` 是服务商,`model` 是它的型号;`units` 是这次的计量(配音按字数)。汇总里单列在 `services` 下,不混进模型的调用次数。
  *
  * 额度按「输入加输出的 token 数」算(`cacheRead` 已含在 `input` 里,只是看命中率用)。窗口按 UTC:累计、当月、当天。
+ *
+ * 权限:缺省目录 0700、文件 0600(只有写它的那个用户读得到)。账号模式下写的是任务进程、读的是主服务(`GET /v1/usage`),
+ * 两者是两个系统用户、同在一个组里:建的时候给 `shared: true`,目录 0750、流水 0640(组内只读),已有的目录和流水也补上组内可读。
+ * 累计检查点(`totals.json`)只有写的一方用,仍是 0600。
+ * 读不到流水时,`queryUsage` 的 `strict` 档抛 `usage-unreadable`,不拿空结果冒充「没有用量」。
  * 本文件不引用 `src/`。
  */
 import fs from 'node:fs';
@@ -68,10 +73,15 @@ export function usageRow(row, now = Date.now()) {
 /** 这一行是不是外部服务的调用(不是模型请求) */
 const isServiceRow = (r) => r?.kind === 'service';
 
-/** 读一个流水文件里从 `from` 字节起的整行;回 `{ rows, bytes }`(`bytes` 是读到的最后一个整行的末尾) */
-function readRows(file, from = 0) {
+const unreadable = (what, error) => Object.assign(new Error(`usage-unreadable: ${what}`), { code: 'usage-unreadable', cause: error, errno: typeof error?.code === 'string' ? error.code : 'error' });
+
+/** 读一个流水文件里从 `from` 字节起的整行;回 `{ rows, bytes }`(`bytes` 是读到的最后一个整行的末尾)。`strict`:文件在但读不了就抛,不当成空的 */
+function readRows(file, from = 0, { strict = false } = {}) {
   let buf;
-  try { buf = fs.readFileSync(file); } catch { return { rows: [], bytes: 0 }; }
+  try { buf = fs.readFileSync(file); } catch (error) {
+    if (strict && error?.code !== 'ENOENT') throw unreadable('file', error);
+    return { rows: [], bytes: 0 };
+  }
   if (from > buf.length) from = 0;
   const end = buf.lastIndexOf(0x0a);
   if (end < from) return { rows: [], bytes: from };
@@ -83,23 +93,28 @@ function readRows(file, from = 0) {
   return { rows, bytes: end + 1 };
 }
 
-function listFiles(dir) {
-  try { return fs.readdirSync(dir).filter((n) => /^\d{4}-\d{2}\.jsonl$/.test(n)).sort(); } catch { return []; }
+/** `strict`:目录在但列不了就抛。目录还不存在(这台节点还没有任务进程起来过)是「确实没有流水」,回空 */
+function listFiles(dir, { strict = false } = {}) {
+  try { return fs.readdirSync(dir).filter((n) => /^\d{4}-\d{2}\.jsonl$/.test(n)).sort(); } catch (error) {
+    if (strict && error?.code !== 'ENOENT') throw unreadable('directory', error);
+    return [];
+  }
 }
 
 /**
  * 按条件汇总流水(给 `GET /v1/usage` 与 `admin.mjs usage` 用,读文件,不读内存里的累计)。
  * @param {string} dir `usage/` 目录
- * @param {{ projectId?: string | null, since?: number | null }} [q]
+ * @param {{ projectId?: string | null, since?: number | null, strict?: boolean }} [q] `strict`:流水目录或文件在但读不到时抛 `usage-unreadable`
+ *   (读的一方和写的一方不是同一个用户时用:读不到不等于没有用量)
  * @returns {{ calls: number, tokens: number, projects: Record<string, { tokens: number, calls: number, input: number, output: number,
  *   members: Record<string, { username: string, tokens: number, calls: number }>, models: Record<string, { tokens: number, calls: number }> }>, rows: object[] }}
  */
-export function queryUsage(dir, { projectId = null, since = null } = {}) {
+export function queryUsage(dir, { projectId = null, since = null, strict = false } = {}) {
   const out = { calls: 0, tokens: 0, projects: {}, rows: [] };
   const sinceMonth = Number.isFinite(since) ? monthOf(since) : null;
-  for (const name of listFiles(dir)) {
+  for (const name of listFiles(dir, { strict })) {
     if (sinceMonth && name.slice(0, 7) < sinceMonth) continue;
-    for (const r of readRows(path.join(dir, name)).rows) {
+    for (const r of readRows(path.join(dir, name), 0, { strict }).rows) {
       if (projectId && r.projectId !== projectId) continue;
       if (Number.isFinite(since) && !(r.t >= since)) continue;
       const tokens = num(r.input) + num(r.output);
@@ -130,8 +145,17 @@ export function queryUsage(dir, { projectId = null, since = null } = {}) {
 /**
  * @param {object} o
  * @param {string | null} o.dir `usage/` 目录;null 时只在内存里记(测试)
+ * @param {boolean} [o.shared] 流水要给同组的另一个用户读(账号模式:任务进程写、主服务读)。见文件头「权限」
  */
-export function createUsageLog({ dir = null, now = () => Date.now(), flushMs = 30_000, log = () => {} } = {}) {
+export function createUsageLog({ dir = null, now = () => Date.now(), flushMs = 30_000, log = () => {}, shared = false } = {}) {
+  const dirMode = shared ? 0o750 : 0o700;
+  const rowsMode = shared ? 0o640 : 0o600;
+  /** `shared` 时把已有的目录、流水补成组内可读(以前按 0700 / 0600 建的;进程的 umask 比预期严时新建的也会少给) */
+  const share = (target, bits) => {
+    if (!shared) return;
+    try { const mode = fs.statSync(target).mode & 0o7777; if ((mode & bits) !== bits) fs.chmodSync(target, mode | bits); }
+    catch (err) { log('agent.usage.share-failed', { message: String(err?.message ?? err).slice(0, 120) }); }
+  };
   /** projectId → { ...bucket, members: Map(userId → bucket) } */
   const projects = new Map();
   /** 流水文件名 → 已经折进累计的字节数 */
@@ -204,7 +228,9 @@ export function createUsageLog({ dir = null, now = () => Date.now(), flushMs = 3
   }
 
   if (dir) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(dir, { recursive: true, mode: dirMode });
+    share(dir, 0o050);
+    for (const name of listFiles(dir)) share(path.join(dir, name), 0o040);
     loadTotals();
   }
   const timer = dir ? setInterval(flush, flushMs) : null;
@@ -227,7 +253,9 @@ export function createUsageLog({ dir = null, now = () => Date.now(), flushMs = 3
         const name = `${monthOf(row.t)}.jsonl`;
         const text = `${JSON.stringify(row)}\n`;
         try {
-          fs.appendFileSync(path.join(dir, name), text, { encoding: 'utf8', mode: 0o600 });
+          const fresh = shared && !fs.existsSync(path.join(dir, name));
+          fs.appendFileSync(path.join(dir, name), text, { encoding: 'utf8', mode: rowsMode });
+          if (fresh) share(path.join(dir, name), 0o040);
           offsets[name] = (offsets[name] ?? 0) + Buffer.byteLength(text);
         } catch (err) {
           log('agent.usage.append-failed', { message: String(err?.message ?? err).slice(0, 120) });

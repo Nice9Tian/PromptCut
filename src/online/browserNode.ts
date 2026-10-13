@@ -212,8 +212,40 @@ export function streamTaskFrames(task: { range?: { from: number; to: number } | 
 
 /** 清单里一个开头文件(`ftyp + moov`)的登记;键是哈希的前 16 位 */
 export interface StreamInitMeta { hash: string; bytes: number; codec: string | null; width: number | null; height: number | null; timescale: number | null; rect: StreamRectLike | null; encoder: string | null }
-/** 清单里一个分段(`moof + mdat`)的登记;键是分段号 */
-export interface StreamSegmentMeta { hash: string; bytes: number; init: string; stride: number; samples: number; sig: string | null; encoder: string | null }
+/**
+ * 清单里一个分段(`moof + mdat`)的登记;键是分段号。`stride`:1 是满密度,大于 1 是稀疏版(只截分段的第一帧、其余帧重复它)。
+ * `box`:这个分段的位置矩形——截的那一张里不透明像素的外接框,平面坐标(与 `inits[].rect`、`header.bound` 同一个坐标系),
+ * 全透明是 null;产稀疏版时量,没量过的不带这一项(与桌面 `stream.json` 的 `segments[n].box` 同一个约定)。
+ */
+export interface StreamSegmentMeta { hash: string; bytes: number; init: string; stride: number; samples: number; sig: string | null; encoder: string | null; box?: StreamRectLike | null }
+
+/** 流任务的密度:`input.density: 'sparse'` 是稀疏流任务(id 末尾多 `:sparse`,`server/render-queue/messages.mjs` 的 `taskIdOf`);不带是满密度任务 */
+export const STREAM_DENSITY_SPARSE = "sparse";
+export const isSparseStreamTask = (task: { kind?: unknown; input?: Record<string, unknown> | null } | null | undefined): boolean =>
+  task?.kind === "stream" && task.input?.density === STREAM_DENSITY_SPARSE;
+/** 这个流任务每几帧截一张:稀疏流任务是一个分段的帧数(每段只截第一帧),满密度任务是 1 */
+export const streamTaskStride = (task: { kind?: unknown; input?: Record<string, unknown> | null } | null | undefined): number =>
+  (isSparseStreamTask(task) ? SEGMENT_FRAMES_SHARED : 1);
+
+/**
+ * 一张 RGBA 画面里不透明像素(alpha > 0)的外接框 `{ x, y, w, h }`(像素,左上角为原点);全透明回 null。
+ * 稀疏版每个分段量一次(位置矩形 `box`),量法与桌面 `server/bakery/capture-canvas.mjs` 的 `rgbaAlphaBox` 相同。
+ */
+export function alphaBoxOf(data: ArrayLike<number>, width: number, height: number): StreamRectLike | null {
+  let x0 = width, y0 = height, x1 = -1, y1 = -1;
+  for (let y = 0; y < height; y++) {
+    const row = y * width * 4;
+    let first = -1, last = -1;
+    for (let x = 0; x < width; x++) if (data[row + x * 4 + 3] > 0) { first = x; break; }
+    if (first < 0) continue;
+    for (let x = width - 1; x >= first; x--) if (data[row + x * 4 + 3] > 0) { last = x; break; }
+    if (first < x0) x0 = first;
+    if (last > x1) x1 = last;
+    if (y < y0) y0 = y;
+    y1 = y;
+  }
+  return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
 
 export interface StreamManifestOut {
   v: 1;
@@ -227,8 +259,8 @@ export interface StreamManifestOut {
 
 /**
  * 一段流任务的清单:形状与桌面 `server/artifact-transfer.mjs` 的 `collectStreamResult` 逐字段相同(单测对拍、过 `manifestMatches`
- * 与 `streamAdoption`),桌面才能把浏览器产的流拉回去用。只列任务范围里的分段和它们用到的开头文件;浏览器只产满密度分段
- * (`stride: 1`)、矩形固定用 `bound`(`header.tight: null`)、不算分段签名(`sig: null`,桌面按 `adopted` 认,不按本机编码器重算)。
+ * 与 `streamAdoption`),桌面才能把浏览器产的流拉回去用。只列任务范围里的分段和它们用到的开头文件;分段照它产出时的密度记 `stride`
+ * (稀疏流任务的是一个分段的帧数,带 `box`;满密度的是 1)、矩形固定用 `bound`(`header.tight: null`)、不算分段签名(`sig: null`,桌面按 `adopted` 认,不按本机编码器重算)。
  * 超过 256 KiB 抛 `code: 'result-too-large'`(不可重试)。
  */
 export function streamManifest(
@@ -246,7 +278,8 @@ export function streamManifest(
     if (!seg || !init) continue;
     if (!inits[seg.init]) inits[seg.init] = { hash: init.hash, bytes: init.bytes, codec: init.codec ?? null, width: init.width ?? null, height: init.height ?? null,
       timescale: init.timescale ?? null, rect: init.rect ? { ...init.rect } : null, encoder: init.encoder ?? null };
-    segments[n] = { hash: seg.hash, bytes: seg.bytes, init: seg.init, stride: seg.stride, samples: seg.samples, sig: seg.sig ?? null, encoder: init.encoder ?? null };
+    segments[n] = { hash: seg.hash, bytes: seg.bytes, init: seg.init, stride: seg.stride, samples: seg.samples, sig: seg.sig ?? null, encoder: init.encoder ?? null,
+      ...(seg.box !== undefined ? { box: seg.box ? { ...seg.box } : null } : {}) };
   }
   const out: StreamManifestOut = {
     v: STREAM_RESULT_VERSION, kind: "stream", resultKey: task.resultKey, range: { from, to },
@@ -258,8 +291,38 @@ export function streamManifest(
   return out;
 }
 
-/** 内容库里取回的流清单能不能直接当这一段的结果用(去重):形状对、任务范围里每个分段和它的开头文件都列着 */
-export function streamManifestCovers(body: unknown, task: { resultKey: string; range: { from: number; to: number } | null }): body is StreamManifestOut {
+/**
+ * 写流清单前和内容库里已有的那一份合并(同一个键),不降级:新清单里某一段是稀疏的而已有的是满密度的,留已有的;新清单里没有、
+ * 已有的清单里有的分段留着;其余用新的。留下的分段连它的开头文件一起带过来。新的分段没带位置矩形(`box`,只在稀疏的一趟量)而已有的
+ * 那一段带着,把它带过来 —— 补成满密度以后位置矩形还在。与桌面 `server/artifact-transfer.mjs` 的 `mergeStreamResult` 同一个规矩。
+ * 已有的对不上(键、范围、形状)就原样回新的。
+ */
+export function mergeStreamManifest(existing: unknown, next: StreamManifestOut): StreamManifestOut {
+  const old = existing as StreamManifestOut | null;
+  if (!old || typeof old !== "object" || old.v !== next.v || old.kind !== "stream" || old.resultKey !== next.resultKey) return next;
+  if (old.range?.from !== next.range.from || old.range?.to !== next.range.to || !old.segments || typeof old.segments !== "object" || !old.inits || typeof old.inits !== "object") return next;
+  const segments = { ...next.segments }, inits = { ...next.inits };
+  let kept = 0;
+  for (const [n, seg] of Object.entries(old.segments)) {
+    const init = seg && typeof seg === "object" ? old.inits[seg.init] : undefined;
+    if (!init || !HEX64.test(String(seg.hash)) || !HEX64.test(String(init.hash))) continue;
+    const cur = segments[n];
+    if (cur && (!(cur.stride > 1) || seg.stride > 1)) {
+      if (cur.box === undefined && seg.box !== undefined) { segments[n] = { ...cur, box: seg.box }; kept++; }
+      continue;
+    }
+    segments[n] = seg;
+    if (!inits[seg.init]) inits[seg.init] = init;
+    kept++;
+  }
+  return kept ? { ...next, inits, segments } : next;
+}
+
+/**
+ * 内容库里取回的流清单能不能直接当这一段的结果用(去重):形状对、任务范围里每个分段和它的开头文件都列着。
+ * `dense`(满密度任务)时另要每个分段都是满密度;稀疏流任务每段有一版就算数。
+ */
+export function streamManifestCovers(body: unknown, task: { resultKey: string; range: { from: number; to: number } | null }, opts: { dense?: boolean } = {}): body is StreamManifestOut {
   const b = body as StreamManifestOut | null;
   if (!b || typeof b !== "object" || b.v !== STREAM_RESULT_VERSION || b.kind !== "stream" || b.resultKey !== task.resultKey || !task.range) return false;
   if (b.range?.from !== task.range.from || b.range?.to !== task.range.to) return false;
@@ -269,6 +332,7 @@ export function streamManifestCovers(body: unknown, task: { resultKey: string; r
     const init = seg ? b.inits[seg.init] : undefined;
     if (!seg || !init || !HEX64.test(String(seg.hash)) || !HEX64.test(String(init.hash))) return false;
     if (!isInt(seg.samples) || seg.samples < 1 || !isInt(seg.stride) || seg.stride < 1) return false;
+    if (opts.dense === true && seg.stride !== 1) return false;
   }
   return true;
 }

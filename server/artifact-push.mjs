@@ -25,7 +25,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { atomic } from './frame-mov.mjs';
 import { rangeHas } from './snapshot-store.mjs';
-import { collectSnapshotResult, collectStreamResult, pushResult, manifestKindOf, manifestKeyOf, assertResultSize, layerMapKeyOf } from './artifact-transfer.mjs';
+import { collectSnapshotResult, collectStreamResult, pushResult, manifestKindOf, manifestKeyOf, assertResultSize, layerMapKeyOf, mergedForWrite } from './artifact-transfer.mjs';
 import { sharedBandwidthGate } from './bandwidth-gate.mjs';
 
 /** 优先级:数字越小越先推 */
@@ -375,7 +375,8 @@ export function createPushQueue({
       counters.skipped += pushed.skipped;
       if (content && typeof content.put === 'function') {
         assertResultSize(result);
-        await content.put(manifestKindOf(result.kind), manifestKeyOf(result), result);
+        // 流清单先和内容库里已有的那一份合并(不降级:别的节点补过的满密度分段、本机还没产到的分段都留着)
+        await content.put(manifestKindOf(result.kind), manifestKeyOf(result), await mergedForWrite(content, result));
         counters.manifests++;
       }
       counters.pushed++;

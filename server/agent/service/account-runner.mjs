@@ -18,6 +18,10 @@ import { createRunDrainRecord } from '../../agent-service/worker-settlement.mjs'
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createProjectAssets } from './project-assets.mjs';
 import { WorkspaceError } from './workspace.mjs';
+import { createAccountToolset } from './account-tools.mjs';
+import { collectPageTools } from './collect-bridge.mjs';
+import { createWorkerPageClient } from '../../agent-service/worker-page-client.mjs';
+import { loadSsrHost } from '../ssr-host.mjs';
 import { createConversationPurger } from './conversation-purge.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
@@ -61,7 +65,7 @@ export function createImportReservation(workspace) {
 export function createExistingHostedRunnerFactory({ root, loadModule, dataClient, dataDir, modelConfig,
   assetBase = null, look = null, voiceConfig = async () => null, collect = null,
   egress: egressOptions = {}, workspaceLimits = {}, toolLimits = {}, toolFetch,
-  resources = null, runAssets = null,
+  resources = null, runAssets = null, runClient = null, accountTools: toolOptions = null,
   now = Date.now, log = () => {} } = {}) {
   if (typeof root !== 'string' || typeof loadModule !== 'function' ||
     typeof dataClient?.wsUrl !== 'string' || !/^wss:\/\//.test(dataClient.wsUrl) ||
@@ -77,11 +81,18 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
   // 给了看画面的客户端而没有能问授权的 resources，直接拒绝；不退回不过闸、不带任务号的老路。
   if (look !== null && (typeof look?.forProject !== 'function' || typeof resources?.authorize !== 'function'))
     fail(503, 'account-runner-look-configuration');
-  const usage = createUsageLog({ dir: path.join(dataDir, 'usage'), now, log });
+  // 工具提供者(感知、一键流程、网页操作、发起人页面的反向通道、采集代下)缺省不建。给了就必须和运行素材一起给:
+  // 它们读写素材只凭这条任务的授权。反向通道那一节(`pageBridge`)可以不给——没有到主服务的内部通道时那一族不建,工具照旧回「发起方不在线」。
+  if (toolOptions !== null && (typeof toolOptions !== 'object' || runAssets === null || typeof resources?.authorize !== 'function' ||
+      (toolOptions.pageBridge != null && (typeof runClient?.workerPageEnvelopeFor !== 'function' || typeof toolOptions.pageBridge.origin !== 'string' ||
+        !toolOptions.pageBridge.tls?.key || typeof toolOptions.pageBridge.serverFingerprint256 !== 'string'))))
+    fail(503, 'account-runner-tools-configuration');
+  // 用量流水由主服务读(成员查用量):主服务是同组的另一个用户,流水要组内可读
+  const usage = createUsageLog({ dir: path.join(dataDir, 'usage'), now, log, shared: true });
   const gate = createGate({ limitsFile: limitsFileOf(dataDir), usage, now, log });
   const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log });
   const egress = createEgressGate({ ...egressOptions, log });
-  const hostedTools = createHostedTools({ root, loadModule, workspaces, egress, assetBase, voiceConfig, collect,
+  const hostedTools = createHostedTools({ root, loadModule, workspaces, egress, assetBase, voiceConfig, collect: toolOptions?.config?.collect ?? collect,
     ...(toolFetch ? { fetchImpl: toolFetch } : {}), limits: toolLimits, log,
     recordService: row => gate.record(row) });
   let lock = Promise.resolve();
@@ -92,7 +103,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     // 看画面要绑的那条任务上下文必须是执行器给的、和这条授权对得上；没有就不开这一轮（不带着不过闸的看画面往下跑）
     if (look && (!context || context.projectId !== grant.projectId || context.runGrantId !== grant.runGrantId))
       fail(503, 'look-context-unavailable');
-    let inst, DataWebSocket, projectAssets = null;
+    let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null;
     let removeAbort = () => {};
     const aborted = new Promise((_, reject) => {
       if (!signal) return;
@@ -141,6 +152,30 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
         openRead: (mediaId, options) => projectAssets.openRead(context, mediaId, options),
       });
     }
+    // 这条任务的工具提供者:建在跑任务的这个进程里,用同一份可信上下文、同一个 resources、同一份「项目素材」。
+    // 项目副本要等下面绑好了才有,所以执行器是现取的(提供者只在工具调用时才用到它)。
+    if (toolOptions && projectAssets) {
+      const pageClient = toolOptions.pageBridge ? createWorkerPageClient({ runClient, resources, origin: toolOptions.pageBridge.origin,
+        tls: toolOptions.pageBridge.tls, serverFingerprint256: toolOptions.pageBridge.serverFingerprint256, extraTools: collectPageTools(),
+        // 发起页此刻在不在:向文档服务问全员选区(这一轮自己的数据连接,带任务授权号)
+        presence: async () => {
+          const reply = await bound.side.executor.request(grant.conversationId, { type: 'selection.query', projectId: grant.projectId, runGrantId: grant.runGrantId },
+            (message) => message?.type === 'selection.state' || message?.type === 'error');
+          if (reply?.type !== 'selection.state' || !Array.isArray(reply.members)) {
+            // 文档服务拒了或回的不是在场表:原因的代号留给日志(只有代号,没有正文)
+            const reason = typeof reply?.reason === 'string' && /^[A-Za-z0-9_.:-]{1,60}$/.test(reply.reason) ? reply.reason : 'reply';
+            throw Object.assign(new Error('selection-unavailable'), { code: `selection-${reason}` });
+          }
+          return { members: reply.members };
+        }, limits: toolOptions.pageLimits ?? {}, log }) : null;
+      toolset = await createAccountToolset({ root, dataDir, context, resources, projectAssets, workspaces, ownerKey, egress,
+        exec: () => { if (!bound) throw Object.assign(new Error('project-not-bound'), { code: 'project-not-bound' }); return bound.side.executor; },
+        host: () => loadSsrHost(loadModule, { apiBase: 'http://agent-service.invalid' }),
+        config: toolOptions.config ?? {}, pageBridge: pageClient, record: row => gate.record(row),
+        onPlayhead: t => inst?.notePlayhead?.(grant.conversationId, t),
+        identity: { username: grant.initiatorName ?? record.senderNameAtSend }, limits: toolOptions.limits ?? {}, log });
+      if (signal?.aborted) fail(403, 'run-fenced');
+    }
     inst = createAgentInstance({ profile: 'hosted', server: { httpServer: null, ssrLoadModule: loadModule,
       config: { root }, middlewares: { use() {} } },
       // 这一轮被停掉(signal)时,它排在渲染服务队列里的看画面请求一并撤回,不占着队列、不在失权之后还出图
@@ -153,9 +188,11 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       hostedTools, docUrl: dataClient.wsUrl, protocolsFor, execSerial, accountMode: true, accountSelection,
       accountDataRequired: true, accountDataWebSocketImpl: DataWebSocket, initiatorOnline: () => false,
       ...(accountRunAssets ? { accountRunAssets } : {}),
+      ...(toolset ? { accountTools: toolset } : {}),
       pageCall: async () => ({ offline: true, why: 'initiator-unavailable' }),
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
       const binding = await Promise.race([inst.bindAgent({ projectId: grant.projectId, mode: 'hosted', signal }), aborted]);
+      bound = binding;
       if (signal?.aborted) fail(403, 'run-fenced');
       // A signed welcome and current project.open reply must arrive before the
       // local read intent can move to execution-started or any model/tool call.
@@ -186,19 +223,34 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
         return handle;
       },
       async drain() {
+        let toolsOpen = null;
         try { if (handle) await handle.drain(); }
         finally {
-          // 素材的连接和流也是本机资源：等它们真的关完才算收完，收尾记录在这之后才形成。
-          // 关不干净就抛出去，执行器据此不形成收尾记录，这条任务只能由强制路径收口。
-          try { await projectAssets?.close(); }
-          finally { removeAbort(); inst.close('run-drained'); await DataWebSocket.closeOwned(); }
+          try {
+            if (toolset) {
+              // 这一轮说完话了:它名下还没做完的后台作业(转写、镜头、主体、追踪、一键流程)等它做完,再收提供者。
+              // 被叫停(signal)就不等。提供者的子进程、浏览器、流都是本机资源:没关干净如实抛出去,不形成收尾记录。
+              await toolset.settle(signal ?? null);
+              const receipt = await toolset.close('run-drained');
+              if (receipt.childrenClosed !== true || receipt.streamsClosed !== true) toolsOpen = Object.assign(new Error('account-tools-close-pending'), { status: 503, code: 'account-tools-close-pending' });
+            }
+          } finally {
+            // 素材的连接和流也是本机资源：等它们真的关完才算收完，收尾记录在这之后才形成。
+            // 关不干净就抛出去，执行器据此不形成收尾记录，这条任务只能由强制路径收口。
+            try { await projectAssets?.close(); }
+            finally { removeAbort(); inst.close('run-drained'); await DataWebSocket.closeOwned(); }
+          }
         }
+        if (toolsOpen) throw toolsOpen;
         return { runId: grant.runId, dispatchesOpen: 0 }; },
+      /** 文档服务叫停这一轮(停止、转私有、Agent 被关、发起人被踢、删除):工具提供者的收场,无条件做 */
+      fence(control) { return toolset ? toolset.fence({ kind: control?.kind }) : Promise.resolve(null); },
       close() { removeAbort(); inst.close('run-finished'); },
     };
     } catch (error) {
       removeAbort();
       try { inst?.close('bind-failed'); } catch { /* The socket witness remains mandatory. */ }
+      try { await toolset?.close('bind-failed'); } catch { /* 账本与浏览器的关闭各自记了结果 */ }
       try { await projectAssets?.close(); } catch { /* Registered resources stay owned by resources.abortForFence. */ }
       if (DataWebSocket) await DataWebSocket.closeOwned();
       throw error;
@@ -490,7 +542,10 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
       // producer still must prove actual data sockets and the complete OS tree.
       const resourceClose = entry.context ? resources.abortForFence(entry.context, control.controlId) : null;
       const supervised = Promise.resolve(resourceClose); void supervised.catch(() => {});
-      await entry.completion; await supervised;
+      // 工具提供者的收场(作业账本标取消、等发起人页面的请求作废、对话的浏览器关掉,转私有或关 Agent 时连用户数据目录一起删):
+      // 不看这一轮用没用过哪个工具,一律做。它自己不抛错,结果记在日志里。
+      const fenced = Promise.resolve().then(() => entry.runner?.fence?.(control)).catch(() => {});
+      await entry.completion; await supervised; await fenced;
     }
     const closedRunIds = targets.filter(id => closedRuns.has(id));
     const sockets = typeof connectionsClosed === 'function' ? await connectionsClosed({ control, instanceId, closedRunIds }) : false;

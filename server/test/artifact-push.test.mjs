@@ -590,8 +590,9 @@ const GOLDEN = {
     // 清单里记着 `version: STREAM_CODE_VERSION`。渲染重构「己一」把它从 1 加到 2,这一个文件的字节跟着变(别的字段、流键、分段都没变:
     // 把常量改回 1,这里仍是原来记下的 5c074ef83138e314fb829b238eeac62127ebfaac4844ac83d5107d015b66c75e)
     // 2026-10-13「稀疏流一」改过这一项:流的清单多记一项 `originFrame`(这条流自己的第一帧)、`version` 跟着 `STREAM_CODE_VERSION` 从 2 到 3。
+    // 「稀疏流一」第二期再改一次:`version` 跟着 `STREAM_CODE_VERSION` 从 3 到 4(这里直接调 storeSegment、不带位置矩形,清单别处没变)。
     // 推送队列配没配不影响它;别的文件一个字没变
-    'streams/5517a8bfe97b060bb52e6467e56b225715869c8e8b895dd54ffa48496cab01c9/stream.json': '672dfc568e2e27a12b7676785bde1a414a27336f0deafd9ca33875dcaa6d41bf'
+    'streams/5517a8bfe97b060bb52e6467e56b225715869c8e8b895dd54ffa48496cab01c9/stream.json': 'c25fc17378b1700ade7d75ba8f6bebe1884f34f4fce56e03ff29d3feb7d172b4'
   }
 };
 

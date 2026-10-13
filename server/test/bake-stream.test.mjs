@@ -4,7 +4,7 @@
  * 钉住验收里「连续生产」那几条:
  *   - 连续生产 10 个分段只付一次换页、只调一次 `__pcSetFrameWindow`,而且那一次的 `clipIds` 恒为 null;
  *   - 跳段 / 换流 / 租约被弄脏(`dirty`)都当断租约处理,重新挂载;
- *   - 稀疏分段(stride 3)15 帧只截 5 张;
+ *   - 稀疏分段(每个分段只截第一帧,stride 是一个分段的帧数)15 帧只截 1 张;
  *   - 截图矩形只在变了的时候发一次 `Emulation.setDeviceMetricsOverride`(带 `viewport`)。
  */
 import { test } from 'node:test';
@@ -76,14 +76,14 @@ test('a skipped segment, another stream or a dirty lease breaks the lease; a rem
   assert.equal((await bakeStream(bakery, { ...seg(5), streamSignature: 'OTHER', onFrame: async () => {} })).reset, true, '换了页面');
 });
 
-test('stride 3 captures five screenshots for a 15-frame segment; the lease still steps every frame', async () => {
+test('a sparse segment (stride = one segment) captures one screenshot for a 15-frame segment; the lease still steps every frame', async () => {
   const bakery = fakeBakery();
   const frames = [];
-  const stats = await bakeStream(bakery, { ...seg(0), stride: 3, onFrame: async (f) => { frames.push(f); } });
-  assert.deepEqual(frames, [0, 3, 6, 9, 12]);
-  assert.equal(stats.captured, 5);
+  const stats = await bakeStream(bakery, { ...seg(0), stride: 15, onFrame: async (f) => { frames.push(f); } });
+  assert.deepEqual(frames, [0]);
+  assert.equal(stats.captured, 1);
   assert.deepEqual(bakery.log.setT.filter((_, i) => i >= 4), Array.from({ length: 15 }, (_, i) => i / 30), '预热之后逐帧推 0..14');
-  const next = await bakeStream(bakery, { ...seg(1), stride: 3, onFrame: async () => {} });
+  const next = await bakeStream(bakery, { ...seg(1), stride: 15, onFrame: async () => {} });
   assert.equal(next.reset, false);
 });
 

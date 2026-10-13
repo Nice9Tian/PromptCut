@@ -302,7 +302,7 @@ test("HS10 文案(先照任务书,用户看过截图再定):标签、两个方�
   const t = H.hostedOptionText("render", "streams");
   assert.equal(t.label, "生成轨道流");
   assert.equal(t.hint(true), "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。");
-  assert.equal(t.hint(false), "没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。");
+  assert.equal(t.hint(false), "没有打开：托管方的渲染节点只为这个项目生成隔一段一张的稀疏轨道流。打开后还会补成每帧都有的轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。");
   assert.equal(t.confirm(true), "打开后，托管方的渲染节点会为这个项目生成轨道流。");
   assert.equal(t.confirm(false), "关闭后，托管方的渲染节点不再为这个项目生成轨道流，已经生成的保留。");
   assert.equal(t.changed(true), "", "打开时不提示,和另两行同一个规矩");
@@ -334,7 +334,7 @@ test("HS11 组件:渲染节点那一行下面缩进多一行,按报来的值勾�
 
   const off = render({ where: "hosted", hosted: STREAMS_OFF, creator: true, onToggleOption: () => {} });
   assert.doesNotMatch(streamsBoxOf(off), /checked/, "关掉后不勾");
-  assert.match(off, /没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流/);
+  assert.match(off, /没有打开：托管方的渲染节点只为这个项目生成隔一段一张的稀疏轨道流。打开后还会补成每帧都有的轨道流/);
   assert.match(off, /会多用云端的渲染时间/, "关着的说明讲清代价");
   assert.doesNotMatch(off, /渲染节点关着，暂不生效/, "渲染节点开着时不加这一句");
   assert.match(off, /data-state="off"/);

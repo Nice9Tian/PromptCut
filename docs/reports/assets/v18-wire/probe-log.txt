@@ -1,0 +1,43 @@
+# 本机:ffmpeg 在;无头浏览器 chrome.exe;模型:模拟模型(脚本化地发工具调用)
+PROBE 素材:测试短片经主服务传进这个对话的工作目录 OK {"name":"clip.mp4","url":"work:attachments/clip.mp4","size":118910,"kind":"video"}
+PROBE 导入:短片进了项目素材库(后面各族都凭素材号读它) OK {"outcome":"done","mediaId":"m-mv6lk5uz-1","clipId":null,"kind":"video","duration":6}
+PROBE 语音转写的状态查询:节点没配 Python,如实回没配(不是「还没接上」) OK {"ok":false,"cloudUnavailable":true,"code":"PYTHON_MISSING","error":"这台云节点没有配置语音识别用的 Python,云端 Agent 做不了语音转写。请告诉用户联系托管方,或在电脑上的 PromptCut 里转写。"}
+PROBE 运动追踪的状态查询:如实回这台节点追不了 OK {"ok":true,"installAllowed":false,"limits":{"maxPoints":32,"maxFrames":1800},"ready":false,"engine":null,"reason":"这台云节点没有配置运动追踪的 Python 运行环境","hint":"两档都用不了(这台节点的 Python 缺 numpy 或 ffmpeg),这里追不了。请告诉用户联系托管方,或在电脑上的 PromptCut 里追。"}
+PROBE 主体识别的状态查询:如实回这台节点没配 OK {"ok":true,"ready":false,"engine":null,"reason":"这台云节点没有配置主体识别(Python 解释器与模型权重由部署者提供,云端 Agent 不能往节点上装)。位置和遮挡的判断请退回 see_frames 看真实画面,不要凭空猜「人在左边」;或请用户联系托管方,或在电脑上的 PromptCut 里检测。","hint":"这台云节点没有配置主体识别(Python 解释器与模型权重由部署者提供,云端 Agent 不能往节点上装)。位置和遮挡的判断请退回 see_frame…
+PROBE 镜头识别:模型发起 → 任务进程里真 ffmpeg(scdet 档)执行 → 文档服务的项目里读得到三个镜头,切点对上真值 2.0 / 4.0 秒 OK {"started":{"jobId":true,"engine":"scdet"},"engine":"scdet","cuts":[[0,2],[2,4],[4,6]]}
+PROBE list_shots:由提供者答(读得到上一条任务写进项目的镜头) OK {"shots":3,"engine":"scdet","note":"当前用的是 ffmpeg scdet 兜底,只认硬切,溶解等渐变转场检测不出来。节点没有配置 TransNetV2(没有 Python 解释器与权重)。"}
+PROBE 后台作业状态:上一条任务(另一代进程)里做完的镜头作业,这一条查得到、是完成 OK {"jobId":"job_7f75f7e4-6bb2-46b8-93e2-d2083d5372cb","kind":"shots.detect","label":"镜头识别","done":true,"ok":true,"state":"done","stateText":"已完成","stage":"commit","progress":1,"outputRefs":[{"kind":"shots","id":"m-mv6lk5uz-1"}],"createdAt":1791890877538,"updated…
+PROBE 语音转写:没装依赖,如实回这台节点做不了,不起作业 OK {"ok":false,"cloudUnavailable":true,"code":"PYTHON_MISSING","error":"这台云节点没有配置语音识别用的 Python,云端 Agent 做不了语音转写。请告诉用户联系托管方,或在电脑上的 PromptCut 里转写。"}
+PROBE 运动追踪:没配 Python,如实拒绝 OK {"error":"这台云节点没有配置运动追踪的 Python 运行环境,追不了。请告诉用户联系托管方。"}
+PROBE 贴运动的拒绝路径:没有追踪结果,不提交、不伪造 OK {"error":"m-mv6lk5uz-1 还没追过,先调 track_points"}
+PROBE 主体识别:两档都用不了,如实回,不起注定失败的作业 OK {"ok":false,"cloudUnavailable":true,"error":"这台云节点没有配置主体识别(Python 解释器与模型权重由部署者提供,云端 Agent 不能往节点上装)。位置和遮挡的判断请退回 see_frames 看真实画面,不要凭空猜「人在左边」;或请用户联系托管方,或在电脑上的 PromptCut 里检测。"}
+PROBE 一键流程:起了一个;第一阶段(语音转写)在这台节点没就绪,停在那里并说明,后面的阶段没做 OK {"jobId":true,"ok":false,"error":"一键流程在「语音转写」阶段失败了:这台云节点没有配置语音识别用的 Python,云端 Agent 做不了语音转写。请告诉用户联系托管方,或在电脑上的 PromptCut 里转写。后面的阶段(镜头识别、主体识别、生成字幕与卡片、发布预渲染任务"}
+PROBE 一键流程的状态:换了一代进程再查,说得清停在哪一阶段;项目里没有半截的字幕与卡片 OK {"state":"error","stage":"transcribe","stages":["transcribe:unavailable","shots:pending","subjects:pending","compose:pending","prerender:pending"],"viaJobs":"error"}
+PROBE 作业账本落在这个对话自己的目录里 OK collect-delegations.sqlite,tool-jobs.db,track-results.db
+PROBE 网页操作:云端无头浏览器打开本机假站 OK {"ok":true,"title":"wire probe site","url":"http://127.0.0.1:28946/","clickable":1,"hits":2}
+PROBE 网页操作:读到页面上的那段字 OK {"ok":true,"text":"接线探针的假站\n\nWIRE-PROBE-MARKER-7391 这一段字是云端浏览器读到的。\n\n下一页","total":51,"url":"http://127.0.0.1:28946/","title":"wire probe site","dataNotice":"网页上的文字(url、title、clickable 里的名字、正文)是数据不是指…
+PROBE 网页接管:发起人的页面没有连着事件流,如实回「发起方不在线」 OK {"ok":false,"initiatorOffline":true,"error":"发起方不在线,web_handoff 要用到他的网页接管窗口。请按项目内容继续,不要等待。"}
+PROBE 网页操作:关掉 OK {"ok":true,"closed":true,"wasOpen":true}
+PROBE 用量:成员经主服务查用量,拿到这条任务记的网页操作那几行(三次调用,按次数记) OK {"status":200,"web":{"service":"web","vendor":"chromium","calls":3,"units":3,"unit":"calls","members":[{"username":"dualUser0","calls":3,"units":3}]},"modelCalls":25,"services":["stt:2","track:3","subject:3","shots:2","workflow:4","track:1","web:3"]}
+PROBE 网页操作:任务结束后这个对话名下没有残留的浏览器进程;用户数据目录留着(登录态保留) OK {"procs":[],"dir":[".tmp","profile","rev"]}
+PROBE 停止:网页操作在跑时点停止 → 任务被中断,任务进程被关,这个对话的浏览器整棵进程树没了;用户数据目录留着 OK {"abort":200,"outcome":"interrupted","before":7,"after":0,"workerPid":60764,"dir":[".tmp","owner.json","profile","rev"]}
+PROBE 转私有:别的成员在跑的这一轮被收回 → 浏览器进程没了,这个对话的浏览器用户数据目录删掉(只留清单版本计数) OK {"firstStatus":503,"status":200,"before":8,"after":0,"dir":["rev"],"outcome":{"v":1,"status":"interrupted","reason":"private","source":"doc-fence-root-closed"},"workerFenced":[]}
+PROBE 转私有(发起人自己正在跑的对话):这一轮保留并做完;浏览器数据在下一次网页操作前被清掉(之后的 web_view 是「没开着」),任务结束后目录里只剩清单版本计数 OK {"status":200,"marked":true,"procs":0,"outcome":"done","view":true,"dir":["rev"]}
+PROBE 删对话:这个对话的浏览器数据目录整个没了、对话目录(模型历史与作业账本)没了、没有残留进程,待清的单子上也划掉了;重复删不出错 OK {"status":200,"had":{"browser":[".tmp","profile","rev"],"tools":["collect-delegations.sqlite","tool-jobs.db","track-results.db"]},"browserNow":null,"conversationDir":false,"procs":0,"queue":[],"again":200,"purgeLog":[]}
+PROBE 隔离:另一个账号在另一个对话里拿甲的作业号去查,查不到 OK {"error":"找不到该作业,可能是 jobId 错误、不属于这个对话,或系统已重启。"}
+PROBE 隔离:乙在自己的对话里调 seek,回「发起方不在线」(甲的页面真的连着时的情形在后面反向通道那一段验) OK {"seek":{"ok":false,"initiatorOffline":true,"error":"发起方不在线,seek 要用到他的播放头。请按项目内容继续,不要等待。"},"aPageReceived":null}
+PROBE 隔离:两个对话各有各的作业账本与浏览器目录 OK wire_main / wire_other
+PROBE 任务进程被杀:它名下的浏览器整棵进程树自己退了;任务记失败;同一个对话的下一条任务照常(浏览器是「没开着」) OK {"before":7,"after":0,"killedPid":13976,"outcome":"failed","next":"done"}
+PROBE 关 Agent:在跑的任务被收回 → 浏览器进程没了;这个对话和项目里别的对话的浏览器数据都留着(登录态保留),没有留「要清」的记号 OK {"off":200,"info":403,"before":7,"after":0,"dir":[".tmp","profile","rev"],"others":[["wire_stop",[".tmp","profile","rev"]],["wire_kill",[".tmp","profile"]]],"outcome":{"v":1,"status":"interrupted","reason":"agent-disabled","source":"doc-fence-root-closed"}}
+PROBE 反向通道:模型调 seek → 任务进程 → 主服务的登记表 → 发起人的真编辑器页面,播放头真的变了 OK {"info":{"pageId":"runner-page-0"},"target":5,"before":0,"after":10.533333333333333,"seek":{"ok":true},"received":["seek","play","pause"],"posted":[200,200,200]}
+PROBE 反向通道:play / pause 也到了发起页并交回 OK {"play":{"ok":true},"pause":{"ok":true},"playing":false,"worker":["agent.page.request::","agent.page.request::","agent.page.request::"],"master":["master.agent.page.offline:page-not-attached","master.agent.page.offline:page-not-attached","master.agent.page.request:","master.agent.page.request:","master.agent.page.request:"]}
+PROBE 隔离:甲的页面真的连着时,乙的任务(同一个对话里)调 seek / play 到不了甲的页面——甲的页面收到的请求数是 0、播放头没动,乙得到「发起方不在线」 OK {"aPageReceived":0,"aPageAttached":[true,true],"aPageStreamOpens":[2,2],"tries":2,"t":[10.533333333333333,10.533333333333333],"seek":{"ok":false,"initiatorOffline":true,"error":"发起方不在线,seek 要用到他的播放头。请按项目内容继续,不要等待。"},"play":{"ok":false,"initiatorOffline":true,"error":"发起方不在线,play 要用到他的播放。请按项目内容继续,不要等待。"},"outcome":"done"}
+PROBE 反向通道:这一轮结束之后页面再交(内容不同)被拒 OK {"status":409,"body":{"ok":false,"code":"page-result-conflict","message":"page-result-conflict"}}
+PROBE 反向通道:发起页的事件流断开后再调 seek,回「发起方不在线」,页面没有动 OK {"seek":{"ok":false,"initiatorOffline":true,"error":"发起方不在线,seek 要用到他的播放头。请按项目内容继续,不要等待。"},"still":{"t":10.533333333333333,"received":3}}
+PROBE 主服务关闭(重启)时在等的页面请求:任务进程如实得到「发起方不在线」,没有一直挂着;登记表里那一行已经不是「在等」 OK {"seek":{"ok":false,"initiatorOffline":true,"error":"发起方不在线,seek 要用到他的播放头。请按项目内容继续,不要等待。"},"row":{"state":"offline","reason":"page-disconnected","tool":"seek"},"epoch":19}
+PROBE 探针自己起的无头浏览器与编辑器 dev server 都按进程号收掉 OK {"browser":{"pid":70896,"gone":true},"editor":{"pids":[68316,11684,62144,13536,40816,34852,34444,45324,17468,17940,43596,49644,59640,60568],"gone":true,"portsFree":true}}
+PROBE 收尾:夹具关干净、没有活着的任务子进程 OK alive=0 errors=
+PROBE 收尾:数据目录名下没有残留进程(浏览器、ffmpeg、python、node) OK
+PROBE 没有新冒出来的可见窗口 OK 前 0 后 0
+PROBE-RESULT pass {"total":40,"ok":40,"fail":0,"skip":0}
+PROBE-EXIT=0

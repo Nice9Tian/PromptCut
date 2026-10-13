@@ -16,6 +16,7 @@ import path from 'node:path';
 import { digestOf } from '../account/ledger.mjs';
 import { agentScopeRef } from '../account/agent-run-scope-doc.mjs';
 import { validateAgentScopeExpected, validateAgentScopeReservation } from '../hosted/agent-run-scope-schema.mjs';
+import { validateAccountToolSettings } from './account-tool-settings.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
 const exact = (value, required, optional = []) => value && typeof value === 'object' && !Array.isArray(value) &&
@@ -38,7 +39,8 @@ const RETIREMENT = 'promptcut.agent-run-scope.unassigned-retirement.v1';
  *       doc         { origin, fingerprint256, keyFile, certFile, caFile }   文档服务的内部口与任务证书
  *       dataDir     各代共用、长期保留的数据目录（和主服务的 PROMPTCUT_AGENT_SHARED_DATA 是同一个）
  *       stateRoot   每一代自己的状态目录的上级（任务进程的用户可写）；实际用 <stateRoot>/<槽>/epoch-<n>/
- *       modelConfigDir / look / runAssets   可不写，含义见 `account-task-worker-config.mjs`
+ *       modelConfigDir / look / runAssets / tools   可不写，含义见 `account-task-worker-config.mjs`（`tools` 是工具要的节点依赖：
+ *                   ffmpeg、各感知包的 Python 与权重目录、无头浏览器；只写节点上真有的，写了但路径不在任务进程会拒绝启动）
  *   slots[]     每个槽：
  *       publisher           发布器的配置（`createAgentScopeRuntime` 认的那一份：v、expected、registryDir、identity、runtimeAdapter、configuredAnchorDigest）
  *       workerSettingsFile  给这一槽的任务进程写设置的固定位置（单元里的 PROMPTCUT_AGENT_WORKER_SETTINGS 指向它）
@@ -53,7 +55,13 @@ export function validateRootConfiguration(config) {
       (config.pollMs !== undefined && (!Number.isInteger(config.pollMs) || config.pollMs < 50 || config.pollMs > 60_000)) ||
       !Array.isArray(config.slots) || !config.slots.length || config.slots.length > 64) fail('root-configuration');
   const w = config.worker;
-  if (!exact(w, ['doc', 'dataDir', 'stateRoot'], ['modelConfigDir', 'look', 'runAssets']) || !absolute(w.dataDir) || !absolute(w.stateRoot) ||
+  // `tools` 一节和任务进程用同一张名单核(`account-tool-settings.mjs`):键写错了在这里就拒绝并指出是哪个键,
+  // 不然 root 起得来、每一代任务进程都拒绝启动,整台节点的云端任务都起不来
+  if (w && typeof w === 'object' && w.tools !== undefined) {
+    try { validateAccountToolSettings(w.tools === null ? [] : w.tools); }
+    catch (error) { throw Object.assign(new Error('root-configuration-worker-tools'), { status: 503, code: 'root-configuration-worker-tools', key: error?.key ?? null, detail: String(error?.message ?? '').slice(0, 200) }); }
+  }
+  if (!exact(w, ['doc', 'dataDir', 'stateRoot'], ['modelConfigDir', 'look', 'runAssets', 'tools']) || !absolute(w.dataDir) || !absolute(w.stateRoot) ||
       w.dataDir === w.stateRoot || (w.modelConfigDir !== undefined && !absolute(w.modelConfigDir)) ||
       !exact(w.doc, ['origin', 'fingerprint256', 'keyFile', 'certFile', 'caFile']) || !loopback(w.doc.origin) || !pin(w.doc.fingerprint256) ||
       ['keyFile', 'certFile', 'caFile'].some(key => !absolute(w.doc[key]))) fail('root-configuration-worker');
@@ -94,7 +102,8 @@ export function workerSettingsFor({ config, slot, reservation }) {
     ...(config.worker.modelConfigDir ? { modelConfigDir: config.worker.modelConfigDir } : {}),
     ...(slot.controlPort !== undefined ? { controlPort: slot.controlPort } : {}),
     ...(config.worker.look ? { look: structuredClone(config.worker.look) } : {}),
-    ...(config.worker.runAssets ? { runAssets: structuredClone(config.worker.runAssets) } : {}) };
+    ...(config.worker.runAssets ? { runAssets: structuredClone(config.worker.runAssets) } : {}),
+    ...(config.worker.tools ? { tools: structuredClone(config.worker.tools) } : {}) };
 }
 
 /**

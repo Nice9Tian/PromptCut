@@ -35,9 +35,10 @@ import type { NodeTask, StreamTaskInput } from "./browserNode.ts";
 
 /**
  * 与 `server/frame-stream.mjs` 的 `STREAM_CODE_VERSION` 同值(对拍)。2:「己一」起单卡流的成员键不带生成快照的代码指纹;
- * 3:分段从这条流自己的第一帧起每 15 帧一段(`render/streamSegments.mjs`),旧流全部重产。
+ * 3:分段从这条流自己的第一帧起每 15 帧一段(`render/streamSegments.mjs`),旧流全部重产;
+ * 4:稀疏版每个分段只截第一帧、清单里每个分段带位置矩形 `box`。
  */
-export const PAGE_STREAM_CODE_VERSION = 3;
+export const PAGE_STREAM_CODE_VERSION = 4;
 /** 与 `server/frame-stream.mjs` 的 `STREAM_DECODER_BUDGET`、`LOCAL_OVERFLOW_PX` 同值 */
 export const PAGE_STREAM_DECODER_BUDGET = 6;
 export const PAGE_LOCAL_OVERFLOW_PX = 32;
@@ -471,6 +472,11 @@ export async function planPageStreams(o: {
 
 /* ------------------------------------------------------------------ 流任务与层表的那一行 */
 
+/** 稀疏流任务的名次(与 `server/render-node/split.mjs` 的 `SPARSE_STREAM_PRIORITY` 同一个数;单测对拍) */
+export const PAGE_SPARSE_STREAM_PRIORITY = 30;
+/** 稀疏流任务的密度记号(`input.density` 的值、id 的结尾;与 `server/render-queue/messages.mjs` 的 `STREAM_DENSITY_SPARSE` 同一个字) */
+const STREAM_DENSITY_SPARSE = "sparse";
+
 /** `[from, to]` 闭区间:first .. last 每 span 一段(与 `split.mjs` 的 `spans` 同一个式子) */
 export function spansOf(first: number, last: number, span: number): [number, number][] {
   const out: [number, number][] = [];
@@ -484,8 +490,13 @@ export function spansOf(first: number, last: number, span: number): [number, num
  * 这条流的流任务,每 `PAGE_STREAM_SEGMENTS_PER_TASK` 个分段一个:id、结果键、范围、`input` 与切分方给浏览器出的那一份逐字段相同
  * (`split.mjs`;`input.dual` 是切分方两份都出时才带的,页面这里没有另一份,不带)。本页不经队列自己做这些任务;之后有切分方接了活、
  * 把同一个任务发进队列时 id 相同,本页已经推完的分段按任务 id 留着,认领之后只补缺的。
+ *
+ * `o.density: 'sparse'`:出这条流的**稀疏流任务**(每个分段只截第一帧),形状同切分方出的稀疏流任务:范围与满密度任务逐个相同
+ * (内容库里的清单键相同)、id 末尾多 `:sparse`、`input.density: 'sparse'`、`priority` 30(`split.mjs` 的 `SPARSE_STREAM_PRIORITY`)。
+ * 不给是满密度任务,与原来逐字相同。
  */
-export function pageStreamTasks(spec: PageStreamSpec, o: { projectId: string; projectRev: number; codeVersion?: string | null; derivedFrom?: string | null }): NodeTask[] {
+export function pageStreamTasks(spec: PageStreamSpec, o: { projectId: string; projectRev: number; codeVersion?: string | null; derivedFrom?: string | null; density?: "sparse" | null }): NodeTask[] {
+  const sparse = o.density === STREAM_DENSITY_SPARSE;
   const stream: StreamTaskInput = { kind: "card", plane: "local", clipIds: [spec.topClipId], fps: spec.fps, bound: { ...spec.bound }, offset: { ...spec.offset },
     firstFrame: spec.firstFrame, count: spec.bake.count, total: spec.total, originFrame: spec.originFrame, lastFrame: spec.lastFrame };
   return spansOf(spec.firstSegment, spec.lastSegment, PAGE_STREAM_SEGMENTS_PER_TASK).map(([from, to]) => {
@@ -494,14 +505,15 @@ export function pageStreamTasks(spec: PageStreamSpec, o: { projectId: string; pr
     let frames = 0;
     for (let n = from; n <= to; n++) frames += streamSegmentFrameCount(n, spec.originFrame, spec.lastFrame);
     return {
-      id: `stream:${spec.streamKey}:${from}-${to}`, kind: "stream", resultKey: spec.streamKey, range,
+      id: `stream:${spec.streamKey}:${from}-${to}${sparse ? `:${STREAM_DENSITY_SPARSE}` : ""}`, kind: "stream", resultKey: spec.streamKey, range,
       source: { projectId: o.projectId, projectRev: o.projectRev, derivedFrom: o.derivedFrom ?? null },
       input: { clipId: spec.topClipId, cardId: spec.cardId ?? null, entryKey: null, contentKey: spec.contentKey, canvasHeavy: false,
+        ...(sparse ? { density: STREAM_DENSITY_SPARSE } : {}),
         compositing: spec.compositing, bake: structuredClone(spec.bake), stream: structuredClone(stream) },
       weight: { class: "medium", estMs: null, frames },
       requires: { envFingerprint: spec.envFingerprint, ...(o.codeVersion ? { codeVersion: o.codeVersion } : {}), cardSources: {}, transcode: false,
         userCards: false, graphCards: false, belowDependent: false, capabilities: { streams: true } },
-      priority: 10,
+      priority: sparse ? PAGE_SPARSE_STREAM_PRIORITY : 10,
     } as NodeTask;
   });
 }
