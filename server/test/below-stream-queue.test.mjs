@@ -3,7 +3,7 @@
  * 管线的计划(`planForQueue`)→ 切分 → 执行器把流任务对回这一版的流(`prerender-executor.mjs` 的 `matchStream`)→ 生产者按隔离工程产分段。
  * 用例名以 `BLQ-` 开头。跑:npm test -- server/test/below-stream-queue.test.mjs
  *
- * 开关(`PROMPTCUT_TEST_BELOW_STREAMS`)在每条用例里自己设、自己还原:缺省关着时这一路什么都不出。
+ * 开关(`PROMPTCUT_TEST_BELOW_STREAMS`)在每条用例里自己设、自己还原:产品里缺省开着;设成 0 是扮「还不认识这种流的旧节点」,那时这一路什么都不出。
  * 不用 Chrome、不用 ffmpeg,假件照 `stream-queue.test.mjs` 的做法(预渲染间、`bakeStream`、分段编码器)。
  * 这里验的是「认不认得、对不对得上、隔离工程给的是哪一种」;流里的像素怎么取不在这一块。
  */
@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { streamInputSig } from '../../src/render/streamInputSig.mjs';
 
 /* ------------------------------------------------------------------ 假的预渲染间 / 截图 / 编码器 */
 
@@ -188,7 +189,7 @@ async function manifestOf(pipeline, key) {
 /** 这一段里把「依赖下层的流」的开关设成 `on`,出去时还原 */
 async function withBelow(on, fn) {
   const saved = process.env.PROMPTCUT_TEST_BELOW_STREAMS;
-  if (on) process.env.PROMPTCUT_TEST_BELOW_STREAMS = '1'; else delete process.env.PROMPTCUT_TEST_BELOW_STREAMS;
+  process.env.PROMPTCUT_TEST_BELOW_STREAMS = on ? '1' : '0';
   try { return await fn(); } finally {
     if (saved === undefined) delete process.env.PROMPTCUT_TEST_BELOW_STREAMS; else process.env.PROMPTCUT_TEST_BELOW_STREAMS = saved;
   }
@@ -196,7 +197,7 @@ async function withBelow(on, fn) {
 
 /* ================================================================== 用例 */
 
-test('BLQ-off 缺省关:计划里没有这种流,切不出这种任务,层表里没有这种行', { timeout: 30_000 }, async (t) => {
+test('BLQ-off 关着(旧节点的样子):计划里没有这种流,切不出这种任务,层表里没有这种行', { timeout: 30_000 }, async (t) => {
   t.after(cleanup);
   await withBelow(false, async () => {
     const A = await streamPipeline();
@@ -236,7 +237,9 @@ test('BLQ-on 打开以后:计划多出毛玻璃的那一条;切出的任务带 b
     await executor.render(view(task), { signal: signalNone(), progress: () => {} });
     const bakes = streamBakes.slice(markBakes);
     assert.ok(bakes.length > 0 && bakes.every((b) => b.streamSignature === q.streamKey), '产的就是这条流');
-    assert.deepEqual(bakes.map((b) => b.fromFrame), [30, 45, 60, 75, 90, 105], '分段 0～5(第 30 帧起每 15 帧一段),满密度');
+    // 这种流推过去的每一拍都要画一张(下层的动画不画就不往前走):头一段接不上租约,从回放的起点(第 0 帧)起每一帧都交给取帧钩子,
+    // 第 30 帧之前的画完就丢、不进编码器;后面几段接着租约,从各自的第一帧起
+    assert.deepEqual(bakes.map((b) => b.fromFrame), [0, 45, 60, 75, 90, 105], '分段 0～5(第 30 帧起每 15 帧一段),满密度;头一段从回放的起点画起');
     assert.ok(bakes.every((b) => b.stride === 1));
     assert.deepEqual(bakes[0].clip, { x: 0, y: 0, w: 320, h: 180 }, '按舞台坐标截(上界是整个画面)');
     assert.equal(bakes[0].mountFrame, 0, '下层那张卡是 motion 式,从它的挂载帧推过来');
@@ -257,6 +260,20 @@ test('BLQ-on 打开以后:计划多出毛玻璃的那一条;切出的任务带 b
     const entry = [...A.entries.values()][0];
     const rows = (A.layerMapStreamOptions(entry).streams ?? []).filter((s) => s.kind === 'below');
     assert.deepEqual(rows.map((s) => s.contentKey), [q.contentKey]);
+    // 发给页面的那一层(就绪索引):带着「这是依赖下层的流」和这一版项目的输入签名;单卡流的层什么都不多带
+    const sig = streamInputSig(entry.project, { clipIds: ['clip-g'], kind: 'below' });
+    assert.match(sig, /^s1-/);
+    const layers = A.streamProducer().claimLayers(entry.key);
+    assert.deepEqual(layers.find((l) => l.clipId === 'clip-g'), { clipId: 'clip-g', kind: 'stream', key: q.streamKey, originFrame: 30, streamKind: 'below', inputSig: sig });
+    for (const l of layers.filter((x) => x.clipId !== 'clip-g')) assert.equal('streamKind' in l || 'inputSig' in l, false);
+    const sent = [];
+    const realPublish = A.ready.publish;
+    A.ready.publish = (key, layer) => { sent.push(layer); return realPublish.call(A.ready, key, layer); };
+    try { A.streamProducer().republish(); } finally { A.ready.publish = realPublish; }
+    const mine = sent.find((l) => l.clipId === 'clip-g');
+    assert.equal(mine?.streamKind, 'below');
+    assert.equal(mine?.inputSig, sig);
+    assert.deepEqual(mine?.ranges, [[0, 5]]);
 
     // 对不上的:分段越界、结果键是别的指纹的、种类和任务说的不一样
     const mut = (fn) => { const copy = view(task); fn(copy); return copy; };

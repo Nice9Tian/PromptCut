@@ -123,3 +123,37 @@ test('unsubscribing stops delivery and a throwing subscriber cannot block the ot
   assert.equal(good.at(-1).ranges.length, 1);
   assert.deepEqual(good.at(-1).ranges, [[0, 0]], '退订之后不再收');
 });
+
+test('依赖下层的流的层带着 streamKind 与 inputSig 发出去;别的层、别的档位不带;认领没带时留着同键原来那一层的', () => {
+  const index = createReadyIndex();
+  const { seen } = collect(index);
+  // 发层:四个口子都原样带出去
+  index.setLayer({ clipId: 'g', kind: 'stream', key: 'B1', ranges: [[0, 2]], originFrame: 55, streamKind: 'below', inputSig: 's1-abc' });
+  assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'g', kind: 'stream', key: 'B1', ranges: [[0, 2]], originFrame: 55, streamKind: 'below', inputSig: 's1-abc' });
+  index.addFrames({ clipId: 'g', kind: 'stream', key: 'B1', frames: [3], originFrame: 55, streamKind: 'below', inputSig: 's1-abc' });
+  assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'g', kind: 'stream', key: 'B1', ranges: [[0, 3]], originFrame: 55, streamKind: 'below', inputSig: 's1-abc' });
+  // 没有签名的只带种类;不认识的种类、不是流的档位都不带
+  index.setLayer({ clipId: 'h', kind: 'stream', key: 'B2', ranges: [[0, 0]], originFrame: 0, streamKind: 'below' });
+  assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'h', kind: 'stream', key: 'B2', ranges: [[0, 0]], originFrame: 0, streamKind: 'below' });
+  index.setLayer({ clipId: 'c', kind: 'stream', key: 'C1', ranges: [[0, 0]], originFrame: 0, streamKind: 'card', inputSig: 's1-zzz' });
+  assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'c', kind: 'stream', key: 'C1', ranges: [[0, 0]], originFrame: 0 });
+  index.setLayer({ clipId: 'g', kind: 'html', key: 'H1', ranges: [[0, 0]], streamKind: 'below', inputSig: 's1-abc' });
+  assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'g', kind: 'html', key: 'H1', ranges: [[0, 0]] });
+
+  // 认领(不 reset 的那一种):带了就用认领表的;没带、键没变就留着原来的;签名换了算变了、要重发
+  index.stageByKey({ kind: 'stream', key: 'B1', ranges: [[0, 5]] });
+  const before = seen.length;
+  assert.equal(index.absorb([{ clipId: 'g', kind: 'stream', key: 'B1', originFrame: 55 }]), 1);
+  assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'g', kind: 'stream', key: 'B1', ranges: [[0, 5]], originFrame: 55, streamKind: 'below', inputSig: 's1-abc' });
+  assert.equal(index.absorb([{ clipId: 'g', kind: 'stream', key: 'B1', originFrame: 55, streamKind: 'below', inputSig: 's1-abc' }]), 0, '什么都没变:不重发');
+  assert.equal(index.absorb([{ clipId: 'g', kind: 'stream', key: 'B1', originFrame: 55, streamKind: 'below', inputSig: 's1-new' }]), 1);
+  assert.equal(seen.at(-1).inputSig, 's1-new');
+  assert.equal(seen.length, before + 2);
+
+  // 认领(先 reset 的那一种)
+  const fresh = createReadyIndex();
+  fresh.stageByKey({ kind: 'stream', key: 'B1', ranges: [[0, 1]] });
+  const got = collect(fresh);
+  assert.equal(fresh.claim([{ clipId: 'g', kind: 'stream', key: 'B1', originFrame: 55, streamKind: 'below', inputSig: 's1-abc' }]), 1);
+  assert.deepEqual(got.seen.at(-1), { type: 'layer', clipId: 'g', kind: 'stream', key: 'B1', ranges: [[0, 1]], originFrame: 55, streamKind: 'below', inputSig: 's1-abc' });
+});

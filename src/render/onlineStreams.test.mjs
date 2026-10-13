@@ -245,7 +245,8 @@ test('候选切换:task.done 认定活着的那一份优先;superseded 作废的
   w2.putStream(rkB, 0, 7, { segs: [0, 1], tag: 'browser' });
   w2.putMap([row({ candidates: [{ envFingerprint: 'fp-a', resultKey: rkA }, { envFingerprint: 'fp-b', resultKey: rkB }] })]);
   const two = w2.source();
-  two.src.noteQueueEvent({ type: 'task.failed', id: `stream:${rkA}:0-7`, error: 'superseded' });
+  // 稀疏流任务的 id 末尾多一段 `:sparse`,同样认得出结果键
+  two.src.noteQueueEvent({ type: 'task.failed', id: `stream:${rkA}:0-7:sparse`, error: 'superseded' });
   await w2.settle(two.src);
   assert.equal(last(two.streamMessages()).key, rkB);
   two.src.stop();
