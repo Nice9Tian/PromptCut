@@ -111,6 +111,9 @@ export async function exportUnified(project, opts) {
           // the frames before the mismatch a second time.
           ...(sink ? { onFrame: sink.write, staticSkip: false } : {}),
           ...(stream ? { writeFrames: false } : {}),
+          // 推帧补画(`bake.mjs` 文件头):第二片起不补 —— 切点只落在没有有状态的卡跨着的帧上,前面推过去的卡到切点都已卸掉;
+          // 补的话每一片要把前面的帧真的再画一遍。第一片照常(只导一段时它前面那些帧上的卡可能还活着)。
+          ...(shardIndex > 0 && typeof opts.pushDraw !== 'boolean' ? { pushDraw: false } : {}),
           quiet: true,
           onProgress: (frame) => {
             const local = Math.max(0, Math.min(b, frame) - a + 1);
