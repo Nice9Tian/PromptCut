@@ -412,6 +412,17 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       pendingServices: [...(docConfirmed ? [] : ['doc']), ...services.filter(s => !serviceAcks[s]?.complete || serviceAcks[s].cursor < barrier.accessSeq)],
       logoutComplete: barrier.state === 'complete' };
   }
+  /** 这次退出等确认等过了时限：把当时的情况记进账本（哪几样确认了、哪几样没有、原因码、等了多久）。只记第一次。
+   * 这只是一条记录：退出仍然算没办完、接着办；旧登录的作废不受任何影响。`reported` 是「已经报给账号服务」的标记。 */
+  function recordLogoutTimeout(eventId, info) {
+    return ledger.transaction(state => {
+      const barrier = state.barriers[`event:${eventId}`]; if (!barrier) reject(404, 'no-event');
+      if (barrier.state === 'complete') return structuredClone(barrier);
+      barrier.timeout ??= { ...structuredClone(info), reported: false };
+      if (info.reported === true) barrier.timeout.reported = true;
+      return structuredClone(barrier);
+    });
+  }
   /** 账号服务已经为这次退出签了结束见证（它那边要四个服务的确认都齐了才签）。只记一次，重复记同一份不报错。 */
   function completeLogoutBarrier(eventId, witness) {
     if (typeof witness?.witnessId !== 'string' || !witness.witnessId || !Number.isSafeInteger(witness.orderSeq) ||
@@ -499,7 +510,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
-    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, flushAccountAcknowledgements,
+    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);
