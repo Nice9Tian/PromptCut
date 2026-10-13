@@ -72,6 +72,9 @@ export function newCloudChatId(): string {
 const CHAT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const chatKey = (projectId: string, tabId: string, accountScope = "") => accountScope
   ? `pc.cloudChat:${accountScope}:${projectId}:${tabId}` : `pc.cloudChat:${projectId}:${tabId}`;
+/** 这一页上「刚建的、还没发过消息」的新对话的 id(服务端还没有它;发出第一条消息后清掉)。刷新页面后靠它认出这仍是新对话 */
+const freshKey = (projectId: string, tabId: string, accountScope = "") => accountScope
+  ? `pc.cloudFresh:${accountScope}:${projectId}:${tabId}` : `pc.cloudFresh:${projectId}:${tabId}`;
 const titlesKey = (projectId: string, accountScope = "") => accountScope
   ? `pc.cloudTitles:${accountScope}:${projectId}` : `pc.cloudTitles:${projectId}`;
 
@@ -301,6 +304,9 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     if (cloud.accountMode) { setInfo(null); setHistItems([]); setNotice(null); }
     const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : lsGet(chatKey(projectId, tabId, accountScope));
     const first = stored && CHAT_ID_RE.test(stored) ? stored : newCloudChatId();
+    // 没有记着的对话 = 这是新建的;记着的那个若正是上次留下的「还没发过消息」的新对话,也算
+    const firstFresh = !(stored && CHAT_ID_RE.test(stored)) || lsGet(freshKey(projectId, tabId, accountScope)) === first;
+    if (firstFresh) lsSet(freshKey(projectId, tabId, accountScope), first);
     const session = cloud.accountMode
       ? createCloudSession({ api, store, accountMode: true, pageId: () => selectionPresenceStatus().pageId, onPageRequest: (ev) => accountPageHandler(ev) })
       : createCloudSession({ api, store, accountMode: false, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
@@ -328,7 +334,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       if (dead || pickedRef.current) return;
       setConversationId(id);
       lsSet(chatKey(projectId, tabId, accountScope), id);
-      session.open(id);
+      session.open(id, { fresh: firstFresh && id === first });
     })();
     return () => {
       dead = true;
@@ -416,6 +422,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     try {
       await s.send(body, sent.length ? bubbleAttachments(sent) : undefined);
       pendingSendRef.current = null;
+      if (projectId) lsSet(freshKey(projectId, tabId, accountScope), "");
       return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
@@ -465,16 +472,16 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     );
   }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, conversationId, key, operationScope]);
 
-  const switchTo = useCallback((id: string) => {
+  const switchTo = useCallback((id: string, fresh = false) => {
     if (cloud.accountMode && (!key || keyRef.current !== key || sessionKeyRef.current !== key)) return;
     pickedRef.current = true;
     setConversationId(id);
-    if (projectId) lsSet(chatKey(projectId, tabId, accountScope), id);
+    if (projectId) { lsSet(chatKey(projectId, tabId, accountScope), id); lsSet(freshKey(projectId, tabId, accountScope), fresh ? id : ""); }
     setNotice(null);
-    sessionRef.current?.open(id);
+    sessionRef.current?.open(id, { fresh });
   }, [projectId, tabId, accountScope, cloud.accountMode, key]);
 
-  const newChat = useCallback(() => switchTo(newCloudChatId()), [switchTo]);
+  const newChat = useCallback(() => switchTo(newCloudChatId(), true), [switchTo]);
 
   const refreshHistory = useCallback(async (): Promise<boolean> => {
     const scope = operationScope;
@@ -515,7 +522,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     abort,
     switchVisibility,
     newChat,
-    openChat: switchTo,
+    openChat: (id: string) => switchTo(id),
     history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory },
     model,
     setModel,
