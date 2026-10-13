@@ -12,7 +12,8 @@
  *
  * 跑：
  *   node server/agent-service/account-root-main.mjs --config /etc/promptcut/agent-root.json
- *       常驻。SIGTERM / SIGINT：只停调度，不关任何任务进程（关进程只凭文档服务的终态做）。
+ *       常驻：起来以后一直在（槽都空着、主服务连不上时也在），只有收到信号才退。
+ *       SIGTERM / SIGINT：只停调度，不关任何任务进程（关进程只凭文档服务的终态做），退出码 0。
  *       下次起来时，上一个 root 进程留下的一代在这里没有通道：它的主进程会被停下、写失败观察，
  *       由文档服务签「进程故障」的强制终态后关掉（那条任务记「失败」）。所以部署重启它之前最好先等槽空。
  *   node server/agent-service/account-root-main.mjs --config <同一份> --bootstrap
@@ -116,10 +117,33 @@ export async function runRoot({ configFile, mode }) {
   const missing = config.slots.filter(slot => slot.publisher.configuredAnchorDigest === null).map(slot => slot.publisher.expected.slotId);
   if (missing.length) throw Object.assign(new Error('root-slot-not-initialized'), { code: 'root-slot-not-initialized', slots: missing });
   const master = createMasterSchedulerClient({ origin: config.master.origin, tls: { key, cert, ca }, serverFingerprint256: config.master.fingerprint256 });
-  const scheduler = createAccountSlotScheduler({ slots: slots.map(row => row.adapter), master, pollMs: config.pollMs ?? 500, log: line });
-  await scheduler.start();
-  line('root.ready', { slots: scheduler.describe(), master: config.master.origin, pollMs: config.pollMs ?? 500 });
-  return { scheduler, async close() { await scheduler.stop(); master.close(); } };
+  return startRootResident({ adapters: slots.map(row => row.adapter), master, pollMs: config.pollMs ?? 500, masterOrigin: config.master.origin });
+}
+
+/**
+ * 常驻的那一部分：起槽调度，并且**拉住这个进程**。
+ * 调度两轮之间的等待、适配里看主进程的等待都是不拉住进程的定时器（它们不该妨碍别的进程收尾），问主服务用的是短连接，
+ * 这个进程又没有任何监听口——槽都空着的时候，事件循环里没有一样东西能让 Node 留下来，它会在第一轮问完以后自己以退出码 0 退出。
+ * 所以这里明确放一个保活，只在 `close()` 里拿掉。
+ * @param {{ adapters: object[], master: { pending: Function, scopeControl: Function, close?: Function }, pollMs?: number, masterOrigin?: string | null, log?: Function }} o
+ */
+export async function startRootResident({ adapters, master, pollMs = 500, masterOrigin = null, log = line } = {}) {
+  const scheduler = createAccountSlotScheduler({ slots: adapters, master, pollMs, log });
+  // 保活：一个什么都不做、**不 unref** 的定时器。它是这个进程在槽空闲时唯一拉住事件循环的东西。
+  const keepAlive = setInterval(() => {}, 60_000);
+  try { await scheduler.start(); } catch (error) { clearInterval(keepAlive); throw error; }
+  log('root.ready', { slots: scheduler.describe(), master: masterOrigin, pollMs });
+  let closing = null;
+  return { scheduler, close: () => closing ??= (async () => { try { await scheduler.stop(); master.close?.(); } finally { clearInterval(keepAlive); } })() };
+}
+
+/** 收到 SIGTERM / SIGINT：只停调度（不关任何任务进程），停完退出码 0。回这个停法本身（测试在发不了信号的平台上直接调）。 */
+export function installRootStop(started, { log = line, exit = code => process.exit(code) } = {}) {
+  let stopping = false;
+  const stop = () => { if (stopping) return; stopping = true; log('root.stopping', {});
+    void started.close().then(() => exit(0), error => { log('root.close.failed', { code: safe(error) }); exit(1); }); };
+  process.once('SIGTERM', stop); process.once('SIGINT', stop);
+  return stop;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
@@ -131,8 +155,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     requireLinuxRoot();
     started = await runRoot(parseRootArguments(process.argv.slice(2)));
   } catch (error) { failed(safe(error), error?.slots ? { slots: error.slots } : {}); }
-  if (started) {
-    const stop = () => { line('root.stopping', {}); void started.close().then(() => process.exit(0), error => { line('root.close.failed', { code: safe(error) }); process.exit(1); }); };
-    process.once('SIGTERM', stop); process.once('SIGINT', stop);
-  }
+  if (started) installRootStop(started);
 }

@@ -50,7 +50,8 @@
  *    8 上一个 root 进程留下的一代：新的接线没有它的通道，先停它的主进程、写失败观察，再强制关
  *    9 文档服务读这条记录链的那段代码（只读）读得通：五代、都关了、三份失败观察；记录文件别的用户读得到
  *   10 root 入口 `--status` 读配置、列出槽的现状
- *   11 root 入口常驻起得来（主服务连不上只是每轮记一行），收到 SIGTERM 退出码 0，不动任何槽
+ *   11 root 入口常驻：起来以后一直在——槽空着、主服务连不上（每轮记一行）时空闲八秒以上还活着、问过三轮以上还在接着问；
+ *      收到 SIGTERM 才退，退出码 0，不动任何槽
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -315,22 +316,33 @@ async function main(options) {
       const row = String(result.stdout).trim().split('\n').map(text => JSON.parse(text)).find(entry => entry.event === 'root.slot.status');
       need(row?.slotId === plan.slotId && row.epoch === 5 && row.phase === 'closed' && row.activeState === 'inactive', 'status-row');
     });
-    await check('root 入口常驻：起得来，主服务连不上只是每轮记一行；SIGTERM 退出码 0，不动任何槽', async () => {
+    await check('root 入口常驻：起来以后一直在（槽空着、主服务连不上也在），问过三轮以上还活着；SIGTERM 才退，退出码 0，不动任何槽', async () => {
       let output = '';
       child = spawn(process.execPath, [rootMain, '--config', plan.configFile], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
       const exited = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
+      const ticks = () => (output.match(/"event":"scheduler[.]tick[.]failed"/g) ?? []).length;
+      const alive = () => child.exitCode === null && child.signalCode === null;
       const deadline = Date.now() + 30_000;
-      while (!/"event":"root\.ready"/.test(output) || !/"event":"scheduler\.tick\.failed"/.test(output)) {
-        if (Date.now() > deadline || child.exitCode !== null) { diag.push(`root main output ${output.slice(-600)}`); fail('root-main-not-ready'); }
+      while (!/"event":"root[.]ready"/.test(output)) {
+        if (Date.now() > deadline || !alive()) { diag.push(`root main output ${output.slice(-600)}`); fail('root-main-not-ready'); }
         await delay(100);
       }
+      // 空闲八秒：这段时间里它没有任何事可做（没人排队），也没有监听口。它必须还在，并且还在一轮一轮地问。
+      await delay(8_000);
+      diag.push(`root main after 8s idle: alive=${alive()} exit=${child.exitCode} ticks=${ticks()}`);
+      need(alive(), 'root-main-exited-by-itself');
+      need(ticks() >= 3, 'root-main-not-polling');
+      const before = ticks(); await delay(1_500);
+      need(alive() && ticks() > before, 'root-main-stopped-polling');
+      need(!/"event":"root[.]stopping"/.test(output), 'root-main-stopping-early');
       child.kill('SIGTERM');
       const ended = await Promise.race([exited, delay(20_000).then(() => null)]);
       diag.push(`root main ended ${JSON.stringify(ended)} ${output.slice(-300)}`);
-      need(ended?.code === 0, 'root-main-exit'); child = null;
+      need(ended?.code === 0 && ended.signal === null, 'root-main-exit'); child = null;
+      need(/"event":"root[.]stopping"/.test(output), 'root-main-not-stopped-by-signal');
       need(await phase() === 'closed' && await idle(), 'root-main-touched-slot');
-      need(!/"event":"slot\.(opened|stuck)"/.test(output), 'root-main-opened-without-work');
+      need(!/"event":"slot[.](opened|stuck)"/.test(output), 'root-main-opened-without-work');
     });
   } catch (error) {
     if (!failedAt) { failedAt = 'setup'; say(`FAIL setup ${codeOf(error)}`); for (const row of diag.splice(0)) say(`  diag ${row}`); await dump().catch(() => {}); }

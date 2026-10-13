@@ -8,6 +8,8 @@
 # (`node server/agent-service/account-root-main.mjs --config {{ROOT_CONFIG}} --status` 看各槽都是 closed)。
 [Unit]
 Description=PromptCut agent root (task slot scheduler)
+# 一直重试,不因为短时间内失败了几次就不再拉(缺省是 10 秒内 5 次就放弃)
+StartLimitIntervalSec=0
 Wants=network-online.target
 After=network-online.target
 
@@ -17,9 +19,10 @@ User=root
 WorkingDirectory={{DIR}}
 Environment=NODE_ENV=production
 ExecStart={{NODE}} {{DIR}}/server/agent-service/account-root-main.mjs --config {{ROOT_CONFIG}}
-# 配置不对会以退出码 1 退出并打一行 config.error:那种情况重启也没用,所以只在异常退出时重启,并且隔开一些
-Restart=on-failure
-RestartSec=10s
+# 它是常驻的:只要不是人停的(systemctl stop),不管以什么退出码退出都拉起来——它不在,排着的消息谁也不会去开。
+# 配置不对时它每次都以退出码 1 退出并打一行 config.error;隔 15 秒拉一次,日志里一眼看得到,不会刷屏。
+Restart=always
+RestartSec=15s
 # 停的时候先让主进程自己停调度;它起的 systemctl / busctl 是一次性的短命令,到时限还在的才结束
 KillMode=mixed
 TimeoutStopSec=30s
