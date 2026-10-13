@@ -1,13 +1,13 @@
 /**
- * 根因 C、D 的回归测试 + 兜底顺序在父页一侧的排程(`snapshotFeed.ts`)。
- * 跑:node --experimental-test-module-mocks --test src/editor/snapshotFallback.test.mjs
+ * 根因 D 的回归测试 + 兜底顺序在父页一侧的排程(`snapshotFeed.ts`)。
+ * 跑:npm test -- src/editor/snapshotFallback.test.mjs
  *
- *  (C) 以前播放中只要就绪索引说「这一段有流」就不给快照;舞台那边流还没解出来 / 超解码器预算 /
- *      清单没到时画布 blank(),快照这条兜底已经被父页撤掉 → 整层透明。现在流覆盖时照样选快照,
- *      标成「海报」:挂着的那张离当前帧不到 15 帧就不换;超出解码器预算的层当「无流」,每拍换。
+ *  (C) 流盖着的层**不读快照**(2026-10-13:每张卡的 HTML 快照作废,有流就贴流):不选帧、不取字节、不投递。
+ *      流这一拍画不出来由舞台留着上一张、到时占位符(`streamPlayer.ts`),不再靠垫在下面的「海报」快照。
+ *      超出解码器预算的层当「无流」,仍落到快照(这条路下一块撤),每拍换。
  *  (D) 以前 K6 降级卡的「就绪」只看流表有没有**任意**一段。现在按当前位置起的覆盖窗口判
  *      (流按分段、快照按帧;mechanism/rendering.md「降级」:从当前位置起 1 秒,不足 1 秒到片段结束)。
- *  一次投递在 2 MB 内按优先级装:无流 > 超预算 > 海报;装不下的这一拍保留上一张,不摘。
+ *  一次投递在 2 MB 内按优先级装:无流 > 超预算;装不下的这一拍保留上一张,不摘。
  */
 import { srcUrl } from "../testing/registerTs.mjs";
 import { test, mock, beforeEach } from "node:test";
@@ -47,16 +47,20 @@ function fakeStage() {
   return st;
 }
 
-test("(C) 播放中流覆盖这一段:照样选快照兜底,标成海报;暂停时照常", () => {
+test("(C) 流盖着这一段:播放、暂停都不选快照,不催预渲染进程补帧;这一段没有流的才选", () => {
   push({ type: "layer", clipId: "h", kind: "html", key: "K", ranges: [[0, 299]] });
-  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]], originFrame: 0 });
-  const playing = feed.planFeed({ project, t: 1, playing: true });
-  assert.ok(playing.heavy.includes("h"));
-  assert.ok(playing.picks.has("h"), "流画不出来时有快照顶上,不透明");
-  assert.equal(playing.picks.get("h").tier, "poster");
-  assert.ok(!playing.wanted.some((w) => w.clipId === "h"), "有流的层不催预渲染进程补精确帧");
-  const paused = feed.planFeed({ project, t: 1, playing: false });
-  assert.equal(paused.picks.get("h").tier, "none");
+  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 9]], originFrame: 0 });
+  for (const playing of [true, false]) {
+    const f = feed.planFeed({ project, t: 1, playing });
+    assert.ok(f.heavy.includes("h"));
+    assert.equal(f.streamPlanes.length, 1, `playing=${playing}:这一帧发流平面`);
+    assert.ok(!f.picks.has("h"), `playing=${playing}:有流不读快照`);
+    assert.ok(!f.wanted.some((w) => w.clipId === "h"), "有流的层不催预渲染进程补精确帧");
+  }
+  // 第 19 段(第 285 帧起)的流还没产出来:落回快照这条路
+  const beyond = feed.planFeed({ project, t: 9.5, playing: true });
+  assert.equal(beyond.streamPlanes.length, 0);
+  assert.equal(beyond.picks.get("h").tier, "none");
 });
 
 test("(D) K6:当前段没有流、也没有快照 → 不切进抑制,照常活渲", () => {
@@ -120,13 +124,21 @@ test("超出解码器预算的层当「无流」:不进流平面,快照每拍换
   const f = feed.planFeed(head);
   const last = ids.at(-1);
   assert.equal(f.picks.get(last).tier, "over");
-  assert.equal(f.picks.get(ids[0]).tier, "poster");
+  assert.ok(!f.picks.has(ids[0]), "预算放行的那几条有流,不读快照");
+  // 暂停 / 拖动同样按预算截;超出的那一张也抑制着(落到快照,再落到占位符),不露出没推到位的活组件
+  const paused = feed.planFeed({ ...head, playing: false });
+  assert.equal(paused.streamPlanes.length, DECODER_BUDGET);
+  assert.deepEqual(paused.scrub, [...ids].sort());
+  assert.equal(paused.picks.get(last).tier, "over");
+  assert.deepEqual(feed.pickForSetTime({ ...head, playing: false }).awaiting, [], "被抑制着的卡不等快照");
 });
 
-test("海报:挂着的快照离当前帧不到 15 帧不换;无流的层每拍换", async () => {
+test("流盖着的层一张快照都不投、一个字节都不取;无流的层每拍换;流到了以后把先前挂着的那张摘掉", async () => {
   push({ type: "layer", clipId: "h", kind: "html", key: "K", ranges: [[0, 299]] });
   push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]], originFrame: 0 });
   push({ type: "layer", clipId: "d", kind: "html", key: "D", ranges: [[0, 299]] });
+  const fetched = [];
+  feed.setSnapshotSource({ subscribeReady: () => () => {}, fetchSnapshot: async (kind, key, f) => { fetched.push(`${key}@${f}`); return `<div>${key}@${f}</div>`; } });
   const stage = fakeStage();
   const at = async (t) => {
     await feed.deliverSnapshots(stage, "front", { project, t, playing: true });   // 发起取字节(字节还没到,这一次投不了)
@@ -135,31 +147,38 @@ test("海报:挂着的快照离当前帧不到 15 帧不换;无流的层每拍�
     await feed.deliverSnapshots(stage, "front", { project, t, playing: true });
   };
   await at(1);
-  assert.equal(stage.calls.at(-1).patch.h, "<div>K@30</div>");
-  stage.calls.length = 0;
+  assert.deepEqual(stage.calls.at(-1).patch, { d: "<div>D@30</div>" });
   await at(1 + 10 / 30);
-  assert.ok(!("h" in (stage.calls.at(-1)?.patch ?? {})), "海报离当前帧 10 帧:不换");
-  assert.equal(stage.calls.at(-1).patch.d, "<div>D@40</div>", "无流的 d 每拍换");
-  await at(1 + 16 / 30);
-  assert.equal(stage.calls.at(-1).patch.h, "<div>K@46</div>", "满 15 帧了:换一张");
+  assert.deepEqual(stage.calls.at(-1).patch, { d: "<div>D@40</div>" }, "无流的 d 每拍换");
+  assert.ok(!fetched.some((id) => id.startsWith("K@")), `流盖着的 h 不取快照的字节:${fetched}`);
+  // d 的流产出来了(这一段就绪):它挂着的那张快照摘掉,画面由流接手
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[0, 19]], originFrame: 0 });
+  now += 40;
+  await feed.deliverSnapshots(stage, "front", { project, t: 1 + 10 / 30, playing: true });
+  assert.deepEqual(stage.calls.at(-1).patch, { d: null });
 });
 
-test("一次投递 ≤ 2 MB,按优先级装:无流 > 海报;装不下的保留上一张,不摘", async () => {
+test("一次投递 ≤ 2 MB,按优先级装:无流 > 超预算;装不下的保留上一张,不摘", async () => {
   const big = "x".repeat(1.5 * 1024 * 1024);
-  push({ type: "layer", clipId: "h", kind: "html", key: "K", ranges: [[0, 299]] });
-  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]], originFrame: 0 });
-  push({ type: "layer", clipId: "d", kind: "html", key: "D", ranges: [[0, 299]] });
-  bodies.set("K@30", big);
-  bodies.set("D@30", big);
-  const head = { project, t: 1, playing: true };
+  // 前 DECODER_BUDGET 张有流、预算放行(不投快照);第 7 张 over 有流但超预算;none 没有流
+  const ids = [...Array.from({ length: DECODER_BUDGET }, (_, i) => `s${i}`), "over", "none"];
+  heavyIds = ids;
+  const p = projectOf(ids);
+  for (const id of ids) {
+    push({ type: "layer", clipId: id, kind: "html", key: `K${id}`, ranges: [[0, 299]] });
+    if (id !== "none") push({ type: "layer", clipId: id, kind: "stream", key: `S${id}`, ranges: [[0, 19]], originFrame: 0 });
+  }
+  bodies.set("Kover@30", big);
+  bodies.set("Knone@30", big);
+  const head = { project: p, t: 1, playing: true };
   const stage = fakeStage();
   await feed.deliverSnapshots(stage, "front", head);   // 发起取字节
   await settle();
   now += 40;
   await feed.deliverSnapshots(stage, "front", head);
   assert.equal(stage.calls.length, 1, "一次只投一包");
-  assert.deepEqual(Object.keys(stage.calls[0].patch), ["d"], "无流的 d 先装,海报 h 这一拍装不下");
+  assert.deepEqual(Object.keys(stage.calls[0].patch), ["none"], "无流的先装,超预算的这一拍装不下");
   now += 40;
   await feed.deliverSnapshots(stage, "front", head);
-  assert.deepEqual(Object.keys(stage.calls[1].patch), ["h"], "下一拍再装 h;d 没有被摘");
+  assert.deepEqual(Object.keys(stage.calls[1].patch), ["over"], "下一拍再装;先装上的那张没有被摘");
 });
