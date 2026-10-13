@@ -339,7 +339,7 @@ export async function bakeOne(
   const post = { bg: rgb ? rgb[1].toLowerCase() : null, stats: true };
   const r = pre ?? (o.runner
     ? await renderOneFrame(root, origin, target, at, [], priority, { signal: o.signal, runner: o.runner, post })
-    : await enqueue(() => renderOneFrame(root, origin, target, at, [], priority, { signal: o.signal, post, lane: o.lane }), priority, 0, o.signal));
+    : await enqueue(() => renderOneFrame(root, origin, target, at, [], priority, { signal: o.signal, post, bitmapOnly: true, lane: o.lane }), priority, 0, o.signal));
 
   /*
    * 经素材服务的接口写进 `px`(分片、收尾时按 sha256 校验,校验过才对外可取,所以读的人拿不到半张),
@@ -408,7 +408,7 @@ export async function bakeClip(
   const atList = missing.map((m) => m.at);
   const shots = o.runner
     ? await renderFrames(root, origin, target, atList, [], priority, { signal: o.signal, runner: o.runner, post })
-    : await enqueue(() => renderFrames(root, origin, target, atList, [], priority, { signal: o.signal, post, lane: o.lane }), priority, 0, o.signal);
+    : await enqueue(() => renderFrames(root, origin, target, atList, [], priority, { signal: o.signal, post, bitmapOnly: true, lane: o.lane }), priority, 0, o.signal);
 
   // 渲好的按帧号交回 bakeOne,缓存键、入库、返回值全走那一套
   const byT = new Map<number, FrameResult>();
