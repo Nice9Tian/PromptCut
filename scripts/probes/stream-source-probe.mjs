@@ -28,12 +28,15 @@
  *      等流平面画出这一帧,截舞台,和**完整项目的导出页同一帧**比,同样比前后各一帧,最像的必须是它自己。tilt 的流里是平面画面,
  *      贴的时候由包裹层做三维变形,所以这一条同时验「贴的时候再做变形,结果和导出一致」;fx 的那一段舞台上没有别的东西在画视频。
  *   5. 真的播放一小段再暂停:不跳帧,暂停的那一帧同样比。
+ *      (「停下以后回到精确活渲」不在这里核:测试页没有成本记录和分派表,舞台不起追帧。三维外框的那一种在真的编辑器里核,
+ *      `scrub-stream-probe.mjs --tilt`;素材效果卡没有成本记录,停下以后怎么回到活渲是原来就有的另一条路,这次没有动。)
  *   6. **改了输入**:视频的裁剪起点(fx)、卡的参数(trans)、三维的角度(tilt)各改一处。fx、trans 的流键换了(旧流不属于这一版,
  *      就绪消息里是新键),重产;tilt 的流键不变、一个分段都不重产。重产完以后三条流各抽几帧,舞台贴出来的和**改过的项目**的导出同一帧最像
  *      (tilt 那几帧验的是同一条流照新的角度贴)。
  *
  * `--measure`:只量。一个项目里只有一段视频套一张素材效果卡(缺省 10 秒、1920×1080),从 `preload` 起计时:稀疏版铺满用了多久、
- * 满密度补齐用了多久、这条流稀疏版和满密度版各多大。不比像素。耗时只记录,不是通过条件。
+ * 满密度补齐用了多久、这条流稀疏版和满密度版各多大。不比像素。耗时只记录,不是通过条件。缺省用 motion 式的那张卡(产流时每帧都推);
+ * 加 `--direct` 换成 remotion 式的写法(稀疏版直接跳到要截的帧)。
  *
  * 输出 JSON 结论,过程写 stderr;任何一条不过就以非零退出。
  */
@@ -58,6 +61,8 @@ const args = process.argv.slice(2);
 const PORT = Number(flagArg('port', '0', args));
 const KEEP = args.includes('--keep');
 const MEASURE = args.includes('--measure');
+/** `--measure --direct`:素材效果卡换成 remotion 式的那一张(产流时不回放、稀疏版直接跳到要截的帧) */
+const DIRECT = args.includes('--direct');
 const JSON_OUT = flagArg('json', null, args);
 const HOST_PORT = Number(flagArg('host-port', '0', args)) || 0;
 const RUN = Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
@@ -100,7 +105,7 @@ async function makeVideo(ffmpeg, id, filter, seconds, width, height) {
   return { id, kind: 'video', name: `${id}.mp4`, url: `/@media/${hash}`, hash, duration: seconds, width, height, fps: FPS, bytes: bytes.length };
 }
 
-const TINT = 'probe-source-tint', FADE = 'probe-source-fade';
+const TINT = 'probe-source-tint', FADE = 'probe-source-fade', TINT_DIRECT = 'probe-source-tint-direct';
 /** 两张素材效果卡,写进临时的卡片改动层。反色那张写成 motion 式(产流时从挂载帧回放),溶解那张是 remotion 式(不回放) */
 async function writeCards() {
   const dir = path.join(OVERRIDES, 'src', 'cards', 'user');
@@ -116,6 +121,30 @@ export const probeSourceTint: CardDef<{ amount: number }> = {
   source: "user",
   kind: "filter",
   frameMode: "stateful",
+  inputs: { source: { description: "输入画面" } },
+  defaults: { amount: 1 },
+  controls: [],
+  card: (sources, t, params) => glsl(
+    \`uniform sampler2D u_input0;
+     uniform float amount;
+     void main() { vec4 c = texture(u_input0, v_uv); outColor = vec4(mix(c.rgb, 1.0 - c.rgb, amount), 1.0); }\`,
+    [sources.source.at(t)],
+    { amount: params.amount },
+  ),
+};
+`);
+  // 同一张反色卡的 remotion 式写法(`--measure --direct` 用)
+  await fs.writeFile(path.join(dir, `${TINT_DIRECT}.tsx`), `import "../../kernel/remotionStyle";
+import type { CardDef } from "../../kernel/types";
+import { glsl } from "../../render/cards/graphValues";
+
+export const probeSourceTintDirect: CardDef<{ amount: number }> = {
+  id: "${TINT_DIRECT}",
+  name: "源依赖探针:反色(remotion 式)",
+  description: "把输入画面按强度混向它的反色",
+  source: "user",
+  kind: "filter",
+  frameMode: "direct",
   inputs: { source: { description: "输入画面" } },
   defaults: { amount: 1 },
   controls: [],
@@ -195,11 +224,12 @@ function project(media, { fxOffset = 0.4, swap = 0, rotateY = TILT_FRAME.rotateY
 
 /** `--measure` 的项目:只有一段视频套一张素材效果卡,从第 0 帧起、整段 */
 function measureProject(media, seconds) {
+  const card = DIRECT ? TINT_DIRECT : TINT;
   return {
     id: 'stream-source-measure', name: '源依赖卡的流:量耗时与体积', width: WIDTH, height: HEIGHT, fps: FPS, duration: seconds,
     themeId: 'dark', media: [media.c], filters: [], pixelMaps: [], audioFx: [], style: {},
-    cardNodes: [{ id: 'n-fx', adapter: 'card', cardId: TINT, kind: 'filter', params: { amount: 1 }, inputs: { source: { nodeId: '@clip/fx/source', offset: 0, rate: 1 } } }],
-    tracks: [{ id: 'tr-fx', name: 'fx', hidden: false, clips: [{ id: 'fx', cardId: TINT, nodeId: 'n-fx', mediaId: media.c.id, mediaOffset: 0, start: 0, end: seconds, params: { amount: 1 }, volume: 0 }] }],
+    cardNodes: [{ id: 'n-fx', adapter: 'card', cardId: card, kind: 'filter', params: { amount: 1 }, inputs: { source: { nodeId: '@clip/fx/source', offset: 0, rate: 1 } } }],
+    tracks: [{ id: 'tr-fx', name: 'fx', hidden: false, clips: [{ id: 'fx', cardId: card, nodeId: 'n-fx', mediaId: media.c.id, mediaOffset: 0, start: 0, end: seconds, params: { amount: 1 }, volume: 0 }] }],
   };
 }
 
@@ -246,6 +276,7 @@ function createStageRpc(target, targetOrigin) {
   return c;
 }
 window.__frames = [];
+window.__settled = [];
 const waitReady = (frame, targetOrigin) => new Promise((res) => {
   window.addEventListener('message', (e) => {
     if (e.source !== frame.contentWindow || e.data?.type !== 'pc-stage-ready') return;
@@ -253,7 +284,7 @@ const waitReady = (frame, targetOrigin) => new Promise((res) => {
   });
 });
 window.__ready = Promise.all([waitReady(document.getElementById('a'), '${oa}'), waitReady(document.getElementById('b'), '${ob}')])
-  .then(([a, b]) => { window.__rpc = a; window.__rpcB = b; a.onEvent((ev) => { if (ev.type === 'frame') window.__frames.push({ sec: ev.sec, at: performance.now() }); }); return true; });
+  .then(([a, b]) => { window.__rpc = a; window.__rpcB = b; a.onEvent((ev) => { if (ev.type === 'frame') window.__frames.push({ sec: ev.sec, at: performance.now() }); if (ev.type === 'settled') window.__settled.push({ sec: ev.sec, clipIds: ev.clipIds }); }); return true; });
 </script></body></html>`;
 
 /* ------------------------------------------------------------------ 主流程 */
@@ -346,14 +377,13 @@ try {
     const frames = state.spec.lastFrame - state.spec.originFrame + 1;
     const cap = state.capture ?? {};
     out.result = {
-      seconds: MEASURE_SECONDS, frames, segments, encoder: dense.encoder, solo: state.spec.solo ?? null, replay: state.spec.replay,
+      seconds: MEASURE_SECONDS, frames, segments, card: DIRECT ? 'remotion 式' : 'motion 式', encoder: dense.encoder, solo: state.spec.solo ?? null, replay: state.spec.replay,
       sourceVideoBytes: media.c.bytes,
       sparseMs, denseMs, denseOnlyMs: denseMs - sparseMs,
       sparseBytes: sparseBytes.sparse, denseBytes: denseBytes.dense, initBytes: denseBytes.inits,
-      perFrame: { sparseCaptureMs: sparseCapture.frames ? round2(sparseCapture.captureMs / sparseCapture.frames) : null,
-        sparseStepMs: sparseCapture.frames ? round2(sparseCapture.stepMs / (frames)) : null,
-        denseCaptureMs: cap.frames > (sparseCapture.frames ?? 0) ? round2((cap.captureMs - (sparseCapture.captureMs ?? 0)) / (cap.frames - (sparseCapture.frames ?? 0))) : null,
-        denseStepMs: cap.frames > (sparseCapture.frames ?? 0) ? round2((cap.stepMs - (sparseCapture.stepMs ?? 0)) / (cap.frames - (sparseCapture.frames ?? 0))) : null },
+      // 取图那一段的累计(生产者自己记的):截了几张、截图一共多少毫秒、推帧(含等素材效果卡解出这一帧的视频)一共多少毫秒
+      sparsePass: { captured: sparseCapture.frames ?? 0, captureMs: Math.round(sparseCapture.captureMs ?? 0), stepMs: Math.round(sparseCapture.stepMs ?? 0) },
+      densePass: { captured: (cap.frames ?? 0) - (sparseCapture.frames ?? 0), captureMs: Math.round((cap.captureMs ?? 0) - (sparseCapture.captureMs ?? 0)), stepMs: Math.round((cap.stepMs ?? 0) - (sparseCapture.stepMs ?? 0)) },
       tight: state.manifest.tight, bound: state.manifest.bound, resets: state.resets ?? null, replayedFrames: state.replayedFrames ?? 0,
     };
     say('measure', out.result);
