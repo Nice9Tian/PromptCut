@@ -455,6 +455,11 @@ test('W1-RUN-01 对话设为私有:浏览器整棵进程树退出,旧上下文�
   assert.equal(f.tools.describe().open, 0);
   assert.ok(fs.existsSync(path.join(dir, 'profile')), '只收回资源时目录还在');
 
+  // 浏览器的 HOME 就是会话目录:Linux 上它还会往这些地方写(证书库、缓存、配置)。设私有时要一起清掉
+  for (const extra of ['.pki/nssdb/cert9.db', '.cache/chromium/x', '.config/chromium/Local State', 'stray.txt']) {
+    fs.mkdirSync(path.dirname(path.join(dir, extra)), { recursive: true });
+    fs.writeFileSync(path.join(dir, extra), 'left by the browser');
+  }
   // 宿主按「私有」关这个对话:目录删掉(换了一批能看这个对话的人,之前的登录态不带过去)
   const closed = await f.tools.closeConversation({ projectId, conversationId }, { reason: 'private' });
   assert.deepEqual(closed, { wasOpen: false, exited: true, alivePids: [], profileRemoved: true });

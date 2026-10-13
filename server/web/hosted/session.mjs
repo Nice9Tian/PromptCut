@@ -46,12 +46,17 @@ function readRev(sessionDir) {
   } catch { return 0; }
 }
 
-/** 清掉一个对话的浏览器数据。`keepRev`:只删用户数据目录与临时文件,留下清单版本的计数 */
+/** 清掉一个对话的浏览器数据。`keepRev`:留下清单版本的计数(一个数),其余全删 */
 export async function removeSessionData(sessionDir, { keepRev = false, timeoutMs = 8_000 } = {}) {
   if (!keepRev) return removeDirFully(sessionDir, { timeoutMs });
+  // 除了版本计数,目录里的东西全删:浏览器的 HOME 就是这个目录,Linux 上它除了 profile/ 还会往 .pki/、.cache/、.config/ 里写
+  let names;
+  try { names = fs.readdirSync(sessionDir); } catch { return true; }
   let ok = true;
-  for (const name of ['profile', '.tmp']) ok = await removeDirFully(path.join(sessionDir, name), { timeoutMs }) && ok;
-  try { fs.rmSync(path.join(sessionDir, OWNER_FILE), { force: true }); } catch { /* 删不掉不影响 */ }
+  for (const name of names) {
+    if (name === REV_FILE) continue;
+    ok = await removeDirFully(path.join(sessionDir, name), { timeoutMs }) && ok;
+  }
   return ok;
 }
 
