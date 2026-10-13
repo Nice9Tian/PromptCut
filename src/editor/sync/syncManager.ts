@@ -1253,7 +1253,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
           if (!isCurrent()) return;
           void renew().catch(error => { if (error instanceof AccountFailure && (error.status === 401 || error.status === 403)) fail(error); });
           void life.tick();
-        }, 3000);
+        }, 3000);
         cur.offs.push(() => clearInterval(metadataTimer));
         // 页面回到前台、网络恢复、电脑睡眠醒来:不等定时器(后台标签页的定时器会被浏览器压到一分钟一次),当场看一眼连接到期没有
         const wake = () => { if (isCurrent() && (typeof document === "undefined" || document.visibilityState !== "hidden")) void life.tick(); };
