@@ -94,7 +94,7 @@ test("流的分段从它自己的第一帧起数:片段从第 100 帧开始,父�
   assert.equal(planesAt(115).length, 0);
   assert.equal(planesAt(100 + 7 * 15).length, 1, "第 7 段是第 205～219 帧");
   // 没带第一帧的层(改分段规则之前的生产者发的):没法换算,当作没有流
-  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[0, 19]] });
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[0, 19]] });   // 故意不带 originFrame
   assert.equal(planesAt(115).length, 0);
   assert.equal(feed.planFeed({ project: p, t: 115 / 30 + 1e-4, playing: true }).picks.get("d").tier, "none", "照没有流的层处理:快照每拍换");
   // K6 的就绪:从第 115 帧起 1 秒(到第 144 帧)要第 1、2 段都在
