@@ -66,7 +66,23 @@ node scripts/acceptance/four-stage-acceptance.mjs --rows-from <目录>/results.j
 
 ### 5.2 其余在线构建探针
 
-(实跑结果见下一节,待填。)
+这一步的目的:清单里「云端项目一律走账号」以后必然跑不通的老项,逐条判。判法:在线构建(`vite build --mode online`)的开始页只有账号登录;探针进项目要等旧的加入表单就必败。我用 0.7.18 的端口段把它们各实跑了一遍(中途发现自己的端口平移把同一探针的相邻端口撞了,改成按老端口的相对位置平移后重跑;跑完按进程号收掉了子进程,收尾查 28990～29049 没有残留监听)。
+
+| 项 | 实跑结果 | 判定 |
+|---|---|---|
+| P-online-user-cards、P-c10-ui、P-online-stage-watch、P-online-stage-handshake、P-online-nav-stress | 日志里都是等 `[data-pc="join-form"]` 超时(nav-stress 在 200 次导航循环里 240 秒时限到) | 旧入口已废,不适用 |
+| S1-5(声音 A、B) | 桌面一半 23 条检查过,在线一半等 join-form 超时 | 旧入口已废,不适用(桌面一半的证据另有) |
+| S2-1、S2-2、S2-3、S2-4、S2-5(第二段在线用户卡 5 支) | 日志里都是等 join-form 超时 | 旧入口已废,不适用 |
+| S1-4(声音预览) | 62 条检查里桌面一半过,唯一失败是等 `join-invite-project` 超时 | 旧入口已废,不适用 |
+| S4-6(界面版「关掉软件照常运转」) | 桌面发起那一半的检查过(它跑在已退役的口令式房间本机组合上),200 秒时限内没走到在线那一步;读代码:第 233 行 `joinOnline` 等 join-form | 旧入口已废,不适用(读代码加半段实跑) |
+| P-c10-browser-a4 / -full / -user-card | 见 5.1 | 旧入口已废,不适用 |
+| X-online-join、X-c10a-demo-local(可选项) | 没实跑,只读代码:前者就是测 join-form,后者 7 处用 join-form | 旧入口已废,不适用(只读代码) |
+| P-online-stale-layer | 能进项目(不走 join-form);6 条断言不过(静置后仍贴旧层等),原因没查 | **不是入口问题**,不改,写进「已知」,属渲染一带 |
+| P-m7-node、P-desktop-auto-node | 200 秒时限内没跑完(P-m7-node 到了 `node.ready`,P-desktop-auto-node 桌面页面测量完),不走 join-form | 没判结论,不改,写进「已知」 |
+| P-m7-browser | 200 秒时限内被我收掉,没判 | 没判结论 |
+| P-multi-agent、S3-2、S4-5 等 | 没实跑 | 没判;它们用的是桌面 dev server 加本机口令式房间组合,在已退役模式上也许还能过,但那不是 0.7.18 的依据 |
+
+清单里这些「不适用」项保留原命令(`was` 字段),运行器记 `na`,不再留必然失败的项。能改成账号入口的只改了 S4-4(第 4 节);其余改造等于重搭创建者那一半,不在这一块里做,逐项的「原来验什么、现在没人验什么」:在线页面的舞台握手与看守(stage-watch/handshake/nav-stress)、用户卡与图卡在线执行的安全与功能验收(S2-1～S2-5,含越权探测卡读不到凭证:**这是第二段的核心项,现在没有在线浏览器层的证据**,服务端层的越权探测在 `hosted-render-isolation-probe` 里,要主会话判是否要在账号模式下重搭)、在线声音 A/B 与预览(S1-4、S1-5 的在线一半)、界面版体验探针的在线一半(S4-6)。
 
 ## 6. 发现的产品问题
 
@@ -88,6 +104,69 @@ node scripts/acceptance/four-stage-acceptance.mjs --rows-from <目录>/results.j
 - 端口写死、不在我段里的探针(`account-user-pages-probe` 63xx、`account-conversation-controls-probe` 662x、`cloud-queue-user-pages-probe` 652x、`project-member-controls-probe` 656x、`account-real-runner-probe` 67xx、`account-executor-visible-probe` 664x、`cloud-agent-consent-user-path-probe` 665x、`password-order-probe` 5760 段):登记成 optional 项并写明端口,**没跑**,它们提供的页面证据(2.1-1 页面、2.1-2 列表可点开、2.1-3 界面)现在是「未跑」。要补要么另派一块把它们的端口改成可参数,要么主会话在空闲的 63xx～66xx 上手工跑。
 - 老清单里端口在 5xxx/87xx 的 S4-1、S4-2、S4-3(`cloud-agent-run-probe` 写死 8798/5741)没通过运行器跑(不在我的端口段里),所以 2.3-4 的旧模式对照项现在记「未跑」。
 
+## 8.5 实跑的 38 行结论表(2026-10-13,本机,提交 `0a0fdb43`)
+
+命令:`node scripts/acceptance/four-stage-acceptance.mjs --only V18,G0-1,G0-2,G0-3,G0-4,G0-6,S4-4 --no-optional --rows --flaky-rerun 1 --dev-port 29040 --out <目录>`(设了两个账号环境变量)。这台机器上同时有别的子 Agent 在跑全量测试和探针,负载很重,所以有 6 项首次失败、重跑通过,按规矩记「不稳定」、算失败:`V18-auth-agent-path`(2.3-3、2.3-4、2.3-7 因它记失败)、`V18-credentials-support`(2.1-13)、`V18-tools-isolation`(2.3-4,15 条因端口被占)、`V18-tools-tests`(2.1-20);前一遍实跑(提交 `627f0e80`,机器闲些)里这几项除 `V18-conv-access`、`V18-tools-tests` 外都是第一遍就过,单跑也过。**这几行的失败是机器忙,不是产品问题**,发版时在空闲机器上重跑。`G0-2` 两遍各有一条不同的测试被机器忙拖垮(`边改写边读…` 与 `subject_install…`),单独重跑都过,见第 9 节。
+
+### 38 行结论(运行器 `--rows` 原样输出)
+
+- 提交:`0a0fdb43814c5dda53c374161adc14df5d3319a0`;机器 DESKTOP-GS40TCK;2026-10-13T08:04:51.327Z → 2026-10-13T08:53:09.310Z
+- 合计 38 行:通过 2、失败 10、未跑 24、不适用 2。规则:一行里只要有一项失败就是失败;有项没跑而其余通过是「未跑」并列出没跑的项,**没跑不算通过**。
+- 「没跑」包括:本次没选中的项、人工看的项、要安装包、要部署到节点以后、要真实网络、等某条分支合入、前置没过。
+
+| 行 | 项目 | 结论 | 由哪些清单项得出 | 失败原因 / 没跑的原因 |
+|---|---|---|---|---|
+| 2.1-1 | 云端登录与限次数 | **未跑** | ✓V18-auth-credentials ✓V18-auth-account-path ✓V18-account-core ·V18-account-pages-probe ·V18-net-public-pages | 没跑:V18-account-pages-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-net-public-pages(要真实网络;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.1-2 | 项目权限与两张列表 | **未跑** | ✓V18-auth-account-path ✓V18-account-core ·V18-account-pages-probe ·V18-member-controls-probe | 没跑:V18-account-pages-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-member-controls-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名) |
+| 2.1-3 | Agent 共有/私有及发送者 | **未跑** | ✓V18-conv-controls ✓V18-conv-access ✓V18-cloud-chat-tests ·V18-conv-controls-probe ✓V18-operation-history ·V18-operation-wiring | 没跑:V18-conv-controls-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-operation-wiring(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名) |
+| 2.1-4 | Agent 已读消息撤回例外 | **通过** | ✓V18-conv-readexception ✓V18-conv-access |  |
+| 2.1-5 | 设备退出与延迟撤回 | **未跑** | ✓V18-conv-readexception ✓V18-conv-access ✓V18-conv-password-probe ·V18-password-order | 没跑:V18-password-order(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名) |
+| 2.1-6 | 本地项目回归 | **未跑** | ✓V18-files-local-regression ✓V18-local-legacy-tests ·V18-lan-real | 没跑:V18-lan-real(要真实网络;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.1-7 | 正常云端文件重开 | **未跑** | ✓V18-files-account-fixture ·V18-gap-file-association ✓V18-reopen-recovery | 没跑:V18-gap-file-association(要人工看:要用户定:账号项目另存为文件再打开,文件里没有「它原来是哪个云端项目」的记号(syncManager.ts enterAccountProject 里 setAssociation(null)),所以「从文件…) |
+| 2.1-8 | 过期云端项目转本地 | **失败** | ✓V18-account-core ·V18-gap-file-association ✗V18-files-recovery-states ✓V18-files-old-proc-fixtures ·V18-missing-tests ·V18-missing-probe | 失败:V18-files-recovery-states(有 2 条 todo(已知不成立的断言,npm test 不因它变红)没转绿:ACC018-STATE-4 错误节点上的「没有此房间」(HTTP 404 / no-project):不能当作房间已删除;ACC018-STATE-5 本机凭证被撤销(旧凭证):要认证,不能当作房间已删除) / 没跑:V18-gap-file-association(要人工看:要用户定:账号项目另存为文件再打开,文件里没有「它原来是哪个云端项目」的记号(syncManager.ts enterAccountProject 里 setAssociation(null)),所以「从文件…);V18-missing-tests(等 claude/v18-missing 合入:本检出没有 server/test/cloud-gone-recovery.test.mjs、server/test/legacy-gone-proof.test.mjs…);V18-missing-probe(等 claude/v18-missing 合入:本检出没有 scripts/probes/v18-missing-probe.mjs) |
+| 2.1-9 | 非过期与坏文件 | **失败** | ✗V18-files-proc-damage ✗V18-files-recovery-states ✓V18-reopen-recovery ·V18-missing-tests ·V18-missing-probe | 失败:V18-files-proc-damage(有 2 条 todo(已知不成立的断言,npm test 不因它变红)没转绿:ACC018-DMG-5 坏关联(房间号不合法):读取失败时不能先把当前项目的剧本和对话换掉;ACC018-DMG-6 未知的 .proc 文件版本:不能当 v1 静默读入再按 v1 存回(会丢掉不认识的字段));V18-files-recovery-states(有 2 条 todo(已知不成立的断言,npm test 不因它变红)没转绿:ACC018-STATE-4 错误节点上的「没有此房间」(HTTP 404 / no-project):不能当作房间已删除;ACC018-STATE-5 本机凭证被撤销(旧凭证):要认证,不能当作房间已删除) / 没跑:V18-missing-tests(等 claude/v18-missing 合入:本检出没有 server/test/cloud-gone-recovery.test.mjs、server/test/legacy-gone-proof.test.mjs…);V18-missing-probe(等 claude/v18-missing 合入:本检出没有 scripts/probes/v18-missing-probe.mjs) |
+| 2.1-10 | 暂时离线改动与冲突 | **不适用** | -V18-na-offline-conflict | 账号任务书第 186 行:归 0.7.19 |
+| 2.1-11 | 保存与修改状态检查 | **不适用** | -V18-na-save-state | 账号任务书第 186 行:归 0.7.19 |
+| 2.1-12 | 缺失视觉/音频素材 | **未跑** | ✓V18-files-missing-voice ·V18-missing-tests ·V18-missing-bakery-tests ·V18-missing-probe ·V18-missing-online-probe | 没跑:V18-missing-tests(等 claude/v18-missing 合入:本检出没有 server/test/cloud-gone-recovery.test.mjs、server/test/legacy-gone-proof.test.mjs…);V18-missing-bakery-tests(等 claude/v18-missing 合入:本检出没有 server/bakery/audio-mix.test.mjs、server/bakery/export-missing-font.test.mjs);V18-missing-probe(等 claude/v18-missing 合入:本检出没有 scripts/probes/v18-missing-probe.mjs);V18-missing-online-probe(等 claude/v18-missing 合入:本检出没有 scripts/probes/v18-missing-online-probe.mjs) |
+| 2.1-13 | 内部核对口与凭证 | **失败** | ✓V18-auth-credentials ✗V18-credentials-support ·V18-linux-os-probes ·V18-net-cert-proxy | 失败:V18-credentials-support(不稳定(稳定性 1/2):退出码 1(要 0);输出里没有 /最终结果[:：]零失败/;fail=1,要 0) / 没跑:V18-linux-os-probes(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));V18-net-cert-proxy(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.1-14 | 备份恢复 | **未跑** | ✓V18-files-account-fixture ·V18-backup-node | 没跑:V18-backup-node(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.1-15 | 最终产品交互验收(运行器本身) | **未跑** | ✓V18-runner-coverage ✓V18-runner-tests ·V18-release-timings | 没跑:V18-release-timings(要人工看:发版动作:node scripts/acceptance/four-stage-acceptance.mjs --rows --out work/four-stage/final/<时间戳> --flaky-…) |
+| 2.1-16 | 完整安装包 | **未跑** | ·V18-installer-build ·V18-installer-smoke | 没跑:V18-installer-build(要安装包:git rev-parse HEAD 记来源提交;cd desktop && npm run release -- --from-head(完整安装包与兼容补丁一起出);产物在 desktop/release…);V18-installer-smoke(要安装包:在隔离的安装位置装(不覆盖用户在用的那份):cd desktop && node scripts/smoke-all.mjs <exe 绝对路径>(smoke-boot 加 smoke-shutdown);账…) |
+| 2.1-17 | 兼容补丁 | **未跑** | ·V18-installer-compat | 没跑:V18-installer-compat(要安装包:读 desktop/release/manifest-0.7.18.json 与 make-patch.mjs 的 MIN_SHELL_VERSION(0.2.0);做 0.2.0 与 0.2.7 外壳的隔离…) |
+| 2.1-18 | 真实网络环境验收 | **未跑** | ·S1-r2 ·S1-r3 ·S2-r1 ·S3-r1 ·S3-r2 ·S3-r3 ·S3-r4 ·S3-r5 ·S3-r6 ·S3-r7 ·S4-r1 ·S4-r2 ·S4-r4 ·S4-r5 ·S4-r6 ·S4-r7 ·V18-net-public-pages ·V18-net-cert-proxy ·V18-net-reconnect ·V18-net-account-limits | 没跑:S1-r2(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S1-r3(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S2-r1(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S3-r1(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S3-r2(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S3-r3(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S3-r4(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S3-r5(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S3-r6(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S3-r7(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-r1(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-r2(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-r4(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-r5(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-r6(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-r7(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));V18-net-public-pages(要真实网络;本次没选真实网络验证(--level network 只生成待办));V18-net-cert-proxy(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));V18-net-reconnect(要真实网络;本次没选真实网络验证(--level network 只生成待办));V18-net-account-limits(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.1-19 | 清理后旧文件验收 | **未跑** | ·V18-gap-file-association ✓V18-files-old-proc-fixtures ·V18-old-files-cleanup | 没跑:V18-gap-file-association(要人工看:要用户定:账号项目另存为文件再打开,文件里没有「它原来是哪个云端项目」的记号(syncManager.ts enterAccountProject 里 setAssociation(null)),所以「从文件…);V18-old-files-cleanup(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.1-20 | 第四阶段剩余工具的验收(= 2.3 的 13 条) | **失败** | ·S4-m5 ✗V18-tools-isolation ✗V18-ui-reverse-channel ✗V18-tools-tests ·V18-wire-wait ·V18-cardsync-wait ·V18-cardsync-probe-wait ·V18-tools-p1-shots ·V18-tools-p3-motion ·V18-tools-p4-subject ·V18-tools-w2-reverse ·V18-tools-c1-collect ·V18-tools-p2-stt ·V18-tools-p5-workflow ·V18-tools-w1-browser ✓行 2.3-1 ✗行 2.3-2 ✗行 2.3-3 ✗行 2.3-4 ·行 2.3-5 ✗行 2.3-6 ✗行 2.3-7 ·行 2.3-8 ·行 2.3-9 ·行 2.3-10 ✗行 2.3-11 ·行 2.3-12 ·行 2.3-13 | 失败:V18-tools-isolation(不稳定(稳定性 1/2):退出码 1(要 0);输出里没有 /最终结果[:：]零失败/;fail=15,要 0);V18-ui-reverse-channel(退出码 1(要 0));V18-tools-tests(不稳定(稳定性 1/2):退出码 1(要 0);输出里没有 /最终结果[:：]零失败/;fail=1,要 0);行 2.3-2(失败:V18-ssr-seam);行 2.3-3(失败:V18-auth-agent-path、V18-ssr-seam);行 2.3-4(失败:V18-auth-agent-path、V18-tools-isolation);行 2.3-6(失败:V18-ui-reverse-channel);行 2.3-7(失败:V18-auth-agent-path);行 2.3-11(失败:G0-2) / 没跑:S4-m5(本次没跑(要人工看));V18-wire-wait(等分支合入:分支 claude/v18-wire 还在做(报告只有开工提交);合入后补接线的单测与端到端命令);V18-cardsync-wait(等 claude/v18-cardsync 合入:本检出没有 server/test/account-card-link.test.mjs、server/test/account-card-sync.test.mjs、…);V18-cardsync-probe-wait(等 claude/v18-cardsync 合入:本检出没有 scripts/probes/account-card-sync-probe.mjs);V18-tools-p1-shots(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-tools-p3-motion(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-tools-p4-subject(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-tools-w2-reverse(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-tools-c1-collect(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-tools-p2-stt(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-tools-p5-workflow(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-tools-w1-browser(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);行 2.3-5(未跑:V18-real-runner-probe、V18-executor-visible-probe、V18-queue-pages-probe、V18-newchat-probe、V18-consent-probe);行 2.3-8(未跑:S4-m3、S4-r4、S4-r5、S4-r6);行 2.3-9(未跑:S4-7、S4-r1、V18-linux-os-probes);行 2.3-10(未跑:S4-m2、V18-doc-semantics-judge);行 2.3-12(未跑:S4-r1、S4-m4、V18-linux-os-probes、V18-release-merge、V18-release-docs);行 2.3-13(未跑:V18-report) |
+| 2.1-21 | 在线浏览器第一步(浏览器新建项目) | **未跑** | ✓V18-auth-account-path ✓V18-auth-start-page ✓V18-account-core ·V18-account-pages-probe | 没跑:V18-account-pages-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名) |
+| RS18-local | 本地取帧优先 | **未跑** | ·V18-local-first | 没跑:V18-local-first(等分支合入:代码没做(块十,等渲染重构),main 上 git grep -nE "本地取帧/本地优先/localFirst/local-first/preferLocal" -- server src 无命中,没有任…) |
+| RS18-queue | 单节点排队 | **未跑** | ✓V18-queue-tests ✓V18-queue-probe ·V18-queue-probe-prod ✓V18-queue-isolation-probe ·V18-queue-507-wait ·V18-queue-node-pressure | 没跑:V18-queue-probe-prod(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-queue-507-wait(等分支合入:没有测试:server/render-node/host.mjs 现在把 507 记成不可重试的失败并暂停认领 10 分钟(块八报告「没做成的」第 3 条),在渲染那一带,等渲染重构合入后做;合入后补一条单…);V18-queue-node-pressure(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办)) |
+| RS18-chat | 50 个对话 | **未跑** | ✓V18-conv-controls ·V18-chats-wait ·V18-chats-probe-wait | 没跑:V18-chats-wait(等 claude/v18-chats 合入:本检出没有 server/test/conversation-delete.test.mjs、server/test/conversation-delete-http.tes…);V18-chats-probe-wait(等 claude/v18-chats 合入:本检出没有 scripts/probes/conversation-delete-probe.mjs) |
+| RS-common | 三版本共同回归 | **未跑** | ✓V18-queue-tests ✓V18-queue-probe ✓V18-queue-isolation-probe ·V18-queue-node-pressure ·V18-local-first | 没跑:V18-queue-node-pressure(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));V18-local-first(等分支合入:代码没做(块十,等渲染重构),main 上 git grep -nE "本地取帧/本地优先/localFirst/local-first/preferLocal" -- server src 无命中,没有任…) |
+| 2.3-1 | 设计与契约先写好 | **通过** | ✓V18-doc-contracts |  |
+| 2.3-2 | 独立入口只经一处载入缝;不动桌面壳 | **失败** | ·S4-m1 ✗V18-ssr-seam ·V18-desktop-shell | 失败:V18-ssr-seam(有 1 条 todo(已知不成立的断言,npm test 不因它变红)没转绿:SEAM-2 独立入口的传递闭包里除 ssr-host 外没有任何文件 import src/) / 没跑:S4-m1(本次没跑(要人工看));V18-desktop-shell(要人工看:命令(只读):git log --oneline release..HEAD -- desktop/ 与 git diff --stat release..HEAD -- desktop/src-tauri/…) |
+| 2.3-3 | 独立入口、多用户多项目多对话互不干扰 | **失败** | ·S4-7 ✗V18-auth-agent-path ✗V18-ssr-seam | 失败:V18-auth-agent-path(不稳定(稳定性 1/2):退出码 1(要 0);输出里没有 /最终结果[:：]零失败/;fail=2,要 0);V18-ssr-seam(有 1 条 todo(已知不成立的断言,npm test 不因它变红)没转绿:SEAM-2 独立入口的传递闭包里除 ssr-host 外没有任何文件 import src/) / 没跑:S4-7(本次没跑(本机就能跑)) |
+| 2.3-4 | 隔离验收(核心项) | **失败** | ·S4-1 ·S4-2 ✗V18-auth-agent-path ✓V18-account-core ✓V18-asset-isolation ✗V18-tools-isolation ·V18-gap-stop-immediate ·V18-linux-os-probes | 失败:V18-auth-agent-path(不稳定(稳定性 1/2):退出码 1(要 0);输出里没有 /最终结果[:：]零失败/;fail=2,要 0);V18-tools-isolation(不稳定(稳定性 1/2):退出码 1(要 0);输出里没有 /最终结果[:：]零失败/;fail=15,要 0) / 没跑:S4-1(本次没跑(本机就能跑));S4-2(本次没跑(本机就能跑));V18-gap-stop-immediate(要人工看:对口径:workflow/project.md 写「立刻停掉」,账号模式在下一个模型或工具检查点停(ACCEPT-018-map 第 6 节 2.3-4.9);主会话看 V18-auth-agent-path…);V18-linux-os-probes(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.3-5 | 在线页面 | **未跑** | ✓S4-4 ✓V18-conv-endtoend ✓V18-cloud-chat-tests ·V18-real-runner-probe ·V18-executor-visible-probe ·V18-queue-pages-probe ·V18-newchat-probe ·V18-consent-probe | 没跑:V18-real-runner-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-executor-visible-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-queue-pages-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-newchat-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-consent-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名) |
+| 2.3-6 | 端到端实测 | **失败** | ·S4-3 ✓S4-4 ·S4-r2 ✓V18-conv-endtoend ✓V18-undo-tests ·V18-real-runner-probe ✗V18-ui-reverse-channel ·V18-cardsync-wait ·V18-cardsync-probe-wait | 失败:V18-ui-reverse-channel(退出码 1(要 0)) / 没跑:S4-3(本次没跑(本机就能跑));S4-r2(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));V18-real-runner-probe(补充项,本次没选中(本机就能跑);加 --include-optional 或 --only 点名);V18-cardsync-wait(等 claude/v18-cardsync 合入:本检出没有 server/test/account-card-link.test.mjs、server/test/account-card-sync.test.mjs、…);V18-cardsync-probe-wait(等 claude/v18-cardsync 合入:本检出没有 scripts/probes/account-card-sync-probe.mjs) |
+| 2.3-7 | G 的接口验收(开关、额度、用量) | **失败** | ✗V18-auth-agent-path | 失败:V18-auth-agent-path(不稳定(稳定性 1/2):退出码 1(要 0);输出里没有 /最终结果[:：]零失败/;fail=2,要 0) |
+| 2.3-8 | 模型 Key 与真实模型三遍 | **未跑** | ·S4-m3 ·S4-r4 ·S4-r5 ·S4-r6 ✓V18-keys-tests | 没跑:S4-m3(本次没跑(要人工看));S4-r4(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-r5(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-r6(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.3-9 | 节点资源 | **未跑** | ·S4-7 ·S4-r1 ✓V18-resource-tests ·V18-linux-os-probes | 没跑:S4-7(本次没跑(本机就能跑));S4-r1(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));V18-linux-os-probes(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办)) |
+| 2.3-10 | 语义按 E～J 改好 | **未跑** | ·S4-m2 ✓V18-doc-semantics ·V18-doc-semantics-judge | 没跑:S4-m2(本次没跑(要人工看));V18-doc-semantics-judge(要人工看:人工逐句对:product/agent.md、architecture.md、platforms.md、hosting.md 与决定 E～J;c10-contract.md、c10a-contract.md …) |
+| 2.3-11 | tsc、npm test、build 全过 | **失败** | ✓G0-1 ✗G0-2 ✓G0-3 ✓G0-4 ✓G0-6 | 失败:G0-2(退出码 1(要 0);输出里没有 /最终结果:零失败/最终结果：零失败/;fail=1,要 0) |
+| 2.3-12 | 合入 main、版本号、部署、release | **未跑** | ·S4-r1 ·S4-m4 ✓V18-resource-tests ·V18-linux-os-probes ·V18-release-merge ·V18-release-docs | 没跑:S4-r1(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));S4-m4(本次没跑(要人工看));V18-linux-os-probes(要部署到节点以后;本次没选真实网络验证(--level network 只生成待办));V18-release-merge(要人工看:要用户授权(原则 4);照 git_and_release.md「release 分支」:基线全绿、npm run build 成功、动了桌面壳所以 desktop/ 的发版构建也要成功;git checko…);V18-release-docs(要人工看:ls server/hosted/deploy / grep agent;grep -n "2b. Agent" docs/plan/hosting-migration.md(这两样现在就在);注意 Agen…) |
+| 2.3-13 | 写报告含〔裁〕清单 | **未跑** | ·V18-report | 没跑:V18-report(要人工看:各块报告里的〔裁〕汇总(grep -c "〔裁" docs/reports/AGENT-v18-*.md);补丁信息见 V18-installer-build;发版时在最终提交上给每行重新下结论(账号任务书「…) |
+
+依据一栏的记号:✓ 这一项通过;✗ 失败;· 没跑;- 不适用。
+
 ## 9. 验证
 
-(基线与实跑结果见下,待填。)
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force`(运行器 G0-1 与合入 main 之后各一遍) | 退出码 0,零错误 |
+| 运行器单测 | `node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/four-stage-acceptance.test.mjs server/test/four-stage-acceptance-v18.test.mjs` | 38 条全过(老的 29 条加新的 9 条) |
+| 覆盖守门 | `node scripts/acceptance/four-stage-acceptance.mjs --check-coverage` | 「守门:通过」,退出码 0(原来:退出码 1,66 个探针没登记) |
+| `cloud-agent-ui-probe.mjs`(S4-4) | 单跑 28 条检查全过、退出码 0(截图在 `docs/reports/assets/v18-runner-list/`);经运行器 `--only S4-4` 再跑一遍 `pass`(116 秒) | 通过 |
+| G0-6(被无声跳过的 cards-layout 集成) | 运行器里起 dev server 跑 | `pass`,skipped 0 |
+| 全量测试 | `npm test`(设了两个账号环境变量) | 合入 main 前一遍:`tests 6446、fail 0、skipped 12、todo 6`,零失败。合入 main 之后几遍在机器被别的 Agent 占满时各有一条不同的测试失败(`边改写边读…`、`subject_install…`、`account-worker-lifecycle` 的一条、`cloud-tools-*` 的写死端口被占),单独重跑都过;`subject_install` 在满载下反复失败,单独跑 29/29,它的断言「不要重复启动」要求第一个安装作业还在跑,是计时相关,不是这一块的改动(我没碰那个文件)。结果见交活时最后一遍。 |
+| 窗口 | 跑探针前后查可见窗口 | 无;28990～29049 收尾无残留监听 |
+
+没有 `git diff --stat main...HEAD` 里整份被换行尾的已有文件(`cloud-agent-ui-probe.mjs` 是整份重写,正常)。
