@@ -12,9 +12,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { PNG } from 'pngjs';
 import {
   planStreams, planListStreams, queueStreamOf, isolatedStreamProject, streamEligible, belowStreamEligible,
-  soloStreamKind, graphCardWithInputs, SEGMENT_FRAMES, SPARSE_STRIDE,
+  soloStreamKind, graphCardWithInputs, pngAlphaBox, SEGMENT_FRAMES, SPARSE_STRIDE,
 } from '../frame-stream.mjs';
 import { CardFrameCache } from '../card-cache.mjs';
 import { frameIdentity } from '../frame-identity.mjs';
@@ -491,4 +492,23 @@ test('SS-layer-map 层表的 streams 表:这两类是普通的单卡流那种行
 
 test('SS-sparse 稀疏版的间隔就是一个分段的帧数(这两类和别的流同一个常数,不另设)', () => {
   assert.equal(SPARSE_STRIDE, SEGMENT_FRAMES);
+});
+
+/* ================================================================== 位置矩形 */
+
+test('SS-opaque-box 没有 alpha 通道的截图(画面铺满又不透明,带着视频的流多半如此):位置矩形是整张图,不当成读不懂', () => {
+  const png = new PNG({ width: 64, height: 40 });
+  png.data.fill(255);
+  const rgb = PNG.sync.write(png, { colorType: 2 });
+  assert.equal(rgb[25], 2, '写出来的是真彩色、没有 alpha 通道的 PNG');
+  assert.deepEqual(pngAlphaBox(rgb), { x: 0, y: 0, w: 64, h: 40 });
+  const gray = PNG.sync.write(png, { colorType: 0 });
+  assert.deepEqual(pngAlphaBox(gray), { x: 0, y: 0, w: 64, h: 40 });
+  // 带 alpha 通道的照旧逐像素量;全透明照旧是 null
+  assert.deepEqual(pngAlphaBox(PNG.sync.write(png)), { x: 0, y: 0, w: 64, h: 40 });
+  png.data.fill(0);
+  assert.equal(pngAlphaBox(PNG.sync.write(png)), null);
+  // 真彩色但带透明色(tRNS):有的像素可能是透明的,这里不解,照旧回「读不懂」
+  const keyed = Buffer.concat([rgb.subarray(0, 33), Buffer.from([0, 0, 0, 6]), Buffer.from('tRNS'), Buffer.alloc(6), Buffer.alloc(4), rgb.subarray(33)]);
+  assert.deepEqual(pngAlphaBox(keyed), { full: true });
 });

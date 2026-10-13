@@ -248,21 +248,28 @@ export function segmentInfo(seg) {
 /**
  * PNG(8 位,RGBA / 灰度 + alpha,不隔行)里 alpha > `threshold` 的像素的包围盒,坐标是图片像素;
  * 一个都没有回 null;读不懂的格式回 `{ full: true }`(调用方当「整张都算」)。
+ *
+ * 没有 alpha 通道的 PNG(真彩色、灰度,又没有 `tRNS` 透明色):整张都不透明,包围盒就是整张图。画面铺满截图矩形又不透明时
+ * (源依赖卡的流里带着视频,多半如此)Chrome 交出来的就是这种 PNG;以前把它当「读不懂」,这条流的分段就没有位置矩形,
+ * 补密时也不看画面有没有顶到收紧矩形的边。
  */
 export function pngAlphaBox(buf, threshold = 0) {
   if (!Buffer.isBuffer(buf) || buf.length < 33 || buf.readUInt32BE(0) !== 0x89504e47) return { full: true };
-  let off = 8, width = 0, height = 0, depth = 0, color = 0, interlace = 0;
+  let off = 8, width = 0, height = 0, depth = 0, color = 0, interlace = 0, keyed = false;
   const idat = [];
   while (off + 8 <= buf.length) {
     const len = buf.readUInt32BE(off);
     const type = buf.toString('latin1', off + 4, off + 8);
     const data = buf.subarray(off + 8, off + 8 + len);
     if (type === 'IHDR') { width = data.readUInt32BE(0); height = data.readUInt32BE(4); depth = data[8]; color = data[9]; interlace = data[12]; }
+    else if (type === 'tRNS') keyed = true;
     else if (type === 'IDAT') idat.push(data);
     else if (type === 'IEND') break;
     off += 12 + len;
   }
   const bpp = color === 6 ? 4 : color === 4 ? 2 : 0;
+  // 真彩色(2)、灰度(0)而且没有透明色:没有 alpha 通道,每个像素都不透明
+  if ((color === 2 || color === 0) && !keyed && width > 0 && height > 0) return { x: 0, y: 0, w: width, h: height };
   if (depth !== 8 || interlace || !bpp || !width || !height) return { full: true };
   let raw;
   try { raw = zlibInflate(Buffer.concat(idat)); } catch { return { full: true }; }
