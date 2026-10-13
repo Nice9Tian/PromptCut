@@ -6,7 +6,7 @@ const { startHostedAssetService } = await import(pathToFileURL(config.runtimeFil
 const gates = new Map();
 const tls = name => ({ key: fs.readFileSync(config[name + 'Key']), cert: fs.readFileSync(config[name + 'Cert']), ca: fs.readFileSync(config.caFile) });
 let sequence = 0;
-const service = await startHostedAssetService({ dataDir: config.dataDir, port: 5863, internalPort: 5864, publicUrl: 'http://127.0.0.1:5863/api/asset',
+const service = await startHostedAssetService({ dataDir: config.dataDir, port: config.assetPort, internalPort: config.assetInternalPort, publicUrl: `http://127.0.0.1:${config.assetPort}/api/asset`,
   doc: { authorityId: config.authorityId, origin: config.docOrigin, serverFingerprint256: config.docPin, tls: tls('asset') },
   internalTls: tls('asset'), docFingerprint256: config.docPin, recoveryFence: config.recoveryFence, allowFixtureRecoveryFence: true,
   wrapStore: (_id, ns, store) => new Proxy(store, { get(target, key) {

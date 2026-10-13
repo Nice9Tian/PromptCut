@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
 import { once } from 'node:events';
+import { freePorts } from './free-ports.mjs';
 import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
 import { certificateFingerprint } from '../account/client.mjs';
 import { createAssetRunClient } from '../hosted/asset-run-client.mjs';
@@ -21,7 +22,7 @@ const close = server => new Promise(resolve => {
 
 test('original asset TLS channel alone answers doc pinned challenge; current epoch gates old socket', { timeout: 45000 }, async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-run-assets-current-tls-'));
-  const pki = assetWiringPki(dir), docPort = 6448, assetPort = 6449;
+  const pki = assetWiringPki(dir), [docPort, assetPort] = await freePorts(2);
   const sockets = new Set(), closes = new Set(); let docServer, assetServer, client, privateClient, channels, docSocket;
   const track = server => server.on('secureConnection', socket => {
     sockets.add(socket); closes.add(new Promise(resolve => socket.once('close', () => { sockets.delete(socket); resolve(); })));
@@ -94,7 +95,7 @@ test('original asset TLS channel alone answers doc pinned challenge; current epo
 
 test('actual pinned events socket rejects a root epoch transition during awaited synchronization', { timeout: 45000 }, async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-run-assets-events-fence-'));
-  const pki = assetWiringPki(dir), port = 6446;
+  const pki = assetWiringPki(dir), [port] = await freePorts(1);
   const sockets = new Set(), closes = new Set(); let server, client, release, reached;
   const entered = new Promise(resolve => { reached = resolve; });
   const pending = new Promise(resolve => { release = resolve; });
