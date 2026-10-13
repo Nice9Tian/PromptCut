@@ -78,8 +78,8 @@ export const STREAM_CODE_VERSION = 4;
 export const LOCAL_OVERFLOW_PX = 32;
 /** 各分段位置矩形的并集再外扩这么多(稀疏版每个分段只量了第一帧,中间帧可能略微超出;超出得多由补密那一趟发现、放大) */
 export const MEASURE_PAD_PX = 8;
-/** 补密时画面顶到了收紧矩形的某一边:这一边往外放这么多像素,或这个方向现有尺寸的一半,取大的 */
-export const TIGHT_WIDEN_STEP_PX = 64;
+/** 补密时画面顶到了收紧矩形的某一边、重量过以后:这一边在量到的边界之外最多再多留这么多像素(画面多半还会接着往那边走) */
+export const TIGHT_WIDEN_MARGIN_PX = 64;
 /** 收紧后的面积超过上界的这个比例就不收紧(白换一个变体没有收益) */
 export const TIGHTEN_MIN_SAVING = 0.15;
 /** X1:队列的流任务里,一个分段最多连着产几次(失败或被中途作废)才放弃这个任务(可重试) */
@@ -313,6 +313,13 @@ export const isBox = r => !!r && typeof r === 'object' && [r.x, r.y, r.w, r.h].e
  * 一张按 `rect` 截的图里,不透明像素的外接框 `local`(图片像素坐标)顶到了 `rect` 的哪几边 —— 只算还没到上界 `bound` 的边
  * (已经贴着上界的边再往外就不是这条流的范围了)。有顶到的回 `{ left?, top?, right?, bottom? }`,没有回 null。
  */
+/** 收紧矩形在 `sides` 里为真的那几边放到上界,别的边不动(重量的一趟用的截图矩形) */
+export function extendSides(tight, sides, bound) {
+  const x0 = sides?.left ? bound.x : tight.x, y0 = sides?.top ? bound.y : tight.y;
+  const x1 = sides?.right ? bound.x + bound.w : tight.x + tight.w, y1 = sides?.bottom ? bound.y + bound.h : tight.y + tight.h;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
 export function tightOverflowSides(local, rect, bound) {
   const sides = {};
   if (local.x <= 0 && rect.x > bound.x) sides.left = true;
@@ -1086,6 +1093,8 @@ export class StreamProducer {
             handedOff = await this.runSegment(bakery, task);
           } catch (error) {
             if (signal?.aborted || this.closed) throw cancelled();
+            // 收紧矩形要重量、重产的那几趟(`runSegment` 标 `cancelled`,次数有上界:四条边各一次)不算一次没产成
+            if (error?.cancelled) attempts = Math.max(0, attempts - 1);
             if (!error?.cancelled) {
               this.stats.failures++;
               state.failures.set(n, (state.failures.get(n) ?? 0) + 1);
@@ -1387,7 +1396,14 @@ export class StreamProducer {
     if (segment < 0 || samples < 1) throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 没有分段 ${segment}`), { retryable: false });
     const encoder = await this.encoder();
     const manifest = state.manifest;
-    const rect = stride > 1 ? manifest.bound : (manifest.tight ?? manifest.bound);
+    /*
+     * 重量的一趟(`state.remeasure`):上一次补这个分段时画面顶到了收紧矩形的边。这一趟把顶到的那几边放到上界、每一帧都量,
+     * 量出这一段实际到哪,收紧矩形照量到的放大(`settleTight`);放大后的矩形和这一趟用的不一样,这个分段再按它产一次。
+     */
+    const remeasure = stride === 1 && spec.kind !== 'below' && manifest.tight && state.remeasure?.segment === segment ? state.remeasure : null;
+    const rect = stride > 1 ? manifest.bound
+      : remeasure ? evenRect(extendSides(manifest.tight, remeasure.sides, manifest.bound), manifest.bound)
+        : (manifest.tight ?? manifest.bound);
     const captureRect = { x: rect.x + spec.offset.x, y: rect.y + spec.offset.y, w: rect.w, h: rect.h };
     // 依赖下层的流:两张截图都按上界截,算完再裁到 `captureRect`
     const viewRect = below ? { x: manifest.bound.x + spec.offset.x, y: manifest.bound.y + spec.offset.y, w: manifest.bound.w, h: manifest.bound.h } : captureRect;
@@ -1418,6 +1434,8 @@ export class StreamProducer {
     let firstCapture = true;
     /** 这个分段的位置矩形(平面坐标):`undefined` = 没量出来,`null` = 这一张全透明 */
     let segmentBox;
+    /** 重量的一趟里这一段每一帧不透明区域的并集(平面坐标) */
+    let remeasured = null;
     // 补密时每一帧都看一眼画面有没有顶到收紧矩形的边(依赖下层的流有自己的办法,见 `below-overflow`);矩形就是上界时不用看
     const guardTight = !sparse && !below && JSON.stringify(rect) !== JSON.stringify(manifest.bound);
     try {
@@ -1439,11 +1457,13 @@ export class StreamProducer {
         onFrame: async (frame, shot) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
           const raw = shot?.rgba ? shot : null;
-          if (sparse || frame === fromFrame || guardTight) {
+          if (sparse || frame === fromFrame || guardTight || remeasure) {
             // 这一张里不透明像素的外接框(截图矩形里的像素坐标)
             const local = raw ? rgbaAlphaBox(raw.rgba, raw.width, raw.height) : pngAlphaBox(shot);
             if (sparse) segmentBox = this.measureBox(state, frame, local, rect);
             else if (frame === fromFrame && !local?.full) segmentBox = local ? { x: rect.x + local.x, y: rect.y + local.y, w: local.w, h: local.h } : null;
+            // 重量的一趟:记下这一段每一帧实际到哪(平面坐标);读不懂的图当整幅都有
+            if (remeasure) remeasured = unionRect(remeasured, !local ? null : local.full ? rect : { x: rect.x + local.x, y: rect.y + local.y, w: local.w, h: local.h });
             if (guardTight && local && !local.full) {
               const sides = tightOverflowSides(local, rect, manifest.bound);
               if (sides) throw Object.assign(new Error(`第 ${frame} 帧的画面顶到了收紧矩形的边(${Object.keys(sides).join('、')})`), { code: 'tight-overflow', sides });
@@ -1477,10 +1497,23 @@ export class StreamProducer {
       bakery.streamLease = null;
       // 差分取层发现目标卡改到了收紧矩形外面(稀疏那一趟没量到的帧):把收紧矩形放大,这个分段按新矩形重来,不算失败
       if (below && error?.code === 'below-overflow' && this.widenTight(state, error.box)) error.cancelled = true;
-      // 别的流:补密时画面顶到了收紧矩形的边(稀疏版每段只量了第一帧),同样放大重来
-      if (error?.code === 'tight-overflow' && this.widenTightSides(state, error.sides)) error.cancelled = true;
+      // 别的流:补密时画面顶到了收紧矩形的边(稀疏版每段只量了第一帧)。这个分段重来一趟,那几边放到上界、每帧都量(见上),不算失败
+      if (error?.code === 'tight-overflow') {
+        state.remeasure = { segment, sides: { ...(remeasure?.sides ?? {}), ...error.sides } };
+        error.cancelled = true;
+      }
       throw error;
     } finally { clearInterval(guard); }
+    if (remeasure) {
+      state.remeasure = null;
+      const settled = this.settleTight(state, remeasured, remeasure.sides);
+      if (JSON.stringify(settled) !== JSON.stringify(rect)) {
+        // 这一趟是按放到上界的矩形产的,比定下来的收紧矩形大:不留它,这个分段按定下来的矩形再产一次(不算失败)
+        if (enc) { await enc.abort(); this.releaseEncoderSlot(); }
+        bakery.streamLease = null;
+        throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)}#${segment} 的收紧矩形重新量过,按新矩形重来`), { cancelled: true });
+      }
+    }
     if (!enc) return false;
     void firstCapture;
     const job = enc.finish()
@@ -1552,22 +1585,32 @@ export class StreamProducer {
   }
 
   /**
-   * 补密时画面顶到了收紧矩形的边(`sides`:`{ left, top, right, bottom }` 里为真的那几边):这几边各往外放
-   * `TIGHT_WIDEN_STEP_PX` 或这个方向现有尺寸的一半(取大的),夹回上界。已经按旧矩形产好的满密度分段签名对不上,会按新矩形重产。
-   * 回有没有真的放大。
+   * 补密时画面顶到了收紧矩形的边(`sides`:`{ left, top, right, bottom }` 里为真的那几边),重量了一趟,这一段每一帧实际到哪是 `measured`
+   * (平面坐标的并集;全透明是 null)。收紧矩形在顶到的那几边放到「量到的边界、外扩 `MEASURE_PAD_PX`、再多留一截」:多留的一截等于
+   * 这一段里画面超出原来矩形的距离,最多 `TIGHT_WIDEN_MARGIN_PX`(画面多半还会接着往那边走,少重来几次;只超出一点的不白放大)。
+   * 别的边不动,夹回上界、外扩到偶数;放大以后省不到 `TIGHTEN_MIN_SAVING` 就干脆用上界。
+   * 只放大不缩小。已经按旧矩形产好的满密度分段签名对不上,会按新矩形重产。回定下来的收紧矩形。
    */
-  widenTightSides(state, sides) {
+  settleTight(state, measured, sides) {
     const manifest = state.manifest;
-    if (!manifest?.tight || !sides) return false;
+    if (!manifest?.tight || !sides) return manifest?.tight ?? null;
     const { tight, bound } = manifest;
-    const dx = Math.max(TIGHT_WIDEN_STEP_PX, Math.ceil(tight.w / 2)), dy = Math.max(TIGHT_WIDEN_STEP_PX, Math.ceil(tight.h / 2));
-    const grown = rectOf(tight.x - (sides.left ? dx : 0), tight.y - (sides.top ? dy : 0), tight.x + tight.w + (sides.right ? dx : 0), tight.y + tight.h + (sides.bottom ? dy : 0));
-    const wider = evenRect(intersectRect(grown, bound), bound);
-    if (rectArea(wider) <= rectArea(tight)) return false;
+    const m = measured ?? tight;
+    /** 这一边往外放多少:量到的边界超出原来矩形 `over` 像素 → 外扩 + 再多留 `over`(封顶);没量到超出(贴着边)按封顶留 */
+    const reach = over => MEASURE_PAD_PX + (over > 0 ? Math.min(TIGHT_WIDEN_MARGIN_PX, over) : TIGHT_WIDEN_MARGIN_PX);
+    const x1 = tight.x + tight.w, y1 = tight.y + tight.h, mx1 = m.x + m.w, my1 = m.y + m.h;
+    const grown = rectOf(
+      sides.left ? Math.min(tight.x, m.x - reach(tight.x - m.x)) : tight.x,
+      sides.top ? Math.min(tight.y, m.y - reach(tight.y - m.y)) : tight.y,
+      sides.right ? Math.max(x1, mx1 + reach(mx1 - x1)) : x1,
+      sides.bottom ? Math.max(y1, my1 + reach(my1 - y1)) : y1);
+    let wider = evenRect(intersectRect(grown, bound), bound);
+    if (rectArea(wider) > rectArea(bound) * (1 - TIGHTEN_MIN_SAVING)) wider = bound;
+    if (rectArea(wider) <= rectArea(tight)) return tight;
     this.note(`流 ${state.spec.streamKey.slice(0, 8)} 的收紧矩形放大到 ${JSON.stringify(wider)}(原来 ${JSON.stringify(tight)},补密时画面顶到了${Object.keys(sides).filter(k => sides[k]).join('、')}边)`);
     manifest.tight = wider;
     state.widened = (state.widened ?? 0) + 1;
-    return true;
+    return wider;
   }
 
   /** 编完一个分段:切分、校验、落盘、改清单、发 `layer`;被替换的旧文件 5 秒后删(G6) */
@@ -1603,6 +1646,8 @@ export class StreamProducer {
     manifest.segments[segment] = { file, init: initId, stride, samples, bytes: segments[0].length, encodeMs: out.encodeMs, tailMs: out.tailMs,
       sig: segmentSignature({ streamKey: spec.streamKey, segment, stride, encoder, rect }), dropped, at: Date.now(), ...(kept !== undefined ? { box: kept } : {}) };
     if (stride > 1) this.maybeTighten(state);
+    const oldRect = old ? manifest.inits[old.init]?.rect : null;
+    this.pruneInits(state);
     await this.store.save(manifest);
     this.stats.segments++;
     this.publish(state);
@@ -1611,7 +1656,7 @@ export class StreamProducer {
     if (old && old.stride > 1 && stride === 1) {
       // 验收「稀疏分段 ≤ 满密度 1.0 倍」要的对照:同一段、稀疏与满密度各自的字节和矩形
       (this.stats.sparseVsDense ||= []).push({ stream: spec.streamKey.slice(0, 8), segment, sparse: old.bytes, dense: segments[0].length,
-        sameRect: JSON.stringify(manifest.inits[old.init]?.rect) === JSON.stringify(rect) });
+        sameRect: JSON.stringify(oldRect) === JSON.stringify(rect) });
       while (this.stats.sparseVsDense.length > 100) this.stats.sparseVsDense.shift();
     }
     if (old && old.file !== file) {
@@ -1623,6 +1668,23 @@ export class StreamProducer {
       }, REPLACED_DELETE_MS);
       timer.unref?.();
     }
+  }
+
+  /**
+   * 清单里没有分段再用的变体去掉(调用方接着保存清单):稀疏版全部换成满密度以后的上界变体、收紧矩形放大以前的变体。
+   * 它的开头文件过 `REPLACED_DELETE_MS` 再删(页面上可能还有拿着旧清单的在途请求);到时清单里又有它了(同样的矩形又产了一次)就不删。
+   */
+  pruneInits(state) {
+    const manifest = state.manifest, key = state.spec.streamKey;
+    const used = new Set(Object.values(manifest.segments ?? {}).map(s => s.init));
+    const gone = Object.keys(manifest.inits ?? {}).filter(id => !used.has(id));
+    if (!gone.length) return 0;
+    for (const id of gone) delete manifest.inits[id];
+    const timer = setTimeout(() => {
+      for (const id of gone) if (!state.manifest?.inits?.[id]) void fs.rm(this.store.initFile(key, id), { force: true }).catch(() => {});
+    }, REPLACED_DELETE_MS);
+    timer.unref?.();
+    return gone.length;
   }
 
   /**

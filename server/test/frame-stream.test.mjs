@@ -311,7 +311,7 @@ test('segmentSignature covers stride, encoder, parameters and rect', () => {
   const base = { streamKey: 'K', segment: 3, stride: 1, encoder: 'libx264', rect: { x: 0, y: 0, w: 2, h: 2 } };
   const sig = segmentSignature(base);
   assert.equal(sig, segmentSignature({ ...base }));
-  for (const change of [{ stride: 3 }, { encoder: 'h264_mf' }, { segment: 4 }, { rect: { x: 0, y: 0, w: 4, h: 2 } }]) {
+  for (const change of [{ stride: 15 }, { encoder: 'h264_mf' }, { segment: 4 }, { rect: { x: 0, y: 0, w: 4, h: 2 } }]) {
     assert.notEqual(sig, segmentSignature({ ...base, ...change }), JSON.stringify(change));
   }
 });
@@ -319,7 +319,7 @@ test('segmentSignature covers stride, encoder, parameters and rect', () => {
 test('readySegmentRanges / publicManifest', () => {
   const manifest = { streamKey: 'K', kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: { x: 0, y: 0, w: 2, h: 2 }, tight: null,
     inits: { i1: { codec: 'avc1.64001f', width: 2, height: 20, rect: { x: 0, y: 0, w: 2, h: 2 }, encoder: 'libx264', bytes: 9 } },
-    segments: { 0: { file: '0-a.m4s', init: 'i1', stride: 1, samples: 15, sig: 'x', bytes: 1 }, 1: { file: '1-b.m4s', init: 'i1', stride: 3, samples: 15, sig: 'y', bytes: 1 }, 5: { file: '5-c.m4s', init: 'i1', stride: 1, samples: 15, sig: 'z', bytes: 1 } } };
+    segments: { 0: { file: '0-a.m4s', init: 'i1', stride: 1, samples: 15, sig: 'x', bytes: 1 }, 1: { file: '1-b.m4s', init: 'i1', stride: 15, samples: 15, sig: 'y', bytes: 1 }, 5: { file: '5-c.m4s', init: 'i1', stride: 1, samples: 15, sig: 'z', bytes: 1 } } };
   assert.deepEqual(readySegmentRanges(manifest), [[0, 1], [5, 5]]);
   const pub = publicManifest(manifest);
   assert.equal(pub.segments[1].sig, undefined, '签名不外露');

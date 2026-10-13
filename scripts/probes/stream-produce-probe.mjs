@@ -10,7 +10,7 @@
  *
  *   1. 每个分段恰好 15 个样本(每条流自己的末段除外:分段从流自己的第一帧起数,到它的最后一帧为止)、首帧是 IDR、只有一个 moof;`mfra` 不落盘;
  *   2. 同一个变体里 `init.mp4` 只写一次,后续分段算出来的 `ftyp + moov` 与它逐字节相同;
- *   3. 稀疏分段(`stride = 3`)体积 ≤ 满密度的 1.0 倍;稀疏分段被满密度替换后,旧文件 5 秒内删除;
+ *   3. 稀疏分段(每个分段只截第一帧、其余帧重复它)体积 ≤ 满密度的 1.0 倍;稀疏分段被满密度替换后,旧文件 5 秒内删除;
  *   4. 一条 15 帧分段的编码耗时(只记录,不当通过条件;原门槛 1080p 全幅流 p50 ≤ 300 ms)、分段体积(≤ 512 KB);
  *   5. 连续生产只付一次换页:`bakeStream` 的重挂载次数 ≤ 流数 × 2(稀疏一趟 + 补密一趟);
  *      同时存活的分段编码器 ≤ 2 × streamPool;
@@ -264,7 +264,7 @@ try {
     timings.record(`${b.clipId} 15 帧出帧`, b.captureMsFor15);
   }
   for (const item of status.stats.sparseVsDense ?? []) {
-    if (item.sameRect) check(item.sparse <= item.dense, 'stride 3 稀疏分段 ≤ 满密度 1.0 倍(同一矩形)', item);
+    if (item.sameRect) check(item.sparse <= item.dense, '稀疏分段(每段一张)≤ 满密度 1.0 倍(同一矩形)', item);
   }
   // 组流:分段里恰好是组内那几张卡 —— 药丸的蓝、粒子的绿都在
   if (GROUP) {

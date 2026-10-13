@@ -107,7 +107,7 @@ const { FramePipeline } = await import('../frame-pipeline.mjs');
 const { describeEnvironment } = await import('../render-node/fingerprint.mjs');
 const { planTaskOf, splitPlan } = await import('../render-node/split.mjs');
 const { createPrerenderExecutor } = await import('../prerender-executor.mjs');
-const { SPARSE_STRIDE, publicManifest, tightOverflowSides, StreamProducer } = await import('../frame-stream.mjs');
+const { SPARSE_STRIDE, publicManifest, tightOverflowSides, extendSides, MEASURE_PAD_PX, TIGHT_WIDEN_MARGIN_PX, StreamProducer } = await import('../frame-stream.mjs');
 const { layerStreamsOf } = await import('../artifact-transfer.mjs');
 const { streamSegmentFirstFrame, streamSegmentLastFrame, streamSegmentOf } = await import('../../src/render/streamSegments.mjs');
 
@@ -429,13 +429,31 @@ test('SO-06 收紧矩形:画面顶到哪几边(只算还没到上界的边);顶�
 
   const producer = new StreamProducer({ root: os.tmpdir(), ready: { stageByKey() {}, publish() {} } }, { env: {} });
   const state = { spec: { streamKey: 'k'.repeat(64), firstSegment: 0, lastSegment: 2 }, manifest: { bound, tight: { ...rect }, segments: {} } };
-  assert.equal(producer.widenTightSides(state, { right: true }), true);
-  assert.deepEqual(state.manifest.tight, { x: 100, y: 50, w: 184, h: 80 }, '右边放 64(比宽的一半 60 大)');
-  assert.equal(producer.widenTightSides(state, { left: true, top: true }), true);
-  assert.deepEqual(state.manifest.tight, { x: 8, y: -14, w: 276, h: 144 }, '左边放宽的一半 92、上边放 64');
-  for (let i = 0; i < 6; i++) producer.widenTightSides(state, { left: true, top: true, right: true, bottom: true });
-  assert.deepEqual(state.manifest.tight, bound, '放到上界为止');
-  assert.equal(producer.widenTightSides(state, { left: true }), false, '已经是上界:不再放大');
+  // 重量的一趟用的截图矩形:顶到的那几边放到上界,别的边不动
+  assert.deepEqual(extendSides(rect, { right: true }, bound), { x: 100, y: 50, w: 332, h: 80 });
+  assert.deepEqual(extendSides(rect, { left: true, top: true }, bound), { x: -32, y: -32, w: 252, h: 162 });
+  assert.deepEqual(extendSides(rect, {}, bound), rect);
+  // 重量过:右边实际到 350(收紧矩形原来到 220,超出 130)→ 放到 350 + 外扩 8 + 多留 64(封顶)= 422;别的边不动
+  const reach = MEASURE_PAD_PX + TIGHT_WIDEN_MARGIN_PX;
+  assert.deepEqual(producer.settleTight(state, { x: 120, y: 60, w: 230, h: 40 }, { right: true }), { x: 100, y: 50, w: 250 + reach, h: 80 });
+  assert.deepEqual(state.manifest.tight, { x: 100, y: 50, w: 322, h: 80 });
+  assert.equal(state.widened, 1);
+  // 只超出一点的不白放大:左边量到从 90 起(超出 10)→ 90 − 8 − 10 = 72;上边量到从 44 起(超出 6)→ 44 − 8 − 6 = 30;只放大不缩小(右、下不动)
+  assert.deepEqual(producer.settleTight(state, { x: 90, y: 44, w: 100, h: 60 }, { left: true, top: true }), { x: 72, y: 30, w: 350, h: 100 });
+  // 量到的范围超出上界的夹回上界(上边没顶到,不动)
+  const wide = { x: -32, y: 30, w: 464, h: 242 };
+  assert.deepEqual(producer.settleTight(state, { x: -20, y: -20, w: 440, h: 280 }, { left: true, right: true, bottom: true }), wide);
+  assert.deepEqual(producer.settleTight(state, { x: 0, y: 40, w: 10, h: 10 }, { left: true }), wide, '这一边已经到上界:不再放大');
+  assert.equal(state.widened, 3);
+  // 放大以后省不到 TIGHTEN_MIN_SAVING:干脆用上界
+  const flat = { spec: state.spec, manifest: { bound, tight: { x: -32, y: -32, w: 464, h: 100 }, segments: {} } };
+  assert.deepEqual(producer.settleTight(flat, { x: 0, y: 0, w: 10, h: 160 }, { bottom: true }), bound);
+  // 没量到东西(这一段全透明):照原来的矩形往顶到的那一边多留一点
+  const blank = { spec: state.spec, manifest: { bound, tight: { ...rect }, segments: {} } };
+  assert.deepEqual(producer.settleTight(blank, null, { right: true }), { x: 100, y: 50, w: 120 + reach, h: 80 });
+  // 量到的边界正好贴着原来的边(没超出):按封顶留
+  const flush = { spec: state.spec, manifest: { bound, tight: { ...rect }, segments: {} } };
+  assert.deepEqual(producer.settleTight(flush, { x: 100, y: 60, w: 50, h: 40 }, { left: true }), { x: 100 - reach, y: 50, w: 120 + reach, h: 80 });
 
   // maybeTighten:各分段位置矩形的并集
   const seg = (box, extra = {}) => ({ file: 'f', init: 'i', stride: 15, samples: 15, sig: null, adopted: true, ...(box !== undefined ? { box } : {}), ...extra });
