@@ -411,9 +411,10 @@ function expectedDerived(ctx, fpFor, takeoverFor = () => false) {
     const lockKey = `stream:${s.streamKey}`;
     const fp = fpFor(lockKey);
     const resultKey = rkOf(s.streamKey, fp);
-    for (let from = s.firstSegment; from <= s.lastSegment; from += 8) {
+    // 每一段先出稀疏流任务(id 末尾多 `:sparse`)、再出满密度任务,范围相同
+    for (const density of [':sparse', '']) for (let from = s.firstSegment; from <= s.lastSegment; from += 8) {
       const to = Math.min(s.lastSegment, from + 7);
-      out.push({ id: `stream:${resultKey}:${from}-${to}`, lockKey, fp, takeover: takeoverFor(lockKey), clipId: s.topClipId });
+      out.push({ id: `stream:${resultKey}:${from}-${to}${density}`, lockKey, fp, takeover: takeoverFor(lockKey), clipId: s.topClipId });
     }
   }
   return out;

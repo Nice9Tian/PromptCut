@@ -1,4 +1,4 @@
-import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf, backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan } from '../render-queue/index.mjs';
+import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf, backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan, STREAM_DENSITY_SPARSE } from '../render-queue/index.mjs';
 import { snapshotTier } from '../snapshot-tier.mjs';
 import { resultKeyOf } from './fingerprint.mjs';
 import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '../../src/render/streamSegments.mjs';
@@ -90,6 +90,17 @@ import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '
  * 一条流标了 `browserOnly: true` 时不出切分方自己的那一份(在线页面发的清单计划用,见 `local-node.mjs` 的 `listPlanOverrides`):
  * 只出浏览器做得了的那几份,做不了就一份都不出。
  *
+ * # 稀疏流任务(语义 `mechanism/rendering.md`「重管线:预渲染」:每条流有稀疏、满密度两版,同一个键;稀疏版排在满密度版前面)
+ *
+ * 队列认稀疏流任务时(`sparseStreams: true`,`node.welcome` 带来的;旧队列不带,就照原来只出满密度的),每一份流在满密度任务之外
+ * 另出一组**稀疏流任务**:范围与满密度任务逐个相同(所以内容库里的清单键相同),`input.density: 'sparse'`,id 末尾多 `:sparse`
+ * (`messages.mjs` 的 `taskIdOf`),`priority` 是 `SPARSE_STREAM_PRIORITY`(高于满密度流任务和普通快照任务,低于锚帧),
+ * 别的字段(结果键、`requires`、`input.dual`、锁键)与同一份的满密度任务相同。稀疏任务排在这条流的满密度任务前面发。
+ *
+ * 一条流标了 `ownSparseOnly: true`(托管方的渲染节点、这个项目的「生成轨道流」关着,见 `listPlanOverrides`)时,切分方自己的那一份
+ * **只出稀疏流任务**。这时有浏览器那一份可出(没锁)就不出自己的:一条流只归一个指纹产(同一把锁),自己这份只有稀疏版,
+ * 抢到了锁浏览器就补不了满密度;没有浏览器能产这条流、或者锁已经在自己的指纹上时才出自己的稀疏版。
+ *
  * # 依赖下层的流(`docs/plan/prerender-products-contract.md` 第 5.1 节)
  *
  * `kind: 'below'` 的流(`frame-stream.mjs` 的 `planStreams` 在开关打开时才出)要整场景的下层和素材,只由桌面应用和渲染主机产:
@@ -107,6 +118,8 @@ import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '
 const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;
 const ANCHOR_PRIORITY = 50;
 const NORMAL_PRIORITY = 10;
+/** 稀疏流任务的名次:排在满密度流任务和普通快照任务(`NORMAL_PRIORITY`)前面、锚帧(`ANCHOR_PRIORITY`)后面 */
+export const SPARSE_STREAM_PRIORITY = 30;
 
 /**
  * 这一版项目的粗任务(发布方发布的那一个)。
@@ -349,6 +362,7 @@ export function splitPlan({
   localMedia = null,        // 发布方的 nodeId(M6c X2):给了,且 usesLocalMedia 判真的任务写进 requires.localMedia
   usesLocalMedia = () => true,   // (control) => boolean;流任务传 { clipId: topClipId, kind: 'stream' }
   lane = 'normal',          // 'backfill':补渲计划任务切出的细任务,priority 一律标 'backfill'(c10a 契约第 17 节)
+  sparseStreams = false,    // 队列认不认稀疏流任务(`node.welcome.sparseStreams`):为真才切稀疏流任务,见文件头「稀疏流任务」
   browserFingerprints = [], // 本项目在线、同一用户的纯浏览器节点的指纹(M7 契约 D1):浏览器可做、没锁的卡另出这些指纹的一份
   browserCards = null,      // 块 N:本页能运行的用户卡、图卡(`browserCardsOf(planTask.input.browser)` 的结果),见上文「用户卡、图卡也可以给浏览器」
   browserCardEnvFingerprints = [], // 块 N:文档服务确认的在线浏览器节点的 cardEnvFingerprint;`browserCards.cardEnvFingerprint` 不在里面就不出用户卡、图卡的浏览器那一份
@@ -532,9 +546,11 @@ export function splitPlan({
     }
     // 出哪几份:没锁(或锁在自己的指纹上且不接手)时切分方一份、浏览器各一份;锁在别处照锁只出一份
     const wantsOwn = stream.browserOnly !== true;
+    // 自己的那一份只出稀疏版(见文件头「稀疏流任务」);队列不认稀疏流任务时这一份等于不出
+    const ownSparseOnly = stream.ownSparseOnly === true;
     const copies = [];
     if (browser && lockOf(lockKey) == null && keying.fingerprint === envFingerprint) {
-      if (wantsOwn) copies.push({ fingerprint: keying.fingerprint, forBrowser: false });
+      if (wantsOwn && !(ownSparseOnly && browser.copyFps.length > 0)) copies.push({ fingerprint: keying.fingerprint, forBrowser: false });
       for (const fingerprint of browser.copyFps) copies.push({ fingerprint, forBrowser: true });
     } else {
       const forBrowser = !!browser && browser.browserOf.has(keying.fingerprint);
@@ -543,7 +559,9 @@ export function splitPlan({
     const dual = copies.length > 1;
     for (const { fingerprint, forBrowser } of copies) {
       const resultKey = resultKeyOf(contentKey, fingerprint);
-      for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
+      // 先稀疏、后满密度(同一条流里稀疏任务排在前面发);自己的那一份标了 `ownSparseOnly` 时不出满密度的
+      const densities = [...(sparseStreams === true ? [STREAM_DENSITY_SPARSE] : []), ...(!forBrowser && ownSparseOnly ? [] : [null])];
+      for (const density of densities) for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
         const range = { unit: 'segment', from, to };
         // 这一段任务的帧数:流的计划带着第一帧和最后一帧时按实际算(流的末段可以不满 15 帧),没带的照满段估
         let frames = (to - from + 1) * SEGMENT_FRAMES;
@@ -555,9 +573,10 @@ export function splitPlan({
           ? { clipId: topClipId, cardId: browser.control.cardId ?? null, entryKey: null, contentKey, canvasHeavy: false }
           : { clipId: topClipId, cardId: null, entryKey: null, contentKey };
         if (dual) input.dual = true;
+        if (density) input.density = density;
         if (forBrowser) Object.assign(input, { compositing: browser.compositing, bake: bakeInputOf(browser.control), stream: structuredClone(browser.input) });
         const task = {
-          id: taskIdOf({ kind: 'stream', resultKey, range }), kind: 'stream', resultKey, range,
+          id: taskIdOf({ kind: 'stream', resultKey, range, density }), kind: 'stream', resultKey, range,
           source: { projectId, projectRev, derivedFrom },
           input,
           weight: forBrowser ? { ...browser.weight, frames } : { ...weight, frames },
@@ -571,7 +590,7 @@ export function splitPlan({
             }, belowStream
               ? { clipId: topClipId, kind: 'stream', streamKind: 'below', belowClipIds: Array.isArray(stream.belowClipIds) ? [...stream.belowClipIds] : [] }
               : { clipId: topClipId, kind: 'stream' }),
-          priority: priorityOf(false),
+          priority: density && lane !== 'backfill' ? SPARSE_STREAM_PRIORITY : priorityOf(false),
         };
         // 接手只属于切分方自己的那一份;浏览器那一份照快照的规矩不带
         if (keying.takeover && !forBrowser) task.takeover = true;

@@ -249,7 +249,7 @@ async function main() {
   const b0 = await streamsBlock(creator);
   check('S1.creator-sees-row-default-unchecked-editable', !!c0 && c0.checked === false && c0.disabled === false, { box: c0 });
   check('S1.indented-under-render-node', !!b0 && b0.nestedInRender && b0.indent >= 16 && b0.state === 'off' && b0.opacity === 1 && b0.text.includes('生成轨道流')
-    && b0.text.includes('没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。')
+    && b0.text.includes('没有打开：托管方的渲染节点只为这个项目生成隔一段一张的稀疏轨道流。打开后还会补成每帧都有的轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。')
     && !b0.text.includes('暂不生效'), b0 ?? {});
   await shotCollab(creator, 'off');
   const found = await lookupProject({ base: DOC, name: NAME });

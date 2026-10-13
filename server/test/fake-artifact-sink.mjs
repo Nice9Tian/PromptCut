@@ -25,6 +25,8 @@
 const segmentKey = (resultKey, range) => `${resultKey}#${range.from}-${range.to}`;
 
 const clone = value => (value === undefined ? undefined : structuredClone(value));
+/** 这次调用是不是稀疏流任务的(task-runner 给的 ref 带任务的 `input`) */
+const sparseRef = args => args?.kind === 'stream' && args?.input?.density === 'sparse';
 
 function badArgs(what, args) {
   if (!args || typeof args !== 'object') return `${what}：参数不是对象`;
@@ -48,7 +50,9 @@ export function createArtifactSink() {
       misuse.push(bad);
       return Promise.reject(new TypeError(bad));
     }
-    const answer = stored.has(segmentKey(args.resultKey, args.range));
+    // 稀疏流任务(`input.density: 'sparse'`)每段有一版就算有;别的任务要满密度的那一版(稀疏流任务存下的不算)
+    const entry = stored.get(segmentKey(args.resultKey, args.range));
+    const answer = !!entry && (sparseRef(args) || entry.sparse !== true);
     hasLog.push({ resultKey: args.resultKey, range: clone(args.range), answer });
     return Promise.resolve(answer);
   }
@@ -71,8 +75,10 @@ export function createArtifactSink() {
     }
     putLog.push({ resultKey, range: clone(range), meta: clone(meta), complete });
     const key = segmentKey(resultKey, range);
-    if (complete && !stored.has(key)) {
-      stored.set(key, { resultKey, kind, tier, range: clone(range), artifacts: clone(artifacts), meta: clone(meta) });
+    // 同一个键(结果键 + 范围)稀疏、满密度共用:满密度的盖掉稀疏的,稀疏的不盖满密度的(不降级)
+    const sparse = sparseRef(args);
+    if (complete && (!stored.has(key) || (stored.get(key).sparse === true && !sparse))) {
+      stored.set(key, { resultKey, kind, tier, range: clone(range), artifacts: clone(artifacts), meta: clone(meta), ...(sparse ? { sparse: true } : {}) });
     }
     return Promise.resolve({ complete });
   }

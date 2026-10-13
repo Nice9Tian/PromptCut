@@ -311,7 +311,7 @@ test('segmentSignature covers stride, encoder, parameters and rect', () => {
   const base = { streamKey: 'K', segment: 3, stride: 1, encoder: 'libx264', rect: { x: 0, y: 0, w: 2, h: 2 } };
   const sig = segmentSignature(base);
   assert.equal(sig, segmentSignature({ ...base }));
-  for (const change of [{ stride: 3 }, { encoder: 'h264_mf' }, { segment: 4 }, { rect: { x: 0, y: 0, w: 4, h: 2 } }]) {
+  for (const change of [{ stride: 15 }, { encoder: 'h264_mf' }, { segment: 4 }, { rect: { x: 0, y: 0, w: 4, h: 2 } }]) {
     assert.notEqual(sig, segmentSignature({ ...base, ...change }), JSON.stringify(change));
   }
 });
@@ -319,7 +319,7 @@ test('segmentSignature covers stride, encoder, parameters and rect', () => {
 test('readySegmentRanges / publicManifest', () => {
   const manifest = { streamKey: 'K', kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: { x: 0, y: 0, w: 2, h: 2 }, tight: null,
     inits: { i1: { codec: 'avc1.64001f', width: 2, height: 20, rect: { x: 0, y: 0, w: 2, h: 2 }, encoder: 'libx264', bytes: 9 } },
-    segments: { 0: { file: '0-a.m4s', init: 'i1', stride: 1, samples: 15, sig: 'x', bytes: 1 }, 1: { file: '1-b.m4s', init: 'i1', stride: 3, samples: 15, sig: 'y', bytes: 1 }, 5: { file: '5-c.m4s', init: 'i1', stride: 1, samples: 15, sig: 'z', bytes: 1 } } };
+    segments: { 0: { file: '0-a.m4s', init: 'i1', stride: 1, samples: 15, sig: 'x', bytes: 1 }, 1: { file: '1-b.m4s', init: 'i1', stride: 15, samples: 15, sig: 'y', bytes: 1 }, 5: { file: '5-c.m4s', init: 'i1', stride: 1, samples: 15, sig: 'z', bytes: 1 } } };
   assert.deepEqual(readySegmentRanges(manifest), [[0, 1], [5, 5]]);
   const pub = publicManifest(manifest);
   assert.equal(pub.segments[1].sig, undefined, '签名不外露');
@@ -496,11 +496,11 @@ test('streamFirstMs: only a broken lease pays the reset + fixed cost + replay', 
   assert.equal(streamFirstMs({ runStartFrame: 30, mountFrame: 10, resetMs: 400, fixedMs: 80, frameMs: 30 }), 400 + 80 + 20 * 30);
 });
 
-test('streamFeasibility: raises stride (15 divisors only) before giving up', () => {
+test('streamFeasibility: falls back to the sparse tier (one frame per segment) before giving up', () => {
   // 30 fps、一个 worker:15 帧的预算是 500 ms;每帧出图 68.9 ms(两个编码器并存)
   const f = streamFeasibility({ n: 4, firstMs: 480, frameMs: 68.9, fps: 30, workers: 1, stride: 1 });
   assert.equal(f.feasible, false);
-  assert.equal(f.stride, 3);
+  assert.equal(f.stride, 15, '只有一档稀疏:每个分段一张');
   assert.equal(streamFeasibility({ n: 4, frameMs: 20, fps: 30 }).feasible, true);
   assert.equal(streamFeasibility({ n: 1, firstMs: 100000, frameMs: 30, fps: 30 }).stride, null);
 });

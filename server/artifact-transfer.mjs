@@ -38,6 +38,7 @@ import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
 import { kindOfTier, wireSnapshotKey } from './ready-index.mjs';
 import { QUEUE_DEFAULTS } from './render-queue/constants.mjs';
+import { isSparseStreamTask } from './render-queue/messages.mjs';
 
 /** 清单的版本(契约第 3 节的 `v`) */
 export const RESULT_VERSION = 1;
@@ -548,8 +549,9 @@ export async function collectStreamResult(pipeline, task, opts = {}) {
       inits[seg.init] = { hash: initBlob.hash, bytes: initBlob.bytes, codec: initMeta.codec ?? null, width: initMeta.width ?? null, height: initMeta.height ?? null,
         timescale: initMeta.timescale ?? null, rect: initMeta.rect ?? null, encoder: initMeta.encoder ?? null };
     }
+    // `box`:这个分段的位置矩形(平面坐标;产稀疏版时量的),清单里有才带
     segments[n] = { hash: segBlob.hash, bytes: segBlob.bytes, init: seg.init, stride: seg.stride, samples: seg.samples,
-      sig: seg.sig ?? null, encoder: initMeta.encoder ?? null };
+      sig: seg.sig ?? null, encoder: initMeta.encoder ?? null, ...(seg.box !== undefined ? { box: seg.box } : {}) };
   }
   const result = {
     v: RESULT_VERSION, kind: 'stream', resultKey: key, range: { from, to },
@@ -612,7 +614,44 @@ export async function pushResult(client, result, readBlob, { onBlock } = {}) {
   return { result, uploaded, skipped, bytes: bytesDone };
 }
 
-/** 本机帧库是否覆盖了这一段(快照:`frames ∪ oversize` 盖住每一帧;流:每个分段和它的 init 都在清单里) */
+/**
+ * 这个流任务要不要满密度的分段:稀疏流任务(`input.density: 'sparse'`)每段有一版就算数(稀疏的、满密度的都行),
+ * 别的流任务(满密度任务、没带密度的引用)要每段都是满密度。不是流回 false。
+ */
+export const wantsDenseStream = ref => ref?.kind === 'stream' && !isSparseStreamTask(ref);
+const sparseSegment = seg => Number(seg?.stride) > 1;
+
+/**
+ * 写流清单前和内容库里已有的那一份合并(同一个键:结果键、范围相同),**不降级**:
+ *   - 新清单里某一段是稀疏的、已有的那一段是满密度的:留已有的(稀疏流任务晚到、别的节点已经补过满密度);
+ *   - 新清单里没有、已有的清单里有的分段:留着(边产边写的清单只列了本机已经产出的那几段);
+ *   - 其余用新的。留下的分段连它的开头文件一起带过来;
+ *   - 新的分段没带位置矩形(`box`,只在稀疏的一趟量)而已有的那一段带着:把它带过来(补成满密度以后位置矩形还在)。
+ * 已有的清单对不上(不是流、键或范围不同、形状不对)就原样用新的。没有可留的时回 `next` 本身。
+ */
+export function mergeStreamResult(existing, next) {
+  if (next?.kind !== 'stream' || !existing || typeof existing !== 'object' || existing.kind !== 'stream') return next;
+  if (existing.v !== next.v || existing.resultKey !== next.resultKey) return next;
+  if (existing.range?.from !== next.range?.from || existing.range?.to !== next.range?.to) return next;
+  if (!existing.segments || typeof existing.segments !== 'object' || !existing.inits || typeof existing.inits !== 'object') return next;
+  const segments = { ...(next.segments ?? {}) }, inits = { ...(next.inits ?? {}) };
+  let kept = 0;
+  for (const [n, old] of Object.entries(existing.segments)) {
+    const init = old && typeof old === 'object' ? existing.inits[old.init] : null;
+    if (!init || !KEY_RE.test(String(old.hash)) || !KEY_RE.test(String(init.hash))) continue;
+    const cur = segments[n];
+    if (cur && (!sparseSegment(cur) || sparseSegment(old))) {
+      if (cur.box === undefined && old.box !== undefined) { segments[n] = { ...cur, box: old.box }; kept++; }
+      continue;
+    }
+    segments[n] = old;
+    if (!inits[old.init]) inits[old.init] = init;
+    kept++;
+  }
+  return kept ? { ...next, inits, segments } : next;
+}
+
+/** 本机帧库是否覆盖了这一段(快照:`frames ∪ oversize` 盖住每一帧;流:每个分段和它的 init 都在清单里,满密度任务另要每段都是满密度) */
 async function coversRange(pipeline, ref) {
   const { from, to } = rangeOf(ref);
   if (ref.kind === 'snapshot') {
@@ -626,9 +665,11 @@ async function coversRange(pipeline, ref) {
     if (!KEY_RE.test(String(ref.resultKey))) return false;
     const manifest = await readStreamManifest(pipeline, ref.resultKey);
     if (!manifest) return false;
+    const dense = wantsDenseStream(ref);
     for (let n = from; n <= to; n++) {
       const seg = manifest.segments?.[n];
       if (!seg?.file || !manifest.inits?.[seg.init]) return false;
+      if (dense && sparseSegment(seg)) return false;
     }
     return true;
   }
@@ -647,8 +688,8 @@ export function smallComplete(result) {
 }
 const wantsSmall = (pipeline, ref) => ref?.kind === 'snapshot' && typeof pipeline?.smallTierEnabled === 'function' && pipeline.smallTierEnabled() === true;
 
-/** 清单是不是把 `range` 里每一帧 / 每个分段都列上了 */
-function resultComplete(result) {
+/** 清单是不是把 `range` 里每一帧 / 每个分段都列上了;`dense`(满密度的流任务,`wantsDenseStream`)时另要每个分段都是满密度 */
+function resultComplete(result, { dense = false } = {}) {
   const { from, to } = result.range;
   if (result.kind === 'snapshot') {
     const have = new Set(result.frames.map(([f]) => f));
@@ -658,6 +699,7 @@ function resultComplete(result) {
   for (let n = from; n <= to; n++) {
     const seg = result.segments?.[n];
     if (!seg || !result.inits?.[seg.init]) return false;
+    if (dense && sparseSegment(seg)) return false;
   }
   return true;
 }
@@ -711,11 +753,28 @@ function manifestMismatch(body, ref) {
   return `shape:${body.kind}`;
 }
 
+/**
+ * 流清单写进内容库之前先取已有的那一份合并(`mergeStreamResult`,不降级);内容库不能读、取不到、合并后超限都原样用新的。
+ * 快照清单原样回。
+ */
+export async function mergedForWrite(content, result) {
+  if (result?.kind !== 'stream' || typeof content?.get !== 'function') return result;
+  const kind = manifestKindOf(result.kind), key = manifestKeyOf(result);
+  if (!kind || !key) return result;
+  let existing = null;
+  try { existing = (await content.get(kind, key))?.body ?? null; } catch { return result; }
+  const merged = mergeStreamResult(existing, result);
+  if (merged === result) return result;
+  try { assertResultSize(merged); } catch { return result; }
+  return merged;
+}
+
 /** 把一段的清单写进内容库。写失败、清单超限只记日志,回 false(C6.4 第 3 节:内容库清单只是给以后复用的) */
 export async function writeManifest(content, result, log = () => {}) {
   const kind = manifestKindOf(result?.kind);
   const key = manifestKeyOf(result);
   if (!content || typeof content.put !== 'function' || !kind || !key) return false;
+  result = await mergedForWrite(content, result);
   try {
     assertResultSize(result);
   } catch (error) {
@@ -791,7 +850,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
     const body = item?.body;
     if (!item || body === undefined) return { ok: false, reason: 'manifest-missing', fields: {} };
     if (!manifestMatches(body, ref)) return { ok: false, reason: 'manifest-mismatch', fields: { field: manifestMismatch(body, ref) } };
-    if (!resultComplete(body)) {
+    if (!resultComplete(body, { dense: wantsDenseStream(ref) })) {
       const listed = body.kind === 'snapshot' ? body.frames.length : Object.keys(body.segments ?? {}).length;
       return { ok: false, reason: 'manifest-incomplete', fields: { listed } };
     }
@@ -822,7 +881,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
       if (covered) {
         let collected;
         try { collected = await collect(ref); } catch { collected = null; }
-        if (collected && resultComplete(collected.result) && (!wantsSmall(pipeline, ref) || smallComplete(collected.result))) {
+        if (collected && resultComplete(collected.result, { dense: wantsDenseStream(ref) }) && (!wantsSmall(pipeline, ref) || smallComplete(collected.result))) {
           // 本机有,素材服务上也得齐:推到一半丢了认领、又被自己重新认领时,这里补齐缺的块,不然别的成员按清单取不到
           const tell = (fields) => { try { report?.(fields); } catch { /* 诊断回调出错不影响推送 */ } };
           tell({ stage: 'has-push' });
@@ -854,7 +913,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
       try {
         if (await coversRange(pipeline, ref)) {
           const { result } = await collect(ref);
-          if (resultComplete(result) && (!wantsSmall(pipeline, ref) || smallComplete(result))) return result;
+          if (resultComplete(result, { dense: wantsDenseStream(ref) }) && (!wantsSmall(pipeline, ref) || smallComplete(result))) return result;
           // 本机这份缺小尺寸:`has` 认的是内容库里两档齐的那份(记下了),回它
         }
       } catch { /* 退到记下的清单 */ }
@@ -881,7 +940,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
         if (ref?.kind !== 'snapshot' && ref?.kind !== 'stream') return incomplete('bad-kind');
         tell({ stage: 'collect' });
         const collected = await collect(ref);
-        if (!resultComplete(collected.result)) {
+        if (!resultComplete(collected.result, { dense: wantsDenseStream(ref) })) {
           const listed = ref.kind === 'snapshot' ? collected.result.frames.length : Object.keys(collected.result.segments ?? {}).length;
           return incomplete('range-missing', { listed });
         }

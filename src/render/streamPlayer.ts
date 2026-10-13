@@ -573,7 +573,8 @@ class PlaneCompositor {
  * ======================================================================== */
 
 interface HeldFrame { frame: VideoFrame; segment: number }
-interface SegmentData { buf: ArrayBuffer; samples: SegmentSample[]; init: string; file: string }
+/** `rect`:拉这一份字节时清单里它那个变体的矩形(之后清单换了、这一段换成别的变体,手里这份解出来的帧仍按它摆) */
+interface SegmentData { buf: ArrayBuffer; samples: SegmentSample[]; init: string; file: string; rect: StreamRect | null }
 
 class StreamTrack {
   readonly id: string;
@@ -733,7 +734,7 @@ class StreamTrack {
     const work = this.bytes.segment(this.key, meta.file)
       .then((buf) => {
         if (this.disposed) return;
-        this.segments.set(n, { buf, samples: parseSegment(buf), init: meta.init, file: meta.file });
+        this.segments.set(n, { buf, samples: parseSegment(buf), init: meta.init, file: meta.file, rect: this.manifest?.inits[meta.init]?.rect ?? null });
         // 留当前段和它前后各一段,别的扔掉
         for (const k of [...this.segments.keys()]) if (Math.abs(k - n) > 2) this.segments.delete(k);
         this.wake();
@@ -824,8 +825,13 @@ class StreamTrack {
     this.standIn = picture !== f ? picture : null;
   }
 
-  /** 这一帧所在分段的变体矩形 */
+  /**
+   * 这一帧所在分段的变体矩形。手里有这一段的字节时用拉它时记下的矩形:清单重问以后这一段可能已经换成别的变体
+   * (稀疏版按上界产、满密度按收紧矩形产),而换文件只在分段起点做(`pump`),段中间画的还是手里这份解出来的帧。
+   */
   private rectOf(f: number): StreamRect | null {
+    const held = this.segments.get(this.segmentOf(f));
+    if (held?.rect) return held.rect;
     const seg = this.manifest?.segments[String(this.segmentOf(f))];
     const init = seg ? this.manifest!.inits[seg.init] : null;
     return init?.rect ?? null;

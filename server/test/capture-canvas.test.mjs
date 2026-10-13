@@ -328,7 +328,7 @@ test('auto 档:直取不比截图快的分段照旧截图,并歇几个分段;画
   await runSegment(capture, bakery, log, { frames: [0], shots: frameOf, shotDelayMs: 100, primed: () => true });
   const halved = record.last.shotMs;
   record = newDirectRecord();
-  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, stride: 3 });
+  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, stride: 15 });
   await runSegment(capture, bakery, log, { frames: [0], shots: frameOf, shotDelayMs: 100, primed: () => true });
   assert.ok(record.last.shotMs > halved * 1.5, `稀疏的分段按两倍算(${record.last.shotMs} 对 ${halved})`);
   // 画面太满:压完超过原始大小的 DIRECT_MAX_FILL,不搬、不比,这个分段走截图

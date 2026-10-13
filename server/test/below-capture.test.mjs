@@ -587,18 +587,23 @@ test('BD-produce 生产者产依赖下层的流:截图恒为整幅、等素材�
     assert.deepEqual(state.manifest.tight, { x: 18, y: 8, w: 48, h: 40 });
     assert.ok(bakery.log.filter(op => op.startsWith('shot:')).every(op => op.endsWith(':96x64')), '稀疏那一趟截的是整幅');
     assert.ok(bakery.log.some(op => op.startsWith('media:')), '截图前等了素材');
-    // 稀疏那一趟每隔 3 帧取一张:第 1 帧没有取
-    assert.ok(!bakery.log.includes('hide:1:target') && bakery.log.includes('hide:3:target'));
+    // 稀疏那一趟每个分段只取分段的第一帧:第 1、3 帧没有取,第 15 帧(第 1 段的第一帧)取了
+    assert.ok(!bakery.log.includes('hide:1:target') && !bakery.log.includes('hide:3:target') && bakery.log.includes('hide:0:target') && bakery.log.includes('hide:15:target'));
     const sparseHides = bakery.log.filter(op => op.startsWith('hide:')).length;
-    assert.equal(sparseHides, 20);
+    assert.equal(sparseHides, 4, '四个分段各一张');
+    // 每个分段的位置矩形记在清单里(平面坐标:这种流是舞台坐标),就是那一张里目标卡改动的那一块
+    for (const n of segments) assert.deepEqual(state.manifest.segments[n].box, { x: 26, y: 16, w: 32, h: 24 }, `分段 ${n} 的位置矩形`);
+    assert.ok(segments.every(n => state.manifest.segments[n].stride === SEGMENT_FRAMES), '稀疏分段的间隔记的是分段的帧数');
     for (const n of segments) await run(bakery, state, n, 1);
     assert.ok(bakery.log.filter(op => op.startsWith('shot:')).every(op => op.endsWith(':96x64')), '第二趟截的仍是整幅(不把截图矩形收紧)');
     const status = producer.status().streams[0];
     assert.equal(status.kind, 'below');
     assert.deepEqual([status.below.failed, status.below.primeLower, status.below.overflows, status.below.absent], [null, false, 0, 0]);
     assert.equal(status.below.checks, 8, '两趟、每个分段各实测一次');
-    assert.equal(status.below.frames, 20 + 60);
-    assert.equal(status.below.glassFrames, 80);
+    assert.equal(status.below.frames, 4 + 60);
+    assert.equal(status.below.glassFrames, 64);
+    // 补密以后位置矩形还在(沿用稀疏分段的)
+    for (const n of segments) assert.deepEqual(state.manifest.segments[n].box, { x: 26, y: 16, w: 32, h: 24 });
     // 解第 1 个分段:每一帧盖回这一帧的下层,和这一帧带目标卡的画面比(收紧矩形里)
     const seg = state.manifest.segments[1];
     const init = state.manifest.inits[seg.init];
@@ -633,10 +638,10 @@ test('BD-widen 收紧矩形不够大(稀疏那一趟没量到的帧里目标卡�
     const spec = specs.find(s => s.kind === 'below');
     assert.equal(spec.hasMedia, false);
     const state = stateOf(spec);
-    // 目标卡每帧往右挪 2 像素;稀疏那一趟只量第 0、3、6、9、12 帧,第 14 帧比量到的最右边多出 4 像素。把外扩关小,让它露出来
+    // 目标卡每帧往右挪 2 像素;稀疏那一趟只量分段的第一帧(第 0 帧),第 14 帧比量到的最右边多出 28 像素。把收紧矩形设小,让它露出来
     const bakery = fakeBakery({ slide: true });
     await run(bakery, state, 0, SPARSE_STRIDE);
-    assert.deepEqual(state.measured, { x: 26, y: 16, w: 56, h: 24 });
+    assert.deepEqual(state.measured, { x: 26, y: 16, w: 32, h: 24 });
     state.manifest.tight = { x: 24, y: 14, w: 60, h: 28 };
     const before = producer.stats.failures;
     await assert.rejects(producer.runSegment(bakery, { state, segment: 0, stride: 1 }), e => e.code === 'below-overflow' && e.cancelled === true);

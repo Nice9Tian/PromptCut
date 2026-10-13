@@ -15,7 +15,8 @@
  * 层表里的流全靠「切分给浏览器出过键」那份记录,`FramePipeline.issuedStreamSpecs`),第二轮开着。`--only` 只跑一轮。
  *
  * 每一轮的断言(任一不成立退出码 1;`<轮>` 是 off / on):
- *   A 产      甲报能压流,认领并完成了这张卡的流任务(没有失败);切分方一个细任务都没做;内容库 `render-manifest` 里每个任务一份流清单
+ *   A 产      甲报能压流,认领并完成了这张卡的流任务——每一段先一个稀疏流任务(每个分段只截第一帧)、再一个满密度任务,四个各做一次(没有失败);
+ *             切分方一个细任务都没做;内容库 `render-manifest` 里每一段一份流清单(稀疏、满密度写同一个键,最后是满密度的,稀疏那一趟量的位置矩形还在)
  *             (过桌面的 `manifestMatches`,编码器 `webcodecs-avc`,分段齐);素材服务 `px` 里开头文件与每个分段都 complete、哈希对得上
  *   B 层表    内容库的层表(v 3)带 `streams`,有这张卡的一行:单卡流、候选里有甲的指纹且结果键 = 内容键 × 甲的指纹 = 甲产的那条流的键、
  *             分段范围与输入签名齐。切分方关着流开关时候选只有浏览器指纹(切分方自己不产,不列它)
@@ -468,16 +469,24 @@ async function runRound(streams, M) {
     /* -------------------------------------------------------------- 2. A 产:清单计划 → 桌面切分 → 甲认领快照与流 → 完成 */
     const tBake = Date.now();
     const seen = new Set();
-    const produced = await until('甲做完这张卡的流任务(两个)与快照任务', async () => {
+    // 流任务四个:两段(0～7、8～8)各一个稀疏流任务、一个满密度任务。计划发出去 5 秒没人认领时本页会自己先产(`pageStreams.ts`),
+    // 那样队列来的四个都走去重、`streamTasks` 一直是 0 —— 认出这种情况就不白等(下面的断言照样判不过,并说明原因)
+    const produced = await until('甲做完这张卡的流任务(稀疏、满密度各两个)与快照任务', async () => {
       const d = await nodeDiag(pageA);
       for (const h of d?.holding ?? []) seen.add(h.id);
-      return d?.counters?.streamTasks >= 2 && d.counters.completed >= 3 && d.state !== 'baking' ? d : null;
+      if (d?.state === 'baking') return null;
+      if (d?.counters?.streamTasks >= 4 && d.counters.completed >= 5) return d;
+      return d?.counters?.streamTasks === 0 && d.counters.dedup >= 4 ? d : null;
     }, 900_000, 250);
     const diagA = produced ?? (await nodeDiag(pageA));
     R.produce = { ms: produced ? Date.now() - tBake : null, counters: diagA?.counters ?? null, streams: diagA?.streams ?? null, claimed: [...seen] };
     say('jia.produced', { round: streams, ms: R.produce.ms, counters: diagA?.counters });
     const streamIds = [...seen].filter((id) => id.startsWith('stream:')).sort();
-    check(diagA?.counters?.streamTasks >= 2 && diagA?.counters?.failed === 0, 'A:甲认领并完成了流任务,没有失败', diagA?.counters);
+    check(diagA?.counters?.streamTasks === 4 && diagA?.counters?.failed === 0 && diagA?.counters?.lost === 0,
+      'A:甲认领并完成了流任务(稀疏、满密度各两个,各做一次),没有失败'
+        + (diagA?.counters?.streamTasks === 0 && diagA?.counters?.dedup >= 4 ? '——这一次计划 5 秒没人认领,本页自己先产了,队列来的任务都走了去重(重跑)' : ''), diagA?.counters);
+    // 每一帧的位置各送进编码器两次:稀疏的一趟(一张重复到整段)和满密度的一趟
+    check(diagA?.counters?.streamFrames === 2 * STREAM_FRAMES, 'A:稀疏、满密度两趟各盖满这条流的每一帧', { streamFrames: diagA?.counters?.streamFrames, frames: STREAM_FRAMES });
     check(streamIds.length >= 1, 'A:甲手里出现过 stream: 任务', [...seen]);
     const deskQ = await editor.queue().catch(() => null);
     R.desk.stats = deskQ?.stats ?? null;
@@ -524,6 +533,18 @@ async function runRound(streams, M) {
     }
     const uniq = [...new Map(blocks.map((b) => [b.hash, b])).values()];
     check(manifestsOk === spansOf(row1).length, 'A:内容库 render-manifest 里每个任务一份流清单(过 manifestMatches、分段齐、webcodecs-avc、满密度)', { manifestsOk, of: spansOf(row1).length });
+    // 位置矩形:稀疏的一趟在页面里量的,补成满密度以后清单里还在;这张卡每一帧都有画面,框在上界里面、不是空的
+    {
+      const boxes = [];
+      for (const [from, to] of spansOf(row1)) {
+        const m = key1 ? await getManifest(key1, from, to) : null;
+        for (let n = from; n <= to; n++) boxes.push({ n, box: m?.segments?.[n]?.box, bound: m?.header?.bound ?? null });
+      }
+      const inBound = (b, o) => !!b && !!o && b.w > 0 && b.h > 0 && b.x >= o.x && b.y >= o.y && b.x + b.w <= o.x + o.w && b.y + b.h <= o.y + o.h;
+      R.boxes = boxes.map((b) => ({ n: b.n, box: b.box ?? null }));
+      check(boxes.length > 0 && boxes.every((b) => inBound(b.box, b.bound)), 'A:清单里每个分段带着位置矩形(平面坐标,在上界里面)', { boxes: R.boxes, bound: boxes[0]?.bound });
+      check(boxes.some((b) => b.box && boxes[0].bound && b.box.w * b.box.h < boxes[0].bound.w * boxes[0].bound.h), 'A:位置矩形比上界小(量的是画面里不透明的那一块)', R.boxes.slice(0, 3));
+    }
     let complete = 0, hashOk = 0;
     for (const b of uniq) {
       const c = await (await fetch(`${SITE}/media/api/asset/px/${b.hash}/chunks`, { headers: auth })).json().catch(() => null);
@@ -603,6 +624,8 @@ async function runRound(streams, M) {
       for (const [from, to] of spansOf(x.row)) {
         const m = await getManifest(cand.resultKey, from, to);
         if (!m || Object.keys(m.segments ?? {}).length !== to - from + 1) return null;
+        // 等到满密度的补齐(稀疏版先到;下面比像素要的是每一帧自己的画面)
+        if (!Object.values(m.segments).every((seg) => seg.stride === 1)) return null;
       }
       return { ...x, cand };
     }, 900_000, 1000);
@@ -613,7 +636,7 @@ async function runRound(streams, M) {
     R.reissue = { ms: got2 ? Date.now() - tNew : null, row: briefRow(row2), streamTasksBy: tasksBy, failed: { jia: after.a?.failed ?? null, yi: after.b?.failed ?? null } };
     say('reissued', { round: streams, ...R.reissue });
     if (check(!!row2 && !!key2 && key2 !== key1 && row2.inputSig !== row1.inputSig && /^s1-/.test(row2.inputSig ?? ''), 'G:层表换成新的一行(内容键、结果键、输入签名都换了)', { old: briefRow(row1), now: briefRow(row2) })) {
-      check(tasksBy.jia + tasksBy.yi >= 2 && (after.a?.failed ?? 0) === 0 && (after.b?.failed ?? 0) === 0, 'G:新一版的两个流任务由浏览器节点做完,没有失败', R.reissue);
+      check(tasksBy.jia + tasksBy.yi >= 4 && (after.a?.failed ?? 0) === 0 && (after.b?.failed ?? 0) === 0, 'G:新一版的流任务(稀疏、满密度各两个)由浏览器节点做完,没有失败', R.reissue);
       if (streams === 'off') check(row2.candidates.every((c) => c.envFingerprint !== deskFp), 'G:新的一行同样不列切分方的指纹', briefRow(row2));
       await pauseAt(pageB, 0.6);
       const readyB2 = await until('G:乙认出新流、分段就绪', async () => { const s = ((await onlineDiag(pageB))?.streams ?? []).find((x) => x.clipId === clipId); return s && s.resultKey !== key1 && s.ready >= 2 ? s : null; }, 90_000, 300);

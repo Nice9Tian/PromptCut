@@ -96,3 +96,27 @@ test('isStreamOrigin:只认非负整数', () => {
   for (const ok of [0, 1, 100]) assert.equal(isStreamOrigin(ok), true);
   for (const bad of [-1, 1.5, NaN, '100', null, undefined, {}]) assert.equal(isStreamOrigin(bad), false);
 });
+
+test('守门:分段帧数这个 15 只许在 streamSegments.mjs 定义(编码器的 GOP 长度在 bakery/ffmpeg.mjs 另有一份,上面核过同值);别处要用就 import', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const hits = [];
+  const walk = (dir) => {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (item.name === 'node_modules' || item.name === 'test' || item.name === 'catalog') continue;
+      const file = path.join(dir, item.name);
+      if (item.isDirectory()) { walk(file); continue; }
+      if (!/\.(mjs|ts|tsx)$/.test(item.name) || /\.test\.|\.d\.mts$/.test(item.name)) continue;
+      const text = fs.readFileSync(file, 'utf8');
+      // 「某个名字里带 SEGMENT / STRIDE 的常量 = 15」
+      if (/\b(?:const|let|var)\s+[A-Z_]*(?:SEGMENT|STRIDE)[A-Z_]*\s*=\s*15\b/.test(text)) hits.push(path.relative(ROOT, file).replaceAll('\\', '/'));
+    }
+  };
+  walk(path.join(ROOT, 'src'));
+  walk(path.join(ROOT, 'server'));
+  assert.deepEqual(hits.sort(), ['server/bakery/ffmpeg.mjs', 'src/render/streamSegments.mjs']);
+  // 已经删掉的快照网格不该再回来
+  assert.equal(fs.existsSync(path.join(ROOT, 'src/render/snapshotGrid.mjs')), false);
+});

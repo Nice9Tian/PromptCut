@@ -657,6 +657,9 @@ export function createRenderQueue(options = {}) {
     // activeIntervalMs（M7 D2 补充）：这个队列认 `node.active`，节点忙着时按这个间隔报；旧队列不带，节点据此不发
     emit(conn, 'node.welcome', {
       nodeId, envFingerprint: node.envFingerprint ?? null, resumed, lost: lost.map((l) => l.id), activeIntervalMs: NODE_ACTIVE_INTERVAL_MS,
+      // 这个队列认稀疏流任务(id 末尾带 `:sparse`,`messages.mjs` 的 `taskIdOf`):切分方看到这一项才切稀疏流任务;
+      // 旧队列不带,切分方就只切满密度的(旧队列校验 id 时不认这种写法,发了会被整批拒掉)
+      sparseStreams: true,
       // 块 N:浏览器节点另有一个用户卡、图卡用的指纹;别的节点与没报运行时版本的浏览器不带这一项(旧形状不变)
       ...(node.profile === 'browser' && fingerprintOf(node.cardEnvFingerprint) !== null ? { cardEnvFingerprint: node.cardEnvFingerprint } : {}),
     }, reqId);

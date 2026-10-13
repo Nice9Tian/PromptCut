@@ -81,7 +81,7 @@ export interface HostedOptionText {
 export const HOSTED_OPTION_TEXT: Record<string, HostedOptionText> = {
   "render.streams": {
     label: "生成轨道流",
-    hint: (enabled) => (enabled ? "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。" : "没有打开：托管方的渲染节点只为这个项目生成快照。打开后还会生成轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。"),
+    hint: (enabled) => (enabled ? "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。" : "没有打开：托管方的渲染节点只为这个项目生成隔一段一张的稀疏轨道流。打开后还会补成每帧都有的轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。"),
     changed: (enabled) => (enabled ? "" : "创建者关闭了轨道流，托管方的渲染节点不再为这个项目生成轨道流。"),
     confirm: (enabled) => (enabled ? "打开后，托管方的渲染节点会为这个项目生成轨道流。" : "关闭后，托管方的渲染节点不再为这个项目生成轨道流，已经生成的保留。"),
   },
