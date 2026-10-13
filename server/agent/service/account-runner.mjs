@@ -39,6 +39,10 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       !Number.isSafeInteger(runAssets.maxImportBytes) || runAssets.maxImportBytes < 1 ||
       typeof resources?.contextAccess?.authorize !== 'function' || typeof resources.register !== 'function'))
     fail(503, 'account-runner-run-assets-configuration');
+  // 看画面同理：账号模式下每个请求都要绑这条任务的授权（登记前、每趟去问前过授权闸，带任务号）。
+  // 给了看画面的客户端而没有能问授权的 resources，直接拒绝；不退回不过闸、不带任务号的老路。
+  if (look !== null && (typeof look?.forProject !== 'function' || typeof resources?.authorize !== 'function'))
+    fail(503, 'account-runner-look-configuration');
   const usage = createUsageLog({ dir: path.join(dataDir, 'usage'), now, log });
   const gate = createGate({ limitsFile: limitsFileOf(dataDir), usage, now, log });
   const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log });
@@ -51,6 +55,9 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
   return async ({ grant, record, onModelCall, beforeToolCall, onEvent = () => {}, signal, context = null }) => {
     if (!idOK(grant.projectId) || !idOK(grant.conversationId) || !idOK(grant.runId) ||
       grant.messageId !== record.messageId || grant.runId !== record.runId) fail(503, 'run-record-mismatch');
+    // 看画面要绑的那条任务上下文必须是执行器给的、和这条授权对得上；没有就不开这一轮（不带着不过闸的看画面往下跑）
+    if (look && (!context || context.projectId !== grant.projectId || context.runGrantId !== grant.runGrantId))
+      fail(503, 'look-context-unavailable');
     let inst, DataWebSocket, projectAssets = null;
     let removeAbort = () => {};
     const aborted = new Promise((_, reject) => {
@@ -104,8 +111,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       // 这一轮被停掉(signal)时,它排在渲染服务队列里的看画面请求一并撤回,不占着队列、不在失权之后还出图
       // 看画面绑这条任务的授权:项目号来自授权;登记前、每趟去问前都问一次文档服务这条任务还能不能读
       prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {}, signal: signal ?? null,
-        ...(context && resources ? { authorize: () => resources.authorize(context, 'read'), instance: grant.instanceId,
-          run: { runGrantId: grant.runGrantId, runId: grant.runId, conversationId: grant.conversationId } } : {}) }) : null,
+        authorize: () => resources.authorize(context, 'read'), instance: grant.instanceId,
+        run: { runGrantId: grant.runGrantId, runId: grant.runId, conversationId: grant.conversationId } }) : null,
       latestMirror: () => null, latestPlayhead: () => null, projectId: grant.projectId,
       identity: { userId: grant.accountId, username: grant.initiatorName ?? record.senderNameAtSend }, ownerKey,
       hostedTools, docUrl: dataClient.wsUrl, protocolsFor, execSerial, accountMode: true, accountSelection,

@@ -18,6 +18,7 @@ import { openAccountLedger } from '../account/ledger.mjs';
 import { inspectAgentScopeSource } from '../hosted/agent-run-scope-reader.mjs';
 import { digestOf } from '../account/ledger.mjs';
 import { scopeModel, pair } from './agent-run-scope-fixture.mjs';
+import { createExistingHostedRunnerFactory } from '../agent/service/account-runner.mjs';
 
 const P = `sp_${'a'.repeat(26)}`;
 const RUN = { runGrantId: 'grant_one', runId: 'run_one', conversationId: 'conversation_one' };
@@ -157,4 +158,27 @@ test('RW4 任务范围的刷新：并着来的不互相打掉；失败的刷新�
   broken = false; slow = 0;
   assert.equal((await scope.refresh(ref)).phase, 'ready');
   assert.equal(probe(), 'run-scope-worker-transport');
+});
+
+test('RW5 账号模式的看画面不能悄悄不过授权闸：没有 resources 构造就拒；没有这条任务的上下文这一轮不开', async t => {
+  const dir = tmp(t);
+  const base = { root: dir, loadModule: async () => { throw new Error('not-loaded'); }, dataDir: dir, modelConfig: async () => ({ vendor: 'mock' }),
+    dataClient: { wsUrl: 'wss://127.0.0.1:1/', webSocketFor() { throw new Error('data-connection-must-not-open'); }, openCount: () => 0 } };
+  const calls = [], look = { forProject(projectId, options) { calls.push({ projectId, options }); return async () => ({ ok: true }); } };
+  const resources = { authorize: async () => ({ allowed: true }) };
+  // 给了看画面而没有能问授权的 resources：构造时就拒（原来会照旧可用，但不过闸、不带任务号）
+  assert.throws(() => createExistingHostedRunnerFactory({ ...base, look }), error => error.code === 'account-runner-look-configuration');
+  assert.throws(() => createExistingHostedRunnerFactory({ ...base, look, resources: {} }), error => error.code === 'account-runner-look-configuration');
+  assert.throws(() => createExistingHostedRunnerFactory({ ...base, look: {}, resources }), error => error.code === 'account-runner-look-configuration');
+  // 没配看画面：不要求 resources（和原来一样）
+  assert.equal(typeof createExistingHostedRunnerFactory(base), 'function');
+  // 配齐了，但执行器没给这条任务的上下文、或上下文是别的任务的：这一轮不开，数据连接都不建
+  const factory = createExistingHostedRunnerFactory({ ...base, look, resources });
+  const grant = { projectId: 'project_one', conversationId: 'conversation_one', runId: 'run_one', runGrantId: 'grant_one', messageId: 'message_one', instanceId: 'instance-task-1', accountId: 'account_one' };
+  const record = { messageId: 'message_one', runId: 'run_one', content: 'x', attachments: [] };
+  const start = context => factory({ grant, record, onModelCall: async () => {}, beforeToolCall: async () => {}, context });
+  await assert.rejects(start(null), error => error.code === 'look-context-unavailable');
+  await assert.rejects(start({ projectId: 'project_one', runGrantId: 'grant_other' }), error => error.code === 'look-context-unavailable');
+  await assert.rejects(start({ projectId: 'project_other', runGrantId: 'grant_one' }), error => error.code === 'look-context-unavailable');
+  assert.equal(calls.length, 0, '没有上下文时一次看画面的绑定都没有建');
 });
