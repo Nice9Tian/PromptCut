@@ -12,7 +12,7 @@ const configFile = path.join(config.dir, 'quick-tunnel.yml'); fs.writeFileSync(c
 const child = spawn(config.binary, ['tunnel', '--config', configFile, '--origincert', path.join(config.dir, 'no-account.pem'),
   '--credentials-file', path.join(config.dir, 'no-account.json'), '--no-autoupdate', '--metrics', '127.0.0.1:0',
   '--grace-period', '1s', '--protocol', 'http2', '--edge-ip-version', '4', '--url', `http://127.0.0.1:${config.port}`],
-{ cwd: config.dir, stdio: ['ignore', 'pipe', 'pipe'] });
+{ windowsHide: true, cwd: config.dir, stdio: ['ignore', 'pipe', 'pipe'] });
 let published = false, stopped = false;
 const read = b => {
   // Never publish raw daemon logs: request failures can contain query tickets.

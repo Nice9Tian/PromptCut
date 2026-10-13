@@ -81,9 +81,11 @@ const ratio = value => {
  * 的缓存校验用。
  *
  * `inputs`:**不能**拿 `cardNodeIdentities` 现成的上游键,那些键里带上游片段的
- * clipId,同一条转场换个片段就不共享了。普通卡没有上游,传 `{}` 即可;
- * `sourceDependent` 链路上每个控件各自递归用本函数算、各自剥掉 clipId,按链路
- * 顺序拼 —— 那部分在第 4 步接上,所以这里把 `inputKeys` 做成显式参数。
+ * clipId,同一条转场换个片段就不共享了。输出节点没有上游的传 `{}`;有上游的
+ * (片段挂了强调、滤镜、声音效果时输出节点是外面那一层,卡片在它的输入后面;素材
+ * 效果卡的素材在它的输入后面)传 `cardSnapshotInputKeys` 给这个节点算出的那一栏 ——
+ * 上游各自剥掉 clipId、沿输入一层层算上去。漏传就是「外面相同、里面不同」的两个
+ * 片段同键、互相取到对方的预渲染结果。
  *
  * 片段框宽高:用 `src/kernel/frameSize.mjs` 的 `resolveFrameSize` 解析,和舞台
  * `layout.ts` 的 `resolveFrame` 同一份实现(选它而不是在浏览器侧算好传进来:
@@ -122,6 +124,45 @@ export function cardSnapshotIdentity(node, {
 }
 
 /**
+ * 每个节点的上游在共享快照键里的那一栏:`节点 id → { 输入名: { key, offset, rate } }`,交给 `cardSnapshotIdentity` 的 `inputKeys`
+ * (`CardFrameCache.plan` 对每个输出节点取一次,共享快照的内容键和单卡流的成员键都用它)。
+ *
+ * 形状和 `cardNodeIdentities` 里的 `inputs` 一样,只是上游的 `key` 换了算法:上游节点的身份在 `id` / `inputs` /
+ * `definitionId` 之外**再剥 `clipId`**(和 `cardSnapshotIdentity` 对输出节点做的一样),它自己的上游照同样的办法一层层算上去。
+ * 所以:
+ *
+ *   - 外面相同、里面不同的两个片段(挂同样强调的两张不同的卡、同一张卡参数不同、卡的源码版本不同、同一张素材效果卡接不同的素材、
+ *     输入的时间映射不同、链路中间某一层不同)这一栏不同,键也就不同;
+ *   - 里外都相同的两个片段这一栏相同 —— 上游的身份里没有片段的 id,同一张卡两个片段照旧共用一份;
+ *   - **没有上游的节点这一栏是 `{}`**,和原来 `inputKeys: {}` 的写法逐字相同,这类片段的键一个字不变。
+ *
+ * 上游的身份里没有片段的时长、相位、框:那些在 `cardSnapshotIdentity` 的 `snapshot` 一段里,取的是输出节点所在片段的;
+ * 上游就在同一个片段里(强调、滤镜、声音效果、接自己那段素材的素材效果卡)时这就够了。上游是**别的片段**的节点时
+ * (转场接两段素材),那个片段相对这一个的入点没有进键 —— `cardNodeIdentities` 也一样(它刻意不带时间上的摆放);
+ * 源依赖卡今天不单独预渲染(`CardFrameCache.plan` 的 `cacheable` 不认它)、不进单卡流,要放行时这一处得一起补。
+ *
+ * 指向已删片段的输入:`validateCardGraph` 丢了边、把名字记在节点的 `missingInputs` 里,它留在节点上一并进摘要。
+ */
+export function cardSnapshotInputKeys(graph, { style = {}, environment = {}, sourceVersions = {} } = {}) {
+  const { nodes, levels } = validateCardGraph(graph);
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const definitions = new Map((graph.definitions ?? []).map(def => [def.id, def]));
+  const upstream = new Map(); // 节点 id → 它当别人的上游时的身份(不带片段的 id)
+  const inputKeys = new Map();
+  for (const level of levels) for (const id of level) {
+    const { id: _id, inputs, definitionId, clipId: _clipId, ...node } = byId.get(id);
+    const own = Object.fromEntries(Object.entries(inputs).map(([name, input]) => [name,
+      { key: upstream.get(input.nodeId), offset: input.offset, rate: input.rate }]));
+    inputKeys.set(id, own);
+    const definition = definitions.get(definitionId);
+    const usedStyle = definition ? selectedCardStyle(definition, style) : node.adapter === 'chrome' ? style : {};
+    upstream.set(id, digest({ abi: CARD_RUNTIME_ABI, environment, node, definition, style: usedStyle,
+      sourceVersion: node.cardId ? sourceVersions[node.cardId] : undefined, inputs: own }));
+  }
+  return inputKeys;
+}
+
+/**
  * 轨道流的流键(R8;任务书说 `streamKey` 的命名在本任务定、A3b 回头对齐 —— 这里先用 `streamKey`)。
  *
  * 两种流,键的口径不同:
@@ -137,8 +178,12 @@ export function cardSnapshotIdentity(node, {
  * 两种都带上画幅、fps 和 `codeVersion`(生产这条流的代码指纹:截图 / 编码那几份文件一改,
  * 旧流全部作废)。**矩形和编码器不进流键**:它们只决定分段的「变体」(`init` 不同),
  * 页面按分段各自找自己的 `init`,见 `server/frame-stream.mjs`。
+ *
+ * 第三种,**依赖下层的流**(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.2 节):目标卡连同它下面的层一起渲,
+ * 按舞台坐标产。成员只有目标卡一张,键见 `belowStreamIdentity`;上面两种的摘要一个字不变。
  */
-export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {}, codeVersion = '' } = {}) {
+export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {}, codeVersion = '', below = null } = {}) {
+  if (kind === 'below') return belowStreamIdentity({ members, fps, stage, codeVersion, below });
   if (kind !== 'card' && kind !== 'group') throw new Error(`未知的流种类 ${kind}`);
   if (!members.length) throw new Error('流里至少要有一张卡');
   return digest({
@@ -151,5 +196,55 @@ export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {
       count: m.count,
       frame: m.frame,
     })),
+  });
+}
+
+/**
+ * 依赖下层的流里**放的是什么**的版本。每改一次流里放的东西就加一 —— 开关打开时(`belowStreamsEnabled`)用旧办法产出来的分段
+ * 就不会被新的读法拿去贴。不动 `STREAM_CODE_VERSION`:那一个管所有的流。
+ *
+ *   0  只有身份(本文件)和计划(`frame-stream.mjs` 的 `planStreams`),流里照单卡流的办法放整幅截图(带着下层);
+ *   1  差分取层(契约第 5.3 节,`./bakery/capture-below.mjs`):流里是「盖在只有下层的画面上正好得到带目标卡的画面」的那一层,
+ *      目标卡没有改动的地方全透明。
+ */
+export const BELOW_STREAM_VERSION = 1;
+
+/**
+ * 依赖下层的流(`kind: 'below'`)的内容键。摘要里是(契约第 5.2 节):
+ *
+ *   - **目标卡**(`members` 恰好一项):带外观的缓存内容键(`control.cacheContentKey`:位置、缩放、旋转、不透明度、淡入淡出、
+ *     轨迹都在里面 —— 这种流按舞台坐标产,外观画进流里),加采样的第一帧、相位、帧数;
+ *   - **下层**(`below.layers`):画家顺序排在目标卡下面、活跃时间和它有重叠的每一个画面层,各自的缓存内容键、第一帧、相位、帧数,
+ *     **按画家顺序排成一列**(下面的在前)。每项可另带 `extra`:缓存内容键没管到、又会改这一层画面的项目数据
+ *     (现在是素材段的像素映射,见 `frame-stream.mjs` 的 `belowLayerExtra`);
+ *   - 画幅、帧率、`codeVersion`,同别的流;再加 `BELOW_STREAM_VERSION`。
+ *
+ * 所以下层任一层的参数、位置、时间、上下顺序变了,或者下层多了少了一层,键就变;排在上面的层怎么改都不变
+ * (`mechanism/cards.md`「轴三」:下层依赖卡的预渲染结果,同一时刻下层任一控件的参数变了就失效)。
+ *
+ * 算不出某个下层的键时不许拿残缺的一列出键:调用方改传 `below.scene`(整个项目的键 `entry.key`),摘要里就只有目标卡加这一个键 ——
+ * 更粗(项目里任何改动都作废),但不会错。`layers` 与 `scene` 都没有、或哪一项缺键就抛。
+ */
+function belowStreamIdentity({ members = [], fps, stage = {}, codeVersion = '', below = null } = {}) {
+  if (members.length !== 1) throw new Error('依赖下层的流只有目标卡一个成员');
+  const scene = below?.scene;
+  const layers = below?.layers;
+  if (scene !== undefined && scene !== null && (typeof scene !== 'string' || !scene)) throw new Error('依赖下层的流:整个项目的键不对');
+  if (!scene && !Array.isArray(layers)) throw new Error('依赖下层的流:要给下层的键,或者整个项目的键');
+  const item = m => {
+    if (typeof m?.key !== 'string' || !m.key) throw new Error('依赖下层的流:有一层没有键');
+    return {
+      key: m.key,
+      firstFrame: m.sampling?.firstFrame,
+      phase: m.sampling?.phase ? ratio(m.sampling.phase) : undefined,
+      count: m.count,
+      extra: m.extra,
+    };
+  };
+  return digest({
+    stream: 1, kind: 'below', below: BELOW_STREAM_VERSION, fps: ratio(fps), codeVersion,
+    stage: { width: stage.width, height: stage.height, camera3dFov: stage.camera3dFov },
+    members: members.map(item),
+    ...(scene ? { scene } : { layers: layers.map(item) }),
   });
 }

@@ -35,12 +35,15 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { bakeStream } from './bakery/bake.mjs';
+import { directCaptureMode, directSegmentCapture, newDirectRecord, rgbaAlphaBox } from './bakery/capture-canvas.mjs';
+import { belowSegmentCapture, newBelowRecord } from './bakery/capture-below.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
+import { belowLayersOf } from '../src/render/streamInputSig.mjs';
 
 import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
 export { StreamStore, readySegmentRanges, publicManifest, handleStreamRequest } from './asset-store/stream-store.mjs';
@@ -55,8 +58,12 @@ export const STREAM_POOL_DEFAULT = 1;
 export const STREAM_POOL_MAX = 2;
 /** G6:替换后旧文件延迟这么久再删(页面上可能还有一个在途请求) */
 export const REPLACED_DELETE_MS = 5000;
-/** 生产这条流的代码的版本(改了分段格式 / 坐标口径就加一,旧流全部作废) */
-export const STREAM_CODE_VERSION = 1;
+/**
+ * 生产这条流的代码的版本(改了分段格式 / 坐标口径就加一,旧流全部作废)。
+ * 2:画布卡的帧从画布直接取像素(`./bakery/capture-canvas.mjs`);单卡流的成员键不再带生成快照的代码指纹
+ * (`docs/plan/prerender-products-contract.md` 第 9.3 节,这两样同一次换)。
+ */
+export const STREAM_CODE_VERSION = 2;
 /** 单卡流的矩形上界:框外再留这么多像素给溢出框的内容(阴影、描边) */
 export const LOCAL_OVERFLOW_PX = 32;
 /** 实测实体框并集再外扩这么多(稀疏趟只量了三分之一的帧,中间帧可能略微超出) */
@@ -69,6 +76,20 @@ export const QUEUE_SEGMENT_ATTEMPTS = 3;
 /** `streams` 开关(任务书:默认开;`PROMPTCUT_STREAMS=0` 关) */
 export function streamsEnabled(env = process.env) {
   return String(env.PROMPTCUT_STREAMS ?? '1').trim() !== '0';
+}
+
+/**
+ * 「依赖下层的流」(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5 节)出不出。**缺省关**〔裁〕。
+ *
+ * 这种流现在做了计划、键、隔离工程、切分与认领,以及流里的像素怎么取(差分取层,`./bakery/capture-below.mjs`);
+ * 怎么贴回舞台、在线页面怎么读还没做。关着的时候
+ * `planStreams` 不出这种流,于是切分不出这种任务、层表里没有这种行、生产者不产它,行为和加这种流之前一字不差。
+ * 只给单测和探针一个打开的办法:环境变量 `PROMPTCUT_TEST_BELOW_STREAMS=1`(照 `PROMPTCUT_TEST_PLAN_ONLY` 的写法,生产环境不设),
+ * 或者直接给 `planStreams` 传 `below: true`。贴回舞台那一块合入时把这个开关去掉(常量改成 true、删掉环境变量)。
+ */
+export const BELOW_STREAMS_DEFAULT = false;
+export function belowStreamsEnabled(env = process.env) {
+  return BELOW_STREAMS_DEFAULT || String(env?.PROMPTCUT_TEST_BELOW_STREAMS ?? '').trim() === '1';
 }
 
 /** 解码器预算。只给探针压低它(`PROMPTCUT_STREAM_DECODERS`),产品里就是 6 */
@@ -312,6 +333,32 @@ export function streamEligible(control, clip, track) {
 }
 
 /**
+ * 「依赖下层的流」收哪些卡(契约第 5.1 节)之外,另外两类卡进不进。现在都不进;以后要并进这条路,把对应的一项改成 true 就行
+ * (`docs/plan/html-snapshot-removal-dryrun.md` 第 0 节第 7 条,用户在定):
+ *   - `sourceDependent`:源依赖卡(转场、接素材的素材效果卡)。隔离工程里它的源片段都留着(藏起来的序列仍是 `sourceOnly`),
+ *     键里目标卡的缓存内容键已经顺着输入带上了整条源链;
+ *   - `frame3d`:框用了三维的卡(含独立卡 —— 它进不了单卡流)。这种流按舞台坐标产,三维摆放照原样画进去。
+ */
+export const BELOW_STREAM_RULES = Object.freeze({ sourceDependent: false, frame3d: false });
+
+/**
+ * 这张卡进不进「依赖下层的流」。收:依不依赖下层这一样是「依赖下层」(`belowDependent`)、旧的统称 `context`、
+ * 或「未知」(`unknown`,审阅表没覆盖到的卡;没写、认不出的值也按未知)的卡。平面的独立卡走单卡流(`streamEligible`),不进这里;
+ * 源依赖卡和框用了三维的卡看 `rules`。和 `streamEligible` 不会同时为真。
+ */
+export function belowStreamEligible(control, clip, track, rules = BELOW_STREAM_RULES) {
+  if (!control?.clipId || !clip || !track) return false;
+  if (track.hidden || track.sourceOnly) return false;
+  if (!clip.cardId) return false;
+  const spatial = frame3d(clip.frame);
+  if (spatial && rules?.frame3d !== true) return false;
+  const compositing = control.capabilities?.compositing ?? control.compositing;
+  if (compositing === 'independent') { if (!spatial) return false; }
+  else if (compositing === 'sourceDependent') { if (rules?.sourceDependent !== true) return false; }
+  return Number.isInteger(control.count) && control.count > 0;
+}
+
+/**
  * 场景里全部**画面层**(卡片段 + 画面素材段),按画家顺序排:和 `FrameScene` 一样,
  * `project.tracks` 倒着数(第一条序列在最上面),同一条序列里按片段顺序。
  * 组流「只由 z 序相邻的卡组成」—— 相邻要连素材层一起看。
@@ -334,13 +381,16 @@ export function paintLayers(project, fps) {
   return out.sort((a, b) => a.order - b.order);
 }
 
-/** 区间集合在同一帧上的最大重叠数,以及峰值出现在哪一帧 */
-export function peakConcurrency(intervals) {
+/**
+ * 区间集合在同一帧上的最大重叠数,以及峰值出现在哪一帧。`skip`(帧号的集合)给了,就不把这些帧当候选:
+ * 回的是剩下的帧里重叠最多的那一帧(`groupStreams` 在有不参加合并的流时用它换一帧再找)。
+ */
+export function peakConcurrency(intervals, skip = null) {
   const events = [];
   for (const it of intervals) { events.push([it.from, 1]); events.push([it.to + 1, -1]); }
   events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   let cur = 0, peak = 0, at = 0;
-  for (const [frame, d] of events) { cur += d; if (cur > peak) { peak = cur; at = frame; } }
+  for (const [frame, d] of events) { cur += d; if (cur > peak && !skip?.has(frame)) { peak = cur; at = frame; } }
   return { peak, at };
 }
 
@@ -351,12 +401,18 @@ export function peakConcurrency(intervals) {
  * 贪心:在重叠峰值那一帧上,挑画家顺序里**紧挨着**的两条流(两者之间、在它们合并后的时间段里
  * 没有别的画面层插着)合并;反复直到峰值 ≤ 预算或者再也找不到可合并的一对。
  * 回合并后的列表(每项 `clipIds` 按画家顺序,最后一个是最上面那张)。
+ *
+ * `fixed`:不参加合并、但同样各占一个解码器的流(依赖下层的流,契约第 5.1 节)`[{ from, to }]`。它们只算进重叠峰值,
+ * 不会被挑去合并,也不出现在结果里;不给(或给空)时和原来完全一样。它们在 `layers` 里本来就有自己那一层,
+ * 夹在两张卡中间时照旧挡住那两张卡合并。有它们的时候,峰值那一帧上可能没有能合的一对(挤在那里的都是不能合的流),
+ * 而别的超预算的帧上有:这一帧找不到就记进 `tried`、换下一个超预算的帧,合成一次以后从头再看。
  */
-export function groupStreams(streams, layers, budget = STREAM_DECODER_BUDGET) {
+export function groupStreams(streams, layers, budget = STREAM_DECODER_BUDGET, fixed = []) {
   let list = streams.map(s => ({ ...s, clipIds: [...s.clipIds] }));
   const overlaps = (a, b) => a.from <= b.to && b.from <= a.to;
+  const tried = new Set();
   for (let guard = 0; guard < 1000; guard++) {
-    const { peak, at } = peakConcurrency(list);
+    const { peak, at } = fixed.length ? peakConcurrency([...list, ...fixed], tried) : peakConcurrency(list);
     if (peak <= budget) break;
     const active = list.map((s, i) => ({ s, i })).filter(({ s }) => s.from <= at && at <= s.to).sort((a, b) => a.s.order - b.s.order);
     let merged = false;
@@ -374,7 +430,8 @@ export function groupStreams(streams, layers, budget = STREAM_DECODER_BUDGET) {
       list.sort((a, b) => a.order - b.order);
       merged = true;
     }
-    if (!merged) break;
+    if (!merged && !fixed.length) break;
+    if (merged) tried.clear(); else tried.add(at);
   }
   return list;
 }
@@ -421,8 +478,12 @@ export function streamNeedsReplay(controls) {
  * M4(契约 E.4):`contentKey` 是流的内容键(成员取 card plan 的**内容键**,不含环境),
  * `streamKey = resultKeyOf(contentKey, envFingerprint)` 是落盘和路由用的结果键。同一个项目在两种
  * 环境下 `contentKey` 相同、`streamKey` 不同。没有指纹就不产流(回 `[]`),理由同 `CardFrameCache.plan()`。
+ *
+ * `below`(缺省取 `belowStreamsEnabled()`,**缺省关**):打开时预渲染集合里依赖下层、`context`、未知的重卡各出一条
+ * `kind: 'below'` 的流(`belowStreamSpec`),排在单卡流和组流后面;它们不参加组流合并,但占解码器预算。
+ * 关着时结果与没有这种流时逐项相同。
  */
-export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint } = {}) {
+export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint, below = belowStreamsEnabled() } = {}) {
   if (typeof envFingerprint !== 'string' || !envFingerprint) return [];
   const project = entry?.project;
   const plan = entry?.cardPlan;
@@ -447,7 +508,9 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
   }
   singles.sort((a, b) => a.order - b.order);
   const byClip = new Map(singles.map(s => [s.clipIds[0], s]));
-  const grouped = groupStreams(singles, layers, budget);
+  // 依赖下层的流的目标卡(开关关着时是空的):不参加组流合并,但各占一个解码器
+  const belows = below ? belowTargets(plan, { picked, where, fps, total, orderOf }) : [];
+  const grouped = groupStreams(singles, layers, budget, belows);
   const specs = [];
   for (const g of grouped) {
     const members = g.clipIds.map(id => byClip.get(id));
@@ -464,9 +527,10 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     if (members.length === 1) {
       const m = members[0];
       const placement = localPlacement(m.clip, stage);
-      // 成员键优先取内容键;`??` 后面的回退只为没有内容键字段的旧形状输入(照旧 `snapshotKey || key`)
+      // 成员键取不带生成快照的代码指纹的那一份内容键(`streamMemberKey`:改生成快照的代码不该让流跟着作废);
+      // `??` 后面的回退只为没有这个字段的旧形状输入(照旧内容键,再照旧 `snapshotKey || key`)
       const contentKey = cardStreamIdentity({ kind: 'card', fps, stage, codeVersion,
-        members: [{ key: m.control.contentKey ?? (m.control.snapshotKey || m.control.key), sampling: m.control.sampling, count: m.control.count }] });
+        members: [{ key: m.control.streamMemberKey ?? m.control.contentKey ?? (m.control.snapshotKey || m.control.key), sampling: m.control.sampling, count: m.control.count }] });
       const streamKey = resultKeyOf(contentKey, envFingerprint);
       specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'card', plane: 'local', offset: placement.offset, bound: placement.bound, box: placement.box, members: [m.control] });
     } else {
@@ -477,7 +541,24 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'group', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view), members: members.map(m => m.control) });
     }
   }
-  return specs;
+  if (belows.length) specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion, envFingerprint }));
+  return relockStreams(specs, entry?.streamLocks);
+}
+
+/**
+ * 「流库里有别的指纹产的同一条流」(任务书 `render-refactor-task.md`「甲二」):单卡流的内容键在 `locks`(内容键 → 环境指纹)里时,
+ * 这条流的键照那个指纹出(`streamKey = 内容键 × 那个指纹`,`envFingerprint` 也换成它,本机的记在 `ownEnvFingerprint`)。
+ * 锁由管线在把那条流整条拉回本机流库之后才记(`FramePipeline.adoptForeignStreams`),记在每个 entry 的 `streamLocks` 上;
+ * 所以照锁出键的流在本机一定是齐的:生产者不重产,舞台播的就是拉回来的那一条,切分时照锁只出一份。
+ * 组流、依赖下层的流不换(它们不在别的环境产)。没有锁时原样返回同一个数组。
+ */
+export function relockStreams(specs, locks) {
+  if (!locks || typeof locks.get !== 'function' || !locks.size) return specs;
+  return specs.map(spec => {
+    const fingerprint = spec?.kind === 'card' ? locks.get(spec.contentKey) : null;
+    if (typeof fingerprint !== 'string' || !fingerprint || fingerprint === spec.envFingerprint) return spec;
+    return { ...spec, streamKey: resultKeyOf(spec.contentKey, fingerprint), envFingerprint: fingerprint, ownEnvFingerprint: spec.envFingerprint };
+  });
 }
 
 /**
@@ -492,6 +573,8 @@ export function queueStreamOf(spec) {
     kind: spec.kind, plane: spec.plane, clipIds: [...(spec.clipIds ?? [])], fps: spec.fps,
     bound: spec.bound ? { ...spec.bound } : null, offset: spec.offset ? { ...spec.offset } : null,
     firstFrame: spec.firstFrame, lastFrame: spec.lastFrame, total: spec.total,
+    // 依赖下层的流另带算进键里的下层(切分据此知道这条流要整场景的下层和素材);别的流不带这一项,形状与原来相同
+    ...(spec.kind === 'below' ? { belowClipIds: [...(spec.belowClipIds ?? [])] } : {}),
   };
 }
 
@@ -515,6 +598,7 @@ export function planListStreams(entry, clips, options = {}) {
  * 都去掉):这些在舞台上由包裹层加。组流原样保留(外观画进流里)。
  */
 export function isolatedStreamProject(project, spec) {
+  if (spec?.kind === 'below') return isolatedBelowProject(project, spec);
   const members = new Set(spec.clipIds);
   const ids = new Set((project.tracks ?? []).map(t => t.id));
   const tracks = [];
@@ -544,6 +628,157 @@ function localClip(clip, spec) {
     : undefined;
   if (out.frame === undefined) delete out.frame;
   return out;
+}
+
+/* ======================================================================== *
+ * 依赖下层的流(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.1、5.2 节)
+ *
+ * 这一节只有计划、键和隔离工程。流里的像素怎么取(第 5.3 节:差分取层)在 `./bakery/capture-below.mjs`,
+ * 由 `StreamProducer.runSegment` 接上;怎么贴回舞台(第 5.4 节)不在这里。
+ * 出不出这种流由 `belowStreamsEnabled` 管,缺省关。
+ * ======================================================================== */
+
+/** 这一版里要出「依赖下层的流」的目标卡,按画家顺序。每项带它占解码器的那一段 `from..to`(同单卡流的算法) */
+function belowTargets(plan, { picked, where, fps, total, orderOf }) {
+  const out = [];
+  const seen = new Set();
+  for (const control of plan) {
+    if (!control?.clipId || seen.has(control.clipId) || !picked(control.clipId)) continue;
+    const at = where.get(control.clipId);
+    if (!at || !belowStreamEligible(control, at.clip, at.track)) continue;
+    const firstFrame = control.sampling?.firstFrame ?? Math.ceil(at.clip.start * fps - 1e-9);
+    const lastFrame = Math.min(total - 1, firstFrame + control.count - 1);
+    if (lastFrame < firstFrame) continue;
+    seen.add(control.clipId);
+    out.push({ control, clip: at.clip, order: orderOf.get(control.clipId) ?? 0, firstFrame, from: Math.min(mountFrameOf(at.clip, fps), firstFrame), to: lastFrame });
+  }
+  return out.sort((a, b) => a.order - b.order);
+}
+
+/**
+ * 一层的缓存内容键(`control.cacheContentKey`)没管到、又会改这一层画面的项目数据;没有回 undefined(摘要里不出现这一项)。
+ *
+ * 现在只有一样:素材段挂的**像素映射**(`clip.pixelMap`、项目里那一条定义、定义里引用到的别的素材)。缓存内容键来自卡片图
+ * (`src/kernel/cardGraph.mjs` 的 `projectCardGraph`),图里只把滤镜、音频效果、强调串成了节点,像素映射不在图里;
+ * 不补这一项,改了下层素材的像素映射,依赖下层的流的键不变,旧流会被接着贴。
+ */
+export function belowLayerExtra(project, clip) {
+  const ref = clip?.pixelMap;
+  if (!ref) return undefined;
+  const def = (project?.pixelMaps ?? []).find(x => x?.id === ref.id) ?? null;
+  const ids = new Set();
+  const walk = value => {
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    if (!value || typeof value !== 'object') return;
+    for (const [name, inner] of Object.entries(value)) {
+      if (name === 'mediaId' && typeof inner === 'string' && inner) ids.add(inner);
+      else walk(inner);
+    }
+  };
+  walk(def);
+  const media = [...ids].sort().map(id => {
+    const m = (project?.media ?? []).find(x => x?.id === id);
+    return [id, m ? (m.hash ?? m.url ?? m.path ?? null) : null];
+  });
+  return { pixelMap: ref, def, media };
+}
+
+/**
+ * 每个目标卡一条**依赖下层的流**。`targets` 是 `belowTargets` 的结果;回的每一项形状照组流(舞台坐标,`plane: 'stage'`、
+ * `offset` 是零、`bound` 是整个画面,收紧留给产流那一趟量),另外:
+ *
+ *   - `clipIds` 只有目标卡一张(这条流挂在它身上);`belowClipIds` 是算进键里的那些下层,按画家顺序(下面的在前);
+ *   - 键:`cardStreamIdentity({ kind: 'below' })`。下层取 `belowLayersOf`(与页面的输入签名、与隔离工程同一份认定),每层用它在
+ *     card plan 里的缓存内容键加采样窗口,再加 `belowLayerExtra`。有一层在 card plan 里找不到键(预渲染间不认识的卡)时,
+ *     整条退回用整个项目的键 `entry.key`(`belowScene: true`;更粗,但不会错);连 `entry.key` 也没有就不出这条流;
+ *   - `replay` / `mountFrame`:目标卡和下层里的卡片段(含挂着节点的素材效果卡片段)有一张是 motion 式的就要回放,从这些有状态的卡里最早的
+ *     挂载帧起(在 card plan 里找不到的按有状态算)。纯素材段按时间直接取帧,不算;
+ *   - `hasMedia`:项目里有没有画面素材(有的话产流那一趟截图前要等素材就位,`bakeStream` 的 `hasMedia`;
+ *     藏起来的源片段也算,素材效果卡可能接着它们)。
+ */
+function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envFingerprint }) {
+  const project = entry.project;
+  const controlOf = new Map();
+  for (const control of entry.cardPlan ?? []) if (control?.clipId && !controlOf.has(control.clipId)) controlOf.set(control.clipId, control);
+  const visualMedia = new Set((project.media ?? []).filter(m => m && m.kind !== 'audio').map(m => m.id));
+  const hasMedia = (project.tracks ?? []).some(track => (track.clips ?? []).some(c => c?.mediaId && visualMedia.has(c.mediaId)));
+  const view = { x: 0, y: 0, w: stage.width, h: stage.height };
+  const specs = [];
+  for (const target of targets) {
+    const { control, clip } = target;
+    const found = belowLayersOf(project, control.clipId);
+    const targetKey = control.cacheContentKey ?? control.key;
+    if (!found || typeof targetKey !== 'string' || !targetKey) continue;
+    const layers = [];
+    let whole = false;
+    for (const layer of found.below) {
+      const lower = controlOf.get(layer.id);
+      const key = lower?.cacheContentKey ?? lower?.key;
+      if (typeof key !== 'string' || !key) { whole = true; break; }
+      layers.push({ key, sampling: lower.sampling, count: lower.count, extra: belowLayerExtra(project, layer.clip) });
+    }
+    if (whole && (typeof entry.key !== 'string' || !entry.key)) continue;
+    const contentKey = cardStreamIdentity({ kind: 'below', fps, stage, codeVersion,
+      members: [{ key: targetKey, sampling: control.sampling, count: control.count, extra: belowLayerExtra(project, clip) }],
+      below: whole ? { scene: entry.key } : { layers } });
+    let mountFrame = target.from;
+    const stateful = [control];
+    for (const layer of found.below) {
+      if (!layer.clip.cardId && !layer.clip.nodeId) continue;
+      const lower = controlOf.get(layer.id) ?? null;
+      stateful.push(lower);
+      if (streamNeedsReplay([lower])) mountFrame = Math.min(mountFrame, mountFrameOf(layer.clip, fps));
+    }
+    specs.push({
+      clipIds: [control.clipId], topClipId: control.clipId, mountFrame,
+      firstFrame: target.firstFrame, lastFrame: target.to,
+      firstSegment: Math.floor(Math.max(0, target.firstFrame) / SEGMENT_FRAMES), lastSegment: Math.floor(target.to / SEGMENT_FRAMES),
+      fps, stage, total,
+      replay: streamNeedsReplay(stateful),
+      streamKey: resultKeyOf(contentKey, envFingerprint), contentKey, envFingerprint,
+      kind: 'below', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view),
+      members: [control],
+      belowClipIds: found.below.map(layer => layer.id), belowScene: whole, hasMedia,
+    });
+  }
+  return specs;
+}
+
+/**
+ * 依赖下层的流的**隔离工程**(契约第 5.3 节头一段):留着目标卡和画家顺序排在它下面的全部层,只把上面的层藏起来。
+ * `isolatedStreamProject` 遇到 `kind: 'below'` 的流走这里;单卡流、组流那一种(非成员全藏)不变。
+ *
+ *   - 目标卡上面的序列:整条变成隐藏的 `sourceOnly` 序列(不出画,素材效果卡按源片段解输入时还找得到);
+ *   - 目标卡所在的序列:它前面的片段(画家顺序在它下面)和它自己留着,它后面的片段挪到一条隐藏的 `sourceOnly` 序列里;
+ *   - 目标卡下面的序列:原样(本来隐藏的照旧隐藏),卡片、素材、它们的外观都不动;
+ *   - 目标卡的外观原样保留(这种流按舞台坐标产,外观画进流里);时间不平移。
+ * 「上面 / 下面」和流键、输入签名用的是同一个画家顺序(`src/render/streamInputSig.mjs` 的 `belowLayersOf`)。
+ *
+ * `withTarget: false`:连目标卡也藏起来(挪进那条隐藏的序列),只剩下层 —— 差分取层要的那一张「不带目标卡」的画面。
+ */
+export function isolatedBelowProject(project, spec, { withTarget = true } = {}) {
+  const targetId = spec?.topClipId ?? spec?.clipIds?.[0];
+  const source = project.tracks ?? [];
+  let ti = -1, ci = -1;
+  source.forEach((track, i) => (track.clips ?? []).forEach((clip, j) => { if (ti < 0 && clip.id === targetId) { ti = i; ci = j; } }));
+  if (ti < 0) throw new Error(`隔离工程:项目里没有片段 ${targetId}`);
+  const ids = new Set(source.map(t => t.id));
+  const tracks = [];
+  source.forEach((track, i) => {
+    if (i < ti) { tracks.push({ ...structuredClone(track), hidden: true, sourceOnly: true }); return; }
+    if (i > ti) { tracks.push(structuredClone(track)); return; }
+    const clips = track.clips ?? [];
+    const kept = clips.filter((_, j) => j < ci || (j === ci && withTarget));
+    const hiddenClips = clips.filter((_, j) => j > ci || (j === ci && !withTarget));
+    tracks.push({ ...structuredClone(track), hidden: false, sourceOnly: false, clips: structuredClone(kept) });
+    if (hiddenClips.length) {
+      let id = `__pc_source_${track.id}`, n = 1;
+      while (ids.has(id)) id = `__pc_source_${track.id}_${n++}`;
+      ids.add(id);
+      tracks.push({ ...structuredClone(track), id, hidden: true, sourceOnly: true, clips: structuredClone(hiddenClips) });
+    }
+  });
+  return { ...structuredClone(project), tracks, _cardRender: { mode: 'final', frames: {}, missing: {} } };
 }
 
 /* ======================================================================== *
@@ -621,6 +856,8 @@ export class StreamProducer {
     this.poolLimit = streamPoolLimit(env);
     this.pool = this.poolLimit.fixed ?? STREAM_POOL_DEFAULT;
     this.store = new StreamStore(path.join(pipeline.root, 'streams'), { ownership, projectAccess });
+    /** 画布卡的流走不走画布直取:`auto`(缺省)/ `always`(过了实测就走,不管快慢)/ `off`;见 `directOf` */
+    this.direct = directCaptureMode(env);
     this.streams = new Map();
     this.workers = new Set();
     this.encoding = new Set();
@@ -666,6 +903,8 @@ export class StreamProducer {
         firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
         bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
         replay: state.spec.replay !== false, replayedFrames: state.replayedFrames ?? 0,
+        direct: state.direct ? { ...state.direct } : null, capture: state.capture ? { ...state.capture } : null,
+        below: state.below ? { ...state.below } : null,
         segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs }])),
         inits: Object.keys(state.manifest?.inits ?? {}),
       })),
@@ -779,6 +1018,8 @@ export class StreamProducer {
         let attempts = 0, made = false;
         while (this.segmentState(state, n) !== 'dense') {
           if (signal?.aborted || this.closed) throw cancelled();
+          // 差分取层实测没过的流(`belowSegmentCapture`):这张卡的这种流产不出来,换一台同样的节点也一样,不重试
+          if (state.below?.failed) throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 的差分取层没过(${state.below.failed})`), { code: 'below-capture-failed', retryable: false });
           if (state.reserved.has(n)) { await sleep(50); continue; }
           if (attempts++ >= QUEUE_SEGMENT_ATTEMPTS) {
             throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 分段 ${n} 连续 ${QUEUE_SEGMENT_ATTEMPTS} 次没产成`), { code: 'stream-segment-failed', retryable: true });
@@ -1037,12 +1278,34 @@ export class StreamProducer {
   }
 
   /**
+   * 这条流走不走画布直取(`docs/plan/prerender-products-contract.md` 第 6.1 节第一道:登记)。回这条流的直取记录,不走回 null。
+   * 只有单卡流、成员登记为画布卡(审阅表的 `canvasHeavy`)才走;组流、别的种类的流、实测没过的流照旧截图。
+   * 第二道(产流时实测)和「直取快不快」都在 `directSegmentCapture` 里,每个分段的第一帧做。
+   */
+  directOf(state) {
+    const { spec } = state;
+    if (this.direct === 'off' || spec.kind !== 'card' || spec.members?.length !== 1 || spec.members[0]?.capabilities?.canvasHeavy !== true) return null;
+    const record = state.direct ||= newDirectRecord();
+    if (record.failed) return null;
+    // 上一次试出来不比截图快:歇几个分段再试
+    if (this.direct !== 'always' && record.cooldown > 0) { record.cooldown--; return null; }
+    return record;
+  }
+
+  /**
    * 生产一个分段(G4:单个分段的生产是它自己的一个 run)。租约接得上就接着推,接不上就把这条流的
    * 隔离工程灌进会话、从挂载帧重放。出帧逐张喂给这个分段的编码器;编码在后台收尾(双缓冲)。
+   *
+   * 依赖下层的流(`kind: 'below'`)每一帧截两张、差分取层(`./bakery/capture-below.mjs`):隔离工程里留着下层,
+   * 截图矩形恒为上界(整个画面,不随收紧变:毛玻璃要采样四周的下层),交给编码器的是裁到这一趟的矩形的那一层;
+   * 项目里有画面素材时截图前等素材就位。别的两种流走的路和原来逐项相同。
    */
   async runSegment(bakery, task) {
     const { state, segment, stride } = task;
     const { spec } = state;
+    const below = spec.kind === 'below';
+    // 差分取层实测没过的流不再产(不白付一次重灌和回放);自动生产把它记成这个分段的一次失败,三次以后不再挑它
+    if (below && state.below?.failed) throw Object.assign(new Error(`差分取层没过(${state.below.failed}),这条流不再产`), { code: 'below-capture-failed', retryable: false });
     // X1:队列任务产的分段(`task.queue`)不随版本作废 —— 流键是内容寻址的,换了一版而键没变,分段照样有效;
     // 只有任务被中止、生产者关了、这条流被换掉才作废。`generation: null` 让 `storeSegment` 不按版本判旧
     const queue = task.queue ?? null;
@@ -1055,6 +1318,8 @@ export class StreamProducer {
     const manifest = state.manifest;
     const rect = stride > 1 ? manifest.bound : (manifest.tight ?? manifest.bound);
     const captureRect = { x: rect.x + spec.offset.x, y: rect.y + spec.offset.y, w: rect.w, h: rect.h };
+    // 依赖下层的流:两张截图都按上界截,算完再裁到 `captureRect`
+    const viewRect = below ? { x: manifest.bound.x + spec.offset.x, y: manifest.bound.y + spec.offset.y, w: manifest.bound.w, h: manifest.bound.h } : captureRect;
     const lease = bakery.streamLease;
     const continues = !!lease && !lease.dirty && lease.page === bakery.page && lease.streamSignature === spec.streamKey && lease.lastFrame + 1 === fromFrame;
     if (!continues) {
@@ -1080,24 +1345,34 @@ export class StreamProducer {
        * 不再从挂载帧逐帧推过来;所以分段不必按顺序产。`server/bakery/bake.mjs` 一个字不动(代码指纹)。
        */
       const replay = spec.replay !== false;
+      // 画布直取:这个分段的帧不截图,从画布取像素(过不了实测的照旧截图);`shot` 是 PNG,或 `{ rgba, width, height }`
+      const direct = this.directOf(state);
       const result = await bakeStream(bakery, {
         streamSignature: spec.streamKey, fromFrame, toFrame, stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
-        clip: captureRect, hasMedia: false, signal: abort.signal,
-        onFrame: async (frame, png) => {
+        clip: viewRect, hasMedia: below && spec.hasMedia === true, signal: abort.signal,
+        ...(below ? { capture: belowSegmentCapture(bakery, { clipId: spec.topClipId, view: viewRect, rect: captureRect, record: state.below ||= newBelowRecord(), signal: abort.signal,
+          note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) }
+        : direct ? { capture: directSegmentCapture(bakery, { clipId: spec.topClipId, rect: captureRect, record: direct, stride, captures: Math.ceil(samples / stride), always: this.direct === 'always',
+          note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) } : {}),
+        onFrame: async (frame, shot) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
-          if (measuring) this.measurePng(state, frame, png, rect);
+          const raw = shot?.rgba ? shot : null;
+          if (measuring) { if (raw) this.measureRgba(state, frame, raw, rect); else this.measurePng(state, frame, shot, rect); }
           if (!enc) {
             // 第一张图出来时还没有这个分段的编码器在跑:这一张的出图耗时算「空闲」样本
             await this.encoderSlot();
-            enc = openStreamSegmentEncoder(this.ffmpeg, { encoder, fps });
+            enc = openStreamSegmentEncoder(this.ffmpeg, { encoder, fps, ...(raw ? { raw: { width: raw.width, height: raw.height } } : {}) });
           }
           const repeat = Math.min(stride, toFrame - frame + 1);
-          for (let k = 0; k < repeat; k++) await enc.write(png);
+          for (let k = 0; k < repeat; k++) await enc.write(raw ? raw.rgba : shot);
           firstCapture = false;
         },
       });
       if (result.reset) this.stats.bakeStreamResets = (this.stats.bakeStreamResets ?? 0) + 1;
+      // 这条流取图那一段的累计(诊断:`status()` 每条流的 `capture`;取了几帧、取图和推帧各花多少毫秒)
+      const taken = state.capture ||= { frames: 0, captureMs: 0, stepMs: 0 };
+      taken.frames += result.captured; taken.captureMs += result.captureMs; taken.stepMs += result.stepMs;
       // 回放过的帧数(`bakeStream` 的 `replayed`):不回放的流恒为 0,探针读 `status()` 核对
       this.stats.replayedFrames = (this.stats.replayedFrames ?? 0) + (result.replayed ?? 0);
       state.replayedFrames = (state.replayedFrames ?? 0) + (result.replayed ?? 0);
@@ -1110,6 +1385,8 @@ export class StreamProducer {
     } catch (error) {
       if (enc) { await enc.abort(); this.releaseEncoderSlot(); }
       bakery.streamLease = null;
+      // 差分取层发现目标卡改到了收紧矩形外面(稀疏那一趟没量到的帧):把收紧矩形放大,这个分段按新矩形重来,不算失败
+      if (below && error?.code === 'below-overflow' && this.widenTight(state, error.box)) error.cancelled = true;
       throw error;
     } finally { clearInterval(guard); }
     if (!enc) return false;
@@ -1139,6 +1416,13 @@ export class StreamProducer {
     state.measuredSegments.add(Math.floor(frame / SEGMENT_FRAMES));
   }
 
+  /** 同 `measurePng`,这一帧是画布直取的原始像素(`{ rgba, width, height }`) */
+  measureRgba(state, frame, raw, rect) {
+    const box = rgbaAlphaBox(raw.rgba, raw.width, raw.height);
+    if (box) state.measured = unionRect(state.measured, { x: rect.x + box.x, y: rect.y + box.y, w: box.w, h: box.h });
+    state.measuredSegments.add(Math.floor(frame / SEGMENT_FRAMES));
+  }
+
   /**
    * 稀疏那一趟整条流量完之后定收紧矩形:并集外扩一点、夹回上界、外扩到偶数。面积省不到
    * `TIGHTEN_MIN_SAVING` 就不收紧(白换一个变体)。一个实体框都没量到(整条流透明)时也不收紧。
@@ -1155,6 +1439,24 @@ export class StreamProducer {
     const tight = evenRect(intersectRect(padRect(state.measured, MEASURE_PAD_PX), bound), bound);
     manifest.tight = rectArea(tight) <= rectArea(bound) * (1 - TIGHTEN_MIN_SAVING) ? tight : bound;
     this.note(`流 ${spec.streamKey.slice(0, 8)} 收紧到 ${JSON.stringify(manifest.tight)}(上界 ${JSON.stringify(bound)})`);
+  }
+
+  /**
+   * 依赖下层的流的收紧矩形不够大:满密度那一趟里目标卡改到了它外面(`box`,场景坐标)。把它并进去再外扩、夹回上界。
+   * 已经按旧矩形产好的满密度分段签名对不上了(`segmentState` 判 `stale`),会按新矩形重产。回有没有真的放大。
+   */
+  widenTight(state, box) {
+    const manifest = state.manifest;
+    const { spec } = state;
+    if (!manifest?.tight || !box) return false;
+    const bound = manifest.bound;
+    const plane = { x: box.x - spec.offset.x, y: box.y - spec.offset.y, w: box.w, h: box.h };
+    const wider = evenRect(intersectRect(unionRect(manifest.tight, padRect(plane, MEASURE_PAD_PX)), bound), bound);
+    if (rectArea(wider) <= rectArea(manifest.tight)) return false;
+    state.measured = unionRect(state.measured, plane);
+    this.note(`流 ${spec.streamKey.slice(0, 8)} 的收紧矩形放大到 ${JSON.stringify(wider)}(原来 ${JSON.stringify(manifest.tight)},目标卡改到了它外面)`);
+    manifest.tight = wider;
+    return true;
   }
 
   /** 编完一个分段:切分、校验、落盘、改清单、发 `layer`;被替换的旧文件 5 秒后删(G6) */

@@ -75,6 +75,43 @@ test('组流:成员的摆放、上下顺序、中间插进别的层都算变', (
   assert.deepEqual(streamInputs(project(), group).paint, ['b', 'a'], '画家顺序:下面的在前');
 });
 
+test('依赖下层的流:目标卡的外观、每个下层的内容、摆放、时间和上下顺序都进;上面的层不进;服务端与页面对同一处改动的对拍在 server/test/below-stream.test.mjs', () => {
+  const below = { clipIds: ['a'], kind: 'below' };
+  const base = streamInputSig(project(), below);
+  assert.match(base, new RegExp(`^s${STREAM_INPUT_SIG_VERSION}-[0-9a-f]{16}$`));
+  assert.notEqual(base, streamInputSig(project(), card), '和单卡流的签名不是一个');
+  assert.equal(streamInputSig(JSON.parse(JSON.stringify(project())), below), base);
+  const inputs = streamInputs(project(), below);
+  assert.equal(inputs.kind, 'below');
+  assert.deepEqual(inputs.members.map((m) => m.id), ['a']);
+  assert.deepEqual(inputs.below.map((m) => m.id), ['v', 'b'], '画家顺序:下面的在前');
+  assert.equal(inputs.below[1].sig, clipInputSig(project(), 'b'));
+  assert.deepEqual(inputs.members[0].window, { firstFrame: 30, count: 60, last: 89 });
+  // 目标卡:这种流按舞台坐标产,位置和外观画进流里(单卡流不看这些)
+  assert.notEqual(streamInputSig(edit((p) => { clipOf(p, 'a').frame.x = 500; }), below), base, '目标卡的位置');
+  assert.notEqual(streamInputSig(edit((p) => { clipOf(p, 'a').opacity = 0.5; }), below), base, '目标卡的不透明度');
+  assert.notEqual(streamInputSig(edit((p) => { clipOf(p, 'a').params.text = 'b'; }), below), base, '目标卡的参数');
+  // 下层
+  assert.notEqual(streamInputSig(edit((p) => { clipOf(p, 'b').params.seed = 9; }), below), base, '下层的参数');
+  assert.notEqual(streamInputSig(edit((p) => { clipOf(p, 'b').frame = { x: 1, y: 2, w: 300, h: 200 }; }), below), base, '下层的位置');
+  assert.notEqual(streamInputSig(edit((p) => { clipOf(p, 'b').start = 0.5; }), below), base, '下层的时间');
+  assert.notEqual(streamInputSig(edit((p) => { clipOf(p, 'v').mediaOffset = 2; }), below), base, '下层素材的偏移');
+  assert.notEqual(streamInputSig(edit((p) => { p.tracks = [p.tracks[0], p.tracks[2], p.tracks[1]]; }), below), base, '两个下层上下对调');
+  assert.notEqual(streamInputSig(edit((p) => { p.tracks.push({ id: 't-new', clips: [{ id: 'x', cardId: 'odometer', start: 2, end: 2.5 }] }); }), below), base, '下面多一层');
+  assert.notEqual(streamInputSig(edit((p) => { p.tracks.pop(); }), below), base, '下面少一层');
+  assert.notEqual(streamInputSig(edit((p) => { p.tracks[1].hidden = true; }), below), base, '下层的序列隐藏了');
+  // 上面的层、时间上不重叠的下层:不相干
+  assert.equal(streamInputSig(edit((p) => { p.tracks.unshift({ id: 't-new', clips: [{ id: 'x', cardId: 'odometer', start: 0, end: 9, params: { n: 1 } }] }); }), below), base, '上面加一层');
+  assert.equal(streamInputSig(edit((p) => { p.tracks.push({ id: 't-new', clips: [{ id: 'x', cardId: 'odometer', start: 6, end: 7 }] }); }), below), base, '下面的层时间上不重叠');
+  assert.equal(streamInputSig(edit((p) => { p.tracks.push({ id: 't-new', hidden: true, clips: [{ id: 'x', cardId: 'odometer', start: 0, end: 9 }] }); }), below), base, '下面是隐藏的序列');
+  // 算不出:成员不止一张、目标不在项目里、目标所在的序列隐藏了
+  assert.equal(streamInputSig(project(), { clipIds: ['a', 'b'], kind: 'below' }), null);
+  assert.equal(streamInputSig(project(), { clipIds: ['nope'], kind: 'below' }), null);
+  assert.equal(streamInputSig(edit((p) => { p.tracks[0].hidden = true; }), below), null);
+  // 别的种类不受影响:不写 kind、写 card 的单成员照旧是单卡流的签名
+  assert.equal(streamInputSig(project(), { clipIds: ['a'] }), streamInputSig(project(), card));
+});
+
 test('streamSigStale:两边都有、同版本、不同才算过期', () => {
   assert.equal(streamSigStale('s1-aaaa', 's1-bbbb'), true);
   assert.equal(streamSigStale('s1-aaaa', 's1-aaaa'), false);

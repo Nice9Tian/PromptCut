@@ -71,6 +71,16 @@
  * `setLimit(n)`:运行中把并发压到 n(0～`maxConcurrent`;隔离工作进程在跑时管理进程把常驻的压低,两者合起来不超过上限)。
  * 都不给时行为与原来逐项相同。
  *
+ * # 按项目「产不产轨道流」(托管方渲染服务的「生成轨道流」,`docs/plan/hosted-render-contract.md` 第 3.1 节;任务书「甲三」)
+ *
+ * 配置项(`add(entry)` 的 `entry`)带布尔的 `streams` 时,这个项目按它管:
+ *   - `streams: false`:**不认领这个项目的流任务**(快照任务、计划任务照常;连接照旧,手里已经认领的流任务照做完、不放回);
+ *     诊断里的 `pending` / `claimable` 也不数流任务(不然管理进程会为没人做的流任务起隔离工作进程);
+ *   - `streams: true`:照常认领。
+ * 按的是**这条连接所属的项目**,不看任务里写的 `source.projectId`。`setStreams(projectId, bool)` 在运行中改(`reconcileHostProjects`
+ * 每次对账照清单更新);接线时 `connect(entry, index, live)` 的第三个参数给 `live.streams()`(现读),调用方把它交给这个项目的执行器
+ * (切分清单计划时出不出自己的那一份流)。配置项不带 `streams`(普通的独立渲染主机)时不按项目管,`live.streams()` 回 null,行为与原来逐项相同。
+ *
  * 除 `loadHostConfig` 读一次配置文件外(经 `../auth/shared-config.mjs`),本模块不开计时器、不碰网络:
  * 端点、执行器、产物库都由调用方注入(预渲染进程里是 `vite-plugin-frames.ts` 的 `startHostNode`)。
  */
@@ -186,8 +196,8 @@ const emptyStats = () => ({ claimed: 0, completed: 0, dedup: 0, plans: 0, failed
  * @param {object} options
  * @param {object[]} options.entries  规整过的配置项(`loadHostConfig().entries`),每项要有 `projectId`;`dynamic` 时可以为空
  * @param {boolean} [options.dynamic]  允许空的 `entries`,项目由 `add` / `remove` 在运行中增减
- * @param {(entry: object, index: number) => { endpoint: object, executor: object, sink: object, close?: () => void }} options.connect
- *   每项调一次:到那个项目文档服务的 `render` 连接(`createWsEndpoint` 的形状;有 `onOpen` / `onClose` 就挂上,
+ * @param {(entry: object, index: number, live: { streams: () => boolean | null }) => { endpoint: object, executor: object, sink: object, close?: () => void }} options.connect
+ *   每项调一次(第三个参数见文件头「按项目产不产轨道流」):到那个项目文档服务的 `render` 连接(`createWsEndpoint` 的形状;有 `onOpen` / `onClose` 就挂上,
  *   没有就当已连上),以及这个项目用的执行器与产物库
  * @param {(entry: object, index: number) => string} options.nodeIdOf  每个节点的 id
  * @param {string} options.envFingerprint
@@ -249,6 +259,11 @@ export function createRenderHost({
     return true;
   }
 
+  /** 配置项里的 `streams`:布尔才按项目管,别的值(没给)是 null */
+  const streamsOf = (entry) => (typeof entry?.streams === 'boolean' ? entry.streams : null);
+  /** 这个项目的这个任务过不过「产不产轨道流」这一道:只挡流任务,只在这个项目明说不产时挡 */
+  const streamsPass = (m, task) => task?.kind !== 'stream' || m.streams !== false;
+
   /** 这个项目此刻是不是搁着不认领(见文件头);判不出来按搁着算 */
   const held = (m) => {
     if (!m.hold) return false;
@@ -267,6 +282,8 @@ export function createRenderHost({
     const ids = [];
     let claimable = 0;
     for (const task of tasks) {
+      // 这个项目不产轨道流:它的流任务谁也不会来做,不算「等着的」(见文件头)
+      if (!streamsPass(m, task)) continue;
       const { cardSources: _ignored, ...requires } = task?.requires ?? {};
       if (checkClaimable({ ...task, requires }, node).ok) ids.push(String(task.id));
       // 按本节点手里真有的卡片代码算:此刻就能认领的(隔离工作进程据此判「还有没有活」)
@@ -283,7 +300,9 @@ export function createRenderHost({
   const members = [];
   function wire(entry) {
     const index = nextIndex++;
-    const wired = connect(entry, index);
+    /** 这个项目产不产轨道流(`null` 不按项目管);先于接线建好,接线时把现读的口子交出去 */
+    const live = { streams: streamsOf(entry) };
+    const wired = connect(entry, index, { streams: () => live.streams });
     const endpoint = wired?.endpoint;
     if (!endpoint || typeof endpoint.send !== 'function' || typeof endpoint.onMessage !== 'function') {
       throw new TypeError(`createRenderHost:第 ${index} 项的 endpoint 不对`);
@@ -306,6 +325,8 @@ export function createRenderHost({
       prefer: entry.members === true,
       draining: false,
       removed: false,
+      get streams() { return live.streams; },
+      set streams(value) { live.streams = value; },
     };
     // 包一层 send:记在飞的认领、放回数
     m.ep = {
@@ -368,7 +389,7 @@ export function createRenderHost({
       ...(random ? { random } : {}),
       ...(constants ? { constants } : {}),
       isIdle: () => !paused && now() >= quotaUntil && !m.draining && busy() < limit && !held(m),
-      canClaim: (task) => laneFree(m, task),
+      canClaim: (task) => streamsPass(m, task) && laneFree(m, task),
       maxConcurrent: cap,
       codeVersion: version,
       executor: m.executor,
@@ -433,6 +454,7 @@ export function createRenderHost({
       if (existing) {
         existing.prefer = entry.members === true;
         existing.draining = false;
+        if (streamsOf(entry) !== null) existing.streams = entry.streams;
         return false;
       }
       const m = wire(entry);
@@ -462,6 +484,11 @@ export function createRenderHost({
     setMembers(projectId, online) {
       const m = members.find((x) => x.projectId === projectId);
       if (m) m.prefer = online === true;
+    },
+    /** 这个项目产不产轨道流(见文件头):只认布尔;改成不产不放回手里的认领,只是不再认领新的流任务 */
+    setStreams(projectId, value) {
+      const m = members.find((x) => x.projectId === projectId);
+      if (m && typeof value === 'boolean') m.streams = value;
     },
     /** 背压:暂停认领新任务,手里的照做 */
     setPaused(value) { paused = value === true; },
@@ -523,6 +550,7 @@ export function createRenderHost({
         watching: m.local?.session.watching?.() ?? [],
         held: m.local ? m.local.session.held().map(({ id }) => id) : [],
         running: m.local ? m.local.running() : [],
+        ...(m.streams !== null ? { streams: m.streams } : {}),
         ...(m.hold ? { hold: held(m), ...pendingOf(m) } : {}),
         ...(m.cards ? { cards: (() => { try { return m.cards(); } catch { return { state: 'unknown', count: 0 }; } })() } : {}),
         ...(typeof m.endpoint.stats === 'function' ? { transport: m.endpoint.stats() } : {}),
@@ -606,7 +634,7 @@ export function createBrokerClient({ url, key, fetch: fetchImpl = globalThis.fet
 }
 
 /**
- * 按代理口给的清单对账:该加的 `add`,不在清单里的 `remove`,清单里标了 `drain` 的排空,`members` 与 `paused` 跟着改。
+ * 按代理口给的清单对账:该加的 `add`,不在清单里的 `remove`,清单里标了 `drain` 的排空,`members`、`streams`(这个项目产不产轨道流)与 `paused` 跟着改。
  * 纯编排,不碰网络;回 `{ added, removed, drained }`(projectId 列表)。
  * @param {ReturnType<typeof createRenderHost>} host
  * @param {{ paused?: boolean, projects: { projectId: string, members?: boolean, drain?: boolean }[] }} listing
@@ -628,6 +656,7 @@ export function reconcileHostProjects(host, listing, entryOf) {
       if (host.remove(projectId, { drain: true }) === 0) out.drained.push(projectId);
       continue;
     }
+    // 已经在的项目:`add` 照这份配置项更新 `members` 与 `streams`(创建者开、关「生成轨道流」后清单变了,这里一拍之内跟上)
     if (host.add(entryOf(item))) out.added.push(projectId);
     else host.setMembers(projectId, item.members === true);
   }

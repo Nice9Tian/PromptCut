@@ -17,6 +17,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+# 云端 Agent 服务把素材取到对话的工作目录后再递路径来:素材是成员传的,伪装成媒体文件的
+# 播放列表(HLS、concat)不能让 ffmpeg / ffprobe 去连网络地址。置 True 时每个输入前加
+# `-protocol_whitelist file`。桌面版不设(它递的是素材服务上的 http 地址)。
+LOCAL_ONLY = False
+
+
+def _protocol_args() -> List[str]:
+    return ["-protocol_whitelist", "file"] if LOCAL_ONLY else []
+
 
 def _no_window() -> dict:
     """Windows 上别弹黑框：子进程是从窗口程序里起的，默认会闪一个控制台。"""
@@ -50,7 +59,7 @@ def probe_size(ffmpeg: Optional[str], video: str) -> Tuple[int, int]:
     proc = subprocess.run(
         [probe, "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height",
-         "-of", "csv=p=0:s=x", video],
+         "-of", "csv=p=0:s=x", *_protocol_args(), video],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         **_no_window(),
     )
@@ -83,7 +92,7 @@ def grab_frame(ffmpeg: str, video: str, t: float, width: int, height: int) -> np
     """
     cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error",
-        "-ss", f"{max(0.0, float(t)):.3f}", "-i", video,
+        "-ss", f"{max(0.0, float(t)):.3f}", *_protocol_args(), "-i", video,
         "-frames:v", "1",
         "-vf", f"scale={width}:{height}",
         "-pix_fmt", "bgr24", "-f", "rawvideo", "-",

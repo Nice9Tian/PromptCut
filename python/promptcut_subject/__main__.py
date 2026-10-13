@@ -149,15 +149,18 @@ def cmd_install(args: argparse.Namespace) -> int:
     os.makedirs(pylibs, exist_ok=True)
 
     tier = args.tier
-    # 清单放在包内部：这个包会被镜像到 pylibs 下运行，放在包外面就跟丢了
+    # 清单放在包内部：这个包会被镜像到 pylibs 下运行，放在包外面就跟丢了。
+    # --requirements 由云端部署者给一份锁定版本的清单,盖掉包内那份(模型不能改它)。
     here = os.path.dirname(os.path.abspath(__file__))
-    req = os.path.join(here, REQUIREMENTS[tier])
+    req = args.requirements or os.path.join(here, REQUIREMENTS[tier])
     if not os.path.isfile(req):
-        emit_error(f"找不到依赖清单 {REQUIREMENTS[tier]}")
+        emit_error(f"找不到依赖清单 {os.path.basename(req)}")
         return 2
 
     # 必须用 sys.executable：写死 "python" 会装进系统解释器
-    cmd = [sys.executable, "-m", "pip", "install", "--target", pylibs, "-r", req]
+    # 本进程是隔离模式(-I)起的(云端 Agent 服务:工作目录是对话工作区),pip 也用隔离模式起,否则 `-m pip` 会把当前目录排进模块搜索路径最前。
+    isolated = ["-I"] if sys.flags.isolated else []
+    cmd = [sys.executable, *isolated, "-m", "pip", "install", "--target", pylibs, "-r", req]
     emit({"event": "log", "line": " ".join(cmd)})
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -413,14 +416,32 @@ def cmd_detect(args: argparse.Namespace) -> int:
     return 0
 
 
+def apply_globals(args: argparse.Namespace) -> None:
+    """云端 Agent 服务起这个包时,环境变量里的 PROMPTCUT_* 一个都不传(工作区的白名单),
+    所以模型目录、依赖目录改走命令行。桌面版不用这几个选项,行为不变。"""
+    if getattr(args, "models_dir", None):
+        os.environ["PROMPTCUT_MODELS"] = args.models_dir
+    if getattr(args, "pylibs", None):
+        os.environ["PROMPTCUT_PYLIBS"] = args.pylibs
+    if getattr(args, "local_only", False):
+        from . import frames as F
+
+        F.LOCAL_ONLY = True
+
+
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(prog="promptcut_subject")
+    parser.add_argument("--models-dir", default=None, help="权重目录(盖掉 PROMPTCUT_MODELS)")
+    parser.add_argument("--pylibs", default=None, help="依赖目录(盖掉 PROMPTCUT_PYLIBS)")
+    parser.add_argument("--local-only", action="store_true",
+                        help="ffmpeg / ffprobe 只读本地文件,不连任何网络地址")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", help="报告两档拓展是否就绪").set_defaults(func=cmd_status)
 
     ins = sub.add_parser("install", help="安装推理依赖")
     ins.add_argument("--tier", choices=["light", "full"], default="light")
+    ins.add_argument("--requirements", default=None, help="锁定版本的依赖清单(盖掉包内的)")
     ins.set_defaults(func=cmd_install)
 
     d = sub.add_parser("detect", help="在若干时刻上检测主体")
@@ -434,6 +455,7 @@ def main(argv: Optional[list] = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        apply_globals(args)
         return args.func(args)
     except KeyboardInterrupt:
         return 130

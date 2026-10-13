@@ -1,0 +1,34 @@
+# 云端 Agent 的 root 入口:开任务进程、关任务进程、写「这一代确实关干净了」的记录。
+# 模板 server/hosted/deploy/systemd-promptcut-agent-root.service;把花括号占位符换成 README「Agent 服务(账号版:一条任务一个进程)」一节的值,
+# 放在 /etc/systemd/system/promptcut-agent-root.service。
+#
+# {{DIR}} 这份代码(整棵 server/、路径上每一级目录、node 本身)必须属主是 root、别人写不了——它以 root 执行这份代码,
+# 启动时自己核,不满足就拒绝启动(config.error root-code-untrusted)。和别的服务共用的部署目录不归 root 的话,给它单独放一份 root 的检出。
+#
+# 起它之前:各任务槽的单元已经放好并 daemon-reload;各槽已经初始化过(`--bootstrap`),锚点摘要已经写进 {{ROOT_CONFIG}}
+# 和文档服务的任务槽配置;Agent 主服务(promptcut-agent,账号版)已经起来。
+# 停它只停调度,不关任何任务进程;但它再起来时,上一次留下的、还在跑的那一代会被停下并记成「失败」。所以重启它之前先等槽空
+# (`node server/agent-service/account-root-main.mjs --config {{ROOT_CONFIG}} --status` 看各槽都是 closed)。
+[Unit]
+Description=PromptCut agent root (task slot scheduler)
+# 一直重试,不因为短时间内失败了几次就不再拉(缺省是 10 秒内 5 次就放弃)
+StartLimitIntervalSec=0
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{DIR}}
+Environment=NODE_ENV=production
+ExecStart={{NODE}} {{DIR}}/server/agent-service/account-root-main.mjs --config {{ROOT_CONFIG}}
+# 它是常驻的:只要不是人停的(systemctl stop),不管以什么退出码退出都拉起来——它不在,排着的消息谁也不会去开。
+# 配置不对时它每次都以退出码 1 退出并打一行 config.error;隔 15 秒拉一次,日志里一眼看得到,不会刷屏。
+Restart=always
+RestartSec=15s
+# 停的时候先让主进程自己停调度;它起的 systemctl / busctl 是一次性的短命令,到时限还在的才结束
+KillMode=mixed
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target

@@ -62,7 +62,7 @@ import type { StageSound } from "./online/cardRuntime/stageSound";
 import type { CardBundle } from "./online/cardRuntime/protocol";
 import { announceStageIsolation } from "./online/isolation/stageGuard";
 import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
-import { clipFrameMode } from "./kernel/frameMode.mjs";
+import { cardCapabilities, clipFrameMode } from "./kernel/frameMode.mjs";
 import { resolveFrameSize } from "./kernel/frameSize.mjs";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { pixelRect, renderSmallWebp, renderSnapshotBitmap } from "./render/bakeSmall";
@@ -1545,6 +1545,43 @@ export default function StageView() {
      */
     let bakeGen = 0;
     let bakeCursor: { project: Project; clipId: string; frame: number } | null = null;
+    /** 落定时看舞台的 DOM 这一轮变没变(只在 `bakeSettle` 里挂着) */
+    let bakeMutations: MutationObserver | null = null;
+    /** 落定最多做几轮(同导出页的 `settleDom`) */
+    const BAKE_SETTLE_ROUNDS = 4;
+    /**
+     * 把已经排下、还没提交的 React 更新提交完(`bakeFrame` 推的每一帧都做,见那里的 `frameEnd`)。
+     *
+     * 卡片在每帧的回调里改状态(进度值、打了几个字、第几个词)、Motion 在动画结束的回调里换人,React 都不当场提交,
+     * 交给调度器排到后面的宏任务里。不管它的话,这次提交落在哪一帧就看两帧之间隔了多久:顺着做时快照里是上一帧的值,
+     * 从头推时又是这一帧的;换进来的元素哪一帧开始动也跟着差一帧(`docs/reports/AGENT-rr-a1-verify.md`「原因三」)。
+     * 导出页每帧都排空(`snapshotSettle.ts` 的 `settleDom`),这里是同一件事。
+     *
+     * 一轮两步:
+     *   1. 让出一个宏任务。改状态的那一下常常藏在一串 Promise 回调后面(Motion 的「全部退场动画播完」),
+     *      微任务链走完它才真的发生;一个宏任务的边界把这条链排空。
+     *   2. 同步提交一次(`flushSync` 带一次真的状态变化)。这一次渲染会把同一棵树上排着的更新一起做掉,
+     *      提交之后的副作用(Motion 在那里起新动画)也当场跑完。**不靠等调度器**:它的任务排在哪条消息后面、
+     *      提交完要不要先让浏览器画一帧再跑副作用,都不归这里管;同步提交则只由这里说了算,每次都落在这一帧的时刻上。
+     * 这一轮里 DOM 变了就再做一轮(副作用里可能又改了状态),不变就够了;最多 `BAKE_SETTLE_ROUNDS` 轮。
+     * 让出用 MessageChannel 不用定时器:连着等的定时器每次至少 4 毫秒,后台页面的定时器还会被浏览器降速。
+     */
+    const bakeSettle = async (): Promise<void> => {
+      const root = rootRef.current;
+      if (root) {
+        bakeMutations ??= new MutationObserver(() => {});
+        bakeMutations.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+      }
+      try {
+        for (let round = 0; round < BAKE_SETTLE_ROUNDS; round++) {
+          await probeTaskBoundary();
+          flushSync(() => bumpPlanes());
+          if (!root || !bakeMutations?.takeRecords().length) return;
+        }
+      } finally {
+        bakeMutations?.disconnect();
+      }
+    };
     /**
      * 舞台这一侧的生成快照诊断(契约第 7 节「舞台」,`__pcStageDiag().bake`):逐帧耗时(不含被门挡住的时长)、
      * 被门挡住的时长单记、从头推的次数、没成的原因计数。
@@ -2261,6 +2298,17 @@ export default function StageView() {
        * 不受一拍预算截断。到了这一帧先过就绪闸,再生成快照、取本控件的 HTML:有读不出像素的画布(`lossy`)回 `lossy`
        * (父页按不可重试失败交回,同 `server/bakery/bake.mjs`)。
        *
+       * **接续**(`prerender-products-contract.md` 第 2.3 节):上一帧不晚于这一帧就接着推(隔若干帧取一张时,中间的帧只推不生成快照),
+       * 同一帧再要一次不再推;舞台时钟不在上一帧的时刻上(别人拨过)、项目或片段换了,就从头推。`batch4` 另要求两帧在同一批里。
+       *
+       * **顺着做和从头推得到同一帧**:两条路推的每一帧(挂载帧也算)走同一套 `frameEnd` —— 提交这一帧排下的 React 更新
+       * (`bakeSettle`)→ 钉动画(拨到结尾的当场交付结束回调,`pinAnimations.ts`)→ 有动画结束就再提交一次(结束回调里换人、写回终值)→ 等 GL 位图。
+       * 一帧做完时没有挂着没提交的更新,所以两帧之间隔了多久(顺着做隔着生成快照和一次 RPC 往返,从头推只隔一个宏任务)
+       * 不影响结果;每一帧的时刻由舞台时钟按帧号直接算(`stageClock.ts` 的 `frameGrid`),从哪一帧起推都是同一个数。
+       *
+       * **remotion 式的卡不回放**(同上契约第 4.2 节):隔离工程里唯一那张卡声明成 remotion 式(画面只由时间和参数决定)时,
+       * 直接把时钟拨到这一帧、提交、跑这一帧的一拍,不重挂载、不从挂载帧逐帧推;回包的 `remounted` 恒为 `false`。
+       *
        * 要像素(`req.pixels`,浏览器节点产轨道流用):生成快照之后照小尺寸那条路按原尺寸把矩形那一块画成位图(`bakeSmall.ts` 的
        * `renderSnapshotBitmap`),随 `bake-frame` 事件转移给父页;画不出来回 `pixels-failed`。`req.html === false` 时事件不带 HTML 字节。
        */
@@ -2279,44 +2327,71 @@ export default function StageView() {
         let pausedMs = 0;
         const stale = () => gen !== bakeGen || ref.current.role !== "back" || ref.current.project !== p;
         const cur = bakeCursor;
-        const continuing = !!cur && cur.project === p && cur.clipId === req.clipId && cur.frame === n - 1 && (req.mode !== "batch4" || n % 4 !== 0);
         bakeCursor = null;
-        if (!continuing) {
-          // 从头推:别的在飞的补跑 / 探针作废(单飞队列本来就不会让它们并存,这里兜底)
-          renderGen.current++;
-          abortPending("superseded");
-          remountAt(sec, fps);
-        }
-        let lastMs = clock.now();
-        await clock.advanceToAsync(sec * 1000, {
-          step: 1000 / fps,
-          // 从挂载帧一帧不落地推到这一帧:不传的话缺省的 6 秒补跑上限会把起点削掉(那是给可见舞台跳转「只求不卡」用的),
-          // 生成出来的就不是这一帧该有的状态。测量、互换、整场景补跑同样传 Infinity
-          maxCatchUp: Infinity,
-          yieldEvery: 1,
-          gate: () => {
-            const g = backGate(stale);
-            if (!g) return undefined;
-            const t0 = realNow();
-            return g.then(() => { pausedMs += realNow() - t0; });
-          },
-          abort: stale,
-          onFrame: (ms) => { flushSync(() => setT(ms / 1000)); },
-          afterFrame: (ms) => {
-            lastMs = ms;
-            pinner.sync(ms, skipWrappers());
-            const g = glStrict(ms / 1000);
-            return g ? g.then(() => undefined) : undefined;
-          },
-        });
-        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
-        if (Math.abs(lastMs - sec * 1000) > 1e-6 || !continuing) {
-          // 挂载帧本身(没推任何一步)或推完没落在这一帧上:补一次提交、钉动画、等 GL 位图
-          flushSync(() => setT(sec));
-          pinner.sync(sec * 1000, skipWrappers());
-          const g = glStrict(sec);
+        const targetMs = sec * 1000;
+        // 隔离工程里唯一那张卡是 remotion 式:画面只由时间和参数决定,直接拨到这一帧。
+        // 判据和预渲染进程给流定「要不要回放」的那一条相同(`server/frame-stream.mjs` 的 `streamNeedsReplay`):
+        // 取卡的能力表里的写法,声明了要预渲染的、认不出来的卡一律按有状态处理(宁可多推,不可画错)
+        const def = clip.cardId ? getCard(clip.cardId) : undefined;
+        const caps = def && !unsupportedHere(clip.cardId, def) ? cardCapabilities(def as never, { ...def.defaults, ...clip.params }, clip.parts as never) : null;
+        const direct = !!caps && caps.frameMode === "direct" && caps.need_prerendering !== true
+          && p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips).length === 1;
+        // 接得上:舞台还挂着这份项目的这个片段,时钟就停在上一帧的时刻上
+        const held = !!cur && cur.project === p && cur.clipId === req.clipId && Math.abs(clock.now() - (cur.frame / fps) * 1000) < 1e-6;
+        const continuing = !direct && held && cur.frame <= n
+          && (req.mode !== "batch4" || (n % 4 !== 0 && Math.floor(cur.frame / 4) === Math.floor(n / 4)));
+        /**
+         * 一帧收尾(挂载帧、推过的每一帧、直接拨到的那一帧都走它,两条路一样):这一帧的回调跑完以后,
+         * 提交排下的 React 更新 → 钉动画并当场交付结束回调 → 有动画在这一帧结束就再提交一次 → 等 GL 位图。
+         * 和导出页一帧的顺序相同(`server/bakery/bake.mjs` 的 `createStepper`:排空 → 钉动画 → 排空)。
+         * 中途被作废就停手,不去钉新一帧的动画。
+         */
+        const frameEnd = async (ms: number): Promise<void> => {
+          await bakeSettle();
+          if (stale()) return;
+          pinner.sync(ms, skipWrappers());
+          if (pinner.endedInLastSync() > 0) await bakeSettle();
+          if (stale()) return;
+          const g = glStrict(ms / 1000);
           if (g) await g;
+        };
+        if (direct) {
+          if (!held) {
+            renderGen.current++;
+            abortPending("superseded");
+          }
+          clock.set(targetMs);
+          flushSync(() => setT(sec));
+          clock.tick(targetMs);
+          await frameEnd(targetMs);
+        } else {
+          if (!continuing) {
+            // 从头推:别的在飞的补跑 / 探针作废(单飞队列本来就不会让它们并存,这里兜底)
+            renderGen.current++;
+            abortPending("superseded");
+            await frameEnd(remountAt(sec, fps) * 1000);
+          }
+          if (!stale()) await clock.advanceToAsync(targetMs, {
+            step: 1000 / fps,
+            fps,
+            // 从挂载帧一帧不落地推到这一帧:不传的话缺省的 6 秒补跑上限会把起点削掉(那是给可见舞台跳转「只求不卡」用的),
+            // 生成出来的就不是这一帧该有的状态。测量、互换、整场景补跑同样传 Infinity
+            maxCatchUp: Infinity,
+            yieldEvery: 1,
+            gate: () => {
+              const g = backGate(stale);
+              if (!g) return undefined;
+              const t0 = realNow();
+              return g.then(() => { pausedMs += realNow() - t0; });
+            },
+            abort: stale,
+            onFrame: (ms) => { flushSync(() => setT(ms / 1000)); },
+            afterFrame: frameEnd,
+          });
         }
+        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        // 时钟没落在这一帧上(不该发生:每一步都按帧号算,最后一步就是这一帧的时刻):不拿别的时刻的画面充数,按可重试交回
+        if (Math.abs(clock.now() - targetMs) > 1e-6) return bakeFail({ ok: false, reason: "cancelled", detail: `舞台时钟在 ${clock.now()} 毫秒,这一帧是 ${targetMs} 毫秒` } satisfies BakeFrameReply);
         ref.current.t = sec;
         const t0 = realNow();
         const ready = await bakeReady(stale);
@@ -2378,11 +2453,11 @@ export default function StageView() {
         bakeStats.frames++;
         bakeStats.ms.push(realNow() - started - pausedMs);
         bakeStats.pausedMs += pausedMs;
-        if (!continuing) bakeStats.remounts++;
+        if (!continuing && !direct) bakeStats.remounts++;
         if (req.small) bakeStats.smallMs.push(smallMs);
         if (bakeStats.ms.length > 200) { bakeStats.ms.splice(0, bakeStats.ms.length - 200); bakeStats.smallMs.splice(0, Math.max(0, bakeStats.smallMs.length - 200)); }
         return { ok: true, localFrame: n, hash, bytes: bytes.length, small: small ? { hash: small.hash, bytes: small.bytes } : null,
-          ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing, smallMs, readyMs, ...(pixels ? { pixelsMs } : {}) } satisfies BakeFrameReply;
+          ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing && !direct, smallMs, readyMs, ...(pixels ? { pixelsMs } : {}) } satisfies BakeFrameReply;
       },
       async bakeCancel() {
         bakeGen++;

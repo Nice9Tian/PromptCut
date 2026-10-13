@@ -7,6 +7,10 @@ import { canonicalJson, digestOf, appendAccessEvent } from './ledger.mjs';
 const accountIdOK = value => typeof value === 'string' && /^acc_[a-f0-9]{24}$/.test(value);
 const projectIdOK = value => typeof value === 'string' && /^sp_[a-z2-7]{26}$/.test(value);
 const services = ['asset', 'agent', 'render'];
+/** 托管方服务下面有哪些子选项(与口令项目那条路 `auth/service-identity.mjs` 的 `HOSTED_OPTIONS` 同一份登记;这里不引它,账号这条路不依赖旧凭证存储的模块) */
+export const HOSTED_OPTIONS = Object.freeze({ render: Object.freeze(['streams']), agent: Object.freeze([]) });
+/** 账号项目的托管方服务状态里渲染节点那一项:开关(记录里是布尔,缺省关)与子选项「生成轨道流」(缺省关) */
+export const accountRenderState = project => ({ enabled: project?.hosted?.render === true, streams: project?.hostedOptions?.render?.streams === true });
 const reject = (status, code) => { throw accountError(status, code); };
 const agentReadClosureComplete = (state, eventId, receipt) => {
   if (state.agentReadControlRequired !== true) return true;
@@ -36,13 +40,38 @@ const permission = (project, accountId, action) => {
   return access;
 };
 
+/**
+ * 「谁可以新建云端项目、每人能建多少」的判断口子（online-browser-task.md 第一步第 4 条）。
+ * 调用方（`createProject`）只问这一个函数；以后要限制，改配置或换规则，不改调用方。〔裁：v18-fixes 子 Agent〕
+ *
+ * 配置 `createPolicy`（传给 `createAccountAuthority`，缺省 `{}`，缺省行为：登录了的账号都能建、不限数量）：
+ *   - `maxProjectsPerAccount`：`null` / 不给 = 不限；非负整数 N = 一个账号名下（创建者是它、状态不是已删除）最多 N 个，
+ *     已经有 N 个时第 N+1 个被拒，错误码 `project-limit-reached`（403）。0 等于谁都不能建。
+ *   - `canCreate({ accountId, accountName, ownedCount, requestId })`：可选的自定义判断，回 `true` 放行；
+ *     回 `false` 或 `{ code }` 拒绝，错误码取 `code`（缺省 `create-not-allowed`，403）。先于数量上限判。
+ * 「要登录」不在这里：没有登录的账号过不了 `verify`，到不了这一步。
+ */
+export function checkCreateProject(policy, { accountId, accountName, ownedCount, requestId }) {
+  const max = policy?.maxProjectsPerAccount ?? null;
+  if (typeof policy?.canCreate === 'function') {
+    const verdict = policy.canCreate({ accountId, accountName, ownedCount, requestId });
+    if (verdict !== true) reject(403, typeof verdict?.code === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(verdict.code) ? verdict.code : 'create-not-allowed');
+  }
+  if (max !== null && ownedCount >= max) reject(403, 'project-limit-reached');
+}
+const validCreatePolicy = policy => policy !== null && typeof policy === 'object' &&
+  (policy.maxProjectsPerAccount === undefined || policy.maxProjectsPerAccount === null ||
+    (Number.isSafeInteger(policy.maxProjectsPerAccount) && policy.maxProjectsPerAccount >= 0)) &&
+  (policy.canCreate === undefined || typeof policy.canCreate === 'function');
+
 /** Sole v2 cloud project authority. No LAN records, account passwords, or usable tokens on disk.
  * initializeProject must durably create the real doc/content snapshot before an active commit.
  * This factory is deliberately not mounted in the legacy shared service by itself.
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
   signingKey, keyId, now = Date.now, pollMs = 1000, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
-  runHooks = null }) {
+  runHooks = null, createPolicy = {} }) {
+  if (!validCreatePolicy(createPolicy)) reject(503, 'create-policy-configuration');
   if (runHooks !== null && typeof runHooks?.fenceInState !== 'function') reject(503, 'run-authority-unavailable');
   const refs = new Map(); const subscriptions = new Set(); const creating = new Map();
   let syncing = null, timer = null, closed = false, ready = false;
@@ -186,6 +215,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const pending = ledger.transaction(state => {
       const previous = replay(state, key, digest);
       if (previous) return { projectId: previous.projectId, result: previous.result ?? null };
+      // 重复的 requestId 已在上面原样回放，不占名额；新建才过策略口子（数量从账本里数，不另建表）
+      checkCreateProject(createPolicy, { accountId: actor.accountId, accountName: actor.accountName, requestId: body.requestId,
+        ownedCount: Object.values(state.projects).filter(p => p.status !== 'deleted' && p.creatorAccountId === actor.accountId).length });
       if (Object.values(state.projects).some(p => p.status !== 'deleted' && p.name === name)) reject(409, 'name-taken');
       let projectId; do { projectId = newProjectId(); } while (state.projects[projectId]);
       state.projects[projectId] = { v: 2, identityRealm: 'account', projectId, authorityId: ledger.authorityId,
@@ -288,12 +320,19 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         case 'set-hosted-service':
           if (!['render', 'agent'].includes(body.service) || typeof body.enabled !== 'boolean') reject(400, 'invalid-service');
           p.hosted[body.service] = body.enabled; break;
+        case 'set-hosted-option':
+          // 托管方服务下面的子选项(渲染节点的「生成轨道流」,`docs/plan/hosted-render-contract.md` 第 3.1 节):只记下,不动成员、不停任何任务。
+          // 记在 `hostedOptions.<服务名>.<选项名>`(与服务的开关 `hosted.<服务名>` 分开放,那一项仍是布尔);没有算关,只有显式为 true 才算开
+          if (!Object.hasOwn(HOSTED_OPTIONS, body.service) || !HOSTED_OPTIONS[body.service].includes(body.option) || typeof body.enabled !== 'boolean') reject(400, 'invalid-option');
+          p.hostedOptions = { ...(p.hostedOptions ?? {}), [body.service]: { ...(p.hostedOptions?.[body.service] ?? {}), [body.option]: body.enabled } };
+          break;
         default: reject(400, 'invalid-operation');
       }
       p.accessRevision = ++state.revision;
       const event = appendAccessEvent(state, { type: 'project-access-changed', reason: body.op, projectId: p.projectId,
         accountIds: affected, accessRevision: p.accessRevision, createdAt: now(),
-        ...(body.op === 'set-hosted-service' ? { service: body.service, enabled: body.enabled } : {}) });
+        ...(body.op === 'set-hosted-service' ? { service: body.service, enabled: body.enabled } : {}),
+        ...(body.op === 'set-hosted-option' ? { service: body.service, option: body.option, enabled: body.enabled } : {}) });
       let control = null;
       const fence = { requestId: `access:${event.eventId}`, projectId: p.projectId, accessSeq: event.seq };
       if (body.op === 'delete') control = fenceRuns(state, { ...fence, kind: 'delete' });
@@ -344,8 +383,29 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const serviceAcks = Object.fromEntries(services.map(service => [service, state.accessAcks[`ack:${barrier.accessEventId}:${service}`] ?? null]));
     // Preserve legacy rows on disk, but they are not proof under the required protocol.
     if (!agentReadClosureComplete(state, barrier.accessEventId, serviceAcks.agent)) serviceAcks.agent = null;
-    return { ...barrier, serviceAcks, pendingServices: ['doc', ...services.filter(s => !serviceAcks[s]?.complete || serviceAcks[s].cursor < barrier.accessSeq)],
-      logoutComplete: false };
+    // 文档服务自己这一项：带着关闭证据的那份回执已经送到账号服务才算。整条退出办完另看账号服务回来的结束见证。
+    const docAck = state.accountAcks[`seq:${barrier.accountEventSeq}`];
+    const docConfirmed = docAck?.sent === true && docAck.receipt?.logoutComplete === true;
+    return { ...barrier, serviceAcks, docConfirmed,
+      pendingServices: [...(docConfirmed ? [] : ['doc']), ...services.filter(s => !serviceAcks[s]?.complete || serviceAcks[s].cursor < barrier.accessSeq)],
+      logoutComplete: barrier.state === 'complete' };
+  }
+  /** 账号服务已经为这次退出签了结束见证（它那边要四个服务的确认都齐了才签）。只记一次，重复记同一份不报错。 */
+  function completeLogoutBarrier(eventId, witness) {
+    if (typeof witness?.witnessId !== 'string' || !witness.witnessId || !Number.isSafeInteger(witness.orderSeq) ||
+        witness.kind !== 'logout-complete' || witness.state !== 'sealed' || witness.eventId !== eventId) reject(400, 'invalid-logout-witness');
+    return ledger.transaction(state => {
+      const barrier = state.barriers[`event:${eventId}`]; if (!barrier) reject(404, 'no-event');
+      const docAck = state.accountAcks[`seq:${barrier.accountEventSeq}`];
+      if (docAck?.sent !== true || docAck.receipt?.logoutComplete !== true) reject(409, 'logout-ack-pending');
+      const record = { witnessId: witness.witnessId, orderSeq: witness.orderSeq, utcMs: witness.utcMs ?? null };
+      if (barrier.state === 'complete') {
+        if (canonicalJson(barrier.logoutWitness) !== canonicalJson(record)) reject(409, 'logout-witness-mismatch');
+        return structuredClone(barrier);
+      }
+      barrier.state = 'complete'; barrier.logoutWitness = record; barrier.completedAt = now();
+      return structuredClone(barrier);
+    });
   }
   async function statusForPrincipal(input, query) {
     const actor = await verify(input);
@@ -417,7 +477,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
-    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, flushAccountAcknowledgements,
+    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);

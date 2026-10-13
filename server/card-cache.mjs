@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { cardNodeIdentities, cardSampling, cardCacheIdentity, cardSnapshotIdentity } from './card-identity.mjs';
+import { cardNodeIdentities, cardSampling, cardCacheIdentity, cardSnapshotIdentity, cardSnapshotInputKeys } from './card-identity.mjs';
 import { cardCostKey } from '../src/render/cardCostKey.mjs';
 import { snapshotCode } from './frame-code.mjs';
 import { snapshotTier } from './snapshot-store.mjs';
@@ -56,6 +56,8 @@ export class CardFrameCache {
     const nodes = new Map(graph.nodes.map(node => [node.id, node]));
     const definitions = new Map((graph.definitions || []).map(definition => [definition.id, definition]));
     const identities = cardNodeIdentities(graph, { style: this.project.style || {}, environment: value?.environment || {}, sourceVersions: value?.sourceVersions || {} });
+    // 每个节点的上游在共享快照键里的那一栏(上游的身份不带片段的 id);没有上游的节点是 {}
+    const upstreamKeys = cardSnapshotInputKeys(graph, { style: this.project.style || {}, environment: value?.environment || {}, sourceVersions: value?.sourceVersions || {} });
     /*
      * 未知卡片(预渲染间的注册表里查不到定义的卡片段,`__pcCardPlan` 的 `unknownClipIds`):舞台不画它们,不出控件 ——
      * 不排预渲染、不进预渲染集合(否则按「没有定义」的缺省能力 stateful / 要预渲染判重)、层表里也没有它们那一层。
@@ -104,16 +106,30 @@ export class CardFrameCache {
       const key = resultKeyOf(cacheContentKey, fp);
       // A3a 的共享快照键:和 `key`(CardFrameCache 的 PNG 键,带位置画幅和 clipId)
       // 是两回事 —— 这个剥掉片段身份、不含外观,同一张卡两个片段共用一份快照。
-      // 普通卡没有上游,`inputKeys` 是 {};sourceDependent 的链路拼接在第 4 步接上。
+      // 输出节点没有上游的(普通卡)`inputKeys` 是 {},键和原来逐字相同;有上游的(片段挂了强调、滤镜、声音效果时输出节点是
+      // 外面那一层,卡片在它的输入后面;素材效果卡的素材在它的输入后面)带上上游的身份 —— 不带的话外面相同、里面不同的两个
+      // 片段同键,互相取到对方的快照和流。
+      const inputKeys = upstreamKeys.get(output.nodeId) ?? {};
       const contentKey = cardSnapshotIdentity(node ?? {}, {
         definition, style: this.project.style || {}, environment: value?.environment || {},
-        sourceVersions: value?.sourceVersions || {}, inputKeys: {},
+        sourceVersions: value?.sourceVersions || {}, inputKeys,
         fps: this.fps, sampling, duration: end - start,
         stage: { width: this.project.width, height: this.project.height, camera3dFov: this.project.camera3dFov },
         frame: output.frame, themeId: this.project.themeId,
         fontFingerprint: value?.environment?.fontFingerprint || '', snapshotCode: snapshotCode(),
       });
       const snapshotKey = resultKeyOf(contentKey, fp);
+      // 单卡轨道流的成员键(`planStreams` 用):同一份内容身份,只是不带生成快照的代码指纹 ——
+      // 流的像素是截图或画布直取来的,和快照 HTML 怎么生成无关;带着它,改一次生成快照的代码所有单卡流都跟着作废
+      // (`docs/plan/prerender-products-contract.md` 第 9.3 节)。流自己的代码指纹在 `planStreams` 的 `codeVersion` 里
+      const streamMemberKey = cardSnapshotIdentity(node ?? {}, {
+        definition, style: this.project.style || {}, environment: value?.environment || {},
+        sourceVersions: value?.sourceVersions || {}, inputKeys,
+        fps: this.fps, sampling, duration: end - start,
+        stage: { width: this.project.width, height: this.project.height, camera3dFov: this.project.camera3dFov },
+        frame: output.frame, themeId: this.project.themeId,
+        fontFingerprint: value?.environment?.fontFingerprint || '', snapshotCode: '',
+      });
       /*
        * K1 / K2 的成本键(R5)。**必须在这里算** —— `cardCostKey` 要的是 graph 的**节点**
        * 和它的源码版本,两样都只在这一层拿得到(`adoptCardPlan` 收到的只是 controls)。
@@ -123,7 +139,7 @@ export class CardFrameCache {
       const costKey = cardCostKey(node ?? {}, (value?.sourceVersions || {})[node?.cardId] ?? null,
         this.fps, Math.max(1, Math.round((end - start) * this.fps)));
       // `costKey` 不乘指纹:成本记录另有设备口径(`device` 字段),键只认卡和源码版本
-      controls.push({ key, snapshotKey, contentKey, cacheContentKey, envFingerprint: fp, costKey, frameMode: caps.frameMode, tier: snapshotTier(caps), capabilities: caps,
+      controls.push({ key, snapshotKey, contentKey, streamMemberKey, cacheContentKey, envFingerprint: fp, costKey, frameMode: caps.frameMode, tier: snapshotTier(caps), capabilities: caps,
         clipId: output.clipId || node?.clipId, nodeId: output.nodeId, start, end, count, sampling, compositing, cacheable,
         needPrerendering: caps.need_prerendering === true || caps.needPrerendering === true || node?.need_prerendering === true || node?.needPrerendering === true, appearance });
     }

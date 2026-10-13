@@ -22,7 +22,7 @@ const exeName = path.basename(exePath);
 
 async function runScript(scriptName) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(__dirname, scriptName), exeName], {
+    const child = spawn(process.execPath, [path.join(__dirname, scriptName), exeName], { windowsHide: true,
       stdio: "inherit",
       cwd: desktopDir,
     });
@@ -40,7 +40,7 @@ let appPid = null;
 process.on("exit", () => {
   if (appPid != null) {
     try {
-      execSync(`taskkill /F /T /PID ${appPid}`, { timeout: 10_000 });
+      execSync(`taskkill /F /T /PID ${appPid}`, { windowsHide: true, timeout: 10_000 });
     } catch { /* best-effort */ }
   }
 });
@@ -70,7 +70,7 @@ async function main() {
   }
 
   console.log(`[smoke-all] Launching ${exePath}`);
-  const app = spawn(exePath, [], {
+  const app = spawn(exePath, [], { windowsHide: true,
     detached: false,
     stdio: "ignore",
   });

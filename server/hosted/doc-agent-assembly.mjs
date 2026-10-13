@@ -10,6 +10,11 @@ import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/age
 import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
   INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
+import { createAgentRunScopeDoc } from '../account/agent-run-scope-doc.mjs';
+import { createRunAssetsInstanceAdapter } from './run-assets-instance-adapter.mjs';
+import { createRunAssets } from '../account/run-assets.mjs';
+import { createRunAssetsInternalHandler } from '../account/run-assets-internal.mjs';
+import { createRunAssetClosure } from './run-assets-closure.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
 
@@ -30,40 +35,60 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     'messageId', 'runId', 'runGrantId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'];
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
-  let stopped = false, runAuthority;
-  const currentService = () => {
+  const scopeAuthority = account.agent.runScopes ? createAgentRunScopeDoc({ ledger,
+    signingKey: account.agent.runScopes.signingKey, slots: account.agent.runScopes.slots,
+    masterServiceKid: account.agent.runScopes.masterServiceKid, masterFingerprint256: account.agent.runScopes.masterFingerprint256,
+    // 〔裁〕只给受控测试：换掉「读 root 记录」的来源（生产的读端只在 Linux 上跑，核文件属主是 root）。
+    // 这一项只有在进程内直接调本函数的调用方给得了；`main.mjs` 从环境变量拼配置时不设它，也没有对应的环境变量。
+    ...(typeof account.agent.runScopes.sourceFactory === 'function' ? { sourceFactory: account.agent.runScopes.sourceFactory } : {}) }) : null;
+  const masterPin = scopeAuthority ? certificateFingerprint(account.agent.runScopes.masterFingerprint256) : null;
+  const masterKid = scopeAuthority ? account.agent.runScopes.masterServiceKid : null;
+  if (scopeAuthority && (masterPin === pin || masterKid === kid)) fail(503, 'doc-agent-role-configuration');
+  const servicePins = new Map([[kid, pin], ...(scopeAuthority ? [[masterKid, masterPin]] : [])]);
+  let stopped = false, runAuthority, assetInstanceAdapter = null, runAssets = null, runAssetsHandler = null;
+  // 不带参数时核的是跑任务的那个身份（运行素材那一侧这样调）；带参数时核指定的那个（任务身份或只做控制的主身份）。
+  const currentService = (serviceKid = kid) => {
     if (stopped) fail(503, 'doc-agent-unavailable');
     try { serviceRegistry?.refresh({ force: true }); } catch { fail(403, 'run-service-forbidden'); }
     const entry = serviceRegistry?.get('agent');
-    if (entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === kid))
+    if (!servicePins.has(serviceKid) || entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === serviceKid))
       fail(403, 'run-service-forbidden');
+    return { serviceId: 'agent', serviceKid };
   };
   const resolveServicePrincipal = ({ socket }) => {
+    const fingerprint = certificateFingerprint(socket?.getPeerCertificate?.()?.fingerprint256);
+    const serviceKid = [...servicePins].find(([_kid, allowed]) => allowed === fingerprint)?.[0];
     if (!socket?.encrypted || socket.authorized !== true || socket.destroyed ||
-        certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== pin) fail(403, 'run-service-forbidden');
-    currentService();
+        !serviceKid) fail(403, 'run-service-forbidden');
+    currentService(serviceKid);
     instanceTlsBinding(socket); // exporter is taken only from the real peer socket.
     let subject = sockets.get(socket);
     if (!subject) {
       const authenticationId = randomUUID();
-      subject = { service: 'agent', serviceKid: kid, authenticationId };
+      subject = { service: 'agent', serviceKid, authenticationId };
       sockets.set(socket, subject); subjects.set(authenticationId, socket);
       socket.once('close', () => { subjects.delete(authenticationId); sockets.delete(socket); handshakeNonces.delete(socket); });
     }
     return structuredClone(subject);
   };
   const verifyServiceInState = (_state, subject) => {
-    currentService();
+    if (assetInstanceAdapter?.has(subject)) {
+      const observed = assetInstanceAdapter.transportFor(subject);
+      return { serviceId: observed.serviceId, serviceKid: observed.serviceKid };
+    }
+    currentService(subject?.serviceKid);
     const socket = subjects.get(subject?.authenticationId);
-    if (!socket || subject.service !== 'agent' || subject.serviceKid !== kid || socket.destroyed ||
-        socket.authorized !== true || certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== pin)
+    if (!socket || subject.service !== 'agent' || socket.destroyed ||
+        socket.authorized !== true || certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== servicePins.get(subject.serviceKid))
       fail(403, 'run-service-forbidden');
-    return { serviceId: 'agent', serviceKid: kid };
+    return { serviceId: 'agent', serviceKid: subject.serviceKid };
   };
-  const instanceAuthority = createAgentInstanceAuthority({ ledger,
+  const instanceAuthority = createAgentInstanceAuthority({ ledger, scopeAuthority,
     verifyTransportInState(state, subject) {
+      if (assetInstanceAdapter?.has(subject)) return assetInstanceAdapter.transportFor(subject);
       const service = verifyServiceInState(state, subject);
       return { ...service, authenticationId: subject.authenticationId,
+        fingerprint256: certificateFingerprint(subjects.get(subject.authenticationId)?.getPeerCertificate?.()?.fingerprint256),
         channelBinding: instanceTlsBinding(subjects.get(subject.authenticationId)) };
     } });
   const readControl = createAgentReadControl({ ledger, instanceAuthority,
@@ -77,19 +102,26 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     }, checkReadInState: conversationReadInState,
     onProgress: () => { try { completeReadAccessEvents(); } catch (error) {
       onDiagnostic({ code: error.code ?? 'agent-read-close-pending' }); } } });
+  /** Agent 这一项对一条访问事件的确认：读取都关了，并且要中止的任务都凭 root 的关闭记录结清了，才往文档服务的账本里记
+   * 「Agent 已确认」。没办完就保持待办，下次再试；办完以后重复调用不会记第二次。
+   * 判断任务那一半见 `agent-read-control.mjs` 的 `accessEventRunClosure`：保留下来继续跑的共有已读任务不在等的范围里。 */
   function completeReadAccessEvents() {
-    const state = ledger.read();
+    const state = ledger.read(), pending = [];
     for (const event of state.accessEvents) {
       if (runtime.authority.hasAgentReadClosure(event.eventId) ||
           !state.agentReadsV1?.controls.some(c => c.accessSeq === event.seq)) continue;
       try {
-        const closure = readControl.finalizeAccessEvent({ eventId: event.eventId });
+        const closure = readControl.finalizeAccessEvent({ eventId: event.eventId, scoped: Boolean(scopeAuthority) });
         runtime.authority.ackAccessEvent(event.eventId, 'agent', { receiptId: `agent-read:${event.eventId}`,
           cursor: event.seq, complete: true, agentReadClosureDigest: closure.digest,
           closedStreams: closure.payload.receipts.flatMap(r => r.closedReadHandleIds),
-          stoppedRuns: [], rejectedCredentials: event.loginIds ?? [] });
-      } catch (error) { if (!['read-close-pending', 'agent-run-closure-pending'].includes(error.code)) throw error; }
+          stoppedRuns: (closure.payload.stoppedRuns ?? []).map(run => run.runId), rejectedCredentials: event.loginIds ?? [] });
+      } catch (error) {
+        if (!['read-close-pending', 'agent-run-closure-pending'].includes(error.code)) throw error;
+        pending.push({ eventId: event.eventId, code: error.code });
+      }
     }
+    return { pending };
   }
   // Operation and doc-transport closure are real partial evidence. Until the
   // registered Agent instance/resource witness exists, no control is ACKed.
@@ -102,10 +134,15 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         fail(403, 'run-control-mismatch');
       const doc = getDocAssembly(), service = getService();
       if (!doc || !service) fail(503, 'doc-agent-unavailable');
+      if (scopeAuthority && (persisted.kind === 'terminal' || persisted.revoked.length)) {
+        await scopeAuthority.closeDocControl({ controlId: persisted.controlId, docInstanceId, service, operationCoordinator: doc });
+        return { pending: true, controlId: persisted.controlId };
+      }
       // fencePrincipals installs logical/admission barriers and terminates owned
       // transports synchronously before its first await. Establish the read
       // barrier before operation recovery can yield to any cache/push callback.
-      const closing = persisted.revoked.length ? service.fencePrincipals({ runGrantIds: persisted.revoked, roles: ['agent'] }) : Promise.resolve(null);
+      const closingIds = persisted.kind === 'terminal' ? persisted.closing : persisted.revoked;
+      const closing = closingIds.length ? service.fencePrincipals({ runGrantIds: closingIds, roles: ['agent'] }) : Promise.resolve(null);
       const closingResult = closing.then(value => ({ value }), error => ({ error }));
       const operationReceipts = [];
       for (const fence of persisted.operationFences ?? []) operationReceipts.push(await doc.fence(fence));
@@ -117,7 +154,11 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         if (!current || current.payloadDigest !== persisted.payloadDigest || current.fenceRevision !== persisted.fenceRevision)
           fail(403, 'run-control-mismatch');
         const record = (state.docRunClosuresV2 ??= {})[control.controlId] ??= {
-          controlId: control.controlId, fenceRevision: control.fenceRevision, instances: {} };
+          controlId: control.controlId, payloadDigest: control.payloadDigest, fenceRevision: control.fenceRevision, instances: {} };
+        if (scopeAuthority) {
+          record.instances[docInstanceId] = { docInstanceId, operationReceipts, closed, state: 'closed', recordedAt: now() };
+          return;
+        }
         record.instances[docInstanceId] ??= { docInstanceId, operationReceipts, closed,
           // This is deliberately not a complete receipt or old-instance proof.
           complete: false, agentState: 'resource-closure-required', recordedAt: now() };
@@ -149,6 +190,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       await Promise.all(immediate);
       const controls = await runAuthority.synchronize();
       await Promise.all(controls.filter(matches).map(deliver));
+      // 任务在独立进程里跑时，这条控制要等 root 把进程关掉、这里读到关闭记录才办完。这里读一次：
+      // 已经关了就当场结清并回成功；还没关就照旧回「还在办」，调用方用同一个请求号再问。
+      if (scopeAuthority) await runAuthority.reconcileScopeClosures();
       const relevant = Object.values(ledger.read().runControlsV2 ?? {}).filter(matches);
       if (relevant.every(control => control.instances.length === 0 && control.retained.length === 0 && control.revoked.length === 0)) {
         const readClosed = await readControl.waitCompletion({ projectId: input.projectId, conversationId: input.conversationId });
@@ -167,7 +211,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     },
   });
   runAuthority = createRunAuthority({ ledger, conversationHooks: conversations.hooks,
-    verifyServiceInState, instanceAuthority, now, synchronize: () => runtime.authority.synchronize(),
+    verifyServiceInState, instanceAuthority, scopeAuthority, docInstanceId, now, synchronize: () => runtime.authority.synchronize(),
     async verifySender(ref, context) {
       const checked = await accountClient.verifyAcceptedMessage(ref, context);
       await runtime.authority.synchronize();
@@ -231,6 +275,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     try {
       claimNonce(handshakeNonces, req.socket, requestNonce);
       const principal = await runAuthority.resolveRunPrincipal({ servicePrincipal: { ...base, ...cap }, projectId, runGrantId });
+      if (scopeAuthority) ledger.transaction(state => {
+        ((state.runDocInstancesV1 ??= {})[runGrantId] ??= {})[docInstanceId] = { docInstanceId };
+      });
       initialNonces.set(req.socket, requestNonce);
       return { ...principal, servicePrincipal: base, userId: principal.accountId, tenantId: projectId,
         service: 'agent', scope: 'member' };
@@ -308,14 +355,69 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       return await dispatchContext.run({ principal, caps }, () => next(text, check));
     } finally { for (const cap of caps) instanceAuthority.release(cap.instanceSession); }
   }
-  const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, resolveServicePrincipal });
+  const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, masterFingerprint256: masterPin, resolveServicePrincipal });
+  function createRunAssetAuthentication({ assetFingerprint256, currentAsset } = {}) {
+    if (assetInstanceAdapter) fail(503, 'run-assets-instance-already-bound');
+    const adapter = createRunAssetsInstanceAdapter({ agentFingerprint256: pin, agentServiceKid: kid,
+      assetFingerprint256, currentAgent: currentService, currentAsset });
+    assetInstanceAdapter = adapter;
+    const authenticateDirect = ({ transport, proof, method, path, operation, request }) => {
+      assertInstanceDirectTransport(transport);
+      const base = resolveServicePrincipal({ socket: transport.socket });
+      // 〔裁〕运行素材只给跑任务的身份用。开了「一条任务一个进程」以后这个入口还认得只做控制的主身份的证书，
+      // 这里先拒掉它，不等到后面按实例用途去拒。
+      if (base.serviceKid !== kid) fail(403, 'run-service-forbidden');
+      const cap = instanceAuthority.authenticate({ servicePrincipal: base, method, path, operation, request, proof });
+      return { servicePrincipal: { ...base, ...cap }, release: () => instanceAuthority.release(cap.instanceSession) };
+    };
+    const authenticateObserved = ({ observer, observation, proof, method, path, operation, request }) => {
+      const observed = adapter.open({ observer, observation });
+      try {
+        const cap = instanceAuthority.authenticate({ servicePrincipal: observed.servicePrincipal,
+          method, path, operation, request, proof });
+        return { servicePrincipal: { ...observed.servicePrincipal, ...cap },
+          release() { instanceAuthority.release(cap.instanceSession); observed.release(); } };
+      } catch (error) { observed.release(); throw error; }
+    };
+    return Object.freeze({ authenticateDirect, authenticateObserved, verifyObserver: adapter.verifyObserver });
+  }
+  function mountRunAssets({ assetFingerprint256, currentAsset, resolveObserver, privateClient,
+    ticketTtlMs, maxBodyBytes, now: runNow = now } = {}) {
+    if (runAssets || typeof resolveObserver !== 'function' || typeof privateClient?.identity !== 'function')
+      fail(503, 'run-assets-unconfigured');
+    const doc = getDocAssembly();
+    if (typeof doc?.resolveRunMedia !== 'function') fail(503, 'run-assets-unconfigured');
+    const authentication = createRunAssetAuthentication({ assetFingerprint256, currentAsset });
+    let authority;
+    try {
+      const closure = createRunAssetClosure({ privateClient, currentAsset });
+      authority = createRunAssets({ ledger, runProvider: provider,
+        authenticateDirect: authentication.authenticateDirect,
+        authenticateObserved: authentication.authenticateObserved,
+        verifyObserver: authentication.verifyObserver,
+        resolveMedia: input => doc.resolveRunMedia(input),
+        verifyLeaseClosure: input => closure.verifyLeaseClosure(input),
+        verifyControlReceipt: input => closure.verifyControlReceipt(input),
+        now: runNow, ticketTtlMs });
+      const handler = createRunAssetsInternalHandler({ runAssets: authority,
+        agentFingerprint256: pin, assetFingerprint256, resolveObserver, maxBodyBytes });
+      runAssets = authority; runAssetsHandler = handler;
+      return Object.freeze({ authority, handler });
+    } catch (error) { authority?.close(); assetInstanceAdapter?.close(); assetInstanceAdapter = null; throw error; }
+  }
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
-    agentFingerprint256: pin, requireReadControl: true, resolveDelegation: async ticket => {
+    agentFingerprint256: masterPin ?? pin, requireReadControl: true, resolveDelegation: async ticket => {
       currentService(); return runtime.resolveAgentDelegation(ticket);
     } });
   const readControlsHandler = createAgentReadControlHandler({ control: readControl, resolveServicePrincipal, instanceAuthority });
-  const runsHandler = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: pin,
-    resolveServicePrincipal,
+  // 「一条任务一个进程」要的那几个接口（领分配、查结束、签准备、取终态、主身份取强制终态与事件来源）只在开了这个模式时
+  // 交给内部口；不开时内部口对它们照旧回 503。交给别处（数据连接、运行素材）的 provider 不变。
+  const internalRunAuthority = scopeAuthority ? { ...provider,
+    queryFinish: input => runAuthority.queryFinish(input), scopeAssignment: input => runAuthority.scopeAssignment(input),
+    scopePrepare: input => runAuthority.scopePrepare(input), scopeTerminal: input => runAuthority.scopeTerminal(input),
+    scopeControl: input => runAuthority.scopeControl(input), workerEventSource: input => runAuthority.workerEventSource(input) } : provider;
+  const runsHandler = createRunInternalHandler({ runAuthority: internalRunAuthority, agentFingerprint256: pin,
+    masterFingerprint256: masterPin, requirePendingProof: Boolean(scopeAuthority), includeScopeControls: Boolean(scopeAuthority), resolveServicePrincipal,
     authenticateInvocation({ req, servicePrincipal, body, operation }) {
       const cap = instanceAuthority.authenticate({ servicePrincipal, method: req.method,
         path: new URL(req.url, 'https://internal.invalid').pathname, operation, request: body, proof: instanceRequestProof(req) });
@@ -328,18 +430,47 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     issueRunTicket: () => fail(503, 'run-data-proof-unavailable'),
     async listPendingRuns({ servicePrincipal }) {
       await runtime.authority.synchronize(); verifyServiceInState(ledger.read(), servicePrincipal);
+      if (scopeAuthority) {
+        instanceAuthority.verifyInState(ledger.read(), servicePrincipal, { operation: 'pendingRuns', input: {} });
+        if (ledger.read().agentInstancesV2?.[servicePrincipal.instanceId]?.purpose !== 'control-only') fail(403, 'instance-purpose-forbidden');
+        for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
+        // 文档服务自己这一侧的连接没关完，终态和强制终态都签不出来。第一次没关成的（当时出错、进程重启过），
+        // 主服务每次来问时补做一遍；已经关过的不重复。
+        for (const control of Object.values(ledger.read().runControlsV2 ?? {}))
+          if (control.state === 'pending' && (control.kind === 'terminal' || control.revoked?.length) &&
+              ledger.read().docRunClosuresV2?.[control.controlId]?.instances?.[docInstanceId]?.state !== 'closed')
+            await deliver(control).catch(error => onDiagnostic({ code: error.code ?? 'run-control-pending', controlId: control.controlId }));
+        await runAuthority.reconcileScopeClosures();
+      }
       const state = ledger.read(), rows = [];
       for (const [projectId, group] of Object.entries(state.conversationsV2 ?? {})) {
         if (state.projects[projectId]?.status !== 'active' || state.projects[projectId].hosted?.agent !== true) continue;
-        for (const conversation of Object.values(group)) if (conversation.messages.some(message => message.queueState === 'queued'))
-          rows.push({ projectId, conversationId: conversation.id, queueRevision: conversation.queueRevision });
+        for (const conversation of Object.values(group)) {
+          // 一条任务一个进程时：这个对话的上一条还没结清（`currentRunId` 还在）就先不报给调度。报了也领不到（409 `run-not-ready`），
+          // 调度却会为它白开一代进程、再退掉。结清以后这里自然就报出来了。
+          if (scopeAuthority && conversation.currentRunId) continue;
+          if (conversation.messages.some(message => message.queueState === 'queued'))
+            rows.push({ projectId, conversationId: conversation.id, queueRevision: conversation.queueRevision });
+        }
       }
-      return { conversations: rows };
+      return { conversations: rows, ...(scopeAuthority ? { scopeControls: runAuthority.listScopeControls({ servicePrincipal }) } : {}) };
     } });
-  return { conversations, readControl, runProvider: provider, runHooks, deliver, transportAuthenticate, transportConnected, dispatchInvocation,
-    async handleInternal(req, res) { return await instancesHandler(req, res) || await readControlsHandler(req, res) || await runsHandler(req, res) || await conversationsHandler(req, res); },
-    async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
-    async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); instanceAuthority.close(); subjects.clear();
+  return { conversations, readControl, runProvider: provider, runHooks, deliver, createRunAssetAuthentication, mountRunAssets,
+    /** 退出确认的续办口：把读取已关、任务已结清的访问事件记成「Agent 已确认」。开了「一条任务一个进程」时先读一次
+     * root 的关闭记录，这样主身份还没来问的时候（比如文档服务刚重启）也能结清。 */
+    async completeAccessEvents() {
+      if (scopeAuthority) await runAuthority.reconcileScopeClosures();
+      return completeReadAccessEvents();
+    },
+    transportAuthenticate, transportConnected, dispatchInvocation,
+    async handleInternal(req, res) { return await runAssetsHandler?.(req, res) || await instancesHandler(req, res) || await readControlsHandler(req, res) ||
+      await runsHandler(req, res) || await conversationsHandler(req, res); },
+    async start() { for (const control of await runAuthority.synchronize()) await deliver(control);
+      if (scopeAuthority) {
+        for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
+        await runAuthority.reconcileScopeClosures();
+      } },
+    async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); runAssets?.close(); assetInstanceAdapter?.close(); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
 }

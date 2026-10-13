@@ -26,9 +26,11 @@
  *   PROMPTCUT_RENDER_USER_CARDS       isolated（缺省）| off。isolated：内容库里有卡片源码的项目由按项目隔离的工作进程做（契约第 7.5 节）；
  *                                     off：不起隔离工作进程，含用户卡的任务渲染服务不认领（常驻工作进程两种取值下都不同步卡）
  *   PROMPTCUT_RENDER_ISO_PORT         隔离工作进程的端口（另占 +1、+2），缺省 PROMPTCUT_RENDER_PORT + 10。它的数据目录是 <PROMPTCUT_RENDER_DATA>/iso
- *   PROMPTCUT_RENDER_ISO_IDLE_MS / _ISO_SLICE_MS   测试与演练用：隔离工作进程闲置多久结束（缺省 60000）、另有项目在等时一个项目最多连续做多久（缺省 300000）
+ *   PROMPTCUT_RENDER_ISO_IDLE_MS / _ISO_SLICE_MS   测试与演练用：隔离工作进程空闲多久才结束让位（缺省 300000，五分钟）、另有项目在等而它一直有活时最多连续做多久（缺省 300000）
  *   PROMPTCUT_RENDER_LOOK             on（缺省）| off。看画面的口子（契约第 8a 节，`look.mjs`）：云端 Agent 服务凭服务身份向本进程要一帧画面。
  *                                     off：这条路整个不在（回 404），云端 Agent 的看画面工具回「这次没看成」
+ *   PROMPTCUT_RENDER_LOOK_QUEUE       看画面请求的队列落盘的目录（`render-requests.mjs`），缺省 <PROMPTCUT_RENDER_DATA>/look-queue。里面有排着的请求带来的
+ *                                     项目内容：目录 0700、文件 0600，属管理进程的用户。管理进程重启后排着的请求从这里接回来
  *   PROMPTCUT_RENDER_LOOK_SERVICES    服务登记表（只有公钥）的路径，核对云端 Agent 服务的签名用；缺省 /var/lib/promptcut/hosted/secrets/services.json。
  *                                     读不到、里面没有 agent：看画面的口子谁也进不来
  *   PROMPTCUT_PAGE_GATE               log：工作进程的页面请求闸与出口代理只记不拦（排查用；缺省 enforce）。不是 PROMPTCUT_RENDER_ 开头，原样传给工作进程
@@ -36,10 +38,14 @@
  *   PROMPTCUT_RENDER_EXPECT_CODE_VERSION   直接给应该一致的代码版本（取不到在线页面构建时用）
  *   PROMPTCUT_RENDER_AGENT_STATUS_URL      云端 Agent 服务的诊断口（回 { codeVersion }）；没配就不比
  *   PROMPTCUT_RENDER_DOC_HEALTH_URL   背压用的文档服务自检地址，缺省由 DOC_URL 推出 http://…/healthz
- *   PROMPTCUT_RENDER_STREAMS          1 开轨道流（缺省不开）
+ *   PROMPTCUT_RENDER_STREAMS          1：工作进程以能产轨道流的方式起（`scripts/render-host.mjs --streams`，常驻的与隔离的都带）。缺省不设 = 不能产。
+ *                                     部署模板写的是 1（`server/hosted/deploy/pm2-promptcut-render.config.cjs`）。能产不等于产：哪个项目产，
+ *                                     看它自己的「生成轨道流」（项目记录 `hosted.render.streams`，缺省关，创建者能改）——渲染节点开着并且这一项开着，
+ *                                     才认领这个项目的流任务、切分它的清单计划时才出自己的那一份流；别的项目只做快照（任务书「甲三」）
  *   PROMPTCUT_RENDER_VERBOSE          1 把工作进程的输出原样转出来
  *   PROMPTCUT_RENDER_REPORT_TIMEOUT_MS  工作进程起来后这么久没交过诊断（或中途停交）就结束它重起，缺省 180000
- *   测试用：PROMPTCUT_RENDER_SAMPLE_MS（采样间隔）、PROMPTCUT_RENDER_SKIP_CHECKS（逗号分隔，跳过自检里的 chrome / ffmpeg）、
+ *   测试用：PROMPTCUT_RENDER_LOOK_ATTEMPT_MS / _LOOK_RETRIES / _LOOK_MAX_QUEUE_MS / _LOOK_ORPHAN_MS（看画面：渲染这一段每次最多等多久，缺省 60000；
+ *   没成重试几次，缺省 3；排队最多等多久，缺省 1800000；调用方多久没来问就撤，缺省 120000）、PROMPTCUT_RENDER_SAMPLE_MS（采样间隔）、PROMPTCUT_RENDER_SKIP_CHECKS（逗号分隔，跳过自检里的 chrome / ffmpeg）、
  *   PROMPTCUT_TEST_ENV_FINGERPRINT（原样传给工作进程，本机演练里让它的指纹与本机桌面不同）
  *
  * 日志：一行一条 JSON 写 stdout（PM2 收走）；自检不过另写 stderr。不记私钥、签名、票据。
@@ -51,9 +57,10 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readServiceKeyFile, createServiceRegistry } from '../auth/service-identity.mjs';
-import { createLook, createLookVerifier } from './look.mjs';
+import { createLook, createLookVerifier, LOOK_DEFAULTS } from './look.mjs';
+import { createRenderRequests } from './render-requests.mjs';
 import { createDirectory } from './directory.mjs';
-import { createBroker, selectProjects } from './broker.mjs';
+import { createBroker, selectProjects, streamsOn } from './broker.mjs';
 import { createWorker } from './worker.mjs';
 import { createIsolation, isolationCandidates, isoNodeIdFor, wipeDir, leftoverCount, ISOLATION_DEFAULTS } from './isolation.mjs';
 import { HOSTED_WORKER_ENV } from './source-gate.mjs';
@@ -115,6 +122,12 @@ export function renderServiceConfig(env = process.env) {
     userCards: env.PROMPTCUT_RENDER_USER_CARDS === 'off' ? 'off' : 'isolated',
     look: env.PROMPTCUT_RENDER_LOOK === 'off' ? 'off' : 'on',
     lookServicesFile: env.PROMPTCUT_RENDER_LOOK_SERVICES || '/var/lib/promptcut/hosted/secrets/services.json',
+    lookQueueDir: path.resolve(env.PROMPTCUT_RENDER_LOOK_QUEUE || path.join(env.PROMPTCUT_RENDER_DATA || '/var/lib/promptcut/render', 'look-queue')),
+    // 测试与演练用：看画面的时限（渲染这一段每次多久、重试几次、排队最多等多久、调用方多久没来问就撤）
+    lookAttemptMs: intOf(env.PROMPTCUT_RENDER_LOOK_ATTEMPT_MS, LOOK_DEFAULTS.attemptMs, 1, 600_000),
+    lookRetries: intOf(env.PROMPTCUT_RENDER_LOOK_RETRIES, LOOK_DEFAULTS.retries, 0, 10),
+    lookMaxQueueMs: intOf(env.PROMPTCUT_RENDER_LOOK_MAX_QUEUE_MS, LOOK_DEFAULTS.maxQueueMs, 1000, 86_400_000),
+    lookOrphanMs: intOf(env.PROMPTCUT_RENDER_LOOK_ORPHAN_MS, LOOK_DEFAULTS.orphanMs, 1000, 86_400_000),
     editorDir: env.PROMPTCUT_RENDER_EDITOR_DIR || '/opt/promptcut-hosted/editor',
     expectCodeVersion: env.PROMPTCUT_RENDER_EXPECT_CODE_VERSION || '',
     agentStatusUrl: env.PROMPTCUT_RENDER_AGENT_STATUS_URL || '',
@@ -319,7 +332,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const picked = selectProjects({ directory: directory.list(), held: heldByProject(), maxProjects: config.maxProjects, instanceId: key.instanceId });
     // 隔离工作进程在跑时占一个并发名额：常驻的压到「总数 - 1」，两者合起来不超过第 4 节的并发上限。
     // 常驻工作进程正在出一帧「看画面」时也让出一个名额（已经在做的任务不打断，只是不再认领新的）
-    const taken = (isolation?.active ? 1 : 0) + (look.busyOn() === 'resident' ? 1 : 0);
+    // 排着的看画面请求里有该由常驻工作进程出的，也先留出一个名额（看画面优先于预渲染任务：等它轮到时名额已经空着）
+    const taken = (isolation?.active ? 1 : 0) + (look.busyOn() === 'resident' || look.reserveOn() === 'resident' ? 1 : 0);
     return { docUrl: config.docUrl, paused: backpressure.paused, limit: Math.max(0, concurrency - taken), projects: picked.projects, waiting: picked.waiting };
   };
 
@@ -328,7 +342,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
    * 内容库里有卡片源码的项目，常驻工作进程连着但不认领（它不执行任何项目带来的代码），由这里起一个**只做这一个项目**的工作进程：
    *   - 同一时刻最多一个；口令每一轮现生成，代理口凭它只给这一个项目的清单与票据（`broker.mjs`）；
    *   - 自己的数据目录（`<数据目录>/iso`）与端口，开卡片同步，报 `userCards: true`，并发 1；
-   *   - 闲置 `isoIdleMs`（60 s）结束；几个项目在等时每个最多 `isoSliceMs`（5 分钟）一换；
+   *   - 空闲满 `isoIdleMs`（5 分钟）才结束让位，别的项目在排队也不提前；一直有活而别的项目在等时最多连续做 `isoSliceMs`（5 分钟）；
    *   - **每一轮前后都把数据目录整个清空**：装进来的卡（改动层）、帧库、临时目录、Chrome 的用户数据目录、Vite 的依赖缓存全在里面；
    *   - 结束时带走整棵进程树（`worker.mjs`）。
    * 检出目录与常驻工作进程共用、不另拷：卡片同步只写数据目录下的改动层，Vite 的缓存、导出目录、临时目录也都指到了数据目录，
@@ -382,8 +396,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           log: isoLog,
           treeFile: path.join(config.dataDir, 'iso-worker-tree.json'),
           command() {
+            // 隔离工作进程同样以能产流的方式起：带用户卡的项目整个归它做，它不能产流的话这种项目打开了「生成轨道流」也没人产
             const args = [path.join(ROOT, 'scripts', 'render-host.mjs'), '--port', String(config.isoPort), '--data', config.isoDataDir, '--max-concurrent', '1',
-              ...(config.verbose ? ['--verbose'] : [])];
+              ...(config.streams ? ['--streams'] : []), ...(config.verbose ? ['--verbose'] : [])];
             const built = workerCommand({
               node: process.execPath, args, support, user: config.user,
               limits: { memoryMax: config.memoryMax, memoryHigh: config.memoryHigh, cpuQuota: config.cpuQuota },
@@ -423,11 +438,15 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       exited: () => !isoProc || !isoProc.running,
     },
   });
-  const isoListing = () => ({ docUrl: config.docUrl, paused: backpressure.paused, limit: 1, projects: isolation?.listing() ?? [], waiting: [] });
+  // 隔离工作进程的清单只有它那一个项目；这个项目产不产流照目录条目补上（`isolation.mjs` 的状态机不认识目录）
+  const isoListing = () => ({ docUrl: config.docUrl, paused: backpressure.paused, limit: 1, waiting: [],
+    projects: (isolation?.listing() ?? []).map((p) => ({ ...p, streams: streamsOn(directory.get(p.projectId)) })) });
   /** 「要看画面」的需求（`look.mjs` 登记）：projectId → { until, seq }。到期的随手清掉 */
   const lookWants = new Map();
   let lookSeq = 0;
   const lookWanted = (projectId) => {
+    // 队列里还有这个项目排着或在做的请求：一直算有需求（隔离工作进程不因闲置结束）
+    if (look.wanted(projectId)) return true;
     const w = lookWants.get(projectId);
     if (!w) return false;
     if (w.until <= Date.now()) { lookWants.delete(projectId); return false; }
@@ -438,8 +457,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const dir = directory.list();
     const looks = new Map();
     for (const [projectId, w] of [...lookWants]) { if (lookWanted(projectId)) looks.set(projectId, w.seq); }
-    // 背压暂停时不新起（已经在跑的照旧，它自己不认领新的）
-    const candidates = backpressure.paused && !isolation.active ? [] : isolationCandidates({ directory: dir, residentNodes: report?.queue?.nodes ?? [], looks });
+    // 背压暂停时不新起（已经在跑的照旧，它自己不认领新的）；排着的看画面请求留在队列里，背压过去后先轮到它们
+    // 管理进程刚起来、第一次采样还没做完时不知道机器吃不吃紧：也先不新起（不然内存本来就低的机器上，重启后会抢在背压生效前起一轮）
+    const holdOff = backpressure.paused || readings.at === null;
+    const candidates = holdOff && !isolation.active ? [] : isolationCandidates({ directory: dir, residentNodes: report?.queue?.nodes ?? [], looks });
     isolation.tick({
       candidates,
       eligible: (projectId) => dir.some((p) => p.projectId === projectId && p.enabled && p.active),
@@ -450,11 +471,19 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
   // ---------- 看画面（契约第 8a 节）：云端 Agent 服务凭服务身份来要一帧
   const lookRegistry = config.look === 'on' ? createServiceRegistry({ file: config.lookServicesFile, log: (event, fields) => log(`look.${event}`, fields) }) : null;
+  // 队列落盘：管理进程重启后排着的请求还在（下面 listen 之后 `load()` 接回来）
+  const lookRequests = createRenderRequests({ dir: config.look === 'on' ? config.lookQueueDir : null, log: (event, fields) => log(`look.${event}`, fields) });
   const look = createLook({
     enabled: config.look === 'on',
     verify: createLookVerifier({ registry: lookRegistry }),
+    requests: lookRequests,
+    limits: { attemptMs: config.lookAttemptMs, retries: config.lookRetries, maxQueueMs: config.lookMaxQueueMs, orphanMs: config.lookOrphanMs },
     project: (projectId) => directory.get(projectId),
+    // 刚起来、目录清单还没拿到：接回来的请求先排着（这时「目录里没有」不等于项目不在了）
+    directoryReady: () => directory.status().syncedAt !== null,
     paused: () => backpressure.paused,
+    // 产物到了容量上限（素材服务回 507，工作进程暂停认领）：要写产物的看画面请求排着等，别的照常出
+    storagePaused: () => { const until = report?.queue?.quotaPausedUntil ?? null; return Number.isFinite(until) ? until > Date.now() : !!until; },
     resident: () => ({
       port: config.port, key: brokerKey, running: worker.status().running === true && worker.status().ready === true,
       node: (projectId) => (report?.queue?.nodes ?? []).find((n) => n.projectId === projectId) ?? null,
@@ -466,9 +495,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       report: isolation?.current && isoReport && isoReportAt >= isolation.current.startedAt ? isoReport : null,
       lastRun: isolation?.status().lastRun ?? null,
     }),
-    want: (projectId, until) => {
+    want: (projectId, until, { fresh = false } = {}) => {
       const prev = lookWants.get(projectId);
-      lookWants.set(projectId, { until, seq: prev && prev.until > Date.now() ? prev.seq : (lookSeq += 1) });
+      // `fresh`：为它起的那一轮没起成，这是重试——换一个记号，隔离的编排才不按「同一批先不再起」跳过它
+      lookWants.set(projectId, { until, seq: !fresh && prev && prev.until > Date.now() ? prev.seq : (lookSeq += 1) });
     },
     log,
   });
@@ -554,6 +584,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         worker: { ...worker.status(), concurrency, mode: support.ok ? 'cgroup' : 'in-process', reportAgeMs: reportAt ? Date.now() - reportAt : null },
         queue: report?.queue ?? null,
         userCards: config.userCards,
+        // 工作进程是不是以能产轨道流的方式起的；每个项目此刻产不产看上面 `projects[].streams`
+        streams: config.streams,
         look: { ...look.status(), registry: lookRegistry ? { file: config.lookServicesFile, agentKeys: lookRegistry.get('agent')?.keys.length ?? 0 } : null },
         isolation: !isolation ? { enabled: false } : {
           enabled: true, port: config.isoPort, ...isolation.status(),
@@ -584,10 +616,12 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     process.stderr.write(line);
     return 1;
   }
-  log('listen', { role: 'hosted-render', look: config.look, statusPort: brokerPort, workerPort: config.port, docUrl: config.docUrl, service: key.service, kid: key.kid, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}`, node: process.version });
+  log('listen', { role: 'hosted-render', look: config.look, streams: config.streams, statusPort: brokerPort, workerPort: config.port, docUrl: config.docUrl, service: key.service, kid: key.kid, cgroup: support.ok ? 'systemd-scope' : `none:${support.reason}`, node: process.version });
 
   // 上一次没来得及清的（管理进程自己被杀）：起任何工作进程之前先把隔离工作进程的数据目录清空
   if (isolation) { try { await wipeIso(); } catch (err) { log('isolation.cleanup-failed', { message: String(err?.message ?? err), at: 'startup' }); } }
+  // 上一次排着没做完的看画面请求：接回队列（目录连上、工作进程起来之后它们自己轮到）
+  if (config.look === 'on') { try { lookRequests.load(); look.resume(); } catch (err) { log('look.queue-load-failed', { message: String(err?.message ?? err) }); } }
   directory.start();
   worker.start();
   const isoTimer = setInterval(() => { try { isoTick(); } catch (err) { log('isolation.error', { message: String(err?.message ?? err) }); } }, 1000);
@@ -601,6 +635,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     log('stop', { signal });
     clearInterval(sampler);
     clearInterval(isoTimer);
+    // 排着的看画面请求留在盘上，下次起来接着做
+    look.close();
     if (isolation) { try { await isolation.stop('shutdown'); } catch { /* 下面的 exit 钩子再兜一层 */ } }
     await worker.stop();
     directory.stop();

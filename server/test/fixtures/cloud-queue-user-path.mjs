@@ -20,6 +20,7 @@ import { startHostedCombo, hostedPaths } from '../../hosted/combo.mjs';
 import { stageHostedAssetFiles } from '../../hosted/files.mjs';
 import { createAssetReadyProbe } from '../../hosted/asset-doc-client.mjs';
 import { assetWiringPki } from './asset-wiring-pki.mjs';
+import { pipeHttpProxyResponse } from './http-proxy-stream.mjs';
 import WebSocket from 'ws';
 import { addServiceKey, generateServiceKeyPair } from '../../auth/service-identity.mjs';
 import { createConversationClient } from '../../agent-service/conversation-client.mjs';
@@ -124,7 +125,7 @@ async function openHostedProjectOverWebSocket({ origin, ca, ticket, projectId })
 export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6524, 6525, 6528], agentPort = 6526, keepOpen = false,
   providerRoot = process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT,
   passwordOrderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE,
-  publicHandler = null, createAgentService = null,
+  publicHandler = null, createAgentService = null, variant = null,
   diagnostic = () => {} } = {}) {
   assert.equal(ports.length, 7);
   assert.ok(path.isAbsolute(providerRoot ?? '') && fs.existsSync(path.join(providerRoot, 'account/internal.mjs')),
@@ -141,8 +142,11 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
   const docOrigin = edgeOrigin;
   const assetOrigin = edgeOrigin;
   const authorityId = 'dual-account-doc';
-  const pki = assetWiringPki(dir);
+  // variant：只给「一条任务一个进程」那类夹具用。它可以多要几张叶证书、往文档服务的 Agent 配置里加东西
+  // （任务范围、运行素材）、换主服务连文档服务用的证书、换素材服务的入口脚本。不给时一切照旧。
+  const pki = assetWiringPki(dir, variant?.pkiNames ?? []);
   const agentKey = generateServiceKeyPair();
+  let extra = {};
   let agentServer, agentClient, agentService, agentRunClient, agentReadControl, agentAssembly;
   const staged = path.join(dir, 'staged-asset');
   const docDir = path.join(dir, 'doc');
@@ -227,9 +231,13 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
       if (target === assetPort || target === agentPort) delete headers.cookie;
       const upstream = http.request({ hostname: '127.0.0.1', port: target, method: req.method, path: upstreamPath,
         headers }, response => {
-        res.writeHead(response.statusCode, response.headers); response.pipe(res);
+        // 和生产的反向代理一样：上游中途被掐（被读取通道的围栏关掉、服务停了）时，把下游连接也关掉，不留一条永远没有下文的流
+        pipeHttpProxyResponse(response, res, upstream);
       });
-      upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+      upstream.on('error', () => {
+        if (!res.headersSent && !res.destroyed) { res.writeHead(502); res.end(); }
+        else if (!res.destroyed && !res.writableEnded) res.destroy();
+      });
       req.pipe(upstream);
     });
     edgeServer.on('upgrade', (req, client, head) => {
@@ -264,6 +272,9 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
     const statusConfig = { origin: `https://127.0.0.1:${assetInternalPort}`, tls: pki.doc,
       serverFingerprint256: pki.asset.fingerprint256 };
     addServiceKey(hostedPaths(docDir).servicesFile, { service: 'agent', role: 'agent', actsFor: 'member', kid: agentKey.kid, pub: agentKey.pub });
+    if (variant) extra = await variant.configure({ dir, pki, docDir, assetDir, staged, authorityId, agentKey,
+      servicesFile: hostedPaths(docDir).servicesFile, statusConfig,
+      ports: { doc: docPort, docInternal: docInternalPort, asset: assetPort, assetInternal: assetInternalPort, edge: edgePort, agent: agentPort } }) ?? {};
     combo = await startHostedCombo({ dataDir: docDir, docPort, assetPort, host: '127.0.0.1',
       trustLoopback: false, clusterToken: 'dual-path-test-cluster-token-32-characters',
       accountRequired: true, docPublicUrl: `${edgeOrigin}/hosted/`,
@@ -274,13 +285,15 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
         keyId: 'dual-path-doc', internalTls: pki.doc, internalPort: docInternalPort,
         services: [{ serviceId: 'account', fingerprint256: pki.account.fingerprint256 },
           { serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 }, { serviceId: 'agent', fingerprint256: pki.wrong.fingerprint256 }],
-        agent: { fingerprint256: pki.wrong.fingerprint256, serviceKid: agentKey.kid },
+        agent: { fingerprint256: pki.wrong.fingerprint256, serviceKid: agentKey.kid, ...(extra.accountAgent ?? {}) },
         order: { witnessKeys: { 'dual-path-order': orderKeys.account.publicKey },
-          docAttestationPrivateKey: orderKeys.doc.privateKey } } });
+          docAttestationPrivateKey: orderKeys.doc.privateKey } },
+      ...(extra.runAssets ? { runAssets: extra.runAssets } : {}), ...(extra.comboLog ? { log: extra.comboLog } : {}) });
     assert.equal(combo.assetPort, null, 'account mode uses the separate asset process');
-    const agentOptions = { origin: `https://127.0.0.1:${docInternalPort}`, tls: pki.wrong,
+    const agentOptions = { origin: `https://127.0.0.1:${docInternalPort}`, tls: extra.agentTls ?? pki.wrong,
       serverFingerprint256: pki.doc.fingerprint256 };
-    agentClient = createConversationClient(agentOptions); agentRunClient = createRunClient(agentOptions);
+    agentClient = createConversationClient(agentOptions);
+    agentRunClient = createRunClient({ ...agentOptions, ...(extra.agentRegistrationPurpose ? { registrationPurpose: extra.agentRegistrationPurpose } : {}) });
     agentReadControl = createConversationControlClient({ ...agentOptions, runClient: agentRunClient,
       receiptFile: path.join(dir, 'agent-read-closures.sqlite') });
     agentClient.useReadControl(agentReadControl);
@@ -296,7 +309,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
     }
     const wiring = createHostedWiring({ accountMode: true, conversationClient: agentClient });
     if (createAgentService) {
-      agentAssembly = await createAgentService({ agentOptions, agentClient, agentRunClient, agentReadControl, dir, combo });
+      agentAssembly = await createAgentService({ agentOptions, agentClient, agentRunClient, agentReadControl, dir, combo, pki });
       assert.equal(typeof agentAssembly?.close, 'function', 'injected assembly must own its actual close');
       agentService = agentAssembly.service;
       assert.equal(typeof agentService?.send, 'function', 'injected assembly supplies the actual account service');
@@ -324,7 +337,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
     assert.notEqual(accounts[0], accounts[1]);
     const project = await doc('POST', '/hosted/shared/account/create', {
       name: 'Shared dual account project', requestId: 'dual-create', allowLinkJoin: true,
-      initialProject: { tracks: [] } }, editors[0]);
+      initialProject: extra.initialProject ?? { tracks: [] } }, editors[0]);
     assert.equal(project.status, 201, JSON.stringify(project.body));
     const projectId = project.body.projectId;
     const siteAFirst = await actors[0].request('GET', '/projects');
@@ -353,7 +366,8 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
       PROMPTCUT_ASSET_CLIENT_CERT_FILE: path.join(dir, 'asset.crt'),
       PROMPTCUT_ASSET_INTERNAL_KEY_FILE: path.join(dir, 'asset.key'),
       PROMPTCUT_ASSET_INTERNAL_CERT_FILE: path.join(dir, 'asset.crt') };
-    child = spawn(process.execPath, ['server/hosted/asset-main.mjs'], { cwd: staged, env,
+    child = spawn(process.execPath, extra.assetChild?.args ?? ['server/hosted/asset-main.mjs'], {
+      cwd: extra.assetChild?.cwd ?? staged, env: { ...env, ...(extra.assetChild?.env ?? {}) },
       windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     assetPid = child.pid;
     childClose = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
@@ -431,6 +445,7 @@ export async function runCloudQueueUserPath({ ports = [6520, 6521, 6522, 6523, 6
       handedOff = true;
       return { origin: edgeOrigin, leafFingerprint256: pki.wrong.fingerprint256,
         caFile: path.join(dir, 'ca.crt'), projectId, fixtureDir: dir, assetPid,
+        assetOutput: () => `${childStdout}${childStderr}`,
         accounts: [{ name: 'dualUser0', password: 'temporary-dual-password-0' },
           { name: 'dualUser1', password: 'temporary-dual-password-1' }],
         ports: { site: sitePort, accountInternal: accountPort, doc: docPort,

@@ -43,7 +43,7 @@ function getWindowTitle(exe) {
   try {
     const csv = execSync(
       `tasklist /V /FO CSV /NH /FI "IMAGENAME eq ${exe}"`,
-      { encoding: "utf-8", timeout: 10_000 }
+      { windowsHide: true, encoding: "utf-8", timeout: 10_000 }
     );
     // Fields: Image Name, PID, Session Name, Session#, Mem Usage, Status, User Name, CPU Time, Window Title
     for (const line of csv.trim().split(/\r?\n/)) {

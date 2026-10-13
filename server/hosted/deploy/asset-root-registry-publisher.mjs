@@ -537,6 +537,46 @@ export async function runAssetRootPublisher({ configFile, mode }) {
   return await publishAssetRootRegistry({ scope, mode, io });
 }
 
+/**
+ * 「原来那一代的主进程已经不在了」时，凭 systemd 和内核的读数认这还是不是原来那一代。纯判断，读数由调用方给
+ * （生产上是 `pinPrevious(old, { allowDeadMain: true })` 现读的），所以哪台机器上都测得到。
+ *
+ * 主进程没了以后，真实的 systemd 上有两种状态（都见过）：
+ *   甲、服务的 cgroup 还在：组里还有别的进程活着（主进程起的子进程）。`ControlGroup` 仍是记录里的那个路径，目录的设备号、节点号没变。
+ *   乙、服务的 cgroup 已经被 systemd 收掉：组里一个进程都不剩（任务进程干净地崩了、被结束了、自己退了，都是这样）。
+ *       单元仍停在这一次启动上（`RemainAfterExit=yes` 时是 active (exited)，`InvocationID` 没变），但 `ControlGroup` 是空的，目录不存在。
+ *       2026-10-13 在 Ubuntu 22.04、systemd 249 上实测：主进程被 SIGKILL 后 `ActiveState=active SubState=exited MainPID=0 ControlGroup=`。
+ * 原来这里只认甲，乙会在读那个已经不存在的目录时出错——于是任务进程一崩，root 既写不了失败观察也强制关不了，槽卡死。
+ *
+ * 认乙没有放松关闭的证明：证明从来不是服务的那个 cgroup，而是包着它的那个关闭范围（临时 slice）——调用方在这之前已经核过
+ * slice 还是原来那一个（启动号、设备号、节点号、开机号）、里面没有不属于这个服务的东西，之后凭固定的句柄读它的 `populated`。
+ * 服务的 cgroup 是 slice 的子目录，它没了而 slice 是空的，正说明这一代一个进程都不剩。这里仍然要求：主进程号是 0、
+ * 单元的启动号就是记录里那一次、开机号没变；乙还要求目录确实不存在（`ControlGroup` 空而目录还在算对不上）。
+ *
+ * @param {object} o
+ * @param {{ MainPID: string, InvocationID: string, ControlGroup: string }} o.unit `systemctl show` 的读数
+ * @param {null | { isDirectory(): boolean, isSymbolicLink(): boolean, uid: bigint, mode: bigint, dev: bigint, ino: bigint }} o.serviceCgroup
+ *        对记录里服务 cgroup 路径 lstat 的结果；不存在给 null
+ * @param {string} o.currentBootId
+ * @param {object} o.old 记录里的那一代（`instance` 与 `closureScope`）
+ * @returns {{ serviceCgroup: 'present' | 'pruned' }}
+ */
+export function validateDeadMainPreviousV2({ unit, serviceCgroup, currentBootId, old }) {
+  const instance = old?.instance;
+  if (!instance || Number(unit?.MainPID) !== 0 || typeof unit.InvocationID !== 'string' || !unit.InvocationID ||
+      unit.InvocationID !== instance.unitInvocationId || currentBootId !== instance.bootId || typeof unit.ControlGroup !== 'string')
+    fail('publisher-previous-instance-mismatch');
+  if (unit.ControlGroup === '') {
+    if (serviceCgroup !== null) fail('publisher-previous-instance-mismatch');
+    return { serviceCgroup: 'pruned' };
+  }
+  const cg = serviceCgroup;
+  if (`/sys/fs/cgroup${unit.ControlGroup}` !== instance.cgroup.v2Path || cg === null || !cg.isDirectory() || cg.isSymbolicLink() ||
+      cg.uid !== 0n || (cg.mode & 0o022n) || String(cg.dev) !== instance.cgroup.dev || String(cg.ino) !== instance.cgroup.ino)
+    fail('publisher-previous-instance-mismatch');
+  return { serviceCgroup: 'present' };
+}
+
 const sliceTextV2 = (expected, reservation) => `# PromptCut root publisher v2 ${expected.authorityId} epoch ${reservation.epoch}\n[Service]\nSlice=${reservation.closureScope.unit}\n`;
 const systemPropertiesV2 = ['Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup', 'InvocationID',
   'KillMode', 'Delegate', 'Restart', 'Slice', 'User', 'FragmentPath', 'SourcePath', 'DropInPaths', 'Following', 'Transient', 'Job', 'Description', 'StopWhenUnneeded'];
@@ -734,9 +774,35 @@ export async function createRootScopeRuntimeV2(config, {
         }
       }
     },
-    async pinPrevious(old) {
+    async pinPrevious(old, { allowDeadMain = false } = {}) {
+      if (allowDeadMain && identityPath !== '/internal/v2/agent/run-scope/identity') fail('publisher-dead-main-purpose');
       const reservation = await read(`reservation-${old.epoch}.json`);
-      if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: old.closureScope })) fail('publisher-previous-instance-mismatch');
+      const assertPrevious = async () => {
+        if (!allowDeadMain) {
+          if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: old.closureScope })) fail('publisher-previous-instance-mismatch');
+          return;
+        }
+        validateReservation(reservation, expected);
+        if (!equal(reservation.closureScope, old.closureScope) || reservation.instanceId !== old.instance.instanceId ||
+            reservation.serviceCgroupPath !== old.instance.cgroup.v2Path) fail('publisher-previous-instance-mismatch');
+        const { unit } = await configuration(reservation);
+        if (Number(unit.MainPID) === old.instance.pid) {
+          if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: old.closureScope })) fail('publisher-previous-instance-mismatch');
+          return;
+        }
+        await scopeInfo(old.closureScope); await exclusiveScope(old.closureScope);
+        // 服务自己的那个 cgroup 可能已经不在了（见 validateDeadMainPreviousV2 的说明）：不在就是不在，别的读错照旧抛
+        let cg = null;
+        try { cg = await fs.lstat(old.instance.cgroup.v2Path, { bigint: true }); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        validateDeadMainPreviousV2({ unit, serviceCgroup: cg, currentBootId: await bootId(), old });
+        try {
+          if (parseProcStat(await fs.readFile(`/proc/${old.instance.pid}/stat`, 'utf8')).startTicks === old.instance.pidBirth.startTicks)
+            fail('publisher-old-birth-live');
+        } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        // Re-read the exact loaded unit after every kernel/proc observation.
+        if (!equal(unit, (await configuration(reservation)).unit)) fail('publisher-previous-instance-mismatch');
+      };
+      await assertPrevious();
       const scope = old.closureScope, group = await fs.open(scope.cgroup.v2Path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       let events;
       try {
@@ -760,8 +826,19 @@ export async function createRootScopeRuntimeV2(config, {
           await exclusiveScope(scope, true);
         };
         return {
+          async observeFailure() {
+            if (!allowDeadMain || identityPath !== '/internal/v2/agent/run-scope/identity') fail('publisher-failure-purpose');
+            await assertPrevious();
+            if (Number((await configuration(reservation)).unit.MainPID) !== 0) fail('publisher-main-still-live');
+            const populated = await empty() ? 0 : 1;
+            await assertPrevious();
+            if (Number((await configuration(reservation)).unit.MainPID) !== 0) fail('publisher-main-still-live');
+            return { kind: 'main-birth-gone', at: Date.now(), bootId: old.instance.bootId,
+              serviceInstance: old.instance, closureScope: scope, scopeActive: true, scopeExclusive: true,
+              mainPid: 0, mainBirthGone: true, populated };
+          },
           async stopAndObserve() {
-            if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: scope })) fail('publisher-previous-instance-mismatch');
+            await assertPrevious();
             const stopping = exec(['stop', expected.unit, '--no-ask-password']).then(() => true, () => false);
             let observed = false;
             try {

@@ -22,6 +22,13 @@
  *   `cardEnvFingerprint` 时,`input.browser` 带 `{ cardEnvFingerprint, userCards, graphCards, cardSources }`(`cardSources`:本页已载入成功、
  *   代码身份已定下来的卡片 id → 身份),切分方据此给浏览器出这几类卡的那一份。登记变了(转译好一张、换代、能力变了)就是另一个计划
  *   (签名里带它的摘要),马上重发;没有这类卡时不带这一项,计划与原来逐字相同。登记在 `nodeCardInfo.ts`,由 `deps.browser` 注入或缺省读它。
+ * - 托管方渲染节点的「生成轨道流」(任务书 `render-refactor-task.md`「甲三」):本页看到这一项开着(`deps.streams()`)时,计划带 `input.streams: true`、
+ *   签名里多一段 —— 同一版项目、同一份清单,这一项开着是另一个计划。创建者刚打开时宿主调 `streamsOn()`,马上重发:关着时发的那一份已经做完,
+ *   同一个结果键队列不会重切;换了键,渲染节点才会再切一次、出它自己的那一份流任务。这一项关着(或旧文档服务不报)时计划与原来逐字相同。
+ *   从开变关不用重发(渲染节点的认领闸当场生效);几个成员同时在线时各自重发的是同一个结果键,队列只留一个任务。
+ * - 本页产流(任务书「甲二」,`pageStreams.ts`)要知道「线上有没有能切分的节点接这份计划」:`current()` 给最近发成的那一版(任务 id、版本、清单、
+ *   发成的时刻),`probe()` 把同一个任务再发布一次、读回包里它此刻的状态(`open` 没人认领、`claimed` / `done` 有节点接了、`failed`)。
+ *   同一个结果键队列只合并,再发布不另起任务、不改它的状态。
  * - 每发一版之前调 `onPublish(version)`:宿主据此把这一版的已确认项目留在内存(M7 D6:执行细任务用任务的 `projectRev` 那一版)。
  *
  * 任务形状与队列侧 `server/render-queue/messages.mjs` 的 `clipsPlanTaskOf` 逐字段相同(单测对拍);这里照抄,页面构建不带服务端模块。
@@ -50,6 +57,10 @@ export function clipsSig(clips: readonly string[], extra?: string): string {
   };
   return fnv(0x811c9dc5).toString(36) + fnv(0x2f4a7c15).toString(36);
 }
+
+/** 签名里「本页看到『生成轨道流』开着」的那一段,与几段附加内容之间的分隔(同 `messages.mjs` 的 `LIST_STREAMS_SIG`、`SIG_EXTRA_SEP`) */
+export const LIST_STREAMS_SIG = "streams=1";
+const SIG_EXTRA_SEP = "\u0001";
 
 /** 清单计划的 `input.browser`(与 `server/render-queue/messages.mjs` 的 `browserCardsOf` 的结果同形) */
 export interface BrowserCards {
@@ -87,19 +98,21 @@ export interface ClipsPlanTask {
   resultKey: string;
   range: null;
   source: { projectId: string; projectRev: number };
-  input: { clips: string[]; browser?: BrowserCards };
+  input: { clips: string[]; browser?: BrowserCards; streams?: true };
   weight: { class: "medium"; estMs: null; frames: null };
   requires: { codeVersion?: string };
   priority: "normal";
 }
 
-export function clipsPlanTask({ projectId, projectRev, clips, codeVersion, browser }: { projectId: string; projectRev: number; clips: readonly string[]; codeVersion?: string | null; browser?: unknown }): ClipsPlanTask {
+export function clipsPlanTask({ projectId, projectRev, clips, codeVersion, browser, streams }: { projectId: string; projectRev: number; clips: readonly string[]; codeVersion?: string | null; browser?: unknown; streams?: boolean }): ClipsPlanTask {
   const list = [...new Set(clips)].map(String).filter(Boolean).sort();
   const cards = browserCardsOf(browser);
-  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${clipsSig(list, cards ? browserCardsSig(cards) : undefined)}`;
+  const on = streams === true;
+  const extra = [cards ? browserCardsSig(cards) : null, on ? LIST_STREAMS_SIG : null].filter((x): x is string => x !== null).join(SIG_EXTRA_SEP);
+  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${clipsSig(list, extra || undefined)}`;
   return {
     id: `plan:${resultKey}`, kind: "plan", resultKey, range: null,
-    source: { projectId, projectRev }, input: cards ? { clips: list, browser: cards } : { clips: list }, weight: { class: "medium", estMs: null, frames: null },
+    source: { projectId, projectRev }, input: { clips: list, ...(cards ? { browser: cards } : {}), ...(on ? { streams: true as const } : {}) }, weight: { class: "medium", estMs: null, frames: null },
     requires: typeof codeVersion === "string" && codeVersion ? { codeVersion } : {}, priority: "normal",
   };
 }
@@ -141,6 +154,8 @@ export interface PlanPublisherDeps {
   browser?: () => unknown | null;
   /** 上面那份登记变了的通知(订阅,回退订);缺省订阅 `nodeCardInfo.ts` 的登记处。变了就重发(清单计划的签名带它的摘要) */
   subscribeBrowser?: (cb: () => void) => () => void;
+  /** 本页此刻看到这个项目的「生成轨道流」是不是开着(托管方的渲染节点开着并且这一项开着);不给等于一直关着 */
+  streams?: () => boolean;
 }
 
 /** 登记处的内容 → `input.browser`:本页能执行(有运行时版本)、节点拿到了 cardEnvFingerprint、至少声明了一种能力才给 */
@@ -162,6 +177,15 @@ export interface PlanPublisher {
   reset(): void;
   /** 本页的纯浏览器节点报到状态变了(M7):等着的那一版马上发 */
   nodeChanged(): void;
+  /** 「生成轨道流」从关变开了:马上重发这一版(结果键带这一项,是另一个计划;不防抖,创建者正等着)。从开变关不用调 */
+  streamsOn(): void;
+  /** 最近发成的那一版清单计划(本页产流用);还没发成、连接换了之后为 null */
+  current(): { id: string; projectId: string; projectRev: number; clips: string[]; at: number } | null;
+  /**
+   * 问队列最近发成的那一版计划此刻的状态:把同一个任务再发布一次,读回包里的 `state`(`open` / `claimed` / `done` / `failed`)。
+   * 问不到(没发成过、正在发、连接断着、回包不对)回 null。
+   */
+  probe(): Promise<string | null>;
   dispose(): void;
   debug(): { measured: boolean; want: Version | null; last: string | null; lastClips: string[]; helloOk: boolean; nodeWaitMs: number | null; log: { at: number; id: string; clips: number; ok: boolean; error?: string; state?: string; waitedMs?: number; node?: string }[] };
 }
@@ -200,6 +224,9 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
   let last: string | null = null;
   /** 上一次发成的那一份清单(探针核「清单含哪些片段」;任务 id 里只有签名) */
   let lastClips: string[] = [];
+  /** 上一次发成的那一个任务与发成的时刻(`current()`、`probe()` 用);连接换了就清掉 */
+  let lastTask: ClipsPlanTask | null = null;
+  let lastAt = 0;
   let helloOk = false;
   let timer: unknown = null;
   let busy = false;
@@ -222,7 +249,9 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
     if (!clips.length) return;
     let browser: unknown = null;
     try { browser = deps.browser ? deps.browser() : browserCardsFromInfo(getNodeCardInfo(now())); } catch { browser = null; }
-    const task = clipsPlanTask({ projectId, projectRev: projectRev as number, clips, codeVersion: deps.codeVersion ?? null, browser });
+    let streams = false;
+    try { streams = deps.streams?.() === true; } catch { streams = false; }
+    const task = clipsPlanTask({ projectId, projectRev: projectRev as number, clips, codeVersion: deps.codeVersion ?? null, browser, streams });
     if (task.id === last) return;
     // M7:本页当纯浏览器节点时先等它报到完(拿到指纹),最多 BROWSER_NODE_WAIT_MS,超时照发
     const node = deps.nodeReady?.() ?? "none";
@@ -255,6 +284,8 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
       if (!r || r.error) throw new Error(`task.publish:${r?.error ?? "no-result"}`);
       last = task.id;
       lastClips = [...task.input.clips];
+      lastTask = task;
+      lastAt = now();
       note({ at: now(), id: task.id, clips: clips.length, ok: true, state: r.state, node, ...(waitedMs !== undefined ? { waitedMs } : {}) });
     } catch (e) {
       const error = String((e as Error)?.message ?? e);
@@ -277,13 +308,36 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
   return {
     measured(v) { measuredOk = true; want = { ...v }; schedule(); },
     changed(v) { want = { ...v }; if (measuredOk) schedule(); },
-    reset() { helloOk = false; last = null; if (measuredOk && want) schedule(); },
+    reset() { helloOk = false; last = null; lastTask = null; if (measuredOk && want) schedule(); },
     nodeChanged() {
       // 在等节点报到的那一版:马上再判一次(报到完就发)
       if (disposed || waitSince === null || busy) return;
       if (timer !== null) clearTimer(timer);
       timer = null;
       void publish();
+    },
+    streamsOn() {
+      if (disposed || !measuredOk || !want) return;
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+      void publish();
+    },
+    current() {
+      const t = lastTask;
+      return t ? { id: t.id, projectId: t.source.projectId, projectRev: t.source.projectRev, clips: [...t.input.clips], at: lastAt } : null;
+    },
+    async probe() {
+      const t = lastTask;
+      if (disposed || !request || !t || busy || !helloOk) return null;
+      try {
+        const reply = await request({ type: "task.publish", tasks: [t] });
+        if (reply?.type !== "task.published" || lastTask !== t) return null;
+        const results = Array.isArray(reply.results) ? (reply.results as { id?: string; error?: string; state?: string }[]) : [];
+        const r = results.find((x) => x?.id === t.id);
+        return r && !r.error && typeof r.state === "string" ? r.state : null;
+      } catch {
+        return null;
+      }
     },
     dispose() {
       disposed = true;

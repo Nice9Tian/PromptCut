@@ -13,6 +13,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import puppeteer from 'puppeteer';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { editorSecurityHeaders, stageSecurityHeaders } from '../../src/online/stagePolicy.mjs';
+import { freePorts } from '../../server/test/free-ports.mjs';
 import { startAccountPasswordUserFixture } from '../../server/test/fixtures/account-password-user-path.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -23,9 +24,11 @@ const DIST = required('--dist'), SITE = required('--site-root'), OUT = required(
 const SITE_FORM_ONLY = argv.includes('--site-form-only');
 const outRelative = path.relative(os.tmpdir(), OUT);
 if (!outRelative || outRelative.startsWith('..') || path.isAbsolute(outRelative)) throw Error('output-must-be-private-temp-child');
-const PORTS = [6680, 6681, 6682, 6683, 6684, 6685, 6686, 6687, 6688, 6689];
-const ORIGIN = 'https://127.0.0.1:6686';
-const STAGES = ['http://s1.pc.localhost:6688', 'http://s2.pc.localhost:6689'];
+// 十个端口都向系统要：0～6 给测试底座的七个服务（6 是 HTTPS 入口），7 给 Agent，8、9 给两个舞台。
+const PORTS = await freePorts(10);
+const ORIGIN = `https://127.0.0.1:${PORTS[6]}`;
+const STAGE_PORTS = [PORTS[8], PORTS[9]];
+const STAGES = STAGE_PORTS.map((port, index) => `http://s${index + 1}.pc.localhost:${port}`);
 const TIMEOUT = 35_000;
 const MIME = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.css':'text/css', '.json':'application/json',
   '.svg':'image/svg+xml', '.png':'image/png', '.jpg':'image/jpeg', '.woff':'font/woff', '.woff2':'font/woff2', '.ttf':'font/ttf', '.wasm':'application/wasm' };
@@ -538,7 +541,7 @@ const started = Date.now();
 try {
   for (const port of PORTS) check(await portIsFree(port), `port-${port}-available`);
   for (const file of [path.join(DIST, 'index.html'), path.join(DIST, 'stage.html'), path.join(SITE, 'account.html'), path.join(SITE, 'login.html'), path.join(SITE, 'reset.html')]) await fs.access(file);
-  fixture = await startAccountPasswordUserFixture({ publicHandler:siteHandler(), diagnostic:entry => {
+  fixture = await startAccountPasswordUserFixture({ ports:PORTS.slice(0, 7), agentPort:PORTS[7], publicHandler:siteHandler(), diagnostic:entry => {
     if (entry.cleanupComplete === true) result.fixtureCleanup = { childClosed:entry.childClosed === true,
       closeFailureCount:entry.closeFailureCount };
   } });
@@ -551,7 +554,7 @@ try {
   result.edgeDiagnostics = fixture.edgeDiagnostics;
   result.readControlDiagnostics = fixture.readControlDiagnostics;
   result.expectedProjectMatch = null;
-  for (const port of [6688, 6689]) await startStage(port);
+  for (const port of STAGE_PORTS) await startStage(port);
   browser = await puppeteer.launch({ executablePath:await puppeteer.executablePath(), headless:true, pipe:true, acceptInsecureCerts:true,
     userDataDir:profile, defaultViewport:{ width:1440, height:1000 }, protocolTimeout:TIMEOUT,
     args:[...PROBE_CHROME_ARGS, '--ignore-certificate-errors',
@@ -709,18 +712,33 @@ try {
     result.deniedHistoryRead.denied = result.deniedHistoryRead.oldIssuedTicketRequest.denied;
   }
   check(result.deniedHistoryRead.denied === true, 'subsequent-real-history-read-denied-after-revocation');
-  const eventStatus = await sitePages[0].evaluate(async () => {
+  // 四样确认（文档、素材、Agent、渲染）齐了，账号服务才把这次退出记成办完，页面才显示已退出；齐之前一直显示正在退出。
+  // 页面自己隔几秒读一次状态，所以这里反复对照「页面上的字」和「接口此刻的状态」。先取页面上的字、后读接口：
+  // 办完是不会退回去的，所以只要页面先显示了已退出、随后读到的接口状态却还没办完，就是页面显示了假成功。
+  const readEventStatus = () => sitePages[0].evaluate(async () => {
     const node = document.querySelector('#password-event-status');
     const eventId = document.querySelector('#password-event')?.dataset.eventId;
+    const text = node?.textContent ?? '';
     const response = await fetch(`/api/account/password-events/${encodeURIComponent(eventId)}`, { credentials:'same-origin' });
     const body = await response.json();
-    return { visible:!!node && node.getClientRects().length > 0, textCode:node?.textContent?.includes('正在退出') ? 'revoking' : 'other',
-      logoutState:body.logout?.state ?? null };
+    return { visible:!!node && node.getClientRects().length > 0,
+      textCode:text.includes('正在退出') ? 'revoking' : text.includes('已退出') ? 'exited' : 'other', logoutState:body.logout?.state ?? null };
   });
-  check(eventStatus.textCode === 'revoking' && eventStatus.logoutState !== 'complete', 'ui-honestly-stays-pending-without-all-service-acks');
+  let eventStatus = await readEventStatus(), exitedBeforeComplete = false;
+  const firstEventStatus = eventStatus;
   currentPhase = 'password-change-pending-screenshot';
   editorStep = 'website-password-pending-screenshot';
   await safeShot(sitePages[0], '06-password-changed-pending');
+  for (const until = Date.now() + TIMEOUT; Date.now() < until;) {
+    if (eventStatus.textCode === 'exited' && eventStatus.logoutState !== 'complete') exitedBeforeComplete = true;
+    if (eventStatus.textCode === 'exited' && eventStatus.logoutState === 'complete') break;
+    await delay(500); eventStatus = await readEventStatus();
+  }
+  check(firstEventStatus.visible && ['revoking', 'exited'].includes(firstEventStatus.textCode) && !exitedBeforeComplete,
+    'ui-never-shows-exited-before-all-service-acks');
+  check(eventStatus.textCode === 'exited' && eventStatus.logoutState === 'complete', 'ui-shows-exited-after-all-service-acks');
+  editorStep = 'website-password-exited-screenshot';
+  await safeShot(sitePages[0], '06b-password-exit-complete');
 
   currentPhase = 'password-reset-with-provider-issued-code';
   editorStep = 'reset-bind-email';

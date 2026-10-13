@@ -137,16 +137,15 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     return undefined;
   }
 
+  /** 文档服务对读取的明确拒绝(不是故障),见 accountEvents 里轮询的 catch */
+  const DENIAL_STATUS = new Set([401, 403, 404]);
+
   /** Account-v2 stream: authorize before headers and on every poll/event. Doc remains
    * the source of the durable queue; this stream has no model output until run wiring. */
   async function accountEvents(req, res, identity, conversationId, after) {
-    let view;
-    try { view = await service.conversation(identity, conversationId, 0); }
-    catch (error) {
-      if (error?.status !== 404) throw error;
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', ...CORS });
-      res.end('data: {"type":"end","state":"none","seq":0}\n\n'); return;
-    }
+    // 对话不存在(含别的项目的、看不到的)：doc 回 404，原样走统一的错误回包，和 GET /v1/conversations/<id> 一致，
+    // 不区分「不存在」与「没权限」。不能先写 200 的流头：读通道在还没有任何一次读取被受理时会把 2xx 回包当越权掐掉连接。
+    let view = await service.conversation(identity, conversationId, 0);
     if (!view) return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
     if (service.runEvents) {
       await service.mirrorAccepted(identity, conversationId);
@@ -206,8 +205,13 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           queueRevision = view.queueRevision; aclRevision = view.aclRevision;
         }
         if (!released && !res.destroyed) res.write(': ping\n\n');
-      } catch {
-        if (!released && !res.destroyed) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} entry.close(); }
+      } catch (error) {
+        // 只有文档服务明确拒绝(401/403/404:退出登录、被踢、Agent 被关、对话被设为私有或删除)才告诉页面「已无法读取」再关流。
+        // 暂时故障(文档服务一时连不上、超时、读取通道被围栏掐断,状态都是 503 一类)只关流不发这个事件:页面照常重连,不会被说成没权限。
+        if (!released && !res.destroyed) {
+          if (DENIAL_STATUS.has(error?.status)) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} }
+          entry.close();
+        }
       } finally { polling = false; }
     };
     const poll = async () => {
@@ -225,8 +229,10 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     if (pathname === '/v1/info' && req.method === 'GET') return sendJson(res, 200, { ok: true, ...await service.info(identity) }, CORS);
     if (pathname === '/v1/conversations' && req.method === 'GET') return sendJson(res, 200, { ok: true,
       items: await service.conversations(identity) }, CORS);
-    if (pathname === '/v1/usage' && req.method === 'GET') return sendJson(res, 200, { ok: true,
-      ...await service.usage(identity) }, CORS);
+    if (pathname === '/v1/usage' && req.method === 'GET') {
+      const since = Number(url.searchParams.get('since'));
+      return sendJson(res, 200, { ok: true, ...await service.usage(identity, Number.isFinite(since) && since > 0 ? since : null) }, CORS);
+    }
     const one = /^\/v1\/conversations\/([^/]+)$/.exec(pathname);
     if (one) {
       const conversationId = decodeURIComponent(one[1]);
@@ -261,7 +267,14 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         const body = await readBody(req);
         return sendJson(res, 200, { ok: true, ...await service.abort(identity, conversationId, body.runId, body.requestId) }, CORS);
       }
-      if (sub[2] === 'attachments' && req.method === 'POST') { await service.attach(identity); }
+      if (sub[2] === 'attachments' && req.method === 'POST') {
+        // 文件名在查询串或请求头里(百分号编码);字节直接是请求体,边收边写进这个对话的工作目录。
+        // 没有挂附件存储的账号服务(`conversation-policy.mjs` 的那一份)在这里抛 503 `attachment-unavailable`
+        let name = String(url.searchParams.get('name') ?? req.headers['x-attachment-name'] ?? '');
+        try { name = decodeURIComponent(name); } catch { /* 原样用 */ }
+        const attachment = await service.attach(identity, conversationId, name, req);
+        return sendJson(res, 200, { ok: true, attachment }, CORS);
+      }
       if (sub[2] === 'page-results' && req.method === 'POST') { await service.pageResult(identity); }
     }
     return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
@@ -278,7 +291,9 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         // `codeVersion`:这份检出的代码版本(同机的渲染服务拿它比对三者是不是同一个提交);不含任何项目信息
         const code = typeof codeVersion === 'function' ? codeVersion() : codeVersion;
         // `egressTestAllow`:出网闸的测试例外开没开。生产必须是 false,部署后的核对看它(契约第 9.6 节)
-        return sendJson(res, 200, { ok: true, version, ...(code ? { codeVersion: code } : {}), egressTestAllow: service.egressTestAllow === true, look: service.look === true, collect: service.collect === true, collectTestRunner: service.collectTestRunner === true }, CORS);
+        return sendJson(res, 200, { ok: true, version, ...(code ? { codeVersion: code } : {}), egressTestAllow: service.egressTestAllow === true, look: service.look === true, collect: service.collect === true, collectTestRunner: service.collectTestRunner === true,
+          // 账号版(任务在任务进程里跑):槽调度此刻有没有在问。没有时消息只排队、不会开始,部署后的核对看它
+          ...(typeof service.schedulerAlive === 'function' ? { taskProcesses: true, scheduler: service.schedulerAlive() } : {}) }, CORS);
       }
       if (!pathname.startsWith('/v1/')) return sendJson(res, 404, { ok: false, code: 'not-found', message: 'not found' }, CORS);
 
@@ -363,7 +378,8 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
   return { async handle(req, res) {
     const route = new URL(req.url || '/', 'http://agent.invalid').pathname.replace(/\/+$/, '') || '/';
     const history = req.method === 'GET' && /^\/v1\/conversations(?:\/[^/]+(?:\/events)?)?$/.test(route);
-    const messageRead = !!service.runEvents && req.method === 'POST' && /^\/v1\/conversations\/[^/]+\/messages$/.test(route);
+    // 发消息后要读回已接受的原文、传附件前要核这个人读得到这个对话：这两种也是对话读取，放在同一种读取范围里
+    const messageRead = !!service.runEvents && req.method === 'POST' && /^\/v1\/conversations\/[^/]+\/(?:messages|attachments)$/.test(route);
     if (service.accountMode !== true || (!history && !messageRead)) return handle(req, res);
     if (!service.readTransports) return sendJson(res, 503, { ok: false, code: 'read-control-unavailable' }, CORS);
     try { return await service.readTransports.run(req, res, () => handle(req, res)); }

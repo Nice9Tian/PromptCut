@@ -33,7 +33,7 @@ async function main() {
   // Kill main process tree
   for (const pid of mainPids) {
     try {
-      execSync(`taskkill /F /T /PID ${pid}`, { encoding: "utf-8", timeout: 10_000 });
+      execSync(`taskkill /F /T /PID ${pid}`, { windowsHide: true, encoding: "utf-8", timeout: 10_000 });
       console.log(`  taskkill /F /T /PID ${pid} — OK`);
     } catch (e) {
       console.warn(`  taskkill /F /T /PID ${pid} — ${e.message.trim().split("\n")[0]}`);

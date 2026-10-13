@@ -1,0 +1,28 @@
+# 账号版 Agent 主服务:只接待人、只做控制,自己不跑任务(任务在任务槽的单元里跑)。
+# 模板 server/hosted/deploy/systemd-promptcut-agent-master.service;把花括号占位符换成 README「Agent 服务(账号版:一条任务一个进程)」一节的值,
+# 放在 /etc/systemd/system/promptcut-agent.service。环境变量照 agent-account.env.example 写成 {{ENV_FILE}}(root 所有、0644,里面没有秘密)。
+#
+# 它必须和任务进程是**两个不同的用户**:主身份的私钥只有它读得到,任务进程(里面跑着模型驱动的工具)读不到。
+# 两个用户同在 {{SHARED_GROUP}} 这个组里,共用数据目录是这个组的、带 setgid(2770);下面的 UMask=0007 让它新建的
+# 目录和文件组内可读写——它存的附件任务进程要能往同一个对话目录里接着写,反过来也一样。任务槽的单元里有同一行。
+[Unit]
+Description=PromptCut agent master (account mode, control only)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{MASTER_USER}}
+Group={{SHARED_GROUP}}
+UMask=0007
+WorkingDirectory={{DIR}}
+EnvironmentFile={{ENV_FILE}}
+Environment=NODE_ENV=production
+ExecStart={{NODE}} {{DIR}}/server/agent-service/main.mjs
+# 文档服务一时不在它会自己等;配置不对时以退出码 1 退出并打一行 config.error。隔 15 秒拉一次
+Restart=always
+RestartSec=15s
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

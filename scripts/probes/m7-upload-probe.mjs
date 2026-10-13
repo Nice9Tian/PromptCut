@@ -33,7 +33,7 @@ const CONC = (flagArg('concurrency') || '1,4').split(',').map(Number);
 const ROUNDS = Number(flagArg('rounds', '3'));
 const log = (...a) => console.error(...a);
 function winLoad() {
-  try { return Number(execFileSync('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average'], { encoding: 'utf8', timeout: 20000 }).trim()); } catch { return null; }
+  try { return Number(execFileSync('powershell', ['-NoProfile', '-Command', '(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average'], { windowsHide: true, encoding: 'utf8', timeout: 20000 }).trim()); } catch { return null; }
 }
 
 const htmls = fs.readdirSync(FRAMES).filter((n) => /^\d+\.html$/.test(n)).sort((a, b) => parseInt(a) - parseInt(b)).slice(0, 60).map((n) => fs.readFileSync(path.join(FRAMES, n)).toString('base64'));

@@ -45,7 +45,7 @@ async function stopTree(child) {
   if (!child?.pid) return;
   if (process.platform === 'win32') {
     await new Promise((resolve) => {
-      const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
       killer.once('error', resolve);
       killer.once('exit', resolve);
     });

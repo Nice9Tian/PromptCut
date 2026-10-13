@@ -36,7 +36,8 @@ import { ONLINE } from "../online/mode";
 import { LOW_MEMORY_TEXT, lowMemoryMode, noteRuntimeTrouble, readDisplayTier, setDisplayTier, type DisplayTier } from "../online/lowMemory";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
 import { assetAuthHeaders, docRequest, hasDocLink, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
-import { currentDocProjectId, currentSharedLink, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
+import { currentDocProjectId, currentSharedLink, getSyncView, pageSession, pushToast, subscribeQueueEvents } from "./sync/syncManager";
+import { hostedStreamsOn } from "./sync/hostedServices";
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
 import { needsLocalPc, onlineBrowserMode, setOnlineBrowserMode } from "../render/placeholderHost";
 import { OnlineCardSources, CARD_SOURCE_POLL_MS } from "./sync/onlineCardSources";
@@ -75,7 +76,7 @@ import { builtinCardSourceFiles } from "../render/cardSourceFiles.mjs";
 import { builtinSourceExports } from "../cards/builtinSourceExports";
 import { pageL2 } from "../online/l2";
 import { l2CostBackend } from "../online/l2Costs";
-import { createPlanPublisher } from "../online/planPublisher";
+import { createPlanPublisher, type PlanPublisher } from "../online/planPublisher";
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
@@ -1137,6 +1138,8 @@ export function Preview() {
    * 小位图到货后自己重投一次(`snapshotFeed` 的到货回调只在 SSE 那条路上挂)。
    */
   const onlineSourceRef = useRef<OnlineSnapshotSource | null>(null);
+  /** 本页的清单计划发布器(本页产流要问它「这一版计划发出去了没有、有没有节点接」;任务书「甲二」) */
+  const planPublisherRef = useRef<PlanPublisher | null>(null);
   useEffect(() => {
     if (!online) return;
     /*
@@ -1357,6 +1360,11 @@ export function Preview() {
       }),
       projectId: () => (currentSharedLink() ? currentDocProjectId() || null : null),
       onAlive: (resultKey) => onlineSourceRef.current?.markAlive(resultKey),
+      // 本页产流(任务书「甲二」):线上没有能切分的节点接本页的清单计划时,本页自己产单卡流(判据在 `online/pageStreams.ts`)
+      pagePlan: () => planPublisherRef.current?.current() ?? null,
+      planState: () => planPublisherRef.current?.probe() ?? Promise.resolve(null),
+      // 这条流有了(本页产的、先查查到的):不等下一轮轮询,马上重取层表与清单
+      onPageStream: () => onlineSourceRef.current?.refresh(),
     });
   }, [online, lowMem]);
   /*
@@ -1374,8 +1382,12 @@ export function Preview() {
       // 只列卡片段(素材段不产快照)。导出期间并上必须用预渲染原尺寸的同步卡片段(判轻时不在预渲染集合里,`export/exportWanted.ts`)
       return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId);
     };
+    // 托管方渲染节点的「生成轨道流」(任务书「甲三」):本页看到它开着时清单计划带这一项(是另一个计划);从关变开时马上重发,
+    // 渲染节点据此再切一次、出它自己的那一份流任务,不用等项目下一次改动
+    const streamsOn = () => { const v = getSyncView(); return hostedStreamsOn(v.shared?.where, v.hosted); };
+    let lastStreams = streamsOn();
     const publisher = createPlanPublisher({
-      request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION,
+      request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION, streams: streamsOn,
       // M7:本页当纯浏览器节点时,这一版的清单计划等节点报到完(拿到指纹)再发,最多 3 s(契约第 3.3 节)
       nodeReady: browserNodeReady,
       // M7 D6:发之前把这一版的已确认项目按版本号留在内存,执行细任务时用任务的 projectRev 那一版
@@ -1384,6 +1396,7 @@ export function Preview() {
         if (ds) keepConfirmedProject(ds.rev, ds.confirmedProject);
       },
     });
+    planPublisherRef.current = publisher;
     const offNodeReady = subscribeBrowserNodeReady(() => publisher.nodeChanged());
     let link: unknown = null;
     let lastKey = "";
@@ -1394,7 +1407,10 @@ export function Preview() {
       if (!shared || !probeSettledFor(getState().project)) return;
       const v = version();
       const key = `${v.projectId}@${v.projectRev}|${clips().sort().join(",")}`;
-      if (key === lastKey) return;
+      const streamsNow = streamsOn();
+      const turnedOn = streamsNow && !lastStreams;
+      lastStreams = streamsNow;
+      if (key === lastKey) { if (turnedOn) publisher.streamsOn(); return; }
       const first = !lastKey;
       lastKey = key;
       if (first) publisher.measured(v);
@@ -1405,7 +1421,7 @@ export function Preview() {
     check();
     const w = window as unknown as Record<string, unknown>;
     w.__pcPlanPublisher = () => publisher.debug();
-    return () => { offProbe(); offNodeReady(); window.clearInterval(timer); publisher.dispose(); delete w.__pcPlanPublisher; };
+    return () => { offProbe(); offNodeReady(); window.clearInterval(timer); publisher.dispose(); if (planPublisherRef.current === publisher) planPublisherRef.current = null; delete w.__pcPlanPublisher; };
   }, [online, lowMem]);
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
 

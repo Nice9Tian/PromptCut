@@ -1,4 +1,4 @@
-// 守门：产品代码和公共脚本里起子进程，必须带 windowsHide: true。
+// 守门：产品代码、脚本、探针和桌面构建脚本里起子进程，必须带 windowsHide: true。
 // 跑法：node --test server/test/windows-hide-silent-spawn.test.mjs
 //
 // 规则：docs/semantics/guide_files/verification.md「Windows 验证静默运行」。
@@ -6,9 +6,8 @@
 // 不带 windowsHide 的子进程会在 Windows 上新开一个可见的控制台窗口；父进程有控制台时看不出，
 // 所以每新增一处起进程的调用都可能在某条脱离控制台的链上弹窗。
 //
-// 扫的范围：server/（不含 server/test/）、scripts/lib/、scripts/*.mjs（不含 scripts/archive/）、
-// scripts/acceptance/，以及 scripts/probes/ 里被别的探针共用的 stream-common.mjs 和 lib/。
-// 单支探针、desktop/ 的构建脚本、scripts/remote/ 不在其内（见 AGENT-rr-silent-spawn 报告里的清单）。
+// 扫的范围：server/（不含 server/test/）、scripts/ 整个目录树（含 lib、acceptance、probes、archive、remote）、desktop/scripts/。
+// 其余不在其内：server/test/ 里的测试自己起的子进程。
 // 认法见 silent-spawn-scan.mjs 文件头；认不出的会被报出来，改成显式写出 windowsHide，或加进下面的例外名单并写理由。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,11 +35,8 @@ const EXEMPT = [
 function targetFiles() {
   return [
     ...listSources(ROOT, 'server', { skip: (r) => r === 'server/test' || r.startsWith('server/test/') }),
-    ...listSources(ROOT, 'scripts/lib'),
-    ...listSources(ROOT, 'scripts', { recursive: false }),
-    ...listSources(ROOT, 'scripts/acceptance'),
-    ...listSources(ROOT, 'scripts/probes/lib'),
-    'scripts/probes/stream-common.mjs',
+    ...listSources(ROOT, 'scripts'),
+    ...listSources(ROOT, 'desktop/scripts'),
   ].filter((f) => fs.existsSync(path.join(ROOT, f)));
 }
 
@@ -60,7 +56,7 @@ function scanRepo() {
   return { files, violations, stale };
 }
 
-test('产品代码与公共脚本起子进程都带 windowsHide（或在例外名单里并写了理由）', () => {
+test('产品代码、脚本、探针与桌面构建脚本起子进程都带 windowsHide（或在例外名单里并写了理由）', () => {
   const { files, violations } = scanRepo();
   assert.ok(files.length > 100, `扫到的文件太少（${files.length}），目录没找对？`);
   assert.deepEqual(violations, [], `下面这些起进程的调用没带 windowsHide: true，Windows 上父进程没有控制台时会弹窗口：\n${violations.join('\n')}`);

@@ -78,7 +78,7 @@ async function until(label, fn, timeoutMs, everyMs = 200) {
 await fs.mkdir(OUT, { recursive: true });
 const ffmpeg = await findFfmpeg();
 function ff(argv) {
-  const r = spawnSync(ffmpeg, ['-v', 'error', '-y', ...argv], { encoding: 'utf8' });
+  const r = spawnSync(ffmpeg, ['-v', 'error', '-y', ...argv], { windowsHide: true, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`ffmpeg 失败:${r.stderr}`);
 }
 /** 一对素材(素材原尺寸 + 素材小尺寸)。`prores` 时素材原尺寸转 ProRes MOV */

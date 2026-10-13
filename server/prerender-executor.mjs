@@ -15,6 +15,11 @@
  *                    `plan-mismatch`(不可重试)。
  *                    流任务(M6c X1):对回这一版的流(内容键、结果键、分段范围),交给 `renderStreamRange` 按段产出;
  *                    对不上同样抛 `plan-mismatch`;本机不能产流(开关关着、没有编码器)抛 `no-streams`(不可重试)。
+ *                    清单计划切出的流任务(任务书「甲三」:切分方自己的那一份)在这一版的流里找不到时,按任务的片段现算它的单卡流再对
+ *                    (清单是发布方判的,本机没判重的卡不在本机这一版的流里)。
+ *                    托管方的渲染节点按项目的「生成轨道流」产流(任务书「甲三」):调用方给 `streamsEnabled`(这个执行器所属的项目此刻产不产,
+ *                    `render-node/host.mjs` 文件头「按项目产不产轨道流」)时,带片段清单的计划切分前看它 —— 不产就不出切分方自己的那一份流
+ *                    (`context.ownListStreams`)。认领流任务的闸不在这里,在主机的认领闸上(同一个量)。桌面应用与普通的独立渲染主机不给,不按项目管。
  *                    回 `null`:产物在帧库 / 流库里,sink 自己读(`collectSnapshotResult` / `collectStreamResult`)。
  *                    共享档卡在本机快照库里记过超限帧(`index.json` 的 `oversize`,R6-14)的,交给切分的 control 标
  *                    `snapshotOversize: true`(见 `markSnapshotOversize`),切分据此不给纯浏览器另出一份(M7 契约第 13 节
@@ -97,6 +102,10 @@ export async function markSnapshotOversize(pipeline, context) {
   return { cardPlan: marked.length ? out : cardPlan, marked };
 }
 
+/** 清单计划写着「页面看到『生成轨道流』开着」而本机还没看到时,最多等多久、多久看一眼(三级数字;本机每秒向管理进程对一次账) */
+export const STREAMS_SETTLE_MS = 4000;
+const STREAMS_SETTLE_POLL_MS = 100;
+
 /** 按版本缓存的上下文条数(附件第 3 节:LRU 约 4 条) */
 export const PLAN_CACHE_SIZE = 4;
 
@@ -141,10 +150,35 @@ export function laneBusy(pipeline) {
  *   独立渲染主机没有推送队列,管线自己的 `publishLayerMap` 写不出去,由主机按这条连接的内容库写;PC 节点不给(照旧由推送队列写)
  * @param {() => unknown} [options.codeStamp]  卡片代码的版次(c66-host-cards:`card-code.mjs` 的 `epoch`)。缓存按
  *   「项目版本 + 版次」存:卡片代码变了(同步装上了新卡),同一版项目的上下文要按新代码重算,不然任务对回的还是旧的 control
+ * @param {null | (() => boolean)} [options.streamsEnabled]
+ *   这个执行器所属的项目此刻产不产轨道流(任务书「甲三」;现读)。托管方渲染服务的工作进程按项目给(`vite-plugin-frames.ts` 的 `startHostNode`);
+ *   缺省 null —— 不按项目管,本机能产就产(桌面应用、普通的独立渲染主机)
+ * @param {number} [options.streamsSettleMs]  清单计划写着「页面看到这一项开着」(`input.streams`)而本机还没看到时,最多等这么久(见 `plan`)
+ * @param {(ms: number) => Promise<void>} [options.sleep]  测试用
  */
-export function createPrerenderExecutor({ pipeline, projects, prepareProject = project => project, log = () => {}, codeStamp = () => '', publishLayerMap = null }) {
+export function createPrerenderExecutor({ pipeline, projects, prepareProject = project => project, log = () => {}, codeStamp = () => '', publishLayerMap = null,
+  streamsEnabled = null, streamsSettleMs = STREAMS_SETTLE_MS, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   if (!pipeline) throw new Error('createPrerenderExecutor needs a pipeline');
   if (!projects || typeof projects.get !== 'function') throw new Error('createPrerenderExecutor needs a project client');
+  /** 按不按项目管 */
+  const perProject = typeof streamsEnabled === 'function';
+  /** 这个项目此刻产不产流;不按项目管时恒为真。问的那一头出错按不产算 */
+  const streamsOn = () => {
+    if (!perProject) return true;
+    try { return streamsEnabled() === true; } catch { return false; }
+  };
+  /**
+   * 创建者刚打开「生成轨道流」的那一下:在线页面看到开了就重发清单计划(结果键带这一项,`render-queue/messages.mjs` 的 `clipsPlanTaskOf`),
+   * 本机从管理进程的清单里看到开了要晚一拍(一秒以内)。计划先到的话,照本机手里的「关着」切就漏掉自己的那一份流,而这一版的计划做完了不会再切。
+   * 所以计划写着 `input.streams: true`、本机还是关着时等一等,等到本机也看到开了、或等满 `streamsSettleMs` 为止。
+   * 页面写的这一项只决定「要不要等」,产不产仍只看本机从目录来的那一项(页面自报的不作数)。
+   */
+  const streamsSettled = async (planTask, signal) => {
+    if (streamsOn() || planTask?.input?.streams !== true) return streamsOn();
+    const until = Date.now() + Math.max(0, streamsSettleMs);
+    while (!streamsOn() && Date.now() < until && !signal?.aborted) await sleep(STREAMS_SETTLE_POLL_MS);
+    return streamsOn();
+  };
   /** `projectId@projectRev` → Promise<{ entry, context }>;Map 的插入顺序就是 LRU 顺序 */
   const cache = new Map();
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响执行 */ } };
@@ -240,7 +274,19 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     if (planTask && typeof planTask === 'object') planned.set(planTask, resolved);
     const { entry, rev, drifted } = resolved;
     // 项目往前走了:按实际那一版切,细任务的 source.projectRev 也写那一版(local-node 读 actualRev)
-    const context = drifted ? { ...resolved.context, actualRev: rev } : resolved.context;
+    let context = drifted ? { ...resolved.context, actualRev: rev } : resolved.context;
+    // 任务书「甲三」:清单计划里切分方自己的那一份流出不出 —— 本机能产(`planForQueue` 给的 `ownListStreams`)并且这个项目此刻产流
+    // (托管方的渲染节点看「生成轨道流」;别的节点不按项目管)。每次切分现问,不进按版本的缓存
+    if (isListPlan(planTask) && perProject) {
+      const on = await streamsSettled(planTask, signal);
+      // 这个项目此刻不产流:本机写层表时不列自己这一版的流(列了没人产,页面白取清单);已经派过的流照候选记录列,产出的保留
+      // (`frame-pipeline.mjs` 的 `layerMapStreamOptions` 读 `entry.ownStreamsOff`)。只有按项目管的进程才写这个记号
+      if (entry && typeof entry === 'object') entry.ownStreamsOff = !on;
+      if (!on && context.ownListStreams === true) {
+        context = { ...context, ownListStreams: false };
+        say('executor.list-streams-off', { version: id });
+      }
+    }
     // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
     // C10 契约第 18 节第 9 条:在线页面的清单计划同一条路(清单是页面自己判重的片段)
     if (isListPlan(planTask) && typeof pipeline.addBackfill === 'function') {
@@ -292,13 +338,25 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   /**
    * M6c X1:把流任务对回这一版的流。流按内容键认(`input.contentKey`,即 `planStreams` 的 `contentKey`);
    * 结果键必须是本机指纹乘出来的(节点侧过滤已经按指纹挡过,这里再核一次);分段范围在这条流之内。
+   * 依赖下层的流(`requires.belowDependent: true`,`docs/plan/prerender-products-contract.md` 第 5 节)同样按内容键认:
+   * 它的内容键里带着目标卡和每个下层,下层改了键就换,对不上(项目往前走了)按作废处理;任务说的种类和这一版的流对不上不产。
    */
-  function matchStream(task, specs, { drifted = false } = {}) {
+  function matchStream(task, specs, { drifted = false, entry = null } = {}) {
     const input = task.input ?? {};
-    const spec = (specs ?? []).find(item => item?.contentKey === input.contentKey) ?? null;
+    let spec = (specs ?? []).find(item => item?.contentKey === input.contentKey) ?? null;
+    // 任务书「甲三」:清单计划切出的、切分方自己的那一份。清单是发布方判的,本机没判重的卡不在本机这一版的流(`specs`)里;
+    // 这一份只有单卡流(`local-node.mjs` 的 `listPlanOverrides`),它的内容键与清单里还有哪些片段无关,按任务的片段现算一条来对。
+    // 切分它的可能是别的进程、或本进程重启之前,所以不指望记着当时的清单
+    if (!spec && entry && isListWork(task) && typeof input.clipId === 'string' && input.clipId && typeof pipeline.listStreamSpecs === 'function') {
+      let listed = [];
+      try { listed = pipeline.listStreamSpecs(entry, [input.clipId]) ?? []; } catch { listed = []; }
+      spec = listed.find(item => item?.kind === 'card' && item.contentKey === input.contentKey) ?? null;
+    }
     if (!spec && drifted) throw superseded('新版本里没有这条流');
     const why = [];
-    if (!spec) why.push(`这一版没有内容键为 ${String(input.contentKey).slice(0, 16)}… 的流`);
+    const wantsBelow = task.requires?.belowDependent === true;
+    if (!spec) why.push(`这一版没有内容键为 ${String(input.contentKey).slice(0, 16)}… 的${wantsBelow ? '依赖下层的流(本机没有打开这种流,或目标卡、下层和切分时不同)' : '流'}`);
+    else if (wantsBelow !== (spec.kind === 'below')) why.push(`流的种类对不上(任务${wantsBelow ? '要' : '不要'}整场景的下层,这一版的流是 ${spec.kind})`);
     else {
       const own = pipeline.envFingerprint;
       const from = task.range?.from, to = task.range?.to;
@@ -317,12 +375,42 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       throw fail('no-streams', '本机不能产轨道流(PROMPTCUT_STREAMS=0 或没有能用的 H.264 编码器)', false);
     }
     const { entry, streamSpecs, drifted } = await contextFor(task, signal);
-    const spec = matchStream(task, streamSpecs, { drifted });
+    const spec = matchStream(task, streamSpecs, { drifted, entry });
+    // 清单计划切出的流任务同快照任务(见 `render`):这张卡在本机可能没判重,把它记进预渲染集合 —— 本机写的层表才列得出这条流
+    // (`frame-pipeline.mjs` 的 `issuedStreamSpecs` 只看预渲染集合里的卡)
+    if (isListWork(task) && typeof pipeline.addBackfill === 'function' && typeof pipeline.prerenderPicked === 'function'
+      && !pipeline.prerenderPicked(entry, spec.topClipId)) {
+      pipeline.addBackfill(entry, [spec.topClipId]);
+    }
     const range = { from: task.range.from, to: task.range.to };
     const started = Date.now();
     await pipeline.renderStreamRange(entry, spec, range, { signal, progress });
     say('executor.render', { id: task.id, kind: 'stream', streamKey: spec.streamKey.slice(0, 12), ms: Date.now() - started });
+    promoteOwnStream(entry, spec);
     return null;
+  }
+
+  /**
+   * 一条流几种环境各出一份时(切分方自己的、浏览器的,成对,谁先认领谁得),层表里候选的先后要对着「实际是谁产的」:
+   * 之后才进来的页面没收到过完成通知,取第一个候选。切分完成时还不知道谁会赢,先把自己的排在别人后面(`afterSplit`);
+   * 本机真产出了这条流的一段,才在这里把自己的提到最前、把层表重写一次。别人赢了的话本机那一份被队列作废、走不到这里,顺序不动。
+   * 记录里没有这条流、或没有自己的指纹(切分它的不是本机)时不动。
+   */
+  function promoteOwnStream(entry, spec) {
+    try {
+      const own = pipeline.envFingerprint;
+      const key = streamCandidateKey(spec?.contentKey);
+      const list = typeof pipeline.splitCandidatesFor === 'function' ? pipeline.splitCandidatesFor(key) : null;
+      if (!own || !Array.isArray(list) || !list.includes(own) || list[0] === own || typeof pipeline.recordSplitCandidates !== 'function') return false;
+      pipeline.recordSplitCandidates(new Map([[key, [own, ...list.filter(fp => fp !== own)]]]));
+      if (typeof publishLayerMap === 'function') publishLayerMap(entry);
+      else if (typeof pipeline.publishLayerMap === 'function') pipeline.publishLayerMap(entry);
+      say('executor.stream-candidates', { streamKey: String(spec.streamKey).slice(0, 12), first: 'own' });
+      return true;
+    } catch (error) {
+      say('executor.stream-candidates-failed', { message: String(error?.message ?? error) });
+      return false;
+    }
   }
 
   async function render(task, { signal, progress, phase } = {}) {
@@ -370,7 +458,14 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       pipeline.recordSplitCandidates(candidates);
       // 轨道流的候选(层表 `streams` 表用)记在同一份记录里,键带 `stream:` 前缀,与卡的内容键分开;这一次切分没有流任务就不记
       const streamCandidates = splitStreamCandidatesOf(tasks);
-      if (streamCandidates.size) pipeline.recordSplitCandidates(new Map([...streamCandidates].map(([contentKey, fps]) => [streamCandidateKey(contentKey), fps])));
+      // 自己与别的环境各出了一份的流:自己的先排在后面,真产出了再提到最前(`promoteOwnStream`)。已经是自己在前的(之前产过)不往后挪
+      const own = pipeline.envFingerprint;
+      const ordered = (contentKey, fps) => {
+        if (!own || fps.length < 2 || !fps.includes(own)) return fps;
+        const before = typeof pipeline.splitCandidatesFor === 'function' ? pipeline.splitCandidatesFor(streamCandidateKey(contentKey)) : null;
+        return Array.isArray(before) && before[0] === own ? [own, ...fps.filter(fp => fp !== own)] : [...fps.filter(fp => fp !== own), own];
+      };
+      if (streamCandidates.size) pipeline.recordSplitCandidates(new Map([...streamCandidates].map(([contentKey, fps]) => [streamCandidateKey(contentKey), ordered(contentKey, fps)])));
     }
     if (!isListPlan(planTask)) return;
     try {

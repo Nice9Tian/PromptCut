@@ -42,7 +42,7 @@ function encode(name, size, level) {
     '-profile:v', 'high', '-level', level,
     '-g', '15', '-keyint_min', '15', '-sc_threshold', '0', '-bf', '0',
     '-x264-params', 'aud=1',
-    '-pix_fmt', 'yuv420p', '-f', 'h264', file], { stdio: ['ignore', 'ignore', 'inherit'] });
+    '-pix_fmt', 'yuv420p', '-f', 'h264', file], { windowsHide: true, stdio: ['ignore', 'ignore', 'inherit'] });
   return fs.readFileSync(file);
 }
 

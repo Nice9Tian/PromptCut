@@ -25,6 +25,9 @@
  *                                    0 时必须有集群令牌（地址登记只能带令牌）
  *   PROMPTCUT_AGENT_PUBLIC_URL       云端 Agent 服务对页面的公网地址，形如 https://<域名>/agent/v1（`docs/plan/cloud-agent-contract.md` 第 10.4 节）。
  *                                    设了、且服务登记表里有 agent 服务时，经成员列表顶层的 hosted.agent.url 下发给页面；不设就不下发
+ *   PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE  只给账号版：云端 Agent「一条任务一个进程」的配置文件（绝对路径，形状见 `agent-run-scope-config.mjs`）。
+ *                                    不设就是不开；设了而读不了、形状不对、不在 Linux 上、或者没有配 Agent 身份（PROMPTCUT_DOC_AGENT_SERVICE_KID），
+ *                                    拒绝启动（`agent-run-scopes`）
  *
  * 失败即关（打一行 `config.error { reason }`，同时写 stdout 与 stderr，退出码 1）：
  *   data-dir           数据目录没设、不存在、不是目录或不可写
@@ -33,6 +36,7 @@
  *   auth-store         绑非回环地址而凭证存储打不开（auth-contract 第 10 节）
  *   asset-public-url   绑非回环地址而没设 PROMPTCUT_ASSET_PUBLIC_URL，或它不是 http(s) 地址
  *   agent-public-url   PROMPTCUT_AGENT_PUBLIC_URL 设了却不是 http(s) 地址
+ *   agent-run-scopes   PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE 设了却开不了（见上）
  *   listen             端口被占等，监听失败
  *   trust-loopback     PROMPTCUT_TRUST_LOOPBACK 不是 0 或 1
  *   cluster-token-required  PROMPTCUT_TRUST_LOOPBACK=0 而没有集群令牌
@@ -49,6 +53,7 @@ import { X509Certificate } from 'node:crypto';
 import { checkTokenFormat } from '../docservice/auth.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
 import { startHostedCombo, readClusterToken, checkDataDir, HostedConfigError } from './combo.mjs';
+import { loadAgentRunScopesConfig } from './agent-run-scope-config.mjs';
 
 function log(event, fields) {
   process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event, ...fields })}\n`);
@@ -197,6 +202,41 @@ async function main() {
         account.agent = { fingerprint256: agent.fingerprint256, serviceKid: env.PROMPTCUT_DOC_AGENT_SERVICE_KID };
       }
     } catch { return configError('account-v2'); }
+    // 云端 Agent「一条任务一个进程」：给了这份文件才开（`agent-run-scope-config.mjs` 的文件头写了形状）。
+    // 给了而读不了、形状不对、不在 Linux 上、或者没有配 Agent 身份：拒绝启动，不悄悄当成没开。
+    if (env.PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE !== undefined) {
+      try {
+        if (!account.agent) throw new Error('run-scopes');
+        account.agent.runScopes = loadAgentRunScopesConfig({ file: env.PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE,
+          agent: account.agent, authorityId: account.authorityId });
+      } catch { return configError('agent-run-scopes'); }
+    }
+  }
+  let runAssets = null;
+  if (env.PROMPTCUT_DOC_RUN_ASSETS_ENABLED !== undefined && !['0', '1'].includes(env.PROMPTCUT_DOC_RUN_ASSETS_ENABLED))
+    return configError('run-assets');
+  if (env.PROMPTCUT_DOC_RUN_ASSETS_ENABLED === '1') {
+    try {
+      if (process.platform !== 'linux' || !account?.agent || !assetStatus) throw Error('run-assets');
+      const dir = env.PROMPTCUT_DOC_RUN_ASSET_REGISTRY_DIR;
+      const uid = Number(env.PROMPTCUT_DOC_RUN_ASSET_UID);
+      const ticketTtlMs = Number(env.PROMPTCUT_DOC_RUN_ASSET_TICKET_TTL_MS);
+      const maxBodyBytes = Number(env.PROMPTCUT_DOC_RUN_ASSET_MAX_BODY_BYTES);
+      if (!path.isAbsolute(dir ?? '') || !Number.isSafeInteger(uid) || uid < 1 ||
+          !Number.isSafeInteger(ticketTtlMs) || ticketTtlMs < 1 ||
+          !Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1 ||
+          !env.PROMPTCUT_DOC_RUN_ASSET_UNIT || !env.PROMPTCUT_DOC_RUN_ASSET_CGROUP_PATH ||
+          !env.PROMPTCUT_DOC_RUN_ASSET_SERVICE_IDENTITY) throw Error('run-assets');
+      const assetPin = account.services.find(service => service.serviceId === 'asset')?.fingerprint256;
+      runAssets = { ticketTtlMs, maxBodyBytes, rootRegistry: {
+        files: { registryFile: path.join(dir, 'current.json'), anchorFile: path.join(dir, 'anchor.json'),
+          reservationFile: path.join(dir, 'reservation.json'), publisherLockFile: path.join(dir, '.publisher.lock') },
+        expected: { authorityId: account.authorityId, serviceIdentity: env.PROMPTCUT_DOC_RUN_ASSET_SERVICE_IDENTITY,
+          uid, unit: env.PROMPTCUT_DOC_RUN_ASSET_UNIT,
+          cgroupPath: env.PROMPTCUT_DOC_RUN_ASSET_CGROUP_PATH,
+          clientFingerprint256: assetPin,
+          serverFingerprint256: pinOf(assetStatus.serverFingerprint256) } } };
+    } catch { return configError('run-assets'); }
   }
   try {
     combo = await startHostedCombo({
@@ -211,6 +251,7 @@ async function main() {
       account,
       accountRequired,
       assetStatus,
+      runAssets,
       trustLoopback,
       localDevice: localDeviceInfo(),
       log,

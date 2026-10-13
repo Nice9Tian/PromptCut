@@ -6,7 +6,9 @@
  * 云节点上没有编辑器进程,这里照同一份命令行与 JSONL 约定起同一个包,规矩是:
  *
  *   - **外部程序只经工作区的受限子进程起**(`workspace.mjs` 的 `spawn`):工作目录是这个对话的工作目录,环境变量按白名单重建,
- *     不带任何 `PROMPTCUT_*`、服务的私钥目录与数据目录;
+ *     不带任何 `PROMPTCUT_*`、服务的私钥目录与数据目录;起出来的是一棵杀得掉的进程树,超时、取消、超限时杀的是整棵树
+ *     (Python 再起的下载与 ffmpeg 一起),等到 exit + close 才算完(公共实现 `perception/runner.mjs`);
+ *   - **Python 用隔离模式起**(`-I`):工作目录里是成员和模型弄进来的文件,不让它排进模块搜索路径;包目录只来自部署配置;
  *   - **只经出网闸的代理出网**(`egress.mjs` 的 `startProxy`):子进程的环境里只有指向这个回环代理的 `HTTP_PROXY` / `HTTPS_PROXY`,
  *     代理对每个目标做与出网闸相同的检查——回环、内网、云厂商元数据地址、同机服务一律到不了。每次调用起一个代理、用完关掉;
  *   - **下载物只落在对话的工作目录**(`collect/<作业号>/`),进素材库走 `import_media` 的那条路(凭成员本人的素材票据写素材服务、
@@ -17,11 +19,17 @@
  *
  * **`collect_install` 在云端不装东西**:节点上有没有采集工具由部署决定(`PROMPTCUT_AGENT_COLLECT_PYTHON`),模型不能触发往节点上装。
  * 登录态(`collect_login`)要用户自己扫码,是「要操作发起人界面」的工具;云端不存任何站点的 cookies,下载按未登录的画质。
+ *
+ * **需要登录的站点(0.7.18,工具包 C1;`collect-bridge.mjs`)**:宿主给了 `delegate`(绑在当前这一轮上的委托口子)时,
+ * `collect_download` 先问它——链接属于有登录支持的站点、发起人本人在线且用的是桌面版、他的电脑上有登录态,就由他的电脑下载并
+ * 直接传进这个项目的素材库,云端核实后登记(作业的 `route` 是 `delegated`);其余情形一律照旧在云端匿名下载(`route` 是 `anonymous`),
+ * 委托没成的原因与画质差别写进作业的 `notes`。`collect_login`、`collect_login_check` 只在本人电脑上操作,也经这个口子。
+ * 不给 `delegate` 时本文件的行为与原来一模一样。
  */
 import { randomBytes } from 'node:crypto';
-import { spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isolatedPythonArgs, splitRoots, superviseChild } from './perception/runner.mjs';
 
 export const COLLECT_DEFAULTS = Object.freeze({
   /** 查状态、探测、搜索的时限 */
@@ -45,6 +53,11 @@ export const COLLECT_DEFAULTS = Object.freeze({
   watchMs: 1500,
 });
 
+/** 没有委托口子(没接线,或不是账号模式)时两个登录工具的回答:如实说只能在本人电脑上操作 */
+const LOGIN_LOCAL_ONLY = (tool) => ({
+  ok: false, initiatorOnly: true,
+  error: `${tool} 只能在发起人自己的电脑上操作:站点的登录态只留在他的机器上,云端不存、也拿不到。请告诉用户在电脑上的 PromptCut 里登录;云端照常按未登录的画质采集。`,
+});
 const NOT_INSTALLED = '这台云节点没有装采集工具(yt-dlp)。云端不能由 Agent 往节点上装东西:请告诉用户联系托管方,或在电脑上的 PromptCut 里采集后导入。';
 const QUALITIES = new Set([2160, 1440, 1080, 720, 480, 360]);
 const SITES = new Set(['auto', 'bilibili', 'generic']);
@@ -64,34 +77,29 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
   const limits = { ...COLLECT_DEFAULTS, ...limitsIn };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
   let running = 0;
-  const prefix = config ? (Array.isArray(config.args) && config.args.length ? config.args : ['-m', 'promptcut_collect']) : [];
-
-  function killTree(child) {
-    if (!child || child.exitCode !== null) return;
-    if (process.platform === 'win32' && child.pid) {
-      try { nodeSpawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }); return; } catch { /* 退回下面 */ }
-    }
-    try { child.kill('SIGKILL'); } catch { /* 已经退了 */ }
-  }
+  /** `config.args` 只给探针与单测(把解释器整个换成替身脚本,见 `readCollectConfig`);正式的一律隔离模式,包目录来自部署配置 */
+  const stubArgs = config && Array.isArray(config.args) && config.args.length ? config.args : null;
+  const pythonArgv = (sub, args) => (stubArgs
+    ? [...stubArgs, sub, ...args]
+    : isolatedPythonArgs('promptcut_collect', { roots: splitRoots(config.pythonPath), args: [sub, ...args] }));
 
   /**
-   * 起一次采集子进程:经工作区(工作目录、环境白名单)、只给它出网闸的代理。逐行读 JSONL。
-   * 回 `{ code, events, stderrTail, kill }` 的承诺与 `child`。
+   * 起一次采集子进程:经工作区(工作目录、环境白名单、进程树)、只给它出网闸的代理。逐行读 JSONL。
+   * 回 `{ child, done, kill }`:`done` 在整棵进程树 exit + close、代理也关了之后解析成 `{ code, events, stderrTail }`;`kill` 杀整棵树。
    */
   async function runCollect(ws, sub, args, { timeoutMs, onEvent = () => {}, signal } = {}) {
     if (!config) throw Object.assign(new Error(NOT_INSTALLED), { notInstalled: true });
     const proxy = await egress.startProxy();
     const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH';
+    // PYTHON* 环境变量在隔离模式下不生效(无缓冲、UTF-8、不写字节码、包目录都由命令行给),这里不设
     const env = {
       HTTP_PROXY: proxy.url, HTTPS_PROXY: proxy.url, ALL_PROXY: proxy.url, http_proxy: proxy.url, https_proxy: proxy.url, all_proxy: proxy.url,
       NO_PROXY: '', no_proxy: '',
-      PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1',
-      ...(config.pythonPath ? { PYTHONPATH: config.pythonPath } : {}),
       ...(config.ffmpegDir ? { [pathKey]: `${config.ffmpegDir}${path.delimiter}${process.env[pathKey] ?? ''}` } : {}),
     };
     let child;
     try {
-      child = ws.spawn(config.python, [...prefix, sub, ...args], { env, timeoutMs });
+      child = ws.spawn(config.python, pythonArgv(sub, args), { env });
     } catch (err) {
       await proxy.close().catch(() => {});
       throw err;
@@ -110,23 +118,19 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
         if (events.length > 5000) events.splice(0, 1000);
       }
     };
-    child.stdout?.on('data', (d) => feed(d.toString('utf8')));
-    child.stderr?.on('data', (d) => { for (const l of d.toString('utf8').split(/\r?\n/)) if (l.trim()) { stderrTail.push(l.trim().slice(0, 300)); if (stderrTail.length > 20) stderrTail.shift(); } });
-    const onAbort = () => killTree(child);
-    signal?.addEventListener('abort', onAbort, { once: true });
-    const done = new Promise((resolve) => {
-      let settled = false;
-      const finish = (code) => {
-        if (settled) return;
-        settled = true;
-        if (buf.trim()) feed('\n');
-        signal?.removeEventListener('abort', onAbort);
-        void proxy.close().catch(() => {}).then(() => resolve({ code, events, stderrTail }));
-      };
-      child.once('error', (err) => { stderrTail.push(String(err?.message ?? err).slice(0, 300)); finish(-1); });
-      child.once('close', (code) => finish(code ?? -1));
+    // 采集还没有接运行资源登记器(它拿不到这一轮的可信上下文,接线归最后的接线包):取消走调用方给的信号,超时在这里
+    const run = await superviseChild(child, {
+      timeoutMs, signal,
+      onStdout: (d) => feed(d.toString('utf8')),
+      onStderr: (d) => { for (const l of d.toString('utf8').split(/\r?\n/)) if (l.trim()) { stderrTail.push(l.trim().slice(0, 300)); if (stderrTail.length > 20) stderrTail.shift(); } },
     });
-    return { child, done, kill: () => killTree(child) };
+    const done = run.done.then(async (end) => {
+      if (buf.trim()) feed('\n');
+      if (end.spawnError) stderrTail.push(String(end.spawnError?.message ?? end.spawnError).slice(0, 300));
+      await proxy.close().catch(() => {});
+      return { code: end.spawnError ? -1 : (end.code ?? -1), events, stderrTail };
+    });
+    return { child, done, kill: run.kill };
   }
 
   const pickError = (events, stderrTail, code) => {
@@ -145,14 +149,19 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
    * @param {(rel: string, name: string) => Promise<{ mediaId: string, kind: string, clipId?: string, duration?: number, width?: number, height?: number, bytes?: number }>} d.importFile
    *   把工作区里的一个文件装进素材库(`import_media` 的那条路)
    * @param {(row: object) => void} d.record
+   * @param {null | (() => (null | { download: Function, login: Function, loginCheck: Function }))} [d.delegate]
+   *   当前这一轮的委托口子(`collect-bridge.mjs` 的 `forRun(context)`);每次调用现取,没有就回 null(照旧只在云端匿名下载)
    */
-  function forConversation({ state, workspace, ensureCanWrite, importFile, record = () => {}, ToolError = Error, conversationId = '' }) {
+  function forConversation({ state, workspace, ensureCanWrite, importFile, record = () => {}, ToolError = Error, conversationId = '', delegate = null }) {
+    const currentDelegate = () => {
+      try { const d = typeof delegate === 'function' ? delegate() : null; return d && typeof d.download === 'function' ? d : null; } catch { return null; }
+    };
     const usage = (model, { bytes = 0, ok = true, ms = 0 } = {}) => {
       try { record({ service: 'collect', vendor: 'yt-dlp', model, units: bytes, unit: 'bytes', ok, ms }); } catch { /* 记用量失败不影响结果 */ }
     };
     const viewOf = (job) => ({
       jobId: job.id, status: job.status, stage: job.stage, percent: job.percent, speed: job.speed ?? null, eta: job.eta ?? null,
-      url: job.url, quality: job.quality, site: job.site,
+      url: job.url, quality: job.quality, site: job.site, ...(job.route ? { route: job.route } : {}),
       ...(job.info ? { info: job.info } : {}), ...(job.notes.length ? { notes: job.notes.slice(-8) } : {}),
       ...(job.status === 'done' ? { items: job.items, mediaIds: job.items.map((it) => it.mediaId) } : {}),
       ...(job.message ? { message: job.message } : {}),
@@ -358,9 +367,64 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
       }
     }
 
+    /**
+     * 一个下载作业从头到尾:有委托口子就先问它;委托成了作业就此做完;没成(或本来就不用委托)接着在云端匿名下载。
+     * 委托口子说「这一轮已经不能写了」时不再匿名下载。
+     */
+    async function runJob(job, args, delegated) {
+      if (delegated) {
+        const t0 = Date.now();
+        let out;
+        try {
+          out = await delegated.download({ id: job.id, url: job.url, quality: job.quality, site: job.site }, args, {
+            signal: job.abort.signal,
+            onProgress: (p) => {
+              if (job.route !== 'delegated') { job.route = 'delegated'; persist(); }
+              if (typeof p?.stage === 'string') job.stage = p.stage;
+              if (typeof p?.percent === 'number') job.percent = Math.max(0, Math.min(99, Math.round(p.percent)));
+            },
+          });
+        } catch (err) {
+          say('agent.collect.delegate-failed', { code: String(err?.code ?? 'error').slice(0, 60) });
+          out = { delegated: false, why: 'failed', note: '委托发起人的电脑下载没有成功;已改为云端按未登录的画质下载,画质可能低于登录后的。' };
+        }
+        if (out?.delegated === true || out?.stop === true) {
+          const ok = out.delegated === true && Array.isArray(out.items) && out.items.length > 0;
+          job.route = 'delegated';
+          if (ok) { job.items = out.items; job.status = 'done'; job.stage = 'done'; job.percent = 100; job.notes.push('这条链接由发起人自己的电脑用他本机的登录态下载,文件由他的电脑直接传进这个项目的素材库;登录信息没有离开他的电脑。'); }
+          else { job.status = 'error'; job.message = job.abort.signal.aborted ? '已取消' : String(out.message ?? '委托发起人的电脑下载没有成功。').slice(0, 300); }
+          job.finishedAt = Date.now();
+          running = Math.max(0, running - 1);
+          usage('delegate', { bytes: ok ? job.items.reduce((sum, it) => sum + (Number(it.bytes) || 0), 0) : 0, ok, ms: Date.now() - t0 });
+          trim();
+          persist();
+          say('agent.collect.job', { status: job.status, route: 'delegated', items: job.items.length, ms: Date.now() - t0 });
+          return;
+        }
+        if (typeof out?.note === 'string' && out.note) job.notes.push(out.note.slice(0, 300));
+      }
+      job.route = 'anonymous';
+      job.stage = 'starting'; job.percent = 0;
+      if (!config) {
+        job.status = 'error'; job.message = NOT_INSTALLED; job.finishedAt = Date.now();
+        running = Math.max(0, running - 1);
+        trim(); persist();
+        return;
+      }
+      if (job.abort.signal.aborted) {
+        job.status = 'error'; job.message = '已取消'; job.finishedAt = Date.now();
+        running = Math.max(0, running - 1);
+        trim(); persist();
+        return;
+      }
+      persist();
+      await runDownload(job, args);
+    }
+
     async function download(args) {
       const url = checkUrl(args?.url);
-      if (!config) return { ok: false, cloudUnavailable: true, error: NOT_INSTALLED };
+      const delegated = currentDelegate();
+      if (!config && !delegated) return { ok: false, cloudUnavailable: true, error: NOT_INSTALLED };
       // 下载物要进素材库:只读成员在下载之前就被拒(不白占带宽)
       await ensureCanWrite();
       const mine = [...state.jobs.values()].filter((j) => j.status === 'running').length;
@@ -370,14 +434,14 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
         id: `collect-${randomBytes(6).toString('hex')}`, conversationId, url,
         quality: QUALITIES.has(Number(args.quality)) ? Number(args.quality) : 1080,
         site: typeof args.site === 'string' && SITES.has(args.site) ? args.site : 'auto',
-        status: 'running', stage: 'starting', percent: 0, speed: null, eta: null, info: null, notes: [], items: [], message: null,
+        status: 'running', stage: 'starting', percent: 0, speed: null, eta: null, info: null, notes: [], items: [], message: null, route: null,
         startedAt: Date.now(), finishedAt: null, abort: new AbortController(), child: null,
       };
       if (typeof args.cookies === 'string' && args.cookies) job.notes.push('云端不存任何站点的登录态,cookies 参数没有用上(按未登录的画质下载)。');
       state.jobs.set(job.id, job);
       running += 1;
       persist();
-      void runDownload(job, args ?? {});
+      void runJob(job, args ?? {}, delegated);
       return { ok: true, jobId: job.id, status: 'running', hint: '下载在云端后台跑。用 collect_job 查进度,两次之间用 wait 等 3 秒;done 且带 mediaIds 才算进了素材库。' };
     }
 
@@ -396,6 +460,9 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
       collect_download: download,
       collect_job: jobOf,
       collect_logout: async () => ({ ok: true, loggedOut: false, note: '云端不存任何站点的登录态,没有可退出的。' }),
+      /** 登录只在本人电脑上操作:有委托口子就经反向通道让发起页打开本机的登录窗口(本人不在线回不在线),没有就如实说 */
+      collect_login: async (args) => { const d = currentDelegate(); return d ? d.login(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login'); },
+      collect_login_check: async (args) => { const d = currentDelegate(); return d ? d.loginCheck(args ?? {}) : LOGIN_LOCAL_ONLY('collect_login_check'); },
       /** 这个对话结束或被删时调:停掉它还在跑的下载 */
       stopAll() { for (const j of state.jobs.values()) if (j.conversationId === conversationId && j.status === 'running') j.abort.abort(); },
     };
@@ -406,8 +473,9 @@ export function createCollect({ config = null, egress, limits: limitsIn = {}, lo
 
 /**
  * 从环境变量读节点上的采集工具(部署决定)。没配回 null。
- *   PROMPTCUT_AGENT_COLLECT_PYTHON     装了 yt-dlp 的 Python 解释器(绝对路径;`-m promptcut_collect` 用检出里的 `python/` 目录)
- *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS  **只给探针与单测**:JSON 数组,替换掉 `-m promptcut_collect`(把解释器换成一个替身脚本)。
+ *   PROMPTCUT_AGENT_COLLECT_PYTHON     装了 yt-dlp 的 Python 解释器(绝对路径;隔离模式起 `promptcut_collect`,包目录是检出里的 `python/`。
+ *                                      隔离模式不看用户 site:yt-dlp 要装在这个解释器自己的 site-packages 或虚拟环境里)
+ *   PROMPTCUT_AGENT_COLLECT_TEST_ARGS  **只给探针与单测**:JSON 数组,替换掉隔离模式的开关与包名(把解释器换成一个替身脚本)。
  *                                      生产不设;设了日志里有 `agent.collect.test-runner`
  */
 export function readCollectConfig(env, { root }) {

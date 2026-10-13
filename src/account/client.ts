@@ -4,7 +4,11 @@ export interface EditorLogin { account: Account; loginId: string; accessToken: s
 export interface ProjectSession {
   connectionTicket: string; assetTicket: string; agentDelegationTicket: string; expiresAt: number;
   projectId: string; creator: boolean; access: 'r' | 'rw'; accessRevision: number;
-  hosted: { agent: { available: boolean; enabled: boolean; url: string | null } };
+  /**
+   * 托管方的服务在这个项目里的状态。`render`(托管方的渲染节点,带子选项「生成轨道流」)只有新的文档服务才报;
+   * 旧文档服务不报这一项,页面上那两行就不显示(任务书 `docs/plan/render-refactor-task.md`「甲三」)。
+   */
+  hosted: { agent: { available: boolean; enabled: boolean; url: string | null }; render?: { available: boolean; enabled: boolean; streams?: boolean } };
 }
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
@@ -162,6 +166,24 @@ export function createAccountClient(options: AccountClientOptions) {
         throw new AccountFailure(503, 'account-protocol');
       return { eventId: out.eventId as string, accessRevision: out.accessRevision as number, completed: false as const };
     },
+    /** 创建者开关托管方的服务(云端 Agent、托管方的渲染节点)。服务端按登录与创建者身份把关,成员调用回 403 */
+    async setHostedService(projectId: string, service: 'agent' | 'render', enabled: boolean, expectedAccessRevision: number, requestId: string) {
+      const current = await ensureLogin();
+      const out = await request('/hosted/shared/account/admin', { projectId, enabled, expectedAccessRevision, requestId,
+        op: 'set-hosted-service', service }, current.accessToken);
+      if (typeof out.eventId !== 'string' || !Number.isSafeInteger(out.accessRevision) || out.completed !== false || out.state !== 'pending-services')
+        throw new AccountFailure(503, 'account-protocol');
+      return { eventId: out.eventId as string, accessRevision: out.accessRevision as number, completed: false as const };
+    },
+    /** 创建者改托管方服务下面的子选项(渲染节点的「生成轨道流」)。同上,成员调用回 403 */
+    async setHostedOption(projectId: string, service: 'render', option: 'streams', enabled: boolean, expectedAccessRevision: number, requestId: string) {
+      const current = await ensureLogin();
+      const out = await request('/hosted/shared/account/admin', { projectId, enabled, expectedAccessRevision, requestId,
+        op: 'set-hosted-option', service, option }, current.accessToken);
+      if (typeof out.eventId !== 'string' || !Number.isSafeInteger(out.accessRevision) || out.completed !== false || out.state !== 'pending-services')
+        throw new AccountFailure(503, 'account-protocol');
+      return { eventId: out.eventId as string, accessRevision: out.accessRevision as number, completed: false as const };
+    },
     async members(projectId: string): Promise<AccountMembersSnapshot> {
       const current = await ensureLogin(), identity = authIdentity(), revision = authVersion;
       const value = await request('/hosted/shared/account/members', { projectId }, current.accessToken);
@@ -240,8 +262,12 @@ function validateSession(value: Record<string, any>, now: number, projectId: str
     typeof value.creator !== 'boolean' || !['r', 'rw'].includes(value.access) || !Number.isSafeInteger(value.accessRevision) || value.accessRevision < 0 ||
     !agent || typeof agent.available !== 'boolean' || typeof agent.enabled !== 'boolean' ||
     !(agent.url === null || (typeof agent.url === 'string' && /^https?:\/\//.test(agent.url)))) throw new AccountFailure(503, 'session-unavailable');
+  // 渲染节点那一项:新的文档服务才报;形状对才收(两个布尔,子选项是布尔才带),旧文档服务没有它,页面上那两行不显示
+  const r = value.hosted?.render;
+  const render = r && typeof r === 'object' && typeof r.available === 'boolean' && typeof r.enabled === 'boolean'
+    ? { available: r.available as boolean, enabled: r.enabled as boolean, ...(typeof r.streams === 'boolean' ? { streams: r.streams as boolean } : {}) } : null;
   return { connectionTicket: value.connectionTicket, assetTicket: value.assetTicket, agentDelegationTicket: value.agentDelegationTicket,
     expiresAt: value.expiresAt, projectId, creator: value.creator, access: value.access, accessRevision: value.accessRevision,
-    hosted: { agent: { available: agent.available, enabled: agent.enabled, url: agent.url } } };
+    hosted: { agent: { available: agent.available, enabled: agent.enabled, url: agent.url }, ...(render ? { render } : {}) } };
 }
 export type CloudAccountClient = ReturnType<typeof createAccountClient>;

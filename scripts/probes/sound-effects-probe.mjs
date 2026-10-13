@@ -39,7 +39,7 @@ const check = (ok, name, evidence = {}) => { report.checks.push({ name, ok: !!ok
 const save = async (name, bytes) => { const file = path.join(OUT, name); await fs.writeFile(file, bytes); report.artifacts[name] = file; return file; };
 const json = (value) => JSON.stringify(value, null, 2);
 const sha = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
-const run = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+const run = (cmd, args) => execFileSync(cmd, args, { windowsHide: true, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 function pcmMetrics(samples) {
   let peak = 0, energy = 0, bad = 0;
   for (const v of samples) { if (!Number.isFinite(v)) bad++; peak = Math.max(peak, Math.abs(v)); energy += v * v; }

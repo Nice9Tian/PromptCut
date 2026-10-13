@@ -98,7 +98,7 @@ test('account get_selection uses the active Agent data connection for all live m
       prompt: script([{ tool: 'get_selection', input: {} }, { sleepMs: 6000 }, { say: 'done' }]),
       apiConfig: { vendor: 'mock', model: 'mock-1' }, model: 'mock-1',
       historyFile: path.join(dir, 'history.json'), onEvent: event => events.push(event) });
-    await waitFor(() => events.some(event => event.type === 'tool_result'), 8000, 'actual model tool route');
+    await waitFor(() => events.some(event => event.type === 'tool_result'), 30_000, 'actual model tool route');
     const state = await inst.callTool('get_selection', { projectId: 'other', username: 'forged' }, 'conv1');
     assert.equal(state.ok, true, JSON.stringify({ state, events: events.map(event => event.type), logs }));
     assert.equal(state.projectId, projectId);

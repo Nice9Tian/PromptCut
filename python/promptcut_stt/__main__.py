@@ -19,7 +19,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from . import __version__
-from .engines import EngineNotInstalled, cuda_available
+from .engines import EngineNotInstalled, ModelNotInstalled, cuda_available
 from .engines import faster_whisper_engine, whisper_engine
 from .jsonl import emit, emit_error, emit_log, warn
 
@@ -164,6 +164,15 @@ def cmd_status(_args: argparse.Namespace) -> int:
         except Exception as exc:  # 引擎探测绝不能让 status 崩
             engines[name] = {"installed": False, "version": None, "error": str(exc)}
 
+    # 每个引擎在模型目录里已经放齐权重的模型名。离线转写（--offline）只用这些。
+    available_models: Dict[str, List[str]] = {}
+    for name, module in ENGINES.items():
+        catalog = [m["name"] for m in MODEL_CATALOG.get(name, [])]
+        try:
+            available_models[name] = module.local_models(models_dir, catalog)
+        except Exception:
+            available_models[name] = []
+
     emit(
         {
             "python": platform.python_version(),
@@ -174,6 +183,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
             "engines": engines,
             "cuda": cuda_available(),
             "models": list_models(models_dir),
+            "available_models": available_models,
             "ffmpeg": shutil.which("ffmpeg"),
         }
     )
@@ -239,7 +249,15 @@ def cmd_install(args: argparse.Namespace) -> int:
         emit_error("环境变量 PROMPTCUT_PYLIBS 未设置，无法确定第三方库的安装目录。")
         return 1
 
-    req = find_requirements(args.engine)
+    # --requirements：调用方（云节点的受控安装作业）指定一份锁定版本的依赖文件，
+    # 不走 find_requirements 的默认查找。只认文件，不认别的东西。
+    if getattr(args, "requirements", None):
+        req = os.path.abspath(args.requirements)
+        if not os.path.isfile(req):
+            emit_error(f"指定的依赖文件不存在：{req}", kind="requirements-missing")
+            return 1
+    else:
+        req = find_requirements(args.engine)
     if not req:
         emit_error(
             f"未找到 requirements-{args.engine}.txt（已在包目录上一级、"
@@ -253,7 +271,9 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     # 必须用 sys.executable —— 内置解释器自己的 pip。写死 "python" 会打到系统里
     # 那个解释器上，库就装错地方了。
-    cmd = [sys.executable, "-m", "pip", "install", "--target", target, "-r", req]
+    # 本进程是隔离模式(-I)起的(云端 Agent 服务:工作目录是对话工作区),pip 也用隔离模式起,否则 `-m pip` 会把当前目录排进模块搜索路径最前。
+    isolated = ["-I"] if sys.flags.isolated else []
+    cmd = [sys.executable, *isolated, "-m", "pip", "install", "--target", target, "-r", req]
     if args.upgrade:
         cmd.append("--upgrade")
     if args.index_url:
@@ -340,9 +360,22 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         )
         return 1
 
+    offline = bool(getattr(args, "offline", False))
+    if offline:
+        # 离线模式：模型权重只用本地已有的，一个字节也不联网下载（huggingface 的开关要在 import 之前设）
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        known = [m["name"] for m in MODEL_CATALOG.get(engine_name, [])]
+        if args.model not in known:
+            emit_error(
+                f"离线模式只认固定的模型名（{', '.join(known)}），收到：{args.model}",
+                kind="model-missing",
+            )
+            return 1
+
     src = args.input
     if not os.path.isfile(src):
-        emit_error(f"输入文件不存在：{src}")
+        emit_error(f"输入文件不存在：{src}", kind="input-missing")
         return 1
 
     # --language auto 或空串 → 自动检测
@@ -371,12 +404,12 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
 
     with tempfile.TemporaryDirectory(prefix="promptcut-stt-") as tmpdir:
         try:
-            wav_path, converted = ensure_wav(src, tmpdir)
+            wav_path, converted = ensure_wav(src, tmpdir, local_only=offline)
         except FfmpegNotFound as exc:
-            emit_error(str(exc))
+            emit_error(str(exc), kind="ffmpeg-missing")
             return 1
         except AudioExtractError as exc:
-            emit_error(str(exc))
+            emit_error(str(exc), kind=getattr(exc, "kind", "audio-extract"))
             return 1
 
         duration = probe_duration(wav_path)
@@ -415,12 +448,17 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
                 models_dir=models_dir,
                 on_segment=on_segment,
                 on_progress=on_progress,
+                offline=offline,
+                catalog=[m["name"] for m in MODEL_CATALOG.get(engine_name, [])],
             )
         except EngineNotInstalled as exc:
-            emit_error(str(exc))
+            emit_error(str(exc), kind="engine-missing")
+            return 1
+        except ModelNotInstalled as exc:
+            emit_error(str(exc), kind="model-missing")
             return 1
         except Exception as exc:
-            emit_error(f"转写失败（{engine_name} / {args.model}）：{exc}")
+            emit_error(f"转写失败（{engine_name} / {args.model}）：{exc}", kind="transcribe-failed")
             return 1
 
     segments = result.get("segments") or []
@@ -468,6 +506,12 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--index-url", dest="index_url", default=None)
     install.add_argument("--extra-index-url", dest="extra_index_url", default=None)
     install.add_argument("--upgrade", action="store_true")
+    install.add_argument(
+        "--requirements",
+        dest="requirements",
+        default=None,
+        help="用这份依赖文件（锁定版本）代替默认的 requirements-<engine>.txt",
+    )
 
     transcribe = sub.add_parser("transcribe", help="转写一个媒体文件")
     transcribe.add_argument("--input", required=True, help="任意音视频文件或 wav")
@@ -482,6 +526,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--device", choices=["auto", "cpu", "cuda"], default="auto"
     )
     transcribe.add_argument("--out", default=None, help="把 done 事件另存为 JSON 文件")
+    transcribe.add_argument(
+        "--offline",
+        action="store_true",
+        help="离线模式（云节点用）：只用本地已有权重、不联网下载；ffmpeg 只读本地文件",
+    )
 
     return parser
 

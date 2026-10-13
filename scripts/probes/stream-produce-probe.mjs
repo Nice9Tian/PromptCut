@@ -76,7 +76,7 @@ async function decodeSegment(init, seg, dir, name) {
   const file = path.join(dir, `${name}.mp4`);
   await fs.writeFile(file, Buffer.concat([init, seg]));
   const { stdout } = await execFileAsync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', file, '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'],
-    { encoding: 'buffer', maxBuffer: 1 << 30 });
+    { windowsHide: true, encoding: 'buffer', maxBuffer: 1 << 30 });
   return stdout;
 }
 
