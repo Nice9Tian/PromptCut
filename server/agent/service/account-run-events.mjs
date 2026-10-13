@@ -263,7 +263,28 @@ export function createAccountRunEvents({ file, authorityId, verifyGrant, failpoi
       async beforeCall() { await serial; if (error) throw error; usable(); },
     };
   }
-  return { registerRun, append, appendWorker, after, writer, mirrorAccepted, mirrorRunMessage, failure: () => fatal,
+  /** 对话被删：这个对话的事件、已接受的消息原文、运行绑定、任务进程交上来的来源包全部删掉(2026-10-13 用户定：清干净) */
+  function purgeConversation({ projectId, conversationId }) {
+    if (!text(projectId) || !text(conversationId)) fail(400, 'run-event-cursor');
+    return transaction('purge', () => {
+      const grants = new Set(db.prepare('SELECT DISTINCT grant_id FROM run_events WHERE project_id=? AND conversation_id=?').all(projectId, conversationId).map(r => r.grant_id));
+      for (const row of db.prepare('SELECT grant_id, binding FROM run_bindings').all()) {
+        let b = null; try { b = JSON.parse(row.binding); } catch { /* 坏行留给别处 */ }
+        if (b?.projectId === projectId && b?.conversationId === conversationId) grants.add(row.grant_id);
+      }
+      let rows = 0;
+      for (const id of grants) {
+        rows += db.prepare('DELETE FROM worker_source_packets WHERE grant_id=?').run(id).changes;
+        rows += db.prepare('DELETE FROM worker_source_heads WHERE grant_id=?').run(id).changes;
+        rows += db.prepare('DELETE FROM run_bindings WHERE grant_id=?').run(id).changes;
+      }
+      rows += db.prepare('DELETE FROM run_events WHERE project_id=? AND conversation_id=?').run(projectId, conversationId).changes;
+      rows += db.prepare('DELETE FROM accepted_messages WHERE project_id=? AND conversation_id=?').run(projectId, conversationId).changes;
+      rows += db.prepare('DELETE FROM conversation_heads WHERE project_id=? AND conversation_id=?').run(projectId, conversationId).changes;
+      return { grants: grants.size, rows };
+    });
+  }
+  return { registerRun, append, appendWorker, after, writer, mirrorAccepted, mirrorRunMessage, purgeConversation, failure: () => fatal,
     inspect: () => ({ synchronous: db.prepare('PRAGMA synchronous').get().synchronous,
       journalMode: db.prepare('PRAGMA journal_mode').get().journal_mode, integrity: db.prepare('PRAGMA integrity_check').get().integrity_check }),
     async close() { if (closed) { if (fatal) throw fatal; return; }

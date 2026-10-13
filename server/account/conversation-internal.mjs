@@ -34,7 +34,7 @@ export function createConversationInternalHandler({ conversationAuthority, resol
       if (req.socket?.authorized !== true || certificateFingerprint(cert?.fingerprint256) !== pin) fail(403, 'service-forbidden');
       if (req.method !== 'POST') fail(405, 'method-not-allowed');
       const action = url.pathname.slice(ROOT.length);
-      if (!['identity', 'access', 'list', 'get', 'send', 'switch', 'stop', 'rename', 'remove', 'notices', 'ack-notices'].includes(action)) fail(404, 'no-route');
+      if (!['identity', 'access', 'list', 'get', 'send', 'switch', 'stop', 'rename', 'remove', 'remove-member-private', 'notices', 'ack-notices'].includes(action)) fail(404, 'no-route');
       if (requireReadControl && ['access', 'list', 'get'].includes(action)) fail(503, 'read-control-required');
       const body = await bodyOf(req);
       if (['principal', 'principalRef', 'authorizationId', 'accountId', 'loginId', 'credentialId', 'loginGeneration',
@@ -58,6 +58,7 @@ export function createConversationInternalHandler({ conversationAuthority, resol
         case 'stop': result = await conversationAuthority.stop({ ...input, runId: body.runId, requestId: body.requestId }); break;
         case 'rename': result = await conversationAuthority.rename({ ...input, title: body.title }); break;
         case 'remove': result = await conversationAuthority.remove({ ...input, requestId: body.requestId }); break;
+        case 'remove-member-private': result = await conversationAuthority.removeMemberPrivate({ ...input, accountId: body.accountId, requestId: body.requestId }); break;
         case 'notices': result = await conversationAuthority.notices(input); break;
         case 'ack-notices': result = await conversationAuthority.ackNotices({ ...input, noticeIds: body.noticeIds }); break;
       }

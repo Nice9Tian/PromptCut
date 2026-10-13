@@ -19,7 +19,7 @@ const bystanderId = 'acc_' + 'd'.repeat(24);
 const readerId = 'acc_' + 'e'.repeat(24);
 const names = { [ownerId]: 'Owner', [memberId]: 'Member', [creatorId]: 'Creator', [bystanderId]: 'Bystander', [readerId]: 'Reader' };
 
-function fixture({ purgeDeletedContent = false } = {}) {
+function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-conv-delete-'));
   const file = path.join(dir, 'authority.sqlite');
   const ledger = openAccountLedger({ file, authorityId: 'conversation-delete-test' });
@@ -51,7 +51,7 @@ function fixture({ purgeDeletedContent = false } = {}) {
     if (message) { message.queueState = 'cancelled'; message.reason = 'stop'; }
     conv.currentRunId = null;
   } };
-  const options = { ledger, accountAuthority, runHooks, now: () => 1000, purgeDeletedContent,
+  const options = { ledger, accountAuthority, runHooks, now: () => 1000,
     checkConsent: async ({ accountId }) => ({ accountId, accepted: true, noticeVersion: 1 }),
     verifySelectionSnapshot: async ({ principal, projectId: id }) => ({ projectId: id, accountId: principal.accountId,
       pageId: 'page_123', selection: { clipIds: [] }, sentAt: 100, source: 'sent-snapshot' }),
@@ -224,10 +224,10 @@ test('RS18-chat 有任务在跑：先下「停止」围栏、等 Agent 确认停
     assert.equal(f.control.fenced[0].conversationId, 'run-conv');
     assert.deepEqual(f.control.onFenceCalls, [{ projectId, conversationId: 'run-conv', runId: 'run1' }], '等的是这一轮的确认');
     assert.equal(rows(f)['run-conv'], undefined);
-    // 排队中的别人的消息一并作废，存档里能看到
+    // 排队中的别人的消息一并作废；删干净以后账本里查不到它的文字，墓碑不带任何文字
     const stone = f.ledger.read().conversationTombstonesV2[projectId]['run-conv'];
-    assert.equal(stone.archive.messages.find(m => m.content === '排在后面的消息').queueState, 'cancelled');
-    assert.equal(stone.archive.messages.find(m => m.content === '排在后面的消息').reason, 'deleted');
+    assert.equal(JSON.stringify(stone).includes('排在后面的消息'), false);
+    assert.equal(JSON.stringify(f.ledger.read()).includes('排在后面的消息'), false);
   } finally { f.close(); }
 });
 
@@ -441,19 +441,121 @@ test('RS18-chat 通知数量封顶，超了丢最旧的', async () => {
 
 /* ---------------------------------------------------------------- 存档与清除 */
 
-test('RS18-chat 〔裁〕缺省只隐藏、留存档(宁可不删)；purgeDeletedContent 打开才清除文字；两种都不留在列表和计数里', async () => {
-  const keep = fixture();
-  const purge = fixture({ purgeDeletedContent: true });
+test('块五第 2 条 删干净：对话行、请求记录里的标题、运行授权与领取/已读/结束记录里的消息与选区快照、墓碑，删后整本账本里查不到这个对话的文字', async () => {
+  const f = fixture();
   try {
-    for (const f of [keep, purge]) {
-      await f.send(ownerId, 'c1', 'r1', '秘密内容');
-      await f.remove(ownerId, 'c1', 'd1');
-      assert.equal(rows(f).c1, undefined);
-      assert.equal((await f.list(ownerId)).length, 0);
-      await assert.rejects(f.authority.get({ principalRef: f.ref(ownerId), projectId, conversationId: 'c1' }), { status: 404 });
-    }
-    assert.equal(keep.ledger.read().conversationTombstonesV2[projectId].c1.archive.messages[0].content, '秘密内容');
-    assert.equal(purge.ledger.read().conversationTombstonesV2[projectId].c1.archive, null);
-    assert.equal(JSON.stringify(purge.ledger.read()).includes('秘密内容'), true, '清除只清存档；对话行已经拿掉，其它地方的请求记录另算(见报告)');
-  } finally { keep.close(); purge.close(); }
+    const SECRET = '绝密文字-4f7a';
+    await f.send(ownerId, 'c1', 'r1', SECRET + '\n第二行');
+    await f.send(ownerId, 'keep', 'r2', '别的对话的话不能被清');
+    await f.authority.switchVisibility({ principalRef: f.ref(ownerId), projectId, conversationId: 'c1', visibility: 'private', requestId: 's1' });
+    await f.authority.switchVisibility({ principalRef: f.ref(ownerId), projectId, conversationId: 'c1', visibility: 'shared', requestId: 's2' });
+    await f.authority.rename({ principalRef: f.ref(ownerId), projectId, conversationId: 'c1', title: SECRET + '改名' });
+    // 模拟一轮跑完留下的运行记录(和 run-authority 的 admit/read/finish 记的形状一致：整条消息、选区快照都在里面)
+    f.ledger.transaction(state => {
+      const message = state.conversationsV2[projectId].c1.messages[0];
+      state.runGrantsV2 = { g1: { runGrantId: 'g1', projectId, conversationId: 'c1', runId: 'runX', messageId: message.messageId, state: 'finished',
+        contentDigest: message.contentDigest, selectionSnapshot: structuredClone(message.selectionSnapshot), initiatorName: 'Owner' },
+        gOther: { runGrantId: 'gOther', projectId, conversationId: 'keep', runId: 'runY', state: 'finished', selectionSnapshot: { pageId: 'KEEPME' } } };
+      state.runRequestsV2 = { k1: { digest: 'd', result: { runGrantId: 'g1', projectId, conversationId: 'c1', message: structuredClone(message), selectionSnapshot: { pageId: SECRET } } } };
+      state.runReadRequestsV2 = { k2: { digest: 'd', result: { projectId, conversationId: 'c1', prompt: SECRET, receiptId: 'rc' } } };
+      state.runFinishRequestsV2 = { k3: { digest: 'd', result: { projectId, conversationId: 'c1', outcome: { status: 'done' }, text: SECRET } } };
+    });
+    assert.ok(JSON.stringify(f.ledger.read()).includes(SECRET), '删之前账本里确实有');
+    await f.remove(ownerId, 'c1', 'del-clean');
+    const dump = JSON.stringify(f.ledger.read());
+    assert.equal(dump.includes(SECRET), false, '删后整本账本里查不到这个对话的文字');
+    assert.equal(dump.includes('第二行'), false);
+    // 逐处核对：对话行、墓碑、请求记录(发送/切换/改名的结果)、运行授权、领取/已读/结束的结果
+    const s = f.ledger.read();
+    assert.equal(s.conversationsV2[projectId].c1, undefined);
+    assert.deepEqual(Object.keys(s.conversationTombstonesV2[projectId].c1).sort(),
+      ['deletedAt', 'deletedByAccountId', 'id', 'notified', 'ownerAccountId', 'projectId', 'requestId', 'visibility']);
+    assert.equal(s.runGrantsV2.g1.selectionSnapshot, undefined);
+    assert.equal(s.runGrantsV2.g1.state, 'finished', '运行授权记录本身留着(结清与审计按号引用它)，只清文字');
+    assert.equal(s.runRequestsV2.k1.result.message, undefined);
+    assert.equal(s.runReadRequestsV2.k2.result.prompt, undefined);
+    assert.equal(s.runFinishRequestsV2.k3.result.text, undefined);
+    // 别的对话的东西不动
+    assert.equal(s.conversationsV2[projectId].keep.messages[0].content, '别的对话的话不能被清');
+    assert.deepEqual(s.runGrantsV2.gOther.selectionSnapshot, { pageId: 'KEEPME' });
+    // 读不到、旧号发不进去
+    await assert.rejects(f.authority.get({ principalRef: f.ref(ownerId), projectId, conversationId: 'c1' }), { status: 404, code: 'conversation-deleted' });
+    await assert.rejects(f.send(ownerId, 'c1', 'again'), { code: 'conversation-deleted' });
+  } finally { f.close(); }
+});
+
+test('块五第 2 条 还没弹的通知带着标题(气泡要靠它把话说清楚)，弹完回执就整条删掉，账本里不再有标题', async () => {
+  const f = fixture();
+  try {
+    await f.send(ownerId, 'c1', 'r1', '标题-xyz');
+    await f.send(memberId, 'c1', 'r2', '成员的话');
+    await f.remove(ownerId, 'c1', 'd1');
+    const [n] = await f.notices(memberId);
+    assert.equal(n.title, '标题-xyz');
+    await f.authority.ackNotices({ principalRef: f.ref(memberId), projectId, noticeIds: [n.noticeId] });
+    const dump = JSON.stringify(f.ledger.read());
+    assert.equal(dump.includes('标题-xyz'), false);
+    assert.equal(dump.includes('成员的话'), false);
+  } finally { f.close(); }
+});
+
+test('块五第 2 条 被删的号对看得到过它的人说「已删」，对看不到的人仍说「没有」', async () => {
+  const f = fixture();
+  try {
+    await f.send(ownerId, 'sh', 'r1', 'x'); await f.send(ownerId, 'pv', 'r2', 'y');
+    await f.authority.switchVisibility({ principalRef: f.ref(ownerId), projectId, conversationId: 'pv', visibility: 'private', requestId: 's' });
+    await f.remove(ownerId, 'sh', 'd1'); await f.remove(ownerId, 'pv', 'd2');
+    const get = (id, who) => f.authority.get({ principalRef: f.ref(who), projectId, conversationId: id });
+    await assert.rejects(get('sh', memberId), { code: 'conversation-deleted' });
+    await assert.rejects(get('pv', memberId), { code: 'no-conversation' });
+    await assert.rejects(get('pv', ownerId), { code: 'conversation-deleted' });
+    await assert.rejects(get('pv', creatorId), { code: 'conversation-deleted' });
+  } finally { f.close(); }
+});
+
+test('块五第 4 条 只读成员不能删自己开的对话(也不能建)', async () => {
+  const f = fixture();
+  try {
+    f.ledger.transaction(state => { state.conversationsV2 = { [projectId]: { mine: { v: 2, projectId, id: 'mine', ownerAccountId: readerId, visibility: 'shared',
+      aclRevision: 1, queueRevision: 0, currentRunId: null, title: 't', createdAt: 1, updatedAt: 1, messages: [] } } }; });
+    await assert.rejects(f.remove(readerId, 'mine'), { status: 403 });
+    assert.ok(rows(f).mine, '没删掉');
+    await assert.rejects(f.send(readerId, 'new', 'r'), { status: 403 });
+    assert.equal((await f.remove(creatorId, 'mine')).removed, true, '创建者仍能清掉它');
+  } finally { f.close(); }
+});
+
+test('块五第 5 条 移出成员时「同时清除他的私有对话」：只清他的私有对话，共有对话与别人的不动；只有创建者能做', async () => {
+  const f = fixture();
+  try {
+    await f.send(memberId, 'm-pv1', 'r1', '私有一'); await f.send(memberId, 'm-pv2', 'r2', '私有二'); await f.send(memberId, 'm-sh', 'r3', '共有的');
+    await f.send(ownerId, 'o-pv', 'r4', '别人的私有');
+    for (const [id, who] of [['m-pv1', memberId], ['m-pv2', memberId], ['o-pv', ownerId]])
+      await f.authority.switchVisibility({ principalRef: f.ref(who), projectId, conversationId: id, visibility: 'private', requestId: 'p-' + id });
+    await assert.rejects(f.authority.removeMemberPrivate({ principalRef: f.ref(ownerId), projectId, accountId: memberId, requestId: 'x' }), { status: 403, code: 'creator-required' });
+    f.ledger.transaction(state => { delete state.projects[projectId].members[memberId]; state.projects[projectId].bans[memberId] = { reason: 'kick' }; });
+    assert.ok(rows(f)['m-pv1']);
+    const done = await f.authority.removeMemberPrivate({ principalRef: f.ref(creatorId), projectId, accountId: memberId, requestId: 'clear-1' });
+    assert.deepEqual(done, { accountId: memberId, projectId, removed: ['m-pv1', 'm-pv2'], pending: [] });
+    assert.deepEqual(Object.keys(rows(f)).sort(), ['m-sh', 'o-pv'], '共有对话保留、别人的私有不动');
+    assert.equal(JSON.stringify(f.ledger.read()).includes('私有一'), false);
+    // 重放同一个请求：没有可清的了，不报错
+    assert.deepEqual((await f.authority.removeMemberPrivate({ principalRef: f.ref(creatorId), projectId, accountId: memberId, requestId: 'clear-1' })).removed, []);
+    await assert.rejects(f.authority.removeMemberPrivate({ principalRef: f.ref(creatorId), projectId, accountId: creatorId, requestId: 'c' }), { status: 400 });
+  } finally { f.close(); }
+});
+
+test('块五第 5 条 清除成员私有对话时有任务在跑：先强制结束再清；停不下来的列在 pending，用同一个请求号再调接着办', async () => {
+  const f = fixture();
+  try {
+    await f.send(memberId, 'm-pv', 'r1', '私有'); await f.authority.switchVisibility({ principalRef: f.ref(memberId), projectId, conversationId: 'm-pv', visibility: 'private', requestId: 'p' });
+    f.startRun('m-pv'); f.control.stopClears = false;
+    f.control.ackError = Object.assign(new Error('pending'), { status: 503, code: 'agent-fence-pending' });
+    const first = await f.authority.removeMemberPrivate({ principalRef: f.ref(creatorId), projectId, accountId: memberId, requestId: 'clear-2' });
+    assert.deepEqual([first.removed, first.pending], [[], ['m-pv']]);
+    assert.equal(f.control.fenced.at(-1).kind, 'stop');
+    f.control.ackError = null; f.ledger.transaction(state => { state.conversationsV2[projectId]['m-pv'].currentRunId = null; });
+    const second = await f.authority.removeMemberPrivate({ principalRef: f.ref(creatorId), projectId, accountId: memberId, requestId: 'clear-2' });
+    assert.deepEqual([second.removed, second.pending], [['m-pv'], []]);
+  } finally { f.close(); }
 });

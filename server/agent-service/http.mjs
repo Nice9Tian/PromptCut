@@ -242,6 +242,11 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       const body = await readBody(req);
       return sendJson(res, 200, { ok: true, ...await service.ackNotices(identity, body.noticeIds) }, CORS);
     }
+    // 移出成员时顺带清他的私有对话(项目创建者做，2026-10-13 用户定)：体 { accountId, requestId }；没办完的在回包的 pending 里，同一个请求号再调接着办
+    if (pathname === '/v1/members/clear-private' && req.method === 'POST') {
+      const body = await readBody(req);
+      return sendJson(res, 200, { ok: true, ...await service.removeMemberPrivate(identity, body.accountId, body.requestId) }, CORS);
+    }
     const one = /^\/v1\/conversations\/([^/]+)$/.exec(pathname);
     if (one) {
       const conversationId = decodeURIComponent(one[1]);

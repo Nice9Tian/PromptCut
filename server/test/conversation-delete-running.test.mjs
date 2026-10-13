@@ -68,8 +68,8 @@ test('删除正在跑的对话：先停(任务进程被 root 关掉)、结清以
   assert.equal(f.grantOf(second), null);
   assert.equal(f.generations.size, 1);
   const stone = f.ledger.read().conversationTombstonesV2[projectId][conversationId];
-  assert.equal(stone.archive.messages.find(m => m.messageId === second).queueState, 'cancelled');
-  assert.equal(stone.archive.messages.find(m => m.messageId === second).reason, 'deleted');
+  assert.equal(JSON.stringify(stone).includes('排在后面'), false, '墓碑和账本里都没有这个对话的文字');
+  assert.equal(JSON.stringify(f.ledger.read()).includes('开工'), false);
   // 发过消息的其他成员各收到一条通知(删的人是开对话的人，自己不通知)
   const notices = f.ledger.read().conversationNoticesV2[projectId];
   assert.deepEqual(Object.keys(notices).sort(), ['other', 'sender']);
