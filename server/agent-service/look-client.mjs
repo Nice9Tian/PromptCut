@@ -35,7 +35,7 @@ export const LOOK_CLIENT_DEFAULTS = Object.freeze({
   /** 登记那一趟(带着整个项目内容)的网络时限 */
   submitTimeoutMs: 60_000,
   /** 连不上、或渲染服务说登记的到了上限时,隔多久再试(逐次往后取,到最后一个为止) */
-  backoffMs: [500, 1000, 2000, 5000, 10_000],
+  backoffMs: [500, 1000, 2000, 5000],
   /** 连着这么久都连不上渲染服务才放弃(它重启一次连同自检、起工作进程,一般一两分钟) */
   reconnectMs: 5 * 60_000,
   /** 渲染服务说不认识这个请求时,照原样再登记最多几次 */
@@ -184,11 +184,15 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
      * 这个项目的 `prerenderPost`。`cards()` 回这个项目内容库里卡片源码的「键 → 版本」(没有卡就是空的):渲染服务据此决定
      * 走不走隔离工作进程,并等它把这几份装到至少这个版本。
      * @param {string} projectId 来自鉴权,不来自工具参数
-     * @param {{ cards?: () => Record<string, number | null> }} [o]
+     * @param {{ cards?: () => Record<string, number | null>, signal?: AbortSignal }} [o] `signal`:这一轮(或这个实例)被停掉的信号。
+     *   它一响,这个项目排着、在渲的看画面请求都撤回(调用时另给的 `opts.signal` 同样算)
      */
-    forProject(projectId, { cards = null } = {}) {
+    forProject(projectId, { cards = null, signal: runSignal = null } = {}) {
       if (typeof projectId !== 'string' || !projectId) throw new TypeError('forProject: 要 projectId');
-      return (pathname, body, opts) => post(projectId, cards, pathname, body, opts);
+      return (pathname, body, opts = {}) => {
+        const signals = [runSignal, opts?.signal].filter(Boolean);
+        return post(projectId, cards, pathname, body, { signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0] });
+      };
     },
     describe: () => ({ url: base, ...stats }),
   };

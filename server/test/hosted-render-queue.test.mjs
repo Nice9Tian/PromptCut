@@ -294,6 +294,20 @@ test('RQ4 重启后排着的请求还在：队列落盘，新起的管理进程�
   assert.deepEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.req.json')), [], '做完的请求体都删了');
   release?.();
 
+  // 调用方取走过的结果只再留一小会儿（它没收到回执会重问），之后清掉：带图的结果不在内存和盘上攒着
+  let clock = 0;
+  const kept = createRenderRequests({ now: () => clock, limits: { deliveredKeepMs: 1000, resultKeepMs: 100_000 } });
+  const one = kept.add({ id: rid(7), owner: 'o', projectId: P1, path: '/api/vision/snapshot', body: { a: 1 } }).entry;
+  const two = kept.add({ id: rid(8), owner: 'o', projectId: P1, path: '/api/vision/snapshot', body: { a: 1 } }).entry;
+  for (const e of [one, two]) kept.finish(e, 'done', { status: 200, body: { ok: true } });
+  kept.delivered(one);
+  clock = 999; kept.sweep();
+  assert.ok(kept.get(rid(7), 'o') && kept.get(rid(8), 'o'));
+  clock = 1000; kept.sweep();
+  assert.deepEqual([kept.get(rid(7), 'o'), !!kept.get(rid(8), 'o')], [null, true], '取走过的清了，没取走的留到保留期');
+  clock = 100_000; kept.sweep();
+  assert.equal(kept.get(rid(8), 'o'), null);
+
   // 结果过了保留期：下次起来清掉
   const k3 = createRenderRequests({ dir, now: () => Date.now() + 11 * 60_000 });
   assert.deepEqual(k3.load(), { restored: 0, results: 0, dropped: 4 });
@@ -545,13 +559,25 @@ test('RQ8 Agent 服务一侧的客户端：登记 → 一趟一趟问 → 出结
   assert.equal(sent.at(-1).path, '/look/cancel');
   assert.equal(sent.at(-1).body.requestId, sent[0].body.requestId);
 
+  // 这一轮的信号交在 forProject 上（账号任务的执行器这样接）：它一响同样撤回
+  sent.length = 0;
+  const run = new AbortController();
+  script.push(queued(), { hang: true });
+  const viaRun = client.forProject(P2, { signal: run.signal })('/api/vision/snapshot', { project: { tracks: [] } });
+  await sleep(20);
+  run.abort(new Error('run-fenced'));
+  await assert.rejects(viaRun);
+  await sleep(20);
+  assert.deepEqual([sent.at(-1).path, sent.at(-1).body.requestId], ['/look/cancel', sent[0].body.requestId]);
+  script.length = 0;
+
   // 一直连不上（过了重连的时限）才放弃
   sent.length = 0;
   for (let i = 0; i < 200; i += 1) script.push(down());
   await assert.rejects(() => post('/api/vision/snapshot', { project: { tracks: [] } }), /这次没看成：连不上/);
   assert.ok(sent.length > 3, '中间一直在重连');
   const d = client.describe();
-  assert.ok(d.ok >= 4 && d.reconnects >= 3 && d.resubmits === 1 && d.cancelled === 1);
+  assert.ok(d.ok >= 4 && d.reconnects >= 3 && d.resubmits === 1 && d.cancelled === 2);
 });
 
 test('RQ9 代理口上的 /look/poll、/look/cancel：只认 Agent 服务的签名；浏览器形状的请求 403；工作进程的口令问不到；没给口子就没有这两条路', async () => {

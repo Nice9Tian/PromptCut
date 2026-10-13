@@ -33,6 +33,8 @@ export const RENDER_REQUEST_DEFAULTS = Object.freeze({
   maxQueued: 64,
   /** 出了结果之后留多久给调用方来取 */
   resultKeepMs: 10 * 60_000,
+  /** 调用方已经取走过一次的结果再留多久（它没收到回执会重问）；之后清掉，不让带图的结果在内存和盘上攒着 */
+  deliveredKeepMs: 60_000,
 });
 
 export const REQUEST_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
@@ -245,12 +247,15 @@ export function createRenderRequests({ dir = null, now = Date.now, log = () => {
 
     /** 调用方来问了一次 */
     touch(e) { e.lastPollAt = now(); },
+    /** 结果交给调用方了一次 */
+    delivered(e) { e.deliveredAt ??= now(); },
 
     /** 把过了保留期的结果清掉 */
     sweep() {
       const at = now();
       for (const e of [...entries.values()]) {
-        if (!isFinal(e.state) || at - e.finishedAt < limits.resultKeepMs) continue;
+        if (!isFinal(e.state)) continue;
+        if (at - e.finishedAt < limits.resultKeepMs && !(e.deliveredAt != null && at - e.deliveredAt >= limits.deliveredKeepMs)) continue;
         entries.delete(e.id);
         if (dir !== null && e.persisted) rm(stateFile(e.id));
       }

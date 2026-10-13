@@ -410,8 +410,12 @@ export function createLook({
     timer.unref?.();
   }
 
+  /** 把出了的结果交给调用方 */
+  const deliver = (e) => { requests.delivered(e); return { status: e.result.status, body: e.result.body }; };
+
   /** 认身份 + 解析；不过回 `{ out }` */
   function admit(auth, bodyText) {
+    requests.sweep();
     // 关着：与没有这条路一样答，不透露别的
     if (!enabled) { stats.refused += 1; return { out: { status: 404, body: { ok: false, look: 'off', error: LOOK_ERRORS.off } } }; }
     const who = verifyAuth(auth, bodyText);
@@ -464,10 +468,10 @@ export function createLook({
       requests.touch(e);
       if (added.created) log('look.queued', { id: e.id.slice(0, 8), projectId: e.projectId, tool: e.tool, mode: queued ? 'poll' : 'sync', position: requests.position(e), persisted: e.persisted });
       kick();
-      if (queued) return isFinal(e.state) ? { status: e.result.status, body: e.result.body } : pending202(requests, e);
+      if (queued) return isFinal(e.state) ? deliver(e) : pending202(requests, e);
       // 同步等：连接一直挂到出结果。到点由 pump 按时限结掉
       while (!isFinal(e.state)) await requests.wait(e, 1000);
-      return { status: e.result.status, body: e.result.body };
+      return deliver(e);
     },
 
     /**
@@ -486,7 +490,7 @@ export function createLook({
       const waitMs = Math.min(limits.maxPollMs, Math.max(0, Number.isFinite(msg.waitMs) ? msg.waitMs : 0));
       const until = now() + waitMs;
       while (!isFinal(e.state) && now() < until) { await requests.wait(e, Math.min(until - now(), 5000)); requests.touch(e); }
-      return isFinal(e.state) ? { status: e.result.status, body: e.result.body } : pending202(requests, e);
+      return isFinal(e.state) ? deliver(e) : pending202(requests, e);
     },
 
     /** `POST /look/cancel { requestId }`：撤回。排着的直接撤；在做的那一个掐掉 */

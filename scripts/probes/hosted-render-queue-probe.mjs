@@ -391,10 +391,12 @@ async function main() {
   const loaded2 = supLogs.slice(markN).find((l) => l.event === 'look.requests.loaded') ?? null;
   const jiaLog = supLogs.slice(markN).filter((l) => l.event === 'look.done' && l.projectId === jia.projectId).at(-1) ?? null;
   const firstStart = supLogs.slice(markN).find((l) => l.event === 'isolation.start');
+  // 重连了几回（两次停机挨得近时调用方可能一直在退避里，合成一回）与一共失败了几趟
   const reconnects = clientLogs.filter((l) => l.event === 'agent.look.reconnected').length;
+  const failedTrips = client.describe().reconnects;
   check('Q5c', '正常收尾后再起：请求第二次接回来，隔离工作进程先为甲（要看画面的）起来、出图，颜色是甲的；调用方拿到了图，中间只是重连', onDisk2.length === 1 && loaded2?.restored === 1 && a3r?.ok === true && near(a3r.rgb, jia.rgb)
-    && jiaLog?.restored === true && jiaLog.worker === 'isolated' && nameOf(firstStart?.projectId) === '甲' && reconnects >= 2,
-    { onDiskAfterGracefulStop: onDisk2.length, loaded: loaded2 && { restored: loaded2.restored }, ms: a3r?.ms, rgb: a3r?.rgb, error: a3r?.error, restored: jiaLog?.restored, firstStart: nameOf(firstStart?.projectId), reconnects });
+    && jiaLog?.restored === true && jiaLog.worker === 'isolated' && nameOf(firstStart?.projectId) === '甲' && reconnects >= 1 && failedTrips >= 2,
+    { onDiskAfterGracefulStop: onDisk2.length, loaded: loaded2 && { restored: loaded2.restored }, ms: a3r?.ms, rgb: a3r?.rgb, error: a3r?.error, restored: jiaLog?.restored, firstStart: nameOf(firstStart?.projectId), reconnects, failedTrips });
   const jiaLast2 = Date.now();
 
   /* ---- Q6 预渲染任务不丢 */
@@ -410,8 +412,9 @@ async function main() {
     }, IDLE_MS + 420_000, '丙的计划与细任务做完', 500);
   } catch (err) { out.bingError = String(err?.message ?? err); }
   const bingStart = supLogs.filter((l) => l.event === 'isolation.start' && l.projectId === bing.projectId).at(-1) ?? null;
-  const sBing = await status();
-  const isoBing = (sBing.isolation?.queue?.nodes ?? []).find((n) => n.projectId === bing.projectId) ?? (sBing.isolation?.lastQueue?.nodes ?? []).find((n) => n.projectId === bing.projectId) ?? null;
+  // 隔离工作进程每秒交一次诊断：任务在文档服务那边记成做完之后，它的计数要等下一次诊断才到，等一等
+  const isoNodeOf = (s) => (s.isolation?.queue?.nodes ?? []).find((n) => n.projectId === bing.projectId) ?? (s.isolation?.lastQueue?.nodes ?? []).find((n) => n.projectId === bing.projectId) ?? null;
+  const isoBing = await waitFor(async () => { const n = isoNodeOf(await status()); return (n?.completed ?? 0) >= 1 ? n : null; }, 15_000, '隔离工作进程报出丙的任务做完', 500).catch(() => null);
   check('Q6', '预渲染任务不丢：丙的计划等过了三个看画面的项目轮次和两次重启；装着的项目闲满时长让位后，隔离工作进程为丙起来把它做完', !!bingDone && bingDone.failed === 0 && bingDone.done === bingDone.tasks && !!bingStart && Date.parse(bingStart.t) - jiaLast2 >= IDLE_MS && (isoBing?.completed ?? 0) >= 1,
     { ...bingDone, error: out.bingError, waitedMs: Date.now() - bingPublishedAt, startedAfterIdleMs: bingStart ? Date.parse(bingStart.t) - jiaLast2 : null, isoCompleted: isoBing?.completed });
 
