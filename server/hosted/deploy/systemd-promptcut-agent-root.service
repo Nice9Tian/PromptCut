@@ -1,0 +1,28 @@
+# 云端 Agent 的 root 入口:开任务进程、关任务进程、写「这一代确实关干净了」的记录。
+# 模板 server/hosted/deploy/systemd-promptcut-agent-root.service;把花括号占位符换成 README「Agent 服务(账号版:一条任务一个进程)」一节的值,
+# 放在 /etc/systemd/system/promptcut-agent-root.service。
+#
+# 起它之前:各任务槽的单元已经放好并 daemon-reload;各槽已经初始化过(`--bootstrap`),锚点摘要已经写进 {{ROOT_CONFIG}}
+# 和文档服务的任务槽配置;Agent 主服务(promptcut-agent,账号版)已经起来。
+# 停它只停调度,不关任何任务进程;但它再起来时,上一次留下的、还在跑的那一代会被停下并记成「失败」。所以重启它之前先等槽空
+# (`node server/agent-service/account-root-main.mjs --config {{ROOT_CONFIG}} --status` 看各槽都是 closed)。
+[Unit]
+Description=PromptCut agent root (task slot scheduler)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{DIR}}
+Environment=NODE_ENV=production
+ExecStart={{NODE}} {{DIR}}/server/agent-service/account-root-main.mjs --config {{ROOT_CONFIG}}
+# 配置不对会以退出码 1 退出并打一行 config.error:那种情况重启也没用,所以只在异常退出时重启,并且隔开一些
+Restart=on-failure
+RestartSec=10s
+# 停的时候先让主进程自己停调度;它起的 systemctl / busctl 是一次性的短命令,到时限还在的才结束
+KillMode=mixed
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target

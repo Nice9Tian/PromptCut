@@ -1,0 +1,35 @@
+# 云端 Agent 的任务槽 {{SLOT}}:一条任务一个进程,这个单元每次只装一代任务进程。
+# 模板 server/hosted/deploy/systemd-promptcut-agent-task.service;用 `node server/agent-service/account-task-unit.mjs` 填好(它同时打印
+# 这份文件的 SHA-256,要抄进 root 入口配置里这个槽的 publisher.runtimeAdapter.unitFragment)。填好的文件放在 /etc/systemd/system/{{UNIT}}。
+#
+# 这个单元不由人起停、不开机自启:root 入口(promptcut-agent-root.service)每开一代之前把这一代的设置写到
+# {{SETTINGS_FILE}},再起它;关也只由 root 入口凭文档服务签的终态来关。没有 [Install] 一节是故意的。
+# 不要在这里写 Slice=:每一代的关闭范围(一个临时 slice)由 root 入口经
+# /run/systemd/system/{{UNIT}}.d/90-promptcut-root-slice.conf 指定,它核对这个单元没有别的 drop-in。
+#
+# 下面几项 root 的发布器会逐项核对,改了它就拒绝开这一代:KillMode=control-group、Delegate=no、Restart=no、User 对应的 uid。
+[Unit]
+Description=PromptCut agent task slot {{SLOT}}
+
+[Service]
+Type=simple
+User={{TASK_USER}}
+Group={{TASK_GROUP}}
+WorkingDirectory={{DIR}}
+Environment=NODE_ENV=production
+Environment=PROMPTCUT_AGENT_WORKER_SETTINGS={{SETTINGS_FILE}}
+# 入口不带父子通道:领取、开跑、收尾、结算结果都走它那个只认 root 证书的本机 HTTPS 口。
+# 开头的「-」:主进程不管怎么退出(退出码非零、被信号结束)都不把单元记成 failed。配合 RemainAfterExit=yes,
+# 主进程没了以后单元停在 active (exited)、它的 cgroup 留着,root 才看得到「原来那一代的主进程不在了」并写下失败观察;
+# 单元一旦进了 failed 或 inactive,systemd 会把 cgroup 收掉,root 核不了,这个槽就只能等人处理。
+ExecStart=-{{NODE}} --max-old-space-size={{HEAP_MB}} {{DIR}}/server/agent-service/account-task-worker-cli.mjs --configuration-module {{DIR}}/server/agent-service/account-task-worker-config.mjs --control https
+RemainAfterExit=yes
+Restart=no
+KillMode=control-group
+Delegate=no
+# 关这一代 = 把整组进程直接结束。正常结束时任务进程已经收完、文档服务已经签了终态,没有要等的东西;
+# 用 SIGTERM 加超时的话,超时那一次 systemd 会把单元记成 failed,后果同上。
+KillSignal=SIGKILL
+# 内核因内存不足结束了组里某个进程时不由 systemd 停掉整个单元(那也会进 failed);由 root 入口按「主进程没了」处理
+OOMPolicy=continue
+NoNewPrivileges=true

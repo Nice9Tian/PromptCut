@@ -71,7 +71,7 @@ async function writeSettings(file, value) {
 }
 
 /** 照配置建各槽。只在 Linux root 上调得通（`createAgentScopeRuntime` 自己也核）。 */
-async function buildSlots(config, controllerTls) {
+export async function buildSlots(config, controllerTls) {
   const slots = [];
   for (const slot of config.slots) {
     const expected = slot.publisher.expected, io = await createAgentScopeRuntime(slot.publisher);
