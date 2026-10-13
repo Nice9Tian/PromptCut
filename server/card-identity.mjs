@@ -138,8 +138,10 @@ export function cardSnapshotIdentity(node, {
  *
  * 上游的身份里没有片段的时长、相位、框:那些在 `cardSnapshotIdentity` 的 `snapshot` 一段里,取的是输出节点所在片段的;
  * 上游就在同一个片段里(强调、滤镜、声音效果、接自己那段素材的素材效果卡)时这就够了。上游是**别的片段**的节点时
- * (转场接两段素材),那个片段相对这一个的入点没有进键 —— `cardNodeIdentities` 也一样(它刻意不带时间上的摆放);
- * 源依赖卡今天不单独预渲染(`CardFrameCache.plan` 的 `cacheable` 不认它)、不进单卡流,要放行时这一处得一起补。
+ * (转场接两段素材),那个片段相对这一个的入点没有进键 —— `cardNodeIdentities` 也一样(它刻意不带时间上的摆放)。
+ * 源依赖卡现在各产一条单卡流(`frame-stream.mjs` 的 `soloStreamKind`),这一处查过,不用补:素材效果卡取输入的时刻是
+ * 「这张卡自己的时间 × 输入的倍速 + 输入的偏移 + 那段素材的裁剪起点」(`src/render/cards/GraphCard.tsx` 的 `renderNode`),
+ * 那个片段摆在时间轴的哪一帧不是画面的输入;上面几样都在节点和边上,已经进键。
  *
  * 指向已删片段的输入:`validateCardGraph` 丢了边、把名字记在节点的 `missingInputs` 里,它留在节点上一并进摘要。
  */

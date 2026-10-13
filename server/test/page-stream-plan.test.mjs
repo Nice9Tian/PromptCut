@@ -12,6 +12,7 @@
  *   PSP-05  清单:同一份分段登记,两边的任务组出的清单相同,过 `manifestMatches`
  *   PSP-06  层表的那一行与 `layerStreamsOf` 写出来的相同
  *   PSP-07  超过解码器预算时合并的结果相同:并进组流的卡两边都不出单卡流
+ *   PSP-07b 切分方单独成流的两类卡(三维外框的独立卡、源依赖卡)页面不产,但算进解码器预算:合并的结果仍相同
  *   PSP-08  不产的卡:画布卡、Lottie、依赖下层、框带三维、隐藏序列两边都不出;页面另外不产的两种(挂了强调的片段、不是内置卡片)
  *   PSP-09  没有指纹、没有代码指纹:一条都不算
  *   PSP-10  并进现有的层表:别的字段与别的卡的行不动、本页的候选提到最前、同一张卡输入签名过期的行去掉(没过期的留在后面)、没有变化时不写;
@@ -224,6 +225,37 @@ test('PSP-07 超过解码器预算时合并的结果相同', async () => {
     for (const id of clips.filter(id => !singles.includes(id))) assert.equal(page.skipped[id], 'grouped', `${id} 并进了组流`);
     assert.deepEqual(server.tasks.map(t => t.input.clipId).filter((id, i, a) => a.indexOf(id) === i).sort(), singles, '切分只给单卡流出浏览器那一份');
   }
+});
+
+test('PSP-07b 切分方单独成流的两类卡(三维外框的独立卡、源依赖卡)页面不产,但算进解码器预算:并进组流的卡两边仍然相同', async () => {
+  // 三张平面的独立卡同时在画,上面再压一张三维外框的独立卡、一张套在视频上的素材效果卡(接了输入,没审阅过)
+  const project = projectOf([
+    { id: 't-3d', clips: [clip('threed', 'punch-pill', 0, 4, { frame: { x: 0, y: 0, w: 200, h: 200, rotateY: 30 } })] },
+    { id: 't-fx', clips: [clip('fx', 'user-fx', 0, 4, { nodeId: 'n-fx', mediaId: 'm1' })] },
+    { id: 't-1', clips: [clip('g-1', 'punch-pill', 0, 4)] },
+    { id: 't-2', clips: [clip('g-2', 'focus-card', 0, 4)] },
+    { id: 't-3', clips: [clip('g-3', 'punch-pill', 0, 4)] },
+  ], {
+    media: [{ id: 'm1', kind: 'video', hash: 'h1', url: '/@media/h1' }],
+    cardNodes: [{ id: 'n-fx', adapter: 'card', cardId: 'user-fx', kind: 'filter', params: {}, inputs: { source: { nodeId: '@clip/fx/source', offset: 0, rate: 1 } } }],
+  });
+  const value = valueOf(project, { 'punch-pill': 'builtin:a', 'focus-card': 'builtin:e', 'user-fx': 'user:x' });
+  const clips = ['threed', 'fx', 'g-1', 'g-2', 'g-3'];
+  let merged = 0;
+  for (const budget of [1, 2, 3, 4, 5, 6]) {
+    const server = serverSide(project, value, clips, { budget });
+    const page = await pageSide(project, value, clips, { budget });
+    assert.deepEqual(server.specs.filter(s => s.solo).map(s => `${s.topClipId}:${s.solo}`).sort(), ['fx:source', 'threed:spatial'], `预算 ${budget}:切分方给这两张各出一条单独的流`);
+    const singles = server.specs.filter(s => s.kind === 'card' && !s.solo).map(s => s.topClipId).sort();
+    if (singles.length < 3) merged++;
+    assert.deepEqual(page.specs.map(s => s.topClipId).sort(), singles, `预算 ${budget}:页面产的单卡流与切分方给浏览器的相同`);
+    for (const id of ['g-1', 'g-2', 'g-3'].filter(id => !singles.includes(id))) assert.equal(page.skipped[id], 'grouped', `预算 ${budget}:${id} 并进了组流`);
+    assert.equal(page.skipped.threed, 'frame-3d');
+    assert.equal(page.skipped.fx, 'not-independent');
+    assert.deepEqual(server.tasks.map(t => t.input.clipId).filter((id, i, a) => a.indexOf(id) === i).sort(), singles, `预算 ${budget}:浏览器那一份只有平面独立卡的单卡流`);
+  }
+  // 预算 4:五条流超了一条 —— 只按平面的三张算是不超的;算上那两条才知道要合并(这一条在页面不算它们的时候会红)
+  assert.ok(merged >= 3, '有几档预算是靠算上这两条才合并的');
 });
 
 test('PSP-08 不产的卡', async () => {
