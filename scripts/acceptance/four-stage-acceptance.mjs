@@ -418,7 +418,7 @@ async function main() {
   // 缺省只跑本地验证;真实网络验证要 --level network 单独选(verification.md「本地验证与真实网络验证」)
   const level = opts.level || 'local';
   let selected;
-  try { selected = selectItems(ITEMS, { only: opts.only, from: opts.from, includeOptional: opts.includeOptional, level }); } catch (e) { console.error(e.message); return 2; }
+  try { selected = selectItems(ITEMS, { only: opts.only, from: opts.from, includeOptional: opts.includeOptional, level, noOptional: opts.noOptional }); } catch (e) { console.error(e.message); return 2; }
 
   const mainWorkspace = mainWorkspaceOf(REPO);
   const out = path.resolve(opts.out || path.join(mainWorkspace, 'work', 'four-stage', 'final-prep', stamp()));

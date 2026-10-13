@@ -46,7 +46,7 @@ export function parseArgs(argv) {
     flakyRerun: 0, devPort: 5690, devMainPort: 5693, json: false, checkCoverage: false, help: false,
     keepMainWorktree: false, includeOptional: false, dryRun: false, matrix: false, portShift: 0,
     level: null, releaseTimings: null, timingsFrom: null, machineName: null,
-    rows: false, rowsFrom: null, rowsMap: false, v18PortBase: null,
+    rows: false, rowsFrom: null, rowsMap: false, v18PortBase: null, noOptional: false,
   };
   const need = (i, name) => {
     const v = argv[i + 1];
@@ -66,6 +66,7 @@ export function parseArgs(argv) {
       case '--dry-run': o.dryRun = true; break;
       case '--matrix': o.matrix = true; break;
       case '--rows': o.rows = true; break;
+      case '--no-optional': o.noOptional = true; break;
       case '--rows-map': o.rowsMap = true; break;
       case '--rows-from': o.rowsFrom = need(i, a); i++; break;
       case '--v18-port-base': {
@@ -123,6 +124,7 @@ export const USAGE = `用法:node scripts/acceptance/four-stage-acceptance.mjs [
   --dev-port <端口>       共享 dev server 的编辑器端口(缺省 5690,另占 +1、+2)
   --dev-main-port <端口>  main 基准树的 dev server(缺省 5693,另占 +1、+2)
   --include-optional      连带跑标了 optional 的补充项(缺省不跑)
+  --no-optional           --only 点到类别或通配时也不带 optional 的项(0.7.18 里端口写死、要备依赖的探针标了 optional;--only V18 --no-optional = 本机缺省能跑的全部)
   --keep-main-worktree    结束时不删 main 基准 worktree
   --check-coverage        守门:① scripts/probes/ 下每个探针要登记(covers)或写明排除原因;② 0.7.18 的 38 行每行至少有一项;③ 清单项引用的
                           测试文件、探针脚本要在仓库里(标了「等分支合入」的单列);④ 全量测试的跳过名单没有失效。有问题退出码 1
@@ -241,7 +243,7 @@ export function matchesToken(item, token) {
  * 记号一个都没匹配到会抛错(拼错编号不要悄悄什么都不跑);记号匹配到的项全在另一级里也抛错,并说要加哪个 --level。
  * level:'local' | 'network' | 'all'(缺省 'all',由调用方定缺省:跑的时候传 local)。
  */
-export function selectItems(items, { only = [], from = null, includeOptional = false, level = 'all' } = {}) {
+export function selectItems(items, { only = [], from = null, includeOptional = false, level = 'all', noOptional = false } = {}) {
   const inLevel = (it) => level === 'all' || levelOf(it) === level;
   for (const t of only) {
     const hit = items.filter((it) => matchesToken(it, t));
@@ -249,7 +251,7 @@ export function selectItems(items, { only = [], from = null, includeOptional = f
     if (!hit.some(inLevel)) throw new Error(`--only ${t}:属于${LEVEL_LABEL[levelOf(hit[0])]},这次选的是${LEVEL_LABEL[level]};要跑它加 --level ${levelOf(hit[0])}`);
   }
   let out = items.filter(inLevel);
-  if (only.length) out = out.filter((it) => only.some((t) => matchesToken(it, t)));
+  if (only.length) out = out.filter((it) => only.some((t) => matchesToken(it, t) && !(noOptional && it.optional && t !== it.id)));
   else if (!includeOptional) out = out.filter((it) => !it.optional);
   if (from) {
     const at = items.findIndex((it) => it.id === from);
