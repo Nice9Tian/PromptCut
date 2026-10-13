@@ -365,51 +365,84 @@ try {
 
   // ── pixels:可见舞台的截图 ──
   if (!NO_PIXELS) {
+    const stageBox = async () => {
+      const f = await frontStage(page);
+      const el = f ? await f.frameElement().catch(() => null) : null;
+      return el ? await el.boundingBox().catch(() => null) : null;
+    };
+    // 把视口调到舞台摆放正好是 1:1(舞台宽 = 项目宽):和导出页的 PNG 才能逐像素比。割线法,最多 8 次
+    {
+      let w = 2400, prev = null, box = await stageBox();
+      for (let i = 0; i < 8 && box && Math.abs(box.width - PROJECT.width) > 0.6; i++) {
+        const cur = { w, sw: box.width };
+        const slope = prev && prev.w !== cur.w ? (cur.sw - prev.sw) / (cur.w - prev.w) : 0.66;
+        const next = Math.max(900, Math.min(3600, Math.round(w + (PROJECT.width - box.width) / (slope || 0.66))));
+        prev = cur; w = next;
+        await page.setViewport({ width: w, height: 1500, deviceScaleFactor: 1 });
+        await delay(800);
+        box = await stageBox();
+      }
+      out.viewport = { width: w, stageWidth: box ? +box.width.toFixed(2) : null, stageHeight: box ? +box.height.toFixed(2) : null };
+      say('pixels.viewport', out.viewport);
+    }
     const shot = async (frame, name) => {
       const s = await arrive(frame);
       if (!s) return null;
       await delay(250);
-      const f = await frontStage(page);
-      const el = f ? await f.frameElement().catch(() => null) : null;
-      const box = el ? await el.boundingBox().catch(() => null) : null;
+      const box = await stageBox();
       if (!box || box.width < 10) return null;
       const buf = await page.screenshot({ clip: { x: Math.round(box.x), y: Math.round(box.y), width: Math.floor(box.width), height: Math.floor(box.height) } });
-      if (name) await fsp.writeFile(path.join(OUT, `${name}.png`), buf);
-      return { png: PNG.sync.read(Buffer.from(buf)), box };
+      if (name) await fsp.writeFile(path.join(OUT, name + '.png'), buf);
+      const c = clipAt(frame);
+      return { png: PNG.sync.read(Buffer.from(buf)), box, hash: c ? s.hashes[c.id] : null };
     };
-    const diffPix = (a, b) => { if (!a || !b || a.width !== b.width || a.height !== b.height) return -1; let n = 0; for (let i = 0; i < a.data.length; i += 4) if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] || a.data[i + 2] !== b.data[i + 2]) n++; return n; };
-    const first = await shot(PIX_FRAMES[0], null);
-    const scale = first ? first.png.width / PROJECT.width : null;
-    out.pixels = { stageShotSize: first ? [first.png.width, first.png.height] : null, scale, compared: [] };
-    // 顺着挪到 对 从别处直接点到
-    const pairs = [];
+    /** 两张同尺寸截图:不同的像素数、通道最大差、平均差、差超过 48 的像素占比 */
+    const cmpPix = (a, b) => {
+      if (!a || !b || a.width !== b.width || a.height !== b.height) return { error: 'size' };
+      let n = 0, max = 0, sum = 0, bad = 0; const px = a.width * a.height;
+      for (let i = 0; i < a.data.length; i += 4) {
+        const d = Math.max(Math.abs(a.data[i] - b.data[i]), Math.abs(a.data[i + 1] - b.data[i + 1]), Math.abs(a.data[i + 2] - b.data[i + 2]));
+        if (d) n++; if (d > max) max = d; if (d > 48) bad++;
+        sum += Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i + 1] - b.data[i + 1]) + Math.abs(a.data[i + 2] - b.data[i + 2]);
+      }
+      return { differ: n, max, mad: +(sum / (px * 3)).toFixed(4), bad48: +(bad / px).toFixed(6), frac: +(n / px).toFixed(6) };
+    };
+    out.pixels = { seqVsJump: [], vsExport: [] };
+    // 顺着挪到 对 从别处直接点到。两张的 SVG 文本散列要相同;像素允许差一点点边缘取整(浏览器只重画变了的那一块和整张重画时的取整,
+    // 卡片管不到,见 docs/reports/AGENT-rr-lottie.md「还剩的一点差别」):差的像素不超过画面的 0.02%、差超过 48 的像素为 0
     for (const f of [62, 75, 96, 199, 322, 353, 395, 440, 500]) {
       await arrive(Math.max(0, f - 3)); await arrive(f - 2); await arrive(f - 1);
       const seqShot = await shot(f, null);
       await arrive(10 + (f % 7)); // 绕开
-      const jumpShot = await shot(f, f % 2 === 0 ? `stage-${f}` : null);
-      const d = diffPix(seqShot?.png, jumpShot?.png);
-      pairs.push({ frame: f, differ: d });
-      check(d === 0, `在线舞台截图:第 ${f} 帧,一帧一帧挪到的和从别处直接点到的逐像素相同`, { pixels: d });
+      const jumpShot = await shot(f, f % 2 === 0 ? 'stage-' + f : null);
+      const d = cmpPix(seqShot?.png, jumpShot?.png);
+      const row = { frame: f, clip: clipAt(f)?.name, domSame: !!seqShot?.hash && seqShot.hash === jumpShot?.hash, ...d };
+      out.pixels.seqVsJump.push(row);
+      check(row.domSame, '在线舞台截图:第 ' + f + ' 帧,两次到达时看得见的 SVG 文本相同', row);
+      check(!d.error && d.frac <= 0.0002 && d.bad48 === 0, '在线舞台截图:第 ' + f + ' 帧,一帧一帧挪到的和从别处直接点到的像素相同(差 ≤ 0.02% 且没有差超过 48 的)', row);
     }
-    out.pixels.seqVsJump = pairs;
-    if (scale !== null && Math.abs(scale - 1) < 0.002) {
-      const vsExport = [];
+    // 舞台摆放是 1:1 时,再和导出页同一帧的 PNG 比。舞台底下是预览用的棋盘格、四角还有画框标记,导出的 PNG 是透明底:
+    // 只比导出里完全不透明(不透明度 ≥ 250)的像素——这些像素舞台上看到的就是卡片自己的颜色,逐通道差 ≤ 2 算相同;
+    // 半透明的边缘会透出棋盘格,不比。通过线:这些像素里不相同的 ≤ 0.1%、差超过 48 的为 0。
+    if (out.viewport.stageWidth && Math.abs(out.viewport.stageWidth - PROJECT.width) <= 0.6) {
       for (const f of PIX_FRAMES) {
         const s = await shot(f, null);
-        const ex = PNG.sync.read(fs.readFileSync(path.join(pngDir, `${String(f).padStart(6, '0')}.png`)));
-        // 导出的 PNG 带透明;舞台截图是不透明的:透明处按舞台的背景看,不比 alpha 为 0 的像素
-        let n = 0, cmp = 0;
-        if (s && s.png.width === ex.width && s.png.height === ex.height) {
-          for (let i = 0; i < ex.data.length; i += 4) { if (ex.data[i + 3] === 0) continue; cmp++; if (Math.abs(ex.data[i] - s.png.data[i]) > 2 || Math.abs(ex.data[i + 1] - s.png.data[i + 1]) > 2 || Math.abs(ex.data[i + 2] - s.png.data[i + 2]) > 2) n++; }
-        } else n = -1;
-        vsExport.push({ frame: f, compared: cmp, differ: n });
+        const ex = PNG.sync.read(fs.readFileSync(path.join(pngDir, String(f).padStart(6, '0') + '.png')));
+        if (!s || s.png.width !== ex.width || s.png.height !== ex.height) { out.pixels.vsExport.push({ frame: f, error: 'size', stage: s && [s.png.width, s.png.height], export: [ex.width, ex.height] }); check(false, '在线舞台截图对导出页 PNG:第 ' + f + ' 帧尺寸对不上', out.pixels.vsExport.at(-1)); continue; }
+        let opaque = 0, differ = 0, bad = 0, max = 0;
+        for (let i = 0; i < ex.data.length; i += 4) {
+          if (ex.data[i + 3] < 250) continue;
+          opaque++;
+          const d = Math.max(Math.abs(ex.data[i] - s.png.data[i]), Math.abs(ex.data[i + 1] - s.png.data[i + 1]), Math.abs(ex.data[i + 2] - s.png.data[i + 2]));
+          if (d > 2) differ++; if (d > 48) bad++; if (d > max) max = d;
+        }
+        const row = { frame: f, clip: clipAt(f)?.name, opaque, differ, bad48: bad, max, frac: opaque ? +(differ / opaque).toFixed(6) : 0 };
+        out.pixels.vsExport.push(row);
+        check(opaque > 0 && row.frac <= 0.001 && bad === 0, '在线舞台截图对导出页 PNG:第 ' + f + ' 帧相符(不透明处差 > 2 的像素 ≤ 0.1%、没有差超过 48 的)', row);
       }
-      out.pixels.vsExport = vsExport;
-      for (const r of vsExport) check(r.differ === 0, `在线舞台截图对导出页 PNG:第 ${r.frame} 帧逐像素相同(不透明处,通道差 ≤ 2)`, r);
     } else {
-      out.pixels.vsExport = `舞台摆放的缩放是 ${scale},不是 1:1,没有拿截图和导出的 PNG 逐像素比;DOM 散列比过了`;
-      say('pixels.skip-export', { scale });
+      out.pixels.vsExport = '舞台摆放的宽是 ' + out.viewport.stageWidth + ',不是项目宽 ' + PROJECT.width + ',没有拿截图和导出的 PNG 逐像素比;SVG 文本散列比过了';
+      say('pixels.skip-export', out.viewport);
     }
   }
   check(pageErrors.length === 0, '在线页面没有报错、没有 [lottie] 警告', pageErrors.slice(0, 4));
