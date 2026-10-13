@@ -74,7 +74,8 @@ process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 const PROJECT = { width: 1280, height: 720, fps: 30, duration: 3 };
 const FPS = PROJECT.fps, TOTAL = PROJECT.duration * FPS;
 const CLIPS = {
-  L: { id: 'xe-light', cardId: 'punch-pill', start: 0, end: 3, params: { text: `导出探针 ${RUN}` }, frame: { x: 320, y: 620, w: 560, h: 120, anchor: [0.5, 0.5] } },
+  // L 不设框(铺满舞台):页面要是把它也判重、产了流,框设小了药丸会被流的矩形(框外扩 32 像素)裁掉一截
+  L: { id: 'xe-light', cardId: 'punch-pill', start: 0, end: 3, params: { text: `导出探针 ${RUN}` } },
   // 探针卡把橙块画在自己框里的 (480, 420) 起 320×240 的地方:A 不设框(铺满舞台),B 的框整个上移 360(橙块落在画面上半),两张不重叠。
   // (单卡流只装得下「框外扩 32 像素」以内的画面,框设小了橙块会落在流的矩形外面,预览里贴流时同样看不到)
   A: { id: 'xe-heavy-a', cardId: 'probe-slow-stepped', start: 0.4, end: 1.9, params: { burnMs: 40, label: 'A' } },
@@ -538,7 +539,7 @@ try {
   check(!!fast2.result && fast2.result.frames === TOTAL, '快速导出(都有满密度流)导完了', { error: fast2.error, waits: fast2.waits.slice(-1) });
   check(f2?.perClip?.[CLIPS.A.id]?.stream === COUNT.A && f2?.perClip?.[CLIPS.B.id]?.stream === COUNT.B, 'A、B 的每一帧都取的是流', f2?.perClip);
   check(f2?.perClip?.[CLIPS.S.id]?.frames === COUNT.S && !(f2?.perClip?.[CLIPS.S.id]?.stream > 0), 'S 没有流:照完整导出的办法,贴渲染节点的位图', f2?.perClip);
-  check(f2?.wrapperOnly === 3, 'A、B、S 三张都不由导出页活渲(只挂包裹层)', f2);
+  check(f2?.wrapperOnly >= 3 && f2?.streamClips >= 2 && f2?.nodeClips === 1, 'A、B、S 三张都不由导出页活渲(只挂包裹层;页面把别的卡也判重、产满了流的话它也算在内)', f2);
   check(!!fast3.result && fast2.frames.every(Boolean) && sameBytes(fast2.frames, fast3.frames), '快速导出两遍逐帧逐字节相同', { firstDiff: firstDiff(fast2.frames, fast3.frames), error: fast3.error });
   out.diffs.fastVsFull = compareRuns(fast2.frames, full2.frames);
   out.diffs.fastVsFull_bFrames = compareRuns(fast2.frames, full2.frames, { frames: rangeOf(WIN.B) });
