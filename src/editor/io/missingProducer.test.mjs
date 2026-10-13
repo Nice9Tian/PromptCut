@@ -272,3 +272,23 @@ test("没读成不认定:原路径 403(不是「不在素材目录」那种)、5
   assert.equal((await ingestUnhashedMedia({ markMissing: true })).failed[0].unreachable, undefined);
   assert.equal(get(mixed.id).missingMaterial, undefined);
 });
+
+test("缺失素材改名:记录里的名字跟着改,占位不失效,占位上显示新名字;存盘重开仍然对得上", async () => {
+  actions.newProject("改名");
+  const m = actions.addMedia({ kind: "video", name: "旧名字.mp4", url: `/@media/${H("a")}`, hash: H("a") });
+  editor({});
+  await checkHashedMedia(); takeMissingMaterials();
+  assert.equal(confirmedMissing(get(m.id)), true);
+  actions.updateMedia(m.id, { name: "新名字.mp4" });
+  assert.equal(confirmedMissing(get(m.id)), true, "改名后仍是确认缺失");
+  assert.equal(get(m.id).missingMaterial.original.name, "新名字.mp4");
+  assert.equal(missingMaterialLabel(get(m.id)), "新名字.mp4");
+  assert.equal(confirmedMissing(reopen(true)[0]), true);
+  // 记录与素材对不上的(别处直接改了素材而没带上记录):不算确认缺失,各处一致地照普通素材办
+  const stale = { ...get(m.id), name: "别处改的.mp4" };
+  assert.equal(confirmedMissing(stale), false);
+  // 再检查一轮会重新认定并把记录写对
+  resetTierBackfillForTest(); editor({});
+  await checkHashedMedia();
+  assert.equal(confirmedMissing(get(m.id)), true);
+});

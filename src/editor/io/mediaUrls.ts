@@ -1,6 +1,7 @@
 import type { MediaAsset } from "../../kernel/project";
 import { kindFromExtension, type AssetKind } from "./mediaKinds.ts";
 import { publishMediaMigrations, type MediaKindMigration } from "./mediaMigrationBus.ts";
+import { confirmedMissing } from "../../audio/missingMaterialRecord.ts";
 
 /**
  * 素材地址在「存盘 → 再打开」之间怎么保持能播。
@@ -63,8 +64,7 @@ export function restoreMediaUrls(media: MediaAsset[], opts: { externalPathUrl?: 
     const shouldMove = !!extKind && extKind !== m.kind && !(m.kind === "audio" && m.soundOf);
     // 认定过「确认缺失」的素材原样留着:占位核对的是记录与素材的类别、名字、地址逐字相同,这里改了哪一项占位就失效
     // (重新找回、清掉记录是 mediaUpload.ts 后台检查的事)。
-    const record = m.missingMaterial;
-    if (record?.v === 1 && record.reason === "confirmed-missing" && record.mediaId === m.id && record.original?.url === m.url && m.url) {
+    if (confirmedMissing(m) && m.url) {
       return m.pending ? { ...m, pending: undefined } : m;
     }
     const normalized = shouldMove ? { ...m, kind: extKind as AssetKind } : m;

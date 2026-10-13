@@ -138,3 +138,22 @@ test('MP-E7 认定过「确认缺失」的素材:地址原样留着、不进 ski
   assert.deepEqual(dropSkippedMediaClips(project, r.skipped), [{ id: 's', name: '(缺失) s.mp4', clips: 1 }]);
   assert.deepEqual(project.tracks[0].clips.map((c) => c.id), ['c1', 'c2', 'c3'], '认定过的素材的片段留在原位置');
 });
+
+test('MP-E8 导出与画面用同一个判定:记录里的名字、类别、哈希任一项和素材对不上,就不算确认缺失(照普通素材办,不留着失效的地址当占位)', async () => {
+  const base = { id: 'h', kind: 'video', name: '(缺失) h.mp4', url: `/@media/${H('9')}.mp4`, hash: H('9') };
+  const record = { v: 1, mediaId: 'h', reason: 'confirmed-missing', original: { kind: 'video', name: base.name, url: base.url, hash: base.hash }, visual: true, audio: true };
+  const { confirmedMissing } = await import('../../src/audio/missingMaterialRecord.ts');
+  for (const [label, media, confirmed] of [
+    ['对得上', { ...base, missingMaterial: record }, true],
+    ['名字对不上', { ...base, name: '改过名.mp4', missingMaterial: record }, false],
+    ['类别对不上', { ...base, kind: 'image', missingMaterial: record }, false],
+    ['哈希对不上', { ...base, hash: H('8'), url: base.url, missingMaterial: record }, false],
+  ]) {
+    assert.equal(confirmedMissing(media), confirmed, label);
+    const project = { media: [structuredClone(media)] };
+    await normalizeExportMedia(project, ROOT, 'job8', { roots: ROOTS, exists: async () => true });
+    // 确认缺失的:地址一个字不动(带扩展名的写法也留着);不算的:照「有哈希就按哈希」的老规矩办
+    assert.equal(project.media[0].url === media.url, confirmed || media.hash === H('9'), label);
+    assert.equal(confirmedMissing(project.media[0]), confirmed, `${label}:导出改完地址之后,画面那一侧的判定与导出这一侧一致`);
+  }
+});
