@@ -34,6 +34,10 @@ export const HOSTED_DEPLOY_FILES = Object.freeze([
   'server/render-node/ws-transport.mjs',
   // 成本记录模块按原始环境算指纹（与预渲染结果键同一套归一规则，C10 其余第 3 节）
   'server/render-node/fingerprint.mjs',
+  // 文档服务按「一条任务一个进程」核对 root 发布的记录链时，`server/hosted/agent-run-scope-reader.mjs` 要用这个文件里
+  // 读 root 所有的目录与文件的两个函数（rootDirectory、rootRead）。`deploy/` 目录整体不拷（见下 skip），所以单列这一个；
+  // 它被引入时不执行任何发布动作（发布入口只在它被当作主脚本运行时才走）。
+  'server/hosted/deploy/asset-root-registry-publisher.mjs',
 ]);
 
 /** 暂存目录根上的 package.json 内容 */

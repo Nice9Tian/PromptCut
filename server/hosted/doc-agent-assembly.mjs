@@ -10,6 +10,7 @@ import { createAgentInstanceAuthority, instanceTlsBinding } from '../account/age
 import { createAgentInstanceInternalHandler, instanceRequestProof, assertInstanceDirectTransport,
   INSTANCE_PROOF_HEADER, INSTANCE_DATA_PROOF_HEADER, instanceConnectionRequest, instanceDataRequest, instanceProtocolHeaders, instanceMessageAction } from '../account/agent-instance-internal.mjs';
 import { createAssetMtlsTransport } from './asset-doc-client.mjs';
+import { createAgentRunScopeDoc } from '../account/agent-run-scope-doc.mjs';
 import { createRunAssetsInstanceAdapter } from './run-assets-instance-adapter.mjs';
 import { createRunAssets } from '../account/run-assets.mjs';
 import { createRunAssetsInternalHandler } from '../account/run-assets-internal.mjs';
@@ -34,24 +35,34 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     'messageId', 'runId', 'runGrantId', 'serviceId', 'serviceKid', 'instanceId', 'instanceGeneration'];
   const transport = createAssetMtlsTransport({ origin: account.origin, tls: account.clientTls,
     serverFingerprint256: account.serverFingerprint256 });
+  const scopeAuthority = account.agent.runScopes ? createAgentRunScopeDoc({ ledger,
+    signingKey: account.agent.runScopes.signingKey, slots: account.agent.runScopes.slots,
+    masterServiceKid: account.agent.runScopes.masterServiceKid, masterFingerprint256: account.agent.runScopes.masterFingerprint256 }) : null;
+  const masterPin = scopeAuthority ? certificateFingerprint(account.agent.runScopes.masterFingerprint256) : null;
+  const masterKid = scopeAuthority ? account.agent.runScopes.masterServiceKid : null;
+  if (scopeAuthority && (masterPin === pin || masterKid === kid)) fail(503, 'doc-agent-role-configuration');
+  const servicePins = new Map([[kid, pin], ...(scopeAuthority ? [[masterKid, masterPin]] : [])]);
   let stopped = false, runAuthority, assetInstanceAdapter = null, runAssets = null, runAssetsHandler = null;
-  const currentService = () => {
+  // 不带参数时核的是跑任务的那个身份（运行素材那一侧这样调）；带参数时核指定的那个（任务身份或只做控制的主身份）。
+  const currentService = (serviceKid = kid) => {
     if (stopped) fail(503, 'doc-agent-unavailable');
     try { serviceRegistry?.refresh({ force: true }); } catch { fail(403, 'run-service-forbidden'); }
     const entry = serviceRegistry?.get('agent');
-    if (entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === kid))
+    if (!servicePins.has(serviceKid) || entry?.role !== 'agent' || entry.actsFor !== 'member' || !entry.keys.some(key => key.kid === serviceKid))
       fail(403, 'run-service-forbidden');
-    return { serviceId: 'agent', serviceKid: kid };
+    return { serviceId: 'agent', serviceKid };
   };
   const resolveServicePrincipal = ({ socket }) => {
+    const fingerprint = certificateFingerprint(socket?.getPeerCertificate?.()?.fingerprint256);
+    const serviceKid = [...servicePins].find(([_kid, allowed]) => allowed === fingerprint)?.[0];
     if (!socket?.encrypted || socket.authorized !== true || socket.destroyed ||
-        certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== pin) fail(403, 'run-service-forbidden');
-    currentService();
+        !serviceKid) fail(403, 'run-service-forbidden');
+    currentService(serviceKid);
     instanceTlsBinding(socket); // exporter is taken only from the real peer socket.
     let subject = sockets.get(socket);
     if (!subject) {
       const authenticationId = randomUUID();
-      subject = { service: 'agent', serviceKid: kid, authenticationId };
+      subject = { service: 'agent', serviceKid, authenticationId };
       sockets.set(socket, subject); subjects.set(authenticationId, socket);
       socket.once('close', () => { subjects.delete(authenticationId); sockets.delete(socket); handshakeNonces.delete(socket); });
     }
@@ -62,18 +73,19 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       const observed = assetInstanceAdapter.transportFor(subject);
       return { serviceId: observed.serviceId, serviceKid: observed.serviceKid };
     }
-    currentService();
+    currentService(subject?.serviceKid);
     const socket = subjects.get(subject?.authenticationId);
-    if (!socket || subject.service !== 'agent' || subject.serviceKid !== kid || socket.destroyed ||
-        socket.authorized !== true || certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== pin)
+    if (!socket || subject.service !== 'agent' || socket.destroyed ||
+        socket.authorized !== true || certificateFingerprint(socket.getPeerCertificate?.()?.fingerprint256) !== servicePins.get(subject.serviceKid))
       fail(403, 'run-service-forbidden');
-    return { serviceId: 'agent', serviceKid: kid };
+    return { serviceId: 'agent', serviceKid: subject.serviceKid };
   };
-  const instanceAuthority = createAgentInstanceAuthority({ ledger,
+  const instanceAuthority = createAgentInstanceAuthority({ ledger, scopeAuthority,
     verifyTransportInState(state, subject) {
       if (assetInstanceAdapter?.has(subject)) return assetInstanceAdapter.transportFor(subject);
       const service = verifyServiceInState(state, subject);
       return { ...service, authenticationId: subject.authenticationId,
+        fingerprint256: certificateFingerprint(subjects.get(subject.authenticationId)?.getPeerCertificate?.()?.fingerprint256),
         channelBinding: instanceTlsBinding(subjects.get(subject.authenticationId)) };
     } });
   const readControl = createAgentReadControl({ ledger, instanceAuthority,
@@ -112,10 +124,15 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         fail(403, 'run-control-mismatch');
       const doc = getDocAssembly(), service = getService();
       if (!doc || !service) fail(503, 'doc-agent-unavailable');
+      if (scopeAuthority && (persisted.kind === 'terminal' || persisted.revoked.length)) {
+        await scopeAuthority.closeDocControl({ controlId: persisted.controlId, docInstanceId, service, operationCoordinator: doc });
+        return { pending: true, controlId: persisted.controlId };
+      }
       // fencePrincipals installs logical/admission barriers and terminates owned
       // transports synchronously before its first await. Establish the read
       // barrier before operation recovery can yield to any cache/push callback.
-      const closing = persisted.revoked.length ? service.fencePrincipals({ runGrantIds: persisted.revoked, roles: ['agent'] }) : Promise.resolve(null);
+      const closingIds = persisted.kind === 'terminal' ? persisted.closing : persisted.revoked;
+      const closing = closingIds.length ? service.fencePrincipals({ runGrantIds: closingIds, roles: ['agent'] }) : Promise.resolve(null);
       const closingResult = closing.then(value => ({ value }), error => ({ error }));
       const operationReceipts = [];
       for (const fence of persisted.operationFences ?? []) operationReceipts.push(await doc.fence(fence));
@@ -127,7 +144,11 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         if (!current || current.payloadDigest !== persisted.payloadDigest || current.fenceRevision !== persisted.fenceRevision)
           fail(403, 'run-control-mismatch');
         const record = (state.docRunClosuresV2 ??= {})[control.controlId] ??= {
-          controlId: control.controlId, fenceRevision: control.fenceRevision, instances: {} };
+          controlId: control.controlId, payloadDigest: control.payloadDigest, fenceRevision: control.fenceRevision, instances: {} };
+        if (scopeAuthority) {
+          record.instances[docInstanceId] = { docInstanceId, operationReceipts, closed, state: 'closed', recordedAt: now() };
+          return;
+        }
         record.instances[docInstanceId] ??= { docInstanceId, operationReceipts, closed,
           // This is deliberately not a complete receipt or old-instance proof.
           complete: false, agentState: 'resource-closure-required', recordedAt: now() };
@@ -159,6 +180,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       await Promise.all(immediate);
       const controls = await runAuthority.synchronize();
       await Promise.all(controls.filter(matches).map(deliver));
+      // 任务在独立进程里跑时，这条控制要等 root 把进程关掉、这里读到关闭记录才办完。这里读一次：
+      // 已经关了就当场结清并回成功；还没关就照旧回「还在办」，调用方用同一个请求号再问。
+      if (scopeAuthority) await runAuthority.reconcileScopeClosures();
       const relevant = Object.values(ledger.read().runControlsV2 ?? {}).filter(matches);
       if (relevant.every(control => control.instances.length === 0 && control.retained.length === 0 && control.revoked.length === 0)) {
         const readClosed = await readControl.waitCompletion({ projectId: input.projectId, conversationId: input.conversationId });
@@ -177,7 +201,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     },
   });
   runAuthority = createRunAuthority({ ledger, conversationHooks: conversations.hooks,
-    verifyServiceInState, instanceAuthority, now, synchronize: () => runtime.authority.synchronize(),
+    verifyServiceInState, instanceAuthority, scopeAuthority, docInstanceId, now, synchronize: () => runtime.authority.synchronize(),
     async verifySender(ref, context) {
       const checked = await accountClient.verifyAcceptedMessage(ref, context);
       await runtime.authority.synchronize();
@@ -241,6 +265,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     try {
       claimNonce(handshakeNonces, req.socket, requestNonce);
       const principal = await runAuthority.resolveRunPrincipal({ servicePrincipal: { ...base, ...cap }, projectId, runGrantId });
+      if (scopeAuthority) ledger.transaction(state => {
+        ((state.runDocInstancesV1 ??= {})[runGrantId] ??= {})[docInstanceId] = { docInstanceId };
+      });
       initialNonces.set(req.socket, requestNonce);
       return { ...principal, servicePrincipal: base, userId: principal.accountId, tenantId: projectId,
         service: 'agent', scope: 'member' };
@@ -318,7 +345,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       return await dispatchContext.run({ principal, caps }, () => next(text, check));
     } finally { for (const cap of caps) instanceAuthority.release(cap.instanceSession); }
   }
-  const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, resolveServicePrincipal });
+  const instancesHandler = createAgentInstanceInternalHandler({ instanceAuthority, agentFingerprint256: pin, masterFingerprint256: masterPin, resolveServicePrincipal });
   function createRunAssetAuthentication({ assetFingerprint256, currentAsset } = {}) {
     if (assetInstanceAdapter) fail(503, 'run-assets-instance-already-bound');
     const adapter = createRunAssetsInstanceAdapter({ agentFingerprint256: pin, agentServiceKid: kid,
@@ -327,6 +354,9 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     const authenticateDirect = ({ transport, proof, method, path, operation, request }) => {
       assertInstanceDirectTransport(transport);
       const base = resolveServicePrincipal({ socket: transport.socket });
+      // 〔裁〕运行素材只给跑任务的身份用。开了「一条任务一个进程」以后这个入口还认得只做控制的主身份的证书，
+      // 这里先拒掉它，不等到后面按实例用途去拒。
+      if (base.serviceKid !== kid) fail(403, 'run-service-forbidden');
       const cap = instanceAuthority.authenticate({ servicePrincipal: base, method, path, operation, request, proof });
       return { servicePrincipal: { ...base, ...cap }, release: () => instanceAuthority.release(cap.instanceSession) };
     };
@@ -366,12 +396,12 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     } catch (error) { authority?.close(); assetInstanceAdapter?.close(); assetInstanceAdapter = null; throw error; }
   }
   const conversationsHandler = createConversationInternalHandler({ conversationAuthority: conversations,
-    agentFingerprint256: pin, requireReadControl: true, resolveDelegation: async ticket => {
+    agentFingerprint256: masterPin ?? pin, requireReadControl: true, resolveDelegation: async ticket => {
       currentService(); return runtime.resolveAgentDelegation(ticket);
     } });
   const readControlsHandler = createAgentReadControlHandler({ control: readControl, resolveServicePrincipal, instanceAuthority });
   const runsHandler = createRunInternalHandler({ runAuthority: provider, agentFingerprint256: pin,
-    resolveServicePrincipal,
+    masterFingerprint256: masterPin, requirePendingProof: Boolean(scopeAuthority), includeScopeControls: Boolean(scopeAuthority), resolveServicePrincipal,
     authenticateInvocation({ req, servicePrincipal, body, operation }) {
       const cap = instanceAuthority.authenticate({ servicePrincipal, method: req.method,
         path: new URL(req.url, 'https://internal.invalid').pathname, operation, request: body, proof: instanceRequestProof(req) });
@@ -384,19 +414,35 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
     issueRunTicket: () => fail(503, 'run-data-proof-unavailable'),
     async listPendingRuns({ servicePrincipal }) {
       await runtime.authority.synchronize(); verifyServiceInState(ledger.read(), servicePrincipal);
+      if (scopeAuthority) {
+        instanceAuthority.verifyInState(ledger.read(), servicePrincipal, { operation: 'pendingRuns', input: {} });
+        if (ledger.read().agentInstancesV2?.[servicePrincipal.instanceId]?.purpose !== 'control-only') fail(403, 'instance-purpose-forbidden');
+        for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
+        // 文档服务自己这一侧的连接没关完，终态和强制终态都签不出来。第一次没关成的（当时出错、进程重启过），
+        // 主服务每次来问时补做一遍；已经关过的不重复。
+        for (const control of Object.values(ledger.read().runControlsV2 ?? {}))
+          if (control.state === 'pending' && (control.kind === 'terminal' || control.revoked?.length) &&
+              ledger.read().docRunClosuresV2?.[control.controlId]?.instances?.[docInstanceId]?.state !== 'closed')
+            await deliver(control).catch(error => onDiagnostic({ code: error.code ?? 'run-control-pending', controlId: control.controlId }));
+        await runAuthority.reconcileScopeClosures();
+      }
       const state = ledger.read(), rows = [];
       for (const [projectId, group] of Object.entries(state.conversationsV2 ?? {})) {
         if (state.projects[projectId]?.status !== 'active' || state.projects[projectId].hosted?.agent !== true) continue;
         for (const conversation of Object.values(group)) if (conversation.messages.some(message => message.queueState === 'queued'))
           rows.push({ projectId, conversationId: conversation.id, queueRevision: conversation.queueRevision });
       }
-      return { conversations: rows };
+      return { conversations: rows, ...(scopeAuthority ? { scopeControls: runAuthority.listScopeControls({ servicePrincipal }) } : {}) };
     } });
   return { conversations, readControl, runProvider: provider, runHooks, deliver, createRunAssetAuthentication, mountRunAssets,
     transportAuthenticate, transportConnected, dispatchInvocation,
     async handleInternal(req, res) { return await runAssetsHandler?.(req, res) || await instancesHandler(req, res) || await readControlsHandler(req, res) ||
       await runsHandler(req, res) || await conversationsHandler(req, res); },
-    async start() { for (const control of await runAuthority.synchronize()) await deliver(control); },
+    async start() { for (const control of await runAuthority.synchronize()) await deliver(control);
+      if (scopeAuthority) {
+        for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
+        await runAuthority.reconcileScopeClosures();
+      } },
     async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); runAssets?.close(); assetInstanceAdapter?.close(); instanceAuthority.close(); subjects.clear();
       usedNonces.clear(); handshakeNonces.clear(); dispatchContext.disable(); transport.close(); },
   };
