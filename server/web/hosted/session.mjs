@@ -841,7 +841,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       if (focus.ok && focus.secret) return { ok: false, refused: 'credentials', typedChars, error: explainSecret(focus.secret) };
       return {
         ok: false, reason: 'focus_moved', typedChars,
-        error: `输入到一半,焦点已经不在这个输入框上了(页面把它挪走了,或者输入框没了),已经停下:后面的字没有输入,也没有按回车。已经输入了 ${typedChars} 个字。先 web_view 看看页面现在的样子。`,
+        error: `输入到一半,焦点已经不在这个输入框上了(页面把它挪走了,或者输入框没了),已经停下:后面的字没有输入,也没有按回车。停下之前已经发出 ${typedChars} 个字的按键。先 web_view 看看页面现在的样子。`,
       };
     };
     check(guard);
