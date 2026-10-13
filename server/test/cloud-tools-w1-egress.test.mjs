@@ -31,6 +31,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import dgram from 'node:dgram';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -234,7 +235,18 @@ test('W1-EGRESS-03 起浏览器时交给它的东西:管道、无头、白名单
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const gate = createEgressGate({ testAllow: ALLOW, resolve });
   const captured = [];
-  const fakePuppeteer = { launch: async (options) => { captured.push(options); throw new Error('stop here'); } };
+  // 换掉「起浏览器进程」那一步:记下交给它的命令行、选项,然后装作没起来
+  const spawnBrowser = (command, args, options) => {
+    captured.push({ command, args, options });
+    const fake = new EventEmitter();
+    fake.pid = undefined;
+    fake.stdio = [];
+    fake.exitCode = null;
+    fake.signalCode = null;
+    fake.kill = () => false;
+    setImmediate(() => fake.emit('error', new Error('stop here')));
+    return fake;
+  };
   const saved = { ...process.env };
   process.env.PROMPTCUT_AGENT_SECRET_FOR_TEST = 'FAKE-CREDENTIAL-DO-NOT-USE';
   process.env.HTTP_PROXY = 'http://corp-proxy.invalid:3128';
@@ -242,32 +254,33 @@ test('W1-EGRESS-03 起浏览器时交给它的东西:管道、无头、白名单
   process.env.AWS_SECRET_ACCESS_KEY = 'FAKE-CREDENTIAL-DO-NOT-USE';
   t.after(() => { for (const k of ['PROMPTCUT_AGENT_SECRET_FOR_TEST', 'HTTP_PROXY', 'HTTPS_PROXY', 'AWS_SECRET_ACCESS_KEY']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
   const chrome = await testChromePath();
-  for (const [exe, extraArgs] of [[chrome, ['--no-sandbox', '--proxy-server=http://evil.invalid:1', '--remote-debugging-port=9222']]]) {
-    await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's'), executablePath: exe, gate, limits: HOSTED_BROWSER_DEFAULTS, extraArgs, puppeteer: fakePuppeteer }), { code: 'launch-failed' });
-  }
+  const extraArgs = ['--no-sandbox', '--proxy-server=http://evil.invalid:1', '--remote-debugging-port=9222', '--headless=old', '--user-data-dir=/tmp/evil'];
+  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's'), executablePath: chrome, gate, limits: HOSTED_BROWSER_DEFAULTS, extraArgs, spawnBrowser }), { code: 'launch-failed' });
   const o = captured[0];
-  assert.equal(o.pipe, true, '用管道连,不开调试端口');
-  assert.equal(o.headless, isHeadlessShell(chrome) ? 'shell' : true, '只用无头');
-  assert.equal(o.executablePath, chrome);
-  assert.equal(o.userDataDir, path.join(dir, 's', 'profile'));
+  assert.equal(o.command, chrome);
+  assert.deepEqual(o.options.stdio, ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], '只有 3、4 号是管道:调试协议走它们');
+  assert.equal(o.args.filter((a) => a === '--remote-debugging-pipe').length, 1, '用管道连');
+  assert.ok(!o.args.some((a) => /^--remote-debugging-(port|address)/.test(a)), '不开调试端口');
+  assert.deepEqual(o.args.filter((a) => /^--headless/.test(a)), [isHeadlessShell(chrome) ? '--headless' : '--headless=new'], '只用无头,而且只有本模块定的那一个');
+  assert.deepEqual(o.args.filter((a) => a.startsWith('--user-data-dir=')), [`--user-data-dir=${path.join(dir, 's', 'profile')}`]);
+  assert.equal(o.options.cwd, path.join(dir, 's'));
   assert.deepEqual(o.args.slice(0, HOSTED_BROWSER_ARG_PREFIX.length), [...HOSTED_BROWSER_ARG_PREFIX]);
   assert.deepEqual([...HOSTED_BROWSER_ARG_PREFIX], [...TEST_CHROME_ARG_PREFIX], '打头的参数与探针用的是同一个');
   assert.equal(o.args.filter((a) => a.startsWith('--proxy-server=')).length, 1);
   assert.match(o.args.find((a) => a.startsWith('--proxy-server=')), /^--proxy-server=http:\/\/127\.0\.0\.1:\d+$/);
   assert.ok(o.args.includes('--no-sandbox'), '部署者追加的合规参数留着');
-  assert.ok(!o.args.some((a) => /remote-debugging|evil\.invalid|no-proxy-server/.test(a)), '改代理、开调试口的被丢掉');
-  assert.ok(!o.args.some((a) => /^--headless/.test(a)), '无头由 puppeteer 的选项定,不靠参数');
-  for (const key of Object.keys(o.env)) assert.doesNotMatch(key, /^PROMPTCUT_|PROXY|AWS_|SECRET|TOKEN|KEY$/i, `环境变量里不该有 ${key}`);
-  assert.equal(o.env.HOME, path.join(dir, 's'));
-  assert.ok(String(o.env.TEMP).startsWith(path.join(dir, 's')));
+  assert.ok(!o.args.some((a) => /evil|no-proxy-server/.test(a)), '改代理、换目录的被丢掉');
+  for (const key of Object.keys(o.options.env)) assert.doesNotMatch(key, /^PROMPTCUT_|PROXY|AWS_|SECRET|TOKEN|KEY$/i, `环境变量里不该有 ${key}`);
+  assert.equal(o.options.env.HOME, path.join(dir, 's'));
+  assert.ok(String(o.options.env.TEMP).startsWith(path.join(dir, 's')));
   // chrome-headless-shell 的文件名:自动用它那种无头
   const shell = path.join(dir, process.platform === 'win32' ? 'chrome-headless-shell.exe' : 'chrome-headless-shell');
   fs.writeFileSync(shell, 'not a real browser');
-  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's2'), executablePath: shell, gate, limits: HOSTED_BROWSER_DEFAULTS, puppeteer: fakePuppeteer }), { code: 'launch-failed' });
-  assert.equal(captured[1].headless, 'shell');
+  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's2'), executablePath: shell, gate, limits: HOSTED_BROWSER_DEFAULTS, spawnBrowser }), { code: 'launch-failed' });
+  assert.deepEqual(captured[1].args.filter((a) => /^--headless/.test(a)), ['--headless']);
   // 没配、不是文件
-  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's3'), executablePath: '', gate, limits: HOSTED_BROWSER_DEFAULTS, puppeteer: fakePuppeteer }), { code: 'browser-missing' });
-  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's3'), executablePath: dir, gate, limits: HOSTED_BROWSER_DEFAULTS, puppeteer: fakePuppeteer }), { code: 'browser-missing' });
+  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's3'), executablePath: '', gate, limits: HOSTED_BROWSER_DEFAULTS, spawnBrowser }), { code: 'browser-missing' });
+  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's3'), executablePath: dir, gate, limits: HOSTED_BROWSER_DEFAULTS, spawnBrowser }), { code: 'browser-missing' });
   assert.equal(captured.length, 2);
 });
 

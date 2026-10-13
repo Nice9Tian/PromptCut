@@ -5,12 +5,14 @@
  * 和桌面版(`server/web/browser.mjs`)不同的地方,都是因为它跑在别人的机器上、没人在旁边:
  *
  *   - **只用无头模式**,不开窗口;没有「挪到用户面前」这回事(网页接管是另一包)。
- *   - **用管道连浏览器**(`pipe: true`),不开调试端口:网页连不到调试口;Agent 服务进程一死,管道断开,浏览器自己退出,
+ *   - **用管道连浏览器**(`--remote-debugging-pipe`),不开调试端口:网页连不到调试口;Agent 服务进程一死,管道断开,浏览器自己退出,
  *     不会留下一个没人管的浏览器,也不存在「重启后接管旧浏览器」。
  *   - **出网只经本会话自己的代理**(`network.mjs`),其余的路在启动参数里堵上。
  *   - **环境变量按白名单重建**(`workspace.mjs` 的 `childEnv`):浏览器进程里没有 Agent 服务的任何配置与凭证,也没有系统代理变量。
  *   - **下载一律拒**;新开的标签页并回当前页;页面弹的对话框自动关掉(没人去点,不关会把页面卡死)。
- *   - **关闭要有证据**:记下浏览器整棵进程树的进程号,关的时候杀整棵树,再逐个核对进程号确实查不到了才算关掉。
+ *   - **浏览器进程自己起**(`server/agent/service/perception/runner.mjs` 的 `spawnTree`,和云端别的子进程同一套):非 Windows 上是一个进程组,
+ *     按组杀、按组核;puppeteer 只经管道说调试协议,不用它的启动器。
+ *   - **关闭要有证据**:杀整棵树之后,等主进程的退出与管道关闭,逐个核记下的进程号,非 Windows 上再核进程组空了(僵尸按已退算),才算关掉。
  *
  * 动作层(打开、看、点、输入、滚动、读)的页面逻辑复用桌面版 `server/web/session.mjs`、`view.mjs`、`hit.mjs`,
  * 清单的版本与「编号还指着原来那个元素吗」在 `view.mjs`、`hit.mjs`(本目录)里。
@@ -24,6 +26,7 @@ import path from 'node:path';
 import { VIEWPORT } from '../browser.mjs';
 import { read as desktopRead } from '../session.mjs';
 import { childEnv } from '../../agent/service/workspace.mjs';
+import { spawnTree, killTree, whenClosed, groupAlive } from '../../agent/service/perception/runner.mjs';
 import { startBrowserProxy, hostedNetworkArgs, filterExtraArgs, pageRequestAllowed, isWebUrl, admitWebTarget, egressRefusalText } from './network.mjs';
 import { captureHostedView, parseUid, PAGE_DATA_NOTICE } from './view.mjs';
 import { resolveAt, explain, locate, focusElement, clearElement, explainStale, explainSecret } from './hit.mjs';
@@ -91,15 +94,112 @@ export function killProcessTree(pid, child = null) {
   try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ } }
 }
 
-/** 等一组进程号都查不到;回还查得到的那些 */
+/**
+ * Linux:`/proc/<进程号>/stat` 里的状态字母与进程组号;读不到回 null。
+ * 进程名里可以有空格和括号,所以从最后一个 `)` 往后数:状态、父进程号、进程组号。
+ */
+export function procStat(pid, { procRoot = '/proc' } = {}) {
+  try {
+    const stat = fs.readFileSync(path.join(procRoot, String(pid), 'stat'), 'utf8');
+    const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const pgrp = Number(rest[2]);
+    return { state: rest[0] ?? '', pgrp: Number.isSafeInteger(pgrp) ? pgrp : null };
+  } catch { return null; }
+}
+
+/**
+ * 进程是不是还**活着**:查得到、而且不是僵尸。
+ * 僵尸是已经死了、只是还没被父进程收走的记录(不占内存、跑不了代码、发不了请求),按已退算。容器里 Agent 服务是 1 号进程又没有
+ * init 时,浏览器的子进程(zygote、渲染进程)被杀后会挂成 Agent 服务名下的僵尸,一直查得到——只看「查不查得到」就永远关不完。
+ */
+export function pidLive(pid, { platform = process.platform, procRoot = '/proc', alive = pidAlive } = {}) {
+  if (!alive(pid)) return false;
+  if (platform !== 'linux') return true;
+  const stat = procStat(pid, { procRoot });
+  return !(stat && (stat.state === 'Z' || stat.state === 'X'));
+}
+
+/**
+ * Linux:一个进程组里还活着(不是僵尸)的进程号。浏览器是进程组的组长,它起的 zygote、渲染、GPU、网络进程都在这个组里,
+ * 包括浏览器自己的进程表里列不出来的——所以「整棵树都退了」在 Linux 上看的是这个组空了没有。读不了 /proc 回 null(不知道)。
+ */
+export function liveGroupMembers(pgid, { procRoot = '/proc' } = {}) {
+  let names;
+  try { names = fs.readdirSync(procRoot); } catch { return null; }
+  const live = [];
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    const stat = procStat(Number(name), { procRoot });
+    if (stat && stat.pgrp === pgid && stat.state !== 'Z' && stat.state !== 'X') live.push(Number(name));
+  }
+  return live;
+}
+
+/**
+ * 浏览器这个进程组里还有没有活着的进程。Windows 没有进程组,回 null(那边靠逐个核进程号)。
+ * 先问系统「组还在不在」(`runner.mjs` 的 `groupAlive`:组里一个进程都没有时是 ESRCH);还在的话再排掉僵尸。
+ */
+export function browserGroupLive(pgid, { platform = process.platform, procRoot = '/proc', group = groupAlive } = {}) {
+  if (platform === 'win32' || !pgid) return null;
+  if (group(pgid, { platform }) === false) return false;
+  const live = liveGroupMembers(pgid, { procRoot });
+  // 读不了 /proc(macOS):组还在就当还活着,不假称退干净了
+  return live === null ? true : live.length > 0;
+}
+
+/** 等一组进程号都不再活着(僵尸按已退算);回还活着的那些 */
 export async function waitPidsGone(pids, timeoutMs) {
   const end = Date.now() + timeoutMs;
-  let left = [...new Set(pids)].filter(pidAlive);
+  let left = [...new Set(pids)].filter((pid) => pidLive(pid));
   while (left.length && Date.now() < end) {
     await sleep(50);
-    left = left.filter(pidAlive);
+    left = left.filter((pid) => pidLive(pid));
   }
   return left;
+}
+
+/**
+ * 经管道和浏览器说调试协议的传输层(交给 `puppeteer.connect({ transport })`):消息是 JSON,以 NUL 结尾。
+ * 浏览器由本文件自己起(`spawnTree`),不经 puppeteer 的启动器,所以这一小段也自己写。
+ */
+class PipeTransport {
+  /** @param {import('node:stream').Writable} write 浏览器的 3 号描述符(它从这里读命令) @param {import('node:stream').Readable} read 4 号(它往这里写) */
+  constructor(write, read) {
+    this.onmessage = null;
+    this.onclose = null;
+    this.closed = false;
+    this.write = write;
+    this.read = read;
+    let pending = [];
+    this.onData = (buffer) => {
+      if (this.closed) return;
+      pending.push(buffer);
+      if (buffer.indexOf(0) === -1) return;
+      const all = Buffer.concat(pending);
+      let start = 0;
+      for (let end = all.indexOf(0); end !== -1; end = all.indexOf(0, start)) {
+        const message = all.toString('utf8', start, end);
+        setImmediate(() => { if (!this.closed) this.onmessage?.call(null, message); });
+        start = end + 1;
+      }
+      pending = start >= all.length ? [] : [all.subarray(start)];
+    };
+    this.onEnd = () => { this.onclose?.call(null); };
+    read.on('data', this.onData);
+    read.once('close', this.onEnd);
+    read.on('error', () => {});
+    write.on('error', () => {});
+  }
+
+  send(message) {
+    if (this.closed || this.write.destroyed) return;
+    try { this.write.write(message); this.write.write('\0'); } catch { /* 浏览器已经没了 */ }
+  }
+
+  close() {
+    this.closed = true;
+    this.read.removeListener('data', this.onData);
+  }
 }
 
 /**
@@ -276,10 +376,11 @@ function keepInOneTab() {
  * @param {object} o.limits `HOSTED_BROWSER_DEFAULTS` 合并后的上限
  * @param {string[]} [o.argPrefix] 启动参数打头的(缺省 `HOSTED_BROWSER_ARG_PREFIX`)
  * @param {string[]} [o.extraArgs] 部署者追加的启动参数(沙箱等;会过滤掉改代理、开调试口的)
- * @param {object} [o.puppeteer] 测试可换
+ * @param {object} [o.puppeteer] 测试可换(要有 `defaultArgs` 与 `connect`)
+ * @param {typeof spawnTree} [o.spawnBrowser] 起浏览器进程的函数,测试可换
  * @param {(event: string, fields?: object) => void} [o.log]
  */
-export async function launchHostedSession({ sessionDir, executablePath, headless, gate, limits, argPrefix = HOSTED_BROWSER_ARG_PREFIX, extraArgs = [], puppeteer, log = () => {}, now = () => Date.now() }) {
+export async function launchHostedSession({ sessionDir, executablePath, headless, gate, limits, argPrefix = HOSTED_BROWSER_ARG_PREFIX, extraArgs = [], puppeteer, spawnBrowser = spawnTree, log = () => {}, now = () => Date.now() }) {
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响 */ } };
   if (typeof executablePath !== 'string' || !executablePath) throw new HostedSessionError('browser-missing', '这台节点没有配置浏览器');
   try { if (!fs.statSync(executablePath).isFile()) throw new Error('not a file'); } catch { throw new HostedSessionError('browser-missing', '这台节点没有配置浏览器'); }
@@ -296,8 +397,11 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
   const proxy = await startBrowserProxy({ gate, maxTunnels: limits.maxTunnels, log });
   const extra = filterExtraArgs(extraArgs);
   if (extra.dropped.length) say('agent.web.extra-args-dropped', { count: extra.dropped.length });
-  const args = [
-    ...argPrefix,
+  // 打头的参数与部署者追加的参数过同一道过滤
+  const prefix = filterExtraArgs(argPrefix);
+  if (prefix.dropped.length) say('agent.web.extra-args-dropped', { count: prefix.dropped.length });
+  let args = [];
+  const ownArgs = [
     ...hostedNetworkArgs(proxy.url),
     `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
     `--disk-cache-size=${limits.diskCacheBytes}`,
@@ -313,55 +417,53 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     ...extra.args,
   ];
 
+  // 浏览器由本文件自己起(`runner.mjs` 的 `spawnTree`:不弹窗口、不经 shell;非 Windows 上是新进程组的组长,
+  // 它起的 zygote、渲染、GPU、网络进程都在这个组里,按组杀、按组核),puppeteer 只负责经管道说调试协议。
   let browser;
+  let proc;
+  let transport = null;
   try {
     const pptr = puppeteer ?? (await import('puppeteer')).default;
-    browser = await pptr.launch({
-      headless: mode === 'shell' ? 'shell' : true,
-      executablePath,
-      userDataDir,
-      pipe: true,
-      args,
-      defaultViewport: { ...VIEWPORT },
-      env: childEnv(sessionDir),
-      handleSIGINT: false,
-      handleSIGTERM: false,
-      handleSIGHUP: false,
-      timeout: limits.launchMs,
-    });
+    const base = await pptr.defaultArgs({ headless: mode === 'shell' ? 'shell' : true, userDataDir, args: ownArgs });
+    args = [...prefix.args, ...base, '--remote-debugging-pipe'];
+    proc = spawnBrowser(executablePath, args, { cwd: sessionDir, env: childEnv(sessionDir), stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
+    const started = whenClosed(proc);
+    if (!proc.pid || !proc.stdio?.[3] || !proc.stdio?.[4]) throw new Error('browser did not start');
+    transport = new PipeTransport(proc.stdio[3], proc.stdio[4]);
+    browser = await withDeadline(Promise.race([
+      pptr.connect({ transport, defaultViewport: { ...VIEWPORT } }),
+      started.then(() => { throw new Error('browser exited during launch'); }),
+    ]), limits.launchMs, '起浏览器');
   } catch (err) {
+    if (proc?.pid) { killTree(proc); await Promise.race([whenClosed(proc), sleep(limits.closeMs)]); }
+    try { transport?.close(); } catch { /* 已经关了 */ }
     await proxy.close();
     say('agent.web.launch-failed', { message: String(err?.message ?? err).slice(0, 160) });
     throw new HostedSessionError('launch-failed', '云端的浏览器没能启动。请告诉用户联系托管方查看节点。');
   }
 
-  const proc = browser.process();
-  const browserPid = proc?.pid ?? null;
+  const browserPid = proc.pid;
   /** 浏览器进程树**此刻**的进程号(每次动作后刷新成最新的一份;不攒旧的——退掉的渲染进程的号可能已被系统分给别的进程) */
-  let pids = new Set(browserPid ? [browserPid] : []);
-  /**
-   * 杀整棵树。先按最近一份进程表逐个直接结束(立刻生效),再让系统按父子关系补杀一遍(兜住表里没有的):
-   * Windows 上后者(taskkill)在机器忙时要好几秒,不能只靠它。
-   */
-  /** 进程表里列不出来的帮手子进程(见 `childPidsOf`);随浏览器一起活,起来时记一次 */
+  let pids = new Set([browserPid]);
+  /** 进程表里列不出来的帮手子进程(见 `childPidsOf`,只有 Windows 上要记);随浏览器一起活,起来时记一次 */
   const helpers = new Set();
+  let exited = false;
+  /** 主进程 `exit` 与 `close`(管道也都关了)都到了 */
+  const gone = whenClosed(proc).then(() => { exited = true; });
+  const processGone = () => gone;
+  /**
+   * 杀整棵树。
+   * 非 Windows:`killTree` 按进程组杀(组长先退了、组里还有进程时照样按组杀)。
+   * Windows:没有进程组。先按最近一份进程表、加帮手进程,逐个直接结束(立刻生效),再用 `killTree`(taskkill 按父子关系)兜住表里没有的——
+   * 只靠 taskkill 不行:机器忙时它查进程树要好几秒,而且主进程一没它就找不到树了。
+   */
   const killAll = () => {
-    const mainAlive = pidAlive(browserPid);
     if (process.platform === 'win32') {
       for (const pid of new Set([...pids, ...helpers])) { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ } }
     }
-    // 主进程已经没了就不用再按树杀(按树杀要靠它的进程号);子进程上面逐个结束过了
-    if (mainAlive || process.platform !== 'win32') killProcessTree(browserPid, null);
+    killTree(proc);
+    return true;
   };
-  let exited = !proc;
-  let procClosed = !proc;
-  const exitWaiters = [];
-  const settleExit = () => { if (exited && procClosed) for (const w of exitWaiters.splice(0)) w(); };
-  proc?.once('exit', () => { exited = true; settleExit(); });
-  proc?.once('close', () => { procClosed = true; settleExit(); });
-  const processGone = () => (exited && procClosed ? Promise.resolve() : new Promise((resolve) => exitWaiters.push(resolve)));
-  // 运行资源登记器收回这一轮时调的是 kill():换成杀整棵树
-  if (proc) proc.kill = () => { killAll(); return true; };
 
   const state = {
     rev: readRev(sessionDir), // 清单版本(接着这个对话上一个浏览器的往下编)
@@ -707,7 +809,8 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
 
   /**
    * 关掉这个会话:浏览器整棵进程树退出、代理关掉;`removeProfile` 时连用户数据目录一起删。
-   * 回的是证据,不是「已发出关闭」:`exited` 为真当且仅当记下的每个进程号都查不到了。
+   * 回的是证据,不是「已发出关闭」:`exited` 为真当且仅当主进程的退出与管道关闭都到了、记下的每个进程号都不再活着、
+   * (非 Windows)浏览器那个进程组里也没有活着的进程了。
    *
    * @param {{ graceful?: boolean, removeProfile?: boolean, removeAll?: boolean, reason?: string }} [o]
    *   `graceful`:先让浏览器自己退(把 cookie 落盘);被收回授权时不给这个机会,直接杀。
@@ -728,7 +831,9 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       const known = [...new Set([...await refreshPids(), ...helpers])];
       state.closed = true;
       if (graceful && browser.connected !== false) {
+        // 请它自己退,并等它真的退(退之前它把 cookie 落盘);到时限还不退就杀
         try { await withDeadline(browser.close(), limits.gracefulCloseMs, '关浏览器'); } catch { /* 不肯退就杀 */ }
+        await Promise.race([processGone(), sleep(limits.gracefulCloseMs)]);
       }
       // 不管它自己退没退,记下的每个进程都直接结束一遍:主进程自己退了以后,子进程在忙的机器上要拖好几秒才跟着退
       killAll();
@@ -747,7 +852,17 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       let alive = await waitPidsGone(known, 1_500);
       for (const pid of alive) { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ } }
       if (alive.length) alive = await waitPidsGone(alive, limits.closeMs);
+      // 非 Windows:看浏览器那个进程组空了没有(进程表里列不出来的 zygote 之类也在组里;僵尸不算)。
+      // 组里还有活的(主进程退出时那一次按组清扫之后又冒出来的):组还有成员,组号就不会被别人用掉,可以再按组杀
+      let groupLive = browserGroupLive(browserPid);
+      const groupEnd = Date.now() + limits.closeMs;
+      while (groupLive === true && Date.now() < groupEnd) {
+        try { process.kill(-browserPid, 'SIGKILL'); } catch { /* 组里没有进程了 */ }
+        await sleep(100);
+        groupLive = browserGroupLive(browserPid);
+      }
       try { browser.disconnect(); } catch { /* 已经断了 */ }
+      try { transport.close(); } catch { /* 已经关了 */ }
       const proxyClosed = await proxy.close();
       let profileRemoved = false;
       let profileBytes = null;
@@ -761,9 +876,9 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
           say('agent.web.profile-over-limit', { bytes: profileBytes });
         }
       }
-      const exitedAll = alive.length === 0 && exited && procClosed;
+      const exitedAll = alive.length === 0 && exited && groupLive !== true;
       say('agent.web.closed', { reason, exited: exitedAll, processes: known.length, profileRemoved });
-      return { exited: exitedAll, pids: known, alivePids: alive, proxyClosed: proxyClosed.closed, profileRemoved, profileBytes };
+      return { exited: exitedAll, pids: known, alivePids: alive, groupLive, proxyClosed: proxyClosed.closed, profileRemoved, profileBytes };
     })();
     return state.closing;
   }
@@ -774,8 +889,8 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     mode,
     args,
     browserPid,
-    /** 浏览器主进程(交给运行资源登记器;它的 kill 已换成杀整棵树) */
-    process: proc,
+    /** 杀整棵进程树(同步发出;真退了没有看 `processGone` 与 `close()` 的回执) */
+    kill: killAll,
     proxy,
     /** 整棵进程树此刻的进程号(进程表里的,加帮手进程) */
     pids: () => [...new Set([...pids, ...helpers])],
@@ -788,7 +903,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     get busy() { return state.busy > 0; },
     get lastUsedAt() { return state.lastUsedAt; },
     /** 进程是不是已经真的退了(exit + close 都到) */
-    get processExited() { return exited && procClosed; },
+    get processExited() { return exited; },
     processGone,
     open, view, click, type, scroll, read, close,
   };

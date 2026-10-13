@@ -30,6 +30,7 @@
  * 本文件不引用 `src/`。中央的工具表、实例与接线不在这里(归最后的接线包)。
  */
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { admitWebTarget } from '../../web/hosted/network.mjs';
@@ -237,30 +238,61 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
         log,
         now,
       });
-      const entry = { key, projectId: scope.projectId, conversationId: scope.conversationId, dir, session, bound: new Map(), timer: null, retired: null };
+      const entry = { key, projectId: scope.projectId, conversationId: scope.conversationId, dir, session, bound: new Map(), pendingHandles: new Set(), timer: null, retired: null };
       if (closing) { await track(session.close({ graceful: false, reason: 'host-close' })); throw new HostedBrowserError('云端网页操作正在关闭。', { code: 'web-closed', status: 503 }); }
       sessions.set(key, entry);
       // 浏览器自己没了(崩溃、被系统杀):从表里摘掉并核一遍进程
-      session.processGone().then(() => { if (sessions.get(key) === entry) void retire(entry, { reason: 'exited', graceful: false }).catch(() => {}); });
+      session.processGone().then(() => {
+        // 进程真的没了:告诉登记器(它等的是 exit 与 close 两个事件),并把挂着的东西都摘掉
+        for (const ck of [...entry.bound.keys()]) release(entry, ck);
+        for (const handle of entry.pendingHandles) { handle.emit('exit'); handle.emit('close'); }
+        if (sessions.get(key) === entry) void retire(entry, { reason: 'exited', graceful: false }).catch(() => {});
+      });
       return entry;
     })();
     launching.set(key, task);
     try { return await task; } finally { launching.delete(key); }
   }
 
+  /** 把一个运行上下文从这个浏览器上摘下来:登记器那边当它已经关了(发 exit 与 close),本模块不再听那一轮的信号 */
+  function release(entry, ck) {
+    const bound = entry.bound.get(ck);
+    if (!bound) return;
+    entry.bound.delete(ck);
+    bound.registration.signal.removeEventListener('abort', bound.onAbort);
+    bound.handle.emit('exit');
+    bound.handle.emit('close');
+    bound.handle.removeAllListeners();
+  }
+
   /**
-   * 把浏览器进程挂到这一轮的运行资源上(每个「会话 × 运行上下文」挂一次)。
-   * 登记器在这一轮被收回时杀进程(整棵树)并打信号;这里听到信号就把会话收掉、等进程号真的查不到。
+   * 把浏览器挂到这一轮的运行资源上。登记器在这一轮被收回时调 `kill()`(杀整棵树)并打信号;这里听到信号就把会话收掉、等进程真的退出。
+   *
+   * 交给登记器的不是浏览器进程本身,而是每一轮一个的小把手:一个对话的浏览器跨很多轮,每一轮都往进程对象上挂监听的话只增不减。
+   * 同一个对话同一时刻只有一轮是当前的(换了新一轮,旧一轮的上下文过不了授权),所以新一轮挂上时把旧的摘掉。
    */
   async function bind(entry, context) {
     const ck = contextKey(context);
     const had = entry.bound.get(ck);
-    if (had) return had;
-    const registration = await resources.register(context, { kind: 'child', resource: entry.session.process });
+    if (had) return had.registration;
+    const handle = new EventEmitter();
+    handle.kill = () => entry.session.kill();
+    // 登记被拒时(这一轮已经被收回)登记器会调 kill() 并一直等到 exit 与 close:所以把手要先记下,进程一没就能通知到它
+    entry.pendingHandles.add(handle);
+    let registration;
+    try { registration = await resources.register(context, { kind: 'child', resource: handle }); }
+    catch (error) {
+      // 登记器已经把浏览器杀了:把这个会话收掉
+      void retire(entry, { reason: 'fence', graceful: false, removeProfile: false }).catch(() => {});
+      throw error;
+    }
+    finally { entry.pendingHandles.delete(handle); }
     const onAbort = () => { void retire(entry, { reason: 'fence', graceful: false, removeProfile: false }).catch(() => {}); };
+    for (const other of [...entry.bound.keys()]) release(entry, other);
+    entry.bound.set(ck, { registration, handle, onAbort });
+    if (entry.session.processExited) release(entry, ck);
     if (registration.signal.aborted) onAbort();
     else registration.signal.addEventListener('abort', onAbort, { once: true });
-    entry.bound.set(ck, registration);
     return registration;
   }
 
