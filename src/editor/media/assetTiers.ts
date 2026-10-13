@@ -15,6 +15,7 @@
  *
  * 集合里带一个标记(`TIERS_KNOWN_LOCAL` / `TIERS_KNOWN_REMOTE`):「问过了、一个都没到齐」和「还没问过」分得开。
  */
+import { withoutConfirmedMissing } from "../../audio/missingMaterialRecord";
 import { useSyncExternalStore } from "react";
 import type { Project } from "../../kernel/project";
 import { getState, subscribe } from "../../store/project";
@@ -347,7 +348,9 @@ export function startAssetTiers(): () => void {
  * 导出前问一遍当前素材服务:时间轴上用到的素材原尺寸哪些还没 `complete`(A1「导出只用素材原尺寸」「等待上传方」)。
  * 空数组 = 可以导出。
  */
-export async function exportGate(project: Project): Promise<MissingOriginal[]> {
+export async function exportGate(source: Project): Promise<MissingOriginal[]> {
+  // 认定过「确认缺失」的素材不会再到齐:不拦,导出时照原位置出占位
+  const project = withoutConfirmedMissing(source);
   const first = missingOriginals(project, []);
   if (!first.length) return [];
   const got = await askComplete(first.map((m) => m.hash));
@@ -358,7 +361,7 @@ export async function exportGate(project: Project): Promise<MissingOriginal[]> {
 /** 不发请求的快速判断:按轮询到的集合。还没问过给 null(不知道) */
 export function exportGateNow(project: Project): MissingOriginal[] | null {
   if (!known) return null;
-  return missingOriginals(project, complete);
+  return missingOriginals(withoutConfirmedMissing(project), complete);
 }
 
 /* ---------------- 共享项目 ---------------- */

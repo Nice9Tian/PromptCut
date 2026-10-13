@@ -4,8 +4,8 @@
  *
  *   CT-01 全部内置卡(`src/cards/index.ts` 注册的四组)在表里三样登记全:哪种写法、画在什么上、依不依赖下层
  *   CT-02 写法以卡的声明为准:表里登记的值和声明对不上算错
- *   CT-03 画在什么上和卡的声明不打架(画布契约、有没有画面),旧字段 `canvasHeavy` 和 `surface` 一致
- *   CT-04 表里没有多余的键、没有会盖过声明的 `frameMode`、没有对不上任何卡的条目
+ *   CT-03 画在什么上和卡的声明不打架(画布契约、有没有画面);是不是画布卡由 `surface` 推出,表里不写 `canvasHeavy`
+ *   CT-04 表里没有多余的键(含 `frameMode`:写法只取声明,登记用 `writing`)、没有对不上任何卡的条目
  *   CT-05 两处读表的地方(`src/kernel/frameMode.mjs`、`server/vision-project.mjs`)读到同一份,都带得出新字段
  *   CT-06 新字段不进卡片身份的摘要:`cardCapabilities` 的返回仍只有原来五项,取值和登记的一致
  *   CT-07 `src/cards/index.ts` 注册的还是这四组(多了一组,本测试枚举不到,要跟着改)
@@ -17,14 +17,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadBuiltinCards, BUILTIN_CARD_GROUPS } from "../testing/loadBuiltinCards.mjs";
-import { reviewedCard, cardCapabilities, cardFrameMode, normalizeFrameMode, DERIVED_FROM_PARTS } from "../kernel/frameMode.mjs";
+import { reviewedCard, reviewedCanvas, cardCapabilities, cardFrameMode, normalizeFrameMode, DERIVED_FROM_PARTS } from "../kernel/frameMode.mjs";
 import { reviewedCapabilities, reviewedClassification, CARD_WRITINGS, CARD_SURFACES, CANVAS_SURFACES, REVIEWED_COMPOSITING, CARD_COMPOSITINGS } from "../../server/vision-project.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const TABLE = JSON.parse(fs.readFileSync(path.join(ROOT, "src/cards/capabilities.json"), "utf8"));
 
-/** 表里每条允许出现的字段。`canvasHeavy` 是旧字段:`frameMode.mjs` 运行时还在读它,必须和 `surface` 一致(见 capabilities.md) */
-const ENTRY_KEYS = ["writing", "surface", "compositing", "canvasHeavy"];
+/** 表里每条允许出现的字段。是不是画布卡由 `surface` 推出(`frameMode.mjs` 的 `reviewedCanvas`),旧字段 `canvasHeavy` 不许再写 */
+const ENTRY_KEYS = ["writing", "surface", "compositing"];
 /** 登记成「故意不审」的卡:探针要它们的轴三保持未知。别的卡不许写 `unknown` */
 const DELIBERATELY_UNKNOWN = ["r6-unknown", "probe-css", "probe-motion-js"];
 /** 表里有、却不在内置四组里的键:随仓库带的那张 `src/cards/user/` 下的卡。新增这样的键要在这里写明 */
@@ -50,9 +50,9 @@ const hasPicture = (def) => typeof def.Component === "function" || typeof def.ca
  *   unregistered  内置卡不在表里
  *   incomplete    三样缺一样,或取值不认识
  *   writing       表里的写法和卡的声明对不上
- *   surface       画在什么上和卡的声明打架,或 `canvasHeavy` 和 `surface` 不一致
+ *   surface       画在什么上和卡的声明打架
  *   compositing   写了这张卡不该写的记号(`unknown` / `fromParts`)
- *   extra-field   条目里有不认识的字段(含会盖过声明的 `frameMode`)
+ *   extra-field   条目里有不认识的字段(含 `frameMode`:写法只取卡的声明;含旧字段 `canvasHeavy`:由 `surface` 推出)
  *   dead-key      表里的键对不上任何内置卡,也不在已知的例外里
  */
 function checkCardTable(table, cards, { keysOutsideBuiltin = KEYS_OUTSIDE_BUILTIN } = {}) {
@@ -62,16 +62,13 @@ function checkCardTable(table, cards, { keysOutsideBuiltin = KEYS_OUTSIDE_BUILTI
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) { report("incomplete", key, "条目不是对象"); continue; }
     for (const field of Object.keys(entry)) if (!ENTRY_KEYS.includes(field)) {
       report("extra-field", key, field === "frameMode"
-        ? "表里不许写 frameMode:frameMode.mjs 读到它会盖过卡的声明;写法登记在 writing"
+        ? "表里不许写 frameMode:写法只取卡的声明,表里写了也没人读;写法登记在 writing"
+        : field === "canvasHeavy" ? "表里不许再写 canvasHeavy:是不是画布卡由 surface 推出(canvas2d / webgl)"
         : `不认识的字段 ${field}`);
     }
     if (!Object.hasOwn(CARD_WRITINGS, entry.writing)) report("incomplete", key, `writing 缺了或不认识:${JSON.stringify(entry.writing)}`);
     if (!CARD_SURFACES.includes(entry.surface)) report("incomplete", key, `surface 缺了或不认识:${JSON.stringify(entry.surface)}`);
     if (!CARD_COMPOSITINGS.includes(entry.compositing)) report("incomplete", key, `compositing 缺了或不认识:${JSON.stringify(entry.compositing)}`);
-    if (Object.hasOwn(entry, "canvasHeavy") && entry.canvasHeavy !== true) report("surface", key, "canvasHeavy 只许写 true 或不写");
-    if (CARD_SURFACES.includes(entry.surface) && (entry.canvasHeavy === true) !== CANVAS_SURFACES.includes(entry.surface)) {
-      report("surface", key, `canvasHeavy(${entry.canvasHeavy === true})和 surface(${entry.surface})不一致:画布卡两处都要写`);
-    }
   }
   for (const def of cards) {
     const id = def.id, hit = lookup(table, id);
@@ -122,7 +119,10 @@ test("CT-05 两处读表的地方读到同一份,都带得出新字段;通配照
   const ids = [...kit.cards.map((c) => c.id), ...Object.keys(TABLE), "no-such-card", "particles", "particles-", "particlesX"];
   for (const id of ids) assert.deepEqual(reviewedCapabilities(id), reviewedCard(id), `${id}:Node 侧和 frameMode.mjs 查到的条目不同`);
   // frameMode.mjs:条目原样带出,新字段读得到
-  assert.deepEqual(reviewedCard("scene-3d"), { writing: "motion", surface: "webgl", compositing: "independent", canvasHeavy: true });
+  assert.deepEqual(reviewedCard("scene-3d"), { writing: "motion", surface: "webgl", compositing: "independent" });
+  // 是不是画布卡:由 surface 推出;表里没有的卡给 undefined
+  assert.deepEqual(["scene-3d", "particles", "particles-snow", "r6-canvas", "odometer", "sound-keyboard", "no-such-card"].map(reviewedCanvas), [true, true, true, true, false, false, undefined]);
+  for (const id of ids) assert.equal(reviewedCanvas(id), reviewedClassification(id)?.canvas, `${id}:两处判画布卡不一致`);
   assert.equal(reviewedCard("caption-track").writing, "remotion");
   assert.equal(reviewedCard("sound-keyboard").surface, "none");
   // 通配:`particles-*` 配 `particles-xxx`,不配 `particles`(它单列),也不配别的前缀
@@ -221,13 +221,13 @@ test("CT-10 夹具:三样缺一样、或取值不认识 → 报 incomplete", () 
 
 test("CT-11 夹具:不该写的值 → 各自报出来", () => {
   const run = (edit) => { const table = copy(TABLE); edit(table); return checkCardTable(table, kit.cards); };
-  // 会盖过声明的 frameMode、不认识的字段
+  // 表里写 frameMode(没人读,写法只取声明)、不认识的字段
   assert.deepEqual(run((t) => { t.odometer.frameMode = "stateful"; }).map((p) => [p.code, p.id]), [["extra-field", "odometer"]]);
   assert.deepEqual(run((t) => { t.odometer.note = "x"; }).map((p) => [p.code, p.id]), [["extra-field", "odometer"]]);
-  // 画布卡两处要一致
-  assert.deepEqual(run((t) => { delete t["scene-3d"].canvasHeavy; }).map((p) => [p.code, p.id]), [["surface", "scene-3d"]]);
-  assert.deepEqual(run((t) => { t.odometer.canvasHeavy = true; }).map((p) => [p.code, p.id]), [["surface", "odometer"]]);
-  assert.deepEqual(run((t) => { t.odometer.canvasHeavy = false; }).map((p) => [p.code, p.id]), [["surface", "odometer"]]);
+  // 旧字段 canvasHeavy 不许再写(写 true、写 false 都报):是不是画布卡由 surface 推出
+  assert.deepEqual(run((t) => { t["scene-3d"].canvasHeavy = true; }).map((p) => [p.code, p.id]), [["extra-field", "scene-3d"]]);
+  assert.deepEqual(run((t) => { t.odometer.canvasHeavy = true; }).map((p) => [p.code, p.id]), [["extra-field", "odometer"]]);
+  assert.deepEqual(run((t) => { t.odometer.canvasHeavy = false; }).map((p) => [p.code, p.id]), [["extra-field", "odometer"]]);
   // 和卡自己的声明打架:three 契约的卡登记成 2D 画布、粒子卡登记成 WebGL、有画面的卡登记成没有画面、只有声音的卡登记成 DOM
   assert.deepEqual(codesFor(run((t) => { t["scene-3d"].surface = "canvas2d"; }), "scene-3d"), ["surface"]);
   assert.deepEqual(codesFor(run((t) => { t.particles.surface = "webgl"; }), "particles"), ["surface"]);

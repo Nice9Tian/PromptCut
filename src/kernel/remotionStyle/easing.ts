@@ -87,9 +87,27 @@ function steps(count: number, atEnd = true): EasingFn {
   };
 }
 
+/** `p` 的 `n` 次方（`poly(2)` 就是 `quad`，`poly(4)` 就是 `quart`） */
+function poly(n: number): EasingFn {
+  if (typeof n !== "number" || !Number.isFinite(n)) {
+    throw new Error(`Easing.poly 的次数要是一个数，收到 ${describe(n)}。写法：\`Easing.poly(4)\`，等于 \`Easing.quart\`。`);
+  }
+  return (p) => Math.pow(p, n);
+}
+
+/** 报错里把收到的值写成人看得懂的样子 */
+function describe(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || value == null || typeof value === "boolean") return String(value);
+  return Array.isArray(value) ? "数组" : typeof value === "function" ? "函数" : "对象";
+}
+
 /**
  * 缓动曲线的全集。基础曲线（`quad`、`cubic`……）都是「起步慢」的形状，用 `Easing.out(...)`、`Easing.inOut(...)` 换方向；
  * 最常用的三条另有现成的名字 `easeIn`、`easeOut`、`easeInOut`（三次曲线）。
+ *
+ * 另有四个照 Remotion 的名字起的别名：`circle` 就是 `circ`，`exp` 就是 `expo`（同一个函数）；
+ * `ease` 是三次贝塞尔 `(0.42, 0, 1, 1)`，起步慢，和上面三条三次曲线不是一回事；`poly(n)` 是 `p` 的 `n` 次方。
  */
 export const Easing = Object.freeze({
   linear,
@@ -110,4 +128,8 @@ export const Easing = Object.freeze({
   easeIn: cubic,
   easeOut: easeOutOf(cubic),
   easeInOut: easeInOutOf(cubic),
+  circle: circ,
+  exp: expo,
+  ease: bezier(0.42, 0, 1, 1),
+  poly,
 });

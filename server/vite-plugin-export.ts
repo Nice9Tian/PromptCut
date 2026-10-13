@@ -1,3 +1,4 @@
+import { confirmedMissing } from "../src/audio/missingMaterialRecord";
 import type { Plugin, ViteDevServer, Connect } from "vite";
 import type { ServerResponse } from "http";
 import path from "path";
@@ -87,6 +88,10 @@ export async function normalizeExportMedia(
   const exists = opts.exists ?? (async (file: string) => { try { await fs.access(file); return true; } catch { return false; } });
   for (const m of project.media) {
     if (!m || typeof m !== "object") continue;
+    // 认定过「确认缺失」的素材不改地址、也不跳过:画面与声音的占位核对记录与素材的地址逐字相同(src/audio/missingMaterial.ts),
+    // 导出时这些片段照原位置出占位,不去读它的文件。
+    // 判定与画面、声音那一侧用同一个函数(记录与素材的类别、名字、地址、哈希都对得上才算)
+    if (confirmedMissing(m) && m.url) continue;
     const hash = originalHashOf(m);
     if (hash) {
       const url = String(m.url || "");

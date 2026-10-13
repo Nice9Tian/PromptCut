@@ -8,7 +8,8 @@ import { restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
-import { currentAssociation, noteLoadedAssociation, type CollaborationDescriptor } from "../sync/recoveryAssociation";
+import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom } from "../sync/recoveryAssociation";
+import { UNSUPPORTED_PROC_TEXT } from "../sync/recoveryTexts";
 
 /**
  * 存盘时给项目盖一个「这是 SKILL 模式下的产物」的戳。不在 SKILL 模式就不写这一段。
@@ -81,6 +82,8 @@ export interface ProcFile {
   snapshots?: string;
   /** Stable room association only. Authentication stays on each device. */
   collaboration?: CollaborationDescriptor;
+  /** 这个本地项目是从哪个已不存在的云端项目转来的（只供提示与追溯，不是协作关联；见 `recoveryAssociation.ts`） */
+  convertedFrom?: ConvertedFrom;
 }
 
 /** 当前项目 → .proc 文本 */
@@ -98,6 +101,7 @@ export function serializeProc(thumbnail: string | null = null): string {
     skill: skillStamp(),
     cards: cards.length ? cards : undefined,
     collaboration: currentAssociation() ?? undefined,
+    convertedFrom: convertedFromOf(project) ?? undefined,
   };
   return JSON.stringify(doc, null, 2);
 }
@@ -124,6 +128,10 @@ export interface ParseProcOptions {
 /** .proc 文本 → Project。旧的裸 Project JSON 也认 */
 export function parseProc(text: string, opts: ParseProcOptions = {}): Project {
   const doc = JSON.parse(text);
+  // 更新的格式版本不硬读：读得进来也可能悄悄丢掉这一版不认识的字段，再保存就把它们抹了。报错，原文件不动。
+  if (doc?.format === PROC_FORMAT && !(Number.isSafeInteger(doc.version) && doc.version >= 1 && doc.version <= PROC_VERSION)) {
+    throw new Error(UNSUPPORTED_PROC_TEXT(doc.version));
+  }
   const project = doc?.format === PROC_FORMAT ? doc.project : doc;
   if (!project || typeof project !== "object" || !Array.isArray(project.tracks)) {
     throw new Error("这不是一个 PromptCut 项目文件");
@@ -159,8 +167,11 @@ export function loadProc(text: string, opts: ParseProcOptions = {}): Project {
   } catch {
     /* parseProc 已经验过一遍,走到这儿说明是裸 Project,没有 ai 段 */
   }
+  // 先把会抛错的校验都做完,再动任何东西:协作关联写坏了的文件要报错,不能先把当前项目的剧本和对话换掉再报
+  checkAssociation(doc?.collaboration);
   applyProjectAi(doc?.ai ?? null);
   noteLoadedAssociation(project, doc?.collaboration);
+  noteConvertedFrom(project, doc?.convertedFrom);
   restoreSnapshots(project, doc?.snapshots);
   // 项目里带的定制卡装回本机。不等它:装完 vite 热更新,卡自己出现在舞台和卡库里
   if (doc) void restoreProjectCards(bundledCardsOf(doc), project.id ?? null);
@@ -226,6 +237,8 @@ let saveTarget: FileSystemFileHandle | null = null;
 export function forgetSaveTarget(): void {
   saveTarget = null;
 }
+// 过期的云端项目转成本地项目之后,原文件保留:下次保存重新问落点,不覆盖它
+onGoneConversion(() => forgetSaveTarget());
 
 export type SaveOutcome =
   | { kind: "saved"; where: string }

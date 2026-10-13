@@ -1,6 +1,9 @@
 import { actions, getState, subscribe } from "../../store/project";
 import type { MediaAsset } from "../../kernel/project";
 import { isViewOnly } from "./viewOnly";
+import { confirmedMissing } from "../../audio/missingMaterialRecord";
+import { publishMissingMaterials, type MissingMaterialNotice } from "./missingMaterialBus";
+import { onGoneConversion } from "../sync/recoveryAssociation";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线浏览器模式没有本机内容库与转码:
@@ -92,16 +95,37 @@ export async function uploadMediaFile(file: File): Promise<UploadedMedia | null>
  * 失败给 null,那条素材就按没有 hash 的迁移期素材走(仍然能按文件名播)。
  */
 export async function adoptServerMedia(filePath: string): Promise<UploadedMedia | null> {
-  if (ONLINE_BUILD) return null;
+  return (await adoptServerMediaVerdict(filePath)).up;
+}
+
+/**
+ * 编辑器进程对「这个文件取不取得到」的回答,只有两种算明确的「没有」:
+ * - `absent`:404,确实没有这个文件(以及落到页面回退的 html);
+ * - `outside`:403 且带 `X-PC-Media-Verdict: outside`,路径不在素材目录里,这个接口永远不会给(另一台机器上的路径多半如此)。
+ * 其余一律 `unsure`:别的 403、5xx、限速、请求本身出错 —— 没读成不等于不存在,不据此认定缺失。
+ */
+export type MediaVerdict = "found" | "absent" | "outside" | "unsure";
+export function mediaVerdictOf(res: { ok: boolean; status: number; headers: { get(name: string): string | null } }): MediaVerdict {
+  if (res.ok) return HTML_TYPE.test(res.headers.get("content-type") || "") ? "absent" : "found";
+  if (res.status === 404) return "absent";
+  if (res.status === 403 && res.headers.get("x-pc-media-verdict") === "outside") return "outside";
+  return "unsure";
+}
+const HTML_TYPE = new RegExp("text/html", "i");
+
+/** 同 adoptServerMedia,另带判词:没拿到时分得清是「没有」还是「说不清」 */
+export async function adoptServerMediaVerdict(filePath: string): Promise<{ up: UploadedMedia | null; verdict: MediaVerdict }> {
+  if (ONLINE_BUILD) return { up: null, verdict: "unsure" };
   try {
     const res = await fetch(`/api/media/adopt?path=${encodeURIComponent(filePath)}&tiers=1`, { method: "POST" });
     if (!res.ok) {
       console.warn(`[io] 补算素材哈希失败(HTTP ${res.status}): ${filePath}`);
-      return null;
+      const verdict = mediaVerdictOf(res);
+      return { up: null, verdict: verdict === "found" ? "unsure" : verdict };
     }
     const data = await res.json();
-    if (!data?.ok || typeof data.hash !== "string") return null;
-    return {
+    if (!data?.ok || typeof data.hash !== "string") return { up: null, verdict: "unsure" };
+    return { verdict: "found", up: {
       hash: data.hash,
       ext: String(data.ext || ""),
       name: String(data.name || ""),
@@ -110,10 +134,10 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
       bytes: Number(data.bytes) || 0,
       deduped: !!data.deduped,
       ...tiersOf(data),
-    };
+    } };
   } catch (err) {
     console.warn(`[io] 补算素材哈希异常: ${filePath}`, err);
-    return null;
+    return { up: null, verdict: "unsure" };
   }
 }
 
@@ -209,7 +233,8 @@ export async function backfillSmallTiers(project = getState().project): Promise<
   if (ONLINE_BUILD || isViewOnly()) return 0; // 在线页面没有本机转码;只读页面不改项目
   const want: { mediaId: string; hash: string; name: string }[] = [];
   for (const m of project.media ?? []) {
-    if (m.kind !== "video" || m.pending || m.tiers?.small) continue;
+    // 认定过「确认缺失」的不问:内容库里没有它,转不出小尺寸
+    if (m.kind !== "video" || m.pending || m.tiers?.small || confirmedMissing(m)) continue;
     const hash = String(m.tiers?.original ?? m.hash ?? "").toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(hash) || backfillAsked.has(hash)) continue;
     backfillAsked.add(hash);
@@ -255,11 +280,15 @@ export function startTierBackfill(hooks: BackfillHooks = {}): () => void {
   const myImportHook = hooks.afterImport ?? null;
   importHook = myImportHook;
   const background = async () => {
-    // 本机取不到文件的标「(缺失)」(共享项目里不标,见 BackfillHooks.shared)
-    const local = !hooks.shared?.();
-    const r = await ingestUnhashedMedia({ background: true, markMissing: local });
+    // 本机取不到文件的标「(缺失)」。只在本机项目里判:共享项目里不标(见 BackfillHooks.shared);还带着协作关联、只是没连上的
+    // (断网、要认证、等主机)也不判 —— 那时只在远端有的素材本机没有是常态,判了还会随重连同步给所有成员(见 BackfillHooks.associated)。
+    // 检查中途项目变了(换了项目、连上了、进了云端项目)就停手,不把这一轮的结论写进去。
+    const local = () => !hooks.shared?.() && !hooks.associated?.();
+    const started = loadMark();
+    const allowed = () => local() && sameLoad(started);
+    const r = await ingestUnhashedMedia({ background: true, markMissing: local(), allowed });
     // 带哈希、本地内容库里却没有的(另一台机器存的 .proc)同样标;共享项目里本机没有是常态,不判
-    if (local) await checkHashedMedia();
+    if (allowed()) await checkHashedMedia({ allowed });
     await hooks.afterIngest?.(r);
   };
   let lastMedia: unknown = null;
@@ -275,8 +304,18 @@ export function startTierBackfill(hooks: BackfillHooks = {}): () => void {
   };
   const unsub = subscribe(check);
   check();
-  return () => { unsub(); if (timer) clearTimeout(timer); if (importHook === myImportHook) importHook = null; };
+  // 过期的云端项目刚转成本地项目:素材表没换(内容原样),但它现在是本机项目了,重新判一遍
+  const again = () => { lastMedia = null; ingestBackgroundFailed.clear(); check(); };
+  recheckers.add(again);
+  return () => { recheckers.delete(again); unsub(); if (timer) clearTimeout(timer); if (importHook === myImportHook) importHook = null; };
 }
+
+const recheckers = new Set<() => void>();
+onGoneConversion(() => { for (const again of [...recheckers]) again(); });
+
+/** 这一刻载入的是哪个项目(`loadProject` 每次加一);后台检查跨着几次请求,回来时用它看项目换没换 */
+const loadMark = () => ({ token: getState().projectLoadToken, id: getState().project.id });
+const sameLoad = (mark: ReturnType<typeof loadMark>) => getState().projectLoadToken === mark.token && getState().project.id === mark.id;
 
 /* ---------------- 补入库:没有哈希、但本机还取得到字节的老素材 ---------------- */
 
@@ -340,20 +379,25 @@ function uploadNameOf(m: Pick<MediaAsset, "name" | "path">): string {
 
 /**
  * 补一条:能 adopt 就 adopt,不行再取字节上传。都不行 `up` 为 null。
- * `unreachable`:每个读地址都明确答了「没有」(非 2xx,或落到页面回退) —— 本机确实取不到这个文件;
- * 取到了字节但上传失败、或请求本身出错(编辑器进程不在)的不算,那时说不清文件在不在。
+ * `unreachable`:每条路径、每个读地址都**明确**答了「没有」(判词见 `mediaVerdictOf`:404、落到页面回退、路径不在素材目录里)
+ * —— 本机确实取不到这个文件;别的非 2xx(没权限、5xx、限速)、取到了字节但上传失败、请求本身出错(编辑器进程不在)都不算,
+ * 那时说不清文件在不在。
  */
 async function ingestOne(m: MediaAsset): Promise<{ up: UploadedMedia | null; unreachable: boolean }> {
   const { paths, urls } = localSourcesOf(m);
-  for (const p of paths) {
-    const up = await adoptServerMedia(p);
-    if (up) return { up, unreachable: false };
-  }
   let unsure = false;
+  for (const p of paths) {
+    const { up, verdict } = await adoptServerMediaVerdict(p);
+    if (up) return { up, unreachable: false };
+    if (verdict === "unsure") unsure = true;
+  }
   for (const u of urls) {
     try {
       const res = await fetch(u);
-      if (!res.ok) continue;
+      const verdict = mediaVerdictOf(res);
+      // 明确没有(404、页面回退、路径不在素材目录里):看下一个地址;别的失败是没读成,说不清
+      if (verdict === "unsure") { unsure = true; continue; }
+      if (verdict !== "found") continue;
       // 兜底:落到页面回退(index.html)的不是素材
       if (/text\/html/i.test(res.headers.get("content-type") || "")) continue;
       unsure = true; // 字节取到了:文件在,只是没入上库
@@ -380,6 +424,11 @@ export interface IngestResult {
  * 这里不直接引同步层:`syncManager` 在 Node 单测里加载不了,也免得 io 反过来依赖 sync。
  */
 export interface BackfillHooks {
+  /**
+   * 这个文件是不是还带着协作关联(连没连上都算)。带着就不认定缺失:没连上时本机没有远端的素材是常态,
+   * 认定了会写进待同步的内容,重连后发给所有成员。
+   */
+  associated?: () => boolean;
   /** 当前是不是共享项目。共享项目里不给素材标「(缺失)」:取不取得到是这台机器的事,不该同步给别的成员 */
   shared?: () => boolean;
   /** 后台补入库做完之后(放云端时把补上哈希的交给上传队列、补不上的列给用户) */
@@ -405,9 +454,12 @@ const ingestBackgroundFailed = new Set<string>();
  * (`mediaUrls.ts` 的 restoreMediaUrls;空地址的素材预览和导出都跳过,不再拿一个打不开的地址去等)。`path` 留着,
  * 换回有这个文件的机器、或文件放回原处后,下一次补入库照样补得上(补上时去掉标记)。
  */
-export async function ingestUnhashedMedia(opts: { background?: boolean; markMissing?: boolean } = {}): Promise<IngestResult> {
+export async function ingestUnhashedMedia(opts: { background?: boolean; markMissing?: boolean; allowed?: () => boolean } = {}): Promise<IngestResult> {
   const out: IngestResult = { ingested: [], failed: [] };
   if (ONLINE_BUILD || isViewOnly()) return out;
+  // 等请求的那一阵项目可能换了:回来再认定缺失之前先看一眼还许不许(`allowed`),并且始终不跨项目写
+  const mark = loadMark();
+  const mayMark = () => !!opts.markMissing && sameLoad(mark) && (opts.allowed?.() ?? true);
   const media = getState().project.media ?? [];
   const byId = new Map(media.map((m) => [m.id, m]));
   // 同一来源(同一文件)的几条记录一起补
@@ -427,7 +479,12 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
     }
     const { paths, urls } = localSourcesOf(m);
     const key = paths[0] ?? urls[0] ?? "";
-    if (!key) { out.failed.push({ id: m.id, name: m.name }); continue; }
+    if (!key) {
+      out.failed.push({ id: m.id, name: m.name });
+      // 没有哈希、没有路径、也没有读得到的地址(打开时已被清空的失效地址):没有任何线索能找回它,同样认定缺失
+      if (mayMark() && !m.url && !m.soundOf) markMediaMissing(m.id);
+      continue;
+    }
     const g = groups.get(key);
     if (g) g.push(m); else groups.set(key, [m]);
   }
@@ -439,11 +496,12 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
       ingestInflight.set(key, p);
     }
     const { up, unreachable } = await p;
+    if (!sameLoad(mark)) return out; // 项目换了:这一轮到此为止,什么都不写
     if (!up) {
       if (opts.background) ingestBackgroundFailed.add(key);
       for (const m of list) {
         out.failed.push({ id: m.id, name: m.name, ...(unreachable ? { unreachable: true } : {}) });
-        if (unreachable && opts.markMissing) markMediaMissing(m.id);
+        if (unreachable && mayMark()) markMediaMissing(m.id);
       }
       continue;
     }
@@ -454,8 +512,8 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
       // 派生的声音不挂视频的两档
       // 补上哈希的交给上传队列走 hooks.afterIngest(queueBackfilledMedia),这里不再按「导入」交一遍
       applyUploadedMedia(m.id, fresh.soundOf ? { ...up, tiers: undefined, smallState: undefined } : up, { imported: false });
-      // 以前在别的机器上被标过「(缺失)」、现在取到了:去掉标记
-      if (fresh.name.startsWith(MISSING_PREFIX)) actions.updateMedia(m.id, { name: fresh.name.slice(MISSING_PREFIX.length) });
+      // 以前在别的机器上被标过「(缺失)」、现在取到了:去掉标记,连同「确认缺失」的记录(占位随之消失)
+      if (fresh.name.startsWith(MISSING_PREFIX) || fresh.missingMaterial) actions.updateMedia(m.id, { name: nameWithoutMissing(fresh.name), missingMaterial: undefined });
       out.ingested.push(m.id);
     }
   }
@@ -472,9 +530,12 @@ const hashPresent = new Set<string>();
  * - 以前标过、现在有了的(导入了同样内容的文件、打开了带这份字节的包)去掉标记、换回 `/@media/<hash>`。
  * 编辑器进程答不上来时什么都不改。回标了哪些、恢复了哪些。
  */
-export async function checkHashedMedia(): Promise<{ missing: string[]; restored: string[] }> {
+export async function checkHashedMedia(opts: { allowed?: () => boolean } = {}): Promise<{ missing: string[]; restored: string[] }> {
   const out = { missing: [] as string[], restored: [] as string[] };
   if (ONLINE_BUILD || isViewOnly()) return out;
+  // 下面要等好几次请求;期间换了项目(或不再许认定)就停手,不把这一轮的结论写进别的项目
+  const mark = loadMark();
+  const go = () => sameLoad(mark) && (opts.allowed?.() ?? true);
   const hashOf = (m: MediaAsset) => String(m.tiers?.original || m.hash || "").toLowerCase();
   const ask = [...new Set((getState().project.media ?? [])
     .filter((m) => !m.pending && hasMediaHash(m))
@@ -492,22 +553,68 @@ export async function checkHashedMedia(): Promise<{ missing: string[]; restored:
       for (const h of part) answered.add(h);
     } catch { /* 编辑器进程不在:这一批不判 */ }
   }
+  if (!go()) return out;
+  // 内容库里没有的,再按原来记的本机路径找一次(素材找回的先后:包里落库的、内容库里已有的都先于它,见 `workflow/materials.md`):
+  // 文件还在原处、内容也对得上,就地挂回内容库,不算缺失;原处的文件内容变了(哈希对不上)记下来,弹窗里单独说明。
+  const changed = new Set<string>();
+  /** 按原路径找的时候没读成(没权限、5xx、请求出错)的:说不清文件在不在,这一轮不认定 */
+  const unsure = new Set<string>();
+  const triedPath = new Set<string>();
+  for (const m of getState().project.media ?? []) {
+    if (m.pending || !hasMediaHash(m) || !m.path) continue;
+    const h = hashOf(m);
+    if (hashPresent.has(h) || !answered.has(h) || h !== String(m.hash).toLowerCase() || triedPath.has(`${h}
+${m.path}`)) continue;
+    triedPath.add(`${h}
+${m.path}`);
+    const { up, verdict } = await adoptServerMediaVerdict(m.path);
+    if (!go()) return out;
+    if (up && up.hash.toLowerCase() === h) hashPresent.add(h);
+    else if (up) changed.add(h);
+    else if (verdict === "unsure") unsure.add(h);
+  }
+  if (!go()) return out;
+  const notices: MissingMaterialNotice[] = [];
   for (const m of getState().project.media ?? []) {
     if (m.pending || !hasMediaHash(m)) continue;
     const h = hashOf(m);
+    const url = `/@media/${String(m.hash).toLowerCase()}`;
     if (hashPresent.has(h)) {
-      if (m.name.startsWith(MISSING_PREFIX) || !m.url) {
-        actions.updateMedia(m.id, { name: m.name.startsWith(MISSING_PREFIX) ? m.name.slice(MISSING_PREFIX.length) : m.name, url: m.url || `/@media/${String(m.hash).toLowerCase()}` });
+      if (m.name.startsWith(MISSING_PREFIX) || !m.url || m.missingMaterial) {
+        actions.updateMedia(m.id, { name: nameWithoutMissing(m.name), url: m.url || url, missingMaterial: undefined });
         out.restored.push(m.id);
       }
-    } else if (answered.has(h)) {
-      if (m.url === "" && m.name.startsWith(MISSING_PREFIX)) continue;
+    } else if (answered.has(h) && !unsure.has(h)) {
+      // 已经认定过、记录也还对得上的不重复写(保存重开后就是这种:占位一直在,不再弹窗)
+      if (m.name.startsWith(MISSING_PREFIX) && confirmedMissing(m)) continue;
       console.warn(`[io] 缺失素材: ${m.name} (${m.hash})`);
-      actions.updateMedia(m.id, { url: "", name: m.name.startsWith(MISSING_PREFIX) ? m.name : `${MISSING_PREFIX}${m.name}` });
+      // 地址留着按哈希的那一个(存盘重开后 restoreMediaUrls 给的也是它,记录才对得上);画面、声音、导出见到记录就不去取它
+      const name = m.name.startsWith(MISSING_PREFIX) ? m.name : `${MISSING_PREFIX}${m.name}`;
+      actions.updateMedia(m.id, { url, name, missingMaterial: missingRecordOf({ ...m, url, name }) });
       out.missing.push(m.id);
+      notices.push({ id: m.id, name: nameWithoutMissing(m.name), kind: m.kind, ...(changed.has(h) ? { changed: true } : {}) });
     }
   }
+  publishMissingMaterials(notices);
   return out;
+}
+
+const nameWithoutMissing = (name: string) => (name.startsWith(MISSING_PREFIX) ? name.slice(MISSING_PREFIX.length) : name);
+
+/** 没有哈希、没有路径的素材认定缺失后用的地址:只为不留空(时间轴的出声清单不收空地址的素材),谁也不会真去取它 */
+const NOWHERE_URL = "/@media/__missing__";
+
+/**
+ * 「确认缺失」的记录(形状见 `MediaAsset.missingMaterial`):只在本机项目里、编辑器进程明确答了「没有」之后写。
+ * 记下认定那一刻素材的类别、名字、地址、哈希、路径,画面与声音的占位核对这几项与素材现状逐字相同才启用;
+ * 视频按画面与声音都缺记(素材不在,没法知道它本来有没有声音),图片只有画面,声音素材只有声音。
+ */
+function missingRecordOf(m: MediaAsset): NonNullable<MediaAsset["missingMaterial"]> {
+  return {
+    v: 1, mediaId: m.id, reason: "confirmed-missing",
+    original: { kind: m.kind, name: m.name, url: m.url, ...(m.hash ? { hash: m.hash } : {}), ...(m.path ? { path: m.path } : {}) },
+    visual: m.kind !== "audio", audio: m.kind !== "image",
+  };
 }
 
 /** 标「(缺失)」:清空地址、名字加标记(换新对象写回;已经标过的不重复加) */
@@ -515,9 +622,12 @@ function markMediaMissing(mediaId: string): void {
   const fresh = getState().project.media.find((x) => x.id === mediaId);
   if (!fresh || hasMediaHash(fresh) || fresh.pending) return;
   const name = fresh.name.startsWith(MISSING_PREFIX) ? fresh.name : `${MISSING_PREFIX}${fresh.name}`;
-  if (fresh.url === "" && name === fresh.name) return;
+  if (name === fresh.name && confirmedMissing(fresh)) return;
   console.warn(`[io] 缺失素材: ${fresh.name} (${fresh.path || fresh.url})`);
-  actions.updateMedia(mediaId, { url: "", name });
+  // 地址不清空:留着原来的读地址(存盘重开后 restoreMediaUrls 按 path 给的还是它),没有就给一个不存在的占位地址
+  const url = fresh.url || NOWHERE_URL;
+  actions.updateMedia(mediaId, { url, name, missingMaterial: missingRecordOf({ ...fresh, url, name }) });
+  publishMissingMaterials([{ id: fresh.id, name: nameWithoutMissing(fresh.name), kind: fresh.kind }]);
 }
 
 /** 单测用 */

@@ -373,9 +373,31 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const p = projectOf(ledger.read(), projectId);
     if (p.status === 'pending') reject(404, 'no-project');
     if (p.status !== 'deleted') return { state: p.status === 'active' ? 'exists' : p.status, authorityId, projectId, accessRevision: p.accessRevision };
+    return goneProofOf(authorityId, projectId, p.tombstone);
+  }
+  /** 「这个项目已不存在」的证明：只对账本里留有墓碑的项目签。客户端的核对见 `server/recovery/gone-proof.mjs`。 */
+  function goneProofOf(authorityId, projectId, tombstone) {
     if (!signingKey || typeof keyId !== 'string' || !keyId) reject(503, 'gone-proof-unavailable');
-    const payload = { v: 1, authorityId, projectId, state: 'gone', tombstoneRevision: p.tombstone.revision, issuedAt: p.tombstone.deletedAt, kid: keyId };
+    if (!Number.isSafeInteger(tombstone?.revision) || !Number.isSafeInteger(tombstone?.deletedAt)) reject(503, 'gone-proof-unavailable');
+    const payload = { v: 1, authorityId, projectId, state: 'gone', tombstoneRevision: tombstone.revision, issuedAt: tombstone.deletedAt, kid: keyId };
     return { ...payload, signature: sign(null, Buffer.from(canonicalJson(payload)), signingKey).toString('base64url') };
+  }
+  /**
+   * 旧办法（不带账号）建的云端项目的墓碑：这些项目从来不在本账本的 `projects` 里，节点上清掉它们时由
+   * `server/hosted/deploy/legacy-tombstones.mjs` 把项目号登记进 `legacyTombstones`。它们没有账号成员可核，
+   * 所以这一项不带登录也答；但只答登记过墓碑的旧项目号——账号项目（不论在不在、删没删）、没登记过的项目号一律回
+   * `no-tombstone`，不签任何东西，也不透露账号项目存不存在。
+   */
+  function legacyGoneStatus({ authorityId, projectId }) {
+    // 不看账号事件有没有追平：旧项目的墓碑和账号服务无关，账号服务停着也答得出来；这一项不带登录，也不该替匿名请求去问账号服务。
+    if (closed) reject(503, 'authority-closed');
+    if (authorityId !== ledger.authorityId) reject(409, 'wrong-authority');
+    if (!projectIdOK(projectId)) reject(400, 'invalid-project');
+    const state = ledger.read();
+    const tombstone = Object.hasOwn(state.legacyTombstones ?? {}, projectId) && !Object.hasOwn(state.projects, projectId)
+      ? state.legacyTombstones[projectId] : null;
+    if (!tombstone) reject(404, 'no-tombstone');
+    return goneProofOf(authorityId, projectId, tombstone);
   }
   function revocationStatus(eventId) {
     const state = ledger.read(); const barrier = state.barriers[`event:${eventId}`];
@@ -477,7 +499,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
-    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, flushAccountAcknowledgements,
+    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);

@@ -11,6 +11,8 @@
  *   RSC-07  桌面建卡这条路（`createUserCard`，`/api/cards/create` 调的那个）：违规的 400 并带行号，合规的落盘
  *   RSC-08  渲染节点装同步文件的预检（`source-gate.mjs`）不因为这套规矩变严：用框架写的卡装得上，老卡照旧
  *   RSC-09  看源码查不出来的那一类（谁先加载好）：这类写法确实过得了检查，兜底在别处（见用例里的说明）
+ *   RSC-10  必须引用框架：新建的 remotion 式的卡没有引用框架被拒，报错指到 frameMode 那一行；只有裸导入的合规；只带类型的导入不算；
+ *           素材效果卡、只有声音的卡同样；框架出现之前建的老卡改文案不强求；原来引用了框架的卡把那一行删掉被拒
  *
  * 云端 Agent 建卡的那条路在 `cloud-agent-tools.test.mjs` 的 CA-HT-03b；在线页面的载入在 `src/online/cardRuntime/remotionLock.test.mjs`；
  * 真 Chrome 里的画面在探针 `scripts/probes/remotion-style-probe.mjs`。
@@ -64,8 +66,9 @@ const VIOLATIONS = [
   { file: 'top-level.tsx', rule: 'top-level', needles: ['let frames = 0', 'new Map<'], says: /顶层/ },
   { file: 'import.tsx', rule: 'import', needles: ['from "lottie-web"'], says: /只许引用框架/ },
   { file: 'frame-mode.tsx', rule: 'frame-mode', needles: ['frameMode: MODES[0]'], says: /字面量/ },
+  { file: 'framework.tsx', rule: 'framework', needles: ['frameMode: "direct"'], says: /没有引用框架/ },
 ];
-const COMPLIANT = ['rs-title-reveal.tsx', 'rs-bar-race.tsx', 'rs-orbit-canvas.tsx', 'rs-alias-write.tsx'];
+const COMPLIANT = ['rs-title-reveal.tsx', 'rs-bar-race.tsx', 'rs-orbit-canvas.tsx', 'rs-alias-write.tsx', 'rs-bare-import.tsx'];
 
 test('RSC-01 每条规矩各有一张违规的样例卡：建卡时被拒绝并指出行号；合规的样例卡通过', () => {
   assert.deepEqual(fs.readdirSync(path.join(FIX, 'violations')).sort(), VIOLATIONS.map((v) => v.file).sort(), '夹具目录里的每个文件都在表里');
@@ -221,7 +224,7 @@ export const card: CardDef<Params> = {
 `;
 
 test('RSC-04 装卡不查：已经在库里的老卡照旧装得上（打开项目、内容库同步）', () => {
-  assert.deepEqual(inspectRemotionStyle(OLD_DIRECT).violations.map((v) => v.rule).sort(), ['css-animation', 'random', 'state', 'top-level']);
+  assert.deepEqual(inspectRemotionStyle(OLD_DIRECT).violations.map((v) => v.rule).sort(), ['css-animation', 'framework', 'random', 'state', 'top-level']);
   assert.equal(author(OLD_DIRECT).ok, false, '现在再新建这样一张卡是不行的');
   const installed = cards.checkCardSource('old-direct', OLD_DIRECT, [], { mode: 'install' });
   assert.deepEqual([installed.ok, installed.errors], [true, []]);
@@ -286,7 +289,7 @@ test('RSC-05 改卡：老卡只拒绝这次新增的违规；用框架写的卡�
   assert.equal(author(stateful).ok, true);
   const r7 = author(OLD_DIRECT, stateful);
   assert.equal(r7.ok, false);
-  assert.equal(remotionLines(r7.errors).length, 4);
+  assert.equal(remotionLines(r7.errors).length, 5, '原有的四条，加上「没有引用框架」');
   // 反过来，从 remotion 式改成 motion 式：不归这套规矩管了
   assert.equal(author(stateful, OLD_DIRECT).ok, true);
 });
@@ -385,4 +388,67 @@ test('RSC-09 看源码查不出来的那一类（谁先加载好）：这类写�
   const bad = author(late);
   assert.equal(bad.ok, false);
   assert.match(bad.errors.join('\n'), new RegExp(`第 ${lineOf(late, 'useState(false)')} 行：用了 useState`));
+});
+
+test('RSC-10 必须引用框架：新建的 remotion 式的卡没引用被拒并指到 frameMode 那一行；裸导入合规；老卡不强求', () => {
+  const bad = read('violations/framework.tsx');
+  const line = lineOf(bad, 'frameMode: "direct"');
+  const r = author(bad);
+  assert.equal(r.ok, false);
+  assert.deepEqual(remotionLines(r.errors), [
+    `[remotion 式] 第 ${line} 行：这张卡声明的是 remotion 式，但没有引用框架。在文件开头加一行 \`import "../../kernel/remotionStyle";\`；用到工具时写成 \`import { tween } from "../../kernel/remotionStyle";\`。引用以后，这张卡载入时文件顶层的对象会被锁成只读。`,
+  ]);
+  // 加一行裸导入就过；用到工具的照常写也过
+  const bare = bad.replace('import type { CardDef', 'import "../../kernel/remotionStyle";\nimport type { CardDef');
+  assert.equal(author(bare).ok, true, author(bare).errors.join('\n'));
+  assert.deepEqual(inspectRemotionStyle(bare).violations, []);
+  assert.equal(author(read('rs-bare-import.tsx')).ok, true);
+  const used = bad.replace('import type { CardDef', 'import { tween } from "../../kernel/remotionStyle";\nimport type { CardDef').replace('Math.min(1, t / 0.4)', 'tween(t, { duration: 0.4 })');
+  assert.equal(author(used).ok, true, author(used).errors.join('\n'));
+  // 只带类型的导入不算（转译后不留痕迹）：两种写法
+  for (const typeOnly of ['import type { EasingFn } from "../../kernel/remotionStyle";', 'import { type EasingFn } from "../../kernel/remotionStyle";']) {
+    const source = bad.replace('import type { CardDef', `${typeOnly}\nimport type { CardDef`);
+    const found = inspectRemotionStyle(source).violations.map((v) => v.rule);
+    assert.deepEqual(found, ['framework'], typeOnly);
+    assert.equal(author(source).ok, false, typeOnly);
+  }
+  // 声明成 motion 式的卡不归这条管
+  assert.deepEqual(inspectRemotionStyle(bad.replace('"direct"', '"stateful"')).violations, []);
+
+  // 素材效果卡（只用 GLSL）、只有声音的卡：同样必须引用，写一行裸导入就过
+  const graph = `import type { CardDef } from "../../kernel/types";
+import { glsl } from "../../render/cards/graphValues";
+const FRAG = "void main() { gl_FragColor = vec4(1.0); }";
+export const card: CardDef<{}> = {
+  id: "rs-graph", name: "素材效果卡", description: "d", source: "user", kind: "effect", inputs: { source: { type: "video" } },
+  frameMode: "direct",
+  defaults: {}, controls: [],
+  card: (sources) => glsl(FRAG, { source: sources.source }),
+};
+`;
+  const sound = `import type { CardDef } from "../../kernel/types";
+import { createNotificationRecipe, renderSoundEffectBlock } from "../../kernel/soundEffects";
+export const card: CardDef<{}> = {
+  id: "rs-sound", name: "只有声音", description: "d", source: "user", kind: "animation", inputs: {},
+  frameMode: "direct",
+  defaults: {}, controls: [],
+  audio: (_sources, range) => renderSoundEffectBlock(createNotificationRecipe({ frequency: 660, gain: 0.5, duration: 0.2 }), { start: range.start, count: range.count }),
+};
+`;
+  for (const source of [graph, sound]) {
+    const found = inspectRemotionStyle(source).violations;
+    assert.deepEqual(found.map((v) => [v.rule, v.line]), [['framework', lineOf(source, 'frameMode: "direct"')]], idOf(source));
+    assert.deepEqual(inspectRemotionStyle(`import "../../kernel/remotionStyle";\n${source}`).violations, [], idOf(source));
+  }
+
+  // 改卡的口径：框架出现之前建的、没引用框架的老卡改一处文案，不强求
+  const old = bad.replace('"rs-bad-framework"', '"rs-old-math"');
+  const renamed = old.replace('name: "没引用框架"', 'name: "老的算术卡"');
+  assert.deepEqual(remotionStyleErrors(renamed, { before: old }).errors, []);
+  assert.equal(author(renamed, old).ok, true, author(renamed, old).errors.join('\n'));
+  // 原来引用了框架的卡，把那一行删掉：拒绝
+  const dropped = remotionStyleErrors(bad, { before: bare });
+  assert.deepEqual(dropped.violations.map((v) => [v.rule, v.line]), [['framework', line]]);
+  // 从 motion 式改成 remotion 式按新建算：没引用就拒
+  assert.deepEqual(remotionStyleErrors(bad, { before: bad.replace('"direct"', '"stateful"') }).violations.map((v) => v.rule), ['framework']);
 });

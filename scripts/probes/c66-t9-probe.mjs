@@ -334,7 +334,8 @@ async function discoverLanBase(M, cfg) {
 
 /* ------------------------------------------------------------------ 探针用户卡 */
 
-const cardSource = (cardId, mark) => `import type { CardDef, CardProps } from "../../kernel/types";
+const cardSource = (cardId, mark) => `import "../../kernel/remotionStyle";
+import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string }
 function C({ params }: CardProps<Params>) {
   return <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 160, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 64, color: "#fff", background: "#224" }}>{"${mark}"} {params.text}</div>;

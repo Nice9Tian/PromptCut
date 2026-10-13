@@ -141,6 +141,32 @@ test("RS-T-03 缓动：都从 0 到 1；贝塞尔与 CSS 的同名曲线对得�
   assert.ok(Object.isFrozen(F.Easing), "Easing 这张表是只读的");
 });
 
+test("RS-T-03 缓动的四个别名：circle、exp 和原名是同一个函数；ease 是贝塞尔 (0.42, 0, 1, 1)；poly(n) 是 n 次方", () => {
+  assert.equal(F.Easing.circle, F.Easing.circ);
+  assert.equal(F.Easing.exp, F.Easing.expo);
+  // ease：两端是 0、1；中间钉住值（和同一组数的 Easing.bezier 逐位相同），起步慢
+  assert.equal(F.Easing.ease(0), 0);
+  assert.equal(F.Easing.ease(1), 1);
+  const sameBezier = F.Easing.bezier(0.42, 0, 1, 1);
+  for (let i = 0; i <= 20; i++) assert.equal(F.Easing.ease(i / 20), sameBezier(i / 20));
+  // 钉住的值另用二分法反解 cubic-bezier(0.42, 0, 1, 1) 独立算过
+  for (const [p, value] of [[0.1, 0.017027], [0.25, 0.093465], [0.5, 0.315357], [0.75, 0.621862], [0.9, 0.839428]]) {
+    assert.ok(Math.abs(F.Easing.ease(p) - value) < 1e-6, `ease(${p}) = ${F.Easing.ease(p)}`);
+  }
+  assert.ok(F.Easing.ease(0.5) < 0.5, "ease 起步慢");
+  assert.notEqual(F.Easing.ease(0.5), F.Easing.easeIn(0.5), "ease 不是三次曲线的 easeIn");
+  // poly
+  for (let i = 0; i <= 20; i++) {
+    assert.ok(Math.abs(F.Easing.poly(3)(i / 20) - F.Easing.cubic(i / 20)) < 1e-12);
+    assert.ok(Math.abs(F.Easing.poly(4)(i / 20) - F.Easing.quart(i / 20)) < 1e-12);
+  }
+  assert.equal(F.Easing.poly(1)(0.3), 0.3);
+  assert.equal(F.Easing.poly(0.5)(0.25), 0.5);
+  for (const bad of [undefined, null, "4", NaN, Infinity, {}]) assert.throws(() => F.Easing.poly(bad), /Easing\.poly 的次数要是一个数，收到 .+。写法：`Easing\.poly\(4\)`，等于 `Easing\.quart`。/);
+  assert.throws(() => F.Easing.poly("4"), /收到 "4"/);
+  assert.throws(() => F.Easing.poly(), /收到 undefined/);
+});
+
 test("RS-T-03 弹簧：解析解与一小步一小步积分出来的轨迹对得上（欠阻尼、临界、过阻尼）", () => {
   const cases = [
     { stiffness: 180, damping: 12, mass: 1 }, // 欠阻尼
@@ -183,6 +209,27 @@ test("RS-T-03 弹簧：解析解与一小步一小步积分出来的轨迹对得
   }
   assert.equal(F.springDuration({ delay: 0.5, from: 1, to: 1 }), 0.5);
   assert.ok(F.springDuration({ delay: 0.5 }) > F.springDuration() + 0.49);
+});
+
+test("RS-T-03 弹簧：照 Remotion 的写法写会报错，不再悄悄返回起点", () => {
+  // 第一种：第一个参数不是数
+  assert.throws(() => F.spring({ frame: 12, fps: 30, config: { damping: 200 } }),
+    { message: "spring 的第一个参数要是时间（秒），收到 对象。这里的写法是 `spring(t, { stiffness, damping, mass, from, to, delay })`，`t` 是片段本地秒；不是 Remotion 的 `spring({ frame, fps, config })`。改成：`spring(t, { stiffness: 100, damping: 10 })`。" });
+  assert.throws(() => F.spring(undefined, { stiffness: 100 }), /第一个参数要是时间（秒），收到 undefined。/);
+  assert.throws(() => F.spring("0.5"), /收到 字符串。/);
+  assert.throws(() => F.spring(NaN), /收到 NaN。/);
+  assert.throws(() => F.spring(null), /收到 null。/);
+  // 第二种：第二个参数里有 Remotion 的键
+  assert.throws(() => F.spring(0.4, { fps: 30, stiffness: 100 }),
+    { message: "spring 的参数里有 fps：这是 Remotion 的写法。这里时间用秒、当第一个参数传，不用帧号和帧率；`stiffness`、`damping`、`mass` 直接写在第二个参数里，不要再包一层 `config`。写法：`spring(t, { stiffness: 100, damping: 10, mass: 1 })`。" });
+  assert.throws(() => F.spring(0.4, { config: { stiffness: 100, damping: 10 } }), /spring 的参数里有 config：这是 Remotion 的写法。/);
+  assert.throws(() => F.spring(0.4, { frame: 12 }), /spring 的参数里有 frame：/);
+  assert.throws(() => F.springDuration({ config: { damping: 200 } }), /spring 的参数里有 config：/);
+  assert.throws(() => F.springDuration({ fps: 30 }), /spring 的参数里有 fps：/);
+  // 合法的调用照旧：负数、0、无穷大都是数
+  assert.equal(F.spring(-1), 0);
+  assert.equal(F.spring(0, { from: 2 }), 2);
+  assert.equal(F.spring(0.4, undefined), F.spring(0.4));
 });
 
 test("RS-T-03 错开进场：各种起点；总时长", () => {

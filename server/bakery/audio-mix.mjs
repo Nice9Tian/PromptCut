@@ -9,6 +9,12 @@ import path from 'path';
 import fs from 'fs/promises';
 import fsSync from 'node:fs';
 import { spawn } from 'child_process';
+import { MISSING_MATERIAL_WAV } from './mux-audio.mjs';
+
+/** Confirmed missing audio always reads the fixed software resource, never project media/path data. */
+export function audioClipInput(entry) {
+  return entry.missingMaterial ? { file: MISSING_MATERIAL_WAV, offset: 0 } : { file: entry.file, offset: entry.offset };
+}
 
 /**
  * 声音在 Chrome 里混:每段先用 ffmpeg 裁出时间轴用到的那一截(48 kHz 立体声 float wav,几 MB),
@@ -47,7 +53,8 @@ export async function mixAudioInChrome({ ffmpegCmd, outDir, plan, project, pageU
         continue;
       }
       const wav = path.join(audioDir, 'clip-' + i + '.wav');
-      await run(['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(e.offset), '-t', String(e.dur), '-i', e.file,
+      const input = audioClipInput(e);
+      await run(['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(input.offset), '-t', String(e.dur), '-i', input.file,
         '-vn', '-sn', '-dn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_f32le', wav]);
       clips[i] = { clipId: e.clipId, url: '/@export/' + id + '/audio/clip-' + i + '.wav', start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx };
     }
