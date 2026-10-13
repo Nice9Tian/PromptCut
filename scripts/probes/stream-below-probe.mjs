@@ -6,8 +6,8 @@
  *        [--scenes a,b] [--sizes 960x540] [--out <dir>] [--keep] [--json <file>]
  *
  * 给了 `--origin` 就用那台 dev server;没给就自己在检出根起一台(`--port`,另占 +1、+2;不碰 5190～5192),用完按进程号收掉。
- * 本进程里直接起 `FramePipeline`(同预渲染进程的代码),库根放临时目录;**开关由探针自己打开**
- * (`PROMPTCUT_TEST_BELOW_STREAMS=1`,产品里缺省关)。两个场景(见 `below-stream-common.mjs`):
+ * 本进程里直接起 `FramePipeline`(同预渲染进程的代码),库根放临时目录;这种流产品里缺省开着
+ * (探针另明着设一次 `PROMPTCUT_TEST_BELOW_STREAMS=1`)。贴回舞台的那一半在 `stream-below-stage-probe.mjs`。两个场景(见 `below-stream-common.mjs`):
  *
  *   甲  毛玻璃卡压在一张会动的卡(粒子)和一段视频上面
  *   乙  下层是半透明的(不透明度 0.6、带阴影的药丸),上面压同一张毛玻璃卡
@@ -55,7 +55,7 @@ const SIZES = String(flagArg('sizes', '960x540', args)).split(',').map((s) => s.
 const KEEP = args.includes('--keep');
 const JSON_OUT = flagArg('json', null, args);
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-stream-below-probe-${Date.now().toString(36)}`));
-// 开关:只在这支探针的进程里打开;一个会话、一条一条地产
+// 这种流产品里缺省开着;这里明着设一次,不受外面环境变量的影响。一个会话、一条一条地产
 process.env.PROMPTCUT_TEST_BELOW_STREAMS = '1';
 process.env.PROMPTCUT_STREAM_POOL = '1';
 
@@ -81,8 +81,8 @@ await fs.mkdir(OUT, { recursive: true });
 let dev = null, media = null, bakery = null;
 const pipelines = [];
 try {
-  check(BELOW_STREAMS_DEFAULT === false, '开关缺省是关的(产品行为不变)', BELOW_STREAMS_DEFAULT);
-  check(belowStreamsEnabled() === true, '探针里打开了开关');
+  check(BELOW_STREAMS_DEFAULT === true, '这种流缺省是开的', BELOW_STREAMS_DEFAULT);
+  check(belowStreamsEnabled() === true, '探针里开着');
   check(BELOW_STREAM_VERSION === 1, '流里放什么的版本是 1', BELOW_STREAM_VERSION);
   const ffmpeg = await findFfmpeg();
   let origin = ORIGIN;

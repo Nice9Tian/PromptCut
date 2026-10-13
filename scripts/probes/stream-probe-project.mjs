@@ -8,8 +8,11 @@
  *   - 实体名牌(`entity-chips`,框 800×450),0.5～2 秒 —— 入点不在分段边界上;
  *     (原来放的是通用 Lottie 卡;Lottie 改成 remotion 式〔`frameMode: "direct"`〕以后按声明是轻卡,没有成本记录时不进预渲染集合,
  *     所以换成现在仍声明 `stateful`、审阅表里 `independent` 的 `entity-chips`)
- *   - 里程表(毛玻璃 HUD,`belowDependent`,不进流)压在粒子背景左下角,0～5 秒 —— 「毛玻璃卡叠在流
+ *   - 里程表(毛玻璃 HUD,`belowDependent`)压在粒子背景左下角,0～5 秒 —— 「毛玻璃卡叠在流
  *     `<canvas>` 上时模糊正确」那一条靠它:播放时它照常活渲,模糊的是下面那块流画布。
+ *     **这两支探针里它不进流**:依赖下层的卡判重时现在有自己的流(`kind: below`),而这里要的正是「它活渲着、压在别的卡的流上」
+ *     (产品里它判轻时就是这样),所以下面把这种流关掉(`PROMPTCUT_TEST_BELOW_STREAMS=0`,只影响引入本文件的探针进程)。
+ *     这种流自己的产与贴在 `stream-below-probe.mjs`、`stream-below-stage-probe.mjs` 里验。
  *
  * **没有用两张粒子卡**:同一时刻挂两张粒子卡时,后挂的那张 `tsParticles.load` 会把先挂的那张的容器
  * 当成同一个 id 销毁掉(容器 id 取自引擎的共享随机数;实测后挂那张一挂上,前一张的 `<canvas>` 就被
@@ -17,6 +20,9 @@
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import { FramePipeline } from '../../server/frame-pipeline.mjs';
+
+// 见文件头:这两支探针里毛玻璃卡不进流(活渲着压在流上)
+process.env.PROMPTCUT_TEST_BELOW_STREAMS = '0';
 
 export const PROJECT = {
   id: 'r8-stream-probe', name: 'R8 轨道流探针', width: 1920, height: 1080, fps: 30, duration: 5,

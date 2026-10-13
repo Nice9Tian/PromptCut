@@ -102,6 +102,18 @@ export function setLowMemoryCostStore(store: CostStore): void {
 <device>`,`l2Costs.ts`)不相撞;
  * 这些记录没有 `device`,普通档读 K1 记录时滤掉。L2 打不开(没有 IndexedDB、被浏览器拒)时退回页面内存。
  */
+/**
+ * 此刻页面自己判重的卡片段(预渲染集合):清单计划的清单、测量时产稀疏流的对象都取它。
+ * 只列卡片段(素材段不产预渲染结果)。导出期间并上必须用预渲染原尺寸的同步卡片段(判轻时不在预渲染集合里,`export/exportWanted.ts`)
+ */
+function heavyCardClips(): string[] {
+  const plan = currentPlan();
+  if (!plan) return [];
+  const p = getState().project;
+  const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
+  return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId);
+}
+
 function l2LowMemoryCostStore(): CostStore {
   const fallback = createMemoryCostStore();
   const l2 = () => pageL2({ lowMemory: true }).catch(() => null);
@@ -1066,7 +1078,7 @@ export function Preview() {
    * 流平面 / 抑制 / 快照的投递(C4、C5、A3c;排程在 `snapshotFeed.ts`)。
    *
    * 叫它的地方:每拍收到 `frame` 之后(播放中)、`setTime` 发完之后(暂停 / 拖动)、起播之前、舞台报 `settled` 之后,
-   * 以及快照字节 / 新的就绪层到货之后。33 ms 的节流在 `deliverSnapshots` 里,所以可以放心地多叫几次。
+   * 项目改了之后,以及快照字节 / 新的就绪层到货之后。33 ms 的节流在 `deliverSnapshots` 里,所以可以放心地多叫几次。
    */
   const dualRef = useRef(dual);
   dualRef.current = dual;
@@ -1379,6 +1391,12 @@ export function Preview() {
       planState: () => planPublisherRef.current?.probe() ?? Promise.resolve(null),
       // 这条流有了(本页产的、先查查到的):不等下一轮轮询,马上重取层表与清单
       onPageStream: () => onlineSourceRef.current?.refresh(),
+      // 测量时就产稀疏版:此刻判重的片段(与清单计划的清单同一个算法)、此刻的已确认版本
+      heavyClips: () => heavyCardClips(),
+      confirmed: () => {
+        const ds = currentSharedLink()?.ds;
+        return ds?.confirmedProject && typeof ds.rev === "number" ? { rev: ds.rev, project: ds.confirmedProject } : null;
+      },
     });
   }, [online, lowMem]);
   /*
@@ -1388,14 +1406,7 @@ export function Preview() {
    */
   useEffect(() => {
     if (!online || lowMem) return;
-    const clips = () => {
-      const plan = currentPlan();
-      if (!plan) return [];
-      const p = getState().project;
-      const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
-      // 只列卡片段(素材段不产快照)。导出期间并上必须用预渲染原尺寸的同步卡片段(判轻时不在预渲染集合里,`export/exportWanted.ts`)
-      return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId);
-    };
+    const clips = heavyCardClips;
     // 托管方渲染节点的「生成轨道流」(任务书「甲三」):本页看到它开着时清单计划带这一项(是另一个计划);从关变开时马上重发,
     // 渲染节点据此再切一次、出它自己的那一份流任务,不用等项目下一次改动
     const streamsOn = () => { const v = getSyncView(); return hostedStreamsOn(v.shared?.where, v.hosted); };
@@ -1606,6 +1617,16 @@ export function Preview() {
      */
     if (onlineSourceRef.current) void pumpRef.current();
   }, [live, stageReady]);
+  /*
+   * 项目改了(store 换了新的项目对象):流平面和抑制按新项目重算一次。依赖下层的卡的流只对产它时的那一版下层有效 ——
+   * 下层一改,那一层带的输入签名就对不上了(`snapshotFeed.ts` 的 `streamLayers`),旧流要当场撤下,不能等下一次 `setTime`:
+   * 暂停着、手按着标尺不动时改下层,之后没有别的事件会来投。播放中下一拍自己会投,这里多投一次无妨;没变的不会重发
+   * (`syncPlanes` 按内容比,快照那一半有 33 毫秒的节流)。
+   */
+  useEffect(() => {
+    if (!live || !stageReady) return;
+    void pumpRef.current();
+  }, [live, stageReady, project]);
 
   /*
    * K5 (4) 的角色互换。**A / B 只是实例名**,谁是 `front` 由这个 state 说了算 ——

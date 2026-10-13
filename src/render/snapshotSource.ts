@@ -29,7 +29,11 @@ export type ReadyMessage =
   | { type: "reset"; localRev: number }
   | { type: "layer"; clipId: string; kind: ReadyKind; key: string; ranges: ReadyRange[]; groupClipIds?: string[];
       /** `stream` 层才有:这条流自己的第一帧(项目帧号),分段从它起每 15 帧一段(`streamSegments.mjs`) */
-      originFrame?: number }
+      originFrame?: number;
+      /** 依赖下层的流才有(`server/frame-stream.mjs` 的 `belowLayerMark`):这条流按舞台坐标产,平面挂在舞台根下 */
+      streamKind?: "below";
+      /** 依赖下层的流才有:产这条流的那一版项目的输入签名(`streamInputSig.mjs`);父页按当前项目算的对不上就不贴 */
+      inputSig?: string }
   | { type: "done"; localRev: number };
 
 export interface SnapshotSource {
@@ -55,7 +59,7 @@ export function snapshotPath(kind: ReadyKind, key: string, localFrame: number): 
 }
 
 /** 就绪索引的页面侧形状(C3):同一张重卡的 `stream` 表和 `html` 表并存、互不覆盖 */
-export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[]; originFrame?: number }>>;
+export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[]; originFrame?: number; streamKind?: "below"; inputSig?: string }>>;
 
 /**
  * 把一条消息应用到页面的 `readyIndex`。`reset` 清表,`layer` 整层替换
@@ -69,7 +73,10 @@ export function applyReadyMessage(index: ReadyIndex, message: ReadyMessage): Rea
   // 组流(R8 / G1)的层带 `groupClipIds`:父页按它合成一条 `{ clipIds: groupClipIds }` 的流平面
   // `stream` 层另带这条流的第一帧(`originFrame`):父页与舞台按它把帧号换成分段号
   byKind.set(message.kind, { key: message.key, ranges: message.ranges, ...(message.groupClipIds?.length ? { groupClipIds: [...message.groupClipIds] } : {}),
-    ...(isStreamOrigin(message.originFrame) ? { originFrame: message.originFrame } : {}) });
+    ...(isStreamOrigin(message.originFrame) ? { originFrame: message.originFrame } : {}),
+    // 依赖下层的流的两项(只有 `stream` 层认):按舞台坐标贴、输入签名
+    ...(message.kind === "stream" && message.streamKind === "below"
+      ? { streamKind: "below" as const, ...(typeof message.inputSig === "string" && message.inputSig ? { inputSig: message.inputSig } : {}) } : {}) });
   return index;
 }
 
@@ -892,8 +899,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const id = typeof msg?.id === "string" ? msg.id : "";
     const keyOf = () => {
       if (typeof msg.resultKey === "string" && msg.resultKey) return msg.resultKey;
-      // 细任务 id:`<kind>:<resultKey>:<from>-<to>`
-      const m = /^(?:snapshot|stream):(.+):\d+-\d+$/.exec(id);
+      // 细任务 id:`<kind>:<resultKey>:<from>-<to>`;稀疏流任务的 id 末尾多一段 `:sparse`(`server/render-queue/messages.mjs` 的 `taskIdOf`)
+      const m = /^(?:snapshot|stream):(.+):\d+-\d+(?::sparse)?$/.exec(id);
       return m ? m[1] : null;
     };
     let changed = false;
