@@ -174,3 +174,5 @@ node scripts/acceptance/four-stage-acceptance.mjs --rows-from <目录>/results.j
 ## 10. 合入 main 27160d3b 之后(第二次合并)
 
 两个冲突文件(`accept-018-conv-endtoend.test.mjs`、`accept-018-files-account-fixture.test.mjs`)取 main 的版本;收掉了清单里传给它们的 `ACCEPT018_E2E_BASE`、`ACCEPT018_FILES_BASE`。**还靠 0.7.18 端口段的**:`--v18-port-base` 现在只管这些项——`V18-auth-*` 三个(`ACCEPT018_AUTH_PORT_BASE`,夹具里 main 仍保留这个口子,我把它的范围检查放宽到 20000～65000)、`V18-asset-isolation`、`V18-conv-password-probe`、两支排队探针与隔离探针(都是 `--base-port` 参数)、`S4-4` 与 `V18-ui-reverse-channel`(`cloud-agent-ui-probe` 自己给任务进程夹具传一组连续端口)。这些夹具内部或探针自己仍要连续段,没有改成自取空闲端口。
+
+第二次合并之后的重跑:`npx tsc -b --force` 零错误;`four-stage-acceptance` 两份单测 38/38;`--check-coverage` 「守门:通过」(main 新进的 13 个探针:Lottie 4 个、合并流 8 个记渲染一带排除,`move-guard-probe` 登记为可选项、单测 `move-guard.test.mjs` 进 `V18-local-legacy-tests`);经运行器跑 `V18-conv-endtoend`(44 秒)、`V18-files-account-fixture`、`V18-local-legacy-tests`、`V18-auth-agent-path` 都 `pass`;`npm test` 一遍 `tests 6498、pass 6471、fail 6`——6 条是机器忙时的计时偶发(`c66-integ` 两条、`asset-project-workers`、`MA-X2`、`UE-S7`、`move-guard` 旧模式搬云端),五个文件单独重跑 37/37 全过。
