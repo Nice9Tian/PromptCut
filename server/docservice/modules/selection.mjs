@@ -85,6 +85,18 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
     if (answer.accountId !== principal.accountId || answer.projectId !== projectId) throw error(403, 'principal-mismatch');
     return { ...principal, accountName: answer.accountName ?? principal.accountName };
   }
+  /**
+   * 问一位在线成员的页面时出的错,算「这一位不算」还是「整次查询失败」。
+   *
+   * 只跟这一位的凭证有关的,这一位不算(不读它的选区,撤掉它这条连接的在场记录),别的成员照常:
+   *   - 403:没有这个项目的读权限、被移出或被禁、连接的身份和项目对不上、权威答得不像样(`checked` 把答非所问也归成 403);
+   *   - 401:这条连接的登录过期了、被撤销了、凭证对不上。这条连接凭的那一次登录不会再变回有效(页面续了登录是换一条连接、
+   *     重新发选区),所以和 403 一样撤掉记录,不是留着等它好。
+   * 其余一律整次失败(回 `authority-unavailable`,宁可不答也不给一张缺人的表):权威连不上或没同步完(5xx、没有状态码的错,
+   * 含超时)、项目没了或正在搬迁(404、409)、请求本身写错了(400)。这些不是哪一位成员的事,问谁都一样。
+   * 断线不走这里:连接一断它的记录就没了,查询途中断的由调用处核对记录还在不在。
+   */
+  const memberLevelFailure = cause => cause?.status === 403 || cause?.status === 401;
   function validatedGrant(grant, projectId, runGrantId) {
     if (!grant || typeof grant.initiatorAccountId !== 'string' || !grant.initiatorAccountId ||
         grant.projectId !== projectId || grant.runGrantId !== runGrantId) throw error(403, 'run-grant-invalid');
@@ -185,7 +197,7 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
         const current = await checked(entry.principal, projectId);
         if (projects.get(projectId)?.get(entry.connId) === entry) valid.push({ record: entry, principal: current });
       } catch (cause) {
-        if (cause?.status !== 403) throw error(503, 'authority-unavailable');
+        if (!memberLevelFailure(cause)) throw error(503, 'authority-unavailable');
         remove(projectId, entry.connId);
       }
     }
