@@ -67,6 +67,16 @@ export const extOf = (name) => (/\.([A-Za-z0-9]{1,5})$/.exec(String(name ?? ''))
 export const kindOfName = (name) => EXT_KIND[extOf(name)] ?? null;
 
 /**
+ * 入库时算「一时答不上」的错,只有这些才重试(按错误码列,不按状态码一概而论):
+ * 连不上或中途断了(到素材服务、到文档服务)、素材服务或文档服务还在对账。别的 503 重试也没用,白等一轮再失败:
+ * 任务已被停(`project-assets-closed`、`run-assets-unconfigured`)、配置或文件本身不对(`project-assets-workspace-unconfigured`、
+ * `project-assets-unconfigured`)、素材服务等人处理的状态(`asset-run-recovery-pending`)、工作目录额度。
+ */
+export const RUN_ASSET_TRANSIENT_CODES = Object.freeze(['run-asset-unavailable', 'run-client-unavailable', 'run-authority-unavailable',
+  'asset-run-not-ready', 'asset-run-head-pending', 'asset-not-ready', 'asset-run-unavailable', 'run-assets-unavailable',
+  'doc-agent-unavailable', 'account-event-gap']);
+
+/**
  * 账号模式把一份字节存进项目素材库时的重试。请求号**整次导入只生成一次**:导入号由它算出,素材服务按导入号放暂存的片,
  * 重试用同一个号就接着传已收到的片;每次换号会在素材服务上另开一个没人收的暂存目录。
  * @param {(requestId: string) => Promise<any>} importOnce 做一次导入(来源要每次重新打开)
@@ -76,7 +86,7 @@ export async function runAssetImportWithRetry(importOnce, { attempts = 3, backof
   for (let attempt = 1; ; attempt += 1) {
     try { return await importOnce(requestId); }
     catch (err) {
-      if (attempt >= attempts || err?.status !== 503 || err?.workspace) throw err;
+      if (attempt >= attempts || err?.workspace || !RUN_ASSET_TRANSIENT_CODES.includes(err?.code)) throw err;
       onRetry({ code: err?.code ?? 'unavailable', attempt });
       await sleep(backoffMs * attempt);
     }

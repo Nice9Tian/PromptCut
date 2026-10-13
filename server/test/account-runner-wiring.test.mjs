@@ -255,3 +255,20 @@ test('RW8 导入重试用同一个请求号（接着传已收到的片，不在�
   await assert.rejects(runAssetImportWithRetry(async () => { calls += 1; throw unavailable(); }, { sleep: async () => {} }), error => error.code === 'run-asset-unavailable');
   assert.equal(calls, 3);
 });
+
+test('RW9 导入只重试确属暂时性的错：任务被停、配置不对、额度不够这类 503 不白等一轮', async () => {
+  const run = async error => { let calls = 0; const waits = [];
+    const outcome = await runAssetImportWithRetry(async () => { calls += 1; throw error; }, { sleep: async ms => { waits.push(ms); } }).then(() => 'ok', e => e.code);
+    return { calls, waits: waits.length, outcome }; };
+  const e = (code, status = 503, extra = {}) => Object.assign(new Error(code), { code, status, ...extra });
+  // 不重试：一次就原样抛出
+  for (const error of [e('project-assets-closed'), e('project-assets-workspace-unconfigured'), e('project-assets-unconfigured'), e('run-assets-unconfigured'),
+    e('asset-run-recovery-pending'), e('run-revoked', 403), e('ticket-expired', 401), e('asset-hash-mismatch', 409), e('quota', undefined, { workspace: true }),
+    e('some-new-503-nobody-listed')])
+    assert.deepEqual(await run(error), { calls: 1, waits: 0, outcome: error.code }, error.code);
+  // 重试：连不上、还在对账
+  for (const code of ['run-asset-unavailable', 'run-client-unavailable', 'asset-run-head-pending', 'asset-run-not-ready', 'doc-agent-unavailable'])
+    assert.deepEqual(await run(e(code)), { calls: 3, waits: 2, outcome: code }, code);
+  // 没有状态码、只有错误码的那一种（问授权时文档服务不通）也算
+  assert.deepEqual(await run(Object.assign(new Error('run-authority-unavailable'), { code: 'run-authority-unavailable' })), { calls: 3, waits: 2, outcome: 'run-authority-unavailable' });
+});
