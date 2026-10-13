@@ -337,6 +337,32 @@ test('a stage job that fails with a coded error is explained in the package word
   assert.equal(answer.stages[0].childErrorCode, 'MODEL_NOT_INSTALLED');
 });
 
+test('a stage that waits too long is stopped with a timeout reason, its job is asked to stop, and nothing after it runs', async (t) => {
+  const f = await makeP5Fixture(t, { workflowLimits: { stageWaitMs: 250 } });
+  await f.addMedia({ id: 'm1' });
+  f.perception.stt.ctl.hold = true;
+  const answer = await f.call('auto_workflow', { mediaId: 'm1' });
+  assert.equal(answer.ok, false);
+  assert.equal(answer.stages[0].status, 'error');
+  assert.equal(answer.stages[0].errorCode, 'STAGE_TIMEOUT');
+  assert.match(answer.error, /等了太久没有结果/);
+  await until(() => rawJobs(f).find((r) => r.kind === 'stt.transcribe').state === 'cancelled', { what: 'the waiting job was asked to stop' });
+  assert.equal(f.perception.shots.ctl.calls.length, 0);
+  assert.equal(f.state.cards.length, 0);
+});
+
+test('a perception package that refuses the call (bad media kind, busy) stops the flow at that stage with its own words', async (t) => {
+  const f = await makeP5Fixture(t);
+  await f.addMedia({ id: 'm1' });
+  f.perception.shots.ctl.throwOnCall = Object.assign(new Error('这个素材正在做镜头识别,等它跑完(用 list_shots 轮询)再重测。'), { code: 'shots-busy' });
+  const answer = await f.call('auto_workflow', { mediaId: 'm1' });
+  assert.equal(answer.ok, false);
+  assert.equal(answer.stages.find((s) => s.stage === 'shots').status, 'error');
+  assert.match(answer.error, /正在做镜头识别/);
+  assert.equal(f.perception.subject.ctl.calls.length, 0);
+  assert.equal(f.state.cards.length, 0);
+});
+
 test('the prerender stage: no seam / no render node is "not done" but not a failure; a publishing error after the commit says the commit is in', async (t) => {
   const none = await makeP5Fixture(t, { withPrerender: false });
   await none.addMedia({ id: 'm1' });
