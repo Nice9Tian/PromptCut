@@ -34,27 +34,17 @@
       "image": "docs/reports/assets/v18-move-guard/before-entry-a-settings.png",
       "requests": [
         {
+          "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
           "url": "https://127.0.0.1:28956/hosted/shared/create",
           "method": "OPTIONS",
           "status": 403
         },
         {
           "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
-          "method": "GET",
-          "status": 200
-        },
-        {
-          "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
-          "method": "GET",
-          "status": 200
-        },
-        {
-          "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
-          "method": "GET",
-          "status": 200
-        },
-        {
-          "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
           "method": "GET",
           "status": 200
         }
@@ -86,21 +76,11 @@
     },
     {
       "step": "B-entry-b-account-node",
-      "roomId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
+      "roomId": "sp_6hp6sadetrnejfasmsenp6yldv",
       "outcome": "timeout",
       "statusText": "正在搬到云端，完成后自动连接原房间…",
       "image": "docs/reports/assets/v18-move-guard/before-entry-b-after-click.png",
       "requests": [
-        {
-          "url": "/api/collaboration/host-state",
-          "method": "POST",
-          "status": 200
-        },
-        {
-          "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
-          "method": "GET",
-          "status": 200
-        },
         {
           "url": "/api/collaboration/journal",
           "method": "POST",
@@ -142,23 +122,13 @@
           "status": 200
         },
         {
-          "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
-          "method": "GET",
-          "status": 200
-        },
-        {
           "url": "/api/collaboration/select",
           "method": "POST",
           "status": 200
         },
         {
-          "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
-          "method": "GET",
-          "status": 200
-        },
-        {
-          "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
-          "method": "GET",
+          "url": "/api/collaboration/select",
+          "method": "POST",
           "status": 200
         },
         {
@@ -180,12 +150,12 @@
       "cloud": [
         {
           "method": "POST",
-          "path": "/hosted/hosting/unregister",
+          "path": "/hosted/hosting/relocation/import-init",
           "status": 200
         },
         {
           "method": "POST",
-          "path": "/hosted/hosting/relocation/import-init",
+          "path": "/hosted/hosting/unregister",
           "status": 200
         },
         {
@@ -317,17 +287,77 @@
           "method": "POST",
           "path": "/hosted/hosting/relocation/import-activate",
           "status": 503
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/import-init",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/begin",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/publish",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/import-activate",
+          "status": 503
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/import-activate",
+          "status": 503
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/import-activate",
+          "status": 503
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/import-init",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/begin",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/publish",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/import-activate",
+          "status": 503
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/import-activate",
+          "status": 503
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/relocation/import-activate",
+          "status": 503
         }
       ],
       "before": {
         "view": {
           "shared": {
-            "projectId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
+            "projectId": "sp_6hp6sadetrnejfasmsenp6yldv",
             "where": "lan",
             "accountId": null
           },
           "association": {
-            "roomId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
+            "roomId": "sp_6hp6sadetrnejfasmsenp6yldv",
             "where": "lan",
             "service": "https://127.0.0.1:28956/hosted"
           },
@@ -352,8 +382,8 @@
             "ok": true,
             "candidate": {
               "where": "lan",
-              "projectId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
-              "name": "move-guard-b-1791876444708",
+              "projectId": "sp_6hp6sadetrnejfasmsenp6yldv",
+              "name": "move-guard-b-1791876882302",
               "mode": "free",
               "base": "http://127.0.0.1:28970/docservice",
               "service": "https://127.0.0.1:28956/hosted",
@@ -367,7 +397,7 @@
         "view": {
           "shared": null,
           "association": {
-            "roomId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
+            "roomId": "sp_6hp6sadetrnejfasmsenp6yldv",
             "where": "lan",
             "service": "https://127.0.0.1:28956/hosted"
           },
@@ -377,7 +407,7 @@
         },
         "edit": {
           "renamedLocally": true,
-          "before": "probe-edit-1791876451340",
+          "before": "probe-edit-1791876886259",
           "saved": "协作身份尚未恢复；请等待主机或重新认证后保存。文件内容已保留。",
           "statusAfter": "idle"
         },
@@ -402,17 +432,17 @@
         }
       },
       "cloudFilesAdded": [
-        "docservice/auth/projects/sp_sz3fqcs5soc7cuivrb2l7fhj4n.json",
-        "docservice/relocation/move_24954458ff7ed8d4d3591b35626a239e/doc/projects/sp_sz3fqcs5soc7cuivrb2l7fhj4n.ops.ndjson",
-        "docservice/relocation/move_24954458ff7ed8d4d3591b35626a239e/index.json",
-        "docservice/tenants/sp_sz3fqcs5soc7cuivrb2l7fhj4n/projects/sp_sz3fqcs5soc7cuivrb2l7fhj4n.ops.ndjson",
-        "secrets/relocation/move_24954458ff7ed8d4d3591b35626a239e.json"
+        "docservice/auth/projects/sp_6hp6sadetrnejfasmsenp6yldv.json",
+        "docservice/relocation/move_77bfa587da3f3d550ac38050a5b0db72/doc/projects/sp_6hp6sadetrnejfasmsenp6yldv.ops.ndjson",
+        "docservice/relocation/move_77bfa587da3f3d550ac38050a5b0db72/index.json",
+        "docservice/tenants/sp_6hp6sadetrnejfasmsenp6yldv/projects/sp_6hp6sadetrnejfasmsenp6yldv.ops.ndjson",
+        "secrets/relocation/move_77bfa587da3f3d550ac38050a5b0db72.json"
       ]
     },
     {
       "step": "C-enter-account-project",
       "ok": true,
-      "projectId": "sp_gdy4iee35pso3ei3ogunwg7ecq"
+      "projectId": "sp_rhpqnkgdxcrz4ljaopsp7e4fec"
     },
     {
       "step": "C-page-after-enter",
@@ -423,28 +453,28 @@
       "step": "C-move-back-account-node",
       "entered": {
         "ok": true,
-        "projectId": "sp_gdy4iee35pso3ei3ogunwg7ecq"
+        "projectId": "sp_rhpqnkgdxcrz4ljaopsp7e4fec"
       },
       "statusText": "搬迁暂未完成，房间和本机恢复信息已保留。请检查连接、身份或存储后重试。",
       "image": "docs/reports/assets/v18-move-guard/before-move-back-after-click.png",
       "requests": [
-        {
-          "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
-          "method": "GET",
-          "status": 200
-        },
         {
           "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
           "method": "GET",
           "status": 200
         },
         {
-          "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
+          "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
           "method": "GET",
           "status": 200
         },
         {
           "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
           "method": "GET",
           "status": 200
         }
@@ -464,9 +494,9 @@
       "stateBefore": {
         "view": {
           "shared": {
-            "projectId": "sp_gdy4iee35pso3ei3ogunwg7ecq",
+            "projectId": "sp_rhpqnkgdxcrz4ljaopsp7e4fec",
             "where": "hosted",
-            "accountId": "acc_fea65ae732bc9a2a41e2e8f2"
+            "accountId": "acc_3f7ad08ded56b5f1e89f384c"
           },
           "association": null,
           "reopenState": null,
@@ -485,9 +515,9 @@
       "stateAfter": {
         "view": {
           "shared": {
-            "projectId": "sp_gdy4iee35pso3ei3ogunwg7ecq",
+            "projectId": "sp_rhpqnkgdxcrz4ljaopsp7e4fec",
             "where": "hosted",
-            "accountId": "acc_fea65ae732bc9a2a41e2e8f2"
+            "accountId": "acc_3f7ad08ded56b5f1e89f384c"
           },
           "association": null,
           "reopenState": null,
@@ -496,7 +526,7 @@
         },
         "edit": {
           "renamedLocally": true,
-          "before": "probe-edit-1791876514330",
+          "before": "probe-edit-1791876935253",
           "saved": true,
           "statusAfter": "online"
         },
@@ -511,27 +541,17 @@
     "image": "docs/reports/assets/v18-move-guard/before-entry-a-settings.png",
     "requests": [
       {
+        "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
         "url": "https://127.0.0.1:28956/hosted/shared/create",
         "method": "OPTIONS",
         "status": 403
       },
       {
         "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
-        "method": "GET",
-        "status": 200
-      },
-      {
-        "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
-        "method": "GET",
-        "status": 200
-      },
-      {
-        "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
-        "method": "GET",
-        "status": 200
-      },
-      {
-        "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
         "method": "GET",
         "status": 200
       }
@@ -562,21 +582,11 @@
     }
   },
   "entryB": {
-    "roomId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
+    "roomId": "sp_6hp6sadetrnejfasmsenp6yldv",
     "outcome": "timeout",
     "statusText": "正在搬到云端，完成后自动连接原房间…",
     "image": "docs/reports/assets/v18-move-guard/before-entry-b-after-click.png",
     "requests": [
-      {
-        "url": "/api/collaboration/host-state",
-        "method": "POST",
-        "status": 200
-      },
-      {
-        "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
-        "method": "GET",
-        "status": 200
-      },
       {
         "url": "/api/collaboration/journal",
         "method": "POST",
@@ -618,23 +628,13 @@
         "status": 200
       },
       {
-        "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
-        "method": "GET",
-        "status": 200
-      },
-      {
         "url": "/api/collaboration/select",
         "method": "POST",
         "status": 200
       },
       {
-        "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
-        "method": "GET",
-        "status": 200
-      },
-      {
-        "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
-        "method": "GET",
+        "url": "/api/collaboration/select",
+        "method": "POST",
         "status": 200
       },
       {
@@ -656,12 +656,12 @@
     "cloud": [
       {
         "method": "POST",
-        "path": "/hosted/hosting/unregister",
+        "path": "/hosted/hosting/relocation/import-init",
         "status": 200
       },
       {
         "method": "POST",
-        "path": "/hosted/hosting/relocation/import-init",
+        "path": "/hosted/hosting/unregister",
         "status": 200
       },
       {
@@ -793,17 +793,77 @@
         "method": "POST",
         "path": "/hosted/hosting/relocation/import-activate",
         "status": 503
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/import-init",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/begin",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/publish",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/import-activate",
+        "status": 503
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/import-activate",
+        "status": 503
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/import-activate",
+        "status": 503
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/import-init",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/begin",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/publish",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/import-activate",
+        "status": 503
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/import-activate",
+        "status": 503
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/relocation/import-activate",
+        "status": 503
       }
     ],
     "before": {
       "view": {
         "shared": {
-          "projectId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
+          "projectId": "sp_6hp6sadetrnejfasmsenp6yldv",
           "where": "lan",
           "accountId": null
         },
         "association": {
-          "roomId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
+          "roomId": "sp_6hp6sadetrnejfasmsenp6yldv",
           "where": "lan",
           "service": "https://127.0.0.1:28956/hosted"
         },
@@ -828,8 +888,8 @@
           "ok": true,
           "candidate": {
             "where": "lan",
-            "projectId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
-            "name": "move-guard-b-1791876444708",
+            "projectId": "sp_6hp6sadetrnejfasmsenp6yldv",
+            "name": "move-guard-b-1791876882302",
             "mode": "free",
             "base": "http://127.0.0.1:28970/docservice",
             "service": "https://127.0.0.1:28956/hosted",
@@ -843,7 +903,7 @@
       "view": {
         "shared": null,
         "association": {
-          "roomId": "sp_sz3fqcs5soc7cuivrb2l7fhj4n",
+          "roomId": "sp_6hp6sadetrnejfasmsenp6yldv",
           "where": "lan",
           "service": "https://127.0.0.1:28956/hosted"
         },
@@ -853,7 +913,7 @@
       },
       "edit": {
         "renamedLocally": true,
-        "before": "probe-edit-1791876451340",
+        "before": "probe-edit-1791876886259",
         "saved": "协作身份尚未恢复；请等待主机或重新认证后保存。文件内容已保留。",
         "statusAfter": "idle"
       },
@@ -878,38 +938,38 @@
       }
     },
     "cloudFilesAdded": [
-      "docservice/auth/projects/sp_sz3fqcs5soc7cuivrb2l7fhj4n.json",
-      "docservice/relocation/move_24954458ff7ed8d4d3591b35626a239e/doc/projects/sp_sz3fqcs5soc7cuivrb2l7fhj4n.ops.ndjson",
-      "docservice/relocation/move_24954458ff7ed8d4d3591b35626a239e/index.json",
-      "docservice/tenants/sp_sz3fqcs5soc7cuivrb2l7fhj4n/projects/sp_sz3fqcs5soc7cuivrb2l7fhj4n.ops.ndjson",
-      "secrets/relocation/move_24954458ff7ed8d4d3591b35626a239e.json"
+      "docservice/auth/projects/sp_6hp6sadetrnejfasmsenp6yldv.json",
+      "docservice/relocation/move_77bfa587da3f3d550ac38050a5b0db72/doc/projects/sp_6hp6sadetrnejfasmsenp6yldv.ops.ndjson",
+      "docservice/relocation/move_77bfa587da3f3d550ac38050a5b0db72/index.json",
+      "docservice/tenants/sp_6hp6sadetrnejfasmsenp6yldv/projects/sp_6hp6sadetrnejfasmsenp6yldv.ops.ndjson",
+      "secrets/relocation/move_77bfa587da3f3d550ac38050a5b0db72.json"
     ]
   },
   "moveBack": {
     "entered": {
       "ok": true,
-      "projectId": "sp_gdy4iee35pso3ei3ogunwg7ecq"
+      "projectId": "sp_rhpqnkgdxcrz4ljaopsp7e4fec"
     },
     "statusText": "搬迁暂未完成，房间和本机恢复信息已保留。请检查连接、身份或存储后重试。",
     "image": "docs/reports/assets/v18-move-guard/before-move-back-after-click.png",
     "requests": [
-      {
-        "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
-        "method": "GET",
-        "status": 200
-      },
       {
         "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
         "method": "GET",
         "status": 200
       },
       {
-        "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
+        "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
         "method": "GET",
         "status": 200
       },
       {
         "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
         "method": "GET",
         "status": 200
       }
@@ -929,9 +989,9 @@
     "stateBefore": {
       "view": {
         "shared": {
-          "projectId": "sp_gdy4iee35pso3ei3ogunwg7ecq",
+          "projectId": "sp_rhpqnkgdxcrz4ljaopsp7e4fec",
           "where": "hosted",
-          "accountId": "acc_fea65ae732bc9a2a41e2e8f2"
+          "accountId": "acc_3f7ad08ded56b5f1e89f384c"
         },
         "association": null,
         "reopenState": null,
@@ -950,9 +1010,9 @@
     "stateAfter": {
       "view": {
         "shared": {
-          "projectId": "sp_gdy4iee35pso3ei3ogunwg7ecq",
+          "projectId": "sp_rhpqnkgdxcrz4ljaopsp7e4fec",
           "where": "hosted",
-          "accountId": "acc_fea65ae732bc9a2a41e2e8f2"
+          "accountId": "acc_3f7ad08ded56b5f1e89f384c"
         },
         "association": null,
         "reopenState": null,
@@ -961,7 +1021,7 @@
       },
       "edit": {
         "renamedLocally": true,
-        "before": "probe-edit-1791876514330",
+        "before": "probe-edit-1791876935253",
         "saved": true,
         "statusAfter": "online"
       },

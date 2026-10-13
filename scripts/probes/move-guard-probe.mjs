@@ -124,7 +124,10 @@ const view = page => page.evaluate(() => { const v = window.probe.sync.getSyncVi
 const statusText = page => page.evaluate(() => document.querySelector('[data-pc="collab-status"]')?.textContent ?? null);
 async function openSettings(page) { await page.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings'))); await page.waitForSelector('[data-pc="collab-section"]', { timeout: 10000 }); }
 async function closeSettings(page) { await page.evaluate(() => [...document.querySelectorAll('.pc-dialog button')].find(b => b.textContent?.trim() === '取消')?.click()); }
-const shot = async (page, name) => { const file = path.join(OUT, `${tag}-${name}.png`); await page.screenshot({ path: file }); return path.relative(process.cwd(), file).replaceAll('\\', '/'); };
+const shot = async (page, name) => { const file = path.join(OUT, `${tag}-${name}.png`);
+  // 截图里不留项目密码、邀请链接、二维码（探针房间是一次性的，也不往仓库里放这些值）
+  await page.evaluate(() => { for (const el of document.querySelectorAll('[data-pc="collab-project-password"], [data-pc="collab-invite-link"], [data-pc="collab-qr"], #pc-collab-cpw, #pc-collab-ppw')) { if ('value' in el && el.tagName === 'INPUT') el.type = 'password'; else el.replaceChildren(document.createTextNode('[redacted]')); } });
+  await page.screenshot({ path: file }); return path.relative(process.cwd(), file).replaceAll('\\', '/'); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /** 本机房间现状：页面状态、磁盘封锁、尝试一次编辑能不能存下去、成员重连用的 restore-host 回什么 */

@@ -34,17 +34,17 @@
       "image": "docs/reports/assets/v18-move-guard/after-entry-a-settings.png",
       "requests": [
         {
-          "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
-          "method": "GET",
-          "status": 200
-        },
-        {
           "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
           "method": "GET",
           "status": 200
         },
         {
-          "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
+          "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
           "method": "GET",
           "status": 200
         },
@@ -52,11 +52,6 @@
           "url": "https://127.0.0.1:28956/hosted/shared/create",
           "method": "OPTIONS",
           "status": 403
-        },
-        {
-          "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
-          "method": "GET",
-          "status": 200
         }
       ],
       "cloud": [
@@ -86,7 +81,7 @@
     },
     {
       "step": "B-entry-b-account-node",
-      "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+      "roomId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
       "outcome": "refused",
       "statusText": "搬迁暂未完成，原房间信息已保留。检查连接或存储后重试。",
       "image": "docs/reports/assets/v18-move-guard/after-entry-b-after-click.png",
@@ -117,6 +112,11 @@
           "status": 200
         },
         {
+          "url": "/api/collaboration/host-state",
+          "method": "POST",
+          "status": 200
+        },
+        {
           "url": "/api/collaboration/journal",
           "method": "POST",
           "status": 200
@@ -130,6 +130,11 @@
           "url": "/api/collaboration/restore-host",
           "method": "POST",
           "status": 200
+        },
+        {
+          "url": "/api/collaboration/host-state",
+          "method": "POST",
+          "status": 200
         }
       ],
       "cloud": [
@@ -137,17 +142,22 @@
           "method": "GET",
           "path": "/hosted/healthz",
           "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/hosted/hosting/register",
+          "status": 200
         }
       ],
       "before": {
         "view": {
           "shared": {
-            "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "projectId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
             "where": "lan",
             "accountId": null
           },
           "association": {
-            "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "roomId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
             "where": "lan",
             "service": "https://127.0.0.1:28956/hosted"
           },
@@ -172,8 +182,8 @@
             "ok": true,
             "candidate": {
               "where": "lan",
-              "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
-              "name": "move-guard-b-1791876556639",
+              "projectId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
+              "name": "move-guard-b-1791876957241",
               "mode": "free",
               "base": "http://127.0.0.1:28970/docservice",
               "service": "https://127.0.0.1:28956/hosted",
@@ -186,12 +196,12 @@
       "after": {
         "view": {
           "shared": {
-            "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "projectId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
             "where": "lan",
             "accountId": null
           },
           "association": {
-            "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+            "roomId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
             "where": "lan",
             "service": "https://127.0.0.1:28956/hosted"
           },
@@ -201,7 +211,7 @@
         },
         "edit": {
           "renamedLocally": true,
-          "before": "probe-edit-1791876561806",
+          "before": "probe-edit-1791876961349",
           "saved": true,
           "statusAfter": "online"
         },
@@ -216,8 +226,8 @@
             "ok": true,
             "candidate": {
               "where": "lan",
-              "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
-              "name": "move-guard-b-1791876556639",
+              "projectId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
+              "name": "move-guard-b-1791876957241",
               "mode": "free",
               "base": "http://127.0.0.1:28970/docservice",
               "service": "https://127.0.0.1:28956/hosted",
@@ -232,7 +242,7 @@
     {
       "step": "C-enter-account-project",
       "ok": true,
-      "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik"
+      "projectId": "sp_rkjezy3kzar2t3rm6yrobibzss"
     },
     {
       "step": "C-page-after-enter",
@@ -243,7 +253,7 @@
       "step": "C-move-back-account-node",
       "entered": {
         "ok": true,
-        "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik"
+        "projectId": "sp_rkjezy3kzar2t3rm6yrobibzss"
       },
       "statusText": "搬迁暂未完成，房间和本机恢复信息已保留。请检查连接、身份或存储后重试。",
       "image": "docs/reports/assets/v18-move-guard/after-move-back-after-click.png",
@@ -284,9 +294,9 @@
       "stateBefore": {
         "view": {
           "shared": {
-            "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik",
+            "projectId": "sp_rkjezy3kzar2t3rm6yrobibzss",
             "where": "hosted",
-            "accountId": "acc_edd0eefdcc6a9241988fcfc9"
+            "accountId": "acc_7bccf38079dd9fd10dc19eaf"
           },
           "association": null,
           "reopenState": null,
@@ -305,9 +315,9 @@
       "stateAfter": {
         "view": {
           "shared": {
-            "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik",
+            "projectId": "sp_rkjezy3kzar2t3rm6yrobibzss",
             "where": "hosted",
-            "accountId": "acc_edd0eefdcc6a9241988fcfc9"
+            "accountId": "acc_7bccf38079dd9fd10dc19eaf"
           },
           "association": null,
           "reopenState": null,
@@ -316,7 +326,7 @@
         },
         "edit": {
           "renamedLocally": true,
-          "before": "probe-edit-1791876572752",
+          "before": "probe-edit-1791876975551",
           "saved": true,
           "statusAfter": "online"
         },
@@ -327,10 +337,10 @@
     },
     {
       "step": "L-entry-b-legacy-node",
-      "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+      "roomId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
       "outcome": "moved",
       "statusText": "已搬到云端，仍是原房间。",
-      "image": "docs/reports/assets/v18-move-guard/after-entry-b-after-click.png",
+      "image": "docs/reports/assets/v18-move-guard/after-legacy-entry-b-after-click.png",
       "requests": [
         {
           "url": "/api/collaboration/journal",
@@ -388,12 +398,12 @@
           "status": 200
         },
         {
-          "url": "http://127.0.0.1:28960/hosting/relay/sp_dwtphn2cmqj3kxyki4qr4z63pq/doc/shared/challenge",
+          "url": "http://127.0.0.1:28960/hosting/relay/sp_pajhrmo5qdm6kmbirwcb6jztiw/doc/shared/challenge",
           "method": "OPTIONS",
           "status": 204
         },
         {
-          "url": "http://127.0.0.1:28960/hosting/relay/sp_dwtphn2cmqj3kxyki4qr4z63pq/doc/shared/challenge",
+          "url": "http://127.0.0.1:28960/hosting/relay/sp_pajhrmo5qdm6kmbirwcb6jztiw/doc/shared/challenge",
           "method": "POST",
           "status": 200
         },
@@ -401,6 +411,11 @@
           "url": "/api/collaboration/identity",
           "method": "POST",
           "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+          "method": "OPTIONS",
+          "status": 204
         },
         {
           "url": "http://127.0.0.1:28960/hosting/authorize-asset",
@@ -458,62 +473,16 @@
           "status": 409
         }
       ],
-      "cloud": [
-        {
-          "method": "POST",
-          "path": "/hosted/shared/account/members",
-          "status": 200
-        },
-        {
-          "method": "POST",
-          "path": "/hosted/shared/account/session",
-          "status": 200
-        },
-        {
-          "method": "POST",
-          "path": "/hosted/shared/account/members",
-          "status": 200
-        },
-        {
-          "method": "POST",
-          "path": "/hosted/shared/account/session",
-          "status": 200
-        },
-        {
-          "method": "POST",
-          "path": "/hosted/shared/account/members",
-          "status": 200
-        },
-        {
-          "method": "POST",
-          "path": "/hosted/shared/account/session",
-          "status": 200
-        },
-        {
-          "method": "POST",
-          "path": "/hosted/hosting/register",
-          "status": 200
-        },
-        {
-          "method": "POST",
-          "path": "/hosted/shared/account/members",
-          "status": 200
-        },
-        {
-          "method": "POST",
-          "path": "/hosted/shared/account/session",
-          "status": 200
-        }
-      ],
+      "cloud": "(旧模式节点是普通 http，不在探针的云端请求记录里)",
       "before": {
         "view": {
           "shared": {
-            "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "projectId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
             "where": "lan",
             "accountId": null
           },
           "association": {
-            "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "roomId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
             "where": "lan",
             "service": "http://127.0.0.1:28960"
           },
@@ -536,8 +505,8 @@
             "ok": true,
             "candidate": {
               "where": "lan",
-              "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
-              "name": "move-guard-legacy-1791876576711",
+              "projectId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
+              "name": "move-guard-legacy-1791876979879",
               "mode": "free",
               "base": "http://127.0.0.1:28970/docservice",
               "service": "http://127.0.0.1:28960",
@@ -550,12 +519,12 @@
       "after": {
         "view": {
           "shared": {
-            "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "projectId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
             "where": "hosted",
             "accountId": null
           },
           "association": {
-            "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+            "roomId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
             "where": "hosted",
             "service": "http://127.0.0.1:28960"
           },
@@ -565,7 +534,7 @@
         },
         "edit": {
           "renamedLocally": true,
-          "before": "probe-edit-1791876583885",
+          "before": "probe-edit-1791876986627",
           "saved": true,
           "statusAfter": "online"
         },
@@ -581,10 +550,10 @@
         }
       },
       "cloudFilesAdded": [
-        "auth/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.json",
-        "relocation/move_a1eceb69b46a7d440a8d2e34734b71a4/doc/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.ops.ndjson",
-        "relocation/move_a1eceb69b46a7d440a8d2e34734b71a4/index.json",
-        "tenants/sp_dwtphn2cmqj3kxyki4qr4z63pq/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.ops.ndjson"
+        "auth/projects/sp_pajhrmo5qdm6kmbirwcb6jztiw.json",
+        "relocation/move_995e1d3b9c778c5edd7ea1655310c8fd/doc/projects/sp_pajhrmo5qdm6kmbirwcb6jztiw.ops.ndjson",
+        "relocation/move_995e1d3b9c778c5edd7ea1655310c8fd/index.json",
+        "tenants/sp_pajhrmo5qdm6kmbirwcb6jztiw/projects/sp_pajhrmo5qdm6kmbirwcb6jztiw.ops.ndjson"
       ]
     }
   ],
@@ -593,17 +562,17 @@
     "image": "docs/reports/assets/v18-move-guard/after-entry-a-settings.png",
     "requests": [
       {
-        "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
-        "method": "GET",
-        "status": 200
-      },
-      {
         "url": "http://127.0.0.1:28972/server/hosting/client.mjs",
         "method": "GET",
         "status": 200
       },
       {
-        "url": "http://127.0.0.1:28971/server/hosting/protocol.mjs",
+        "url": "http://127.0.0.1:28971/server/hosting/client.mjs",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
         "method": "GET",
         "status": 200
       },
@@ -611,11 +580,6 @@
         "url": "https://127.0.0.1:28956/hosted/shared/create",
         "method": "OPTIONS",
         "status": 403
-      },
-      {
-        "url": "http://127.0.0.1:28972/server/hosting/protocol.mjs",
-        "method": "GET",
-        "status": 200
       }
     ],
     "cloud": [
@@ -644,7 +608,7 @@
     }
   },
   "entryB": {
-    "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+    "roomId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
     "outcome": "refused",
     "statusText": "搬迁暂未完成，原房间信息已保留。检查连接或存储后重试。",
     "image": "docs/reports/assets/v18-move-guard/after-entry-b-after-click.png",
@@ -675,6 +639,11 @@
         "status": 200
       },
       {
+        "url": "/api/collaboration/host-state",
+        "method": "POST",
+        "status": 200
+      },
+      {
         "url": "/api/collaboration/journal",
         "method": "POST",
         "status": 200
@@ -688,6 +657,11 @@
         "url": "/api/collaboration/restore-host",
         "method": "POST",
         "status": 200
+      },
+      {
+        "url": "/api/collaboration/host-state",
+        "method": "POST",
+        "status": 200
       }
     ],
     "cloud": [
@@ -695,17 +669,22 @@
         "method": "GET",
         "path": "/hosted/healthz",
         "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/hosted/hosting/register",
+        "status": 200
       }
     ],
     "before": {
       "view": {
         "shared": {
-          "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+          "projectId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
           "where": "lan",
           "accountId": null
         },
         "association": {
-          "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+          "roomId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
           "where": "lan",
           "service": "https://127.0.0.1:28956/hosted"
         },
@@ -730,8 +709,8 @@
           "ok": true,
           "candidate": {
             "where": "lan",
-            "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
-            "name": "move-guard-b-1791876556639",
+            "projectId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
+            "name": "move-guard-b-1791876957241",
             "mode": "free",
             "base": "http://127.0.0.1:28970/docservice",
             "service": "https://127.0.0.1:28956/hosted",
@@ -744,12 +723,12 @@
     "after": {
       "view": {
         "shared": {
-          "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+          "projectId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
           "where": "lan",
           "accountId": null
         },
         "association": {
-          "roomId": "sp_krweyxvi4anjyh2uygaku6nnwz",
+          "roomId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
           "where": "lan",
           "service": "https://127.0.0.1:28956/hosted"
         },
@@ -759,7 +738,7 @@
       },
       "edit": {
         "renamedLocally": true,
-        "before": "probe-edit-1791876561806",
+        "before": "probe-edit-1791876961349",
         "saved": true,
         "statusAfter": "online"
       },
@@ -774,8 +753,8 @@
           "ok": true,
           "candidate": {
             "where": "lan",
-            "projectId": "sp_krweyxvi4anjyh2uygaku6nnwz",
-            "name": "move-guard-b-1791876556639",
+            "projectId": "sp_5ftcqbrasfqh6o6tdciwcr2dtm",
+            "name": "move-guard-b-1791876957241",
             "mode": "free",
             "base": "http://127.0.0.1:28970/docservice",
             "service": "https://127.0.0.1:28956/hosted",
@@ -790,7 +769,7 @@
   "moveBack": {
     "entered": {
       "ok": true,
-      "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik"
+      "projectId": "sp_rkjezy3kzar2t3rm6yrobibzss"
     },
     "statusText": "搬迁暂未完成，房间和本机恢复信息已保留。请检查连接、身份或存储后重试。",
     "image": "docs/reports/assets/v18-move-guard/after-move-back-after-click.png",
@@ -831,9 +810,9 @@
     "stateBefore": {
       "view": {
         "shared": {
-          "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik",
+          "projectId": "sp_rkjezy3kzar2t3rm6yrobibzss",
           "where": "hosted",
-          "accountId": "acc_edd0eefdcc6a9241988fcfc9"
+          "accountId": "acc_7bccf38079dd9fd10dc19eaf"
         },
         "association": null,
         "reopenState": null,
@@ -852,9 +831,9 @@
     "stateAfter": {
       "view": {
         "shared": {
-          "projectId": "sp_qrcb2r6h3f4qpsziucvyl2olik",
+          "projectId": "sp_rkjezy3kzar2t3rm6yrobibzss",
           "where": "hosted",
-          "accountId": "acc_edd0eefdcc6a9241988fcfc9"
+          "accountId": "acc_7bccf38079dd9fd10dc19eaf"
         },
         "association": null,
         "reopenState": null,
@@ -863,7 +842,7 @@
       },
       "edit": {
         "renamedLocally": true,
-        "before": "probe-edit-1791876572752",
+        "before": "probe-edit-1791876975551",
         "saved": true,
         "statusAfter": "online"
       },
@@ -873,10 +852,10 @@
     "cloudFilesAdded": []
   },
   "entryBLegacy": {
-    "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+    "roomId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
     "outcome": "moved",
     "statusText": "已搬到云端，仍是原房间。",
-    "image": "docs/reports/assets/v18-move-guard/after-entry-b-after-click.png",
+    "image": "docs/reports/assets/v18-move-guard/after-legacy-entry-b-after-click.png",
     "requests": [
       {
         "url": "/api/collaboration/journal",
@@ -934,12 +913,12 @@
         "status": 200
       },
       {
-        "url": "http://127.0.0.1:28960/hosting/relay/sp_dwtphn2cmqj3kxyki4qr4z63pq/doc/shared/challenge",
+        "url": "http://127.0.0.1:28960/hosting/relay/sp_pajhrmo5qdm6kmbirwcb6jztiw/doc/shared/challenge",
         "method": "OPTIONS",
         "status": 204
       },
       {
-        "url": "http://127.0.0.1:28960/hosting/relay/sp_dwtphn2cmqj3kxyki4qr4z63pq/doc/shared/challenge",
+        "url": "http://127.0.0.1:28960/hosting/relay/sp_pajhrmo5qdm6kmbirwcb6jztiw/doc/shared/challenge",
         "method": "POST",
         "status": 200
       },
@@ -947,6 +926,11 @@
         "url": "/api/collaboration/identity",
         "method": "POST",
         "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:28960/hosting/authorize-asset",
+        "method": "OPTIONS",
+        "status": 204
       },
       {
         "url": "http://127.0.0.1:28960/hosting/authorize-asset",
@@ -1004,62 +988,16 @@
         "status": 409
       }
     ],
-    "cloud": [
-      {
-        "method": "POST",
-        "path": "/hosted/shared/account/members",
-        "status": 200
-      },
-      {
-        "method": "POST",
-        "path": "/hosted/shared/account/session",
-        "status": 200
-      },
-      {
-        "method": "POST",
-        "path": "/hosted/shared/account/members",
-        "status": 200
-      },
-      {
-        "method": "POST",
-        "path": "/hosted/shared/account/session",
-        "status": 200
-      },
-      {
-        "method": "POST",
-        "path": "/hosted/shared/account/members",
-        "status": 200
-      },
-      {
-        "method": "POST",
-        "path": "/hosted/shared/account/session",
-        "status": 200
-      },
-      {
-        "method": "POST",
-        "path": "/hosted/hosting/register",
-        "status": 200
-      },
-      {
-        "method": "POST",
-        "path": "/hosted/shared/account/members",
-        "status": 200
-      },
-      {
-        "method": "POST",
-        "path": "/hosted/shared/account/session",
-        "status": 200
-      }
-    ],
+    "cloud": "(旧模式节点是普通 http，不在探针的云端请求记录里)",
     "before": {
       "view": {
         "shared": {
-          "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+          "projectId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
           "where": "lan",
           "accountId": null
         },
         "association": {
-          "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+          "roomId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
           "where": "lan",
           "service": "http://127.0.0.1:28960"
         },
@@ -1082,8 +1020,8 @@
           "ok": true,
           "candidate": {
             "where": "lan",
-            "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
-            "name": "move-guard-legacy-1791876576711",
+            "projectId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
+            "name": "move-guard-legacy-1791876979879",
             "mode": "free",
             "base": "http://127.0.0.1:28970/docservice",
             "service": "http://127.0.0.1:28960",
@@ -1096,12 +1034,12 @@
     "after": {
       "view": {
         "shared": {
-          "projectId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+          "projectId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
           "where": "hosted",
           "accountId": null
         },
         "association": {
-          "roomId": "sp_dwtphn2cmqj3kxyki4qr4z63pq",
+          "roomId": "sp_pajhrmo5qdm6kmbirwcb6jztiw",
           "where": "hosted",
           "service": "http://127.0.0.1:28960"
         },
@@ -1111,7 +1049,7 @@
       },
       "edit": {
         "renamedLocally": true,
-        "before": "probe-edit-1791876583885",
+        "before": "probe-edit-1791876986627",
         "saved": true,
         "statusAfter": "online"
       },
@@ -1127,10 +1065,10 @@
       }
     },
     "cloudFilesAdded": [
-      "auth/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.json",
-      "relocation/move_a1eceb69b46a7d440a8d2e34734b71a4/doc/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.ops.ndjson",
-      "relocation/move_a1eceb69b46a7d440a8d2e34734b71a4/index.json",
-      "tenants/sp_dwtphn2cmqj3kxyki4qr4z63pq/projects/sp_dwtphn2cmqj3kxyki4qr4z63pq.ops.ndjson"
+      "auth/projects/sp_pajhrmo5qdm6kmbirwcb6jztiw.json",
+      "relocation/move_995e1d3b9c778c5edd7ea1655310c8fd/doc/projects/sp_pajhrmo5qdm6kmbirwcb6jztiw.ops.ndjson",
+      "relocation/move_995e1d3b9c778c5edd7ea1655310c8fd/index.json",
+      "tenants/sp_pajhrmo5qdm6kmbirwcb6jztiw/projects/sp_pajhrmo5qdm6kmbirwcb6jztiw.ops.ndjson"
     ]
   }
 }
