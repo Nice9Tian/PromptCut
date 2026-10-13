@@ -24,6 +24,14 @@
  *   拿它当「这一次最多渲多久」。`signal`:这一轮被停掉时把排着的请求撤回;
  * - 渲染服务说「这次没看成」(`{ ok: false, look, error }`)时抛带原话的错,工具把它原样交给模型:这里不再重试、不挂着;
  * - 聊天栏的可视化记录(`/api/ai/visual` 的看画面记录、改片段的前后对比)存在工作进程里,在线页面取不到:这里直接回「没有」,不发请求。
+ * - **账号模式绑运行授权**(0.7.18;`forProject` 的 `authorize` / `run` / `instance`):项目号取自文档服务签的任务授权;登记之前、
+ *   每一趟去问之前都先过一次 `authorize()`(执行器去问文档服务「这条任务现在还能不能读」),不过就把排着的请求撤回并抛错——
+ *   任务被停、被撤销以后不再出图。请求体里带上 `run`(任务授权号、任务号、对话号),渲染服务把它记在这条请求上;
+ *   签名里的实例号填这条任务所在进程在文档服务登记的那一个,渲染服务按它给请求分主人(问、撤只认主人)。
+ *   **这不是隔离**:实例号是调用方自己填的,渲染服务不核它和钥匙的对应,而各任务进程用的是同一把私钥——一个任务进程
+ *   填别人的实例号也签得出来。实际挡着别的任务进程来问、来撤的,是请求号是现生成的随机串(144 位),别人猜不到。
+ *   授权闸答「不行」和「文档服务一时问不到」是两回事,给模型的话分开(问不到先按退避再问几次)。
+ *   渲染服务那一侧现在只核服务私钥的签名,**不向文档服务核这条任务授权**(它还没有账号模式下连文档服务的身份),见报告。
  */
 import { randomBytes } from 'node:crypto';
 import { signLookRequest, LOOK_AUTH_HEADER, LOOK_ROUTES } from '../hosted-render/look.mjs';
@@ -41,10 +49,19 @@ export const LOOK_CLIENT_DEFAULTS = Object.freeze({
   reconnectMs: 5 * 60_000,
   /** 渲染服务说不认识这个请求时,照原样再登记最多几次 */
   maxResubmits: 3,
+  /** 授权闸说「文档服务一时问不到」时,按退避再问最多几次;都问不到才告诉模型没看成 */
+  authorizeRetries: 3,
 });
 
 const UNREACHABLE = '这次没看成：连不上这台云节点的渲染服务。先按项目内容继续，并在汇报里说明没有看过画面。';
 const NOT_ACCEPTED = '这次没看成：这台云节点的渲染服务没有接受看画面的请求。先按项目内容继续，并在汇报里说明没有看过画面。';
+const REVOKED = '这次没看成：这条任务已经被停止，或者不再有读这个项目的权限。';
+const AUTHORITY_UNAVAILABLE = '这次没看成：暂时确认不了这条任务的权限（文档服务一时连不上）。先按项目内容继续，稍后可以再看一次。';
+/** 给模型看的话集中在这里（措辞是一处改处处改；测试按它断言） */
+export const LOOK_CLIENT_MESSAGES = Object.freeze({ UNREACHABLE, NOT_ACCEPTED, REVOKED, AUTHORITY_UNAVAILABLE });
+/** 授权闸抛这个码表示「文档服务一时问不到」（`tool-context.mjs`），不是「没权限」 */
+const AUTHORITY_UNAVAILABLE_CODE = 'run-authority-unavailable';
+const RUN_REF = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /** 只许回环上的 http 地址,不带路径;不合格回 null */
 export function parseLookUrl(raw) {
@@ -70,7 +87,7 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
   if (!base) throw new TypeError('createLookClient: url 要是回环上的 http 地址(如 http://127.0.0.1:5399)');
   if (!key || typeof key.priv !== 'string') throw new TypeError('createLookClient: 要服务私钥');
   const limits = { ...LOOK_CLIENT_DEFAULTS, ...limitsIn };
-  const stats = { requests: 0, ok: 0, refused: 0, failed: 0, queued: 0, reconnects: 0, resubmits: 0, cancelled: 0 };
+  const stats = { requests: 0, ok: 0, refused: 0, failed: 0, queued: 0, reconnects: 0, resubmits: 0, cancelled: 0, revoked: 0, unverified: 0 };
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响工具 */ } };
   const sleep = sleepIn ?? ((ms, signal) => new Promise((resolve) => {
     const t = setTimeout(done, ms);
@@ -79,12 +96,12 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
   }));
 
   /** 发一趟签了名的请求。回 `{ res, data }`;网络层的错原样抛 */
-  async function send(pathname, text, timeoutMs, signal) {
+  async function send(pathname, text, timeoutMs, signal, instance = null) {
     const signals = [AbortSignal.timeout(timeoutMs)];
     if (signal) signals.push(signal);
     const res = await fetchImpl(`${base}${pathname}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', [LOOK_AUTH_HEADER]: signLookRequest(key, text, { now: now() }) },
+      headers: { 'content-type': 'application/json', [LOOK_AUTH_HEADER]: signLookRequest(instance ? { ...key, instanceId: instance } : key, text, { now: now() }) },
       body: text,
       signal: AbortSignal.any(signals),
     });
@@ -92,12 +109,12 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
   }
 
   /** 这一轮被停掉了:把排着的请求撤回(尽力而为,不等结果) */
-  function cancel(requestId) {
+  function cancel(requestId, instance = null) {
     stats.cancelled += 1;
-    void send('/look/cancel', JSON.stringify({ requestId }), 5000).catch(() => {});
+    void send('/look/cancel', JSON.stringify({ requestId }), 5000, undefined, instance).catch(() => {});
   }
 
-  async function post(projectId, cards, pathname, body, { signal, timeoutMs } = {}) {
+  async function post(projectId, cards, pathname, body, { signal, timeoutMs, authorize = null, run = null, instance = null } = {}) {
     // 可视化记录:云端不存(在线页面取不到工作进程里的文件)。`get_gif` 写规格的那一次除外
     if (pathname === '/api/ai/visual' && body?.tool !== 'get_gif') return { ok: false, error: '云端不存可视化记录' };
     if (!Object.hasOwn(LOOK_ROUTES, pathname)) throw new Error(`云端的渲染服务不提供 ${pathname}`);
@@ -105,7 +122,7 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
     try { cardRevs = (typeof cards === 'function' ? cards() : cards) ?? {}; } catch { cardRevs = {}; }
     // 同一个 id 重发不会登记两次:没收到回执、渲染服务重启后不认识,都拿它再登记
     const requestId = randomBytes(18).toString('base64url');
-    const submitText = JSON.stringify({ projectId, path: pathname, body, cards: cardRevs, requestId, ...(Number(timeoutMs) > 0 ? { timeoutMs: Number(timeoutMs) } : {}) });
+    const submitText = JSON.stringify({ projectId, path: pathname, body, cards: cardRevs, requestId, ...(Number(timeoutMs) > 0 ? { timeoutMs: Number(timeoutMs) } : {}), ...(run ? { run } : {}) });
     stats.requests += 1;
     const started = now();
     let submitted = false; // 渲染服务认下这个请求了没有
@@ -116,14 +133,37 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
     const backoff = () => limits.backoffMs[Math.min(tries++, limits.backoffMs.length - 1)];
 
     for (;;) {
-      if (signal?.aborted) { if (submitted) cancel(requestId); throw signal.reason ?? new Error('aborted'); }
+      if (signal?.aborted) { if (submitted) cancel(requestId, instance); throw signal.reason ?? new Error('aborted'); }
+      // 账号模式:这条任务现在还读得了这个项目才登记、才接着问;不行就把排着的撤回
+      if (authorize) {
+        // 三种结果:行;不行(任务被停、被撤销、没权限)——撤回并照实说;文档服务一时问不到——按退避再问几次,
+        // 都问不到也撤回,但说的是「确认不了」,不说成「被停止或没权限」
+        let allowed = false, unreachable = 0;
+        for (;;) {
+          try { allowed = (await authorize())?.allowed !== false; break; }
+          catch (err) {
+            if (err?.code !== AUTHORITY_UNAVAILABLE_CODE) { allowed = false; break; }
+            unreachable += 1;
+            if (unreachable > limits.authorizeRetries || signal?.aborted) break;
+            await sleep(limits.backoffMs[Math.min(unreachable - 1, limits.backoffMs.length - 1)], signal);
+          }
+        }
+        if (signal?.aborted) continue;
+        if (!allowed) {
+          if (submitted) cancel(requestId, instance);
+          const unknown = unreachable > limits.authorizeRetries;
+          if (unknown) stats.unverified += 1; else stats.revoked += 1;
+          say(unknown ? 'agent.look.unverified' : 'agent.look.revoked', { projectId, submitted });
+          throw new Error(unknown ? AUTHORITY_UNAVAILABLE : REVOKED);
+        }
+      }
       let out;
       try {
         out = submitted
-          ? await send('/look/poll', JSON.stringify({ requestId, waitMs: limits.pollWaitMs }), limits.pollWaitMs + limits.requestSlackMs, signal)
-          : await send('/look', submitText, limits.submitTimeoutMs, signal);
+          ? await send('/look/poll', JSON.stringify({ requestId, waitMs: limits.pollWaitMs }), limits.pollWaitMs + limits.requestSlackMs, signal, instance)
+          : await send('/look', submitText, limits.submitTimeoutMs, signal, instance);
       } catch (err) {
-        if (signal?.aborted) { if (submitted) cancel(requestId); throw err; }
+        if (signal?.aborted) { if (submitted) cancel(requestId, instance); throw err; }
         // 连不上、这一趟超时:渲染服务可能正在重启。不算没看成,按退避接着来;连着太久都不通才放弃
         downSince ??= now();
         stats.reconnects += 1;
@@ -186,13 +226,20 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
      * 走不走隔离工作进程,并等它把这几份装到至少这个版本。
      * @param {string} projectId 来自鉴权,不来自工具参数
      * @param {{ cards?: () => Record<string, number | null>, signal?: AbortSignal }} [o] `signal`:这一轮(或这个实例)被停掉的信号。
-     *   它一响,这个项目排着、在渲的看画面请求都撤回(调用时另给的 `opts.signal` 同样算)
+     *   它一响,这个项目排着、在渲的看画面请求都撤回(调用时另给的 `opts.signal` 同样算)。
+     *   账号模式另给三样(只来自执行器,不来自工具参数):`authorize()` 问文档服务这条任务现在还能不能读;`run` 是这条任务的
+     *   `{ runGrantId, runId, conversationId }`,随请求交给渲染服务记下;`instance` 是这个进程在文档服务登记的实例号
      */
-    forProject(projectId, { cards = null, signal: runSignal = null } = {}) {
+    forProject(projectId, { cards = null, signal: runSignal = null, authorize = null, run = null, instance = null } = {}) {
       if (typeof projectId !== 'string' || !projectId) throw new TypeError('forProject: 要 projectId');
+      if (authorize !== null && typeof authorize !== 'function') throw new TypeError('forProject: authorize 要是函数');
+      if (run !== null && (!run || typeof run !== 'object' || Object.keys(run).sort().join(',') !== 'conversationId,runGrantId,runId'
+        || Object.values(run).some((v) => typeof v !== 'string' || !RUN_REF.test(v)))) throw new TypeError('forProject: run 不对');
+      if (instance !== null && (typeof instance !== 'string' || !RUN_REF.test(instance))) throw new TypeError('forProject: instance 不对');
+      const bound = run ? Object.freeze({ ...run }) : null;
       return (pathname, body, opts = {}) => {
         const signals = [runSignal, opts?.signal].filter(Boolean);
-        return post(projectId, cards, pathname, body, { signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0], timeoutMs: opts?.timeoutMs });
+        return post(projectId, cards, pathname, body, { signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0], timeoutMs: opts?.timeoutMs, authorize, run: bound, instance });
       };
     },
     describe: () => ({ url: base, ...stats }),

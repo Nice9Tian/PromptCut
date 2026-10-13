@@ -1332,6 +1332,8 @@ export function createAgentInstance(env) {
         shared: hostedShared,
         // 卡片声音:卡片代码交给同机的渲染服务执行(与看画面同一个口子);节点没配时是 null
         look: () => prerenderPost ?? null,
+        // 账号模式:这条任务的「项目素材」(凭任务授权读写本项目素材)。没给时素材那几个工具照旧走成员票据
+        ...(env.accountMode === true && env.accountRunAssets ? { runAssets: env.accountRunAssets } : {}),
       });
       hostedContexts.set(agent, ctx);
     }

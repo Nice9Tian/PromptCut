@@ -11,7 +11,7 @@ import { createFileStore } from '../docservice/store/index.mjs';
 import { createDocService } from '../docservice/service.mjs';
 import { wsClient } from './fake-ws-kit.mjs';
 
-export async function operationFixture({ dir, port = 5760, request, failpoint = () => {}, historyFailpoint = () => {},
+export async function operationFixture({ dir, port = 0, request, failpoint = () => {}, historyFailpoint = () => {},
   accountFailpoint = () => {}, projectionFailpoint = () => {}, onFenceRequested, acknowledgeFence, runProvider,
   clock = { now: 100 }, principalTransform = p => p } = {}) {
   fs.mkdirSync(dir, { recursive: true });
@@ -58,7 +58,7 @@ export async function operationFixture({ dir, port = 5760, request, failpoint = 
       return principalTransform({ ...p, tenantId: p.projectId, userId: p.accountId, deviceId: `fixture-${name}` });
     },
   });
-  await service.listen(port, '127.0.0.1');
+  port = (await service.listen(port, '127.0.0.1')).port;
   const clients = [];
   return { account, authority, ledger, store, storeDir, history, coordinator, project, sessions, counts, projectId: sessions.projectId,
     async connect(name = 'a', projectId = sessions.projectId) { const c = wsClient(`ws://127.0.0.1:${port}/?page=${name}&project=${projectId}`); clients.push(c); await c.opened; return c; },

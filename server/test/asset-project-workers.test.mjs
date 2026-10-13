@@ -112,14 +112,14 @@ test('真实ffmpeg项目worker独立转码/登记；编码后失权的迟到产�
 });
 
 test('frame stream真实HTTP清单/初始化/分段按项目、错项目worker归属与迟到save拒', async t => {
-  const dir = await tmp(t), fixture = await startAssetProjectFixture({ port: 5782 }); t.after(() => fixture.close());
+  const dir = await tmp(t), fixture = await startAssetProjectFixture(); t.after(() => fixture.close());
   const aOwner = owner(), bOwner = owner('B'), a = new StreamStore(dir, { ownership: aOwner, projectAccess: fixture.projectAccess }), b = new StreamStore(dir, { ownership: bOwner, projectAccess: fixture.projectAccess });
   assert.notEqual(a.root, b.root); const initId = 'b'.repeat(16), file = `0-${'c'.repeat(16)}.m4s`;
   await a.save({ streamKey: hash, projectId: 'A', inits: {}, segments: {}, length: 15 }); await fs.writeFile(a.initFile(hash, initId), bytes); await fs.writeFile(a.segFile(hash, file), bytes);
   const server = http.createServer((req, res) => { const selected = req.headers.authorization === 'Bearer B-rw' ? b : a; if (!handleStreamRequest(selected, req, res, req.url)) { res.statusCode = 404; res.end(); } });
-  await new Promise(r => server.listen(5781, '127.0.0.1', r)); t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); });
-  for (const part of ['manifest', `init/${initId}`, `seg/${file}`]) for (const project of ['A', 'B']) { const r = await fetch(`http://127.0.0.1:5781/stream/${hash}/${part}`, { headers: { authorization: `Bearer ${project}-rw` } }); assert.equal(r.status, project === 'A' ? 200 : 404); await r.arrayBuffer(); }
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); });
+  for (const part of ['manifest', `init/${initId}`, `seg/${file}`]) for (const project of ['A', 'B']) { const r = await fetch(`http://127.0.0.1:${server.address().port}/stream/${hash}/${part}`, { headers: { authorization: `Bearer ${project}-rw` } }); assert.equal(r.status, project === 'A' ? 200 : 404); await r.arrayBuffer(); }
   const producer = new StreamProducer({ root: dir }, { ownership: aOwner, env: {} }); await assert.rejects(producer.adoptionNeeds({ projectId: 'B' }), /project-mismatch/); await assert.rejects(producer.adoptSegmentsNow({ projectId: 'B' }, {}), /project-mismatch/);
   aOwner.deny(); await assert.rejects(a.save({ streamKey: hash }), /access-revoked/); await assert.rejects(producer.adoptionNeeds({ projectId: 'A' }), /access-revoked/);
-  await fixture.revoke('A'); const denied = await fetch(`http://127.0.0.1:5781/stream/${hash}/manifest`, { headers: { authorization: 'Bearer A-rw' } }); assert.equal(denied.status, 403); await denied.arrayBuffer();
+  await fixture.revoke('A'); const denied = await fetch(`http://127.0.0.1:${server.address().port}/stream/${hash}/manifest`, { headers: { authorization: 'Bearer A-rw' } }); assert.equal(denied.status, 403); await denied.arrayBuffer();
 });
