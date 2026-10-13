@@ -5,6 +5,7 @@
  *
  * 自己起一台隔离的编辑器(舞台端口是 +1、+2,三个连号都要空着;数据、素材、卡片改动层都指到 `--out` 下),跑完按进程号收掉。
  * 编辑器进程带 `PROMPTCUT_STAGE_PORT_LOG`:舞台端口每来一个请求,代理记一行(方法、地址、放没放行)。
+ * `--out` 不要指到仓库的 `out/` 下:那里不在开发服务器的监听范围里,第 5 步改卡不会触发热更新(缺省在系统临时目录)。
  *
  * 流程:
  *   0. 往卡片改动层写一张用户卡(`probe-gate-card`):它在舞台里挂上以后**自己**去调一次 `POST /api/agent/bind`,
@@ -20,6 +21,7 @@
  *      卡片写入与同步、渲染节点、采集、网页工具、项目根下的文件、`/@fs/` 任意文件、文档服务的 WebSocket):**全部被拒**(403;WebSocket 连不上)。
  *      同一批接口从编辑器端口发(Node 里,不带 Origin):没有一个是 403。
  *   4. 被拒之后预览照常:再点一处、播一秒,用户卡和视频照样画得出来。
+ *   5. 改这张用户卡的源码:舞台不重载就换成新的(热更新的 WebSocket、重新取源码都经舞台端口)。
  *
  * 贴轨道流、按住标尺拖这两样的逐帧核对用现成的 `scrub-stream-probe.mjs`(同一道闸下跑,见报告)。
  * 验收:退出码 0,结果里 `fails: []`。等待时限只为防卡死。
@@ -59,6 +61,8 @@ const GATE_LOG = path.join(WORK, 'stage-port.log');
 const CARD_ID = 'probe-gate-card';
 /** 用户卡画的色块:纯品红,别的东西不会是这个颜色 */
 const MARK = [255, 0, 255];
+/** 改卡之后的颜色 */
+const MARK2 = [16, 32, 48];
 const FPS = 30, WIDTH = 1280, HEIGHT = 720, SECONDS = 6;
 
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ step, t: Date.now(), ...fields })}\n`);
@@ -99,7 +103,7 @@ async function makeAudio() {
 }
 
 /** 用户卡:画一个品红色块;挂上以后自己调一次 Agent 绑定;留一个函数让探针叫它逐个去调 */
-async function writeCard() {
+async function writeCard(color = MARK) {
   const dir = path.join(OVERRIDES, 'src', 'cards', 'user');
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, `${CARD_ID}.tsx`), `import type { CardDef, CardProps } from "../../kernel/types";
@@ -130,7 +134,7 @@ if (typeof window !== "undefined" && !g.__gateProbe) {
   void call({ method: "POST", path: "/api/agent/bind", type: "application/json", body: JSON.stringify({ mode: "ticket", projectId: "p", url: "ws://attacker.invalid/" }) }).then((r) => { g.__gateProbe.auto = r; });
 }
 function C(_: CardProps<{}>) {
-  return <div data-gate-mark style={{ position: "absolute", left: 0, top: 0, width: 320, height: 240, background: "rgb(${MARK.join(',')})" }} />;
+  return <div data-gate-mark style={{ position: "absolute", left: 0, top: 0, width: 320, height: 240, background: "rgb(${color.join(',')})" }} />;
 }
 export const probeGateCard: CardDef<{}> = {
   id: "${CARD_ID}", name: "舞台端口探针", description: "stage-gate-probe", source: "user",
@@ -457,6 +461,18 @@ try {
   await page.evaluate(async () => (await import('/src/store/project.ts')).actions.pause());
   out.afterAttack = { shot: shot4, t: t5, stage: await stageState() };
   check(shot4 && shot4.mark > 2000 && shot4.videoStd > 8 && t5 > 2.5, '被拒之后预览照常:用户卡、视频都画得出来,能播放', out.afterAttack);
+
+  /* ---------------------------------------------------------------- 5. 改卡:舞台跟着热更新(热更新的 WebSocket 与重新取源码都经舞台端口) */
+  for (const f of stageFrames()) await f.evaluate(() => { globalThis.__gateStay = 1; }).catch(() => {});
+  await writeCard(MARK2);
+  const colorNow = async () => (await frontFrame())?.evaluate(() => { const el = document.querySelector('[data-gate-mark]'); return el ? { color: getComputedStyle(el).backgroundColor, stayed: globalThis.__gateStay === 1 } : null; }).catch(() => null);
+  const hot = await until('舞台里的用户卡换成改过的颜色', async () => { const c = await colorNow(); return c?.color === `rgb(${MARK2.join(', ')})` ? c : null; }, 60000);
+  await sleep(500);
+  const shot5 = await shoot('5-after-card-edit');
+  const px = shot5 ? [0, 1, 2].map((k) => shot5.data[(Math.round(shot5.height * 0.15) * shot5.width + Math.round(shot5.width * 0.1)) * 4 + k]) : null;
+  out.hotUpdate = { dom: hot ?? await colorNow(), pixel: px };
+  check(!!hot && hot.stayed, '改了用户卡的源码,舞台不重载就换成新的(热更新经舞台端口照常)', out.hotUpdate);
+  check(px && px.every((v, k) => Math.abs(v - MARK2[k]) <= 6), '截图里那一块是改过之后的颜色', out.hotUpdate);
   const tail = readLog().slice(logBefore.length + logAfter.length).filter((r) => !r.ok);
   check(tail.length === 0, '之后舞台端口没有新的正当请求被拒', shapes(tail));
   out.pageErrors = pageErrors.slice(0, 10);
