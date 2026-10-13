@@ -16,7 +16,7 @@
  * 外部的等待(下载、上传、合成)都在进程级的锁之外;进锁只做同步的改项目。
  * 本文件不引用 `src/`:前端代码只经 `ssr-host.mjs`(`ctx.host()`)。
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -252,6 +252,9 @@ export function createHostedTools({
    * @param {() => string | null} c.runId
    * @param {{ cards: object }} c.shared 这个实例(项目 × 成员)各对话共用的:项目的卡片源码表(`newSharedState()`)
    * @param {() => (Function | null)} [c.look] 这个项目问同机渲染服务的函数(看画面那条路);节点没配口子回 null
+   * @param {{ authorizeWrite(): Promise<any>, import(source, o): Promise<any>, openRead(mediaId, o?): Promise<any> }} [c.runAssets]
+   *   账号模式下这条任务的「项目素材」(`project-assets.mjs`,凭任务授权,不借成员票据)。给了它,入库与按素材读取都走它,
+   *   不再向文档服务要成员的素材票据(任务的数据连接要不到那种票据)
    */
   function forConversation(c) {
     const { identity, conversationId } = c;
@@ -295,6 +298,11 @@ export function createHostedTools({
      * 不让只读成员的对话白白占带宽、白白花托管方的钱。
      */
     async function ensureCanWrite() {
+      if (c.runAssets) {
+        try { await c.runAssets.authorizeWrite(); }
+        catch { throw new HostedToolError('这条任务现在不能往项目里写素材(任务已被停止,或发起人在这个项目里没有写权限)。', { code: 'forbidden' }); }
+        return;
+      }
       if (!assetBase) throw new HostedToolError('这台云节点没有配置素材服务的地址,云端 Agent 暂时不能把文件入库。请联系托管方。', { code: 'no-asset-service' });
       try {
         await docRequest({ type: 'auth.ticket', kind: 'asset', access: 'rw' }, ['auth.ticket.ok']);
@@ -304,8 +312,22 @@ export function createHostedTools({
       }
     }
 
+    /** 账号模式:凭这条任务的授权把一份字节存进本项目的素材库。只是「已存」,登记进项目是调用方的下一步 */
+    async function runAssetImport(source, { name, kind }) {
+      try {
+        const out = await c.runAssets.import(source, { name, kind, requestId: `import-${randomUUID()}` });
+        return { hash: out.assetRef.hash, size: out.assetRef.size };
+      } catch (err) {
+        if (err?.status === 403 || err?.status === 401 || ['run-access-denied', 'run-revoked', 'run-resource-fenced'].includes(err?.code)) {
+          throw new HostedToolError('素材服务拒绝了这次写入:这条任务现在不能往项目里写素材(任务已被停止,或发起人没有写权限)。', { code: 'forbidden' });
+        }
+        if (err?.workspace) throw new HostedToolError(`素材没有入库:${err.message}`, { code: err.code ?? 'quota' });
+        throw err;
+      }
+    }
+
     /** 把工作区里的一个文件送进素材服务(`media` 命名空间);回 `{ hash, ext, bytes }` */
-    async function ingest(rel) {
+    async function ingest(rel, kindHint = null) {
       const ws = workspace();
       const abs = ws.resolve(rel);
       const st = ws.stat(rel);
@@ -313,6 +335,13 @@ export function createHostedTools({
       if (st.size === 0) throw new HostedToolError('这个文件是空的。');
       const hash = await sha256File(abs);
       const ext = extOf(rel);
+      if (c.runAssets) {
+        const kind = kindHint ?? kindOfName(rel);
+        if (!kind || !ext) throw new HostedToolError('无法识别这个文件的类型,请使用视频、音频或图片文件。');
+        const stored = await runAssetImport(fs.createReadStream(abs), { name: `import.${ext}`, kind });
+        if (stored.hash !== hash || stored.size !== st.size) throw new HostedToolError('素材入库后的内容与原文件对不上,没有登记。');
+        return { hash, ext, bytes: st.size };
+      }
       try {
         await assetClient().putFile('media', abs, { hash, ext });
       } catch (err) {
@@ -353,7 +382,7 @@ export function createHostedTools({
 
     /** 素材入库后登记进项目(可选:放上时间轴);回 `{ media, clip }` */
     async function registerMedia(track, { rel, name, kind, place = null }) {
-      const [up, meta] = [await ingest(rel), await probe(rel, kind)];
+      const [up, meta] = [await ingest(rel, kind), await probe(rel, kind)];
       let media = null;
       let clip = null;
       await exec().mutate('import_media', agentKey, track, (host) => {
@@ -707,6 +736,7 @@ export function createHostedTools({
 
     /** 把生成出来的 WAV 写进素材服务(`media`,凭成员本人的票据) */
     const putWav = async (wav) => {
+      if (c.runAssets) { const stored = await runAssetImport(wav, { name: 'sound.wav', kind: 'audio' }); return { ...stored, uploaded: true }; }
       try {
         return await assetClient().put('media', wav, { ext: 'wav' });
       } catch (err) {
@@ -742,7 +772,8 @@ export function createHostedTools({
       mutate: (track, apply) => exec().mutate('render_card_audio', agentKey, track, apply),
       ensureCanWrite,
       put: putWav,
-      has: (hash) => assetClient().has('media', hash),
+      // 账号模式没有「按哈希问有没有」这一问(任务授权只按项目里登记的素材读):当作没有,重存一次同样的字节是幂等的
+      has: (hash) => (c.runAssets ? false : assetClient().has('media', hash)),
       record: usageRow,
       ToolError: HostedToolError,
       limits: limits.cardAudio ?? {},
@@ -752,6 +783,19 @@ export function createHostedTools({
 
     /** 凭成员本人的只读素材票据按哈希取一份素材(同机素材服务的地址是托管方配的,不经出网闸) */
     async function fetchAssetByHash(hash, onChunk, { timeoutMs }) {
+      if (c.runAssets) {
+        // 任务授权只能读项目里登记着的素材:先在项目副本里找到哈希对应的那一项
+        const { project } = await exec().snapshot(agentKey);
+        const media = (project?.media ?? []).find((m) => m?.hash === hash || m?.tiers?.original === hash || String(m?.url ?? '').endsWith(`/${hash}`));
+        if (!media?.id) return { status: 404 };
+        let opened;
+        try { opened = await c.runAssets.openRead(media.id); }
+        catch (err) { return { status: err?.status === 404 || err?.code === 'asset-missing' ? 404 : err?.status === 401 || err?.status === 403 ? 403 : 502 }; }
+        const timer = setTimeout(() => opened.stream.destroy(new Error('timeout')), timeoutMs);
+        try { for await (const chunk of opened.stream) onChunk(chunk); await opened.closed; }
+        finally { clearTimeout(timer); opened.stream.destroy(); }
+        return { status: 200 };
+      }
       if (!assetBase) throw new HostedToolError('这台云节点没有配置素材服务的地址,云端 Agent 暂时读不到素材。请联系托管方。', { code: 'no-asset-service' });
       const reply = await docRequest({ type: 'auth.ticket', kind: 'asset', access: 'r' }, ['auth.ticket.ok']);
       const res = await fetchImpl(`${assetBase.replace(/\/+$/, '')}/api/asset/media/${hash}`, {

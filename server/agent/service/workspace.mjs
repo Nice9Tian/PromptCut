@@ -260,6 +260,11 @@ export function createWorkspaces({ dataDir, limits: limitsIn = {}, log = () => {
         return out;
       },
       usage: () => treeSize(dir),
+      /** 不经 `write` / `writer` 往这个目录里落字节之前先问一声放不放得下（运行素材的导入用）；放不下抛 `quota` / `too-large` */
+      reserve(bytes) {
+        if (!Number.isSafeInteger(bytes) || bytes < 0) throw new WorkspaceError('bad-path', '字节数不对');
+        ensure(); checkQuota(bytes);
+      },
       /**
        * 起子进程:工作目录是对话目录,环境变量按白名单重建,不弹窗口。`args` 里的路径由调用方用 `resolve()` 得到。
        * @param {string} command

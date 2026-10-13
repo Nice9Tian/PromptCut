@@ -54,9 +54,24 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
         !configs.has(keyOf(ref))) fail(403, 'reference');
     return keyOf(ref);
   }
+  // 同一个槽的刷新排成一条队，一次只做一个：主身份定时来问、任务进程每一步过闸，都会各自触发刷新。
+  // 并着做会出两种假故障：后一个刷新一开始就把前一个刚读好的结果清掉（紧接着的请求读不到，回 503），
+  // 以及两个刷新读到同一个旧检查点、先后提交（后一个回 409）。
+  // 刷新失败（包括 root 正在发布、文件被锁）时把结果清掉：失败的刷新绝不留下更早的「允许」。
+  const refreshTails = new Map();
   async function refresh(ref) {
-    const key = requireRef(ref), checkpoint = ledger.read().agentRunScopesV1.checkpoints[key] ?? null;
-    live.delete(key); // Failed/locked refresh must never leave an older allow cached.
+    const key = requireRef(ref);
+    const run = (refreshTails.get(key) ?? Promise.resolve()).then(() => refreshOnce(ref, key));
+    const tail = run.catch(() => {}); refreshTails.set(key, tail);
+    void tail.then(() => { if (refreshTails.get(key) === tail) refreshTails.delete(key); });
+    return run;
+  }
+  async function refreshOnce(ref, key) {
+    const checkpoint = ledger.read().agentRunScopesV1.checkpoints[key] ?? null;
+    try { return await refreshRead(ref, key, checkpoint); }
+    catch (error) { live.delete(key); throw error; }
+  }
+  async function refreshRead(ref, key, checkpoint) {
     const result = await sources.get(key).read({ checkpoint });
     const historical = result.history?.find(entry => entry.record.epoch === ref.epoch);
     const projection = result.record.epoch === ref.epoch ? result : historical ? { ...result,

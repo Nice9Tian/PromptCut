@@ -112,7 +112,10 @@ export function createWorkerEventSink({ journal, runClient, origin, tls, serverF
       return { binding: structuredClone(scope.binding), failed, stop,
         emit(event) {
           if (error || stopped) return;
-          let copy; try { copy = structuredClone(event); } catch (cause) { stop(cause); return; }
+          // 事件要原样变成一段 JSON 交给主服务，主服务按「和这段 JSON 意思完全一样」来核。真实运行器发的事件里
+          // 常带值为 undefined 的字段（比如没有的 callId），先按 JSON 的意思规整一遍：这些字段去掉，别的不变。
+          let copy; try { copy = JSON.parse(JSON.stringify(event)); } catch (cause) { stop(cause); return; }
+          if (!copy || typeof copy !== 'object' || Array.isArray(copy)) { stop(accountError(400, 'worker-event-packet')); return; }
           const eventId = `event:${scope.binding.runGrantId}:${++next}`;
           const work = enqueue(async () => { if (error) throw error;
             const packet = journal.append({ eventId, event: copy }); return deliver(packet); });
