@@ -1,6 +1,7 @@
 import React from "react";
 import type { ChatSummary } from "../../ai/chatStore";
 import type { CloudChatItem } from "../../ai/cloud/types";
+import { CLOUD_CHAT_TEXT } from "../../ai/cloud/chatTexts";
 import "./ChatHistoryDrawer.css";
 
 /** 历史列表里「云端」一组(契约 7.4):这位成员在这个项目里的云端对话,在跑的带「进行中」 */
@@ -10,6 +11,13 @@ export interface CloudHistoryGroup {
   /** 当前打开的云端对话 */
   currentId?: string | null;
   onPick(id: string): void;
+  /** 这一条这个账号能不能删（开对话的人删自己的；项目创建者删任何人的）；不给就整组没有删除按钮 */
+  canDelete?(item: CloudChatItem): boolean;
+  onDelete?(item: CloudChatItem): void;
+  /** 这位账号在这个项目里的对话已满上限：顶上给一行提示 */
+  limitReached?: boolean;
+  /** 这位账号在这个项目里自己开的对话数(实时)：显示在「云端」标题后面 */
+  ownedCount?: number;
 }
 
 export interface ChatHistoryDrawerProps {
@@ -147,7 +155,8 @@ export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
         )}
         {cloud && (
           <div className="chat-drawer-group" data-pc="chat-cloud-group">
-            <div className="chat-drawer-group-title">云端</div>
+            <div className="chat-drawer-group-title">云端{cloud.ownedCount !== undefined && <span data-pc="chat-cloud-count" data-owned={cloud.ownedCount}> · {CLOUD_CHAT_TEXT.countLabel(cloud.ownedCount)}</span>}</div>
+            {cloud.limitReached && <div className="chat-drawer-limit" data-pc="chat-cloud-limit" role="status">{CLOUD_CHAT_TEXT.limitHint}</div>}
             {cloud.loading && cloudItems.length === 0 ? (
               <div className="chat-drawer-empty">读取中…</div>
             ) : cloudItems.length === 0 ? (
@@ -168,10 +177,25 @@ export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
                     </div>
                     <div className="chat-drawer-item-meta">
                       {item.updatedAt ? `${formatChatTime(item.updatedAt)} · ` : ""}
-                      {CLOUD_STATE_TEXT[item.state] ?? "云端"}
+                      {item.deleting ? CLOUD_CHAT_TEXT.deleting : (CLOUD_STATE_TEXT[item.state] ?? "云端")}
                       {item.startedOn ? ` · ${item.startedOn}` : ""}
                     </div>
                   </div>
+                  {cloud.onDelete && cloud.canDelete?.(item) && (
+                    <button
+                      type="button"
+                      className="chat-drawer-delete-btn"
+                      data-pc="chat-cloud-delete"
+                      title={item.deleting ? CLOUD_CHAT_TEXT.deleteResumeTitle : CLOUD_CHAT_TEXT.deleteButtonTitle}
+                      aria-label={item.deleting ? CLOUD_CHAT_TEXT.deleteResumeTitle : CLOUD_CHAT_TEXT.deleteButtonTitle}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        cloud.onDelete?.(item);
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
               ))
             )}

@@ -14,7 +14,7 @@ export function createConversationClient({ origin, tls, serverFingerprint256, ti
       (certificateFingerprint(cert.fingerprint256) !== pin ? accountError(503, 'conversation-server-certificate') : undefined); } });
   const active = new Set(); let closed = false, readControl = null;
   const request = (action, input) => new Promise((resolve, reject) => {
-    if (closed || !['identity', 'access', 'list', 'get', 'send', 'switch', 'stop', 'rename'].includes(action))
+    if (closed || !['identity', 'access', 'list', 'get', 'send', 'switch', 'stop', 'rename', 'remove', 'remove-member-private', 'notices', 'ack-notices', 'purges', 'purge-ack'].includes(action))
       return reject(accountError(503, 'conversation-client-unavailable'));
     const body = Buffer.from(JSON.stringify(input));
     if (body.length > 1024 * 1024) return reject(accountError(413, 'conversation-body-too-large'));
@@ -49,6 +49,10 @@ export function createConversationClient({ origin, tls, serverFingerprint256, ti
       conversationId: input.conversationId, action: 'get', after: input.after ?? 0 }) : request('get', input),
     send: input => request('send', input), switchVisibility: input => request('switch', input),
     stop: input => request('stop', input), rename: input => request('rename', input),
+    remove: input => request('remove', input), removeMemberPrivate: input => request('remove-member-private', input), notices: input => request('notices', input),
+    ackNotices: input => request('ack-notices', input),
+    /** 服务一级(无委托)：还没确认清理的已删对话清单；清完回执 */
+    purges: () => request('purges', {}), purgeAck: input => request('purge-ack', input),
     close() { closed = true; for (const req of active) req.destroy(); agent.destroy(); },
   };
 }

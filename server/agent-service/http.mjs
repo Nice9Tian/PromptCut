@@ -208,8 +208,10 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       } catch (error) {
         // 只有文档服务明确拒绝(401/403/404:退出登录、被踢、Agent 被关、对话被设为私有或删除)才告诉页面「已无法读取」再关流。
         // 暂时故障(文档服务一时连不上、超时、读取通道被围栏掐断,状态都是 503 一类)只关流不发这个事件:页面照常重连,不会被说成没权限。
+        // 对话被删(文档服务回 404 conversation-deleted，只对开对话的人、创建者和共有对话的成员这么说)单独发 conversation.deleted：页面据此退到一个新对话。
         if (!released && !res.destroyed) {
-          if (DENIAL_STATUS.has(error?.status)) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} }
+          if (error?.status === 404 && error?.code === 'conversation-deleted') { try { res.write('data: {"type":"conversation.deleted"}\n\n'); } catch {} }
+          else if (DENIAL_STATUS.has(error?.status)) { try { res.write('data: {"type":"access.revoked"}\n\n'); } catch {} }
           entry.close();
         }
       } finally { polling = false; }
@@ -233,13 +235,30 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       const since = Number(url.searchParams.get('since'));
       return sendJson(res, 200, { ok: true, ...await service.usage(identity, Number.isFinite(since) && since > 0 ? since : null) }, CORS);
     }
+    // 别人删了和你有关的对话以后留给你的通知：打开项目时取、弹完回执，没弹到的下次再给
+    if (pathname === '/v1/notices' && req.method === 'GET') return sendJson(res, 200, { ok: true,
+      items: await service.notices(identity) }, CORS);
+    if (pathname === '/v1/notices/ack' && req.method === 'POST') {
+      const body = await readBody(req);
+      return sendJson(res, 200, { ok: true, ...await service.ackNotices(identity, body.noticeIds) }, CORS);
+    }
+    // 移出成员时顺带清他的私有对话(项目创建者做，2026-10-13 用户定)：体 { accountId, requestId }；没办完的在回包的 pending 里，同一个请求号再调接着办
+    if (pathname === '/v1/members/clear-private' && req.method === 'POST') {
+      const body = await readBody(req);
+      return sendJson(res, 200, { ok: true, ...await service.removeMemberPrivate(identity, body.accountId, body.requestId) }, CORS);
+    }
     const one = /^\/v1\/conversations\/([^/]+)$/.exec(pathname);
     if (one) {
       const conversationId = decodeURIComponent(one[1]);
       if (!CONVERSATION_ID_RE.test(conversationId)) throw new AgentServiceError('bad-request', 'invalid conversation id');
       if (req.method === 'GET') return sendJson(res, 200, { ok: true, meta: await service.conversation(identity, conversationId) }, CORS);
       if (req.method === 'PATCH') { const body = await readBody(req); await service.rename(identity, conversationId, body.title); return sendJson(res, 200, { ok: true }, CORS); }
-      if (req.method === 'DELETE') { await service.remove(identity, conversationId); return sendJson(res, 503, { ok: false, code: 'deletion-pending' }, CORS); }
+      if (req.method === 'DELETE') {
+        // 云端对话的删除(2026-10-12 用户定)：权限、先停任务再删、让出名额都在文档服务的对话权威里判。
+        // 请求体 { requestId }：删除没办完(任务还没停稳，503 agent-fence-pending)时，用同一个请求号重试
+        const body = await readBody(req);
+        return sendJson(res, 200, { ok: true, ...await service.remove(identity, conversationId, body.requestId) }, CORS);
+      }
     }
     const sub = /^\/v1\/conversations\/([^/]+)\/(messages|events|abort|visibility|attachments|page-results)$/.exec(pathname);
     if (sub) {
