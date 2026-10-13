@@ -11,3 +11,15 @@ ACCEPTS_URL = True
 def is_media_url(value: str) -> bool:
     """素材服务上的地址(http / https)。只认这两种协议,别的一律当本机路径看。"""
     return isinstance(value, str) and value.lower().startswith(("http://", "https://"))
+
+
+def ffmpeg_input(video: str) -> list:
+    """ffmpeg 的输入参数。本地文件前加 `-protocol_whitelist file`:
+
+    素材是项目成员上传的,伪装成视频的播放列表(m3u8、concat 清单)里可以写任意网络地址,
+    不加白名单 ffmpeg 会老老实实去连——云节点上这等于让成员借我们的进程出网。
+    素材服务上的 http(s) 地址是我们自己递的,不限。
+    """
+    if is_media_url(video):
+        return ["-i", video]
+    return ["-protocol_whitelist", "file", "-i", video]
