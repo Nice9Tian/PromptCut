@@ -353,4 +353,6 @@
 - 探针前后查过可见窗口，没有新冒出来的；收尾后 28950～28999 没有监听。
 - `npx tsc -b --force`、`npm test`：见下。
 
-（全量跑完填）
+- `npx tsc -b --force`：退出码 0（合 main 之后的最后一个代码提交上）。
+- `npm test`（设了两个环境变量，合 main 之后、最后一次改代码之后跑的；之后只提交过报告）：**退出码 1**。6860 条：6843 通过、1 条失败、15 跳过、1 待办。失败的是 `server/test/cloud-tools-p4-subject.test.mjs` 的「转私有后:权限收回,进程被杀,结果不写…」，不是这一块的测试。单独重跑这个文件：29 条全过；失败清单里一并出现的 `accept-018-rest-ssr-seam.test.mjs` 单独重跑 4 条全过。所以仍然没有拿到一遍零失败的全量，差的是这一条偶发。
+- 这一块自己的测试与相关守门（`accountMove.test.mjs`、`account-move.test.mjs`、`c10a-online-build.test.mjs`、`onlinePrune.test.mjs`、`move-guard.test.mjs`）合 main 之前单独跑过一遍：80 条全过；在全量里也都过。
