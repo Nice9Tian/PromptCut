@@ -381,6 +381,7 @@ test('W1-TOOL-05 字只进那一个输入框:聚焦后核不过就不打;中途�
   assert.equal(hopped.reason, 'focus_moved');
   assert.match(hopped.error, /焦点已经不在这个输入框上/);
   assert.ok(hopped.typedChars > 0 && hopped.typedChars < text.length, `停在了半路:${hopped.typedChars}`);
+  await sleep(120);                                               // 页面上那行「各个框里现在是什么」每 30 毫秒刷一次
   const after = await pageText(f, context);
   const inPass = /口令框里:\(?([a-j空]*)\)?/.exec(after)[1].replace('空', '');
   const inHop = /跳走的框里:\(?([a-j空]*)\)?/.exec(after)[1].replace('空', '');

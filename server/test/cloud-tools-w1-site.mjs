@@ -75,7 +75,8 @@ if (q.get('shift')) setTimeout(function(){ document.getElementById('pad').style.
 <script>
 document.addEventListener('keydown', function (e) { if (e.key === 'Enter') document.getElementById('sub').textContent = '提交了'; });
 function val(id) { var el = document.getElementById(id); return el && el.value ? el.value : '空'; }
-setInterval(function () { document.getElementById('mirror').textContent = '一碰就躲的框里:(' + val('shy') + ') 跳走的框里:(' + val('hop') + ') 口令框里:(' + val('pass') + ')'; }, 50);
+function tick() { document.getElementById('mirror').textContent = '一碰就躲的框里:(' + val('shy') + ') 跳走的框里:(' + val('hop') + ') 口令框里:(' + val('pass') + ')'; }
+tick(); setInterval(tick, 30);
 </script>`),
   // 页面上到处写着「指令」:元素的名字、盖住别人的那一层、对话框、下载的文件名、正文
   '/inject': () => html('W1 注入', `
