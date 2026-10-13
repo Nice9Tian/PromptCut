@@ -181,6 +181,24 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     void work.finally(() => { if (purging.get(dir) === work) purging.delete(dir); }).catch(() => {});
     return work;
   }
+  /**
+   * 清，清不成（任务进程还占着：那一轮正在被 root 关、或发起人自己的那一轮被保留着在跑）就隔一会儿再来，最多两分钟。
+   * 到时仍被占着的留给那个任务进程自己清（记号已经留下）。回第一次尝试的结果。
+   */
+  function purgeBrowserEventually(scope, reason) {
+    const first = purgeBrowser(scope, reason);
+    void first.then(result => {
+      if (!result.deferred) return;
+      let left = 60;
+      const again = () => {
+        if (stopped || left-- <= 0) return;
+        const timer = setTimeout(() => { void purgeBrowser(scope, reason).then(next => { if (next.deferred) again(); }, () => {}); }, 2_000);
+        timer.unref?.();
+      };
+      again();
+    }, () => {});
+    return first;
+  }
   /** Agent 被关：这个项目名下各对话的浏览器数据都清（关的时候在跑的任务已经被文档服务叫停、由 root 关进程） */
   async function purgeProjectBrowsers(projectId, reason) {
     let names = [];
@@ -198,6 +216,15 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     return count;
   }
   /** 文档服务说这个项目的 Agent 开关关了（页面的任何一次读取都会碰到）：清一次这个项目的浏览器数据；之后同一个项目不重复清，直到再开 */
+  /**
+   * 槽调度来取「这条任务的强制终态」时,文档服务的回答里写着这一轮是因为什么被收回的。创建者关了云端 Agent(agent-disabled)时,
+   * 把这个项目名下各对话的浏览器数据都清掉;那一轮的进程这时正被 root 关,所以隔一会儿再清几遍。
+   */
+  const noteControl = (body, result) => {
+    const projectId = body?.projectId;
+    if (result?.terminal?.fence?.kind !== 'agent-disabled' || typeof projectId !== 'string') return;
+    for (const ms of [0, 3_000, 10_000, 30_000]) { const timer = setTimeout(() => { if (!stopped) void purgeProjectBrowsers(projectId, 'agent-off').catch(() => {}); }, ms); timer.unref?.(); }
+  };
   const disabledSeen = new Set();
   const noteDisabled = (identity, error) => {
     const projectId = identity?.projectId;
@@ -229,6 +256,7 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     try {
       // 原样转问文档服务。回来的东西（排队的对话、强制终态）主服务不改、不补：终态是文档服务签的，root 自己验。
       const result = req.url === MASTER_SCHEDULER_PENDING_PATH ? await runClient.pending() : await runClient.scopeControl(body);
+      if (req.url !== MASTER_SCHEDULER_PENDING_PATH) noteControl(body, result);
       if (req.url === MASTER_SCHEDULER_PENDING_PATH) lastSchedulerAt = now();
       reply(res, 200, { ok: true, result });
     } catch (error) {
@@ -276,15 +304,19 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     },
     /** 转私有、转共有。转成私有以后把这个对话的云端浏览器数据清掉（能看这个对话的人换了一批，之前攒下的状态不带过去）。 */
     async switchVisibility(identity, conversationId, visibility, requestId) {
-      const out = await base.switchVisibility(identity, conversationId, visibility, requestId);
-      if (visibility === 'private') {
-        try { await purgeBrowser({ projectId: identity.projectId, conversationId }, 'private'); }
-        catch (error) { say('agent.master.browser-purge', { reason: 'private', code: error?.code ?? 'error' }); }
+      let out, failure = null;
+      try { out = await base.switchVisibility(identity, conversationId, visibility, requestId); }
+      catch (error) { failure = error; }
+      // 文档服务回「还在办」（503 agent-fence-pending）时对话已经是私有的了，只是别人那一轮的进程还没被 root 关完：同样要清
+      if (visibility === 'private' && typeof identity?.projectId === 'string' && (!failure || failure.code === 'agent-fence-pending')) {
+        const first = purgeBrowserEventually({ projectId: identity.projectId, conversationId }, 'private');
+        if (!failure) { try { await first; } catch (error) { say('agent.master.browser-purge', { reason: 'private', code: error?.code ?? 'error' }); } }
       }
+      if (failure) throw failure;
       return out;
     },
     /** 这个对话的云端浏览器数据清掉（对话被删时调；账号模式的删对话接口本身还没有开放，这里先把收场备好） */
-    purgeConversationBrowser: (scope, reason = 'conversation-deleted') => purgeBrowser(scope, reason),
+    purgeConversationBrowser: (scope, reason = 'conversation-deleted') => purgeBrowserEventually(scope, reason),
     runEvents: eventStore,
     // 看画面由任务进程自己接（它的设置里写没写）；主服务不跑任务，这里如实是「没有」
     look: false,
@@ -373,7 +405,7 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   return { service, eventStore, close, internalPort: server.address().port, schedulerAlive,
     /** 不经内部口、在同一个进程里直接给调度用的那两条（没有 root 分离的机器和测试）。 */
     master: { async pending() { const value = await runClient.pending(); lastSchedulerAt = now(); return value; },
-      scopeControl: row => runClient.scopeControl(row) },
+      async scopeControl(row) { const result = await runClient.scopeControl(row); noteControl(row, result); return result; } },
     pageBridge, purgeBrowser, purgeProjectBrowsers,
     describe: () => ({ registered, schedulerAlive: schedulerAlive(), lastSchedulerAt, internalSockets: sockets.size, internalPort: server.address()?.port ?? null,
       pageBridge: pageBridge.describe() }) };

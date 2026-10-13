@@ -326,18 +326,25 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       if (changed.status !== 200) throw Error('runner-fixture-enable-agent');
       session = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: 'runner-enabled-session' });
     }
-    const ws = new WebSocket(fixture.origin.replace('https:', 'wss:') + '/hosted/', ['promptcut.v1', `promptcut.account.${session.body.connectionTicket}`], { ca, origin: fixture.origin });
-    const closed = new Promise(resolve => ws.once('close', resolve)); humanSockets.add(ws); ws.once('close', () => humanSockets.delete(ws));
-    const send = frame => new Promise((resolve, reject) => { const reqId = `human-${Math.random().toString(36).slice(2)}`;
-      const timer = setTimeout(() => { ws.off('message', receive); reject(Error('runner-fixture-page-timeout')); }, 10_000);
+    // 页面连接可以重开（长时间的探针里连接票据会到期，文档服务把旧连接关掉）：`ws`、`closed` 指的是当前这一条
+    let ws, closed, selectionRevision = 0;
+    const openPage = async ticket => {
+      const socket = new WebSocket(fixture.origin.replace('https:', 'wss:') + '/hosted/', ['promptcut.v1', `promptcut.account.${ticket}`], { ca, origin: fixture.origin });
+      const done = new Promise(resolve => socket.once('close', resolve)); humanSockets.add(socket); socket.once('close', () => humanSockets.delete(socket));
+      await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+      ws = socket; closed = done;
+    };
+    const send = frame => new Promise((resolve, reject) => { const reqId = `human-${Math.random().toString(36).slice(2)}`, socket = ws;
+      const timer = setTimeout(() => { socket.off('message', receive); reject(Error('runner-fixture-page-timeout')); }, 10_000);
       const receive = bytes => { const reply = JSON.parse(bytes.toString()); if (reply.reqId !== reqId) return;
-        clearTimeout(timer); ws.off('message', receive); resolve(reply); };
-      ws.on('message', receive); ws.send(JSON.stringify({ ...frame, reqId })); });
-    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+        clearTimeout(timer); socket.off('message', receive); resolve(reply); };
+      socket.on('message', receive); socket.send(JSON.stringify({ ...frame, reqId })); });
+    await openPage(session.body.connectionTicket);
     const opened = await send({ type: 'project.open', projectId });
     const pageId = `runner-page-${index}`;
-    const selection = await send({ type: 'selection.set', projectId, pageId, revision: 1, selection: { clipIds: [] } });
-    if (selection.type !== 'selection.ok') throw Error('runner-fixture-selection');
+    const announce = async () => { const reply = await send({ type: 'selection.set', projectId, pageId, revision: ++selectionRevision, selection: { clipIds: [] } });
+      if (reply.type !== 'selection.ok') throw Error('runner-fixture-selection'); };
+    await announce();
     // 委托票据有时限；机器很忙时一条测试会跑过它。快到期就凭同一个登录重新要一份（和页面的做法一样）
     let renewals = 0;
     const tickets = async () => {
@@ -362,6 +369,24 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
         if (now.status !== 200) throw Error('runner-fixture-admin-session');
         session = now;
         return doc('admin', { projectId, expectedAccessRevision: now.body.accessRevision, ...body }); },
+      /** 这张页面到文档服务的连接是不是还连着；断了（连接票据到期）就凭同一个登录重开一条，照旧报同一个在场页面号 */
+      ensurePage: async () => {
+        if (ws.readyState === WebSocket.OPEN) { try { await announce(); return false; } catch { /* 连着但不认了：重开 */ } }
+        try { ws.terminate(); } catch { /* 已经关了 */ }
+        let renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-page-${++renewals}` });
+        if (renewed.status === 401) {
+          const again = await site('/editor/session', { deviceId: `runner-device-${index}`, deviceName: 'Runner page', requestId: `runner-editor-${index}-page-${renewals}` });
+          if (again.status !== 200) throw Error('runner-fixture-editor-session-renew');
+          editor = again;
+          renewed = await doc('session', { projectId, deviceId: `runner-device-${index}`, requestId: `runner-session-${index}-page-${++renewals}` });
+        }
+        if (renewed.status !== 200) throw Error('runner-fixture-doc-session-renew');
+        session = renewed; selectionRevision = 0;
+        await openPage(session.body.connectionTicket);
+        await send({ type: 'project.open', projectId });
+        await announce();
+        return true;
+      },
       /** 此刻的委托票据（快到期会先续） */
       delegation: async () => (await tickets()).agentDelegationTicket,
       agent: async (route, body) => request('/agent/v1' + route, { method: body ? 'POST' : 'GET', body, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
@@ -388,7 +413,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       /** 凭成员自己的素材票据直接问素材服务（不经 Agent）：用来核对任务写进去的字节 */
       asset: async hash => { const res = await fetch(`http://127.0.0.1:${ports.asset}/api/asset/media/${hash}`, { headers: { authorization: `Bearer ${(await tickets()).assetTicket}` } });
         return { status: res.status, bytes: Buffer.from(await res.arrayBuffer()) }; },
-      async close() { ws.terminate(); await closed; } };
+      async close() { try { ws.terminate(); } catch { /* 已经关了 */ } await closed; } };
   }
   // 文档服务的账本：另开一个只读连接看（账本是文档服务进程内的对象，这里不碰它、只读盘上已经提交的那一份）
   const ledgerFile = path.join(hostedPaths(path.join(dir, 'doc')).docservice, 'account-v2.sqlite');

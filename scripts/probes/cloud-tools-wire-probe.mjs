@@ -342,7 +342,11 @@ async function main() {
     const waitNoBrowser = async (conv, timeoutMs = 60_000) => { try { await until(() => browsersOf(conv).length === 0, { what: 'gone', timeoutMs, everyMs: 500 }); return true; } catch { return false; } };
     const epochNow = () => f.headRecord()?.head?.epoch;
 
+    // 长时间的探针里页面到文档服务的连接票据会到期:每一段开头先看一眼,断了就重连(照旧报同一个在场页面号)
+    const fresh = async (actor) => { try { await actor.ensurePage(); } catch (error) { console.log(`# 页面重连没成:${error?.message}`); } };
+
     if (wants('stop') && browser) {
+      await fresh(a);
       const conv = 'wire_stop';
       const sent = await h.run(a, conv, longWeb(), { waitSettled: false });
       const procs = await waitBrowser(conv);
@@ -361,29 +365,35 @@ async function main() {
       // 成员乙在甲的共有对话里跑任务(开着网页),甲把对话转成私有:乙的这一轮被收回,对话的浏览器关掉、用户数据目录删掉
       const conv = 'wire_private';
       b = await f.connectActor(1); actors.push(b);
+      await fresh(a);
       await h.run(a, conv, [{ say: '甲开的共有对话' }]);
       const sent = await h.run(b, conv, longWeb(), { waitSettled: false });
       const procs = await waitBrowser(conv);
       const epoch = epochNow();
-      const switched = await a.agent(`/conversations/${conv}/visibility`, { visibility: 'private', requestId: 'wire-private-1' });
+      // 文档服务当场把对话转成私有、收回乙的这一轮;「办完」要等 root 把那一代进程关掉,没办完时回 503(还在办),凭同一个请求号再问
+      const first = await a.agent(`/conversations/${conv}/visibility`, { visibility: 'private', requestId: 'wire-private-1' });
+      let switched = first;
+      for (let i = 0; i < 60 && switched.status === 503 && switched.body?.code === 'agent-fence-pending'; i++) { await sleep(500); switched = await a.agent(`/conversations/${conv}/visibility`, { visibility: 'private', requestId: 'wire-private-1' }); }
       const gone = await waitNoBrowser(conv);
       await until(() => f.grantOf(sent.messageId)?.state === 'finished', { what: '乙的任务结清', timeoutMs: 90_000 }).catch(() => {});
       const removed = await until(() => { const s = profileState(conv); return s === null || !s.includes('profile') ? true : null; }, { what: 'profile removed', timeoutMs: 30_000 }).catch(() => false);
       const fenced = h.workerLogOf(epoch).filter((r) => r.event === 'agent.account-tools.fenced').map((r) => ({ kind: r.kind, browser: r.browser, jobs: r.jobs }));
       check('转私有:别的成员在跑的这一轮被收回 → 浏览器进程没了,这个对话的浏览器用户数据目录删掉(只留清单版本计数)',
         switched.status === 200 && gone && removed === true && f.grantOf(sent.messageId)?.terminalOutcome?.status === 'interrupted',
-        brief({ status: switched.status, before: procs.length, after: browsersOf(conv).length, dir: profileState(conv), outcome: f.grantOf(sent.messageId)?.terminalOutcome, fenced }));
+        brief({ firstStatus: first.status, status: switched.status, before: procs.length, after: browsersOf(conv).length, dir: profileState(conv), outcome: f.grantOf(sent.messageId)?.terminalOutcome, workerFenced: fenced }));
       // 发起人自己把自己正在跑的对话转私有:这一轮保留;主服务留记号,任务进程收尾时清
       const own = 'wire_private_own';
+      await fresh(a);
       const mine = await h.run(a, own, [{ tool: 'web_open', input: { url: `http://127.0.0.1:${SITE_PORT}/` } }, { sleepMs: 8_000 }, { tool: 'web_view', input: {} }, { say: '我自己的对话' }], { waitSettled: false });
       await waitBrowser(own);
       const ownSwitch = await a.agent(`/conversations/${own}/visibility`, { visibility: 'private', requestId: 'wire-private-2' });
       const marked = (profileState(own) ?? []).includes(BROWSER_PURGE_MARK);
       await until(() => f.grantOf(mine.messageId)?.state === 'finished', { what: '甲自己的任务结清', timeoutMs: 120_000 });
       const ownRounds = h.toolRounds(own);
+      const ownGone = await waitNoBrowser(own, 30_000);
       check('转私有(发起人自己正在跑的对话):这一轮保留并做完;浏览器数据在下一次网页操作前被清掉(之后的 web_view 是「没开着」),任务结束后目录里只剩清单版本计数',
-        ownSwitch.status === 200 && f.grantOf(mine.messageId)?.terminalOutcome?.status === 'done' && browsersOf(own).length === 0 && !(profileState(own) ?? []).includes('profile') && !(profileState(own) ?? []).includes(BROWSER_PURGE_MARK),
-        brief({ status: ownSwitch.status, marked, outcome: f.grantOf(mine.messageId)?.terminalOutcome?.status, view: ownRounds.filter((r) => r.name === 'web_view').pop()?.result?.notOpen, dir: profileState(own) }));
+        ownSwitch.status === 200 && f.grantOf(mine.messageId)?.terminalOutcome?.status === 'done' && ownGone && !(profileState(own) ?? []).includes('profile') && !(profileState(own) ?? []).includes(BROWSER_PURGE_MARK),
+        brief({ status: ownSwitch.status, marked, procs: browsersOf(own).length, outcome: f.grantOf(mine.messageId)?.terminalOutcome?.status, view: ownRounds.filter((r) => r.name === 'web_view').pop()?.result?.notOpen, dir: profileState(own) }));
     }
 
     if (wants('delete') && browser) {
@@ -398,6 +408,7 @@ async function main() {
     if (wants('isolation')) {
       // 乙在自己的对话里查甲的作业号、调页面工具:查不到、到不了甲的页面
       b ??= await f.connectActor(1); if (!actors.includes(b)) actors.push(b);
+      await fresh(b);
       const conv = 'wire_other';
       const r = await h.run(b, conv, [{ tool: 'background_job_status', input: { jobId: shotsJobId ?? 'job_00000000-0000-0000-0000-000000000000' } }, { tool: 'seek', input: { t: 1 } }, { tool: 'web_view', input: {} }, { say: '乙试过了' }]);
       const foreign = r.of('background_job_status'), seek = r.of('seek');
@@ -411,12 +422,14 @@ async function main() {
     if (wants('kill') && browser) {
       // 任务进程被强杀(不走任何收尾):浏览器随管道断开自己退;下一条任务照常
       const conv = 'wire_kill';
+      await fresh(a);
       const sent = await h.run(a, conv, longWeb(), { waitSettled: false });
       const procs = await waitBrowser(conv);
       const epoch = epochNow(), pid = f.generations.get(epoch).pid;
       try { process.kill(pid, 'SIGKILL'); } catch { /* 已经没了 */ }
       const gone = await waitNoBrowser(conv, 90_000);
       await until(() => f.grantOf(sent.messageId)?.state === 'finished', { what: '被杀的任务被结清', timeoutMs: 120_000 }).catch(() => {});
+      await fresh(a);
       const next = await h.run(a, conv, [{ tool: 'web_view', input: {} }, { say: '下一条' }]);
       check('任务进程被杀:它名下的浏览器整棵进程树自己退了;任务记失败;同一个对话的下一条任务照常(浏览器是「没开着」)',
         gone && ['failed', 'interrupted'].includes(f.grantOf(sent.messageId)?.terminalOutcome?.status) && next.outcome === 'done' && next.of('web_view')?.notOpen === true,
@@ -426,6 +439,7 @@ async function main() {
     if (wants('agent-off') && browser) {
       // 创建者关掉这个项目的云端 Agent:在跑的任务被收回,浏览器关掉、用户数据目录删掉
       const conv = 'wire_off';
+      await fresh(a);
       const sent = await h.run(a, conv, longWeb(), { waitSettled: false });
       const procs = await waitBrowser(conv);
       const off = await a.admin({ op: 'set-hosted-service', service: 'agent', enabled: false, requestId: 'wire-agent-off' });
@@ -446,6 +460,7 @@ async function main() {
     if (wants('master-restart') && pageTab) {
       // 主服务关闭时有一条页面请求在等:任务进程那一头如实得到「发起方不在线」,登记表里那一行不是「在等」
       const conv = 'wire_page';
+      await fresh(a);
       await pageTab.page.evaluate(pageHarness, { agentUrl: `http://127.0.0.1:${PORTS.agent}`, conversation: conv, pageId: a.pageId, ticket: await a.delegation(), holdAnswers: true });
       await until(async () => (await pageTab.page.evaluate(() => window.__wire.attached)) === true, { what: '页面重新挂上', timeoutMs: 20_000 });
       const before = h.toolRounds(conv).length;
