@@ -3,10 +3,12 @@
 //
 // 真的：VisuHive 账号后端、文档服务组合(账本、操作历史、WSS)、独立的素材服务进程、Agent 服务的执行器(真实工具、真实项目修改)、
 //       页面一侧的连接用真的 WebSocket。受控的：只有模型——用仓库里的脚本式模拟提供方(```mock-script```)，不连任何真实模型。
-// 端口：28580～28588(本组端口段)。需要环境变量 PROMPTCUT_ACCOUNT_PROVIDER_ROOT / PROMPTCUT_PASSWORD_ORDER_MODULE，没有就跳过。
+// 端口：28691～28699(原来用本组的 28580～28588，和同组的 accept-018-conv-controls、accept-018-conv-readexception 是同一组写死的端口，
+// 一次全量里并着跑会撞；这个文件挪到生产入口那一块的段里)。「停止」那一条另用 28705～28712、28735～28739。需要环境变量 PROMPTCUT_ACCOUNT_PROVIDER_ROOT / PROMPTCUT_PASSWORD_ORDER_MODULE，没有就跳过。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startAccountRealRunnerFixtureAt } from './accept-018-conv-runner-fixture.mjs';
+import { startRunnerProcessFixture } from './fixtures/account-runner-process.mjs';
 
 const have = Boolean(process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT && process.env.PROMPTCUT_PASSWORD_ORDER_MODULE);
 const script = steps => '按脚本执行。\n```mock-script\n' + JSON.stringify(steps) + '\n```';
@@ -22,7 +24,7 @@ async function until(check, what, ms = 40_000) {
 }
 
 test('2.3-6 账号模式端到端：改文案、挪片段、调卡片参数各一次；署名；两个成员各开一个对话互不串', { skip: !have && 'account provider env not set', timeout: 240_000 }, async t => {
-  const fixture = await startAccountRealRunnerFixtureAt();
+  const fixture = await startAccountRealRunnerFixtureAt({ base: 28691 });
   t.after(() => fixture.close());
   const a = await fixture.connectActor(0), b = await fixture.connectActor(1);
   t.after(() => Promise.allSettled([a.close(), b.close()]));
@@ -109,7 +111,7 @@ import fs from 'node:fs';
 import https from 'node:https';
 
 test('2.3-5 账号模式下 AI 栏背后的接口：info、发消息、流式回复、工具调用过程、重开；停止', { skip: !have && 'account provider env not set', timeout: 240_000 }, async t => {
-  const fixture = await startAccountRealRunnerFixtureAt();
+  const fixture = await startAccountRealRunnerFixtureAt({ base: 28691 });
   const streams = new Set();
   t.after(async () => { for (const stream of streams) stream.destroy(); await fixture.close(); });
   const a = await fixture.connectActor(0);
@@ -149,19 +151,37 @@ test('2.3-5 账号模式下 AI 栏背后的接口：info、发消息、流式回
   await until(() => rowsOf(conversationId).some(row => row.event.type === 'runner_done'), '这一轮结束', 60_000);
   await until(() => seen.some(e => kind(e) === 'text' && String((e.event ?? e).delta).includes('收尾的话')), '收尾的话到了流里', 30_000);
 
-  // 停止：照页面的做法对一轮正在跑的任务发「停止」。已知问题见段落「产品问题」：这套组合(进程内执行器)不确认围栏，回 503 agent-fence-pending。
-  await t.test('停止：这一轮停下、停之后才会说的话没有出现', { todo: '账号模式进程内执行器没有确认停止围栏：POST abort 回 503 agent-fence-pending；独立任务进程那一套的接线归最后的接线包' }, async () => {
-    const stopId = 'panel_stop', stopSeen = [];
-    const sent = await a.agent(`/conversations/${stopId}/messages`, { requestId: 'panel-2', selectionSnapshot: { pageId: a.pageId },
-      prompt: script([{ tool: 'get_project', input: {} }, { sleepMs: 6000 }, { say: '停之后才会说的话。' }]) });
-    assert.equal(sent.status, 202);
-    openStream(stopId, stopSeen);
-    const run = await until(() => rowsOf(stopId).find(row => row.event.type === 'run'), '拿到 runId', 30_000);
+  // 停止：照页面的做法对一轮正在跑的任务发「停止」。
+  // 这一条换了夹具：上面那套组合是「在主进程里跑任务」的进程内执行器，它没有关闭结算，停止永远确认不了（原先这里标着 todo）。
+  // 账号模式真正的跑法是一条任务一个进程：主服务用生产的装配（`account-master-assembly.mjs`，只做控制），任务在真的子进程里跑，
+  // 停止由 root 那一侧把进程关掉、文档服务结清。所以这里另起一套那样的组合来验（哪些是真的见 fixtures/account-runner-process.mjs 的开头）。
+  // 端口 28705～28712、28735～28739（生产入口那一块的段）。
+  await t.test('停止：这一轮停下、停之后才会说的话没有出现', async () => {
+    const f = await startRunnerProcessFixture({ productionMaster: true, ports: { combo: [28705, 28706, 28707, 28708, 28709, 28710, 28711], agent: 28712,
+      masterEvents: 28735, look: 28736, renderWorker: 28737, identityBase: 28737, controlBase: 28738 } });
+    let actor = null, stream = null;
     try {
-      const aborted = await a.agent(`/conversations/${stopId}/abort`, { runId: run.runId, requestId: 'panel-stop-1' });
+      actor = await f.connectActor(0);
+      const stopId = 'panel_stop', stopSeen = [], stopRows = () => f.events(stopId);
+      const sent = await actor.agent(`/conversations/${stopId}/messages`, { requestId: 'panel-2', selectionSnapshot: { pageId: actor.pageId },
+        prompt: script([{ tool: 'get_project', input: {} }, { sleepMs: 6000 }, { say: '停之后才会说的话。' }]) });
+      assert.equal(sent.status, 202);
+      stream = await actor.stream(stopId, stopSeen);
+      await f.scheduler.start();
+      const run = await until(() => stopRows().find(row => row.event.type === 'run'), '拿到 runId', 60_000);
+      const aborted = await actor.agent(`/conversations/${stopId}/abort`, { runId: run.runId, requestId: 'panel-stop-1' });
       assert.equal(aborted.status, 200, JSON.stringify(aborted.body));
-      await until(() => fixture.describe().activeRuns === 0, '没有在跑的任务', 3000);
-      assert.ok(!rowsOf(stopId).some(row => row.event.type === 'text' && String(row.event.delta).includes('停之后才会说的话')));
-    } finally { await until(() => rowsOf(stopId).some(row => row.event.type === 'runner_done'), '这一轮自己结束', 60_000).catch(() => {}); }
+      await until(() => f.scheduler.describe().every(slot => slot.phase === 'idle'), '没有在跑的任务', 3000);
+      assert.ok(!stopRows().some(row => row.event.type === 'text' && String(row.event.delta).includes('停之后才会说的话')));
+      assert.ok(!stopSeen.some(e => kind(e) === 'text' && String((e.event ?? e).delta).includes('停之后才会说的话')), '页面的流里也没有');
+      // 这一轮是真的结束了：任务结清、结果是「被中断」，跑它的那个进程被关掉了
+      const grant = f.grantOf(f.messageOf(stopId, 'panel-2').messageId);
+      assert.equal(grant.state, 'finished'); assert.equal(grant.terminalOutcome.status, 'interrupted'); assert.equal(grant.terminalOutcome.reason, 'stop');
+      assert.equal(f.stops.at(-1).how, 'killed'); assert.equal(f.conversation(stopId).currentRunId, null);
+    } finally {
+      stream?.close(); await actor?.close().catch(() => {});
+      const closed = await f.close();
+      assert.equal(closed.alive, 0, '收尾后不该还有活着的任务子进程');
+    }
   });
 });

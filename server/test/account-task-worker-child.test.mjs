@@ -51,9 +51,9 @@ createAssemblyOptions:async()=>{throw Object.assign(Error('must not execute'),{c
   const ready = await gateway.ready; assert.notEqual(ready.pid, process.pid); assert.equal(ready.pid, gateway.pid()); assert.ok(ready.port > 0);
   diagnostic('gateway-ready');
   const first = await get(ready.port, pki.account), second = await get(ready.port, pki.account);
-  assert.equal(first.status, 200); assert.equal(first.body.pid, ready.pid);
+  assert.equal(first.status, 200); assert.equal(first.body.ok, true); assert.equal(first.body.result.pid, ready.pid);
   diagnostic('actual-identity-200');
-  assert.equal(first.body.publicKey, second.body.publicKey); assert.equal(first.body.instanceId, model.files.get('reservation-1.json').instanceId);
+  assert.equal(first.body.result.publicKey, second.body.result.publicKey); assert.equal(first.body.result.instanceId, model.files.get('reservation-1.json').instanceId);
   assert.equal((await get(ready.port, pki.wrong)).status, 403);
   diagnostic('wrong-controller-403');
   await assert.rejects(gateway.start(), { code: 'account-worker-not-prepared' });

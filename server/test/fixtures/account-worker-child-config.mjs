@@ -52,7 +52,7 @@ async function scriptedRunner({ grant, record, onModelCall, beforeToolCall, onEv
 }
 
 export function createWorkerConfiguration() {
-  return { listener: { host: '127.0.0.1', port: 0 }, workerOptions: {
+  return { listener: { host: '127.0.0.1', port: settings.identityPort ?? 0 }, workerOptions: {
     expected: settings.expected, reservation: settings.reservation, identityTls: tls('asset'),
     doc: { origin: settings.docOrigin, tls: tls('wrong'), serverFingerprint256: settings.docFingerprint256 },
     readRootRecord: async () => JSON.parse(fs.readFileSync(path.join(settings.chainDir, `epoch-${settings.reservation.epoch}.json`), 'utf8')),
