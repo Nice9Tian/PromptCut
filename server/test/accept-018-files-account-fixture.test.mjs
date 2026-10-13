@@ -34,7 +34,8 @@ const orderModule = process.env.PROMPTCUT_PASSWORD_ORDER_MODULE ?? '';
 const available = Boolean(providerRoot) && fs.existsSync(path.join(providerRoot, 'account/internal.mjs')) && Boolean(orderModule) && fs.existsSync(orderModule);
 const skip = !available && '账号后端源码不可用:设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT(VisuHive 仓库根)与 PROMPTCUT_PASSWORD_ORDER_MODULE(其 account/password-order.mjs)';
 
-const PORTS = [28590, 28591, 28592, 28593, 28594, 28595, 28596];
+const FILES_BASE = Number(process.env.ACCEPT018_FILES_BASE) || 28590; // 验收运行器给 ACCEPT018_FILES_BASE=<起点> 时用起点起连着 7 个
+const PORTS = [0, 1, 2, 3, 4, 5, 6].map(n => FILES_BASE + n);
 
 const { SyncLink } = await import(srcUrl('editor/sync/link.ts'));
 const { accountConnectionProtocols } = await import(srcUrl('account/client.ts'));

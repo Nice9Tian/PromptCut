@@ -25,9 +25,11 @@ const DIST = required('--dist'), SITE = required('--site-root'), OUT = required(
 const SITE_FORM_ONLY = argv.includes('--site-form-only');
 const outRelative = path.relative(os.tmpdir(), OUT);
 if (!outRelative || outRelative.startsWith('..') || path.isAbsolute(outRelative)) throw Error('output-must-be-private-temp-child');
-const PORTS = [28580, 28581, 28582, 28583, 28584, 28585, 28586, 28587, 28588, 28589];
-const ORIGIN = 'https://127.0.0.1:28586';
-const STAGES = ['http://s1.pc.localhost:28588', 'http://s2.pc.localhost:28589'];
+// 端口:缺省 28580 起连着 10 个;--base-port <起点> 换一段(验收运行器用它)
+const BASE_PORT = (() => { const at = process.argv.indexOf('--base-port'); return at > 0 ? Number(process.argv[at + 1]) : 28580; })();
+const PORTS = Array.from({ length: 10 }, (_, n) => BASE_PORT + n);
+const ORIGIN = `https://127.0.0.1:${BASE_PORT + 6}`;
+const STAGES = [`http://s1.pc.localhost:${BASE_PORT + 8}`, `http://s2.pc.localhost:${BASE_PORT + 9}`];
 const TIMEOUT = 35_000;
 const MIME = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.css':'text/css', '.json':'application/json',
   '.svg':'image/svg+xml', '.png':'image/png', '.jpg':'image/jpeg', '.woff':'font/woff', '.woff2':'font/woff2', '.ttf':'font/ttf', '.wasm':'application/wasm' };
@@ -553,7 +555,7 @@ try {
   result.edgeDiagnostics = fixture.edgeDiagnostics;
   result.readControlDiagnostics = fixture.readControlDiagnostics;
   result.expectedProjectMatch = null;
-  for (const port of [28588, 28589]) await startStage(port);
+  for (const port of [BASE_PORT + 8, BASE_PORT + 9]) await startStage(port);
   browser = await puppeteer.launch({ executablePath:await puppeteer.executablePath(), headless:true, pipe:true, acceptInsecureCerts:true,
     userDataDir:profile, defaultViewport:{ width:1440, height:1000 }, protocolTimeout:TIMEOUT,
     args:[...PROBE_CHROME_ARGS, '--ignore-certificate-errors',

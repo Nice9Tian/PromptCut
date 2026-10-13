@@ -11,6 +11,9 @@ import { startAccountRealRunnerFixtureAt } from './accept-018-conv-runner-fixtur
 import { startRunnerProcessFixture } from './fixtures/account-runner-process.mjs';
 
 const have = Boolean(process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT && process.env.PROMPTCUT_PASSWORD_ORDER_MODULE);
+// 端口:缺省 28691 起那几段(见上);验收运行器给 ACCEPT018_E2E_BASE=<起点> 时三组都落在 起点～起点+24 里,免得和别的会话写死的段相撞
+const E2E_BASE = Number(process.env.ACCEPT018_E2E_BASE) || 0;
+const portAt = (legacy, offset) => (E2E_BASE ? E2E_BASE + offset : legacy);
 const script = steps => '按脚本执行。\n```mock-script\n' + JSON.stringify(steps) + '\n```';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -24,7 +27,7 @@ async function until(check, what, ms = 40_000) {
 }
 
 test('2.3-6 账号模式端到端：改文案、挪片段、调卡片参数各一次；署名；两个成员各开一个对话互不串', { skip: !have && 'account provider env not set', timeout: 240_000 }, async t => {
-  const fixture = await startAccountRealRunnerFixtureAt({ base: 28691 });
+  const fixture = await startAccountRealRunnerFixtureAt({ base: portAt(28691, 0) });
   t.after(() => fixture.close());
   const a = await fixture.connectActor(0), b = await fixture.connectActor(1);
   t.after(() => Promise.allSettled([a.close(), b.close()]));
@@ -111,7 +114,7 @@ import fs from 'node:fs';
 import https from 'node:https';
 
 test('2.3-5 账号模式下 AI 栏背后的接口：info、发消息、流式回复、工具调用过程、重开；停止', { skip: !have && 'account provider env not set', timeout: 240_000 }, async t => {
-  const fixture = await startAccountRealRunnerFixtureAt({ base: 28691 });
+  const fixture = await startAccountRealRunnerFixtureAt({ base: portAt(28691, 0) });
   const streams = new Set();
   t.after(async () => { for (const stream of streams) stream.destroy(); await fixture.close(); });
   const a = await fixture.connectActor(0);
@@ -157,8 +160,8 @@ test('2.3-5 账号模式下 AI 栏背后的接口：info、发消息、流式回
   // 停止由 root 那一侧把进程关掉、文档服务结清。所以这里另起一套那样的组合来验（哪些是真的见 fixtures/account-runner-process.mjs 的开头）。
   // 端口 28705～28712、28735～28739（生产入口那一块的段）。
   await t.test('停止：这一轮停下、停之后才会说的话没有出现', async () => {
-    const f = await startRunnerProcessFixture({ productionMaster: true, ports: { combo: [28705, 28706, 28707, 28708, 28709, 28710, 28711], agent: 28712,
-      masterEvents: 28735, look: 28736, renderWorker: 28737, identityBase: 28737, controlBase: 28738 } });
+    const f = await startRunnerProcessFixture({ productionMaster: true, ports: { combo: [0, 1, 2, 3, 4, 5, 6].map(n => portAt(28705 + n, 10 + n)), agent: portAt(28712, 17),
+      masterEvents: portAt(28735, 20), look: portAt(28736, 21), renderWorker: portAt(28737, 22), identityBase: portAt(28737, 22), controlBase: portAt(28738, 23) } });
     let actor = null, stream = null;
     try {
       actor = await f.connectActor(0);

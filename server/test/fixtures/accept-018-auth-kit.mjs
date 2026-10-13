@@ -37,7 +37,7 @@ const canListen = port => new Promise(resolve => {
  */
 export async function acceptPorts(count) {
   const base = Number(process.env.ACCEPT018_AUTH_PORT_BASE);
-  if (Number.isInteger(base) && base >= 28560 && base + count - 1 <= 28599)
+  if (Number.isInteger(base) && base >= 20000 && base + count - 1 <= 65000)
     return Array.from({ length: count }, (_, index) => base + index);
   for (let attempt = 0; attempt < 40; attempt++) {
     const start = 31000 + Math.floor(Math.random() * 7000);
