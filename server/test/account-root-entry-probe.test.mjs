@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PREFIX, SLICE_PREFIX, PROBE_SOURCE_PATHS, parseProbeArguments, probePlan, requireLinuxRoot, cleanup, leftovers } from '../../scripts/probes/account-root-entry-linux.mjs';
+import { PREFIX, SLICE_PREFIX, PROBE_SOURCE_PATHS, parseProbeArguments, probePlan, requireLinuxRoot, cleanup, leftovers } from '../agent-service/account-root-probe-support.mjs';
 import { renderTaskUnit, parseTaskUnitArguments } from '../agent-service/account-task-unit.mjs';
 
 // 节点自检脚本（scripts/probes/account-root-entry-linux.mjs）里在这台机器上验得到的部分：参数、名字、清理的幂等、非 Linux 明确拒绝；
