@@ -103,6 +103,12 @@ async function planMedia(opts, outDir, ffmpegCmd) {
   const ffprobeCmd = ffprobeOf(ffmpegCmd);
   const probed = new Map();
   const layers = all.map((l) => {
+    const state = l.media?.missingMaterial;
+    const confirmedMissing = state?.v === 1 && state.reason === 'confirmed-missing' && state.mediaId === l.media.id
+      && state.original?.kind === l.media.kind && state.original?.name === l.media.name
+      && state.original?.url === l.media.url && state.original?.hash === l.media.hash
+      && typeof state.visual === 'boolean' && typeof state.audio === 'boolean';
+    if (confirmedMissing && state.visual === true) return { ...l, src: null, missingMaterial: true, hasAlpha: false };
     let src = mediaSourceOf(l.media, { outDir, pageUrl: url });
     let info = null;
     if (src) {
