@@ -122,7 +122,7 @@ function assertSame(tasks) {
   return bare;
 }
 
-test('WC-01 Lottie 素材卡:不挂的给浏览器节点(2026-10-14 放开),挂了强调、滤镜的照旧不给(包着别的输出节点,拿不准一律不给)', () => {
+test('WC-01 Lottie 素材卡(2026-10-14 放开):和普通独立卡一样给浏览器节点,挂了强调、滤镜也看里面那张卡', () => {
   const { cardPlan, tasks } = splitOf({ cardId: 'lottie', params: { src: 'a.json' } });
   for (const control of cardPlan) assert.equal(control.tier, 'shared', `${control.clipId} 是共享档`);
   assert.ok(browserTasks(tasks, 'clip-bare').length > 0, '不挂的给浏览器');
