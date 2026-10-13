@@ -107,6 +107,12 @@ const LIVE = typeof window !== "undefined" && new URLSearchParams(location.searc
 
 /** `.pc-awaiting` 的兜底时长(E0):快照没来也要在这之后露出活组件,不能永久隐身 */
 const AWAIT_FALLBACK_MS = 500;
+/**
+ * 重卡被点名抑制、它的轨道流还没画出第一帧时,先不藏它原来的画面,最多等这么久(mechanism/rendering.md「兜底顺序」:
+ * 「起播和跳转后的第一拍,流的第一帧画出来之前不藏这张卡原来的画面」);到时还没有就照常藏起来,这一层落到占位符。
+ * 流的第一帧实测 80～130 毫秒出来(取清单、取分段、建解码器;原型 `claude/scrub-streams` 量的)。
+ */
+const STREAM_FIRST_WAIT_MS = 500;
 
 /**
  * K4 的节拍按**绝对时刻**排:`nextDue = playStart + n × 1000 / fps`。等到 `nextDue − 这个值`
@@ -249,6 +255,16 @@ export default function StageView() {
     /** 上一次停下追一帧的结果(诊断 `__pcStageDiag().lowMemSettle`) */
     lowMemSettle: null as LowMemorySettleResult | null,
     streamPlanes: [] as readonly StreamPlaneGroup[],
+    /**
+     * 父页点名抑制了、挂着流平面、但流还没画出第一帧的卡 → 从什么时候起等的(真实毫秒)。这段时间**不藏它原来的画面**
+     * (藏了那一层就是空的),等流画出来(`StreamPlayer` 的 `onShowingChange`)或 `STREAM_FIRST_WAIT_MS` 到了再藏。
+     */
+    streamWaiting: new Map<string, number>() as ReadonlyMap<string, number>,
+    streamWaitTimer: 0,
+    /** 停下追帧被上面那一条推后的卡:流的第一帧画出来(或到时)再起步,这之前露着的是跳之前那一刻的画面 */
+    deferredSettle: new Map<string, { target: number; fps: number; gen: number }>(),
+    /** 组流里先追上的成员:留在 `settling` 里(不可见、时间钉在目标帧),等同组此刻在场的都追上了一起露出来 */
+    settledHeld: new Set<string>() as ReadonlySet<string>,
     /** 这一帧的快照还没到、先藏着等的片段(E0 的 `setTime({ awaiting })`) */
     awaiting: new Set<string>() as ReadonlySet<string>,
     /** `.pc-awaiting` 的 500 ms 兜底(真定时器:暂停态虚拟时钟不动) */
@@ -393,7 +409,9 @@ export default function StageView() {
      * (理由见 `streamPlayer.ts`「在线页面:清单与字节由父页推来」)—— 这里给一个只认推来的块的源,
      * 没带清单的平面(父页还没取到)在它这里取不到东西,不会去请求不存在的预渲染进程。
      */
-    const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}) });
+    /** 某条流的画面有无变了(异步解出第一帧、留到时限清空);实现在下面,等用到的函数都定义了再接上 */
+    let onStreamShowing: () => void = () => {};
+    const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}), onShowingChange: () => onStreamShowing() });
     // 占位符的几何首选流清单的实体框(product/rendering.md「兜底顺序」;`placeholderHost` 的 `geometryFor`)
     setStreamBoxSource((clipId) => player.boxOf(clipId));
 
@@ -615,7 +633,10 @@ export default function StageView() {
       const unsupported = localOnlyAt(ref.current.t);
       if (!suppressed.size && !awaiting.size && !settling.size && !unsupported.size && !shownPlaceholders().size) return;
       const streamShowing = ref.current.streamPlanes.length ? player.showingClips() : NO_CLIPS;
-      applyPlaceholders(placeholderWanted({ suppressed, snapshots, awaiting, settling, streamShowing, unsupported }), slotOf);
+      // 停下追帧时这张卡的流平面还画着:它不算「不可见地追帧」(T3),不显示占位符
+      let settlingBlank = settling;
+      if (settling.size && streamShowing.size) settlingBlank = new Map([...settling].filter(([id]) => !streamShowing.has(id)));
+      applyPlaceholders(placeholderWanted({ suppressed, snapshots, awaiting, settling: settlingBlank, streamShowing, unsupported }), slotOf);
     };
 
     /**
@@ -796,13 +817,116 @@ export default function StageView() {
     };
 
     /**
-     * 实际生效的抑制集合 = 父页发来的减去低内存档停下追一帧正在画 / 已画好的(`lowMemLive`)。
+     * 实际生效的抑制集合 = 父页发来的,减去低内存档停下追一帧正在画 / 已画好的(`lowMemLive`),
+     * 再减去流还没画出第一帧、先不藏的(`streamWaiting`)。
      * 只改 `ref.current`,不提交;调用方随后的那次提交(`commitPlanes` / `flushSync`)一起生效。整份换新(`Stage` 按引用判)。
      */
     const applySuppressed = (): void => {
       const parent = ref.current.parentSuppressed;
       const live = ref.current.lowMemLive;
-      ref.current.suppressed = live.size ? new Set([...parent].filter((id) => !live.has(id))) : parent;
+      const waiting = ref.current.streamWaiting;
+      ref.current.suppressed = live.size || waiting.size ? new Set([...parent].filter((id) => !live.has(id) && !waiting.has(id))) : parent;
+    };
+
+    /* ------------------------------------------ 重卡贴轨道流:等第一帧、追上以后撤抑制 */
+
+    /** 这张卡此刻挂着的流平面(它自己的单卡流,或它所在的组流);没有回 null */
+    const planeOf = (clipId: string): StreamPlaneGroup | null => {
+      for (const g of ref.current.streamPlanes) if (g.clipIds.includes(clipId)) return g;
+      return null;
+    };
+    /** 换一份 `streamWaiting`(整份换新),并按最早到时的那一张排真定时器:流一直画不出来也不能让原来的画面一直露着 */
+    const setStreamWaiting = (next: ReadonlyMap<string, number>): void => {
+      ref.current.streamWaiting = next;
+      window.clearTimeout(ref.current.streamWaitTimer);
+      ref.current.streamWaitTimer = 0;
+      if (!next.size) return;
+      const earliest = Math.min(...next.values());
+      ref.current.streamWaitTimer = realSetTimeout(() => {
+        ref.current.streamWaitTimer = 0;
+        const now = realNow();
+        // 到时限流还没画面:照父页说的藏起来,这一层落到占位符(兜底顺序尽头)
+        endStreamWaiting([...ref.current.streamWaiting].filter(([, since]) => now - since >= STREAM_FIRST_WAIT_MS - 1).map(([id]) => id));
+        if (ref.current.streamWaiting.size) setStreamWaiting(ref.current.streamWaiting);
+      }, Math.max(1, earliest + STREAM_FIRST_WAIT_MS - realNow()));
+    };
+    /**
+     * 这几张卡不再等流的第一帧(流画出来了、到时了、流平面撤了):现在真的藏起来(父页还点着名的),同一次提交里画面从原来的换成流。
+     * 被推后的停下追帧(`deferredSettle`)这时起步。
+     */
+    const endStreamWaiting = (ids: readonly string[]): void => {
+      const rest = new Map(ref.current.streamWaiting);
+      let changed = false;
+      for (const id of ids) if (rest.delete(id)) changed = true;
+      if (!changed) return;
+      setStreamWaiting(rest);
+      applySuppressed();
+      commitPlanes();
+      let started = false;
+      for (const id of ids) {
+        const d = ref.current.deferredSettle.get(id);
+        if (!d) continue;
+        ref.current.deferredSettle.delete(id);
+        if (d.gen !== catchUpGen.current || !ref.current.parentSuppressed.has(id)) continue;
+        const task = startCatchUp(id, d.target * 1000, d.fps, true);
+        if (task) { started = true; void runCatchUpAsync(task); }
+      }
+      // 追帧的起步重挂载了包裹层,流的画布换了一块:当场把画面画回去(`streamPlayer` 的 `redraw`)
+      if (started) { presentStreams(ref.current.t); refreshPlaceholders(); }
+    };
+    /** 这几张卡不再被抑制(舞台自己撤:它们追到精确活渲了)。只改 `ref.current`,调用方提交 */
+    const unsuppress = (ids: readonly string[]): void => {
+      const parent = new Set(ref.current.parentSuppressed);
+      let changed = false;
+      for (const id of ids) if (parent.delete(id)) changed = true;
+      if (changed) ref.current.parentSuppressed = parent;
+      if (ids.some((id) => ref.current.streamWaiting.has(id))) {
+        const rest = new Map(ref.current.streamWaiting);
+        for (const id of ids) rest.delete(id);
+        setStreamWaiting(rest);
+      }
+      applySuppressed();
+    };
+    /**
+     * 这张卡追到精确活渲了:它的抑制由舞台自己撤,和摘 `.pc-settling` 同一次提交(父页收到 `settled` 再撤的话,中间那一个来回
+     * 里它会先落回 `.pc-suppressed`、子树没有布局盒,刚追好的状态就废了)。流平面不撤:不抑制的卡的流平面是藏着的(`Stage`),
+     * 留着它把播放头下这一帧先解好,按下播放头一拍就有;父页照旧发着它。回这一次该报 `settled` 的卡。
+     *
+     * **组流整组一起撤**:组里各卡的外观画在同一条流里,不能只撤一张。先追上的成员留在 `.pc-settling` 的样子里
+     * (不可见、有布局盒、时间钉在目标帧),等组里此刻在场的都追上了一起露出来、一起报。
+     * 低内存档停下追一帧画好的层另有 `lowMemLive` 管着,不动父页的那一份。
+     */
+    const releaseSettled = (clipId: string, targetMs: number): string[] => {
+      if (ref.current.lowMemLive.has(clipId) || !ref.current.parentSuppressed.has(clipId)) return [clipId];
+      const plane = planeOf(clipId);
+      if (plane && plane.clipIds.length > 1) {
+        const held = new Set(ref.current.settledHeld);
+        held.add(clipId);
+        const active = new Set(cardClipsAt(ref.current.t).map((c) => c.id));
+        const members = plane.clipIds.filter((id) => active.has(id));
+        if (!members.every((id) => held.has(id))) {
+          ref.current.settledHeld = held;
+          setSettlingAt(clipId, targetMs);
+          return [];
+        }
+        for (const id of members) { held.delete(id); setSettlingAt(id, null); }
+        ref.current.settledHeld = held;
+        unsuppress(members);
+        return members;
+      }
+      unsuppress([clipId]);
+      return [clipId];
+    };
+    onStreamShowing = () => {
+      if (ref.current.role !== "front") return;
+      // 等着的卡里流画出来了的那几张:现在真的藏起原来的画面(同一个任务里换成流,中间不空)
+      if (ref.current.streamWaiting.size) {
+        const showing = player.showingClips();
+        const done = [...ref.current.streamWaiting.keys()].filter((id) => showing.has(id));
+        if (done.length) { endStreamWaiting(done); return; }
+      }
+      // 画面有无变了,占位符跟着切:暂停着没有下一拍来刷(帧是异步解出来的)
+      refreshPlaceholders();
     };
     const setLowMemLive = (next: ReadonlySet<string>): void => {
       ref.current.lowMemLive = next;
@@ -881,14 +1005,17 @@ export default function StageView() {
       task.finishing = false;
       ref.current.catchUps.delete(task.clipId);
       setSettlingAt(task.clipId, null);
+      let announce: string[] = [];
       if (caughtUp && task.announce) {
         // 舞台自己摘掉这张卡的快照平面;父页收到 `settled` 把 clipId 从投递基线里删掉(A3c)
         const rest = new Map(ref.current.snapshots);
         rest.delete(task.clipId);
         ref.current.snapshots = rest;
+        // 贴着流的卡:抑制也由舞台自己撤(组流等整组),同一次提交
+        announce = releaseSettled(task.clipId, task.targetMs);
       }
       commitPlanes();
-      if (caughtUp && task.announce) postStageEvent({ type: "settled", sec: ref.current.t, clipIds: [task.clipId] });
+      if (announce.length) postStageEvent({ type: "settled", sec: ref.current.t, clipIds: announce });
     };
 
     /**
@@ -1035,6 +1162,13 @@ export default function StageView() {
 
     /** 全部中止(新的 `setTime` / `play` / `setProject` / `setRole` / `setSuppressed` 都走它) */
     const abortCatchUps = (): void => {
+      // 推后还没起步的、组流里先追上等着同组的,一并作废(后者回到抑制:流还贴着)
+      ref.current.deferredSettle.clear();
+      if (ref.current.settledHeld.size) {
+        for (const id of ref.current.settledHeld) setSettlingAt(id, null);
+        ref.current.settledHeld = new Set();
+        if (!ref.current.catchUps.size) commitPlanes();
+      }
       if (!ref.current.catchUps.size) return;
       for (const task of [...ref.current.catchUps.values()]) endCatchUp(task, false);
     };
@@ -1102,6 +1236,11 @@ export default function StageView() {
         if (localOnly.has(clip.id)) continue;
         const { record } = tierOf(clip.id, fps);
         if (record?.vtOk !== true) continue;
+        // 它的流还没画出第一帧、原来的画面还露着:追帧一起步子树就不可见了,所以等流的第一帧画出来(或到时)再追(`endStreamWaiting`)
+        if (ref.current.streamWaiting.has(clip.id)) {
+          ref.current.deferredSettle.set(clip.id, { target, fps, gen: catchUpGen.current });
+          continue;
+        }
         const task = startCatchUp(clip.id, target * 1000, fps, true);
         if (task) void runCatchUpAsync(task);
       }
@@ -2027,6 +2166,9 @@ export default function StageView() {
           ref.current.suppressed = new Set();
           ref.current.parentSuppressed = new Set();
           ref.current.lowMemLive = new Set();
+          setStreamWaiting(new Map());
+          ref.current.deferredSettle.clear();
+          ref.current.settledHeld = new Set();
           ref.current.streamPlanes = [];
           // 3. 停 `streamPlayer` 并 `close()` 全部 `VideoFrame`(R8)
           player.stop();
@@ -2150,7 +2292,26 @@ export default function StageView() {
        * 加上抑制 —— 两个类不会同帧共存。
        */
       async setSuppressed(clipIds) {
+        const before = ref.current.suppressed;
+        const named = ref.current.parentSuppressed;
         ref.current.parentSuppressed = new Set(clipIds);
+        /*
+         * 这一次**新**点名的卡,挂着流平面而流还没画出第一帧:先不藏它原来的画面(`streamWaiting`),等流画出来再藏
+         * (起播、跳转、拖动起步都走这里;父页先发流平面、再发抑制)。已经藏着的、流已经有画面的(暂停着先解好了)照常当场藏。
+         * 没有流平面的卡(没有流、超出解码器预算、等后台补跑互换的轻卡)不等。
+         */
+        {
+          const showing = ref.current.streamPlanes.length ? player.showingClips() : NO_CLIPS;
+          const waiting = new Map<string, number>();
+          const now = realNow();
+          for (const id of ref.current.parentSuppressed) {
+            if (showing.has(id) || !planeOf(id)) continue;
+            const since = ref.current.streamWaiting.get(id);
+            if (since !== undefined) waiting.set(id, since);
+            else if (!before.has(id) && !ref.current.settling.has(id)) waiting.set(id, now);
+          }
+          if (waiting.size || ref.current.streamWaiting.size) setStreamWaiting(waiting);
+        }
         // 低内存档停下追一帧正在画 / 画好的层不按父页的抑制藏(c10a 契约第 17 节);下面按生效的那一份判
         applySuppressed();
         const next = ref.current.suppressed;
@@ -2171,7 +2332,9 @@ export default function StageView() {
         if (ref.current.settling.size) {
           const rest = new Map(ref.current.settling);
           let changed = false;
-          for (const id of next) if (rest.delete(id)) changed = true;
+          // 只有这一次**新**点名的才打断它的追帧(K6 把追帧中的轻卡降为重)。上一次就点着名的是停下以后贴着流追精确活渲的重卡,
+          // 父页重发抑制集合(别的卡变了)不打断它
+          for (const id of next) if (!named.has(id) && rest.delete(id)) changed = true;
           if (changed) {
             ref.current.settling = rest;
             catchUpGen.current++;
@@ -2255,6 +2418,11 @@ export default function StageView() {
           const manifest = g.manifest && typeof g.manifest === "object" && g.manifest.bound && g.manifest.segments && g.manifest.inits ? g.manifest : null;
           return manifest ? { ...p, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : p;
         }), fps);
+        // 等着流画出第一帧的卡,流平面撤了:不再等(父页还点着名的当场藏起来,落到快照 / 占位符)
+        if (ref.current.streamWaiting.size) {
+          const gone = [...ref.current.streamWaiting.keys()].filter((id) => !planeOf(id));
+          if (gone.length) endStreamWaiting(gone);
+        }
         // 画布刚随这次提交挂上:当场画一次,不等下一拍
         presentStreams(ref.current.t);
         refreshPlaceholders();
@@ -2585,6 +2753,11 @@ export default function StageView() {
       cardCost: [...ref.current.cardCost.entries()],
       /** R8:流平面与解码器的状态(持有的帧数 / 字节、每条流画了几帧、当前变体……) */
       streamPlanes: ref.current.streamPlanes.map((g) => ({ clipIds: g.clipIds, key: g.key ?? null, ranges: g.ranges ?? null, originFrame: g.originFrame ?? null })),
+      /** 贴轨道流:父页点名抑制了、流还没画出第一帧、原来的画面先没藏的卡;被推后的停下追帧;组流里先追上等着同组的 */
+      parentSuppressed: [...ref.current.parentSuppressed],
+      streamWaiting: [...ref.current.streamWaiting.keys()],
+      deferredSettle: [...ref.current.deferredSettle.keys()],
+      settledHeld: [...ref.current.settledHeld],
       streams: player.diag(),
       /** R9:共享 WebGL 渲染器这一侧的状态(路线、连接方式、往返耗时、超时次数……) */
       gl: gl.diag(),
@@ -2616,6 +2789,7 @@ export default function StageView() {
       delete (window as unknown as Record<string, unknown>).__pcGlWorkerDiag;
       window.clearTimeout(ref.current.settle);
       window.clearTimeout(ref.current.awaitTimer);
+      window.clearTimeout(ref.current.streamWaitTimer);
       window.clearTimeout(sampleTimer);
       window.clearTimeout(inkTimer);
       setPlaceholdersEnabled(false);
