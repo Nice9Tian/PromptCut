@@ -24,6 +24,12 @@ import {
   type ContentLinkOptions, type MoveAttempt, type MoveResult, type MoveSource, type MoveStage,
 } from "./accountMove";
 
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线页面没有编辑器进程,
+ * 下面打本机 `/api/*` 的几处(问本机素材库、看上传队列、存草稿)在在线构建里整段剪掉(守门 `server/test/c10a-online-build.test.mjs` 的 C10A-API-03)。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
 /* ---------------- 桌面版的账号云端 ---------------- */
 
 export interface AccountCloud { origin: string; client: CloudAccountClient }
@@ -92,6 +98,7 @@ export function pendingMove(accountId: string): MoveAttempt | null {
 
 async function localHave(hashes: string[]): Promise<Set<string>> {
   const got = new Set<string>();
+  if (ONLINE_BUILD) return got;
   for (let i = 0; i < hashes.length; i += 40) {
     const r = await fetch(`/api/media/local?hashes=${hashes.slice(i, i + 40).join(",")}`, { cache: "no-store" });
     const j = (await r.json()) as { hashes?: string[] };
@@ -116,6 +123,7 @@ async function pullRoomMedia(project: Project): Promise<{ ok: boolean; missing: 
 
 /** 素材还在后台上传的提示:队列空了换成「已全部传到云端」;离开这个项目就收掉 */
 function watchUploads(projectId: string, count: number) {
+  if (ONLINE_BUILD) return;
   const toast = pushToast(ACCOUNT_MOVE_TEXT.uploading(count), "info", Infinity);
   let idle = 0;
   const timer = setInterval(() => {
@@ -153,6 +161,8 @@ let moving: Promise<MoveOutcome> | null = null;
 
 /** 把当前打开的本地项目或本机协作房间搬到账号云端。同一时间只做一次;不抛错 */
 export function moveCurrentToAccountCloud(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> {
+  // 在线页面没有本机项目可搬:在线构建里下面整段(连同存草稿、问本机素材库的那些调用)剪掉
+  if (ONLINE_BUILD) return Promise.resolve({ ok: false, error: "not-ready", stage: "check", localClosed: false, cloud: null, kind: "local" });
   if (moving) return moving;
   const task = run(c, request).finally(() => { if (moving === task) moving = null; });
   moving = task;
@@ -186,7 +196,7 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
     },
     pullMedia: pullRoomMedia,
     closeRoom: (pw) => disableCollab(pw),
-    saveLocal: async () => { const id = getActiveDraftId(); if (id) await saveDraft(id); },
+    saveLocal: ONLINE_BUILD ? undefined : async () => { const id = getActiveDraftId(); if (id) await saveDraft(id); },
     enter: async ({ projectId, name, snapshot, kind: from }) => {
       await enterAccountProject({ client, origin, projectId, name, initial: snapshot,
         enteredText: from === "room" ? ACCOUNT_MOVE_TEXT.toastRoom : ACCOUNT_MOVE_TEXT.toastLocal });

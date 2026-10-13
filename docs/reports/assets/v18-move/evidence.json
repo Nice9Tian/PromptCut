@@ -1,6 +1,6 @@
 {
-  "runId": "mv76dxqn",
-  "cardId": "move-probe-mv76dxqn",
+  "runId": "mv76ibz1",
+  "cardId": "move-probe-mv76ibz1",
   "ports": {
     "fixture": [
       28950,
@@ -15,13 +15,50 @@
     "a": 28960,
     "b": 28965
   },
-  "shots": [],
-  "timings": {},
+  "shots": [
+    "docs/reports/assets/v18-move/room-1-before.png",
+    "docs/reports/assets/v18-move/room-2-failed.png",
+    "docs/reports/assets/v18-move/room-3-progress.png",
+    "docs/reports/assets/v18-move/room-4-done.png",
+    "docs/reports/assets/v18-move/room-6-second-account.png"
+  ],
+  "timings": {
+    "roomMoveMs": 13303
+  },
   "video": {
     "bytes": 781730,
-    "sha256": "391fc8db0e36"
+    "sha256": "d43d34f05e8c"
   },
-  "fails": [
-    "探针中断:协作恢复失败"
-  ]
+  "room": {
+    "confirm": "搬到云端后，云端会新建一个属于账号「dualUser0」的项目，内容和现在一样。\n本机协作会关闭，旧邀请码作废，原来的成员要用新的项目链接、登录自己的网站账号重新加入。\n确认搬到云端？",
+    "failText": "连不上云端，云端项目没有建成。本机协作没有改动，原房间照常可用。稍后再点一次。",
+    "progressText": "正在搬到云端：检查登录和项目…",
+    "doneText": "已搬到云端。本机协作已关闭，旧邀请码已作废；请把新的项目链接发给原来的成员，他们登录自己的网站账号后加入。",
+    "toasts": [
+      "已搬到云端。本机协作已关闭、旧邀请码已作废，请把新的项目链接发给原来的成员。",
+      "素材还在后台上传（共 2 个，先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。"
+    ],
+    "b": {
+      "projectId": "sp_4pasai7go6h3hndgemcygz24af",
+      "assets": {
+        "small": {
+          "status": 200,
+          "bytes": 116819,
+          "sameHash": true
+        },
+        "original": {
+          "status": 200,
+          "bytes": 781730,
+          "sameHash": true
+        },
+        "cardAudio": {
+          "status": 200,
+          "bytes": 768044,
+          "sameHash": true
+        }
+      }
+    },
+    "projectId": "sp_4pasai7go6h3hndgemcygz24af"
+  },
+  "fails": []
 }
