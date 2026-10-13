@@ -2,8 +2,8 @@
  * 依赖下层的流(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.1、5.2 节)—— 计划、键、输入签名、隔离工程、
  * 切分与认领、层表。用例名以 `BL-` 开头。跑:npm test -- server/test/below-stream.test.mjs
  *
- * 这种流缺省关(`frame-stream.mjs` 的 `belowStreamsEnabled`);这里给 `planStreams` 传 `below: true` 打开它来验,
- * 另有几条专门验「关着时什么都不变」。
+ * 这种流缺省开(`frame-stream.mjs` 的 `belowStreamsEnabled`;只给单测和探针留了关掉的办法);这里给 `planStreams` 明着传
+ * `below: true`,另有几条专门验「关着时(旧节点的样子)什么都不变」。
  *
  * 键用**真的**卡片计划算:项目 → `projectCardGraph`(卡片定义用替身,依不依赖下层这一样取自审阅表里真有的卡)→
  * `CardFrameCache.plan()` → `planStreams`。所以「下层改一处,键变不变」验的是真键对真项目数据的反应,不是手写的假键。
@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   planStreams, planListStreams, queueStreamOf, groupStreams, peakConcurrency, isolatedStreamProject, isolatedBelowProject,
-  belowStreamEligible, belowStreamsEnabled, belowLayerExtra, BELOW_STREAMS_DEFAULT, BELOW_STREAM_RULES, streamEligible, SEGMENT_FRAMES,
+  belowStreamEligible, belowStreamsEnabled, belowLayerExtra, belowLayerMark, BELOW_STREAMS_DEFAULT, BELOW_STREAM_RULES, streamEligible, SEGMENT_FRAMES,
 } from '../frame-stream.mjs';
 import { cardStreamIdentity, BELOW_STREAM_VERSION } from '../card-identity.mjs';
 import { CardFrameCache } from '../card-cache.mjs';
@@ -97,31 +97,50 @@ const sigOf = (p, clipId = 'glass') => streamInputSig(p, { clipIds: [clipId], ki
 
 /* ================================================================== 开关 */
 
-test('BL-off 缺省关:常量是 false,环境变量不设就不出;`planStreams` 不传 `below` 时没有这种流,结果与明说关着逐项相同', () => {
-  assert.equal(BELOW_STREAMS_DEFAULT, false);
-  assert.equal(belowStreamsEnabled({}), false);
-  assert.equal(belowStreamsEnabled({ PROMPTCUT_TEST_BELOW_STREAMS: '0' }), false);
-  assert.equal(belowStreamsEnabled({ PROMPTCUT_TEST_BELOW_STREAMS: 'true' }), false, '只认 1');
+test('BL-off 缺省开:常量是 true,环境变量不设就出;只有明说 0(或 `below: false`)才关,关着时没有这种流、别的流一个字不变', () => {
+  assert.equal(BELOW_STREAMS_DEFAULT, true);
+  assert.equal(belowStreamsEnabled({}), true);
   assert.equal(belowStreamsEnabled({ PROMPTCUT_TEST_BELOW_STREAMS: '1' }), true);
+  assert.equal(belowStreamsEnabled({ PROMPTCUT_TEST_BELOW_STREAMS: 'false' }), true, '只认 0');
+  assert.equal(belowStreamsEnabled({ PROMPTCUT_TEST_BELOW_STREAMS: '0' }), false);
   const saved = process.env.PROMPTCUT_TEST_BELOW_STREAMS;
   delete process.env.PROMPTCUT_TEST_BELOW_STREAMS;
   try {
     const entry = entryOf(project());
     const byDefault = planStreams(entry, { envFingerprint: FP, codeVersion: CV });
-    const off = planStreams(entry, { envFingerprint: FP, codeVersion: CV, below: false });
-    assert.deepEqual(byDefault, off);
-    assert.deepEqual(byDefault.map(s => `${s.kind}:${s.clipIds}`).sort(), ['card:late', 'card:mid', 'card:top'], '只有独立卡的单卡流');
-    assert.deepEqual(planListStreams(entry, ['glass', 'mid'], { envFingerprint: FP, codeVersion: CV }).map(s => s.kind), ['card'], '清单计划那条路同样不出');
-    // 打开以后:原来那几条流一个字不变,只是后面多出依赖下层的那一条
     const on = planStreams(entry, { envFingerprint: FP, codeVersion: CV, below: true });
+    const off = planStreams(entry, { envFingerprint: FP, codeVersion: CV, below: false });
+    assert.deepEqual(byDefault, on, '不传就是开着');
+    assert.deepEqual(off.map(s => `${s.kind}:${s.clipIds}`).sort(), ['card:late', 'card:mid', 'card:top'], '关着:只有独立卡的单卡流');
+    // 开着:原来那几条流一个字不变,只是后面多出依赖下层的那一条
     assert.deepEqual(on.slice(0, off.length), off, '单卡流的键、形状、先后都不变');
     assert.deepEqual(on.slice(off.length).map(s => `${s.kind}:${s.clipIds}`), ['below:glass']);
-    // 环境变量那一个打开办法
-    process.env.PROMPTCUT_TEST_BELOW_STREAMS = '1';
-    assert.deepEqual(planStreams(entry, { envFingerprint: FP, codeVersion: CV }), on);
+    // 清单计划那条路:计划里有这一条,但清单计划的流一律只给浏览器出一份,而这种流浏览器做不了 —— 切分时一份都不出(`BL-split`),
+    // 所以在线页面的清单还换不来这种流(留给在线页面读这种流的那一块)
+    assert.deepEqual(planListStreams(entry, ['glass', 'mid'], { envFingerprint: FP, codeVersion: CV }).map(s => s.kind), ['card', 'below']);
+    assert.deepEqual(planListStreams(entry, ['glass', 'mid'], { envFingerprint: FP, codeVersion: CV, below: false }).map(s => s.kind), ['card']);
+    // 环境变量那一个关掉的办法
+    process.env.PROMPTCUT_TEST_BELOW_STREAMS = '0';
+    assert.deepEqual(planStreams(entry, { envFingerprint: FP, codeVersion: CV }), off);
   } finally {
     if (saved === undefined) delete process.env.PROMPTCUT_TEST_BELOW_STREAMS; else process.env.PROMPTCUT_TEST_BELOW_STREAMS = saved;
   }
+});
+
+test('BL-layer 发给页面的那一层:依赖下层的流带 `streamKind: below` 和这一版项目的输入签名;别的流什么都不多带', () => {
+  const p = project();
+  const specs = plan(p);
+  const below = specs.find(s => s.kind === 'below');
+  assert.equal(below.inputSig, sigOf(p), '计划里记的签名就是页面按同一份项目算的那一个');
+  assert.match(below.inputSig, /^s1-/);
+  assert.deepEqual(belowLayerMark(below, 'glass'), { streamKind: 'below', inputSig: sigOf(p) });
+  // 别名(同键的另一张卡)没有自己的签名:只带种类,页面不比
+  assert.deepEqual(belowLayerMark(below, 'someone-else'), { streamKind: 'below' });
+  for (const spec of specs.filter(s => s.kind !== 'below')) {
+    assert.equal('inputSig' in spec, false);
+    assert.deepEqual(belowLayerMark(spec, spec.topClipId), {});
+  }
+  assert.deepEqual(belowLayerMark(null, 'glass'), {});
 });
 
 /* ================================================================== 哪些卡进 */

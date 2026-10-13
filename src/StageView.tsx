@@ -2410,7 +2410,7 @@ export default function StageView() {
           return { ok: true as const };
         }
         const incoming = (Array.isArray(planes) ? planes : []).filter((g) => Array.isArray(g?.clipIds) && g.clipIds.length);
-        const groupsOf = (list: readonly { clipIds: readonly string[] }[]) => list.map((g) => g.clipIds.join(",")).join("|");
+        const groupsOf = (list: readonly { clipIds: readonly string[]; plane?: string }[]) => list.map((g) => `${g.clipIds.join(",")}${g.plane === "stage" ? "@stage" : ""}`).join("|");
         const before = groupsOf(ref.current.streamPlanes);
         ref.current.streamPlanes = incoming.map((g) => ({
           clipIds: g.clipIds.map(String),
@@ -2418,6 +2418,8 @@ export default function StageView() {
           ...(Array.isArray(g.ranges) ? { ranges: g.ranges.map((r) => [Number(r[0]), Number(r[1])] as [number, number]) } : {}),
           // 这条流自己的第一帧:播放器按它把帧号换成分段号(`render/streamSegments.mjs`);不带的平面播放器不收
           ...(Number.isInteger(g.originFrame) && (g.originFrame as number) >= 0 ? { originFrame: g.originFrame as number } : {}),
+          // 依赖下层的流:按舞台坐标产,画布挂在舞台根下(`Stage` 的 `[data-pc-group-plane]`),不挂进包裹层
+          ...(g.plane === "stage" ? { plane: "stage" as const } : {}),
         }));
         /*
          * 在线页面的流平面另带清单与字节(`streamPlayer.ts` 的 `PushedStreamSource`),播放中每取到一段就来一次;
@@ -2765,7 +2767,7 @@ export default function StageView() {
       /** 最后一拍每张卡的耗时(`<Profiler>` 报的);K6 挑「最贵的那张」就按它 */
       cardCost: [...ref.current.cardCost.entries()],
       /** R8:流平面与解码器的状态(持有的帧数 / 字节、每条流画了几帧、当前变体……) */
-      streamPlanes: ref.current.streamPlanes.map((g) => ({ clipIds: g.clipIds, key: g.key ?? null, ranges: g.ranges ?? null, originFrame: g.originFrame ?? null })),
+      streamPlanes: ref.current.streamPlanes.map((g) => ({ clipIds: g.clipIds, key: g.key ?? null, ranges: g.ranges ?? null, originFrame: g.originFrame ?? null, plane: g.plane ?? null })),
       /** 贴轨道流:父页点名抑制了、流还没画出第一帧、原来的画面先没藏的卡;被推后的停下追帧;组流里先追上等着同组的 */
       parentSuppressed: [...ref.current.parentSuppressed],
       streamWaiting: [...ref.current.streamWaiting.keys()],
