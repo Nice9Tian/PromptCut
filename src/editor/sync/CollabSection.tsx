@@ -325,7 +325,8 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
             <span className="pc-collab-key">放在</span>
             <span>{shared.where === "hosted" ? "云端" : "本机"} · {shared.mode === "free" ? "自由进入" : "限定进入"}</span>
           </div>
-          {shared.where === "hosted" && !ONLINE ? <button type="button" className="pc-dialog-opt" data-pc="collab-move-lan" disabled={busy} onClick={() => void moveLan()}>搬回本机</button> : null}
+          {/* 账号办法的云端项目没有「搬回本机」（点了必然失败，用户 2026-10-13 定先收起来）；旧办法的房间照旧显示 */}
+          {shared.where === "hosted" && !ONLINE && !shared.accountId ? <button type="button" className="pc-dialog-opt" data-pc="collab-move-lan" disabled={busy} onClick={() => void moveLan()}>搬回本机</button> : null}
           <div className="pc-collab-row" data-pc="collab-project-name">
             <span className="pc-collab-key">项目名</span>
             <code>{shared.name}</code>

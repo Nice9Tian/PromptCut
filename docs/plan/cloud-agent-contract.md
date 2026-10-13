@@ -33,7 +33,7 @@
 
 > **看画面口径更正：** 第 23.1 节留下的“云端 Agent 第一版没有渲染能力，也不经素材服务拉取产物来看”是被后续第 25 节取代的旧句。目标分工是云端 Agent 服务请求同机托管渲染服务即时出图，Agent 服务自身不运行 renderer；具体部署是否具备该能力仍须按实际节点验收，不能仅凭本历史契约宣称已部署。
 
-> **发起人本机工具口径更正：** 第 28.3 节 `web_handoff` 与 `collect_login`/`collect_login_check` 的“没接”是实现状态，不是产品能力禁用或新的选型问题。`web_handoff` 目标只操作发起人自己的页面/本机界面，发起人离线时明确回 offline；素材采集默认匿名，需要登录时由发起人的电脑代下，登录信息不离开其电脑，代下失败或发起人离线则回退匿名，不上传登录信息。所需的本机桥接仍待实现；旧“评估后保持现状”的结论已被取代。
+> **发起人本机工具口径更正：** 第 28.3 节 `web_handoff` 与 `collect_login`/`collect_login_check` 的“没接”是实现状态，不是产品能力禁用或新的选型问题。`web_handoff` 目标只操作发起人自己的页面/本机界面，发起人离线时明确回 offline；素材采集默认匿名，需要登录时由发起人的电脑代下，登录信息不离开其电脑，代下失败或发起人离线则回退匿名，不上传登录信息。所需的本机桥接（服务端与页面一侧）已实现但未挂载，接线待最后的接线包做，见第 9.4d、28.8 节；旧“评估后保持现状”的结论已被取代。
 
 > **托管方读取告知：** 第 7.2 节与第 19 节 U5 的“托管方读得到”补充为：首次使用云端 Agent 前告知托管方可读取含私有对话的全部记录，用户选“我知道了”后按账号记住；选“拒绝”不发送消息、不使用云端 Agent，下次再提示。该流程是产品目标，尚待实现。
 
@@ -99,7 +99,8 @@ createAgentService({
 | 数据目录 | `PROMPTCUT_AGENT_DATA`，必须已存在且可写，0700。布局见下 |
 | 文档服务地址 | `PROMPTCUT_AGENT_DOC_URL`（同机回环 `ws://127.0.0.1:8787`，不绕公网） |
 | 公网源 | `PROMPTCUT_AGENT_PUBLIC_ORIGIN`（如 `https://149-88-94-84.sslip.io`）：只认这个源来的浏览器请求 |
-| 服务身份凭证 | `PROMPTCUT_AGENT_SECRETS`（缺省 `/var/lib/promptcut/agent-secrets/`，目录 0700）下的 `service-key.json`：服务名 `agent` 的 Ed25519 私钥，由第三段的 `keygen` 生成（待对齐）。不读集群令牌 |
+| 服务身份凭证 | `PROMPTCUT_AGENT_SECRETS`（缺省 `/var/lib/promptcut/agent-secrets/`，目录 0700）下的 `service-key.json`：服务名 `agent` 的 Ed25519 私钥，由第三段的 `keygen` 生成（待对齐）。不读集群令牌。账号模式（`PROMPTCUT_ACCOUNT_V2=1`）的命令行入口不读这个目录：主服务凭文档服务签的证书连文档服务，没有服务私钥；看画面用的服务私钥改由任务进程的设置文件里的 `look.keyDir` 指（第 29.3 节）〔裁：见 AGENT-v18-prod.md、AGENT-v18-runner.md〕 |
+| 账号模式的三样（`PROMPTCUT_ACCOUNT_V2=1` 时都要有，缺哪一样都拒绝启动） | `PROMPTCUT_AGENT_INTERNAL_PORT`（主服务内部口的端口，只绑回环，要和 `PROMPTCUT_AGENT_PORT` 不同）、`PROMPTCUT_AGENT_ROOT_FINGERPRINT256`（root 入口那张证书的 SHA-256 指纹）、`PROMPTCUT_AGENT_SHARED_DATA`（各代任务进程共用的数据目录，已存在且可写，要和 root 入口配置的 `worker.dataDir` 是同一个）。细节第 29.1 节〔裁：见 AGENT-v18-prod.md〕 |
 
 数据目录布局：
 
@@ -124,13 +125,13 @@ createAgentService({
 
 ### 2.3 托管档对外接口
 
-全部在 `/v1/` 下（经 nginx 是 `/agent/v1/`）。除 `healthz` 外都要 `Authorization: Bearer <委托票据>`（第 4 节）。回包 JSON，`Cache-Control: no-store`。请求体上限 256 KiB〔裁：第一版不收附件，消息加素材清单远小于此〕。
+全部在 `/v1/` 下（经 nginx 是 `/agent/v1/`）。除 `healthz` 外都要 `Authorization: Bearer <委托票据>`（第 4 节）。回包 JSON，`Cache-Control: no-store`。JSON 请求体上限 256 KiB〔裁：消息加素材清单远小于此〕；附件上传的请求体是文件字节，单个上限 512 MiB（第 9.4 节）。
 
 跨源：在线页面与它同源；桌面版的页面从本机源（`http://127.0.0.1:<端口>`）跨源来打（第 10.4 节）。所以它答预检，`Access-Control-Allow-Origin: *`、允许 `Authorization` 与 `Content-Type` 请求头，不收也不发 Cookie。鉴权只看票据，放开来源不多给任何人权限（与文档服务的共享端点同一做法，`auth-contract.md` 第 4 节）。
 
 | 接口 | 请求 | 成功 | 说明 |
 |---|---|---|---|
-| `GET /healthz` | — | `{ ok, version }` | 不鉴权，不含任何项目信息 |
+| `GET /healthz` | — | `{ ok, version, codeVersion?, egressTestAllow, look, collect, collectTestRunner }`；账号模式另有 `taskProcesses: true`、`scheduler` | 不鉴权，不含任何项目信息。`scheduler` 是槽调度此刻有没有在问主服务（15 秒没来问算没有；没有时消息只排队、不会开始）；主服务不跑任务，`look`、`collect` 恒为 `false`。字段含义见第 9.6、20、25、27 节与第 29.4 节〔裁：见 AGENT-v18-prod.md〕 |
 | `GET /v1/info` | — | `{ ok, enabled, render: { enabled }, models: [..], defaultModel, limits: { rounds, runMs }, usage: { tokens, limitTokens }, running: [对话 id] }` | 页面进入「云端」接入方式时取一次；`running` 是这位成员在这个项目里还在跑的对话 |
 | `POST /v1/conversations/<id>/messages` | `{ prompt, grant, model?, effort?, creativity?, script?, library?: [素材清单], pageState?: { t, selection }, pageId? }`（`pageId`：发这条消息的那张页面的页面号，第 28 节） | 202 `{ ok, runId, seq }` | 发一条消息、起一轮。**这一轮从此与这个请求的连接无关。** `grant` 是这一轮的对话委托（4.2）。同一个对话已有进行中的回 409 `busy-conversation` |
 | `GET /v1/conversations/<id>/events` | `?after=<seq>`，可选 `&page=<页面号>`（第 28 节），`Accept: text/event-stream` | SSE（第 2.4 节） | 先补发 `seq` 大于 `after` 的全部事件，再接实时的。可以同时开多条（多台设备、多个页签） |
@@ -142,7 +143,7 @@ createAgentService({
 | `GET /v1/usage` | `?since=<毫秒>` | `{ ok, project: { tokens, calls }, members: [{ username, tokens, calls }] }` | 项目内任何成员可查本项目的 |
 | `POST /v1/conversations/<id>/page-results` | `{ id, pageId, ok, result?, error? }` | `{ ok }` | 反向通道（第 28 节）：发起人的页面交回一次 `page.request` 的结果。按「这个对话的主人、发起这一轮的 `userId`、这一轮的页面号、还在等的 `id`」核对，一次有效；别人的或不存在的对话 404，不在等的（编的、过期的、交过的、这一轮已结束）410 `page-request-gone`，结果超过 64 KiB 回 413。〔这一行原来是占位的 `page-result { reqId, result?, error? }`，从未实现过；2026-10-07 按做成的改〕 |
 
-请求里**不收**这些桌面字段：`provider`（恒为 API 直连）、`sessionId`（模型历史按对话 id 找，不认页面自报的）、`deepAuto`、`reviewLoop`、`schemaCompat`、`attachments`、`hops`、`projectCreativity`（服务端读副本）。带了也忽略。
+请求里**不收**这些桌面字段：`provider`（恒为 API 直连）、`sessionId`（模型历史按对话 id 找，不认页面自报的）、`deepAuto`、`reviewLoop`、`schemaCompat`、`hops`、`projectCreativity`（服务端读副本）。带了也忽略。`attachments` 只认 `[{ url }]` 这一种写法，且 `url` 要是这个对话工作区里已有的文件（第 9.4 节）〔裁：原列表把 `attachments` 也算作忽略的桌面字段，与第 9.4 节、第 9.11 节不符〕。
 
 错误统一为 `{ ok: false, code, message }`；`code` 取：`unauthorized`（401，不说原因）、`forbidden`（403）、`disabled`（项目关了开关）、`busy`（节点或项目并发已满）、`busy-conversation`、`quota-exceeded`、`no-model-key`、`too-large`、`bad-request`、`bad-grant`（对话委托不对：过期、不是这个对话的、不是这位成员的）、`unavailable`（文档服务连不上）、`page-request-gone`（410，只在 `page-results` 上：这次请求已经不在等了）。
 
@@ -153,6 +154,7 @@ createAgentService({
 - 流断开（关页签、退出桌面版、断网）：这一轮**不停**。只有三件事能停它：主人调 `abort`、撤销（4.5）、出错或到上限。
 - 重新打开、换设备：`GET …/events?after=<上次看到的 seq>`，服务端先从事件记录补发，再接上实时的；`after=0` 就是从头看完整过程。补发与实时之间不丢、不重（同一把锁里切换）。
 - 页面的对话界面完全由事件重建，页面不向服务端存对话记录。
+- **账号模式下对话不存在或读不到**（`http.mjs` 的 `accountEvents`）：事件流在写 200 的流头之前回 404，响应体 `{ ok: false, code: 'no-conversation' }`，不回 200 加结束事件。不区分「还没有」「已被设为私有」「已删除」，防止泄露存在性。路由不存在的 404 是 `not-found`，另一回事。页面按「这是不是页面刚建、还没发过消息、这次打开后也没读到过事件的新对话」分辨：是，就安静停在空对话，不提示、不重试，发出第一条消息后才接事件流；不是，照常提示重新连接并重试（`src/ai/cloud/session.ts`）。〔裁〕：见 AGENT-v18-newchat.md。
 
 格式：`text/event-stream`，带 `X-Accel-Buffering: no`，每 15 秒一行 `: ping`。每个事件一行 `data: <JSON>`，带递增的 `seq`（每个对话从 1 起，跨轮连续）。事件类型在桌面 `/api/ai/chat` 的基础上（`run`、`session`、`status`、`text`、`thinking`、`tool_call`、`tool_result`（不带完整 `output`）、`progress`、`diagnostic`、`error`、`done`）加：
 
@@ -474,6 +476,7 @@ gate.record({ projectId, userId, username, conversationId, runId, vendor, model,
 - 不含提示词、回复、工具参数、Key。文件 0600。
 - `usage/totals.json`：各项目、各成员在各窗口的累计，每 30 秒与退出时落一次；启动时用它加上之后的流水重建。它坏了就从流水全量重算。
 - 查询：成员用 `GET /v1/usage`（本项目的总量与各成员的量）；托管方用 `admin.mjs usage`（可跨项目）。
+- **账号模式下「成员」的含义**：以文档服务按账号核对出的项目成员为准（含只读成员）；不是成员、被踢、没登录的不回数字，只回自己项目的流水，成员只给显示名、不给账号编号，认 `?since=`。回包是 `{ project: { tokens, calls, input, output }, members: [{ username, tokens, calls }], models: [{ model, tokens, calls }], services: [...] }`（`conversation-policy.mjs` 的 `usage()`）。没有挂用量目录的服务对象回 503 `usage-unavailable`，不编造零。用量目录只在进程内装配执行器的那一路挂了；生产的「只做控制的主服务」（第 29 节）没有挂，所以生产上这个接口现在回 503，托管方用 `admin.mjs usage`（`PROMPTCUT_AGENT_DATA` 指各代共用的数据目录，任务进程把流水写在那里）。〔裁〕：见 AGENT-v18-fixes.md 第 13 条与 AGENT-v18-prod.md。
 - 模拟模型提供方也照常报 `usage`，所以第 7 条验收不依赖真实模型。
 
 ---
@@ -602,7 +605,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | 要操作发起人的界面（`initiator`） | 发起方不在线时立刻回 `{ ok: false, initiatorOffline: true, error }`，Agent 据此继续；在线时四个（`seek`、`play`、`pause`、`get_selection`）经反向通道让他的页面执行（第 28 节），另外四个回 `initiatorOnly` 并写明差什么 | 8 |
 | 这一版还没接上（`pending`） | 逐项写明差什么，记未达成；不交给模型，调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 这一版还用不了 <工具>：<差什么>。…' }` | 23 |
 
-交给模型的是前四类共 105 个（加驱动自带的 `think`）〔2026-10-07 接上声音的六个与网页采集的七个，见 9.4a～9.4d 与第 26、27 节〕；节点没有配看画面的口子（`PROMPTCUT_AGENT_LOOK_URL`）时少掉看画面的四个与卡片声音的两个（都要同机的渲染服务），是 99 个，看画面的四个调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 在这台节点上看不了画面…' }`；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
+交给模型的是前四类共 105 个（加驱动自带的 `think`）〔2026-10-07 接上声音的六个与网页采集的七个，见 9.4a～9.4d 与第 26、27 节〕；节点没有配看画面的口子（`PROMPTCUT_AGENT_LOOK_URL`；账号模式看任务进程设置里有没有 `look`，第 29.3 节）时少掉看画面的四个与卡片声音的两个（都要同机的渲染服务），是 99 个，看画面的四个调用时回 `{ ok: false, cloudUnavailable: true, error: '云端 Agent 在这台节点上看不了画面…' }`；`text_editor` 仍不提供（它读写的是驱动的工作目录，云端的文件只经工作区的工具）。工具调用的总入口再判一次。
 
 ### 9.2 逐个工具
 
@@ -615,8 +618,8 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | ai（19） | `detach_clip_motion`、`get_transcript`、`fill_captions`、`list_captions`、`edit_caption`、`list_shots`、`list_subjects` | — | — | `stt_status`、`stt_install`、`transcribe_media`（语音识别）、`detect_shots`（镜头）、`track_points`、`get_track`、`track_status`、`track_install`（追踪）、`detect_subjects`、`subject_status`、`subject_install`（主体）：要节点上的 Python 运行环境与模型权重，并把页面里的作业表搬到服务端。`attach_clip_motion`：要一份追踪结果 |
 | cards（8） | `list_cards`（含本项目的用户卡）、`apply_card`；`bake_card`、`inspect_card_dom`（看画面，9.8） | `card_authoring_guide`、`get_card_source`、`create_card`、`edit_card` | — | — |
 | vision（2） | `see_frames`（时间轴的画面）、`get_gif`（看画面，9.8） | — | — | `see_frames` 的素材镜头拼图（`source: "media"`）：要节点上的镜头识别，回明确的原因 |
-| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check` 当前尚无发起电脑代下桥接；目标为素材采集默认匿名，需登录时由发起电脑代下，失败/离线退回匿名且不上传登录信息（见首部补记） | — |
-| browser（8） | — | — | `web_handoff` 当前尚未桥接；目标只作用发起人自己的页面/本机界面，离线明确回 offline（见首部补记） | 其余七个：要节点上的浏览器，并让它只经出网闸的代理出网、按对话隔离用户数据目录 |
+| collect（9） | — | `collect_status`、`collect_install`（云端不装东西）、`collect_search`、`collect_probe`、`collect_download`、`collect_job`、`collect_logout`（9.4d；节点上没装采集工具时回明确的原因） | `collect_login`、`collect_login_check`：发起电脑代下的桥接已实现（`collect-bridge.mjs`，9.4d、28.3）、未挂载，云端仍回 `initiatorOnly` 或 `initiatorOffline`；目标为素材采集默认匿名，需登录时由发起电脑代下，失败/离线退回匿名且不上传登录信息（见首部补记） | — |
+| browser（8） | — | — | `web_handoff`：已实现（`hosted-handoff.mjs`）、未挂载，账号模式下仍回「发起方不在线」；目标只作用发起人自己的页面/本机界面，离线明确回 offline（见首部补记与第 28.8 节） | 其余七个（`web_*`）：已实现（`server/agent/service/hosted-browser.mjs`，浏览器只经出网闸的代理出网、按「项目 × 对话」隔离用户数据目录，9.5、9.6）、未挂载：`CLOUD_TOOL_PLAN` 里仍归「这一版还没接上」，Agent 服务的启动也没有建它。节点上要配 chrome-headless-shell 的绝对路径（环境变量名由接线包定，W1 报告建议 `PROMPTCUT_AGENT_BROWSER`，代码里还没有谁读它）；没配时这七个工具回「这台节点没有配置浏览器」。〔裁：见 AGENT-v18-tools-w1.md〕 |
 | agent（5） | — | —（`declare_scope`、`list_agents`、`send_message`、`check_messages` 就地执行） | `spawn_agent`（0.7.18、0.7.19、0.7.20 全部关闭，统一提示“云端暂不支持开子 Agent”） | 0.7.20 之后待办 |
 | core（8） | —（`wait`、`report_progress` 就地执行） | — | `seek`、`play`、`pause`（在线：经反向通道在发起人的页面上执行；第 28 节） | `background_job_status`、`auto_workflow`、`auto_workflow_status`：依赖语音识别等后台作业 |
 
@@ -640,6 +643,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - `import_media { url, name? }`：`url` 是附件地址（`work:attachments/<文件名>`，或桌面版写法 `/@pcwork/<本对话 id>/<文件名>`）或 http(s) 地址（经出网闸下载到工作区）。先确认成员写得进（只读成员在下载之前就被拒），再按内容哈希分片写进素材服务，然后在副本上登记素材；视频照桌面版放上时间轴（发起方在线放在他发消息时的播放头，不在线接在现有内容后面）。素材条目只有原件一档（`tiers: { original }`），小尺寸一档没有做（要节点上的 ffmpeg 转码），记未达成。时长与宽高：图片读文件头，音视频用节点上的 ffprobe（没有就只认 WAV，其余在结果里注明没读出来）。
 - `voice_generate`：用托管方的配音配置（`<数据目录>/config/voice.json` 与 `config/keys/voice.key`，与模型 Key 同一套落盘加密与导入办法），先确认成员写得进（只读成员不花钱），合成后入库、登记，每次调用记一行用量（第 6.3 节）。没配时工具回明确的原因。
 - **附件**：页面把文件传到 `POST /v1/conversations/<id>/attachments?name=<文件名>`（请求体是文件字节，单个 512 MiB），存进这个对话工作区的 `attachments/` 下，回 `{ attachment: { name, url: 'work:attachments/…', size, kind, text? } }`；发消息时请求体多一个可选的 `attachments: [{ url }]`，服务端只认这个对话工作区里真有的文件，拼进提示词（不给磁盘路径，小的文本内联）。要进素材库由 Agent 调 `import_media`。
+- **账号模式的附件**（生产的主服务装配，`account-master-assembly.mjs`）：`POST …/attachments` 可用。能传的是项目里可写的成员；对话已在他看得到的清单里时，不能是「创建者只读地看别人的私有对话」；不在清单里的当成还没发过消息的新对话收下。文件存进各代任务进程共用的数据目录里这个对话的工作区（与任务进程里算出的是同一个位置）。发消息带的 `attachments` 最多 32 个，每个 `url` 要是这个工作区 `attachments/` 下真有的文件，否则 400；主服务把核过的 `{ name, url, size }` 经文档服务记在消息上，任务进程从消息里取。进程内装配执行器、没有挂附件存储的那一路仍回 503 `attachment-unavailable`。〔裁：见 AGENT-v18-prod.md 〔裁 6〕〔裁 7〕〕
 
 ### 9.4a 音效合成（`sound_generate`、`sound_status`、`sound_cancel`）
 
@@ -687,10 +691,11 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - **只经出网闸的代理出网**（9.6）：每次调用起一个只绑回环的代理、用完关掉；子进程的环境里只有指向它的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`（大小写两套），`NO_PROXY` 是空的。代理对每个目标做与出网闸相同的检查：回环、内网、云厂商元数据地址、同机各服务一律到不了。
 - **模型给的链接**只收 `http(s)://` 开头的地址，或 B 站的 BV 号 / av 号；别的（`file:`、`ftp:`、以 `-` 开头的）在起子进程之前就被拒。
 - **下载物只落在对话的工作目录**（`collect/<作业号>/`）。入库走 `import_media` 的那条路（成员本人的素材票据、在项目副本上登记，视频照桌面版放上时间轴）；只读成员在下载之前就被拒。只认作业目录里这一层的文件（下载器报的别处的路径不认），入库后整个作业目录删掉。
-- **作业表在服务端**，按实例（项目 × 成员）分，作业号带随机数（`collect-<12 位十六进制>`）；同一位成员在同一个项目里的几个对话互相查得到，别的项目、别的成员查不到。作业表随对话落盘（工作目录的 `collect/jobs.json`）：服务重启后在原来的对话里查，得到的是「云端 Agent 服务重启过，这次下载中断了」，不是「找不到」。
+- **作业表在服务端**，按实例（项目 × 成员）分，作业号带随机数（`collect-<12 位十六进制>`）；同一位成员在同一个项目里的几个对话互相查得到，别的项目、别的成员查不到。作业表随对话落盘（工作目录的 `collect/jobs.json`）：服务重启后在原来的对话里查，得到的是「云端 Agent 服务重启过，这次下载中断了」，不是「找不到」。作业记录多一个 `route` 字段（`hosted-collect.mjs`）：`delegated` 是发起人的电脑代下的，`anonymous` 是云端匿名下的，还没分流时没有这个字段；`collect_job` 的结果里照带。〔裁：见 AGENT-v18-tools-c1.md 第 10 节〕
 - **上限**：一个作业的下载物合计 512 MiB（边下边量，超了就停）、片子时长 2 小时、墙钟 15 分钟、最多入库 20 个文件；一位成员在一个项目里同时只跑 1 个下载，整个进程同时 2 个。超限的不入库、不留文件，作业记 `error` 与原因。
 - **`collect_install` 在云端不装东西**：节点上有没有采集工具由部署决定（`PROMPTCUT_AGENT_COLLECT_PYTHON`，9.9）。没装时 `collect_status` 回 `{ ok: true, ready: false, ytdlp: { installed: false }, hint: '这台云节点没有装采集工具…' }`，`collect_install` 与 `collect_download` 回 `{ ok: false, cloudUnavailable: true, error }`，`collect_probe`、`collect_search` 报同一句原因；一个子进程也不起。装了时 `collect_install` 回 `{ ok: true, alreadyInstalled: true }`，同样不起安装的子进程。
 - **登录态**：`collect_login`、`collect_login_check` 要用户自己扫码，是「要操作发起人界面」的工具（9.2）。云端不存任何站点的 cookies：下载按未登录的画质，`collect_download` 的 `cookies` 参数不用（结果的 `notes` 里注明），`collect_logout` 回 `{ ok: true, loggedOut: false, note }`。
+- **需要登录的站点由发起人的电脑代下**（0.7.18，`server/agent/service/collect-bridge.mjs`；现状：已实现、未挂载，`hosted-collect.mjs` 的 `delegate` 口子没有人传，工具表里这两个工具仍是「要操作发起人界面」，现在实际的行为仍是上一条：云端匿名下载）：`collect_download` 先问委托口子，链接属于有登录支持的站点（`server/collect-cookies.mjs` 的站点表，现在只有哔哩哔哩）、发起人本人在线且用桌面版、他的电脑上有没过期的登录态时，由他的电脑调本机采集下载，文件按哈希直接经他的账号会话传进这个项目的素材库，登录信息不离开他的电脑。云端用 `开始、轮询（每 2 秒）、取消` 三种短请求经反向通道（28.8）发起，因为一次下载可能几分钟而一次页面请求最多等 60 秒；整次委托最多 15 分钟。回执是一次页面请求的答案：`{ requestId, jobId, assetRef: { projectId, hash, size }, result: { items: [{ assetRef, name, kind, title?, duration?, width?, height?, vcodec? }], cookiesUsed? } }`。云端收到后核回执属于这次委托、这一轮此刻能写、素材服务里这份字节哈希与大小对得上，再登记进项目（同一个登记请求号不登记两次）。任何一步不成、发起人不在线或用网页版，回「没委托成」加原因，接着在云端匿名下载，原因与画质差别写进作业的 `notes`；这一轮自己已不能写（被停止、被撤销）就不再下载，作业记失败。`collect_login`、`collect_login_check` 在这条路上只拿回「登录框开没开」「登没登」「是不是过期」这类真假值。〔裁：见 AGENT-v18-tools-c1.md 第 2.1、2.3 节〕
 - **用量**：每次调用记一行 `service: 'collect'`、`vendor: 'yt-dlp'`、`model: <子命令>`、`units: <下载的字节数，查状态 / 探测 / 搜索是 0>`、`unit: 'bytes'`；汇总里的 `calls` 就是次数。
 - **残余面**（照实写）：代理只管「经它出去的」；下载器若不认环境里的代理、自己去连，或往工作目录以外写文件，代码这一层拦不住——靠节点上用独立的非特权用户跑子进程与系统级的出站限制兜底（9.5、9.6 的同一条）。yt-dlp 与它调用的 ffmpeg 都认环境里的代理。
 - 对话被删时还在跑的下载不会被主动停掉（它的作业目录随对话的工作目录删掉，之后入库会失败并记 `error`）。
@@ -703,6 +708,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - 工具给的相对路径先在字面上拒掉绝对路径、盘符、UNC 与设备路径、`..`、NUL、Windows 保留设备名、备用数据流、结尾的点与空格；再解析并核对在对话目录之内；再对已存在的最深一层取真实路径（跟符号链接、junction），核对仍在对话目录的真实路径之内；
 - 上限：单个文件 1 GiB、一个对话 2 GiB、一个项目 8 GiB、一个对话 2000 个文件，超了拒写；
 - 对话删除、项目删除时整棵删掉；
+- **网页操作的浏览器目录不在工作区里**（`hosted-browser.mjs`，已实现、未挂载，见 9.2）：工作区的文件工具列得出、读得到里面的文件，cookie 库不该让模型读到。浏览器的目录是 `<数据目录>/web/<项目>/<对话>/`（两段目录名都是清洗后的 id 加原文哈希），用户数据目录是它下面的 `profile/`，每个「项目 × 对话」一个浏览器进程、一份目录、一个出网代理。去留：`web_close`、闲置十分钟、点停止、Agent 被关、服务关闭，都留着（模型手里「登录态还在」的说法才成立）；对话被设为私有，删到只剩清单版本计数（能看这个对话的人换了一批，之前攒下的状态不带过去）；对话或项目被删，连版本计数一起删；超过 512 MiB，关闭时删。〔裁：见 AGENT-v18-tools-w1.md 第 5 节〔裁 2〕和第 11 节〕
 - 子进程只经 `spawn()` 起：工作目录是对话目录，环境变量按白名单重建（不带任何 `PROMPTCUT_*`、代理、别的凭证变量），临时目录在对话目录里，不弹窗口。节点上应当再用独立的非特权用户跑这些子进程（部署说明里写），代码不假设它存在。
 
 ### 9.6 出网闸
@@ -714,6 +720,7 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 - 按解析结果连接、不二次解析（连接的 `lookup` 钉死在核过的地址上）；
 - 重定向每一跳重查，最多 5 跳，跨源的跳不带鉴权头；响应体上限 512 MiB（各工具可以更小）、整体有时限；
 - 给子进程用的正向代理（只绑回环、随机端口）过同一道闸；
+- **浏览器（网页操作，已实现、未挂载）要额外堵的几条**：浏览器在模型手里，去哪由网页决定，所以它的一切出网只留一条路——`server/web/hosted/network.mjs` 起的、只绑回环的正向代理（每个目标过出网闸），其余途径在启动参数里逐条堵：回环与链路本地地址缺省不走代理（去掉缺省，再由代理拒）、浏览器自己解析主机名（一个名字都不让它解析，只交给代理）、WebRTC、QUIC、下载（一律拒）、非 http(s) 协议、调试端口（用管道连，不开端口）。每条的做法与对应测试在 `network.mjs` 文件头的表；启动参数只认白名单。残余面同 9.4d：代码这一层管的是经代理出去的，其余靠节点上的系统级出站限制兜底。〔裁：见 AGENT-v18-tools-w1.md 第 3 节、第 11 节〕
 - **测试例外**：环境变量 `PROMPTCUT_AGENT_EGRESS_TEST_ALLOW`（逗号分隔的「IP:端口」）只给探针与演练，生产不设；设了日志里有 `agent.egress.test-allow`，`/healthz` 的 `egressTestAllow` 为 `true`（部署后的核对看它）。
 - 托管方自己配置的地址（模型接口、配音服务、同机的文档服务与素材服务）不经出网闸：它们不是模型给的。
 
@@ -725,13 +732,13 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 
 〔2026-10-07 做成，实现记录在第 25 节；渲染服务一侧的口子在 `hosted-render-contract.md` 第 8a 节〕
 
-- **怎么要**：Agent 服务（`server/agent-service/look-client.mjs`）向同机渲染服务管理进程的 `POST /look`（只绑回环）发 `{ projectId, path, body, cards, timeoutMs }`。`path` 是本机 Agent 看画面用的同一批接口（`/api/vision/snapshot`、`/api/cards/layout`、`/api/cards/dom`、`/api/vision/bake`、`/api/ai/visual` 与 `/api/ai/visual/render`），`body` 里带着**这一版项目副本**与时刻；所以 `server/agent/agent-exec.mjs` 里看画面的那几个读工具与桌面版是同一份实现，只是「问谁」不同。
+- **怎么要**：Agent 服务（`server/agent-service/look-client.mjs`）向同机渲染服务管理进程的 `POST /look`（只绑回环）发 `{ projectId, path, body, cards, timeoutMs, requestId?, run? }`（`requestId` 与排队的 `POST /look/poll`、`POST /look/cancel` 见 `hosted-render-contract.md` 第 8a 节；账号模式带 `run: { runGrantId, runId, conversationId }`，渲染服务把它记在这条请求上，落盘、重启后还在、日志和状态里看得到。渲染服务现在只核服务私钥的签名，不向文档服务核这条任务授权，`run` 是调用方的说法，第 29.5 节）。`path` 是本机 Agent 看画面用的同一批接口（`/api/vision/snapshot`、`/api/cards/layout`、`/api/cards/dom`、`/api/vision/bake`、`/api/ai/visual` 与 `/api/ai/visual/render`），`body` 里带着**这一版项目副本**与时刻；所以 `server/agent/agent-exec.mjs` 里看画面的那几个读工具与桌面版是同一份实现，只是「问谁」不同。
 - **认身份**：每个请求用 Agent 服务的**服务私钥**签名（时刻、一次性随机数、请求体摘要）；渲染服务按服务登记表核对，只认服务 `agent`。
 - **一个对话要不到别的项目的画面**：`projectId` 由宿主在建实例时绑死（来自鉴权——委托里的项目），工具参数改不了；请求体里的项目内容是这个实例的副本。只读成员照常能看（看不改项目）。
 - **带用户卡的项目**：随请求报这个项目内容库里卡片源码的「键 → 版本」；渲染服务据此只让隔离工作进程出图，并等它把这几份卡装到至少这个版本——所以 `create_card` / `edit_card` 之后紧接着 `see_frames`，看到的就是刚写的那一版。
 - **图片怎么进模型**：与本机相同（`server/harness/agent.mjs`）：工具结果里的 `__image` / `__images` 摘出来，作为图片块跟在同一条 user 消息的工具结果之后；历史里只留最近 10 张；历史文件超过 `maxHistoryBytes`（8 MiB）按现有办法从最早的整对消息截。事件记录与发给页面的工具结果里不带图片。
 - **云端的结果不带页面取不到的东西**：聊天栏的可视化记录与动图存在渲染服务的工作进程里，在线页面取不到，所以结果里没有 `visualId` 与动图地址，`get_gif` 只把 4×2 的拼图交给模型（说明里照实写）；改片段时的前后对比记录云端不存。
-- **时限与没看成**：看画面的工具单次最多等 180 秒（别的工具 60 秒）。渲染服务回 `{ ok: false, look: <原因码>, error: '这次没看成：…' }` 时原话交给模型，这一轮照常继续；原因码与原话见 `hosted-render-contract.md` 第 8a 节。
+- **时限与没看成**：向渲染服务要画面的工具（看画面的四个、`get_layout` 的实体框、`render_card_audio`）在渲染服务那边排队：排队最多 30 分钟，渲染每次一分钟、重试三次（卡片声音那一条例外：每次的时限由调用方给，不重试），都由渲染服务回明确的结果；Agent 服务这一侧单次只设 35 分钟的兜底（`instance.mjs` 的 `LOOK_QUEUE_TOOL_MS`），比它长，免得别的项目占着隔离工作进程时这一步在轮到之前被掐掉（别的工具 60 秒；`HOSTED_DEFAULTS.lookToolMs` 180 秒现在只有 `collect_search` 在用）〔裁：见 AGENT-v18-queue.md〕。渲染服务回 `{ ok: false, look: <原因码>, error: '这次没看成：…' }` 时原话交给模型，这一轮照常继续；原因码与原话见 `hosted-render-contract.md` 第 8a 节。
 - **开关**：项目的「渲染节点」关着、项目的「云端 Agent」关着、托管方关掉渲染服务的看画面（`PROMPTCUT_RENDER_LOOK=off`）、Agent 服务没配 `PROMPTCUT_AGENT_LOOK_URL`，任一成立都要不到画面。
 
 ### 9.9 节点上要装什么（给部署说明）
@@ -743,10 +750,11 @@ cd <部署目录> && PROMPTCUT_AGENT_DATA=<数据目录> node server/agent-servi
 | 素材小尺寸一档 | ffmpeg | 没接上 |
 | 语音识别、镜头、追踪、主体 | Python 3 与各扩展包、模型权重（`python/` 下各包的 `requirements-*.txt`），`PROMPTCUT_PYTHON` | 没接上 |
 | 网页采集 | Python 3 与 yt-dlp（`PROMPTCUT_AGENT_COLLECT_PYTHON` 指解释器的绝对路径）、ffmpeg（`PROMPTCUT_FFMPEG`）；步骤见 27.4 | 已接上；没配时工具回「这台云节点没有装采集工具」 |
-| 网页接管、`measure_audio_js` | 无头浏览器 | 没接上 |
+| 网页操作（`web_*` 七个） | chrome-headless-shell 的绝对路径（环境变量名由接线包定，W1 报告建议 `PROMPTCUT_AGENT_BROWSER`）；Linux 上以 root 跑要加 `--no-sandbox`，建议改用非特权用户；节点上用系统级出站限制兜底（9.6） | 工具已实现（`hosted-browser.mjs`）、未挂载；没配时工具回「这台节点没有配置浏览器」〔裁：见 AGENT-v18-tools-w1.md〕 |
+| `measure_audio_js` | 断网的无头浏览器 | 没接上 |
 | 音效合成 | 不用装东西（纯计算） | 已接上 |
 | 卡片声音 | 同「看画面」：同机的渲染服务与 `PROMPTCUT_AGENT_LOOK_URL` | 已接上 |
-| 看画面 | 同机的渲染服务（它的无头浏览器与预渲染管线）；环境变量 `PROMPTCUT_AGENT_LOOK_URL`（渲染服务管理进程的回环口子；PM2 模板已带）。`get_gif` 另要渲染服务的工作进程里有 ffmpeg（渲染节点本来就装） | 已接上 |
+| 看画面 | 同机的渲染服务（它的无头浏览器与预渲染管线）；环境变量 `PROMPTCUT_AGENT_LOOK_URL`（渲染服务管理进程的回环口子；PM2 模板已带）。`get_gif` 另要渲染服务的工作进程里有 ffmpeg（渲染节点本来就装）。账号模式的主服务不看这个地址，看画面写在 root 入口配置的 `worker.look`（`url`、`keyDir`）里随任务进程的设置下发（第 29.3 节） | 已接上 |
 | 配音 | 托管方的配音服务地址与令牌（导入办法同模型 Key） | 已接上 |
 | 素材写入 | 环境变量 `PROMPTCUT_AGENT_ASSET_URL`（同机素材服务的回环地址；PM2 模板已带） | 已接上 |
 
@@ -1317,7 +1325,7 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 
 **入口与配置（第 2.2 节）**
 
-- 命令行入口读 `PROMPTCUT_AGENT_SECRETS`（缺省 `/var/lib/promptcut/agent-secrets`）下的 `service-key.json`，服务名必须是 `agent`，否则 `config.error service-identity`。文档服务一时连不上不退出：控制连接自己退避重连，期间新请求回 503 `unavailable`。
+- 命令行入口（旧模式；账号模式不读，见第 2.2、29.1 节）读 `PROMPTCUT_AGENT_SECRETS`（缺省 `/var/lib/promptcut/agent-secrets`）下的 `service-key.json`，服务名必须是 `agent`，否则 `config.error service-identity`。文档服务一时连不上不退出：控制连接自己退避重连，期间新请求回 503 `unavailable`。
 - `PROMPTCUT_AGENT_PUBLIC_ORIGIN` 是可选项，只做格式检查并记进日志，**不拿它拒绝请求**：桌面版的页面从本机源跨源来打（第 2.3、10.4 节），鉴权只看票据。第 13.1 节 CA-ENTRY-03 里「带 `Origin` 不是公网源：403」这一句作废。页面拿到的地址由托管组合的 `PROMPTCUT_AGENT_PUBLIC_URL` 经文档服务下发。
 - `GET /healthz` 多回一个 `codeVersion`（这份检出的代码版本，与渲染服务、在线页面同一种算法）：渲染服务的管理进程拿它核对三者是不是同一个提交（它的 `PROMPTCUT_RENDER_AGENT_STATUS_URL` 指到这里）。不含任何项目信息。
 - 另有两个排查与演练用的环境变量：`PROMPTCUT_AGENT_RENDER_STALL_MS`、`PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS`（预渲染任务的两个时限）。
@@ -1623,12 +1631,12 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 | 渲染服务管理进程新增 `POST /look`（回环）；状态口多 `look`、`isolation.lastQueue`；节点计数多 `plans` | `server/hosted-render/look.mjs`、`broker.mjs`、`main.mjs`、`server/render-node/host.mjs` |
 | 渲染服务新配置 `PROMPTCUT_RENDER_LOOK`（`on` / `off`，缺省 `on`）、`PROMPTCUT_RENDER_LOOK_SERVICES`（登记表路径） | `server/hosted-render/main.mjs`；PM2 模板与 `deploy.mjs` |
 | 托管方工作进程里看画面的那批接口，Node 一侧的请求也要带这个工作进程自己的口令（原来不带任何凭证就放行） | `server/hosted-render/vite-gate.mjs` |
-| 隔离工作进程：要看画面的项目没有任务也算候选并排最前；有人等着看画面时当前一轮最多再做 45 秒就轮换 | `server/hosted-render/isolation.mjs` |
+| 隔离工作进程：要看画面的项目没有任务也算候选并排最前；当前一轮空闲满五分钟才让位，有人等着看画面不再提前轮换（45 秒轮换已取消）〔裁：见 AGENT-v18-queue.md〕 | `server/hosted-render/isolation.mjs` |
 | 托管方工作进程（代理模式）登记卡片快照的远程素材服务（`bake_card` 的贴图推到项目的素材服务） | `server/vite-plugin-frames.ts` 的 `startHostNode` |
 | Agent 服务新配置 `PROMPTCUT_AGENT_LOOK_URL`（不是回环上的 http 地址：`config.error look-url`）；`/healthz` 多回 `look` | `server/agent-service/main.mjs`、`http.mjs`、`look-client.mjs` |
 | 工具表：`see_frames`、`get_gif`、`bake_card`、`inspect_card_dom` 从「还没接上」挪到「在副本上执行」并标 `look`；没配口子时不交给模型 | `server/agent/service/cloud-tools.mjs`、`instance.mjs` |
 | 系统提示词 `cloudSystemNote({ look })`（`CLOUD_SYSTEM_NOTE` 留作没配口子时的那一段） | 同上 |
-| 看画面的工具单次时限 180 秒（`HOSTED_DEFAULTS.lookToolMs`） | `server/agent/service/create-agent-service.mjs` |
+| 向渲染服务要画面的工具单次时限：35 分钟的兜底（`instance.mjs` 的 `LOOK_QUEUE_TOOL_MS`；渲染服务那边排队最多 30 分钟，渲染每次一分钟、重试三次）。`HOSTED_DEFAULTS.lookToolMs`（180 秒）现在只有 `collect_search` 在用〔裁：见 AGENT-v18-queue.md 第 2 条〕 | `server/agent/service/instance.mjs`、`create-agent-service.mjs` |
 | 内容库里卡片源码的版本（`rev`）记进实例的卡片源码表 | `server/agent/service/hosted-tools.mjs` |
 
 语义文档没有改。「谁能让渲染服务出图」「看画面优先于预渲染任务」是这次新定的，分别标了〔裁〕（二级、三级），合入 main 前请用户审。
@@ -1650,8 +1658,8 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 ### 25.6 实现时发现、任务书与清单都没列的用户可见行为
 
 1. 云端 Agent 看过的画面只有模型看得到：AI 栏里点开「看了画面」这一步没有图，`get_gif` 也没有动图可点（桌面版有）。
-2. 带自定义卡片的项目，云端第一次看画面（含 `get_layout` 量实体框）要等十来秒：隔离工作进程按项目现起。之后 90 秒内再看是快的。
-3. 渲染服务正在渲别的项目的自定义卡片时，带自定义卡片的项目看画面要排队，最长等到时限（`see_frames` 约三分钟、`get_layout` 一分钟）后回「这次没看成」，模型按规定框继续并在汇报里说明。
+2. 带自定义卡片的项目，云端第一次看画面（含 `get_layout` 量实体框）要等十来秒：隔离工作进程按项目现起。之后只要隔离工作进程还没让位（出完图最多再算 15 秒有需求，之后空闲满五分钟才让位），再看是快的〔裁：见 AGENT-v18-queue.md；`server/hosted-render/look.mjs` 的 `holdMs`、`isolation.mjs` 的 `IDLE_MS`〕。
+3. 渲染服务正在渲别的项目的自定义卡片时，带自定义卡片的项目看画面要排队，最长排 30 分钟；轮到之后每次渲一分钟、没成自动重试三次，都没成才回「这次没看成」，模型按规定框继续并在汇报里说明（第 9.8 节）〔裁：见 AGENT-v18-queue.md〕。
 4. 项目创建者关掉「渲染节点」后，云端 Agent 也看不了这个项目的画面（工具回「这次没看成：项目创建者关掉了这个项目的渲染节点」）。
 5. 云端 Agent 用 `bake_card` 做的贴图是以渲染服务的身份写进素材服务的，按现有规则应计在托管方渲染服务的产物容量里（`hosted-render-contract.md` 第 6 节）、不算在成员名下；这一点是按规则推的，没有单独验。
 6. 一轮结束后，别的成员 AI 栏顶上「〈成员〉的云端 Agent 正在改：…」那一行随之消失（原来一直挂着）。
@@ -1660,7 +1668,7 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 
 - `get_gif` 的动图、聊天栏的可视化记录：见 25.2。
 - `cloud-agent-ux-ui-probe` 没有加用户卡一步（真实浏览器里「后来的成员贴得上云端 Agent 建的用户卡的快照」仍没有断言）；看画面没有界面可验，界面探针没有动。
-- 有人等着看画面时提前轮换隔离工作进程（45 秒）只有单测（HR41），没有用两个带卡项目的真进程演练。
+- 有人等着看画面时提前轮换隔离工作进程（45 秒）已取消，改成空闲满五分钟才让位（见 25.3）〔裁：见 AGENT-v18-queue.md〕。
 - 新节点上要核对的：管理进程读得到登记表（`PROMPTCUT_RENDER_LOOK_SERVICES`；它与托管组合不是同一个用户时要给读权限，文件里只有公钥）；`/status` 的 `look.registry.agentKeys` 不是 0；非 root 的工作进程用户下 `bake_card` 的贴图推得进素材服务；Linux 上 Agent 通道那个浏览器实例多占的内存（常驻那棵树看画面后大约多一个浏览器进程，闲置 10 分钟关掉）计进了内存看护的读数。
 
 ---
@@ -1752,6 +1760,8 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 
 接着第 27 节，做任务书 J 里「要操作发起人自己界面的工具，发起方在线时要能用」这一块。上文与本节冲突时以本节为准。
 
+本节 28.1 到 28.7 写的是旧通道：页面号由请求体自报，判定按 `userId`。旧通道只用于本地与局域网。账号模式的新形状（发起人与发起页取自文档服务确认过的运行授权）写在 28.8。〔裁：见 AGENT-v18-tools-w2.md 第 10 条〕
+
 ### 28.1 通道的做法
 
 **消息形状**（已有的接口与事件格式只追加，没有改）：
@@ -1805,9 +1815,9 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 | `pause` | 页面停下，回 `{ ok: true }` | `initiatorOffline` | 做成 |
 | `get_selection` | 旧行为：只读发起页面 | 旧行为：有同成员其它窗口时回消息快照 | **旧实现说明已由用户新决定取代**：当前目标为读取所有在线成员选区并标用户名、发起人标“当前用户”；发起人离线用消息快照并注明非实时。接口待设计，不把旧两列当成目标行为 |
 | `spawn_agent` | 云端暂不支持 | 云端暂不支持 | 用户已定：0.7.18、0.7.19、0.7.20 关闭，提示「云端暂不支持开子 Agent」，列 0.7.20 之后；不再等待用户选型 |
-| `web_handoff` | `initiatorOnly` | `initiatorOffline` | **尚未桥接（实现记录）**。目标仅操作发起人自己的页面/本机界面；发起人离线时明确回 offline。旧“转交 Agent 自己的网页窗口，再决定远程画面或地址交回”的未定描述不再是当前目标 |
-| `collect_login` | `initiatorOnly` | `initiatorOffline` | **尚未桥接（实现记录）**。目标是素材采集默认匿名；需登录时由发起人电脑代下，登录信息不上传节点；代下失败或发起人离线回退匿名。旧“评估后保持现状”已被取代 |
-| `collect_login_check` | `initiatorOnly` | `initiatorOffline` | **尚未桥接（实现记录）**；按 `collect_login` 的本机代下与匿名回退目标设计，不上传登录信息 |
+| `web_handoff` | `initiatorOnly` | `initiatorOffline` | **账号模式：桥接已实现（`hosted-handoff.mjs`）、未挂载，见 28.8**。目标仅操作发起人自己的页面/本机界面；发起人离线时明确回 offline。旧“转交 Agent 自己的网页窗口，再决定远程画面或地址交回”的未定描述不再是当前目标 |
+| `collect_login` | `initiatorOnly` | `initiatorOffline` | **桥接已实现（`collect-bridge.mjs`）、未挂载**：挂上之后，发起页在线时让他的电脑弹出本机的登录窗口（`method: 'qr'` 或 `'browser'`），云端只拿回「开没开」「登没登」；发起页不在线回 `initiatorOffline`，用网页版回 `initiatorOnly`。素材采集默认匿名；需登录时由发起人电脑代下，登录信息不上传节点；代下失败或发起人离线回退匿名（9.4d）。旧“评估后保持现状”已被取代 |
+| `collect_login_check` | `initiatorOnly` | `initiatorOffline` | **桥接已实现、未挂载**：挂上之后云端只拿回「登没登」「是不是过期了」；其余同 `collect_login` |
 
 `initiatorOnly` 的 `error` 逐个写了上面「差什么」的那一句（`CLOUD_TOOL_PLAN[工具].online`），不再是原来那句笼统的「还不能反过来操作他的页面」。
 
@@ -1843,3 +1853,109 @@ location /agent/ { rewrite ^/agent/?(.*)$ /$1 break; proxy_pass http://127.0.0.1
 
 - 本段原记录的 `spawn_agent` “需要用户定做法”已由用户决定取代：三个版本关闭、0.7.20 后再做。`web_handoff` 仍未接；`collect_login` 与 `collect_login_check` 仍不可用，登录态按主机代下的新决定处理（见首部补记）。
 - 发起的那张页面刷新之后，这一轮余下的时间里它不再是「发起的那张」（页面号变了）。要让它接回来得把页面号存进会话存储并防别的页签冒用，这一版没做。
+
+### 28.8 账号模式的新形状（0.7.18，`server/agent/service/page-bridge.mjs`；已实现、未挂载）
+
+〔裁：见 AGENT-v18-tools-w2.md 第 2、5、10 节、AGENT-v18-tools-c1.md〕账号模式下反向通道的规矩和旧通道（28.1 到 28.7，只用于本地与局域网）不同。现状：服务端本体、页面一侧的执行器都在，测试与探针是在同一个进程里跑通的；Agent 服务的启动和路由没有建它，账号模式的运行器里 `initiatorOnline` 仍写死为不在线、`pageCall` 回 `{ offline: true }`，所以账号模式下 `seek`、`play`、`pause`、`web_handoff` 现在都回「发起方不在线」，等最后的接线包挂上。
+
+- **发起人与发起页都取自文档服务确认过的东西**：发消息时页面只报一个「在场页面号」（页面连文档服务时自己起的随机号），文档服务核过「这张页面此刻连着、属于这次登录」才把它记进消息；这一轮的运行授权里带着它和发送者账号。`requestPage` 的发起人账号、页面号两个参数只是调用方的断言，与授权对不上回 `page-binding-mismatch`；模型的工具参数里多带任何字段都被拒；页面交回的请求体指定不了页面。
+- **「现在确实在线」要两样同时成立**：文档服务的在场表里这张页面此刻连着；并且这张页面有一条到 Agent 服务的事件流（`GET …/events` 的查询串带 `page=<在场页面号>`）挂在这个对话上，账号是 HTTP 层核过委托票据的。同账号的别的页面、别的成员的页面（含谎报页面号的）都收不到。
+- **消息形状（版本 2）**：事件流上 `page.request { v: 2, id, nonce, runId, pageId, tool, args, timeoutMs }`，不带 `seq`、不进事件记录、只写给那一条流；交回 `POST …/page-results` 的请求体 `{ v: 2, id, nonce, pageId, runId?, ok, result?, error?, code? }`，多带字段回 400，结果上限 64 KiB。页面一侧的白名单是 `ACCOUNT_PAGE_REQUEST_TOOLS`（`seek`、`play`、`pause`、`web_handoff`），没有 `get_selection`：账号模式下它走文档服务的全员选区查询（28.1 的替代说明）。
+- **时限**：请求发出后 15 秒没交回、等的中途那条流断了、这一轮结束，都回 `initiatorOffline`；文档服务说页面在、流还没挂上时最多等 3 秒；调用方给的时限再长也不超过 60 秒。数字沿用旧通道。
+- **交回时全部重核**：交的人是发起人且此刻仍读得到这个对话；对话的权限版本和发请求时一样；页面号与一次性随机数对得上；这一轮的授权仍是当前的、仍是「发起人本人有效」、栅栏版本没换；没过时限；请求还在等。任何一样不对都拒收，等待的工具按不在线收掉。同一份结果重复交回回 `{ ok: true, duplicate: true }`，内容不同回 409。
+- **请求状态落盘**（SQLite，`page_requests` 表）：`pending`、`answered`、`offline`、`expired`、`cancelled`、`interrupted`、`rejected`。重启时还在等的标成 `interrupted`（原因 `agent-restart`），之后发起页交回得到 410 `page-request-interrupted`；库里只存随机数的哈希，日志里没有随机数和页面号。
+- **反向通道放在哪个进程还没定**：生产形态是一条任务一个进程，要页面的调用方在任务进程，接事件流和交回的是主服务，两边之间还没有通道（任务进程到主服务只有单向的交事件那一条，第 29.2 节）。W2 报告建议放在主服务、加一条任务进程到主服务的内部请求，采集代下（9.4d）同受此影响。
+- **`web_handoff`**（`hosted-handoff.mjs`）：向云端浏览器要这个对话此刻开着的网页地址，经反向通道让发起页用他本机的 `web_handoff` 把本机浏览器交给本人并带上地址；云端只拿回「交没交出去」。登录只发生在他的电脑上，云端那个浏览器并没有登录。不是公开网页地址的不往用户电脑上带；用网页版的回 `unsupported`。云端浏览器（9.2）没挂上时回 `cloudUnavailable`。
+- **采集代下加在同一条通道上**：`createPageBridge` 多一个可选参数 `extraTools`，采集代下（9.4d）借它加了 `collect_delegate_start`、`collect_delegate_poll`、`collect_delegate_cancel`、`collect_login`、`collect_login_check` 五种请求；发起人与发起页的绑定、交回时的重核、落盘与幂等都是上面这一套。
+
+---
+
+## 29. 账号模式（一条任务一个进程）的接口与配置（2026-10-13，0.7.18 语义同步）
+
+〔裁：见 AGENT-v18-prod.md、AGENT-v18-runner.md、AGENT-v18-queue.md、AGENT-v18-fixes.md〕前面各节写的多是旧模式（服务私钥身份、一个进程里跑所有对话）。账号模式（`PROMPTCUT_ACCOUNT_V2=1`）的生产装配是这样分工的，上文与本节冲突时以本节为准：
+
+- **主服务**（`server/agent-service/main.mjs` 的命令行入口）：对页面开接口的那个进程。它凭文档服务签的「只做控制」的主身份连文档服务，只管读取控制、事件库、附件存储和给槽调度问话的内部口，**自己不跑任何一条任务**。
+- **任务进程**：每条任务一个操作系统进程，里面是真实的运行器（`account-task-worker.mjs`）。一个任务槽上先后开过的每个进程算一代。
+- **root 入口**（`account-root-main.mjs`，只在 Linux 上、以 root 跑）：槽调度，负责开、关任务进程并写「这一代确实关干净了」的记录；经主服务的内部口去问排队与强制终态。
+
+页面看到的接口（第 2.3 节）形状不变，差别见 29.4。
+
+### 29.1 主服务的环境变量
+
+三样都要有，缺哪一样都拒绝启动（`config.error { reason: 'account-task-processes', missing: [...] }`）：
+
+| 变量 | 含义 |
+|---|---|
+| `PROMPTCUT_AGENT_INTERNAL_PORT` | 内部口的端口，1～65535，只绑回环，不能和 `PROMPTCUT_AGENT_PORT` 相同 |
+| `PROMPTCUT_AGENT_ROOT_FINGERPRINT256` | root 入口那张证书的 SHA-256 指纹（冒号可有可无）。只有这张证书能来问调度要的那两条 |
+| `PROMPTCUT_AGENT_SHARED_DATA` | 各代任务进程共用的数据目录，绝对路径、已存在、可写。用户上传的附件存进这里，要和 root 入口配置的 `worker.dataDir` 是同一个 |
+
+账号版命令行入口不再接下面这些，设了就拒绝启动并点名是哪一个：`PROMPTCUT_AGENT_CONTROL_PORT`、`PROMPTCUT_AGENT_RUN_ASSET_ORIGIN`、`PROMPTCUT_AGENT_RUN_ASSET_FINGERPRINT256`、`PROMPTCUT_AGENT_RUN_ASSET_MAX_IMPORT_BYTES`、`PROMPTCUT_AGENT_ACCOUNT_LOOK=1`（它们属于「在主进程里跑任务」那一路，只留给进程内直接装配执行器的调用方，也就是测试夹具）。`PROMPTCUT_AGENT_ACCOUNT_LOOK` 只认 `0` 或 `1`，别的值拒绝；`1` 的含义在进程内装配里是「接看画面」（要 `PROMPTCUT_AGENT_LOOK_URL` 和读得到的 `agent` 服务私钥，否则 `account-look`、`look-key`）。
+
+另几个变量在账号模式下的含义：
+
+- `PROMPTCUT_AGENT_SECRETS`：命令行入口不读。看画面用的服务私钥由任务进程按设置文件的 `look.keyDir` 读（29.3），所以每个任务进程都读得到这把私钥，这是已知的暴露面（AGENT-v18-runner.md 请用户定的事第 1 条：任务进程不持私钥、由主服务代签，用户还没定）。
+- `PROMPTCUT_AGENT_LOOK_URL`：设了要是回环上的 http 地址，否则 `look-url`；设对了也被忽略，主服务的 `look` 恒为 `false`。真正的看画面地址写在 root 入口配置的 `worker.look.url` 里。
+- 运行素材（任务进程读写素材服务）不再用环境变量，写在 `worker.runAssets` 里（29.3）。
+- 其余变量（`PROMPTCUT_AGENT_DATA`、`PROMPTCUT_AGENT_HOST`、`PROMPTCUT_AGENT_PORT`、`PROMPTCUT_AGENT_DOC_URL` 必须是 `wss://`、`PROMPTCUT_AGENT_DOC_INTERNAL_ORIGIN`、`PROMPTCUT_AGENT_DOC_FINGERPRINT256`、`PROMPTCUT_AGENT_CLIENT_KEY_FILE` / `_CERT_FILE` / `_CA_FILE`）见 `server/hosted/deploy/agent-account.env.example`。主身份的证书和任务证书必须是两张。
+
+启动时要等到第一次向文档服务登记成功才开监听；文档服务一时连不上不退出，隔 2 秒再试，每次记一行 `agent.master.pending`；文档服务明确不认主身份（4xx）、登记出来的不是只做控制的身份、内部口占不上，才拒绝启动（`config.error { reason: 'account-master', detail }`）。
+
+### 29.2 内部口与任务进程的指令口
+
+**主服务内部口**（`account-master-assembly.mjs`）：只绑 `127.0.0.1`，双向 TLS（TLS 1.3），服务端证书是主服务自己的，任务进程按它的指纹钉住。三条路径：
+
+| 路径 | 谁来 | 做什么 |
+|---|---|---|
+| `POST /internal/v2/worker/events/append` | 任务进程（用任务证书） | 交这一代的运行事件；每条回文档服务核是哪一条任务的哪一代进程 |
+| `POST /internal/v2/master/scheduler/pending` | root 入口的槽调度 | 问「哪些对话在排队」；主服务原样转问文档服务，并记下调度来过的时刻（`/healthz` 的 `scheduler` 据此，15 秒内来过才算在） |
+| `POST /internal/v2/master/scheduler/scope-control` | 同上 | 问「哪些任务要强制关」「这一条的强制终态」；原样转问文档服务 |
+
+后两条只认 root 那张证书的指纹，直连；带 `Forwarded`、`X-Real-IP`、`X-Forwarded-*` 头一律 403 `master-scheduler-forbidden`；请求体上限 64 KiB（413 `master-scheduler-body`）。文档服务回的内容主服务不改、不补：强制终态是文档服务签的，root 自己验签。文档服务回 400、403、404、409 原样带回，别的失败回 503。
+
+**任务进程的指令口**（`account-worker-control-client.mjs`；任务进程以 `--control https` 起，没有父进程通道也能起）：在它核身份用的那个本机 HTTPS 口上另认四条，只认 root 那张客户端证书，带反向代理转发头一律 403：
+
+| 路径 | 做什么 |
+|---|---|
+| `POST /internal/v2/agent/run-scope/control/prepare` | 领取，请求体 `{ projectId, conversationId, requestId }` |
+| `POST /internal/v2/agent/run-scope/control/start` | 开跑，请求体 `{}`；没领取就开跑被拒 |
+| `POST /internal/v2/agent/run-scope/control/close` | 收尾，请求体 `{}`；回应送到以后进程自己收掉 |
+| `GET /internal/v2/agent/run-scope/control/settlement` | 长挂：结算结果出来了就回，到时限（缺省 15 秒）回「还没有」 |
+
+每条指令带请求头 `x-promptcut-scope-slot`、`x-promptcut-scope-epoch`、`x-promptcut-scope-instance`，任务进程核对，不是给这一代的回 409 不做；回应里带 `scope`，调度一侧核对，对不上当没答。这三个头防串代，不是鉴权。
+
+### 29.3 任务进程的设置文件
+
+任务进程的生产配置入口（`account-task-worker-cli.mjs --configuration-module account-task-worker-config.mjs`）只认环境变量 `PROMPTCUT_AGENT_WORKER_SETTINGS` 指向的一份 JSON。root 在开这一代进程之前写好，进程的用户只读；进程间消息和任何请求体都改不了其中任何一项。只在 Linux 上能用（要核 root 写的文件的属主），别的平台拒绝。形状（`v: 1`，路径都是绝对路径）：
+
+| 字段 | 含义 |
+|---|---|
+| `expected`、`reservation`、`rootRecordFile` | root 给这个槽、这一代写的记录（`agent-run-scope-schema.mjs`） |
+| `identity { keyFile, certFile, caFile, port }` | root 核身份、下指令用的本机口；`port` 为 0 由系统分配 |
+| `doc { origin, fingerprint256, keyFile, certFile, caFile }` | 文档服务的内部口与这个进程的任务证书 |
+| `master { origin, fingerprint256 }` | 主服务收事件的口（用同一张任务证书连） |
+| `journalFile` | 这一代的本机事件日志 |
+| `dataDir` | 各代共用、长期保留：对话的模型历史、工作目录、用量流水、额度 |
+| `stateDir` | 这一代自己的：已读意向等本机状态 |
+| `modelConfigDir`（可不写） | 模型配置所在目录，缺省就是 `dataDir` |
+| `controlPort`（可不写） | 文档服务回连的本机控制口，缺省 0（系统分配） |
+| `look { url, keyDir }`（可不写） | 渲染服务的回环口、签看画面请求用的服务私钥目录（里面是服务名 `agent` 的 `service-key.json`）。没写就是没接：看画面的工具不交给模型。读不到私钥、服务名不对，拒绝启动 |
+| `runAssets { origin, fingerprint256, maxResponseBytes, maxImportBytes, timeoutMs? }`（可不写） | 素材服务的内部口。没写，素材那几个工具回明确的原因。`timeoutMs` 是一次素材请求里连接多久没有动静就放弃，缺省 5 秒 |
+
+写了但不全，直接拒绝启动（`account-worker-settings`、`-look`、`-look-key`、`-run-assets`）。`look`、`runAssets` 在 root 入口配置里写在 `worker` 下，由 root 逐代下发进设置文件。运行素材在账号模式下凭这条任务的运行授权读写素材服务，不借成员的素材票据；每个任务进程用自己内存里的钥匙签请求。
+
+### 29.4 页面看到的接口在账号模式下的差别
+
+- `GET /healthz`：多回 `taskProcesses: true` 与 `scheduler`（槽调度此刻有没有在问）。`GET /v1/info` 的 `executorMounted` 跟 `scheduler` 一致：调度没来时回 `false`，页面有一句现成的话「消息会持久排队，等待执行服务」；消息仍由文档服务持久排队，主服务不装作在执行。
+- `POST /v1/conversations/<id>/abort`：主服务凭同一个请求号在服务器上等到 root 关掉那一代进程、文档服务结清，再回成功，最多等 15 秒；到时没办完照旧回 503 `agent-fence-pending`，页面显示原来那句「已禁止新访问，相关服务关闭待确认。点击重试会沿用原请求。」。
+- `POST /v1/conversations/<id>/attachments`：可用，规矩见 9.4。
+- `GET /v1/usage`：见 6.3。生产装配现在回 503 `usage-unavailable`。
+- `GET /v1/conversations/<id>/events`：对话不存在或读不到回 404 `no-conversation`，见 2.4。
+- 任务放弃结算而没人来强制关（任务读完消息之后因事件交不上去、收尾没形成记录等暂时性故障放弃）：槽调度让那一代进程停下并写失败观察，文档服务据此签「进程故障」的强制终态，这条任务记「失败」，槽让出来，同一个对话里排着的下一条接着开始。已经停止或撤销的任务放弃，文档服务随后会给强制终态，不走这一条。
+- 重启：root 入口或主服务重启时正在跑的任务会被记成「失败」，没有「重新接上还在跑的一代」；部署说明要求重启前先等槽空。节点重启后每个槽要重新初始化（`--bootstrap`），重启前没结清的任务结不了。
+
+### 29.5 看画面在账号模式下
+
+- **Agent 一侧**：任务进程的设置里写了 `look` 才接。每次登记看画面的请求之前、每一趟去问之前都先过一次授权闸（执行器问文档服务「这条任务现在还能不能读」），不过就把排着的请求撤回并抛错：任务被停、被撤销以后不再出图。授权闸答「不行」和「文档服务一时问不到」是两回事，后者先按退避再问几次，都问不到才告诉模型这次没看成。
+- **`POST /look` 的请求体**多一个可选的 `run: { runGrantId, runId, conversationId }`（`hosted-render-contract.md` 第 8a 节）；签名里的实例号填这条任务所在进程在文档服务登记的那一个，渲染服务按它给请求分主人（问、撤只认主人）。旧请求、旧落盘文件照认。
+- **渲染服务一侧**现在只核服务私钥的签名，不向文档服务核这条任务授权（它在账号模式下还没有连文档服务的身份）。`run` 是调用方的说法，起不到隔离的作用：实例号由调用方填，渲染服务不核它和钥匙的对应，而各任务进程用的是同一把私钥；实际挡着别的任务进程来问、来撤的，是现生成的 144 位随机请求号。后果：谁拿到那把私钥，谁就能以任何项目号向渲染服务要画面，间接看到别的项目的素材画面；这是旧模式里 Agent 服务持有私钥时同一个暴露面，现在每个任务进程都读得到。收紧有两步，各自独立：任务进程不持私钥、经主服务代签（Agent 一侧能做）；渲染服务向文档服务核任务授权（要先有它在账号模式下的身份）。待用户定。

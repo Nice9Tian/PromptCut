@@ -21,7 +21,7 @@ function write(file, value) {
   try { fs.writeFileSync(fd, JSON.stringify(value)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(temp, file);
 }
-export function createHostedRelocation({ paths, hosting, store, device, assets, reloadSpace, authenticate, docBaseOf, assetBaseOf }) {
+export function createHostedRelocation({ paths, hosting, store, device, assets, reloadSpace, authenticate, docBaseOf, assetBaseOf, accountMode = false }) {
   const root = path.join(paths.secrets, 'relocation'), workers = new Map(); let closing = false, timer;
   const fileOf = txnId => { if (!isRelocationId(txnId)) refuse('bad-relocation'); return path.join(root, `${txnId}.json`); };
   const read = txnId => {
@@ -166,7 +166,10 @@ export function createHostedRelocation({ paths, hosting, store, device, assets, 
   return {
     handle(req, res) { const p = new URL(req.url, 'http://localhost').pathname;
       if (p.startsWith('/hosting/relocation/export-')) { void exportRun(req, res); return true; }
-      if (!p.startsWith('/hosting/relocation/import-')) return false; void run(req, res); return true; },
+      if (!p.startsWith('/hosting/relocation/import-')) return false;
+      // 账号模式的节点只认网站账号：旧办法（房间、项目密码、创建者口令）的整房导入口关着，不收任何写入。
+      if (accountMode) { reply(res, 403, { ok: false, error: 'account-required' }); return true; }
+      void run(req, res); return true; },
     start() { sweep(); },
     async close() { closing = true; clearTimeout(timer); await Promise.all([...workers.values()].map(worker => worker.stop())); workers.clear(); },
   };

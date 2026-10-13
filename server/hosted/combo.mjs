@@ -591,6 +591,7 @@ export async function startHostedCombo({
   hosting.setAuthority(docPublicUrl || `http://${loopHost}:${docAddr.port}`);
   if (store) {
     relocation = createHostedRelocation({ paths, hosting, store, device: localDevice || localDeviceInfo({ PROMPTCUT_DATA_DIR: root }),
+      accountMode: !!accountRuntime,
       assets: Object.fromEntries(HOSTED_NAMESPACES.map(ns => [ns, { root: path.join(paths.assets, ns), shard: true }])), reloadSpace: service.reloadSpace, authenticate,
       docBaseOf: () => `http://${loopHost}:${docAddr.port}`, assetBaseOf: () => `http://${loopHost}:${assetAddr.port}` });
     relocation.start();

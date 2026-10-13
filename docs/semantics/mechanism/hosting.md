@@ -64,8 +64,9 @@ Agent 接续中继会话时重新取得当前页面委托票据；网关先核�
 
 从属于 `../product/hosting.md` 的「托管方的 Agent 服务」。本节全部〔裁：主会话 2026-10-06；出处 `../../plan/cloud-agent-contract.md` 第 2.2、8、10、11、20 节〕。
 
-- **进程与目录**：PM2 的 `promptcut-agent`（`server/hosted/deploy/pm2-promptcut-agent.config.cjs`），单进程，`--max-old-space-size=1536`、`max_memory_restart: '2G'`、`kill_timeout: 8000`；只绑回环，只经反向代理对外（`/agent/` 一段见 `server/hosted/deploy/nginx-location-agent.conf`）。代码不单独上传，用 `deploy-render` 放上去的那份检出，Agent 服务、渲染服务、在线页面须出自同一个提交，`/healthz` 的 `codeVersion` 用来核对。数据目录 `PROMPTCUT_AGENT_DATA`（0700），按「项目 / 主人 / 对话」分目录存对话，另有模型配置、Key 密文、`limits.json`、用量流水。
-- **服务身份**：凭 `PROMPTCUT_AGENT_SECRETS` 下 `service-key.json`（服务名 `agent` 的私钥，由 keygen 生成）连文档服务的控制连接；不读集群令牌；文档服务一时连不上不退出，自己退避重连，期间新请求回 503。
+- **进程与目录**（非账号模式）：PM2 的 `promptcut-agent`（`server/hosted/deploy/pm2-promptcut-agent.config.cjs`），单进程，`--max-old-space-size=1536`、`max_memory_restart: '2G'`、`kill_timeout: 8000`；只绑回环，只经反向代理对外（`/agent/` 一段见 `server/hosted/deploy/nginx-location-agent.conf`）。代码不单独上传，用 `deploy-render` 放上去的那份检出，Agent 服务、渲染服务、在线页面须出自同一个提交，`/healthz` 的 `codeVersion` 用来核对。数据目录 `PROMPTCUT_AGENT_DATA`（0700），按「项目 / 主人 / 对话」分目录存对话，另有模型配置、Key 密文、`limits.json`、用量流水。
+- **服务身份**（非账号模式）：凭 `PROMPTCUT_AGENT_SECRETS` 下 `service-key.json`（服务名 `agent` 的私钥，由 keygen 生成）连文档服务的控制连接；不读集群令牌；文档服务一时连不上不退出，自己退避重连，期间新请求回 503。
+- **账号模式（一条任务一个进程）的部署**：节点上除 Agent 主服务外多出两样。一是 root 入口（`server/agent-service/account-root-main.mjs`，以 root 跑，开任务进程、关任务进程、写「这一代关干净了」的记录），二是若干任务槽（每槽一个 systemd 单元，以任务用户跑，一代只跑一条任务；槽的个数就是全节点同时跑的任务数）。主服务与任务用户必须是两个不同的用户，两者加进同一个共用组；root 入口执行的代码连同路径上每一级目录都归 root，否则拒绝启动。文档服务用 `PROMPTCUT_DOC_AGENT_RUN_SCOPES_FILE` 指向的配置打开这个模式，不设就不开。账号版不用 PM2、服务私钥和 `deploy-agent`，目前手工部署；步骤、证书、目录权限和回退见 `server/hosted/deploy/README.md` 的「Agent 服务（账号版：一条任务一个进程）」。节点重启后任务槽要人手工重新初始化。〔裁〕：见 AGENT-v18-prod.md
 - **部署子命令**：`keygen-agent`、`deploy-agent`、`status-agent`、`stop-agent`，都收 `--dry-run`。模型 Key 与别的外部服务的 Key 另有 `machine-id-agent`（取节点的机器识别码）与 `import-key-agent --file <密文文件> [--service model|voice]`（把用户生成的密文送到节点导入），也收 `--dry-run`；办法见 `mechanism/agent.md`「Key 与模型」。〔用户 2026-10-07 定〕
 - **在线页面的诊断报告提交**：构建在线页面时带 `VITE_DIAG_SUBMIT_URL` 与 `VITE_DIAG_SUBMIT_TOKEN`（只写变量名；值在构建那台电脑的 `.env.local` 里）。〔用户 2026-10-07 定〕
 - **Key 与换机**：Key 的密文由本机指纹派生口令封装，整个文件拷到别的机器解不开，换机（或重装系统）后要重新生成密文、重新导入；对话与用量数据目录整个拷走即可。迁移办法见 `../../plan/hosting-migration.md`。
