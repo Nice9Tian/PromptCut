@@ -91,8 +91,9 @@ export async function loadReadableStreams(projectId: string | null, project: unk
     if (row.clipIds.length !== 1 || (row.kind as string) === "group") continue;
     const clipId = row.clipIds[0];
     if (clipIds && !clipIds.has(clipId)) continue;
-    // 旧输入的流不取(行里带签名、页面也算得出、两者不同)
-    if (row.inputSig && streamSigStale(row.inputSig, streamInputSig(project, row))) continue;
+    // 旧输入的流不取(行里的签名和页面按这一版项目算的不同)。没带签名的行没法核对,导出时同样不取(预览照旧贴,那是它自己的规矩):
+    // 成片里贴进一段别的版本的画面比慢一点更糟
+    if (!row.inputSig || streamSigStale(row.inputSig, streamInputSig(project, row))) continue;
     let best: ReadableStream | null = null;
     for (const candidate of row.candidates) {
       const inits = new Map<string, InitMeta>();
@@ -145,6 +146,12 @@ export function composeHalves(rgba: Uint8ClampedArray | Uint8Array, width: numbe
     }
   }
   return out;
+}
+
+/** 解出来的一帧的宽度就是这一段矩形的宽;对不上就抛(调用方不裁、不拉伸) */
+export function frameWidthOf(decodedWidth: number, rect: LayerRect, frame: number): number {
+  if (decodedWidth !== rect.w) throw new Error(`轨道流第 ${frame} 帧解出来宽 ${decodedWidth},和清单里这一段的矩形宽 ${rect.w} 对不上`);
+  return rect.w;
 }
 
 /** 一条流的顺序解码器:按帧号递增取帧 */
@@ -276,7 +283,8 @@ export class StreamFrameReader {
     const seg = this.stream.segments.get(n)!;
     const rect = this.stream.inits.get(seg.init)!.rect;
     const width = vf.displayWidth || vf.codedWidth, total = vf.displayHeight || vf.codedHeight;
-    const w = Math.min(width, rect.w), h = rect.h;
+    // 解出来的宽度应当就是这一段的矩形宽(编码时按矩形编的)。对不上说明清单和字节不是一回事:不裁、不拉伸,报错,不导出错的画面
+    const w = frameWidthOf(width, rect, frame), h = rect.h;
     const make = (cw: number, ch: number) => {
       if (typeof document !== "undefined") { const c = document.createElement("canvas"); c.width = cw; c.height = ch; return c; }
       return new OffscreenCanvas(cw, ch);

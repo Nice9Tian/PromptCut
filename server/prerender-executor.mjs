@@ -386,7 +386,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     const { entry, drifted } = await contextFor(task, signal);
     const input = task.input ?? {};
     let specs = [];
-    try { specs = pipeline.exportStreamSpecs(entry, [input.clipId])?.specs ?? []; } catch { specs = []; }
+    try { specs = pipeline.exportStreamSpecs(entry, [input.clipId], input.exportSalt)?.specs ?? []; } catch { specs = []; }
     const spec = specs.find(item => item?.exportKey === input.exportKey) ?? null;
     if (!spec && drifted) throw superseded(`新版本里片段 ${input.clipId} 的内容换了`);
     const why = [];

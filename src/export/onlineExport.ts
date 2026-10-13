@@ -65,12 +65,12 @@ function nonRunnableClips(p: Project): string[] {
 }
 
 /** 卡片画面的现成来源从哪取:文档服务(层表、清单、任务队列)与素材服务;页面没连着项目时为 null(全部由导出页活渲) */
-const cardLayerDeps = () => (hasDocLink() ? {
+const cardLayerDeps = (over: { stallMs?: number } = {}) => (hasDocLink() ? {
   projectId: () => currentDocProjectId() || null,
   projectRev: () => currentSharedLink()?.ds.rev ?? null,
   stream: { request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders },
   frames: { request: docRequest, subscribeQueue: subscribeQueueEvents, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders,
-    publisherId: `page-${pageSession()}`, codeVersion: CODE_VERSION },
+    publisherId: `page-${pageSession()}`, codeVersion: CODE_VERSION, ...(over.stallMs ? { stallMs: over.stallMs } : {}) },
 } : null);
 
 export async function exportVideoOnline(
@@ -165,8 +165,9 @@ export function exportRenewalStats() {
  *   - `originals: true`:照正式导出,按 `mode`(`fast` / `full`,缺省 `full`)取卡片画面的来源;
  *   - `capture`:这些帧(项目帧号)合成完当场拷一张 PNG 回来(`captures`:帧号 → `data:` 地址),逐像素核对用;
  *   - `waitLimit`:导出前的等待提示最多看到几条就取消(缺省 3;等渲染节点现渲时给大一点)。
+ *   - `stallMs`:等渲染节点时多久没有进展就报失败(缺省是 `exportFrames.ts` 的 `EXPORT_STALL_MS`;探针注成几秒)。
  */
-export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals?: boolean; sounds?: boolean; mode?: ExportMode; capture?: number[]; waitLimit?: number } = {}) {
+export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals?: boolean; sounds?: boolean; mode?: ExportMode; capture?: number[]; waitLimit?: number; stallMs?: number } = {}) {
   // `sounds: true`:同正式导出,先把声音生成好(探针 `sound-ab-probe.mjs`)
   if (o.sounds) await prepareExportSounds({ signal: new AbortController().signal });
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
@@ -186,7 +187,7 @@ export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals
     onWaiting: (m) => { if (m) waits.push(m); if (waits.length > waitLimit) controller.abort(); },
     confirm: () => true, notify: () => {},
     checkMediaOriginals: () => exportGate(p),
-    cardLayers: o.originals ? cardLayerDeps() : null,
+    cardLayers: o.originals ? cardLayerDeps({ stallMs: o.stallMs }) : null,
     nonRunnable: () => nonRunnableClips(p),
     onFrame: wanted.size ? (frame, canvas) => { if (wanted.has(frame)) captures[frame] = canvas.toDataURL("image/png"); } : undefined,
     mediaUrl: remote ? (url) => remoteMediaUrl(url, { base: remote.base, ticket: renewer?.ticket() ?? remote.ticket }) : undefined,

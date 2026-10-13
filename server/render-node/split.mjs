@@ -629,7 +629,7 @@ export function splitPlan({
       emit({
         id: taskIdOf({ kind: 'stream', resultKey, range }), kind: 'stream', resultKey, range,
         source: { projectId, projectRev, derivedFrom },
-        input: { clipId, cardId: null, entryKey: null, exportFrames: true, exportKey,
+        input: { clipId, cardId: null, entryKey: null, exportFrames: true, exportKey, ...(stream.salt ? { exportSalt: stream.salt } : {}),
           stream: { clipId, kind: stream.kind, plane: stream.plane, fps: stream.fps, originFrame: stream.originFrame, lastFrame: stream.lastFrame,
             rect: stream.rect ? { ...stream.rect } : null, offset: stream.offset ? { ...stream.offset } : null } },
         weight: { ...weight, frames },

@@ -208,7 +208,8 @@ export function listPlanOverrides(task, plan) {
   const clips = Array.isArray(task.input?.clips) ? task.input.clips.filter(id => typeof id === 'string' && id) : [];
   if (isExportOnlyPlan(task)) {
     let found = null;
-    if (typeof plan?.exportStreamsFor === 'function') { try { found = plan.exportStreamsFor(new Set(clips)); } catch { found = null; } }
+    // `input.exportSalt`:页面上一次失败之后重新导出带的标识,导出键跟着换(`../export-frames.mjs` 的 `exportSaltOf`)
+    if (typeof plan?.exportStreamsFor === 'function') { try { found = plan.exportStreamsFor(new Set(clips), task.input?.exportSalt); } catch { found = null; } }
     const exportStreams = Array.isArray(found?.streams) ? found.streams.filter(s => s && typeof s === 'object') : [];
     const exportUnsupported = found ? (Array.isArray(found.unsupported) ? found.unsupported : []) : clips.map(clipId => ({ clipId, reason: 'no-executor' }));
     return { prerenderSet: new Set(), streams: [], exportStreams, exportUnsupported, lane: 'normal' };

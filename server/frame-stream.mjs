@@ -1297,6 +1297,9 @@ export class StreamProducer {
       this.exportStates.set(key, state);
       while (this.exportStates.size > 16) this.exportStates.delete(this.exportStates.keys().next().value);
     }
+    // 差分取层的自检记录不跨任务留着「判死」:上一份任务判过失败的,这一份任务重新试一次(失败了本任务照样尽早停)。
+    // 不清的话同一份内容在这个进程重启之前永远 `below-capture-failed`,用户重新导出也没用
+    if (state.below?.failed) state.below = null;
     const from = Math.max(range.from, 0), to = Math.min(range.to, spec.lastSegment);
     let bakery = null, frames = 0;
     try {
