@@ -486,13 +486,21 @@ async function main() {
         // 请求只发给发消息的那个人(乙)的页面;乙没有连着的页面,所以回「发起方不在线」,甲的页面一条都收不到、播放头不动
         {
           const b2 = await f.connectActor(1); actors.push(b2);
-          const mark = await page.evaluate(() => ({ received: window.__wire.received.length, t: window.__pcStore.getState().t, attached: window.__wire.attached }));
-          const rb = await h.run(b2, conv, [{ tool: 'seek', input: { t: 1 } }, { tool: 'play', input: {} }, { say: '乙试过了' }]);
-          const now2 = await page.evaluate(() => ({ received: window.__wire.received.length, t: window.__pcStore.getState().t, attached: window.__wire.attached, playing: window.__pcStore.getState().playing }));
+          const sample = () => page.evaluate(() => ({ received: window.__wire.received.length, t: window.__pcStore.getState().t, attached: window.__wire.attached, opens: window.__wire.opens, playing: window.__pcStore.getState().playing }));
+          // 要的是「乙发请求的那段时间里甲的页面一直连着」:前后都连着、中间没有重开过才算数。甲的事件流中途断过重连(机器忙、票据续期)的那一遍不算,等它连回来再来一遍,最多三遍
+          let mark = null, now2 = null, rb = null, steady = false, tries = 0;
+          for (; tries < 3 && !steady; tries++) {
+            await until(async () => (await sample()).attached === true, { what: '甲的页面连着事件流', timeoutMs: 20_000 });
+            mark = await sample();
+            rb = await h.run(b2, conv, [{ tool: 'seek', input: { t: 1 } }, { tool: 'play', input: {} }, { say: '乙试过了' }]);
+            now2 = await sample();
+            steady = mark.attached === true && now2.attached === true && now2.opens === mark.opens;
+            if (!(rb.of('seek')?.initiatorOffline === true && rb.of('play')?.initiatorOffline === true && now2.received - mark.received === 0)) break;   // 真出了事:不重来,照实报
+          }
           check('隔离:甲的页面真的连着时,乙的任务(同一个对话里)调 seek / play 到不了甲的页面——甲的页面收到的请求数是 0、播放头没动,乙得到「发起方不在线」',
-            mark.attached === true && now2.attached === true && rb.outcome === 'done' && rb.of('seek')?.initiatorOffline === true && rb.of('play')?.initiatorOffline === true &&
+            steady && rb.outcome === 'done' && rb.of('seek')?.initiatorOffline === true && rb.of('play')?.initiatorOffline === true &&
             now2.received - mark.received === 0 && Math.abs(now2.t - mark.t) < 0.01 && now2.playing === false,
-            brief({ aPageReceived: now2.received - mark.received, aPageAttached: [mark.attached, now2.attached], t: [mark.t, now2.t], seek: rb.of('seek'), play: rb.of('play'), outcome: rb.outcome }, 500));
+            brief({ aPageReceived: now2.received - mark.received, aPageAttached: [mark.attached, now2.attached], aPageStreamOpens: [mark.opens, now2.opens], tries, t: [mark.t, now2.t], seek: rb.of('seek'), play: rb.of('play'), outcome: rb.outcome }, 600));
           await b2.close().catch(() => {}); actors.splice(actors.indexOf(b2), 1); await sleep(500);
         }
         // 页面晚到的回答:拿上一条已经结束的请求再交一次(换一个结果),主服务拒收
