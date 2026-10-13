@@ -1,6 +1,8 @@
 import { actions, getState, subscribe } from "../../store/project";
 import type { MediaAsset } from "../../kernel/project";
 import { isViewOnly } from "./viewOnly";
+import { confirmedMissing } from "../../audio/missingMaterialRecord";
+import { publishMissingMaterials, type MissingMaterialNotice } from "./missingMaterialBus";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线浏览器模式没有本机内容库与转码:
@@ -427,7 +429,12 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
     }
     const { paths, urls } = localSourcesOf(m);
     const key = paths[0] ?? urls[0] ?? "";
-    if (!key) { out.failed.push({ id: m.id, name: m.name }); continue; }
+    if (!key) {
+      out.failed.push({ id: m.id, name: m.name });
+      // 没有哈希、没有路径、也没有读得到的地址(打开时已被清空的失效地址):没有任何线索能找回它,同样认定缺失
+      if (opts.markMissing && !m.url && !m.soundOf) markMediaMissing(m.id);
+      continue;
+    }
     const g = groups.get(key);
     if (g) g.push(m); else groups.set(key, [m]);
   }
@@ -454,8 +461,8 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
       // 派生的声音不挂视频的两档
       // 补上哈希的交给上传队列走 hooks.afterIngest(queueBackfilledMedia),这里不再按「导入」交一遍
       applyUploadedMedia(m.id, fresh.soundOf ? { ...up, tiers: undefined, smallState: undefined } : up, { imported: false });
-      // 以前在别的机器上被标过「(缺失)」、现在取到了:去掉标记
-      if (fresh.name.startsWith(MISSING_PREFIX)) actions.updateMedia(m.id, { name: fresh.name.slice(MISSING_PREFIX.length) });
+      // 以前在别的机器上被标过「(缺失)」、现在取到了:去掉标记,连同「确认缺失」的记录(占位随之消失)
+      if (fresh.name.startsWith(MISSING_PREFIX) || fresh.missingMaterial) actions.updateMedia(m.id, { name: nameWithoutMissing(fresh.name), missingMaterial: undefined });
       out.ingested.push(m.id);
     }
   }
@@ -492,22 +499,62 @@ export async function checkHashedMedia(): Promise<{ missing: string[]; restored:
       for (const h of part) answered.add(h);
     } catch { /* 编辑器进程不在:这一批不判 */ }
   }
+  // 内容库里没有的,再按原来记的本机路径找一次(素材找回的先后:包里落库的、内容库里已有的都先于它,见 `workflow/materials.md`):
+  // 文件还在原处、内容也对得上,就地挂回内容库,不算缺失;原处的文件内容变了(哈希对不上)记下来,弹窗里单独说明。
+  const changed = new Set<string>();
+  const triedPath = new Set<string>();
+  for (const m of getState().project.media ?? []) {
+    if (m.pending || !hasMediaHash(m) || !m.path) continue;
+    const h = hashOf(m);
+    if (hashPresent.has(h) || !answered.has(h) || h !== String(m.hash).toLowerCase() || triedPath.has(`${h}
+${m.path}`)) continue;
+    triedPath.add(`${h}
+${m.path}`);
+    const up = await adoptServerMedia(m.path);
+    if (up && up.hash.toLowerCase() === h) hashPresent.add(h);
+    else if (up) changed.add(h);
+  }
+  const notices: MissingMaterialNotice[] = [];
   for (const m of getState().project.media ?? []) {
     if (m.pending || !hasMediaHash(m)) continue;
     const h = hashOf(m);
+    const url = `/@media/${String(m.hash).toLowerCase()}`;
     if (hashPresent.has(h)) {
-      if (m.name.startsWith(MISSING_PREFIX) || !m.url) {
-        actions.updateMedia(m.id, { name: m.name.startsWith(MISSING_PREFIX) ? m.name.slice(MISSING_PREFIX.length) : m.name, url: m.url || `/@media/${String(m.hash).toLowerCase()}` });
+      if (m.name.startsWith(MISSING_PREFIX) || !m.url || m.missingMaterial) {
+        actions.updateMedia(m.id, { name: nameWithoutMissing(m.name), url: m.url || url, missingMaterial: undefined });
         out.restored.push(m.id);
       }
     } else if (answered.has(h)) {
-      if (m.url === "" && m.name.startsWith(MISSING_PREFIX)) continue;
+      // 已经认定过、记录也还对得上的不重复写(保存重开后就是这种:占位一直在,不再弹窗)
+      if (m.name.startsWith(MISSING_PREFIX) && confirmedMissing(m)) continue;
       console.warn(`[io] 缺失素材: ${m.name} (${m.hash})`);
-      actions.updateMedia(m.id, { url: "", name: m.name.startsWith(MISSING_PREFIX) ? m.name : `${MISSING_PREFIX}${m.name}` });
+      // 地址留着按哈希的那一个(存盘重开后 restoreMediaUrls 给的也是它,记录才对得上);画面、声音、导出见到记录就不去取它
+      const name = m.name.startsWith(MISSING_PREFIX) ? m.name : `${MISSING_PREFIX}${m.name}`;
+      actions.updateMedia(m.id, { url, name, missingMaterial: missingRecordOf({ ...m, url, name }) });
       out.missing.push(m.id);
+      notices.push({ id: m.id, name: nameWithoutMissing(m.name), kind: m.kind, ...(changed.has(h) ? { changed: true } : {}) });
     }
   }
+  publishMissingMaterials(notices);
   return out;
+}
+
+const nameWithoutMissing = (name: string) => (name.startsWith(MISSING_PREFIX) ? name.slice(MISSING_PREFIX.length) : name);
+
+/** 没有哈希、没有路径的素材认定缺失后用的地址:只为不留空(时间轴的出声清单不收空地址的素材),谁也不会真去取它 */
+const NOWHERE_URL = "/@media/__missing__";
+
+/**
+ * 「确认缺失」的记录(形状见 `MediaAsset.missingMaterial`):只在本机项目里、编辑器进程明确答了「没有」之后写。
+ * 记下认定那一刻素材的类别、名字、地址、哈希、路径,画面与声音的占位核对这几项与素材现状逐字相同才启用;
+ * 视频按画面与声音都缺记(素材不在,没法知道它本来有没有声音),图片只有画面,声音素材只有声音。
+ */
+function missingRecordOf(m: MediaAsset): NonNullable<MediaAsset["missingMaterial"]> {
+  return {
+    v: 1, mediaId: m.id, reason: "confirmed-missing",
+    original: { kind: m.kind, name: m.name, url: m.url, ...(m.hash ? { hash: m.hash } : {}), ...(m.path ? { path: m.path } : {}) },
+    visual: m.kind !== "audio", audio: m.kind !== "image",
+  };
 }
 
 /** 标「(缺失)」:清空地址、名字加标记(换新对象写回;已经标过的不重复加) */
@@ -515,9 +562,12 @@ function markMediaMissing(mediaId: string): void {
   const fresh = getState().project.media.find((x) => x.id === mediaId);
   if (!fresh || hasMediaHash(fresh) || fresh.pending) return;
   const name = fresh.name.startsWith(MISSING_PREFIX) ? fresh.name : `${MISSING_PREFIX}${fresh.name}`;
-  if (fresh.url === "" && name === fresh.name) return;
+  if (name === fresh.name && confirmedMissing(fresh)) return;
   console.warn(`[io] 缺失素材: ${fresh.name} (${fresh.path || fresh.url})`);
-  actions.updateMedia(mediaId, { url: "", name });
+  // 地址不清空:留着原来的读地址(存盘重开后 restoreMediaUrls 按 path 给的还是它),没有就给一个不存在的占位地址
+  const url = fresh.url || NOWHERE_URL;
+  actions.updateMedia(mediaId, { url, name, missingMaterial: missingRecordOf({ ...fresh, url, name }) });
+  publishMissingMaterials([{ id: fresh.id, name: nameWithoutMissing(fresh.name), kind: fresh.kind }]);
 }
 
 /** 单测用 */

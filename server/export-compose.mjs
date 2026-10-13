@@ -361,7 +361,9 @@ export function buildComposeArgs(opts) {
     chain.push(`scale=${p.w}:${p.h}:force_original_aspect_ratio=increase${matrix}`, `crop=${p.w}:${p.h}`, "format=gbrap");
     if (isMissing) {
       const file = `${String(opts.sidecarDir || ".").replace(/\\/g, "/")}/missing-${k}.txt`;
-      const name = String(layer.missingMaterialName || media.missingMaterial?.original?.name || media.name || media.id).replace(/[\r\n\u0000-\u001f]/g, " ");
+      const name = String(layer.missingMaterialName || media.missingMaterial?.original?.name || media.name || media.id).replace(/[\r\n\u0000-\u001f]/g, " ")
+        // 素材库里给缺失素材名字加的「(缺失) 」标记不上画面,只显示原来的名字(与 src/audio/missingMaterial.ts 的 missingMaterialLabel 一致)
+        .replace(/^\(缺失\) (?=.)/, "");
       sidecars.push({ file, text: `找不到素材${name}` });
       const escapeFilterPath = (value) => String(value).replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "'\\''");
       const quoted = escapeFilterPath(file);

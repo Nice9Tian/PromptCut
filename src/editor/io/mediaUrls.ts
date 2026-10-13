@@ -61,6 +61,12 @@ export function restoreMediaUrls(media: MediaAsset[], opts: { externalPathUrl?: 
     const extKind = kindFromExtension(m.name) ?? kindFromExtension(m.path || "") ?? kindFromExtension(m.url || "");
     // A derived audio asset intentionally keeps audio kind even when its source is .mp4.
     const shouldMove = !!extKind && extKind !== m.kind && !(m.kind === "audio" && m.soundOf);
+    // 认定过「确认缺失」的素材原样留着:占位核对的是记录与素材的类别、名字、地址逐字相同,这里改了哪一项占位就失效
+    // (重新找回、清掉记录是 mediaUpload.ts 后台检查的事)。
+    const record = m.missingMaterial;
+    if (record?.v === 1 && record.reason === "confirmed-missing" && record.mediaId === m.id && record.original?.url === m.url && m.url) {
+      return m.pending ? { ...m, pending: undefined } : m;
+    }
     const normalized = shouldMove ? { ...m, kind: extKind as AssetKind } : m;
     if (shouldMove) moved.push({ id: m.id, name: m.name, from: m.kind, to: extKind as AssetKind });
     // 有内容哈希就只认 /@media/<hash> —— 文件在内容库里按哈希存,path 只是它当时的落点。
