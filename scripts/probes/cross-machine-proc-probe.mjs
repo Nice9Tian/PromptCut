@@ -44,6 +44,19 @@ const KEEP = args.includes('--keep');
 const fails = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return !!cond; };
 const log = (...a) => console.error('[cross-proc]', ...a);
+/**
+ * 等这个实例的预渲染进程就绪(`/api/prerender/info` 回 ready)。导出要它;实例刚起时它可能还在启动,
+ * 页面那一侧头一次只等 10 秒(`src/render/prerender.ts`),这台机器忙的时候不够。等的时限只为防卡死。
+ */
+async function waitPrerender(port, label) {
+  const t0 = Date.now();
+  for (;;) {
+    const info = await fetch(`http://127.0.0.1:${port}/api/prerender/info`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (info?.ready && typeof info.url === 'string') { log(`${label}:预渲染进程就绪,等了 ${Date.now() - t0} ms`); return; }
+    if (Date.now() - t0 > 180000) throw new Error(`${label}:预渲染进程 180 秒没就绪`);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
 const HASH = /^[0-9a-f]{64}$/;
 const MISSING = '(缺失) ';
 
@@ -216,6 +229,7 @@ try {
   check(afterB.every((m) => !String(m.name).startsWith(MISSING) && m.url === `/@media/${m.hash}`), 'B:内容库里有的素材不标「(缺失)」', afterB);
 
   log('B:导出');
+  await waitPrerender(PORT_B, 'B');
   const exp = await pageB.evaluate(async () => {
     const io = await import('/src/editor/io/index.ts');
     const r = await io.exportVideo();
@@ -309,19 +323,34 @@ try {
   out.d.old = oldD;
   check(oldD && String(oldD.name).startsWith(MISSING) && oldD.record === 'confirmed-missing' && oldD.url && !oldD.hash, 'D:只有路径的老视频标「(缺失)」、写了「确认缺失」的记录、地址留着、没有哈希', oldD);
   log('C:缺失老视频的项目从顶栏导出');
+  await waitPrerender(PORT_C, 'C');
   const exportsBefore = new Set(await fs.readdir(C.exportDir));
-  await pageC.evaluate(() => {
-    window.showSaveFilePicker = undefined; // 没有另存为:成片留在产物目录(顶栏的兜底路)
-    window.dispatchEvent(new CustomEvent('pc-titlebar-command', { detail: 'export-video' }));
-  });
-  const dialog = await pageC.waitForFunction(() => {
-    const t = document.querySelector('.pc-export-dialog .pc-export-title')?.textContent?.trim();
-    return t === '导出完成' || t === '导出失败' || t === '已取消导出' ? t : null;
-  }, { timeout: 900000, polling: 1000 }).then((h) => h.jsonValue()).catch((e) => `等不到结果:${e.message}`);
-  const note = await pageC.evaluate(() => ({
-    skipped: document.querySelector('[data-pc="export-skipped"]')?.textContent ?? null,
-    err: document.querySelector('.pc-export-dialog .pc-export-err')?.textContent ?? null,
-  }));
+  /*
+   * 刚起的实例第一次导出,预渲染进程或导出页可能还没就绪(已知的老问题,属于暂时性故障):
+   * 只有报的是「没就绪」才重试,退避 10、20 秒,最多三次;每次的报错都记下来。别的失败不重试。
+   */
+  const attempts = [];
+  let dialog, note;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await pageC.evaluate(() => {
+      window.showSaveFilePicker = undefined; // 没有另存为:成片留在产物目录(顶栏的兜底路)
+      window.dispatchEvent(new CustomEvent('pc-titlebar-command', { detail: 'export-video' }));
+    });
+    dialog = await pageC.waitForFunction(() => {
+      const t = document.querySelector('.pc-export-dialog .pc-export-title')?.textContent?.trim();
+      return t === '导出完成' || t === '导出失败' || t === '已取消导出' ? t : null;
+    }, { timeout: 900000, polling: 1000 }).then((h) => h.jsonValue()).catch((e) => `等不到结果:${e.message}`);
+    note = await pageC.evaluate(() => ({
+      skipped: document.querySelector('[data-pc="export-skipped"]')?.textContent ?? null,
+      err: document.querySelector('.pc-export-dialog .pc-export-err')?.textContent ?? null,
+    }));
+    attempts.push({ attempt, dialog, err: note.err });
+    if (dialog !== '导出失败' || !/没就绪/.test(note.err || '') || attempt === 3) break;
+    log(`C:导出第 ${attempt} 次报没就绪,${attempt * 10} 秒后重试`, note.err?.slice(0, 80));
+    await pageC.evaluate(() => document.querySelector('.pc-export-dialog .pc-export-primary')?.click());
+    await new Promise((r) => setTimeout(r, attempt * 10000));
+  }
+  out.d = { ...out.d, exportAttempts: attempts };
   const shot = path.join(OUT, `D-export-dialog-${RUN}.png`);
   await pageC.screenshot({ path: shot }).catch(() => {});
   out.d.dialog = { title: dialog, ...note, shot };
