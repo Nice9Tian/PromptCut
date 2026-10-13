@@ -44,7 +44,7 @@
 - `mechanism/platforms.md` 素材效果卡不认领的理由：对照文档说措辞实现时定，我按它给的意思写了一版（浏览器里拿像素要先生成这张卡的快照，整屏画面 74 KB～6.5 MB，太大），后面标了「措辞实现时定」，请审。
 - `mechanism/rendering.md`「在线浏览器的重层」最后一句：原来「固定成本取卡种成本」，卡种成本那组算式删了，我写成「贴流以后取多少还没有量，实现时量了再写」。
 - 兜底顺序第 4 条里的两个时长（500 毫秒等）没有写，对照文档说量过再写。
-- 稀疏版收紧矩形的量法（契约了第 5 节表里「三选一」）、遮罩上限之外的数字，都没有写。
+- 稀疏版收紧矩形的量法（对照文档第 5 节表里「三选一」）、遮罩上限之外的数字，都没有写。
 
 ## 其他需要你知道的
 
@@ -73,4 +73,6 @@
 
 ## 基线结果
 
-（见最后一次追加）
+- `npx tsc -b --force`：退出码 0。
+- `npm test` 全量（设了那两个环境变量）：6479 条，通过 6447，失败 12，取消 2，退出码 1。失败的 12 条分布在 14 个文件里，全是进程、端口、超时、真 ffmpeg 一类（机器当时 CPU 100%、66 个 node 进程，别的子 Agent 在跑）：accept-018-auth-agent-path、accept-018-files-proc-damage、accept-018-files-recovery-states、accept-018-rest-ssr-seam、account-master-production、account-runner-process、artifact-push、asset-project-workers、c66-integ、card-lock-pipeline、cloud-agent-page、cloud-tools-p1-shots、docservice-http-transport、user-editing。没有一个读文档用词。
+- 单独重跑这 14 个文件：143 条通过 135，失败 2（account-runner-process 的「真实运行器在任务进程里」、artifact-push 的 W1，仍是忙时超时）；再各自单独重跑这两个文件：artifact-push 7 条全过（退出码 0），account-runner-process 1 条过（退出码 0）。所以 14 个文件单独跑都是绿的，没有改松或跳过任何测试，本分支没有改任何代码和测试。
