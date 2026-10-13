@@ -407,7 +407,7 @@ async function main() {
         console.log(`\n标了「等分支合入」的项,缺的文件单列(${cov.waitingFiles.length} 个,预期缺):`);
         for (const [k, v] of by) console.log(`  等 ${k}(${v.length}):\n    ${v.join('\n    ')}`);
       }
-      const sp = skipListProblems(ITEMS.flatMap((it) => it.pass?.skipAllow || []));
+      const sp = skipListProblems([...new Map(ITEMS.flatMap((it) => it.pass?.skipAllow || []).map((a) => [a.name, a])).values()]);
       console.log(`\n④ 全量测试的跳过名单(G0-2):${G0_2_SKIPS.length} 条;${sp.length ? '有问题:\n  ' + sp.join('\n  ') : '每条都写了名字、所在文件、原因'}`);
       if (sp.length) bad++;
     }
@@ -444,7 +444,7 @@ async function main() {
   const vars = {
     node: process.execPath, repo: REPO, out, tsc: resolvePackageBin('typescript', path.join('bin', 'tsc')), vite: viteBin(),
     dist: path.join(out, 'dist-online'), main: path.join(mainWorkspace, '.worktrees', 'acceptance-main-baseline'),
-    mainWorkspace,
+    mainWorkspace, visuhive: process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT || '',
   };
   const ctx = { opts, out, vars, mainDir: vars.main, mainCommit: null };
 

@@ -26,6 +26,10 @@
  */
 
 import '../lib/no-user-dirs.mjs'; // 清单里写着会起编辑器与导出的命令;按 no-user-dirs.test.mjs 的规矩,第一个 import 摘掉外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
+import { V18_ITEMS, G0_2_SKIPS, OLD_ITEM_ROWS, STALE_OLD_ENTRY, V18_EXCLUDED } from './v18-manifest.mjs';
+import { V18_ROWS } from './v18-rows.mjs';
+import { whereOf } from './acceptance-lib.mjs';
+export { V18_ROWS as ROWS, G0_2_SKIPS };
 
 const node = 'node';
 const probe = (name, args = []) => [node, `scripts/probes/${name}.mjs`, ...args];
@@ -36,6 +40,7 @@ const DOC = (n = 0) => String(8760 + n);
 
 /** 不在整套里的探针文件与原因(--check-coverage 对照) */
 export const EXCLUDED_PROBE_FILES = {
+  ...V18_EXCLUDED,
   // 公共件与工具,不单独跑
   'asset-lan-discover.mjs': '公共件(局域网发现),单测在 server/test',
   'claim-gate-judge.mjs': '认领闸探针的判定函数,单测直接测',
@@ -167,19 +172,22 @@ export const EXCLUDED_PROBE_FILES = {
 
 const JSON_OK = { strictJson: true };
 
-export const ITEMS = [
+const OLD_ITEMS = [
   /* ============================== G0 通用门槛 ============================== */
   {
     id: 'G0-1', name: '类型检查 tsc -b --force', category: 'G0', level: 'local', taskRef: '最后一次完整验收第 1 步;任务书一 第 1 条',
     tasks: ['R1'], cmd: [node, '{tsc}', '-b', '--force'], pass: { exit: 0 }, timeoutMin: 15,
   },
   {
-    id: 'G0-2', name: '全量测试 npm test', category: 'G0', level: 'local', taskRef: '最后一次完整验收第 1 步;任务书一 第 1 条;主计划 G0(失败 0、跳过 ≤ 2)',
+    id: 'G0-2', name: '全量测试 npm test(失败 0;跳过的只能是 G0_2_SKIPS 名单里的)', category: 'G0', level: 'local', taskRef: '最后一次完整验收第 1 步;任务书一 第 1 条;主计划 G0(失败 0;原写「跳过 ≤ 2」,0.7.18 起改成逐条名单,见 v18-manifest.mjs 的 G0_2_SKIPS)',
     tasks: ['R1', 'C3', 'C11'], cmd: [node, 'scripts/test-suite.mjs'],
+    // 要账号后端的两个环境变量:不设,用到真实账号后端的测试会整文件跳过(多出名单以外的跳过),所以先拦住,记「跑不了」而不是悄悄多跳
+    requiresEnv: ['PROMPTCUT_ACCOUNT_PROVIDER_ROOT', 'PROMPTCUT_PASSWORD_ORDER_MODULE'],
     pass: {
       exit: 0, must: ['最终结果:零失败|最终结果：零失败'],
-      metrics: { tests: 'ℹ tests (\\d+)', pass: 'ℹ pass (\\d+)', fail: 'ℹ fail (\\d+)', skipped: 'ℹ skipped (\\d+)' },
-      limits: { fail: { eq: 0 }, skipped: { max: 2 } },
+      metrics: { tests: 'ℹ tests (\\d+)', pass: 'ℹ pass (\\d+)', fail: 'ℹ fail (\\d+)', skipped: 'ℹ skipped (\\d+)', todo: 'ℹ todo (\\d+)' },
+      limits: { fail: { eq: 0 } },
+      skipAllow: G0_2_SKIPS,
     },
     timeoutMin: 45, idleKillMin: 12, retryOnIdle: true,
     known: 'server/test/codex-auth-state.test.mjs 偶发卡死:日志十几分钟没输出就结束这一轮的子进程树后重跑(runner 的 idleKillMin 12、自动重跑一次)',
@@ -792,6 +800,20 @@ export const ITEMS = [
     tasks: ['C12', 'C13'], manual: '见部署清单与总报告模板:server/hosted/deploy/ 的模板与 hosting-migration.md 补上 Agent 服务;docs/local.md 记节点上多出的进程与目录(清单见部署清单末节)',
   },
 ];
+
+/**
+ * 总清单 = 老清单(0.7.17 以前四段)+ 0.7.18 的项(v18-manifest.mjs)。老项补上 38 行的行号(OLD_ITEM_ROWS)和「在哪能跑」;
+ * 走老入口(在线页面的房间号加口令)的、在 main 上必然跑不通的老项,按 STALE_OLD_ENTRY 记成「不适用」(留着原命令作记录)。
+ */
+export const ITEMS = [...OLD_ITEMS, ...V18_ITEMS].map((it) => {
+  let out = it;
+  if (OLD_ITEM_ROWS[it.id]) out = { ...out, rows: [...new Set([...(out.rows || []), ...OLD_ITEM_ROWS[it.id]])] };
+  if (STALE_OLD_ENTRY[it.id]) {
+    const { cmd, steps, parallel, needs, prereq, pass, timing, timingNote, timeoutMin, idleKillMin, retryOnIdle, requires, requiresText, env, ...rest } = out;
+    out = { ...rest, notApplicable: `旧入口已废,不适用:${STALE_OLD_ENTRY[it.id]}`, was: { cmd, steps } };
+  }
+  return out;
+});
 
 /** 两份任务书里全部编号验收,单测核每一条都至少被清单里的一项覆盖 */
 export const TASK_ACCEPTANCE = {
