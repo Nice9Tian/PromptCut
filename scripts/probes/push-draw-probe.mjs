@@ -338,11 +338,12 @@ try {
       const plain = await beat(), jpeg0 = await beat({ screenshot: { format: 'jpeg', quality: 0 } }), png = await beat({ screenshot: { format: 'png', optimizeForSpeed: true } });
       // 并行导出的总耗时
       const shards = shardProject(w, h);
-      const whole = async (pushDraw, workers) => { const t0 = Date.now(); await quiet(() => exportUnified(shards, { url: exportUrl(shards), out: path.join(OUT, 'scratch', `cost-${w}-${pushDraw}-${workers}`), workers, noVideo: true, writeFrames: false, pushDraw, onFrame: async () => {} })); return Date.now() - t0; };
-      const single = await whole(true, 1), parOff = await whole(false, 3), parOn = await whole(true, 3);
+      const whole = async (pushDraw, workers) => { const t0 = Date.now(); await quiet(() => exportUnified(shards, { url: exportUrl(shards), out: path.join(OUT, 'scratch', `cost-${w}-${pushDraw}-${workers}`), workers, noVideo: true, writeFrames: false, ...(pushDraw === undefined ? {} : { pushDraw }), onFrame: async () => {} })); return Date.now() - t0; };
+      // 缺省:第二片起不补(`export-unified.mjs`);「都补」是硬传 pushDraw: true 的对照(要是分片也补会多花多少)
+      const single = await whole(undefined, 1), parOff = await whole(false, 3), parDefault = await whole(undefined, 3), parAll = await whole(true, 3);
       out.代价[`${w}x${h}`] = { 推过去的帧数: pushed, 只导末尾十帧_关: off, 只导末尾十帧_开: on, 每推一帧多花毫秒: round2((on - off) / pushed),
         单拍毫秒: { 不带截图: round2(plain), 丢掉的JPEG: round2(jpeg0), PNG: round2(png) },
-        六秒项目整段导出毫秒: { 单进程: single, 三片_关: parOff, 三片_开: parOn, 三片多花百分比: round2((parOn - parOff) / parOff * 100) } };
+        六秒项目整段导出毫秒: { 单进程: single, 三片_关: parOff, 三片_缺省: parDefault, 三片_每片都补: parAll, 每片都补多花百分比: round2((parAll - parOff) / parOff * 100) } };
       say('cost', { size: `${w}x${h}`, ...out.代价[`${w}x${h}`] });
     }
   }
