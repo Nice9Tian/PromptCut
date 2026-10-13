@@ -31,6 +31,8 @@ import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/h
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync, detachCardSync } from "./cardSync";
+import { accountCardTicket } from "./accountCardSync";
+import { bindAgentSide, releaseAgentSide } from "./agentSideBinding";
 import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
@@ -481,34 +483,7 @@ function tickOnline() {
   if (unconfirmed !== view.unconfirmed || recoveryState.phase !== view.recovery) patch({ unconfirmed, recovery: recoveryState.phase });
 }
 
-/* ---------------- Agent 服务端的项目副本(server/vite-plugin-ai.ts 的 /api/agent/bind) ---------------- */
-
-let agentBoundKey: string | null = null;
-let agentBindingWrite: Promise<unknown> = Promise.resolve();
-
-/**
- * 页面挂上 DocSync 之后告诉 Agent 服务端「我在编辑哪个项目、连的是哪个文档服务」(c65-integ2 接线;
- * 接口见 docs/archive/agent-reports/AGENT-c65-agent.md 第 7 节):绑上之后 side: "agent" 的工具在服务端的项目副本上执行,
- * 写入以 Agent 对话的身份直接进文档服务(D1)。本机项目用 local(回环 + 本机信任);共享项目用 ticket:
- * Agent 服务端每开一条对话连接,经 SSE 向本页面要一张连接票据(issueAgentTicket)。同样的绑定不重发。
- */
-function bindAgentSide(kind: "local" | "shared", docProjectId: string, url: string) {
-  const body = kind === "local" ? { projectId: docProjectId, mode: "local" } : { projectId: docProjectId, mode: "ticket", url };
-  const key = JSON.stringify(body);
-  if (key === agentBoundKey) return;
-  agentBoundKey = key;
-  agentBindingWrite = agentBindingWrite.catch(() => undefined).then(() => fetch("/api/agent/bind", { method: "POST", headers: { "Content-Type": "application/json" }, body: key }))
-    .then((r) => r.json().catch(() => null))
-    .then((j) => {
-      if (!j?.ok) {
-        if (agentBoundKey === key) agentBoundKey = null;
-        console.warn("[sync] Agent 服务端没绑上项目副本:", j?.error ?? "无回包");
-      }
-    })
-    .catch(() => {
-      if (agentBoundKey === key) agentBoundKey = null;
-    });
-}
+/* ---------------- Agent 服务端的项目副本:绑定与解绑在 `agentSideBinding.ts`,这里只答它要的票据 ---------------- */
 
 /**
  * SSE 里的 `agent.ticket`:Agent 服务端要一张 agent 角色的连接票据(k:'conn', r:'agent', c:对话号)。
@@ -646,7 +621,27 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     if (prev?.kind === "shared" && (kind !== "shared" || prev.docProjectId !== docProjectId)) unbindRenderNode(prev.docProjectId, kind === "shared" ? "switched" : "left");
     if (kind === "shared") bindRenderNode({ url, projectId: docProjectId, contentId: getState().project.id || null }, renderNodeHooks);
   }
+  // 账号云端项目(桌面版):解掉 Agent 服务端留着的旧绑定,卡片源码同步凭账号办法的票据接上(渲染节点这次不接)
+  if (accountClient && !ONLINE_BUILD && !ONLINE) bindAccountEditorSide(link, docProjectId, url, accountClient);
   if (prev && prev.link !== link) retire(prev.link);
+}
+
+/**
+ * 桌面版进账号云端项目时编辑器进程那一侧要做的事(渲染节点不在内):
+ * - Agent 服务端:账号项目里不绑(本机 Agent 走「页面代做」),但上一个项目留在服务端的绑定要解掉(`agentSideBinding.ts`);
+ * - 卡片源码同步:编辑器进程要票据时,页面凭登录另取一份项目会话,交出其中的连接票据(`accountCardSync.ts`)。
+ */
+function bindAccountEditorSide(link: SyncLink, docProjectId: string, url: string, client: CloudAccountClient) {
+  releaseAgentSide();
+  const accountId = client.account?.id;
+  bindCardSync({ kind: "shared", projectId: docProjectId, url, account: true }, getState().project, {
+    ...cardSyncHooks,
+    ticket: accountCardTicket({
+      session: (projectId) => client.session(projectId),
+      isCurrent: () => cur?.link === link && !!accountId && client.account?.id === accountId,
+      stop: detachCardSync,
+    }),
+  });
 }
 
 /** 在线页面离开共享项目:没有本机文档服务可回,解开当前连接,store 回到快照栈(C10a) */
@@ -662,9 +657,9 @@ function detach() {
     prev.unbind();
     retire(prev.link);
     if (prev.kind === "shared" && !ONLINE_BUILD && !ONLINE) unbindRenderNode(prev.docProjectId, "left");
-    if (!ONLINE_BUILD && !ONLINE && !view.shared?.accountId) {
-      agentBoundKey = null;
-      agentBindingWrite = agentBindingWrite.catch(() => undefined).then(() => fetch("/api/agent/unbind", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
+    if (!ONLINE_BUILD && !ONLINE) {
+      // 账号项目进来时已经解过 Agent 服务端的绑定,这里只解卡片源码同步
+      if (!view.shared?.accountId) releaseAgentSide();
       detachCardSync();
     }
   }
@@ -1146,6 +1141,8 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
   let resolveEntry!: () => void, rejectEntry!: (error: unknown) => void;
   const opened = new Promise<void>((resolve, reject) => { resolveEntry = resolve; rejectEntry = reject; });
   const fail = (error: unknown) => { stopped = true; link.stop(); if (cur?.link === link) { setCloudConsentSource(null); setCloudIdentity(null);
+    // 登录失效、被踢、项目没了:编辑器进程那条卡片源码同步的连接一起停(回本机空间,不再向本页面要票据)
+    if (!ONLINE_BUILD && !ONLINE) detachCardSync();
     if (error instanceof AccountFailure && error.status === 403 && ['banned', 'not-listed'].includes(error.code))
       patch({ blocked: error.code === 'banned' ? 'kicked' : 'removed' });
   } if (!ready) rejectEntry(error);

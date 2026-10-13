@@ -33,6 +33,11 @@ interface Binding {
   kind: "local" | "shared";
   projectId: string;
   url: string;
+  /**
+   * 账号云端项目:票据是页面凭登录向账号会话接口取的那种(`accountCardSync.ts`),编辑器进程用账号办法的子协议连。
+   * 其余(绑定时机、项目用到的卡、提示)与旧共享项目相同。
+   */
+  account?: boolean;
 }
 
 let hooks: CardSyncHooks | null = null;
@@ -74,7 +79,7 @@ async function send(b: Binding, cardIds: string[]) {
   const body =
     b.kind === "local"
       ? { mode: "local" }
-      : { mode: "ticket", projectId: b.projectId, url: b.url, cardIds };
+      : { mode: b.account ? "account" : "ticket", projectId: b.projectId, url: b.url, cardIds };
   const key = JSON.stringify(body);
   if (key === lastSent) return;
   lastSent = key;

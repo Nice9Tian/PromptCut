@@ -15,6 +15,7 @@ import {
   setCardHasher, setCardIdentifier, emitCardSourceChange,
 } from './card-overrides.mjs';
 import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
+import { accountCardProtocols } from './account-card-link.mjs';
 import { cardCodePreimage, localImportsOf, CARD_CODE_ID_HEX } from '../src/render/cardCodeIdentity.mjs';
 import { checkSyncedSource, rejectedStub, hostedWorkerKind, normalizeBrowserCssImports } from './hosted-render/source-gate.mjs';
 import { remotionStyleErrors } from './remotion-style-check.mjs';
@@ -1518,6 +1519,8 @@ export default function vitePluginCards(): Plugin[] {
        *     - local:本机项目,连本机 /docservice 的 local 空间,只上传(同步那一半是空操作,cardRev 照常自增);
        *     - ticket:共享项目,凭页面签的 page 角色连接票据连过去;票据两分钟过期,重连时经 HMR 向页面再要一张
        *       (`pc:card-sync` 的 { type: 'ticket', reqId, projectId },页面 POST /api/cards/sync/ticket 交回);
+       *     - account:账号云端项目,规则与 ticket 相同,只是票据是页面凭登录向账号会话接口取的那种
+       *       (子协议 `promptcut.account.<票据>`,`server/account-card-link.mjs`),每建一个新会话现要一张;
        *     - cardIds:项目用到的卡,其中的用户卡与改过的内置卡(连同它们用到的文件)服务上还没有的会传上去。
        *   POST /api/cards/sync/unbind  回到本机空间
        *   GET  /api/cards/sync/status  诊断:绑定、记账、最近的通知
@@ -1625,7 +1628,7 @@ export default function vitePluginCards(): Plugin[] {
           try {
             if (!cardSync) return sendJson(res, 200, { ok: true, enabled: false });
             const input = JSON.parse(body || '{}');
-            const mode = input?.mode === 'ticket' ? 'ticket' : 'local';
+            const mode = input?.mode === 'ticket' ? 'ticket' : input?.mode === 'account' ? 'account' : 'local';
             if (mode === 'local') {
               bindLocal();
               return sendJson(res, 200, { ok: true, enabled: true, ...cardSync.status(), notices: undefined });
@@ -1640,11 +1643,13 @@ export default function vitePluginCards(): Plugin[] {
               url: input.url,
               local: false,
               keys: keysForCards(input.cardIds),
-              protocols: async () => {
-                const t = first ?? (await requestPageTicket(projectId));
-                first = null;
-                return ['promptcut.v1', `promptcut.ticket.${t}`];
-              },
+              protocols: mode === 'account'
+                ? accountCardProtocols(() => requestPageTicket(projectId))
+                : async () => {
+                  const t = first ?? (await requestPageTicket(projectId));
+                  first = null;
+                  return ['promptcut.v1', `promptcut.ticket.${t}`];
+                },
             });
             sendJson(res, 200, { ok: true, enabled: true, ...cardSync.status(), notices: undefined });
           } catch (e: any) {
