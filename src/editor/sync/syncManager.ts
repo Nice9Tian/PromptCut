@@ -28,7 +28,7 @@ import { RecoveryCoordinator } from "../../../server/recovery/coordinator.mjs";
 import { serviceIdentity } from "../../../server/recovery/descriptor.mjs";
 // @ts-expect-error Browser-safe hosting discovery and ticket delegation.
 import { discoverRoom, relayFetch, authorizeRelayAsset } from "../../../server/hosting/client.mjs";
-import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
+import { accountNameKey, clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets, lanAssetBaseOf, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync, detachCardSync } from "./cardSync";
 import { accountCardTicket } from "./accountCardSync";
@@ -307,7 +307,20 @@ export function me(): Me {
 export function displayNames(): DisplayNames {
   const m: DisplayNames = new Map();
   for (const row of view.members) if (row.deviceId) m.set(`${row.username}@${row.deviceId}`, row.displayName);
+  // 账号云端项目:`view.members` 是空的(成员名单另走账号接口),名字按账号记在 `accountNames` 里
+  for (const [accountId, name] of accountNames) m.set(accountNameKey(accountId), name);
   return m;
+}
+
+/**
+ * 账号云端项目里各成员账号的名字(提示气泡里「谁改的」用):进项目时取一次成员名单,之后成员有变化(会话里的权限版本变了)再取。
+ * 离开项目清掉。取不到就没有名字,气泡照原来的退路显示。
+ */
+let accountNames = new Map<string, string>();
+function accountNamesFrom(snapshot: AccountMembersSnapshot): void {
+  const next = new Map<string, string>();
+  for (const row of snapshot.members) if (row.accountName) next.set(row.accountId, row.accountName);
+  accountNames = next;
 }
 
 function localWsUrl(): string {
@@ -571,6 +584,7 @@ export function pageOpIdsSince(mark: number | null): string[] {
 function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string, accountClient: CloudAccountClient | null = null) {
   const account = accountClient !== null;
   const prev = cur;
+  if (!account) accountNames = new Map();
   if (prev) {
     for (const off of prev.offs) off();
     prev.unbind();
@@ -651,6 +665,7 @@ function bindAccountEditorSide(link: SyncLink, docProjectId: string, url: string
 function detach() {
   const prev = cur;
   cur = null;
+  accountNames = new Map();
   setCloudIdentity(null);
   setCloudConsentSource(null);
   clearHostedAgent();
@@ -1128,7 +1143,15 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
     if (ownHostedChange === 0 && view.shared) for (const text of hostedChangeNotices(view.hosted, value.hosted)) pushToast(text, "info", 6000);
     patch({ shared: view.shared ? { ...view.shared, creator: value.creator } : null, hosted: value.hosted });
     setHostedAgent(options.projectId, value.hosted.agent);
+    // 自己的权限变了(只读改可写):换一个会话,新连接才写得进去
+    if (ready) void life.accessSeen(value.access);
+    // 成员有变化(有人加入、被踢、改权限)时重取一次名字
+    if (ready && value.accessRevision !== namesRevision) {
+      namesRevision = value.accessRevision;
+      void options.client.members(options.projectId).then(snapshot => { if (isCurrent()) accountNamesFrom(snapshot); }, () => { if (namesRevision === value.accessRevision) namesRevision = null; });
+    }
   };
+  let namesRevision: number | null = null;
   const renew = () => renewing ??= options.client.session(options.projectId).then(value => {
     current = value; projectSession(value); return value;
   }).finally(() => { renewing = null; });
@@ -1164,7 +1187,11 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
     // 接续时服务端按会话里记下的身份重新核对登录与成员资格。票据只在建新会话时出示(`protocols`)
     protocols,
     saveBackup: b => void saveBackup(b), onMessage: onSideMessage,
+    // 服务端关连接的码不当终局(可写改只读时也是 4003):退避着凭新票据重连,取票据的接口说不行才收场 ——
+    // 401 登录失效、403 被踢 / 不在名单、404 项目没了(文案用客户端里已有的那句「这个云端项目已不存在。」)
+    isFatalClose: () => false,
     onProtocolError: error => { const e = error as { status?: number }; if (e.status === 401 || e.status === 403) { fail(error); return true; }
+      if (e.status === 404) { fail(new AccountFailure(404, 'project-gone')); return true; }
       pushToast(error instanceof Error ? error.message : '云端服务暂时不可用，正在等待重连。', 'warn'); return false; },
     onAuthExpired: () => { void life.authExpired(); },
     onOpen: () => { life.opened(); void (async () => {

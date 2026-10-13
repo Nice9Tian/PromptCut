@@ -107,3 +107,14 @@ test("ALL-06 没有会话时不管;换的途中不重入", async () => {
   assert.equal(await first, "renewed");
   assert.equal(h.renews.length, 1);
 });
+
+test("ALL-07 读到自己的权限变了(只读改可写)就换一个会话;第一次读到、没变、没有会话时不动", async () => {
+  const h = harness();
+  await open(h);
+  assert.equal(await h.life.accessSeen("r"), "idle", "第一次读到只是记下");
+  assert.equal(await h.life.accessSeen("r"), "idle");
+  assert.equal(await h.life.accessSeen("rw"), "renewed");
+  assert.deepEqual(h.renews, [false]);
+  h.connected = false;
+  assert.equal(await h.life.accessSeen("r"), "idle", "没有会话(服务端已经关掉旧连接):交给断线重连");
+});

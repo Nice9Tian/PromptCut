@@ -110,6 +110,12 @@ export interface LinkOptions {
    * 这条连接背后的访问令牌到期了,之后发什么都被拒。调用方据此换会话(`renew()`),换不成就 `expire()`。
    */
   onAuthExpired?: (reason: string) => void;
+  /**
+   * 这个关闭码是不是「不再重连」。缺省:4003(被踢、被移出)、4004(项目被删)。
+   * 账号云端项目给 `() => false`:那里 4003 也用在「权限变了,请重新进来」(可写改只读时服务端关掉旧连接),
+   * 该不该再连由取票据的接口说了算(被踢 403、登录失效 401、项目没了 404 → `onProtocolError` 终止),不凭关闭码。
+   */
+  isFatalClose?: (code: number, reason: string) => boolean;
   WebSocketImpl?: WsCtor;
   reconnect?: { minMs: number; maxMs: number };
 }
@@ -339,7 +345,7 @@ export class SyncLink {
       this.ds.disconnect();
     }
     this.failWaiting("连接断了");
-    const fatal = FATAL_CLOSE.has(code);
+    const fatal = this.o.isFatalClose ? this.o.isFatalClose(code, reason) : FATAL_CLOSE.has(code);
     this.o.onClosed?.({ code, reason, fatal, neverOpened: !this.everOpened });
     if (!fatal) this.scheduleRetry();
     else this.stopped = true;

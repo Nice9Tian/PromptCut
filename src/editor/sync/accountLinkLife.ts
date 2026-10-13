@@ -13,6 +13,7 @@
  *   登录失效、被踢(会话接口回 401 / 403)交给 `onTerminal`,由调用方照现有的做法收场。
  * - **已经过期才发现**(睡眠醒来、时钟不准):文档服务回「凭证到期」时 `authExpired()` 当场换;换不成同样 `expire()`。
  *   换成之后没确认的改动在新会话上补发(`DocSync.handover`),不丢。
+ * - **权限变了**(`accessSeen`):只读改成可写时换一个会话,新连接才写得进去。
  */
 
 /** 离到期不到这么久就换会话 */
@@ -49,6 +50,7 @@ export function createAccountLinkLife(o: AccountLinkLifeOptions) {
   let busy = false;
   let renews = 0;
   let expires = 0;
+  let knownAccess: string | null = null;
 
   /** 换一次(`urgent`:旧连接已经作废,不等它上面的提交落定)。回:换成了 / 没换成(可再试) / 终局 */
   async function swap(urgent: boolean): Promise<"renewed" | "retry" | "terminal"> {
@@ -113,6 +115,19 @@ export function createAccountLinkLife(o: AccountLinkLifeOptions) {
         }
         return "retry";
       } finally { busy = false; }
+    },
+    /**
+     * 调用方每次读到会话里的权限(`r` / `rw`)都报一下。连接的权限是建连时那张票据上的,文档服务改项目时照它判:
+     * 权限被提高(只读改可写)时服务端不关旧连接,旧连接一直是只读 —— 所以发现权限变了就换一个会话。
+     * (权限被降低时服务端自己会关掉旧连接,页面照断线重连。)
+     */
+    async accessSeen(access: string): Promise<TickResult> {
+      const before = knownAccess;
+      knownAccess = access;
+      const link = o.link();
+      if (before === null || before === access || busy || !link || !link.connected) return "idle";
+      busy = true;
+      try { return await swap(false); } finally { busy = false; }
     },
     /** 诊断 */
     describe: () => ({ expiresAt: active, renews, expires, busy }),

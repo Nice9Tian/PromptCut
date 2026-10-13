@@ -14,7 +14,8 @@
  *   4  登录 130 秒时(原问题:161 秒时放片段,服务端版本 10 → 10、对方看不到、页面仍显示在线)甲再改一次:
  *      乙看得到,服务端版本前进;甲的连接按时换过、从头到尾没被闸拒过
  *   5  睡眠醒来:丁的计时器从进项目起就停着(不换会话),130 秒后改一次 → 被闸拒 → 当场换会话 → 补发成功,乙看得到
- *   6  被踢:连接被服务端关(不再重连)、换会话取票据回 403,页面不在线
+ *   5b 可写改只读:服务端关掉旧连接(4003),页面凭新票据重新连上(不当成被踢),照常收到别人的改动;改回可写后照常写
+ *   6  被踢:连接被服务端关,重连时取票据回 403 banned,不再重连,页面不在线
  *   7  项目被删:连接被关、不在线
  *   8  退出登录:连接被关、换会话取票据回 401,页面不在线
  *
@@ -114,7 +115,9 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       onOpen: () => life.opened(),
       onAuthExpired: (reason) => { p.authExpired.push(reason); if (renewing) void life.authExpired(); },
       onClosed: (info) => p.closes.push({ code: info.code, reason: info.reason, fatal: info.fatal }),
-      onProtocolError: (error) => { if (error?.status === 401 || error?.status === 403) { p.terminal.push({ status: error.status, code: error.code }); return true; } return false; },
+      // 与 `enterAccountProject` 相同:关闭码不当终局,取票据的接口回 401 / 403 / 404 才收场
+      isFatalClose: () => false,
+      onProtocolError: (error) => { if ([401, 403, 404].includes(error?.status)) { p.terminal.push({ status: error.status, code: error.code }); return true; } return false; },
       reconnect: { minMs: 200, maxMs: 1000 },
       onMessage: (m) => { if (process.env.PL_DEBUG) console.log(name, '<~', m.type, m.reason ?? '', m.detail ?? ''); },
     });
@@ -123,7 +126,9 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     if (process.env.PL_DEBUG) { const r = link.ds.receive.bind(link.ds); link.ds.receive = (m) => { console.log(name, '<-', m.type, m.rev ?? '', m.reason ?? ''); return r(m); }; }
     link.ds.on('status', (s) => p.statuses.push(s));
     const timer = setInterval(() => { if (p.ticking && renewing) void life.tick(); }, 500);
-    closers.push(() => { clearInterval(timer); link.stop(); });
+    // 页面每 3 秒续一次会话读项目的状态(`enterAccountProject` 的那个定时),读到自己的权限就报给寿命模块
+    const poll = setInterval(() => { if (p.ticking && renewing && link.connected) void session(who).then((s) => life.accessSeen(s.access), () => undefined); }, 2000);
+    closers.push(() => { clearInterval(timer); clearInterval(poll); link.stop(); });
     link.start();
     return Object.assign(p, { link, life, ds: link.ds,
       set: (key, value) => link.ds.commit({ ...link.ds.project, [key]: value }),
@@ -265,22 +270,45 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       t.diagnostic(`5 睡眠醒来:丁的连接过期后被闸拒(${D.authExpired[0]}),当场换会话补发成功,版本 ${rev} → ${rev + 1}`);
     }
 
+    // ---- 5b 可写改只读:服务端把乙的连接关掉(同样是 4003),乙凭新票据重新连上,能收不能写;改回可写后照常
+    {
+      const closesBefore = B.closes.length;
+      const toR = await admin(alice, { op: 'set-list', members: [{ accountId: bob.accountId, access: 'r' }] });
+      assert.equal(toR.status, 200, JSON.stringify(toR.body));
+      await waitFor(() => B.closes.length > closesBefore, '乙的连接被服务端关过一次');
+      await waitFor(() => B.online(), '乙凭新票据重新连上(没有被当成被踢)', 20_000);
+      assert.deepEqual(B.terminal, []);
+      A.set('whileReadonly', '甲在乙只读时改的');
+      await waitFor(() => B.get('whileReadonly') === '甲在乙只读时改的', '只读的乙照常收到别人的改动');
+      const toRw = await admin(alice, { op: 'set-list', members: [{ accountId: bob.accountId, access: 'rw' }] });
+      assert.equal(toRw.status, 200, JSON.stringify(toRw.body));
+      const renewsBefore = B.life.describe().renews;
+      await waitFor(() => B.life.describe().renews > renewsBefore && B.online(), '乙读到权限变了,换了一个会话', 20_000);
+      B.set('rwAgain', '乙改回可写之后');
+      await waitFor(() => A.get('rwAgain') === '乙改回可写之后', '改回可写后乙的改动甲看得到', 20_000);
+      t.diagnostic(`5b 可写改只读:乙的连接被关(${JSON.stringify(B.closes.at(-1))})后重新连上,照常收到别人的改动;改回可写后换一个会话、照常写`);
+      C.ticking = true;
+      await waitFor(() => C.online(), '丙也回到在线', 20_000);
+    }
+
     // ---- 6 被踢(乙的账号:乙、丙两个页面)
     {
       C.ticking = true;
       const kicked = await admin(alice, { op: 'kick', accountId: bob.accountId });
       assert.equal(kicked.status, 200, JSON.stringify(kicked.body));
       await waitFor(() => !B.link.connected && !C.link.connected, '乙、丙的连接被关');
-      // 页面知道这是终局有两条路:服务端关连接时给的关闭码(4003),或者正好在换会话 / 重连时取票据回 403;产品里两条路都走同一个收场
-      const final = (p) => p.closes.some((c) => c.fatal) || p.terminal.some((e) => e.status === 403);
-      await waitFor(() => final(B) && final(C), '乙、丙都知道是终局(不再重连)')
+      // 服务端关连接(4003)之后页面凭新票据重连,取票据回 403 banned:这才是终局
+      const final = (p) => p.terminal.some((e) => e.status === 403 && e.code === 'banned');
+      await waitFor(() => final(B) && final(C), '乙、丙取票据回 403 banned,不再重连')
         .catch((e) => { throw new Error(`${e.message}:乙 ${JSON.stringify(B.closes)} ${JSON.stringify(B.terminal)} ${JSON.stringify(B.link.stats())};丙 ${JSON.stringify(C.closes)} ${JSON.stringify(C.terminal)}`); });
       assert.ok(!B.online() && !C.online(), '被踢后不显示在线');
       await assert.rejects(session(bob), (e) => e.status === 403 && e.code === 'banned');
       A.set('afterKick', 1);
       await sleep(1000);
       assert.equal(B.get('afterKick'), undefined, '被踢之后的改动乙收不到');
-      t.diagnostic(`6 被踢:乙、丙的连接被关(${JSON.stringify(B.closes.at(-1))}),不再重连,取会话回 403 banned`);
+      await sleep(1500);
+      assert.ok(!B.link.connected && !C.link.connected, '之后没有再连上');
+      t.diagnostic(`6 被踢:乙、丙的连接被关(${JSON.stringify(B.closes.find((c) => c.code === 4003))}),重连时取票据回 ${JSON.stringify(B.terminal.at(-1))},不再重连`);
     }
 
     // ---- 8 退出登录(丁那个登录):连接被关、取票据回 401
@@ -289,7 +317,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       const out = await post('/api/account/editor/logout', {}, D.who.token);
       assert.equal(out.status, 200, JSON.stringify(out.body));
       await waitFor(() => !D.link.connected, '丁退出登录后连接被关');
-      await waitFor(() => D.closes.some((c) => c.fatal) || D.terminal.some((e) => e.status === 401), '丁知道是登录失效');
+      await waitFor(() => D.terminal.some((e) => e.status === 401), '丁重连时取票据回 401,不再重连');
       assert.ok(!D.online());
       t.diagnostic(`8 退出登录:丁的连接被关(${JSON.stringify(D.closes.at(-1))}),终局 ${JSON.stringify(D.terminal)}`);
     }
@@ -299,10 +327,10 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       const deleted = await admin(alice, { op: 'delete' });
       assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
       await waitFor(() => !A.link.connected, '项目被删后甲的连接被关');
-      await waitFor(() => A.closes.some((c) => c.fatal), '不再重连');
+      await waitFor(() => A.terminal.some((e) => e.status === 404), '甲重连时取票据回 404,不再重连');
       assert.ok(!A.online());
       await assert.rejects(session(alice), (e) => e.status === 404);
-      t.diagnostic(`7 项目被删:甲的连接被关(${JSON.stringify(A.closes.at(-1))}),取会话回 404`);
+      t.diagnostic(`7 项目被删:甲的连接被关(${JSON.stringify(A.closes.find((c) => c.code === 4003))}),重连时取票据回 ${JSON.stringify(A.terminal.at(-1))}`);
     }
   } finally {
     for (const close of closers) { try { close(); } catch { /* 已经关了 */ } }
