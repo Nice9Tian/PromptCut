@@ -187,7 +187,7 @@ export function normalizeChatItem(raw: Record<string, unknown>): CloudChatItem |
       visibility: raw.visibility === 'private' ? 'private' as const : 'shared' as const,
       creatorReadOnly: raw.creatorReadOnly === true, queueRevision: num(raw.queueRevision),
       running: typeof raw.currentRunId === 'string' && raw.currentRunId !== '',
-      ...(raw.deleting === true ? { deleting: true } : {}) } : {}),
+      ...(raw.deleting === true ? { deleting: true, ...(typeof raw.deletingBy === 'string' ? { deletingBy: raw.deletingBy } : {}) } : {}) } : {}),
     id: raw.id,
     title: typeof raw.title === "string" && raw.title ? raw.title : "云端对话",
     updatedAt: num(raw.updatedAt),
@@ -289,6 +289,20 @@ export function createCloudApi(deps: CloudApiDeps) {
       if (body?.ok !== true || body.removed !== true || body.conversationId !== conversationId)
         throw new CloudError("unavailable", "云端尚未确认删除这个对话，请重读对话列表后重试。", res.status || 503);
       return { already: body.already === true };
+    },
+
+    /**
+     * 移出成员时「同时清除他的私有对话」(项目创建者做；共有对话保留)。`requestId` 一次操作用同一个：回包的 `pending`
+     * (对话里的任务还没停稳)不空时，用同一个请求号再调接着办。
+     */
+    async clearMemberPrivate(accountId: string, requestId: string): Promise<{ removed: string[]; pending: string[] }> {
+      if (!accountId || !requestId) throw new CloudError("bad-request", "清除请求无效。", 400);
+      const res = await request("/members/clear-private", { method: "POST", json: { accountId, requestId } });
+      const body = (await res.json().catch(() => null)) as { ok?: unknown; removed?: unknown; pending?: unknown } | null;
+      const ids = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null);
+      const removed = ids(body?.removed), pending = ids(body?.pending);
+      if (body?.ok !== true || !removed || !pending) throw new CloudError("unavailable", "云端尚未确认清除，请重试。", res.status || 503);
+      return { removed, pending };
     },
 
     /** 别人删了和你有关的对话以后留给你的通知；弹完用 `ackNotices` 回执，没弹到的下次打开项目再给 */

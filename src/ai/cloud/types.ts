@@ -45,6 +45,8 @@ export interface CloudChatItem {
   running?: boolean;
   /** 账号模式：删除办到一半(任务还没停稳)，对话停在「正在删除」，只有删它的人能继续 */
   deleting?: boolean;
+  /** 正在删它的那个账号(删到一半、任务还没停稳时);就是它自己的页面在重新打开后接着办 */
+  deletingBy?: string;
   id: string;
   title: string;
   /** 毫秒;服务端没给时是 0 */

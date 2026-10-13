@@ -99,3 +99,42 @@ test("流上来 conversation.deleted：清掉正文、不重连、通知界面�
   assert.equal(session.getView().problem, null, "不显示「无权读取」");
   session.close();
 });
+
+test("块五第 5 条 清除成员私有对话的请求：POST、请求号、只认文档服务确认过的回包", async () => {
+  const calls = [];
+  const api = baseApi(async (url, init) => { calls.push({ url: String(url), method: init.method, body: init.body });
+    return Response.json({ ok: true, accountId: "acc", projectId: "project", removed: ["p1"], pending: ["p2"] }); });
+  assert.deepEqual(await api.clearMemberPrivate("acc", "req-1"), { removed: ["p1"], pending: ["p2"] });
+  assert.equal(calls[0].url, "https://fixture.invalid/v1/members/clear-private");
+  assert.equal(calls[0].method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].body), { accountId: "acc", requestId: "req-1" });
+  await assert.rejects(baseApi(async () => Response.json({ ok: true })).clearMemberPrivate("acc", "r"), { code: "unavailable" });
+  await assert.rejects(baseApi(async () => Response.json({ ok: false, code: "creator-required" }, { status: 403 })).clearMemberPrivate("acc", "r"), { status: 403 });
+});
+
+test("块五第 6 条 列表项带出 deletingBy；文字集中且「我的 N/50」随数变", () => {
+  const item = normalizeChatItem({ v: 2, id: "c", projectId: "p", ownerAccountId: "a", visibility: "shared", deleting: true, deletingBy: "acc9" });
+  assert.equal(item.deletingBy, "acc9");
+  assert.equal(CLOUD_CHAT_TEXT.countLabel(7), "我的 7/50");
+  assert.equal(CLOUD_CHAT_TEXT.countLabel(CLOUD_CHAT_LIMIT), "我的 50/50");
+});
+
+test("块五第 2 条 重连时文档服务说「已删」(404 conversation-deleted)：清掉正文、退到新对话、不重连、不说「无权读取」", async () => {
+  const messages = { v: [] }, listeners = new Set();
+  const store = { get: () => messages.v, set(next) { messages.v = typeof next === "function" ? next(messages.v) : next; for (const l of listeners) l(); },
+    subscribe(l) { listeners.add(l); return () => listeners.delete(l); } };
+  let streams = 0; const deleted = [];
+  const api = { async send() { return { runId: "r", seq: 1 }; }, async abort() {},
+    async *events() { streams++; if (streams === 1) { yield { type: "user", seq: 1, runId: "r1", prompt: "旧", messageId: "m", senderAccountId: "a", senderNameAtSend: "A" }; throw new CloudError("conversation-deleted", "x", 404); }
+      assert.fail("不该重连"); } };
+  const session = createCloudSession({ api, store, accountMode: true, backoff: () => 5 });
+  session.setOnConversationDeleted((id) => deleted.push(id));
+  session.open("gone");
+  const deadline = Date.now() + 2000;
+  while (!deleted.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(deleted, ["gone"]);
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(streams, 1); assert.deepEqual(store.get(), []);
+  assert.equal(session.getView().problem, null); assert.equal(session.getView().connection, "idle");
+  session.close();
+});

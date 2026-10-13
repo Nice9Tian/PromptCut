@@ -101,3 +101,27 @@ test('任务停不下来(进程关闭被卡住)时一直不删，放开以后同
     { what: '放开以后删除办完', timeoutMs: 60_000 });
   assert.equal(done.removed, true);
 });
+
+test('块五第 7 条 一次删除调用就办完：替页面等强制结束(最多等 15 秒)，任务进程没了、对话查不到、Agent 一侧清理和接缝都在删成功之后调用', { timeout: 120_000 }, async t => {
+  const { createAccountConversationService } = await import('../agent/service/conversation-policy.mjs');
+  const { f, authority } = await fixture(t);
+  const first = f.enqueue([{ say: '开工' }, { hold: 'never-released' }, { say: '这句不该出现' }]);
+  await f.scheduler.start();
+  await until(() => f.marker('held-never-released'), { what: '任务进到占用状态' });
+  const order = [];
+  const ref = { authorizationId: 'auth-owner' };
+  const client = Object.fromEntries(['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename'].map(n => [n, async () => ({})]));
+  client.remove = async input => { const r = await authority.remove({ principalRef: ref, projectId, conversationId: input.conversationId, requestId: input.requestId });
+    order.push(['doc-removed', f.generations.get(1).gateway.describe().childClosed]); return r; };
+  const svc = createAccountConversationService({ conversationClient: client, deleteWaitMs: 60_000,
+    purger: { purge: async () => { order.push(['purge']); } }, onConversationDeleted: async () => { order.push(['seam']); } });
+  const out = await svc.remove({ accountMode: true, delegation: 'd', projectId, accountId: 'owner' }, conversationId, 'one-call');
+  assert.equal(out.removed, true);
+  // 删成功的那一刻任务进程已经被 root 关掉(强制结束)；Agent 一侧清理与接缝在其后
+  assert.deepEqual(order.at(-3), ['doc-removed', true]); assert.deepEqual(order.slice(-2), [['purge'], ['seam']]);
+  assert.equal(f.generations.get(1).gateway.describe().childClosed, true);
+  assert.equal(f.stops.find(row => row.epoch === 1).how, 'killed');
+  assert.equal(f.grantOf(first).terminalOutcome.status, 'interrupted');
+  await assert.rejects(authority.get({ principalRef: ref, projectId, conversationId }), { status: 404, code: 'conversation-deleted' });
+  assert.equal(JSON.stringify(f.ledger.read()).includes('这句不该出现'), false);
+});

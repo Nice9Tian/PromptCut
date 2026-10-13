@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import net from 'node:net';
 import { createAgentHttp } from '../agent-service/http.mjs';
 import { createAccountConversationService } from '../agent/service/conversation-policy.mjs';
 import { openAccountLedger } from '../account/ledger.mjs';
@@ -15,6 +16,8 @@ import { assetWiringPki } from './fixtures/asset-wiring-pki.mjs';
  * 块五(0.7.18):从页面的 HTTP 请求一路到文档服务的对话权威（真的 mTLS、真的 SQLite 账本、真的 SSE）:
  * 删除、满额、别人删之后的通知与补弹、正在看的对话被删时流上的事件。端口 28180、28181。
  */
+/** 不写死端口：向系统要一个空闲的 */
+const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 const until = async (predicate, ms = 5000) => {
   const deadline = Date.now() + ms;
   while (!(await predicate())) { if (Date.now() >= deadline) throw Error('observation-timeout'); await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -39,7 +42,7 @@ test('HTTP 全链路:删除、满额、通知补弹、被删时流上的事件',
   const trusted = {};
   for (const id of [a, b, creator]) trusted[`delegation-${id}`] = await authority.authorizePrincipal({ accessToken: id }, { projectId, action: 'read' });
   fixture = agentReadControlFixture({ ledger, directory: dir, docTls: pki.doc, agentTls: pki.asset,
-    docPin: pki.doc.fingerprint256, agentPin: pki.asset.fingerprint256, port: 28180, accountAuthority: authority,
+    docPin: pki.doc.fingerprint256, agentPin: pki.asset.fingerprint256, port: await freePort(), accountAuthority: authority,
     resolveDelegation: async value => { assert.ok(trusted[value], 'known delegation'); return trusted[value]; },
     checkConsent: async ({ accountId }) => ({ accountId, accepted: true, noticeVersion: 1 }),
     verifySelectionSnapshot: async ({ principal }) => ({ projectId, accountId: principal.accountId, source: 'sent-snapshot',
@@ -52,11 +55,12 @@ test('HTTP 全链路:删除、满额、通知补弹、被删时流上的事件',
   t.after(async () => { for (const s of streams) s.destroy(); await fixture.close();
     if (server.listening) await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
     service.close(); authority.close(); ledger.close(); fs.rmSync(dir, { recursive: true }); });
-  await fixture.start(); await new Promise(resolve => server.listen(28181, '127.0.0.1', resolve));
+  await fixture.start(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const agentPort = server.address().port;
 
   const call = (account, method, url, body) => new Promise((resolve, reject) => {
     const payload = body === undefined ? null : JSON.stringify(body);
-    const req = http.request(`http://127.0.0.1:28181${url}`, { method, headers: { 'x-test-account': account,
+    const req = http.request(`http://127.0.0.1:${agentPort}${url}`, { method, headers: { 'x-test-account': account,
       ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}) } }, res => {
       let text = ''; res.on('data', chunk => { text += chunk; });
       res.on('end', () => resolve({ status: res.statusCode, body: text ? JSON.parse(text) : null }));
@@ -72,7 +76,7 @@ test('HTTP 全链路:删除、满额、通知补弹、被删时流上的事件',
 
   // Bob 开着这个共有对话的事件流；之后它被删，流上要来一条 conversation.deleted，然后关
   let wire = '', streamClosed = false;
-  const stream = http.get('http://127.0.0.1:28181/v1/conversations/conv-1/events?after=0', { headers: { 'x-test-account': b } }, res => {
+  const stream = http.get(`http://127.0.0.1:${agentPort}/v1/conversations/conv-1/events?after=0`, { headers: { 'x-test-account': b } }, res => {
     res.on('data', chunk => { wire += chunk; }); res.once('close', () => { streamClosed = true; }); res.on('error', () => {});
   }); stream.on('error', () => {}); streams.push(stream);
   await until(() => wire.includes('"type":"user"'));
@@ -115,4 +119,22 @@ test('HTTP 全链路:删除、满额、通知补弹、被删时流上的事件',
   assert.equal((await post(a, 'conv-over', '第 51 个', 'ra-over2')).status, 202, '删一个以后立刻能新建');
   // 没有这个对话 / 别人的私有对话：404
   assert.equal((await call(a, 'DELETE', '/v1/conversations/not-there', { requestId: 'x' })).status, 404);
+
+  // 块五第 5 条：移出成员时清他的私有对话(经真的 mTLS 到文档服务的对话权威)：只有创建者能做，只清私有、共有保留
+  assert.equal((await post(b, 'b-sh', '成员的共有对话', 'rb1')).status, 202);
+  assert.equal((await post(b, 'b-pv', '成员的私有对话-xyz', 'rb2')).status, 202);
+  assert.equal((await call(b, 'POST', '/v1/conversations/b-pv/visibility', { visibility: 'private', requestId: 'vp' })).status, 200);
+  const notCreator = await call(a, 'POST', '/v1/members/clear-private', { accountId: b, requestId: 'clear-x' });
+  assert.equal(notCreator.status, 403); assert.equal(notCreator.body.code, 'creator-required');
+  // 页面是先踢出、再清：这里直接在账本里把他移出
+  ledger.transaction(state => { delete state.projects[projectId].members[b]; state.projects[projectId].bans[b] = { reason: 'kick' }; });
+  const cleared = await call(creator, 'POST', '/v1/members/clear-private', { accountId: b, requestId: 'clear-1' });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual([cleared.body.removed, cleared.body.pending], [['b-pv'], []]);
+  assert.ok(ledger.read().conversationsV2[projectId]['b-sh'], '共有对话保留');
+  assert.equal(ledger.read().conversationsV2[projectId]['b-pv'], undefined);
+  assert.equal(JSON.stringify(ledger.read()).includes('成员的私有对话-xyz'), false, '账本里查不到');
+  // 被删的号：对看得到过它的人(创建者)说「已删」404，不是 no-conversation
+  const gone = await call(creator, 'GET', '/v1/conversations/b-pv');
+  assert.equal(gone.status, 404); assert.equal(gone.body.code, 'conversation-deleted');
 });

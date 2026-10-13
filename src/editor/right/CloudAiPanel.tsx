@@ -511,6 +511,18 @@ export function CloudAiPanel(props: {
     }
   };
 
+  // 删到一半(任务还没停稳)就关了页面的：这位账号再打开页面时静默接着办，不等他再去点「继续删除」(2026-10-13 用户定：不给取消删除)
+  const resumedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!cloud.accountMode || !cloud.accountId) return;
+    for (const item of chat.history.items) {
+      if (!item.deleting || item.deletingBy !== cloud.accountId || resumedRef.current.has(item.id) || deleteAsk?.item.id === item.id) continue;
+      resumedRef.current.add(item.id);
+      void chat.removeChat(item.id, crypto.randomUUID()).catch(() => undefined)
+        .finally(() => { setTimeout(() => resumedRef.current.delete(item.id), 10_000); });
+    }
+  }, [cloud.accountMode, cloud.accountId, chat.history.items, chat.removeChat, deleteAsk]);
+
   /* ---------- 历史列表 ---------- */
   const openHistory = () => { setHistoryOpen(true); void chat.history.refresh(); };
   const historyItems = useMemo(() => {
@@ -658,7 +670,7 @@ export function CloudAiPanel(props: {
         onNewChat={() => { chat.newChat(); setHistoryOpen(false); }}
         hideLocal
         cloud={{ items: historyItems, loading: chat.history.loading, currentId: chat.conversationId, onPick: (id) => { chat.openChat(id); setHistoryOpen(false); },
-          ...(cloud.accountMode ? { canDelete: canDeleteChat, onDelete: askDelete, limitReached: chat.history.atLimit } : {}) }}
+          ...(cloud.accountMode ? { canDelete: canDeleteChat, onDelete: askDelete, limitReached: chat.history.atLimit, ownedCount: chat.history.ownedCount } : {}) }}
       />
     </aside>
   );

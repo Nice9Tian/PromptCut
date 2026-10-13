@@ -1,9 +1,9 @@
 /**
  * 云端对话的「50 个上限」与「删除」在界面上给用户看的话，集中在这一处。
  *
- * 〔草稿，待用户定〕这些句子是一级语义（用户看得到的文字），账号任务书「已拍板」只定了规则，没给原文，
- * 所以现在写的是起草的字。用户定了原文以后只改这一个文件（服务端那一句满额提示在
- * `server/agent/service/create-agent-service.mjs` 的 `CONVERSATION_LIMIT_MESSAGE`，要同步改）。
+ * 这些句子是一级语义（用户看得到的文字）。2026-10-13 用户确认：照原来起草的用（`docs/plan/user-decisions-2026-10-13.md` 块五第 1 条），
+ * 下面标「〔草稿〕」的只有移出成员那一组（块五第 5 条新增，等用户事后改）。要改只改这一个文件
+ * （服务端那一句满额提示在 `server/agent/service/create-agent-service.mjs` 的 `CONVERSATION_LIMIT_MESSAGE`，要同步改）。
  */
 import type { CloudNotice } from "./types.ts";
 
@@ -37,6 +37,15 @@ export const CLOUD_CHAT_TEXT = {
   conversationDeleting: "这个对话正在被删除。",
   currentDeleted: "你正在看的对话已被删除。",
   noConversation: "没有找到这个对话，它可能已经被删除。",
+  /** 对话历史里「云端」一组标题后面显示这位账号自己开了多少个：随别人新建、删除实时变 */
+  countLabel: (n: number) => `我的 ${n}/${CLOUD_CHAT_LIMIT}`,
+
+  /* 〔草稿〕移出成员(项目成员面板里「踢出账号」)时多出来的选项与随后的提示（2026-10-13 用户定：让操作的人选是否同时清除他的私有对话，共有对话缺省保留） */
+  clearPrivateOption: "同时清除他的私有对话（他的共有对话会保留）",
+  clearPrivateWorking: "正在清除他的私有对话…",
+  clearPrivateDone: (n: number) => (n > 0 ? `已清除他的 ${n} 个私有对话。` : "他没有私有对话。"),
+  clearPrivatePending: (n: number) => `还有 ${n} 个对话里的任务没停稳，暂时没有清除。点「重试清除」会接着办。`,
+  clearPrivateRetry: "重试清除",
 } as const;
 
 /** 别人删了和你有关的对话以后弹出的气泡 */

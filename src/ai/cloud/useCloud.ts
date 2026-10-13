@@ -218,7 +218,7 @@ export interface CloudChat {
    * 界面用同一个请求号重试。成功时如果删的是当前打开的，自动退到一个新对话。
    */
   removeChat: (id: string, requestId: string) => Promise<{ already: boolean }>;
-  history: { items: CloudChatItem[]; loading: boolean; refresh: () => Promise<boolean>;
+  history: { items: CloudChatItem[]; loading: boolean; refresh: (silent?: boolean) => Promise<boolean>;
     /** 这位账号在这个项目里自己开的对话数（共有对话算在开它的人名下）；满 CLOUD_CHAT_LIMIT 个就不让新建 */
     ownedCount: number; atLimit: boolean };
   model: string;
@@ -262,7 +262,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const operationScope = operationScopeGuardRef.current.update(operationScopeKey, conversationId);
   /** 进入时的那一次「取 info、定对话」还没做完,用户已经自己选了对话(历史列表里点的、新对话):后到的结果不再改写他的选择 */
   const pickedRef = useRef(false);
-  const refreshHistoryRef = useRef<() => Promise<boolean>>(async () => false);
+  const refreshHistoryRef = useRef<(silent?: boolean) => Promise<boolean>>(async () => false);
   /** 自己正在删的对话号：它被删时流上的 conversation.deleted 不再当「别人删了」提示 */
   const selfDeletingRef = useRef<Set<string>>(new Set());
   const onDeletedRef = useRef<(id: string) => void>(() => {});
@@ -458,29 +458,42 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
 
   const newChat = useCallback(() => switchTo(newCloudChatId(), true), [switchTo]);
 
-  const refreshHistory = useCallback(async (): Promise<boolean> => {
+  /** `silent`：后台定时刷新用，不闪「读取中」、失败也不弹提示 */
+  const refreshHistory = useCallback(async (silent = false): Promise<boolean> => {
     const scope = operationScope;
     const expectedConversationId = conversationId;
     const expectedSession = sessionRef.current;
     const current = () => operationScopeGuardRef.current.isCurrent(scope) && keyRef.current === key &&
       sessionKeyRef.current === key && sessionRef.current === expectedSession && convRef.current === expectedConversationId;
     if (!key || !current()) return false;
-    setHistLoading(true);
+    if (!silent) setHistLoading(true);
     try {
       const list = await api.list();
       if (!current()) return false;
       const titles = readTitles(projectId, accountScope);
-      setHistItems(list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x)));
+      const next = list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x));
+      // 没变就沿用原数组，后台每 3 秒读一次时不白白重绘
+      setHistItems((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       return true;
     } catch (err) {
-      if (current()) setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      if (current() && !silent) setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       return false;
     } finally {
-      if (current()) setHistLoading(false);
+      if (current() && !silent) setHistLoading(false);
     }
   }, [api, key, projectId, accountScope, conversationId, operationScope]);
 
   refreshHistoryRef.current = refreshHistory;
+  // 对话列表与「我的 N/50」实时更新(2026-10-13 用户定)：别人(或自己的另一页)新建、删除以后，这一页不刷新也跟着变。
+  // 每 3 秒(HISTORY_POLL_MS)后台读一次列表(页面看得见时)，回到前台和页面里有人删了对话时立刻读一次。
+  useEffect(() => {
+    if (!key || !cloud.accountMode) return;
+    const pull = () => { if (document.visibilityState === "visible") void refreshHistoryRef.current(true); };
+    const timer = setInterval(pull, HISTORY_POLL_MS);
+    document.addEventListener("visibilitychange", pull);
+    window.addEventListener(NOTICES_REFRESH_EVENT, pull);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", pull); window.removeEventListener(NOTICES_REFRESH_EVENT, pull); };
+  }, [key, cloud.accountMode]);
   const setModel = useCallback((m: string) => { setModelState(m); lsSet(MODEL_KEY, m); }, []);
 
   // 正在看的对话被删了：退到一个新对话，刷新列表；别人删的才提示（自己删的有自己的反馈）。有关的人另有气泡（useCloudNotices）
@@ -552,6 +565,8 @@ export const NOTICES_REFRESH_EVENT = "pc-cloud-notices-refresh";
 /** 已经弹过的通知号（跨组件、跨钩子实例；回执失败时防止同一页反复弹） */
 const shownNoticeIds = new Set<string>();
 const NOTICES_POLL_MS = 15_000;
+/** 对话列表后台刷新的间隔：别人新建、删除后这一页最多晚这么久看到 */
+export const HISTORY_POLL_MS = 3_000;
 
 /**
  * 打开项目时取一次、之后每 15 秒和每次窗口回到前台时再取：别人删了你开的对话、或你在里面发过消息的共有对话，

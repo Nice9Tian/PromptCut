@@ -103,7 +103,7 @@ export function createAccountConversationService({ conversationClient, usageDir 
       const deadline = now() + deleteWaitMs;
       let result;
       for (;;) {
-        result = await call('removeMemberPrivate', identity, undefined, { accountId, requestId });
+        result = await call('removeMemberPrivate', identity, undefined, { targetAccountId: accountId, requestId });
         if (!result.pending?.length || now() >= deadline) break;
         await sleep(200);
       }

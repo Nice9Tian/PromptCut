@@ -16,6 +16,8 @@ export interface CloudHistoryGroup {
   onDelete?(item: CloudChatItem): void;
   /** 这位账号在这个项目里的对话已满上限：顶上给一行提示 */
   limitReached?: boolean;
+  /** 这位账号在这个项目里自己开的对话数(实时)：显示在「云端」标题后面 */
+  ownedCount?: number;
 }
 
 export interface ChatHistoryDrawerProps {
@@ -153,7 +155,7 @@ export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
         )}
         {cloud && (
           <div className="chat-drawer-group" data-pc="chat-cloud-group">
-            <div className="chat-drawer-group-title">云端</div>
+            <div className="chat-drawer-group-title">云端{cloud.ownedCount !== undefined && <span data-pc="chat-cloud-count" data-owned={cloud.ownedCount}> · {CLOUD_CHAT_TEXT.countLabel(cloud.ownedCount)}</span>}</div>
             {cloud.limitReached && <div className="chat-drawer-limit" data-pc="chat-cloud-limit" role="status">{CLOUD_CHAT_TEXT.limitHint}</div>}
             {cloud.loading && cloudItems.length === 0 ? (
               <div className="chat-drawer-empty">读取中…</div>

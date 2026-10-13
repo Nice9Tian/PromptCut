@@ -149,7 +149,7 @@ async function main() {
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
     }
     const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH ?? await puppeteer.executablePath();
-    browser = await puppeteer.launch({ executablePath, headless: true, pipe: true, userDataDir: path.join(OUT, 'chrome-profile'),
+    browser = await puppeteer.launch({ executablePath, headless: true, pipe: true, protocolTimeout: 90_000, userDataDir: path.join(OUT, 'chrome-profile'),
       args: [...PROBE_CHROME_ARGS, '--ignore-certificate-errors', '--host-resolver-rules=MAP s1.pc.localhost 127.0.0.1,MAP s2.pc.localhost 127.0.0.1'] });
     for (let i = 0; i < labels.length; i++) {
       const context = await browser.createBrowserContext(); contexts.push(context);
@@ -356,6 +356,96 @@ async function main() {
     await openProject(member);
     await sleep(3000);
     check(!(await toastTexts(member)).some(t => t.includes(offlineBubble)), 'member-bubble-not-replayed-twice');
+
+    // ---------- 块五第 6 条：满额时「新对话」按钮不灰；对话数实时更新(同一个账号的两页，一页新建/删除，另一页不刷新就变) ----------
+    phase = 'live-count';
+    const countOf = page => page.$eval('[data-pc="chat-cloud-count"]', e => Number(e.getAttribute('data-owned'))).catch(() => null);
+    const waitCount = (page, n) => page.waitForFunction(want => Number(document.querySelector('[data-pc="chat-cloud-count"]')?.getAttribute('data-owned')) === want, { timeout: 20_000 }, n);
+    // 第二页要「看得见」才会后台刷新(隐藏的页面不轮询)，所以另开一个浏览器环境、同一个账号重新登录
+    const ctxB = await browser.createBrowserContext(); contexts.push(ctxB);
+    const ownerB = await ctxB.newPage(); pages.push(ownerB); labels.push('owner2'); ownerB.setDefaultTimeout(TIMEOUT);
+    await ownerB.setViewport({ width: 1500, height: 950 });
+    ownerB.on('pageerror', error => result.pageErrors.push({ page: 'owner2', message: String(error?.message ?? error).slice(0, 160) }));
+    phase = 'live-count step 1';
+    await ownerB.goto(`${ORIGIN}/editor/`, { waitUntil: 'domcontentloaded' });
+    await fill(ownerB, 'input[name="username"]', fixture.accounts[1].name); await fill(ownerB, 'input[name="password"]', fixture.accounts[1].password);
+    await enabled(ownerB, '[data-pc="account-projects"] form button.sp-primary-btn'); await ownerB.click('[data-pc="account-projects"] form button.sp-primary-btn');
+    await waitVisible(ownerB, '[data-pc="account-name"]');
+    phase = 'live-count step 2';
+    await openProject(ownerB);
+    phase = 'live-count step 4';
+    await closeHistory(owner).catch(() => {});
+    phase = 'live-count step 5';
+    await openHistory(owner); await openHistory(ownerB);
+    const c0 = await countOf(owner);
+    check(c0 !== null && c0 === await countOf(ownerB), 'owner-two-pages-show-same-count-at-start');
+    // 先把数补到满额，验证满额时「新对话」不灰
+    const room = 50 - c0;
+    if (room > 0) {
+      seedLedger.transaction(state => { const rows = state.conversationsV2[fixture.projectId];
+        for (let i = 0; i < room; i++) { const id = `fill-${i}`; rows[id] = { v: 2, projectId: fixture.projectId, id, ownerAccountId, visibility: 'shared', aclRevision: 1, queueRevision: 0,
+          currentRunId: null, title: `补满 ${i}`, createdAt: 2000 + i, updatedAt: 2000 + i, messages: [] }; } });
+    }
+    await waitCount(owner, 50); await waitCount(ownerB, 50);          // 两页都没刷新，数字自己变到 50
+    check((await owner.$('[data-pc="chat-cloud-limit"]')) !== null && (await ownerB.$('[data-pc="chat-cloud-limit"]')) !== null, 'both-pages-show-limit-hint-after-live-update');
+    check(await owner.$eval('[data-pc="chat-new"]', e => e.disabled === false) && await ownerB.$eval('[data-pc="chat-new"]', e => e.disabled === false), 'new-chat-button-not-disabled-at-limit');
+    await shot(ownerB, '13-owner-second-page-live-count-50');
+    // 第一页删一个，第二页不刷新就变成 49、那一行消失
+    await clickDelete(owner, 'fill-0');
+    check(await confirmDelete(owner) === 200, 'owner-page-1-delete-200');
+    await waitCount(owner, 49);
+    await waitCount(ownerB, 49);
+    check(!(await historyIds(ownerB)).includes('fill-0'), 'page-2-row-disappeared-without-reload');
+    check((await ownerB.$('[data-pc="chat-cloud-limit"]')) === null, 'page-2-limit-hint-gone-without-reload');
+    await shot(ownerB, '14-owner-second-page-live-count-49');
+    // 第二页新建一个(真发)，第一页不刷新就变回 50
+    await closeHistory(ownerB);
+    await sendMessage(ownerB, '第二页新建的对话');
+    await ownerB.waitForFunction(() => document.querySelectorAll('[data-pc="cloud-queue"] li[data-message-id]').length === 1, { timeout: TIMEOUT });
+    await waitCount(owner, 50);
+    check((await historyIds(owner)).length === 50, 'page-1-count-back-to-50-after-page-2-created');
+    await shot(owner, '15-owner-first-page-live-count-50-after-other-page-created');
+    await closeHistory(owner);
+
+    // ---------- 块五第 5 条：踢出成员时选「同时清除他的私有对话」 ----------
+    phase = 'kick-with-clear-private';
+    await openHistory(member); await member.click('[data-pc="chat-new"]');
+    await member.waitForSelector('.chat-history-drawer', { hidden: true, timeout: TIMEOUT }).catch(() => {});
+    await sendMessage(member, '成员的私有对话');
+    await member.waitForFunction(() => document.querySelectorAll('[data-pc="cloud-queue"] li[data-message-id]').length === 1, { timeout: TIMEOUT });
+    const convPv = await currentConversationId(member);
+    await member.waitForSelector('[data-pc="cloud-visibility-toggle"]', { visible: true, timeout: TIMEOUT });
+    await member.click('[data-pc="cloud-visibility-toggle"]');
+    await member.waitForFunction(() => document.querySelector('[data-pc="cloud-visibility-label"]')?.textContent?.includes('私有对话'), { timeout: TIMEOUT });
+    await openHistory(member); await member.click('[data-pc="chat-new"]');
+    await member.waitForSelector('.chat-history-drawer', { hidden: true, timeout: TIMEOUT }).catch(() => {});
+    await sendMessage(member, '成员的共有对话');
+    await member.waitForFunction(() => document.querySelectorAll('[data-pc="cloud-queue"] li[data-message-id]').length === 1, { timeout: TIMEOUT });
+    const convSh = await currentConversationId(member);
+    check(convPv !== convSh, 'member-has-one-private-and-one-shared');
+    await waitRow(creator, convPv); await closeHistory(creator);
+    await creator.click('[data-pc="members-button"]');
+    await creator.waitForSelector(`[data-pc="account-member"][data-account-id="${memberAccountId}"] [data-pc="account-member-kick"]`, { visible: true, timeout: TIMEOUT });
+    await creator.click(`[data-pc="account-member"][data-account-id="${memberAccountId}"] [data-pc="account-member-kick"]`);
+    await creator.waitForSelector('[data-pc="account-member-clear-option"]', { visible: true, timeout: TIMEOUT });
+    check(await creator.$eval('[data-pc="account-member-clear-option"] input', e => e.checked === false), 'clear-private-option-unchecked-by-default');
+    check((await creator.$eval('[data-pc="account-member-clear-option"]', e => e.textContent?.trim())) === CLOUD_CHAT_TEXT.clearPrivateOption, 'clear-private-option-text');
+    await creator.click('[data-pc="account-member-clear-option"] input');
+    await shot(creator, '16-creator-kick-confirm-with-clear-private-option');
+    const clearResponse = creator.waitForResponse(r => new URL(r.url()).pathname.endsWith('/members/clear-private'), { timeout: TIMEOUT });
+    await creator.click('[data-pc="account-member-submit"]');
+    const cleared = await clearResponse;
+    check(cleared.status() === 200, 'clear-private-http-200');
+    const clearedBody = await cleared.json();
+    check(clearedBody.removed.length === 1 && clearedBody.removed[0] === convPv && clearedBody.pending.length === 0, 'only-the-private-conversation-removed');
+    await waitToast(creator, CLOUD_CHAT_TEXT.clearPrivateDone(1));
+    await shot(creator, '17-creator-after-clear-private');
+    await closeHistory(creator).catch(() => {});
+    await openHistory(creator);
+    await creator.waitForFunction(id => ![...document.querySelectorAll('[data-pc="chat-cloud-item"]')].some(e => e.getAttribute('data-chat-id') === id), { timeout: 20_000 }, convPv);
+    check((await historyIds(creator)).includes(convSh), 'kicked-members-shared-conversation-kept');
+    check(!(await historyIds(creator)).includes(convPv), 'kicked-members-private-conversation-gone');
+    check(!JSON.stringify(seedLedger.read()).includes('成员的私有对话'), 'ledger-has-no-text-of-cleared-private-conversation');
 
     result.completed = true;
     check(result.pageErrors.length === 0, 'no-page-errors');
