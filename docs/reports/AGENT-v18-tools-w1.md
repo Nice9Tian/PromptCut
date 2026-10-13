@@ -168,34 +168,54 @@
 | `diskCacheBytes` | 64 MiB | 浏览器磁盘缓存 |
 | `maxProfileBytes` | 512 MiB | 用户数据目录上限，超了在关闭时删 |
 
-## 6. 部署者要提供的、要在 Linux 上验的
+## 6. 要在 Linux 节点上验的（照着跑）
 
-节点上要有：chrome-headless-shell 152（已装）和它的可执行文件绝对路径；Agent 服务的运行用户对 `<数据目录>/web/` 可写；建议这个用户是非特权用户（这样浏览器自己的沙箱能用，不必加 `--no-sandbox`）；系统级出站限制（第 3 节的残余面）。
+节点上要有：chrome-headless-shell 152 的绝对路径；Node 22 以上；一份装好的 `node_modules`，里面有 `puppeteer-core`（部署目录里那一份就行，只读着用）。建议以非特权用户跑（浏览器自己的沙箱能用）；以 root 跑要追加 `--no-sandbox`。
 
-可以照着在节点的临时目录里跑的步骤（不改任何已部署的东西；端口用的是回环上的 28380～28411）：
+用的是专门的自验脚本 `scripts/probes/cloud-tools-w1-linux-demo.mjs`：自带假站，**只用回环地址上由系统分配的随机端口**，只在自己的临时目录里写东西，不连任何现有服务、不出公网，跑完把自己起的进程与目录清干净。授权在脚本里是放行的桩（授权那一面与平台无关，仓库的专用测试里验过）。
 
-```sh
-# 1. 取这条分支的代码到临时目录,装依赖(节点上已有的检出也行;不要动正在跑的服务)
-cd /tmp && git clone <仓库> w1-check && cd w1-check && git checkout claude/v18-tools-w1 && npm ci
+**拷哪些文件**（保持相对路径，共 14 个文件，除 `puppeteer-core` 外只用 Node 标准库）：
 
-# 2. 让测试用节点上的浏览器,而不是 puppeteer 自带的
-export W1_BROWSER=/绝对路径/chrome-headless-shell
-#    以 root 跑时加: export W1_EXTRA_ARGS=--no-sandbox
-
-# 3. 跑三份专用测试(真浏览器;不连公网)
-PROMPTCUT_ACCOUNT_PROVIDER_ROOT=… PROMPTCUT_PASSWORD_ORDER_MODULE=… \
-  npm test -- server/test/cloud-tools-w1-browser.test.mjs server/test/cloud-tools-w1-egress.test.mjs server/test/cloud-tools-w1-restart.test.mjs
-
-# 4. 关的时候进程树是不是都没了(Linux 上靠进程组)
-pgrep -fa 'chrome.*/web/' ; echo "上面应当没有输出"
-
-# 5. 出网闸之外的兜底:确认运行用户出不了内网(以下应当连不上)
-sudo -u <运行用户> curl -m 3 http://169.254.169.254/ ; sudo -u <运行用户> curl -m 3 http://<同机别的服务的地址>/
+```
+scripts/probes/cloud-tools-w1-linux-demo.mjs
+server/test/cloud-tools-w1-site.mjs
+server/agent/service/hosted-browser.mjs
+server/agent/service/egress.mjs
+server/agent/service/workspace.mjs
+server/agent/service/perception/runner.mjs
+server/web/browser.mjs  server/web/session.mjs  server/web/view.mjs  server/web/hit.mjs
+server/web/hosted/session.mjs  server/web/hosted/network.mjs  server/web/hosted/view.mjs  server/web/hosted/hit.mjs
 ```
 
-第 2 步里的 `W1_BROWSER`（浏览器的绝对路径）、`W1_EXTRA_ARGS`（追加的启动参数，空格分隔）夹具认；在本机用 chrome-headless-shell 的 Windows 版验过这两个变量管用（27 条全过）。`W1-RESTART-02` 在 chrome-headless-shell 上造「残留浏览器」时会给它开一个只绑回环的调试口 28401（它不开调试口就自己退了，造不出残留；这是测试专用，产品代码从不开调试口）。
+**跑什么**（在节点的一个临时目录里；`<部署目录>` 是节点上 PromptCut 的检出，只读它的 `node_modules`）：
 
-要在 Linux 上看的四件事：（1）27 条是否全过；（2）`web_close`、收回之后 `pgrep` 查不到那个对话目录下的浏览器进程（Linux 上靠杀进程组）；（3）以非特权用户跑时不加 `--no-sandbox` 能不能起；（4）`W1-RESTART-02` 过不过——清残留浏览器在 Linux 上靠读 `/proc/<进程号>/cmdline` 认「这个进程正用着这份目录」，这条路本机验不了。
+```sh
+D=$(mktemp -d) && cd "$D"          # 把上面 14 个文件按相对路径放进来
+W1_BROWSER=/绝对路径/chrome-headless-shell \
+W1_NODE_MODULES=<部署目录>/node_modules \
+node scripts/probes/cloud-tools-w1-linux-demo.mjs ; echo "退出码 $?"
+# 以 root 跑时在前面加:W1_EXTRA_ARGS="--no-sandbox"
+cd / && rm -rf "$D"
+```
+
+**期望的输出**：每一项一行 `[w1-linux] 通过 …`，没有 `没过`；末尾三行是 `按目录名查残留进程: 0`、`临时目录已删`、`全部通过`；退出码 0。逐项是：
+
+| 项 | 验的是什么 | 只有 Linux 才走得到 |
+|---|---|---|
+| 起得来、打得开；看、点、输入、滚动、读 | 节点上的 chrome-headless-shell 经管道连得上、七个工具走得通 | |
+| 页面连不到「内网服务」；回环、metadata、内网、IPv6 的请求都到了代理并被拒；放行的只有假站 | 出网那一组启动参数在 Linux 版上同样管用 | |
+| WebRTC：UDP 0 个、候选 `[]`；跳转到内网被拒 | 同上 | |
+| 浏览器主进程是进程组的组长；进程表里的进程都在这个组里；组里有活进程；按 /proc 里的命令行认得出它 | 起成了进程组（`spawnTree`）；会打印一行「组里共 N 个活进程；其中进程表里没有的 M 个」——那 M 个就是 zygote 之类 | 是 |
+| web_close 拿到了退出凭据；关之前组里的进程都不再活着；进程组空了 | 按组杀、按组核（僵尸不算） | 后两项是 |
+| 设为私有：除版本计数外全删 | 前一行会打印关了以后目录里有什么（Linux 上应当能看到 `.pki`、`.cache`、`.config` 之类）；删完只剩 `["rev"]` | 看得到那几个目录是 |
+| 服务关闭的回执；两个浏览器的进程组都空了 | `close()` 的三项为真 | 后一项是 |
+| 服务进程被强杀后，浏览器整棵树自己退了 | 管道一断浏览器自己退，不留孤儿 | 组的那一半是 |
+| 新服务起来时清掉了一个残留浏览器；残留浏览器不再活着 | 残留清理按 `/proc/<进程号>/cmdline` 认「是我们的浏览器」 | 是（Windows 上走的是另一条路） |
+| 锁文件与登记里写着的那个不相干的进程没有被杀；过期的锁与登记清掉了；那个对话照常能打开网页 | **不误杀**：脚本起一个 `sleep 300` 当「不相干的进程」，把它的进程号写进另一个对话的过期 `SingletonLock` 与登记里 | 是 |
+
+哪一项「没过」，把那一行和它前后几行原样贴回来就行（行里带着原因：还活着的进程号、代理记录、回执）。脚本在本机（Windows，同版本的 chrome-headless-shell）跑过一遍：标「只有 Linux」的项目打印的是 `跳过(不是 Linux)`，其余全过、退出码 0。
+
+脚本验不了、要靠部署保证的：出网闸之外的兜底（运行用户在系统层面出不了内网）；容器里 Agent 服务是 1 号进程时的僵尸进程（代码已按「僵尸算已退」处理，单测 `W1-PROC-01`、`02` 用假的 /proc 验过，真容器里没有验）。
 
 ## 7. 要主会话注意的
 
@@ -233,6 +253,7 @@ const web = createHostedBrowserTools({
 });
 ```
 
+- **一轮正常结束后浏览器还活着(最长到闲置关闭),页面里的脚本还能经出网闸发请求。对话设为私有、Agent 被关、对话或项目被删这三种事件,宿主必须无条件调 `closeConversation`(项目被删调 `removeProject`),不能只靠 `abortForFence`**——`abortForFence` 只对「当前这一轮」挂着的浏览器管用,一轮已经结束、下一轮还没来的空档里它什么都杀不到。
 - **路由**：`web.handles` 里的七个名字 → `web.call(name, args, context)`，`context` 是这一轮的可信 ToolRunContext（`resources.contextFor(...)` 得到的那个对象，原样传）。结果里的 `__image` 照桌面版的办法摘成图片块。
 - **工具表**：`cloud-tools.mjs` 里七个 `web_*` 从「还没接上」挪到「服务端另有实现」；`web_handoff` 那一行的说明（「云端的网页操作还没接上」）与系统提示词里「这一版在云端还没有…网页操作」一并改。节点没配浏览器时可以选择不把这七个交给模型（同「没配看画面的口子」的做法），或照旧交给模型由工具如实回——本包两种都支持（`web.describe().configured`）。
 - **收回**：对话设为私有、被停止、Agent 被关时照常调 `resources.abortForFence(context, reason)`，浏览器进程会被杀。登记器的 `childTreeWitness` 可以接 `web.treeClosed`（它等到进程号确实查不到才回 true）。
@@ -265,3 +286,54 @@ const web = createHostedBrowserTools({
 `npx tsc -b --force`：退出码 0，零错误（提交 `00b4dd18` 上）。
 
 不弹窗：探针前后各查一次看得见的窗口，都是空；探针结束时按目录名查残留的浏览器进程是 0。
+
+## 11. 审查之后的修改（第二轮，2026-10-13）
+
+主会话的独立审查没找到能绕过代理或出网闸出网的路，也没找到两个对话共用进程、目录或代理的路；提了一条必须改、八条应该改和几条顺手的。下面逐条写改了什么、哪条测试在验。基底是主会话合过 main 的 `d679373d`。本节与前面各节有出入的地方，以本节为准（前面写「27 条」「三份测试」的地方是第一轮当时的数；第 6 节已经整节换成新的）。
+
+审查说「每条一个提交」。实际是 8 个提交：第 2、3、4 条改的是同一段代码（按对话记正在进行的关闭），合成了一个；第 5、7 条都在重写 `hit.mjs` 与动作那一段，合成了一个；顺手的几条合成一个。
+
+| 审查的条目 | 改了什么 | 提交 | 验它的测试 |
+|---|---|---|---|
+| 必改 1：清残留浏览器在 Linux 上可能误杀无关进程 | 认「是不是我们的浏览器」**只看它自己的命令行里有没有完整的 `--user-data-dir=<这份目录>`**（Linux 读 `/proc/<进程号>/cmdline`，Windows 问系统）；锁文件、登记文件里的进程号只是候选。候选都不是：非 Windows 上把过期的 `SingletonLock` 等三个文件删掉（不删的话新起的完整版 Chrome 可能会对着锁里那个不相干的进程号去「联系旧实例」）。登记里的子进程号不再直接杀 | `c52bd757` | `W1-PROC-03`、`W1-PROC-04`（注入的进程表与假 /proc）；`W1-RESTART-02`（真浏览器） |
+| 应改 2：`treeClosed` 不看关闭结果 | 按会话记每次关闭的结果；没核到「都退了」就回 false，之后每次被问时重核，核到了才回 true | `60b6fe89` | `W1-HOST-01` |
+| 应改 3：`closeConversation` 回的是缺省值 | 会话已被摘掉、那次关闭还在进行时，先等它；回它的真结果（没拿到退出凭据就是 `exited: false`） | 同上 | `W1-HOST-02` |
+| 应改 4：旧的还在关、新的已经起 | 按对话记「最近一次关闭（含删目录）」；同一个对话的下一次启动、下一次 `closeConversation` 都先等它 | 同上 | `W1-HOST-03` |
+| 应改 5：`web_type` 聚焦后的复查失败照样打字；核完之后焦点被挪走 | 复查不过（没了、换了内容、被盖住、不再是输入框）一律按过期拒。打字改成**一个字一段**，每段之前、全部打完之后各核一次焦点还在那个输入框上、它没有变成口令框；不在了就停，如实回 `reason: 'focus_moved'` 与已经打出去的字数，不按回车。所以页面中途挪走焦点时最多有一个字进了别处（`typeChunkChars`，缺省 1） | `aacba013` | `W1-TOOL-05` |
+| 应改 6：启动参数 | 改成**白名单，整条相等才留**：`--no-sandbox`、`--disable-setuid-sandbox`、`--no-zygote`、`--disable-dev-shm-usage`、`--disable-gpu`、`--disable-software-rasterizer`、`--disable-field-trial-config`。`argPrefix` 过同一道。名单在 `network.mjs` 的 `ALLOWED_EXTRA_ARGS`，有一条断言盯着它与本表一致 | `6a26c931` | `W1-EGRESS-01`、`W1-EGRESS-03` |
+| 应改 7：页面控制的文字进了 `error` | `error`、`blockedNote`、`wallNote`、`hint` 全是写死的句子，不拼页面上的字。页面上的字只在单独的字段里：`coveredBy`（盖住它的那层）、`candidates[].n`、`seen`（那个位置上看到的字）、`blocked[].text` / `.name`（对话框文字、下载文件名）、`clicked.n`；带这些字段的结果都带 `dataNotice`。浏览器与 puppeteer 的异常原文不进句子也不进日志（只留 `netError` 这种固定字母的错误码、异常的类名）。**出错的结果也过交结果前的那次授权复核** | 与 5 同一个 | `W1-TOOL-06`、`W1-HOST-06` |
+| 应改 8：设私有时只删 `profile`、`.tmp` | 除版本计数（`rev`，一个数）外，会话目录里的东西全删 | `03f68752` | `W1-RUN-01`（先往目录里放 `.pki`、`.cache`、`.config` 再设私有） |
+| 应改 9：Linux 上核不到 zygote；容器里僵尸进程 | **浏览器进程改成自己起**：用 `server/agent/service/perception/runner.mjs` 的 `spawnTree`（非 Windows 上是新进程组的组长）、`killTree`（按组杀）、`whenClosed`；puppeteer 不再用它的启动器，只经管道连上去说调试协议（`puppeteer.connect({ transport })`，传输层三十行自己写）。关闭回执在非 Windows 上多核一条「进程组里没有活着的进程」（`groupAlive` 报组还在时，再读 /proc 排掉僵尸）；逐个核进程号时僵尸也按已退算。Windows 没有进程组，照旧逐个结束进程表里的进程与帮手进程，再用 `killTree`（taskkill）兜底 | `b8830e23` | `W1-PROC-01`、`W1-PROC-02`（假 /proc）；全部真浏览器测试都跑在新的起法上；节点上由第 6 节的脚本验 |
+| 顺手：`page.goto` 用规范化后的地址 | `admitWebTarget` 回出网闸解析后的 `url.href` | 与 5、7 同一个 | 现有测试（`navigated` 断言） |
+| 顺手：每一轮在浏览器进程上挂监听只增不减 | 交给登记器的不再是浏览器进程，而是每一轮一个的小把手；换了新一轮（旧一轮的上下文已过不了授权）就把旧把手摘掉并通知登记器它关了。顺带修掉一个新发现的挂死：登记被拒时登记器等把手的退出事件，而把手还没记下 | 与 9 同一个 | `W1-HOST-04`、`W1-HOST-05` |
+| 顺手：带方括号的 IPv6 经 CONNECT | 查过：代理把带括号的原样交给出网闸，出网闸的 `bareHost` 去括号再判，没有问题；补了测试 | `b3152125` | `W1-EGRESS-02`（`[::1]:443`、`[fd00::1]:443`、`[::ffff:127.0.0.1]:443` 等六个） |
+| 顺手：WebRTC 走 TCP 的 TURN | 补了测试：TURN 指向本机假服务，零连接；代理记录里有两条指向它的连接、都被拒（那条 TCP 也只能经代理） | `b3152125` | `W1-EGRESS-09` |
+| 顺手：下载的对照；弹出页抢发的请求 | 对照：把下载行为设成「允许」文件真的落盘（2048 字节）。弹出页：用「程序里直接提交 `target=_blank` 的表单」绕过并回当前页的那道，新页直奔内网——请求到了代理并被拒，内网服务零连接，多出来的页被关掉并告诉了模型 | `b3152125` | `W1-EGRESS-13`、`W1-EGRESS-14` |
+| 顺手：`reapOrphan` 不看 `servicePid` | 查清了：两个服务进程共用数据目录时，新进程的启动清扫**会**把旧进程还在用的浏览器当残留杀掉。改了：启动清扫时，起它的服务进程还活着就不动（旧进程退出时管道一断它自己会退）；真要在同一个对话里起新浏览器时照清（同一份目录不能两个浏览器用，那时文档服务已经只认新进程）。登记里的服务进程号要是被别的进程占了，后果只是清扫时少杀，不会误杀 | `b3152125` | `W1-PROC-05` |
+
+### 第二轮的验证
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npm test -- server/test/cloud-tools-w1-{browser,egress,restart,host,process}.test.mjs` | 0 | 42 条通过（真浏览器 31 条：browser 15、egress 14、restart 2；不起浏览器的 11 条：host 6、process 5），0 失败，0 跳过 |
+| 同上五份，加 `W1_BROWSER=<chrome-headless-shell 152 的 Windows 版>` | 见文末 | 见文末 |
+| `npm test -- server/test/windows-hide-silent-spawn.test.mjs server/test/bakery-deps.test.mjs` | 0 | 7 条通过 |
+| `node scripts/probes/cloud-tools-w1-browser-probe.mjs` | 见文末 | 见文末 |
+| `node scripts/probes/cloud-tools-w1-linux-demo.mjs`（本机，`W1_BROWSER` 指 chrome-headless-shell） | 0 | 全部通过；标「只有 Linux」的四项打印的是跳过 |
+| `npx tsc -b --force` | 见文末 | 见文末 |
+| `npm test`（全量） | 见文末 | 见文末 |
+
+### 第二轮之后仍没做成的
+
+1. **Linux 上还是没验。** 进程组、读 /proc 认浏览器、清残留不误杀、设私有删 `.pki` 等，代码写了、能注入的部分有单测，真机要靠第 6 节的脚本。
+2. **容器里的僵尸进程没有在真容器里验**（只有假 /proc 的单测）。
+3. **口令框认不出的情形**（判断只看元素自己的 `type`、`autocomplete`、`name`、`id`、`placeholder`、`aria-label`、`title`；审查说如实写、不为堵洞加启发式）：
+   - 用普通文本框加样式遮字（`-webkit-text-security`、自定义字体把字画成圆点）做的口令框；
+   - 提示语不在元素自己身上：写在旁边的 `<label>`、表格的上一格、`aria-labelledby` / `aria-describedby` 指向的别处、背景图里；
+   - 名字用的是名单外的词或别的语言（「通行码」「安全码」「PIN 码」的别的写法、日文韩文等）；
+   - 一格一个字的验证码输入（六个没有名字的小方框）；
+   - `contenteditable` 的 div、画在 canvas 上或放在别的源的 iframe、shadow DOM 里的自定义输入控件（iframe 与关着的 shadow DOM 里的元素本来就不在清单里，点不到也打不了；开着的 shadow DOM 里的同理）；
+   - 页面在打字途中把框从普通框改成口令框：每个字之前会再看一次类型，所以最多漏进去一个字。
+   这些情形下 `web_type` 会照常输入模型给的字。输入的是**模型自己给的字**（云端 Agent 手里没有用户的口令）；撞上登录页时结果里有固定的提醒（`wall` / `wallNote`）。
+4. 第一轮「没做成的」第 2～5 条照旧（没有真 mTLS 与真模型、没有用量记账、系统提示词与工具表归 G 包、`web_handoff` 不在本包）。
+5. **本机跑节点自验脚本时用了分给本包的端口段之外的端口**：脚本按要求用系统分配的随机端口（这次是 1564、1565 等，都在回环上），和派活指令「端口只用 28380～28419」对不上。只跑了这一遍；三份真浏览器测试与探针仍只用分给本包的端口（新增 28393、28401）。

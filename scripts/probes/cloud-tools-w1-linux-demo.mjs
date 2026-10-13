@@ -3,7 +3,7 @@
 // 它只用回环地址上由系统分配的随机端口,只在自己的临时目录里写东西,不连任何现有服务、不出公网;跑完把自己起的进程与目录清干净。
 // 不用运行授权、文档服务:授权在这里是放行的桩(授权那一面在仓库的专用测试里验过,和平台无关)。
 //
-// 要拷到节点临时目录的文件(保持相对路径,共 16 个;除 puppeteer-core 外只用 Node 标准库):
+// 要拷到节点临时目录的文件(保持相对路径,共 14 个;除 puppeteer-core 外只用 Node 标准库):
 //   scripts/probes/cloud-tools-w1-linux-demo.mjs
 //   server/test/cloud-tools-w1-site.mjs
 //   server/agent/service/{hosted-browser,egress,workspace}.mjs
