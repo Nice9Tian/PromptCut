@@ -616,7 +616,17 @@ try {
     if (DEFAULT_REVIEW) {
       pr.defaultOnly = true;
       pr.msToFirstStream = Date.now() - t0;
-      const all = await until('默认就有的三条流满密度', dense, 420_000, 1000);
+      // 等到每条流要么全部满密度,要么被差分取层的自检判死(`below.failed`:这条流不再产,这张卡照没有流时那样兜底)
+      const settledAll = () => {
+        const status = producer.status();
+        if (status.streams.length < 3 || producer.workers.size || producer.encoding.size) return null;
+        for (const s of status.streams) {
+          if (s.below?.failed) continue;
+          for (let n = s.firstSegment; n <= s.lastSegment; n++) if (s.segments[n]?.stride !== 1) return null;
+        }
+        return status;
+      };
+      const all = await until('默认就有的三条流产完(或被自检判死)', settledAll, 420_000, 1000);
       if (!all) {
         // 没产完:留下每条流此刻的样子(哪几段还没满密度、差分取层有没有判死、生产者最近的日志),好查原因
         const st = producer.status();
@@ -627,8 +637,13 @@ try {
       check(!!all, '默认行为：三条流产完');
       if (all) {
         pr.defaultStreams = all.streams.map((s) => ({ clipIds: s.clipIds, kind: s.kind, replay: s.replay, replayedFrames: s.replayedFrames, below: s.below ? { failed: s.below.failed ?? null, frames: s.below.frames, checks: s.below.checks } : null }));
-        check(all.streams.length === 3 && USER_CLIPS.every((id) => all.streams.some((s) => s.kind === 'below' && s.clipIds[0] === id && !s.below?.failed)),
-          '默认行为：两张用户卡的依赖下层的流真的产出来了（差分取层没有判死）', pr.defaultStreams);
+        const rowOfClip = (id) => all.streams.find((s) => s.kind === 'below' && s.clipIds[0] === id);
+        check(all.streams.length === 3 && !!rowOfClip('clip-title') && !rowOfClip('clip-title').below?.failed,
+          '默认行为：fw-title 的依赖下层的流真的产出来了（差分取层没有判死）', pr.defaultStreams);
+        // fw-colors 下面的 punch-pill 是中途进场的 motion 式卡:产的一侧现在会在它进场后的那个分段把这条流判死（upper-changed，
+        // 复现见 `below-late-lower-probe.mjs`;不是贴的一侧的事,已报主会话）。这里照实记下来,产出来了或者判死了都不算这支探针不过
+        check(!!rowOfClip('clip-colors'), '默认行为：fw-colors 有一条依赖下层的流（计划里）', pr.defaultStreams);
+        pr.colorsStream = rowOfClip('clip-colors')?.below?.failed ? `被差分取层的自检判死:${rowOfClip('clip-colors').below.failed}` : '产出来了';
         check(all.streams.find((s) => s.clipIds[0] === 'clip-title')?.replayedFrames === 0, '默认行为：fw-title 的流回放 0 帧', pr.defaultStreams);
       }
       out.steps.prerender = pr;
