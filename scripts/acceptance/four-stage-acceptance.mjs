@@ -55,11 +55,19 @@ import {
   listText, summaryText, commandText, describeItem, coverageReport, DONE_VERDICTS, matrixText, shiftPorts,
   levelOf, LEVEL_LABEL, releaseTimingsSection,
 } from './acceptance-lib.mjs';
+import { rowTable, rowsMarkdown, rowsText, rowsMapText, v18CoverageCheck, skipListProblems, tableCounts } from './v18-table.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+// 0.7.18 各项的端口段起点:清单在被 import 时就按它算端口,所以要在 import 清单之前读命令行(--v18-port-base),写进环境变量
+{
+  const at = process.argv.indexOf('--v18-port-base');
+  if (at > 0 && process.argv[at + 1]) process.env.PC_V18_PORT_BASE = process.argv[at + 1];
+}
 
 // 清单模块可以用环境变量 PC_ACCEPTANCE_MANIFEST 换成别的(单测用一份假清单跑真的子进程流程)
 const MANIFEST_FILE = process.env.PC_ACCEPTANCE_MANIFEST ? path.resolve(process.env.PC_ACCEPTANCE_MANIFEST) : path.join(HERE, 'four-stage-manifest.mjs');
-const { ITEMS, EXCLUDED_PROBE_FILES = {}, TASK_ACCEPTANCE = { R: [], C: [], U: [], N: [] } } = await import(pathToFileURL(MANIFEST_FILE).href);
+const { ITEMS, EXCLUDED_PROBE_FILES = {}, TASK_ACCEPTANCE = { R: [], C: [], U: [], N: [] }, ROWS = [], G0_2_SKIPS = [] } = await import(pathToFileURL(MANIFEST_FILE).href);
+const ROW_IDS = new Set(ROWS.map((r) => r.id));
 
 /* ------------------------------------------------------------------ 小工具 */
 
@@ -335,7 +343,7 @@ async function main() {
   try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(e.message + '\n\n' + USAGE); process.exit(2); }
   if (opts.help) { console.log(USAGE); return 0; }
 
-  const errs = validateManifest(ITEMS);
+  const errs = validateManifest(ITEMS, { rowIds: ROWS.length ? ROW_IDS : null });
   if (errs.length) { console.error('清单不合格:\n  ' + errs.join('\n  ')); return 2; }
 
   if (opts.list) {
@@ -357,14 +365,54 @@ async function main() {
     console.log(matrixText(ITEMS, { '任务书一 sound-online-render-task.md 编号验收': TASK_ACCEPTANCE.R, '任务书二 cloud-agent-task.md 完成条件': TASK_ACCEPTANCE.C, '任务书二「用户体验验收」六条': TASK_ACCEPTANCE.U, '任务书二 2026-10-07 更新带来的编号(J 工具范围、K 诊断报告、第 4 条新增三条、第 8 条真实模型三样)': TASK_ACCEPTANCE.N }));
     return 0;
   }
+  if (opts.rowsMap) {
+    if (!ROWS.length) { console.error('这份清单没有 0.7.18 的 38 行(ROWS)'); return 2; }
+    console.log(rowsMapText(ROWS, ITEMS));
+    return 0;
+  }
+  if (opts.rowsFrom) {
+    // 不跑任何项:用已有的 results.json 出 38 行结论表
+    let run;
+    try { run = JSON.parse(fs.readFileSync(path.resolve(opts.rowsFrom), 'utf8')); } catch (e) { console.error(`读不了 ${opts.rowsFrom}:${e.message}`); return 2; }
+    if (!ROWS.length) { console.error('这份清单没有 0.7.18 的 38 行(ROWS)'); return 2; }
+    const table = rowTable(ROWS, ITEMS, run.items);
+    console.log(rowsText(table));
+    const md = rowsMarkdown(table, { ...run.meta, host: run.meta.host });
+    const outDir = path.resolve(opts.out || path.dirname(path.resolve(opts.rowsFrom)));
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(outDir, 'rows-table.md'), md);
+    fs.writeFileSync(path.join(outDir, 'rows-table.json'), JSON.stringify(table.map(({ row, ...r }) => r), null, 2));
+    console.log(`\nMarkdown:${path.join(outDir, 'rows-table.md')}`);
+    return 0;
+  }
   if (opts.checkCoverage) {
+    let bad = 0;
     const names = fs.readdirSync(path.join(REPO, 'scripts', 'probes'), { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name);
     const rep = coverageReport(names, ITEMS, EXCLUDED_PROBE_FILES);
-    console.log(`scripts/probes 下 ${names.length} 个文件`);
+    console.log(`① scripts/probes 下 ${names.length} 个文件`);
     console.log(rep.unlisted.length ? `清单没登记也没写排除原因(${rep.unlisted.length}):\n  ${rep.unlisted.join('\n  ')}` : '都登记了或写明了排除原因');
+    if (rep.unlisted.length) bad++;
     if (rep.staleExcluded.length) console.log(`排除表里有、本检出没有的(多半在后三段分支上):${rep.staleExcluded.join(', ')}`);
     if (rep.staleCovers.length) console.log(`清单 covers 里有、本检出没有的(多半在后三段分支上):${rep.staleCovers.join(', ')}`);
-    return rep.unlisted.length ? 1 : 0;
+    if (ROWS.length) {
+      const cov = v18CoverageCheck(ROWS, ITEMS, (f) => fs.existsSync(path.join(REPO, f)));
+      console.log(`\n② 0.7.18 的 ${ROWS.length} 行:${cov.uncoveredRows.length ? `这 ${cov.uncoveredRows.length} 行没有任何清单项:${cov.uncoveredRows.join('、')}` : '每行至少有一条清单项'}`);
+      if (cov.uncoveredRows.length || cov.unknownRows.length) bad++;
+      if (cov.unknownRows.length) console.log(`清单项指到不存在的行:${cov.unknownRows.map((x) => `${x.item}→${x.row}`).join('、')}`);
+      console.log(`\n③ 清单项引用的测试文件与探针脚本:${cov.missingFiles.length ? `本检出里没有(${cov.missingFiles.length}):\n  ${cov.missingFiles.map((x) => `${x.item}  ${x.file}`).join('\n  ')}` : '都在仓库里'}`);
+      if (cov.missingFiles.length) bad++;
+      if (cov.waitingFiles.length) {
+        const by = new Map();
+        for (const w of cov.waitingFiles) { const k = w.waitFor || '?'; (by.get(k) || by.set(k, []).get(k)).push(`${w.item}  ${w.file}`); }
+        console.log(`\n标了「等分支合入」的项,缺的文件单列(${cov.waitingFiles.length} 个,预期缺):`);
+        for (const [k, v] of by) console.log(`  等 ${k}(${v.length}):\n    ${v.join('\n    ')}`);
+      }
+      const sp = skipListProblems(ITEMS.flatMap((it) => it.pass?.skipAllow || []));
+      console.log(`\n④ 全量测试的跳过名单(G0-2):${G0_2_SKIPS.length} 条;${sp.length ? '有问题:\n  ' + sp.join('\n  ') : '每条都写了名字、所在文件、原因'}`);
+      if (sp.length) bad++;
+    }
+    console.log(bad ? `\n守门:不过(${bad} 类有问题)` : '\n守门:通过');
+    return bad ? 1 : 0;
   }
 
   // 缺省只跑本地验证;真实网络验证要 --level network 单独选(verification.md「本地验证与真实网络验证」)
@@ -455,6 +503,7 @@ async function main() {
       timing: item.timing || false, timingNote: item.timingNote || null, known: item.known || null,
       cmd: commandText(item) || null, flags: describeItem(item),
     };
+    if (item.notApplicable) return { ...rec, verdict: 'na', reasons: [item.notApplicable], logs: [] };
     if (item.manual) return { ...rec, verdict: 'manual', reasons: [item.manual], logs: [] };
     if (item.remoteOnly) return { ...rec, verdict: 'remote', reasons: [item.remoteOnly], logs: [] };
     const missing = (item.requires || []).filter((f) => !fs.existsSync(path.join(REPO, f)));
@@ -463,7 +512,10 @@ async function main() {
       try { have = fs.readFileSync(path.join(REPO, file), 'utf8'); } catch { /* 没有文件算缺 */ }
       if (!have.includes(text)) missing.push(`${file} 里没有「${text}」`);
     }
+    if (missing.length && item.where === 'wait') return { ...rec, verdict: 'waiting', reasons: [`等 ${item.waitFor} 合入:本检出没有 ${missing.join('、')}`], logs: [] };
     if (missing.length) return { ...rec, verdict: 'missing', reasons: [`本检出没有:${missing.join('、')}`], logs: [] };
+    const noEnv = (item.requiresEnv || []).filter((k) => !process.env[k]);
+    if (noEnv.length) return { ...rec, verdict: 'blocked', reasons: [`没设环境变量 ${noEnv.join('、')}(值在主工作区 docs/local.md 文末;不设时用到账号后端的测试会整文件跳过)`], logs: [] };
     const byIdNow = byId();
     for (const p of item.prereq || []) {
       const pr = byIdNow.get(p);
@@ -518,6 +570,7 @@ async function main() {
       ...rec, cmd: steps.map((s, i) => expandCmd(stepSpecs[i].cmd, vars).join(' ')).join(item.parallel ? ' ‖ ' : ' && '),
       startedAt: new Date(startedMs).toISOString(), finishedAt: nowIso(), durationSec: Math.round((Date.now() - startedMs) / 1000),
       exitCodes: steps.map((s) => s.exitCode), verdict: j.verdict, reasons: j.reasons, resultLine: j.resultLine, metrics: j.metrics, timings: j.timings,
+      ...(j.skipped?.length ? { skippedTests: j.skipped } : {}), ...(j.failingTodos?.length ? { failingTodos: j.failingTodos } : {}),
       logs: steps.map((s) => path.relative(out, s.logFile)),
     };
   };
@@ -562,6 +615,14 @@ async function main() {
     const file = path.join(out, 'release-timings-section.md');
     fs.writeFileSync(file, section);
     console.log(`\n发版耗时记录的一节(贴进 docs/reports/release-timings.md):${file}\n\n${section}`);
+  }
+  if (opts.rows && ROWS.length) {
+    const table = rowTable(ROWS, ITEMS, final);
+    console.log(`\n${rowsText(table)}`);
+    const md = rowsMarkdown(table, { ...meta, host: meta.host });
+    fs.writeFileSync(path.join(out, 'rows-table.md'), md);
+    fs.writeFileSync(path.join(out, 'rows-table.json'), JSON.stringify(table.map(({ row, ...r }) => r), null, 2));
+    console.log(`\n38 行结论表(Markdown,整份贴进对话):${path.join(out, 'rows-table.md')}`);
   }
   const bad = results.filter((r) => ['fail', 'flaky', 'blocked', 'missing'].includes(r.verdict));
   return bad.length ? 1 : 0;

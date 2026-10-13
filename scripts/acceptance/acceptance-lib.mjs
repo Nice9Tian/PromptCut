@@ -6,13 +6,23 @@
  */
 
 /** 清单里允许的类别(显示顺序) */
-export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段'];
+export const CATEGORIES = ['G0', 'G0-R', '探针', '第一段', '第二段', '第三段', '第四段', 'V18'];
 
 /** 一项的最终判定。时间数字不参与判定(只记录),所以没有「参考」一档;remote = 真实网络验证的项,脚本不跑 */
-export const VERDICTS = ['pass', 'fail', 'flaky', 'manual', 'remote', 'missing', 'blocked', 'skipped'];
+export const VERDICTS = ['pass', 'fail', 'flaky', 'manual', 'remote', 'missing', 'blocked', 'skipped', 'na', 'waiting'];
 
-/** 这些判定在续跑时不再重跑 */
-export const DONE_VERDICTS = new Set(['pass']);
+/** 这些判定在续跑时不再重跑(na = 不适用,写死的;waiting = 本检出还没有它要的文件,等某条分支合入) */
+export const DONE_VERDICTS = new Set(['pass', 'na']);
+
+/**
+ * 一项「在哪能跑」(0.7.18 的 38 行结论表用;写在清单项的 where 字段):
+ *   local 本机就能跑;installer 要安装包;node 要部署到节点以后;network 要真实网络(公网、两台机器);manual 要人工看;
+ *   wait 等某条分支合入(waitFor 写是哪条);na 不适用(notApplicable 写原因)。
+ * 没写 where 的老项:带 manual 的算 manual,带 remoteOnly 的算 node,其余 local。
+ */
+export const WHERE_VALUES = ['local', 'installer', 'node', 'network', 'manual', 'wait', 'na'];
+export const WHERE_LABEL = { local: '本机就能跑', installer: '要安装包', node: '要部署到节点以后', network: '要真实网络', manual: '要人工看', wait: '等分支合入', na: '不适用' };
+export const whereOf = (item) => item.where || (item.notApplicable ? 'na' : item.manual ? 'manual' : item.remoteOnly ? 'node' : 'local');
 
 /** 验证的两级(verification.md「本地验证与真实网络验证」)。local 合入 main 前跑;network 只在往节点部署时、或改到网络这一层时跑 */
 export const LEVELS = ['local', 'network'];
@@ -36,6 +46,7 @@ export function parseArgs(argv) {
     flakyRerun: 0, devPort: 5690, devMainPort: 5693, json: false, checkCoverage: false, help: false,
     keepMainWorktree: false, includeOptional: false, dryRun: false, matrix: false, portShift: 0,
     level: null, releaseTimings: null, timingsFrom: null, machineName: null,
+    rows: false, rowsFrom: null, rowsMap: false, v18PortBase: null,
   };
   const need = (i, name) => {
     const v = argv[i + 1];
@@ -54,6 +65,14 @@ export function parseArgs(argv) {
       case '--include-optional': o.includeOptional = true; break;
       case '--dry-run': o.dryRun = true; break;
       case '--matrix': o.matrix = true; break;
+      case '--rows': o.rows = true; break;
+      case '--rows-map': o.rowsMap = true; break;
+      case '--rows-from': o.rowsFrom = need(i, a); i++; break;
+      case '--v18-port-base': {
+        const n = Number(need(i, a));
+        if (!Number.isInteger(n) || n < 20000 || n > 65000) throw new Error('--v18-port-base 要 20000～65000 的整数(0.7.18 各项用它起的一段端口)');
+        o.v18PortBase = n; i++; break;
+      }
       case '--help': case '-h': o.help = true; break;
       case '--only': o.only.push(...need(i, a).split(',').map((s) => s.trim()).filter(Boolean)); i++; break;
       case '--from': o.from = need(i, a); i++; break;
@@ -105,18 +124,25 @@ export const USAGE = `用法:node scripts/acceptance/four-stage-acceptance.mjs [
   --dev-main-port <端口>  main 基准树的 dev server(缺省 5693,另占 +1、+2)
   --include-optional      连带跑标了 optional 的补充项(缺省不跑)
   --keep-main-worktree    结束时不删 main 基准 worktree
-  --check-coverage        对照 scripts/probes/ 下的文件,列出清单没登记也没写明排除原因的探针后退出
+  --check-coverage        守门:① scripts/probes/ 下每个探针要登记(covers)或写明排除原因;② 0.7.18 的 38 行每行至少有一项;③ 清单项引用的
+                          测试文件、探针脚本要在仓库里(标了「等分支合入」的单列);④ 全量测试的跳过名单没有失效。有问题退出码 1
   --dry-run               只打印将要跑哪些项与命令,不执行
   --release-timings <版本> 跑完后按这次的结果出一节发版耗时记录(版本与提交、机器配置、各项耗时),写到 <out>/release-timings-section.md 并打印;贴进 docs/reports/release-timings.md
   --timings-from <文件>   不跑任何项,直接用已有的 results.json 出那一节(配 --release-timings)
   --machine-name <名字>   那一节里「哪台」写什么(缺省主机名)
+  --rows                  跑完(或 --dry-run 之外的任何一次运行)后按 0.7.18 验收的 38 行出结论表:每行 通过 / 失败 / 未跑 / 不适用,
+                          由哪些清单项得出、没跑的原因;打印并写 <out>/rows-table.md 与 rows-table.json。有一项失败这一行就是失败;
+                          有项没跑而其余通过是「未跑」(并列出没跑的项),没跑不会被算成通过
+  --rows-from <文件>      不跑任何项,用已有的 results.json 出结论表(同 --rows 的输出;可加 --out 指定写到哪)
+  --rows-map              不跑任何项,打印 38 行各由哪些清单项覆盖、每项在哪能跑
+  --v18-port-base <端口>  0.7.18 各项用的端口段起点(缺省 28990,连着约 60 个;另一台机器或别的会话分到别的段时改)
   --matrix                打印两份任务书的每一条编号验收由哪些项覆盖(R<n> 任务书一、C<n> 任务书二完成条件、U<n> 用户体验验收)后退出
   --json                  --list 时输出 JSON`;
 
 /**
  * 校验清单(数据)。返回错误字符串数组,空数组表示合格。
  */
-export function validateManifest(items) {
+export function validateManifest(items, { rowIds = null } = {}) {
   const errs = [];
   if (!Array.isArray(items) || !items.length) return ['清单为空'];
   const seen = new Set();
@@ -130,9 +156,24 @@ export function validateManifest(items) {
     if (typeof it.name !== 'string' || !it.name.trim()) errs.push(`${at}:缺名字`);
     if (!CATEGORIES.includes(it.category)) errs.push(`${at}:类别 ${it.category} 不在 ${CATEGORIES.join('/')} 里`);
     if (typeof it.taskRef !== 'string' || !it.taskRef.trim()) errs.push(`${at}:缺 taskRef(对应任务书哪一条)`);
-    const kinds = ['cmd', 'steps', 'manual', 'remoteOnly'].filter((k) => it[k]);
+    const kinds = ['cmd', 'steps', 'manual', 'remoteOnly', 'notApplicable'].filter((k) => it[k]);
     const runnable = !!(it.cmd || it.steps);
-    if (!runnable && !it.manual && !it.remoteOnly) errs.push(`${at}:既没有命令也没有 manual / remoteOnly`);
+    if (!runnable && !it.manual && !it.remoteOnly && !it.notApplicable) errs.push(`${at}:既没有命令也没有 manual / remoteOnly / notApplicable`);
+    if (it.notApplicable !== undefined && (typeof it.notApplicable !== 'string' || !it.notApplicable.trim())) errs.push(`${at}:notApplicable 要写明不适用的依据(字符串)`);
+    if (it.notApplicable && (runnable || it.manual || it.remoteOnly)) errs.push(`${at}:notApplicable 的项不带命令、manual、remoteOnly(${kinds.join(',')})`);
+    if (it.where !== undefined && !WHERE_VALUES.includes(it.where)) errs.push(`${at}:where 要是 ${WHERE_VALUES.join('/')}`);
+    if (it.where === 'wait' && !(typeof it.waitFor === 'string' && it.waitFor.trim())) errs.push(`${at}:where 为 wait 的项要写 waitFor(等哪条分支合入)`);
+    if (it.waitFor !== undefined && it.where !== 'wait') errs.push(`${at}:waitFor 只在 where 为 wait 时写`);
+    if (it.where === 'na' && !it.notApplicable) errs.push(`${at}:where 为 na 的项要写 notApplicable`);
+    if (it.where === 'local' && !runnable) errs.push(`${at}:where 为 local 的项要有命令(没有命令的写 manual)`);
+    if (['node', 'network'].includes(it.where) && !it.remoteOnly) errs.push(`${at}:where 为 ${it.where} 的项要写 remoteOnly(脚本不跑,写明怎么验)`);
+    if (['installer', 'manual'].includes(it.where) && !it.manual) errs.push(`${at}:where 为 ${it.where} 的项要写 manual(写明怎么验)`);
+    if (it.requiresEnv !== undefined && !(Array.isArray(it.requiresEnv) && it.requiresEnv.every((x) => typeof x === 'string'))) errs.push(`${at}:requiresEnv 要字符串数组`);
+    if (it.rows !== undefined) {
+      if (!(Array.isArray(it.rows) && it.rows.length && it.rows.every((x) => typeof x === 'string'))) errs.push(`${at}:rows 要非空字符串数组(0.7.18 验收的行号)`);
+      else if (rowIds) for (const r of it.rows) if (!rowIds.has(r)) errs.push(`${at}:rows 里的 ${r} 不是 38 行里的任何一行`);
+    }
+    if (it.category === 'V18' && !(it.rows && it.rows.length)) errs.push(`${at}:V18 类的项要写 rows`);
     if (it.cmd && it.steps) errs.push(`${at}:cmd 与 steps 只能写一个`);
     if ((it.manual || it.remoteOnly) && runnable) errs.push(`${at}:manual / remoteOnly 的项不能带命令(${kinds.join(',')})`);
     if (it.manual && typeof it.manual !== 'string') errs.push(`${at}:manual 要写明怎么验(字符串)`);
@@ -150,6 +191,8 @@ export function validateManifest(items) {
         else for (const r of p[k] || []) { try { new RegExp(r); } catch { errs.push(`${at}:pass.${k} 里 ${r} 不是合法正则`); } }
       }
       if (p.metrics) for (const [k, r] of Object.entries(p.metrics)) { try { new RegExp(r); } catch { errs.push(`${at}:pass.metrics.${k} 不是合法正则`); } }
+      if (p.skipAllow !== undefined && !(Array.isArray(p.skipAllow) && p.skipAllow.every((x) => x && typeof x.name === 'string' && typeof x.file === 'string' && typeof x.why === 'string'))) errs.push(`${at}:pass.skipAllow 要 [{ name, file, why }](跳过名单:测试名、所在文件、为什么跳过)`);
+      if (p.todoFail !== undefined && typeof p.todoFail !== 'boolean') errs.push(`${at}:pass.todoFail 要布尔`);
       if (p.limits) for (const [k, lim] of Object.entries(p.limits)) {
         if (!p.metrics || !(k in p.metrics)) errs.push(`${at}:pass.limits.${k} 没有对应的 metrics`);
         if (!lim || (lim.eq === undefined && lim.max === undefined && lim.min === undefined)) errs.push(`${at}:pass.limits.${k} 要 eq / max / min`);
@@ -159,6 +202,7 @@ export function validateManifest(items) {
     if (it.timing === 'record' && !it.timingNote) errs.push(`${at}:timing 为 record 时要写 timingNote(记哪些耗时)`);
     if (it.timing === 'record' && !runnable) errs.push(`${at}:timing 为 record 的项要有命令(不跑就没有耗时可记)`);
     if (!LEVELS.includes(it.level)) errs.push(`${at}:level 要写 local(本地验证)或 network(真实网络验证)`);
+    if (['node', 'network'].includes(it.where) && it.level !== 'network') errs.push(`${at}:where 为 ${it.where} 的项属于真实网络验证,level 要是 network`);
     if (it.remoteOnly && it.level !== 'network') errs.push(`${at}:remoteOnly 的项属于真实网络验证,level 要是 network`);
     if (it.level === 'network' && runnable) errs.push(`${at}:真实网络验证的项不带本机命令(照部署清单在节点上做),写 remoteOnly`);
     if (it.needs !== undefined) {
@@ -311,6 +355,15 @@ export function judge(item, stepResults) {
     if (lim.max !== undefined && v > lim.max) reasons.push(`${k}=${v},上限 ${lim.max}`);
     if (lim.min !== undefined && v < lim.min) reasons.push(`${k}=${v},下限 ${lim.min}`);
   }
+  // 跳过名单(0.7.18 起,问题 17):输出里每一条被跳过的测试(spec 报告器的「﹣ 名字 (n ms) # 原因」行)都必须在名单里,多出一条就不过
+  const skipped = parseSkippedTests(combined);
+  if (pass.skipAllow) {
+    const extra = skipped.filter((sk) => !pass.skipAllow.some((a) => a.name === sk.name && (!a.platforms || a.platforms.includes(process.platform))));
+    if (extra.length) reasons.push(`多出 ${extra.length} 条不在跳过名单里的跳过:${extra.slice(0, 6).map((x) => `「${x.name.slice(0, 60)}」${x.reason ? `(${x.reason.slice(0, 50)})` : '(没写原因)'}`).join(';')}${extra.length > 6 ? ' …' : ''}`);
+  }
+  // 失败的 todo(已知不成立的断言,node 的 todo 失败不让 npm test 变红,输出里用 ⚠ 标出)——点名要查的项里,有一条没转绿就不过
+  const failingTodos = parseFailingTodos(combined);
+  if (pass.todoFail && failingTodos.length) reasons.push(`有 ${failingTodos.length} 条 todo(已知不成立的断言,npm test 不因它变红)没转绿:${failingTodos.slice(0, 6).map((x) => x.name.slice(0, 70)).join(';')}${failingTodos.length > 6 ? ' …' : ''}`);
   const json = lastJsonObject(combined);
   if (json && pass.strictJson !== false) {
     const v = json.value;
@@ -321,7 +374,32 @@ export function judge(item, stepResults) {
   if (!resultLine && json) resultLine = json.line;
   if (!resultLine) resultLine = lastNonEmptyLine(combined);
   const verdict = reasons.length === 0 ? 'pass' : 'fail';
-  return { verdict, reasons, resultLine: clip(resultLine, 400), metrics, timings: parseTimingLines(combined) };
+  return { verdict, reasons, resultLine: clip(resultLine, 400), metrics, timings: parseTimingLines(combined), skipped, failingTodos };
+}
+
+const splitLines = (text) => String(text).split(/\r?\n/);
+
+/** 输出里被跳过的测试(去重):spec 报告器写「﹣ 名字 (n.nnms) # 原因」,无原因时是「# SKIP」 */
+export function parseSkippedTests(output) {
+  const seen = new Map();
+  for (const raw of splitLines(output)) {
+    const m = /^\s*﹣\s+(.*?)\s+\(\d+(?:\.\d+)?ms\)(?:\s+#\s*(.*))?$/.exec(raw);
+    if (!m) continue;
+    const reason = (m[2] || '').trim();
+    if (!seen.has(m[1])) seen.set(m[1], { name: m[1], reason: reason === 'SKIP' ? '' : reason });
+  }
+  return [...seen.values()];
+}
+
+/** 输出里失败的 todo(去重):node 报告器写「⚠ 名字 (n.nnms) # 原因」 */
+export function parseFailingTodos(output) {
+  const seen = new Map();
+  for (const raw of splitLines(output)) {
+    const m = /^\s*⚠\s+(.*?)\s+\(\d+(?:\.\d+)?ms\)(?:\s+#\s*(.*))?$/.exec(raw);
+    if (!m || m[1].includes('测试文件进程异常')) continue;
+    if (!seen.has(m[1])) seen.set(m[1], { name: m[1], why: (m[2] || '').trim() });
+  }
+  return [...seen.values()];
 }
 
 function lastMatchLine(text, re) {
@@ -355,6 +433,8 @@ export function combineAttempts(attempts) {
 export function describeItem(item) {
   const flags = [];
   flags.push(LEVEL_LABEL[levelOf(item)]);
+  if (item.where && item.where !== 'local') flags.push(`${WHERE_LABEL[item.where]}${item.waitFor ? ':' + item.waitFor : ''}`);
+  if (item.rows?.length) flags.push(`行 ${item.rows.join('、')}`);
   if (item.timing === 'record') flags.push('记耗时');
   if (item.realModel) flags.push('真实模型');
   if (item.manual) flags.push('人工');
@@ -404,6 +484,7 @@ export function passText(it) {
 const VERDICT_LABEL = {
   pass: '过', fail: '不过', flaky: '不稳定',
   manual: '人工', remote: '在节点上做(脚本不跑)', missing: '缺(本检出没有这个文件)', blocked: '跑不了(前置没过)', skipped: '续跑跳过',
+  na: '不适用', waiting: '等分支合入(本检出还没有)',
 };
 export const verdictLabel = (v) => VERDICT_LABEL[v] || v;
 
@@ -426,11 +507,11 @@ export function summaryText(run) {
   let cat = null;
   for (const r of items) {
     if (r.category !== cat) { cat = r.category; lines.push(`【${cat}】`); }
-    const mark = { pass: '✓', fail: '✗', flaky: '~', manual: '·', remote: '·', missing: '?', blocked: '!', skipped: '-' }[r.verdict] || ' ';
+    const mark = { pass: '✓', fail: '✗', flaky: '~', manual: '·', remote: '·', missing: '?', blocked: '!', skipped: '-', na: '-', waiting: '…' }[r.verdict] || ' ';
     const dur = r.durationSec != null ? ` ${r.durationSec}s` : '';
     const stab = r.stability ? ` 稳定性${r.stability}` : '';
     lines.push(`${mark} ${r.id}  ${r.name}  ${verdictLabel(r.verdict)}${stab}${dur}`);
-    if (['fail', 'flaky', 'blocked', 'missing'].includes(r.verdict) && r.reasons && r.reasons.length) lines.push(`    原因:${r.reasons.join(';')}`);
+    if (['fail', 'flaky', 'blocked', 'missing', 'waiting'].includes(r.verdict) && r.reasons && r.reasons.length) lines.push(`    原因:${r.reasons.join(';')}`);
     if (r.resultLine && ['fail', 'flaky', 'pass'].includes(r.verdict)) lines.push(`    结果行:${r.resultLine}`);
     if ((r.timings || []).length) lines.push(`    耗时(只记录):${clip(r.timings.map(timingText).join(';'), 600)}`);
     if (r.known && r.verdict !== 'pass') lines.push(`    已知:${r.known}`);
