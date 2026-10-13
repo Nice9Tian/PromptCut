@@ -20,6 +20,7 @@ import { digestOf } from '../account/ledger.mjs';
 import { scopeModel, pair } from './agent-run-scope-fixture.mjs';
 import { createExistingHostedRunnerFactory, createImportReservation } from '../agent/service/account-runner.mjs';
 import { createWorkspaces } from '../agent/service/workspace.mjs';
+import { runAssetImportWithRetry } from '../agent/service/hosted-tools.mjs';
 import { resolveAccountLook } from '../agent-service/main.mjs';
 
 const P = `sp_${'a'.repeat(26)}`;
@@ -236,4 +237,21 @@ test('RW7 导入的额度：一次导入只看一次目录、之后只累计；�
   assert.equal(ws.room(), 300); ws.write('attachments/a.bin', Buffer.alloc(120)); assert.equal(ws.room(), 180);
   ws.write('b.bin', Buffer.alloc(1)); ws.write('c.bin', Buffer.alloc(1));
   assert.throws(() => ws.room(), error => error.workspace === true && error.code === 'quota');
+});
+
+test('RW8 导入重试用同一个请求号（接着传已收到的片，不在素材服务上另开暂存目录）', async () => {
+  const seen = [], waits = [], retried = [];
+  const unavailable = () => Object.assign(new Error('run-asset-unavailable'), { status: 503, code: 'run-asset-unavailable' });
+  const out = await runAssetImportWithRetry(async requestId => { seen.push(requestId); if (seen.length < 3) throw unavailable(); return { stored: true }; },
+    { sleep: async ms => { waits.push(ms); }, onRetry: row => retried.push(row) });
+  assert.deepEqual(out, { stored: true });
+  assert.equal(seen.length, 3); assert.equal(new Set(seen).size, 1, '三次用的是同一个请求号'); assert.match(seen[0], /^import-[0-9a-f-]{36}$/);
+  assert.deepEqual(waits, [500, 1000]); assert.deepEqual(retried.map(row => [row.code, row.attempt]), [['run-asset-unavailable', 1], ['run-asset-unavailable', 2]]);
+  // 另一次导入是另一个请求号
+  const other = []; await runAssetImportWithRetry(async requestId => { other.push(requestId); return {}; });
+  assert.notEqual(other[0], seen[0]);
+  // 三次都不成：把最后那个错原样抛出
+  let calls = 0;
+  await assert.rejects(runAssetImportWithRetry(async () => { calls += 1; throw unavailable(); }, { sleep: async () => {} }), error => error.code === 'run-asset-unavailable');
+  assert.equal(calls, 3);
 });
