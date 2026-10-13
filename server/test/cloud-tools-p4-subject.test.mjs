@@ -554,3 +554,18 @@ test('素材超过取字节的上限:作业 error(不把大文件落进工作目
   assert.equal(fx.readConfigCalls().filter((c) => c.sub === 'detect').length, 0, '没起 Python');
   assert.deepEqual(fx.ws.list().map((f) => f.path).filter((p) => p !== 'stub-calls.jsonl'), ['subject/jobs.json']);
 });
+
+test('文档服务联系不上:fail closed,回 503 级的「上游不可用」,不起任何东西;恢复后可用', async (t) => {
+  const fx = await makeP4Fixture(t, { config: stubConfig(t) });
+  await fx.addMedia({ id: 'm1', bytes: plan({ mode: 'ok', duration: 6 }), extra: { duration: 6 } });
+  fx.setUnavailable(true);
+  for (const call of [() => detect(fx, 'm1'), () => list(fx, 'm1'), () => fx.tools.call('subject_status', {}, fx.context)]) {
+    await assert.rejects(call(), (e) => e.code === 'authority-unavailable' && e.status === 503);
+  }
+  const forbidden = await fx.tools.call('subject_status', {}, { ...fx.context, runId: 'forged' }).catch((e) => e);
+  assert.equal(forbidden.status, 403);
+  assert.equal(fx.readConfigCalls().length, 0, '没起任何进程');
+  fx.setUnavailable(false);
+  assert.equal((await detect(fx, 'm1')).started, true);
+  await settle(fx, 'm1');
+});

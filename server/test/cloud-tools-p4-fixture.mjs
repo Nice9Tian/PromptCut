@@ -32,10 +32,12 @@ export async function makeP4Fixture(t, { config = null, limits = {}, readOnly = 
   const dir = authority.dir;
 
   let denyWrite = readOnly;
+  let unavailable = false;
   const runClient = {
     registerInstance: async () => authority.agentProcess.registration,
     instanceIdentity: () => authority.agentProcess.registration,
     async checkAccess({ projectId: p, runGrantId, action }) {
+      if (unavailable) throw new Error('controlled transport unavailable');
       if (denyWrite && action === 'write') throw Object.assign(new Error('controlled read-only context'), { status: 403, code: 'read-only' });
       const principal = await authority.provider.resolveRunPrincipal({ servicePrincipal, projectId: p, runGrantId });
       return authority.provider.checkAccess({ principal, projectId: p, action });
@@ -148,6 +150,7 @@ export async function makeP4Fixture(t, { config = null, limits = {}, readOnly = 
     get tools() { return tools; },
     get jobs() { return jobs; },
     setReadOnly(v) { denyWrite = v; },
+    setUnavailable(v) { unavailable = v; },
     /** 模拟 Agent 服务重启:关掉工具与账本,在同一份 SQLite 与工作区上重开 */
     async restart() {
       await tools.close('restart');

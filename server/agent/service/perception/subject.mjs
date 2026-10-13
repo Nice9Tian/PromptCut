@@ -206,7 +206,11 @@ export function createSubjectTools({
     try { return await resources.authorize(context, action); }
     catch (error) {
       if (error instanceof SubjectToolError) throw error;
-      throw new SubjectToolError(action === 'write' ? '这一轮没有写项目的权限(只读成员、被停止或已转私有),主体识别没有开始。' : '这一轮没有读项目的权限,主体识别没有开始。', 'subject-forbidden');
+      // 文档服务联系不上:fail closed,但说清是「上游不可用」(503),不是「没权限」(403)
+      if (['run-authority-unavailable', 'tool-instance-unavailable', 'fence-unavailable', 'authorization-unavailable'].includes(error?.code)) {
+        throw Object.assign(new SubjectToolError('文档服务暂时联系不上,没法确认这一轮的权限,主体识别没有开始。稍后再试。', 'authority-unavailable'), { status: 503 });
+      }
+      throw Object.assign(new SubjectToolError(action === 'write' ? '这一轮没有写项目的权限(只读成员、被停止或已转私有),主体识别没有开始。' : '这一轮没有读项目的权限,主体识别没有开始。', 'subject-forbidden'), { status: 403 });
     }
   };
 
