@@ -5,6 +5,10 @@
  *
  *   node scripts/probes/stream-scrub-stage-probe.mjs (--origin http://127.0.0.1:26940 | --port 26940) [--host-port 26950]
  *        [--size 1280x720] [--out <dir>] [--json <file>] [--keep]
+ *   node scripts/probes/stream-scrub-stage-probe.mjs --port 26940 --timing particles --size 1920x1080   # 只量随机跳帧的耗时
+ *
+ * `--timing <卡片 id>`:只做 C 里量耗时的那一半。项目换成一张铺满整幅的这种卡(画布卡的流是整幅的,解一帧比那两张小卡贵得多),
+ * 不比像素、不做别的几条;用来量「随机跳到一帧最坏要多久」。
  *
  * 给 `--port` 就自己在检出根起一台 dev server(另占 +1、+2 当舞台端口),用完按进程号收掉。本进程里直接起 `FramePipeline`
  * (同预渲染进程的代码),库根放临时目录。项目同 `stream-origin-probe.mjs`:两张每帧横移 10 像素的卡,**都不从 15 的倍数帧开始**
@@ -48,6 +52,7 @@ const ORIGIN = flagArg('origin', null, args);
 const PORT = Number(flagArg('port', '0', args));
 const HOST_PORT = Number(flagArg('host-port', '0', args)) || 0;
 const KEEP = args.includes('--keep');
+const TIMING = flagArg('timing', null, args);
 const JSON_OUT = flagArg('json', null, args);
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-stream-scrub-stage-${Date.now().toString(36)}`));
 const [WIDTH, HEIGHT] = String(flagArg('size', '1280x720', args)).split('x').map(Number);
@@ -63,7 +68,16 @@ const CLIPS = {
   'clip-b': { frames: [40, 129], start: 1.32, end: 4.32, frame: band(380, 300) },
   'clip-a': { frames: [100, 149], start: 3.32, end: 4.99, frame: band(40, 300) },
 };
-const PROJECT = {
+if (TIMING) {
+  delete CLIPS['clip-a'];
+  CLIPS['clip-b'].frame = { x: 0, y: 0, w: WIDTH, h: HEIGHT };
+}
+const TIMING_PARAMS = { particles: { color: '#30ff60', quantity: 120, links: 'yes', seed: 5 } };
+const PROJECT = TIMING ? {
+  id: 'stream-scrub-stage-probe-timing', name: '随机跳帧耗时', width: WIDTH, height: HEIGHT, fps: FPS, duration: DURATION,
+  themeId: 'dark', media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
+  tracks: [{ id: 'tr-b', name: 'b', hidden: false, clips: [{ id: 'clip-b', kind: 'card', cardId: TIMING, start: CLIPS['clip-b'].start, end: CLIPS['clip-b'].end, params: TIMING_PARAMS[TIMING] ?? {}, frame: CLIPS['clip-b'].frame }] }],
+} : {
   id: 'stream-scrub-stage-probe', name: '暂停和拖动贴流探针', width: WIDTH, height: HEIGHT, fps: FPS, duration: DURATION,
   themeId: 'dark', media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
   tracks: [
@@ -71,7 +85,7 @@ const PROJECT = {
     { id: 'tr-b', name: 'b', hidden: false, clips: [{ id: 'clip-b', kind: 'card', cardId: 'r6-stateful', start: CLIPS['clip-b'].start, end: CLIPS['clip-b'].end, params: {}, frame: CLIPS['clip-b'].frame }] },
   ],
 };
-const FIRST = 40, LAST = 149;
+const FIRST = 40, LAST = TIMING ? 129 : 149;
 const clipsAt = (f) => Object.keys(CLIPS).filter((id) => CLIPS[id].frames[0] <= f && f <= CLIPS[id].frames[1]);
 
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ step, t: Date.now(), ...fields })}\n`);
@@ -158,7 +172,7 @@ try {
   pipeline.streamPicked = () => true; // 钉成重卡
   const producer = pipeline.streamProducer();
   producer.attachRoute();
-  let holdDense = true;
+  let holdDense = !TIMING;
   const nextTask = producer.nextTask.bind(producer);
   producer.nextTask = (b) => { const task = nextTask(b); return task && task.stride === 1 && holdDense ? null : task; };
   const layerByClip = new Map();
@@ -168,15 +182,17 @@ try {
   const idle = () => !producer.workers.size && !producer.encoding.size;
   const stateOf = (clipId) => [...producer.streams.values()].find((s) => s.spec.clipIds.length === 1 && s.spec.clipIds[0] === clipId) ?? null;
   const segmentsOf = (clipId) => { const s = stateOf(clipId); return s ? Array.from({ length: s.spec.lastSegment + 1 }, (_, n) => s.manifest.segments[n]?.stride ?? 0) : []; };
-  await until('两条流的稀疏版铺满全段', () => {
-    if (producer.streams.size < 2 || !idle()) return null;
+  await until(TIMING ? '流全部分段满密度' : '两条流的稀疏版铺满全段', () => {
+    if (producer.streams.size < Object.keys(CLIPS).length || !idle()) return null;
+    if (TIMING) return Object.keys(CLIPS).every((id) => { const st = segmentsOf(id); return st.length && st.every((s) => s === 1); }) ? true : null;
     return Object.keys(CLIPS).every((id) => { const st = segmentsOf(id); return st.length && st.every((s) => s >= 1); }) ? true : null;
   }, 600_000, 300);
   out.sparseMs = Date.now() - t0;
   out.sparse = Object.fromEntries(Object.keys(CLIPS).map((id) => [id, { originFrame: stateOf(id)?.spec.originFrame, strides: segmentsOf(id) }]));
   say('sparse-ready', { ms: out.sparseMs, ...out.sparse });
   const sparseStrides = Object.values(out.sparse).flatMap((s) => s.strides);
-  if (!check(sparseStrides.length > 0 && sparseStrides.every((s) => s > 1), '先只有稀疏版(每个分段的间隔都大于 1)', out.sparse)) throw new Error('没有得到只有稀疏版的状态');
+  if (!TIMING && !check(sparseStrides.length > 0 && sparseStrides.every((s) => s > 1), '先只有稀疏版(每个分段的间隔都大于 1)', out.sparse)) throw new Error('没有得到只有稀疏版的状态');
+  if (TIMING) { const st = stateOf('clip-b'); out.timingStream = { card: TIMING, bound: st?.manifest.bound, tight: st?.manifest.tight, inits: Object.values(st?.manifest.inits ?? {}).map((i) => ({ width: i.width, height: i.height })) }; say('timing-stream', out.timingStream); }
   const layers = () => [...layerByClip.values()];
   /** 这张卡在第 f 帧贴的是哪一张画面:满密度是它自己;稀疏是不晚于它的最近一张(间隔从清单读) */
   const pictureOf = (clipId, f) => {
@@ -190,14 +206,16 @@ try {
 
   /* ------------------------------------------------------------ 参照:导出页逐帧 */
   const emptyUrl = emptyUrlOf(origin, { width: WIDTH, height: HEIGHT });
-  bakery = await openBakery({ url: emptyUrl });
   const exported = new Map();
-  await bakery.reset(PROJECT, emptyUrl);
-  bakery.streamLease = null;
-  const refDir = path.join(OUT, 'ref-project');
-  await fs.mkdir(refDir, { recursive: true });
-  await bakeFrames(bakery, { out: refDir, fps: FPS, frames: `0-${LAST + 1}`, fullFrame: true, format: 'png', warm: 3, staticSkip: false, quiet: true, writeFrames: false,
-    onFrame: async (i, buf) => { exported.set(i, Buffer.from(buf)); } });
+  if (!TIMING) {
+    bakery = await openBakery({ url: emptyUrl });
+    await bakery.reset(PROJECT, emptyUrl);
+    bakery.streamLease = null;
+    const refDir = path.join(OUT, 'ref-project');
+    await fs.mkdir(refDir, { recursive: true });
+    await bakeFrames(bakery, { out: refDir, fps: FPS, frames: `0-${LAST + 1}`, fullFrame: true, format: 'png', warm: 3, staticSkip: false, quiet: true, writeFrames: false,
+      onFrame: async (i, buf) => { exported.set(i, Buffer.from(buf)); } });
+  }
   const exportRgb = new Map();
   const exportOf = (f) => { if (!exportRgb.has(f)) { exportRgb.set(f, rgbOver(exported.get(f))); if (exportRgb.size > 24) exportRgb.delete(exportRgb.keys().next().value); } return exportRgb.get(f); };
   say('exported', { frames: exported.size });
@@ -305,7 +323,7 @@ try {
   const shuffled = (from, to) => { const order = []; for (let f = from; f <= to; f++) order.push(f); for (let i = 0; i < order.length; i++) { const j = (i * 37 + 11) % order.length; [order[i], order[j]] = [order[j], order[i]]; } return order; };
 
   /* ------------------------------------------------------------ A. 只有稀疏版 */
-  {
+  if (!TIMING) {
     const rec = { frames: 0, wrong: [], notDrawn: [], later: [], placeholders: [], levels: new Set(), seekMs: [], sameMean: 0, n: 0, standIns: {} };
     for (const f of shuffled(FIRST, LAST)) {
       const { want, got } = await seekTo(f);
@@ -336,7 +354,7 @@ try {
   }
 
   /* ------------------------------------------------------------ B. 停在稀疏段上,满密度版产出来以后自己换上 */
-  {
+  if (!TIMING) {
     // 找一帧:两张卡都在场,而且它在稀疏版里不是「自己那一张」
     let park = null;
     for (let f = 104; f <= 128 && park === null; f++) if (clipsAt(f).every((id) => pictureOf(id, f) !== f)) park = f;
@@ -392,8 +410,9 @@ try {
         if (f === 105 || f === 47) { await fs.writeFile(path.join(OUT, `dense-stage-${f}.png`), toPng(stage)); await fs.writeFile(path.join(OUT, `export-${f}.png`), toPng(exportOf(f))); }
       }
     };
-    await pass('cold', shuffled(FIRST, LAST), true);
+    await pass('cold', shuffled(FIRST, LAST), !TIMING);
     await pass('warm', shuffled(FIRST, LAST).reverse(), false);
+    if (TIMING) { await pass('warm', shuffled(FIRST, LAST), false); rec.frames = LAST - FIRST + 1; rec.sameMean = 0; rec.nextMean = 1; rec.n = 1; }
     const worst = (label) => stats((rec.bySample[label] ?? {})[SEG - 1] ?? []);
     const tracks = (await diagA()).tracks;
     out.denseScrub = { frames: rec.frames, wrongCount: rec.wrong.length, wrong: rec.wrong.slice(0, 5), notDrawn: rec.notDrawn.slice(0, 5), placeholdersLeft: rec.placeholders.slice(0, 5),
@@ -405,12 +424,12 @@ try {
     say('C-dense', out.denseScrub);
     check(rec.notDrawn.length === 0 && rec.frames === LAST - FIRST + 1, `满密度:第 ${FIRST}～${LAST} 帧每一帧都贴出了这一帧`, { frames: rec.frames, notDrawn: rec.notDrawn.slice(0, 3) });
     check(rec.wrong.length === 0, '满密度:暂停着跳到任意一帧,贴出来的画面最像的都是导出页的同一帧', { wrong: rec.wrong.length, first: rec.wrong.slice(0, 3) });
-    check(out.denseScrub.对导出同一帧 < 3 && out.denseScrub.对照_第二像的那一帧 > 3 * out.denseScrub.对导出同一帧, '满密度:和同一帧的差小,和第二像的那一帧差得明显更大', out.denseScrub);
+    if (!TIMING) check(out.denseScrub.对导出同一帧 < 3 && out.denseScrub.对照_第二像的那一帧 > 3 * out.denseScrub.对导出同一帧, '满密度:和同一帧的差小,和第二像的那一帧差得明显更大', out.denseScrub);
     check(rec.placeholders.length === 0, '满密度:画出来的那一刻没有占位符挂着(帧是异步到的,父页没有补发消息)', rec.placeholders.slice(0, 3));
   }
 
   /* ------------------------------------------------------------ D. 迟迟解不出来:留着上一张 → 到时占位符 → 帧到了自己换上、占位符自己撤 */
-  {
+  if (!TIMING) {
     await setBase('/slow1');
     await rpc('setStreamPlanes', []);
     await rpc('setSuppressed', []);
@@ -463,7 +482,7 @@ try {
   }
 
   /* ------------------------------------------------------------ E. 暂停着先解好;起播头一拍;流没画出来之前不藏原来的画面 */
-  {
+  if (!TIMING) {
     const f0 = 110;
     const both = ['clip-a', 'clip-b'];
     await seekTo(f0);
@@ -555,7 +574,7 @@ try {
   }
 
   /* ------------------------------------------------------------ F. 拖得快 */
-  {
+  if (!TIMING) {
     const path16 = [...Array.from({ length: 20 }, (_, i) => 41 + i * 3), ...Array.from({ length: 16 }, (_, i) => 98 - i * 3), 77, 45, 96, 52, 88, 63];
     await seekTo(41);
     const before = (await diagA()).tracks.find((t) => t.id === 'clip-b');
@@ -596,7 +615,7 @@ try {
   }
 
   /* ------------------------------------------------------------ G. 播放中暂停 */
-  {
+  if (!TIMING) {
     await rpc('setStreamPlanes', planesAt(100));
     await rpc('setSuppressed', ['clip-a', 'clip-b']);
     await rpc('setTime', 95 / FPS + 1e-4);
