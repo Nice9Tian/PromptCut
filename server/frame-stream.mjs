@@ -24,6 +24,9 @@
  *   - **组流**(`plane: 'stage'`):舞台坐标,组内各卡的包裹层外观全部画进流里(G1),
  *     由 `Stage` 渲在与包裹层同级的 `[data-pc-group-plane]` 上。
  *
+ * 单卡流除了平面的独立卡,还有两类单独成流的卡(`soloStreamKind`):源依赖卡(转场、套在视频上的素材效果卡,连同它用到的视频一起渲)
+ * 和外框用了三维变形的独立卡(流里是变形之前的画面,贴的时候包裹层照常做变形)。
+ *
  * # 分段的「变体」
  *
  * 一条流的所有分段不一定同一个矩形:稀疏那一趟用上界矩形、每个分段量一个位置矩形(这一张里不透明像素的外接框),
@@ -251,21 +254,28 @@ export function segmentInfo(seg) {
 /**
  * PNG(8 位,RGBA / 灰度 + alpha,不隔行)里 alpha > `threshold` 的像素的包围盒,坐标是图片像素;
  * 一个都没有回 null;读不懂的格式回 `{ full: true }`(调用方当「整张都算」)。
+ *
+ * 没有 alpha 通道的 PNG(真彩色、灰度,又没有 `tRNS` 透明色):整张都不透明,包围盒就是整张图。画面铺满截图矩形又不透明时
+ * (源依赖卡的流里带着视频,多半如此)Chrome 交出来的就是这种 PNG;以前把它当「读不懂」,这条流的分段就没有位置矩形,
+ * 补密时也不看画面有没有顶到收紧矩形的边。
  */
 export function pngAlphaBox(buf, threshold = 0) {
   if (!Buffer.isBuffer(buf) || buf.length < 33 || buf.readUInt32BE(0) !== 0x89504e47) return { full: true };
-  let off = 8, width = 0, height = 0, depth = 0, color = 0, interlace = 0;
+  let off = 8, width = 0, height = 0, depth = 0, color = 0, interlace = 0, keyed = false;
   const idat = [];
   while (off + 8 <= buf.length) {
     const len = buf.readUInt32BE(off);
     const type = buf.toString('latin1', off + 4, off + 8);
     const data = buf.subarray(off + 8, off + 8 + len);
     if (type === 'IHDR') { width = data.readUInt32BE(0); height = data.readUInt32BE(4); depth = data[8]; color = data[9]; interlace = data[12]; }
+    else if (type === 'tRNS') keyed = true;
     else if (type === 'IDAT') idat.push(data);
     else if (type === 'IEND') break;
     off += 12 + len;
   }
   const bpp = color === 6 ? 4 : color === 4 ? 2 : 0;
+  // 真彩色(2)、灰度(0)而且没有透明色:没有 alpha 通道,每个像素都不透明
+  if ((color === 2 || color === 0) && !keyed && width > 0 && height > 0) return { x: 0, y: 0, w: width, h: height };
   if (depth !== 8 || interlace || !bpp || !width || !height) return { full: true };
   let raw;
   try { raw = zlibInflate(Buffer.concat(idat)); } catch { return { full: true }; }
@@ -354,10 +364,9 @@ export function evenRect(r, limit) {
 const frame3d = frame => !!(frame?.rotateX || frame?.rotateY || frame?.translateZ);
 
 /**
- * 这张卡能不能进流。**只收 `independent`**:毛玻璃(`belowDependent`)要采样下层,`unknown`
- * 一律按 `belowDependent` 处理(G1「哪些卡不进流」);`sourceDependent`(转场 / 图卡接素材)的
- * 隔离工程要带齐源链,这一版保守地不进流(见报告「待用户定」),它们照 K5 贴快照。
- * 框用了三维的卡也不进:单卡流画在包裹层自己的坐标系里,框的三维摆放会被压成一张平面贴图。
+ * 这张卡是不是**平面的独立卡**(单卡流里可以和相邻的独立卡并成组流的那一种)。**只收 `independent`**:毛玻璃(`belowDependent`)
+ * 要采样下层,`unknown` 一律按 `belowDependent` 处理(G1「哪些卡不进流」)。源依赖卡(转场、接素材的素材效果卡)和框用了三维的
+ * 独立卡不在这里:它们同样产单卡流,但单独成流、不并进组流,判据在下面的 `soloStreamKind`。
  */
 export function streamEligible(control, clip, track) {
   if (!control?.clipId || !clip || !track) return false;
@@ -369,12 +378,96 @@ export function streamEligible(control, clip, track) {
   return Number.isInteger(control.count) && control.count > 0;
 }
 
+/** 项目里 `id` 是这个值的卡片节点(`project.cardNodes`;数组,旧数据里也可能是按 id 存的对象) */
+function cardNodeOf(project, nodeId) {
+  if (typeof nodeId !== 'string' || !nodeId) return null;
+  const raw = project?.cardNodes;
+  const list = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? Object.values(raw) : [];
+  return list.find(node => node?.id === nodeId) ?? null;
+}
+
+/**
+ * 这个片段是不是**接着输入的素材效果卡**(转场、套在素材上的滤镜这一类):片段挂的节点是出画面的素材效果卡节点
+ * (判据同 `src/render/cards/GraphCard.tsx` 的 `graphVisualNode`),而且它有输入(接素材、接别的片段、接另一张素材效果卡;
+ * 输入指向的片段已经删掉的也算 —— 边还记在节点上)。没有输入的素材效果卡(自己生成画面的)不算。
+ */
+export function graphCardWithInputs(project, clip) {
+  const node = cardNodeOf(project, clip?.nodeId);
+  if (!node || node.adapter !== 'card' || node.kind === 'audio') return false;
+  return !!node.inputs && typeof node.inputs === 'object' && Object.keys(node.inputs).length > 0;
+}
+
+/**
+ * 两类**单独成流**的卡(`docs/semantics/mechanism/rendering.md`「重管线:预渲染」「怎么产,按卡分」;用户 2026-10-13 定,
+ * `docs/plan/user-decisions-2026-10-13.md` 第 1 节第 7 条)。它们各产一条单卡流(`kind: 'card'`、`plane: 'local'`,和独立卡的单卡流
+ * 同一种形状、走同一套稀疏版与满密度版、分段、位置矩形、任务队列),只是不参加组流合并,浏览器也不产(见下):
+ *
+ *   - `'source'` **源依赖卡**:转场、套在视频上的素材效果卡 —— 画面取决于别的素材或别的片段。连同它用到的视频一起渲:
+ *     隔离工程里它的源片段都留着(藏起来的序列是 `sourceOnly`,不出画,素材效果卡解输入时找得到),流里就是「视频经过这张卡以后」
+ *     的画面;贴的时候这条流顶替这张卡原来的画面(套在视频上的那一种,这一段的视频本来就由这张卡画,不另画)。
+ *     判据:审阅表写了 `sourceDependent`;或者没有审阅过(`unknown`、旧的统称 `context`)而片段挂着接了输入的素材效果卡节点
+ *     (`graphCardWithInputs`)。素材效果卡的画面是宿主照它给的描述在画布上执行出来的,采样不到下面的层,所以不走「依赖下层的流」。
+ *     流键里顺着输入带着整条源链(`CardFrameCache.plan` 的 `streamMemberKey`:素材本身、素材的裁剪起点、每条输入的时间映射、
+ *     上游各张卡的参数与源码版本),页面的输入签名同样(`src/render/layerInputSig.mjs`),任一变了旧流就不再贴;
+ *   - `'spatial'` **外框用了三维变形的独立卡**:流里是变形之前的平面画面(隔离工程里框只留位置和宽高,`localClip`),
+ *     贴的时候流平面是包裹层的子元素,包裹层照常带着三维变形,所以画面跟着变形。三维那几项不进流键(它们不在流里)。
+ *
+ * 两类同时成立时算 `'source'`(框的三维照样不在流里)。别的卡回 null:平面的独立卡走 `streamEligible`,
+ * 依赖下层的、没审阅过又没接输入的走 `belowStreamEligible`。
+ *
+ * 不参加组流合并:组流按舞台坐标产,成员的外观(含三维)全画进流里,和「流里是变形之前的画面」对不上;源依赖卡多半整幅不透明,
+ * 并进组流会把夹在中间的层关系压平。它们各占一个解码器,算进预算。
+ * 浏览器不产:源依赖卡要解素材、执行素材效果卡,三维外框的卡浏览器那条取像素的路没有验过;切分不出浏览器那一份
+ * (`render-node/split.mjs` 的 `browserStreamInputOf`),在线页面本页产流也不认它们(`src/online/pageStreamPlan.ts`)。
+ */
+export function soloStreamKind(control, clip, track, project) {
+  if (!control?.clipId || !clip || !track) return null;
+  if (track.hidden || track.sourceOnly) return null;
+  if (!clip.cardId) return null;
+  if (!(Number.isInteger(control.count) && control.count > 0)) return null;
+  const compositing = control.capabilities?.compositing ?? control.compositing;
+  if (compositing === 'sourceDependent') return 'source';
+  if (compositing === 'independent') return frame3d(clip.frame) ? 'spatial' : null;
+  if (compositing === 'belowDependent') return null;
+  return graphCardWithInputs(project, clip) ? 'source' : null;
+}
+
+/**
+ * 源依赖卡的流要不要从挂载帧回放:这张卡自己是 motion 式的要(`streamNeedsReplay`);它的输入链上还有别的素材效果卡时也要 ——
+ * 上游那几张卡的写法这里拿不到(卡片计划里只有输出节点的能力),保守地当它们带着历史。只接素材的不用:素材按时间直接取帧。
+ */
+function sourceNeedsReplay(project, clip, control) {
+  if (streamNeedsReplay([control])) return true;
+  const top = cardNodeOf(project, clip?.nodeId);
+  if (!top) return false;
+  const seen = new Set([top.id]);
+  const queue = [top];
+  while (queue.length) {
+    const node = queue.shift();
+    for (const ref of Object.values(node?.inputs ?? {})) {
+      const id = typeof ref === 'string' ? ref : ref?.nodeId;
+      if (typeof id !== 'string' || !id || seen.has(id)) continue;
+      seen.add(id);
+      // 片段的素材本身(`@clip/<id>/source`):按时间取帧,没有历史。片段不是素材段时这个节点是它那张卡,但素材效果卡不接 DOM 卡
+      if (/^@clip\/.+\/source$/.test(id)) continue;
+      const upstream = cardNodeOf(project, id);
+      if (upstream?.adapter === 'media') continue;
+      if (!upstream || upstream.adapter === 'card') return true;
+      queue.push(upstream);
+    }
+  }
+  return false;
+}
+
 /**
  * 「依赖下层的流」收哪些卡(契约第 5.1 节)之外,另外两类卡进不进。现在都不进;以后要并进这条路,把对应的一项改成 true 就行
- * (`docs/plan/html-snapshot-removal-dryrun.md` 第 0 节第 7 条,用户在定):
+ * (`docs/plan/html-snapshot-removal-dryrun.md` 第 0 节第 7 条):
  *   - `sourceDependent`:源依赖卡(转场、接素材的素材效果卡)。隔离工程里它的源片段都留着(藏起来的序列仍是 `sourceOnly`),
  *     键里目标卡的缓存内容键已经顺着输入带上了整条源链;
  *   - `frame3d`:框用了三维的卡(含独立卡 —— 它进不了单卡流)。这种流按舞台坐标产,三维摆放照原样画进去。
+ * 用户 2026-10-13 定了这两类的做法:源依赖卡和三维外框的独立卡各自单独成流(上面的 `soloStreamKind`),不走这条路,
+ * `planStreams` 先把它们挑走。还剩一种没有流:**依赖下层(或没审阅过、又没接输入)而外框又用了三维的卡** —— 它的画面取决于
+ * 它在屏幕上盖住了什么,产不出「变形之前的画面」;要给它流只能把 `frame3d` 打开(流里是带着三维的舞台坐标画面),见报告。
  */
 export const BELOW_STREAM_RULES = Object.freeze({ sourceDependent: false, frame3d: false });
 
@@ -519,6 +612,9 @@ export function streamNeedsReplay(controls) {
  * `streamKey = resultKeyOf(contentKey, envFingerprint)` 是落盘和路由用的结果键。同一个项目在两种
  * 环境下 `contentKey` 相同、`streamKey` 不同。没有指纹就不产流(回 `[]`),理由同 `CardFrameCache.plan()`。
  *
+ * 单独成流的两类卡(`soloStreamKind`:源依赖卡、框用了三维的独立卡)各出一条 `kind: 'card'`、`plane: 'local'` 的单卡流,另带
+ * `solo: 'source' | 'spatial'`,排在单卡流和组流后面;它们不参加组流合并,但占解码器预算。项目里没有这两类卡时结果与原来逐项相同。
+ *
  * `below`(缺省取 `belowStreamsEnabled()`,**缺省开**):预渲染集合里依赖下层、`context`、未知的重卡各出一条
  * `kind: 'below'` 的流(`belowStreamSpec`),排在单卡流和组流后面;它们不参加组流合并,但占解码器预算。
  * 传 `false` 时结果与没有这种流时逐项相同。
@@ -536,22 +632,42 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
   const layers = paintLayers(project, fps);
   const orderOf = new Map(layers.map(l => [l.clipId, l.order]));
   const singles = [];
+  // 单独成流的两类卡(`soloStreamKind`:源依赖卡、框用了三维的独立卡):各一条单卡流,不参加组流合并,但各占一个解码器
+  const solos = [];
+  const soloSeen = new Set();
   for (const control of plan) {
     if (!picked(control.clipId)) continue;
     const at = where.get(control.clipId);
-    if (!at || !streamEligible(control, at.clip, at.track)) continue;
+    if (!at) continue;
+    const flat = streamEligible(control, at.clip, at.track);
+    const solo = flat ? null : soloStreamKind(control, at.clip, at.track, project);
+    if (!flat && !solo) continue;
+    if (solo && soloSeen.has(control.clipId)) continue;
     const firstFrame = control.sampling?.firstFrame ?? Math.ceil(at.clip.start * fps - 1e-9);
     const lastFrame = Math.min(total - 1, firstFrame + control.count - 1);
     if (lastFrame < firstFrame) continue;
     const mountFrame = mountFrameOf(at.clip, fps);
-    singles.push({ control, clip: at.clip, clipIds: [control.clipId], order: orderOf.get(control.clipId) ?? 0, from: Math.min(mountFrame, firstFrame), to: lastFrame });
+    const item = { control, clip: at.clip, clipIds: [control.clipId], order: orderOf.get(control.clipId) ?? 0, from: Math.min(mountFrame, firstFrame), to: lastFrame };
+    if (solo) { soloSeen.add(control.clipId); solos.push({ ...item, solo }); } else singles.push(item);
   }
   singles.sort((a, b) => a.order - b.order);
+  solos.sort((a, b) => a.order - b.order);
   const byClip = new Map(singles.map(s => [s.clipIds[0], s]));
-  // 依赖下层的流的目标卡(`below: false` 时是空的):不参加组流合并,但各占一个解码器
-  const belows = below ? belowTargets(plan, { picked, where, fps, total, orderOf }) : [];
-  const grouped = groupStreams(singles, layers, budget, belows);
+  // 依赖下层的流的目标卡(`below: false` 时是空的):不参加组流合并,但各占一个解码器。已经单独成流的卡不再出这种流
+  const belows = below ? belowTargets(plan, { picked, where, fps, total, orderOf, taken: soloSeen }) : [];
+  const fixed = solos.length ? [...solos, ...belows] : belows;
+  const grouped = groupStreams(singles, layers, budget, fixed);
   const specs = [];
+  /** 一张卡的单卡流(包裹层自己的坐标系;外观不在流里):平面的独立卡,和单独成流的两类卡,都是这一种 */
+  const cardSpec = (m, base) => {
+    const placement = localPlacement(m.clip, stage);
+    // 成员键取不带生成快照的代码指纹的那一份内容键(`streamMemberKey`:改生成快照的代码不该让流跟着作废);
+    // `??` 后面的回退只为没有这个字段的旧形状输入(照旧内容键,再照旧 `snapshotKey || key`)
+    const contentKey = cardStreamIdentity({ kind: 'card', fps, stage, codeVersion,
+      members: [{ key: m.control.streamMemberKey ?? m.control.contentKey ?? (m.control.snapshotKey || m.control.key), sampling: m.control.sampling, count: m.control.count }] });
+    const streamKey = resultKeyOf(contentKey, envFingerprint);
+    return { ...base, streamKey, contentKey, envFingerprint, kind: 'card', plane: 'local', offset: placement.offset, bound: placement.bound, box: placement.box, members: [m.control] };
+  };
   for (const g of grouped) {
     const members = g.clipIds.map(id => byClip.get(id));
     const first = Math.min(...members.map(m => m.from));
@@ -565,14 +681,7 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       replay: streamNeedsReplay(members.map(m => m.control)),
     };
     if (members.length === 1) {
-      const m = members[0];
-      const placement = localPlacement(m.clip, stage);
-      // 成员键取不带生成快照的代码指纹的那一份内容键(`streamMemberKey`:改生成快照的代码不该让流跟着作废);
-      // `??` 后面的回退只为没有这个字段的旧形状输入(照旧内容键,再照旧 `snapshotKey || key`)
-      const contentKey = cardStreamIdentity({ kind: 'card', fps, stage, codeVersion,
-        members: [{ key: m.control.streamMemberKey ?? m.control.contentKey ?? (m.control.snapshotKey || m.control.key), sampling: m.control.sampling, count: m.control.count }] });
-      const streamKey = resultKeyOf(contentKey, envFingerprint);
-      specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'card', plane: 'local', offset: placement.offset, bound: placement.bound, box: placement.box, members: [m.control] });
+      specs.push(cardSpec(members[0], base));
     } else {
       const view = { x: 0, y: 0, w: stage.width, h: stage.height };
       const contentKey = cardStreamIdentity({ kind: 'group', fps, stage, codeVersion,
@@ -580,6 +689,17 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       const streamKey = resultKeyOf(contentKey, envFingerprint);
       specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'group', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view), members: members.map(m => m.control) });
     }
+  }
+  // 单独成流的两类卡:形状同单卡流,另带 `solo`(哪一类;切分据此不出浏览器那一份)。源依赖卡的回放另看它的输入链
+  for (const m of solos) {
+    const firstVisible = m.control.sampling?.firstFrame ?? m.from;
+    specs.push({ ...cardSpec(m, {
+      clipIds: [...m.clipIds], topClipId: m.clipIds[0], mountFrame: m.from,
+      firstFrame: firstVisible, lastFrame: m.to,
+      ...streamSegmentSpan(firstVisible, m.to),
+      fps, stage, total,
+      replay: m.solo === 'source' ? sourceNeedsReplay(project, m.clip, m.control) : streamNeedsReplay([m.control]),
+    }), solo: m.solo });
   }
   if (belows.length) specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion, envFingerprint }));
   return relockStreams(specs, entry?.streamLocks);
@@ -615,6 +735,8 @@ export function queueStreamOf(spec) {
     firstFrame: spec.firstFrame, lastFrame: spec.lastFrame, total: spec.total,
     // 依赖下层的流另带算进键里的下层(切分据此知道这条流要整场景的下层和素材);别的流不带这一项,形状与原来相同
     ...(spec.kind === 'below' ? { belowClipIds: [...(spec.belowClipIds ?? [])] } : {}),
+    // 单独成流的两类卡(`soloStreamKind`)带上是哪一类:切分据此不出浏览器那一份
+    ...(spec.solo ? { solo: spec.solo } : {}),
   };
 }
 
@@ -679,11 +801,11 @@ function localClip(clip, spec) {
  * ======================================================================== */
 
 /** 这一版里要出「依赖下层的流」的目标卡,按画家顺序。每项带它占解码器的那一段 `from..to`(同单卡流的算法) */
-function belowTargets(plan, { picked, where, fps, total, orderOf }) {
+function belowTargets(plan, { picked, where, fps, total, orderOf, taken = null }) {
   const out = [];
   const seen = new Set();
   for (const control of plan) {
-    if (!control?.clipId || seen.has(control.clipId) || !picked(control.clipId)) continue;
+    if (!control?.clipId || seen.has(control.clipId) || taken?.has(control.clipId) || !picked(control.clipId)) continue;
     const at = where.get(control.clipId);
     if (!at || !belowStreamEligible(control, at.clip, at.track)) continue;
     const firstFrame = control.sampling?.firstFrame ?? Math.ceil(at.clip.start * fps - 1e-9);
@@ -973,6 +1095,7 @@ export class StreamProducer {
       stats: { ...this.stats, aliveEncoders: this.aliveEncoders },
       streams: [...this.streams.values()].map(state => ({
         streamKey: state.spec.streamKey, contentKey: state.spec.contentKey, kind: state.spec.kind, clipIds: state.spec.clipIds,
+        ...(state.spec.solo ? { solo: state.spec.solo } : {}),
         originFrame: state.spec.originFrame ?? null, firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
         bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
         replay: state.spec.replay !== false, replayedFrames: state.replayedFrames ?? 0,

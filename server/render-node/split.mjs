@@ -326,9 +326,13 @@ const isNum = Number.isFinite;
  * 否则回 null(组流、旧调用方只给了流键与分段范围的流,都不出浏览器那一份)。`count` 取成员卡的帧数:本地帧 0 .. count-1 之外的帧是全透明。
  * `originFrame` / `lastFrame`:这条流自己的第一帧和最后一帧(项目帧号)。页面按它们把分段号换成帧(`streamSegments.mjs`),不自己算;
  * 流的计划没给这两项(改分段规则之前的调用方)就不出浏览器那一份。
+ * 流标了 `solo`(源依赖卡的流:要解素材、执行素材效果卡;框用了三维的独立卡的流:浏览器那条取像素的路没有验过)也不出:
+ * 这两类只由桌面应用和渲染主机产,浏览器节点收不到这种任务(切分方自己的那一份要本机转码,`filter.mjs` 规则 2 本来就挡着)。
  */
 function browserStreamInputOf(stream, control) {
   if (stream?.kind !== 'card' || stream.plane !== 'local') return null;
+  // 单独成流的两类卡(`frame-stream.mjs` 的 `soloStreamKind`:源依赖卡、框用了三维的独立卡)只出切分方自己的那一份
+  if (stream.solo) return null;
   const ids = stream.clipIds;
   if (!Array.isArray(ids) || ids.length !== 1 || ids[0] !== stream.topClipId || control?.clipId !== ids[0]) return null;
   const { bound, offset } = stream;
