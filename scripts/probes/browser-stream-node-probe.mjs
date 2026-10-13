@@ -21,7 +21,7 @@
  *   D 桌面采纳 桌面预渲染进程把这条流拉了回去:诊断口的流表里有这个键、任务范围里的分段都在;它的流库里的字节与素材服务上的逐字节相同;
  *              `applyErrors` 为 0
  *   E 画面     把浏览器产的流与参照流都解出来逐帧比:色半区(预乘色)与透明度半区的平均差都 < 1(满分 255,`render-standard.md` 实测的量级);
- *              卡的范围之外的帧两边都是全透明;对照:同一条浏览器流的每一帧去比参照流里**隔得最远的那一帧**,内容区的差要明显更大(≥ 3 倍)
+ *              流从这张卡自己的第一帧(第 12 帧)起分段,里面没有卡的范围之外的帧;对照:同一条浏览器流的每一帧去比参照流里**隔得最远的那一帧**,内容区的差要明显更大(≥ 3 倍)
  *   F 快照回归 同一张卡的快照任务照旧由页面认领并完成(`snapshot-manifest` 两档齐)
  *   G 让路     产流途中开始播放:当前帧做完放回恰好一次(`yield-play`)、播放期间不认领不产帧、停下后恢复并做完,已推完的分段不重做,不计失败
  *   H 中止     产流途中页面隐藏:不等当前帧、立即放回(`yield-hidden`);回到前台后恢复并做完,不计失败
@@ -64,9 +64,14 @@ const deadline = Date.now() + 40 * 60_000;
 // 探针起的 Node 子进程(桌面编辑器与它的预渲染进程)继承它,也能解析 pc.localhost
 process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 
-/** 探针项目:1280×720、30 fps、8 秒。卡从第 12 帧起(不在分段边界上),占 48 帧(全局 12～59,分段 0～3,头一个分段前 12 帧在卡之外) */
+/** 探针项目:1280×720、30 fps、8 秒。卡从第 12 帧起(不是 15 的倍数),占 48 帧(项目的第 12～59 帧) */
 const PROJECT = { width: 1280, height: 720, fps: 30, duration: 8 };
+/** 流从这张卡自己的第一帧(第 12 帧)起分段:0～3,前三段各 15 帧,第 3 段只有 3 帧(第 57～59 帧);没有垫在前面的透明帧 */
 const CLIP = { start: 0.4, duration: 1.6 };
+const ORIGIN_FRAME = 12;
+const STREAM_FRAMES = 48;
+/** 第 n 段该有几个样本 */
+const samplesOf = (n) => Math.max(0, Math.min(15, STREAM_FRAMES - n * 15));
 const SEG = 15;
 
 const fails = [];
@@ -313,7 +318,7 @@ try {
   out.steps.claimed = [...seen];
   check(diag?.counters?.streamTasks >= 1 && diag?.counters?.failed === 0, 'A:页面认领并完成了流任务,没有失败', diag?.counters);
   check(streamIds.length >= 1 || (diag?.streams?.tasks ?? 0) >= 1, 'A:页面手里出现过 stream: 任务', [...seen]);
-  check((diag?.streams?.frames ?? 0) === 60 && diag?.streams?.blank === 12, 'A:送进编码器 60 帧(分段 0～3),其中卡之外的 12 帧送的是全透明', diag?.streams);
+  check((diag?.streams?.frames ?? 0) === STREAM_FRAMES && diag?.streams?.blank === 0, 'A:送进编码器 48 帧(分段 0～3,从卡自己的第一帧起),没有卡之外的全透明帧', diag?.streams);
   check(diag?.streams?.segments === 4 && diag?.streams?.inits === 1, 'A:推了 4 个分段、1 个开头文件', diag?.streams);
   const deskQ = await editor.queue().catch(() => null);
   out.steps.desk = deskQ && { stats: deskQ.stats };
@@ -344,7 +349,7 @@ try {
   const m0 = idOf ? /^stream:([a-f0-9]{64}):(\d+)-(\d+)$/.exec(idOf) : null;
   const resultKey = m0?.[1] ?? null;
   const range = m0 ? { from: Number(m0[2]), to: Number(m0[3]) } : null;
-  check(range && range.from === 0 && range.to === 3, 'B:流任务的范围是分段 0～3(卡占全局帧 12～59)', { idOf });
+  check(range && range.from === 0 && range.to === 3, 'B:流任务的范围是分段 0～3(卡占项目的第 12～59 帧,分段从第 12 帧起数)', { idOf });
   const item = resultKey ? await content.get('render-manifest', `${resultKey}:${range.from}-${range.to}`).catch((e) => ({ error: String(e?.message ?? e) })) : null;
   const manifest = item?.body ?? null;
   check(manifest && manifestMatches(manifest, { kind: 'stream', resultKey, range }), 'B:内容库里有这一段的流清单(render-manifest,过桌面的 manifestMatches)', { key: resultKey?.slice(0, 12), item: item?.error ?? (manifest ? Object.keys(manifest) : null) });
@@ -358,7 +363,7 @@ try {
   check(initIds.every((id) => manifest.inits[id].encoder === 'webcodecs-avc' && manifest.inits[id].hash.slice(0, 16) === id && JSON.stringify(manifest.inits[id].rect) === JSON.stringify(bound)
     && manifest.inits[id].width === PROJECT.width && manifest.inits[id].height === 2 * PROJECT.height + 16 && manifest.inits[id].timescale === 30),
   'B:开头文件的登记(编码器 webcodecs-avc、键 = 哈希前 16 位、矩形 = bound、拼合后的宽高、时间刻度)', manifest?.inits);
-  check(segNums.every((n) => { const s = manifest.segments[n]; return s.stride === 1 && s.samples === SEG && s.sig === null && s.encoder === 'webcodecs-avc' && initIds.includes(s.init); }),
+  check(segNums.every((n) => { const s = manifest.segments[n]; return s.stride === 1 && s.samples === samplesOf(n) && s.sig === null && s.encoder === 'webcodecs-avc' && initIds.includes(s.init); }),
     'B:每个分段满密度(stride 1)、15 个样本、编码器 webcodecs-avc', manifest?.segments);
 
   // 参照管线:取任务那一版的项目,算计划、按清单里的这张卡算流、整段产出来
@@ -390,8 +395,8 @@ try {
   const { entry } = await refPipeline.planForQueue(renderProject(project));
   const spec = refPipeline.listStreamSpecs(entry, [clipId]).find((s) => s.topClipId === clipId) ?? null;
   if (!check(spec && spec.kind === 'card', '参照:这张卡有一条单卡流', spec && { kind: spec.kind, first: spec.firstSegment, last: spec.lastSegment })) throw new Error('参照管线没有这条流');
-  check(spec.firstSegment === 0 && spec.lastSegment === 3 && spec.firstFrame === 12 && JSON.stringify(spec.bound) === JSON.stringify(bound), '参照:流的范围与矩形和浏览器任务里的相同',
-    { first: spec.firstSegment, last: spec.lastSegment, firstFrame: spec.firstFrame, bound: spec.bound });
+  check(spec.originFrame === ORIGIN_FRAME && spec.firstSegment === 0 && spec.lastSegment === 3 && spec.firstFrame === 12 && spec.lastFrame === 59 && JSON.stringify(spec.bound) === JSON.stringify(bound),
+    '参照:流的第一帧、范围与矩形和浏览器任务里的相同', { originFrame: spec.originFrame, first: spec.firstSegment, last: spec.lastSegment, firstFrame: spec.firstFrame, lastFrame: spec.lastFrame, bound: spec.bound });
   check(browserFp && resultKeyOf(spec.contentKey, browserFp) === resultKey, 'B:结果键 = 流的内容键 × 浏览器指纹(内容键取参照管线算的:同一张卡、同一份内容)',
     { resultKey: resultKey?.slice(0, 12), expect: browserFp ? resultKeyOf(spec.contentKey, browserFp).slice(0, 12) : null });
   check(resultKey !== resultKeyOf(spec.contentKey, DESK_FP), 'B:它不是桌面指纹的键(两种环境的结果不混)');
@@ -427,7 +432,7 @@ try {
   const info = initInfo(initBytes);
   check(info.codec === manifest.inits[initIds[0]].codec && info.width === PROJECT.width && info.height === 2 * PROJECT.height + 16 && info.timescale === 30, 'C:服务端读得出开头文件(编码串、宽高、时间刻度与清单一致)', info);
   const segInfos = segNums.map((n) => segmentInfo(got.get(manifest.segments[n].hash)));
-  check(segInfos.every((s) => s.moofs === 1 && s.sampleCount === SEG && s.firstSampleIsSync === true), 'C:每个分段一个 moof、15 个样本、段首是关键帧', segInfos);
+  check(segInfos.every((s, i) => s.moofs === 1 && s.sampleCount === samplesOf(segNums[i]) && s.firstSampleIsSync === true), 'C:每个分段一个 moof、样本数 = 这一段盖住的帧数(15、15、15、3)、段首是关键帧', segInfos);
   out.steps.blocks = { bytes: blocks.reduce((s, b) => s + b.bytes, 0), codec: info.codec, each: blocks.map((b) => [b.what, b.bytes]) };
 
   const deskStream = await until('桌面预渲染进程把这条流拉回去(诊断口的流表里有这个键)', async () => {
@@ -473,16 +478,17 @@ try {
     crops.b.push(cropWindow(rb.value, W, H, WIN));
   }
   out.timings.compareMs = Date.now() - tCmp;
-  check(matched.length === 60, 'E:解出 60 帧(4 个分段)', { frames: matched.length });
-  const inCard = matched.filter((m) => m.frame >= 12 && m.frame <= 59), outside = matched.filter((m) => m.frame < 12);
+  check(matched.length === STREAM_FRAMES, 'E:解出 48 帧(4 个分段:15 + 15 + 15 + 3)', { frames: matched.length });
+  // 解出来的第 f 帧是项目的第 12 + f 帧(分段从这条流自己的第一帧起数):48 帧都在卡的范围里,没有垫在前面的透明帧
+  const inCard = matched;
   const colorMax = Math.max(...matched.map((m) => m.color)), alphaMax = Math.max(...matched.map((m) => m.alpha));
   check(colorMax < 1 && alphaMax < 1, 'E:每一帧的色半区、透明度半区平均差都 < 1(满分 255)', { colorMax: round(colorMax), alphaMax: round(alphaMax) });
-  check(outside.length === 12 && outside.every((m) => m.maxAlphaA <= 2 && m.maxAlphaB <= 2 && m.content === 0), 'E:卡的范围之外的 12 帧(全局 0～11)两边都是全透明', outside.map((m) => [m.frame, m.maxAlphaA, m.maxAlphaB]));
-  check(inCard.length === 48 && inCard.every((m) => m.maxAlphaA >= 250 && m.maxAlphaB >= 250 && m.content > 50_000), 'E:卡范围里的 48 帧两边都画着橙块(不透明区域 > 5 万像素)', inCard.slice(0, 3).map((m) => [m.frame, m.maxAlphaA, m.maxAlphaB, m.content]));
+  check(inCard.length === STREAM_FRAMES && inCard.every((m) => m.maxAlphaA >= 250 && m.maxAlphaB >= 250 && m.content > 50_000), 'E:流里的 48 帧(项目的第 12～59 帧)两边都画着橙块(不透明区域 > 5 万像素),没有卡的范围之外的透明帧',
+    inCard.filter((m) => !(m.maxAlphaA >= 250 && m.maxAlphaB >= 250 && m.content > 50_000)).slice(0, 3).map((m) => [m.frame, m.maxAlphaA, m.maxAlphaB, m.content]));
   // 对照:浏览器流的第 f 帧去比参照流里隔得最远的那一帧(橙块每帧右移 1/3 px,隔 24 帧以上差 8 px 以上)
-  const farOf = (f) => (f - 12 < 24 ? f + 24 : f - 24);
+  const farOf = (f) => (f < 24 ? f + 24 : f - 24);
   const own = [], far = [];
-  for (let f = 12; f <= 59; f++) {
+  for (let f = 0; f < STREAM_FRAMES; f++) {
     const a = windowDiff(crops.a[f], crops.b[f]), b = windowDiff(crops.a[f], crops.b[farOf(f)]);
     own.push(a.color + a.alpha);
     far.push(b.color + b.alpha);
@@ -497,9 +503,9 @@ try {
     content: { pixels: stat(inCard.map((m) => m.content)), color: stat(inCard.map((m) => m.contentColor)), alpha: stat(inCard.map((m) => m.contentAlpha)) },
     control: { sameFrame: round(ownMean), farFrame: round(farMean), ratio: round(farMean / Math.max(ownMean, 1e-6), 1), minRatio: round(Math.min(...ratios), 2) },
   };
-  // 看图:两条流各取全局第 14 帧(卡的第 3 帧,分段 0 的最后一帧)与第 58 帧(分段 3 里),存成 PNG(上半色、下半透明度)
+  // 看图:两条流各取项目的第 14 帧(卡的第 3 帧,分段 0 里)与第 58 帧(分段 3 里),存成 PNG(上半色、下半透明度)
   for (const [name, files] of [['browser', browserFiles], ['desktop', refFiles]]) for (const g of [14, 58]) {
-    try { execFileSync(ffmpegPath, ['-y', '-hide_banner', '-loglevel', 'error', '-i', files[Math.floor(g / SEG)], '-vf', 'select=eq(n' + '\\' + ',' + (g % SEG) + ')', '-frames:v', '1', path.join(OUT, name + '-frame-' + g + '.png')], { windowsHide: true }); } catch { /* 看图用,出不来不影响结论 */ }
+    try { execFileSync(ffmpegPath, ['-y', '-hide_banner', '-loglevel', 'error', '-i', files[Math.floor((g - ORIGIN_FRAME) / SEG)], '-vf', 'select=eq(n' + '\\' + ',' + ((g - ORIGIN_FRAME) % SEG) + ')', '-frames:v', '1', path.join(OUT, name + '-frame-' + g + '.png')], { windowsHide: true }); } catch { /* 看图用,出不来不影响结论 */ }
   }
 
   /* ---------------------------------------------------------------- 7. 快照回归:同一张卡的快照任务照旧完成 */
@@ -515,7 +521,7 @@ try {
   /* ---------------------------------------------------------------- 8. 让路:产流途中开始播放 */
   if (!NO_YIELD) {
     const before0 = await nodeDiag(page);
-    const clip2 = await addClip(2.0, 4.0, 'yield', 0);   // 全局帧 60～179:分段 4～11,一个流任务 8 段 120 帧
+    const clip2 = await addClip(2.0, 4.0, 'yield', 0);   // 项目的第 60～179 帧:这条流自己的分段 0～7,一个流任务 8 段 120 帧
     const baking = await until('第二张卡的流任务做到一半(至少推完一个分段、又做了几帧)', async () => {
       const d = await nodeDiag(page);
       const h = streamHold(d);
@@ -540,13 +546,13 @@ try {
     check(during && released && during.counters.claims === released.counters.claims && during.streams.frames === released.streams.frames, 'G:播放期间不认领、不产帧', out.steps.yield.during);
     check(after && after.counters.failed === 0, 'G:停下后恢复并做完,不计失败', after?.counters);
     check(after && after.streams.resumedSegments >= 1, 'G:重新认领同一段只补缺的分段(已推完的不重做)', out.steps.yield.after);
-    // 两张卡一共 60 + 120 帧;让路时没满的那一段(至多 14 帧)要重做,已推完的分段不重做
-    check(after && after.streams.frames >= 180 && after.streams.frames <= 180 + 14, 'G:送进编码器的总帧数 = 180 + 让路时丢掉的那不满一段(≤ 14)', { frames: after?.streams?.frames });
+    // 两张卡一共 48 + 120 帧(每条流只含它自己的帧);让路时没满的那一段(至多 14 帧)要重做,已推完的分段不重做
+    check(after && after.streams.frames >= 168 && after.streams.frames <= 168 + 14, 'G:送进编码器的总帧数 = 168 + 让路时丢掉的那不满一段(≤ 14)', { frames: after?.streams?.frames });
     check(after && after.streams.segments === 12, 'G:两张卡一共推了 12 个分段,一个不多', { segments: after?.streams?.segments });
 
     /* -------------------------------------------------------------- 9. 中止:产流途中页面隐藏 */
     const before1 = after ?? (await nodeDiag(page));
-    const clip3 = await addClip(6.0, 2.0, 'hide', 0);   // 全局帧 180～239:分段 12～15,60 帧
+    const clip3 = await addClip(6.0, 2.0, 'hide', 0);   // 项目的第 180～239 帧:这条流自己的分段 0～3,60 帧
     const baking3 = await until('第三张卡的流任务在做', async () => {
       const d = await nodeDiag(page);
       const h = streamHold(d);

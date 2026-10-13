@@ -1,4 +1,5 @@
 /** 违规样例（测试夹具，不进卡片库）：Motion 的动画与弹簧。建卡时应当被拒绝并指出行号。 */
+import "../../kernel/remotionStyle";
 import { motion, useSpring } from "motion/react";
 import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string }

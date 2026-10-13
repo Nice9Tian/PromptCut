@@ -71,6 +71,7 @@
  *
  * 本模块属于 render 这一层(`src/online/`):不引 editor,不引 `mode.ts`。
  */
+import { isStreamOrigin, STREAM_SEGMENT_FRAMES as SEGMENT_FRAMES_SHARED, streamSegmentFirstFrame, streamSegmentLastFrame } from "../render/streamSegments.mjs";
 // @ts-expect-error 无类型声明的 .mjs(浏览器与 Node 通用,纯逻辑)
 import { createNodeSession as createNodeSessionUntyped } from "../../server/render-node/session.mjs";
 // @ts-expect-error 无类型声明的 .mjs(纯函数)
@@ -123,8 +124,8 @@ export function browserNodeEligibility(input: EligibilityInput): { ok: boolean; 
 
 /* ------------------------------------------------------------------ 流任务的纯函数 */
 
-/** 轨道流每段的帧数(同 `streamPlayer.ts` 的 `SEGMENT_FRAMES`、`server/frame-stream.mjs` 的同名常量) */
-export const STREAM_SEGMENT_FRAMES = 15;
+/** 轨道流每段的帧数:数和换算都在 `render/streamSegments.mjs`(产流、读流共用),这里照旧的名字再导出一次 */
+export const STREAM_SEGMENT_FRAMES = SEGMENT_FRAMES_SHARED;
 /** 浏览器压的流在清单里写的编码器名(桌面那边是 ffmpeg 的编码器名,如 `libx264`):看得出是浏览器用自带的编码器压的 */
 export const BROWSER_STREAM_ENCODER = "webcodecs-avc";
 /** 清单的版本与体积上限(同 `server/artifact-transfer.mjs` 的 `RESULT_VERSION`、`RESULT_MAX_BYTES`) */
@@ -146,8 +147,12 @@ export interface StreamTaskInput {
   firstFrame: number;
   /** 卡的帧数:本地帧 0 .. count-1 之外是全透明 */
   count: number;
-  /** 项目的总帧数(最后一个分段可能不满) */
+  /** 项目的总帧数(原来用它截最后一个分段;现在分段截到 `lastFrame`,这一项只照旧带着) */
   total: number;
+  /** 这条流自己的第一帧(项目帧号):分段从它起每 15 帧一段。单卡流的它就是 `firstFrame` */
+  originFrame: number;
+  /** 这条流自己的最后一帧(项目帧号):最后一个分段到它为止,可以不满 15 帧 */
+  lastFrame: number;
 }
 
 const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
@@ -162,22 +167,25 @@ export function streamInputOf(task: { input?: Record<string, unknown> } | null |
   const b = s.bound, o = s.offset;
   const fps = Number(s.fps);
   if (!(fps > 0) || !Number.isFinite(fps) || !isInt(s.firstFrame) || !isInt(s.count) || s.count < 1 || !isInt(s.total) || s.total < 1) return null;
+  // 分段从这条流自己的第一帧起数:任务没带这一帧的(改分段规则之前的切分方出的)不做,不拿项目的第 0 帧去猜
+  if (!isStreamOrigin(s.originFrame) || !isInt(s.lastFrame) || s.lastFrame < s.originFrame) return null;
   if (!b || !isInt(b.x) || !isInt(b.y) || !isInt(b.w) || !isInt(b.h) || b.w < 2 || b.h < 2 || b.w % 2 || b.h % 2) return null;
   if (!o || !Number.isFinite(o.x) || !Number.isFinite(o.y)) return null;
   return { kind: "card", plane: "local", clipIds: [ids[0]], fps, bound: { x: b.x, y: b.y, w: b.w, h: b.h }, offset: { x: o.x, y: o.y },
-    firstFrame: s.firstFrame, count: s.count, total: s.total };
+    firstFrame: s.firstFrame, count: s.count, total: s.total, originFrame: s.originFrame, lastFrame: s.lastFrame };
 }
 
 export interface StreamSegmentPlan {
-  /** 分段号:这一段的第一帧是全局第 `index × 15` 帧 */
+  /** 分段号:这一段的第一帧是项目的第 `originFrame + index × 15` 帧 */
   index: number;
   /** 这一段每一帧要的本地帧号;`null` = 这一帧不在卡的范围里,送全透明 */
   frames: (number | null)[];
 }
 
 /**
- * 一段流任务要做哪些帧(第四处「帧号怎么换算」):任务范围里每个分段 15 帧(全局帧 `n×15` 起,最后一段到项目末帧为止),
- * 全局帧号减去 `firstFrame` 得卡的本地帧;落在 0 .. count-1 之外的帧不在卡的范围里,送全透明。
+ * 一段流任务要做哪些帧(第四处「帧号怎么换算」):任务范围里每个分段 15 帧(从这条流的第一帧 `originFrame` 起数,最后一段到这条流的
+ * 最后一帧 `lastFrame` 为止;换算用 `render/streamSegments.mjs`,与切分方、播放器同一份),
+ * 项目帧号减去 `firstFrame` 得卡的本地帧;落在 0 .. count-1 之外的帧不在卡的范围里,送全透明。
  * 任务不是浏览器形状的流任务回 null。`frames` 是这一段任务的总帧数。
  */
 export function streamTaskFrames(task: { range?: { from: number; to: number } | null; input?: Record<string, unknown> } | null | undefined): { input: StreamTaskInput; segments: StreamSegmentPlan[]; frames: number } | null {
@@ -187,14 +195,14 @@ export function streamTaskFrames(task: { range?: { from: number; to: number } | 
   const segments: StreamSegmentPlan[] = [];
   let frames = 0;
   for (let n = range.from; n <= range.to; n++) {
-    const first = n * STREAM_SEGMENT_FRAMES;
-    const last = Math.min(first + STREAM_SEGMENT_FRAMES - 1, input.total - 1);
+    const first = streamSegmentFirstFrame(n, input.originFrame);
+    const last = streamSegmentLastFrame(n, input.originFrame, input.lastFrame);
     const list: (number | null)[] = [];
     for (let g = first; g <= last; g++) {
       const local = g - input.firstFrame;
       list.push(local >= 0 && local < input.count ? local : null);
     }
-    // 整段都在项目末帧之后:这样的分段不该出现在任务里(切分按流的末段切),出现了就是任务对不上,不做
+    // 整段都在这条流的最后一帧之后:这样的分段不该出现在任务里(切分按流的末段切),出现了就是任务对不上,不做
     if (!list.length) return null;
     segments.push({ index: n, frames: list });
     frames += list.length;
@@ -212,7 +220,7 @@ export interface StreamManifestOut {
   kind: "stream";
   resultKey: string;
   range: { from: number; to: number };
-  header: { kind: "card"; plane: "local"; clipIds: string[]; fps: number; bound: StreamRectLike; offset: { x: number; y: number }; tight: null };
+  header: { kind: "card"; plane: "local"; clipIds: string[]; fps: number; originFrame: number; bound: StreamRectLike; offset: { x: number; y: number }; tight: null };
   inits: Record<string, StreamInitMeta>;
   segments: Record<string, StreamSegmentMeta>;
 }
@@ -242,7 +250,7 @@ export function streamManifest(
   }
   const out: StreamManifestOut = {
     v: STREAM_RESULT_VERSION, kind: "stream", resultKey: task.resultKey, range: { from, to },
-    header: { kind: "card", plane: "local", clipIds: [...input.clipIds], fps: input.fps, bound: { ...input.bound }, offset: { ...input.offset }, tight: null },
+    header: { kind: "card", plane: "local", clipIds: [...input.clipIds], fps: input.fps, originFrame: input.originFrame, bound: { ...input.bound }, offset: { ...input.offset }, tight: null },
     inits, segments,
   };
   const bytes = new TextEncoder().encode(JSON.stringify(out)).length;
@@ -255,7 +263,7 @@ export function streamManifestCovers(body: unknown, task: { resultKey: string; r
   const b = body as StreamManifestOut | null;
   if (!b || typeof b !== "object" || b.v !== STREAM_RESULT_VERSION || b.kind !== "stream" || b.resultKey !== task.resultKey || !task.range) return false;
   if (b.range?.from !== task.range.from || b.range?.to !== task.range.to) return false;
-  if (!b.header || !Array.isArray(b.header.clipIds) || !b.inits || typeof b.inits !== "object" || !b.segments || typeof b.segments !== "object") return false;
+  if (!b.header || !Array.isArray(b.header.clipIds) || !isStreamOrigin(b.header.originFrame) || !b.inits || typeof b.inits !== "object" || !b.segments || typeof b.segments !== "object") return false;
   for (let n = task.range.from; n <= task.range.to; n++) {
     const seg = b.segments[n];
     const init = seg ? b.inits[seg.init] : undefined;

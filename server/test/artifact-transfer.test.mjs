@@ -385,7 +385,8 @@ async function writeStreamFixture(root, { streamKey, segments, extra = [], encod
   const id1 = sha16(init1), id2 = sha16(init2);
   const files = { [`init-${id1}.mp4`]: init1 };
   const manifest = {
-    version: 1, streamKey, kind: 'card', plane: 'local', clipIds: ['clip-s'], fps: 30, bound, offset: { x: 32, y: 32 }, tight,
+    // `originFrame`:这条流自己的第一帧(分段从它起数);清单不带它的结果别处不收(`streamAdoption`)
+    version: 1, streamKey, kind: 'card', plane: 'local', clipIds: ['clip-s'], fps: 30, originFrame: 45, bound, offset: { x: 32, y: 32 }, tight,
     inits: { [id1]: { codec: 'avc1.64001f', width: 48, height: 96, timescale: 15360, rect: tight, encoder, bytes: init1.length } },
     segments: {},
   };
@@ -434,7 +435,7 @@ test('T5 流：collectStreamResult、pushResult，B adoptSegments：分段文件
     assert.equal(result.resultKey, streamKey);
     assert.deepEqual({ from: result.range.from, to: result.range.to }, { from: 0, to: 3 });
     const top = fx.manifest;
-    assert.deepEqual(result.header, { kind: top.kind, plane: top.plane, clipIds: top.clipIds, fps: top.fps, bound: top.bound, offset: top.offset, tight: top.tight }, 'header 取自 stream.json 顶层');
+    assert.deepEqual(result.header, { kind: top.kind, plane: top.plane, clipIds: top.clipIds, fps: top.fps, originFrame: 45, bound: top.bound, offset: top.offset, tight: top.tight }, 'header 取自 stream.json 顶层(含这条流的第一帧)');
     const [id1, id2] = Object.keys(top.inits);
     assert.deepEqual(Object.keys(result.inits), [id1], '只列本段分段用到的 init（第 4 段的 init 不在）');
     const init1 = fx.files[`init-${id1}.mp4`];

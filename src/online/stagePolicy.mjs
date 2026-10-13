@@ -28,8 +28,13 @@ export const MEDIA_S_PATH_PATTERN = "media/[0-9a-f]{64}(?:\\.[A-Za-z0-9]{1,8})?"
 export const ASSET_API_PREFIX = "/api/asset";
 /** 编辑器页的源上素材服务的基址路径(nginx 的 `/media` 反代 + 素材服务的 API 基址) */
 export const MEDIA_PROXY_BASE = "/media/api/asset";
-/** 素材票据的形状(`server/auth/tickets.mjs`:`v1.<base64url>.<base64url>`,总长不超过 2048) */
-export const TICKET_PATTERN = "v1\\.[A-Za-z0-9_-]{1,1600}\\.[A-Za-z0-9_-]{1,200}";
+/**
+ * 素材票据的形状,两种,各自写死:
+ * - 旧共享项目的(`server/auth/tickets.mjs`):`v1.<base64url>.<base64url>`,总长不超过 2048;
+ * - 账号云端项目的(`server/docservice/account-hosted.mjs` 的 `issue`:32 个随机字节的 base64url):恰好 43 个字符。
+ * nginx 的舞台站点模板(`server/hosted/deploy/nginx-site-promptcut-stages.conf`)里手写着同一个正则,改这里要一起改(测试会对)。
+ */
+export const TICKET_PATTERN = "(?:v1\\.[A-Za-z0-9_-]{1,1600}\\.[A-Za-z0-9_-]{1,200}|[A-Za-z0-9_-]{43})";
 
 /**
  * 舞台策略的指令(顺序固定,生成的文本逐字稳定)。`frame-ancestors` 只能出现在响应头里(`<meta>` 里无效),单列。

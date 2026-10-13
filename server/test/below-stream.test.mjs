@@ -171,8 +171,10 @@ test('BL-plan 预渲染集合里依赖下层、context、未知(含 remotion 式
   assert.deepEqual(g.bound, { x: 0, y: 0, w: 1280, h: 720 }, '上界是整个画面,收紧留给产流那一趟');
   assert.equal(g.firstFrame, 30);
   assert.equal(g.lastFrame, 119);
-  assert.equal(g.firstSegment, Math.floor(30 / SEGMENT_FRAMES));
-  assert.equal(g.lastSegment, Math.floor(119 / SEGMENT_FRAMES));
+  // 分段从这条流自己的第一帧(目标卡的第一帧,第 30 帧)起数:第 0 段是第 30～44 帧,最后一帧 119 在第 5 段
+  assert.equal(g.originFrame, 30);
+  assert.equal(g.firstSegment, 0);
+  assert.equal(g.lastSegment, Math.floor((119 - 30) / SEGMENT_FRAMES));
   assert.equal(g.total, 240);
   assert.deepEqual(g.belowClipIds, ['vid', 'mid'], '画家顺序,下面的在前;不重叠的 late、纯音频的 bgm、上面的 top 不算');
   assert.equal(g.belowScene, false);
@@ -522,7 +524,8 @@ test('BL-split 切分:这种流的任务带 requires.transcode、requires.belowD
   assert.deepEqual(q.belowClipIds, ['vid', 'mid']);
   assert.ok(!('belowClipIds' in queueStreamOf(specs.find(s => s.kind === 'card'))), '别的流交给切分的形状不变');
   const mine = streams.filter(t => t.input.contentKey === spec.contentKey);
-  assert.deepEqual(mine.map(t => [t.range.from, t.range.to]), [[2, 7]], '分段 2～7,一个任务');
+  assert.equal(q.originFrame, 30, '交给切分的那一份带着这条流的第一帧');
+  assert.deepEqual(mine.map(t => [t.range.from, t.range.to]), [[0, 5]], '分段 0～5(从目标卡的第一帧起数),一个任务');
   for (const t of mine) {
     assert.equal(t.resultKey, resultKeyOf(spec.contentKey, OWN));
     assert.equal(t.resultKey, spec.streamKey, '和本机生产者写的是同一个目录');
@@ -612,7 +615,7 @@ test('BL-layer-map 层表的 streams 表认这种流:kind below、舞台坐标�
   assert.deepEqual(row, {
     topClipId: 'glass', clipIds: ['glass'], kind: 'below', plane: 'stage', contentKey: spec.contentKey,
     candidates: [{ envFingerprint: OWN, resultKey: spec.streamKey }],
-    firstSegment: spec.firstSegment, lastSegment: spec.lastSegment, segmentsPerTask: row.segmentsPerTask,
+    originFrame: 30, lastSegment: spec.lastSegment, segmentsPerTask: row.segmentsPerTask,
     inputSig: streamInputSig(p, { clipIds: ['glass'], kind: 'below' }),
   });
   assert.match(row.inputSig, /^s1-/);

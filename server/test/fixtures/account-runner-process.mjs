@@ -94,7 +94,7 @@ export function toneWav({ hz = 440, seconds = 0.25, rate = 8000 } = {}) {
  * @param {object} [o.runnerOptions] 交给真实运行器的其它选项（例如出网闸的测试例外）；只给探针与测试
  * @param {object} [o.toolLimits] 工具提供者的时限与上限（探针把它们调短）
  */
-export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false,
+export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false, publicHandler = null,
   tools = null, runnerOptions = null, toolLimits = null } = {}) {
   const log = [], say = (event, fields) => log.push({ at: Date.now(), event, ...fields });
   const docKey = pair(), masterKey = generateServiceKeyPair(), m = scopeModel(slotId);
@@ -104,7 +104,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
   const masterSockets = new Set(), lookSockets = new Set(), renderSockets = new Set(), humanSockets = new Set();
   const lookCalls = [], renderGate = { hold: false };
 
-  const fixture = await startCloudQueueUserFixture({ ports: [...P.combo], agentPort: P.agent,
+  const fixture = await startCloudQueueUserFixture({ ports: [...P.combo], agentPort: P.agent, publicHandler,
     variant: {
       pkiNames: ['master', 'rootctl', 'workerid'],
       async configure(ctx) {

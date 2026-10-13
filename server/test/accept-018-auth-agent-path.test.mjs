@@ -9,7 +9,6 @@
  *
  * 跑法（PowerShell 与 Bash 都要先设两个环境变量，值见 docs/local.md）：
  *   npm test -- server/test/accept-018-auth-agent-path.test.mjs
- * 手动跑时可设 ACCEPT018_AUTH_PORT_BASE=28570 让端口落在分给 auth 组的段里。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -256,13 +255,13 @@ test('账号模式云端 Agent：隔离（跨项目、伪造/过期证明、只�
     // 这一条换了夹具：上面那套组合是「在主进程里跑任务」的进程内执行器，它没有关闭结算，同一个对话的第二条永远等不到（原先这里标着 todo）。
     // 账号模式真正的跑法是一条任务一个进程：主服务用生产的装配（只做控制），任务在真的子进程里跑，第一条被 root 关掉、文档服务结清以后
     // 第二条才领得到。所以这里另起一套那样的组合来验（哪些是真的见 fixtures/account-runner-process.mjs 的开头）；它自带一个两位成员都在的项目。
-    // 端口 28713～28734（生产入口那一块的段）。第二条要等新的一代任务进程起来（带一份 vite），等待时限比原来的 15 秒放宽，只为防卡死。
+    // 端口向系统要空闲的（runnerPorts）。第二条要等新的一代任务进程起来（带一份 vite），等待时限比原来的 15 秒放宽，只为防卡死。
     await t.test('2.3-3 共有对话里一个成员的任务结束后，另一个成员后发的消息的任务能按到达顺序开始', async () => {
       // 到这里才载这个夹具：它和上面那套组合共用同一个底座模块，而上面那套要先把底座里文档服务的时钟换成可拨的（验身份证明过期用）。
       // 在文件开头静态引入会让底座抢先按没换时钟的样子载进来。
       const { startRunnerProcessFixture } = await import('./fixtures/account-runner-process.mjs');
-      const f = await startRunnerProcessFixture({ productionMaster: true, ports: { combo: [28713, 28714, 28715, 28716, 28717, 28718, 28719], agent: 28725,
-        masterEvents: 28726, look: 28727, renderWorker: 28728, identityBase: 28728, controlBase: 28731 } });
+      const { runnerPorts } = await import('./free-ports.mjs');
+      const f = await startRunnerProcessFixture({ productionMaster: true, ports: await runnerPorts() });
       const actors = [];
       try {
         const a = await f.connectActor(0); actors.push(a);

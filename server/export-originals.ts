@@ -13,12 +13,15 @@
  */
 import { checkExportOriginals, missingOriginals, type ExportGateResult } from "../src/render/mediaTier";
 import { assetServiceOrigin } from "./asset-client";
+import { withoutConfirmedMissing } from "../src/audio/missingMaterialRecord";
 
 export async function exportOriginalsGate(
   project: any,
   { origin = assetServiceOrigin(), fetchImpl = globalThis.fetch, timeoutMs = 10_000 }: { origin?: string | null; fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<ExportGateResult> {
   if (!project || !Array.isArray(project.media) || !Array.isArray(project.tracks)) return { ok: true, missing: [] };
+  // 认定过「确认缺失」的素材不会再到齐:不拦,导出时照原位置出占位(src/audio/missingMaterialRecord.ts)
+  project = withoutConfirmedMissing(project);
   const candidates = missingOriginals(project, []).map((m) => m.hash);
   if (!candidates.length) return { ok: true, missing: [] };
   let incomplete: Set<string> | null = null;

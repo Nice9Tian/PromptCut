@@ -244,8 +244,8 @@ test('directOf:只有单卡流、成员登记为画布卡才走;组流、实测�
 
 /* ------------------------------------------------------------ 键(契约第 9.3 节) */
 
-test('STREAM_CODE_VERSION 是 2;单卡流的成员键用 streamMemberKey,不再跟着快照的内容键变', () => {
-  assert.equal(STREAM_CODE_VERSION, 2);
+test('STREAM_CODE_VERSION 是 3(2:画布直取与成员键;3:分段从流自己的第一帧起数);单卡流的成员键用 streamMemberKey,不再跟着快照的内容键变', () => {
+  assert.equal(STREAM_CODE_VERSION, 3);
   const project = projectOf([{ id: 'a', cardId: 'x', start: 0, end: 2 }]);
   const key = (ctl, budget = 6) => planStreams({ key: 'E', project, cardPlan: [ctl] }, { budget, envFingerprint: ENV_FP })[0]?.streamKey;
   const base = control('a', 0, 2, DOM_CAPS, { contentKey: 'C-with-snapshot-code', streamMemberKey: 'M-content-only' });

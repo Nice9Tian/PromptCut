@@ -49,7 +49,7 @@ function fakeStage() {
 
 test("(C) 播放中流覆盖这一段:照样选快照兜底,标成海报;暂停时照常", () => {
   push({ type: "layer", clipId: "h", kind: "html", key: "K", ranges: [[0, 299]] });
-  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]] });
+  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]], originFrame: 0 });
   const playing = feed.planFeed({ project, t: 1, playing: true });
   assert.ok(playing.heavy.includes("h"));
   assert.ok(playing.picks.has("h"), "流画不出来时有快照顶上,不透明");
@@ -61,7 +61,7 @@ test("(C) 播放中流覆盖这一段:照样选快照兜底,标成海报;暂停�
 
 test("(D) K6:当前段没有流、也没有快照 → 不切进抑制,照常活渲", () => {
   feed.markPendingDemote("d");
-  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[15, 19]] });   // 只有第 7.5 秒以后
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[15, 19]], originFrame: 0 });   // 只有第 7.5 秒以后
   const f = feed.planFeed({ project, t: 1, playing: true });                            // 播放头在第 1 秒 = 第 2 段
   assert.ok(!f.heavy.includes("d"), "就绪前照常活渲");
   assert.ok(feed.pendingDemotes().has("d"));
@@ -69,11 +69,41 @@ test("(D) K6:当前段没有流、也没有快照 → 不切进抑制,照常活�
 
 test("(D) K6:从当前位置起 1 秒的分段都有流才算就绪", () => {
   feed.markPendingDemote("d");
-  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[2, 2]] });   // 第 30~44 帧
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[2, 2]], originFrame: 0 });   // 第 30~44 帧
   assert.ok(!feed.planFeed({ project, t: 1, playing: true }).heavy.includes("d"), "第 1 秒起 30 帧要到第 59 帧,第 3 段(45~59)没有 → 不够");
-  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[2, 3]] });
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[2, 3]], originFrame: 0 });
   assert.ok(feed.planFeed({ project, t: 1, playing: true }).heavy.includes("d"), "第 2~3 段盖住了第 30~59 帧");
   assert.ok(!feed.pendingDemotes().has("d"));
+});
+
+test("流的分段从它自己的第一帧起数:片段从第 100 帧开始,父页按层带来的 originFrame 把帧号换成分段号", () => {
+  // 片段 d 占第 100～249 帧(不从 15 的倍数帧开始);它的流的第 0 段是第 100～114 帧,第 1 段是第 115～129 帧……
+  const p = { fps: 30, tracks: [{ id: "t", clips: [card("h"), card("d", 100 / 30, 250 / 30)] }] };
+  heavyIds = ["h", "d"];
+  const planesAt = (frame) => feed.streamPlanesAt({ project: p, t: frame / 30 + 1e-4, playing: true }).filter((x) => x.clipIds[0] === "d");
+  push({ type: "layer", clipId: "d", kind: "html", key: "D", ranges: [[0, 149]] });
+  // 只有第 1 段(第 115～129 帧)就绪
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[1, 1]], originFrame: 100 });
+  assert.equal(planesAt(100).length, 0, "第 100 帧在第 0 段,没就绪");
+  assert.equal(planesAt(114).length, 0);
+  assert.deepEqual(planesAt(115), [{ clipIds: ["d"], key: "SD", ranges: [[1, 1]], originFrame: 100 }], "第 115 帧起是第 1 段;流平面带着第一帧交给舞台");
+  assert.equal(planesAt(129).length, 1);
+  assert.equal(planesAt(130).length, 0, "第 130 帧是第 2 段");
+  // 按项目帧号算(原来的做法)第 115 帧是第 7 段:只有第 7 段就绪时这一帧没有流
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[7, 7]], originFrame: 100 });
+  assert.equal(planesAt(115).length, 0);
+  assert.equal(planesAt(100 + 7 * 15).length, 1, "第 7 段是第 205～219 帧");
+  // 没带第一帧的层(改分段规则之前的生产者发的):没法换算,当作没有流
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[0, 19]] });   // 故意不带 originFrame
+  assert.equal(planesAt(115).length, 0);
+  assert.equal(feed.planFeed({ project: p, t: 115 / 30 + 1e-4, playing: true }).picks.get("d").tier, "none", "照没有流的层处理:快照每拍换");
+  // K6 的就绪:从第 115 帧起 1 秒(到第 144 帧)要第 1、2 段都在
+  feed.markPendingDemote("d");
+  push({ type: "layer", clipId: "d", kind: "html", key: "D", ranges: [] });
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[1, 1]], originFrame: 100 });
+  assert.ok(!feed.planFeed({ project: p, t: 115 / 30 + 1e-4, playing: true }).heavy.includes("d"), "第 2 段(第 130～144 帧)没有:不够");
+  push({ type: "layer", clipId: "d", kind: "stream", key: "SD", ranges: [[1, 2]], originFrame: 100 });
+  assert.ok(feed.planFeed({ project: p, t: 115 / 30 + 1e-4, playing: true }).heavy.includes("d"), "第 1～2 段盖住了第 115～144 帧");
 });
 
 test("超出解码器预算的层当「无流」:不进流平面,快照每拍换(不是海报)", () => {
@@ -82,7 +112,7 @@ test("超出解码器预算的层当「无流」:不进流平面,快照每拍换
   const p = projectOf(ids);
   for (const id of ids) {
     push({ type: "layer", clipId: id, kind: "html", key: `K${id}`, ranges: [[0, 299]] });
-    push({ type: "layer", clipId: id, kind: "stream", key: `S${id}`, ranges: [[0, 19]] });
+    push({ type: "layer", clipId: id, kind: "stream", key: `S${id}`, ranges: [[0, 19]], originFrame: 0 });
   }
   const head = { project: p, t: 1, playing: true };
   const planes = feed.streamPlanesAt(head);
@@ -95,7 +125,7 @@ test("超出解码器预算的层当「无流」:不进流平面,快照每拍换
 
 test("海报:挂着的快照离当前帧不到 15 帧不换;无流的层每拍换", async () => {
   push({ type: "layer", clipId: "h", kind: "html", key: "K", ranges: [[0, 299]] });
-  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]] });
+  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]], originFrame: 0 });
   push({ type: "layer", clipId: "d", kind: "html", key: "D", ranges: [[0, 299]] });
   const stage = fakeStage();
   const at = async (t) => {
@@ -117,7 +147,7 @@ test("海报:挂着的快照离当前帧不到 15 帧不换;无流的层每拍�
 test("一次投递 ≤ 2 MB,按优先级装:无流 > 海报;装不下的保留上一张,不摘", async () => {
   const big = "x".repeat(1.5 * 1024 * 1024);
   push({ type: "layer", clipId: "h", kind: "html", key: "K", ranges: [[0, 299]] });
-  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]] });
+  push({ type: "layer", clipId: "h", kind: "stream", key: "S", ranges: [[0, 19]], originFrame: 0 });
   push({ type: "layer", clipId: "d", kind: "html", key: "D", ranges: [[0, 299]] });
   bodies.set("K@30", big);
   bodies.set("D@30", big);

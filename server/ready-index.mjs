@@ -18,9 +18,13 @@ import { mergeRanges } from './snapshot-store.mjs';
  * # 消息三种(格式定死,C3)
  *
  *   { type: 'reset', localRev }                       项目版本换了,页面清表
- *   { type: 'layer', clipId, kind, key, ranges, groupClipIds? }
+ *   { type: 'layer', clipId, kind, key, ranges, groupClipIds?, originFrame? }
  *                                                     该层当前**全部**就绪的本地帧
  *                                                     闭区间,**每次发全量、不发增量**
+ *                                                     `stream` 层的区间单位是分段号,另带 `originFrame`:
+ *                                                     这条流自己的第一帧(项目帧号),页面按它把帧号换成
+ *                                                     分段号(`src/render/streamSegments.mjs`);不带的
+ *                                                     `stream` 层页面不贴
  *   { type: 'done', localRev }                        锚帧全部就绪(C2 的门槛)
  *
  * 全量语义是刻意的:一条消息丢了不会让页面的表永远缺一段,下一条同层消息就补回来;
@@ -61,6 +65,8 @@ export function wireSnapshotKey(tier, entryKey, snapshotKey) {
 }
 
 const layerId = (clipId, kind) => `${kind}:${clipId}`;
+/** `stream` 层带的第一帧(非负整数才带);别的档位不带这一项 */
+const originOf = (kind, originFrame) => (kind === 'stream' && Number.isInteger(originFrame) && originFrame >= 0 ? { originFrame } : {});
 
 /**
  * `staged`:还没认领的「键 → 区间」。缺省每个索引自带一份;按会话分片时(`createReadyHub`)
@@ -68,7 +74,7 @@ const layerId = (clipId, kind) => `${kind}:${clipId}`;
  */
 export function createReadyIndex({ staged: shared = null } = {}) {
   const staged = shared ?? new Map();
-  /** layerId -> { clipId, kind, key, ranges, groupClipIds? } */
+  /** layerId -> { clipId, kind, key, ranges, groupClipIds?, originFrame? } */
   const layers = new Map();
   const subscribers = new Set();
   let localRev = 0;
@@ -90,23 +96,23 @@ export function createReadyIndex({ staged: shared = null } = {}) {
    * 把这一批新帧并进某一层,并发一条**全量** `layer`。
    * `frames` 可以是帧号、闭区间,或两者混排(`mergeRanges` 的口径)。
    */
-  function addFrames({ clipId, kind, key, frames, groupClipIds = undefined }) {
+  function addFrames({ clipId, kind, key, frames, groupClipIds = undefined, originFrame = undefined }) {
     if (!clipId || !READY_KINDS.includes(kind) || !key) return null;
     const id = layerId(clipId, kind);
     const before = layers.get(id);
     // 换了键(卡的参数变了)就从头记:旧键的区间和新键没有关系
     const base = before && before.key === key ? before.ranges : [];
     const ranges = mergeRanges([...base, ...(frames ?? [])]);
-    const layer = { clipId, kind, key, ranges, ...(groupClipIds ? { groupClipIds } : {}) };
+    const layer = { clipId, kind, key, ranges, ...(groupClipIds ? { groupClipIds } : {}), ...originOf(kind, originFrame) };
     layers.set(id, layer);
     emit({ type: 'layer', ...layer });
     return layer;
   }
 
   /** 整层直接给一份区间表(F5 的重建路);和 `addFrames` 一样发全量 `layer`。 */
-  function setLayer({ clipId, kind, key, ranges, groupClipIds = undefined }) {
+  function setLayer({ clipId, kind, key, ranges, groupClipIds = undefined, originFrame = undefined }) {
     if (!clipId || !READY_KINDS.includes(kind) || !key) return null;
-    const layer = { clipId, kind, key, ranges: mergeRanges(ranges), ...(groupClipIds ? { groupClipIds } : {}) };
+    const layer = { clipId, kind, key, ranges: mergeRanges(ranges), ...(groupClipIds ? { groupClipIds } : {}), ...originOf(kind, originFrame) };
     layers.set(layerId(clipId, kind), layer);
     emit({ type: 'layer', ...layer });
     return layer;
@@ -129,8 +135,9 @@ export function createReadyIndex({ staged: shared = null } = {}) {
 
   /**
    * card plan 到位:用 `control.clipId` ↔ `control.snapshotKey` 把挂着的区间认领成层。
-   * `layers` = [{ clipId, kind, key }],`key` 已经是**线上的键**(本地档是
-   * `<entry.key>/<共享键>`,C3),由调用方用 `wireSnapshotKey` 拼好。返回认领了几层。
+   * `layers` = [{ clipId, kind, key, originFrame? }],`key` 已经是**线上的键**(本地档是
+   * `<entry.key>/<共享键>`,C3),由调用方用 `wireSnapshotKey` 拼好;`stream` 层的 `originFrame` 由调用方按这一版的
+   * 流计划给(挂着的「键 → 区间」里没有它:它是这条流在这一版项目里的位置,不是流库里的东西)。返回认领了几层。
    *
    * 认领是**全量重发**:先 `reset`(页面清表),再对每一层发一条 `layer`。这和 C3
    * 的语义一致,所以不需要新端点。
@@ -141,7 +148,7 @@ export function createReadyIndex({ staged: shared = null } = {}) {
       if (!READY_KINDS.includes(item?.kind) || !item.clipId || !item.key) continue;
       const hit = staged.get(`${item.kind}:${item.key}`);
       if (!hit?.ranges?.length) continue;
-      claimed.push({ clipId: item.clipId, kind: item.kind, key: item.key, ranges: hit.ranges });
+      claimed.push({ clipId: item.clipId, kind: item.kind, key: item.key, ranges: hit.ranges, ...originOf(item.kind, item.originFrame) });
     }
     if (!claimed.length) return 0;
     localRev = Number(rev) || 0;
@@ -169,9 +176,10 @@ export function createReadyIndex({ staged: shared = null } = {}) {
       const id = layerId(item.clipId, item.kind);
       const before = layers.get(id);
       const ranges = mergeRanges([...(before?.key === item.key ? before.ranges : []), ...hit.ranges]);
-      if (before?.key === item.key && JSON.stringify(before.ranges) === JSON.stringify(ranges)) continue;
+      const origin = originOf(item.kind, item.originFrame ?? (before?.key === item.key ? before.originFrame : undefined));
+      if (before?.key === item.key && JSON.stringify(before.ranges) === JSON.stringify(ranges) && before.originFrame === origin.originFrame) continue;
       const layer = { clipId: item.clipId, kind: item.kind, key: item.key, ranges,
-        ...(before?.key === item.key && before.groupClipIds ? { groupClipIds: before.groupClipIds } : {}) };
+        ...(before?.key === item.key && before.groupClipIds ? { groupClipIds: before.groupClipIds } : {}), ...origin };
       layers.set(id, layer);
       emit({ type: 'layer', ...layer });
       changed++;

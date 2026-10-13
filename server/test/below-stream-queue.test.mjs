@@ -119,7 +119,7 @@ const REV = 4;
 /**
  * 从上到下三条序列(5 秒,150 帧):
  *   clip-top  独立卡,0～5 秒   —— 在毛玻璃上面
- *   clip-g    毛玻璃(依赖下层),1～4 秒 —— 目标卡;流的分段 2～7
+ *   clip-g    毛玻璃(依赖下层),1～4 秒 —— 目标卡;流从它的第一帧(第 30 帧)起分段,分段 0～5
  *   clip-a    独立卡,0～5 秒   —— 毛玻璃的下层
  */
 const START = { 'clip-top': 0, 'clip-g': 1, 'clip-a': 0 };
@@ -224,9 +224,9 @@ test('BLQ-on 打开以后:计划多出毛玻璃的那一条;切出的任务带 b
     assert.deepEqual(q.clipIds, ['clip-g']);
     assert.deepEqual(q.belowClipIds, ['clip-a'], '下面那张卡算进键;上面那张不算');
     assert.equal(q.streamKey, resultKeyOf(q.contentKey, OWN));
-    assert.deepEqual([q.firstSegment, q.lastSegment], [2, 7]);
+    assert.deepEqual([q.originFrame, q.firstSegment, q.lastSegment], [30, 0, 5]);
     const tasks = streamTasksOf(ctx).filter((x) => x.input.contentKey === q.contentKey);
-    assert.deepEqual(tasks.map((x) => [x.range.from, x.range.to]), [[2, 7]]);
+    assert.deepEqual(tasks.map((x) => [x.range.from, x.range.to]), [[0, 5]]);
     const [task] = tasks;
     assert.equal(task.requires.belowDependent, true);
     assert.equal(task.requires.transcode, true);
@@ -236,7 +236,7 @@ test('BLQ-on 打开以后:计划多出毛玻璃的那一条;切出的任务带 b
     await executor.render(view(task), { signal: signalNone(), progress: () => {} });
     const bakes = streamBakes.slice(markBakes);
     assert.ok(bakes.length > 0 && bakes.every((b) => b.streamSignature === q.streamKey), '产的就是这条流');
-    assert.deepEqual(bakes.map((b) => b.fromFrame), [30, 45, 60, 75, 90, 105], '分段 2～7,满密度');
+    assert.deepEqual(bakes.map((b) => b.fromFrame), [30, 45, 60, 75, 90, 105], '分段 0～5(第 30 帧起每 15 帧一段),满密度');
     assert.ok(bakes.every((b) => b.stride === 1));
     assert.deepEqual(bakes[0].clip, { x: 0, y: 0, w: 320, h: 180 }, '按舞台坐标截(上界是整个画面)');
     assert.equal(bakes[0].mountFrame, 0, '下层那张卡是 motion 式,从它的挂载帧推过来');
@@ -250,7 +250,9 @@ test('BLQ-on 打开以后:计划多出毛玻璃的那一条;切出的任务带 b
     assert.equal(manifest.kind, 'below');
     assert.equal(manifest.plane, 'stage');
     assert.deepEqual(manifest.clipIds, ['clip-g']);
-    for (let n = 2; n <= 7; n++) assert.equal(manifest.segments[n]?.stride, 1, `分段 ${n} 产了`);
+    assert.equal(manifest.originFrame, 30, '清单记着这条流的第一帧');
+    assert.deepEqual(Object.keys(manifest.segments).map(Number).sort((x, y) => x - y), [0, 1, 2, 3, 4, 5]);
+    for (let n = 0; n <= 5; n++) assert.equal(manifest.segments[n]?.stride, 1, `分段 ${n} 产了`);
     // 层表那一行
     const entry = [...A.entries.values()][0];
     const rows = (A.layerMapStreamOptions(entry).streams ?? []).filter((s) => s.kind === 'below');

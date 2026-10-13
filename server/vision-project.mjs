@@ -54,7 +54,7 @@ export function reviewedCapabilities(cardId) {
  *   `writing`      'remotion' | 'motion'
  *   `frameMode`    写法对应的声明值 'direct' | 'stateful'（手里有卡片定义时以定义的声明为准，这里只是登记值）
  *   `surface`      'dom' | 'canvas2d' | 'webgl' | 'none'
- *   `canvas`       是不是画布卡（2D 画布或 WebGL）
+ *   `canvas`       是不是画布卡（2D 画布或 WebGL），由 `surface` 推出；`surface` 缺了给 false
  *   `compositing`  'independent' | 'sourceDependent' | 'belowDependent'；登记成 `unknown`、`fromParts` 或写了别的值，
  *                  一律给 'unknown'（和 `frameMode.mjs` 一样，不当审阅结论）
  *   `reviewed`     轴三有没有审阅结论
@@ -68,7 +68,7 @@ export function reviewedClassification(cardId) {
   const surface = CARD_SURFACES.includes(entry.surface) ? entry.surface : undefined;
   const reviewed = REVIEWED_COMPOSITING.includes(entry.compositing);
   return { writing, frameMode: writing ? CARD_WRITINGS[writing] : undefined, surface,
-    canvas: surface ? CANVAS_SURFACES.includes(surface) : entry.canvasHeavy === true,
+    canvas: surface ? CANVAS_SURFACES.includes(surface) : false,
     compositing: reviewed ? entry.compositing : 'unknown', reviewed };
 }
 

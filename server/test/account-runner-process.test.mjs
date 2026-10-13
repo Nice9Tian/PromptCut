@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { digestOf } from '../account/ledger.mjs';
 import { startRunnerProcessFixture, until, toneWav, PNG_B64 } from './fixtures/account-runner-process.mjs';
+import { runnerPorts } from './free-ports.mjs';
 
 // 真实的运行器放进任务进程：一条任务从领取、执行、结束到结清。
 // 哪些是真的、哪些是受控的，写在夹具 fixtures/account-runner-process.mjs 的开头。
@@ -18,7 +19,7 @@ const safeCode = body => (/^[a-z0-9-]{1,80}$/.test(body?.code ?? '') ? body.code
 test('真实运行器在任务进程里：带工具调用的任务做完并结清；跑的过程中看一次画面；第二条在第一代关掉之后才开始；从外面强制停',
   { timeout: 300_000 }, async t => {
     const marks = [['start', Date.now()]], mark = name => marks.push([name, Date.now()]);
-    const f = await startRunnerProcessFixture(); mark('fixture');
+    const f = await startRunnerProcessFixture({ ports: await runnerPorts() }); mark('fixture');
     let actor;
     t.after(async () => {
       await actor?.close().catch(() => {});

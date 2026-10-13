@@ -40,13 +40,14 @@ const AVCC = Uint8Array.from([1, 0x64, 0x00, 0x1f, 0xff, 0xe1, 0x00, 0x04, 0x67,
 const sample = (n, fill) => { const d = new Uint8Array(n); d.fill(fill); new DataView(d.buffer).setUint32(0, n - 4); return d; };
 
 /** 切分方给浏览器的那一份流任务(`split.mjs` 的形状) */
-function browserTask({ from = 3, to = 5, total = 300 } = {}) {
+function browserTask({ from = 3, to = 5, total = 300, lastFrame = 164 } = {}) {
   return {
     id: `stream:${RESULT_KEY}:${from}-${to}`, kind: 'stream', resultKey: RESULT_KEY, range: { unit: 'segment', from, to },
     source: { projectId: 'p1', projectRev: 1, derivedFrom: 'plan:p1@1#clips:x' },
     input: { clipId: 'clip-a', cardId: 'punch-pill', entryKey: null, contentKey: CONTENT_KEY, canvasHeavy: false, compositing: 'independent',
       bake: { start: 1.5, end: 5.5, count: 120, sampling: { firstFrame: 45, phase: { numerator: 0, denominator: 1 } } },
-      stream: { kind: 'card', plane: 'local', clipIds: ['clip-a'], fps: 30, bound: BOUND, offset: { x: 760, y: 420 }, firstFrame: 45, count: 120, total } },
+      // 片段是第 45～164 帧:分段从第 45 帧起数(0～7),任务范围 3～5 是第 90～134 帧
+      stream: { kind: 'card', plane: 'local', clipIds: ['clip-a'], fps: 30, bound: BOUND, offset: { x: 760, y: 420 }, firstFrame: 45, count: 120, total, originFrame: 45, lastFrame } },
     weight: { class: 'medium', estMs: null, frames: (to - from + 1) * 15 },
     requires: { envFingerprint: BROWSER_FP, codeVersion: 'c', cardSources: {}, transcode: false, userCards: false, graphCards: false, belowDependent: false, capabilities: { streams: true } },
     priority: 10,
@@ -113,7 +114,12 @@ test('BM-01 清单形状与桌面 collectStreamResult 逐字段同形;过 manife
 
   // 值:照任务书第四处
   assert.equal(mine.v, RESULT_VERSION);
-  assert.deepEqual(mine.header, { kind: 'card', plane: 'local', clipIds: ['clip-a'], fps: 30, bound: BOUND, offset: { x: 760, y: 420 }, tight: null });
+  assert.deepEqual(mine.header, { kind: 'card', plane: 'local', clipIds: ['clip-a'], fps: 30, originFrame: 45, bound: BOUND, offset: { x: 760, y: 420 }, tight: null });
+  // 清单不带这条流的第一帧(改分段规则之前的节点产的):两边都不认
+  const { originFrame: _dropped, ...oldHeader } = mine.header;
+  assert.equal(manifestMatches({ ...mine, header: oldHeader }, { kind: 'stream', resultKey: RESULT_KEY, range: { from: 3, to: 5 } }), false);
+  assert.throws(() => streamAdoption({ ...mine, header: oldHeader }), /originFrame/);
+  assert.equal(streamManifestCovers({ ...mine, header: oldHeader }, task), false);
   const [initId] = Object.keys(mine.inits);
   assert.equal(initId, mine.inits[initId].hash.slice(0, 16), '开头文件的键 = 哈希前 16 位');
   assert.equal(mine.inits[initId].encoder, 'webcodecs-avc');
@@ -193,13 +199,14 @@ test('BM-02 桌面把浏览器产的流拉回去并采纳:applyResult → adoptS
 });
 
 test('BM-03 浏览器封的字节,服务端读得出清单里写的那几项(编码串、拼合后的宽高、时间刻度、每段样本数与段首关键帧)', () => {
-  const task = browserTask({ from: 19, to: 19, total: 290 });   // 最后一段不满:帧 285～289 共 5 帧
+  // 这条流的最后一帧是第 154 帧:第 7 段(第 150 帧起)不满,只有第 150～154 帧共 5 帧
+  const task = browserTask({ from: 7, to: 7, lastFrame: 154 });
   const parts = browserParts(task);
   const meta = parts.inits[parts.initId];
   const info = initInfo(parts.init);
   assert.deepEqual(info, { codec: meta.codec, width: meta.width, height: meta.height, timescale: meta.timescale });
   assert.deepEqual([info.width, info.height], [464, 2 * 304 + 16], '拼合后的画面:宽不变,高 = 2H + 16');
-  const seg = parts.segments[19];
+  const seg = parts.segments[7];
   assert.equal(seg.samples, 5);
   assert.deepEqual(segmentInfo(parts.blobs.get(seg.hash)), { moofs: 1, sampleCount: 5, firstSampleIsSync: true });
 });

@@ -589,7 +589,9 @@ const GOLDEN = {
     'streams/5517a8bfe97b060bb52e6467e56b225715869c8e8b895dd54ffa48496cab01c9/init-a01177ae56eef330.mp4': 'a01177ae56eef330122d54c5a419f0c7843e5dfbeb656f3ceb5c254e91ba238e',
     // 清单里记着 `version: STREAM_CODE_VERSION`。渲染重构「己一」把它从 1 加到 2,这一个文件的字节跟着变(别的字段、流键、分段都没变:
     // 把常量改回 1,这里仍是原来记下的 5c074ef83138e314fb829b238eeac62127ebfaac4844ac83d5107d015b66c75e)
-    'streams/5517a8bfe97b060bb52e6467e56b225715869c8e8b895dd54ffa48496cab01c9/stream.json': '6f2ec95a45dab54dd0521e06e1ea3e8e0b6879600a1046e99beac53ce1ddc4d8'
+    // 2026-10-13「稀疏流一」改过这一项:流的清单多记一项 `originFrame`(这条流自己的第一帧)、`version` 跟着 `STREAM_CODE_VERSION` 从 2 到 3。
+    // 推送队列配没配不影响它;别的文件一个字没变
+    'streams/5517a8bfe97b060bb52e6467e56b225715869c8e8b895dd54ffa48496cab01c9/stream.json': '672dfc568e2e27a12b7676785bde1a414a27336f0deafd9ca33875dcaa6d41bf'
   }
 };
 
@@ -612,7 +614,7 @@ async function w6Scenario(A, rootA) {
   const prod = producerOf(A, 'libx264');
   const streamKey = resultKeyOf(sha256('stream-W6'), FP);
   const spec = { streamKey, contentKey: sha256('stream-W6'), envFingerprint: FP, kind: 'card', plane: 'local', clipIds: ['clip-s'], topClipId: 'clip-s', fps: 30,
-    bound: { x: 0, y: 0, w: 64, h: 64 }, offset: { x: 0, y: 0 }, firstSegment: 0, lastSegment: 1, total: 30, members: [] };
+    bound: { x: 0, y: 0, w: 64, h: 64 }, offset: { x: 0, y: 0 }, originFrame: 0, firstFrame: 0, lastFrame: 29, firstSegment: 0, lastSegment: 1, total: 30, members: [] };
   const state = { spec, manifest: prod.freshManifest(spec), aliases: new Set(), entryKey, reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set(), generation: 1 };
   prod.streams.set(streamKey, state);
   prod.entryKey = entryKey;

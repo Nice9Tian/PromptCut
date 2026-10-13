@@ -3,7 +3,7 @@
 // 只验出口:给模型看的缩图才量、每帧挂 rects、文字部分按 clipId 一行、量不出来不连累图片。
 //
 // render.ts 是 .ts、兄弟模块不带扩展名,和 asset-service.test 一样用 typescript 转译到临时目录,
-// 四个依赖换成桩。跑法:node --test server/test/see-frames-rects.test.mjs
+// 五个依赖换成桩。跑法:node --test server/test/see-frames-rects.test.mjs
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,8 +23,10 @@ const post = stub('post.mjs', `import fs from 'node:fs/promises';
 export async function postFrame({ cards, out }) { await fs.copyFile(cards, out); return { width: 960, height: 540 }; }`);
 const http = stub('http.mjs', 'export const outRoot = r => r;');
 const pool = stub('pool.mjs', 'export const runExport = async () => null;');
+// 单张卡片位图那条路(bitmapOnly):真身借预渲染间截图,这里换成假的,只验 renderFrames 把它分出去、不碰 FramePipeline
+const bitmap = stub('card-bitmap.mjs', 'export const cardBitmapScratch = r => r; export const renderCardBitmaps = (...a) => globalThis.__seeRectsBitmaps(...a);');
 let src = fs.readFileSync(path.join(ROOT, 'server', 'vision', 'render.ts'), 'utf8');
-for (const [a, b] of [['"../vite-plugin-frames"', `"${frames}"`], ['"../png-post.mjs"', `"${post}"`], ['"./http"', `"${http}"`], ['"./worker-pool"', `"${pool}"`]]) {
+for (const [a, b] of [['"../vite-plugin-frames"', `"${frames}"`], ['"../png-post.mjs"', `"${post}"`], ['"./http"', `"${http}"`], ['"./card-bitmap"', `"${bitmap}"`], ['"./worker-pool"', `"${pool}"`]]) {
   assert.ok(src.includes(a), `render.ts 里没有 ${a} 这条 import`);
   src = src.split(a).join(b);
 }
@@ -118,4 +120,25 @@ test('entityRectsNote:图片没缩就说和图片像素一致', () => {
   const note = entityRectsNote({ width: 1280, height: 720 }, 25, [[25, [{ clipId: 'a', box: [1, 2, 3, 4], solid: null }]]], { width: 1280, height: 720 });
   assert.match(note, /舞台 1280×720 像素坐标 \[x, y, w, h\],和图片像素一致/);
   assert.match(note, /\nt=1s:\na box=\[1, 2, 3, 4\] solid=null$/);
+});
+
+test('单张卡片位图(bitmapOnly,bake_card 与 3D 视图贴图):不建帧库条目、不走 see_frames、不量实体框;压底色与透明统计照旧', async () => {
+  const calls = fakeService();
+  let entries = 0;
+  globalThis.__seeRectsService.entry = async () => { entries++; return { dir: OUT }; };
+  const asked = [];
+  globalThis.__seeRectsBitmaps = async (_root, _origin, _project, times, o) => { asked.push({ times, lane: o.lane }); return new Map(times.map(t => [Math.round(t * 30), Buffer.from('bitmap')])); };
+  const plain = await renderFrames(OUT, '', project, [1, 2], [], 0, { bitmapOnly: true, lane: 'prerender' });
+  assert.deepEqual(asked, [{ times: [1, 2], lane: 'prerender' }]);
+  assert.equal(plain.get(30).buf.toString(), 'bitmap');
+  assert.equal(plain.get(60).width, 1920, '不做后处理时宽高就是项目画幅');
+  const shot = await renderOneFrame(OUT, '', project, 1, [], 1, { bitmapOnly: true, post: { bg: '0b0f17', stats: true } });
+  assert.equal(asked[1].lane, 'agent', '缺省是 Agent 那条队');
+  assert.equal(shot.buf.toString(), 'bitmap');
+  assert.equal(shot.width, 960, '后处理的结果(宽高、透明占比)照旧带回');
+  assert.equal(shot.rects, undefined);
+  assert.equal(calls.see.length, 0, '没有调 see_frames');
+  assert.equal(calls.rects.length, 0, '没有量实体框');
+  assert.equal(entries, 0, '没有建帧库条目');
+  assert.deepEqual(fs.readdirSync(OUT).filter(n => n.startsWith('post-')), [], '后处理的临时文件用完就删');
 });

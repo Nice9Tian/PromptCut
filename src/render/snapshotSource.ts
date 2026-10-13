@@ -2,6 +2,7 @@ import type { PickedSnapshot, ReadyKind, ReadyLayer, ReadyRange } from "./snapsh
 import { cachedClipInputSig, inputSigStale } from "./layerInputSig.mjs";
 import { streamInputSig, streamSigStale } from "./streamInputSig.mjs";
 import { SEGMENT_FRAMES, type StreamManifest, type StreamRect } from "./streamPlayer.ts";
+import { isStreamOrigin, streamSegmentOf } from "./streamSegments.mjs";
 
 /**
  * J3 舞台侧的快照来源接口。
@@ -26,7 +27,9 @@ export type { ReadyKind, ReadyLayer, ReadyRange, PickedSnapshot };
 /** C3 的三种消息,形状定死 */
 export type ReadyMessage =
   | { type: "reset"; localRev: number }
-  | { type: "layer"; clipId: string; kind: ReadyKind; key: string; ranges: ReadyRange[]; groupClipIds?: string[] }
+  | { type: "layer"; clipId: string; kind: ReadyKind; key: string; ranges: ReadyRange[]; groupClipIds?: string[];
+      /** `stream` 层才有:这条流自己的第一帧(项目帧号),分段从它起每 15 帧一段(`streamSegments.mjs`) */
+      originFrame?: number }
   | { type: "done"; localRev: number };
 
 export interface SnapshotSource {
@@ -52,7 +55,7 @@ export function snapshotPath(kind: ReadyKind, key: string, localFrame: number): 
 }
 
 /** 就绪索引的页面侧形状(C3):同一张重卡的 `stream` 表和 `html` 表并存、互不覆盖 */
-export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[] }>>;
+export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[]; originFrame?: number }>>;
 
 /**
  * 把一条消息应用到页面的 `readyIndex`。`reset` 清表,`layer` 整层替换
@@ -64,7 +67,9 @@ export function applyReadyMessage(index: ReadyIndex, message: ReadyMessage): Rea
   let byKind = index.get(message.clipId);
   if (!byKind) { byKind = new Map(); index.set(message.clipId, byKind); }
   // 组流(R8 / G1)的层带 `groupClipIds`:父页按它合成一条 `{ clipIds: groupClipIds }` 的流平面
-  byKind.set(message.kind, { key: message.key, ranges: message.ranges, ...(message.groupClipIds?.length ? { groupClipIds: [...message.groupClipIds] } : {}) });
+  // `stream` 层另带这条流的第一帧(`originFrame`):父页与舞台按它把帧号换成分段号
+  byKind.set(message.kind, { key: message.key, ranges: message.ranges, ...(message.groupClipIds?.length ? { groupClipIds: [...message.groupClipIds] } : {}),
+    ...(isStreamOrigin(message.originFrame) ? { originFrame: message.originFrame } : {}) });
   return index;
 }
 
@@ -283,7 +288,8 @@ export interface StreamCandidate {
 
 /**
  * 层表 `streams` 表的一行(`server/artifact-transfer.mjs` 的 `layerStreamsOf`):一条轨道流。
- * 流清单在内容库里按 `<结果键>:<起>-<止>` 存,分段号从 `firstSegment` 起每 `segmentsPerTask` 段一份、最后一份到 `lastSegment`。
+ * 流清单在内容库里按 `<结果键>:<起>-<止>` 存,分段号从 0 起每 `segmentsPerTask` 段一份、最后一份到 `lastSegment`。
+ * 分段号是这条流自己的:从它的第一帧 `originFrame`(项目帧号)起每 15 帧一段(`streamSegments.mjs`)。
  */
 export interface OnlineStream {
   /** 就绪消息挂在哪张卡上:单卡流是它自己,组流是组里最上面那张 */
@@ -295,6 +301,9 @@ export interface OnlineStream {
   contentKey: string;
   /** 候选:切分实际出键的那几种环境,再补上写层表的节点自己的。哪一份活着的认定同快照层 */
   candidates: StreamCandidate[];
+  /** 这条流自己的第一帧(项目帧号):层表那一行带的,由写层表的一侧按当时的项目给 */
+  originFrame: number;
+  /** 恒为 0(层表的行里不写它;留着是因为取清单按「从 firstSegment 到 lastSegment」分份) */
   firstSegment: number;
   lastSegment: number;
   segmentsPerTask: number;
@@ -382,7 +391,10 @@ export function layerCandidates(layer: OnlineLayer): LayerCandidate[] {
   return [];
 }
 
-/** 层表的 `streams` 表:形状不对的行跳过,不抛;不是数组回空表 */
+/**
+ * 层表的 `streams` 表:形状不对的行跳过,不抛;不是数组回空表。
+ * 只认带 `originFrame` 的行:没有它的行是改分段规则之前的节点写的(分段按项目帧号数),照现在的换算贴上去画面会错位。
+ */
 export function parseLayerStreams(raw: unknown): OnlineStream[] {
   if (!Array.isArray(raw)) return [];
   const out: OnlineStream[] = [];
@@ -393,9 +405,10 @@ export function parseLayerStreams(raw: unknown): OnlineStream[] {
     if (!clipIds.length || clipIds.length !== (r.clipIds as unknown[]).length) continue;
     const kind = r.kind === "group" ? "group" : r.kind === "card" ? "card" : null;
     const plane = r.plane === "stage" ? "stage" : r.plane === "local" ? "local" : null;
-    const firstSegment = Number(r.firstSegment), lastSegment = Number(r.lastSegment), segmentsPerTask = Number(r.segmentsPerTask);
+    const firstSegment = 0, lastSegment = Number(r.lastSegment), segmentsPerTask = Number(r.segmentsPerTask);
+    const originFrame = r.originFrame;
     if (!kind || !plane || !str(r.contentKey)) continue;
-    if (!Number.isInteger(firstSegment) || !Number.isInteger(lastSegment) || firstSegment < 0 || lastSegment < firstSegment) continue;
+    if (!isStreamOrigin(originFrame) || !Number.isInteger(lastSegment) || lastSegment < firstSegment) continue;
     if (!Number.isInteger(segmentsPerTask) || segmentsPerTask < 1) continue;
     const candidates: StreamCandidate[] = [];
     for (const c of Array.isArray(r.candidates) ? (r.candidates as Record<string, unknown>[]) : []) {
@@ -403,7 +416,7 @@ export function parseLayerStreams(raw: unknown): OnlineStream[] {
     }
     if (!candidates.length) continue;
     const topClipId = str(r.topClipId) ? r.topClipId : clipIds[clipIds.length - 1];
-    out.push({ topClipId, clipIds, kind, plane, contentKey: r.contentKey, candidates, firstSegment, lastSegment, segmentsPerTask,
+    out.push({ topClipId, clipIds, kind, plane, contentKey: r.contentKey, candidates, originFrame, firstSegment, lastSegment, segmentsPerTask,
       ...(str(r.inputSig) ? { inputSig: r.inputSig } : {}) });
   }
   return out;
@@ -1053,7 +1066,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       skipped: (this.map?.layers ?? []).filter((l) => !usable.includes(l)).map((l) => l.clipId),
       manifests: this.manifests.size,
       streams: this.streamsNow().map((s) => ({ clipId: s.row.topClipId, kind: s.row.kind, members: s.row.clipIds.length, resultKey: s.resultKey, envFingerprint: s.envFingerprint,
-        candidates: s.row.candidates.length, firstSegment: s.row.firstSegment, lastSegment: s.row.lastSegment, ready: this.streamReady(s).length, inputSig: s.row.inputSig ?? null })),
+        candidates: s.row.candidates.length, originFrame: s.row.originFrame, firstSegment: s.row.firstSegment, lastSegment: s.row.lastSegment, ready: this.streamReady(s).length, inputSig: s.row.inputSig ?? null })),
       staleStreams: (this.map?.streams ?? []).filter((r) => this.streamStale(r)).map((r) => r.topClipId),
       streamManifests: this.streamManifests.size, streamBlocks: this.streamBlocks.size, streamBlockBytes: this.streamBlocks.total, streamRev: this.streamRev,
       cacheBytes: this.cache.total, cacheSize: this.cache.size, ...this.stats,
@@ -1158,7 +1171,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       const id = `stream:${s.row.topClipId}`;
       if (live.has(id)) continue;   // 同一张卡在表里列了两行:只认第一行
       live.add(id);
-      const sig = `${msg.key}|${JSON.stringify(msg.ranges)}|${msg.groupClipIds?.join(",") ?? ""}`;
+      const sig = `${msg.key}|${JSON.stringify(msg.ranges)}|${msg.groupClipIds?.join(",") ?? ""}|${msg.originFrame ?? ""}`;
       if (this.emitted.get(id)?.sig === sig) continue;
       this.emitted.set(id, { sig, clipId: s.row.topClipId, kind: "stream", key: s.resultKey });
       this.emit(msg);
@@ -1319,7 +1332,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
 
   private streamMessage(s: ChosenStream): ReadyMessage {
     return { type: "layer", clipId: s.row.topClipId, kind: "stream", key: s.resultKey, ranges: framesToRanges(this.streamReady(s)),
-      ...(s.row.kind === "group" ? { groupClipIds: [...s.row.clipIds] } : {}) };
+      originFrame: s.row.originFrame, ...(s.row.kind === "group" ? { groupClipIds: [...s.row.clipIds] } : {}) };
   }
 
   /** 流的清单或字节变了:记一笔、重发就绪、叫宿主重投(流平面要带上新到的字节) */
@@ -1331,12 +1344,16 @@ export class OnlineSnapshotSource implements SnapshotSource {
     try { this.onFetched?.(); } catch { /* 宿主坏了 */ }
   }
 
-  /** 播放头这一窗口的分段号:往回 `STREAM_BEHIND_SEGMENTS` 段,往前 `PREFETCH_SEC` 秒 */
-  private streamWindow(): [number, number] {
+  /**
+   * 播放头这一窗口落在**这条流**的哪几个分段:往回 `STREAM_BEHIND_SEGMENTS` 段,往前 `PREFETCH_SEC` 秒。回 `[lo, hi, cur]`,
+   * `cur` 是播放头所在的分段号。分段号是每条流自己的(从它的第一帧起数),所以窗口按流各算各的;播放头还没到这条流、
+   * 往前这几秒也够不着它时 `hi` 是负数,这条流这一轮什么都不取。
+   */
+  private streamWindow(row: Pick<OnlineStream, "originFrame">): [number, number, number] {
     const fps = this.map?.fps || this.playhead.fps;
     const g = Math.max(0, Math.floor(this.playhead.t * fps + 1e-6));
-    const cur = Math.floor(g / SEGMENT_FRAMES);
-    return [Math.max(0, cur - STREAM_BEHIND_SEGMENTS), Math.floor((g + Math.ceil(PREFETCH_SEC * fps)) / SEGMENT_FRAMES)];
+    const cur = streamSegmentOf(g, row.originFrame);
+    return [Math.max(0, cur - STREAM_BEHIND_SEGMENTS), streamSegmentOf(g + Math.ceil(PREFETCH_SEC * fps), row.originFrame), cur];
   }
 
   /** 取这一窗口里各条流的清单(没取过的、还没满的隔 `MANIFEST_POLL_MS` 再取) */
@@ -1344,9 +1361,9 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const map = this.map;
     const streams = this.streamsNow();
     if (!map || !streams.length) return;
-    const [lo, hi] = this.streamWindow();
     const wanted: { resultKey: string; seg: [number, number]; key: string }[] = [];
     for (const s of streams) {
+      const [lo, hi] = this.streamWindow(s.row);
       for (const seg of streamSpansInWindow(s.row, lo, hi)) {
         const key = this.streamManifestKey(s.resultKey, seg);
         const st = this.streamManifests.get(key);
@@ -1386,9 +1403,6 @@ export class OnlineSnapshotSource implements SnapshotSource {
     if (!map || !this.deps.assetBase()) return;
     const streams = this.streamsNow();
     if (!streams.length) return;
-    const [lo, hi] = this.streamWindow();
-    const fps = map.fps || this.playhead.fps;
-    const cur = Math.floor(Math.max(0, Math.floor(this.playhead.t * fps + 1e-6)) / SEGMENT_FRAMES);
     const now = this.now();
     const wanted: { hash: string; dist: number }[] = [];
     const want = (hash: string, dist: number) => {
@@ -1398,6 +1412,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       wanted.push({ hash, dist });
     };
     for (const s of streams) {
+      const [lo, hi, cur] = this.streamWindow(s.row);
       for (let n = Math.max(lo, s.row.firstSegment); n <= Math.min(hi, s.row.lastSegment); n++) {
         const hit = this.streamSegment(s, n);
         if (!hit) continue;
@@ -1474,7 +1489,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     if (!header || !blocks.size) return null;
     return {
       manifest: { streamKey: key, kind: s.row.kind, plane: s.row.plane, clipIds: [...s.row.clipIds], fps: header.fps, segmentFrames: SEGMENT_FRAMES,
-        bound: header.bound, tight: header.tight, inits, segments },
+        originFrame: s.row.originFrame, bound: header.bound, tight: header.tight, inits, segments },
       blocks,
     };
   }

@@ -35,15 +35,15 @@ function weightOf(c) {
   if (c.tier === 'local' || c.capabilities?.canvasHeavy === true || comp === 'belowDependent' || comp === 'unknown') return { class: 'heavy', estMs: null };
   return { class: 'medium', estMs: null };
 }
-/** `planStreams` 算出的一条单卡流,照 `queueStreamOf` 交给切分的形状(帧 45～164,分段 3～10) */
+/** `planStreams` 算出的一条单卡流,照 `queueStreamOf` 交给切分的形状(帧 45～164;分段从它自己的第一帧 45 起数,0～7) */
 function cardStream(clipId, extra = {}) {
   return {
-    streamKey: rk(`sk-${clipId}`, OWN), contentKey: `sk-${clipId}`, topClipId: clipId, firstSegment: 3, lastSegment: 10,
+    streamKey: rk(`sk-${clipId}`, OWN), contentKey: `sk-${clipId}`, topClipId: clipId, originFrame: 45, firstSegment: 0, lastSegment: 7,
     kind: 'card', plane: 'local', clipIds: [clipId], fps: 30, bound: { x: -32, y: -32, w: 464, h: 304 }, offset: { x: 760, y: 420 },
     firstFrame: 45, lastFrame: 164, total: 300, ...extra,
   };
 }
-/** 旧调用方只给流键与分段范围 */
+/** 旧调用方只给流键与分段范围(没有形状,也没有这条流的第一帧:不出浏览器那一份) */
 const legacyStream = clipId => ({ streamKey: rk(`sk-${clipId}`, OWN), contentKey: `sk-${clipId}`, topClipId: clipId, firstSegment: 3, lastSegment: 10 });
 
 function split({ cardPlan, streams, browser = { nodeId: 'n-br', envFingerprint: BR }, ...rest }) {
@@ -69,18 +69,19 @@ function ownTaskBefore({ clipId, from, to, fingerprint = OWN, cardSources = {} }
 
 test('BS-01 浏览器做得了的单卡流:切分方一份、浏览器一份,都带 dual;浏览器那一份的形状逐字段对', () => {
   const tasks = split({ cardPlan: [control('a')], streams: [cardStream('a')] });
-  assert.equal(tasks.length, 2, '分段 3～10 共 8 段一个任务 × 两份');
+  assert.equal(tasks.length, 2, '分段 0～7 共 8 段一个任务 × 两份');
   const [own] = ofFp(tasks, OWN);
   const [br] = ofFp(tasks, BR);
   assert.ok(own && br);
   const resultKey = rk('sk-a', BR);
   assert.deepEqual(br, {
-    id: `stream:${resultKey}:3-10`, kind: 'stream', resultKey, range: { unit: 'segment', from: 3, to: 10 },
+    id: `stream:${resultKey}:0-7`, kind: 'stream', resultKey, range: { unit: 'segment', from: 0, to: 7 },
     source: { projectId: 'p1', projectRev: 1, derivedFrom: own.source.derivedFrom },
     input: {
       clipId: 'a', cardId: 'card-a', entryKey: null, contentKey: 'sk-a', canvasHeavy: false, dual: true, compositing: 'independent',
       bake: { start: 1.5, end: 5.5, count: 120, sampling: { firstFrame: 45, phase: { numerator: 0, denominator: 1 } } },
-      stream: { kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: { x: -32, y: -32, w: 464, h: 304 }, offset: { x: 760, y: 420 }, firstFrame: 45, count: 120, total: 300 },
+      // `originFrame` / `lastFrame`:这条流自己的第一帧和最后一帧,页面按它们把分段号换成帧
+      stream: { kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: { x: -32, y: -32, w: 464, h: 304 }, offset: { x: 760, y: 420 }, firstFrame: 45, count: 120, total: 300, originFrame: 45, lastFrame: 164 },
     },
     weight: { class: 'medium', estMs: null, frames: 120 },
     requires: { envFingerprint: BR, codeVersion: 'cv-1', cardSources: {}, transcode: false, userCards: false, graphCards: false, belowDependent: false, capabilities: { streams: true } },
@@ -97,18 +98,24 @@ test('BS-02 切分方自己的那一份一个字不变:没有浏览器时与原�
   const cardSourceVersions = { 'user-x': 'user:abc' };
   for (const streams of [[cardStream('a')], [legacyStream('a')]]) {
     const none = split({ cardPlan, streams, browser: null, cardSourceVersions });
-    assert.deepEqual(none, [ownTaskBefore({ clipId: 'a', from: 3, to: 10, cardSources: { 'user-x': 'user:abc' } })], '没有浏览器指纹:与原来逐字相同');
+    const { firstSegment: from, lastSegment: to } = streams[0];
+    assert.deepEqual(none, [ownTaskBefore({ clipId: 'a', from, to, cardSources: { 'user-x': 'user:abc' } })], '没有浏览器指纹:与原来逐字相同');
   }
   const withBrowser = ofFp(split({ cardPlan, streams: [cardStream('a')], cardSourceVersions }), OWN);
-  const expected = ownTaskBefore({ clipId: 'a', from: 3, to: 10, cardSources: { 'user-x': 'user:abc' } });
+  const expected = ownTaskBefore({ clipId: 'a', from: 0, to: 7, cardSources: { 'user-x': 'user:abc' } });
   expected.input.dual = true;
   assert.deepEqual(withBrowser, [expected]);
   // 分段多于一个任务时,两份的段一一对应
-  const long = split({ cardPlan, streams: [cardStream('a', { firstSegment: 0, lastSegment: 19 })] });
+  const long = split({ cardPlan, streams: [cardStream('a', { lastFrame: 45 + 20 * 15 - 1, lastSegment: 19, total: 400 })] });
   const seg = list => list.map(t => [t.range.from, t.range.to]);
   assert.deepEqual(seg(ofFp(long, OWN)), [[0, 7], [8, 15], [16, 19]]);
   assert.deepEqual(seg(ofFp(long, BR)), seg(ofFp(long, OWN)));
   assert.deepEqual(ofFp(long, BR).map(t => t.weight.frames), [120, 120, 60]);
+  assert.deepEqual(ofFp(long, OWN).map(t => t.weight.frames), [120, 120, 60]);
+  // 流的末段不满 15 帧时,任务的帧数按实际算(这条流到第 337 帧为止:末段只有 8 帧),两份相同
+  const short = split({ cardPlan, streams: [cardStream('a', { lastFrame: 45 + 19 * 15 + 7, lastSegment: 19, total: 400 })] });
+  assert.deepEqual(ofFp(short, OWN).map(t => t.weight.frames), [120, 120, 53]);
+  assert.deepEqual(ofFp(short, BR).map(t => t.weight.frames), [120, 120, 53]);
 });
 
 test('BS-03 只给单卡流:组流、缺形状字段的流、成员卡不在 card plan 里的流,只出切分方自己的一份(与原来逐字相同)', () => {
@@ -120,11 +127,13 @@ test('BS-03 只给单卡流:组流、缺形状字段的流、成员卡不在 car
     '缺 bound': cardStream('b', { bound: null }),
     '宽不是偶数': cardStream('b', { bound: { x: 0, y: 0, w: 463, h: 304 } }),
     '缺 total': cardStream('b', { total: undefined }),
+    '缺这条流的第一帧(改分段规则之前的计划)': cardStream('b', { originFrame: undefined }),
+    '缺这条流的最后一帧': cardStream('b', { lastFrame: undefined }),
     成员卡不在计划里: cardStream('zz'),
   };
   for (const [name, stream] of Object.entries(cases)) {
     const tasks = split({ cardPlan, streams: [stream] });
-    assert.deepEqual(tasks, [ownTaskBefore({ clipId: stream.topClipId, from: 3, to: 10 })], name);
+    assert.deepEqual(tasks, [ownTaskBefore({ clipId: stream.topClipId, from: stream.firstSegment, to: stream.lastSegment })], name);
   }
 });
 
@@ -151,13 +160,13 @@ test('BS-04 画布卡、Lottie、重度为「重」的卡、本地档、标了�
   // 没有浏览器指纹、浏览器指纹与切分方相同:不另出
   assert.equal(split({ cardPlan: [control('a')], streams: [cardStream('a')], browser: null }).length, 1);
   const same = split({ cardPlan: [control('a')], streams: [cardStream('a')], browser: { nodeId: 'n', envFingerprint: OWN } });
-  assert.deepEqual(same, [ownTaskBefore({ clipId: 'a', from: 3, to: 10 })], '同指纹:只有切分方那一份,仍是要本机转码的形状');
+  assert.deepEqual(same, [ownTaskBefore({ clipId: 'a', from: 0, to: 7 })], '同指纹:只有切分方那一份,仍是要本机转码的形状');
 });
 
 test('BS-05 锁在别处的卡不出浏览器那一份:照锁只出一份;锁在浏览器指纹上时那一份是浏览器的形状', () => {
   const base = { cardPlan: [control('a')], streams: [cardStream('a')] };
   const third = split({ ...base, cardLocks: { 'stream:sk-a': THIRD } });
-  assert.deepEqual(third, [ownTaskBefore({ clipId: 'a', from: 3, to: 10, fingerprint: THIRD })], '锁在第三个环境:照它的指纹出切分方形状的一份');
+  assert.deepEqual(third, [ownTaskBefore({ clipId: 'a', from: 0, to: 7, fingerprint: THIRD })], '锁在第三个环境:照它的指纹出切分方形状的一份');
   const br = split({ ...base, cardLocks: { 'stream:sk-a': BR } });
   assert.equal(br.length, 1);
   assert.equal(br[0].requires.envFingerprint, BR);
@@ -166,7 +175,7 @@ test('BS-05 锁在别处的卡不出浏览器那一份:照锁只出一份;锁在
   assert.equal('dual' in br[0].input, false);
   // 接手:按自己的指纹出一份、带 takeover,不出浏览器那一份
   const taken = split({ ...base, cardLocks: { 'stream:sk-a': BR }, takeover: true });
-  const expected = ownTaskBefore({ clipId: 'a', from: 3, to: 10 });
+  const expected = ownTaskBefore({ clipId: 'a', from: 0, to: 7 });
   expected.takeover = true;
   assert.deepEqual(taken, [expected]);
   // 快照的锁不影响流的锁(各是各的锁键)
@@ -320,14 +329,15 @@ test('BS-15 queueStreamOf 把 planStreams 的形状原样交给切分;planListSt
   assert.deepEqual(planListStreams(entry, ['a'], { envFingerprint: OWN, codeVersion: 'cv' }).map(s => s.streamKey), listed.map(s => s.streamKey), '清单给数组也行');
   const q = queueStreamOf(listed[0]);
   const spec = listed[0];
-  assert.deepEqual(q, { streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: 'a', firstSegment: 3, lastSegment: 10,
+  assert.deepEqual(q, { streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: 'a', originFrame: 45, firstSegment: 0, lastSegment: 7,
     kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: spec.bound, offset: spec.offset, firstFrame: 45, lastFrame: 164, total: 300 });
   assert.deepEqual(q.bound, { x: -32, y: -32, w: 464, h: 304 }, '框 400×240 外扩 32');
   assert.notEqual(q.bound, spec.bound, 'bound 是拷贝');
   const control = { ...entry.cardPlan[0], cardId: 'punch-pill', tier: 'shared', start: 1.5, end: 5.5, sampling: { firstFrame: 45, phase: { numerator: 0, denominator: 1 } } };
   const tasks = split({ cardPlan: [control], streams: [{ ...q, browserOnly: true }] });
   assert.equal(tasks.length, 1);
-  assert.deepEqual(tasks[0].input.stream, { kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: { x: -32, y: -32, w: 464, h: 304 }, offset: spec.offset, firstFrame: 45, count: 120, total: 300 });
+  assert.deepEqual(tasks[0].input.stream, { kind: 'card', plane: 'local', clipIds: ['a'], fps: 30, bound: { x: -32, y: -32, w: 464, h: 304 }, offset: spec.offset, firstFrame: 45, count: 120, total: 300, originFrame: 45, lastFrame: 164 });
+  assert.deepEqual([tasks[0].range.from, tasks[0].range.to], [0, 7]);
 });
 
 /** 只跑到发布:假端点把 node.hello 之后的 plan 认领塞给节点,收它发布的细任务 */

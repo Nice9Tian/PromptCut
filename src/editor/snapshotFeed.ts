@@ -39,6 +39,7 @@ import { cardRunStatesGen, cardsRegistryGen, syncedUserCardsGen } from "../kerne
 import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { fitBeatSwaps, SWAP_MS, swapCostOfSize } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
+import { isStreamOrigin, streamSegmentOf } from "../render/streamSegments.mjs";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
 export const SNAPSHOT_THROTTLE_MS = 33;
@@ -60,13 +61,17 @@ const KIND_ORDER: ReadyKind[] = ["html", "local"];
  */
 export const POSTER_REFRESH_FRAMES = SEGMENT_FRAMES;
 
-/** 就绪索引里全部 `stream` 层(单卡流的成员就是它自己;组流挂在组里最上面那张上、带 `groupClipIds`) */
-function streamLayers(): { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; members: string[] }[] {
-  const out: { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; members: string[] }[] = [];
+/**
+ * 就绪索引里全部 `stream` 层(单卡流的成员就是它自己;组流挂在组里最上面那张上、带 `groupClipIds`)。
+ * `originFrame` 是这条流自己的第一帧(分段从它起数,`render/streamSegments.mjs`);没带它的层(改分段规则之前的生产者发的)
+ * 没法把帧号换成分段号,这里不收 —— 当作这张卡没有流。
+ */
+function streamLayers(): { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame: number; members: string[] }[] {
+  const out: { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame: number; members: string[] }[] = [];
   for (const [clipId, byKind] of readyIndex) {
     const layer = byKind.get("stream");
-    if (!layer) continue;
-    out.push({ clipId, key: layer.key, ranges: layer.ranges as Array<[number, number]>, groupClipIds: layer.groupClipIds,
+    if (!layer || !isStreamOrigin(layer.originFrame)) continue;
+    out.push({ clipId, key: layer.key, ranges: layer.ranges as Array<[number, number]>, groupClipIds: layer.groupClipIds, originFrame: layer.originFrame,
       members: layer.groupClipIds?.length ? layer.groupClipIds : [clipId] });
   }
   return out;
@@ -375,10 +380,11 @@ function rangesCover(ranges: readonly (readonly number[])[] | undefined, from: n
  */
 function demoteReady(clipId: string, globalFrame: number, localFrame: number, count: number, fps: number): boolean {
   const need = Math.max(0, Math.min(fps, count - localFrame) - 1);
-  const firstSeg = Math.floor(Math.max(0, globalFrame) / SEGMENT_FRAMES);
-  const lastSeg = Math.floor(Math.max(0, globalFrame + need) / SEGMENT_FRAMES);
   for (const layer of streamLayers()) {
     if (!layer.members.includes(clipId)) continue;
+    // 这几帧落在这条流的哪几段:按这条流自己的第一帧换算(早于第一帧的是负数段,不在就绪区间里)
+    const firstSeg = streamSegmentOf(Math.max(0, globalFrame), layer.originFrame);
+    const lastSeg = streamSegmentOf(Math.max(0, globalFrame + need), layer.originFrame);
     let all = true;
     for (let seg = firstSeg; seg <= lastSeg && all; seg++) all = rangesHave(layer.ranges, seg);
     if (all) return true;

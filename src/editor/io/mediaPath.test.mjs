@@ -34,7 +34,7 @@ function fakeEditor({ files = {}, throws = [], enqueue = null } = {}) {
       if (throws.includes(p)) throw new TypeError("fetch failed");
       const hit = files[p];
       if (hit) return Response.json({ ok: true, hash: hit, ext: p.split(".").pop(), name: p.split(/[/\\]/).pop(), path: `C:/store/${hit}`, url: `/@media/${hit}`, bytes: 10 });
-      return new Response("Media path is outside PromptCut media folders", { status: 403 });
+      return new Response("Media path is outside PromptCut media folders", { status: 403, headers: { "X-PC-Media-Verdict": "outside" } });
     }
     if (u.startsWith("/api/media/file?")) {
       const p = new URL(u, "http://x").searchParams.get("path");
@@ -52,7 +52,7 @@ let realFetch;
 beforeEach(() => { realFetch = globalThis.fetch; resetTierBackfillForTest(); T.resetAssetTiersForTest(); });
 afterEach(() => { globalThis.fetch = realFetch; resetTierBackfillForTest(); T.resetAssetTiersForTest(); });
 
-test("MP-M1 只有路径、本机取不到文件的素材:后台补入库那一轮标「(缺失)」(清空地址、名字加标记、path 留着);取得到的不标", async () => {
+test("MP-M1 只有路径、本机取不到文件的素材:后台补入库那一轮标「(缺失)」(名字加标记、写「确认缺失」记录、地址与 path 留着);取得到的不标", async () => {
   actions.newProject("跨机器");
   const gonePath = "C:\\Users\\admin\\Videos\\PromptCut\\media\\voice-gone.mp3";
   const okPath = "D:/pc/media/voice-ok.mp3";
@@ -65,8 +65,12 @@ test("MP-M1 只有路径、本机取不到文件的素材:后台补入库那一�
   const r = await ingestUnhashedMedia({ background: true, markMissing: true });
   assert.deepEqual(r.ingested, [ok.id]);
   assert.deepEqual(r.failed, [{ id: gone.id, name: "voice-gone.mp3", unreachable: true }]);
-  assert.equal(get(gone.id).url, "", "空地址:预览和导出跳过");
+  // 0.7.18:不再清空地址,改写「确认缺失」的记录(画面、声音、导出见到记录出占位,不去取这个地址);存盘重开后地址不变,记录才对得上
+  assert.equal(get(gone.id).url, fileUrl(gonePath), "地址留着");
   assert.equal(get(gone.id).name, "(缺失) voice-gone.mp3");
+  assert.deepEqual(get(gone.id).missingMaterial, { v: 1, mediaId: gone.id, reason: "confirmed-missing",
+    original: { kind: "audio", name: "(缺失) voice-gone.mp3", url: fileUrl(gonePath), path: gonePath }, visual: false, audio: true });
+  assert.equal(get(ok.id).missingMaterial, undefined);
   assert.equal(get(gone.id).path, gonePath, "path 留着,换回有这个文件的机器还补得上");
   assert.notEqual(get(gone.id), before, "换新对象写回");
   assert.equal(before.url, fileUrl(gonePath), "旧对象没被原地改");
@@ -105,6 +109,7 @@ test("MP-M3 打开项目后的后台检查:本机项目标「(缺失)」,共享�
     assert.equal(seen.failed[0].unreachable, true);
     assert.equal(get(a.id).url, fileUrl(p), "共享项目:不改项目");
     assert.equal(get(a.id).name, "voice.mp3");
+    assert.equal(get(a.id).missingMaterial, undefined, "共享项目:不认定缺失");
   } finally { stop(); }
   // 本机项目:标
   resetTierBackfillForTest();
@@ -114,8 +119,9 @@ test("MP-M3 打开项目后的后台检查:本机项目标「(缺失)」,共享�
   stop = startTierBackfill({ shared: () => false, afterIngest: (r) => { seen = r; } });
   try {
     await waitFor(() => seen);
-    assert.equal(get(b.id).url, "");
+    assert.equal(get(b.id).url, fileUrl(p));
     assert.equal(get(b.id).name, "(缺失) voice.mp3");
+    assert.equal(get(b.id).missingMaterial?.reason, "confirmed-missing");
   } finally { stop(); }
 });
 
@@ -143,13 +149,18 @@ test("MP-M5 带哈希、本地内容库里没有这份字节的素材标「(缺�
       asked.push(new URL(u, "http://x").searchParams.get("hashes").split(","));
       return Response.json({ ok: true, hashes: [H("a"), H("c")] });
     }
+    // 内容库里没有的,按原路径再找一次(0.7.18):这里原路径上也明确没有(404)
+    if (u.startsWith("/api/media/adopt?")) return new Response("Not found", { status: 404 });
     throw new Error(`没料到的请求 ${u}`);
   };
   const r = await checkHashedMedia();
   assert.deepEqual(asked, [[H("a"), H("b"), H("c")]]);
   assert.deepEqual(r, { missing: [lack.id], restored: [] });
-  assert.equal(get(lack.id).url, "");
+  assert.equal(get(lack.id).url, `/@media/${H("b")}`, "地址留着按哈希的那一个");
   assert.equal(get(lack.id).name, "(缺失) lack.mp3");
+  assert.deepEqual(get(lack.id).missingMaterial, { v: 1, mediaId: lack.id, reason: "confirmed-missing",
+    original: { kind: "audio", name: "(缺失) lack.mp3", url: `/@media/${H("b")}`, hash: H("b"), path: "C:/A/out/media/y.mp3" }, visual: false, audio: true });
+  assert.equal(get(have.id).missingMaterial, undefined);
   assert.equal(get(lack.id).hash, H("b"), "哈希留着:下次打开照样按哈希找");
   assert.equal(get(have.id).url, `/@media/${H("a")}`);
   assert.equal(get(tiered.id).name, "tiered.mp4");
@@ -172,6 +183,7 @@ test("MP-M6 标过「(缺失)」的带哈希素材,内容库里有了之后去�
   assert.deepEqual(await checkHashedMedia(), { missing: [], restored: [m.id] });
   assert.equal(get(m.id).name, "back.mp3");
   assert.equal(get(m.id).url, `/@media/${H("f")}`);
+  assert.equal(get(m.id).missingMaterial, undefined);
   // 共享项目:后台检查不问 /api/media/local
   resetTierBackfillForTest();
   actions.newProject("共享-带哈希");

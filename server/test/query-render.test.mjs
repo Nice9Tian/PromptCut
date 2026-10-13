@@ -210,6 +210,25 @@ test('QR-G1-6 路由按谁要的分:用户点开的 GIF 走 preview、不经 vis
   assert.equal((bake.match(/lane: o\.lane \}/g) || []).length, 2, 'bakeOne / bakeClip 都把 lane 传给 renderOneFrame / renderFrames');
 });
 
+test('QR-G1-7 单张卡片画面(bake_card、3D 视图贴图)当场渲出位图:不经帧库的 see_frames、不生成快照;排队规则同上', () => {
+  const read = rel => fs.readFileSync(new URL(rel, import.meta.url), 'utf8');
+  const bake = read('../vision/bake.ts');
+  assert.equal((bake.match(/post, bitmapOnly: true, lane: o\.lane \}/g) || []).length, 2, 'bakeOne / bakeClip 走预渲染进程时都要位图那条路');
+  assert.match(bake, /graphCode: graphCardCode\(project, iso\.clip\.nodeId\), store: BAKE_STORE_VERSION \}/, '出法版本进缓存键,旧键不再命中');
+  assert.match(bake, /export const BAKE_STORE_VERSION = 2;/);
+  const render = read('../vision/render.ts');
+  assert.match(render, /if \(!o\.runner && o\.bitmapOnly\) \{\s*const shots = await renderCardBitmaps\(root, origin, project, times, \{ signal: o\.signal, lane: o\.lane \?\? "agent" \}\);/,
+    '位图那条路在进 frameService 的 see_frames 之前就分出去');
+  // 去掉注释再查:说明文字里会提到这些名字
+  const bitmap = read('../vision/card-bitmap.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const banned of ['see_frames', '.entry(', 'onSnapshot', 'snapshotFrames', '.record(', 'cardRender', 'writeMov', 'domCache'])
+    assert.ok(!bitmap.includes(banned), `card-bitmap.ts 不该出现 ${banned}:这条路不建帧库条目、不生成也不记快照`);
+  assert.match(bitmap, /fullFrame: true, writeFrames: false/, '截图就是这一帧的画面,不写帧文件');
+  assert.match(bitmap, /if \(lane === "agent"\) await service\.runAgentTask\(work\);/, 'Agent 的走 Agent 专用实例');
+  assert.match(bitmap, /service\.runQueueTask\(work, o\.signal, \{ front: lane === "preview", scaleLane: "preview", kind: lane \}\)/,
+    '贴图不进 Agent lane:用户等着看的插在普通预渲染待办之前,空闲预取排队尾,都是 1 倍缩放');
+});
+
 /* ------------------------------------------------------------------ G2 */
 
 test('QR-G2-1 Agent 队列空、queue lane 忙时,Agent 专用实例接下一项普通预渲染', async () => {

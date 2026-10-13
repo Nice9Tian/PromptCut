@@ -42,6 +42,7 @@ import { PNG } from 'pngjs';
 import { flagArg } from './probe-connect.mjs';
 import { FramePipeline } from '../../server/frame-pipeline.mjs';
 import { SEGMENT_FRAMES, splitFmp4 } from '../../server/frame-stream.mjs';
+import { streamSegmentFirstFrame, streamSegmentLastFrame } from '../../src/render/streamSegments.mjs';
 import { bakeStream } from '../../server/bakery/bake.mjs';
 import { openStreamSegmentEncoder } from '../../server/bakery/ffmpeg.mjs';
 
@@ -233,7 +234,8 @@ try {
       const clip = { x: rect.x + spec.offset.x, y: rect.y + spec.offset.y, w: rect.w, h: rect.h };
       /** 重灌页面以后产这个分段的全部 PNG;replay = 照旧(传挂载帧、预热缺省) */
       const shoot = async (segment, replay) => {
-        const fromFrame = segment * SEGMENT_FRAMES, toFrame = Math.min(fromFrame + SEGMENT_FRAMES - 1, spec.total - 1);
+        // 这个分段盖住的帧:从这条流自己的第一帧起数(`src/render/streamSegments.mjs`)
+        const fromFrame = streamSegmentFirstFrame(segment, spec.originFrame), toFrame = streamSegmentLastFrame(segment, spec.originFrame, spec.lastFrame);
         await bakery.reset(state.isolated, pipeline.emptyUrl(state.isolated), { deferCards: true });
         bakery.streamLease = null;
         const pngs = [];
