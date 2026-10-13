@@ -74,10 +74,12 @@ account-executor-assembly 的 6640/6641（命令行拒绝配置的输入，根�
 
 改法（只动测试）：`finally` 里先等 `activeRuns===0`（最多 90 秒）再收尾，这样关的时候是干净的；等待时限 40 秒放宽到 120 秒、用例时限 90 秒放宽到 240 秒（只防卡死）。未做的：`cloud-queue-user-path.mjs` 的 `close()` 应改成每一步各自 try/catch、全部执行完再汇总抛出，建议归另一个子 Agent。同类"失败就不收尾"的写法：我查了用这批底座的测试，其余都用 `try/finally` 或 `t.after` 收尾；唯一的共同隐患就是上面这个 `close()` 的"中途抛出跳过后面"。
 
-## 三、npm test 的保险
-评估：
-- (a) node 自带 `--test-force-exit` + `--test-timeout`（node v24.19.0 支持）。小实验：失败后还有监听的文件，加 `--test-force-exit` 后 0.16 秒退出，仍记失败；永不结束的测试靠 `--test-timeout` 在时限到时记为失败（`test timed out after N ms`）并退出；测试自己写了更长 `timeout` 的不受影响（实验：自带 30 秒时限的测试跑 6 秒通过，没时限的被 3 秒时限判失败）；通过但留着监听的文件仍记通过、整体零失败。对每个文件的子进程都生效。
-- (b) 在 `scripts/test-suite.mjs` 自己做看门：node 的测试运行器只启一个父进程，每个文件是它的孙进程，要从事件流里找出文件对应的进程再杀进程树，实现复杂，且容易误杀。
-选 (a)：`scripts/test-suite.mjs` 的 `baseArgs` 加了 `--test-force-exit` 和 `--test-timeout=1200000`（20 分钟，环境变量 `PROMPTCUT_TEST_TIMEOUT_MS` 可改，验证看门时改小用）。不改变通过与失败的判定。限制：被强制退出的文件不会单独点名（强制退出只发生在测试都结束之后，失败仍按失败点名）；因超时失败的测试按名字出现在"failing tests"里。
+## 三、npm test 的保险（最终采用自己的看门，不用 node 自带开关）
+先试了办法 (a) node 自带 `--test-force-exit`（加 `--test-timeout`）：小实验里能让失败后留着监听的文件退出，但**全量跑时发现它会把本来通过的文件记成文件级失败**（asset-announce、asset-harness-lifecycle、cloud-agent-spawn-disabled、prerender-proxy 等，单独跑不加该开关全过），改变了判定，所以放弃并撤掉。
 
-验证（用完已删，不在仓库里）：`out/zz/` 下三个小文件。①失败且留着监听的文件，②永不结束且有定时器的测试，两者一起用 `PROMPTCUT_TEST_TIMEOUT_MS=8000 npm test -- …`：在 8 秒内结束，列出两个失败（含 `test timed out after 8000ms`），最终"仍有失败"，退出码 1。③通过但留着监听的文件：通过、"零失败"、退出码 0。
+改用办法 (b)：`scripts/test-suite.mjs` 里加看门。每 30 秒（`PROMPTCUT_TEST_WATCHDOG_POLL_MS`）查测试运行器的直接子进程，凡是命令行带 `*.test.mjs` 且已运行超过 15 分钟（`PROMPTCUT_TEST_FILE_LIMIT_MS`）的，杀它的进程树（Windows 用 `taskkill /T /F`，Linux 用 `pkill -P` 加 SIGKILL），打印一行"看门：<文件> …"，并在最终汇总后再点名一次"被看门强制结束的测试文件（记为失败）"。被杀的文件由测试运行器照常记成文件级失败，其它文件的判定不变；起进程都带 `windowsHide`（守门测试 windows-hide-silent-spawn 扫过）。
+
+验证（用完已删，不在仓库里）：`out/zz/` 下一个"失败并留着监听、进程退不出来"的文件和一个普通通过的文件，用 `PROMPTCUT_TEST_FILE_LIMIT_MS=10000 PROMPTCUT_TEST_WATCHDOG_POLL_MS=3000 npm test -- …`：12 秒时看门杀掉前者并点名，通过的文件仍通过，最终"仍有失败"并再次点名，退出码 1，整体不再挂住。
+
+## 四、三个进程同时跑全量 npm test
+每遍 245 秒左右正常结束，三遍都没有卡死（之前会无限挂住）。过程中为减少"忙时才有的"失败，又放宽了几处只防卡死的等待：cloud-agent-runs 里 CA-RENDER 的几处等待（20/5 秒到 60/30 秒），multi-agent-presence 的 3 秒等待改 20 秒、在场状态的存活期 15 秒改 60 秒（忙时用例跑到 19 秒，存活期先过期了，所以读不到"正在编辑"）。三个进程同时跑加上机器上别的子 Agent，每遍仍有 4～9 条因负载超时的失败（artifact-push 的 W4、cloud-agent-service、reopen-hosting、user-editing、ai-visual-shared、hosted-render-queue、cloud-tools-p4-subject 等，每遍不完全相同）；把这些文件逐个单独重跑，79 条全部通过。未再逐条放宽，这类用例的时限在三倍负载下本来就偏紧，建议主会话需要时另议。
