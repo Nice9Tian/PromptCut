@@ -15,7 +15,8 @@
  * 层表里的流全靠「切分给浏览器出过键」那份记录,`FramePipeline.issuedStreamSpecs`),第二轮开着。`--only` 只跑一轮。
  *
  * 每一轮的断言(任一不成立退出码 1;`<轮>` 是 off / on):
- *   A 产      甲报能压流,认领并完成了这张卡的流任务——每一段先一个稀疏流任务(每个分段只截第一帧)、再一个满密度任务,四个各做一次(没有失败);
+ *   A 产      甲报能压流。这张卡是空项目里的第一张,加载遮罩那一轮里它的稀疏版在测量时就由本页自己产了(`pageStreams.ts` 的 `measure()`,不经队列);
+ *             队列来的两个稀疏流任务走去重,两个满密度任务由甲的节点认领并完成,各做一次(没有失败);
  *             切分方一个细任务都没做;内容库 `render-manifest` 里每一段一份流清单(稀疏、满密度写同一个键,最后是满密度的,稀疏那一趟量的位置矩形还在)
  *             (过桌面的 `manifestMatches`,编码器 `webcodecs-avc`,分段齐);素材服务 `px` 里开头文件与每个分段都 complete、哈希对得上
  *   B 层表    内容库的层表(v 3)带 `streams`,有这张卡的一行:单卡流、候选里有甲的指纹且结果键 = 内容键 × 甲的指纹 = 甲产的那条流的键、
@@ -237,7 +238,8 @@ async function liveShot(page, id, sec, dir, name) {
     while (Date.now() - t0 < 8000 && !ok) {
       const s = await stageState(page, id);
       last = s ? { t: s.t, tracks: s.tracks.length, clip: { suppressed: s.clip.suppressed, snapshot: s.clip.snapshot, placeholder: s.clip.placeholder } } : null;
-      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && !s.tracks.length && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
+      // 停着时这张卡的流轨道可能还留着(「暂停和拖动贴流」之后);判据看包裹层没被抑制(画的是活渲)。调用处都在流补成满密度以后
+      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
       else await delay(100);
     }
   }
@@ -459,7 +461,8 @@ async function runRound(streams, M) {
     R.clip = clipId;
     const docId = await store(pageA, `return S.getState().project.id;`);
     const ready = await until('甲当节点、报到拿到指纹、探到编码器', async () => { const d = await nodeDiag(pageA); return d?.ready === 'ready' && d.envFingerprint && d.streams?.capable ? d : null; }, 240_000, 500);
-    check(ready?.eligibility?.ok && ready?.streams?.capable === true, 'A:甲当节点的条件成立,报能压流', ready && { eligibility: ready.eligibility, streams: ready.streams });
+    // 报到在测量落定之前就做(测量时产稀疏版要指纹),这时资格里只差「测量落定」这一条
+    check((ready?.eligibility?.ok || ready?.eligibility?.reason === 'measuring') && ready?.streams?.capable === true, 'A:甲当节点的条件成立(或只差测量落定),报能压流', ready && { eligibility: ready.eligibility, streams: ready.streams });
     const fpA = ready?.envFingerprint ?? null;
     R.jia = { envFingerprint: fpA, nodeId: ready?.nodeId ?? null, encoder: ready?.streams && { probe: ready.streams.probe, mode: ready.streams.mode } };
     say('jia.ready', { round: streams, ...R.jia });
@@ -475,18 +478,18 @@ async function runRound(streams, M) {
       const d = await nodeDiag(pageA);
       for (const h of d?.holding ?? []) seen.add(h.id);
       if (d?.state === 'baking') return null;
-      if (d?.counters?.streamTasks >= 4 && d.counters.completed >= 5) return d;
+      if (d?.counters?.streamTasks >= 2 && d.counters.dedup >= 2 && d.counters.completed >= 5) return d;
       return d?.counters?.streamTasks === 0 && d.counters.dedup >= 4 ? d : null;
     }, 900_000, 250);
     const diagA = produced ?? (await nodeDiag(pageA));
     R.produce = { ms: produced ? Date.now() - tBake : null, counters: diagA?.counters ?? null, streams: diagA?.streams ?? null, claimed: [...seen] };
     say('jia.produced', { round: streams, ms: R.produce.ms, counters: diagA?.counters });
     const streamIds = [...seen].filter((id) => id.startsWith('stream:')).sort();
-    check(diagA?.counters?.streamTasks === 4 && diagA?.counters?.failed === 0 && diagA?.counters?.lost === 0,
-      'A:甲认领并完成了流任务(稀疏、满密度各两个,各做一次),没有失败'
+    check(diagA?.counters?.streamTasks === 2 && diagA?.counters?.dedup >= 2 && diagA?.counters?.failed === 0 && diagA?.counters?.lost === 0 && diagA?.pageStreams?.measure?.produced === 2,
+      'A:稀疏的两段在测量时由本页产了(队列来的那两个走去重),满密度的两个由甲的节点认领并完成,各做一次,没有失败'
         + (diagA?.counters?.streamTasks === 0 && diagA?.counters?.dedup >= 4 ? '——这一次计划 5 秒没人认领,本页自己先产了,队列来的任务都走了去重(重跑)' : ''), diagA?.counters);
     // 每一帧的位置各送进编码器两次:稀疏的一趟(一张重复到整段)和满密度的一趟
-    check(diagA?.counters?.streamFrames === 2 * STREAM_FRAMES, 'A:稀疏、满密度两趟各盖满这条流的每一帧', { streamFrames: diagA?.counters?.streamFrames, frames: STREAM_FRAMES });
+    check(diagA?.counters?.streamFrames === STREAM_FRAMES && diagA?.streams?.frames === 2 * STREAM_FRAMES, 'A:稀疏(测量时)、满密度(经队列)两趟各盖满这条流的每一帧', { nodeStreamFrames: diagA?.counters?.streamFrames, encoded: diagA?.streams?.frames, frames: STREAM_FRAMES });
     check(streamIds.length >= 1, 'A:甲手里出现过 stream: 任务', [...seen]);
     const deskQ = await editor.queue().catch(() => null);
     R.desk.stats = deskQ?.stats ?? null;
