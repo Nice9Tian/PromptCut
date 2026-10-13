@@ -15,7 +15,7 @@
 
 本机（Windows）能验的六段都做了、都有测试：生产的主服务装配加真子进程、真实运行器跑通了，验收里那两条原先不成立的行为（停止真的停下；共有对话里第二位发送者的任务接着开始）用同样的断言证明成立。**Linux 上的那一半一行都没跑过**：root 入口、任务槽的 systemd 单元模板、发布器看系统的那一半接到真的任务进程上——这些只有主会话到节点上跑自检脚本才知道通不通。所以现在的状态是「代码与部署材料齐了、本机全绿、节点上待验」，不是「可以部署」。
 
-（独立审查之后又改了一轮，见文末「审查后补做的」；下面各节里被那一轮改掉的说法已就地更正。）
+（独立审查之后改了一轮，见「审查后补做的」；主会话在节点上实跑第一遍（过 5 步、第 6 步不过）之后又改了一轮，见「节点第一遍实跑之后」。下面各节里被改掉的说法已就地更正。）
 
 ## 做了什么
 
@@ -124,7 +124,7 @@
 ## 没做成的及原因
 
 1. **Linux 上一行都没跑过。** root 入口、适配接到真的发布器运行时、任务槽单元模板、任务进程在 systemd 下凭 root 写的设置起来——全部要等主会话跑自检脚本。脚本本身我也只在本机验了参数、清理和「非 Linux 拒绝」，十一步检查的正文没有执行过一次，第一次跑很可能有脚本自己的毛病。
-2. **单元模板里有四项是我读 systemd 的行为推出来的，没有实测**（〔裁 10〕）。要紧的一条：发布器在「主进程没了」以后要核原来那个 cgroup 还在；而 systemd 在单元进了 `failed` 或 `inactive` 以后会把 cgroup 收掉。照 ChatGPT 留下的做法（只在子进程还活着的两秒窗口里验过），任务进程干净地崩溃后 root 写不了失败观察、也强制关不了，槽就卡死。我在模板里用 `ExecStart=-…` 加 `RemainAfterExit=yes`（主进程怎么退单元都停在 `active (exited)`、cgroup 留着）、`KillSignal=SIGKILL`（关的时候不走会超时进 `failed` 的那条路）、`OOMPolicy=continue` 来避开。自检第 6、7、8 步验的就是它；不成立的话这三步会失败并打印单元当时的状态。
+2. **单元模板里有四项是我读 systemd 的行为推出来的，没有实测**（〔裁 10〕）。（节点第一遍实跑以后：`ExecStart=-` 加 `RemainAfterExit=yes` 让单元停在 `active (exited)`、`KillSignal=SIGKILL` 停完回到 `inactive` 这两样证实了；「cgroup 会留着」证伪了，改的是发布器，见「节点第一遍实跑之后」。下面是初稿原文。）要紧的一条：发布器在「主进程没了」以后要核原来那个 cgroup 还在；而 systemd 在单元进了 `failed` 或 `inactive` 以后会把 cgroup 收掉。照 ChatGPT 留下的做法（只在子进程还活着的两秒窗口里验过），任务进程干净地崩溃后 root 写不了失败观察、也强制关不了，槽就卡死。我在模板里用 `ExecStart=-…` 加 `RemainAfterExit=yes`（主进程怎么退单元都停在 `active (exited)`、cgroup 留着）、`KillSignal=SIGKILL`（关的时候不走会超时进 `failed` 的那条路）、`OOMPolicy=continue` 来避开。自检第 6、7、8 步验的就是它；不成立的话这三步会失败并打印单元当时的状态。
 3. **自检验不到「正常结束」那条关法。** 它要任务进程签意向，任务进程要先从真的文档服务领到任务；自检里没有文档服务。这条在本机集成测试里验过，差的系统那一半和强制关是同一段代码。真要验得等部署后发一条真任务。
 4. **节点重启以后，原来的槽不能接着用。** 发布器把记录链钉在一次开机上（`boot-transition`），文档服务的检查点又钉着锚点摘要。重启后每个槽要换新的 `authorityId`、空的登记目录、重新初始化、改文档服务配置并重启它；重启前没结清的任务结不了。这是 ChatGPT 的设计，我没动，写进了部署说明。上生产前建议定一下要不要改（见「要用户定的事」第 3 条）。
 5. **root 入口或主服务重启，正在跑的任务会被记成「失败」。** root 入口再起来时没有上一代的通道，只能把它停下走失败观察；主服务重启期间任务进程交不上事件，会放弃结算。没有做「重新接上还在跑的一代」（指令通道是本机 HTTPS，技术上接得上，要改调度的接手逻辑）。部署说明里写了「重启前先等槽空」。
@@ -218,7 +218,7 @@ node scripts/probes/account-root-entry-linux.mjs --cleanup <编号>     # 可以
 
 跑完：`rm -rf /root/pc-claude-probe-src /root/pc-claude-probe.log`。
 
-最可能先坏的地方：第 1 步（单元起不来，看 `diag journal`）；第 6 步的 `unit-left-active-state`（我对 systemd 的推断不成立，见「没做成的」第 2 条）；第 10 步的 `root-code-untrusted`（node 或 `/run` 的属主、权限不合它的要求，`diag` 里有是哪个路径）。
+第一遍实跑（2026-10-13）第 1～5 步已过、第 6 步不过，原因和改法见「节点第一遍实跑之后」；打包清单没变，重新打包再跑即可。下一遍最可能先坏的地方：第 6～8 步里发布器在「服务的 cgroup 已被收掉」这个状态下往后走的每一步（停一个 active (exited) 的单元、放掉 slice），都是第一次在真机上执行；第 10 步的 `root-code-untrusted`（node 或 `/run` 的属主、权限不合它的要求，`diag` 里有是哪个路径）。
 
 ### 二、上一块留下的那支（任务进程的生产配置入口，九条）
 
@@ -321,6 +321,86 @@ node scripts/probes/account-root-entry-linux.mjs --cleanup <编号>     # 可以
 - `accept-018-conv-*` 三个文件共用写死的 28580 段，一次全量里可能互相撞；建议改成向系统要端口。不是这一块的文件，没动。
 - 应该改 3 的效果（两个用户互写同一个对话目录）和应该改 4 在真实部署目录上的表现，都要到节点上才看得到。
 
+## 节点第一遍实跑之后（2026-10-13，Ubuntu 22.04、systemd 249）
+
+主会话在节点上跑了自检：第 1～5 步 ok，第 6 步 `unit-left-active-state`，其余 skip，清理干净，三个生产服务没被碰。失败时的读数：`ActiveState=active SubState=exited MainPID=0 ControlGroup=`（空）。
+
+### 一、是产品代码的假设错了，不只是自检的断言
+
+- **现象**：任务进程的主进程被结束、组里一个进程都不剩时，单元确实停在 `active (exited)`（模板里的 `RemainAfterExit=yes` 和 `ExecStart=-` 起作用了），启动号没变，但 systemd 把这个服务自己的 cgroup 收掉了，`ControlGroup` 变空。我原来以为单元还 active 时 cgroup 会留着，这个推断是错的。
+- **它打中的是发布器**（ChatGPT 留下的 `asset-root-registry-publisher.mjs`，`pinPrevious(old, { allowDeadMain: true })` 里的 `assertPrevious`）：主进程没了以后它去读记录里那个服务 cgroup 的目录、并要求 `ControlGroup` 仍是那个路径。目录不在，它当场出错。写失败观察和强制关都要先过这一步，所以在真机上**任务进程一崩，root 既写不了失败观察也强制关不了，槽卡死**。它原来只在「主进程没了、子进程还活着两秒」的窗口里验过，那时 cgroup 还在。自检第 6 步的断言（要求 `ControlGroup` 非空）只是把同一个错误的假设写了一遍；就算不断言，下一行 `observeFailure()` 也会失败。
+- **改法**〔裁 21〕（提交 `268bcc4b`）：把这段判断抽成纯函数 `validateDeadMainPreviousV2`，两种真实状态都认——
+  - 甲（原有）：`ControlGroup` 仍是记录里的路径，目录在，设备号、节点号、属主、权限都对得上；
+  - 乙（新认）：`ControlGroup` 为空**并且**那个目录确实不存在。
+  两种都仍然要求：主进程号是 0、单元的启动号就是记录里那一次、开机号没变；乙里「`ControlGroup` 空而目录还在」「`ControlGroup` 有值而目录不在」都算对不上，照旧拒。别的检查一处没动（预留与记录对得上、单元文件与 drop-in 没被改、单元的 `Slice` 是这一代的 slice、slice 还是原来那一个且里面没有别人的东西、旧主进程确实不在、读完再读一遍单元没变）。
+- **为什么这不是放松关闭的证明**：证明从来不是服务的那个 cgroup，而是包着它的那个临时 slice——发布器凭固定的句柄读 slice 的 `populated`，并核 slice 的启动号、设备号、节点号。服务的 cgroup 是 slice 的子目录；它没了而 slice 是空的，正说明这一代一个进程都不剩。少掉的只是「对一个已经不存在的目录再核一遍设备号」。这条判断只在 Agent 任务槽用（素材服务那一路不许 `allowDeadMain`），素材服务的行为没变。
+- **不依赖 Linux 的单测**：`server/test/agent-run-scope-dead-main.test.mjs`，3 条。读数是注入的，「乙」那一组照抄节点上实测到的；另 16 种对不上的读数逐个拒。
+- 自检第 6 步改成：要求 `active/exited`、启动号等于记录里的，`ControlGroup` 在不在不作要求（照实打印）；然后照旧要写得下失败观察、强制关得掉。任务槽模板里那段注释原来写着「cgroup 留着」，照实改了。
+- **仍然只是读代码推出来的**：发布器在状态乙下往后的每一步（`systemctl stop` 一个 `active (exited)` 的单元回到 `inactive`、凭 slice 为空写关闭记录、放掉 slice）在真机上还没执行过。下一遍自检的第 6、7、8 步验的就是它。
+
+### 二、我对 systemd 行为的推断，逐条
+
+**这一遍真机已经证实的**（第 1～5 步走到了，加上第 6 步失败前的读数）：
+
+1. 单元文件放在 `/run/systemd/system/` 下，`FragmentPath` 就是它；`KillMode=control-group`、`Delegate=no`、`Restart=no` 读得出来，发布器的单元核对通过。
+2. 发布器用 `busctl … StartTransientUnit` 建临时 slice、用运行时 drop-in 写 `Slice=`、`daemon-reload` 后起单元，服务的 cgroup 落在 `<slice>/<单元>` 下（开了三代都过）。
+3. `Type=simple` 加 `ExecStart=-…` 起得来；任务进程以非 root 用户从 `/run` 下的代码副本、不带 `node_modules` 起来，读到 root 写的设置文件，在发布器的重试时限内开始监听；监听口归主进程那一条核对通过；身份口的回应形状（`{ ok, result }`）发布器认。
+4. `KillSignal=SIGKILL`：对正在跑的单元 `systemctl stop`，整组进程被结束，slice 的 cgroup 变空，单元回到 **`inactive`（不是 `failed`）**（日志 `Deactivated successfully`；第 1 步的退槽和第 5 步的强制关各走了一次）。
+5. `systemctl stop <slice>` 以后 slice 的 cgroup 目录没了；下一代能接着开（改 drop-in、`daemon-reload`、再起）。
+6. `systemctl kill --kill-who=main --signal=SIGKILL` 在 249 上可用，只结束主进程。
+7. 主进程被 SIGKILL 以后：单元 **`active (exited)`**、`MainPID=0`、启动号还在、`Slice` 还是这一代的；slice 本身也还在（清理时列得到它）。——`ExecStart=-` 加 `RemainAfterExit=yes` 这一半证实了。
+8. 指令通道：root 证书连得上 systemd 起的任务进程；它自己答的拒绝带得回来；绑定通过。
+9. `daemon-reload` 没有碰到别的服务（跑之前在运行的 26 个服务主进程号、重启次数都没变）。
+
+**证伪的**：
+
+10. 「单元停在 `active (exited)` 时服务自己的 cgroup 会留着」——不成立，见上一节。
+
+**还没被执行到的**（下一遍的第 6～11 步，以及自检没覆盖的）：
+
+11. 状态乙下发布器的 `scopeInfo` / `exclusiveScope` 过得去（slice 仍 active、启动号没变、里面没有子目录也没有进程），slice 的 `cgroup.events` 读出 `populated 0`。〔第 6 步〕
+12. 对 `active (exited)` 的单元 `systemctl stop`：回到 `inactive`、没有挂着的 Job、不进 `failed`。〔第 6、7、8 步〕
+13. 主进程自己以退出码 0 退出（收尾指令）以后同样是 `active (exited)`、`MainPID=0`。〔第 7 步〕
+14. 没绑定过的一代在主进程没了以后能按「没领过任务」退掉。〔第 7 步〕
+15. 新建的接线（没有连着任何一代）对一条还活着的遗留一代：`systemctl kill` 主进程 → 失败观察 → 强制关。〔第 8 步〕
+16. 文档服务读记录链的那段代码以 root 读得通；登记目录里的文件非 root 用户读得到。〔第 9 步〕
+17. root 入口核代码属主在 `/run` 下的副本和 `/usr/local/bin/node` 上过得去；改成组可写就拒。〔第 10 步〕
+18. root 入口常驻：空闲八秒还活着、还在问；SIGTERM 退出码 0。〔第 11 步〕
+19. **自检没覆盖、仍是推断**：主进程以**非零退出码**退出时 `ExecStart=-` 同样不让单元进 `failed`（自检只做了「被 SIGKILL」和「退出码 0」两种）；`OOMPolicy=continue` 在内核因内存不足结束组内进程时不让 systemd 停单元；单元起不来（可执行文件不存在等）时的状态；`UMask=0007` 加共用组下两个用户互写同一个对话目录；root 入口单元的 `Restart=always`、`StartLimitIntervalSec=0`；节点重启后的 `boot-transition`。
+
+### 三、`Special user nobody configured, this is not safe!`
+
+自检借用 `nobody` 可以（它不建用户），但部署不行：README 第一步和任务槽模板里写明任务用户要专门建、不要用 `nobody`；填单元的小工具 `account-task-unit.mjs` 遇到 `--user nobody` 直接拒（`task-unit-user-nobody`），只有自检带着明确的开关才能借用。
+
+### 四、「交错二」里第二条落到第 3 代
+
+**判断：两样都有——调度在忙时确实白开了一代，原来的断言把它照了出来；功能结果是对的。**
+
+- 机制（读代码得出，没能在本机复现：十份并着跑、八份并着跑都没出现）：第一代被 root 关掉以后，调度立刻去问文档服务。文档服务这一问里要先把那条停止控制在它自己那一侧办完、再读 root 的关闭记录去结清；夹具里那一步是不等的（生产的装配里是等的，但失败时同样会留到下一轮）。机器忙时这一轮没结清，对话的「当前任务」还挂着，而清单只看「有没有排队的消息」，于是把这个对话报给了调度。调度开出第 2 代去领，文档服务回 409 `run-not-ready`，第 2 代被退掉、这个对话歇一会儿，再下一轮结清了，第二条落到第 3 代。
+- 这算不该发生：块一的规矩就是「上一条没结清下一条领不到」，那就不该把它报出去让调度白开一个进程（生产上是一次 systemd 起停加一次 `daemon-reload`，一两秒）。
+- **改法**〔裁 22〕（提交 `0fc9d213`）：开了「一条任务一个进程」时，对话的上一条还没结清（`currentRunId` 还在）就不报给调度；结清以后自然报出来。生产的 `doc-agent-assembly.mjs` 和夹具里照着写的那一份都改了。没开这个模式时清单不变。
+- 断言没有放松，反而多了两处：「正常结束」里第一条还占着时直接问清单，里面没有这个对话；「交错二」末尾除了仍要求第二条在第 2 代，另证明它的领取和开始都不早于第一代被关掉、用的是另一个进程、整个过程没有一代因为领不到被退掉。改完八份并着跑 8/8。
+- 说不准的地方：没复现出来，所以「改了以后忙时不再出现」是按机制推的。还会出现的话，日志里的 `slot.no-task` 会带着原因码，那就是另一个成因。
+
+### 这一轮的验证
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npx tsc -b --force`（`0fc9d213`） | 0 | 零错误 |
+| `npm test -- <动到的八个文件>`（`agent-run-scope-dead-main`、`account-worker-lifecycle`、`account-root-entry-probe`、`account-master-production`、`account-runner-process`、`agent-run-scope-core / -forced / -failure`） | 0 | 84 条全过 |
+| `npm test -- server/test/account-worker-lifecycle.test.mjs` 八份并着跑 | 都是 0 | 每份 9/9 |
+| `npm test`（全量，`0fc9d213`） | 1 | 6423 条：6369 过、**36 失败**、12 跳过、6 条 todo。失败全在我没碰的文件里：34 条是写死的端口被占（`cloud-tools-w1-*` 的 28380 / 28390 / 28400 共 32 条、`account-runner-process` 的 28221、`accept-018-conv-endtoend` 的 28581 两条），1 条是 `cloud-tools-w1-egress` 收尾时连带的 `TypeError`，1 条 `cloud-tools-p4-subject`「不要重复启动」。当时机器上另有别的工作区在跑全量。这几个文件单独重跑：61 条全过、4 条全过 |
+| `npm test`（全量），第二遍（`0fc9d213`） | 1 | 6422 条，2 失败：都是 `accept-018-conv-endtoend` 的 `EADDRINUSE 28581`。这个文件和同组的 `accept-018-conv-controls`、`accept-018-conv-readexception` 用同一组写死的端口，一次全量里并着跑会撞；我上一轮给它加了一条要起整套服务的子测试，它跑得更久、撞得更勤。把它挪到分给我的端口段里（提交 `dcd1419a`；另两个文件没动，它们之间仍可能互相撞） |
+| `npm test`（全量），第三遍（最终代码 `dcd1419a`） | 1 | 6424 条，3 失败：`cloud-agent-runs.test.mjs` 的 CA-RENDER-01、CA-RENDER-02（通用规矩偶发名单里的文件，我没碰过） |
+| `npm test`（全量），第四遍（最终代码 `dcd1419a`） | 0 | **6424 条：6406 过、0 失败、0 取消、12 跳过、6 条 todo**，133 秒。（这一遍是我本想单独重跑 `cloud-agent-runs`、命令里文件名没传进去而跑成了全量；结果照实记。`cloud-agent-runs` 在这一遍里是过的） |
+
+收尾查过：没有可见窗口，没有这个工作区留下的 node 进程，28680～28739 没有残留监听。
+
+### 这一轮新增的裁定〔裁〕
+
+21. 发布器在「主进程没了」时多认一种状态（服务的 cgroup 已被 systemd 收掉）。**这是改了 ChatGPT 故意收紧的一处检查**，理由和没放松的部分见上面第一节；请主会话和用户过目。三级（用户看不出区别；不改的话崩溃的任务永远收不了口）。
+22. 没结清的对话不报给槽调度。三级。
+
 ## 提交列表
 
 | 提交 | 内容 |
@@ -336,4 +416,9 @@ node scripts/probes/account-root-entry-linux.mjs --cleanup <编号>     # 可以
 | `2567fdd2` | 报告正文 |
 | `e24f907c` | （主会话）合并 `main` |
 | `9a966b40`～`3bb3d164` | 审查后补做的九个提交，逐个见上表 |
-| 本提交 | 报告补审查后的部分、Linux 一节最终版 |
+| `2daec137` | 报告补审查后的部分、Linux 一节最终版 |
+| `c523619d` | （主会话）合并 `main` |
+| `268bcc4b` | 发布器认「服务的 cgroup 已被收掉」；自检第 6 步；任务用户不许是 nobody |
+| `0fc9d213` | 没结清的对话不报给槽调度；「交错二」的断言 |
+| `dcd1419a` | `accept-018-conv-endtoend` 挪出和同组另两个文件共用的写死端口 |
+| 本提交 | 报告补节点第一遍实跑之后的部分 |
