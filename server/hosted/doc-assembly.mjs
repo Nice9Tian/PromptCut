@@ -88,7 +88,7 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
       return selection.captureSnapshot({ principal: { ...principal, tenantId: projectId },
         projectId, pageId: selectionInput.pageId });
     },
-    async resolveRunMedia({ principal, projectId, purpose, selector } = {}) {
+    async resolveRunMedia({ principal, projectId, purpose, selector, action = 'read' } = {}) {
       requireOpen();
       if (principal?.realm !== 'account' || principal.role !== 'agent' ||
           principal.projectId !== projectId || !isProjectId(projectId))
@@ -97,9 +97,12 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
       const describe = () => describeRunMedia({ snapshot: history.snapshot(projectId), projectId, purpose, selector });
       // Each read recovers and authorizes within the existing project order lock.
       // Physical tier metadata is queried between them, outside that lock.
-      const first = await coordinator.read(projectId, principal, describe, 'read');
+      // 核权限用这次请求签的那个动作。导入的请求签的是「写」：按「读」去核，对不上这次请求的签名，会被实例登记那一层拒掉
+      //（真实的 Agent、文档服务、素材服务第一次连起来才暴露；各自的单测里对方都是受控的）。
+      if (!['read', 'write'].includes(action)) throw historyError('run-asset-project-forbidden', 403);
+      const first = await coordinator.read(projectId, principal, describe, action);
       const selected = await materializeRunMedia(first, { resolveTierAssetRef, contentTypeForExt });
-      const second = await coordinator.read(projectId, principal, describe, 'read');
+      const second = await coordinator.read(projectId, principal, describe, action);
       if (digestOf(first) !== digestOf(second)) throw historyError('stale-media-ref', 409);
       return selected;
     },
