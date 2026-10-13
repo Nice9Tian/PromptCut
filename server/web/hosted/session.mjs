@@ -146,6 +146,31 @@ export async function processCommandLine(pid, { timeoutMs = 15_000 } = {}) {
 }
 
 /**
+ * Windows:一个进程的所有后代进程的进程号(查不到回空)。只在起浏览器时问一次系统。
+ * 浏览器有几个子进程是它自己的进程表(SystemInfo)里列不出来的:崩溃上报的帮手进程、chrome-headless-shell 的控制台宿主。
+ * 主进程被直接结束后,这种帮手进程实测还会多活几秒到十几秒,而且一直握着和本进程相连的管道——不单独结束它,就等不到「整棵树都退了」。
+ */
+export async function childPidsOf(pid, { timeoutMs = 8_000 } = {}) {
+  if (process.platform !== 'win32' || !Number.isSafeInteger(pid) || pid <= 0) return [];
+  return new Promise((resolve) => {
+    let text = '';
+    let child;
+    try {
+      child = nodeSpawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', `$all = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId; $q = @(${pid}); while ($q.Count) { $c = @($all | Where-Object { $q -contains $_.ParentProcessId } | ForEach-Object { $_.ProcessId }); $c; $q = $c }`],
+        { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    } catch { resolve([]); return; }
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* 已经退了 */ } }, timeoutMs);
+    timer.unref?.();
+    child.stdout.on('data', (chunk) => { text += chunk; });
+    child.once('error', () => { clearTimeout(timer); resolve([]); });
+    child.once('close', () => {
+      clearTimeout(timer);
+      resolve(text.split(/\s+/).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0));
+    });
+  });
+}
+
+/**
  * 这个进程是不是一个正用着这份用户数据目录的浏览器。
  * 完整的 Chrome 会锁住目录(`profileHolder`);chrome-headless-shell 不锁(实测),所以再看它的命令行里有没有这份目录。
  */
@@ -318,10 +343,12 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
    * 杀整棵树。先按最近一份进程表逐个直接结束(立刻生效),再让系统按父子关系补杀一遍(兜住表里没有的):
    * Windows 上后者(taskkill)在机器忙时要好几秒,不能只靠它。
    */
+  /** 进程表里列不出来的帮手子进程(见 `childPidsOf`);随浏览器一起活,起来时记一次 */
+  const helpers = new Set();
   const killAll = () => {
     const mainAlive = pidAlive(browserPid);
     if (process.platform === 'win32') {
-      for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ } }
+      for (const pid of new Set([...pids, ...helpers])) { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ } }
     }
     // 主进程已经没了就不用再按树杀(按树杀要靠它的进程号);子进程上面逐个结束过了
     if (mainAlive || process.platform !== 'win32') killProcessTree(browserPid, null);
@@ -432,6 +459,15 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     return [...pids];
   }
   await refreshPids();
+  // 后台问一次系统:主进程的后代进程里,进程表没列出来的就是帮手进程
+  const helpersKnown = (async () => {
+    if (process.platform !== 'win32' || !browserPid) return;
+    const before = new Set(pids);
+    const children = await childPidsOf(browserPid);
+    if (state.closed && !children.length) return;
+    await refreshPids();
+    for (const pid of children) if (!before.has(pid) && !pids.has(pid) && pidAlive(pid)) helpers.add(pid);
+  })().catch(() => {});
   say('agent.web.launched', { mode, processes: pids.size });
 
   /* ---------------------------------------------------------------- 串行与收尾 */
@@ -687,13 +723,25 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       });
     }
     state.closing = (async () => {
-      const known = await refreshPids();
+      // 帮手进程的名单要是还在问(刚起来就关),等它一下;问不出来就按已知的办
+      await Promise.race([helpersKnown, sleep(Math.min(limits.closeMs, 6_000))]);
+      const known = [...new Set([...await refreshPids(), ...helpers])];
       state.closed = true;
       if (graceful && browser.connected !== false) {
         try { await withDeadline(browser.close(), limits.gracefulCloseMs, '关浏览器'); } catch { /* 不肯退就杀 */ }
       }
       // 不管它自己退没退,记下的每个进程都直接结束一遍:主进程自己退了以后,子进程在忙的机器上要拖好几秒才跟着退
       killAll();
+      const quick = await Promise.race([processGone().then(() => true), sleep(1_500).then(() => false)]);
+      if (!quick && process.platform === 'win32') {
+        // 还有谁握着管道没退:多半是起来时没问到的帮手进程。主进程没了也照样能按父子关系把它的后代问出来,问到就结束
+        for (const pid of await childPidsOf(browserPid, { timeoutMs: limits.closeMs })) {
+          if (!pidAlive(pid)) continue;
+          helpers.add(pid);
+          known.push(pid);
+          try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ }
+        }
+      }
       await Promise.race([processGone(), sleep(limits.closeMs)]);
       // 主进程退了以后子进程可能还要一瞬;逐个核,还在的直接杀
       let alive = await waitPidsGone(known, 1_500);
@@ -729,7 +777,10 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     /** 浏览器主进程(交给运行资源登记器;它的 kill 已换成杀整棵树) */
     process: proc,
     proxy,
-    pids: () => [...pids],
+    /** 整棵进程树此刻的进程号(进程表里的,加帮手进程) */
+    pids: () => [...new Set([...pids, ...helpers])],
+    /** 帮手进程的名单问完了没有(测试等它) */
+    helpersKnown,
     refreshPids,
     get rev() { return state.rev; },
     get opened() { return state.opened; },

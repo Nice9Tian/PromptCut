@@ -37,6 +37,7 @@
 | 命令 | 退出码 | 结果 |
 |---|---|---|
 | `npm test -- server/test/cloud-tools-w1-browser.test.mjs server/test/cloud-tools-w1-egress.test.mjs server/test/cloud-tools-w1-restart.test.mjs` | 0 | 27 条通过，0 失败，0 跳过 |
+| 同上三份，加 `W1_BROWSER=<本机 puppeteer 缓存里的 chrome-headless-shell.exe 152>` | 0 | 27 条通过，0 失败，0 跳过（整套在节点上装的那种浏览器的 Windows 版上再过一遍） |
 | `node scripts/probes/cloud-tools-w1-browser-probe.mjs` | 0 | 「全部通过」；关键行见下 |
 | `npm test -- server/test/windows-hide-silent-spawn.test.mjs server/test/bakery-deps.test.mjs` | 0 | 7 条通过（不弹窗守门、server 不引 scripts 守门） |
 | `npx tsc -b --force` | 0 | 零错误 |
@@ -125,7 +126,7 @@
 
 ## 4. 没做成的及原因
 
-1. **Linux 上没验。** 只在 Windows 上跑。Linux 上不同的地方：chrome-headless-shell 的 Linux 版、沙箱（节点上若以 root 跑要 `--no-sandbox`，建议改用非特权用户）、进程组（代码按「浏览器是新进程组的组长、杀负的进程号」写的，没有实测）、`SingletonLock` 的格式。步骤见第 6 节。
+1. **Linux 上没验。** 只在 Windows 上跑（Chrome for Testing 与 chrome-headless-shell 的 Windows 版各一遍）。Linux 上不同的地方：chrome-headless-shell 的 Linux 版、沙箱（节点上若以 root 跑要 `--no-sandbox`，建议改用非特权用户）、进程组（代码按「浏览器是新进程组的组长、杀负的进程号」写的，没有实测）、清残留浏览器时读 `/proc/<进程号>/cmdline`（没有实测）。步骤见第 6 节。
 2. **没有真 mTLS、没有真模型。** 运行授权用的是真 SQLite 的授权库加受控适配器（同 P2 包的做法）；工具由测试直接调。真模型直连的那一条归 G 包的最终组合。
 3. **没有用量记账。** 契约里别的服务端工具每次调用记一行用量；网页操作记不记、按什么记（次数？字节？）契约没写，本包没做，留给 G 包与用户定（第 8 节）。
 4. **系统提示词没改。** `cloud-tools.mjs` 里「这一版在云端还没有：…网页操作（web_*）」那句与工具表一起归 G 包。
@@ -177,7 +178,7 @@
 # 1. 取这条分支的代码到临时目录,装依赖(节点上已有的检出也行;不要动正在跑的服务)
 cd /tmp && git clone <仓库> w1-check && cd w1-check && git checkout claude/v18-tools-w1 && npm ci
 
-# 2. 让测试用节点上的浏览器,而不是 puppeteer 自带的(测试夹具认这个变量见下)
+# 2. 让测试用节点上的浏览器,而不是 puppeteer 自带的
 export W1_BROWSER=/绝对路径/chrome-headless-shell
 #    以 root 跑时加: export W1_EXTRA_ARGS=--no-sandbox
 
@@ -192,14 +193,15 @@ pgrep -fa 'chrome.*/web/' ; echo "上面应当没有输出"
 sudo -u <运行用户> curl -m 3 http://169.254.169.254/ ; sudo -u <运行用户> curl -m 3 http://<同机别的服务的地址>/
 ```
 
-第 2 步里的 `W1_BROWSER`、`W1_EXTRA_ARGS` **夹具现在还不认**（本机没有 Linux 可验，没有加没验过的开关）；G 包或部署那一步要跑时，在 `server/test/cloud-tools-w1-fixture.mjs` 的 `testChromePath()` 里加两行即可（读环境变量、传给 `runtime.executablePath` / `runtime.extraArgs`）。已知 Linux 上可能要调的地方：`W1-RESTART-02` 里造残留浏览器用的是 `--headless=new`（chrome-headless-shell 不认，要换成 `--headless`）；`W1-EGRESS-06`、`09` 的对照用 `headless: true` 直接起浏览器，对 chrome-headless-shell 要改成 `headless: 'shell'`。
+第 2 步里的 `W1_BROWSER`（浏览器的绝对路径）、`W1_EXTRA_ARGS`（追加的启动参数，空格分隔）夹具认；在本机用 chrome-headless-shell 的 Windows 版验过这两个变量管用（27 条全过）。`W1-RESTART-02` 在 chrome-headless-shell 上造「残留浏览器」时会给它开一个只绑回环的调试口 28401（它不开调试口就自己退了，造不出残留；这是测试专用，产品代码从不开调试口）。
 
-要在 Linux 上看的四件事：（1）27 条里除上面两条对照外是否全过；（2）`web_close`、收回之后 `pgrep` 查不到那个对话目录下的浏览器进程；（3）以非特权用户跑时不加 `--no-sandbox` 能不能起；（4）`SingletonLock` 是否是「主机名-进程号」的链接（残留清理靠它）。
+要在 Linux 上看的四件事：（1）27 条是否全过；（2）`web_close`、收回之后 `pgrep` 查不到那个对话目录下的浏览器进程（Linux 上靠杀进程组）；（3）以非特权用户跑时不加 `--no-sandbox` 能不能起；（4）`W1-RESTART-02` 过不过——清残留浏览器在 Linux 上靠读 `/proc/<进程号>/cmdline` 认「这个进程正用着这份目录」，这条路本机验不了。
 
 ## 7. 要主会话注意的
 
 1. **桌面版的截图在页面滚动后截的是文档顶部。** `server/web/view.mjs` 的 `captureView` 给 `page.screenshot` 传了 `clip: { x: 0, y: 0, … }`；puppeteer 25 在有 `clip` 时按文档坐标截（等于打开了 `captureBeyondViewport`），所以滚动之后图是页面顶部那一屏，清单却是当前这一屏的，图和清单对不上。本包在无头模式下实测到（`out/` 里的对比：滚到 2071 像素后，这种截法的图与首屏逐字节相同）。桌面版是有头模式，本包没有在有头模式下验，也没有改它（只读）；云端一侧在 `server/web/hosted/view.mjs` 里滚动后从滚动位置重截一张。建议另开一件事去核桌面版。
 2. **G 包接线时要填什么**：见第 9 节。
+   另有两处是做的过程中实测出来、和原先想的不一样的，写在这里免得后来人再踩：（a）**chrome-headless-shell 不锁用户数据目录**（完整的 Chrome 会锁），所以「这份目录是不是被一个活着的浏览器占着」不能只看锁，清残留时改成再看那个进程的命令行里有没有这份目录；（b）**Windows 上 `taskkill /T` 在机器忙时要好几秒到十几秒**，全量测试并行跑时关浏览器因此超过时限——现在先按最近一份进程表逐个直接结束，`taskkill` 只作兜底。
 3. **测试占固定端口** 28380、28390～28392、28400（都在分给本包的段里）；本包三份测试文件互不冲突，但同一台机器上同时跑两份这条分支的全量测试会撞。
 4. `server/test/cloud-tools-w1-fixture.mjs` 里抄了一份 `--disable-field-trial-config`（因为 `server/` 不许引 `scripts/`，守门测试会拦）；有一条断言保证它与产品代码里打头的参数一致，探针传的是 `PROBE_CHROME_ARGS` 原件。
 5. 这一轮的每次调用是 2 次授权查询（首次绑定这一轮时多 2 次，登记器要的）。连续操作网页时文档服务会多出这些查询。
@@ -248,4 +250,12 @@ const web = createHostedBrowserTools({
 
 ## 全量基线
 
-（交活前跑的一遍，结果补在这里。）
+命令：`npm test`（同一条命令里设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`），在最后一次改代码之后跑的（提交 `c16c601c` 的内容）。
+
+- 结果：6096 条，通过 6087，**失败 1**，取消 0，跳过 8（都不是本包的），退出码 1，耗时 103 秒。
+- 失败的那一条：`server/test/asset-project-workers.test.mjs` 的「frame stream真实HTTP清单/初始化/分段按项目…」，报 `listen EADDRINUSE: address already in use 127.0.0.1:5782`——端口写死、机器上同时有别的子 Agent 在跑时会撞，在通用规矩点名的「机器忙时偶发失败」名单里。单独重跑这个文件：9 条通过、0 失败、退出码 0。本包没有碰这个文件，也不用 5782 端口。
+- 本包的 27 条在这次全量里全过。
+
+如实补一句：做的过程中更早跑过一次全量（那时代码还没改完），失败 12 条——其中 10 条在别的文件里（`codex-auth-state` 的五条、`artifact-push` 的 W4、一条 `CA-RENDER-01`、一条「account get_selection…」、`asset-project-workers` 的一条、一条「L9 cardLockIdleMs…」；前几类在通用规矩的偶发名单里，最后一条我没有去核它属于哪个文件；本包没有碰这些文件，后一次全量里它们都过了），另外 2 条是本包自己的（`W1-ISO-01` 报「浏览器进程没有在时限内退出」、`W1-RESTART-02` 残留浏览器没被杀掉）。那两条是真问题，不是偶发：机器忙时 `taskkill` 太慢。改成逐个直接结束进程之后（第 7 节第 2 条的 b），上面这次全量里它们都过了。
+
+`npx tsc -b --force`：退出码 0，零错误（同样在最后一次改代码之后）。
