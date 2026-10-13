@@ -41,7 +41,7 @@ async function capture() {
   const { default: puppeteer } = await import('puppeteer');
   const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
   const PORT = Number(arg('--port', '27600'));
-  if (!Number.isInteger(PORT) || PORT < 27600 || PORT > 27619) throw new Error('--port 只能用 27600～27619');
+  if (!Number.isInteger(PORT) || PORT < 20000 || PORT > 64999) throw new Error('--port 要用 20000 以上的端口');
   const OUT = path.resolve(ROOT, arg('--out', 'out/lottie-baseline/run'));
   const ASSETS = arg('--assets', [...BUNDLED, 'demo'].join(',')).split(',').filter(Boolean);
   const POKE = arg('--poke', '');
