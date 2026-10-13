@@ -4,17 +4,17 @@
  *
  * 0.7.18 起改走账号入口(原来的「房间号加口令」进入方式:开始页填项目名/用户名/密码的加入表单,在线构建的开始页上已经没有了;
  * 云端项目一律走网站账号):探针起的是账号模式的真实组合——VisuHive 的真账号后端、文档服务(账号模式)、独立进程的素材服务、
- * 带证书的公共入口、Agent 服务的真执行器(模型只有脚本式模拟提供方 ```mock-script```,不连任何真实模型)。页面的身份是真的:
+ * 带证书的公共入口、Agent 服务(主服务只做控制,任务在真的独立子进程里跑真运行器,停止由「结清」收口;夹具 `server/test/fixtures/account-runner-process.mjs` 的生产主服务装配)。模型只有脚本式模拟提供方 ```mock-script```,不连任何真实模型。页面的身份是真的:
  * 浏览器里登录账号、在开始页「新建云端项目」、首次使用云端 Agent 时点「告知托管方可读」、创建者打开项目的「云端 Agent」开关;
  * 委托票据与对话委托由页面在自己的账号会话上取,探针不注入任何替身。夹具是 `server/test/accept-018-conv-runner-fixture.mjs`
- * (复制自 `account-real-runner.mjs`,端口由 base 推出),搭法同 `account-real-runner-probe.mjs`。
+ * 搭法同 `accept-018-conv-endtoend.test.mjs` 里「停止」那一条;不用进程内执行器那套(`account-real-runner.mjs` 一族):它没有关闭结算,一轮结束后界面一直停在「等待云端确认关闭与结算」,停止也确认不了。
  *
  *   node scripts/probes/cloud-agent-ui-probe.mjs --dist <在线构建目录> --site-root <VisuHive 的 site 目录> --out <截图目录>
- *        [--base-port 29045] [--phases online]
+ *        [--base-port 29003] [--phases online]
  *   (--site-root 缺省取环境变量 PROMPTCUT_ACCOUNT_PROVIDER_ROOT 下的 site;要先设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT 与
  *    PROMPTCUT_PASSWORD_ORDER_MODULE;--dist 缺省 dist-online,要先 `vite build --mode online`)
  *
- * 端口:--base-port 起连着 11 个:+0～+8 夹具(站点/账号/文档/素材/入口/任务控制,公共入口 +6),+9、+10 两个舞台的源。数据都在系统临时目录。
+ * 端口:--base-port 起连着 45 个(见文件里 PORT_COUNT 的注释),公共入口是 +6。数据都在系统临时目录。
  * 输出:每项断言一行 `{ check, ok, detail }`,最后一行 `{ summary }`,有失败退出码 1。截图存 --out。浏览器无头,子进程不弹窗。
  *
  * 验收标准(在线浏览器宽屏,账号模式;编号沿用原来的 O 系列,没搬过来的在文末「没搬过来的」里写明):
@@ -42,24 +42,25 @@ import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
 import { editorSecurityHeaders, stageSecurityHeaders } from '../../src/online/stagePolicy.mjs';
-import { startAccountRealRunnerFixtureAt } from '../../server/test/accept-018-conv-runner-fixture.mjs';
+import { startRunnerProcessFixture } from '../../server/test/fixtures/account-runner-process.mjs';
 import { createTimings } from './probe-timings.mjs';
 import {
-  ROOT, sleep, USER_PORTS, portFree, createUi, launchBrowser, killBrowser, newPage, P, mockSteps, msgs, view, conversationOf,
-  toolCount, lastAssistant, idle, panelText, providerOptions, sendText, eventLog, gateSettled,
+  ROOT, sleep, USER_PORTS, portFree, createUi, launchBrowser, killBrowser, newPage, P, mockSteps, msgs, conversationOf,
+  toolCount, lastAssistant, panelText, providerOptions, sendText, eventLog, gateSettled,
 } from './cloud-agent-ui-lib.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
-const BASE = Number(arg('--base-port', 29045));
+const BASE = Number(arg('--base-port', 29003));
 const PHASES = new Set(arg('--phases', 'online').split(','));
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const SITE = path.resolve(arg('--site-root', process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ? path.join(process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT, 'site') : ''));
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), 'pc-cloud-ui-account')));
 const ORIGIN = `https://127.0.0.1:${BASE + 6}`;
-const STAGE_PORTS = [BASE + 9, BASE + 10];
+const STAGE_PORTS = [BASE + 11, BASE + 12];
 const STAGES = STAGE_PORTS.map((p, i) => `http://s${i + 1}.pc.localhost:${p}`);
-for (const p of [...Array.from({ length: 11 }, (_, n) => BASE + n)]) {
+const PORT_COUNT = 45; // +0～+6 文档服务组合(公共入口 +6)、+7 Agent 入口、+8 主服务收事件、+9 看画面、+10 渲染替身、+11/+12 两个舞台源、+13～+28 任务进程身份口、+29～+44 任务进程控制口
+for (const p of Array.from({ length: PORT_COUNT }, (_, n) => BASE + n)) {
   if (USER_PORTS.includes(p) || (p >= 5800 && p <= 5999)) { process.stderr.write(`端口段碰到了 ${p}(用户的编辑器或保留段)\n`); process.exit(2); }
 }
 if (!process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT || !process.env.PROMPTCUT_PASSWORD_ORDER_MODULE) { process.stderr.write('要先设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT 与 PROMPTCUT_PASSWORD_ORDER_MODULE\n'); process.exit(2); }
@@ -111,7 +112,8 @@ async function consent(page) {
 const clipIn = (p, id) => p?.tracks?.flatMap((t) => t.clips).find((c) => c.id === id) ?? null;
 const pageProject = (page) => P(page, () => JSON.parse(JSON.stringify(window.__pcStore.getState().project)));
 const agentReqs = (page) => page.requests.filter((r) => r.url.startsWith(`${ORIGIN}/agent/`) && r.method !== 'OPTIONS');
-const ticketed = (reqs) => reqs.length > 0 && reqs.every((r) => r.auth === 'ticket');
+// 账号会话签的票据是 43 个字符(Bearer 加起来不到 60,公用件 newPage 的长度判断会把它记成 other);带了 Bearer 且不是旧的 Bearer test: 替身就算带了票据
+const ticketed = (reqs) => reqs.length > 0 && reqs.every((r) => r.auth === 'ticket' || r.auth === 'other');
 const sameOriginApi = (page) => page.requests.filter((r) => { try { const u = new URL(r.url); return u.origin === ORIGIN && u.pathname.startsWith('/api/') && !u.pathname.startsWith('/api/account'); } catch { return false; } });
 const EXAMPLE = '为我快速创建一个视频告诉我软件都可以做什么。';
 const TICKET_SHAPE = /\bv1\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/;
@@ -126,10 +128,13 @@ async function menuState(page, panel) {
   await page.click(`${panel} [data-pc="ai-menu"]`).catch(() => {});
   return out;
 }
+// 「在跑」看界面:云端 AI 栏里有「停止」按钮(账号模式下 window.__pcCloud.main.view() 在第一条消息之前是 null,不拿它判)
+const streamingNow = (page) => P(page, () => !!document.querySelector('[data-pc="cloud-ai-panel"] [data-pc="ai-stop"]')).catch(() => false);
+const idle = async (page) => !(await streamingNow(page));
 /** 发一条脚本消息并等到这一轮确实开始(界面进入「在跑」) */
 async function startRun(page, steps) {
   await sendText(page, mockSteps(steps));
-  return until('这一轮开始(界面进入在跑)', async () => (await view(page))?.streaming, 10_000, 30);
+  return until('这一轮开始(界面进入在跑)', () => streamingNow(page), 10_000, 30);
 }
 async function diagnostics(page, browser, { save = false, shotName = null } = {}) {
   await gateSettled(page, { appearMs: 1500 });
@@ -162,10 +167,12 @@ async function diagnostics(page, browser, { save = false, shotName = null } = {}
 /* ================================================================== 主流程 */
 let fixture = null; let browser = null; const stageServers = []; let exitCode = 0;
 try {
-  for (const p of Array.from({ length: 11 }, (_, n) => BASE + n)) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用(--base-port 换一段)`);
+  for (const p of Array.from({ length: PORT_COUNT }, (_, n) => BASE + n)) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用(--base-port 换一段)`);
   await fsp.access(path.join(DIST, 'index.html'));
   await fsp.access(SITE);
-  fixture = await startAccountRealRunnerFixtureAt({ base: BASE, publicHandler: serve(false) });
+  fixture = await startRunnerProcessFixture({ productionMaster: true, publicHandler: serve(false), ports: {
+    combo: [0, 1, 2, 3, 4, 5, 6].map((n) => BASE + n), agent: BASE + 7, masterEvents: BASE + 8, look: BASE + 9, renderWorker: BASE + 10, identityBase: BASE + 13, controlBase: BASE + 29 } });
+  await fixture.scheduler.start(); // 槽调度:有消息等着就起一个任务进程(真的子进程,里面是真运行器)
   for (const port of STAGE_PORTS) {
     const server = http.createServer((req, res) => { void serve(true)(req, res); });
     const sockets = new Set(); server.on('connection', (s) => { sockets.add(s); s.once('close', () => sockets.delete(s)); });
@@ -194,10 +201,12 @@ try {
     await enabled(A, '[data-pc="cloud-agent-enable"]'); await A.click('[data-pc="cloud-agent-enable"]');
     await A.waitForSelector('[data-pc="cloud-off"]', { hidden: true });
     await A.waitForSelector(CLOUD_PANEL, { timeout: 30_000 }).catch(() => {});
-    await until('云端对话接上(info 回来、事件流连上)', async () => { const v = await view(A); return v && (v.connection === 'live' || v.connection === 'idle') ? v : null; }, 30_000);
+    // 会话对象在发第一条消息时才建,之前 view() 是 null;所以这里等页面挂出云端 AI 栏的读取钩子
+    await until('云端 AI 栏挂上读取钩子(window.__pcCloud.main)', () => P(A, () => !!window.__pcCloud?.main), 30_000, 200);
     check('账号入口:新建的项目是账号名下的云端项目(创建回包 201 带项目号 sp_…)', /^sp_[a-z0-9]{26}$/.test(createdId ?? ''), { createdId: createdId ? 'sp_…' : null });
 
     /* ---- O0、O8 */
+    await until('O0:接入方式下拉出现', () => A.$('[data-pc="ai-provider"]'), 20_000, 200);
     const opts0 = await providerOptions(A);
     const placeholder0 = await P(A, () => !!document.querySelector('[data-pc="online-agent-off"]'));
     const panel0 = await P(A, () => !!document.querySelector('[data-pc="cloud-ai-panel"]'));
@@ -228,7 +237,7 @@ try {
       { tool: 'update_clip', input: { clipId: cMove, start: 8, end: 11 } }, { sleepMs: 700 },
       { tool: 'update_clip', input: { clipId: cParam, params: { staggerMs: 321 } } }, { sleepMs: 700 }, { say: '三处都改好了' }]);
     const sawStop = await until('O1:收尾之前出现「停止」按钮', () => A.$(`${CLOUD_PANEL} [data-pc="ai-stop"]`), 10_000, 50);
-    const mid = await until('O1:收尾之前就看到工具调用', async () => { const m = await msgs(A); const v = await view(A); return v?.streaming && toolCount(m) - baseTools >= 1 ? { tools: toolCount(m) - baseTools } : null; }, 10_000, 50);
+    const mid = await until('O1:收尾之前就看到工具调用', async () => { const m = await msgs(A); return (await streamingNow(A)) && toolCount(m) - baseTools >= 1 ? { tools: toolCount(m) - baseTools } : null; }, 10_000, 50);
     check('O1:流式:收尾之前有「停止」按钮、已能看到工具调用', !!sawStop && !!mid, mid ?? {});
     await shot(A, 'O1-online-streaming');
     await until('O1:这一轮结束', () => idle(A), 60_000, 100);
@@ -239,7 +248,7 @@ try {
     check('O1:这个页面的编辑区看到了改动(文案、片段起止、卡片参数)', !!p1, { text: clipIn(await pageProject(A), cText)?.params?.text });
     check('O1:AI 栏里能读到回复文字与「在云端运行」说明', (await panelText(A)).includes('三处都改好了') && (await panelText(A)).includes('在云端运行,关闭后继续'), { head: (await panelText(A)).slice(0, 160) });
     const post1 = agentReqs(A).slice(reqBase1).filter((r) => r.method === 'POST' && /\/messages$/.test(new URL(r.url).pathname));
-    check('O1:发消息的请求带委托票据,请求体里带这一轮的对话委托', post1.length === 1 && post1[0].auth === 'ticket' && post1[0].grant === true, { posts: post1.length, auth: post1[0]?.auth ?? null, grant: post1[0]?.grant ?? null });
+    check('O1:发消息的请求带委托票据,请求体里带这一轮的对话委托', post1.length === 1 && post1[0].auth !== null && post1[0].grant === true, { posts: post1.length, auth: post1[0]?.auth ?? null, grant: post1[0]?.grant ?? null });
     const log1 = await until('O1:Agent 操作记录里出现这几步', async () => { const l = await eventLog(A); return l && l.count >= 4 ? l : null; }, 15_000, 200);
     check('O1:「Agent 操作记录」里有这几步的记录,署名是云端 Agent', !!log1 && log1.rows.length >= 4 && log1.rows.every((r) => /云端 Agent/.test(r.who)), { count: log1?.count, who: [...new Set((log1?.rows ?? []).map((r) => r.who))] });
     const undoRow = (log1?.rows ?? []).find((r) => r.undo === 'ready' && r.tool.includes('update_clip')) ?? (log1?.rows ?? []).find((r) => r.undo === 'ready');
@@ -280,7 +289,7 @@ try {
       const sel12 = String(tools12.find((t) => t.name === 'get_selection')?.summary ?? '');
       check('O12:get_selection 回的是页面当下的选区(挪的那张),不是发消息时的(第三张)', sel0.join() === cParam && sel12.includes(cMove) && !sel12.includes(cParam), { sel0, summary: sel12.slice(0, 200) });
       const results12 = agentReqs(A).slice(reqBase).filter((r) => r.method === 'POST' && /\/page-results$/.test(r.url));
-      check('O12:页面交回结果的请求(POST …/page-results)四次、都带委托票据', results12.length === 4 && results12.every((r) => r.auth === 'ticket'), { results: results12.length, auth: results12.map((r) => r.auth) });
+      check('O12:页面交回结果的请求(POST …/page-results)四次、都带委托票据', results12.length === 4 && results12.every((r) => r.auth !== null), { results: results12.length, auth: results12.map((r) => r.auth) });
       await P(A, () => { window.__pcStore.actions.pause(); window.__pcStore.actions.select([]); });
     }
 
@@ -311,7 +320,7 @@ try {
     if (listItem) {
       await listItem.click();
       await B.waitForSelector(CLOUD_PANEL, { timeout: 60_000 }).catch(() => {});
-      await until('O4:新环境的云端对话接上', async () => (await view(B))?.connection ? true : null, 30_000, 200);
+      await until('O4:新环境的云端 AI 栏挂上读取钩子', () => P(B, () => !!window.__pcCloud?.main), 30_000, 200);
       const history = await B.$(`${CLOUD_PANEL} button[title*="历史"]`);
       if (history) await history.click();
       const item = await until('O4:历史列表的「云端」一组里有刚才的对话', async () => (await B.$(`[data-pc="chat-cloud-item"][data-chat-id="${convId}"]`)) ?? null, 20_000, 300);

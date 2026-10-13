@@ -26,7 +26,7 @@
  */
 
 import '../lib/no-user-dirs.mjs'; // 清单里写着会起编辑器与导出的命令;按 no-user-dirs.test.mjs 的规矩,第一个 import 摘掉外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
-import { V18_ITEMS, G0_2_SKIPS, OLD_ITEM_ROWS, STALE_OLD_ENTRY, V18_EXCLUDED } from './v18-manifest.mjs';
+import { V18_ITEMS, G0_2_SKIPS, OLD_ITEM_ROWS, STALE_OLD_ENTRY, V18_EXCLUDED, V } from './v18-manifest.mjs';
 import { V18_ROWS } from './v18-rows.mjs';
 import { whereOf } from './acceptance-lib.mjs';
 export { V18_ROWS as ROWS, G0_2_SKIPS };
@@ -715,10 +715,13 @@ const OLD_ITEMS = [
     timing: 'record', timingNote: 'E1 发起方不在线时读选区的工具回话的用时(原门槛 < 500 ms)',
   },
   {
-    id: 'S4-4', name: '云端 AI 栏(在线宽屏、桌面云端项目、手机占位)', category: '第四段', level: 'local', taskRef: '任务书二 第 5、6 条(界面部分)',
+    id: 'S4-4', name: '云端 AI 栏(在线宽屏,走账号入口:登录、新建云端项目、开开关、发消息、停止、重开找回;手机占位)', category: '第四段', level: 'local', taskRef: '任务书二 第 5、6 条(界面部分);0.7.18 起改走账号入口',
     tasks: ['C5', 'C6'], needs: ['online-build'], prereq: ['G0-4'], covers: ['cloud-agent-ui-probe.mjs'], requires: ['scripts/probes/cloud-agent-ui-probe.mjs'],
-    cmd: probe('cloud-agent-ui-probe', ['--base-port', B, '--doc-port', DOC(4), '--asset-port', DOC(5), '--agent-port', DOC(6), '--phases', 'online,desktop', '--dist', '{dist}', '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 40,
-    timing: 'record', timingNote: '点「停止」到停下(原门槛 < 5 秒)、一轮结束到云端 Agent 标记消失(原门槛 < 20 / 25 秒)的用时',
+    requiresEnv: ['PROMPTCUT_ACCOUNT_PROVIDER_ROOT', 'PROMPTCUT_PASSWORD_ORDER_MODULE'], where: 'local',
+    // 端口:0.7.18 的端口段(起点 PC_V18_PORT_BASE,缺省 28990)里第 13 个起连着 45 个(+13～+57)
+    cmd: probe('cloud-agent-ui-probe', ['--base-port', String(V + 13), '--dist', '{dist}', '--site-root', '{visuhive}/site', '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 40,
+    known: '原探针走旧的「房间号加口令」加入表单,在线构建的开始页上已经没有它(云端项目一律走网站账号),2026-10-13 起改走账号入口(仍叫 cloud-agent-ui-probe);桌面版阶段 D1～D12 与 O3/O5/O7/O10/O11 没搬过来,原因见探针文件头与 docs/reports/AGENT-v18-runner-list.md',
+    timing: 'record', timingNote: '点「停止」到停下(原门槛 < 5 秒)的用时',
   },
   {
     id: 'S4-5', name: '关掉软件照常运转(无界面版,真的结束发起方进程)', category: '第四段', level: 'local', taskRef: '任务书二「用户体验验收」六条的本机版(回归项)',
