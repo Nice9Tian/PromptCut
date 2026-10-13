@@ -62,9 +62,9 @@ export function normalizeWebTarget(input) {
   if (raw.length > 4096) throw new WebTargetError('too-long', '地址太长');
   if (/[\u0000-\u001f\u007f]/.test(raw)) throw new WebTargetError('protocol', '地址里有非法字符');
   if (/^https?:\/\//i.test(raw)) return raw;
-  // 「名字:端口/路径」不是协议:冒号后面紧跟数字。其余带「协议:」前缀的都不是 http(s)
+  // 「名字:端口/路径」不是协议:名字里有点(或就是 localhost)、冒号后面紧跟数字。`tel:123` 这类不算。其余带「协议:」前缀的都不是 http(s)
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(raw);
-  if (scheme && !/^[^/:]+:\d{1,5}(\/|$|\?|#)/.test(raw)) {
+  if (scheme && !/^([^/:]+\.[^/:]+|localhost):\d{1,5}(\/|$|\?|#)/i.test(raw)) {
     throw new WebTargetError('protocol', `云端 Agent 的浏览器只打开 http / https 地址,不打开 ${scheme[1].toLowerCase()}: 地址。`);
   }
   if (raw.startsWith('//') || raw.startsWith('\\\\')) throw new WebTargetError('protocol', '云端 Agent 的浏览器只打开 http / https 地址。');
@@ -81,6 +81,23 @@ export function egressRefusalText(code) {
     case 'unresolved': return '这个主机名解析不了。';
     default: return '这个地址被云端的出网限制拒绝了。';
   }
+}
+
+/**
+ * 模型给的地址能不能打开:先按字面只收 http(s),再过一遍出网闸。
+ * 回 `{ ok: true, target }`,或 `{ ok: false, result }`(`result` 就是回给模型的那份拒绝)。出网闸以外的错照常抛。
+ */
+export async function admitWebTarget(gate, input) {
+  let target;
+  try { target = normalizeWebTarget(input); } catch (err) {
+    if (!(err instanceof WebTargetError)) throw err;
+    return { ok: false, result: { ok: false, error: err.code === 'empty' ? err.message : `没有打开:${err.message}`, refused: err.code } };
+  }
+  try { await gate.admitUrl(target); } catch (err) {
+    if (!err?.egress) throw err;
+    return { ok: false, result: { ok: false, error: `没有打开:${egressRefusalText(err.code)}`, egress: err.code } };
+  }
+  return { ok: true, target };
 }
 
 /**
@@ -147,7 +164,7 @@ export async function startBrowserProxy({ gate, host = '127.0.0.1', maxTunnels =
   /** 记一条:主机名只留在内存里的这份记录里(给模型解释、给测试取证),服务日志里不出现 */
   function record(kind, hostname, port, outcome) {
     seq += 1;
-    const entry = { seq, at: now(), kind, host: String(hostname ?? '').slice(0, 255), port, ...outcome };
+    const entry = { seq, at: now(), kind, host: String(hostname ?? '').replace(/^\[|\]$/g, '').slice(0, 255), port, ...outcome };
     entries.push(entry);
     if (entries.length > maxJournal) entries.splice(0, entries.length - maxJournal);
     if (outcome.ok) counts.allowed += 1;
@@ -229,7 +246,9 @@ export async function startBrowserProxy({ gate, host = '127.0.0.1', maxTunnels =
       }
     })();
   });
-  server.on('clientError', (_err, socket) => { try { socket.destroy(); } catch { /* 已经断了 */ } });
+  server.on('clientError', (_err, socket) => {
+    try { if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\n\r\n'); else socket.destroy(); } catch { /* 已经断了 */ }
+  });
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);

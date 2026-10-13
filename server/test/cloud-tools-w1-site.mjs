@@ -93,6 +93,49 @@ export function startFakeSite(port, { internalUrl = 'http://127.0.0.1:1/', host 
     if (url.pathname === '/redir-internal') return send(302, 'text/plain', 'moved', { location: internalUrl });
     if (url.pathname === '/meta-refresh') return send(200, 'text/html; charset=utf-8', `<!doctype html><meta charset="utf-8"><title>跳走</title><meta http-equiv="refresh" content="0;url=${internalUrl}"><p>马上跳到内网</p>`);
     if (url.pathname === '/file-link') return send(200, 'text/html; charset=utf-8', html('W1 file 链接', `<h1>file 链接</h1><a id="f" href="${url.searchParams.get('to') ?? 'file:///etc/passwd'}">本机文件</a><iframe id="fr" src="${url.searchParams.get('to') ?? 'file:///etc/passwd'}"></iframe><p id="out">页面在</p>`));
+    // 页面里用各种办法去连 t= 给的每个地址,结果写在页面上;全部试完写一行 LEAK-DONE
+    if (url.pathname === '/leak') return send(200, 'text/html; charset=utf-8', html('W1 试着连内网', `<h1>试着连内网</h1><main><pre id="out">开始</pre></main><script>
+(async function () {
+  var out = document.getElementById('out');
+  var targets = new URLSearchParams(location.search).getAll('t');
+  function wait(ms, v) { return new Promise(function (r) { setTimeout(function () { r(v); }, ms); }); }
+  var NL = String.fromCharCode(10);
+  // WebSocket 一起发、最后一起收:浏览器对连不上的 WebSocket 会故意拖一会儿才报(防端口扫描),逐个等太慢
+  var sockets = targets.map(function (u) { return Promise.race([new Promise(function (res) { try { var w = new WebSocket(u.replace(/^http/, 'ws')); w.onopen = function () { res('open'); }; w.onerror = function () { res('err'); }; } catch (e) { res('throw'); } }), wait(8000, 'timeout')]); });
+  for (var i = 0; i < targets.length; i++) {
+    var u = targets[i], r = {};
+    try { var x = await Promise.race([fetch(u, { mode: 'no-cors', cache: 'no-store' }), wait(4000, null)]); r.fetch = x ? 'resp-' + x.type : 'timeout'; } catch (e) { r.fetch = 'err'; }
+    r.xhr = await Promise.race([new Promise(function (res) { try { var q = new XMLHttpRequest(); q.open('GET', u); q.onload = function () { res('load[' + q.responseText.slice(0, 60) + ']'); }; q.onerror = function () { res('err'); }; q.send(); } catch (e) { res('throw'); } }), wait(4000, 'timeout')]);
+    r.img = await Promise.race([new Promise(function (res) { var im = new Image(); im.onload = function () { res('load'); }; im.onerror = function () { res('err'); }; im.src = u; }), wait(4000, 'timeout')]);
+    r.frame = await Promise.race([new Promise(function (res) { var f = document.createElement('iframe'); f.style.display = 'none'; f.onload = function () { res('load'); }; f.src = u; document.body.appendChild(f); }), wait(4000, 'timeout')]);
+    try { r.beacon = String(navigator.sendBeacon(u, 'x')); } catch (e) { r.beacon = 'throw'; }
+    ['preconnect', 'dns-prefetch', 'prefetch', 'preload'].forEach(function (rel) { var l = document.createElement('link'); l.rel = rel; l.href = u; if (rel === 'preload') l.as = 'fetch'; document.head.appendChild(l); });
+    r.ws = await sockets[i];
+    out.textContent += NL + u + ' ' + JSON.stringify(r);
+  }
+  await wait(500);
+  out.textContent += NL + 'LEAK-DONE';
+})();
+</script>`));
+    // WebRTC:向 stun= 给的服务器要候选地址,收集到的写在页面上
+    if (url.pathname === '/webrtc') return send(200, 'text/html; charset=utf-8', html('W1 WebRTC', `<h1>WebRTC</h1><main><pre id="out">开始</pre></main><script>
+(async function () {
+  var out = document.getElementById('out');
+  if (typeof RTCPeerConnection === 'undefined') { out.textContent = 'RTC-DONE []'; return; }
+  var stun = new URLSearchParams(location.search).get('stun');
+  var pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:' + stun }] });
+  var got = [];
+  pc.onicecandidate = function (e) { if (e.candidate && e.candidate.candidate) got.push(e.candidate.candidate); };
+  pc.createDataChannel('x');
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise(function (r) { setTimeout(r, 3000); });
+  out.textContent = 'RTC-DONE ' + JSON.stringify(got);
+})();
+</script>`));
+    // DNS 重绑定:按钮每点一次,向本源取一次 /whoami 的字,写在页面上
+    if (url.pathname === '/rebind') return send(200, 'text/html; charset=utf-8', html('W1 重绑定', `<h1>重绑定</h1><button id="go" onclick="fetch('/whoami?n='+Date.now(),{cache:'no-store'}).then(function(r){return r.text().then(function(t){document.getElementById('out').textContent='取到('+r.status+'):'+t.replace(/<[^>]+>/g,' ').slice(0,80)})}).catch(function(e){document.getElementById('out').textContent='取不到'})">再取一次</button><main><p id="out">还没取</p></main>`));
+    // 向本站开一条 WebSocket(证明 WebSocket 走的也是代理)
+    if (url.pathname === '/ws') return send(200, 'text/html; charset=utf-8', html('W1 WebSocket', `<main><p id="out">开始</p></main><script>var w=new WebSocket('ws://'+location.host+'/socket');w.onopen=function(){document.getElementById('out').textContent='WS-OPEN'};w.onerror=function(){document.getElementById('out').textContent='WS-ERR'};w.onclose=function(){document.getElementById('out').textContent+=' WS-CLOSED'}</script>`));
     if (url.pathname === '/blank') return send(200, 'text/html; charset=utf-8', html('W1 空页', '<h1>空页</h1><p id="out">等脚本</p>'));
     if (url.pathname === '/slow') return void setTimeout(() => { try { send(200, 'text/html; charset=utf-8', html('慢', '<p>慢</p>')); } catch { /* 对面已经断了 */ } }, 60_000).unref();
     return send(404, 'text/plain; charset=utf-8', 'not found');

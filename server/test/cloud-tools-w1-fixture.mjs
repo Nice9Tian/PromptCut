@@ -28,6 +28,12 @@ export async function until(check, { ms = 15_000, step = 50, what = 'condition' 
   }
 }
 
+/** 测试用的解析函数:只认 localhost,别的一律解析不了 */
+export async function hermeticResolve(hostname) {
+  if (hostname === 'localhost') return [{ address: '127.0.0.1', family: 4 }, { address: '::1', family: 6 }];
+  throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' });
+}
+
 let chromePathPromise = null;
 /** 本机测试用的浏览器:puppeteer 自带的 Chrome for Testing。没有就抛(测试不跳过) */
 export function testChromePath() {
@@ -114,7 +120,8 @@ export async function w1Fixture(t, options = {}) {
   const egressLog = [];
   const gate = createEgressGate({
     testAllow: options.testAllow ?? [],
-    ...(options.resolve ? { resolve: options.resolve } : {}),
+    // 缺省的解析函数一个名字都不认:测试不连公网(Chrome for Testing 起来时自己会去连几个谷歌的地址,在代理那里就被拒)
+    resolve: options.resolve ?? hermeticResolve,
     log: (event, fields) => egressLog.push({ event, ...fields }),
   });
   const serviceLog = [];

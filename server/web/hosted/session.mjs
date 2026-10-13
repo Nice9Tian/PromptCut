@@ -24,7 +24,7 @@ import path from 'node:path';
 import { VIEWPORT } from '../browser.mjs';
 import { read as desktopRead } from '../session.mjs';
 import { childEnv } from '../../agent/service/workspace.mjs';
-import { startBrowserProxy, hostedNetworkArgs, filterExtraArgs, pageRequestAllowed, isWebUrl, normalizeWebTarget, egressRefusalText } from './network.mjs';
+import { startBrowserProxy, hostedNetworkArgs, filterExtraArgs, pageRequestAllowed, isWebUrl, admitWebTarget, egressRefusalText } from './network.mjs';
 import { captureHostedView, parseUid, PAGE_DATA_NOTICE } from './view.mjs';
 import { resolveAt, explain, locate, focusElement, clearElement, explainStale, explainSecret } from './hit.mjs';
 
@@ -61,6 +61,8 @@ export function killProcessTree(pid, child = null) {
     try {
       const killer = nodeSpawn('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true });
       killer.on('error', () => { try { child?.kill('SIGKILL'); } catch { /* 已经退了 */ } });
+      // taskkill 自己可能很慢(机器忙时它查进程树要好几秒):不让它拖住本进程退出
+      killer.unref();
     } catch { try { child?.kill('SIGKILL'); } catch { /* 已经退了 */ } }
     return;
   }
@@ -251,7 +253,18 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
 
   const proc = browser.process();
   const browserPid = proc?.pid ?? null;
-  const pids = new Set(browserPid ? [browserPid] : []);
+  /** 浏览器进程树**此刻**的进程号(每次动作后刷新成最新的一份;不攒旧的——退掉的渲染进程的号可能已被系统分给别的进程) */
+  let pids = new Set(browserPid ? [browserPid] : []);
+  /**
+   * 杀整棵树。先按最近一份进程表逐个直接结束(立刻生效),再让系统按父子关系补杀一遍(兜住表里没有的):
+   * Windows 上后者(taskkill)在机器忙时要好几秒,不能只靠它。
+   */
+  const killAll = () => {
+    if (process.platform === 'win32') {
+      for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退了 */ } }
+    }
+    killProcessTree(browserPid, null);
+  };
   let exited = !proc;
   let procClosed = !proc;
   const exitWaiters = [];
@@ -260,7 +273,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
   proc?.once('close', () => { procClosed = true; settleExit(); });
   const processGone = () => (exited && procClosed ? Promise.resolve() : new Promise((resolve) => exitWaiters.push(resolve)));
   // 运行资源登记器收回这一轮时调的是 kill():换成杀整棵树
-  if (proc) proc.kill = () => { killProcessTree(browserPid, null); return true; };
+  if (proc) proc.kill = () => { killAll(); return true; };
 
   const state = {
     rev: 0,                 // 清单版本
@@ -330,7 +343,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     });
     browser.on('disconnected', () => { state.closed = true; });
   } catch (err) {
-    killProcessTree(browserPid, null);
+    killAll();
     await Promise.race([processGone(), sleep(limits.closeMs)]);
     await proxy.close();
     say('agent.web.launch-failed', { message: String(err?.message ?? err).slice(0, 160) });
@@ -342,7 +355,9 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     if (state.closed) return [...pids];
     try {
       const info = await withDeadline(cdp.send('SystemInfo.getProcessInfo'), 2_000, '取进程表');
-      for (const p of info?.processInfo ?? []) if (Number.isSafeInteger(p?.id) && p.id > 0) pids.add(p.id);
+      const current = new Set(browserPid ? [browserPid] : []);
+      for (const p of info?.processInfo ?? []) if (Number.isSafeInteger(p?.id) && p.id > 0) current.add(p.id);
+      pids = current;
       fs.writeFileSync(path.join(sessionDir, OWNER_FILE), JSON.stringify({ servicePid: process.pid, browserPid, pids: [...pids], at: now() }));
     } catch { /* 取不到就用已有的 */ }
     return [...pids];
@@ -434,12 +449,9 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
    * @param {{ guard?: () => void }} [o] 真正动页面之前再调一次的闸(这一轮被收回就抛)
    */
   const open = (input, { guard } = {}) => enqueue(async (check) => {
-    let target;
-    try { target = normalizeWebTarget(input); } catch (err) { return { ok: false, error: err.message, refused: err.code ?? 'protocol' }; }
-    try { await gate.admitUrl(target); } catch (err) {
-      if (!err?.egress) throw err;
-      return { ok: false, error: `没有打开:${egressRefusalText(err.code)}`, egress: err.code };
-    }
+    const admitted = await admitWebTarget(gate, input);
+    if (!admitted.ok) return admitted.result;
+    const target = admitted.target;
     check(guard);
     const mark = proxy.seq;
     let response = null;
@@ -599,7 +611,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       if (graceful && browser.connected !== false) {
         try { await withDeadline(browser.close(), limits.gracefulCloseMs, '关浏览器'); } catch { /* 不肯退就杀 */ }
       }
-      if (browserPid && pidAlive(browserPid)) killProcessTree(browserPid, null);
+      if (browserPid && pidAlive(browserPid)) killAll();
       await Promise.race([processGone(), sleep(limits.closeMs)]);
       // 主进程退了以后子进程可能还要一瞬;逐个核,还在的直接杀
       let alive = await waitPidsGone(known, 1_500);

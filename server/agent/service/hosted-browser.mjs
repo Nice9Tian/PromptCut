@@ -32,6 +32,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { admitWebTarget } from '../../web/hosted/network.mjs';
 import { launchHostedSession, HostedSessionError, reapOrphan, removeDirFully, pidAlive, HOSTED_BROWSER_ARG_PREFIX } from '../../web/hosted/session.mjs';
 
 export const WEB_TOOL_NAMES = Object.freeze(['web_open', 'web_view', 'web_click', 'web_type', 'web_scroll', 'web_read', 'web_close']);
@@ -303,6 +304,9 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     if (!entry) {
       if (name !== 'web_open') return { ok: false, error: NOT_OPEN, notOpen: true };
       if (typeof input.url !== 'string' || !input.url.trim()) return { ok: false, error: '要给 url' };
+      // 地址本身就不许打开的(非 http(s)、内网、metadata…):当场拒,不为它起一个浏览器
+      const admitted = await admitWebTarget(egress, input.url);
+      if (!admitted.ok) return admitted.result;
       try { entry = await launch(scope); } catch (error) {
         const mapped = failure(error);
         if (mapped === null) return unavailable('BROWSER_MISSING', NO_BROWSER);
@@ -406,6 +410,12 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     return true;
   }
 
+  /** 一个对话的浏览器的出网记录(每个目标放行还是拒绝;给探针、测试与排障取证。主机名只在这里,不进服务日志) */
+  function egressJournal(scope) {
+    const entry = sessions.get(keyOf(scope));
+    return entry ? entry.session.proxy.journal() : [];
+  }
+
   function describe() {
     return {
       configured: browserReady(),
@@ -416,6 +426,7 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
       sessions: [...sessions.values()].map((e) => ({
         projectId: e.projectId, conversationId: e.conversationId, browserPid: e.session.browserPid,
         pids: e.session.pids(), alive: e.session.pids().filter(pidAlive).length, proxyPort: e.session.proxy.port,
+        mode: e.session.mode, egress: e.session.proxy.stats(),
       })),
     };
   }
@@ -438,5 +449,5 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     return closePromise;
   }
 
-  return Object.freeze({ handles, call, close, closeConversation, removeProject, treeClosed, describe, ready: swept });
+  return Object.freeze({ handles, call, close, closeConversation, removeProject, treeClosed, describe, egressJournal, ready: swept });
 }
