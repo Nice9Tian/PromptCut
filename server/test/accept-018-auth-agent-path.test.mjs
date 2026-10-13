@@ -244,12 +244,12 @@ test('账号模式云端 Agent：隔离（跨项目、伪造/过期证明、只�
       assert.deepEqual(await gate.admitModelCall({ projectId: P5, userId: A.accountId, model: 'mock/scripted-local-response' }), { ok: true });
       assert.ok(!/"limitTokens": ?1/.test(admin(['quota', 'show', P5]).text), '额度配置里已经没有这个项目的上限');
     });
-    // —— 以下两条是现在不成立的断言，用 todo 留着（不让 npm test 变红）；对应的缺口见分段文件「产品问题」——
-    await t.test('2.3-4 不存在的对话（含别的项目的对话）的事件流：应该回一个 HTTP 响应（200 加一条结束事件，或 404），不应断开连接',
-      { todo: '现状：直接打 Agent 入口时连接被断开（socket hang up），经反向代理是 502；没有泄露内容，但不是干净的拒绝' }, async () => {
+    // —— 以下一条是现在不成立的断言，用 todo 留着（不让 npm test 变红）；对应的缺口见分段文件「产品问题」——
+    await t.test('2.3-4 不存在的对话（含别的项目的对话）的事件流：应该回一个 HTTP 响应（200 加一条结束事件，或 404），不应断开连接', async () => {
       const a = pages.find(p => p.projectId === P1);
       const answer = await bareText(fx.ports.agent, '/v1/conversations/does-not-exist/events?after=0', { authorization: `Bearer ${a.delegation}` });
       assert.ok(answer.status === 200 || answer.status === 404);
+      assert.equal(answer.status, 404, '和 GET /v1/conversations/<不存在> 一致：干净的 404');
     });
 
     await t.test('2.3-3 共有对话里一个成员的任务结束后，另一个成员后发的消息的任务能按到达顺序开始',
