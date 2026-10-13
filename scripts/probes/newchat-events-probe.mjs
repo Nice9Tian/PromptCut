@@ -144,6 +144,7 @@ async function main() {
     }
   };
   const newChat = async page => {
+    page.mark = page.evLog.length;
     const before = await convId(page);
     await openHistory(page);
     await page.click('[data-pc="chat-new"]');
@@ -151,6 +152,7 @@ async function main() {
     await page.waitForSelector('.chat-history-drawer', { hidden: true, timeout: TIMEOUT }).catch(() => {});
   };
   const pickFromHistory = async (page, id) => {
+    page.mark = page.evLog.length;
     for (let i = 0; i < 12; i++) {
       await openHistory(page);
       const found = await page.waitForSelector(`[data-pc="chat-cloud-item"][data-chat-id="${id}"]`, { visible: true, timeout: 2500 }).then(() => true, () => false);
@@ -176,7 +178,8 @@ async function main() {
 
   /** 观察一段时间：每秒取一次页面状态，并统计这段时间里这张页面发出的事件流请求。 */
   const observe = async (page, who, name, ms, { shotAt = [3000], fromIndex = null } = {}) => {
-    const t0 = Date.now(), from = fromIndex ?? page.evLog.length, samples = [];
+    const t0 = Date.now(), from = fromIndex ?? page.mark ?? page.evLog.length, samples = [];
+    page.mark = null;
     const shots = new Set(shotAt);
     while (Date.now() - t0 < ms) {
       const at = Date.now() - t0;
@@ -258,7 +261,7 @@ async function main() {
     phase = 'A-fresh-initial';
     const idA = await convId(creator);
     result.notes.push({ A_conversationId: idA });
-    await observe(creator, 'creator', 'A-fresh-initial', quick ? 12_000 : 30_000, { shotAt: [3000, quick ? 11_000 : 29_000] });
+    await observe(creator, 'creator', 'A-fresh-initial', quick ? 12_000 : 30_000, { shotAt: [3000, quick ? 11_000 : 29_000], fromIndex: 0 });
 
     // ---------- B：点「新对话」 ----------
     phase = 'B-new-chat-click';
@@ -314,7 +317,7 @@ async function main() {
     await member.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true, timeout: TIMEOUT }); await consent(member);
     await member.waitForFunction(() => Boolean(window.__pcCloud?.main), { timeout: TIMEOUT });
     await member.waitForFunction(() => document.querySelector('[data-pc="cloud-off"]') === null, { timeout: TIMEOUT });
-    await observe(member, 'member', 'E0-member-own-fresh-chat', quick ? 6000 : 10_000, { shotAt: [4000] });
+    await observe(member, 'member', 'E0-member-own-fresh-chat', quick ? 6000 : 10_000, { shotAt: [4000], fromIndex: 0 });
     await pickFromHistory(member, idC);
     await member.waitForFunction(() => document.querySelector('[data-pc-msg^="cq-"]'), { timeout: TIMEOUT });
     await observe(member, 'member', 'E1-member-views-shared-conversation', 5000, { shotAt: [] });
