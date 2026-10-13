@@ -115,4 +115,9 @@
 
 ## 基线
 
-（交活前补：见下。）
+合 main（a0a322de 之后）后：
+- `npx tsc -b --force`：退出码 0，无输出。
+- `npm test`（设了两个环境变量）第一遍（合 main 之前）：6484 个用例、6463 通过；失败只有 `c66-integ.test.mjs` 里两个用例（已知机器忙时偶发，单独重跑 14 项含它全过）。
+- 合 main 之后又跑全量：日志里有四处失败（`account-master-production`、`account-runner-process`、`agent-live-selection`、`asset-project-workers` 各一个用例），且日志没有末尾汇总行。把这四个文件单独重跑：`account-master-production`、`agent-live-selection`、`asset-project-workers` 全过；`account-runner-process`（「真实运行器在任务进程里」）两次单独重跑都失败（`send runner_message_3: selection-page-unavailable`，期望 202、实得 403），把我改的三个服务端文件换回 main 的版本再跑仍然失败，所以与本块无关，是合进来的 main 上的问题（来自上一块的新用例），请主会话核对。
+- 本块 `server/test/move-guard.test.mjs` 5 个用例全过；`windows-hide-silent-spawn` 守门测试过（含新探针）。
+- 探针两遍（修之前、修之后加旧模式对照）退出码 0，每遍前后查可见窗口无新增，收尾子进程均已关。
