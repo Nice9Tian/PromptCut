@@ -13,6 +13,56 @@ import { waitFrameReady } from './frame-ready.mjs';
 import { prepareFrameMedia } from './frame-media.mjs';
 
 /**
+ * 推帧补画:推过去、不取图的那一帧也真的画一拍,把图丢掉。
+ *
+ * 为什么(2026-10-14 在导出页上量出来的,`scripts/probes/push-draw-probe.mjs` 能复跑):
+ *   - 不带截图的 `beginFrame` 不保证渲染器会跑这一拍的主线程帧。页面上已经有东西画过以后,连着两三拍不带截图,
+ *     `requestAnimationFrame` 就一次都不再触发,直到下一次带截图的那一拍(逐步数过原始 rAF:挂上一张卡以后
+ *     1 1 1 0 0 0 … 一直是 0;每步后面跟一张丢掉的截图就恢复成每拍都跑)。
+ *   - Motion 建动画要等挂载之后的下一次 rAF。所以这种时候挂载的 motion 式卡,动画到下一次真的画帧才建出来:
+ *     JS 驱动的那些从那一刻起算(Motion 规定建晚了 40 ms 以上就不追溯),交给 WAAPI 的那些被 `__pcSyncAnims`
+ *     锚在更晚的一帧。之后一直落后那么多帧,没有任何检查拦得住。
+ *   - 中招的条件不是「上面压着别的层」,是「这张卡挂载的那一拍没有 rAF」:页面上先有一张更早挂载的卡(在上面、
+ *     在下面、不重叠都一样),再推过一张中途进场的卡。只导一段(`--frames a-b`)、抽帧(`targetFrames`)、
+ *     流的回放段和稀疏那一趟(一页上不止一张卡时)都是这样推的。整段导出每帧都截图,不受影响。
+ *
+ * 做法:推过去的帧在 `step` 之后补一拍带截图的 `beginFrame`(最便宜的 JPEG,立刻丢掉),拍数和「这一帧取了图」
+ * 完全一样(上一帧没画过时同样先多画一拍,见 `captureFrame` 的 `prime`)。于是页面经历的拍子与整段导出逐拍相同,
+ * 取图的那几帧和整段导出里的同一帧一致。
+ *   - 每帧都取图的那些路(整段导出、接着租约产的满密度分段)一拍都不多走,逐字节不变;
+ *   - 预热(`warmUpAt`)不动;
+ *   - 素材不在补画的帧上加载(`prepareFrameMedia` 只在真取图的帧前面);丢掉的图不交给 `onFrame`、不写盘、不进编码器。
+ *
+ * `PROMPTCUT_PUSH_DRAW=0`(或 `opts.pushDraw === false`)关掉,只给探针对照「修之前」用,产品里不设。
+ */
+export const PUSH_DRAW_SHOT = Object.freeze({ format: 'jpeg', quality: 0 });
+export function pushDrawEnabled(opts = {}, env = process.env) {
+  if (typeof opts?.pushDraw === 'boolean') return opts.pushDraw;
+  return String(env?.PROMPTCUT_PUSH_DRAW ?? '1').trim() !== '0';
+}
+/**
+ * 画一拍丢掉。`prime`:紧挨着的上一帧没画过时先多画一拍(和 `captureFrame` 同一个判据、同样的拍数)。
+ * 和 `captureFrame` 一样,这一拍没交回画面就在同一个时间点再发,最多四拍;交不回来不报错(这张图本来就不要)。
+ * 回一共发了几拍。
+ */
+export async function drawDiscarded(bakery, prime, signal) {
+  const cancelled = () => Object.assign(new Error('已取消'), { cancelled: true });
+  let ticks = 0;
+  if (prime) {
+    if (signal?.aborted) throw cancelled();
+    await bakery.beginFrame({ screenshot: PUSH_DRAW_SHOT });
+    ticks++;
+  }
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (signal?.aborted) throw cancelled();
+    const result = await bakery.beginFrame({ screenshot: PUSH_DRAW_SHOT });
+    ticks++;
+    if (result?.screenshotData) break;
+  }
+  return ticks;
+}
+
+/**
  * 在一个已经开着的 bakery 上渲一段帧。返回给 ffmpeg 用的那些参数。
  *
  * opts:
@@ -159,6 +209,9 @@ export async function bakeFrames(bakery, opts = {}) {
   const totalFrames = targetFrames ? targetFrames.size : endFrame - startFrame + 1;
   const durationSec = (totalFrames / fps).toFixed(3);
   let reused = 0;
+  // 推帧补画:开没开,以及这一趟为推过去的帧一共多发了几拍(只为诊断和单测)
+  const pushDraw = pushDrawEnabled(opts);
+  let pushDrawn = 0;
 
   /*
    * HTML 采样缓存(opts.domCache):每截完一帧顺手把舞台生成 HTML 快照,gzip 后写到 <out>/dom/%06d.html.gz。
@@ -197,6 +250,7 @@ export async function bakeFrames(bakery, opts = {}) {
     // 上一张真截对应的遮罩:undefined = 还没截过(null = 截了,没有玻璃)。静止帧复用卡片图时遮罩也一起复用
     let lastGlass;
     reused = 0;
+    pushDrawn = 0;
     domLossy = 0;
     glass.list = [];
     glass.blurs.clear();
@@ -234,7 +288,14 @@ export async function bakeFrames(bakery, opts = {}) {
       if (!opts.quiet && opts.onProgressLog && ((i - startFrame + 1) % 10 === 0 || i === endFrame)) {
         console.log(`Exported frame ${i} (${i - startFrame + 1}/${totalFrames})`);
       }
-      if (!wantShot || opts.snapshotOnly) continue;
+      if (!wantShot || opts.snapshotOnly) {
+        // 推帧补画(见文件头):这一帧不取图,也没有为生成快照画过,就画一拍丢掉。当它「截过」记账,下一帧不用再先丢一张
+        if (pushDraw && lastDrawnFrame !== i) {
+          pushDrawn += await drawDiscarded(bakery, lastShotFrame !== i - 1, opts.signal);
+          lastShotFrame = lastDrawnFrame = i;
+        }
+        continue;
+      }
 
       let buf;
       let fresh = true;
@@ -306,7 +367,7 @@ export async function bakeFrames(bakery, opts = {}) {
   return {
     framesDir, ext, fps, width, height, startFrame, endFrame, advanceStartFrame,
     advancedFrames: renderRanges.reduce((sum, [a, b]) => sum + b - a + 1, 0),
-    totalFrames, durationSec, reused, elapsed, domDir,
+    totalFrames, durationSec, reused, elapsed, domDir, pushDrawn,
     glass: { dir: glass.dir, list: glass.list, blurs: [...glass.blurs] },
   };
 }
@@ -443,7 +504,8 @@ const STREAM_SHOT = { format: 'png', optimizeForSpeed: true };
  *   onFrame          `(frame, png) => Promise`:逐帧交出,`await` 就是背压(G4:编码器双缓冲靠它)
  *   signal           只在两帧之间生效
  *
- * 回 `{ reset, replayed, captured, captureMs, stepMs }`(给调度器量 `firstMs` / `frameMs` 用)。
+ * 回 `{ reset, replayed, captured, captureMs, stepMs, pushDrawn, pushDrawMs }`(给调度器量 `firstMs` / `frameMs` 用;
+ * 后两个是推帧补画多发的拍数和花的毫秒,见文件头)。
  */
 export async function bakeStream(bakery, opts) {
   const { page, client } = bakery;
@@ -478,15 +540,24 @@ export async function bakeStream(bakery, opts) {
     lease = bakery.streamLease = { streamSignature, lastFrame: startFrame - 1, lastShot: null, stepper, dirty: false, fps, page };
     reset = true;
   }
-  const stats = { reset, replayed: 0, captured: 0, captureMs: 0, stepMs: 0 };
+  const stats = { reset, replayed: 0, captured: 0, captureMs: 0, stepMs: 0, pushDrawn: 0, pushDrawMs: 0 };
+  const pushDraw = pushDrawEnabled(opts);
+  /** 推帧补画(见文件头):回放的帧、稀疏分段里不取图的帧各画一拍丢掉;当它「截过」记账,下一帧不用再先丢一张 */
+  const drawPushed = async (frame) => {
+    if (!pushDraw) return;
+    const started = Date.now();
+    stats.pushDrawn += await drawDiscarded(bakery, lease.lastShot !== frame - 1, signal);
+    lease.lastShot = frame;
+    stats.pushDrawMs += Date.now() - started;
+  };
   for (let frame = lease.lastFrame + 1; frame <= toFrame; frame++) {
     if (signal?.aborted) throw cancelled();
     const stepStarted = Date.now();
     await lease.stepper(frame, false);
     stats.stepMs += Date.now() - stepStarted;
     lease.lastFrame = frame;
-    if (frame < fromFrame) { stats.replayed++; continue; }
-    if ((frame - fromFrame) % stride !== 0) continue;
+    if (frame < fromFrame) { stats.replayed++; await drawPushed(frame); continue; }
+    if ((frame - fromFrame) % stride !== 0) { await drawPushed(frame); continue; }
     const shotStarted = Date.now();
     await opts.beforeCapture?.(frame);
     if (opts.hasMedia) await prepareFrameMedia(bakery);
