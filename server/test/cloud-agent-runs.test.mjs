@@ -454,7 +454,7 @@ test('一轮的生命周期、收尾与对话状态', { timeout: 240_000 }, asyn
   });
 });
 
-test('CA-CHAT-03 记录降级与封顶;对话数上限的淘汰不动在跑的', () => {
+test('CA-CHAT-03 记录降级与封顶;对话数上限只拦新建、不自动删历史', () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-cloud-store-'));
   try {
     let at = 1000;
@@ -468,12 +468,21 @@ test('CA-CHAT-03 记录降级与封顶;对话数上限的淘汰不动在跑的',
     assert.equal(store.full(c), false);
     while (c.bytes < 1200) store.emit(c, { type: 'text', delta: '字'.repeat(20) });
     assert.equal(store.full(c), true, '封顶后不能再发消息');
-    // 对话数上限:删最久没动且不在跑的
-    c.run = { runId: 'r' }; // c1 最旧,但在跑
+    // 对话数上限(2026-10-08 用户定:满了不让新建、不自动删历史):第 4 个被拒,原来的 3 个一个不少,包括最旧的、不在跑的
+    c.run = { runId: 'r' };
     at = 2000; store.setState(store.get('p', 'o', 'c2', { create: true }), {});
     at = 3000; store.setState(store.get('p', 'o', 'c3', { create: true }), {});
-    at = 4000; store.get('p', 'o', 'c4', { create: true });
-    assert.deepEqual(store.list('p', 'o').map((m) => m.id).sort(), ['c1', 'c3', 'c4'], 'c2 被淘汰,在跑的 c1 留着');
+    at = 4000;
+    assert.throws(() => store.get('p', 'o', 'c4', { create: true }), { code: 'conversation-limit' });
+    assert.deepEqual(store.list('p', 'o').map((m) => m.id).sort(), ['c1', 'c2', 'c3'], '满额不淘汰任何对话');
+    assert.equal(store.get('p', 'o', 'c4'), null, '被拒的没有留下半个对话');
+    assert.ok(store.get('p', 'o', 'c2'), '已有的对话照常能取、能继续用');
+    // 另一个主人、另一个项目各算各的
+    assert.ok(store.get('p', 'o2', 'c4', { create: true }), '另一个主人不受影响');
+    assert.ok(store.get('p2', 'o', 'c4', { create: true }), '另一个项目不受影响');
+    // 用户自己删掉一个,名额就让出来
+    store.remove(store.get('p', 'o', 'c2'));
+    assert.ok(store.get('p', 'o', 'c4', { create: true }), '删一个以后能再新建');
     // 目录名:走不出 tenants/
     assert.throws(() => store.get('..', 'o', 'c1', { create: true }));
     assert.equal(store.get('p', 'o', '../x', { create: true }), null);
