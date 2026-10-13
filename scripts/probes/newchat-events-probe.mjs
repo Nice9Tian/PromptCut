@@ -328,12 +328,23 @@ async function main() {
     await creator.click(toggle);
     await sleep(2000);
     result.notes.push({ E_creatorControlStatus: await creator.$eval('[data-pc="cloud-control-status"]', e => e.textContent?.trim()).catch(() => null) });
-    await observe(member, 'member', 'E2-member-after-creator-set-private', quick ? 12_000 : 20_000, { shotAt: [3000, quick ? 11_000 : 19_000] });
+    // 成员页上从「创建者点下设为私有」起算到出现提示用了多久；创建者自己的页面、成员自己的别的对话不受影响
+    const privateAt = Date.now();
+    const sawNotice = member.waitForFunction(text => document.querySelector('[data-pc="cloud-notice"]')?.textContent?.includes(text), { timeout: 30_000 },
+      '当前账号已无法读取这个对话').then(() => Date.now() - privateAt, () => null);
+    await observe(member, 'member', 'E2-member-after-creator-set-private', quick ? 12_000 : 20_000, { shotAt: [3000, quick ? 11_000 : 19_000], fromIndex: member.evLog.length });
+    result.notes.push({ E2_msUntilRevokedNotice: await sawNotice });
+    const creatorAfter = await state(creator);
+    result.notes.push({ E2_creatorPageAfterPrivate: { connection: creatorAfter.connection, banner: Boolean(creatorAfter.banner), notice: creatorAfter.notice,
+      userMessages: creatorAfter.userMessages, assistantMessages: creatorAfter.assistantMessages } });
+    await shot(creator, 'E2-creator-page-after-private');
 
     // 成员刷新页面：记着的就是这个已经对他不可读的对话(它不是页面刚建的新对话)
     const markE3 = member.evLog.length;
     await reopen(member);
     await observe(member, 'member', 'E3-member-reloads-onto-now-private-conversation', quick ? 8000 : 15_000, { shotAt: [4000, quick ? 7000 : 14_000], fromIndex: markE3 });
+    await newChat(member);
+    await observe(member, 'member', 'E4-member-other-conversation-after-revoke', quick ? 6000 : 8000, { shotAt: [4000] });
 
     // ---------- F：Agent 服务停掉 ----------
     phase = 'F-agent-down';
