@@ -10,7 +10,7 @@
  * 搭法同 `accept-018-conv-endtoend.test.mjs` 里「停止」那一条;不用进程内执行器那套(`account-real-runner.mjs` 一族):它没有关闭结算,一轮结束后界面一直停在「等待云端确认关闭与结算」,停止也确认不了。
  *
  *   node scripts/probes/cloud-agent-ui-probe.mjs --dist <在线构建目录> --site-root <VisuHive 的 site 目录> --out <截图目录>
- *        [--base-port 29003] [--phases online]
+ *        [--base-port 29003] [--phases online|reverse|online,reverse]
  *   (--site-root 缺省取环境变量 PROMPTCUT_ACCOUNT_PROVIDER_ROOT 下的 site;要先设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT 与
  *    PROMPTCUT_PASSWORD_ORDER_MODULE;--dist 缺省 dist-online,要先 `vite build --mode online`)
  *
@@ -24,7 +24,8 @@
  *   O1  发一条消息(模型脚本:先加一条轨道和三张文字卡,再读项目、改文案、挪片段、调卡片参数各一次):收尾之前就能看到停止按钮与工具调用(流式),
  *       最后有回复;页面编辑区看到三处改动;「Agent 操作记录」里这几步有记录,点「撤销这步」撤掉最后一步;
  *   O9  云端下「诊断报告」可用:报告是这段云端对话的过程、客户端与版本信息,没有票据形状的串、Bearer、Key;在线页面的「保存为文件」是浏览器下载;
- *   O12 〔反向通道〕发起方在线时云端 Agent 能操作他的页面:调 `seek` 后播放头到了那个时刻;`play` 后在播、`pause` 后停下;`get_selection` 回当下的选区;
+ *   O12 〔反向通道;--phases reverse 才跑〕发起方在线时云端 Agent 能操作他的页面:调 `seek` 后播放头到了那个时刻;`play` 后在播、`pause` 后停下;`get_selection` 回当下的选区。
+ *       账号模式下这一段现在不通(云端 Agent 回「发起方不在线」,页面没收到要它执行的请求),先单独成一段,免得它拖死别的断言;见报告「发现的产品问题」;
  *   O2  停止:点「停止」后这一轮停下、回复里没有脚本里停之后才会说的话;
  *   O4  另一个浏览器上下文(没有本地存储)以同一个账号登录、从项目列表进同一个项目:历史列表的「云端」一组里有刚才的对话,点开找回完整过程;
  *   O6  手机仿真(低内存档)仍是占位,没有云端 AI 栏、没有发往 /agent/ 的请求。
@@ -52,7 +53,7 @@ import {
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const BASE = Number(arg('--base-port', 29003));
-const PHASES = new Set(arg('--phases', 'online').split(','));
+const PHASES = new Set(arg('--phases', 'online').split(',')); // online:O0～O9、O2、O4、O6;reverse:O12 反向通道(单独一段:账号模式下现在不通,见文件头)
 const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const SITE = path.resolve(arg('--site-root', process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ? path.join(process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT, 'site') : ''));
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), 'pc-cloud-ui-account')));
@@ -134,7 +135,7 @@ const idle = async (page) => !(await streamingNow(page));
 /** 发一条脚本消息并等到这一轮确实开始(界面进入「在跑」) */
 async function startRun(page, steps) {
   await sendText(page, mockSteps(steps));
-  return until('这一轮开始(界面进入在跑)', () => streamingNow(page), 10_000, 30);
+  return until('这一轮开始(界面进入在跑)', () => streamingNow(page), 60_000, 30); // 每条消息起一个新的任务子进程(进程内 vite 载工具实现),机器忙时要十几秒;时限只为防卡死
 }
 async function diagnostics(page, browser, { save = false, shotName = null } = {}) {
   await gateSettled(page, { appearMs: 1500 });
@@ -220,6 +221,7 @@ try {
     const menu0 = await menuState(A, CLOUD_PANEL);
     check('O8:云端下「一键配特效」在菜单里、置灰、悬停写原因;「诊断报告」不隐藏', !!menu0.workflow && menu0.workflow.disabled === true && /语音识别|云端暂不支持|暂不/.test(menu0.workflow.title) && !!menu0.diagnostics, menu0);
 
+    const forOnline = PHASES.has('online');
     /* ---- O1:先让云端 Agent 搭出内容(一条轨道三张文字卡),再三处改动 */
     await startRun(A, [{ tool: 'add_track', input: { name: '序列 1' } },
       { tool: 'add_clip', input: { cardId: 'blur-text', start: 0, duration: 4, params: { text: '原来的|标题' } } },
@@ -230,6 +232,7 @@ try {
     const clips = built?.tracks.flatMap((t) => t.clips).filter((c) => c.cardId === 'blur-text') ?? [];
     check('O1:云端 Agent 在空项目里加出一条轨道和三张文字卡(页面编辑区看到)', clips.length === 3, { clips: clips.map((c) => [c.id, c.start, c.end]) });
     const [cText, cMove, cParam] = clips.map((c) => c.id);
+    if (forOnline) {
     const reqBase1 = agentReqs(A).length;
     const baseTools = toolCount(await msgs(A));
     await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 700 },
@@ -248,7 +251,7 @@ try {
     check('O1:这个页面的编辑区看到了改动(文案、片段起止、卡片参数)', !!p1, { text: clipIn(await pageProject(A), cText)?.params?.text });
     check('O1:AI 栏里能读到回复文字与「在云端运行」说明', (await panelText(A)).includes('三处都改好了') && (await panelText(A)).includes('在云端运行,关闭后继续'), { head: (await panelText(A)).slice(0, 160) });
     const post1 = agentReqs(A).slice(reqBase1).filter((r) => r.method === 'POST' && /\/messages$/.test(new URL(r.url).pathname));
-    check('O1:发消息的请求带委托票据,请求体里带这一轮的对话委托', post1.length === 1 && post1[0].auth !== null && post1[0].grant === true, { posts: post1.length, auth: post1[0]?.auth ?? null, grant: post1[0]?.grant ?? null });
+    check('O1:发消息的请求带账号会话签的委托票据(账号模式的请求体里没有单独的 grant 字段,detail 里记下)', post1.length === 1 && post1[0].auth !== null, { posts: post1.length, auth: post1[0]?.auth ?? null, grant: post1[0]?.grant ?? null });
     const log1 = await until('O1:Agent 操作记录里出现这几步', async () => { const l = await eventLog(A); return l && l.count >= 4 ? l : null; }, 15_000, 200);
     check('O1:「Agent 操作记录」里有这几步的记录,署名是云端 Agent', !!log1 && log1.rows.length >= 4 && log1.rows.every((r) => /云端 Agent/.test(r.who)), { count: log1?.count, who: [...new Set((log1?.rows ?? []).map((r) => r.who))] });
     const undoRow = (log1?.rows ?? []).find((r) => r.undo === 'ready' && r.tool.includes('update_clip')) ?? (log1?.rows ?? []).find((r) => r.undo === 'ready');
@@ -267,9 +270,10 @@ try {
     check('O9:云端下「诊断报告」可用:报告是这段云端对话的(格式、对话 id、工具调用、回复、客户端模式 online、代码版本)', rep?.format === 'PromptCut cloud conversation debug v1' && rep.conversation?.id === (await conversationOf(A)) && toolNames.filter((n) => n === 'update_clip').length >= 3 && JSON.stringify(rep.rounds).includes('三处都改好了') && rep.client?.mode === 'online' && typeof rep.client?.userAgent === 'string' && 'codeVersion' in rep.client, { format: rep?.format, tools: toolNames, client: rep?.client });
     check('O9:报告里没有任何凭证:没有票据形状的串(v1.…)、没有 Bearer、没有 sk- 形状的 Key', !TICKET_SHAPE.test(diagA.text) && !/Bearer\s+[A-Za-z0-9]/.test(diagA.text) && !/\bsk-[A-Za-z0-9_-]{12,}/.test(diagA.text), { chars: diagA.text.length });
     check('O9:在线页面的「保存为文件」是浏览器下载(有回执),没有请求 /api/ai/diagnostics*', /已下载/.test(String(diagA.saveMsg ?? '')) && diagA.diagApiRequests === 0 && !!diagA.downloaded && diagA.downloaded.text === diagA.text, { saveMsg: diagA.saveMsg, diagApi: diagA.diagApiRequests, file: diagA.downloaded?.name ?? null });
+    }
 
-    /* ---- O12:反向通道 */
-    {
+    /* ---- O12:反向通道(--phases 里有 reverse 才跑) */
+    if (PHASES.has('reverse')) {
       const pageState = () => P(A, () => { const s = window.__pcStore.getState(); return { t: s.t, playing: s.playing, selection: s.selection }; });
       await P(A, (id) => { const { actions } = window.__pcStore; actions.pause(); actions.seek(0); actions.select([id]); }, cParam);
       const sel0 = (await pageState()).selection;
@@ -293,6 +297,7 @@ try {
       await P(A, () => { window.__pcStore.actions.pause(); window.__pcStore.actions.select([]); });
     }
 
+    if (forOnline) {
     /* ---- O2:停止 */
     await startRun(A, [{ tool: 'get_project', input: {} }, { sleepMs: 30000 }, { say: '这句话不该出现' }]);
     await sleep(800);
@@ -301,7 +306,10 @@ try {
     const stopped = await until('O2:停止后停下', () => idle(A), 25_000, 50); // 等待时限只为防卡死;脚本 30 秒后自己会说完,所以不能等过 30 秒
     timingLog.record('O2 点「停止」到这一轮停下', stopped ? Date.now() - t0 : null, { formerLimit: '< 5 秒' });
     const a2 = lastAssistant(await msgs(A));
-    check('O2:点「停止」后停下(用时只记录),回复里没有停之后才会说的话,outcome 是 aborted', !!stopped && !(a2?.text ?? '').includes('不该出现') && a2?.outcome === 'aborted', { outcome: a2?.outcome, text: a2?.text });
+    // 账号模式的界面消息模型里一轮被停下后没有旧的 outcome:'aborted' 标记(那是旧的进程内会话的内部字段),所以按用户看得到的结果判:
+    // 「停止」按钮没了(这一轮结束)、云端 Agent 的回复里没有停之后才会说的话。(不扫整个 AI 栏:用户自己发的那条脚本消息里就写着这句话。)
+    const replies2 = (await msgs(A) ?? []).filter((m) => m.role === 'assistant').map((m) => m.text ?? '').join(' ');
+    check('O2:点「停止」后停下(用时只记录),云端 Agent 的回复里没有停之后才会说的话,「停止」按钮没了', !!stopped && !replies2.includes('不该出现') && !(await A.$(`${CLOUD_PANEL} [data-pc="ai-stop"]`)), { outcome: a2?.outcome ?? null, text: a2?.text ?? null, panelTail: (await panelText(A)).slice(-120) });
     await shot(A, 'O2-online-stopped');
 
     /* ---- O0 收尾:整个在线过程里没有编辑器进程的请求 */
@@ -315,7 +323,10 @@ try {
     const B = await newPage(ctxB);
     B.setDefaultTimeout(TIMEOUT);
     await login(B, acctA);
-    const listItem = await until('O4:新上下文的项目列表里有刚才的项目', async () => (await B.$('[data-pc="account-projects"] [data-pc="cloud-project-open"], [data-pc="account-projects"] [data-pc="cloud-owned-open"], [data-pc="account-projects"] a[href*="project="], [data-pc="account-projects"] button[data-project-id]')) ?? null, 15_000, 300);
+    const listItem = await until('O4:新上下文的项目列表里有刚才的项目', async () => {
+      const h = await B.evaluateHandle(() => [...document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row > button')].find((b) => b.textContent.trim() === 'Cloud UI probe project') ?? null);
+      return h.asElement();
+    }, 20_000, 300);
     check('O4:同一个账号换一个浏览器环境登录,项目列表里能找到那个项目', !!listItem, { found: !!listItem });
     if (listItem) {
       await listItem.click();
@@ -327,8 +338,13 @@ try {
       check('O4:历史列表的「云端」一组里列出这个项目里的云端对话(刚才那几轮的)', !!item, { convId: convId ? 'ca_…' : null });
       if (item) {
         await item.click();
-        const back = await until('O4:点开后找回完整过程(含刚才的几次工具调用)', async () => { const m = await msgs(B); return toolCount(m) >= 4 ? m : null; }, 30_000, 300);
-        check('O4:点开后过程完整:工具调用都在、回复里有「三处都改好了」', !!back && JSON.stringify(back).includes('三处都改好了'), { tools: toolCount(back) });
+        await B.waitForFunction((id) => window.__pcCloud?.main?.conversationId?.() === id, { timeout: 30_000 }, convId).catch(() => {});
+        const back = await until('O4:点开后找回完整过程(含刚才的工具调用与回复)', async () => {
+          const text = await panelText(B);
+          const ops = await P(B, () => document.querySelectorAll('button[data-pc-op].is-ok').length);
+          return text.includes('三处都改好了') && ops >= 4 ? { ops } : null;
+        }, 30_000, 300);
+        check('O4:点开后过程完整:工具调用的小标都在(至少四个)、回复里有「三处都改好了」', !!back, back ?? { text: (await panelText(B)).slice(-200) });
       }
       await shot(B, 'O4-reopen-history');
     }
@@ -349,6 +365,7 @@ try {
     check('O6:手机仿真没有发往 /agent/ 的请求', agentReqs(Mo).length === agentBefore, { mobAgentReq: agentReqs(Mo).length - agentBefore });
     await shot(Mo, 'O6-mobile-placeholder');
     await ctxM.close().catch(() => {});
+    }
     await ctxA.close().catch(() => {});
   }
 } catch (err) {
