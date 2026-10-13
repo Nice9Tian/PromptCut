@@ -209,7 +209,8 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       look: { url: `http://127.0.0.1:${RUNNER_PORTS.look}`, keyDir: lookKeyDir },
       // 任务进程连素材服务的内部口，用的是它连文档服务的同一张任务证书
       runAssets: { origin: `https://127.0.0.1:${ports.assetInternal}/`, fingerprint256: pki.asset.fingerprint256,
-        maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024 } };
+        // 全量测试时机器很忙：一次素材请求里素材服务要回文档服务核好几趟，缺省的 5 秒无动静时限不够宽
+        maxResponseBytes: 1024 * 1024, maxImportBytes: 64 * 1024 * 1024, timeoutMs: 30_000 } };
     fs.writeFileSync(settingsFile, JSON.stringify({ worker, logFile }), { mode: 0o600 });
     const gateway = createAccountWorkerGateway({ configurationModule: path.join(here, 'account-runner-child-config.mjs'), cwd: path.resolve(here, '..', '..', '..'),
       env: { ...process.env, PROMPTCUT_RUNNER_FIXTURE_SETTINGS: settingsFile }, timeoutMs: 30_000 });

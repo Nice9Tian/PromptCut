@@ -24,7 +24,7 @@ try {
       tls: { key: file('PROMPTCUT_ASSET_CLIENT_KEY_FILE'), cert: file('PROMPTCUT_ASSET_CLIENT_CERT_FILE'), ca } },
     internalTls: { key: file('PROMPTCUT_ASSET_INTERNAL_KEY_FILE'), cert: file('PROMPTCUT_ASSET_INTERNAL_CERT_FILE'), ca },
     docFingerprint256: env.PROMPTCUT_ASSET_DOC_CLIENT_FINGERPRINT256, serviceIdentity: env.PROMPTCUT_ASSET_SERVICE_IDENTITY, log,
-    runAssets: { agentFingerprint256: agentPin, timeoutMs: 5000, maxResponseBytes: 1024 * 1024, maxBodyBytes: 16 * 1024 * 1024,
+    runAssets: { agentFingerprint256: agentPin, timeoutMs: 30_000, maxResponseBytes: 1024 * 1024, maxBodyBytes: 16 * 1024 * 1024,
       // 和生产入口同一个写法：只把钉住的那张 Agent 证书对应到配置里的服务钥匙号
       resolveAgentTransport({ req, socket, fingerprint256: actual }) {
         if (socket !== req.socket || actual !== agentPin || socket.authorized !== true || socket.destroyed) throw new Error('asset-run-service-forbidden');

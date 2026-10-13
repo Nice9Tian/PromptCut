@@ -17,7 +17,8 @@ const safeCode = body => (/^[a-z0-9-]{1,80}$/.test(body?.code ?? '') ? body.code
 
 test('真实运行器在任务进程里：带工具调用的任务做完并结清；跑的过程中看一次画面；第二条在第一代关掉之后才开始；从外面强制停',
   { timeout: 300_000 }, async t => {
-    const f = await startRunnerProcessFixture();
+    const marks = [['start', Date.now()]], mark = name => marks.push([name, Date.now()]);
+    const f = await startRunnerProcessFixture(); mark('fixture');
     let actor;
     t.after(async () => {
       await actor?.close().catch(() => {});
@@ -52,7 +53,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
       { say: '第一条做完' }]);
     const second = await send('runner_message_2', [{ tool: 'get_project', input: {} }, { say: '第二条做完' }]);
     await f.scheduler.start();
-    await waitFinished(first, '第一条结清');
+    await waitFinished(first, '第一条结清'); mark('first');
     const g1 = f.grantOf(first), chain1 = f.chain(1), stop1 = f.stops.find(row => row.epoch === 1);
     assert.equal(g1.terminalOutcome.status, 'done');
     // 任务在另一个操作系统进程里跑，root 绑定的就是文档服务签给这一条的分配
@@ -99,7 +100,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     assert.equal(last1.event.type, 'runner_done'); assert.equal(last1.event.outcome, 'done'); assert.equal(last1.eventId, sealed1.outcome.eventId);
 
     // ---------- 第二条：在第一代被关掉、文档服务结清之后才领得到，用的是新的一代进程 ----------
-    await waitFinished(second, '第二条结清');
+    await waitFinished(second, '第二条结清'); mark('second');
     const g2 = f.grantOf(second), stop2 = f.stops.find(row => row.epoch === 2);
     assert.equal(g2.terminalOutcome.status, 'done');
     assert.ok(g2.admittedAt >= stop1.at, `第二条领取 ${g2.admittedAt} 不该早于第一代关闭 ${stop1.at}`);
@@ -111,7 +112,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
 
     // ---------- 读运行素材：另一条任务（又一代进程）把刚才导入的素材读回来量响度 ----------
     const reader = await send('runner_message_read', [{ tool: 'measure_audio', input: { mediaId: media.id } }, { say: '量完了' }]);
-    await waitFinished(reader, '读素材的那一条结清');
+    await waitFinished(reader, '读素材的那一条结清'); mark('reader');
     const gr = f.grantOf(reader), rowsR = f.events(conversationId).filter(row => row.runGrantId === gr.runGrantId);
     assert.equal(gr.terminalOutcome.status, 'done');
     assert.deepEqual(rowsR.filter(row => row.event.type === 'tool_result').map(row => [row.event.name, row.event.ok]), [['measure_audio', true]],
@@ -120,7 +121,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     assert.ok(readIntent, '文档服务给这条任务签过这次读取'); assert.equal(readIntent.resource.hash, wavHash);
     // 素材的租约都关了：任务进程每次请求用完就断开，素材服务看到连接关了向文档服务报关闭
     await until(() => Object.values(f.ledger().runAssetLeasesV1 ?? {}).every(row => row.state === 'closed'), { what: '运行素材的租约都关闭', timeoutMs: 20_000 });
-    const leases = Object.values(f.ledger().runAssetLeasesV1 ?? {});
+    const leases = Object.values(f.ledger().runAssetLeasesV1 ?? {}); mark('leases');
     assert.ok(leases.length >= 4, `导入（对账、传片、收尾）与读取各有租约：${leases.length}`);
 
     // ---------- 第三条：做到一半从外面强制停 ----------
@@ -141,7 +142,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
       stopReply = await actor.agent(`/conversations/${conversationId}/abort`, { runId: g3.runId, requestId: 'runner_stop_3' });
       return stopReply.status === 200;
     }, { what: '停止接口回成功', timeoutMs: 60_000, everyMs: 300 }).catch(error => { error.message += ` last=${stopReply?.status}/${safeCode(stopReply?.body)} :: ${diagnose()}`; throw error; });
-    await waitFinished(third, '强制停止结清');
+    await waitFinished(third, '强制停止结清'); mark('forced');
     const done3 = f.grantOf(third), chain3 = f.chain(4), stop3 = f.stops.find(row => row.epoch === 4);
     assert.equal(done3.terminalOutcome.status, 'interrupted'); assert.equal(done3.terminalOutcome.reason, 'stop');
     assert.equal(done3.finishReceiptId, undefined, '没做完的任务没有正常结束的回执');
@@ -161,10 +162,14 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     assert.equal((await actor.project()).project.name, 'Before forced stop');
 
     // ---------- 第四条：强制关掉之后名额让出来，照常做完 ----------
-    await waitFinished(fourth, '第四条结清');
+    await waitFinished(fourth, '第四条结清'); mark('last');
     const g4 = f.grantOf(fourth);
     assert.equal(g4.terminalOutcome.status, 'done'); assert.ok(g4.admittedAt >= stop3.at);
     assert.equal(f.conversation(conversationId).currentRunId, null);
     assert.deepEqual(f.scheduler.describe().map(row => row.phase), ['idle']);
+    t.diagnostic(`耗时（毫秒，只记录）：${marks.slice(1).map(([name, at], i) => `${name} ${at - marks[i][1]}`).join('，')}`);
+    const counts = {}; for (const row of f.log) if (/^slot\./.test(row.event)) counts[row.event] = (counts[row.event] ?? 0) + 1;
+    const retries = [...f.generations.keys()].map(epoch => `${epoch}:${f.workerLog(epoch).filter(row => /retry/.test(row.event)).map(row => row.code).join('|') || '-'}`);
+    t.diagnostic(`调度事件 ${JSON.stringify(counts)}；各代重试 ${retries.join(' ')}`);
     t.diagnostic(`epoch1 pid ${stop1.pid} graceful@${stop1.at}; second admitted ${g2.admittedAt}; epoch4 pid ${pid3} ${stop3.how} (exit ${stop3.exitCode}/${stop3.signal}); look served ${lookStatus.served}`);
   });

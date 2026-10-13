@@ -25,7 +25,8 @@
  *   modelConfigDir             可不写：模型配置所在的数据目录，缺省就是 dataDir
  *   controlPort                可不写：文档服务回连的本机控制口，缺省 0（系统分配）
  *   look       { url, keyDir }                          可不写；渲染服务的回环口、签看画面请求用的服务私钥目录
- *   runAssets  { origin, fingerprint256, maxResponseBytes, maxImportBytes }   可不写；素材服务的内部口
+ *   runAssets  { origin, fingerprint256, maxResponseBytes, maxImportBytes, timeoutMs? }   可不写；素材服务的内部口
+ *                              （timeoutMs：一次素材请求里连接多久没有动静就放弃，缺省 5 秒）
  *
  * 只在 Linux 上能用：root 写的文件要核属主（`rootRead`）。别的平台直接拒绝。测试经 `buildWorkerConfiguration`
  * 换掉「读 root 记录」和「模型配置」这两处，其余走同一份代码。
@@ -63,9 +64,10 @@ export function validateWorkerSettings(settings) {
     fail('account-worker-settings');
   if (settings.look !== undefined && (!exact(settings.look, ['url', 'keyDir']) || !parseLookUrl(settings.look.url) || !absolute(settings.look.keyDir)))
     fail('account-worker-settings-look');
-  if (settings.runAssets !== undefined && (!exact(settings.runAssets, ['origin', 'fingerprint256', 'maxResponseBytes', 'maxImportBytes']) ||
+  if (settings.runAssets !== undefined && (!exact(settings.runAssets, ['origin', 'fingerprint256', 'maxResponseBytes', 'maxImportBytes'], ['timeoutMs']) ||
       !origin(settings.runAssets.origin) || !fingerprint(settings.runAssets.fingerprint256) ||
-      !positive(settings.runAssets.maxResponseBytes) || !positive(settings.runAssets.maxImportBytes)))
+      !positive(settings.runAssets.maxResponseBytes) || !positive(settings.runAssets.maxImportBytes) ||
+      (settings.runAssets.timeoutMs !== undefined && !positive(settings.runAssets.timeoutMs))))
     fail('account-worker-settings-run-assets');
   return settings;
 }
@@ -119,7 +121,8 @@ export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig
         ...(look ? { look } : {}),
         ...(settings.runAssets ? { runAssets: { assetOrigin: settings.runAssets.origin, assetTls: docTls,
           assetFingerprint256: settings.runAssets.fingerprint256, maxResponseBytes: settings.runAssets.maxResponseBytes,
-          maxImportBytes: settings.runAssets.maxImportBytes } } : {}),
+          maxImportBytes: settings.runAssets.maxImportBytes,
+          ...(settings.runAssets.timeoutMs ? { timeoutMs: settings.runAssets.timeoutMs } : {}) } } : {}),
         log,
         // 这个进程收尾时（执行器关完之后）关掉 vite
         async close() { const owned = vite; vite = null; await owned?.close(); } };
