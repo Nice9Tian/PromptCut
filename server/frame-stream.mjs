@@ -42,13 +42,14 @@ import { createHash } from 'node:crypto';
 import { bakeStream } from './bakery/bake.mjs';
 import { directCaptureMode, directSegmentCapture, newDirectRecord, rgbaAlphaBox } from './bakery/capture-canvas.mjs';
 import { belowSegmentCapture, newBelowRecord } from './bakery/capture-below.mjs';
+import { prepareFrameMedia } from './bakery/frame-media.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
-import { belowLayersOf } from '../src/render/streamInputSig.mjs';
+import { belowLayersOf, streamInputSig } from '../src/render/streamInputSig.mjs';
 import { isStreamOrigin, streamSegmentFirstFrame, streamSegmentFrameCount, streamSegmentLastFrame, streamSegmentOf, streamSegmentSpan } from '../src/render/streamSegments.mjs';
 
 import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
@@ -94,18 +95,35 @@ export function streamsEnabled(env = process.env) {
 }
 
 /**
- * 「依赖下层的流」(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5 节)出不出。**缺省关**〔裁〕。
+ * 「依赖下层的流」(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5 节)出不出。**缺省开**。
  *
- * 这种流现在做了计划、键、隔离工程、切分与认领,以及流里的像素怎么取(差分取层,`./bakery/capture-below.mjs`);
- * 怎么贴回舞台、在线页面怎么读还没做。关着的时候
- * `planStreams` 不出这种流,于是切分不出这种任务、层表里没有这种行、生产者不产它,行为和加这种流之前一字不差。
- * 只给单测和探针一个打开的办法:环境变量 `PROMPTCUT_TEST_BELOW_STREAMS=1`(照 `PROMPTCUT_TEST_PLAN_ONLY` 的写法,生产环境不设),
- * 或者直接给 `planStreams` 传 `below: true`。贴回舞台那一块合入时把这个开关去掉(常量改成 true、删掉环境变量)。
+ * 这种流的计划、键、隔离工程、切分与认领、流里的像素怎么取(差分取层,`./bakery/capture-below.mjs`)、怎么贴回舞台
+ * (`src/render/Stage.tsx` 舞台根下的那块平面)都做了,产品里一直出。
+ * 只给单测和探针留一个**关掉**的办法:环境变量 `PROMPTCUT_TEST_BELOW_STREAMS=0`(生产环境不设),或给 `planStreams` 传
+ * `below: false` —— 用来扮「还不认识这种流的旧节点」(队列里新旧节点并存时,旧节点收到这种任务要报对不上、不可重试)。
+ * 关着的时候 `planStreams` 不出这种流,于是切分不出这种任务、层表里没有这种行、生产者不产它。
  */
-export const BELOW_STREAMS_DEFAULT = false;
+export const BELOW_STREAMS_DEFAULT = true;
 export function belowStreamsEnabled(env = process.env) {
-  return BELOW_STREAMS_DEFAULT || String(env?.PROMPTCUT_TEST_BELOW_STREAMS ?? '').trim() === '1';
+  const flag = String(env?.PROMPTCUT_TEST_BELOW_STREAMS ?? '').trim();
+  if (flag === '0') return false;
+  if (flag === '1') return true;
+  return BELOW_STREAMS_DEFAULT;
 }
+
+/**
+ * 依赖下层的流:推过去而不取图的帧(回放的帧、稀疏那一趟分段里第一帧以外的帧)也要真的画一次,用这张丢掉的截图来画。
+ *
+ * 原因(2026-10-14 在导出页上单独量的,不经过产流):下层有一张中途挂载的 motion 式卡、上面压着毛玻璃(`backdrop-filter`)时,
+ * 只推帧不截图(`beginFrame` 不带 `screenshot`)的那几拍里,这张卡的动画在画面上不往前走 —— 动画的时刻在页面里是对的,
+ * 可合成出来的像素停在它挂载的那一帧,要到下一次真的截图才起步,之后一直落后那么多帧;没有毛玻璃压着时没有这回事。
+ * 每一拍都截一张(哪怕是最便宜的)就对了。质量 1 的 JPEG 在 960×540 上每张约 4 毫秒。
+ * 不这样做的后果:稀疏版和断了租约重产的满密度分段里,下层那张卡落后好几帧(流里的画面是错的);画面还在一拍一拍地追,
+ * 差分取层的自检(藏起目标卡再露出来,带目标卡的那张要不变)有时就过不了,整条流被判死。
+ */
+const BELOW_DISCARD_SHOT = Object.freeze({ format: 'jpeg', quality: 1 });
+/** 上面那种丢掉的帧在 `bakeStream` 的 `capture` → `onFrame` 之间的记号 */
+const BELOW_SKIPPED = Object.freeze({ skipped: true });
 
 /** 解码器预算。只给探针压低它(`PROMPTCUT_STREAM_DECODERS`),产品里就是 6 */
 export function streamDecoderBudget(env = process.env) {
@@ -612,9 +630,9 @@ export function streamNeedsReplay(controls) {
  * 单独成流的两类卡(`soloStreamKind`:源依赖卡、框用了三维的独立卡)各出一条 `kind: 'card'`、`plane: 'local'` 的单卡流,另带
  * `solo: 'source' | 'spatial'`,排在单卡流和组流后面;它们不参加组流合并,但占解码器预算。项目里没有这两类卡时结果与原来逐项相同。
  *
- * `below`(缺省取 `belowStreamsEnabled()`,**缺省关**):打开时预渲染集合里依赖下层、`context`、未知的重卡各出一条
+ * `below`(缺省取 `belowStreamsEnabled()`,**缺省开**):预渲染集合里依赖下层、`context`、未知的重卡各出一条
  * `kind: 'below'` 的流(`belowStreamSpec`),排在单卡流和组流后面;它们不参加组流合并,但占解码器预算。
- * 关着时结果与没有这种流时逐项相同。
+ * 传 `false` 时结果与没有这种流时逐项相同。
  */
 export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint, below = belowStreamsEnabled() } = {}) {
   if (typeof envFingerprint !== 'string' || !envFingerprint) return [];
@@ -650,7 +668,7 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
   singles.sort((a, b) => a.order - b.order);
   solos.sort((a, b) => a.order - b.order);
   const byClip = new Map(singles.map(s => [s.clipIds[0], s]));
-  // 依赖下层的流的目标卡(开关关着时是空的):不参加组流合并,但各占一个解码器。已经单独成流的卡不再出这种流
+  // 依赖下层的流的目标卡(`below: false` 时是空的):不参加组流合并,但各占一个解码器。已经单独成流的卡不再出这种流
   const belows = below ? belowTargets(plan, { picked, where, fps, total, orderOf, taken: soloSeen }) : [];
   const fixed = solos.length ? [...solos, ...belows] : belows;
   const grouped = groupStreams(singles, layers, budget, fixed);
@@ -793,8 +811,8 @@ function localClip(clip, spec) {
  * 依赖下层的流(`kind: 'below'`,`docs/plan/prerender-products-contract.md` 第 5.1、5.2 节)
  *
  * 这一节只有计划、键和隔离工程。流里的像素怎么取(第 5.3 节:差分取层)在 `./bakery/capture-below.mjs`,
- * 由 `StreamProducer.runSegment` 接上;怎么贴回舞台(第 5.4 节)不在这里。
- * 出不出这种流由 `belowStreamsEnabled` 管,缺省关。
+ * 由 `StreamProducer.runSegment` 接上;怎么贴回舞台(第 5.4 节)在页面一侧(`src/render/Stage.tsx`、`streamPlayer.ts`)。
+ * 出不出这种流由 `belowStreamsEnabled` 管,缺省开。
  * ======================================================================== */
 
 /** 这一版里要出「依赖下层的流」的目标卡,按画家顺序。每项带它占解码器的那一段 `from..to`(同单卡流的算法) */
@@ -898,9 +916,24 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
       kind: 'below', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view),
       members: [control],
       belowClipIds: found.below.map(layer => layer.id), belowScene: whole, hasMedia,
+      // 这一版项目里这条流的输入签名:发层时带给页面(`StreamProducer.publish`),页面按自己手里的项目算同一个签名,
+      // 对不上就是下层已经改过、预渲染进程还没换版本的那一小段 —— 旧流不贴(`src/editor/snapshotFeed.ts`)。算不出不带
+      inputSig: streamInputSig(project, { clipIds: [control.clipId], kind: 'below' }),
     });
   }
   return specs;
+}
+
+/**
+ * 依赖下层的流发给页面的那一层(就绪索引的 `layer`,`kind: 'stream'`)另带的两项;别的流回空对象,发出去的层一个字不变。
+ *
+ *   - `streamKind: 'below'`:页面据此把这条流的平面挂在舞台根下、按舞台坐标贴(契约第 5.4 节),不挂进包裹层;
+ *   - `inputSig`:产这条流的那一版项目的输入签名(`belowStreamSpecs` 算的)。只给这条流自己的目标卡;算不出不带(页面不比)。
+ */
+export function belowLayerMark(spec, clipId) {
+  if (spec?.kind !== 'below') return {};
+  const sig = clipId === spec.topClipId && typeof spec.inputSig === 'string' && spec.inputSig ? { inputSig: spec.inputSig } : {};
+  return { streamKind: 'below', ...sig };
 }
 
 /**
@@ -1327,7 +1360,7 @@ export class StreamProducer {
       const entryKey = state.entryKey ?? this.entryKey;
       for (const clipId of [spec.topClipId, ...(state.aliases ?? [])]) {
         ready.publish(entryKey, { clipId, kind: 'stream', key: spec.streamKey, ranges, ...(isStreamOrigin(spec.originFrame) ? { originFrame: spec.originFrame } : {}),
-          ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}) });
+          ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}), ...belowLayerMark(spec, clipId) });
       }
     } catch {}
   }
@@ -1548,6 +1581,15 @@ export class StreamProducer {
       state.resets = state.resets ?? { sparse: 0, dense: 0 };
       state.resets[stride > 1 ? 'sparse' : 'dense']++;
     }
+    /*
+     * 依赖下层、要回放的流:每一拍都画(`BELOW_DISCARD_SHOT` 的说明)。做法是让 `bakeStream` 把「推过去的帧」也当成要取的帧
+     * (从它本来要回放的起点起、间隔 1),在取帧钩子里把不是这个分段要的帧画一张丢掉;`bakeStream` 和截图代码一个字不动。
+     * `drawFrom`:接得上租约时就是这个分段的第一帧,接不上时是回放的起点(与 `bakeStream` 自己算的 `startFrame` 同一个数)。
+     */
+    const drawAll = below && replay;
+    const drawFrom = drawAll && !continues && Number.isInteger(spec.mountFrame) ? Math.max(0, Math.min(fromFrame, spec.mountFrame)) : fromFrame;
+    const wanted = frame => frame >= fromFrame && (frame - fromFrame) % stride === 0;
+    let discarded = 0, discardedBefore = 0;
     const abort = new AbortController();
     const stale = () => this.closed || this.streams.get(spec.streamKey) !== state
       || (queue ? queue.signal?.aborted === true : state.generation !== generation);
@@ -1569,16 +1611,30 @@ export class StreamProducer {
        */
       // 画布直取:这个分段的帧不截图,从画布取像素(过不了实测的照旧截图);`shot` 是 PNG,或 `{ rgba, width, height }`
       const direct = this.directOf(state);
+      const belowCapture = below ? belowSegmentCapture(bakery, { clipId: spec.topClipId, view: viewRect, rect: captureRect, record: state.below ||= newBelowRecord(), signal: abort.signal,
+        note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) : null;
       const result = await bakeStream(bakery, {
-        streamSignature: spec.streamKey, fromFrame, toFrame: bakeTo, stride, fps,
+        streamSignature: spec.streamKey, fromFrame: drawAll ? drawFrom : fromFrame, toFrame: bakeTo, stride: drawAll ? 1 : stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
-        clip: viewRect, hasMedia: below && spec.hasMedia === true, signal: abort.signal,
-        ...(below ? { capture: belowSegmentCapture(bakery, { clipId: spec.topClipId, view: viewRect, rect: captureRect, record: state.below ||= newBelowRecord(), signal: abort.signal,
-          note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) }
+        // 每一拍都画的那一种:素材只在真要取的帧前面等(丢掉的那几张不用等视频就位),所以不交给 `bakeStream` 逐帧等
+        clip: viewRect, hasMedia: below && !drawAll && spec.hasMedia === true, signal: abort.signal,
+        ...(drawAll ? { capture: async (frame, shoot, info) => {
+          if (!wanted(frame)) {
+            await bakery.beginFrame({ screenshot: BELOW_DISCARD_SHOT });
+            discarded++;
+            if (frame < fromFrame) discardedBefore++;
+            return BELOW_SKIPPED;
+          }
+          if (spec.hasMedia === true) await prepareFrameMedia(bakery);
+          return belowCapture(frame, shoot, info);
+        } }
+        : below ? { capture: belowCapture }
         : direct ? { capture: directSegmentCapture(bakery, { clipId: spec.topClipId, rect: captureRect, record: direct, stride, captures: Math.ceil(samples / stride), always: this.direct === 'always',
           note: message => this.note(`流 ${spec.streamKey.slice(0, 8)} ${message}`) }) } : {}),
         onFrame: async (frame, shot) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
+          // 画一张丢掉的帧(不是这个分段要的)不进编码器
+          if (shot === BELOW_SKIPPED || (drawAll && !wanted(frame))) return;
           const raw = shot?.rgba ? shot : null;
           if (sparse || frame === fromFrame || guardTight || remeasure) {
             // 这一张里不透明像素的外接框(截图矩形里的像素坐标)
@@ -1604,8 +1660,12 @@ export class StreamProducer {
       });
       if (result.reset) this.stats.bakeStreamResets = (this.stats.bakeStreamResets ?? 0) + 1;
       // 这条流取图那一段的累计(诊断:`status()` 每条流的 `capture`;取了几帧、取图和推帧各花多少毫秒)
+      // 画一张丢掉的那些帧不算取了的帧;分段第一帧之前的那些就是回放的帧(`bakeStream` 把它们数进了 `captured`)
+      result.captured -= discarded;
+      result.replayed = (result.replayed ?? 0) + discardedBefore;
       const taken = state.capture ||= { frames: 0, captureMs: 0, stepMs: 0 };
       taken.frames += result.captured; taken.captureMs += result.captureMs; taken.stepMs += result.stepMs;
+      if (discarded) taken.discarded = (taken.discarded ?? 0) + discarded;
       // 回放过的帧数(`bakeStream` 的 `replayed`):不回放的流恒为 0,探针读 `status()` 核对
       this.stats.replayedFrames = (this.stats.replayedFrames ?? 0) + (result.replayed ?? 0);
       state.replayedFrames = (state.replayedFrames ?? 0) + (result.replayed ?? 0);
@@ -2004,7 +2064,8 @@ export class StreamProducer {
     // C6.2:只是拉来的流(`adoptedOnly`)不属于任何一版,不认领
     return [...this.streams.values()].filter(state => !state.adoptedOnly && (entryKey === undefined || (state.entryKey ?? this.entryKey) === entryKey))
       .flatMap(state => [state.spec.topClipId, ...(state.aliases ?? [])]
-      .map(clipId => ({ clipId, kind: 'stream', key: state.spec.streamKey, ...(isStreamOrigin(state.spec.originFrame) ? { originFrame: state.spec.originFrame } : {}) })));
+      .map(clipId => ({ clipId, kind: 'stream', key: state.spec.streamKey, ...(isStreamOrigin(state.spec.originFrame) ? { originFrame: state.spec.originFrame } : {}),
+        ...belowLayerMark(state.spec, clipId) })));
   }
 
   async close() {

@@ -355,7 +355,8 @@ test("播放态互换:先额外抑制,目标拍取整到拍格,武装停到了�
   const i = (pred) => log.findIndex(pred);
   assert.ok(i((e) => e[0] === "A" && e[1] === "pause") > i((e) => e[1] === "setMediaT"), "back 就绪之后才武装停");
   assert.ok(i((e) => e[0] === "setExtraSuppressed" && e[1].length === 0) < i((e) => e[0] === "swapRoles"), "互换前清掉额外抑制");
-  assert.deepEqual(methodsOf("B").slice(-8), ["setRole", "setLocalHashes", "setSuppressed", "setStreamPlanes", "setScrubbing", "setProxy", "play", "setPlaying"]);
+  // 先发流平面、后发抑制:舞台收到抑制时已经知道有流要来,流画出第一帧之前不藏补跑出来的精确画面(反过来发,这一层会空约 0.1 秒)
+  assert.deepEqual(methodsOf("B").slice(-8), ["setRole", "setLocalHashes", "setStreamPlanes", "setSuppressed", "setScrubbing", "setProxy", "play", "setPlaying"]);
   assert.deepEqual(log.find((e) => e[0] === "B" && e[1] === "play").slice(2), [T]);
   assert.deepEqual(log.find((e) => e[0] === "B" && e[1] === "setPlaying").slice(2), [true]);
   assert.deepEqual(log.find((e) => e[0] === "deliverSnapshots").slice(1), ["front", T, true]);

@@ -498,7 +498,7 @@ export class FramePipeline {
   /**
    * 现在是不是「忙」(G0-b 结论 1:只在机器空闲时生产;用户拖动或播放时生产暂停让路)。
    * 判据:legacy 播放热池在用 / 后台让路租约在期;镜像插件报的播放头「在播」且 5 秒内有过音讯
-   * (播放中页面按 100 ms 节流报 `wanted`,停下也会报一次);或者 800 ms 内刚动过(拖动)。
+   * (播放中页面每 2 秒发一条保活 `PLAYHEAD_KEEPALIVE_MS`,有缺口时另按 100 ms 节流报 `wanted`,停下也会报一次);或者 800 ms 内刚动过(拖动)。
    */
   streamBusy(now = Date.now()) {
     if (this.closed) return true;

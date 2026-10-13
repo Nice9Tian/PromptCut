@@ -486,9 +486,13 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
     await sendPlanTo("front", { force: true });
     await next.setLocalHashes(host?.localHashes() ?? []);
     if (playing) {
-      // 播放态互换：先把三个集合摆好，再 play(T)
-      await next.setSuppressed(suppressedAt({ project, t: sec, playing: true }));
+      /*
+       * 播放态互换：先把三个集合摆好，再 play(T)。**先发流平面、后发抑制**（和 `Preview` 的 `syncPlanes` 同一个顺序）：
+       * 舞台收到抑制时已经知道这张卡有流要来，流画出第一帧之前先不藏它补跑出来的精确画面（`StageView` 的 `streamWaiting`）。
+       * 反过来发的话，舞台当场藏了活子树，流的第一帧出来之前（约 0.1 秒）这一层是空的。
+       */
       await next.setStreamPlanes(streamPlanesAt({ project, t: sec, playing: true }));
+      await next.setSuppressed(suppressedAt({ project, t: sec, playing: true }));
       markBaselineReset("front");
       await deliverSnapshots(next, "front", { project, t: sec, playing: true });
       await next.setScrubbing(false);

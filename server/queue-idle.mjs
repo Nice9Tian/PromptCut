@@ -18,7 +18,7 @@
 
 /** 最近这么久内有过交互帧请求就不认领新任务 */
 export const INTERACTION_QUIET_MS = 500;
-/** 播放头报「在播」之后多久没再报就不算在播了(同 `FramePipeline.streamBusy`:播放中页面按 100 ms 节流上报) */
+/** 播放头报「在播」之后多久没再报就不算在播了(同 `FramePipeline.streamBusy`:播放中页面每 2 秒发一条保活,有缺口时另按 100 ms 节流报) */
 export const PLAYING_STALE_MS = 5_000;
 
 /**

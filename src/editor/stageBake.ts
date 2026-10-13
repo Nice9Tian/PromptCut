@@ -75,7 +75,8 @@ export interface StageBakerDiag {
 }
 
 export interface StageBaker {
-  bakeFrame(job: { task: NodeTask; project: unknown; localFrame: number; signal: AbortSignal }): Promise<StageBakeResult>;
+  /** `ahead`:这一帧做完后先发给舞台的那一帧(本地帧号);不给是下一帧,null 是不先发 */
+  bakeFrame(job: { task: NodeTask; project: unknown; localFrame: number; signal: AbortSignal; ahead?: number | null }): Promise<StageBakeResult>;
   /** 交还这一段的活(停掉在推的帧、清掉顺推的接续点) */
   close(): void;
   /** 退订舞台事件(宿主卸载时) */
@@ -147,7 +148,7 @@ export function createStageBaker(deps: StageBakerDeps): StageBaker {
     if (cur && cur !== l.stage) { l.stage = cur; l.pushedTo = null; l.ahead = null; stats.restages++; }
   };
 
-  async function bakeFrame({ task, localFrame, project, signal }: { task: NodeTask; project: unknown; localFrame: number; signal: AbortSignal }): Promise<StageBakeResult> {
+  async function bakeFrame({ task, localFrame, project, signal, ahead: aheadFrame }: { task: NodeTask; project: unknown; localFrame: number; signal: AbortSignal; ahead?: number | null }): Promise<StageBakeResult> {
     const t0 = now();
     if (!lease || lease.taskId !== task.id) {
       close();
@@ -192,8 +193,9 @@ export function createStageBaker(deps: StageBakerDeps): StageBaker {
        * 不闲(要让路)或已中止时不先发。
        */
       const range = task.range;
-      if (reply.ok && deps.mode === "seq" && range && localFrame + 1 <= range.to && !signal.aborted && deps.isIdle() && lease === l && !moved()) {
-        const next = localFrame + 1;
+      // 先发哪一帧:缺省是下一帧;调用方给了 `ahead` 就照它(稀疏的一趟每个分段只取第一帧,先发的是下一个分段的第一帧;null = 不先发)
+      const next = aheadFrame === undefined ? localFrame + 1 : aheadFrame;
+      if (reply.ok && deps.mode === "seq" && range && next !== null && Number.isInteger(next) && next > localFrame && next <= range.to && !signal.aborted && deps.isIdle() && lease === l && !moved()) {
         const p = stage.bakeFrame({ session, clipId: l.input.clipId, localFrame: next, mode: deps.mode, small })
           .catch((e): BakeFrameReply => ({ ok: false, reason: "cancelled", detail: String((e as Error)?.message ?? e).slice(0, 200) }));
         l.ahead = { frame: next, stage, reply: p };

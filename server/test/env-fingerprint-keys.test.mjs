@@ -248,11 +248,13 @@ test('F4 流:同一个 entry 两种指纹 → contentKey 相同、streamKey 不�
     const kind = budget === 1 ? 'group' : 'card';
     const underA = planStreams(entry, { budget, codeVersion: 'cv', envFingerprint: FP_A });
     const underB = planStreams(entry, { budget, codeVersion: 'cv', envFingerprint: FP_B });
-    assert.equal(underA.length, budget === 1 ? 1 : 2, `${kind}:流数`);
+    // 夹具里另有一张依赖下层的卡:它判重时有自己的一条流(`kind: below`,排在最后),键同样按环境隔离
+    assert.equal(underA.filter((s) => s.kind !== 'below').length, budget === 1 ? 1 : 2, `${kind}:流数`);
+    assert.deepEqual(underA.filter((s) => s.kind === 'below').map((s) => s.clipIds.length), underA.some((s) => s.kind === 'below') ? [1] : []);
     assert.equal(underB.length, underA.length);
     for (let i = 0; i < underA.length; i++) {
       const a = underA[i], b = underB[i];
-      assert.equal(a.kind, kind);
+      assert.equal(a.kind, a.kind === 'below' ? b.kind : kind);
       assert.deepEqual(a.clipIds, b.clipIds);
       assert.match(a.contentKey, HEX64);
       assert.equal(a.contentKey, b.contentKey, `${kind} ${a.clipIds}:contentKey 与指纹无关`);

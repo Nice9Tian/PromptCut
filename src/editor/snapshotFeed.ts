@@ -29,6 +29,10 @@
  *      已经追到精确活渲的卡不抑制，它的流平面照发，舞台只拿它把播放头下这一帧先解好（起播头一拍就有）；
  *   3. **有流盖着的卡不读快照**（下面「快照这条路的分界」）：不选帧、不取字节、不投递、不等。
  *
+ * **依赖下层的卡**（毛玻璃这一类，和审阅表没覆盖到的卡）走的是同一条顺序，只有两处不同（`streamLayers`）：
+ * 它的流按舞台坐标产，流平面带 `plane: "stage"`（舞台把画布挂在舞台根下）；它的流只对产它时的那一版下层有效，
+ * 那一层带着产流时的输入签名（`inputSig`），和父页按当前项目算的对不上就是**过期**的 —— 当作这张卡没有流，落到下一步。
+ *
  * 流这一拍画不出来时舞台留着上一张，最多留一个分段的时长，再没有才显示占位符（`streamPlayer`、`StageView`）。
  *
  * # 快照这条路的分界（下一块「撤快照」从这里删）
@@ -54,6 +58,7 @@ import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../rend
 import { fitBeatSwaps, SWAP_MS, swapCostOfSize } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 import { isStreamOrigin, streamSegmentOf } from "../render/streamSegments.mjs";
+import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
 export const SNAPSHOT_THROTTLE_MS = 33;
@@ -74,15 +79,37 @@ const KIND_ORDER: ReadyKind[] = ["html", "local"];
  * `originFrame` 是这条流自己的第一帧(分段从它起数,`render/streamSegments.mjs`);没带它的层(改分段规则之前的生产者发的)
  * 没法把帧号换成分段号,这里不收 —— 当作这张卡没有流。
  */
-function streamLayers(): { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame: number; members: string[] }[] {
-  const out: { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame: number; members: string[] }[] = [];
+interface StreamLayer { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame: number; members: string[]; plane?: "stage" }
+function streamLayers(project: Project): StreamLayer[] {
+  const out: StreamLayer[] = [];
   for (const [clipId, byKind] of readyIndex) {
     const layer = byKind.get("stream");
     if (!layer || !isStreamOrigin(layer.originFrame)) continue;
+    const below = layer.streamKind === "below";
+    // 依赖下层的流:下层已经改过、预渲染进程还没换版本的这一小段里,就绪索引里还是旧流 —— 签名对不上的不贴
+    if (below && belowStreamStale(project, clipId, layer.inputSig)) continue;
     out.push({ clipId, key: layer.key, ranges: layer.ranges as Array<[number, number]>, groupClipIds: layer.groupClipIds, originFrame: layer.originFrame,
-      members: layer.groupClipIds?.length ? layer.groupClipIds : [clipId] });
+      members: layer.groupClipIds?.length ? layer.groupClipIds : [clipId], ...(below ? { plane: "stage" as const } : {}) });
   }
   return out;
+}
+
+/**
+ * 依赖下层的流过没过期:那一层带的输入签名(产流时的那一版项目)和按当前项目算的对不上。签名里是目标卡和它下面每一层的
+ * 片段输入、采样窗口、框、不透明度、淡入淡出、轨迹,以及下层的上下顺序(`render/streamInputSig.mjs`);上面的层不在里面。
+ * 两边都有、同一算法版本、而且不同才算过期(`streamSigStale`);那一层没带签名的不判(照贴)。
+ * 每份项目(不可变对象)缓存一张 clipId → 签名:父页每拍都问,项目不换新对象就不重算。
+ */
+const belowSigs = new WeakMap<Project, Map<string, string | null>>();
+function belowSigOf(project: Project, clipId: string): string | null {
+  let byClip = belowSigs.get(project);
+  if (!byClip) { byClip = new Map(); belowSigs.set(project, byClip); }
+  if (!byClip.has(clipId)) byClip.set(clipId, streamInputSig(project, { clipIds: [clipId], kind: "below" }));
+  return byClip.get(clipId) ?? null;
+}
+function belowStreamStale(project: Project, clipId: string, layerSig: string | undefined): boolean {
+  if (!layerSig) return false;
+  return streamSigStale(layerSig, belowSigOf(project, clipId));
 }
 
 /**
@@ -160,7 +187,12 @@ export function snapshotFeedDebug(head: Playhead) {
     heavy: planned.heavy,
     picks: [...planned.picks].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12), cached: have.has(pick.id), flying: flying.has(pick.id) })),
     // 这一刻发给舞台的流平面盖着哪几张卡、暂停 / 拖动时抑制哪几张(贴流)
-    streams: planned.streamPlanes.map((p) => ({ clipIds: p.clipIds, key: (p.key ?? "").slice(0, 12), originFrame: p.originFrame ?? null })),
+    streams: planned.streamPlanes.map((p) => ({ clipIds: p.clipIds, key: (p.key ?? "").slice(0, 12), originFrame: p.originFrame ?? null, plane: p.plane ?? null })),
+    // 就绪索引里有、但输入签名对不上当前项目的依赖下层的流(下层改过了,旧流不贴)
+    staleBelow: [...readyIndex].filter(([clipId, kinds]) => {
+      const layer = kinds.get("stream");
+      return layer?.streamKind === "below" && belowStreamStale(head.project, clipId, layer.inputSig);
+    }).map(([clipId]) => clipId),
     scrub: planned.scrub,
     mounted: [...baselines.front.mounted].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12) })),
     reset: baselines.front.needsReset,
@@ -388,9 +420,9 @@ function rangesCover(ranges: readonly (readonly number[])[] | undefined, from: n
  * 都有预渲染结果覆盖 —— 流按分段(这几帧落在的每一段都在同一条流的就绪区间里,组流算成员),
  * 快照按帧。以前流表只要有**任意**一段就算就绪,当前段没料也切进抑制 → 透明。
  */
-function demoteReady(clipId: string, globalFrame: number, localFrame: number, count: number, fps: number): boolean {
+function demoteReady(project: Project, clipId: string, globalFrame: number, localFrame: number, count: number, fps: number): boolean {
   const need = Math.max(0, Math.min(fps, count - localFrame) - 1);
-  for (const layer of streamLayers()) {
+  for (const layer of streamLayers(project)) {
     if (!layer.members.includes(clipId)) continue;
     // 这几帧落在这条流的哪几段:按这条流自己的第一帧换算(早于第一帧的是负数段,不在就绪区间里)
     const firstSeg = streamSegmentOf(Math.max(0, globalFrame), layer.originFrame);
@@ -491,7 +523,7 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
     const { firstFrame, count } = samplingOf(clip, fps);
     if (pendingDemote.has(clip.id)) {
       // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会贴快照）
-      if (!demoteReady(clip.id, globalFrame, globalFrame - firstFrame, count, fps)) continue;
+      if (!demoteReady(project, clip.id, globalFrame, globalFrame - firstFrame, count, fps)) continue;
       pendingDemote.delete(clip.id);
     }
     heavy.push(clip.id);
@@ -511,7 +543,7 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
    * （舞台那边也是整组一起撤，`StageView` 的 `releaseSettled`）。
    */
   const scrub = new Set<string>();
-  const layers = playing || !lowMemory ? streamLayers() : [];
+  const layers = playing || !lowMemory ? streamLayers(project) : [];
   if (layers.length) {
     // 播放中：全部被抑制的卡（重卡，加上等后台补跑互换的那几张）。暂停 / 拖动：全部重卡 —— 已经追到精确活渲的也在里面，
     // 它们不抑制，流平面只是把播放头下这一帧先解好，按下播放时头一拍就有

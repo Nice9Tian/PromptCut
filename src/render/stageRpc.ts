@@ -297,6 +297,7 @@ export interface StageRpcApi {
    * 凭它们去拉分段;不带 `key` 的平面只占位、不解码(R8 之前的调用方照旧只发 `clipIds`)。
    * 另带 `originFrame`:这条流自己的第一帧(项目帧号),分段从它起每 15 帧一段(`streamSegments.mjs`);
    * 舞台按它把这一拍的帧号换成分段号,不带它的平面同样只占位、不解码。
+   * 依赖下层的流另带 `plane: "stage"`:只有目标卡一张,但按舞台坐标产,舞台把它的画布挂在舞台根下(同组流),不挂进包裹层。
    */
   setStreamPlanes(planes: StreamPlaneRequest[]): Promise<{ ok: true }>;
   setScrubbing(on: boolean): Promise<{ ok: true }>;
