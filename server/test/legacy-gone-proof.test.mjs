@@ -152,3 +152,81 @@ test('公开入口：成功和失败都放开只读跨源；别的方法、别�
   const unsigned = await bare.fetcher(`${ORIGIN}${GONE_PATH}?authorityId=doc-fixture&projectId=${id('a')}`);
   assert.equal(unsigned.status, 503); assert.equal((await unsigned.json()).code, 'gone-proof-unavailable');
 });
+
+/* ---------------- 登记脚本的命令行：空跑真的不写、和旧数据核对、要明说旧服务已停、撤销 ---------------- */
+
+test('命令行：plan 不写任何东西（连不是账本的 sqlite 文件也不碰）；apply 要旧数据对得上、要明说旧服务已停；revoke 之后不再签', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { createHash } = await import('node:crypto');
+  const { DatabaseSync } = await import('node:sqlite');
+  const { fileURLToPath } = await import('node:url');
+  const { readLegacyProjectIds, revokeLegacyTombstones, readLedgerReadOnly } = await import('../hosted/deploy/legacy-tombstones.mjs');
+  const cli = fileURLToPath(new URL('../hosted/deploy/legacy-tombstones.mjs', import.meta.url));
+  const run = (...a) => { const r = spawnSync(process.execPath, [cli, ...a], { encoding: 'utf8', windowsHide: true }); return { code: r.status, out: r.stdout, err: r.stderr }; };
+  const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const f = fixture(t);
+  const ledgerFile = path.join(f.dir, 'doc.sqlite');
+  f.ledger.transaction(state => { state.projects[id('p')] = { projectId: id('p'), status: 'active', accessRevision: 1, members: {}, bans: {} }; });
+
+  // 旧数据目录：a、b 是真的旧项目；c 的登记文件里写的是别的号（不算数）
+  const legacy = path.join(f.dir, 'old-hosted'); const projects = path.join(legacy, 'docservice', 'auth', 'projects');
+  fs.mkdirSync(projects, { recursive: true });
+  for (const ch of ['a', 'b']) fs.writeFileSync(path.join(projects, `${id(ch)}.json`), JSON.stringify({ v: 1, projectId: id(ch), name: ch }));
+  fs.writeFileSync(path.join(projects, `${id('c')}.json`), JSON.stringify({ v: 1, projectId: id('z') }));
+  assert.deepEqual([...readLegacyProjectIds(legacy).ids].sort(), [id('a'), id('b')]);
+  assert.deepEqual([...readLegacyProjectIds(projects).ids].sort(), [id('a'), id('b')], '直接给登记目录也认');
+  assert.throws(() => readLegacyProjectIds(f.dir), /没找到旧项目的登记目录/);
+  const legacyBefore = fs.readdirSync(projects).map(n => [n, digest(path.join(projects, n))]);
+
+  const ids = path.join(f.dir, 'ids.txt'); fs.writeFileSync(ids, `${id('a')}\n${id('b')}\n`);
+  const wrong = path.join(f.dir, 'wrong.txt'); fs.writeFileSync(wrong, `${id('a')}\n${id('c')}\n${id('d')}\n`);
+  const base = ['--ledger', ledgerFile, '--authority-id', 'doc-fixture'];
+
+  // 不是账本的 sqlite 文件：报错，一个字节都不动，也不建表
+  const other = path.join(f.dir, 'other.sqlite');
+  { const db = new DatabaseSync(other); db.exec('CREATE TABLE notes(text TEXT); INSERT INTO notes VALUES (1);'); db.close(); }
+  const otherBefore = digest(other);
+  for (const command of ['plan', 'list', 'apply', 'revoke']) {
+    const r = run(command, '--ledger', other, '--authority-id', 'doc-fixture', '--ids', ids, '--legacy-data', legacy, '--source', 'x', '--old-service-stopped', 'yes');
+    assert.equal(r.code, 1, command); assert.match(r.err, /不是账号账本/, command);
+  }
+  assert.equal(digest(other), otherBefore, '不相干的文件一个字节都没动');
+  { const db = new DatabaseSync(other, { readOnly: true }); assert.deepEqual(db.prepare('SELECT name FROM sqlite_master WHERE type=?').all('table').map(r => r.name), ['notes']); db.close(); }
+  assert.equal(run('plan', '--ledger', path.join(f.dir, 'nope.sqlite'), '--authority-id', 'doc-fixture', '--ids', ids).code, 1, '不存在的文件不新建');
+  assert.equal(fs.existsSync(path.join(f.dir, 'nope.sqlite')), false);
+  assert.match(run('plan', '--ledger', ledgerFile, '--authority-id', 'someone-else', '--ids', ids).err, /签发方标识/);
+
+  // plan：账本内容不变
+  const stateBefore = JSON.stringify(f.ledger.read());
+  const plan = run('plan', ...base, '--ids', ids, '--legacy-data', legacy);
+  assert.equal(plan.code, 0, plan.err); assert.match(plan.out, /空跑，没有写：清单 2 个；新登记 2/);
+  const bad = run('plan', ...base, '--ids', wrong, '--legacy-data', legacy);
+  assert.equal(bad.code, 2); assert.match(bad.out, new RegExp(`${id('c')}\\tnot-in-legacy-data`)); assert.match(bad.out, new RegExp(`${id('d')}\\tnot-in-legacy-data`));
+  assert.match(run('plan', ...base, '--ids', ids).out, /没给 --legacy-data/);
+  assert.equal(JSON.stringify(f.ledger.read()), stateBefore, 'plan 之后账本内容一字不差');
+
+  // apply：缺旧数据目录、没明说旧服务已停、旧数据里对不上，都一个不写
+  for (const [extra, pattern] of [[['--ids', ids, '--source', 's', '--old-service-stopped', 'yes'], /缺 --legacy-data/],
+    [['--ids', ids, '--source', 's', '--legacy-data', legacy], /先停掉旧服务/], [['--ids', ids, '--source', 's', '--legacy-data', legacy, '--old-service-stopped', 'maybe'], /先停掉旧服务/],
+    [['--ids', wrong, '--source', 's', '--legacy-data', legacy, '--old-service-stopped', 'yes'], /一个都没写/]]) {
+    const r = run('apply', ...base, ...extra); assert.equal(r.code, 1, extra.join(' ')); assert.match(r.err, pattern);
+  }
+  assert.equal(f.ledger.read().legacyTombstones, undefined, '到这里一个墓碑都没写');
+  const applied = run('apply', ...base, '--ids', ids, '--source', '旧托管 2026-10', '--legacy-data', legacy, '--old-service-stopped', 'yes');
+  assert.equal(applied.code, 0, applied.err); assert.match(applied.out, /已写入：清单 2 个；新登记 2.*墓碑 0 → 2/);
+  assert.equal((await queryGone(file(id('a')), { authorities: [f.trusted], fetch: f.fetcher })).state, 'gone');
+  assert.deepEqual(fs.readdirSync(projects).map(n => [n, digest(path.join(projects, n))]), legacyBefore, '旧数据目录只读，没被动过');
+
+  // revoke：之后不再签；留下撤销记录；别的号不受影响；可以重新登记
+  const one = path.join(f.dir, 'one.txt'); fs.writeFileSync(one, `${id('a')}\n${id('d')}\n`);
+  assert.match(run('revoke', ...base, '--ids', one).err, /缺 --source/);
+  const revoked = run('revoke', ...base, '--ids', one, '--source', '号登记错了');
+  assert.equal(revoked.code, 0, revoked.err); assert.match(revoked.out, /已撤销：清单 2 个；撤销 1，本来就没登记 1.*墓碑 2 → 1/);
+  assert.deepEqual(await queryGone(file(id('a')), { authorities: [f.trusted], fetch: f.fetcher }), { state: 'no-tombstone' }, '撤销后不再签发');
+  assert.equal((await queryGone(file(id('b')), { authorities: [f.trusted], fetch: f.fetcher })).state, 'gone');
+  const after = await readLedgerReadOnly(ledgerFile, 'doc-fixture');
+  assert.equal(after.legacyTombstoneRevocations[id('a')].length, 1); assert.equal(after.legacyTombstoneRevocations[id('a')][0].source, '号登记错了');
+  const listed = run('list', ...base); assert.match(listed.out, new RegExp(`${id('b')}\\t墓碑`)); assert.match(listed.out, new RegExp(`${id('a')}\\t已撤销`)); assert.match(listed.out, /墓碑 1 个；撤销记录 1 条/);
+  assert.deepEqual(revokeLegacyTombstones(f.ledger, [id('a')], { source: '再撤一次' }).map(r => r.action), ['not-registered']);
+  assert.match(run('apply', ...base, '--ids', ids, '--source', '重新登记', '--legacy-data', legacy, '--old-service-stopped', 'yes').out, /新登记 1，已登记过 1/);
+});
