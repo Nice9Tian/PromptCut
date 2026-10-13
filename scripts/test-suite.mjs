@@ -22,7 +22,10 @@ const root = path.resolve(fileURLToPath(import.meta.url), '..', '..');
 const reporter = path.join(root, 'scripts', 'test-event-reporter.mjs');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'promptcut-test-'));
 const files = process.argv.length > 2 ? process.argv.slice(2) : ['server/test/*.test.mjs', 'src/**/*.test.mjs', 'tools/report-worker/*.test.mjs'];
-const baseArgs = ['--experimental-test-module-mocks', '--test-global-setup=server/test/global-setup.mjs', '--test'];
+// 防卡死的保险（不改通过与失败的判定）：
+// --test-force-exit：一个文件的测试都结束后，即使还有没关的服务、子进程让进程退不出来，也强制退出（失败的测试照样记失败）。
+// --test-timeout：没写自己时限的测试，超过 20 分钟（验证看门时可用环境变量 PROMPTCUT_TEST_TIMEOUT_MS 改小）就记为失败（'test timed out'），测试自己写了更长时限的不受影响。
+const baseArgs = ['--experimental-test-module-mocks', '--test-global-setup=server/test/global-setup.mjs', '--test-force-exit', `--test-timeout=${Number(process.env.PROMPTCUT_TEST_TIMEOUT_MS) || 1200000}`, '--test'];
 
 async function run(testFiles, attempt) {
   const report = path.join(temp, `events-${attempt}.ndjson`);
