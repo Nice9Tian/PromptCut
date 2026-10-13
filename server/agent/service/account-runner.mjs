@@ -15,11 +15,44 @@ import { canonicalReadRecord, acceptedMessageRef } from '../../account/run-autho
 import { canonicalJson } from '../../account/ledger.mjs';
 import { PROTOCOL } from '../../auth/protocol.mjs';
 import { createRunDrainRecord } from '../../agent-service/worker-settlement.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createProjectAssets } from './project-assets.mjs';
+import { WorkspaceError } from './workspace.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const idOK = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 const keyOf = (projectId, conversationId) => `${projectId}\n${conversationId}`;
+
+/** 运行素材导入时的额度。「项目素材」每读到一块就来问一次；这里一次导入只在第一块时看一次工作目录还剩多少
+ * （`workspace.room()`，要同步扫两遍目录树），之后只做累计，超了照旧拒。大文件不会每一小块都去扫目录、堵住事件循环。
+ *
+ * 导入总要先在工作目录的 `.tmp/` 里落一份再上传。来源如果本来就是工作目录里的文件（用户的附件、下载下来的文件），
+ * 它当初进工作目录时已经按额度核过、也已经算在占用里；临时的那一份上传完就删。这种来源不再按额度算第二遍——
+ * 否则大于剩余额度一半的文件永远导不进去。只限它不超过声明的大小（源文件中途变大就拒）。〔裁〕代价是导入期间
+ * 磁盘上短暂多出一份，最多一个单文件上限。来源是内存里现生成的字节（音效、配音）时，临时那一份就是唯一的一份，照额度算。
+ * @param {() => { room(): number }} workspace 这条任务的对话工作目录
+ */
+export function createImportReservation(workspace) {
+  const scope = new AsyncLocalStorage();
+  return {
+    /** 在一次导入的范围里跑 fn。`origin.inWorkspace`：来源已经是工作目录里的文件；`origin.size`：来源的大小（知道的话） */
+    run(origin, fn) {
+      const size = Number.isSafeInteger(origin?.size) && origin.size >= 0 ? origin.size : null;
+      return scope.run({ counted: origin?.inWorkspace === true && size !== null, size, reserved: 0, room: null }, fn);
+    },
+    reserve(bytes) {
+      if (!Number.isSafeInteger(bytes) || bytes < 0) throw new WorkspaceError('bad-path', '字节数不对');
+      // 不在任何一次导入的范围里（不该发生）：按最保守的办，当场看一次
+      const state = scope.getStore() ?? { counted: false, size: null, reserved: 0, room: null };
+      if (state.room === null) {
+        state.room = state.counted ? state.size : workspace().room();
+        if (!state.counted && state.size !== null && state.size > state.room) throw new WorkspaceError('quota', '工作目录放不下这个文件');
+      }
+      state.reserved += bytes;
+      if (state.reserved > state.room) throw new WorkspaceError('quota', state.counted ? '要导入的文件在导入过程中变大了' : '工作目录放不下这个文件');
+    },
+  };
+}
 
 /** Actual existing hosted Agent instance, one isolated instance per doc-owned run.
  * The doc-admitted grant binds this run's signed data connection; creator is never inferred.
@@ -96,13 +129,14 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       if (!context || context.projectId !== grant.projectId || context.runGrantId !== grant.runGrantId)
         fail(503, 'run-assets-context-unavailable');
       const workspace = () => workspaces.open({ projectId: grant.projectId, ownerKey, conversationId: grant.conversationId });
+      const reservation = createImportReservation(workspace);
       projectAssets = createProjectAssets({ contextAccess: resources.contextAccess, runAssetClient: runAssets.client,
         resources, workspace: async () => { const ws = workspace(); ws.dir(); return ws; }, maxImportBytes: runAssets.maxImportBytes,
-        // 导入先落到这个对话的工作目录里再上传，所以额度就是工作目录原有的那几条上限〔裁〕。
-        reserveImport: async (_context, bytes) => { workspace().reserve(bytes); } });
+        // 导入先落到这个对话的工作目录里再上传，所以额度就是工作目录原有的那几条上限〔裁〕；怎么算见 createImportReservation
+        reserveImport: async (_context, bytes) => { reservation.reserve(bytes); } });
       accountRunAssets = Object.freeze({
         authorizeWrite: () => resources.authorize(context, 'write'),
-        import: (source, options) => projectAssets.import(context, source, options),
+        import: (source, options, origin = {}) => reservation.run(origin, () => projectAssets.import(context, source, options)),
         openRead: (mediaId, options) => projectAssets.openRead(context, mediaId, options),
       });
     }

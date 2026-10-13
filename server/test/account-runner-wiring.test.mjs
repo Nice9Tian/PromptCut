@@ -18,7 +18,8 @@ import { openAccountLedger } from '../account/ledger.mjs';
 import { inspectAgentScopeSource } from '../hosted/agent-run-scope-reader.mjs';
 import { digestOf } from '../account/ledger.mjs';
 import { scopeModel, pair } from './agent-run-scope-fixture.mjs';
-import { createExistingHostedRunnerFactory } from '../agent/service/account-runner.mjs';
+import { createExistingHostedRunnerFactory, createImportReservation } from '../agent/service/account-runner.mjs';
+import { createWorkspaces } from '../agent/service/workspace.mjs';
 import { resolveAccountLook } from '../agent-service/main.mjs';
 
 const P = `sp_${'a'.repeat(26)}`;
@@ -201,4 +202,38 @@ test('RW6 账号模式的看画面要显式开关：缺省忽略地址；开了�
   assert.equal(reason(() => resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: 'yes' }, lookUrl: url, readKey })), 'account-look');
   assert.equal(reason(() => resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: '1' }, lookUrl: url, readKey: () => { throw new Error('ENOENT'); } })), 'look-key');
   assert.equal(reason(() => resolveAccountLook({ env: { PROMPTCUT_AGENT_ACCOUNT_LOOK: '1' }, lookUrl: url, readKey: () => ({ ...good, service: 'render' }) })), 'look-key');
+});
+
+test('RW7 导入的额度：一次导入只看一次目录、之后只累计；工作目录里已有的文件不按两份算；现生成的字节照额度算', async t => {
+  let scans = 0, room = 1000;
+  const r = createImportReservation(() => ({ room() { scans += 1; return room; } }));
+  const quota = fn => { try { fn(); } catch (error) { return error.workspace === true ? error.code : `other:${error.message}`; } return 'ok'; };
+  // 现生成的字节（不知道大小）：分一百块，目录只看了一次；累计超过剩余额度的那一块被拒
+  await r.run({}, async () => {
+    for (let i = 0; i < 100; i++) { await null; assert.equal(quota(() => r.reserve(10)), 'ok'); }
+    assert.equal(quota(() => r.reserve(1)), 'quota');
+  });
+  assert.equal(scans, 1, '一百多块只扫了一次目录');
+  // 知道大小而放不下：第一块就拒，不白写
+  scans = 0;
+  await r.run({ size: 1001 }, async () => { assert.equal(quota(() => r.reserve(10)), 'quota'); });
+  assert.equal(scans, 1);
+  // 来源本来就在工作目录里：不再按额度算第二遍（剩余额度比文件小也导得了），目录一次都不用看；中途变大就拒
+  scans = 0; room = 10;
+  await r.run({ inWorkspace: true, size: 600 }, async () => {
+    for (let i = 0; i < 6; i++) assert.equal(quota(() => r.reserve(100)), 'ok');
+    assert.equal(quota(() => r.reserve(1)), 'quota');
+  });
+  assert.equal(scans, 0);
+  // 两次导入并着来，各记各的
+  room = 100;
+  await Promise.all([r.run({}, async () => { await null; r.reserve(60); await null; assert.equal(quota(() => r.reserve(60)), 'quota'); }),
+    r.run({}, async () => { r.reserve(60); await null; await null; assert.equal(quota(() => r.reserve(30)), 'ok'); })]);
+  assert.equal(quota(() => r.reserve(-1)), 'bad-path');
+  // 真的工作目录：room() 回的是单文件上限、对话与项目剩余额度里最小的那个；文件数到上限抛 quota
+  const dir = tmp(t), ws = createWorkspaces({ dataDir: dir, limits: { maxFileBytes: 500, maxConversationBytes: 300, maxProjectBytes: 10_000, maxFiles: 3 } })
+    .open({ projectId: 'project_one', ownerKey: 'a'.repeat(32), conversationId: 'conversation_one' });
+  assert.equal(ws.room(), 300); ws.write('attachments/a.bin', Buffer.alloc(120)); assert.equal(ws.room(), 180);
+  ws.write('b.bin', Buffer.alloc(1)); ws.write('c.bin', Buffer.alloc(1));
+  assert.throws(() => ws.room(), error => error.workspace === true && error.code === 'quota');
 });

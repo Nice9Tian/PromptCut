@@ -313,12 +313,12 @@ export function createHostedTools({
     }
 
     /** 账号模式:凭这条任务的授权把一份字节存进本项目的素材库。只是「已存」,登记进项目是调用方的下一步 */
-    async function runAssetImport(sourceOf, { name, kind }) {
+    async function runAssetImport(sourceOf, { name, kind }, origin = {}) {
       try {
         // 素材服务或文档服务一时答不上(503、连接断了)不算失败:隔一会儿整件重来,最多三次。同样的字节重存是幂等的
         for (let attempt = 1; ; attempt += 1) {
           try {
-            const out = await c.runAssets.import(sourceOf(), { name, kind, requestId: `import-${randomUUID()}` });
+            const out = await c.runAssets.import(sourceOf(), { name, kind, requestId: `import-${randomUUID()}` }, origin);
             return { hash: out.assetRef.hash, size: out.assetRef.size };
           } catch (err) {
             if (attempt >= 3 || err?.status !== 503 || err?.workspace) throw err;
@@ -347,7 +347,8 @@ export function createHostedTools({
       if (c.runAssets) {
         const kind = kindHint ?? kindOfName(rel);
         if (!kind || !ext) throw new HostedToolError('无法识别这个文件的类型,请使用视频、音频或图片文件。');
-        const stored = await runAssetImport(() => fs.createReadStream(abs), { name: `import.${ext}`, kind });
+        // 来源已经是工作目录里的文件(进来时按额度核过、也算在占用里):导入时临时落的那一份不再按额度算第二遍
+        const stored = await runAssetImport(() => fs.createReadStream(abs), { name: `import.${ext}`, kind }, { inWorkspace: true, size: st.size });
         if (stored.hash !== hash || stored.size !== st.size) throw new HostedToolError('素材入库后的内容与原文件对不上,没有登记。');
         return { hash, ext, bytes: st.size };
       }
@@ -745,7 +746,7 @@ export function createHostedTools({
 
     /** 把生成出来的 WAV 写进素材服务(`media`,凭成员本人的票据) */
     const putWav = async (wav) => {
-      if (c.runAssets) { const stored = await runAssetImport(() => wav, { name: 'sound.wav', kind: 'audio' }); return { ...stored, uploaded: true }; }
+      if (c.runAssets) { const stored = await runAssetImport(() => wav, { name: 'sound.wav', kind: 'audio' }, { size: wav.length }); return { ...stored, uploaded: true }; }
       try {
         return await assetClient().put('media', wav, { ext: 'wav' });
       } catch (err) {
