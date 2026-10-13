@@ -253,7 +253,7 @@ function keepInOneTab() {
   // 云端只有一个页:新窗口、新标签页一律并回当前页(另有服务端的兜底:多出来的页直接关掉)
   try {
     window.open = (url) => { try { if (url) location.assign(String(url)); } catch { /* 地址不合法就算了 */ } return null; };
-  } catch { /* 页面冻结了 window:靠服务端兜底 */ }
+  } catch { /* 页面把 window 锁死了(改不了 open):靠服务端兜底 */ }
   document.addEventListener('click', (event) => {
     const a = event.target && event.target.closest ? event.target.closest('a[target],area[target]') : null;
     if (a && a.target && a.target !== '_self') a.target = '_self';

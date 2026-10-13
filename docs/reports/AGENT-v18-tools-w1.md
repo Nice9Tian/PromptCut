@@ -16,7 +16,7 @@
 | `server/web/hosted/view.mjs` | 复用桌面版的截图与清单，给清单加版本（编号形如 `r12e7`）、留服务端指纹；页面滚动后重截当前这一屏 |
 | `server/web/hosted/hit.mjs` | 动作前核对「这个编号此刻还指着清单里那个元素、点下去不会落到别的元素上」；认出口令、验证码、卡号的输入框 |
 | `server/test/cloud-tools-w1-{browser,egress,restart}.test.mjs` | 27 条测试（真浏览器） |
-| `server/test/cloud-tools-w1-{fixture,site,restart-child}.mjs` | 夹具（真 SQLite 运行授权、真登记器、真出网闸）、本地假站、扮「被强杀的服务进程」的子进程 |
+| `server/test/cloud-tools-w1-{fixture,site,restart-child}.mjs` | 夹具（真 SQLite 运行授权、真登记器、真出网闸；等进程退出的时限放宽到 40 秒，产品缺省是 10 秒）、本地假站、扮「被强杀的服务进程」的子进程 |
 | `scripts/probes/cloud-tools-w1-browser-probe.mjs` | 探针：窗口检查、三份测试、真实公网、浏览器自己不解析主机名的对照 |
 | `docs/reports/assets/v18-tools-w1/*.webp` | 七张截图 |
 
@@ -41,7 +41,7 @@
 | `node scripts/probes/cloud-tools-w1-browser-probe.mjs` | 0 | 「全部通过」；关键行见下 |
 | `npm test -- server/test/windows-hide-silent-spawn.test.mjs server/test/bakery-deps.test.mjs` | 0 | 7 条通过（不弹窗守门、server 不引 scripts 守门） |
 | `npx tsc -b --force` | 0 | 零错误 |
-| `npm test`（全量，设了那两个环境变量） | 见文末「全量基线」 | 见文末 |
+| `npm test`（全量，设了那两个环境变量） | 1 | 6096 条，通过 6086，失败 2（同一个测试的父子两行，在 `multi-agent-presence.test.mjs`，单独重跑 6 条全过），本包 27 条全过；详见文末「全量基线」 |
 
 探针输出的关键行（原文）：
 
@@ -50,7 +50,7 @@
 [w1] 测试:通过 27 条,跳过 0 条,退出码 0
 [w1] WebRTC:受控 UDP 0 个、候选 0 个;对照 UDP 4 个、候选 1 个
 [w1] 通过 出网闸没有开测试例外
-[w1] 打开用了 410 毫秒;标题「Example Domain」,地址 https://example.com/,清单 ["r1e1=Learn more"]
+[w1] 打开用了 408 毫秒;标题「Example Domain」,地址 https://example.com/,清单 ["r1e1=Learn more"]
 [w1] 代理记录里 example.com 的条目: [{"kind":"connect","host":"example.com","port":443,"ok":true,"address":"172.66.147.243"},…]
 [w1] 通过 正常出网走的是代理:记录里有这条到 example.com:443 的隧道,连的是出网闸核过的地址
 [w1] 通过 真闸拒 http://169.254.169.254/latest/meta-data/ blocked-address
@@ -201,10 +201,11 @@ sudo -u <运行用户> curl -m 3 http://169.254.169.254/ ; sudo -u <运行用户
 
 1. **桌面版的截图在页面滚动后截的是文档顶部。** `server/web/view.mjs` 的 `captureView` 给 `page.screenshot` 传了 `clip: { x: 0, y: 0, … }`；puppeteer 25 在有 `clip` 时按文档坐标截（等于打开了 `captureBeyondViewport`），所以滚动之后图是页面顶部那一屏，清单却是当前这一屏的，图和清单对不上。本包在无头模式下实测到（`out/` 里的对比：滚到 2071 像素后，这种截法的图与首屏逐字节相同）。桌面版是有头模式，本包没有在有头模式下验，也没有改它（只读）；云端一侧在 `server/web/hosted/view.mjs` 里滚动后从滚动位置重截一张。建议另开一件事去核桌面版。
 2. **G 包接线时要填什么**：见第 9 节。
-   另有两处是做的过程中实测出来、和原先想的不一样的，写在这里免得后来人再踩：（a）**chrome-headless-shell 不锁用户数据目录**（完整的 Chrome 会锁），所以「这份目录是不是被一个活着的浏览器占着」不能只看锁，清残留时改成再看那个进程的命令行里有没有这份目录；（b）**Windows 上 `taskkill /T` 在机器忙时要好几秒到十几秒**，全量测试并行跑时关浏览器因此超过时限——现在先按最近一份进程表逐个直接结束，`taskkill` 只作兜底。
+   另有两处是做的过程中实测出来、和原先想的不一样的，写在这里免得后来人再踩：（a）**chrome-headless-shell 不锁用户数据目录**（完整的 Chrome 会锁），所以「这份目录是不是被一个活着的浏览器占着」不能只看锁，清残留时改成再看那个进程的命令行里有没有这份目录；（b）**Windows 上 `taskkill /T` 在机器忙时要好几秒到十几秒**，全量测试并行跑时关浏览器因此超过时限——现在先按最近一份进程表逐个直接结束，`taskkill` 只作兜底。（c）**浏览器有不在它自己进程表里的「帮手进程」**：Windows 上完整的 Chrome 有一个崩溃上报的帮手进程（试过三个关它的启动参数都关不掉），chrome-headless-shell 有一个控制台宿主（不开窗口，探针前后查过）。主进程被结束后，崩溃上报的那个实测还会多活几秒到十几秒，并且一直握着和 Agent 服务相连的管道——「整棵树都退了」的证据因此迟迟拿不到。现在起浏览器时在后台问一次系统（Windows 上用 PowerShell 查后代进程），把它们记下一起结束；关的时候万一还没问到，再问一次。Linux 上靠杀进程组，不走这条路。
 3. **测试占固定端口** 28380、28390～28392、28400（都在分给本包的段里）；本包三份测试文件互不冲突，但同一台机器上同时跑两份这条分支的全量测试会撞。
 4. `server/test/cloud-tools-w1-fixture.mjs` 里抄了一份 `--disable-field-trial-config`（因为 `server/` 不许引 `scripts/`，守门测试会拦）；有一条断言保证它与产品代码里打头的参数一致，探针传的是 `PROBE_CHROME_ARGS` 原件。
 5. 这一轮的每次调用是 2 次授权查询（首次绑定这一轮时多 2 次，登记器要的）。连续操作网页时文档服务会多出这些查询。
+6. `web_close`、`closeConversation`、`close` 回的「退出了」是证据：记下的每个进程号都查不到、并且主进程的退出与管道关闭两个事件都到了。在时限（缺省 10 秒）里拿不到证据时，`web_close` 抛 `web-close-pending`（进程已经被结束过，只是还没核实），另两个回 `exited: false` / `childrenClosed: false`——不会把「已经发了结束」说成「已经退出」。
 
 ## 8. 要用户定的事
 
@@ -250,12 +251,17 @@ const web = createHostedBrowserTools({
 
 ## 全量基线
 
-命令：`npm test`（同一条命令里设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`），在最后一次改代码之后跑的（提交 `c16c601c` 的内容）。
+命令：`npm test`（同一条命令里设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`）。一共跑了四遍，如实都记在这里；**算数的是第四遍**（提交 `00b4dd18`，之后只改了本报告与截图）。
 
-- 结果：6096 条，通过 6087，**失败 1**，取消 0，跳过 8（都不是本包的），退出码 1，耗时 103 秒。
-- 失败的那一条：`server/test/asset-project-workers.test.mjs` 的「frame stream真实HTTP清单/初始化/分段按项目…」，报 `listen EADDRINUSE: address already in use 127.0.0.1:5782`——端口写死、机器上同时有别的子 Agent 在跑时会撞，在通用规矩点名的「机器忙时偶发失败」名单里。单独重跑这个文件：9 条通过、0 失败、退出码 0。本包没有碰这个文件，也不用 5782 端口。
-- 本包的 27 条在这次全量里全过。
+| 遍 | 代码 | 结果 | 说明 |
+|---|---|---|---|
+| 1 | 还没改完 | 6096 条，失败 12、取消 1 | 其中 2 条是本包的：`W1-ISO-01` 报「浏览器进程没有在时限内退出」、`W1-RESTART-02` 残留浏览器没被杀掉。是真问题：机器忙时 `taskkill` 要好几秒。改成逐个直接结束进程。其余 10 条在别的文件里（`codex-auth-state` 五条、`artifact-push` 的 W4、一条 `CA-RENDER-01`、一条「account get_selection…」、`asset-project-workers` 一条、一条「L9 cardLockIdleMs…」），本包没有碰 |
+| 2 | 提交 `c16c601c` | 6096 条，通过 6087，失败 1，取消 0，跳过 8，103 秒 | 失败的是 `asset-project-workers.test.mjs`：`listen EADDRINUSE … 127.0.0.1:5782`（端口写死，偶发名单里的）。单独重跑：9 条通过。本包 27 条全过 |
+| 3 | 提交 `fb12f19f` | 6096 条，失败 18、取消 3，耗时 1766 秒 | 这一遍机器异常地忙：`account-real-runner.test.mjs` 的一个测试进程挂了近半小时不退（我把自己起的这个测试进程按进程号停掉，全量才收尾），别的文件大面积超时。本包有 4 条没过（`W1-TOOL-01`、`W1-ISO-01` 报没在时限内退出，`W1-RESTART-01`、`02` 等进程退出超时）。查出的真原因见第 7 节第 2 条的 c：浏览器有一个「帮手进程」不在它自己的进程表里，主进程没了以后它还握着管道多活十几秒。已改；测试里等进程退出的时限也从卡固定秒数改成放宽到 40～90 秒（只为防卡死） |
+| 4 | 提交 `00b4dd18` | **6096 条，通过 6086，失败 2（同一个测试的父子两行），取消 0，跳过 8（都不是本包的），退出码 1，131 秒** | 失败的是 `server/test/multi-agent-presence.test.mjs` 的「MA-X2 成员 B 的页面正在拖 c2…」（断言拿到的是 `undefined`，跑了 15.9 秒）。单独重跑这个文件：6 条通过、0 失败、退出码 0。本包没有碰它用到的任何文件；它不在通用规矩点名的偶发名单里，请主会话重跑基线时留意。**本包 27 条全过** |
 
-如实补一句：做的过程中更早跑过一次全量（那时代码还没改完），失败 12 条——其中 10 条在别的文件里（`codex-auth-state` 的五条、`artifact-push` 的 W4、一条 `CA-RENDER-01`、一条「account get_selection…」、`asset-project-workers` 的一条、一条「L9 cardLockIdleMs…」；前几类在通用规矩的偶发名单里，最后一条我没有去核它属于哪个文件；本包没有碰这些文件，后一次全量里它们都过了），另外 2 条是本包自己的（`W1-ISO-01` 报「浏览器进程没有在时限内退出」、`W1-RESTART-02` 残留浏览器没被杀掉）。那两条是真问题，不是偶发：机器忙时 `taskkill` 太慢。改成逐个直接结束进程之后（第 7 节第 2 条的 b），上面这次全量里它们都过了。
+第四遍之后另外单独跑过：三份专用测试连跑两遍（27 / 27，其中一遍赶上机器忙、跑了 163 秒，照样全过）、探针一遍（退出码 0，输出见第 2 节）。
 
-`npx tsc -b --force`：退出码 0，零错误（同样在最后一次改代码之后）。
+`npx tsc -b --force`：退出码 0，零错误（提交 `00b4dd18` 上）。
+
+不弹窗：探针前后各查一次看得见的窗口，都是空；探针结束时按目录名查残留的浏览器进程是 0。
