@@ -175,3 +175,55 @@ test("素材全在 / 部分缺 / 全缺", async () => {
     assert.equal(getState().project.media.length, 3, "素材条目一条不少");
   }
 });
+
+/* ---------------- 还带着协作关联的文件不认定;检查中途换了项目不乱写 ---------------- */
+
+const { startTierBackfill } = await import(srcUrl("editor/io/mediaUpload.ts"));
+const { publishGoneConversion, takeGoneNotices } = await import(srcUrl("editor/sync/recoveryAssociation.ts"));
+const waitFor = async (cond, ms = 6000) => { const t0 = Date.now(); while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return cond(); };
+
+test("还带着协作关联、只是没连上(断网、要认证、等主机):不认定、不弹窗、项目不被改;被证明转成本地项目后才判", async () => {
+  actions.newProject("带着关联");
+  const hashed = actions.addMedia({ kind: "video", name: "只在远端.mp4", url: `/@media/${H("a")}`, hash: H("a") });
+  const old = actions.addMedia({ kind: "audio", name: "只在远端.mp3", url: fileUrl("C:/remote/a.mp3"), path: "C:/remote/a.mp3" });
+  const ed = editor({});
+  let associated = true, seen = 0;
+  const before = getState().project;
+  const stop = startTierBackfill({ shared: () => false, associated: () => associated, afterIngest: () => { seen++; } });
+  try {
+    assert.equal(await waitFor(() => seen === 1), true);
+    assert.equal(getState().project, before, "项目对象没换:没有任何写入(也就没有东西会在重连后同步给别的成员)");
+    for (const m of [hashed, old]) { assert.equal(get(m.id).missingMaterial, undefined); assert.equal(get(m.id).name, m.name); }
+    assert.deepEqual(takeMissingMaterials(), [], "不弹窗");
+    assert.equal(ed.calls.some((u) => u.startsWith("/api/media/local?")), false, "带哈希的连问都不问");
+    // 文档服务证明项目已不存在、转成了本地项目:素材表没换,但要重新判一遍
+    associated = false;
+    publishGoneConversion({ projectId: getState().project.id, name: "带着关联", from: { v: 1, roomId: `sp_${"a".repeat(26)}`, service: "https://x.example", authorityId: "doc", tombstoneRevision: 1, kid: "k", convertedAt: "t" } });
+    takeGoneNotices();
+    assert.equal(await waitFor(() => confirmedMissing(get(hashed.id)) && confirmedMissing(get(old.id))), true, "转成本地项目之后认定");
+    assert.equal(takeMissingMaterials().length, 2);
+  } finally { stop(); }
+});
+
+test("检查到一半换了项目(同一份文件进了云端项目、素材号相同):这一轮的结论不写进新项目", async () => {
+  actions.newProject("换项目");
+  const media = { id: "m-same", kind: "video", name: "v.mp4", url: `/@media/${H("a")}`, hash: H("a"), path: "D:/pc/media/v.mp4" };
+  const oldMedia = { id: "m-old", kind: "audio", name: "o.mp3", url: fileUrl("C:/gone/o.mp3"), path: "C:/gone/o.mp3" };
+  actions.addMedia(media); actions.addMedia(oldMedia);
+  // 请求挂着不回,趁这时候换项目
+  let release; const gate = new Promise((r) => { release = r; });
+  const real = editor({});
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { await gate; return inner(url, init); };
+  void real;
+  const hashedRun = checkHashedMedia();
+  const ingestRun = ingestUnhashedMedia({ markMissing: true });
+  actions.loadProject({ ...getState().project, id: "another-project", media: [{ ...media }, { ...oldMedia }] });
+  const after = getState().project;
+  release();
+  assert.deepEqual(await hashedRun, { missing: [], restored: [] });
+  await ingestRun;
+  assert.equal(getState().project, after, "新项目一个字段都没被写");
+  assert.equal(getState().project.media.some((m) => m.missingMaterial || m.name.startsWith("(缺失)")), false);
+  assert.deepEqual(takeMissingMaterials(), []);
+});

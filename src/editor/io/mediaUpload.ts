@@ -3,6 +3,7 @@ import type { MediaAsset } from "../../kernel/project";
 import { isViewOnly } from "./viewOnly";
 import { confirmedMissing } from "../../audio/missingMaterialRecord";
 import { publishMissingMaterials, type MissingMaterialNotice } from "./missingMaterialBus";
+import { onGoneConversion } from "../sync/recoveryAssociation";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线浏览器模式没有本机内容库与转码:
@@ -257,11 +258,15 @@ export function startTierBackfill(hooks: BackfillHooks = {}): () => void {
   const myImportHook = hooks.afterImport ?? null;
   importHook = myImportHook;
   const background = async () => {
-    // 本机取不到文件的标「(缺失)」(共享项目里不标,见 BackfillHooks.shared)
-    const local = !hooks.shared?.();
-    const r = await ingestUnhashedMedia({ background: true, markMissing: local });
+    // 本机取不到文件的标「(缺失)」。只在本机项目里判:共享项目里不标(见 BackfillHooks.shared);还带着协作关联、只是没连上的
+    // (断网、要认证、等主机)也不判 —— 那时只在远端有的素材本机没有是常态,判了还会随重连同步给所有成员(见 BackfillHooks.associated)。
+    // 检查中途项目变了(换了项目、连上了、进了云端项目)就停手,不把这一轮的结论写进去。
+    const local = () => !hooks.shared?.() && !hooks.associated?.();
+    const started = loadMark();
+    const allowed = () => local() && sameLoad(started);
+    const r = await ingestUnhashedMedia({ background: true, markMissing: local(), allowed });
     // 带哈希、本地内容库里却没有的(另一台机器存的 .proc)同样标;共享项目里本机没有是常态,不判
-    if (local) await checkHashedMedia();
+    if (allowed()) await checkHashedMedia({ allowed });
     await hooks.afterIngest?.(r);
   };
   let lastMedia: unknown = null;
@@ -277,8 +282,18 @@ export function startTierBackfill(hooks: BackfillHooks = {}): () => void {
   };
   const unsub = subscribe(check);
   check();
-  return () => { unsub(); if (timer) clearTimeout(timer); if (importHook === myImportHook) importHook = null; };
+  // 过期的云端项目刚转成本地项目:素材表没换(内容原样),但它现在是本机项目了,重新判一遍
+  const again = () => { lastMedia = null; ingestBackgroundFailed.clear(); check(); };
+  recheckers.add(again);
+  return () => { recheckers.delete(again); unsub(); if (timer) clearTimeout(timer); if (importHook === myImportHook) importHook = null; };
 }
+
+const recheckers = new Set<() => void>();
+onGoneConversion(() => { for (const again of [...recheckers]) again(); });
+
+/** 这一刻载入的是哪个项目(`loadProject` 每次加一);后台检查跨着几次请求,回来时用它看项目换没换 */
+const loadMark = () => ({ token: getState().projectLoadToken, id: getState().project.id });
+const sameLoad = (mark: ReturnType<typeof loadMark>) => getState().projectLoadToken === mark.token && getState().project.id === mark.id;
 
 /* ---------------- 补入库:没有哈希、但本机还取得到字节的老素材 ---------------- */
 
@@ -382,6 +397,11 @@ export interface IngestResult {
  * 这里不直接引同步层:`syncManager` 在 Node 单测里加载不了,也免得 io 反过来依赖 sync。
  */
 export interface BackfillHooks {
+  /**
+   * 这个文件是不是还带着协作关联(连没连上都算)。带着就不认定缺失:没连上时本机没有远端的素材是常态,
+   * 认定了会写进待同步的内容,重连后发给所有成员。
+   */
+  associated?: () => boolean;
   /** 当前是不是共享项目。共享项目里不给素材标「(缺失)」:取不取得到是这台机器的事,不该同步给别的成员 */
   shared?: () => boolean;
   /** 后台补入库做完之后(放云端时把补上哈希的交给上传队列、补不上的列给用户) */
@@ -407,9 +427,12 @@ const ingestBackgroundFailed = new Set<string>();
  * (`mediaUrls.ts` 的 restoreMediaUrls;空地址的素材预览和导出都跳过,不再拿一个打不开的地址去等)。`path` 留着,
  * 换回有这个文件的机器、或文件放回原处后,下一次补入库照样补得上(补上时去掉标记)。
  */
-export async function ingestUnhashedMedia(opts: { background?: boolean; markMissing?: boolean } = {}): Promise<IngestResult> {
+export async function ingestUnhashedMedia(opts: { background?: boolean; markMissing?: boolean; allowed?: () => boolean } = {}): Promise<IngestResult> {
   const out: IngestResult = { ingested: [], failed: [] };
   if (ONLINE_BUILD || isViewOnly()) return out;
+  // 等请求的那一阵项目可能换了:回来再认定缺失之前先看一眼还许不许(`allowed`),并且始终不跨项目写
+  const mark = loadMark();
+  const mayMark = () => !!opts.markMissing && sameLoad(mark) && (opts.allowed?.() ?? true);
   const media = getState().project.media ?? [];
   const byId = new Map(media.map((m) => [m.id, m]));
   // 同一来源(同一文件)的几条记录一起补
@@ -432,7 +455,7 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
     if (!key) {
       out.failed.push({ id: m.id, name: m.name });
       // 没有哈希、没有路径、也没有读得到的地址(打开时已被清空的失效地址):没有任何线索能找回它,同样认定缺失
-      if (opts.markMissing && !m.url && !m.soundOf) markMediaMissing(m.id);
+      if (mayMark() && !m.url && !m.soundOf) markMediaMissing(m.id);
       continue;
     }
     const g = groups.get(key);
@@ -446,11 +469,12 @@ export async function ingestUnhashedMedia(opts: { background?: boolean; markMiss
       ingestInflight.set(key, p);
     }
     const { up, unreachable } = await p;
+    if (!sameLoad(mark)) return out; // 项目换了:这一轮到此为止,什么都不写
     if (!up) {
       if (opts.background) ingestBackgroundFailed.add(key);
       for (const m of list) {
         out.failed.push({ id: m.id, name: m.name, ...(unreachable ? { unreachable: true } : {}) });
-        if (unreachable && opts.markMissing) markMediaMissing(m.id);
+        if (unreachable && mayMark()) markMediaMissing(m.id);
       }
       continue;
     }
@@ -479,9 +503,12 @@ const hashPresent = new Set<string>();
  * - 以前标过、现在有了的(导入了同样内容的文件、打开了带这份字节的包)去掉标记、换回 `/@media/<hash>`。
  * 编辑器进程答不上来时什么都不改。回标了哪些、恢复了哪些。
  */
-export async function checkHashedMedia(): Promise<{ missing: string[]; restored: string[] }> {
+export async function checkHashedMedia(opts: { allowed?: () => boolean } = {}): Promise<{ missing: string[]; restored: string[] }> {
   const out = { missing: [] as string[], restored: [] as string[] };
   if (ONLINE_BUILD || isViewOnly()) return out;
+  // 下面要等好几次请求;期间换了项目(或不再许认定)就停手,不把这一轮的结论写进别的项目
+  const mark = loadMark();
+  const go = () => sameLoad(mark) && (opts.allowed?.() ?? true);
   const hashOf = (m: MediaAsset) => String(m.tiers?.original || m.hash || "").toLowerCase();
   const ask = [...new Set((getState().project.media ?? [])
     .filter((m) => !m.pending && hasMediaHash(m))
@@ -499,6 +526,7 @@ export async function checkHashedMedia(): Promise<{ missing: string[]; restored:
       for (const h of part) answered.add(h);
     } catch { /* 编辑器进程不在:这一批不判 */ }
   }
+  if (!go()) return out;
   // 内容库里没有的,再按原来记的本机路径找一次(素材找回的先后:包里落库的、内容库里已有的都先于它,见 `workflow/materials.md`):
   // 文件还在原处、内容也对得上,就地挂回内容库,不算缺失;原处的文件内容变了(哈希对不上)记下来,弹窗里单独说明。
   const changed = new Set<string>();
@@ -511,9 +539,11 @@ ${m.path}`)) continue;
     triedPath.add(`${h}
 ${m.path}`);
     const up = await adoptServerMedia(m.path);
+    if (!go()) return out;
     if (up && up.hash.toLowerCase() === h) hashPresent.add(h);
     else if (up) changed.add(h);
   }
+  if (!go()) return out;
   const notices: MissingMaterialNotice[] = [];
   for (const m of getState().project.media ?? []) {
     if (m.pending || !hasMediaHash(m)) continue;
