@@ -109,5 +109,42 @@ class TrackErrorCodeTest(unittest.TestCase):
         self.assertEqual(events[-1]["code"], "video-missing")
 
 
+class FfmpegInputTest(unittest.TestCase):
+    def test_本地文件加协议白名单_素材服务地址不加(self):
+        from promptcut_track import ffmpeg_input
+
+        self.assertEqual(ffmpeg_input("/work/a.mp4"), ["-protocol_whitelist", "file", "-i", "/work/a.mp4"])
+        self.assertEqual(ffmpeg_input("http://127.0.0.1:1/a"), ["-i", "http://127.0.0.1:1/a"])
+
+    @unittest.skipIf(not FFMPEG, "没有 ffmpeg")
+    def test_伪装成视频的播放列表连不了网络(self):
+        """回归守卫:concat 清单里写一个本地 http 地址,ffmpeg 不去连。
+        (新版 ffmpeg 对本地清单默认也拦;`-protocol_whitelist file` 是不依赖版本的兜底,上面的参数测试钉它。)"""
+        import socket
+        from promptcut_track.tracker import estimate_frames
+
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(0.5)
+        port = listener.getsockname()[1]
+        tmp = tempfile.mkdtemp(prefix="pc-track-playlist-")
+        try:
+            playlist = os.path.join(tmp, "fake.ffconcat")
+            with open(playlist, "w", encoding="utf-8") as fh:
+                fh.write(f"ffconcat version 1.0\nfile 'http://127.0.0.1:{port}/x.mp4'\n")
+            estimate_frames(FFMPEG, playlist)
+            try:
+                conn, _ = listener.accept()
+                conn.close()
+                connected = True
+            except socket.timeout:
+                connected = False
+            self.assertFalse(connected, "ffmpeg 不该去连播放列表里的网络地址")
+        finally:
+            listener.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

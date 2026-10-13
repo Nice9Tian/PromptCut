@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from . import ffmpeg_input
 from .tracker import _parse_size
 
 # 解码时长边缩到这个尺寸。模板匹配是在解码后的像素上做的，太小则模板里
@@ -65,7 +66,7 @@ def decode_gray(ffmpeg: str, video: str, max_side: int = MAX_SIDE
     这层约束，拉伸只会让模板在一个方向上被挤扁，白白降低匹配质量。
     """
     probe = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", video],
+        [ffmpeg, "-hide_banner", *ffmpeg_input(video)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     src_w, src_h = _parse_size(probe.stderr.decode("utf-8", "replace"))
@@ -79,7 +80,7 @@ def decode_gray(ffmpeg: str, video: str, max_side: int = MAX_SIDE
     dst_h = max(2, int(round(src_h * scale)) // 2 * 2)
 
     proc = subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", video,
+        [ffmpeg, "-hide_banner", "-loglevel", "error", *ffmpeg_input(video),
          "-vf", f"scale={dst_w}:{dst_h}", "-pix_fmt", "gray",
          "-f", "rawvideo", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,

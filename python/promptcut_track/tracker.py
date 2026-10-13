@@ -17,6 +17,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from . import ffmpeg_input
+
 MODEL_FILENAME = "bootstapir_v2.pt"
 
 # 模型是按 256×256 训练的，喂别的尺寸精度会掉。查询点和输出轨迹都在这个
@@ -36,13 +38,13 @@ def decode_frames(ffmpeg: str, video: str, size: int = INPUT_SIZE) -> Tuple[np.n
     让有效像素变少。坐标换算在 scale_points 里按同样的拉伸做逆变换。
     """
     probe = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", video],
+        [ffmpeg, "-hide_banner", *ffmpeg_input(video)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     src_w, src_h = _parse_size(probe.stderr.decode("utf-8", "replace"))
 
     proc = subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", video,
+        [ffmpeg, "-hide_banner", "-loglevel", "error", *ffmpeg_input(video),
          "-vf", f"scale={size}:{size}", "-pix_fmt", "rgb24",
          "-f", "rawvideo", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -71,7 +73,7 @@ def estimate_frames(ffmpeg: str, video: str) -> Optional[int]:
     import re
 
     probe = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", video],
+        [ffmpeg, "-hide_banner", *ffmpeg_input(video)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     text = probe.stderr.decode("utf-8", "replace")
