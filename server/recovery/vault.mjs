@@ -31,16 +31,22 @@ function atomic(file, text) {
     }
   } finally { try { fs.unlinkSync(tmp); } catch { /* already renamed */ } }
 }
+/** 系统保护存储(Windows 的 DPAPI 经 PowerShell)一次输出的上限 */
+export const PROTECT_MAX_BUFFER = 256 * 1024 * 1024;
 export function systemProtector(dir) {
   if (process.platform === 'win32') {
     const run = (mode, value) => {
       const script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $j=[Console]::In.ReadToEnd()|ConvertFrom-Json; $b=[Convert]::FromBase64String($j.value); $e=[Text.Encoding]::UTF8.GetBytes('PromptCut-collaboration-v1'); if($j.mode -eq 'seal'){$r=[Security.Cryptography.ProtectedData]::Protect($b,$e,[Security.Cryptography.DataProtectionScope]::CurrentUser)}else{$r=[Security.Cryptography.ProtectedData]::Unprotect($b,$e,[Security.Cryptography.DataProtectionScope]::CurrentUser)}; [Console]::Write([Convert]::ToBase64String($r))";
       const p = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
         input: JSON.stringify({ mode, value: Buffer.from(value).toString('base64') }), windowsHide: true, encoding: 'utf8', timeout: 15000,
+        // 保护存储里有各房间的离线修改记录(整份项目内容):缺省的 1 MiB 输出上限下,项目正文过了约 780 KB 就写不进去(ENOBUFS),
+        // 房间里的保存、取消多用户协作、搬到云端都跟着失败。上限放到与恢复接口请求体相同的量级
+        maxBuffer: PROTECT_MAX_BUFFER,
       });
       if (p.status !== 0) throw Object.assign(new Error('系统保护存储不可用'), { storageCode: p.error?.code ?? 'DPAPI_FAILED' });
       const output = p.stdout.trim();
-      if (!output || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(output)) throw Object.assign(new Error('系统保护存储响应无效'), { storageCode: 'DPAPI_FAILED' });
+      // 判的仍是「一段合法的 base64」;写成长度加一条不嵌套的正则:原来那条带分组重复的正则在几 MB 的输出上会把调用栈撑爆
+      if (!output || output.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(output)) throw Object.assign(new Error('系统保护存储响应无效'), { storageCode: 'DPAPI_FAILED' });
       return Buffer.from(output, 'base64');
     };
     return { kind: 'dpapi-current-user', seal: value => run('seal', value), open: value => run('open', value) };

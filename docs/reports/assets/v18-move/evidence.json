@@ -1,6 +1,6 @@
 {
-  "runId": "mv768lm5",
-  "cardId": "move-probe-mv768lm5",
+  "runId": "mv76dxqn",
+  "cardId": "move-probe-mv76dxqn",
   "ports": {
     "fixture": [
       28950,
@@ -15,82 +15,13 @@
     "a": 28960,
     "b": 28965
   },
-  "shots": [
-    "docs/reports/assets/v18-move/local-1-before.png",
-    "docs/reports/assets/v18-move/local-2-login.png",
-    "docs/reports/assets/v18-move/local-3-progress.png",
-    "docs/reports/assets/v18-move/local-4-failed.png",
-    "docs/reports/assets/v18-move/local-5-done.png",
-    "docs/reports/assets/v18-move/local-6-second-account.png"
-  ],
-  "timings": {
-    "localMoveMs": 11147
-  },
+  "shots": [],
+  "timings": {},
   "video": {
     "bytes": 781730,
-    "sha256": "0fc7301cfb5c"
-  },
-  "local": {
-    "built": {
-      "contentId": "p-mv768w9y-bdbebb63",
-      "bytes": 1708779,
-      "tiers": true,
-      "audio": "ok"
-    },
-    "introText": "云端项目属于你的网站账号。点「确定」后把当前项目搬到云端，编辑器接着就在云端项目里；本机这一份保留为普通的本地项目。",
-    "progressText": "正在搬到云端：上传项目内容…",
-    "failText": "项目内容没有传完。本机项目没有改动。再点一次会接着用云端已经建好的那个项目，不会多建一个。",
-    "createRequests": [
-      {
-        "bytes": 389
-      }
-    ],
-    "doneText": "已搬到云端，现在编辑的是云端项目。本机那一份保留为普通的本地项目。",
-    "toasts": [
-      "已搬到云端，可以将项目链接发给其他已登录成员。",
-      "素材还在后台上传（共 2 个，先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。"
-    ],
-    "draftDiff": {
-      "vsBefore": [
-        "media"
-      ],
-      "vsMoved": [
-        "media",
-        "_note"
-      ]
-    },
-    "uploadToasts": [
-      "素材还在后台上传（共 2 个，先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。",
-      "素材已全部传到云端。"
-    ],
-    "uploadOrder": [
-      "small:8e2c2f66",
-      "original:721a9f94",
-      "original:54f51c7c"
-    ],
-    "b": {
-      "projectId": "sp_alitchcydg453nt5nzbzfxjk4t",
-      "assets": {
-        "small": {
-          "status": 200,
-          "bytes": 116819,
-          "sameHash": true
-        },
-        "original": {
-          "status": 200,
-          "bytes": 781730,
-          "sameHash": true
-        },
-        "cardAudio": {
-          "status": 200,
-          "bytes": 768044,
-          "sameHash": true
-        }
-      }
-    },
-    "projectId": "sp_alitchcydg453nt5nzbzfxjk4t"
+    "sha256": "391fc8db0e36"
   },
   "fails": [
-    "本地-本机草稿仍是普通的本地项目(没有协作关联),项目内容与搬之前存的那一份相同({\"collaboration\":null,\"id\":\"p-mv768w9y-bdbebb63\",\"vsBefore\":[\"media\"],\"vsMoved\":[\"media\",\"_note\"]})"
+    "探针中断:协作恢复失败"
   ]
 }

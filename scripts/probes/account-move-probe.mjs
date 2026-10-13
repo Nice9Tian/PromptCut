@@ -254,6 +254,8 @@ async function openDesktop(ed, state, label) {
   page.on('dialog', (d) => { page.dialogs.push({ type: d.type(), message: d.message() }); void d.accept(); });
   page.on('console', (m) => { if (/\[(collab|sync)\]/.test(m.text())) say('console', { label, text: m.text().slice(0, 240) }); });
   page.setDefaultNavigationTimeout(300_000);
+  // 本机协作恢复接口的失败(哪个接口、什么原因):探针自己排查用
+  page.on('response', (r) => { const u = new URL(r.url()); if (u.pathname.startsWith('/api/collaboration/')) void r.json().then((b) => { if (r.status() >= 400 || b?.ok === false) say('collaboration.fail', { label, path: u.pathname, status: r.status(), error: b?.error ?? null }); }, (e) => say('collaboration.fail', { label, path: u.pathname, status: r.status(), unreadable: String(e?.message ?? e).slice(0, 80) })); });
   await page.exposeFunction('__probeNative', nativeBridge(state));
   // 桌面外壳的全局对象:只给账号桥这一个命令(别的命令回 null,等于没有外壳)
   await page.evaluateOnNewDocument(() => {
