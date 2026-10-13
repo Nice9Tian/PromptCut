@@ -230,3 +230,29 @@ test('命令行：plan 不写任何东西（连不是账本的 sqlite 文件也�
   assert.deepEqual(revokeLegacyTombstones(f.ledger, [id('a')], { source: '再撤一次' }).map(r => r.action), ['not-registered']);
   assert.match(run('apply', ...base, '--ids', ids, '--source', '重新登记', '--legacy-data', legacy, '--old-service-stopped', 'yes').out, /新登记 1，已登记过 1/);
 });
+
+test('旧文件里记的服务地址归一以后落在哪：换下来的旧主机名读进来就是新的；端口、路径、协议不同的是不同的地址，信任表要逐个列', async () => {
+  const { parseCollaboration, serviceIdentity } = await import('../recovery/descriptor.mjs');
+  const { DEFAULT_HOSTED_URL } = await import('../auth/hosted-default.mjs');
+  const norm = service => parseCollaboration({ version: 1, roomId: id('a'), service, where: 'hosted' }).service;
+  // 旧文件里可能出现的几种写法 → 归一后的写法
+  const cases = [
+    ['http://8.219.80.16:8787', 'http://149.88.94.84:8787'],            // 阿里云时期的缺省地址（IP）
+    ['http://8.219.80.16:8787/', 'http://149.88.94.84:8787'],
+    ['ws://8.219.80.16:8787', 'http://149.88.94.84:8787'],
+    ['https://8-219-80-16.sslip.io/hosted', 'https://149-88-94-84.sslip.io/hosted'], // 阿里云时期的证书域名
+    ['wss://8-219-80-16.sslip.io/hosted/', 'https://149-88-94-84.sslip.io/hosted'],
+    ['http://149.88.94.84:8787', 'http://149.88.94.84:8787'],            // 现在的缺省地址
+    ['https://149-88-94-84.sslip.io/hosted/', 'https://149-88-94-84.sslip.io/hosted'],
+    ['https://visuhive.com/hosted', 'https://visuhive.com/hosted'],        // 官网域名下的入口
+  ];
+  for (const [raw, want] of cases) assert.equal(norm(raw), want, raw);
+  assert.equal(serviceIdentity(DEFAULT_HOSTED_URL), 'http://149.88.94.84:8787');
+  // 归一只换主机名、去结尾斜杠、把 ws 换成 http：这三个仍是三个不同的地址，要都认就得都列进信任表的 services
+  const distinct = new Set(cases.map(c => c[1]));
+  assert.deepEqual([...distinct].sort(), ['http://149.88.94.84:8787', 'https://149-88-94-84.sslip.io/hosted', 'https://visuhive.com/hosted']);
+  const table = [{ authorityId: 'doc', origin: 'https://visuhive.com', services: [...distinct], keys: {} }];
+  for (const [raw] of cases) assert.equal(authorityFor({ version: 1, roomId: id('a'), service: norm(raw), where: 'hosted' }, table)?.authorityId, 'doc', raw);
+  // 只列了一个时，别的写法对不到签发方（不会转换）
+  assert.equal(authorityFor({ service: 'http://149.88.94.84:8787' }, [{ ...table[0], services: ['https://visuhive.com/hosted'] }]), null);
+});
