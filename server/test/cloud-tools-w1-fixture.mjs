@@ -151,6 +151,7 @@ export async function w1Fixture(t, options = {}) {
       // 等进程树退出的时限放宽:全量测试并行跑时机器很忙,问系统要进程表、等进程退出都会慢;时限只为防卡死,不当通过条件
       limits: { closeMs: TEST_CLOSE_MS, ...options.limits, ...overrides.limits },
       log: (event, fields) => serviceLog.push({ event, ...fields }),
+      ...(overrides.launchSession ?? options.launchSession ? { launchSession: overrides.launchSession ?? options.launchSession } : {}),
     });
     opened.push(tools);
     return tools;

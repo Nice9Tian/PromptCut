@@ -947,6 +947,8 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
     get lastUsedAt() { return state.lastUsedAt; },
     /** 进程是不是已经真的退了(exit + close 都到) */
     get processExited() { return exited; },
+    /** 此刻还活着的:主进程的退出事件到没到、记下的进程号里还活着的、进程组里还有没有活进程(给关闭之后的重核用) */
+    leftovers: () => ({ exited, alivePids: [...new Set([...pids, ...helpers])].filter((pid) => pidLive(pid)), groupLive: browserGroupLive(browserPid) }),
     processGone,
     open, view, click, type, scroll, read, close,
   };

@@ -127,8 +127,9 @@ const removeAllFor = (reason) => reason === 'conversation-deleted' || reason ===
  * @param {string[]} [d.runtime.argPrefix] 启动参数打头的那几个
  * @param {object} [d.limits] 覆盖 `HOSTED_BROWSER_DEFAULTS`
  * @param {(event: string, fields?: object) => void} [d.log]
+ * @param {typeof launchHostedSession} [d.launchSession] 起会话的函数,只给单测换
  */
-export function createHostedBrowserTools({ resources, egress, dataDir, runtime = {}, limits = {}, log = () => {}, puppeteer, now = Date.now } = {}) {
+export function createHostedBrowserTools({ resources, egress, dataDir, runtime = {}, limits = {}, log = () => {}, puppeteer, now = Date.now, launchSession = launchHostedSession } = {}) {
   if (typeof resources?.authorize !== 'function' || typeof resources?.register !== 'function'
     || typeof egress?.admit !== 'function' || typeof egress?.admitUrl !== 'function'
     || typeof dataDir !== 'string' || !dataDir) {
@@ -144,8 +145,28 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
   const launching = new Map();
   /** 正在关的(含登记器触发的):`close()` 要等它们 */
   const closings = new Set();
+  /** 「项目 对话」→ 这个对话最近一次关闭(含删目录)的 promise。同一个对话的下一次启动、`closeConversation` 都先等它 */
+  const closingByKey = new Map();
+  /** 关过的会话(已从 `sessions` 摘掉):还在关的、关了却没拿到退出凭据的留在这里,`treeClosed` 与 `closeConversation` 据此回话 */
+  const retired = new Set();
   let closing = false;
   let closePromise = null;
+
+  function noteKeyClosing(key, promise) {
+    closingByKey.set(key, promise);
+    const done = () => { if (closingByKey.get(key) === promise) closingByKey.delete(key); };
+    promise.then(done, done);
+    return promise;
+  }
+
+  /** 一个关过的会话此刻是不是确实没有活着的进程了(关闭当时没核到的,这里重核) */
+  function settled(entry) {
+    if (entry.lastClose?.exited === true) return true;
+    if (!entry.lastClose) return false;
+    const left = entry.session.leftovers?.();
+    if (left && left.exited && left.alivePids.length === 0 && left.groupLive !== true) { entry.lastClose = { ...entry.lastClose, exited: true, alivePids: [] }; return true; }
+    return false;
+  }
 
   const keyOf = (scope) => `${scope.projectId}\0${scope.conversationId}`;
   const contextKey = (context) => JSON.stringify(CONTEXT_KEYS.map((k) => context?.[k]));
@@ -189,7 +210,16 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     if (sessions.get(entry.key) === entry) sessions.delete(entry.key);
     if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
     entry.retired ??= reason;
-    return track(entry.session.close({ graceful, removeProfile, removeAll, reason }));
+    retired.add(entry);
+    const closed = track(entry.session.close({ graceful, removeProfile, removeAll, reason }));
+    entry.closed = closed;
+    closed.then((result) => {
+      entry.lastClose = result ?? { exited: false };
+      // 拿到退出凭据的不用再记;没拿到的留着,直到重核通过
+      if (entry.closed === closed && settled(entry)) retired.delete(entry);
+    }, () => { entry.lastClose = { exited: false, alivePids: [] }; });
+    noteKeyClosing(entry.key, closed);
+    return closed;
   }
 
   function touch(entry) {
@@ -222,11 +252,13 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     if (existing) return existing;
     const task = (async () => {
       await swept;
+      // 这个对话上一个浏览器还在关(含设私有时删目录):等它完。不等的话新浏览器会先读到正在被删的旧 cookie
+      while (closingByKey.has(key)) { try { await closingByKey.get(key); } catch { /* 关闭自己会记结果 */ } }
       if (!await makeRoom()) {
         throw new HostedBrowserError('云端同时开着的浏览器已经到上限,这次没有打开。稍后再试;别的对话里用完了浏览器请 web_close。', { code: 'web-busy', status: 429 });
       }
       const dir = hostedBrowserDir(dataDir, scope);
-      const session = await launchHostedSession({
+      const session = await launchSession({
         sessionDir: dir,
         executablePath: runtime.executablePath,
         headless: runtime.headless,
@@ -238,7 +270,7 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
         log,
         now,
       });
-      const entry = { key, projectId: scope.projectId, conversationId: scope.conversationId, dir, session, bound: new Map(), pendingHandles: new Set(), timer: null, retired: null };
+      const entry = { key, projectId: scope.projectId, conversationId: scope.conversationId, dir, session, bound: new Map(), contexts: new Set(), pendingHandles: new Set(), timer: null, retired: null, closed: null, lastClose: null };
       if (closing) { await track(session.close({ graceful: false, reason: 'host-close' })); throw new HostedBrowserError('云端网页操作正在关闭。', { code: 'web-closed', status: 503 }); }
       sessions.set(key, entry);
       // 浏览器自己没了(崩溃、被系统杀):从表里摘掉并核一遍进程
@@ -290,6 +322,7 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     const onAbort = () => { void retire(entry, { reason: 'fence', graceful: false, removeProfile: false }).catch(() => {}); };
     for (const other of [...entry.bound.keys()]) release(entry, other);
     entry.bound.set(ck, { registration, handle, onAbort });
+    entry.contexts.add(ck);
     if (entry.session.processExited) release(entry, ck);
     if (registration.signal.aborted) onAbort();
     else registration.signal.addEventListener('abort', onAbort, { once: true });
@@ -406,16 +439,27 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     const key = keyOf(scope);
     const pendingLaunch = launching.get(key);
     if (pendingLaunch) { try { await pendingLaunch; } catch { /* 没起来就没有要关的 */ } }
-    const entry = sessions.get(key);
-    let result = { exited: true, alivePids: [], profileRemoved: false };
-    if (entry) result = await retire(entry, { reason, graceful: false, removeProfile });
-    let profileRemoved = result.profileRemoved;
-    if (removeProfile && !profileRemoved) {
-      // 浏览器没开着,目录是以前留下的:先确认没有残留进程占着,再删
-      await reapOrphan(dir, { timeoutMs: cfg.closeMs });
-      profileRemoved = await removeSessionData(dir, { keepRev: !removeAllFor(reason), timeoutMs: cfg.closeMs });
-    }
-    return { wasOpen: Boolean(entry), exited: result.exited, alivePids: result.alivePids ?? [], profileRemoved };
+    const prior = closingByKey.get(key);
+    const task = (async () => {
+      let result = { exited: true, alivePids: [], profileRemoved: false };
+      const live = sessions.get(key);
+      // 已经被摘掉的(登记器收回、闲置关、换下):它那次关闭可能还在进行,也可能没拿到退出凭据——都以它为准,不拿缺省值充数
+      const last = live ? null : [...retired].filter((e) => e.key === key).pop() ?? null;
+      if (live) result = await retire(live, { reason, graceful: false, removeProfile });
+      else if (last) {
+        try { result = await retire(last, { reason, graceful: false, removeProfile }); } catch { result = { exited: false, alivePids: [], profileRemoved: false }; }
+        result = { ...result, exited: settled(last), alivePids: last.lastClose?.alivePids ?? result.alivePids ?? [] };
+      } else if (prior) { try { await prior; } catch { /* 那次关闭自己记了结果 */ } }
+      let profileRemoved = result.profileRemoved === true;
+      if (removeProfile && !profileRemoved) {
+        // 浏览器没开着,目录是以前留下的:先确认没有残留进程占着,再删
+        await reapOrphan(dir, { timeoutMs: cfg.closeMs });
+        profileRemoved = await removeSessionData(dir, { keepRev: !removeAllFor(reason), timeoutMs: cfg.closeMs });
+      }
+      return { wasOpen: Boolean(live), exited: result.exited === true, alivePids: result.alivePids ?? [], profileRemoved };
+    })();
+    noteKeyClosing(key, task);
+    return task;
   }
 
   /** 项目被删:它名下所有对话的浏览器关掉、目录删掉 */
@@ -435,12 +479,18 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
 
   /**
    * 这个运行上下文名下的浏览器进程树是不是已经确实没了(给运行资源登记器的 `childTreeWitness` 用)。
-   * 还开着、还在关、记下的进程号还有查得到的,都回 false。
+   * 还开着、关闭没拿到退出凭据(记下的进程号还有活着的、进程组里还有活进程)的,都回 false;只有每一次关闭都核到「都退了」才回 true。
    */
   async function treeClosed(context) {
     const ck = contextKey(context);
     for (const entry of sessions.values()) if (entry.bound.has(ck)) return false;
-    await Promise.allSettled([...closings]);
+    for (const entry of [...retired]) {
+      if (!entry.contexts.has(ck)) continue;
+      try { await entry.closed; } catch { /* 结果记在 lastClose 里 */ }
+      // 关了却没核到「都退了」:重核一次,还是核不到就照实回 false(登记器的回执保持未完成)
+      if (!settled(entry)) return false;
+      retired.delete(entry);
+    }
     return true;
   }
 
