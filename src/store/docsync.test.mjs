@@ -616,6 +616,11 @@ function swappable(svc, session, initial) {
     svc.disconnect(old.conn, opts);
     ds.handover();
   };
+  /** 换连接但旧连接留在服务端(调用方自己管它的上行、下行):模拟旧连接上在途的提交换完之后才落地 */
+  swap.keepOld = () => {
+    link = svc.connect(session, (msg) => ds.receive(msg));
+    ds.handover();
+  };
   return { ds, notices, projects, sent, swap };
 }
 
@@ -696,7 +701,7 @@ test("HO-04 本来就在离线批次里:换连接不改离线的规矩(第一条
   assert.equal(A.ds.status, "online");
 });
 
-test("HO-05 换连接时旧连接上有两条在途:前一条已含在新状态里、后一条换完才落地并先回来 —— 不算乱序,不重同步", () => {
+test("HO-05 换连接时旧连接上有两条在途:前一条已含在新状态里、后一条换完才落地并先回来 —— 整份重取一次,最后与文档服务一致", () => {
   const svc = new MemDocService({ project: clipsProject(), rev: 1 });
   const A = swappable(svc, "A", clipsProject());
   svc.drain();
@@ -719,6 +724,82 @@ test("HO-05 换连接时旧连接上有两条在途:前一条已含在新状态�
   assert.equal(A.ds.unconfirmed, 0);
   assert.equal(textOf(A.ds.project, "c1"), "X");
   assert.equal(textOf(A.ds.project, "c2"), "Y");
-  assert.deepEqual(A.notices.filter((n) => n.kind !== "remote").map((n) => n.kind), []);
+  // 不去猜前一条落没落地:确认先后颠倒就整份重取(静默的,不给用户提示),只许这一种通知
+  assert.deepEqual(A.notices.filter((n) => n.kind !== "remote").map((n) => n.kind), ["resync"]);
   assert.equal(JSON.stringify(A.ds.project), JSON.stringify(svc.project));
+  assert.equal(JSON.stringify(A.ds.confirmedProject), JSON.stringify(svc.project));
+});
+
+test("HO-06 审查复现:前一条在旧连接上没落地(闸拒了、页面不知道)、后一条换完才经旧连接落地 —— 页面不能停在与文档服务不一致的内容上", () => {
+  const svc = new MemDocService({ project: clipsProject(), rev: 1 });
+  const A = swappable(svc, "A", clipsProject());
+  svc.drain();
+  const connA = () => [...svc.conns].filter((c) => c.session === "A");
+  A.ds.commit({ ...A.ds.project, name: "X" });
+  A.ds.commit({ ...A.ds.project, name: "Y" });
+  const old = connA()[0];
+  old.up.shift();                 // X:旧连接上没落(闸回了不带提交号的错误)
+  const yMsg = old.up.shift();    // Y:还在路上
+  A.swap({ dropUp: true });
+  const fresh = connA()[0];
+  svc.handle(fresh, fresh.up.shift());                  // 新连接拿到状态(不含 X、Y)
+  fresh.onMessage(fresh.down.shift());
+  svc.handle({ ...old, open: true, down: [] }, yMsg);   // Y 经旧连接落地,回发给新连接
+  svc.drain();
+  // 文档服务上是先 Y 后 X;页面必须也是
+  assert.equal(svc.project.name, "X");
+  assert.equal(A.ds.project.name, "X");
+  assert.equal(A.ds.confirmedProject.name, "X");
+  assert.equal(A.ds.unconfirmed, 0);
+  assert.equal(A.ds.rev, svc.rev);
+});
+
+/**
+ * 穷举:换连接的那一刻旧连接上有 2～3 条在途的提交(都改同一个字段,另各带一个自己的字段),每条枚举三种去向 ——
+ *   gate   旧连接上被闸拒了(回的是不带提交号的错误,页面不知道),没落地;
+ *   before 在新连接拿到状态之前就经旧连接落地了(回音丢在旧连接上);
+ *   after  换完之后才经旧连接落地(回音会从新连接回来,和重发的那一条、别的回音先后不定)。
+ * 再叠上:换的那一下又做了一条没有、别的成员同时改没改;每种组合用若干个随机种子打乱投递顺序。
+ * 安静下来之后只许两种结局:页面本地副本、已确认副本与文档服务内容相同且没有未确认的(中途整份重取过不算错);不许「不一致且没有任何动静」。
+ */
+test("HO-07 穷举换连接时在途提交的各种去向与回音先后:安静下来时页面与文档服务一致、未确认为 0", () => {
+  const FATES = ["gate", "before", "after"];
+  const combos = (n) => (n === 0 ? [[]] : combos(n - 1).flatMap((c) => FATES.map((f) => [...c, f])));
+  const canon = (v) => JSON.stringify(v, (_k, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
+  let cases = 0, resynced = 0;
+  for (const n of [2, 3]) for (const fates of combos(n)) for (const late of [false, true]) for (const other of [false, true]) for (let seed = 1; seed <= 8; seed++) {
+    const label = `${fates.join(",")} late=${late} other=${other} seed=${seed}`;
+    const svc = new MemDocService({ project: clipsProject(), rev: 1 });
+    const A = swappable(svc, "A", clipsProject());
+    const B = page(svc, "B", clipsProject());
+    svc.drain();
+    for (let i = 0; i < n; i++) A.ds.commit({ ...A.ds.project, name: `v${i}`, [`k${i}`]: i });
+    const old = [...svc.conns].find((c) => c.session === "A");
+    const msgs = old.up.splice(0);
+    assert.equal(msgs.length, n, label);
+    // before:现在就落地(回音留在旧连接上,不投给页面)
+    msgs.forEach((m, i) => { if (fates[i] === "before") svc.handle(old, m); });
+    old.down.length = 0;
+    // 换连接:旧连接留在服务端(不再往页面投),after 的那几条还在它的上行队列里,由随机投递决定什么时候落地
+    const quiet = old.onMessage;
+    old.onMessage = () => {};
+    msgs.forEach((m, i) => { if (fates[i] === "after") old.up.push(m); });
+    A.swap.keepOld();
+    if (late) A.ds.commit({ ...A.ds.project, name: "late", late: 1 });
+    if (other) B.ds.commit({ ...B.ds.project, other: seed });
+    svc.drain(rng(seed));
+    svc.drain();
+    void quiet;
+    cases++;
+    if (A.notices.some((x) => x.kind === "resync")) resynced++;
+    assert.equal(A.ds.unconfirmed, 0, `${label}:还有没确认的`);
+    assert.equal(canon(A.ds.project), canon(svc.project), `${label}:页面本地副本与文档服务不一致`);
+    assert.equal(canon(A.ds.confirmedProject), canon(svc.project), `${label}:页面已确认副本与文档服务不一致`);
+    assert.equal(A.ds.rev, svc.rev, `${label}:版本号`);
+    assert.equal(canon(B.ds.project), canon(svc.project), `${label}:别的成员与文档服务不一致`);
+    assert.deepEqual(A.notices.filter((x) => !["remote", "resync"].includes(x.kind)).map((x) => x.kind), [], `${label}:不该有被拒、丢弃之类的通知`);
+    assert.equal(A.ds.status, "online", label);
+  }
+  assert.equal(cases, (9 + 27) * 2 * 2 * 8);
+  assert.ok(resynced > 0 && resynced < cases, `其中 ${resynced} / ${cases} 种走了整份重取`);
 });

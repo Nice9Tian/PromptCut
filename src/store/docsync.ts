@@ -224,11 +224,6 @@ interface Pending {
   ackRev?: number;
   /** 已发出、但在最新的已确认副本上重放失败 —— 文档服务那边也会拒 */
   brokenLocally?: boolean;
-  /**
-   * 计划内换连接时已经在旧连接上发出过(`handover`):它可能早就落地、已经含在新连接拿到的状态里,只是这边还不知道
-   * (要等新连接上重发的回音)。排在它后面的提交先拿到确认时不算乱序。
-   */
-  handed?: boolean;
 }
 
 interface Step {
@@ -473,7 +468,7 @@ export class DocSync {
     this.awaitingState = true;
     this.handingOver = true;
     this.partial = null;
-    for (const p of this.pending) if (p.ackRev === undefined) { if (p.sent) p.handed = true; p.sent = false; }
+    for (const p of this.pending) if (p.ackRev === undefined) p.sent = false;
     this.sendMsg({ type: "project.open", projectId: this.projectId });
     this.statusChanged(before);
   }
@@ -674,9 +669,9 @@ export class DocSync {
       else if (!this.gateOpId && !this.paused && this.confirmed) this.setLocal(this.replay(this.confirmed), "commit");
       return;
     }
-    // 排在前面的都是换连接时在旧连接上发过的(可能已经含在状态里,回音还没到):这一条先确认不算乱序,按文档服务的顺序并进已确认副本
-    const ahead = idx !== 0 && this.pending.slice(0, idx).every((p) => p.handed);
-    if ((idx !== 0 && !ahead) || msg.rev !== this.confirmedRev + 1 || entry.brokenLocally) {
+    // 换连接之后也可能走到这里:旧连接上在途的提交晚到,先于排在它前面那条的回音。不去猜前面那条落没落地
+    // (猜错了页面与文档服务的内容会悄悄不一样),一律整份重取、在取到的状态上重放没确认的
+    if (idx !== 0 || msg.rev !== this.confirmedRev + 1 || entry.brokenLocally) {
       this.resync(`确认乱序或与本地不一致:${entry.opId} rev ${msg.rev}`);
       return;
     }
@@ -694,7 +689,7 @@ export class DocSync {
       this.confirmed = r.value;
     }
     this.confirmedRev = msg.rev;
-    this.pending.splice(idx, 1);
+    this.pending.shift();
     this.localWrites.push({ rev: msg.rev, entities: entitiesOf(entry.ops) });
     this.pruneRemoteWrites();
     if (this.gateOpId === entry.opId) {
