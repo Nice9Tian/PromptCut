@@ -156,7 +156,8 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
       await provider.reconcileScopeClosures();
       const state = ledger.read(), rows = [];
       for (const [id, group] of Object.entries(state.conversationsV2 ?? {})) for (const conversation of Object.values(group))
-        if (conversation.messages.some(message => message.queueState === 'queued'))
+        // 和生产的那一份（doc-agent-assembly.mjs 的 listPendingRuns）一样：上一条还没结清的对话先不报给调度
+        if (!conversation.currentRunId && conversation.messages.some(message => message.queueState === 'queued'))
           rows.push({ projectId: id, conversationId: conversation.id, queueRevision: conversation.queueRevision });
       return { conversations: rows, scopeControls: provider.listScopeControls({ servicePrincipal }) };
     } });
