@@ -51,6 +51,8 @@ export interface StreamPlaneGroup {
   clipIds: string[];
   key?: string;
   ranges?: Array<[number, number]>;
+  /** 这条流自己的第一帧(项目帧号);`streamPlayer` 按它把帧号换成分段号,`Stage` 不看 */
+  originFrame?: number;
   /**
    * 组流平面挂在哪张卡的那一层(组里**此刻活跃的最上面那张**)。由 `StageView` 按当前时刻算好填进来 ——
    * live 路每个片段一个单片段 `Stage`,单个 `Stage` 不知道别的片段此刻在不在场。不填就取组里最上面那张。

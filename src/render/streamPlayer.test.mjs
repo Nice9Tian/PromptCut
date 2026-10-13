@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseInit, parseSegment, chunkTimestamp, frameOfTimestamp, rangesHave, streamPlanesFor, StreamPlayer,
+  parseInit, parseSegment, chunkTimestamp, frameOfTimestamp, rangesHave, streamPlanesFor, streamLayerHas, StreamPlayer,
   MAX_FRAMES_PER_DECODER, MIN_FRAMES_PER_STREAM, DECODED_BYTES_BUDGET, DECODER_BUDGET, SEGMENT_FRAMES,
 } from './streamPlayer.ts';
 
@@ -65,19 +65,43 @@ test('timestamps are the global frame number × 1e6 / fps and round-trip at 24 /
 
 test('streamPlanesFor: only suppressed cards whose current segment is ready; a group needs every member suppressed', () => {
   const layers = [
-    { clipId: 'a', key: 'KA', ranges: [[0, 3]] },
-    { clipId: 'c', key: 'KG', ranges: [[0, 9]], groupClipIds: ['b', 'c'] },
-    { clipId: 'd', key: 'KD', ranges: [[5, 9]] },
+    { clipId: 'a', key: 'KA', ranges: [[0, 3]], originFrame: 0 },
+    { clipId: 'c', key: 'KG', ranges: [[0, 9]], groupClipIds: ['b', 'c'], originFrame: 0 },
+    { clipId: 'd', key: 'KD', ranges: [[5, 9]], originFrame: 0 },
   ];
   const planes = streamPlanesFor(layers, new Set(['a', 'b', 'c', 'd']), 20);
   assert.deepEqual(planes, [
-    { clipIds: ['a'], key: 'KA', ranges: [[0, 3]] },
-    { clipIds: ['b', 'c'], key: 'KG', ranges: [[0, 9]] },
+    { clipIds: ['a'], key: 'KA', ranges: [[0, 3]], originFrame: 0 },
+    { clipIds: ['b', 'c'], key: 'KG', ranges: [[0, 9]], originFrame: 0 },
   ], 'd 的第 1 段还没就绪:不挂平面(父页给它投最近快照)');
   assert.deepEqual(streamPlanesFor(layers, new Set(['a', 'c']), 20).map((p) => p.clipIds), [['a']], '组里有一张没被抑制就不贴组流');
   assert.equal(rangesHave([[0, 3], [7, 7]], 7), true);
   assert.equal(rangesHave([[0, 3]], 4), false);
   assert.equal(rangesHave(undefined, 0), false);
+});
+
+test('streamPlanesFor / streamLayerHas: 每一层按它自己的第一帧把项目帧号换成分段号;没带第一帧的层不出流平面', () => {
+  // a 从第 100 帧开始、d 从第 7 帧开始,两条流都只有第 1 段就绪
+  const layers = [
+    { clipId: 'a', key: 'KA', ranges: [[1, 1]], originFrame: 100 },
+    { clipId: 'd', key: 'KD', ranges: [[1, 1]], originFrame: 7 },
+    { clipId: 'old', key: 'KO', ranges: [[0, 99]] },
+  ];
+  const all = new Set(['a', 'd', 'old']);
+  const at = (frame) => streamPlanesFor(layers, all, frame).map((p) => p.clipIds[0]);
+  assert.deepEqual(at(21), [], 'd 的第 1 段是第 22～36 帧');
+  assert.deepEqual(at(22), ['d']);
+  assert.deepEqual(at(36), ['d']);
+  assert.deepEqual(at(37), []);
+  assert.deepEqual(at(114), [], 'a 的第 1 段是第 115～129 帧');
+  assert.deepEqual(at(115), ['a']);
+  assert.deepEqual(at(129), ['a']);
+  assert.deepEqual(at(130), []);
+  assert.equal(streamPlanesFor(layers, all, 115)[0].originFrame, 100, '流平面带着第一帧交给舞台');
+  assert.equal(streamLayerHas(layers[0], 99), false, '早于第一帧:没有分段');
+  assert.equal(streamLayerHas({ ranges: [[0, 0]], originFrame: 100 }, 99), false);
+  assert.equal(streamLayerHas({ ranges: [[0, 0]], originFrame: 100 }, 100), true);
+  assert.equal(streamLayerHas(layers[2], 0), false, '没带第一帧的层一律算没有');
 });
 
 test('capFor: bytes budget shared between streams, clamped to [3, 8] frames per decoder', () => {
@@ -96,8 +120,8 @@ test('capFor: bytes budget shared between streams, clamped to [3, 8] frames per 
 
 test('a stopped player ignores present(); planes without a key are placeholders only', () => {
   const player = new StreamPlayer({ root: () => null });
-  player.setPlanes([{ clipIds: ['a'] }, { clipIds: ['b'], key: 'K' }], 30);
-  assert.equal(player.diag().planes, 1);
+  player.setPlanes([{ clipIds: ['a'] }, { clipIds: ['b'], key: 'K', originFrame: 0 }, { clipIds: ['c'], key: 'L' }], 30);
+  assert.equal(player.diag().planes, 1, '没有流键、没带第一帧的平面都只占位');
   player.stop();
   player.present(1);
   assert.equal(player.diag().stopped, true);
@@ -109,7 +133,7 @@ test('setPlanes drops the streams that are no longer wanted right away (pause se
   const disposed = [];
   const fake = (id) => ({ dispose: () => disposed.push(id) });
   player.tracks = new Map([['a#K', fake('a')], ['b#L', fake('b')]]);
-  player.setPlanes([{ clipIds: ['b'], key: 'L' }], 30);
+  player.setPlanes([{ clipIds: ['b'], key: 'L', originFrame: 0 }], 30);
   assert.deepEqual(disposed, ['a']);
   assert.deepEqual([...player.tracks.keys()], ['b#L']);
   player.setPlanes([], 30);

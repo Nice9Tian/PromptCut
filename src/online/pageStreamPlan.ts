@@ -30,10 +30,14 @@ import { CARD_RUNTIME_ABI, selectedCardStyle } from "../kernel/cardGraph.mjs";
 import { resolveFrameSize } from "../kernel/frameSize.mjs";
 import { mountFrameOf } from "../render/frameWindow.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
-import { STREAM_SEGMENT_FRAMES, type NodeTask, type StreamTaskInput } from "./browserNode.ts";
+import { isStreamOrigin, streamSegmentFrameCount, streamSegmentSpan } from "../render/streamSegments.mjs";
+import type { NodeTask, StreamTaskInput } from "./browserNode.ts";
 
-/** 与 `server/frame-stream.mjs` 的 `STREAM_CODE_VERSION` 同值(对拍)。2:「己一」起单卡流的成员键不带生成快照的代码指纹 */
-export const PAGE_STREAM_CODE_VERSION = 2;
+/**
+ * 与 `server/frame-stream.mjs` 的 `STREAM_CODE_VERSION` 同值(对拍)。2:「己一」起单卡流的成员键不带生成快照的代码指纹;
+ * 3:分段从这条流自己的第一帧起每 15 帧一段(`render/streamSegments.mjs`),旧流全部重产。
+ */
+export const PAGE_STREAM_CODE_VERSION = 3;
 /** 与 `server/frame-stream.mjs` 的 `STREAM_DECODER_BUDGET`、`LOCAL_OVERFLOW_PX` 同值 */
 export const PAGE_STREAM_DECODER_BUDGET = 6;
 export const PAGE_LOCAL_OVERFLOW_PX = 32;
@@ -350,6 +354,8 @@ export interface PageStreamSpec {
   total: number;
   firstFrame: number;
   lastFrame: number;
+  /** 这条流自己的第一帧(项目帧号):分段从它起每 15 帧一段(`render/streamSegments.mjs`),所以 `firstSegment` 恒为 0 */
+  originFrame: number;
   firstSegment: number;
   lastSegment: number;
   offset: { x: number; y: number };
@@ -455,7 +461,7 @@ export async function planPageStreams(o: {
     specs.push({
       kind: "card", plane: "local", clipIds: [control.clipId], topClipId: control.clipId, cardId: control.cardId, contentKey, streamKey, envFingerprint,
       fps, stage, total, firstFrame: firstVisible, lastFrame: m.to,
-      firstSegment: Math.floor(Math.max(0, firstVisible) / STREAM_SEGMENT_FRAMES), lastSegment: Math.floor(m.to / STREAM_SEGMENT_FRAMES),
+      ...streamSegmentSpan(firstVisible, m.to),
       offset: placement.offset, bound: placement.bound, compositing: control.compositing,
       bake: { start: control.start, end: control.end, count: control.count, sampling: structuredClone(control.sampling) },
     });
@@ -481,15 +487,18 @@ export function spansOf(first: number, last: number, span: number): [number, num
  */
 export function pageStreamTasks(spec: PageStreamSpec, o: { projectId: string; projectRev: number; codeVersion?: string | null; derivedFrom?: string | null }): NodeTask[] {
   const stream: StreamTaskInput = { kind: "card", plane: "local", clipIds: [spec.topClipId], fps: spec.fps, bound: { ...spec.bound }, offset: { ...spec.offset },
-    firstFrame: spec.firstFrame, count: spec.bake.count, total: spec.total };
+    firstFrame: spec.firstFrame, count: spec.bake.count, total: spec.total, originFrame: spec.originFrame, lastFrame: spec.lastFrame };
   return spansOf(spec.firstSegment, spec.lastSegment, PAGE_STREAM_SEGMENTS_PER_TASK).map(([from, to]) => {
     const range = { unit: "segment", from, to };
+    // 这一段任务的帧数:每个分段按它实际的帧数(流的末段可以不满 15 帧),与切分方算的同一个数
+    let frames = 0;
+    for (let n = from; n <= to; n++) frames += streamSegmentFrameCount(n, spec.originFrame, spec.lastFrame);
     return {
       id: `stream:${spec.streamKey}:${from}-${to}`, kind: "stream", resultKey: spec.streamKey, range,
       source: { projectId: o.projectId, projectRev: o.projectRev, derivedFrom: o.derivedFrom ?? null },
       input: { clipId: spec.topClipId, cardId: spec.cardId ?? null, entryKey: null, contentKey: spec.contentKey, canvasHeavy: false,
         compositing: spec.compositing, bake: structuredClone(spec.bake), stream: structuredClone(stream) },
-      weight: { class: "medium", estMs: null, frames: (to - from + 1) * STREAM_SEGMENT_FRAMES },
+      weight: { class: "medium", estMs: null, frames },
       requires: { envFingerprint: spec.envFingerprint, ...(o.codeVersion ? { codeVersion: o.codeVersion } : {}), cardSources: {}, transcode: false,
         userCards: false, graphCards: false, belowDependent: false, capabilities: { streams: true } },
       priority: 10,
@@ -505,7 +514,8 @@ export interface PageStreamRow {
   plane: "local";
   contentKey: string;
   candidates: { envFingerprint: string; resultKey: string }[];
-  firstSegment: number;
+  /** 这条流自己的第一帧(项目帧号)。行里不写 `firstSegment`(恒为 0;理由见 `layerStreamsOf`) */
+  originFrame: number;
   lastSegment: number;
   segmentsPerTask: number;
   inputSig?: string;
@@ -516,7 +526,7 @@ export function pageStreamRow(project: unknown, spec: PageStreamSpec): PageStrea
   const inputSig = streamInputSig(project, { clipIds: spec.clipIds, kind: spec.kind });
   return { topClipId: spec.topClipId, clipIds: [...spec.clipIds], kind: "card", plane: "local", contentKey: spec.contentKey,
     candidates: [{ envFingerprint: spec.envFingerprint, resultKey: spec.streamKey }],
-    firstSegment: spec.firstSegment, lastSegment: spec.lastSegment, segmentsPerTask: PAGE_STREAM_SEGMENTS_PER_TASK, ...(inputSig ? { inputSig } : {}) };
+    originFrame: spec.originFrame, lastSegment: spec.lastSegment, segmentsPerTask: PAGE_STREAM_SEGMENTS_PER_TASK, ...(inputSig ? { inputSig } : {}) };
 }
 
 const isObj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -574,6 +584,7 @@ export interface LayerStreamCandidate { envFingerprint: string; resultKey: strin
  * 现有的层表里,这张卡此刻**能播的**单卡流有哪些候选(「先查」用:哪种环境产的都算)。能播的判据与在线来源播放时的相同
  * (`snapshotSource.ts` 的 `streamStale`):同一个内容键,或者输入签名没有过期(那一行没带签名也算)。别的环境算出的内容键可能与本页的不同
  * (代码版本不同、加载的字体不同),但它的输入签名对得上、页面本来就会播它 —— 有了就不必再产。
+ * 没带 `originFrame` 的行不算(改分段规则之前的节点写的,在线来源不播它,`parseLayerStreams`);分段号从 0 起。
  */
 export function layerStreamCandidates(existing: unknown, row: { topClipId: string; contentKey: string; inputSig?: string | null }): LayerStreamCandidate[] {
   if (!isObj(existing) || existing.kind !== "layer-map" || !Array.isArray(existing.streams)) return [];
@@ -581,8 +592,8 @@ export function layerStreamCandidates(existing: unknown, row: { topClipId: strin
   for (const r of existing.streams as Record<string, any>[]) {
     if (!isObj(r) || r.topClipId !== row.topClipId || r.kind !== "card") continue;
     if (r.contentKey !== row.contentKey && streamSigStale(r.inputSig, row.inputSig)) continue;
-    const firstSegment = Number(r.firstSegment), lastSegment = Number(r.lastSegment), segmentsPerTask = Number(r.segmentsPerTask);
-    if (!Number.isInteger(firstSegment) || !Number.isInteger(lastSegment) || lastSegment < firstSegment || !Number.isInteger(segmentsPerTask) || segmentsPerTask < 1) continue;
+    const firstSegment = 0, lastSegment = Number(r.lastSegment), segmentsPerTask = Number(r.segmentsPerTask);
+    if (!isStreamOrigin(r.originFrame) || !Number.isInteger(lastSegment) || lastSegment < firstSegment || !Number.isInteger(segmentsPerTask) || segmentsPerTask < 1) continue;
     for (const c of Array.isArray(r.candidates) ? r.candidates : []) {
       if (isObj(c) && typeof c.envFingerprint === "string" && c.envFingerprint && typeof c.resultKey === "string" && c.resultKey && !out.some((x) => x.resultKey === c.resultKey)) {
         out.push({ envFingerprint: c.envFingerprint, resultKey: c.resultKey, firstSegment, lastSegment, segmentsPerTask });

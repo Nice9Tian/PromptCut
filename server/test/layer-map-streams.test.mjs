@@ -60,14 +60,17 @@ test('单卡流:每条流一行,字段齐;layers 那一半不受影响', () => {
     assert.equal(row.plane, 'local');
     assert.equal(row.contentKey, spec.contentKey);
     assert.deepEqual(row.candidates, [{ envFingerprint: OWN, resultKey: spec.streamKey }], '只有自己一个候选,结果键就是流键');
-    assert.equal(row.firstSegment, spec.firstSegment);
+    // 行里带这条流自己的第一帧,不写 firstSegment(恒为 0;改分段规则之前的页面认它,不写它旧页面就跳过这一行)
+    assert.equal(row.originFrame, spec.originFrame);
+    assert.equal('firstSegment' in row, false);
+    assert.equal(spec.firstSegment, 0);
     assert.equal(row.lastSegment, spec.lastSegment);
     assert.equal(row.segmentsPerTask, QUEUE_DEFAULTS.STREAM_SEGMENTS);
     assert.equal(row.inputSig, streamInputSig(entry.project, { clipIds: spec.clipIds, kind: 'card' }));
     assert.match(row.inputSig, /^s1-[0-9a-f]{16}$/);
   }
-  // clip-b 从第 30 帧起:第一段是 2
-  assert.equal(map.streams.find((r) => r.topClipId === 'clip-b').firstSegment, 2);
+  // clip-b 从第 30 帧起:它的第一帧是 30,分段从那里起数
+  assert.equal(map.streams.find((r) => r.topClipId === 'clip-b').originFrame, 30);
 });
 
 test('组流:解码器预算压到 1 时两张卡并成一条,行里带全部成员,挂在最上面那张上', () => {
@@ -112,6 +115,8 @@ test('每份清单几段:缺省取队列常量,调用方可以给;形状不对�
   const bad = [
     null, {}, { ...spec, contentKey: '' }, { ...spec, clipIds: [] }, { ...spec, clipIds: ['a', 7] }, { ...spec, kind: 'video' }, { ...spec, plane: 'x' },
     { ...spec, firstSegment: 3, lastSegment: 2 }, { ...spec, firstSegment: -1 }, { ...spec, lastSegment: 1.5 },
+    // 没有第一帧、第一帧不是非负整数,或分段不是从 0 起数的(改分段规则之前的计划):不列
+    { ...spec, originFrame: undefined }, { ...spec, originFrame: -1 }, { ...spec, originFrame: 1.5 }, { ...spec, firstSegment: 2 },
   ];
   assert.deepEqual(layerStreamsOf(entry, { streams: bad, fingerprint: OWN }), []);
   // 一个指纹都没有(流自己没带、调用方也没给):凑不出候选,不列
@@ -275,7 +280,8 @@ for (const mode of ['none', 'off']) {
         assert.deepEqual(row.clipIds, [task.input.clipId]);
         assert.equal(row.contentKey, task.input.contentKey, '内容键就是任务里的那一个');
         assert.deepEqual(row.candidates, [{ envFingerprint: BROWSER, resultKey: task.resultKey }], '候选只有实际出键的浏览器指纹,结果键就是任务的结果键');
-        assert.equal(row.firstSegment, task.range.from);
+        assert.equal(task.range.from, 0, '分段从 0 起数');
+        assert.equal(row.originFrame, task.input.stream.originFrame, '行里的第一帧就是任务里给浏览器的那一个');
         assert.equal(row.lastSegment, task.range.to);
         assert.equal(row.segmentsPerTask, QUEUE_DEFAULTS.STREAM_SEGMENTS);
         assert.equal(row.inputSig, streamInputSig(entry.project, { clipIds: [task.input.clipId], kind: 'card' }));

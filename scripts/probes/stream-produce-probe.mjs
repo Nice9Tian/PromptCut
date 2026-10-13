@@ -8,7 +8,7 @@
  * 导出页打 `--origin` 那台 dev server(缺省 `.claude/launch.json` 的 `dev-test`,或 `PC_STAGE_TEST_URL`)。
  * 灌一个含三张重卡的项目,等轨道流全部生产完(先稀疏、后补密),然后逐条核对:
  *
- *   1. 每个分段恰好 15 个样本(末段除外)、首帧是 IDR、只有一个 moof;`mfra` 不落盘;
+ *   1. 每个分段恰好 15 个样本(每条流自己的末段除外:分段从流自己的第一帧起数,到它的最后一帧为止)、首帧是 IDR、只有一个 moof;`mfra` 不落盘;
  *   2. 同一个变体里 `init.mp4` 只写一次,后续分段算出来的 `ftyp + moov` 与它逐字节相同;
  *   3. 稀疏分段(`stride = 3`)体积 ≤ 满密度的 1.0 倍;稀疏分段被满密度替换后,旧文件 5 秒内删除;
  *   4. 一条 15 帧分段的编码耗时(只记录,不当通过条件;原门槛 1080p 全幅流 p50 ≤ 300 ms)、分段体积(≤ 512 KB);
@@ -44,6 +44,7 @@ import { bakeStream } from '../../server/bakery/bake.mjs';
 import { openStreamSegmentEncoder } from '../../server/bakery/ffmpeg.mjs';
 import { PROJECT, until as untilIn } from './stream-probe-project.mjs';
 import { segmentSignature } from '../../server/frame-stream.mjs';
+import { streamSegmentFrameCount } from '../../src/render/streamSegments.mjs';
 import { resultKeyOf } from '../../server/render-node/fingerprint.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -136,7 +137,9 @@ try {
     const files = await fs.readdir(dir);
     const segFiles = files.filter(f => f.endsWith('.m4s'));
     const inits = files.filter(f => f.startsWith('init-'));
-    const record = { streamKey: spec.streamKey, kind: spec.kind, clipIds: spec.clipIds, bound: manifest.bound, tight: manifest.tight,
+    check(Number.isInteger(spec.originFrame) && spec.originFrame === spec.firstFrame && spec.firstSegment === 0 && manifest.originFrame === spec.originFrame,
+      `${spec.clipIds}: 分段从这条流自己的第一帧起数,清单记着这一帧`, { originFrame: spec.originFrame, firstFrame: spec.firstFrame, firstSegment: spec.firstSegment, manifest: manifest.originFrame });
+    const record = { streamKey: spec.streamKey, kind: spec.kind, clipIds: spec.clipIds, originFrame: spec.originFrame, lastFrame: spec.lastFrame, bound: manifest.bound, tight: manifest.tight,
       segments: spec.lastSegment - spec.firstSegment + 1, segFiles: segFiles.length, inits: inits.length, variants: Object.keys(manifest.inits).length,
       encodeMs: [], bytes: [], sparseBytes: {} };
     check(!files.some(f => f.includes('mfra')), 'mfra 不落盘', files);
@@ -148,8 +151,9 @@ try {
       const seg = manifest.segments[n];
       const buf = await fs.readFile(path.join(dir, seg.file));
       const info = segmentInfo(buf);
-      const last = n * SEGMENT_FRAMES + SEGMENT_FRAMES > spec.total;
-      const want = last ? spec.total - n * SEGMENT_FRAMES : SEGMENT_FRAMES;
+      // 分段从这条流自己的第一帧起数,末段到它的最后一帧为止(`src/render/streamSegments.mjs`)
+      const want = streamSegmentFrameCount(n, spec.originFrame, spec.lastFrame);
+      check(want >= 1 && want <= SEGMENT_FRAMES && (n === spec.lastSegment || want === SEGMENT_FRAMES), `${spec.clipIds}#${n}: 只有末段可以不满`, want);
       check(info.sampleCount === want, `${spec.clipIds}#${n}: 样本数`, { got: info.sampleCount, want });
       check(info.firstSampleIsSync === true, `${spec.clipIds}#${n}: 首帧 IDR`);
       check(info.moofs === 1 && topLevelBoxes(buf).every(b => b.type === 'moof' || b.type === 'mdat'), `${spec.clipIds}#${n}: 只有 moof + mdat`);
@@ -177,6 +181,7 @@ try {
     const layer = byClip.get(state.spec.topClipId);
     check(!!layer && layer.key === state.spec.streamKey, `${state.spec.topClipId}: 索引里有这条流的层`, layer ?? null);
     if (layer) check(JSON.stringify(layer.ranges) === JSON.stringify([[state.spec.firstSegment, state.spec.lastSegment]]), `${state.spec.topClipId}: 索引区间 = 全部分段`, layer.ranges);
+    if (layer) check(layer.originFrame === state.spec.originFrame, `${state.spec.topClipId}: 层带着这条流的第一帧`, { layer: layer.originFrame, spec: state.spec.originFrame });
     if (GROUP && layer) check(Array.isArray(layer.groupClipIds) && layer.groupClipIds.length === state.spec.clipIds.length, '组流的层带 groupClipIds', layer);
   }
   // 隔离:绿色粒子背景那条流(单卡流)里不能有金句药丸的蓝色

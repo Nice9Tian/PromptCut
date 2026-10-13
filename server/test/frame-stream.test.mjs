@@ -11,7 +11,7 @@ import path from 'node:path';
 import { PNG } from 'pngjs';
 import {
   splitFmp4, segmentInfo, initInfo, codecOfAvcC, topLevelBoxes, evenRect, intersectRect, unionRect, padRect,
-  groupStreams, peakConcurrency, paintLayers, planStreams, streamNeedsReplay, isolatedStreamProject, localPlacement, streamEligible,
+  groupStreams, peakConcurrency, paintLayers, planStreams, queueStreamOf, streamNeedsReplay, isolatedStreamProject, localPlacement, streamEligible,
   pngAlphaBox, segmentSignature, readySegmentRanges, publicManifest, StreamStore, handleStreamRequest,
   streamsEnabled, streamDecoderBudget, streamPoolLimit, SEGMENT_FRAMES, StreamProducer,
 } from '../frame-stream.mjs';
@@ -168,7 +168,7 @@ function project(tracks, extra = {}) {
   return { width: 1920, height: 1080, fps: 30, duration: 4, media: [], tracks, ...extra };
 }
 
-test('planStreams: one stream per eligible card, global segment numbers, local plane with offset; group when over budget', () => {
+test('planStreams: one stream per eligible card, segments counted from the stream\'s own first frame, local plane with offset; group when over budget', () => {
   const p = project([
     { id: 't1', clips: [{ id: 'a', cardId: 'x', start: 0.5, end: 2, frame: { x: 0, y: 0, w: 640, h: 360 } }] },
     { id: 't2', clips: [{ id: 'b', cardId: 'y', start: 0, end: 4 }] },
@@ -180,8 +180,13 @@ test('planStreams: one stream per eligible card, global segment numbers, local p
   assert.equal(a.kind, 'card');
   assert.equal(a.plane, 'local');
   assert.equal(a.firstFrame, 15);
-  assert.equal(a.firstSegment, 1);
-  assert.equal(a.lastSegment, Math.floor(59 / SEGMENT_FRAMES));
+  // 分段从这条流自己的第一帧起数:第一帧是片段的第一帧(15),第 0 段是第 15～29 帧;最后一帧 59 落在第 2 段
+  assert.equal(a.originFrame, 15);
+  assert.equal(a.firstSegment, 0);
+  assert.equal(a.lastFrame, 59);
+  assert.equal(a.lastSegment, Math.floor((59 - 15) / SEGMENT_FRAMES));
+  const b = specs.find(s => s.clipIds[0] === 'b');
+  assert.deepEqual([b.originFrame, b.firstSegment, b.lastSegment], [0, 0, 7]);
   assert.deepEqual(a.offset, { x: 640, y: 360 });
   assert.equal(a.mountFrame, 14, '挂载帧含 LEAD');
   // 预渲染集合之外的卡不产流(pinned 渲染 9)
@@ -194,6 +199,26 @@ test('planStreams: one stream per eligible card, global segment numbers, local p
   assert.deepEqual(grouped[0].clipIds, ['b', 'a'], '画家顺序:t2 在下面,t1 在最上面');
   assert.equal(grouped[0].topClipId, 'a');
   assert.deepEqual(grouped[0].bound, { x: 0, y: 0, w: 1920, h: 1080 });
+  // 组流的第一帧是成员里最早的那个第一帧(b 的第 0 帧),最后一帧是成员里最晚的(b 的第 119 帧)
+  assert.deepEqual([grouped[0].originFrame, grouped[0].firstSegment, grouped[0].lastSegment], [0, 0, 7]);
+});
+
+test('planStreams: 片段不从 15 的倍数帧开始、时长不是 15 的倍数 —— 分段照样从它自己的第一帧起,末段不满', () => {
+  // 第 100 帧开始(100 / 30 秒),共 50 帧:第 100～149 帧。第 0 段 100～114、第 1 段 115～129、第 2 段 130～144、第 3 段 145～149(5 帧)
+  const start = 100 / 30, end = 150 / 30;
+  const p = project([
+    { id: 't1', clips: [{ id: 'a', cardId: 'x', start, end }] },
+    { id: 't2', clips: [{ id: 'b', cardId: 'y', start: 40 / 30, end: 130 / 30 }] },
+  ], { duration: 6 });
+  const entry = { key: 'E', project: p, cardPlan: [control('a', start, end), control('b', 40 / 30, 130 / 30)] };
+  const a = planStreams(entry, { envFingerprint: ENV_FP }).find(s => s.clipIds[0] === 'a');
+  assert.deepEqual([a.firstFrame, a.lastFrame, a.originFrame, a.firstSegment, a.lastSegment], [100, 149, 100, 0, 3]);
+  // 交给切分的那一份带着第一帧
+  assert.deepEqual([queueStreamOf(a).originFrame, queueStreamOf(a).firstSegment, queueStreamOf(a).lastSegment], [100, 0, 3]);
+  // 组流:盖住 40～149,第一帧是 40
+  const g = planStreams(entry, { budget: 1, envFingerprint: ENV_FP })[0];
+  assert.equal(g.kind, 'group');
+  assert.deepEqual([g.firstFrame, g.lastFrame, g.originFrame, g.firstSegment, g.lastSegment], [40, 149, 40, 0, Math.floor((149 - 40) / SEGMENT_FRAMES)]);
 });
 
 test('stream keys: placement-free for single-card streams, with time placement; group keys use the appearance key', () => {
@@ -202,7 +227,7 @@ test('stream keys: placement-free for single-card streams, with time placement; 
   const base = control('a', 0, 2);
   assert.equal(key(base), key({ ...base, key: 'K-moved-elsewhere' }), '单卡流不看带外观的缓存键(挪位置不作废流)');
   assert.notEqual(key(base), key({ ...base, snapshotKey: 'S-other-params' }), '内容变了就换流键');
-  assert.notEqual(key(base), key({ ...base, sampling: { ...base.sampling, firstFrame: 1 } }), '入点挪了一帧就换流键(全局帧号分段)');
+  assert.notEqual(key(base), key({ ...base, sampling: { ...base.sampling, firstFrame: 1 } }), '入点挪了一帧就换流键(片段在时间轴上的位置仍在键里;「挪动以后流不失效」记了待办,这次不做)');
   const a = cardStreamIdentity({ kind: 'card', fps: 30, stage: { width: 1920, height: 1080 }, members: [{ key: 'S', sampling: base.sampling, count: 60 }], codeVersion: '1' });
   assert.notEqual(a, cardStreamIdentity({ kind: 'card', fps: 30, stage: { width: 1920, height: 1080 }, members: [{ key: 'S', sampling: base.sampling, count: 60 }], codeVersion: '2' }), '生产代码换了旧流作废');
   assert.notEqual(a, cardStreamIdentity({ kind: 'card', fps: 25, stage: { width: 1920, height: 1080 }, members: [{ key: 'S', sampling: base.sampling, count: 60 }], codeVersion: '1' }), 'fps 进键');
@@ -300,6 +325,9 @@ test('readySegmentRanges / publicManifest', () => {
   assert.equal(pub.segments[1].sig, undefined, '签名不外露');
   assert.deepEqual(pub.inits.i1, { codec: 'avc1.64001f', width: 2, height: 20, rect: { x: 0, y: 0, w: 2, h: 2 } });
   assert.equal(pub.segmentFrames, 15);
+  // 清单里记的第一帧原样交给页面;改分段规则之前落盘的清单没有这一项,回 null
+  assert.equal(pub.originFrame, null);
+  assert.equal(publicManifest({ ...manifest, originFrame: 100 }).originFrame, 100);
 });
 
 test('handleStreamRequest serves the manifest (no-store) and content-addressed files (immutable), rejects anything else', async () => {
@@ -394,7 +422,7 @@ test('StreamProducer.rescan stages stream keys on the ready index (F5); republis
     // 读口没接上时什么都不挂、不发(和 R7 一样)
     assert.equal(await producer.rescan(), 0);
     producer.attachRoute();
-    await producer.store.save({ streamKey: key, kind: 'group', plane: 'stage', clipIds: ['x', 'y'], fps: 30, bound: { x: 0, y: 0, w: 2, h: 2 }, tight: null, inits: {}, segments: { 2: { file: '2-0123456789abcdef.m4s', init: 'i', stride: 1, samples: 15 } } });
+    await producer.store.save({ streamKey: key, kind: 'group', plane: 'stage', clipIds: ['x', 'y'], fps: 30, originFrame: 40, bound: { x: 0, y: 0, w: 2, h: 2 }, tight: null, inits: {}, segments: { 2: { file: '2-0123456789abcdef.m4s', init: 'i', stride: 1, samples: 15 } } });
     producer.store.manifests.clear();
     assert.equal(await producer.rescan(), 1);
     assert.deepEqual(pipeline.ready.stagedKeys(), [{ kind: 'stream', key, ranges: [[2, 2]] }]);
@@ -402,14 +430,15 @@ test('StreamProducer.rescan stages stream keys on the ready index (F5); republis
     const seen = [];
     pipeline.ready.subscribe('s', m => seen.push(m));
     pipeline.ready.adopt('s', 'E', 1);
-    pipeline.ready.claim('E', [{ clipId: 'y', kind: 'stream', key }]);
-    assert.deepEqual(seen.filter(m => m.type === 'layer').at(-1), { type: 'layer', clipId: 'y', kind: 'stream', key, ranges: [[2, 2]] });
-    // 生产者手里的流:republish 带 groupClipIds,只发给当前版本是这条流所属 entry 的会话
-    producer.streams.set(key, { spec: { streamKey: key, topClipId: 'y', clipIds: ['x', 'y'], kind: 'group' }, manifest: await producer.store.load(key), aliases: new Set(), entryKey: 'E' });
+    // 认领的那一项带着这条流的第一帧(来自这一版的流计划),发出去的层也带
+    pipeline.ready.claim('E', [{ clipId: 'y', kind: 'stream', key, originFrame: 40 }]);
+    assert.deepEqual(seen.filter(m => m.type === 'layer').at(-1), { type: 'layer', clipId: 'y', kind: 'stream', key, ranges: [[2, 2]], originFrame: 40 });
+    // 生产者手里的流:republish 带 groupClipIds 和第一帧,只发给当前版本是这条流所属 entry 的会话
+    producer.streams.set(key, { spec: { streamKey: key, topClipId: 'y', clipIds: ['x', 'y'], kind: 'group', originFrame: 40 }, manifest: await producer.store.load(key), aliases: new Set(), entryKey: 'E' });
     producer.republish();
-    assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'y', kind: 'stream', key, ranges: [[2, 2]], groupClipIds: ['x', 'y'] });
-    assert.deepEqual(producer.claimLayers(), [{ clipId: 'y', kind: 'stream', key }]);
-    assert.deepEqual(producer.claimLayers('E'), [{ clipId: 'y', kind: 'stream', key }]);
+    assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'y', kind: 'stream', key, ranges: [[2, 2]], groupClipIds: ['x', 'y'], originFrame: 40 });
+    assert.deepEqual(producer.claimLayers(), [{ clipId: 'y', kind: 'stream', key, originFrame: 40 }]);
+    assert.deepEqual(producer.claimLayers('E'), [{ clipId: 'y', kind: 'stream', key, originFrame: 40 }]);
     assert.deepEqual(producer.claimLayers('OTHER'), [], '别的版本不认领这条流');
     // 别的版本的流不进这个会话
     const before = seen.length;
@@ -496,4 +525,18 @@ test('planStreamSegments: continue the lease first, then the nearest unready seg
   // 预留的不再挑
   ready.delete(7);
   assert.equal(plan({ playheadFrame: 0, rate: 0, reserved: new Set([7]) }).segment, null);
+});
+
+test('planStreamSegments: 播放头的帧号按这条流自己的第一帧换成分段号;还没到这条流时从它的第 0 段起', () => {
+  const plan = (o) => planStreamSegments({ fps: 30, firstSegment: 0, lastSegment: 9, ready: () => false, rate: 0, ...o });
+  // 流从第 100 帧开始:播放头在第 100～114 帧是第 0 段,第 115 帧起是第 1 段
+  assert.equal(plan({ playheadFrame: 100, originFrame: 100 }).segment, 0);
+  assert.equal(plan({ playheadFrame: 114, originFrame: 100 }).segment, 0);
+  assert.equal(plan({ playheadFrame: 115, originFrame: 100 }).segment, 1);
+  assert.equal(plan({ playheadFrame: 100 + 4 * 15 + 7, originFrame: 100 }).segment, 4);
+  // 同一个播放头,从第 0 帧开始的流是第 7 段(原来所有流都按这个算)
+  assert.equal(plan({ playheadFrame: 115, originFrame: 0 }).segment, 7);
+  // 播放头在流的前面:第 0 段;在流的后面:末段已经没有未就绪的就回头找
+  assert.equal(plan({ playheadFrame: 3, originFrame: 100 }).segment, 0);
+  assert.equal(plan({ playheadFrame: 100000, originFrame: 100 }).segment, 9);
 });

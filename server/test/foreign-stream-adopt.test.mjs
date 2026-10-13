@@ -69,7 +69,7 @@ function pageProduce(spec, { stride = () => 1 } = {}) {
   for (let from = spec.firstSegment; from <= spec.lastSegment; from += 8) {
     const to = Math.min(spec.lastSegment, from + 7);
     const task = { id: `stream:${resultKey}:${from}-${to}`, kind: 'stream', resultKey, range: { unit: 'segment', from, to },
-      input: { clipId: spec.topClipId, contentKey: spec.contentKey, stream: { kind: 'card', plane: 'local', clipIds: [spec.topClipId], fps: 30, bound: spec.bound, offset: spec.offset, firstFrame: spec.firstFrame, count: spec.members[0].count, total: spec.total } } };
+      input: { clipId: spec.topClipId, contentKey: spec.contentKey, stream: { kind: 'card', plane: 'local', clipIds: [spec.topClipId], fps: 30, bound: spec.bound, offset: spec.offset, firstFrame: spec.firstFrame, count: spec.members[0].count, total: spec.total, originFrame: spec.originFrame, lastFrame: spec.lastFrame } } };
     const plan = streamTaskFrames(task);
     const inits = { [initId]: { hash: initHash, bytes: init.length, codec: codecOfAvcC(AVCC), width: size.width, height: size.height, timescale: 30, rect: { ...spec.bound }, encoder: BROWSER_STREAM_ENCODER } };
     const segments = {};
@@ -120,7 +120,7 @@ async function scene(t, { produce = true, rowFor = null, stride } = {}) {
     }
   }
   const row = { topClipId: 'clip-a', clipIds: ['clip-a'], kind: 'card', plane: 'local', contentKey: rowFor ?? a.contentKey,
-    candidates: [{ envFingerprint: BROWSER, resultKey: resultKeyOf(rowFor ?? a.contentKey, BROWSER) }], firstSegment: a.firstSegment, lastSegment: a.lastSegment, segmentsPerTask: 8 };
+    candidates: [{ envFingerprint: BROWSER, resultKey: resultKeyOf(rowFor ?? a.contentKey, BROWSER) }], originFrame: a.originFrame, lastSegment: a.lastSegment, segmentsPerTask: 8 };
   content.put('snapshot-manifest', layerMapKeyOf(entry.project.id), { v: 3, kind: 'layer-map', projectId: entry.project.id, layers: [], streams: [row] });
   return { pipeline, producer, entry, specs, a, b, content, client: svc.client, page, root, make };
 }
@@ -178,7 +178,7 @@ test('FSA-02 层表里列着别的指纹、整条满密度:拉回流库、记锁
   assert.ok(state && !state.adoptedOnly, '拉来的流进了这一版的计划');
   for (let n = a.firstSegment; n <= a.lastSegment; n++) assert.equal(producer.segmentState(state, n), 'dense', `分段 ${n}`);
   assert.equal(producer.streams.has(a.streamKey), false, '本机自己指纹的那条流不在计划里(不产)');
-  assert.deepEqual(producer.claimLayers(entry.key).filter(l => l.clipId === 'clip-a'), [{ clipId: 'clip-a', kind: 'stream', key: page.resultKey }], '发给舞台的层就是拉回来的那条');
+  assert.deepEqual(producer.claimLayers(entry.key).filter(l => l.clipId === 'clip-a'), [{ clipId: 'clip-a', kind: 'stream', key: page.resultKey, originFrame: 0 }], '发给舞台的层就是拉回来的那条(带着这条流的第一帧)');
   // 层表:这一行的候选是锁定方的指纹
   const map = layerMapOf(entry, { fingerprint: pipeline.envFingerprint, streams: planned });
   assert.deepEqual(map.streams.find(r => r.topClipId === 'clip-a').candidates, [{ envFingerprint: BROWSER, resultKey: page.resultKey }]);
