@@ -218,6 +218,46 @@ if (covered.has(clip.id)) continue;
 7. 没有改、没有跑的旧探针：`preview-fallback-probe`、`scrub-hold-snapshot-probe`、`stream-editor-e2e`（它们期望流下面垫着快照，或者上一块就标了要先改）。`stream-play-probe`、`stream-produce-probe` 这次没有重跑（没有动产流的一侧）。
 8. `particles` 这张卡的键跟着变（第 10 节），原因是上一块报告里写的入口查找问题，不是这次引入的。
 
-## 10. 基线（合并 `main` 以后）
+## 10. 基线、键、提交与收尾
 
-（见文末「收尾」）
+`main`（69f42f9a）已并入（合并提交 3ce71851），两边改的文件没有重叠。下面都是合并以后跑的。
+
+### 10.1 导出与键
+
+- `node scripts/verify-determinism.mjs --url "http://127.0.0.1:26970/?export=1"`：退出码 0，`Total Frames: 1800 / Identical: 1800 / Different: 0`。
+- `PC_FRAME_TEST_URL=http://127.0.0.1:26970 node scripts/verify-unified-frames.mjs`：退出码 0，`PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; …`。第一次退出码 1（`Video decode failed … 404`）：是我起的那台开发服务器把产物目录指到了别处，脚本放测试视频的目录和它对不上；带上 `PC_FRAME_MEDIA_DIR` 指到同一个目录重跑就过了，和这次的改动无关。
+- `node scripts/probes/card-source-version-compare.mjs --base main`：88 个入口变 10 个，61 个身份变 0。变的 10 个入口都是经 `kernel/clock` 连到 `streamPlayer.ts` 的那一族（契约第 9.2 节的丙组）。退出码 1 是这支脚本「有变就 1」的写法。
+- `node scripts/probes/card-table-digest-compare.mjs --expect ,`：变了 6 张：`focus-card`、`lottie`、`probe-slow`、`probe-slow-stepped`、`terminal-3d`（丙组五个 id，预料中）和 `particles`（上一块报告查到的入口查找问题，`main` 上就有）。六张都是「能力表同、注册表里的定义同、源码版本变、键（定源码）同」。三张有声卡没变，卡片声音不受影响。十个不许改的文件一个没碰。
+
+### 10.2 类型检查与全量测试
+
+- `npx tsc -b --force`：退出码 0，零错误（最后一个提交上重跑过）。
+- `npm test`（设了那两个环境变量）：6702 条，通过 6684，失败 2，取消 1，跳过 13，待办 2，退出码 1。失败和被取消的落在三个文件：
+  - `src/render/streamFallback.test.mjs`：**我引入的**。整份文件被看门强制结束（913 秒）。原因：停在稀疏段上的刷新定时器是自己接着排的（第 7 节〔裁 8〕），这份单测不关播放器，定时器就一直拖着进程退不出去；用例本身都过了。已改（单测环境里这个定时器不拖住进程；舞台里用的是另一个口子，不受影响）。
+  - `server/test/account-runner-process.test.mjs`（一条，跑了 134 秒）、`server/test/asset-project-workers.test.mjs`（一条，20 秒超时）：和这次的改动无关，机器忙时的失败（后一个在通用规矩列的偶发名单的同类里，前一个是真起任务进程的）。
+  - `server/test/accept-018-rest-ssr-seam.test.mjs` 的 SEAM-2 本来就标着「现状不成立」（待办），不计失败。
+- 改完以后单独重跑：`npm test -- <上面三个文件，加这次改到和新加的 11 个流、投递、占位符的测试文件>`，14 个文件 129 条，通过 129，失败 0，退出码 0。全量没有再跑第二遍（省额度；那一处改动只影响单测环境里定时器拖不拖住进程）。
+
+### 10.3 提交
+
+`git log --oneline --first-parent main..HEAD`：
+
+- `1d030afd` 报告：开工
+- `9b666bf4` 播放器：留着上一张最多一个分段的时长；连着跳只解最新要的；稀疏段先画不晚于目标帧的最近一张；画面有无变了回调宿主；画布换了把上一张画回去
+- `0e8a988f` 父页：暂停和拖动也发流平面与抑制（先发流平面）；有流盖着的卡不读快照；起播之前先摆好；`settled` 后对齐抑制集合
+- `d4ccf419` 舞台：流画出第一帧之前不藏原来的画面；追上时自己撤抑制（组流整组）；流的画面有无变了自己重算占位符；不抑制时流平面藏着先解好。探针：`stream-origin-probe` 不再补发流平面；新增 `stream-scrub-stage-probe`
+- `660c32cd` 播放器：刷新定时器不断档；父页：迟到的 `settled` 按 store 的播放头判；探针：新增 `scrub-stream-probe`
+- `7c4356e2` 舞台：追帧收摊只收自己那一次；探针：停下以后的画面按不贴流时的活渲判、起播暂停做四轮
+- `424fbd9d` 探针：只量随机跳帧耗时的一档
+- `3ce71851` 合并 `main`
+- `ae230ef4` 舞台：父页重发抑制集合不打断停下以后追精确活渲的重卡；报告初稿
+- `0932a16f` 播放器：单测里的刷新定时器不拖住进程
+- 之后一个只改报告的提交
+
+`git diff --stat main...HEAD`：13 个文件，新增约 2700 行、删约 200 行；逐个看过增删行数，没有哪个已有文件是整份被换的（入库的都是 LF）。
+
+### 10.4 收尾
+
+- 我起的进程都收掉了：探针自己起的开发服务器、渲染用的浏览器、Chrome 由探针收；一次探针卡在等流（我把校准挪到了钉重卡之前，预渲染进程那一版没有重算，是探针自己的问题，已改回）、一次全量测试中途要改代码，这两次是我按进程号结束了自己起的那棵进程树；量导出确定性用的那台开发服务器（端口 26970）验完停了。交活前查过：26940～26979 没有在听的端口，没有残留的测试进程。
+- 跑探针前后查过可见窗口：没有新冒出来的命令行、node、chrome、ffmpeg 窗口。
+- 产物都在工作区的 `out/rr-scrub/`（不入库）。没有推送、没有动 `main`、没有动别的工作区。
