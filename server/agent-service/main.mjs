@@ -53,7 +53,8 @@
  *   PROMPTCUT_AGENT_RENDER_STALL_MS / PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS
  *                                  可不设:补渲「连续多久没有进度就放弃」(缺省 10 分钟)与「写入落地后攒多久再发」(缺省 3 秒),排查与演练用
  *
- * 失败即关(打一行 `config.error { reason }`,退出码 1):`data-dir`、`doc-url`、`asset-url`、`service-identity`(私钥读不到、格式不对、
+ * 失败即关(打一行 `config.error { reason }`,退出码 1):`account-task-processes`(账号版缺配置或带着旧路的变量)、`account-master`(账号版:文档服务不认主身份、
+ * 内部口占不上;`detail` 里是原因码)、`data-dir`、`doc-url`、`asset-url`、`service-identity`(私钥读不到、格式不对、
  * 服务名不是 agent)、`look-url`(不是回环上的 http 地址)、`public-origin`、`bind-public`、`listen`。文档服务一时连不上不算:控制连接自己退避重连,期间新请求回 503 `unavailable`。
  *
  * 数据目录里(契约第 2.2 节):`config/ai.json` 与 `config/keys/custom.key`(模型配置与 Key 的密文,`set-key.mjs` 写)、
@@ -245,7 +246,11 @@ export async function startAgentService({
   try {
     if (accountMaster) {
       // 账号版的生产装配：主身份、事件库、内部口、附件存储。这个进程里没有任何一条任务在跑
-      executor = await createAccountMasterAssembly({ ...accountMaster, dataDir, conversationClient, log });
+      try { executor = await createAccountMasterAssembly({ ...accountMaster, dataDir, conversationClient, log }); }
+      catch (error) {
+        // 文档服务不认这张证书或这个身份（没开「一条任务一个进程」、主身份没登记）、内部口占不上：明确拒绝启动
+        throw new AgentConfigError('account-master', typeof error?.code === 'string' ? error.code : String(error?.message ?? error).slice(0, 160));
+      }
       service = executor.service;
     } else if (accountMode && accountExecutor) {
       // CLI supplies its one already-created RAM runClient and read-control

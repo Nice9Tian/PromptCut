@@ -297,7 +297,7 @@ PROMPTCUT_AGENT_DATA=/var/lib/promptcut/agent node server/agent-service/admin.mj
 ### 日常
 
 - **看现状**：`node server/agent-service/account-root-main.mjs --config … --status`（各槽停在第几代、什么阶段、单元状态）；`journalctl -u promptcut-agent-root`、`journalctl -u promptcut-agent-task-slot-a`。
-- **重启 root 入口**：停它只停调度，不关任务进程；但它再起来时，上一次留下的还在跑的那一代会被停下并记成「失败」（它没有那一代的通道了）。所以先等各槽都是 `closed` 再重启。主服务可以单独重启，任务不受影响（重启期间任务进程交不上事件会自己重试）。
+- **重启 root 入口**：停它只停调度，不关任务进程；但它再起来时，上一次留下的还在跑的那一代会被停下并记成「失败」（它没有那一代的通道了）。所以先等各槽都是 `closed` 再重启。**主服务重启也一样要先等槽空**：正在跑的任务每一步都要把事件交给主服务，交不上去它就放弃正常结算，被记成「失败」。
 - **换代码版本**：正在跑的任务进程用的是旧代码，做完那一条就结束；新开的一代用新代码。任务槽单元文件的内容不变就不用动配置里的 `sha256`；模板变了要重新填、改 `sha256`、`daemon-reload`。
 - **槽停住了**：root 入口的日志里出现 `slot.stuck`，或 `--status` 长时间停在同一代的 `ready` / `bound`。发布器出错时故意把锁（登记目录里的 `.publisher.lock`）留着，不自动重试，要人看过再处理——不要直接删锁。常见原因：任务槽单元起不来（看它的日志）、单元文件被改过（`sha256` 对不上）、目录权限不对。
 - **节点重启以后**：记录链钉在这一次开机上，重启后**原来的槽不能接着用**（发布器会报 `agent-scope-boot-transition`）。要给每个槽换一个新的 `expected.authorityId`（或 `slotId`）、换一个空的登记目录，重做第 4～6 步（含重启文档服务）和第 8 步。重启前还没结清的任务结不了，对应的对话要到文档服务里处理。这是现在这套设计的限制，不是配置问题。
