@@ -215,3 +215,15 @@
 .chat-drawer-item[data-state="interrupted"] .chat-drawer-item-meta,
 .chat-drawer-item[data-state="failed"] .chat-drawer-item-meta,
 .chat-drawer-item[data-state="revoked"] .chat-drawer-item-meta { color: var(--danger, #e5534b); }
+
+/* 云端一组：满额提示 */
+.chat-drawer-limit {
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--fill-subtle);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}

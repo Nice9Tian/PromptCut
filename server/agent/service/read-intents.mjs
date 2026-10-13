@@ -82,7 +82,12 @@ export function openReadIntents({ file, failpoint = () => {}, now = Date.now } =
     transaction('read-finished', () => { const current = row(readIntentId); current.state = 'finished'; current.finishedAt = now(); save(current); return current; });
     return result;
   }
-  return { prepare, confirm, executeOnce, get: row,
+  /** 对话被删：这个对话的已读意向(含提示词原文)全部删掉 */
+  function purgeConversation({ projectId, conversationId }) {
+    return transaction('read-intent-purge', () => ({ rows: db.prepare(
+      "DELETE FROM read_intents WHERE json_extract(payload,'$.projectId')=? AND json_extract(payload,'$.conversationId')=?").run(projectId, conversationId).changes }));
+  }
+  return { prepare, confirm, executeOnce, get: row, purgeConversation,
     pending: () => db.prepare('SELECT payload FROM read_intents').all().map(r => JSON.parse(r.payload)).filter(r => r.state !== 'finished'),
     inspect: () => ({ journalMode: db.prepare('PRAGMA journal_mode').get().journal_mode,
       synchronous: db.prepare('PRAGMA synchronous').get().synchronous, integrity: db.prepare('PRAGMA integrity_check').get().integrity_check }),

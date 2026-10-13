@@ -8,6 +8,7 @@
  *   WIRE-SET    一条任务的工具提供者(用替身搭,不起进程):账本打不开不拖垮对话;等后台作业时暂时性故障接着等、明确拒绝才停;
  *               浏览器数据的记号组内读得到、读不到不当成没有、由任务进程一侧照记号清;停止与关 Agent 留数据、转私有删、项目被删全删;代下缺省不开
  *   WIRE-USAGE  用量流水给同组的主服务读;读不到时报错,不拿零冒充
+ *   WIRE-DEL    对话被删:记进待清的单子;任务用户一侧(任何一条任务的进程)照单子清掉浏览器目录、对话目录连同作业账本
  *   WIRE-PAGE   任务进程到主服务的页面请求内部通道:签名、连接绑定、一次性随机数、文档服务的现问,一样不对都拒,
  *               并且交给反向通道的运行上下文取自文档服务的回答,不取自请求体
  * 整条链(模型发工具调用 → 提供者 → 文档与素材;停止、转私有、关 Agent 的收场;隔离)在探针 scripts/probes/cloud-tools-wire-probe.mjs。
@@ -23,7 +24,8 @@ import { CLOUD_TOOL_PLAN, CLOUD_OPEN_TOOLS, CLOUD_OPEN_TOOLS_NO_LOOK, CLOUD_PROV
   checkCloudTool, cloudOpenTools, cloudSystemNote, providedTools } from '../agent/service/cloud-tools.mjs';
 import { createToolJobs } from '../agent/service/tool-jobs.mjs';
 import { ACCOUNT_TOOL_SETTING_KEYS, readAccountToolConfig, validateAccountToolSettings, createAccountToolset, accountToolStateDir, BROWSER_PURGE_MARK,
-  readBrowserPurgeMarkIn, writeBrowserPurgeMark, removeMarkedBrowserData, TOOL_JOBS_BROKEN_TEXT, LOGIN_WITHOUT_DELEGATE_TEXT } from '../agent/service/account-tools.mjs';
+  readBrowserPurgeMarkIn, writeBrowserPurgeMark, removeMarkedBrowserData, TOOL_JOBS_BROKEN_TEXT, LOGIN_WITHOUT_DELEGATE_TEXT,
+  CONVERSATION_PURGE_DIR, queueConversationPurge, listConversationPurges, purgeConversationData } from '../agent/service/account-tools.mjs';
 import { ACCOUNT_TOOL_SETTING_KEYS as SHARED_KEYS } from '../agent-service/account-tool-settings.mjs';
 import { validateRootConfiguration } from '../agent-service/account-root-slots.mjs';
 import { hostedBrowserDir } from '../agent/service/hosted-browser.mjs';
@@ -634,4 +636,58 @@ test('WIRE-CONF root 入口:tools 里的键写错、值不对,启动时就拒绝
   assert.equal(readAccountToolConfig({}, { root: REPO_ROOT }).collectDelegate, false);
   assert.equal(readAccountToolConfig({ PROMPTCUT_AGENT_COLLECT_DELEGATE: '0' }, { root: REPO_ROOT }).collectDelegate, false);
   assert.equal(readAccountToolConfig({ PROMPTCUT_AGENT_COLLECT_DELEGATE: '1' }, { root: REPO_ROOT }).collectDelegate, true);
+});
+
+/* ---------- 对话被删:待清的单子,任务用户一侧照单子清 ---------- */
+
+/** 一个被删的对话在共用数据目录里留着的东西:浏览器目录,和对话目录(模型历史、`tools/` 下的作业账本) */
+function seedDeletedConversation(dataDir, conversationId, projectId = 'p1') {
+  const browser = seedBrowser(dataDir, conversationId, { projectId });
+  const conversation = path.join(dataDir, 'tenants', projectId, 'conversations', conversationId);
+  fs.mkdirSync(path.join(conversation, 'tools'), { recursive: true });
+  fs.writeFileSync(path.join(conversation, 'history.json'), '[]');
+  fs.writeFileSync(path.join(conversation, 'tools', 'tool-jobs.db'), 'ledger');
+  return { browser, conversation, entry: () => listConversationPurges(dataDir).find((row) => row.conversationId === conversationId && row.projectId === projectId) ?? null };
+}
+
+test('WIRE-DEL 对话被删:记进待清的单子;照单子清掉浏览器目录和对话目录(连同作业账本),清完从单子上划掉;再来一遍不报错', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-del-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  assert.deepEqual(listConversationPurges(dataDir), [], '单子还没有:空的');
+  const gone = seedDeletedConversation(dataDir, 'c7');
+  const kept = seedDeletedConversation(dataDir, 'c8');
+  queueConversationPurge(dataDir, { projectId: 'p1', conversationId: 'c7' }, 5);
+  queueConversationPurge(dataDir, { projectId: 'p1', conversationId: 'c7' }, 6);   // 重复删:只是覆盖
+  assert.deepEqual(listConversationPurges(dataDir), [{ projectId: 'p1', conversationId: 'c7' }]);
+  if (process.platform !== 'win32') {
+    const file = path.join(dataDir, CONVERSATION_PURGE_DIR, fs.readdirSync(path.join(dataDir, CONVERSATION_PURGE_DIR))[0]);
+    assert.equal(fs.statSync(file).mode & 0o060, 0o060, '单子上的条目组内可读写(主服务写、任务用户读并划掉)');
+  }
+  for (const bad of [{ projectId: '..', conversationId: 'c7' }, { projectId: 'p1', conversationId: 'a/b' }, { projectId: 'p1' }, null])
+    assert.throws(() => queueConversationPurge(dataDir, bad), { code: 'conversation-purge-invalid' }, JSON.stringify(bad));
+  assert.deepEqual(await purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }), { removed: true, held: false });
+  assert.deepEqual([fs.existsSync(gone.browser), fs.existsSync(gone.conversation), gone.entry()], [false, false, null], '浏览器目录、对话目录(连同作业账本)都没了,单子上也划掉了');
+  assert.deepEqual([fs.existsSync(kept.browser), fs.existsSync(path.join(kept.conversation, 'tools', 'tool-jobs.db'))], [true, true], '别的对话不动');
+  assert.deepEqual(await purgeConversationData(dataDir, { projectId: 'p1', conversationId: 'c7' }), { removed: true, held: false }, '再来一遍:什么都不剩,不报错');
+  await assert.rejects(purgeConversationData(dataDir, { projectId: 'p1', conversationId: '../x' }), { code: 'conversation-purge-invalid' });
+  // 单子里混进读不懂的、文件名和内容对不上的条目:照实标出来,不照着它去删东西
+  fs.writeFileSync(path.join(dataDir, CONVERSATION_PURGE_DIR, `${'0'.repeat(40)}.json`), '{"projectId":');
+  fs.writeFileSync(path.join(dataDir, CONVERSATION_PURGE_DIR, `${'1'.repeat(40)}.json`), JSON.stringify({ projectId: 'p1', conversationId: 'c8' }));
+  assert.deepEqual(listConversationPurges(dataDir), [{ unreadable: true, code: 'bad-entry' }, { unreadable: true, code: 'bad-entry' }]);
+  assert.equal(fs.existsSync(kept.browser), true);
+});
+
+test('WIRE-DEL 任务进程开工时照单子清:被删的对话再也没有任务,它留下的东西也由别的对话的任务进程清掉', async (t) => {
+  let seeded = null;
+  const kit = await toolsetKit(t, { prepare: (dataDir) => {
+    seeded = { deleted: seedDeletedConversation(dataDir, 'c7'), otherProject: seedDeletedConversation(dataDir, 'c9', 'p2'), alive: seedDeletedConversation(dataDir, 'c8') };
+    queueConversationPurge(dataDir, { projectId: 'p1', conversationId: 'c7' });
+    queueConversationPurge(dataDir, { projectId: 'p2', conversationId: 'c9' });
+  } });
+  await until(() => kit.events('agent.account-tools.browser-swept').length > 0, '顺手清的那一趟做完');
+  for (const row of [seeded.deleted, seeded.otherProject]) assert.deepEqual([fs.existsSync(row.browser), fs.existsSync(row.conversation), row.entry()], [false, false, null]);
+  assert.deepEqual([fs.existsSync(seeded.alive.browser), fs.existsSync(seeded.alive.conversation)], [true, true], '没被删的对话不动');
+  const swept = kit.events('agent.account-tools.browser-swept')[0];
+  assert.deepEqual([swept.conversations, swept.conversationsRemoved], [2, 2]);
+  assert.deepEqual(listConversationPurges(kit.dataDir), []);
 });

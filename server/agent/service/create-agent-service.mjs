@@ -37,6 +37,8 @@ import { createAccountConversationService } from './conversation-policy.mjs';
 import { createAccountRunnerService } from './account-runner.mjs';
 
 export const CONVERSATION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** 满额提示(一级文字，2026-10-13 用户确认用这一句)。页面一侧的同一句集中在 `src/ai/cloud/chatTexts.ts`，要同步 */
+export const CONVERSATION_LIMIT_MESSAGE = '你在这个项目里的云端对话已满 50 个。请先删除不用的对话，再新建。';
 
 export const HOSTED_DEFAULTS = Object.freeze({
   /** 没有进行中的一轮、这么久没有请求的实例被回收 */
@@ -462,7 +464,13 @@ export function createHostedAgentService({
   function conversationOf(identity, conversationId, create = false) {
     checkIdentity(identity);
     if (typeof conversationId !== 'string' || !CONVERSATION_ID_RE.test(conversationId)) return null;
-    return store.get(identity.projectId, ownerKeyOf(identity), conversationId, { create, startedOn: identity.deviceName ?? null });
+    try {
+      return store.get(identity.projectId, ownerKeyOf(identity), conversationId, { create, startedOn: identity.deviceName ?? null });
+    } catch (err) {
+      // 满额不自动删历史(2026-10-08 用户定)：新建被拒，要用户自己先删旧的
+      if (err?.code === 'conversation-limit') throw new AgentServiceError('conversation-limit', CONVERSATION_LIMIT_MESSAGE, 409);
+      throw err;
+    }
   }
 
   const listItem = (m) => ({ id: m.id, title: m.title ?? '', updatedAt: m.updatedAt ?? null, state: m.state, reason: m.reason ?? null, lastSeq: m.lastSeq ?? 0, startedOn: m.startedOn ?? null });

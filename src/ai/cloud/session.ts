@@ -46,6 +46,8 @@ export interface CloudSessionDeps {
    */
   pageId?: string | (() => string | null);
   onPageRequest?: (ev: CloudEvent) => Promise<PageRequestReply | null> | PageRequestReply | null;
+  /** 同 `setOnConversationDeleted`：创建时就给也行 */
+  onConversationDeleted?: (conversationId: string) => void;
   store: ChatStore;
   /** 文字与思考的增量攒批的间隔(毫秒);0 = 来一条折一条 */
   flushMs?: number;
@@ -118,6 +120,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
   let repaging = false;
   /** 执行过的请求 id:同一条请求重复到达只执行一次 */
   const answered = new Set<string>();
+  /** 正在看的对话被删了（别人删的，或自己在别处删的）：服务端发 `conversation.deleted` 就关流并调它，由界面退到一个新对话 */
+  let onConversationDeleted: ((conversationId: string) => void) | null = deps.onConversationDeleted ?? null;
 
   /**
    * 事件流里来了一条 `page.request`:执行并交回。只在这条流还是当前对话的那一条时做(换了对话、关了页面就不做);
@@ -260,6 +264,13 @@ export function createCloudSession(deps: CloudSessionDeps) {
             if (ev.type === "end" && ev.state === "none") { sawNone = true; continue; }
             // 反向通道的请求不是对话记录的一部分(没有 seq):不折进消息,交给页面执行
             if (ev.type === "page.request") { void answerPageRequest(ev, id, myGen, streamReadEpoch); continue; }
+            if (deps.accountMode && ev.type === "conversation.deleted") {
+              clearAccountReadState();
+              problem = null;
+              setConnection("idle");
+              onConversationDeleted?.(id);
+              return;
+            }
             if (deps.accountMode && ev.type === "access.revoked") {
               clearAccountReadState();
               problem = REVOKED_TEXT;
@@ -280,6 +291,14 @@ export function createCloudSession(deps: CloudSessionDeps) {
           if (accountAuthFailure || (err instanceof CloudError && FATAL.has(err.code))) {
             problem = deps.accountMode ? deniedText(err) : err instanceof Error ? err.message : cloudErrorText("network");
             setConnection("idle");
+            return;
+          }
+          // 文档服务明确说「这个对话已被删」(404 conversation-deleted，只对看得到过它的人这么说)：清掉正文，退到新对话，不重连、不说「无权读取」
+          if (deps.accountMode && err instanceof CloudError && err.status === 404 && err.code === "conversation-deleted") {
+            clearAccountReadState();
+            problem = null;
+            setConnection("idle");
+            onConversationDeleted?.(id);
             return;
           }
           // 账号模式下读到过的对话,现在文档服务说「没有这个对话」(或项目已不在):被设为私有、被删除、项目被删(围栏掐断旧流后重连才会遇到)。
@@ -362,6 +381,9 @@ export function createCloudSession(deps: CloudSessionDeps) {
       publish();
       ensureLoop();
     },
+
+    /** 登记「正在看的对话被删了」的处理(界面退到新对话)。单独一个方法，免得改动创建会话那一处的接线 */
+    setOnConversationDeleted(fn: ((conversationId: string) => void) | null) { onConversationDeleted = fn; },
 
     /** 对话 id;没打开过是 null */
     get conversationId() { return conversationId; },

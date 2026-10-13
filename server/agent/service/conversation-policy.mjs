@@ -18,7 +18,17 @@ const requireIdentity = identity => {
 /** Account-v2 HTTP surface. It relies on doc mTLS for every read and write. Runs stay queued
  * until the run-authority/read-intent executor is mounted; this module never fabricates ACKs.
  */
-export function createAccountConversationService({ conversationClient, usageDir = null, now = Date.now } = {}) {
+export function createAccountConversationService({ conversationClient, usageDir = null, now = Date.now,
+  /** 对话被删以后清 Agent 服务一侧自己存的这个对话的东西(conversation-purge.mjs)；没有存储的装配不给 */
+  purger = null,
+  /**
+   * 〔接缝〕对话被删时无条件收掉这个对话在 Agent 一侧还占着的东西(云端浏览器、感知子进程等)：`async ({ projectId, conversationId }) => void`。
+   * 文档服务确认删掉(含重复删除得到「已删」)以后调用；失败回页面 503 `purge-failed`，页面用同一个请求号重试会再调一次，所以实现要幂等。
+   * 缺省什么都不做；claude/v18-wire(云端工具表接线)合入后由装配把它接到 hosted-tools 的「收掉这个对话的子进程」上。
+   */
+  onConversationDeleted = null,
+  /** 删除时对话里有任务在跑：围栏(强制结束)下去以后，替页面等 root 把进程关掉、文档服务结清，最多等这么久(毫秒)，同「停止最多等 15 秒」 */
+  deleteWaitMs = 15_000, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   if (!conversationClient || ['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename']
     .some(name => typeof conversationClient[name] !== 'function')) throw new AgentServiceError('conversation-unavailable', 'doc conversation client is required', 503);
   const call = async (fn, identity, conversationId, fields = {}) => {
@@ -26,6 +36,25 @@ export function createAccountConversationService({ conversationClient, usageDir 
     try { return await conversationClient[fn]({ ...context(identity, conversationId), ...fields }); }
     catch (error) { throw translated(error); }
   };
+  /** 文档服务确认删掉以后，Agent 一侧各处清干净；任何一处失败都抛 503，页面重试同一个请求会再来一遍 */
+  async function afterDeleted(projectId, conversationId) {
+    try {
+      await purger?.purge({ projectId, conversationId });
+      await onConversationDeleted?.({ projectId, conversationId });
+    } catch (error) { throw new AgentServiceError('purge-failed', 'purge-failed', 503); }
+    // 回执文档服务：这个已删对话在 Agent 一侧清完了(墓碑上记下，对账就不再列它)。回执失败不要紧：下一次对账会再清一遍(幂等)
+    try { await conversationClient.purgeAck?.({ projectId, conversationId }); } catch { /* 下次对账补 */ }
+  }
+  /**
+   * 对账：问文档服务「哪些已删的对话在 Agent 一侧还没确认清理」，逐个补清。补它崩了、回包丢了、清到一半出错漏掉的。
+   * 主服务起来时和定时各来一次(account-master-assembly.mjs)。返回这次补清了几个。
+   */
+  async function reconcilePurges() {
+    if (typeof conversationClient.purges !== 'function') return 0;
+    let done = 0;
+    for (const row of await conversationClient.purges()) { await afterDeleted(row.projectId, row.conversationId); done++; }
+    return done;
+  }
   return {
     accountMode: true,
     get readTransports() { return conversationClient.readTransports ?? null; },
@@ -73,7 +102,45 @@ export function createAccountConversationService({ conversationClient, usageDir 
     },
     async attach(identity) { await call('identity', identity); throw new AgentServiceError('attachment-unavailable', 'attachment authority is not mounted', 503); },
     async pageResult(identity) { await call('identity', identity); throw new AgentServiceError('run-unavailable', 'run authority is not mounted', 503); },
-    async remove(identity) { await call('identity', identity); throw new AgentServiceError('deletion-pending', 'conversation deletion policy is pending', 503); },
+    /** 删除(2026-10-12 用户定)：权限、确认前的名额与停任务都由文档服务的对话权威判；这里只转发。requestId 由页面给，同一次删除重试沿用 */
+    async remove(identity, conversationId, requestId = randomUUID()) {
+      if (typeof conversationClient.remove !== 'function') throw new AgentServiceError('deletion-unavailable', 'conversation deletion is not mounted', 503);
+      const deadline = now() + deleteWaitMs;
+      let result;
+      // 有任务在跑：文档服务先下强制结束的围栏、等 root 关进程，没办完回 503 agent-fence-pending；同一个请求号隔一会儿再问
+      for (;;) {
+        try { result = await call('remove', identity, conversationId, { requestId }); break; }
+        catch (error) { if (error?.code !== 'agent-fence-pending' || now() >= deadline) throw error; await sleep(200); }
+      }
+      await afterDeleted(identity.projectId, conversationId);
+      return result;
+    },
+    /** 移出成员时顺带清他的私有对话(项目创建者做)：文档服务逐个删，这里再把删掉的各个清干净 */
+    async removeMemberPrivate(identity, accountId, requestId = randomUUID()) {
+      if (typeof conversationClient.removeMemberPrivate !== 'function') throw new AgentServiceError('deletion-unavailable', 'conversation deletion is not mounted', 503);
+      const deadline = now() + deleteWaitMs;
+      // 每一轮文档服务只列「这一轮还在账本里」的对话，前一轮已经删掉的不会再出现：所以每一轮删掉的立刻清 Agent 一侧并累计，
+      // 最后回的 removed 是各轮的总和(2026-10-13 审查)
+      const removed = new Set();
+      let result;
+      for (;;) {
+        result = await call('removeMemberPrivate', identity, undefined, { targetAccountId: accountId, requestId });
+        for (const id of result.removed) if (!removed.has(id)) { removed.add(id); await afterDeleted(identity.projectId, id); }
+        if (!result.pending?.length || now() >= deadline) break;
+        await sleep(200);
+      }
+      return { ...result, removed: [...removed].sort() };
+    },
+    /** 别人删了和你有关的对话时留给你的通知(打开项目时取，弹完回执) */
+    async notices(identity) {
+      if (typeof conversationClient.notices !== 'function') throw new AgentServiceError('notices-unavailable', 'conversation notices are not mounted', 503);
+      return call('notices', identity);
+    },
+    async ackNotices(identity, noticeIds) {
+      if (typeof conversationClient.ackNotices !== 'function') throw new AgentServiceError('notices-unavailable', 'conversation notices are not mounted', 503);
+      return call('ackNotices', identity, undefined, { noticeIds });
+    },
+    reconcilePurges,
     onRevoke: () => () => {},
     close() {},
     describe: () => ({ accountMode: true, runAuthorityMounted: false, at: now() }),

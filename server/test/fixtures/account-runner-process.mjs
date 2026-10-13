@@ -404,6 +404,8 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
       /** 此刻的委托票据（快到期会先续） */
       delegation: async () => (await tickets()).agentDelegationTicket,
       agent: async (route, body) => request('/agent/v1' + route, { method: body ? 'POST' : 'GET', body, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
+      /** 删对话(账号模式的 DELETE;请求体带请求号,没办完时用同一个请求号重试) */
+      remove: async (conversationId, requestId) => request(`/agent/v1/conversations/${conversationId}`, { method: 'DELETE', body: { requestId }, headers: { authorization: `Bearer ${(await tickets()).agentDelegationTicket}` } }),
       /** 照页面的做法传一个附件：字节直接是请求体，文件名在查询串里 */
       upload: async (conversationId, name, bytes) => new Promise((resolve, reject) => { void tickets().then(ticket => {
         const req = https.request(`${fixture.origin}/agent/v1/conversations/${conversationId}/attachments?name=${encodeURIComponent(name)}`, { method: 'POST', ca, timeout: 15_000,

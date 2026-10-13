@@ -22,6 +22,7 @@ import { createAccountToolset } from './account-tools.mjs';
 import { collectPageTools } from './collect-bridge.mjs';
 import { createWorkerPageClient } from '../../agent-service/worker-page-client.mjs';
 import { loadSsrHost } from '../ssr-host.mjs';
+import { createConversationPurger } from './conversation-purge.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const idOK = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
@@ -591,7 +592,8 @@ export function createAccountRunnerService({ conversationClient, runClient, read
     const preflight = runnerFactory ? async () => true : async () => modelReady(await runnerOptions.modelConfig());
     const manager = createAccountRunManager({ runClient, readIntents, runnerFactory: factory, preflight, serviceKid, instanceId,
       runEvents, resources, connectionsClosed, childrenClosed, task, assignmentReady, onTaskDrained, now, log });
-    const base = createAccountConversationService({ conversationClient, now,
+    const base = createAccountConversationService({ conversationClient, now, onConversationDeleted: runnerOptions.onConversationDeleted ?? null,
+      purger: createConversationPurger({ eventStore: runEvents, readIntents, sharedDataDir: typeof runnerOptions.dataDir === 'string' ? runnerOptions.dataDir : null, log }),
       usageDir: typeof runnerOptions.dataDir === 'string' && runnerOptions.dataDir ? path.join(runnerOptions.dataDir, 'usage') : null });
     return { ...base, runManager: manager, runEvents,
       // `/healthz` 据此报看画面接没接：只有真实运行器、并且给了看画面的客户端才算

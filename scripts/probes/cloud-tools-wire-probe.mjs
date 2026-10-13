@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startRunnerProcessFixture, until } from '../../server/test/fixtures/account-runner-process.mjs';
 import { hostedBrowserDir } from '../../server/agent/service/hosted-browser.mjs';
-import { accountToolStateDir, BROWSER_PURGE_MARK } from '../../server/agent/service/account-tools.mjs';
+import { accountToolStateDir, BROWSER_PURGE_MARK, listConversationPurges } from '../../server/agent/service/account-tools.mjs';
 import { CLOUD_PROVIDER_TOOLS } from '../../server/agent/service/cloud-tools.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -370,12 +370,22 @@ async function main() {
     }
 
     if (wants('delete') && browser) {
-      // 账号模式的删对话接口本身还没开放(回 503 deletion-pending);这里验的是备好的收场:浏览器目录整个删掉
+      // 删对话(账号模式的 DELETE,真的删):文档服务确认删掉以后,主服务把这个对话在 Agent 一侧的东西清掉——
+      // 浏览器目录整个没了、对话目录(模型历史、作业账本)没了、没有残留进程、待清的单子上没有留着它
       const conv = 'wire_web';
-      const had = profileState(conv);
-      const removed = had ? await f.masterAssembly.purgeBrowser({ projectId: f.projectId, conversationId: conv }, 'conversation-deleted') : null;
-      const del = await a.agent(`/conversations/${conv}`, undefined);
-      check('删对话的收场(接口未开放,直接调主服务备好的那一步):这个对话的浏览器目录整个没了', !!had && removed?.removed === true && profileState(conv) === null, brief({ had, removed, dirNow: profileState(conv), getStatus: del.status }));
+      await fresh(a);
+      const conversationDir = path.join(f.dataDir, 'tenants', f.projectId, 'conversations', conv);
+      const had = { browser: profileState(conv), tools: (() => { try { return fs.readdirSync(accountToolStateDir(f.dataDir, f.projectId, conv)).sort(); } catch { return null; } })() };
+      let del = await a.remove(conv, 'wire-delete-1');
+      for (let i = 0; i < 40 && del.status === 503; i++) { await sleep(500); del = await a.remove(conv, 'wire-delete-1'); }
+      const cleared = await until(() => (profileState(conv) === null && !fs.existsSync(conversationDir) ? true : null), { what: '被删对话的目录清掉', timeoutMs: 20_000 }).catch(() => false);
+      const again = await a.remove(conv, 'wire-delete-2');
+      const queue = listConversationPurges(f.dataDir);
+      const purgeLog = f.log.filter((row) => row.event === 'master.agent.master.conversation-purge' || row.event === 'agent.master.conversation-purge').map((row) => ({ queued: row.queued, removed: row.removed }));
+      check('删对话:这个对话的浏览器数据目录整个没了、对话目录(模型历史与作业账本)没了、没有残留进程,待清的单子上也划掉了;重复删不出错',
+        del.status === 200 && !!had.browser && Array.isArray(had.tools) && had.tools.includes('tool-jobs.db') && cleared === true && browsersOf(conv).length === 0 && queue.length === 0 && again.status < 500 &&
+        profileState(conv) === null && !fs.existsSync(conversationDir),
+        brief({ status: del.status, had, browserNow: profileState(conv), conversationDir: fs.existsSync(conversationDir), procs: browsersOf(conv).length, queue, again: again.status, purgeLog }, 500));
     }
 
     if (wants('isolation')) {
@@ -387,7 +397,7 @@ async function main() {
       const foreign = r.of('background_job_status'), seek = r.of('seek');
       const aPage = pageTab ? await pageTab.page.evaluate(() => window.__wire.received.length) : null;
       check('隔离:另一个账号在另一个对话里拿甲的作业号去查,查不到', !!foreign && foreign.ok !== true && foreign.done !== true && !foreign.kind, brief(foreign));
-      check('隔离:乙的任务调 seek 到不了甲的页面(乙没有连着的发起页,回不在线)', seek?.initiatorOffline === true, brief({ seek, aPageReceived: aPage }));
+      check('隔离:乙在自己的对话里调 seek,回「发起方不在线」(甲的页面真的连着时的情形在后面反向通道那一段验)', seek?.initiatorOffline === true, brief({ seek, aPageReceived: aPage }));
       const dirs = [accountToolStateDir(f.dataDir, f.projectId, 'wire_main'), accountToolStateDir(f.dataDir, f.projectId, conv)];
       check('隔离:两个对话各有各的作业账本与浏览器目录', dirs[0] !== dirs[1] && profileDir('wire_main') !== profileDir(conv) && fs.existsSync(path.join(dirs[1], 'tool-jobs.db')), dirs.map((d) => path.basename(path.dirname(d))).join(' / '));
     }
@@ -410,7 +420,7 @@ async function main() {
     }
 
     if (wants('agent-off') && browser) {
-      // 创建者关掉这个项目的云端 Agent:在跑的任务被收回,浏览器关掉、用户数据目录删掉
+      // 创建者关掉这个项目的云端 Agent:在跑的任务被收回,浏览器进程关掉;用户数据目录留着(网页操作原来的规矩:只有转私有、删对话、删项目才删)
       const conv = 'wire_off';
       await fresh(a);
       const sent = await h.run(a, conv, longWeb(), { waitSettled: false });
@@ -418,14 +428,15 @@ async function main() {
       const off = await a.admin({ op: 'set-hosted-service', service: 'agent', enabled: false, requestId: 'wire-agent-off' });
       const gone = await waitNoBrowser(conv);
       await until(() => f.grantOf(sent.messageId)?.state === 'finished', { what: '被关掉的任务结清', timeoutMs: 90_000 }).catch(() => {});
-      // 页面这时任何一次读取都会碰到「已关闭」,主服务据此把这个项目各对话的浏览器数据清一遍
+      // 页面这时的读取会碰到「已关闭」;等几秒再看(以前这里会隔 0 / 3 秒各清一遍):数据应当原样留着,也没有留下「要清」的记号
       const info = await a.agent('/info');
-      const removed = await until(() => { const s = profileState(conv); return s === null || !s.includes('profile') ? true : null; }, { what: 'profile removed', timeoutMs: 30_000 }).catch(() => false);
+      await sleep(5_000);
       const others = ['wire_stop', 'wire_kill'].map((c) => [c, profileState(c)]);
-      const cleaned = await until(() => (others.every(([c]) => { const s = profileState(c); return s === null || !s.includes('profile'); }) ? true : null), { what: '别的对话的浏览器数据也清了', timeoutMs: 30_000 }).catch(() => false);
-      check('关 Agent:在跑的任务被收回 → 浏览器进程没了、这个对话的用户数据目录删掉;项目里别的对话留着的浏览器数据也清掉',
-        off.status === 200 && gone && removed === true && cleaned === true && f.grantOf(sent.messageId)?.terminalOutcome?.status === 'interrupted',
-        brief({ off: off.status, info: info.status, before: procs.length, after: browsersOf(conv).length, dir: profileState(conv), others: others.map(([c]) => [c, profileState(c)]), outcome: f.grantOf(sent.messageId)?.terminalOutcome }));
+      const keptHere = (profileState(conv) ?? []).includes('profile') && !(profileState(conv) ?? []).includes(BROWSER_PURGE_MARK);
+      const keptOthers = others.every(([, s]) => (s ?? []).includes('profile') && !(s ?? []).includes(BROWSER_PURGE_MARK));
+      check('关 Agent:在跑的任务被收回 → 浏览器进程没了;这个对话和项目里别的对话的浏览器数据都留着(登录态保留),没有留「要清」的记号',
+        off.status === 200 && gone && keptHere && keptOthers && f.grantOf(sent.messageId)?.terminalOutcome?.status === 'interrupted',
+        brief({ off: off.status, info: info.status, before: procs.length, after: browsersOf(conv).length, dir: profileState(conv), others, outcome: f.grantOf(sent.messageId)?.terminalOutcome }));
       const on = await a.admin({ op: 'set-hosted-service', service: 'agent', enabled: true, requestId: 'wire-agent-on' });
       if (on.status !== 200) console.log(`# 重新打开云端 Agent 没成:${on.status}`);
     }
@@ -471,6 +482,19 @@ async function main() {
           worker: h.workerLogOf(epochNow()).filter((row) => String(row.event).startsWith('agent.page.')).map((row) => `${row.event}:${row.why ?? ''}:${row.code ?? ''}`),
           master: f.log.filter((row) => String(row.event).startsWith('master.agent.page.')).slice(-6).map((row) => `${row.event}:${row.why ?? ''}`) }, 900));
         try { await page.screenshot({ path: path.join(ROOT, 'docs', 'reports', 'assets', 'v18-wire', 'page-after-seek.png') }); } catch { /* 截图只是留证 */ }
+        // 隔离:甲的页面此刻真的连着这个对话的事件流。乙在**同一个对话**里发消息、他的任务调 seek / play:
+        // 请求只发给发消息的那个人(乙)的页面;乙没有连着的页面,所以回「发起方不在线」,甲的页面一条都收不到、播放头不动
+        {
+          const b2 = await f.connectActor(1); actors.push(b2);
+          const mark = await page.evaluate(() => ({ received: window.__wire.received.length, t: window.__pcStore.getState().t, attached: window.__wire.attached }));
+          const rb = await h.run(b2, conv, [{ tool: 'seek', input: { t: 1 } }, { tool: 'play', input: {} }, { say: '乙试过了' }]);
+          const now2 = await page.evaluate(() => ({ received: window.__wire.received.length, t: window.__pcStore.getState().t, attached: window.__wire.attached, playing: window.__pcStore.getState().playing }));
+          check('隔离:甲的页面真的连着时,乙的任务(同一个对话里)调 seek / play 到不了甲的页面——甲的页面收到的请求数是 0、播放头没动,乙得到「发起方不在线」',
+            mark.attached === true && now2.attached === true && rb.outcome === 'done' && rb.of('seek')?.initiatorOffline === true && rb.of('play')?.initiatorOffline === true &&
+            now2.received - mark.received === 0 && Math.abs(now2.t - mark.t) < 0.01 && now2.playing === false,
+            brief({ aPageReceived: now2.received - mark.received, aPageAttached: [mark.attached, now2.attached], t: [mark.t, now2.t], seek: rb.of('seek'), play: rb.of('play'), outcome: rb.outcome }, 500));
+          await b2.close().catch(() => {}); actors.splice(actors.indexOf(b2), 1); await sleep(500);
+        }
         // 页面晚到的回答:拿上一条已经结束的请求再交一次(换一个结果),主服务拒收
         const late = await page.evaluate(async () => {
           const last = window.__wire.answers[window.__wire.answers.length - 1];

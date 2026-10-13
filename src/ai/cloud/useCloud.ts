@@ -21,6 +21,8 @@ import { titleOf } from "./events";
 import { bubbleAttachments, type CloudAttachmentInfo } from "./attach";
 import type { ChatAttachment } from "../types";
 import type { CloudChatItem, CloudInfo, CloudSendBody } from "./types";
+import { CLOUD_CHAT_LIMIT, CLOUD_CHAT_TEXT, cloudNoticeText } from "./chatTexts";
+import { createPoller } from "./poll";
 import { newPageId, runPageRequest, type PageRequestExec } from "./pageRequests";
 import { createAccountPageHandler } from "./accountPage";
 import { desktopCollectLocal, desktopCollectUpload } from "./collectLocal";
@@ -29,6 +31,7 @@ import { requestAgentBrowser, closeAgentBrowser } from "../agentBrowserStore";
 import { playbackHandlers } from "../../mcp/handlers/playback";
 import { projectHandlers } from "../../mcp/handlers/project";
 import { beginAgentTool, endAgentTool } from "../../editor/userEditing";
+import { pushToast } from "../../editor/sync/syncManager";
 
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 
@@ -247,7 +250,14 @@ export interface CloudChat {
   switchVisibility: (visibility: "shared" | "private", requestId: string) => Promise<CloudChatItem>;
   newChat: () => void;
   openChat: (id: string) => void;
-  history: { items: CloudChatItem[]; loading: boolean; refresh: () => Promise<boolean> };
+  /**
+   * 删除一个云端对话（账号模式）。requestId 一次删除用同一个：任务还没停稳（agent-fence-pending）时抛错，
+   * 界面用同一个请求号重试。成功时如果删的是当前打开的，自动退到一个新对话。
+   */
+  removeChat: (id: string, requestId: string) => Promise<{ already: boolean }>;
+  history: { items: CloudChatItem[]; loading: boolean; refresh: (silent?: boolean) => Promise<boolean>;
+    /** 这位账号在这个项目里自己开的对话数（共有对话算在开它的人名下）；满 CLOUD_CHAT_LIMIT 个就不让新建 */
+    ownedCount: number; atLimit: boolean };
   model: string;
   setModel: (m: string) => void;
 }
@@ -289,6 +299,12 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const operationScope = operationScopeGuardRef.current.update(operationScopeKey, conversationId);
   /** 进入时的那一次「取 info、定对话」还没做完,用户已经自己选了对话(历史列表里点的、新对话):后到的结果不再改写他的选择 */
   const pickedRef = useRef(false);
+  const refreshHistoryRef = useRef<(silent?: boolean) => Promise<boolean>>(async () => false);
+  /** 后台刷新列表最近一次失败的原因(轮询据此判断是退避还是登录失效就停) */
+  const histErrorRef = useRef<unknown>(null);
+  /** 自己正在删的对话号：它被删时流上的 conversation.deleted 不再当「别人删了」提示 */
+  const selfDeletingRef = useRef<Set<string>>(new Set());
+  const onDeletedRef = useRef<(id: string) => void>(() => {});
 
   // 项目或地址或页签变了:换一个会话控制器。对话 id 取这个项目这一页上次用的
   useEffect(() => {
@@ -310,7 +326,8 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     const session = cloud.accountMode
       ? createCloudSession({ api, store, accountMode: true, pageId: () => selectionPresenceStatus().pageId, onPageRequest: (ev) => accountPageHandler(ev) })
       : createCloudSession({ api, store, accountMode: false, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
-    // 账号模式:在场页面号连上文档服务之后才有、重连会变。隔一会儿对一下,变了就让事件流带着新的页面号重开
+    session.setOnConversationDeleted((id) => onDeletedRef.current(id));
+    // 账号模式:在场页面号连上文档服务之后才有、重连会变。隔一会儿对一下,变了就让事件流带着新的页面号接着读(不清正文、不显示重连)
     const pageWatch = cloud.accountMode ? setInterval(() => session.syncPage(), 1000) : null;
     sessionRef.current = session;
     sessionKeyRef.current = key;
@@ -426,6 +443,8 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      // 满额被拒：列表可能是旧的，重读一次让「已满」的提示和实际对上
+      if (err instanceof CloudError && err.code === "conversation-limit") void refreshHistoryRef.current();
       return false;
     }
   }, [tabId, model, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
@@ -483,29 +502,89 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
 
   const newChat = useCallback(() => switchTo(newCloudChatId(), true), [switchTo]);
 
-  const refreshHistory = useCallback(async (): Promise<boolean> => {
+  /** `silent`：后台定时刷新用，不闪「读取中」、失败也不弹提示 */
+  const refreshHistory = useCallback(async (silent = false): Promise<boolean> => {
     const scope = operationScope;
     const expectedConversationId = conversationId;
     const expectedSession = sessionRef.current;
     const current = () => operationScopeGuardRef.current.isCurrent(scope) && keyRef.current === key &&
       sessionKeyRef.current === key && sessionRef.current === expectedSession && convRef.current === expectedConversationId;
     if (!key || !current()) return false;
-    setHistLoading(true);
+    if (!silent) setHistLoading(true);
     try {
       const list = await api.list();
       if (!current()) return false;
       const titles = readTitles(projectId, accountScope);
-      setHistItems(list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x)));
+      const next = list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x));
+      // 没变就沿用原数组，后台每 3 秒读一次时不白白重绘
+      setHistItems((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       return true;
     } catch (err) {
-      if (current()) setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      if (silent) histErrorRef.current = err;
+      if (current() && !silent) setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       return false;
     } finally {
-      if (current()) setHistLoading(false);
+      if (current() && !silent) setHistLoading(false);
     }
   }, [api, key, projectId, accountScope, conversationId, operationScope]);
 
+  refreshHistoryRef.current = refreshHistory;
+  // 对话列表与「我的 N/50」实时更新(2026-10-13 用户定)：别人(或自己的另一页)新建、删除以后，这一页不刷新也跟着变。
+  // 后台每 3 秒(HISTORY_POLL_MS)读一次列表；同时只有一次在途、失败退避、登录失效就停、页面不可见就不排(poll.ts)；
+  // 回到前台和页面里有人删了对话时立刻读一次。
+  useEffect(() => {
+    if (!key || !cloud.accountMode) return;
+    const poller = createPoller({ baseMs: HISTORY_POLL_MS, run: async () => {
+      histErrorRef.current = null;
+      const ok = await refreshHistoryRef.current(true);
+      const err = histErrorRef.current;
+      if (!ok && err) { if (authLost(err)) return "stop"; throw err; }
+    } });
+    const kick = () => { if (document.visibilityState === "visible") poller.kick(); };
+    poller.start();
+    document.addEventListener("visibilitychange", kick);
+    window.addEventListener(NOTICES_REFRESH_EVENT, kick);
+    return () => { poller.stop(); document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); };
+  }, [key, cloud.accountMode]);
   const setModel = useCallback((m: string) => { setModelState(m); lsSet(MODEL_KEY, m); }, []);
+
+  // 正在看的对话被删了：退到一个新对话，刷新列表；别人删的才提示（自己删的有自己的反馈）。有关的人另有气泡（useCloudNotices）
+  onDeletedRef.current = (id: string) => {
+    if (id !== convRef.current) return;
+    const mine = selfDeletingRef.current.has(id);
+    switchTo(newCloudChatId());
+    void refreshHistory();
+    window.dispatchEvent(new Event(NOTICES_REFRESH_EVENT));
+    if (!mine) setNotice(CLOUD_CHAT_TEXT.currentDeleted);
+  };
+
+  const removeChat = useCallback(async (id: string, requestId: string): Promise<{ already: boolean }> => {
+    const scope = operationScope;
+    const expectedSession = sessionRef.current;
+    const current = () => operationScopeGuardRef.current.isCurrent(scope) && keyRef.current === key &&
+      sessionKeyRef.current === key && sessionRef.current === expectedSession &&
+      cloudConsentState().accountId === cloud.accountId && cloudConsentState().bindingVersion === consent.bindingVersion;
+    if (!cloud.accountMode || !cloud.accountId || !key || !current())
+      throw new CloudError("forbidden", "账号、项目或对话已切换，请重新读取对话列表后再操作。", 403);
+    selfDeletingRef.current.add(id);
+    try {
+      const out = await withCloudControlConsent(
+        () => requireCloudConsent({ accountId: cloud.accountId!, bindingVersion: consent.bindingVersion }),
+        current,
+        () => api.remove(id, requestId),
+      );
+      if (id === convRef.current) switchTo(newCloudChatId());
+      void refreshHistory();
+      window.dispatchEvent(new Event(NOTICES_REFRESH_EVENT));
+      return out;
+    } finally {
+      // 流上的 conversation.deleted 比这里的回包晚一点也没关系：留一小会儿再撤
+      setTimeout(() => selfDeletingRef.current.delete(id), 5000);
+    }
+  }, [api, cloud.accountMode, cloud.accountId, consent.bindingVersion, key, operationScope, switchTo, refreshHistory]);
+
+  const ownedCount = cloud.accountMode && cloud.accountId ? histItems.filter((x) => x.ownerAccountId === cloud.accountId).length : 0;
+  const atLimit = cloud.accountMode && ownedCount >= CLOUD_CHAT_LIMIT;
 
   const blocked = cloud.accountMode && (!key || keyRef.current !== key || sessionKeyRef.current !== key);
   return {
@@ -523,8 +602,57 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     switchVisibility,
     newChat,
     openChat: (id: string) => switchTo(id),
-    history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory },
+    removeChat,
+    history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory,
+      ownedCount: blocked ? 0 : ownedCount, atLimit: blocked ? false : atLimit },
     model,
     setModel,
   };
+}
+
+/* ---------------- 别人删了和你有关的对话：气泡 ---------------- */
+
+/**
+ * 服务端明确说登录失效(401)：后台轮询停下来(换了账号、重新登录会换 key 重新起)。刚进页面身份还没就绪时的取票失败、403(Agent 被关、暂时没权限)不算，
+ * 那些靠退避(poll.ts)慢慢等。
+ */
+const authLost = (err: unknown) => err instanceof CloudError && err.status === 401;
+
+/** 页面里有人（含自己）刚删了对话时发这个事件，通知钩子立刻再取一次，不等下一次轮询 */
+export const NOTICES_REFRESH_EVENT = "pc-cloud-notices-refresh";
+/** 已经弹过的通知号（跨组件、跨钩子实例；回执失败时防止同一页反复弹） */
+const shownNoticeIds = new Set<string>();
+const NOTICES_POLL_MS = 15_000;
+/** 对话列表后台刷新的间隔：别人新建、删除后这一页最多晚这么久看到 */
+export const HISTORY_POLL_MS = 3_000;
+
+/**
+ * 打开项目时取一次、之后每 15 秒和每次窗口回到前台时再取：别人删了你开的对话、或你在里面发过消息的共有对话，
+ * 弹一条气泡（点 × 才关），弹完回执；不在线时留着，下次打开项目补弹一次（2026-10-12 用户定）。
+ * 只在账号模式下起作用。enabled 为假（没有云端 Agent）时什么都不做。
+ */
+export function useCloudNotices(cloud: CloudAgentState, enabled: boolean): void {
+  const api = useCloudApi(cloud.url, cloud.projectId);
+  const key = enabled && cloud.accountMode && cloud.available && cloud.url && cloud.projectId && cloud.accountId
+    ? `${cloud.projectId}|${cloud.url}|${cloud.accountId}|${cloud.identityVersion}` : "";
+  useEffect(() => {
+    if (!key) return;
+    // 同时只有一次在途、失败退避(取不到、回执失败)、登录失效就停、页面不可见就不排(poll.ts)；没回执成功的下次还会给，已弹过的本页不重复弹
+    const poller = createPoller({ baseMs: NOTICES_POLL_MS, run: async () => {
+      try {
+        const items = await api.notices();
+        for (const n of items) {
+          if (shownNoticeIds.has(n.noticeId)) continue;
+          shownNoticeIds.add(n.noticeId);
+          pushToast(cloudNoticeText(n), "info", Infinity);
+        }
+        if (items.length) await api.ackNotices(items.map((n) => n.noticeId));
+      } catch (err) { if (authLost(err)) return "stop"; throw err; }
+    } });
+    const kick = () => { if (document.visibilityState === "visible") poller.kick(); };
+    poller.start();
+    document.addEventListener("visibilitychange", kick);
+    window.addEventListener(NOTICES_REFRESH_EVENT, kick);
+    return () => { poller.stop(); document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); };
+  }, [api, key]);
 }

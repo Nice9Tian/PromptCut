@@ -138,6 +138,45 @@ const STEPS = {
     try { removed = await removeMarkedBrowserData(dir, { all, timeoutMs }); } catch (error) { failure = errorOf(error); }
     return { removed, failure, reaped, left: listing(dir), markThere: fs.existsSync(path.join(dir, BROWSER_PURGE_MARK)), innerLeft: listing(path.join(dir, 'profile')) };
   },
+  /** 任务进程:照产品的写法建一个对话的目录(`account-runner.mjs`:0700;里面 `tools/` 下是作业账本),再加它的浏览器目录 */
+  async conversationSeed({ shared, conversations }) {
+    const out = {};
+    for (const conversationId of conversations) {
+      const conversation = path.join(shared, 'tenants', PROJECT, 'conversations', conversationId);
+      fs.mkdirSync(conversation, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(path.join(conversation, 'tools'), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(conversation, 'history.json'), '[]', { mode: 0o600 });
+      fs.writeFileSync(path.join(conversation, 'tools', 'tool-jobs.db'), 'ledger', { mode: 0o600 });
+      out[conversationId] = { conversation, stat: modeOf(conversation) };
+    }
+    return { ...out, browsers: await STEPS.browserSeed({ shared, conversations }) };
+  },
+  /** 主服务:对话被删时做的那两步——记进待清的单子,再尽力删一次(产品的 `queueConversationPurge`、`purgeConversationData`) */
+  async conversationDeletedByMaster({ shared, conversationId }) {
+    const { queueConversationPurge, purgeConversationData, listConversationPurges, CONVERSATION_PURGE_DIR } = await load('server/agent/service/account-tools.mjs');
+    const scope = { projectId: PROJECT, conversationId };
+    let queued = false, queueError = null, attempt = null;
+    try { queueConversationPurge(shared, scope, Date.now()); queued = true; } catch (error) { queueError = errorOf(error); }
+    try { attempt = await purgeConversationData(shared, scope, { timeoutMs: 500 }); } catch (error) { attempt = { error: errorOf(error) }; }
+    const dir = path.join(shared, CONVERSATION_PURGE_DIR);
+    const entry = (listing(dir) ?? []).filter((name) => typeof name === 'string' && name.endsWith('.json'))[0];
+    return { queued, queueError, attempt, dir: modeOf(dir), entry: entry ? modeOf(path.join(dir, entry)) : null, list: listConversationPurges(shared) };
+  },
+  /** 任务进程:读单子、照单子清一个对话 */
+  async conversationPurgeByTask({ shared, conversationId }) {
+    const { purgeConversationData, listConversationPurges } = await load('server/agent/service/account-tools.mjs');
+    const { hostedBrowserDir } = await load('server/agent/service/hosted-browser.mjs');
+    const before = listConversationPurges(shared);
+    const out = await purgeConversationData(shared, { projectId: PROJECT, conversationId });
+    return { before, out, browser: listing(hostedBrowserDir(shared, { projectId: PROJECT, conversationId })),
+      conversation: listing(path.join(shared, 'tenants', PROJECT, 'conversations', conversationId)), after: listConversationPurges(shared) };
+  },
+  /** 主服务:另一处清理(`conversation-purge.mjs`,删对话时先于上面那两步跑)在任务用户的对话目录上的结果。只记录,不计入通过数 */
+  async historyPurgeByMaster({ shared, conversationId }) {
+    const { createConversationPurger } = await load('server/agent/service/conversation-purge.mjs');
+    try { return { ok: true, out: await createConversationPurger({ sharedDataDir: shared }).purge({ projectId: PROJECT, conversationId }) }; }
+    catch (error) { return { ok: false, error: errorOf(error) }; }
+  },
   /** 任务进程:建一份真的工具提供者(`createAccountToolset`,依赖用替身),看它开工时照记号清自己的对话、顺手清别的对话 */
   async toolset({ shared, own, others }) {
     const { createAccountToolset } = await load('server/agent/service/account-tools.mjs');
@@ -154,7 +193,9 @@ const STEPS = {
     for (let i = 0; i < 300 && !log.some((row) => row.event === 'agent.account-tools.browser-swept'); i++) await new Promise((resolve) => setTimeout(resolve, 100));
     const closed = await toolset.close('perms-check');
     const dirOf = (conversationId) => hostedBrowserDir(shared, { projectId: PROJECT, conversationId });
+    const { listConversationPurges } = await load('server/agent/service/account-tools.mjs');
     return { own: listing(dirOf(own)), others: Object.fromEntries(others.map((c) => [c, listing(dirOf(c))])), ledger: toolset.describe().ledger,
+      conversations: Object.fromEntries(others.map((c) => [c, listing(path.join(shared, 'tenants', PROJECT, 'conversations', c))])), queue: listConversationPurges(shared),
       closed: { childrenClosed: closed.childrenClosed, workPending: closed.workPending },
       log: log.filter((row) => /browser-(purged|swept|purge-failed)|purge-mark-unreadable|ledger-broken/.test(row.event)) };
   },
@@ -285,10 +326,26 @@ async function main() {
       const delMaster = step('master', 'purge', { dir: dirOf('c_deleted'), all: true, timeoutMs: 500 });
       const delTask = step('task', 'purge', { dir: dirOf('c_deleted'), all: true });
       check('对话被删:主服务删不干净、记号还在;任务进程照记号把整个目录删掉', delMaster?.removed === false && delMaster.markThere === true && delTask?.removed === true && delTask.left === null, { delMaster: delMaster && { removed: delMaster.removed, left: delMaster.left }, delTask });
-      // 5) 真的工具提供者(任务进程里跑的那一份):开工时自己的对话照记号清,别的对话留着记号的顺手清,没记号的不动
+      // 4b) 删对话的整套:对话目录(0700,里面有作业账本)和浏览器目录都是任务用户的。主服务记进待清的单子、自己删不动;任务用户一侧照单子清
+      const convs = step('task', 'conversationSeed', { shared, conversations: ['c_gone', 'c_gone2', 'c_history'] });
+      const byMasterDel = step('master', 'conversationDeletedByMaster', { shared, conversationId: 'c_gone' });
+      check('删对话:主服务把它记进待清的单子(条目组内可读写),自己删不动任务用户的对话目录和浏览器目录——如实回「没清掉」,不装作清了',
+        !!convs && !!byMasterDel && byMasterDel.queued === true && (parseInt(byMasterDel.entry?.mode ?? '0', 8) & 0o060) === 0o060 && byMasterDel.attempt?.removed === false &&
+        byMasterDel.list.some((row) => row.conversationId === 'c_gone'), byMasterDel);
+      const byTaskDel = step('task', 'conversationPurgeByTask', { shared, conversationId: 'c_gone' });
+      check('删对话:任务进程读得到单子,照单子把这个对话的浏览器目录、对话目录(连同作业账本)全删掉,并从单子上划掉',
+        !!byTaskDel && byTaskDel.before.some((row) => row.conversationId === 'c_gone') && byTaskDel.out.removed === true && byTaskDel.browser === null && byTaskDel.conversation === null &&
+        !byTaskDel.after.some((row) => row.conversationId === 'c_gone'), byTaskDel);
+      step('master', 'conversationDeletedByMaster', { shared, conversationId: 'c_gone2' });
+      // 另一处清理(块五的 `conversation-purge.mjs`,删对话时先跑)在两个用户下的结果:只记录、不计数,给主会话看
+      const history = step('master', 'historyPurgeByMaster', { shared, conversationId: 'c_history' });
+      console.log(`PERMS INFO 另一处清理(conversation-purge.mjs,删对话时先于上面那两步跑)由主服务在任务用户的 0700 对话目录上执行的结果(不计入通过数) :: ${JSON.stringify(history)}`);
+      // 5) 真的工具提供者(任务进程里跑的那一份):开工时自己的对话照记号清,别的对话留着记号的顺手清,没记号的不动;单子上被删的对话也清
       step('master', 'markWrite', { dir: dirOf('c_own'), reason: 'private' });
       step('master', 'markWrite', { dir: dirOf('c_swept'), reason: 'conversation-deleted' });
-      const tool = step('task', 'toolset', { shared, own: 'c_own', others: ['c_swept', 'c_kept'] });
+      const tool = step('task', 'toolset', { shared, own: 'c_own', others: ['c_swept', 'c_kept', 'c_gone2'] });
+      check('任务进程里真的工具提供者:单子上被删的对话(它自己再也没有任务)也被顺手清掉——浏览器目录、对话目录都没了,单子空了',
+        !!tool && tool.others.c_gone2 === null && tool.conversations.c_gone2 === null && tool.queue.length === 0, tool && { browser: tool.others.c_gone2, conversation: tool.conversations.c_gone2, queue: tool.queue, log: tool.log });
       check('任务进程里真的工具提供者:开工前把自己这个对话照记号清了(只剩清单版本的计数)', !!tool && JSON.stringify(tool.own) === '["rev"]' && tool.closed.childrenClosed === true, tool && { own: tool.own, closed: tool.closed, ledger: tool.ledger });
       check('任务进程里真的工具提供者:别的对话留着「对话被删」记号的顺手清掉(整个目录没了);没有记号的对话不动',
         !!tool && tool.others.c_swept === null && Array.isArray(tool.others.c_kept) && tool.others.c_kept.includes('profile'), tool && { others: tool.others, log: tool.log });
