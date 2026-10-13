@@ -112,7 +112,8 @@ export function ExportDialog(props: {
   }
 
   const pct = state.total > 0 ? Math.min(100, Math.round((state.done / state.total) * 100)) : 0;
-  const elapsed = state.startedAt ? now - state.startedAt : 0;
+  // 计时器每半秒才走一下:刚进「进行中」那一下 `now` 还是旧的,不让它显示成负数
+  const elapsed = state.startedAt ? Math.max(0, now - state.startedAt) : 0;
 
   return (
     <div className="pc-export-backdrop" onClick={state.phase === "running" ? undefined : onClose}>
