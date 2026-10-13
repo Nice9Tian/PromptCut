@@ -7,13 +7,16 @@
  *   W1-PROC-01  僵尸按已退算:`/proc/<进程号>/stat` 的状态是 Z 的进程查得到但不算活着;进程名里带空格和括号也读得对
  *   W1-PROC-02  进程组:组里只剩僵尸 = 整棵树退了;还有一个活的(进程表里列不出来的 zygote)= 没退;组已经不在 = 退了;
  *               Windows 没有进程组,回「不知道」
+ *   W1-PROC-03  认「是不是我们的浏览器」只看命令行里有没有完整的 `--user-data-dir=<这份目录>`;目录名是别人的前缀、子目录都不算
+ *   W1-PROC-04  清残留不误杀:锁文件里的进程号活着、但那是别的进程(渲染服务的浏览器、文档服务)——不杀,过期的锁删掉;
+ *               登记文件里的进程号被别的对话的浏览器占了——不杀;确实是这份目录的浏览器——杀;Windows 上锁被独占却认不出是谁——照实报还占着
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { procStat, pidLive, liveGroupMembers, browserGroupLive } from '../web/hosted/session.mjs';
+import { procStat, pidLive, liveGroupMembers, browserGroupLive, processCommandLine, commandLineUsesProfile, browserHoldsProfile, reapOrphan } from '../web/hosted/session.mjs';
 
 /** 造一个假的 /proc:`{ 进程号: { comm, state, ppid, pgrp, cmdline? } }` */
 export function fakeProc(t, table) {
@@ -71,4 +74,126 @@ test('W1-PROC-02 进程组:只剩僵尸算退了,还有进程表里列不出来�
   assert.equal(browserGroupLive(200, { platform: 'darwin', procRoot: path.join(zombiesOnly, 'no-such-dir'), group: groupThere }), true, '读不了 /proc 而组还在:不假称退干净');
   assert.equal(browserGroupLive(200, { platform: 'win32', procRoot: zombiesOnly, group: groupThere }), null, 'Windows 没有进程组:不知道');
   assert.equal(browserGroupLive(0, { platform: 'linux', procRoot: zombiesOnly, group: groupThere }), null);
+});
+
+test('W1-PROC-03 认「是不是我们的浏览器」只看命令行里完整的 --user-data-dir', async (t) => {
+  const dir = '/srv/agent/web/p-1/c-1/profile';
+  assert.equal(commandLineUsesProfile(`/opt/chrome-headless-shell --headless --user-data-dir=${dir} --remote-debugging-pipe`, dir, 'linux'), true);
+  assert.equal(commandLineUsesProfile(`/opt/chrome --user-data-dir=${dir}`, dir, 'linux'), true, '在最后一个参数上');
+  assert.equal(commandLineUsesProfile(`/opt/chrome --user-data-dir=${dir}-other --x`, dir, 'linux'), false, '别人的目录以它开头');
+  assert.equal(commandLineUsesProfile(`/opt/chrome --user-data-dir=${dir}/Default --x`, dir, 'linux'), false, '它的子目录');
+  assert.equal(commandLineUsesProfile(`/opt/chrome --user-data-dir=/srv/render/profile --note=${dir}`, dir, 'linux'), false, '只是碰巧含着这串字');
+  assert.equal(commandLineUsesProfile(`/opt/chrome --x=--user-data-dir=${dir} --y`, dir, 'linux'), false, '嵌在别的参数里');
+  assert.equal(commandLineUsesProfile('node /srv/doc/main.mjs', dir, 'linux'), false);
+  assert.equal(commandLineUsesProfile(null, dir, 'linux'), false);
+  assert.equal(commandLineUsesProfile('"C:\\x\\chrome.exe" "--user-data-dir=C:\\Data Dir\\web\\p\\c\\profile" --remote-debugging-pipe', 'c:\\data dir\\web\\p\\c\\profile', 'win32'), true, 'Windows:不分大小写,带引号');
+  assert.equal(commandLineUsesProfile(`/opt/chrome --user-data-dir=${dir.toUpperCase()}`, dir, 'linux'), false, 'Linux 分大小写');
+
+  // 经假的 /proc 读命令行
+  const procRoot = fakeProc(t, {
+    500: { cmdline: ['/opt/chrome-headless-shell', '--headless', `--user-data-dir=${dir}`, '--remote-debugging-pipe'] },
+    501: { cmdline: ['/opt/render/chrome', '--user-data-dir=/srv/render/profile'] },
+    502: { comm: 'node', cmdline: ['node', '/srv/doc/main.mjs'] },
+  });
+  const commandLine = (pid) => processCommandLine(pid, { platform: 'linux', procRoot });
+  const alive = () => true;
+  assert.equal(await browserHoldsProfile(500, dir, { commandLine, alive, platform: 'linux' }), true);
+  assert.equal(await browserHoldsProfile(501, dir, { commandLine, alive, platform: 'linux' }), false, '渲染服务自己的浏览器');
+  assert.equal(await browserHoldsProfile(502, dir, { commandLine, alive, platform: 'linux' }), false, '文档服务');
+  assert.equal(await browserHoldsProfile(999, dir, { commandLine, alive, platform: 'linux' }), false, '读不到命令行');
+  assert.equal(await browserHoldsProfile(500, dir, { commandLine, alive: () => false, platform: 'linux' }), false, '进程不在');
+  assert.equal(await browserHoldsProfile(0, dir, { commandLine, alive, platform: 'linux' }), false);
+});
+
+test('W1-PROC-04 清残留不误杀别的进程', async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-w1-reap-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  /** 一个对话目录:带登记文件与(假的)过期锁 */
+  const makeSession = (name, owner) => {
+    const sessionDir = path.join(base, name);
+    const profile = path.join(sessionDir, 'profile');
+    fs.mkdirSync(profile, { recursive: true });
+    for (const lockName of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.writeFileSync(path.join(profile, lockName), 'stale');
+    if (owner) fs.writeFileSync(path.join(sessionDir, 'owner.json'), JSON.stringify(owner));
+    return { sessionDir, profile };
+  };
+  /** 假进程表:进程号 → 命令行;被杀的记下来并从表里去掉 */
+  const world = (table) => {
+    const killed = [];
+    const trees = [];
+    return {
+      killed, trees,
+      deps: (extra) => ({
+        platform: 'linux',
+        commandLine: async (pid) => table[pid] ?? null,
+        alive: (pid) => pid in table,
+        kill: (pid) => { killed.push(pid); delete table[pid]; },
+        killTree: (pid) => { trees.push(pid); },
+        ...extra,
+      }),
+    };
+  };
+
+  /* 锁里写的进程号活着,但那是渲染服务的浏览器(浏览器被强杀后锁留在盘上,号被系统分给了别人) */
+  {
+    const { sessionDir, profile } = makeSession('reused-lock', { servicePid: 1, browserPid: 4242, pids: [4242, 4243] });
+    const w = world({ 4242: '/opt/render/chrome --user-data-dir=/srv/render/profile', 4243: 'node /srv/doc/main.mjs' });
+    const result = await reapOrphan(sessionDir, { timeoutMs: 500, deps: w.deps({ holder: () => ({ held: true, pid: 4242 }) }) });
+    assert.deepEqual(result, { found: false, killed: [], stillHeld: false });
+    assert.deepEqual(w.killed, [], '渲染服务的浏览器没有被杀');
+    assert.deepEqual(w.trees, [], '也没有按进程组去杀');
+    assert.deepEqual(fs.readdirSync(profile), [], '过期的锁删掉了(不然新起的浏览器会对着那个不相干的进程号去联系「旧实例」)');
+    assert.equal(fs.existsSync(path.join(sessionDir, 'owner.json')), false);
+  }
+
+  /* 锁里的号是别人,登记文件里的号也是别人(别的对话的浏览器,目录名以这份目录开头) */
+  {
+    const { sessionDir, profile } = makeSession('reused-owner', { servicePid: 1, browserPid: 5001, pids: [5001] });
+    const w = world({ 5001: `/opt/chrome-headless-shell --user-data-dir=${profile}-2 --remote-debugging-pipe`, 5002: 'sshd: admin' });
+    const result = await reapOrphan(sessionDir, { timeoutMs: 500, deps: w.deps({ holder: () => ({ held: true, pid: 5002 }) }) });
+    assert.equal(result.found, false);
+    assert.deepEqual(w.killed, []);
+    assert.deepEqual(w.trees, []);
+  }
+
+  /* 确实是这份目录的浏览器(锁里的号对):杀它,只杀它 */
+  {
+    const { sessionDir, profile } = makeSession('real-orphan', { servicePid: 1, browserPid: 6001, pids: [6001, 6002] });
+    const w = world({ 6001: `/opt/chrome-headless-shell --headless --user-data-dir=${profile} --remote-debugging-pipe`, 6002: 'node /srv/doc/main.mjs' });
+    const result = await reapOrphan(sessionDir, { timeoutMs: 2_000, deps: w.deps({ holder: () => ({ held: true, pid: 6001 }) }) });
+    assert.deepEqual(result, { found: true, killed: [6001], stillHeld: false });
+    assert.deepEqual(w.killed, [6001], '登记文件里的子进程号 6002(现在是文档服务)没有被直接杀');
+    assert.deepEqual(w.trees, [6001]);
+    assert.equal(fs.existsSync(path.join(sessionDir, 'owner.json')), false);
+  }
+
+  /* chrome-headless-shell 不拿锁:只有登记文件里的号,命令行对得上就杀 */
+  {
+    const { sessionDir, profile } = makeSession('shell-orphan', { servicePid: 1, browserPid: 7001, pids: [7001] });
+    const w = world({ 7001: `/opt/chrome-headless-shell --headless --user-data-dir=${profile}` });
+    const result = await reapOrphan(sessionDir, { timeoutMs: 2_000, deps: w.deps({ holder: () => ({ held: false, pid: null }) }) });
+    assert.deepEqual(result.killed, [7001]);
+  }
+
+  /* 杀不掉的(进程表里一直在):照实报还占着,登记留着下次再清 */
+  {
+    const { sessionDir, profile } = makeSession('stubborn', { servicePid: 1, browserPid: 8001, pids: [8001] });
+    const table = { 8001: `/opt/chrome --user-data-dir=${profile}` };
+    const result = await reapOrphan(sessionDir, { timeoutMs: 300, deps: { platform: 'linux', commandLine: async (pid) => table[pid] ?? null, alive: (pid) => pid in table, kill: () => {}, killTree: () => {}, holder: () => ({ held: true, pid: 8001 }) } });
+    assert.deepEqual(result, { found: true, killed: [8001], stillHeld: true });
+    assert.equal(fs.existsSync(path.join(sessionDir, 'owner.json')), true);
+  }
+
+  /* Windows:锁文件被谁独占着,登记的号是个不相干的活进程——不杀,照实报「还被占着」;锁没被占时把过期登记清掉 */
+  {
+    const { sessionDir } = makeSession('win-unknown-holder', { servicePid: 1, browserPid: 9001, pids: [9001] });
+    const w = world({ 9001: '"C:\\Program Files\\nodejs\\node.exe" server.mjs' });
+    const held = await reapOrphan(sessionDir, { timeoutMs: 300, deps: w.deps({ platform: 'win32', holder: () => ({ held: true, pid: null }) }) });
+    assert.deepEqual(held, { found: true, killed: [], stillHeld: true });
+    assert.deepEqual(w.killed, []);
+    const free = await reapOrphan(sessionDir, { timeoutMs: 300, deps: w.deps({ platform: 'win32', holder: () => ({ held: false, pid: null }) }) });
+    assert.deepEqual(free, { found: false, killed: [], stillHeld: false });
+    assert.deepEqual(w.killed, []);
+    assert.equal(fs.existsSync(path.join(sessionDir, 'owner.json')), false);
+  }
 });

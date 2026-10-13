@@ -203,8 +203,11 @@ class PipeTransport {
 }
 
 /**
- * 这份用户数据目录是不是正被一个活着的浏览器占着。
- * Windows:浏览器独占打开目录里的 `lockfile`,别人打不开;Linux / macOS:目录里的 `SingletonLock` 是个指向「主机名-进程号」的链接。
+ * 这份用户数据目录的锁。**只是线索,不是凭据**:
+ * Windows:完整的 Chrome 独占打开目录里的 `lockfile`,`held` 是「此刻打不开它」(确实有进程握着,但不知道是谁);
+ * Linux / macOS:目录里的 `SingletonLock` 是个指向「主机名-进程号」的链接,`pid` 是里面写的号,`held` 只是「那个号此刻有进程」——
+ * 浏览器被强杀后链接还在,号可能已经是别的进程。谁是不是我们的浏览器,由 `browserHoldsProfile` 看命令行定。
+ * chrome-headless-shell 两种锁都不拿。
  * @returns {{ held: boolean, pid: number | null }}
  */
 export function profileHolder(userDataDir) {
@@ -225,12 +228,12 @@ export function profileHolder(userDataDir) {
 }
 
 /** 一个进程的命令行(查不到回 null)。Linux 读 /proc,不起子进程;Windows、macOS 要问系统,只在清残留时用 */
-export async function processCommandLine(pid, { timeoutMs = 15_000 } = {}) {
+export async function processCommandLine(pid, { timeoutMs = 15_000, platform = process.platform, procRoot = '/proc' } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-  if (process.platform === 'linux') {
-    try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim() || null; } catch { return null; }
+  if (platform === 'linux') {
+    try { return fs.readFileSync(path.join(procRoot, String(pid), 'cmdline'), 'utf8').replace(/\0/g, ' ').trim() || null; } catch { return null; }
   }
-  const [command, args] = process.platform === 'win32'
+  const [command, args] = platform === 'win32'
     ? ['powershell', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`]]
     : ['ps', ['-o', 'command=', '-p', String(pid)]];
   return new Promise((resolve) => {
@@ -270,46 +273,81 @@ export async function childPidsOf(pid, { timeoutMs = 8_000 } = {}) {
   });
 }
 
-/**
- * 这个进程是不是一个正用着这份用户数据目录的浏览器。
- * 完整的 Chrome 会锁住目录(`profileHolder`);chrome-headless-shell 不锁(实测),所以再看它的命令行里有没有这份目录。
- */
-export async function browserHoldsProfile(pid, userDataDir) {
-  if (!pidAlive(pid)) return false;
-  const holder = profileHolder(userDataDir);
-  if (holder.held && (holder.pid === null || holder.pid === pid)) return true;
-  const line = await processCommandLine(pid);
-  if (!line) return false;
-  return process.platform === 'win32' ? line.toLowerCase().includes(userDataDir.toLowerCase()) : line.includes(userDataDir);
+/** 一条命令行是不是「用这份用户数据目录起的浏览器」:要有完整的 `--user-data-dir=<这份目录>` 这一个参数,不是碰巧含着这串字 */
+export function commandLineUsesProfile(line, userDataDir, platform = process.platform) {
+  if (typeof line !== 'string' || !line || !userDataDir) return false;
+  const fold = (text) => (platform === 'win32' ? text.toLowerCase() : text);
+  const hay = fold(line);
+  const needle = fold(`--user-data-dir=${userDataDir}`);
+  for (let at = hay.indexOf(needle); at !== -1; at = hay.indexOf(needle, at + 1)) {
+    const before = at === 0 ? ' ' : hay[at - 1];
+    const after = hay[at + needle.length] ?? ' ';
+    if ((before === ' ' || before === '"') && (after === ' ' || after === '"')) return true;
+  }
+  return false;
 }
 
 /**
+ * 这个进程是不是一个正用着这份用户数据目录的浏览器。**只认它自己的命令行**:里面有 `--user-data-dir=<这份目录>` 才算。
+ *
+ * 锁文件、登记文件里的进程号都只是「候选」,不能当凭据:浏览器被强杀后锁还留在盘上,那个进程号日后会被系统分给别的进程
+ * (节点上有渲染服务自己的浏览器、文档服务等),只凭「号还活着」就杀会误杀它们。
+ */
+export async function browserHoldsProfile(pid, userDataDir, { commandLine = processCommandLine, alive = pidLive, platform = process.platform } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !alive(pid)) return false;
+  return commandLineUsesProfile(await commandLine(pid), userDataDir, platform);
+}
+
+/** 非 Windows:用户数据目录里的单例锁(一个链接加两个配套文件)。浏览器被强杀后它们留在盘上 */
+const SINGLETON_FILES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+
+/**
  * 清掉上一个 Agent 服务进程留下的浏览器(正常不会有:管道一断浏览器自己退;这是兜底)。
- * 只杀「登记过(或锁文件里写着)、还活着、而且确实正用着这份目录」的那个,免得进程号被系统回收后误杀别人。
+ * 候选进程号来自锁文件(非 Windows)与登记文件;**只杀命令行里确实带着这份目录的那个**(`browserHoldsProfile`)。
+ * 候选都不是:非 Windows 上把过期的锁删掉(不删的话新起的浏览器会对着锁里那个不相干的进程号去「联系旧实例」);
+ * Windows 上锁文件要是真被谁独占着却认不出是谁,照实报「还被占着」。
+ *
+ * @param {string} sessionDir
+ * @param {{ timeoutMs?: number, deps?: object }} [o] `deps` 只给单测:`holder`、`commandLine`、`alive`、`kill`、`killTree`、`platform`
  * @returns {Promise<{ found: boolean, killed: number[], stillHeld: boolean }>}
  */
-export async function reapOrphan(sessionDir, { timeoutMs = 8_000 } = {}) {
+export async function reapOrphan(sessionDir, { timeoutMs = 8_000, deps = {} } = {}) {
+  const {
+    holder = profileHolder, commandLine = processCommandLine, alive = pidLive, platform = process.platform,
+    kill = (pid) => process.kill(pid, 'SIGKILL'), killTree: killTreeOf = killProcessTree,
+  } = deps;
   const userDataDir = path.join(sessionDir, 'profile');
   const forget = () => { try { fs.rmSync(path.join(sessionDir, OWNER_FILE), { force: true }); } catch { /* 删不掉不影响 */ } };
   let owner = null;
   try { owner = JSON.parse(fs.readFileSync(path.join(sessionDir, OWNER_FILE), 'utf8')); } catch { /* 没有登记 */ }
-  const holder = profileHolder(userDataDir);
-  const browserPid = holder.pid ?? (Number.isSafeInteger(owner?.browserPid) && owner.browserPid > 0 ? owner.browserPid : null);
-  if (!browserPid || !await browserHoldsProfile(browserPid, userDataDir)) {
-    // 目录被锁着却认不出是谁(没有登记、登记的进程不在了):杀不了,照实报「还被占着」
-    if (holder.held) return { found: true, killed: [], stillHeld: true };
+  const lock = holder(userDataDir);
+  const candidates = [...new Set([lock.pid, owner?.browserPid].filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
+  let browserPid = null;
+  for (const pid of candidates) {
+    if (await browserHoldsProfile(pid, userDataDir, { commandLine, alive, platform })) { browserPid = pid; break; }
+  }
+  if (!browserPid) {
+    if (platform === 'win32') {
+      // 锁文件被谁独占着却认不出是谁:杀不了,照实报「还被占着」
+      if (lock.held) return { found: true, killed: [], stillHeld: true };
+    } else {
+      for (const name of SINGLETON_FILES) { try { fs.rmSync(path.join(userDataDir, name), { force: true }); } catch { /* 删不掉:起浏览器时自会报 */ } }
+    }
     forget();
     return { found: false, killed: [], stillHeld: false };
   }
-  // 主进程直接结束(立刻生效),再让系统按父子关系补杀一遍。
+  // 主进程直接结束(立刻生效),再按树(Windows)/按组(其它)补杀一遍。
   // 登记里的子进程号不直接杀:它们可能早就退了、号被系统分给了别的进程;主进程一没,浏览器的子进程自己会退
-  try { process.kill(browserPid, 'SIGKILL'); } catch { /* 已经退了 */ }
-  killProcessTree(browserPid);
-  const left = await waitPidsGone([browserPid], timeoutMs);
+  try { kill(browserPid); } catch { /* 已经退了 */ }
+  killTreeOf(browserPid);
   const end = Date.now() + timeoutMs;
-  let stillHeld = left.length > 0 || profileHolder(userDataDir).held;
-  while (stillHeld && Date.now() < end) { await sleep(100); stillHeld = pidAlive(browserPid) || profileHolder(userDataDir).held; }
-  if (!stillHeld) forget();
+  const held = () => alive(browserPid) || (platform === 'win32' && holder(userDataDir).held);
+  let stillHeld = held();
+  while (stillHeld && Date.now() < end) { await sleep(100); stillHeld = held(); }
+  if (!stillHeld) {
+    if (platform !== 'win32') for (const name of SINGLETON_FILES) { try { fs.rmSync(path.join(userDataDir, name), { force: true }); } catch { /* 留给起浏览器时处理 */ } }
+    forget();
+  }
   return { found: true, killed: [browserPid], stillHeld };
 }
 
