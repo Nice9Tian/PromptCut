@@ -26,7 +26,6 @@ async function realFixture(t, options = {}) {
 }
 
 test('real short clip: speech → shots → subjects → captions and cards in the project → prerender publish, every stage reported', { skip: missing ?? false, timeout: 600_000 }, async (t) => {
-  const before = liveProcesses();
   const { f, clip } = await realFixture(t);
   log('clip', JSON.stringify({ duration: clip.duration, cuts: clip.cuts }));
   const started = await f.call('auto_workflow', { mediaId: 'clip', maxCards: 12 }, f.context, { requestId: 'real-call-0001' });
@@ -86,7 +85,7 @@ test('real short clip: speech → shots → subjects → captions and cards in t
   }
   await f.workflow.close('end');
   for (const p of Object.values(f.perception)) await p.close('end');
-  assert.equal(liveProcesses(), before, 'no stray Python or ffmpeg left');
+  assert.equal(liveProcesses(f.dir), 0, 'no stray Python or ffmpeg left');
 });
 
 test('real chain, a dependency not ready: subjects cannot run (no onnxruntime in this Python) → the flow stops there, shots stay done, the project gets nothing', { skip: missing ?? false, timeout: 600_000 }, async (t) => {
@@ -107,11 +106,10 @@ test('real chain, a dependency not ready: subjects cannot run (no onnxruntime in
 });
 
 test('real chain, stopped mid-transcription (host path): the Python process is really gone, the flow never moves on, nothing is committed', { skip: missing ?? false, timeout: 600_000 }, async (t) => {
-  const before = liveProcesses();
   const { f } = await realFixture(t);
   const answer = await f.call('auto_workflow', { mediaId: 'clip' }, f.context, { requestId: 'real-call-0003' });
-  await until(async () => (await f.call('auto_workflow_status', { jobId: answer.jobId })).stage === 'transcribe' && liveProcesses() > before, { ms: 120_000, step: 100, what: 'transcription process up' });
-  assert.ok(liveProcesses() > before, 'the Python process was running');
+  await until(async () => (await f.call('auto_workflow_status', { jobId: answer.jobId })).stage === 'transcribe' && liveProcesses(f.dir) > 0, { ms: 120_000, step: 100, what: 'transcription process up' });
+  assert.ok(liveProcesses(f.dir) > 0, 'the Python process was running');
   const fence = (await f.resources.authorize(f.context, 'read')).fenceRevision;
   await f.authority.privateFence();
   const receipt = await f.resources.abortForFence(f.context, 'private');
@@ -120,7 +118,7 @@ test('real chain, stopped mid-transcription (host path): the Python process is r
   f.cancel.window = true; f.cancel.fence = fence;
   await f.jobs.cancelForFence(f.context, fence);
   f.cancel.window = false;
-  await until(() => liveProcesses() === before, { ms: 30_000, what: 'processes gone' });
+  await until(() => liveProcesses(f.dir) === 0, { ms: 30_000, what: 'processes gone' });
   await sleep(1_000);
   const rows = rawJobs(f);
   log('rows', JSON.stringify(rows.map((r) => `${r.kind}:${r.state}`)));
@@ -131,15 +129,14 @@ test('real chain, stopped mid-transcription (host path): the Python process is r
 });
 
 test('real chain, the service shuts down mid-run, then comes back: "interrupted" at the right stage; a new call finishes the job', { skip: missing ?? false, timeout: 900_000 }, async (t) => {
-  const before = liveProcesses();
   const { f } = await realFixture(t);
   const answer = await f.call('auto_workflow', { mediaId: 'clip' }, f.context, { requestId: 'real-call-0004' });
-  await until(async () => (await f.call('auto_workflow_status', { jobId: answer.jobId })).stage === 'transcribe' && liveProcesses() > before, { ms: 120_000, step: 100, what: 'transcription process up' });
+  await until(async () => (await f.call('auto_workflow_status', { jobId: answer.jobId })).stage === 'transcribe' && liveProcesses(f.dir) > 0, { ms: 120_000, step: 100, what: 'transcription process up' });
   // 宿主关闭顺序:先一键流程,再各感知包
   const receipt = await f.workflow.close('shutdown');
   assert.equal(receipt.workPending, 0);
   for (const p of Object.values(f.perception)) assert.equal((await p.close('shutdown')).childrenClosed, true);
-  assert.equal(liveProcesses(), before, 'processes gone after close');
+  assert.equal(liveProcesses(f.dir), 0, 'processes gone after close');
   await f.restart();
   const status = await f.call('auto_workflow_status', { jobId: answer.jobId });
   log('after restart', JSON.stringify({ state: status.state, stage: status.stage, stages: stageStatus(status), error: status.error }));
@@ -155,5 +152,5 @@ test('real chain, the service shuts down mid-run, then comes back: "interrupted"
   assert.deepEqual(f.state.commits.map((c) => c.what), ['transcript', 'shots', 'subjects', 'edits']);
   await f.workflow.close('end');
   for (const p of Object.values(f.perception)) await p.close('end');
-  assert.equal(liveProcesses(), before);
+  assert.equal(liveProcesses(f.dir), 0);
 });

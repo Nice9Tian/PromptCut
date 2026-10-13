@@ -95,11 +95,19 @@ export async function makeRealProviders({ subjectPython = SUBJECT_PYTHON, subjec
   });
 }
 
-/** 数一数还活着的转写/镜头/主体相关进程(python 与它们起的 ffmpeg) */
-export function liveProcesses() {
-  if (process.platform !== 'win32') return Number(run('pgrep', ['-fc', 'promptcut_(stt|subject|shots)']).stdout.trim() || '0');
+/**
+ * 数一数还活着的转写/镜头/主体相关进程(python 与它们起的 ffmpeg)。
+ * `within` 给了(例如某个测试的临时目录)就只数命令行里带这个路径的:全量测试里别的测试文件也在起这类进程,全机器的总数会互相串。
+ */
+export function liveProcesses(within = null) {
+  const inside = within ? String(within) : null;
+  if (process.platform !== 'win32') {
+    const r = run('pgrep', ['-fa', 'promptcut_(stt|subject|shots)']);
+    return r.stdout.split(String.fromCharCode(10)).filter((l) => l.trim() && (!inside || l.includes(inside))).length;
+  }
+  const filter = inside ? ` -and $_.CommandLine.Contains('${inside.replace(/'/g, "''")}')` : '';
   const r = run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-    "@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'promptcut_(stt|subject|shots)' -and $_.Name -match 'python|ffmpeg' }).Count"]);
+    `@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'promptcut_(stt|subject|shots)' -and $_.Name -match 'python|ffmpeg'${filter} }).Count`]);
   return Number(r.stdout.trim() || '0');
 }
 export function visibleWindows() {
