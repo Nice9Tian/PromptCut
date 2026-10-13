@@ -6,6 +6,7 @@ import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, f
 import { PROCP_EXT, isProcpFile, loadProcpFile, packMissingMessage, packProcp } from "./io/procp";
 import { exportSkippedMessage } from "./io/exportSkipped";
 import { ExportDialog, type ExportState } from "./ExportDialog";
+import type { ExportMode } from "../export/cardLayers";
 import { exportGateNow } from "./media/assetTiers";
 import { awaitingUploaderMessage } from "../render/mediaTier";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
@@ -411,8 +412,11 @@ export function TopBar() {
    *
    * 挑不出位置(WebView 没这个 API)也照样能导:文件留在服务端的产物目录,
    * 结束时给一个「打开产物目录」。
+   *
+   * 在线浏览器先选导出方式(`docs/semantics/workflow/project.md`「导出视频」:「快速导出」或「完整导出」):不带 `mode` 进来时只把
+   * 对话框切到选择那一步,选了以后带着 `mode` 再进来 —— 那一次点击就是「另存为」要的用户手势。桌面版没有这一步。
    */
-  const exportProject = async () => {
+  const exportProject = async (mode?: ExportMode) => {
     const project = getState().project;
     // C6.6:按轮询到的集合先判一次(不发请求,不耽误下面「另存为」要的用户手势);
     // 素材原尺寸还没传完就不弹另存为,直接提示等待上传方。exportVideo 里还会再问一遍素材服务
@@ -421,6 +425,12 @@ export function TopBar() {
       setExportState({ phase: "error", done: 0, total: 1, target: "", message: awaitingUploaderMessage(pending) });
       return;
     }
+    if (ONLINE_BUILD && !mode) {
+      setExportState({ phase: "asking", done: 0, total: 1, target: "" });
+      return;
+    }
+    // 选保存位置期间选择的对话框先收起来(用户取消选位置就整个不导出)
+    if (ONLINE_BUILD) setExportState(null);
     const suggested = `${name}.mp4`;
     let target: FileSystemFileHandle | null = null;
     try {
@@ -438,12 +448,15 @@ export function TopBar() {
       total: Math.max(1, Math.floor(project.duration * (project.fps || 30))),
       target: target ? target.name : "产物目录（本机不支持选择位置）",
       startedAt: Date.now(),
+      ...(mode ? { mode } : {}),
     });
 
     try {
       const { outDir, id, written, skippedMedia } = await exportVideo({
         // 在线浏览器模式(c10a 第 11.1 节)边编边写进这个落点,回 written: true;桌面那一路不看它
         target,
+        // 在线浏览器:选的导出方式;导出前还在等什么(素材原尺寸、渲染节点)显示在进度窗口里。桌面那一路不看这两项
+        ...(mode ? { mode, onWaiting: (message: string | null) => setExportState((st) => (st ? { ...st, waiting: message ?? undefined } : st)) } : {}),
         onStart: (jobId) => {
           exportIdRef.current = jobId;
           setExportState((st) => (st ? { ...st, id: jobId } : st));
@@ -526,7 +539,7 @@ export function TopBar() {
         case "new-project": if (!ONLINE_BUILD) createProject(); break;
         case "open-project": if (!ONLINE_BUILD) projectInput.current?.click(); break;
         case "save-project": if (!viewOnly && !ONLINE_BUILD) void saveProject(); break;
-        case "export-video": void run(exportProject)(); break;
+        case "export-video": void run(() => exportProject())(); break;
         case "go-home": goHome(); break;
         case "undo": actions.undo(); break;
         case "redo": actions.redo(); break;
@@ -751,7 +764,7 @@ export function TopBar() {
         {/* 配音设置:开子窗口,和开始页配音卡的「设置」是同一个 */}
         <Btn onClick={openVoiceSettings} label="配音设置" icon={<IconVoice />} collapsed={tier !== "wide"} disabled={ONLINE_BUILD} title={ONLINE_BUILD ? ONLINE_OFF("配音") : undefined} />
         <Btn
-          onClick={run(exportProject)}
+          onClick={run(() => exportProject())}
           label="导出视频"
           icon={<IconExport />}
           primary
@@ -787,6 +800,7 @@ export function TopBar() {
         onReveal={() => {
           if (exportState?.id) void revealExport(exportState.id);
         }}
+        onPick={(picked) => { void run(() => exportProject(picked))(); }}
       />
     </div>
   );

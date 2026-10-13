@@ -6,15 +6,16 @@
 import type { Project } from "../kernel/project";
 import { actions, getState } from "../store/project";
 import { assetAuthHeaders, docRequest, exportGate, hasDocLink, remoteAssetBase, remoteAssetTicketInfo } from "../editor/media/assetTiers";
+import { currentDocProjectId, currentSharedLink, pageSession, subscribeQueueEvents } from "../editor/sync/syncManager";
+import { CODE_VERSION } from "../online/buildInfo";
+import type { ExportMode } from "./cardLayers";
 import { createTicketRenewer, type TicketRenewer } from "./ticketRenewal";
 import { remoteMediaUrl, mediaTierPolicy } from "../render/mediaTier";
 import { activeOnlineSource } from "../render/snapshotSource";
-import { judgedPlan, planLowMemory } from "../editor/planDispatch";
 import { pushToast } from "../editor/sync/syncManager";
 import { MemorySink, type MuxSink } from "./mp4Mux";
 import { runBrowserExport } from "./browserExport";
 import { getCard, isUserCardId } from "../kernel/registry";
-import { setExportWantedClips } from "./exportWanted";
 import { ONLINE_EXPORT_TEXT } from "./text";
 import { prepareExportSounds } from "../editor/io/exportSounds";
 
@@ -25,7 +26,9 @@ export interface OnlineExportOptions {
    * `fetchExportFile` 取走;这个浏览器连「另存为」都没有(iOS)时攒成 Blob 直接下载。
    */
   target?: FileSystemFileHandle | null;
-  /** 导出前核对没过(素材原尺寸没传完、重卡缺预渲染原尺寸)时给用户看的话;null = 过了 */
+  /** 导出方式:`fast` 快速导出、`full` 完整导出(用户点导出时选的);不给 = 完整导出 */
+  mode?: ExportMode;
+  /** 导出前核对没过(素材原尺寸没传完、在等渲染节点把本页不执行的卡逐帧渲好)时给用户看的话;null = 过了 */
   onWaiting?: (message: string | null) => void;
   /** 探针:只导前 n 帧 */
   maxFrames?: number;
@@ -52,28 +55,23 @@ function downloadBlob(blob: Blob, name: string) {
 }
 
 /**
- * 这个项目里页面自己判重的片段(还没有渲染节点的层表时,导出前核对按它算缺)。按轻重判定的表(`judgedPlan`):
- * 低内存档里是界限搜索的结果,不是显示用的「全部判重」。
+ * 本页不执行的卡片段:同步来的用户卡与素材效果卡(编辑页面的注册表里没有它们的定义)。导出页与编辑页面同源,不执行它们的代码
+ * (`docs/semantics/mechanism/platforms.md`「在线执行用户卡与素材效果卡」的「导出页」),所以它们的画面导出时取现成的:
+ * 快速导出先取满密度的轨道流,其余请渲染节点逐帧渲(`exportLayers.ts`)。
+ * 构建时就在包里的卡(内置卡、内置素材效果卡、仓库里的用户卡)导出页都能运行,不在这里。
  */
-function heavyClipsOfPlan(p: Project): string[] {
-  const plan = judgedPlan() as { prerenderSet?: Iterable<string> } | null;
-  const set = plan?.prerenderSet ? new Set(plan.prerenderSet) : null;
-  if (!set) return [];
-  return p.tracks.flatMap((tr) => tr.clips).map((c) => c.id).filter((id) => set.has(id));
-}
-
-/**
- * 同步来的用户卡与图卡的片段(编辑页面没有它们的定义):导出页与编辑页面同源,不执行它们的代码,
- * 所以导出时一律用预渲染原尺寸,缺的由导出前的核对拦下(`docs/plan/online-card-exec-contract.md` 第 8 节「在线导出」)。
- */
-function syncedCardClips(p: Project): string[] {
+function nonRunnableClips(p: Project): string[] {
   return p.tracks.flatMap((tr) => tr.clips).filter((c) => !!c.cardId && isUserCardId(c.cardId) && !getCard(c.cardId)).map((c) => c.id);
 }
 
-/** 低内存档:只有判重的卡用预渲染原尺寸,判轻的卡本机逐帧渲(契约 `c10-contract.md` 第 18 节第 8 条);普通档不限 */
-const heavyOnlyOf = (p: Project) => () => (planLowMemory() ? heavyClipsOfPlan(p) : null);
-
-const originalsDeps = () => (hasDocLink() ? { request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders } : null);
+/** 卡片画面的现成来源从哪取:文档服务(层表、清单、任务队列)与素材服务;页面没连着项目时为 null(全部由导出页活渲) */
+const cardLayerDeps = () => (hasDocLink() ? {
+  projectId: () => currentDocProjectId() || null,
+  projectRev: () => currentSharedLink()?.ds.rev ?? null,
+  stream: { request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders },
+  frames: { request: docRequest, subscribeQueue: subscribeQueueEvents, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders,
+    publisherId: `page-${pageSession()}`, codeVersion: CODE_VERSION },
+} : null);
 
 export async function exportVideoOnline(
   opts: { onProgress?: (done: number, total: number, stage?: "sound" | "render" | "compose") => void; onStart?: (id: string) => void } & OnlineExportOptions,
@@ -107,14 +105,13 @@ export async function exportVideoOnline(
   let waitingShown = "";
   // C10 契约第 12 节:导出可能比只读票据的时限还长,途中按时限提前续签(取票复用 assetTicketSource)
   const renewer = remote ? await startRenewer() : null;
-  // 同步来的卡判轻时不在平时发布的清单计划里:导出期间请渲染节点把它们的预渲染原尺寸补上(`exportWanted.ts`)
-  setExportWantedClips(syncedCardClips(p));
   try {
     const result = await runBrowserExport({
       project: p,
       sink,
       signal: job.controller.signal,
       maxFrames: opts.maxFrames,
+      mode: opts.mode,
       onProgress: (done, total) => opts.onProgress?.(done, total, "render"),
       onWaiting: (message) => {
         opts.onWaiting?.(message);
@@ -124,10 +121,8 @@ export async function exportVideoOnline(
       confirm: (message) => window.confirm(message),
       notify: (message, tone) => pushToast(message, tone ?? "info"),
       checkMediaOriginals: () => exportGate(p),
-      originals: originalsDeps(),
-      fallbackHeavy: () => heavyClipsOfPlan(p),
-      heavyOnly: heavyOnlyOf(p),
-      requiredOriginals: () => syncedCardClips(p),
+      cardLayers: cardLayerDeps(),
+      nonRunnable: () => nonRunnableClips(p),
       // 导出只用素材原尺寸:它的地址换成远程素材服务的取回地址(只读票据走查询串,`<video>` 带不了头)
       mediaUrl: remote ? (url) => remoteMediaUrl(url, { base: remote.base, ticket: renewer?.ticket() ?? remote.ticket }) : undefined,
       freshTicket: renewer ? () => renewer.ticket() : undefined,
@@ -146,8 +141,6 @@ export async function exportVideoOnline(
     const err = e as Error & { cancelled?: boolean };
     pushToast(err.cancelled ? ONLINE_EXPORT_TEXT.cancelled : ONLINE_EXPORT_TEXT.failed(err.message), err.cancelled ? "info" : "warn");
     throw err.cancelled ? Object.assign(new Error(ONLINE_EXPORT_TEXT.cancelled), { cancelled: true }) : err;
-  } finally {
-    setExportWantedClips([]);
   }
 }
 
@@ -166,10 +159,14 @@ export function exportRenewalStats() {
 }
 
 /**
- * 探针入口(`window.__pcIo.exportVideoBrowser`,`scripts/probes/lowmem-export-compare.mjs`):在当前页面上跑一次浏览器逐帧导出,
- * 回产物字节(base64)与统计。不经「另存为」、不下载;`originals: false` 时重卡照活渲(桌面运行环境没有渲染节点的层表)。
+ * 探针入口(`window.__pcIo.exportVideoBrowser`,`scripts/probes/lowmem-export-compare.mjs`、`online-export-modes-probe.mjs`):在当前页面上跑一次
+ * 浏览器逐帧导出,回产物字节(base64)与统计。不经「另存为」、不下载。
+ *   - `originals: false`:卡片一律由导出页活渲,不取任何现成的画面(桌面运行环境没有文档服务;本页不执行的卡这时没有画面);
+ *   - `originals: true`:照正式导出,按 `mode`(`fast` / `full`,缺省 `full`)取卡片画面的来源;
+ *   - `capture`:这些帧(项目帧号)合成完当场拷一张 PNG 回来(`captures`:帧号 → `data:` 地址),逐像素核对用;
+ *   - `waitLimit`:导出前的等待提示最多看到几条就取消(缺省 3;等渲染节点现渲时给大一点)。
  */
-export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals?: boolean; sounds?: boolean } = {}) {
+export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals?: boolean; sounds?: boolean; mode?: ExportMode; capture?: number[]; waitLimit?: number } = {}) {
   // `sounds: true`:同正式导出,先把声音生成好(探针 `sound-ab-probe.mjs`)
   if (o.sounds) await prepareExportSounds({ signal: new AbortController().signal });
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
@@ -180,16 +177,18 @@ export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals
   const remote = mediaTierPolicy().remote ?? (remoteAssetBase() ? { base: remoteAssetBase()!, ticket: null } : null);
   const renewer = remote ? await startRenewer() : null;
   let result: Awaited<ReturnType<typeof runBrowserExport>>;
+  const wanted = new Set(o.capture ?? []);
+  const captures: Record<number, string> = {};
+  const waitLimit = Number.isFinite(o.waitLimit) ? (o.waitLimit as number) : 3;
   try {
     result = await runBrowserExport({
-    project: p, sink, signal: controller.signal, maxFrames: o.maxFrames,
-    onWaiting: (m) => { if (m) waits.push(m); if (waits.length > 3) controller.abort(); },
+    project: p, sink, signal: controller.signal, maxFrames: o.maxFrames, mode: o.mode,
+    onWaiting: (m) => { if (m) waits.push(m); if (waits.length > waitLimit) controller.abort(); },
     confirm: () => true, notify: () => {},
     checkMediaOriginals: () => exportGate(p),
-    originals: o.originals ? originalsDeps() : null,
-    fallbackHeavy: () => heavyClipsOfPlan(p),
-    heavyOnly: heavyOnlyOf(p),
-    requiredOriginals: () => syncedCardClips(p),
+    cardLayers: o.originals ? cardLayerDeps() : null,
+    nonRunnable: () => nonRunnableClips(p),
+    onFrame: wanted.size ? (frame, canvas) => { if (wanted.has(frame)) captures[frame] = canvas.toDataURL("image/png"); } : undefined,
     mediaUrl: remote ? (url) => remoteMediaUrl(url, { base: remote.base, ticket: renewer?.ticket() ?? remote.ticket }) : undefined,
     freshTicket: renewer ? () => renewer.ticket() : undefined,
     });
@@ -203,5 +202,5 @@ export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals
   const bytes = sink.bytes();
   let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return { result, waits, base64: btoa(bin), renewal: renewer?.stats() ?? null };
+  return { result, waits, base64: btoa(bin), renewal: renewer?.stats() ?? null, captures };
 }

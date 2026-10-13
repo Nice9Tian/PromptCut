@@ -112,3 +112,44 @@
   border-color: var(--accent);
   color: var(--on-accent);
 }
+
+/* 在线浏览器:选导出方式(快速导出 / 完整导出)。两个选项各占一行,名字在上、说明在下 */
+.pc-export-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pc-export-mode {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--fill-subtle);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pc-export-mode:hover { border-color: var(--accent); }
+.pc-export-mode:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.pc-export-mode-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.pc-export-mode-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+/* 导出前还在等什么(素材原尺寸、渲染节点) */
+.pc-export-waiting {
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--fill-subtle);
+}

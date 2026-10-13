@@ -1,12 +1,19 @@
 /**
- * 低内存档逐帧导出(`docs/plan/c10a-contract.md` 第 11.1 节;语义 `product/platforms.md`「面向的平台」的「导出」)。
+ * 在线浏览器的逐帧导出(`docs/plan/c10a-contract.md` 第 11.1 节;语义 `product/platforms.md`「在线浏览器」的「导出」)。
  *
- *   能力探测 → (没有 AAC 就先问一次)→ 导出前核对(素材原尺寸 complete、重卡的预渲染原尺寸齐全;不设超时,可取消)
+ *   能力探测 → (没有 AAC 就先问一次)→ 导出前核对(素材原尺寸 complete;卡片画面的来源备齐,`exportLayers.ts`;不设超时,可取消)
  *   → 提示保持前台 → 混音并编 AAC → 逐帧:合成一帧到复用的原尺寸画布 → `VideoEncoder.encode()` → `frame.close()`
  *   (`encodeQueueSize` 不超过 3)→ 封装(`mp4Mux.ts`)写出。
  *
  * 时间按帧号定(`i / fps`,导出页的钉时间办法同 `src/kernel/exportClock.ts`)。导出只用原尺寸:素材原尺寸(导出页按它的地址、
- * Range 取)、重卡的预渲染原尺寸(`originals.ts`);小尺寸在这里一张都不用。
+ * Range 取);小尺寸在这里一张都不用。
+ *
+ * 分两种方式(用户 2026-10-13 定,点导出时二选一,`mode`):
+ *   - **完整导出**(`full`):本页能运行的卡由导出页逐帧渲,不管它平时判轻判重(导出不是实时的,重卡这时不抑制、不等预渲染);
+ *     本页不执行的卡(同步来的用户卡与素材效果卡)导出开始时请渲染节点按原尺寸逐帧渲好再用,没到齐时提示等待;
+ *   - **快速导出**(`fast`):有满密度轨道流的那一段直接取流里的画面(整段都有流的卡导出页连组件都不挂);只有稀疏版或没有流的那一段
+ *     照完整导出的办法出。
+ * 〔分界〕2026-10-13 之前的做法(重卡逐帧取每张卡存好的 HTML 快照,`originals.ts`)两种方式都不再走;那份代码留到撤快照那一块一并删。
  *
  * 这一层不认识编辑器:项目、素材服务、文档服务、提示、确认都由调用方(`src/editor/io/index.ts` 的 `exportVideo` 在线分支)注入。
  */
@@ -19,7 +26,8 @@ import { awaitingUploaderMessage, type MissingOriginal } from "../render/mediaTi
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, audioConfigOf, probeExportCapability, videoConfigOf, type EncoderEnv } from "./capability";
 import { Mp4Muxer, type MuxSink } from "./mp4Mux";
 import { ExportCompositor } from "./frameCompositor";
-import { fetchOriginalHtml, loadOriginalsIndex, type OriginalsDeps, type OriginalsIndex } from "./originals";
+import type { ExportMode } from "./cardLayers";
+import { prepareExportLayers, type ExportLayerDeps, type ExportLayerStats, type FrameLayers } from "./exportLayers";
 import { ONLINE_EXPORT_TEXT } from "./text";
 import { rgbaToI420 } from "./yuv";
 
@@ -41,17 +49,17 @@ export interface BrowserExportDeps {
   notify: (message: string, tone?: "info" | "warn") => void;
   /** 被引用的素材原尺寸里还没 complete 的(C6.6 的 `exportGate`) */
   checkMediaOriginals: () => Promise<MissingOriginal[]>;
-  /** 文档服务与素材服务;null = 不取预渲染原尺寸(重卡照活渲;只给探针与桌面对照) */
-  originals: OriginalsDeps | null;
-  /** 还没有层表时,页面自己判重的片段 */
-  fallbackHeavy?: () => string[];
+  /** 导出方式;不给 = 完整导出 */
+  mode?: ExportMode;
   /**
-   * 低内存档:只有这些片段(页面判重的)用预渲染原尺寸,别的(判轻的)一律本机逐帧渲,层表里有也不取。
-   * 回 null 或不给 = 层表里的都算重卡(普通档)。
+   * 卡片画面的现成来源从哪取(文档服务、素材服务、渲染任务队列);null = 一律由导出页活渲(只给探针与桌面对照:
+   * 这时本页不执行的卡没有画面)。
    */
-  heavyOnly?: () => string[] | null;
-  /** 不管判轻判重都必须用预渲染原尺寸的片段(同步来的用户卡与图卡:导出页不执行它们的代码) */
-  requiredOriginals?: () => string[];
+  cardLayers: (ExportLayerDeps & { projectId: () => string | null }) | null;
+  /** 本页不执行的卡片段(同步来的用户卡与素材效果卡:导出页与编辑页面同源,不执行它们的代码) */
+  nonRunnable?: () => string[];
+  /** 探针:每合成完一帧调一次(逐像素核对用;画布是复用的,要留就当场拷走) */
+  onFrame?: (frame: number, canvas: HTMLCanvasElement) => void | Promise<void>;
   /** 素材原尺寸的地址:在线页面换成远程素材服务 + 只读票据(`mediaTier.ts` 的 `remoteMediaUrl`) */
   mediaUrl?: (url: string) => string;
   /** 当前的只读票据(导出途中续签,C10 契约第 12 节;`ticketRenewal.ts`):每一帧装素材前换进素材地址 */
@@ -70,6 +78,9 @@ export interface BrowserExportResult {
   videoCodec: string;
   ms: number;
   stats: Record<string, number>;
+  mode: ExportMode;
+  /** 卡片画面取了哪些现成的来源(没用 `cardLayers` 时为 null) */
+  layers: ExportLayerStats | null;
 }
 
 const cancelled = () => Object.assign(new Error(ONLINE_EXPORT_TEXT.cancelled), { cancelled: true });
@@ -83,20 +94,26 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-/** 导出前核对:两样都齐才往下走;不齐就提示、隔一会儿再核,不设超时(用户可以取消) */
-async function precheck(deps: BrowserExportDeps): Promise<OriginalsIndex | null> {
+/**
+ * 导出前核对:素材原尺寸到齐、卡片画面的现成来源备齐才往下走;不齐就提示、接着等,不设超时(用户可以取消)。
+ * 先等素材(隔一会儿再核一次),再备卡片画面(要请渲染节点逐帧渲的,等它渲完;`exportLayers.ts`)。回卡片画面的来源(没有就 null)。
+ */
+async function precheck(deps: BrowserExportDeps, mode: ExportMode): Promise<FrameLayers | null> {
   for (;;) {
     if (deps.signal.aborted) throw cancelled();
     const media = await deps.checkMediaOriginals();
-    let index: OriginalsIndex | null = null;
-    if (deps.originals) index = await loadOriginalsIndex(deps.project.id || null, deps.originals, { fallbackHeavy: deps.fallbackHeavy?.() ?? [], onlyClips: deps.heavyOnly?.() ?? null, project: deps.project, requiredClips: deps.requiredOriginals?.() ?? [] });
-    const parts: string[] = [];
-    if (media.length) parts.push(awaitingUploaderMessage(media));
-    if (index?.missing.length) parts.push(ONLINE_EXPORT_TEXT.missingOriginals(index.missing.length));
-    if (!parts.length) { deps.onWaiting?.(null); return index; }
-    deps.onWaiting?.(parts.join("\n"));
+    if (!media.length) break;
+    deps.onWaiting?.(awaitingUploaderMessage(media));
     await sleep(PRECHECK_RETRY_MS, deps.signal);
   }
+  deps.onWaiting?.(null);
+  if (!deps.cardLayers) return null;
+  const layers = await prepareExportLayers({
+    project: deps.project, projectId: deps.cardLayers.projectId(), mode, nonRunnable: deps.nonRunnable?.() ?? [],
+    deps: deps.cardLayers, signal: deps.signal, onWaiting: (message) => deps.onWaiting?.(message),
+  });
+  deps.onWaiting?.(null);
+  return layers;
 }
 
 /* ---------------- 音频 ---------------- */
@@ -229,26 +246,29 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
   const wantsAudio = audioPlanOf(project).some((e: { start: number }) => e.start < durationSec);
   if (wantsAudio && !cap.audio && !(await deps.confirm(ONLINE_EXPORT_TEXT.noAudio))) throw cancelled();
 
-  const index = await precheck(deps);
+  const mode: ExportMode = deps.mode === "fast" ? "fast" : "full";
+  const layers = await precheck(deps, mode);
   deps.notify(ONLINE_EXPORT_TEXT.start, "info");
 
-  const audio = wantsAudio && cap.audio ? await encodeAudio(deps, durationSec) : null;
-
-  // 重卡的原尺寸:当前这一帧要用时才取,不攒
-  const originals = deps.originals && index?.map ? {
-    htmlFor: async (clipId: string, frame: number) => {
-      const hash = index.hashAt(clipId, frame);
-      if (hash === undefined) return undefined;
-      if (hash === null) throw new Error(ONLINE_EXPORT_TEXT.missingOriginals(1));
-      return fetchOriginalHtml(hash, deps.originals!, deps.signal);
-    },
-  } : null;
+  let audio: EncodedAudio | null = null;
+  try {
+    audio = wantsAudio && cap.audio ? await encodeAudio(deps, durationSec) : null;
+  } catch (e) {
+    layers?.close();
+    throw e;
+  }
 
   const exportProject: Project = deps.mediaUrl
     // 认定过「确认缺失」的素材地址原样留着:占位核对的是记录与素材的地址逐字相同,换成远程取回地址占位就失效、转去解一个不存在的文件
     ? { ...project, media: project.media.map((m) => (confirmedMissing(m) ? m : { ...m, url: m.url ? deps.mediaUrl!(m.url) : m.url })) }
     : project;
-  const compositor = await ExportCompositor.open({ project: exportProject, exportUrl: deps.exportUrl, originals, signal: deps.signal, freshTicket: deps.freshTicket });
+  let compositor: ExportCompositor;
+  try {
+    compositor = await ExportCompositor.open({ project: exportProject, exportUrl: deps.exportUrl, layers, signal: deps.signal, freshTicket: deps.freshTicket });
+  } catch (e) {
+    layers?.close();
+    throw e;
+  }
 
   let muxer: Mp4Muxer | null = null;
   let failure: unknown = null;
@@ -296,6 +316,7 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
       if (deps.signal.aborted) throw cancelled();
       if (failure) throw failure;
       const canvas = await compositor.frame(i);
+      await deps.onFrame?.(i, canvas);
       await waitQueue();
       const pixels = canvas.getContext("2d")!.getImageData(0, 0, project.width, project.height).data;
       i420 = rgbaToI420(pixels, project.width, project.height, i420);
@@ -308,7 +329,7 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
     if (failure) throw failure;
     if (!muxer) throw new Error("编码器一帧都没给出");
     const bytes = await (muxer as Mp4Muxer).finalize();
-    return { frames: total, bytes, audio: !!audio, videoCodec: cap.videoCodec, ms: performance.now() - t0, stats: { ...compositor.stats } };
+    return { frames: total, bytes, audio: !!audio, videoCodec: cap.videoCodec, ms: performance.now() - t0, stats: { ...compositor.stats }, mode, layers: layers ? { ...layers.stats } : null };
   } finally {
     try { if (encoder.state !== "closed") encoder.close(); } catch { /* 已经关了 */ }
     compositor.close();

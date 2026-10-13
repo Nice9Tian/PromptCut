@@ -6,8 +6,12 @@
  * 1. **场景**:页面里开一个同源的导出页(`?export=1`,`src/ExportView.tsx`,和预渲染进程、桌面导出同一份页面与钉时间的办法),
  *    灌进项目,每一帧照 `server/bakery/bake.mjs` 的步子推:`__pcSetT` → 排空 → 等一拍 → `__pcSyncAnims` → 排空 → `__pcFrameReady`,
  *    再生成整场景快照(`__pcCreateSnapshot`:样式内联、画布换成图、素材层只留占位)。
- * 2. **重卡**:在预渲染集合里的片段(层表,渲染节点的判定),包裹层里的活组件换成**预渲染原尺寸**的 HTML 快照
- *    (素材服务 `snap/<hash>`,按清单取)—— 重卡用已有的原尺寸,不重渲(语义 `product/platforms.md`「面向的平台」)。
+ * 2. **卡片的画面**(语义 `product/platforms.md`「在线浏览器」的「导出」,2026-10-13 起分「快速导出」「完整导出」):本页能运行的卡就是
+ *    场景里的活组件,逐帧渲;调用方给了 `layers`(`exportLayers.ts`)时,它每一帧说哪几张卡要贴现成的画面 —— 轨道流里的这一帧
+ *    (快速导出,只取满密度的分段)、或渲染节点为这次导出逐帧渲好的位图(本页不执行的卡)—— 贴的规矩同预览一侧:
+ *    单卡的画面放进这张卡的包裹层(包裹层的位置、缩放、旋转、不透明度、层序照常作用在它上面),按舞台坐标产的画面
+ *    (依赖下层的卡)放在包裹层旁边、层序同它,包裹层里原来的东西去掉。
+ *    〔分界〕`originals`(逐帧取每张卡存好的 HTML 快照)是 2026-10-13 之前的做法,两种新导出都不再传它;代码留到撤快照那一块一并删。
  * 3. **素材**:导出页按素材原尺寸的地址装素材(`__pcPrepareFrameMedia`:`<video>` 按 Range 取当前需要的那一段,不整片读进内存),
  *    装好后把这一帧的画面画成图、替进快照里素材的占位(层序、框、裁切、滤镜都跟着占位元素走)。
  * 4. **栅格化**:整张快照包成 SVG `foreignObject`,以 `data:` 地址载成图画到复用的原尺寸画布上。
@@ -21,6 +25,7 @@ import type { Project } from "../kernel/project";
 import { renameSnapshotIds } from "../render/snapshotRename";
 import { withTicket } from "./ticketRenewal";
 import { syncedUserCards } from "../kernel/registry";
+import type { FrameLayer, FrameLayers } from "./exportLayers";
 
 type ExportWindow = Window & typeof globalThis & {
   __pcReady?: boolean;
@@ -35,6 +40,8 @@ type ExportWindow = Window & typeof globalThis & {
   __pcLoadProject?: (p: unknown, o?: unknown) => Promise<void>;
   /** 导出页:接同步来的用户卡的表(在线导出把它们的包裹层挂出来,好换成预渲染原尺寸) */
   __pcSetSyncedUserCards?: (entries: unknown[]) => void;
+  /** 导出页:这些片段只挂包裹层、不挂组件(整段的画面由这里贴进快照) */
+  __pcSetExportWrapperOnly?: (clipIds: string[]) => void;
   __pcRealRaf?: (cb: FrameRequestCallback) => number;
   /** `?rafControl=1` 时由 `src/render/stageClockEntry.ts` 装:跑一轮排着的 rAF 回调(一拍),回跑了几个 */
   __pcBrowserBeginFrame?: () => number;
@@ -53,8 +60,10 @@ export interface CompositorOptions {
   project: Project;
   /** 导出页地址(同源,`?export=1`);不给就按当前页面拼 */
   exportUrl?: string;
-  /** 重卡的原尺寸;不给 = 全部活渲(只给探针 / 桌面对照用) */
+  /** 〔分界〕旧做法:重卡逐帧换成存好的 HTML 快照。两种新导出都不传它(见文件头第 2 条) */
   originals?: HeavyOriginals | null;
+  /** 卡片画面的现成来源(轨道流、渲染节点逐帧渲的位图);不给 = 全部由导出页活渲 */
+  layers?: FrameLayers | null;
   /** 素材帧的 JPEG 质量 */
   mediaQuality?: number;
   /** 背景色(成片不透明) */
@@ -105,6 +114,32 @@ export function pageCssText(doc: Document): string {
   return out;
 }
 
+/**
+ * 把一层现成的画面贴进快照里这张卡的包裹层(规矩同预览一侧的流平面,`src/render/Stage.tsx`):
+ *   - `local`:包裹层里原来的东西去掉,图是包裹层的子元素,放在包裹层自己的坐标系里 —— 包裹层的框、缩放、旋转、三维变形、
+ *     不透明度、强调、层序都照常作用在它上面;
+ *   - `stage`:画面按舞台坐标产,包裹层的外观已经画在里面。包裹层里原来的东西去掉,图放在包裹层后面(同一个父元素、同一个层序),
+ *     照普通的叠加盖在下面的层上。
+ * 图一律显式给位置和宽高、关掉页面样式里对 `<img>` 的限制(Tailwind 的 preflight 有 `max-width: 100%; height: auto`)。
+ */
+export function pasteLayer(wrap: HTMLElement, layer: FrameLayer): boolean {
+  const { x, y, w, h } = layer.rect;
+  if (!(w > 0 && h > 0) || !layer.url) return false;
+  const img = wrap.ownerDocument.createElement("img");
+  img.setAttribute("alt", "");
+  img.setAttribute("src", layer.url);
+  const base = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;max-width:none;max-height:none;margin:0;padding:0;border:0;display:block;pointer-events:none`;
+  wrap.innerHTML = "";
+  if (layer.plane === "stage") {
+    img.setAttribute("style", `${base};z-index:${wrap.style.zIndex || "auto"}`);
+    wrap.after(img);
+  } else {
+    img.setAttribute("style", base);
+    wrap.appendChild(img);
+  }
+  return true;
+}
+
 export class ExportCompositor {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -112,7 +147,7 @@ export class ExportCompositor {
   private w: ExportWindow;
   private opts: CompositorOptions;
   private scratch: HTMLCanvasElement;
-  readonly stats = { frames: 0, stepMs: 0, snapshotMs: 0, mediaMs: 0, rasterMs: 0, heavyReplaced: 0, mediaFrames: 0, manualTicks: 0, rafFallbacks: 0, ticketSwaps: 0 };
+  readonly stats = { frames: 0, stepMs: 0, snapshotMs: 0, mediaMs: 0, rasterMs: 0, heavyReplaced: 0, mediaFrames: 0, manualTicks: 0, rafFallbacks: 0, ticketSwaps: 0, layersPasted: 0, layerMs: 0 };
 
   private constructor(frameEl: HTMLIFrameElement, opts: CompositorOptions) {
     this.frameEl = frameEl;
@@ -141,6 +176,8 @@ export class ExportCompositor {
       await c.waitFor(() => c.w?.__pcReady === true && typeof c.w.__pcLoadProject === "function", 60_000, "导出页 60 秒没就绪");
       // 同步来的用户卡在导出页里没有定义:把同步表交给它,让这些卡的包裹层挂出来,逐帧换成预渲染原尺寸
       if (syncedUserCards().size) c.w.__pcSetSyncedUserCards?.([...syncedUserCards().values()]);
+      // 整段的画面都由这里贴的卡:导出页只挂包裹层,不跑组件
+      if (opts.layers?.wrapperOnly.length) c.w.__pcSetExportWrapperOnly?.([...opts.layers.wrapperOnly]);
       await c.w.__pcLoadProject!(p);
       await c.waitFor(() => c.w.__pcReady === true && typeof c.w.__pcSetT === "function", 60_000, "导出页 60 秒没装好项目");
     } catch (e) {
@@ -283,6 +320,24 @@ export class ExportCompositor {
       }
     }
     this.stats.snapshotMs += performance.now() - t0;
+    // 素材的占位先按文档顺序记下来(和导出页里活的素材元素一一对应);下面贴卡片画面时可能把某个包裹层里的占位一起换掉
+    const holes = [...tpl.content.querySelectorAll<HTMLElement>("video[data-pc-media-src], img[data-pc-media-src]")];
+
+    // 卡片的现成画面:轨道流里的这一帧、渲染节点逐帧渲的位图(见文件头第 2 条)
+    if (this.opts.layers) {
+      t0 = performance.now();
+      const wraps = new Map<string, HTMLElement>();
+      for (const wrap of tpl.content.querySelectorAll<HTMLElement>("[data-pc-clip]")) {
+        if (wrap.hasAttribute("data-pc-media")) continue;
+        const id = wrap.getAttribute("data-pc-clip")!;
+        if (!wraps.has(id)) wraps.set(id, wrap);
+      }
+      for (const layer of await this.opts.layers.at(frame, [...wraps.keys()])) {
+        const wrap = wraps.get(layer.clipId);
+        if (wrap && pasteLayer(wrap, layer)) this.stats.layersPasted++;
+      }
+      this.stats.layerMs += performance.now() - t0;
+    }
 
     // 素材:原尺寸按这一帧装好,画成图替进占位(跨源素材要按 CORS 取,否则画布被污染)
     t0 = performance.now();
@@ -298,10 +353,10 @@ export class ExportCompositor {
         }
       }
       await this.w.__pcPrepareFrameMedia?.();
-      const holes = [...tpl.content.querySelectorAll<HTMLElement>("video[data-pc-media-src], img[data-pc-media-src]")];
       holes.forEach((hole, i) => {
         const el = live[i];
-        if (!el) return;
+        // 占位所在的包裹层已经整个换成现成的画面:这一处素材不用画
+        if (!el || !tpl.content.contains(hole)) return;
         const shown = el.style.visibility !== "hidden" && hole.getAttribute("data-pc-media-hidden") !== "true";
         const url = shown ? this.mediaFrameUrl(el) : null;
         const img = document.createElement("img");
@@ -331,6 +386,7 @@ export class ExportCompositor {
   }
 
   close(): void {
+    try { this.opts.layers?.close(); } catch { /* 已经关了 */ }
     try { this.frameEl.remove(); } catch { /* 已经摘了 */ }
     this.scratch.width = this.scratch.height = 0;
   }
