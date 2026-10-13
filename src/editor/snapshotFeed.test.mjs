@@ -398,7 +398,7 @@ test("低内存档停下追一帧画好的层(settled)暂停中不再选小尺�
 
 /* ---------------------------------------------------------------- 抑制 */
 
-test("抑制集合只在播放中有,并上 K3(b) 的额外抑制", () => {
+test("没有流的重卡:抑制集合只在播放中有,并上 K3(b) 的额外抑制(暂停 / 拖动时贴流的那几张见 snapshotFeedScrub.test.mjs)", () => {
   const p = project([card("h", 0, 10), card("l", 0, 10)]);
   plan = heavyEverywhere("h");
   assert.deepEqual(suppressedAt({ project: p, t: 1, playing: false }), []);

@@ -10,7 +10,7 @@
  *   `setProject` 整份替换、K5 的角色互换要带 `reset`；`settled` 消息把 clipId 从基线里删掉，
  *   否则下次 C4 选到同一帧会按基线判「已挂着」不投、露出过期的活组件；
  * - **换 DOM 有节流**：每 ≥ 33 ms 一次（C4）。带 `reset` 的那次（互换后的首投）不受节流；
- * - **一次投递 ≤ 2 MB**（A3c）：一次一包，按兜底级别装（无流 > 超预算 > 海报），装不下的下一拍再投、不摘。
+ * - **一次投递 ≤ 2 MB**（A3c）：一次一包，按兜底级别装（无流 > 超预算），装不下的下一拍再投、不摘。
  *
  * # 为什么取字节不能挡住 `setTime`
  *
@@ -21,10 +21,24 @@
  *
  * # 兜底顺序（mechanism/rendering.md「兜底顺序」）
  *
- * 播放中被抑制的重卡按「满帧流 → 稀疏流 → 同区间最近快照 → 占位符」逐级退化。父页这一侧管两件事：
- * 流平面只发解码器预算放行的那几条（`planesWithinBudget`，和舞台同一个函数）；**每张重卡都照样
- * 选一张快照垫着**（流覆盖着的是海报，15 帧换一张；超预算 / 无流的每拍换）。流这一拍画不出来时
- * 舞台当拍露出垫着的快照（`streamPlayer` 的 `coverSnapshot`），连快照也没有才显示占位符（舞台侧）。
+ * 重卡贴的是轨道流，**播放、暂停、拖动都一样**（2026-10-13 用户定：每张卡的 HTML 快照作废）：这一帧的满密度流 →
+ * 稀疏流（不晚于这一帧的最近一张）→ 占位符。父页这一侧管三件事：
+ *
+ *   1. 流平面只发这一帧所在分段已经就绪、解码器预算放行的那几条（`planesWithinBudget`，和舞台同一个函数）；
+ *   2. 抑制：播放中是全部重卡；暂停 / 拖动时是「这一帧有流、还没追到精确活渲」的重卡（`FeedPlan.scrub`）——
+ *      已经追到精确活渲的卡不抑制，它的流平面照发，舞台只拿它把播放头下这一帧先解好（起播头一拍就有）；
+ *   3. **有流盖着的卡不读快照**（下面「快照这条路的分界」）：不选帧、不取字节、不投递、不等。
+ *
+ * 流这一拍画不出来时舞台留着上一张，最多留一个分段的时长，再没有才显示占位符（`streamPlayer`、`StageView`）。
+ *
+ * # 快照这条路的分界（下一块「撤快照」从这里删）
+ *
+ * 快照只剩给**这一帧贴不上流**的重卡用：这一帧所在分段的流还没就绪、流超出解码器预算、这张卡根本没有流、低内存档暂停着。
+ * 判据只有一处：`planFeed` 里的 `covered`（这一帧有流平面的卡）—— 在它里面的卡跳过选帧，于是 `picks`、`wanted`、
+ * `fetchMissing`、`diffAgainst` / `packChanges`、`pickForSetTime` 的 `awaiting` 都轮不到它。撤快照时删掉的是：
+ * `KIND_ORDER`、`Pick` / `PickTier`、选帧那一段循环、`wanted`、`have` / `flying` / `fetchMissing`、投递基线里的 `mounted`、
+ * `diffAgainst` / `packChanges` / `deliverSnapshots` / `pickForSetTime` 的快照那一半、按拍换快照（`beatSwap`），
+ * 以及 `demoteReady` 里看 `html` / `local` 表的那一支；留下的是 `heavy`、`streamPlanes`、`scrub`、`settled` 这几样。
  */
 import { cardMountedAt } from "../render/frameWindow.mjs";
 import { anchorFrames, pickLayerSnapshot } from "../render/snapshotPick.mjs";
@@ -38,7 +52,7 @@ import { currentPlan } from "./planDispatch";
 import { cardRunStatesGen, cardsRegistryGen, syncedUserCardsGen } from "../kernel/registry";
 import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { fitBeatSwaps, SWAP_MS, swapCostOfSize } from "../render/beatSwap.mjs";
-import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
+import { planesWithinBudget, rangesHave, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 import { isStreamOrigin, streamSegmentOf } from "../render/streamSegments.mjs";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
@@ -54,12 +68,6 @@ export const MAX_WANTED = 8;
  * **`stream` 不是快照**：它的区间单位是分段号、字节是 fMP4，由舞台里的 `streamPlayer` 解（R8）。
  */
 const KIND_ORDER: ReadyKind[] = ["html", "local"];
-
-/**
- * 海报刷新间隔(帧):流覆盖着的层垫的那张快照,离当前帧不到这么多帧就不换(一个分段)。
- * 换帧预算不因海报多花:仍是 33 ms 节流、一次 ≤ 2 MB(已定,不新增预算常量)。
- */
-export const POSTER_REFRESH_FRAMES = SEGMENT_FRAMES;
 
 /**
  * 就绪索引里全部 `stream` 层(单卡流的成员就是它自己;组流挂在组里最上面那张上、带 `groupClipIds`)。
@@ -78,14 +86,13 @@ function streamLayers(): { clipId: string; key: string; ranges: Array<[number, n
 }
 
 /**
- * 这一张快照在兜底顺序里垫在哪一级,也是一次投递装包的优先级(小的先装):
- *   - `none`   这一层这一拍没有流(或暂停 / 拖动):快照就是它的画面,每拍换;
- *   - `over`   有流,但超出解码器预算(`planesWithinBudget` 没放行):当「无流」,每拍换;
- *   - `poster` 流覆盖着:快照只是垫在流下面的海报(流画不出来的那一拍露出来),
- *              挂着的那张离当前帧不到 `POSTER_REFRESH_FRAMES` 帧就不换。
+ * 这一张快照是哪一种情形下选的,也是一次投递装包的优先级(小的先装):
+ *   - `none`   这一层这一帧没有流:快照就是它的画面,每拍换;
+ *   - `over`   这一帧有流,但超出解码器预算(`planesWithinBudget` 没放行):当「无流」,每拍换。
+ * 流盖着的层不选快照(见文件头「快照这条路的分界」),所以没有「垫在流下面的海报」这一种了。
  */
-export type PickTier = "none" | "over" | "poster";
-const TIER_ORDER: Record<PickTier, number> = { none: 0, over: 1, poster: 2 };
+export type PickTier = "none" | "over";
+const TIER_ORDER: Record<PickTier, number> = { none: 0, over: 1 };
 
 /** 这一刻某张卡选中的那一帧 */
 export interface Pick {
@@ -152,6 +159,9 @@ export function snapshotFeedDebug(head: Playhead) {
     ready: [...readyIndex].map(([clipId, kinds]) => ({ clipId, kinds: [...kinds].map(([kind, layer]) => ({ kind, key: layer.key.slice(0, 12), ranges: layer.ranges.length })) })),
     heavy: planned.heavy,
     picks: [...planned.picks].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12), cached: have.has(pick.id), flying: flying.has(pick.id) })),
+    // 这一刻发给舞台的流平面盖着哪几张卡、暂停 / 拖动时抑制哪几张(贴流)
+    streams: planned.streamPlanes.map((p) => ({ clipIds: p.clipIds, key: (p.key ?? "").slice(0, 12), originFrame: p.originFrame ?? null })),
+    scrub: planned.scrub,
     mounted: [...baselines.front.mounted].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12) })),
     reset: baselines.front.needsReset,
     settled: [...baselines.front.settled],
@@ -443,22 +453,29 @@ export interface Playhead {
 export interface FeedPlan {
   /** 这一刻判重的卡（播放中就是 `setSuppressed` 的实参，再并上 K3(b) 的额外抑制） */
   heavy: string[];
-  /** 每张重卡选中的那一帧（带兜底级别 `tier`）；选不出来的不在表里（那一层这一拍落到占位符） */
+  /** 贴不上流的重卡选中的那一帧快照（带 `tier`）；流盖着的、选不出来的不在表里 */
   picks: Map<string, Pick>;
   /** 这一刻该报给预渲染进程的缺口（全局帧号） */
   wanted: { clipId: string; frame: number }[];
-  /** 这一刻发给舞台的流平面（只在播放中；已按解码器预算截过，`planesWithinBudget`） */
+  /**
+   * 这一刻发给舞台的流平面（已按解码器预算截过，`planesWithinBudget`）：这一帧所在分段已经就绪的重卡的流。
+   * 播放、暂停、拖动都有；低内存档暂停着没有（照现状贴小尺寸）。
+   */
   streamPlanes: StreamPlaneRequest[];
+  /**
+   * 暂停 / 拖动时父页该抑制的卡：这一帧有流（含超出解码器预算的）、还没追到精确活渲的重卡。
+   * 它们的画面由流给（超预算的落到快照，再落到占位符），不露出没推到位的活组件。播放中恒为空（播放中抑制的是 `heavy`）。
+   */
+  scrub: string[];
 }
 
 /**
  * 这一刻的投递计划。**纯算，不 fetch、不发 RPC**，所以验收探针可以单独看它。
  *
- * 兜底顺序（mechanism/rendering.md「兜底顺序」）在父页这一侧：流平面只发解码器预算放行的那几条；
- * **每张重卡都照样选一帧快照**（根因 C：以前「有流就不选快照」，舞台那边流一 blank 整层就透明）——
- * 流覆盖着的标成海报（`poster`）垫在流下面，超预算的当「无流」（`over`），其余 `none`。
+ * 兜底顺序（mechanism/rendering.md「兜底顺序」）在父页这一侧：流平面只发这一帧有流、解码器预算放行的那几条；
+ * 流盖着的卡不选快照（流这一拍画不出来由舞台留着上一张、到时占位符）；超预算的当「无流」（`over`），其余 `none`。
  */
-export function planFeed({ project, t, playing }: Playhead): FeedPlan {
+export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan {
   const plan = currentPlan();
   const fps = Math.max(1, project.fps || 30);
   const globalFrame = Math.max(0, Math.floor(t * fps + 1e-6));
@@ -481,21 +498,33 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
     clips.push({ clip, firstFrame, count });
   }
   /*
-   * 流平面（兜底顺序第 1、2 步）：只在播放中、只给被抑制的卡。按解码器预算截 —— 和舞台 `sync()`
-   * 同一个函数，截掉的那几张（`over`）父页当「无流」，直接从第 3 步（最近快照）开始。
+   * 流平面（兜底顺序第 1、2 步）：播放、暂停、拖动都发，给这一帧所在分段已经就绪的重卡（组流要成员全在）。
+   * 按解码器预算截 —— 和舞台 `sync()` 同一个函数，截掉的那几张（`over`）父页当「无流」。
+   * 低内存档暂停着不发（照现状：重卡抑制着贴小尺寸，见 `Preview` 的 `pumpFeed`）。
    */
   let streamPlanes: StreamPlaneRequest[] = [];
   const covered = new Set<string>();
   const wantedStream = new Set<string>();
-  if (playing) {
-    const layers = streamLayers();
-    if (layers.length) {
-      const suppressed = new Set(heavy);
-      for (const id of extraSuppressed) suppressed.add(id);
-      const all = streamPlanesFor(layers, suppressed, globalFrame);
-      streamPlanes = planesWithinBudget(all);
-      for (const p of all) for (const id of p.clipIds) wantedStream.add(id);
-      for (const p of streamPlanes) for (const id of p.clipIds) covered.add(id);
+  /*
+   * 暂停 / 拖动时抑制谁（`scrub`）：这一帧有流、还没追到精确活渲的重卡（「停下就撤兜底」：追上的不再盖回去）。
+   * 这台设备跑不了的卡停下不追，「已精确」对它们不成立，一直贴着流。组流按整条判：成员有一张没追上，整组都还抑制着
+   * （舞台那边也是整组一起撤，`StageView` 的 `releaseSettled`）。
+   */
+  const scrub = new Set<string>();
+  const layers = playing || !lowMemory ? streamLayers() : [];
+  if (layers.length) {
+    // 播放中：全部被抑制的卡（重卡，加上等后台补跑互换的那几张）。暂停 / 拖动：全部重卡 —— 已经追到精确活渲的也在里面，
+    // 它们不抑制，流平面只是把播放头下这一帧先解好，按下播放时头一拍就有
+    const members = new Set(heavy);
+    if (playing) for (const id of extraSuppressed) members.add(id);
+    const all = streamPlanesFor(layers, members, globalFrame);
+    streamPlanes = planesWithinBudget(all);
+    for (const p of all) for (const id of p.clipIds) wantedStream.add(id);
+    for (const p of streamPlanes) for (const id of p.clipIds) covered.add(id);
+    if (!playing) {
+      for (const p of all) {
+        if (p.clipIds.some((id) => !isSettled("front", id) || localOnly.has(id))) for (const id of p.clipIds) scrub.add(id);
+      }
     }
   }
   for (const { clip, firstFrame, count } of clips) {
@@ -503,7 +532,9 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
     // 低内存档同样:停下追一帧画好的层(c10a 契约第 17 节,取代原来的「不追活渲」)
     // 这台设备跑不了的卡停下不追,暂停态的「已精确」对它们不成立:快照照贴
     if (!playing && isSettled("front", clip.id) && !localOnly.has(clip.id)) continue;
-    const tier: PickTier = covered.has(clip.id) ? "poster" : wantedStream.has(clip.id) ? "over" : "none";
+    // **分界:有流盖着的卡不读快照**(文件头「快照这条路的分界」)。下面这一段循环体只为贴不上流的卡跑
+    if (covered.has(clip.id)) continue;
+    const tier: PickTier = wantedStream.has(clip.id) ? "over" : "none";
     let picked: Pick | null = null;
     for (const kind of KIND_ORDER) {
       const layer = layerOf(readyIndex, clip.id, kind);
@@ -517,32 +548,20 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
     if (picked) picks.set(clip.id, picked);
     /*
      * 缺口报给预渲染进程（C4）：本次回溯了（选中的不是当前这一帧）或者干脆缺料的层，
-     * 各报它**当前想要的**那一帧。全局帧号。流覆盖着的层（海报）不报 —— 画面由流给，
-     * 不值得为一张垫底的海报去打乱预渲染的排程。
+     * 各报它**当前想要的**那一帧。全局帧号。流盖着的层走不到这里（画面由流给）。
      */
     const wantLocal = globalFrame - firstFrame;
-    if (tier !== "poster" && wantLocal >= 0 && wantLocal < count && (!picked || picked.localFrame !== wantLocal) && wanted.length < MAX_WANTED) {
+    if (wantLocal >= 0 && wantLocal < count && (!picked || picked.localFrame !== wantLocal) && wanted.length < MAX_WANTED) {
       wanted.push({ clipId: clip.id, frame: globalFrame });
     }
   }
-  return { heavy: heavy.sort(), picks, wanted, streamPlanes };
+  return { heavy: heavy.sort(), picks, wanted, streamPlanes, scrub: [...scrub].sort() };
 }
 
-/**
- * 挂着的海报还在节流窗口里(同一层同一个键、帧号差不到 `POSTER_REFRESH_FRAMES`):这一拍不换,也就不用取字节。
- * 流覆盖着的层每拍选中的帧号都在变,不挡这一下的话每拍都去预渲染进程拉一整张快照(画布卡上 MB)却一张都不用。
- */
-function heldPoster(role: StageRole, pick: Pick): boolean {
-  if (pick.tier !== "poster") return false;
-  const cur = baselines[role].mounted.get(pick.clipId);
-  return !!cur && cur.kind === pick.kind && cur.key === pick.key && Math.abs(cur.localFrame - pick.localFrame) < POSTER_REFRESH_FRAMES;
-}
-
-/** 缺的那几帧发起取字节；到货后叫一次 `onArrive` 让宿主重投。挂着的海报还没到换的时候就不取 */
-function fetchMissing(picks: Map<string, Pick>, role: StageRole = "front"): void {
+/** 缺的那几帧发起取字节；到货后叫一次 `onArrive` 让宿主重投 */
+function fetchMissing(picks: Map<string, Pick>): void {
   for (const pick of picks.values()) {
     if (have.has(pick.id) || flying.has(pick.id)) continue;
-    if (heldPoster(role, pick)) continue;
     flying.add(pick.id);
     void source.fetchSnapshot(pick.kind, pick.key, pick.localFrame)
       .then((html) => {
@@ -559,9 +578,7 @@ interface Change { clipId: string; html: string | null; pick: Pick | null }
 
 /**
  * 手里已经有的那些和该 iframe 的基线比,列出要换的和要摘的。**不改基线** —— 真的发出去之后才改。
- *
- * 海报(`poster`)的节流在这里:挂着的那张和这一次选中的是同一层同一个键、帧号差不到
- * `POSTER_REFRESH_FRAMES`,就当没变(流在上面画着,垫底的海报不必每拍换)。
+ * 流盖着的卡不在 `picks` 里:它以前挂着的快照在这里被摘掉(流的画面接手)。
  */
 function diffAgainst(role: StageRole, picks: Map<string, Pick>, reset = false): Change[] {
   const base = baselines[role];
@@ -571,7 +588,6 @@ function diffAgainst(role: StageRole, picks: Map<string, Pick>, reset = false): 
   for (const [clipId, pick] of picks) {
     const cur = mounted.get(clipId);
     if (cur?.id === pick.id) continue;
-    if (!reset && heldPoster(role, pick)) continue;
     const html = have.get(pick.id);
     if (html === undefined) continue;   // 还没到货：这一层保持上一张，不闪
     changes.push({ clipId, html, pick });
@@ -586,7 +602,7 @@ function diffAgainst(role: StageRole, picks: Map<string, Pick>, reset = false): 
 
 /**
  * 一次投递在 2 MB 内按优先级装(换帧预算,mechanism/rendering.md「兜底顺序」):摘掉的不占字节、全装;
- * 换上的按 `none` > `over` > `poster` 的顺序装,装不下的这一拍**保留上一张、不摘**,下一拍再来。
+ * 换上的按 `none` > `over` 的顺序装,装不下的这一拍**保留上一张、不摘**,下一拍再来。
  * 单张就超 2 MB 的,包里第一张照装(不然永远投不出去;体积上限由预渲染进程先挡过一道)。
  */
 function packChanges(role: StageRole, changes: Change[], reset: boolean): { patch: Record<string, string | null>; next: Map<string, Pick>; deferred: number } {
@@ -618,7 +634,8 @@ function packChanges(role: StageRole, changes: Change[], reset: boolean): { patc
  *
  * `awaiting`（E0）**只给**「当前位置判重、且就绪索引里有这一层的表」的片段，而且只在
  * 「本次新挂载又没带快照」或「从活渲切回 `snapshots` 又没带快照」时加 —— 两个判据只有父页
- * 知道，所以由父页点名。判轻位置上的卡、被抑制的卡、轻卡从不带它（任务书「不做」）。
+ * 知道，所以由父页点名。判轻位置上的卡、被抑制的卡、轻卡从不带它（任务书「不做」）；
+ * 这一帧贴流的卡（`scrub`）被抑制着，不等快照。
  */
 export function pickForSetTime(head: Playhead): { snapshots: Record<string, string | null>; awaiting: string[] } {
   // 新的一次 setTime:上一次暂停态的 settled 作废(这一刻重新按兜底顺序选)
@@ -627,7 +644,7 @@ export function pickForSetTime(head: Playhead): { snapshots: Record<string, stri
   fetchMissing(feed.picks);
   if (feed.wanted.length) pushWanted(feed.wanted);
   const base = baselines.front;
-  // setTime 这一份和 `t` 同一次提交生效,不按 2 MB 拆(拆出去的就不同帧了);暂停 / 拖动时没有海报
+  // setTime 这一份和 `t` 同一次提交生效,不按 2 MB 拆(拆出去的就不同帧了)
   const changes = diffAgainst("front", feed.picks);
   const patch: Record<string, string | null> = {};
   const next = new Map(base.mounted);
@@ -637,7 +654,10 @@ export function pickForSetTime(head: Playhead): { snapshots: Record<string, stri
     else next.delete(c.clipId);
   }
   const awaiting: string[] = [];
+  const scrub = new Set(feed.scrub);
   for (const clipId of feed.heavy) {
+    // 这一帧贴流的卡(含超出解码器预算的):被抑制着,画面不靠快照,不等
+    if (scrub.has(clipId)) continue;
     // 这一层有表（预渲染进程认这张卡）才等；没有表的层等也等不来，只会白藏 500 ms
     const hasTable = KIND_ORDER.some((kind) => layerOf(readyIndex, clipId, kind));
     if (!hasTable) continue;
@@ -687,7 +707,7 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   // 播放中没有「停下就精确」这回事:settled 作废
   if (head.playing) clearSettled(role, "playing");
   const feed = planFeed(head);
-  fetchMissing(feed.picks, role);
+  fetchMissing(feed.picks);
   if (feed.wanted.length) pushWanted(feed.wanted);
   const base = baselines[role];
   const now = performance.now();
@@ -746,21 +766,23 @@ export function setExtraSuppressed(clipIds: readonly string[]): void {
 }
 
 /**
- * R8：这一刻的流平面（C3 末段：由就绪索引里 `kind: 'stream'` 的层合成）。只在播放中、只给被抑制的卡，
+ * R8：这一刻的流平面（C3 末段：由就绪索引里 `kind: 'stream'` 的层合成）：这一帧有流的重卡，播放、暂停、拖动都有，
  * **已按解码器预算截过**（`planesWithinBudget`，和舞台同一个函数）。
- * 父页在发 `setSuppressed(H(t))` 的同一处发 `setStreamPlanes(...)`。
+ * 父页在发 `setSuppressed(...)` 的同一处、**先于它**发 `setStreamPlanes(...)`（舞台等流的第一帧画出来才藏活子树）。
  */
 export function streamPlanesAt(head: Playhead): StreamPlaneRequest[] {
-  if (!head.playing) return [];
   return planFeed(head).streamPlanes;
 }
 
-/** 这一刻该抑制哪几张（播放中才有，C5 / K5） */
+/**
+ * 这一刻该抑制哪几张。播放中：全部重卡（C5 / K5），加上等后台补跑互换的那几张。
+ * 暂停 / 拖动：这一帧有流、还没追到精确活渲的重卡（`FeedPlan.scrub`）—— 贴流，不露出没推到位的活组件。
+ */
 export function suppressedAt(head: Playhead): string[] {
-  if (!head.playing) return [];
-  const heavy = planFeed(head).heavy;
-  if (!extraSuppressed.length) return heavy;
-  return [...new Set([...heavy, ...extraSuppressed])].sort();
+  const feed = planFeed(head);
+  if (!head.playing) return feed.scrub;
+  if (!extraSuppressed.length) return feed.heavy;
+  return [...new Set([...feed.heavy, ...extraSuppressed])].sort();
 }
 
 /** 测试用 */
