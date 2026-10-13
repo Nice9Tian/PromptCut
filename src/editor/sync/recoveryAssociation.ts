@@ -14,6 +14,8 @@ let pending: { contentId: string; descriptor: CollaborationDescriptor | null } |
 let active: CollaborationDescriptor | null = null;
 let recovering = false;
 
+/** 只校验、不记:文件里的协作关联写坏了就抛错(打开文件时先于一切副作用调用) */
+export function checkAssociation(value: unknown): void { parseCollaboration(value); }
 export function noteLoadedAssociation(project: Project, value: unknown) {
   pending = { contentId: project.id!, descriptor: parseCollaboration(value) as CollaborationDescriptor | null };
 }

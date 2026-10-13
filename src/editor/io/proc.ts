@@ -8,7 +8,7 @@ import { restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
-import { convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom } from "../sync/recoveryAssociation";
+import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom } from "../sync/recoveryAssociation";
 import { UNSUPPORTED_PROC_TEXT } from "../sync/recoveryTexts";
 
 /**
@@ -167,6 +167,8 @@ export function loadProc(text: string, opts: ParseProcOptions = {}): Project {
   } catch {
     /* parseProc 已经验过一遍,走到这儿说明是裸 Project,没有 ai 段 */
   }
+  // 先把会抛错的校验都做完,再动任何东西:协作关联写坏了的文件要报错,不能先把当前项目的剧本和对话换掉再报
+  checkAssociation(doc?.collaboration);
   applyProjectAi(doc?.ai ?? null);
   noteLoadedAssociation(project, doc?.collaboration);
   noteConvertedFrom(project, doc?.convertedFrom);
