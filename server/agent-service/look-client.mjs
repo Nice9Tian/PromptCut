@@ -20,7 +20,8 @@
  *   (落盘失败又赶上重启)就照原样再登记一次。连着 `reconnectMs` 都连不上才放弃;
  * - 渲染服务说登记的请求到了上限(503 `busy`):过一会儿再登记,不交给模型;
  * - 渲染这一段每次最多一分钟、没成自动重试三次,是渲染服务那一侧做的(`look.mjs`)。调用方给的 `timeoutMs` 在排队的调用法里
- *   不再当整条请求的时限用(排队的时间不由它管),只保留 `signal`:这一轮被停掉时把排着的请求撤回;
+ *   不再当整条请求的时限用(排队的时间不由它管);它原样带给渲染服务,只有卡片声音那一条(`/api/cards/audio`,算一段声音比出一帧久)
+ *   拿它当「这一次最多渲多久」。`signal`:这一轮被停掉时把排着的请求撤回;
  * - 渲染服务说「这次没看成」(`{ ok: false, look, error }`)时抛带原话的错,工具把它原样交给模型:这里不再重试、不挂着;
  * - 聊天栏的可视化记录(`/api/ai/visual` 的看画面记录、改片段的前后对比)存在工作进程里,在线页面取不到:这里直接回「没有」,不发请求。
  */
@@ -96,7 +97,7 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
     void send('/look/cancel', JSON.stringify({ requestId }), 5000).catch(() => {});
   }
 
-  async function post(projectId, cards, pathname, body, { signal } = {}) {
+  async function post(projectId, cards, pathname, body, { signal, timeoutMs } = {}) {
     // 可视化记录:云端不存(在线页面取不到工作进程里的文件)。`get_gif` 写规格的那一次除外
     if (pathname === '/api/ai/visual' && body?.tool !== 'get_gif') return { ok: false, error: '云端不存可视化记录' };
     if (!Object.hasOwn(LOOK_ROUTES, pathname)) throw new Error(`云端的渲染服务不提供 ${pathname}`);
@@ -104,7 +105,7 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
     try { cardRevs = (typeof cards === 'function' ? cards() : cards) ?? {}; } catch { cardRevs = {}; }
     // 同一个 id 重发不会登记两次:没收到回执、渲染服务重启后不认识,都拿它再登记
     const requestId = randomBytes(18).toString('base64url');
-    const submitText = JSON.stringify({ projectId, path: pathname, body, cards: cardRevs, requestId });
+    const submitText = JSON.stringify({ projectId, path: pathname, body, cards: cardRevs, requestId, ...(Number(timeoutMs) > 0 ? { timeoutMs: Number(timeoutMs) } : {}) });
     stats.requests += 1;
     const started = now();
     let submitted = false; // 渲染服务认下这个请求了没有
@@ -191,7 +192,7 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
       if (typeof projectId !== 'string' || !projectId) throw new TypeError('forProject: 要 projectId');
       return (pathname, body, opts = {}) => {
         const signals = [runSignal, opts?.signal].filter(Boolean);
-        return post(projectId, cards, pathname, body, { signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0] });
+        return post(projectId, cards, pathname, body, { signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0], timeoutMs: opts?.timeoutMs });
       };
     },
     describe: () => ({ url: base, ...stats }),

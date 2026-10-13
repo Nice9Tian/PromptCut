@@ -109,7 +109,9 @@ export const LOOK_ROUTES = Object.freeze({
   '/api/ai/visual': Object.freeze({ tool: 'get_gif', only: (body) => body?.tool === 'get_gif' }),
   '/api/ai/visual/render': Object.freeze({ tool: 'get_gif' }),
   // 卡片声音（`cloud-agent-contract.md` 第 9.4c 节）：卡片的 audio() 在渲染页里求值，回 WAV；与出一帧走同一条路由、同一套隔离
-  '/api/cards/audio': Object.freeze({ tool: 'render_card_audio' }),
+  // 它不是「看画面」：算一段声音可以比一帧久得多。所以不套「每次一分钟、重试三次」，照原来的办法——这一次最多等调用方给的时限
+  // （`timeoutMs`，上限 `maxTimeoutMs`），没成不自动重试〔裁，三级〕。排队、背压、重启接续与看画面一样
+  '/api/cards/audio': Object.freeze({ tool: 'render_card_audio', attempt: 'caller', retries: 0 }),
 });
 
 /** 工作进程里这几条接口的路径前缀（页面请求闸对它们另要口令） */
@@ -285,7 +287,7 @@ export function createLook({
         e.attempts += 1;
         stats.retried += 1;
         log('look.retry', { id: e.id.slice(0, 8), projectId, why: `iso-${s.lastRun.reason}`, attempts: e.attempts });
-        if (e.attempts > limits.retries) return { fail: fail(503, 'iso-failed') };
+        if (e.attempts > (e.retries ?? limits.retries)) return { fail: fail(503, 'iso-failed') };
         e.isoSince = s.lastRun.at + 1;
         e.baseSince = null;
         requests.touchAttempts(e);
@@ -339,7 +341,7 @@ export function createLook({
     requests.start(e);
     current = { id: e.id, projectId, worker: target.worker, since: now(), abort };
     const room = e.deadline ? Math.max(1000, e.deadline - now()) : Infinity;
-    const limit = Math.min(limits.attemptMs, room);
+    const limit = Math.min(e.attemptMs ?? limits.attemptMs, room);
     // 在途期间需求不过期（隔离工作进程不会在出图的半路上因为闲置被结束）
     const keep = target.worker === 'isolated' ? setInterval(() => want(projectId, now() + limits.holdMs), 5000) : null;
     keep?.unref?.();
@@ -378,7 +380,7 @@ export function createLook({
     if (res.final) { settle(e, 'done', res.final); return; }
     e.attempts += 1;
     const outOfTime = e.deadline && now() >= e.deadline - 500;
-    if (e.attempts > limits.retries || outOfTime) { settle(e, 'failed', res.out); return; }
+    if (e.attempts > (e.retries ?? limits.retries) || outOfTime) { settle(e, 'failed', res.out); return; }
     stats.retried += 1;
     log('look.retry', { id: e.id.slice(0, 8), projectId, why: res.retry, attempts: e.attempts });
     requests.requeue(e);
@@ -460,6 +462,7 @@ export function createLook({
         id: queued ? msg.requestId : `sync-${(syncSeq += 1).toString(36).padStart(4, '0')}-${randomBytes(9).toString('base64url')}`,
         owner: who.instanceId, projectId: msg.projectId, path: msg.path, tool: route0.tool, cards, body: msg.body,
         persist: queued, deadline: queued ? null : now() + timeoutMs,
+        attemptMs: route0.attempt === 'caller' ? timeoutMs : null, retries: Number.isInteger(route0.retries) ? route0.retries : null,
       });
       if (added.conflict) { stats.refused += 1; return { status: 409, body: { ok: false, error: 'request-id-taken' } }; }
       // 登记的已经到了上限（防磁盘被占满的硬上限）：调用方过一会儿再登记；它不把这当成「没看成」

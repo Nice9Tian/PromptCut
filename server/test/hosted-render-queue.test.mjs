@@ -369,6 +369,18 @@ test('RQ5 重试：渲染这一段每次最多一分钟，没成自动重试三�
   assert.deepEqual((await k4.poll({ requestId: rid(4), waitMs: 2000 })).body, { ok: false, error: '时间轴上没有 id 为 c9 的片段。' });
   assert.equal(k4.state.sent.length, 1);
 
+  // 卡片声音不是看画面：不套「一分钟乘三次」，这一次最多等调用方给的时限，没成不自动重试
+  const ka = kit({ limits: { attemptMs: 80 } });
+  let audioCalls = 0;
+  ka.state.reply = async (url, init) => { audioCalls += 1; if (audioCalls === 1) { await sleep(300); return { status: 200, json: { ok: true, wav: 1 } }; } return hang(url, init); };
+  await ka.submit(ka.msg(P3, { requestId: rid(7), path: '/api/cards/audio', timeoutMs: 2000 }));
+  assert.deepEqual((await ka.poll({ requestId: rid(7), waitMs: 3000 })).body, { ok: true, wav: 1 }, '渲了 300 ms（比看画面的每次时限久）照样出');
+  const ta = Date.now();
+  await ka.submit(ka.msg(P3, { requestId: rid(8), path: '/api/cards/audio', timeoutMs: 2000 }));
+  const au = await ka.poll({ requestId: rid(8), waitMs: 5000 });
+  assert.deepEqual([au.status, au.body.look, audioCalls], [504, 'timeout', 2], '到了调用方给的时限：不重试');
+  assert.ok(Date.now() - ta >= 1900);
+
   // 排队的时间不算在一分钟里：排了比 attemptMs 久得多，轮到了照样有完整的一次
   const k5 = kit({ limits: { attemptMs: 80 } });
   k5.state.paused = true;

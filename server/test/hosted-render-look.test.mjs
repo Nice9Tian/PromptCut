@@ -453,7 +453,7 @@ test('CA-LOOK-01 Agent 服务一侧的客户端：地址只许回环；项目由
   const msg = JSON.parse(sent[0].init.body);
   assert.deepEqual([msg.projectId, msg.path, msg.cards], [P1, '/api/vision/snapshot', { 'src/cards/user/x.tsx': 4 }]);
   assert.match(msg.requestId, /^[A-Za-z0-9_-]{16,64}$/, '带着现生成的 requestId 登记（排队的调用法）');
-  assert.equal(msg.timeoutMs, undefined, '排队的调用法不带整条请求的时限');
+  assert.equal(msg.timeoutMs, 30_000, '调用方给的时限原样带上（只有卡片声音那一条拿它当这一次最多渲多久）');
   assert.equal(verify(sent[0].init.headers[LOOK_AUTH_HEADER], sent[0].init.body).ok, true, '签名按发出去的请求体原文算，对端核得过');
   // 项目是绑死的：工具给的请求体里写别的项目也改不了信封上的项目
   await post('/api/vision/snapshot', { project: { id: P2, tracks: [] }, projectId: P2 });

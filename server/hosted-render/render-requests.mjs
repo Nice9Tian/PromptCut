@@ -16,7 +16,7 @@
  *
  * # 落盘（给了 `dir` 才落；不给就只在内存里，单测与「同步等」的旧调用方用）
  *
- *   <dir>/<id>.req.json     { v, id, seq, owner, projectId, path, cards, createdAt, body }   登记时写一次；出了结果就删
+ *   <dir>/<id>.req.json     { v, id, seq, owner, projectId, path, cards, createdAt, attemptMs?, retries?, body }   登记时写一次；出了结果就删
  *   <dir>/<id>.state.json   { v, state, attempts, finishedAt?, result? }                     每次变化重写（很小；结果在里面）
  *
  * 请求体里有项目内容，所以目录 0700、文件 0600（管理进程的用户；部署时工作进程是另一个用户，读不到）。写用「临时文件 + 改名」。
@@ -135,7 +135,8 @@ export function createRenderRequests({ dir = null, now = Date.now, log = () => {
           // 正在做的那一个也回到排队；那一次不算重试次数
           state: 'queued', attempts: Number(st?.attempts) || 0, createdAt: Number(req.createdAt) || now(), queuedAt: now(), waitedMs: 0, startedAt: null, finishedAt: null,
           // 停机的那一段没人能来问：从现在起算「调用方多久没来问」
-          lastPollAt: now(), blockedReason: null, result: null, waiters: new Set(), restored: true,
+          lastPollAt: now(), blockedReason: null, result: null, waiters: new Set(), restored: true, deadline: null,
+          attemptMs: Number.isFinite(req.attemptMs) ? req.attemptMs : null, retries: Number.isInteger(req.retries) ? req.retries : null,
         });
         nextSeq = Math.max(nextSeq, seq + 1);
         out.restored += 1;
@@ -149,7 +150,7 @@ export function createRenderRequests({ dir = null, now = Date.now, log = () => {
      * 登记一个请求。同一个 `id` 再登记回原来那一条（幂等：调用方没收到回执就重发）。
      * @returns {{ entry: object, created: boolean } | { full: true } | { conflict: true }} `conflict`：这个 id 是别的调用方登记的
      */
-    add({ id, owner = null, projectId, path: pathname, tool = null, cards = {}, body, persist = false, deadline = null }) {
+    add({ id, owner = null, projectId, path: pathname, tool = null, cards = {}, body, persist = false, deadline = null, attemptMs = null, retries = null }) {
       const had = entries.get(id);
       if (had) return had.owner === owner ? { entry: had, created: false } : { conflict: true };
       if (active().length >= limits.maxQueued) { counts.full += 1; return { full: true }; }
@@ -158,12 +159,14 @@ export function createRenderRequests({ dir = null, now = Date.now, log = () => {
         id, seq: nextSeq, owner, projectId, path: pathname, tool, cards, body, persist, persisted: false,
         state: 'queued', attempts: 0, createdAt: at, queuedAt: at, waitedMs: 0, startedAt: null, finishedAt: null,
         lastPollAt: at, blockedReason: null, result: null, waiters: new Set(), deadline,
+        // 这条接口自己的时限与重试次数（没有就用调度的缺省：一分钟、三次）
+        attemptMs, retries,
       };
       nextSeq += 1;
       if (persist && dir !== null) {
         try {
           if (!ensureDir()) throw new Error('dir');
-          writeAtomic(reqFile(id), JSON.stringify({ v: 1, id, seq: e.seq, owner, projectId, path: pathname, tool, cards, createdAt: at, body }));
+          writeAtomic(reqFile(id), JSON.stringify({ v: 1, id, seq: e.seq, owner, projectId, path: pathname, tool, cards, createdAt: at, ...(attemptMs !== null ? { attemptMs } : {}), ...(retries !== null ? { retries } : {}), body }));
           e.persisted = true;
           diskOk = true;
         } catch (err) {
