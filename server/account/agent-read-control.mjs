@@ -238,6 +238,8 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     for (const row of Object.values(state.agentInstancesV2 ?? {})) {
       if (row.state === 'closed' && row.closure) continue;
       if (t.instances[row.instanceId] || fence.kind === 'stop') continue;
+      // 只跑一条任务的进程用不了读对话的接口（实例权威里拒掉），名下不可能有读取；它的进程资源由任务的关闭记录管，不在这里等。
+      if (row.purpose === 'run-worker') continue;
       control.targets[row.instanceId] = { ...Object.fromEntries(instanceKeys.map(k => [k, row[k]])),
         readHandleIds: [], receipt: null, unknownInstance: true };
     }

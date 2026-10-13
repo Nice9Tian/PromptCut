@@ -31,6 +31,8 @@ import { createAccountRunEvents } from '../../agent/service/account-run-events.m
 import { createWorkerEventInternalHandler } from '../../agent-service/worker-event-internal.mjs';
 import { createAccountWorkerGateway } from '../../agent-service/account-worker-gateway.mjs';
 import { createAccountSlotScheduler } from '../../agent-service/account-slot-scheduler.mjs';
+import { createAgentReadControl, createAgentReadControlHandler } from '../../account/agent-read-control.mjs';
+import { createConversationControlClient } from '../../agent-service/conversation-control-client.mjs';
 
 export const projectId = 'sp_worker_fixture', conversationId = 'conversation_worker';
 const BOOT = '11111111-1111-1111-1111-111111111111';
@@ -158,8 +160,10 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
       return { conversations: rows, scopeControls: provider.listScopeControls({ servicePrincipal }) };
     } });
   const docSockets = new Set();
+  // 读取清点（给人读对话用的那一路）只在测退出确认时挂上，见下面的 startReadControl。
+  let readControl = null, readHandler = null, masterReadControl = null;
   const docServer = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, async (req, res) => {
-    try { if (await instanceHandler(req, res)) return; if (await runHandler(req, res)) return; res.writeHead(404); res.end(); }
+    try { if (await readHandler?.(req, res)) return; if (await instanceHandler(req, res)) return; if (await runHandler(req, res)) return; res.writeHead(404); res.end(); }
     catch { if (!res.writableEnded) { res.writeHead(503); res.end(); } }
   });
   docServer.on('connection', socket => { docSockets.add(socket); socket.once('close', () => docSockets.delete(socket)); });
@@ -239,10 +243,10 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
     master: { pending: () => master.pending(), scopeControl: row => master.scopeControl(row) }, log: say });
 
   let serial = 0;
-  function enqueue(steps, accountId = 'sender') {
+  function enqueue(steps, accountId = 'sender', inConversation = conversationId) {
     const messageId = `message${++serial}`, content = `任务 ${serial}\n\`\`\`script\n${JSON.stringify(steps)}\n\`\`\``;
     ledger.transaction(s => {
-      const c = s.conversationsV2[projectId][conversationId];
+      const c = s.conversationsV2[projectId][inConversation];
       c.messages.push({ messageId, requestId: `send-${messageId}`, arrivalSeq: c.messages.length + 1, createdAt: Date.now(),
         senderAccountId: accountId, senderNameAtSend: `${accountId} name`, loginId: `login-${accountId}`, credentialId: `credential-${accountId}`,
         loginGeneration: 1, content, contentDigest: digestOf(content), attachments: [],
@@ -258,14 +262,42 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
     enqueue, marker, conversation, grantOf, headRecord,
     release: name => fs.writeFileSync(path.join(markerDir, `release-${name}`), '1'),
     chain: epoch => Object.fromEntries(['epoch', 'assignment', 'terminal', 'intent', 'closure', 'failure'].map(k => [k, m.files.get(`${k}-${epoch}.json`) ?? null])),
-    events: () => eventStore.after({ projectId, conversationId }).events,
+    events: (inConversation = conversationId) => eventStore.after({ projectId, conversationId: inConversation }).events,
+    /** 再开一个对话（比如某个成员自己的私有对话）。 */
+    addConversation(id, { ownerAccountId, visibility }) {
+      ledger.transaction(s => { s.conversationsV2[projectId][id] = { v: 2, projectId, id, ownerAccountId, visibility,
+        aclRevision: 1, queueRevision: 1, currentRunId: null, messages: [] }; });
+    },
+    /** 挂上真的读取清点：文档服务一侧的清点与接口，加上主身份那一侧真的订阅连接（生产上 Agent 主服务就是这样连的）。
+     * 这个夹具里没有人读对话，所以清点里没有读取；挂它是为了让「Agent 这一项确认了没有」走生产上的同一个判断。 */
+    async startReadControl() {
+      const noHumanRead = () => { throw Object.assign(Error('fixture-no-human-read'), { status: 403, code: 'forbidden' }); };
+      readControl = createAgentReadControl({ ledger, instanceAuthority: instances, authorizeRead: async () => noHumanRead(), checkReadInState: noHumanRead });
+      readHandler = createAgentReadControlHandler({ control: readControl, resolveServicePrincipal: peerPrincipal, instanceAuthority: instances });
+      masterReadControl = createConversationControlClient({ origin: docOrigin, tls: pki.account, serverFingerprint256: pki.doc.fingerprint256,
+        runClient: master, receiptFile: path.join(dir, 'master-read-closures.sqlite'), onDiagnostic: entry => say('read-control.diagnostic', entry) });
+      await masterReadControl.start();
+      await until(() => masterReadControl.describe().connected, { timeoutMs: 10_000, what: '主身份的读取控制连接' });
+    },
+    /** Agent 这一项对一次退出确认了没有。就是生产上 doc-agent-assembly.mjs 的 completeAccessEvents 用的那个判断
+     * （读取都关了、要中止的任务都凭 root 的关闭记录结清了）；这里不往账号服务回，只看判断结果。 */
+    agentConfirmation(eventId) {
+      try { return { confirmed: true, closure: readControl.finalizeAccessEvent({ eventId, scoped: true }) }; }
+      catch (error) {
+        if (!['read-close-pending', 'agent-run-closure-pending'].includes(error.code)) throw error;
+        return { confirmed: false, code: error.code };
+      }
+    },
     /** 用户按「停止」时对话权威做的那一步：在文档服务的账本里给这条任务下围栏，并通知它自己去关连接。 */
     stop: (runId, requestId = `stop-${runId}`) => provider.fence({ kind: 'stop', projectId, conversationId, runId, requestId }),
     /** 改密选了退出（或被踢）：账号的旧登录作废，文档服务据这条访问事件给相关任务下围栏。 */
     exit(accountId) {
       const event = ledger.transaction(s => { s.revokedLogins[`login:login-${accountId}`] = { seq: ++s.accountHead };
-        return appendAccessEvent(s, { type: 'login-revoked', accountIds: [accountId], loginIds: [`login-${accountId}`] }); });
-      return provider.applyAccessEvent(event);
+        const event = appendAccessEvent(s, { type: 'login-revoked', accountIds: [accountId], loginIds: [`login-${accountId}`] });
+        // 生产上账号权威在同一个事务里先给读取下围栏、再给任务下围栏（doc-agent-assembly.mjs 的 runHooks）。
+        readControl?.hooks.fenceInState(s, { kind: 'credential', requestId: `access:${event.eventId}`, loginIds: event.loginIds, accessSeq: event.seq });
+        return event; });
+      return Object.assign(provider.applyAccessEvent(event), { event });
     },
     /** 开对话的人把它切成私有：只在账本里下围栏，不另外通知（文档服务在主服务下一次来问时补做它那一侧的关闭）。 */
     makePrivate: (requestId = 'private-1') => ledger.transaction(s => hooks.privateFenceInState(s, { projectId, conversationId,
@@ -275,6 +307,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
       const attempt = async fn => { try { await fn(); } catch (error) { errors.push(error); } };
       gates.holdTerminalDelivery = false;
       await attempt(() => scheduler.stop());
+      await attempt(() => masterReadControl?.close()); readControl?.close();
       // 测试收尾：把还活着的子进程按进程号结束掉。这是清理，不是关闭证明。
       for (const generation of generations.values()) await attempt(() => generation.gateway.terminate());
       await Promise.allSettled([...deliveries.values()]);
