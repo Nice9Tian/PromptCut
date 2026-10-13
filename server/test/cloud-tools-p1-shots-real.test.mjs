@@ -15,6 +15,7 @@ import path from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { makeP1Fixture, tmpDir } from './cloud-tools-p1-fixture.mjs';
+import { freePort } from './free-ports.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const home = os.homedir();
@@ -203,9 +204,10 @@ test('真坏文件(文本冒充 mp4):真 ffprobe 的话变成明确的 error,带
 test('伪装成媒体的播放列表连不了网络:素材里写着 http 地址,真 ffprobe / ffmpeg 一次都没去连(对照:白名单放开 http 的 ffprobe 会连)', { skip: skipAll, timeout: 120_000 }, async (t) => {
   let hits = 0;
   const server = http.createServer((req, res) => { hits += 1; res.statusCode = 404; res.end(); });
-  await new Promise((resolve) => server.listen(28601, '127.0.0.1', resolve));
+  const port = await freePort();
+  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
-  const playlist = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nhttp://127.0.0.1:28601/seg0.ts\n#EXT-X-ENDLIST\n';
+  const playlist = `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nhttp://127.0.0.1:${port}/seg0.ts\n#EXT-X-ENDLIST\n`;
   const work = tmpDir('pc-p1-m3u8-');
   t.after(() => fs.rmSync(work, { recursive: true, force: true }));
   const local = path.join(work, 'list.m3u8');
