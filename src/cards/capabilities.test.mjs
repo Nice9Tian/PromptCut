@@ -5,7 +5,7 @@
  *   CT-01 全部内置卡(`src/cards/index.ts` 注册的四组)在表里三样登记全:哪种写法、画在什么上、依不依赖下层
  *   CT-02 写法以卡的声明为准:表里登记的值和声明对不上算错
  *   CT-03 画在什么上和卡的声明不打架(画布契约、有没有画面),旧字段 `canvasHeavy` 和 `surface` 一致
- *   CT-04 表里没有多余的键、没有会盖过声明的 `frameMode`、没有对不上任何卡的条目
+ *   CT-04 表里没有多余的键(含 `frameMode`:写法只取声明,登记用 `writing`)、没有对不上任何卡的条目
  *   CT-05 两处读表的地方(`src/kernel/frameMode.mjs`、`server/vision-project.mjs`)读到同一份,都带得出新字段
  *   CT-06 新字段不进卡片身份的摘要:`cardCapabilities` 的返回仍只有原来五项,取值和登记的一致
  *   CT-07 `src/cards/index.ts` 注册的还是这四组(多了一组,本测试枚举不到,要跟着改)
@@ -52,7 +52,7 @@ const hasPicture = (def) => typeof def.Component === "function" || typeof def.ca
  *   writing       表里的写法和卡的声明对不上
  *   surface       画在什么上和卡的声明打架,或 `canvasHeavy` 和 `surface` 不一致
  *   compositing   写了这张卡不该写的记号(`unknown` / `fromParts`)
- *   extra-field   条目里有不认识的字段(含会盖过声明的 `frameMode`)
+ *   extra-field   条目里有不认识的字段(含 `frameMode`:写法只取卡的声明)
  *   dead-key      表里的键对不上任何内置卡,也不在已知的例外里
  */
 function checkCardTable(table, cards, { keysOutsideBuiltin = KEYS_OUTSIDE_BUILTIN } = {}) {
@@ -62,7 +62,7 @@ function checkCardTable(table, cards, { keysOutsideBuiltin = KEYS_OUTSIDE_BUILTI
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) { report("incomplete", key, "条目不是对象"); continue; }
     for (const field of Object.keys(entry)) if (!ENTRY_KEYS.includes(field)) {
       report("extra-field", key, field === "frameMode"
-        ? "表里不许写 frameMode:frameMode.mjs 读到它会盖过卡的声明;写法登记在 writing"
+        ? "表里不许写 frameMode:写法只取卡的声明,表里写了也没人读;写法登记在 writing"
         : `不认识的字段 ${field}`);
     }
     if (!Object.hasOwn(CARD_WRITINGS, entry.writing)) report("incomplete", key, `writing 缺了或不认识:${JSON.stringify(entry.writing)}`);
@@ -221,7 +221,7 @@ test("CT-10 夹具:三样缺一样、或取值不认识 → 报 incomplete", () 
 
 test("CT-11 夹具:不该写的值 → 各自报出来", () => {
   const run = (edit) => { const table = copy(TABLE); edit(table); return checkCardTable(table, kit.cards); };
-  // 会盖过声明的 frameMode、不认识的字段
+  // 表里写 frameMode(没人读,写法只取声明)、不认识的字段
   assert.deepEqual(run((t) => { t.odometer.frameMode = "stateful"; }).map((p) => [p.code, p.id]), [["extra-field", "odometer"]]);
   assert.deepEqual(run((t) => { t.odometer.note = "x"; }).map((p) => [p.code, p.id]), [["extra-field", "odometer"]]);
   // 画布卡两处要一致

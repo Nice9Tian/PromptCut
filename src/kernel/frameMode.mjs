@@ -88,13 +88,14 @@ export function resetDegradedCards() { DEGRADED.clear(); }
  * card needs prerendering in its scene, never an isolated transparent movie.
  * Independence is an explicit, reviewed declaration, not a source-code guess.
  *
- * 读的顺序:审阅表 → CardDef。`independent` / `sourceDependent` / `belowDependent`
+ * 写法(frameMode)只取卡的声明,审阅表不盖它。
+ * 依不依赖下层的读的顺序:审阅表 → CardDef。`independent` / `sourceDependent` / `belowDependent`
  * 的唯一权威是审阅表,源码里写的这三个值一概忽略(只有旧的 `context` 还读得出来)。
  * `parts` 是组合卡的部件出处卡 id 列表,不传 = 没有部件。
  */
 export function cardCapabilities(def, params = def?.defaults || {}, parts) {
   const reviewed = reviewedCard(def?.id);
-  const frameMode = normalizeFrameMode(reviewed?.frameMode) ?? cardFrameMode(def, params);
+  const frameMode = cardFrameMode(def, params);
   let compositing = reviewedCompositing(def?.id);
   if (!compositing && DERIVED_FROM_PARTS.includes(def?.id)) compositing = derivedCompositing(parts);
   // 源码声明只剩 `context` 这一个还算数:它是「依赖下层 / 依赖源」的旧统称,不是独立声明。
