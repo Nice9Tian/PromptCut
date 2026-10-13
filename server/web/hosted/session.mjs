@@ -30,6 +30,27 @@ import { resolveAt, explain, locate, focusElement, clearElement, explainStale, e
 
 /** 记这份用户数据目录是哪个进程起的浏览器在用(清孤儿用) */
 const OWNER_FILE = 'owner.json';
+/**
+ * 这个对话的清单出到第几版了。跨浏览器进程接着往下编:关掉重开、服务重启、目录因「设为私有」被清之后,
+ * 新浏览器的版本号不会和模型手里旧清单的版本号撞上(撞上的话旧编号会点到新页面的元素上)。里面只有一个数,不是用户数据。
+ */
+const REV_FILE = 'rev';
+
+function readRev(sessionDir) {
+  try {
+    const n = Number(fs.readFileSync(path.join(sessionDir, REV_FILE), 'utf8').trim());
+    return Number.isSafeInteger(n) && n >= 0 && n < 900_000_000 ? n : 0;
+  } catch { return 0; }
+}
+
+/** 清掉一个对话的浏览器数据。`keepRev`:只删用户数据目录与临时文件,留下清单版本的计数 */
+export async function removeSessionData(sessionDir, { keepRev = false, timeoutMs = 8_000 } = {}) {
+  if (!keepRev) return removeDirFully(sessionDir, { timeoutMs });
+  let ok = true;
+  for (const name of ['profile', '.tmp']) ok = await removeDirFully(path.join(sessionDir, name), { timeoutMs }) && ok;
+  try { fs.rmSync(path.join(sessionDir, OWNER_FILE), { force: true }); } catch { /* 删不掉不影响 */ }
+  return ok;
+}
 
 /**
  * 启动参数打头的那一个。本机的 Chrome for Testing 缺省套用实验配置,会偶发页面永远加载不完
@@ -276,11 +297,12 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
   if (proc) proc.kill = () => { killAll(); return true; };
 
   const state = {
-    rev: 0,                 // 清单版本
+    rev: readRev(sessionDir), // 清单版本(接着这个对话上一个浏览器的往下编)
     viewEpoch: -1,          // 出这版清单时的页面代数
     epoch: 0,               // 页面代数:主框架每跳转一次加一
     marks: new Map(),       // 编号 → 指纹
     opened: false,          // 打开过网页没有
+    hasView: false,         // 这个浏览器出过清单没有
     blocked: [],            // 这次动作里被拦下的东西(下载、协议、新标签页、对话框)
     lastNavRequestAt: 0,
     lastNavEndedAt: 0,      // 主框架的跳转请求收完或失败的时刻(收完了却没换页 = 下载、204 之类)
@@ -398,6 +420,9 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
   /** 每个动作收尾:出新的一版清单 */
   async function finish(extra = {}) {
     state.rev += 1;
+    // 先记下版本再把清单交出去:模型见过的版本号一定已经落盘,下一个浏览器不会重用它
+    try { fs.writeFileSync(path.join(sessionDir, REV_FILE), String(state.rev)); } catch { /* 写不了:本次浏览器里仍然不重复 */ }
+    state.hasView = true;
     const epochBefore = state.epoch;
     const { result, marks } = await captureHostedView(page, state.rev);
     state.marks = marks;
@@ -431,7 +456,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
   function checkUid(u) {
     const parsed = parseUid(u);
     if (!parsed) return { reason: 'format' };
-    if (state.rev === 0) return { reason: 'no_view' };
+    if (!state.hasView) return { reason: parsed.rev <= state.rev ? 'old_rev' : 'no_view' };
     if (parsed.rev !== state.rev) return { reason: 'old_rev' };
     if (state.viewEpoch !== state.epoch) return { reason: 'navigated' };
     const mark = state.marks.get(u);
@@ -503,7 +528,7 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
         return { ok: false, error: '要么给 u,要么给 x,y。x,y 是上一次 web_view 返回的那张图上的像素坐标。' };
       }
-      if (state.rev === 0) return stale('no_view');
+      if (!state.hasView) return stale('no_view');
       if (state.viewEpoch !== state.epoch) return stale('navigated', { u: '图上的坐标' });
       const res = await resolveAt(page, x, y, { expect: typeof expect === 'string' && expect ? expect : null });
       if (!res.ok) return { ok: false, error: explain(res), ...(res.cands ? { candidates: res.cands } : {}) };
@@ -594,15 +619,17 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
    * 关掉这个会话:浏览器整棵进程树退出、代理关掉;`removeProfile` 时连用户数据目录一起删。
    * 回的是证据,不是「已发出关闭」:`exited` 为真当且仅当记下的每个进程号都查不到了。
    *
-   * @param {{ graceful?: boolean, removeProfile?: boolean, reason?: string }} [o]
-   *   `graceful`:先让浏览器自己退(把 cookie 落盘);被收回授权时不给这个机会,直接杀
+   * @param {{ graceful?: boolean, removeProfile?: boolean, removeAll?: boolean, reason?: string }} [o]
+   *   `graceful`:先让浏览器自己退(把 cookie 落盘);被收回授权时不给这个机会,直接杀。
+   *   `removeProfile`:删用户数据目录(留下清单版本的计数);`removeAll`:整个目录都删(对话、项目没了)
    */
-  function close({ graceful = true, removeProfile = false, reason = 'close' } = {}) {
+  function close({ graceful = true, removeProfile = false, removeAll = false, reason = 'close' } = {}) {
+    const wipe = () => removeSessionData(sessionDir, { keepRev: !removeAll, timeoutMs: limits.closeMs });
     if (state.closing) {
       // 已经在关:后来的调用只多做「删目录」这一件
       return state.closing.then(async (first) => {
-        if (!removeProfile || first.profileRemoved) return first;
-        return { ...first, profileRemoved: await removeDirFully(sessionDir, { timeoutMs: limits.closeMs }) };
+        if (!(removeProfile || removeAll)) return first;
+        return { ...first, profileRemoved: await wipe() };
       });
     }
     state.closing = (async () => {
@@ -621,13 +648,13 @@ export async function launchHostedSession({ sessionDir, executablePath, headless
       const proxyClosed = await proxy.close();
       let profileRemoved = false;
       let profileBytes = null;
-      if (removeProfile) profileRemoved = await removeDirFully(sessionDir, { timeoutMs: limits.closeMs });
+      if (removeProfile || removeAll) profileRemoved = await wipe();
       else {
         try { fs.rmSync(path.join(sessionDir, OWNER_FILE), { force: true }); } catch { /* 删不掉不影响 */ }
         // 用户数据目录超过上限:整个删掉(登录态也没了),免得一个对话把磁盘占满
         profileBytes = dirBytes(userDataDir);
         if (profileBytes > limits.maxProfileBytes) {
-          profileRemoved = await removeDirFully(sessionDir, { timeoutMs: limits.closeMs });
+          profileRemoved = await removeSessionData(sessionDir, { keepRev: true, timeoutMs: limits.closeMs });
           say('agent.web.profile-over-limit', { bytes: profileBytes });
         }
       }

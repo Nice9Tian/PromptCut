@@ -135,6 +135,10 @@ test('W1-TOOL-01 七个工具真实走通,形状同桌面版', async (t) => {
   const bottom = await f.tools.call('web_scroll', { to: 'bottom' }, context);
   assert.equal(bottom.ok, true);
   assert.equal(bottom.scrolled, 'bottom');
+  // 图是滚动之后这一屏的,不是文档顶部那一屏:和首屏的图不一样,而且清单里的框落在图的范围里
+  assert.ok(bottom.__image.base64 !== latest.__image.base64, '滚动后的截图是当前这一屏,不是文档顶部那一屏');
+  const deepBox = item(bottom, '底部的按钮').b;
+  assert.ok(deepBox[1] >= 0 && deepBox[3] <= bottom.image.height, `底部按钮的框在图里:${deepBox}`);
   const deep = await f.tools.call('web_click', { u: item(bottom, '底部的按钮').u }, context);
   assert.equal(deep.ok, true, deep.error);
   shot(bottom, '05-scroll.webp');
@@ -412,12 +416,15 @@ test('W1-ISO-02 web_close 之后进程没了、目录还在;再打开登录态�
 
   const again = await f.tools.call('web_open', { url: `${ORIGIN}/whoami` }, context);
   assert.equal(again.ok, true, again.error);
-  assert.equal(again.rev, 1, '新起的浏览器,清单从头编');
+  assert.equal(again.rev, view.rev + 1, '新起的浏览器接着这个对话原来的版本往下编,不重用旧版本号');
   assert.match(await pageText(f, context), new RegExp(`会话是 ${sid}`), '登录态随目录留了下来');
-  // 上一个浏览器里的编号:版本对不上(新浏览器的清单从 1 重新编,旧的 r2… 不是当前这一版)
-  const stale = await f.tools.call('web_click', { u: `r${view.rev}e1` }, context);
-  assert.equal(stale.ok, false);
-  assert.equal(stale.stale, true);
+  // 上一个浏览器里的每一版编号:在新浏览器里都不是当前这一版,一个都点不了
+  for (let rev = 1; rev <= view.rev; rev += 1) {
+    const stale = await f.tools.call('web_click', { u: `r${rev}e1` }, context);
+    assert.equal(stale.ok, false);
+    assert.equal(stale.reason, 'old_rev');
+  }
+  assert.equal((await f.tools.call('web_read', {}, context)).title, 'W1 我是谁', '页面没有被旧编号点走');
 });
 
 test('W1-RUN-01 对话设为私有:浏览器整棵进程树退出,旧上下文被拒,按「私有」关对话后目录删掉', async (t) => {
@@ -450,7 +457,9 @@ test('W1-RUN-01 对话设为私有:浏览器整棵进程树退出,旧上下文�
   // 宿主按「私有」关这个对话:目录删掉(换了一批能看这个对话的人,之前的登录态不带过去)
   const closed = await f.tools.closeConversation({ projectId, conversationId }, { reason: 'private' });
   assert.deepEqual(closed, { wasOpen: false, exited: true, alivePids: [], profileRemoved: true });
-  assert.equal(fs.existsSync(dir), false);
+  assert.equal(fs.existsSync(path.join(dir, 'profile')), false, '用户数据目录删掉了');
+  assert.deepEqual(fs.readdirSync(dir), ['rev'], '只留下清单版本的计数(一个数,不是用户数据)');
+  assert.equal(fs.readFileSync(path.join(dir, 'rev'), 'utf8'), String(view.rev));
   const hitsBefore = site.hits.length;
   await sleep(300);
   assert.equal(site.hits.length, hitsBefore, '浏览器没了以后站点再没收到请求');

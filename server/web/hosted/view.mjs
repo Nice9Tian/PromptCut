@@ -13,6 +13,7 @@
  * 页面里的 `data-pcuid` 只是「找回那个元素」的把手;判定用的版本号与指纹都在服务端(页面改不了)。
  */
 import { view as desktopView } from '../session.mjs';
+import { liveViewport, scaleOf } from '../view.mjs';
 
 /** 清单编号的形状:`r<版本>e<序号>` */
 export const UID_RE = /^r(\d{1,9})e(\d{1,4})$/;
@@ -74,6 +75,20 @@ export async function captureHostedView(page, rev) {
     tagged = await page.evaluate(retag, prefix);
   } catch { /* 截完图页面就跳走了:这一版清单一个都点不了,下面照实给,动作时会被判成过期 */ }
   const marks = new Map(Object.entries(tagged.marks ?? {}));
+  // 页面滚动过时,桌面版那张图截的是**文档顶部**而不是当前这一屏(它给 screenshot 传了 clip,puppeteer 就按文档坐标截),
+  // 图和清单对不上。这里从滚动到的位置重截一张换掉。没滚动时两种截法是同一张,不重截。
+  const scroll = tagged.scroll ?? [0, 0];
+  if (result.__image && (scroll[0] !== 0 || scroll[1] !== 0)) {
+    try {
+      const viewport = await liveViewport(page);
+      const base64 = await page.screenshot({
+        type: 'webp', quality: 70, encoding: 'base64',
+        // clip 是文档坐标:从滚动到的位置起截一屏
+        clip: { x: scroll[0], y: scroll[1], width: viewport.width, height: viewport.height, scale: scaleOf(viewport) },
+      });
+      result.__image = { base64, mime: 'image/webp' };
+    } catch { /* 重截不成:留着原来那张,清单仍然是对的 */ }
+  }
   result.rev = rev;
   result.clickable = (result.clickable ?? []).map((item) => ({ ...item, u: formatUid(rev, item.u) }));
   if (result.image) {
@@ -82,5 +97,5 @@ export async function captureHostedView(page, rev) {
   }
   if (Array.isArray(result.wall) && result.wall.length) result.wallNote = hostedWallNote(result.wall);
   result.dataNotice = PAGE_DATA_NOTICE;
-  return { result, marks, scroll: tagged.scroll ?? [0, 0] };
+  return { result, marks, scroll };
 }

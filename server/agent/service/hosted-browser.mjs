@@ -22,7 +22,7 @@
  *   |--------------------------------------------|------------|--------------|
  *   | `web_close`、闲置超时、为腾名额被换下      | 退出       | 留着(工具说明里写的「登录态还在」) |
  *   | 这一轮被停止、Agent 被关(登记器收回)     | 退出       | 留着(对话还在,下一轮接着用) |
- *   | 对话被设为私有(宿主调 `closeConversation(…, { reason: 'private' })`) | 退出 | **删掉**(换了一批能看这个对话的人,之前攒下的状态不带过去) |
+ *   | 对话被设为私有(宿主调 `closeConversation(…, { reason: 'private' })`) | 退出 | **删掉**(换了一批能看这个对话的人,之前攒下的状态不带过去);只留清单版本的计数 |
  *   | 对话被删、项目被删(宿主调 `closeConversation` / `removeProject`)   | 退出 | 删掉 |
  *   | 服务关闭(`close()`)                      | 退出       | 留着;重启后旧浏览器不会复活,打开过的页面与旧清单的编号都作废 |
  *   | 用户数据目录超过上限                       | —          | 关闭时整个删掉 |
@@ -33,7 +33,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { admitWebTarget } from '../../web/hosted/network.mjs';
-import { launchHostedSession, HostedSessionError, reapOrphan, removeDirFully, pidAlive, HOSTED_BROWSER_ARG_PREFIX } from '../../web/hosted/session.mjs';
+import { launchHostedSession, HostedSessionError, reapOrphan, removeDirFully, removeSessionData, pidAlive, HOSTED_BROWSER_ARG_PREFIX } from '../../web/hosted/session.mjs';
 
 export const WEB_TOOL_NAMES = Object.freeze(['web_open', 'web_view', 'web_click', 'web_type', 'web_scroll', 'web_read', 'web_close']);
 
@@ -110,6 +110,8 @@ export function hostedBrowserDir(dataDir, { projectId, conversationId }) {
 function removeProfileFor(reason) {
   return reason === 'private' || reason === 'conversation-deleted' || reason === 'project-deleted';
 }
+/** 对话、项目没了:连清单版本的计数一起删。只是设为私有:计数留着(模型手里还有旧清单,新浏览器的版本号不能和它撞) */
+const removeAllFor = (reason) => reason === 'conversation-deleted' || reason === 'project-deleted';
 
 /**
  * @param {object} d
@@ -182,11 +184,11 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
   }
 
   /** 关一个会话并等到有结果。从表里先摘掉:之后的调用看到的是「没开着」 */
-  function retire(entry, { reason, graceful = true, removeProfile = removeProfileFor(reason) } = {}) {
+  function retire(entry, { reason, graceful = true, removeProfile = removeProfileFor(reason), removeAll = removeProfile && removeAllFor(reason) } = {}) {
     if (sessions.get(entry.key) === entry) sessions.delete(entry.key);
     if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
     entry.retired ??= reason;
-    return track(entry.session.close({ graceful, removeProfile, reason }));
+    return track(entry.session.close({ graceful, removeProfile, removeAll, reason }));
   }
 
   function touch(entry) {
@@ -379,7 +381,7 @@ export function createHostedBrowserTools({ resources, egress, dataDir, runtime =
     if (removeProfile && !profileRemoved) {
       // 浏览器没开着,目录是以前留下的:先确认没有残留进程占着,再删
       await reapOrphan(dir, { timeoutMs: cfg.closeMs });
-      profileRemoved = await removeDirFully(dir, { timeoutMs: cfg.closeMs });
+      profileRemoved = await removeSessionData(dir, { keepRev: !removeAllFor(reason), timeoutMs: cfg.closeMs });
     }
     return { wasOpen: Boolean(entry), exited: result.exited, alivePids: result.alivePids ?? [], profileRemoved };
   }
