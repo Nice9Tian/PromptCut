@@ -1,4 +1,4 @@
-// P2(云端语音转写)真实验证的公共部分:找依赖、造素材。素材放 out/p2-stt/(被 .gitignore 忽略,不入库)。
+// P2(云端语音转写)真实验证的公共部分(放在 server/test/ 是因为 server/ 下的测试不许 import scripts/;探针脚本反过来引用这里):找依赖、造素材。素材放 out/p2-stt/(被 .gitignore 忽略,不入库)。
 // 依赖(Python、faster-whisper、权重)不入库也不下载:从主工作区已装好的一份复制到 out/p2-stt/(只读主工作区),
 // 复制只在 out/p2-stt/ 里没有时做一次。
 import { spawnSync } from 'node:child_process';

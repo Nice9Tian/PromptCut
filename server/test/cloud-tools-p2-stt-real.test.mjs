@@ -1,22 +1,24 @@
 // P2(云端语音转写)真实验证:真 Python + 真 faster-whisper(small 权重)+ 真 ffmpeg + 真语音素材,
 // 走完整条链:项目素材库 → 工作区 → 离线子进程 → 文字稿 → 提交到(假的)项目。运行授权、作业表、素材库、进程登记都是真的。
 // 依赖不全时整文件跳过并说明缺什么;要强制跑(缺依赖就失败)用 node scripts/probes/cloud-tools-p2-stt-probe.mjs。
-// 依赖和素材准备见 scripts/probes/cloud-tools-p2-lib.mjs。
+// 依赖和素材准备见 server/test/cloud-tools-p2-real-lib.mjs。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { p2Fixture, until, alive } from './cloud-tools-p2-fixture.mjs';
-import { PATHS, findPython, realDepsMissing, ensureMedia } from '../../scripts/probes/cloud-tools-p2-lib.mjs';
+import { PATHS, findPython, realDepsMissing, ensureMedia } from './cloud-tools-p2-real-lib.mjs';
 
 const missing = realDepsMissing();
 const verbose = process.env.P2_VERBOSE === '1';
 const log = (...args) => { if (verbose) console.log('[p2]', ...args); };
 
-async function realFixture(t, limits = {}) {
+async function realFixture(t, limits = {}, runtime = {}) {
   const f = await p2Fixture(t, {
     realPython: true,
-    runtime: { pythonPath: findPython(), sourceRoot: PATHS.sourceRoot, pylibs: PATHS.pylibs, modelsDir: PATHS.models, requirements: {} },
+    runtime: { pythonPath: findPython(), sourceRoot: PATHS.sourceRoot, pylibs: PATHS.pylibs, modelsDir: PATHS.models, requirements: {}, ...runtime },
     limits: { engines: ['faster-whisper', 'whisper'], progressMs: 300, transcribeMs: 5 * 60_000, ...limits },
   });
   return f;
@@ -123,4 +125,24 @@ test('real timeout: the engine is stopped at the limit and the job ends as TIMEO
   assert.equal(rawJob(f, started.jobId).error_code, 'TIMEOUT');
   await until(() => !alive(python.pid), { ms: 20_000, what: 'python exit' });
   assert.equal(f.doc.commits.length, 0);
+});
+
+test('real install job: pip runs with the node-configured locked requirements file, not with anything from the model', { skip: process.env.P2_PIP !== '1' ? 'set P2_PIP=1 (needs network and pip)' : (missing ?? false), timeout: 300_000 }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-p2-pip-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const lock = path.join(dir, 'tiny-lock.txt');
+  fs.writeFileSync(lock, 'idna==3.10\n');                    // 一个很小的纯 Python 包,只为证明 pip 真的按锁定文件装
+  const libs = path.join(dir, 'libs');
+  const f = await realFixture(t, {}, { pylibs: libs, requirements: { 'faster-whisper': lock } });
+  const status = await f.tools.call('stt_status', {}, f.context);
+  assert.equal(status.engines['faster-whisper'].installed, false, 'an empty library directory has no engine');
+  assert.equal(status.engines['faster-whisper'].installableHere, true);
+  await assert.rejects(f.tools.call('stt_install', { engine: 'faster-whisper', requirements: 'C:/evil.txt' }, f.context), { code: 'bad-args' });
+  const started = await f.tools.call('stt_install', { engine: 'faster-whisper' }, f.context);
+  assert.equal(started.started, true);
+  await waitJob(f, started.jobId, 'done');
+  log('install job', JSON.stringify(rawJob(f, started.jobId)));
+  assert.ok(fs.existsSync(path.join(libs, 'idna')), 'the locked package landed in the node library directory');
+  await f.tools.close('test');
+  assert.ok(f.calls.realChildren.every((c) => c.exitCode !== null || c.signalCode !== null));
 });

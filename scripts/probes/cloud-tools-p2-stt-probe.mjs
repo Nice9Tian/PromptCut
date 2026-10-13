@@ -6,10 +6,11 @@
 // 跑之前设好 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE(运行授权夹具要用,值见仓库 docs/local.md 里的说明)。
 // 真实验证的内容:真 Python + faster-whisper small + ffmpeg;真实语音素材(系统合成语音念已知英文、仓库自带的中文人声);
 // 完整链路 项目素材库 → 工作区 → 离线子进程 → 文字稿 → 提交;缺权重/缺引擎/无音轨的回应;撤销时子进程真的退出;超时。
+// 探针会设 P2_PIP=1,多跑一条真 pip 安装(装一个很小的锁定包到临时目录;要联网)。
 // 步骤和证据行(以 [p2] 开头)直接打在输出里。耗时只记录。
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { copyDeps, ensureMedia, realDepsMissing, ROOT, PATHS } from './cloud-tools-p2-lib.mjs';
+import { copyDeps, ensureMedia, realDepsMissing, ROOT, PATHS } from '../../server/test/cloud-tools-p2-real-lib.mjs';
 
 const setupOnly = process.argv.includes('--setup');
 copyDeps();
@@ -24,7 +25,7 @@ const code = await new Promise((resolve) => {
   const child = spawn(process.execPath, [
     '--experimental-test-module-mocks', '--test-global-setup=server/test/global-setup.mjs', '--test', '--test-reporter=spec',
     'server/test/cloud-tools-p2-stt.test.mjs', 'server/test/cloud-tools-p2-stt-real.test.mjs',
-  ], { cwd: ROOT, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, P2_VERBOSE: '1' } });
+  ], { cwd: ROOT, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, P2_VERBOSE: '1', P2_PIP: '1' } });
   let text = '';
   child.stdout.on('data', (chunk) => { text += chunk; process.stdout.write(chunk); });
   child.once('close', (exitCode) => {
