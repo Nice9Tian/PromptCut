@@ -128,17 +128,34 @@ export function hostedNetworkArgs(proxyUrl) {
   ];
 }
 
-/** 部署者追加的启动参数里不许出现的:会把上面那一组改掉或打开调试端口 */
-const FORBIDDEN_EXTRA = /^--(proxy-|no-proxy-server|host-resolver-rules|host-rules|remote-debugging-|remote-allow-origins|webrtc-ip-handling-policy|force-webrtc-ip-handling-policy|enable-quic|origin-to-force-quic-on|load-extension|disable-web-security|allow-file-access|user-data-dir|headless)/i;
+/**
+ * 部署者能追加的启动参数:**白名单,整条相等才留**。只列确有部署需要、而且不碰出网与隔离的几个:
+ *
+ *   - `--no-sandbox`、`--disable-setuid-sandbox`:节点上以 root 跑、或内核不许非特权用户建命名空间时,浏览器自己的沙箱起不来;
+ *   - `--no-zygote`:某些容器里 zygote 起不来(只能和 `--no-sandbox` 一起用);
+ *   - `--disable-dev-shm-usage`:容器的 /dev/shm 太小时,共享内存改放临时目录;
+ *   - `--disable-gpu`、`--disable-software-rasterizer`:没有显卡的节点上省掉 GPU 进程;
+ *   - `--disable-field-trial-config`:本机 Chrome for Testing 打头的那一个(见 `session.mjs` 的 `HOSTED_BROWSER_ARG_PREFIX`)。
+ *
+ * 用黑名单挡不住:浏览器有上千个开关,能改代理、换缓存目录、放宽证书校验、关站点隔离、往盘上记网络日志与 TLS 密钥的不止一二十个,
+ * 还会随版本增加。名单外的一律丢掉(记一行日志,只记个数)。
+ */
+export const ALLOWED_EXTRA_ARGS = Object.freeze([
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--no-zygote',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--disable-software-rasterizer',
+  '--disable-field-trial-config',
+]);
 
-/** 部署者追加的启动参数:留下合规的,回 `{ args, dropped }` */
+/** 追加的启动参数(部署者给的、以及打头的那几个):留下白名单里的,回 `{ args, dropped }` */
 export function filterExtraArgs(extra) {
   const args = [];
   const dropped = [];
   for (const a of Array.isArray(extra) ? extra : []) {
-    if (typeof a !== 'string' || !a.startsWith('--') || /[\r\n\0]/.test(a)) { dropped.push(String(a)); continue; }
-    if (FORBIDDEN_EXTRA.test(a)) { dropped.push(a); continue; }
-    args.push(a);
+    if (typeof a === 'string' && ALLOWED_EXTRA_ARGS.includes(a)) { if (!args.includes(a)) args.push(a); } else dropped.push(String(a));
   }
   return { args, dropped };
 }

@@ -41,7 +41,7 @@ import { pathToFileURL } from 'node:url';
 import { w1Fixture, item, sleep, until, testChromePath, testHeadlessShellPath, projectId, conversationId, TEST_CHROME_ARG_PREFIX, TEST_EXTRA_ARGS, isHeadlessShell, rawLaunchOptions } from './cloud-tools-w1-fixture.mjs';
 import { startFakeSite, startInternalService } from './cloud-tools-w1-site.mjs';
 import { createEgressGate } from '../agent/service/egress.mjs';
-import { normalizeWebTarget, pageRequestAllowed, filterExtraArgs, hostedNetworkArgs, startBrowserProxy, egressRefusalText } from '../web/hosted/network.mjs';
+import { normalizeWebTarget, pageRequestAllowed, filterExtraArgs, ALLOWED_EXTRA_ARGS, hostedNetworkArgs, startBrowserProxy, egressRefusalText } from '../web/hosted/network.mjs';
 import { launchHostedSession, HOSTED_BROWSER_ARG_PREFIX } from '../web/hosted/session.mjs';
 import { HOSTED_BROWSER_DEFAULTS } from '../agent/service/hosted-browser.mjs';
 
@@ -144,6 +144,17 @@ test('W1-EGRESS-01 纯函数:地址、协议、启动参数', () => {
     '--force-webrtc-ip-handling-policy=default', 'not-a-flag', 42, '--ok\n--proxy-server=x', '--allow-file-access-from-files', '--enable-quic']);
   assert.deepEqual(extra.args, ['--no-sandbox', '--disable-gpu']);
   assert.equal(extra.dropped.length, 16);
+  // 白名单:整条相等才留。黑名单时代漏掉的这些,现在一个都进不来
+  const sneaky = ['--disable-extensions-except=/x', '--disk-cache-dir=/srv/other', '--ignore-certificate-errors', '--ignore-certificate-errors-spki-list=abc',
+    '--unsafely-treat-insecure-origin-as-secure=http://evil', '--allow-running-insecure-content', '--log-net-log=/tmp/net.json', '--ssl-key-log-file=/tmp/keys',
+    '--explicitly-allowed-ports=22', '--disable-site-isolation-trials', '--single-process', '--enable-features=NetworkServiceInProcess', '--disable-features=IsolateOrigins',
+    '--no-sandbox=1', '--NO-SANDBOX', ' --no-sandbox', '--no-sandbox --proxy-server=http://evil:1', '--disable-gpu-sandbox', '--renderer-cmd-prefix=sh', '--utility-cmd-prefix=sh',
+    '--gpu-launcher=sh', '--enable-logging', '--user-agent=x', '--js-flags=--expose-gc', '--remote-debugging-pipe', '--auto-open-devtools-for-tabs', '--', '-no-sandbox', null, {}, ['--no-sandbox']];
+  assert.deepEqual(filterExtraArgs(sneaky), { args: [], dropped: sneaky.map(String) });
+  assert.deepEqual(filterExtraArgs([...ALLOWED_EXTRA_ARGS, '--no-sandbox']).args, [...ALLOWED_EXTRA_ARGS], '名单里的都留,重复的只留一个');
+  assert.deepEqual([...ALLOWED_EXTRA_ARGS], ['--no-sandbox', '--disable-setuid-sandbox', '--no-zygote', '--disable-dev-shm-usage', '--disable-gpu', '--disable-software-rasterizer', '--disable-field-trial-config'],
+    '名单改了要同时改报告里那张表');
+  assert.deepEqual(filterExtraArgs('--no-sandbox'), { args: [], dropped: [] }, '不是数组:当没给');
   assert.match(egressRefusalText('blocked-address'), /内网/);
 });
 
@@ -255,7 +266,8 @@ test('W1-EGRESS-03 起浏览器时交给它的东西:管道、无头、白名单
   t.after(() => { for (const k of ['PROMPTCUT_AGENT_SECRET_FOR_TEST', 'HTTP_PROXY', 'HTTPS_PROXY', 'AWS_SECRET_ACCESS_KEY']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
   const chrome = await testChromePath();
   const extraArgs = ['--no-sandbox', '--proxy-server=http://evil.invalid:1', '--remote-debugging-port=9222', '--headless=old', '--user-data-dir=/tmp/evil'];
-  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's'), executablePath: chrome, gate, limits: HOSTED_BROWSER_DEFAULTS, extraArgs, spawnBrowser }), { code: 'launch-failed' });
+  await assert.rejects(launchHostedSession({ sessionDir: path.join(dir, 's'), executablePath: chrome, gate, limits: HOSTED_BROWSER_DEFAULTS, extraArgs, spawnBrowser,
+    argPrefix: [...HOSTED_BROWSER_ARG_PREFIX, '--proxy-server=http://evil.invalid:2', '--single-process', '--disk-cache-dir=/srv/evil'] }), { code: 'launch-failed' });
   const o = captured[0];
   assert.equal(o.command, chrome);
   assert.deepEqual(o.options.stdio, ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], '只有 3、4 号是管道:调试协议走它们');
@@ -269,7 +281,7 @@ test('W1-EGRESS-03 起浏览器时交给它的东西:管道、无头、白名单
   assert.equal(o.args.filter((a) => a.startsWith('--proxy-server=')).length, 1);
   assert.match(o.args.find((a) => a.startsWith('--proxy-server=')), /^--proxy-server=http:\/\/127\.0\.0\.1:\d+$/);
   assert.ok(o.args.includes('--no-sandbox'), '部署者追加的合规参数留着');
-  assert.ok(!o.args.some((a) => /evil|no-proxy-server/.test(a)), '改代理、换目录的被丢掉');
+  assert.ok(!o.args.some((a) => /evil|no-proxy-server|single-process|disk-cache-dir/.test(a)), '改代理、换目录的被丢掉;打头的那几个参数过的是同一道白名单');
   for (const key of Object.keys(o.options.env)) assert.doesNotMatch(key, /^PROMPTCUT_|PROXY|AWS_|SECRET|TOKEN|KEY$/i, `环境变量里不该有 ${key}`);
   assert.equal(o.options.env.HOME, path.join(dir, 's'));
   assert.ok(String(o.options.env.TEMP).startsWith(path.join(dir, 's')));
