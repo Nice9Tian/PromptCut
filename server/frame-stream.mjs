@@ -2,7 +2,8 @@
  * 轨道流(R8,任务书 `docs/plan/r8-streams-task.md` 的 G1～G6)—— 预渲染进程这一侧。
  *
  * 给预渲染集合里的卡产「轨道流」:每张(或每组)重卡一条 H.264 流,上半 RGB(预乘)、下半 alpha 灰度,
- * 裁到实体框,按 15 帧切成 fMP4 分段。页面侧的解封装 / 解码 / 合成在 `src/render/streamPlayer.ts`。
+ * 裁到实体框,从这条流自己的第一帧起每 15 帧切成一个 fMP4 分段(换算只在 `src/render/streamSegments.mjs` 一处)。
+ * 页面侧的解封装 / 解码 / 合成在 `src/render/streamPlayer.ts`。
  *
  * # 这个文件里有什么
  *
@@ -44,6 +45,7 @@ import { cardStreamIdentity } from './card-identity.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
 import { belowLayersOf } from '../src/render/streamInputSig.mjs';
+import { isStreamOrigin, streamSegmentFirstFrame, streamSegmentFrameCount, streamSegmentLastFrame, streamSegmentOf, streamSegmentSpan } from '../src/render/streamSegments.mjs';
 
 import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
 export { StreamStore, readySegmentRanges, publicManifest, handleStreamRequest } from './asset-store/stream-store.mjs';
@@ -62,8 +64,10 @@ export const REPLACED_DELETE_MS = 5000;
  * 生产这条流的代码的版本(改了分段格式 / 坐标口径就加一,旧流全部作废)。
  * 2:画布卡的帧从画布直接取像素(`./bakery/capture-canvas.mjs`);单卡流的成员键不再带生成快照的代码指纹
  * (`docs/plan/prerender-products-contract.md` 第 9.3 节,这两样同一次换)。
+ * 3:分段从这条流自己的第一帧起每 15 帧一段(原来从项目的第 0 帧起),最后一段到这条流自己的最后一帧为止
+ * (`src/render/streamSegments.mjs`;`docs/plan/html-snapshot-removal-dryrun.md` 第 10.5 节)。分段号的含义变了,旧流全部重产。
  */
-export const STREAM_CODE_VERSION = 2;
+export const STREAM_CODE_VERSION = 3;
 /** 单卡流的矩形上界:框外再留这么多像素给溢出框的内容(阴影、描边) */
 export const LOCAL_OVERFLOW_PX = 32;
 /** 实测实体框并集再外扩这么多(稀疏趟只量了三分之一的帧,中间帧可能略微超出) */
@@ -472,8 +476,11 @@ export function streamNeedsReplay(controls) {
 /**
  * 按 entry(项目 + card plan + 预渲染集合)算出这一版的全部流。纯函数(除了 `prerenderPicked`
  * 由调用方给)。回 `[{ streamKey, contentKey, envFingerprint, kind, plane, clipIds, topClipId, offset, bound,
- * mountFrame, replay, firstFrame, lastFrame, firstSegment, lastSegment, members }]`。`replay`:产分段时要不要从挂载帧
+ * mountFrame, replay, firstFrame, lastFrame, originFrame, firstSegment, lastSegment, members }]`。`replay`:产分段时要不要从挂载帧
  * 回放(`streamNeedsReplay`);不进任何键 —— 不回放不改画面,remotion 式的卡画面只由时间和参数决定。
+ *
+ * `originFrame`:这条流自己的第一帧(项目帧号)——单卡流是片段的第一帧,组流是成员里最早的第一帧,依赖下层的流是目标卡的第一帧。
+ * 分段从它起每 15 帧一段(`streamSegmentSpan`),所以 `firstSegment` 恒为 0;`originFrame` 自己不另进键(键里已有成员的采样窗口)。
  *
  * M4(契约 E.4):`contentKey` 是流的内容键(成员取 card plan 的**内容键**,不含环境),
  * `streamKey = resultKeyOf(contentKey, envFingerprint)` 是落盘和路由用的结果键。同一个项目在两种
@@ -520,7 +527,7 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     const base = {
       clipIds: [...g.clipIds], topClipId: g.clipIds[g.clipIds.length - 1], mountFrame: first,
       firstFrame: firstVisible, lastFrame: last,
-      firstSegment: Math.floor(Math.max(0, firstVisible) / SEGMENT_FRAMES), lastSegment: Math.floor(last / SEGMENT_FRAMES),
+      ...streamSegmentSpan(firstVisible, last),
       fps, stage, total,
       replay: streamNeedsReplay(members.map(m => m.control)),
     };
@@ -569,7 +576,7 @@ export function relockStreams(specs, locks) {
 export function queueStreamOf(spec) {
   return {
     streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: spec.topClipId,
-    firstSegment: spec.firstSegment, lastSegment: spec.lastSegment,
+    originFrame: spec.originFrame, firstSegment: spec.firstSegment, lastSegment: spec.lastSegment,
     kind: spec.kind, plane: spec.plane, clipIds: [...(spec.clipIds ?? [])], fps: spec.fps,
     bound: spec.bound ? { ...spec.bound } : null, offset: spec.offset ? { ...spec.offset } : null,
     firstFrame: spec.firstFrame, lastFrame: spec.lastFrame, total: spec.total,
@@ -591,8 +598,8 @@ export function planListStreams(entry, clips, options = {}) {
  * 这条流的**隔离工程**(G4「单卡像素怎么隔离」:`isolatedCardProject` 的流版本)。
  *
  * 只留这条流的卡(单卡流一张、组流一组)可见;同一条序列上的其它片段和别的序列都变成
- * 隐藏的 `sourceOnly` 序列 —— 不出画,但图卡按源片段解输入时还找得到。**时间不平移**(流按全局
- * 帧号分段);背景透明由导出页自己保证。
+ * 隐藏的 `sourceOnly` 序列 —— 不出画,但图卡按源片段解输入时还找得到。**时间不平移**(隔离工程里
+ * 片段还在它原来的时刻,产分段时按项目帧号推帧;分段号由 `originFrame` 换算);背景透明由导出页自己保证。
  *
  * 单卡流还要把包裹层外观拿掉(框摆到 `offset`、不缩放不旋转、不透明度 / 淡入淡出 / motion / 强调
  * 都去掉):这些在舞台上由包裹层加。组流原样保留(外观画进流里)。
@@ -732,7 +739,7 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
     specs.push({
       clipIds: [control.clipId], topClipId: control.clipId, mountFrame,
       firstFrame: target.firstFrame, lastFrame: target.to,
-      firstSegment: Math.floor(Math.max(0, target.firstFrame) / SEGMENT_FRAMES), lastSegment: Math.floor(target.to / SEGMENT_FRAMES),
+      ...streamSegmentSpan(target.firstFrame, target.to),
       fps, stage, total,
       replay: streamNeedsReplay(stateful),
       streamKey: resultKeyOf(contentKey, envFingerprint), contentKey, envFingerprint,
@@ -795,7 +802,10 @@ export function encoderParamsHash(encoder) {
   return sha(JSON.stringify({ args: spec?.args ?? null, filter: streamFilterIdentity(spec?.pixFmt) }), 16);
 }
 
-/** 分段签名 = 流签名 + 分段号 + stride + 编码器名 + 编码参数哈希(G2),再加上矩形(变体) */
+/**
+ * 分段签名 = 流签名 + 分段号 + stride + 编码器名 + 编码参数哈希(G2),再加上矩形(变体)。
+ * 分段号是这条流自己的(从它的第一帧起数),签名里没有项目帧号:流在时间轴上的位置只经流键进来。
+ */
 export function segmentSignature({ streamKey, segment, stride, encoder, rect }) {
   return sha(JSON.stringify({ streamKey, segment, stride, encoder, params: encoderParamsHash(encoder), rect }), 32);
 }
@@ -815,6 +825,8 @@ export function streamAdoption(result) {
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) bad('range');
   const header = result.header;
   if (!header || typeof header !== 'object' || !Array.isArray(header.clipIds)) bad('header');
+  // 分段号从这条流自己的第一帧起数:清单不带这一帧的(改分段规则之前的节点产的)不收,免得把按项目帧号分的段当成新的贴
+  if (!isStreamOrigin(header.originFrame)) bad('header.originFrame');
   const inits = {};
   for (const [id, meta] of Object.entries(result.inits ?? {})) {
     if (!INIT_RE.test(id) || !KEY_RE.test(String(meta?.hash)) || meta.hash.slice(0, 16) !== id) bad(`init ${id}`);
@@ -830,6 +842,19 @@ export function streamAdoption(result) {
   }
   segments.sort((a, b) => a[0] - b[0]);
   return { key, range: { from, to }, header, inits, segments };
+}
+
+/**
+ * 清单里记的第一帧跟上这一版计划的(`spec.originFrame`),回同一个清单对象。
+ *
+ * 清单的 `originFrame` 记的是「产这条流时它的第一帧在项目的第几帧」。现在流键里带着片段在时间轴上的位置,同一个键的清单
+ * 这一项不会和计划对不上,这里什么都不改。留着这一步是给「片段在时间轴上挪动以后流不失效」(记了待办,这次不做)用的:
+ * 那时位置从流键和输入签名里拿掉,同一条流会被摆到别的帧上,清单里的旧位置就由这里换成当前的;读的一侧本来就不从清单取这一帧
+ * (取的是就绪消息 / 层表那一行带的,由计划的一侧按当前项目给),所以分段和清单的格式都不用再动。
+ */
+export function anchorManifest(manifest, spec) {
+  if (manifest && isStreamOrigin(spec?.originFrame) && manifest.originFrame !== spec.originFrame) manifest.originFrame = spec.originFrame;
+  return manifest;
 }
 
 /* ======================================================================== *
@@ -900,7 +925,7 @@ export class StreamProducer {
       stats: { ...this.stats, aliveEncoders: this.aliveEncoders },
       streams: [...this.streams.values()].map(state => ({
         streamKey: state.spec.streamKey, contentKey: state.spec.contentKey, kind: state.spec.kind, clipIds: state.spec.clipIds,
-        firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
+        originFrame: state.spec.originFrame ?? null, firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
         bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
         replay: state.spec.replay !== false, replayedFrames: state.replayedFrames ?? 0,
         direct: state.direct ? { ...state.direct } : null, capture: state.capture ? { ...state.capture } : null,
@@ -984,7 +1009,7 @@ export class StreamProducer {
         delete base.adoptedOnly;
         base.queueOnly = true;
         base.spec = spec;
-        base.manifest = base.manifest ?? manifest;
+        base.manifest = anchorManifest(base.manifest ?? manifest, spec);
         base.aliases ||= new Set();
         base.generation = this.generation;
         base.entryKey = entry.key;
@@ -1001,7 +1026,7 @@ export class StreamProducer {
    * (`storeSegment`,C6.4 的推送钩子照常)之后才算完。已经是满密度而且不旧的分段跳过;自动生产那边正在做的
    * (`reserved`)等它做完。一个分段连续 `QUEUE_SEGMENT_ATTEMPTS` 次没产成抛可重试的错误。
    * 预渲染间与自动生产共用 `leaseStreamBakery` 的池,整段只借一次:相邻分段接着租约推,不重灌工程。
-   * `progress(done)`:这一段里已经就绪的帧数(分段数 × 15,末段按实际帧数)。回 `{ produced, skipped }`。
+   * `progress(done)`:这一段里已经就绪的帧数(每个分段按它实际的帧数,流的末段可以不满 15 帧)。回 `{ produced, skipped }`。
    */
   async produceRange(entry, spec, range, { signal, progress } = {}) {
     const cancelled = () => Object.assign(new Error('Queue task cancelled'), { cancelled: true });
@@ -1046,7 +1071,7 @@ export class StreamProducer {
           if (handedOff) { await task.job; made = true; }
         }
         if (made) produced++; else skipped++;
-        frames += Math.min(SEGMENT_FRAMES, Math.max(0, (spec.total ?? Infinity) - n * SEGMENT_FRAMES));
+        frames += streamSegmentFrameCount(n, spec.originFrame, spec.lastFrame);
         report();
       }
     } finally {
@@ -1096,7 +1121,7 @@ export class StreamProducer {
       delete state.queueOnly;
       state.spec = spec;
       state.aliases = new Set();
-      state.manifest = manifest;
+      state.manifest = anchorManifest(manifest, spec);
       state.isolated = isolatedStreamProject(entry.project, spec);
       state.generation = generation;
       // Item 4:这条流的层只发给当前版本正是这个 entry 的会话
@@ -1115,12 +1140,12 @@ export class StreamProducer {
 
   freshManifest(spec) {
     return { version: STREAM_CODE_VERSION, streamKey: spec.streamKey, kind: spec.kind, plane: spec.plane, clipIds: spec.clipIds,
-      fps: spec.fps, bound: spec.bound, offset: spec.offset, tight: null, inits: {}, segments: {} };
+      fps: spec.fps, originFrame: spec.originFrame, bound: spec.bound, offset: spec.offset, tight: null, inits: {}, segments: {} };
   }
 
   /**
-   * 把每条流此刻的就绪分段发成 C3 的 `layer`(`kind: 'stream'`,单位是分段号;组流带 `groupClipIds`,
-   * 挂在组里最上面那张卡上)。同时挂到 `stageByKey` 上 —— 会话换版本时先清表,之后靠认领把它补回来。
+   * 把每条流此刻的就绪分段发成 C3 的 `layer`(`kind: 'stream'`,单位是分段号;带这条流的第一帧 `originFrame`,
+   * 页面按它把项目帧号换成分段号;组流带 `groupClipIds`,挂在组里最上面那张卡上)。同时挂到 `stageByKey` 上 —— 会话换版本时先清表,之后靠认领把它补回来。
    * 发层过 Item 4 的闸:只进当前版本是这条流所属 entry(`state.entryKey`)的会话。
    */
   republish() {
@@ -1140,7 +1165,8 @@ export class StreamProducer {
       if (state.adoptedOnly) return;
       const entryKey = state.entryKey ?? this.entryKey;
       for (const clipId of [spec.topClipId, ...(state.aliases ?? [])]) {
-        ready.publish(entryKey, { clipId, kind: 'stream', key: spec.streamKey, ranges, ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}) });
+        ready.publish(entryKey, { clipId, kind: 'stream', key: spec.streamKey, ranges, ...(isStreamOrigin(spec.originFrame) ? { originFrame: spec.originFrame } : {}),
+          ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}) });
       }
     } catch {}
   }
@@ -1189,13 +1215,15 @@ export class StreamProducer {
         const failures = state.failures;
         const ready = n => !need(state, n) || (failures.get(n) ?? 0) >= 3;
         const { frame, playing } = this.playheadFrame(spec.fps);
-        const leaseLast = lease && lease.streamSignature === spec.streamKey && (lease.lastFrame + 1) % SEGMENT_FRAMES === 0
-          ? Math.floor(lease.lastFrame / SEGMENT_FRAMES) : null;
-        const pick = planStreamSegments({ playheadFrame: frame, fps: spec.fps, rate: playing ? 1 : 0, stride,
+        // 租约停在某个分段的最后一帧上,才算「接得上下一段」
+        const leaseSegment = lease && lease.streamSignature === spec.streamKey ? streamSegmentOf(lease.lastFrame, spec.originFrame) : null;
+        const leaseLast = leaseSegment !== null && leaseSegment >= 0 && lease.lastFrame === streamSegmentLastFrame(leaseSegment, spec.originFrame, spec.lastFrame)
+          ? leaseSegment : null;
+        const pick = planStreamSegments({ playheadFrame: frame, originFrame: spec.originFrame, fps: spec.fps, rate: playing ? 1 : 0, stride,
           firstSegment: spec.firstSegment, lastSegment: spec.lastSegment, ready, reserved: state.reserved, leaseLastSegment: leaseLast });
         if (pick.segment === null) continue;
         if (pick.continues) return { state, segment: pick.segment, stride };
-        const start = pick.segment * SEGMENT_FRAMES;
+        const start = streamSegmentFirstFrame(pick.segment, spec.originFrame);
         const distance = start >= frame ? start - frame : (frame - start) + spec.total;
         if (!best || distance < best.distance) best = { state, segment: pick.segment, stride, distance };
       }
@@ -1311,9 +1339,12 @@ export class StreamProducer {
     const queue = task.queue ?? null;
     const generation = queue ? null : state.generation;
     const fps = spec.fps;
-    const fromFrame = segment * SEGMENT_FRAMES;
-    const toFrame = Math.min(fromFrame + SEGMENT_FRAMES - 1, spec.total - 1);
+    // 这个分段盖住的项目帧:从这条流自己的第一帧起数,末段到这条流的最后一帧为止(`streamSegments.mjs`)
+    if (!isStreamOrigin(spec.originFrame)) throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 没有第一帧,产不了分段`), { retryable: false });
+    const fromFrame = streamSegmentFirstFrame(segment, spec.originFrame);
+    const toFrame = streamSegmentLastFrame(segment, spec.originFrame, spec.lastFrame);
     const samples = toFrame - fromFrame + 1;
+    if (segment < 0 || samples < 1) throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 没有分段 ${segment}`), { retryable: false });
     const encoder = await this.encoder();
     const manifest = state.manifest;
     const rect = stride > 1 ? manifest.bound : (manifest.tight ?? manifest.bound);
@@ -1413,14 +1444,14 @@ export class StreamProducer {
     const box = pngAlphaBox(png);
     if (box?.full) { state.measureFailed = true; return; }
     if (box) state.measured = unionRect(state.measured, { x: rect.x + box.x, y: rect.y + box.y, w: box.w, h: box.h });
-    state.measuredSegments.add(Math.floor(frame / SEGMENT_FRAMES));
+    state.measuredSegments.add(streamSegmentOf(frame, state.spec.originFrame));
   }
 
   /** 同 `measurePng`,这一帧是画布直取的原始像素(`{ rgba, width, height }`) */
   measureRgba(state, frame, raw, rect) {
     const box = rgbaAlphaBox(raw.rgba, raw.width, raw.height);
     if (box) state.measured = unionRect(state.measured, { x: rect.x + box.x, y: rect.y + box.y, w: box.w, h: box.h });
-    state.measuredSegments.add(Math.floor(frame / SEGMENT_FRAMES));
+    state.measuredSegments.add(streamSegmentOf(frame, state.spec.originFrame));
   }
 
   /**
@@ -1467,7 +1498,7 @@ export class StreamProducer {
     if (segments.length !== 1) throw new Error(`一次编码应当恰好一个分段,实际 ${segments.length} 个`);
     const info = segmentInfo(segments[0]);
     if (info.moofs !== 1) throw new Error(`分段里应当恰好一个 moof,实际 ${info.moofs}`);
-    // G2:一个分段的样本数必须恰好 15(末段除外),少一帧就重拍
+    // G2:一个分段的样本数必须恰好 15(这条流的末段除外),少一帧就重拍
     if (info.sampleCount !== samples) throw new Error(`分段样本数 ${info.sampleCount},应当是 ${samples}`);
     if (info.firstSampleIsSync !== true) throw new Error('分段首帧不是 IDR');
     if (!init.length) throw new Error('编码输出里没有 ftyp + moov');
@@ -1646,7 +1677,7 @@ export class StreamProducer {
     if (live) return live;
     const { header, range } = plan;
     const manifest = (await this.store.load(key)) ?? { version: STREAM_CODE_VERSION, streamKey: key, kind: header.kind, plane: header.plane,
-      clipIds: header.clipIds, fps: header.fps, bound: header.bound, offset: header.offset ?? null, tight: header.tight ?? null, inits: {}, segments: {} };
+      clipIds: header.clipIds, fps: header.fps, originFrame: header.originFrame, bound: header.bound, offset: header.offset ?? null, tight: header.tight ?? null, inits: {}, segments: {} };
     const again = this.streams.get(key);
     if (again) return again;
     const clipIds = Array.isArray(manifest.clipIds) ? manifest.clipIds : header.clipIds;
@@ -1654,7 +1685,7 @@ export class StreamProducer {
       adoptedOnly: true,
       spec: { streamKey: key, contentKey: null, kind: manifest.kind ?? header.kind, plane: manifest.plane ?? header.plane, clipIds, topClipId: clipIds[clipIds.length - 1] ?? null,
         fps: manifest.fps ?? header.fps, bound: manifest.bound ?? header.bound, offset: manifest.offset ?? header.offset ?? { x: 0, y: 0 },
-        firstSegment: range.from, lastSegment: range.to },
+        originFrame: manifest.originFrame ?? header.originFrame, firstSegment: range.from, lastSegment: range.to },
       manifest, aliases: new Set(), reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set(),
     };
   }
@@ -1703,7 +1734,7 @@ export class StreamProducer {
     // C6.2:只是拉来的流(`adoptedOnly`)不属于任何一版,不认领
     return [...this.streams.values()].filter(state => !state.adoptedOnly && (entryKey === undefined || (state.entryKey ?? this.entryKey) === entryKey))
       .flatMap(state => [state.spec.topClipId, ...(state.aliases ?? [])]
-      .map(clipId => ({ clipId, kind: 'stream', key: state.spec.streamKey })));
+      .map(clipId => ({ clipId, kind: 'stream', key: state.spec.streamKey, ...(isStreamOrigin(state.spec.originFrame) ? { originFrame: state.spec.originFrame } : {}) })));
   }
 
   async close() {

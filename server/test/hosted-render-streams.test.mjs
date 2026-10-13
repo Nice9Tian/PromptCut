@@ -209,7 +209,7 @@ function control(clipId, extra = {}) {
 const weightOf = () => ({ class: 'medium', estMs: null });
 function cardStream(clipId, extra = {}) {
   return {
-    streamKey: rk(`sk-${clipId}`, OWN), contentKey: `sk-${clipId}`, topClipId: clipId, firstSegment: 3, lastSegment: 10,
+    streamKey: rk(`sk-${clipId}`, OWN), contentKey: `sk-${clipId}`, topClipId: clipId, originFrame: 45, firstSegment: 0, lastSegment: 7,
     kind: 'card', plane: 'local', clipIds: [clipId], fps: 30, bound: { x: -32, y: -32, w: 464, h: 304 }, offset: { x: 760, y: 420 },
     firstFrame: 45, lastFrame: 164, total: 300, ...extra,
   };
@@ -396,7 +396,7 @@ test('HRS-07 执行器把清单计划的流任务对回这一版:本机没判重
   const [single] = planListStreams(entry, ['a'], { envFingerprint: OWN, codeVersion: 'cv' });
   assert.equal(single.kind, 'card');
   const taskOf = (extra = {}) => ({
-    id: `stream:${single.streamKey}:3-10`, kind: 'stream', resultKey: single.streamKey, range: { unit: 'segment', from: 3, to: 10 },
+    id: `stream:${single.streamKey}:0-7`, kind: 'stream', resultKey: single.streamKey, range: { unit: 'segment', from: 0, to: 7 },
     source: { projectId: 'p1', projectRev: 1, derivedFrom: clipsPlan({ clips: ['a'] }).id },
     input: { clipId: 'a', cardId: null, entryKey: null, contentKey: single.contentKey }, requires: { envFingerprint: OWN }, ...extra,
   });
@@ -404,7 +404,7 @@ test('HRS-07 执行器把清单计划的流任务对回这一版:本机没判重
   const f = fakePipeline({ entry, ownSpecs: [] });
   const exec = createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(entry) });
   await exec.render(taskOf(), { progress: () => {} });
-  assert.deepEqual(f.produced, [{ streamKey: single.streamKey, kind: 'card', clipIds: ['a'], range: { from: 3, to: 10 } }]);
+  assert.deepEqual(f.produced, [{ streamKey: single.streamKey, kind: 'card', clipIds: ['a'], range: { from: 0, to: 7 } }]);
   assert.deepEqual(f.backfilled, ['a'], '这张卡记进预渲染集合(本机写的层表才列得出这条流)');
   // 本机这一版把 a、b 并成了组流(解码器预算 1):清单计划的单卡流照样对得上
   const grouped = planStreams(entry, { budget: 1, envFingerprint: OWN, codeVersion: 'cv' });
@@ -429,7 +429,7 @@ test('HRS-07 执行器把清单计划的流任务对回这一版:本机没判重
   // 结果键不是本机指纹的
   await rejects(taskOf({ resultKey: resultKeyOf(single.contentKey, BR) }), /结果键不是本机指纹的键/);
   // 分段范围越界
-  await rejects(taskOf({ range: { unit: 'segment', from: 3, to: 99 } }), /分段范围/);
+  await rejects(taskOf({ range: { unit: 'segment', from: 0, to: 99 } }), /分段范围/);
   // 本机不能产流:不可重试的 no-streams(照旧)
   const no = fakePipeline({ entry, capable: false });
   await assert.rejects(() => createPrerenderExecutor({ pipeline: no.pipeline, projects: projectsOf(entry) }).render(taskOf(), { progress: () => {} }), (e) => e.code === 'no-streams');

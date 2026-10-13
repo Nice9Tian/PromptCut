@@ -295,6 +295,8 @@ export interface StageRpcApi {
    * G1 / C3 的流平面(父页按就绪索引里 `kind: 'stream'` 的层合成)。元素的形状仍是 `{ clipIds }`,
    * R8 加了两个可选字段:`key`(流键)和 `ranges`(就绪的分段号闭区间)—— 舞台里的 `streamPlayer`
    * 凭它们去拉分段;不带 `key` 的平面只占位、不解码(R8 之前的调用方照旧只发 `clipIds`)。
+   * 另带 `originFrame`:这条流自己的第一帧(项目帧号),分段从它起每 15 帧一段(`streamSegments.mjs`);
+   * 舞台按它把这一拍的帧号换成分段号,不带它的平面同样只占位、不解码。
    */
   setStreamPlanes(planes: StreamPlaneRequest[]): Promise<{ ok: true }>;
   setScrubbing(on: boolean): Promise<{ ok: true }>;

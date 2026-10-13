@@ -24,11 +24,15 @@ import { YIELD_FRAME_MAX_MS } from "./browserNode.ts";
 const flush = async (n = 20) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 const FP = "2222222222222222";
 const PROJECT = { id: "proj", fps: 30, width: 1920, height: 1080, tracks: [{ id: "t", clips: [{ id: "clip-a", cardId: "punch-pill", start: 0, end: 4 }, { id: "clip-b", cardId: "focus-card", start: 4, end: 5 }] }] };
-const specOf = (clipId, contentKey, firstSegment, lastSegment) => ({
+/**
+ * 一条单卡流的计划:片段从项目的第 `startFrame` 帧起,共 `segments` 个满的分段。分段从这条流自己的第一帧起数
+ * (`originFrame` = `startFrame`),所以 `firstSegment` 恒为 0、`lastSegment` = `segments - 1`。
+ */
+const specOf = (clipId, contentKey, startFrame, segments) => ({
   kind: "card", plane: "local", clipIds: [clipId], topClipId: clipId, cardId: "punch-pill", contentKey, streamKey: `rk-${contentKey}`, envFingerprint: FP,
-  fps: 30, stage: { width: 1920, height: 1080 }, total: 300, firstFrame: firstSegment * 15, lastFrame: lastSegment * 15 + 14, firstSegment, lastSegment,
+  fps: 30, stage: { width: 1920, height: 1080 }, total: 300, firstFrame: startFrame, lastFrame: startFrame + segments * 15 - 1, originFrame: startFrame, firstSegment: 0, lastSegment: segments - 1,
   offset: { x: 0, y: 0 }, bound: { x: 0, y: 0, w: 640, h: 360 }, compositing: "independent",
-  bake: { start: firstSegment / 2, end: (lastSegment + 1) / 2, count: (lastSegment - firstSegment + 1) * 15, sampling: { firstFrame: firstSegment * 15, fps: { numerator: "30", denominator: "1" }, phase: { numerator: "0", denominator: "1" } } },
+  bake: { start: startFrame / 30, end: (startFrame + segments * 15) / 30, count: segments * 15, sampling: { firstFrame: startFrame, fps: { numerator: "30", denominator: "1" }, phase: { numerator: "0", denominator: "1" } } },
 });
 const PLAN = { id: "plan:proj@7#clips:x", projectId: "proj", projectRev: 7, clips: ["clip-a", "clip-b"], at: 1000 };
 
@@ -36,7 +40,7 @@ const PLAN = { id: "plan:proj@7#clips:x", projectId: "proj", projectRev: 7, clip
 function rig(over = {}) {
   const w = {
     now: 1000, idle: true, capable: true, plan: PLAN, state: "open",
-    specs: [specOf("clip-a", "ka", 0, 9), specOf("clip-b", "kb", 8, 9)],
+    specs: [specOf("clip-a", "ka", 0, 10), specOf("clip-b", "kb", 120, 2)],
     /** 结果键 → 已有清单的范围(`from-to`) */
     present: new Set(), layerMap: null, written: [], alive: [], produced: [], probes: 0, specCalls: 0,
     /** 在产的那一段:测试里手动放行 */
@@ -92,7 +96,7 @@ test("PS-01 没人认领:等满等待时间才动手;先查、写层表、再产
   // 开工前层表里已经有本页的那一行
   assert.equal(w.written.length, 1);
   assert.equal(w.written[0].kind, "layer-map");
-  assert.deepEqual(w.written[0].streams.map((r) => [r.topClipId, r.contentKey, r.candidates[0].resultKey, r.firstSegment, r.lastSegment, r.segmentsPerTask]), [["clip-a", "ka", "rk-ka", 0, 9, 8]]);
+  assert.deepEqual(w.written[0].streams.map((r) => [r.topClipId, r.contentKey, r.candidates[0].resultKey, r.originFrame, r.lastSegment, r.segmentsPerTask, "firstSegment" in r]), [["clip-a", "ka", "rk-ka", 0, 9, 8, false]]);
   assert.equal(pages.running(), true);
   assert.equal(pages.debug().state, "producing");
   await finish();
@@ -102,7 +106,7 @@ test("PS-01 没人认领:等满等待时间才动手;先查、写层表、再产
   assert.equal(w.produced[1].id, "stream:rk-ka:8-9");
   await finish();
   await run(500);
-  assert.equal(w.produced[2].id, "stream:rk-kb:8-9");
+  assert.equal(w.produced[2].id, "stream:rk-kb:0-1");
   await finish();
   await run(500);
   const d = pages.debug();
@@ -137,7 +141,7 @@ test("PS-02 有能切分的节点接了活:不产;done 之后不再问队列", a
 test("PS-03 先查:自己的键已经有、别的候选已经有,都不产", async () => {
   // 自己的键:三段都有
   const own = rig();
-  for (const k of ["rk-ka:0-7", "rk-ka:8-9", "rk-kb:8-9"]) own.w.present.add(k);
+  for (const k of ["rk-ka:0-7", "rk-ka:8-9", "rk-kb:0-1"]) own.w.present.add(k);
   await own.run(PAGE_STREAM_WAIT_MS + 3000);
   assert.equal(own.w.produced.length, 0);
   assert.equal(own.pages.debug().counters.have, 3);
@@ -146,9 +150,9 @@ test("PS-03 先查:自己的键已经有、别的候选已经有,都不产", asy
   assert.ok(own.w.written.length >= 1, "自己的键有了,层表里要有本页的那一行");
   // 别的候选(桌面产的):层表里这张卡、这个内容键的行列着它的键
   const other = rig();
-  other.w.specs = [specOf("clip-a", "ka", 0, 7)];
+  other.w.specs = [specOf("clip-a", "ka", 0, 8)];
   other.w.layerMap = { v: 3, kind: "layer-map", projectId: "proj", layers: [], streams: [
-    { topClipId: "clip-a", clipIds: ["clip-a"], kind: "card", plane: "local", contentKey: "ka", candidates: [{ envFingerprint: "desktop", resultKey: "rk-desktop" }], firstSegment: 0, lastSegment: 7, segmentsPerTask: 8 }] };
+    { topClipId: "clip-a", clipIds: ["clip-a"], kind: "card", plane: "local", contentKey: "ka", candidates: [{ envFingerprint: "desktop", resultKey: "rk-desktop" }], originFrame: 0, lastSegment: 7, segmentsPerTask: 8 }] };
   other.w.present.add("rk-desktop:0-7");
   await other.run(PAGE_STREAM_WAIT_MS + 2000);
   assert.equal(other.w.produced.length, 0, "桌面产好的直接用");
@@ -157,7 +161,7 @@ test("PS-03 先查:自己的键已经有、别的候选已经有,都不产", asy
   assert.equal(other.pages.debug().jobs[0].state, "elsewhere");
   // 内容键不同、输入签名没过期的行(别的环境按它自己的键产的同一条流:代码版本不同、字体不同):同样直接用;它的清单按它那一行的范围分份
   const foreign = rig();
-  foreign.w.specs = [specOf("clip-a", "ka", 0, 9)];
+  foreign.w.specs = [specOf("clip-a", "ka", 0, 10)];
   foreign.w.layerMap = { ...other.w.layerMap, streams: [{ ...other.w.layerMap.streams[0], contentKey: "their-ka", lastSegment: 9, segmentsPerTask: 4 }] };
   for (const k of ["rk-desktop:0-3", "rk-desktop:4-7", "rk-desktop:8-9"]) foreign.w.present.add(k);
   await foreign.run(PAGE_STREAM_WAIT_MS + 3000);
@@ -165,14 +169,14 @@ test("PS-03 先查:自己的键已经有、别的候选已经有,都不产", asy
   assert.deepEqual(foreign.pages.debug().jobs.map((j) => [j.state, j.via]), [["elsewhere", "rk-desktop"], ["elsewhere", "rk-desktop"]]);
   // 它只产了一部分(缺 8～9 那一份):本页这一段(8～9)自己产,前一段用它的
   const partly = rig();
-  partly.w.specs = [specOf("clip-a", "ka", 0, 9)];
+  partly.w.specs = [specOf("clip-a", "ka", 0, 10)];
   partly.w.layerMap = structuredClone(foreign.w.layerMap);
   for (const k of ["rk-desktop:0-3", "rk-desktop:4-7"]) partly.w.present.add(k);
   await partly.run(PAGE_STREAM_WAIT_MS + 3000);
   assert.deepEqual(partly.w.produced.map((x) => x.id), ["stream:rk-ka:8-9"]);
   // 输入签名过期的行(旧参数的流)不算
   const stale = rig();
-  stale.w.specs = [specOf("clip-a", "ka", 0, 7)];
+  stale.w.specs = [specOf("clip-a", "ka", 0, 8)];
   stale.w.layerMap = { ...other.w.layerMap, streams: [{ ...other.w.layerMap.streams[0], contentKey: "old", inputSig: "s1-0000000000000000" }] };
   stale.w.present.add("rk-desktop:0-7");
   await stale.run(PAGE_STREAM_WAIT_MS + 2000);
@@ -242,7 +246,7 @@ test("PS-05 产到一半有切分方接了活:做完当前帧就停,不再开工
 
 test("PS-06 产到一半别处产出来了:停下,改用现成的", async () => {
   const { w, pages, run, yielded } = rig();
-  w.specs = [specOf("clip-a", "ka", 0, 7)];
+  w.specs = [specOf("clip-a", "ka", 0, 8)];
   await run(PAGE_STREAM_WAIT_MS + 500);
   const job = w.current.job;
   // 桌面连上来、产好了、把自己的候选写进了层表
@@ -282,7 +286,7 @@ test("PS-07 不闲不开工;不能产时什么都不做;换了一版计划,旧�
   await run(PAGE_STREAM_WAIT_MS + 500);
   const job = w.current.job;
   w.plan = { ...PLAN, id: "plan:proj@8#clips:x", projectRev: 8, at: w.now };
-  w.specs = [specOf("clip-a", "ka2", 0, 7)];
+  w.specs = [specOf("clip-a", "ka2", 0, 8)];
   await run(250);
   assert.equal(job.signal.aborted, true, "旧一版在产的马上停");
   assert.equal(pages.debug().counters.stops["plan-changed"], 1);
@@ -296,7 +300,7 @@ test("PS-07 不闲不开工;不能产时什么都不做;换了一版计划,旧�
 
 test("PS-08 层表:本页的那一行被别人盖掉之后重写;有切分方接了活之后不再写", async () => {
   const { w, pages, run, finish } = rig();
-  w.specs = [specOf("clip-a", "ka", 0, 7)];
+  w.specs = [specOf("clip-a", "ka", 0, 8)];
   await run(PAGE_STREAM_WAIT_MS + 500);
   await finish();
   await run(500);
@@ -316,20 +320,20 @@ test("PS-08 层表:本页的那一行被别人盖掉之后重写;有切分方接
 
 test("PS-09 口子:产几趟、每趟多密由 passes 定", async () => {
   const { w, run, finish } = rig({ passes: [{ name: "sparse", stride: 15 }, { name: "dense", stride: 1 }] });
-  w.specs = [specOf("clip-a", "ka", 0, 7), specOf("clip-b", "kb", 8, 9)];
+  w.specs = [specOf("clip-a", "ka", 0, 8), specOf("clip-b", "kb", 120, 2)];
   // 自己的键查不到(每一趟都要做):这里让「先查」一直查不到
   w.present = { has: () => false, add: () => {} };
   await run(PAGE_STREAM_WAIT_MS + 500);
   for (let i = 0; i < 4; i++) { await finish(); await run(500); }
   assert.deepEqual(w.produced.slice(0, 4), [
-    { id: "stream:rk-ka:0-7", stride: 15 }, { id: "stream:rk-kb:8-9", stride: 15 },
-    { id: "stream:rk-ka:0-7", stride: 1 }, { id: "stream:rk-kb:8-9", stride: 1 },
+    { id: "stream:rk-ka:0-7", stride: 15 }, { id: "stream:rk-kb:0-1", stride: 15 },
+    { id: "stream:rk-ka:0-7", stride: 1 }, { id: "stream:rk-kb:0-1", stride: 1 },
   ], "先把每条流稀疏的那一趟做完,再补满密度");
 });
 
 test("PS-10 做不成:退避后再试,连着不成放下这一段;没活了不再问队列", async () => {
   const { w, pages, run } = rig();
-  w.specs = [specOf("clip-a", "ka", 0, 7)];
+  w.specs = [specOf("clip-a", "ka", 0, 8)];
   await run(PAGE_STREAM_WAIT_MS + 500);
   for (let i = 1; i <= PAGE_STREAM_ATTEMPTS; i++) {
     assert.equal(w.produced.length, i, `第 ${i} 次`);
@@ -351,14 +355,14 @@ test("PS-10 做不成:退避后再试,连着不成放下这一段;没活了不�
 
 test("PS-11 本页的那一行被别的写层表的一方盖掉、而它整条产好了:不写回去", async () => {
   const { w, pages, run, finish } = rig();
-  w.specs = [specOf("clip-a", "ka", 0, 7)];
+  w.specs = [specOf("clip-a", "ka", 0, 8)];
   await run(PAGE_STREAM_WAIT_MS + 500);
   await finish();
   await run(500);
   const writes = w.written.length;
   // 另一方(比如代码版本不同的桌面)按它自己的键把同一条流整条产好了,并用它的层表盖掉了本页的
   w.layerMap = { v: 3, kind: "layer-map", projectId: "proj", layers: [], streams: [
-    { topClipId: "clip-a", clipIds: ["clip-a"], kind: "card", plane: "local", contentKey: "their-ka", candidates: [{ envFingerprint: "desktop", resultKey: "rk-desktop" }], firstSegment: 0, lastSegment: 7, segmentsPerTask: 8 }] };
+    { topClipId: "clip-a", clipIds: ["clip-a"], kind: "card", plane: "local", contentKey: "their-ka", candidates: [{ envFingerprint: "desktop", resultKey: "rk-desktop" }], originFrame: 0, lastSegment: 7, segmentsPerTask: 8 }] };
   w.present.add("rk-desktop:0-7");
   await run(PAGE_STREAM_ROWS_MS + 1000);
   await run(PAGE_STREAM_ROWS_MS + 1000);
@@ -367,7 +371,7 @@ test("PS-11 本页的那一行被别的写层表的一方盖掉、而它整条�
   assert.deepEqual(w.layerMap.streams.map((r) => r.contentKey), ["their-ka"]);
   // 对照:盖掉本页那一行的一方并没有产好(清单不在):写回去
   const again = rig();
-  again.w.specs = [specOf("clip-a", "ka", 0, 7)];
+  again.w.specs = [specOf("clip-a", "ka", 0, 8)];
   await again.run(PAGE_STREAM_WAIT_MS + 500);
   await again.finish();
   await again.run(500);

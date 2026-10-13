@@ -69,12 +69,18 @@ const deadline = Date.now() + 60 * 60_000;
 // 探针起的 Node 子进程(桌面编辑器与它的预渲染进程)继承它,也能解析 pc.localhost
 process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 
-/** 探针项目:1280×720、30 fps。卡从第 12 帧起(不在分段边界上),占 120 帧(全局 12～131,分段 0～8:两个流任务 0～7 与 8～8) */
+/**
+ * 探针项目:1280×720、30 fps。卡从第 12 帧起(不是 15 的倍数),占 132 帧(项目的第 12～143 帧)。
+ * 分段从这条流自己的第一帧(第 12 帧)起数:0～8,两个流任务 0～7 与 8～8。
+ */
 const PROJECT = { width: 1280, height: 720, fps: 30, duration: 8 };
 const FPS = PROJECT.fps;
-const CLIP = { start: 0.4, duration: 4.0 };
+const CLIP = { start: 0.4, duration: 4.4 };
+/** 这条流自己的第一帧、它一共多少帧 */
+const ORIGIN_FRAME = Math.round(CLIP.start * 30);
+const STREAM_FRAMES = Math.round(CLIP.duration * 30);
 const SEG = 15;
-/** 项目时长跟着内容走(卡在 4.4 秒结束):一共 132 帧,最后一个分段(第 8 段)只有 12 帧 */
+/** 项目时长跟着内容走(卡在 4.8 秒结束):一共 144 帧;这条流 132 帧,最后一个分段(第 8 段)只有 12 帧 */
 const TOTAL = Math.round((CLIP.start + CLIP.duration) * FPS);
 const LABEL_1 = 'e2e', LABEL_2 = '';
 
@@ -438,7 +444,7 @@ async function runRound(streams, M) {
       chk.send({ type: 'auth.ticket', kind: 'asset', access: 'r', reqId });
     });
     const getManifest = async (resultKey, from, to) => (await content.get('render-manifest', `${resultKey}:${from}-${to}`).catch(() => null))?.body ?? null;
-    const spansOf = (row) => { const o = []; for (let f = row.firstSegment; f <= row.lastSegment; f += row.segmentsPerTask) o.push([f, Math.min(row.lastSegment, f + row.segmentsPerTask - 1)]); return o; };
+    const spansOf = (row) => { const o = []; for (let f = 0; f <= row.lastSegment; f += row.segmentsPerTask) o.push([f, Math.min(row.lastSegment, f + row.segmentsPerTask - 1)]); return o; };
 
     /* -------------------------------------------------------------- 1. 甲进入、加一张重卡、当节点 */
     const a = await openMember(browserA, { projectId, name: projName, username: 'bse-jia', password: projectPassword, deviceId: `bse-jia-${streams}-${RUN}`.padEnd(16, '0') });
@@ -484,7 +490,7 @@ async function runRound(streams, M) {
       return { body, row: (body?.streams ?? []).find((r) => r.topClipId === clipId) ?? null };
     };
     const briefRow = (row) => row && { topClipId: row.topClipId, kind: row.kind, plane: row.plane, clipIds: row.clipIds, contentKey: String(row.contentKey).slice(0, 12),
-      candidates: (row.candidates ?? []).map((c) => ({ envFingerprint: c.envFingerprint, resultKey: String(c.resultKey).slice(0, 12) })), firstSegment: row.firstSegment, lastSegment: row.lastSegment,
+      candidates: (row.candidates ?? []).map((c) => ({ envFingerprint: c.envFingerprint, resultKey: String(c.resultKey).slice(0, 12) })), originFrame: row.originFrame ?? null, firstSegment: row.firstSegment ?? null, lastSegment: row.lastSegment,
       segmentsPerTask: row.segmentsPerTask, inputSig: row.inputSig ?? null };
     const got1 = await until('层表里出现这张卡的流', async () => { const x = await rowNow(); return x.row ? x : null; }, 60_000, 500);
     const map1 = got1?.body ?? (await rowNow()).body;
@@ -494,7 +500,8 @@ async function runRound(streams, M) {
     const candA = row1.candidates.find((c) => c.envFingerprint === fpA) ?? null;
     check(row1.kind === 'card' && row1.plane === 'local' && row1.clipIds.join() === clipId && /^s1-/.test(row1.inputSig ?? ''), 'B:这一行是这张卡的单卡流,带输入签名', R.layerMap.row);
     check(!!candA && candA.resultKey === M.resultKeyOf(row1.contentKey, fpA), 'B:候选里有甲的指纹,结果键 = 内容键 × 甲的指纹', R.layerMap.row);
-    check(row1.firstSegment === 0 && row1.lastSegment === 8 && row1.segmentsPerTask === 8, 'B:分段范围 0～8,每个任务 8 段', R.layerMap.row);
+    check(row1.originFrame === ORIGIN_FRAME && !('firstSegment' in row1) && row1.lastSegment === 8 && row1.segmentsPerTask === 8,
+      'B:这一行带着这条流的第一帧(第 12 帧),分段从它起数 0～8,每个任务 8 段;行里不写 firstSegment', R.layerMap.row);
     if (streams === 'off') check(row1.candidates.length === 1 && row1.candidates.every((c) => c.envFingerprint !== deskFp), 'B:切分方关着流开关、自己不产:候选只有浏览器指纹,不列切分方的', R.layerMap.row);
     else check(row1.candidates[0]?.envFingerprint === fpA, 'B:切分实际出键的浏览器指纹排在候选最前', R.layerMap.row);
     const key1 = candA?.resultKey ?? null;
@@ -509,7 +516,7 @@ async function runRound(streams, M) {
       const segs = Object.keys(m?.segments ?? {}).map(Number).sort((x, y) => x - y);
       const inits = Object.keys(m?.inits ?? {});
       const ok = !!m && M.manifestMatches(m, { kind: 'stream', resultKey: key1, range: { from, to } }) && segs.length === to - from + 1 && segs[0] === from && inits.length >= 1
-        && segs.every((n) => m.segments[n].encoder === 'webcodecs-avc' && m.segments[n].stride === 1 && m.segments[n].samples === Math.min(SEG, TOTAL - n * SEG))
+        && segs.every((n) => m.segments[n].encoder === 'webcodecs-avc' && m.segments[n].stride === 1 && m.segments[n].samples === Math.min(SEG, STREAM_FRAMES - n * SEG))
         && m.header?.kind === 'card' && m.header.clipIds?.join() === clipId;
       if (ok) manifestsOk++;
       for (const id of inits) blocks.push({ hash: m.inits[id].hash, bytes: m.inits[id].bytes });

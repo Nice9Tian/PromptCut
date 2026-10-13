@@ -146,11 +146,17 @@ test("K6:片段剩下不到一秒时,覆盖到片尾就算就绪;流要按分段
   setSnapshotSource(src);
   syncSnapshotSubscription(() => {});
   markPendingDemote("h");
-  src.push(layer("h", [[0, 0]], "stream"));
+  // 流的层带着这条流自己的第一帧(片段从第 0 帧起,所以是 0);分段从它起数
+  const streamLayer = (ranges, originFrame = 0) => ({ ...layer("h", ranges, "stream"), originFrame });
+  src.push(streamLayer([[0, 0]]));
   assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, [], "流表有别的段不算:当前位置没料");
   // 第 1 秒 = 第 30 帧,一秒到第 59 帧 = 第 2、3 段
-  src.push(layer("h", [[2, 3]], "stream"));
+  src.push(streamLayer([[2, 3]]));
   assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, ["h"]);
+  // 没带第一帧的层(改分段规则之前的生产者发的)没法换算:当作没有流
+  src.push(layer("h", [[2, 3]], "stream"));
+  markPendingDemote("h");
+  assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, [], "没带第一帧的流层不算就绪");
 });
 
 /* ---------------------------------------------------------------- 投递 */

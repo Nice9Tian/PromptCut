@@ -112,7 +112,13 @@ const OWN = OWN_ENV.fingerprint;
 const PID = 'stream-noreplay';
 const REV = 3;
 
-/** 三个片段(6 秒,180 帧,分段 0～11):clip-d 独立卡 remotion 式,clip-s 独立卡 motion 式,clip-x 独立卡但写法没带 */
+/**
+ * 三个片段(0.5 秒入点到 6 秒:第 15～179 帧,165 帧):clip-d 独立卡 remotion 式,clip-s 独立卡 motion 式,clip-x 独立卡但写法没带。
+ * 分段从每条流自己的第一帧(第 15 帧)起数:第 n 段是第 `15 + n × 15` 帧起的 15 帧,分段 0～10。
+ */
+const ORIGIN = 15;
+/** 第 n 段的第一帧(项目帧号) */
+const segStart = (n) => ORIGIN + n * 15;
 const CLIPS = ['clip-d', 'clip-s', 'clip-x'];
 const START = { 'clip-d': 0.5, 'clip-s': 0.5, 'clip-x': 0.5 };
 const END = { 'clip-d': 6, 'clip-s': 6, 'clip-x': 6 };
@@ -195,11 +201,13 @@ test('noreplay:按段产流时,remotion 式的流不传 mountFrame、预热传 0
   }
   // remotion 式:从不传 mountFrame、预热传 0,哪怕接不上租约(7、3、9 都是跳段)也不回放
   for (const b of done['clip-d']) {
-    assert.equal(b.hasMountFrame, false, `clip-d#${b.fromFrame / SEGMENT_FRAMES}:不传 mountFrame`);
+    assert.equal(b.hasMountFrame, false, `clip-d#${(b.fromFrame - ORIGIN) / SEGMENT_FRAMES}:不传 mountFrame`);
     assert.equal(b.warm, 0, 'clip-d:预热 0');
     assert.equal(b.replayed, 0, 'clip-d:replayed 为 0');
   }
   assert.deepEqual(done['clip-d'].map((b) => b.continues), [false, false, false, true], '7、3、9 是跳段(重灌一次页面),10 接着 9 的租约');
+  // 每一段从这条流自己的第一帧起数:第 7 段是第 120～134 帧(不是按项目帧号的 105～119)
+  assert.deepEqual(done['clip-d'].map((b) => [b.fromFrame, b.toFrame]), order.map((n) => [segStart(n), segStart(n) + 14]), '分段盖住的帧从流的第一帧起数');
   // motion 式 / 写法没带:照旧传挂载帧,预热用缺省(不传),跳段时回放
   for (const clipId of ['clip-s', 'clip-x']) {
     for (const b of done[clipId]) {
@@ -207,7 +215,7 @@ test('noreplay:按段产流时,remotion 式的流不传 mountFrame、预热传 0
       assert.equal(b.mountFrame, 14, '挂载帧含 LEAD:0.5 秒入点 → 第 14 帧');
       assert.equal(b.warm, undefined, `${clipId}:预热帧数不传(用缺省)`);
     }
-    assert.deepEqual(done[clipId].map((b) => b.replayed), [7 * 15 - 14, 3 * 15 - 14, 9 * 15 - 14, 0], `${clipId}:跳段从挂载帧回放,接得上租约的不回放`);
+    assert.deepEqual(done[clipId].map((b) => b.replayed), [segStart(7) - 14, segStart(3) - 14, segStart(9) - 14, 0], `${clipId}:跳段从挂载帧回放,接得上租约的不回放`);
   }
   // 诊断:每条流的 replay 与累计回放帧数
   const status = A.streamProducer().status();
@@ -215,7 +223,7 @@ test('noreplay:按段产流时,remotion 式的流不传 mountFrame、预热传 0
   assert.equal(row('clip-d').replay, false);
   assert.equal(row('clip-d').replayedFrames, 0);
   assert.equal(row('clip-s').replay, true);
-  assert.equal(row('clip-s').replayedFrames, (7 * 15 - 14) + (3 * 15 - 14) + (9 * 15 - 14));
+  assert.equal(row('clip-s').replayedFrames, (segStart(7) - 14) + (segStart(3) - 14) + (segStart(9) - 14));
   assert.equal(row('clip-x').replay, true);
   assert.equal(status.stats.replayedFrames, row('clip-s').replayedFrames + row('clip-x').replayedFrames);
 });

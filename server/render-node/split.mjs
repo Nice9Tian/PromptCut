@@ -1,6 +1,7 @@
 import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf, backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan } from '../render-queue/index.mjs';
 import { snapshotTier } from '../snapshot-tier.mjs';
 import { resultKeyOf } from './fingerprint.mjs';
+import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '../../src/render/streamSegments.mjs';
 
 /**
  * `plan` 任务 → 细任务(设计第 2 节、Q1,契约 B.4)。
@@ -11,6 +12,7 @@ import { resultKeyOf } from './fingerprint.mjs';
  *
  *   快照:每个 control 的本地帧 0 .. count-1 按 SNAPSHOT_SPAN 切段(缺省 60 帧);本地档缺 entryKey 的跳过
  *   轨道流:firstSegment .. lastSegment 按 STREAM_SEGMENTS 切(缺省 8 段,每段 15 帧);没有 streamKey 的跳过。
+ *     分段号是这条流自己的:从它的第一帧 `originFrame` 起每 15 帧一段(`src/render/streamSegments.mjs`),所以 firstSegment 恒为 0。
  *          流任务的 `requires.capabilities = { streams: true }`(M6c X1):只给报了能产流的节点
  *
  * 结果键 = 内容键 × 切分节点**自己的**环境指纹(设计 2.1;卡被别的环境锁定时见下文「卡片级指纹锁」):认领 `plan` 的节点定下这一版
@@ -101,8 +103,8 @@ import { resultKeyOf } from './fingerprint.mjs';
  * 纯函数:不读环境变量、不做 I/O。
  */
 
-/** 轨道流每段的帧数(G2 的分段规则,和 `frame-stream.mjs` 的 SEGMENT_FRAMES 同值)。 */
-const SEGMENT_FRAMES = 15;
+/** 轨道流每段的帧数(G2 的分段规则;取 `src/render/streamSegments.mjs` 的,不另写一个数)。 */
+const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;
 const ANCHOR_PRIORITY = 50;
 const NORMAL_PRIORITY = 10;
 
@@ -309,6 +311,8 @@ const isNum = Number.isFinite;
 /**
  * 浏览器那一份流任务的 `input.stream`:只认单卡流(`kind: 'card'`、`plane: 'local'`、成员恰好是这一张卡),字段齐、形状对才给;
  * 否则回 null(组流、旧调用方只给了流键与分段范围的流,都不出浏览器那一份)。`count` 取成员卡的帧数:本地帧 0 .. count-1 之外的帧是全透明。
+ * `originFrame` / `lastFrame`:这条流自己的第一帧和最后一帧(项目帧号)。页面按它们把分段号换成帧(`streamSegments.mjs`),不自己算;
+ * 流的计划没给这两项(改分段规则之前的调用方)就不出浏览器那一份。
  */
 function browserStreamInputOf(stream, control) {
   if (stream?.kind !== 'card' || stream.plane !== 'local') return null;
@@ -316,11 +320,13 @@ function browserStreamInputOf(stream, control) {
   if (!Array.isArray(ids) || ids.length !== 1 || ids[0] !== stream.topClipId || control?.clipId !== ids[0]) return null;
   const { bound, offset } = stream;
   const fps = Number(stream.fps), firstFrame = stream.firstFrame, total = stream.total, count = Number(control.count);
+  const { originFrame, lastFrame } = stream;
   if (!(fps > 0) || !isInt(firstFrame) || !isInt(total) || total < 1 || !isInt(count) || count < 1) return null;
+  if (!isStreamOrigin(originFrame) || !isInt(lastFrame) || lastFrame < originFrame) return null;
   if (!bound || !isInt(bound.x) || !isInt(bound.y) || !isInt(bound.w) || !isInt(bound.h) || bound.w < 2 || bound.h < 2 || bound.w % 2 || bound.h % 2) return null;
   if (!offset || !isNum(offset.x) || !isNum(offset.y)) return null;
   return { kind: 'card', plane: 'local', clipIds: [ids[0]], fps, bound: { x: bound.x, y: bound.y, w: bound.w, h: bound.h },
-    offset: { x: offset.x, y: offset.y }, firstFrame, count, total };
+    offset: { x: offset.x, y: offset.y }, firstFrame, count, total, originFrame, lastFrame };
 }
 
 /** → TaskInput[]:先快照(按 cardPlan 顺序、段升序),后轨道流(按 streams 顺序、段升序);同一 id 只留第一个。 */
@@ -539,7 +545,12 @@ export function splitPlan({
       const resultKey = resultKeyOf(contentKey, fingerprint);
       for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
         const range = { unit: 'segment', from, to };
-        const frames = (to - from + 1) * SEGMENT_FRAMES;
+        // 这一段任务的帧数:流的计划带着第一帧和最后一帧时按实际算(流的末段可以不满 15 帧),没带的照满段估
+        let frames = (to - from + 1) * SEGMENT_FRAMES;
+        if (isStreamOrigin(stream.originFrame) && isInt(stream.lastFrame)) {
+          frames = 0;
+          for (let n = from; n <= to; n++) frames += streamSegmentFrameCount(n, stream.originFrame, stream.lastFrame);
+        }
         const input = forBrowser
           ? { clipId: topClipId, cardId: browser.control.cardId ?? null, entryKey: null, contentKey, canvasHeavy: false }
           : { clipId: topClipId, cardId: null, entryKey: null, contentKey };

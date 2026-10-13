@@ -2240,6 +2240,8 @@ export default function StageView() {
           clipIds: g.clipIds.map(String),
           ...(typeof g.key === "string" && g.key ? { key: g.key } : {}),
           ...(Array.isArray(g.ranges) ? { ranges: g.ranges.map((r) => [Number(r[0]), Number(r[1])] as [number, number]) } : {}),
+          // 这条流自己的第一帧:播放器按它把帧号换成分段号(`render/streamSegments.mjs`);不带的平面播放器不收
+          ...(Number.isInteger(g.originFrame) && (g.originFrame as number) >= 0 ? { originFrame: g.originFrame as number } : {}),
         }));
         /*
          * 在线页面的流平面另带清单与字节(`streamPlayer.ts` 的 `PushedStreamSource`),播放中每取到一段就来一次;
@@ -2582,7 +2584,7 @@ export default function StageView() {
       /** 最后一拍每张卡的耗时(`<Profiler>` 报的);K6 挑「最贵的那张」就按它 */
       cardCost: [...ref.current.cardCost.entries()],
       /** R8:流平面与解码器的状态(持有的帧数 / 字节、每条流画了几帧、当前变体……) */
-      streamPlanes: ref.current.streamPlanes.map((g) => ({ clipIds: g.clipIds, key: g.key ?? null, ranges: g.ranges ?? null })),
+      streamPlanes: ref.current.streamPlanes.map((g) => ({ clipIds: g.clipIds, key: g.key ?? null, ranges: g.ranges ?? null, originFrame: g.originFrame ?? null })),
       streams: player.diag(),
       /** R9:共享 WebGL 渲染器这一侧的状态(路线、连接方式、往返耗时、超时次数……) */
       gl: gl.diag(),
