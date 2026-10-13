@@ -41,7 +41,7 @@ function listChildren(parentPid) {
       if (pid && age !== undefined) rows.push({ pid: Number(pid), ageMs: Number(age), cmd: cmd.join('|') });
     }
   } else {
-    const out = spawnSync('ps', ['-o', 'pid=,etimes=,args=', '--ppid', String(parentPid)], { encoding: 'utf8', timeout: 20000 });
+    const out = spawnSync('ps', ['-o', 'pid=,etimes=,args=', '--ppid', String(parentPid)], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
     for (const line of (out.stdout ?? '').split('\n')) {
       const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
       if (match) rows.push({ pid: Number(match[1]), ageMs: Number(match[2]) * 1000, cmd: match[3] });
@@ -52,7 +52,7 @@ function listChildren(parentPid) {
 
 function killTree(pid) {
   if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 20000 });
-  else { spawnSync('pkill', ['-KILL', '-P', String(pid)]); try { process.kill(pid, 'SIGKILL'); } catch {} }
+  else { spawnSync('pkill', ['-KILL', '-P', String(pid)], { windowsHide: true }); try { process.kill(pid, 'SIGKILL'); } catch {} }
 }
 
 function watchdog(runnerPid) {
