@@ -73,8 +73,8 @@ const MOVER_CARD = `bp-mover-${RUN}`;
 const CLICKS = [57, 20, 83, 41];
 /** 拖动依次到的帧:第一个是按下的位置。含往回、跨分段、只挪两帧、它那个分段的第一帧(6 + 3 × 15 = 51)和上一段的最后一帧 */
 const STEPS = [33, 48, 24, 70, 72, 51, 50, 86, 11];
-/** 改下层的那一步停在哪一帧 */
-const EDIT_AT = 44;
+/** 改下层的那一步停在哪一帧(这一帧下面那条亮带正在毛玻璃后面看得见的那一半里) */
+const EDIT_AT = 28;
 
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ step, t: Date.now(), ...fields })}\n`);
 const fails = [];
