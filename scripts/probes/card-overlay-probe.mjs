@@ -55,7 +55,8 @@ const RUN = Date.now().toString(36);
 const ID = { a: `ov-a-${RUN}`, b: `ov-b-${RUN}`, c: `ov-c-${RUN}` };
 const MARK = (v) => `OV-PROBE-${RUN}-${v}`;
 const USER = 'src/cards/user';
-const cardSource = (id, v) => `import type { CardDef, CardProps } from "../../kernel/types";
+const cardSource = (id, v) => `import "../../kernel/remotionStyle";
+import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string }
 function C({ params }: CardProps<Params>) {
   return <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 64, color: "#fff", background: "#243" }}>{"${MARK(v)}"} {params.text}</div>;

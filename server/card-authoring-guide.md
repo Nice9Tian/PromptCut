@@ -25,14 +25,14 @@ PromptCut 的卡都在两种写法里二选一（动效卡、素材效果卡一�
 |---|---|---|
 | 声明 | `frameMode: "direct"` | `frameMode: "stateful"` |
 | 画面怎么得到 | 只由时间 `t`、参数和输入素材算出来；跳到哪一帧都是直接算，代价一样 | 有状态：要从片段起点一帧帧推进，才得到目标帧 |
-| 怎么写 | 只用 react、PromptCut 自带的 remotion 式框架（`interpolate`、`tween`、`spring`、`stagger`、`random` 等）和第 2.5 节名单里的模块。不一定要引用框架：纯算术、GLSL 的卡（素材效果卡）也写 `"direct"`。第 2 节 | 可以用 Motion 的动画、弹簧、`AnimatePresence`，CSS 动画，`lottie-web`，粒子，three，也可以自己累积状态。用了第 2.5 节名单之外的库（`lottie-web`、three 等）的卡也写 `"stateful"`，不要求它真的累积状态。第 3 节 |
+| 怎么写 | 只用 react、PromptCut 自带的 remotion 式框架（`interpolate`、`tween`、`spring`、`stagger`、`random` 等）和第 2.5 节名单里的模块。**必须有一句引用框架的 import**：纯算术、GLSL 的卡（素材效果卡）也写 `"direct"`，用不到工具就写一行裸导入 `import "../../kernel/remotionStyle";`。第 2 节 | 可以用 Motion 的动画、弹簧、`AnimatePresence`，CSS 动画，`lottie-web`，粒子，three，也可以自己累积状态。用了第 2.5 节名单之外的库（`lottie-web`、three 等）的卡也写 `"stateful"`，不要求它真的累积状态。第 3 节 |
 | 适合 | 画面能写成「t 的函数」：标题与字幕的进出场、数字与柱图、按种子摆出来的一批元素、画布上按公式算位置的图形 | 要用 Motion 或 CSS 现成的动画而不想自己写曲线；要用粒子、物理模拟这类一帧依赖上一帧的效果；要用 `lottie-web`、three |
 | 代价 | 只能用框架里有的工具，框架外的写法建卡时当场拒绝（第 2.4 节）；弹簧、缓动、错开进场要用框架自己的 | 暂停、拖动到片段中间时，要从片段起点重新推进到那一帧，片段越长越慢；预渲染要为它存每一帧的快照 |
 | 建卡时的检查 | 严格，逐条指出哪一行不行 | 硬约束与通用合规：必填字段、没装的依赖、没定义的动画 class、来源与许可证等（第 6、8 节） |
 
 - 一张卡属于哪一种，**只看它的 `frameMode` 声明**，软件不会替你判定。写了 `"direct"` 就是在保证「这一帧的画面只由 t、参数和输入素材决定」，建卡检查按这个保证查你的源码。
 - 字面量只有这两个：`"direct"`、`"stateful"`。旧项目里能读到的旧值 `"react"`、`"non-react"` **都按 motion 式读**（老卡不用重写），新卡不要再写它们。
-- 素材效果卡（滤镜、转场、强调、音频，第 4.3 节）也要写 `frameMode`：只用 `at()` + GLSL 的写 `"direct"`，用了 `pixels()` 或自带状态的写 `"stateful"`。
+- 素材效果卡（滤镜、转场、强调、音频，第 4.3 节）也要写 `frameMode`：只用 `at()` + GLSL 的写 `"direct"`，用了 `pixels()` 或自带状态的写 `"stateful"`。写 `"direct"` 的同样要引用框架，用不到工具就写一行裸导入（第 2.4 节）。
 - 两种写法都写得出来的画面（例如标题的淡入上移）：差别就是上表的「怎么写」和「代价」两行。remotion 式要自己用框架写曲线，跳到哪一帧代价都一样；motion 式可以直接用 Motion 现成的曲线，代价是暂停、拖动到片段中间时要从片段起点推进。选哪一种由你按画面和维护方便来定。
 - 现有的内置卡里两种写法的都有，都不用改写。
 
@@ -57,7 +57,7 @@ import { interpolate, tween, spring, stagger, random, Easing } from "../../kerne
 | `interpolate` | `interpolate(t, 时间点[], 取值[], { easing?, extrapolateLeft?, extrapolateRight? })`。时间点至少两个、一个比一个大，取值个数要一样多，否则抛错。`easing` 给一条，或每一段各给一条（数组）；缺省匀速。`extrapolateLeft` / `extrapolateRight` 只有两个值：`"clamp"`（缺省，停在端点）、`"extend"`（顺着最边上一段的斜率延伸） | 数 | `interpolate(t, [0, 0.4], [0, 1])`：0.4 秒内从 0 到 1，之后停在 1 |
 | `interpolateColors` | `interpolateColors(t, 时间点[], 颜色[], 同上)`。颜色认 `#rgb`、`#rrggbb`、`#rrggbbaa`、`rgb()`、`rgba()` | `"rgba(r, g, b, a)"` | `interpolateColors(t, [0, 1], ["#ff0000", "#0000ff"])` |
 | `tween` | `tween(t, { from = 0, to = 1, delay = 0, duration, easing = Easing.easeOut })`。`duration` 没有缺省，要写；`duration` 不大于 0 时没有过渡，`t` 到了 `delay` 就是 `to` | 数；开始前是 `from`，走完是 `to` | `tween(t, { from: 40, to: 0, delay: 0.2, duration: 0.5 })` |
-| `Easing` | `linear` `quad` `cubic` `quart` `sin` `circ` `expo` `bounce`；`back(overshoot)` `elastic(bounciness)`；`in(e)` `out(e)` `inOut(e)`；`bezier(x1, y1, x2, y2)`；`steps(n, atEnd)`；现成的 `easeIn` `easeOut` `easeInOut`（三次曲线）；四个别名：`circle`（同 `circ`）、`exp`（同 `expo`）、`ease`（贝塞尔 `(0.42, 0, 1, 1)`，起步慢，不是那三条三次曲线）、`poly(n)`（`p` 的 `n` 次方，`poly(4)` 等于 `quart`） | 缓动函数 `(p) => 数` | `Easing.bezier(0.16, 1, 0.3, 1)`、`Easing.out(Easing.back(1.4))`。基础曲线都是「起步慢」的形状，要「起步快」就包一层 `Easing.out(...)` |
+| `Easing` | `linear` `quad` `cubic` `quart` `sin` `circ` `expo` `bounce`；`back(overshoot)` `elastic(bounciness)`；`in(e)` `out(e)` `inOut(e)`；`bezier(x1, y1, x2, y2)`；`steps(n, atEnd)`；现成的 `easeIn` `easeOut` `easeInOut`（三次曲线）；四个别名：`circle`（同 `circ`）、`exp`（同 `expo`）、`ease`（贝塞尔 `(0.42, 0, 1, 1)`，起步慢，不是那三条三次曲线）、`poly(n)`（进度的 n 次方，`poly(4)` 等于 `quart`） | 缓动函数 `(p) => 数` | `Easing.bezier(0.16, 1, 0.3, 1)`、`Easing.out(Easing.back(1.4))`。基础曲线都是「起步慢」的形状，要「起步快」就包一层 `Easing.out(...)` |
 | `spring` | `spring(t, { stiffness = 100, damping = 10, mass = 1, from = 0, to = 1, delay = 0, velocity = 0, clamp = false })`：阻尼振子的解析解，给 t 直接算位置，不从头推。第一个参数是片段本地秒，不是 Remotion 的 `spring({ frame, fps, config })`：第一个参数不是数、或第二个参数里出现 `frame` `fps` `config`，直接报错 | 第 t 秒的位置；`delay` 之前是 `from`；`clamp: true` 不许越过终点 | `spring(t, { from: 0.6, to: 1, stiffness: 180, damping: 12 })` |
 | `springDuration` | `springDuration(同一组参数, restRatio = 0.001)` | 停稳要多少秒（含 `delay`） | `springDuration({ stiffness: 180, damping: 12 })` 约 1.17 |
 | `stagger` | `stagger(t, index, { each, delay = 0, from = "first", count })`；`from` 可以是 `"first"`、`"last"`、`"center"` 或一个下标；`last` 和 `center` 要同时给 `count` | 第 index 个元素自己的时间（还没轮到它是负数） | `tween(stagger(t, i, { each: 0.08 }), { duration: 0.4 })` |
@@ -307,13 +307,14 @@ useLayoutEffect(() => {
 | 顶层的 `let` / `var` / `class` / `enum`、直接执行的语句，顶层初始化式里的 `new`、`await`、赋值 | 顶层必须只有常量，载入时才能整体锁成只读 | 只写 `const` 常量；要 `new` 的放进函数里 |
 | `IntersectionObserver` | 卡片挂载即播放，不存在「滚动进入视口」（所有卡都不许） | 不用 |
 | `frameMode` 写成变量或算出来的值 | 建卡时读不出这张卡是哪种写法，「以声明为准」就落空了 | 直接写字面量 `"direct"` 或 `"stateful"` |
+| 没有一句引用框架的 import（只带类型的 `import type …` 不算） | 载入时只给引用了框架的卡把文件顶层锁成只读；不引用就不上锁，绕一道变量往顶层的对象里写查不出来。报错指到 `frameMode` 那一行 | 用到工具的照常写 `import { tween } from "../../kernel/remotionStyle";`；用不到工具的（只用 `t` 做算术的卡、只用 GLSL 的素材效果卡、只有声音的卡）在文件开头写一行裸导入 `import "../../kernel/remotionStyle";` |
 
 **另外：**
 
 - 末尾会多一句不带行号的总说明，提醒这张卡声明的是 remotion 式；要从起点一帧帧推进才能得到画面的效果，是另一种声明 `frameMode: "stateful"`（第 3 节）。
 - 只在建卡、改卡时检查。已经在库里的卡（内置卡、以前建的卡）照旧载入、照旧运行，不会因为多了检查而坏。
-- 改一张**框架出现之前建的、没有引用框架**的 remotion 式老卡，只拒绝这次编辑**新增**的违规，原来就有的不追究。一旦这张卡引用了框架，从那一刻起每一条都要改掉。两种写法互相改：把 motion 式的卡改成 remotion 式，按新建卡检查（每一条违规都拒）；把 remotion 式的卡改成 motion 式，就不再归这一节的检查管，按 motion 式的检查走。
-- 引用了框架的卡载入时，文件顶层的对象会被整体锁成**只读**，往里写当场报错。
+- 改一张**框架出现之前建的、没有引用框架**的 remotion 式老卡，只拒绝这次编辑**新增**的违规，原来就有的不追究（「没有引用框架」这一条也不强求它补）。一旦这张卡引用了框架，从那一刻起每一条都要改掉。两种写法互相改：把 motion 式的卡改成 remotion 式，按新建卡检查（每一条违规都拒）；把 remotion 式的卡改成 motion 式，就不再归这一节的检查管，按 motion 式的检查走。
+- 引用了框架的卡载入时，文件顶层的对象会被整体锁成**只读**，往里写当场报错。新建的 remotion 式的卡都必须引用框架，所以都会上锁；裸导入同样算引用。
 - 这一节的检查看的是语法树，不是文本匹配：注释里写到这些词不会被拦；字符串和类名里的 `animate-*`、`transition`、`@keyframes` 会被查。（motion 式那三条老规矩——`Date.now()`、`setTimeout` / `setInterval`、`IntersectionObserver`——是文本匹配，注释里写出这几个词也会被拦。）
 
 ### 2.5 remotion 式的卡可以引用的模块
@@ -323,7 +324,7 @@ useLayoutEffect(() => {
 | 模块 | 给什么用 |
 |---|---|
 | `react`、`react/jsx-runtime` | 组件，和不记状态的 hook |
-| `../../kernel/remotionStyle` | 框架（2.1 节） |
+| `../../kernel/remotionStyle` | 框架（2.1 节）。**必须引用**：用不到工具时写裸导入 `import "../../kernel/remotionStyle";` |
 | `../../kernel/types` | `CardDef`、`CardProps` |
 | `../../kernel/frameReady` | `beginFrameWork`：异步准备好之前挡住截图 |
 | `../../kernel/soundEffects`、`../native/sound-effects` | 声音配方与 `cardSoundBlock`（纯计算，给有声卡用） |
@@ -506,11 +507,12 @@ interface CardDef<Params> {
 
 **能力声明只写 `frameMode`**：只用 `at()` + GLSL 的素材效果卡写 `"direct"`；用了 `pixels()` 或自带状态的写 `"stateful"`。**不要在源码里写 `compositing: 'independent'`**（写了会被 `create_card` 拒掉）——这个值只认人工审阅表 `src/cards/capabilities.json`；别的 `compositing` 值写在源码里不作数。卡建出来之前按 `unknown` 走最保守的一条路，由人审阅后再加 `independent`。第一版素材效果卡也**不要**声明 `canvasHeavy`。
 
-**写成 `"direct"` 的素材效果卡不需要引用框架。** 下面三个例子的画面由 GLSL 和 `t` 直接算（或者直接对音频块做乘法），只引了 `../../kernel/types` 和 `../../render/cards/graphValues`，都在 2.5 节的名单里。它们仍然要过 2.4 节的检查——名单之外的模块不能引、顶层只写常量、不读真实时间、不用 `Math.random`——例子里的写法都满足。
+**写成 `"direct"` 的素材效果卡同样要引用框架。** 下面三个例子的画面由 GLSL 和 `t` 直接算（或者直接对音频块做乘法），用不到框架的工具，所以各写一行裸导入 `import "../../kernel/remotionStyle";`；另外只引了 `../../kernel/types` 和 `../../render/cards/graphValues`，都在 2.5 节的名单里。引用以后，这张卡载入时文件顶层的对象会被锁成只读（着色器字符串和卡片定义不受影响）。它们仍然要过 2.4 节的检查——名单之外的模块不能引、顶层只写常量、不读真实时间、不用 `Math.random`——例子里的写法都满足。
 
 #### 例一：GLSL 反色滤镜
 
 ```tsx 完整卡片
+import "../../kernel/remotionStyle";
 import type { CardDef } from "../../kernel/types";
 import { glsl } from "../../render/cards/graphValues";
 
@@ -548,6 +550,7 @@ export const invertFilter: CardDef<Params> = {
 #### 例二：双输入 crossfade 转场
 
 ```tsx 完整卡片
+import "../../kernel/remotionStyle";
 import type { CardDef } from "../../kernel/types";
 import { glsl } from "../../render/cards/graphValues";
 
@@ -585,6 +588,7 @@ export const crossfade: CardDef<Params> = {
 #### 例三：增益音频卡
 
 ```tsx 完整卡片
+import "../../kernel/remotionStyle";
 import type { CardDef } from "../../kernel/types";
 
 interface Params { gain: number }

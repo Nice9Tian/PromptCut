@@ -74,7 +74,8 @@ const CARD_ID = `cs-probe-${RUN}`;
 const CARD_REL = `src/cards/user/${CARD_ID}.tsx`;
 const CARD_ABS = path.join(ROOT, CARD_REL);
 const MARK = (v) => `CS-PROBE-${RUN}-${v}`;
-const cardSource = (v) => `import type { CardDef, CardProps } from "../../kernel/types";
+const cardSource = (v) => `import "../../kernel/remotionStyle";
+import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string }
 function C({ params }: CardProps<Params>) {
   return <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 72, color: "#fff", background: "#224" }}>{"${MARK(v)}"} {params.text}</div>;
