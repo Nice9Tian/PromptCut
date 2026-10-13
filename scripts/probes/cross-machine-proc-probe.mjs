@@ -8,11 +8,12 @@
  *      A 的路径在 B 上按路径读取不到(`/api/media/file?path=…` 回非 2xx,说明改前按路径读必失败);
  *      导出成片:有画面(视频帧不是一片纯色)、有音轨且 440 Hz 那段不是静音。
  *   3. **实例 C**(数据目录为空、内容库里也没有这些字节):打开同一个 `.proc`,打开后的后台检查把两条素材标「(缺失)」
- *      (地址清空、名字加标记、哈希留着)。
- *   4. **实例 C,缺失的老视频导出时跳过**(`docs/reports/AGENT-maint-4.md` 第 3 项):新建项目,放一条 C 里导入的视频(0～3 s)、
- *      一条 C 里入库的 660 Hz 音频(0.5～2.5 s),再放一条**老形态只有 `path`** 的视频(A 的文件路径、没有哈希,1～2 s);
- *      等后台检查把它标「(缺失)」(地址清空)。从顶栏「导出视频」导出(没有另存为的 API,留在产物目录):导出完成、不报解码失败;
- *      完成对话框里列出被跳过的那条素材;成片三个时刻都有画面、音频那段是 660 Hz;导出用的 project.json 里没有引用它的片段。
+ *      (名字加标记、写「确认缺失」的记录;地址与哈希留着)。
+ *   4. **实例 C,缺失的老视频导出时照原位置出占位**(0.7.18 起;此前是跳过这一段,`docs/reports/AGENT-maint-4.md` 第 3 项):新建项目,
+ *      放一条 C 里导入的视频(0～3 s)、一条 C 里入库的 660 Hz 音频(0.5～2.5 s),再放一条**老形态只有 `path`** 的视频(A 的文件路径、
+ *      没有哈希,1～2 s);等后台检查把它标「(缺失)」并写记录。从顶栏「导出视频」导出(没有另存为的 API,留在产物目录):导出完成、
+ *      不报解码失败、没有片段被跳过;成片 1.5 s 处是「找不到素材」的占位,前后是正常画面;音频 2 s 以后那段是 660 Hz;
+ *      导出用的 project.json 里引用它的片段还在。
  *
  *   node scripts/probes/cross-machine-proc-probe.mjs [--port-a 6070] [--port-b 6075] [--port-c 6080] [--out <临时目录>] [--keep]
  *
@@ -104,13 +105,13 @@ async function openProc(page, text) {
     const { actions, getState } = await import('/src/store/project.ts');
     const { loadProc } = await import('/src/editor/io/proc.ts');
     actions.loadProject(loadProc(t), 'cross-machine.proc');
-    return getState().project.media.map((m) => ({ id: m.id, kind: m.kind, name: m.name, hash: m.hash ?? null, url: m.url, path: m.path ?? null }));
+    return getState().project.media.map((m) => ({ id: m.id, kind: m.kind, name: m.name, hash: m.hash ?? null, url: m.url, path: m.path ?? null, record: m.missingMaterial?.reason ?? null }));
   }, text);
 }
 
 const mediaOf = (page) => page.evaluate(async () => {
   const { getState } = await import('/src/store/project.ts');
-  return getState().project.media.map((m) => ({ id: m.id, kind: m.kind, name: m.name, hash: m.hash ?? null, url: m.url, path: m.path ?? null }));
+  return getState().project.media.map((m) => ({ id: m.id, kind: m.kind, name: m.name, hash: m.hash ?? null, url: m.url, path: m.path ?? null, record: m.missingMaterial?.reason ?? null }));
 });
 
 const out = { ok: false, run: RUN, out: OUT, ports: { a: PORT_A, b: PORT_B, c: PORT_C } };
@@ -254,7 +255,7 @@ try {
   out.c = { opened: openedC, afterCheck: afterC };
   for (const m of afterC) {
     check(String(m.name).startsWith(MISSING), `C:${m.kind} 标「(缺失)」`, m);
-    check(m.url === '', `C:${m.kind} 地址清空(预览与导出跳过)`, m);
+    check(m.url === `/@media/${m.hash}` && m.record === 'confirmed-missing', `C:${m.kind} 地址留着、写了「确认缺失」的记录(预览与导出出占位)`, m);
     check(HASH.test(String(m.hash)), `C:${m.kind} 哈希留着`, m);
   }
   check(!eventsC.some((e) => e.type === 'pageerror'), 'C:页面没有报错', eventsC);
@@ -287,7 +288,8 @@ try {
     if (!actions.addMediaClip(mVoice.id, 0.5, { trackId: ta.id, duration: 2 })) throw new Error('音频放不上时间轴');
     // 老形态:只有 path(另一台机器 A 的文件)、没有哈希,地址是打开老项目时还原出来的按路径地址
     const mOld = actions.addMedia({ kind: 'video', name: o.oldName, url: '/api/media/file?path=' + encodeURIComponent(o.oldPath), path: o.oldPath, duration: 3, width: 640, height: 360 });
-    const tv = actions.addTrack('老视频');
+    // 放在最上面一条序列:它的占位要盖在底下那条视频上才看得见(放在最底下时被上面的视频挡住,和素材在的时候一样)
+    const tv = actions.addTrack('老视频', { index: 0 });
     if (!actions.addMediaClip(mOld.id, 1, { trackId: tv.id, duration: 1 })) throw new Error('老视频放不上时间轴');
     const p = getState().project;
     return { oldId: mOld.id, tracks: p.tracks.map((t) => ({ id: t.id, clips: t.clips.map((c) => ({ id: c.id, mediaId: c.mediaId ?? null, start: c.start, end: c.end })) })), duration: p.duration };
@@ -301,11 +303,11 @@ try {
   let oldD = null;
   for (let i = 0; i < 80; i++) {
     oldD = (await mediaOf(pageC)).find((m) => m.id === setupD.oldId);
-    if (oldD && String(oldD.name).startsWith(MISSING) && oldD.url === '') break;
+    if (oldD && String(oldD.name).startsWith(MISSING) && oldD.record === 'confirmed-missing') break;
     await new Promise((r) => setTimeout(r, 250));
   }
   out.d.old = oldD;
-  check(oldD && String(oldD.name).startsWith(MISSING) && oldD.url === '' && !oldD.hash, 'D:只有路径的老视频标「(缺失)」、地址清空、没有哈希', oldD);
+  check(oldD && String(oldD.name).startsWith(MISSING) && oldD.record === 'confirmed-missing' && oldD.url && !oldD.hash, 'D:只有路径的老视频标「(缺失)」、写了「确认缺失」的记录、地址留着、没有哈希', oldD);
   log('C:缺失老视频的项目从顶栏导出');
   const exportsBefore = new Set(await fs.readdir(C.exportDir));
   await pageC.evaluate(() => {
@@ -324,7 +326,7 @@ try {
   await pageC.screenshot({ path: shot }).catch(() => {});
   out.d.dialog = { title: dialog, ...note, shot };
   check(dialog === '导出完成', 'D:导出完成(不因缺失的老视频解码失败)', { dialog, err: note.err });
-  check(!!note.skipped && note.skipped.includes(oldName) && note.skipped.includes('跳过'), 'D:完成对话框里列出被跳过的那条素材', note);
+  check(!note.skipped, 'D:没有素材被跳过(缺失的老视频照原位置出占位)', note);
   const newDirs = (await fs.readdir(C.exportDir)).filter((d) => d.startsWith('export-') && !exportsBefore.has(d));
   const expDir = newDirs.length ? path.join(C.exportDir, newDirs.sort().pop()) : null;
   if (check(expDir, 'D:产物目录里有这次导出', newDirs)) {
@@ -335,12 +337,13 @@ try {
     const oldInJson = (pj.media || []).find((m) => m.id === setupD.oldId);
     const streamsD = JSON.parse(String(run(ffprobe, ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,duration', '-of', 'json', keptD]))).streams;
     const framesD = [0.5, 1.5, 2.5].map((t) => ({ t, ...frameStats(keptD, t) }));
-    const segD = audioStats(keptD, 0.7, 1.5);
+    const segD = audioStats(keptD, 2.05, 0.4); // 1～2 s 那段叠着「找不到素材」的人声,量它后面那一截
     out.d.export = { file: keptD, streams: streamsD, frames: framesD, seg: segD, clipsOfOld: clipsOfOld.length, oldUrl: oldInJson?.url ?? null };
-    check(clipsOfOld.length === 0, 'D:导出用的 project.json 里没有引用缺失老视频的片段', clipsOfOld);
-    check(oldInJson && oldInJson.url === '', 'D:导出用的 project.json 里缺失老视频的地址为空(没按路径读)', oldInJson);
+    check(clipsOfOld.length === 1, 'D:导出用的 project.json 里引用缺失老视频的片段还在(位置和编排保留)', clipsOfOld);
+    check(oldInJson && oldInJson.missingMaterial?.reason === 'confirmed-missing' && oldInJson.url === oldD.url, 'D:导出用的 project.json 里缺失老视频带着记录、地址没被改写', oldInJson);
     check(streamsD.some((x) => x.codec_type === 'video'), 'D:有视频流', streamsD);
-    check(framesD.every((f) => f.std > 20), 'D:三个时刻都有画面(含被跳过那段 1～2 s,底下的视频照常)', framesD);
+    check(framesD[0].std > 20 && framesD[2].std > 20, 'D:0.5 s 与 2.5 s 是正常画面', framesD);
+    check(framesD[1].mean > 25 && framesD[1].mean < 80 && framesD[1].std > 2 && framesD[1].std < 60, 'D:1.5 s 处是「找不到素材」的占位(深色底加白字)', framesD[1]);
     check(streamsD.some((x) => x.codec_type === 'audio'), 'D:有音轨', streamsD);
     check(segD.rmsDb > -40 && Math.abs(segD.hz - 660) <= 40, 'D:音频那段不是静音、是 660 Hz', segD);
   }
