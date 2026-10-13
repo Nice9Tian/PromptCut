@@ -3,7 +3,7 @@
  * (`server/agent/service/hosted-browser.mjs`、`server/web/hosted/session.mjs`)。
  * 跑:npm test -- server/test/cloud-tools-w1-restart.test.mjs
  *
- * 真的:puppeteer 自带的 Chrome for Testing(无头)、一个真的被强杀的子进程(扮 Agent 服务)、本测试在 127.0.0.1:28400 上起的假站。
+ * 真的:puppeteer 自带的 Chrome for Testing(无头)、一个真的被强杀的子进程(扮 Agent 服务)、本测试在 127.0.0.1 的一个系统给的空闲端口上起的假站。
  * 授权是放行的桩(这里验的是进程的生死)。
  *
  *   W1-RESTART-01  服务进程被强杀(不走任何收尾):它起的浏览器整棵进程树自己退出(连浏览器的是管道,管道一断浏览器就退),
@@ -24,8 +24,9 @@ import { startFakeSite } from './cloud-tools-w1-site.mjs';
 import { createEgressGate } from '../agent/service/egress.mjs';
 import { createHostedBrowserTools, hostedBrowserDir } from '../agent/service/hosted-browser.mjs';
 import { profileHolder, browserHoldsProfile } from '../web/hosted/session.mjs';
+import { freePorts } from './free-ports.mjs';
 
-const PORT = 28400;
+const [PORT, DEBUG_PORT] = await freePorts(2);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const CHILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cloud-tools-w1-restart-child.mjs');
 const context = { projectId: 'sp_restart', conversationId: 'conversation_restart', runId: 'run2', runGrantId: 'grant2', instanceId: 'instance2', instanceGeneration: 1, senderAccountId: 'sender', messageId: 'message2' };
@@ -114,8 +115,8 @@ test('W1-RESTART-02 兜底:还占着用户数据目录的残留浏览器,新服�
   const profile = path.join(dir, 'profile');
   fs.mkdirSync(profile, { recursive: true });
   // 造一个「没跟着服务退出的浏览器」:无头、不开调试口、出网指向一个不通的代理,占着这个对话的用户数据目录
-  // chrome-headless-shell 不开调试口就没有事可做、会自己退;给它一个只绑回环的调试口(28401,在分给本包的端口段里)让它挂着(测试专用,产品代码从不开调试口)
-  const hold = isHeadlessShell(chrome) ? ['--headless', '--remote-debugging-port=28401'] : ['--headless=new'];
+  // chrome-headless-shell 不开调试口就没有事可做、会自己退;给它一个只绑回环的调试口(系统给的空闲端口)让它挂着(测试专用,产品代码从不开调试口)
+  const hold = isHeadlessShell(chrome) ? ['--headless', `--remote-debugging-port=${DEBUG_PORT}`] : ['--headless=new'];
   const orphan = spawn(chrome, [...TEST_CHROME_ARG_PREFIX, ...hold, `--user-data-dir=${profile}`, '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>',
     '--no-first-run', '--disable-background-networking', '--mute-audio', ...TEST_EXTRA_ARGS, 'about:blank'], { stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' });
   orphan.unref();

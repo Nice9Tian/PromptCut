@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import https from 'node:https';
 import { createHash } from 'node:crypto';
 import { startRunnerProcessFixture, until, toneWav } from './fixtures/account-runner-process.mjs';
+import { runnerPorts } from './free-ports.mjs';
 import { MASTER_SCHEDULER_PENDING_PATH } from '../agent-service/account-master-scheduler-client.mjs';
 
 // 账号模式「一条任务一个进程」的整套，主服务这一侧用的是生产的装配（`account-master-assembly.mjs`）：
@@ -14,15 +15,13 @@ import { MASTER_SCHEDULER_PENDING_PATH } from '../agent-service/account-master-s
 // 证明的两条行为（验收里原先不成立、标成 todo 的那两条，断言照抄）：
 //   - 停止：这一轮真的停下，进程被关，结果是「被中断」，停之后才会说的话没有出现；
 //   - 共有对话里一个成员的任务结束后，另一个成员后发的消息的任务按到达顺序开始。
-const PORTS = Object.freeze({ combo: [28680, 28681, 28682, 28683, 28684, 28685, 28686], agent: 28687,
-  masterEvents: 28688, look: 28689, renderWorker: 28690, identityBase: 28700, controlBase: 28720 });
 const script = steps => `按脚本做。\n\`\`\`mock-script\n${JSON.stringify(steps)}\n\`\`\``;
 const safeCode = body => (/^[a-z0-9-]{1,80}$/.test(body?.code ?? '') ? body.code : 'unclassified');
 const kind = row => row.event?.type ?? row.type;
 
 test('生产的主服务装配：任务在任务进程里跑；停止真的停下；共有对话里第二位发送者的任务按到达顺序开始；附件存进各代共用的目录',
   { timeout: 300_000 }, async t => {
-    const f = await startRunnerProcessFixture({ ports: PORTS, productionMaster: true });
+    const f = await startRunnerProcessFixture({ ports: await runnerPorts(), productionMaster: true });
     const actors = [];
     t.after(async () => {
       for (const actor of actors) await actor.close().catch(() => {});
@@ -47,7 +46,7 @@ test('生产的主服务装配：任务在任务进程里跑；停止真的停�
     // ---------- 内部口的闸：调度要的那两条只认 root 那张证书 ----------
     const internal = (tls, route, body = {}) => new Promise((resolve, reject) => {
       const text = JSON.stringify(body);
-      const req = https.request(`https://127.0.0.1:${PORTS.masterEvents}${route}`, { ...tls, method: 'POST', agent: false, rejectUnauthorized: true,
+      const req = https.request(`https://127.0.0.1:${f.ports.masterEvents}${route}`, { ...tls, method: 'POST', agent: false, rejectUnauthorized: true,
         headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), connection: 'close' } }, res => {
         const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks)) }); } catch (error) { reject(error); } }); });
       req.on('error', reject); req.end(text); });
