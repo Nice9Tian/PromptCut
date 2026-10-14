@@ -376,6 +376,30 @@ export function setStreamBoxSource(fn: typeof streamBoxOf): void {
   streamBoxOf = fn;
 }
 
+/**
+ * 舞台坐标里的一个矩形换到某一层包裹层自己的坐标(超出预算的组流、依赖下层的流的位置矩形是舞台坐标,占位符摆在包裹层里)。
+ *
+ * 用屏幕上量到的两块矩形换:`ref` 是舞台坐标的原点所在的那个元素(包裹层的定位祖先,流的舞台平面也挂在它下面),`wrap` 是包裹层;
+ * `*Width` 是它们各自布局里的宽(没算变形的)。只认平移加等比缩放的包裹层:转过、斜切过、带三维的(`transform` 不是这种矩阵)回 null,
+ * 那一层照老办法定位。
+ */
+export function stageBoxToLocal(
+  box: { x: number; y: number; w: number; h: number },
+  at: { ref: { left: number; top: number; width: number }; refWidth: number; wrap: { left: number; top: number; width: number }; wrapWidth: number; transform?: string | null },
+): { x: number; y: number; w: number; h: number } | null {
+  const t = at.transform;
+  if (t && t !== "none") {
+    const m = /^matrix\(([^)]+)\)$/.exec(t.trim())?.[1].split(",").map(Number);
+    if (!m || m.length !== 6 || Math.abs(m[1]) > 1e-6 || Math.abs(m[2]) > 1e-6 || Math.abs(m[0] - m[3]) > 1e-6 || !(m[0] > 0)) return null;
+  }
+  // 舞台像素 → 屏幕像素(预览缩放);包裹层自己的像素 → 屏幕像素(预览缩放 × 这一层的缩放)
+  const view = at.ref.width / at.refWidth;
+  const own = at.wrap.width / at.wrapWidth;
+  if (!(view > 0) || !(own > 0) || !Number.isFinite(view) || !Number.isFinite(own)) return null;
+  const r = (n: number) => Math.round(n * 100) / 100;
+  return { x: r((at.ref.left + box.x * view - at.wrap.left) / own), y: r((at.ref.top + box.y * view - at.wrap.top) / own), w: r((box.w * view) / own), h: r((box.h * view) / own) };
+}
+
 /** 流清单量到过的框,流停了也留着(下一次来不及时还用得上) */
 const streamBoxes = new Map<string, PlaceholderBox>();
 /** 上次活渲时量到的墨迹框(包裹层坐标) */

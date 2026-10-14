@@ -18,7 +18,10 @@ let heavyIds = ["h", "d"];
 mock.module(srcUrl("render/dataMirror.ts"), { exports: { mirrorKey: () => ({ session: "s", localRev: 1 }), pushWanted: () => {} } });
 mock.module(srcUrl("editor/planDispatch.ts"), { exports: { currentPlan: () => ({ segments: [{ fromSec: 0, toSec: 1000, heavy: new Set(heavyIds) }] }) } });
 const feed = await import(srcUrl("editor/snapshotFeed.ts"));
-const { DECODER_BUDGET } = await import(srcUrl("render/streamPlayer.ts"));
+// 同屏流的预算是数像素的(`render/streamBudget.mjs`)。这份测试里的卡都是整幅的、项目 30 帧每秒:
+// 同屏放得下的条数由预算算出来(15.04 亿 ÷ (1920 × 2176 × 30) = 12),下面仍叫它 DECODER_BUDGET
+const { STREAM_PIXEL_RATE_BUDGET, streamCost, stageStreamPixels } = await import(srcUrl("render/streamBudget.mjs"));
+const DECODER_BUDGET = Math.floor(STREAM_PIXEL_RATE_BUDGET / streamCost(stageStreamPixels({ width: 1920, height: 1080 }), 30));
 
 let now = 1000;
 performance.now = () => now;
@@ -120,8 +123,11 @@ test("超出解码器预算的层当「无流」:不进流平面,快照每拍换
   }
   const head = { project: p, t: 1, playing: true };
   const planes = feed.streamPlanesAt(head);
-  assert.equal(planes.length, DECODER_BUDGET, "父页发给舞台的流平面也按解码器预算截");
+  assert.equal(planes.filter((p) => !p.over).length, DECODER_BUDGET, "父页发给舞台的流平面也按预算截");
+  // 超出预算的那一条也发给舞台,带着 over:舞台不为它建解码器,只取清单、照这一帧所在分段的位置矩形摆占位符
+  assert.deepEqual(planes.filter((p) => p.over).map((p) => p.clipIds), [[ids.at(-1)]]);
   const f = feed.planFeed(head);
+  assert.deepEqual(f.overPlanes.map((p) => [p.key, p.over]), [[`S${ids.at(-1)}`, true]]);
   const last = ids.at(-1);
   assert.equal(f.picks.get(last).tier, "over");
   assert.ok(!f.picks.has(ids[0]), "预算放行的那几条有流,不读快照");

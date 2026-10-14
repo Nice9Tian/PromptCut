@@ -51,6 +51,7 @@ import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
 import { belowLayersOf, streamInputSig } from '../src/render/streamInputSig.mjs';
 import { isStreamOrigin, streamSegmentFirstFrame, streamSegmentFrameCount, streamSegmentLastFrame, streamSegmentOf, streamSegmentSpan } from '../src/render/streamSegments.mjs';
+import { groupStreams, peakConcurrency, stageStreamPixels, streamCodedPixels, streamCost, STREAM_COUNT_BUDGET } from '../src/render/streamBudget.mjs';
 
 import { StreamStore, readySegmentRanges, handleStreamRequest } from './asset-store/stream-store.mjs';
 export { StreamStore, readySegmentRanges, publicManifest, handleStreamRequest } from './asset-store/stream-store.mjs';
@@ -61,8 +62,12 @@ export const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;
  * 清单里稀疏分段的 `stride` 记这个数,满密度的记 1;读的一侧只看它是不是大于 1。
  */
 export const SPARSE_STRIDE = STREAM_SEGMENT_FRAMES;
-/** G1 / G0-b (4):同时活跃的解码器预算 */
-export const STREAM_DECODER_BUDGET = 6;
+/**
+ * 同屏轨道流的预算在 `src/render/streamBudget.mjs`(数像素,另有条数的硬上限;页面与这里共用那一份)。
+ * 这个名字是条数的硬上限,照旧导出;`groupStreams` / `peakConcurrency` 也搬到了那里,这里原样再导出。
+ */
+export const STREAM_DECODER_BUDGET = STREAM_COUNT_BUDGET;
+export { groupStreams, peakConcurrency };
 /** G0-b 结论 1:`streamPool` 缺省 1,最多 2 */
 export const STREAM_POOL_DEFAULT = 1;
 export const STREAM_POOL_MAX = 2;
@@ -125,10 +130,13 @@ const BELOW_DISCARD_SHOT = Object.freeze({ format: 'jpeg', quality: 1 });
 /** 上面那种丢掉的帧在 `bakeStream` 的 `capture` → `onFrame` 之间的记号 */
 const BELOW_SKIPPED = Object.freeze({ skipped: true });
 
-/** 解码器预算。只给探针压低它(`PROMPTCUT_STREAM_DECODERS`),产品里就是 6 */
+/**
+ * 同屏流的条数上限。只给探针压低它(`PROMPTCUT_STREAM_DECODERS`:压到 1 逼出组流),产品里就是 `STREAM_COUNT_BUDGET`;
+ * 像素那一半的预算不随它变(`src/render/streamBudget.mjs`)。
+ */
 export function streamDecoderBudget(env = process.env) {
   const n = Math.round(Number(env.PROMPTCUT_STREAM_DECODERS));
-  return Number.isInteger(n) && n >= 1 && n <= 16 ? n : STREAM_DECODER_BUDGET;
+  return Number.isInteger(n) && n >= 1 && n <= STREAM_DECODER_BUDGET ? n : STREAM_DECODER_BUDGET;
 }
 
 /** `streamPool` 的上限:`PROMPTCUT_STREAM_POOL=1|2`;不设 = 从 1 起按实测自适应、最多 2 */
@@ -527,61 +535,6 @@ export function paintLayers(project, fps) {
 }
 
 /**
- * 区间集合在同一帧上的最大重叠数,以及峰值出现在哪一帧。`skip`(帧号的集合)给了,就不把这些帧当候选:
- * 回的是剩下的帧里重叠最多的那一帧(`groupStreams` 在有不参加合并的流时用它换一帧再找)。
- */
-export function peakConcurrency(intervals, skip = null) {
-  const events = [];
-  for (const it of intervals) { events.push([it.from, 1]); events.push([it.to + 1, -1]); }
-  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  let cur = 0, peak = 0, at = 0;
-  for (const [frame, d] of events) { cur += d; if (cur > peak && !skip?.has(frame)) { peak = cur; at = frame; } }
-  return { peak, at };
-}
-
-/**
- * 同时活跃的流超过解码器预算时,把超出的**相邻**重卡合并成组流(G1:「这是唯一的合并规则」)。
- *
- * `streams`:按画家顺序排好的单卡流 `[{ clipIds: [id], order, from, to }]`;`layers`:全部画面层。
- * 贪心:在重叠峰值那一帧上,挑画家顺序里**紧挨着**的两条流(两者之间、在它们合并后的时间段里
- * 没有别的画面层插着)合并;反复直到峰值 ≤ 预算或者再也找不到可合并的一对。
- * 回合并后的列表(每项 `clipIds` 按画家顺序,最后一个是最上面那张)。
- *
- * `fixed`:不参加合并、但同样各占一个解码器的流(依赖下层的流,契约第 5.1 节)`[{ from, to }]`。它们只算进重叠峰值,
- * 不会被挑去合并,也不出现在结果里;不给(或给空)时和原来完全一样。它们在 `layers` 里本来就有自己那一层,
- * 夹在两张卡中间时照旧挡住那两张卡合并。有它们的时候,峰值那一帧上可能没有能合的一对(挤在那里的都是不能合的流),
- * 而别的超预算的帧上有:这一帧找不到就记进 `tried`、换下一个超预算的帧,合成一次以后从头再看。
- */
-export function groupStreams(streams, layers, budget = STREAM_DECODER_BUDGET, fixed = []) {
-  let list = streams.map(s => ({ ...s, clipIds: [...s.clipIds] }));
-  const overlaps = (a, b) => a.from <= b.to && b.from <= a.to;
-  const tried = new Set();
-  for (let guard = 0; guard < 1000; guard++) {
-    const { peak, at } = fixed.length ? peakConcurrency([...list, ...fixed], tried) : peakConcurrency(list);
-    if (peak <= budget) break;
-    const active = list.map((s, i) => ({ s, i })).filter(({ s }) => s.from <= at && at <= s.to).sort((a, b) => a.s.order - b.s.order);
-    let merged = false;
-    for (let k = 0; k + 1 < active.length && !merged; k++) {
-      const lo = active[k].s, hi = active[k + 1].s;
-      const span = { from: Math.min(lo.from, hi.from), to: Math.max(lo.to, hi.to) };
-      const members = new Set([...lo.clipIds, ...hi.clipIds]);
-      const minOrder = Math.min(lo.order, lo.minOrder ?? lo.order, hi.minOrder ?? hi.order);
-      const maxOrder = Math.max(hi.order, lo.order);
-      const blocked = layers.some(l => !members.has(l.clipId) && l.order > minOrder && l.order < maxOrder && overlaps(l, span));
-      if (blocked) continue;
-      const next = { clipIds: [...lo.clipIds, ...hi.clipIds], order: maxOrder, minOrder, from: span.from, to: span.to };
-      list = list.filter((_, i) => i !== active[k].i && i !== active[k + 1].i);
-      list.push(next);
-      list.sort((a, b) => a.order - b.order);
-      merged = true;
-    }
-    if (!merged && !fixed.length) break;
-    if (merged) tried.clear(); else tried.add(at);
-  }
-  return list;
-}
-
-/**
  * 一张卡的包裹层框(整数外扩)和它在隔离工程里摆到哪儿(`offset`):框比画面小时居中,
  * 两边都给溢出留地方;框和画面一样大时贴着左上角。
  */
@@ -662,7 +615,10 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     const lastFrame = Math.min(total - 1, firstFrame + control.count - 1);
     if (lastFrame < firstFrame) continue;
     const mountFrame = mountFrameOf(at.clip, fps);
-    const item = { control, clip: at.clip, clipIds: [control.clipId], order: orderOf.get(control.clipId) ?? 0, from: Math.min(mountFrame, firstFrame), to: lastFrame };
+    // 开销:每秒要解的像素(编码画幅 × 帧率,`src/render/streamBudget.mjs`)。单卡流按它的矩形上界算
+    const bound = localPlacement(at.clip, stage).bound;
+    const item = { control, clip: at.clip, clipIds: [control.clipId], order: orderOf.get(control.clipId) ?? 0, from: Math.min(mountFrame, firstFrame), to: lastFrame,
+      cost: streamCost(streamCodedPixels(bound.w, bound.h), fps) };
     if (solo) { soloSeen.add(control.clipId); solos.push({ ...item, solo }); } else singles.push(item);
   }
   singles.sort((a, b) => a.order - b.order);
@@ -670,8 +626,10 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
   const byClip = new Map(singles.map(s => [s.clipIds[0], s]));
   // 依赖下层的流的目标卡(`below: false` 时是空的):不参加组流合并,但各占一个解码器。已经单独成流的卡不再出这种流
   const belows = below ? belowTargets(plan, { picked, where, fps, total, orderOf, taken: soloSeen }) : [];
-  const fixed = solos.length ? [...solos, ...belows] : belows;
-  const grouped = groupStreams(singles, layers, budget, fixed);
+  // 按舞台坐标产的流(组流、依赖下层的流)矩形上界是整幅画面
+  const stageCost = streamCost(stageStreamPixels(stage), fps);
+  const fixed = [...solos, ...belows.map(b => ({ ...b, cost: stageCost }))];
+  const grouped = groupStreams(singles, layers, budget, fixed, stageCost);
   const specs = [];
   /** 一张卡的单卡流(包裹层自己的坐标系;外观不在流里):平面的独立卡,和单独成流的两类卡,都是这一种 */
   const cardSpec = (m, base) => {

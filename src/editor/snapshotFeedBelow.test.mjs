@@ -21,7 +21,10 @@ mock.module(srcUrl("render/dataMirror.ts"), { exports: { mirrorKey: () => ({ ses
 
 const feed = await import(srcUrl("editor/snapshotFeed.ts"));
 const { planFeed, pickForSetTime, noteSettled, suppressedAt, streamPlanesAt, snapshotFeedDebug, setSnapshotSource, syncSnapshotSubscription, resetSnapshotFeed } = feed;
-const { DECODER_BUDGET } = await import(srcUrl("render/streamPlayer.ts"));
+// 同屏流的预算是数像素的(`render/streamBudget.mjs`)。这份测试里的卡都是整幅的、项目 30 帧每秒:
+// 同屏放得下的条数由预算算出来(15.04 亿 ÷ (1920 × 2176 × 30) = 12),下面仍叫它 DECODER_BUDGET
+const { STREAM_PIXEL_RATE_BUDGET, streamCost, stageStreamPixels } = await import(srcUrl("render/streamBudget.mjs"));
+const DECODER_BUDGET = Math.floor(STREAM_PIXEL_RATE_BUDGET / streamCost(stageStreamPixels({ width: 1920, height: 1080 }), 30));
 const { streamInputSig } = await import(srcUrl("render/streamInputSig.mjs"));
 
 let now = 1000;

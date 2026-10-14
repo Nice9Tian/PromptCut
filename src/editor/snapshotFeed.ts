@@ -57,6 +57,7 @@ import { cardRunStatesGen, cardsRegistryGen, syncedUserCardsGen } from "../kerne
 import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { fitBeatSwaps, SWAP_MS, swapCostOfSize } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
+import { localStreamPixels, stageStreamPixels } from "../render/streamBudget.mjs";
 import { isStreamOrigin, streamSegmentOf } from "../render/streamSegments.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 
@@ -79,7 +80,25 @@ const KIND_ORDER: ReadyKind[] = ["html", "local"];
  * `originFrame` 是这条流自己的第一帧(分段从它起数,`render/streamSegments.mjs`);没带它的层(改分段规则之前的生产者发的)
  * 没法把帧号换成分段号,这里不收 —— 当作这张卡没有流。
  */
-interface StreamLayer { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame: number; members: string[]; plane?: "stage" }
+interface StreamLayer { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; originFrame: number; members: string[]; plane?: "stage"; px?: number }
+/**
+ * 一条流的编码画幅(预算按它乘帧率算,`render/streamBudget.mjs`;划分流的一侧用的是同一个式子):
+ * 按舞台坐标产的流(组流、依赖下层的流)是整幅画面;单卡流是它的矩形上界(包裹层的框外扩一圈、夹在画面里)。
+ * 每份项目(不可变对象)缓存一张 clipId → 像素数。项目里找不到这张卡的回 undefined(预算那边按满屏卡算)。
+ */
+const streamPixels = new WeakMap<Project, Map<string, number | undefined>>();
+function streamPixelsOf(project: Project, clipId: string, stage: boolean): number | undefined {
+  const size = { width: Number(project.width) || 1920, height: Number(project.height) || 1080 };
+  if (stage) return stageStreamPixels(size);
+  let byClip = streamPixels.get(project);
+  if (!byClip) { byClip = new Map(); streamPixels.set(project, byClip); }
+  if (!byClip.has(clipId)) {
+    let found: TrackClip | undefined;
+    for (const track of project.tracks ?? []) { found = (track.clips ?? []).find((c) => c.id === clipId); if (found) break; }
+    byClip.set(clipId, found ? localStreamPixels(found.frame, size) : undefined);
+  }
+  return byClip.get(clipId);
+}
 function streamLayers(project: Project): StreamLayer[] {
   const out: StreamLayer[] = [];
   for (const [clipId, byKind] of readyIndex) {
@@ -89,7 +108,8 @@ function streamLayers(project: Project): StreamLayer[] {
     // 依赖下层的流:下层已经改过、预渲染进程还没换版本的这一小段里,就绪索引里还是旧流 —— 签名对不上的不贴
     if (below && belowStreamStale(project, clipId, layer.inputSig)) continue;
     out.push({ clipId, key: layer.key, ranges: layer.ranges as Array<[number, number]>, groupClipIds: layer.groupClipIds, originFrame: layer.originFrame,
-      members: layer.groupClipIds?.length ? layer.groupClipIds : [clipId], ...(below ? { plane: "stage" as const } : {}) });
+      members: layer.groupClipIds?.length ? layer.groupClipIds : [clipId], ...(below ? { plane: "stage" as const } : {}),
+      px: streamPixelsOf(project, clipId, below || (layer.groupClipIds?.length ?? 0) > 1) });
   }
   return out;
 }
@@ -490,10 +510,15 @@ export interface FeedPlan {
   /** 这一刻该报给预渲染进程的缺口（全局帧号） */
   wanted: { clipId: string; frame: number }[];
   /**
-   * 这一刻发给舞台的流平面（已按解码器预算截过，`planesWithinBudget`）：这一帧所在分段已经就绪的重卡的流。
+   * 这一刻发给舞台的流平面（已按同屏流的预算截过，`planesWithinBudget`）：这一帧所在分段已经就绪的重卡的流。
    * 播放、暂停、拖动都有；低内存档暂停着没有（照现状贴小尺寸）。
    */
   streamPlanes: StreamPlaneRequest[];
+  /**
+   * 这一帧有流、但超出预算的那几条（每条带 `over: true`）。舞台不为它们建解码器，只取清单，
+   * 占位符照清单里这一帧所在分段的位置矩形摆。和 `streamPlanes` 一起发给舞台（`streamPlanesAt`）。
+   */
+  overPlanes: StreamPlaneRequest[];
   /**
    * 暂停 / 拖动时父页该抑制的卡：这一帧有流（含超出解码器预算的）、还没追到精确活渲的重卡。
    * 它们的画面由流给（超预算的落到快照，再落到占位符），不露出没推到位的活组件。播放中恒为空（播放中抑制的是 `heavy`）。
@@ -535,6 +560,7 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
    * 低内存档暂停着不发（照现状：重卡抑制着贴小尺寸，见 `Preview` 的 `pumpFeed`）。
    */
   let streamPlanes: StreamPlaneRequest[] = [];
+  let overPlanes: StreamPlaneRequest[] = [];
   const covered = new Set<string>();
   const wantedStream = new Set<string>();
   /*
@@ -550,7 +576,13 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
     const members = new Set(heavy);
     if (playing) for (const id of extraSuppressed) members.add(id);
     const all = streamPlanesFor(layers, members, globalFrame);
-    streamPlanes = planesWithinBudget(all);
+    // 每条流的编码画幅按当前项目算(层上的 `px`);同一个流键只有一层
+    const pixelsOf = new Map(layers.map((l) => [l.key, l.px]));
+    streamPlanes = planesWithinBudget(all, fps, (p) => pixelsOf.get(p.key ?? ""));
+    if (streamPlanes.length < all.length) {
+      const within = new Set(streamPlanes);
+      overPlanes = all.filter((p) => !within.has(p)).map((p) => ({ ...p, over: true as const }));
+    }
     for (const p of all) for (const id of p.clipIds) wantedStream.add(id);
     for (const p of streamPlanes) for (const id of p.clipIds) covered.add(id);
     if (!playing) {
@@ -587,7 +619,7 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
       wanted.push({ clipId: clip.id, frame: globalFrame });
     }
   }
-  return { heavy: heavy.sort(), picks, wanted, streamPlanes, scrub: [...scrub].sort() };
+  return { heavy: heavy.sort(), picks, wanted, streamPlanes, overPlanes, scrub: [...scrub].sort() };
 }
 
 /** 缺的那几帧发起取字节；到货后叫一次 `onArrive` 让宿主重投 */
@@ -799,11 +831,12 @@ export function setExtraSuppressed(clipIds: readonly string[]): void {
 
 /**
  * R8：这一刻的流平面（C3 末段：由就绪索引里 `kind: 'stream'` 的层合成）：这一帧有流的重卡，播放、暂停、拖动都有，
- * **已按解码器预算截过**（`planesWithinBudget`，和舞台同一个函数）。
+ * **已按同屏流的预算截过**（`planesWithinBudget`，和舞台同一个函数）；超出预算的那几条跟在后面、带 `over: true`（舞台只拿它们的清单摆占位符）。
  * 父页在发 `setSuppressed(...)` 的同一处、**先于它**发 `setStreamPlanes(...)`（舞台等流的第一帧画出来才藏活子树）。
  */
 export function streamPlanesAt(head: Playhead): StreamPlaneRequest[] {
-  return planFeed(head).streamPlanes;
+  const feed = planFeed(head);
+  return feed.overPlanes.length ? [...feed.streamPlanes, ...feed.overPlanes] : feed.streamPlanes;
 }
 
 /**

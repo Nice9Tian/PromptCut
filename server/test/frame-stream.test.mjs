@@ -451,7 +451,7 @@ test('StreamProducer.rescan stages stream keys on the ready index (F5); republis
 test('switches: streams default on, decoder budget 6, pool 1 (max 2) unless pinned', () => {
   assert.equal(streamsEnabled({}), true);
   assert.equal(streamsEnabled({ PROMPTCUT_STREAMS: '0' }), false);
-  assert.equal(streamDecoderBudget({}), 6);
+  assert.equal(streamDecoderBudget({}), 32, '条数的硬上限;预算的口径是数像素(src/render/streamBudget.mjs)');
   assert.equal(streamDecoderBudget({ PROMPTCUT_STREAM_DECODERS: '2' }), 2);
   assert.deepEqual(streamPoolLimit({}), { fixed: null });
   assert.deepEqual(streamPoolLimit({ PROMPTCUT_STREAM_POOL: '2' }), { fixed: 2 });
