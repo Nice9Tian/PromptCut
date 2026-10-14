@@ -515,6 +515,8 @@ void main(){
 
 /** 共用的那块离屏画布:建不出来、或丢了上下文迟迟不还时,隔这么久(真实毫秒)再重建一次 */
 export const GL_RETRY_MS = 1000;
+/** 接连建不出来时每次把间隔加倍,最长到这么久(别空转) */
+export const GL_RETRY_MAX_MS = 30000;
 
 type GlCanvas = OffscreenCanvas | HTMLCanvasElement;
 const newGlCanvas = (): GlCanvas | null => {
@@ -545,7 +547,8 @@ const newGlCanvas = (): GlCanvas | null => {
  *
  * 上下文丢了(显卡进程重启、名额被别的画布挤掉):平面的 2D 画布不受影响,上一张画面还在;这期间新的一帧画不上,
  * 照「这一拍画不出来」办(留着上一张、到时占位符)。浏览器还回来(`webglcontextrestored`)就重建着色器和纹理;
- * `GL_RETRY_MS` 以后还没还(被挤掉的不还)就扔掉这块离屏画布另建一块。两种情况都叫播放器把这一帧再走一遍(暂停着没有下一拍)。
+ * `GL_RETRY_MS` 以后还没还(被挤掉的不还)就扔掉这块离屏画布另建一块;另建也没建出来的,隔一会儿再试(间隔每次加倍,最长
+ * `GL_RETRY_MAX_MS`)。每一种都约播放器到点把这一帧再走一遍(暂停着没有下一拍)。
  */
 class SharedGl {
   private canvas: GlCanvas | null = null;
@@ -555,14 +558,21 @@ class SharedGl {
   private uHalf: WebGLUniformLocation | null = null;
   private lostAt: number | null = null;
   private failedAt: number | null = null;
+  /** 接连建不出来几次了(建成一次清零);下一次隔多久再试按它加倍 */
+  private failures = 0;
   private onLost: () => void;
   private onBack: () => void;
-  stats = { creates: 0, losses: 0, restores: 0, draws: 0, lastError: "" };
+  private onRetry: (ms: number) => void;
+  stats = { creates: 0, losses: 0, restores: 0, failures: 0, draws: 0, lastError: "" };
 
-  constructor(onLost: () => void, onBack: () => void) {
+  /** `onRetry(ms)`:这一刻画不了,过 `ms` 毫秒值得再试一次(播放器据此排一个真定时器把这一帧再走一遍;暂停着没有下一拍) */
+  constructor(onLost: () => void, onBack: () => void, onRetry: (ms: number) => void) {
     this.onLost = onLost;
     this.onBack = onBack;
+    this.onRetry = onRetry;
   }
+
+  private get retryMs(): number { return Math.min(GL_RETRY_MAX_MS, GL_RETRY_MS * 2 ** Math.max(0, this.failures - 1)); }
 
   /** 着色器、顶点、纹理(新建上下文和上下文还回来以后各做一次) */
   private setup(gl: WebGLRenderingContext): void {
@@ -609,10 +619,12 @@ class SharedGl {
     if (this.gl && this.lostAt === null) return this.gl;
     if (this.gl) {
       // 丢了:先等浏览器还;等够了还没还(被别的画布挤掉的不还)就另建
-      if (now - (this.lostAt as number) < GL_RETRY_MS) return null;
+      const waited = now - (this.lostAt as number);
+      if (waited < GL_RETRY_MS) { this.onRetry(GL_RETRY_MS - waited); return null; }
       this.drop();
     }
-    if (this.failedAt !== null && now - this.failedAt < GL_RETRY_MS) return null;
+    // 上一次没建出来:隔一会儿再试(接连失败间隔加倍);这期间有人要画,就约好到点再走一遍
+    if (this.failedAt !== null && now - this.failedAt < this.retryMs) { this.onRetry(this.retryMs - (now - this.failedAt)); return null; }
     try {
       const canvas = newGlCanvas();
       const gl = canvas?.getContext("webgl", { premultipliedAlpha: true, alpha: true, preserveDrawingBuffer: false, antialias: false }) as WebGLRenderingContext | null;
@@ -635,11 +647,15 @@ class SharedGl {
       this.canvas = canvas;
       this.gl = gl;
       this.failedAt = null;
+      this.failures = 0;
       this.stats.creates++;
       return gl;
     } catch (e) {
       this.failedAt = now;
+      this.failures++;
+      this.stats.failures++;
       this.stats.lastError = String((e as Error)?.message || e);
+      this.onRetry(this.retryMs);
       return null;
     }
   }
@@ -701,10 +717,15 @@ class PlaneCompositor {
     const want: Record<string, string> = { left: `${bound.x}px`, top: `${bound.y}px`, width: `${bound.w}px`, height: `${bound.h}px` };
     for (const [k, v] of Object.entries(want)) if (s.getPropertyValue(k) !== v) s.setProperty(k, v);
   }
-  /** 画一帧。`rect` 是这一帧所在变体的矩形(平面坐标),`bound` 是画布覆盖的矩形。共用的上下文这一刻画不了回 false,画布上原来那一张不动 */
+  /**
+   * 画一帧。`rect` 是这一帧所在变体的矩形(平面坐标),`bound` 是画布覆盖的矩形。共用的上下文这一刻画不了回 false,
+   * **画布上原来那一张原样不动**:画布的位置和尺寸是画得了才改的(改 2D 画布的宽高会把它清空;清单的 `bound` 变了而上下文丢着时,
+   * 先改尺寸的话上一张就没了,账上却还记着有画面)。
+   */
   draw(frame: VideoFrame, rect: StreamRect, bound: StreamRect): boolean {
     const src = this.shared.render(frame, rect.w, rect.h);
     if (!src) return false;
+    this.place(bound);
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     // 一比一、不缩放:离屏画布左上角的 rect.w × rect.h 原样搬到平面上这一帧的矩形里
@@ -790,7 +811,16 @@ class StreamTrack {
   private adoptPushed(manifest: StreamManifest): void {
     this.manifest = manifest;
     this.manifestAt = realNow();
-    this.ensureCompositor()?.place(manifest.bound);
+    this.placeBlank(manifest.bound);
+  }
+
+  /**
+   * 清单到了:把**还没有画面的**画布摆到流的矩形上界(被抑制的卡要有一块能点中的框)。上面已经有画面的不动 ——
+   * 改宽高会清空它;下一次画得上的时候 `PlaneCompositor.draw` 自己会摆。
+   */
+  private placeBlank(bound: StreamRect): void {
+    if (this.lastDrawn !== null) return;
+    this.ensureCompositor()?.place(bound);
   }
 
   /** 这条流的字节从哪来:带了清单的平面只认父页推来的块,否则是播放器的字节源(桌面:预渲染进程) */
@@ -852,7 +882,7 @@ class StreamTrack {
         this.manifest = m;
         this.manifestAt = realNow();
         // 清单一到就把画布摆到流的矩形上界:还没画出第一帧时,被抑制的卡也要有一块能点中的框
-        this.ensureCompositor()?.place(m.bound);
+        this.placeBlank(m.bound);
         this.wake();
       })
       .catch(() => { /* 还没就绪:这一层这一拍落到兜底顺序的下一步(快照 / 占位符),下一拍再说 */ })
@@ -1028,8 +1058,7 @@ class StreamTrack {
     const rect = this.rectOf(f);
     const compositor = this.ensureCompositor();
     if (!rect || !compositor || !this.manifest || !this.planeFits) return false;
-    compositor.place(this.manifest.bound);
-    // 共用的上下文这一刻画不了(丢着):当这一拍没画上,留着上一张
+    // 共用的上下文这一刻画不了(丢着):当这一拍没画上,留着上一张(画布的位置和尺寸也不动,见 `PlaneCompositor.draw`)
     if (!compositor.draw(frame, rect, this.manifest.bound)) return false;
     const was = this.lastDrawn;
     this.lastDrawn = f;
@@ -1067,7 +1096,6 @@ class StreamTrack {
     const rect = shown ? this.rectOf(shown.f) : null;
     const compositor = shown ? this.ensureCompositor() : null;
     if (!shown || !rect || !compositor || !this.manifest || !this.planeFits) return false;
-    compositor.place(this.manifest.bound);
     if (!compositor.draw(shown.frame, rect, this.manifest.bound)) return false;
     this.lastDrawn = shown.f;
     this.coverSnapshot(true);
@@ -1478,9 +1506,21 @@ export class StreamPlayer {
      * 所以丢的那一刻另排一个真定时器,到 `GL_RETRY_MS` 再走一遍 —— 那时 `SharedGl` 会另建一块。
      */
     this.gl = new SharedGl(
-      () => { this.onContextLost?.(); realTimeout(() => this.represent(), GL_RETRY_MS + 20); },
+      () => { this.onContextLost?.(); this.retryLater(GL_RETRY_MS); },
       () => this.represent(),
+      (ms) => this.retryLater(ms),
     );
+  }
+
+  /**
+   * 过 `ms` 毫秒把这一帧再走一遍(共用的上下文丢着、或者没建出来)。同时只排一个;到点时没有要画的流(停了、没有轨道)就不再排,
+   * 还画不了的话 `SharedGl` 会再约下一次(间隔加倍),不会空转。
+   */
+  private retryPending = false;
+  private retryLater(ms: number): void {
+    if (this.retryPending) return;
+    this.retryPending = true;
+    realTimeout(() => { this.retryPending = false; this.represent(); }, Math.max(1, ms) + 20);
   }
 
   /** 把上一拍要的那一帧再走一遍(共用的上下文回来了) */

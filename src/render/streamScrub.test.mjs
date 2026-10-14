@@ -18,7 +18,7 @@
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { StreamPlayer, frameOfTimestamp, SEGMENT_FRAMES, HOLD_FRAMES, MAX_FRAMES_PER_DECODER, SEEK_PATIENCE_MS, FIRST_PICTURE_LAG_MS, MANIFEST_REFRESH_MS, GL_RETRY_MS } from './streamPlayer.ts';
+import { StreamPlayer, frameOfTimestamp, SEGMENT_FRAMES, HOLD_FRAMES, MAX_FRAMES_PER_DECODER, SEEK_PATIENCE_MS, FIRST_PICTURE_LAG_MS, MANIFEST_REFRESH_MS, GL_RETRY_MS, GL_RETRY_MAX_MS } from './streamPlayer.ts';
 import { buildStreamInit, buildStreamSegment } from './streamMux.ts';
 import { streamSegmentFrameCount, streamSegmentSpan } from './streamSegments.mjs';
 
@@ -113,7 +113,7 @@ globalThis.CSS = { escape: (s) => s };
  * 全部流平面共用一个 WebGL 上下文,建在一块离屏画布上(`streamPlayer.ts` 的 `SharedGl`):假的只记下最近上传的是哪一帧;
  * 平面自己是 2D 画布,`drawImage` 取走时把那一帧记成它画的。
  */
-const sharedGl = { last: null, contexts: 0, canvases: [] };
+const sharedGl = { last: null, contexts: 0, canvases: [], fail: 0, attempts: 0 };
 globalThis.OffscreenCanvas = class {
   constructor(w, h) { this.width = w; this.height = h; this.lost = false; this.listeners = {}; sharedGl.canvases.push(this); }
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
@@ -121,6 +121,9 @@ globalThis.OffscreenCanvas = class {
   lose() { this.lost = true; for (const fn of this.listeners.webglcontextlost ?? []) fn({ preventDefault() {} }); }
   restore() { this.lost = false; for (const fn of this.listeners.webglcontextrestored ?? []) fn({}); }
   getContext() {
+    sharedGl.attempts++;
+    // 用例里让接下来的几次建不出上下文(`sharedGl.fail`)
+    if (sharedGl.fail > 0) { sharedGl.fail--; return null; }
     sharedGl.contexts++;
     return new Proxy({
       getShaderParameter: () => true, getProgramParameter: () => true, createShader: () => ({}), createProgram: () => ({}),
@@ -587,5 +590,62 @@ test('共用的上下文丢了:这一拍画不上、留着上一张;浏览器还
   assert.equal(sharedGl.contexts, contexts + 1);
   assert.equal(player.diag().gl.creates, 2);
   player.stop();
+  assert.equal(frames.open, 0);
+});
+
+test('上下文丢着的时候清单的矩形上界变了:画布的尺寸不动、上一张还在;画得上了才改尺寸', async () => {
+  const stream = streamOf(100, 189);
+  const h = playerFor(stream);
+  h.seek(150);
+  await drawn(h, 150);
+  await flush();
+  assert.equal(h.dom.canvas.width, 64);
+  const gl = sharedGl.canvases.at(-1);
+  gl.lose();
+  // 父页带来一份新清单,矩形上界大了一圈(改 2D 画布的宽高会把它清空)
+  const bigger = { ...stream.manifest, bound: { x: 0, y: 0, w: 128, h: 128 } };
+  h.player.setPlanes([{ ...stream.plane, manifest: bigger }], FPS);
+  const clears = h.dom.canvas.clears;
+  h.seek(151);
+  await flush();
+  assert.equal(h.dom.canvas.width, 64, '画不了的时候不改画布的尺寸');
+  assert.equal(h.dom.canvas.clears, clears, '也不清空');
+  assert.equal(h.track().lastDrawn, 150, '账上记的和画布上的一致:还是上一张');
+  gl.restore();
+  await drawn(h, 151);
+  assert.equal(h.dom.canvas.width, 128, '画上了,尺寸跟着新清单');
+  h.player.stop();
+  assert.equal(frames.open, 0);
+});
+
+test('共用的上下文建不出来:暂停着也会自己再试,间隔每次加倍;建出来以后把这一帧画上', async () => {
+  const stream = streamOf(100, 189);
+  const attempts = sharedGl.attempts;
+  sharedGl.fail = 2;
+  const h = playerFor(stream);
+  h.seek(150);
+  await until(() => sharedGl.attempts === attempts + 1, '头一次建上下文(没建出来)');
+  await flush();
+  assert.equal(h.track().lastDrawn, null);
+  assert.equal(h.player.diag().gl.state, 'none');
+  // 没有任何一拍再来(暂停着)。过 GL_RETRY_MS:自己再试一次,又没建出来
+  await advance(GL_RETRY_MS + 60);
+  await flush();
+  assert.equal(sharedGl.attempts, attempts + 2);
+  assert.equal(h.track().lastDrawn, null);
+  // 第二次失败以后间隔加倍:再过 GL_RETRY_MS 还不试
+  await advance(GL_RETRY_MS + 60);
+  await flush();
+  assert.equal(sharedGl.attempts, attempts + 2, '间隔加倍了,还没到');
+  await advance(GL_RETRY_MS + 60);
+  await until(() => h.track()?.lastDrawn === 150, '第三次建出来,这一帧自己画上');
+  assert.equal(sharedGl.attempts, attempts + 3);
+  assert.deepEqual({ creates: h.player.diag().gl.creates, failures: h.player.diag().gl.failures }, { creates: 1, failures: 2 });
+  // 停了以后不再排:没有流要画就不空转
+  sharedGl.fail = 0;
+  h.player.stop();
+  const pending = timers.length;
+  await advance(GL_RETRY_MAX_MS * 2);
+  assert.ok(timers.length <= pending, '停了以后没有新排的定时器');
   assert.equal(frames.open, 0);
 });
