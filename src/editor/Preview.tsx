@@ -1099,7 +1099,8 @@ export function Preview() {
    *   - 暂停 / 拖动:这一帧有流、还没追到精确活渲的重卡抑制、贴流;已经追上的不抑制,流平面照发,
    *     舞台拿它把播放头下这一帧先解好(起播头一拍就有)。没有流的重卡不抑制,照现状贴快照。
    *   - **低内存档例外**(c10a 第 8 节「不追活渲」「缺小尺寸的重层显示占位」):暂停、拖动时重卡一律抑制 ——
-   *     子树藏着、不活渲,有小尺寸就贴它,没有就由舞台显示占位符;暂停着不发流平面(`snapshotFeed` 那边按 `lowMemory` 回空)。
+   *     子树藏着、不活渲,贴轨道流(每个分段的第一帧那一张,`snapshotFeed` 给流平面带 `first`),这一帧没有流的贴预渲染小尺寸,
+   *     都没有就由舞台显示占位符;停下后舞台追一帧精确活渲(`settleLowMemoryAt`),画好的层不再按抑制藏。
    */
   const syncPlanes = useCallback((s: StageRpcClient, head: { project: ReturnType<typeof getState>["project"]; t: number; playing: boolean; lowMemory: boolean }) => {
     const planes = streamPlanesAt(head);

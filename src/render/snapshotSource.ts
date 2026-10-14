@@ -225,12 +225,21 @@ export class HttpSnapshotSource implements SnapshotSource {
  * 5. **缓存**:只在内存里按 LRU 存小尺寸,上限 `ONLINE_CACHE_MAX_BYTES`(64 MiB,契约第 8 节〔裁〕,不做 IndexedDB)。
  *    预取:播放头前后各 2 秒、当前可见的重层。导出前 `clearCache()` 释放(契约第 11.1 节)。
  *
- * 6. **轨道流**(`docs/plan/browser-stream-task.md` 第六处;只在普通档):层表另带一张 `streams` 表(每条流一行:成员、候选的结果键、
+ * 6. **轨道流**(`docs/plan/browser-stream-task.md` 第六处;普通档、低内存档都取,低内存档的不同见第 7 条):层表另带一张 `streams` 表(每条流一行:成员、候选的结果键、
  *    分段范围、每份清单几段)。页面按播放头附近的分段去内容库取流清单(`render-manifest`,键 `<结果键>:<起>-<止>`),清单里列着的
  *    开头文件与分段按哈希从素材服务取到本页内存(`px/<hash>`,同一张只读票据);**字节到了本页的分段才算就绪**,照 C3 的
  *    `layer` 消息(`kind: 'stream'`,单位是分段号,组流带 `groupClipIds`)交给订阅方 —— 和桌面的就绪索引同一种消息,`snapshotFeed` 不用改。
  *    舞台不自己取:父页发流平面时把清单和字节一起带过去(`streamPlane`,配 `streamPlayer.ts` 的 `StreamPlaneSender`)。
  *    候选的认定、输入签名过期的处理照快照层的规矩;流这一段没取到时这一层照旧每拍换快照。
+ *
+ * 7. **低内存档贴轨道流的稀疏版**(2026-10-13 用户定;手机、平板身份的在线浏览器):取流的路和普通档是同一条(层表、清单、分段),
+ *    舞台那边每个分段只解第一帧(`streamPlayer.ts` 的 `presentFirst`)。这里只有三处不同:
+ *      - 先问浏览器解不解得了(`StreamDecodeSupport`):没有 `VideoDecoder` 就一条流都不取、不发;某个开头文件的编码配置
+ *        `isConfigSupported` 说不行,用它的分段不取、不算就绪 —— 父页那边就是「这张卡没有流」,照旧落到预渲染小尺寸,再落到占位符;
+ *      - 流字节在本页内存里留得少(`LOW_MEMORY_STREAM_CACHE_MAX_BYTES`);
+ *      - 分段**整段取**:只要第一帧,但块按内容哈希存取、取回来要核哈希,取不了半块。稀疏的分段本来就只有一张图加十几个几乎为空的
+ *        重复帧,整段约等于第一帧;满密度的分段多取了后面 14 个差分帧(用不上),代价是这部分流量。
+ *    预渲染小尺寸那条路(上面第 2～5 条的 `small`)原样留着作过渡。〔撤快照时删:`small` 那一档连同 `tier` 的分支〕
  *
  * 文档服务与素材服务都经注入的依赖访问(页面里由 `Preview` 接到 `assetTiers.ts` 的 `docRequest` / `assetAuthHeaders`),
  * 这里不认识 `/api`,单测注入假的。
@@ -250,6 +259,8 @@ export const ONLINE_FETCH_CONCURRENCY = 4;
 export const LAYER_MAP_PREFIX = "layers:";
 /** 轨道流的分段字节在本页内存里最多留这么多(按最近用过的留;三级数字:6 条流、每条前后 6 段、每段不超过 512 KB 约 18 MiB,留三倍余量) */
 export const STREAM_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+/** 低内存档:流字节在本页内存里最多留这么多(三级数字:4 条流、每条播放头前后 6 段、每段不超过 512 KB 约 12 MiB) */
+export const LOW_MEMORY_STREAM_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 /** 轨道流预取:播放头所在分段往回这么多段(刚播过的那一段留着,往回拖一点不用重取) */
 export const STREAM_BEHIND_SEGMENTS = 1;
 /** 一块流字节取失败之后,过这么久才再取(缺块、票据过期:不每一轮都打素材服务) */
@@ -723,10 +734,33 @@ export interface L2Like {
   subscribeReady(cb: (e: { layerKey: string; ranges: Array<[number, number]> }) => void): () => void;
 }
 
+/**
+ * 低内存档问「这台浏览器解不解得了轨道流」用的两样(文件头第 7 条)。普通档不问(电脑身份的页面照现状)。单测注入假的。
+ */
+export interface StreamDecodeSupport {
+  /** 浏览器有没有 `VideoDecoder` */
+  available(): boolean;
+  /** 这一种编码配置(流清单里开头文件那一项的 `codec` 与编码画幅)解不解得了 */
+  supports(config: { codec: string; codedWidth: number; codedHeight: number }): Promise<boolean>;
+}
+/** 缺省:问浏览器自己。`isConfigSupported` 抛错、回不出结果都算不行;没有这个方法的旧实现只看有没有 `VideoDecoder` */
+export const browserDecodeSupport: StreamDecodeSupport = {
+  available: () => typeof (globalThis as { VideoDecoder?: unknown }).VideoDecoder === "function",
+  supports: async (config) => {
+    const VD = (globalThis as { VideoDecoder?: unknown }).VideoDecoder;
+    if (typeof VD !== "function") return false;
+    const ask = (VD as { isConfigSupported?: (c: unknown) => Promise<{ supported?: boolean }> }).isConfigSupported;
+    if (typeof ask !== "function") return true;
+    try { return (await ask.call(VD, config))?.supported === true; } catch { return false; }
+  },
+};
+
 export interface OnlineSourceOptions {
   /** 没有 L2 时的内存缓存上限(C10a 的 64 MiB) */
   maxBytes?: number;
   tier?: OnlineTier;
+  /** 低内存档问浏览器解不解得了流(缺省 `browserDecodeSupport`) */
+  decodeSupport?: StreamDecodeSupport;
   /** 页面内快照库 L2(C10 契约第 4 节);给了就把块存进它,内存里只留一小份刚用过的 */
   store?: L2Like | Promise<L2Like | null> | null;
 }
@@ -793,9 +827,15 @@ export class OnlineSnapshotSource implements SnapshotSource {
   readonly stats = { mapFetches: 0, manifestFetches: 0, smallFetches: 0, smallBytes: 0, snapFetches: 0, snapBytes: 0, l2Hits: 0, errors: 0,
     streamManifestFetches: 0, streamFetches: 0, streamBytes: 0, streamFailures: 0 };
 
-  constructor(deps: OnlineSnapshotDeps, { maxBytes = ONLINE_CACHE_MAX_BYTES, tier = "small", store = null }: OnlineSourceOptions = {}) {
+  private decodeSupport: StreamDecodeSupport;
+  /** 低内存档:开头文件(按哈希)的编码配置这台浏览器解不解得了;在问的是 null */
+  private initDecodable = new Map<string, boolean | null>();
+
+  constructor(deps: OnlineSnapshotDeps, { maxBytes = ONLINE_CACHE_MAX_BYTES, tier = "small", store = null, decodeSupport = browserDecodeSupport }: OnlineSourceOptions = {}) {
     this.deps = deps;
     this.tier = tier;
+    this.decodeSupport = decodeSupport;
+    if (tier === "small") this.streamBlocks = new BlockLru(LOW_MEMORY_STREAM_CACHE_MAX_BYTES);
     this.cache = new ByteLru(store ? Math.min(maxBytes, ONLINE_HOT_CACHE_BYTES) : maxBytes);
     if (store) {
       const opened = Promise.resolve(store).then((s) => {
@@ -1302,12 +1342,33 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   /**
-   * 此刻能用的流(只在普通档;低内存档不消费流),各自选定一个候选:认定活着的优先,都没认定时取第一个没作废的,
+   * 低内存档:用这个开头文件的流这台浏览器贴不贴得了(文件头第 7 条)。普通档恒为 true。头一次问到时去问浏览器,
+   * 问完之前当不行(那几段先不取、不算就绪),问到「行」再重发就绪。
+   */
+  private decodable(init: StreamInitMeta): boolean {
+    if (!this.lowMemory) return true;
+    const known = this.initDecodable.get(init.hash);
+    if (known !== undefined) return known === true;
+    this.initDecodable.set(init.hash, null);
+    if (this.initDecodable.size > 1024) { this.initDecodable.clear(); this.initDecodable.set(init.hash, null); }
+    void Promise.resolve()
+      .then(() => this.decodeSupport.supports({ codec: init.codec, codedWidth: init.width, codedHeight: init.height }))
+      .catch(() => false)
+      .then((ok) => {
+        this.initDecodable.set(init.hash, ok === true);
+        if (ok === true && !this.stopped) { this.prefetchStreams(); this.streamChanged(); }
+      });
+    return false;
+  }
+
+  /**
+   * 此刻能用的流(普通档;低内存档要浏览器有 `VideoDecoder`,没有就照没有流办),各自选定一个候选:认定活着的优先,都没认定时取第一个没作废的,
    * 全作废照旧用第一个 —— 同快照层的 `chosen`。旧输入的流不算。
    */
   private streamsNow(): ChosenStream[] {
     const map = this.map;
-    if (!map || this.tier !== "original" || !map.streams.length) return [];
+    if (!map || !map.streams.length) return [];
+    if (this.lowMemory && !this.decodeSupport.available()) return [];
     const out: ChosenStream[] = [];
     for (const row of map.streams) {
       if (this.streamStale(row)) continue;
@@ -1337,7 +1398,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       for (const [n, seg] of state.segments) {
         if (n < s.row.firstSegment || n > s.row.lastSegment) continue;
         const init = state.inits.get(seg.init);
-        if (init && this.streamBlocks.has(seg.hash) && this.streamBlocks.has(init.hash)) out.push(n);
+        if (init && this.streamBlocks.has(seg.hash) && this.streamBlocks.has(init.hash) && this.decodable(init)) out.push(n);
       }
     }
     return out;
@@ -1435,6 +1496,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
       for (let n = Math.max(lo, s.row.firstSegment); n <= Math.min(hi, s.row.lastSegment); n++) {
         const hit = this.streamSegment(s, n);
         if (!hit) continue;
+        // 低内存档:这台浏览器解不了的编码(或者还没问完)不取它的字节
+        if (!this.decodable(hit.init)) continue;
         // 往回的那一段排在往前的后面
         const dist = n >= cur ? n - cur : hi - cur + (cur - n);
         want(hit.init.hash, dist);
@@ -1495,7 +1558,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
         const init = state.inits.get(seg.init);
         if (!init) continue;
         const segBytes = this.streamBlocks.get(seg.hash), initBytes = this.streamBlocks.get(init.hash);
-        if (!segBytes || !initBytes) continue;
+        if (!segBytes || !initBytes || !this.decodable(init)) continue;
         segments[String(n)] = { init: seg.init, file: seg.hash, stride: seg.stride, samples: seg.samples };
         inits[seg.init] = { codec: init.codec, width: init.width, height: init.height, rect: init.rect, hash: init.hash };
         blocks.set(seg.hash, segBytes);

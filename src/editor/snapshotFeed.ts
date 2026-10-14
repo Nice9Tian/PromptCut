@@ -35,9 +35,15 @@
  *
  * 流这一拍画不出来时舞台留着上一张，最多留一个分段的时长，再没有才显示占位符（`streamPlayer`、`StageView`）。
  *
+ * **低内存档**(手机、平板身份的在线浏览器;2026-10-13 用户定:改贴轨道流的稀疏版)走的也是这条顺序,不同的只有:
+ * 流平面带 `first`(舞台每个分段只解第一帧那一张,那一段是满密度的也一样);同屏流的预算用小的那一组
+ * (`lowMemoryStreamBudget`:4 个解码器、画幅之和两张 1080p 满屏卡);这一档的兜底顺序是
+ * 「流的分段第一帧 → 预渲染小尺寸 → 占位符」—— 中间那一步就是下面的快照这条路(低内存档的在线来源给的是小尺寸),撤快照时一起删。
+ * 暂停、拖动时重卡一律抑制、停下后由舞台追一帧精确活渲(`Preview` 的 `syncPlanes`、`settleLowMemory`),这一条没变。
+ *
  * # 快照这条路的分界（下一块「撤快照」从这里删）
  *
- * 快照只剩给**这一帧贴不上流**的重卡用：这一帧所在分段的流还没就绪、流超出解码器预算、这张卡根本没有流、低内存档暂停着。
+ * 快照只剩给**这一帧贴不上流**的重卡用：这一帧所在分段的流还没就绪、流超出解码器预算、这张卡根本没有流（低内存档还有：浏览器解不了流）。
  * 判据只有一处：`planFeed` 里的 `covered`（这一帧有流平面的卡）—— 在它里面的卡跳过选帧，于是 `picks`、`wanted`、
  * `fetchMissing`、`diffAgainst` / `packChanges`、`pickForSetTime` 的 `awaiting` 都轮不到它。撤快照时删掉的是：
  * `KIND_ORDER`、`Pick` / `PickTier`、选帧那一段循环、`wanted`、`have` / `flying` / `fetchMissing`、投递基线里的 `mounted`、
@@ -57,7 +63,7 @@ import { cardRunStatesGen, cardsRegistryGen, syncedUserCardsGen } from "../kerne
 import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { fitBeatSwaps, SWAP_MS, swapCostOfSize } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
-import { localStreamPixels, stageStreamPixels } from "../render/streamBudget.mjs";
+import { localStreamPixels, lowMemoryStreamBudget, stageStreamPixels, STREAM_BUDGET_MIN_FPS } from "../render/streamBudget.mjs";
 import { isStreamOrigin, streamSegmentOf } from "../render/streamSegments.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 
@@ -497,7 +503,8 @@ export interface Playhead {
   playing: boolean;
   /**
    * 低内存档(c10a 契约第 17 节):播放、拖动、暂停时判重的卡一律抑制(父页 `Preview` 的 `pumpFeed`);
-   * 停下时舞台把当前这一帧追一次(`settleLowMemory`),画好的层照普通档一样收 `settled`、不再盖回小尺寸。
+   * 停下时舞台把当前这一帧追一次(`settleLowMemory`),画好的层照普通档一样收 `settled`、不再盖回流或小尺寸。
+   * 这一档的流平面带 `first`(每个分段只解第一帧),预算用 `lowMemoryStreamBudget`(文件头「低内存档」)。
    */
   lowMemory?: boolean;
 }
@@ -511,7 +518,7 @@ export interface FeedPlan {
   wanted: { clipId: string; frame: number }[];
   /**
    * 这一刻发给舞台的流平面（已按同屏流的预算截过，`planesWithinBudget`）：这一帧所在分段已经就绪的重卡的流。
-   * 播放、暂停、拖动都有；低内存档暂停着没有（照现状贴小尺寸）。
+   * 播放、暂停、拖动都有。低内存档的每条带 `first`（舞台每个分段只解第一帧那一张）。
    */
   streamPlanes: StreamPlaneRequest[];
   /**
@@ -557,7 +564,7 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
   /*
    * 流平面（兜底顺序第 1、2 步）：播放、暂停、拖动都发，给这一帧所在分段已经就绪的重卡（组流要成员全在）。
    * 按解码器预算截 —— 和舞台 `sync()` 同一个函数，截掉的那几张（`over`）父页当「无流」。
-   * 低内存档暂停着不发（照现状：重卡抑制着贴小尺寸，见 `Preview` 的 `pumpFeed`）。
+   * 低内存档同样发（播放、暂停、拖动），预算换成小的那一组、开销不乘项目帧率（`streamBudget.mjs`「低内存档的预算」），放行的每条带 `first`。
    */
   let streamPlanes: StreamPlaneRequest[] = [];
   let overPlanes: StreamPlaneRequest[] = [];
@@ -569,7 +576,7 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
    * （舞台那边也是整组一起撤，`StageView` 的 `releaseSettled`）。
    */
   const scrub = new Set<string>();
-  const layers = playing || !lowMemory ? streamLayers(project) : [];
+  const layers = streamLayers(project);
   if (layers.length) {
     // 播放中：全部被抑制的卡（重卡，加上等后台补跑互换的那几张）。暂停 / 拖动：全部重卡 —— 已经追到精确活渲的也在里面，
     // 它们不抑制，流平面只是把播放头下这一帧先解好，按下播放时头一拍就有
@@ -578,11 +585,15 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
     const all = streamPlanesFor(layers, members, globalFrame);
     // 每条流的编码画幅按当前项目算(层上的 `px`);同一个流键只有一层
     const pixelsOf = new Map(layers.map((l) => [l.key, l.px]));
-    streamPlanes = planesWithinBudget(all, fps, (p) => pixelsOf.get(p.key ?? ""));
+    streamPlanes = lowMemory
+      ? planesWithinBudget(all, STREAM_BUDGET_MIN_FPS, (p) => pixelsOf.get(p.key ?? ""), lowMemoryStreamBudget())
+      : planesWithinBudget(all, fps, (p) => pixelsOf.get(p.key ?? ""));
     if (streamPlanes.length < all.length) {
       const within = new Set(streamPlanes);
       overPlanes = all.filter((p) => !within.has(p)).map((p) => ({ ...p, over: true as const }));
     }
+    // 低内存档:每个分段只解第一帧那一张(`streamPlayer.ts` 的 `presentFirst`)
+    if (lowMemory) streamPlanes = streamPlanes.map((p) => ({ ...p, first: true as const }));
     for (const p of all) for (const id of p.clipIds) wantedStream.add(id);
     for (const p of streamPlanes) for (const id of p.clipIds) covered.add(id);
     if (!playing) {
@@ -596,7 +607,8 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
     // 低内存档同样:停下追一帧画好的层(c10a 契约第 17 节,取代原来的「不追活渲」)
     // 这台设备跑不了的卡停下不追,暂停态的「已精确」对它们不成立:快照照贴
     if (!playing && isSettled("front", clip.id) && !localOnly.has(clip.id)) continue;
-    // **分界:有流盖着的卡不读快照**(文件头「快照这条路的分界」)。下面这一段循环体只为贴不上流的卡跑
+    // **分界:有流盖着的卡不读快照**(文件头「快照这条路的分界」)。下面这一段循环体只为贴不上流的卡跑。
+    // 低内存档走到这里选的是预渲染小尺寸:兜底顺序里「流的分段第一帧」之后的那一步,过渡用。〔撤快照时删〕
     if (covered.has(clip.id)) continue;
     const tier: PickTier = wantedStream.has(clip.id) ? "over" : "none";
     let picked: Pick | null = null;

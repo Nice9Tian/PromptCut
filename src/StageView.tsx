@@ -2469,7 +2469,9 @@ export default function StageView() {
         player.setPlanes(ref.current.streamPlanes.map((p, i) => {
           const g = incoming[i];
           const manifest = g.manifest && typeof g.manifest === "object" && g.manifest.bound && g.manifest.segments && g.manifest.inits ? g.manifest : null;
-          return manifest ? { ...p, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : p;
+          // 低内存档:父页带的 `first`(每个分段只解第一帧)只交给播放器,和清单、字节一样不进 React 的 props
+          const base = g.first === true ? { ...p, first: true as const } : p;
+          return manifest ? { ...base, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : base;
         }), fps, over);
         // 等着流画出第一帧的卡,流平面撤了:不再等(父页还点着名的当场藏起来,落到快照 / 占位符)
         if (ref.current.streamWaiting.size) {

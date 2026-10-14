@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import {
   OnlineSnapshotSource, parseLayerMap, parseLayerStreams, streamSpansInWindow, applyReadyMessage, BlockLru,
   LAYER_MAP_PREFIX, MANIFEST_POLL_MS, STREAM_RETRY_MS, LAYER_MAP_POLL_MS,
+  browserDecodeSupport, LOW_MEMORY_STREAM_CACHE_MAX_BYTES, STREAM_CACHE_MAX_BYTES,
 } from './snapshotSource.ts';
 import { streamPlanesFor, SEGMENT_FRAMES } from './streamPlayer.ts';
 import { streamInputSig } from './streamInputSig.mjs';
@@ -420,17 +421,76 @@ test('新订阅方:先 reset,再把手里已有的流的层全量发一遍;层�
   src.stop();
 });
 
-test('低内存档不消费流:streams 表在,也不取流清单、不发流的层', async () => {
+test('低内存档、浏览器没有 VideoDecoder:不消费流 —— streams 表在,也不取流清单、不发流的层(照没有流办)', async () => {
   const w = world();
   const rk = RK(0xa);
   w.putStream(rk, 0, 7);
   w.putMap([row()]);
-  const { src, streamMessages } = w.source({ tier: 'small' });
-  await w.settle(src);
-  assert.equal(w.requests.some((r) => r.kind === 'render-manifest'), false);
-  assert.deepEqual(streamMessages(), []);
-  assert.equal(w.fetches.length, 0);
-  src.stop();
+  // Node 里没有 VideoDecoder,缺省的 `browserDecodeSupport` 回「没有」;再显式注入一次同样的
+  assert.equal(browserDecodeSupport.available(), false);
+  assert.equal(await browserDecodeSupport.supports({ codec: 'avc1.640028', codedWidth: 704, codedHeight: 864 }), false);
+  for (const opts of [{ tier: 'small' }, { tier: 'small', decodeSupport: { available: () => false, supports: async () => true } }]) {
+    const before = w.requests.length;
+    const { src, streamMessages } = w.source(opts);
+    await w.settle(src);
+    assert.equal(w.requests.slice(before).some((r) => r.kind === 'render-manifest'), false);
+    assert.deepEqual(streamMessages(), []);
+    assert.equal(w.fetches.length, 0);
+    assert.deepEqual(src.debug().streams, []);
+    src.stop();
+  }
+});
+
+test('低内存档、浏览器解得了:照普通档的路取流(层表、清单、分段),发同样的就绪消息;流字节的内存上限用小的那一个', async () => {
+  const w = world();
+  const rk = RK(0xa);
+  const put = w.putStream(rk, 0, 7);
+  w.putMap([row()]);
+  const asked = [];
+  const decodeSupport = { available: () => true, supports: async (c) => { asked.push(c); return true; } };
+  const low = w.source({ tier: 'small', decodeSupport });
+  low.src.focus(1, 30);   // 播放头在第 30 帧 = 这条流的第 0 段
+  await w.settle(low.src);
+  await w.settle(low.src);
+  const msg = last(low.streamMessages());
+  assert.equal(msg.key, rk);
+  assert.equal(msg.originFrame, 30);
+  assert.ok(msg.ranges.length && msg.ranges[0][0] === 0, '播放头附近的分段就绪');
+  assert.deepEqual(asked, [{ codec: 'avc1.640028', codedWidth: 704, codedHeight: 864 }], '每个开头文件只问一次浏览器');
+  const plane = low.src.streamPlane(rk);
+  assert.ok(plane && plane.blocks.has(put.initHash) && plane.blocks.has(put.hashes[0]));
+  assert.equal(plane.manifest.segments['0'].file, put.hashes[0], '分段整段取(块按哈希存取)');
+  // 和普通档取到的是同一批东西
+  const w2 = world();
+  w2.putStream(rk, 0, 7);
+  w2.putMap([row()]);
+  const normal = w2.source();
+  normal.src.focus(1, 30);
+  await w2.settle(normal.src);
+  await w2.settle(normal.src);
+  assert.deepEqual(last(low.streamMessages()), last(normal.streamMessages()));
+  assert.deepEqual(w.fetches.map((f) => f.url).sort(), w2.fetches.map((f) => f.url).sort());
+  assert.ok(LOW_MEMORY_STREAM_CACHE_MAX_BYTES < STREAM_CACHE_MAX_BYTES);
+  low.src.stop();
+  normal.src.stop();
+});
+
+test('低内存档、这条流的编码配置浏览器不支持:清单照取,但分段的字节不取、不算就绪(父页照没有流办:小尺寸 → 占位符)', async () => {
+  const w = world();
+  const rk = RK(0xa);
+  const put = w.putStream(rk, 0, 7);
+  w.putMap([row()]);
+  for (const supports of [async () => false, async () => { throw new Error('boom'); }]) {
+    const before = w.fetches.length;
+    const { src, streamMessages } = w.source({ tier: 'small', decodeSupport: { available: () => true, supports } });
+    src.focus(1, 30);
+    await w.settle(src);
+    await w.settle(src);
+    assert.deepEqual(streamMessages().filter((m) => m.ranges.length), [], '没有就绪的分段');
+    assert.equal(src.streamPlane(rk), null);
+    assert.equal(w.fetches.slice(before).some((f) => f.url.endsWith(put.hashes[0])), false, '解不了的流不取字节');
+    src.stop();
+  }
 });
 
 test('BlockLru:按字节计,挤掉最久没用的,回被挤掉的键', () => {
@@ -580,14 +640,26 @@ test('BO-stale 依赖下层的流过期:下层或目标卡改了,旧流撤掉、
   src.stop();
 });
 
-test('BO-lowmem 低内存档不消费依赖下层的流(这一块不动它)', async () => {
+test('BO-lowmem 低内存档:浏览器没有 VideoDecoder 时不消费依赖下层的流;解得了就照普通档同一套(带 streamKind 与输入签名)', async () => {
   const w = world();
   const rk = RK(0xb);
   w.putStream(rk, 0, 7, { clipIds: ['glass'], kind: 'below' });
   w.putMap([belowRow(null, { candidates: [{ envFingerprint: 'fp-a', resultKey: rk }] })]);
-  const { src, streamMessages } = w.source({ tier: 'small' });
-  await w.settle(src);
-  assert.deepEqual(streamMessages(), []);
+  const none = w.source({ tier: 'small' });
+  await w.settle(none.src);
+  assert.deepEqual(none.streamMessages(), []);
   assert.equal(w.requests.some((r) => r.kind === 'render-manifest'), false);
-  src.stop();
+  none.src.stop();
+  const low = w.source({ tier: 'small', decodeSupport: { available: () => true, supports: async () => true } });
+  await w.settle(low.src);
+  await w.settle(low.src);
+  const normal = w.source();
+  await w.settle(normal.src);
+  await w.settle(normal.src);
+  const a = last(low.streamMessages()), b = last(normal.streamMessages());
+  assert.ok(a && a.ranges.length, '低内存档取到了依赖下层的流');
+  assert.equal(a.streamKind, 'below');
+  assert.deepEqual(a, b, '和普通档发的是同一条就绪消息');
+  low.src.stop();
+  normal.src.stop();
 });
