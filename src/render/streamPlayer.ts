@@ -1528,6 +1528,8 @@ class StreamTrack {
       decoder: this.decoder?.state ?? null, nextFeed: this.nextFeed, lastDrawn: this.lastDrawn,
       // 要哪一帧、画着的是哪一张画面(稀疏段里是不晚于那一帧的最近一张)、是不是留着的旧画面、在途的寻帧、上一次寻帧的耗时
       want: this.wantFrame, picture: this.lastDrawn === null ? null : this.pictureOf(this.lastDrawn), level: this.level,
+      // 画着的那一张所在的分段在清单里多密(1 = 满密度;低内存档不管它多密都只解第一帧)
+      stride: this.lastDrawn === null ? null : this.manifest?.segments[String(this.segmentOf(this.lastDrawn))]?.stride ?? null,
       stale: this.staleSince !== null, seekTarget: this.seekTarget, lastSeek: this.lastSeek,
       segments: [...this.segments.keys()], manifest: !!this.manifest, bound: this.manifest?.bound ?? null,
       // 画在哪种平面上(舞台根下 / 包裹层里),清单是哪一种流、和这块平面对不对得上
