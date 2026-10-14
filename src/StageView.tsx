@@ -38,7 +38,7 @@ import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./
 import { PushedStreamSource, StreamPlayer } from "./render/streamPlayer";
 import {
   applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, onlineBrowserMode, setPlaceholderViewScale, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
-  resetPlaceholderGeometry, setCatchingUpClips, setLocalOnlyConfirmed, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, stageBoxToLocal, shownSince,
+  resetPlaceholderGeometry, setCatchingUpClips, setLocalOnlyConfirmed, setOnlineBrowserMode, setPlaceholdersEnabled, keepTopOfGroups, setOverBoxSource, setStreamBoxSource, shownPlaceholders, stageBoxToLocal, shownSince,
   unsupportedHere,
 } from "./render/placeholderHost";
 
@@ -420,10 +420,12 @@ export default function StageView() {
     /*
      * 占位符的几何首选流清单里的矩形(mechanism/rendering.md「重管线:预渲染」;`placeholderHost` 的 `geometryFor`)。
      * 超出预算的层取这一帧所在分段的位置矩形:单卡流的是包裹层自己的坐标,直接用;组流、依赖下层的流的是舞台坐标,
-     * 按屏幕上量到的包裹层位置换过来(换不了的回 null,照老办法定位)。
+     * 按屏幕上量到的包裹层位置换过来(换不了的回 null,照老办法定位)。这个矩形只管这一帧,和预算以内的流的框分开给
+     * (那一种会被记下来留到以后用,这一种不记)。
      */
-    setStreamBoxSource((clipId) => {
-      const own = player.boxOf(clipId);
+    setStreamBoxSource((clipId) => player.boxOf(clipId));
+    setOverBoxSource((clipId) => {
+      const own = player.overBoxOf(clipId);
       if (own) return own;
       const staged = player.stageBoxOf(clipId);
       const wrap = staged ? rootRef.current?.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(clipId)}"]`) : null;
@@ -655,7 +657,13 @@ export default function StageView() {
       // 停下追帧时这张卡的流平面还画着:它不算「不可见地追帧」(T3),不显示占位符
       let settlingBlank = settling;
       if (settling.size && streamShowing.size) settlingBlank = new Map([...settling].filter(([id]) => !streamShowing.has(id)));
-      applyPlaceholders(placeholderWanted({ suppressed, snapshots, awaiting, settling: settlingBlank, streamShowing, unsupported }), slotOf);
+      const wanted = placeholderWanted({ suppressed, snapshots, awaiting, settling: settlingBlank, streamShowing, unsupported });
+      /*
+       * 超出预算的组流:整组只有一个位置矩形(成员的并集),每个成员的占位符都会铺在它上面。只留这一拍要显示占位符的成员里
+       * 最上面的那一张(画家顺序里最后一个),其余的不显示。这一组这一帧没有位置矩形时不动(各自照老办法定位)。
+       */
+      if (wanted.size > 1 && player.hasOver) keepTopOfGroups(wanted, player.overGroups());
+      applyPlaceholders(wanted, slotOf);
     };
 
     /**

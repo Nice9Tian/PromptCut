@@ -11,7 +11,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { StreamPlayer, StreamPlaneSender, MANIFEST_REFRESH_MS } from './streamPlayer.ts';
-import { stageBoxToLocal } from './placeholderHost.ts';
+import { stageBoxToLocal, keepTopOfGroups, geometryFor, resetPlaceholderGeometry, setOverBoxSource, setStreamBoxSource } from './placeholderHost.ts';
 
 globalThis.CSS = { escape: (s) => s };
 let now = 1_000_000;
@@ -44,45 +44,64 @@ test('超出预算的单卡流:不建解码器;占位符的矩形是清单里这
   // 片段从第 100 帧开始:第 0 段是 100～114,第 1 段是 115～129
   player.setPlanes([], FPS, [{ clipIds: ['a'], key: 'S', ranges: [[0, 2]], originFrame: 100, over: true }]);
   assert.equal(player.hasOver, true);
-  assert.equal(player.boxOf('a'), null, '还没走过一拍、清单也没到');
+  assert.equal(player.overBoxOf('a'), null, '还没走过一拍、清单也没到');
+  assert.equal(player.boxOf('a'), null, 'boxOf 只管预算以内的流');
   player.present(107 / FPS);
   await flush();
   assert.deepEqual(source.calls, ['S'], '只取清单');
   assert.equal(player.diag().tracks.length, 0, '不建解码器、不建轨道');
-  assert.deepEqual(player.boxOf('a'), boxes[0]);
+  assert.deepEqual(player.overBoxOf('a'), boxes[0]);
   assert.equal(player.stageBoxOf('a'), null, '单卡流的矩形不是舞台坐标');
   assert.equal(changed, 1, '清单到了:叫宿主重取一次');
 
   player.present(114 / FPS);
   await flush();
-  assert.deepEqual(player.boxOf('a'), boxes[0]);
+  assert.deepEqual(player.overBoxOf('a'), boxes[0]);
   assert.equal(changed, 1, '还在同一个分段:不叫');
 
   player.present(115 / FPS);
   await flush();
-  assert.deepEqual(player.boxOf('a'), boxes[1], '进了下一个分段');
+  assert.deepEqual(player.overBoxOf('a'), boxes[1], '进了下一个分段');
   assert.equal(changed, 2);
   assert.deepEqual(source.calls, ['S'], '这一段有矩形:不再问清单');
 
-  // 第 2 段没量过:回 null(占位符照老办法定位);隔一会儿再问一次清单
+  // 第 2 段在清单里、只是没量过(桌面上没量过的分段以后也不会有矩形):回 null(占位符照老办法定位),**不再问清单**
   player.present(130 / FPS);
   await flush();
-  assert.equal(player.boxOf('a'), null);
+  assert.equal(player.overBoxOf('a'), null);
   assert.equal(changed, 3);
-  assert.equal(source.calls.length, 1, '离上一次问清单还不到间隔:先不问');
-  now += MANIFEST_REFRESH_MS + 1;
-  player.present(131 / FPS);
+  for (let f = 131; f < 140; f++) { now += MANIFEST_REFRESH_MS + 1; player.present(f / FPS); await flush(); }
+  assert.equal(source.calls.length, 1, '清单里已有这一段而没有矩形:播放着也不再取清单');
+  // 第 3 段清单里还没有(手里的清单是旧的):隔一会儿再问一次,问到了就有矩形
+  boxes[3] = { x: 70, y: 20, w: 300, h: 200 };
+  const fresh = manifestOf({ boxes });
+  const stale = manifestOf({ boxes: { 0: boxes[0], 1: boxes[1], 2: null } });
+  let served = stale;
+  source.manifest = async (key) => { source.calls.push(key); return served; };
+  player.setPlanes([], FPS, []);
   await flush();
-  assert.equal(source.calls.length, 2, '这一段没有矩形:隔一会儿再问一次(稀疏版可能刚产到这一段)');
-  player.present(132 / FPS);
+  const player2 = new StreamPlayer({ root: () => root, source });
+  player2.setPlanes([], FPS, [{ clipIds: ['a'], key: 'S', ranges: [[0, 3]], originFrame: 100, over: true }]);
+  player2.present(146 / FPS);
+  await flush();
+  assert.equal(source.calls.length, 2);
+  assert.equal(player2.overBoxOf('a'), null, '旧清单里没有第 3 段');
+  player2.present(147 / FPS);
   await flush();
   assert.equal(source.calls.length, 2, '间隔没到不问');
+  served = fresh;
+  now += MANIFEST_REFRESH_MS + 1;
+  player2.present(148 / FPS);
+  await flush();
+  assert.equal(source.calls.length, 3, '清单里还没有这一段:隔一会儿再问');
+  assert.deepEqual(player2.overBoxOf('a'), boxes[3]);
+  player2.stop();
 
   // 这一拍不再超预算(父页不再标 over):清掉,叫宿主一次
   player.setPlanes([], FPS, []);
   await flush();
   assert.equal(player.hasOver, false);
-  assert.equal(player.boxOf('a'), null);
+  assert.equal(player.overBoxOf('a'), null);
   assert.equal(changed, 3, '本来就没有矩形:不用宿主重取');
 });
 
@@ -102,13 +121,15 @@ test('超出预算的组流、依赖下层的流:矩形是舞台坐标,每个成
   player.present(0);
   await flush();
   assert.equal(player.diag().tracks.length, 0, '标了 over 的混在流平面里发来也不建解码器');
-  assert.equal(player.boxOf('a'), null, '舞台坐标的矩形不当包裹层坐标回');
+  assert.equal(player.overBoxOf('a'), null, '舞台坐标的矩形不当包裹层坐标回');
   assert.deepEqual(player.stageBoxOf('a'), box);
   assert.deepEqual(player.stageBoxOf('b'), box);
   assert.deepEqual(player.stageBoxOf('glass'), { x: 504, y: 306, w: 640, h: 360 }, '加清单的 offset');
   assert.equal(player.stageBoxOf('wrong'), null);
-  assert.equal(player.boxOf('wrong'), null);
+  assert.equal(player.overBoxOf('wrong'), null);
   assert.deepEqual(player.diag().over.map((o) => o.key).sort(), ['B', 'G', 'W']);
+  // 整组只有一个矩形:宿主据此只让一个成员(最上面的,列表里最后一个)显示占位符
+  assert.deepEqual(player.overGroups(), [['a', 'b']], '只列有位置矩形的组流;依赖下层的流只有一张卡,不列');
   player.stop();
   assert.equal(player.hasOver, false, '退到 back:清掉');
 });
@@ -121,12 +142,12 @@ test('父页带来清单的(在线页面):直接用,不问字节源;带来新清
   player.setPlanes([], FPS, [{ clipIds: ['a'], key: 'S', ranges: [[0, 0]], originFrame: 0, over: true, manifest: first }]);
   player.present(0);
   await flush();
-  assert.deepEqual(player.boxOf('a'), { x: 1, y: 2, w: 30, h: 40 });
+  assert.deepEqual(player.overBoxOf('a'), { x: 1, y: 2, w: 30, h: 40 });
   assert.deepEqual(source.calls, []);
   const next = manifestOf({ boxes: { 0: { x: 5, y: 2, w: 30, h: 40 } } });
   player.setPlanes([], FPS, [{ clipIds: ['a'], key: 'S', ranges: [[0, 0]], originFrame: 0, over: true, manifest: next }]);
   await flush();
-  assert.deepEqual(player.boxOf('a'), { x: 5, y: 2, w: 30, h: 40 });
+  assert.deepEqual(player.overBoxOf('a'), { x: 5, y: 2, w: 30, h: 40 });
   assert.equal(changed, 2);
   assert.deepEqual(source.calls, []);
 });
@@ -167,4 +188,38 @@ test('stageBoxToLocal:舞台坐标的矩形换到包裹层自己的坐标;只认
   assert.equal(stageBoxToLocal(box, { ...at, transform: 'matrix(0.866, 0.5, -0.5, 0.866, 0, 0)' }), null);
   assert.equal(stageBoxToLocal(box, { ...at, transform: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)' }), null);
   assert.equal(stageBoxToLocal(box, { ...at, wrapWidth: 0 }), null);
+});
+
+test('占位符的几何:超出预算的层用这一帧的位置矩形,不记下来;换不出矩形时照老办法定位,不沿用上一段的', () => {
+  resetPlaceholderGeometry();
+  const size = { width: 640, height: 360 };
+  let over = { x: 10, y: 20, w: 300, h: 200 };
+  let stream = null;
+  setOverBoxSource(() => over);
+  setStreamBoxSource(() => stream);
+  assert.deepEqual(geometryFor('a', size), { kind: 'solid', box: { left: 10, top: 20, width: 300, height: 200 } });
+  // 下一段没量过(或者包裹层转了,舞台坐标换不过来):回到老办法 —— 没有别的框就是徽标,不是上一段的矩形
+  over = null;
+  assert.deepEqual(geometryFor('a', size), { kind: 'badge', center: { x: 320, y: 180 } });
+  // 预算以内的流的框照旧记着(流停了也留着);超出预算的那一帧矩形在的时候先用它
+  stream = { x: 1, y: 2, w: 30, h: 40 };
+  assert.deepEqual(geometryFor('a', size), { kind: 'solid', box: { left: 1, top: 2, width: 30, height: 40 } });
+  stream = null;
+  assert.deepEqual(geometryFor('a', size).box, { left: 1, top: 2, width: 30, height: 40 }, '预算以内的流的框留着');
+  over = { x: 50, y: 60, w: 70, h: 80 };
+  assert.deepEqual(geometryFor('a', size).box, { left: 50, top: 60, width: 70, height: 80 });
+  over = null;
+  assert.deepEqual(geometryFor('a', size).box, { left: 1, top: 2, width: 30, height: 40 }, '超出预算的矩形没有了:回到原来记着的那一个,不是刚才那一帧的');
+  setOverBoxSource(() => null);
+  setStreamBoxSource(() => null);
+  resetPlaceholderGeometry();
+});
+
+test('超出预算的组流:整组只有一个矩形,只让这一拍要显示占位符的成员里最上面的那一张显示', () => {
+  const wanted = (ids) => new Map(ids.map((id) => [id, 'pending']));
+  assert.deepEqual([...keepTopOfGroups(wanted(['a', 'b', 'c', 'x']), [['a', 'b', 'c']]).keys()], ['c', 'x'], '最后一个在最上面;组外的不动');
+  assert.deepEqual([...keepTopOfGroups(wanted(['a', 'b', 'x']), [['a', 'b', 'c']]).keys()], ['b', 'x'], '最上面那张这一拍不显示(没挂着):留它下面最近的一张');
+  assert.deepEqual([...keepTopOfGroups(wanted(['a', 'x']), [['a', 'b']]).keys()], ['a', 'x']);
+  assert.deepEqual([...keepTopOfGroups(wanted(['a', 'b', 'c', 'd']), [['a', 'b'], ['c', 'd']]).keys()], ['b', 'd']);
+  assert.deepEqual([...keepTopOfGroups(wanted(['a', 'b']), []).keys()], ['a', 'b'], '这一帧没有位置矩形的组不在表里:各自照老办法定位');
 });

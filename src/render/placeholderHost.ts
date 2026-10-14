@@ -377,6 +377,19 @@ export function setStreamBoxSource(fn: typeof streamBoxOf): void {
 }
 
 /**
+ * 超出预算的组流:整组只有一个位置矩形(成员的并集),每个成员的占位符都会铺在它上面,N 个成员叠 N 块同样的框。
+ * 每一组里只留这一拍要显示占位符的成员中最上面的那一张(`groups` 每项按画家顺序,最后一个在最上面),其余的从 `wanted` 里拿掉。
+ * 原地改 `wanted` 并返回它。
+ */
+export function keepTopOfGroups<T>(wanted: Map<string, T>, groups: readonly (readonly string[])[]): Map<string, T> {
+  for (const members of groups) {
+    const showing = members.filter((id) => wanted.has(id));
+    for (const id of showing.slice(0, -1)) wanted.delete(id);
+  }
+  return wanted;
+}
+
+/**
  * 舞台坐标里的一个矩形换到某一层包裹层自己的坐标(超出预算的组流、依赖下层的流的位置矩形是舞台坐标,占位符摆在包裹层里)。
  *
  * 用屏幕上量到的两块矩形换:`ref` 是舞台坐标的原点所在的那个元素(包裹层的定位祖先,流的舞台平面也挂在它下面),`wrap` 是包裹层;
@@ -400,7 +413,16 @@ export function stageBoxToLocal(
   return { x: r((at.ref.left + box.x * view - at.wrap.left) / own), y: r((at.ref.top + box.y * view - at.wrap.top) / own), w: r((box.w * view) / own), h: r((box.h * view) / own) };
 }
 
-/** 流清单量到过的框,流停了也留着(下一次来不及时还用得上) */
+/**
+ * 超出预算的层:流清单里这一帧所在分段的位置矩形(已经换到包裹层坐标)。由 `StageView` 接到 `StreamPlayer.overBoxOf` / `stageBoxOf` 上。
+ * 它只管这一帧,**不记进 `streamBoxes`**:这一层之后换不出矩形(包裹层转了、下一段没量过)时照老办法定位,不沿用上一段的。
+ */
+let overBoxOf: (clipId: string) => { x: number; y: number; w: number; h: number } | null = () => null;
+export function setOverBoxSource(fn: typeof overBoxOf): void {
+  overBoxOf = fn;
+}
+
+/** 预算以内的流:清单量到过的框,流停了也留着(下一次来不及时还用得上) */
 const streamBoxes = new Map<string, PlaceholderBox>();
 /** 上次活渲时量到的墨迹框(包裹层坐标) */
 const inkBoxes = new Map<string, PlaceholderBox>();
@@ -432,8 +454,10 @@ export function geometryFor(clipId: string, size: { width: number; height: numbe
   if (fresh && fresh.w > 0 && fresh.h > 0) streamBoxes.set(clipId, { left: fresh.x, top: fresh.y, width: fresh.w, height: fresh.h });
   const stream = streamBoxes.get(clipId);
   const ink = inkBoxes.get(clipId);
+  const over = overBoxOf(clipId);
   let geometry: PlaceholderGeometry;
-  if (stream) geometry = { kind: "solid", box: stream };
+  if (over && over.w > 0 && over.h > 0) geometry = { kind: "solid", box: { left: over.x, top: over.y, width: over.w, height: over.h } };
+  else if (stream) geometry = { kind: "solid", box: stream };
   else if (ink) geometry = { kind: "solid", box: ink };
   else geometry = { kind: "badge", center: { x: size.width / 2, y: size.height / 2 } };
   const key = JSON.stringify(geometry);

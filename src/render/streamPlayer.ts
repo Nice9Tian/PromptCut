@@ -1438,10 +1438,13 @@ class OverPlane {
     return isRect(box) ? box : null;
   }
 
-  /** 每拍叫一次:没有清单就取;这一帧的分段还没有位置矩形就隔一会儿再问(父页带清单来的不问,等它带新的来) */
+  /**
+   * 每拍叫一次:没有清单就取;手里的清单还没有这一帧所在的分段(清单是旧的)就隔一会儿再问。清单里已经有这一段、只是没有位置矩形
+   * (没量过的分段,以后也不会有)的不再问。父页带清单来的不问,等它带新的来。
+   */
   tick(f: number): void {
     if (this.plane.manifest || this.loading || !this.plane.key) return;
-    if (this.manifest && this.boxAt(f)) return;
+    if (this.manifest && isStreamOrigin(this.plane.originFrame) && this.manifest.segments?.[String(streamSegmentOf(f, this.plane.originFrame))]) return;
     const now = realNow();
     if (this.askedAt && now - this.askedAt < MANIFEST_REFRESH_MS) return;
     this.askedAt = now;
@@ -1721,17 +1724,35 @@ export class StreamPlayer {
     return out;
   }
 
-  /**
-   * 单卡流的实体框(包裹层坐标 = 平面坐标)。预算以内的流是清单的收紧矩形(没有就用上界);**超出预算的流**是清单里这一帧所在分段的
-   * 位置矩形(没量过回 null)。组流、依赖下层的流的框在舞台坐标里,这里不回,见 `stageBoxOf`。
-   */
+  /** 预算以内的单卡流的实体框(清单的收紧矩形,没有就用上界;包裹层坐标 = 平面坐标)。组流、依赖下层的流的框在舞台坐标里,不回 */
   boxOf(clipId: string): StreamRect | null {
     for (const track of this.tracks.values()) {
       if (!stagePlane(track.plane) && track.plane.clipIds[0] === clipId) return track.box;
     }
+    return null;
+  }
+
+  /**
+   * **超出预算的**单卡流:清单里这一帧所在分段的位置矩形(包裹层坐标);没量过、没有清单回 null。和 `boxOf` 分开回:
+   * 这个矩形只管这一帧,宿主不该把它记下来留到以后用。组流、依赖下层的流见 `stageBoxOf`。
+   */
+  overBoxOf(clipId: string): StreamRect | null {
     const over = this.over.get(clipId);
     if (over && !stagePlane(over.plane) && this.lastFrame !== null) return over.boxAt(this.lastFrame);
     return null;
+  }
+
+  /**
+   * 超出预算的组流里,这一帧有位置矩形的那几组的成员(每组按画家顺序,最后一个在最上面)。整组只有一个矩形(成员的并集),
+   * 宿主只让其中一个成员显示占位符(4:不然 N 个成员叠 N 块同样的框)。
+   */
+  overGroups(): string[][] {
+    const out: string[][] = [];
+    if (this.lastFrame === null) return out;
+    for (const o of new Set(this.over.values())) {
+      if (o.plane.clipIds.length > 1 && o.boxAt(this.lastFrame)) out.push([...o.plane.clipIds]);
+    }
+    return out;
   }
 
   /**
