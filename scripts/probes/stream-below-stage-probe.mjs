@@ -4,7 +4,7 @@
  * 父页那一侧(真的编辑器里哪些卡贴流、下层改了以后旧流不贴)在 `below-paste-editor-probe.mjs`。
  *
  *   node scripts/probes/stream-below-stage-probe.mjs (--origin http://127.0.0.1:26980 | --port 26980) [--host-port 26990] [--media-port 26991]
- *        [--scenes a,b,u] [--size 960x540] [--out <目录>] [--json <文件>] [--keep]
+ *        [--scenes a,b,u,d] [--size 960x540] [--out <目录>] [--json <文件>] [--keep]
  *
  * 给 `--port` 就自己在检出根起一台 dev server(另占 +1、+2 当舞台端口;数据目录、卡片改动层都在 `--out` 下),用完按进程号收掉。
  * 本进程里直接起 `FramePipeline`(同预渲染进程的代码),库根在 `--out` 下。测试页扮演父页,照产品里父页的顺序发消息
@@ -15,6 +15,9 @@
  *   甲  毛玻璃卡(里程表 `odometer`,审阅表里依赖下层)压在一张会动的卡(粒子)和一段视频上面;
  *   乙  下层是半透明的:不透明度 0.6、带阴影的药丸,底下什么都没有(透明);上面压同一张毛玻璃卡;
  *   丙  用 remotion 式框架写的**用户卡**(审阅表没覆盖到,按依赖下层处理;经真的 `POST /api/cards/create` 建)压在粒子和视频上面。
+ *   丁  (缺省不跑,`--scenes d`)同甲,但毛玻璃卡的**外框用了三维变形**(`rotateY`、`rotateX`、`translateZ`),项目开了透视:
+ *       流里是带着三维的舞台坐标画面,平面照旧挂在舞台根下、不再变形。第 F 条改的是**三维角度**(不是下层):旧流的签名对不上、
+ *       键变、新流到了再贴,拿旧角度的导出页比明显更差。
  *
  * 目标卡都**不从 15 的倍数帧开始**(甲、乙第 6 帧,丙第 38 帧)。全部卡钉成重卡:目标卡走依赖下层的流,别的卡各走各的单卡流,
  * 视频由舞台现放 —— 所以暂停着跳到任意一帧时,舞台上的下层就是那一帧该有的画面,整幅截图能和导出页同一帧直接比
@@ -66,7 +69,7 @@ const ORIGIN = flagArg('origin', null, args);
 const PORT = Number(flagArg('port', '0', args));
 const HOST_PORT = Number(flagArg('host-port', '0', args)) || 0;
 const MEDIA_PORT = Number(flagArg('media-port', '0', args)) || 0;
-const SCENES = String(flagArg('scenes', 'a,b,u', args)).split(',').map((s) => s.trim()).filter((s) => ['a', 'b', 'u'].includes(s));
+const SCENES = String(flagArg('scenes', 'a,b,u', args)).split(',').map((s) => s.trim()).filter((s) => ['a', 'b', 'u', 'd'].includes(s));
 const KEEP = args.includes('--keep');
 
 const JSON_OUT = flagArg('json', null, args);
@@ -79,7 +82,9 @@ if (!(WIDTH > 0 && HEIGHT > 0)) { console.error('--size 写成 960x540 这样');
 
 const FPS = 30, DURATION = 3, SEG = STREAM_SEGMENT_FRAMES, LAST = DURATION * FPS - 1;
 const K = WIDTH / 1920;
-const SCENE_NAME = { a: '甲', b: '乙', u: '丙' };
+const SCENE_NAME = { a: '甲', b: '乙', u: '丙', d: '丁' };
+/** 丁:毛玻璃卡外框的三维摆放;`edited` 时换一个角度 */
+const TILT = { rotateY: 18, rotateX: -8, translateZ: -60 }, TILT_EDITED = { rotateY: 30, rotateX: 6, translateZ: -60 }, FOV = 50;
 const USER_CARD = `bp-panel-${RUN}`;
 
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ step, t: Date.now(), ...fields })}\n`);
@@ -188,6 +193,12 @@ function scene(kind, { mediaUrl = '', edited = false } = {}) {
   const glass = { id: 'tr-glass', name: 'glass', hidden: false, clips: [
     { id: 'clip-glass', kind: 'card', cardId: 'odometer', start: 0.2, end: DURATION, params: { position: 'left', value: 86420, label: '贴流探针' }, ...glassFrame() },
   ] };
+  if (kind === 'd') {
+    const g = glass.clips[0];
+    g.frame = { x: 0, y: 0, w: 1920, h: 1080, anchor: [0, 0], scale: K, ...(g.frame ?? {}), ...(edited ? TILT_EDITED : TILT) };
+    return { target: 'clip-glass', cards: ['clip-above', 'clip-glass', 'clip-move'], hasVideo: true, tilted: true,
+      project: { ...base, camera3dFov: FOV, id: `below-stage-d-${RUN}`, media, tracks: [abovePill(WIDTH * 0.2, HEIGHT * 0.5), glass, particles(), videoTrack()] } };
+  }
   if (kind === 'a') {
     return { target: 'clip-glass', cards: ['clip-above', 'clip-glass', 'clip-move'], hasVideo: true,
       project: { ...base, id: `below-stage-a-${RUN}`, media, tracks: [abovePill(WIDTH * 0.16, HEIGHT * 0.5), glass, particles(edited ? '#ff5a30' : '#30ff60'), videoTrack()] } };
@@ -392,6 +403,10 @@ try {
     run.layer = { streamKind: layer0?.streamKind ?? null, inputSig: layer0?.inputSig ?? null, pageSig: sig0, originFrame: layer0?.originFrame ?? null };
     check(spec0.kind === 'below' && spec0.plane === 'stage' && spec0.originFrame === FIRST, `${tag}:目标卡有一条依赖下层的流(舞台坐标),第一帧是它自己的第一帧`, run.stream);
     check(layer0?.streamKind === 'below' && typeof sig0 === 'string' && layer0.inputSig === sig0, `${tag}:发给页面的那一层带着种类和输入签名,签名就是按同一份项目算的那一个`, run.layer);
+    if (sc.tilted) {
+      const f3 = targetClip.frame ?? {};
+      check(!!(f3.rotateX && f3.rotateY && f3.translateZ) && project.camera3dFov > 0 && !('solo' in spec0), `${tag}:目标卡的外框带三维、项目开了透视,出的是依赖下层的流(不是单独成流的那一种)`, { frame: f3, fov: project.camera3dFov, solo: spec0.solo ?? null });
+    }
     check(cards.filter((id) => id !== target).every((id) => stateOf(id)?.spec.kind === 'card' && layerByClip.get(id) && !('streamKind' in layerByClip.get(id)) && !('inputSig' in layerByClip.get(id))),
       `${tag}:别的卡是单卡流,它们的层不带这两项`, run.stream.others);
     /** 父页的做法(`snapshotFeed.ts` 的 `streamLayers`):依赖下层的那一层的流平面带 `plane: "stage"` */
@@ -537,6 +552,22 @@ try {
       check(dom.planeBox && dom.planeBox.left === `${b.x}px` && dom.planeBox.top === `${b.y}px` && dom.planeBox.w === b.w && dom.planeBox.h === b.h, `${tag}:平面按清单的舞台坐标摆`, { planeBox: dom.planeBox, bound: b });
       check(/pc-suppressed/.test(dom.cls ?? '') && dom.liveHidden && dom.member, `${tag}:目标卡的包裹层抑制着(子树藏着),点它退回包裹层的框`, dom);
       check(track?.plane === 'stage' && track.kind === 'below' && track.fits === true && run.dom.sentPlane?.plane === 'stage', `${tag}:播放器认这是按舞台坐标的流`, run.dom);
+      if (sc.tilted) {
+        // 平面本身不带变形(舞台的透视只作用在带三维变形的直接子元素上):它在屏幕上的框就是清单的矩形;包裹层带着三维矩阵
+        const flat = await frameA().evaluate((id) => {
+          const wrap = document.querySelector(`[data-pc-clip="${id}"]:not([data-pc-media])`);
+          const plane = document.querySelector(`canvas[data-pc-group-plane][data-pc-stream-group="${id}"]`);
+          const root = plane?.parentElement?.getBoundingClientRect();
+          const box = plane?.getBoundingClientRect();
+          return { planeTransform: plane ? getComputedStyle(plane).transform : null, wrapperTransform: wrap ? getComputedStyle(wrap).transform.slice(0, 9) : null,
+            // 透视挂在包裹层的父元素上(`Stage.tsx` 的 AnimClock 那一层);流平面在舞台根下,不是它的子元素
+            perspective: wrap?.parentElement ? getComputedStyle(wrap.parentElement).perspective : null, planeUnderPerspective: !!plane && !!wrap?.parentElement && plane.parentElement === wrap.parentElement,
+            screen: box && root ? { x: box.left - root.left, y: box.top - root.top, w: box.width, h: box.height } : null, css: plane ? { w: parseFloat(plane.style.width), h: parseFloat(plane.style.height), l: parseFloat(plane.style.left), t: parseFloat(plane.style.top) } : null };
+        }, target);
+        run.dom.tilt = flat;
+        check(flat.planeTransform === 'none' && flat.wrapperTransform === 'matrix3d(' && flat.perspective && flat.perspective !== 'none', `${tag}:包裹层带三维矩阵、舞台有透视,流平面自己不带变形`, flat);
+        check(flat.screen && flat.css && Math.abs(flat.screen.x - flat.css.l) < 0.51 && Math.abs(flat.screen.y - flat.css.t) < 0.51 && Math.abs(flat.screen.w - flat.css.w) < 0.51 && Math.abs(flat.screen.h - flat.css.h) < 0.51, `${tag}:流平面在屏幕上的框就是它样式里的框(没有被透视变形)`, flat);
+      }
     }
 
     /* ---------- C. 满密度:暂停着跳到任意一帧,逐帧比 */

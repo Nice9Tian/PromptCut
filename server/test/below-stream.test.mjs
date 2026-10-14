@@ -26,7 +26,7 @@ import { checkClaimable } from '../render-node/filter.mjs';
 import { layerMapOf, layerStreamsOf } from '../artifact-transfer.mjs';
 import { localMediaGate } from '../queue-local-media.mjs';
 import { projectCardGraph } from '../../src/kernel/cardGraph.mjs';
-import { streamInputSig, streamInputs, belowLayersOf } from '../../src/render/streamInputSig.mjs';
+import { streamInputSig, streamInputs, belowLayersOf, streamSigStale } from '../../src/render/streamInputSig.mjs';
 
 /* ------------------------------------------------------------------ 场景 */
 
@@ -144,9 +144,44 @@ test('BL-layer 发给页面的那一层:依赖下层的流带 `streamKind: below
   assert.deepEqual(belowLayerMark(null, 'glass'), {});
 });
 
+test('BL-3d 依赖下层(或没审阅过)又带三维外框的卡:照普通的依赖下层的流出(舞台坐标,三维画进流里);改三维角度、改项目的透视,键和输入签名都变;发层照带种类和签名', () => {
+  const tilt = (frame, more = () => {}) => edit((x) => { clipOf(x, 'glass').frame = { x: 100, y: 100, w: 600, h: 300, ...frame }; x.camera3dFov = 50; more(x); });
+  const p = tilt({ rotateY: 20, rotateX: -8, translateZ: -40 });
+  const flat = edit((x) => { x.camera3dFov = 50; });
+  const spec = belowOf(p);
+  assert.ok(spec, '出一条依赖下层的流');
+  assert.deepEqual([spec.kind, spec.plane, spec.clipIds, spec.offset, spec.bound], ['below', 'stage', ['glass'], { x: 0, y: 0 }, { x: 0, y: 0, w: 1280, h: 720 }], '形状和平面的那一种相同:整个画面、舞台坐标');
+  assert.deepEqual(spec.belowClipIds, belowOf(flat).belowClipIds, '下层的认定不受三维影响');
+  assert.equal('solo' in spec, false);
+  // 占解码器预算、不参加组流合并:别的流的键和形状不受它带不带三维影响
+  assert.deepEqual(plan(p).filter(s => s.kind !== 'below'), plan(flat).filter(s => s.kind !== 'below'));
+  assert.equal(plan(p).filter(s => s.topClipId === 'glass').length, 1, '只有这一条,没有另出单卡流');
+  // 键与签名:三维每一项、项目的透视都在里面
+  assert.notEqual(keyOf(p), keyOf(flat)); assert.notEqual(sigOf(p), sigOf(flat));
+  for (const [name, other] of [['rotateY', tilt({ rotateY: 21, rotateX: -8, translateZ: -40 })], ['rotateX', tilt({ rotateY: 20, rotateX: -9, translateZ: -40 })],
+    ['translateZ', tilt({ rotateY: 20, rotateX: -8, translateZ: -41 })], ['camera3dFov', tilt({ rotateY: 20, rotateX: -8, translateZ: -40 }, (x) => { x.camera3dFov = 60; })]]) {
+    assert.notEqual(keyOf(other), keyOf(p), `改 ${name}:流键变`);
+    assert.notEqual(sigOf(other), sigOf(p), `改 ${name}:输入签名变`);
+    assert.equal(streamSigStale(belowOf(p).inputSig, sigOf(other)), true, `改 ${name}:旧流带的签名对不上,页面不再贴`);
+  }
+  assert.equal(keyOf(tilt({ rotateY: 20, rotateX: -8, translateZ: -40 })), keyOf(p), '同样的输入键相同');
+  // 上面的层怎么改都不变(同平面的那一种)
+  assert.equal(keyOf(tilt({ rotateY: 20, rotateX: -8, translateZ: -40 }, (x) => { clipOf(x, 'top').params.text = '改了'; })), keyOf(p));
+  // 发层
+  assert.equal(spec.inputSig, sigOf(p));
+  assert.deepEqual(belowLayerMark(spec, 'glass'), { streamKind: 'below', inputSig: sigOf(p) });
+  // 隔离工程:目标卡的框原样(三维那几项都在),不像单独成流的三维独立卡那样只留位置和宽高
+  assert.deepEqual(clipOf(isolatedStreamProject(p, spec), 'glass').frame, clipOf(p, 'glass').frame);
+  // 没审阅过(未知)又带三维的用户卡同样;三维外框的独立卡不走这条路(它单独成流,流里是变形之前的画面)
+  const user = edit((x) => { x.camera3dFov = 50; clipOf(x, 'glass').cardId = 'user-glass'; clipOf(x, 'glass').frame = { x: 100, y: 100, w: 600, h: 300, rotateX: 15 }; });
+  assert.equal(belowOf(user)?.plane, 'stage');
+  const indep = edit((x) => { clipOf(x, 'mid').frame = { x: 0, y: 0, w: 400, h: 200, rotateY: 30 }; });
+  assert.deepEqual(plan(indep).filter(s => s.topClipId === 'mid').map(s => [s.kind, s.plane, s.solo]), [['card', 'local', 'spatial']]);
+});
+
 /* ================================================================== 哪些卡进 */
 
-test('BL-eligible 依赖下层、旧的统称 context、未知的卡进;平面的独立卡不进(走单卡流);源依赖卡、框用了三维的卡缺省不进,放宽一项就进', () => {
+test('BL-eligible 依赖下层、旧的统称 context、未知的卡进(外框带三维的也进);独立卡不进(平面的走单卡流,带三维的单独成流);源依赖卡缺省不进,放宽一项就进', () => {
   const track = { hidden: false };
   const clip = { id: 'a', cardId: 'x' };
   const ctl = (compositing, extra = {}) => ({ clipId: 'a', count: 30, capabilities: compositing === undefined ? {} : { compositing }, ...extra });
@@ -158,18 +193,20 @@ test('BL-eligible 依赖下层、旧的统称 context、未知的卡进;平面�
   assert.equal(belowStreamEligible(ctl('independent'), clip, track), false, '平面的独立卡走单卡流');
   assert.equal(streamEligible(ctl('independent'), clip, track), true);
   assert.equal(belowStreamEligible(ctl('sourceDependent'), clip, track), false, '源依赖卡缺省不进');
-  assert.equal(belowStreamEligible(ctl('belowDependent'), { ...clip, frame: { rotateY: 20 } }, track), false, '框用了三维的照旧不进');
+  assert.equal(belowStreamEligible(ctl('belowDependent'), { ...clip, frame: { rotateY: 20 } }, track), true, '依赖下层又带三维外框的也进(三维画进流里)');
+  assert.equal(belowStreamEligible(ctl('unknown'), { ...clip, frame: { translateZ: -80 } }, track), true, '没审阅过又带三维外框的同样');
+  assert.equal(belowStreamEligible(ctl('independent'), { ...clip, frame: { rotateX: 10 } }, track), false, '三维外框的独立卡单独成流,不进这里');
   assert.equal(belowStreamEligible(ctl('belowDependent'), clip, { hidden: true }), false);
   assert.equal(belowStreamEligible(ctl('belowDependent'), clip, { sourceOnly: true }), false);
   assert.equal(belowStreamEligible(ctl('belowDependent'), { id: 'a', mediaId: 'm' }, track), false, '素材段不是卡');
   assert.equal(belowStreamEligible(ctl('belowDependent', { count: 0 }), clip, track), false);
   assert.equal(belowStreamEligible(null, clip, track), false);
   // 留好的口子:以后要并进来,只是把判据里的一项放宽
-  assert.deepEqual(BELOW_STREAM_RULES, { sourceDependent: false, frame3d: false });
+  assert.deepEqual(BELOW_STREAM_RULES, { sourceDependent: false, frame3d: true });
   assert.equal(belowStreamEligible(ctl('sourceDependent'), clip, track, { ...BELOW_STREAM_RULES, sourceDependent: true }), true);
   const spatial = { ...clip, frame: { rotateY: 20 } };
-  assert.equal(belowStreamEligible(ctl('belowDependent'), spatial, track, { ...BELOW_STREAM_RULES, frame3d: true }), true);
-  assert.equal(belowStreamEligible(ctl('independent'), spatial, track, { ...BELOW_STREAM_RULES, frame3d: true }), true, '三维框的独立卡进不了单卡流,放宽后走这条路');
+  assert.equal(belowStreamEligible(ctl('belowDependent'), spatial, track, { ...BELOW_STREAM_RULES, frame3d: false }), false, '把这一项关掉就不进');
+  assert.equal(belowStreamEligible(ctl('independent'), spatial, track, { ...BELOW_STREAM_RULES, frame3d: true }), false, '三维框的独立卡怎么设都不进(它单独成流)');
   assert.equal(belowStreamEligible(ctl('independent'), clip, track, { sourceDependent: true, frame3d: true }), false, '平面的独立卡怎么放宽都不进');
 });
 
@@ -183,7 +220,7 @@ test('BL-plan 预渲染集合里依赖下层、context、未知(含 remotion 式
   });
   const specs = plan(p);
   const below = specs.filter(s => s.kind === 'below');
-  assert.deepEqual(below.map(s => s.topClipId).sort(), ['ctx', 'direct', 'glass', 'user'], '三维框的那张不进');
+  assert.deepEqual(below.map(s => s.topClipId).sort(), ['ctx', 'direct', 'glass', 'tilt', 'user'], '外框带三维的那张也进');
   const g = below.find(s => s.topClipId === 'glass');
   assert.equal(g.plane, 'stage');
   assert.deepEqual(g.clipIds, ['glass'], '成员只有目标卡');
@@ -205,7 +242,7 @@ test('BL-plan 预渲染集合里依赖下层、context、未知(含 remotion 式
   assert.equal(g.streamKey, resultKeyOf(g.contentKey, FP), '结果键 = 内容键 × 环境指纹');
   assert.equal(g.envFingerprint, FP);
   // 只出预渲染集合里的
-  assert.deepEqual(plan(p, { picked: id => id !== 'glass' }).filter(s => s.kind === 'below').map(s => s.topClipId).sort(), ['ctx', 'direct', 'user']);
+  assert.deepEqual(plan(p, { picked: id => id !== 'glass' }).filter(s => s.kind === 'below').map(s => s.topClipId).sort(), ['ctx', 'direct', 'tilt', 'user']);
   // 没有环境指纹照旧什么都不出
   assert.deepEqual(planStreams(entryOf(p), { codeVersion: CV, below: true }), []);
   // 清单计划那条路打开以后也按清单出
@@ -646,9 +683,11 @@ test('BL-list 清单计划:依赖下层的卡由切分方按自己的指纹出�
 
   // 清单里没有毛玻璃卡(页面没把它判重):不出这种流
   assert.deepEqual(splitListOf(p, ['mid'], { ownListStreams: true }).overrides.streams.map(s => s.kind), ['card']);
-  // 依赖下层又带三维外框的卡现在没有流(`BELOW_STREAM_RULES.frame3d`,等用户定):清单里有它也不出
+  // 依赖下层又带三维外框的卡同样出这种流(`BELOW_STREAM_RULES.frame3d`):清单计划这条路照出,切分方自己的一份,浏览器那一份不出
   const tilted = edit((x) => { clipOf(x, 'glass').frame = { x: 100, y: 100, w: 600, h: 300, rotateY: 20 }; });
-  assert.deepEqual(splitListOf(tilted, ['glass'], { ownListStreams: true }).overrides.streams, []);
+  const tiltedList = splitListOf(tilted, ['glass'], { ownListStreams: true });
+  assert.deepEqual(tiltedList.overrides.streams.map(s => [s.kind, s.plane, s.clipIds.join(), 'browserOnly' in s]), [['below', 'stage', 'glass', false]]);
+  assert.ok(tiltedList.streams.length > 0 && tiltedList.streams.every(t => t.requires.belowDependent === true && t.requires.envFingerprint === OWN));
   // 预渲染重试计划(低内存档发的)不切流
   const entry2 = entryOf(p);
   const listed = clipsPlanTaskOf({ projectId: 'below-p', projectRev: 3, clips: ['glass'] });
