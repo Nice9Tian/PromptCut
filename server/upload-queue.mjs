@@ -2,8 +2,12 @@
  * 素材上传队列(C6.6,`docs/plan/c66-design.md` 第 3 节;语义 `docs/semantics/product/asset-service.md`「上传」)。
  *
  * 编辑器进程里一个持久队列,把本机导入的素材(两档:素材小尺寸、素材原尺寸)传到**当前连接的素材服务**:
- *   - **逐个素材**:队头那一个两档都在素材服务上 `complete` 了才出队,才轮到下一个。队头在退避时后面的也等着(严格按序)。
- *   - **先小后大**:同一素材先传素材小尺寸、再传素材原尺寸;没有素材小尺寸(不是视频、素材小尺寸没生成出来)就只传素材原尺寸。
+ *   - **小尺寸全部先传**(用户 2026-10-13:「强制先上传小尺寸,然后上传大尺寸」):队里只要还有哪个素材的素材小尺寸没传完,
+ *     就先传它(按进队先后);队里所有素材小尺寸都在素材服务上 `complete` 了,才按进队先后传素材原尺寸。传素材原尺寸期间
+ *     新进队的素材(或后补上的素材小尺寸)排在剩下的素材原尺寸前面,正在传的那一档传完才让。
+ *     没有素材小尺寸(不是视频、素材小尺寸没生成出来)的素材只有素材原尺寸一档,排在所有素材小尺寸之后。
+ *   - **严格按序**:轮到的那一档在退避时,后面的都等着(素材小尺寸在退避,任何素材原尺寸都不传)。
+ *   - 哪一档已经传过只记在内存里,不落盘:重启后从素材小尺寸重新问起,已传完的那一档 `putFile` 问一次 `chunks` 就过。
  *   - **分片、断点续传**:每一档走素材服务客户端的 `putFile`(先问 `chunks`,只补 `received` 里缺的片,最后 `complete`
  *     由服务端按 sha256 校验)。断了按退避重试(5 s、30 s、120 s,之后每 10 min),不放弃。
  *   - **两档都 complete 才出队**:传完再各问一次 `chunks`,两档都报 `complete: true` 才算。同步状态只问素材服务,
@@ -60,7 +64,7 @@ export const ENQUEUE_MAX_ITEMS = 2000;
  * - `items`:`[{ name?, original, small? }]`,一个素材一项(视频两档:`small` 是 `tiers.small`、`original` 是 `tiers.original`;
  *   图片、音频只有一档,只给 `original`)。也收 `hashes: string[]`(每个当作只有素材原尺寸一档)。
  * - 只收本地有的:素材原尺寸本地没有 → 整个素材不进队,素材原尺寸哈希记进 `missing`;素材小尺寸本地没有 → 只传素材原尺寸,素材小尺寸哈希记进 `missing`。
- * - 进队照队列本来的规则:逐个素材、先小后大、两档都 complete 才出队;同一素材原尺寸已在队里就合并档位。
+ * - 进队照队列本来的规则:所有素材小尺寸先传、再传素材原尺寸,两档都 complete 才出队;同一素材原尺寸已在队里就合并档位。
  * - 已登记的小尺寸仍在转码时,交给持久的两档管理器完成后入队,回 deferred,不提前传原尺寸。
  *   小尺寸已经生成、页面还没写回哈希时,从本机两档登记补上,仍按先小后大入队。
  * - 当前连的是本机素材服务(队列是空操作)时回 `local: true`,什么都不进。
@@ -171,16 +175,22 @@ export function createUploadQueue({
       const item = normalizeUploadItem(record);
       if (ownership && item?.projectId !== ownership.projectId) continue;
       if (!item || items.has(item.id)) continue;
-      items.set(item.id, { ...item, attempts: Math.max(0, Math.floor(Number(record.attempts) || 0)), nextAt: 0, seq: seq++ });
+      items.set(item.id, { ...item, attempts: Math.max(0, Math.floor(Number(record.attempts) || 0)), nextAt: 0, seq: seq++, sent: new Set(), uploaded: [] });
       counters.restored++;
     }
   })();
 
   /* ---------- 调度 ---------- */
-  const head = () => {
-    let best = null;
-    for (const item of items.values()) if (!best || item.seq < best.seq) best = item;
-    return best;
+  /** 下一档活:还有素材小尺寸没传的,取其中最早进队的;都传了,取最早进队的素材传它的素材原尺寸 */
+  const nextJob = () => {
+    let small = null;
+    let first = null;
+    for (const item of items.values()) {
+      if (!first || item.seq < first.seq) first = item;
+      if (item.tiers.some((t) => t.tier === 'small') && !item.sent.has('small') && (!small || item.seq < small.seq)) small = item;
+    }
+    if (small) return { item: small, tier: 'small' };
+    return first ? { item: first, tier: 'original' } : null;
   };
   const settle = () => { if (!items.size) for (const resolve of waiters.splice(0)) resolve(); };
   const clearTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
@@ -193,8 +203,9 @@ export function createUploadQueue({
 
   async function pump() {
     if (!running || working) return;
-    const item = head();
-    if (!item) return settle();
+    const job = nextJob();
+    if (!job) return settle();
+    const item = job.item;
     const wait = item.nextAt - now();
     if (wait > 0) return schedule(wait);
     const where = target();
@@ -209,13 +220,21 @@ export function createUploadQueue({
     try {
       await ownership?.assert();
       if (ownership && (item.projectId !== ownership.projectId || where.projectId !== ownership.projectId)) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
-      await uploadItem(item, where.client, signal);
+      await uploadTier(item, job.tier, where.client, signal);
       await ownership?.assert();
-      items.delete(item.id);
-      counters.done++;
-      say('upload.item-done', { id: item.id, name: item.name, tiers: item.tiers.map((t) => t.tier) });
-      await persist();
-      settle();
+      item.attempts = 0;
+      if (job.tier === 'original') {
+        // 两档都在素材服务上 complete 才出队(同步状态只问素材服务)
+        for (const t of item.uploaded) {
+          const st = await where.client.chunks('media', t.hash);
+          if (!st.complete) throw Object.assign(new Error(`素材服务上 ${t.tier} ${t.hash} 还没 complete`), { code: 'not-complete' });
+        }
+        items.delete(item.id);
+        counters.done++;
+        say('upload.item-done', { id: item.id, name: item.name, tiers: item.tiers.map((t) => t.tier) });
+        await persist();
+        settle();
+      }
     } catch (error) {
       if (!running && (error?.name === 'AbortError')) {
         // 停下了:留在队里,下次接着传
@@ -236,39 +255,41 @@ export function createUploadQueue({
     if (running) schedule(0);
   }
 
-  async function uploadItem(item, client, signal) {
-    const done = [];
-    for (const t of item.tiers) {
-      await ownership?.assert();
-      if (ownership && target()?.projectId !== item.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
-      const filePath = await resolveFile(t.hash);
-      if (!filePath) {
-        // 本地内容库里没有这一档(被删了):传不了,记一笔跳过这一档;素材原尺寸也没有就整个丢掉
-        counters.missing++;
-        say('upload.missing', { id: item.id, tier: t.tier, hash: t.hash });
-        continue;
-      }
-      say('upload.tier-start', { id: item.id, tier: t.tier, hash: t.hash });
-      const r = await client.putFile('media', filePath, {
-        hash: t.hash,
-        ext: t.ext || undefined,
-        beforeChunk: async () => {
-          await ownership?.assert();
-          if (ownership && target()?.projectId !== item.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
-          if (!running || signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-          const release = gate ? await gate.acquireMedia({ signal }) : null;
-          counters.chunks++;
-          return release;
-        },
-      });
-      say('upload.tier-done', { id: item.id, tier: t.tier, hash: t.hash, uploaded: r.uploaded, sent: r.sent });
-      done.push(t);
+  /** 传一个素材的一档;传完向素材服务问到 complete 才记「传过」。本地没有这一档的文件就记一笔跳过 */
+  async function uploadTier(item, tier, client, signal) {
+    const t = item.tiers.find((x) => x.tier === tier);
+    if (!t || item.sent.has(tier)) return;
+    await ownership?.assert();
+    if (ownership && target()?.projectId !== item.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+    const filePath = await resolveFile(t.hash);
+    if (!filePath) {
+      // 本地内容库里没有这一档(被删了):传不了,记一笔跳过这一档;素材原尺寸也没有就整个丢掉
+      counters.missing++;
+      say('upload.missing', { id: item.id, tier: t.tier, hash: t.hash });
+      item.sent.add(tier);
+      return;
     }
-    // 两档都在素材服务上 complete 才出队(同步状态只问素材服务)
-    for (const t of done) {
+    say('upload.tier-start', { id: item.id, tier: t.tier, hash: t.hash });
+    const r = await client.putFile('media', filePath, {
+      hash: t.hash,
+      ext: t.ext || undefined,
+      beforeChunk: async () => {
+        await ownership?.assert();
+        if (ownership && target()?.projectId !== item.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+        if (!running || signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+        const release = gate ? await gate.acquireMedia({ signal }) : null;
+        counters.chunks++;
+        return release;
+      },
+    });
+    say('upload.tier-done', { id: item.id, tier: t.tier, hash: t.hash, uploaded: r.uploaded, sent: r.sent });
+    if (tier === 'small') {
+      // 素材小尺寸在素材服务上 complete 了才算传过:没 complete 就重试它,不往下传素材原尺寸
       const st = await client.chunks('media', t.hash);
       if (!st.complete) throw Object.assign(new Error(`素材服务上 ${t.tier} ${t.hash} 还没 complete`), { code: 'not-complete' });
     }
+    item.sent.add(tier);
+    if (!item.uploaded.some((x) => x.tier === tier)) item.uploaded.push(t);
   }
 
   /* ---------- 对外 ---------- */
@@ -295,7 +316,7 @@ export function createUploadQueue({
         existing.tiers.sort((a, b) => TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier));
         counters.merged++;
       } else {
-        items.set(item.id, { ...item, attempts: 0, nextAt: 0, seq: seq++ });
+        items.set(item.id, { ...item, attempts: 0, nextAt: 0, seq: seq++, sent: new Set(), uploaded: [] });
         counters.enqueued++;
         say('upload.enqueued', { id: item.id, name: item.name, tiers: item.tiers.map((t) => t.tier) });
       }

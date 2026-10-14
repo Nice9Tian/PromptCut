@@ -485,11 +485,11 @@ function memoryClient({ failOnce = new Set(), delayMs = 5 } = {}) {
 }
 const H = (c) => c.repeat(64);
 
-test('T3-1 逐个素材、同一素材先小后大、两档都 complete 才轮到下一个;队头失败时后面的等着(日志顺序核对)', async () => {
+test('T3-1 所有素材小尺寸先传、再按进队先后传素材原尺寸;轮到的那一档失败时后面的等着(日志顺序核对)', async () => {
   const client = memoryClient({ failOnce: new Set([H('b')]) });
   const log = [];
   const q = uq.createUploadQueue({ file: null, target: () => ({ client }), resolveFile: () => HERE, backoff: [20], log: (e, f) => log.push(`${e}:${f.id?.[0] ?? ''}:${f.tier ?? ''}`) });
-  // 进队顺序 A、B、C;tiers 故意把素材原尺寸写在前面,队列要自己排成先小后大
+  // 进队顺序 A、B、C;tiers 故意把素材原尺寸写在前面,队列要自己把素材小尺寸排到前面
   await q.enqueue({ name: 'A', tiers: [{ tier: 'original', hash: H('b') }, { tier: 'small', hash: H('a') }] });
   await q.enqueue({ name: 'B', tiers: [{ tier: 'original', hash: H('d') }, { tier: 'small', hash: H('c') }] });
   await q.enqueue({ name: 'C', tiers: [{ tier: 'original', hash: H('e') }] });
@@ -498,13 +498,14 @@ test('T3-1 逐个素材、同一素材先小后大、两档都 complete 才轮�
   await q.stop();
   const order = log.filter((l) => /tier-start|tier-done|item-done|retry/.test(l));
   assert.deepEqual(order, [
-    'upload.tier-start:b:small', 'upload.tier-done:b:small', 'upload.tier-start:b:original', 'upload.retry:b:',
-    'upload.tier-start:b:small', 'upload.tier-done:b:small', 'upload.tier-start:b:original', 'upload.tier-done:b:original', 'upload.item-done:b:',
-    'upload.tier-start:d:small', 'upload.tier-done:d:small', 'upload.tier-start:d:original', 'upload.tier-done:d:original', 'upload.item-done:d:',
+    'upload.tier-start:b:small', 'upload.tier-done:b:small', 'upload.tier-start:d:small', 'upload.tier-done:d:small',
+    'upload.tier-start:b:original', 'upload.retry:b:',
+    'upload.tier-start:b:original', 'upload.tier-done:b:original', 'upload.item-done:b:',
+    'upload.tier-start:d:original', 'upload.tier-done:d:original', 'upload.item-done:d:',
     'upload.tier-start:e:original', 'upload.tier-done:e:original', 'upload.item-done:e:',
   ]);
-  // 实际落到素材服务的顺序:小 A、原 A、小 B、原 B、原 C
-  assert.deepEqual(client.calls, [H('a'), H('b'), H('c'), H('d'), H('e')]);
+  // 实际落到素材服务的顺序:小 A、小 B、原 A、原 B、原 C
+  assert.deepEqual(client.calls, [H('a'), H('c'), H('b'), H('d'), H('e')]);
 });
 
 test('T3-2 连本地素材服务(target 回 null)时进队是空操作;队里已有的暂停,换回远程接着传', async () => {
@@ -584,3 +585,81 @@ test('T3-4 推送队列接在带宽闸上:登记需求、推的时候占着;跨�
   assert.equal(gateMod.pushQueueFileProbe(path.join(OUT, 'none.json'), { cacheMs: 0 })(), false);
 });
 
+
+/* ---- 素材小尺寸全部先传(用户 2026-10-13:「强制先上传小尺寸,然后上传大尺寸」) ---- */
+
+const three = async (q) => {
+  await q.enqueue({ name: 'A', tiers: [{ tier: 'small', hash: H('a') }, { tier: 'original', hash: H('b') }] });
+  await q.enqueue({ name: 'B', tiers: [{ tier: 'small', hash: H('c') }, { tier: 'original', hash: H('d') }] });
+  await q.enqueue({ name: 'C', tiers: [{ tier: 'small', hash: H('7') }, { tier: 'original', hash: H('8') }] });
+};
+
+test('T3-5 三个素材一起进队:三份素材小尺寸都先于任何一份素材原尺寸到素材服务', async () => {
+  const client = memoryClient();
+  const q = uq.createUploadQueue({ file: null, target: () => ({ client }), resolveFile: () => HERE, backoff: [10] });
+  await three(q);
+  q.start();
+  await q.drain();
+  await q.stop();
+  assert.deepEqual(client.calls, [H('a'), H('c'), H('7'), H('b'), H('d'), H('8')]);
+  assert.equal(q.stats().done, 3);
+});
+
+test('T3-6 某份素材小尺寸传失败在退避:任何素材原尺寸都不传,等它重试成功', async () => {
+  const client = memoryClient({ failOnce: new Set([H('c')]) });
+  const log = [];
+  const q = uq.createUploadQueue({ file: null, target: () => ({ client }), resolveFile: () => HERE, backoff: [40], log: (e, f) => log.push(`${e}:${f.tier ?? ''}`) });
+  await three(q);
+  q.start();
+  await q.drain();
+  await q.stop();
+  assert.deepEqual(client.calls, [H('a'), H('c'), H('7'), H('b'), H('d'), H('8')]);
+  const firstOriginal = log.indexOf('upload.tier-start:original');
+  assert.ok(log.indexOf('upload.retry:') >= 0 && log.indexOf('upload.retry:') < firstOriginal, '重试发生在第一份素材原尺寸之前');
+  assert.equal(log.slice(0, firstOriginal).filter((l) => l === 'upload.tier-done:small').length, 3, '第一份素材原尺寸开传前三份素材小尺寸都已传完');
+});
+
+test('T3-7 正在传素材原尺寸时新进队的素材:它的素材小尺寸排在剩下的素材原尺寸前面;后补上的素材小尺寸也一样', async () => {
+  const client = memoryClient({ delayMs: 20 });
+  let q = null;
+  let added = false;
+  const log = (e, f) => {
+    if (e !== 'upload.tier-start' || f.tier !== 'original' || added) return;
+    added = true; // 第一份素材原尺寸开传的那一刻:给只有素材原尺寸的 C 补上素材小尺寸,再进一个新素材 D
+    void q.enqueue({ name: 'C', tiers: [{ tier: 'small', hash: H('7') }, { tier: 'original', hash: H('8') }] });
+    void q.enqueue({ name: 'D', tiers: [{ tier: 'small', hash: H('1') }, { tier: 'original', hash: H('2') }] });
+  };
+  q = uq.createUploadQueue({ file: null, target: () => ({ client }), resolveFile: () => HERE, backoff: [10], log });
+  await q.enqueue({ name: 'A', tiers: [{ tier: 'small', hash: H('a') }, { tier: 'original', hash: H('b') }] });
+  await q.enqueue({ name: 'B', tiers: [{ tier: 'small', hash: H('c') }, { tier: 'original', hash: H('d') }] });
+  await q.enqueue({ name: 'C', tiers: [{ tier: 'original', hash: H('8') }] });
+  q.start();
+  await q.drain();
+  await q.stop();
+  // 小 A、小 B、原 A(正在传的这一档传完才让)、小 C(先进队)、小 D、原 B、原 C、原 D
+  assert.deepEqual(client.calls, [H('a'), H('c'), H('b'), H('7'), H('1'), H('d'), H('8'), H('2')]);
+});
+
+test('T3-8 应用重启后队列恢复:先把没传完的素材小尺寸传完,再传素材原尺寸;已传完的档不重传', async () => {
+  const file = path.join(os.tmpdir(), `pc-upload-order-${process.pid}-${Date.now()}.json`);
+  const client = memoryClient({ failOnce: new Set([H('c')]) });
+  // 第一个实例:小 A 传完、小 B 失败后退避很久(模拟这时应用被关掉)
+  const q1 = uq.createUploadQueue({ file, target: () => ({ client }), resolveFile: () => HERE, backoff: [600_000] });
+  await three(q1);
+  q1.start();
+  for (let i = 0; i < 200 && !q1.stats().failures; i++) await new Promise((r) => setTimeout(r, 10));
+  await q1.stop();
+  assert.deepEqual(client.calls, [H('a')], '重启前只传完了 A 的素材小尺寸');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).items.length, 3, '三个素材都还在队列文件里');
+  // 第二个实例:同一个队列文件
+  const log = [];
+  const q2 = uq.createUploadQueue({ file, target: () => ({ client }), resolveFile: () => HERE, backoff: [10], log: (e, f) => { if (e === 'upload.tier-start') log.push(f.tier); } });
+  assert.equal(q2.stats().restored, 3);
+  q2.start();
+  await q2.drain();
+  await q2.stop();
+  assert.deepEqual(client.calls, [H('a'), H('c'), H('7'), H('b'), H('d'), H('8')], 'A 的素材小尺寸没有重传;剩下两份素材小尺寸先于任何素材原尺寸');
+  assert.deepEqual(log, ['small', 'small', 'small', 'original', 'original', 'original'], '恢复后的派活顺序');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items, []);
+  fs.rmSync(file, { force: true });
+});
