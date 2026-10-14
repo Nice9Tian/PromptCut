@@ -2334,6 +2334,8 @@ export default function StageView() {
          * 这一次**新**点名的卡,挂着流平面而流还没画出第一帧:先不藏它原来的画面(`streamWaiting`),等流画出来再藏
          * (起播、跳转、拖动起步都走这里;父页先发流平面、再发抑制)。已经藏着的、流已经有画面的(暂停着先解好了)照常当场藏。
          * 没有流平面的卡(没有流、超出解码器预算、等后台补跑互换的轻卡)不等。
+         * **低内存档不等**:这一档的重卡播放、拖动时一律不活渲(这台设备跑不动才判重;等的那几拍里活组件照跑,每拍都要算它,
+         * 流的解码输出反而排在后面出不来)。流的第一张没到之前这一层先空着,和原来等小尺寸到货时一样(占位符过 120 毫秒才显示)。
          */
         {
           const showing = ref.current.streamPlanes.length ? player.showingClips() : NO_CLIPS;
@@ -2343,7 +2345,7 @@ export default function StageView() {
             if (showing.has(id) || !planeOf(id)) continue;
             const since = ref.current.streamWaiting.get(id);
             if (since !== undefined) waiting.set(id, since);
-            else if (!before.has(id) && !ref.current.settling.has(id)) waiting.set(id, now);
+            else if (!caps.lowMemory && !before.has(id) && !ref.current.settling.has(id)) waiting.set(id, now);
           }
           if (waiting.size || ref.current.streamWaiting.size) setStreamWaiting(waiting);
         }
@@ -2469,7 +2471,9 @@ export default function StageView() {
         player.setPlanes(ref.current.streamPlanes.map((p, i) => {
           const g = incoming[i];
           const manifest = g.manifest && typeof g.manifest === "object" && g.manifest.bound && g.manifest.segments && g.manifest.inits ? g.manifest : null;
-          return manifest ? { ...p, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : p;
+          // 低内存档:父页带的 `first`(每个分段只解第一帧)只交给播放器,和清单、字节一样不进 React 的 props
+          const base = g.first === true ? { ...p, first: true as const } : p;
+          return manifest ? { ...base, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : base;
         }), fps, over);
         // 等着流画出第一帧的卡,流平面撤了:不再等(父页还点着名的当场藏起来,落到快照 / 占位符)
         if (ref.current.streamWaiting.size) {
