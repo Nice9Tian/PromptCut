@@ -5,7 +5,7 @@
 ## 1. 为什么停、现在在哪
 
 - **停的原因**：周额度到线（开工指令「什么时候停」第 5 条：用到 90% 不再派子 Agent、各分支提交并推送、写交接文档、停下等用户重新开工）。2026-10-14 11:30 是 90% 上下，额度 2026-10-19 10:00（日本时间）重置。
-- **`main`**：`afff3cd8`（之后只有本文和两份进度文件的文档提交），已推送，主工作区干净。`release` 仍指向 0.7.17（`073c8cca`），0.7.18 没有发。
+- **`main`**：`1acf25c4`（之后只有本文和两份进度文件的文档提交），已推送，主工作区干净。`release` 仍指向 0.7.17（`073c8cca`），0.7.18 没有发。
 - **没有在跑的子 Agent**，没有残留的后台进程。节点上没有留下临时东西，生产服务没动过（上一次核对主进程号是 279515、279516、279517）。VisuHive 仓库在 `main`、干净；本机分支 `claude/v18-logout-text`（`25ecb2e`）没推送，部署时用。
 - 两份进度文件（`render-refactor-progress.md`、`three-versions-progress.md`）记到今天 06:00 的合入；之后合入的六块只记在本文第 2、3 节，接手后第一件事是把它们补进进度文件。
 
@@ -55,7 +55,7 @@
 还没做的：
 
 1. 语义文档里 Agent 机制几处跟上（`mechanism/agent.md` 的「已实现，还没挂载」「播放头恒为 0」「page-results 回 503」、删除对话的机制、工具表接线第一期的进程分工；建议的原文在 `AGENT-v18-wire.md`、`AGENT-v18-chats.md`）。
-2. 验收清单登记后合入的探针（`node scripts/acceptance/four-stage-acceptance.mjs --check-coverage`）。
+2. 验收清单登记后合入的探针：2026-10-14 已做一轮（`1acf25c4`），27 项登记进清单，`node scripts/acceptance/four-stage-acceptance.mjs --check-coverage` 退出码 0；新登记的探针没有实跑，整套验收时跑。之后再合入的探针仍要登记。三支探针的端口写死在 286xx～289xx，不随运行器的端口基数走（`docs/reports/AGENT-v18-accept-reg.md`）。
 3. 在线浏览器层的隔离探针改走账号入口。
 4. 等渲染重构做完才能做的：本地取帧优先（块十）、渲染服务接账号项目与素材拼图、`get_gif`、音频测量脚本（块十一）、工具表接线第二期。
 5. 改旧名词。
@@ -100,13 +100,14 @@
 6. **部署前要验**：舞台端口的白名单只放行路径里带 `/node_modules/` 的依赖。托管渲染服务把开发服务器的预构建缓存目录另设了（`PROMPTCUT_VITE_CACHE_DIR`，`server/hosted-render/main.mjs`）；它的工作进程要是经舞台端口取依赖，舞台会空白。桌面版不设这个变量，不受影响。跑一遍 `hosted-render-streams-probe` 和 `render-host-probe` 就知道。
 7. **满密度流任务偶尔卡在最后一个短分段**（做完 75 帧后 120 秒无进度被收回，机器占满时见到三次）。没查清是机器忙还是产流一侧的事。出处 `AGENT-rr-below-online.md`。
 8. `BELOW_DISCARD_SHOT`（下层三的局部修法）在推帧补画合入以后多余了，留着没删，两处不打架。`AGENT-rr-below-paste.md` 第 11.2 节说的根因（「上面压着别的卡」）不对，以 `AGENT-rr-push-draw.md` 为准。
-9. `online-stream-play-probe` 的 S6 在 `main` 上不过（原有）。
+9. `online-stream-play-probe` 的 S6 在 `main` 上不过，查下来是产品问题：组流起播后约 170 毫秒里，流已经在画、两张卡也已被抑制，占位符却还显示着（「这一帧快照没到」的判据不看流在不在画，怀疑在 `src/render/placeholderHost.ts`）。和兜底顺序「流在画就不该显示占位符」冲突。撤快照时等快照的这段逻辑会一并删掉，届时复核。出处 `docs/reports/AGENT-v18-accept-reg.md`。
 10. 机器占满时偶发失败的测试，今天又见到的：`cloud-tools-p4-subject`（`subject_install` 一条，`main` 上三遍过两遍）、`asset-project-workers`、`c66-integ`、`cloud-agent-scope`、`multi-agent-presence`、`move-guard`、`codex-auth-state`、`account-page-link`、`account-worker-lifecycle`、`account-op-resend`、`account-runner-process`。每次都单独重跑确认过。
 11. **`hosted-render-streams-probe` 在 `main` 上退出码 1，是探针的判据过时了**：它等「暂停后流的轨道撤掉」才截参照图，而「暂停和拖动也贴流」合入以后轨道本来就留着（`page-stream-probe` 已经改过同一处，改成看包裹层没被抑制）。2026-10-14 在 `main` 上跑过：渲染服务起得来、产得出流、页面看得到，所以舞台端口的白名单没有碰坏托管渲染那条路（第 6 条的担心在本机验过了，节点上部署后再看一眼）。
 12. **在线页面和切分方算预算时可能判得不一样**：`src/online/pageStreamPlan.ts` 的 `planPageStreams` 算同屏流的预算时没把依赖下层的流算进去，切分方算了（原有的，不是今天引入的）。同屏超过预算时两边并组流的结果可能不一致。出处 `AGENT-rr-below-3d.md`、`AGENT-rr-pixel-budget.md`。
 13. 己三乙留下的：条数超过 32 且没有可并的一对时，那一帧的像素没再检查（页面占位符兜底）；预算以内的流的占位符仍用整条流的矩形，没改成分段的；真编辑器加真预渲染进程下同屏 30 张卡没跑，笔记本和核显没量。`server/frame-pipeline.mjs` 约 3292 行的注释还拿「依赖下层又带三维外框的卡」当没有流的例子，已过时（改它会动代码版本，留给下一次动这个文件时顺手改）。
 14. 低内存档贴稀疏流留下的：在线来源没读流清单里每段的位置矩形，所以在线页面（普通档也一样）超预算层的占位符位置还是老办法；流的字节整段取（按哈希存取，取不了半块）；解码中途连着报错时落到占位符而不是小尺寸；「有小尺寸就贴小尺寸」和组流、依赖下层的流、源依赖卡的流在低内存档只有单测；起播头一拍、卡入场那一拍仍有约 40 毫秒乘在场卡数的活渲（父页的抑制晚到一步，没在 `main` 上对照量过）。
 15. `product/asset-service.md` 写着「在线浏览器导入素材时在页面里转出素材小尺寸」，但代码里没有这个功能（在线页面的「导入媒体」是置灰的）；是二级文字，没改，要用户定是补功能还是注明未实现。另有一个小窗口：本机转码登记里没有的老视频进上传队列时只带原尺寸，通常由打开项目时的补转补上，没改。
+16. 第 11 条说的 `hosted-render-streams-probe` 判据已修（`1acf25c4`），在 `main` 上退出码 0；`online-stream-play-probe` 的 S5 是同一处判据，也修了。
 
 ## 8. 发版与部署要记住的
 
