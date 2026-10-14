@@ -217,7 +217,7 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
   if (o.where !== "hosted") return { ok: true, invite: null };
   /*
    * 开启前就在项目里的素材也要上云(C10a 集成返工):等编辑器进程拿到托管端素材服务与 rw 票据(进入共享项目时
-   * connectSharedAssets 设的上传目标),再按哈希交给上传队列,之后照 C6.6 的队列规则逐个素材、先小后大地传。
+   * connectSharedAssets 设的上传目标),再按哈希交给上传队列,之后照上传队列的规则传(所有素材小尺寸先传、再传素材原尺寸)。
    * 不挡开启:传的进度由上传队列管,缺的(本机内容库里没有)记一笔。
    */
   void queueExistingMedia();

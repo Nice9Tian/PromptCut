@@ -70,7 +70,7 @@ async function drainWithin(q, ms) {
 
 // ------------------------------------------------------------------ T3
 
-test('C66-T3-01 逐个素材、同一素材先小后大；上一档 complete 之后才写下一档，一个素材两档都 complete 才轮到下一个', async () => {
+test('C66-T3-01 所有素材小尺寸先传、再按进队先后传素材原尺寸；上一档 complete 之后才写下一档', async () => {
   const createQueue = await loadUploadQueue();
   const srv = await harness.serve({ chunkSize: CHUNK, isTrusted: () => true });
   const rec = recordingFetch();
@@ -81,9 +81,9 @@ test('C66-T3-01 逐个素材、同一素材先小后大；上一档 complete 之
   await q.close();
 
   const runs = writeRuns(rec.log);
-  const order = [A.small, A.original, B.small, B.original, C.original];
+  const order = [A.small, B.small, A.original, B.original, C.original];
   assert.deepEqual(runs.map((r) => r.hash), order.map((f) => f.hash),
-    `写请求要按「A 小、A 原、B 小、B 原、C 原」成段出现、不交错；实际段序：${runs.map((r) => r.hash.slice(0, 6)).join(' → ')}`);
+    `写请求要按「A 小、B 小、A 原、B 原、C 原」成段出现、不交错；实际段序：${runs.map((r) => r.hash.slice(0, 6)).join(' → ')}`);
   runs.forEach((r, i) => {
     assert.equal(r.completed, true, `第 ${i + 1} 段（${r.hash.slice(0, 6)}）以 complete 收尾`);
     assert.deepEqual([...new Set(r.puts)].sort((a, b) => a - b), [...Array(chunkCount(order[i])).keys()], `第 ${i + 1} 段传齐所有分片`);
@@ -126,8 +126,9 @@ test('C66-T2-01 上传中断网、重启后续传：同一个 upload-queue.json 
   assert.equal(mid.complete, false, '断网时 A 素材原尺寸没传完');
   const received = new Set(mid.received);
   assert.ok(received.size >= 1 && received.size < chunkCount(A.original), `A 素材原尺寸收了一部分分片：${[...received]}`);
-  for (const f of [B.small, B.original, C.original]) {
-    assert.equal((await chunksOf(srv.base, f.hash)).received.length, 0, `A 没完之前 B、C 一片都没传（${f.hash.slice(0, 6)}）`);
+  assert.equal((await chunksOf(srv.base, B.small.hash)).complete, true, '断网前 B 的素材小尺寸也已经传完（所有素材小尺寸先于任何素材原尺寸）');
+  for (const f of [B.original, C.original]) {
+    assert.equal((await chunksOf(srv.base, f.hash)).received.length, 0, `A 素材原尺寸没完之前 B、C 的素材原尺寸一片都没传（${f.hash.slice(0, 6)}）`);
   }
 
   // 第二个实例：同一个队列文件，不再 enqueue，网络正常
@@ -138,10 +139,11 @@ test('C66-T2-01 上传中断网、重启后续传：同一个 upload-queue.json 
 
   const puts = (f) => rec2.log.filter((e) => e.action === 'put' && e.hash === f.hash).map((e) => e.n);
   assert.deepEqual(puts(A.small), [], '已 complete 的 A 素材小尺寸不重传');
+  assert.deepEqual(puts(B.small), [], '已 complete 的 B 素材小尺寸不重传');
   const missing = [...Array(chunkCount(A.original)).keys()].filter((n) => !received.has(n));
   assert.deepEqual([...puts(A.original)].sort((a, b) => a - b), missing, 'A 素材原尺寸只补缺的分片，每片一次');
   const runs = writeRuns(rec2.log).map((r) => r.hash);
-  assert.deepEqual(runs, [A.original.hash, B.small.hash, B.original.hash, C.original.hash], '续传仍按「A 原、B 小、B 原、C 原」');
+  assert.deepEqual(runs, [A.original.hash, B.original.hash, C.original.hash], '续传按「A 原、B 原、C 原」（两份素材小尺寸重启前已传完）');
 
   for (const [name, f] of Object.entries({ 'A 素材小尺寸': A.small, 'A 素材原尺寸': A.original, 'B 素材小尺寸': B.small, 'B 素材原尺寸': B.original, 'C 素材原尺寸': C.original })) {
     const st = await chunksOf(srv.base, f.hash);
