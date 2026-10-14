@@ -6,7 +6,12 @@
  * # 口径:数像素,不数条数
  *
  * 一条流的开销 = 它的**编码画幅**(上下拼合以后的宽 × 高,按这条流的矩形上界算)× 帧率,单位是「每秒要解的像素」。
- * 同屏各条流的开销加起来不超过 `STREAM_PIXEL_RATE_BUDGET`;另有一个条数的硬上限 `STREAM_COUNT_BUDGET`。
+ * 三条规则,页面和服务端一样:
+ *
+ *   1. 同屏不超过 `STREAM_FREE_COUNT`(6)条:**不管像素多少都放行**。原来的预算就是「同屏 6 条」、不看像素,
+ *      所以原来放得过的现在一律照样放得过 —— 4K、高帧率的项目里一条流的像素是 1080p 的好几倍,只看像素的话它们同屏两三条就超了;
+ *   2. 超过 6 条:各条流的开销加起来不超过 `STREAM_PIXEL_RATE_BUDGET`;
+ *   3. 条数的硬上限 `STREAM_COUNT_BUDGET`(32)。
  *
  * 为什么不数条数(`docs/reports/AGENT-rr-merged-eval.md` 第 1.3、4 节,在一台 RTX 3080 的 PC 上量的):同时开 64 个硬件解码器
  * 都正常出帧,30 张小卡各一个解码器、60 帧每秒按时画上 240 / 240;卡住的是硬解每秒能解的像素总量(约 17.8 亿)——
@@ -14,10 +19,12 @@
  *
  * # 这几个数怎么来的(三级数字,只写在这里)
  *
- *   - `STREAM_PIXEL_RATE_BUDGET` = 6 × 1920 × 2176 × 60 ≈ 15.04 亿像素每秒。就是原来「同屏 6 条」在最贵的情形
- *     (6 张 1920×1080 的满屏卡、60 帧每秒)下允许的量:原来的预算放得过的,现在照样放得过,任何机器上每秒要解的像素都不比
- *     原来的上限多。它是那台 PC 实测产能(约 17.8 亿)的 84%。折下来:满屏卡 60 帧 6 张、30 帧 12 张;704×864 的小卡
- *     60 帧 41 张、30 帧 82 张(先碰到条数上限)。别的机器(核显、手机)的产能没量过,要按机器定时改这一个数。
+ *   - `STREAM_FREE_COUNT` = 6:原来的条数预算。6 条以内照原来的办法不看像素(上面第 1 条)。
+ *   - `STREAM_PIXEL_RATE_BUDGET` = 6 × 1920 × 2176 × 60 ≈ 15.04 亿像素每秒:第 7 条起才看它。就是原来「同屏 6 条」在
+ *     1080p、60 帧每秒的满屏卡上允许的量,是那台 PC 实测产能(约 17.8 亿)的 84%。折下来(1080p):满屏卡 60 帧 6 张、
+ *     30 帧 12 张;704×864 的小卡 60 帧 41 张、30 帧 82 张(先碰到条数上限)。大于 1080p 或高于 60 帧的项目里 6 条满屏流
+ *     就已经超过这个数,它们照第 1 条放行(和原来一样),第 7 条起一条都加不进。别的机器(核显、手机)的产能没量过,
+ *     要按机器定时改这一个数。
  *   - `STREAM_BUDGET_MIN_FPS` = 30:帧率低于 30 的项目按 30 算。不设的话 24 帧的项目能放 15 张满屏卡,而每条流要保底留 3 帧
  *     解好的画面(`streamPlayer.ts` 的 `MIN_FRAMES_PER_STREAM`),显存跟着涨;设了以后保底的解码帧最多是
  *     12 张满屏卡 × 3 帧 ≈ 225 MB(原来 6 张 × 3 帧 ≈ 113 MB)。
@@ -38,6 +45,8 @@ export const STREAM_BUDGET_OVERFLOW_PX = 32;
 export const STREAM_PIXEL_RATE_BUDGET = 6 * 1920 * 2176 * 60;
 /** 同屏流的条数硬上限(见文件头) */
 export const STREAM_COUNT_BUDGET = 32;
+/** 同屏不超过这么多条时不看像素(原来的条数预算;见文件头) */
+export const STREAM_FREE_COUNT = 6;
 /** 算开销时帧率的下限(见文件头) */
 export const STREAM_BUDGET_MIN_FPS = 30;
 /** 不知道编码画幅的流(没带这一项的旧消息)按一张 1920×1080 的满屏卡算 */
@@ -89,27 +98,29 @@ export function streamCost(pixels, fps) {
 }
 
 /**
- * 预算。不给就是产品的那一组数;给一个数是只改条数上限(`PROMPTCUT_STREAM_DECODERS`,探针拿它把预算压到 1 逼出组流);
- * 给对象可以两样都改(单测)。
+ * 预算 `{ count, pixelRate, free }`:条数硬上限、像素预算、不看像素的条数。不给就是产品的那一组数;给一个数是只改条数上限
+ * (`PROMPTCUT_STREAM_DECODERS`,探针拿它把预算压到 1 逼出组流);给对象可以三样都改(单测)。`free` 不会比条数上限大。
  */
 export function streamBudgetOf(budget) {
   const pick = (v, fallback) => (Number.isFinite(v) && v > 0 ? v : fallback);
-  if (typeof budget === 'number') return { count: pick(Math.floor(budget), STREAM_COUNT_BUDGET), pixelRate: STREAM_PIXEL_RATE_BUDGET };
-  return { count: pick(Math.floor(budget?.count), STREAM_COUNT_BUDGET), pixelRate: pick(budget?.pixelRate, STREAM_PIXEL_RATE_BUDGET) };
+  const of = (count, pixelRate, free) => ({ count, pixelRate, free: Math.min(count, Number.isFinite(free) && free >= 0 ? Math.floor(free) : STREAM_FREE_COUNT) });
+  if (typeof budget === 'number') return of(pick(Math.floor(budget), STREAM_COUNT_BUDGET), STREAM_PIXEL_RATE_BUDGET, undefined);
+  return of(pick(Math.floor(budget?.count), STREAM_COUNT_BUDGET), pick(budget?.pixelRate, STREAM_PIXEL_RATE_BUDGET), budget?.free);
 }
 
 /**
  * 这一拍哪几条放得进预算。`costs`:按优先顺序排好的各条流的开销(`streamCost`)。回放行的下标。
- * 条数到了上限就停;某一条的像素放不下时跳过它接着看后面的(后面更小的还放得下)。
+ * 头 `free` 条不看像素(原来放得过的照样放得过);之后某一条的像素放不下时跳过它接着看后面的(后面更小的还放得下);
+ * 条数到了硬上限就停。
  */
 export function withinStreamBudget(costs, budget) {
-  const { count, pixelRate } = streamBudgetOf(budget);
+  const { count, pixelRate, free } = streamBudgetOf(budget);
   const out = [];
   let used = 0;
   for (let i = 0; i < costs.length; i++) {
     if (out.length >= count) break;
     const cost = costs[i] > 0 ? costs[i] : 0;
-    if (used + cost > pixelRate) continue;
+    if (out.length >= free && used + cost > pixelRate) continue;
     used += cost;
     out.push(i);
   }
@@ -129,19 +140,25 @@ export function peakConcurrency(intervals, skip = null) {
   return { peak, at };
 }
 
-/** 同上,但加的是每条流的开销(`cost`,没带的算 0):同一帧上开销之和的峰值 */
-export function peakCost(intervals, skip = null) {
-  const events = [];
+/**
+ * 同上,但加的是每条流的开销(`cost`,没带的算 0):同一帧上开销之和的峰值。`moreThan` 给了,只看同屏条数**超过**它的帧
+ * (条数不超过它的帧不看像素);回的 `count` 是峰值那一帧上的条数。
+ */
+export function peakCost(intervals, skip = null, moreThan = 0) {
+  const byFrame = new Map();
+  const add = (frame, n, c) => { const e = byFrame.get(frame) ?? [0, 0]; e[0] += n; e[1] += c; byFrame.set(frame, e); };
   for (const it of intervals) {
     const c = it.cost > 0 ? it.cost : 0;
-    if (!c) continue;
-    events.push([it.from, c]);
-    events.push([it.to + 1, -c]);
+    add(it.from, 1, c);
+    add(it.to + 1, -1, -c);
   }
-  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  let cur = 0, peak = 0, at = 0;
-  for (const [frame, d] of events) { cur += d; if (cur > peak && !skip?.has(frame)) { peak = cur; at = frame; } }
-  return { peak, at };
+  let n = 0, cur = 0, peak = 0, at = 0, count = 0;
+  for (const frame of [...byFrame.keys()].sort((a, b) => a - b)) {
+    const [dn, dc] = byFrame.get(frame);
+    n += dn; cur += dc;
+    if (n > moreThan && cur > peak && !skip?.has(frame)) { peak = cur; at = frame; count = n; }
+  }
+  return { peak, at, count };
 }
 
 /**
@@ -151,10 +168,12 @@ export function peakCost(intervals, skip = null) {
  * `budget`:见 `streamBudgetOf`;`groupCost`:一条组流的开销(组流按整幅画面产,和成员多少无关)。`cost` 都不带时只看条数,
  * 和改成数像素之前完全一样。
  *
- * 先看条数、再看像素:
- *   - 条数超了:在重叠最多的那一帧上,挑画家顺序里**紧挨着**的两条流(两者之间、在它们合并后的时间段里没有别的画面层插着)合并;
- *   - 条数没超、像素超了:在开销最大的那一帧上同样只看紧挨着的两条,取「并了以后这一帧要解的像素少得最多」的一对
- *     (一样多取画家顺序里最靠前的;并了不变少的不并 —— 两张小卡并成一条整幅的组流反而更贵);这一帧找不到就换下一个超预算的帧。
+ * 先看条数的硬上限、再看像素:
+ *   - 条数超了硬上限:在重叠最多的那一帧上,挑画家顺序里**紧挨着**的两条流(两者之间、在它们合并后的时间段里没有别的画面层插着)合并;
+ *   - 条数没超硬上限:只看同屏**超过 `free` 条**的帧(不超过的不看像素,原来放得过的照样放得过)。像素超了的,在开销最大的那一帧上
+ *     同样只看紧挨着的两条,取「并了以后这一帧要解的像素少得最多」的一对(一样多取画家顺序里最靠前的)。并了不变少的不并 ——
+ *     两张小卡并成一条整幅的组流反而更贵;例外是这一帧正好比 `free` 多一条,并掉一条就回到不看像素的条数里,这时照并。
+ *     这一帧找不到就换下一个超预算的帧。
  * 反复直到都不超,或者再也找不到可合并的一对。回合并后的列表(每项 `clipIds` 按画家顺序,最后一个是最上面那张)。
  *
  * `fixed`:不参加合并、但同样占预算的流(依赖下层的流、单独成流的两类卡)`[{ from, to, cost }]`。它们只算进峰值,
@@ -163,18 +182,21 @@ export function peakCost(intervals, skip = null) {
  * `tried`、换下一个超预算的帧,合成一次以后从头再看。
  */
 export function groupStreams(streams, layers, budget = undefined, fixed = [], groupCost = 0) {
-  const { count: maxCount, pixelRate } = streamBudgetOf(budget);
+  const { count: maxCount, pixelRate, free } = streamBudgetOf(budget);
   let list = streams.map(s => ({ ...s, clipIds: [...s.clipIds] }));
   const overlaps = (a, b) => a.from <= b.to && b.from <= a.to;
   const tried = new Set();
   for (let guard = 0; guard < 1000; guard++) {
     const all = fixed.length ? [...list, ...fixed] : list;
-    let byCost = false;
+    let byCost = false, lastFree = false;
     let { peak, at } = fixed.length ? peakConcurrency(all, tried) : peakConcurrency(all);
     if (peak <= maxCount) {
       byCost = true;
-      ({ peak, at } = peakCost(all, tried));
+      let count = 0;
+      ({ peak, at, count } = peakCost(all, tried, free));
       if (peak <= pixelRate) break;
+      // 这一帧正好比不看像素的条数多一条:并掉哪一对都行
+      lastFree = count === free + 1;
     }
     const active = list.map((s, i) => ({ s, i })).filter(({ s }) => s.from <= at && at <= s.to).sort((a, b) => a.s.order - b.s.order);
     // 这一帧上能并的一对:条数超了取画家顺序里最靠前的(原来的规则);只为省像素时取省得最多的(一样多取最靠前的)
@@ -183,7 +205,7 @@ export function groupStreams(streams, layers, budget = undefined, fixed = [], gr
       const lo = active[k].s, hi = active[k + 1].s;
       const saving = (lo.cost > 0 ? lo.cost : 0) + (hi.cost > 0 ? hi.cost : 0) - groupCost;
       // 只为省像素而并:并了以后这一帧不变少的不并(两张小卡并成一条整幅的组流反而更贵)
-      if (byCost && !(saving > 0)) continue;
+      if (byCost && !lastFree && !(saving > 0)) continue;
       if (pick && !(saving > pick.saving)) continue;
       const span = { from: Math.min(lo.from, hi.from), to: Math.max(lo.to, hi.to) };
       const members = new Set([...lo.clipIds, ...hi.clipIds]);

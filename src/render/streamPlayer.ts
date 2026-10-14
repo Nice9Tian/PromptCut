@@ -298,7 +298,8 @@ export function streamLayerHas(layer: { ranges?: ReadonlyArray<readonly number[]
  * 同屏流的预算(兜底顺序第 1、2 步的预算,mechanism/rendering.md「兜底顺序」):这一拍**真的会建解码器**的那几条平面。
  *
  * 只收有流键、带着第一帧(`originFrame`)的(没有键的只占位、不解码;没有第一帧的没法把帧号换成分段号)、没标 `over` 的。
- * 预算的口径在 `./streamBudget.mjs`:每条流的开销是它的编码画幅乘帧率,加起来不超过像素预算,条数另有硬上限。
+ * 预算的口径在 `./streamBudget.mjs`:同屏 6 条以内不看像素(原来放得过的照样放得过);超过 6 条,每条流的开销(编码画幅乘帧率)
+ * 加起来不超过像素预算;条数另有硬上限。
  * `pixelsOf` 给每条平面的编码画幅(父页按当前项目算,`snapshotFeed.ts` 的 `streamPixelsOf`);回不出正数的按一张 1920×1080 的满屏卡算。
  * 按传进来的顺序放:条数到了上限就停;某一条的像素放不下时跳过它接着看后面的(后面更小的还放得下)。
  *

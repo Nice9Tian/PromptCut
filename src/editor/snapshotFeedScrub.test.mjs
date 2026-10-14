@@ -159,6 +159,21 @@ test("同屏超出解码器预算:流平面按预算截;超出的那几张也抑
   assert.ok([...f.picks.values()].every((pick) => pick.tier === "over"));
 });
 
+test("大于 1080p 或高于 60 帧的项目:同屏 6 条以内不看像素,都发流平面,没有超出预算的层(原来放得过的照样放得过)", () => {
+  const ids = ["a", "b", "c", "d"];
+  for (const size of [{ width: 3840, height: 2160, fps: 60 }, { width: 3840, height: 2160, fps: 30 }, { width: 2560, height: 1440, fps: 60 }, { width: 1920, height: 1080, fps: 120 }]) {
+    const p = { ...project(ids.map((id) => card(id))), ...size };
+    plan = heavyEverywhere(...ids);
+    for (const id of ids) src.push(stream(id, [[0, 39]]));
+    for (const playing of [true, false]) {
+      const f = planFeed({ project: p, t: 1, playing });
+      assert.equal(f.streamPlanes.length, 4, `${size.width}×${size.height}@${size.fps} playing=${playing}`);
+      assert.deepEqual(f.overPlanes, []);
+      assert.equal(f.picks.size, 0, "都有流盖着,不读快照");
+    }
+  }
+});
+
 test("低内存档暂停着:照现状不发流平面、不按贴流抑制(重卡贴小尺寸);播放中照发", () => {
   const p = project([card("h")]);
   plan = heavyEverywhere("h");

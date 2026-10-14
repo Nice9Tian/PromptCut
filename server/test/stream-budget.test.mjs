@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  STREAM_PIXEL_RATE_BUDGET, STREAM_COUNT_BUDGET, STREAM_BUDGET_MIN_FPS, STREAM_DEFAULT_PIXELS, STREAM_BUDGET_HALF_PAD, STREAM_BUDGET_OVERFLOW_PX,
+  STREAM_PIXEL_RATE_BUDGET, STREAM_COUNT_BUDGET, STREAM_FREE_COUNT, STREAM_BUDGET_MIN_FPS, STREAM_DEFAULT_PIXELS, STREAM_BUDGET_HALF_PAD, STREAM_BUDGET_OVERFLOW_PX,
   streamCodedPixels, stageStreamPixels, localStreamBoundSize, localStreamPixels, streamCost, streamBudgetOf, withinStreamBudget,
   peakConcurrency, peakCost, groupStreams,
 } from '../../src/render/streamBudget.mjs';
@@ -22,6 +22,7 @@ test('预算的数:像素预算是「6 张满屏卡、60 帧每秒」,条数上�
   assert.equal(STREAM_PIXEL_RATE_BUDGET, 6 * FULL * 60);
   assert.equal(STREAM_PIXEL_RATE_BUDGET, 1_504_051_200);
   assert.equal(STREAM_COUNT_BUDGET, 32);
+  assert.equal(STREAM_FREE_COUNT, 6, '原来的条数预算:6 条以内不看像素');
   assert.equal(STREAM_DECODER_BUDGET, STREAM_COUNT_BUDGET);
   assert.equal(DECODER_BUDGET, STREAM_COUNT_BUDGET);
   assert.equal(PAGE_STREAM_DECODER_BUDGET, STREAM_COUNT_BUDGET);
@@ -85,10 +86,12 @@ test('放得下几条:满屏卡 60 帧 6 条、30 帧 12 条;小卡先碰到条�
   // 留着余量时:大的放不下跳过,后面小的照放
   assert.deepEqual(withinStreamBudget([full, full, full, full, full, small, full, small]), [0, 1, 2, 3, 4, 5, 7]);
   assert.deepEqual(withinStreamBudget([small, small, small], 2), [0, 1], '给一个数 = 只改条数上限');
-  assert.deepEqual(withinStreamBudget([10, 10, 10], { pixelRate: 25 }), [0, 1]);
-  assert.deepEqual(streamBudgetOf(), { count: 32, pixelRate: STREAM_PIXEL_RATE_BUDGET });
-  assert.deepEqual(streamBudgetOf(1), { count: 1, pixelRate: STREAM_PIXEL_RATE_BUDGET });
-  assert.deepEqual(streamBudgetOf({ count: 0, pixelRate: -1 }), { count: 32, pixelRate: STREAM_PIXEL_RATE_BUDGET }, '不像话的值不认');
+  assert.deepEqual(withinStreamBudget([10, 10, 10], { pixelRate: 25, free: 0 }), [0, 1]);
+  assert.deepEqual(withinStreamBudget([10, 10, 10], { pixelRate: 25 }), [0, 1, 2], '6 条以内不看像素');
+  assert.deepEqual(withinStreamBudget([10, 10, 10, 10], { pixelRate: 25, free: 2 }), [0, 1], '头两条不看像素,第三条起看');
+  assert.deepEqual(streamBudgetOf(), { count: 32, pixelRate: STREAM_PIXEL_RATE_BUDGET, free: 6 });
+  assert.deepEqual(streamBudgetOf(1), { count: 1, pixelRate: STREAM_PIXEL_RATE_BUDGET, free: 1 }, '不看像素的条数不会比条数上限大');
+  assert.deepEqual(streamBudgetOf({ count: 0, pixelRate: -1 }), { count: 32, pixelRate: STREAM_PIXEL_RATE_BUDGET, free: 6 }, '不像话的值不认');
 });
 
 test('页面的 planesWithinBudget 走的是同一个口径:按父页给的编码画幅乘帧率', () => {
@@ -106,28 +109,34 @@ test('页面的 planesWithinBudget 走的是同一个口径:按父页给的编�
 });
 
 test('peakCost:同一帧上开销之和的峰值;没带开销的不算', () => {
-  assert.deepEqual(peakCost([{ from: 0, to: 9, cost: 5 }, { from: 5, to: 20, cost: 7 }, { from: 21, to: 30, cost: 9 }]), { peak: 12, at: 5 });
-  assert.deepEqual(peakCost([{ from: 0, to: 9, cost: 5 }, { from: 5, to: 20, cost: 7 }], new Set([5])), { peak: 7, at: 10 }, '跳过第 5 帧:剩下的帧里最贵的是第 10 帧(只剩后一条)');
-  assert.deepEqual(peakCost([{ from: 0, to: 9 }]), { peak: 0, at: 0 });
+  assert.deepEqual(peakCost([{ from: 0, to: 9, cost: 5 }, { from: 5, to: 20, cost: 7 }, { from: 21, to: 30, cost: 9 }]), { peak: 12, at: 5, count: 2 });
+  // 只看同屏超过 1 条的帧:第 21～30 帧那一条最贵(9),但那里只有 1 条,不看
+  assert.deepEqual(peakCost([{ from: 0, to: 9, cost: 5 }, { from: 5, to: 20, cost: 7 }, { from: 21, to: 30, cost: 20 }], null, 1), { peak: 12, at: 5, count: 2 });
+  assert.deepEqual(peakCost([{ from: 0, to: 9, cost: 5 }, { from: 5, to: 20, cost: 7 }], null, 2), { peak: 0, at: 0, count: 0 });
+  assert.deepEqual(peakCost([{ from: 0, to: 9, cost: 5 }, { from: 5, to: 20, cost: 7 }], new Set([5])), { peak: 7, at: 10, count: 1 }, '跳过第 5 帧:剩下的帧里最贵的是第 10 帧(只剩后一条)');
+  assert.deepEqual(peakCost([{ from: 0, to: 9 }]), { peak: 0, at: 0, count: 0 });
 });
 
-test('groupStreams 数像素:超了像素才并,而且只并「并了以后这一帧变少」的一对;没带开销时和原来完全一样', () => {
+test('groupStreams 数像素(这一条把不看像素的条数设成 0,只看像素那一半):超了像素才并,而且只并「并了以后这一帧变少」的一对;没带开销时和原来完全一样', () => {
   const layers = ['a', 'b', 'c', 'd'].map((id, i) => ({ clipId: id, order: i + 1, from: 0, to: 99 }));
   const of = (costs) => ['a', 'b', 'c', 'd'].map((id, i) => ({ clipIds: [id], order: i + 1, from: 0, to: 99, cost: costs[i] }));
   const ids = (list) => list.map((s) => s.clipIds);
   // 四条各 10,像素预算 25,一条组流的开销 10:并一次(a+b)是 30,还超;再并是 20,不超了
-  assert.deepEqual(ids(groupStreams(of([10, 10, 10, 10]), layers, { pixelRate: 25 }, [], 10)), [['a', 'b', 'c'], ['d']]);
+  assert.deepEqual(ids(groupStreams(of([10, 10, 10, 10]), layers, { pixelRate: 25, free: 0 }, [], 10)), [['a', 'b', 'c'], ['d']]);
   // 没超:不并
-  assert.deepEqual(ids(groupStreams(of([10, 10, 10, 10]), layers, { pixelRate: 40 }, [], 10)), [['a'], ['b'], ['c'], ['d']]);
+  assert.deepEqual(ids(groupStreams(of([10, 10, 10, 10]), layers, { pixelRate: 40, free: 0 }, [], 10)), [['a'], ['b'], ['c'], ['d']]);
   // 小卡:两张加起来还没有一条组流贵,并了反而更贵 —— 不并(超着也不并,超出的层由页面显示占位符)
-  assert.deepEqual(ids(groupStreams(of([4, 4, 4, 4]), layers, { pixelRate: 12 }, [], 10)), [['a'], ['b'], ['c'], ['d']]);
+  assert.deepEqual(ids(groupStreams(of([4, 4, 4, 4]), layers, { pixelRate: 12, free: 0 }, [], 10)), [['a'], ['b'], ['c'], ['d']]);
   // 大小混着:a、b 小,c、d 大。只有 c+d 并了变少
-  assert.deepEqual(ids(groupStreams(of([4, 4, 10, 10]), layers, { pixelRate: 20 }, [], 10)), [['a'], ['b'], ['c', 'd']]);
+  assert.deepEqual(ids(groupStreams(of([4, 4, 10, 10]), layers, { pixelRate: 20, free: 0 }, [], 10)), [['a'], ['b'], ['c', 'd']]);
   // 条数超了:照原来的办法从画家顺序最靠前的一对并起,不看像素
   assert.deepEqual(ids(groupStreams(of([4, 4, 4, 4]), layers, { count: 3, pixelRate: 1000 }, [], 10)), [['a', 'b'], ['c'], ['d']]);
   // 不参加合并的流也占像素
   const fixed = [{ from: 0, to: 99, cost: 10 }];
-  assert.deepEqual(ids(groupStreams(of([10, 10, 0, 0]).slice(0, 2), layers.slice(0, 2), { pixelRate: 25 }, fixed, 10)), [['a', 'b']]);
+  assert.deepEqual(ids(groupStreams(of([10, 10, 0, 0]).slice(0, 2), layers.slice(0, 2), { pixelRate: 25, free: 0 }, fixed, 10)), [['a', 'b']]);
+  // 不看像素的条数:同屏不超过它就不并,不管像素超了多少;正好多一条时并掉一对就回到里面,并了不省像素也并
+  assert.deepEqual(ids(groupStreams(of([10, 10, 10, 10]), layers, { pixelRate: 1, free: 4 }, [], 10)), [['a'], ['b'], ['c'], ['d']]);
+  assert.deepEqual(ids(groupStreams(of([4, 4, 4, 4]), layers, { pixelRate: 1, free: 3 }, [], 10)), [['a', 'b'], ['c'], ['d']]);
   // 没带开销:只看条数
   const plain = ['a', 'b', 'c'].map((id, i) => ({ clipIds: [id], order: i + 1, from: 0, to: 99 }));
   assert.equal(groupStreams(plain, layers, 6).length, 3);
@@ -189,4 +198,59 @@ test('planStreams:预算变了以后单卡流的键不变(键里没有预算);�
   const a = keyOf(now), b = keyOf(before);
   for (const [clipId, key] of b) assert.equal(a.get(clipId), key, `${clipId}:原来就是单卡流的,键不变`);
   assert.equal([...a.keys()].filter((id) => !b.has(id)).length, 3, '原来并在组流里的三张现在各一条单卡流(要新产)');
+});
+
+/* ------------------------------------------------------------------ 原来放得过的现在照样放得过(同屏 6 条以内不看像素) */
+
+function stackedOn(n, { width, height, fps }) {
+  const entry = stacked(n, { fps });
+  return { ...entry, project: { ...entry.project, width, height } };
+}
+
+test('大于 1080p 或高于 60 帧的项目:同屏 6 条以内照原来的办法不并(4K 60 帧 2 张、4K 30 帧 4 张、2560×1440 60 帧 4 张、1080p 120 帧 4 张)', () => {
+  const cases = [
+    ['4K 60 帧 2 张', 2, { width: 3840, height: 2160, fps: 60 }],
+    ['4K 30 帧 4 张', 4, { width: 3840, height: 2160, fps: 30 }],
+    ['2560×1440 60 帧 4 张', 4, { width: 2560, height: 1440, fps: 60 }],
+    ['1080p 120 帧 4 张', 4, { width: 1920, height: 1080, fps: 120 }],
+    ['4K 60 帧 6 张', 6, { width: 3840, height: 2160, fps: 60 }],
+  ];
+  for (const [label, n, size] of cases) {
+    const entry = stackedOn(n, size);
+    const specs = planStreams(entry, { envFingerprint: ENV_FP });
+    assert.deepEqual(kinds(specs), Array.from({ length: n }, () => 'card:1'), `${label}:各一条单卡流,不并`);
+    // 和原来「同屏 6 条」的结果逐条相同
+    const before = planStreams(entry, { envFingerprint: ENV_FP, budget: { count: 6, free: 6 } });
+    assert.deepEqual(specs.map((s) => s.streamKey).sort(), before.map((s) => s.streamKey).sort(), label);
+    // 页面一侧:这几条都放行,没有超出预算的(也就没有占位符)
+    const px = stageStreamPixels(size);
+    assert.ok(px * size.fps * n > STREAM_PIXEL_RATE_BUDGET, `${label}:只看像素的话是超的`);
+    const planes = specs.map((s) => ({ clipIds: s.clipIds, key: s.streamKey, ranges: [[0, 9]], originFrame: 0 }));
+    assert.equal(planesWithinBudget(planes, size.fps, () => px).length, n, `${label}:页面全部放行`);
+  }
+});
+
+test('4K 60 帧两条依赖下层的流(不能并):页面两条都放行,不出占位符;第 7 条起才看像素', () => {
+  const px = stageStreamPixels({ width: 3840, height: 2160 });
+  const planes = Array.from({ length: 8 }, (_, i) => ({ clipIds: [`g${i}`], key: `B${i}`, ranges: [[0, 9]], originFrame: 0, plane: 'stage' }));
+  assert.ok(streamCost(px, 60) * 2 > STREAM_PIXEL_RATE_BUDGET, '两条就超过像素预算');
+  assert.deepEqual(planesWithinBudget(planes.slice(0, 2), 60, () => px).map((p) => p.key), ['B0', 'B1']);
+  assert.equal(planesWithinBudget(planes.slice(0, 6), 60, () => px).length, 6, '6 条以内不看像素');
+  assert.equal(planesWithinBudget(planes, 60, () => px).length, 6, '第 7 条起看像素:加不进');
+  // 划分一侧:不能并的流(fixed)同屏 2 条,旁边的独立卡不因为它们被并
+  const layers = [{ clipId: 'a', order: 1, from: 0, to: 99 }, { clipId: 'b', order: 2, from: 0, to: 99 }];
+  const cost = streamCost(px, 60);
+  const singles = layers.map((l) => ({ clipIds: [l.clipId], order: l.order, from: 0, to: 99, cost }));
+  const fixed = [{ from: 0, to: 99, cost }, { from: 0, to: 99, cost }];
+  assert.deepEqual(groupStreams(singles, layers, undefined, fixed, cost).map((s) => s.clipIds), [['a'], ['b']]);
+});
+
+test('1080p 60 帧 7 张满屏卡:照旧要并(第 7 条超了像素)', () => {
+  const specs = planStreams(stacked(7, { fps: 60 }), { envFingerprint: ENV_FP });
+  assert.deepEqual(kinds(specs), ['card:1', 'card:1', 'card:1', 'card:1', 'card:1', 'group:2']);
+  const before = planStreams(stacked(7, { fps: 60 }), { envFingerprint: ENV_FP, budget: { count: 6, free: 6 } });
+  assert.deepEqual(specs.map((s) => s.streamKey).sort(), before.map((s) => s.streamKey).sort(), '和原来的并法相同');
+  // 4K 60 帧 7 张:同样并成 6 条(并掉一条就回到不看像素的条数里)
+  const big = planStreams(stackedOn(7, { width: 3840, height: 2160, fps: 60 }), { envFingerprint: ENV_FP });
+  assert.deepEqual(kinds(big), ['card:1', 'card:1', 'card:1', 'card:1', 'card:1', 'group:2']);
 });
