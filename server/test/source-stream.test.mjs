@@ -149,7 +149,7 @@ test('SS-eligible 源依赖卡:接了输入的素材效果卡(转场、套在素
 
 /* ================================================================== 计划 */
 
-test('SS-plan 这两类各出一条单卡流(kind card、plane local),带 solo;分段从自己的第一帧起数;没有输入的素材效果卡、依赖下层又带三维的不出', () => {
+test('SS-plan 这两类各出一条单卡流(kind card、plane local),带 solo;分段从自己的第一帧起数;没有输入的素材效果卡、依赖下层又带三维的不在这两类里(关着依赖下层的流时不出)', () => {
   const p = project();
   const specs = plan(p);
   assert.deepEqual(specs.map(s => `${s.kind}:${s.clipIds}:${s.solo ?? '-'}`), ['card:flat:-', 'card:fx:source', 'card:trans:source', 'card:tilt:spatial'],
@@ -188,12 +188,13 @@ test('SS-plan-same 项目里没有这两类卡时,计划与原来逐项相同;�
   assert.deepEqual(plan(p).find(s => s.topClipId === 'flat'), a[0], '旁边多了单独成流的卡,平面独立卡的那一条一个字不变');
 });
 
-test('SS-below 「依赖下层的流」打开时:接了输入的素材效果卡不再出那种流(已经单独成流);没有输入的照旧归它;依赖下层又带三维的仍然没有流', () => {
+test('SS-below 「依赖下层的流」打开时:接了输入的素材效果卡不再出那种流(已经单独成流);没有输入的照旧归它;依赖下层又带三维的也归它(舞台坐标,三维画进流里)', () => {
   const p = project();
   const on = plan(p, { below: true });
-  assert.deepEqual(on.map(s => `${s.kind}:${s.clipIds}:${s.solo ?? '-'}`), ['card:flat:-', 'card:fx:source', 'card:trans:source', 'card:tilt:spatial', 'below:gen:-']);
+  assert.deepEqual(on.map(s => `${s.kind}:${s.clipIds}:${s.solo ?? '-'}`), ['card:flat:-', 'card:fx:source', 'card:trans:source', 'card:tilt:spatial', 'below:glass3:-', 'below:gen:-']);
   assert.deepEqual(on.slice(0, 4), plan(p), '开关不影响前面几条');
-  assert.ok(!on.some(s => s.topClipId === 'glass3'), '依赖下层又带三维的:现在没有流(见报告)');
+  const glass3 = on.find(s => s.topClipId === 'glass3');
+  assert.deepEqual([glass3.kind, glass3.plane, 'solo' in glass3], ['below', 'stage', false], '依赖下层又带三维的:一条依赖下层的流,不是单独成流的那一种');
 });
 
 test('SS-nomerge 不参加组流合并,但各占一个解码器:它们把预算顶超了,合并的是旁边平面的独立卡', () => {
