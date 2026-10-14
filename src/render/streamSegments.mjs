@@ -48,6 +48,14 @@ export function streamSegmentFrameCount(segment, originFrame, lastFrame = Infini
   return Math.max(0, streamSegmentLastFrame(segment, originFrame, lastFrame) - streamSegmentFirstFrame(segment, originFrame) + 1);
 }
 
+/**
+ * 这一帧所在分段的第一帧(项目帧号)。稀疏版每个分段只截这一张、其余帧重复它;低内存档(手机、平板身份的在线浏览器)
+ * 不管那一段是稀疏还是满密度,都只解这一张来贴(`streamPlayer.ts` 的 `presentFirst`)。早于流的第一帧的帧回的也早于第一帧。
+ */
+export function streamFirstFrameOf(frame, originFrame) {
+  return streamSegmentFirstFrame(streamSegmentOf(frame, originFrame), originFrame);
+}
+
 /** 这一帧在它所在分段里是第几个样本(0 起) */
 export function streamSampleOf(frame, originFrame) {
   return frame - streamSegmentFirstFrame(streamSegmentOf(frame, originFrame), originFrame);
