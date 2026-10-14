@@ -31,6 +31,7 @@ import { resolveFrameSize } from "../kernel/frameSize.mjs";
 import { mountFrameOf } from "../render/frameWindow.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 import { isStreamOrigin, streamSegmentFrameCount, streamSegmentSpan } from "../render/streamSegments.mjs";
+import { groupStreams, localStreamPixels, stageStreamPixels, streamCost, STREAM_COUNT_BUDGET, type StreamBudget, type StreamGroupItem } from "../render/streamBudget.mjs";
 import type { NodeTask, StreamTaskInput } from "./browserNode.ts";
 
 /**
@@ -39,8 +40,9 @@ import type { NodeTask, StreamTaskInput } from "./browserNode.ts";
  * 4:稀疏版每个分段只截第一帧、清单里每个分段带位置矩形 `box`。
  */
 export const PAGE_STREAM_CODE_VERSION = 4;
-/** 与 `server/frame-stream.mjs` 的 `STREAM_DECODER_BUDGET`、`LOCAL_OVERFLOW_PX` 同值 */
-export const PAGE_STREAM_DECODER_BUDGET = 6;
+/** 同屏流的条数上限:与 `server/frame-stream.mjs` 的 `STREAM_DECODER_BUDGET` 是同一个数(`render/streamBudget.mjs`);预算的口径(数像素)也在那里 */
+export const PAGE_STREAM_DECODER_BUDGET = STREAM_COUNT_BUDGET;
+/** 与 `server/frame-stream.mjs` 的 `LOCAL_OVERFLOW_PX` 同值 */
 export const PAGE_LOCAL_OVERFLOW_PX = 32;
 /** 一个流任务几个分段(与 `server/render-queue/constants.mjs` 的 `QUEUE_DEFAULTS.STREAM_SEGMENTS` 同值):流清单按它分份 */
 export const PAGE_STREAM_SEGMENTS_PER_TASK = 8;
@@ -233,48 +235,8 @@ function paintLayers(project: { tracks?: AnyTrack[]; media?: { id: string; kind?
   return out.sort((a, b) => a.order - b.order);
 }
 
-function peakConcurrency(intervals: { from: number; to: number }[], skip: Set<number> | null = null): { peak: number; at: number } {
-  const events: [number, number][] = [];
-  for (const it of intervals) { events.push([it.from, 1]); events.push([it.to + 1, -1]); }
-  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  let cur = 0, peak = 0, at = 0;
-  for (const [frame, d] of events) { cur += d; if (cur > peak && !skip?.has(frame)) { peak = cur; at = frame; } }
-  return { peak, at };
-}
-
-interface Single { clipIds: string[]; order: number; minOrder?: number; from: number; to: number }
-/**
- * 同时活跃的流超过解码器预算时把相邻的合并成组流(与服务端 `groupStreams` 同一个式子)。
- * `fixed`:不参加合并、但同样各占一个解码器的流(切分方单独成流的两类卡,见 `planPageStreams`);不给时与原来相同。
- */
-function groupStreams<T extends Single>(streams: T[], layers: PaintLayer[], budget: number, fixed: { from: number; to: number }[] = []): Single[] {
-  let list: Single[] = streams.map((s) => ({ ...s, clipIds: [...s.clipIds] }));
-  const overlaps = (a: { from: number; to: number }, b: { from: number; to: number }) => a.from <= b.to && b.from <= a.to;
-  const tried = new Set<number>();
-  for (let guard = 0; guard < 1000; guard++) {
-    const { peak, at } = fixed.length ? peakConcurrency([...list, ...fixed], tried) : peakConcurrency(list);
-    if (peak <= budget) break;
-    const active = list.map((s, i) => ({ s, i })).filter(({ s }) => s.from <= at && at <= s.to).sort((a, b) => a.s.order - b.s.order);
-    let merged = false;
-    for (let k = 0; k + 1 < active.length && !merged; k++) {
-      const lo = active[k].s, hi = active[k + 1].s;
-      const span = { from: Math.min(lo.from, hi.from), to: Math.max(lo.to, hi.to) };
-      const members = new Set([...lo.clipIds, ...hi.clipIds]);
-      const minOrder = Math.min(lo.order, lo.minOrder ?? lo.order, hi.minOrder ?? hi.order);
-      const maxOrder = Math.max(hi.order, lo.order);
-      const blocked = layers.some((l) => !members.has(l.clipId) && l.order > minOrder && l.order < maxOrder && overlaps(l, span));
-      if (blocked) continue;
-      const next: Single = { clipIds: [...lo.clipIds, ...hi.clipIds], order: maxOrder, minOrder, from: span.from, to: span.to };
-      list = list.filter((_, i) => i !== active[k].i && i !== active[k + 1].i);
-      list.push(next);
-      list.sort((a, b) => a.order - b.order);
-      merged = true;
-    }
-    if (!merged && !fixed.length) break;
-    if (merged) tried.clear(); else tried.add(at);
-  }
-  return list;
-}
+/** 组流的合并在 `render/streamBudget.mjs`(`groupStreams`),与切分方用的是同一个函数 */
+type Single = StreamGroupItem;
 
 /* ------------------------------------------------------------------ 这一版的卡(同 `CardFrameCache.plan`) */
 
@@ -423,7 +385,7 @@ export async function planPageStreams(o: {
   clips: Iterable<string>;
   codes: StreamCodes | null;
   envFingerprint: string | null;
-  budget?: number;
+  budget?: StreamBudget;
 }): Promise<PageStreamPlan> {
   const { project, codes, envFingerprint } = o;
   const empty: PageStreamPlan = { specs: [], skipped: {} };
@@ -443,7 +405,7 @@ export async function planPageStreams(o: {
   // 进不进流照切分方的判据(`streamEligible`);合并也照它:预算按「清单里全部进流的卡」算,不只按页面能产的那几张
   const singles: (Single & { control: PageControl; clip: AnyClip })[] = [];
   // 切分方单独成流的两类卡(`serverSoloStream`):页面不产,只算进解码器预算
-  const fixed: { from: number; to: number }[] = [];
+  const fixed: { from: number; to: number; cost: number }[] = [];
   const fixedSeen = new Set<string>();
   for (const control of pageControls(project, value)) {
     if (!listed.has(control.clipId)) continue;
@@ -455,7 +417,7 @@ export async function planPageStreams(o: {
         && !fixedSeen.has(control.clipId) && serverSoloStream(project, control, at.clip)) {
         const first = control.sampling.firstFrame;
         const last = Math.min(total - 1, first + control.count - 1);
-        if (last >= first) { fixedSeen.add(control.clipId); fixed.push({ from: Math.min(mountFrameOf(at.clip, fps), first), to: last }); }
+        if (last >= first) { fixedSeen.add(control.clipId); fixed.push({ from: Math.min(mountFrameOf(at.clip, fps), first), to: last, cost: streamCost(localStreamPixels(at.clip.frame, stage), fps) }); }
       }
       continue;
     }
@@ -463,11 +425,12 @@ export async function planPageStreams(o: {
     const lastFrame = Math.min(total - 1, firstFrame + control.count - 1);
     if (lastFrame < firstFrame) { skipped[control.clipId] = "past-end"; continue; }
     const mountFrame = mountFrameOf(at.clip, fps);
-    singles.push({ control, clip: at.clip, clipIds: [control.clipId], order: orderOf.get(control.clipId) ?? 0, from: Math.min(mountFrame, firstFrame), to: lastFrame });
+    singles.push({ control, clip: at.clip, clipIds: [control.clipId], order: orderOf.get(control.clipId) ?? 0, from: Math.min(mountFrame, firstFrame), to: lastFrame,
+      cost: streamCost(localStreamPixels(at.clip.frame, stage), fps) });
   }
   singles.sort((a, b) => a.order - b.order);
   const byClip = new Map(singles.map((s) => [s.clipIds[0], s]));
-  const grouped = groupStreams(singles, layers, o.budget ?? PAGE_STREAM_DECODER_BUDGET, fixed);
+  const grouped = groupStreams(singles, layers, o.budget, fixed, streamCost(stageStreamPixels(stage), fps));
   const codeVersion = streamCodeVersion(codes);
   const environment = (value.environment ?? {}) as Record<string, unknown>;
   const specs: PageStreamSpec[] = [];

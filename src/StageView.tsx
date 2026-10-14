@@ -38,7 +38,7 @@ import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./
 import { PushedStreamSource, StreamPlayer } from "./render/streamPlayer";
 import {
   applyPlaceholders, hideAllPlaceholders, localOnlyClipIds, onlineBrowserMode, setPlaceholderViewScale, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
-  resetPlaceholderGeometry, setCatchingUpClips, setLocalOnlyConfirmed, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
+  resetPlaceholderGeometry, setCatchingUpClips, setLocalOnlyConfirmed, setOnlineBrowserMode, setPlaceholdersEnabled, keepTopOfGroups, setOverBoxSource, setStreamBoxSource, shownPlaceholders, stageBoxToLocal, shownSince,
   unsupportedHere,
 } from "./render/placeholderHost";
 
@@ -411,9 +411,29 @@ export default function StageView() {
      */
     /** 某条流的画面有无变了(异步解出第一帧、留到时限清空);实现在下面,等用到的函数都定义了再接上 */
     let onStreamShowing: () => void = () => {};
-    const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}), onShowingChange: () => onStreamShowing() });
-    // 占位符的几何首选流清单的实体框(product/rendering.md「兜底顺序」;`placeholderHost` 的 `geometryFor`)
+    const player = new StreamPlayer({ root: () => rootRef.current, ...(ONLINE ? { source: new PushedStreamSource() } : {}), onShowingChange: () => onStreamShowing(),
+      // 流平面共用的 WebGL 上下文建在一块不在文档里的离屏画布上,它丢了的事件到不了下面 `document` 上的监听:由播放器直接报
+      onContextLost: () => { if (ONLINE) postStageTrouble("webglcontextlost"); },
+      // 超出预算的层的位置矩形变了(清单到了、播放头进了下一个分段):占位符的几何是渲染时取的,提交一次让它重取
+      onBoxChange: () => onStreamBoxes() });
+    let onStreamBoxes: () => void = () => {};
+    /*
+     * 占位符的几何首选流清单里的矩形(mechanism/rendering.md「重管线:预渲染」;`placeholderHost` 的 `geometryFor`)。
+     * 超出预算的层取这一帧所在分段的位置矩形:单卡流的是包裹层自己的坐标,直接用;组流、依赖下层的流的是舞台坐标,
+     * 按屏幕上量到的包裹层位置换过来(换不了的回 null,照老办法定位)。这个矩形只管这一帧,和预算以内的流的框分开给
+     * (那一种会被记下来留到以后用,这一种不记)。
+     */
     setStreamBoxSource((clipId) => player.boxOf(clipId));
+    setOverBoxSource((clipId) => {
+      const own = player.overBoxOf(clipId);
+      if (own) return own;
+      const staged = player.stageBoxOf(clipId);
+      const wrap = staged ? rootRef.current?.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(clipId)}"]`) : null;
+      const ref = (wrap?.offsetParent ?? null) as HTMLElement | null;
+      if (!staged || !wrap || !ref || !(ref.offsetWidth > 0) || !(wrap.offsetWidth > 0)) return null;
+      return stageBoxToLocal(staged, { ref: ref.getBoundingClientRect(), refWidth: ref.offsetWidth, wrap: wrap.getBoundingClientRect(), wrapWidth: wrap.offsetWidth,
+        transform: getComputedStyle(wrap).transform });
+    });
 
     /*
      * canvas 卡的共享 WebGL 渲染器(R9 M2)。`stageId` 是实例名(`A` / `B`),**和角色无关**:
@@ -511,7 +531,8 @@ export default function StageView() {
     /** 严格的一拍:探针、生成快照、补跑落定都等它(没有 gl 平面时回 `undefined`,不多让一次微任务) */
     const glStrict = (sec: number) => gl.beat({ strict: true, t: sec }) ?? undefined;
     const presentStreams = (sec: number) => {
-      if (ref.current.role !== "front" || !ref.current.streamPlanes.length) return;
+      // 没有流平面、但有超出预算的层时也要走:它们的位置矩形跟着播放头换
+      if (ref.current.role !== "front" || (!ref.current.streamPlanes.length && !player.hasOver)) return;
       player.present(sec);
     };
 
@@ -636,7 +657,13 @@ export default function StageView() {
       // 停下追帧时这张卡的流平面还画着:它不算「不可见地追帧」(T3),不显示占位符
       let settlingBlank = settling;
       if (settling.size && streamShowing.size) settlingBlank = new Map([...settling].filter(([id]) => !streamShowing.has(id)));
-      applyPlaceholders(placeholderWanted({ suppressed, snapshots, awaiting, settling: settlingBlank, streamShowing, unsupported }), slotOf);
+      const wanted = placeholderWanted({ suppressed, snapshots, awaiting, settling: settlingBlank, streamShowing, unsupported });
+      /*
+       * 超出预算的组流:整组只有一个位置矩形(成员的并集),每个成员的占位符都会铺在它上面。只留这一拍要显示占位符的成员里
+       * 最上面的那一张(画家顺序里最后一个),其余的不显示。这一组这一帧没有位置矩形时不动(各自照老办法定位)。
+       */
+      if (wanted.size > 1 && player.hasOver) keepTopOfGroups(wanted, player.overGroups());
+      applyPlaceholders(wanted, slotOf);
     };
 
     /**
@@ -665,6 +692,7 @@ export default function StageView() {
       flushSync(() => bumpPlanes());
       refreshPlaceholders();
     };
+    onStreamBoxes = () => { if (ref.current.role === "front") commitPlanes(); };
 
     /**
      * 应用一次快照增量(A3c):`null` = 摘掉,`reset` = 先清空全部再应用。
@@ -2409,7 +2437,17 @@ export default function StageView() {
           commitPlanes();
           return { ok: true as const };
         }
-        const incoming = (Array.isArray(planes) ? planes : []).filter((g) => Array.isArray(g?.clipIds) && g.clipIds.length);
+        const sent = (Array.isArray(planes) ? planes : []).filter((g) => Array.isArray(g?.clipIds) && g.clipIds.length);
+        // 父页标了 `over` 的是这一拍超出预算的:不挂流平面、不建解码器,只交给播放器取清单(占位符照清单里的位置矩形摆)
+        const incoming = sent.filter((g) => !g.over);
+        const over = sent.filter((g) => g.over).map((g) => ({
+          clipIds: g.clipIds.map(String),
+          ...(typeof g.key === "string" && g.key ? { key: g.key } : {}),
+          ...(Number.isInteger(g.originFrame) && (g.originFrame as number) >= 0 ? { originFrame: g.originFrame as number } : {}),
+          ...(g.plane === "stage" ? { plane: "stage" as const } : {}),
+          ...(g.manifest && typeof g.manifest === "object" && g.manifest.segments ? { manifest: g.manifest } : {}),
+          over: true as const,
+        }));
         const groupsOf = (list: readonly { clipIds: readonly string[]; plane?: string }[]) => list.map((g) => `${g.clipIds.join(",")}${g.plane === "stage" ? "@stage" : ""}`).join("|");
         const before = groupsOf(ref.current.streamPlanes);
         ref.current.streamPlanes = incoming.map((g) => ({
@@ -2432,7 +2470,7 @@ export default function StageView() {
           const g = incoming[i];
           const manifest = g.manifest && typeof g.manifest === "object" && g.manifest.bound && g.manifest.segments && g.manifest.inits ? g.manifest : null;
           return manifest ? { ...p, manifest, ...(g.blocks && typeof g.blocks === "object" ? { blocks: g.blocks } : {}) } : p;
-        }), fps);
+        }), fps, over);
         // 等着流画出第一帧的卡,流平面撤了:不再等(父页还点着名的当场藏起来,落到快照 / 占位符)
         if (ref.current.streamWaiting.size) {
           const gone = [...ref.current.streamWaiting.keys()].filter((id) => !planeOf(id));

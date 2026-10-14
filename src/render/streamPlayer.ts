@@ -1,5 +1,5 @@
 /**
- * 轨道流的页面侧:自写 fMP4 解封装、`VideoDecoder` 硬解、WebGL 拆两半合成(R8,任务书 G5)。
+ * 轨道流的页面侧:自写 fMP4 解封装、`VideoDecoder` 硬解、WebGL 拆两半合成(R8,任务书 G5)。全部流平面共用一个 WebGL 上下文(`SharedGl`)。
  *
  * **只在 `front` 角色的舞台文档里跑**(解码器和解码帧预算都在 `front`;`back` 不建 decoder、不画,K5)。
  * 画在 `Stage` 已经渲好的兄弟平面上 —— 单卡流是包裹层里的 `<canvas data-pc-stream-plane>`,
@@ -12,15 +12,15 @@
  *     永不返回,这是帧数上限、与分辨率无关;
  *   - 在这之上解码帧预算**按字节算**:总量 ≤ 80 MB(上下拼合的编码画面,NV12 按 1.5 字节 / 像素),
  *     每流保底 3 帧;
- *   - 同时活跃的解码器 ≤ 6(超出的平面不建解码器 —— `planesWithinBudget`,父页用同一个函数;
- *     那一层从兜底顺序第 3 步起:最近快照,再没有就占位符);
+ *   - 同屏的流按「每秒要解的像素」算预算,另有条数的硬上限(`./streamBudget.mjs`,划分流的一侧用的是同一份);超出的平面不建解码器
+ *     (`planesWithinBudget`,父页据它给超出的平面标上 `over`),那一层显示占位符,位置取这条流清单里这一帧所在分段的位置矩形;
  *   - 每流最多 2 个在途请求,分段整段拉;
  *   - `codec` 从 `avcC` 拼(真实 SPS 的 level 随内容变,不能写死);`isConfigSupported` 不校验 level
  *     与分辨率,不拿它当能力判据。
  *
  * # 画法
  *
- * 色半区存的是**预乘色**(G3),上下文按 `premultipliedAlpha: true` 输出,不再做 `rgb × a`;
+ * 色半区存的是**预乘色**(G3),共用的上下文按 `premultipliedAlpha: true` 输出,不再做 `rgb × a`;平面的 2D 画布原样取走(见 `SharedGl`);
  * 着色器**钳一次 `rgb = min(rgb, vec3(a))`**(G0-b (5):不钳时透明区的编码噪声原样输出)。
  * 纹理坐标按 `alphaTop = (H + 8) / (2H + 16)`、`half = H / (2H + 16)` 拆两半。
  *
@@ -45,6 +45,7 @@
  */
 
 import { isStreamOrigin, STREAM_SEGMENT_FRAMES, streamSegmentFirstFrame, streamSegmentOf } from "./streamSegments.mjs";
+import { STREAM_COUNT_BUDGET, streamCost, withinStreamBudget } from "./streamBudget.mjs";
 
 /** 一个分段的帧数;数和换算都在 `./streamSegments.mjs`,这里只是照旧的名字再导出一次 */
 export const SEGMENT_FRAMES = STREAM_SEGMENT_FRAMES;
@@ -54,8 +55,8 @@ export const MAX_FRAMES_PER_DECODER = 8;
 export const DECODED_BYTES_BUDGET = 80 * 1024 * 1024;
 /** G5:每流保底 */
 export const MIN_FRAMES_PER_STREAM = 3;
-/** G1 / G0-b (4):同时活跃的解码器预算 */
-export const DECODER_BUDGET = 6;
+/** 同屏流的条数硬上限(预算的口径是数像素,见 `./streamBudget.mjs`;这个名字照旧导出) */
+export const DECODER_BUDGET = STREAM_COUNT_BUDGET;
 /** G5:每流最多 2 个在途请求 */
 export const MAX_INFLIGHT_PER_STREAM = 2;
 /** 这一拍的画面没画出来时,上一张最多留这么多帧的时长(一个分段;按这条流的帧率换成真实毫秒) */
@@ -117,6 +118,11 @@ export interface StreamPlaneRequest {
    */
   originFrame?: number;
   /**
+   * 这一拍超出预算(父页用 `planesWithinBudget` 判的,舞台照它办):舞台不为它建解码器、不画,只取它的清单,
+   * 拿这一帧所在分段的位置矩形摆占位符。在线页面这种平面只带清单、不带字节。
+   */
+  over?: true;
+  /**
    * 在线页面(`docs/plan/browser-stream-task.md` 第七处):这条流的清单由父页随流平面带过来,舞台不自己去取。
    * 带了它,这条流的字节也只从父页推来的块里拿(`PushedStreamSource`),不碰预渲染进程的地址。桌面不带,照旧。
    */
@@ -136,10 +142,13 @@ export interface StreamManifest {
   originFrame?: number | null;
   bound: StreamRect;
   tight: StreamRect | null;
+  /** 单卡流:包裹层的框在隔离工程里摆到哪儿(平面坐标加它是那份工程的舞台坐标);按舞台坐标产的流是零 */
+  offset?: { x: number; y: number } | null;
   /** `hash`:在线页面推来的清单才有,开头文件的内容哈希(字节按它在推来的块里找) */
   inits: Record<string, { codec: string; width: number; height: number; rect: StreamRect; hash?: string }>;
   /** `file`:桌面是分段的文件名;在线页面推来的清单里是分段的内容哈希(两种都是「换了内容就换名」) */
-  segments: Record<string, { init: string; file: string; stride: number; samples: number }>;
+  /** `box`:产稀疏版时这个分段量到的位置矩形(收紧的框,平面坐标);没量过的分段不带。占位符照它摆 */
+  segments: Record<string, { init: string; file: string; stride: number; samples: number; box?: StreamRect | null }>;
 }
 
 /* ======================================================================== *
@@ -286,22 +295,26 @@ export function streamLayerHas(layer: { ranges?: ReadonlyArray<readonly number[]
 }
 
 /**
- * 解码器预算(兜底顺序第 1、2 步的预算,mechanism/rendering.md「兜底顺序」):这一拍**真的会建解码器**的那几条平面。
+ * 同屏流的预算(兜底顺序第 1、2 步的预算,mechanism/rendering.md「兜底顺序」):这一拍**真的会建解码器**的那几条平面。
  *
- * 只收有流键、带着第一帧(`originFrame`)的(没有键的只占位、不解码;没有第一帧的没法把帧号换成分段号),按传进来的顺序取前 `DECODER_BUDGET` 条 ——
- * 舞台的 `sync()` 和父页的 `streamPlanesAt` 用同一个函数,两边对「谁超预算」的判断一致:
- * 超预算的卡父页当「无流」、每拍换最近的快照(兜底顺序直接从第 3 步开始)。
- * 画布还没挂上的平面照样占着它的预算位(父页不知道画布到没到),那一拍按流 blank 处理。
+ * 只收有流键、带着第一帧(`originFrame`)的(没有键的只占位、不解码;没有第一帧的没法把帧号换成分段号)、没标 `over` 的。
+ * 预算的口径在 `./streamBudget.mjs`:同屏 6 条以内不看像素(原来放得过的照样放得过);超过 6 条,每条流的开销(编码画幅乘帧率)
+ * 加起来不超过像素预算;条数另有硬上限。
+ * `pixelsOf` 给每条平面的编码画幅(父页按当前项目算,`snapshotFeed.ts` 的 `streamPixelsOf`);回不出正数的按一张 1920×1080 的满屏卡算。
+ * 按传进来的顺序放:条数到了上限就停;某一条的像素放不下时跳过它接着看后面的(后面更小的还放得下)。
+ *
+ * **谁超预算由父页判**(`planFeed`):它把超出的平面标上 `over` 再发给舞台,自己也照这个结果决定哪些卡算「有流盖着」。
+ * 舞台不重算像素(它手里没有项目的框),照父页标的办,只用这个函数守住条数的硬上限(`STAGE_PLANE_PIXELS`)。
+ * 画布还没挂上的平面照样占着它的预算(父页不知道画布到没到),那一拍按流 blank 处理。
  */
-export function planesWithinBudget<P extends { clipIds?: readonly string[]; key?: string; originFrame?: number }>(planes: readonly P[]): P[] {
-  const out: P[] = [];
-  for (const p of planes) {
-    if (out.length >= DECODER_BUDGET) break;
-    if (!Array.isArray(p?.clipIds) || !p.clipIds.length || typeof p.key !== "string" || !p.key || !isStreamOrigin(p.originFrame)) continue;
-    out.push(p);
-  }
-  return out;
+export function planesWithinBudget<P extends { clipIds?: readonly string[]; key?: string; originFrame?: number; over?: boolean }>(
+  planes: readonly P[], fps = 30, pixelsOf: (plane: P) => number | null | undefined = () => undefined,
+): P[] {
+  const valid = planes.filter((p) => Array.isArray(p?.clipIds) && p.clipIds.length > 0 && typeof p.key === "string" && !!p.key && isStreamOrigin(p.originFrame) && !p.over);
+  return withinStreamBudget(valid.map((p) => streamCost(pixelsOf(p), fps))).map((i) => valid[i]);
 }
+/** 舞台一侧过 `planesWithinBudget` 时每条平面报的像素数:小到像素预算永远不会满,只剩条数的硬上限起作用 */
+const STAGE_PLANE_PIXELS = () => 1;
 
 /** 这条平面的画布是不是挂在舞台根下、按舞台坐标画的那一种:组流,和依赖下层的流 */
 export function stagePlane(plane: { clipIds?: readonly string[]; plane?: string } | null | undefined): boolean {
@@ -453,9 +466,12 @@ export class StreamPlaneSender {
     const out: StreamPlaneRequest[] = [];
     for (const p of planes) {
       const base: StreamPlaneRequest = { clipIds: [...p.clipIds], ...(p.key ? { key: p.key } : {}), ...(p.ranges ? { ranges: p.ranges } : {}),
-        ...(isStreamOrigin(p.originFrame) ? { originFrame: p.originFrame } : {}), ...(p.plane === "stage" ? { plane: "stage" as const } : {}) };
+        ...(isStreamOrigin(p.originFrame) ? { originFrame: p.originFrame } : {}), ...(p.plane === "stage" ? { plane: "stage" as const } : {}),
+        ...(p.over ? { over: true as const } : {}) };
       const data = p.key ? this.lookup(p.key) : null;
       if (!data) { out.push(base); continue; }
+      // 超出预算的平面舞台不解码:只带清单(占位符照它的位置矩形摆),不带字节,也不记进「舞台手里的块」
+      if (p.over) { out.push({ ...base, manifest: data.manifest }); continue; }
       const blocks: Record<string, ArrayBuffer> = {};
       let added = 0;
       for (const hash of manifestBlockHashes(data.manifest)) {
@@ -497,18 +513,69 @@ void main(){
   gl_FragColor = vec4(min(rgb, vec3(a)), a);
 }`;
 
-class PlaneCompositor {
-  readonly canvas: HTMLCanvasElement;
-  private gl: WebGLRenderingContext;
-  private tex: WebGLTexture;
-  private uAlphaTop: WebGLUniformLocation | null;
-  private uHalf: WebGLUniformLocation | null;
-  private blank = true;
-  constructor(canvas: HTMLCanvasElement) {
-    this.canvas = canvas;
-    const gl = canvas.getContext("webgl", { premultipliedAlpha: true, alpha: true, preserveDrawingBuffer: true, antialias: false });
-    if (!gl) throw new Error("轨道流拿不到 WebGL 上下文");
-    this.gl = gl;
+/** 共用的那块离屏画布:建不出来、或丢了上下文迟迟不还时,隔这么久(真实毫秒)再重建一次 */
+export const GL_RETRY_MS = 1000;
+/** 接连建不出来时每次把间隔加倍,最长到这么久(别空转) */
+export const GL_RETRY_MAX_MS = 30000;
+
+type GlCanvas = OffscreenCanvas | HTMLCanvasElement;
+const newGlCanvas = (): GlCanvas | null => {
+  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(2, 2);
+  if (typeof document !== "undefined") return document.createElement("canvas");
+  return null;
+};
+
+/**
+ * **全部流平面共用的一个 WebGL 上下文**(一台舞台一个,`StreamPlayer` 拿着)。
+ *
+ * 为什么不是每块平面一个:浏览器一页最多给 16 个 WebGL 上下文,超出的把最早建的那个丢掉、不还
+ * (`docs/reports/AGENT-rr-merged-eval.md` 第 4 节:24 层丢 8 个、30 层丢 14 个,丢了的层一帧没画);
+ * 舞台里 canvas 卡的共享渲染器、卡片自己的 WebGL 也占名额。
+ *
+ * 做法:一块**不挂进文档**的离屏画布建上下文;每画一帧,把这一帧上传成纹理、照原来的着色器拆两半画到离屏画布的左上角
+ * (`rect.w × rect.h`,一比一),平面自己的 2D 画布当场 `drawImage` 取走。选它而不选 `transferToImageBitmap` 加
+ * `bitmaprenderer`:后者每次交出去都要给离屏画布重新分配一块后备缓冲,各平面尺寸不同还得每帧改离屏画布的尺寸;
+ * 2D 取走是显卡上的一次拷贝,离屏画布只长不缩。画面与每块平面一个上下文时逐像素相同(同一份报告第 4 节,差 0):
+ * 离屏画布按预乘色输出(`premultipliedAlpha: true`),2D 画布内部存的也是预乘色,先清空再一比一不缩放地画上去,数值原样过去。
+ * 离屏画布不留绘图缓冲(`preserveDrawingBuffer: false`):每次都是先把要的那一块整块画满、同一个任务里当场取走,用不着留;
+ * 留着的话每次取走都多一份拷贝(`scripts/probes/stream-budget-probe.mjs` 量的:同屏 30 条小卡流每拍 4.2 毫秒对 3.1 毫秒)。
+ *
+ * 代价(同一支探针,30 帧每秒、704×864 的小卡流,每拍 `present` 的平均毫秒,前面是每块平面一个上下文):1 条 0.20 对 0.28,
+ * 6 条 0.57 对 0.80,16 条 1.24 对 1.65;30 条时原来的画法丢 14 个上下文、14 块平面是空的,共用以后 30 块都画、2.74。
+ * 折下来每条流每拍多 0.03～0.08 毫秒(多出来的是离屏画布到 2D 画布那一次取走;各轮的数见 `docs/reports/AGENT-rr-pixel-budget.md`)。
+ * 还能省:一拍里的各条先画进一张图集、再一起取走(评估报告量的那种画法,每拍基本不多花),没有做。
+ *
+ * 上下文丢了(显卡进程重启、名额被别的画布挤掉):平面的 2D 画布不受影响,上一张画面还在;这期间新的一帧画不上,
+ * 照「这一拍画不出来」办(留着上一张、到时占位符)。浏览器还回来(`webglcontextrestored`)就重建着色器和纹理;
+ * `GL_RETRY_MS` 以后还没还(被挤掉的不还)就扔掉这块离屏画布另建一块;另建也没建出来的,隔一会儿再试(间隔每次加倍,最长
+ * `GL_RETRY_MAX_MS`)。每一种都约播放器到点把这一帧再走一遍(暂停着没有下一拍)。
+ */
+class SharedGl {
+  private canvas: GlCanvas | null = null;
+  private gl: WebGLRenderingContext | null = null;
+  private tex: WebGLTexture | null = null;
+  private uAlphaTop: WebGLUniformLocation | null = null;
+  private uHalf: WebGLUniformLocation | null = null;
+  private lostAt: number | null = null;
+  private failedAt: number | null = null;
+  /** 接连建不出来几次了(建成一次清零);下一次隔多久再试按它加倍 */
+  private failures = 0;
+  private onLost: () => void;
+  private onBack: () => void;
+  private onRetry: (ms: number) => void;
+  stats = { creates: 0, losses: 0, restores: 0, failures: 0, draws: 0, lastError: "" };
+
+  /** `onRetry(ms)`:这一刻画不了,过 `ms` 毫秒值得再试一次(播放器据此排一个真定时器把这一帧再走一遍;暂停着没有下一拍) */
+  constructor(onLost: () => void, onBack: () => void, onRetry: (ms: number) => void) {
+    this.onLost = onLost;
+    this.onBack = onBack;
+    this.onRetry = onRetry;
+  }
+
+  private get retryMs(): number { return Math.min(GL_RETRY_MAX_MS, GL_RETRY_MS * 2 ** Math.max(0, this.failures - 1)); }
+
+  /** 着色器、顶点、纹理(新建上下文和上下文还回来以后各做一次) */
+  private setup(gl: WebGLRenderingContext): void {
     const shader = (type: number, src: string) => {
       const s = gl.createShader(type)!;
       gl.shaderSource(s, src);
@@ -539,6 +606,108 @@ class PlaneCompositor {
     this.uAlphaTop = gl.getUniformLocation(prog, "alphaTop");
     this.uHalf = gl.getUniformLocation(prog, "half_");
   }
+
+  private drop(): void {
+    this.canvas = null;
+    this.gl = null;
+    this.tex = null;
+    this.lostAt = null;
+  }
+
+  private ensure(): WebGLRenderingContext | null {
+    const now = realNow();
+    if (this.gl && this.lostAt === null) return this.gl;
+    if (this.gl) {
+      // 丢了:先等浏览器还;等够了还没还(被别的画布挤掉的不还)就另建
+      const waited = now - (this.lostAt as number);
+      if (waited < GL_RETRY_MS) { this.onRetry(GL_RETRY_MS - waited); return null; }
+      this.drop();
+    }
+    // 上一次没建出来:隔一会儿再试(接连失败间隔加倍);这期间有人要画,就约好到点再走一遍
+    if (this.failedAt !== null && now - this.failedAt < this.retryMs) { this.onRetry(this.retryMs - (now - this.failedAt)); return null; }
+    try {
+      const canvas = newGlCanvas();
+      const gl = canvas?.getContext("webgl", { premultipliedAlpha: true, alpha: true, preserveDrawingBuffer: false, antialias: false }) as WebGLRenderingContext | null;
+      if (!canvas || !gl) throw new Error("轨道流拿不到 WebGL 上下文");
+      this.setup(gl);
+      const target = canvas as unknown as Partial<EventTarget>;
+      target.addEventListener?.("webglcontextlost", (e) => {
+        if (this.canvas !== canvas) return;
+        e.preventDefault();
+        this.lostAt = realNow();
+        this.stats.losses++;
+        this.onLost();
+      });
+      target.addEventListener?.("webglcontextrestored", () => {
+        if (this.canvas !== canvas) return;
+        try { this.setup(gl); this.lostAt = null; this.stats.restores++; }
+        catch (e) { this.stats.lastError = String((e as Error)?.message || e); this.drop(); }
+        this.onBack();
+      });
+      this.canvas = canvas;
+      this.gl = gl;
+      this.failedAt = null;
+      this.failures = 0;
+      this.stats.creates++;
+      return gl;
+    } catch (e) {
+      this.failedAt = now;
+      this.failures++;
+      this.stats.failures++;
+      this.stats.lastError = String((e as Error)?.message || e);
+      this.onRetry(this.retryMs);
+      return null;
+    }
+  }
+
+  /**
+   * 把一帧(上下拼合)拆两半、合成预乘色,画到离屏画布左上角的 `w × h`(一比一)。回离屏画布,调用方**当场**取走那一块;
+   * 画不了(没有上下文、上下文丢着)回 null。`w`、`h` 是这一帧所在变体的矩形的宽高。
+   */
+  render(frame: VideoFrame, w: number, h: number): GlCanvas | null {
+    const gl = this.ensure();
+    const c = this.canvas;
+    if (!gl || !c) return null;
+    // 只长不缩:改 WebGL 画布的尺寸要重新分配后备缓冲
+    if (c.width < w) c.width = w;
+    if (c.height < h) c.height = h;
+    const total = frame.displayHeight || frame.codedHeight;
+    // WebGL 的原点在左下:画布左上角的 w × h
+    gl.viewport(0, c.height - h, w, h);
+    gl.uniform1f(this.uAlphaTop, (h + 8) / total);
+    gl.uniform1f(this.uHalf, h / total);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    if (typeof gl.isContextLost === "function" && gl.isContextLost() === true) return null;
+    this.stats.draws++;
+    return c;
+  }
+
+  /** 舞台退到 `back`:离屏画布缩回最小(放掉后备缓冲),上下文留着,下一次当 `front` 不用重建 */
+  shrink(): void {
+    const c = this.canvas;
+    if (!c || this.lostAt !== null) return;
+    if (c.width !== 2) c.width = 2;
+    if (c.height !== 2) c.height = 2;
+  }
+
+  get state(): "none" | "ready" | "lost" { return !this.gl ? "none" : this.lostAt !== null ? "lost" : "ready"; }
+}
+
+/** 一块流平面:自己只有一个 2D 上下文,合成在共用的 `SharedGl` 里做 */
+class PlaneCompositor {
+  readonly canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private shared: SharedGl;
+  private blank = true;
+  constructor(canvas: HTMLCanvasElement, shared: SharedGl) {
+    this.canvas = canvas;
+    this.shared = shared;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("轨道流平面拿不到 2D 上下文");
+    this.ctx = ctx;
+  }
   /** 画布的位置和尺寸 = 流的矩形上界(平面坐标)。只在变了的时候写 */
   place(bound: StreamRect): void {
     const c = this.canvas;
@@ -548,37 +717,29 @@ class PlaneCompositor {
     const want: Record<string, string> = { left: `${bound.x}px`, top: `${bound.y}px`, width: `${bound.w}px`, height: `${bound.h}px` };
     for (const [k, v] of Object.entries(want)) if (s.getPropertyValue(k) !== v) s.setProperty(k, v);
   }
-  /** 画一帧。`rect` 是这一帧所在变体的矩形(平面坐标),`bound` 是画布覆盖的矩形 */
-  draw(frame: VideoFrame, rect: StreamRect, bound: StreamRect): void {
-    const gl = this.gl;
-    const total = frame.displayHeight || frame.codedHeight;
-    const H = rect.h;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    // WebGL 的原点在左下
-    const vx = rect.x - bound.x;
-    const vy = bound.y + bound.h - (rect.y + rect.h);
-    gl.viewport(vx, vy, rect.w, rect.h);
-    gl.uniform1f(this.uAlphaTop, (H + 8) / total);
-    gl.uniform1f(this.uHalf, H / total);
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  /**
+   * 画一帧。`rect` 是这一帧所在变体的矩形(平面坐标),`bound` 是画布覆盖的矩形。共用的上下文这一刻画不了回 false,
+   * **画布上原来那一张原样不动**:画布的位置和尺寸是画得了才改的(改 2D 画布的宽高会把它清空;清单的 `bound` 变了而上下文丢着时,
+   * 先改尺寸的话上一张就没了,账上却还记着有画面)。
+   */
+  draw(frame: VideoFrame, rect: StreamRect, bound: StreamRect): boolean {
+    const src = this.shared.render(frame, rect.w, rect.h);
+    if (!src) return false;
+    this.place(bound);
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    // 一比一、不缩放:离屏画布左上角的 rect.w × rect.h 原样搬到平面上这一帧的矩形里
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(src, 0, 0, rect.w, rect.h, rect.x - bound.x, rect.y - bound.y, rect.w, rect.h);
     this.blank = false;
+    return true;
   }
   clear(): void {
     if (this.blank) return;
-    const gl = this.gl;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.blank = true;
   }
   get isBlank(): boolean { return this.blank; }
-  dispose(): void {
-    try { this.gl.getExtension("WEBGL_lose_context")?.loseContext(); } catch { /* 已经丢了 */ }
-  }
 }
 
 /* ======================================================================== *
@@ -650,7 +811,16 @@ class StreamTrack {
   private adoptPushed(manifest: StreamManifest): void {
     this.manifest = manifest;
     this.manifestAt = realNow();
-    this.ensureCompositor()?.place(manifest.bound);
+    this.placeBlank(manifest.bound);
+  }
+
+  /**
+   * 清单到了:把**还没有画面的**画布摆到流的矩形上界(被抑制的卡要有一块能点中的框)。上面已经有画面的不动 ——
+   * 改宽高会清空它;下一次画得上的时候 `PlaneCompositor.draw` 自己会摆。
+   */
+  private placeBlank(bound: StreamRect): void {
+    if (this.lastDrawn !== null) return;
+    this.ensureCompositor()?.place(bound);
   }
 
   /** 这条流的字节从哪来:带了清单的平面只认父页推来的块,否则是播放器的字节源(桌面:预渲染进程) */
@@ -669,8 +839,7 @@ class StreamTrack {
 
   private ensureCompositor(): PlaneCompositor | null {
     if (this.compositor && this.compositor.canvas === this.canvas) return this.compositor;
-    this.compositor?.dispose();
-    try { this.compositor = new PlaneCompositor(this.canvas); }
+    try { this.compositor = new PlaneCompositor(this.canvas, this.player.gl); }
     catch (e) { this.compositor = null; this.stats.lastError = String((e as Error)?.message || e); }
     return this.compositor;
   }
@@ -713,7 +882,7 @@ class StreamTrack {
         this.manifest = m;
         this.manifestAt = realNow();
         // 清单一到就把画布摆到流的矩形上界:还没画出第一帧时,被抑制的卡也要有一块能点中的框
-        this.ensureCompositor()?.place(m.bound);
+        this.placeBlank(m.bound);
         this.wake();
       })
       .catch(() => { /* 还没就绪:这一层这一拍落到兜底顺序的下一步(快照 / 占位符),下一拍再说 */ })
@@ -889,8 +1058,8 @@ class StreamTrack {
     const rect = this.rectOf(f);
     const compositor = this.ensureCompositor();
     if (!rect || !compositor || !this.manifest || !this.planeFits) return false;
-    compositor.place(this.manifest.bound);
-    compositor.draw(frame, rect, this.manifest.bound);
+    // 共用的上下文这一刻画不了(丢着):当这一拍没画上,留着上一张(画布的位置和尺寸也不动,见 `PlaneCompositor.draw`)
+    if (!compositor.draw(frame, rect, this.manifest.bound)) return false;
     const was = this.lastDrawn;
     this.lastDrawn = f;
     this.stats.drawn++;
@@ -927,8 +1096,7 @@ class StreamTrack {
     const rect = shown ? this.rectOf(shown.f) : null;
     const compositor = shown ? this.ensureCompositor() : null;
     if (!shown || !rect || !compositor || !this.manifest || !this.planeFits) return false;
-    compositor.place(this.manifest.bound);
-    compositor.draw(shown.frame, rect, this.manifest.bound);
+    if (!compositor.draw(shown.frame, rect, this.manifest.bound)) return false;
     this.lastDrawn = shown.f;
     this.coverSnapshot(true);
     return true;
@@ -1213,7 +1381,6 @@ class StreamTrack {
     try { if (this.decoder && this.decoder.state !== "closed") this.decoder.close(); } catch { /* 已经关了 */ }
     this.decoder = null;
     this.compositor?.clear();
-    this.compositor?.dispose();
     this.compositor = null;
     this.segments.clear();
   }
@@ -1228,6 +1395,64 @@ class StreamTrack {
       // 画在哪种平面上(舞台根下 / 包裹层里),清单是哪一种流、和这块平面对不对得上
       plane: stagePlane(this.plane) ? "stage" : "local", kind: this.manifest?.kind ?? null, fits: this.planeFits,
       cap: this.player.capFor(this), ...this.stats };
+  }
+}
+
+/** 是不是一个位置矩形(四个有限数,宽高为正) */
+const isRect = (r: unknown): r is StreamRect => {
+  const v = r as StreamRect | null;
+  return !!v && typeof v === "object" && [v.x, v.y, v.w, v.h].every(Number.isFinite) && v.w > 0 && v.h > 0;
+};
+
+/**
+ * 超出预算的一条流:不建解码器、不画,只拿着它的清单,给占位符报「这一帧所在分段的位置矩形」(清单里 `segments[n].box`,
+ * 产稀疏版时每个分段量的收紧的框)。清单由父页带来(在线页面)就用带来的;没带(桌面)就问字节源,这一帧所在的分段还没有
+ * 位置矩形时隔 `MANIFEST_REFRESH_MS` 再问一次。取不到清单、分段没量过的回 null,占位符照老办法定位。
+ */
+class OverPlane {
+  plane: StreamPlaneRequest;
+  private player: StreamPlayer;
+  manifest: StreamManifest | null;
+  private askedAt = 0;
+  private loading = false;
+  disposed = false;
+
+  constructor(player: StreamPlayer, plane: StreamPlaneRequest) {
+    this.player = player;
+    this.plane = plane;
+    this.manifest = plane.manifest ?? null;
+  }
+
+  setPlane(plane: StreamPlaneRequest): void {
+    this.plane = plane;
+    if (plane.manifest) this.manifest = plane.manifest;
+  }
+
+  /** 这一帧所在分段的位置矩形(平面坐标:单卡流是包裹层自己的坐标,按舞台坐标产的流是舞台坐标);没有回 null */
+  boxAt(f: number): StreamRect | null {
+    const m = this.manifest;
+    if (!m || !isStreamOrigin(this.plane.originFrame)) return null;
+    // 清单说的坐标系和父页说的对不上的不用(同 `StreamTrack.planeFits`)
+    if ((m.plane === "stage" || m.plane === "local") && (m.plane === "stage") !== stagePlane(this.plane)) return null;
+    const box = m.segments?.[String(streamSegmentOf(f, this.plane.originFrame))]?.box;
+    return isRect(box) ? box : null;
+  }
+
+  /**
+   * 每拍叫一次:没有清单就取;手里的清单还没有这一帧所在的分段(清单是旧的)就隔一会儿再问。清单里已经有这一段、只是没有位置矩形
+   * (没量过的分段,以后也不会有)的不再问。父页带清单来的不问,等它带新的来。
+   */
+  tick(f: number): void {
+    if (this.plane.manifest || this.loading || !this.plane.key) return;
+    if (this.manifest && isStreamOrigin(this.plane.originFrame) && this.manifest.segments?.[String(streamSegmentOf(f, this.plane.originFrame))]) return;
+    const now = realNow();
+    if (this.askedAt && now - this.askedAt < MANIFEST_REFRESH_MS) return;
+    this.askedAt = now;
+    this.loading = true;
+    this.player.source.manifest(this.plane.key)
+      .then((m) => { if (!this.disposed) { this.manifest = m; this.player.noteBoxes(); } })
+      .catch(() => { /* 还没有清单:占位符照老办法定位,过一会儿再问 */ })
+      .finally(() => { this.loading = false; });
   }
 }
 
@@ -1250,18 +1475,61 @@ export class StreamPlayer {
   private lastFrame: number | null = null;
   private onShowingChange: (() => void) | null;
   private showingQueued = false;
+  /** 超出预算的流(片段 id → 那一条;组流的每个成员都指向同一条) */
+  private over = new Map<string, OverPlane>();
+  private onBoxChange: (() => void) | null;
+  private boxesQueued = false;
+  private boxesSig = "";
+  private onContextLost: (() => void) | null;
+  /** 全部流平面共用的那个 WebGL 上下文(头一次真的要画时才建;`back` 角色的舞台从不画,也就不建) */
+  readonly gl: SharedGl;
 
-  constructor({ root, source = new HttpStreamSource(), onShowingChange }: {
+  constructor({ root, source = new HttpStreamSource(), onShowingChange, onContextLost, onBoxChange }: {
     root: () => Element | null; source?: StreamSource;
     /**
      * 某条流的画面从无到有、或从有到无(异步解出来了、留到时限清空了)时叫一次;同一个微任务里只叫一次。
      * 暂停着没有下一拍:宿主靠它撤占位符、把等着第一张画面的活子树藏起来。
      */
     onShowingChange?: () => void;
+    /** 共用的 WebGL 上下文丢了(那块画布不在文档里,事件到不了 `document`;在线页面靠它报「运行中出事了」) */
+    onContextLost?: () => void;
+    /**
+     * 超出预算的层的位置矩形变了(清单到了、播放头进了下一个分段)时叫一次;同一个微任务里只叫一次。
+     * 占位符的几何是宿主渲染时取的(`boxOf` / `stageBoxOf`),宿主靠它重取一遍。
+     */
+    onBoxChange?: () => void;
   }) {
     this.root = root;
     this.source = source;
     this.onShowingChange = onShowingChange ?? null;
+    this.onContextLost = onContextLost ?? null;
+    this.onBoxChange = onBoxChange ?? null;
+    /*
+     * 共用的上下文丢了 / 回来了:把这一帧再走一遍(暂停着没有下一拍)。丢了以后浏览器不一定还(被别的画布挤掉的不还),
+     * 所以丢的那一刻另排一个真定时器,到 `GL_RETRY_MS` 再走一遍 —— 那时 `SharedGl` 会另建一块。
+     */
+    this.gl = new SharedGl(
+      () => { this.onContextLost?.(); this.retryLater(GL_RETRY_MS); },
+      () => this.represent(),
+      (ms) => this.retryLater(ms),
+    );
+  }
+
+  /**
+   * 过 `ms` 毫秒把这一帧再走一遍(共用的上下文丢着、或者没建出来)。同时只排一个;到点时没有要画的流(停了、没有轨道)就不再排,
+   * 还画不了的话 `SharedGl` 会再约下一次(间隔加倍),不会空转。
+   */
+  private retryPending = false;
+  private retryLater(ms: number): void {
+    if (this.retryPending) return;
+    this.retryPending = true;
+    realTimeout(() => { this.retryPending = false; this.represent(); }, Math.max(1, ms) + 20);
+  }
+
+  /** 把上一拍要的那一帧再走一遍(共用的上下文回来了) */
+  private represent(): void {
+    if (this.stopped || this.proxy || this.lastFrame === null) return;
+    for (const track of this.tracks.values()) track.present(this.lastFrame);
   }
 
   /** 轨道报:画面有无变了。攒到微任务里叫宿主(`present` 的循环里不重入宿主) */
@@ -1274,9 +1542,49 @@ export class StreamPlayer {
     });
   }
 
-  /** 父页的 `setStreamPlanes`。只存,下一次 `present` 才绑画布(画布要等 React 提交之后才在) */
-  setPlanes(planes: readonly StreamPlaneRequest[], fps: number): void {
-    const list = planes.filter((p) => Array.isArray(p?.clipIds) && p.clipIds.length && typeof p.key === "string" && p.key && isStreamOrigin(p.originFrame));
+  /** 超出预算的层的位置矩形可能变了:攒到微任务里,真的变了才叫宿主 */
+  noteBoxes(): void {
+    if (!this.onBoxChange || this.boxesQueued) return;
+    this.boxesQueued = true;
+    queueMicrotask(() => {
+      this.boxesQueued = false;
+      if (this.stopped) return;
+      const f = this.lastFrame ?? 0;
+      let sig = "";
+      // 只记有矩形的:没有矩形的层占位符照老办法定位,多一条少一条都不用宿主重取
+      for (const [id, o] of this.over) { const b = o.boxAt(f); if (b) sig += `${id}:${b.x},${b.y},${b.w},${b.h};`; }
+      if (sig === this.boxesSig) return;
+      this.boxesSig = sig;
+      this.onBoxChange?.();
+    });
+  }
+
+  /** 超出预算的平面(父页标了 `over` 的):只记下来取清单,不建解码器 */
+  private setOver(planes: readonly StreamPlaneRequest[]): void {
+    const before = new Map<string, OverPlane>();
+    for (const o of this.over.values()) before.set(planeId(o.plane), o);
+    const next = new Map<string, OverPlane>();
+    const kept = new Set<OverPlane>();
+    for (const plane of planes) {
+      let entry = before.get(planeId(plane)) ?? null;
+      if (entry) entry.setPlane(plane); else entry = new OverPlane(this, plane);
+      kept.add(entry);
+      for (const clipId of plane.clipIds) next.set(clipId, entry);
+    }
+    for (const o of before.values()) if (!kept.has(o)) o.disposed = true;
+    const had = this.over.size > 0;
+    this.over = next;
+    if (had || next.size) this.noteBoxes();
+  }
+
+  /**
+   * 父页的 `setStreamPlanes`。只存,下一次 `present` 才绑画布(画布要等 React 提交之后才在)。
+   * `over`:这一拍超出预算的平面(不解码,只为占位符取位置矩形);`planes` 里标了 `over` 的也算。
+   */
+  setPlanes(planes: readonly StreamPlaneRequest[], fps: number, over: readonly StreamPlaneRequest[] = []): void {
+    const usable = (p: StreamPlaneRequest) => Array.isArray(p?.clipIds) && p.clipIds.length > 0 && typeof p.key === "string" && !!p.key && isStreamOrigin(p.originFrame);
+    this.setOver([...over, ...planes.filter((p) => p?.over)].filter(usable));
+    const list = planes.filter((p) => usable(p) && !p.over);
     // 在线页面:先收下随平面推来的块(没用到的旧块当场丢),平面自己不留着字节
     this.pushed.accept(list);
     this.planes = list.map((p) => {
@@ -1327,12 +1635,12 @@ export class StreamPlayer {
   }
 
   /**
-   * 把平面和画布对上:新来的建流,没了的关掉。只收 `planesWithinBudget` 放行的那几条 ——
-   * 和父页同一个函数,父页当「无流」的层这里也不建解码器。
+   * 把平面和画布对上:新来的建流,没了的关掉。超出预算的平面父页已经标了 `over`,不在 `this.planes` 里(`setPlanes`);
+   * 这里只再守一次条数的硬上限。
    */
   private sync(): void {
     const want = new Map<string, { plane: StreamPlaneRequest; canvas: HTMLCanvasElement }>();
-    for (const plane of planesWithinBudget(this.planes)) {
+    for (const plane of planesWithinBudget(this.planes, this.fps, STAGE_PLANE_PIXELS)) {
       const canvas = this.canvasOf(plane);
       if (!canvas) continue;
       want.set(planeId(plane), { plane, canvas });
@@ -1355,8 +1663,14 @@ export class StreamPlayer {
     if (this.stopped || this.proxy) return;
     this.sync();
     const f = Math.max(0, Math.round(sec * this.fps + 1e-6));
+    const moved = this.lastFrame !== f;
     this.lastFrame = f;
     for (const track of this.tracks.values()) track.present(f);
+    if (this.over.size) {
+      for (const o of new Set(this.over.values())) o.tick(f);
+      // 播放头进了下一个分段,位置矩形可能换了
+      if (moved) this.noteBoxes();
+    }
   }
 
   /**
@@ -1379,6 +1693,10 @@ export class StreamPlayer {
     this.stopped = true;
     this.planes = [];
     this.disposeAll();
+    for (const o of this.over.values()) o.disposed = true;
+    this.over = new Map();
+    this.boxesSig = "";
+    this.gl.shrink();
   }
 
   /**
@@ -1406,13 +1724,52 @@ export class StreamPlayer {
     return out;
   }
 
-  /** 单卡流的实体框(包裹层坐标 = 平面坐标)。组流、依赖下层的流的框在舞台坐标里,不回 */
+  /** 预算以内的单卡流的实体框(清单的收紧矩形,没有就用上界;包裹层坐标 = 平面坐标)。组流、依赖下层的流的框在舞台坐标里,不回 */
   boxOf(clipId: string): StreamRect | null {
     for (const track of this.tracks.values()) {
       if (!stagePlane(track.plane) && track.plane.clipIds[0] === clipId) return track.box;
     }
     return null;
   }
+
+  /**
+   * **超出预算的**单卡流:清单里这一帧所在分段的位置矩形(包裹层坐标);没量过、没有清单回 null。和 `boxOf` 分开回:
+   * 这个矩形只管这一帧,宿主不该把它记下来留到以后用。组流、依赖下层的流见 `stageBoxOf`。
+   */
+  overBoxOf(clipId: string): StreamRect | null {
+    const over = this.over.get(clipId);
+    if (over && !stagePlane(over.plane) && this.lastFrame !== null) return over.boxAt(this.lastFrame);
+    return null;
+  }
+
+  /**
+   * 超出预算的组流里,这一帧有位置矩形的那几组的成员(每组按画家顺序,最后一个在最上面)。整组只有一个矩形(成员的并集),
+   * 宿主只让其中一个成员显示占位符(4:不然 N 个成员叠 N 块同样的框)。
+   */
+  overGroups(): string[][] {
+    const out: string[][] = [];
+    if (this.lastFrame === null) return out;
+    for (const o of new Set(this.over.values())) {
+      if (o.plane.clipIds.length > 1 && o.boxAt(this.lastFrame)) out.push([...o.plane.clipIds]);
+    }
+    return out;
+  }
+
+  /**
+   * 超出预算、按舞台坐标产的流(组流、依赖下层的流)这一帧所在分段的位置矩形,**舞台坐标**(清单里的矩形加清单的 `offset`,
+   * 这种流的 `offset` 是零)。宿主要自己换到包裹层的坐标再给占位符。别的情形回 null。
+   */
+  stageBoxOf(clipId: string): StreamRect | null {
+    const over = this.over.get(clipId);
+    if (!over || !stagePlane(over.plane) || this.lastFrame === null) return null;
+    const box = over.boxAt(this.lastFrame);
+    if (!box) return null;
+    const off = over.manifest?.offset;
+    return { x: box.x + (Number(off?.x) || 0), y: box.y + (Number(off?.y) || 0), w: box.w, h: box.h };
+  }
+
+  /** 这一拍有超出预算的平面在(没有流平面时宿主据此还要每拍叫 `present`:位置矩形跟着播放头换) */
+  get hasOver(): boolean { return this.over.size > 0; }
 
   /** 此刻持有的解码帧字节(验收「解码帧总内存 ≤ 80 MB」看它) */
   heldBytes(): number {
@@ -1423,7 +1780,8 @@ export class StreamPlayer {
 
   diag() {
     return { stopped: this.stopped, proxy: this.proxy, fps: this.fps, lastFrame: this.lastFrame, planes: this.planes.length,
-      heldBytes: this.heldBytes(), pushed: { blocks: this.pushed.size, bytes: this.pushed.bytes },
+      over: [...new Set(this.over.values())].map((o) => ({ clipIds: o.plane.clipIds, key: o.plane.key ?? "", box: this.lastFrame === null ? null : o.boxAt(this.lastFrame) })),
+      heldBytes: this.heldBytes(), gl: { state: this.gl.state, ...this.gl.stats }, pushed: { blocks: this.pushed.size, bytes: this.pushed.bytes },
       tracks: [...this.tracks.values()].map((t) => t.diag()) };
   }
 }

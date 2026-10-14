@@ -111,7 +111,7 @@ test('capFor: bytes budget shared between streams, clamped to [3, 8] frames per 
   player.tracks = new Map([['a', full1080]]);
   assert.equal(player.capFor(full1080), MAX_FRAMES_PER_DECODER);
   // 六条 1080p 全幅:每条 80/6 MB ≈ 2 帧,保底 3
-  player.tracks = new Map(Array.from({ length: DECODER_BUDGET }, (_, i) => [String(i), full1080]));
+  player.tracks = new Map(Array.from({ length: 6 }, (_, i) => [String(i), full1080]));
   assert.equal(player.capFor(full1080), MIN_FRAMES_PER_STREAM);
   // 裁剪很小的流:字节远没到预算也照样不超过 8(G0-b (4):卡死的是帧数,不是字节)
   assert.equal(player.capFor({ bytesPerFrame: 612 * 916 * 1.5 }), MAX_FRAMES_PER_DECODER);

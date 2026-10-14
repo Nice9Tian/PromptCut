@@ -22,7 +22,10 @@ mock.module(srcUrl("render/dataMirror.ts"), { exports: { mirrorKey: () => ({ ses
 
 const feed = await import(srcUrl("editor/snapshotFeed.ts"));
 const { planFeed, pickForSetTime, deliverSnapshots, noteSettled, markAllSettled, suppressedAt, streamPlanesAt, setSnapshotSource, syncSnapshotSubscription, resetSnapshotFeed } = feed;
-const { DECODER_BUDGET } = await import(srcUrl("render/streamPlayer.ts"));
+// 同屏流的预算是数像素的(`render/streamBudget.mjs`)。这份测试里的卡都是整幅的、项目 30 帧每秒:
+// 同屏放得下的条数由预算算出来(15.04 亿 ÷ (1920 × 2176 × 30) = 12),下面仍叫它 DECODER_BUDGET
+const { STREAM_PIXEL_RATE_BUDGET, streamCost, stageStreamPixels } = await import(srcUrl("render/streamBudget.mjs"));
+const DECODER_BUDGET = Math.floor(STREAM_PIXEL_RATE_BUDGET / streamCost(stageStreamPixels({ width: 1920, height: 1080 }), 30));
 
 let now = 1000;
 performance.now = () => now;
@@ -154,6 +157,21 @@ test("同屏超出解码器预算:流平面按预算截;超出的那几张也抑
   assert.deepEqual(f.scrub, [...ids].sort());
   assert.deepEqual([...f.picks.keys()].sort(), ids.slice(DECODER_BUDGET).sort(), "只有超出预算的那两张读快照");
   assert.ok([...f.picks.values()].every((pick) => pick.tier === "over"));
+});
+
+test("大于 1080p 或高于 60 帧的项目:同屏 6 条以内不看像素,都发流平面,没有超出预算的层(原来放得过的照样放得过)", () => {
+  const ids = ["a", "b", "c", "d"];
+  for (const size of [{ width: 3840, height: 2160, fps: 60 }, { width: 3840, height: 2160, fps: 30 }, { width: 2560, height: 1440, fps: 60 }, { width: 1920, height: 1080, fps: 120 }]) {
+    const p = { ...project(ids.map((id) => card(id))), ...size };
+    plan = heavyEverywhere(...ids);
+    for (const id of ids) src.push(stream(id, [[0, 39]]));
+    for (const playing of [true, false]) {
+      const f = planFeed({ project: p, t: 1, playing });
+      assert.equal(f.streamPlanes.length, 4, `${size.width}×${size.height}@${size.fps} playing=${playing}`);
+      assert.deepEqual(f.overPlanes, []);
+      assert.equal(f.picks.size, 0, "都有流盖着,不读快照");
+    }
+  }
 });
 
 test("低内存档暂停着:照现状不发流平面、不按贴流抑制(重卡贴小尺寸);播放中照发", () => {
