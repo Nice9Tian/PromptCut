@@ -259,7 +259,7 @@ async function stageState(page, ids) {
       clips[id] = {
         wrapper: true, suppressed: w.classList.contains('pc-suppressed'),
         snapshot: !!snap && snap.childElementCount > 0, snapshotHidden: !!snap && getComputedStyle(snap).visibility === 'hidden',
-        placeholder: !!slot && !slot.hidden, streamCanvas: !!canvas,
+        placeholder: !!slot && !slot.hidden, reason: slot && !slot.hidden ? slot.getAttribute('data-pc-placeholder-reason') : null, streamCanvas: !!canvas,
         stream: tracks.find((t) => t.clips.includes(id)) ?? null,
       };
     }
@@ -735,7 +735,7 @@ try {
     check(seenG.length >= 8, 'S6 播放中组流在画、两张卡都被抑制', out.playingGroup);
     check(g1 && g1.canvas && g1.canvas.group === g.clipIds.join(',') && g1.canvas.w === 1920 && g1.canvas.h === 1080, 'S6 组流画在舞台根下的那块画布上(整幅)', g1?.canvas);
     check(g1 && g1.track.pushed === true && g1.track.drawn > g0.track.drawn && g1.track.lastDrawn > g0.track.lastDrawn && g1.tracks === 1, 'S6 只有这一条轨道,字节是父页推来的,在出帧', out.playingGroup);
-    check(seenG.every((x) => !x.a.placeholder && !x.b.placeholder), 'S6 没有显示占位符', seenG.filter((x) => x.a.placeholder || x.b.placeholder).map((x) => ({ t: +x.t.toFixed(3), a: x.a.placeholder, b: x.b.placeholder, aSnap: x.a.snapshot, bSnap: x.b.snapshot })));
+    check(seenG.every((x) => !x.a.placeholder && !x.b.placeholder), 'S6 没有显示占位符', seenG.filter((x) => x.a.placeholder || x.b.placeholder).map((x) => ({ t: +x.t.toFixed(3), a: x.a.placeholder, b: x.b.placeholder, aWhy: x.a.reason, bWhy: x.b.reason, aSnap: x.a.snapshot, bSnap: x.b.snapshot })));
     out.pixelsGroup = await comparePixels(page, IDS, { from: 0.8, name: 's6-group', streamOf: groupDrawing, until: 2.0 });
     await stopPipeline(two);
   }

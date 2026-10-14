@@ -7,7 +7,7 @@
  *      `setPlaceholdersEnabled(true)`;`StageView` 在 `setRole('back')` 时关掉。关着时 `Stage` 一个节点都不渲、
  *      样式表也不注入 —— 导出像素基线不受影响。
  *   2. **显示谁**(`placeholderWanted`,纯函数):T1 兜底链尽头(被抑制、这一拍流 blank、又没挂快照)、
- *      T2 `.pc-awaiting`(快照还没到)、T3 `.pc-settling` 且没挂快照(不可见地追帧)、
+ *      T2 `.pc-awaiting`(快照还没到、这一拍流也没在画)、T3 `.pc-settling` 且没挂快照(不可见地追帧)、
  *      T4 等后台补跑互换的轻卡(被抑制、分派表说它这一刻是轻卡);在线浏览器模式下这台设备跑不了的卡
  *      (用户卡、图卡)没有可贴的快照 / 流时一律是 `unsupported`。
  *   3. **显隐**:`StageView` 每拍 / 每次平面提交之后按上面的结果只用 contract 的 `setPlaceholderShown`
@@ -152,7 +152,9 @@ export function placeholderWanted(s: PlaceholderState): Map<string, PlaceholderR
     out.set(id, (s.isLight ?? isCatchingUpClip)(id) ? "catching-up" : "no-data");
   }
   // T2:快照还没到(`.pc-awaiting` 500 ms 兜底之后由舞台摘掉,占位符随之撤)
-  for (const id of s.awaiting) if (!skip(id)) out.set(id, "awaiting");
+  // 这张卡的流这一拍在画(单卡流、它所在的组流、依赖下层的流;留着上一张的那一段也算)就不显示:兜底顺序里流排在前面,
+  // 流在画就轮不到占位符。超出预算而不发流的层没有轨道、不在 `streamShowing` 里,照旧显示
+  for (const id of s.awaiting) if (!skip(id) && !s.streamShowing.has(id)) out.set(id, "awaiting");
   // T3:不可见地追帧,又没有快照垫着
   for (const id of s.settling.keys()) {
     if (skip(id)) continue;
