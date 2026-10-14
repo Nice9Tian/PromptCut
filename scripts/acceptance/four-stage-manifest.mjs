@@ -37,6 +37,7 @@ const probe = (name, args = []) => [node, `scripts/probes/${name}.mjs`, ...args]
 /** 约定的端口 */
 const B = '5690'; // 探针自己起的编辑器 / 在线站点的端口段起点
 const DOC = (n = 0) => String(8760 + n);
+const P = (n = 0) => String(V + n); // 渲染附加项的端口:挂在 0.7.18 的端口段上(串行用)
 
 /** 不在整套里的探针文件与原因(--check-coverage 对照) */
 export const EXCLUDED_PROBE_FILES = {
@@ -441,6 +442,98 @@ const OLD_ITEMS = [
   {
     id: 'P-push-race-flat', name: '素材推送竞态(平铺布局 30 轮)', category: '探针', level: 'local', taskRef: '同上',
     tasks: [], covers: ['push-race-probe.mjs'], cmd: probe('push-race-probe', ['--port', DOC(0), '--rounds', '30', '--store', 'flat']), pass: { exit: 0 }, timeoutMin: 10,
+  },
+
+  /* ============================== G0-R 渲染附加项:渲染重构合入 main 后各块带来的探针(缺省不跑) ==============================
+   * 端口:都挂在 0.7.18 的端口段上(V = PC_V18_PORT_BASE,缺省 28990;串行用,不同时占);自己起编辑器的探针另占 +1、+2 当舞台端口。
+   * 用法与前提读各探针的文件头;带 {dist} 的要先有在线构建(运行器的 online-build 服务会建)。 */
+  {
+    id: 'RR-play-idle', name: '播放空闲(自己起编辑器)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['play-idle-probe.mjs'], cmd: probe('play-idle-probe', ['--port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-push-draw', name: '推帧只画一次(自己起编辑器)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['push-draw-probe.mjs'], cmd: probe('push-draw-probe', ['--port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-stage-gate', name: '舞台端口的闸:只放白名单(真编辑器、真舞台窗口)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['stage-gate-probe.mjs'], cmd: probe('stage-gate-probe', ['--port', P(0), '--shots', '{item}/shots']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-stream-origin', name: '轨道流:父页推流、舞台贴流的逐帧比像素(单卡流)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['dev'], covers: ['stream-origin-probe.mjs'], cmd: probe('stream-origin-probe', ['--origin', '{dev.origin}', '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-stream-origin-group', name: '轨道流:同上,组流', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['dev'], covers: ['stream-origin-probe.mjs'], cmd: probe('stream-origin-probe', ['--origin', '{dev.origin}', '--group', '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-stream-scrub-stage', name: '轨道流:暂停与拖动先解好、稀疏版往回找', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['dev'], covers: ['stream-scrub-stage-probe.mjs'], cmd: probe('stream-scrub-stage-probe', ['--origin', '{dev.origin}', '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-scrub-stream', name: '拖动时贴流再停下的活渲(自己起编辑器)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['scrub-stream-probe.mjs'], cmd: probe('scrub-stream-probe', ['--port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-sparse-stream', name: '稀疏版先于满密度、舞台换上满密度(自己起编辑器)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['sparse-stream-probe.mjs'], cmd: probe('sparse-stream-probe', ['--port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-stream-source', name: '轨道流的来源与稀疏版的分段、位置矩形(自己起编辑器)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['stream-source-probe.mjs'], cmd: probe('stream-source-probe', ['--port', P(0), '--host-port', P(5), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-stream-budget', name: '同屏轨道流超出解码器预算的表现(自己起编辑器)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['stream-budget-probe.mjs'], cmd: probe('stream-budget-probe', ['--port', P(0), '--host-port', P(5), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-stream-below-stage', name: '依赖下层的流:舞台逐帧比像素(三个场景)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['stream-below-stage-probe.mjs'], cmd: probe('stream-below-stage-probe', ['--port', P(0), '--host-port', P(5), '--media-port', P(6), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-below-late-lower', name: '依赖下层的流:下面的卡中途进场时流产得对不对', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['below-late-lower-probe.mjs'], cmd: probe('below-late-lower-probe', ['--port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-below-paste-editor', name: '依赖下层的卡贴轨道流:真的编辑器里的端到端', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['below-paste-editor-probe.mjs'], cmd: probe('below-paste-editor-probe', ['--port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-below-online-e2e', name: '在线页面读依赖下层的流的整条链(切分方产、甲乙两页读)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['online-build'], prereq: ['G0-4'], covers: ['below-online-e2e-probe.mjs'], cmd: probe('below-online-e2e-probe', ['--dist', '{dist}', '--base-port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-card-bitmap', name: '单张卡的画面是当场渲出的位图、不存 HTML(落盘核对与缓存命中)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['card-bitmap-probe.mjs', 'card-bitmap-probe.project.json'], cmd: probe('card-bitmap-probe', ['--port', P(0)]), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-lottie-cost', name: '当场算一帧 Lottie 的耗时(只记录)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['lottie-cost-probe.mjs'], cmd: probe('lottie-cost-probe', ['--port', P(0)]), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-lottie-browser-bake', name: '浏览器节点对 Lottie 卡当场生成快照的体积与耗时(只记录)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['online-build'], prereq: ['G0-4'], covers: ['lottie-browser-bake-probe.mjs'], cmd: probe('lottie-browser-bake-probe', ['--dist', '{dist}', '--port-base', P(0)]), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-lottie-online', name: 'Lottie 卡在在线页面的整条链(含像素比对)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['online-build'], prereq: ['G0-4'], covers: ['lottie-online-probe.mjs'], cmd: probe('lottie-online-probe', ['--dist', '{dist}', '--base-port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-online-export-modes', name: '在线浏览器导出的「快速导出」与「完整导出」', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['online-build'], prereq: ['G0-4'], covers: ['online-export-modes-probe.mjs'], cmd: probe('online-export-modes-probe', ['--dist', '{dist}', '--base-port', P(0), '--out', '{item}/o', '--shots', '{item}/shots']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-page-stream', name: '在线页面贴轨道流(solo / splitter / desk / mask / slow / lowmem 六场)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['online-build'], prereq: ['G0-4'], covers: ['page-stream-probe.mjs'], cmd: probe('page-stream-probe', ['--dist', '{dist}', '--base-port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-hosted-render-streams', name: '托管渲染的轨道流(渲染服务常驻工作进程)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], needs: ['online-build'], prereq: ['G0-4'], covers: ['hosted-render-streams-probe.mjs'], cmd: probe('hosted-render-streams-probe', ['--dist', '{dist}', '--base-port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
+    id: 'RR-online-stream-play', name: '在线页面起播轨道流(单卡与组流)', category: 'G0-R', level: 'local', taskRef: '渲染重构(渲染附加项,不是 0.7.18 38 行的依据)', optional: true,
+    tasks: [], covers: ['online-stream-play-probe.mjs'], cmd: probe('online-stream-play-probe', ['--base-port', P(0), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
   },
 
   /* ============================== 补充:其余仍可本机独立跑的现有探针(缺省不跑) ============================== */
