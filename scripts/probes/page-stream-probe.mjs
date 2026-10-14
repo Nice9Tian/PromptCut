@@ -1222,7 +1222,7 @@ async function lowStage(page) {
     if (!d) return null;
     const s = d.streams ?? {};
     return {
-      t: d.t ?? null, suppressed: d.suppressed ?? [], lowMemLive: d.lowMemLive ?? [], placeholders: d.placeholders ?? [], snapshots: d.snapshots ?? [],
+      t: d.t ?? null, suppressed: d.suppressed ?? [], lowMemLive: d.lowMemLive ?? [], settling: d.settling ?? [], placeholders: d.placeholders ?? [], snapshots: d.snapshots ?? [],
       planes: (d.streamPlanes ?? []).map((p) => p.clipIds.join()), heldBytes: s.heldBytes ?? 0, over: (s.over ?? []).map((o) => o.clipIds.join()), pushedBytes: s.pushed?.bytes ?? 0,
       tracks: (s.tracks ?? []).map((t) => ({ clips: String(t.id).split('#')[0].split(','), key: t.key ?? null, first: t.first === true, lastDrawn: t.lastDrawn, stride: t.stride ?? null,
         decoded: t.decoded, drawn: t.drawn, held: t.held, maxHeld: t.maxHeld, decoder: t.decoder, errors: t.errors, seeks: t.seeks, lastError: t.lastError || null })),
@@ -1314,7 +1314,11 @@ async function sceneLowmem(M) {
     };
     /** 这张卡的轨道在这些采样里:贴的是不是所在分段的第一帧 */
     const firstFrameCheck = (who, list, id, clipOrigin, { stride }) => {
-      const rows2 = list.map((s) => ({ f: Math.round((s.t ?? 0) * FPS), tr: trackOf(s, id), suppressed: s.suppressed.includes(id) })).filter((x) => x.tr && typeof x.tr.lastDrawn === 'number');
+      const all2 = list.map((s) => ({ f: Math.round((s.t ?? 0) * FPS), tr: trackOf(s, id), suppressed: s.suppressed.includes(id) })).filter((x) => x.tr && typeof x.tr.lastDrawn === 'number');
+      // 起播是从别处跳过来的:头几拍画布上留着跳之前的那一张(「留着上一张」,和普通档同一条规矩),等这一段的第一帧解出来才换。这几拍不算
+      const lead = all2.findIndex((x) => x.tr.lastDrawn <= x.f + 1);
+      const rows2 = lead < 0 ? [] : all2.slice(lead);
+      check(lead >= 0 && lead <= 4, `${who}:起播后几拍之内换上这一段的第一帧(之前留着跳转前的那一张)`, { lead, head: all2.slice(0, 5).map((x) => [x.f, x.tr.lastDrawn]) });
       const bad = rows2.filter((x) => (x.tr.lastDrawn - clipOrigin) % SEG !== 0 || x.tr.lastDrawn > x.f + 1 || x.f - x.tr.lastDrawn > SEG + 6);
       const brief = { samples: list.length, drawing: rows2.length, pictures: [...new Set(rows2.map((x) => x.tr.lastDrawn))], strides: [...new Set(rows2.map((x) => x.tr.stride))],
         decoded: rows2.length ? [rows2[0].tr.decoded, rows2.at(-1).tr.decoded] : null, seeks: rows2.at(-1)?.tr.seeks ?? null, errors: rows2.at(-1)?.tr.errors ?? null, maxHeld: Math.max(0, ...rows2.map((x) => x.tr.maxHeld)), bad: bad.slice(0, 4).map((x) => [x.f, x.tr.lastDrawn]) };
@@ -1359,6 +1363,9 @@ async function sceneLowmem(M) {
     const heapPage0 = await P(pageB, () => performance.memory?.usedJSHeapSize ?? null).catch(() => null);
     const densePlay = await sample(SEQ[0].start + 0.05, SEQ[1].start + 1.9);
     R.densePlay = firstFrameCheck('三 满密度', densePlay, clipA, origin, { stride: 1 });
+    const traceOf = async () => { const o = []; for (const f of stageFrames(pageB)) o.push(...(await f.evaluate(() => (window.__pcFallbackTrace ?? []).map((x) => x.workMs)).catch(() => []))); return o; };
+    const beatStats = (list) => ({ beats: list.length, p50: quant(list, 0.5), p95: quant(list, 0.95), max: quant(list, 1), over16: list.filter((x) => x > 16.7).length, over35: list.filter((x) => x >= 35).length });
+    const traceSingle = await traceOf();
     say('lowmem.densePlay', R.densePlay);
 
     /* ---------------- 四:比像素 —— 播放、暂停时贴的都是分段第一帧那一张 */
@@ -1380,27 +1387,68 @@ async function sceneLowmem(M) {
     }
     await store(pageB, `S.actions.pause(); return true;`);
     await delay(600);
-    // 暂停:停在第 3 段的中间(推帧卡追到这一帧要两秒多,追上之前画面由流给)
+    // 暂停:停在第 3 段的中间。推帧卡追到这一帧要两秒多;追的时候这一层不可见地画着(`settling`),画面由流给(流平面露着),追上才换成精确活渲
+    const streamHeld = (s) => !!s && (s.suppressed.includes(clipA) || s.settling.includes(clipA)) && !s.placeholders.includes(clipA);
     const pauseFrame = origin + 3 * SEG + 8;
     let pausedShot = null;
-    for (let round = 0; round < 6 && !pausedShot; round++) {
+    const pauseTrace = [];
+    for (let round = 0; round < 3 && !pausedShot; round++) {
       await pauseAt(pageB, SEQ[0].start + 0.1);
-      await delay(250);
+      await delay(600);
       await pauseAt(pageB, pauseFrame / FPS + 1e-4);
       const tp = Date.now();
-      while (Date.now() - tp < 1200 && !pausedShot) {
+      while (Date.now() - tp < 1500 && !pausedShot) {
         const s = await lowStage(pageB);
         const tr = trackOf(s, clipA);
-        if (s && tr?.lastDrawn === origin + 3 * SEG && s.suppressed.includes(clipA) && !s.lowMemLive.includes(clipA) && !s.placeholders.includes(clipA)) {
+        if (s) pauseTrace.push({ round, ms: Date.now() - tp, f: Math.round((s.t ?? 0) * FPS), lastDrawn: tr?.lastDrawn ?? null, sup: s.suppressed.includes(clipA), settling: s.settling.includes(clipA), live: s.lowMemLive.includes(clipA), ph: s.placeholders.includes(clipA) });
+        if (tr?.lastDrawn === origin + 3 * SEG && streamHeld(s)) {
           const shot = await stageShot(pageB, dir, 'lowmem-paused');
           const s2 = await lowStage(pageB);
-          if (shot && s2?.suppressed.includes(clipA) && !s2.lowMemLive.includes(clipA)) pausedShot = { shot, seg: 3, fb: 3 * SEG + 8, fa: 3 * SEG + 8, mode: 'paused' };
-        } else await delay(20);
+          if (shot && streamHeld(s2) && trackOf(s2, clipA)?.lastDrawn === origin + 3 * SEG) pausedShot = { shot, seg: 3, fb: 3 * SEG + 8, fa: 3 * SEG + 8, mode: 'paused' };
+        } else await delay(10);
       }
     }
-    check(!!pausedShot, '四:暂停在分段中间、还没追到精确画面时,截到流贴着的那一张');
+    // 停下以后:这一帧追到精确活渲(不再抑制、流平面藏起来)。这张卡是推帧卡,舞台追的时候主线程忙,问一次状态要等几百毫秒,所以截图不一定赶得上
+    const tSettle = Date.now();
+    const settled = await until('暂停后这一帧追到精确活渲', async () => { const s = await lowStage(pageB); return s && Math.round((s.t ?? -1) * FPS) === pauseFrame && s.lowMemLive.includes(clipA) && !s.suppressed.includes(clipA) && !s.settling.includes(clipA) ? s : null; }, 12_000, 50);
+    R.pause = { captured: !!pausedShot, samples: pauseTrace.length, settledWithinMs: settled ? Date.now() - tSettle : null, sawStreamHeld: pauseTrace.some((x) => x.f === pauseFrame && x.lastDrawn === origin + 3 * SEG && (x.sup || x.settling) && !x.ph),
+      head: pauseTrace.slice(0, 8), picture: pauseTrace.at(-1)?.lastDrawn ?? null };
+    say('lowmem.pause', R.pause);
+    check(R.pause.sawStreamHeld, '四:暂停后、还没追到精确画面时,这一层贴着流(流平面露着,解的是这一段的第一帧),不是占位符', R.pause);
+    check(!!settled, '四:停下以后这一帧追到精确活渲(流平面撤下)', R.pause);
+    check(!pauseTrace.some((x) => x.f === pauseFrame && x.ph), '四:暂停后没有闪过占位符', pauseTrace.filter((x) => x.ph).slice(0, 3));
     if (pausedShot) shots.push(pausedShot);
-    // 拖动:连着换几个位置(不松手),每一步落定后画着的是那一段的第一帧;全程不走寻帧(不重置解码器)
+    // 按住时间轴的标尺拖(真的鼠标):拖动中不追精确画面,这一层一直贴流。停在一个分段的中间截一张
+    let dragShot = null;
+    const ruler = await pageB.$('[data-pc="ruler"]');
+    const box = ruler ? await ruler.boundingBox() : null;
+    R.dragMouse = { ruler: !!box, steps: 0 };
+    if (check(!!box, '四:找到时间轴的标尺')) {
+      const y = box.y + box.height / 2;
+      await pageB.mouse.move(box.x + 6, y);
+      await pageB.mouse.down();
+      try {
+        for (let x = box.x + 8; x < box.x + box.width - 4 && !dragShot; x += 3) {
+          await pageB.mouse.move(x, y);
+          await delay(120);
+          R.dragMouse.steps++;
+          const tNow = await store(pageB, `return S.getState().t;`);
+          const off = Math.round(tNow * FPS) - origin;
+          if (off > 59) break;
+          if (off < 0 || off % SEG < 8 || off % SEG > 12) continue;
+          const first = origin + Math.floor(off / SEG) * SEG;
+          const hit = await until('拖动中这一层贴着所在分段的第一帧', async () => { const s = await lowStage(pageB); return trackOf(s, clipA)?.lastDrawn === first && s.suppressed.includes(clipA) && !s.placeholders.includes(clipA) && Math.round((s.t ?? -1) * FPS) === origin + off ? s : null; }, 3000, 25);
+          if (!hit) break;
+          const shot = await stageShot(pageB, dir, 'lowmem-drag');
+          const s2 = await lowStage(pageB);
+          if (shot && trackOf(s2, clipA)?.lastDrawn === first && s2.suppressed.includes(clipA) && !s2.lowMemLive.includes(clipA)) dragShot = { shot, seg: Math.floor(off / SEG), fb: off, fa: off, mode: 'drag' };
+        }
+      } finally { await pageB.mouse.up(); }
+      check(!!dragShot, '四:拖动中截到流贴着的那一张(这一层抑制着、没有在追精确画面)', R.dragMouse);
+      if (dragShot) shots.push(dragShot);
+      await delay(600);
+    }
+    // 连着跳几个位置:每一步落定后流的轨道解的是那一段的第一帧;全程不走寻帧(不重置解码器)
     const drag = [];
     await store(pageB, `S.actions.pause(); return true;`);
     for (const off of [52, 36, 20, 7, 41]) {
@@ -1409,7 +1457,7 @@ async function sceneLowmem(M) {
       drag.push({ off, picture: hit?.lastDrawn ?? null, seeks: hit?.seeks ?? null, decoded: hit?.decoded ?? null });
     }
     R.drag = drag;
-    check(drag.every((x) => x.picture === origin + Math.floor(x.off / SEG) * SEG && x.seeks === 0), '四:拖动时每一步贴的都是所在分段的第一帧,一次寻帧都没有', drag);
+    check(drag.every((x) => x.picture === origin + Math.floor(x.off / SEG) * SEG && x.seeks === 0), '四:连着跳时每一步解的都是所在分段的第一帧,一次寻帧都没有', drag);
     // 停下以后回到精确活渲(低内存档现有的规矩):再拿它当参照
     R.pixels = [];
     if (check(shots.filter((x) => x.mode === 'play').length >= 1, '四:播放中截到流在画的帧', shots.map((x) => ({ mode: x.mode, seg: x.seg, fb: x.fb })))) {
@@ -1443,8 +1491,7 @@ async function sceneLowmem(M) {
     check(R.stack.errors === 0, '五:没有解码错误', R.stack.errors);
 
     /* ---------------- 量:播放时每秒解几帧、舞台每拍多少毫秒、JS 堆与解码帧内存的峰值 */
-    const trace = [];
-    for (const f of stageFrames(pageB)) trace.push(...(await f.evaluate(() => (window.__pcFallbackTrace ?? []).map((x) => [x.sec, x.workMs])).catch(() => [])));
+    const traceStack = await traceOf();
     const decodedIn = (list) => { const byKey = (s) => Object.fromEntries(s.tracks.map((t) => [t.key, t.decoded ?? 0])); let n = 0; for (let i = 1; i < list.length; i++) { const p0 = byKey(list[i - 1]), p1 = byKey(list[i]); for (const k of Object.keys(p1)) n += Math.max(0, p1[k] - (p0[k] ?? 0)); } return n; };
     const secs = (list) => (list.length > 1 ? (list.at(-1).at - list[0].at) / 1000 : 0);
     const heapStage = [...densePlay, ...stackPlay].map((s) => s.heap).filter((x) => typeof x === 'number');
@@ -1452,12 +1499,16 @@ async function sceneLowmem(M) {
     R.measured = {
       single: { seconds: +secs(densePlay).toFixed(2), decoded: decodedIn(densePlay), perSecond: secs(densePlay) ? +(decodedIn(densePlay) / secs(densePlay)).toFixed(2) : null, heldBytesMax: Math.max(0, ...densePlay.map((s) => s.heldBytes)) },
       stack: { seconds: +secs(stackPlay).toFixed(2), decoded: decodedIn(stackPlay), perSecond: secs(stackPlay) ? +(decodedIn(stackPlay) / secs(stackPlay)).toFixed(2) : null, heldBytesMax: R.stack.heldBytesMax, pushedBytesMax: R.stack.pushedBytesMax },
-      beatMs: { beats: trace.length, p50: quant(trace.map((x) => x[1]), 0.5), p95: quant(trace.map((x) => x[1]), 0.95), max: quant(trace.map((x) => x[1]), 1) },
+      beatMs: { single: beatStats(traceSingle), stack: beatStats(traceStack) },
       heapMB: { stageMax: heapStage.length ? +(Math.max(...heapStage) / 1048576).toFixed(1) : null, pageBefore: heapPage0 ? +(heapPage0 / 1048576).toFixed(1) : null, pageAfter: heapPage1 ? +(heapPage1 / 1048576).toFixed(1) : null },
     };
     say('lowmem.measured', R.measured);
     check(R.measured.single.perSecond !== null && R.measured.single.perSecond <= (FPS / SEG) * 1.6, '量:单条流播放时每秒解的帧数约等于每秒的分段数(30 帧的项目是 2)', R.measured.single);
     check(R.measured.stack.perSecond !== null && R.measured.stack.perSecond <= 4 * (FPS / SEG) * 1.6, '量:四条流同屏每秒解的帧数约等于 4 × 2', R.measured.stack);
+    // 这几张卡一帧要算 40 毫秒:哪一拍到了 35 毫秒,就是有重卡的活组件在这一拍里跑了。低内存档播放时重卡不活渲 —— 例外只有跳过来起播的头一拍、
+    // 卡入场的那一两拍(父页的抑制比舞台的节拍晚到一步;这一条和贴不贴流无关),所以这样的拍只许零星几拍,不许连着出现
+    check(traceStack.length >= 20 && R.measured.beatMs.stack.p95 < 16.7 && R.measured.beatMs.single.p95 < 16.7 && R.measured.beatMs.stack.over35 <= 2 && R.measured.beatMs.single.over35 <= 4,
+      '量:播放中舞台每拍的耗时第 95 百分位在一帧以内,活渲到重卡的只有起播、卡入场的零星几拍(不等流的第一帧)', R.measured.beatMs);
 
     /* ---------------- 六:没有流的卡 —— 甲下线,乙自己加一张卡:没有谁产它的流,播放时占位符;乙不产流、不当节点 */
     try { await ctxA.close(); } catch { /* 已关 */ }
