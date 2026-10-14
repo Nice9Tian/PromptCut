@@ -534,6 +534,13 @@ const newGlCanvas = (): GlCanvas | null => {
  * `bitmaprenderer`:后者每次交出去都要给离屏画布重新分配一块后备缓冲,各平面尺寸不同还得每帧改离屏画布的尺寸;
  * 2D 取走是显卡上的一次拷贝,离屏画布只长不缩。画面与每块平面一个上下文时逐像素相同(同一份报告第 4 节,差 0):
  * 离屏画布按预乘色输出(`premultipliedAlpha: true`),2D 画布内部存的也是预乘色,先清空再一比一不缩放地画上去,数值原样过去。
+ * 离屏画布不留绘图缓冲(`preserveDrawingBuffer: false`):每次都是先把要的那一块整块画满、同一个任务里当场取走,用不着留;
+ * 留着的话每次取走都多一份拷贝(`scripts/probes/stream-budget-probe.mjs` 量的:同屏 30 条小卡流每拍 4.2 毫秒对 3.1 毫秒)。
+ *
+ * 代价(同一支探针,30 帧每秒、704×864 的小卡流,每拍 `present` 的平均毫秒,前面是每块平面一个上下文):1 条 0.29 对 0.27,
+ * 6 条 0.63 对 0.76,16 条 1.46 对 2.33;30 条时原来的画法丢 14 个上下文、14 块平面是空的,共用以后 30 块都画、3.13。
+ * 折下来每条流每拍多 0.03～0.05 毫秒(多出来的是离屏画布到 2D 画布那一次取走)。还能省:一拍里的各条先画进一张图集、
+ * 再一起取走(同一份报告量的那种画法,每拍基本不多花),没有做。
  *
  * 上下文丢了(显卡进程重启、名额被别的画布挤掉):平面的 2D 画布不受影响,上一张画面还在;这期间新的一帧画不上,
  * 照「这一拍画不出来」办(留着上一张、到时占位符)。浏览器还回来(`webglcontextrestored`)就重建着色器和纹理;
@@ -607,7 +614,7 @@ class SharedGl {
     if (this.failedAt !== null && now - this.failedAt < GL_RETRY_MS) return null;
     try {
       const canvas = newGlCanvas();
-      const gl = canvas?.getContext("webgl", { premultipliedAlpha: true, alpha: true, preserveDrawingBuffer: true, antialias: false }) as WebGLRenderingContext | null;
+      const gl = canvas?.getContext("webgl", { premultipliedAlpha: true, alpha: true, preserveDrawingBuffer: false, antialias: false }) as WebGLRenderingContext | null;
       if (!canvas || !gl) throw new Error("轨道流拿不到 WebGL 上下文");
       this.setup(gl);
       const target = canvas as unknown as Partial<EventTarget>;
