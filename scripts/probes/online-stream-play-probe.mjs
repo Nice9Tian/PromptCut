@@ -307,6 +307,7 @@ const pauseAt = (page, t) => store(page, `S.actions.pause(); S.actions.seek(args
 const pageT = (page) => store(page, `const s = S.getState(); return { t: s.t, playing: !!s.playing };`).catch(() => null);
 
 /** 暂停在 `sec`、等两张卡追到精确活渲(不抑制、没有快照、没有占位符、流平面撤了),截一张 */
+/* 停着时流轨道可能还留着(「暂停和拖动贴流」之后),所以不再等轨道撤掉;判据看这几张卡的包裹层没被抑制、露着精确活渲(同 page-stream-probe 的 liveShot) */
 async function liveShot(page, ids, sec, name) {
   // 先停下、等舞台报完最后一拍,再放播放头:刚从播放停下的那一下,舞台回报的时刻会盖掉同一刻发的 seek
   await store(page, `S.actions.pause(); return true;`);
@@ -318,7 +319,7 @@ async function liveShot(page, ids, sec, name) {
     while (Date.now() - t0 < 8000 && !ok) {
       const s = await stageState(page, ids);
       last = s ? { t: s.t, tracks: s.tracks.length, clips: Object.fromEntries(ids.map((id) => [id, s.clips[id] ? { suppressed: s.clips[id].suppressed, snapshot: s.clips[id].snapshot, placeholder: s.clips[id].placeholder } : null])) } : null;
-      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && !s.tracks.length
+      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS
         && ids.every((id) => s.clips[id]?.wrapper && !s.clips[id].suppressed && !s.clips[id].snapshot && !s.clips[id].placeholder)) ok = s;
       else await sleep(100);
     }

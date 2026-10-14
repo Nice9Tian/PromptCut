@@ -359,6 +359,8 @@ function colorsOf(png) {
   const n = png.width * png.height;
   return { orange: +(orange / n).toFixed(5), white: +(white / n).toFixed(5) };
 }
+/* 停着时这张卡的流轨道可能还留着(「暂停和拖动贴流」之后:播放头下这一帧先解好、留着等换满密度),所以不再等轨道撤掉;
+ * 判据看包裹层没被抑制、露着精确活渲(同 page-stream-probe 的 liveShot) */
 async function liveShot(page, id, sec, name) {
   await store(page, `S.actions.pause(); return true;`);
   await delay(500);
@@ -369,7 +371,7 @@ async function liveShot(page, id, sec, name) {
     while (Date.now() - t0 < 8000 && !ok) {
       const s = await stageState(page, id);
       last = s ? { t: s.t, tracks: s.tracks.length, clip: { suppressed: s.clip.suppressed, snapshot: s.clip.snapshot, placeholder: s.clip.placeholder } } : null;
-      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && !s.tracks.length && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
+      if (s && Math.abs((s.t ?? -1) - sec) <= 0.5 / FPS && s.clip.wrapper && !s.clip.suppressed && !s.clip.snapshot && !s.clip.placeholder) ok = s;
       else await delay(100);
     }
   }
