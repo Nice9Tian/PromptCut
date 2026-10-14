@@ -18,7 +18,8 @@
  * # 页面只算哪些流
  *
  * 只算单卡流,而且只算切分方会给浏览器出一份的那些(`browser-stream-task.md` 第一处):共享档(有状态的卡)、独立卡、
- * 不是画布卡、框不带三维、序列没有隐藏。清单里的卡超过解码器预算时照切分方同一个办法合并(`groupStreams`),
+ * 不是画布卡、框不带三维、序列没有隐藏。清单里的卡超过解码器预算时照切分方同一个办法合并(`groupStreams`;切分方另出、页面不产的
+ * 两种流——单独成流的两类卡、依赖下层的流——照同一份判据 `render/streamPlanRules.mjs` 算进预算),
  * 并进组流的卡页面不产(组流浏览器画不了)。另有两条比切分方更紧的(〔裁〕,见 `browser-stream-task.md`「本页产流」):
  * 只算页面自带的内置卡片(源码版本以 `builtin:` 开头;同步来的用户卡的源码版本页面一侧算不准,算错了改卡以后键不变),
  * 只算输出节点就是这张卡自己的片段(片段上另挂了滤镜、强调时输出节点是外面那一层,键里没有卡的参数)。
@@ -31,6 +32,7 @@ import { resolveFrameSize } from "../kernel/frameSize.mjs";
 import { mountFrameOf } from "../render/frameWindow.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 import { isStreamOrigin, streamSegmentFrameCount, streamSegmentSpan } from "../render/streamSegments.mjs";
+import { belowTargets, frame3d, soloStreamKind, streamEligible } from "../render/streamPlanRules.mjs";
 import { groupStreams, localStreamPixels, stageStreamPixels, streamCost, STREAM_COUNT_BUDGET, type StreamBudget, type StreamGroupItem } from "../render/streamBudget.mjs";
 import type { NodeTask, StreamTaskInput } from "./browserNode.ts";
 
@@ -331,25 +333,6 @@ export interface PageStreamSpec {
   bake: { start: number; end: number; count: number; sampling: CardSampling };
 }
 
-const frame3d = (frame: Record<string, any> | undefined) => !!(frame?.rotateX || frame?.rotateY || frame?.translateZ);
-
-/**
- * 切分方会不会给这张卡**单独成流**(与服务端 `frame-stream.mjs` 的 `soloStreamKind` 同一个判据):源依赖卡
- * (审阅表写了 `sourceDependent`;或没审阅过而片段挂着接了输入的素材效果卡节点),和外框用了三维变形的独立卡。
- * 这两类页面自己不产(源依赖卡要解素材、执行素材效果卡;三维外框的卡浏览器取像素的那条路没有验过),切分也不给浏览器出;
- * 但它们各占一个解码器,算合并时要照切分方算进去,不然两边对「哪几张并进了组流」会说不到一起。
- */
-function serverSoloStream(project: Record<string, any>, control: PageControl, clip: AnyClip): boolean {
-  if (control.compositing === "sourceDependent") return true;
-  if (control.compositing === "independent") return frame3d(clip.frame);
-  if (control.compositing === "belowDependent") return false;
-  const raw = project?.cardNodes;
-  const nodes: Record<string, any>[] = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? Object.values(raw) : [];
-  const node = typeof clip.nodeId === "string" && clip.nodeId ? nodes.find((n) => n?.id === clip.nodeId) : null;
-  if (!node || node.adapter !== "card" || node.kind === "audio") return false;
-  return !!node.inputs && typeof node.inputs === "object" && Object.keys(node.inputs).length > 0;
-}
-
 /** 为什么这张卡页面不产流(诊断用);能产回 null */
 export function pageStreamBlock(control: PageControl, at: { clip: AnyClip; track: AnyTrack } | undefined, sourceVersions: Readonly<Record<string, string>>): string | null {
   if (!at) return "no-clip";
@@ -404,20 +387,20 @@ export async function planPageStreams(o: {
   const skipped: Record<string, string> = {};
   // 进不进流照切分方的判据(`streamEligible`);合并也照它:预算按「清单里全部进流的卡」算,不只按页面能产的那几张
   const singles: (Single & { control: PageControl; clip: AnyClip })[] = [];
-  // 切分方单独成流的两类卡(`serverSoloStream`):页面不产,只算进解码器预算
+  // 切分方另出的两种流页面不产,只照切分方同一份判据(`render/streamPlanRules.mjs`)算进解码器预算:
+  // 单独成流的两类卡(`soloStreamKind`,按它的单卡流矩形算开销)、依赖下层的流(`belowTargets`,按整幅画面算开销)
   const fixed: { from: number; to: number; cost: number }[] = [];
-  const fixedSeen = new Set<string>();
-  for (const control of pageControls(project, value)) {
+  const soloSeen = new Set<string>();
+  const controls = pageControls(project, value);
+  for (const control of controls) {
     if (!listed.has(control.clipId)) continue;
     const at = where.get(control.clipId);
-    if (!at || at.track.hidden || at.track.sourceOnly || !at.clip.cardId || control.compositing !== "independent" || frame3d(at.clip.frame)
-      || !Number.isInteger(control.count) || control.count <= 0) {
+    if (!at || !streamEligible(control, at.clip, at.track)) {
       skipped[control.clipId] = pageStreamBlock(control, at, value.sourceVersions ?? {}) ?? "not-eligible";
-      if (at && !at.track.hidden && !at.track.sourceOnly && at.clip.cardId && Number.isInteger(control.count) && control.count > 0
-        && !fixedSeen.has(control.clipId) && serverSoloStream(project, control, at.clip)) {
+      if (at && !soloSeen.has(control.clipId) && soloStreamKind(control, at.clip, at.track, project)) {
         const first = control.sampling.firstFrame;
         const last = Math.min(total - 1, first + control.count - 1);
-        if (last >= first) { fixedSeen.add(control.clipId); fixed.push({ from: Math.min(mountFrameOf(at.clip, fps), first), to: last, cost: streamCost(localStreamPixels(at.clip.frame, stage), fps) }); }
+        if (last >= first) { soloSeen.add(control.clipId); fixed.push({ from: Math.min(mountFrameOf(at.clip, fps), first), to: last, cost: streamCost(localStreamPixels(at.clip.frame, stage), fps) }); }
       }
       continue;
     }
@@ -430,7 +413,10 @@ export async function planPageStreams(o: {
   }
   singles.sort((a, b) => a.order - b.order);
   const byClip = new Map(singles.map((s) => [s.clipIds[0], s]));
-  const grouped = groupStreams(singles, layers, o.budget, fixed, streamCost(stageStreamPixels(stage), fps));
+  const stageCost = streamCost(stageStreamPixels(stage), fps);
+  // 依赖下层的流:切分方缺省出(`belowStreamsEnabled`,环境变量只在预渲染进程那一侧能关),页面照缺省算
+  for (const b of belowTargets(controls, { picked: (id) => listed.has(id), where, fps, total, orderOf, taken: soloSeen })) fixed.push({ from: b.from, to: b.to, cost: stageCost });
+  const grouped = groupStreams(singles, layers, o.budget, fixed, stageCost);
   const codeVersion = streamCodeVersion(codes);
   const environment = (value.environment ?? {}) as Record<string, unknown>;
   const specs: PageStreamSpec[] = [];

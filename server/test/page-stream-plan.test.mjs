@@ -257,6 +257,75 @@ test('PSP-07b 切分方单独成流的两类卡(三维外框的独立卡、源�
   assert.ok(merged >= 3, '有几档预算是靠算上这两条才合并的');
 });
 
+/** 两边的单卡流集合(切分方给浏览器出的那一种:平面独立卡的单卡流)逐条比:片段与内容键都相同 */
+async function assertParity(project, value, clips, opts = {}, label = '') {
+  const server = serverSide(project, value, clips, opts);
+  const page = await pageSide(project, value, clips, opts.budget === undefined ? {} : { budget: opts.budget });
+  const want = server.specs.filter(s => s.kind === 'card' && !s.solo).map(s => `${s.topClipId}:${s.contentKey}`).sort();
+  const got = page.specs.map(s => `${s.topClipId}:${s.contentKey}`).sort();
+  assert.deepEqual(got, want, `${label}:页面的单卡流与切分方的相同`);
+  for (const s of server.specs.filter(s => s.kind === 'group')) for (const id of s.clipIds) assert.equal(page.skipped[id], 'grouped', `${label}:${id} 两边都并进了组流`);
+  return { server, page };
+}
+
+/** 4K、60 帧;六张满屏的平面独立卡同时在画,最上面再压 `extra` 几条序列 */
+const crowded = (extra = [], more = {}) => projectOf([
+  ...extra,
+  ...[1, 2, 3, 4, 5, 6].map(n => ({ id: `t-${n}`, clips: [clip(`f-${n}`, n % 2 ? 'punch-pill' : 'focus-card', 0, 3)] })),
+], { width: 3840, height: 2160, fps: 60, duration: 4, ...more });
+
+test('PSP-11 复现:依赖下层的流占预算,页面要算上(4K 60 帧,六张满屏独立卡 + 一张依赖下层的卡)', async () => {
+  // 七条流同屏:超过不看像素的 6 条,4K 满屏的像素远超预算 → 切分方要并;页面若不算依赖下层的那一条,只看到 6 条,一张都不并
+  const project = crowded([{ id: 't-below', clips: [clip('below', 'terminal-3d', 0, 3)] }]);
+  const value = valueOf(project);
+  const clips = ['below', 'f-1', 'f-2', 'f-3', 'f-4', 'f-5', 'f-6'];
+  const { server, page } = await assertParity(project, value, clips, {}, '4K 七条');
+  assert.ok(server.specs.some(s => s.kind === 'below' && s.topClipId === 'below'), '切分方给依赖下层的卡出了一条流');
+  assert.ok(server.specs.some(s => s.kind === 'group'), '切分方并出了组流');
+  assert.ok(page.specs.length < 6, '页面也少出了并进组流的那几张');
+  assert.equal(page.skipped.below, 'not-independent');
+});
+
+test('PSP-12 对拍:一组有代表性的项目,页面的单卡流与切分方的逐条相同', async () => {
+  const fxNode = { id: 'n-fx', adapter: 'card', cardId: 'user-fx', kind: 'filter', params: {}, inputs: { source: { nodeId: '@clip/fx/source', offset: 0, rate: 1 } } };
+  const versions = { 'punch-pill': 'builtin:a', 'focus-card': 'builtin:e', 'terminal-3d': 'builtin:d', 'user-fx': 'user:x' };
+  const cases = [
+    // 少于 6 条
+    ['1080p 三条', BASIC(), ['clip-a', 'clip-b', 'clip-c'], null],
+    // 多于 6 条、1080p:七张满屏独立卡,第 7 条起看像素
+    ['1080p 七条', projectOf([1, 2, 3, 4, 5, 6, 7].map(n => ({ id: `t-${n}`, clips: [clip(`f-${n}`, 'punch-pill', 0, 3)] })), { fps: 60 }), null, null],
+    // 高画幅、少于 6 条(不看像素,一张都不并)
+    ['4K 六条', crowded(), null, null],
+    // 带依赖下层的卡(两张,一张外框带三维:同样出依赖下层的流)
+    ['4K 依赖下层两张', crowded([
+      { id: 't-b1', clips: [clip('below', 'terminal-3d', 0, 3)] },
+      { id: 't-b2', clips: [clip('below3d', 'terminal-3d', 1, 2, { frame: { x: 0, y: 0, w: 400, h: 300, rotateX: 20 } })] },
+    ]), null, null],
+    // 带三维外框的独立卡(单独成流)
+    ['4K 三维外框', crowded([{ id: 't-3d', clips: [clip('threed', 'punch-pill', 0, 3, { frame: { x: 0, y: 0, w: 800, h: 600, rotateY: 30 } })] }]), null, null],
+    // 带源依赖卡(接了输入的素材效果卡,没审阅过)
+    ['4K 源依赖卡', crowded([{ id: 't-fx', clips: [clip('fx', 'user-fx', 0, 3, { nodeId: 'n-fx', mediaId: 'm1' })] }],
+      { media: [{ id: 'm1', kind: 'video', hash: 'h1', url: '/@media/h1' }], cardNodes: [fxNode] }), null, versions],
+    // 三样都有,1080p 小卡多条
+    ['1080p 混合', projectOf([
+      { id: 't-below', clips: [clip('below', 'terminal-3d', 0, 3)] },
+      { id: 't-3d', clips: [clip('threed', 'punch-pill', 0, 3, { frame: { x: 0, y: 0, w: 200, h: 200, rotateY: 30 } })] },
+      { id: 't-fx', clips: [clip('fx', 'user-fx', 0, 3, { nodeId: 'n-fx', mediaId: 'm1' })] },
+      ...[1, 2, 3, 4, 5, 6].map(n => ({ id: `t-${n}`, clips: [clip(`f-${n}`, 'focus-card', 0, 3)] })),
+    ], { fps: 60, media: [{ id: 'm1', kind: 'video', hash: 'h1', url: '/@media/h1' }], cardNodes: [fxNode] }), null, versions],
+  ];
+  let grouped = 0;
+  for (const [label, project, listed, sourceVersions] of cases) {
+    const value = valueOf(project, sourceVersions);
+    const clips = listed ?? project.tracks.flatMap(t => t.clips.map(c => c.id));
+    for (const budget of [undefined, 3]) {
+      const { server } = await assertParity(project, value, clips, budget === undefined ? {} : { budget }, `${label} 预算 ${budget ?? '缺省'}`);
+      if (server.specs.some(s => s.kind === 'group')) grouped++;
+    }
+  }
+  assert.ok(grouped >= 4, `有几种项目两边都并了组流(${grouped})`);
+});
+
 test('PSP-08 不产的卡', async () => {
   const project = plain([
     { id: 't-ok', clips: [clip('ok', 'punch-pill', 0, 1)] },
