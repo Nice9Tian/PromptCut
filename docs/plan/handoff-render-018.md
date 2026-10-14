@@ -5,7 +5,7 @@
 ## 1. 为什么停、现在在哪
 
 - **停的原因**：周额度到线（开工指令「什么时候停」第 5 条：用到 90% 不再派子 Agent、各分支提交并推送、写交接文档、停下等用户重新开工）。2026-10-14 11:30 是 90% 上下，额度 2026-10-19 10:00（日本时间）重置。
-- **`main`**：`1acf25c4`（之后只有本文和两份进度文件的文档提交），已推送，主工作区干净。`release` 仍指向 0.7.17（`073c8cca`），0.7.18 没有发。
+- **`main`**：`6474b669`（之后只有本文和两份进度文件的文档提交），已推送，主工作区干净。`release` 仍指向 0.7.17（`073c8cca`），0.7.18 没有发。
 - **没有在跑的子 Agent**，没有残留的后台进程。节点上没有留下临时东西，生产服务没动过（上一次核对主进程号是 279515、279516、279517）。VisuHive 仓库在 `main`、干净；本机分支 `claude/v18-logout-text`（`25ecb2e`）没推送，部署时用。
 - 两份进度文件（`render-refactor-progress.md`、`three-versions-progress.md`）记到今天 06:00 的合入；之后合入的六块只记在本文第 2、3 节，接手后第一件事是把它们补进进度文件。
 
@@ -100,7 +100,7 @@
 6. **部署前要验**：舞台端口的白名单只放行路径里带 `/node_modules/` 的依赖。托管渲染服务把开发服务器的预构建缓存目录另设了（`PROMPTCUT_VITE_CACHE_DIR`，`server/hosted-render/main.mjs`）；它的工作进程要是经舞台端口取依赖，舞台会空白。桌面版不设这个变量，不受影响。跑一遍 `hosted-render-streams-probe` 和 `render-host-probe` 就知道。
 7. **满密度流任务偶尔卡在最后一个短分段**（做完 75 帧后 120 秒无进度被收回，机器占满时见到三次）。没查清是机器忙还是产流一侧的事。出处 `AGENT-rr-below-online.md`。
 8. `BELOW_DISCARD_SHOT`（下层三的局部修法）在推帧补画合入以后多余了，留着没删，两处不打架。`AGENT-rr-below-paste.md` 第 11.2 节说的根因（「上面压着别的卡」）不对，以 `AGENT-rr-push-draw.md` 为准。
-9. `online-stream-play-probe` 的 S6 在 `main` 上不过，查下来是产品问题：组流起播后约 170 毫秒里，流已经在画、两张卡也已被抑制，占位符却还显示着（「这一帧快照没到」的判据不看流在不在画，怀疑在 `src/render/placeholderHost.ts`）。和兜底顺序「流在画就不该显示占位符」冲突。撤快照时等快照的这段逻辑会一并删掉，届时复核。出处 `docs/reports/AGENT-v18-accept-reg.md`。
+9. `online-stream-play-probe` 的 S6（组流起播后约 170 毫秒里，流已经在画，占位符却还盖在上面）已修：`6474b669`。原因是「这一帧快照没到」的判据不看流在不在画；改成这张卡的流这一拍在画就不显示占位符。这支探针在 `main` 上现在全过。
 10. 机器占满时偶发失败的测试，今天又见到的：`cloud-tools-p4-subject`（`subject_install` 一条，`main` 上三遍过两遍）、`asset-project-workers`、`c66-integ`、`cloud-agent-scope`、`multi-agent-presence`、`move-guard`、`codex-auth-state`、`account-page-link`、`account-worker-lifecycle`、`account-op-resend`、`account-runner-process`。每次都单独重跑确认过。
 11. **`hosted-render-streams-probe` 在 `main` 上退出码 1，是探针的判据过时了**：它等「暂停后流的轨道撤掉」才截参照图，而「暂停和拖动也贴流」合入以后轨道本来就留着（`page-stream-probe` 已经改过同一处，改成看包裹层没被抑制）。2026-10-14 在 `main` 上跑过：渲染服务起得来、产得出流、页面看得到，所以舞台端口的白名单没有碰坏托管渲染那条路（第 6 条的担心在本机验过了，节点上部署后再看一眼）。
 12. **在线页面和切分方算预算时可能判得不一样**：`src/online/pageStreamPlan.ts` 的 `planPageStreams` 算同屏流的预算时没把依赖下层的流算进去，切分方算了（原有的，不是今天引入的）。同屏超过预算时两边并组流的结果可能不一致。出处 `AGENT-rr-below-3d.md`、`AGENT-rr-pixel-budget.md`。
