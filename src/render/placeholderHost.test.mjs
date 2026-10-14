@@ -9,7 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  applyPlaceholders, geometryFor, hideAllPlaceholders, noteInkBox, placeholdersEnabled, placeholderWanted,
+  applyPlaceholders, geometryFor, hideAllPlaceholders, noteInkBox, placeholdersEnabled, placeholderWanted, keepTopOfGroups,
   resetPlaceholderGeometry, setCatchingUpClips, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders,
   PLACEHOLDER_SLOT_ATTR, setLocalOnlyConfirmed, localOnlyConfirmed, localOnlyReason,
 } from "./placeholderHost.ts";
@@ -56,6 +56,22 @@ test("T2 等快照、T3 不可见追帧(没有快照垫着时)、T4 等后台补
   assert.equal(w.get("st"), "catching-up");
   assert.equal(w.has("st-snap"), false, "追帧期间快照平面照常显示(`.pc-settling` 只藏子树)");
   setCatchingUpClips([]);
+});
+
+test("T2:这张卡的流这一拍在画(单卡流、组流的每个成员)就不显示;流没画、快照没到照旧显示;超出预算不发流的层照旧显示", () => {
+  // 组流起播:两张卡都被抑制、都在等这一帧的快照,组流已经在画(`showingClips` 把组流算到每个成员头上)
+  const drawing = placeholderWanted({ ...base, suppressed: set("a", "b"), awaiting: set("a", "b"), streamShowing: set("a", "b") });
+  assert.equal(drawing.size, 0, "流在画:不显示占位符");
+  // 只有 a 的流在画:b 的流没画、快照也没到,照旧显示
+  const half = placeholderWanted({ ...base, suppressed: set("a", "b"), awaiting: set("a", "b"), streamShowing: set("a") });
+  assert.deepEqual([...half], [["b", "awaiting"]]);
+  // 没被抑制(暂停着放播放头)也一样按流在不在画判
+  assert.equal(placeholderWanted({ ...base, awaiting: set("a"), streamShowing: set("a") }).size, 0);
+  assert.equal(placeholderWanted({ ...base, awaiting: set("a") }).get("a"), "awaiting");
+  // 超出预算的层没有轨道,不在 streamShowing 里:被抑制的显示(T1),在等快照的显示(T2);同一组只留最上面那张
+  const over = placeholderWanted({ ...base, suppressed: set("o1", "o2", "s"), awaiting: set("o2", "s"), streamShowing: set("s") });
+  assert.deepEqual([...over], [["o1", "no-data"], ["o2", "awaiting"]]);
+  assert.deepEqual([...keepTopOfGroups(over, [["o1", "o2"]])], [["o2", "awaiting"]]);
 });
 
 test("显隐只切槽位的 hidden;上一拍显示着、这一拍不要的关掉", () => {
