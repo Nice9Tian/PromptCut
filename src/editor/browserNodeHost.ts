@@ -82,7 +82,7 @@
  * `window.__pcBrowserNode()`:资格与原因、节点状态与计数(`browserNode.ts` 的 `debug()`)、推了几块 / 跳过几块 / 多少字节、
  * 小尺寸几帧、舞台每帧耗时 p50 / p95 与被门挡住的时长、连接状态、最近一次错误;`pageStreams` 是本页产流的状态与计数。
  */
-import { alphaBoxOf, browserNodeEligibility, createBrowserNode, isSparseStreamTask, mergeStreamManifest, streamManifest, streamManifestBlocks, streamManifestCovers, streamTaskFrames, streamTaskStride,
+import { alphaBoxOf, browserNodeEligibility, createBrowserNode, isChromiumUserAgent, isSparseStreamTask, mergeStreamManifest, streamManifest, streamManifestBlocks, streamManifestCovers, streamTaskFrames, streamTaskStride,
   BROWSER_STREAM_ENCODER,
   type BrowserNode, type EligibilityInput, type FrameRecord, type NodeTask, type StreamInitMeta, type StreamManifestOut, type StreamRectLike, type StreamSegmentMeta } from "../online/browserNode";
 import { openStreamEncoder, probeStreamEncoder } from "../render/streamEncode";
@@ -94,7 +94,7 @@ import { startNodeCardInfoLive } from "./nodeCardInfoLive";
 import { pageEnvironment } from "./pageEnvironment.mjs";
 import { backWorkDiag } from "./backWorkGate";
 import { runBackJob, urgentBackJobs } from "./stageJobs";
-import { backStage, onStageEvent, pushProject } from "./stageBridge";
+import { backRole, backStage, frontStage, onStageEvent, pushProject } from "./stageBridge";
 import { getState, subscribe } from "../store/project";
 import { isScrubbing, subscribeScrub } from "./timeline/useScrub";
 import { docRequest, remoteAssetBase } from "./media/assetTiers";
@@ -190,6 +190,8 @@ export interface BrowserNodeHostDeps {
   heavyClips?: () => readonly string[];
   /** 测量时就产稀疏版:此刻文档服务确认的那一版项目与版本号;没有回 null */
   confirmed?: () => { rev: number; project: Project } | null;
+  /** 单舞台下产流后恢复前台舞台抑制与流平面 */
+  restore?: () => void;
 }
 
 /**
@@ -376,8 +378,33 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     }
     return w;
   };
+  let singleStageBaking = false;
+  const restoreFrontFromBake = async () => {
+    if (!singleStageBaking && backRole() !== "front") return;
+    singleStageBaking = false;
+    const stage = frontStage();
+    if (stage) {
+      try { await stage.setRole("front"); } catch { /* ignore */ }
+      try { await pushProject("front", getState().project, { reset: true }); } catch { /* ignore */ }
+    }
+    try { deps.restore?.(); } catch { /* ignore */ }
+  };
+
   const streamBaker = createStageBaker({
-    runBackJob: (kind, run) => runBackJob(kind, (ctx) => run({ ...ctx, stage: withPixels(ctx.stage)! })),
+    runBackJob: (kind, run) => runBackJob(kind, async (ctx) => {
+      const single = backRole() === "front";
+      if (single) {
+        singleStageBaking = true;
+        try { await ctx.stage.setRole("back", { job: "bake" }); } catch { /* ignore */ }
+      }
+      try {
+        return await run({ ...ctx, stage: withPixels(ctx.stage)! });
+      } finally {
+        if (single) {
+          await restoreFrontFromBake();
+        }
+      }
+    }),
     backStage: () => withPixels(backStage()),
     pushProject,
     // 位图不进活的事件表(它最多留 16 条、不关位图):这里另存,交给它的事件不带位图
@@ -400,7 +427,14 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
   });
 
   /** 交还流任务那一份活:停掉在推的帧、关掉还没用的位图 */
-  const closeStreamLease = () => { streamBaker.close(); dropPixels(); pixelRectNow = null; };
+  const closeStreamLease = () => {
+    streamBaker.close();
+    dropPixels();
+    pixelRectNow = null;
+    if (singleStageBaking) {
+      void restoreFrontFromBake();
+    }
+  };
 
   /**
    * `stride`:每几帧向舞台取一张。大于 1 时取到的那一张连着送 `stride` 次(分段的样本数不变),清单里这一段记这个 `stride`。
@@ -717,6 +751,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       return s === "open" || s === "claimed" || s === "done" || s === "failed" ? (s as PlanState) : "none";
     },
     codeVersion: deps.eligibility().codeVersion ?? null,
+    lowMemory: () => deps.eligibility().lowMemory === true,
+    waitMs: deps.eligibility().lowMemory ? 0 : undefined,
     specs: async (plan) => {
       const project = kept.get(plan.projectRev) ?? null;
       const fp = node?.envFingerprint ?? null;
@@ -882,8 +918,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     node = createBrowserNode({
       nodeId, projectId, userId: me().userId ?? "", codeVersion: deps.eligibility().codeVersion ?? null, environment: pageEnvironment(),
       // 本页自己在产流时不认领:两条路共用后台舞台的同一份活
-      // 测量落定之前不认领(连接先开着,为的是测量时就能产稀疏版)
-      now: Date.now, isIdle: () => settled && isIdle() && !pages.running(), busy,
+      // 测量落定之前不认领(连接先开着,为的是测量时就能产稀疏版);低内存档绝不当队列节点
+      now: Date.now, isIdle: () => !deps.eligibility().lowMemory && settled && isIdle() && !pages.running(), busy,
       send: (m) => ep?.send(m) ?? false,
       keptProject: (rev) => kept.get(rev) ?? null,
       fetchSnapshot, bakeFrame, finishTask, lookupResult,
@@ -931,9 +967,11 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     if (raw.measured && projectId) measuredProjects.add(projectId);
     const input = projectId && measuredProjects.has(projectId) ? { ...raw, measured: true } : raw;
     eligibility = browserNodeEligibility(input);
-    settled = eligibility.ok;
+    settled = eligibility.ok || (!!raw.lowMemory && !!raw.measured);
+    const lowMemCanConnect = !!raw.lowMemory && !!raw.online && !!raw.codeVersion && !!raw.member && isChromiumUserAgent(raw.userAgent);
     // 别的条件都成立、只差测量没落定:连接先开、照常报到拿指纹(测量时就产稀疏版要它),不认领(`settled` 为假)
-    connectable = !fatal && !!projectId && (eligibility.ok || eligibility.reason === "measuring");
+    // 低内存档下满足在线成员条件时允许开 render 连接报到拿指纹供本页算流键,但不认领队列任务
+    connectable = !fatal && !!projectId && (eligibility.ok || eligibility.reason === "measuring" || lowMemCanConnect);
     if (!connectable || !projectId) {
       if (node) teardown(fatal ?? eligibility.reason ?? "no-project");
       // 测量方还在等的那一次要有人推时钟
