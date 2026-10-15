@@ -51,6 +51,6 @@
 
 1. 读 `AGENTS.md`，再读它指的 `docs/semantics/developer_guide.md`、`guide_files/suggested_agent_behavior.md`、`guide_files/constraints.md`。
 2. 读开工指令 `render-018-kickoff.md` 和本文。
-3. 读交接文档 `handoff-render-018.md`，再读两份决定文件 `user-decisions-2026-10-13.md`、`user-decisions-2026-10-14.md`（冲突时以 10-14 为准）。
+3. 读交接文档 `handoff-render-018.md`，再读决定文件 `user-decisions-2026-10-13.md`、`user-decisions-2026-10-14.md`、`user-decisions-2026-10-16.md`（冲突时以日期新的为准；10-16 那份给 0.7.18 加了托管渲染服务的暂行调度「云端 Agent 按轮占用」）。
 4. 读 `docs/local.md`（不入库的本机说明：节点、测试要设的环境变量、闸门脚本、安卓模拟器）。
 5. 照交接文档第 5 节的顺序接着做；第一件事是把交接文档第 2、3 节和两份决定文件补进 `render-refactor-progress.md`、`three-versions-progress.md`。
