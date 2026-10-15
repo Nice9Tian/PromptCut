@@ -33,6 +33,7 @@
 import { QUEUE_DEFAULTS } from '../../render-queue/constants.mjs';
 import { parseInbound, makeMessage, prioritySummaryValue, NODE_TYPES, PUBLISHER_TYPES } from '../../render-queue/messages.mjs';
 import { describeEnvironment, describeCardEnvironment, isChromiumUserAgent } from '../../render-node/fingerprint.mjs';
+import { deviceRank } from '../../render-node/session.mjs';
 
 export const RENDER_QUEUE_MODULE = 'render-queue';
 
@@ -368,6 +369,54 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
         const parsed = parseInbound(msg);
         if (parsed.ok) recordRole(ctx, connId, conn, parsed.type, parsed.body);
       }
+      if (msg.type === 'node.active') {
+        const busy = typeof msg.busy === 'string' ? msg.busy : null;
+        if (busy === 'scrub' || busy === 'drag' || busy === 'play') {
+          const nodeId = conns.get(connId)?.node?.nodeId;
+          if (nodeId && typeof q.describe === 'function') {
+            const d = q.describe();
+            const heldStreams = (Array.isArray(d?.tasks) ? d.tasks : []).filter(
+              (t) => t.state === 'claimed' && t.claim?.nodeId === nodeId && typeof t.id === 'string' && t.id.startsWith('stream:')
+            );
+            for (const t of heldStreams) {
+              const currentStep = t.claim?.progress?.step ?? 0;
+              q.handle(connId, {
+                type: 'task.progress',
+                id: t.id,
+                token: t.claim.token,
+                done: t.claim?.progress?.done ?? null,
+                step: currentStep + 1,
+              });
+            }
+          }
+        }
+      }
+      if (msg.type === 'task.claim' && typeof msg.id === 'string' && msg.id.startsWith('stream:')) {
+        const claimerRank = deviceRank(conn?.node);
+        if (claimerRank > 1 && typeof q.describe === 'function') {
+          const d = q.describe();
+          const targetTask = (Array.isArray(d?.tasks) ? d.tasks : []).find((t) => t.id === msg.id);
+          if (targetTask && targetTask.state === 'claimed' && targetTask.claim) {
+            let holderConnId = null;
+            let holderConn = null;
+            for (const [cId, c] of conns.entries()) {
+              if (c.node?.nodeId === targetTask.claim.nodeId) {
+                holderConnId = cId;
+                holderConn = c;
+                break;
+              }
+            }
+            const holderRank = deviceRank(holderConn?.node);
+            if (claimerRank > holderRank) {
+              const oldToken = targetTask.claim.token;
+              q.handle(holderConnId, { type: 'task.release', id: targetTask.id, token: oldToken, reason: 'preempted' });
+              ctx.send(holderConnId, makeMessage(q.epoch ?? null, 'task.lease-lost', { id: targetTask.id, token: oldToken, reason: 'preempted' }));
+              q.handle(connId, { ...msg, expectVersion: targetTask.version + 1 });
+              return;
+            }
+          }
+        }
+      }
       if (msg.type === 'task.publish') return handlePublish(connId, msg);
       q.handle(connId, msg);
     },
@@ -393,6 +442,51 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
           const info = publishing.pending.get(r.id);
           if (info) infos.set(r.id, info);
         }
+      }
+      if (message.type === 'task.taken' && typeof message.id === 'string' && message.id.startsWith('stream:')) {
+        const d = typeof q.describe === 'function' ? q.describe() : null;
+        const task = (Array.isArray(d?.tasks) ? d.tasks : []).find((t) => t.id === message.id);
+        let holderProfile = null;
+        let holderRank = 1;
+        if (task?.claim?.nodeId) {
+          for (const c of conns.values()) {
+            if (c.node?.nodeId === task.claim.nodeId) {
+              holderProfile = c.node.profile ?? null;
+              holderRank = deviceRank(c.node);
+              break;
+            }
+          }
+        }
+        message.holderProfile = holderProfile;
+        message.holderRank = holderRank;
+        message.density = message.id.endsWith(':sparse') ? 'sparse' : null;
+      }
+      if (message.type === 'queue.snapshot') {
+        const d = typeof q.describe === 'function' ? q.describe() : null;
+        const claimedStreams = [];
+        for (const t of Array.isArray(d?.tasks) ? d.tasks : []) {
+          if (t.state === 'claimed' && typeof t.id === 'string' && t.id.startsWith('stream:')) {
+            let holderProfile = null;
+            let holderRank = 1;
+            if (t.claim?.nodeId) {
+              for (const c of conns.values()) {
+                if (c.node?.nodeId === t.claim.nodeId) {
+                  holderProfile = c.node.profile ?? null;
+                  holderRank = deviceRank(c.node);
+                  break;
+                }
+              }
+            }
+            claimedStreams.push({
+              id: t.id,
+              version: t.version,
+              holderProfile,
+              holderRank,
+              density: t.id.endsWith(':sparse') ? 'sparse' : null,
+            });
+          }
+        }
+        message.claimedStreams = claimedStreams;
       }
       const id = coalesceIdOf(message);
       return id === null ? {} : { coalesceKey: `task:${id}` };

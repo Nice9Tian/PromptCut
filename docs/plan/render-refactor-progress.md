@@ -65,10 +65,11 @@
 | 所有舞台一律跨源隔离（撤掉在线浏览器退回同源单舞台的路）+ 桌面版舞台锁死（`prerender-gate.mjs` 拦截舞台调预渲染控制/渲染接口、只放行流与快照字节只读拉取；`stage-gate.mjs` 按哈希读素材只许读当前项目 `project.media`） | `f83500d2`、`987de00c` |
 | 「生成轨道流」关着时托管方渲染节点什么都不产（稀疏版和满密度版都不产）；VisuHive 去掉默认管理员硬编码（只认 `ACCOUNT_ADMINS` 配置）并新增 `render_streams` 权限分组与后台管理页，PromptCut 接入权限分组校验、无权限时开关置灰并提示「你的账号没有开启这一项的权限，请联系托管方。」 | `8a41fcd3`（VisuHive 本地 `main` `c4553cd`） |
 | 放开在线浏览器导入媒体：浏览器内用 WebCodecs + `mp4Mux` 转出视频小尺寸 MP4（不支持或解码失败时优雅降级只传原尺寸），经在线上传队列按「所有小尺寸先传、再传原尺寸」分片上传到素材服务 | `cf8f3e1c` |
+| `motion` 式的卡满密度流任务拆分至少 30 秒（不足 30 秒整张卡 1 个任务）、`remotion` 式保持 8 段（4 秒）；强设备抢弱设备正领着的 `stream` 任务（`桌面版 > 托管方的渲染服务 > 浏览器`）且保留已上传分段、被抢端收到 `preempted` 立即停手；浏览器时间轴拖动保活（S2） | `57bab25d` |
 
 ## 在分支上、没合入的
 
-正在并行推进 `gemini/rr-motion-preempt`（`motion` 式卡 30s 拆分 + 强设备抢弱设备 + 拖动保活）与 `gemini/rr-bake3d-stream`（3D 视图播放取轨道流贴图随时间动 + 暂停当场渲精确帧 + 3D 模式轻卡产流 + `bake_card` PNG 快照说明）。
+正在并行推进 `gemini/rr-bake3d-stream`（3D 视图播放取轨道流贴图随时间动 + 暂停当场渲精确帧 + 3D 模式轻卡产流 + `bake_card` PNG 快照说明）与 `gemini/rr-online-export-stage`（在线浏览器导出改在跨源隔离舞台内整帧渲染 + `export-frames` 退路清理与限流）。
 
 ## 接下来（照 `handoff-render-018.md` 第 2 节与 `user-decisions-2026-10-14.md` 第 2 节）
 
