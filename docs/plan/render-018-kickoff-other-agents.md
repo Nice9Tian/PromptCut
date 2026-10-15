@@ -19,14 +19,15 @@
 | 主会话：拆活、合并、发版、部署 | 你自己（Argon High） | — | 用的是 Gemini 这边的额度 |
 | 边界非常具体的难题：根因不明的缺陷，偶发、时序、跨进程才复现的问题，像素或输出对不上的对拍，读懂没有文档的旧代码 | Argon High | Opus 5.5 High | 边界清楚的复杂逻辑是 Argon 的强项 |
 | 要抓整体、分主次的工程活：拆方案、写契约、定接口、跨模块的改动、一整块功能（例如撤快照的服务端一侧、云端 Agent 按轮占用） | Opus 5.5 High | Argon High，派活指令里把主次和取舍写明 | Opus 更工程、更能抓整体 |
-| 界面与前端：页面、提示行、交互、样式 | Opus 5.5 medium，复杂的用 High | Sonnet 5.5 High | Opus 的前端审美更好 |
-| 照契约实现、写测试、探针、工具包 | Sonnet 5.5 High | Argon High | 边界清楚的日常工程 |
+| 界面与前端：页面、提示行、交互、样式 | Opus 5.5 medium，复杂的用 High | Argon High | Opus 的前端审美更好 |
+| 照契约实现、写测试、探针、工具包 | Opus 5.5 medium；跨进程、要等时序的探针用 High | Argon High | 用户 2026-10-16 改定：这类活 Opus 好一点，尤其是测试和探针（原定首选 Sonnet 5.5 High） |
 | 简单、机械的批量活：改名、清单整理、报告归档 | Flash 3.8 High | Sonnet 5.5 High | 省额度 |
 | 合入前的独立审查（交接文档第 9 节：大块合入前另派一位不带作者结论的审查） | 换一边审：Gemini 写的派 Opus 5.5 High，Claude 写的派 Argon High；只给代码和契约，不给作者的结论 | 同一边的另一个高档模型 | 换个模型看，盲点不重合，两边额度也自然摊开 |
 | 主次检查：每开一块大活之前 | Opus 5.5 High：只给进度文件、任务书和这块活的拆法，问「现在最该做的是不是这个、有没有偏离主线、哪些可以不做」 | — | 补主会话抓整体、分主次的短板；它只提意见，定还是主会话定 |
 | GPT（`/subagent-gpt`）、Gemini 顾问（`/subagent-agy`） | 不用（这两个是 Claude Code 那边的技能） | — | 攻坚改由 Argon High 或 Opus 5.5 High；卡住时照 `guide_files/solution_table.md` |
 
 - 选谁、为什么，写在派活指令里。拿不准就往高一档。
+- 「首选那边额度紧时」一栏都换到另一边，这样第 3 节的平衡才挪得动。Claude 那边只想省一点、还没到紧的时候，边界很清楚、改动小的实现和改测试断言可以交给 Sonnet 5.5 High。
 - Antigravity 里 Opus 最高只到 High，没有开工指令说的 Extra 档（用户 2026-10-16 说明）。开工指令里要 Extra 的活（写契约、根因不明、前一档两轮没过），按上表的性质用 Opus 5.5 High 或 Argon High。
 - 升级：Flash 同一处改了两轮不过，换 Sonnet 5.5 High 或 Argon High；Sonnet 两轮不过，换 Opus 5.5 High；Opus 或 Argon 两轮不过，换另一边的高档再试一轮（Opus↔Argon），仍不过照解法表走，做不到就写清楚报给用户。
 - 选谁、为什么，写在派活指令里；每个子 Agent 一个工作区（`.worktrees/<名>`）、一条分支（`gemini/<名>`）、一段不重叠的端口，报告写到 `docs/reports/AGENT-<分支名>.md`。
