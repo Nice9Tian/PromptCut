@@ -16,7 +16,6 @@ import { cardMountedAt } from "./frameWindow.mjs";
 import { clipFrameMode } from "../kernel/frameMode.mjs";
 import { guardCompositing, shouldGuard } from "./capabilityGuard";
 import { ensurePlaneStyle } from "./planeStyle";
-import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
 /* 占位组件(product/rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
 import { PlaceholderPlane, PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, maxAnimated } from "./placeholder";
@@ -88,29 +87,11 @@ export interface StagePlaneProps {
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /**
- * 快照平面的 `dangerouslySetInnerHTML` 实参,每个片段缓存一份:**同一张快照回同一个 `{ __html }` 对象**。
- *
- * React 19 更新属性时按 `nextProp !== lastProp` 比 —— 每拍新建一个 `{ __html }` 对象,它就每拍重写一遍
- * `innerHTML`:画布卡的快照是一张整屏图的 data URL(实测粒子卡 276 KB),每拍重新解析、重建 `<img>`、重新解码。
- * 兜底顺序让「流下面垫一张海报快照」成了播放中的常态之后,CDP 采样里 `setProp` 一项 3 秒吃掉 257 ms,
- * 可见舞台每拍主线程耗时的 p50 从约 3.5 ms 抬到约 7 ms。按引用缓存之后,只有换了快照的那一拍才写 DOM。
- * 顺带省掉 `renameSnapshotIds` 每拍把整份 html 哈希一遍的开销。
- */
-const snapshotPropByClip = new Map<string, { html: string; prop: { __html: string } }>();
-/**
  * 运行时载入的卡(在线浏览器里执行的同步来的用户卡与图卡)包一层错误边界:渲染时抛错只撤这一张,不带垮舞台。
  * 构建时就有的卡原样返回 —— 桌面、导出、预渲染的 React 树与以前逐字相同。
  */
 function guardRuntimeCard(cardId: string | undefined, body: ReactNode): ReactNode {
   return cardId && isRuntimeCard(cardId) ? <RuntimeCardBoundary cardId={cardId}>{body}</RuntimeCardBoundary> : body;
-}
-function snapshotProp(clipId: string, html: string): { __html: string } {
-  const hit = snapshotPropByClip.get(clipId);
-  if (hit && hit.html === html) return hit.prop;
-  const prop = { __html: renameSnapshotIds(html, clipId) };
-  if (snapshotPropByClip.size > 256) snapshotPropByClip.clear();
-  snapshotPropByClip.set(clipId, { html, prop });
-  return prop;
 }
 
 /**
@@ -314,16 +295,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           const gen = playToken + (remountGen?.get(clip.id) ?? 0);
           const mountClockMs = mountClockMsOf(`${clip.id}:${gen}`, clip, cardT);
           const isSettling = settling?.has(clip.id) ?? false;
-          const snapshotHtml = snapshots?.get(clip.id);
-          /*
-           * 平面的渲染条件是「在 `snapshots` 里」,类名是另一件事:
-           * **`.pc-settling` 与 `.pc-snapshot` 互斥** —— settling 期间只加 `.pc-settling`,
-           * 否则并集里 `display:none` 赢,子树没有布局盒、CSS 动画被取消成 idle,`syncIn` 一步都钉不上。
-           * `.pc-settling` 与 `.pc-suppressed` 同样互斥(两个集合本来就不相交,这里再兜一道)。
-           */
           const cls = [
             proxy ? "pc-proxy" : "",
-            !isSettling && snapshotHtml !== undefined ? "pc-snapshot" : "",
             !isSettling && supNow.has(clip.id) ? "pc-suppressed" : "",
             awaiting?.has(clip.id) ? "pc-awaiting" : "",
             isSettling ? "pc-settling" : "",
@@ -414,7 +387,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 <GlPlane clipId={clip.id} cardId={clip.cardId} contract={glContract}
                   w={glBox.width} h={glBox.height} t={localTOf(clip, cardT)} frame={localFrame}
                   params={{ ...def!.defaults, ...clip.params }} gen={gen}
-                  skip={supNow.has(clip.id) || (snapshotHtml !== undefined && !isSettling)} stage={stageInfo} />
+                  skip={supNow.has(clip.id)} stage={stageInfo} />
               ) : null}
               {/*
                 代理色块是卡片的**兄弟**,不是把卡片包起来 —— 真卡由 .pc-proxy 那条
@@ -438,21 +411,6 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                   />
                 );
               })() : null}
-              {/*
-                快照平面(E7 第 4 条)。和代理平面同一个位置:卡片的**兄弟**,不是把卡片包起来 ——
-                包一层 div 会让 React 在挂上 / 摘掉那一刻重挂载卡片,锚点就丢了。
-
-                **必须显式 `position:absolute; inset:0`**:不能假设所有卡根都是绝对定位
-                (odometer / checklist 的根是 `.hud-wrapper`,靠 hud.css 才是 absolute)。
-
-                `renameSnapshotIds` 按本片段 clipId 改名(A2(7)):共享快照会挂到多个片段上,
-                不改名的话 SVG 的 `url(#id)` 会解析到第一个,后挂的那片渐变整片错掉。
-                C4 换成同一片段的另一帧就是这个平面 innerHTML 的原子替换,前后两张不共存。
-              */}
-              {snapshotHtml !== undefined ? (
-                <div data-pc-snapshot-plane="" style={{ position: "absolute", inset: 0 }}
-                  dangerouslySetInnerHTML={snapshotProp(clip.id, snapshotHtml)} />
-              ) : null}
               {/*
                 流平面(E7 第 5 条,R8)。`streamPlayer` 只往这个**已经存在的** `<canvas>` 上画,
                 不做外部 `insertBefore` —— 否则会和代理平面、快照平面抢兄弟位置。

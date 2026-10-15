@@ -88,36 +88,35 @@ test("只有判重、正在挂载的卡进 heavy;轻卡和不在场的卡不进"
   assert.deepEqual(planFeed({ project: p, t: 1, playing: false }).heavy, ["h"]);
 });
 
-test("按就绪索引回溯选帧;回溯了就报当前想要的那一帧", () => {
+test("快照退役:planFeed 不再选帧,picks 恒为空,wanted 恒为空", () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
   src.push(layer("h", [[0, 20]]));
   const f = planFeed({ project: p, t: 1, playing: false });
-  assert.equal(f.picks.get("h").localFrame, 20, "第 30 帧没就绪,回溯到同区间里最近的 20");
-  assert.deepEqual(f.wanted, [{ clipId: "h", frame: 30 }]);
+  assert.equal(f.picks.size, 0);
+  assert.deepEqual(f.wanted, []);
 
   src.push(layer("h", [[0, 40]]));
   const g = planFeed({ project: p, t: 1, playing: false });
-  assert.equal(g.picks.get("h").localFrame, 30);
-  assert.deepEqual(g.wanted, [], "选中的就是当前帧:不报");
+  assert.equal(g.picks.size, 0);
+  assert.deepEqual(g.wanted, []);
 });
 
-test("html 表缺时用 local 表;一张表都没有就不选、只报缺口", () => {
+test("html 与 local 快照退役:不选帧、不报缺口", () => {
   const p = project([card("h", 0, 10), card("g", 0, 10)]);
   plan = heavyEverywhere("h", "g");
   src.push(layer("h", [[0, 100]], "local"));
   const f = planFeed({ project: p, t: 1, playing: false });
-  assert.equal(f.picks.get("h").kind, "local");
-  assert.equal(f.picks.has("g"), false);
-  assert.deepEqual(f.wanted, [{ clipId: "g", frame: 30 }]);
+  assert.equal(f.picks.size, 0);
+  assert.deepEqual(f.wanted, []);
 });
 
-test("缺口一次最多报 8 条", () => {
+test("缺口上报已退役:wanted 恒为空数组", () => {
   const ids = Array.from({ length: 12 }, (_, i) => `h${String(i).padStart(2, "0")}`);
   plan = heavyEverywhere(...ids);
   const f = planFeed({ project: project(ids.map((id) => card(id, 0, 10))), t: 1, playing: false });
   assert.equal(f.heavy.length, 12);
-  assert.equal(f.wanted.length, MAX_WANTED);
+  assert.equal(f.wanted.length, 0);
 });
 
 /* ---------------------------------------------------------------- K6 */
@@ -126,11 +125,12 @@ test("K6:降级卡死素材就绪之前照常活渲,不进 heavy", () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
   markPendingDemote("h");
-  // 播放头在第 30 帧:要覆盖 [30, 59](一秒)才算就绪
-  src.push(layer("h", [[0, 58]]));
+  // 播放头在第 30 帧:要覆盖 [30, 59](一秒，即第 2、3 分段)才算就绪
+  const streamLayer = (ranges, originFrame = 0) => ({ ...layer("h", ranges, "stream"), originFrame });
+  src.push(streamLayer([[0, 1]]));
   assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, []);
   assert.ok(pendingDemotes().has("h"));
-  src.push(layer("h", [[0, 59]]));
+  src.push(streamLayer([[0, 3]]));
   assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, ["h"]);
   assert.equal(pendingDemotes().has("h"), false, "就绪之后移出 pending");
 });
@@ -139,7 +139,8 @@ test("K6:片段剩下不到一秒时,覆盖到片尾就算就绪;流要按分段
   const p = project([card("h", 0, 10)]);   // 300 帧,本地 0..299
   plan = heavyEverywhere("h");
   markPendingDemote("h");
-  src.push(layer("h", [[290, 299]]));
+  const streamLayer = (ranges, originFrame = 0) => ({ ...layer("h", ranges, "stream"), originFrame });
+  src.push(streamLayer([[19, 19]]));
   assert.deepEqual(planFeed({ project: p, t: 290 / FPS, playing: true }).heavy, ["h"]);
 
   resetSnapshotFeed();
@@ -147,7 +148,6 @@ test("K6:片段剩下不到一秒时,覆盖到片尾就算就绪;流要按分段
   syncSnapshotSubscription(() => {});
   markPendingDemote("h");
   // 流的层带着这条流自己的第一帧(片段从第 0 帧起,所以是 0);分段从它起数
-  const streamLayer = (ranges, originFrame = 0) => ({ ...layer("h", ranges, "stream"), originFrame });
   src.push(streamLayer([[0, 0]]));
   assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, [], "流表有别的段不算:当前位置没料");
   // 第 1 秒 = 第 30 帧,一秒到第 59 帧 = 第 2、3 段
@@ -161,19 +161,16 @@ test("K6:片段剩下不到一秒时,覆盖到片尾就算就绪;流要按分段
 
 /* ---------------------------------------------------------------- 投递 */
 
-test("pickForSetTime:第一次缺字节就发起取、同步回空并点名 awaiting;到货后同步带上", async () => {
+/* ---------------------------------------------------------------- 投递 */
+
+test("pickForSetTime:快照退役后恒返回空快照与空 awaiting,不发起取字节", async () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
   src.push(layer("h", [[0, 100]]));
   const head = { project: p, t: 1, playing: false };
   const first = pickForSetTime(head);
-  assert.deepEqual(first, { snapshots: {}, awaiting: ["h"] });
-  assert.deepEqual(src.fetched, ["html/k-h/30"]);
-  await settle();
-  const second = pickForSetTime(head);
-  assert.deepEqual(second, { snapshots: { h: "html:html/k-h/30" }, awaiting: [] });
-  // 同一帧已经挂着:不重投,也不 awaiting
-  assert.deepEqual(pickForSetTime(head), { snapshots: {}, awaiting: [] });
+  assert.deepEqual(first, { snapshots: {}, awaiting: [] });
+  assert.deepEqual(src.fetched, []);
 });
 
 test("pickForSetTime:没有表的判重卡不 awaiting(等也等不来)", () => {
@@ -181,254 +178,90 @@ test("pickForSetTime:没有表的判重卡不 awaiting(等也等不来)", () => 
   assert.deepEqual(pickForSetTime({ project: project([card("h", 0, 10)]), t: 1, playing: false }).awaiting, []);
 });
 
-test("deliverSnapshots:33 ms 节流;不再判重的卡摘掉(null)", async () => {
+test("deliverSnapshots:快照退役后返回 0,不再向舞台派发快照补丁", async () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
   src.push(layer("h", [[0, 100]]));
   const stage = fakeStage();
   const head = { project: p, t: 1, playing: true };
-  await deliverSnapshots(stage, "front", head);    // 发起取字节,手里还没有:什么都不发
-  await settle();
-  assert.equal(await deliverSnapshots(stage, "front", head), 1);
-  assert.deepEqual(stage.calls.at(-1), { patch: { h: "html:html/k-h/30" }, opts: {} });
-
-  now += SNAPSHOT_THROTTLE_MS - 1;
-  plan = heavyEverywhere();
-  assert.equal(await deliverSnapshots(stage, "front", head), 0, "节流内不发");
-  now += 1;
-  assert.equal(await deliverSnapshots(stage, "front", head), 1);
-  assert.deepEqual(stage.calls.at(-1).patch, { h: null });
-  now += SNAPSHOT_THROTTLE_MS;
-  assert.equal(await deliverSnapshots(stage, "front", head), 0, "没变化:一条 RPC 都不发");
-});
-
-test("setSnapshotArrive:投递时缺的那一帧取到之后叫一次重投(在线页面不走 SSE 订阅,c10a)", async () => {
-  const p = project([card("h", 0, 10)]);
-  plan = heavyEverywhere("h");
-  src.push(layer("h", [[0, 100]]));
-  let arrived = 0;
-  setSnapshotArrive(() => { arrived++; });
-  const stage = fakeStage();
-  const head = { project: p, t: 1, playing: false };
-  assert.equal(await deliverSnapshots(stage, "front", head), 0, "手里还没有字节:先发起取");
-  await settle();
-  assert.equal(arrived, 1, "字节到了:叫宿主重投");
-  now += SNAPSHOT_THROTTLE_MS;
-  assert.equal(await deliverSnapshots(stage, "front", head), 1);
-  setSnapshotArrive(null);
-});
-
-/** 等真定时器(被节流挡掉之后约的那次补投用的是真 `setTimeout`,至多一个节流窗口) */
-const realWait = (ms = SNAPSHOT_THROTTLE_MS + 40) => new Promise((r) => setTimeout(r, ms));
-
-test("停着时(暂停、手按着标尺不动)字节在节流窗口里到货:到货的那次补投被挡掉,过了窗口会再叫一次宿主重投", async () => {
-  const p = project([card("h", 0, 10)]);
-  plan = heavyEverywhere("h");
-  src.push(layer("h", [[0, 100]]));
-  const stage = fakeStage();
-  const head = { project: p, t: 1, playing: false };
-  let arrived = 0;
-  setSnapshotArrive(() => { arrived++; void deliverSnapshots(stage, "front", head); });
-  // 发 setTime:这一帧的字节手里没有,当场去取;节流窗口从这一刻起算
-  assert.deepEqual(pickForSetTime(head), { snapshots: {}, awaiting: ["h"] });
-  await settle();
-  assert.equal(arrived, 1, "字节到了(时钟没动,还在窗口里)");
-  assert.equal(stage.calls.length, 0, "节流内不发");
-  // 窗口过了,没有任何别的事件:以前这一层就一直贴不上
-  now += SNAPSHOT_THROTTLE_MS;
-  await realWait();
-  assert.equal(arrived, 2, "过了窗口叫了一次宿主重投");
-  assert.deepEqual(stage.calls, [{ patch: { h: "html:html/k-h/30" }, opts: {} }]);
-  // 投上了就不再约
-  await realWait();
-  assert.equal(arrived, 2);
-  assert.equal(stage.calls.length, 1);
-  setSnapshotArrive(null);
-});
-
-test("约的那次补投到点时窗口又被新的 setTime 推后了:再约一次,直到投上", async () => {
-  const p = project([card("h", 0, 10)]);
-  plan = heavyEverywhere("h");
-  src.push(layer("h", [[0, 100]]));
-  const stage = fakeStage();
-  const head = { project: p, t: 1, playing: false };
-  let arrived = 0;
-  setSnapshotArrive(() => { arrived++; void deliverSnapshots(stage, "front", head); });
-  pickForSetTime(head);
-  await settle();
-  assert.equal(stage.calls.length, 0);
-  // 时钟不动:到点的那次重投仍在窗口里,又被挡掉
-  await realWait();
-  assert.ok(arrived >= 2, "到点叫过宿主");
-  assert.equal(stage.calls.length, 0, "窗口没过:还是不发");
-  now += SNAPSHOT_THROTTLE_MS;
-  await realWait();
-  assert.equal(stage.calls.length, 1, "窗口过了之后的那一次投上了");
-  setSnapshotArrive(null);
-});
-
-test("播放中被节流挡掉的不约补投(下一拍自己会投);停着但没有东西要换的也不约", async () => {
-  const p = project([card("h", 0, 10)]);
-  plan = heavyEverywhere("h");
-  src.push(layer("h", [[0, 100]]));
-  const stage = fakeStage();
-  let arrived = 0;
-  const playing = { project: p, t: 1, playing: true };
-  await deliverSnapshots(stage, "front", playing);
-  await settle();
-  assert.equal(await deliverSnapshots(stage, "front", playing), 1);
-  setSnapshotArrive(() => { arrived++; });
-  // 播放中:有东西要换(不再判重 → 摘掉),被节流挡掉,不约
-  plan = heavyEverywhere();
-  assert.equal(await deliverSnapshots(stage, "front", playing), 0, "节流内不发");
-  await realWait();
-  assert.equal(arrived, 0, "播放中不约补投");
-  // 停着:没有东西要换,被节流挡掉也不约
-  plan = heavyEverywhere("h");
-  assert.equal(await deliverSnapshots(stage, "front", { ...playing, playing: false }), 0);
-  await realWait();
-  assert.equal(arrived, 0, "没有东西要换:不约");
-  setSnapshotArrive(null);
-});
-
-test("停着时一包 2 MB 装不下的那几张:没有下一拍,同样约补投,直到都投完", async () => {
-  const ids = ["a", "b", "c"];
-  plan = heavyEverywhere(...ids);
-  const big = "x".repeat(Math.ceil(SNAPSHOT_DELIVERY_MAX_BYTES * 0.6));
-  for (const id of ids) {
-    src.push(layer(id, [[0, 100]]));
-    src.bodies.set(`html/k-${id}/30`, big);
-  }
-  const stage = fakeStage();
-  const head = { project: project(ids.map((id) => card(id, 0, 10))), t: 1, playing: false };
-  await deliverSnapshots(stage, "front", head);   // 发起取字节
-  await settle();
-  // 宿主的重投:每次到点时钟都已经过了窗口
-  setSnapshotArrive(() => { now += SNAPSHOT_THROTTLE_MS; void deliverSnapshots(stage, "front", head); });
-  now += SNAPSHOT_THROTTLE_MS;
-  assert.equal(await deliverSnapshots(stage, "front", head), 1);
-  assert.deepEqual(stage.calls.map((c) => Object.keys(c.patch)), [["a"]], "第一包只装得下一张");
-  await realWait(3 * SNAPSHOT_THROTTLE_MS + 120);
-  assert.deepEqual(stage.calls.map((c) => Object.keys(c.patch)), [["a"], ["b"], ["c"]], "剩下的两张靠约的补投投完");
-  setSnapshotArrive(null);
-});
-
-test("deliverSnapshots:reset 不受节流,带 reset 并把该挂的整份重投", async () => {
-  const p = project([card("h", 0, 10)]);
-  plan = heavyEverywhere("h");
-  src.push(layer("h", [[0, 100]]));
-  const stage = fakeStage();
-  const head = { project: p, t: 1, playing: true };
-  await deliverSnapshots(stage, "front", head);
-  await settle();
-  await deliverSnapshots(stage, "front", head);
-  markBaselineReset("front");
-  assert.equal(await deliverSnapshots(stage, "front", head), 1, "紧接着(节流内)也发");
-  assert.deepEqual(stage.calls.at(-1), { patch: { h: "html:html/k-h/30" }, opts: { reset: true } });
-});
-
-test("deliverSnapshots:一次只投一包、≤ 2 MB,装不下的下一拍再投;只有第一包带 reset", async () => {
-  const ids = ["a", "b", "c"];
-  plan = heavyEverywhere(...ids);
-  const big = "x".repeat(Math.ceil(SNAPSHOT_DELIVERY_MAX_BYTES * 0.6));
-  for (const id of ids) {
-    src.push(layer(id, [[0, 100]]));
-    src.bodies.set(`html/k-${id}/30`, big);
-  }
-  const stage = fakeStage();
-  const head = { project: project(ids.map((id) => card(id, 0, 10))), t: 1, playing: true };
-  await deliverSnapshots(stage, "back", head);
-  await settle();
-  markBaselineReset("back");
-  assert.equal(await deliverSnapshots(stage, "back", head), 1);
-  now += SNAPSHOT_THROTTLE_MS;
-  assert.equal(await deliverSnapshots(stage, "back", head), 1);
-  now += SNAPSHOT_THROTTLE_MS;
-  assert.equal(await deliverSnapshots(stage, "back", head), 1);
-  now += SNAPSHOT_THROTTLE_MS;
-  assert.equal(await deliverSnapshots(stage, "back", head), 0, "都投完了");
-  assert.deepEqual(stage.calls.map((c) => Object.keys(c.patch)), [["a"], ["b"], ["c"]]);
-  assert.deepEqual(stage.calls.map((c) => c.opts), [{ reset: true }, {}, {}]);
-});
-
-test("deliverSnapshots:发送失败后,下一次带 reset", async () => {
-  const p = project([card("h", 0, 10)]);
-  plan = heavyEverywhere("h");
-  src.push(layer("h", [[0, 100]]));
-  const stage = fakeStage();
-  const head = { project: p, t: 1, playing: true };
-  await deliverSnapshots(stage, "front", head);
-  await settle();
-  stage.fail = true;
   assert.equal(await deliverSnapshots(stage, "front", head), 0);
-  stage.fail = false;
-  now += SNAPSHOT_THROTTLE_MS;
-  assert.equal(await deliverSnapshots(stage, "front", head), 1);
-  assert.deepEqual(stage.calls.at(-1).opts, { reset: true });
+  assert.equal(stage.calls.length, 0);
 });
 
-test("settled 把卡从基线里删掉:同一帧会重投", async () => {
+test("deliverSnapshots:播放中投递清空 settled", async () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
-  src.push(layer("h", [[0, 100]]));
-  const head = { project: p, t: 1, playing: false };
-  pickForSetTime(head);
-  await settle();
-  assert.deepEqual(Object.keys(pickForSetTime(head).snapshots), ["h"]);
-  assert.deepEqual(pickForSetTime(head).snapshots, {});
+  const stage = fakeStage();
   noteSettled("front", ["h"]);
-  assert.deepEqual(Object.keys(pickForSetTime(head).snapshots), ["h"]);
+  assert.deepEqual(suppressedAt({ project: p, t: 1, playing: false }), []);
+  await deliverSnapshots(stage, "front", { project: p, t: 1, playing: true });
+  assert.deepEqual(suppressedAt({ project: p, t: 1, playing: false }), ["h"]);
+});
+
+test("markBaselineReset:保留向后兼容接口", () => {
+  markBaselineReset("front");
+  markBaselineReset("back");
+});
+
+test("settled 状态影响 suppressedAt 与 scrub", () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  const head = { project: p, t: 1, playing: false };
+  assert.deepEqual(suppressedAt(head), ["h"]);
+  noteSettled("front", ["h"]);
+  assert.deepEqual(suppressedAt(head), []);
+  pickForSetTime(head);
+  assert.deepEqual(suppressedAt(head), ["h"]);
 });
 
 /*
  * c10a 契约第 17 节「停下追当前一帧」取代了原来的「低内存档不追活渲」:低内存档停下时舞台把当前这一帧追一次,
- * 画好的层收 `settled`,和普通档一样暂停中不再盖回小尺寸;下一次 setTime / 播放照常选。
- * (这条用例原来断言「低内存档忽略 settled、暂停时仍选小尺寸」,按新规则改。)
+ * 画好的层收 `settled`,和普通档一样暂停中不再抑制;下一次 setTime / 播放照常进入抑制。
  */
-test("低内存档停下追一帧画好的层(settled)暂停中不再选小尺寸;下一次 setTime 照常选", () => {
+test("低内存档停下追一帧画好的层(settled)暂停中不再抑制;下一次 setTime 照常进入抑制", () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
-  src.push(layer("h", [[0, 100]]));
+  const head = { project: p, t: 1, playing: false, lowMemory: true };
+  assert.deepEqual(suppressedAt(head), ["h"]);
   noteSettled("front", ["h"]);
-  assert.equal(planFeed({ project: p, t: 1, playing: false }).picks.size, 0);
-  assert.equal(planFeed({ project: p, t: 1, playing: false, lowMemory: true }).picks.size, 0);
-  pickForSetTime({ project: p, t: 1, playing: false, lowMemory: true });
-  assert.equal(planFeed({ project: p, t: 1, playing: false, lowMemory: true }).picks.size, 1);
+  assert.deepEqual(suppressedAt(head), []);
+  pickForSetTime(head);
+  assert.deepEqual(suppressedAt(head), ["h"]);
 });
 
 /* ---------------------------------------------------------------- 抑制 */
 
-test("没有流的重卡:抑制集合只在播放中有,并上 K3(b) 的额外抑制(暂停 / 拖动时贴流的那几张见 snapshotFeedScrub.test.mjs)", () => {
+test("重卡抑制集合:播放中为 heavy 并上 K3(b) 的额外抑制;暂停时未 settled 进 scrub", () => {
   const p = project([card("h", 0, 10), card("l", 0, 10)]);
   plan = heavyEverywhere("h");
-  assert.deepEqual(suppressedAt({ project: p, t: 1, playing: false }), []);
   assert.deepEqual(suppressedAt({ project: p, t: 1, playing: true }), ["h"]);
   setExtraSuppressed(["l", "h"]);
   assert.deepEqual(suppressedAt({ project: p, t: 1, playing: true }), ["h", "l"]);
+  // 暂停中未 settled 的重卡进 scrub 占位
+  assert.deepEqual(suppressedAt({ project: p, t: 1, playing: false }), ["h"]);
+  // settled 之后暂停中不再抑制
+  noteSettled("front", ["h"]);
   assert.deepEqual(suppressedAt({ project: p, t: 1, playing: false }), []);
 });
 
-test("wanted 报给预渲染进程", () => {
+test("快照退役后不再向预渲染进程上报 wanted 缺口", () => {
   plan = heavyEverywhere("h");
   pickForSetTime({ project: project([card("h", 0, 10)]), t: 1, playing: false });
-  assert.deepEqual(wantedPushed, [[{ clipId: "h", frame: 30 }]]);
+  assert.deepEqual(wantedPushed, []);
 });
 
-test("低内存档:一层的就绪表有缺口(清单缺几帧小尺寸)时,有的帧照常选,缺的回溯同区间,段首缺才不选(占位)", () => {
+test("低内存档:小尺寸快照退役,picks 恒为空,未就绪重卡在暂停时进 scrub 占位", () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
-  // 阿里云 2026-09-27 手机上的样子:第 0 帧与 28～31 缺小尺寸
   src.push(layer("h", [[1, 27], [32, 119]]));
-  const at = (t) => planFeed({ project: p, t, playing: false, lowMemory: true }).picks.get("h")?.localFrame ?? null;
-  assert.equal(at(0), null, "段首缺:没有更早的可回溯");
-  assert.equal(at(5 / FPS), 5);
-  assert.equal(at(1), 27, "第 30 帧缺:回溯到 27");
-  assert.equal(at(3), 90);
+  const f = planFeed({ project: p, t: 1, playing: false, lowMemory: true });
+  assert.equal(f.picks.size, 0);
+  assert.deepEqual(f.scrub, ["h"]);
 });
 
 /* ---------------------------------------------------------------- C10 第 9 节:在线的用户卡、图卡 */
 
-test("在线浏览器模式:用户卡、图卡(含同步来的)一律按重卡,照常选帧、报缺口、取字节;停下不认「已精确」;桌面照旧(C10 契约第 9 节,2026-09-29)", async () => {
+test("在线浏览器模式:用户卡、图卡(含同步来的)一律按重卡;停下不认「已精确」;桌面照旧(C10 契约第 9 节,2026-09-29)", async () => {
   const registry = await import(srcUrl("kernel/registry.ts"));
   const host = await import(srcUrl("render/placeholderHost.ts"));
   registry.registerCards([{ id: "graphish", card: () => null, params: {} }]);
@@ -454,17 +287,17 @@ test("在线浏览器模式:用户卡、图卡(含同步来的)一律按重卡,�
     for (const id of ["u", "g", "s", "b"]) src.push(layer(id, [[0, 100]]));
     const got = planFeed({ project: p, t: 5, playing: true });
     assert.deepEqual(got.heavy, ["b", "g", "s", "u"]);
-    assert.deepEqual([...got.picks.keys()].sort(), ["b", "g", "s", "u"], "照常选帧(回溯到 100)");
-    assert.deepEqual(got.wanted.map((w) => w.clipId).sort(), ["b", "g", "s", "u"], "照常报缺口");
+    assert.equal(got.picks.size, 0, "快照已退役");
+    assert.deepEqual(got.wanted, [], "不再报缺口");
     assert.deepEqual(suppressedAt({ project: p, t: 5, playing: true }), ["b", "g", "s", "u"], "播放中一律抑制");
     const stage = fakeStage();
     await deliverSnapshots(stage, "front", { project: p, t: 1, playing: true });
     await settle();
-    for (const id of ["u", "g", "s", "b"]) assert.ok(src.fetched.some((f) => f.includes(`k-${id}`)), `${id} 照常取字节:${src.fetched.join(",")}`);
-    // 暂停态:舞台报了 settled(停下追到精确)的内置卡不再投;本机跑不了的卡停下不追,照常选帧
+    assert.equal(src.fetched.length, 0, "不再取快照字节");
+    // 暂停态:舞台报了 settled(停下追到精确)的内置卡不再抑制;本机跑不了的卡停下不追,一直在 scrub 占位
     noteSettled("front", ["b", "u", "s"]);
     const paused = planFeed({ project: p, t: 1, playing: false });
-    assert.deepEqual([...paused.picks.keys()].sort(), ["g", "s", "u"]);
+    assert.deepEqual(paused.scrub.sort(), ["g", "s", "u"]);
   } finally {
     host.setOnlineBrowserMode(false);
     registry.setSyncedUserCards([]);

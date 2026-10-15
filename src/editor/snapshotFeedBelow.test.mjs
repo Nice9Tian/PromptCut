@@ -98,15 +98,15 @@ test("依赖下层的流:播放、暂停、拖动都发流平面(带 plane: stag
   assert.deepEqual(snapshotFeedDebug(head).staleBelow, []);
 });
 
-test("这一帧所在的分段没就绪:不发平面、不抑制,落回快照(和别的重卡一样)", () => {
+test("这一帧所在的分段没就绪:不发平面、重卡进 scrub 占位,不选快照", () => {
   const p = project();
   plan = heavy("glass");
   src.push(local("glass", [[0, 119]]));
   src.push(below(p, [[0, 1]]));                      // 只有第 40～69 帧
   const f = planFeed({ project: p, t: at(77), playing: false });
   assert.deepEqual(f.streamPlanes, []);
-  assert.deepEqual(f.scrub, []);
-  assert.deepEqual([...f.picks.keys()], ["glass"]);
+  assert.deepEqual(f.scrub, ["glass"]);
+  assert.equal(f.picks.size, 0);
   // 第 39 帧(片段挂载了、流还没开始)也没有
   assert.deepEqual(planFeed({ project: p, t: at(39), playing: true }).streamPlanes, []);
 });
@@ -137,11 +137,10 @@ for (const [what, edit] of Object.entries(EDITS)) {
       const head = { project: p1, t: at(77), playing };
       const f = planFeed(head);
       assert.deepEqual(f.streamPlanes, [], `旧流不发(playing=${playing})`);
-      assert.deepEqual(f.scrub, []);
-      assert.deepEqual([...f.picks.keys()], ["glass"], "落到下一步:快照");
-      assert.equal(f.picks.get("glass").tier, "none", "当作这张卡没有流");
-      // 播放中重卡照旧抑制(贴快照 / 占位符);暂停、拖动时不抑制(现状:贴快照,没有就露活组件)
-      assert.deepEqual(suppressedAt(head), playing ? ["glass"] : []);
+      assert.deepEqual(f.scrub, playing ? [] : ["glass"]);
+      assert.equal(f.picks.size, 0, "快照已退役");
+      // 播放中重卡照旧抑制(播放中 heavy: ["glass"]);暂停、拖动时未 settled 的重卡进 scrub (["glass"])
+      assert.deepEqual(suppressedAt(head), ["glass"]);
       assert.deepEqual(snapshotFeedDebug(head).staleBelow, ["glass"]);
     }
     // 回到原来那一版(撤销):签名又对上,原来的流照贴
@@ -195,5 +194,6 @@ test("占解码器预算:和别的流一起数;超出的那一张抑制着、落
   assert.equal(f.streamPlanes.length, DECODER_BUDGET);
   assert.equal(f.streamPlanes.some((x) => x.clipIds[0] === "glass"), false);
   assert.ok(f.scrub.includes("glass"), "有流、只是超了预算:照旧抑制着");
-  assert.equal(f.picks.get("glass")?.tier, "over");
+  assert.equal(f.picks.size, 0, "快照退役");
+  assert.equal(f.overPlanes.some((x) => x.clipIds[0] === "glass"), true);
 });

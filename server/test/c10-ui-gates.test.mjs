@@ -100,41 +100,38 @@ async function feedOnce(online, { playing = true } = {}) {
   }
 }
 
-itUi('C10-UI-03 在线时用户卡、图卡（含同步来的）与内置重卡一样选帧、报缺口、取字节', async () => {
+itUi('C10-UI-03 在线时用户卡、图卡（含同步来的）与内置重卡一样一律按重卡抑制', async () => {
   const { f, fetched } = await feedOnce(true);
   assert.deepEqual(f.heavy, ['b', 'g', 's', 'u'], '同步卡分派表里没判重,在线照样按重卡');
-  for (const id of ['b', 'u', 'g', 's']) {
-    assert.ok(f.picks.has(id), `${id} 照常选帧`);
-    assert.ok(fetched.some((x) => x.includes(`k-${id}`)), `${id} 取了字节：${JSON.stringify(fetched)}`);
-  }
+  assert.equal(f.picks.size, 0, '快照已退役');
+  assert.equal(fetched.length, 0, '不再取快照字节');
   placeholder.setOnlineBrowserMode(true);
   try {
-    // 第 150 帧不在就绪区间里:回溯到 100,并报缺口
+    // 第 150 帧不在就绪区间里:退役后 picks 仍为空
     const late = feed.planFeed({ project: project(clips()), t: 5, playing: true });
-    for (const id of ['b', 'u', 'g', 's']) {
-      assert.equal(late.picks.get(id)?.localFrame, 100, `${id} 回溯到最近的就绪帧`);
-      assert.ok(late.wanted.some((w) => w.clipId === id), `${id} 照常报缺口`);
-    }
+    assert.deepEqual(late.heavy, ['b', 'g', 's', 'u']);
+    assert.equal(late.picks.size, 0);
+    assert.deepEqual(late.wanted, []);
   } finally {
     placeholder.setOnlineBrowserMode(false);
   }
-  // 暂停态整台「已精确」(K5 第二路互换之后):内置卡不再投,这台设备跑不了的卡停下不追,快照照挂
+  // 暂停态整台「已精确」(K5 第二路互换之后):内置卡不再抑制,这台设备跑不了的卡停下不追,进 scrub 占位
   placeholder.setOnlineBrowserMode(true);
   try {
     assert.deepEqual(feed.suppressedAt({ project: project(clips()), t: 1, playing: true }), ['b', 'g', 's', 'u'], '播放中一律抑制');
     feed.markAllSettled('front');
     const paused = feed.planFeed({ project: project(clips()), t: 1, playing: false });
-    // 2026-10-06(online-card-exec-contract.md 第 6 节):构建时就在包里的用户卡本页能运行,停下照内置卡追精确、不再贴快照
-    assert.deepEqual([...paused.picks.keys()].sort(), ['g', 's'], '停下只剩本页运行不了的卡还贴快照');
+    // 2026-10-06(online-card-exec-contract.md 第 6 节):构建时就在包里的用户卡本页能运行,停下照内置卡追精确、不再抑制
+    assert.deepEqual(paused.scrub.sort(), ['g', 's'], '停下只剩本页运行不了的卡还进 scrub 占位');
     // 同步来的卡载入成功(运行状态 ready):不再一律按重,照分派表(表里没判它重)
     registry.setCardRunStates([['c10-synced-card', { state: 'ready', version: 'g1' }]]);
     assert.deepEqual(feed.suppressedAt({ project: project(clips()), t: 1, playing: true }), ['b', 'g', 'u'], '能运行的同步卡不再一律抑制');
-    assert.deepEqual([...feed.planFeed({ project: project(clips()), t: 1, playing: false }).picks.keys()].sort(), ['g'], '停下它也追精确');
+    assert.deepEqual(feed.planFeed({ project: project(clips()), t: 1, playing: false }).scrub.sort(), ['g'], '停下它也追精确');
     registry.setCardRunStates([['c10-synced-card', { state: 'missing-module', detail: 'lodash' }]]);
     assert.deepEqual(feed.suppressedAt({ project: project(clips()), t: 1, playing: true }), ['b', 'g', 's', 'u'], '运行不了的照旧一律抑制');
     // 低内存档不执行用户卡的代码:构建时的用户卡也回到「本页运行不了」
     placeholder.setLocalOnlyLowMemory(true);
-    assert.deepEqual([...feed.planFeed({ project: project(clips()), t: 1, playing: false }).picks.keys()].sort(), ['g', 's', 'u'], '低内存档:构建时的用户卡停下也不追');
+    assert.deepEqual(feed.planFeed({ project: project(clips()), t: 1, playing: false }).scrub.sort(), ['g', 's', 'u'], '低内存档:构建时的用户卡停下也不追');
     placeholder.setLocalOnlyLowMemory(false);
   } finally {
     placeholder.setOnlineBrowserMode(false);
@@ -143,12 +140,12 @@ itUi('C10-UI-03 在线时用户卡、图卡（含同步来的）与内置重卡�
   }
 });
 
-itUi('C10-UI-04 桌面（在线开关关着）用户卡、图卡照常选帧，同步表不影响桌面', async () => {
+itUi('C10-UI-04 桌面（在线开关关着）用户卡、图卡按分派表，同步表不影响桌面', async () => {
   const { f } = await feedOnce(false);
-  for (const id of ['b', 'u', 'g']) assert.ok(f.picks.has(id), `${id} 在桌面照常选帧`);
-  assert.equal(f.picks.has('s'), false, '桌面按分派表:同步表不起作用(桌面也不设它)');
+  assert.deepEqual(f.heavy, ['b', 'g', 'u'], '桌面按分派表:同步表不起作用(桌面也不设它)');
+  assert.equal(f.heavy.includes('s'), false);
   feed.markAllSettled('front');
-  assert.equal(feed.planFeed({ project: project(clips()), t: 1, playing: false }).picks.size, 0, '桌面暂停态整台精确:一张不投');
+  assert.equal(feed.planFeed({ project: project(clips()), t: 1, playing: false }).scrub.length, 0, '桌面暂停态整台精确:一张不抑制');
 });
 
 /* ------------------------------------------------------------------ 棘轮（K9） */

@@ -1105,7 +1105,6 @@ class StreamTrack {
       this.closeShown();
       if (copy) this.shown = { frame: copy, f };
     }
-    this.coverSnapshot(true);
     if (this.wantFrame !== null && this.fresh(this.wantFrame)) {
       this.staleSince = null;
       if (this.seeking) {
@@ -1135,7 +1134,6 @@ class StreamTrack {
     if (!shown || !rect || !compositor || !this.manifest || !this.planeFits) return false;
     if (!compositor.draw(shown.frame, rect, this.manifest.bound)) return false;
     this.lastDrawn = shown.f;
-    this.coverSnapshot(true);
     return true;
   }
 
@@ -1148,7 +1146,6 @@ class StreamTrack {
     this.lastDrawn = null;
     this.staleSince = null;
     this.closeShown();
-    this.coverSnapshot(false);
     if (was !== null) this.player.noteShowing();
   }
 
@@ -1170,28 +1167,6 @@ class StreamTrack {
       this.staleTimer = false;
       if (!this.disposed && this.staleSince !== null && this.wantFrame !== null) this.present(this.wantFrame);
     }, Math.max(1, holdMs - (now - this.staleSince)) + 20);
-  }
-
-  /**
-   * 有流画面时把快照平面藏起来,流清空时露出来(兜底顺序:流画不出来的那一拍当场落到快照,
-   * 不等下一次分派)。父页在流覆盖时照样投一张「海报」快照垫在下面(根因 C),
-   * 两层同时显示会叠出重影 —— 流在上面,快照从流的透明处漏出来。
-   *
-   * 单卡流:同一包裹层里的快照平面。组流、依赖下层的流(画布在舞台根下):每个成员包裹层里的快照平面。
-   * 只动快照平面自己的 `visibility`,React 不管这个属性,不会冲掉它。
-   */
-  private coverSnapshot(on: boolean): void {
-    const want = on ? "hidden" : "";
-    const set = (snap: HTMLElement | null | undefined) => { if (snap && snap.style.visibility !== want) snap.style.visibility = want; };
-    if (!stagePlane(this.plane)) {
-      set(this.canvas.parentElement?.querySelector<HTMLElement>(":scope > [data-pc-snapshot-plane]"));
-      return;
-    }
-    const root = this.player.rootElement();
-    if (!root) return;
-    for (const id of this.plane.clipIds) {
-      set(root.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(id)}"] > [data-pc-snapshot-plane]`));
-    }
   }
 
   /** 这一拍流画面在不在(画了、或留着上一张)。占位符 T1 按它判 */
@@ -1495,7 +1470,6 @@ class StreamTrack {
     }
     this.plane = plane;
     if (canvas !== this.canvas) {
-      this.coverSnapshot(false);
       this.canvas = canvas;
       // 包裹层重挂载(停下追帧的起步)换了一块新的空画布:把刚才那张原样画回去,不等解码
       if (!this.redraw()) {
@@ -1512,7 +1486,6 @@ class StreamTrack {
 
   dispose(): void {
     this.disposed = true;
-    this.coverSnapshot(false);
     for (const h of this.frames.values()) h.frame.close();
     this.frames.clear();
     this.closeShown();

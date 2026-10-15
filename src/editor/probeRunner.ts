@@ -61,14 +61,11 @@ import { costDeviceString, readGpuRenderer, resolveGlRoute } from "../render/cos
 import { budgetOf } from "../render/pipelinePlan.mjs";
 import { resolveTuning, PROBE_MAX_FRAMES, type PipelineTuning } from "../render/pipelineTuning.mjs";
 import { summarizeProbe } from "../render/probeSummary.mjs";
-import { pageEnvironment } from "./pageEnvironment.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
-import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, SnapshotCost, StageEvent, StageRpcClient } from "../render/stageRpc";
-import { probeFrameHtml } from "../render/stageRpc";
-import { mirrorKey } from "../render/dataMirror";
+import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, StageRpcClient } from "../render/stageRpc";
 import { clipIdentityOf, resetClipIdentityCache } from "./costIdentity";
 import { mergePlanCosts, setPlanCosts } from "./planDispatch";
-import { backStage, onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
+import { backStage, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
 import { measureGateOpen, whenMeasureGateOpen } from "./measureGate";
 
@@ -330,44 +327,7 @@ async function putCostsHttp(records: CardCostRecord[]): Promise<boolean> {
   }
 }
 
-/* ---------------------------------- 探针帧存成预渲染素材（TODO(R6)：端点还没合进来） */
 
-/** 端点回过一次 404 就不再试：`PUT /api/frames/snapshot` 由 R6 的 Agent 在做 */
-let snapshotEndpointMissing = false;
-
-/**
- * 快照趟里后台舞台 post 的 `probe-frame`，父页转发到 `PUT /api/frames/snapshot`
- * （**TODO(R6)**：这个端点由 R6 在做，还没合进来 —— 404 时静默丢弃、不报错）。
- *
- * **只转发审阅表 `independent` 的卡**（K1 末句）：`sourceDependent`（链上的源在缩水项目里没有）
- * 和 `belowDependent`（没有下层背景）在缩水项目里都拿不到输入，探针只计时、不存帧，
- * 它们的本地档仍由 C2 的整场景路产。
- *
- * `kind` / `key` 由预渲染进程按镜像里的项目用 A3a 的规则算，父页只带
- * `{ session, localRev, clipId, localFrame, html, environment }`。`environment` 是这台浏览器的渲染环境
- * （`pageEnvironment.mjs`），预渲染进程按它算页面的环境指纹：测量帧写在页面自己的键下，这张卡的
- * 快照随之锁定到页面的环境（卡片级指纹锁，契约 F.4）。
- */
-async function forwardProbeFrame(e: Extract<StageEvent, { type: "probe-frame" }>): Promise<void> {
-  probeFrameStats.frames++;
-  if (e.htmlGz) { probeFrameStats.gzFrames++; probeFrameStats.gzBytes += e.htmlGz.byteLength; }
-  else probeFrameStats.htmlBytes += e.html.length;
-  // 在线页面没有预渲染进程:不转发(存下来当预渲染结果属于 M7 的认领,C10 契约第 8 节)
-  if (!backend.forwardFrames) return;
-  if (snapshotEndpointMissing) return;
-  const key = mirrorKey();
-  if (!key) return;
-  try {
-    const res = await fetch("/api/frames/snapshot", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session: key.session, localRev: key.localRev, clipId: e.clipId, localFrame: e.localFrame, html: await probeFrameHtml(e), environment: pageEnvironment() }),
-    });
-    if (res.status === 404) snapshotEndpointMissing = true;
-  } catch {
-    snapshotEndpointMissing = true;
-  }
-}
 
 /* ------------------------------------------------------------------ 测一张卡 */
 
@@ -483,18 +443,7 @@ async function probeCardOnce(
     for (const s of (timePass as { steps?: number[] }).steps ?? []) steps.push(Number(s) || 0);
     if (stale() || signal.aborted) return { kind: "retry" };
 
-    /* ---- 快照趟：每帧生成一次快照并 post probe-frame；仍受一拍预算约束 ---- */
-    const snapPass = await stage.render(lastSec, { jump: true, probe: "snapshot", maxCatchUp: Infinity });
-    if (isAborted(snapPass)) {
-      const out = onAbort(snapPass);
-      if (out) return out;
-    }
-    for (const s of ((snapPass as { snapshotSteps?: SnapshotCost[] }).snapshotSteps ?? [])) {
-      inline.push(Number(s.inlineMs) || 0);
-      raster.push(Number(s.rasterMs) || 0);
-      serialize.push(Number(s.serializeMs) || 0);
-    }
-    if (stale() || signal.aborted) return { kind: "retry" };
+
 
     /* ---- 两趟布尔探针：整趟在舞台里跑（K1） ---- */
     const boolPass = await stage.render(lastSec, { jump: true, probe: "booleans" });
@@ -701,28 +650,20 @@ async function runLoop(): Promise<void> {
 
 /** 一张卡：排进单飞队列，按 E0 的规矩最多重来几次 */
 async function probeCard(job: ProbeJob, tuning: PipelineTuning, device: string, stale: () => boolean): Promise<CardCostRecord | null> {
-  // 探针帧存成预渲染素材：只有审阅表 independent 的卡存（K1 末句）
-  const off = job.independent
-    ? onStageEvent((e) => { if (e.type === "probe-frame") void forwardProbeFrame(e); })
-    : () => {};
-  try {
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      if (stale()) return null;
-      let out: Attempt;
-      try {
-        out = await runBackJob("probe", (ctx) => probeCardOnce(job, ctx.stage, ctx.signal, tuning, device, stale));
-      } catch {
-        // iframe 正在换 / RPC 抛了：换一次客户端再来
-        await whenStageReady("back").catch(() => undefined);
-        continue;
-      }
-      if (out.kind === "ok") return out.record;
-      if (out.kind === "fail") return null;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (stale()) return null;
+    let out: Attempt;
+    try {
+      out = await runBackJob("probe", (ctx) => probeCardOnce(job, ctx.stage, ctx.signal, tuning, device, stale));
+    } catch {
+      // iframe 正在换 / RPC 抛了：换一次客户端再来
+      await whenStageReady("back").catch(() => undefined);
+      continue;
     }
-    return null;
-  } finally {
-    off();
+    if (out.kind === "ok") return out.record;
+    if (out.kind === "fail") return null;
   }
+  return null;
 }
 
 /** 测试用：把驱动恢复成刚加载的样子 */
@@ -736,7 +677,6 @@ export function resetProbeRunner(): void {
   firstPassDone = false;
   maskRound = 0;
   cardMeasuredHook = null;
-  snapshotEndpointMissing = false;
   progress = IDLE;
   listeners.clear();
   probedLog.length = 0;

@@ -105,8 +105,6 @@ const LEGACY = typeof window !== "undefined" && new URLSearchParams(location.sea
  */
 const LIVE = typeof window !== "undefined" && new URLSearchParams(location.search).get("preview") === "stage";
 
-/** `.pc-awaiting` 的兜底时长(E0):快照没来也要在这之后露出活组件,不能永久隐身 */
-const AWAIT_FALLBACK_MS = 500;
 /**
  * 重卡被点名抑制、它的轨道流还没画出第一帧时,先不藏它原来的画面,最多等这么久(mechanism/rendering.md「兜底顺序」:
  * 「起播和跳转后的第一拍,流的第一帧画出来之前不藏这张卡原来的画面」);到时还没有就照常藏起来,这一层落到占位符。
@@ -267,8 +265,6 @@ export default function StageView() {
     settledHeld: new Set<string>() as ReadonlySet<string>,
     /** 这一帧的快照还没到、先藏着等的片段(E0 的 `setTime({ awaiting })`) */
     awaiting: new Set<string>() as ReadonlySet<string>,
-    /** `.pc-awaiting` 的 500 ms 兜底(真定时器:暂停态虚拟时钟不动) */
-    awaitTimer: 0,
     /** 正在用子树虚拟时间追帧的片段 → 它此刻的全局舞台毫秒(K5 第一路,R5 才填) */
     settling: new Map<string, number>() as ReadonlyMap<string, number>,
     /** K3:按片段重挂载的代数(空表时 `Stage` 退回整舞台 playToken) */
@@ -694,66 +690,12 @@ export default function StageView() {
     };
     onStreamBoxes = () => { if (ref.current.role === "front") commitPlanes(); };
 
-    /**
-     * 应用一次快照增量(A3c):`null` = 摘掉,`reset` = 先清空全部再应用。
-     * **整份换一个新 Map**,不就地改 —— `Stage` 按引用判「谁刚变」。
-     * 快照到了的片段同时从 `awaiting` 里去掉:`.pc-snapshot` 接管,不用再等兜底。
-     * 回的是本次投递的字节数(父页按它判「一次投递 ≤ 2 MB」要不要拆)。
-     */
-    const applySnapshots = (patch: Record<string, string | null>, reset: boolean): number => {
-      const next = new Map(reset ? [] : ref.current.snapshots);
-      const arrived: string[] = [];
-      let bytes = 0;
-      for (const [id, html] of Object.entries(patch)) {
-        if (html === null) next.delete(id);
-        else {
-          next.set(id, html);
-          bytes += html.length;
-          arrived.push(id);
-        }
-      }
-      ref.current.snapshots = next;
-      if (arrived.some((id) => ref.current.awaiting.has(id))) {
-        const rest = new Set(ref.current.awaiting);
-        for (const id of arrived) rest.delete(id);
-        setAwaiting(rest);
-      }
-      return bytes;
-    };
-
-    /**
-     * `.pc-awaiting` 的两条退出路(E0,**必有一个**):快照到达(上面那条),
-     * 或 **500 ms 兜底**超时后摘掉、改露活组件 —— 宁可露初始态也不能永久隐身:
-     * `visibility:hidden` 会让 `solid.ts` 的 `isSolid` 判它不是实体,`hitTest` 点不中、
-     * `bounds` 退回整屏框。兜底用**真** `setTimeout`:暂停态虚拟时钟不动,虚拟定时器永远不响。
-     */
-    const setAwaiting = (ids: Iterable<string>) => {
-      ref.current.awaiting = new Set(ids);
-      window.clearTimeout(ref.current.awaitTimer);
-      ref.current.awaitTimer = 0;
-      if (!ref.current.awaiting.size) return;
-      ref.current.awaitTimer = realSetTimeout(() => {
-        ref.current.awaitTimer = 0;
-        if (!ref.current.awaiting.size) return;
-        ref.current.awaiting = new Set();
-        commitPlanes();
-      }, AWAIT_FALLBACK_MS);
-    };
-
     /** 掐掉还在飞的 render:回包按 reason 给,不允许静默丢 */
     const abortPending = (reason: "superseded" | "project") => {
       const p = ref.current.pending;
       if (!p) return;
       ref.current.pending = null;
       p.resolve({ aborted: true, reason, elapsedMs: realNow() - p.startedAt, frames: p.frames() });
-    };
-
-    /** 片段的入点(给 probe-frame 生成快照时算本地帧号用) */
-    const clipStart = (clipId: string): number => {
-      const p = ref.current.project;
-      if (!p) return 0;
-      for (const tr of p.tracks) for (const c of tr.clips) if (c.id === clipId) return c.start;
-      return 0;
     };
 
     /**
@@ -1043,10 +985,6 @@ export default function StageView() {
       setSettlingAt(task.clipId, null);
       let announce: string[] = [];
       if (caughtUp && task.announce) {
-        // 舞台自己摘掉这张卡的快照平面;父页收到 `settled` 把 clipId 从投递基线里删掉(A3c)
-        const rest = new Map(ref.current.snapshots);
-        rest.delete(task.clipId);
-        ref.current.snapshots = rest;
         // 贴着流的卡:抑制也由舞台自己撤(组流等整组),同一次提交
         announce = releaseSettled(task.clipId, task.targetMs);
       }
@@ -1699,20 +1637,7 @@ export default function StageView() {
         backWork.waiters.add(done);
       });
     };
-    /**
-     * 在线舞台的探针帧压成 gzip 字节、随消息转移(C10 契约第 2 节「大块产出」);压不了照旧传字符串。
-     * 压缩是异步的:`render` 回包之前要等这些帧都发出去(父页收到回包就退订了,晚到的帧会丢)。
-     */
-    const probeFramePosts = new Set<Promise<void>>();
-    const postProbeFrame = (clipId: string, localFrame: number, html: string) => {
-      if (!ONLINE) { postStageEvent({ type: "probe-frame", clipId, localFrame, html }); return; }
-      const job = compressHtml(html).then((gz) => {
-        if (gz) postStageEvent({ type: "probe-frame", clipId, localFrame, html: "", htmlGz: gz }, "*", [gz]);
-        else postStageEvent({ type: "probe-frame", clipId, localFrame, html });
-      }).finally(() => { probeFramePosts.delete(job); });
-      probeFramePosts.add(job);
-    };
-    const flushProbeFrames = async () => { if (probeFramePosts.size) await Promise.allSettled([...probeFramePosts]); };
+
 
     /*
      * M7 生成快照(`bakeFrame`,契约第 4.3 节):代数(`bakeCancel`、新的一帧作废在飞的那一帧)与顺推的接续点
@@ -1880,9 +1805,6 @@ export default function StageView() {
         const prev = ref.current.t;
         const dt = target - prev;
         ref.current.t = target;
-        if (opts.snapshots) applySnapshots(opts.snapshots, false);
-        // 本次要加 `.pc-awaiting` 的片段由父页点名(E0:两个判据只有父页知道)
-        setAwaiting(opts.awaiting ?? []);
         if (!p) return { path: "set" } satisfies SetTimeReply;
         // 暂停 / 拖动时来了 setTime,就没有「还在飞的补跑」这回事了
         renderGen.current++;
@@ -1969,10 +1891,7 @@ export default function StageView() {
         const p = ref.current.project;
         if (!p) return { aborted: true, reason: "project", elapsedMs: 0 } satisfies RenderReply;
         const fps = Math.max(1, p.fps || 30);
-        const budgetMs = (1000 / fps) * 0.7;
-        // K1 的两趟(任务书 K1):`true` 按老调用方的意思等于快照趟
-        const probeMode = opts.probe === true ? "snapshot" : opts.probe || null;
-        const probe = probeMode !== null;
+        const probeMode = opts.probe === true ? "time" : opts.probe || null;
         const timing = probeMode === "time";
         const maxFrames = opts.maxFrames ?? (timing ? PROBE_MAX_FRAMES : Infinity);
 
@@ -2009,16 +1928,8 @@ export default function StageView() {
 
         let frames = 0;
         let truncated = false;
-        /*
-         * 生成快照的三段耗时按帧累加(任务书 3.8)。`stepMs = elapsedMs − 这三段之和` ——
-         * 判重只看 `stepMs`(3.3),生成快照的时间只排探针和预渲染的产能。
-         */
-        const snapshot = { inlineMs: 0, rasterMs: 0, serializeMs: 0 };
-        const stepOf = (elapsed: number) => Math.max(0, elapsed - snapshot.inlineMs - snapshot.rasterMs - snapshot.serializeMs);
         /* 计时趟:每帧的活渲耗时(提交 React → 跑 rAF 回调 → 钉动画),帧间让出的时间不算进来 */
         const steps: number[] = [];
-        /* 快照趟:每帧三段的耗时。`snapshot` 是它们的累加,而成本记录要的是单帧稳健值 */
-        const snapshotSteps: SnapshotCost[] = [];
         let frameStarted = 0;
         /*
          * 后台活停着的时间(C10 契约第 2 节):不算进探针的封顶与耗时。在线的后台舞台逐帧让一个宏任务(`setTimeout(0)`),
@@ -2054,10 +1965,6 @@ export default function StageView() {
                   }
                   return false;
                 }
-                if (probe && (frames >= maxFrames || wall() > budgetMs)) {
-                  truncated = true;
-                  return true;
-                }
                 return false;
               },
               onFrame: (ms) => {
@@ -2066,45 +1973,23 @@ export default function StageView() {
               },
               afterFrame: (ms) => {
                 pinner.sync(ms, skipWrappers());
-                if (!probe) return;
+                if (!timing) return;
                 frames++;
                 /*
                  * canvas 卡(R9 M3 / M4):K1 探针的每一帧都发 beat、等 done —— 计时趟的每帧耗时含这段往返
-                 * (`stepMs` 的口径),快照趟要位图贴上了才生成快照(不然 `rasterizeCanvas` 判 `lossy`)。
+                 * (`stepMs` 的口径)。
                  * 没有 gl 平面时 `glStrict` 回 `undefined`,这一帧和以前一模一样同步走完。
                  */
                 const glDone = glStrict(ms / 1000);
-                if (glDone) return glDone.then(() => afterProbeFrame(ms));
-                afterProbeFrame(ms);
+                if (glDone) return glDone.then(() => { steps.push(realNow() - frameStarted); });
+                steps.push(realNow() - frameStarted);
               },
             });
-            function afterProbeFrame(ms: number): void {
-              // 计时趟:只留下这一帧的耗时,不生成快照、不 post probe-frame
-              if (timing) {
-                steps.push(realNow() - frameStarted);
-                return;
-              }
-              const root = rootRef.current;
-              if (!root) return;
-              // 探针推过的帧直接存成死素材(K1):本地帧号按探针自己的步序算,不取 data-pc-local-frame
-              const snap = createSnapshot(root);
-              snapshot.inlineMs += snap.timing.inlineMs;
-              snapshot.rasterMs += snap.timing.rasterMs;
-              snapshot.serializeMs += snap.timing.serializeMs;
-              snapshotSteps.push({ inlineMs: snap.timing.inlineMs, rasterMs: snap.timing.rasterMs, serializeMs: snap.timing.serializeMs });
-              for (const c of snap.controls) {
-                postProbeFrame(c.id, Math.round((ms / 1000 - clipStart(c.id)) * fps), c.html);
-              }
-            }
             if (gen !== renderGen.current) return; // 已被 abortPending 按 reason 回包
-            // 在线舞台的探针帧压缩是异步的:回包之前等它们发完(等的时间不算进耗时)
-            if (probe && probeFramePosts.size) { const t0 = realNow(); await flushProbeFrames(); pausedMs += realNow() - t0; }
-            if (gen !== renderGen.current) return;
             ref.current.pending = null;
             const elapsedMs = wall();
             if (truncated) {
-              resolve({ aborted: true, reason: "timeout", elapsedMs, stepMs: stepOf(elapsedMs), frames, truncated: true, snapshot,
-                ...(timing ? { steps } : { snapshotSteps }) });
+              resolve({ aborted: true, reason: "timeout", elapsedMs, stepMs: elapsedMs, frames, truncated: true, steps });
               return;
             }
             flushSync(() => setT(target));
@@ -2114,7 +1999,7 @@ export default function StageView() {
             scheduleSample();
             ref.current.t = target;
             // K5 第二路补跑到目标的那一帧(中间帧不发,同步 advanceTo 的豁免同理):位图贴上再回包
-            if (!probe) {
+            if (!timing) {
               await glStrict(target);
               if (gen !== renderGen.current) return;
               /*
@@ -2123,9 +2008,8 @@ export default function StageView() {
                */
               measureInkBoxesNow();
             }
-            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs),
-              ...(probe ? { frames, truncated: false, snapshot } : {}),
-              ...(timing ? { steps } : probe ? { snapshotSteps } : {}) });
+            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: elapsedMs,
+              ...(timing ? { frames, truncated: false, steps } : {}) });
           })();
         });
       },
@@ -2211,7 +2095,6 @@ export default function StageView() {
           ref.current.settling = new Map();
           ref.current.catchUps.clear();
           ref.current.lastActive = new Set();
-          setAwaiting([]);
           catchUpGen.current++;
           // 后台舞台永远没有占位符(product/rendering.md「兜底顺序」):先撤下,再关掉 —— 这一次提交里槽位一起摘掉
           hideAllPlaceholders(slotOf);
@@ -2751,17 +2634,10 @@ export default function StageView() {
         return { ok: true as const };
       },
       /**
-       * A3c:patch 是相对上次投递的增量(null = 摘掉),reset = 先清空全部再应用。
-       * 回包的 `bytes` 就是「一次投递 ≤ 2 MB」的实测口子,父页超了就拆。
+       * HTML 快照已由己二撤掉，留作空桩兼容旧接口。
        */
-      async setSnapshots(patch, opts = {}) {
-        const bytes = applySnapshots(patch, !!opts.reset);
-        /*
-         * 播放中不单独提交(P4 性能修正):节拍循环下一拍的 `flushSync(setT)` 读的就是 `ref.current.snapshots`,
-         * 海报快照跟着那一次提交一起上屏,晚到最多一拍。单独再 `flushSync` 一次等于每次投递多一整次 React 提交。
-         */
-        if (!ref.current.beatRunning) commitPlanes();
-        return { ok: true as const, bytes };
+      async setSnapshots(_patch, _opts = {}) {
+        return { ok: true as const, bytes: 0 };
       },
     };
 
@@ -2845,7 +2721,6 @@ export default function StageView() {
       gl.dispose();
       delete (window as unknown as Record<string, unknown>).__pcGlWorkerDiag;
       window.clearTimeout(ref.current.settle);
-      window.clearTimeout(ref.current.awaitTimer);
       window.clearTimeout(ref.current.streamWaitTimer);
       window.clearTimeout(sampleTimer);
       window.clearTimeout(inkTimer);

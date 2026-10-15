@@ -170,7 +170,7 @@ test("在线页面改了下层:父页当场不再发旧流;在线来源收到新
   for (const playing of [false, true]) {
     const head = { project: p1, t: at(77), playing };
     assert.deepEqual(planFeed(head).streamPlanes, [], `playing=${playing}`);
-    assert.deepEqual(suppressedAt(head), playing ? ["glass"] : [], "照没有流的重卡办");
+    assert.deepEqual(suppressedAt(head), ["glass"], "照没有流的重卡办:未 settled 暂停进 scrub,播放进 heavy");
     assert.deepEqual(snapshotFeedDebug(head).staleBelow, ["glass"]);
   }
   // 在线来源收到新项目:那一层撤掉(就绪区间发空),清单也不再给

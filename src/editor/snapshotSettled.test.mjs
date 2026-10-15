@@ -40,47 +40,35 @@ beforeEach(async () => {
   head = { project: P0, t: 1, playing: false };
   feed.syncSnapshotSubscription(() => { void feed.deliverSnapshots(stage, "front", head); });
   push({ type: "layer", clipId: "h", kind: "html", key: "OLDKEY", ranges: [[0, 299]] });
-  await tick();
-  await feed.deliverSnapshots(stage, "front", head);   // 字节到货后的补投
-  assert.ok(sent.some((s) => s.patch.h?.includes("OLDKEY")), "暂停时先贴快照(正常)");
+  assert.deepEqual(feed.suppressedAt(head), ["h"], "暂停时未 settled 先抑制");
 });
 
-test("settled 之后改卡:暂停中任何 SSE 都不再把快照投回去", async () => {
+test("settled 之后改卡:暂停中不再抑制", async () => {
   feed.noteSettled("front", ["h"]);
   sent.length = 0;
   head = { project: P1, t: 1, playing: false };
-  await tick();
-  push({ type: "layer", clipId: "other", kind: "html", key: "X", ranges: [[0, 1]] });
-  await tick();
-  await feed.deliverSnapshots(stage, "front", head);
-  assert.ok(!sent.some((s) => s.patch.h), `settled 的卡不再投快照:${JSON.stringify(sent.map((s) => s.patch))}`);
-  assert.ok(!feed.planFeed(head).picks.has("h"), "planFeed 暂停态也不再给它选帧");
+  assert.deepEqual(feed.suppressedAt(head), [], "settled 的卡不再抑制");
+  assert.deepEqual(feed.planFeed(head).scrub, [], "planFeed 暂停态也不再进 scrub");
 });
 
-test("下一次 setTime 清掉 settled:同一张卡照常贴快照", async () => {
+test("下一次 setTime 清掉 settled:同一张卡照常进入抑制", async () => {
   feed.noteSettled("front", ["h"]);
   head = { project: P0, t: 2, playing: false };
-  const { snapshots } = feed.pickForSetTime(head);
-  assert.ok(typeof snapshots.h === "string" || feed.planFeed(head).picks.has("h"), "setTime 之后重新选帧");
+  feed.pickForSetTime(head);
+  assert.deepEqual(feed.suppressedAt(head), ["h"], "setTime 之后重新进入抑制");
 });
 
-test("起播清掉 settled:播放中照常有兜底快照", async () => {
+test("起播清掉 settled:播放后回到暂停照常进入抑制", async () => {
   feed.noteSettled("front", ["h"]);
   head = { project: P0, t: 1, playing: true };
-  await tick();
   await feed.deliverSnapshots(stage, "front", head);
   head = { project: P0, t: 1, playing: false };
-  assert.ok(feed.planFeed(head).picks.has("h"), "播放过一次之后 settled 已经清空");
+  assert.deepEqual(feed.suppressedAt(head), ["h"], "播放过一次之后 settled 已经清空");
 });
 
-test("暂停态互换之后整台精确:markAllSettled 期间不投任何快照,setTime 后恢复", async () => {
+test("暂停态互换之后整台精确:markAllSettled 期间一张都不抑制,setTime 后恢复", async () => {
   feed.markAllSettled("front");
-  sent.length = 0;
-  await tick();
-  push({ type: "layer", clipId: "other", kind: "html", key: "Y", ranges: [[0, 1]] });
-  await tick();
-  await feed.deliverSnapshots(stage, "front", head);
-  assert.ok(!sent.some((s) => typeof s.patch.h === "string"), "互换后不再盖回快照");
+  assert.deepEqual(feed.suppressedAt(head), [], "互换后整台精确,不抑制");
   feed.pickForSetTime({ project: P0, t: 1.5, playing: false });
-  assert.ok(feed.planFeed({ project: P0, t: 1.5, playing: false }).picks.has("h"));
+  assert.deepEqual(feed.suppressedAt({ project: P0, t: 1.5, playing: false }), ["h"], "setTime 后恢复抑制");
 });

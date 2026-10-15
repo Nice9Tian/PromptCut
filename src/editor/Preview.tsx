@@ -23,7 +23,7 @@ import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
 import { backfillHooks } from "./sync/backfillUpload";
-import { currentReadyIndex, deliverSnapshots, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { clearSettled, currentReadyIndex, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, activeOnlineSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { StreamPlaneSender } from "../render/streamPlayer";
 import { notePlayFrame, notePlayRunStart, playingSwapTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
@@ -1135,7 +1135,6 @@ export function Preview() {
      */
     const holdForSwap = !head.playing && !head.lowMemory && swapInFlight();
     if (!holdForSwap) syncPlanes(s, head);
-    await deliverSnapshots(s, "front", head);
   }, [syncPlanes]);
   const pumpRef = useRef(pumpFeed);
   pumpRef.current = pumpFeed;
@@ -1199,22 +1198,10 @@ export function Preview() {
       if (document.visibilityState === "visible") src.focus(tRef.current, getState().project.fps || 30);
     };
     document.addEventListener("visibilitychange", resume);
-    /*
-     * 暂停着的在线页面没有帧事件会再投:每 5 秒带 reset 重投一次,对齐舞台的实际状态
-     * (投递记进基线之后 setTime 又换掉了快照、或 iframe 原地重载丢了已确认的投递)。
-     * 播放中每拍都在投,不用它。
-     */
-    const reconcile = window.setInterval(() => {
-      if (document.visibilityState === "visible" && !playingRef.current) {
-        markBaselineReset("front");
-        void pumpRef.current();
-      }
-    }, 5000);
     if (typeof window !== "undefined") (window as unknown as Record<string, unknown>).__pcOnlineSnapshots = () => src.debug();
     return () => {
       off();
       document.removeEventListener("visibilitychange", resume);
-      window.clearInterval(reconcile);
       src.stop();
       onlineSourceRef.current = null;
       setActiveOnlineSource(null);
@@ -1973,26 +1960,14 @@ export function Preview() {
     if (!s || lowMemoryMeasuring()) return;
     try {
       await syncProject("front", getState().project);
-      /*
-       * C4 的快照增量和 `t` 在**同一次 React 提交**里生效(E0):拖过一张 stateful 卡的
-       * 入点时,新挂载的组件和它的快照平面同帧出现、不闪初始态。手里没有的那几帧当场
-       * 发起取字节(不等),由 `.pc-awaiting` 藏 500 ms 兜底。
-       */
-      const feed = liveRef.current ? pickForSetTime({ project: getState().project, t: sec, playing: false, lowMemory: lowMemRef.current })
-        : { snapshots: {} as Record<string, string | null>, awaiting: [] as string[] };
-      /*
-       * 这一刻贴流的重卡:它们的流平面和抑制要**先于**这一次 `setTime` 到舞台 —— 舞台在 `setTime` 里就按新时刻取流的那一帧,
-       * 没推到位的活组件一拍都不露。(`pickForSetTime` 刚把上一次停下的「已精确」作废,所以排在它后面。)
-       */
-      if (liveRef.current) syncPlanes(s, { project: getState().project, t: sec, playing: false, lowMemory: lowMemRef.current });
+      if (liveRef.current) {
+        clearSettled("front", `setTime ${sec}`);
+        syncPlanes(s, { project: getState().project, t: sec, playing: false, lowMemory: lowMemRef.current });
+      }
       // 低内存档的停下追一帧另走 `settleLowMemory`(下面),舞台的 K5 第一路不起
       const { settle: _settle, ...stageOpts } = opts;
       setTimeEpochRef.current++;
-      await s.setTime(sec, {
-        ...(lowMemRef.current ? stageOpts : opts),
-        ...(Object.keys(feed.snapshots).length ? { snapshots: feed.snapshots } : {}),
-        ...(feed.awaiting.length ? { awaiting: feed.awaiting } : {}),
-      });
+      await s.setTime(sec, lowMemRef.current ? stageOpts : opts);
     } catch (e) {
       // iframe 正在换(detached):新的 ready 会重发
       setTimeErrorRef.current = { at: Math.round(performance.now()), sec, error: String((e as Error)?.message ?? e).slice(0, 120) };

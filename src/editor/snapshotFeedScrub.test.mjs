@@ -75,7 +75,7 @@ test("暂停 / 拖动:这一帧有流的重卡发流平面、被抑制;有流不
   assert.deepEqual(calls, [], "也不投");
 });
 
-test("这一帧所在分段的流没就绪、或者这张卡根本没有流:不抑制,落回快照这条路(现状)", () => {
+test("这一帧所在分段的流没就绪、或者这张卡根本没有流:重卡进 scrub 占位,不选快照", () => {
   const p = project([card("h"), card("n")]);
   plan = heavyEverywhere("h", "n");
   src.push(html("h", [[0, 299]]));
@@ -84,14 +84,15 @@ test("这一帧所在分段的流没就绪、或者这张卡根本没有流:不�
   const head = { project: p, t: at(37), playing: false };
   const f = planFeed(head);
   assert.deepEqual(f.streamPlanes, []);
-  assert.deepEqual(f.scrub, []);
-  assert.deepEqual([...f.picks.keys()].sort(), ["h", "n"]);
-  assert.deepEqual(suppressedAt(head), []);
-  assert.deepEqual(pickForSetTime(head).awaiting.sort(), ["h", "n"], "字节还没到:照现状点名等快照");
-  // 拖回有流的那一段:h 改贴流,n 照旧
+  assert.deepEqual(f.scrub, ["h", "n"]);
+  assert.equal(f.picks.size, 0, "快照退役,不选快照");
+  assert.deepEqual(suppressedAt(head), ["h", "n"]);
+  assert.deepEqual(pickForSetTime(head), { snapshots: {}, awaiting: [] });
+  // 拖回有流的那一段:h 贴流,n 照旧在 scrub 占位
   const back = planFeed({ ...head, t: at(20) });
-  assert.deepEqual(back.scrub, ["h"]);
-  assert.deepEqual([...back.picks.keys()], ["n"]);
+  assert.deepEqual(back.streamPlanes.map((s) => s.clipIds[0]), ["h"]);
+  assert.deepEqual(back.scrub, ["h", "n"]);
+  assert.equal(back.picks.size, 0);
 });
 
 test("追到精确活渲(settled)的卡不再抑制,流平面照发(把这一帧先解好);下一次 setTime 重新贴流;起播照常抑制", () => {
@@ -143,10 +144,12 @@ test("组流整条判:成员有一张没追上,整组都还抑制着;全追上�
   plan = heavyEverywhere("a");
   pickForSetTime(head);
   assert.deepEqual(planFeed(head).streamPlanes, []);
-  assert.deepEqual(planFeed(head).scrub, []);
+  assert.deepEqual(planFeed(head).scrub, ["a"], "a 没有流但仍是重卡未 settled,进 scrub 占位");
+  noteSettled("front", ["a"]);
+  assert.deepEqual(planFeed(head).scrub, [], "a settled 之后不再抑制");
 });
 
-test("同屏超出解码器预算:流平面按预算截;超出的那几张也抑制着,落到快照", () => {
+test("同屏超出解码器预算:流平面按预算截;超出的那几张也抑制着(占位),不选快照", () => {
   const ids = Array.from({ length: DECODER_BUDGET + 2 }, (_, i) => `c${i}`);
   const p = project(ids.map((id) => card(id)));
   plan = heavyEverywhere(...ids);
@@ -155,8 +158,8 @@ test("同屏超出解码器预算:流平面按预算截;超出的那几张也抑
   const f = planFeed(head);
   assert.equal(f.streamPlanes.length, DECODER_BUDGET);
   assert.deepEqual(f.scrub, [...ids].sort());
-  assert.deepEqual([...f.picks.keys()].sort(), ids.slice(DECODER_BUDGET).sort(), "只有超出预算的那两张读快照");
-  assert.ok([...f.picks.values()].every((pick) => pick.tier === "over"));
+  assert.equal(f.picks.size, 0, "快照退役,不选快照");
+  assert.equal(f.overPlanes.length, 2, "超出预算的标 over");
 });
 
 test("大于 1080p 或高于 60 帧的项目:同屏 6 条以内不看像素,都发流平面,没有超出预算的层(原来放得过的照样放得过)", () => {
@@ -174,7 +177,7 @@ test("大于 1080p 或高于 60 帧的项目:同屏 6 条以内不看像素,都�
   }
 });
 
-test("低内存档:播放、暂停、拖动都发流平面,每条带 first(只解分段第一帧);有流盖着的卡不读小尺寸,没有流的照旧选小尺寸", () => {
+test("低内存档:播放、暂停、拖动都发流平面,每条带 first(只解分段第一帧);快照已退役不选小尺寸", () => {
   const p = project([card("h"), card("n")]);
   plan = heavyEverywhere("h", "n");
   src.push(html("h", [[0, 299]]));
@@ -184,19 +187,19 @@ test("低内存档:播放、暂停、拖动都发流平面,每条带 first(只�
     const f = planFeed({ project: p, t: at(37), playing, lowMemory: true });
     assert.deepEqual(f.streamPlanes, [{ clipIds: ["h"], key: "s-h", ranges: [[0, 19]], originFrame: 0, first: true }], `playing=${playing}`);
     assert.deepEqual(f.overPlanes, []);
-    assert.deepEqual([...f.picks.keys()], ["n"], "兜底顺序:有流贴流;没有流的落到预渲染小尺寸");
-    assert.equal(f.picks.get("n").tier, "none");
+    assert.equal(f.picks.size, 0, "小尺寸快照退役");
   }
   // 普通档的流平面不带 first(照常逐帧解)
   assert.deepEqual(planFeed({ project: p, t: at(37), playing: true }).streamPlanes, [{ clipIds: ["h"], key: "s-h", ranges: [[0, 19]], originFrame: 0 }]);
-  // 这一帧所在分段的流还没就绪(只有第 0、1 段,播放头在第 2 段):不发流平面,这张卡照旧选小尺寸
+  // 这一帧所在分段的流还没就绪(只有第 0、1 段,播放头在第 2 段):不发流平面,不选小尺寸
   src.push(stream("h", [[0, 1]]));
   const late = planFeed({ project: p, t: at(37), playing: false, lowMemory: true });
   assert.deepEqual(late.streamPlanes, []);
-  assert.deepEqual([...late.picks.keys()].sort(), ["h", "n"]);
+  assert.equal(late.picks.size, 0);
+  assert.deepEqual(late.scrub, ["h", "n"]);
 });
 
-test("低内存档的预算:小卡同屏只放 4 条(解码器个数),满屏卡只放 2 条(画幅之和);超出的标 over、落到小尺寸;普通档同样的卡都放得下", () => {
+test("低内存档的预算:小卡同屏只放 4 条(解码器个数),满屏卡只放 2 条(画幅之和);超出的标 over;普通档同样的卡都放得下", () => {
   const ids = ["a", "b", "c", "d", "e", "f"];
   const head = (p, extra = {}) => ({ project: p, t: at(37), playing: true, ...extra });
   // 六张小卡(框 320×240)
@@ -207,8 +210,7 @@ test("低内存档的预算:小卡同屏只放 4 条(解码器个数),满屏卡�
   assert.deepEqual(s.streamPlanes.map((x) => x.clipIds[0]), ["a", "b", "c", "d"]);
   assert.ok(s.streamPlanes.every((x) => x.first === true));
   assert.deepEqual(s.overPlanes.map((x) => [x.clipIds[0], x.over, "first" in x]), [["e", true, false], ["f", true, false]]);
-  assert.deepEqual([...s.picks.keys()].sort(), ["e", "f"], "超出预算的落到预渲染小尺寸");
-  assert.ok([...s.picks.values()].every((pick) => pick.tier === "over"));
+  assert.equal(s.picks.size, 0, "小尺寸快照退役");
   assert.equal(streamPlanesAt(head(small, { lowMemory: true })).length, 6, "发给舞台的是放行的 4 条加超出的 2 条(只为摆占位符)");
   assert.equal(planFeed(head(small)).streamPlanes.length, 6, "普通档:6 条都放");
   // 六张满屏卡:低内存档放 2 条;60 帧每秒的项目也是 2 条(开销不乘项目帧率)
@@ -225,11 +227,11 @@ test("片段从第 100 帧开始(不是 15 的倍数):暂停着按这条流自�
   const p = project([card("d", 100 / FPS + 1e-3, 250 / FPS)]);
   plan = heavyEverywhere("d");
   src.push(stream("d", [[1, 2]], { originFrame: 101 }));   // 第 116～145 帧
-  const scrubAt = (frame) => planFeed({ project: p, t: at(frame), playing: false }).scrub;
-  assert.deepEqual(scrubAt(115), [], "第 115 帧在第 0 段,没就绪");
-  assert.deepEqual(scrubAt(116), ["d"]);
-  assert.deepEqual(scrubAt(145), ["d"]);
-  assert.deepEqual(scrubAt(146), [], "第 146 帧是第 3 段");
+  const streamAt = (frame) => planFeed({ project: p, t: at(frame), playing: false }).streamPlanes.length;
+  assert.equal(streamAt(115), 0, "第 115 帧在第 0 段,没就绪");
+  assert.equal(streamAt(116), 1);
+  assert.equal(streamAt(145), 1);
+  assert.equal(streamAt(146), 0, "第 146 帧是第 3 段");
 });
 
 test("这台设备跑不了的卡(在线浏览器模式)停下不追:「已精确」对它不成立,暂停着一直贴流", async () => {

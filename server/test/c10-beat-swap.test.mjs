@@ -151,7 +151,7 @@ async function twoBeats({ on, playing }) {
     src.push({ type: 'layer', clipId: 'h', kind: 'html', key: 'k-h', ranges: [[0, 600]] });
     const stage = fakeStage();
     await primeAt(f, stage, 60, playing);
-    assert.equal(await f.deliverSnapshots(stage, 'front', { project: project([card('h', 0, 10)]), t: 60 / FPS, playing }), 1, '第 60 帧投出去');
+    assert.equal(await f.deliverSnapshots(stage, 'front', { project: project([card('h', 0, 10)]), t: 60 / FPS, playing }), 0, '快照退役后不投');
     // 下一拍（60 fps，约 16.7 ms 后），换到第 61 帧
     now += 1000 / FPS;
     const head2 = await primeAt(f, stage, 61, playing);
@@ -161,15 +161,15 @@ async function twoBeats({ on, playing }) {
   }
 }
 
-it('C10-BS-05 在线按拍换帧：播放中相邻两拍（60 fps，间隔 16.7 ms）都投，不受 33 ms 节流', async () => {
-  assert.equal(await twoBeats({ on: true, playing: true }), 1, '第 61 帧在下一拍就投出去');
+it('C10-BS-05 在线按拍换帧：快照退役后 deliverSnapshots 返回 0', async () => {
+  assert.equal(await twoBeats({ on: true, playing: true }), 0);
 });
 
-it('C10-BS-06 节流只留给非播放时的投递：开着按拍换帧、暂停时 33 ms 内不重投', async () => {
+it('C10-BS-06 节流只留给非播放时的投递：快照退役后 deliverSnapshots 返回 0', async () => {
   assert.equal(await twoBeats({ on: true, playing: false }), 0);
 });
 
-it('C10-BS-07 桌面（开关关着）播放中照旧受 33 ms 节流', async () => {
+it('C10-BS-07 桌面（开关关着）播放中：快照退役后 deliverSnapshots 返回 0', async () => {
   const f = await loadFeed();
   beatSwitch(f)(false);
   assert.equal(await twoBeats({ on: false, playing: true }), 0);

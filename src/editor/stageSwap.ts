@@ -43,8 +43,7 @@ import { backStage, frontStage, onStageEvent, pushProject, syncProject } from ".
 import { runBackJob } from "./stageJobs";
 import { currentCosts, currentPlan, currentTuning, sendPlanTo } from "./planDispatch";
 import { clipIdentityOf } from "./costIdentity";
-import { localOnlyClipIds } from "../render/placeholderHost";
-import { deliverSnapshots, markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
+import { markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
 import { onStageDemote } from "./demote";
 
 /** K5 (3)：等后台舞台的素材层画出一帧，最多等这么久（真墙钟），超时照样换 */
@@ -493,26 +492,15 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
        */
       await next.setStreamPlanes(streamPlanesAt({ project, t: sec, playing: true }));
       await next.setSuppressed(suppressedAt({ project, t: sec, playing: true }));
-      markBaselineReset("front");
-      await deliverSnapshots(next, "front", { project, t: sec, playing: true });
       await next.setScrubbing(false);
       await next.setProxy(host?.proxy() ?? false);
       await next.play(sec);
       await next.setPlaying(true);
     } else {
-      // settled 态不挂任何平面，快照基线 reset
       markBaselineReset("front");
-      // 整台都是补跑出来的精确活渲:暂停中不再往任何卡上投快照,直到下一次 setTime / 播放(根因 B)
       markAllSettled("front");
-      await next.setSnapshots({}, { reset: true });
-      /*
-       * 在线浏览器模式下这台设备跑不了的卡(用户卡、图卡)停下不追、不算精确(C10 契约第 9 节):它们的快照当场重新挂上
-       * (`snapshotFeed` 对它们不认「已精确」,整台精确时选帧只选它们)。桌面没有这种卡,这一步不发。
-       */
-      if (localOnlyClipIds(project.tracks.flatMap((tr) => tr.clips)).size) {
-        markBaselineReset("front");
-        await deliverSnapshots(next, "front", { project, t: sec, playing: false });
-      }
+      await next.setStreamPlanes(streamPlanesAt({ project, t: sec, playing: false }));
+      await next.setSuppressed(suppressedAt({ project, t: sec, playing: false }));
       await next.setPlaying(false);
       await next.setScrubbing(false);
       await next.setProxy(host?.proxy() ?? false);

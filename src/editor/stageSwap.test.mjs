@@ -271,7 +271,8 @@ test("暂停态互换:(1)～(5) 的顺序一步不少", async () => {
     "B.setLocalHashes",
     "markBaselineReset.front",
     "markAllSettled.front",
-    "B.setSnapshots",
+    "B.setStreamPlanes",
+    "B.setSuppressed",
     "B.setPlaying",
     "B.setScrubbing",
     "B.setProxy",
@@ -284,7 +285,8 @@ test("暂停态互换:(1)～(5) 的顺序一步不少", async () => {
   assert.deepEqual(at("syncProject.front").slice(2), [true], "根因 A:互换后对新 front 补推当前项目(增量由 stageBridge 按客户端基线算)");
   assert.deepEqual(at("sendPlanTo.front").slice(2), [{ force: true }], "它作为 back 时没有表,必须补发");
   assert.deepEqual(at("B.setLocalHashes").slice(2), [["h1"]]);
-  assert.deepEqual(at("B.setSnapshots").slice(2), [{}, { reset: true }]);
+  assert.deepEqual(at("B.setStreamPlanes").slice(2), [[]]);
+  assert.deepEqual(at("B.setSuppressed").slice(2), [["h"]]);
   assert.deepEqual(at("B.setPlaying").slice(2), [false]);
   assert.deepEqual(at("B.setProxy").slice(2), [true], "实体模式要对新 front 重发");
   assert.equal(front.name, "B");
@@ -359,7 +361,7 @@ test("播放态互换:先额外抑制,目标拍取整到拍格,武装停到了�
   assert.deepEqual(methodsOf("B").slice(-8), ["setRole", "setLocalHashes", "setStreamPlanes", "setSuppressed", "setScrubbing", "setProxy", "play", "setPlaying"]);
   assert.deepEqual(log.find((e) => e[0] === "B" && e[1] === "play").slice(2), [T]);
   assert.deepEqual(log.find((e) => e[0] === "B" && e[1] === "setPlaying").slice(2), [true]);
-  assert.deepEqual(log.find((e) => e[0] === "deliverSnapshots").slice(1), ["front", T, true]);
+  assert.equal(log.some((e) => e[0] === "deliverSnapshots"), false, "快照退役后互换不再投快照");
   assert.equal(log.some((e) => e[0] === "demote"), false);
 });
 
