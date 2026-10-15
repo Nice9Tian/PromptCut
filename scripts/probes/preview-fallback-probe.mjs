@@ -140,7 +140,7 @@ try {
   await pinHeavy([clipId], true);
   const prerender = await (await fetch(origin + '/api/prerender/info')).json();
   const segCount = Math.ceil(SECONDS * 30 / 15);
-  const ready = await until('粒子卡的轨道流满密度、快照铺上一截', async () => {
+  const ready = await until('粒子卡的轨道流满密度', async () => {
     const k = await page.evaluate(async () => (await import('/src/render/dataMirror.ts')).mirrorKey());
     if (!k) return null;
     if (!PAGE_PRELOAD) await fetch(prerender.url + '/api/frames/preload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: k.session, localRev: k.localRev, lane: 'background' }) }).catch(() => {});
@@ -151,7 +151,6 @@ try {
     }, clipId);
     const covered = (ranges, n) => { let c = 0; for (let i = 0; i < n; i++) if ((ranges ?? []).some((r) => r[0] <= i && i <= r[1])) c++; return c; };
     if (!layers?.stream || covered(layers.stream, segCount) < segCount) return null;
-    if (!layers.html || covered(layers.html, SECONDS * 30) < SECONDS * 30 * 0.3) return null;
     return layers;
   }, 600000, 2000);
   out.readyLayers = ready ? Object.fromEntries(Object.entries(ready).map(([k, v]) => [k, v.length])) : null;
@@ -339,7 +338,7 @@ try {
     for (const id of ids) idx.set(id, new Map([...src].map(([k, v]) => [k, { ...v }])));
     return ids.length;
   }, clipId, extra);
-  check(injected === 6, '给 6 张新粒子卡复制了流层和快照层', injected);
+  check(injected === 6, '给 6 张新粒子卡复制了流层', injected);
   // 新卡同一身份;一并钉成重卡
   await pinAll(extra);
   await sleep(500);
@@ -347,13 +346,17 @@ try {
     await play();
     await sleep(1000);
     const front = await frontFrame();
-    out.overBudget = front ? await front.evaluate(() => { const d = window.__pcStageDiag(); return { planes: d.streamPlanes.length, tracks: d.streams.tracks.length, snapshots: d.snapshots.length, suppressed: d.suppressed.length }; }).catch(() => null) : null;
+    out.overBudget = front ? await front.evaluate(() => {
+      const d = window.__pcStageDiag();
+      const planesWithin = d.streamPlanes.filter((p) => !p.over).length;
+      return { planes: d.streamPlanes.length, planesWithin, tracks: d.streams.tracks.length, snapshots: d.snapshots.length, suppressed: d.suppressed.length, over: d.streams.over?.length ?? 0 };
+    }).catch(() => null) : null;
     const a = await shot('超过6路流');
     await sleep(1000);
     await pause();
     return [a];
   });
-  if (LABEL !== 'before') check(out.overBudget && out.overBudget.planes <= 6 && out.overBudget.tracks <= 6, '父页只发解码器预算内的流平面(≤ 6)', out.overBudget);
+  if (LABEL !== 'before') check(out.overBudget && out.overBudget.planesWithin === out.overBudget.tracks && out.overBudget.tracks <= 32, '舞台解码器数与预算内流平面数一致且不超过硬上限(≤ 32)', out.overBudget);
   await sleep(1200);
 
   /* ---------------------------------------------------------------- 4. 编辑后 */

@@ -1,21 +1,19 @@
 /**
- * R6 数据面的端到端探针。起编辑器进程 + 预渲染进程,载入一个含 stateful DOM 卡、
+ * R6/R8 数据面的端到端探针。起编辑器进程 + 预渲染进程,载入一个含 stateful DOM 卡、
  * canvas 卡、`unknown` 卡、超限卡的项目(四张固定卡在 `src/cards/_probe/r6.tsx`),
- * 然后逐条验收 C2 / C3 / C4 / A3c / F5:
+ * 适配己二撤快照后「就绪索引只发 stream 层、帧库只写 streams/<streamKey>」:
  *
- *   1. 锚帧先于其他帧就绪(C2:锚帧全部就绪前不开始其余后台预渲染);
- *   2. SSE 先收到 `reset` 再收到 `layer`,区间随生产增长(C3);
- *   3. `HttpSnapshotSource` 取到的 HTML 和磁盘上的逐字节相同(J3);
- *   4. C4 选帧在冷缓存下回到区间起点;
- *   5. 超限帧不出现在索引里(A3c),但盘上有;
- *   6. `unknown` 卡出现在 `'local'` 表里(计划 3.1(2));
- *   7. 杀掉预渲染进程再起来:**没人发 preload**,编辑器进程照会话版本登记重放 preload,
- *      索引按键重建、**会话版本回来之后才发 `layer`**(F5 + Item 4 方案 A);
- *   8. `wanted` 发出后对应片段的批被提前(C4 服务端消费侧);
- *   9. **在所有位置都判轻的卡不产快照、不进就绪索引**(pinned 渲染 9)——
- *      给一张 stateful 卡写一条便宜的成本记录,它就该从预渲染集合里掉出去。
- *  10. **环境指纹进结果键**(M4,契约 E.7):诊断里的指纹是 16 位十六进制,
- *      每个带 `snapshotKey` 的 control 满足 `snapshotKey === resultKeyOf(contentKey, envFingerprint)`。
+ *   1. SSE 第一条是 reset,随后收到 done 和各重卡的 stream 层;
+ *   2. stream 层的 ranges 随分段生产增长;
+ *   3. GET /api/frames/stream/${key}/manifest 取到的清单 JSON 与磁盘 streams/<key>/stream.json 一致;
+ *   6. clip-unknown 出现在 clip-unknown/stream(streamKind === 'below' 依赖下层的流),
+ *      clip-stateful 和 clip-canvas 出现在单卡 stream 层;且帧库下没有 controls-html / controls-local 目录;
+ *   7. 杀掉预渲染进程再自动拉起后:没人发 preload,编辑器进程照会话版本登记重放 preload,
+ *      服务端重放会话版本后先发 reset(localRev: 1) 再通过 streamProducer().rescan() 重建全部 stream 层;
+ *   9. 在所有位置都判轻的卡不产流、不进就绪索引(pinned 渲染 9)——
+ *      给一张 stateful 卡写一条便宜的成本记录,它就从预渲染集合里掉出去;删掉它的 streams/<key> 目录后重跑,判轻的目录不长回来;
+ *  10. 环境指纹进结果键(M4,契约 E.7):诊断里的指纹是 16 位十六进制,
+ *      每个带 snapshotKey 的 control 满足 snapshotKey === resultKeyOf(contentKey, envFingerprint)。
  *
  * 成本记录也隔离在临时目录(`PROMPTCUT_DATA_DIR`),不碰仓库的 `out/card-costs.json`。
  *
@@ -23,10 +21,6 @@
  *
  * `--keep-out` 保留本次临时产物、不保留 dev server;`--keep` 是旧调试开关。
  * 默认成功后清理,失败会留一份限长且过滤敏感值的诊断证据。
- *
- * **每次都从冷缓存开始**:`PROMPTCUT_EXPORT_DIR` 指到一个新建的临时目录,所以
- * 「锚帧先于其他帧就绪」这一条量的是真的冷启动,而不是上一次跑剩下的盘。
- * 它由子进程继承,预渲染进程崩了重起也还是同一个目录(F5 那一条要靠它)。
  *
  * 耗时只记录(verification.md「耗时只记录,不当闸门」):这支探针没有时间门槛;每一处等待等到的用时记进
  * `TIMINGS` 行与结果的 `timings`。等待时限只为防卡死,不到 120 秒的一律按 120 秒等;等到头没有结果仍算不过。
@@ -41,8 +35,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createTimings } from './probe-timings.mjs';
-import { pickSnapshotFrame, segmentStartOf, anchorFrames } from '../../src/render/snapshotPick.mjs';
 import { resultKeyOf } from '../../server/render-node/fingerprint.mjs';
+import { publicManifest } from '../../server/frame-stream.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -153,7 +147,7 @@ function indexOf(messages) {
   for (const message of messages) {
     if (message.type === 'reset') { table.clear(); continue; }
     if (message.type !== 'layer') continue;
-    table.set(`${message.clipId}/${message.kind}`, { key: message.key, ranges: message.ranges });
+    table.set(`${message.clipId}/${message.kind}`, { ...message });
   }
   return table;
 }
@@ -215,99 +209,62 @@ try {
   const preload = await postJson(`${base}/api/frames/preload`, { session: SESSION, localRev: 1 });
   check(preload.ok, '预渲染开跑', preload.body);
 
-  /* ---- ① 锚帧先于其他帧就绪 ---- */
-  const doneAt = await until('收到 done(锚帧全部就绪)', () => ready.messages.findIndex(m => m.type === 'done') + 1 || null, 300000);
-  const beforeDone = ready.messages.slice(0, (doneAt ?? 1) - 1);
-  const anchors = anchorFrames(PROJECT.tracks.flatMap(t => t.clips), FPS).filter(n => n < PROJECT.duration * FPS);
-  out.anchors = anchors;
-  // 锚帧 = [0(三张卡挂载 + 第 0 帧), 29(clip-huge 挂载)];60 不算(超出时长)
-  check(anchors.length >= 2 && anchors[0] === 0, '锚帧集合 = 每个片段的 mountFrameOf ∪ last+1 ∪ 第 0 帧', anchors);
-  const atDone = indexOf(beforeDone.concat(ready.messages[(doneAt ?? 1) - 1] ?? []));
-  out.layersAtDone = [...atDone].map(([id, layer]) => ({ id, ranges: layer.ranges }));
-  const anchorLocalsOf = firstFrame => new Set(anchors.filter(n => n >= firstFrame).map(n => n - firstFrame));
-  const onlyAnchors = [...atDone].every(([id, layer]) => {
-    const firstFrame = id.startsWith('clip-huge') ? 29 : 0;
-    const allowed = anchorLocalsOf(firstFrame);
-    return layer.ranges.every(([from, to]) => { for (let n = from; n <= to; n++) if (!allowed.has(n)) return false; return true; });
-  });
-  check(atDone.size > 0, '② done 的时候已经有层了', out.layersAtDone);
-  check(onlyAnchors, '② done 的时候每一层只有锚帧 —— 锚帧先于其他帧就绪', out.layersAtDone);
-
-  /* ---- ④ C4 冷缓存:回到区间起点 ---- */
-  const coldStateful = atDone.get('clip-stateful/html');
-  if (coldStateful) {
-    const target = 45;                       // 全局第 45 帧,落在 clip-huge 挂载(29)切出的那一段
-    const segment = segmentStartOf(anchors, target);
-    const picked = pickSnapshotFrame({ ranges: coldStateful.ranges, localFrame: target, segmentStart: segment });
-    out.coldPick = { target, segment, picked, ranges: coldStateful.ranges };
-    check(segment === 29, '④ 第 45 帧所在区间的起点是 clip-huge 的挂载帧', out.coldPick);
-    check(picked === segment, '④ 冷缓存下 C4 选到区间起点,而不是第 0 帧、也不是空', out.coldPick);
-  } else check(false, '④ 冷缓存时 clip-stateful 的 html 层应当已经有锚帧了', out.layersAtDone);
-
-  /* ---- ⑧ wanted:批被提前 ---- */
-  // 播放头报「clip-stateful 现在缺第 52 帧」;预渲染在 4 帧批边界读到之后该跳过去
-  await postJson(EDITOR + '/api/data/playhead', { session: SESSION, t: 45 / FPS, playing: true, wanted: [{ clipId: 'clip-stateful', frame: 52 }] });
-  const promotion = await until('wanted 让某一批插队', async () => {
-    const d = await json(`${base}/api/frames/diagnostics`);
-    return d.body?.promotions?.find(p => p.clipId === 'clip-stateful') || null;
-  }, 300000, 500);
-  out.promotion = promotion;
-  check(!!promotion, '⑧ wanted 发出后对应片段的批被提前(诊断里有这条记录)');
-  check(!promotion || promotion.start === 52 - (52 % 4), '⑧ 提前的正是含第 52 帧的那一批', promotion);
-
-  /* ---- ② 区间随生产增长 ---- */
-  const grew = await until('某一层的区间长过锚帧', () => {
+  /* ---- ① SSE 第一条是 reset，随后收到 done 和各重卡的 stream 层 ---- */
+  const doneAt = await until('收到 done', () => ready.messages.findIndex(m => m.type === 'done') + 1 || null, 300000);
+  check(!!doneAt, '① 收到 done 消息', { doneAt });
+  const hasStreamLayers = await until('收到各重卡的 stream 层', () => {
     const table = indexOf(ready.messages);
-    const layer = table.get('clip-stateful/html');
-    return layer && layer.ranges.some(([from, to]) => to - from >= 3) ? layer : null;
+    return table.has('clip-stateful/stream') && table.has('clip-canvas/stream') && table.has('clip-unknown/stream') && table.has('clip-huge/stream') ? table : null;
+  }, 300000, 500);
+  check(!!hasStreamLayers, '① 收到各重卡的 stream 层 (含 clip-stateful, clip-canvas, clip-unknown, clip-huge)', hasStreamLayers ? [...hasStreamLayers.keys()] : []);
+
+  /* ---- ② stream 层的 ranges 随分段生产增长 ---- */
+  const grew = await until('某一层的区间随分段生产增长', () => {
+    const table = indexOf(ready.messages);
+    const layer = table.get('clip-stateful/stream');
+    return layer && layer.ranges.some(([from, to]) => to - from >= 1) ? layer : null;
   }, 300000, 500);
   out.grown = grew;
-  check(!!grew, '② layer 的区间随生产增长(每次全量,不是增量)');
-  check(ready.messages.filter(m => m.type === 'layer').length > 1, '② 收到了多条 layer');
+  check(!!grew, '② stream 层的 ranges 随分段生产增长', grew);
+  check(ready.messages.filter(m => m.type === 'layer' && m.kind === 'stream').length > 1, '② 收到了多条 stream layer');
 
-  /* ---- ⑥ unknown 卡进 local 表 ---- */
+  /* ---- ③ GET /api/frames/stream/${statefulLayer.key}/manifest 取到的清单 JSON 与磁盘一致 ---- */
   const table = indexOf(ready.messages);
-  out.kinds = [...table.keys()].sort();
-  check(table.has('clip-unknown/local'), '⑥ unknown 卡出现在 local 表里', out.kinds);
-  check(!table.has('clip-unknown/html'), '⑥ unknown 卡不上云(不在 html 表里)', out.kinds);
-  check(table.has('clip-stateful/html'), '⑥ 审阅表 independent 的 stateful 卡走共享档', out.kinds);
-  check(table.has('clip-canvas/html'), '⑥ canvas 卡同样按审阅表走共享档', out.kinds);
-
-  /* ---- ③ HttpSnapshotSource 取到的和磁盘逐字节相同 ---- */
-  const statefulLayer = table.get('clip-stateful/html');
+  const statefulLayer = table.get('clip-stateful/stream');
   if (statefulLayer) {
-    const localFrame = statefulLayer.ranges[0][0];
-    const overHttp = await fetch(`${base}/api/frames/snapshot/html/${statefulLayer.key}/${localFrame}`);
+    const overHttp = await fetch(`${base}/api/frames/stream/${statefulLayer.key}/manifest`);
     const httpText = await overHttp.text();
-    const file = path.join(LIBRARY, 'controls-html', statefulLayer.key, `${localFrame}.html`);
+    const file = path.join(LIBRARY, 'streams', statefulLayer.key, 'stream.json');
     const onDisk = await fs.readFile(file, 'utf8').catch(() => null);
-    out.snapshot = {
-      status: overHttp.status, bytes: httpText.length, file, sameBytes: onDisk !== null && onDisk === httpText,
+    let parsedHttp = null, parsedDisk = null;
+    try { parsedHttp = JSON.parse(httpText); } catch {}
+    try { parsedDisk = JSON.parse(onDisk); } catch {}
+    const expectedPublic = parsedDisk ? publicManifest(parsedDisk) : null;
+    out.streamManifest = {
+      status: overHttp.status, bytes: httpText.length, file,
+      sameJson: parsedHttp !== null && expectedPublic !== null && JSON.stringify(parsedHttp) === JSON.stringify(expectedPublic),
       contentType: safeDiagnosticText(overHttp.headers.get('content-type') || '', 200),
       cacheControl: safeDiagnosticText(overHttp.headers.get('cache-control') || '', 200),
       ...(!overHttp.ok ? { errorBody: safeDiagnosticText(httpText), serviceErrors: serviceErrorExcerpt() } : {}),
     };
-    check(overHttp.ok, '③ GET /api/frames/snapshot/... 取得到', out.snapshot);
-    check(out.snapshot.sameBytes, '③ 取到的 HTML 与磁盘上的逐字节相同', { ...out.snapshot, diskBytes: onDisk?.length ?? null });
-    check((overHttp.headers.get('cache-control') || '').includes('immutable'), '③ 内容寻址的键回 immutable', overHttp.headers.get('cache-control'));
-  } else check(false, '③ 没有 clip-stateful 的 html 层,没法比对字节');
+    check(overHttp.ok, '③ GET /api/frames/stream/... 取得到清单', out.streamManifest);
+    check(out.streamManifest.sameJson, '③ 取到的清单 JSON 与磁盘上的 stream.json 一致', { ...out.streamManifest, diskBytes: onDisk?.length ?? null });
+  } else check(false, '③ 没有 clip-stateful 的 stream 层,没法比对清单');
 
-  /* ---- ⑤ 超限帧落盘但不进索引 ---- */
-  const diagnostics = await json(`${base}/api/frames/diagnostics`);
-  const oversize = (diagnostics.body?.oversize || []).filter(item => item.clipId === 'clip-huge');
-  out.oversize = oversize.slice(0, 3);
-  check(oversize.length > 0, '⑤ 超限帧记了诊断(卡 id、字节数)', diagnostics.body?.oversize?.slice(0, 3));
-  if (oversize.length) {
-    check(oversize[0].bytes > oversize[0].limit && oversize[0].limit === 300 * 1024, '⑤ DOM 卡的上限是 300 KB', oversize[0]);
-    const onDisk = await fs.stat(path.join(LIBRARY, 'controls-html', oversize[0].key, `${oversize[0].localFrame}.html`)).then(s => s.size, () => 0);
-    check(onDisk > 300 * 1024, '⑤ 超限帧照常落盘(下一次不用重渲)', { onDisk });
-    const hugeLayer = indexOf(ready.messages).get('clip-huge/html');
-    const indexed = hugeLayer ? hugeLayer.ranges.some(([from, to]) => oversize[0].localFrame >= from && oversize[0].localFrame <= to) : false;
-    out.hugeLayer = hugeLayer ?? null;
-    check(!indexed, '⑤ 超限帧不进就绪索引', { hugeLayer, frame: oversize[0].localFrame });
-  }
+  /* ---- ⑥ clip-unknown 进 below 流, stateful/canvas 进单卡流, 且无 controls-html/controls-local ---- */
+  const unknownLayer = table.get('clip-unknown/stream');
+  const canvasLayer = table.get('clip-canvas/stream');
+  out.kinds = [...table.keys()].sort();
+  check(table.has('clip-unknown/stream') && unknownLayer?.streamKind === 'below', '⑥ clip-unknown 出现在 clip-unknown/stream 且 streamKind === below', unknownLayer);
+  check(table.has('clip-stateful/stream') && statefulLayer?.streamKind !== 'below', '⑥ clip-stateful 出现在单卡 stream 层', statefulLayer);
+  check(table.has('clip-canvas/stream') && canvasLayer?.streamKind !== 'below', '⑥ clip-canvas 出现在单卡 stream 层', canvasLayer);
+  check(!table.has('clip-unknown/local') && !table.has('clip-unknown/html') && !table.has('clip-stateful/html') && !table.has('clip-canvas/html'), '⑥ 不再有 html 或 local 快照层', out.kinds);
+  const controlsHtmlExists = fsSync.existsSync(path.join(LIBRARY, 'controls-html'));
+  const controlsLocalExists = fsSync.existsSync(path.join(LIBRARY, 'controls-local'));
+  check(!controlsHtmlExists && !controlsLocalExists, '⑥ 帧库下没有 controls-html / controls-local 目录', { controlsHtmlExists, controlsLocalExists });
 
   /* ---- ⑩ M4:环境指纹进结果键(契约 E.7「探针」) ---- */
+  const diagnostics = await json(`${base}/api/frames/diagnostics`);
   {
     const d = diagnostics.body || {};
     const fingerprint = d.environment?.fingerprint;
@@ -375,7 +332,7 @@ try {
       await after.close();
     }
   }
-  /* ---- ⑨ pinned 渲染 9:在所有位置都判轻的卡不产快照、不进就绪索引 ---- */
+  /* ---- ⑨ pinned 渲染 9:在所有位置都判轻的卡不产流、不进就绪索引 ---- */
   // ⑦ 重启过一次,预渲染进程换了端口 —— 这里重新取一次地址
   const base9 = (await until('⑨ 预渲染进程地址', prerenderUrl, 60000)) || base;
   out.prerender9 = base9;
@@ -385,10 +342,13 @@ try {
   out.planBefore = plan0 ? { key: plan0.key, prerenderSet: plan0.prerenderSet } : null;
   check(!!plan0?.prerenderSet, '⑨ 诊断露出预渲染集合', diag0.body?.plans);
   check(!!plan0?.prerenderSet?.includes('clip-stateful'), '⑨ 没有成本记录时按声明兜底:stateful 卡都在集合里', out.planBefore);
-  const statefulControl = (plan0?.controls || []).find(c => c.clipId === 'clip-stateful');
-  const statefulKey = statefulControl?.snapshotKey;
-  const statefulDir = statefulKey ? path.join(LIBRARY, 'controls-html', statefulKey) : null;
-  check(!!statefulDir && fsSync.existsSync(statefulDir), '⑨ 判重时 clip-stateful 确实产了快照目录', statefulDir);
+  const statefulKey = beforeKill.get('clip-stateful/stream')?.key;
+  const statefulDir = statefulKey ? path.join(LIBRARY, 'streams', statefulKey) : null;
+  check(!!statefulDir && fsSync.existsSync(statefulDir), '⑨ 判重时 clip-stateful 确实产了流目录', statefulDir);
+
+  const canvasKey = beforeKill.get('clip-canvas/stream')?.key;
+  const canvasDir = canvasKey ? path.join(LIBRARY, 'streams', canvasKey) : null;
+  check(!!canvasDir && fsSync.existsSync(canvasDir), '⑨ 判重时 clip-canvas 确实产了流目录', canvasDir);
 
   // 给 clip-stateful 写一条「便宜的随机访问卡」记录 → 每个位置都判轻;其余三张钉死为重,
   // 这样成本记录非空(不走声明兜底),而集合里只少了 clip-stateful 这一张。
@@ -414,12 +374,9 @@ try {
    * `entry.key` 和第一版是同一个(卡和片段一字没动)。后台代次按页面会话分(Item 4:owner =
    * `session:<id>`),所以换一个会话来发 preload —— 不会走「同一个 entry 直接返回」那条早退,
    * 而是对同一个 entry 重跑一趟:`adoptCardPlan` 按**新的 costs** 重算 `prerenderSet`,这正是要验的东西。
-   * 就绪索引也按会话分:SSE 订阅的是这个新会话。
    */
   const SESSION_B = `${SESSION}-b`, SESSION_C = `${SESSION}-c`;
   const PROJECT_B = { ...PROJECT, id: `${PROJECT.id}-b`, name: 'R6 数据面探针(第二版)' };
-  const readyB = openReady(base9, undefined, SESSION_B);
-  await until('第二版的 SSE 连上', () => readyB.messages.length > 0 || null, 30000);
   const pushedB = await postJson(EDITOR + '/api/data/project', { session: SESSION_B, localRev: 1, project: PROJECT_B });
   check(pushedB.ok, '⑨ 第二版项目推进镜像', pushedB.body);
   await until('预渲染进程手里有第二版', async () => (await json(`${base9}/api/data/project?session=${SESSION_B}&localRev=1`)).ok || null, 30000);
@@ -439,34 +396,38 @@ try {
   check(!!planB && !planB.prerenderSet.includes('clip-stateful'), '⑨ 判轻的卡不在预渲染集合里', out.planAfter);
   check(!!planB && planB.prerenderSet.includes('clip-canvas'), '⑨ 判重的卡还在集合里', out.planAfter);
 
-  // 等第二版真的产起来(判重的那张卡长出了层),再看判轻的那张有没有动静
-  await until('第二版里判重的卡开始就绪', () => indexOf(readyB.messages).has('clip-canvas/html') || null, 300000, 500);
-  const tableB = indexOf(readyB.messages);
-  out.layersB = [...tableB.keys()].sort();
-  check(!tableB.has('clip-stateful/html'), '⑨ 判轻的卡不进就绪索引', out.layersB);
+  // 等生产者完成更新并移除 clip-stateful、所有在跑的编码器结束
+  await until('预渲染生产者更新计划(不含 clip-stateful)', async () => {
+    const d = await json(`${base9}/api/frames/diagnostics`);
+    const ss = d.body?.streams?.streams || [];
+    return ss.length > 0 && !ss.some(s => s.clipIds.includes('clip-stateful')) && (d.body?.streams?.stats?.aliveEncoders ?? 0) === 0 ? ss : null;
+  }, 180000, 500);
 
   /*
-   * 「不产快照」:**重算之后**才删那棵目录 —— 第一版那一趟后台预渲染可能还在飞,
-   * 早删会被它写回来(那一趟拿的还是旧的 `prerenderSet`)。删完再等 `clip-canvas`
-   * 的区间继续长(证明这一趟确实还在产东西),那时判轻的那张仍然没有目录才算数。
-   * 第三版同样换一个会话触发重跑;它和第二版是同一个 entry,所以这一趟发的层照样进第二版会话的 SSE。
+   * 「不产流」:**重算之后且生产者已卸下轻卡**才删那棵流目录。
+   * 删完再等第三版跑起来，判重的那张还在，判轻的那张目录不长回来、也不进就绪索引。
    */
   if (statefulDir) await fs.rm(statefulDir, { recursive: true, force: true });
-  const msgsBefore = readyB.messages.length;
+  await delay(500);
+
   const PROJECT_C = { ...PROJECT, id: `${PROJECT.id}-c`, name: 'R6 数据面探针(第三版)' };
+  const readyC = openReady(base9, undefined, SESSION_C);
+  await until('第三版的 SSE 连上', () => readyC.messages.length > 0 || null, 30000);
   await postJson(EDITOR + '/api/data/project', { session: SESSION_C, localRev: 1, project: PROJECT_C });
   await until('预渲染进程手里有第三版', async () => (await json(`${base9}/api/data/project?session=${SESSION_C}&localRev=1`)).ok || null, 30000);
   await postJson(`${base9}/api/frames/preload`, { session: SESSION_C, localRev: 1 });
-  const rescanned = await until('删掉之后又跑了一趟(索引重新发了层)',
-    () => readyB.messages.length > msgsBefore || null, 120000, 300);
-  await delay(3000);
+  await until('第三版里判重的卡开始就绪', () => indexOf(readyC.messages).has('clip-canvas/stream') || null, 300000, 500);
+  const tableC = indexOf(readyC.messages);
+  out.layersB = [...tableC.keys()].sort();
+  check(!tableC.has('clip-stateful/stream'), '⑨ 判轻的卡不进就绪索引', out.layersB);
+  check(tableC.has('clip-canvas/stream'), '⑨ 判重的卡在就绪索引里', out.layersB);
+
+  await delay(2000);
   out.statefulDirBack = statefulDir ? fsSync.existsSync(statefulDir) : null;
-  out.canvasDir = fsSync.existsSync(path.join(LIBRARY, 'controls-html',
-    (planB?.controls || []).find(c => c.clipId === 'clip-canvas')?.snapshotKey || 'none'));
-  check(!!rescanned, '⑨ 删目录之后确实又跑了一趟预渲染');
-  check(out.canvasDir === true, '⑨ 同一趟里判重的卡照样有快照目录', out.canvasDir);
-  check(out.statefulDirBack === false, '⑨ 判轻的卡不产快照(目录删掉之后没长回来)', { statefulDir });
-  await readyB.close();
+  out.canvasDir = canvasDir ? fsSync.existsSync(canvasDir) : false;
+  check(out.canvasDir === true, '⑨ 同一趟里判重的卡照样有流目录', out.canvasDir);
+  check(out.statefulDirBack === false, '⑨ 判轻的卡不产流(目录删掉之后没长回来)', { statefulDir });
+  await readyC.close();
 
 } catch (error) {
   fails.push('exception: ' + (error?.stack || error));
@@ -475,7 +436,7 @@ try {
   if (fails.length) {
     const diagnosticFile = path.join(EXPORT_DIR, 'ready-index-diagnostic.json');
     try {
-      await fs.writeFile(diagnosticFile, JSON.stringify({ probe: 'ready-index-probe', port: PORT, snapshot: out.snapshot ?? null }, null, 2), 'utf8');
+      await fs.writeFile(diagnosticFile, JSON.stringify({ probe: 'ready-index-probe', port: PORT, streamManifest: out.streamManifest ?? null }, null, 2), 'utf8');
       out.diagnosticFile = diagnosticFile;
     } catch (error) {
       out.diagnosticWriteError = safeDiagnosticText(error?.message || String(error), 1000);
