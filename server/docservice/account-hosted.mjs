@@ -235,7 +235,24 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       // 托管方的渲染节点(任务书 `docs/plan/render-refactor-task.md`「甲三」):登记表里有渲染服务的公钥才算有;开关与子选项「生成轨道流」照账本里的。
       // 创建者经 `/hosted/shared/account/admin` 的 `set-hosted-service` / `set-hosted-option` 改,成员只读(页面每次续会话读到)
       const renderRegistered = hostedConfig?.registry?.get('render');
-      const render = { available: renderRegistered?.role === 'render' && renderRegistered.keys?.length > 0, ...accountRenderState(project) };
+      const renderState = accountRenderState(project);
+      let streamsAllowed;
+      if (typeof accountClient?.permissions === 'function') {
+        try {
+          const perm = await accountClient.permissions({ accountId: project.creatorAccountId, group: 'render_streams' });
+          streamsAllowed = perm?.allowed === true;
+        } catch (err) {
+          if (err?.status === 404) streamsAllowed = undefined;
+          else streamsAllowed = false;
+        }
+      }
+      const streams = streamsAllowed !== undefined ? (streamsAllowed ? renderState.streams : false) : renderState.streams;
+      const render = {
+        available: renderRegistered?.role === 'render' && renderRegistered.keys?.length > 0,
+        enabled: renderState.enabled,
+        streams,
+        ...(streamsAllowed !== undefined ? { streamsAllowed } : {}),
+      };
       return { projectId: principal.projectId, creator: principal.creator === true, access: principal.access,
         accessRevision: principal.accessRevision, hosted: { agent: { available: Boolean(available), enabled: project.hosted?.agent === true, url }, render },
         connectionTicket: issue('conn', principal, deviceId, expiresAt),

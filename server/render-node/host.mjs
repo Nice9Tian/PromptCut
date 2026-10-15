@@ -74,7 +74,7 @@
  * # 按项目「产不产轨道流」(托管方渲染服务的「生成轨道流」,`docs/plan/hosted-render-contract.md` 第 3.1 节;任务书「甲三」)
  *
  * 配置项(`add(entry)` 的 `entry`)带布尔的 `streams` 时,这个项目按它管:
- *   - `streams: false`:**不认领这个项目满密度的流任务**(稀疏流任务、快照任务、计划任务照常;连接照旧,手里已经认领的流任务照做完、不放回);
+ *   - `streams: false`:**不认领这个项目的任何轨道流任务**(既不认稀疏流也不认满密度流;快照任务、计划任务照常;连接照旧,手里已经认领的流任务照做完、不放回);
  *     诊断里的 `pending` / `claimable` 也不数流任务(不然管理进程会为没人做的流任务起隔离工作进程);
  *   - `streams: true`:照常认领。
  * 按的是**这条连接所属的项目**,不看任务里写的 `source.projectId`。`setStreams(projectId, bool)` 在运行中改(`reconcileHostProjects`
@@ -89,7 +89,6 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createLocalNode, idleLockTakeover } from './local-node.mjs';
 import { checkClaimable } from './filter.mjs';
-import { isSparseStreamTask } from '../render-queue/index.mjs';
 import { isExportFramesTask } from './export-plan.mjs';
 import { normalizeEntry, SHARED_CONFIG_ENV } from '../auth/shared-config.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
@@ -264,11 +263,12 @@ export function createRenderHost({
   /** 配置项里的 `streams`:布尔才按项目管,别的值(没给)是 null */
   const streamsOf = (entry) => (typeof entry?.streams === 'boolean' ? entry.streams : null);
   /**
-   * 这个项目的这个任务过不过「生成轨道流」这一道:只挡**满密度的**流任务,只在这个项目明说关着时挡。
-   * 稀疏流任务不挡:这一项关着时渲染节点仍然产稀疏版,只是不补满密度(语义 `workflow/project.md`「项目设置」)。
+   * 这个项目的这个任务过不过「生成轨道流」这一道：关着时（m.streams === false）托管方渲染节点什么轨道流都不产
+   * （既不产稀疏流也不产满密度流；只留 Agent 查帧 see_frames/get_gif/get_layout）。
+   * 开着时稀疏流与满密度流都产。
    */
   // 导出专用的逐帧位图任务(`../export-frames.mjs`;种类也是流任务)不是轨道流,不归这一项管:这一项关着的项目照样能导出
-  const streamsPass = (m, task) => task?.kind !== 'stream' || m.streams !== false || isSparseStreamTask(task) || isExportFramesTask(task);
+  const streamsPass = (m, task) => task?.kind !== 'stream' || m.streams !== false || isExportFramesTask(task);
 
   /** 这个项目此刻是不是搁着不认领(见文件头);判不出来按搁着算 */
   const held = (m) => {

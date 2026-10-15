@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { isPrerender } from "./render-role.mjs";
 import { prerenderState, setPrerender } from "./prerender-client.mjs";
 import { repushMirror, replayReadySessions } from "./vite-plugin-mirror";
-import { stageOriginsOf } from "./stage-ports.mjs";
+import { stageOriginsOf, stagePortsOf } from "./stage-ports.mjs";
 import { listenSafe } from "./safe-port.mjs";
 import { createSessionLineForwarder } from "./render-node/session-diag.mjs";
 import { autoRenderNodeOffReason, normalizeBinding, ticketOk } from "./auto-render-node.mjs";
@@ -52,7 +52,7 @@ async function freePort(): Promise<number> {
 function editorOrigins(server: ViteDevServer): string[] {
   const addr = server.httpServer?.address() as AddressInfo | null;
   const port = addr?.port || server.config.server.port || 5190;
-  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`];
+  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`, ...stageOriginsOf(port)];
 }
 
 /**

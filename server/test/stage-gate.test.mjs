@@ -48,6 +48,7 @@ test('白名单里的:舞台页面与脚本、素材、动效素材目录、两�
     ['HEAD', '/api/media/file?path=x'],
     ['GET', '/catalog/lottie/bodymovin.json'],
     ['GET', '/api/cards/scopes'],
+    ['GET', '/api/prerender/info'],
   ];
   for (const [m, u] of allowed) assert.equal(stageRequestAllowed(m, u), true, `${m} ${u} 应该放行`);
   assert.equal(stageRequestAllowed('GET', '/?token=abc', HMR), true, '热更新的 WebSocket');
@@ -85,7 +86,7 @@ const DENIED = [
   ['POST', '/api/frames/preload'], ['POST', '/api/frames/yield'], ['POST', '/api/frames/render-node'], ['POST', '/api/frames/render-node/unbind'], ['GET', '/api/frames/ready'],
   ['GET', '/api/frames/snapshot/html/k/0'], ['GET', '/api/frames/stream/k/manifest'], ['POST', '/api/frames/export'],
   ['POST', '/api/export'], ['GET', '/api/export/x/status'], ['POST', '/api/export/media/x'], ['POST', '/api/export/audio-mix/x'], ['GET', '/api/exports'], ['DELETE', '/api/exports/x'],
-  ['GET', '/api/storage'], ['POST', '/api/storage/cap'], ['POST', '/api/storage/clear-cache'], ['GET', '/api/prerender/health'], ['GET', '/api/prerender/info'], ['POST', '/api/prerender/info'],
+  ['GET', '/api/storage'], ['POST', '/api/storage/cap'], ['POST', '/api/storage/clear-cache'], ['GET', '/api/prerender/health'], ['POST', '/api/prerender/info'],
   ['POST', '/api/vision/bake'], ['POST', '/api/vision/bake-batch'], ['POST', '/api/vision/snapshot'], ['POST', '/api/vision/sheet'], ['POST', '/api/ui-render/bake-batch'], ['GET', '/api/ui-render/status'],
   // MCP、Skill、文件系统类
   ['POST', '/api/mcp/call'], ['GET', '/api/mcp/events'], ['POST', '/api/mcp/result'], ['GET', '/api/mcp/status'],
@@ -150,7 +151,7 @@ test('服务端源码里写着的每一条 /api 路由,除白名单点名的以�
   const routes = new Set();
   for (const file of files) for (const m of fs.readFileSync(file, 'utf8').matchAll(/["'`](\/api\/[A-Za-z0-9/_-]+)/g)) routes.add(m[1]);
   assert.ok(routes.size > 100, `扫到的路由太少(${routes.size}),扫描的写法多半失效了`);
-  const readable = new Set(['/api/media/file', '/api/cards/scopes']);
+  const readable = new Set(['/api/media/file', '/api/cards/scopes', '/api/prerender/info']);
   const leaked = [];
   for (const route of routes) {
     for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']) {
@@ -258,8 +259,7 @@ test('真的起两个舞台端口:白名单外的当场 403、编辑器进程没
     const before = seen.length;
     for (const [method, url] of [['POST', '/api/agent/bind'], ['GET', '/api/agent/status'], ['POST', '/api/ai/chat'], ['PUT', '/api/data/project'], ['PUT', '/api/projects/x'],
       ['POST', '/api/media/upload/x.txt'], ['POST', '/api/frames/preload'], ['POST', '/api/export'], ['POST', '/api/mcp/call'], ['POST', '/api/skill/open-path'],
-      ['POST', '/api/cards/sync/bind'], ['POST', '/api/render-node/bind'], ['GET', '/api/stage/ports'], ['GET', '/package.json'], ['GET', '/@fs/C:/Windows/win.ini'], ['POST', '/aPi/agent/bind'],
-      ['GET', '/api/prerender/info']]) {
+      ['POST', '/api/cards/sync/bind'], ['POST', '/api/render-node/bind'], ['GET', '/api/stage/ports'], ['GET', '/package.json'], ['GET', '/@fs/C:/Windows/win.ini'], ['POST', '/aPi/agent/bind']]) {
       const r = await send(stage, { method, path: url, headers: method === 'GET' ? {} : J, body: method === 'GET' ? undefined : '{"x":1}' });
       assert.equal(r.status, 403, `${method} ${url} 经舞台端口 ${stage} 应该 403`);
       assert.equal(r.headers['origin-agent-cluster'], '?1', '被拒的响应也带进程隔离的头(这个头要在这个源的每一个响应上)');
@@ -268,7 +268,7 @@ test('真的起两个舞台端口:白名单外的当场 403、编辑器进程没
     assert.equal(seen.length, before, '被拒的请求编辑器进程一个都没收到');
 
     // 白名单里:照转,带着代理写的头(请求自己伪造的同名头被盖掉)
-    for (const url of ['/?stage=1&id=A', '/src/main.tsx', '/api/cards/scopes', `/@media/${'b'.repeat(64)}`, '/catalog/lottie/bodymovin.json']) {
+    for (const url of ['/?stage=1&id=A', '/src/main.tsx', '/api/cards/scopes', '/api/prerender/info', `/@media/${'b'.repeat(64)}`, '/catalog/lottie/bodymovin.json']) {
       const r = await send(stage, { path: url, headers: { [STAGE_CLIENT_HEADER]: '8.8.8.8' } });
       assert.equal(r.status, 200, `GET ${url} 经舞台端口应该照转`);
       assert.equal(r.headers['origin-agent-cluster'], '?1');

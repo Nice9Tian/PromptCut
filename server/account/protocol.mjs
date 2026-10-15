@@ -8,6 +8,7 @@ export const INTERNAL_PATHS = Object.freeze({
   verify: '/internal/v2/credentials/verify', events: '/internal/v2/events',
   consent: '/internal/v2/consents', reserve: '/internal/v2/order/reserve',
   logoutComplete: '/internal/v2/order/logout-complete',
+  permissions: '/internal/v2/permissions',
 });
 export const ACCOUNT_PRINCIPAL_FIELDS = Object.freeze([
   'identityVersion', 'realm', 'accountId', 'accountName', 'loginId',

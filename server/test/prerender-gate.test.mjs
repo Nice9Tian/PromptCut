@@ -15,26 +15,31 @@ test("PRERENDER-GATE-01 拦截来自舞台端口的请求 (Origin / Referer / x-
     process.env.PROMPTCUT_CORS_ORIGINS = "http://127.0.0.1:5190,http://localhost:5190";
     process.env.PROMPTCUT_INTERNAL_TOKEN = "secret-tok";
 
-    // 1. x-pc-stage-client
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { "x-pc-stage-client": "127.0.0.1" } }), { ok: false, reason: "stage-client-header" });
+    // 1. x-pc-stage-client: 非流/快照接口一律拒，只读流/快照放行
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "POST", url: "/api/frames/render-node", headers: { "x-pc-stage-client": "127.0.0.1" } }), { ok: false, reason: "stage-client-header" });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/api/frames/stream/k1/manifest", headers: { "x-pc-stage-client": "127.0.0.1" } }), { ok: true });
 
-    // 2. Stage Origin
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { origin: "http://127.0.0.1:5191" } }), { ok: false, reason: "stage-origin" });
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { origin: "http://localhost:5192" } }), { ok: false, reason: "stage-origin" });
+    // 2. Stage Origin: 调预渲染控制/渲染接口被拦，只读拉流/快照字节放行
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "POST", url: "/api/frames/see", headers: { origin: "http://127.0.0.1:5191" } }), { ok: false, reason: "stage-origin" });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/api/frames/ready", headers: { origin: "http://localhost:5192" } }), { ok: false, reason: "stage-origin" });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "POST", url: "/api/frames/stream/k1/manifest", headers: { origin: "http://127.0.0.1:5191" } }), { ok: false, reason: "stage-origin" });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/api/frames/stream/k1/manifest", headers: { origin: "http://127.0.0.1:5191" } }), { ok: true });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/api/frames/snapshot/png/k1/0", headers: { origin: "http://localhost:5192" } }), { ok: true });
 
-    // 3. Stage Referer
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { referer: "http://127.0.0.1:5191/?stage=1&id=A" } }), { ok: false, reason: "stage-referer" });
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { referer: "http://localhost:5192/stage.html" } }), { ok: false, reason: "stage-referer" });
+    // 3. Stage Referer: 非流/快照接口被拦
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/api/frames/diagnostics", headers: { referer: "http://127.0.0.1:5191/?stage=1&id=A" } }), { ok: false, reason: "stage-referer" });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "POST", url: "/api/frames/preload", headers: { referer: "http://localhost:5192/stage.html" } }), { ok: false, reason: "stage-referer" });
 
     // 4. 恶意跨源（无 token）
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { origin: "http://evil.com" } }), { ok: false, reason: "cross-origin-no-token" });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/api/frames/ready", headers: { origin: "http://evil.com", host: "127.0.0.1:54321" } }), { ok: false, reason: "cross-origin-no-token" });
 
     // 5. 跨源但带合法内部 token
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { origin: "http://other-service.local", "x-pc-internal-token": "secret-tok" } }), { ok: true });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "POST", url: "/api/frames/see", headers: { origin: "http://other-service.local", "x-pc-internal-token": "secret-tok" } }), { ok: true });
 
-    // 6. 编辑器合法源
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { origin: "http://127.0.0.1:5190" } }), { ok: true });
-    assert.deepEqual(isPrerenderRequestAllowed({ headers: { origin: "http://localhost:5190" } }), { ok: true });
+    // 6. 编辑器合法源与预渲染进程自身同源（无头 Chrome 加载 /?export=1）
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/api/frames/ready", headers: { origin: "http://127.0.0.1:5190" } }), { ok: true });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/api/frames/ready", headers: { origin: "http://localhost:5190" } }), { ok: true });
+    assert.deepEqual(isPrerenderRequestAllowed({ method: "GET", url: "/src/main.tsx", headers: { origin: "http://127.0.0.1:54321", host: "127.0.0.1:54321" } }), { ok: true });
 
     // 7. 本机内部请求（无 Origin/Referer）
     assert.deepEqual(isPrerenderRequestAllowed({ headers: {} }), { ok: true });

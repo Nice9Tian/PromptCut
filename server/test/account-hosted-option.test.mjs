@@ -158,3 +158,60 @@ test('AHO-5 公开路由 /hosted/shared/account/admin:创建者凭登录令牌�
   assert.deepEqual(after.value.hosted.render, { available: true, enabled: false, streams: true });
   assert.equal(after.value.creator, false);
 });
+
+test('AHO-6 权限组:创建者开启 streams 需要 render_streams 权限组，无权限报 403 permission-denied;会话返回 streamsAllowed 并在无权限时强制 streams 为 false', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-account-perm-'));
+  const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'doc-perm-fixture' });
+  const allowedAccounts = new Set();
+  const accountClient = {
+    verify: async (token) => {
+      const accountId = TOKENS[token];
+      if (!accountId) throw Object.assign(new Error('login-required'), { status: 401, code: 'login-required' });
+      return { accountId, accountName: accountId === A ? 'Alice' : 'Bob', loginId: `login-${token}`, credentialId: `cred-${token}`, loginGeneration: 1,
+        expiresAt: Date.now() + 3_600_000, accountEventSeq: 0, kind: 'editor' };
+    },
+    events: async () => ({ events: [], headSeq: 0 }),
+    permissions: async ({ accountId, group }) => ({ ok: true, allowed: group === 'render_streams' && allowedAccounts.has(accountId) }),
+  };
+  const runtime = createAccountHostedRuntime({ ledger, accountClient, dataDir: null, authorityUrl: 'https://fixture.invalid', allowFixtureAssetReady: true, pollMs: 0 });
+  runtime.setAssetReady(true);
+  const registry = { refresh() {}, get: (name) => (name === 'render' ? { role: 'render', actsFor: 'self', keys: [{ kid: 'k1' }] } : null) };
+  runtime.bindService({ describe: () => ({ conns: [] }), fencePrincipals: async () => ({ actualClosed: true }) }, { registry, urls: {} });
+  await runtime.start();
+  t.after(() => { try { runtime.close(); } catch { /* 已关 */ } fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
+
+  const authority = runtime.authority;
+  const created = await authority.createProject({ accessToken: 'tok-a' }, { name: '权限测试', requestId: 'create-perm', initialProject: { tracks: [] } });
+  const projectId = created.projectId;
+
+  // Alice initially NOT in group:
+  // 1. Session returns streamsAllowed: false
+  const s1 = await runtime.issueSession({ principal: await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId }), deviceId: 'dev-1' });
+  assert.deepEqual(s1.hosted.render, { available: true, enabled: false, streams: false, streamsAllowed: false });
+
+  // 2. Alice tries to enable streams: rejected with 403 permission-denied
+  const reqOn = { projectId, expectedAccessRevision: (await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId })).accessRevision,
+    op: 'set-hosted-option', service: 'render', option: 'streams', enabled: true, requestId: 'req-fail' };
+  await fails(() => authority.adminProject({ accessToken: 'tok-a' }, reqOn), 403, 'permission-denied');
+
+  // 3. Add Alice to group: Alice can enable streams
+  allowedAccounts.add(A);
+  const s2 = await runtime.issueSession({ principal: await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId }), deviceId: 'dev-2' });
+  assert.deepEqual(s2.hosted.render, { available: true, enabled: false, streams: false, streamsAllowed: true });
+
+  const ok = await authority.adminProject({ accessToken: 'tok-a' }, { ...reqOn, requestId: 'req-ok' });
+  assert.equal(ok.state, 'pending-services');
+
+  const s3 = await runtime.issueSession({ principal: await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId }), deviceId: 'dev-3' });
+  assert.deepEqual(s3.hosted.render, { available: true, enabled: false, streams: true, streamsAllowed: true });
+
+  // 4. Remove Alice from group: previously enabled project returns streams: false and streamsAllowed: false
+  allowedAccounts.delete(A);
+  const s4 = await runtime.issueSession({ principal: await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId }), deviceId: 'dev-4' });
+  assert.deepEqual(s4.hosted.render, { available: true, enabled: false, streams: false, streamsAllowed: false });
+
+  // 5. Turning OFF streams is allowed even without permission
+  const rev = (await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId })).accessRevision;
+  const off = await authority.adminProject({ accessToken: 'tok-a' }, { projectId, expectedAccessRevision: rev, op: 'set-hosted-option', service: 'render', option: 'streams', enabled: false, requestId: 'req-off' });
+  assert.equal(off.state, 'pending-services');
+});

@@ -305,7 +305,7 @@ test('HRS-04 local-node 切清单计划:ownListStreams 为真时流出两份(自
 
 const sparseOf = (task) => ({ ...task, id: `${task.id}:sparse`, input: { ...task.input, density: 'sparse' }, priority: 30 });
 
-test('HRS-09 主机:「生成轨道流」关着时照常认领稀疏流任务,不认领满密度的;打开后满密度的也认领', () => {
+test('HRS-09 主机:「生成轨道流」关着时完全不认领轨道流任务(既不认稀疏也不认满密度);打开后稀疏与满密度都认领', () => {
   const dense = open(streamTaskFor('p_off')), sparse = open(sparseOf(streamTaskFor('p_off')));
   assert.equal(isSparseStreamTask(sparse), true);
   assert.equal(isSparseStreamTask(dense), false);
@@ -314,8 +314,15 @@ test('HRS-09 主机:「生成轨道流」关着时照常认领稀疏流任务,�
   const a = hostOn([{ projectId: 'p_off', streams: false }], { maxConcurrent: 2 });
   snapshotOf(a.of('p_off'), [dense, sparse]);
   a.host.tick(); a.host.tick();
-  assert.deepEqual(a.of('p_off').claims(), [sparse.id], '关着:只认领稀疏流任务');
-  // 只有满密度的那一个:关着一拍也不认领,打开后当拍认领(稀疏流任务不占这道闸)
+  assert.deepEqual(a.of('p_off').claims(), [], '关着:完全不认领轨道流任务');
+  a.host.setStreams('p_off', true);
+  a.host.tick();
+  assert.deepEqual(a.of('p_off').claims(), [sparse.id], '打开后:认领高优先级的稀疏流任务');
+  a.of('p_off').deliver({ type: 'task.claimed', id: sparse.id, epoch: 1 });
+  a.host.tick();
+  assert.deepEqual(a.of('p_off').claims(), [sparse.id, dense.id], '上一项认领成功后:认领满密度流任务');
+
+  // 只有满密度的那一个:关着一拍也不认领,打开后当拍认领
   const b = hostOn([{ projectId: 'p_off', streams: false }]);
   snapshotOf(b.of('p_off'), [dense]);
   b.host.tick(); b.host.tick();
@@ -401,7 +408,7 @@ test('HRS-06 执行器 plan:清单计划里切分方自己的那一份,托管方
   const list = clipsPlan({ projectId: 'p1', clips: ['a'] });
   const mk = (opts, streamsEnabled) => { const f = fakePipeline(opts); return createPrerenderExecutor({ pipeline: f.pipeline, projects: projectsOf(f.entry), ...(streamsEnabled === undefined ? {} : { streamsEnabled }) }); };
   assert.equal((await mk({ ownListStreams: true }, enabled).plan(list)).ownListStreams, false, '托管方、这一项关着:不出自己满密度的那一份');
-  assert.equal((await mk({ ownListStreams: true }, enabled).plan(list)).ownListSparseStreams, true, '托管方、这一项关着、本机能产:自己的那一份只出稀疏流任务');
+  assert.equal((await mk({ ownListStreams: true }, enabled).plan(list)).ownListSparseStreams, false, '托管方、这一项关着、本机能产:稀疏的也不出');
   assert.equal((await mk({ ownListStreams: false }, enabled).plan(list)).ownListSparseStreams, undefined, '本机不能产流:稀疏的也不出');
   on = true;
   assert.equal((await mk({ ownListStreams: true }, enabled).plan(list)).ownListStreams, true, '托管方、这一项开着:出');
@@ -426,9 +433,9 @@ test('HRS-06 执行器 plan:清单计划里切分方自己的那一份,托管方
   const d = fakePipeline({ ownListStreams: true });
   await createPrerenderExecutor({ pipeline: d.pipeline, projects: projectsOf(d.entry), streamsEnabled: null }).plan(list);
   assert.equal('ownStreamsOff' in d.entry, false);
-  // 这道闸接到 listPlanOverrides 上:关着 → 自己的那一份只出稀疏流任务(`ownSparseOnly`),不出满密度的;浏览器那一份照常
-  assert.equal((await exec.plan(list)).ownListSparseStreams, true);
-  assert.ok(listPlanOverrides(list, await exec.plan(list)).streams.every((s) => s.ownSparseOnly === true && !('browserOnly' in s)));
+  // 这道闸接到 listPlanOverrides 上:关着 → 自己的那一份不出任何轨道流任务(`ownListSparseStreams: false`,全标 `browserOnly`);浏览器那一份照常
+  assert.equal((await exec.plan(list)).ownListSparseStreams, false);
+  assert.ok(listPlanOverrides(list, await exec.plan(list)).streams.every((s) => s.browserOnly === true));
   on = true;
   assert.deepEqual(listPlanOverrides(list, await exec.plan(list)).streams.map((s) => 'browserOnly' in s), [false]);
   // 执行器不再有认领的钩子:认领闸在主机上(HRS-02),不留两条路

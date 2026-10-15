@@ -284,10 +284,9 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       // (`frame-pipeline.mjs` 的 `layerMapStreamOptions` 读 `entry.ownStreamsOff`)。只有按项目管的进程才写这个记号
       if (entry && typeof entry === 'object') entry.ownStreamsOff = !on;
       if (!on && context.ownListStreams === true) {
-        // 这一项关着:自己的那一份只出稀疏流任务,不出满密度的(语义 `workflow/project.md`「项目设置」;`local-node.mjs` 的 `listPlanOverrides`)。
-        // 派出去的稀疏流按切分候选记录列进层表(`issuedStreamSpecs`),所以上面的 `ownStreamsOff` 照旧记
-        context = { ...context, ownListStreams: false, ownListSparseStreams: true };
-        say('executor.list-streams-off', { version: id, sparse: true });
+        // 这一项关着：托管方渲染节点什么轨道流都不产（既不产满密度流也不产稀疏流，只有 Agent 查帧；语义 workflow/project.md「项目设置」）。
+        context = { ...context, ownListStreams: false, ownListSparseStreams: false };
+        say('executor.list-streams-off', { version: id, sparse: false });
       }
     }
     // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
