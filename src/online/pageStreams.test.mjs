@@ -20,6 +20,9 @@
  *          这一轮之后再调马上回;换一轮时钟重来
  *   PS-15  测量时的那一份记账在清单计划发出来之前留着;计划发出来就换成计划的,测量时产的稀疏版查得到、不重产,之后才补满密度
  *   PS-16  测量时本页还没当上节点:等 MEASURE_READY_WAIT_MS,等到了照常产,等不到回 incapable(归闲时)
+ *   PS-17  低内存模式下 isConfigSupported 通过时只产稀疏版、不产满密度版
+ *   PS-18  低内存模式下 isConfigSupported 返回不支持时停产退回
+ *   PS-19  低内存模式下编码连错 3 次时停产退回
  *
  * 跑:npm test -- src/online/pageStreams.test.mjs
  */
@@ -569,4 +572,96 @@ test("PS-16 测量时本页还没当上节点:等一会儿,等到了照常产,�
   await never.run(MEASURE_READY_WAIT_MS + 250);
   assert.equal(got?.result, "incapable");
   assert.equal(never.w.produced.length, 0);
+});
+
+test("PS-17 低内存模式下 isConfigSupported 通过时只产稀疏版、不产满密度版", async () => {
+  let checkedConfig = null;
+  const { w, pages, run, finish } = rig({
+    lowMemory: true,
+    passes: undefined,
+    isConfigSupported: async (cfg) => { checkedConfig = cfg; return true; },
+  });
+  w.specs = [specOf("clip-a", "ka", 0, 8), specOf("clip-b", "kb", 120, 2)];
+  await run(PAGE_STREAM_WAIT_MS + 1000);
+  assert.ok(checkedConfig, "开工前调用了 isConfigSupported 检查配置");
+  assert.equal(checkedConfig.codec, "avc1.64001f");
+  assert.equal(w.produced.length, 1);
+  assert.equal(w.produced[0].id, "stream:rk-ka:0-7:sparse", "产出的第一段是稀疏版");
+  assert.equal(w.produced[0].stride, 15);
+  await finish();
+  await run(500);
+  assert.equal(w.produced.length, 2);
+  assert.equal(w.produced[1].id, "stream:rk-kb:0-1:sparse", "第二段也是稀疏版");
+  assert.equal(w.produced[1].stride, 15);
+  await finish();
+  await run(1000);
+  assert.equal(w.produced.length, 2, "绝不产满密度版 (不会开工 dense)");
+  const dbg = pages.debug();
+  assert.equal(dbg.state, "done");
+  assert.ok(dbg.jobs.every((j) => j.pass === "sparse"), "低内存模式下任务清单里只有稀疏版");
+});
+
+test("PS-18 低内存模式下 isConfigSupported 返回不支持时停产退回", async () => {
+  const { w, pages, run } = rig({
+    lowMemory: true,
+    passes: undefined,
+    isConfigSupported: async () => false,
+  });
+  w.specs = [specOf("clip-a", "ka", 0, 8)];
+  // 1. 闲时本页产流入口
+  await run(PAGE_STREAM_WAIT_MS + 1000);
+  assert.equal(w.produced.length, 0, "不支持时不产任何流");
+  const dbg = pages.debug();
+  assert.equal(dbg.jobs[0].state, "failed");
+  assert.equal(dbg.counters.failed, 1);
+  pages.stop();
+
+  // 2. 测量趟入口
+  const measureRig = rig({
+    lowMemory: true,
+    passes: undefined,
+    isConfigSupported: async () => false,
+  });
+  measureRig.w.specs = [specOf("clip-a", "ka", 0, 8)];
+  const out = await measureRig.pages.measure({ round: 1, projectId: "proj", projectRev: 7, clips: ["clip-a"], heavy: ["clip-a"] });
+  assert.equal(out.result, "failed", "测量趟不支持时回 failed 退出");
+  assert.equal(measureRig.w.produced.length, 0, "测量趟不支持时不产流");
+});
+
+test("PS-19 低内存模式下编码连错 3 次时停产退回", async () => {
+  let produceCalls = 0;
+  const { w, pages, run } = rig({
+    lowMemory: true,
+    passes: undefined,
+    isConfigSupported: async () => true,
+    produce: () => {
+      produceCalls++;
+      return Promise.reject(new Error("编码器崩溃"));
+    },
+  });
+  w.specs = [specOf("clip-a", "ka", 0, 8)];
+  // 连跑直到退避重试 3 次做不成
+  await run(PAGE_STREAM_WAIT_MS + 20_000);
+  assert.equal(produceCalls, 3, "连试 3 次");
+  const dbg = pages.debug();
+  assert.equal(dbg.jobs[0].state, "failed");
+  assert.equal(dbg.counters.failed, 1);
+  assert.equal(dbg.state, "done");
+  assert.equal(w.current, null);
+
+  // 测量趟中连续失败 3 次停产并回 failed
+  let measureProduceCalls = 0;
+  const measureRig = rig({
+    lowMemory: true,
+    passes: undefined,
+    isConfigSupported: async () => true,
+    produce: () => {
+      measureProduceCalls++;
+      return Promise.reject(new Error("编码器崩溃"));
+    },
+  });
+  measureRig.w.specs = [specOf("clip-a", "ka", 0, 8)];
+  const out = await measureRig.pages.measure({ round: 1, projectId: "proj", projectRev: 7, clips: ["clip-a"], heavy: ["clip-a"] });
+  assert.equal(out.result, "failed");
+  assert.equal(measureProduceCalls, 1);
 });

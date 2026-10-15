@@ -12,7 +12,7 @@
 
 **2026-10-14 08:30 收工：周额度到线，停下等用户重新开工。** 现场、每一项的状态、没做的和原因、接手后的顺序都在 `handoff-render-018.md`。`main` 在 `e2d46f53`。这次任务自己建的分支和工作区都已合入并清掉。
 
-**2026-10-15 接手继续：** `main` 在 `3ac769fa`，按 `render-018-kickoff.md`、`render-018-kickoff-other-agents.md`、`handoff-render-018.md` 及两份用户决定（`user-decisions-2026-10-13.md`、`user-decisions-2026-10-14.md`，冲突处以 10-14 为准）继续做完渲染重构与 0.7.18。本机安卓模拟器加速自检已跑（未装 hypervisor 驱动，照 10-14 第 2.1 节直接走 `page-stream-probe` 模拟手机自动化测试）。
+**2026-10-15 接手继续：** `main` 在 `3ac769fa`，按 `render-018-kickoff.md`、`render-018-kickoff-other-agents.md`、`handoff-render-018.md` 及两份用户决定（`user-decisions-2026-10-13.md`、`user-decisions-2026-10-14.md`，冲突处以 10-14 为准）继续做完渲染重构与 0.7.18。本机安卓模拟器加速自检已跑（Windows Hypervisor Platform 已开且已重启，系统报 hypervisor 未在运行，多半是启动配置 `hypervisorlaunchtype` 被关，由用户自行查；在此之前照 10-14 第 2.1 节先用 `page-stream-probe` 浏览器模拟手机自动化测试）。
 
 ## 已合进 `main` 的
 
@@ -59,12 +59,16 @@
 | 素材上传先传小尺寸、再传原尺寸（用户 2026-10-13 另加的一条）：上传队列改成所有素材的小尺寸先传完、再传原尺寸 | `afff3cd8` |
 | 修：轨道流已经在画时占位符还盖在上面（组流起播后约 170 毫秒；`online-stream-play-probe` 的 S6，登记验收清单时查出来的） | `6474b669` |
 | 修：在线页面和切分方算同屏流预算时判得不一样（在线页面没把依赖下层的流算进去，同屏流多时会白产对方不用的单卡流）；规则挪到两边共用的 `src/render/streamPlanRules.mjs`，加对拍单测 | `e2d46f53` |
+| 2026-10-14 决定文档与语义同步：把 `user-decisions-2026-10-14.md` 及获批的一级/二级语义改动落进 18 份 `docs/semantics/**` 与 `docs/plan/*` 契约 | `08fb7cd9` |
+| 低内存档进入文案更新、`pageStreams.ts` 手机/平板只产稀疏流与 `isConfigSupported` 前置检查、`page-stream-probe.mjs` 模拟手机场（`390×844`、4x CPU、4G、4 条稀疏流 + 1 占位、堆增量 ≤ 25 MB） | `16fe6882` |
+| 修 `FrameScene.tsx` Agent `see_frames`/开窗抽帧早一帧（`push-draw-probe` ahead=0）；查清并根除 `bake.mjs` 导出成片开头 36 帧偶发差一帧（`warmUpAt` 唤醒 Chromium rAF，连导 3 遍与 `A-89c15177` 240/240 逐字节相同）；画布卡产流缺省改为一律直取像素（`always`） | `69d791ed` |
 
 ## 在分支上、没合入的
 
 | 分支 | 是什么 | 状态 |
 |---|---|---|
-| —— | 没有留在分支上的；没开工的项和原因见 `handoff-render-018.md` 第 2 节与下方「接下来」 | —— |
+| `gemini/rr-stream-sched`（`.worktrees/rr-stream-sched`）+ VisuHive `gemini/vh-stream-perm`（`VisuHive/.worktrees/vh-stream-perm`） | 去掉 `account/store.mjs` 默认管理员 `9tian`；「生成轨道流」关着时托管方渲染节点什么都不产；「生成轨道流」权限分组与界面置灰 | 正在收尾单测与 `hosted-render-streams-probe.mjs`。详见 `docs/reports/AGENT-rr-stream-sched.md` |
+| `gemini/rr-stage-export-media`（`55d6b71f`，`.worktrees/rr-stage-export-media`） | 所有舞台一律跨源隔离 + 桌面版舞台锁死（禁调预渲染接口、按哈希读素材只许读当前项目） | 已限缩为单功能分支，并入 `69d791ed` 后完成 `previewMode.ts` 同源单舞台退回移除并过闸门合入。详见 `docs/reports/AGENT-rr-stage-export-media.md` |
 
 ## 接下来（照 `handoff-render-018.md` 第 2 节与 `user-decisions-2026-10-14.md` 第 2 节）
 
