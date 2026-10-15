@@ -194,7 +194,8 @@ test('F2 其余细节:每个 control 都成立;costKey 与其余字段不随指�
     const rest = ({ key, snapshotKey, envFingerprint, ...others }) => others;
     assert.deepEqual(rest(a), rest(b), `${label} 除 key / snapshotKey / envFingerprint 外逐字段相同`);
   }
-  assert.equal(byClip(planA, 'clip-b').tier, 'local', '夹具里有一张本地档卡');
+  // 己二：撤掉每张卡的快照后 tier 恒为 none
+  assert.equal(byClip(planA, 'clip-b').tier, 'none');
 
   // 同一指纹算两次完全相同;函数形式与字符串形式相同
   assert.deepEqual(planWith(FP_A), planA);
@@ -377,22 +378,9 @@ test('F6 splitPlan 喂真实 plan() 输出:共享档 resultKey === snapshotKey�
     const shared = tasks.filter(t => t.kind === 'snapshot' && t.tier === 'shared');
     const local = tasks.filter(t => t.kind === 'snapshot' && t.tier === 'local');
     const stream = tasks.filter(t => t.kind === 'stream');
-    assert.ok(shared.length >= 3, `共享档任务:clip-a 两段 + clip-c 一段(实得 ${shared.length})`);
-    assert.ok(local.length >= 1, '本地档任务');
+    assert.equal(shared.length, 0, '己二：快照已撤，splitPlan 真实链路不再切出快照细任务');
+    assert.equal(local.length, 0, '己二：不再切出本地档快照细任务');
     assert.ok(stream.length >= 2, '流任务');
-    for (const t of shared) {
-      const ctl = byClip(cardPlan, t.input.clipId);
-      assert.equal(t.resultKey, ctl.snapshotKey, `共享档 ${t.id}:resultKey === control.snapshotKey`);
-      assert.equal(t.input.contentKey, ctl.contentKey, '共享档内容键 = control.contentKey');
-      assert.equal(t.input.entryKey, null);
-    }
-    for (const t of local) {
-      const ctl = byClip(cardPlan, t.input.clipId);
-      const contentKey = `${ENTRY_KEY}/${ctl.contentKey}`;
-      assert.equal(t.input.contentKey, contentKey, '本地档内容键 = <entryKey>/<contentKey>');
-      assert.equal(t.resultKey, resultKeyOf(contentKey, fp), '本地档 resultKey = resultKeyOf(<entryKey>/<contentKey>, fp)');
-      assert.equal(t.input.entryKey, ENTRY_KEY);
-    }
     for (const t of stream) {
       const spec = streams.find(s => s.topClipId === t.input.clipId);
       assert.ok(spec, `流任务 ${t.id} 找得到它的 spec`);

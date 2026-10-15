@@ -142,40 +142,15 @@ test('A1 A 预渲染并推送完；B 用同一份 card plan 调 adoptFromManifes
   const asset = countingAsset(svc.client);
   const contentB = countingContent(await svc.another('node-b'));
   const out = await adopt(B, entryB, contentB, asset);
-  assert.deepEqual({ manifests: out?.manifests, fetched: out?.fetched, written: out?.written }, { manifests: 5, fetched: 200, written: 200 },
+  // 己二：快照已撤，adoptFromManifests 不再拉取快照清单
+  assert.deepEqual({ manifests: out?.manifests, fetched: out?.fetched, written: out?.written }, { manifests: 0, fetched: 0, written: 0 },
     `返回 { manifests, fetched, written }：${JSON.stringify(out)}`);
-  const keysAsked = contentB.gets().map((g) => `${g.kind}|${g.key}`).sort();
-  const want = tasks.map((x) => `snapshot-manifest|${x.resultKey}:${x.range.from}-${x.range.to}`).sort();
-  for (const k of want) assert.ok(keysAsked.includes(k), `按本机算出的键查了清单：${k}`);
   assert.equal(asset.puts.length, 0, '取用不上传');
-
-  for (const c of plan) {
-    const dirA = snapshotDir(rootA, targetOf(c)), dirB = snapshotDir(rootB, targetOf(c));
-    const fa = await filesOf(dirA), fb = await filesOf(dirB);
-    assert.deepEqual(Object.keys(fb).sort(), Object.keys(fa).sort(), `${c.clipId}：同一批文件`);
-    for (const name of Object.keys(fa)) {
-      if (name === 'index.json') assert.deepEqual(JSON.parse(fb[name]), JSON.parse(fa[name]), `${c.clipId} index.json 一致`);
-      else assert.ok(fb[name].equals(fa[name]), `${c.clipId} ${name} 逐字节相同`);
-    }
-  }
-  // 整棵帧库只多了这两个快照目录（没有别的产物、没有半截文件）
-  const treeB = Object.keys(await treeOf(rootB)).filter((p) => !p.startsWith('controls-lock/'));
-  assert.ok(treeB.every((p) => p.startsWith('controls-html/') || p.startsWith('controls-local/')), `B 只写了快照库：${treeB.filter((p) => !p.startsWith('controls-')).join(', ')}`);
-
-  const sharedHit = staged(B, 'html', plan[0].snapshotKey);
-  assert.deepEqual(sharedHit?.ranges, [[0, 129]], `共享档的键挂进了就绪索引：${JSON.stringify(B.ready.stagedKeys())}`);
-  const localHit = staged(B, 'local', `${ENTRY_KEY}/${plan[1].snapshotKey}`);
-  assert.deepEqual(localHit?.ranges, [[0, 69]], '本地档的键（<entryKey>/<dirKey>）挂进了就绪索引');
-  const layerOf = (clipId) => watch.layers().filter((m) => m.clipId === clipId).at(-1);
-  assert.deepEqual(layerOf('clip-a') && { kind: layerOf('clip-a').kind, key: layerOf('clip-a').key, ranges: layerOf('clip-a').ranges },
-    { kind: 'html', key: plan[0].snapshotKey, ranges: [[0, 129]] }, '会话收到共享档的 layer');
-  assert.deepEqual(layerOf('clip-l') && { kind: layerOf('clip-l').kind, key: layerOf('clip-l').key, ranges: layerOf('clip-l').ranges },
-    { kind: 'local', key: `${ENTRY_KEY}/${plan[1].snapshotKey}`, ranges: [[0, 69]] }, '会话收到本地档的 layer');
   assert.equal(bakeryCalls.length, before, 'B 没有调任何渲染');
 
-  // 再调一次：本机都有了，全部跳过
+  // 再调一次：本机跳过
   const again = await adopt(B, entryB, await svc.another('node-b2'), countingAsset(svc.client));
-  assert.equal(again.fetched, 0, '本机已有的段不再拉');
+  assert.equal(again.fetched, 0, '不再拉');
   assert.equal(again.written, 0);
 });
 
@@ -245,20 +220,18 @@ test('A2 部分段在内容库里没有、部分段本机已有：只拉内容�
   const asset = countingAsset(svc.client);
   const before = bakeryCalls.length;
   const out = await adopt(B, entryB, await svc.another('node-b'), asset);
-  assert.equal(out.fetched, 20, `只下载共享档 120-129 与本地档 60-69 的 20 个块：${JSON.stringify(out)}`);
-  assert.equal(out.written, 20, `落盘 20 帧：${JSON.stringify(out)}`);
-  // manifests：用上的清单数。本机已有的共享档 0-59 要么根本不查、要么查到但什么都不拉 —— 契约没说它算不算，两种都认
-  assert.ok(out.manifests === 2 || out.manifests === 3, `manifests 是用上的清单数（2；把本机已有、查到而没拉的也算上是 3）：${out.manifests}`);
-  const wantHashes = new Set([...pushed['shared:120-129'].frames, ...pushed['local:60-69'].frames].map(([, h]) => h));
-  assert.equal(asset.gets.length, 20, `get 了 20 次：${asset.gets.length}`);
-  assert.ok(asset.gets.every((g) => wantHashes.has(g.hash)), '下载的都是缺的那两段的块');
+  // 己二：快照已撤，adoptFromManifests 不再拉取快照清单
+  assert.deepEqual({ manifests: out?.manifests, fetched: out?.fetched, written: out?.written }, { manifests: 0, fetched: 0, written: 0 },
+    `返回 { manifests, fetched, written }：${JSON.stringify(out)}`);
+  assert.equal(asset.gets.length, 0);
 
   const idxShared = await B.snapshots().snapshotIndex(targetOf(plan[0]));
-  assert.deepEqual(idxShared.frames, [[0, 59], [120, 129]], '共享档：本机的 0-59 加上拉来的 120-129；60-119 留给本机预渲染');
+  assert.deepEqual(idxShared.frames, [[0, 59]], '共享档：仅有本机原有的 0-59，快照不再从远端拉');
   const idxLocal = await B.snapshots().snapshotIndex(targetOf(plan[1]));
-  assert.deepEqual(idxLocal.frames, [[60, 69]], '本地档：只有拉来的 60-69');
+  assert.deepEqual(idxLocal.frames, [], '本地档：快照不再拉取');
   const fa = await filesOf(snapshotDir(rootA, targetOf(plan[0]))), fb = await filesOf(snapshotDir(rootB, targetOf(plan[0])));
-  for (const n of range(120, 129)) assert.ok(fb[`${n}.html`]?.equals(fa[`${n}.html`]), `第 ${n} 帧与 A 相同`);
+  for (const n of range(0, 59)) assert.ok(fb[`${n}.html`]?.equals(fa[`${n}.html`]), `第 ${n} 帧与 A 相同`);
+  assert.equal(fb['120.html'], undefined, '快照不再拉取');
   assert.equal(fb['60.html'], undefined, '内容库里没有的段不拉');
   assert.equal(bakeryCalls.length, before, 'adoptFromManifests 本身不渲染');
 });

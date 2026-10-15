@@ -105,8 +105,8 @@ const focus = (text, more = {}) => ({ kind: 'card', cardId: 'focus-card', params
 
 test('强调:里面是两张不同的卡,键不能相同', () => {
   const planned = assertDistinct(pill('aaa', { emphasis: EMPHASIS }), focus('zzz', { emphasis: EMPHASIS }), { streams: true, outer: /\/emphasis$/ });
-  // 这种片段判成共享档、能单独预渲染:撞键就是两张卡共用一份产物
-  assert.equal(planned.left.tier, 'shared');
+  // 己二：撤掉每张卡的快照后 tier 恒为 none
+  assert.equal(planned.left.tier, 'none');
   assert.equal(planned.left.cacheable, true);
 });
 
@@ -171,9 +171,9 @@ const fxNodes = (inputL = '@clip/clip-l/source', inputR = '@clip/clip-r/source')
 test('素材效果卡:同一张卡同参数、接的素材不同,键不能相同', () => {
   const planned = assertDistinct({ kind: 'media', mediaId: 'm-a', nodeId: 'n-l', params: { amount: 1 } }, { kind: 'media', mediaId: 'm-b', nodeId: 'n-r', params: { amount: 1 } },
     { extra: { cardNodes: fxNodes() } });
-  // 输出节点是卡自己(不是外面套的一层),它不在审阅表里:本地档
   assert.equal(planned.left.nodeId, 'n-l');
-  assert.equal(planned.left.tier, 'local');
+  // 己二：撤掉每张卡的快照后 tier 恒为 none
+  assert.equal(planned.left.tier, 'none');
 });
 
 test('素材效果卡:接同一个素材、输入的时间映射不同,键不能相同', () => {

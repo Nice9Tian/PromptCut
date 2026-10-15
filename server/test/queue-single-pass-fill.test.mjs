@@ -56,7 +56,7 @@ async function run(root, { singlePass, range }) {
   const commit = store.commitSnapshots.bind(store);
   store.commitSnapshots = (args) => { bakeLog.at(-1)?.events.push(`commit ${args.items.map(i => i.localFrame).join(',')}`); return commit(args); };
   const entry = await pipeline.entry(project);
-  pipeline.recordCardPlan(entry, entry.cardCache.plan(graph));
+  pipeline.recordCardPlan(entry, entry.cardCache.plan(graph).map(c => ({ ...c, tier: 'shared' })));
   entry.cardCache.hasComplete = async () => false;
   entry.cardCache.put = async () => true;
   entry.cardCache.finish = async () => {};

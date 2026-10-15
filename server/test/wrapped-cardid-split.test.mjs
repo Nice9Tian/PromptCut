@@ -69,15 +69,29 @@ const weightOf = control => {
   return { class: 'medium', estMs: null };
 };
 
+/** `FramePipeline.queueHandles` */
+const queueHandles = control => {
+  if (!control?.snapshotKey || !control.clipId) return false;
+  const caps = control?.capabilities ?? {};
+  const tier = control.tier || snapshotTier(caps);
+  if (tier === 'local' || (tier === 'shared' && control.cacheable === true)) return true;
+  if (tier === 'none') {
+    const stateful = control.frameMode === 'stateful' || caps.frameMode === 'stateful' || control.needPrerendering === true || caps.need_prerendering === true || caps.needPrerendering === true;
+    const compositing = control.compositing ?? caps.compositing ?? 'unknown';
+    return stateful && (compositing !== 'sourceDependent' || control.cacheable === true);
+  }
+  return false;
+};
+
 /** `planForQueue` 给控件补卡片 id 的那一步(同一个函数) */
-const queueCardPlan = (controls, graph) => withInnerCards(controls, graph);
+const queueCardPlan = (controls, graph) => withInnerCards(controls.filter(queueHandles), graph);
 /** `planForQueue` 的 `isUserCard`(同一个函数) */
 const isUserCardOf = sourceVersions => control => isUserCardControl(control, sourceVersions);
 
 /** main(53e7a9ca)上 `planForQueue` 的写法:只看输出节点。对照用 */
 function mainCardPlan(controls, graph) {
   const cardIdOf = new Map((graph?.nodes ?? []).map(node => [node?.id, node?.cardId ?? null]));
-  return controls.map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
+  return controls.filter(queueHandles).map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
 }
 const mainIsUserCardOf = sourceVersions => control => String(sourceVersions[control?.cardId] ?? '').startsWith('user:');
 

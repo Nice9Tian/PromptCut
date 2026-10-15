@@ -80,7 +80,7 @@ async function setup(root, { interactive = false } = {}) {
   const pipeline = new FramePipeline({ root, origin: () => 'http://127.0.0.1:1', environment: ENV, dataRoot: root, interactive, ...(interactive ? { mode: 'full' } : {}) });
   await pipeline.ensureCardLocks();
   const entry = await pipeline.entry(project);
-  pipeline.recordCardPlan(entry, entry.cardCache.plan(graph));
+  pipeline.recordCardPlan(entry, entry.cardCache.plan(graph).map(c => ({ ...c, tier: 'shared' })));
   entry.cardCache.hasComplete = async () => false;
   entry.cardCache.put = async () => true;
   entry.cardCache.finish = async () => {};

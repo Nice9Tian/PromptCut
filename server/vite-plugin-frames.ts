@@ -21,10 +21,8 @@ const prerenderMode = isPrerender ? prerenderModeOf(process.env) : "full";
 const servesPrerender = modeServesPrerender(prerenderMode);
 import { ensureMirror } from "./vite-plugin-mirror";
 
-import { latestPlayhead, ensureMirror as ensureMirrorVersion, reportReadySession } from "./vite-plugin-mirror";
-import { snapshotTier } from "./snapshot-store.mjs";
+import { latestPlayhead, reportReadySession } from "./vite-plugin-mirror";
 import { readySessionOf } from "./ready-index.mjs";
-import { describeEnvironment } from "./render-node/fingerprint.mjs";
 import { sessionDiagOf, sessionLogger } from "./render-node/session-diag.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
 import { assetServiceOrigin, setMediaFallbackBases, setMediaFallbackTicket } from "./asset-client";

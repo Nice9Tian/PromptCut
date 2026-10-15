@@ -99,7 +99,7 @@ test('prerenderSetOf 的兜底口径:direct 不产,其余都产(TODO(R4a) 接真
  * ------------------------------------------------------------------------ */
 
 const statefulControl = (clipId, count = 8) => ({
-  clipId, count, snapshotKey: `key-${clipId}`, sampling: { firstFrame: 0 }, end: 100,
+  clipId, count, snapshotKey: `key-${clipId}`, sampling: { firstFrame: 0 }, end: 100, tier: 'shared',
   capabilities: { frameMode: 'stateful', compositing: 'independent' },
 });
 const picker = (entry, index = { count: 0, frames: [], oversize: [] }) => ({

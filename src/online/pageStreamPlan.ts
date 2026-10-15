@@ -267,6 +267,8 @@ export interface PageControl {
   capabilities: Record<string, any>;
   compositing: string;
   tier: "none" | "shared" | "local";
+  frameMode?: "stateful" | "direct";
+  needPrerendering?: boolean;
   start: number;
   end: number;
   count: number;
@@ -297,7 +299,7 @@ export function pageControls(project: { fps?: number }, value: PageCardPlanValue
     const clipId = output.clipId || node?.clipId;
     if (!node || typeof clipId !== "string" || !clipId) continue;
     out.push({ clipId, cardId: typeof node.cardId === "string" ? node.cardId : null, nodeId: output.nodeId, node, definition, capabilities: caps, compositing,
-      tier: snapshotTier(caps), start, end, count, sampling, frame: output.frame });
+      tier: snapshotTier(caps), frameMode: caps.frameMode, needPrerendering: caps.need_prerendering === true || caps.needPrerendering === true, start, end, count, sampling, frame: output.frame });
   }
   return out;
 }
@@ -366,7 +368,7 @@ export function pageStreamBlock(control: PageControl, at: { clip: AnyClip; track
   if (!Number.isInteger(control.count) || control.count <= 0) return "no-frames";
   // 浏览器做不做得了(`split.mjs` 的 `browserEligible`):有状态/need_prerendering(轻卡不产流)、不是画布卡
   const caps = control.capabilities ?? {};
-  const isStateful = caps.frameMode === "stateful" || caps.need_prerendering === true || caps.needPrerendering === true;
+  const isStateful = control.tier === "shared" || control.frameMode === "stateful" || caps.frameMode === "stateful" || (control as any).needPrerendering === true || caps.need_prerendering === true || caps.needPrerendering === true;
   if (!isStateful) return "not-shared-tier";
   if (caps.canvasHeavy === true) return "canvas";
   // 〔裁〕比切分方更紧的两条:只算页面自带的内置卡片;只算输出节点就是这张卡自己的片段

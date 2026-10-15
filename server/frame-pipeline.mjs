@@ -1466,11 +1466,13 @@ export class FramePipeline {
    */
   queueHandles(control) {
     if (!control?.snapshotKey || !control.clipId) return false;
-    const tier = control.tier || snapshotTier(control.capabilities);
+    const caps = control?.capabilities ?? {};
+    const tier = control.tier || snapshotTier(caps);
     if (tier === 'local' || (tier === 'shared' && control.cacheable === true)) return true;
     if (tier === 'none') {
-      const comp = control.compositing ?? control.capabilities?.compositing;
-      return comp === 'belowDependent' || comp === 'unknown' || (comp === 'independent' && control.cacheable === true);
+      const stateful = control.frameMode === 'stateful' || caps.frameMode === 'stateful' || control.needPrerendering === true || caps.need_prerendering === true || caps.needPrerendering === true;
+      const compositing = control.compositing ?? caps.compositing ?? 'unknown';
+      return stateful && (compositing !== 'sourceDependent' || control.cacheable === true);
     }
     return false;
   }
@@ -1709,10 +1711,9 @@ export class FramePipeline {
    * `session` 是页面镜像的会话(HTTP 的 `/preload` 从 body 里带来;脚本不带就是缺省会话),
    * `localRev` 是页面的版本号。`adopt: false`(让路之后重新排上的那些)只排活、不动任何会话的版本。
    *
-   * `queue`(契约 J.5):`true` = 这一版的快照交给渲染任务队列产(队列模式的 `/preload` 路由传),
+   * `queue`(契约 J.5):`true` = 队列模式的 `/preload` 路由传,
    * `false` = 退回本机自己产(连不上文档服务时);不传(缺省,所有现有调用方)就不动 entry 上记着的模式。
-   * 队列模式下后台那一趟跳过 `fillCardControls` 与 `renderLocalSnapshots`,整场景路也不再顺手写
-   * 队列负责的那些卡的快照(`recordSnapshots`);锚帧、流、整场景照旧。
+   * 己二：撤掉每张卡的 HTML 快照后，锚帧直接标记就绪、流照常更新，整场景与旧整帧通道写 PNG/MOV 照旧。
    *
    * @param {any} project
    * @param {{ session?: string, localRev?: unknown, adopt?: boolean, owner?: string, ticket?: number, queue?: boolean }} [options]
@@ -1963,13 +1964,7 @@ export class FramePipeline {
    * 写在快照同目录的 `<localFrame>.small.webp`(`index.json` 与 `<localFrame>.html` 一字不动)。写完把这一批所在的段
    * 再进一次推送队列 —— 小位图随同一段推到素材服务(`px`),清单里带 `small` 表(`artifact-transfer.mjs`)。
    *
-   * - 只在配了推送队列时做:小尺寸只给在线页面从素材服务拉,不连素材服务就没有消费方(离线照旧,一个字节不多写)。
-   *   独立渲染主机没有推送队列、由 sink 推,它起节点前调 `enableSmallTier` 打开(AGENT-xnode-dedup)。
-   * - 只借**已经开着**的预渲染间(lane 的 `bakery`),在它换页前画:不为小尺寸单独起浏览器、也不另开页面 ——
-   *   推送队列本身从不开 Chrome、不渲染(C6.4)。
-   * - 从素材服务拉来的帧(`adopted: true`)不做:别的节点产的,清单里本来就有它的小尺寸。
-   * - 生成失败只记日志,不挡原尺寸:原尺寸照常入库、推送。
-   * - `PROMPTCUT_SMALL_TIER=0` 关掉(排查用)。
+   * 己二（2026-10-13 契约）：预渲染小尺寸已停产，两档改成一档，smallTierEnabled 恒为 false。
    */
   smallTierEnabled() {
     return false;
@@ -2059,7 +2054,7 @@ export class FramePipeline {
    * 这些帧从哪来:本进程还没配推送队列时产的(比如共享配置写好之前、预渲染进程重启之前先渲的锚帧和播放头那一批 ——
    * 阿里云演示 2026-09-27 的 295/300 就是这样缺的 5 帧)、攒太多被丢掉的、上一次生成失败的、记下后进程退出没画的。
    * 只按新产出的帧排小尺寸时,这些帧所在的段原尺寸齐了、小尺寸永远缺那几张。
-   * 回排了几帧。没开小尺寸(没配推送队列、`PROMPTCUT_SMALL_TIER=0`)或这张卡不产快照时回 0,不读任何文件。
+   * 回排了几帧。己二：预渲染小尺寸已停产，smallTierEnabled() 恒回 false，不读任何文件。
    */
   async scheduleMissingSmall(entry, control, range) {
     if (!this.smallTierEnabled() || !control?.snapshotKey || !range) return 0;
