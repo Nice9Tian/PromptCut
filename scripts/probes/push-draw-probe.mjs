@@ -26,9 +26,8 @@
  *            稀疏那一趟(每个分段只截第一帧),各自和接着租约一路产下来的满密度逐帧比
  *   shards   并行导出(另一个项目,6 秒,几张卡前后接着):`exportUnified({ workers: 3 })` 的每一帧和整段导出比
  *
- * 开窗取帧(targets / see / layout)另有一件老的、和这里无关的事:窗口里的卡比整段导出早一帧挂载
- * (`planFrameWindow` 按提前量算挂载帧,整段导出的 `FrameScene` 在片段起点才挂),所以这几条路取到的第 f 帧
- * 和参照的第 f+1 帧逐像素相同。这支探针把「最像第 f 或 f+1 帧、而且差为 0」都算不中,报告里另记。
+ * 开窗取帧(targets / see / layout):修了 FrameScene 中按 clipFrameMode 分流直接求值与时间卡之后,
+ * 开窗取帧不再早一帧挂载,取到的第 f 帧与参照的第 f 帧逐像素相同(ahead = 0)。
  *
  * `--legacy`:把推帧补画关掉(`PROMPTCUT_PUSH_DRAW=0`)跑同一套,复现修之前的样子;这时探针核对的是「该中的路都中了、对照档不中」。
  * `--cost`:另量代价(960×540 和 1920×1080):每推一帧多花多少毫秒、并行导出的总耗时变化。耗时只记录。
@@ -250,12 +249,12 @@ try {
       const got = new Map();
       await quiet(() => exportUnified(project, { url: exportUrl(project), out: path.join(OUT, 'scratch', `targets-${variant}`), targetFrames: TARGETS, noVideo: true, writeFrames: false,
         onFrame: async (i, buf) => { got.set(i, rgba(buf)); } }));
-      row.只取几帧的导出 = settle(variant, 'targets 只取几帧的导出', verdict(judge(got, ref), 1));
+      row.只取几帧的导出 = settle(variant, 'targets 只取几帧的导出', verdict(judge(got, ref), 0));
     }
     if (PATHS.has('see')) {
       const frames = await quiet(() => pipeline.see_frames(project, SEE.map((f) => f / FPS), { lane: 'agent' }));
       const got = new Map([...frames].map(([f, value]) => [f, rgba(value.buf)]));
-      row.抽帧 = settle(variant, 'see_frames 抽帧', verdict(judge(got, ref), 1), { sources: [...frames].map(([f, v]) => `${f}:${v.source}`) });
+      row.抽帧 = settle(variant, 'see_frames 抽帧', verdict(judge(got, ref), 0), { sources: [...frames].map(([f, v]) => `${f}:${v.source}`) });
       if (variant !== 'alone') await shot('see-f35', frames.get(35).buf);
     }
     if (PATHS.has('layout')) {

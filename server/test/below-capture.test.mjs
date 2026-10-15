@@ -374,7 +374,10 @@ function fakeBakery({ present = () => true, stale = false, drifting = false, stu
     client: { async send(method, params) { if (method === 'Emulation.setDeviceMetricsOverride') clip = params.viewport ? { x: params.viewport.x, y: params.viewport.y, w: params.viewport.width, h: params.viewport.height } : { x: 0, y: 0, w: STAGE.width, h: STAGE.height }; } },
     async beginFrame(extra = {}) {
       // 画一张丢掉的(`frame-stream.mjs` 的 `BELOW_DISCARD_SHOT`):只记下在哪一帧画过
-      if (extra.screenshot?.format === 'jpeg') { log.push(`draw:${frame}`); return { screenshotData: '' }; }
+      if (extra.screenshot?.format === 'jpeg') {
+        if (extra.screenshot?.quality === 1) log.push(`draw:${frame}`);
+        return { screenshotData: 'ok' };
+      }
       if (extra.screenshot?.format !== 'png') return {};
       if (hidden && failLower) throw new Error('截图坏了');
       const drift = drifting ? shots : 0;

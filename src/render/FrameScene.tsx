@@ -9,6 +9,8 @@ import { type PixelMapDef } from "../kernel/pixelMap.mjs";
 import { drawPixelMap } from "./pixelMapGl";
 import { graphVisualNode } from "./cards/GraphCard";
 import { cardMountedAt } from "./frameWindow.mjs";
+import { clipFrameMode } from "../kernel/frameMode.mjs";
+import { getCard } from "../kernel/registry";
 import { VideoTrack } from "./VideoTrack";
 import { driveMedia, filterOf, releaseMedia, targetTimeOf } from "./mediaDrive";
 import { playbackUrl } from "./mediaTier";
@@ -198,13 +200,18 @@ export function FrameScene({
   const replaced = (id: string) => !!cached(id) || missing.has(id);
   const tracks = [...project.tracks].reverse().filter((tr) => !tr.hidden);
   /*
-   * E7 第 2 条:live 下卡片活跃判据用 `cardMountedAt`(含 LEAD)—— 和 `Stage` 内部、
-   * 导出的分片计划、`mountFrameOf` 同一个口径,卡片在入点前 50 ms 就挂上,进场动画才不会被切掉一截。
-   * `placeholder` 那条保持原判据不动(导出逐像素基线)。
+   * 卡片按自身时间口径判定活跃:直接求值卡走 directT,时序卡走 t。
+   * 开窗取帧(see_frames / 局部导出)下 t 还在片段起点之前时,时序卡不能因 directT 越过起点而提前挂载(否则早一帧)。
+   * live 下用 cardMountedAt(含 50ms 提前量),placeholder(导出)下用 [start, end) 区间。
    */
+  const clipTime = (clip: TrackClip) =>
+    clipFrameMode(clip, getCard(clip.cardId)) === "direct" ? directT : t;
   const active = live
-    ? (clip: { start: number; end: number }) => cardMountedAt(clip, directT)
-    : (clip: { start: number; end: number }) => directT >= clip.start && directT < clip.end;
+    ? (clip: TrackClip) => cardMountedAt(clip, clipTime(clip))
+    : (clip: TrackClip) => {
+        const ct = clipTime(clip);
+        return ct >= clip.start && ct < clip.end;
+      };
   /*
    * 图卡接管的素材段、带像素映射的素材段都不进 `VideoTrack`:前者由 `Stage` 里的图卡画,
    * 后者由 `PixelMappedMedia` 画 —— 不滤掉的话同一段素材会被画两遍。
