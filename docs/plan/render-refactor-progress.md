@@ -64,7 +64,10 @@
 
 | 分支 | 是什么 | 状态 |
 |---|---|---|
-| —— | 没有留在分支上的；没开工的项和原因见 `handoff-render-018.md` 第 2 节与下方「接下来」 | —— |
+| `gemini/rr-mobile-lowmem`（`9c60aa7b`，`.worktrees/rr-mobile-lowmem`） | 低内存档进入文案更新；手机/平板打开项目也为本页产稀疏流（带 `isConfigSupported` 检查、只产稀疏版）；`page-stream-probe.mjs` 模拟手机场（390×844、4x CPU、4G、4 条稀疏流 + 1 占位、堆增量 10.7 MB ≤ 25 MB、节拍 p95 3～4 ms） | 已做完并跑通单测与探针，待重启后主会话过合入闸门合 `main`。详见 `docs/reports/AGENT-rr-mobile-lowmem.md` |
+| `gemini/rr-frame-bake3d`（`198ca4de`，`.worktrees/rr-frame-bake3d`） | 修 `FrameScene.tsx` 抽帧早一帧；查清并根除 `bake.mjs` 导出开头 36 帧偶发差一帧（连导 3 遍与 `A-89c15177` 240/240 逐字节相同）；画布卡产流改为一律直取像素（`always`） | 已做完并过单测与 3 遍 240 帧导出核对，待重启后主会话过合入闸门合 `main`。详见 `docs/reports/AGENT-rr-frame-bake3d.md` |
+| `gemini/rr-stream-sched`（`d0e7ec2e`，`.worktrees/rr-stream-sched`）+ VisuHive `gemini/vh-stream-perm`（`58c2923`，`VisuHive/.worktrees/vh-stream-perm`） | 「生成轨道流」关着时托管方渲染节点什么都不产；「生成轨道流」权限分组与 VisuHive 管理后台 | VisuHive 侧权限组存储、API、管理页与单测（95 pass）已做完提交；剩 PromptCut 侧对接权限查询、开关置灰与关闭不产流。详见 `docs/reports/AGENT-rr-stream-sched.md` |
+| `gemini/rr-stage-export-media`（`55d6b71f`，`.worktrees/rr-stage-export-media`） | 所有舞台一律跨源隔离 + 桌面版舞台锁死（禁调预渲染接口、按哈希读素材只许读当前项目）；放开在线浏览器导入媒体并先转小尺寸 | 桌面预渲染接口守门、舞台按项目过滤素材哈希、在线 `stageIsolation.ts` 禁同源退回已做完并过单测（23 pass）；剩 `previewMode.ts` 单舞台退回移除与在线导入媒体/浏览器转小尺寸。详见 `docs/reports/AGENT-rr-stage-export-media.md` |
 
 ## 接下来（照 `handoff-render-018.md` 第 2 节与 `user-decisions-2026-10-14.md` 第 2 节）
 
