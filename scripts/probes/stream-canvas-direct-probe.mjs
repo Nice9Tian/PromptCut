@@ -178,7 +178,7 @@ try {
       return bakery;
     };
     const producer = pipeline.streamProducer();
-    check(producer.direct === 'auto', `${tag}:生产者缺省是 auto 档`, producer.direct);
+    check(producer.direct === 'always', `${tag}:生产者缺省是 always 档`, producer.direct);
     producer.attachRoute();
     const dense = () => {
       const status = producer.status();
@@ -199,11 +199,11 @@ try {
       if (!check(!!row, `${tag} ${clipId}:有流`)) continue;
       size.auto[clipId] = { direct: row.direct, capture: row.capture, bound: row.bound, tight: row.tight, segments: row.lastSegment - row.firstSegment + 1 };
       if (REAL.includes(clipId)) {
-        check(!!row.direct && row.direct.failed === null, `${tag} ${clipId}(auto):没有判成不能直取`, row.direct);
-        check(row.direct?.checks >= 1 && (row.direct.segments + row.direct.slowSegments) >= 1, `${tag} ${clipId}(auto):做过实测,而且过了`, row.direct);
+        check(!!row.direct && row.direct.failed === null, `${tag} ${clipId}(always):没有判成不能直取`, row.direct);
+        check(row.direct?.checks >= 1 && (row.direct.segments + row.direct.slowSegments) >= 1, `${tag} ${clipId}(always):做过实测,而且过了`, row.direct);
       } else {
-        check(row.direct?.failed === 'differs', `${tag} ${clipId}(auto):画布外面有别的元素,退回截图`, row.direct);
-        check(row.direct?.segments === 0 && row.direct?.frames === 0, `${tag} ${clipId}(auto):一帧都没有走直取`, row.direct);
+        check(row.direct?.failed === 'differs', `${tag} ${clipId}(always):画布外面有别的元素,退回截图`, row.direct);
+        check(row.direct?.segments === 0 && row.direct?.frames === 0, `${tag} ${clipId}(always):一帧都没有走直取`, row.direct);
       }
     }
     check(first.log.some((l) => /画布直取没过\(differs/.test(l.message)), `${tag}:诊断里有「画布直取没过」那一条`, first.log.map((l) => l.message).slice(-6));
@@ -362,7 +362,7 @@ try {
       // 把这条流的状态还回去
       producer.streams.set(spec.streamKey, orig);
     }
-    producer.direct = 'auto';
+    producer.direct = 'always';
     pipeline.returnStreamBakery(bakery);
     await pipeline.close();
     pipelines.splice(pipelines.indexOf(pipeline), 1);

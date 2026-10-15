@@ -39,14 +39,15 @@ export const DIRECT_COOLDOWN_SEGMENTS = 8;
 
 /**
  * 画布直取的三种档(`PROMPTCUT_STREAM_DIRECT`):
- *   - `auto`(缺省):过了实测、而且这个分段量出来比截图快才走;
- *   - `always`:过了实测就走,不管快慢(探针拿它量直取本身的耗时、比两条路的画面);
+ *   - `always`(缺省):过了实测就走,不管快慢(推翻旧 auto,2026-10-14 决定 2.5);
+ *   - `auto`:过了实测、而且这个分段量出来比截图快才走(旧的缺省);
  *   - `off`(写 `0` 也行):不走,和改之前一样每帧截图(探针拿它产对照)。
  */
 export function directCaptureMode(env = process.env) {
   const want = String(env.PROMPTCUT_STREAM_DIRECT ?? '').trim().toLowerCase();
   if (want === '0' || want === 'off') return 'off';
-  return want === 'always' ? 'always' : 'auto';
+  if (want === 'auto') return 'auto';
+  return 'always';
 }
 
 /** 一个矩形里允许多少个明显不同的像素 */
@@ -222,7 +223,7 @@ export function newDirectRecord() {
  * `record`:这条流的直取记录(`newDirectRecord`);`stride`:这个分段每隔几帧取一张;`captures`:这个分段一共取几张;
  * `always`:过了实测就走直取,不看快慢(`directCaptureMode` 的 `always` 档);`note(message)`:记一条诊断。
  */
-export function directSegmentCapture(bakery, { clipId, rect, record, stride = 1, captures = 15, always = false, note = () => {} }) {
+export function directSegmentCapture(bakery, { clipId, rect, record, stride = 1, captures = 15, always = directCaptureMode() === 'always', note = () => {} }) {
   let mode = null;
   const shotAsRgba = async (shoot, why) => {
     const decoded = decodePngRgba(await shoot());
