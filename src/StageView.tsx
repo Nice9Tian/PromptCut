@@ -231,6 +231,7 @@ export default function StageView() {
     proxy: false,
     role: "front" as StageRole,
     job: undefined as BackJob | undefined,
+    wantedSettle: false,
     /** K2 的分派表(已回填成 `Set`)+ K1 的每卡记录。查询走下面的 `pipelineOf` */
     plan: null as StagePlan | null,
     /*
@@ -1201,12 +1202,13 @@ export default function StageView() {
      * 用子树虚拟时间追到精确活渲。`vtOk = false` 的由父页走第二路(整场景在后台补跑后互换),
      * 舞台这边什么都不做。
      */
-    const routeSettle = (target: number, fps: number): void => {
+    const routeSettle = (target: number, fps: number, onlySuppressed = false): void => {
       const plan = ref.current.plan?.plan ?? null;
       const localOnly = localOnlyAll();
       const immediateSettled: string[] = [];
       const targetMs = target * 1000;
       for (const clip of cardClipsAt(target)) {
+        if (onlySuppressed && (!ref.current.suppressed.has(clip.id) || ref.current.catchUps.has(clip.id))) continue;
         if (pipelineAt(plan, clip.id, target) !== "heavy") continue;
         // 这台设备跑不了的卡停下不追(没有组件可追),快照照贴着
         if (localOnly.has(clip.id)) continue;
@@ -1818,6 +1820,7 @@ export default function StageView() {
         const prev = ref.current.t;
         const dt = target - prev;
         ref.current.t = target;
+        ref.current.wantedSettle = !!opts.settle;
         if (!p) return { path: "set" } satisfies SetTimeReply;
         // 暂停 / 拖动时来了 setTime,就没有「还在飞的补跑」这回事了
         renderGen.current++;
@@ -2091,6 +2094,7 @@ export default function StageView() {
         ref.current.job = role === "back" ? opts.job ?? "probe" : undefined;
         gl.setRole(role);
         if (role === "back") {
+          ref.current.wantedSettle = false;
           // 1. 停 K4 的节拍循环(挂着的 pause() 回包一并落定)
           stopBeat();
           // R9:放掉这个 stageId 在 Worker 里的那份图集(互换时 stageId 不变,只清这一份)
@@ -2143,10 +2147,10 @@ export default function StageView() {
       async setPlan(plan) {
         const wire = (plan?.plan ?? null) as WirePlan | null;
         ref.current.plan = reviveStagePlan(wire, Array.isArray(plan?.costs) ? plan.costs : []);
-        if (!ref.current.beatRunning && !ref.current.scrubbing && ref.current.suppressed.size) {
+        if (ref.current.role === "front" && ref.current.wantedSettle && !ref.current.playing && !ref.current.scrubbing && ref.current.suppressed.size > 0) {
           const p = ref.current.project;
           const fps = Math.max(1, p?.fps || 30);
-          routeSettle(ref.current.t, fps);
+          routeSettle(ref.current.t, fps, true);
         }
         return { ok: true as const };
       },
@@ -2158,6 +2162,7 @@ export default function StageView() {
        */
       async play(fromSec) {
         if (ref.current.role !== "front") return { ok: false, reason: "role" };
+        ref.current.wantedSettle = false;
         const p = ref.current.project;
         if (!p) return { ok: false, reason: "no-project" };
         const from = Math.max(0, Number(fromSec) || 0);
@@ -2389,12 +2394,14 @@ export default function StageView() {
       /** 手按着播放头拖:素材层 seek 放疏一点(`mediaSync` 的 SCRUB_SEEK_MIN_MS) */
       async setScrubbing(on) {
         ref.current.scrubbing = !!on;
+        if (on) ref.current.wantedSettle = false;
         commitPlanes();
         return { ok: true as const };
       },
       /** **只管素材层**(`VideoTrack` 的 `playing`):不碰 K4 的节拍循环,那个只由 play / pause / setRole 起停 */
       async setPlaying(on) {
         ref.current.playing = !!on;
+        if (on) ref.current.wantedSettle = false;
         commitPlanes();
         return { ok: true as const };
       },

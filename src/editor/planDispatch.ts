@@ -130,7 +130,8 @@ export async function sendPlanTo(role: StageRole, opts: { force?: boolean } = {}
   if (!stage || stage.disposed) return false;
   // clipId → identityKey / frameMode 一起带过去:舞台要按 clipId 查 vtOk / seekOk（K3 / K5）
   const wire = wirePlan(plan, clipIdentityOf(project), tuning);
-  const serialized = JSON.stringify(wire);
+  const costsKey = costs.map((c) => `${c.identityKey}:${c.vtOk}`).join(",");
+  const serialized = `${JSON.stringify(wire)}|costs:${costsKey}`;
   // 补发(force)一律发:新 front 作为 back 时手里没有表,「和上次发的一样」对它不成立
   if (!opts.force && role === "front" && serialized === sentWire) return false;
   try {
