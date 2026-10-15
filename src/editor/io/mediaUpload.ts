@@ -4,6 +4,10 @@ import { isViewOnly } from "./viewOnly";
 import { confirmedMissing } from "../../audio/missingMaterialRecord";
 import { publishMissingMaterials, type MissingMaterialNotice } from "./missingMaterialBus";
 import { onGoneConversion } from "../sync/recoveryAssociation";
+import { transcodeVideoSmall, sha256Blob } from "../../online/mediaTranscode";
+import { enqueueOnlineMedia } from "../../online/mediaUploadQueue";
+import { onlinePage } from "../../online/pageFlag";
+import { classifyFileDetailed } from "./mediaKinds";
 
 /**
  * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线浏览器模式没有本机内容库与转码:
@@ -56,9 +60,98 @@ function tiersOf(data: { tiers?: { original?: unknown; small?: unknown }; small?
   };
 }
 
+/**
+ * 在线浏览器端导入素材：页面直接计算内容哈希并分片上传到素材服务，
+ * 视频在浏览器内转出小尺寸 MP4，按「所有小尺寸先传、再传原尺寸」入队。
+ */
+export async function uploadOnlineMediaFile(
+  file: File,
+  opts?: { transcode?: typeof transcodeVideoSmall },
+): Promise<UploadedMedia | null> {
+  try {
+    const detected = classifyFileDetailed(file);
+    const kind = detected.kind;
+    const ext = file.name.split(".").pop()?.toLowerCase() || (kind === "video" ? "mp4" : kind === "audio" ? "mp3" : "png");
+    const transcode = opts?.transcode ?? transcodeVideoSmall;
+
+    if (kind === "video") {
+      let smallResult = null;
+      try {
+        smallResult = await transcode(file);
+      } catch {
+        smallResult = null;
+      }
+      const originalHash = await sha256Blob(file);
+
+      if (smallResult) {
+        const tiers = { original: originalHash, small: smallResult.hash };
+        await enqueueOnlineMedia({
+          id: originalHash,
+          name: file.name,
+          tiers: [
+            { tier: "small", hash: smallResult.hash, ext: "mp4", blob: smallResult.blob },
+            { tier: "original", hash: originalHash, ext, blob: file },
+          ],
+        });
+        return {
+          hash: originalHash,
+          ext,
+          name: file.name,
+          url: `/@media/${originalHash}`,
+          bytes: file.size,
+          tiers,
+          smallState: "ready",
+        };
+      } else {
+        const tiers = { original: originalHash, small: null };
+        await enqueueOnlineMedia({
+          id: originalHash,
+          name: file.name,
+          tiers: [{ tier: "original", hash: originalHash, ext, blob: file }],
+        });
+        return {
+          hash: originalHash,
+          ext,
+          name: file.name,
+          url: `/@media/${originalHash}`,
+          bytes: file.size,
+          tiers,
+          smallState: "none",
+        };
+      }
+    } else {
+      // 图片与音频：没有小尺寸档，直接算 SHA-256 并进上传队列
+      const originalHash = await sha256Blob(file);
+      const tiers = { original: originalHash, small: null };
+      await enqueueOnlineMedia({
+        id: originalHash,
+        name: file.name,
+        tiers: [{ tier: "original", hash: originalHash, ext, blob: file }],
+      });
+      return {
+        hash: originalHash,
+        ext,
+        name: file.name,
+        url: `/@media/${originalHash}`,
+        bytes: file.size,
+        tiers,
+        smallState: "none",
+      };
+    }
+  } catch (err) {
+    console.warn(`[io] 在线导入素材异常: ${file.name}`, err);
+    return null;
+  }
+}
+
 /** 把一个 File 流进本地内容库,拿回它的内容哈希。失败给 null(调用方负责提示) */
-export async function uploadMediaFile(file: File): Promise<UploadedMedia | null> {
-  if (ONLINE_BUILD) return null;
+export async function uploadMediaFile(
+  file: File,
+  opts?: { transcode?: typeof transcodeVideoSmall; forceOnline?: boolean },
+): Promise<UploadedMedia | null> {
+  if (ONLINE_BUILD || onlinePage() || opts?.forceOnline) {
+    return uploadOnlineMediaFile(file, opts);
+  }
   try {
     // tiers=1:视频在服务端做 faststart 判定(缺了就同容器重封装),并在后台生成素材小尺寸(C6.6)
     const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}?tiers=1`, { method: "POST", body: file });
@@ -190,7 +283,7 @@ const watching = new Set<string>();
  * 只是这条素材的项目记录里没有 small,别的设备按「还没有素材小尺寸时直接拉素材原尺寸」处理)。
  */
 export function watchSmallTier(mediaId: string, original: string): void {
-  if (ONLINE_BUILD) return;
+  if (ONLINE_BUILD || onlinePage()) return;
   const key = `${mediaId}:${original}`;
   if (watching.has(key)) return;
   watching.add(key);
@@ -230,7 +323,7 @@ const backfillAsked = new Set<string>();
  * 回这次问了几份。
  */
 export async function backfillSmallTiers(project = getState().project): Promise<number> {
-  if (ONLINE_BUILD || isViewOnly()) return 0; // 在线页面没有本机转码;只读页面不改项目
+  if (ONLINE_BUILD || onlinePage() || isViewOnly()) return 0; // 在线页面没有本机转码;只读页面不改项目
   const want: { mediaId: string; hash: string; name: string }[] = [];
   for (const m of project.media ?? []) {
     // 认定过「确认缺失」的不问:内容库里没有它,转不出小尺寸

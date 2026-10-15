@@ -3,6 +3,7 @@ import { actions } from "../../store/project";
 import { importVideoFiles, registerMediaFile } from "../io";
 import { applyUploadedMedia, uploadMediaFile } from "../io/mediaUpload";
 import { classifyFileDetailed, EXT_KIND } from "../io/mediaKinds";
+import { holdOnlineQueueOriginals } from "../../online/mediaUploadQueue";
 
 export type AssetKind = MediaAsset["kind"];
 
@@ -109,33 +110,38 @@ export interface ImportResult {
 }
 
 export async function importMediaFiles(files: FileList | File[]): Promise<ImportResult> {
-  const counts: Record<AssetKind, number> = { video: 0, audio: 0, image: 0 };
-  const skipped: string[] = [];
-  const rejected: string[] = [];
-  let firstKind: AssetKind | null = null;
+  const releaseHold = holdOnlineQueueOriginals();
+  try {
+    const counts: Record<AssetKind, number> = { video: 0, audio: 0, image: 0 };
+    const skipped: string[] = [];
+    const rejected: string[] = [];
+    let firstKind: AssetKind | null = null;
 
-  const videos: File[] = [];
-  const rest: { file: File; kind: "audio" | "image" }[] = [];
-  for (const file of Array.from(files)) {
-    const detected = classifyFileDetailed(file);
-    const kind = detected.kind;
-    if (!kind) {
-      skipped.push(file.name);
-      if (detected.reason) rejected.push(detected.reason);
-      continue;
+    const videos: File[] = [];
+    const rest: { file: File; kind: "audio" | "image" }[] = [];
+    for (const file of Array.from(files)) {
+      const detected = classifyFileDetailed(file);
+      const kind = detected.kind;
+      if (!kind) {
+        skipped.push(file.name);
+        if (detected.reason) rejected.push(detected.reason);
+        continue;
+      }
+      if (!firstKind) firstKind = kind;
+      if (kind === "video") videos.push(file);
+      else rest.push({ file, kind });
     }
-    if (!firstKind) firstKind = kind;
-    if (kind === "video") videos.push(file);
-    else rest.push({ file, kind });
-  }
 
-  if (videos.length > 0) {
-    counts.video = (await importVideoFiles(videos)).length;
-  }
-  for (const { file, kind } of rest) {
-    await registerAsset(file, kind);
-    counts[kind] += 1;
-  }
+    if (videos.length > 0) {
+      counts.video = (await importVideoFiles(videos)).length;
+    }
+    for (const { file, kind } of rest) {
+      await registerAsset(file, kind);
+      counts[kind] += 1;
+    }
 
-  return { counts, skipped, firstKind, rejected };
+    return { counts, skipped, firstKind, rejected };
+  } finally {
+    releaseHold();
+  }
 }
