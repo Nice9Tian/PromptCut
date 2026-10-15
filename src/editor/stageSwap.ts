@@ -43,7 +43,7 @@ import { backStage, frontStage, onStageEvent, pushProject, syncProject } from ".
 import { runBackJob } from "./stageJobs";
 import { currentCosts, currentPlan, currentTuning, sendPlanTo } from "./planDispatch";
 import { clipIdentityOf } from "./costIdentity";
-import { markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
+import { clearSettled, markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
 import { onStageDemote } from "./demote";
 
 /** K5 (3)：等后台舞台的素材层画出一帧，最多等这么久（真墙钟），超时照样换 */
@@ -485,6 +485,7 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
     await sendPlanTo("front", { force: true });
     await next.setLocalHashes(host?.localHashes() ?? []);
     if (playing) {
+      clearSettled("front", "playing");
       /*
        * 播放态互换：先把三个集合摆好，再 play(T)。**先发流平面、后发抑制**（和 `Preview` 的 `syncPlanes` 同一个顺序）：
        * 舞台收到抑制时已经知道这张卡有流要来，流画出第一帧之前先不藏它补跑出来的精确画面（`StageView` 的 `streamWaiting`）。

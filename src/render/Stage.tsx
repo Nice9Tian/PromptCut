@@ -319,8 +319,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           const localFrame = Math.round(((settlingMs !== undefined ? settlingMs / 1000 : cardT) - clip.start) * timeline.fps);
           /*
            * canvas 卡(R9 M1):带 `canvas` 契约(`dom2d` 除外)的片段在包裹层里多渲一个 gl 平面,画面由共享渲染器画。
-           * 这一拍画不画(M3):「在 `suppressed` 里」和「在 `snapshots` 里且不在 `settling` 里」的不画 ——
-           * 前者在贴流,后者在贴快照且没在追。尺寸 = 片段实体框。
+           * 这一拍画不画(M3):「在 `suppressed` 里」的不画（在贴流或占位，没在追）。尺寸 = 片段实体框。
            */
           const glContract = !unsupported && def?.canvas && def.canvas.kind !== "dom2d" ? def.canvas : null;
           const glBox = glContract ? frameBox(clip.frame, timeline) : null;

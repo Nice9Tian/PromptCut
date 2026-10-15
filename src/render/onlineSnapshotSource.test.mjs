@@ -101,16 +101,16 @@ test('OS3 取字节:只拉 px/<hash>(小尺寸),带只读票据;缓存命中不�
   src.subscribeReady('s', 0, () => {});
   src.setProject('p1');
   src.focus(0, 30);
-  await src.tickNow();
-  // 预取已经把窗口里的两张取了
+  // 快照预取已退役：refresh 不再预取小尺寸，按需 fetchSnapshot 时才拉
   await new Promise((r) => setTimeout(r, 5));
-  const n = w.fetches.length;
-  assert.equal(n, 2);
-  assert.ok(w.fetches.every((f) => /^https:\/\/h\.example\/media\/api\/asset\/px\/[0-9a-f]{64}$/.test(f.url)), '只拉 px 下的小位图');
-  assert.ok(w.fetches.every((f) => f.auth === 'Bearer RT'));
+  assert.equal(w.fetches.length, 0, '不预取快照小尺寸');
   const html = await src.fetchSnapshot('html', 'K', 1);
   assert.match(html, /data:image\/webp;base64,/);
-  assert.equal(w.fetches.length, n, '缓存命中');
+  assert.equal(w.fetches.length, 1);
+  assert.ok(w.fetches.every((f) => /^https:\/\/h\.example\/media\/api\/asset\/px\/[0-9a-f]{64}$/.test(f.url)), '只拉 px 下的小位图');
+  assert.ok(w.fetches.every((f) => f.auth === 'Bearer RT'));
+  const htmlCached = await src.fetchSnapshot('html', 'K', 1);
+  assert.equal(w.fetches.length, 1, '缓存命中');
   await assert.rejects(src.fetchSnapshot('html', 'K', 5), /没有这一帧的预渲染小尺寸/);
   assert.ok(src.cacheBytes > 0);
   src.clearCache();
@@ -222,7 +222,7 @@ test('OS9 一张小位图请求永久悬挂后释放队列并重取', async () =
   } });
   src.setProject('p1');
   await src.tickNow();
-  await new Promise((r) => setTimeout(r, 30));
+  await assert.rejects(src.fetchSnapshot('html', 'K', 0), /素材请求超时/);
   assert.match(await src.fetchSnapshot('html', 'K', 0), /data:image\/webp;base64,/);
   assert.equal(calls, 2);
   src.stop();
@@ -284,8 +284,8 @@ test('C10 第 9 节:用户卡、图卡的层照常取清单与字节(不再豁�
   await new Promise((r) => setTimeout(r, 5));
   assert.ok(w.requests.some((r) => r.key === 'R:0-59') && w.requests.some((r) => r.key === 'RU:0-59'), '两层的窗口清单都取');
   assert.ok(w.requests.some((r) => r.key === 'RU:120-179'), 'coverageLayer 的层窗口之外的段也取');
-  assert.ok(!w.requests.some((r) => r.key === 'R:120-179'), '别的层只取窗口(前后 2 秒)');
-  assert.ok(w.fetches.some((f) => f.url.includes(H(5000 + 0 + 7))), '用户卡那一层的字节照常预取');
+  await src.fetchSnapshot('html', 'KU', 0);
+  assert.ok(w.fetches.some((f) => f.url.includes(H(5000 + 0 + 7))), '用户卡那一层的字节照常拉取');
   assert.equal(src.coverage('u'), 'partial', '最后一段不齐');
   assert.equal(src.coverage('a'), 'unknown', '不点名的层只取窗口:窗口外那一段的清单从没取到过 → 还不知道');
   assert.equal(src.coverage('nobody'), 'none', '层表里没有这一层');

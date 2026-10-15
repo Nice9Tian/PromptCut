@@ -256,3 +256,51 @@ test("这台设备跑不了的卡(在线浏览器模式)停下不追:「已精�
     registry.setSyncedUserCards([]);
   }
 });
+
+test("无流的纯 remotion 重卡在暂停/拖动时不进 scrub(露出活组件直接算)", async () => {
+  const registry = await import(srcUrl("kernel/registry.ts"));
+  registry.registerCards([
+    { id: "pure-remotion", name: "Pure Remotion", frameMode: "direct", Component: () => null },
+  ]);
+  const p = project([{ id: "r", cardId: "pure-remotion", start: 0, end: 10, params: {} }]);
+  plan = heavyEverywhere("r");
+  const head = { project: p, t: at(37), playing: false };
+  const f = planFeed(head);
+  assert.ok(f.heavy.includes("r"), "分派表判重");
+  assert.equal(f.streamPlanes.length, 0, "没有流");
+  assert.deepEqual(f.scrub, [], "纯 remotion 重卡不进 scrub,露出活组件直接算");
+});
+
+test("无流时带 parts 的重卡或 motion 重卡进 scrub 占位(不能误判成 direct)", async () => {
+  const registry = await import(srcUrl("kernel/registry.ts"));
+  registry.registerCards([
+    { id: "motion-card", name: "Motion Card", frameMode: "stateful", Component: () => null },
+    { id: "direct-composite", name: "Direct Composite", frameMode: "direct", Component: () => null },
+  ]);
+  // 1. motion 重卡 (frameMode: stateful)
+  // 2. 声明 direct 但带 parts 的组合片段 (clipFrameMode 判为 stateful)
+  const p = project([
+    { id: "m", cardId: "motion-card", start: 0, end: 10, params: {} },
+    { id: "c_parts", cardId: "direct-composite", start: 0, end: 10, params: {}, parts: [{ id: "p1" }] },
+  ]);
+  plan = heavyEverywhere("m", "c_parts");
+  const head = { project: p, t: at(37), playing: false };
+  const f = planFeed(head);
+  assert.deepEqual(f.streamPlanes, []);
+  assert.deepEqual(f.scrub, ["c_parts", "m"], "带 parts 或 stateful 的重卡进 scrub 待占位");
+});
+
+test("无流非 remotion 重卡在没有成本记录或单舞台 vtOk=false 时不进 scrub(防止卡死在占位符)", () => {
+  const p = project([card("unmeasured"), card("single_vtfail")]);
+  plan = heavyEverywhere("unmeasured", "single_vtfail");
+  feed.setCostResolver(
+    (_proj, clipId) => {
+      if (clipId === "single_vtfail") return { identityKey: "k2", fps: 30, stepMs: 25, vtOk: false };
+      return undefined; // unmeasured has no cost record
+    },
+    () => false // single stage mode
+  );
+  const head = { project: p, t: at(37), playing: false };
+  const f = planFeed(head);
+  assert.deepEqual(f.scrub, [], "未测过或单舞台 vtOk=false 不关进 scrub");
+});

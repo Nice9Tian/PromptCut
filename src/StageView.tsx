@@ -966,7 +966,7 @@ export default function StageView() {
       onEnd?: (caughtUp: boolean) => void;
     }
 
-    /** 追帧被中止 / 追完:摘 `.pc-settling`,**把该片段留在 `snapshots` 里**(平面还挂着,不闪) */
+    /** 追帧被中止 / 追完:摘 `.pc-settling` */
     const endCatchUp = (task: CatchUpTask, caughtUp: boolean): void => {
       // 先让调用方改完抑制集合(`lowMemLive`),和摘 `.pc-settling` 同一次提交:没追上的层不会露出一帧旧的活组件
       const onEnd = task.onEnd;
@@ -977,7 +977,7 @@ export default function StageView() {
        * 这一次追帧已经收过摊,或者已经被同一张卡后来的那一次顶掉了:不再动表里那一条和 `.pc-settling`。
        * 连着两次「停下」(刚暂停时父页常常隔一两毫秒发两次带 settle 的 `setTime`)就会走到这里:前一次的循环被 `abortCatchUps` 收过摊,
        * 它让出的那个宏任务醒来发现代数变了,又来收一次 —— 以前这一下把后来那一次的表项和 `.pc-settling` 一起摘了,那张卡的子树
-       * 掉一拍布局盒(回到 `.pc-suppressed` / `.pc-snapshot` 的 `display: none`),CSS 动画被取消、从那一步重新起跑,
+       * 掉一拍布局盒(回到 `.pc-suppressed` 的 `display: none`),CSS 动画被取消、从那一步重新起跑,
        * 追完以后露出来的画面落后好几帧(`scrub-stream-probe` 第 3 步实测落后 10 帧)。
        */
       if (ref.current.catchUps.get(task.clipId) !== task) return;
@@ -1018,7 +1018,7 @@ export default function StageView() {
        * 不需要额外动作 —— 摘了 `.pc-settling` 它就是精确的活组件。
        *
        * **canvas 卡要先等这一拍的 `done`**(R9 M3):追帧中间步不发 `beat`(被 `.pc-settling` 藏着),
-       * 追上那一步发一拍、等位图贴上,再摘 `.pc-settling` 和快照 —— 否则曝光的是上一拍的旧位图。
+       * 追上那一步发一拍、等位图贴上,再摘 `.pc-settling` —— 否则曝光的是上一拍的旧位图。
        */
       if (glPlanes.has(task.clipId)) {
         const pending = gl.beat({ strict: true, t: task.targetMs / 1000 });
@@ -1082,8 +1082,8 @@ export default function StageView() {
 
     /**
      * 低内存档停下追一帧(c10a 契约第 17 节)的一层:把它从抑制里放出来、在 `.pc-settling` 下不可见地画到 `targetMs`
-     * (直接定位的一步到位,推帧卡从入点逐帧推),画好了撤兜底(`endCatchUp(true)`:摘快照、post `settled`)。
-     * 画的时候兜底照常显示(快照平面不受 `.pc-settling` 影响;没有快照时占位符的 T3 管)。
+     * (直接定位的一步到位,推帧卡从入点逐帧推),画好了撤兜底(`endCatchUp(true)`:post `settled`)。
+     * 画的时候兜底照常显示(占位符的 T3 管)。
      * 到 `deadline` 还没画好:这一层回到抑制(贴小尺寸或占位符),直到下一次停下。
      */
     const drawLowMemory = async (item: LowMemorySettleItem, deadline: number, targetMs: number, fps: number): Promise<DrawOutcome> => {
@@ -1204,6 +1204,8 @@ export default function StageView() {
     const routeSettle = (target: number, fps: number): void => {
       const plan = ref.current.plan?.plan ?? null;
       const localOnly = localOnlyAll();
+      const immediateSettled: string[] = [];
+      const targetMs = target * 1000;
       for (const clip of cardClipsAt(target)) {
         if (pipelineAt(plan, clip.id, target) !== "heavy") continue;
         // 这台设备跑不了的卡停下不追(没有组件可追),快照照贴着
@@ -1215,8 +1217,19 @@ export default function StageView() {
           ref.current.deferredSettle.set(clip.id, { target, fps, gen: catchUpGen.current });
           continue;
         }
-        const task = startCatchUp(clip.id, target * 1000, fps, true);
+        const mountMs = mountMsOf(clip, fps);
+        if (mountMs >= targetMs) {
+          // 停在挂载帧上（例如 t = 0 或片段起点）：此刻本来就是精确的初始帧，不需要追帧，立即解除抑制并报 settled
+          const announced = releaseSettled(clip.id, targetMs);
+          immediateSettled.push(...announced);
+          continue;
+        }
+        const task = startCatchUp(clip.id, targetMs, fps, true);
         if (task) void runCatchUpAsync(task);
+      }
+      if (immediateSettled.length) {
+        commitPlanes();
+        postStageEvent({ type: "settled", sec: target, clipIds: [...new Set(immediateSettled)] });
       }
     };
 
@@ -2130,6 +2143,11 @@ export default function StageView() {
       async setPlan(plan) {
         const wire = (plan?.plan ?? null) as WirePlan | null;
         ref.current.plan = reviveStagePlan(wire, Array.isArray(plan?.costs) ? plan.costs : []);
+        if (!ref.current.beatRunning && !ref.current.scrubbing && ref.current.suppressed.size) {
+          const p = ref.current.project;
+          const fps = Math.max(1, p?.fps || 30);
+          routeSettle(ref.current.t, fps);
+        }
         return { ok: true as const };
       },
       /**

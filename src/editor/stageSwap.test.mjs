@@ -68,6 +68,7 @@ mock.module(srcUrl("editor/planDispatch.ts"), {
 mock.module(srcUrl("editor/costIdentity.ts"), { exports: { clipIdentityOf: () => ({ identityKeys, frameModes }) } });
 mock.module(srcUrl("editor/snapshotFeed.ts"), {
   exports: {
+    clearSettled: (role, why) => log.push(["clearSettled", role, why]),
     deliverSnapshots: async (_stage, role, head) => { log.push(["deliverSnapshots", role, head.t, head.playing]); return 0; },
     markBaselineReset: (role) => log.push(["markBaselineReset", role]),
     markAllSettled: (role) => log.push(["markAllSettled", role]),

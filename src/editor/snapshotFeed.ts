@@ -41,14 +41,11 @@
  * 「流的分段第一帧 → 预渲染小尺寸 → 占位符」—— 中间那一步就是下面的快照这条路(低内存档的在线来源给的是小尺寸),撤快照时一起删。
  * 暂停、拖动时重卡一律抑制、停下后由舞台追一帧精确活渲(`Preview` 的 `syncPlanes`、`settleLowMemory`),这一条没变。
  *
- * # 快照这条路的分界（下一块「撤快照」从这里删）
+ * # 快照已撤掉（己二）
  *
- * 快照只剩给**这一帧贴不上流**的重卡用：这一帧所在分段的流还没就绪、流超出解码器预算、这张卡根本没有流（低内存档还有：浏览器解不了流）。
- * 判据只有一处：`planFeed` 里的 `covered`（这一帧有流平面的卡）—— 在它里面的卡跳过选帧，于是 `picks`、`wanted`、
- * `fetchMissing`、`diffAgainst` / `packChanges`、`pickForSetTime` 的 `awaiting` 都轮不到它。撤快照时删掉的是：
- * `KIND_ORDER`、`Pick` / `PickTier`、选帧那一段循环、`wanted`、`have` / `flying` / `fetchMissing`、投递基线里的 `mounted`、
- * `diffAgainst` / `packChanges` / `deliverSnapshots` / `pickForSetTime` 的快照那一半、按拍换快照（`beatSwap`），
- * 以及 `demoteReady` 里看 `html` / `local` 表的那一支；留下的是 `heavy`、`streamPlanes`、`scrub`、`settled` 这几样。
+ * 每张卡的 HTML 快照已全量下线。重卡播放、暂停与拖动贴轨道流；
+ * 这一帧贴不上流（流还没就绪、超预算、或没有流）的重卡在暂停/拖动态进 scrub 显示占位符（可活渲的纯 remotion 卡直接活渲）。
+ * picks 恒回空表、wanted 恒回空数组、deliverSnapshots 退役为返回 0 的空操作。
  */
 import { cardMountedAt } from "../render/frameWindow.mjs";
 import type { ReadyKind } from "../render/snapshotPick.mjs";
@@ -57,7 +54,17 @@ import { pipelineAt } from "../render/pipelinePlan.mjs";
 import { mirrorKey } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
-import { currentPlan } from "./planDispatch";
+import * as planDispatch from "./planDispatch";
+import type { CardCostRecord } from "../render/cardCostKey.mjs";
+
+type CostResolver = (project: Project, clipId: string) => CardCostRecord | undefined;
+let costResolver: CostResolver | null = null;
+let dualStageResolver: (() => boolean) | null = null;
+
+export function setCostResolver(fn: CostResolver | null, dual?: (() => boolean) | null): void {
+  costResolver = fn;
+  if (dual !== undefined) dualStageResolver = dual;
+}
 import { cardRunStatesGen, cardsRegistryGen, syncedUserCardsGen, getCard } from "../kernel/registry";
 import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { planesWithinBudget, rangesHave, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
@@ -431,7 +438,7 @@ export interface FeedPlan {
  * 流平面只发这一帧有流、解码器预算放行的那几条；超出预算的标 `over`。
  */
 export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan {
-  const plan = currentPlan();
+  const plan = planDispatch.currentPlan();
   const fps = Math.max(1, project.fps || 30);
   const globalFrame = Math.max(0, Math.floor(t * fps + 1e-6));
   const heavy: string[] = [];
@@ -483,9 +490,16 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
       if (wantedStream.has(clip.id)) continue;
       if (!isSettled("front", clip.id) || localOnly.has(clip.id)) {
         const def = clip.cardId ? getCard(clip.cardId) : undefined;
-        const isDirect = clipFrameMode(clip, def) === "direct" || def?.frameMode === "direct";
+        const isDirect = clipFrameMode(clip, def) === "direct";
         const runnableRemotion = isDirect && !localOnly.has(clip.id) && !lowMemory;
         if (!runnableRemotion) {
+          if (costResolver && !localOnly.has(clip.id) && !lowMemory) {
+            const record = costResolver(project, clip.id);
+            const dual = dualStageResolver ? dualStageResolver() : true;
+            if (!record || (record.vtOk === false && !dual)) {
+              continue;
+            }
+          }
           scrub.add(clip.id);
         }
       }
@@ -549,6 +563,8 @@ export function resetSnapshotFeed(): void {
   stopSnapshotFeed();
   beatSwap = false;
   pendingDemote.clear();
+  costResolver = null;
+  dualStageResolver = null;
   source = new HttpSnapshotSource();
 }
 

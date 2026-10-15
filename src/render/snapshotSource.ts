@@ -1329,7 +1329,6 @@ export class OnlineSnapshotSource implements SnapshotSource {
     }
     await this.loadStoreRanges();
     await this.loadWindow(now);
-    this.prefetchWindow();
     await this.loadStreamWindow(now);
     this.prefetchStreams();
   }

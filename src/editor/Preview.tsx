@@ -23,7 +23,7 @@ import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
 import { backfillHooks } from "./sync/backfillUpload";
-import { clearSettled, currentReadyIndex, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { clearSettled, currentReadyIndex, localOnlyOf, markBaselineReset, noteSettled, pendingDemotes, setCostResolver, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, activeOnlineSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { StreamPlaneSender } from "../render/streamPlayer";
 import { notePlayFrame, notePlayRunStart, playingSwapTargets, runPlayingSwap, runSettleSwap, setSwapHost, stageSwapDebug, stageSwapPlayingDebug, stageSwapTrace, swapInFlight } from "./stageSwap";
@@ -83,6 +83,11 @@ import { backStage } from "./stageBridge";
 import { onCostRecords, onProbeProgress, probeFrameDiag, probeRunDiag, probeSettledFor, setCostBackend } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
+
+setCostResolver((proj, clipId) => {
+  const key = clipIdentityOf(proj).identityKeys[clipId];
+  return key ? currentCosts().find((r) => r.identityKey === key) : undefined;
+}, () => dualStage());
 
 /** 「进入项目时提示一次当前是低内存档」(c10a 第 8 节):一个页面会话只提示一次 */
 let lowMemoryNoticeShown = false;
@@ -1097,7 +1102,7 @@ export function Preview() {
    *
    *   - 播放中:全部重卡抑制,这一帧有流的发流平面。
    *   - 暂停 / 拖动:这一帧有流、还没追到精确活渲的重卡抑制、贴流;已经追上的不抑制,流平面照发,
-   *     舞台拿它把播放头下这一帧先解好(起播头一拍就有)。没有流的重卡不抑制,照现状贴快照。
+   *     舞台拿它把播放头下这一帧先解好(起播头一拍就有)。没有流的重卡进 scrub 待占位符（可活渲的纯 remotion 卡直接活渲）。
    *   - **低内存档例外**(c10a 第 8 节「不追活渲」「缺小尺寸的重层显示占位」):暂停、拖动时重卡一律抑制 ——
    *     子树藏着、不活渲,贴轨道流(每个分段的第一帧那一张,`snapshotFeed` 给流平面带 `first`),这一帧没有流的贴预渲染小尺寸,
    *     都没有就由舞台显示占位符;停下后舞台追一帧精确活渲(`settleLowMemoryAt`),画好的层不再按抑制藏。
@@ -1128,6 +1133,7 @@ export function Preview() {
     const s = frontStage();
     if (!s) return;
     const head = { project: getState().project, t: at?.t ?? tRef.current, playing: at?.playing ?? playingRef.current, lowMemory: lowMemRef.current };
+    if (head.playing) clearSettled("front", "playing");
     /*
      * 暂停态第二路(后台整场景补跑后互换)正在跑:这一次不动抑制和流平面。互换那一步新的可见舞台已经是精确活渲,
      * 而「整台都精确」(`markAllSettled`)要晚几个回包才记上 —— 这中间按「还没精确」重发的话,会把流平面盖回新的可见舞台上。
