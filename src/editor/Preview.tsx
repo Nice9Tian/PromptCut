@@ -764,7 +764,7 @@ export function Preview() {
       for (const id of STAGE_IDS) {
         const win = frames[id].current?.contentWindow;
         if (!win || e.source !== win) continue;
-        if (!originOk(id, e.origin, dualRef.current)) return;
+        if (!originOk(id, e.origin, dualRef.current || ONLINE)) return;
         readyByWinRef.current.set(win, { origin: e.origin, caps: readyCaps });
         isoByWinRef.current.delete(win);
         processReadyRef.current(id, win, e.origin, readyCaps);
@@ -785,7 +785,7 @@ export function Preview() {
         // 回包发给这个 iframe 此刻真实的源(换源重载的过渡期里 `stageTargetOrigin` 可能已经是另一个)
         const targetOrigin = origin && origin !== "null" ? origin : stageTargetOrigin(id);
         // 在线的跨源舞台:回包与事件当不可信输入校验(`online/stageMessageGuard.ts`);同源单舞台、桌面运行环境照旧
-        const untrusted = ONLINE && dualRef.current && targetOrigin !== location.origin;
+        const untrusted = ONLINE && targetOrigin !== location.origin;
         const client = createStageRpc(win, targetOrigin, { untrusted, maxSec: () => getState().project.duration });
         if (ONLINE) {
           /*
@@ -2416,12 +2416,10 @@ export function Preview() {
               {/* K4 的 `mediaStalled`:舞台的一拍比应到时刻晚出超过 40 ms 时,音频跟着停一下;这一轮播放的第一拍到之前音频不起播 */}
               <MediaLayers project={project} t={t} playing={playing && !mediaStalled && (!live || firstBeatRef.current)} masterVolume={muted ? 0 : volume} audioOnly localHashes={tierList} />
               {/*
-                * 舞台 iframe 按槽位挂:同源单舞台(`single`)、跨源的 A(`dualA`)、跨源的 B(`dualB`),顺序固定、按槽位作 key。
-                * 首次握手的过渡期(〔裁〕2026-09-30 `claude/stage-handshake`)里三个同时在:`single` 当可见舞台 A,`dualA` / `dualB`
-                * 改作隐藏的预热 iframe;换回双舞台时 `dualA` / `dualB` **还是同一个元素**(key 不变、顺序不变,React 不会挪动它,
-                * iframe 不会重新加载)直接接任 A / B,`single` 留作盖板直到新的可见舞台画好当前这一帧。
+                * 舞台 iframe 按槽位挂:单舞台(`single`,低内存档使用跨源 A)、跨源的 A(`dualA`)、跨源的 B(`dualB`),顺序固定、按槽位作 key。
+                * 在线模式下一律跨源隔离:若无舞台源或握手失败,不再退回同源单舞台,直接不挂载舞台 iframe(2026-10-14 用户定)。
                 */}
-              {!stagesPending && (() => {
+              {!stagesPending && !(ONLINE && (!stageOrigins() || onlineStages.handshake === "failed")) && (() => {
                 const base = {
                   position: "absolute" as const,
                   inset: 0,
@@ -2442,6 +2440,8 @@ export function Preview() {
                     ref={cover ? undefined : frameRefOf.A}
                     data-pc={cover ? "stage-frame-cover" : "stage-frame"}
                     title="预览舞台"
+                    sandbox={ONLINE ? STAGE_SANDBOX : undefined}
+                    onLoad={() => onStageFrameLoad("A")}
                     /*
                      * 这里**不加 proxy=1**:2D 预览的契约是「预览所见 = 导出所得」,
                      * 播放时换成色块就把这条破了 —— 用户按播放是要看成片长什么样,
