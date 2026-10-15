@@ -72,15 +72,16 @@
 | 手机/平板低内存档本页稀疏流产流接线与单舞台烘焙生命周期管理（`Preview.tsx`、`browserNodeHost.ts`、`stageBridge.ts`、`stageJobs.ts`），`page-stream-probe.mjs --only mobile` 实跑验证模拟手机自产稀疏流（`produced >= 1`、`stride === 15`、`claims === 0`、堆增量 `0.2 MB <= 25 MB`、节拍 p95 `0.8 ms < 33 ms`） | `5b947ca8`（`dbec5a23`） |
 | 在线浏览器导出改在跨源隔离舞台内整帧渲染（保留「快速导出 / 完整导出」，就绪的同步用户卡和素材效果卡在隔离导出舞台内直接活渲，无需等待渲染节点，`ImageBitmap` 零拷贝回传；补 `export-frames` 24 小时 TTL 过期清理与计划并发节流） | `576ad0a3`（`d624d2bd`） |
 | 己二的页面与舞台一侧：撤掉每张卡 HTML 快照的选帧、取字节、投递、`.pc-snapshot` 平面、`.pc-awaiting` 兜底与测量快照趟转发；暂停/拖动下无流的非 `remotion` 重卡进 `scrub`（`remotion` 重卡照旧露出活组件），修停在挂载帧或刚测完时追活渲与 `costs` 重发；`OnlineSnapshotSource` 停止预取快照与小尺寸（Opus 5.5 High 独立审查两轮通过，`scrub-stream-probe` PASS） | `4ce057f5`（`e706be5b`） |
+| 己二的服务端与预渲染进程一侧：`snapshotTier` 全面回 `'none'`，停产 `controls-html`/`controls-local` 与 `.small.webp` 预渲染小尺寸，撤掉 `preload` 锚帧快照趟与本地档快照趟、`record` 不再顺手写每张卡快照、`PUT /api/frames/snapshot` 退役，`splitPlan` 不再切快照细任务、保留浏览器单卡流与 `motion` 30 秒切分（Opus 5.5 High 独立审查两轮通过） | `cff49101`（`3641145e`） |
 
 ## 在分支上、没合入的
 
-- 己二的服务端一侧 `rr-rm-snap-server`：即将开工。
+- 渲染重构功能项（除放在 0.7.18 的改旧名词「壬」外）已全部合入 `main`；当前正在 `gemini/rr-g0r-probes` 跑整套 G0-R 渲染附加项并撰写 `docs/reports/REPORT-render-refactor.md`。
 
 ## 接下来（2026-10-16 更新）
 
 1. ~~己二的页面一侧：`gemini/rr-rm-snap-page`（已在 `4ce057f5` 合入）。~~
-2. 己二的服务端一侧：`rr-rm-snap-server`（下面原第 2 条最后一项列的那些服务端的东西）。
+2. ~~己二的服务端一侧：`rr-rm-snap-server`（已在 `cff49101` 合入）。~~
 3. 渲染重构收尾：在 `main` 上跑整套 G0-R 渲染附加项，写并提交 `docs/reports/REPORT-render-refactor.md`。
 4. 0.7.18：`three-versions-progress.md`「还差什么」各项。其中块十要带上 10-16 定的「云端 Agent 按轮占用」（`user-decisions-2026-10-16.md` 第 3 节）；第 2 节的多项目模式是 0.7.19 的事，不在这次任务里。
 
