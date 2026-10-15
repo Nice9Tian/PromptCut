@@ -44,6 +44,7 @@ export const STAGE_ALLOW = [
   { methods: READ, prefix: "/@fs/", test: (raw) => raw.split("?")[0].includes("/node_modules/"), who: "舞台 iframe",
     why: "不在项目根下的依赖(依赖向上解析时走这个前缀);只放行路径里带 /node_modules/ 的,别的文件一概不给" },
   { methods: READ, prefix: "/@vite/", who: "舞台 iframe", why: "开发服务器的热更新客户端" },
+  { methods: READ, exact: "/@id/__x00__vite/dynamic-import-helper.js", who: "舞台 iframe", why: "开发服务器动态 import 的运行时辅助模块" },
   { methods: READ, exact: "/@react-refresh", who: "舞台 iframe", why: "React 热更新的运行时" },
   { upgrade: true, methods: ["GET"], exact: "/", test: (_raw, headers) => /(^|,)\s*vite-(hmr|ping)\s*(,|$)/.test(String(headers["sec-websocket-protocol"] ?? "")),
     who: "舞台 iframe", why: "热更新的 WebSocket(改卡之后舞台跟着换);只认开发服务器自己的子协议,文档服务等别的升级不放行" },

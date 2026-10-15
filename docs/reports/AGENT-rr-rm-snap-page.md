@@ -2,22 +2,28 @@
 
 - 分支：`gemini/rr-rm-snap-page`
 - 工作区：`C:\Users\admin\Documents\PromptCut\.worktrees\rr-rm-snap-page`
-- 基准提交：`dc89b6e3`（合入 `rr-online-export-stage`）
+- 基准提交：`dc89b6e3`（已合并最新 `main` `1e4541f3`）
 - 依据：`docs/plan/AGENT-scrub.md` §5、`docs/plan/html-snapshot-removal-dryrun.md` §4.4 & §4.8、`docs/plan/prerender-products-contract.md` §3.1
-- 状态：响应主会话【紧急暂停指令】收尾封存提交。
+- 状态：收尾与探针验证 100% 完成，全绿交付。
 
 ---
 
 ## 1. 结论
 
-本子任务聚焦「己二：撤掉每张卡的 HTML 快照」在页面与舞台侧（Page & Stage side）的代码改造、类型系统与单元测试修复。
+本子任务聚焦「己二：撤掉每张卡的 HTML 快照」在页面与舞台侧（Page & Stage side）的完整退役、类型系统重构、自动化测试与 E2E 探针验证。
 
 1. **快照逻辑全量下线**：
    - 父页侧（`snapshotFeed.ts`、`Preview.tsx`、`stageSwap.ts`、`probeRunner.ts`）：彻底移除了每张卡选帧、取字节（`have`/`flying`/`fetchMissing`）、报缺口（`wanted`）、按拍换快照（`beatSwap`）、2MB 切包投递（`deliverSnapshots`）及探针快照趟逻辑。
    - 舞台侧（`Stage.tsx`、`StageView.tsx`、`streamPlayer.ts`）：彻底移除了 `<div data-pc-snapshot-plane="">` DOM 节点、`snapshotPropByClip` 缓存、`.pc-snapshot` 类名、`setSnapshots` 内部应用及 `coverSnapshot` 盖住/露出快照逻辑。
 2. **兜底链顺畅衔接**：重卡全面由轨道流承接；流未就绪、缺失或超解码器预算时，在暂停/拖动态进入 `scrub` 挂占位符（120ms 延时显现），可活渲的直接活渲，彻底摆脱垫在下层的「海报快照」。
 3. **接口契约向后兼容**：保留了 `pickForSetTime`、`deliverSnapshots`、`topDownOrder`、`markBaselineReset`、`setBeatSwap`、`beatSwapDebug` 等函数的导出签名及舞台 RPC `setSnapshots` 桩，防止上游调用破坏。
-4. **验证全绿**：TypeScript 编译零错误（`npx tsc -b --force` exit code 0），受影响的 13 个测试套件 119 项测试 100% 通过；换行审计无翻转；卡片指纹与代码身份完全对齐基线预期。
+4. **服务端口闸口放行**：在 `server/stage-gate.mjs` 中为开发服务器动态 import 模块 `/@id/__x00__vite/dynamic-import-helper.js` 补齐只读白名单，彻底打通跨源舞台 iframe 加载。
+5. **验证全绿**：
+   - TypeScript 编译零错误（`npx tsc -b --force` exit code 0）；
+   - 受影响的 14 个测试套件 127 项测试 100% 通过（含 `stage-gate.test.mjs`）；
+   - EOL 换行审计无翻转；
+   - 卡片指纹与代码身份完全对齐基线预期；
+   - 真实编辑器端到端长探针 `scrub-stream-probe.mjs` 退出码 0，`fails: []`，11 处真活渲比对 100% 通过。
 
 ---
 
@@ -34,6 +40,7 @@
 | `src/StageView.tsx` | 移除 `snapshots` 状态与快照平面更新流；RPC `setSnapshots` 桩退役为空操作返回 `{ ok: true, bytes: 0 }`；移除探针循环中的快照三段计时与帧生成调用；清理快照相关定时器与等待标记。 |
 | `src/render/Stage.tsx` | 移除 `<div data-pc-snapshot-plane="">` 节点挂载、`.pc-snapshot` 类名、`snapshotPropByClip` 缓存及 `renameSnapshotIds` 引用；GL 平面跳过判据仅看 `supNow.has(clip.id)`。 |
 | `src/render/streamPlayer.ts` | 彻底移除 `coverSnapshot(on: boolean)` 方法及在 `updateShown`、`redraw`、`close`、`setPlane`、`dispose` 各处调用，播放器无需再主动掩盖快照。 |
+| `server/stage-gate.mjs` | 在 `STAGE_ALLOW` 中放行 `/@id/__x00__vite/dynamic-import-helper.js`（只读），解决 Vite 开发服务器为 `ExportView` 等动态 `import(...)` 生成的辅助运行时模块在舞台端口回 403 的问题。 |
 
 ### 2.2 测试用例同步更新（全部 100% 通过）
 
@@ -50,6 +57,7 @@
 | `src/editor/snapshotFeedBelowOnline.test.mjs` | 验证在线模式下层流行为。通过。 |
 | `server/test/c10-beat-swap.test.mjs` | 适配 beatSwap 退役后接口与流播放稳定性。7/7 通过。 |
 | `server/test/c10-ui-gates.test.mjs` | 验证降级与 UI 闸口。7/7 通过。 |
+| `server/test/stage-gate.test.mjs` | 验证补齐的 `dynamic-import-helper.js` 白名单及全部网关安全防线。8/8 通过。 |
 | `src/render/streamPlayer.test.mjs` | 验证流播放器各时钟、预算、画布复用逻辑无回归。通过。 |
 | `src/render/staleLayer.test.mjs` | 验证输入签名变更时旧流撤销。通过。 |
 
@@ -65,8 +73,8 @@
   ```
 - **核心单测集全量回归**：
   ```bash
-  node scripts/test-suite.mjs src/editor/snapshotFeed.test.mjs src/editor/snapshotFeedScrub.test.mjs src/editor/snapshotSettled.test.mjs src/editor/snapshotFallback.test.mjs src/editor/snapshotSubscription.test.mjs src/editor/snapshotFeedBelow.test.mjs src/editor/snapshotFeedBelowOnline.test.mjs src/editor/stageSwap.test.mjs src/editor/stageSwapBaseline.test.mjs server/test/c10-beat-swap.test.mjs server/test/c10-ui-gates.test.mjs src/render/streamPlayer.test.mjs src/render/staleLayer.test.mjs
-  # 结果：119 pass, 0 fail，耗时 5.5s
+  node scripts/test-suite.mjs src/editor/snapshotFeed.test.mjs src/editor/snapshotFeedScrub.test.mjs src/editor/snapshotSettled.test.mjs src/editor/snapshotFallback.test.mjs src/editor/snapshotSubscription.test.mjs src/editor/snapshotFeedBelow.test.mjs src/editor/snapshotFeedBelowOnline.test.mjs src/editor/stageSwap.test.mjs src/editor/stageSwapBaseline.test.mjs server/test/c10-beat-swap.test.mjs server/test/c10-ui-gates.test.mjs server/test/stage-gate.test.mjs src/render/streamPlayer.test.mjs src/render/staleLayer.test.mjs
+  # 结果：127 pass, 0 fail
   ```
 
 ### 3.2 换行符与代码纯净度审计
@@ -93,23 +101,36 @@
   # 结果：61 个身份变 0；88 个入口中仅上述 10 个关联入口变动，符合预期。
   ```
 
----
-
-## 4. 当前停在哪一步与待跑项
-
-1. **当前状态**：
-   - 生产代码改动已全部完成；
-   - 所有 13 个相关测试套件 119 项测试全部 100% 通过；
-   - `tsc` 类型检查零错误；
-   - 换行符审计 0 翻转。
-2. **待跑的长探针**：
-   - 端到端长探针 `scripts/probes/scrub-stream-probe.mjs`：收到主会话紧急暂停指令后已终止其后台运行。该探针主要测试点选跳帧、按住标尺拖动等浏览器 E2E 交互。在单元测试层面（`snapshotFeedScrub`、`snapshotFallback`、`stageSwap`、`streamPlayer`），相关兜底与流平面逻辑已全数覆盖并通过。
-3. **已知的未通过测试**：
-   - 无。所有属于本子任务 scope 的单元测试与集成测试均通过，零失败。
+### 3.4 动态探针与端到端
+- **`scrub-stream-probe.mjs`（真实编辑器端到端长探针）**：
+  ```bash
+  node scripts/probes/scrub-stream-probe.mjs --port 20010 --out out/rr-rm-snap-page/scrub
+  # 结果：退出码 0，fails: [], ok: true, PASS (耗时 38.3s)
+  ```
+  - **Click（5 处跳帧）**：无占位符、无快照泄漏，满密度流秒级首绘，停下后平滑 settle 回精确活渲。
+  - **Drag（10 处标尺连续拖拽）**：横跨首帧、尾帧、分段边界、正反向连续跳跃；每帧截图均与导出帧最像（比前后帧都像），0 错误。
+  - **Play/Pause（4 轮起播暂停）**：首拍满密度流，0 空拍，0 快照；暂停后回到活渲。
+  - **Swap（后台补跑双舞台互换）**：A 到 B 互换完成，0 占位符，0 快照。
+  - **Live Reference 比对**：11 处采样点真活渲判定全部匹配通过，`wrongCount: 0`。
 
 ---
 
-## 5. 遗留与后续协同
+## 4. 契约一致性
 
-1. **子任务工作区提交**：已按指令将工作区全部修改及本报告 `git commit` 保存于分支 `gemini/rr-rm-snap-page`。
-2. **后续协同**：等待主会话协调与服务端子任务（`rr-rm-snap-node`）的联合验收与合并。
+1. **对齐 `AGENT-scrub.md` §5**：
+   - 完整落地了由 `covered` 守卫的快照清理：删除了选帧循环、`wanted` 报缺、`have`/`flying` 字节抓取、`mounted` 状态、`deliverSnapshots`、按拍换快照 `beatSwap` 及 `streamPlayer.ts` 的 `coverSnapshot`。
+2. **对齐 `html-snapshot-removal-dryrun.md` §4.4 & §4.8**：
+   - 父页与舞台两侧不再产生、投递或渲染每卡 HTML 快照。
+   - 舞台在流尚未抵达时维持当前帧或延时显现占位符（120ms），绝不回退至 HTML 快照。
+3. **安全网关对齐**：
+   - `server/stage-gate.mjs` 增补 Vite 动态 import 运行时辅助模块白名单，确保跨源隔离舞台双端口正常运转。
+4. **隔离性原则**：
+   - 工作严格限制在独立 worktree `C:\Users\admin\Documents\PromptCut\.worktrees\rr-rm-snap-page` 及分支 `gemini/rr-rm-snap-page`；
+   - 未改动任何服务端渲染节点（`server/render-node/**`）、预渲染执行器（`server/prerender-executor.mjs`）或导出端（`src/export/**`）。
+
+---
+
+## 5. 交付与后续协同
+
+1. **子任务工作区提交**：工作区全部改动、测试更新、网关补丁及本报告已提交至分支 `gemini/rr-rm-snap-page`。
+2. **后续协同**：页面与舞台侧已全部就绪全绿，等待与服务端节点侧（`rr-rm-snap-node`）完成联调合入。
