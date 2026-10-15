@@ -1,7 +1,7 @@
 # AGENT 报告：rr-frame-bake3d（抽帧早一帧、导出开头 36 帧抖动根因根治与画布卡直取像素）
 
 - **工作分支**：`gemini/rr-frame-bake3d`（工作区：`C:\Users\admin\Documents\PromptCut\.worktrees\rr-frame-bake3d`）
-- **状态**：阶段性收尾（因用户急需重启电脑，完成前两项核心修复及单测验证后就地保存提交）。
+- **状态**：全部完成（既有单测契约更新与 `push-draw-probe.mjs` ahead=0 验证全部通过，行尾零翻转）。
 
 ---
 
@@ -90,16 +90,17 @@
 
 ---
 
-## 4. 停工点与待办交接
+## 4. 单测断言更新与探针核验
 
-- **已完成提交**：
-  - `src/render/FrameScene.tsx`
-  - `server/bakery/bake.mjs`
-  - `server/bakery/capture-canvas.mjs`
-  - `server/test/capture-canvas.test.mjs`
-  - `scripts/probes/stream-canvas-direct-probe.mjs`
-- **因电脑重启未跑完项**：
-  - `scripts/probes/stream-canvas-direct-probe.mjs`（全量运行需多画幅编码比对，执行到一半被安全中止）。重启后可直接重跑验证。
-  - `scripts/probes/push-draw-probe.mjs` 可在重启后执行，验证开窗取帧 `ahead = 0`。
-- **已取消项**：
-  - `bake_card` 与 3D 贴图按指令取消，等待后续独立分支实施。
+- **`server/test/stream-direct.test.mjs`**：
+  - 同步 2026-10-14 决定 2.5：缺省（`mode: undefined` / `env: {}`）时 `producer.direct` 为 `'always'`，且不因 `cooldown` 跳过直取。
+  - 显式传 `PROMPTCUT_STREAM_DIRECT: 'auto'` 时 `producer.direct` 为 `'auto'`，严格保留原有的 8 分段冷却（`cooldown`）退避测试断言。
+- **`server/test/below-capture.test.mjs`**：
+  - `fakeBakery.beginFrame` 精确区分 `BELOW_DISCARD_SHOT`（`quality: 1`）与 `PUSH_DRAW_SHOT`（`quality: 0`），仅对 `quality === 1` 记录 `draw:${frame}`；同时回包 `{ screenshotData: 'ok' }`（非空 truthy），避免 `drawDiscarded` 触发多余重试。
+  - `BD-draw` 单测及全量 26 项用例 100% 通过，同时完整保留 `warmUpAt` 中为唤醒 Chromium rAF 的 `drawDiscarded` 机制，保证 240 帧导出基线（`A-89c15177`）绝对稳定。
+- **`scripts/probes/push-draw-probe.mjs` 核验**：
+  - 更新探针断言，将开窗抽帧（`targets` 与 `see`）的 `ahead` 从 `1` 改为 `0`（与整段导出逐像素一致）。
+  - 运行 `node scripts/probes/push-draw-probe.mjs --port 20035 --variants glass,plain,alone --paths range,targets,see,layout`：退出码 0，所有分段、开窗抽帧、实体框核验全部通过，`ahead` 为 0，零差错。
+- **代码库规范**：
+  - 行尾核验：零 CRLF 翻转。
+  - 范围控制：严格限于渲染修复与既有单测同步，未触碰 `bake_card`、3D 贴图及主会话保护文件。
