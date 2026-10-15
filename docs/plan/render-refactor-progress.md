@@ -67,10 +67,11 @@
 | 放开在线浏览器导入媒体：浏览器内用 WebCodecs + `mp4Mux` 转出视频小尺寸 MP4（不支持或解码失败时优雅降级只传原尺寸），经在线上传队列按「所有小尺寸先传、再传原尺寸」分片上传到素材服务 | `cf8f3e1c` |
 | `motion` 式的卡满密度流任务拆分至少 30 秒（不足 30 秒整张卡 1 个任务）、`remotion` 式保持 8 段（4 秒）；强设备抢弱设备正领着的 `stream` 任务（`桌面版 > 托管方的渲染服务 > 浏览器`）且保留已上传分段、被抢端收到 `preempted` 立即停手；浏览器时间轴拖动保活（S2） | `57bab25d` |
 | 3D 视图板子贴图播放时取卡片自己的轨道流随时间动态推进（按流画布 `bound` 几何对齐，不发 `bake-batch`）、暂停时当场渲精确 PNG 快照；开启 3D 模式时独立轻卡也纳入 `prerenderSet` 产流；`bake_card` 工具说明与返回提示统一改为「PNG 快照」 | `61600a5b` |
+| 手机/平板低内存档本页稀疏流产流接线与单舞台烘焙生命周期管理（`Preview.tsx`、`browserNodeHost.ts`、`stageBridge.ts`、`stageJobs.ts`），`page-stream-probe.mjs --only mobile` 实跑验证模拟手机自产稀疏流（`produced >= 1`、`stride === 15`、`claims === 0`、堆增量 `0.2 MB <= 25 MB`、节拍 p95 `0.8 ms < 33 ms`） | `5b947ca8`（`dbec5a23`） |
 
 ## 在分支上、没合入的
 
-正在并行推进 `gemini/rr-online-export-stage`（在线浏览器导出改在跨源隔离舞台内整帧渲染 + `export-frames` 退路清理与限流）与 `gemini/rr-mobile-node-wire`（手机/平板低内存档本页稀疏流产流接线与模拟手机探针验证）。
+正在推进 `gemini/rr-online-export-stage`（在线浏览器导出改在跨源隔离舞台内整帧渲染 + `export-frames` 退路清理与限流）。
 
 ## 接下来（照 `handoff-render-018.md` 第 2 节与 `user-decisions-2026-10-14.md` 第 2 节）
 
