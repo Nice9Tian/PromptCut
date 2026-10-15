@@ -48,7 +48,7 @@ export function pickLatestCosts(costs) {
 }
 
 /** controls → 喂给 `planPipelines` 的合成项目 + 两张索引 */
-export function planInputsOfControls(controls, fps) {
+export function planInputsOfControls(controls, fps, cardIdOf = () => undefined) {
   const clips = [];
   const identityKeys = {};
   const frameModes = {};
@@ -57,7 +57,8 @@ export function planInputsOfControls(controls, fps) {
     if (!clipId) continue;
     const start = Number(control.start), end = Number(control.end);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-    clips.push({ id: clipId, nodeId: control.nodeId ?? clipId, start, end });
+    const cardId = control.cardId ?? cardIdOf(clipId);
+    clips.push({ id: clipId, cardId, nodeId: control.nodeId ?? clipId, start, end });
     if (typeof control.costKey === 'string') identityKeys[clipId] = control.costKey;
     const mode = control.frameMode ?? control.capabilities?.frameMode;
     if (typeof mode === 'string') frameModes[clipId] = mode;
@@ -76,15 +77,41 @@ export function prerenderSetOfPlan(controls, opts = {}) {
   const fps = Number(opts.fps) || Number(list[0]?.sampling?.fps?.numerator) / Number(list[0]?.sampling?.fps?.denominator) || 30;
   const root = opts.root;
   const costs = opts.costs ?? (root ? loadCosts(root) : null);
+
+  const mirror = typeof globalThis !== 'undefined' ? (globalThis.__PC_LATEST_MIRROR__?.() ?? null) : null;
+  const mirrorClips = (mirror?.project?.tracks ?? opts.project?.tracks ?? []).flatMap((t) => t?.clips ?? []) ?? [];
+  const cardIdOf = (clipId) => {
+    return mirrorClips.find((c) => c?.id === clipId)?.cardId;
+  };
+
+  const hasScene3d = mirrorClips.some((c) => c?.cardId === 'scene-3d')
+    || list.some((c) => c?.cardId === 'scene-3d' || c?.definitionId === 'scene-3d' || c?.definitionId === 'def:scene-3d' || cardIdOf(c?.clipId) === 'scene-3d');
+  const for3D = Boolean(opts.includeLightCardsFor3D || opts.view3d || (opts.includeLightCardsFor3D !== false && hasScene3d));
+
   // 一条记录都没有(还没探针过 / 读不到盘)就按声明兜底:和接上 planPipelines 之前的行为一致
   if (!costs || !costs.length) {
     const set = new Set();
-    for (const control of list) if (control?.clipId && declaredHeavy(control.capabilities)) set.add(control.clipId);
+    for (const control of list) {
+      if (!control?.clipId) continue;
+      const cardId = control.cardId ?? cardIdOf(control.clipId);
+      if (declaredHeavy(control.capabilities)) set.add(control.clipId);
+      else if (for3D && cardId !== 'scene-3d') {
+        const comp = control.compositing ?? control.capabilities?.compositing ?? 'independent';
+        if (comp === 'independent') set.add(control.clipId);
+      }
+    }
     return set;
   }
   const tuning = opts.tuning ?? (root ? loadTuning(root) : null);
-  const { project, identityKeys, frameModes } = planInputsOfControls(list, fps);
-  return planPipelines(project, pickLatestCosts(costs), fps, { tuning, identityKeys, frameModes }).prerenderSet;
+  const { project, identityKeys, frameModes } = planInputsOfControls(list, fps, cardIdOf);
+  return planPipelines(project, pickLatestCosts(costs), fps, {
+    tuning, identityKeys, frameModes,
+    includeLightCardsFor3D: for3D,
+    view3d: opts.view3d ?? (for3D ? true : undefined),
+    capabilities: opts.capabilities ?? Object.fromEntries(list.map((c) => [c.clipId, c.capabilities])),
+    compositing: opts.compositing,
+    isIndependent: opts.isIndependent,
+  }).prerenderSet;
 }
 
 /**
@@ -97,12 +124,19 @@ export function prerenderSetOf(project, costs = null, fps = Number(project?.fps)
     for (const clip of track?.clips ?? []) {
       if (!clip?.id || !(clip.cardId || clip.nodeId)) continue;
       controls.push({
-        clipId: clip.id, nodeId: clip.nodeId ?? clip.id, start: clip.start, end: clip.end,
+        clipId: clip.id, cardId: clip.cardId, nodeId: clip.nodeId ?? clip.id, start: clip.start, end: clip.end,
         costKey: opts.identityKeys?.[clip.id],
         capabilities: capabilitiesOf(clip) ?? { frameMode: clip.mode },
         frameMode: opts.frameModes?.[clip.id],
       });
     }
   }
-  return prerenderSetOfPlan(controls, { fps, costs, tuning: opts.tuning, root: opts.root });
+  return prerenderSetOfPlan(controls, {
+    fps, costs, tuning: opts.tuning, root: opts.root,
+    includeLightCardsFor3D: opts.includeLightCardsFor3D ?? opts.view3d,
+    view3d: opts.view3d,
+    capabilities: opts.capabilities,
+    compositing: opts.compositing,
+    isIndependent: opts.isIndependent,
+  });
 }

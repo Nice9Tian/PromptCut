@@ -2,7 +2,7 @@
  * 单卡预渲染:算缓存键(`bakeTarget`)、渲单张(`bakeOne`)、渲同一张卡的一批时刻(`bakeClip`)。
  * 从 server/vite-plugin-vision.ts 逐字搬来。
  *
- * **这份模块状态只有这里能写**:`bakeInFlight`(同一个键正在飞的那一趟)、`stores`(每个根一份卡片快照存取)。
+ * **这份模块状态只有这里能写**:`bakeInFlight`(同一个键正在飞的那一趟)、`stores`(每个根一份 PNG 快照存取)。
  *
  * 产物(PNG)经素材服务的接口写进 `px` 命名空间,缓存键 → 内容哈希记在小索引里(`server/bake-store.mjs`),
  * 不再直接写、列、删素材目录(`docs/semantics/product/asset-service.md`「预渲染的产物」)。
@@ -40,13 +40,13 @@ export const BAKE_STORE_VERSION = 2;
  */
 const bakeInFlight = new Map<string, { promise: Promise<any>; priority: number }>();
 
-/** 每个根一份卡片快照存取(索引在 `<outRoot>/bake-index`,字节经素材服务) */
+/** 每个根一份 PNG 快照存取(索引在 `<outRoot>/bake-index`,字节经素材服务) */
 const stores = new Map<string, ReturnType<typeof createBakeStore>>();
 const bakeLog = (event: string, fields: object = {}) => {
   try { console.info("[bake-store]", event, JSON.stringify(fields)); } catch { console.info("[bake-store]", event); }
 };
 
-/** 这个根的卡片快照存取:编辑器进程和预渲染进程各一份实例,共用同一个索引目录 */
+/** 这个根的 PNG 快照存取:编辑器进程和预渲染进程各一份实例,共用同一个索引目录 */
 export function bakeStoreFor(root: string) {
   const key = path.resolve(root);
   let s = stores.get(key);
@@ -285,7 +285,7 @@ export async function bakeOne(
   const hint = rgb
     ? "不透明贴图:贴上去是「实心物体表面印着这张卡」。把 url 填进 scene-3d 的 texture 参数。"
     : "透明底贴图:贴上去物体在卡片没画的地方也是透空的,内容像浮在空间里(适合标志 / 招牌)。想要「实心立方体表面印着这张卡」就重新渲染一次并传 bg(比如 bg:\"#0b0f17\")。";
-  const note = "这是一张**快照**:卡片的动画定格在 t 这一帧,之后改卡片参数贴图不会跟着变,要重新渲染一次。";
+  const note = "这是一张**PNG 快照**:卡片的动画定格在 t 这一帧,之后改卡片参数贴图不会跟着变,要重新渲染一次。";
 
   /*
    * 缓存命中:同样的输入渲过了(索引里有、素材服务上这一块收全了),直接给 URL。

@@ -1525,9 +1525,14 @@ async function sceneLowmem(M) {
     R.lone = { clip: lone, samples: lonePlay.length, suppressed: loneLate.filter((s) => s.suppressed.includes(lone)).length, tracks: lonePlay.filter((s) => trackOf(s, lone)).length, placeholder: loneLate.filter((s) => s.placeholders.includes(lone)).length, late: loneLate.length,
       snapshots: lonePlay.filter((s) => s.snapshots.includes(lone)).length, node: nodeB1 && { ready: nodeB1.ready ?? null, eligibility: nodeB1.eligibility ?? null, frames: nodeB1.streams?.frames ?? null, encoders: nodeB1.streams?.encoders ?? null, claims: nodeB1.counters?.claims ?? null }, pxWrites: editorPxWrites().length - writes0 };
     say('lowmem.lone', R.lone);
-    check(loneLate.length > 0 && R.lone.suppressed === loneLate.length && R.lone.tracks === 0, '六:没有流的重卡播放时抑制着、没有流的轨道', R.lone);
-    check(loneLate.length > 0 && R.lone.placeholder === loneLate.length, '六:没有流、也没有预渲染小尺寸:显示占位符', R.lone);
-    check((nodeB1?.streams?.frames ?? 0) === 0 && (nodeB1?.streams?.encoders ?? 0) === 0 && (nodeB1?.counters?.claims ?? 0) === 0 && R.lone.pxWrites === 0, '六:低内存档的页面不产流、不当节点(没有起编码器、没有认领任务、没有往素材服务写块)', R.lone);
+    const producedByYi = (nodeB1?.pageStreams?.counters?.produced ?? 0) >= 1 || (nodeB1?.streams?.encoders ?? 0) >= 1;
+    if (producedByYi) {
+      check((nodeB1?.counters?.claims ?? 0) === 0, '六:低内存档的页面只为自己产稀疏流、不当队列节点(claims === 0)', R.lone);
+    } else {
+      check(loneLate.length > 0 && R.lone.suppressed === loneLate.length && R.lone.tracks === 0, '六:没有流的重卡播放时抑制着、没有流的轨道', R.lone);
+      check(loneLate.length > 0 && R.lone.placeholder === loneLate.length, '六:没有流、也没有预渲染小尺寸:显示占位符', R.lone);
+      check((nodeB1?.streams?.frames ?? 0) === 0 && (nodeB1?.streams?.encoders ?? 0) === 0 && (nodeB1?.counters?.claims ?? 0) === 0 && R.lone.pxWrites === 0, '六:低内存档的页面不产流、不当节点(没有起编码器、没有认领任务、没有往素材服务写块)', R.lone);
+    }
     // 停下:这一帧照旧由舞台追到精确活渲
     const loneLive = await liveShot(pageB, lone, 8.5, dir, 'lowmem-lone-live');
     check(!!loneLive && orangeOf(loneLive.png) > 0.02, '六:停下以后这张卡显示精确画面', loneLive && { orange: orangeOf(loneLive.png) });
@@ -1562,13 +1567,12 @@ async function sceneMobile(M) {
     // 单卡 1 张(2 秒 = 4 个分段), 同屏 5 张重卡(2 秒 = 4 个分段)
     const SEQ = [{ start: 0.4, duration: 2, label: 'aa' }];
     const STACK = Array.from({ length: 5 }, (_, i) => ({ start: 4.0, duration: 2, label: `s${i}` }));
-    const seeded = await seedCards(P0, [...SEQ, ...STACK]);
-    const clipA = seeded.ids[0];
-    const stackIds = seeded.ids.slice(SEQ.length);
-    R.clips = seeded.ids;
+    // 页面甲只为 STACK 预先产流；clipA 稍后由模拟手机自己产
+    const seededStack = await seedCards(P0, STACK);
+    const stackIds = seededStack.ids;
     const origin = Math.round(SEQ[0].start * FPS);
 
-    /* ---------------- 准备:页面甲打开项目,在遮罩下把六条流的稀疏版产好并推上素材服务 ---------------- */
+    /* ---------------- 准备:页面甲打开项目,在遮罩下把五条流的稀疏版产好并推上素材服务 ---------------- */
     const a = await P0.member(browserA, 'psp-jia', { before: async (page) => { await instrument(page); } });
     ctxA = a.ctx;
     const pageA = a.page;
@@ -1578,20 +1582,37 @@ async function sceneMobile(M) {
 
     const fpA = (await nodeDiag(pageA))?.envFingerprint ?? null;
     const rows = {};
-    for (const id of seeded.ids) rows[id] = (await rowOf(P0.content, seeded.docId, id)).row;
+    for (const id of stackIds) rows[id] = (await rowOf(P0.content, seededStack.docId, id)).row;
     const keyOf = (id) => rows[id]?.candidates.find((c) => c.envFingerprint === fpA)?.resultKey ?? null;
-    const keyA = keyOf(clipA);
     R.prepared = {
       maskMs: gone.goneAt - gone.shownAt,
-      streams: Object.fromEntries(await Promise.all(seeded.ids.map(async (id) => [id.slice(-6), rows[id] ? await manifestState(P0, rows[id], keyOf(id)) : null]))),
+      streams: Object.fromEntries(await Promise.all(stackIds.map(async (id) => [id.slice(-6), rows[id] ? await manifestState(P0, rows[id], keyOf(id)) : null]))),
     };
     say('mobile.prepared', R.prepared);
-    check(seeded.ids.every((id) => rows[id] && keyOf(id)), '准备:六条流都在层表里(候选是甲的指纹)');
-    check(Object.values(R.prepared.streams).every((x) => x && x.have === 4 && x.sparse === 4), '准备:六条流的稀疏版都在素材服务上(每条4个分段、每段一张)', R.prepared.streams);
+    check(stackIds.every((id) => rows[id] && keyOf(id)), '准备:五条流都在层表里(候选是甲的指纹)');
+    check(Object.values(R.prepared.streams).every((x) => x && x.have === 4 && x.sparse === 4), '准备:五条流的稀疏版都在素材服务上(每条4个分段、每段一张)', R.prepared.streams);
 
     // 页面甲完成产流与推送后下线，后续只留模拟手机页面
     try { await ctxA.close(); } catch {}
     ctxA = null;
+
+    // 甲下线后加入单卡 clipA，不靠页面甲预先产流
+    const seedMember = await P0.member(browserB, 'psp-seed-seq', { userAgent: NON_NODE_UA });
+    let clipA = null;
+    let seededSeqDocId = null;
+    try {
+      clipA = await addCard(seedMember.page, { start: SEQ[0].start, duration: SEQ[0].duration }, SEQ[0].label, 40);
+      seededSeqDocId = await store(seedMember.page, `return S.getState().project.id;`);
+      await until('加的卡都被文档服务确认', () => P(seedMember.page, (cid) => {
+        const p = window.__pcStore?.getState?.().project;
+        return p && p.tracks.some((t) => t.clips.some((c) => c.id === cid));
+      }, clipA), 60_000, 300);
+      await delay(2500);
+    } finally {
+      try { await seedMember.ctx.close(); } catch {}
+    }
+    const seededSeq = { ids: [clipA], docId: seededSeqDocId };
+    R.clips = [clipA, ...stackIds];
 
     /* ---------------- 模拟手机:打开项目、低内存检测、文案核对、isConfigSupported 与流挂载 ---------------- */
     const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
@@ -1606,6 +1627,8 @@ async function sceneMobile(M) {
         await page.evaluateOnNewDocument(() => {
           try {
             Object.defineProperty(navigator, 'deviceMemory', { get: () => 4, configurable: true });
+            localStorage.setItem('pc.rail.left.collapsed', '1');
+            localStorage.setItem('pc.rail.right.collapsed', '1');
           } catch {}
           window.__pspToasts = [];
           const add = (txt) => { if (txt && !window.__pspToasts.includes(txt)) window.__pspToasts.push(txt); };
@@ -1670,14 +1693,34 @@ async function sceneMobile(M) {
     });
     check(encSupported === true, 'a: 模拟手机环境通过 VideoEncoder.isConfigSupported(avc1.64001f)');
 
+    // 模拟手机本页产流: 通过 isConfigSupported 并产出单卡稀疏流、推上素材服务、写进层表
+    const prod = await until('模拟手机本页产出单卡稀疏流', async () => {
+      const nd = await nodeDiag(pageB);
+      const ps = nd?.pageStreams;
+      return ps && (ps.counters?.produced ?? 0) >= 1 ? nd : null;
+    }, 120_000, 300);
+    check(!!prod, 'a: 模拟手机本页自己产出稀疏流 (pageStreams.counters.produced >= 1)');
+    const nodeB_diag = await nodeDiag(pageB);
+    check((nodeB_diag?.counters?.claims ?? 0) === 0, 'a: 模拟手机不替队列认领任务 (claims === 0)', nodeB_diag?.counters);
+
+    // 核对产出的流分段 stride === 15 (只有稀疏版，没有满密度版)
+    const fpB = (await nodeDiag(pageB))?.envFingerprint ?? null;
+    const rowA = (await rowOf(P0.content, seededSeq.docId, clipA)).row;
+    const candB = rowA?.candidates?.find((c) => c.envFingerprint === fpB);
+    check(!!candB, 'a: 模拟手机将自己产出的流写进层表 (候选是手机的指纹)', { rowA, fpB });
+    const mfA = candB ? await manifestState(P0, rowA, candB.resultKey) : null;
+    check(mfA && mfA.have === 4 && mfA.sparse === 4 && mfA.dense === 0, 'a: 模拟手机产出的流分段 stride === 15 (只有稀疏版，没有满密度版)', mfA);
+    const keyA = candB?.resultKey ?? null;
+
     // 在线来源取到流
     const readyB = await until('模拟手机取到流(播放头附近的分段就绪)', async () => {
       await pauseAt(pageB, SEQ[0].start + 0.1);
       const d = await onlineDiag(pageB);
       const x = (d?.streams ?? []).find((z) => z.clipId === clipA);
-      return x && x.ready >= 3 && (d.streams ?? []).length === seeded.ids.length ? d : null;
+      return x && x.ready >= 3 && (d.streams ?? []).length === R.clips.length ? d : null;
     }, 120_000, 500);
-    check(!!readyB && readyB.streams.every((x) => x.resultKey === keyOf(x.clipId)), 'a: 模拟手机在线来源认得这几条流(层表、清单、分段都就绪)');
+    const expectedKeyOf = (id) => (id === clipA ? keyA : keyOf(id));
+    check(!!readyB && readyB.streams.every((x) => x.resultKey === expectedKeyOf(x.clipId)), 'a: 模拟手机在线来源认得这几条流(层表、清单、分段都就绪)');
 
     // 开启 stage fallback trace
     for (const f of stageFrames(pageB)) await f.evaluate(() => { window.__pcFallbackTrace = []; }).catch(() => {});
@@ -1725,6 +1768,15 @@ async function sceneMobile(M) {
     for (const f of stageFrames(pageB)) await f.evaluate(() => { window.__pcFallbackTrace = []; }).catch(() => {});
     const heapBefore = await pageB.evaluate(() => performance.memory ? performance.memory.usedJSHeapSize : null);
     let play5Shot = null;
+
+    // 在截取 mobile-play-5stack.png 和 mobile-paused-5stack.png 之前，在 390×844 手机视口下折叠左右侧栏
+    await pageB.evaluate(() => {
+      for (const sel of ['[data-pc="left-collapse"]', '[data-pc="right-collapse"]']) {
+        const btn = document.querySelector(sel);
+        if (btn) btn.click();
+      }
+    });
+    await delay(300);
 
     await playFrom(pageB, STACK[0].start + 0.05);
     const stackPlay = [];

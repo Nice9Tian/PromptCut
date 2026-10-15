@@ -93,7 +93,7 @@ export function setStageClient(role: StageRole, client: StageRpcClient | null, c
      * `mediaReady` / `probe` / `probe-frame` 只认当前 `back` 的,其余丢弃。
      * 互换那一拍两个舞台都可能 post(旧 front 走完本拍才停),不过滤就会重复 tick。
      */
-    if (stageEventRole(e.type) !== role) return;
+    if (stageEventRole(e.type) !== role && !(role === "front" && backRole() === "front")) return;
     // 客户端在事件排队期间被换掉了:这一条是上一个 iframe 的,不算数
     if (slots[role].client !== client) return;
     for (const l of eventListeners) l(e, role);
@@ -189,7 +189,8 @@ export function swapStageClients(
  * 送到了就记在它身上,不管它之后被换到了哪个位置。
  */
 function send(role: StageRole, project: Project, force: boolean): Promise<void> {
-  const client = slots[role].client;
+  const targetRole = role === "back" && backRole() === "front" ? "front" : role;
+  const client = slots[targetRole].client;
   if (!client || client.disposed) return Promise.resolve();
   const mine = pushedOf(client);
   const run = async () => {
@@ -227,7 +228,8 @@ export function pushProject(role: StageRole, project: Project, opts: { reset?: b
 
 /** 测试 / 调试用:哪个舞台推到了哪份项目 */
 export function pushedProject(role: StageRole): Project | null {
-  const client = slots[role].client;
+  const targetRole = role === "back" && backRole() === "front" ? "front" : role;
+  const client = slots[targetRole].client;
   return client ? pushedBy.get(client)?.project ?? null : null;
 }
 
@@ -237,7 +239,8 @@ export function pushedProject(role: StageRole): Project | null {
  * 改走 `swapStageClients` —— 基线本来就跟着客户端走。
  */
 export function markPushed(role: StageRole, project: Project | null): void {
-  const client = slots[role].client;
+  const targetRole = role === "back" && backRole() === "front" ? "front" : role;
+  const client = slots[targetRole].client;
   if (client) pushedOf(client).project = project;
 }
 

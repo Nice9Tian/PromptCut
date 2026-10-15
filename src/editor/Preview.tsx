@@ -1374,7 +1374,7 @@ export function Preview() {
    * (在线构建且嵌了代码版本、普通档、两个跨源舞台都握上手、Chromium、以成员身份连着云端项目、测量落定)。
    */
   useEffect(() => {
-    if (!online || lowMem) return;
+    if (!online) return;
     return startBrowserNodeHost({
       eligibility: () => ({
         online: ONLINE,
@@ -1383,20 +1383,46 @@ export function Preview() {
         stageLayout: dualRef.current && onlineStageState().handshake === "ok" ? "dual" : "single",
         userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
         member: !!currentSharedLink() && hasDocLink(),
-        measured: probeSettledFor(getState().project),
+        measured: lowMemRef.current ? lowMemoryJudged() : probeSettledFor(getState().project),
       }),
       projectId: () => (currentSharedLink() ? currentDocProjectId() || null : null),
       onAlive: (resultKey) => onlineSourceRef.current?.markAlive(resultKey),
       // 本页产流(任务书「甲二」):线上没有能切分的节点接本页的清单计划时,本页自己产单卡流(判据在 `online/pageStreams.ts`)
-      pagePlan: () => planPublisherRef.current?.current() ?? null,
-      planState: () => planPublisherRef.current?.probe() ?? Promise.resolve(null),
+      pagePlan: () => {
+        if (lowMemRef.current) {
+          if (!lowMemoryJudged()) return null;
+          const projectId = currentSharedLink() ? currentDocProjectId() || null : null;
+          const ds = currentSharedLink()?.ds;
+          if (!projectId || !ds?.confirmedProject || typeof ds.rev !== "number") return null;
+          keepConfirmedProject(ds.rev, ds.confirmedProject);
+          const clips = [...(judgedPlan()?.prerenderSet ?? [])].sort();
+          return {
+            id: `lowmem:${projectId}@${ds.rev}`,
+            projectId,
+            projectRev: ds.rev,
+            clips,
+            at: 0,
+          };
+        }
+        return planPublisherRef.current?.current() ?? null;
+      },
+      planState: () => {
+        if (lowMemRef.current) return Promise.resolve("open");
+        return planPublisherRef.current?.probe() ?? Promise.resolve(null);
+      },
       // 这条流有了(本页产的、先查查到的):不等下一轮轮询,马上重取层表与清单
       onPageStream: () => onlineSourceRef.current?.refresh(),
       // 测量时就产稀疏版:此刻判重的片段(与清单计划的清单同一个算法)、此刻的已确认版本
-      heavyClips: () => heavyCardClips(),
+      heavyClips: () => (lowMemRef.current ? [...(judgedPlan()?.prerenderSet ?? [])].sort() : heavyCardClips()),
       confirmed: () => {
         const ds = currentSharedLink()?.ds;
         return ds?.confirmedProject && typeof ds.rev === "number" ? { rev: ds.rev, project: ds.confirmedProject } : null;
+      },
+      restore: () => {
+        suppressedRef.current = "";
+        streamPlanesRef.current = "[]";
+        markBaselineReset("front");
+        setStageReady((n) => n + 1);
       },
     });
   }, [online, lowMem]);
@@ -1548,6 +1574,8 @@ export function Preview() {
         // 搜索期间项目可能又变了:按最新的项目判一遍
         const latest = getState().project;
         setPlanLowMemoryLight(latest === project ? outcome.light : reclassify(outcome, latest, clipIdentityOf(latest).identityKeys, unsupported));
+        const ds = currentSharedLink()?.ds;
+        if (ds?.confirmedProject && typeof ds.rev === "number") keepConfirmedProject(ds.rev, ds.confirmedProject);
       } catch {
         // 取不到记录:下一拍再试
         if (lowMemSearchRef.current?.projectId === projectId) lowMemSearchRef.current = null;

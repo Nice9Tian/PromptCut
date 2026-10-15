@@ -170,11 +170,12 @@ async function resolveStage(): Promise<StageRpcClient> {
  */
 let lastSent: { client: StageRpcClient; job: BackJob } | null = null;
 async function sendJob(stage: StageRpcClient | null, job: BackJob): Promise<void> {
-  if (backRole() !== "back" || !stage) return;
+  if (!stage) return;
+  if (backRole() !== "back" && job !== "bake") return;
   if (lastSent && lastSent.client === stage && lastSent.job === job) return;
   try {
     await stage.setRole("back", { job });
-    lastSent = { client: stage, job };
+    if (backRole() === "back") lastSent = { client: stage, job };
   } catch {
     // iframe 正在换:下一个活开工时会重发
     lastSent = null;

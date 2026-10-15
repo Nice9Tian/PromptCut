@@ -15,6 +15,11 @@ import {
 import { cameraFor, DEFAULT_FOV_DEG, stageToWorld } from "../../kernel/space3d";
 import { motionOf, pickBakeT, sampleTimesFor, texKeyOf, type TimedClip } from "./bakeTime";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
+import { ONLINE } from "../../online/mode";
+import { StreamPlayer, PushedStreamSource, type StreamPlaneRequest } from "../../render/streamPlayer";
+import { isStreamOrigin } from "../../render/streamSegments.mjs";
+import { currentReadyIndex } from "../snapshotFeed";
+import { setPlan3DView } from "../planDispatch";
 // 棋盘格底和浮层样式在这儿(.pc-3d-checker / .pc-3d-note)。自己引一次,不指望父组件替它引
 import "./preview.css";
 
@@ -105,7 +110,16 @@ interface Props {
 
 export function Scene3DView({ project, t }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const streamHost = useRef<HTMLDivElement>(null);
   const selected = useStore((s) => s.selection[0]);
+  const playing = useStore((s) => s.playing);
+  const playingRef = useRef(playing);
+  playingRef.current = playing;
+
+  useEffect(() => {
+    setPlan3DView(true);
+    return () => setPlan3DView(false);
+  }, []);
   const [mods, setMods] = useState<[ThreeMod, OrbitMod] | null>(null);
   const [pending, setPending] = useState(0);
   /**
@@ -314,7 +328,7 @@ export function Scene3DView({ project, t }: Props) {
    * 这个视图挂着的时候才开:预渲染一张要起一个 Chrome、四五秒,
    * 没打开三维页的人不该为它一直付这笔账。
    */
-  const prefetch = useBakePrefetch({ project, t, moments: wantedMoments, enabled: true });
+  const prefetch = useBakePrefetch({ project, t, moments: wantedMoments, enabled: !playing });
 
   useEffect(() => {
     let dead = false;
@@ -408,6 +422,48 @@ export function Scene3DView({ project, t }: Props) {
     disposables.push(frustum.geometry, frustum.material as any);
     swap.current = new Map();
     proxy.current = new Map();
+
+    /* 轨道流播放器：从隐藏画布中解码并获取各卡片轨道流 */
+    const player = new StreamPlayer({
+      root: () => streamHost.current,
+      ...(ONLINE ? { source: new PushedStreamSource() } : {}),
+    });
+    disposables.push({ dispose: () => player.stop() });
+
+    const boards: {
+      clipId: string;
+      mesh: any;
+      mat: any;
+      pl: any;
+      canvas: HTMLCanvasElement | null;
+      canvasTex: any;
+      cropped: boolean;
+      boundSig: string;
+      mode: "proxy" | "stream" | "exact";
+    }[] = [];
+
+    const cropToCanvasBound = (b: typeof boards[number], cv: HTMLCanvasElement) => {
+      const W = b.pl.size.width;
+      const H = b.pl.size.height;
+      const bx = parseFloat(cv.style.left) || 0;
+      const by = parseFloat(cv.style.top) || 0;
+      const bw = cv.width || W;
+      const bh = cv.height || H;
+      const sig = `${bx},${by},${bw},${bh}`;
+      if (b.boundSig === sig && b.cropped) return;
+      b.boundSig = sig;
+
+      const nextGeo = new THREE.PlaneGeometry(bw, bh);
+      const old = b.mesh.geometry;
+      b.mesh.geometry = nextGeo;
+      old.dispose();
+      disposables.push(nextGeo);
+
+      const dx = (bx + bw / 2) - W / 2;
+      const dy = H / 2 - (by + bh / 2);
+      b.mesh.position.set(b.pl.meshOffset[0] + dx, b.pl.meshOffset[1] + dy, b.pl.meshOffset[2]);
+      b.cropped = true;
+    };
 
     posers.current = [];
     // 拾取用:每块 mesh 记住它属于哪个 clip(three 的 userData 就是干这个的)
@@ -505,6 +561,44 @@ export function Scene3DView({ project, t }: Props) {
       mesh.userData.clipId = clip.id;
       pickables.push(mesh);
       disposables.push(geo, mat);
+
+      // 轨道流画布与纹理
+      const canvas = streamHost.current?.querySelector<HTMLCanvasElement>(
+        `[data-pc-clip="${CSS.escape(clip.id)}"] > canvas[data-pc-stream-plane]`,
+      );
+      let canvasTex: any = null;
+      if (canvas) {
+        canvasTex = new THREE.CanvasTexture(canvas);
+        canvasTex.colorSpace = THREE.SRGBColorSpace;
+        canvasTex.minFilter = THREE.LinearFilter;
+        canvasTex.magFilter = THREE.LinearFilter;
+        canvasTex.generateMipmaps = false;
+        disposables.push(canvasTex);
+      }
+
+      const boardState: {
+        clipId: string;
+        mesh: any;
+        mat: any;
+        pl: any;
+        canvas: HTMLCanvasElement | null;
+        canvasTex: any;
+        cropped: boolean;
+        boundSig: string;
+        mode: "proxy" | "stream" | "exact";
+      } = {
+        clipId: clip.id,
+        mesh,
+        mat,
+        pl,
+        canvas: canvas ?? null,
+        canvasTex,
+        cropped: false,
+        boundSig: "",
+        mode: "proxy",
+      };
+      boards.push(boardState);
+
       /** 这块板子此刻挂着哪张贴图。贴图缓存淘汰时要绕开正在用的,靠它记账 */
       let boundUrl: string | null = null;
 
@@ -532,8 +626,23 @@ export function Scene3DView({ project, t }: Props) {
        */
       const cropToContent = (tex: any) => {
         const box = measureImageBox(tex.image);
-        if (!worthCropping(box) || !box) return;
         const W = pl.size.width, H = pl.size.height;
+        boardState.boundSig = "";
+        if (!worthCropping(box) || !box) {
+          if (boardState.cropped) {
+            const nextGeo = new THREE.PlaneGeometry(W, H);
+            const old = mesh.geometry;
+            mesh.geometry = nextGeo;
+            old.dispose();
+            disposables.push(nextGeo);
+            mesh.position.set(...pl.meshOffset);
+            tex.repeat.set(1, 1);
+            tex.offset.set(0, 0);
+            tex.needsUpdate = true;
+            boardState.cropped = false;
+          }
+          return;
+        }
         const nextGeo = new THREE.PlaneGeometry(W * box.w, H * box.h);
         const old = mesh.geometry;
         mesh.geometry = nextGeo;
@@ -550,6 +659,7 @@ export function Scene3DView({ project, t }: Props) {
         tex.repeat.set(box.w, box.h);
         tex.offset.set(box.x, 1 - box.y - box.h);
         tex.needsUpdate = true;
+        boardState.cropped = true;
       };
 
       /** 贴上去之后的收尾:裁到内容框、恢复成不透明的白底(色块那一套的反操作) */
@@ -563,6 +673,7 @@ export function Scene3DView({ project, t }: Props) {
         if (!precise) return; // 预渲染那条路不带时刻,它给的图只进缓存,不上板子
         boundUrl = url;
         texInUse.add(url);
+        boardState.mode = "exact";
         /*
          * **解码过的直接贴,不再走一遍 TextureLoader。**
          *
@@ -590,9 +701,34 @@ export function Scene3DView({ project, t }: Props) {
          * (相对键之后,同一张卡的两个副本共用同一个文件),dispose 会让那块板子直接变黑。
          */
       };
-      /** 退回色块:这一刻的图还没渲出来,或者换到了别的时刻 */
+      /** 退回色块:这一刻的图还没渲出来,或者换到了别的时刻;若流画面可用则保持流画面过渡 */
       const toProxy = () => {
         if (boundUrl) { texInUse.delete(boundUrl); boundUrl = null; }
+        if (player.showingClips().has(clip.id) && canvasTex && canvas) {
+          cropToCanvasBound(boardState, canvas);
+          canvasTex.repeat.set(1, 1);
+          canvasTex.offset.set(0, 0);
+          canvasTex.needsUpdate = true;
+          mat.map = canvasTex;
+          mat.color.set(0xffffff);
+          mat.opacity = 1;
+          mat.transparent = true;
+          mat.needsUpdate = true;
+          boardState.mode = "stream";
+          renderer.render(scene, camera);
+          return;
+        }
+        if (boardState.cropped) {
+          const nextGeo = new THREE.PlaneGeometry(pl.size.width, pl.size.height);
+          const old = mesh.geometry;
+          mesh.geometry = nextGeo;
+          old.dispose();
+          disposables.push(nextGeo);
+          mesh.position.set(...pl.meshOffset);
+          boardState.cropped = false;
+          boardState.boundSig = "";
+        }
+        boardState.mode = "proxy";
         if (!mat.map) return;
         mat.map = null;
         mat.color.set(PROXY_COLOR);
@@ -645,9 +781,111 @@ export function Scene3DView({ project, t }: Props) {
       disposables.push(box.geometry, box.material as any);
     }
 
+    let lastPlanesSig = "";
+    const activeIds = new Set(active.filter((c) => c.cardId !== "scene-3d").map((c) => c.id));
+
     let raf = 0;
     const tick = () => {
       controls.update();
+
+      // 轨道流与 3D 板子同步
+      const ready = currentReadyIndex();
+      const fps = Math.max(1, projRef.current.fps || 30);
+      const streamPlanes: StreamPlaneRequest[] = [];
+      for (const [cId, kinds] of ready) {
+        if (!activeIds.has(cId)) continue;
+        const layer = kinds.get("stream");
+        if (!layer || !isStreamOrigin(layer.originFrame) || !layer.key) continue;
+        streamPlanes.push({
+          clipIds: [cId],
+          key: layer.key,
+          ranges: layer.ranges.map((r: any) => [r[0], r[1]]),
+          originFrame: layer.originFrame,
+        });
+      }
+      const planesSig = streamPlanes.map((p) => `${p.clipIds[0]}:${p.key}:${p.ranges?.length ?? 0}`).join(";");
+      if (planesSig !== lastPlanesSig) {
+        lastPlanesSig = planesSig;
+        player.setPlanes(streamPlanes, fps);
+      }
+      player.present(tRef.current);
+      const showing = player.showingClips();
+
+      const isPlay = playingRef.current;
+      for (const b of boards) {
+        if (isPlay) {
+          if (showing.has(b.clipId) && b.canvasTex && b.canvas) {
+            cropToCanvasBound(b, b.canvas);
+            if (b.mode !== "stream") {
+              b.canvasTex.repeat.set(1, 1);
+              b.canvasTex.offset.set(0, 0);
+              b.mat.map = b.canvasTex;
+              b.mat.color.set(0xffffff);
+              b.mat.opacity = 1;
+              b.mat.transparent = true;
+              b.mat.needsUpdate = true;
+              b.mode = "stream";
+            }
+            b.canvasTex.needsUpdate = true;
+          } else {
+            if (b.mode !== "proxy") {
+              if (b.cropped) {
+                const nextGeo = new THREE.PlaneGeometry(b.pl.size.width, b.pl.size.height);
+                const old = b.mesh.geometry;
+                b.mesh.geometry = nextGeo;
+                old.dispose();
+                disposables.push(nextGeo);
+                b.mesh.position.set(...b.pl.meshOffset);
+                b.cropped = false;
+                b.boundSig = "";
+              }
+              b.mat.map = null;
+              b.mat.color.set(PROXY_COLOR);
+              b.mat.opacity = 0.45;
+              b.mat.transparent = true;
+              b.mat.needsUpdate = true;
+              b.mode = "proxy";
+            }
+          }
+        } else {
+          // 暂停态：如果已有精确 PNG 快照，保持 exact；
+          // 如果还没有 exact 快照，但流画面可用，保持流画面过渡；
+          // 两者都没有则显示半透明占位色块
+          if (b.mode === "exact") {
+            // 已有精确 PNG 快照，保持
+          } else if (showing.has(b.clipId) && b.canvasTex && b.canvas) {
+            cropToCanvasBound(b, b.canvas);
+            if (b.mode !== "stream") {
+              b.canvasTex.repeat.set(1, 1);
+              b.canvasTex.offset.set(0, 0);
+              b.mat.map = b.canvasTex;
+              b.mat.color.set(0xffffff);
+              b.mat.opacity = 1;
+              b.mat.transparent = true;
+              b.mat.needsUpdate = true;
+              b.mode = "stream";
+            }
+            b.canvasTex.needsUpdate = true;
+          } else if (b.mode !== "proxy") {
+            if (b.cropped) {
+              const nextGeo = new THREE.PlaneGeometry(b.pl.size.width, b.pl.size.height);
+              const old = b.mesh.geometry;
+              b.mesh.geometry = nextGeo;
+              old.dispose();
+              disposables.push(nextGeo);
+              b.mesh.position.set(...b.pl.meshOffset);
+              b.cropped = false;
+              b.boundSig = "";
+            }
+            b.mat.map = null;
+            b.mat.color.set(PROXY_COLOR);
+            b.mat.opacity = 0.45;
+            b.mat.transparent = true;
+            b.mat.needsUpdate = true;
+            b.mode = "proxy";
+          }
+        }
+      }
       // 会转的三维物件跟着时间轴走:姿势是 t 的纯函数,所以每帧照着当前 t 摆一次就行
       /*
        * 每帧按最新的 project 重摆一次。开销就是几个矩阵,但换来的是:
@@ -718,6 +956,8 @@ export function Scene3DView({ project, t }: Props) {
 
   /* ── 换到哪一刻就贴哪一刻;没有的先退回色块,再去渲 ─────────────── */
   useEffect(() => {
+    // 播放中不发前台渲染请求，贴图直接从轨道流走；拖动中也不发
+    if (playing || scrubbing) { setPending(0); setBakingAt(null); return; }
     /*
      * 只给**二维的卡**要贴图。scene-3d 那种在这个视图里是真几何,不需要贴图 ——
      * 一开始没排除它,结果每开一次都白渲一张(单张 4.7~6.5 秒),而且渲出来根本没人用。
@@ -728,7 +968,7 @@ export function Scene3DView({ project, t }: Props) {
       const url = moments.current.get(momentKey(c));
       // 有这一刻的就贴上(这条也覆盖「拖回刚才那一刻」:缓存命中,一张都不用重渲)
       if (url) swap.current.get(c.id)?.(url, true);
-      // 没有就**立刻**打回色块。留着上一刻的图不动,等于把一个错的画面继续传下去
+      // 没有就打回色块（或留着流画面过渡），并记录需要渲染
       else { proxy.current.get(c.id)?.(); need.push(c); }
     }
     /*
@@ -847,7 +1087,7 @@ export function Scene3DView({ project, t }: Props) {
     // momentSig 在依赖里:拖时间轴换到别的时刻要重新取图。但它**不在建场景那个 effect 的
     // 依赖里**,所以只是换 material.map,场景不重建。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, momentSig, parked, bakeGen, scrubbing]);
+  }, [sig, momentSig, parked, bakeGen, scrubbing, playing]);
 
   /* ── 预渲染好的贴图一到就收进「按时刻」的缓存,轮到那一刻就用得上 ───── */
   useEffect(() => {
@@ -883,6 +1123,25 @@ export function Scene3DView({ project, t }: Props) {
      * 格子的灰和边长跟 see_frames 那边逐值对齐(见 .pc-3d-checker 的说明)。
      */
     <div className="pc-3d-checker" style={{ position: "relative", width: "100%", height: "100%", minHeight: 200 }}>
+      {/* 隐藏的轨道流画布容器，供 StreamPlayer 解码和提供材质源 */}
+      <div
+        ref={streamHost}
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          width: 0,
+          height: 0,
+          overflow: "hidden",
+          opacity: 0,
+          pointerEvents: "none",
+        }}
+      >
+        {active.filter((c) => c.cardId !== "scene-3d").map((c) => (
+          <div key={c.id} data-pc-clip={c.id}>
+            <canvas data-pc-stream-plane="" />
+          </div>
+        ))}
+      </div>
       <div ref={host} style={{ position: "absolute", inset: 0 }} />
 
       {/*
@@ -910,7 +1169,7 @@ export function Scene3DView({ project, t }: Props) {
           2D 视角框
         </button>
       )}
-      {(pending > 0 || err) && (
+      {(pending > 0 || err) && !playing && (
         <div
           className="pc-3d-note"
           style={{

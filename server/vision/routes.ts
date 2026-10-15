@@ -650,7 +650,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
       });
 
       /**
-       * POST /api/vision/bake-evict { keys: ["a1b2c3d4e5f6", ...] } —— 淘汰这些卡片快照。
+       * POST /api/vision/bake-evict { keys: ["a1b2c3d4e5f6", ...] } —— 淘汰这些 PNG 快照。
        *
        * 传的是键(12 位哈希),不是路径:要删哪条由服务端拿自己的索引比对,删的只是索引条目,
        * 碰不到索引以外的文件。字节留在素材服务里(没有删除接口),见 bake-cache.ts 的 evictBakes。
