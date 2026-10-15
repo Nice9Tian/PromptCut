@@ -14,6 +14,8 @@
 
 **2026-10-15 接手继续：** `main` 在 `3ac769fa`，按 `render-018-kickoff.md`、`render-018-kickoff-other-agents.md`、`handoff-render-018.md` 及两份用户决定（`user-decisions-2026-10-13.md`、`user-decisions-2026-10-14.md`，冲突处以 10-14 为准）继续做完渲染重构与 0.7.18。本机安卓模拟器加速自检已跑（Windows Hypervisor Platform 已开且已重启，系统报 hypervisor 未在运行，多半是启动配置 `hypervisorlaunchtype` 被关，由用户自行查；在此之前照 10-14 第 2.1 节先用 `page-stream-probe` 浏览器模拟手机自动化测试）。
 
+**2026-10-16 用户叫停（现场）：** `main` 在 `710215dc`。10-15 接手后合入了下表最后 10 行。己二的页面与舞台一侧在 `gemini/rr-rm-snap-page` 上做完、暂停，没合入、没推到远端（见「在分支上、没合入的」）；服务端一侧 `rr-rm-snap-server` 还没开工。没有在跑的子 Agent 和后台进程。同一天用户定了 `user-decisions-2026-10-16.md`（见「用户已经定的」），语义与计划已由 Claude 的会话改好推到 `main`（`c533df45`、`710215dc`）。
+
 ## 已合进 `main` 的
 
 | 项 | 合入提交 |
@@ -63,7 +65,7 @@
 | 低内存档进入文案更新、`pageStreams.ts` 手机/平板只产稀疏流与 `isConfigSupported` 前置检查、`page-stream-probe.mjs` 模拟手机场（`390×844`、4x CPU、4G、4 条稀疏流 + 1 占位、堆增量 ≤ 25 MB） | `16fe6882` |
 | 修 `FrameScene.tsx` Agent `see_frames`/开窗抽帧早一帧（`push-draw-probe` ahead=0）；查清并根除 `bake.mjs` 导出成片开头 36 帧偶发差一帧（`warmUpAt` 唤醒 Chromium rAF，连导 3 遍与 `A-89c15177` 240/240 逐字节相同）；画布卡产流缺省改为一律直取像素（`always`） | `69d791ed` |
 | 所有舞台一律跨源隔离（撤掉在线浏览器退回同源单舞台的路）+ 桌面版舞台锁死（`prerender-gate.mjs` 拦截舞台调预渲染控制/渲染接口、只放行流与快照字节只读拉取；`stage-gate.mjs` 按哈希读素材只许读当前项目 `project.media`） | `f83500d2`、`987de00c` |
-| 「生成轨道流」关着时托管方渲染节点什么都不产（稀疏版和满密度版都不产）；VisuHive 去掉默认管理员硬编码（只认 `ACCOUNT_ADMINS` 配置）并新增 `render_streams` 权限分组与后台管理页，PromptCut 接入权限分组校验、无权限时开关置灰并提示「你的账号没有开启这一项的权限，请联系托管方。」 | `8a41fcd3`（VisuHive 本地 `main` `c4553cd`） |
+| 「生成轨道流」关着时托管方渲染节点什么都不产（稀疏版和满密度版都不产）；VisuHive 去掉默认管理员硬编码（只认 `ACCOUNT_ADMINS` 配置）并新增 `render_streams` 权限分组与后台管理页，PromptCut 接入权限分组校验、无权限时开关置灰并提示「你的账号没有开启这一项的权限，请联系托管方。」 | `8a41fcd3`（VisuHive 本地 `main` 的合并 `47be5d4`，含 `58c2923`、`61d2928`；原记的 `c4553cd` 在 VisuHive 里查不到，2026-10-16 更正。VisuHive 的 `main` 本机比 GitHub 多这 3 个提交，还没推，部署前要推） |
 | 放开在线浏览器导入媒体：浏览器内用 WebCodecs + `mp4Mux` 转出视频小尺寸 MP4（不支持或解码失败时优雅降级只传原尺寸），经在线上传队列按「所有小尺寸先传、再传原尺寸」分片上传到素材服务 | `cf8f3e1c` |
 | `motion` 式的卡满密度流任务拆分至少 30 秒（不足 30 秒整张卡 1 个任务）、`remotion` 式保持 8 段（4 秒）；强设备抢弱设备正领着的 `stream` 任务（`桌面版 > 托管方的渲染服务 > 浏览器`）且保留已上传分段、被抢端收到 `preempted` 立即停手；浏览器时间轴拖动保活（S2） | `57bab25d` |
 | 3D 视图板子贴图播放时取卡片自己的轨道流随时间动态推进（按流画布 `bound` 几何对齐，不发 `bake-batch`）、暂停时当场渲精确 PNG 快照；开启 3D 模式时独立轻卡也纳入 `prerenderSet` 产流；`bake_card` 工具说明与返回提示统一改为「PNG 快照」 | `61600a5b` |
@@ -72,9 +74,17 @@
 
 ## 在分支上、没合入的
 
-无（准备开启「己二：撤掉每张卡的 HTML 快照」：`rr-rm-snap-server` 与 `rr-rm-snap-page`）。
+- `gemini/rr-rm-snap-page`（工作区 `.worktrees/rr-rm-snap-page`，提交 `806958be`，从 `dc89b6e3` 分出，**没推到远端**）：己二的页面与舞台一侧，拆掉每张卡 HTML 快照的生成与取用（`snapshotFeed.ts`、`Preview.tsx`、`stageSwap.ts`、`probeRunner.ts`、`StageView.tsx`、`Stage.tsx`、`streamPlayer.ts`）。类型检查 0 错误，相关的 13 组测试 119 条全过；全量测试、`scrub-stream-probe.mjs` 和合入闸门还没跑。接着做：先推到远端；并入最新 `main`；跑探针和闸门；核对 `streamPlayer.ts` 的改动对 6 张内置卡的身份（键）有没有影响；然后合入。报告在该分支的 `docs/reports/AGENT-rr-rm-snap-page.md`。
+- 己二的服务端一侧 `rr-rm-snap-server`：还没开工。
 
-## 接下来（照 `handoff-render-018.md` 第 2 节与 `user-decisions-2026-10-14.md` 第 2 节）
+## 接下来（2026-10-16 更新）
+
+1. 己二的页面一侧：`gemini/rr-rm-snap-page` 照上一节接着做完、合入。
+2. 己二的服务端一侧：`rr-rm-snap-server`（下面原第 2 条最后一项列的那些服务端的东西）。
+3. 渲染重构收尾：在 `main` 上跑整套 G0-R 渲染附加项，写并提交 `docs/reports/REPORT-render-refactor.md`。
+4. 0.7.18：`three-versions-progress.md`「还差什么」各项。其中块十要带上 10-16 定的「云端 Agent 按轮占用」（`user-decisions-2026-10-16.md` 第 3 节）；第 2 节的多项目模式是 0.7.19 的事，不在这次任务里。
+
+下面是 10-15 接手时列的顺序，留作记录：其中第 1 条和第 2 条的前四项都已合入（见上表）。
 
 1. **先把已批的一级、二级、三级语义改动落进 `docs/semantics/`**（`user-decisions-2026-10-14.md` 第 1、2、3 节定下的文本，含术语表「HTML 快照 / PNG 快照」「历史序号」等）。
 2. **渲染重构剩余项（分波派子 Agent 并行，过完闸门合 `main`）**：
@@ -85,7 +95,7 @@
    - **己二：撤掉每张卡的 HTML 快照**（`render-refactor-task.md` 己二）：删掉每张卡 HTML 快照的生成、存储、推送与消费（`controls-html`、`controls-local`、`small-bitmap`、测量里的快照趟、`see_frames`/`get_gif`/`get_layout` 顺带写单卡快照、`snapshotFeed.ts` 退回、`originals.ts` 快照导出）；`verify-unified-frames.mjs` 改为比对两路渲染出的画面像素。
 3. **渲染重构收尾**：在 `main` 上跑整套 G0-R 渲染附加项；写并提交 `docs/reports/REPORT-render-refactor.md`，子 Agent 报告归档进 `docs/archive/agent-reports/`。然后转入 0.7.18 收尾。
 
-## 用户已经定的（2026-10-13 与 2026-10-14）
+## 用户已经定的（2026-10-13、2026-10-14 与 2026-10-16）
 
 **2026-10-13 决定**（全文在 `user-decisions-2026-10-13.md`）：
 
@@ -110,6 +120,8 @@
    - 放开在线浏览器导入媒体：浏览器内先转出视频小尺寸，再按「先小尺寸、再原尺寸」上传。
    - 依赖下层又带三维外框的卡按甲做；稀疏流三的 3 条与低内存档贴稀疏流的 5 条确认通过。
 6. **已批的一级、二级语义改动**：`AGENT-v18-semsync2.md` 列出的条目（除被 10-14 推翻的条目外）全部批准写进 `docs/semantics/`。
+
+**2026-10-16 决定（全文在 `user-decisions-2026-10-16.md`，冲突处以日期新的为准）**：渲染服务分单项目、多项目两种模式，多项目渲染节点放在 0.7.19；0.7.18 的托管渲染服务改用「云端 Agent 按轮占用」的暂行办法（取代块八的「空闲满五分钟才让位」：排队不计时，渲染一次最多三分钟、超时回调试信息），随块十做；0.7.20 的磁盘轮转取消。语义已写好（`c533df45`）。
 
 ## 〔裁〕清单
 
