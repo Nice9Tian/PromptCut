@@ -828,13 +828,21 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     },
   });
 
-  /** 此刻忙什么(报忙用):手里有认领就是在生成快照;否则问宿主(后台舞台的更急的活) */
+  /** 此刻忙什么(报忙用):手里有认领就是在生成快照/压流;拖动/穿梭报 scrub，播放报 play；否则问宿主(后台舞台的更急的活) */
   const busyNow = (): string | null => {
     const r = run;
-    if (r && !r.ended) return "bake";
+    if (r && !r.ended) {
+      if (r.yieldCause === "drag") return "scrub";
+      if (r.yieldCause === "play") return "play";
+      return "bake";
+    }
     try {
       const b = deps.busy?.() ?? null;
-      return typeof b === "string" && b ? b.slice(0, 32) : null;
+      if (typeof b === "string" && b) {
+        if (b === "drag") return "scrub";
+        return b.slice(0, 32);
+      }
+      return null;
     } catch { return null; }
   };
 
