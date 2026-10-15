@@ -95,15 +95,15 @@ test("OCS-S-04 浏览器没有出口白名单或Trusted Types:分源和交接就
   assert.deepEqual({ enabled: iso.state().enabled, egress: iso.state().egress }, { enabled: true, egress: "none" });
 });
 
-test("OCS-S-05 托管方关了总开关:不交接、不等自检,两台都走旧办法(票据经 RPC),原因是总开关;打开后恢复", async () => {
+test("OCS-S-05 托管方关了总开关:不交接、不等自检,两台都不给票据(严禁退回带票据的旧办法),原因是总开关;打开后恢复", async () => {
   const { iso, state } = make({ enabled: false });
   const { a, b } = await bothIsolated(iso);
-  for (const p of [a, b]) assert.deepEqual(p, { mode: "legacy", base: null, ticket: TICKET, cardExec: false });
+  for (const p of [a, b]) assert.deepEqual(p, { mode: "cookie", base: `/media-s/${SID}`, ticket: null, cardExec: false });
   assert.equal(state.grants.length, 0);
   assert.deepEqual({ enabled: iso.state().enabled, reason: iso.state().reason }, { enabled: false, reason: "switch-off" });
 });
 
-test("OCS-S-06 有一台自检没过(只有 <meta> 兜底):那一台走旧办法,本页不执行,说得出是哪台、为什么", async () => {
+test("OCS-S-06 有一台自检没过(只有 <meta> 兜底):那一台不给票据,本页不执行,说得出是哪台、为什么", async () => {
   const { iso, state } = make();
   iso.setDual(true);
   iso.handshake("A"); iso.handshake("B");
@@ -112,19 +112,19 @@ test("OCS-S-06 有一台自检没过(只有 <meta> 兜底):那一台走旧办法
   const b = await iso.plan("B", { dual: true, stageOrigin: S2, ticket: TICKET });
   assert.equal(a.mode, "cookie");
   assert.equal(a.cardExec, false);
-  assert.deepEqual(b, { mode: "legacy", base: null, ticket: TICKET, cardExec: false });
+  assert.deepEqual(b, { mode: "cookie", base: `/media-s/${SID}`, ticket: null, cardExec: false });
   assert.deepEqual(iso.state(), { enabled: false, reason: "not-isolated", detail: { B: ["meta-only"] }, egress: null });
   assert.deepEqual(state.grants.map((g) => g.origin), [S1], "没过的那一台不交接");
 });
 
-test("OCS-S-07 票据交接没成(舞台源没有 /media-s/、第三方 cookie 被拦):走旧办法,本页不执行,原因是交接", async () => {
+test("OCS-S-07 票据交接没成(舞台源没有 /media-s/、第三方 cookie 被拦):不给票据,本页不执行,原因是交接", async () => {
   const { iso } = make({ grantOk: false });
   const { a } = await bothIsolated(iso);
-  assert.deepEqual(a, { mode: "legacy", base: null, ticket: TICKET, cardExec: false });
+  assert.deepEqual(a, { mode: "cookie", base: `/media-s/${SID}`, ticket: null, cardExec: false });
   assert.deepEqual({ enabled: iso.state().enabled, reason: iso.state().reason }, { enabled: false, reason: "grant-failed" });
 });
 
-test("OCS-S-08 握手之后等不到自检结果(旧版舞台页不发、舞台卡住):到时按自检出错,走旧办法", async () => {
+test("OCS-S-08 握手之后等不到自检结果(旧版舞台页不发、舞台卡住):到时按自检出错,不给票据", async () => {
   const { iso, state } = make();
   iso.setDual(true);
   iso.handshake("A");
@@ -132,13 +132,13 @@ test("OCS-S-08 握手之后等不到自检结果(旧版舞台页不发、舞台�
   await Promise.resolve();
   assert.equal(state.timers.length, 1);
   state.timers[0]();
-  assert.deepEqual(await pending, { mode: "legacy", base: null, ticket: TICKET, cardExec: false });
+  assert.deepEqual(await pending, { mode: "cookie", base: `/media-s/${SID}`, ticket: null, cardExec: false });
   assert.equal(iso.state().reason, "not-isolated");
   assert.deepEqual(iso.state().detail, { A: ["check-error"] });
   assert.equal(state.grants.length, 0);
 });
 
-test("OCS-S-09 点过头之后任何舞台都不再收到票据:后来哪一台自检不过或交接失败,拿到的是不带票据的 cookie 基址", async () => {
+test("OCS-S-09 点过头之后任何舞台都不再收到票据:后来哪一台自检不过或交接失败,拿到的是不带票据的 cookie 基址;未配置 stageOrigin 则抛错拒绝退回同源", async () => {
   const { iso, state } = make();
   await bothIsolated(iso);
   assert.equal(iso.state().enabled, true);
@@ -153,11 +153,13 @@ test("OCS-S-09 点过头之后任何舞台都不再收到票据:后来哪一台�
   const a = await iso.plan("A", { dual: true, stageOrigin: S1, ticket: `${TICKET}2` });
   assert.equal(a.mode, "cookie");
   assert.equal(a.ticket, null);
-  // 退回单舞台(握手失败):那一台是同源的旧办法调用方自己处理,这里只管不点头
+  // 退回单舞台(未配置 stageOrigin):抛错拒绝同源退回
   iso.setDual(false);
   assert.equal(iso.state().reason, "single-stage");
-  const single = await iso.plan("A", { dual: false, stageOrigin: null, ticket: TICKET });
-  assert.equal(single.ticket, null, "点过头的会话里,连退回单舞台时也不经它发票据");
+  await assert.rejects(
+    () => iso.plan("A", { dual: false, stageOrigin: null, ticket: TICKET }),
+    /跨源隔离舞台未配置或不可用/
+  );
 });
 
 test("OCS-S-10 加固拦下过试图造子框架的代码:本页会话不再执行;订阅方收到通知", async () => {

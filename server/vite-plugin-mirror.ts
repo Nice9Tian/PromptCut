@@ -43,6 +43,7 @@ export type MirrorVersion = { session: string; localRev: number; project: any; h
 
 /** 当前编辑页 session 的最新一版 */
 export function latestMirror(): MirrorVersion | null { return store.latestMirror() as MirrorVersion | null; }
+(globalThis as any).__PC_LATEST_MIRROR__ = latestMirror;
 /** 按 `{session, localRev}` 取。`localRev` 省略 = 那个 session 的最新一版 */
 export function getMirror(session: string, localRev?: number | string | null): MirrorVersion | null {
   return store.getMirror(session, localRev as any) as MirrorVersion | null;
@@ -96,9 +97,11 @@ export async function ensureMirror(session: string, localRev?: number | string |
 let forwardChain: Promise<unknown> = Promise.resolve();
 
 async function postJson(url: string, body: unknown, timeoutMs = 15000) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (process.env.PROMPTCUT_INTERNAL_TOKEN) headers["x-pc-internal-token"] = process.env.PROMPTCUT_INTERNAL_TOKEN;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
