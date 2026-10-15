@@ -247,3 +247,38 @@ test("AVC-05 卡片图里有悬空输入:普通卡与有声动效卡照样有身
     assert.ok(records.some((r) => r.identityKey === id.identityKeys.s));
   } finally { PR.setCostBackend(null); }
 });
+
+test("AVC-06 3D 模式 (setPlan3DView / plan3DView):开启时将独立轻卡也纳入 prerenderSet", async () => {
+  setup();
+  const p = project();
+  D.setPlanProject(p);
+  // 注入轻记录，让 "s" 和 "a" 都判轻
+  const keys = CI.clipIdentityOf(p).identityKeys;
+  const light = (identityKey) => ({ identityKey, device: "test-device", fps: FPS, kind: "stepped", stepMs: 1, catchUpMs: 5, seekOk: true, seekMs: 1, demoted: false });
+  D.mergePlanCosts([light(keys.s)]);
+  await settle();
+
+  assert.equal(D.plan3DView(), false);
+  let plan = D.currentPlan();
+  // 正常模式下，轻卡不在 prerenderSet
+  assert.equal(plan.prerenderSet.has("a"), false);
+  assert.equal(plan.prerenderSet.has("s"), false);
+
+  // 开启 3D 模式
+  D.setPlan3DView(true);
+  assert.equal(D.plan3DView(), true);
+  await settle();
+  plan = D.currentPlan();
+  // 3D 模式下，作为独立轻卡的 "a" 和 "s" 均被纳入 prerenderSet
+  assert.equal(plan.prerenderSet.has("a"), true);
+  assert.equal(plan.prerenderSet.has("s"), true);
+
+  // 关闭 3D 模式后恢复
+  D.setPlan3DView(false);
+  assert.equal(D.plan3DView(), false);
+  await settle();
+  plan = D.currentPlan();
+  assert.equal(plan.prerenderSet.has("a"), false);
+  assert.equal(plan.prerenderSet.has("s"), false);
+});
+

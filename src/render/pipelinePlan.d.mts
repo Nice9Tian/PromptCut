@@ -43,6 +43,17 @@ export interface PlanPipelinesOptions {
    * 集合里的卡在每个位置都判轻(不受预算挤出),其余在每个位置都判重。`allHeavy` 为 true 时不看它。
    */
   lowMemoryLight?: Iterable<string> | null;
+  /**
+   * 打开 3D 模式时把原本判轻的独立卡片也纳入单卡轨道流生产计划 prerenderSet，
+   * scene-3d 自身在 3D 视图里是真三维网格，照旧除外，使得 3D 视图播放时所有卡片板子都有轨道流可贴。
+   */
+  includeLightCardsFor3D?: boolean;
+  /** `includeLightCardsFor3D` 的简写 */
+  view3d?: boolean;
+  /** 判卡片是否为独立卡的能力表 / 函数，不给时除 scene-3d 外一律纳入 */
+  isIndependent?: ((clip: any) => boolean) | null;
+  compositing?: ClipIndex<string> | ((clip: any) => string | undefined) | null;
+  capabilities?: ClipIndex<{ compositing?: string }> | ((clip: any) => { compositing?: string } | undefined) | null;
 }
 
 export const DEAD_MS: number;

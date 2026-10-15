@@ -106,3 +106,18 @@ test('同一个 identityKey 有多台 device 时取 measuredAt 最新的那一�
   assert.equal(picked.length, 1);
   assert.equal(picked[0].device, 'new');
 });
+
+test('3D 模式 (includeLightCardsFor3D / view3d) 将独立轻卡也纳入 prerenderSet', () => {
+  // 原本 6 秒那张 'a' 走 (b) 轻管线、'c' 是 direct 轻卡，只有 'b' 进 prerenderSet
+  const setNormal = prerenderSetOfPlan(controls, { fps, costs, tuning: null });
+  assert.deepEqual([...setNormal].sort(), ['b']);
+
+  // 开启 3D 模式后，'a' 和 'c' 是 independent 卡，均纳入 prerenderSet
+  const set3D = prerenderSetOfPlan(controls, { fps, costs, tuning: null, includeLightCardsFor3D: true });
+  assert.deepEqual([...set3D].sort(), ['a', 'b', 'c']);
+
+  // 通过 prerenderSetOf 传入 view3d 同样生效
+  const set3DDirect = prerenderSetOf(project, costs, fps, (clip) => caps[clip.id], { view3d: true });
+  assert.deepEqual([...set3DDirect].sort(), ['a', 'b', 'c']);
+});
+

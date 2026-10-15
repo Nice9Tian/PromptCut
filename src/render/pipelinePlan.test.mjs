@@ -345,3 +345,54 @@ test('resolveTuning 幂等：已解析过的一份再传进 planPipelines 也不
   const cards = [card('mid', 0, 4, direct(15), 'direct')];
   assert.deepEqual(ids(plan(cards, FPS, { tuning: t }).prerenderSet), ['mid']);
 });
+
+/* ------------------------------------------------------------------ 3D 模式与轻卡产流 (rr-bake3d-stream) */
+
+test('3D 模式 (includeLightCardsFor3D / view3d) 把原本判轻的独立卡也纳入 prerenderSet，scene-3d 照旧除外', () => {
+  // c0: 1ms (判轻), c1: 2ms (判轻), c2: 30ms (判重)
+  const cards = [
+    card('c0', 0, 4, direct(1), 'direct'),
+    card('c1', 0, 4, direct(2), 'direct'),
+    card('c2', 0, 4, direct(30), 'direct'),
+  ];
+  // 默认情况下: c0, c1 进 light, 只有 c2 进 prerenderSet
+  const pDefault = plan(cards, FPS);
+  assert.deepEqual(ids(pDefault.segments[0].light), ['c0', 'c1']);
+  assert.deepEqual(ids(pDefault.segments[0].heavy), ['c2']);
+  assert.deepEqual(ids(pDefault.prerenderSet), ['c2']);
+
+  // 打开 view3d: c0, c1 也进 prerenderSet, segments 内 light / heavy 仍保持原样
+  const p3d = plan(cards, FPS, { view3d: true });
+  assert.deepEqual(ids(p3d.segments[0].light), ['c0', 'c1']);
+  assert.deepEqual(ids(p3d.segments[0].heavy), ['c2']);
+  assert.deepEqual(ids(p3d.prerenderSet), ['c0', 'c1', 'c2']);
+
+  // 加入 scene-3d 和非独立卡:
+  // scene-3d 在 3D 视图里是真三维网格，除外；非独立卡 (belowDependent) 也除外
+  const project = {
+    version: 1, name: 'p', width: 1920, height: 1080, fps: FPS, duration: 60, themeId: 'midnight',
+    tracks: [{
+      id: 'tr', name: 'tr', clips: [
+        { id: 'c0', cardId: 'punch-pill', start: 0, end: 4, params: {} },
+        { id: 's3d', cardId: 'scene-3d', start: 0, end: 4, params: {} },
+        { id: 'glass', cardId: 'glass-blur', start: 0, end: 4, params: {} },
+      ],
+    }],
+  };
+  const costs = [];
+  const opts = {
+    view3d: true,
+    identityKeys: { c0: 'k-c0', s3d: 'k-s3d', glass: 'k-glass' },
+    frameModes: { c0: 'direct', s3d: 'direct', glass: 'direct' },
+    compositing: {
+      'punch-pill': 'independent',
+      'glass-blur': 'belowDependent',
+    },
+  };
+  const pCaps = planPipelines(project, costs, FPS, opts);
+  // c0 是 independent 且轻卡 -> 纳入 prerenderSet
+  // s3d 是 scene-3d -> 排除
+  // glass 是 belowDependent -> 排除
+  assert.deepEqual(ids(pCaps.prerenderSet), ['c0']);
+});
+
