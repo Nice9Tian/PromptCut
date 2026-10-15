@@ -52,6 +52,26 @@ export const EXPORT_TASK_CHECK_MS = 6000;
  */
 export const EXPORT_STALL_MS = 3 * 60_000;
 
+/** 同一项目/同一会话只为导出的计划最小发起间隔(毫秒):节流防短时间内高频重复提交 */
+export const EXPORT_PLAN_THROTTLE_MS = 2000;
+/** 同一项目/同一会话同时只允许 1 份导出的计划在执行 */
+export const MAX_CONCURRENT_EXPORT_PLANS = 1;
+
+interface PlanThrottleEntry {
+  inFlight: boolean;
+  lastTime: number;
+}
+const planThrottles = new Map<string, PlanThrottleEntry>();
+
+export function resetExportPlanThrottle(): void {
+  planThrottles.clear();
+}
+
+export function exportPlanThrottleState(key: string): { inFlight: boolean; lastTime: number } | null {
+  const e = planThrottles.get(key);
+  return e ? { inFlight: e.inFlight, lastTime: e.lastTime } : null;
+}
+
 /**
  * 这一页上一次请渲染节点失败之后,下一次带的新标识(见文件头「失败之后再点导出」);没失败过是 null。
  * 只认小写字母与数字、最多 32 位(节点一侧 `server/export-frames.mjs` 的 `exportSaltOf` 同一个口径)。
@@ -59,7 +79,7 @@ export const EXPORT_STALL_MS = 3 * 60_000;
 let retrySalt: string | null = null;
 const freshSalt = () => (Math.random().toString(36).slice(2, 12) + Date.now().toString(36)).replace(/[^0-9a-z]/g, "").slice(0, 32);
 export const exportRetrySalt = () => retrySalt;
-export function resetExportRetry(): void { retrySalt = null; }
+export function resetExportRetry(): void { retrySalt = null; resetExportPlanThrottle(); }
 const HASH_RE = /^[0-9a-f]{64}$/;
 
 export interface ExportFrameDeps {
@@ -227,6 +247,19 @@ export async function requestExportFrames({ projectId, projectRev, project, clip
 }): Promise<ExportFrames> {
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? Date.now;
+  const throttleKey = `${projectId}:${deps.publisherId}`;
+  const tStart = now();
+  const existingThrottle = planThrottles.get(throttleKey);
+  if (existingThrottle?.inFlight) {
+    throw Object.assign(new Error("同一项目正在等待或执行导出计划，请勿重复发起"), { throttled: true, retryable: false });
+  }
+  if (!retrySalt && existingThrottle && tStart - existingThrottle.lastTime < EXPORT_PLAN_THROTTLE_MS) {
+    const waitMs = EXPORT_PLAN_THROTTLE_MS - (tStart - existingThrottle.lastTime);
+    await sleep(waitMs, signal);
+  }
+  const throttleRecord: PlanThrottleEntry = { inFlight: true, lastTime: now() };
+  planThrottles.set(throttleKey, throttleRecord);
+
   const stallMs = deps.stallMs ?? EXPORT_STALL_MS;
   const taskCheckMs = deps.taskCheckMs ?? EXPORT_TASK_CHECK_MS;
   const task = exportPlanTask({ projectId, projectRev, clips, codeVersion: deps.codeVersion ?? null, salt: retrySalt });
@@ -381,6 +414,8 @@ export async function requestExportFrames({ projectId, projectRev, project, clip
       },
     };
   } finally {
+    throttleRecord.inFlight = false;
+    throttleRecord.lastTime = now();
     try { off(); } catch { /* 订阅方坏了 */ }
   }
 }

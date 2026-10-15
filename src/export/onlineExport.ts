@@ -15,7 +15,7 @@ import { activeOnlineSource } from "../render/snapshotSource";
 import { pushToast } from "../editor/sync/syncManager";
 import { MemorySink, type MuxSink } from "./mp4Mux";
 import { runBrowserExport } from "./browserExport";
-import { getCard, isUserCardId } from "../kernel/registry";
+import { cardRunState, getCard, isUserCardId } from "../kernel/registry";
 import { ONLINE_EXPORT_TEXT } from "./text";
 import { prepareExportSounds } from "../editor/io/exportSounds";
 
@@ -54,15 +54,8 @@ function downloadBlob(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
 }
 
-/**
- * 本页不执行的卡片段:同步来的用户卡与素材效果卡(编辑页面的注册表里没有它们的定义)。导出页与编辑页面同源,不执行它们的代码
- * (`docs/semantics/mechanism/platforms.md`「在线执行用户卡与素材效果卡」的「导出页」),所以它们的画面导出时取现成的:
- * 快速导出先取满密度的轨道流,其余请渲染节点逐帧渲(`exportLayers.ts`)。
- * 构建时就在包里的卡(内置卡、内置素材效果卡、仓库里的用户卡)导出页都能运行,不在这里。
- */
-function nonRunnableClips(p: Project): string[] {
-  return p.tracks.flatMap((tr) => tr.clips).filter((c) => !!c.cardId && isUserCardId(c.cardId) && !getCard(c.cardId)).map((c) => c.id);
-}
+import { isCardRunnable, nonRunnableClips } from "./cardLayers";
+export { isCardRunnable, nonRunnableClips };
 
 /** 卡片画面的现成来源从哪取:文档服务(层表、清单、任务队列)与素材服务;页面没连着项目时为 null(全部由导出页活渲) */
 const cardLayerDeps = (over: { stallMs?: number } = {}) => (hasDocLink() ? {

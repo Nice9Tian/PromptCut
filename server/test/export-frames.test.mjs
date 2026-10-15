@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { collectExportResult, createExportFramesSink, exportFramesKey, exportResultComplete, exportSpecOf, exportStreamOf, exportTaskFrames,
-  rgbaToPng, shotToPng, storeExportFrame, exportFramesDir, EXPORT_FRAMES_KIND } from '../export-frames.mjs';
+  rgbaToPng, shotToPng, storeExportFrame, exportFramesDir, EXPORT_FRAMES_KIND, sweepExpiredExportFrames, releaseExportFrames, EXPORT_FRAMES_TTL_MS } from '../export-frames.mjs';
 import { exportIndexOf, isExportFramesTask, isExportOnlyPlan, EXPORT_FRAMES_PRIORITY } from '../render-node/export-plan.mjs';
 import { splitPlan, SPARSE_STREAM_PRIORITY } from '../render-node/split.mjs';
 import { listPlanOverrides } from '../render-node/local-node.mjs';
@@ -229,3 +229,68 @@ test('EF-07 导出位图任务不被当成稀疏流任务、不被当成要满�
   assert.equal(isExportFramesTask(task), true);
   assert.equal(wantsDenseStream(task), true, '它的种类仍是流任务(队列与节点过滤按流任务收)');
 });
+
+test('EF-08 过期清理与显式释放:TTL 24小时清理过期位图与清单,保留期内不动', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-export-sweep-'));
+  try {
+    const expiredKey = '1'.repeat(64);
+    const freshKey = '2'.repeat(64);
+    const now = Date.now();
+
+    // 构造过期位图文件（mtime 为 25 小时前）和未过期文件（mtime 为现在）
+    const expiredDir = exportFramesDir(root, expiredKey);
+    const freshDir = exportFramesDir(root, freshKey);
+    await fs.mkdir(expiredDir, { recursive: true });
+    await fs.mkdir(freshDir, { recursive: true });
+    await fs.writeFile(path.join(expiredDir, '1.png'), Buffer.from('png-old'));
+    await fs.writeFile(path.join(freshDir, '2.png'), Buffer.from('png-fresh'));
+
+    const oldTime = (now - EXPORT_FRAMES_TTL_MS - 3600_000) / 1000;
+    await fs.utimes(expiredDir, oldTime, oldTime);
+
+    const manifests = new Map();
+    manifests.set(`render-manifest|${expiredKey}:0-0`, {
+      body: { kind: EXPORT_FRAMES_KIND, createdAt: now - EXPORT_FRAMES_TTL_MS - 3600_000, frames: [[1, 'hash-old', 10]] },
+    });
+    manifests.set(`render-manifest|${freshKey}:0-0`, {
+      body: { kind: EXPORT_FRAMES_KIND, createdAt: now - 1000, frames: [[2, 'hash-fresh', 10]] },
+    });
+    const droppedBlocks = [];
+    const content = {
+      async list(kind, prefix) {
+        const items = [];
+        for (const k of manifests.keys()) {
+          const [mKind, mKey] = k.split('|');
+          if (mKind === kind && (!prefix || mKey.startsWith(prefix))) items.push({ key: mKey });
+        }
+        return { items };
+      },
+      async get(kind, key) { return manifests.get(`${kind}|${key}`) ?? null; },
+      async del(kind, key) { manifests.delete(`${kind}|${key}`); },
+    };
+    const client = {
+      async drop(ns, hash) { droppedBlocks.push(`${ns}/${hash}`); },
+    };
+
+    // 运行清理
+    const stats = await sweepExpiredExportFrames(root, { maxAgeMs: EXPORT_FRAMES_TTL_MS, now, content, client });
+    assert.equal(stats.cleanedDirs, 1, '清理了 1 个过期的本地目录');
+    assert.equal(stats.cleanedFrames, 1, '清理了 1 帧本地文件');
+    assert.equal(stats.cleanedManifests, 1, '清理了 1 份过期清单');
+    assert.deepEqual(droppedBlocks, ['px/hash-old'], '通知客户端释放了过期块');
+
+    // 检查过期目录已被删除，未过期目录仍在
+    await assert.rejects(fs.stat(expiredDir));
+    const freshStat = await fs.stat(freshDir);
+    assert.ok(freshStat.isDirectory());
+    assert.ok(manifests.has(`render-manifest|${freshKey}:0-0`));
+
+    // 显式释放未过期结果键
+    await releaseExportFrames(root, freshKey, { content, client });
+    await assert.rejects(fs.stat(freshDir));
+    assert.equal(manifests.has(`render-manifest|${freshKey}:0-0`), false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+

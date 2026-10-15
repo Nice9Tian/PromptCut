@@ -23,6 +23,7 @@ const F = await import(srcUrl("export/exportFrames.ts"));
 const S = await import(srcUrl("export/streamFrames.ts"));
 const P = await import(srcUrl("online/planPublisher.ts"));
 const T = await import(srcUrl("export/text.ts"));
+const R = await import(srcUrl("kernel/registry.ts"));
 
 const FPS = 30;
 /** 满密度的分段表:分段号 → 样本数 */
@@ -242,3 +243,39 @@ test("XM-07 流清单的读法", () => {
   assert.equal(S.readStreamManifest({ ...body, kind: "export-frames" }, RK, [0, 7]), null);
   assert.equal(S.readStreamManifest(null, RK, [0, 7]), null);
 });
+
+test("XM-08 在线导出可执行卡判定与 nonRunnableClips: 就绪的同步卡活渲、错误状态等节点", () => {
+  R.resetRuntimeCardsForTest();
+  R.registerCards([{ id: "builtin-card", name: "Builtin Card" }]);
+  // 模拟同步卡
+  R.setSyncedUserCards([
+    { id: "synced-ready", name: "Ready Card" },
+    { id: "synced-bad", name: "Bad Card" },
+  ]);
+  R.setCardRunStates({
+    "synced-ready": { state: "ready" },
+    "synced-bad": { state: "unsupported-syntax", detail: "SyntaxError" },
+  });
+  assert.equal(L.isCardRunnable("builtin-card"), true, "内置卡一律可运行");
+  assert.equal(L.isCardRunnable("synced-ready"), true, "运行状态为 ready 的同步用户卡可运行");
+  assert.equal(L.isCardRunnable("synced-bad"), false, "运行状态为 unsupported-syntax 的不可运行");
+  assert.equal(L.isCardRunnable("unknown-card"), false, "未知卡不可运行");
+
+  const p = {
+    width: 1280, height: 720, fps: 30, duration: 3,
+    tracks: [
+      { id: "t1", clips: [
+        { id: "c1", cardId: "builtin-card", start: 0, end: 1 },
+        { id: "c2", cardId: "synced-ready", start: 1, end: 2 },
+        { id: "c3", cardId: "synced-bad", start: 2, end: 3 },
+        { id: "c4", cardId: "unknown-card", start: 0, end: 2 },
+        { id: "c5", start: 0, end: 3 }, // 素材片段（无 cardId）
+      ] },
+    ],
+  };
+  const nonRunnable = L.nonRunnableClips(p);
+  assert.deepEqual(nonRunnable.sort(), ["c3", "c4"].sort(), "只有真正不能在浏览器运行的卡进入 nonRunnableClips");
+  R.resetRuntimeCardsForTest();
+  R.resetCards();
+});
+

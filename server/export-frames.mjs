@@ -36,6 +36,8 @@ export const EXPORT_FRAMES_VERSION = 1;
 export const EXPORT_FRAMES_KIND = 'export-frames';
 /** 清单的版本(同 `artifact-transfer.mjs` 的 `RESULT_VERSION`) */
 export const EXPORT_RESULT_VERSION = 1;
+/** 导出专用位图与清单的默认保留期:24 小时 */
+export const EXPORT_FRAMES_TTL_MS = 24 * 60 * 60 * 1000;
 /** 推块的并发 */
 const PUSH_CONCURRENCY = 4;
 const KEY_RE = /^[a-f0-9]{64}$/;
@@ -174,7 +176,10 @@ export async function collectExportResult(root, task) {
     files.set(hash, frameFile(dir, f));
     frames.push([f, hash, buf.length]);
   }
-  const result = { v: EXPORT_RESULT_VERSION, kind: EXPORT_FRAMES_KIND, resultKey: key, range: { from: task.range.from, to: task.range.to }, header: headerOf(task), frames };
+  const result = {
+    v: EXPORT_RESULT_VERSION, kind: EXPORT_FRAMES_KIND, resultKey: key, range: { from: task.range.from, to: task.range.to },
+    header: headerOf(task), frames, createdAt: Date.now(), exportOnly: true, ttlSec: Math.floor(EXPORT_FRAMES_TTL_MS / 1000),
+  };
   return { result, readBlob: async hash => (files.has(hash) ? fs.readFile(files.get(hash)) : null) };
 }
 
@@ -202,6 +207,73 @@ export async function dropExportFrames(root, task) {
   try { await fs.rmdir(dir); } catch { /* 还有别的段的帧 */ }
 }
 
+/**
+ * 清理过期的导出位图（按保留期 TTL 24 小时清理落盘帧目录与内容库清单；素材服务上的块若支持也一并释放）。
+ * 写入新导出位图时顺带触发，也可在定时任务或维护中调用。
+ */
+export async function sweepExpiredExportFrames(root, { maxAgeMs = EXPORT_FRAMES_TTL_MS, now = Date.now(), content = null, client = null, log = () => {} } = {}) {
+  let cleanedDirs = 0, cleanedFrames = 0, cleanedManifests = 0;
+  const baseDir = path.join(root, 'export-frames');
+  try {
+    const entries = await fs.readdir(baseDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dirPath = path.join(baseDir, entry.name);
+      try {
+        const stat = await fs.stat(dirPath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          const files = await fs.readdir(dirPath).catch(() => []);
+          cleanedFrames += files.length;
+          await fs.rm(dirPath, { recursive: true, force: true });
+          cleanedDirs++;
+        }
+      } catch { /* 忽略单个目录的错误 */ }
+    }
+  } catch { /* 目录可能不存在 */ }
+
+  if (content && typeof content.list === 'function' && typeof content.del === 'function') {
+    try {
+      const listing = await content.list('render-manifest', '');
+      for (const item of listing?.items ?? []) {
+        if (!item?.key) continue;
+        try {
+          const manifest = await content.get('render-manifest', item.key);
+          const body = manifest?.body;
+          if (body && body.kind === EXPORT_FRAMES_KIND && body.createdAt && (now - body.createdAt > maxAgeMs)) {
+            await content.del('render-manifest', item.key);
+            cleanedManifests++;
+            if (client && typeof client.drop === 'function' && Array.isArray(body.frames)) {
+              for (const f of body.frames) {
+                if (f && f[1]) await client.drop('px', f[1]).catch(() => {});
+              }
+            }
+          }
+        } catch { /* 单项失败不中断 */ }
+      }
+    } catch { /* list 不支持时不处理 */ }
+  }
+
+  log?.('export-frames.sweep', { cleanedDirs, cleanedFrames, cleanedManifests });
+  return { cleanedDirs, cleanedFrames, cleanedManifests };
+}
+
+/** 导出完成或释放时显式释放特定结果键的本地临时帧与清单 */
+export async function releaseExportFrames(root, resultKey, { content = null, client = null } = {}) {
+  if (!KEY_RE.test(String(resultKey))) return;
+  const dir = exportFramesDir(root, resultKey);
+  try {
+    await fs.rm(dir, { recursive: true, force: true });
+  } catch { /* ignore */ }
+  if (content && typeof content.list === 'function' && typeof content.del === 'function') {
+    try {
+      const listing = await content.list('render-manifest', `${resultKey}:`);
+      for (const item of listing?.items ?? []) {
+        if (item?.key) await content.del('render-manifest', item.key).catch(() => {});
+      }
+    } catch { /* ignore */ }
+  }
+}
+
 /* ------------------------------------------------------------------ sink(推素材服务、写内容库) */
 
 const manifestKey = task => `${task.resultKey}:${task.range.from}-${task.range.to}`;
@@ -227,6 +299,8 @@ async function settleLimited(items, limit, work) {
 export function createExportFramesSink({ root, client, content = null, log = () => {} }) {
   const remembered = new Map();
   const say = (event, fields) => { try { log?.(event, fields); } catch { /* 日志出错不影响推送 */ } };
+  let lastSweep = 0;
+  const SWEEP_INTERVAL_MS = 10 * 60 * 1000;
   return {
     async has(ref) {
       if (!content || typeof content.get !== 'function') return false;
@@ -246,6 +320,10 @@ export function createExportFramesSink({ root, client, content = null, log = () 
     },
     async put(ref, { report } = {}) {
       const started = Date.now();
+      if (started - lastSweep > SWEEP_INTERVAL_MS) {
+        lastSweep = started;
+        sweepExpiredExportFrames(root, { maxAgeMs: EXPORT_FRAMES_TTL_MS, now: started, content, client, log }).catch(() => {});
+      }
       const tell = fields => { try { report?.(fields); } catch { /* 诊断回调出错不影响推送 */ } };
       let pushed = 0, bytes = 0, blocks = null;
       const incomplete = (reason, extra = {}) => {

@@ -26,6 +26,10 @@ import { renameSnapshotIds } from "../render/snapshotRename";
 import { withTicket } from "./ticketRenewal";
 import { getCard, syncedUserCards } from "../kernel/registry";
 import type { FrameLayer, FrameLayers } from "./exportLayers";
+import { stageOrigins } from "../editor/previewMode";
+import { ONLINE } from "../online/mode";
+import { STAGE_ENTRY_FILE } from "../online/isolation/stageGuard";
+import { activeCardSourceReader } from "../editor/sync/onlineCardSources";
 
 type ExportWindow = Window & typeof globalThis & {
   __pcReady?: boolean;
@@ -165,17 +169,58 @@ export class ExportCompositor {
   private w: ExportWindow;
   private opts: CompositorOptions;
   private scratch: HTMLCanvasElement;
+  readonly crossOrigin: boolean;
+  private rpcSeq = 0;
+  private pendingRpc = new Map<number, { resolve: (val: any) => void; reject: (err: any) => void }>();
+  private messageListener: ((ev: MessageEvent) => void) | null = null;
   readonly stats = { frames: 0, stepMs: 0, snapshotMs: 0, mediaMs: 0, rasterMs: 0, heavyReplaced: 0, mediaFrames: 0, manualTicks: 0, rafFallbacks: 0, ticketSwaps: 0, layersPasted: 0, layerMs: 0 };
 
-  private constructor(frameEl: HTMLIFrameElement, opts: CompositorOptions) {
+  private constructor(frameEl: HTMLIFrameElement, opts: CompositorOptions, crossOrigin = false) {
     this.frameEl = frameEl;
     this.w = frameEl.contentWindow as ExportWindow;
     this.opts = opts;
+    this.crossOrigin = crossOrigin;
     this.canvas = document.createElement("canvas");
     this.canvas.width = opts.project.width;
     this.canvas.height = opts.project.height;
     this.ctx = this.canvas.getContext("2d", { alpha: false, willReadFrequently: true })!;
     this.scratch = document.createElement("canvas");
+    if (crossOrigin) {
+      this.messageListener = (ev: MessageEvent) => {
+        if (ev.source !== this.frameEl.contentWindow) return;
+        const data = ev.data;
+        if (!data || typeof data !== "object") return;
+        if (typeof data.id === "number") {
+          const handler = this.pendingRpc.get(data.id);
+          if (handler) {
+            this.pendingRpc.delete(data.id);
+            if (data.error) handler.reject(new Error(data.error));
+            else handler.resolve(data);
+          }
+        }
+      };
+      window.addEventListener("message", this.messageListener);
+    }
+  }
+
+  private sendRpc<T = any>(msg: Record<string, unknown>, transfer?: Transferable[]): Promise<T> {
+    this.throwIfAborted();
+    const id = ++this.rpcSeq;
+    return new Promise<T>((resolve, reject) => {
+      this.pendingRpc.set(id, { resolve, reject });
+      try {
+        const w = this.frameEl.contentWindow;
+        if (!w) throw new Error("导出舞台 iframe 已脱落");
+        if (transfer && transfer.length) {
+          w.postMessage({ id, ...msg }, "*", transfer);
+        } else {
+          w.postMessage({ id, ...msg }, "*");
+        }
+      } catch (e) {
+        this.pendingRpc.delete(id);
+        reject(e);
+      }
+    });
   }
 
   /** 开导出页、灌项目、等就绪 */
@@ -183,22 +228,113 @@ export class ExportCompositor {
     // 整段的画面都由这里贴的卡:导出页只挂包裹层,不跑组件(见 `withWrapperOnly`)
     const wrapped = withWrapperOnly(opts.project, opts.layers?.wrapperOnly ?? []);
     const p = wrapped.project;
+    const origins = stageOrigins();
+    const stageHost = origins ? (origins.B || origins.A) : null;
+    let url: string;
+    if (opts.exportUrl) {
+      url = opts.exportUrl;
+    } else if (stageHost) {
+      const base = typeof import.meta.env !== "undefined" && import.meta.env.BASE_URL ? import.meta.env.BASE_URL : "/";
+      const path = ONLINE && origins ? `${base.endsWith("/") ? base : `${base}/`}${STAGE_ENTRY_FILE}` : location.pathname;
+      url = `${stageHost}${path}?export=1&rafControl=1&id=export`;
+    } else {
+      url = exportPageUrl(p);
+    }
+    const isCrossOrigin = (u: string) => {
+      try {
+        return new URL(u, location.href).origin !== location.origin;
+      } catch {
+        return false;
+      }
+    };
+    const crossOrigin = isCrossOrigin(url);
+
     const el = document.createElement("iframe");
     el.setAttribute("aria-hidden", "true");
     el.title = "逐帧导出";
     el.dataset.pc = "browser-export-frame";
     // 只能 opacity:0 藏:display:none / visibility:hidden 会停掉里面的 rAF 与 <video>(和后台舞台同一个理由)
     el.style.cssText = `position:fixed;left:0;top:0;width:${p.width}px;height:${p.height}px;border:0;opacity:0;pointer-events:none;z-index:-1`;
-    el.src = opts.exportUrl ?? exportPageUrl(p);
+    if (crossOrigin) {
+      el.setAttribute("sandbox", "allow-scripts allow-same-origin");
+    }
+    el.src = url;
     document.body.appendChild(el);
-    const c = new ExportCompositor(el, opts);
+    const c = new ExportCompositor(el, opts, crossOrigin);
     try {
-      await c.waitFor(() => c.w?.__pcReady === true && typeof c.w.__pcLoadProject === "function", 60_000, "导出页 60 秒没就绪");
-      // 同步来的用户卡在导出页里没有定义:把同步表交给它,让这些卡的包裹层挂出来,逐帧换成预渲染原尺寸
-      const synced = [...syncedUserCards().values(), ...(wrapped.replaced ? [{ id: WRAPPER_ONLY_CARD, name: "" }] : [])];
-      if (synced.length) c.w.__pcSetSyncedUserCards?.(synced);
-      await c.w.__pcLoadProject!(p);
-      await c.waitFor(() => c.w.__pcReady === true && typeof c.w.__pcSetT === "function", 60_000, "导出页 60 秒没装好项目");
+      if (crossOrigin) {
+        let ready = false;
+        const onReady = (ev: MessageEvent) => {
+          if (ev.source === c.frameEl.contentWindow && ev.data?.type === "pc-export-ready") ready = true;
+        };
+        window.addEventListener("message", onReady);
+        try {
+          const t0 = performance.now();
+          while (!ready) {
+            c.throwIfAborted();
+            try { c.frameEl.contentWindow?.postMessage({ type: "pc-export-ping" }, "*"); } catch { /* ignore */ }
+            if (performance.now() - t0 > 60_000) throw new Error("导出舞台 60 秒没就绪");
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        } finally {
+          window.removeEventListener("message", onReady);
+        }
+        const synced = [...syncedUserCards().values(), ...(wrapped.replaced ? [{ id: WRAPPER_ONLY_CARD, name: "" }] : [])];
+        const reader = activeCardSourceReader();
+        let cardSources: { entries: string[]; files: Record<string, { body: string; hash: string }> } | null = null;
+        if (reader) {
+          const entries = reader.entries();
+          const files: Record<string, { body: string; hash: string }> = {};
+          const visited = new Set<string>();
+          const queue = [...entries];
+          while (queue.length > 0) {
+            const key = queue.shift()!;
+            if (visited.has(key)) continue;
+            visited.add(key);
+            const item = reader.read(key);
+            if (item) {
+              files[key] = item;
+              const re = /(?:import|from)\s*['"](\.[^'"]+)['"]/g;
+              let match: RegExpExecArray | null;
+              while ((match = re.exec(item.body)) !== null) {
+                const spec = match[1];
+                const parts = key.split("/").slice(0, -1);
+                let ok = true;
+                for (const p of spec.split("/")) {
+                  if (p === "" || p === ".") continue;
+                  if (p === "..") { if (!parts.length) { ok = false; break; } parts.pop(); continue; }
+                  parts.push(p);
+                }
+                if (ok) {
+                  const resolved = parts.join("/");
+                  for (const ext of ["", ".tsx", ".ts", ".js", ".mjs", ".css"]) {
+                    const candidate = resolved + ext;
+                    if (!visited.has(candidate) && reader.read(candidate)) {
+                      queue.push(candidate);
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+          cardSources = { entries, files };
+        }
+        await c.sendRpc({
+          type: "pc-export-init",
+          project: p,
+          syncedCards: synced,
+          cardSources,
+          freshTicket: opts.freshTicket?.() ?? null,
+        });
+      } else {
+        await c.waitFor(() => c.w?.__pcReady === true && typeof c.w.__pcLoadProject === "function", 60_000, "导出页 60 秒没就绪");
+        // 同步来的用户卡在导出页里没有定义:把同步表交给它,让这些卡的包裹层挂出来,逐帧换成预渲染原尺寸
+        const synced = [...syncedUserCards().values(), ...(wrapped.replaced ? [{ id: WRAPPER_ONLY_CARD, name: "" }] : [])];
+        if (synced.length) c.w.__pcSetSyncedUserCards?.(synced);
+        await c.w.__pcLoadProject!(p);
+        await c.waitFor(() => c.w.__pcReady === true && typeof c.w.__pcSetT === "function", 60_000, "导出页 60 秒没装好项目");
+      }
     } catch (e) {
       c.close();
       throw e;
@@ -300,6 +436,11 @@ export class ExportCompositor {
    * 和桌面导出差出相位。
    */
   private async warmUp(startFrame: number, fps: number) {
+    if (this.crossOrigin) {
+      await this.sendRpc({ type: "pc-export-warmup", startFrame, fps });
+      this.warmed = startFrame;
+      return;
+    }
     const sec = startFrame / fps;
     this.w.__pcSetFrameWindow?.(null, sec, sec);
     for (let i = 0; i < 3; i++) { await this.stepTo(startFrame, fps); await this.raf(); }
@@ -316,9 +457,49 @@ export class ExportCompositor {
     this.throwIfAborted();
     const p = this.opts.project;
     const fps = Math.max(1, p.fps || 30);
+    if (this.warmed < 0) await this.warmUp(frame, fps);
+
+    if (this.crossOrigin) {
+      const t0 = performance.now();
+      let layers: FrameLayer[] = [];
+      if (this.opts.layers) {
+        const activeClipIds = this.opts.layers.wrapperOnly;
+        layers = await this.opts.layers.at(frame, activeClipIds);
+        if (layers.length) this.stats.layersPasted += layers.length;
+      }
+      const ticket = this.opts.freshTicket?.() ?? null;
+      const res = await this.sendRpc<{
+        type: "pc-export-frame-result";
+        bitmap: ImageBitmap;
+        stats?: Record<string, number>;
+      }>({
+        type: "pc-export-render-frame",
+        frame,
+        fps,
+        layers,
+        freshTicket: ticket,
+        background: this.opts.background ?? "#000",
+      });
+      const bitmap = res.bitmap;
+      this.ctx.fillStyle = this.opts.background ?? "#000";
+      this.ctx.fillRect(0, 0, p.width, p.height);
+      this.ctx.drawImage(bitmap, 0, 0, p.width, p.height);
+      bitmap.close();
+      if (res.stats) {
+        this.stats.stepMs += res.stats.stepMs ?? 0;
+        this.stats.snapshotMs += res.stats.snapshotMs ?? 0;
+        this.stats.mediaMs += res.stats.mediaMs ?? 0;
+        this.stats.rasterMs += res.stats.rasterMs ?? 0;
+        this.stats.mediaFrames += res.stats.mediaFrames ?? 0;
+        this.stats.ticketSwaps += res.stats.ticketSwaps ?? 0;
+      }
+      this.stats.rasterMs += performance.now() - t0;
+      this.stats.frames++;
+      return this.canvas;
+    }
+
     const doc = this.w.document;
     let t0 = performance.now();
-    if (this.warmed < 0) await this.warmUp(frame, fps);
     await this.stepTo(frame, fps);
     this.stats.stepMs += performance.now() - t0;
 
@@ -405,6 +586,19 @@ export class ExportCompositor {
   }
 
   close(): void {
+    if (this.crossOrigin) {
+      if (this.messageListener) {
+        window.removeEventListener("message", this.messageListener);
+        this.messageListener = null;
+      }
+      for (const handler of this.pendingRpc.values()) {
+        handler.reject(new Error("导出合成器已关闭"));
+      }
+      this.pendingRpc.clear();
+      try {
+        this.frameEl.contentWindow?.postMessage({ type: "pc-export-close" }, "*");
+      } catch { /* 已经关了 */ }
+    }
     try { this.opts.layers?.close(); } catch { /* 已经关了 */ }
     try { this.frameEl.remove(); } catch { /* 已经摘了 */ }
     this.scratch.width = this.scratch.height = 0;

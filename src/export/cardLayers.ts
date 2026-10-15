@@ -15,6 +15,32 @@
  * 组流(一条流盖住相邻几张卡)这一版不取:它的成员在快速导出里照没有流办(本页逐帧渲,或渲染节点逐帧渲),画面不受影响。
  */
 import { streamSegmentOf, streamSegmentFirstFrame } from "../render/streamSegments.mjs";
+import { getCard, isUserCardId, cardRunState } from "../kernel/registry";
+import type { Project } from "../kernel/project";
+
+/**
+ * 这张卡在此刻是否能在浏览器中运行：
+ *   - 构建时在包里的卡（内置卡、内置素材效果卡、仓库卡）：`getCard` 有定义，直接可运行；
+ *   - 同步来的用户卡：未同步或非用户卡不可运行；运行状态只有 `ready` 视为可运行；
+ *     其它错误状态（`missing-module`, `unsupported-syntax`, `gpu`, `load-error`, `runtime-error`, `not-isolated`, `media`, `disabled`, `low-memory`, `loading`）均不可运行。
+ */
+export function isCardRunnable(cardId: string): boolean {
+  if (getCard(cardId)) return true;
+  if (!isUserCardId(cardId)) return false;
+  const state = cardRunState(cardId)?.state;
+  return state === "ready";
+}
+
+/**
+ * 本页不执行的卡片段:
+ * 在线导出在跨源隔离舞台里整帧活渲（user-decisions-2026-10-14 §2.2）：
+ * 同步来的用户卡只要在浏览器中就绪（`ready`），就在隔离舞台活渲；
+ * 只有真正无法在浏览器执行的卡（语法不支持、缺模块、GPU能力不够、加载/运行时出错、未隔离、媒体格式等，或未就绪/未知卡）
+ * 才进入 `nonRunnableClips` 等待渲染节点为导出逐帧渲染位图兜底。
+ */
+export function nonRunnableClips(p: Project): string[] {
+  return p.tracks.flatMap((tr) => tr.clips).filter((c) => !!c.cardId && !isCardRunnable(c.cardId)).map((c) => c.id);
+}
 
 export type ExportMode = "fast" | "full";
 

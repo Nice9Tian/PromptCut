@@ -174,3 +174,33 @@ test("XR-08 解出来的宽度和清单里的矩形对不上:报错,不裁", () 
   assert.throws(() => S.frameWidthOf(48, { x: 0, y: 0, w: 64, h: 32 }, 12), /对不上/);
   assert.throws(() => S.frameWidthOf(80, { x: 0, y: 0, w: 64, h: 32 }, 12), /对不上/);
 });
+
+test("XR-09 只为导出的计划并发与限流: 同一项目同一发布方进行中拒绝并发", async () => {
+  F.resetExportRetry();
+  const svc = service();
+  let release = null;
+  const holding = new Promise((r) => { release = r; });
+  svc.hooks.onSleep = async () => {
+    // 第一次进入 sleep 时模拟正在执行/等待节点
+    if (release) await holding;
+  };
+  const firstP = request(svc);
+  // 等它进入执行
+  await new Promise((r) => setImmediate(r));
+  // 此时并发发起第二个请求：必须被限流拦截
+  await assert.rejects(
+    request(svc),
+    (err) => err.throttled === true && /同一项目正在等待或执行导出计划/.test(err.message)
+  );
+  // 释放第一个请求让它失败结束
+  const rel = release;
+  release = null;
+  svc.states.set(planOf().id, "failed");
+  rel();
+  await assert.rejects(firstP);
+  // resetExportRetry 后限流状态清空
+  F.resetExportRetry();
+  const state = F.exportPlanThrottleState("p1", svc.deps.publisherId);
+  assert.equal(state, null, "resetExportRetry 清空节流状态");
+});
+
