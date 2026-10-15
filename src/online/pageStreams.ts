@@ -59,6 +59,8 @@
 import type { NodeTask } from "./browserNode.ts";
 import { STREAM_SEGMENT_FRAMES, YIELD_FRAME_MAX_MS, type YieldCause } from "./browserNode.ts";
 import { candidateSpans, layerStreamCandidates, mergeLayerStreams, pageStreamRow, pageStreamTasks, type PageStreamRow, type PageStreamSpec } from "./pageStreamPlan.ts";
+import { lowMemoryMode } from "./lowMemory.ts";
+import { packedSize, avcCodecFor } from "../render/streamEncode.ts";
 
 /** 清单计划发出去之后没人认领,等这么久本页才自己产(三级数字;空闲的切分方认领计划在一秒以内,留出它正忙着别的活的余量) */
 export const PAGE_STREAM_WAIT_MS = 5000;
@@ -157,6 +159,10 @@ export interface PageStreamsDeps {
   pollMs?: number;
   recheckMs?: number;
   rowsMs?: number;
+  /** 低内存档(手机、平板):只产稀疏版;产流前调 VideoEncoder.isConfigSupported 检查配置。缺省读 lowMemoryMode(true) */
+  lowMemory?: boolean | (() => boolean);
+  /** 检查编码器配置是否支持(单测注入桩,缺省查 globalThis.VideoEncoder.isConfigSupported) */
+  isConfigSupported?: (config: Record<string, unknown>) => Promise<{ supported?: boolean } | boolean>;
 }
 
 type TaskState = "todo" | "produced" | "have" | "elsewhere" | "failed";
@@ -240,9 +246,50 @@ export interface PageStreams {
 
 export function createPageStreams(deps: PageStreamsDeps): PageStreams {
   const passes: readonly PageStreamPass[] = deps.passes?.length ? deps.passes : PAGE_STREAM_PASSES;
-  const measureMaxMs = deps.measureMaxMs ?? MEASURE_SPARSE_MAX_MS, measureReadyMs = deps.measureReadyMs ?? MEASURE_READY_WAIT_MS;
+  const isLow = () => typeof deps.lowMemory === "function" ? deps.lowMemory() : deps.lowMemory !== undefined ? !!deps.lowMemory : lowMemoryMode(true);
   /** 这一趟是不是稀疏的(任务是稀疏流任务、先查不要求满密度) */
   const sparse = (pass: PageStreamPass) => pass.stride > 1;
+  const effectivePasses = (): readonly PageStreamPass[] => {
+    if (isLow()) {
+      const sp = passes.filter(sparse);
+      return sp.length ? sp : [{ name: "sparse", stride: STREAM_SEGMENT_FRAMES }];
+    }
+    return passes;
+  };
+  let consecutiveErrors = 0;
+  const checkEncoderSupported = async (spec: PageStreamSpec): Promise<boolean> => {
+    const w = spec.bound?.w || 640;
+    const h = spec.bound?.h || 360;
+    const fps = spec.fps || 30;
+    const size = packedSize(w, h);
+    const config = {
+      codec: avcCodecFor(size.width, size.height),
+      width: size.width,
+      height: size.height,
+      framerate: fps,
+      avc: { format: "avc" },
+      latencyMode: "quality",
+    };
+    if (typeof deps.isConfigSupported === "function") {
+      try {
+        const r = await deps.isConfigSupported(config);
+        return typeof r === "boolean" ? r : r?.supported === true;
+      } catch {
+        return false;
+      }
+    }
+    const ve = (globalThis as any).VideoEncoder;
+    if (typeof ve?.isConfigSupported === "function") {
+      try {
+        const r = await ve.isConfigSupported(config);
+        return typeof r === "boolean" ? r : r?.supported === true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+  const measureMaxMs = deps.measureMaxMs ?? MEASURE_SPARSE_MAX_MS, measureReadyMs = deps.measureReadyMs ?? MEASURE_READY_WAIT_MS;
   const waitMs = deps.waitMs ?? PAGE_STREAM_WAIT_MS, pollMs = deps.pollMs ?? PAGE_STREAM_POLL_MS;
   const recheckMs = deps.recheckMs ?? PAGE_STREAM_RECHECK_MS, rowsMs = deps.rowsMs ?? PAGE_STREAM_ROWS_MS;
   let ctx: Ctx | null = null;
@@ -367,7 +414,7 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
       c.skipped = got.skipped;
       c.project = got.project;
       c.rows = new Map(got.specs.map((spec) => [spec.streamKey, pageStreamRow(got.project, spec)]));
-      c.jobs = passes.flatMap((pass, passIndex) => jobsOf(c, got.specs, pass, passIndex));
+      c.jobs = effectivePasses().flatMap((pass, passIndex) => jobsOf(c, got.specs, pass, passIndex));
     } catch (e) {
       fail(e);
     } finally {
@@ -401,6 +448,7 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
         job.state = "produced";
         job.via = job.task.resultKey;
         counters.produced++;
+        consecutiveErrors = 0;
         alive(job.task.resultKey);
         // 这一段的清单进了内容库:马上核对一次层表里本页的那一行
         if (ctx === c) c.rowsAt = -Infinity;
@@ -414,9 +462,14 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
       }
       fail(e);
       job.fails++;
+      consecutiveErrors++;
       // 做不成:退避后再试,连着不成就放下这一段(这一版里)
-      if (job.fails >= PAGE_STREAM_ATTEMPTS || (e as { retryable?: boolean })?.retryable === false) { job.state = "failed"; counters.failed++; }
-      else job.retryAt = deps.now() + 2000 * job.fails;
+      if (job.fails >= PAGE_STREAM_ATTEMPTS || (e as { retryable?: boolean })?.retryable === false || (isLow() && consecutiveErrors >= 3)) {
+        job.state = "failed";
+        counters.failed++;
+      } else {
+        job.retryAt = deps.now() + 2000 * job.fails;
+      }
     }).finally(() => { if (run === r) run = null; });
   };
 
@@ -435,6 +488,19 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
       if (ctx !== c) return;
       if (found) { settle(c, job, found); if (found.own) await syncRows(c); return; }
       if (taken(c) || !deps.isIdle() || !deps.capable()) return;
+      if (isLow()) {
+        if (consecutiveErrors >= 3) {
+          job.state = "failed";
+          counters.failed++;
+          return;
+        }
+        const supported = await checkEncoderSupported(job.spec);
+        if (!supported) {
+          job.state = "failed";
+          counters.failed++;
+          return;
+        }
+      }
       // 开工前把这一行写进层表:别的页面(和本页的在线来源)据此找这条流的清单
       if (!c.mine.has(job.spec.streamKey)) { c.mine.add(job.spec.streamKey); await syncRows(c); }
       // 写的时候发现别人整条产好了(`syncRows` 把这条流从本页的名下拿掉了):不开工,下一拍先查会认它
@@ -482,7 +548,8 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
   /** 测量时这一张卡的稀疏那一趟:先查,没有才产。每一步之后看这一次还在不在等(到时了就不再往下做) */
   const runMeasure = async (m: Measuring): Promise<MeasureOutcome["result"]> => {
     const { req } = m;
-    const sparsePass = passes.findIndex(sparse);
+    const eff = effectivePasses();
+    const sparsePass = eff.findIndex(sparse);
     if (sparsePass < 0 || !req.clips.length) return "none";
     // 等本页当上节点(拿到指纹、探到编码器):最多 `measureReadyMs`,等不到这张卡归闲时
     const readyBy = deps.now() + measureReadyMs;
@@ -518,7 +585,7 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
     const fresh = got.specs.filter((spec) => wanted.has(spec.topClipId) && !known.has(spec.streamKey));
     for (const spec of fresh) { c.specs!.push(spec); c.rows.set(spec.streamKey, pageStreamRow(got.project, spec)); }
     const mine = new Set(got.specs.filter((spec) => wanted.has(spec.topClipId)).map((spec) => spec.streamKey));
-    c.jobs.push(...jobsOf(c, fresh, passes[sparsePass], sparsePass));
+    c.jobs.push(...jobsOf(c, fresh, eff[sparsePass], sparsePass));
     const jobs = c.jobs.filter((j) => mine.has(j.spec.streamKey) && j.state === "todo");
     if (!jobs.length) return c.jobs.some((j) => mine.has(j.spec.streamKey)) ? "ok" : "none";
     m.out.left = jobs.length;
@@ -540,6 +607,21 @@ export function createPageStreams(deps: PageStreamsDeps): PageStreams {
       // 写的时候发现别人整条产好了:这一段下一次先查会认它,这里不产
       if (!c.mine.has(job.spec.streamKey)) continue;
       if (run) return "busy";
+      if (isLow()) {
+        if (consecutiveErrors >= 3) {
+          job.state = "failed";
+          counters.failed++;
+          failed = true;
+          break;
+        }
+        const supported = await checkEncoderSupported(job.spec);
+        if (!supported) {
+          job.state = "failed";
+          counters.failed++;
+          failed = true;
+          break;
+        }
+      }
       await start(c, job);
       if (m.done) return "stopped";
       if (ctx !== c) return "interrupted";
