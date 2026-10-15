@@ -1,4 +1,3 @@
-import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 import { useCallback, useRef, useState } from "react";
 import { IconImport } from "../../ui/icons";
 import { KIND_LABEL, MEDIA_ACCEPT, importMediaFiles, type AssetKind } from "./importAssets";
@@ -34,7 +33,7 @@ export function LibrarySection() {
 
   const data: Record<string, GroupData> = { videos, images, music };
 
-  const importMedia = useCallback(() => { if (!onlinePage()) mediaInputRef.current?.click(); }, []);
+  const importMedia = useCallback(() => { mediaInputRef.current?.click(); }, []);
 
   const handleMediaFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -67,9 +66,7 @@ export function LibrarySection() {
           type="button"
           className="pc-btn-primary is-block pc-left-primary"
           data-pc-add="media"
-          // 在线浏览器模式:页面侧上传不在本期(C10 契约第 10 节),置灰、点了不发请求
-          disabled={onlinePage()}
-          title={onlinePage() ? onlineUnsupported("导入媒体") : "导入素材(视频 / 音频 / 图片,按类型自动归位)"}
+          title="导入素材(视频 / 音频 / 图片,按类型自动归位)"
           onClick={importMedia}
         >
           <IconImport size={16} />
