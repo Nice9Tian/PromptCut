@@ -157,7 +157,9 @@ Claude 主会话接手后合进 `main` 的（每块的验证数字和细节在 [
 
 2026-10-13 下午又清掉五条（本机、远端和两个工作区；清之前逐条核过，只在分支上的六份报告先收进了 `docs/archive/agent-reports/`）：`codex/018-cloud-assets-central-glue`（头 `ea298821`；36 个代码与测试文件里 21 个和 `main` 逐字相同、15 个是 `main` 更新更全）、`codex/018-agent-immediate-revoke`（头 `2d063550`；任务资源范围那一组已在 `main`，正常结束的关闭控制那一套被 `main` 上另一套做到底的办法取代，它自己的报告也写明不要并进 `main`；只测那一套的三个测试文件没留）、`codex/018-agent-real-runner`（头 `554f2d82`；只有一份交接设计，五条都已实现）、`claude/four-stage`（头 `bea0d881`；只有合并提交，文件和 `main` 的祖先完全相同）、`claude/cloud-agent-3`（头 `8fb6df79`；一个没有文件改动的提交，说明里的 `get_gif` 可视记录选型笔记已转录在 `docs/reports/HANDOFF-four-stage.md`，没转的只有半句：素材地址用 `src/editor/media/assetTiers.ts` 的 `remoteAssetBase()`、`assetAuthHeaders()` 取）。
 
-还留着的：`codex/018-missing-material-user-path`（内容已并进 `claude/v18-missing`，等那条分支进 `main` 以后清）；`codex/018-browser-doc-read`（三个提交，修的是强化版普通档浏览器探针回读项目全文时用错了项目编号；这支强化探针 10-09 已从 `main` 拿掉，`main` 上的普通档浏览器探针本来也卡在旧的邀请加入入口进不了项目；产品不受影响，要不要恢复这支探针交给验收运行器那一块判）。交接计划书第 5.4 节那几条不属于这次任务，不动。
+2026-10-16 用户授权清掉六处（清之前核过：工作区都没有未提交或未跟踪的文件，内容都已在 `main` 或是当初定了不合并的实验）：`claude/c10-integ`（头 `7c8ad867`，一个合并提交，两边都在 `main`）、`claude/c10-accept`（`9614df01`，只多一份 C10 本机验收报告，结果已在 `REPORT-C10.md` 第 5 节）、`claude/m7-probe-exp`（`1058b4ca`，M7 可行性实验，结论已进 `vite.config.ts`）、`codex/018-browser-doc-read`（`dcc51bc0`，修的强化探针 10-09 已从 `main` 拿掉）——这四条本机、远端和工作区都清了；`.worktrees/m7-integ`（没挂分支，停在 `f3a617b8`，合进来的内容都在 `main`）；`codex/c10-a5-timing`（`91857f6a`，只在本机，C10-A5 探针加严改造，自己的审核没过；补丁 `C10-A5.patch` 与 `A5-review.md` 还在 `C:\Users\admin\Documents\Codex\2026-10-08\task-2\`）。
+
+原先记在这里「还留着的」两条都已清：`codex/018-missing-material-user-path` 随「干净版」进了 `main` 后清掉（见 `render-refactor-progress.md`「分支去向」），`codex/018-browser-doc-read` 见上一段。交接计划书第 5.4 节剩下的几条（`claude/peaceful-meitner-ef78de`、Antigravity 的 `check_frontend_backend_separation`、`Doger`、`release`）不属于这次任务，不动。
 
 ## 没做到的与原因
 

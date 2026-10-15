@@ -74,8 +74,8 @@ VisuHive 推到 main 后，节点上的定时器每 5 分钟自动同步 `site/`
 
 | 名字 | 说明 |
 |---|---|
-| `claude/c10-accept`、`claude/c10-integ`、`claude/m7-probe-exp`（各带一个工作区） | 2026-09-28 的旧分支，各有几个提交没并入任何地方：验收报告、一次合并、几个实验。用户还没定去留，**不要删** |
-| `.worktrees/m7-integ`（没挂分支） | 有 3 个合并提交不在 main 里，同上 |
+| 〔已清，2026-10-16 用户授权〕`claude/c10-accept`、`claude/c10-integ`、`claude/m7-probe-exp`（各带一个工作区） | 2026-09-28 的旧分支。核过内容已在 main 或是不合并的实验，本机、远端和工作区都删了；去向见 `three-versions-progress.md`「分支去向」 |
+| 〔已清，同上〕`.worktrees/m7-integ`（没挂分支） | 3 个合并提交合进来的内容都已在 main，工作区已删 |
 | `check_frontend_backend_separation` | 工作区在 Antigravity 的目录下（`C:\Users\admin\.gemini\antigravity\worktrees\PromptCut\`），不归本任务管 |
 | 远端 `claude/peaceful-meitner-ef78de` | 会话信箱第二版的设计与实现，只在 GitHub 上。和本任务无关 |
 | 远端 `Doger` | 协作者的声音分支，内容已在集成分支里 |
