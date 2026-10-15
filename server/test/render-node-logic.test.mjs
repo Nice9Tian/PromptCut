@@ -556,15 +556,13 @@ test('B.4 splitPlan：resultKey 与 id 随环境指纹变化', () => {
   assert.equal(y.id, `snapshot:${y.resultKey}:0-59`);
 });
 
-test('B.4 splitPlan：没有 control.tier 时按 snapshotTier(capabilities) 定档；belowDependent 可取自 capabilities', () => {
-  // 没有 tier、没有 compositing 字段；capabilities 标了 needPrerendering 与 belowDependent → snapshotTier 给 local
+test('B.4 splitPlan：没有 control.tier 时按 snapshotTier(capabilities) 定档（现一律为 none，跳过切快照任务）', () => {
+  // 没有 tier；capabilities 标了 needPrerendering 与 belowDependent → snapshotTier 给 none，splitPlan 不切快照任务
   const c = control({ clipId: 'c', snapshotKey: 'skc', capabilities: { needPrerendering: true, compositing: 'belowDependent' }, count: 10, withTier: false });
-  const [t] = splitPlan(baseArgs({ cardPlan: [c] }));
-  assert.deepEqual(t, expectSnapshot({ ctl: c, tier: 'local', from: 0, to: 9, priority: 10 }));
-  assert.equal(t.requires.belowDependent, true);
-  // 没有 tier、stateful + independent → shared
+  assert.deepEqual(splitPlan(baseArgs({ cardPlan: [c] })), []);
+  // 没有 tier、stateful + independent → snapshotTier 给 none，同样不切快照任务
   const d = control({ clipId: 'd', snapshotKey: 'skd', capabilities: SHARED_CAPS, count: 10, withTier: false });
-  assert.equal(splitPlan(baseArgs({ cardPlan: [d] }))[0].tier, 'shared');
+  assert.deepEqual(splitPlan(baseArgs({ cardPlan: [d] })), []);
 });
 
 test('B.4 splitPlan：control.compositing 优先于 capabilities.compositing', () => {

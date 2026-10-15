@@ -555,29 +555,33 @@ export function splitPlan({
     const keying = keyingOf(lockKey);
     // 依赖下层的流:整场景渲,只出切分方自己的一份(下面 `browserStreamInputOf` 不认它,`browser` 恒为 null)
     const belowStream = stream.kind === 'below';
-    const weight = belowStream ? { ...weightOf(controlOf.get(topClipId) ?? { clipId: topClipId }), class: 'heavy' } : weightOf({ clipId: topClipId });
+    const weight = belowStream ? { ...weightOf(controlOf.get(topClipId) ?? { clipId: topClipId }), class: 'heavy' } : weightOf(controlOf.get(topClipId) ?? { clipId: topClipId });
     // 浏览器那一份(单卡流):成员卡照快照任务的规矩判做不做得了,requires 也照那张卡的快照任务写(只画这一张卡)
     const control = controlOf.get(topClipId) ?? null;
     const streamInput = control ? browserStreamInputOf(stream, control) : null;
     let browser = null;
     if (streamInput) {
-      const tier = control.tier ?? snapshotTier(control.capabilities);
-      const compositing = control.compositing ?? control.capabilities?.compositing;
-      const requires = gateLocalMedia({
-        envFingerprint: keying.fingerprint, codeVersion,
-        cardSources: ownCardSources(control),
-        transcode: false,
-        userCards: !!isUserCard(control),
-        graphCards: !!isGraphCard(control),
-        belowDependent: compositing === 'belowDependent',
-        capabilities: { streams: true },
-      }, control);
-      const cardWeight = cardWeightOf(control);
-      const plan = browserPlanOf({ tier, compositing, requires, weight: cardWeight, control });
-      if (plan.eligible) {
-        // 流的浏览器那一份不含切分方自己的指纹:同指纹时两份的任务 id 相同,而切分方那一份要本机转码
-        const copyFps = plan.copyFps.filter(fp => fp !== envFingerprint);
-        browser = { copyFps, browserOf: new Set(copyFps), requires, weight: cardWeight, compositing, control, input: streamInput };
+      const caps = control.capabilities ?? {};
+      const isStateful = control.tier === 'shared' || caps.frameMode === 'stateful' || caps.need_prerendering === true || caps.needPrerendering === true || control.needPrerendering === true;
+      if (isStateful) {
+        const tier = 'shared';
+        const compositing = control.compositing ?? caps.compositing;
+        const requires = gateLocalMedia({
+          envFingerprint: keying.fingerprint, codeVersion,
+          cardSources: ownCardSources(control),
+          transcode: false,
+          userCards: !!isUserCard(control),
+          graphCards: !!isGraphCard(control),
+          belowDependent: compositing === 'belowDependent',
+          capabilities: { streams: true },
+        }, control);
+        const cardWeight = cardWeightOf(control);
+        const plan = browserPlanOf({ tier, compositing, requires, weight: cardWeight, control });
+        if (plan.eligible) {
+          // 流的浏览器那一份不含切分方自己的指纹:同指纹时两份的任务 id 相同,而切分方那一份要本机转码
+          const copyFps = plan.copyFps.filter(fp => fp !== envFingerprint);
+          browser = { copyFps, browserOf: new Set(copyFps), requires, weight: cardWeight, compositing, control, input: streamInput };
+        }
       }
     }
     // 出哪几份:没锁(或锁在自己的指纹上且不接手)时切分方一份、浏览器各一份;锁在别处照锁只出一份

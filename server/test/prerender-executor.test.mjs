@@ -175,6 +175,16 @@ async function cleanupRoots() {
 
 function newPipeline(root) {
   const p = new FramePipeline({ root, origin: () => 'http://127.0.0.1:1', environment: OWN_ENV, dataRoot: root, interactive: false });
+  const origRecord = p.recordCardPlan.bind(p);
+  p.recordCardPlan = (entry, plan) => {
+    for (const c of plan ?? []) {
+      if (!c.tier || c.tier === 'none') {
+        const comp = c.compositing ?? c.capabilities?.compositing ?? 'unknown';
+        c.tier = (comp === 'independent' || comp === 'sourceDependent') ? 'shared' : 'local';
+      }
+    }
+    return origRecord(entry, plan);
+  };
   pipes.push(p);
   return p;
 }

@@ -1456,12 +1456,8 @@ export class FramePipeline {
     entry.html.set(n, html);
     for (const control of controls) {
       if (!entry.controls.has(control.id)) entry.controls.set(control.id, entry.createControl?.(control.id) || new Map());
-      // The control cache is intentionally addressed by the control's own
-      // local frame (the `t` used by the card), so it can be replayed without
-      // knowing the clip's global start time.
       entry.controls.get(control.id).set(control.frame, control.html);
     }
-    this.recordSnapshots(entry, controls, options);
   }
   /**
    * 队列模式(契约 J.5)下由队列细任务产快照的那些卡:共享档里可缓存的(隔离单卡渲)与本地档(整场景渲)。
@@ -1471,7 +1467,12 @@ export class FramePipeline {
   queueHandles(control) {
     if (!control?.snapshotKey || !control.clipId) return false;
     const tier = control.tier || snapshotTier(control.capabilities);
-    return tier === 'local' || (tier === 'shared' && control.cacheable === true);
+    if (tier === 'local' || (tier === 'shared' && control.cacheable === true)) return true;
+    if (tier === 'none') {
+      const comp = control.compositing ?? control.capabilities?.compositing;
+      return comp === 'belowDependent' || comp === 'unknown' || (comp === 'independent' && control.cacheable === true);
+    }
+    return false;
   }
   /** 这个 entry 的 card plan 里 `queueHandles` 为真的 clipId(按 plan 对象缓存) */
   queueHandledClips(entry) {
@@ -1775,21 +1776,20 @@ export class FramePipeline {
           try { await this.adoptForeignStreams(entry, this.pushQueue.content, this.pushQueue.client, { signal: controller.signal }); } catch {}
         }
         entry.stage = 'required';
-        // C2:**锚帧全部就绪前不开始其余后台预渲染**。
-        await this.fillAnchorSnapshots(entry, bakery, controller.signal);
-        // R8 / G4:锚帧就绪之后轨道流开始生产。它有自己的会话(`streamPool`),不占这条 lane,
+        if (!controller.signal.aborted) {
+          entry.anchorsReady = true;
+          this.ready.markDone(entry.key);
+        }
+        // R8 / G4:启动轨道流生产。它有自己的会话(`streamPool`),不占这条 lane,
         // 也不等它 —— 这里只是把这一版的流交给生产者
         if (!controller.signal.aborted) void this.streamProducer()?.update(entry).catch(() => {});
-        // J.5:队列模式下这两步的快照交给队列细任务(执行器 `renderCardSnapshotRange` / `renderSceneSnapshotRange`)。
-        // 每一步开始前现读 `entry.queueSnapshots`:中途连不上文档服务、退回本机时(`leaveQueueMode`),余下的步骤照常跑
-        const viaQueue = () => entry.queueSnapshots === true;
-        if (!viaQueue()) deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering), { share: true })) ?? []);
-        // C2 本地档那一趟:一趟整场景服务该帧上全部本地档卡(毛玻璃 / unknown)
-        if (!viaQueue()) await this.renderLocalSnapshots(entry, await this.missingSnapshotFrames(entry, { tiers: ['local'] }), bakery, controller.signal);
+        // 己二：保留 fillCardControls 中给旧整帧通道写 controls/<key> PNG/MOV 的那一支
+        deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering), { share: true })) ?? []);
+        // 己二：撤掉本地档快照趟 renderLocalSnapshots
         await this.fillRequiredScene(entry, bakery, controller.signal, cardPlan);
         if (this.playback?.playing) { entry.status = 'partial'; return; }
         entry.stage = 'direct';
-        if (!viaQueue()) deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering), { share: true })) ?? []);
+        deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering), { share: true })) ?? []);
         // `size === count` is not enough for a sparse archive: a foreground
         // request can contain exactly `count` entries while still missing one
         // frame and containing an out-of-range index.  C must only start after
@@ -1972,7 +1972,7 @@ export class FramePipeline {
    * - `PROMPTCUT_SMALL_TIER=0` 关掉(排查用)。
    */
   smallTierEnabled() {
-    return (!!this.pushQueue || this.smallTierForced === true) && process.env.PROMPTCUT_SMALL_TIER !== '0';
+    return false;
   }
   /**
    * 独立渲染主机(`vite-plugin-frames.ts` 的 `startHostNode`)没有推送队列,产物由各项目节点的 sink 推 —— 它也是渲染节点,
@@ -2366,22 +2366,6 @@ export class FramePipeline {
       const key = manifestKeyOf(job);
       if (kind && key && !jobs.has(`${kind}\u0000${key}`)) jobs.set(`${kind}\u0000${key}`, { ...job, manifestKind: kind, manifestKey: key });
     };
-    for (const control of entry.cardPlan ?? []) {
-      if (!control?.snapshotKey || !control.clipId) continue;
-      if (!this.prerenderPicked(entry, control.clipId)) continue;
-      const tier = control.tier || snapshotTier(control.capabilities);
-      if (tier !== 'shared' && tier !== 'local') continue;
-      const count = Number(control.count);
-      if (!Number.isInteger(count) || count < 1) continue;
-      let resultKey = control.snapshotKey;
-      const entryKey = tier === 'local' ? entry.key : null;
-      if (tier === 'local') {
-        const fp = control.envFingerprint ?? this.envFingerprint;
-        if (!entryKey || !fp) continue;
-        resultKey = resultKeyOf(`${entryKey}/${control.contentKey ?? control.snapshotKey}`, fp);
-      }
-      for (const [from, to] of spansOf(0, count - 1, PUSH_SNAPSHOT_SPAN)) add({ kind: 'snapshot', tier, resultKey, dirKey: control.snapshotKey, entryKey, range: { from, to } });
-    }
     const producer = this.streamProducer();
     if (producer?.enabled) {
       let specs = [];
@@ -2483,30 +2467,7 @@ export class FramePipeline {
   async rescanSnapshots() {
     // 契约 F.3:锁库先读完 —— 被别的环境锁定的卡,认领时认的是锁定方的键(`applyCardLocks`)
     await this.ensureCardLocks();
-    const store = this.snapshots();
-    const read = async target => {
-      try { return await store.snapshotIndex(target); } catch { return { count: 0, frames: [] }; }
-    };
-    const list = async dir => { try { return await fs.readdir(dir, { withFileTypes: true }); } catch { return []; } };
     let found = 0;
-    for (const item of await list(path.join(this.root, 'controls-html'))) {
-      if (!item.isDirectory()) continue;
-      const index = await read({ tier: 'shared', key: item.name });
-      if (!index.count) continue;
-      this.ready.stageByKey({ kind: 'html', key: item.name, ranges: index.frames });
-      found++;
-    }
-    for (const outer of await list(path.join(this.root, 'controls-local'))) {
-      if (!outer.isDirectory()) continue;
-      for (const item of await list(path.join(this.root, 'controls-local', outer.name))) {
-        if (!item.isDirectory()) continue;
-        const index = await read({ tier: 'local', entryKey: outer.name, key: item.name });
-        if (!index.count) continue;
-        // 本地档的线上 `key` 自带一个斜杠:`<entry.key>/<共享键>`(C3 / J3)
-        this.ready.stageByKey({ kind: 'local', key: `${outer.name}/${item.name}`, ranges: index.frames });
-        found++;
-      }
-    }
     try { found += (await this.streamProducer()?.rescan()) ?? 0; } catch {}
     return found;
   }
@@ -3342,12 +3303,11 @@ export class FramePipeline {
     await producer.produceRange(entry, spec, range, { signal, progress, density });
     return null;
   }
-  /** 细任务的重度(附件第 2 节):`canvasHeavy`、`belowDependent`、`unknown`、本地档记 `heavy`,其余 `medium` */
+  /** 细任务的重度(附件第 2 节):`canvasHeavy`、`belowDependent`、`context`、`unknown`、本地档记 `heavy`,其余 `medium` */
   queueWeightClass(control) {
     const caps = control?.capabilities ?? {};
     const compositing = control?.compositing ?? caps.compositing;
-    if ((control?.tier || snapshotTier(caps)) === 'local') return 'heavy';
-    if (caps.canvasHeavy === true || compositing === 'belowDependent' || compositing === 'unknown') return 'heavy';
+    if (control?.tier === 'local' || caps.canvasHeavy === true || control?.innerCanvasHeavy === true || compositing === 'belowDependent' || compositing === 'context' || compositing === 'unknown') return 'heavy';
     return 'medium';
   }
   /**

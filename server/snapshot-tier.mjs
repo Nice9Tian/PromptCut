@@ -22,11 +22,10 @@
  *           分派,判轻就活渲,判重用本地档快照,不上云、不进流);
  *   不预渲染:非 stateful 的轻卡(渲染 9:在所有位置都判轻的不产快照)。
  */
-export function snapshotTier(capabilities) {
-  const caps = capabilities ?? {};
-  const stateful = caps.frameMode === 'stateful' || caps.need_prerendering === true || caps.needPrerendering === true;
-  if (!stateful) return 'none';
-  const compositing = caps.compositing || 'unknown';
-  if (compositing === 'independent' || compositing === 'sourceDependent') return 'shared';
-  return 'local';
+/**
+ * 快照作废以后（2026-10-13 用户定：契约 prerender-products-contract.md 第 1.1 节第 32 行）
+ * 对所有卡一律返回 'none'。
+ */
+export function snapshotTier(_capabilities) {
+  return 'none';
 }

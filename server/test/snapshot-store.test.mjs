@@ -31,24 +31,18 @@ test('directory shape: shared is one level, local is two (entry key / shared key
   assert.throws(() => snapshotDir('R', { tier: 'none', key: 'K' }), /Unknown snapshot tier/);
 });
 
-test('tier follows the review table: independent/sourceDependent shared, every other stateful card local', () => {
+test('tier follows the contract: all cards return none (2026-10-13 契约 1.1 每张卡的 HTML 快照作废)', () => {
   const caps = (compositing, frameMode = 'stateful') => ({ compositing, frameMode });
-  assert.equal(snapshotTier(caps('independent')), 'shared');
-  assert.equal(snapshotTier(caps('sourceDependent')), 'shared');
-  // 毛玻璃:结果受下层影响,只能本地档、不上云。
-  assert.equal(snapshotTier(caps('belowDependent')), 'local');
-  assert.equal(snapshotTier(caps('context')), 'local');
-  // 计划 3.1(2):`unknown` 一律按下层依赖卡处理 —— 只有本地档、不上云、不进流。
-  // 真实项目里的定制卡和带部件的组合卡片段都是它,回 'none' 会让它们在播放和拖动时
-  // 整片消失(没有死素材可贴)。
-  assert.equal(snapshotTier(caps('unknown')), 'local');
-  assert.equal(snapshotTier(caps(undefined)), 'local');
-  // 渲染 9:在所有位置都判轻的(非 stateful)不产快照。
+  assert.equal(snapshotTier(caps('independent')), 'none');
+  assert.equal(snapshotTier(caps('sourceDependent')), 'none');
+  assert.equal(snapshotTier(caps('belowDependent')), 'none');
+  assert.equal(snapshotTier(caps('context')), 'none');
+  assert.equal(snapshotTier(caps('unknown')), 'none');
+  assert.equal(snapshotTier(caps(undefined)), 'none');
   assert.equal(snapshotTier(caps('independent', 'direct')), 'none');
   assert.equal(snapshotTier(caps('unknown', 'direct')), 'none');
-  // 显式声明要预渲染的卡照样算 stateful(审阅表两种写法都认)。
-  assert.equal(snapshotTier({ compositing: 'independent', need_prerendering: true }), 'shared');
-  assert.equal(snapshotTier({ compositing: 'belowDependent', needPrerendering: true }), 'local');
+  assert.equal(snapshotTier({ compositing: 'independent', need_prerendering: true }), 'none');
+  assert.equal(snapshotTier({ compositing: 'belowDependent', needPrerendering: true }), 'none');
   assert.equal(snapshotTier(undefined), 'none');
 });
 

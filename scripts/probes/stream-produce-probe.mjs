@@ -50,7 +50,7 @@ import { resultKeyOf } from '../../server/render-node/fingerprint.mjs';
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
-const origin = devOrigin(args);
+const origin = flagArg('port', null, args) ? `http://127.0.0.1:${flagArg('port', null, args)}` : devOrigin(args);
 const KEEP = args.includes('--keep');
 const GROUP = args.includes('--group');
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-stream-probe-${Date.now().toString(36)}`));
@@ -312,6 +312,9 @@ try {
     check(JSON.stringify(out.resegment.ranges) === JSON.stringify([[bg.spec.firstSegment, bg.spec.lastSegment]]), '重新生产第 5 段后索引区间不变', out.resegment);
     check(oldGone, '替换后旧文件删掉了(用时见 timings)', out.resegment);
   }
+  const checkExists = file => fs.access(file).then(() => true, () => false);
+  check(!(await checkExists(path.join(OUT, 'controls-html'))), '帧库下不再生成 controls-html 快照目录');
+  check(!(await checkExists(path.join(OUT, 'controls-local'))), '帧库下不再生成 controls-local 快照目录');
   // F5:同一个库根上重起一个 FramePipeline(模拟预渲染进程被杀后拉起)
   {
     const keys = [...producer.streams.keys()];

@@ -252,11 +252,8 @@ export interface PageCardPlanValue {
 }
 
 /** 与 `server/snapshot-tier.mjs` 的 `snapshotTier` 同一个式子 */
-function snapshotTier(caps: Record<string, any>): "none" | "shared" | "local" {
-  const stateful = caps.frameMode === "stateful" || caps.need_prerendering === true || caps.needPrerendering === true;
-  if (!stateful) return "none";
-  const compositing = caps.compositing || "unknown";
-  return compositing === "independent" || compositing === "sourceDependent" ? "shared" : "local";
+function snapshotTier(_caps: Record<string, any>): "none" | "shared" | "local" {
+  return "none";
 }
 
 /** 这一版里一张卡的计划(`CardFrameCache.plan` 的 control 里页面要用到的那几项) */
@@ -367,9 +364,11 @@ export function pageStreamBlock(control: PageControl, at: { clip: AnyClip; track
   if (control.compositing !== "independent") return "not-independent";
   if (frame3d(at.clip.frame)) return "frame-3d";
   if (!Number.isInteger(control.count) || control.count <= 0) return "no-frames";
-  // 浏览器做不做得了(`split.mjs` 的 `browserEligible`):共享档、不是画布卡(重度在这几条之下一定是 medium)
-  if (control.tier !== "shared") return "not-shared-tier";
-  if (control.capabilities?.canvasHeavy === true) return "canvas";
+  // 浏览器做不做得了(`split.mjs` 的 `browserEligible`):有状态/need_prerendering(轻卡不产流)、不是画布卡
+  const caps = control.capabilities ?? {};
+  const isStateful = caps.frameMode === "stateful" || caps.need_prerendering === true || caps.needPrerendering === true;
+  if (!isStateful) return "not-shared-tier";
+  if (caps.canvasHeavy === true) return "canvas";
   // 〔裁〕比切分方更紧的两条:只算页面自带的内置卡片;只算输出节点就是这张卡自己的片段
   if (control.node.adapter !== "chrome" || control.node.clipId !== control.clipId) return "wrapped-node";
   if (!control.cardId || !String(sourceVersions[control.cardId] ?? "").startsWith("builtin:")) return "not-builtin";

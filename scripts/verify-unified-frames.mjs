@@ -63,6 +63,8 @@ try {
   assert.equal(rastered.length, 10, 'C must raster every frame into frames/');
   assert.equal(await exists(path.join(entry.dir, 'preview.mp4')), false, 'preview.mp4 is no longer produced');
   assert.equal(await exists(path.join(entry.dir, 'mov', 'full.mov')), false, 'full-scene full.mov is no longer produced');
+  assert.equal(await exists(path.join(root, 'controls-html')), false, 'controls-html is no longer produced');
+  assert.equal(await exists(path.join(root, 'controls-local')), false, 'controls-local is no longer produced');
   // 导出页自己不知道要渲哪个项目,得经 ?timeline= 带进去(同 verify-export-frame-content.mjs);
   // 不带的话它渲的是页面默认项目,和这里的 320×180 对不上。
   const exportUrl = `${origin}/?export=1&timeline=${encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(project)))}`;

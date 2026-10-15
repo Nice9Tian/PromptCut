@@ -181,7 +181,8 @@ test('ST7 什么时候排:没配推送队列不排;配了就记下、等预渲�
   const args = { tier: 'shared', key: 'd'.repeat(64), clipId: 'c1', items: [{ localFrame: 0, html: html(0) }] };
   assert.equal(p.scheduleSmallSnapshots(args), false, '没配推送队列');
   p.pushQueue = { enqueue: async () => {} };
-  assert.equal(p.smallTierEnabled(), true);
+  assert.equal(p.smallTierEnabled(), false, '己二：小尺寸已停产，配了推送队列也默认为 false');
+  p.smallTierEnabled = () => true; // 单测下显式打开以测试排期逻辑
   assert.equal(p.scheduleSmallSnapshots(args), true, '记下来');
   assert.equal(p.smallPending.length, 1);
   assert.equal(p.scheduleSmallSnapshots({ ...args, adopted: true }), false, '拉来的帧');
@@ -194,9 +195,8 @@ test('ST7 什么时候排:没配推送队列不排;配了就记下、等预渲�
   await p.snapshots().commitSnapshots(args);
   assert.equal(bakeryCalls.length, calls, '一次 openBakery 都没有');
   p.smallPending = [];
-  const prev = process.env.PROMPTCUT_SMALL_TIER;
-  process.env.PROMPTCUT_SMALL_TIER = '0';
-  try { assert.equal(p.smallTierEnabled(), false); } finally { if (prev === undefined) delete process.env.PROMPTCUT_SMALL_TIER; else process.env.PROMPTCUT_SMALL_TIER = prev; }
+  p.smallTierEnabled = FramePipeline.prototype.smallTierEnabled;
+  assert.equal(p.smallTierEnabled(), false);
   p.pushQueue = null;
 });
 
@@ -293,6 +293,7 @@ const controlOf = (key, count) => ({ clipId: 'c1', snapshotKey: key, tier: 'shar
 /** 把管线接上一个假推送队列(打开小尺寸),再把画小位图换成直接写假 WebP(单测不开 Chrome) */
 function withSmallTier(p) {
   p.pushQueue = { enqueue: async () => {} };
+  p.smallTierEnabled = () => true;
   const drawn = [];
   p.writeSmallSnapshots = async (job) => {
     const dir = p.snapshots().dir({ tier: job.tier, entryKey: job.entryKey, key: job.key });
@@ -316,6 +317,7 @@ test('ST10 已有原尺寸、缺小尺寸的帧(先于推送队列渲的、画�
   assert.equal(await p.scheduleMissingSmall(entry, control, { from: 0, to: 59 }), 0, '没开小尺寸:不排');
   assert.equal(p.smallPending?.length ?? 0, 0);
   p.pushQueue = { enqueue: async () => {} };
+  p.smallTierEnabled = () => true;
   assert.equal(await p.scheduleMissingSmall(entry, control, { from: 0, to: 59 }), 5);
   assert.deepEqual(p.smallPending.flatMap((j) => j.items.map((i) => i.localFrame)), [0, 28, 29, 30, 31]);
   assert.equal(p.smallPending[0].items[0].html, html(0), '从帧库读回原 HTML');
@@ -371,6 +373,7 @@ test('ST12 sink:开着小尺寸时缺一张小尺寸就不算完成(put 回 inco
   assert.equal(T.smallComplete((await sink.put(ref)).result), false, '这份清单确实缺帧 0 的小尺寸');
   // 开着小尺寸:缺帧 0 的小尺寸 → 不算已有、不算完成(可重试),即使内容库里已有一份原尺寸齐的清单
   p.pushQueue = { enqueue: async () => {} };
+  p.smallTierEnabled = () => true;
   assert.ok(manifests.size, '内容库里已有上面那份(原尺寸齐、小尺寸缺)');
   assert.equal(await sink.has(ref), false);
   assert.equal(await sink.resultFor(ref), null);

@@ -830,11 +830,6 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   // M6c X1:能力与 PC 节点同一个判据(`streams` 按实报)
   let capabilities = await nodeCapabilities(service);
   if (services.get(root) !== service || (service as any).closed) return;
-  /*
-   * 主机也是渲染节点:产原尺寸时一并产预渲染小尺寸,两档都推(`product/rendering.md`「两档」、c10a 第 9 节)。主机没有推送队列,
-   * 小尺寸默认不开,要在这里打开 —— 不然它做完的段只有原尺寸,别的节点领到时只能补画小尺寸、不能去重(AGENT-xnode-dedup)。
-   */
-  (service as any).enableSmallTier?.();
 
   const { sharedProtocols }: any = await import("./auth/shared-config.mjs");
   const { createTicketSource }: any = await import("./auth/ticket-source.mjs");
@@ -1246,22 +1241,8 @@ async function backfillPush(service: FramePipeline, auto: AutoLink, done: Set<st
     if (done.has(entry.key) || !live.has(entry.key) || !Array.isArray(entry.cardPlan) || !entry.cardPlan.length) continue;
     if (entry.project?.id !== auto.contentId) continue;
     done.add(entry.key);
-    try { pipeline.publishLayerMap(entry); } catch { /* 层表写不了:推送照补 */ }
-    const store = pipeline.snapshots();
-    let segments = 0, frames = 0;
-    for (const control of entry.cardPlan) {
-      const tier = control?.tier || snapshotTier(control?.capabilities);
-      if ((tier !== "shared" && tier !== "local") || !control?.snapshotKey) continue;
-      let index: any;
-      try { index = await store.snapshotIndex({ tier, entryKey: entry.key, key: control.snapshotKey }); } catch { continue; }
-      const items: { localFrame: number }[] = [];
-      for (const [from, to] of index?.frames ?? []) for (let f = from; f <= to; f++) items.push({ localFrame: f });
-      if (!items.length) continue;
-      frames += items.length;
-      segments += pipeline.enqueueSnapshotPush({ tier, key: control.snapshotKey, entryKey: entry.key, items, capabilities: control.capabilities }) || 0;
-    }
-    queued += segments;
-    autoLog("render-node.backfill", { projectId: auto.projectId, entryKey: String(entry.key).slice(0, 12), controls: entry.cardPlan.length, frames, segments });
+    try { pipeline.publishLayerMap(entry); } catch { /* 层表写不了 */ }
+    autoLog("render-node.backfill", { projectId: auto.projectId, entryKey: String(entry.key).slice(0, 12), controls: entry.cardPlan.length, frames: 0, segments: 0 });
   }
   return queued;
 }
@@ -1578,53 +1559,7 @@ export function framesPlugin(): Plugin {
        * 这张卡随之锁定到页面的环境(卡片级指纹锁,契约 F.3),见下面 `acceptMeasuredSnapshot` 那一段。
        */
       if (req.method === "PUT" && url.pathname === "/snapshot") {
-        let probeBody = "", probeOver = false;
-        req.on("data", chunk => { if (!probeOver) { probeBody += chunk; probeOver = overLimit(req, res, probeBody.length, 32 * 1024 * 1024, "Probe snapshot too large"); } });
-        req.on("end", async () => {
-          if (probeOver) return;
-          try {
-            const input = JSON.parse(probeBody || "{}");
-            if (!isPrerender) {
-              // 编辑器进程只转发,不存 —— 快照库在预渲染进程那一侧
-              const remote = prerenderState();
-              if (!remote.ready || !remote.url) return json(503, { ok: false, code: "PRERENDER_UNAVAILABLE", error: "预渲染进程还没就绪" });
-              const forwarded = await fetch(remote.url + "/api/frames/snapshot", { method: "PUT", headers: { "Content-Type": "application/json" },
-                body: probeBody, signal: AbortSignal.timeout(10000) });
-              return json(forwarded.status, await forwarded.json().catch(() => ({ ok: forwarded.ok })));
-            }
-            const clipId = String(input.clipId || "");
-            const localFrame = Number(input.localFrame);
-            const html = typeof input.html === "string" ? input.html : null;
-            if (!clipId || !Number.isInteger(localFrame) || localFrame < 0 || html === null) throw new Error("探针帧要带 clipId / localFrame / html");
-            const version = await ensureMirrorVersion(String(input.session || ""), input.localRev);
-            if (!version) return json(409, { ok: false, code: "MIRROR_MISSING", retryable: true, error: "镜像里没有这一版项目" });
-            const entry = await service.entry(renderProject(version.project));
-            // 键从 card plan 反查(`control.clipId` ↔ `control.snapshotKey`)。plan 要
-            // 浏览器才算得出来,还没算过就先不存 —— 下一次预渲染自己会产这一帧。
-            const control = (entry.cardPlan || []).find((item: any) => item.clipId === clipId);
-            if (!control?.snapshotKey) return json(202, { ok: false, code: "PLAN_PENDING", stored: false, error: "card plan 还没算出来" });
-            const compositing = control.capabilities?.compositing;
-            const tier = snapshotTier(control.capabilities);
-            if (compositing !== "independent" || tier !== "shared") return json(200, { ok: true, stored: false, reason: "NOT_INDEPENDENT" });
-            /*
-             * 卡片级指纹锁(契约 F.3,取代 E.6 的指纹闸):测量帧产自用户的浏览器,写在**页面自己的
-             * 环境指纹**乘出来的键下,这张卡的共享快照随之锁定到页面的环境(「预渲染结果的复用」)。
-             * 页面指纹按页面上报的 `environment`(`src/editor/pageEnvironment.mjs`)用同一份
-             * `describeEnvironment` 算;没有 `environment` 就认字符串 `envFingerprint`;都没有传 null。
-             * 得锁、写盘、发层都在 `acceptMeasuredSnapshot` 里。页面(`probeRunner.ts`)只在意 404,回 200 不影响它。
-             */
-            let pageFingerprint: string | null = null;
-            const environment = input.environment;
-            if (environment && typeof environment === "object" && !Array.isArray(environment)) {
-              pageFingerprint = describeEnvironment({ platform: environment.platform, renderer: environment.renderer, vendor: environment.vendor,
-                chromeVersion: environment.userAgent ?? environment.chromeVersion }).fingerprint;
-            } else if (typeof input.envFingerprint === "string") pageFingerprint = input.envFingerprint;
-            return json(200, await service.acceptMeasuredSnapshot(entry, control, { envFingerprint: pageFingerprint, localFrame, html }));
-          } catch (error: any) {
-            json(400, { ok: false, code: "PROBE_SNAPSHOT_ERROR", error: error?.message || "探针帧没存下" });
-          }
-        });
-        return;
+        return json(200, { ok: true, stored: false, reason: "RETIRED" });
       }
       if (req.method !== "POST") return next();
       let body = "", over = false;

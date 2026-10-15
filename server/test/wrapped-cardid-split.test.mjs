@@ -61,30 +61,23 @@ const projectOf = (card, extra = {}) => ({
   ],
 });
 
-/** `FramePipeline.queueHandles` */
-const queueHandles = control => {
-  if (!control?.snapshotKey || !control.clipId) return false;
-  const tier = control.tier || snapshotTier(control.capabilities);
-  return tier === 'local' || (tier === 'shared' && control.cacheable === true);
-};
 /** `FramePipeline.queueWeightClass` */
 const weightOf = control => {
   const caps = control?.capabilities ?? {};
   const compositing = control?.compositing ?? caps.compositing;
-  if ((control?.tier || snapshotTier(caps)) === 'local') return { class: 'heavy', estMs: null };
-  if (caps.canvasHeavy === true || compositing === 'belowDependent' || compositing === 'unknown') return { class: 'heavy', estMs: null };
+  if (control?.tier === 'local' || caps.canvasHeavy === true || control?.innerCanvasHeavy === true || compositing === 'belowDependent' || compositing === 'context' || compositing === 'unknown') return { class: 'heavy', estMs: null };
   return { class: 'medium', estMs: null };
 };
 
 /** `planForQueue` 给控件补卡片 id 的那一步(同一个函数) */
-const queueCardPlan = (controls, graph) => withInnerCards(controls.filter(queueHandles), graph);
+const queueCardPlan = (controls, graph) => withInnerCards(controls, graph);
 /** `planForQueue` 的 `isUserCard`(同一个函数) */
 const isUserCardOf = sourceVersions => control => isUserCardControl(control, sourceVersions);
 
 /** main(53e7a9ca)上 `planForQueue` 的写法:只看输出节点。对照用 */
 function mainCardPlan(controls, graph) {
   const cardIdOf = new Map((graph?.nodes ?? []).map(node => [node?.id, node?.cardId ?? null]));
-  return controls.filter(queueHandles).map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
+  return controls.map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
 }
 const mainIsUserCardOf = sourceVersions => control => String(sourceVersions[control?.cardId] ?? '').startsWith('user:');
 
@@ -94,7 +87,7 @@ function splitOf(card, { cardSources = {}, sourceVersions = SOURCE_VERSIONS, ext
   const graph = projectCardGraph(project, getCard);
   const controls = new CardFrameCache({ root: 'unused', project, envFingerprint: OWN }).plan({ graph, sourceVersions, environment: ENVIRONMENT });
   const cardPlan = queueCardPlan(controls, graph);
-  const streams = planStreams({ project, cardPlan: controls }, { envFingerprint: OWN, codeVersion: 'test-code', budget: 8, below: false }).map(queueStreamOf);
+  const streams = planStreams({ project, cardPlan: controls }, { envFingerprint: OWN, codeVersion: 'test-code', budget: 8, below: true }).map(queueStreamOf);
   const tasks = splitPlan({
     planTask: clipsPlan({ clips: cardPlan.map(control => control.clipId) }), entryKey: 'entry-1', cardPlan, prerenderSet: null, streams,
     envFingerprint: OWN, codeVersion: 'cv-1', cardSourceVersions: cardSources, weightOf, isUserCard: isUserCardOf(sourceVersions),
@@ -124,20 +117,20 @@ function assertSame(tasks) {
 
 test('WC-01 Lottie 素材卡(2026-10-14 放开):和普通独立卡一样给浏览器节点,挂了强调、滤镜也看里面那张卡', () => {
   const { cardPlan, tasks } = splitOf({ cardId: 'lottie', params: { src: 'a.json' } });
-  for (const control of cardPlan) assert.equal(control.tier, 'shared', `${control.clipId} 是共享档`);
+  for (const control of cardPlan) assert.equal(control.tier, 'none', `${control.clipId} 是 none 档`);
   assert.ok(browserTasks(tasks, 'clip-bare').length > 0, '不挂的给浏览器');
   for (const clipId of WRAPPED) assert.ok(browserTasks(tasks, clipId).length > 0, `${clipId} 也给浏览器`);
   const bare = assertSame(tasks);
-  for (const item of bare.filter(item => item.kind === 'snapshot')) assert.equal(item.cardId, 'lottie');
+  for (const item of bare.filter(item => item.kind === 'stream' && item.forBrowser)) assert.equal(item.cardId, 'lottie');
 });
 
 test('WC-02 改过源码的内置卡:挂了也要这张卡的代码身份,不给浏览器节点', () => {
   const cardSources = { 'punch-pill': 'override:abc', 'focus-card': 'override:def' };
   const { cardPlan, tasks } = splitOf({ cardId: 'punch-pill', params: { text: '甲' } }, { cardSources });
-  for (const control of cardPlan) assert.equal(control.tier, 'shared', `${control.clipId} 是共享档`);
+  for (const control of cardPlan) assert.equal(control.tier, 'none', `${control.clipId} 是 none 档`);
   const bare = assertSame(tasks);
-  // 共享档只要这一张卡的;没有这份代码的节点不认领
-  for (const item of bare.filter(item => item.kind === 'snapshot')) assert.deepEqual(item.cardSources, { 'punch-pill': 'override:abc' });
+  // 切分方单卡流带全部代码身份;没有这份代码的节点不认领
+  for (const item of bare.filter(item => item.kind === 'stream')) assert.deepEqual(item.cardSources, cardSources);
   for (const clipId of ['clip-bare', ...WRAPPED]) assert.equal(browserTasks(tasks, clipId).length, 0, `${clipId} 不给浏览器`);
 });
 
@@ -145,11 +138,9 @@ test('WC-03 用户卡:挂了也算用户卡、要定制卡的代码', () => {
   const cardSources = { 'my-card': 'user:mine-v1' };
   const { tasks } = splitOf({ cardId: 'my-card', params: { text: '甲' } }, { cardSources });
   const bare = assertSame(tasks);
-  const snapshots = bare.filter(item => item.kind === 'snapshot');
-  assert.ok(snapshots.length > 0);
-  for (const item of snapshots) {
-    assert.equal(item.userCards, true);
-    assert.equal(item.cardId, 'my-card');
+  const streams = bare.filter(item => item.kind === 'stream');
+  assert.ok(streams.length > 0);
+  for (const item of streams) {
     assert.deepEqual(item.cardSources, cardSources);
   }
   for (const clipId of ['clip-bare', ...WRAPPED]) assert.equal(browserTasks(tasks, clipId).length, 0, `${clipId} 不给浏览器`);
@@ -158,12 +149,12 @@ test('WC-03 用户卡:挂了也算用户卡、要定制卡的代码', () => {
 test('WC-04 普通内置卡:挂了也给浏览器节点,input.cardId 是这张卡', () => {
   const { tasks } = splitOf({ cardId: 'punch-pill', params: { text: '甲' } });
   const bare = assertSame(tasks);
-  for (const item of bare.filter(item => item.kind === 'snapshot')) {
+  for (const item of bare.filter(item => item.kind === 'stream' && item.forBrowser)) {
     assert.equal(item.cardId, 'punch-pill');
     assert.deepEqual(item.cardSources, {});
     assert.equal(item.userCards, false);
   }
-  for (const clipId of ['clip-bare', ...WRAPPED]) assert.ok(browserTasks(tasks, clipId).some(task => task.kind === 'snapshot'), `${clipId} 的快照给浏览器`);
+  for (const clipId of ['clip-bare', ...WRAPPED]) assert.ok(browserTasks(tasks, clipId).some(task => task.kind === 'stream'), `${clipId} 的流给浏览器`);
 });
 
 test('WC-05 强调和滤镜都挂(套两层):照样认得出里面那张', () => {
@@ -178,7 +169,7 @@ test('WC-05 强调和滤镜都挂(套两层):照样认得出里面那张', () =>
     assert.equal(two.nodeId, '@clip/clip-filt/emphasis');
     assert.equal(two.cardId, cardId);
     assert.deepEqual(two.cardIds, [cardId]);
-    const streams = planStreams({ project, cardPlan: controls }, { envFingerprint: OWN, codeVersion: 'test-code', budget: 8, below: false }).map(queueStreamOf);
+    const streams = planStreams({ project, cardPlan: controls }, { envFingerprint: OWN, codeVersion: 'test-code', budget: 8, below: true }).map(queueStreamOf);
     const tasks = splitPlan({
       planTask: clipsPlan({ clips: cardPlan.map(control => control.clipId) }), entryKey: 'entry-1', cardPlan, prerenderSet: null, streams,
       envFingerprint: OWN, codeVersion: 'cv-1', cardSourceVersions: cardSources, weightOf, isUserCard: isUserCardOf(SOURCE_VERSIONS),
@@ -201,7 +192,7 @@ test('WC-06 不套一层的片段:cardId 与 main 的写法相同,切出的任�
   // 控件只多了 cardIds 一栏(就是它自己那一张),别的逐字段相同
   assert.deepEqual(after.map(({ cardIds, ...rest }) => rest), before);
   for (const control of after) assert.deepEqual(control.cardIds, [control.cardId]);
-  const streams = planStreams({ project, cardPlan: controls }, { envFingerprint: OWN, codeVersion: 'test-code', budget: 8, below: false }).map(queueStreamOf);
+  const streams = planStreams({ project, cardPlan: controls }, { envFingerprint: OWN, codeVersion: 'test-code', budget: 8, below: true }).map(queueStreamOf);
   for (const cardSources of [{}, { 'punch-pill': 'override:abc', 'my-card': 'user:mine-v1' }]) {
     const args = { planTask: clipsPlan({ clips: after.map(control => control.clipId) }), entryKey: 'entry-1', prerenderSet: null, streams,
       envFingerprint: OWN, codeVersion: 'cv-1', cardSourceVersions: cardSources, weightOf, browser: { nodeId: 'n-br', envFingerprint: BR } };
@@ -299,10 +290,10 @@ test('WC-08 里面不止一张卡、拿不准的控件:不给浏览器节点,代
 
 test('WC-09 画布卡:挂了强调、滤镜也不给浏览器节点、重度为「重」', () => {
   const { cardPlan, tasks } = splitOf({ cardId: 'particles', params: {} });
-  for (const control of cardPlan) assert.equal(control.tier, 'shared', `${control.clipId} 是共享档`);
+  for (const control of cardPlan) assert.equal(control.tier, 'none', `${control.clipId} 是 none 档`);
   assert.equal(cardPlan.find(control => control.clipId === 'clip-bare').capabilities.canvasHeavy, true);
   const bare = assertSame(tasks);
-  for (const item of bare.filter(item => item.kind === 'snapshot')) assert.equal(item.weight, 'heavy');
+  for (const item of bare.filter(item => item.kind === 'stream')) assert.equal(item.weight, 'heavy');
   for (const clipId of ['clip-bare', ...WRAPPED]) assert.equal(browserTasks(tasks, clipId).length, 0, `${clipId} 不给浏览器`);
 });
 

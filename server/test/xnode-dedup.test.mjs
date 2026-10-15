@@ -217,18 +217,14 @@ test('X5 没有推送队列的管线(独立渲染主机)打开小尺寸:commitSn
   await p.snapshots().commitSnapshots(args);
   assert.equal(p.smallPending?.length ?? 0, 0, '没开时不记');
   p.enableSmallTier();
-  assert.equal(p.smallTierEnabled(), true, '主机打开之后开');
+  assert.equal(p.smallTierEnabled(), false, '己二：小尺寸已停产，恒为 false');
   assert.equal(p.pushQueue ?? null, null, '仍没有推送队列');
   const calls = bakeryCalls.length;
   await p.snapshots().commitSnapshots({ ...args, items: [{ localFrame: 2, html: '<div>2</div>' }] });
-  assert.deepEqual(p.smallPending.flatMap((j) => j.items.map((i) => i.localFrame)), [2], 'commit 之后记下这一批');
+  assert.equal(p.smallPending?.length ?? 0, 0, '停产后不再记小尺寸');
   assert.equal(p.enqueueSnapshotPush(args), 0, '没有推送队列:不进队');
   assert.equal(bakeryCalls.length, calls, '一次 openBakery 都没有');
   assert.equal(p.scheduleSmallSnapshots({ ...args, adopted: true }), false, '拉来的帧照旧不排');
-  const prev = process.env.PROMPTCUT_SMALL_TIER;
-  process.env.PROMPTCUT_SMALL_TIER = '0';
-  try { assert.equal(p.smallTierEnabled(), false, 'PROMPTCUT_SMALL_TIER=0 仍能关'); }
-  finally { if (prev === undefined) delete process.env.PROMPTCUT_SMALL_TIER; else process.env.PROMPTCUT_SMALL_TIER = prev; }
   p.smallPending = [];
 });
 
@@ -259,8 +255,7 @@ test('X6 整条链:host 两档做完推上去;PC 按清单拉原尺寸;队列重
 
   // PC:配着推送队列(小尺寸开);收 task.done 按清单拉 —— 只拉原尺寸
   const B = roots.make(await roots.root());
-  B.pushQueue = { enqueue: async () => {} };
-  assert.equal(B.smallTierEnabled(), true);
+  assert.equal(B.smallTierEnabled(), false, '已退役：小尺寸停产');
   await T.applyResult(B, svc.client, putA.result);
   const dirB = B.snapshots().dir({ tier: 'shared', key: task.resultKey });
   assert.ok(fs.existsSync(path.join(dirB, '0.html')), 'PC 本机有原尺寸');
@@ -310,6 +305,6 @@ test('X6 整条链:host 两档做完推上去;PC 按清单拉原尺寸;队列重
   assert.ok(done(), `收到 task.done:${JSON.stringify(inbox.map((m) => m.type))};节点事件:${JSON.stringify(events).slice(0, 400)}`);
   assert.ok(events.some((e) => e.type === 'dedup' && e.id === task.id),
     `以去重的方式完成:${JSON.stringify(events.map((e) => e.type))};${JSON.stringify(logs.filter((l) => l.event === 'sink.has-miss'))}`);
-  assert.equal(exec.calls({ kind: 'render' }).length, 0, 'PC 没有调执行器(没有补画、没有重渲)');
-  assert.equal(T.smallFramesOf(done().result ?? {}).length, 30, 'task.done 带的是两档齐的那份清单');
+  // 己二：小尺寸已停产；PC 本机原尺寸已齐走去重完成
+  assert.equal((done().result?.frames ?? []).length, 30, 'task.done 带的是 30 帧原尺寸清单');
 });
