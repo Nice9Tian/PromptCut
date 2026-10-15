@@ -64,10 +64,11 @@
 | 修 `FrameScene.tsx` Agent `see_frames`/开窗抽帧早一帧（`push-draw-probe` ahead=0）；查清并根除 `bake.mjs` 导出成片开头 36 帧偶发差一帧（`warmUpAt` 唤醒 Chromium rAF，连导 3 遍与 `A-89c15177` 240/240 逐字节相同）；画布卡产流缺省改为一律直取像素（`always`） | `69d791ed` |
 | 所有舞台一律跨源隔离（撤掉在线浏览器退回同源单舞台的路）+ 桌面版舞台锁死（`prerender-gate.mjs` 拦截舞台调预渲染控制/渲染接口、只放行流与快照字节只读拉取；`stage-gate.mjs` 按哈希读素材只许读当前项目 `project.media`） | `f83500d2`、`987de00c` |
 | 「生成轨道流」关着时托管方渲染节点什么都不产（稀疏版和满密度版都不产）；VisuHive 去掉默认管理员硬编码（只认 `ACCOUNT_ADMINS` 配置）并新增 `render_streams` 权限分组与后台管理页，PromptCut 接入权限分组校验、无权限时开关置灰并提示「你的账号没有开启这一项的权限，请联系托管方。」 | `8a41fcd3`（VisuHive 本地 `main` `c4553cd`） |
+| 放开在线浏览器导入媒体：浏览器内用 WebCodecs + `mp4Mux` 转出视频小尺寸 MP4（不支持或解码失败时优雅降级只传原尺寸），经在线上传队列按「所有小尺寸先传、再传原尺寸」分片上传到素材服务 | `cf8f3e1c` |
 
 ## 在分支上、没合入的
 
-当前无未合入分支（前四路 `rr-sem-1014`、`rr-mobile-lowmem`、`rr-frame-bake3d`、`rr-stage-export-media`、`rr-stream-sched` 均已过完主会话闸门合进 `main` 并清掉工作区与分支）。
+正在并行推进 `gemini/rr-motion-preempt`（`motion` 式卡 30s 拆分 + 强设备抢弱设备 + 拖动保活）与 `gemini/rr-bake3d-stream`（3D 视图播放取轨道流贴图随时间动 + 暂停当场渲精确帧 + 3D 模式轻卡产流 + `bake_card` PNG 快照说明）。
 
 ## 接下来（照 `handoff-render-018.md` 第 2 节与 `user-decisions-2026-10-14.md` 第 2 节）
 

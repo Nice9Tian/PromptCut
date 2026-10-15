@@ -10,6 +10,7 @@ import { prerenderBase } from "../../render/prerender";
 import { exportGate } from "../media/assetTiers";
 import { awaitingUploaderMessage } from "../../render/mediaTier";
 import { parseExportSkipped, type ExportSkipped } from "./exportSkipped";
+import { holdOnlineQueueOriginals } from "../../online/mediaUploadQueue";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
@@ -43,56 +44,61 @@ export function registerMediaFile(id: string, file: File): void {
  * pending,片段已经在时间轴上、素材层先画「上传中」占位,传完自动出画。
  */
 export async function importVideoFiles(files: FileList | File[]): Promise<string[]> {
-  const fileArray = Array.from(files);
-  const mediaIds: string[] = [];
-  let cursor = getState().t;
+  const releaseHold = holdOnlineQueueOriginals();
+  try {
+    const fileArray = Array.from(files);
+    const mediaIds: string[] = [];
+    let cursor = getState().t;
 
-  for (const file of fileArray) {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.muted = true;
-    video.style.display = "none";
-    document.body.appendChild(video);
+    for (const file of fileArray) {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.muted = true;
+      video.style.display = "none";
+      document.body.appendChild(video);
 
-    const { duration, videoWidth, videoHeight } = await new Promise<{ duration: number; videoWidth: number; videoHeight: number }>((resolve) => {
-      video.onloadedmetadata = () => {
-        resolve({ duration: video.duration, videoWidth: video.videoWidth, videoHeight: video.videoHeight });
-      };
-      video.onerror = () => {
-        console.warn(`[io] 探测视频失败: ${file.name}`);
-        resolve({ duration: 5, videoWidth: 1920, videoHeight: 1080 });
-      };
-      video.src = url;
-    });
+      const { duration, videoWidth, videoHeight } = await new Promise<{ duration: number; videoWidth: number; videoHeight: number }>((resolve) => {
+        video.onloadedmetadata = () => {
+          resolve({ duration: video.duration, videoWidth: video.videoWidth, videoHeight: video.videoHeight });
+        };
+        video.onerror = () => {
+          console.warn(`[io] 探测视频失败: ${file.name}`);
+          resolve({ duration: 5, videoWidth: 1920, videoHeight: 1080 });
+        };
+        video.src = url;
+      });
 
-    document.body.removeChild(video);
-    URL.revokeObjectURL(url);
+      document.body.removeChild(video);
+      URL.revokeObjectURL(url);
 
-    const media = actions.addMedia({
-      kind: "video",
-      name: file.name,
-      url: "",
-      pending: true,
-      duration,
-      width: videoWidth,
-      height: videoHeight,
-    });
+      const media = actions.addMedia({
+        kind: "video",
+        name: file.name,
+        url: "",
+        pending: true,
+        duration,
+        width: videoWidth,
+        height: videoHeight,
+      });
 
-    mediaFiles.set(media.id, file);
-    mediaIds.push(media.id);
+      mediaFiles.set(media.id, file);
+      mediaIds.push(media.id);
 
-    const clip = actions.addMediaClip(media.id, cursor);
-    if (clip) {
-      cursor = clip.end;
-    } else {
-      console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
+      const clip = actions.addMediaClip(media.id, cursor);
+      if (clip) {
+        cursor = clip.end;
+      } else {
+        console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
+      }
+
+      applyUploadedMedia(media.id, await uploadMediaFile(file));
     }
 
-    applyUploadedMedia(media.id, await uploadMediaFile(file));
+    return mediaIds;
+  } finally {
+    releaseHold();
   }
-
-  return mediaIds;
 }
 
 /**
