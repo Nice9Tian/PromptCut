@@ -51,8 +51,9 @@ export const STAGE_ALLOW = [
   { methods: READ, prefix: "/@media/", who: "舞台里的 <video>、<img>、音频图卡、素材效果卡", why: "本机内容库里的素材字节(按哈希或文件名,分段取);含 `/@media/<哈希>/pcm`" },
   { methods: READ, exact: "/api/media/file", who: "舞台里的 <video>、<img>", why: "迁移期的老项目按路径取素材;接口自己只给素材目录里的文件" },
   { methods: READ, prefix: "/catalog/", who: "Lottie 卡、粒子卡", why: "动效素材目录里登记过的 JSON(接口只认登记过的名字)" },
-  // —— 一条只读接口 ——
+  // —— 两条只读接口 ——
   { methods: READ, exact: "/api/cards/scopes", who: "舞台里的卡片注册表", why: "定制卡的归属表(哪张卡属于哪个项目),只读;改档位的 POST 不放行" },
+  { methods: READ, exact: "/api/prerender/info", who: "舞台里取生成快照与轨道流的那一层", why: "问预渲染进程在哪个端口,只读(预渲染进程侧由 prerender-gate 拦死除流与快照字节外的一切请求)" },
 ];
 
 /** 匹配 /@media/<hash>、/@media/<hash>.<ext>、/@media/<hash>/pcm */

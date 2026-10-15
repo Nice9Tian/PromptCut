@@ -5,9 +5,27 @@
  * 1. 凡是来自舞台的请求（Origin、Referer 带舞台端口或舞台源，或带 x-pc-stage-client 头）一律 403 拒掉。
  * 2. 凡是跨源请求（Origin 存在且不在 PROMPTCUT_CORS_ORIGINS 中），若没有合法内部 token（x-pc-internal-token === PROMPTCUT_INTERNAL_TOKEN）一律 403 拒掉。
  */
+import { apiPath } from "./http-guard.mjs";
 import { stagePortsOf } from "./stage-ports.mjs";
 
 export const PRERENDER_DENY_BODY = JSON.stringify({ ok: false, error: "舞台或未经授权的跨源请求禁止访问预渲染接口" });
+
+/** 舞台唯二允许向预渲染进程只读拉取的字节前缀（轨道流与快照字节） */
+const STAGE_PRERENDER_READ_PREFIXES = ["/api/frames/stream/", "/api/frames/snapshot/"];
+
+function sneaky(rawPath) {
+  return /(^|\/)\.\.(\/|$)/.test(rawPath) || /\\|%2e|%2f|%5c|%00/i.test(rawPath);
+}
+
+function isStageReadStreamOrSnapshot(req) {
+  const m = String(req.method || "GET").toUpperCase();
+  if (m !== "GET" && m !== "HEAD") return false;
+  const raw = String(req.url || "/");
+  const rawPath = raw.split("?")[0];
+  if (!rawPath.startsWith("/") || sneaky(rawPath)) return false;
+  const p = apiPath(raw);
+  return STAGE_PRERENDER_READ_PREFIXES.some((prefix) => p.startsWith(prefix));
+}
 
 /**
  * 获取当前配置的舞台端口集合
@@ -33,6 +51,7 @@ export function getStagePorts() {
 export function isPrerenderRequestAllowed(req) {
   // 1. 带有舞台代理客户端标记头
   if (req.headers && req.headers["x-pc-stage-client"] !== undefined) {
+    if (isStageReadStreamOrSnapshot(req)) return { ok: true };
     return { ok: false, reason: "stage-client-header" };
   }
 
@@ -40,12 +59,15 @@ export function isPrerenderRequestAllowed(req) {
   const origin = typeof req.headers?.origin === "string" ? req.headers.origin.trim() : null;
   const referer = typeof req.headers?.referer === "string" ? req.headers.referer.trim() : null;
 
-  // 2. 检查 Origin 是否为舞台端口
+  // 2. 检查 Origin 是否为舞台端口（舞台只许 GET/HEAD 拉取 /api/frames/stream/* 与 /api/frames/snapshot/* 字节，其余接口一律 403）
   if (origin) {
     try {
       const u = new URL(origin);
       const port = Number(u.port);
-      if (port && stagePorts.has(port)) return { ok: false, reason: "stage-origin" };
+      if (port && stagePorts.has(port)) {
+        if (isStageReadStreamOrSnapshot(req)) return { ok: true };
+        return { ok: false, reason: "stage-origin" };
+      }
     } catch { /* 非合法 URL 在后续跨源判断中拦截 */ }
   }
 
@@ -54,18 +76,25 @@ export function isPrerenderRequestAllowed(req) {
     try {
       const u = new URL(referer);
       const port = Number(u.port);
-      if (port && stagePorts.has(port)) return { ok: false, reason: "stage-referer" };
+      if (port && stagePorts.has(port)) {
+        if (isStageReadStreamOrSnapshot(req)) return { ok: true };
+        return { ok: false, reason: "stage-referer" };
+      }
     } catch { /* 忽略格式异常 */ }
   }
 
-  // 4. 检查跨源请求与内部 token
+  // 4. 检查跨源请求与内部 token（放行预渲染进程自己的同源请求，如无头 Chrome 加载 /?export=1 的模块）
   if (origin) {
-    const allowedOrigins = new Set(String(process.env.PROMPTCUT_CORS_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean));
-    if (!allowedOrigins.has(origin)) {
-      const token = req.headers?.["x-pc-internal-token"];
-      const internalToken = process.env.PROMPTCUT_INTERNAL_TOKEN;
-      if (!internalToken || token !== internalToken) {
-        return { ok: false, reason: "cross-origin-no-token" };
+    const host = typeof req.headers?.host === "string" ? req.headers.host.trim() : "";
+    const isSameOrigin = host && (origin === `http://${host}` || origin === `https://${host}`);
+    if (!isSameOrigin) {
+      const allowedOrigins = new Set(String(process.env.PROMPTCUT_CORS_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean));
+      if (!allowedOrigins.has(origin)) {
+        const token = req.headers?.["x-pc-internal-token"];
+        const internalToken = process.env.PROMPTCUT_INTERNAL_TOKEN;
+        if (!internalToken || token !== internalToken) {
+          return { ok: false, reason: "cross-origin-no-token" };
+        }
       }
     }
   }
