@@ -38,6 +38,17 @@ import { pickCandidate } from './pick.mjs';
 
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
+/** 设备等级：桌面版 (3) > 托管方渲染服务且支持流 (2) > 浏览器 / 其它 (1) */
+export function deviceRank(node) {
+  if (!node) return 0;
+  if (node.profile === 'pc') return 3;
+  if (node.profile === 'host') {
+    return node.capabilities?.streams ? 2 : 1;
+  }
+  if (node.profile === 'browser') return 1;
+  return 1;
+}
+
 export function createNodeSession({
   nodeId,
   node,
@@ -61,6 +72,8 @@ export function createNodeSession({
   const settings = { ...QUEUE_DEFAULTS, ...constants };
   /** 本地看到的 open 任务:id → TaskView */
   let open = new Map();
+  /** 在飞的流任务(被别的节点认领中):id → { id, version, holderProfile, holderRank, density } */
+  let inFlightStreams = new Map();
   /** 持有的认领:id → { id, token, lastSentAt, done, step, projectId } */
   const holds = new Map();
   /** 在飞的认领:{ id, projectId } | null */
@@ -101,6 +114,7 @@ export function createNodeSession({
     }
     // 旧连接上在飞的认领和本地视图都作废:回包不会再来,视图等新的 queue.snapshot
     open = new Map();
+    inFlightStreams.clear();
     inflight = null;
     yielding = null;
     // 限流挂在队列的连接上,新连接不带着旧连接的退避(契约 I.10 第 6 条)
@@ -119,6 +133,7 @@ export function createNodeSession({
     if (inflight?.id === id) inflight = null;
     const task = message.task ?? open.get(id) ?? null;
     open.delete(id);
+    inFlightStreams.delete(id);
     if (yielding && yielding.id === id) {
       const { reason } = yielding;
       yielding = null;
@@ -151,6 +166,8 @@ export function createNodeSession({
     if (reason === 'stale') {
       const task = open.get(id);
       if (task && Number.isInteger(message.version)) open.set(id, { ...task, version: message.version });
+      const streamItem = inFlightStreams.get(id);
+      if (streamItem && Number.isInteger(message.version)) streamItem.version = message.version;
       return;
     }
     if (reason === 'preferred' || reason === 'retry-backoff') {
@@ -166,6 +183,7 @@ export function createNodeSession({
     // card-locked(契约 F.2):这张卡的锁在别的指纹上,本节点的指纹做不了,按 taken 丢掉候选、
     // 不重试;任务在队列里仍是 open,只有队列再发 task.opened / queue.snapshot 时才会回到视图
     open.delete(id);
+    inFlightStreams.delete(id);
   }
 
   /**
@@ -210,14 +228,46 @@ export function createNodeSession({
       }
       case 'queue.snapshot':
         open = new Map((message.tasks ?? []).filter(task => task?.id != null).map(task => [task.id, task]));
+        inFlightStreams.clear();
+        if (Array.isArray(message.claimedStreams)) {
+          for (const s of message.claimedStreams) {
+            if (s?.id) {
+              inFlightStreams.set(s.id, {
+                id: s.id,
+                version: Number.isInteger(s.version) ? s.version : 1,
+                holderProfile: s.holderProfile ?? null,
+                holderRank: Number.isInteger(s.holderRank) ? s.holderRank : 1,
+                density: s.density ?? (s.id.endsWith(':sparse') ? 'sparse' : null),
+              });
+            }
+          }
+        }
         break;
       case 'task.opened':
-        if (message.task?.id != null) open.set(message.task.id, message.task);
+        if (message.task?.id != null) {
+          open.set(message.task.id, message.task);
+          inFlightStreams.delete(message.task.id);
+        }
         break;
       case 'task.taken':
+        open.delete(message.id);
+        if (typeof message.id === 'string' && message.id.startsWith('stream:')) {
+          const rank = Number.isInteger(message.holderRank)
+            ? message.holderRank
+            : (message.holderProfile === 'pc' ? 3 : message.holderProfile === 'host' ? 2 : 1);
+          inFlightStreams.set(message.id, {
+            id: message.id,
+            version: Number.isInteger(message.version) ? message.version : 1,
+            holderProfile: message.holderProfile ?? null,
+            holderRank: rank,
+            density: message.density ?? (message.id.endsWith(':sparse') ? 'sparse' : null),
+          });
+        }
+        break;
       case 'task.closed':
         // 包括 `state: 'hidden'`(契约 I.6):队列的指纹前置过滤不再让本节点看见它,和别的 closed 一样移除
         open.delete(message.id);
+        inFlightStreams.delete(message.id);
         break;
       case 'task.claimed':
         onClaimed(message);
@@ -259,13 +309,41 @@ export function createNodeSession({
     const candidates = filterClaimable(known0().filter(task => !holds.has(task.id) && !deferred.has(task.id)), filterNode())
       .filter(task => { try { return canClaim(task, { held }) !== false; } catch { return false; } });
     const task = pickCandidate(candidates, { k: settings.PICK_K, random, lastProjectId });
-    if (!task) return;
-    inflight = { id: task.id, projectId: task.source?.projectId ?? null };
-    try {
-      send({ type: 'task.claim', id: task.id, expectVersion: task.version });
-    } catch (error) {
-      if (inflight?.id === task.id) inflight = null;
-      throw error;
+    if (task) {
+      inflight = { id: task.id, projectId: task.source?.projectId ?? null };
+      try {
+        send({ type: 'task.claim', id: task.id, expectVersion: task.version });
+      } catch (error) {
+        if (inflight?.id === task.id) inflight = null;
+        throw error;
+      }
+      return;
+    }
+    // 没有 open 候选任务时：能力更强的设备可抢占能力更弱设备执行中的 stream 任务（桌面版 > 托管服务 > 浏览器）
+    const myRank = deviceRank(filterNode());
+    if (myRank > 1 && inFlightStreams.size > 0) {
+      const preemptable = [];
+      for (const item of inFlightStreams.values()) {
+        if (holds.has(item.id) || deferred.has(item.id)) continue;
+        if (item.holderRank < myRank) preemptable.push(item);
+      }
+      if (preemptable.length > 0) {
+        // 若有多个可抢占任务，优先抢占稀疏流任务（sparse 先于满密度）
+        preemptable.sort((a, b) => {
+          const aSparse = a.density === 'sparse' ? 1 : 0;
+          const bSparse = b.density === 'sparse' ? 1 : 0;
+          if (aSparse !== bSparse) return bSparse - aSparse;
+          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+        });
+        const target = preemptable[0];
+        inflight = { id: target.id, projectId: null };
+        try {
+          send({ type: 'task.claim', id: target.id, expectVersion: target.version });
+        } catch (error) {
+          if (inflight?.id === target.id) inflight = null;
+          throw error;
+        }
+      }
     }
   }
 
@@ -332,6 +410,7 @@ export function createNodeSession({
     yieldAll,
     held: () => [...holds.values()].sort(byId).map(({ id, token, lastSentAt }) => ({ id, token, lastSentAt })),
     known: () => known0().map(task => ({ ...task })),
+    inFlightStreams: () => [...inFlightStreams.values()],
     /** host 按摘要 watch 着的项目(M6c X3),升序;没有就是空数组 */
     watching: () => (watching ? [...watching] : []),
     get epoch() { return epoch; },

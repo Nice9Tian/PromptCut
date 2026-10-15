@@ -159,6 +159,7 @@ test('PSP-04 流任务与切分方给浏览器出的那一份相同;PSP-05 清�
   const project = BASIC();
   // clip-b 拉长到第 38～185 帧(148 帧):从它自己的第一帧起分段是 0～9,超过 8 段,分两个任务;末段只有 13 帧
   project.tracks.find(t => t.id === 't-b').clips[0].end = 6.2;
+  project.tracks.find(t => t.id === 't-b').clips[0].cardId = 'caption-track';
   const value = valueOf(project);
   const clips = ['clip-a', 'clip-b', 'clip-c'];
   const server = serverSide(project, value, clips);

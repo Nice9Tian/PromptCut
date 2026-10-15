@@ -3,6 +3,7 @@ import { snapshotTier } from '../snapshot-tier.mjs';
 import { resultKeyOf } from './fingerprint.mjs';
 import { isStreamOrigin, streamSegmentFrameCount, STREAM_SEGMENT_FRAMES } from '../../src/render/streamSegments.mjs';
 import { EXPORT_FRAMES_PRIORITY } from './export-plan.mjs';
+import { reviewedCard } from '../../src/kernel/frameMode.mjs';
 
 /**
  * `plan` 任务 → 细任务(设计第 2 节、Q1,契约 B.4)。
@@ -195,6 +196,30 @@ function takeoverTest(takeover) {
 
 /** 纯浏览器能认领的重度(filter.mjs 的 `DEFAULT_WEIGHT_POLICY.browser`) */
 const BROWSER_WEIGHTS = new Set(['light', 'medium']);
+
+/**
+ * 判断流对应的卡是否为 motion 式（相对应为 remotion 式）。
+ * 依据：control / stream 上的 writing、frameMode、或审阅表能力。
+ */
+export function isMotionCard(control, stream) {
+  const writing = control?.writing ?? control?.capabilities?.writing ?? stream?.writing;
+  if (writing === 'remotion') return false;
+  if (writing === 'motion') return true;
+
+  const cardId = control?.cardId ?? stream?.cardId;
+  if (cardId) {
+    const rev = reviewedCard(cardId);
+    if (rev?.writing === 'remotion') return false;
+    if (rev?.writing === 'motion') return true;
+  }
+
+  const frameMode = control?.frameMode ?? control?.capabilities?.frameMode ?? stream?.frameMode;
+  if (frameMode === 'direct') return false;
+  if (frameMode === 'stateful') return true;
+
+  return false;
+}
+
 
 /**
  * 这个控件里面有哪几张卡(卡片 id,去重)。`planForQueue` 经 `withInnerCards` 给的 `cardIds` 优先;
@@ -567,12 +592,21 @@ export function splitPlan({
       const forBrowser = !!browser && browser.browserOf.has(keying.fingerprint);
       if (forBrowser || wantsOwn) copies.push({ fingerprint: keying.fingerprint, forBrowser });
     }
+    const isMotion = isMotionCard(control, stream);
+    const streamFps = Number(stream?.fps) > 0 ? Number(stream.fps) : 30;
+    const motionSpan = Math.ceil(30 * streamFps / SEGMENT_FRAMES);
     const dual = copies.length > 1;
     for (const { fingerprint, forBrowser } of copies) {
       const resultKey = resultKeyOf(contentKey, fingerprint);
       // 先稀疏、后满密度(同一条流里稀疏任务排在前面发);自己的那一份标了 `ownSparseOnly` 时不出满密度的
       const densities = [...(sparseStreams === true ? [STREAM_DENSITY_SPARSE] : []), ...(!forBrowser && ownSparseOnly ? [] : [null])];
-      for (const density of densities) for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
+      for (const density of densities) {
+        const span = density === STREAM_DENSITY_SPARSE
+          ? Math.max(1, lastSegment - firstSegment + 1)
+          : isMotion
+            ? motionSpan
+            : streamSegments;
+        for (const [from, to] of spans(firstSegment, lastSegment, span)) {
         const range = { unit: 'segment', from, to };
         // 这一段任务的帧数:流的计划带着第一帧和最后一帧时按实际算(流的末段可以不满 15 帧),没带的照满段估
         let frames = (to - from + 1) * SEGMENT_FRAMES;
@@ -609,6 +643,7 @@ export function splitPlan({
       }
     }
   }
+}
 
   // 导出专用的逐帧位图:每条一组,只出自己的一份(见文件头)
   for (const stream of exportStreams ?? []) {

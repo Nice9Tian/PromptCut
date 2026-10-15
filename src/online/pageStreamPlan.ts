@@ -31,9 +31,10 @@ import { CARD_RUNTIME_ABI, selectedCardStyle } from "../kernel/cardGraph.mjs";
 import { resolveFrameSize } from "../kernel/frameSize.mjs";
 import { mountFrameOf } from "../render/frameWindow.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
-import { isStreamOrigin, streamSegmentFrameCount, streamSegmentSpan } from "../render/streamSegments.mjs";
+import { isStreamOrigin, streamSegmentFrameCount, streamSegmentSpan, STREAM_SEGMENT_FRAMES } from "../render/streamSegments.mjs";
 import { belowTargets, frame3d, soloStreamKind, streamEligible } from "../render/streamPlanRules.mjs";
 import { groupStreams, localStreamPixels, stageStreamPixels, streamCost, STREAM_COUNT_BUDGET, type StreamBudget, type StreamGroupItem } from "../render/streamBudget.mjs";
+import { reviewedCard } from "../kernel/frameMode.mjs";
 import type { NodeTask, StreamTaskInput } from "./browserNode.ts";
 
 /**
@@ -331,7 +332,31 @@ export interface PageStreamSpec {
   compositing: string;
   /** 隔离单卡工程要的参数(切分方写在浏览器那一份任务的 `input.bake` 里的) */
   bake: { start: number; end: number; count: number; sampling: CardSampling };
+  writing?: "motion" | "remotion";
+  frameMode?: "stateful" | "direct";
 }
+
+/** 判断卡或流是否为 motion 式卡（相对应为 remotion 式） */
+export function isMotionCard(controlOrSpec: { writing?: string; frameMode?: string; cardId?: string | null; capabilities?: { writing?: string; frameMode?: string } } | null | undefined): boolean {
+  if (!controlOrSpec) return true;
+  const writing = controlOrSpec.writing ?? controlOrSpec.capabilities?.writing;
+  if (writing === "remotion") return false;
+  if (writing === "motion") return true;
+
+  const cardId = controlOrSpec.cardId;
+  if (cardId) {
+    const rev = reviewedCard(cardId);
+    if (rev?.writing === "remotion") return false;
+    if (rev?.writing === "motion") return true;
+  }
+
+  const frameMode = controlOrSpec.frameMode ?? controlOrSpec.capabilities?.frameMode;
+  if (frameMode === "direct") return false;
+  if (frameMode === "stateful") return true;
+
+  return false;
+}
+
 
 /** 为什么这张卡页面不产流(诊断用);能产回 null */
 export function pageStreamBlock(control: PageControl, at: { clip: AnyClip; track: AnyTrack } | undefined, sourceVersions: Readonly<Record<string, string>>): string | null {
@@ -436,12 +461,15 @@ export async function planPageStreams(o: {
     const streamKey = await resultKeyOf(contentKey, envFingerprint);
     const placement = localPlacement(clip, stage);
     const firstVisible = control.sampling.firstFrame;
+    const isMotion = isMotionCard(control);
     specs.push({
       kind: "card", plane: "local", clipIds: [control.clipId], topClipId: control.clipId, cardId: control.cardId, contentKey, streamKey, envFingerprint,
       fps, stage, total, firstFrame: firstVisible, lastFrame: m.to,
       ...streamSegmentSpan(firstVisible, m.to),
       offset: placement.offset, bound: placement.bound, compositing: control.compositing,
       bake: { start: control.start, end: control.end, count: control.count, sampling: structuredClone(control.sampling) },
+      writing: isMotion ? "motion" : "remotion",
+      frameMode: (control.capabilities?.frameMode as any) || (isMotion ? "stateful" : "direct"),
     });
   }
   return { specs, skipped };
@@ -474,9 +502,16 @@ export function spansOf(first: number, last: number, span: number): [number, num
  */
 export function pageStreamTasks(spec: PageStreamSpec, o: { projectId: string; projectRev: number; codeVersion?: string | null; derivedFrom?: string | null; density?: "sparse" | null }): NodeTask[] {
   const sparse = o.density === STREAM_DENSITY_SPARSE;
+  const isMotion = isMotionCard(spec);
+  const fps = Number(spec.fps) > 0 ? Number(spec.fps) : 30;
+  const span = sparse
+    ? Math.max(1, spec.lastSegment - spec.firstSegment + 1)
+    : isMotion
+      ? Math.ceil(30 * fps / STREAM_SEGMENT_FRAMES)
+      : PAGE_STREAM_SEGMENTS_PER_TASK;
   const stream: StreamTaskInput = { kind: "card", plane: "local", clipIds: [spec.topClipId], fps: spec.fps, bound: { ...spec.bound }, offset: { ...spec.offset },
     firstFrame: spec.firstFrame, count: spec.bake.count, total: spec.total, originFrame: spec.originFrame, lastFrame: spec.lastFrame };
-  return spansOf(spec.firstSegment, spec.lastSegment, PAGE_STREAM_SEGMENTS_PER_TASK).map(([from, to]) => {
+  return spansOf(spec.firstSegment, spec.lastSegment, span).map(([from, to]) => {
     const range = { unit: "segment", from, to };
     // 这一段任务的帧数:每个分段按它实际的帧数(流的末段可以不满 15 帧),与切分方算的同一个数
     let frames = 0;
