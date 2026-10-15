@@ -180,9 +180,14 @@ test('登记为画布卡的单卡流走直取:每个分段第一帧先取画布�
   assert.deepEqual(Object.keys(on.state.manifest.inits), Object.keys(off.state.manifest.inits));
 });
 
-test('auto 档(缺省)也能产出同样的分段:走哪条路只看快慢,不改画面', { skip: !ffmpegOk }, async () => {
+test('缺省(always 档)与 auto 档也能产出同样的分段:走哪条路只看快慢,不改画面', { skip: !ffmpegOk }, async () => {
   const off = await produce({ mode: 'off', segments: [0] });
-  const auto = await produce({ mode: undefined, segments: [0] });
+  const def = await produce({ mode: undefined, segments: [0] });
+  assert.equal(def.producer.direct, 'always');
+  assert.equal(Buffer.compare(def.bytes[0], off.bytes[0]), 0);
+  assert.equal(def.status.direct.failed, null);
+  assert.equal(def.status.direct.checks, 1);
+  const auto = await produce({ mode: 'auto', segments: [0] });
   assert.equal(auto.producer.direct, 'auto');
   assert.equal(Buffer.compare(auto.bytes[0], off.bytes[0]), 0);
   assert.equal(auto.status.direct.failed, null);
@@ -216,26 +221,36 @@ test('没登记成画布卡的卡不问画布;稀疏那一趟直取量出的实�
   for (const n of all) assert.equal(Buffer.compare(on.bytes[n], off.bytes[n]), 0, `稀疏分段 ${n} 逐字节相同`);
 });
 
-test('directOf:只有单卡流、成员登记为画布卡才走;组流、实测没过的、正在歇的分段不走', () => {
+test('directOf:只有单卡流、成员登记为画布卡才走;组流、实测没过的、正在歇的分段不走;缺省 always 不歇', () => {
   const pipeline = { root: os.tmpdir(), ready: createReadyHub() };
   const producer = new StreamProducer(pipeline, { env: {} });
-  assert.equal(producer.direct, 'auto');
+  assert.equal(producer.direct, 'always');
   const card = { spec: { kind: 'card', members: [{ capabilities: CANVAS_CAPS }] } };
   assert.ok(producer.directOf(card));
   assert.equal(producer.directOf({ spec: { kind: 'card', members: [{ capabilities: DOM_CAPS }] } }), null);
   assert.equal(producer.directOf({ spec: { kind: 'group', members: [{ capabilities: CANVAS_CAPS }, { capabilities: CANVAS_CAPS }] } }), null);
   assert.equal(producer.directOf({ spec: { kind: 'below', members: [{ capabilities: CANVAS_CAPS }] } }), null, '别的种类的流不走');
   assert.equal(producer.directOf({ spec: { kind: 'card' } }), null, '拉来的流没有成员信息');
-  // 歇两个分段:这两次不走,第三次再试
+  // 缺省 always 档:不因 cooldown 歇
   card.direct.cooldown = 2;
-  assert.equal(producer.directOf(card), null);
-  assert.equal(producer.directOf(card), null);
   assert.ok(producer.directOf(card));
   card.direct.failed = 'differs';
   assert.equal(producer.directOf(card), null);
   const off = new StreamProducer(pipeline, { env: { PROMPTCUT_STREAM_DIRECT: '0' } });
   assert.equal(off.directOf({ spec: { kind: 'card', members: [{ capabilities: CANVAS_CAPS }] } }), null);
-  // always 档不歇
+  // 显式传 PROMPTCUT_STREAM_DIRECT: 'auto' 时保留 cooldown 退避
+  const auto = new StreamProducer(pipeline, { env: { PROMPTCUT_STREAM_DIRECT: 'auto' } });
+  assert.equal(auto.direct, 'auto');
+  const autoCard = { spec: { kind: 'card', members: [{ capabilities: CANVAS_CAPS }] } };
+  assert.ok(auto.directOf(autoCard));
+  // 歇两个分段:这两次不走,第三次再试
+  autoCard.direct.cooldown = 2;
+  assert.equal(auto.directOf(autoCard), null);
+  assert.equal(auto.directOf(autoCard), null);
+  assert.ok(auto.directOf(autoCard));
+  autoCard.direct.failed = 'differs';
+  assert.equal(auto.directOf(autoCard), null);
+  // 显式传 always 档也不歇
   const always = new StreamProducer(pipeline, { env: { PROMPTCUT_STREAM_DIRECT: 'always' } });
   const hot = { spec: { kind: 'card', members: [{ capabilities: CANVAS_CAPS }] } };
   always.directOf(hot);

@@ -11,6 +11,7 @@ import { mediaPlugin } from "./server/vite-plugin-media";
 import { assetProxyPlugin } from "./server/asset-client";
 import vitePluginCards from "./server/vite-plugin-cards";
 import { visionPlugin } from "./server/vite-plugin-vision";
+import { prerenderGatePlugin } from "./server/prerender-gate.mjs";
 import { rawEolPlugin } from "./server/raw-eol.mjs";
 import { watchIgnored, DEP_SCAN_ENTRIES } from "./server/vite-scan-ignore.mjs";
 import path from "node:path";
@@ -83,7 +84,7 @@ export default defineConfig({
   optimizeDeps: { entries: DEP_SCAN_ENTRIES },
   // 跨源守卫要排在所有接口前面(中间件按 configureServer 的调用顺序注册)
   // hostedGatePlugin 只在托管方渲染服务的工作进程里生效(页面请求闸、出口代理,`server/hosted-render/vite-gate.mjs`),别处是空的
-  plugins: [hostedGatePlugin(), corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), mediaRoutes(), vitePluginCards(), rawEolPlugin(), visionPlugin()],
+  plugins: [prerenderGatePlugin(), hostedGatePlugin(), corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), mediaRoutes(), vitePluginCards(), rawEolPlugin(), visionPlugin()],
   server: {
     // 渲染页每一趟都是全新的页面,用不着热更新;源码改了照样重新变换(watcher 还开着)
     hmr: false,

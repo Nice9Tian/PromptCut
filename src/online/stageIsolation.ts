@@ -236,19 +236,21 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
     },
     async plan(id, ctx) {
       const slot = slots[id];
-      const legacy = (): StageMediaPlan => {
-        // 点过头之后不再给任何舞台票据:给它不带票据的 cookie 基址,取不到就取不到
-        if (everAllowed) { slot.mode = "cookie"; update(); return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: false }; }
-        slot.mode = "legacy"; update();
-        return { mode: "legacy", base: null, ticket: ctx.ticket, cardExec: false };
+      if (!ctx.stageOrigin) {
+        throw new Error(`[stageIsolation] 跨源隔离舞台未配置或不可用，禁止同源退回: stage ${id}`);
+      }
+      const safeFallback = (): StageMediaPlan => {
+        slot.mode = "legacy";
+        update();
+        return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: false };
       };
-      if (!ctx.dual || !deps.enabled() || !ctx.stageOrigin) return legacy();
+      if (!ctx.dual || !deps.enabled()) return safeFallback();
       const gen = slot.gen;
       const report = await waitReport(id);
-      if (gen !== slot.gen) return legacy(); // 等的时候这一台又握手了:这一次作废,新的握手会再来
-      // 等不到结果(旧版舞台页不发、或舞台卡住):按自检出错记,这一台走旧办法
+      if (gen !== slot.gen) return safeFallback(); // 等的时候这一台又握手了:这一次作废,新的握手会再来
+      // 等不到结果(旧版舞台页不发、或舞台卡住):按自检出错记
       if (!report) slot.report = { ok: false, crossOrigin: false, csp: "none", egress: "none", hardened: false, trustedTypes: "unsupported", reasons: ["check-error"] };
-      if (!report?.ok) return legacy();
+      if (!report?.ok) return safeFallback();
       if (!ctx.ticket) {
         // 还没有票据(素材服务没连上):不交接,也不退回旧办法 —— 这一台已经判为隔离,等有票据再来
         return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: false };
@@ -259,12 +261,12 @@ export function createStageIsolation(deps: StageIsolationDeps): StageIsolationSe
         const flying = slot.granting;
         const ok = await flying.done;
         if (slot.granting === flying) slot.granting = null;
-        if (gen !== slot.gen) return legacy();
+        if (gen !== slot.gen) return safeFallback();
         if (!ok) {
-          // 续票时交接失败:已经走 cookie 的舞台留在 cookie 上(旧 cookie 还能用到过期),不退回旧办法
+          // 续票时交接失败:留在 cookie 上(旧 cookie 还能用到过期),不退回旧办法
           if (slot.mode === "cookie") return { mode: "cookie", base: mediaSBase(sid), ticket: null, cardExec: cached.enabled };
           grantFailed = true;
-          return legacy();
+          return safeFallback();
         }
         slot.granted = { ticket: ctx.ticket, origin: ctx.stageOrigin };
       }

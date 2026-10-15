@@ -497,9 +497,9 @@ export async function warmUpAt(bakery, step, { startFrame, warmFrames = 3, frame
     await beginFrame();
   }
   await page.evaluate(() => { window.__pcRestartCards && window.__pcRestartCards(); window.__pcResetAnims && window.__pcResetAnims(); });
+  await drawDiscarded(bakery, true, signal);
   await step(startFrame, false);
-  await beginFrame();
-  await page.evaluate(() => { window.__pcResetAnims && window.__pcResetAnims(); });
+  await drawDiscarded(bakery, false, signal);
 }
 
 /** 轨道流的截图参数:带 alpha 的 PNG(ffmpeg 的 image2pipe 吃它),照 bakeFrames 的 PNG 口径 */

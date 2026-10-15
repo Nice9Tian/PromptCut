@@ -51,10 +51,22 @@ export const STAGE_ALLOW = [
   { methods: READ, prefix: "/@media/", who: "舞台里的 <video>、<img>、音频图卡、素材效果卡", why: "本机内容库里的素材字节(按哈希或文件名,分段取);含 `/@media/<哈希>/pcm`" },
   { methods: READ, exact: "/api/media/file", who: "舞台里的 <video>、<img>", why: "迁移期的老项目按路径取素材;接口自己只给素材目录里的文件" },
   { methods: READ, prefix: "/catalog/", who: "Lottie 卡、粒子卡", why: "动效素材目录里登记过的 JSON(接口只认登记过的名字)" },
-  // —— 两条只读接口 ——
+  // —— 一条只读接口 ——
   { methods: READ, exact: "/api/cards/scopes", who: "舞台里的卡片注册表", why: "定制卡的归属表(哪张卡属于哪个项目),只读;改档位的 POST 不放行" },
-  { methods: READ, exact: "/api/prerender/info", who: "舞台里取生成快照与轨道流的那一层", why: "问预渲染进程在哪个端口,只读" },
 ];
+
+/** 匹配 /@media/<hash>、/@media/<hash>.<ext>、/@media/<hash>/pcm */
+const MEDIA_HASH_RE = /^\/@media\/([0-9a-fA-F]{64})(?:\.[a-zA-Z0-9]+)?(?:\/pcm)?$/i;
+
+let stageMediaHashesGetter = null;
+
+/**
+ * 注册当前项目素材哈希的获取函数（供桌面版舞台端口代理校验）
+ * @param {(() => Set<string> | string[] | null) | null} fn
+ */
+export function setStageMediaHashesGetter(fn) {
+  stageMediaHashesGetter = fn;
+}
 
 /** 路径里有没有想跳出前缀的写法:`..` 段、反斜杠、编码过的点、斜杠、反斜杠。浏览器发出来的地址不会有这些 */
 function sneaky(rawPath) {
@@ -65,13 +77,27 @@ function sneaky(rawPath) {
  * 这条从舞台端口来的请求放不放行。
  * @param {string} method
  * @param {string} url 请求行里的地址(含查询串)
- * @param {{ upgrade?: boolean, headers?: Record<string, unknown> }} [opts] `upgrade`:这是一次 WebSocket 升级
+ * @param {{ upgrade?: boolean, headers?: Record<string, unknown>, projectMediaHashes?: Set<string> | string[] | (() => Set<string> | string[] | null) }} [opts] `upgrade`:这是一次 WebSocket 升级
  */
 export function stageRequestAllowed(method, url, opts = {}) {
   const m = String(method || "GET").toUpperCase();
   const raw = String(url || "/");
   const rawPath = raw.split("?")[0];
   if (!rawPath.startsWith("/") || sneaky(rawPath)) return false;
+
+  // 舞台按哈希读素材只放行当前项目 project.media 里的素材
+  const mediaHashMatch = MEDIA_HASH_RE.exec(rawPath);
+  if (mediaHashMatch) {
+    const hash = mediaHashMatch[1].toLowerCase();
+    const hashesSource = opts.projectMediaHashes !== undefined
+      ? (typeof opts.projectMediaHashes === "function" ? opts.projectMediaHashes() : opts.projectMediaHashes)
+      : (stageMediaHashesGetter ? stageMediaHashesGetter() : null);
+    if (hashesSource) {
+      const allowedSet = hashesSource instanceof Set ? hashesSource : new Set(Array.from(hashesSource).map((h) => String(h).toLowerCase()));
+      if (!allowedSet.has(hash)) return false;
+    }
+  }
+
   const p = apiPath(raw);
   for (const rule of STAGE_ALLOW) {
     if (!!rule.upgrade !== !!opts.upgrade) continue;

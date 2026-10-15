@@ -59,15 +59,16 @@
 | 素材上传先传小尺寸、再传原尺寸（用户 2026-10-13 另加的一条）：上传队列改成所有素材的小尺寸先传完、再传原尺寸 | `afff3cd8` |
 | 修：轨道流已经在画时占位符还盖在上面（组流起播后约 170 毫秒；`online-stream-play-probe` 的 S6，登记验收清单时查出来的） | `6474b669` |
 | 修：在线页面和切分方算同屏流预算时判得不一样（在线页面没把依赖下层的流算进去，同屏流多时会白产对方不用的单卡流）；规则挪到两边共用的 `src/render/streamPlanRules.mjs`，加对拍单测 | `e2d46f53` |
+| 2026-10-14 决定文档与语义同步：把 `user-decisions-2026-10-14.md` 及获批的一级/二级语义改动落进 18 份 `docs/semantics/**` 与 `docs/plan/*` 契约 | `08fb7cd9` |
+| 低内存档进入文案更新、`pageStreams.ts` 手机/平板只产稀疏流与 `isConfigSupported` 前置检查、`page-stream-probe.mjs` 模拟手机场（`390×844`、4x CPU、4G、4 条稀疏流 + 1 占位、堆增量 ≤ 25 MB） | `16fe6882` |
+| 修 `FrameScene.tsx` Agent `see_frames`/开窗抽帧早一帧（`push-draw-probe` ahead=0）；查清并根除 `bake.mjs` 导出成片开头 36 帧偶发差一帧（`warmUpAt` 唤醒 Chromium rAF，连导 3 遍与 `A-89c15177` 240/240 逐字节相同）；画布卡产流缺省改为一律直取像素（`always`） | `69d791ed` |
 
 ## 在分支上、没合入的
 
 | 分支 | 是什么 | 状态 |
 |---|---|---|
-| `gemini/rr-mobile-lowmem`（`9c60aa7b`，`.worktrees/rr-mobile-lowmem`） | 低内存档进入文案更新；手机/平板打开项目也为本页产稀疏流（带 `isConfigSupported` 检查、只产稀疏版）；`page-stream-probe.mjs` 模拟手机场（390×844、4x CPU、4G、4 条稀疏流 + 1 占位、堆增量 10.7 MB ≤ 25 MB、节拍 p95 3～4 ms） | 已做完并跑通单测与探针，待重启后主会话过合入闸门合 `main`。详见 `docs/reports/AGENT-rr-mobile-lowmem.md` |
-| `gemini/rr-frame-bake3d`（`198ca4de`，`.worktrees/rr-frame-bake3d`） | 修 `FrameScene.tsx` 抽帧早一帧；查清并根除 `bake.mjs` 导出开头 36 帧偶发差一帧（连导 3 遍与 `A-89c15177` 240/240 逐字节相同）；画布卡产流改为一律直取像素（`always`） | 已做完并过单测与 3 遍 240 帧导出核对，待重启后主会话过合入闸门合 `main`。详见 `docs/reports/AGENT-rr-frame-bake3d.md` |
-| `gemini/rr-stream-sched`（`d0e7ec2e`，`.worktrees/rr-stream-sched`）+ VisuHive `gemini/vh-stream-perm`（`58c2923`，`VisuHive/.worktrees/vh-stream-perm`） | 「生成轨道流」关着时托管方渲染节点什么都不产；「生成轨道流」权限分组与 VisuHive 管理后台 | VisuHive 侧权限组存储、API、管理页与单测（95 pass）已做完提交；剩 PromptCut 侧对接权限查询、开关置灰与关闭不产流。详见 `docs/reports/AGENT-rr-stream-sched.md` |
-| `gemini/rr-stage-export-media`（`55d6b71f`，`.worktrees/rr-stage-export-media`） | 所有舞台一律跨源隔离 + 桌面版舞台锁死（禁调预渲染接口、按哈希读素材只许读当前项目）；放开在线浏览器导入媒体并先转小尺寸 | 桌面预渲染接口守门、舞台按项目过滤素材哈希、在线 `stageIsolation.ts` 禁同源退回已做完并过单测（23 pass）；剩 `previewMode.ts` 单舞台退回移除与在线导入媒体/浏览器转小尺寸。详见 `docs/reports/AGENT-rr-stage-export-media.md` |
+| `gemini/rr-stream-sched`（`.worktrees/rr-stream-sched`）+ VisuHive `gemini/vh-stream-perm`（`VisuHive/.worktrees/vh-stream-perm`） | 去掉 `account/store.mjs` 默认管理员 `9tian`；「生成轨道流」关着时托管方渲染节点什么都不产；「生成轨道流」权限分组与界面置灰 | 正在收尾单测与 `hosted-render-streams-probe.mjs`。详见 `docs/reports/AGENT-rr-stream-sched.md` |
+| `gemini/rr-stage-export-media`（`55d6b71f`，`.worktrees/rr-stage-export-media`） | 所有舞台一律跨源隔离 + 桌面版舞台锁死（禁调预渲染接口、按哈希读素材只许读当前项目） | 已限缩为单功能分支，并入 `69d791ed` 后完成 `previewMode.ts` 同源单舞台退回移除并过闸门合入。详见 `docs/reports/AGENT-rr-stage-export-media.md` |
 
 ## 接下来（照 `handoff-render-018.md` 第 2 节与 `user-decisions-2026-10-14.md` 第 2 节）
 

@@ -132,11 +132,12 @@ test('rgbaAlphaBox:和截图那条路的 pngAlphaBox 量出同一个框', () => 
   assert.equal(rgbaAlphaBox(Buffer.alloc(width * height * 4), width, height), null);
 });
 
-test('directCaptureMode:缺省 auto;0 / off 关;always 不看快慢', () => {
-  assert.equal(directCaptureMode({}), 'auto');
-  assert.equal(directCaptureMode({ PROMPTCUT_STREAM_DIRECT: '1' }), 'auto');
+test('directCaptureMode:缺省 always;0 / off 关;auto 看快慢', () => {
+  assert.equal(directCaptureMode({}), 'always');
+  assert.equal(directCaptureMode({ PROMPTCUT_STREAM_DIRECT: '1' }), 'always');
   assert.equal(directCaptureMode({ PROMPTCUT_STREAM_DIRECT: '0' }), 'off');
   assert.equal(directCaptureMode({ PROMPTCUT_STREAM_DIRECT: 'off' }), 'off');
+  assert.equal(directCaptureMode({ PROMPTCUT_STREAM_DIRECT: 'auto' }), 'auto');
   assert.equal(directCaptureMode({ PROMPTCUT_STREAM_DIRECT: 'always' }), 'always');
 });
 
@@ -298,7 +299,7 @@ test('auto 档:直取不比截图快的分段照旧截图,并歇几个分段;画
   // 直取慢(页面读像素报 500 毫秒)、截图快:这个分段走截图
   let log = [], record = newDirectRecord();
   let bakery = fakeBakery((frame) => ({ rgba: frameOf(frame), readMs: 500 }), log);
-  let capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record });
+  let capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, always: false });
   let out = await runSegment(capture, bakery, log, { frames: [0, 1], shots: frameOf });
   assert.deepEqual(log, ['grab:0', 'shot:0', 'shot:1']);
   assert.ok(out.every(Buffer.isBuffer));
@@ -309,14 +310,14 @@ test('auto 档:直取不比截图快的分段照旧截图,并歇几个分段;画
   // 直取快、截图慢:走直取
   log = []; record = newDirectRecord();
   bakery = fakeBakery((frame) => ({ rgba: frameOf(frame), readMs: 0 }), log);
-  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record });
+  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, always: false });
   out = await runSegment(capture, bakery, log, { frames: [0, 1], shots: frameOf, shotDelayMs: 120 });
   assert.deepEqual(log, ['grab:0', 'shot:0', 'grab:1']);
   assert.deepEqual([record.slowSegments, record.cooldown, record.segments, record.frames], [0, 0, 1, 2]);
   // 直取每帧比截图快,但这个分段只剩一帧可省,抵不过实测自己多花的那一张截图:照旧截图
   log = []; record = newDirectRecord();
   bakery = fakeBakery((frame) => ({ rgba: frameOf(frame), readMs: 0 }), log);
-  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, captures: 2 });
+  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, captures: 2, always: false });
   out = await runSegment(capture, bakery, log, { frames: [0, 1], shots: frameOf, shotDelayMs: 40 });
   assert.deepEqual(log, ['grab:0', 'shot:0', 'shot:1']);
   assert.ok(record.last.grabMs < record.last.shotMs, '单看每帧是直取快');
@@ -324,18 +325,18 @@ test('auto 档:直取不比截图快的分段照旧截图,并歇几个分段;画
   // 截图那一次先丢了一张(primed):每帧的截图耗时按一半算;稀疏的分段每帧都要先丢一张,按两倍算
   log = []; record = newDirectRecord();
   bakery = fakeBakery((frame) => ({ rgba: frameOf(frame), readMs: 0 }), log);
-  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record });
+  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, always: false });
   await runSegment(capture, bakery, log, { frames: [0], shots: frameOf, shotDelayMs: 100, primed: () => true });
   const halved = record.last.shotMs;
   record = newDirectRecord();
-  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, stride: 15 });
+  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, stride: 15, always: false });
   await runSegment(capture, bakery, log, { frames: [0], shots: frameOf, shotDelayMs: 100, primed: () => true });
   assert.ok(record.last.shotMs > halved * 1.5, `稀疏的分段按两倍算(${record.last.shotMs} 对 ${halved})`);
   // 画面太满:压完超过原始大小的 DIRECT_MAX_FILL,不搬、不比,这个分段走截图
   log = []; record = newDirectRecord();
   const full = Buffer.alloc(RECT.w * RECT.h * 4, 200);
   bakery = fakeBakery(() => ({ rgba: full }), log);
-  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record });
+  capture = directSegmentCapture(bakery, { clipId: 'clip-c', rect: RECT, record, always: false });
   out = await runSegment(capture, bakery, log, { frames: [0, 1], shots: () => full });
   assert.deepEqual(log, ['grab:0', 'shot:0', 'shot:1']);
   assert.deepEqual([record.checks, record.slowSegments, record.cooldown, record.last.reason], [0, 1, DIRECT_COOLDOWN_SEGMENTS, 'dense']);
