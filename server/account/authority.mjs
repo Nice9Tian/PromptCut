@@ -287,6 +287,12 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   }
   async function adminProject(input, body) {
     const actor = await verify(input);
+    if (body?.op === 'set-hosted-option' && body.service === 'render' && body.option === 'streams' && body.enabled === true) {
+      if (typeof accountClient?.permissions === 'function') {
+        const perm = await accountClient.permissions({ accountId: actor.accountId, group: 'render_streams' });
+        if (perm?.allowed !== true) reject(403, 'permission-denied');
+      }
+    }
     const key = requestKey(actor.accountId, body.requestId); const digest = digestOf({ op: 'admin', body });
     const committed = ledger.transaction(state => {
       const p = projectOf(state, body.projectId);

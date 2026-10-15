@@ -26,6 +26,8 @@ export interface HostedServiceState {
   enabled: boolean;
   /** 渲染节点的子选项「生成轨道流」：文档服务报了才有（旧托管端没有）；缺省关由文档服务算好再报（记录里没有这一项算关，只有显式为 true 才算开） */
   streams?: boolean;
+  /** 账号是否有权限开启「生成轨道流」（在权限组或管理员） */
+  streamsAllowed?: boolean;
 }
 
 /** 服务下面的子选项名；现在只有渲染节点的 `streams` */
@@ -81,7 +83,7 @@ export interface HostedOptionText {
 export const HOSTED_OPTION_TEXT: Record<string, HostedOptionText> = {
   "render.streams": {
     label: "生成轨道流",
-    hint: (enabled) => (enabled ? "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。" : "没有打开：托管方的渲染节点只为这个项目生成隔一段一张的稀疏轨道流。打开后还会补成每帧都有的轨道流，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。"),
+    hint: (enabled) => (enabled ? "托管方的渲染节点为这个项目生成轨道流，重卡在在线浏览器里播放更流畅。" : "没有打开：托管方的渲染节点不为这个项目生成轨道流，播放时用成员们各自设备生成的轨道流。打开后托管方也会生成，重卡在在线浏览器里播放更流畅，会多用云端的渲染时间。"),
     changed: (enabled) => (enabled ? "" : "创建者关闭了轨道流，托管方的渲染节点不再为这个项目生成轨道流。"),
     confirm: (enabled) => (enabled ? "打开后，托管方的渲染节点会为这个项目生成轨道流。" : "关闭后，托管方的渲染节点不再为这个项目生成轨道流，已经生成的保留。"),
   },
@@ -99,11 +101,12 @@ export function parseHosted(raw: unknown): HostedView | null {
   for (const name of ["render", "agent"] as const) {
     const s = (raw as Record<string, unknown>)[name];
     if (!s || typeof s !== "object") continue;
-    const { available, enabled, streams } = s as Record<string, unknown>;
+    const { available, enabled, streams, streamsAllowed } = s as Record<string, unknown>;
     if (typeof available !== "boolean" || typeof enabled !== "boolean") continue;
     out[name] = { available, enabled };
     // 子选项：形状对才收（布尔）；旧托管端不报，就没有这个字段，对应的行不显示
     if (name === "render" && typeof streams === "boolean") out[name]!.streams = streams;
+    if (name === "render" && typeof streamsAllowed === "boolean") out[name]!.streamsAllowed = streamsAllowed;
   }
   return Object.keys(out).length ? out : null;
 }
@@ -181,6 +184,8 @@ export interface HostedOptionRow {
   enabled: boolean;
   /** 它挂着的服务那一行关着：这一行置灰、不可点 */
   parentOff: boolean;
+  /** 账号没有开启此项的权限：置灰、不可点 */
+  notAllowed?: boolean;
 }
 
 /**
@@ -194,7 +199,10 @@ export function hostedOptionRowsOf(where: "lan" | "hosted" | null | undefined, h
     const s = hosted[service];
     const text = hostedOptionText(service, option);
     const value = s?.[option];
-    if (s?.available && text && typeof value === "boolean") rows.push({ service, option, label: text.label, enabled: value, parentOff: !s.enabled });
+    if (s?.available && text && typeof value === "boolean") {
+      const notAllowed = option === "streams" && s.streamsAllowed === false;
+      rows.push({ service, option, label: text.label, enabled: value, parentOff: !s.enabled, ...(notAllowed ? { notAllowed: true } : {}) });
+    }
   }
   return rows;
 }

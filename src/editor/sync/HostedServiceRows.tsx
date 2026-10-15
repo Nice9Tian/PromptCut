@@ -45,24 +45,28 @@ export function HostedServiceRows({ where, hosted, creator, busy = false, onTogg
           {optionRows.filter((o) => o.service === row.service).map((o) => (
             <div
               key={o.option}
-              className={`pc-collab-hosted-sub${o.parentOff ? " pc-collab-hosted-sub--off" : ""}`}
+              className={`pc-collab-hosted-sub${o.parentOff || o.notAllowed ? " pc-collab-hosted-sub--off" : ""}`}
               data-pc={`collab-hosted-${o.service}-${o.option}`}
-              data-state={o.parentOff ? "disabled" : o.enabled ? "on" : "off"}
+              data-state={o.parentOff || o.notAllowed ? "disabled" : o.enabled ? "on" : "off"}
             >
               <label className="pc-collab-head">
                 <input
                   type="checkbox"
                   data-pc={`collab-hosted-${o.service}-${o.option}-toggle`}
                   checked={o.enabled}
-                  disabled={!creator || busy || o.parentOff || !onToggleOption}
+                  disabled={!creator || busy || o.parentOff || o.notAllowed || !onToggleOption}
                   onChange={(e) => onToggleOption?.(o.service, o.option, e.target.checked)}
                 />
                 {o.label}
               </label>
               <div className="pc-sync-hint" data-pc={`collab-hosted-${o.service}-${o.option}-hint`}>
-                {hostedOptionText(o.service, o.option)?.hint(o.enabled)}
-                {o.parentOff ? "（渲染节点关着，暂不生效）" : ""}
-                {creator ? "" : "（只有创建者能改）"}
+                {o.notAllowed ? "你的账号没有开启这一项的权限，请联系托管方。" : (
+                  <>
+                    {hostedOptionText(o.service, o.option)?.hint(o.enabled)}
+                    {o.parentOff ? "（渲染节点关着，暂不生效）" : ""}
+                    {creator ? "" : "（只有创建者能改）"}
+                  </>
+                )}
               </div>
             </div>
           ))}

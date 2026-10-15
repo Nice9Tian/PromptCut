@@ -90,5 +90,11 @@ export function createAccountClient({ origin, tls, serverFingerprint256, timeout
       requireRequestId(report.reportId);
       return request('POST', `${INTERNAL_PATHS.events}/${encodeURIComponent(eventId)}/logout-report`, report);
     },
+    async permissions({ accountId, group }) {
+      if (!accountId || typeof accountId !== 'string') return { ok: true, allowed: false };
+      const q = new URLSearchParams({ accountId, group: String(group ?? '') });
+      const result = await request('GET', `${INTERNAL_PATHS.permissions}?${q.toString()}`);
+      return { ok: true, allowed: Boolean(result?.allowed) };
+    },
   };
 }
