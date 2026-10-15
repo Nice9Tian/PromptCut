@@ -66,7 +66,7 @@ function cardClipsOf(project) {
       if (!isCardClip(clip)) continue;
       const start = Number(clip.start), end = Number(clip.end);
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-      clips.push({ id: clip.id, start, end });
+      clips.push({ id: clip.id, cardId: clip.cardId, nodeId: clip.nodeId, start, end });
     }
   }
   return clips.sort((a, b) => byId(a.id, b.id));
@@ -74,10 +74,33 @@ function cardClipsOf(project) {
 
 /** `identityKeys` / `frameModes` 既收 Map 也收普通对象 */
 const lookup = (table, key) => {
-  if (!table) return undefined;
+  if (!table || !key) return undefined;
+  if (typeof table === 'function') {
+    try { return table(key); } catch { return undefined; }
+  }
   if (typeof table.get === 'function') return table.get(key);
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 };
+
+/** 3D 模式下判卡片是否为独立卡（scene-3d 自身在外面除外） */
+function isIndependentCard(clip, opts) {
+  if (typeof opts.isIndependent === 'function') {
+    try {
+      const res = opts.isIndependent(clip) ?? (clip.id ? opts.isIndependent(clip.id) : undefined) ?? (clip.cardId ? opts.isIndependent(clip.cardId) : undefined);
+      if (res !== undefined) return Boolean(res);
+    } catch { return false; }
+  }
+  const comp = lookup(opts.compositing, clip.cardId) ?? lookup(opts.compositing, clip.id);
+  if (typeof comp === 'string') return comp === 'independent';
+
+  const caps = lookup(opts.capabilities, clip.cardId) ?? lookup(opts.capabilities, clip.id);
+  if (caps && typeof caps === 'object' && typeof caps.compositing === 'string') {
+    return caps.compositing === 'independent';
+  }
+
+  // 不给时除 scene-3d 外一律纳入
+  return true;
+}
 
 /**
  * 一张卡在任一位置的每拍权重，以及「是不是每个位置都判重」。
@@ -150,7 +173,10 @@ export function clipWeight(record, frameMode, fps, tuningOrOverrides) {
  *   `lowMemoryLight`（低内存档界限搜索判轻的卡的 identityKey 集合；给了就不看成本记录与声明，
  *   集合里的卡在每个位置都判轻、其余每个位置都判重，`src/render/boundarySearch.mjs`）、
  *   `allHeavy`（每张卡在每个位置都判重。低内存档的显示用它：播放时一律不活渲、只贴预渲染小尺寸，
- *   `src/editor/planDispatch.ts` 的 `currentPlan`；轻重判定本身看 `lowMemoryLight`）
+ *   `src/editor/planDispatch.ts` 的 `currentPlan`；轻重判定本身看 `lowMemoryLight`）、
+ *   `includeLightCardsFor3D` / `view3d`（打开 3D 模式时把原本判轻的独立卡片也纳入单卡轨道流生产计划 prerenderSet，
+ *   scene-3d 自身在 3D 视图里是真三维网格，照旧除外，使得 3D 视图播放时所有卡片板子都有轨道流可贴）、
+ *   `capabilities` / `compositing` / `isIndependent`（判卡片是否为独立卡的能力表 / 函数，不给时除 scene-3d 外一律纳入）
  */
 export function planPipelines(project, costs, fps, opts = {}) {
   const rate = Math.max(1, Number(fps) || 30);
@@ -229,6 +255,15 @@ export function planPipelines(project, costs, fps, opts = {}) {
     for (const id of heavy) prerender.add(id);
     // 集合按 clipId 排好序再建，序列化出来两端逐字节相同
     segments.push({ fromSec, toSec, heavy: new Set(heavy.sort(byId)), light: new Set([...light].sort(byId)) });
+  }
+
+  if (opts.includeLightCardsFor3D === true || opts.view3d === true) {
+    for (const clip of clips) {
+      if (clip.cardId === 'scene-3d' || clip.nodeId === 'scene-3d') continue;
+      if (isIndependentCard(clip, opts)) {
+        prerender.add(clip.id);
+      }
+    }
   }
 
   return { segments, prerenderSet: new Set([...prerender].sort(byId)) };

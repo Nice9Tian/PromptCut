@@ -57,7 +57,7 @@ export function planInputsOfControls(controls, fps) {
     if (!clipId) continue;
     const start = Number(control.start), end = Number(control.end);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-    clips.push({ id: clipId, nodeId: control.nodeId ?? clipId, start, end });
+    clips.push({ id: clipId, cardId: control.cardId, nodeId: control.nodeId ?? clipId, start, end });
     if (typeof control.costKey === 'string') identityKeys[clipId] = control.costKey;
     const mode = control.frameMode ?? control.capabilities?.frameMode;
     if (typeof mode === 'string') frameModes[clipId] = mode;
@@ -79,12 +79,27 @@ export function prerenderSetOfPlan(controls, opts = {}) {
   // 一条记录都没有(还没探针过 / 读不到盘)就按声明兜底:和接上 planPipelines 之前的行为一致
   if (!costs || !costs.length) {
     const set = new Set();
-    for (const control of list) if (control?.clipId && declaredHeavy(control.capabilities)) set.add(control.clipId);
+    const for3D = Boolean(opts.includeLightCardsFor3D || opts.view3d);
+    for (const control of list) {
+      if (!control?.clipId) continue;
+      if (declaredHeavy(control.capabilities)) set.add(control.clipId);
+      else if (for3D && control.cardId !== 'scene-3d') {
+        const comp = control.compositing ?? control.capabilities?.compositing ?? 'independent';
+        if (comp === 'independent') set.add(control.clipId);
+      }
+    }
     return set;
   }
   const tuning = opts.tuning ?? (root ? loadTuning(root) : null);
   const { project, identityKeys, frameModes } = planInputsOfControls(list, fps);
-  return planPipelines(project, pickLatestCosts(costs), fps, { tuning, identityKeys, frameModes }).prerenderSet;
+  return planPipelines(project, pickLatestCosts(costs), fps, {
+    tuning, identityKeys, frameModes,
+    includeLightCardsFor3D: opts.includeLightCardsFor3D ?? opts.view3d,
+    view3d: opts.view3d,
+    capabilities: opts.capabilities,
+    compositing: opts.compositing,
+    isIndependent: opts.isIndependent,
+  }).prerenderSet;
 }
 
 /**
@@ -97,12 +112,19 @@ export function prerenderSetOf(project, costs = null, fps = Number(project?.fps)
     for (const clip of track?.clips ?? []) {
       if (!clip?.id || !(clip.cardId || clip.nodeId)) continue;
       controls.push({
-        clipId: clip.id, nodeId: clip.nodeId ?? clip.id, start: clip.start, end: clip.end,
+        clipId: clip.id, cardId: clip.cardId, nodeId: clip.nodeId ?? clip.id, start: clip.start, end: clip.end,
         costKey: opts.identityKeys?.[clip.id],
         capabilities: capabilitiesOf(clip) ?? { frameMode: clip.mode },
         frameMode: opts.frameModes?.[clip.id],
       });
     }
   }
-  return prerenderSetOfPlan(controls, { fps, costs, tuning: opts.tuning, root: opts.root });
+  return prerenderSetOfPlan(controls, {
+    fps, costs, tuning: opts.tuning, root: opts.root,
+    includeLightCardsFor3D: opts.includeLightCardsFor3D ?? opts.view3d,
+    view3d: opts.view3d,
+    capabilities: opts.capabilities,
+    compositing: opts.compositing,
+    isIndependent: opts.isIndependent,
+  });
 }

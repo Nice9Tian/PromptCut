@@ -299,7 +299,7 @@ try {
     out.a1.push({ name: b.name, ok: r.ok, url: r.url, width: r.width, height: r.height, cached: r.cached, transparentRatio: r.transparentRatio, error: r.error, ms: Date.now() - t0 });
     if (!check(r.ok === true, `A1 ${b.name}:bake_card 成功`, { status: r.status, error: r.error })) continue;
     check(r.clipId === b.clipId && r.t === b.t && r.width === b.size && r.height === b.size && r.cached === false
-      && typeof r.bytes === 'number' && typeof r.transparentRatio === 'number' && typeof r.hint === 'string' && /贴图/.test(r.hint) && typeof r.note === 'string' && /快照/.test(r.note),
+      && typeof r.bytes === 'number' && typeof r.transparentRatio === 'number' && typeof r.hint === 'string' && /贴图/.test(r.hint) && typeof r.note === 'string' && /PNG 快照/.test(r.note),
       `A1 ${b.name}:返回的字段齐全(clipId、t、正方形尺寸、bytes、transparentRatio、hint、note)`, { ...r, hint: undefined, note: undefined });
     check(b.bg ? /不透明贴图/.test(r.hint) : /透明底贴图/.test(r.hint), `A1 ${b.name}:说明文字跟着 bg 走`, r.hint);
     check(r.transparentRatio < 1, `A1 ${b.name}:画面不是空的`, r.transparentRatio);

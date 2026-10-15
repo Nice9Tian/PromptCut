@@ -1,8 +1,8 @@
 /**
- * 卡片快照(`bake_card`、3D 视图与空闲预渲染的贴图)经素材服务存取。
- * 这里说的「卡片快照」是一张 **PNG 位图**(单张卡片某一刻的画面,当场渲出来,见 `vision/card-bitmap.ts`),不是 HTML:
- * 本模块只收发 PNG,任何地方都不存这张卡的 HTML(`docs/semantics/glossary.md`「快照」、`mechanism/asset-service.md`
- * 「不经任务队列的单张卡片画面」)。标识符和报错文字里的旧叫法没有改。
+ * PNG 快照(`bake_card`、3D 视图与空闲预渲染的贴图)经素材服务存取。
+ * 这里说的「PNG 快照」是一张 **PNG 位图**(单张卡片某一刻的画面,当场渲出来,见 `vision/card-bitmap.ts`),不是 HTML:
+ * 本模块只收发 PNG,任何地方都不存这张卡的 HTML(`docs/semantics/glossary.md`「PNG 快照」、`mechanism/asset-service.md`
+ * 「不经任务队列的单张卡片画面」)。注释与报错文字统一为「PNG 快照」(2026-10-14 用户定)。
  *
  * 语义:`docs/semantics/product/asset-service.md`「预渲染的产物」(渲染生成的所有预渲染产物生成后都无条件推送到素材服务,
  * 素材服务就在本机时也一样)、「职责」第三条与 `product/agent.md`「素材与产物」(Agent 进程和预渲染进程经素材服务的接口
@@ -100,7 +100,7 @@ function wrap(err, base, what) {
   if (typeof status === 'number') {
     return new BakeStoreError(`素材服务拒绝了${what}(${base},HTTP ${status}):${msg}`, { status });
   }
-  return new BakeStoreError(`素材服务不可达(${base}),卡片快照没能${what}:${msg}`);
+  return new BakeStoreError(`素材服务不可达(${base}),PNG 快照没能${what}:${msg}`);
 }
 
 async function writeAtomic(file, text) {
@@ -147,7 +147,7 @@ export function createBakeStore({ indexDir, origin, fetchImpl = globalThis.fetch
   /** 当前素材服务的客户端;取不到地址抛 */
   function current(what) {
     const src = String(origin() || '').trim().replace(/\/+$/, '');
-    if (!src) throw new BakeStoreError(`素材服务不可达:取不到素材服务的地址,卡片快照没能${what}`);
+    if (!src) throw new BakeStoreError(`素材服务不可达:取不到素材服务的地址,PNG 快照没能${what}`);
     const base = `${src}/api/asset`;
     if (cached?.base !== base) cached = { src, base, client: createAssetClient({ base, fetch: fetchImpl, timeoutMs, retries }) };
     return cached;
@@ -233,7 +233,7 @@ export function createBakeStore({ indexDir, origin, fetchImpl = globalThis.fetch
      * @param {{ width?: number, height?: number, clipId?: string, name?: string }} [meta]
      */
     async put(key, buf, meta = {}) {
-      if (!KEY_RE.test(String(key))) throw new TypeError(`卡片快照的键不合法:${key}`);
+      if (!KEY_RE.test(String(key))) throw new TypeError(`PNG 快照的键不合法:${key}`);
       const { base, client } = current('写入');
       let r;
       try { r = await client.put(BAKE_NS, buf, { ext: 'png' }); } catch (err) { throw wrap(err, base, '写入'); }
@@ -264,7 +264,7 @@ export function createBakeStore({ indexDir, origin, fetchImpl = globalThis.fetch
       try {
         res = await fetchImpl(url, { signal: AbortSignal.timeout(LEGACY_FETCH_TIMEOUT_MS) });
       } catch (err) {
-        throw new BakeStoreError(`素材服务不可达(${base}),卡片快照没能读取:${err?.cause?.code || err?.message || err}`);
+        throw new BakeStoreError(`素材服务不可达(${base}),PNG 快照没能读取:${err?.cause?.code || err?.message || err}`);
       }
       if (res.status === 404) { await res.arrayBuffer().catch(() => {}); return null; }
       if (!res.ok) {

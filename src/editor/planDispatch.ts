@@ -48,6 +48,8 @@ let lowMemory = false;
 /** 界限搜索判轻的卡的 identityKey;null = 还没有结果 */
 let lowMemoryLight: ReadonlySet<string> | null = null;
 let judged: PipelinePlan | null = null;
+/** 3D 视图是否开启（打开时把独立轻卡也纳入预渲染单卡轨道流集合 prerenderSet） */
+let view3d = false;
 /**
  * L4(在线普通档,C10 契约第 6 节、第 18 节第 1 条):分派时每张重卡每拍的固定成本换成实测的换帧成本 `swapMs`
  * (`planPipelines` 的 `opts.deadMs`),与播放时 `beatSwap.mjs` 的 `fitBeatSwaps` 同一个数。null = 桌面的 `DEAD_MS`。
@@ -78,6 +80,18 @@ export function currentTuning(): PipelineTuning {
   return tuning;
 }
 
+/** 3D 视图开启 / 关闭。打开时把独立轻卡也纳入 prerenderSet，方便 3D 板子贴轨道流 */
+export function setPlan3DView(on: boolean): void {
+  if (view3d === !!on) return;
+  view3d = !!on;
+  schedule();
+}
+
+/** 此刻 3D 模式是否开启 */
+export function plan3DView(): boolean {
+  return view3d;
+}
+
 function recompute(): void {
   if (!project) {
     plan = null;
@@ -94,8 +108,9 @@ function recompute(): void {
    * 不去掉的话它们没有身份、没有成本记录,会按声明兜底判重,进清单计划与低内存档补渲。
    */
   const planned = knownCardsOnly(project);
-  plan = planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}), ...dead });
-  judged = lowMemory ? planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [], ...dead }) : plan;
+  const opts3D = view3d ? { includeLightCardsFor3D: true, view3d: true } : {};
+  plan = planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}), ...opts3D, ...dead });
+  judged = lowMemory ? planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [], ...opts3D, ...dead }) : plan;
 }
 
 /** 去掉未知卡片段的项目(只给 `planPipelines` 看;没有未知卡片时原样回同一个对象) */
@@ -254,6 +269,7 @@ export function lightCostAt(t: number): number {
 /** 测试用 */
 export function resetPlanDispatch(): void {
   lowMemory = false;
+  view3d = false;
   setLocalOnlyLowMemory(false);
   lowMemoryLight = null;
   judged = null;
