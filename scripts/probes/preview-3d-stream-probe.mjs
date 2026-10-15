@@ -6,7 +6,7 @@
  *      独立轻卡（如 punch-pill）纳入 prerenderSet（scene-3d 照旧除外）；
  *   2. 播放中 (playing: true)：
  *      - 绝对不向 /api/vision/bake-batch 或 /api/ui-render/bake-batch 发起渲染请求；
- *      - 3D 板子使用轨道流画面（或半透明占位）；
+ *      - 3D 板子使用轨道流画面（且几何按 bound 收紧，不是拉伸为全屏）；
  *   3. 暂停态 (!playing)：
  *      - 发起当前时刻的精确单帧渲染；
  *      - 在精确图返回前保持流画面/占位作为过渡；到位后无缝切换为精确 PNG 快照。
@@ -127,12 +127,25 @@ try {
     return !!m.frontStage() && m.backRole() === 'back';
   }, { timeout: 120000, polling: 500 }).catch(() => {});
 
-  // 创建项目：包含 scene-3d 与 punch-pill
+  // 创建项目：包含 scene-3d（右后方）与 punch-pill（左前方），保证两者互不遮挡
   const ids = await page.evaluate(async () => {
     const { actions, getState } = await import('/src/store/project.ts');
     actions.newProject('3d-stream-test');
-    const a = actions.addCardClip('scene-3d', 0, { duration: 8 });
-    const b = actions.addCardClip('punch-pill', 0, { duration: 8, params: { text: '3D Stream Test' } });
+    // scene-3d 挪到右侧偏后
+    const a = actions.addCardClip('scene-3d', 0, {
+      duration: 8,
+    });
+    if (a?.id) {
+      actions.setClipFrame(a.id, { x: 1200, y: 540, w: 750, h: 550, translateZ: -120, rotateY: -15 });
+    }
+    // punch-pill 设在左前方，带倾角和深度
+    const b = actions.addCardClip('punch-pill', 0, {
+      duration: 8,
+      params: { text: '3D Stream Test' },
+    });
+    if (b?.id) {
+      actions.setClipFrame(b.id, { x: 450, y: 540, w: 700, h: 260, translateZ: 220, rotateY: 18 });
+    }
     actions.seek(0);
     return { scene: a?.id, pill: b?.id, clips: getState().project.tracks.reduce((n, t) => n + t.clips.length, 0) };
   });
@@ -164,39 +177,108 @@ try {
   check(planInfo.pillInPrerenderSet === true, '3D 模式下 punch-pill 独立轻卡纳入 prerenderSet', planInfo);
   check(planInfo.sceneInPrerenderSet === false, '3D 模式下 scene-3d 真三维卡不纳入 prerenderSet', planInfo);
 
-  // 等待暂停态下的首帧渲染平稳
-  await sleep(1500);
+  // 触发并等待预渲染进程产出 punch-pill 的轨道流
+  const streamReadyDeadline = Date.now() + 120000;
+  let streamReady = false;
+  let lastDiag = null;
+  let lastReadyIndex = null;
+  while (Date.now() < streamReadyDeadline) {
+    let prerenderInfo = null;
+    try {
+      prerenderInfo = await (await fetch(origin + '/api/prerender/info')).json();
+      out.prerenderInfo = prerenderInfo;
+    } catch {}
 
-  // 截图 1：暂停态（初始）
-  const pausedInitialPath = path.join(OUT_DIR, '3d-paused-initial.png');
-  await page.screenshot({ path: pausedInitialPath });
-  out.pausedInitialScreenshot = pausedInitialPath;
+    if (prerenderInfo?.url && prerenderInfo?.ready) {
+      try {
+        const k = await page.evaluate(async () => (await import('/src/render/dataMirror.ts')).mirrorKey());
+        if (k) {
+          const res = await fetch(prerenderInfo.url + '/api/frames/preload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: k.session, localRev: k.localRev, lane: 'background' }),
+          }).catch(() => null);
+          if (res) out.preloadStatus = res.status;
+        }
+        lastDiag = await (await fetch(prerenderInfo.url + '/api/frames/diagnostics').catch(() => null))?.json().catch(() => null);
+      } catch {}
+    }
 
-  // 2. 播放测试：播放中绝对不发 bake-batch 请求
+    const { hasStream, readyKeys } = await page.evaluate(async (id) => {
+      const m = await import('/src/editor/snapshotFeed.ts');
+      const idx = m.currentReadyIndex();
+      const l = idx.get(id)?.get('stream');
+      const keys = [];
+      for (const [k, v] of idx.entries()) {
+        keys.push({ id: k, kinds: [...v.keys()] });
+      }
+      return { hasStream: !!l && (l.ranges?.length ?? 0) > 0, readyKeys: keys };
+    }, ids.pill);
+    lastReadyIndex = readyKeys;
+    if (hasStream) {
+      streamReady = true;
+      break;
+    }
+    await sleep(2000);
+  }
+  out.streamReady = streamReady;
+  out.lastDiag = lastDiag;
+  out.lastReadyIndex = lastReadyIndex;
+  check(streamReady, 'punch-pill 轨道流已在父页就绪索引中 ready', { streamReady, lastReadyIndex, lastDiag: out.lastDiag?.streams?.stats });
+
+  // 2. 播放测试：播放中绝对不发 bake-batch 请求，在两个不同时刻分别截图
   bakeRequestsWhilePlaying = 0;
   isCurrentlyPlaying = true;
+  await page.evaluate(async () => {
+    const { actions } = await import('/src/store/project.ts');
+    actions.seek(0);
+  });
   await page.click('.pc-pv-btn--play');
-  await sleep(2000); // 播放 2 秒
 
-  const headDuringPlay = await page.evaluate(async () => {
+  // 等待播放推进至 t ≈ 0.3s
+  await sleep(350);
+  const headT1 = await page.evaluate(async () => {
     const { getState } = await import('/src/store/project.ts');
     return { t: getState().t, playing: getState().playing };
   });
-  out.headDuringPlay = headDuringPlay;
-  check(headDuringPlay.playing === true, '播放中 playing 保持 true', headDuringPlay);
-  check(headDuringPlay.t > 0.8, '播放中播放头向前推进', headDuringPlay);
+  out.headT1 = headT1;
+  check(headT1.playing === true, '时刻 1 播放中 playing 为 true', headT1);
+
+  // 截图 1：播放中时刻 1
+  const playingT1Path = path.join(OUT_DIR, '3d-playing-t1.png');
+  await page.screenshot({ path: playingT1Path });
+  out.playingT1Screenshot = playingT1Path;
+
+  // 继续播放至 t ≈ 1.5s
+  await sleep(1200);
+  const headT2 = await page.evaluate(async () => {
+    const { getState } = await import('/src/store/project.ts');
+    return { t: getState().t, playing: getState().playing };
+  });
+  out.headT2 = headT2;
+  check(headT2.playing === true, '时刻 2 播放中 playing 为 true', headT2);
+  check(headT2.t > headT1.t, '播放头从时刻 1 持续前进至时刻 2', { t1: headT1.t, t2: headT2.t });
   check(bakeRequestsWhilePlaying === 0, '播放中严禁调用 /bake-batch', { bakeRequestsWhilePlaying });
 
-  // 截图 2：播放中
-  const playingPath = path.join(OUT_DIR, '3d-playing.png');
-  await page.screenshot({ path: playingPath });
-  out.playingScreenshot = playingPath;
+  // 截图 2：播放中时刻 2
+  const playingT2Path = path.join(OUT_DIR, '3d-playing-t2.png');
+  await page.screenshot({ path: playingT2Path });
+  out.playingT2Screenshot = playingT2Path;
 
   // 3. 暂停测试：停下就精确
   isCurrentlyPlaying = false;
-  const bakeBeforePause = bakeRequestsTotal;
   await page.click('.pc-pv-btn--play');
-  await sleep(1500); // 等待停下后触发精确渲染
+
+  // 等待暂停状态生效并触发停下精确渲染（parked 延迟 500ms，开始请求 bake-batch）
+  await sleep(1000);
+
+  // 等待 .pc-3d-note 烘焙提示彻底消失（精确 PNG 快照渲染并贴上完成）
+  await page.waitForFunction(() => {
+    const note = document.querySelector('.pc-3d-note');
+    return !note || note.textContent === '';
+  }, { timeout: 60000, polling: 500 }).catch(() => {});
+
+  await sleep(800); // 确保最后一次 raf 渲染完毕并上屏
 
   const headAfterPause = await page.evaluate(async () => {
     const { getState } = await import('/src/store/project.ts');

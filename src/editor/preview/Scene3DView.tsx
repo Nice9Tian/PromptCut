@@ -435,10 +435,35 @@ export function Scene3DView({ project, t }: Props) {
       mesh: any;
       mat: any;
       pl: any;
+      canvas: HTMLCanvasElement | null;
       canvasTex: any;
       cropped: boolean;
+      boundSig: string;
       mode: "proxy" | "stream" | "exact";
     }[] = [];
+
+    const cropToCanvasBound = (b: typeof boards[number], cv: HTMLCanvasElement) => {
+      const W = b.pl.size.width;
+      const H = b.pl.size.height;
+      const bx = parseFloat(cv.style.left) || 0;
+      const by = parseFloat(cv.style.top) || 0;
+      const bw = cv.width || W;
+      const bh = cv.height || H;
+      const sig = `${bx},${by},${bw},${bh}`;
+      if (b.boundSig === sig && b.cropped) return;
+      b.boundSig = sig;
+
+      const nextGeo = new THREE.PlaneGeometry(bw, bh);
+      const old = b.mesh.geometry;
+      b.mesh.geometry = nextGeo;
+      old.dispose();
+      disposables.push(nextGeo);
+
+      const dx = (bx + bw / 2) - W / 2;
+      const dy = H / 2 - (by + bh / 2);
+      b.mesh.position.set(b.pl.meshOffset[0] + dx, b.pl.meshOffset[1] + dy, b.pl.meshOffset[2]);
+      b.cropped = true;
+    };
 
     posers.current = [];
     // 拾取用:每块 mesh 记住它属于哪个 clip(three 的 userData 就是干这个的)
@@ -556,16 +581,20 @@ export function Scene3DView({ project, t }: Props) {
         mesh: any;
         mat: any;
         pl: any;
+        canvas: HTMLCanvasElement | null;
         canvasTex: any;
         cropped: boolean;
+        boundSig: string;
         mode: "proxy" | "stream" | "exact";
       } = {
         clipId: clip.id,
         mesh,
         mat,
         pl,
+        canvas: canvas ?? null,
         canvasTex,
         cropped: false,
+        boundSig: "",
         mode: "proxy",
       };
       boards.push(boardState);
@@ -597,8 +626,23 @@ export function Scene3DView({ project, t }: Props) {
        */
       const cropToContent = (tex: any) => {
         const box = measureImageBox(tex.image);
-        if (!worthCropping(box) || !box) return;
         const W = pl.size.width, H = pl.size.height;
+        boardState.boundSig = "";
+        if (!worthCropping(box) || !box) {
+          if (boardState.cropped) {
+            const nextGeo = new THREE.PlaneGeometry(W, H);
+            const old = mesh.geometry;
+            mesh.geometry = nextGeo;
+            old.dispose();
+            disposables.push(nextGeo);
+            mesh.position.set(...pl.meshOffset);
+            tex.repeat.set(1, 1);
+            tex.offset.set(0, 0);
+            tex.needsUpdate = true;
+            boardState.cropped = false;
+          }
+          return;
+        }
         const nextGeo = new THREE.PlaneGeometry(W * box.w, H * box.h);
         const old = mesh.geometry;
         mesh.geometry = nextGeo;
@@ -660,16 +704,8 @@ export function Scene3DView({ project, t }: Props) {
       /** 退回色块:这一刻的图还没渲出来,或者换到了别的时刻;若流画面可用则保持流画面过渡 */
       const toProxy = () => {
         if (boundUrl) { texInUse.delete(boundUrl); boundUrl = null; }
-        if (player.showingClips().has(clip.id) && canvasTex) {
-          if (boardState.cropped) {
-            const nextGeo = new THREE.PlaneGeometry(pl.size.width, pl.size.height);
-            const old = mesh.geometry;
-            mesh.geometry = nextGeo;
-            old.dispose();
-            disposables.push(nextGeo);
-            mesh.position.set(...pl.meshOffset);
-            boardState.cropped = false;
-          }
+        if (player.showingClips().has(clip.id) && canvasTex && canvas) {
+          cropToCanvasBound(boardState, canvas);
           canvasTex.repeat.set(1, 1);
           canvasTex.offset.set(0, 0);
           canvasTex.needsUpdate = true;
@@ -690,6 +726,7 @@ export function Scene3DView({ project, t }: Props) {
           disposables.push(nextGeo);
           mesh.position.set(...pl.meshOffset);
           boardState.cropped = false;
+          boardState.boundSig = "";
         }
         boardState.mode = "proxy";
         if (!mat.map) return;
@@ -777,17 +814,9 @@ export function Scene3DView({ project, t }: Props) {
       const isPlay = playingRef.current;
       for (const b of boards) {
         if (isPlay) {
-          if (showing.has(b.clipId) && b.canvasTex) {
+          if (showing.has(b.clipId) && b.canvasTex && b.canvas) {
+            cropToCanvasBound(b, b.canvas);
             if (b.mode !== "stream") {
-              if (b.cropped) {
-                const nextGeo = new THREE.PlaneGeometry(b.pl.size.width, b.pl.size.height);
-                const old = b.mesh.geometry;
-                b.mesh.geometry = nextGeo;
-                old.dispose();
-                disposables.push(nextGeo);
-                b.mesh.position.set(...b.pl.meshOffset);
-                b.cropped = false;
-              }
               b.canvasTex.repeat.set(1, 1);
               b.canvasTex.offset.set(0, 0);
               b.mat.map = b.canvasTex;
@@ -808,6 +837,7 @@ export function Scene3DView({ project, t }: Props) {
                 disposables.push(nextGeo);
                 b.mesh.position.set(...b.pl.meshOffset);
                 b.cropped = false;
+                b.boundSig = "";
               }
               b.mat.map = null;
               b.mat.color.set(PROXY_COLOR);
@@ -823,17 +853,9 @@ export function Scene3DView({ project, t }: Props) {
           // 两者都没有则显示半透明占位色块
           if (b.mode === "exact") {
             // 已有精确 PNG 快照，保持
-          } else if (showing.has(b.clipId) && b.canvasTex) {
+          } else if (showing.has(b.clipId) && b.canvasTex && b.canvas) {
+            cropToCanvasBound(b, b.canvas);
             if (b.mode !== "stream") {
-              if (b.cropped) {
-                const nextGeo = new THREE.PlaneGeometry(b.pl.size.width, b.pl.size.height);
-                const old = b.mesh.geometry;
-                b.mesh.geometry = nextGeo;
-                old.dispose();
-                disposables.push(nextGeo);
-                b.mesh.position.set(...b.pl.meshOffset);
-                b.cropped = false;
-              }
               b.canvasTex.repeat.set(1, 1);
               b.canvasTex.offset.set(0, 0);
               b.mat.map = b.canvasTex;
@@ -845,6 +867,16 @@ export function Scene3DView({ project, t }: Props) {
             }
             b.canvasTex.needsUpdate = true;
           } else if (b.mode !== "proxy") {
+            if (b.cropped) {
+              const nextGeo = new THREE.PlaneGeometry(b.pl.size.width, b.pl.size.height);
+              const old = b.mesh.geometry;
+              b.mesh.geometry = nextGeo;
+              old.dispose();
+              disposables.push(nextGeo);
+              b.mesh.position.set(...b.pl.meshOffset);
+              b.cropped = false;
+              b.boundSig = "";
+            }
             b.mat.map = null;
             b.mat.color.set(PROXY_COLOR);
             b.mat.opacity = 0.45;

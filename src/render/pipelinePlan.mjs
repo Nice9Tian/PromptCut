@@ -257,9 +257,17 @@ export function planPipelines(project, costs, fps, opts = {}) {
     segments.push({ fromSec, toSec, heavy: new Set(heavy.sort(byId)), light: new Set([...light].sort(byId)) });
   }
 
-  if (opts.includeLightCardsFor3D === true || opts.view3d === true) {
+  const mirror = typeof globalThis !== 'undefined' ? (globalThis.__PC_LATEST_MIRROR__?.() ?? null) : null;
+  const mirrorClips = (mirror?.project?.tracks ?? []).flatMap((t) => t?.clips ?? []) ?? [];
+  const cardIdOfClip = (clip) => clip?.cardId ?? mirrorClips.find((c) => c?.id === clip?.id)?.cardId;
+
+  const hasScene3d = clips.some((c) => cardIdOfClip(c) === 'scene-3d' || c.cardId === 'scene-3d' || c.nodeId === 'scene-3d')
+    || mirrorClips.some((c) => c?.cardId === 'scene-3d');
+  const for3D = opts.includeLightCardsFor3D === true || opts.view3d === true || (opts.includeLightCardsFor3D !== false && hasScene3d);
+  if (for3D) {
     for (const clip of clips) {
-      if (clip.cardId === 'scene-3d' || clip.nodeId === 'scene-3d') continue;
+      const cid = cardIdOfClip(clip);
+      if (cid === 'scene-3d' || clip.cardId === 'scene-3d' || clip.nodeId === 'scene-3d') continue;
       if (isIndependentCard(clip, opts)) {
         prerender.add(clip.id);
       }
