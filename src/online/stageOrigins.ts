@@ -9,8 +9,8 @@
  *   同一份配置里另有托管方的总开关 `"onlineCardExec": false`(契约 `online-card-exec-contract.md`;缺省开):关掉就不在线执行用户卡与图卡,
  *   整体退回原来的做法(`parseCardExecSwitch`)。
  *
- * - **退回**:读不到配置、配置不对、或舞台握手失败,退回 C10a 的同源单舞台 —— 不许开不出画面(`dualStage()` 的兜底原则)。
- * - **低内存档**:仍是单舞台,不开后台舞台(C10a)。
+ * - **跨源隔离**:所有舞台一律跨源隔离，撤掉退回同源单舞台的路（2026-10-14 用户定）。读不到配置、配置不对或握手失败不再退回同源单舞台，而是不挂载舞台；低内存档开单舞台 A，也必须从跨源舞台源加载。
+ * - **低内存档**:只开单舞台 A,不开后台舞台 B,单舞台 A 同样必须是跨源隔离舞台。
  *
  * 本模块属于 render 这一层(`src/online/`):不引 editor;不读 `import.meta.env`(调用方把 `base` 传进来)。
  */
@@ -18,8 +18,7 @@
 export type StageLetter = "A" | "B";
 export type StageOrigins = Record<StageLetter, string>;
 /**
- * 首次握手的进度。`interim`:可见舞台 A 挂上 20 秒还没握上手,先按同源单舞台出画面,同时在隐藏的 iframe 里预热两个舞台源;
- * 两台都加载完、握上手就换回双舞台(`ok`,只换一次),总上限到点还没好就 `failed`(`stageHandshake.ts`)。
+ * 首次握手的进度。`interim` 过渡期已撤销（所有舞台一律跨源隔离，不再退回同源单舞台；2026-10-14 用户定）。
  */
 export type Handshake = "pending" | "interim" | "ok" | "failed";
 export type StageLayout = "dual" | "single";
@@ -86,7 +85,7 @@ export function parseCardExecSwitch(config: unknown): boolean {
 }
 
 /**
- * 开几个舞台:低内存档单舞台;没有舞台源(读不到配置)单舞台;握手失败单舞台;其余双舞台(握手进行中也按双舞台挂 iframe)。
+ * 开几个舞台:低内存档单舞台(只开跨源 A,不开后台 B);没有舞台源(读不到配置)、握手失败或与编辑器页同源为 single(不再挂载同源单舞台,而是不挂载);其余双舞台(握手进行中也按双舞台挂 iframe)。
  * `pageOrigin` 给了时,舞台源不能与编辑器页同源(那就不是跨源隔离,按读不到处理)。
  */
 export function stageLayout({ lowMemory, origins, handshake, pageOrigin }: { lowMemory: boolean; origins: StageOrigins | null; handshake?: Handshake; pageOrigin?: string }): StageLayout {
@@ -176,7 +175,7 @@ export function loadStageConfig({ base = "/editor/", fetchImpl, timeoutMs = RUNT
 }
 
 /**
- * 舞台握手的结果(Preview 报):失败就退回同源单舞台,本页会话内不再试。
+ * 舞台握手的结果(Preview 报):失败本页会话内不再试,不退回同源单舞台。
  * `interim` 只能从 `pending` 进(换回双舞台之后再出问题不回 `interim`,照看守走 `failed`,不来回切)。
  */
 export function markStageHandshake(result: Exclude<Handshake, "pending">, reason: string | null = null): void {

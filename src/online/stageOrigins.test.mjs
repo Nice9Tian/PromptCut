@@ -27,6 +27,7 @@ test("C10-SO-02 开几个舞台:低内存档、没有舞台源、握手失败、
   assert.equal(stageLayout({ lowMemory: false, origins, handshake: "pending" }), "dual");
   assert.equal(stageLayout({ lowMemory: false, origins, handshake: "ok" }), "dual");
   assert.equal(stageLayout({ lowMemory: false, origins, handshake: "failed" }), "single");
+  assert.equal(stageLayout({ lowMemory: false, origins, handshake: "interim" }), "single");
   assert.equal(stageLayout({ lowMemory: true, origins, handshake: "ok" }), "single");
   assert.equal(stageLayout({ lowMemory: false, origins: null, handshake: "ok" }), "single");
   assert.equal(stageLayout({ lowMemory: false, origins, handshake: "ok", pageOrigin: "https://s1.x.io" }), "single");
@@ -86,5 +87,5 @@ test("C10-SO-07 取运行配置时一并读总开关:关了记进本页状态(�
   resetOnlineStagesForTest();
   await loadStageConfig({ fetchImpl: async () => { throw new Error("offline"); } });
   assert.equal(onlineStageState().cardExec, true);
-  assert.equal(onlineStageState().origins, null, "取不到配置时没有舞台源,本来就是同源单舞台、不执行");
+  assert.equal(onlineStageState().origins, null, "取不到配置时没有舞台源,不挂载舞台、不执行");
 });

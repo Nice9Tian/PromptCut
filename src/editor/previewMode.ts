@@ -75,8 +75,9 @@ export function stageOrigins(): Record<StageId, string> | null {
  */
 export function dualStage(): boolean {
   /*
-   * 在线浏览器模式(C10 契约第 2 节):普通档开两个同站跨源的舞台,舞台源来自运行配置;读不到配置、握手失败、
-   * 低内存档都退回 C10a 的同源单舞台(c10a 第 8.1 节)。舞台端口表在线上一律不看。
+   * 在线浏览器模式(C10 契约第 2 节):普通档开两个同站跨源的舞台,舞台源来自运行配置;
+   * 低内存档开跨源单舞台 A(不开后台舞台 B);读不到配置或握手失败则不挂载舞台,不再退回同源单舞台(2026-10-14 用户定)。
+   * 舞台端口表在线上一律不看。
    */
   if (ONLINE) {
     const st = onlineStageState();
@@ -86,14 +87,11 @@ export function dualStage(): boolean {
 }
 
 /**
- * 在线普通档首次握手的过渡期(`stageHandshake.ts` 的 `interim`):按同源单舞台出画面,两个跨源舞台在隐藏的 iframe 里预热。
- * 条件与双舞台相同(有舞台源、不是低内存档……),只是握手处在 `interim`。
+ * 在线普通档首次握手的过渡期(`stageHandshake.ts` 的 `interim`)已撤销（2026-10-14 用户定：所有舞台一律跨源隔离，撤掉退回同源单舞台的路）。
+ * 直接返回 false。
  */
 export function interimStage(): boolean {
-  if (!ONLINE) return false;
-  const st = onlineStageState();
-  if (st.handshake !== "interim") return false;
-  return stageLayout({ lowMemory: lowMemoryMode(true), origins: st.origins, handshake: "pending", pageOrigin: typeof location === "undefined" ? undefined : location.origin }) === "dual";
+  return false;
 }
 
 /**
@@ -124,9 +122,12 @@ export function liveStage(): boolean {
  * 是双舞台开不出来,舞台内容应当照缺省走。
  */
 export function stageSrc(id: StageId, opts: { dual?: boolean } = {}): string {
-  // `opts.dual`:按双舞台 / 单舞台的形状给地址,不看此刻的布局(过渡期的预热 iframe 与换回那一下的衔接要用)
+  // `opts.dual`:按双舞台 / 单舞台的形状给地址,不看此刻的布局(换回那一下的衔接要用)
   const dual = opts.dual ?? dualStage();
-  const origins = dual ? stageOrigins() : null;
+  const origins = ONLINE ? stageOrigins() : dual ? stageOrigins() : null;
+  if (ONLINE && (!origins || !origins[id])) {
+    throw new Error(`[previewMode] 在线舞台未配置跨源隔离源，禁止退回同源舞台: stage ${id}`);
+  }
   const mode = dual || singleLiveStage() ? "&preview=stage" : previewMode() === "legacy" ? "&preview=legacy" : "";
   // 在线浏览器模式还没有运行期判据,先由编辑页地址上的 `platform=browser` 显式打开、转给舞台(`unsupported` 占位)
   const platform = new URLSearchParams(location.search).get("platform") === "browser" ? "&platform=browser" : "";
@@ -139,7 +140,7 @@ export function stageSrc(id: StageId, opts: { dual?: boolean } = {}): string {
   const tier = ONLINE ? `&lm=${lowMemoryMode(true) ? 1 : 0}` : "";
   /*
    * 在线的跨源舞台载单独的舞台入口 `stage.html`(同一份脚本包;契约 `online-card-exec-contract.md` 第 3.3 节):它带舞台的内容安全策略
-   * (`<meta>` 兜底),加固与自检按这个路径认它(`isolation/stageGuard.ts`)。同源单舞台、桌面运行环境的地址一个字不变。
+   * (`<meta>` 兜底),加固与自检按这个路径认它(`isolation/stageGuard.ts`)。桌面运行环境端口未起时的退回地址一个字不变。
    */
   // 按构建的 base 拼(`/editor/stage.html`):编辑器页的地址可能是不带斜杠的 `/editor`,不能拿它的目录部分
   const base = typeof import.meta.env !== "undefined" && import.meta.env.BASE_URL ? import.meta.env.BASE_URL : "/";
@@ -149,6 +150,9 @@ export function stageSrc(id: StageId, opts: { dual?: boolean } = {}): string {
 
 /** 给 `createStageRpc` 的 `targetOrigin`:跨源时必须点名,不能用 `location.origin` */
 export function stageTargetOrigin(id: StageId): string {
-  const origins = dualStage() ? stageOrigins() : null;
+  const origins = ONLINE ? stageOrigins() : dualStage() ? stageOrigins() : null;
+  if (ONLINE && (!origins || !origins[id])) {
+    throw new Error(`[previewMode] 在线舞台未配置跨源隔离源，禁止退回同源舞台: stage ${id}`);
+  }
   return origins ? origins[id] : location.origin;
 }

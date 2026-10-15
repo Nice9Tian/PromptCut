@@ -4,7 +4,29 @@ import type { Duplex } from "node:stream";
 import type { Plugin, ViteDevServer } from "vite";
 import { STAGE_PORTS, stagePortsOf } from "./stage-ports.mjs";
 import { STAGE_CLIENT_HEADER, viaStagePort } from "./http-guard.mjs";
-import { stageRequestAllowed, stageGateLog, STAGE_DENY_BODY } from "./stage-gate.mjs";
+import { stageRequestAllowed, stageGateLog, STAGE_DENY_BODY, setStageMediaHashesGetter } from "./stage-gate.mjs";
+
+export function projectMediaHashes(project: any): Set<string> {
+  const hashes = new Set<string>();
+  if (!project || !Array.isArray(project.media)) return hashes;
+  for (const m of project.media) {
+    if (typeof m.hash === "string" && m.hash) hashes.add(m.hash.toLowerCase());
+    if (typeof m.tiers?.original === "string" && m.tiers.original) hashes.add(m.tiers.original.toLowerCase());
+    if (typeof m.tiers?.small === "string" && m.tiers.small) hashes.add(m.tiers.small.toLowerCase());
+    if (typeof m.url === "string") {
+      const match = /\/@media\/([0-9a-fA-F]{64})/i.exec(m.url);
+      if (match) hashes.add(match[1].toLowerCase());
+    }
+  }
+  return hashes;
+}
+
+export function currentProjectMediaHashes(): Set<string> | null {
+  const getter = (globalThis as any).__PC_LATEST_MIRROR__;
+  const m = typeof getter === "function" ? getter() : null;
+  if (!m || !m.project) return null;
+  return projectMediaHashes(m.project);
+}
 
 /**
  * 两个舞台端口(E1)。编辑器端口 +1 / +2 各起一个**透明反向代理**,原样转回同一份 vite,
@@ -69,7 +91,7 @@ export function stagePortsPlugin(): Plugin {
   const makeProxy = (listenHost: string, listenPort: number, targetPort: number): Promise<http.Server | null> =>
     new Promise((resolve) => {
       const proxy = http.createServer((req, res) => {
-        const ok = stageRequestAllowed(req.method, req.url, { headers: req.headers });
+        const ok = stageRequestAllowed(req.method, req.url, { headers: req.headers, projectMediaHashes: currentProjectMediaHashes });
         stageGateLog(req.method, req.url, false, ok);
         if (!ok) {
           // 请求体不读:回完就让这条连接收掉,不把字节转给编辑器进程
@@ -126,13 +148,14 @@ export function stagePortsPlugin(): Plugin {
     apply: "serve",
 
     configureServer(server: ViteDevServer) {
+      setStageMediaHashesGetter(currentProjectMediaHashes);
       /*
        * 第二道:带着舞台端口那个头进来、又不在白名单里的请求,编辑器进程自己也拒(所有路径,不只 `/api`)。
        * 正常情况下走不到 —— 代理已经拒过了;留着是防将来另有一处也写这个头、却忘了过闸。
        * 直连编辑器端口的请求没有这个头,这里直接放过,行为一个字不变。
        */
       server.middlewares.use((req, res, next) => {
-        if (!viaStagePort(req) || stageRequestAllowed(req.method, req.url, { headers: req.headers })) return next();
+        if (!viaStagePort(req) || stageRequestAllowed(req.method, req.url, { headers: req.headers, projectMediaHashes: currentProjectMediaHashes })) return next();
         res.statusCode = 403;
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.setHeader("Cache-Control", "no-store");

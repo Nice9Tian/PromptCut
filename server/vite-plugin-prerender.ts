@@ -52,7 +52,7 @@ async function freePort(): Promise<number> {
 function editorOrigins(server: ViteDevServer): string[] {
   const addr = server.httpServer?.address() as AddressInfo | null;
   const port = addr?.port || server.config.server.port || 5190;
-  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`, ...stageOriginsOf(port)];
+  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`];
 }
 
 /**
@@ -146,7 +146,9 @@ export function prerenderPlugin(): Plugin {
         const s = prerenderState();
         if (!s.ready || !s.url) return { ok: true, pending: true };
         try {
-          const r = await fetch(s.url + pathname, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (process.env.PROMPTCUT_INTERNAL_TOKEN) headers["x-pc-internal-token"] = process.env.PROMPTCUT_INTERNAL_TOKEN;
+          const r = await fetch(s.url + pathname, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
           return await r.json().catch(() => ({ ok: false, error: `预渲染进程回了非 JSON(HTTP ${r.status})` }));
         } catch (e: any) {
           return { ok: false, pending: true, error: String(e?.message ?? e) };
@@ -207,6 +209,14 @@ export function prerenderPlugin(): Plugin {
       const start = async () => {
         const port = await freePort();
         const url = `http://127.0.0.1:${port}`;
+        const addr = server.httpServer?.address() as AddressInfo | null;
+        const editorPort = addr?.port || server.config.server.port || 5190;
+        const stagePorts = stagePortsOf(editorPort);
+        const internalToken = process.env.PROMPTCUT_INTERNAL_TOKEN || (globalThis as any).__PC_INTERNAL_TOKEN__ || (() => {
+          const tok = ((globalThis as any).__PC_INTERNAL_TOKEN__ = "pc-tok-" + Math.random().toString(36).slice(2) + Date.now().toString(36));
+          return tok;
+        })();
+        process.env.PROMPTCUT_INTERNAL_TOKEN = internalToken;
         child = spawn(process.execPath, [
           viteBin(root), "--config", path.join(root, "vite.prerender.config.ts"),
           "--port", String(port), "--strictPort", "--host", "127.0.0.1",
@@ -217,6 +227,8 @@ export function prerenderPlugin(): Plugin {
             PROMPTCUT_ROLE: "prerender",
             PROMPTCUT_PRERENDER_MODE: mode,
             PROMPTCUT_CORS_ORIGINS: editorOrigins(server).join(","),
+            PROMPTCUT_STAGE_PORTS: stagePorts.join(","),
+            PROMPTCUT_INTERNAL_TOKEN: internalToken,
             /*
              * 编辑器那一端的地址,给镜像插件回拉整份项目用(A7)。帧请求的 body 里只有
              * `{session, localRev}`,转发丢了或者这个进程刚起来的时候,它就按这个键

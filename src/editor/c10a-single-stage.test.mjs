@@ -9,9 +9,10 @@
  * `src/online/lowMemory.ts`（同一个实现分支的文件）不在时整组 skip。
  */
 import { srcUrl } from "../testing/registerTs.mjs";
-import { test, mock } from "node:test";
+import { test, mock, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { exists, skipIf, LOW_MEMORY_FILE } from "../../server/test/c10a-kit.mjs";
+import { resetOnlineStagesForTest } from "../online/stageOrigins.ts";
 
 const missing = !exists(LOW_MEMORY_FILE);
 const skip = skipIf(missing, `${LOW_MEMORY_FILE}（单舞台随低内存档分支来，K7）`);
@@ -23,6 +24,8 @@ if (!missing) {
   pm = await import(srcUrl("editor/previewMode.ts"));
 }
 
+beforeEach(() => resetOnlineStagesForTest());
+
 function page({ ports, search = "" }) {
   const loc = { protocol: "https:", hostname: "8-219-80-16.sslip.io", host: "8-219-80-16.sslip.io", origin: "https://8-219-80-16.sslip.io", pathname: "/editor/", search, hash: "" };
   Object.defineProperty(globalThis, "location", { value: loc, configurable: true, writable: true });
@@ -31,17 +34,26 @@ function page({ ports, search = "" }) {
   return () => { delete globalThis.location; delete globalThis.__PC_STAGE_PORTS__; };
 }
 
-test("C10A-GT-07 在线页面只开一个同源舞台 A，按 live 变体渲（没有后台舞台 B）", { skip }, () => {
+test("C10A-GT-07 在线页面所有舞台一律跨源隔离：未配置舞台源抛错拒绝退回同源；配置后从跨源 stage.html 加载", { skip }, () => {
   for (const ports of [undefined, [], [5191, 5192]]) {
     const restore = page({ ports });
     try {
-      assert.equal(pm.dualStage(), false, `舞台端口表 ${JSON.stringify(ports)}：在线页面不开双舞台`);
-      const src = pm.stageSrc("A");
-      assert.ok(src.startsWith("/editor/") || src.startsWith("https://8-219-80-16.sslip.io/editor/"), `A 是同源的：${src}`);
+      // 未配置舞台源：禁止退回同源，直接抛错
+      resetOnlineStagesForTest({ origins: null });
+      assert.equal(pm.dualStage(), false, `舞台端口表 ${JSON.stringify(ports)}：未配置源不开双舞台`);
+      assert.throws(() => pm.stageSrc("A"), /禁止退回同源舞台/);
+      assert.throws(() => pm.stageTargetOrigin("A"), /禁止退回同源舞台/);
+      assert.equal(pm.interimStage(), false, "interimStage 过渡期已撤销恒为 false");
+
+      // 配置了跨源舞台源：即使是单舞台也是跨源加载 stage.html，绝不退回同源
+      resetOnlineStagesForTest({ origins: { A: "https://s1.8-219-80-16.sslip.io", B: "https://s2.8-219-80-16.sslip.io" } });
+      const src = pm.stageSrc("A", { dual: false });
+      assert.ok(src.startsWith("https://s1.8-219-80-16.sslip.io/stage.html") || src.startsWith("https://s1.8-219-80-16.sslip.io/editor/stage.html"), `A 必须从跨源 stage.html 加载：${src}`);
       assert.match(src, /[?&]preview=stage(?:&|$)/, `A 按 live 变体渲：${src}`);
-      assert.equal(pm.stageTargetOrigin("A"), "https://8-219-80-16.sslip.io");
+      assert.equal(pm.stageTargetOrigin("A"), "https://s1.8-219-80-16.sslip.io");
     } finally {
       restore();
     }
   }
 });
+
