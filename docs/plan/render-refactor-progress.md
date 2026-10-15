@@ -62,13 +62,12 @@
 | 2026-10-14 决定文档与语义同步：把 `user-decisions-2026-10-14.md` 及获批的一级/二级语义改动落进 18 份 `docs/semantics/**` 与 `docs/plan/*` 契约 | `08fb7cd9` |
 | 低内存档进入文案更新、`pageStreams.ts` 手机/平板只产稀疏流与 `isConfigSupported` 前置检查、`page-stream-probe.mjs` 模拟手机场（`390×844`、4x CPU、4G、4 条稀疏流 + 1 占位、堆增量 ≤ 25 MB） | `16fe6882` |
 | 修 `FrameScene.tsx` Agent `see_frames`/开窗抽帧早一帧（`push-draw-probe` ahead=0）；查清并根除 `bake.mjs` 导出成片开头 36 帧偶发差一帧（`warmUpAt` 唤醒 Chromium rAF，连导 3 遍与 `A-89c15177` 240/240 逐字节相同）；画布卡产流缺省改为一律直取像素（`always`） | `69d791ed` |
+| 所有舞台一律跨源隔离（撤掉在线浏览器退回同源单舞台的路）+ 桌面版舞台锁死（`prerender-gate.mjs` 拦截舞台调预渲染控制/渲染接口、只放行流与快照字节只读拉取；`stage-gate.mjs` 按哈希读素材只许读当前项目 `project.media`） | `f83500d2`、`987de00c` |
+| 「生成轨道流」关着时托管方渲染节点什么都不产（稀疏版和满密度版都不产）；VisuHive 去掉默认管理员硬编码（只认 `ACCOUNT_ADMINS` 配置）并新增 `render_streams` 权限分组与后台管理页，PromptCut 接入权限分组校验、无权限时开关置灰并提示「你的账号没有开启这一项的权限，请联系托管方。」 | `8a41fcd3`（VisuHive 本地 `main` `c4553cd`） |
 
 ## 在分支上、没合入的
 
-| 分支 | 是什么 | 状态 |
-|---|---|---|
-| `gemini/rr-stream-sched`（`.worktrees/rr-stream-sched`）+ VisuHive `gemini/vh-stream-perm`（`VisuHive/.worktrees/vh-stream-perm`） | 去掉 `account/store.mjs` 默认管理员 `9tian`；「生成轨道流」关着时托管方渲染节点什么都不产；「生成轨道流」权限分组与界面置灰 | 正在收尾单测与 `hosted-render-streams-probe.mjs`。详见 `docs/reports/AGENT-rr-stream-sched.md` |
-| `gemini/rr-stage-export-media`（`55d6b71f`，`.worktrees/rr-stage-export-media`） | 所有舞台一律跨源隔离 + 桌面版舞台锁死（禁调预渲染接口、按哈希读素材只许读当前项目） | 已限缩为单功能分支，并入 `69d791ed` 后完成 `previewMode.ts` 同源单舞台退回移除并过闸门合入。详见 `docs/reports/AGENT-rr-stage-export-media.md` |
+当前无未合入分支（前四路 `rr-sem-1014`、`rr-mobile-lowmem`、`rr-frame-bake3d`、`rr-stage-export-media`、`rr-stream-sched` 均已过完主会话闸门合进 `main` 并清掉工作区与分支）。
 
 ## 接下来（照 `handoff-render-018.md` 第 2 节与 `user-decisions-2026-10-14.md` 第 2 节）
 
