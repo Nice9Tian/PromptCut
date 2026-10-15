@@ -12,7 +12,7 @@
 
 **2026-10-14 08:30 收工：周额度到线，停下等用户重新开工。** 现场、每一项的状态、没做的和原因、接手后的顺序都在 `handoff-render-018.md`。`main` 在 `e2d46f53`。这次任务自己建的分支和工作区都已合入并清掉。
 
-**2026-10-15 接手继续：** `main` 在 `3ac769fa`，按 `render-018-kickoff.md`、`render-018-kickoff-other-agents.md`、`handoff-render-018.md` 及两份用户决定（`user-decisions-2026-10-13.md`、`user-decisions-2026-10-14.md`，冲突处以 10-14 为准）继续做完渲染重构与 0.7.18。本机安卓模拟器加速自检已跑（未装 hypervisor 驱动，照 10-14 第 2.1 节直接走 `page-stream-probe` 模拟手机自动化测试）。
+**2026-10-15 接手继续：** `main` 在 `3ac769fa`，按 `render-018-kickoff.md`、`render-018-kickoff-other-agents.md`、`handoff-render-018.md` 及两份用户决定（`user-decisions-2026-10-13.md`、`user-decisions-2026-10-14.md`，冲突处以 10-14 为准）继续做完渲染重构与 0.7.18。本机安卓模拟器加速自检已跑（Windows Hypervisor Platform 已开且已重启，系统报 hypervisor 未在运行，多半是启动配置 `hypervisorlaunchtype` 被关，由用户自行查；在此之前照 10-14 第 2.1 节先用 `page-stream-probe` 浏览器模拟手机自动化测试）。
 
 ## 已合进 `main` 的
 
