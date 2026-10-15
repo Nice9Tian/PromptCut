@@ -129,6 +129,7 @@
 只是想弄明白、还没决定要不要做的事放这里。
 
 - **研究 Lottie 用画布画为什么会画错**（2026-10-10 用户加，未排期）。例子是自带素材 `navidad`（`server/catalog/lottie/navidad.json`）：用 SVG 画是一个花环，用画布画成了一整块绿色盖住花环。它是自带 5 个素材里唯一同时用了遮罩层、多种蒙版模式（相减、相交、差值）和表达式的，画错是哪一项引起的没有查清。现在的决定是 Lottie 缺省用 SVG 画（见 `docs/plan/render-standard.md` 的「Lottie 动效」）；这一项查清之后，才谈得上哪些 Lottie 可以改用画布。重现办法：`node scripts/probes/lottie-renderer-probe.mjs --assets navidad --out <目录>`（探针在分支 `claude/browser-stream-encode` 上），第 31、93、124 帧差得最大。
+- **可能性：用 `analyze-beatgrid.py`（Python 的 librosa 库）分析一次音乐，得到 `audiomap.json`**（2026-10-16 用户加，未排期）：能量段落、音头、滚奏、静音、急停点、高潮和落点、乐句、BPM。仓库里还没有这个脚本。留意：`docs/archive/topics/audio-fx.md` 记过当时不加 librosa 的理由（它依赖 41.9 MB 的 llvmlite），那次是为音频效果做的取舍，分析用途要不要加、装进安装包还是另作工具，到时候再定。
 
 ## 语义与代码的差距
 
