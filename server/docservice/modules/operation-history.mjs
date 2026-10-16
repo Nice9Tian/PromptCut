@@ -119,7 +119,7 @@ export function openOperationHistory(file, { failpoint = () => {}, maxBytes = 25
       if (['accepted', 'materialized'].includes(current.state)) { if (canonical(current.witness) !== canonical(witness)) throw historyError('accepted-witness-mismatch'); return current; }
       if (current.state === 'cancelled' || witness.state !== 'sealed') throw historyError('not-accepted');
       const last = q("SELECT witness FROM operations WHERE project_id=? AND state IN ('accepted','materialized') ORDER BY json_extract(prepared,'$.projectRev') DESC LIMIT 1").get(op.projectId);
-      if (last && JSON.parse(last.witness).orderSeq >= witness.orderSeq) throw historyError('order-regression');
+      if (last?.witness && JSON.parse(last.witness)?.orderSeq >= witness.orderSeq) throw historyError('order-regression');
       q("UPDATE operations SET state='accepted',witness=? WHERE project_id=? AND op_id=?").run(canonical(witness), op.projectId, op.opId);
       append(op.projectId, 'accepted-op', { opId: op.opId, witness }); failpoint('accepted-before-commit'); return get(op.projectId, op.opId);
     });
@@ -191,6 +191,37 @@ export function openOperationHistory(file, { failpoint = () => {}, maxBytes = 25
       if (!q('SELECT 1 FROM projects WHERE id=?').get(projectId)) {
         q('INSERT INTO projects VALUES(?,?,?,?)').run(projectId, projectRev, canonical(initial), '{}');
         append(projectId, 'project-created', { snapshot: initial, projectRev });
+      }
+    }); },
+    importHistory(projectId, records = []) { tx(() => {
+      for (const rec of Array.isArray(records) ? records : []) {
+        const rev = Number.isSafeInteger(rec.projectRev) ? rec.projectRev : Number.isSafeInteger(rec.rev) ? rec.rev : 1;
+        const opId = typeof rec.opId === 'string' && rec.opId ? rec.opId : `op_import_${rev}`;
+        const requestId = typeof rec.requestId === 'string' && rec.requestId ? rec.requestId : `req_import_${projectId}_${opId}`;
+        const prepared = {
+          v: 2,
+          projectId,
+          opId,
+          requestId,
+          projectRev: rev,
+          ops: Array.isArray(rec.ops) ? rec.ops : [],
+          before: rec.before ?? {},
+          after: rec.after ?? {},
+          changes: Array.isArray(rec.changes) ? rec.changes : [],
+          dependencies: Array.isArray(rec.dependencies) ? rec.dependencies : [],
+          ...(rec.actor ? { actor: rec.actor } : {}),
+        };
+        const serialized = canonical(prepared);
+        const preparedDigest = digest(prepared);
+        const payloadDigest = digest({ ops: prepared.ops, changes: prepared.changes, after: prepared.after, result: null });
+        const opWitness = canonical({ state: 'sealed', orderSeq: rev });
+        if (!q('SELECT 1 FROM operations WHERE project_id=? AND op_id=?').get(projectId, opId)) {
+          q('INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?)').run(
+            projectId, opId, requestId, 'materialized',
+            preparedDigest, preparedDigest, payloadDigest, serialized, opWitness
+          );
+          append(projectId, 'accepted-op', { opId, projectRev: rev });
+        }
       }
     }); },
     pending: (projectId) => q("SELECT * FROM operations WHERE project_id=? AND state IN ('prepared','reserved','accepted')").all(projectId).map(decode),

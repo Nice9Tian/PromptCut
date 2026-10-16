@@ -176,3 +176,69 @@ test('账号办法的云端项目不显示「搬回本机」，旧办法的云�
   assert.match(line, /shared\.where === "hosted" && !ONLINE && !shared\.accountId/);
   assert.ok(source.includes('onClick={() => void moveLan()}') && source.includes('moveSharedToLan'), '功能代码没删');
 });
+
+test('旧版（<= 0.7.17）调用搬到云端被拒并返回「当前软件版本已过期，无法搬到云端」', async () => {
+  const { mountAccountProjects } = await import('../docservice/modules/account-projects.mjs');
+  const mounted = mountAccountProjects({ authority: {
+    authorityId: 'auth-test',
+    async createProject() { return { projectId: 'sp_test' }; },
+    async synchronize() {},
+  } });
+
+  // 1. 旧版 0.7.17 在请求体带 clientVersion 调用 create
+  const body17 = JSON.stringify({ name: 'old-project', requestId: 'req-old-17', clientVersion: '0.7.17' });
+  let status17, res17;
+  const req17 = {
+    url: '/hosted/shared/account/create',
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer token-test' },
+    async *[Symbol.asyncIterator]() { yield body17; },
+  };
+  await mounted.handlePublic(req17, {
+    writeHead(code) { status17 = code; },
+    end(text) { res17 = JSON.parse(text); },
+    headersSent: false,
+  });
+  assert.equal(status17, 400);
+  assert.equal(res17.ok, false);
+  assert.equal(res17.code, 'version-expired');
+  assert.equal(res17.message, '当前软件版本已过期，无法搬到云端');
+
+  // 2. 旧版通过 x-promptcut-version: 0.7.16 header 调用
+  const body16 = JSON.stringify({ name: 'old-project-16', requestId: 'req-old-16' });
+  let status16, res16;
+  const req16 = {
+    url: '/hosted/shared/account/create',
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer token-test', 'x-promptcut-version': '0.7.16' },
+    async *[Symbol.asyncIterator]() { yield body16; },
+  };
+  await mounted.handlePublic(req16, {
+    writeHead(code) { status16 = code; },
+    end(text) { res16 = JSON.parse(text); },
+    headersSent: false,
+  });
+  assert.equal(status16, 400);
+  assert.equal(res16.ok, false);
+  assert.equal(res16.code, 'version-expired');
+  assert.equal(res16.message, '当前软件版本已过期，无法搬到云端');
+});
+
+test('界面文字已改为「历史序号」，账号云端项目的项目设置显示「作废并重新生成项目链接」「项目二级密码」，且不显示「改创建者密码」「已禁入的设备」「这台设备上没有邀请链接」「搬回本机」', () => {
+  const collabSource = fs.readFileSync(new URL('../../src/editor/sync/CollabSection.tsx', import.meta.url), 'utf8');
+  assert.ok(collabSource.includes('data-pc="collab-project-rev"'), '包含历史序号展示项');
+  assert.ok(collabSource.includes('历史序号'), '界面文字包含历史序号');
+  assert.ok(collabSource.includes('data-pc="collab-regen-link"'), '账号项目包含作废并重新生成项目链接按钮');
+  assert.ok(collabSource.includes('作废并重新生成项目链接'), '文字为作废并重新生成项目链接');
+  assert.ok(collabSource.includes('data-pc="collab-secondary-password"'), '账号项目包含项目二级密码按钮');
+  assert.ok(collabSource.includes('项目二级密码'), '文字为项目二级密码');
+
+  // 账号模式下收起旧按钮的条件判定
+  assert.match(collabSource, /!isAccount[\s\S]*?改创建者密码/, '改创建者密码在账号项目下收起');
+  assert.match(collabSource, /!isAccount[\s\S]*?已禁入的设备/, '已禁入的设备在账号项目下收起');
+  assert.match(collabSource, /isAccount\s*\?[\s\S]*?这台设备上没有邀请链接/, '这台设备上没有邀请链接在账号项目下收起');
+
+  const backupsSource = fs.readFileSync(new URL('../../src/editor/sync/BackupsDialog.tsx', import.meta.url), 'utf8');
+  assert.ok(backupsSource.includes('历史序号'), '备份对话框包含历史序号');
+});
+

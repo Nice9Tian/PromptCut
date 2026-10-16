@@ -138,3 +138,10 @@ export function writerLabel(by: Writer | undefined, me: Me, names: DisplayNames 
   if (typeof actor.accountId === "string" && names.has(accountNameKey(actor.accountId))) return names.get(accountNameKey(actor.accountId))!;
   return actor.username ?? actor.userId ?? "别人";
 }
+
+/** 项目历史序号（修改计数）给人看的文字：历史序号 N */
+export function historySeqLabel(rev: number | null | undefined): string {
+  if (rev === null || rev === undefined || !Number.isFinite(rev)) return "历史序号 -";
+  return `历史序号 ${rev}`;
+}
+

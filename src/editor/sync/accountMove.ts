@@ -57,6 +57,8 @@ export type MoveErrorCode =
   | "invalid-name"
   /** 这个账号现在不许新建(托管方的策略、数量上限) */
   | "create-refused"
+  /** 软件版本已过期(<0.7.18) */
+  | "version-expired"
   /** 目标云端没有账号办法的新建接口(不是账号模式的节点) */
   | "not-account-cloud"
   /** 连不上云端(网络、超时) */
@@ -275,7 +277,7 @@ export interface MoveDeps {
   /** 当前登录的账号;没登录回 null;连不上抛错 */
   account(): Promise<{ id: string; name: string } | null>;
   /** 新建云端项目;失败抛带 `status` / `code` 的错 */
-  create(name: string, stub: unknown, requestId: string): Promise<{ projectId: string }>;
+  create(name: string, stub: unknown, requestId: string, extra?: { projectId?: string; rev?: number; history?: unknown[]; initialProject?: unknown }): Promise<{ projectId: string }>;
   /** 等本机的修改都落定,回一份项目内容的拷贝;等不到抛错 */
   snapshot(): Promise<Project>;
   /** 此刻编辑器里的项目内容(不拷贝,只用来比较) */
@@ -344,11 +346,12 @@ const detailOf = (error: unknown): string => {
  */
 function createDefinitelyFailed(error: unknown): boolean {
   const kind = createErrorCode(error);
-  return kind === "name-taken" || kind === "invalid-name" || kind === "create-refused" || kind === "not-account-cloud";
+  return kind === "name-taken" || kind === "invalid-name" || kind === "create-refused" || kind === "not-account-cloud" || kind === "version-expired";
 }
 
 function createErrorCode(error: unknown): MoveErrorCode {
   const s = statusOf(error), code = codeOf(error);
+  if (code === "version-expired" || detailOf(error).includes("当前软件版本已过期，无法搬到云端") || detailOf(error).includes("version-expired")) return "version-expired";
   if (s === 0 || code === "network") return "network";
   if (s === 401) return "login-required";
   if (code === "name-taken") return "name-taken";
@@ -414,7 +417,12 @@ export async function moveToAccountCloud(deps: MoveDeps, input: MoveInput): Prom
       // 上一次的请求结果不确定(没收到回包):先用原样的请求问清楚,免得换了名字又建一个。
       // 云端的请求账本不过期,原样重放一直安全,所以这条记录也不设过期
       try {
-        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId);
+        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId, {
+          projectId: source.contentId,
+          rev: (snapshot as any).rev ?? (snapshot as any).projectRev ?? 1,
+          history: (snapshot as any).history ?? [],
+          initialProject: snapshot,
+        });
         attempt = { ...attempt, projectId: made.projectId };
         deps.attempts.put(attempt);
       } catch (error) {
@@ -432,7 +440,12 @@ export async function moveToAccountCloud(deps: MoveDeps, input: MoveInput): Prom
       // 先记下请求号再发请求:发出去之后回包丢了,下一次也知道该问哪个请求
       try { deps.attempts.put(attempt); } catch (error) { return fail("not-ready", detailOf(error)); }
       try {
-        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId);
+        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId, {
+          projectId: source.contentId,
+          rev: (snapshot as any).rev ?? (snapshot as any).projectRev ?? 1,
+          history: (snapshot as any).history ?? [],
+          initialProject: snapshot,
+        });
         attempt = { ...attempt, projectId: made.projectId };
         deps.attempts.put(attempt);
       } catch (error) {
@@ -674,6 +687,7 @@ export const ACCOUNT_MOVE_TEXT = {
   cardsStuck: "卡片源码还没同步到云端（卡片同步没连上），其他成员暂时画不出自定义卡；连上后会自动补传。",
   /** 旧文件带着搬到云端时关掉的那个房间的关联:重开时当普通本地项目开,提示一次 */
   reopenedLocal: "这个文件原来的本机协作已在搬到云端时关闭，现在按普通的本地项目打开。",
+  versionExpired: "当前软件版本已过期，无法搬到云端",
 } as const;
 
 const unchanged = (kind: "local" | "room") => (kind === "room" ? "本机协作没有改动，原房间照常可用。" : "本机项目没有改动。");
@@ -705,6 +719,7 @@ export function moveFailureText(r: Extract<MoveResult, { ok: false }>, kind: "lo
     case "name-taken": return `这个项目名已被使用，请换一个名字。${local}`;
     case "invalid-name": return `项目名不能为空，不能超过 200 个字。${local}`;
     case "create-refused": return `这个账号现在不能新建云端项目（${r.detail || "被拒绝"}）。${local}`;
+    case "version-expired": return ACCOUNT_MOVE_TEXT.versionExpired;
     case "not-account-cloud": return `这个云端不接受网站账号的项目，没有搬。${local}`;
     case "network": return r.stage === "create" ? `连不上云端，云端项目没有建成。${local}稍后再点一次。` : `连不上云端，没有开始搬。${local}`;
     case "create-failed": return `云端暂时不可用，云端项目没有建成。${local}稍后再点一次，不会多建一个。`;

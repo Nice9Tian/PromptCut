@@ -1,6 +1,9 @@
 import type { Project } from "../../kernel/project";
 // @ts-expect-error Browser-safe format validation, also used by the server.
 import { parseCollaboration } from "../../../server/recovery/descriptor.mjs";
+import { convertGoneProject, type GoneProof } from "./cloudGone";
+// @ts-expect-error Browser-safe proof verification
+import { queryGone } from "../../../server/recovery/gone-proof.mjs";
 
 export interface CollaborationDescriptor {
   version: number;
@@ -73,3 +76,167 @@ export function publishGoneConversion(event: GoneConversion) {
 }
 /** 界面取走还没提示过的那几条（每条只提示一次） */
 export function takeGoneNotices(): GoneConversion[] { const out = goneNotices; goneNotices = []; return out; }
+
+/**
+ * 账号云端项目另存为 .proc / .procp 时的云端关联记号（10-14 第 3.4 节）
+ */
+export interface CloudProjectAssociation {
+  accountProject: true;
+  projectId: string;
+  docServiceUrl: string;
+  origin?: string;
+  savedRev: number;
+  savedAt: string;
+}
+
+export function parseCloudAssociation(value: unknown): CloudProjectAssociation | null {
+  const v = value as Partial<CloudProjectAssociation> | null;
+  if (!v || typeof v !== "object" || v.accountProject !== true || typeof v.projectId !== "string" || !v.projectId) return null;
+  if (typeof v.docServiceUrl !== "string" || !v.docServiceUrl) return null;
+  const savedRev = Number.isSafeInteger(v.savedRev) ? Number(v.savedRev) : 1;
+  const savedAt = typeof v.savedAt === "string" ? v.savedAt : new Date().toISOString();
+  return {
+    accountProject: true,
+    projectId: v.projectId,
+    docServiceUrl: v.docServiceUrl,
+    origin: typeof v.origin === "string" ? v.origin : v.docServiceUrl,
+    savedRev,
+    savedAt,
+  };
+}
+
+let loadedCloudAssoc: { contentId: string; assoc: CloudProjectAssociation } | null = null;
+let activeCloudAssoc: CloudProjectAssociation | null = null;
+
+export function noteLoadedCloudAssociation(project: Pick<Project, "id">, value: unknown) {
+  const assoc = parseCloudAssociation(value);
+  loadedCloudAssoc = assoc && project.id ? { contentId: project.id, assoc } : null;
+}
+
+export function takeLoadedCloudAssociation(project: Pick<Project, "id">): CloudProjectAssociation | null {
+  const value = loadedCloudAssoc && loadedCloudAssoc.contentId === project.id ? loadedCloudAssoc.assoc : null;
+  loadedCloudAssoc = null;
+  activeCloudAssoc = value;
+  return value;
+}
+
+export function currentCloudAssociation(): CloudProjectAssociation | null {
+  return activeCloudAssoc;
+}
+
+export function setCloudAssociation(value: CloudProjectAssociation | null) {
+  activeCloudAssoc = value;
+}
+
+/**
+ * 账号云端项目另存为 .proc / .procp 后的重开四规则（10-14 第 3.4 节）：
+ * 1. 没登录：提示登录，不直接当本地项目打开，也不抹掉关联；
+ * 2. 登录的账号不是成员：提示没有权限，不打开项目；
+ * 3. 云端项目已删：凭已删证明（goneProof）转成独立本地项目打开；
+ * 4. 有权限且有离线修改：打开并连回云端项目，把离线修改合回云端（生成新的历史序号）。
+ */
+export async function handleCloudAssociationReopen(
+  project: Project,
+  assoc: CloudProjectAssociation,
+  options: {
+    account?: { id: string; name: string } | null;
+    client?: {
+      account?: { id: string; name: string } | null;
+      session: (projectId: string) => Promise<any>;
+      join?: (projectId: string, requestId?: string) => Promise<any>;
+    };
+    queryGone?: (descriptor: CollaborationDescriptor) => Promise<GoneProof | null>;
+    isOfflineModified?: boolean;
+    cloudProject?: Project;
+    toast?: (msg: string, tone?: "info" | "warn", duration?: number) => void;
+    enterProject?: (options: any) => Promise<void>;
+  } = {},
+): Promise<{ status: "opened" | "merged" | "converted" | "login-required" | "forbidden"; project?: Project }> {
+  const toast = options.toast ?? (() => {});
+  // 1. 规则 1：未登录
+  let account = options.account;
+  let client = options.client;
+  if (account === undefined) {
+    try {
+      const flow = await import("./accountMoveFlow.ts");
+      const c = await flow.accountCloud();
+      if (c) {
+        client = c.client;
+        account = await flow.accountCloudLogin(c);
+      }
+    } catch {}
+  }
+
+  if (!account) {
+    toast("需要登录网站账号以核对云端权限。", "warn", 10_000);
+    setCloudAssociation(assoc);
+    return { status: "login-required" };
+  }
+
+  // 2. 核对成员权限与状态
+  let session: any = null;
+  const descriptor: CollaborationDescriptor = {
+    version: 1,
+    roomId: assoc.projectId,
+    where: "hosted",
+    service: assoc.docServiceUrl,
+  };
+
+  if (client) {
+    try {
+      session = await client.session(assoc.projectId);
+    } catch (error: any) {
+      const status = error?.status;
+      const code = error?.code;
+      // 规则 3：云端项目已被创建者删除
+      if (status === 404 || code === "project-gone" || code === "no-project") {
+        const query = options.queryGone ?? ((d: CollaborationDescriptor) => queryGone(d));
+        let proof: GoneProof | null = null;
+        try { proof = await query(descriptor); } catch {}
+        if (proof) {
+          const converted = convertGoneProject(project, descriptor, proof);
+          setCloudAssociation(null);
+          publishGoneConversion({ projectId: converted.project.id!, name: converted.project.name, from: converted.from });
+          toast("这个云端项目已在云端被删除，已转为普通本地项目打开。", "info", 8000);
+          return { status: "converted", project: converted.project };
+        }
+      }
+      // 规则 2：已登录但不是该项目成员
+      if (status === 403 || code === "not-listed" || code === "banned" || code === "forbidden") {
+        toast("当前账号不是这个云端项目的成员，无法打开。", "warn", 10_000);
+        return { status: "forbidden" };
+      }
+    }
+  }
+
+  if (!session && !options.client) {
+    toast("当前账号不是这个云端项目的成员，无法打开。", "warn", 10_000);
+    return { status: "forbidden" };
+  }
+
+  // 规则 4：有权限。检查是否有离线修改
+  const isOfflineModified = options.isOfflineModified ?? (
+    ((project as any).rev !== undefined && (project as any).rev > assoc.savedRev) ||
+    (options.cloudProject && JSON.stringify(project) !== JSON.stringify(options.cloudProject))
+  );
+
+  if (options.enterProject && client) {
+    await options.enterProject({
+      client,
+      origin: assoc.origin || assoc.docServiceUrl,
+      projectId: assoc.projectId,
+      name: project.name,
+      initial: project,
+      firstSession: session,
+    });
+  }
+
+  if (isOfflineModified) {
+    toast("已连回云端项目，离线修改已合并同步。", "info", 6000);
+    return { status: "merged", project };
+  }
+
+  return { status: "opened", project };
+}
+
+

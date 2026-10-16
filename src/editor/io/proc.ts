@@ -8,7 +8,7 @@ import { restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
-import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom } from "../sync/recoveryAssociation";
+import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom, type CloudProjectAssociation, currentCloudAssociation, noteLoadedCloudAssociation } from "../sync/recoveryAssociation";
 import { UNSUPPORTED_PROC_TEXT } from "../sync/recoveryTexts";
 
 /**
@@ -84,12 +84,15 @@ export interface ProcFile {
   collaboration?: CollaborationDescriptor;
   /** 这个本地项目是从哪个已不存在的云端项目转来的（只供提示与追溯，不是协作关联；见 `recoveryAssociation.ts`） */
   convertedFrom?: ConvertedFrom;
+  /** 账号云端项目另存为文件时的云端关联记号（10-14 第 3.4 节） */
+  cloudAssociation?: CloudProjectAssociation;
 }
 
 /** 当前项目 → .proc 文本 */
 export function serializeProc(thumbnail: string | null = null): string {
   const project = JSON.parse(exportProjectJson()) as Project;
   const cards = collectProjectCards(project);
+  const cloudAssoc: CloudProjectAssociation | undefined = currentCloudAssociation() ?? undefined;
   const doc: ProcFile = {
     format: PROC_FORMAT,
     version: PROC_VERSION,
@@ -102,6 +105,7 @@ export function serializeProc(thumbnail: string | null = null): string {
     cards: cards.length ? cards : undefined,
     collaboration: currentAssociation() ?? undefined,
     convertedFrom: convertedFromOf(project) ?? undefined,
+    cloudAssociation: cloudAssoc,
   };
   return JSON.stringify(doc, null, 2);
 }
@@ -172,6 +176,7 @@ export function loadProc(text: string, opts: ParseProcOptions = {}): Project {
   applyProjectAi(doc?.ai ?? null);
   noteLoadedAssociation(project, doc?.collaboration);
   noteConvertedFrom(project, doc?.convertedFrom);
+  noteLoadedCloudAssociation(project, doc?.cloudAssociation);
   restoreSnapshots(project, doc?.snapshots);
   // 项目里带的定制卡装回本机。不等它:装完 vite 热更新,卡自己出现在舞台和卡库里
   if (doc) void restoreProjectCards(bundledCardsOf(doc), project.id ?? null);

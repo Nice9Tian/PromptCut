@@ -27,3 +27,10 @@ test("LBL-02 自己的页面说法不变;名单里没有时照原来的退路", 
   // 非账号项目照旧
   assert.equal(L.writerLabel({ actor: { userId: "alice@dev-a", role: "page", session: "s-p" } }, { session: "x", userId: "bob@d" }, new Map([["alice@dev-a", "alice"]])), "alice");
 });
+
+test("LBL-03 历史序号文字统一命名为「历史序号」", () => {
+  assert.equal(L.historySeqLabel(1), "历史序号 1");
+  assert.equal(L.historySeqLabel(15), "历史序号 15");
+  assert.equal(L.historySeqLabel(null), "历史序号 -");
+});
+

@@ -238,8 +238,33 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
   const result = await moveToAccountCloud({
     source: moveSource,
     account: async () => { const a = await accountCloudLogin(c); startedAs = a?.id ?? null; return a; },
-    create: (name, stub, requestId) => { sameAccount(); return client.create(name, stub, requestId); },
     snapshot: async () => { await whenSaved(10_000); return structuredClone(getState().project); },
+    create: async (name, stub, requestId, extra) => {
+      sameAccount();
+      if (extra?.projectId) {
+        try {
+          const auth = await accountCloudLogin(c);
+          const body = {
+            name,
+            initialProject: extra.initialProject ?? stub,
+            allowLinkJoin: true,
+            requestId,
+            projectId: extra.projectId,
+            rev: extra.rev ?? 1,
+            history: extra.history ?? [],
+          };
+          const res = await desktopAccountBridge("request", {
+            path: "/hosted/shared/account/create",
+            body,
+            accessToken: (auth as any)?.accessToken,
+          }) as any;
+          if (res?.ok === true && res?.projectId) return res;
+        } catch (e: any) {
+          if (e?.status || e?.code) throw e;
+        }
+      }
+      return client.create(name, stub, requestId);
+    },
     current: () => getState().project,
     upload: (projectId, snapshot) => { sameAccount(); return uploadProjectContent(linkTo(projectId), projectId, snapshot); },
     read: async (projectId) => (await readProjectContent(linkTo(projectId), projectId, getState().project)).project,

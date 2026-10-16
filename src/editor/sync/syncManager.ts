@@ -21,7 +21,7 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { classifyEnterFailure, classifyProtocolError } from "./enterFailure";
 import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
-import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor } from "./recoveryAssociation";
+import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor, type CloudProjectAssociation, currentCloudAssociation, setCloudAssociation, takeLoadedCloudAssociation, handleCloudAssociationReopen } from "./recoveryAssociation";
 import { convertGoneProject, restoreOfflineEdits, type GoneProof } from "./cloudGone";
 // @ts-expect-error Browser-safe proof verification, shared with the server-side tooling.
 import { queryGone } from "../../../server/recovery/gone-proof.mjs";
@@ -54,7 +54,7 @@ const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.V
 import { loadBrowserDevice } from "../../online/device";
 import type { CloudAccountClient, ProjectSession, AccountMembersSnapshot, AccountMemberOperation, AccountMemberResult } from "../../account/client";
 import { hostedWsUrlOf } from "../../online/invite";
-import { AccountFailure, accountConnectionProtocols } from "../../account/client";
+import { AccountFailure, accountConnectionProtocols, projectLink } from "../../account/client";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
 import { ACCOUNT_MOVE_TEXT, createAttemptStore } from "./accountMove";
 import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
@@ -178,6 +178,8 @@ export interface SyncView {
   recovery: "recovering" | "recovered" | null;
   /** 在线页面内存里的本地备份份数(`onlineBackups.ts`) */
   onlineBackups: number;
+  /** 当前项目的历史序号（文档服务确认的 rev） */
+  rev: number | null;
 }
 
 let view: SyncView = {
@@ -201,6 +203,7 @@ let view: SyncView = {
   unconfirmed: 0,
   recovery: null,
   onlineBackups: 0,
+  rev: null,
 };
 const viewListeners = new Set<() => void>();
 
@@ -260,6 +263,7 @@ interface Current {
   /** 诊断:账号项目里这条连接的寿命 */
   accountLife?: () => { expiresAt: number | null; trusted: boolean | null; renews: number; expires: number; busy: boolean };
   accountMemberAdmin?: (operation: AccountMemberOperation) => Promise<AccountMemberResult>;
+  client?: CloudAccountClient | null;
 }
 
 let cur: Current | null = null;
@@ -463,7 +467,7 @@ function onNotice(n: SyncNotice) {
       pushToast(`有一步修改没被文档服务接受(${n.reason}),已撤回。`, "warn");
       return;
     case "replay-dropped":
-      pushToast("有一步离线时的修改在最新版本上落不下去,已丢弃。", "warn");
+      pushToast("有一步离线时的修改在最新历史序号上落不下去,已丢弃。", "warn");
       return;
     default:
       return;
@@ -608,13 +612,15 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
       // 自动渲染节点:项目文档的 id(层表键用它)晚到时再交一次(同一个项目只换 id,不重建)
       if (!account && kind === "shared" && !ONLINE_BUILD && !ONLINE) bindRenderNode({ url, projectId: docProjectId, contentId: p.id || null }, renderNodeHooks);
     }),
+    link.ds.on("project", () => { patch({ rev: link.ds.rev }); }),
+    link.ds.on("status", () => { patch({ rev: link.ds.rev }); }),
   ];
   if (ONLINE) {
     recoveryState = { phase: null, wasOffline: false, hadUnsent: false };
     const tick = setInterval(tickOnline, ONLINE_TICK_MS);
     offs.push(() => clearInterval(tick));
   }
-  cur = { link, kind, docProjectId, url, unbind, offs };
+  cur = { link, kind, docProjectId, url, unbind, offs, client: accountClient };
   // 云端 Agent 的身份跟着共享项目的连接走:接上就绪,回本机空间撤掉(界面据此重取一次 info 与对话列表)
   setCloudIdentity(kind === "shared" && !account ? cloudIdentityOf(link) : null);
   setCloudConsentSource(kind === "shared" && accountClient ? { client: accountClient, accountId: accountClient.account?.id ?? "" } : null);
@@ -629,7 +635,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   }
   // 在场状态(A3 第二阶段):这个页面「正在编辑」的片段经这条连接发布,别的成员那边 Agent 的范围经它收
   setPresenceLink(link, docProjectId, me().userId ?? "", account);
-  patch({ active: true, kind, members: kind === "local" ? [] : view.members, hosted: kind === "local" ? null : view.hosted, notice: null });
+  patch({ active: true, kind, rev: link.ds.rev, members: kind === "local" ? [] : view.members, hosted: kind === "local" ? null : view.hosted, notice: null });
   refreshStatus();
   // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
   if (!account && !ONLINE_BUILD && !ONLINE) {
@@ -673,6 +679,7 @@ function detach() {
   accountNames = new Map();
   setCloudIdentity(null);
   setCloudConsentSource(null);
+  setCloudAssociation(null);
   clearHostedAgent();
   setPresenceLink(null, null, "");
   if (prev) {
@@ -740,7 +747,15 @@ function onLoad(project: Project): Project {
   recoveryCoordinator.cancel();
   cancelHostTask(previousAssociation);
   const association = takeLoadedAssociation(project);
-  patch({ association, reopenState: null });
+  const cloudAssoc = takeLoadedCloudAssociation(project);
+  patch({ association, reopenState: null, rev: cur?.link.ds.rev ?? null });
+  if (cloudAssoc) {
+    detach(); disconnectSharedAssets();
+    patch({ shared: null, members: [], hosted: null, blocked: null, reopenState: "cloud-reopening" });
+    setCloudAssociation(cloudAssoc);
+    void handleCloudAssociationReopen(project, cloudAssoc);
+    return project;
+  }
   if (association) {
     detach(); disconnectSharedAssets();
     patch({ shared: null, members: [], hosted: null, blocked: null });
@@ -1217,6 +1232,14 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       if (!account) throw new AccountFailure(401, 'login-required');
       options.guard?.(link.ds.project);
       recoveryCoordinator.cancel(); releaseHolding(); setAssociation(null); clearSharedResume();
+      setCloudAssociation({
+        accountProject: true,
+        projectId: options.projectId,
+        docServiceUrl: base,
+        origin,
+        savedRev: (link.ds as any)?.rev ?? 1,
+        savedAt: new Date().toISOString(),
+      });
       patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
         username: account.name, accountId: account.id, creator: current.creator }, members: [], hosted: current.hosted, blocked: null, association: null, reopenState: null });
       bind(link, 'shared', options.projectId, url, options.client);
@@ -1961,3 +1984,35 @@ function accountAdminError(error: unknown): AdminError {
 export function makeCredential(password: string) {
   return client.makeCredential(password);
 }
+
+/** 重新生成账号云端项目链接使旧链接作废（10-14 第 3.3 节） */
+export async function regenAccountProjectLink(): Promise<{ ok: true; link: string } | { ok: false; error: string }> {
+  const s = view.shared;
+  if (!s || !s.accountId) return { ok: false, error: "不是账号云端项目" };
+  try {
+    const r = await adminOp("regen-link", {});
+    if (r.ok) {
+      const link = (r.reply as any)?.link || projectLink(s.base || location.origin, s.projectId);
+      return { ok: true, link };
+    }
+    return { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message || "regen-failed" };
+  }
+}
+
+/** 设置/修改/清除账号项目二级密码（10-14 第 3.3 节） */
+export async function setAccountSecondaryPassword(password: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
+  const s = view.shared;
+  if (!s || !s.accountId) return { ok: false, error: "不是账号云端项目" };
+  try {
+    const r = await adminOp("set-secondary-password", {}, { password });
+    return r.ok ? { ok: true } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message || "set-failed" };
+  }
+}
+
+export { handleCloudAssociationReopen } from "./recoveryAssociation";
+
+
