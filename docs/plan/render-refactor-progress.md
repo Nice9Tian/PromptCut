@@ -73,16 +73,17 @@
 | 在线浏览器导出改在跨源隔离舞台内整帧渲染（保留「快速导出 / 完整导出」，就绪的同步用户卡和素材效果卡在隔离导出舞台内直接活渲，无需等待渲染节点，`ImageBitmap` 零拷贝回传；补 `export-frames` 24 小时 TTL 过期清理与计划并发节流） | `576ad0a3`（`d624d2bd`） |
 | 己二的页面与舞台一侧：撤掉每张卡 HTML 快照的选帧、取字节、投递、`.pc-snapshot` 平面、`.pc-awaiting` 兜底与测量快照趟转发；暂停/拖动下无流的非 `remotion` 重卡进 `scrub`（`remotion` 重卡照旧露出活组件），修停在挂载帧或刚测完时追活渲与 `costs` 重发；`OnlineSnapshotSource` 停止预取快照与小尺寸（Opus 5.5 High 独立审查两轮通过，`scrub-stream-probe` PASS） | `4ce057f5`（`e706be5b`） |
 | 己二的服务端与预渲染进程一侧：`snapshotTier` 全面回 `'none'`，停产 `controls-html`/`controls-local` 与 `.small.webp` 预渲染小尺寸，撤掉 `preload` 锚帧快照趟与本地档快照趟、`record` 不再顺手写每张卡快照、`PUT /api/frames/snapshot` 退役，`splitPlan` 不再切快照细任务、保留浏览器单卡流与 `motion` 30 秒切分（Opus 5.5 High 独立审查两轮通过） | `cff49101`（`3641145e`） |
+| 渲染重构收尾（G0-R 整套附加项与报告归档）：`ready-index-probe`、`preview-fallback-probe`（默认与 `--page-preload`）、`stream-produce-probe`（默认与 `--group`）、`verify-unified-frames`、`verify-determinism`（240/240）、导出像素基线比对（与 `A-89c15177` 240/240 逐字节相同）全部通过；提交 `docs/reports/REPORT-render-refactor.md`，并将 59 份 `AGENT-rr-*.md` 归档至 `docs/archive/agent-reports/` | `d68dd0f8`（`52d3d2b5`） |
 
 ## 在分支上、没合入的
 
-- 渲染重构功能项（除放在 0.7.18 的改旧名词「壬」外）已全部合入 `main`；当前正在 `gemini/rr-g0r-probes` 跑整套 G0-R 渲染附加项并撰写 `docs/reports/REPORT-render-refactor.md`。
+- 无（渲染重构除放在 0.7.18 的改旧名词「壬」外已全部完成并合入 `main`）。
 
 ## 接下来（2026-10-16 更新）
 
 1. ~~己二的页面一侧：`gemini/rr-rm-snap-page`（已在 `4ce057f5` 合入）。~~
 2. ~~己二的服务端一侧：`rr-rm-snap-server`（已在 `cff49101` 合入）。~~
-3. 渲染重构收尾：在 `main` 上跑整套 G0-R 渲染附加项，写并提交 `docs/reports/REPORT-render-refactor.md`。
+3. ~~渲染重构收尾：在 `main` 上跑整套 G0-R 渲染附加项，写并提交 `docs/reports/REPORT-render-refactor.md`（已在 `d68dd0f8` 合入）。~~
 4. 0.7.18：`three-versions-progress.md`「还差什么」各项。其中块十要带上 10-16 定的「云端 Agent 按轮占用」（`user-decisions-2026-10-16.md` 第 3 节）；第 2 节的多项目模式是 0.7.19 的事，不在这次任务里。
 
 下面是 10-15 接手时列的顺序，留作记录：其中第 1 条和第 2 条的前四项都已合入（见上表）。
