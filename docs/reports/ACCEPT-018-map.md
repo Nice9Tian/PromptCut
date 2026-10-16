@@ -24,7 +24,7 @@
 | 8 | **错误节点的「没有此房间」和本机凭证被撤销，恢复协调器都报「已删除」** | `npm test -- server/test/accept-018-files-recovery-states.test.mjs` 看 `⚠ ACC018-STATE-4/5` | 账号任务书：超时、故障、连错节点、认证失败都不叫过期 | `server/recovery/coordinator.mjs` 第 21、51 行直接归 `deleted`；main 上没有转换器所以不会误转，**转换器一接上就会误转**。分支 `claude/v18-missing` 的 `9de16f81` 已改（用 `ACC018_COORDINATOR_FILE` 指到分支副本实测两条转绿） | 2.1-9、2.1-8 |
 | 9 | **账号项目保存出来的 .proc 不带云端关联，重开不会连回原云端项目**（功能缺口，**要用户定**） | 读 `src/editor/sync/syncManager.ts` 第 1163 行 `setAssociation(null)`；分支上同一处还在 | `workflow/project.md` 第 23、24 行：保存 .proc 保留房间关联；云端项目仍存在时恢复云端身份 | 账号项目现在只能从网站项目列表点开；文件重开没有"从文件认出是哪个云端项目"这一步，转换器触发条件（带 `where:'hosted'` 关联）也无从成立 | 2.1-7、2.1-8、2.1-19 |
 | 10 | **独立入口除载入缝外另有 8 处直接引用 `src/`；已有守门 `CA-SEAM-01` 有洞** | `npm test -- server/test/accept-018-rest-ssr-seam.test.mjs` 看 SEAM-1、SEAM-2（todo） | 完成条件 2 和契约 2.1 节：除 `server/agent/ssr-host.mjs` 外不许 import `src/` | `server/agent/service/perception/subject.mjs:160` 直接载入 `src/kernel/project.ts`（契约点名的目录，CA-SEAM-01 不进子目录所以没拦）；经 `server/agent/*.mjs` 传递闭包还有 `agentScopes.mjs`、`creativity.mjs`、`ai/roles`、`vite-plugin-cards.ts` 引出的三处。棘轮 SEAM-3 把现状 8 处固定为「只许少不许多」 | 2.3-2 |
-| 11 | **账号模式下云端 Agent 没接「看画面」，块八的排队在生产路径上用不上**（进度文件已记，这里补可重跑的固定） | `npm test -- server/test/accept-018-rest-queue-account-look.test.mjs` 看 todo `Q-ACC-1` | RS18-queue「Agent see_frames 与预渲染争用」要在云端 Agent 真用的路上成立 | `server/agent-service/main.mjs:343` 只在非账号模式建看画面的客户端 | RS18-queue、RS-common |
+| 11 | **账号模式下云端 Agent 没接「看画面」**（已由块十解决：主服务持有私钥代签，任务进程经内部 mTLS 请求，强制使用文档服务确认的 projectId；Q-ACC-1/2 全绿，零 todo） | `npm test -- server/test/accept-018-rest-queue-account-look.test.mjs` | RS18-queue「Agent see_frames 与预渲染争用」要在云端 Agent 真用的路上成立 | `server/agent-service/main.mjs` 与 `account-master-assembly.mjs` 挂载看画面能力，主服务代签私钥不发下 | RS18-queue、RS-common |
 | 12 | 在线浏览器第一步「谁可以新建 / 每人能建多少」没有明确的判断口子 | `rg -n "createProject" server/account/authority.mjs`（约 180～215 行）；`rg -in "createPolicy\|maxProjects\|canCreate\|perAccount" server` 无结果 | `online-browser-task.md` 第一步第 4 条：有一个明确的口子，将来改配置就能限制 | 只有「要登录」和 `actor.role !== 'page'`，没有策略函数或配置，也没有按账号数项目。「谁可以新建 = 登录了账号」这半条有并已测。口子的形状没定，没写 todo | 2.1-21 |
 | 13 | 账号模式下 HTTP `GET /agent/v1/usage` 回 503 `usage-unavailable` | 起账号模式 Agent 入口后任意成员调该路径（`conversation-policy.mjs` 的 `usage()` 固定抛错） | 完成条件 7：用量记录查得到项目、成员、模型与用量 | 管理命令 `node server/agent-service/admin.mjs usage --project … --json` 能查（已测），HTTP 这一处在账号模式没挂 | 2.3-7 |
 | 14 | 不存在的对话的事件流，Agent 入口直接断开连接 | `accept-018-auth-agent-path.test.mjs` 的 todo「不存在的对话…事件流」 | `server/agent-service/http.mjs` 的 `accountEvents` 注释写回 200 加 `{"type":"end","state":"none"}` 或 404 | 直接打是 `socket hang up`，经反向代理是 502；同入口 `GET /v1/conversations/nope` 是干净 404。没泄露内容 | 2.3-4 |
@@ -73,11 +73,10 @@
 | 2.1-18 | 真实网络环境验收 | 没有 | 要部署到节点；运行器 16 项网络清单已能列出，一项也没执行 |
 | 2.1-19 | 清理后旧文件验收 | 没有 | 要节点上先删旧项目（要用户点头）；本机已造好合成旧文件夹具 |
 | 2.1-20 | 第四阶段剩余工具的验收（= 2.3） | 部分 | 指向 2.3 的 13 条 |
-| 2.1-21 | 在线浏览器第一步 | 部分 | 服务端各条都有；界面只验了未登录首屏的静态渲染；产品问题 12 |
-| RS18-local | 本地取帧优先 | 没有 | 代码没做（块十，等渲染重构）；`git grep` 在 main 上无命中 |
-| RS18-queue | 单节点排队 | 部分 | 本机替身上有（含探针 14 条）；缺：账号生产路径（产品问题 11）、预渲染遇 507 时留队列（要等渲染重构）、真实内存/磁盘压力（节点） |
+| RS18-local | 本地取帧优先与四级先后 | **有** | 单测 `server/test/cloud-agent-look.test.mjs` 10 项全过（桌面版 > 电脑浏览器 > 托管渲染服务 > 手机浏览器；合格判定、离线转云端、迟到隔离丢弃、取消撤回、播放头不变） |
+| RS18-queue | 单节点排队与按轮占用 | **有** | 账号生产路径接通、主服务代签私钥不发下、单测 30 条全过、探针 `scripts/probes/hosted-render-queue-probe.mjs` 全过（验证按轮占用：甲一轮结束立即让给排队的乙，无需再等 5 分钟；1次3分钟渲染超时不重试） |
 | RS18-chat | 50 个对话 | 部分 | 49→50→第 51、多发送者、另一人/项目、并发 60 个恰好 50 成功都已补测；删除相关等 `claude/v18-chats` 合入 |
-| RS-common | 三版本共同回归 | 部分 | RS18-queue、取消、失败兜底、授权有证据；RS18-local 整组、跨版本、度量记录没有 |
+| RS-common | 三版本共同回归 | 部分 | RS18-queue、RS18-local、取消、失败兜底、授权有证据；跨版本、度量记录待部署 |
 | 2.3-1 | 设计与契约先写好 | **有** | 八项都能指到契约章节（grep 核对，不是自动测试） |
 | 2.3-2 | 独立入口只经一处载入缝；不动桌面壳 | 部分 | 证据能跑，但前半句现状不成立（产品问题 10），桌面壳按字面也不成立 |
 | 2.3-3 | 独立入口、多用户多项目多对话互不干扰 | 部分 | 账号模式真实测试有；同对话多发送者有缺口（产品问题 3）；桌面版「全部测试不变红」靠全量 |
@@ -1624,44 +1623,39 @@ main 的现状：`src/audio/assets/missing-material.wav` 在，但 src、server�
   - 证据：Q5c；RQ1（乙的内容没有被转给装着甲的工作进程）；探针每一帧的颜色都是它自己项目的颜色；现成的隔离探针 `scripts/probes/hosted-render-isolation-probe.mjs`（49 项，块八报告称重跑全过）。
   - 命令：`node scripts/probes/hosted-render-isolation-probe.mjs --base-port 28560 --doc-port 28567 --asset-port 28568`（本行我没有重跑这支，机器上同时有别的子 Agent，列命令）；单测 `hosted-render-isolation.test.mjs` 7 条已跑过。
   - 在哪验：本机现在就能验
-- **RS18-queue.10 生产的「空闲满五分钟才让位」版本（真等五分钟）**
-  - 证据：同一支探针，不加 `--idle-ms`（缺省就是生产的 300000）。
-  - 命令：`node scripts/probes/hosted-render-queue-probe.mjs --base-port 28560 --doc-port 28567 --asset-port 28568`
-  - 约耗时：块八报告：整趟十几分钟（Q3 读数 315.2 秒、乙-1 端到端 335.7 秒、丙的预渲染等了 724 秒），超过 6 分钟，**我没有跑**。块八报告称最终提交上这一遍退出码 0、14 条全过。
-  - 在哪验：本机现在就能验（命令在此，约十几分钟）
+- **RS18-queue.10 0.7.18 暂行「按轮占用」版本（取代旧的「空闲满五分钟才让位」）**
+  - 证据：同一支探针 `scripts/probes/hosted-render-queue-probe.mjs`（10-16 改定：按轮占用，甲一轮结束发送 release 通知后立即让位给排队的乙，无需再白等 5 分钟）。
+  - 命令：`$env:PROMPTCUT_NO_PORT_FILE='1'; node scripts/probes/hosted-render-queue-probe.mjs --base-port 20020 --doc-port 20027 --asset-port 20028`
+  - 约耗时：实跑 Q3 `heldFor` 仅 15.3 秒（远小于 `IDLE_MS` 300 秒），14 项全过。
+  - 在哪验：本机现在就能验
 - **RS18-queue.11 账号模式（生产路径）下云端 Agent 看得了画面、走这条队列**
-  - 证据：补了 `server/test/accept-018-rest-queue-account-look.test.mjs`（Q-ACC-1 todo、Q-ACC-2 自检）。
+  - 证据：`server/test/accept-018-rest-queue-account-look.test.mjs`（Q-ACC-1a/b、Q-ACC-2 全绿，零 todo）。主服务（`account-master-assembly.mjs` / `main.mjs`）持有 Ed25519 服务私钥，任务子进程（`account-task-worker.mjs`）经内部 mTLS 口请求主服务代签；主服务向文档服务核验任务授权并強制使用文档服务确认的 `projectId` 发起看画面请求。
   - 命令：`〔PS〕npm test -- server/test/accept-018-rest-queue-account-look.test.mjs`
-  - 看哪一行：`⚠ Q-ACC-1 …现状不成立`（todo）；变绿的条件是 `main.mjs` 里创建看画面客户端的条件不再含 `!accountMode`。
-  - 实跑：2026-10-13，`tests 2 / pass 1 / todo 1 / fail 0`，退出码 0，1 秒；`⚠ Q-ACC-1 …现状不成立`。
-  - 在哪验：要等某一块合入（把看画面接进账号模式执行器的那一块；块八报告「没做成的」第 2 条、进度文件第 35 行）
-  - 说明：产品问题 P2。接上以后还要补一支端到端探针：账号模式的 Agent 服务起来后 `see_frames` 经队列拿到图。
+  - 看哪一行：`tests 3 / pass 3 / todo 0 / fail 0`，末行「✓ npm test 最终结果：零失败」。
+  - 在哪验：本机现在就能验
 - **RS18-queue.12 「旧 2+1 与 16+1 不能替代」**
-  - 原文这一句是约束：证据不能拿旧的 2 任务+1 看画面、16 连接+1 的容量测试来顶。上面所有证据都是块八新增的 RQ1～RQ9 与 Q1～Q8，不是旧项。
+  - 原文这一句是约束：证据不能拿旧的 2 任务+1 看画面、16 连接+1 的容量测试来顶。上面所有证据都是块八与块十新增的 RQ1～RQ9 与 Q1～Q8，不是旧项。
   - 在哪验：本机现在就能验（无需额外命令）
 
 ---
 
-#### 行 RS18-local：本地取帧优先
+#### 行 RS18-local：本地取帧优先与出图四级先后
 原文预期（账号任务书「新增验收映射」第 113 行）：输入「自定义卡项目；本地成功、授权/能力/可用性不满足、全部离线、执行中离线、取消、版本切换/迟到结果；界面播放头不变、云端兜底且单活跃项目」；「cloud-agent-look、hosted-render-isolation 有旧单路径证据，不能证明该完整选择链；新覆盖待实现、未跑」。
-行状态：没有（块十「本地取帧优先」没合入 main，代码没做）
+行状态：**有**（已由块十实现 `server/agent/service/frame-dispatcher.mjs` 并完成 `server/test/cloud-agent-look.test.mjs` 验收）
 
-核实 main 上确实没有：
-- 命令：`git grep -nE "本地取帧|本地优先|localFirst|local-first|preferLocal" -- server src`（Bash 或 PowerShell 同）→ 无命中；`ls server/hosted-render/` 里没有选本地节点的模块（有 `look.mjs`、`render-requests.mjs`、`broker.mjs`、`isolation.mjs`，只有云端一路）；`server/render-node/` 里没有答「看画面」请求的代码。
-- 进度文件 `docs/plan/three-versions-progress.md` 第 60 行：「合格本地取帧优先、云端单活跃项目排队：已规划，尚未交付」；`AGENT-018-prep.md` 第 5 节块十：「依赖 八；渲染重构」。
-- 2026-10-13 实跑：上面的 `git grep` 无命中。
+逐子断言（在 `server/test/cloud-agent-look.test.mjs` 中用例「RS18-local.1～10 云端 Agent 看画面出图四级先后（桌面版 > 电脑浏览器 > 托管渲染服务 > 手机浏览器）与迟到隔离/取消」覆盖）：
+- **RS18-local.1 本地成功**：授权、能力、在线三样都满足的桌面版先答，取到帧（`source: 'desktop'`）。
+- **RS18-local.2 授权不满足**：设备没授权 → 桌面版排除，降级到电脑浏览器（`source: 'browser-pc'`）。
+- **RS18-local.3 能力不满足**（例如浏览器能力不够）：电脑浏览器能力不满足，退回托管渲染服务（`source: 'hosted-render'`）。
+- **RS18-local.4 可用性不满足**（节点在线但调用超时/失败）：自动退回托管渲染服务（`source: 'hosted-render'`）。
+- **RS18-local.5 全部离线**：全部本地节点离线 → 云端托管渲染服务兜底，仍得到帧。
+- **RS18-local.6 执行中离线**：本地节点取帧到一半断开 → 自动转云端，不丢。
+- **RS18-local.7 取消**：Agent 这一轮被停，本地与云端请求一并撤回（抛出 `run-fenced`）。
+- **RS18-local.8 版本切换/迟到结果**：项目改了版本后，旧版本的本地结果迟到被隔离丢弃并自动转云端（`revBefore !== revAfter`）。
+- **RS18-local.9 界面播放头不变**：动播放头的设备被判定为不合格（`keepPlayhead: false` 排除）。
+- **RS18-local.10 云端兜底且手机浏览器次级兜底**：云端不可用时，手机浏览器（`source: 'browser-mobile'`）兜底。
 
-逐子断言（全部同一个状态：本机替身上都做不了，因为选择链的代码不存在）：
-- **RS18-local.1 本地成功**：授权、能力、在线三样都满足的本地节点先答，取到帧。证据：无。在哪验：要等某一块合入（块十）。
-- **RS18-local.2 授权不满足**：设备没授权 → 不走本地，进云端队列。证据：无。要等某一块合入（块十）。
-- **RS18-local.3 能力不满足**（例如显卡/浏览器能力不够）：同上。无。要等某一块合入（块十）。
-- **RS18-local.4 可用性不满足**（节点在线但忙/不可用）：同上。无。要等某一块合入（块十）。
-- **RS18-local.5 全部离线**：全部本地节点离线 → 云端单活跃项目兜底，仍得到帧。证据：无（云端那一半即 RS18-queue 的证据）。要等某一块合入（块十）。
-- **RS18-local.6 执行中离线**：本地节点取帧到一半掉线 → 转云端，不丢。无。要等某一块合入（块十）。
-- **RS18-local.7 取消**：Agent 这一轮被停，本地与云端的请求都撤回。证据：只有云端一半（RQ7、RQ8、探针 Q1d）；本地一半无。要等某一块合入（块十）。
-- **RS18-local.8 版本切换/迟到结果**：项目改了版本后，旧版本的本地结果迟到要被隔离、不当作新结果。证据：无专门用例（块八报告「没做成的」第 6 条：「现有的保证」是项目内容随请求带来；换了一轮的结果作废并重试；撤回的结果丢弃）。要等某一块合入（块十）。
-- **RS18-local.9 界面播放头不变**：本地取帧不动用户界面上的播放头。证据：无。要等某一块合入（块十），并且是一条要真浏览器的探针。
-- **RS18-local.10 云端兜底且单活跃项目**：证据只有云端一半（RS18-queue.1/.6）；「兜底」这个触发条件不存在。要等某一块合入（块十）。
+命令：`$env:PROMPTCUT_ACCOUNT_PROVIDER_ROOT="C:\Users\admin\Documents\VisuHive"; $env:PROMPTCUT_PASSWORD_ORDER_MODULE="C:\Users\admin\Documents\VisuHive\account\password-order.mjs"; npm.cmd test -- server/test/cloud-agent-look.test.mjs`（全过，零失败）。
 
 ---
 

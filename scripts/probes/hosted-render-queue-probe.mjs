@@ -194,6 +194,7 @@ function startSupervisor(extraEnv = {}) {
     PROMPTCUT_RENDER_MEM_LOW: MEM_LOW,
     PROMPTCUT_RENDER_EDITOR_DIR: path.join(TMP, 'no-editor'),
     PROMPTCUT_RENDER_LOOK_SERVICES: hostedPaths(HOSTED_DATA).servicesFile,
+    PROMPTCUT_RENDER_STREAMS: '1',
     PROMPTCUT_RENDER_ISO_IDLE_MS: String(IDLE_MS),
     PROMPTCUT_NO_PORT_FILE: '1',
     ...extraEnv,
@@ -234,9 +235,9 @@ const timings = [];
 let client = null;
 const clientLogs = [];
 /** 以 Agent 服务的身份为这个项目要一帧；回 `{ ok, rgb, ms }` 或 `{ error }`，不抛 */
-function look(proj, label, { signal } = {}) {
+function look(proj, label, { signal, run } = {}) {
   const started = Date.now();
-  const post = client.forProject(proj.projectId, { cards: () => ({ [CARD_KEY]: null }) });
+  const post = client.forProject(proj.projectId, { cards: () => ({ [CARD_KEY]: null }), ...(run ? { run } : {}) });
   const rec = { label, project: proj.label, started, done: false };
   rec.promise = post('/api/vision/snapshot', { project: proj.project, t: 1 }, { signal }).then((data) => {
     let rgb = null;
@@ -290,12 +291,16 @@ async function main() {
   const jia = await makeProject('甲', 'alice', 'jia', '#ff0000', [255, 0, 0]);
   const yi = await makeProject('乙', 'bob', 'yi', '#00ff00', [0, 255, 0]);
   const bing = await makeProject('丙', 'carol', 'bing', '#0000ff', [0, 0, 255]);
+  combo.credentialStore.update(bing.projectId, (rec) => {
+    rec.hosted = { render: { enabled: true, streams: true } };
+  });
   const nameOf = (id) => [jia, yi, bing].find((p) => p.projectId === id)?.label ?? (id ? '别的' : null);
   await waitFor(async () => { const s = await status(); return [jia, yi, bing].every((p) => (s.queue?.nodes ?? []).some((n) => n.projectId === p.projectId)) ? s : null; }, 60_000, '常驻工作进程连上三个项目', 500);
   watch();
 
   /* ---- Q1a 甲要一帧 */
-  const a1 = await look(jia, '甲-1').promise;
+  const jiaRun = { runId: `run-jia-${RUN}`, runGrantId: `grant-jia-${RUN}`, conversationId: `conv-jia-${RUN}` };
+  const a1 = await look(jia, '甲-1', { run: jiaRun }).promise;
   const s1 = await status();
   check('Q1a', '甲要一帧：隔离工作进程为它起来、出图，颜色是甲的', a1.ok === true && near(a1.rgb, jia.rgb) && s1.isolation?.current?.projectId === jia.projectId && (s1.look?.byWorker?.isolated ?? 0) === 1 && (s1.look?.byWorker?.resident ?? 0) === 0,
     { ms: a1.ms, rgb: a1.rgb, error: a1.error, iso: nameOf(s1.isolation?.current?.projectId), byWorker: s1.look?.byWorker });
@@ -303,15 +308,16 @@ async function main() {
   /* ---- Q2 的布置：丙先发预渲染计划（带用户卡，要隔离工作进程做），在等 */
   const hello = await bing.conn.ask({ type: 'publisher.hello', publisherId: `rq-pub-${RUN}` });
   if (hello.type !== 'publisher.welcome') throw new Error(`publisher.hello：${JSON.stringify(hello).slice(0, 200)}`);
-  const plan = clipsPlanTaskOf({ projectId: bing.docId, projectRev: bing.rev, clips: ['clip-solid'], codeVersion });
+  const plan = clipsPlanTaskOf({ projectId: bing.docId, projectRev: bing.rev, clips: ['clip-solid'], codeVersion, streams: true });
   const pub = await bing.conn.ask({ type: 'task.publish', tasks: [plan] });
   if (pub.type !== 'task.published') throw new Error(`task.publish：${JSON.stringify(pub).slice(0, 300)}`);
   const bingPublishedAt = Date.now();
   await waitFor(async () => ((await status()).isolation?.waiting ?? []).includes(bing.projectId), 30_000, '丙的预渲染任务进了等的名单', 500);
 
   /* ---- Q1b 甲装着时乙要一帧：排着 */
+  const yiRun = { runId: `run-yi-${RUN}`, runGrantId: `grant-yi-${RUN}`, conversationId: `conv-yi-${RUN}` };
   const markB = seen.length;
-  const b1 = look(yi, '乙-1');
+  const b1 = look(yi, '乙-1', { run: yiRun });
   const yiQueuedAt = Date.now();
   const sB = await waitFor(async () => { const s = await status(); return s.look?.queue?.queued === 1 && s.look.queue.blocked?.['iso-other-project'] === 1 ? s : null; }, 20_000, '乙的请求排进队列', 300).catch(() => null);
   await delay(3000);
@@ -320,7 +326,7 @@ async function main() {
     { queued: sB2.look?.queue?.queued, blocked: sB2.look?.queue?.blocked, iso: nameOf(sB2.isolation?.current?.projectId), refused: sB2.look?.refused, failed: sB2.look?.failed, clientDone: b1.done, clientError: b1.error });
 
   /* ---- Q1c 乙排着时甲再要一帧 */
-  const a2 = await look(jia, '甲-2').promise;
+  const a2 = await look(jia, '甲-2', { run: jiaRun }).promise;
   const jiaLastAt = Date.now();
   check('Q1c', '乙排着时甲再要一帧：照常出（排在前面的乙不挡它），乙还排着', a2.ok === true && near(a2.rgb, jia.rgb) && b1.done === false, { ms: a2.ms, rgb: a2.rgb, error: a2.error, yiDone: b1.done });
 
@@ -335,9 +341,10 @@ async function main() {
   check('Q1d', '撤回：乙另一条请求登记后被调用方撤回，队列里不留它，原来那条还排着', sD0.look?.queue?.queued === 2 && !!sD && (sD.look?.queue?.cancelled ?? 0) === 1 && b1.done === false && !!b2.error,
     { before: sD0.look?.queue?.queued, after: sD?.look?.queue?.queued, cancelled: sD?.look?.queue?.cancelled });
 
-  /* ---- Q3 / Q2 / Q4：等甲让位 */
-  say('wait-yield', { idleMs: IDLE_MS });
-  const b1r = await Promise.race([b1.promise, delay(IDLE_MS + T(300_000)).then(() => null)]);
+  /* ---- Q3 / Q2 / Q4：甲一轮结束，立即让位给排队的乙，无需再等 5 分钟！ */
+  say('release-turn', { projectId: jia.projectId, runId: jiaRun.runId });
+  await client.release(jia.projectId, { runId: jiaRun.runId });
+  const b1r = await Promise.race([b1.promise, delay(T(60_000)).then(() => null)]);
   const yiDoneAt = Date.now();
   const window1 = seen.slice(markB).filter((x) => x.at <= yiDoneAt);
   const jiaEnded = supLogs.filter((l) => l.event === 'isolation.ended' && l.projectId === jia.projectId).at(-1) ?? null;
@@ -349,8 +356,8 @@ async function main() {
   const curs = [...new Set(window1.filter((x) => x.at < (jiaStopAt ?? yiDoneAt)).map((x) => nameOf(x.cur)))];
   const multi = seen.filter((x) => new Set(x.listed).size > 1).length;
   check('Q1b', '乙等着的整个期间隔离工作进程装着的始终只有甲一个项目（任何一拍都没有同时装两个）', curs.length === 1 && curs[0] === '甲' && multi === 0, { curs, ticks: window1.length, multiProjectTicks: multi });
-  check('Q3', `让位要满时长：从甲最后一次出图算起满 ${IDLE_MS} ms 才让位（乙在排队、丙有预渲染任务等着也不提前）；结束原因是空闲`, heldFor !== null && heldFor >= IDLE_MS && heldFor <= IDLE_MS + T(45_000) && jiaEnded?.reason === 'idle',
-    { heldForMs: heldFor, idleMs: IDLE_MS, reason: jiaEnded?.reason, yiWaitedMs: (jiaStopAt ?? 0) - yiQueuedAt, bingWaitedMs: (jiaStopAt ?? 0) - bingPublishedAt });
+  check('Q3', '按轮占用：甲一轮结束立即让位（乙在排队），无需再等 5 分钟；结束原因是轮换或空闲', heldFor !== null && heldFor < IDLE_MS && (jiaEnded?.reason === 'idle' || jiaEnded?.reason === 'rotated' || jiaStop?.reason === 'idle' || jiaStop?.reason === 'rotated'),
+    { heldForMs: heldFor, idleMs: IDLE_MS, reason: jiaEnded?.reason ?? jiaStop?.reason, yiWaitedMs: (jiaStopAt ?? 0) - yiQueuedAt, bingWaitedMs: (jiaStopAt ?? 0) - bingPublishedAt });
   check('Q2', '看画面优先于预渲染任务：丙先发了预渲染计划、乙后来才要看画面；甲让位后下一轮装的是乙，不是先来的丙', startsAfter[0] === '乙' && bingPublishedAt < yiQueuedAt, { startsAfterJia: startsAfter, bingBeforeYiMs: yiQueuedAt - bingPublishedAt });
   const sY = await status();
   const yiLog = supLogs.filter((l) => l.event === 'look.done' && l.projectId === yi.projectId && l.state === 'done').at(-1) ?? null;
@@ -428,7 +435,7 @@ async function main() {
     const r = await Promise.race([look(bing, '丙-重试到头').promise, delay(T(300_000)).then(() => null)]);
     const retries = supLogs.slice(markR).filter((l) => l.event === 'look.retry');
     const doneR = supLogs.slice(markR).filter((l) => l.event === 'look.done').at(-1) ?? null;
-    check('Q7', '重试到头：每次都到时限，试 1 + 3 次后调用方收到明确的「这次没看成」，不挂着；日志里有三次重试', r?.error === LOOK_ERRORS.timeout && retries.length === 3 && retries.every((x) => x.why === 'timeout') && doneR?.attempts === 4 && doneR.state === 'failed',
+    check('Q7', '超时与一次不重试：到时限回「这次没看成」（渲染超时），一次不重试', (r?.error?.includes('这次没看成') || r?.error?.includes('渲染超时') || r?.error === LOOK_ERRORS.timeout) && retries.length === 0 && doneR?.attempts === 1 && doneR.state === 'failed',
       { error: r?.error, ms: r?.ms, retries: retries.map((x) => x.why), attempts: doneR?.attempts, state: doneR?.state });
   }
   out.lookStatus = (({ served, failed, refused, retried, over5min, byWorker, queue }) => ({ served, failed, refused, retried, over5min, byWorker, queue }))((await status()).look ?? {});

@@ -159,3 +159,129 @@ test('CA-LOOK-04 工具表:看画面的四个归到「在副本上执行」并�
   assert.deepEqual(cloudLookResult('see_frames', { ok: false, error: 'x' }), { ok: false, error: 'x' });
   assert.equal(lookUnavailable('see_frames').cloudUnavailable, true);
 });
+
+import {
+  dispatchFrameSnapshot, selectEligibleLocalNodes, isQualifiedMemberNode, classifyNode, FRAME_SOURCE_LEVELS,
+} from '../agent/service/frame-dispatcher.mjs';
+
+test('RS18-local.1～10 云端 Agent 看画面出图四级先后（桌面版 > 电脑浏览器 > 托管渲染服务 > 手机浏览器）与迟到隔离/取消', async () => {
+  // RS18-local.1 本地成功：桌面版满足资格先答
+  const desktopNode = { id: 'node-pc-1', kind: 'desktop', online: true, authorized: true, codeVersion: 'v1', capabilities: { canSnapshot: true }, keepPlayhead: true };
+  const browserNode = { id: 'node-web-1', kind: 'browser', platform: 'browser', online: true, authorized: true, codeVersion: 'v1', capabilities: { canSnapshot: true }, keepPlayhead: true };
+  let localCalls = [];
+  const res1 = await dispatchFrameSnapshot({
+    memberNodes: [browserNode, desktopNode],
+    projectCodeVersion: 'v1',
+    cloudLook: async () => ({ ok: true, cloud: true }),
+    callLocal: async (node, req) => { localCalls.push(node.id); return { ok: true, frame: 'snap-' + node.id }; },
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+  });
+  assert.equal(res1.source, FRAME_SOURCE_LEVELS.DESKTOP);
+  assert.deepEqual(localCalls, ['node-pc-1'], '优先从桌面版出图');
+
+  // RS18-local.2 授权不满足：桌面版没授权，降级到电脑浏览器
+  localCalls = [];
+  const unauthDesktop = { ...desktopNode, authorized: false };
+  const res2 = await dispatchFrameSnapshot({
+    memberNodes: [unauthDesktop, browserNode],
+    projectCodeVersion: 'v1',
+    cloudLook: async () => ({ ok: true, cloud: true }),
+    callLocal: async (node) => { localCalls.push(node.id); return { ok: true, frame: 'snap-' + node.id }; },
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+  });
+  assert.equal(res2.source, FRAME_SOURCE_LEVELS.BROWSER_PC);
+  assert.deepEqual(localCalls, ['node-web-1']);
+
+  // RS18-local.3 能力不满足：电脑浏览器没有出图能力，退回云端渲染服务
+  localCalls = [];
+  const incapableBrowser = { ...browserNode, capabilities: { canSnapshot: false } };
+  let cloudCalled = false;
+  const res3 = await dispatchFrameSnapshot({
+    memberNodes: [incapableBrowser],
+    projectCodeVersion: 'v1',
+    cloudLook: async () => { cloudCalled = true; return { ok: true, cloud: true }; },
+    callLocal: async (node) => { localCalls.push(node.id); return { ok: true }; },
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+  });
+  assert.equal(res3.source, FRAME_SOURCE_LEVELS.HOSTED_RENDER);
+  assert.equal(cloudCalled, true);
+  assert.deepEqual(localCalls, [], '不合格节点不发起请求');
+
+  // RS18-local.4 可用性不满足：在线但调用超时/失败，自动转云端
+  localCalls = [];
+  cloudCalled = false;
+  const res4 = await dispatchFrameSnapshot({
+    memberNodes: [desktopNode],
+    projectCodeVersion: 'v1',
+    cloudLook: async () => { cloudCalled = true; return { ok: true, cloud: true }; },
+    callLocal: async () => { throw new Error('timeout'); },
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+  });
+  assert.equal(res4.source, FRAME_SOURCE_LEVELS.HOSTED_RENDER);
+  assert.equal(cloudCalled, true);
+
+  // RS18-local.5 全部离线：云端单活跃项目兜底，仍得到帧
+  cloudCalled = false;
+  const offlineDesktop = { ...desktopNode, online: false };
+  const res5 = await dispatchFrameSnapshot({
+    memberNodes: [offlineDesktop],
+    cloudLook: async () => { cloudCalled = true; return { ok: true, cloud: true }; },
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+  });
+  assert.equal(res5.source, FRAME_SOURCE_LEVELS.HOSTED_RENDER);
+  assert.equal(cloudCalled, true);
+
+  // RS18-local.6 执行中掉线：本地节点取帧到一半断开 -> 转云端，不丢
+  cloudCalled = false;
+  const res6 = await dispatchFrameSnapshot({
+    memberNodes: [desktopNode],
+    projectCodeVersion: 'v1',
+    cloudLook: async () => { cloudCalled = true; return { ok: true, cloud: true }; },
+    callLocal: async () => { throw new Error('socket closed'); },
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+  });
+  assert.equal(res6.source, FRAME_SOURCE_LEVELS.HOSTED_RENDER);
+  assert.equal(cloudCalled, true);
+
+  // RS18-local.7 取消：Agent 这一轮被停，本地与云端请求都撤回
+  const ac = new AbortController();
+  ac.abort(new Error('run-fenced'));
+  await assert.rejects(dispatchFrameSnapshot({
+    memberNodes: [desktopNode],
+    cloudLook: async () => ({ ok: true }),
+    callLocal: async () => ({ ok: true }),
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+    signal: ac.signal,
+  }), /run-fenced/);
+
+  // RS18-local.8 版本切换/迟到结果：项目改了版本后，旧版本的本地结果迟到被隔离丢弃并转云端
+  let rev = 1;
+  cloudCalled = false;
+  const res8 = await dispatchFrameSnapshot({
+    memberNodes: [desktopNode],
+    projectCodeVersion: 'v1',
+    cloudLook: async () => { cloudCalled = true; return { ok: true, cloud: true }; },
+    callLocal: async () => {
+      rev = 2; // 版本在取帧过程中切换
+      return { ok: true, stale: true };
+    },
+    getProjectRev: () => rev,
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+  });
+  assert.equal(res8.source, FRAME_SOURCE_LEVELS.HOSTED_RENDER, '迟到旧结果被丢弃，转云端');
+  assert.equal(cloudCalled, true);
+
+  // RS18-local.9 界面播放头不变：节点 keepPlayhead 为 false 时不合格
+  const movingPlayheadNode = { ...desktopNode, keepPlayhead: false };
+  assert.equal(isQualifiedMemberNode(movingPlayheadNode), false, '动播放头的设备不合格');
+
+  // RS18-local.10 云端兜底且手机浏览器次级兜底
+  const mobileNode = { id: 'node-mobile-1', isMobile: true, online: true, authorized: true, capabilities: { canSnapshot: true }, keepPlayhead: true };
+  const res10 = await dispatchFrameSnapshot({
+    memberNodes: [mobileNode],
+    cloudLook: async () => { throw new Error('cloud-off'); },
+    callLocal: async (node) => ({ ok: true, frame: 'mobile-snap' }),
+    request: { path: '/api/vision/snapshot', body: { t: 1 } },
+  });
+  assert.equal(res10.source, FRAME_SOURCE_LEVELS.BROWSER_MOBILE, '云端也不可用时手机浏览器兜底');
+});

@@ -10,9 +10,15 @@ import { accountMessageId } from "../../../ai/cloud/events";
 export function CloudQueueList(props: { queue?: CloudQueueSnapshot | null; messages: ChatMessage[]; senders?: Record<string, CloudSender> }) {
   const items = props.queue?.items.filter(item => item.state === 'queued').sort((a, b) => (a.position ?? 0) - (b.position ?? 0)) ?? [];
   const waitingJobs = props.messages.some(m => m.role === 'assistant' && m.pending && (m.progress?.waitingJobs || m.progress?.phase === 'waiting_jobs'));
-  if (!items.length && !waitingJobs) return null;
+  const queuedLook = props.messages.find(m => m.role === 'assistant' && m.pending && ((m.progress as Record<string, any>)?.renderQueuePosition || m.progress?.phase === 'render_queued'));
+  const renderQueuePos = (queuedLook?.progress as Record<string, any>)?.renderQueuePosition ?? 1;
+  if (!items.length && !waitingJobs && !queuedLook) return null;
   return <section className="ai-queue" data-pc="cloud-queue" data-queue-revision={props.queue?.queueRevision} aria-label="云端持久队列">
-    {waitingJobs ? (
+    {queuedLook ? (
+      <div className="ai-queue-head pc-cloud-render-queued" data-pc="cloud-queue-render-queued">
+        云端渲染正在给别的项目用，排在第 {renderQueuePos} 位，轮到了会接着做。
+      </div>
+    ) : waitingJobs ? (
       <div className="ai-queue-head pc-cloud-waiting-jobs" data-pc="cloud-queue-waiting-jobs">
         上一条消息发起的后台作业（转写、镜头识别等）还在做，做完就处理你这条消息。
       </div>

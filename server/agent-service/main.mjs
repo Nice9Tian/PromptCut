@@ -386,8 +386,19 @@ async function main() {
       let readClosing = null;
       conversationControl.close = () => readClosing ??= Promise.resolve().then(closeReadControl);
       conversationClient.useReadControl(conversationControl);
+      let masterLookKey = null;
+      if (lookUrl) {
+        try { masterLookKey = resolveAccountLook({ env, lookUrl }); } catch { /* ignore */ }
+        if (!masterLookKey) {
+          try {
+            const k = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets');
+            if (k?.service === 'agent') masterLookKey = k;
+          } catch { /* ignore */ }
+        }
+      }
       accountMaster = { runClient, readControl: conversationControl, tls: options.tls, internalPort: slots.internalPort,
-        controllerFingerprint256: slots.controllerFingerprint256, sharedDataDir: slots.sharedDataDir };
+        controllerFingerprint256: slots.controllerFingerprint256, sharedDataDir: slots.sharedDataDir,
+        ...(masterLookKey ? { lookUrl, lookKey: masterLookKey } : {}) };
       wiring = createHostedWiring({ accountMode: true, conversationClient, log: line });
     } catch (error) {
       await conversationControl?.close(); conversationClient?.close(); runClient?.close();

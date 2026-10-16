@@ -121,6 +121,7 @@ export function sharedModule({
   now,
   linkOrigin = null,
   hostedServices = null,
+  accountRuntime = null,
 } = {}) {
   const storeOf = typeof store === 'function' ? store : () => store;
   const registryOf = () => {
@@ -263,6 +264,16 @@ export function sharedModule({
     const p = c.principal;
     if (c.space === null) throw new Refused('forbidden', '控制连接要不到票据');
     const rec = storeOf()?.peek(c.space) ?? null;
+    if (!rec) {
+      const runtime = typeof accountRuntime === 'function' ? accountRuntime() : accountRuntime;
+      if (runtime && typeof runtime.issueServiceAssetTicket === 'function') {
+        if (msg.kind !== 'asset') throw new Refused('forbidden', '服务身份只能要素材票据');
+        const access = msg.access ?? 'r';
+        if (access !== 'r' && access !== 'rw') throw new Refused('bad-message', "access 只能是 'r' 或 'rw'");
+        const out = runtime.issueServiceAssetTicket({ projectId: c.space, service: p.service, serviceKid: p.serviceKid, access });
+        return reply(ctx, connId, { type: 'auth.ticket.ok', ticket: out.assetTicket ?? out.ticket, exp: out.expiresAt ?? out.exp }, reqId);
+      }
+    }
     const refused = serviceAdmission({ registry: registryOf(), record: rec, service: p.service, kid: p.serviceKid, role: p.role });
     if (refused) throw new Refused('forbidden', refused);
     if (msg.kind !== 'asset') throw new Refused('forbidden', '服务身份只能要素材票据');

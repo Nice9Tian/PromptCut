@@ -72,12 +72,15 @@ export const LOOK_DEFAULTS = Object.freeze({
   maxTimeoutMs: 170_000,
   /** 签名里的时刻与本机时钟最多差多少 */
   skewMs: 60_000,
-  /** 渲染这一段每次最多等多久（2026-10-09 用户定：一分钟；不含排队与把项目装进隔离工作进程的时间） */
-  attemptMs: 60_000,
-  /** 没成自动重试几次（2026-10-09 用户定：三次，每次也是一分钟）。所以最多试 1 + 3 次〔裁：「允许三次重试」按字面读成第一次之外再三次〕 */
-  retries: 3,
-  /** 排队最多等多久；到了如实回「这次没看成」〔裁，三级：防呆上限，不是「一分钟」那条规矩的一部分〕 */
+  /** 渲染这一段每次最多等多久（2026-10-16 用户改定：最长三分钟，从真正开始渲算；一次不重试） */
+  attemptMs: 180_000,
+  /** 没成自动重试几次（2026-10-16 用户定：一次，不重试） */
+  retries: 0,
+  /** 隔离工作进程启动失败的重试次数（与出图重试分开） */
+  isoRetries: 3,
+  /** 排队不设硬上限；只留一道防故障兜底：队列 10 分钟一点没动当作调度异常（2026-10-16 用户定） */
   maxQueueMs: 30 * 60_000,
+  queueStallMs: 10 * 60_000,
   /** 「登记了再来问」的请求：调用方这么久没来问就撤掉（它自己没了） */
   orphanMs: 120_000,
   /** 一次 `/look/poll` 最多挂多久 */
@@ -191,7 +194,9 @@ export const LOOK_ERRORS = Object.freeze({
   'iso-busy': '这次没看成：渲染服务正在渲别的项目的自定义卡片，带自定义卡片的项目要排队。过一会儿再看，先按项目内容继续。',
   'iso-off': '这次没看成：这台云节点没有开自定义卡片的渲染，带自定义卡片的项目看不了画面。',
   'iso-failed': '这次没看成：渲染这个项目自定义卡片的工作进程没起来。先按项目内容继续，并在汇报里说明没有看过画面。',
-  timeout: '这次没看成：渲染服务在时限内没有出图。先按项目内容继续，稍后可以再看一次。',
+  timeout: '这次没看成：渲染超时。渲染服务在 3 分钟时限内没有出图，请缩小范围或稍后再试。',
+  'render-timeout': '这次没看成：渲染超时。渲染服务在 3 分钟时限内没有出图，请缩小范围或稍后再试。',
+  'queue-stalled': '排队异常：队列连续 10 分钟未处理，调度异常。先按项目内容继续，稍后可以再看一次。',
   failed: '这次没看成：渲染画面的工作进程出了错。',
   cancelled: '这次没看成：这个看画面的请求已经撤回。',
 });
@@ -199,12 +204,26 @@ export const LOOK_ERRORS = Object.freeze({
 /** 要往素材服务写产物的接口：产物到了容量上限（507）时这几条排着等，别的照常出 */
 const WRITES_ARTIFACT = new Set(['/api/vision/bake']);
 
-const fail = (status, look, extra = '') => ({ status, body: { ok: false, look, error: `${LOOK_ERRORS[look] ?? '这次没看成。'}${extra}` } });
-
+const fail = (status, look, extra = '', debug = null) => ({
+  status,
+  body: {
+    ok: false,
+    look,
+    error: `${LOOK_ERRORS[look] ?? '这次没看成。'}${extra}`,
+    ...(debug ? { debug } : {}),
+  },
+});
 
 const pending202 = (requests, e) => ({
   status: 202,
-  body: { ok: true, requestId: e.id, state: e.state, queuePosition: requests.position(e), attempts: e.attempts, ...(e.blockedReason ? { blockedReason: e.blockedReason } : {}) },
+  body: {
+    ok: true,
+    requestId: e.id,
+    state: e.state,
+    queuePosition: requests.position(e),
+    attempts: e.attempts,
+    ...(e.blockedReason ? { blockedReason: e.blockedReason } : {}),
+  },
 });
 
 /**
@@ -226,7 +245,7 @@ const pending202 = (requests, e) => ({
  */
 export function createLook({
   enabled = true, verify: verifyAuth, project, directoryReady = () => true, paused = () => false, storagePaused = () => false, resident, iso, want = () => {},
-  requests: requestsIn = null,
+  requests: requestsIn = null, isolation = null,
   fetch: fetchImpl = globalThis.fetch, now = Date.now, log = () => {}, limits: limitsIn = {},
 } = {}) {
   const limits = { ...LOOK_DEFAULTS, ...limitsIn };
@@ -283,12 +302,25 @@ export function createLook({
       // 排着的时候需求一直登记着：隔离工作进程的编排据此把这个项目当候选（并排在只有预渲染任务的项目前面）
       want(projectId, now() + limits.holdMs);
       e.isoSince ??= now();
+
+      const runId = e.run?.runId ?? null;
+      const turnAcquired = isolation?.acquireTurn ? isolation.acquireTurn({
+        projectId: e.projectId,
+        runId,
+        runGrantId: e.run?.runGrantId,
+        conversationId: e.run?.conversationId,
+        hasOtherQueued: requests.queued().some(q => q.needIso && q.projectId !== e.projectId),
+      }) : { ok: true, active: true };
+      if (!turnAcquired.ok) {
+        return { wait: 'iso-other-project' };
+      }
+
       // 为它起过、又没起成（起不来、内存超限、进程自己没了）：算一次没成；还有重试次数就再要一轮
       if (!s.current && s.lastRun && s.lastRun.projectId === projectId && s.lastRun.at >= e.isoSince && ['prepare-failed', 'start-timeout', 'oom', 'exit'].includes(s.lastRun.reason)) {
         e.attempts += 1;
         stats.retried += 1;
-        log('look.retry', { id: e.id.slice(0, 8), projectId, why: `iso-${s.lastRun.reason}`, attempts: e.attempts });
-        if (e.attempts > (e.retries ?? limits.retries)) return { fail: fail(503, 'iso-failed') };
+        const maxIsoRetries = e.retries ?? (limitsIn.retries !== undefined ? limitsIn.retries : (limitsIn.isoRetries ?? limits.isoRetries ?? 3));
+        if (e.attempts > maxIsoRetries) return { fail: fail(503, 'iso-failed') };
         e.isoSince = s.lastRun.at + 1;
         e.baseSince = null;
         requests.touchAttempts(e);
@@ -369,7 +401,24 @@ export function createLook({
       }
     } catch (err) {
       if (abort.signal.aborted) res = { cancelled: true };
-      else if (err?.name === 'TimeoutError' || err?.name === 'AbortError') res = { retry: 'timeout', out: fail(504, 'timeout') };
+      else if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        const debug = {
+          reason: 'render-timeout',
+          attemptMs: limit,
+          stalledStep: 'render-frame',
+          cards: e.cards,
+          path: e.path,
+          tool: e.tool,
+          projectId: e.projectId,
+          replayedFrames: 0,
+          pushedToFrame: null,
+          errorLogs: [],
+          unhandledExceptions: [],
+          waitingRequests: [],
+          oomKilled: false,
+        };
+        res = { retry: 'timeout', out: fail(504, 'timeout', '', debug) };
+      }
       else res = { retry: 'error', out: fail(502, 'failed', `（${String(err?.cause?.code ?? err?.code ?? err?.message ?? err).slice(0, 80)}）`) };
     } finally {
       if (keep) clearInterval(keep);
@@ -392,10 +441,23 @@ export function createLook({
     timer = null;
     requests.sweep();
     const at = now();
+    const qList = requests.queued();
+    if (qList.length > 0) {
+      const oldest = qList[0];
+      const isoStatus = iso ? iso() : null;
+      const activelyRendering = !!current || (isoStatus?.current?.phase === 'running' && isoStatus.current.projectId === oldest.projectId && (isoStatus.queue?.nodes?.[0]?.running?.length ?? 0) > 0);
+      if (!activelyRendering && (at - oldest.queuedAt >= (limits.queueStallMs ?? 600_000))) {
+        log('look.queue-stalled', { id: oldest.id.slice(0, 8), queuedMs: at - oldest.queuedAt });
+        if (isolation?.unlockProject) {
+          try { isolation.unlockProject(oldest.projectId); } catch {}
+        }
+        settle(oldest, 'failed', fail(503, 'queue-stalled'));
+      }
+    }
     for (const e of requests.queued()) {
       // 「登记了再来问」的：调用方很久没来问（它自己没了），撤掉，不占着队列
       if (e.persist && at - e.lastPollAt >= limits.orphanMs) { log('look.orphaned', { id: e.id.slice(0, 8), projectId: e.projectId }); settle(e, 'cancelled', fail(499, 'cancelled')); continue; }
-      if (e.deadline ? at >= e.deadline : at - e.queuedAt >= limits.maxQueueMs) { settle(e, 'failed', waitedOut(e)); continue; }
+      if (e.deadline ? at >= e.deadline : (limits.maxQueueMs && at - e.queuedAt >= limits.maxQueueMs)) { settle(e, 'failed', waitedOut(e)); continue; }
       const r = routeOnce(e);
       if (r.fail) { settle(e, 'failed', r.fail); continue; }
       if (r.wait) { e.blockedReason = r.wait; continue; }
@@ -521,10 +583,30 @@ export function createLook({
       if (!isFinal(e.state)) {
         log('look.cancelled', { id: e.id.slice(0, 8), projectId: e.projectId, was: e.state });
         const mine = e.state === 'running' && current?.id === e.id ? current : null;
+        if (e.run?.runId) isolation?.cancelTurn?.(e.run.runId);
         settle(e, 'cancelled', fail(499, 'cancelled'));
         mine?.abort.abort();
       }
       return { status: 200, body: { ok: true, requestId: e.id, state: e.state } };
+    },
+
+    async release({ auth, bodyText }) {
+      const a = admit(auth, bodyText);
+      if (a.out) return a.out;
+      const { who, msg } = a;
+      const projectId = msg?.projectId;
+      const runId = msg?.runId;
+      isolation?.releaseTurn?.({ projectId, runId, aborted: msg?.aborted === true });
+      kick();
+      return { status: 200, body: { ok: true } };
+    },
+
+    async heartbeat({ auth, bodyText }) {
+      const a = admit(auth, bodyText);
+      if (a.out) return a.out;
+      const { who, msg } = a;
+      isolation?.heartbeat?.({ projectId: msg?.projectId, runId: msg?.runId });
+      return { status: 200, body: { ok: true } };
     },
 
     /** 管理进程起来、把盘上的队列接回来之后调一次：让调度转起来 */

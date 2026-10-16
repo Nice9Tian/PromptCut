@@ -131,10 +131,10 @@ export function createBroker({ key, listing, ticket, report, status, clients = n
       if (fromBrowser(req)) { req.resume(); log('broker.browser-refused', { path: url.pathname.slice(0, 80) }); return send(res, 403, { ok: false, error: 'forbidden' }); }
       if (req.method === 'GET' && url.pathname === '/status') return send(res, 200, { ok: true, ...status() });
       // 看画面：云端 Agent 服务凭服务私钥的签名来要，不走工作进程的口令（工作进程的口令要不到画面，Agent 服务的签名也要不到清单与票据）
-      const lookOp = req.method === 'POST' ? { '/look': 'handle', '/look/poll': 'poll', '/look/cancel': 'cancel' }[url.pathname] : undefined;
+      const lookOp = req.method === 'POST' ? { '/look': 'handle', '/look/poll': 'poll', '/look/cancel': 'cancel', '/look/release': 'release', '/look/heartbeat': 'heartbeat' }[url.pathname] : undefined;
       if (lookOp) {
         if (!look || typeof look[lookOp] !== 'function') { req.resume(); return send(res, 404, { ok: false, error: 'not-found' }); }
-        // 问结果、撤回的请求体只有一个 id：不给它项目内容那么大的上限
+        // 问结果、撤回、释放、心跳的请求体只有一个 id 或几项参数：不给它项目内容那么大的上限
         const bodyText = await readText(req, lookOp === 'handle' ? look.limits.maxBodyBytes : 4096);
         if (bodyText === null) return send(res, 413, { ok: false, error: 'too-large' });
         // 调用方等不及先断了（同步等的那种）不影响别的：结果写不回去而已

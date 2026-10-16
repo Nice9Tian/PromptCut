@@ -632,6 +632,13 @@ export function CloudAiPanel(props: {
         </div>
       )}
 
+      {cloud.accountMode && chat.messages.some(m => m.role === 'assistant' && m.pending && ((m.progress as Record<string, any>)?.renderQueuePosition || m.progress?.phase === 'render_queued')) &&
+        (!view.queue?.items?.filter(item => item.state === 'queued').length) && (
+        <div className="ai-banner pc-cloud-render-queued" data-pc="cloud-render-queued">
+          云端渲染正在给别的项目用，排在第 {(chat.messages.find(m => m.role === 'assistant' && m.pending && ((m.progress as Record<string, any>)?.renderQueuePosition || m.progress?.phase === 'render_queued'))?.progress as Record<string, any>)?.renderQueuePosition ?? 1} 位，轮到了会接着做。
+        </div>
+      )}
+
       {cloud.accountMode && chat.history.atLimit && !chat.history.items.some((x) => x.id === chat.conversationId) && (
         <div className="ai-banner" data-pc="cloud-limit-note" role="status">{CLOUD_CHAT_TEXT.limitComposer}</div>
       )}

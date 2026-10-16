@@ -38,13 +38,17 @@
  * 换掉「读 root 记录」和「模型配置」这两处，其余走同一份代码。
  */
 import fs from 'node:fs';
+import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkServerIdentity } from 'node:tls';
 import { readModelConfig } from '../agent/service/model-config.mjs';
 import { readServiceKeyFile } from '../auth/service-identity.mjs';
 import { rootRead } from '../hosted/deploy/asset-root-registry-publisher.mjs';
 import { createLookClient, parseLookUrl } from './look-client.mjs';
 import { readAccountToolConfig, validateAccountToolSettings } from '../agent/service/account-tools.mjs';
+import { certificateFingerprint } from '../account/client.mjs';
+import { WORKER_LOOK_PATH } from './account-master-assembly.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
@@ -69,8 +73,14 @@ export function validateWorkerSettings(settings) {
       !fingerprint(settings.doc.fingerprint256) || ['keyFile', 'certFile', 'caFile'].some(key => !absolute(settings.doc[key])) ||
       !exact(settings.master, ['origin', 'fingerprint256']) || !origin(settings.master.origin) || !fingerprint(settings.master.fingerprint256))
     fail('account-worker-settings');
-  if (settings.look !== undefined && (!exact(settings.look, ['url', 'keyDir']) || !parseLookUrl(settings.look.url) || !absolute(settings.look.keyDir)))
-    fail('account-worker-settings-look');
+  if (settings.look !== undefined) {
+    const hasKey = typeof settings.look.keyDir === 'string';
+    const isProxy = settings.look.proxy === true || typeof settings.look.internalUrl === 'string';
+    if (!exact(settings.look, ['url'], ['keyDir', 'proxy', 'internalUrl']) || !parseLookUrl(settings.look.url) ||
+        (hasKey && !absolute(settings.look.keyDir)) || (!hasKey && !isProxy)) {
+      fail('account-worker-settings-look');
+    }
+  }
   if (settings.runAssets !== undefined && (!exact(settings.runAssets, ['origin', 'fingerprint256', 'maxResponseBytes', 'maxImportBytes'], ['timeoutMs']) ||
       !origin(settings.runAssets.origin) || !fingerprint(settings.runAssets.fingerprint256) ||
       !positive(settings.runAssets.maxResponseBytes) || !positive(settings.runAssets.maxImportBytes) ||
@@ -78,6 +88,87 @@ export function validateWorkerSettings(settings) {
     fail('account-worker-settings-run-assets');
   if (settings.tools !== undefined) { try { validateAccountToolSettings(settings.tools); } catch { fail('account-worker-settings-tools'); } }
   return settings;
+}
+
+export function createWorkerMasterLookClient({ masterOrigin, masterFingerprint256, tls, log = () => {}, limits = {} } = {}) {
+  const pin = certificateFingerprint(masterFingerprint256);
+  const base = new URL(masterOrigin);
+
+  async function callMaster(op, binding, params = {}, { signal = null } = {}) {
+    if (signal?.aborted) throw signal.reason ?? new Error('aborted');
+    const payload = JSON.stringify({ op, binding, params });
+    const encoded = Buffer.from(payload, 'utf8');
+    return new Promise((resolve, reject) => {
+      const req = https.request(new URL(WORKER_LOOK_PATH, base), {
+        ...tls,
+        method: 'POST',
+        agent: false,
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.3',
+        checkServerIdentity(host, cert) {
+          return checkServerIdentity(host, cert) ||
+            (certificateFingerprint(cert.fingerprint256) !== pin ? Object.assign(new Error('master-cert'), { status: 503 }) : undefined);
+        },
+        headers: {
+          'content-type': 'application/json',
+          'content-length': encoded.length,
+          connection: 'close',
+        },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.once('end', () => {
+          let body;
+          try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
+          catch { return reject(Object.assign(new Error('master-invalid-json'), { status: 502 })); }
+          if (res.statusCode === 200 && body?.ok === true) return resolve(body.result ?? body);
+          const err = new Error(body?.error || body?.code || `HTTP ${res.statusCode}`);
+          err.status = res.statusCode;
+          err.code = body?.code;
+          err.debug = body?.debug;
+          reject(err);
+        });
+      });
+      if (signal) {
+        const onAbort = () => {
+          try { req.destroy(signal.reason ?? new Error('aborted')); } catch {}
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        req.once('close', () => signal.removeEventListener('abort', onAbort));
+      }
+      req.once('error', reject);
+      req.end(encoded);
+    });
+  }
+
+  return {
+    forProject(projectId, { cards = null, signal = null, run = null, onProgress = null } = {}) {
+      const bound = run ? { ...run } : null;
+      return async (pathname, body, opts = {}) => {
+        const currentCards = typeof cards === 'function' ? cards() : cards;
+        const currentSignal = opts?.signal || signal;
+        const currentProgress = opts?.onProgress || onProgress;
+        const res = await callMaster('look', { projectId, ...bound, assignmentDigest: bound?.assignmentDigest }, {
+          path: pathname,
+          body,
+          cards: currentCards,
+          timeoutMs: opts?.timeoutMs,
+        }, { signal: currentSignal });
+        return res;
+      };
+    },
+    release(projectId, fields = {}) {
+      const { runId, aborted = false, ...rest } = fields;
+      return callMaster('release', { projectId, runId, ...rest, assignmentDigest: fields?.assignmentDigest }, { aborted }).catch(() => null);
+    },
+    heartbeat(projectId, fields = {}) {
+      const { runId, ...rest } = fields;
+      return callMaster('heartbeat', { projectId, runId, ...rest, assignmentDigest: fields?.assignmentDigest }).catch(() => null);
+    },
+    cancel(requestId, fields = {}) {
+      return callMaster('cancel', { ...fields }, { requestId }).catch(() => null);
+    },
+  };
 }
 
 /**
@@ -102,13 +193,23 @@ export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.accessSync(dir, fs.constants.W_OK);
   }
-  // 看画面：服务私钥在这里读一次。读不到、服务名不对就拒绝启动，不悄悄变成「看不了画面」。
+  // 看画面：服务私钥在生产中只由主服务持有，任务进程请主服务代签。带 keyDir 时本地建客户端（兼容测试）
   let look = null;
   if (settings.look) {
-    let key;
-    try { key = readServiceKeyFile(settings.look.keyDir); } catch { fail('account-worker-settings-look-key'); }
-    if (key.service !== 'agent') fail('account-worker-settings-look-key');
-    look = createLookClient({ url: settings.look.url, key, log, limits: lookLimits });
+    if (settings.look.keyDir) {
+      let key;
+      try { key = readServiceKeyFile(settings.look.keyDir); } catch { fail('account-worker-settings-look-key'); }
+      if (key.service !== 'agent') fail('account-worker-settings-look-key');
+      look = createLookClient({ url: settings.look.url, key, log, limits: lookLimits });
+    } else {
+      look = createWorkerMasterLookClient({
+        masterOrigin: settings.master.origin,
+        masterFingerprint256: settings.master.fingerprint256,
+        tls: docTls,
+        log,
+        limits: lookLimits,
+      });
+    }
   }
   // 工具要的节点依赖：在这里读一次。写了但不对（路径不在、键不认）就拒绝启动，不悄悄变成「没配」。
   let toolConfig = null;

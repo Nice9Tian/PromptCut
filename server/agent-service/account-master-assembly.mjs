@@ -38,6 +38,9 @@ import { writeBrowserPurgeMark, removeMarkedBrowserData } from '../agent/service
 import { reapOrphan, OWNER_FILE } from '../web/hosted/session.mjs';
 import fs from 'node:fs';
 import { MASTER_SCHEDULER_PENDING_PATH, MASTER_SCHEDULER_CONTROL_PATH } from './account-master-scheduler-client.mjs';
+import { createLookClient } from './look-client.mjs';
+
+export const WORKER_LOOK_PATH = '/internal/v2/worker/look';
 
 const fail = code => { throw Object.assign(new Error(code), { status: 503, code }); };
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -64,7 +67,8 @@ export const accountWorkspaceOwnerKey = (projectId, conversationId) =>
  */
 export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runClient, conversationClient, readControl, tls,
   internalPort, internalHost = '127.0.0.1', controllerFingerprint256, schedulerStaleMs = 15_000, stopWaitMs = 15_000,
-  registerRetryMs = 2_000, workspaceLimits = {}, attachmentLimits = {}, onConversationDeleted = null, purgeSweepMs = 60_000, now = Date.now, log = () => {} } = {}) {
+  registerRetryMs = 2_000, workspaceLimits = {}, attachmentLimits = {}, onConversationDeleted = null, purgeSweepMs = 60_000,
+  look = null, lookUrl = null, lookKey = null, now = Date.now, log = () => {} } = {}) {
   const controllerPin = certificateFingerprint(controllerFingerprint256);
   let ownPin = null;
   try { ownPin = certificateFingerprint(new X509Certificate(tls?.cert).fingerprint256); } catch { ownPin = null; }
@@ -267,12 +271,93 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
       reply(res, [400, 403, 404, 409].includes(error?.status) ? error.status : 503, { ok: false, code: safe(error?.code) ? error.code : 'master-scheduler-unavailable' });
     }
   }
+
+  const masterLook = look && typeof look.forProject === 'function' ? look :
+    (lookUrl && lookKey ? createLookClient({ url: lookUrl, key: lookKey, log: say }) : null);
+
+  async function lookRoute(req, res) {
+    if (req.method !== 'POST') return reply(res, 405, { ok: false, code: 'method-not-allowed' });
+    if (req.socket?.encrypted !== true || req.socket.authorized !== true || req.socket.destroyed ||
+        Object.keys(req.headers ?? {}).some(k => k === 'forwarded' || k === 'x-real-ip' || k.startsWith('x-forwarded-')))
+      return reply(res, 403, { ok: false, code: 'worker-look-peer' });
+    const peer = certificateFingerprint(req.socket.getPeerCertificate?.()?.fingerprint256);
+    if (!hash(peer)) return reply(res, 403, { ok: false, code: 'worker-look-peer' });
+
+    const chunks = []; let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 64 * 1024 * 1024) return reply(res, 413, { ok: false, code: 'worker-look-body' });
+      chunks.push(chunk);
+    }
+    let body;
+    try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
+    catch { return reply(res, 400, { ok: false, code: 'worker-look-body' }); }
+
+    const { op, binding, assignmentDigest, params } = body ?? {};
+    if (!binding?.projectId || !binding?.runGrantId) return reply(res, 400, { ok: false, code: 'worker-look-binding' });
+
+    let source;
+    try {
+      source = await runClient.workerEventSource({
+        projectId: binding.projectId,
+        runGrantId: binding.runGrantId,
+        assignmentDigest: assignmentDigest ?? binding.assignmentDigest ?? '0'.repeat(64),
+      });
+    } catch {
+      return reply(res, 403, { ok: false, code: 'run-authority-denied' });
+    }
+    const grant = source?.runGrant;
+    if (source?.allowed !== true || !grant ||
+        certificateFingerprint(source.workerFingerprint256) !== peer ||
+        !['active', 'retained'].includes(grant.state) ||
+        (binding.runId && grant.runId !== binding.runId) ||
+        (binding.conversationId && grant.conversationId !== binding.conversationId)) {
+      return reply(res, 403, { ok: false, code: 'run-authority-denied' });
+    }
+
+    // 強制使用文档服务确认的 projectId（绝不信任务进程自报的别的 projectId）
+    const targetProjectId = grant.projectId;
+
+    if (!masterLook) {
+      return reply(res, 503, { ok: false, code: 'look-unavailable' });
+    }
+
+    try {
+      if (op === 'release') {
+        await masterLook.release?.(targetProjectId, { runId: grant.runId, aborted: params?.aborted === true });
+        return reply(res, 200, { ok: true });
+      }
+      if (op === 'heartbeat') {
+        await masterLook.heartbeat?.(targetProjectId, { runId: grant.runId });
+        return reply(res, 200, { ok: true });
+      }
+      if (op === 'cancel') {
+        masterLook.cancel?.(params?.requestId);
+        return reply(res, 200, { ok: true });
+      }
+      const ac = new AbortController();
+      req.on('close', () => { ac.abort(new Error('client-closed')); });
+      const post = masterLook.forProject(targetProjectId, {
+        cards: () => params?.cards ?? {},
+        run: { runGrantId: grant.runGrantId, runId: grant.runId, conversationId: grant.conversationId },
+        timeoutMs: params?.timeoutMs,
+        signal: ac.signal,
+      });
+      const result = await post(params?.path, params?.body, { timeoutMs: params?.timeoutMs, signal: ac.signal });
+      return reply(res, 200, { ok: true, result });
+    } catch (err) {
+      const status = err?.status ?? 500;
+      return reply(res, status, { ok: false, error: err?.message ?? String(err), code: err?.code ?? 'look-error', debug: err?.debug });
+    }
+  }
+
   server = https.createServer({ key: tls.key, cert: tls.cert, ca: tls.ca, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, (req, res) => {
     void (async () => {
       if (stopped) return reply(res, 503, { ok: false, code: 'master-unavailable' });
       if (req.url === WORKER_EVENT_PATH) { if (!await eventHandler(req, res)) reply(res, 404, { ok: false, code: 'no-route' }); return; }
       if (req.url === WORKER_PAGE_PATH) { if (!await pageHandler(req, res)) reply(res, 404, { ok: false, code: 'no-route' }); return; }
       if (req.url === MASTER_SCHEDULER_PENDING_PATH || req.url === MASTER_SCHEDULER_CONTROL_PATH) return schedulerRoute(req, res);
+      if (req.url === WORKER_LOOK_PATH) return lookRoute(req, res);
       reply(res, 404, { ok: false, code: 'no-route' });
     })().catch(() => { try { res.destroy(); } catch { /* 已经关了 */ } });
   });
@@ -322,8 +407,8 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     /** 这个对话的云端浏览器数据清掉（对话被删时调；账号模式的删对话接口本身还没有开放，这里先把收场备好） */
     purgeConversationBrowser: (scope, reason = 'conversation-deleted') => purgeBrowserEventually(scope, reason),
     runEvents: eventStore,
-    // 看画面由任务进程自己接（它的设置里写没写）；主服务不跑任务，这里如实是「没有」
-    look: false,
+    // 主服务持有看画面能力并通过内部 mTLS 代签代发
+    look: !!masterLook,
     mirrorAccepted: mirror,
     schedulerAlive,
     async send(identity, conversationId, body = {}) {
