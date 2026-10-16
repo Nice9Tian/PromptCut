@@ -166,7 +166,15 @@ export function createSharedDocService({
   if (accountRuntime && !accountProjects) throw new TypeError('accountProjects required for account runtime');
   function authenticate(req) {
     if (!accountRuntime) return auth.authenticate(req);
-    if (offeredProtocols(req).some(item => item.startsWith('promptcut.account.'))) return accountRuntime.authenticate(req);
+    const protocols = offeredProtocols(req);
+    if (protocols.some(item => item.startsWith('promptcut.account.'))) return accountRuntime.authenticate(req);
+    const ticketProtocol = protocols.find(item => item.startsWith('promptcut.ticket.'));
+    if (ticketProtocol) {
+      const token = ticketProtocol.slice('promptcut.ticket.'.length);
+      if (typeof accountRuntime.hasServiceTicket === 'function' && accountRuntime.hasServiceTicket(token)) {
+        return accountRuntime.authenticate(req);
+      }
+    }
     const principal = auth.authenticate(req);
     // In the account realm the old username/device/password handshake can never enter cloud data.
     return principal?.scope === 'admin' || (principal?.scope === 'service' && !principal.tenantId) ? principal : null;
@@ -267,7 +275,7 @@ export function createSharedDocService({
 
   service.mountRenderQueue((space) => createRenderQueue({ now, send: service.send }));
   service.mount(endpointsModule());
-  if (registry) service.mount(hostedModule({ store: storeOf, registry: registryOf, now, ...(Number.isFinite(hostedLingerMs) ? { lingerMs: hostedLingerMs } : {}) }));
+  if (registry) service.mount(hostedModule({ store: storeOf, registry: registryOf, now, accountRuntime, ...(Number.isFinite(hostedLingerMs) ? { lingerMs: hostedLingerMs } : {}) }));
   /** 空间 → { project, content, events }：同一空间的三个实例配成一组，事件模块要借另外两个 */
   const bundles = new Map();
   function bundleForSpace(space) {
@@ -299,6 +307,7 @@ export function createSharedDocService({
     store: storeOf,
     challenges: adminChallenges,
     limiter,
+    accountRuntime,
     claimsOf: (connId) => service.claimsOf(connId),
     // 创建者操作的限速按连接的来源地址判回环，与握手用同一个判据（连接只记了地址，拼一个只有对端地址的请求）
     isLoopbackRemote: (remote) => {

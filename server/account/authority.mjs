@@ -105,7 +105,13 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   if (!validCreatePolicy(createPolicy)) reject(503, 'create-policy-configuration');
   if (runHooks !== null && typeof runHooks?.fenceInState !== 'function') reject(503, 'run-authority-unavailable');
   const refs = new Map(); const subscriptions = new Set(); const creating = new Map();
+  const projectSubscriptions = new Set();
   let syncing = null, timer = null, closed = false, ready = false;
+  const notifyProjectChanged = (projectId, op) => {
+    for (const sub of projectSubscriptions) {
+      try { sub(projectId, op); } catch { /* ignore */ }
+    }
+  };
   const notify = (event, control = null) => {
     if (event.type !== 'login-revoked' && !(event.type === 'project-access-changed' &&
       (event.accountIds?.length || (event.service === 'agent' && event.enabled === false)))) return;
@@ -236,6 +242,15 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       accessRevision: project.accessRevision, revocationSeq: state.accessHead };
   }
   async function checkAccess({ principal, projectId, action, resource } = {}) {
+    if (principal?.service === 'render') {
+      if (principal.projectId && principal.projectId !== projectId) reject(403, 'project-mismatch');
+      const state = ledger.read(); const project = projectOf(state, projectId);
+      active(project);
+      if (project.hosted?.render !== true) reject(403, 'service-disabled');
+      if (principal.access === 'r' && action === 'write') reject(403, 'read-only');
+      if (action === 'write' && (resource?.ns === 'media' || resource?.namespace === 'media')) reject(403, 'service-forbidden');
+      return { allowed: true, projectId, role: 'render', service: 'render', access: principal.access ?? 'rw' };
+    }
     if (!principal?.authorizationId) reject(401, 'login-required');
     if (!accountIdOK(principal.accountId) || typeof principal.loginId !== 'string' || !principal.loginId ||
       typeof principal.credentialId !== 'string' || !principal.credentialId || !Number.isSafeInteger(principal.loginGeneration)) reject(401, 'principal-mismatch');
@@ -313,7 +328,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         state.requests[key] = { digest, projectId: p.projectId, state: 'complete', result };
         return { result, event };
       });
-      if (committed.event) notify(committed.event); return committed.result;
+      if (committed.event) notify(committed.event);
+      notifyProjectChanged(committed.result.projectId, 'create');
+      return committed.result;
     })();
     creating.set(key, work);
     try { return await work; } finally { creating.delete(key); }
@@ -372,7 +389,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       const event = appendAccessEvent(state, { type: 'member-joined', projectId: p.projectId, accountIds: [actor.accountId], accessRevision: p.accessRevision, createdAt: now() });
       return { result, event };
     });
-    if (committed.event) notify(committed.event); return committed.result;
+    if (committed.event) notify(committed.event);
+    notifyProjectChanged(body.projectId, 'join');
+    return committed.result;
   }
   /**
    * 发项目会话前的进入核对(公开的 `/session` 路由用;`/join` 已经在 `joinProject` 里核过)。
@@ -471,7 +490,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       state.requests[key] = { digest, result, state: 'complete' };
       return { result, event, control };
     });
-    if (committed.event) notify(committed.event, committed.control); return committed.result;
+    if (committed.event) notify(committed.event, committed.control);
+    notifyProjectChanged(body.projectId, body.op);
+    return committed.result;
   }
   function eventsSince(after = 0) {
     if (!ready || closed) reject(503, 'authority-not-ready');
@@ -638,6 +659,18 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, checkAccess,
     createProject, joinProject, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
+    subscribeProjectChanges(callback) {
+      if (typeof callback !== 'function') reject(400, 'invalid-subscription');
+      projectSubscriptions.add(callback);
+      return () => projectSubscriptions.delete(callback);
+    },
+    listActiveProjects() {
+      return Object.values(ledger.read().projects).filter(p => p.status === 'active');
+    },
+    projectState(projectId) {
+      const p = ledger.read().projects[projectId];
+      return p && p.status === 'active' ? p : null;
+    },
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);
@@ -647,6 +680,6 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       if (!timer && pollMs > 0) { timer = setInterval(() => synchronize().catch(error => onDiagnostic({ code: error.code ?? 'account-unavailable' })), pollMs); timer.unref(); }
       return { accountHead: ledger.read().accountHead };
     },
-    close() { closed = true; ready = false; clearInterval(timer); refs.clear(); subscriptions.clear(); },
+    close() { closed = true; ready = false; clearInterval(timer); refs.clear(); subscriptions.clear(); projectSubscriptions.clear(); },
   };
 }

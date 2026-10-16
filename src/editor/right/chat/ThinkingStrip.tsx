@@ -26,8 +26,13 @@ function fmtElapsed(ms: number): string {
  * 没有就看正在跑的工具;都没有就是还在想。
  */
 export function stripText(m: ChatMessage): string {
-  if (m.progress?.waitingJobs || m.progress?.phase === 'waiting_jobs') {
-    return m.progress.text || "上一条消息发起的后台作业（转写、镜头识别等）还在做，做完就处理你这条消息。";
+  const p = m.progress as Record<string, any> | undefined;
+  if (p?.waitingJobs || p?.phase === 'waiting_jobs') {
+    return p.text || "上一条消息发起的后台作业（转写、镜头识别等）还在做，做完就处理你这条消息。";
+  }
+  if (p?.renderQueuePosition || p?.phase === 'render_queued') {
+    const pos = p.renderQueuePosition ?? 1;
+    return `云端渲染正在给别的项目用，排在第 ${pos} 位，轮到了会接着做。`;
   }
   const parts = partsOf(m);
   const step = currentStep(parts);

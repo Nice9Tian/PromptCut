@@ -128,11 +128,44 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       userId: `account:${principal.accountId}@run:${principal.runId}`, deviceId: principal.runId,
       deviceName: principal.runId, creator: false };
   }
+  async function resolveService(ticket) {
+    const entry = tickets.get(ticket);
+    if (!entry || entry.kind !== 'service' || entry.expiresAt <= now()) fail(401, 'ticket-expired');
+    const project = ledger.read().projects[entry.projectId];
+    if (!project || project.status !== 'active') fail(404, 'no-project');
+    if (project.hosted?.[entry.service] !== true) fail(403, 'service-disabled');
+    return {
+      userId: `service:${entry.service}@${entry.deviceId ?? entry.service}`,
+      tenantId: entry.projectId,
+      projectId: entry.projectId,
+      scope: 'service',
+      service: entry.service,
+      serviceKid: entry.serviceKid,
+      serviceRole: entry.service,
+      role: entry.service,
+      realm: 'account',
+      identityVersion: 2,
+      deviceId: entry.deviceId ?? entry.service,
+      deviceName: entry.deviceName ?? entry.deviceId ?? entry.service,
+    };
+  }
   function ticketOf(req) {
     const list = offeredProtocols(req);
     const matching = list.filter(value => value.startsWith(PREFIX));
-    if (matching.length !== 1 || list.some(value => [AUTH_PREFIX, TICKET_PREFIX, TENANT_PREFIX, TOKEN_PREFIX, SERVICE_PREFIX].some(prefix => value.startsWith(prefix)))) fail(401, 'account-ticket-required');
-    return matching[0].slice(PREFIX.length);
+    if (matching.length === 1) {
+      const rawTicket = matching[0].slice(PREFIX.length);
+      const entry = tickets.get(rawTicket);
+      if (entry?.kind === 'service') return rawTicket;
+      if (list.some(value => [AUTH_PREFIX, TICKET_PREFIX, TENANT_PREFIX, TOKEN_PREFIX, SERVICE_PREFIX].some(prefix => value.startsWith(prefix)))) fail(401, 'account-ticket-required');
+      return rawTicket;
+    }
+    const ticketProtocols = list.filter(value => value.startsWith(TICKET_PREFIX));
+    if (ticketProtocols.length === 1) {
+      const rawTicket = ticketProtocols[0].slice(TICKET_PREFIX.length);
+      const entry = tickets.get(rawTicket);
+      if (entry?.kind === 'service') return rawTicket;
+    }
+    fail(401, 'account-ticket-required');
   }
   const unsubscribe = authority.subscribeRevocations({}, async (event, committedControl) => {
     if (!service) return;
@@ -210,7 +243,11 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       assetReady = value === true;
     },
     requireAssetReady,
-    bindService(value, config = null) { service = value; hostedConfig = config; accessHeadAtBind = ledger.read().accessHead; },
+    bindService(value, config = null) {
+      service = value;
+      hostedConfig = config;
+      accessHeadAtBind = ledger.read().accessHead;
+    },
     /** 文档服务自己这一侧对一条访问事件的关闭证据（只读）：这个进程亲手关掉并记进账本的那一份，
      * 或者「这个进程开始接连接时这条事件已经在账本里」。两样都没有就是还没办完，回 null。 */
     docTransportEvidence(accessEventId) {
@@ -265,7 +302,10 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     },
     async authenticate(req) {
       const ticket = ticketOf(req);
-      return tickets.get(ticket)?.kind === 'run' ? resolveRun(ticket) : resolve(ticket, 'conn');
+      const entry = tickets.get(ticket);
+      if (entry?.kind === 'run') return resolveRun(ticket);
+      if (entry?.kind === 'service') return resolveService(ticket);
+      return resolve(ticket, 'conn');
     },
     async issueRunTicket({ principal, servicePrincipal, purpose }) {
       if (purpose !== 'run' || principal?.creator !== false || principal?.role !== 'agent' ||
@@ -283,12 +323,76 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
         principal: structuredClone(principal), servicePrincipal: structuredClone(servicePrincipal), expiresAt });
       return { connectionTicket, expiresAt };
     },
-    async resolveAssetTicket(ticket) { return resolve(ticket, 'asset'); },
+    hasServiceTicket(token) {
+      return tickets.get(token)?.kind === 'service';
+    },
+    issueServiceTicket({ service: sName, serviceKid, deviceId, deviceName, projectId }) {
+      const project = ledger.read().projects[projectId];
+      if (!project || project.status !== 'active') fail(404, 'no-project');
+      if (project.hosted?.[sName] !== true) fail(403, 'service-disabled');
+      const ticket = randomBytes(32).toString('base64url');
+      const expiresAt = now() + 2 * 60_000;
+      tickets.set(ticket, {
+        kind: 'service',
+        service: sName,
+        serviceKid,
+        deviceId: deviceId ?? sName,
+        deviceName: deviceName ?? deviceId ?? sName,
+        projectId,
+        expiresAt,
+      });
+      return { ticket, exp: expiresAt };
+    },
+    issueServiceAssetTicket({ service: sName, serviceKid, deviceId, deviceName, projectId, access = 'r' }) {
+      const project = ledger.read().projects[projectId];
+      if (!project || project.status !== 'active') fail(404, 'no-project');
+      if (project.hosted?.[sName] !== true) fail(403, 'service-disabled');
+      const ticket = randomBytes(32).toString('base64url');
+      const expiresAt = now() + 5 * 60_000;
+      tickets.set(ticket, {
+        kind: 'asset',
+        service: sName,
+        serviceKid,
+        deviceId: deviceId ?? sName,
+        deviceName: deviceName ?? deviceId ?? sName,
+        projectId,
+        access,
+        expiresAt,
+      });
+      return { assetTicket: ticket, ticket, expiresAt, exp: expiresAt };
+    },
+    async resolveAssetTicket(ticket) {
+      const entry = tickets.get(ticket);
+      if (entry && entry.kind === 'asset' && entry.service === 'render') {
+        if (entry.expiresAt <= now()) fail(401, 'ticket-expired');
+        const project = ledger.read().projects[entry.projectId];
+        if (!project || project.status !== 'active') fail(404, 'no-project');
+        if (project.hosted?.render !== true) fail(403, 'service-disabled');
+        return {
+          service: 'render',
+          role: 'render',
+          tenantId: entry.projectId,
+          projectId: entry.projectId,
+          scope: 'service',
+          access: entry.access ?? 'r',
+          authorizationId: 'service:render',
+          accountId: 'service:render',
+        };
+      }
+      return resolve(ticket, 'asset');
+    },
     // Only the authenticated Agent mTLS RPC calls this resolver. A reference is
     // kind-bound and reverified, not a public accountId/authorizationId claim.
     async resolveAgentDelegation(ticket) { return resolve(ticket, 'agent'); },
     async gate(principal, type, msg) {
       if (principal?.realm !== 'account') return null;
+      if (principal?.service === 'render') {
+        if (msg?.projectId !== undefined && msg.projectId !== principal.tenantId) return 'project-mismatch';
+        const project = ledger.read().projects[principal.tenantId];
+        if (!project || project.status !== 'active') return 'no-project';
+        if (project.hosted?.render !== true) return 'service-disabled';
+        return null;
+      }
       if (type.startsWith('shared.') || type === 'auth.ticket' || type.startsWith('hosted.') || type.startsWith('service.')) return 'forbidden';
       if (msg?.projectId !== undefined && msg.projectId !== principal.tenantId) return 'project-mismatch';
       if (type === 'selection.set' || type === 'selection.clear') {
@@ -310,6 +414,12 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     },
     async resumeGate(principal) {
       if (principal?.realm !== 'account') return null;
+      if (principal?.service === 'render') {
+        const project = ledger.read().projects[principal.tenantId];
+        if (!project || project.status !== 'active') return 'no-project';
+        if (project.hosted?.render !== true) return 'service-disabled';
+        return null;
+      }
       try {
         if (principal.role === 'agent' || principal.service === 'agent') {
           const provider = getRunProvider();
@@ -320,6 +430,12 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       }
       catch (error) { return error?.code === 'account-unavailable' || error?.status === 503 ? 'authority-unavailable' : error?.code ?? 'forbidden'; }
     },
-    close() { unsubscribe(); authority.close(); tickets.clear(); accountClient.close?.(); ledger.close?.(); },
+    close() {
+      unsubscribe();
+      authority.close();
+      tickets.clear();
+      accountClient.close?.();
+      ledger.close?.();
+    },
   };
 }

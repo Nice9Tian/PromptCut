@@ -31,8 +31,9 @@
 import { isProjectId, serviceUserId, isConversation, isConversationId } from '../../auth/protocol.mjs';
 import { checkDelegation, delegationDigest } from '../../auth/delegation.mjs';
 import { signTicket } from '../../auth/tickets.mjs';
-import { serviceAdmission, serviceEnabled, hostedStateOf } from '../../auth/service-identity.mjs';
+import { serviceAdmission, serviceEnabled, hostedStateOf, hostedOptionEnabled } from '../../auth/service-identity.mjs';
 import { roomUnavailableReason } from '../../recovery/relocation.mjs';
+import { accountRenderState } from '../../account/authority.mjs';
 
 export const HOSTED_MODULE = 'hosted';
 export const HOSTED_DEFAULTS = Object.freeze({ LINGER_MS: 60_000, TICK_MS: 1000, DEMAND_MS: 120_000, DEMAND_MAX_MS: 600_000 });
@@ -50,10 +51,12 @@ const serviceKey = (name) => `service:${name}`;
  * @param {() => number} [options.now]
  * @param {number} [options.lingerMs] 某一类连接的最后一条离开后 `active` 再保持多久
  * @param {number} [options.tickMs]
+ * @param {object | (() => object | null)} [options.accountRuntime] 账号运行时实例
  */
-export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.LINGER_MS, tickMs = HOSTED_DEFAULTS.TICK_MS } = {}) {
+export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.LINGER_MS, tickMs = HOSTED_DEFAULTS.TICK_MS, accountRuntime = null } = {}) {
   const storeOf = typeof store === 'function' ? store : () => store;
   const registryOf = typeof registry === 'function' ? registry : () => registry;
+  const getAccountRuntime = () => (typeof accountRuntime === 'function' ? accountRuntime() : accountRuntime);
   /** connId → { principal, watching, sent: Map<projectId, JSON> } */
   const conns = new Map();
   /** projectId → Map<类别, 连接数>；类别是 'member' 或 'service:<服务名>' */
@@ -118,21 +121,55 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     return false;
   }
 
-  /** 这个服务此刻该看到的清单：projectId → { projectId, enabled, active, members } */
+  const projectChangeHook = () => { if (ctxRef) sync(ctxRef); };
+  const initialRuntime = getAccountRuntime();
+  if (initialRuntime && typeof initialRuntime.authority?.subscribeProjectChanges === 'function') {
+    initialRuntime.authority.subscribeProjectChanges(projectChangeHook);
+  }
+
+  /** 这个服务此刻该看到的清单：projectId → { projectId, enabled, active, members, hosted } */
   function viewFor(service, at) {
     const out = new Map();
     const st = storeOf();
-    if (!st) return out;
-    for (const { projectId } of st.list()) {
-      const rec = st.peek(projectId);
-      if (!rec || roomUnavailableReason(rec)) continue;
-      out.set(projectId, {
-        projectId,
-        enabled: serviceEnabled(rec, service),
-        active: activeFor(service, projectId, at),
-        members: (present.get(projectId)?.get(MEMBER) ?? 0) > 0,
-        hosted: hostedStateOf(registryOf(), rec),
-      });
+    if (st) {
+      for (const { projectId } of st.list()) {
+        const rec = st.peek(projectId);
+        if (!rec || roomUnavailableReason(rec)) continue;
+        out.set(projectId, {
+          projectId,
+          enabled: serviceEnabled(rec, service),
+          active: activeFor(service, projectId, at),
+          members: (present.get(projectId)?.get(MEMBER) ?? 0) > 0,
+          hosted: hostedStateOf(registryOf(), rec),
+        });
+      }
+    }
+    const runtime = getAccountRuntime();
+    if (runtime?.authority) {
+      const activeProjects = typeof runtime.authority.listActiveProjects === 'function' ? runtime.authority.listActiveProjects() : [];
+      for (const p of activeProjects) {
+        const renderState = accountRenderState(p);
+        const reg = registryOf();
+        const renderAvailable = !!reg?.get('render');
+        const agentAvailable = !!reg?.get('agent');
+        out.set(p.projectId, {
+          projectId: p.projectId,
+          enabled: service === 'render' ? renderState.enabled : p.hosted?.agent === true,
+          active: activeFor(service, p.projectId, at),
+          members: (present.get(p.projectId)?.get(MEMBER) ?? 0) > 0,
+          hosted: {
+            render: {
+              available: renderAvailable,
+              enabled: renderState.enabled,
+              streams: renderState.streams,
+            },
+            agent: {
+              available: agentAvailable,
+              enabled: p.hosted?.agent === true,
+            },
+          },
+        });
+      }
     }
     return out;
   }
@@ -178,6 +215,31 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
       return refuse('forbidden', '这个服务要不到代成员的票据');
     }
     if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
+
+    // 优先查账号模式项目
+    const runtime = getAccountRuntime();
+    if (runtime?.authority) {
+      const pRecord = runtime.authority?.projectState?.(msg.projectId);
+      if (pRecord) {
+        if (!registryOf()?.has(p.service, p.serviceKid)) return refuse('service-revoked');
+        if (pRecord.status !== 'active') return refuse('no-project');
+        if (p.service === 'render' && pRecord.hosted?.render !== true) return refuse('service-disabled');
+        try {
+          const out = runtime.issueServiceTicket({
+            service: p.service,
+            serviceKid: p.serviceKid,
+            deviceId: p.deviceId,
+            deviceName: p.deviceName,
+            projectId: msg.projectId,
+          });
+          ctx.log('hosted.ticket', { connId, service: p.service, projectId: msg.projectId });
+          return reply(ctx, connId, { type: 'hosted.ticket.ok', ticket: out.ticket, exp: out.exp }, reqId);
+        } catch (err) {
+          return refuse(typeof err?.code === 'string' ? err.code : 'forbidden');
+        }
+      }
+    }
+
     const rec = storeOf()?.peek(msg.projectId) ?? null;
     const refused = serviceAdmission({ registry: registryOf(), record: rec, service: p.service, kid: p.serviceKid });
     if (refused) return refuse(refused);
@@ -203,9 +265,10 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
       holdMs = msg.holdMs;
     }
     const p = c.principal;
+    const isAccount = Boolean(getAccountRuntime()?.authority?.projectState?.(msg.projectId));
     const rec = storeOf()?.peek(msg.projectId) ?? null;
-    if (!rec) return refuse('no-project');
-    const unavailable = roomUnavailableReason(rec);
+    if (!rec && !isAccount) return refuse('no-project');
+    const unavailable = rec ? roomUnavailableReason(rec) : null;
     if (unavailable) return refuse(unavailable);
     if (!registryOf()?.has(p.service, p.serviceKid)) return refuse('service-revoked');
     const at = clock(ctx);

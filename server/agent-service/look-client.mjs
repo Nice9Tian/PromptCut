@@ -114,7 +114,7 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
     void send('/look/cancel', JSON.stringify({ requestId }), 5000, undefined, instance).catch(() => {});
   }
 
-  async function post(projectId, cards, pathname, body, { signal, timeoutMs, authorize = null, run = null, instance = null } = {}) {
+  async function post(projectId, cards, pathname, body, { signal, timeoutMs, authorize = null, run = null, instance = null, onProgress = null } = {}) {
     // 可视化记录:云端不存(在线页面取不到工作进程里的文件)。`get_gif` 写规格的那一次除外
     if (pathname === '/api/ai/visual' && body?.tool !== 'get_gif') return { ok: false, error: '云端不存可视化记录' };
     if (!Object.hasOwn(LOOK_ROUTES, pathname)) throw new Error(`云端的渲染服务不提供 ${pathname}`);
@@ -181,7 +181,25 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
 
       // 还排着、或正在渲:接着问
       if (res.status === 202 && data?.ok === true) {
-        if (!submitted || !waited) { stats.queued += 1; waited = true; say('agent.look.queued', { projectId, path: pathname, position: data.queuePosition ?? null, blockedReason: data.blockedReason ?? null }); }
+        if (!submitted || !waited) {
+          stats.queued += 1;
+          waited = true;
+          say('agent.look.queued', { projectId, path: pathname, position: data.queuePosition ?? null, blockedReason: data.blockedReason ?? null });
+        }
+        if (typeof onProgress === 'function') {
+          const isBlocked = data.blockedReason === 'iso-other-project' || data.blockedReason === 'behind-another' || (Number(data.queuePosition) > 0);
+          if (data.state === 'queued' && isBlocked) {
+            const pos = Math.max(1, Number(data.queuePosition) || 1);
+            onProgress({
+              phase: 'render_queued',
+              renderQueuePosition: pos,
+              blockedReason: data.blockedReason,
+              text: `云端渲染正在给别的项目用，排在第 ${pos} 位，轮到了会接着做。`,
+            });
+          } else if (data.state === 'running' || data.state === 'iso-loading') {
+            onProgress({ phase: 'rendering', renderQueuePosition: null, text: '' });
+          }
+        }
         submitted = true;
         tries = 0;
         continue;
@@ -202,6 +220,9 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
       }
 
       const ms = now() - started;
+      if (typeof onProgress === 'function') {
+        onProgress({ phase: 'rendering', renderQueuePosition: null, text: '' });
+      }
       if (res.status === 401 || res.status === 404 || res.status === 409 || !data || typeof data !== 'object') {
         stats.refused += 1;
         say('agent.look.refused', { projectId, status: res.status, look: data?.look ?? null, ms });
@@ -210,7 +231,16 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
       if (typeof data.look === 'string' && data.ok === false) {
         stats.refused += 1;
         say('agent.look.refused', { projectId, status: res.status, look: data.look, ms });
-        throw new Error(typeof data.error === 'string' && data.error ? data.error : '这次没看成。');
+        const err = new Error(typeof data.error === 'string' && data.error ? data.error : '这次没看成。');
+        err.look = data.look;
+        err.code = data.look;
+        if (data.look === 'timeout' || data.look === 'render-timeout') {
+          err.code = 'render-timeout';
+        }
+        if (data.debug) {
+          err.debug = data.debug;
+        }
+        throw err;
       }
       stats.ok += 1;
       say('agent.look', { projectId, path: pathname, ok: data.ok !== false, ms, queued: waited });
@@ -225,12 +255,9 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
      * 这个项目的 `prerenderPost`。`cards()` 回这个项目内容库里卡片源码的「键 → 版本」(没有卡就是空的):渲染服务据此决定
      * 走不走隔离工作进程,并等它把这几份装到至少这个版本。
      * @param {string} projectId 来自鉴权,不来自工具参数
-     * @param {{ cards?: () => Record<string, number | null>, signal?: AbortSignal }} [o] `signal`:这一轮(或这个实例)被停掉的信号。
-     *   它一响,这个项目排着、在渲的看画面请求都撤回(调用时另给的 `opts.signal` 同样算)。
-     *   账号模式另给三样(只来自执行器,不来自工具参数):`authorize()` 问文档服务这条任务现在还能不能读;`run` 是这条任务的
-     *   `{ runGrantId, runId, conversationId }`,随请求交给渲染服务记下;`instance` 是这个进程在文档服务登记的实例号
+     * @param {{ cards?: () => Record<string, number | null>, signal?: AbortSignal, onProgress?: Function }} [o]
      */
-    forProject(projectId, { cards = null, signal: runSignal = null, authorize = null, run = null, instance = null } = {}) {
+    forProject(projectId, { cards = null, signal: runSignal = null, authorize = null, run = null, instance = null, onProgress = null } = {}) {
       if (typeof projectId !== 'string' || !projectId) throw new TypeError('forProject: 要 projectId');
       if (authorize !== null && typeof authorize !== 'function') throw new TypeError('forProject: authorize 要是函数');
       if (run !== null && (!run || typeof run !== 'object' || Object.keys(run).sort().join(',') !== 'conversationId,runGrantId,runId'
@@ -239,8 +266,25 @@ export function createLookClient({ url, key, fetch: fetchImpl = globalThis.fetch
       const bound = run ? Object.freeze({ ...run }) : null;
       return (pathname, body, opts = {}) => {
         const signals = [runSignal, opts?.signal].filter(Boolean);
-        return post(projectId, cards, pathname, body, { signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0], timeoutMs: opts?.timeoutMs, authorize, run: bound, instance });
+        const progressCb = opts?.onProgress ?? onProgress;
+        return post(projectId, cards, pathname, body, {
+          signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
+          timeoutMs: opts?.timeoutMs,
+          authorize,
+          run: bound,
+          instance,
+          onProgress: progressCb,
+        });
       };
+    },
+    release(projectId, { runId, aborted = false } = {}) {
+      return send('/look/release', JSON.stringify({ projectId, runId, aborted }), 5000).catch(() => null);
+    },
+    heartbeat(projectId, { runId } = {}) {
+      return send('/look/heartbeat', JSON.stringify({ projectId, runId }), 5000).catch(() => null);
+    },
+    cancel(requestId, instance = null) {
+      cancel(requestId, instance);
     },
     describe: () => ({ url: base, ...stats }),
   };
