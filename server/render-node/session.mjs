@@ -49,6 +49,22 @@ export function deviceRank(node) {
   return 1;
 }
 
+/** 在途流任务的持有方等级:队列给了就用;只给了 profile 的按 profile 换算;都没有回 null(不当作可抢) */
+function holderRankOf(item) {
+  if (Number.isInteger(item?.holderRank)) return item.holderRank;
+  return item?.holderProfile === 'pc' ? 3 : item?.holderProfile === 'host' ? 2 : item?.holderProfile === 'browser' ? 1 : null;
+}
+
+/**
+ * 判断抢占用的任务视图:id 以 `stream:` 起头的一律是流任务,补上 `kind: 'stream'`;项目 id 归到 `source.projectId`
+ * (诊断形状的任务只有顶层 `projectId`)。这样 `canClaim`(托管节点按项目的「生成轨道流」开关)认得出它是流任务、属于哪个项目。没有回 null
+ */
+function streamTaskView(task, id) {
+  if (!task || typeof task !== 'object') return null;
+  const projectId = task.source?.projectId ?? task.projectId ?? null;
+  return { ...task, id: task.id ?? id, kind: 'stream', source: { ...(task.source ?? {}), projectId } };
+}
+
 export function createNodeSession({
   nodeId,
   node,
@@ -72,7 +88,7 @@ export function createNodeSession({
   const settings = { ...QUEUE_DEFAULTS, ...constants };
   /** 本地看到的 open 任务:id → TaskView */
   let open = new Map();
-  /** 在飞的流任务(被别的节点认领中):id → { id, version, holderProfile, holderRank, density } */
+  /** 在飞的流任务(被别的节点认领中):id → { id, version, holderProfile, holderRank, density, task }(`task` 是判断能不能抢的任务视图,见 `streamTaskView`) */
   let inFlightStreams = new Map();
   /** 持有的认领:id → { id, token, lastSentAt, done, step, projectId } */
   const holds = new Map();
@@ -124,6 +140,9 @@ export function createNodeSession({
     send({
       type: 'node.hello', nodeId, profile: node?.profile, envFingerprint: node?.envFingerprint,
       capabilities: node?.capabilities, codeVersions: node?.codeVersions, maxConcurrent, resume: entries,
+      ...(node?.planOnly !== undefined ? { planOnly: Boolean(node.planOnly) } : {}),
+      ...(node?.projectStreams ? { projectStreams: node.projectStreams } : {}),
+      ...(node?.streams !== undefined ? { streams: node.streams } : {}),
     });
     send({ type: 'queue.watch', projects });
   }
@@ -226,44 +245,48 @@ export function createNodeSession({
         }
         break;
       }
-      case 'queue.snapshot':
+      case 'queue.snapshot': {
+        const before = open;
+        const beforeStreams = inFlightStreams;
         open = new Map((message.tasks ?? []).filter(task => task?.id != null).map(task => [task.id, task]));
-        inFlightStreams.clear();
+        inFlightStreams = new Map();
         if (Array.isArray(message.claimedStreams)) {
           for (const s of message.claimedStreams) {
-            if (s?.id) {
-              inFlightStreams.set(s.id, {
-                id: s.id,
-                version: Number.isInteger(s.version) ? s.version : 1,
-                holderProfile: s.holderProfile ?? null,
-                holderRank: Number.isInteger(s.holderRank) ? s.holderRank : 1,
-                density: s.density ?? (s.id.endsWith(':sparse') ? 'sparse' : null),
-              });
-            }
+            if (typeof s?.id !== 'string' || !s.id.startsWith('stream:')) continue;
+            inFlightStreams.set(s.id, {
+              id: s.id,
+              version: Number.isInteger(s.version) ? s.version : 1,
+              holderProfile: s.holderProfile ?? null,
+              holderRank: holderRankOf(s),
+              density: s.density ?? (s.id.endsWith(':sparse') ? 'sparse' : null),
+              // 本地见过的完整任务(被认领之前在 open 里的那一份、上一张快照记下的)优先,队列只给判断抢占要的最小视图
+              task: streamTaskView(before.get(s.id) ?? open.get(s.id) ?? beforeStreams.get(s.id)?.task ?? s.task, s.id),
+            });
           }
         }
         break;
+      }
       case 'task.opened':
         if (message.task?.id != null) {
           open.set(message.task.id, message.task);
           inFlightStreams.delete(message.task.id);
         }
         break;
-      case 'task.taken':
+      case 'task.taken': {
+        const existingTask = open.get(message.id) ?? inFlightStreams.get(message.id)?.task ?? message.task ?? null;
         open.delete(message.id);
         if (typeof message.id === 'string' && message.id.startsWith('stream:')) {
-          const rank = Number.isInteger(message.holderRank)
-            ? message.holderRank
-            : (message.holderProfile === 'pc' ? 3 : message.holderProfile === 'host' ? 2 : 1);
           inFlightStreams.set(message.id, {
             id: message.id,
             version: Number.isInteger(message.version) ? message.version : 1,
             holderProfile: message.holderProfile ?? null,
-            holderRank: rank,
+            holderRank: holderRankOf(message),
             density: message.density ?? (message.id.endsWith(':sparse') ? 'sparse' : null),
+            task: streamTaskView(existingTask, message.id),
           });
         }
         break;
+      }
       case 'task.closed':
         // 包括 `state: 'hidden'`(契约 I.6):队列的指纹前置过滤不再让本节点看见它,和别的 closed 一样移除
         open.delete(message.id);
@@ -320,23 +343,32 @@ export function createNodeSession({
       return;
     }
     // 没有 open 候选任务时：能力更强的设备可抢占能力更弱设备执行中的 stream 任务（桌面版 > 托管服务 > 浏览器）
-    const myRank = deviceRank(filterNode());
-    if (myRank > 1 && inFlightStreams.size > 0) {
-      const preemptable = [];
+    const fn = filterNode();
+    const canDoStreams = fn?.capabilities?.streams === true || (fn?.capabilities?.streams === undefined && fn?.capabilities?.transcode === true);
+    const myRank = canDoStreams ? deviceRank(fn) : 0;
+    if (myRank > 1 && !fn.planOnly && inFlightStreams.size > 0) {
+      const candidates = [];
       for (const item of inFlightStreams.values()) {
         if (holds.has(item.id) || deferred.has(item.id)) continue;
-        if (item.holderRank < myRank) preemptable.push(item);
+        if (!Number.isInteger(item.holderRank) || item.holderRank >= myRank) continue;
+        // 必须具备完整任务视图，且通过 filterClaimable 与 canClaim 检查
+        if (!item.task) continue;
+        if (!filterClaimable([item.task], fn).length) continue;
+        try {
+          if (canClaim(item.task, { held }) === false) continue;
+        } catch { continue; }
+        candidates.push(item);
       }
-      if (preemptable.length > 0) {
+      if (candidates.length > 0) {
         // 若有多个可抢占任务，优先抢占稀疏流任务（sparse 先于满密度）
-        preemptable.sort((a, b) => {
+        candidates.sort((a, b) => {
           const aSparse = a.density === 'sparse' ? 1 : 0;
           const bSparse = b.density === 'sparse' ? 1 : 0;
           if (aSparse !== bSparse) return bSparse - aSparse;
           return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
         });
-        const target = preemptable[0];
-        inflight = { id: target.id, projectId: null };
+        const target = candidates[0];
+        inflight = { id: target.id, projectId: target.task?.source?.projectId ?? null };
         try {
           send({ type: 'task.claim', id: target.id, expectVersion: target.version });
         } catch (error) {

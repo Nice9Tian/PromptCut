@@ -31,6 +31,7 @@ import { rangeHas } from './snapshot-store.mjs';
 import { clipInputSig } from '../src/render/layerInputSig.mjs';
 import { streamInputSig } from '../src/render/streamInputSig.mjs';
 import { isStreamOrigin } from '../src/render/streamSegments.mjs';
+import { streamBucketManifest, streamBucketRanges, streamLastSegmentOf, STREAM_BUCKET_SEGMENTS } from '../src/render/streamBuckets.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { MovFrameStore, signatureMatches } from './frame-mov.mjs';
 import { readRenderRecord } from './png-record.mjs';
@@ -554,11 +555,18 @@ export async function collectStreamResult(pipeline, task, opts = {}) {
     segments[n] = { hash: segBlob.hash, bytes: segBlob.bytes, init: seg.init, stride: seg.stride, samples: seg.samples,
       sig: seg.sig ?? null, encoder: initMeta.encoder ?? null, ...(seg.box !== undefined ? { box: seg.box } : {}) };
   }
+  // `lastFrame`:这条流自己的最后一帧(项目帧号),写清单时据它算整条流的最后一段、按桶写(`src/render/streamBuckets.mjs`)。
+  // 取任务的 `input.stream.lastFrame`(切分方给浏览器那一份、导出位图带着),没有就取流库 `stream.json` 记的(生产者按流的计划写);
+  // 都没有(旧节点落盘的流)不写,写清单时只好按任务的范围截桶
+  const origin = isStreamOrigin(manifest.originFrame) ? manifest.originFrame : null;
+  const span = task?.input?.stream;
+  const taskLast = span && (span.originFrame === undefined || span.originFrame === origin) ? span.lastFrame : undefined;
+  const lastFrame = [taskLast, manifest.lastFrame].find(v => Number.isInteger(v) && origin !== null && v >= origin) ?? null;
   const result = {
     v: RESULT_VERSION, kind: 'stream', resultKey: key, range: { from, to },
     // `originFrame`:这条流自己的第一帧(分段从它起数)。清单里没有这一项的(改分段规则之前落盘的)不写,那样的结果别处不收
     header: { kind: manifest.kind, plane: manifest.plane, clipIds: manifest.clipIds, fps: manifest.fps,
-      ...(isStreamOrigin(manifest.originFrame) ? { originFrame: manifest.originFrame } : {}), bound: manifest.bound,
+      ...(origin !== null ? { originFrame: origin } : {}), ...(lastFrame !== null ? { lastFrame } : {}), bound: manifest.bound,
       offset: manifest.offset ?? null, tight: manifest.tight ?? null },
     inits, segments,
   };
@@ -770,8 +778,7 @@ export async function mergedForWrite(content, result) {
   return merged;
 }
 
-/** 把一段的清单写进内容库。写失败、清单超限只记日志,回 false(C6.4 第 3 节:内容库清单只是给以后复用的) */
-export async function writeManifest(content, result, log = () => {}) {
+async function writeSingleManifest(content, result, log = () => {}) {
   const kind = manifestKindOf(result?.kind);
   const key = manifestKeyOf(result);
   if (!content || typeof content.put !== 'function' || !kind || !key) return false;
@@ -789,6 +796,28 @@ export async function writeManifest(content, result, log = () => {}) {
     safeLog(log, 'manifest.put-failed', { kind, key, code: error?.code ?? null, reason: error?.reason ?? null, message: String(error?.message ?? error) });
     return false;
   }
+}
+
+/**
+ * 把一段的清单写进内容库。写失败、清单超限只记日志,回 false(C6.4 第 3 节:内容库清单只是给以后复用的)。
+ *
+ * 轨道流另按「8 段一桶」写(`src/render/streamBuckets.mjs`,读的一侧只按桶找):桶的终点截到**整条流的最后一段**,
+ * 由清单 `header` 的 `originFrame` / `lastFrame`(`collectStreamResult` 写的)换算;清单没带时退到 `task`(可选,
+ * 这一段的任务)的 `input.stream`;都没有只好按任务的范围截。这样任务 `[0, 59]` 不是流的末尾时最后一个桶是 `56-63`,
+ * 与任务 `[60, 124]` 写的同一个键,两边经 `mergedForWrite` 合在一份里。
+ */
+export async function writeManifest(content, result, log = () => {}, task = null) {
+  const kind = manifestKindOf(result?.kind);
+  if (!content || typeof content.put !== 'function' || !kind || !result) return false;
+  let ok = await writeSingleManifest(content, result, log);
+  if (result.kind !== 'stream') return ok;
+  const { from, to } = result.range ?? {};
+  const lastSegment = streamLastSegmentOf(result.header) ?? streamLastSegmentOf(task?.input?.stream);
+  for (const bucket of streamBucketRanges(from, to, lastSegment)) {
+    if (bucket.from === from && bucket.to === to) continue;
+    if (!(await writeSingleManifest(content, streamBucketManifest(result, bucket), log))) ok = false;
+  }
+  return ok;
 }
 
 function safeLog(log, event, fields) {
@@ -843,6 +872,14 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
     const kind = manifestKindOf(ref?.kind);
     const key = manifestKeyOf(ref);
     if (!kind || !key) return { ok: false, reason: 'no-key', fields: {} };
+    const direct = await lookupKey(ref, kind, key, { requireSmall });
+    if (direct.ok || ref?.kind !== 'stream') return direct;
+    // 任务自己的键没有能用的:轨道流再按桶找(别的形状的任务 —— 整条流的稀疏流任务、另一种切法 —— 写过的桶),找不全照旧回上面的原因
+    return (await lookupBuckets(ref, kind, key, { requireSmall })) ?? direct;
+  }
+
+  /** 内容库里键 `key` 这一份清单能不能当 `ref` 这一段的结果用(见 `lookup`) */
+  async function lookupKey(ref, kind, key, { requireSmall }) {
     let item;
     try {
       item = await content.get(kind, key);
@@ -865,6 +902,50 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
     }
     remembered.set(key, body);
     return { ok: true, body };
+  }
+
+  /**
+   * 轨道流按「8 段一桶」找(`src/render/streamBuckets.mjs`,与 `writeManifest` 同一个规矩):每个桶取一份,只看落在任务范围里的分段,
+   * 拼成这一段的清单;全齐(满密度任务另要都是满密度)、块都在素材服务上才算数。桶的终点截到整条流的最后一段 —— 取任务的
+   * `input.stream`,没带就取已经取到的桶的 `header.lastFrame`;都不知道时只有越过任务末尾的那一个桶的终点拿不准,按可能的终点挨个试
+   * (先试满 8 段的,再从任务末尾往后)。拼不出回 null。
+   */
+  async function lookupBuckets(ref, kind, key, { requireSmall }) {
+    const { from, to } = ref.range ?? {};
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) return null;
+    const step = STREAM_BUCKET_SEGMENTS;
+    const dense = wantsDenseStream(ref);
+    let lastSegment = streamLastSegmentOf(ref.input?.stream);
+    const segments = {}, inits = {};
+    let header = null;
+    for (let b = Math.floor(from / step) * step; b <= to; b += step) {
+      const full = b + step - 1;
+      const ends = lastSegment !== null ? [Math.min(Math.max(lastSegment, to), full)]
+        : full <= to ? [full]
+        : [full, ...Array.from({ length: full - to }, (_, i) => to + i)];
+      let body = null;
+      for (const end of ends) {
+        if (b === from && end === to) continue; // 就是任务自己的键,上面查过了
+        let item;
+        try { item = await content.get(kind, `${ref.resultKey}:${b}-${end}`); } catch { item = null; }
+        if (item?.body !== undefined && manifestMatches(item.body, { kind: 'stream', resultKey: ref.resultKey, range: { from: b, to: end } })) { body = item.body; break; }
+      }
+      if (!body) return null;
+      header ??= body.header;
+      if (lastSegment === null) lastSegment = streamLastSegmentOf(body.header);
+      for (let n = Math.max(from, b); n <= Math.min(to, full); n++) {
+        const seg = body.segments[n];
+        const init = seg ? body.inits[seg.init] : null;
+        if (!seg || !init || (dense && sparseSegment(seg))) return null;
+        segments[n] = seg;
+        inits[seg.init] = init;
+      }
+    }
+    const combined = { v: RESULT_VERSION, kind: 'stream', resultKey: ref.resultKey, range: { from, to }, header, inits, segments };
+    if (!resultComplete(combined, { dense }) || (requireSmall && !smallComplete(combined))) return null;
+    if (!(await blocksPresent(client, combined))) return null;
+    remembered.set(key, combined);
+    return { ok: true, body: combined };
   }
   return {
     async has(ref, { report } = {}) {
@@ -891,7 +972,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
           tell({ stage: 'has-push' });
           try {
             const pushed = await pushResult(client, collected.result, collected.readBlob, { onBlock: (p) => tell(p) });
-            if (content) await writeManifest(content, collected.result, log);
+            if (content) await writeManifest(content, collected.result, log, ref);
             if (pushed.uploaded > 0) {
               safeLog(log, 'sink.has-pushed', { resultKey: String(ref.resultKey ?? '').slice(0, 16), range: ref.range ?? null, uploaded: pushed.uploaded, skipped: pushed.skipped });
             }
@@ -961,7 +1042,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
         await pushResult(client, collected.result, collected.readBlob, {
           onBlock: (p) => { progress = p; tell(p); },
         });
-        if (content) await writeManifest(content, collected.result, log);
+        if (content) await writeManifest(content, collected.result, log, ref);
         return { complete: true, result: collected.result, stats: stats() };
       } catch (error) {
         // 素材服务说托管方渲染服务的产物到了容量上限(507 `service-quota`,`docs/plan/hosted-render-contract.md` 第 6 节):

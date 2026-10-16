@@ -165,13 +165,17 @@ function expectedDerived(ctx, fp) {
   }
   for (const s of ctx.streams) {
     const resultKey = resultKeyOf(s.streamKey, fp);
-    // 每一段先出稀疏流任务(id 末尾多 `:sparse`)、再出满密度任务,范围相同(`split.mjs` 文件头「稀疏流任务」)
-    for (const density of ['sparse', null]) for (let from = s.firstSegment; from <= s.lastSegment; from += 8) {
+    // 稀疏流整条流一个任务(rr-motion-preempt 规则);满密度任务按 8 段切分
+    out.push({
+      id: `stream:${resultKey}:${s.firstSegment}-${s.lastSegment}:sparse`, kind: 'stream', tier: null, resultKey, contentKey: s.streamKey,
+      range: { unit: 'segment', from: s.firstSegment, to: s.lastSegment }, weightClass: ctx.weightOf({ clipId: s.topClipId }).class, clipId: s.topClipId,
+      density: 'sparse',
+    });
+    for (let from = s.firstSegment; from <= s.lastSegment; from += 8) {
       const to = Math.min(s.lastSegment, from + 7);
       out.push({
-        id: `stream:${resultKey}:${from}-${to}${density ? `:${density}` : ''}`, kind: 'stream', tier: null, resultKey, contentKey: s.streamKey,
+        id: `stream:${resultKey}:${from}-${to}`, kind: 'stream', tier: null, resultKey, contentKey: s.streamKey,
         range: { unit: 'segment', from, to }, weightClass: ctx.weightOf({ clipId: s.topClipId }).class, clipId: s.topClipId,
-        ...(density ? { density } : {}),
       });
     }
   }
@@ -362,7 +366,7 @@ test('I1 全链路：页面发布 plan，两个 pc 节点认领、切分、执�
 
   const planId = planIdOf('p1', 1);
   const expected = expectedDerived(planContextFor('p1'), FP_A);
-  assert.equal(expected.length, 10, '夹具应切出 10 个细任务(6 个快照、2 个稀疏流、2 个满密度流)');
+  assert.equal(expected.length, 9, '夹具应切出 9 个细任务(6 个快照、1 个稀疏流、2 个满密度流)');
   assert.ok(expected.some(t => t.kind === 'snapshot') && expected.some(t => t.kind === 'stream'));
   const ids = [planId, ...expected.map(t => t.id)];
 
@@ -430,8 +434,14 @@ test('I1 全链路：页面发布 plan，两个 pc 节点认领、切分、执�
     assert.deepEqual(page.done(t.id).result.ranges, [[t.range.from, t.range.to]], `${t.id}：ranges`);
     assert.equal(page.done(t.id).resultKey, t.resultKey);
   }
-  // 产物库按「结果键 + 范围」存:一条流的稀疏流任务和满密度任务共用一项
-  assert.equal(rig.sink.entries().length, expected.filter(t => !t.density).length);
+  // 产物库按「结果键 + 范围」存(同 writeManifest):每个任务自己的键一项;稀疏流整条流一个任务,另按 8 段一桶写,
+  // 那几个桶与满密度任务的键相同、共用一项,满密度的盖掉稀疏的
+  const keyOf = t => `${t.resultKey}#${t.range.from}-${t.range.to}`;
+  assert.equal(rig.sink.entries().length, new Set(expected.map(keyOf)).size);
+  for (const t of expected.filter(x => x.kind === 'stream' && !x.density)) {
+    assert.ok(rig.sink.stores(t.resultKey, t.range), `${t.id}：满密度任务的键(也是桶)存着`);
+    assert.notEqual(rig.sink.entries().find(e => keyOf(e) === keyOf(t)).sparse, true, `${t.id}：桶是满密度的那一版`);
+  }
   hygiene(rig, { unhandledBefore: before });
 });
 
@@ -449,9 +459,9 @@ test('I2 产物库已有部分结果：这些段不调 executor.render，直接�
   ];
   assert.ok(seeded3.every(Boolean));
   for (const t of seeded3) rig.sink.seed({ resultKey: t.resultKey, range: t.range });
-  // 轨道流第二段预置的是满密度的那一版:同一个键、同一段的稀疏流任务也走去重(每段有一版就算数)
+  // 预置三段：标题第一段、下三分之一第二段、轨道流第二段(稀疏流整条流 0-11 与满密度 8-11 范围不同，此处匹配 3 项)
   const seededAll = expected.filter(t => seeded3.some(s => s.resultKey === t.resultKey && s.range.from === t.range.from && s.range.to === t.range.to));
-  assert.equal(seededAll.length, 4);
+  assert.equal(seededAll.length, 3);
 
   // 这一条先发布、后让节点报到：节点经 queue.snapshot 看到 plan
   const page = rig.addPage('page', { publisherId: 'page-u1' });

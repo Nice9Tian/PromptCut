@@ -160,11 +160,18 @@ export function planTaskOf({ projectId, projectRev, priority = 0, codeVersion, e
  */
 export { backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan };
 
-/** `[from, to]` 闭区间序列:first .. last 每 span 一段,最后一段到 last。 */
-function spans(first, last, span) {
+/** `[from, to]` 闭区间序列:first .. last 每 span 一段,最后一段到 last。若给定了 minSpan 且尾段不足 minSpan，并入前一段 */
+function spans(first, last, span, minSpan = 1) {
   const out = [];
   if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last)) return out;
   for (let from = first; from <= last; from += span) out.push([from, Math.min(last, from + span - 1)]);
+  if (minSpan > 1 && out.length > 1) {
+    const lastSpan = out[out.length - 1];
+    if (lastSpan[1] - lastSpan[0] + 1 < minSpan) {
+      out[out.length - 2][1] = lastSpan[1];
+      out.pop();
+    }
+  }
   return out;
 }
 
@@ -610,7 +617,8 @@ export function splitPlan({
           : isMotion
             ? motionSpan
             : streamSegments;
-        for (const [from, to] of spans(firstSegment, lastSegment, span)) {
+        const minSpan = (!density && isMotion) ? motionSpan : 1;
+        for (const [from, to] of spans(firstSegment, lastSegment, span, minSpan)) {
         const range = { unit: 'segment', from, to };
         // 这一段任务的帧数:流的计划带着第一帧和最后一帧时按实际算(流的末段可以不满 15 帧),没带的照满段估
         let frames = (to - from + 1) * SEGMENT_FRAMES;

@@ -194,6 +194,9 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
       capabilities: body.capabilities,
       codeVersions: body.codeVersions,
       maxConcurrent: body.maxConcurrent,
+      planOnly: body.planOnly === true,
+      projectStreams: body.projectStreams ?? null,
+      streams: body.streams ?? null,
     };
     ctx.log('role.node', { connId, nodeId: body.nodeId, profile: body.profile, userId: conn.principal.userId });
   }
@@ -317,6 +320,53 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
     }
   }
 
+  // ---------- 跨层抢占(能力更强的设备接手能力更弱的设备在做的流任务) ----------
+
+  /** 这个 nodeId 此刻报到在哪条连接上:`{ connId, node }`;不在线回 null */
+  function connOfNode(nodeId) {
+    if (typeof nodeId !== 'string') return null;
+    for (const [connId, c] of conns.entries()) if (c.node?.nodeId === nodeId) return { connId, node: c.node };
+    return null;
+  }
+  const nodeById = (nodeId) => connOfNode(nodeId)?.node ?? null;
+
+  /**
+   * 认领一个正被别人做着的流任务时,认领方的设备等级更高、资格全部过关,才替它放回原持有方的认领、发 `task.lease-lost { reason: 'preempted' }`,
+   * 再按新版本号认领;回 true。任何一条不过回 false:原持有方不动,认领照常交给队列,队列按 `taken` / `throttled` 回拒,认领方的在飞认领因此清掉。
+   * 资格(先核完,再动原持有方):
+   *   - 认领方看得见这个任务(`claimedStreamsFor`:watch 了这个项目、指纹前置过滤;托管节点只抢它报到的那几个项目里的);
+   *   - 队列此刻没有限流认领方(`describe().nodes` 里它的 `throttled`;限流时队列对它的认领一律回 throttled,不能先把原持有方踢掉);
+   *   - 认领方能产轨道流;托管节点在项目关了「生成轨道流」时不抢;planOnly 节点不抢;
+   *   - 环境指纹相符;本地素材闸(`requires.localMedia`)放行。
+   */
+  function tryPreempt(ctx, connId, conn, msg) {
+    const node = conn?.node;
+    const claimerRank = deviceRank(node);
+    if (claimerRank <= 1 || typeof q.describe !== 'function' || typeof q.claimedStreamsFor !== 'function') return false;
+    const [entry] = q.claimedStreamsFor(connId, msg.id);
+    if (!entry) return false;
+    const holder = connOfNode(entry.holderNodeId);
+    if (!holder || claimerRank <= deviceRank(holder.node)) return false;
+    const d = q.describe();
+    const target = (Array.isArray(d?.tasks) ? d.tasks : []).find((t) => t.id === msg.id);
+    if (!target || target.state !== 'claimed' || !target.claim || target.claim.nodeId !== entry.holderNodeId) return false;
+    const me = (Array.isArray(d?.nodes) ? d.nodes : []).find((n) => n.nodeId === node.nodeId);
+    if (me?.throttled === true) return false;
+    const caps = node.capabilities ?? {};
+    const hasStreams = caps.streams === true || (caps.streams !== false && (node.profile === 'pc' || caps.transcode === true));
+    if (!hasStreams || node.planOnly === true) return false;
+    const projectId = entry.task.source?.projectId;
+    if (node.profile === 'host' && (node.projectStreams?.[projectId] ?? node.streams) === false) return false;
+    const requires = entry.task.requires ?? {};
+    if (requires.envFingerprint && node.envFingerprint && requires.envFingerprint !== node.envFingerprint) return false;
+    if (requires.localMedia && requires.localMedia !== node.nodeId) return false;
+    const oldToken = target.claim.token;
+    q.handle(holder.connId, { type: 'task.release', id: target.id, token: oldToken, reason: 'preempted' });
+    ctx.send(holder.connId, makeMessage(q.epoch ?? null, 'task.lease-lost', { id: target.id, token: oldToken, reason: 'preempted' }));
+    q.handle(connId, { ...msg, expectVersion: target.version + 1 });
+    return true;
+  }
+
   return {
     name: RENDER_QUEUE_MODULE,
     types: queueTypes(),
@@ -367,7 +417,7 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
       // hello 由队列回 welcome；这里只在消息合法时记下这条连接的角色（队列会用同一套校验）
       if (conn && (msg.type === 'node.hello' || msg.type === 'publisher.hello')) {
         const parsed = parseInbound(msg);
-        if (parsed.ok) recordRole(ctx, connId, conn, parsed.type, parsed.body);
+        if (parsed.ok) recordRole(ctx, connId, conn, parsed.type, { ...msg, ...parsed.body });
       }
       if (msg.type === 'node.active') {
         const busy = typeof msg.busy === 'string' ? msg.busy : null;
@@ -391,32 +441,7 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
           }
         }
       }
-      if (msg.type === 'task.claim' && typeof msg.id === 'string' && msg.id.startsWith('stream:')) {
-        const claimerRank = deviceRank(conn?.node);
-        if (claimerRank > 1 && typeof q.describe === 'function') {
-          const d = q.describe();
-          const targetTask = (Array.isArray(d?.tasks) ? d.tasks : []).find((t) => t.id === msg.id);
-          if (targetTask && targetTask.state === 'claimed' && targetTask.claim) {
-            let holderConnId = null;
-            let holderConn = null;
-            for (const [cId, c] of conns.entries()) {
-              if (c.node?.nodeId === targetTask.claim.nodeId) {
-                holderConnId = cId;
-                holderConn = c;
-                break;
-              }
-            }
-            const holderRank = deviceRank(holderConn?.node);
-            if (claimerRank > holderRank) {
-              const oldToken = targetTask.claim.token;
-              q.handle(holderConnId, { type: 'task.release', id: targetTask.id, token: oldToken, reason: 'preempted' });
-              ctx.send(holderConnId, makeMessage(q.epoch ?? null, 'task.lease-lost', { id: targetTask.id, token: oldToken, reason: 'preempted' }));
-              q.handle(connId, { ...msg, expectVersion: targetTask.version + 1 });
-              return;
-            }
-          }
-        }
-      }
+      if (msg.type === 'task.claim' && typeof msg.id === 'string' && msg.id.startsWith('stream:') && tryPreempt(ctx, connId, conn, msg)) return;
       if (msg.type === 'task.publish') return handlePublish(connId, msg);
       q.handle(connId, msg);
     },
@@ -443,50 +468,25 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
           if (info) infos.set(r.id, info);
         }
       }
+      // 在途流任务的抢占信息(能力更强的节点据此判断能不能抢):只给这条连接看得见的(`claimedStreamsFor`,同 open 任务的可见性),
+      // 只带判断要的最小字段;不带认领令牌,纯浏览器什么都不带(它不抢别人)
       if (message.type === 'task.taken' && typeof message.id === 'string' && message.id.startsWith('stream:')) {
-        const d = typeof q.describe === 'function' ? q.describe() : null;
-        const task = (Array.isArray(d?.tasks) ? d.tasks : []).find((t) => t.id === message.id);
-        let holderProfile = null;
-        let holderRank = 1;
-        if (task?.claim?.nodeId) {
-          for (const c of conns.values()) {
-            if (c.node?.nodeId === task.claim.nodeId) {
-              holderProfile = c.node.profile ?? null;
-              holderRank = deviceRank(c.node);
-              break;
-            }
-          }
-        }
-        message.holderProfile = holderProfile;
-        message.holderRank = holderRank;
+        const [entry] = typeof q.claimedStreamsFor === 'function' ? q.claimedStreamsFor(connId, message.id) : [];
+        const holder = entry ? nodeById(entry.holderNodeId) : null;
+        message.holderProfile = holder?.profile ?? null;
+        message.holderRank = holder ? deviceRank(holder) : null;
         message.density = message.id.endsWith(':sparse') ? 'sparse' : null;
+        if (entry) message.task = entry.task;
       }
       if (message.type === 'queue.snapshot') {
-        const d = typeof q.describe === 'function' ? q.describe() : null;
-        const claimedStreams = [];
-        for (const t of Array.isArray(d?.tasks) ? d.tasks : []) {
-          if (t.state === 'claimed' && typeof t.id === 'string' && t.id.startsWith('stream:')) {
-            let holderProfile = null;
-            let holderRank = 1;
-            if (t.claim?.nodeId) {
-              for (const c of conns.values()) {
-                if (c.node?.nodeId === t.claim.nodeId) {
-                  holderProfile = c.node.profile ?? null;
-                  holderRank = deviceRank(c.node);
-                  break;
-                }
-              }
-            }
-            claimedStreams.push({
-              id: t.id,
-              version: t.version,
-              holderProfile,
-              holderRank,
-              density: t.id.endsWith(':sparse') ? 'sparse' : null,
-            });
-          }
-        }
-        message.claimedStreams = claimedStreams;
+        const entries = typeof q.claimedStreamsFor === 'function' ? q.claimedStreamsFor(connId) : [];
+        message.claimedStreams = entries.map(({ task, holderNodeId }) => {
+          const holder = nodeById(holderNodeId);
+          return {
+            id: task.id, version: task.version, holderProfile: holder?.profile ?? null, holderRank: holder ? deviceRank(holder) : null,
+            density: task.input?.density === 'sparse' ? 'sparse' : null, task,
+          };
+        });
       }
       const id = coalesceIdOf(message);
       return id === null ? {} : { coalesceKey: `task:${id}` };

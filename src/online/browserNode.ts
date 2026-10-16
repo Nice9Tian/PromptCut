@@ -72,6 +72,7 @@
  * 本模块属于 render 这一层(`src/online/`):不引 editor,不引 `mode.ts`。
  */
 import { isStreamOrigin, STREAM_SEGMENT_FRAMES as SEGMENT_FRAMES_SHARED, streamSegmentFirstFrame, streamSegmentLastFrame } from "../render/streamSegments.mjs";
+import { streamBucketManifest, streamBucketRanges, streamLastSegmentOf } from "../render/streamBuckets.mjs";
 // @ts-expect-error 无类型声明的 .mjs(浏览器与 Node 通用,纯逻辑)
 import { createNodeSession as createNodeSessionUntyped } from "../../server/render-node/session.mjs";
 // @ts-expect-error 无类型声明的 .mjs(纯函数)
@@ -252,7 +253,8 @@ export interface StreamManifestOut {
   kind: "stream";
   resultKey: string;
   range: { from: number; to: number };
-  header: { kind: "card"; plane: "local"; clipIds: string[]; fps: number; originFrame: number; bound: StreamRectLike; offset: { x: number; y: number }; tight: null };
+  /** `lastFrame`:这条流自己的最后一帧(项目帧号);写内容库时按它截 8 段一桶的终点(`render/streamBuckets.mjs`)。旧清单没有这一项 */
+  header: { kind: "card"; plane: "local"; clipIds: string[]; fps: number; originFrame: number; lastFrame?: number; bound: StreamRectLike; offset: { x: number; y: number }; tight: null };
   inits: Record<string, StreamInitMeta>;
   segments: Record<string, StreamSegmentMeta>;
 }
@@ -283,11 +285,33 @@ export function streamManifest(
   }
   const out: StreamManifestOut = {
     v: STREAM_RESULT_VERSION, kind: "stream", resultKey: task.resultKey, range: { from, to },
-    header: { kind: "card", plane: "local", clipIds: [...input.clipIds], fps: input.fps, originFrame: input.originFrame, bound: { ...input.bound }, offset: { ...input.offset }, tight: null },
+    header: { kind: "card", plane: "local", clipIds: [...input.clipIds], fps: input.fps, originFrame: input.originFrame, lastFrame: input.lastFrame, bound: { ...input.bound }, offset: { ...input.offset }, tight: null },
     inits, segments,
   };
   const bytes = new TextEncoder().encode(JSON.stringify(out)).length;
   if (bytes > STREAM_RESULT_MAX_BYTES) throw Object.assign(new Error(`任务清单 ${bytes} 字节,超过上限 ${STREAM_RESULT_MAX_BYTES}`), { code: "result-too-large", bytes, retryable: false });
+  return out;
+}
+
+/**
+ * 一段流任务的清单要写进内容库(`render-manifest`)的几份:任务自己的键 `<结果键>:<起>-<止>`,另加「8 段一桶」里与它不同的每个桶
+ * (`render/streamBuckets.mjs`,与桌面 `server/artifact-transfer.mjs` 的 `writeManifest` 同一个规矩)。桶的终点截到**整条流的最后一段**,
+ * 由任务的 `input.stream`(`originFrame` / `lastFrame`)换算,不拿任务的 `range.to` 顶:任务 `[0, 59]` 不是流的末尾时最后一个桶是 `56-63`,
+ * 与任务 `[60, 124]` 写的同一个键。每一份写之前由调用方各自和内容库里已有的那一份合并(`mergeStreamManifest`),两边的分段合在一起。
+ */
+export function streamManifestPuts(
+  task: { resultKey: string; range: { from: number; to: number } | null; input?: Record<string, unknown> },
+  manifest: StreamManifestOut,
+): { key: string; body: StreamManifestOut }[] {
+  const range = task.range;
+  if (!range || typeof task.resultKey !== "string" || !task.resultKey || !isInt(range.from) || !isInt(range.to) || range.from < 0 || range.to < range.from) return [];
+  const out = [{ key: `${task.resultKey}:${range.from}-${range.to}`, body: manifest }];
+  const span = task.input?.stream as { originFrame?: unknown; lastFrame?: unknown } | undefined;
+  const lastSegment = streamLastSegmentOf(span) ?? streamLastSegmentOf(manifest.header);
+  for (const bucket of streamBucketRanges(range.from, range.to, lastSegment)) {
+    if (bucket.from === range.from && bucket.to === range.to) continue;
+    out.push({ key: `${task.resultKey}:${bucket.from}-${bucket.to}`, body: streamBucketManifest(manifest, bucket) as StreamManifestOut });
+  }
   return out;
 }
 
