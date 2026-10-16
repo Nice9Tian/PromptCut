@@ -222,6 +222,31 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
           }, beforeToolCall, onEvent });
         return handle;
       },
+      settle(sig) {
+        if (!toolset) return Promise.resolve({ waited: true, pending: 0 });
+        return toolset.settle(sig ?? signal ?? null, {
+          onWaiting: ({ pending, text }) => {
+            try {
+              onEvent({
+                type: 'progress',
+                phase: 'waiting_jobs',
+                waitingJobs: true,
+                pending,
+                text,
+              });
+            } catch { /* 宿主的事 */ }
+          },
+          onTimeout: ({ pending, text }) => {
+            try {
+              onEvent({
+                type: 'status',
+                text,
+                waitingTimeout: true,
+              });
+            } catch { /* 宿主的事 */ }
+          },
+        });
+      },
       async drain() {
         let toolsOpen = null;
         try { if (handle) await handle.drain(); }
@@ -360,6 +385,7 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
         signal: entry.cancelController.signal });
       entry.runner = runner;
       if (entry.cancelled) fail(403, 'run-fenced');
+      let drained = !entry.handle && !entry.runner;
       await readIntents.executeOnce(intent.readIntentId, { authorize: gated, execute: async () => {
         if (entry.cancelled) fail(403, 'run-fenced');
         const handle = await runner.start(); entry.handle = handle;
@@ -376,9 +402,19 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
           if (!selectedTask || eventsFailed) throw error;
           rejected = true;
         }
+        let settleResult = null;
+        if (!rejected && !entry.cancelled && entry.runner?.settle) {
+          try {
+            settleResult = await entry.runner.settle(entry.cancelController.signal);
+          } catch (error) {
+            if (!selectedTask) throw error;
+            rejected = true;
+          }
+        }
         if (selectedTask) {
           // 这一条就是终态事件。主服务持久确认它以后，才有可以交给文档服务的结果。
-          const status = entry.cancelled ? 'interrupted' : rejected || seen.error || !seen.done ? 'failed' : 'done';
+          const timedOut = settleResult?.reason === 'timeout';
+          const status = entry.cancelled || timedOut ? 'interrupted' : rejected || seen.error || !seen.done ? 'failed' : 'done';
           seen.terminal = true;
           const eventId = events.emit({ type: 'runner_done', settlement: 'pending', outcome: status });
           await events.flush();

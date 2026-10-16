@@ -258,6 +258,7 @@ export interface CloudChat {
   history: { items: CloudChatItem[]; loading: boolean; refresh: (silent?: boolean) => Promise<boolean>;
     /** 这位账号在这个项目里自己开的对话数（共有对话算在开它的人名下）；满 CLOUD_CHAT_LIMIT 个就不让新建 */
     ownedCount: number; atLimit: boolean };
+  revoked?: boolean;
   model: string;
   setModel: (m: string) => void;
 }
@@ -284,7 +285,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const [info, setInfo] = useState<CloudInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string>(() => (key ? lsGet(chatKey(projectId, tabId, accountScope)) : null) ?? newCloudChatId());
-  const [view, setView] = useState<CloudSessionView>({ conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 });
+  const [view, setView] = useState<CloudSessionView>({ conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0, revoked: false });
   const [model, setModelState] = useState<string>(() => lsGet(MODEL_KEY) ?? "");
   const [histItems, setHistItems] = useState<CloudChatItem[]>([]);
   const [histLoading, setHistLoading] = useState(false);
@@ -324,7 +325,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     const firstFresh = !(stored && CHAT_ID_RE.test(stored)) || lsGet(freshKey(projectId, tabId, accountScope)) === first;
     if (firstFresh) lsSet(freshKey(projectId, tabId, accountScope), first);
     const session = cloud.accountMode
-      ? createCloudSession({ api, store, accountMode: true, pageId: () => selectionPresenceStatus().pageId, onPageRequest: (ev) => accountPageHandler(ev) })
+      ? createCloudSession({ api, store, accountMode: true, projectId: () => cloud.projectId, accountId: () => cloud.accountId, pageId: () => selectionPresenceStatus().pageId, onPageRequest: (ev) => accountPageHandler(ev) })
       : createCloudSession({ api, store, accountMode: false, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
     session.setOnConversationDeleted((id) => onDeletedRef.current(id));
     // 账号模式:在场页面号连上文档服务之后才有、重连会变。隔一会儿对一下,变了就让事件流带着新的页面号接着读(不清正文、不显示重连)
@@ -408,7 +409,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   }, [projectId, messages, key, accountScope]);
 
   const send = useCallback(async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
-    if (!text.trim()) return false;
+    if (!text.trim() || view.revoked) return false;
     if (cloud.accountMode) {
       if (!cloud.accountId || !key) return false;
       try { await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }); }
@@ -590,7 +591,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   return {
     store,
     messages: blocked ? [] : messages,
-    view: blocked ? { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0, queue: null, senders: {} } : view,
+    view: blocked ? { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0, queue: null, senders: {}, revoked: false } : view,
     info: blocked ? null : info,
     notice,
     clearNotice: () => setNotice(null),
@@ -605,6 +606,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     removeChat,
     history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory,
       ownedCount: blocked ? 0 : ownedCount, atLimit: blocked ? false : atLimit },
+    revoked: Boolean(view.revoked),
     model,
     setModel,
   };

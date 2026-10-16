@@ -94,6 +94,9 @@ export interface ComposerProps {
   cloud?: ComposerCloud;
   /** 这一页的 id:运行选项里的创造力等级按页存 */
   tabId?: string;
+  /** 禁用输入框与发送按钮（如当前对话已无读取权限） */
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 function providerLabel(p: ProviderInfo): string {
@@ -282,6 +285,8 @@ export function Composer(props: ComposerProps) {
     menu,
     tabId,
     cloud,
+    disabled = false,
+    disabledReason,
   } = props;
   const cloudOn = !!cloud?.selected;
   /** 附件条上的动词:本机是「导入」,云端是传到云节点的「上传」 */
@@ -293,6 +298,7 @@ export function Composer(props: ComposerProps) {
     if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (disabled) return;
       onSubmit(text);
     }
   };
@@ -346,8 +352,8 @@ export function Composer(props: ComposerProps) {
         value={text}
         onChange={(e) => onTextChange(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={uploading ? "正在导入..." : streaming ? "Agent 正在运行,Enter 加入队列,Shift+Enter 换行" : "输入消息,Enter 发送,Shift+Enter 换行"}
-        disabled={uploading}
+        placeholder={disabled ? (disabledReason ?? "当前对话已无读取权限") : uploading ? "正在导入..." : streaming ? "Agent 正在运行,Enter 加入队列,Shift+Enter 换行" : "输入消息,Enter 发送,Shift+Enter 换行"}
+        disabled={uploading || disabled}
       />
 
       <div className="ai-composer-bar">
@@ -356,10 +362,10 @@ export function Composer(props: ComposerProps) {
             type="button"
             className="pc-icon-btn ai-bar-btn"
             data-pc="ai-attach"
-            title={cloudOn ? (cloud!.attachTitle ?? "添加附件") : "添加附件"}
+            title={disabled ? (disabledReason ?? "当前对话已无读取权限") : cloudOn ? (cloud!.attachTitle ?? "添加附件") : "添加附件"}
             aria-label="添加附件"
             onClick={onPickFiles}
-            disabled={uploading}
+            disabled={uploading || disabled}
           >
             <IconPaperclip size={16} />
           </button>
@@ -395,7 +401,7 @@ export function Composer(props: ComposerProps) {
           <>
             {/* 运行中还能接着写:有内容就给「加入队列」(Enter 也是),这一轮落定后按顺序自动发 */}
             {(text.trim().length > 0 || attachments.length > 0) && (
-              <button type="button" className="pc-btn-primary ai-send-btn" data-pc="ai-enqueue" title="Agent 这一轮完成后自动发送(Enter)" onClick={() => onSubmit(text)}>
+              <button type="button" className="pc-btn-primary ai-send-btn" data-pc="ai-enqueue" title="Agent 这一轮完成后自动发送(Enter)" disabled={disabled} onClick={() => !disabled && onSubmit(text)}>
                 加入队列
               </button>
             )}
@@ -406,7 +412,7 @@ export function Composer(props: ComposerProps) {
             </button>
           </>
         ) : (
-          <button type="button" className="pc-btn-primary ai-send-btn" data-pc="ai-send" title="发送(Enter)" onClick={() => onSubmit(text)}>
+          <button type="button" className="pc-btn-primary ai-send-btn" data-pc="ai-send" title={disabled ? (disabledReason ?? "无法发送") : "发送(Enter)"} disabled={disabled} onClick={() => !disabled && onSubmit(text)}>
             发送
           </button>
         )}

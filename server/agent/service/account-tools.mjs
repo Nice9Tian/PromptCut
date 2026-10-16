@@ -298,19 +298,50 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
       same(ctx);
       const snap = await snapshot();
       if (input.expectedProjectRev !== snap.rev) throw coded('project-changed');
+      const allClips = (snap.project?.tracks ?? []).flatMap((t) => t.clips ?? []);
+      const existing = allClips.filter((c) =>
+        c?.params?.workflowCommitKey === input.commitKey ||
+        c?.workflowCommitKey === input.commitKey ||
+        c?.meta?.workflowCommitKey === input.commitKey
+      );
+      if (existing.length > 0) {
+        const captionClip = existing.find((c) => c.cardId === 'caption-track');
+        const cardClips = existing.filter((c) => c.cardId !== 'caption-track');
+        return {
+          alreadyApplied: true,
+          projectRev: snap.rev,
+          clips: cardClips.map((c) => ({ clipId: c.id, start: c.start, end: c.end })),
+          captionClipId: captionClip?.id ?? null,
+        };
+      }
       const placed = [];
       let captionClipId = null;
       let out;
       try {
         out = await commit('auto_workflow', (h) => {
+          const currentClips = (h.getProject()?.tracks ?? []).flatMap((t) => t.clips ?? []);
+          const already = currentClips.filter((c) =>
+            c?.params?.workflowCommitKey === input.commitKey ||
+            c?.workflowCommitKey === input.commitKey ||
+            c?.meta?.workflowCommitKey === input.commitKey
+          );
+          if (already.length > 0) {
+            for (const c of already) {
+              if (c.cardId === 'caption-track') captionClipId = c.id;
+              else placed.push({ clipId: c.id, start: c.start, end: c.end });
+            }
+            return { ok: true, alreadyApplied: true };
+          }
           for (const card of input.cards ?? []) {
-            const clip = h.workflow.addCardClip(card.cardId, card.start, { duration: card.duration, params: card.params });
+            const params = { ...(card.params ?? {}), workflowCommitKey: input.commitKey };
+            const clip = h.workflow.addCardClip(card.cardId, card.start, { duration: card.duration, params });
             placed.push(clip ? { clipId: clip.id, start: clip.start, end: clip.end } : null);
           }
           if (input.caption) {
             // 字幕单独一条序列,建在最上层(与桌面版相同)
             const captionTrack = h.workflow.ensureCaptionTrack();
-            const clip = h.workflow.addCardClip('caption-track', input.caption.start, { duration: input.caption.duration, trackId: captionTrack.id, params: input.caption.params });
+            const params = { ...(input.caption.params ?? {}), workflowCommitKey: input.commitKey };
+            const clip = h.workflow.addCardClip('caption-track', input.caption.start, { duration: input.caption.duration, trackId: captionTrack.id, params });
             captionClipId = clip?.id ?? null;
           }
           const p = h.getProject();
@@ -323,7 +354,12 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
         if (error?.name === 'StaleWriteError' || error?.code === 'stale') throw coded('project-changed');
         throw error;
       }
-      return { projectRev: Number.isSafeInteger(out?.rev) ? out.rev : (await snapshot()).rev, clips: placed, captionClipId };
+      return {
+        alreadyApplied: Boolean(out?.alreadyApplied),
+        projectRev: Number.isSafeInteger(out?.rev) ? out.rev : (await snapshot()).rev,
+        clips: placed,
+        captionClipId,
+      };
     },
   };
   async function writeMedia(tool, mediaId, expectedMediaRev, write) {
@@ -597,6 +633,9 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     return fencing;
   }
 
+  const WAIT_JOBS_TEXT = '上一条消息发起的后台作业（转写、镜头识别等）还在做，做完就处理你这条消息。';
+  const TIMEOUT_JOBS_TEXT = '后台作业等了一小时还没做完，已经中断；需要的话请重新发起。';
+
   /**
    * 这一轮说完话了:等它名下还没做完的后台作业(转写、镜头、主体、追踪、一键流程)做完再往下收。
    *
@@ -604,13 +643,16 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
    * 文档服务**明确说不算数了**才停止等待(随后的收尾会把还在跑的作业中断);它一时答不上(断线、重启、超时)不算拒绝,
    * 隔一会儿再核、一次比一次久,作业接着做。`signal` 触发(这一轮被叫停)或到了兜底时限(一小时)也不再等。
    */
-  async function settle(signal = null) {
+  async function settle(signal = null, options = {}) {
     if (!jobs) return { waited: true, pending: 0 };
     const deadline = now() + limits.settleMs;
     const backoff = Array.isArray(limits.settleAuthBackoffMs) && limits.settleAuthBackoffMs.length ? limits.settleAuthBackoffMs : [limits.settleAuthMs];
     let nextAuthAt = now() + limits.settleAuthMs;
     let authFailures = 0;
     let ledgerFailures = 0;
+    let notifiedWaiting = false;
+    const onWaiting = typeof options?.onWaiting === 'function' ? options.onWaiting : null;
+    const onTimeout = typeof options?.onTimeout === 'function' ? options.onTimeout : null;
     const nap = (ms) => new Promise((resolve) => {
       if (signal?.aborted) { resolve(); return; }
       const done = () => { clearTimeout(timer); signal?.removeEventListener?.('abort', done); resolve(); };
@@ -628,7 +670,15 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
         continue;
       }
       if (!pending) return { waited: true, pending: 0 };
-      if (now() > deadline) { say('agent.account-tools.settle-timeout', { pending }); return { waited: false, reason: 'timeout', pending }; }
+      if (!notifiedWaiting && pending > 0) {
+        notifiedWaiting = true;
+        try { onWaiting?.({ pending, text: WAIT_JOBS_TEXT }); } catch { /* 宿主的事 */ }
+      }
+      if (now() > deadline) {
+        say('agent.account-tools.settle-timeout', { pending });
+        try { onTimeout?.({ pending, text: TIMEOUT_JOBS_TEXT }); } catch { /* 宿主的事 */ }
+        return { waited: false, reason: 'timeout', pending };
+      }
       if (now() >= nextAuthAt) {
         try {
           const auth = await authorize(context, 'read');

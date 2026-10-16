@@ -266,6 +266,8 @@ export interface RunProgress {
   elapsedMs?: number;
   callId?: string;
   jobId?: string;
+  waitingJobs?: boolean;
+  waitingTimeout?: boolean;
 }
 
 export interface CliSetupJob {

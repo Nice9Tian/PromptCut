@@ -56,8 +56,8 @@ export const WORKFLOW_DEFAULTS = Object.freeze({
   closeMs: 10_000,
   /** 工作区索引里留多少条 */
   historyJobs: 20,
-  /** 允许「没就绪」时跳过(而不是停在那里)的阶段 */
-  optionalStages: ['prerender'],
+  /** 允许「没就绪」时跳过(而不是停在那里)的阶段:主体识别与发布预渲染任务缺省可选 */
+  optionalStages: Object.freeze(['subjects', 'prerender']),
 });
 
 /** 进度条上每个阶段占的区间(单调递增;完成时才到 1) */

@@ -32,12 +32,16 @@ export interface CloudSessionView {
   lastSeq: number;
   queue?: CloudQueueSnapshot | null;
   senders?: Record<string, CloudSender>;
+  revoked: boolean;
 }
 
 export interface CloudSessionDeps {
   api: Pick<CloudApi, "send" | "abort" | "events"> & Partial<Pick<CloudApi, "pageResult">>;
   /** 账号共享对话的读取可能在流中途被撤销;断流后不能继续把上一授权下的正文留在 store。 */
   accountMode?: boolean;
+  projectId?: string | (() => string | null);
+  accountId?: string | (() => string | null);
+  storage?: Storage | { getItem: (k: string) => string | null; setItem: (k: string, v: string) => void; removeItem?: (k: string) => void };
   /**
    * 反向通道(契约第 28 节):这张页面的页面号与执行请求的函数。两样都给了,发消息与开事件流时才报页面号,
    * 事件流里来的 `page.request` 才会被执行并交回;不给就是只看不动的页面。
@@ -77,6 +81,76 @@ const deniedText = (err: unknown): string => {
   if (code === "agent-disabled") return cloudErrorText("disabled");
   return err instanceof Error ? err.message : cloudErrorText("network");
 };
+
+function getRevokedStorage(deps: CloudSessionDeps): Storage | { getItem: (k: string) => string | null; setItem: (k: string, v: string) => void; removeItem?: (k: string) => void } | null {
+  if (deps.storage) return deps.storage;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.localStorage) return globalThis.localStorage;
+    if (typeof window !== "undefined" && window.localStorage) return window.localStorage;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function revokedStorageKey(deps: CloudSessionDeps): string {
+  const proj = typeof deps.projectId === "function" ? deps.projectId() : deps.projectId;
+  const acc = typeof deps.accountId === "function" ? deps.accountId() : deps.accountId;
+  if (proj && acc) return `pc.cloudRevoked:${acc}:${proj}`;
+  if (proj) return `pc.cloudRevoked:${proj}`;
+  return `pc.cloudRevoked:default`;
+}
+
+function readRevokedSet(deps: CloudSessionDeps): Set<string> {
+  const storage = getRevokedStorage(deps);
+  if (!storage) return new Set();
+  try {
+    const raw = storage.getItem(revokedStorageKey(deps));
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? new Set(arr.filter((x): x is string => typeof x === "string")) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function writeRevokedSet(deps: CloudSessionDeps, set: Set<string>): void {
+  const storage = getRevokedStorage(deps);
+  if (!storage) return;
+  try {
+    const key = revokedStorageKey(deps);
+    if (set.size === 0) {
+      storage.removeItem?.(key);
+    } else {
+      storage.setItem(key, JSON.stringify([...set]));
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function markConversationRevoked(deps: CloudSessionDeps, id: string): void {
+  if (!deps.accountMode || !id) return;
+  const set = readRevokedSet(deps);
+  if (!set.has(id)) {
+    set.add(id);
+    writeRevokedSet(deps, set);
+  }
+}
+
+function unmarkConversationRevoked(deps: CloudSessionDeps, id: string): void {
+  if (!deps.accountMode || !id) return;
+  const set = readRevokedSet(deps);
+  if (set.has(id)) {
+    set.delete(id);
+    writeRevokedSet(deps, set);
+  }
+}
+
+function isConversationRevoked(deps: CloudSessionDeps, id: string): boolean {
+  if (!deps.accountMode || !id) return false;
+  return readRevokedSet(deps).has(id);
+}
 
 const isDelta = (ev: CloudEvent) => (ev.type === "text" || ev.type === "thinking") && typeof ev.delta === "string" && ev.delta !== "";
 
@@ -148,12 +222,13 @@ export function createCloudSession(deps: CloudSessionDeps) {
     } catch { /* 不在等了或网络断了:不重试 */ }
   }
 
-  let view: CloudSessionView = { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0 };
+  let revoked = false;
+  let view: CloudSessionView = { conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0, revoked: false };
   const listeners = new Set<() => void>();
 
   function publish() {
-    const next: CloudSessionView = { conversationId, streaming: hasOpenRun(store.get()), connection, problem, lastSeq, queue, senders };
-    if (next.conversationId === view.conversationId && next.streaming === view.streaming && next.connection === view.connection && next.problem === view.problem && next.lastSeq === view.lastSeq && next.queue === view.queue && next.senders === view.senders) return;
+    const next: CloudSessionView = { conversationId, streaming: hasOpenRun(store.get()), connection, problem, lastSeq, queue, senders, revoked };
+    if (next.conversationId === view.conversationId && next.streaming === view.streaming && next.connection === view.connection && next.problem === view.problem && next.lastSeq === view.lastSeq && next.queue === view.queue && next.senders === view.senders && next.revoked === view.revoked) return;
     view = next;
     for (const l of [...listeners]) l();
   }
@@ -194,6 +269,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
 
   function handle(ev: CloudEvent) {
     if (ev.type === 'access.revoked') {
+      if (conversationId) markConversationRevoked(deps, conversationId);
+      revoked = true;
       queue = null; senders = {}; queued = []; store.set([]);
       problem = REVOKED_TEXT; publish(); return;
     }
@@ -260,6 +337,10 @@ export function createCloudSession(deps: CloudSessionDeps) {
             if (myGen !== gen || streamReadEpoch !== readEpoch) return;
             attempt = 0;
             known = true; seenLive = true;
+            if (revoked || isConversationRevoked(deps, id)) {
+              revoked = false;
+              unmarkConversationRevoked(deps, id);
+            }
             if (connection !== "live") { problem = null; setConnection("live"); }
             if (ev.type === "end" && ev.state === "none") { sawNone = true; continue; }
             // 反向通道的请求不是对话记录的一部分(没有 seq):不折进消息,交给页面执行
@@ -272,6 +353,8 @@ export function createCloudSession(deps: CloudSessionDeps) {
               return;
             }
             if (deps.accountMode && ev.type === "access.revoked") {
+              markConversationRevoked(deps, id);
+              revoked = true;
               clearAccountReadState();
               problem = REVOKED_TEXT;
               setConnection("idle");
@@ -289,6 +372,11 @@ export function createCloudSession(deps: CloudSessionDeps) {
             ((status === 401 || status === 403) || (err instanceof CloudError && FATAL.has(err.code))));
           if (accountAuthFailure) clearAccountReadState();
           if (accountAuthFailure || (err instanceof CloudError && FATAL.has(err.code))) {
+            const code = err instanceof CloudError ? err.code : "";
+            if (deps.accountMode && (code === "not-listed" || code === "banned")) {
+              markConversationRevoked(deps, id);
+              revoked = true;
+            }
             problem = deps.accountMode ? deniedText(err) : err instanceof Error ? err.message : cloudErrorText("network");
             setConnection("idle");
             return;
@@ -304,6 +392,17 @@ export function createCloudSession(deps: CloudSessionDeps) {
           // 账号模式下读到过的对话,现在文档服务说「没有这个对话」(或项目已不在):被设为私有、被删除、项目被删(围栏掐断旧流后重连才会遇到)。
           // 这是明确的没权限,不是故障:清掉正文、给「已无法读取」那句、停止读,不一直重连。
           if (deps.accountMode && seenLive && (isAbsent(err) || (err instanceof CloudError && err.status === 404 && err.code === "no-project"))) {
+            markConversationRevoked(deps, id);
+            revoked = true;
+            clearAccountReadState();
+            problem = REVOKED_TEXT;
+            setConnection("idle");
+            return;
+          }
+          // 页面刷新或重新打开一个在撤销集合里的对话并收到 404 no-conversation 时：
+          // 记着已被撤销，不再当作普通网络故障无限重连，而是直接显示「当前账号已无法读取这个对话，请重新选择有权限的对话。」并停止重连
+          if (deps.accountMode && isConversationRevoked(deps, id) && isAbsent(err)) {
+            revoked = true;
             clearAccountReadState();
             problem = REVOKED_TEXT;
             setConnection("idle");
@@ -373,6 +472,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       lastSeq = 0;
       fresh = opts?.fresh === true;
       known = false; seenLive = false;
+      revoked = false;
       queued = [];
       pendingAttachments.clear();
       queue = null; senders = {};
