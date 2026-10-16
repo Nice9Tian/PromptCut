@@ -180,7 +180,8 @@
      - 在 `docs/reports/ACCEPT-018-map.md` 与 `scripts/acceptance/four-stage-manifest.mjs` 补齐 `RS18-local`、`RS18-queue` 验收命令。
 3. **分支 C（`v18-block11-tools`）**：
    - 块十一（`see_media` 素材拼图、`get_gif` 动图记录、`measure_audio_js` 音频测量脚本）+ 工具表接线第二期 + 轨道流和渲染工作进程两处入口的素材隔离。
-4. **分支 D（`v18-probes-terms`）**：
-   - 二十来支在线探针改走账号登录入口、残余子进程隐藏窗口参数、壬（改旧名词：「图卡」→「素材效果卡」，「补渲」→「预渲染重试」，含界面 17 处改前改后截图）。
+4. **分支 D（`v18-online-probes` 与 `v18-terms`）**：
+   - **第一半（`v18-online-probes`，已完成并合入 `main` `8b09add4`，分支提交 `f6f0fb4a`，报告 `docs/reports/AGENT-v18-online-probes.md`）**：十七支在线探针改走会话恢复入口（`lib/online-resume-entry.mjs`），对齐 10-14「在线舞台一律跨源隔离、撤掉同源单舞台退路」与撤快照后的断言，实跑 S2-1（116/116）～S2-5、`online-stage-watch`、`online-stage-handshake`、`c10-ui`、`online-user-cards`、`sound-ab`、`sound-preview` 等 14 支探针 100% 通过。合并后 `8b09add4` 上 `npx tsc -b --force` **0 错误**，全量 `npm test` **共 `7025` 条：`7010` 通过、`0` 失败、`14` 跳过、`1` todo**（耗时 160.8 秒，退出码 0）。
+   - **第二半（`v18-terms`，等在途分支全部合完后执行）**：壬（改旧名词：「图卡」→「素材效果卡」，「补渲」→「预渲染重试」，含界面 17 处改前改后截图）。
 5. **块十五（发版前配置、38 行全套验收、打包 `0.7.18`、推进 `release`、节点备份与部署、删旧测试数据、真实旧文件转本地、真实网络环境验收）**：贴齐五项交付证据。
 
