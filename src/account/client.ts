@@ -9,6 +9,9 @@ export interface ProjectSession {
    * 旧文档服务不报这一项,页面上那两行就不显示(任务书 `docs/plan/render-refactor-task.md`「甲三」)。
    */
   hosted: { agent: { available: boolean; enabled: boolean; url: string | null }; render?: { available: boolean; enabled: boolean; streams?: boolean } };
+  linkToken?: string;
+  hasSecondaryPassword?: boolean;
+  needsSecondaryPassword?: boolean;
 }
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
@@ -53,10 +56,15 @@ export function projectIdFromLink(text: string, origin: string): string {
     if (url.origin !== new URL(origin).origin || url.username || url.password) throw new AccountFailure(400, 'wrong-project-origin', '这不是当前云端服务的项目链接。');
     id = url.searchParams.get('project') || '';
   }
-  if (!/^sp_[a-z2-7]{26}$/.test(id)) throw new AccountFailure(400, 'invalid-project', '请输入有效的云端项目链接。');
+  if (!/^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/.test(id)) throw new AccountFailure(400, 'invalid-project', '请输入有效的云端项目链接。');
   return id;
 }
-export function projectLink(origin: string, projectId: string): string { return `${new URL(origin).origin}/editor?project=${encodeURIComponent(projectId)}`; }
+export function projectLink(origin: string, projectId: string, linkToken?: string): string {
+  const u = new URL('/editor', new URL(origin).origin);
+  u.searchParams.set('project', projectId);
+  if (linkToken) u.searchParams.set('token', linkToken);
+  return u.toString();
+}
 export function createAccountClient(options: AccountClientOptions) {
   const fetcher = options.fetch ?? fetch, now = options.now ?? Date.now;
   const origin = new URL(options.origin).origin;
@@ -160,8 +168,39 @@ export function createAccountClient(options: AccountClientOptions) {
       await website(); const result = await request('/api/account/projects');
       if (!Array.isArray(result.owned) || !Array.isArray(result.joined)) throw new AccountFailure(503, 'account-protocol');
       return { owned: result.owned, joined: result.joined }; },
-    async create(name: string, initialProject: unknown, requestId: string): Promise<{ projectId: string; authorityId: string }> {
-      const current = await ensureLogin(); return await request('/hosted/shared/account/create', { name, initialProject, allowLinkJoin: true, requestId }, current.accessToken) as any;
+    async create(name: string, initialProject: unknown, requestId: string, opts?: { projectId?: string; rev?: number; history?: unknown[] }): Promise<{ projectId: string; authorityId: string }> {
+      const current = await ensureLogin();
+      const body = {
+        name,
+        initialProject,
+        allowLinkJoin: true,
+        requestId,
+        ...(opts?.projectId ? { projectId: opts.projectId } : {}),
+        ...(opts?.rev ? { rev: opts.rev } : {}),
+        ...(opts?.history ? { history: opts.history } : {}),
+      };
+      return await request('/hosted/shared/account/create', body, current.accessToken) as any;
+    },
+    async regenProjectLink(projectId: string, expectedAccessRevision: number, requestId: string): Promise<{ eventId: string; accessRevision: number; linkToken: string }> {
+      const current = await ensureLogin();
+      const out = await request('/hosted/shared/account/admin', {
+        projectId,
+        op: 'regen-link',
+        expectedAccessRevision,
+        requestId,
+      }, current.accessToken);
+      return out as any;
+    },
+    async setSecondaryPassword(projectId: string, password: string | null, expectedAccessRevision: number, requestId: string): Promise<{ eventId: string; accessRevision: number; hasSecondaryPassword: boolean }> {
+      const current = await ensureLogin();
+      const out = await request('/hosted/shared/account/admin', {
+        projectId,
+        op: 'set-secondary-password',
+        password,
+        expectedAccessRevision,
+        requestId,
+      }, current.accessToken);
+      return out as any;
     },
     async setAgentEnabled(projectId: string, enabled: boolean, expectedAccessRevision: number, requestId: string) {
       const current = await ensureLogin();
@@ -208,7 +247,18 @@ export function createAccountClient(options: AccountClientOptions) {
           value.accessRevision < 0 || value.completed !== false || value.state !== 'pending-services') throw new AccountFailure(503, 'account-protocol');
       return { eventId: value.eventId, accessRevision: value.accessRevision, completed: false, state: 'pending-services' };
     },
-    async join(projectId: string, requestId: string): Promise<ProjectSession> { const current = await ensureLogin(); return validateSession(await request('/hosted/shared/account/join', { projectId, deviceId: options.device.deviceId, requestId }, current.accessToken), now(), projectId); },
+    async join(projectId: string, requestId: string, joinOpts?: { token?: string; linkToken?: string; secondaryPassword?: string }): Promise<ProjectSession> {
+      const current = await ensureLogin();
+      const token = joinOpts?.token ?? joinOpts?.linkToken;
+      const body = {
+        projectId,
+        deviceId: options.device.deviceId,
+        requestId,
+        ...(token ? { token, linkToken: token } : {}),
+        ...(joinOpts?.secondaryPassword ? { secondaryPassword: joinOpts.secondaryPassword } : {}),
+      };
+      return validateSession(await request('/hosted/shared/account/join', body, current.accessToken), now(), projectId);
+    },
     async session(projectId: string, { minRemainingMs }: { minRemainingMs?: number } = {}): Promise<ProjectSession> { const current = await ensureLogin(minRemainingMs); return validateSession(await request('/hosted/shared/account/session', { projectId, deviceId: options.device.deviceId, requestId: crypto.randomUUID() }, current.accessToken), now(), projectId); },
   };
 }
@@ -273,6 +323,9 @@ function validateSession(value: Record<string, any>, now: number, projectId: str
     ? { available: r.available as boolean, enabled: r.enabled as boolean, ...(typeof r.streams === 'boolean' ? { streams: r.streams as boolean } : {}) } : null;
   return { connectionTicket: value.connectionTicket, assetTicket: value.assetTicket, agentDelegationTicket: value.agentDelegationTicket,
     expiresAt: value.expiresAt, projectId, creator: value.creator, access: value.access, accessRevision: value.accessRevision,
-    hosted: { agent: { available: agent.available, enabled: agent.enabled, url: agent.url }, ...(render ? { render } : {}) } };
+    hosted: { agent: { available: agent.available, enabled: agent.enabled, url: agent.url }, ...(render ? { render } : {}) },
+    ...(typeof value.linkToken === 'string' ? { linkToken: value.linkToken } : {}),
+    ...(typeof value.hasSecondaryPassword === 'boolean' ? { hasSecondaryPassword: value.hasSecondaryPassword } : {}),
+    ...(typeof value.needsSecondaryPassword === 'boolean' ? { needsSecondaryPassword: value.needsSecondaryPassword } : {}) };
 }
 export type CloudAccountClient = ReturnType<typeof createAccountClient>;

@@ -128,7 +128,7 @@ function DesktopBackupsDialog({ open, onClose }: { open: boolean; onClose: () =>
                 <div className="pc-backup-row" key={`${b.id}-${i}`} data-pc="backup-row" data-entity={row.entity}>
                   <span>{entityLabel(row.entity, mine ? project : null)}</span>
                   <small>
-                    {fmtTime(b.at)} · {who} · {b.projectName ?? b.projectId}
+                    {fmtTime(b.at)} · {who}{b.rev !== null && b.rev !== undefined ? ` · 历史序号 ${b.rev}` : ""} · {b.projectName ?? b.projectId}
                     {mine ? "" : "(不是当前项目)"}
                   </small>
                   <button type="button" className="pc-dialog-opt" disabled={!mine} title={mine ? "以一次新的修改写回去" : "只能恢复到同一个项目"} onClick={() => void restore(row)}>

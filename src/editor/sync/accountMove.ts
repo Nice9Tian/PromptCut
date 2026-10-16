@@ -57,6 +57,8 @@ export type MoveErrorCode =
   | "invalid-name"
   /** 这个账号现在不许新建(托管方的策略、数量上限) */
   | "create-refused"
+  /** 软件版本已过期(<0.7.18) */
+  | "version-expired"
   /** 目标云端没有账号办法的新建接口(不是账号模式的节点) */
   | "not-account-cloud"
   /** 连不上云端(网络、超时) */
@@ -164,8 +166,16 @@ export interface MoveAttempt {
   stub: unknown;
   /** 云端已经回了项目号(建成了);没有 = 上一次请求的结果不确定 */
   projectId?: string;
+  /**
+   * 这次新建请求有没有带上本机原来的项目号(搬上去还是同一个项目,10-14 第 3.3 节)。原样重放时照它带或不带;
+   * 原号已被云端别的项目占着时改成不带、另起请求号,由云端发新号。旧记录没有这一项,按不带算(那时的请求就没带)
+   */
+  keepId?: boolean;
   at: number;
 }
+
+/** 本机原来的项目号能不能直接当云端项目号(与 `server/account/authority.mjs` 的 `projectIdOK` 同一个形状) */
+export const keepableProjectId = (id: string): boolean => /^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/.test(id);
 
 export interface AttemptStorage {
   getItem(key: string): string | null;
@@ -204,7 +214,7 @@ export function createAttemptStore(storage: AttemptStorage | null) {
   };
   const valid = (a: MoveAttempt | undefined, accountId: string, contentId: string): a is MoveAttempt =>
     !!a && a.v === 1 && a.accountId === accountId && a.contentId === contentId && typeof a.requestId === "string" && !!a.requestId &&
-    typeof a.name === "string" && !!a.name && (a.projectId === undefined || /^sp_[a-z2-7]{26}$/.test(a.projectId)) && Number.isFinite(a.at);
+    typeof a.name === "string" && !!a.name && (a.projectId === undefined || keepableProjectId(a.projectId)) && Number.isFinite(a.at);
   return {
     get(accountId: string, contentId: string): MoveAttempt | null {
       const a = readAll()[attemptKey(accountId, contentId)];
@@ -274,8 +284,13 @@ export interface MoveDeps {
   source(): MoveSource | null;
   /** 当前登录的账号;没登录回 null;连不上抛错 */
   account(): Promise<{ id: string; name: string } | null>;
-  /** 新建云端项目;失败抛带 `status` / `code` 的错 */
-  create(name: string, stub: unknown, requestId: string): Promise<{ projectId: string }>;
+  /** 新建云端项目;失败抛带 `status` / `code` 的错。`extra`:本机原来的项目号、历史序号与提交摘要(搬上去还是同一个项目) */
+  create(name: string, stub: unknown, requestId: string, extra?: { projectId?: string; rev?: number; history?: unknown[] }): Promise<{ projectId: string }>;
+  /**
+   * 本机这一份现在的历史序号与提交摘要:从当前连着的本机文档连接(`DocSync` 的 `rev` / `history`)读,
+   * 云端项目从这个序号接着往上数(10-14 第 3.3 节)。没有连着的文档连接回 null(云端从 1 起)
+   */
+  lineage?(): { rev: number; history: unknown[] } | null;
   /** 等本机的修改都落定,回一份项目内容的拷贝;等不到抛错 */
   snapshot(): Promise<Project>;
   /** 此刻编辑器里的项目内容(不拷贝,只用来比较) */
@@ -338,17 +353,22 @@ const detailOf = (error: unknown): string => {
 };
 
 /**
- * 新建接口的失败:这个请求号**肯定没有**建出项目。只认四种:名字重、名字不合法、账号不许建(403)、没有这条路由 ——
+ * 新建接口的失败:这个请求号**肯定没有**建出项目。只认这几种:名字重、名字不合法、账号不许建(403)、没有这条路由、
+ * 软件版本过期、原来的项目号已被别的云端项目占着 ——
  * 它们都是落账之前就拒绝的。别的一律当「结果不确定」留着请求号:401 也是(云端先记下项目、占住名字,初始化完再核一次登录,
  * 那时回 401 项目已经落账,`server/account/authority.mjs` 的 `createProject`),丢了请求号再点就是对着自己看不见的项目报重名。
  */
 function createDefinitelyFailed(error: unknown): boolean {
   const kind = createErrorCode(error);
-  return kind === "name-taken" || kind === "invalid-name" || kind === "create-refused" || kind === "not-account-cloud";
+  return idTaken(error) || kind === "name-taken" || kind === "invalid-name" || kind === "create-refused" || kind === "not-account-cloud" || kind === "version-expired";
 }
+
+/** 云端说带去的原项目号已被别的项目占着(`project-id-taken`,409) */
+const idTaken = (error: unknown): boolean => codeOf(error) === "project-id-taken";
 
 function createErrorCode(error: unknown): MoveErrorCode {
   const s = statusOf(error), code = codeOf(error);
+  if (code === "version-expired") return "version-expired";
   if (s === 0 || code === "network") return "network";
   if (s === 401) return "login-required";
   if (code === "name-taken") return "name-taken";
@@ -409,35 +429,52 @@ export async function moveToAccountCloud(deps: MoveDeps, input: MoveInput): Prom
     /* 2 建项目(或接着用上一次建好的那个) */
     at("create");
     const name = input.name.trim();
+    // 历史序号与提交摘要从本机当前的文档连接读(快照之后读:那时本机的修改已经落定),云端接着这个序号往上数
+    const lineage = deps.lineage?.() ?? null;
+    const extraOf = (a: MoveAttempt) => ({
+      ...(a.keepId === true ? { projectId: a.contentId } : {}),
+      ...(lineage && Number.isSafeInteger(lineage.rev) && lineage.rev >= 1 ? { rev: lineage.rev, history: lineage.history } : {}),
+    });
+    const fresh = (keepId: boolean): MoveAttempt =>
+      ({ v: 1, accountId: account.id, contentId: source.contentId, requestId: deps.newRequestId(), name, stub: deps.stub(name, source.contentId), keepId, at: now() });
+    let idWasTaken = false;
     let attempt = deps.attempts.get(account.id, source.contentId);
     if (attempt && !attempt.projectId) {
       // 上一次的请求结果不确定(没收到回包):先用原样的请求问清楚,免得换了名字又建一个。
       // 云端的请求账本不过期,原样重放一直安全,所以这条记录也不设过期
       try {
-        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId);
+        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId, extraOf(attempt));
         attempt = { ...attempt, projectId: made.projectId };
         deps.attempts.put(attempt);
       } catch (error) {
         if (!createDefinitelyFailed(error)) return fail(createErrorCode(error), detailOf(error));
         // 那一次确实没建成:记录作废。名字没换、或者不是名字的问题,直接报给用户;换了名字的按这一次填的重新来
+        // (原来的项目号被占着的,下面另起一个不带原号的请求)
         deps.attempts.drop(account.id, source.contentId, attempt.requestId);
         const kind = createErrorCode(error);
-        if (attempt.name === name || (kind !== "name-taken" && kind !== "invalid-name")) return fail(kind, detailOf(error));
+        idWasTaken = idTaken(error);
+        if (!idWasTaken && (attempt.name === name || (kind !== "name-taken" && kind !== "invalid-name"))) return fail(kind, detailOf(error));
         attempt = null;
       }
     }
     if (!attempt) {
       if (!name || name.length > 200 || /[\u0000-\u001f]/.test(name)) return fail("invalid-name");
-      attempt = { v: 1, accountId: account.id, contentId: source.contentId, requestId: deps.newRequestId(), name, stub: deps.stub(name, source.contentId), at: now() };
-      // 先记下请求号再发请求:发出去之后回包丢了,下一次也知道该问哪个请求
-      try { deps.attempts.put(attempt); } catch (error) { return fail("not-ready", detailOf(error)); }
-      try {
-        const made = await deps.create(attempt.name, attempt.stub, attempt.requestId);
-        attempt = { ...attempt, projectId: made.projectId };
-        deps.attempts.put(attempt);
-      } catch (error) {
-        if (createDefinitelyFailed(error)) deps.attempts.drop(account.id, source.contentId, attempt.requestId);
-        return fail(createErrorCode(error), detailOf(error));
+      // 先带本机原来的项目号去建(搬上去还是同一个项目);原号已被云端别的项目占着(比如这份文件就是从那个云端项目另存出来的),
+      // 改由云端发新号再建一次 —— 历史序号照样接着本机往上数
+      for (let keepId = keepableProjectId(source.contentId) && !idWasTaken; ; keepId = false) {
+        attempt = fresh(keepId);
+        // 先记下请求号再发请求:发出去之后回包丢了,下一次也知道该问哪个请求
+        try { deps.attempts.put(attempt); } catch (error) { return fail("not-ready", detailOf(error)); }
+        try {
+          const made = await deps.create(attempt.name, attempt.stub, attempt.requestId, extraOf(attempt));
+          attempt = { ...attempt, projectId: made.projectId };
+          deps.attempts.put(attempt);
+          break;
+        } catch (error) {
+          if (createDefinitelyFailed(error)) deps.attempts.drop(account.id, source.contentId, attempt.requestId);
+          if (keepId && idTaken(error)) continue;
+          return fail(createErrorCode(error), detailOf(error));
+        }
       }
     }
     const made = attempt;
@@ -660,10 +697,10 @@ export const ACCOUNT_MOVE_TEXT = {
     done: "正在搬到云端：收尾…",
   } as Record<MoveStage, string>,
   doneLocal: "已搬到云端，现在编辑的是云端项目。本机那一份保留为普通的本地项目。",
-  doneRoom: "已搬到云端。本机协作已关闭，旧邀请码已作废；请把新的项目链接发给原来的成员，他们登录自己的网站账号后加入。",
+  doneRoom: "已搬到云端。本机协作已关闭，旧邀请码已作废，原来的禁入名单没有带过去；请把新的项目链接发给原来的成员，他们登录自己的网站账号后加入。",
   /** 搬完的气泡(带「复制项目链接」按钮) */
   toastLocal: "已搬到云端，可以将项目链接发给其他已登录成员。",
-  toastRoom: "已搬到云端。本机协作已关闭、旧邀请码已作废，请把新的项目链接发给原来的成员。",
+  toastRoom: "已搬到云端。本机协作已关闭、旧邀请码已作废，原来的禁入名单没有带过去，请把新的项目链接发给原来的成员。",
   copyLink: "复制项目链接",
   uploading: (n: number) => `素材还在后台上传（共 ${n} 个，含卡片声音；先传小尺寸、再传原尺寸）。传完之前，其他成员看到的是占位。`,
   uploaded: "素材和卡片源码都已传到云端。",
@@ -674,6 +711,7 @@ export const ACCOUNT_MOVE_TEXT = {
   cardsStuck: "卡片源码还没同步到云端（卡片同步没连上），其他成员暂时画不出自定义卡；连上后会自动补传。",
   /** 旧文件带着搬到云端时关掉的那个房间的关联:重开时当普通本地项目开,提示一次 */
   reopenedLocal: "这个文件原来的本机协作已在搬到云端时关闭，现在按普通的本地项目打开。",
+  versionExpired: "当前软件版本已过期，无法搬到云端",
 } as const;
 
 const unchanged = (kind: "local" | "room") => (kind === "room" ? "本机协作没有改动，原房间照常可用。" : "本机项目没有改动。");
@@ -705,6 +743,7 @@ export function moveFailureText(r: Extract<MoveResult, { ok: false }>, kind: "lo
     case "name-taken": return `这个项目名已被使用，请换一个名字。${local}`;
     case "invalid-name": return `项目名不能为空，不能超过 200 个字。${local}`;
     case "create-refused": return `这个账号现在不能新建云端项目（${r.detail || "被拒绝"}）。${local}`;
+    case "version-expired": return ACCOUNT_MOVE_TEXT.versionExpired;
     case "not-account-cloud": return `这个云端不接受网站账号的项目，没有搬。${local}`;
     case "network": return r.stage === "create" ? `连不上云端，云端项目没有建成。${local}稍后再点一次。` : `连不上云端，没有开始搬。${local}`;
     case "create-failed": return `云端暂时不可用，云端项目没有建成。${local}稍后再点一次，不会多建一个。`;

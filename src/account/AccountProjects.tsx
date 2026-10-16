@@ -5,14 +5,30 @@ import { ensureDevice, enterAccountProject } from '../editor/sync/syncManager';
 import { createAccountClient, projectIdFromLink, projectLink, type Account, type CloudAccountClient, type ProjectLists } from './client';
 import { desktopAccountBridge } from './desktopVault';
 
+function tokenFromLink(text: string): string | undefined {
+  const value = text.trim();
+  if (/^https?:/i.test(value)) {
+    try {
+      const url = new URL(value);
+      return url.searchParams.get('token') || url.searchParams.get('linkToken') || undefined;
+    } catch {}
+  }
+  return undefined;
+}
+
 export function AccountProjects({ online, onEnterEditor }: { online: boolean; onEnterEditor: () => void }) {
   const [origin, setOrigin] = useState(online ? location.origin : 'https://visuhive.com');
   const client = useRef<CloudAccountClient | null>(null);
   const [account, setAccount] = useState<Account | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState('');
   const [name, setName] = useState(''), [password, setPassword] = useState(''), [remember, setRemember] = useState(false);
   const [projectName, setProjectName] = useState('未命名'), [link, setLink] = useState(() => {
-    const id = new URL(location.href).searchParams.get('project'); return id ? projectLink(origin, id) : '';
+    const sp = new URL(location.href).searchParams;
+    const id = sp.get('project');
+    const token = sp.get('token') || sp.get('linkToken') || undefined;
+    return id ? projectLink(origin, id, token) : '';
   });
+  const [secondaryPassword, setSecondaryPassword] = useState('');
+  const [askSecondaryPassword, setAskSecondaryPassword] = useState(false);
   const [lists, setLists] = useState<ProjectLists | null>(null), [listError, setListError] = useState('');
   const createAttempt = useRef<{ name: string; requestId: string; initial: ReturnType<typeof createEmptyProject>; projectId?: string } | null>(null);
   const joinAttempt = useRef<{ projectId: string; requestId: string } | null>(null);
@@ -24,8 +40,10 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
       if (!device) throw new Error('无法取得当前设备身份，请重试。');
       const serviceOrigin = online ? location.origin : (await desktopAccountBridge('configuration') as { origin: string }).origin;
       if (!alive) return; setOrigin(serviceOrigin);
-      const invited = new URL(location.href).searchParams.get('project');
-      if (invited) setLink(projectLink(serviceOrigin, invited));
+      const sp = new URL(location.href).searchParams;
+      const invited = sp.get('project');
+      const token = sp.get('token') || sp.get('linkToken') || undefined;
+      if (invited) setLink(projectLink(serviceOrigin, invited, token));
       const c = createAccountClient({ online, origin: serviceOrigin, device, ...(!online ? { native: desktopAccountBridge } : {}) }); client.current = c;
       try { const current = await c.restore(); if (alive) { setAccount(current); if (current) await refreshLists(); } }
       catch (e) { if (alive) setError(e instanceof Error ? e.message : '登录恢复失败，请重新登录。'); }
@@ -72,13 +90,36 @@ export function AccountProjects({ online, onEnterEditor }: { online: boolean; on
     </>}
     <form className="sp-account-form" onSubmit={e => { e.preventDefault(); void perform(async () => {
       const projectId = projectIdFromLink(link, origin);
+      const token = tokenFromLink(link) || new URL(location.href).searchParams.get('token') || new URL(location.href).searchParams.get('linkToken') || undefined;
       if (joinAttempt.current?.projectId !== projectId) joinAttempt.current = { projectId, requestId: crypto.randomUUID() };
-      const firstSession = await client.current!.join(projectId, joinAttempt.current!.requestId);
+      let firstSession;
+      try {
+        firstSession = await client.current!.join(projectId, joinAttempt.current!.requestId, {
+          token,
+          secondaryPassword: askSecondaryPassword ? secondaryPassword : (secondaryPassword || undefined),
+        });
+      } catch (err: any) {
+        if (err?.code === 'secondary-password-required' || err?.code === 'bad-secondary-password') {
+          setAskSecondaryPassword(true);
+          setError(err.code === 'bad-secondary-password' ? '项目二级密码不正确。' : '该项目设置了项目二级密码，请输入二级密码。');
+          return;
+        }
+        if (err?.code === 'link-expired') {
+          setError('该项目链接已失效，请联系创建者获取最新链接。');
+          return;
+        }
+        throw err;
+      }
+      setAskSecondaryPassword(false);
+      setSecondaryPassword('');
       await refreshLists(); await enter(projectId, lists?.owned.concat(lists.joined).find(p => p.projectId === projectId)?.name || '云端项目', firstSession);
       joinAttempt.current = null;
     }); }}>
-      <label>项目链接<input data-pc="cloud-project-link" type="text" required placeholder="粘贴云端项目链接" value={link} onChange={e => setLink(e.target.value)} /></label>
-      <button className="sp-primary-btn" data-pc="cloud-join" disabled={busy || !account}>加入并打开项目</button>
+      <label>项目链接<input data-pc="cloud-project-link" type="text" required placeholder="粘贴云端项目链接" value={link} onChange={e => { setLink(e.target.value); setAskSecondaryPassword(false); }} /></label>
+      {askSecondaryPassword && (
+        <label>项目二级密码<input data-pc="cloud-secondary-password" type="password" required placeholder="请输入项目二级密码" value={secondaryPassword} onChange={e => setSecondaryPassword(e.target.value)} /></label>
+      )}
+      <button className="sp-primary-btn" data-pc="cloud-join" disabled={busy || !account}>{askSecondaryPassword ? '验证二级密码并加入' : '加入并打开项目'}</button>
     </form>
     {lists && <div data-pc="cloud-project-lists">{(['owned', 'joined'] as const).map(kind => <div key={kind}>
       <h3>{kind === 'owned' ? '我创建的' : '我加入的'}</h3>{lists[kind].length === 0 ? <p className="sp-muted">暂无项目</p> : lists[kind].map(p =>

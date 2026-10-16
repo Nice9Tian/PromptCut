@@ -21,7 +21,7 @@ import { hosted, type SharedMode, type Where } from "./sharedApi";
 import { ListEditor, LanRestartHint, readHostedUrl, writeHostedUrl } from "./SharedDialogs";
 import { CreatorFlow, type Flow } from "./MembersPanel";
 import { HostedServiceRows } from "./HostedServiceRows";
-import { useSync, moveSharedToHosted, moveSharedToLan } from "./syncManager";
+import { useSync, moveSharedToHosted, moveSharedToLan, pushToast, regenAccountProjectLink, setAccountSecondaryPassword } from "./syncManager";
 import { ACCOUNT_MOVE_TEXT, moveFailureText } from "./accountMove";
 import { accountCloud, accountCloudLogin, accountCloudSignIn, moveCurrentToAccountCloud, pendingMove, targetsAccountCloud, type AccountCloud } from "./accountMoveFlow";
 import { projectLink, type Account } from "../../account/client";
@@ -66,11 +66,13 @@ function when(ms: number | null): string {
 
 export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(function CollabSection({ open }, ref) {
   const shared = useSync((v) => v.shared);
+  const rev = useSync((v) => v.rev);
   const device = useSync((v) => v.device);
   const association = useSync((v) => v.association);
   const hostRegistration = useSync((v) => v.hostRegistration);
   const hostedServices = useSync((v) => v.hosted);
   const isOn = !!shared || !!association;
+  const isAccount = !!shared?.accountId;
   const [checked, setChecked] = useState(isOn);
   const [where, setWhere] = useState<Where>("lan");
   const [mode, setMode] = useState<SharedMode>("free");
@@ -92,6 +94,9 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const [cancelPw, setCancelPw] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
   const [flow, setFlow] = useState<Flow | null>(null);
+  const [secondaryModalOpen, setSecondaryModalOpen] = useState(false);
+  const [secondaryPw, setSecondaryPw] = useState("");
+  const [secondaryBusy, setSecondaryBusy] = useState(false);
   // 账号办法的「搬到云端」：这台桌面版配置的账号云端（没有账号桥是 null）、登录的账号（undefined = 还在查）
   const [acct, setAcct] = useState<AccountCloud | null>(null);
   const [acctUser, setAcctUser] = useState<Account | null | undefined>(undefined);
@@ -314,6 +319,40 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
     setInviteStatus({ active: true, expiresAt: r.invite.expiresAt, maxUses: r.invite.maxUses, used: 0, revokedAt: null });
     setStatus({ text: COLLAB_TEXT.regenDone, tone: "ok" });
   };
+  const regenLink = async () => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const r = await regenAccountProjectLink();
+      if (r.ok) {
+        setMoveLink(r.link);
+        pushToast("项目链接已重新生成，旧链接已失效。", "info", 5000);
+      } else {
+        setStatus({ text: r.error || "重新生成项目链接失败。", tone: "err" });
+      }
+    } catch (e) {
+      setStatus({ text: (e as Error).message || "重新生成项目链接失败。", tone: "err" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const submitSecondaryPw = async () => {
+    setSecondaryBusy(true);
+    try {
+      const r = await setAccountSecondaryPassword(secondaryPw || null);
+      if (r.ok) {
+        pushToast(secondaryPw ? "项目二级密码已设置。" : "项目二级密码已清除。", "info", 4000);
+        setSecondaryModalOpen(false);
+        setSecondaryPw("");
+      } else {
+        setStatus({ text: r.error || "设置项目二级密码失败。", tone: "err" });
+      }
+    } catch (e) {
+      setStatus({ text: (e as Error).message || "设置项目二级密码失败。", tone: "err" });
+    } finally {
+      setSecondaryBusy(false);
+    }
+  };
   const moveHosted = async () => {
     // 房间登记的云端就是账号云端：走账号办法（云端新建账号项目、搬完关本机协作）；别的节点照旧办法
     const c = acct ?? await accountCloud();
@@ -463,6 +502,10 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
             {copyBtn("name", shared.name)}
             {copied$("name")}
           </div>
+          <div className="pc-collab-row" data-pc="collab-project-rev">
+            <span className="pc-collab-key">历史序号</span>
+            <code>{rev ?? 1}</code>
+          </div>
           {shared.mode === "free" && local?.projectPassword ? (
             <div className="pc-collab-row" data-pc="collab-project-password">
               <span className="pc-collab-key">项目密码</span>
@@ -497,34 +540,58 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
           ) : null}
           {shared.where === "hosted" && iAmCreator ? (
             <>
-              {invite ? (
-                <div className="pc-collab-qr">
-                  <div className="pc-collab-qr-img" data-pc="collab-qr" aria-label="邀请二维码" dangerouslySetInnerHTML={{ __html: qrSvg(invite.link, { ec: "M", quiet: 4, scale: 8 }) }} />
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0, flex: 1 }}>
-                    <code data-pc="collab-invite-link" style={{ fontSize: 11.5, wordBreak: "break-all" }}>{invite.link}</code>
-                    <div className="pc-collab-actions">
-                      <button type="button" className="pc-dialog-opt" data-pc="collab-copy-link" onClick={() => copy(invite.link, () => setCopied("link"))}>复制邀请链接</button>
-                      {copied$("link")}
-                    </div>
-                    <div className="pc-sync-hint" data-pc="collab-invite-status">
-                      {inviteStatus && !inviteStatus.active ? COLLAB_TEXT.inviteDead
-                        : `有效期至 ${when(inviteStatus?.expiresAt ?? invite.expiresAt)}${inviteStatus ? ` · 已用 ${inviteStatus.used} 次` : ""}${(inviteStatus?.maxUses ?? invite.maxUses) ? ` / 限 ${inviteStatus?.maxUses ?? invite.maxUses} 次` : ""}`}
-                    </div>
-                  </div>
+              {isAccount ? (
+                <div className="pc-collab-actions">
+                  <button type="button" className="pc-dialog-opt" data-pc="collab-regen-link" disabled={busy} onClick={() => void regenLink()}>作废并重新生成项目链接</button>
+                  <button type="button" className="pc-dialog-opt" data-pc="collab-secondary-password" disabled={busy} onClick={() => setSecondaryModalOpen(true)}>项目二级密码</button>
                 </div>
               ) : (
-                <div className="pc-sync-hint">这台设备上没有邀请链接（链接只存在签发它的那台设备上）。</div>
+                <>
+                  {invite ? (
+                    <div className="pc-collab-qr">
+                      <div className="pc-collab-qr-img" data-pc="collab-qr" aria-label="邀请二维码" dangerouslySetInnerHTML={{ __html: qrSvg(invite.link, { ec: "M", quiet: 4, scale: 8 }) }} />
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0, flex: 1 }}>
+                        <code data-pc="collab-invite-link" style={{ fontSize: 11.5, wordBreak: "break-all" }}>{invite.link}</code>
+                        <div className="pc-collab-actions">
+                          <button type="button" className="pc-dialog-opt" data-pc="collab-copy-link" onClick={() => copy(invite.link, () => setCopied("link"))}>复制邀请链接</button>
+                          {copied$("link")}
+                        </div>
+                        <div className="pc-sync-hint" data-pc="collab-invite-status">
+                          {inviteStatus && !inviteStatus.active ? COLLAB_TEXT.inviteDead
+                            : `有效期至 ${when(inviteStatus?.expiresAt ?? invite.expiresAt)}${inviteStatus ? ` · 已用 ${inviteStatus.used} 次` : ""}${(inviteStatus?.maxUses ?? invite.maxUses) ? ` / 限 ${inviteStatus?.maxUses ?? invite.maxUses} 次` : ""}`}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="pc-sync-hint">这台设备上没有邀请链接（链接只存在签发它的那台设备上）。</div>
+                  )}
+                  <div className="pc-collab-actions">
+                    <button type="button" className="pc-dialog-opt" data-pc="collab-regen" disabled={busy} onClick={() => void regen()}>作废并重新生成邀请码</button>
+                  </div>
+                  {regenPw !== null ? (
+                    <div className="pc-sync-field">
+                      <label htmlFor="pc-collab-regen-pw">创建者密码</label>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input id="pc-collab-regen-pw" type="password" autoFocus className="pc-dialog-input" data-pc="collab-regen-password" value={regenPw}
+                          onChange={(e) => setRegenPw(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void regen(); }} />
+                        <button type="button" className="pc-dialog-opt" data-pc="collab-regen-confirm" style={{ height: 30 }} disabled={!regenPw || busy} onClick={() => void regen()}>确认</button>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
               )}
-              <div className="pc-collab-actions">
-                <button type="button" className="pc-dialog-opt" data-pc="collab-regen" disabled={busy} onClick={() => void regen()}>作废并重新生成邀请码</button>
-              </div>
-              {regenPw !== null ? (
-                <div className="pc-sync-field">
-                  <label htmlFor="pc-collab-regen-pw">创建者密码</label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <input id="pc-collab-regen-pw" type="password" autoFocus className="pc-dialog-input" data-pc="collab-regen-password" value={regenPw}
-                      onChange={(e) => setRegenPw(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void regen(); }} />
-                    <button type="button" className="pc-dialog-opt" data-pc="collab-regen-confirm" style={{ height: 30 }} disabled={!regenPw || busy} onClick={() => void regen()}>确认</button>
+              {secondaryModalOpen ? (
+                <div className="pc-sync-field" data-pc="secondary-password-modal" style={{ marginTop: 12, padding: 8, border: "1px solid var(--border, #ccc)", borderRadius: 6 }}>
+                  <label htmlFor="pc-secondary-pw">项目二级密码（留空表示清除二级密码）</label>
+                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <input id="pc-secondary-pw" type="password" className="pc-dialog-input" data-pc="collab-secondary-pw-input" placeholder="输入新密码或留空清除"
+                      value={secondaryPw} onChange={(e) => setSecondaryPw(e.target.value)} />
+                    <button type="button" className="pc-dialog-opt" data-pc="collab-secondary-pw-confirm" disabled={secondaryBusy || busy} onClick={() => void submitSecondaryPw()}>
+                      确定
+                    </button>
+                    <button type="button" className="pc-dialog-opt" onClick={() => { setSecondaryModalOpen(false); setSecondaryPw(""); }}>
+                      取消
+                    </button>
                   </div>
                 </div>
               ) : null}
@@ -532,11 +599,11 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
           ) : null}
           {iAmCreator ? (
             <div className="pc-collab-actions">
-              {shared.mode === "free"
+              {!isAccount && (shared.mode === "free"
                 ? <button type="button" className="pc-dialog-opt" onClick={() => setFlow({ kind: "password" })}>改项目密码</button>
-                : <button type="button" className="pc-dialog-opt" onClick={() => setFlow({ kind: "list" })}>改名单</button>}
-              <button type="button" className="pc-dialog-opt" onClick={() => setFlow({ kind: "creator-password" })}>改创建者密码</button>
-              <button type="button" className="pc-dialog-opt" onClick={() => setFlow({ kind: "bans" })}>已禁入的设备</button>
+                : <button type="button" className="pc-dialog-opt" onClick={() => setFlow({ kind: "list" })}>改名单</button>)}
+              {!isAccount && <button type="button" className="pc-dialog-opt" onClick={() => setFlow({ kind: "creator-password" })}>改创建者密码</button>}
+              {!isAccount && <button type="button" className="pc-dialog-opt" onClick={() => setFlow({ kind: "bans" })}>已禁入的设备</button>}
               <button type="button" className="pc-dialog-opt" onClick={() => setFlow({ kind: "delete" })}>删除项目</button>
             </div>
           ) : null}

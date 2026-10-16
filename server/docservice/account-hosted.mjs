@@ -67,23 +67,27 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     (memoryStores.get(projectId) ?? memoryStores.set(projectId, createMemoryStore()).get(projectId));
   const authority = createAccountAuthority({ ledger, accountClient, authorityUrl, signingKey, keyId, now, pollMs, onDiagnostic, runHooks,
     getDocBarrier, verifyDocBarrier,
-    async initializeProject({ projectId, initialProject }) {
+    async initializeProject({ projectId, initialProject, initialRev = 1, initialHistory = [] }) {
       const store = storeOf(projectId);
       const body = initialProject ?? null;
       const digest = sha256(JSON.stringify(body));
       const snapshotName = stateBlobName(projectId);
       const existing = store.readBlob(snapshotName);
+      // 搬到云端:项目从本机那一份的历史序号起步(不是 1),快照里的提交摘要只留到这一号为止;
+      // 之后的第一笔(搬迁流程的根替换)由文档服务按 `projectRev + 1` 接着记,序号与摘要都是连着的
+      const rev = Number.isSafeInteger(initialRev) && initialRev >= 1 ? initialRev : 1;
+      const history = Array.isArray(initialHistory) ? initialHistory.filter(h => Number.isSafeInteger(h?.rev) && h.rev >= 1 && h.rev <= rev) : [];
       if (existing !== null) {
         let saved;
         try { saved = JSON.parse(existing); } catch { fail(503, 'initialization-conflict'); }
-        if (saved?.projectId !== projectId || saved?.rev !== 1 || sha256(JSON.stringify(saved.project)) !== digest) fail(503, 'initialization-conflict');
+        if (saved?.projectId !== projectId || saved?.rev !== rev || sha256(JSON.stringify(saved.project)) !== digest) fail(503, 'initialization-conflict');
       } else {
-        store.writeBlob(snapshotName, JSON.stringify({ v: 1, projectId, rev: 1, at: now(), project: body, writers: [], history: [], opIds: [] }));
+        store.writeBlob(snapshotName, JSON.stringify({ v: 1, projectId, rev, at: now(), project: body, writers: [], history, opIds: [] }));
       }
       const stream = `projects/${projectId}`;
       const records = store.read(stream);
-      if (records.length && (records[0].projectId !== projectId || records[0].rev !== 1 || records[0].digest !== digest)) fail(503, 'initialization-conflict');
-      if (!records.length) store.append(stream, { projectId, rev: 1, digest, actor: { userId: 'system:account-create' }, at: now() });
+      if (records.length && (records[0].projectId !== projectId || records[0].rev !== rev || records[0].digest !== digest)) fail(503, 'initialization-conflict');
+      if (!records.length) store.append(stream, { projectId, rev, digest, actor: { userId: 'system:account-create' }, at: now() });
       if (dataDir) {
         const directory = path.join(dataDir, 'tenants', projectId, 'projects');
         for (const file of [path.join(directory, `${fileNameOf(projectId)}.ndjson`), path.join(directory, snapshotName.slice('projects/'.length))]) {
