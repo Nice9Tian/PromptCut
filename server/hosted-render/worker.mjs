@@ -26,14 +26,207 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from 'node:child_process';
 
 export const WORKER_DEFAULTS = Object.freeze({ BACKOFF_MIN_MS: 1000, BACKOFF_MAX_MS: 60_000, STABLE_MS: 60_000, GRACE_MS: 15_000 });
 
 /** 工作进程树的记号所在的环境变量（见文件头「整棵树一起走」） */
 export const TREE_ENV = 'PROMPTCUT_RENDER_TREE';
+/** 工作进程当前绑定的项目 ID 环境变量（隔离工作进程与按项目素材缓存用） */
+export const WORKER_PROJECT_ENV = 'PROMPTCUT_WORKER_PROJECT_ID';
 const TOKEN_RE = /^[0-9a-f]{16,64}$/;
+const HASH_RE = /^[0-9a-f]{64}$/;
+/** 已签发的代理口令/素材票据 → 绑定的 projectId（防止跨项目串用同一票据或口令） */
+const BOUND_TICKET_PROJECTS = new Map();
+
+export function workerProjectKey(projectId) {
+  if (typeof projectId !== 'string' || !projectId.trim()) {
+    throw Object.assign(new Error('projectId required'), { code: 'project-required' });
+  }
+  return createHash('sha256').update(projectId).digest('hex');
+}
+
+export function workerProjectDataDir(baseDataDir, projectId) {
+  if (typeof baseDataDir !== 'string' || !baseDataDir.trim()) {
+    throw Object.assign(new Error('dataDir required'), { code: 'data-dir-required' });
+  }
+  return path.join(path.resolve(baseDataDir), 'projects', workerProjectKey(projectId));
+}
+
+function bindTicketToProject(ticketOrKey, projectId) {
+  if (typeof ticketOrKey !== 'string' || !ticketOrKey) return;
+  const existing = BOUND_TICKET_PROJECTS.get(ticketOrKey);
+  if (existing && existing !== projectId) {
+    throw Object.assign(new Error('worker-ticket-project-mismatch'), { code: 'project-mismatch' });
+  }
+  BOUND_TICKET_PROJECTS.set(ticketOrKey, projectId);
+  if (BOUND_TICKET_PROJECTS.size > 4096) {
+    BOUND_TICKET_PROJECTS.delete(BOUND_TICKET_PROJECTS.keys().next().value);
+  }
+}
+
+/**
+ * 渲染工作进程按项目隔离的素材缓存、代理与环境变量作用域（契约 `three-versions-018-design.md` 素材协议表第 219 行）。
+ *
+ * 确保：
+ *   - 素材拉取缓存、代理口令、票据、临时目录严格绑定当前 `projectId`；
+ *   - 同一内容哈希 `hash` 在项目 A 与项目 B 下物理目录与内存索引完全隔离，项目 B 绝不能命中项目 A 的缓存或沿用项目 A 的票据；
+ *   - 切换项目或销毁时立即作废旧票据并清空临时拉取状态。
+ */
+export function createWorkerProjectScope({
+  dataDir,
+  projectId,
+  brokerUrl = null,
+  brokerKey = null,
+  ticket = null,
+  remoteAssetBase = null,
+} = {}) {
+  const key = workerProjectKey(projectId);
+  const root = workerProjectDataDir(dataDir, projectId);
+  const dirs = Object.freeze({
+    root,
+    assets: path.join(root, 'assets'),
+    pull: path.join(root, 'pull-cache'),
+    data: path.join(root, 'data'),
+    tmp: path.join(root, 'tmp'),
+    viteCache: path.join(root, 'vite-cache'),
+  });
+  for (const d of Object.values(dirs)) {
+    fs.mkdirSync(d, { recursive: true, mode: 0o700 });
+  }
+
+  let active = true;
+  let currentBrokerKey = brokerKey;
+  let currentTicket = ticket;
+  let currentRemoteBase = remoteAssetBase;
+  if (currentBrokerKey) bindTicketToProject(currentBrokerKey, projectId);
+  if (currentTicket) bindTicketToProject(currentTicket, projectId);
+
+  const memoryCache = new Map();
+
+  function assertScope(reqProjectId = projectId, reqTicket = null) {
+    if (!active) throw Object.assign(new Error('worker-scope-retired'), { code: 'project-retired' });
+    if (reqProjectId !== undefined && reqProjectId !== null && reqProjectId !== projectId) {
+      throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+    }
+    if (reqTicket !== null && reqTicket !== undefined) {
+      const ownerProj = BOUND_TICKET_PROJECTS.get(reqTicket);
+      if (ownerProj && ownerProj !== projectId) {
+        throw Object.assign(new Error('worker-ticket-project-mismatch'), { code: 'project-mismatch' });
+      }
+      if (currentTicket && reqTicket !== currentTicket && reqTicket !== currentBrokerKey) {
+        throw Object.assign(new Error('worker-ticket-invalid'), { code: 'ticket-mismatch' });
+      }
+    }
+  }
+
+  function setCredentials({ projectId: reqProjectId = projectId, brokerKey: nextBrokerKey, ticket: nextTicket, remoteAssetBase: nextBase } = {}) {
+    assertScope(reqProjectId);
+    if (nextBrokerKey !== undefined) {
+      if (nextBrokerKey) bindTicketToProject(nextBrokerKey, projectId);
+      currentBrokerKey = nextBrokerKey;
+    }
+    if (nextTicket !== undefined) {
+      if (nextTicket) bindTicketToProject(nextTicket, projectId);
+      currentTicket = nextTicket;
+    }
+    if (nextBase !== undefined) {
+      currentRemoteBase = nextBase;
+    }
+  }
+
+  function putAsset(hash, bytes, { projectId: reqProjectId = projectId, ticket: reqTicket = null } = {}) {
+    assertScope(reqProjectId, reqTicket);
+    if (typeof hash !== 'string' || !HASH_RE.test(hash)) {
+      throw Object.assign(new Error('invalid-asset-hash'), { code: 'invalid-hash' });
+    }
+    const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    const actualHash = createHash('sha256').update(buf).digest('hex');
+    if (actualHash !== hash) {
+      throw Object.assign(new Error('asset-hash-mismatch'), { code: 'hash-mismatch' });
+    }
+    const file = path.join(dirs.assets, hash);
+    const metaFile = `${file}.meta.json`;
+    fs.writeFileSync(file, buf, { mode: 0o600 });
+    fs.writeFileSync(metaFile, JSON.stringify({ projectId, hash, size: buf.length }), { mode: 0o600 });
+    memoryCache.set(hash, Buffer.from(buf));
+    return { projectId, hash, size: buf.length, file };
+  }
+
+  function getAsset(hash, { projectId: reqProjectId = projectId, ticket: reqTicket = null } = {}) {
+    assertScope(reqProjectId, reqTicket);
+    if (typeof hash !== 'string' || !HASH_RE.test(hash)) return null;
+    const file = path.join(dirs.assets, hash);
+    const metaFile = `${file}.meta.json`;
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+      if (!meta || meta.projectId !== projectId || meta.hash !== hash) return null;
+      const buf = fs.readFileSync(file);
+      if (createHash('sha256').update(buf).digest('hex') !== hash) return null;
+      memoryCache.set(hash, buf);
+      return Buffer.from(buf);
+    } catch {
+      memoryCache.delete(hash);
+      return null;
+    }
+  }
+
+  function hasAsset(hash, opts = {}) {
+    return getAsset(hash, opts) !== null;
+  }
+
+  function buildEnv(baseEnv = {}, { projectId: reqProjectId = projectId, brokerKey: overrideBrokerKey } = {}) {
+    assertScope(reqProjectId);
+    const effBrokerKey = overrideBrokerKey ?? currentBrokerKey ?? baseEnv.PROMPTCUT_RENDER_BROKER_KEY ?? null;
+    if (effBrokerKey) bindTicketToProject(effBrokerKey, projectId);
+    if (baseEnv[WORKER_PROJECT_ENV] && baseEnv[WORKER_PROJECT_ENV] !== projectId) {
+      throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+    }
+    const out = { ...baseEnv };
+    // 剥离任何可能跨项目串用的旧票据或全局令牌
+    delete out.PROMPTCUT_CLUSTER_TOKEN;
+    delete out.PROMPTCUT_ASSET_TICKET;
+    delete out.PROMPTCUT_SHARED_CONFIG;
+    out[WORKER_PROJECT_ENV] = projectId;
+    out.PROMPTCUT_DATA_DIR = dirs.data;
+    out.PROMPTCUT_EXPORT_DIR = dirs.root;
+    out.PROMPTCUT_VITE_CACHE_DIR = dirs.viteCache;
+    out.TEMP = dirs.tmp;
+    out.TMP = dirs.tmp;
+    out.TMPDIR = dirs.tmp;
+    if (brokerUrl) out.PROMPTCUT_RENDER_BROKER = brokerUrl;
+    if (effBrokerKey) out.PROMPTCUT_RENDER_BROKER_KEY = effBrokerKey;
+    return out;
+  }
+
+  function retire({ wipeDisk = false } = {}) {
+    active = false;
+    memoryCache.clear();
+    currentBrokerKey = null;
+    currentTicket = null;
+    currentRemoteBase = null;
+    if (wipeDisk) {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
+    }
+  }
+
+  return Object.freeze({
+    projectId,
+    projectKey: key,
+    dirs,
+    get active() { return active; },
+    get brokerKey() { return currentBrokerKey; },
+    get ticket() { return currentTicket; },
+    get remoteAssetBase() { return active ? currentRemoteBase : null; },
+    setCredentials,
+    putAsset,
+    getAsset,
+    hasAsset,
+    buildEnv,
+    retire,
+  });
+}
 
 /**
  * 本机进程表：pid → `{ ppid, tagged }`。`tagged` 表示它的环境里带 `PROMPTCUT_RENDER_TREE=<token>`（只有 Linux 查得到；
@@ -205,6 +398,7 @@ export function createWorker({
   command, log = () => {}, onLine = () => {}, now = Date.now, spawn = nodeSpawn, setTimer = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
   backoffMinMs = WORKER_DEFAULTS.BACKOFF_MIN_MS, backoffMaxMs = WORKER_DEFAULTS.BACKOFF_MAX_MS, stableMs = WORKER_DEFAULTS.STABLE_MS, graceMs = WORKER_DEFAULTS.GRACE_MS,
   platform = process.platform, treeFile = null, restart = true, onExit: exitHook = () => {}, sweep = sweepStaleTree, killer = killTree,
+  projectId: initialProjectId = null, dataDir = null, brokerUrl = null, brokerKey: initialBrokerKey = null, ticket: initialTicket = null,
 } = {}) {
   let child = null;
   let token = '';
@@ -218,6 +412,10 @@ export function createWorker({
   let pendingReason = null;
   let timer = null;
   let ready = false;
+  let currentProjectId = initialProjectId;
+  let scope = currentProjectId && dataDir
+    ? createWorkerProjectScope({ dataDir, projectId: currentProjectId, brokerUrl, brokerKey: initialBrokerKey, ticket: initialTicket })
+    : null;
   const exitWaiters = [];
 
   function pipe(stream) {
@@ -245,7 +443,21 @@ export function createWorker({
         if (swept.length > 0) log('worker.swept-stale', { pids: swept.slice(0, 20), count: swept.length });
       } catch (err) { log('worker.sweep-failed', { message: String(err?.message ?? err) }); }
     }
-    const { cmd, args, env, cwd } = command();
+    const spec = command();
+    const { cmd, args, cwd } = spec;
+    let env = spec.env ?? {};
+    if (currentProjectId) {
+      if (spec.projectId && spec.projectId !== currentProjectId) {
+        throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+      }
+      const bKey = spec.brokerKey ?? env.PROMPTCUT_RENDER_BROKER_KEY ?? null;
+      if (bKey) bindTicketToProject(bKey, currentProjectId);
+      if (scope) {
+        env = scope.buildEnv(env, { projectId: currentProjectId, brokerKey: bKey });
+      } else {
+        env = { ...env, [WORKER_PROJECT_ENV]: currentProjectId };
+      }
+    }
     token = randomBytes(16).toString('hex');
     starts += 1;
     ready = false;
@@ -267,7 +479,7 @@ export function createWorker({
         fs.writeFileSync(treeFile, JSON.stringify({ token, pid: lastPid, marker: args.find((a) => /render-host\.mjs$/.test(String(a))) ?? '', at: now() }));
       } catch (err) { log('worker.tree-file-failed', { message: String(err?.code ?? err?.message ?? err) }); }
     }
-    log('worker.start', { pid: proc.pid ?? null, starts });
+    log('worker.start', { pid: proc.pid ?? null, starts, ...(currentProjectId ? { projectId: currentProjectId } : {}) });
     pipe(proc.stdout);
     pipe(proc.stderr);
     proc.once('error', (err) => { if (child === proc) { log('worker.spawn-failed', { message: String(err?.message ?? err) }); child = null; onExit(null, null, 'spawn-failed'); } });
@@ -301,6 +513,22 @@ export function createWorker({
 
   const exited = () => new Promise((resolve) => { if (!child) resolve(); else exitWaiters.push(resolve); });
 
+  async function stop() {
+    stopping = true;
+    clearTimeout(timer);
+    timer = null;
+    const proc = child;
+    if (!proc) return;
+    pendingReason = 'stop';
+    try {
+      if (platform === 'win32') { if (proc.connected) proc.send({ type: 'shutdown' }); else killAll(proc.pid); }
+      else process.kill(proc.pid, 'SIGTERM');
+    } catch { killAll(proc.pid); }
+    let done = false;
+    await Promise.race([exited().then(() => { done = true; }), new Promise((resolve) => setTimer(resolve, graceMs))]);
+    if (!done) { killAll(proc.pid); await Promise.race([exited(), new Promise((resolve) => setTimer(resolve, 5000))]); }
+  }
+
   return {
     start() { stopping = false; start(); },
     /** 结束整棵树；它会照常被重起。`reason` 记进 `worker.exit`（内存看护用 `'oom'`） */
@@ -311,20 +539,26 @@ export function createWorker({
       return true;
     },
     /** 请它收尾后退出；`graceMs` 内不退就结束整棵树。不再重起 */
-    async stop() {
-      stopping = true;
-      clearTimeout(timer);
-      timer = null;
-      const proc = child;
-      if (!proc) return;
-      pendingReason = 'stop';
-      try {
-        if (platform === 'win32') { if (proc.connected) proc.send({ type: 'shutdown' }); else killAll(proc.pid); }
-        else process.kill(proc.pid, 'SIGTERM');
-      } catch { killAll(proc.pid); }
-      let done = false;
-      await Promise.race([exited().then(() => { done = true; }), new Promise((resolve) => setTimer(resolve, graceMs))]);
-      if (!done) { killAll(proc.pid); await Promise.race([exited(), new Promise((resolve) => setTimer(resolve, 5000))]); }
+    stop,
+    /**
+     * 切换到新项目：先停止当前进程树并退役旧项目的素材缓存/票据作用域，再为新项目建立独立缓存与票据作用域。
+     * 若传入了已绑定到旧项目的 brokerKey 或 ticket，立即抛 `project-mismatch` 拒绝。
+     */
+    async switchProject(nextProjectId, { brokerKey: nextBrokerKey = null, ticket: nextTicket = null, remoteAssetBase = null, wipePreviousDisk = false } = {}) {
+      if (typeof nextProjectId !== 'string' || !nextProjectId.trim()) {
+        throw Object.assign(new Error('projectId required'), { code: 'project-required' });
+      }
+      if (nextBrokerKey) bindTicketToProject(nextBrokerKey, nextProjectId);
+      if (nextTicket) bindTicketToProject(nextTicket, nextProjectId);
+      await stop();
+      if (scope) {
+        scope.retire({ wipeDisk: wipePreviousDisk });
+      }
+      currentProjectId = nextProjectId;
+      scope = dataDir
+        ? createWorkerProjectScope({ dataDir, projectId: nextProjectId, brokerUrl, brokerKey: nextBrokerKey, ticket: nextTicket, remoteAssetBase })
+        : null;
+      return scope;
     },
     /** 进程退出前的最后一步（同步）：把这棵树的进程全部结束。管理进程自己要没了、来不及走 `stop()` 时用 */
     killSync() { if (child?.pid || (platform !== 'win32' && token)) killAll(child?.pid ?? null, { sync: true }); },
@@ -333,6 +567,8 @@ export function createWorker({
     get pid() { return child?.pid ?? null; },
     get running() { return !!child; },
     get ready() { return ready; },
-    status: () => ({ pid: child?.pid ?? null, running: !!child, ready, starts, exits, lastExit, startedAt }),
+    get projectId() { return currentProjectId; },
+    get assetScope() { return scope; },
+    status: () => ({ pid: child?.pid ?? null, running: !!child, ready, starts, exits, lastExit, startedAt, projectId: currentProjectId }),
   };
 }

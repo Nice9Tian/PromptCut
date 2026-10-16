@@ -15,7 +15,8 @@ import { createUploadQueue } from '../upload-queue.mjs';
 import { projectMediaPull } from '../media-pull.mjs';
 import { createMediaStamper } from '../media-stamp.mjs';
 import { createTierManager } from '../media-tiers.mjs';
-import { StreamStore, StreamProducer, handleStreamRequest } from '../frame-stream.mjs';
+import { StreamStore, StreamProducer, handleStreamRequest, planStreams, queueStreamOf, segmentSignature } from '../frame-stream.mjs';
+import { createWorker, createWorkerProjectScope, WORKER_PROJECT_ENV } from '../hosted-render/worker.mjs';
 import { startAssetProjectFixture } from './fixtures/asset-project-service.mjs';
 
 const hash = 'a'.repeat(64), bytes = Buffer.from('owned-payload');
@@ -122,4 +123,216 @@ test('frame stream真实HTTP清单/初始化/分段按项目、错项目worker�
   const producer = new StreamProducer({ root: dir }, { ownership: aOwner, env: {} }); await assert.rejects(producer.adoptionNeeds({ projectId: 'B' }), /project-mismatch/); await assert.rejects(producer.adoptSegmentsNow({ projectId: 'B' }, {}), /project-mismatch/);
   aOwner.deny(); await assert.rejects(a.save({ streamKey: hash }), /access-revoked/); await assert.rejects(producer.adoptionNeeds({ projectId: 'A' }), /access-revoked/);
   await fixture.revoke('A'); const denied = await fetch(`http://127.0.0.1:${server.address().port}/stream/${hash}/manifest`, { headers: { authorization: 'Bearer A-rw' } }); assert.equal(denied.status, 403); await denied.arrayBuffer();
+});
+
+test('frame-stream 跨项目同卡片参数衍生流键隔离，且项目 B 绝不能凭相同参数或流键读到项目 A 轨道流或跳过授权', async t => {
+  const dir = await tmp(t), fixture = await startAssetProjectFixture(); t.after(() => fixture.close());
+  const cardEntry = {
+    key: 'entry-same',
+    project: {
+      fps: 30,
+      width: 1920,
+      height: 1080,
+      duration: 2,
+      tracks: [{ id: 't1', clips: [{ id: 'c1', cardId: 'heavy-card', start: 0, end: 2 }] }],
+    },
+    cardPlan: [{
+      clipId: 'c1',
+      key: 'card-key-same',
+      streamMemberKey: 'member-key-same',
+      count: 60,
+      sampling: { firstFrame: 0, fps: { numerator: '30', denominator: '1' }, phase: { numerator: '0', denominator: '1' } },
+      capabilities: { heavy: true },
+    }],
+  };
+
+  // 1) 相同卡片参数 + 相同 envFingerprint 在项目 A 与项目 B 下衍生出不同的 contentKey、streamKey 与分段签名
+  const specsA = planStreams(cardEntry, { envFingerprint: 'env-1', projectId: 'A' });
+  const specsB = planStreams(cardEntry, { envFingerprint: 'env-1', projectId: 'B' });
+  assert.equal(specsA.length, 1);
+  assert.equal(specsB.length, 1);
+  assert.equal(specsA[0].projectId, 'A');
+  assert.equal(specsB[0].projectId, 'B');
+  assert.notEqual(specsA[0].contentKey, specsB[0].contentKey, '不同项目的同参数卡片衍生 contentKey 必须隔离');
+  assert.notEqual(specsA[0].streamKey, specsB[0].streamKey, '不同项目的同参数卡片衍生 streamKey 必须隔离');
+  assert.equal(queueStreamOf(specsA[0]).projectId, 'A');
+  assert.notEqual(
+    segmentSignature({ streamKey: specsA[0].streamKey, segment: 0, stride: 1, encoder: 'libx264', rect: specsA[0].bound, projectId: 'A' }),
+    segmentSignature({ streamKey: specsA[0].streamKey, segment: 0, stride: 1, encoder: 'libx264', rect: specsA[0].bound, projectId: 'B' }),
+  );
+
+  // 2) StreamProducer 严格绑定所属项目，拒绝跨项目 entry / spec 的 update、queueState、produceRange、produceExportRange
+  const aOwner = owner('A'), bOwner = owner('B');
+  const makePipeline = () => ({
+    root: dir,
+    envFingerprint: 'env-1',
+    prerenderPicked: () => true,
+    ready: { stageByKey() {}, publish() {} },
+  });
+  const prodA = new StreamProducer(makePipeline(), { ownership: aOwner, projectAccess: fixture.projectAccess, env: {} });
+  const prodB = new StreamProducer(makePipeline(), { ownership: bOwner, projectAccess: fixture.projectAccess, env: {} });
+  prodA.attachRoute();
+  prodB.attachRoute();
+  t.after(async () => { await prodA.close(); await prodB.close(); });
+
+  const initId = 'd'.repeat(16), segFile = `0-${'e'.repeat(16)}.m4s`;
+  const keyA = specsA[0].streamKey;
+  await prodA.store.save({
+    version: 4,
+    streamKey: keyA,
+    projectId: 'A',
+    kind: 'card',
+    plane: 'local',
+    clipIds: ['c1'],
+    fps: 30,
+    originFrame: 0,
+    bound: specsA[0].bound,
+    inits: { [initId]: { codec: 'avc1.64001f', width: 640, height: 360, rect: specsA[0].bound } },
+    segments: { 0: { init: initId, file: segFile, stride: 1, samples: 15 } },
+  });
+  await fs.writeFile(prodA.store.initFile(keyA, initId), bytes);
+  await fs.writeFile(prodA.store.segFile(keyA, segFile), bytes);
+
+  // 项目 B 尝试用项目 A 的 entry 或 spec 调用生产者各入口一律抛 project-mismatch
+  await assert.rejects(prodB.update({ ...cardEntry, projectId: 'A' }), /project-mismatch/);
+  await assert.rejects(prodB.queueState(cardEntry, specsA[0]), /project-mismatch/);
+  await assert.rejects(prodB.produceRange(cardEntry, specsA[0], { from: 0, to: 0 }), /project-mismatch/);
+  await assert.rejects(prodB.produceExportRange(cardEntry, { ...specsA[0], exportResultKey: keyA }, { from: 0, to: 0 }, { onFrame: () => {} }), /project-mismatch/);
+
+  // 即使项目 B 直接向自己的流库或 HTTP 路由请求项目 A 的 streamKey，也拿不到任何清单或分段
+  assert.equal(await prodB.store.load(keyA), null);
+  const server = http.createServer((req, res) => {
+    const target = req.headers['x-target-store'] === 'A' ? prodA : prodB;
+    if (!target.handle(req, res, req.url)) { res.statusCode = 404; res.end(); }
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  // 项目 B 票据打项目 B 的 store（404）与打项目 A 的 store（403 project-mismatch）均被拒
+  const bOnB = await fetch(`${base}/stream/${keyA}/manifest`, { headers: { authorization: 'Bearer B-rw', 'x-target-store': 'B' } });
+  assert.equal(bOnB.status, 404);
+  await bOnB.arrayBuffer();
+
+  const bOnA = await fetch(`${base}/stream/${keyA}/manifest`, { headers: { authorization: 'Bearer B-rw', 'x-target-store': 'A' } });
+  assert.equal(bOnA.status, 403, '项目 B 票据访问项目 A 流读口必须被 403 拒绝');
+  await bOnA.arrayBuffer();
+
+  const aOnA = await fetch(`${base}/stream/${keyA}/seg/${segFile}`, { headers: { authorization: 'Bearer A-rw', 'x-target-store': 'A' } });
+  assert.equal(aOnA.status, 200);
+  assert.deepEqual(Buffer.from(await aOnA.arrayBuffer()), bytes);
+});
+
+test('hosted-render/worker 跨项目同哈希素材缓存、代理口令与环境变量隔离，切换项目绝不串用', async t => {
+  const dir = await tmp(t);
+  const sameBytes = Buffer.from('identical-media-bytes-across-projects-A-and-B');
+  const sameHash = sha(sameBytes);
+
+  const scopeA = createWorkerProjectScope({
+    dataDir: dir,
+    projectId: 'proj_A',
+    brokerUrl: 'http://127.0.0.1:5399',
+    brokerKey: 'broker-key-proj-A',
+    ticket: 'asset-ticket-proj-A',
+    remoteAssetBase: 'http://127.0.0.1:5788/api/asset',
+  });
+  const scopeB = createWorkerProjectScope({
+    dataDir: dir,
+    projectId: 'proj_B',
+    brokerUrl: 'http://127.0.0.1:5399',
+    brokerKey: 'broker-key-proj-B',
+    ticket: 'asset-ticket-proj-B',
+    remoteAssetBase: 'http://127.0.0.1:5788/api/asset',
+  });
+
+  // 1) 物理目录完全隔离，且项目 A 写入的同哈希素材缓存绝不在项目 B 命中
+  assert.notEqual(scopeA.dirs.assets, scopeB.dirs.assets);
+  scopeA.putAsset(sameHash, sameBytes, { projectId: 'proj_A', ticket: 'asset-ticket-proj-A' });
+  assert.equal(scopeA.hasAsset(sameHash), true);
+  assert.deepEqual(scopeA.getAsset(sameHash), sameBytes);
+  assert.equal(scopeB.hasAsset(sameHash), false, '项目 B 绝不能命中项目 A 的同哈希素材缓存');
+  assert.equal(scopeB.getAsset(sameHash), null);
+
+  // 2) 跨项目使用票据、代理口令或伪造磁盘缓存元数据一律被拒
+  assert.throws(() => scopeB.getAsset(sameHash, { projectId: 'proj_A' }), /project-mismatch/);
+  assert.throws(() => scopeB.getAsset(sameHash, { ticket: 'asset-ticket-proj-A' }), /project-mismatch/);
+  assert.throws(() => scopeB.putAsset(sameHash, sameBytes, { ticket: 'asset-ticket-proj-A' }), /project-mismatch/);
+  assert.throws(() => scopeB.setCredentials({ brokerKey: 'broker-key-proj-A' }), /project-mismatch/);
+  assert.throws(() => scopeB.setCredentials({ ticket: 'asset-ticket-proj-A' }), /project-mismatch/);
+
+  // 即使把项目 A 的缓存文件与元数据硬拷进项目 B 的目录，因元数据 projectId 为 proj_A 也被拒绝读取
+  await fs.copyFile(path.join(scopeA.dirs.assets, sameHash), path.join(scopeB.dirs.assets, sameHash));
+  await fs.copyFile(path.join(scopeA.dirs.assets, `${sameHash}.meta.json`), path.join(scopeB.dirs.assets, `${sameHash}.meta.json`));
+  assert.equal(scopeB.getAsset(sameHash), null, '带项目 A 归属标记的缓存文件在项目 B 下被拒读');
+
+  // 项目 B 用自己的票据独立入库相同字节后，项目 B 正常可读
+  scopeB.putAsset(sameHash, sameBytes, { projectId: 'proj_B', ticket: 'asset-ticket-proj-B' });
+  assert.deepEqual(scopeB.getAsset(sameHash), sameBytes);
+
+  // 3) createWorker 环境变量绑定与 switchProject 跨项目切换隔离
+  const spawnedEnvs = [];
+  let currentCmdProject = 'proj_A';
+  let currentCmdBrokerKey = 'broker-key-worker-A';
+  const fakeSpawn = (_cmd, _args, opts) => {
+    spawnedEnvs.push(opts.env);
+    const fakeChild = Object.assign(new Readable({ read() {} }), {
+      pid: 42000 + spawnedEnvs.length,
+      stdout: new Readable({ read() {} }),
+      stderr: new Readable({ read() {} }),
+      connected: true,
+      send() { setImmediate(() => fakeChild.emit('exit', 0, null)); },
+    });
+    return fakeChild;
+  };
+
+  const worker = createWorker({
+    projectId: 'proj_A',
+    dataDir: dir,
+    brokerUrl: 'http://127.0.0.1:5399',
+    brokerKey: currentCmdBrokerKey,
+    spawn: fakeSpawn,
+    command: () => ({
+      cmd: process.execPath,
+      args: ['render-host.mjs'],
+      projectId: currentCmdProject,
+      brokerKey: currentCmdBrokerKey,
+      env: { PROMPTCUT_CLUSTER_TOKEN: 'secret-cluster', PROMPTCUT_ASSET_TICKET: 'stale-ticket' },
+    }),
+  });
+
+  worker.start();
+  assert.equal(spawnedEnvs.length, 1);
+  assert.equal(spawnedEnvs[0][WORKER_PROJECT_ENV], 'proj_A');
+  assert.equal(spawnedEnvs[0].PROMPTCUT_RENDER_BROKER_KEY, 'broker-key-worker-A');
+  assert.equal(spawnedEnvs[0].PROMPTCUT_CLUSTER_TOKEN, undefined, '集群令牌被剥离');
+  assert.equal(spawnedEnvs[0].PROMPTCUT_ASSET_TICKET, undefined, '遗留票据被剥离');
+  const prevScopeA = worker.assetScope;
+  prevScopeA.putAsset(sameHash, sameBytes);
+  assert.equal(prevScopeA.hasAsset(sameHash), true);
+
+  // 切换到项目 B 时若试图沿用项目 A 的 brokerKey 立即报错拒绝
+  await assert.rejects(
+    worker.switchProject('proj_B', { brokerKey: 'broker-key-worker-A' }),
+    /project-mismatch/,
+  );
+
+  // 用项目 B 专属的新 brokerKey 切换后，旧作用域退役、新作用域缓存为空且目录/环境变量严格指向 proj_B
+  currentCmdProject = 'proj_B';
+  currentCmdBrokerKey = 'broker-key-worker-B';
+  const nextScopeB = await worker.switchProject('proj_B', {
+    brokerKey: currentCmdBrokerKey,
+    ticket: 'ticket-worker-B',
+    wipePreviousDisk: true,
+  });
+  assert.equal(prevScopeA.active, false, '切换项目后旧项目的素材缓存作用域已退役');
+  assert.throws(() => prevScopeA.getAsset(sameHash), /worker-scope-retired|project-retired/);
+  assert.equal(worker.projectId, 'proj_B');
+  assert.equal(nextScopeB.projectId, 'proj_B');
+
+  worker.start();
+  assert.equal(spawnedEnvs.length, 2);
+  assert.equal(spawnedEnvs[1][WORKER_PROJECT_ENV], 'proj_B');
+  assert.equal(spawnedEnvs[1].PROMPTCUT_RENDER_BROKER_KEY, 'broker-key-worker-B');
+  assert.notEqual(spawnedEnvs[1].PROMPTCUT_DATA_DIR, spawnedEnvs[0].PROMPTCUT_DATA_DIR);
+  await worker.stop();
 });

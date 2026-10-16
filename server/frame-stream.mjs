@@ -495,11 +495,19 @@ export function streamNeedsReplay(controls) {
  * `kind: 'below'` 的流(`belowStreamSpec`),排在单卡流和组流后面;它们不参加组流合并,但占解码器预算。
  * 传 `false` 时结果与没有这种流时逐项相同。
  */
-export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint, below = belowStreamsEnabled() } = {}) {
+export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint, below = belowStreamsEnabled(), projectId = null, projectScoped = false } = {}) {
   if (typeof envFingerprint !== 'string' || !envFingerprint) return [];
   const project = entry?.project;
   const plan = entry?.cardPlan;
   if (!project || !Array.isArray(plan) || !plan.length) return [];
+  const scopeProjectId = typeof projectId === 'string' && projectId
+    ? projectId
+    : (projectScoped && typeof entry?.projectId === 'string' && entry.projectId ? entry.projectId : null);
+  if (scopeProjectId && typeof entry?.projectId === 'string' && entry.projectId && entry.projectId !== scopeProjectId) {
+    throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+  }
+  const effectiveCodeVersion = scopeProjectId ? `${codeVersion}|project:${scopeProjectId}` : codeVersion;
+  const projectTag = scopeProjectId ? { projectId: scopeProjectId } : {};
   const fps = Number(project.fps) || 30;
   const stage = { width: Number(project.width) || 1920, height: Number(project.height) || 1080, camera3dFov: project.camera3dFov };
   const total = Math.max(1, Math.floor((Number(project.duration) || 0) * fps));
@@ -544,10 +552,10 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     const placement = localPlacement(m.clip, stage);
     // 成员键取不带生成快照的代码指纹的那一份内容键(`streamMemberKey`:改生成快照的代码不该让流跟着作废);
     // `??` 后面的回退只为没有这个字段的旧形状输入(照旧内容键,再照旧 `snapshotKey || key`)
-    const contentKey = cardStreamIdentity({ kind: 'card', fps, stage, codeVersion,
+    const contentKey = cardStreamIdentity({ kind: 'card', fps, stage, codeVersion: effectiveCodeVersion,
       members: [{ key: m.control.streamMemberKey ?? m.control.contentKey ?? (m.control.snapshotKey || m.control.key), sampling: m.control.sampling, count: m.control.count }] });
     const streamKey = resultKeyOf(contentKey, envFingerprint);
-    return { ...base, streamKey, contentKey, envFingerprint, kind: 'card', plane: 'local', offset: placement.offset, bound: placement.bound, box: placement.box, members: [m.control] };
+    return { ...base, ...projectTag, streamKey, contentKey, envFingerprint, kind: 'card', plane: 'local', offset: placement.offset, bound: placement.bound, box: placement.box, members: [m.control] };
   };
   for (const g of grouped) {
     const members = g.clipIds.map(id => byClip.get(id));
@@ -565,10 +573,10 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       specs.push(cardSpec(members[0], base));
     } else {
       const view = { x: 0, y: 0, w: stage.width, h: stage.height };
-      const contentKey = cardStreamIdentity({ kind: 'group', fps, stage, codeVersion,
+      const contentKey = cardStreamIdentity({ kind: 'group', fps, stage, codeVersion: effectiveCodeVersion,
         members: members.map(m => ({ key: m.control.cacheContentKey ?? m.control.key, sampling: m.control.sampling, count: m.control.count })) });
       const streamKey = resultKeyOf(contentKey, envFingerprint);
-      specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'group', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view), members: members.map(m => m.control) });
+      specs.push({ ...base, ...projectTag, streamKey, contentKey, envFingerprint, kind: 'group', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view), members: members.map(m => m.control) });
     }
   }
   // 单独成流的两类卡:形状同单卡流,另带 `solo`(哪一类;切分据此不出浏览器那一份)。源依赖卡的回放另看它的输入链
@@ -582,7 +590,9 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       replay: m.solo === 'source' ? sourceNeedsReplay(project, m.clip, m.control) : streamNeedsReplay([m.control]),
     }), solo: m.solo });
   }
-  if (belows.length) specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion, envFingerprint }));
+  if (belows.length) {
+    specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion: effectiveCodeVersion, envFingerprint }).map(s => ({ ...s, ...projectTag })));
+  }
   return relockStreams(specs, entry?.streamLocks);
 }
 
@@ -614,6 +624,7 @@ export function queueStreamOf(spec) {
     kind: spec.kind, plane: spec.plane, clipIds: [...(spec.clipIds ?? [])], fps: spec.fps,
     bound: spec.bound ? { ...spec.bound } : null, offset: spec.offset ? { ...spec.offset } : null,
     firstFrame: spec.firstFrame, lastFrame: spec.lastFrame, total: spec.total,
+    ...(spec.projectId ? { projectId: spec.projectId } : {}),
     // 依赖下层的流另带算进键里的下层(切分据此知道这条流要整场景的下层和素材);别的流不带这一项,形状与原来相同
     ...(spec.kind === 'below' ? { belowClipIds: [...(spec.belowClipIds ?? [])] } : {}),
     // 单独成流的两类卡(`soloStreamKind`)带上是哪一类:切分据此不出浏览器那一份
@@ -841,8 +852,8 @@ export function encoderParamsHash(encoder) {
  * 分段签名 = 流签名 + 分段号 + stride + 编码器名 + 编码参数哈希(G2),再加上矩形(变体)。
  * 分段号是这条流自己的(从它的第一帧起数),签名里没有项目帧号:流在时间轴上的位置只经流键进来。
  */
-export function segmentSignature({ streamKey, segment, stride, encoder, rect }) {
-  return sha(JSON.stringify({ streamKey, segment, stride, encoder, params: encoderParamsHash(encoder), rect }), 32);
+export function segmentSignature({ streamKey, segment, stride, encoder, rect, projectId = null }) {
+  return sha(JSON.stringify({ streamKey, segment, stride, encoder, params: encoderParamsHash(encoder), rect, ...(projectId ? { projectId } : {}) }), 32);
 }
 
 /**
@@ -910,14 +921,16 @@ export function anchorManifest(manifest, spec) {
  *   - **同时存活的分段编码器 ≤ 2 × streamPool**(双缓冲)。
  */
 export class StreamProducer {
-  constructor(pipeline, { env = process.env, ownership = null, projectAccess = null } = {}) {
+  constructor(pipeline, { env = process.env, ownership = null, projectAccess = null, projectId = null } = {}) {
     this.ownership = ownership;
+    this.projectId = ownership?.projectId ?? projectId ?? null;
     this.pipeline = pipeline;
     this.enabled = streamsEnabled(env);
     this.budget = streamDecoderBudget(env);
     this.poolLimit = streamPoolLimit(env);
     this.pool = this.poolLimit.fixed ?? STREAM_POOL_DEFAULT;
-    this.store = new StreamStore(path.join(pipeline.root, 'streams'), { ownership, projectAccess });
+    const storeOwnership = ownership ?? (this.projectId ? { projectId: this.projectId, assert: async () => {} } : null);
+    this.store = new StreamStore(path.join(pipeline.root, 'streams'), { ownership: storeOwnership, projectAccess });
     /** 画布卡的流走不走画布直取:`auto`(缺省)/ `always`(过了实测就走,不管快慢)/ `off`;见 `directOf` */
     this.direct = directCaptureMode(env);
     this.streams = new Map();
@@ -940,6 +953,17 @@ export class StreamProducer {
      * 这道闸保证只接了一半时行为和 R7 一样。
      */
     this.routeAttached = false;
+  }
+
+  async assertProjectScope(entryOrObj, spec = null) {
+    await this.ownership?.assert();
+    if (!this.projectId) return;
+    if (entryOrObj?.projectId && entryOrObj.projectId !== this.projectId) {
+      throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+    }
+    if (spec?.projectId && spec.projectId !== this.projectId) {
+      throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
+    }
   }
 
   /** 读口接上了:从现在起生产、发层(见 `routeAttached`) */
@@ -1038,16 +1062,20 @@ export class StreamProducer {
    * 或只是拉来的 `adoptedOnly`)就按 `spec` 建一个 `queueOnly` 的:有隔离工程、能发层,但自动生产不碰它。
    */
   async queueState(entry, spec) {
-    const usable = state => state && !state.adoptedOnly;
+    await this.assertProjectScope(entry, spec);
+    const usable = state => state && !state.adoptedOnly && (!this.projectId || !state.projectId || state.projectId === this.projectId);
     let state = this.streams.get(spec.streamKey);
     if (!usable(state)) {
-      const manifest = state?.manifest ?? (await this.store.load(spec.streamKey)) ?? this.freshManifest(spec);
+      const loaded = await this.store.load(spec.streamKey);
+      const validLoaded = loaded && (!this.projectId || !loaded.projectId || loaded.projectId === this.projectId) ? loaded : null;
+      const manifest = (state && (!this.projectId || !state.projectId || state.projectId === this.projectId) ? state.manifest : null) ?? validLoaded ?? this.freshManifest(spec);
       state = this.streams.get(spec.streamKey);
       if (!usable(state)) {
         const base = state ?? { reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set() };
         delete base.adoptedOnly;
         base.queueOnly = true;
-        base.spec = spec;
+        if (this.projectId) base.projectId = this.projectId;
+        base.spec = this.projectId && !spec.projectId ? { ...spec, projectId: this.projectId } : spec;
         base.manifest = anchorManifest(base.manifest ?? manifest, spec);
         base.aliases ||= new Set();
         base.generation = this.generation;
@@ -1069,6 +1097,7 @@ export class StreamProducer {
    * `progress(done)`:这一段里已经就绪的帧数(每个分段按它实际的帧数,流的末段可以不满 15 帧)。回 `{ produced, skipped }`。
    */
   async produceRange(entry, spec, range, { signal, progress, density = null } = {}) {
+    await this.assertProjectScope(entry, spec);
     const sparse = density === 'sparse';
     const stride = sparse ? SPARSE_STRIDE : 1;
     /** 这一段还要不要产:稀疏任务只补一张都没有的(和签名对不上的),满密度任务补到满密度为止 */
@@ -1136,14 +1165,15 @@ export class StreamProducer {
    * 不会和同一张卡的轨道流接上同一份租约。一个分段连续 `QUEUE_SEGMENT_ATTEMPTS` 次没取成抛可重试的错误。
    */
   async produceExportRange(entry, spec, range, { signal, progress, onFrame } = {}) {
+    await this.assertProjectScope(entry, spec);
     const cancelled = () => Object.assign(new Error('Queue task cancelled'), { cancelled: true });
     if (this.closed) throw cancelled();
     if (typeof onFrame !== 'function') throw new Error('produceExportRange 要 onFrame');
-    const key = spec.exportResultKey;
+    const key = this.projectId ? `${this.projectId}:${spec.exportResultKey}` : spec.exportResultKey;
     this.exportStates ||= new Map();
     let state = this.exportStates.get(key);
     if (!state) {
-      const own = { ...spec, streamKey: key };
+      const own = { ...spec, streamKey: key, ...(this.projectId ? { projectId: this.projectId } : {}) };
       state = { spec: own, manifest: this.freshManifest(own), isolated: isolatedStreamProject(entry.project, spec), reserved: new Set(), failures: new Map(), exportOnly: true };
       this.exportStates.set(key, state);
       while (this.exportStates.size > 16) this.exportStates.delete(this.exportStates.keys().next().value);
@@ -1189,6 +1219,7 @@ export class StreamProducer {
    */
   async update(entry) {
     if (!this.enabled || this.closed || !entry) return [];
+    await this.assertProjectScope(entry);
     if (!this.routeAttached) { this.pendingEntry = entry; return []; }
     const specs = planStreams(entry, {
       // c10a 契约第 17 节:补渲进集合的片段不产流(`streamPicked`);旧的管线替身没有它时退回 `prerenderPicked`
@@ -1197,6 +1228,7 @@ export class StreamProducer {
       codeVersion: `${STREAM_CODE_VERSION}:${this.pipeline.captureCode?.() || ''}`,
       // M4:流键乘本进程预渲染 Chrome 的环境指纹(还没定下来时为 null,planStreams 回 [])
       envFingerprint: this.pipeline.envFingerprint,
+      ...(this.projectId ? { projectId: this.projectId } : {}),
     });
     const generation = ++this.generation;
     // 先把要读盘的清单都读回来(这一段会让出事件循环),再**同步**改状态:两次 update 交错时,
@@ -1220,6 +1252,7 @@ export class StreamProducer {
       delete state.adoptedOnly;
       // X1:只为队列任务建的流进了这一版的计划:归不归队列改由这一版 entry 的模式定(`queueOwned`)
       delete state.queueOnly;
+      if (this.projectId) state.projectId = this.projectId;
       state.spec = spec;
       state.aliases = new Set();
       state.manifest = anchorManifest(manifest, spec);
@@ -1241,7 +1274,7 @@ export class StreamProducer {
 
   freshManifest(spec) {
     // `lastFrame`:这条流自己的最后一帧。推送时清单 header 带上它,写内容库时按它截桶(`src/render/streamBuckets.mjs`)
-    return { version: STREAM_CODE_VERSION, streamKey: spec.streamKey, kind: spec.kind, plane: spec.plane, clipIds: spec.clipIds,
+    return { version: STREAM_CODE_VERSION, streamKey: spec.streamKey, ...(this.projectId ? { projectId: this.projectId } : {}), kind: spec.kind, plane: spec.plane, clipIds: spec.clipIds,
       fps: spec.fps, originFrame: spec.originFrame, ...(Number.isInteger(spec.lastFrame) ? { lastFrame: spec.lastFrame } : {}),
       bound: spec.bound, offset: spec.offset, tight: null, inits: {}, segments: {} };
   }
