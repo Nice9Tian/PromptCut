@@ -24,6 +24,36 @@
  * 数字〔裁〕见 `SANDBOX_LIMITS`。
  */
 import { randomUUID } from "node:crypto";
+import vm from "node:vm";
+
+/**
+ * 仅做 V8 语法解析（绝不执行），提取语法错误在函数体 `code` 内的精确行号与列号（1-based）。
+ * @param {string} code
+ * @returns {{ line: number, column: number, message: string } | null}
+ */
+export function syntaxLocationOf(code) {
+  if (typeof code !== "string") return null;
+  try {
+    // 仅编译语法树，不调 runInContext / runInNewContext，一行业务代码都不会执行
+    new vm.Script(`(async function(input) {\n${code}\n})`, { filename: "<measure>" });
+    return null;
+  } catch (err) {
+    const stack = String(err?.stack || "");
+    const lines = stack.split(/\r?\n/);
+    const locMatch = /^<measure>:(\d+)/.exec(lines[0] || "");
+    const rawLine = locMatch ? Number(locMatch[1]) : 2;
+    const line = Math.max(1, rawLine - 1);
+    let column = 1;
+    for (let i = 1; i < Math.min(lines.length, 6); i++) {
+      const caret = lines[i].indexOf("^");
+      if (caret >= 0) {
+        column = caret + 1;
+        break;
+      }
+    }
+    return { line, column, message: `${err?.name || "SyntaxError"}: ${err?.message || "语法错误"}` };
+  }
+}
 
 export const SANDBOX_LIMITS = Object.freeze({
   /** 代码的时限:缺省 / 最长 */
@@ -223,7 +253,8 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
     idleTimer.unref?.();
   }
 
-  async function runOnce({ code, channels, sampleRate, duration, meta, timeoutMs }) {
+  async function runOnce({ code, channels, sampleRate, duration, meta, timeoutMs, signal }) {
+    if (signal?.aborted) throw new SandboxError("cancelled", "自定义测量已取消");
     const browser = await ensureBrowser();
     const frames = channels[0]?.length ?? 0;
     const pcm = Buffer.alloc(frames * channels.length * 4);
@@ -238,6 +269,7 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
     const crash = new Promise((r) => { crashed = r; });
     let watchdog = null;
     let heartbeat = null;
+    let onAbort = null;
     try {
       const page = await ctx.newPage();
       page.on("error", (e) => crashed(e));
@@ -258,7 +290,7 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
         req.abort("blockedbyclient").catch(() => {});
       });
       await page.goto(`${SANDBOX_ORIGIN}/`, { waitUntil: "load", timeout: 15_000 });
-      const verdict = await Promise.race([
+      const races = [
         page.evaluate((o) => window.__runMeasure(o), {
           token, chunks, code, frames, numberOfChannels: channels.length, sampleRate, duration, meta: meta ?? {},
           timeoutMs, maxTimeoutMs: limits.maxTimeoutMs, maxResultBytes: limits.maxResultBytes, heapMb: limits.heapMb,
@@ -287,10 +319,18 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
           watchdog = setTimeout(() => reject(new SandboxError("hung", `沙箱在 ${(timeoutMs + limits.graceMs) / 1000} 秒内没有回话,已重启`)), timeoutMs + limits.graceMs + chunks * 1000);
           watchdog.unref?.();
         }),
-      ]);
+      ];
+      if (signal) {
+        races.push(new Promise((_, reject) => {
+          onAbort = () => reject(new SandboxError("cancelled", "自定义测量已取消"));
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
+        }));
+      }
+      const verdict = await Promise.race(races);
       return { verdict, blocked };
     } catch (e) {
-      // 页面 / 浏览器已经不对劲(崩溃、没回话、协议断了):整个 Chrome 重开,只丢这一次
+      // 页面 / 浏览器已经不对劲(崩溃、没回话、协议断了、被取消):整个 Chrome 重开,只丢这一次
       resetBrowser();
       if (e instanceof SandboxError) throw e;
       const msg = String(e?.message || e);
@@ -299,6 +339,7 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
       }
       throw new SandboxError("internal", "沙箱内部出错:" + msg.slice(0, 300));
     } finally {
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
       clearTimeout(watchdog);
       clearInterval(heartbeat);
       let t;
@@ -308,10 +349,11 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
   }
 
   /**
-   * 跑一段测量代码。回 `{ ok: true, value, elapsedMs }` 或 `{ ok: false, kind, error }`,不抛错。
-   * kind:syntax | exception | timeout | unserializable | too-large | crashed | hung | no-chrome | busy | invalid | internal
+   * 跑一段测量代码。回 `{ ok: true, value, elapsedMs }` 或 `{ ok: false, kind, error, line?, column? }`,不抛错。
+   * kind:syntax | exception | timeout | unserializable | too-large | crashed | hung | no-chrome | busy | invalid | cancelled | internal
    */
-  async function run({ code, channels, sampleRate, duration, meta, timeoutMs }) {
+  async function run({ code, channels, sampleRate, duration, meta, timeoutMs, signal }) {
+    if (signal?.aborted) return { ok: false, kind: "cancelled", error: "自定义测量已取消" };
     if (typeof code !== "string" || !code.trim()) return { ok: false, kind: "invalid", error: "code 是空的:写一个函数体,用 return 返回结果" };
     if (code.length > limits.maxCodeChars) return { ok: false, kind: "invalid", error: `code 有 ${code.length} 个字符,超过上限 ${limits.maxCodeChars}` };
     if (!Array.isArray(channels) || !channels.length || !channels.every((c) => c instanceof Float32Array)) {
@@ -323,10 +365,28 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
     clearTimeout(idleTimer);
     const job = chain.then(async () => {
       try {
-        const { verdict, blocked } = await runOnce({ code, channels, sampleRate, duration, meta, timeoutMs: limit });
+        if (signal?.aborted) return { ok: false, kind: "cancelled", error: "自定义测量已取消" };
+        const { verdict, blocked } = await runOnce({ code, channels, sampleRate, duration, meta, timeoutMs: limit, signal });
         const netNote = blocked.length ? { blockedRequests: blocked.slice(0, 5) } : null;
         if (!verdict || typeof verdict !== "object") return { ok: false, kind: "internal", error: "沙箱回了意外的结果" };
-        if (!verdict.ok) return { ok: false, kind: verdict.kind || "exception", error: String(verdict.error || "沙箱里出错"), ...netNote };
+        if (!verdict.ok) {
+          const kind = verdict.kind || "exception";
+          let error = String(verdict.error || "沙箱里出错");
+          let loc = null;
+          if (kind === "syntax") {
+            loc = syntaxLocationOf(code);
+            if (loc && !/第 \d+ 行/.test(error)) {
+              error = `${error}(第 ${loc.line} 行第 ${loc.column} 列)`;
+            }
+          }
+          return {
+            ok: false,
+            kind,
+            error,
+            ...(loc ? { line: loc.line, column: loc.column } : null),
+            ...netNote,
+          };
+        }
         const json = String(verdict.json);
         if (Buffer.byteLength(json, "utf8") > limits.maxResultBytes) {
           return { ok: false, kind: "too-large", error: `返回值超过上限 ${limits.maxResultBytes} 字节` };
@@ -354,7 +414,15 @@ export function createAudioSandbox({ launch = defaultLaunch, limits: override = 
       const p = browserP;
       browserP = null;
       const b = await p?.catch(() => null);
-      if (b) await Promise.race([b.close().catch(() => {}), sleep(5_000)]).then(() => killBrowser(b));
+      if (b) {
+        const proc = b.process?.();
+        const exited = proc && proc.exitCode === null && proc.signalCode === null
+          ? new Promise((r) => { proc.once("exit", r); proc.once("close", r); })
+          : Promise.resolve();
+        await Promise.race([b.close().catch(() => {}), sleep(5_000)]).then(() => killBrowser(b));
+        await Promise.race([exited, sleep(3_000)]);
+      }
+      await Promise.race([chain, sleep(3_000)]);
     },
     /** 现在有没有开着的 Chrome(测试用) */
     get alive() { return !!browserP; },

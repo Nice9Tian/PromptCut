@@ -46,17 +46,17 @@ const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : undefined)
  * @param {(src: string, ffprobe: string) => (number | Promise<number>)} [p.probeChannels]
  * @returns {Promise<{ status: number, body: object }>}
  */
-export async function measureJs({ body, resolveSource, resolveFile, ffmpeg, ffprobe, sandbox, pcmLimits = PCM_LIMITS, probeChannels = probeAudioChannelsAsync }) {
+export async function measureJs({ body, resolveSource, resolveFile, ffmpeg, ffprobe, sandbox, pcmLimits = PCM_LIMITS, probeChannels = probeAudioChannelsAsync, spawnImpl, signal }) {
   const resolve = resolveSource ?? resolveFile;
   try {
-    return await measureJsInner({ body, resolve, ffmpeg, ffprobe, sandbox, pcmLimits, probeChannels });
+    return await measureJsInner({ body, resolve, ffmpeg, ffprobe, sandbox, pcmLimits, probeChannels, spawnImpl, signal });
   } catch (e) {
     if (e instanceof AssetSourceError) return { status: 200, body: { ok: false, kind: "asset-service", error: e.message } };
     throw e;
   }
 }
 
-async function measureJsInner({ body, resolve, ffmpeg, ffprobe, sandbox, pcmLimits, probeChannels }) {
+async function measureJsInner({ body, resolve, ffmpeg, ffprobe, sandbox, pcmLimits, probeChannels, spawnImpl, signal }) {
   const bad = (error, kind = "invalid") => ({ status: 200, body: { ok: false, kind, error } });
   if (!body || typeof body !== "object") return bad("请求体不对");
   const code = body.code;
@@ -117,7 +117,7 @@ async function measureJsInner({ body, resolve, ffmpeg, ffprobe, sandbox, pcmLimi
 
   let pcm;
   try {
-    pcm = await decodePcm(ffmpeg, args, { channels, sampleRate, limits: pcmLimits });
+    pcm = await decodePcm(ffmpeg, args, { channels, sampleRate, limits: pcmLimits, ...(spawnImpl ? { spawnImpl } : null) });
   } catch (e) {
     return bad(String(e?.message || e), "decode");
   }
@@ -126,8 +126,21 @@ async function measureJsInner({ body, resolve, ffmpeg, ffprobe, sandbox, pcmLimi
   const duration = +(frames / sampleRate).toFixed(6);
 
   const meta = body.meta && typeof body.meta === "object" ? body.meta : {};
-  const r = await sandbox.run({ code, channels: pcm, sampleRate, duration, meta: { ...meta, scope: source.scope, start: source.start }, timeoutMs: body.timeoutMs });
+  const r = await sandbox.run({ code, channels: pcm, sampleRate, duration, meta: { ...meta, scope: source.scope, start: source.start }, timeoutMs: body.timeoutMs, signal });
   const input = { sampleRate, numberOfChannels: channels, frames, duration, ...source };
-  if (!r.ok) return { status: 200, body: { ok: false, kind: r.kind, error: r.error, input, ...(r.blockedRequests ? { blockedRequests: r.blockedRequests } : null), ...(notes.length ? { notes } : null) } };
+  if (!r.ok) {
+    return {
+      status: 200,
+      body: {
+        ok: false,
+        kind: r.kind,
+        error: r.error,
+        ...(Number.isInteger(r.line) ? { line: r.line, column: r.column } : null),
+        input,
+        ...(r.blockedRequests ? { blockedRequests: r.blockedRequests } : null),
+        ...(notes.length ? { notes } : null),
+      },
+    };
+  }
   return { status: 200, body: { ok: true, value: r.value, elapsedMs: r.elapsedMs, input, ...(r.blockedRequests ? { blockedRequests: r.blockedRequests } : null), ...(notes.length ? { notes } : null) } };
 }
