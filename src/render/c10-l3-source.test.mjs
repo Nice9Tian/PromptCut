@@ -84,7 +84,7 @@ test("C10-L3-1 层表:普通档只认 v 2 且两项齐的层;低内存档 v 1、
   assert.equal(layerRefOf(v2, "b"), null, "缺内容键");
 });
 
-test("C10-L3-2 原尺寸:拉 snap/<hash> 进 L2,ranges 写入即就绪;小尺寸请求 0;一层只出自层表那一种环境", async () => {
+test("C10-L3-2 原尺寸:撤快照后不自动预取;按需拉取 snap/<hash> 进 L2;小尺寸请求 0;一层只出自层表那一种环境", async () => {
   const w = world();
   w.layerMap([w.layer("a")]);
   w.manifest("R-a", 0, 59);
@@ -99,16 +99,16 @@ test("C10-L3-2 原尺寸:拉 snap/<hash> 进 L2,ranges 写入即就绪;小尺寸
   src.focus(1, 30);
   await settle(src);
   assert.equal(w.fetches.filter((f) => f.ns === "px").length, 0, "普通档不拉小尺寸");
-  const snaps = w.fetches.filter((f) => f.ns === "snap");
-  assert.ok(snaps.length >= 60, `预取了播放头附近的原尺寸:${snaps.length}`);
-  assert.ok(snaps.every((f) => f.auth === "Bearer RT"), "凭只读票据");
-  const layer = layerOf(index, "a", "html");
-  assert.ok(layer && layer.ranges.length, "有就绪区间");
-  const stored = idb.dump(L2_DB_NAME, "snapshots");
-  assert.ok(stored.length >= 60 && stored.every((r) => r.key.startsWith("snap/")), "块进了 L2 的 snapshots");
-  assert.ok(idb.dump(L2_DB_NAME, "ranges").some((r) => r.key === "R-a"), "ranges 按层记");
+  assert.equal(w.fetches.filter((f) => f.ns === "snap").length, 0, "撤快照后不自动预取原尺寸快照块");
+  // 按需拉取:凭只读票据拉取并写进 L2
   const html = await src.fetchSnapshot("html", "K-a", 5);
   assert.match(html, /data-f="5"/);
+  const snaps = w.fetches.filter((f) => f.ns === "snap");
+  assert.equal(snaps.length, 1, "按需拉取了一块");
+  assert.equal(snaps[0].auth, "Bearer RT", "凭只读票据");
+  await new Promise((r) => setTimeout(r, 20));
+  const stored = idb.dump(L2_DB_NAME, "snapshots");
+  assert.ok(stored.some((r) => r.key.startsWith("snap/")), "按需拉取的块进 L2 的 snapshots");
   assert.equal(src.debug().layers[0].envFingerprint, FP);
   src.stop();
   l2.close();
@@ -126,6 +126,9 @@ test("C10-L3-3 关掉再开:已在 L2 的块不再请求,就绪照样出来", as
   first.setProject("p1");
   first.focus(1, 30);
   await settle(first);
+  // 按需取一块进 L2(fetchSnapshot 自身会把该帧区间写进 L2)
+  await first.fetchSnapshot("html", "K-a", 3);
+  await new Promise((r) => setTimeout(r, 20));
   first.stop();
   l2a.close();
   const before = w.fetches.length;
@@ -137,14 +140,15 @@ test("C10-L3-3 关掉再开:已在 L2 的块不再请求,就绪照样出来", as
   again.focus(1, 30);
   await settle(again);
   assert.equal(w.fetches.length - before, 0, "重开之后一个块都没再请求");
-  assert.ok(layerOf(index, "a", "html")?.ranges.length, "就绪从 L2 的 ranges 读回来");
+  const ranges = layerOf(index, "a", "html")?.ranges;
+  assert.ok(ranges && ranges.some(([lo, hi]) => lo <= 3 && hi >= 3), "就绪从 L2 的 ranges 读回来(含第 3 帧)");
   assert.match(await again.fetchSnapshot("html", "K-a", 3), /data-f="3"/);
   assert.equal(again.stats.snapFetches, 0);
   assert.ok(again.stats.l2Hits >= 1);
   again.stop();
 });
 
-test("C10-L3-4 预取只拉播放头前后 2 秒;v 1 层表的层普通档不认(一个请求都不发)", async () => {
+test("C10-L3-4 撤快照后不自动预取原尺寸;v 1 层表的层普通档不认(一个请求都不发)", async () => {
   const w = world();
   w.layerMap([w.layer("a")]);
   for (let s = 0; s < 600; s += 60) w.manifest("R-a", s, s + 59);
@@ -153,8 +157,7 @@ test("C10-L3-4 预取只拉播放头前后 2 秒;v 1 层表的层普通档不认
   src.setProject("p1");
   src.focus(10, 30);                 // 全局帧 300,窗口 240..360
   await settle(src);
-  const frames = w.fetches.map((f) => Number(w.content.get([...w.content.keys()].find((k) => w.content.get(k)?.frames?.some((x) => x[1] === f.hash)))?.frames.find((x) => x[1] === f.hash)[0]));
-  assert.ok(frames.length > 0 && frames.every((f) => f >= 240 && f <= 360), `只拉窗口里的帧:${Math.min(...frames)}..${Math.max(...frames)}`);
+  assert.equal(w.fetches.filter((f) => f.ns === "snap").length, 0, "撤快照后不自动预取原尺寸快照块");
   src.stop();
 
   const w1 = world();
@@ -172,7 +175,7 @@ test("C10-L3-4 预取只拉播放头前后 2 秒;v 1 层表的层普通档不认
   src1.stop();
 });
 
-test("C10-L3-5 低内存档:小尺寸存进 L2(只存 px/),重开后不再请求", async () => {
+test("C10-L3-5 低内存档:撤快照后不自动预取小尺寸;按需存进 L2(只存 px/),重开后不再请求", async () => {
   const w = world();
   w.layerMap([{ clipId: "a", kind: "html", key: "K-a", resultKey: "R-a", firstFrame: 0, count: 120 }], 1);
   w.manifest("R-a", 0, 59);
@@ -183,7 +186,11 @@ test("C10-L3-5 低内存档:小尺寸存进 L2(只存 px/),重开后不再请求
   src.setProject("p1");
   src.focus(0, 30);
   await settle(src);
-  assert.ok(w.fetches.length > 0 && w.fetches.every((f) => f.ns === "px"), "只拉小尺寸");
+  assert.equal(w.fetches.filter((f) => f.ns === "px").length, 0, "撤快照后不自动预取小尺寸块");
+  // 按需取一块进 L2
+  const html = await src.fetchSnapshot("html", "K-a", 2);
+  assert.match(html, /^<img /);
+  assert.equal(w.fetches.filter((f) => f.ns === "px").length, 1, "按需拉取小尺寸图片");
   await new Promise((r) => setTimeout(r, 30));
   const stored = idb.dump(L2_DB_NAME, "snapshots");
   assert.ok(stored.length > 0 && stored.every((r) => r.key.startsWith("px/")), "L2 只存小尺寸");
@@ -197,5 +204,6 @@ test("C10-L3-5 低内存档:小尺寸存进 L2(只存 px/),重开后不再请求
   await settle(again);
   assert.equal(w.fetches.length - before, 0, "重开之后不再请求");
   assert.match(await again.fetchSnapshot("html", "K-a", 2), /^<img /);
+  assert.equal(w.fetches.length - before, 0, "命中缓存不再请求");
   again.stop();
 });

@@ -2,8 +2,8 @@
  * 舞台(`Stage.tsx`)上这台设备跑不了的卡(C10 契约第 9 节,2026-09-29 用户改语义)。服务端渲染出 HTML 来核,跑:
  *   node --test src/render/stageLocalOnly.test.mjs
  *
- *   SL-01 在线浏览器模式:构建时的用户卡、图卡、同步来的用户卡(没有定义)不挂组件;包裹层照内置重卡的路子挂快照平面、
- *         流平面;占位槽位不再是常驻的(没有 `data-pc-placeholder-fixed`),默认 `hidden`(进显隐调度);父页没确认这一帧没有结果时
+ *   SL-01 在线浏览器模式:构建时的用户卡、图卡、同步来的用户卡(没有定义)不挂组件;包裹层照内置重卡的路子挂流平面与
+ *         抑制占位(撤快照后无快照平面);占位槽位不再是常驻的(没有 `data-pc-placeholder-fixed`),默认 `hidden`(进显隐调度);父页没确认这一帧没有结果时
  *         是沙漏(`awaiting`),确认了才是「需要本地 PC 渲染辅助」图标;图标与沙漏按预览缩放补偿(`fit`);两边都没有的 id 不画
  *   SL-02 模式关着(桌面、导出、预渲染):用户卡、图卡照常挂组件,同步表不起作用,没有 `unsupported`
  */
@@ -46,7 +46,7 @@ async function withStage(fn) {
 /** 某个片段的包裹层(到下一个包裹层为止) */
 const wrapOf = (html, id) => html.match(new RegExp(`<div data-pc-clip="${id}"[\\s\\S]*?(?=<div data-pc-clip=|$)`))?.[0] ?? null;
 
-test("SL-01 在线:本页运行不了的卡不挂组件,照挂快照 / 流平面,占位槽位进显隐调度;能运行的用户卡照常挂;未知 id 不画", () => withStage(async ({ R, H, render, marker }) => {
+test("SL-01 在线:本页运行不了的卡不挂组件,照挂流平面与抑制占位,占位槽位进显隐调度;能运行的用户卡照常挂;未知 id 不画", () => withStage(async ({ R, H, render, marker }) => {
   H.setOnlineBrowserMode(true);
   H.setPlaceholdersEnabled(true);
   try {
@@ -70,7 +70,9 @@ test("SL-01 在线:本页运行不了的卡不挂组件,照挂快照 / 流平面
     assert.doesNotMatch(wrapOf(live, "v"), /data-test-component/, "没载入的同步卡不挂组件");
     R.setRuntimeCards([]);
     H.setLocalOnlyLowMemory(true);
-    assert.match(s, /data-pc-snapshot-plane=""[^>]*><p>snap-s<\/p>/, "同步卡(没有定义)照挂快照平面");
+    // 撤快照后:没有流的同步卡(没有定义)由 suppressed 占位接管,不再挂快照平面
+    assert.doesNotMatch(s, /data-pc-snapshot-plane/, "同步卡撤除快照平面");
+    assert.match(s, /class="pc-suppressed"/, "同步卡(没有定义)由 suppressed 占位接管");
     for (const w of [u, s]) {
       assert.match(w, /data-pc-placeholder-slot="" hidden=""/, "槽位默认藏着,由显隐调度切");
       assert.doesNotMatch(w, /data-pc-placeholder-fixed/, "不再是常驻槽位");

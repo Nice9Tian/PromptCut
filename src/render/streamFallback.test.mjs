@@ -1,9 +1,9 @@
 /**
- * 兜底顺序在舞台一侧(`streamPlayer.ts`)的单测:解码器预算的纯函数、组流藏 / 露成员快照、
+ * 兜底顺序在舞台一侧(`streamPlayer.ts`)的单测:解码器预算的纯函数、组流清空、
  * 稀疏段换满帧段时的清单刷新(疑点 G)。跑:node --test src/render/streamFallback.test.mjs
  *
  * 解码与合成要浏览器;这里用假的 root / canvas / 字节源,只钉「哪条流建轨道」「清单什么时候再问」
- * 「流清空时成员的快照平面露不露出来」这几件纯逻辑。
+ * 「流清空时画面清空」这几件纯逻辑。
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,18 +14,15 @@ let now = 1_000_000;
 Date.now = () => now;
 
 const fakeCanvas = () => ({ getContext: () => null, style: { getPropertyValue: () => '', setProperty() {} }, width: 0, height: 0, parentElement: null });
-const fakeSnap = () => ({ style: { visibility: 'hidden' } });
 
-/** 只认 streamPlayer 用到的三种选择器 */
-function fakeRoot({ canvases = {}, snaps = {} } = {}) {
+/** 只认 streamPlayer 用到的选择器 */
+function fakeRoot({ canvases = {} } = {}) {
   return {
     querySelector(sel) {
       let m = /^\[data-pc-clip="(.+?)"\] > canvas\[data-pc-stream-plane\]$/.exec(sel);
       if (m) return canvases[m[1]] ?? null;
       m = /data-pc-stream-group="(.+?)"/.exec(sel);
       if (m) return canvases[m[1]] ?? null;
-      m = /^\[data-pc-clip="(.+?)"\] > \[data-pc-snapshot-plane\]$/.exec(sel);
-      if (m) return snaps[m[1]] ?? null;
       return null;
     },
   };
@@ -102,12 +99,9 @@ test('疑点 G:同一个流键的就绪区间变了(新分段发布),允许再�
   assert.equal(source.calls, 2);
 });
 
-test('组流清空(这一段没料)时,把各成员的快照平面露出来 —— 兜底快照不能被组流藏着', () => {
-  const snaps = { a: fakeSnap(), b: fakeSnap() };
-  const player = new StreamPlayer({ root: () => fakeRoot({ canvases: { 'a,b': fakeCanvas() }, snaps }), source: fakeSource([manifestWith(1)]) });
+test('组流清空(这一段没料)时,流画面清空;撤快照后不操作快照平面,由流平面与占位接管', () => {
+  const player = new StreamPlayer({ root: () => fakeRoot({ canvases: { 'a,b': fakeCanvas() } }), source: fakeSource([manifestWith(1)]) });
   player.setPlanes([{ clipIds: ['a', 'b'], key: 'G', ranges: [[5, 9]], originFrame: 0 }], 30);
   player.present(0);   // 第 0 段不在就绪区间里 → blank
-  assert.equal(snaps.a.style.visibility, '');
-  assert.equal(snaps.b.style.visibility, '');
   assert.deepEqual([...player.showingClips()], [], '这一拍没有流画面');
 });

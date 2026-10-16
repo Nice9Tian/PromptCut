@@ -384,9 +384,12 @@ test('HR21h 淘汰的前提不成立:块被清掉、清单还列着它时,页面
   await new Promise((r) => setTimeout(r, 20));
   await src.tickNow();
   await new Promise((r) => setTimeout(r, 20));
-  assert.ok(fetches.length > 0, '页面在取块,而且取不到');
+  assert.equal(fetches.length, 0, '撤快照后不自动预取已废弃的快照块');
   assert.equal(src.coverage('a'), 'full', '清单还列着,页面认为这一层整段都有产物');
   assert.equal(src.frameConfirmedMissing('a', 5), false, '页面不会确认「这一帧没有产物」,所以补渲的判据(按清单判)不会触发');
+  // 主动按需拉取被淘汰的块:页面在取块,而且取不到(404)
+  await src.fetchSnapshot('html', 'K', 5).catch(() => {});
+  assert.ok(fetches.length > 0, '页面在取块,而且取不到');
   assert.ok(src.stats.errors > 0, '只是一直取不到、下一轮再取');
 });
 

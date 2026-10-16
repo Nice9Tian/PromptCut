@@ -61,6 +61,7 @@ if (!missing) {
   mock.module(srcUrl("editor/costIdentity.ts"), { exports: { clipIdentityOf: () => ({ identityKeys, frameModes: {} }) } });
   mock.module(srcUrl("editor/snapshotFeed.ts"), {
     exports: {
+      clearSettled: () => {},
       deliverSnapshots: async () => 0,
       markBaselineReset: () => {},
       markAllSettled: () => {},
