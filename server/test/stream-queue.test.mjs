@@ -280,13 +280,22 @@ test('X1-split 流任务带 requires.capabilities.streams = true;快照任务不
   });
   const streams = tasks.filter((t) => t.kind === 'stream');
   const snaps = tasks.filter((t) => t.kind === 'snapshot');
-  assert.deepEqual(streams.map((t) => [t.range.from, t.range.to]), [[0, 7], [8, 9]]);
+  assert.deepEqual(streams.map((t) => [t.range.from, t.range.to]), [[0, 9]], 'motion 卡不足 30s(60段)整张一口气做完');
   for (const t of streams) {
     assert.deepEqual(t.requires.capabilities, { streams: true });
     assert.equal(t.requires.transcode, true);
     assert.equal(t.resultKey, resultKeyOf('d'.repeat(64), OWN));
   }
   for (const t of snaps) assert.equal(t.requires.capabilities, undefined);
+
+  // 补测：remotion 卡仍按 8 段切分
+  const remotionTasks = splitPlan({
+    planTask: planTaskOf({ projectId: PID, projectRev: REV }), entryKey: 'e'.repeat(64), envFingerprint: OWN, codeVersion: CV,
+    cardPlan: [{ clipId: 'clip-r', snapshotKey: 's'.repeat(64), contentKey: 'c'.repeat(64), tier: 'shared', capabilities: { writing: 'remotion', frameMode: 'direct' }, count: 60 }],
+    streams: [{ streamKey: resultKeyOf('d'.repeat(64), OWN), contentKey: 'd'.repeat(64), topClipId: 'clip-r', firstSegment: 0, lastSegment: 9 }],
+  });
+  const remotionStreams = remotionTasks.filter((t) => t.kind === 'stream');
+  assert.deepEqual(remotionStreams.map((t) => [t.range.from, t.range.to]), [[0, 7], [8, 9]], 'remotion 卡保持 8 段切分');
 });
 
 /* ================================================================== plan 出流 */
@@ -305,7 +314,7 @@ test('X1-plan 开关开着、探到编码器:plan 的 streams 是这一版的全
   const a = ctx.streams.find((s) => s.topClipId === 'clip-a');
   assert.deepEqual([a.firstSegment, a.lastSegment], [0, 9]);
   assert.equal(await A.streamCapable(), true);
-  assert.deepEqual(streamTasksOf(ctx).map((x) => x.input.clipId).sort(), ['clip-a', 'clip-a', 'clip-b', 'clip-c']);
+  assert.deepEqual(streamTasksOf(ctx).map((x) => x.input.clipId).sort(), ['clip-a', 'clip-b', 'clip-c']);
   assert.deepEqual(streamTasksOf(ctx).filter((x) => x.requires.belowDependent === true).map((x) => x.input.clipId), ['clip-b']);
 
   const off = await streamPipeline({ env: { PROMPTCUT_STREAMS: '0' } });
@@ -340,7 +349,7 @@ test('X1-render 执行器按段产出流任务的分段(满密度)、报进度;s
   const ctx = await executor.plan(planView(), { signal: signalNone() });
   // 依赖下层的那一条(clip-b)不在这一条用例里产:它每帧截两张,走的取帧钩子在 `below-capture.test.mjs`、`below-stream-queue.test.mjs` 里验
   const tasks = streamTasksOf(ctx).filter((x) => x.requires.belowDependent !== true);
-  assert.equal(tasks.length, 3);
+  assert.equal(tasks.length, 2);
   const client = memoryClient();
   const content = memoryContent();
   const sink = createAssetSink({ pipeline: A, client, content });
@@ -413,7 +422,7 @@ test('X1-render-skip 已经是满密度、不旧的分段不重产;本机只有�
   const A = await streamPipeline();
   const executor = executorFor(A);
   const ctx = await executor.plan(planView(), { signal: signalNone() });
-  const [task] = streamTasksOf(ctx).filter((x) => x.input.clipId === 'clip-a' && x.range.from === 8);
+  const [task] = streamTasksOf(ctx).filter((x) => x.input.clipId === 'clip-a');
   await executor.render(view(task), { signal: signalNone(), progress: () => {} });
   const mark = streamBakes.length;
   const first = await segmentHashes(A, task.resultKey, 8);
@@ -437,8 +446,8 @@ test('X1-sparse 稀疏流任务:每个分段只截第一帧、清单与满密度
   const executor = executorFor(A);
   const ctx = await executor.plan(planView(), { signal: signalNone() });
   const all = splitPlan({ ...ctx, planTask: planTaskOf({ projectId: PID, projectRev: REV }), envFingerprint: OWN, codeVersion: CV, sparseStreams: true }).filter((x) => x.kind === 'stream');
-  const dense = all.find((x) => x.input.clipId === 'clip-a' && x.range.from === 8 && !x.input.density);
-  const sparse = all.find((x) => x.input.clipId === 'clip-a' && x.range.from === 8 && x.input.density === 'sparse');
+  const dense = all.find((x) => x.input.clipId === 'clip-a' && !x.input.density);
+  const sparse = all.find((x) => x.input.clipId === 'clip-a' && x.input.density === 'sparse');
   assert.ok(dense && sparse);
   assert.equal(sparse.id, `${dense.id}:sparse`);
   assert.equal(sparse.resultKey, dense.resultKey);

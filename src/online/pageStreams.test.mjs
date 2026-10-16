@@ -107,7 +107,7 @@ test("PS-01 没人认领:等满等待时间才动手;先查、写层表、再产
   assert.equal(pages.debug().planState, "open");
   await run(1000);
   assert.equal(w.produced.length, 1, "等满了开工");
-  assert.deepEqual(w.produced[0], { id: "stream:rk-ka:0-7", stride: 1 }, "任务 id 与切分方给浏览器出的那一份同一个式子;满密度");
+  assert.deepEqual(w.produced[0], { id: "stream:rk-ka:0-9", stride: 1 }, "任务 id 与切分方给浏览器出的那一份同一个式子;满密度");
   // 开工前层表里已经有本页的那一行
   assert.equal(w.written.length, 1);
   assert.equal(w.written[0].kind, "layer-map");
@@ -116,18 +116,15 @@ test("PS-01 没人认领:等满等待时间才动手;先查、写层表、再产
   assert.equal(pages.debug().state, "producing");
   await finish();
   assert.deepEqual(w.alive, ["rk-ka"]);
-  // 接着做下一段、下一条流
+  // 接着做下一条流(clip-a 为 motion 卡不足 30 秒一口气做完，下一条流为 clip-b)
   await run(500);
-  assert.equal(w.produced[1].id, "stream:rk-ka:8-9");
-  await finish();
-  await run(500);
-  assert.equal(w.produced[2].id, "stream:rk-kb:0-1");
+  assert.equal(w.produced[1].id, "stream:rk-kb:0-1");
   await finish();
   await run(500);
   const d = pages.debug();
   assert.equal(d.state, "done");
-  assert.equal(d.counters.produced, 3);
-  assert.deepEqual(d.jobs.map((j) => j.state), ["produced", "produced", "produced"]);
+  assert.equal(d.counters.produced, 2);
+  assert.deepEqual(d.jobs.map((j) => j.state), ["produced", "produced"]);
   assert.deepEqual(w.layerMap.streams.map((r) => r.topClipId).sort(), ["clip-a", "clip-b"]);
   assert.deepEqual(d.skipped, { other: "canvas" });
   assert.equal(w.specCalls, 1, "这一版的流只算一次");
@@ -154,12 +151,12 @@ test("PS-02 有能切分的节点接了活:不产;done 之后不再问队列", a
 });
 
 test("PS-03 先查:自己的键已经有、别的候选已经有,都不产", async () => {
-  // 自己的键:三段都有
+  // 自己的键:两段都有
   const own = rig();
-  for (const k of ["rk-ka:0-7", "rk-ka:8-9", "rk-kb:0-1"]) own.w.present.add(k);
+  for (const k of ["rk-ka:0-9", "rk-kb:0-1"]) own.w.present.add(k);
   await own.run(PAGE_STREAM_WAIT_MS + 3000);
   assert.equal(own.w.produced.length, 0);
-  assert.equal(own.pages.debug().counters.have, 3);
+  assert.equal(own.pages.debug().counters.have, 2);
   assert.equal(own.pages.debug().state, "done");
   assert.deepEqual([...new Set(own.w.alive)].sort(), ["rk-ka", "rk-kb"]);
   assert.ok(own.w.written.length >= 1, "自己的键有了,层表里要有本页的那一行");
@@ -181,14 +178,14 @@ test("PS-03 先查:自己的键已经有、别的候选已经有,都不产", asy
   for (const k of ["rk-desktop:0-3", "rk-desktop:4-7", "rk-desktop:8-9"]) foreign.w.present.add(k);
   await foreign.run(PAGE_STREAM_WAIT_MS + 3000);
   assert.equal(foreign.w.produced.length, 0);
-  assert.deepEqual(foreign.pages.debug().jobs.map((j) => [j.state, j.via]), [["elsewhere", "rk-desktop"], ["elsewhere", "rk-desktop"]]);
-  // 它只产了一部分(缺 8～9 那一份):本页这一段(8～9)自己产,前一段用它的
+  assert.deepEqual(foreign.pages.debug().jobs.map((j) => [j.state, j.via]), [["elsewhere", "rk-desktop"]]);
+  // 它只产了一部分(缺 8～9 那一份):本页整张(0～9)自己产,因为 motion 卡切分至少 30 秒不足 30 秒整卡产
   const partly = rig();
   partly.w.specs = [specOf("clip-a", "ka", 0, 10)];
   partly.w.layerMap = structuredClone(foreign.w.layerMap);
   for (const k of ["rk-desktop:0-3", "rk-desktop:4-7"]) partly.w.present.add(k);
   await partly.run(PAGE_STREAM_WAIT_MS + 3000);
-  assert.deepEqual(partly.w.produced.map((x) => x.id), ["stream:rk-ka:8-9"]);
+  assert.deepEqual(partly.w.produced.map((x) => x.id), ["stream:rk-ka:0-9"]);
   // 输入签名过期的行(旧参数的流)不算
   const stale = rig();
   stale.w.specs = [specOf("clip-a", "ka", 0, 8)];
@@ -241,7 +238,7 @@ test("PS-04 让路:播放、拖动做完当前帧就停,闲下来接着做;隐�
   await flush();
   assert.equal(pages.debug().counters.yields.hidden, 1);
   // 让路不算做不成
-  assert.deepEqual(pages.debug().jobs.map((j) => j.fails), [0, 0, 0]);
+  assert.deepEqual(pages.debug().jobs.map((j) => j.fails), [0, 0]);
 });
 
 test("PS-05 产到一半有切分方接了活:做完当前帧就停,不再开工", async () => {
@@ -439,17 +436,15 @@ test("PS-13 测量时就产稀疏版:不等计划、不问切分方、不看闲�
   let out = null;
   void pages.measure(REQ).then((o) => { out = o; });
   await flush();
-  assert.deepEqual(w.produced, [{ id: "stream:rk-ka:0-7:sparse", stride: 15 }], "只产刚测完的这张卡;稀疏的一趟");
+  assert.deepEqual(w.produced, [{ id: "stream:rk-ka:0-9:sparse", stride: 15 }], "只产刚测完的这张卡;稀疏的一趟");
   assert.equal(pages.running(), true);
   assert.equal(w.written.length, 1, "开工前写了层表里本页的那一行");
   assert.deepEqual(w.written[0].streams.map((r) => r.topClipId), ["clip-a"]);
   assert.equal(out, null, "产完之前遮罩等着");
   await finish();
-  assert.equal(w.produced[1].id, "stream:rk-ka:8-9:sparse", "这张卡的下一段接着做,不用等节拍");
-  await finish();
-  assert.deepEqual(out, { result: "ok", produced: 2, have: 0, elsewhere: 0, left: 0 });
+  assert.deepEqual(out, { result: "ok", produced: 1, have: 0, elsewhere: 0, left: 0 });
   assert.deepEqual([...new Set(w.alive)], ["rk-ka"], "叫宿主认这个结果键(本页先用自己产的)");
-  assert.equal(w.produced.length, 2, "满密度的一趟不在测量时做");
+  assert.equal(w.produced.length, 1, "满密度的一趟不在测量时做");
   assert.equal(w.probes, 0, "不问队列");
   // 没有计划的时候节拍照走:这一份记账留着,不被当成「没有计划」清掉
   await run(2000);
@@ -459,7 +454,7 @@ test("PS-13 测量时就产稀疏版:不等计划、不问切分方、不看闲�
   w.present.add("rk-kb:0-1#sparse");
   const second = await pages.measure({ ...REQ, clips: ["clip-b"] });
   assert.deepEqual(second, { result: "ok", produced: 0, have: 1, elsewhere: 0, left: 0 });
-  assert.equal(w.produced.length, 2, "已经有的不重产");
+  assert.equal(w.produced.length, 1, "已经有的不重产");
   assert.deepEqual(pages.debug().measure.results, { ok: 2 });
   // 判轻的卡、本页产不了的卡:没有它的流
   const none = await pages.measure({ ...REQ, clips: ["clip-x"] });
@@ -481,7 +476,7 @@ test("PS-14 遮罩等稀疏版最多 MEASURE_SPARSE_MAX_MS:到时当场回、在
   assert.equal(w.current.job.yielding(), false);
   await run(500);
   assert.equal(out?.result, "deadline", "到 50 秒当场回(这张卡拖得再久也进编辑)");
-  assert.equal(out.left, 2);
+  assert.equal(out.left, 1);
   assert.equal(w.now - t0, MEASURE_SPARSE_MAX_MS);
   assert.equal(w.current.job.yielding(), true, "在产的做完当前这一帧就停");
   assert.equal(w.current.job.signal.aborted, false);
@@ -500,7 +495,7 @@ test("PS-14 遮罩等稀疏版最多 MEASURE_SPARSE_MAX_MS:到时当场回、在
   void two.pages.measure(REQ).then(() => {});
   await flush();
   await two.run(30_000);
-  await two.finish(); await two.finish();
+  await two.finish();
   let late = null;
   void two.pages.measure({ ...REQ, clips: ["clip-b"] }).then((o) => { late = o; });
   await flush();

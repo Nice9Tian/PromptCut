@@ -232,11 +232,14 @@ export function createNodeSession({
         if (Array.isArray(message.claimedStreams)) {
           for (const s of message.claimedStreams) {
             if (s?.id) {
+              const rank = Number.isInteger(s.holderRank)
+                ? s.holderRank
+                : (s.holderProfile === 'pc' ? 3 : s.holderProfile === 'host' ? 2 : s.holderProfile === 'browser' ? 1 : null);
               inFlightStreams.set(s.id, {
                 id: s.id,
                 version: Number.isInteger(s.version) ? s.version : 1,
                 holderProfile: s.holderProfile ?? null,
-                holderRank: Number.isInteger(s.holderRank) ? s.holderRank : 1,
+                holderRank: rank,
                 density: s.density ?? (s.id.endsWith(':sparse') ? 'sparse' : null),
               });
             }
@@ -254,7 +257,7 @@ export function createNodeSession({
         if (typeof message.id === 'string' && message.id.startsWith('stream:')) {
           const rank = Number.isInteger(message.holderRank)
             ? message.holderRank
-            : (message.holderProfile === 'pc' ? 3 : message.holderProfile === 'host' ? 2 : 1);
+            : (message.holderProfile === 'pc' ? 3 : message.holderProfile === 'host' ? 2 : message.holderProfile === 'browser' ? 1 : null);
           inFlightStreams.set(message.id, {
             id: message.id,
             version: Number.isInteger(message.version) ? message.version : 1,
@@ -320,12 +323,14 @@ export function createNodeSession({
       return;
     }
     // 没有 open 候选任务时：能力更强的设备可抢占能力更弱设备执行中的 stream 任务（桌面版 > 托管服务 > 浏览器）
-    const myRank = deviceRank(filterNode());
+    const fn = filterNode();
+    const canDoStreams = fn?.capabilities?.streams !== false;
+    const myRank = canDoStreams ? deviceRank(fn) : 0;
     if (myRank > 1 && inFlightStreams.size > 0) {
       const preemptable = [];
       for (const item of inFlightStreams.values()) {
         if (holds.has(item.id) || deferred.has(item.id)) continue;
-        if (item.holderRank < myRank) preemptable.push(item);
+        if (Number.isInteger(item.holderRank) && item.holderRank < myRank) preemptable.push(item);
       }
       if (preemptable.length > 0) {
         // 若有多个可抢占任务，优先抢占稀疏流任务（sparse 先于满密度）
