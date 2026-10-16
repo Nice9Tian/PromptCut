@@ -162,6 +162,7 @@ export const EXCLUDED_PROBE_FILES = {
   'cloud-agent-isolation-tools.mjs': '第四段隔离探针里「工具」的几组,由 cloud-agent-isolation-probe(S4-2)调,不单独跑',
   'probe-timings.mjs': '探针共用的耗时记录件(耗时只记录,不当闸门),单测在 server/test/probe-timings.test.mjs',
   // 已交付、能在本机独立跑、但还没有进整套清单的验收探针:要不要加成清单项等用户定(见 docs/reports/REPORT-verification-rework.md「看到了但没有自己定的」)
+  'hosted-render-queue-probe.mjs': '第三段托管方渲染服务「云端排队与按轮占用」验收探针（14 条，验证按轮占用与超时）',
   'hosted-render-isolation-probe.mjs': '第三段「越权探测卡」隔离验收探针(49 条),清单里还没有对应的项,待用户定是否加入',
   'hosted-render-node-side-check.mjs': '第三段同步文件预检的对照实验(回答缺口在不在,故意不经过预检),清单里还没有对应的项,待用户定是否加入',
   'cloud-agent-look-probe.mjs': '第四段云端 Agent「看画面」端到端探针,清单里还没有对应的项,待用户定是否加入',
@@ -752,6 +753,11 @@ const OLD_ITEMS = [
     pass: { exit: 0, metrics: { fail: 'ℹ fail (\\d+)' }, limits: { fail: { eq: 0 } } }, timeoutMin: 15,
   },
   {
+    id: 'RS18-queue', name: '云端排队与按轮占用（单节点排队，甲一轮收尾立即让给排队的乙，一次三分钟不重试）', category: '第三段', level: 'local', taskRef: 'RS18-queue 单节点排队与按轮占用（10-16 用户改定）',
+    tasks: ['R20', 'R21', 'R23'], covers: ['hosted-render-queue-probe.mjs'], requires: ['scripts/probes/hosted-render-queue-probe.mjs'],
+    cmd: probe('hosted-render-queue-probe', ['--base-port', B, '--doc-port', DOC(0), '--asset-port', DOC(1)]), pass: { exit: 0 }, timeoutMin: 30,
+  },
+  {
     id: 'S3-m1', name: '第三段:设计与契约、语义与迁移文档', category: '第三段', level: 'local', taskRef: '任务书一 第 20、24 条',
     tasks: ['R20', 'R24'], manual: '读 docs/plan/hosted-render-contract.md(认证、并发与内存上限、环境指纹、容量上限的〔裁〕);product/hosting.md、product/platforms.md、workflow/project.md 的决定 D 逐句对;hosting-migration.md 补了渲染服务的迁移与重建;draft_cloud-node-and-agent.md「步骤 1」「步骤 2」标为已完成',
   },
@@ -834,6 +840,11 @@ const OLD_ITEMS = [
     tasks: ['C3', 'C11'], requires: ['server/test/cloud-agent-service.test.mjs'],
     cmd: [node, '--experimental-test-module-mocks', '--test-global-setup=server/test/global-setup.mjs', '--test', 'server/test/cloud-agent-*.test.mjs'],
     pass: { exit: 0, metrics: { fail: 'ℹ fail (\\d+)' }, limits: { fail: { eq: 0 } } }, timeoutMin: 15,
+  },
+  {
+    id: 'RS18-local', name: '出图四级先后（桌面版 > 电脑浏览器 > 托管渲染服务 > 手机浏览器）与迟到隔离/取消', category: '第四段', level: 'local', taskRef: 'RS18-local 本地取帧优先与四级先后（10-16 用户改定第 3.1 节）',
+    tasks: ['C6', 'C9'], requires: ['server/test/cloud-agent-look.test.mjs'],
+    cmd: [node, '--test', 'server/test/cloud-agent-look.test.mjs'], pass: { exit: 0 }, timeoutMin: 15,
   },
   {
     id: 'S4-m1', name: '第四段:设计与契约、载入缝', category: '第四段', level: 'local', taskRef: '任务书二 第 1、2 条',

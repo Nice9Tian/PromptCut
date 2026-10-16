@@ -477,6 +477,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     enabled: config.look === 'on',
     verify: createLookVerifier({ registry: lookRegistry }),
     requests: lookRequests,
+    isolation,
     limits: { attemptMs: config.lookAttemptMs, retries: config.lookRetries, maxQueueMs: config.lookMaxQueueMs, orphanMs: config.lookOrphanMs },
     project: (projectId) => directory.get(projectId),
     // 刚起来、目录清单还没拿到：接回来的请求先排着（这时「目录里没有」不等于项目不在了）

@@ -327,11 +327,11 @@ test('RQ4 重启后排着的请求还在：队列落盘，新起的管理进程�
   assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('sync-')), []);
 });
 
-test('RQ5 重试：渲染这一段每次最多一分钟，没成自动重试三次；次数到了回「这次没看成」；中途成了就成了；隔离工作进程起不来同样算次数', async () => {
-  assert.deepEqual([LOOK_DEFAULTS.attemptMs, LOOK_DEFAULTS.retries], [60_000, 3], '2026-10-09 用户定：每次一分钟，允许三次重试');
+test('RQ5 渲染时限：渲染这一段最多三分钟，只做一次不重试；到点回「这次没看成」并附带调试信息', async () => {
+  assert.deepEqual([LOOK_DEFAULTS.attemptMs, LOOK_DEFAULTS.retries], [180_000, 0], '2026-10-16 用户改定：每次三分钟，一次不重试');
   const hang = (_url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(Object.assign(new Error('timeout'), { name: 'TimeoutError' }))));
 
-  // 一直不出图：试 1 + 3 次，每次到时限，然后回「这次没看成」
+  // 一直不出图：只做一次（retries = 0），回 504 timeout，附带 debug 调试信息
   const k = kit({ limits: { attemptMs: 80 } });
   k.state.reply = hang;
   const t0 = Date.now();
@@ -339,29 +339,32 @@ test('RQ5 重试：渲染这一段每次最多一分钟，没成自动重试三�
   const out = await k.poll({ requestId: rid(1), waitMs: 5000 });
   const took = Date.now() - t0;
   assert.deepEqual([out.status, out.body.ok, out.body.look, out.body.error], [504, false, 'timeout', LOOK_ERRORS.timeout]);
-  assert.equal(k.state.sent.length, 4, '第一次之外再重试三次');
-  assert.ok(took >= 4 * 80 - 20 && took < 2000, `四次各等满时限：${took} ms`);
-  assert.deepEqual(k.logs.filter((l) => l.event === 'look.retry').map((l) => [l.why, l.attempts]), [['timeout', 1], ['timeout', 2], ['timeout', 3]]);
+  assert.ok(out.body.debug, '返回调试信息');
+  assert.equal(out.body.debug.reason, 'render-timeout');
+  assert.equal(k.state.sent.length, 1, '只做一次，不重试');
+  assert.ok(took >= 80 - 20 && took < 2000, `单次等满时限：${took} ms`);
+  assert.deepEqual(k.logs.filter((l) => l.event === 'look.retry').map((l) => [l.why, l.attempts]), []);
   const done = k.logs.find((l) => l.event === 'look.done');
-  assert.deepEqual([done.state, done.attempts, done.look], ['failed', 4, 'timeout']);
-  assert.equal(k.look.status().retried, 3);
+  assert.deepEqual([done.state, done.attempts, done.look], ['failed', 1, 'timeout']);
+  assert.equal(k.look.status().retried, 0);
 
-  // 前两次没成、第三次成了：调用方只看到成了
-  const k2 = kit({ limits: { attemptMs: 80 } });
+  // 显式指定 retries: 2 时，仍支持有限重试
+  const k2 = kit({ limits: { attemptMs: 80, retries: 2 } });
   let n = 0;
   k2.state.reply = (url, init) => { n += 1; return n < 3 ? (n === 1 ? hang(url, init) : Promise.reject(Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNRESET' } }))) : Promise.resolve({ status: 200, json: { ok: true, n } }); };
-  await k2.submit(k2.msg(P3, { requestId: rid(2) }));
+  await k2.submit(k2.msg(P3, { requestId: rid(2), retries: 2 }));
   assert.deepEqual((await k2.poll({ requestId: rid(2), waitMs: 5000 })).body, { ok: true, n: 3 });
   assert.deepEqual(k2.logs.filter((l) => l.event === 'look.retry').map((l) => l.why), ['timeout', 'error']);
-  // 重试的那一个排在后来的请求前面（次序不变）
-  // 工作进程一直出错：次数到了明说出错
+
+  // 工作进程出错：一次不重试，明说出错
   const k3 = kit();
   k3.state.reply = async () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); };
   await k3.submit(k3.msg(P3, { requestId: rid(3) }));
   const f = await k3.poll({ requestId: rid(3), waitMs: 5000 });
   assert.deepEqual([f.status, f.body.look], [502, 'failed']);
   assert.match(f.body.error, /^这次没看成.*ECONNREFUSED/);
-  assert.equal(k3.state.sent.length, 4);
+  assert.equal(k3.state.sent.length, 1, '一次不重试');
+
   // 工作进程自己的回答（片段不存在）是结果，不重试
   const k4 = kit();
   k4.state.reply = async () => ({ status: 404, json: { ok: false, error: '时间轴上没有 id 为 c9 的片段。' } });
@@ -628,6 +631,6 @@ test('RQ9 代理口上的 /look/poll、/look/cancel：只认 Agent 服务的签�
   // 配置：队列的目录缺省在数据目录下，可另给；时限缺省照用户定的
   const c = renderServiceConfig({ PROMPTCUT_RENDER_DATA: path.join(os.tmpdir(), 'pc-render-x') });
   assert.equal(c.lookQueueDir, path.join(os.tmpdir(), 'pc-render-x', 'look-queue'));
-  assert.deepEqual([c.lookAttemptMs, c.lookRetries, c.lookMaxQueueMs, c.lookOrphanMs], [60_000, 3, 30 * 60_000, 120_000]);
+  assert.deepEqual([c.lookAttemptMs, c.lookRetries, c.lookMaxQueueMs, c.lookOrphanMs], [180_000, 0, 30 * 60_000, 120_000]);
   assert.equal(renderServiceConfig({ PROMPTCUT_RENDER_LOOK_QUEUE: path.join(os.tmpdir(), 'q') }).lookQueueDir, path.join(os.tmpdir(), 'q'));
 });

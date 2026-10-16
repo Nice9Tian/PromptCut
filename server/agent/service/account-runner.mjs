@@ -23,6 +23,7 @@ import { collectPageTools } from './collect-bridge.mjs';
 import { createWorkerPageClient } from '../../agent-service/worker-page-client.mjs';
 import { loadSsrHost } from '../ssr-host.mjs';
 import { createConversationPurger } from './conversation-purge.mjs';
+import { dispatchFrameSnapshot } from './frame-dispatcher.mjs';
 
 const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }); };
 const idOK = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
@@ -103,11 +104,34 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     // 看画面要绑的那条任务上下文必须是执行器给的、和这条授权对得上；没有就不开这一轮（不带着不过闸的看画面往下跑）
     if (look && (!context || context.projectId !== grant.projectId || context.runGrantId !== grant.runGrantId))
       fail(503, 'look-context-unavailable');
-    let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null;
+    let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null, heartbeatTimer = null;
     let removeAbort = () => {};
+    if (look && typeof look.heartbeat === 'function') {
+      heartbeatTimer = setInterval(() => {
+        try {
+          look.heartbeat(grant.projectId, {
+            runId: grant.runId,
+            runGrantId: grant.runGrantId,
+            conversationId: grant.conversationId,
+            assignmentDigest: grant.assignmentDigest,
+          });
+        } catch {}
+      }, 30_000);
+      heartbeatTimer.unref?.();
+    }
     const aborted = new Promise((_, reject) => {
       if (!signal) return;
       const onAbort = () => {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        try {
+          look?.release?.(grant.projectId, {
+            runId: grant.runId,
+            runGrantId: grant.runGrantId,
+            conversationId: grant.conversationId,
+            assignmentDigest: grant.assignmentDigest,
+            aborted: true,
+          });
+        } catch {}
         try { inst?.close('run-fenced'); } catch { /* Cleanup below still awaits the socket. */ }
         reject(Object.assign(new Error('run-fenced'), { status: 403, code: 'run-fenced' }));
       };
@@ -176,13 +200,77 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
         identity: { username: grant.initiatorName ?? record.senderNameAtSend }, limits: toolOptions.limits ?? {}, log });
       if (signal?.aborted) fail(403, 'run-fenced');
     }
+
+    const onLookProgress = (info) => {
+      if (info?.phase === 'render_queued' && info.renderQueuePosition !== null && info.renderQueuePosition !== undefined) {
+        try {
+          onEvent({
+            type: 'progress',
+            phase: 'render_queued',
+            renderQueuePosition: info.renderQueuePosition,
+            text: `云端渲染正在给别的项目用，排在第 ${info.renderQueuePosition} 位，轮到了会接着做。`,
+          });
+        } catch {}
+      } else if (info?.phase === 'rendering') {
+        try {
+          onEvent({
+            type: 'progress',
+            phase: 'rendering',
+            renderQueuePosition: null,
+          });
+        } catch {}
+      }
+    };
+
+    const cloudLookPost = look ? look.forProject(grant.projectId, {
+      cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {},
+      signal: signal ?? null,
+      authorize: () => resources.authorize(context, 'read'),
+      instance: grant.instanceId,
+      run: { runGrantId: grant.runGrantId, runId: grant.runId, conversationId: grant.conversationId },
+      onProgress: onLookProgress,
+    }) : null;
+
+    const prerenderPost = async (pathname, body, opts = {}) => {
+      if (pathname === '/api/vision/snapshot') {
+        let memberNodes = [];
+        try {
+          if (bound?.side?.executor?.request) {
+            const reply = await bound.side.executor.request(
+              grant.conversationId,
+              { type: 'selection.query', projectId: grant.projectId, runGrantId: grant.runGrantId },
+              (message) => message?.type === 'selection.state' || message?.type === 'error'
+            );
+            if (reply?.type === 'selection.state' && Array.isArray(reply.members)) {
+              memberNodes = reply.members.flatMap(m => m.pages ?? []);
+            }
+          }
+        } catch {}
+        return dispatchFrameSnapshot({
+          memberNodes,
+          projectCodeVersion: bound?.side?.link?.replica?.codeVersion ?? bound?.side?.executor?.codeVersion ?? null,
+          cloudLook: cloudLookPost ? () => cloudLookPost(pathname, body, opts) : null,
+          callLocal: async (node, req, sig) => {
+            if (toolset?.pageBridge?.call) {
+              return toolset.pageBridge.call(grant.conversationId, 'see_frames', req.body, { signal: sig, pageId: node?.pageId });
+            }
+            throw new Error('no-local-bridge');
+          },
+          getProjectRev: () => bound?.side?.link?.replica?.rev ?? null,
+          request: { path: pathname, body, timeoutMs: opts?.timeoutMs },
+          signal: opts?.signal ?? signal ?? null,
+          log: (event, fields) => log(event, fields),
+        });
+      }
+      if (cloudLookPost) return cloudLookPost(pathname, body, opts);
+      throw new Error(`云端的渲染服务不提供 ${pathname}`);
+    };
+
     inst = createAgentInstance({ profile: 'hosted', server: { httpServer: null, ssrLoadModule: loadModule,
       config: { root }, middlewares: { use() {} } },
       // 这一轮被停掉(signal)时,它排在渲染服务队列里的看画面请求一并撤回,不占着队列、不在失权之后还出图
       // 看画面绑这条任务的授权:项目号来自授权;登记前、每趟去问前都问一次文档服务这条任务还能不能读
-      prerenderPost: look ? look.forProject(grant.projectId, { cards: () => inst.hasProjectCards?.() ? inst.cardRevs?.() : {}, signal: signal ?? null,
-        authorize: () => resources.authorize(context, 'read'), instance: grant.instanceId,
-        run: { runGrantId: grant.runGrantId, runId: grant.runId, conversationId: grant.conversationId } }) : null,
+      prerenderPost: look ? prerenderPost : null,
       latestMirror: () => null, latestPlayhead: () => null, projectId: grant.projectId,
       identity: { userId: grant.accountId, username: grant.initiatorName ?? record.senderNameAtSend }, ownerKey,
       hostedTools, docUrl: dataClient.wsUrl, protocolsFor, execSerial, accountMode: true, accountSelection,
@@ -263,16 +351,65 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             // 素材的连接和流也是本机资源：等它们真的关完才算收完，收尾记录在这之后才形成。
             // 关不干净就抛出去，执行器据此不形成收尾记录，这条任务只能由强制路径收口。
             try { await projectAssets?.close(); }
-            finally { removeAbort(); inst.close('run-drained'); await DataWebSocket.closeOwned(); }
+            finally {
+              if (heartbeatTimer) clearInterval(heartbeatTimer);
+              try {
+                await look?.release?.(grant.projectId, {
+                  runId: grant.runId,
+                  runGrantId: grant.runGrantId,
+                  conversationId: grant.conversationId,
+                  assignmentDigest: grant.assignmentDigest,
+                  aborted: false,
+                });
+              } catch {}
+              removeAbort();
+              inst.close('run-drained');
+              await DataWebSocket.closeOwned();
+            }
           }
         }
         if (toolsOpen) throw toolsOpen;
         return { runId: grant.runId, dispatchesOpen: 0 }; },
       /** 文档服务叫停这一轮(停止、转私有、Agent 被关、发起人被踢、删除):工具提供者的收场,无条件做 */
-      fence(control) { return toolset ? toolset.fence({ kind: control?.kind }) : Promise.resolve(null); },
-      close() { removeAbort(); inst.close('run-finished'); },
+      fence(control) {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        try {
+          look?.release?.(grant.projectId, {
+            runId: grant.runId,
+            runGrantId: grant.runGrantId,
+            conversationId: grant.conversationId,
+            assignmentDigest: grant.assignmentDigest,
+            aborted: true,
+          });
+        } catch {}
+        return toolset ? toolset.fence({ kind: control?.kind }) : Promise.resolve(null);
+      },
+      close() {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        try {
+          look?.release?.(grant.projectId, {
+            runId: grant.runId,
+            runGrantId: grant.runGrantId,
+            conversationId: grant.conversationId,
+            assignmentDigest: grant.assignmentDigest,
+            aborted: true,
+          });
+        } catch {}
+        removeAbort();
+        inst.close('run-finished');
+      },
     };
     } catch (error) {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      try {
+        look?.release?.(grant.projectId, {
+          runId: grant.runId,
+          runGrantId: grant.runGrantId,
+          conversationId: grant.conversationId,
+          assignmentDigest: grant.assignmentDigest,
+          aborted: true,
+        });
+      } catch {}
       removeAbort();
       try { inst?.close('bind-failed'); } catch { /* The socket witness remains mandatory. */ }
       try { await toolset?.close('bind-failed'); } catch { /* 账本与浏览器的关闭各自记了结果 */ }
