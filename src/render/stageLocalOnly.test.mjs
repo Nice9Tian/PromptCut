@@ -70,7 +70,9 @@ test("SL-01 在线:本页运行不了的卡不挂组件,照挂快照 / 流平面
     assert.doesNotMatch(wrapOf(live, "v"), /data-test-component/, "没载入的同步卡不挂组件");
     R.setRuntimeCards([]);
     H.setLocalOnlyLowMemory(true);
-    assert.match(s, /data-pc-snapshot-plane=""[^>]*><p>snap-s<\/p>/, "同步卡(没有定义)照挂快照平面");
+    // 撤快照后:没有流的同步卡(没有定义)由 suppressed 占位接管,不再挂快照平面
+    assert.doesNotMatch(s, /data-pc-snapshot-plane/, "同步卡撤除快照平面");
+    assert.match(s, /class="pc-suppressed"/, "同步卡(没有定义)由 suppressed 占位接管");
     for (const w of [u, s]) {
       assert.match(w, /data-pc-placeholder-slot="" hidden=""/, "槽位默认藏着,由显隐调度切");
       assert.doesNotMatch(w, /data-pc-placeholder-fixed/, "不再是常驻槽位");

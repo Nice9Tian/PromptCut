@@ -57,6 +57,8 @@ test("M7-AS-01 没认定时用第一个候选;浏览器那份 task.done 之后�
   src.noteQueueEvent({ type: "task.done", id: "snapshot:R-page:0-59", resultKey: "R-page" });
   await settle(src);
   assert.equal(layerOf(index, "a", "html")?.key, "R-page", "浏览器那份活着:整层换键");
+  assert.equal(w.fetches.length, 0, "撤快照后不自动预取每张卡快照块");
+  await src.fetchSnapshot("html", "R-page", 0);
   assert.ok(w.fetches.some((f) => f === `snap/${H(5000)}`), "按活着那一份的清单取块");
   assert.equal(src.debug().layers[0].envFingerprint, "fp-page");
   src.stop();

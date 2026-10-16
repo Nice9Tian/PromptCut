@@ -228,15 +228,17 @@ test("OCE-L-06 接线:运行状态变了,分派表、测量、时间轴片段、
   assert.match(read("editor/timeline/ClipView.tsx"), /useSyncExternalStore\(onCardRunStatesChanged, cardRunStatesGen\)/, "时间轴片段重绘");
   assert.match(read("editor/snapshotFeed.ts"), /cardRunStatesGen\(\)/, "投递那一侧的记忆带运行状态的代数");
   assert.match(read("editor/costIdentity.ts"), /cardRunStatesGen\(\)/, "成本身份的记忆带运行状态的代数");
-  // 契约第 6 节的六处都经 `localOnlyClipIds` / `unsupportedHere` / `needsLocalPc`,不自己再判「是不是用户卡」
+  // 契约第 6 节的各处都经 `localOnlyClipIds` / `unsupportedHere` / `needsLocalPc`,不自己再判「是不是用户卡」
   for (const [rel, re] of [
-    ["editor/costIdentity.ts", /localOnlyClipIds\(/], ["editor/snapshotFeed.ts", /localOnlyClipIds\(/], ["editor/stageSwap.ts", /localOnlyClipIds\(/],
+    ["editor/costIdentity.ts", /localOnlyClipIds\(/], ["editor/snapshotFeed.ts", /localOnlyClipIds\(/],
     ["StageView.tsx", /localOnlyClipIds\(/], ["render/Stage.tsx", /unsupportedHere\(clip\.cardId, def\)/], ["editor/timeline/ClipView.tsx", /unsupportedHere\(/],
   ]) {
     const text = read(rel);
     assert.match(text, re, `${rel} 走同一个判法`);
     assert.doesNotMatch(text, /isUserCardId\(/, `${rel} 不自己判「是不是用户卡」`);
   }
+  // 撤快照后 stageSwap 不再直接投快照，统一由 snapshotFeed.streamPlanesAt / suppressedAt 接管，不自己判「是不是用户卡」
+  assert.doesNotMatch(read("editor/stageSwap.ts"), /isUserCardId\(/, "editor/stageSwap.ts 不自己判「是不是用户卡」");
 });
 
 test("OCE-L-07 导出期间请渲染节点补同步卡的原尺寸:记下、去重、通知、清掉;清单计划并上它们", async () => {
