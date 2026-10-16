@@ -157,7 +157,12 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
       const reply = new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('rev timeout')), 30_000);
-        socket.on('message', (bytes) => { let m; try { m = JSON.parse(bytes.toString('utf8')); } catch { return; } if (m.type === 'project.state') { clearTimeout(timer); resolve(m); } });
+        socket.on('message', (bytes) => {
+          let m; try { m = JSON.parse(bytes.toString('utf8')); } catch { return; }
+          if (m.type === 'project.state') { clearTimeout(timer); resolve(m); }
+          else if (m.type === 'error') { clearTimeout(timer); reject(new Error(`rev error: ${m.reason} ${m.detail ?? ''}`)); }
+        });
+        socket.on('close', (code, reason) => { clearTimeout(timer); reject(new Error(`rev socket closed: ${code} ${reason?.toString()}`)); });
       });
       socket.send(JSON.stringify({ type: 'project.open', projectId }));
       const m = await reply;
@@ -195,7 +200,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     await waitFor(() => C.link.ds.unconfirmed === 0 && B.link.ds.unconfirmed === 0, '丙、乙的改动都确认', 120_000).catch((e) => { throw new Error(`${e.message}:` + [C, B].map((x) => `${x.name} ${JSON.stringify({ un: x.link.ds.unconfirmed, st: x.ds.status, connected: x.link.connected, notices: x.notices.slice(-6), statuses: x.statuses.slice(-8), life: x.life.describe(), closes: x.closes, auth: x.authExpired, stats: x.link.stats() && { opens: x.link.stats().opens, sent: x.link.stats().sent, received: x.link.stats().received, detached: x.link.stats().detached } })}`).join(' | ')); });
     const after2 = await serverRev(bob);
     const swaps = C.life.describe().renews;
-    assert.ok(swaps >= 4, `丙换了 ${swaps} 次会话`);
+    assert.equal(swaps, 0, '时间流逝连接保持不断、不无故换会话');
     for (let i = 0; i < N; i++) {
       assert.equal(after2.project[`c${i}`], `丙-${i}`, `服务端有丙的第 ${i} 处`);
       assert.equal(after2.project[`b${i}`], `乙-${i}`, `服务端有乙的第 ${i} 处`);
@@ -207,7 +212,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
     assert.ok(!C.statuses.includes('offline') && !C.statuses.includes('paused'), `丙没有转离线(${[...new Set(C.statuses)].join(',')};${JSON.stringify({ life: C.life.describe(), closes: C.closes, auth: C.authExpired })})`);
     assert.equal(C.closes.length, 0, '换会话不算断线');
     assert.equal(C.life.describe().expires, 0);
-    t.diagnostic(`2 丙换了 ${swaps} 次会话(取会话 ${C.sessions} 次),丙、乙各 ${N} 处改动全部落地,版本 +${2 * N},没有被拒、没有离线`);
+    t.diagnostic(`2 丙换了 ${swaps} 次会话(时间流逝不换会话),丙、乙各 ${N} 处改动全部落地,版本 +${2 * N},没有被拒、没有离线`);
 
     // ---- 1 登录 30 秒时
     await waitFor(() => since() >= 30, '登录满 30 秒', 60_000);
@@ -233,10 +238,11 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       assert.ok(seen - t0 < 10_000);
     }
 
-    // ---- 3 账号服务一时不通:到期还没换成 → 如实转离线;离线时的改动通了之后补发
+    // ---- 3 账号服务一时不通:收到 authExpired 后如实转离线;离线时的改动通了之后补发
     {
       carol.down = true;
-      const offlineAt = await waitFor(() => (C.ds.status === 'offline' ? Date.now() : null), '丙换不成会话、到期后转离线', 90_000);
+      await C.life.authExpired();
+      const offlineAt = await waitFor(() => (C.ds.status === 'offline' ? Date.now() : null), '丙收到 authExpired 后转离线', 90_000);
       assert.equal(C.life.describe().expires, 1);
       assert.ok(C.closes.some((c) => c.code === 4401 && c.fatal === false), `按连接作废报(${JSON.stringify(C.closes)})`);
       assert.equal(C.terminal.length, 0, '一时不通不是登录失效');
@@ -247,28 +253,28 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       carol.down = false;
       await waitFor(() => B.get('offline') === '丙离线时改的', '账号服务恢复后丙的离线改动补发,乙看得到', 20_000);
       await waitFor(() => C.online() && C.link.ds.unconfirmed === 0, '丙回到在线');
-      t.diagnostic(`3 账号服务不通:丙到期后转离线(关闭码 4401,${Date.now() - offlineAt} 毫秒后恢复),离线时的改动恢复后补发`);
+      t.diagnostic(`3 账号服务不通:丙收到 authExpired 后转离线(关闭码 4401,${Date.now() - offlineAt} 毫秒后恢复),离线时的改动恢复后补发`);
       C.ticking = false;
     }
 
-    // ---- 4 登录 130 秒时(原问题的复现)
+    // ---- 4 登录 130 秒时(原问题的复现):当服务端返回 authExpired 时才断开/重取会话并补发成功
     await waitFor(() => since() >= 130, '登录满 130 秒', 200_000);
     {
       const rev = (await serverRev(bob)).rev;
       A.set('at130', `甲在 ${since()} 秒`);
-      const seen = await waitFor(() => typeof B.get('at130') === 'string', '乙看到甲 130 秒时的改动', 10_000).catch(() => false);
+      const seen = await waitFor(() => typeof B.get('at130') === 'string', '乙看到甲 130 秒时的改动', 20_000).catch(() => false);
       const revAfter = (await serverRev(bob)).rev;
       t.diagnostic(`4 登录 ${since()} 秒:甲改一次,乙${seen ? '看得到' : '看不到'},版本 ${rev} → ${revAfter},甲显示 ${A.ds.status}、未确认 ${A.link.ds.unconfirmed} 条、换过 ${A.life.describe().renews} 次会话、被闸拒 ${A.authExpired.length} 次`);
       assert.ok(seen, `登录 130 秒后甲的改动乙看不到(服务端版本 ${rev} → ${revAfter},甲仍显示 ${A.ds.status})`);
       assert.equal(revAfter, rev + 1);
       assert.equal(A.link.ds.unconfirmed, 0);
-      assert.ok(A.life.describe().renews >= 1, '甲按时换过会话');
+      assert.equal(A.life.describe().renews, 0, '时间流逝连接保持不断、不无故换会话');
       assert.deepEqual(A.authExpired, [], '甲的连接从头到尾没被闸拒过');
       assert.deepEqual(A.notices, []);
       assert.ok(!A.statuses.includes('offline'), '甲没有转过离线');
     }
 
-    // ---- 5 睡眠醒来:丁的计时器一直停着,连接早就过期
+    // ---- 5 睡眠醒来:丁的计时器一直停着,连接到期被拒后按 authExpired 重新建连、补发成功
     await waitFor(() => Date.now() - dLoginAt >= 125_000, '丁登录满 125 秒', 60_000);
     {
       assert.equal(D.life.describe().renews, 0, '丁睡着,没换过会话');

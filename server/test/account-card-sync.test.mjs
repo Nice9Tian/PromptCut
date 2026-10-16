@@ -243,7 +243,7 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
     assert.equal(c.sync.status().notices.filter((n) => n.type === 'installed' && n.key === CARD && n.rev === 5).length, 1, '同一版只装一次');
     t.diagnostic(`7b 按票据到期换会话 ${c.renews().length} 次(取票据 ${c.tickets.ok} 次),换过之后收发照常`);
 
-    // ---- 7c 真的到期:一条不按时换的连接(到期时刻故意报成很久以后),访问令牌到期后闸回 credential-revoked,端点当场换会话、补传
+    // ---- 7c 真的到期:时间流逝连接保持不断、不按时钟到期换会话,改动直接上传成功
     const d = editor(alice, projectId, {}, { expiresAt: () => Date.now() + 600_000 });
     await waitFor(() => d.files.get(CARD) === src('v4b'), '丁(甲的另一台设备)对账装上');
     const dTicketExpiry = loggedInAt + 120_000;
@@ -253,12 +253,11 @@ test('账号云端项目的卡片源码同步:上传、装上、只读、别的�
     const LATE = 'src/cards/user/acct-sync-late.tsx';
     d.files.set(LATE, src('after-expiry'));
     d.sync.saved(LATE);
-    await waitFor(() => d.renews().some((e) => e.why === 'credential-revoked' || e.why === 'authorization-expired'), '到期的连接被闸拒,端点换会话');
-    await waitFor(() => a.files.get(LATE) === src('after-expiry'), '换会话之后补传成功,甲装上', 30_000);
+    await waitFor(() => a.files.get(LATE) === src('after-expiry'), '时间流逝连接不断,丁的改动直接上传成功,甲装上', 30_000);
+    assert.equal(d.renews().length, 0, '时间流逝连接保持不断、不按钟点换会话');
     assert.ok(alice.tokenRenewals >= 1, '期间访问令牌续过');
-    assert.ok(a.renews().length >= 1 && a.renews().every((e) => e.why === 'ticket-expiring'), '甲那条按时换的连接没等到被拒');
     assert.ok(!a.log.some((e) => e.event === 'cards.sync.put-failed' && /credential-revoked|authorization-expired/.test(e.code ?? '')), '按时换的连接没有因为到期丢过上传');
-    t.diagnostic(`7c 访问令牌到期后:没按时换的连接被闸拒(${d.renews().map((e) => e.why).join(',')})并当场换会话补传;按时换的连接换了 ${a.renews().length} 次、没被拒过`);
+    t.diagnostic(`7c 访问令牌到期后:时间流逝连接保持不断(丁换了 ${d.renews().length} 次会话),改动直接上传成功`);
 
     // ---- 8 乙被踢
     const kicked = await admin(alice, projectId, { op: 'kick', accountId: bob.accountId });

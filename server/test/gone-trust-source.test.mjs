@@ -34,16 +34,18 @@ test('已去掉的环境变量通道没有回来', () => {
   assert.deepEqual(hits, []);
 });
 
-test('页面一侧只有 syncManager 引证明模块，只引 queryGone，调用时不传信任表', () => {
-  const users = product.filter(file => rel(file).startsWith('src/') && /(?:from\s*|import\(\s*)["'][^"']*gone-proof\.mjs["']/.test(fs.readFileSync(file, 'utf8'))).map(rel);
-  assert.deepEqual(users, ['src/editor/sync/syncManager.ts']);
-  const text = fs.readFileSync(path.join(ROOT, users[0]), 'utf8');
-  const imports = [...text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"[^"]*gone-proof\.mjs"/g)].map(m => m[1].split(',').map(x => x.trim()).filter(Boolean));
-  assert.deepEqual(imports, [['queryGone']]);
-  const calls = [...text.matchAll(/queryGone\(([^;]*)\);?/g)].map(m => m[1]);
-  assert.equal(calls.length, 1, '只有一处调用');
-  assert.equal(/authorities/.test(calls[0]), false, calls[0]);
-  assert.equal(/TRUSTED_GONE_AUTHORITIES|validAuthority|authorityFor/.test(text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')), false, '页面代码不碰信任表本身');
+test('页面一侧只有 syncManager 与 recoveryAssociation 引证明模块，只引 queryGone，调用时不传信任表', () => {
+  const users = product.filter(file => rel(file).startsWith('src/') && /(?:from\s*|import\(\s*)["'][^"']*gone-proof\.mjs["']/.test(fs.readFileSync(file, 'utf8'))).map(rel).sort();
+  assert.deepEqual(users, ['src/editor/sync/recoveryAssociation.ts', 'src/editor/sync/syncManager.ts']);
+  for (const user of users) {
+    const text = fs.readFileSync(path.join(ROOT, user), 'utf8');
+    const imports = [...text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"[^"]*gone-proof\.mjs"/g)].map(m => m[1].split(',').map(x => x.trim()).filter(Boolean));
+    assert.deepEqual(imports, [['queryGone']]);
+    const calls = [...text.matchAll(/queryGone\(([^;]*)\);?/g)].map(m => m[1]);
+    assert.equal(calls.length, 1, `${user} 只有一处调用`);
+    assert.equal(/authorities/.test(calls[0]), false, calls[0]);
+    assert.equal(/TRUSTED_GONE_AUTHORITIES|validAuthority|authorityFor/.test(text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')), false, `${user} 页面代码不碰信任表本身`);
+  }
 });
 
 test('服务端产品代码里，带着自备信任表调用的只有登记墓碑的命令行工具', () => {

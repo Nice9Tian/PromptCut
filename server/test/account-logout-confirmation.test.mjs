@@ -175,7 +175,7 @@ test('退出确认：四个服务都确认以后网页才显示成功；缺一�
     const other = await otherDevice(account, account.password);
     const ackRoute = /^POST \/internal\/v2\/events\/[^/]+\/ack$/, sealRoute = /^POST \/internal\/v2\/order\/logout-complete$/;
     // 文档服务去取账号事件的请求有三次没送到；它的确认有两次、结束见证有一次是账号服务办了但回应丢了。
-    const lostFetch = fixture.accountFault({ match: /^GET \/internal\/v2\/events$/, kind: 'drop-request', times: 3 });
+    const lostFetch = fixture.accountFault({ match: /^GET \/internal\/v2\/(?:events|revocations)$/, kind: 'drop-request', times: 3 });
     const lostAck = fixture.accountFault({ match: ackRoute, kind: 'drop-response', times: 2 });
     const lostSeal = fixture.accountFault({ match: sealRoute, kind: 'drop-response', times: 1 });
     const sealsBefore = fixture.accountInternalSeen(sealRoute);

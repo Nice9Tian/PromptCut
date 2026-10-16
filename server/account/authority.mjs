@@ -189,28 +189,41 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   }
   async function verify(input, trustedRole = 'page') {
     if (!input || typeof input !== 'object') reject(401, 'login-required');
+    let token = input.accessToken, ref;
     if (input.authorizationId !== undefined) {
-      const ref = refs.get(input.authorizationId);
+      ref = refs.get(input.authorizationId);
       if (!ref) reject(401, 'authorization-expired');
-      for (const field of ['accountId', 'loginId', 'credentialId', 'loginGeneration']) {
+      token = ref.token;
+      for (const field of ['accountId', 'loginId', 'loginGeneration']) {
         if (input[field] !== undefined && input[field] !== ref.principal[field]) reject(401, 'principal-mismatch');
       }
-      if (input.accessToken !== undefined && input.accessToken !== ref.token) reject(401, 'principal-mismatch');
+      if (input.accessToken !== undefined && input.accessToken !== token) reject(401, 'principal-mismatch');
       trustedRole = ref.role;
       const state = ledger.read();
       if (state.revokedLogins[`login:${ref.principal.loginId}`]) reject(401, 'credential-revoked');
-      return { ...ref.principal, authorizationId: input.authorizationId, role: trustedRole };
     }
-    const token = input.accessToken;
     const principal = await accountClient.verify(token);
     await synchronize();
     const state = ledger.read();
     if (state.accountHead < principal.accountEventSeq) reject(503, 'account-event-gap');
     if (state.revokedLogins[`login:${principal.loginId}`]) reject(401, 'credential-revoked');
-    if (principal.expiresAt <= now()) reject(401, 'credential-revoked');
+    if (!ref && principal.expiresAt <= now()) reject(401, 'credential-revoked');
+    if (ref && ['accountId', 'loginId', 'loginGeneration'].some(k => principal[k] !== ref.principal[k])) reject(401, 'principal-mismatch');
     if (!['page', 'agent', 'render'].includes(trustedRole)) reject(403, 'invalid-role');
-    const authorizationId = randomUUID();
-    refs.set(authorizationId, { token, principal, role: trustedRole });
+    let authorizationId = input.authorizationId;
+    if (!authorizationId) {
+      authorizationId = randomUUID();
+      refs.set(authorizationId, { token, principal, role: trustedRole });
+      for (const [id, existingRef] of refs) {
+        if (id !== authorizationId &&
+            existingRef.principal.accountId === principal.accountId &&
+            existingRef.principal.loginId === principal.loginId &&
+            existingRef.principal.loginGeneration === principal.loginGeneration) {
+          existingRef.token = token;
+          existingRef.principal = { ...existingRef.principal, expiresAt: principal.expiresAt };
+        }
+      }
+    }
     return { ...principal, authorizationId, role: trustedRole };
   }
   async function authorizePrincipal(input, { projectId, action = 'read', trustedRole = 'page' } = {}) {

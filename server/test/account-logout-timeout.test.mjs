@@ -10,9 +10,10 @@ import fs from 'node:fs/promises';
 import https from 'node:https';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { freePorts } from './free-ports.mjs';
 import { startAccountPasswordUserFixture } from './fixtures/account-password-user-path.mjs';
 
-const ports = [28150, 28151, 28152, 28153, 28154, 28155, 28156], agentPort = 28157, TIMEOUT_MS = 3000;
+const TIMEOUT_MS = 3000;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(check, what, ms = 30_000) {
   const until = Date.now() + ms;
@@ -36,6 +37,7 @@ function jsonRequest(url, { method = 'GET', body, headers = {}, ca } = {}) {
 }
 
 test('退出确认超时：到时显示失败和调试信息，不冒称已退出，不放回权限；迟到的确认到齐后照实变成办完', { timeout: 300_000 }, async t => {
+  const [agentPort, ...ports] = await freePorts(8);
   const fixture = await startAccountPasswordUserFixture({ ports, agentPort, logoutConfirmPollMs: 250, logoutConfirmTimeoutMs: TIMEOUT_MS,
     assetEntry: fileURLToPath(new URL('./fixtures/asset-entry-restartable.mjs', import.meta.url)) });
   t.after(() => fixture.close());

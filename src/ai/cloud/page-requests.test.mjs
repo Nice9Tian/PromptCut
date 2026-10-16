@@ -234,7 +234,7 @@ test("CAU-REV-06 守门:触发执行的入口只有事件流;接口层带委托�
   // 旧通道(非账号模式)照旧:这张页面自己起的页面号、旧的执行器;账号模式另一支:在场页面号每次现取、账号模式的执行器(accountPage.ts)
   assert.match(wiring, /createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*false,\s*pageId:\s*PAGE_ID,\s*onPageRequest:\s*\(ev\)\s*=>\s*runPageRequest\(ev,\s*pageExec\)\s*\}\)/,
     "非账号模式:事件流会话仍绑这张页面自己的页面号,页面请求仍经旧的唯一接线入口执行");
-  assert.match(wiring, /createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*true,\s*pageId:\s*\(\)\s*=>\s*selectionPresenceStatus\(\)\.pageId,\s*onPageRequest:\s*\(ev\)\s*=>\s*accountPageHandler\(ev\)\s*\}\)/,
+  assert.match(wiring, /createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*true,\s*(?:projectId:[^,]+,\s*accountId:[^,]+,\s*)?pageId:\s*\(\)\s*=>\s*selectionPresenceStatus\(\)\.pageId,\s*onPageRequest:\s*\(ev\)\s*=>\s*accountPageHandler\(ev\)\s*\}\)/,
     "账号模式:页面号取文档服务在场表里的那一个(每次现取),页面请求交给账号模式的执行器");
   assert.match(wiring, /cloud\.accountMode\s*\?\s*createCloudSession\(\{\s*api,\s*store,\s*accountMode:\s*true/, "两支按 cloud.accountMode 分");
   assert.equal(/__pcCloud[^\n]*(runPageRequest|pageExec|PAGE_ID)/.test(wiring), false, "探针的只读口子里没有它");
