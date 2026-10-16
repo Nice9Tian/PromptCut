@@ -117,8 +117,8 @@ export function validateAgentScopeClosure(value, expected, record, assignment, t
       value.epoch !== record.epoch || value.recordDigest !== digestOf(record) || value.assignmentDigest !== (assignment ? digestOf(assignment) : null) ||
       value.terminalDigest !== digestOf(terminal) || value.intentDigest !== (intent ? digestOf(intent) : null)) failScope('closure');
   const o = value.observed;
-  if (!exactScope(o, ['kind', 'closed', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'populated', 'serviceInactive', 'mainBirthGone']) ||
-      o.kind !== 'cgroup-empty' || o.closed !== true || !positive(o.at) || o.bootId !== record.instance.bootId ||
+  if (!exactScope(o, ['kind', 'closed', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'populated', 'serviceInactive', 'mainBirthGone'], ['previousBootId', 'currentBootId']) ||
+      (o.kind !== 'cgroup-empty' && o.kind !== 'boot-transition') || o.closed !== true || !positive(o.at) || o.bootId !== record.instance.bootId ||
       !sameScope(o.serviceInstance, record.instance) || !sameScope(o.closureScope, record.closureScope) || o.scopeActive !== true ||
       o.scopeExclusive !== true || o.populated !== 0 || o.serviceInactive !== true || o.mainBirthGone !== true) failScope('closure-observation');
   return structuredClone(value);
@@ -146,7 +146,7 @@ export function validateAgentScopeFailure(value, publication, expected, record, 
       value.assignmentDigest !== (assignment ? digestOf(assignment) : null) || !hash(anchorDigest)) failScope('failure-binding');
   const o = value.observed;
   if (!exactScope(o, ['kind', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'mainPid', 'mainBirthGone', 'populated']) ||
-      o.kind !== 'main-birth-gone' || !positive(o.at) || o.bootId !== record.instance.bootId ||
+      (o.kind !== 'main-birth-gone' && o.kind !== 'boot-transition') || !positive(o.at) || o.bootId !== record.instance.bootId ||
       !sameScope(o.serviceInstance, record.instance) || !sameScope(o.closureScope, record.closureScope) ||
       o.scopeActive !== true || o.scopeExclusive !== true || o.mainPid !== 0 || o.mainBirthGone !== true ||
       ![0, 1].includes(o.populated)) failScope('failure-observation');
@@ -166,8 +166,7 @@ export function validateAgentScopeHistory({ expected, anchor, configuredAnchorDi
         e.record?.epoch !== i + 1 || !exactScope(e.publications, ['ready', 'bound', 'closed'])) failScope('history');
     const r = validateAgentScopeRecord(e.record, expected); validateAgentScopeReservation(e.reservation, expected);
     if (e.reservation.instanceId !== r.instance.instanceId || !sameScope(e.reservation.closureScope, r.closureScope)) failScope('reservation');
-    if (i === 0 ? anchor.firstRecordDigest !== digestOf(r) : r.previousClosureDigest !== digestOf(previous.closure) ||
-        r.instance.bootId !== previous.record.instance.bootId) failScope('history');
+    if (i === 0 ? anchor.firstRecordDigest !== digestOf(r) : r.previousClosureDigest !== digestOf(previous.closure)) failScope('history');
     for (const id of [`instance:${r.instance.instanceId}`, `scope:${r.closureScope.scopeId}`, `unit:${r.closureScope.unit}`,
       `invocation:${r.instance.unitInvocationId}`, `invocation:${r.closureScope.unitInvocationId}`, `key:${r.worker.publicKeyDigest}`]) {
       if (unique.has(id)) failScope('generation-reused'); unique.add(id);

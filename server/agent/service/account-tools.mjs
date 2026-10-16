@@ -119,8 +119,8 @@ export function readAccountToolConfig(tools, { root }) {
   if (optionalStages && optionalStages.some((name) => !['transcribe', 'shots', 'subjects', 'compose', 'prerender'].includes(name)))
     bad('PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES 只能是 transcribe、shots、subjects、compose、prerender 里的几个,用逗号隔开');
   const delegate = env.PROMPTCUT_AGENT_COLLECT_DELEGATE;
-  if (delegate !== undefined && !['0', '1'].includes(delegate)) bad('PROMPTCUT_AGENT_COLLECT_DELEGATE 只能是 0 或 1');
-  return { shots, subject, stt, track, browser, collect, collectDelegate: delegate === '1', ...(optionalStages ? { workflow: { optionalStages } } : {}) };
+  if (delegate !== undefined && !['0', '1', 'false', 'true'].includes(delegate)) bad('PROMPTCUT_AGENT_COLLECT_DELEGATE 只能是 0 或 1');
+  return { shots, subject, stt, track, browser, collect, collectDelegate: delegate !== '0' && delegate !== 'false', ...(optionalStages ? { workflow: { optionalStages } } : {}) };
 }
 
 /** 这个对话放工具状态(账本、追踪结果、委托记录)的目录 */
@@ -493,7 +493,7 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
   } else {
     for (const family of ['page', 'handoff', 'collect']) skipped[family] = 'no-internal-channel';
   }
-  const delegateDownload = config.collectDelegate === true;
+  const delegateDownload = config.collectDelegate !== false;
   const names = Object.freeze(new Set(byTool.keys()));
 
   /* ---------- 调用 ---------- */

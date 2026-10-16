@@ -97,8 +97,11 @@ test('WIRE-TABLE 给模型看的那一段跟着接上的族变:接上的不再�
     '由他的电脑用本机的登录态代下', '登录信息只留在他的电脑上', '云端暂不支持开子 Agent', '素材的镜头拼图(`source: "media"`)云端还没有',
     // 等作业有上限、到点会中断;模板匹配兜底只在配了追踪的运行环境时成立
     '最多接着等一小时,到时还没做完的作业会被中断', '运动追踪要这台节点配了追踪的运行环境才能用', '配了运行环境但没装模型时走模板匹配兜底']) assert.ok(all.includes(phrase), phrase);
-  // 代下缺省不开(部署配置没有显式打开):采集那一条仍说「不带登录态」,并说明登录那两个工具帮不了云端的下载;不说「由他的电脑代下」
-  const plain = cloudSystemNote({ look: true, provided: CLOUD_PROVIDER_TOOLS });
+  // 代下缺省开启:包含由他的电脑代下
+  assert.ok(all.includes('由他的电脑用本机的登录态代下'));
+  assert.ok(cloudSystemNote({ look: true, provided: CLOUD_PROVIDER_TOOLS }).includes('由他的电脑用本机的登录态代下'), '代下缺省开启');
+  // 显式关闭代下（collectDelegate: false）：采集那一条说「不带登录态」，并说明登录那两个工具帮不了云端的下载；不说「由他的电脑代下」
+  const plain = cloudSystemNote({ look: true, provided: CLOUD_PROVIDER_TOOLS, collectDelegate: false });
   assert.ok(plain.includes('不带任何站点的登录态(按未登录的画质)'));
   assert.ok(plain.includes('云端的下载这一版用不到他电脑上的登录态'));
   assert.doesNotMatch(plain, /由他的电脑用本机的登录态代下/);
@@ -540,12 +543,13 @@ test('WIRE-SET 被叫停时浏览器数据的去留:停止、Agent 被关留着;
   assert.equal((await run('delete')).left, null);
 });
 
-test('WIRE-SET 代下缺省不开:只交登录那两样,回给模型的话不许诺「之后由他的电脑代下」;部署配置显式打开才交代下', async (t) => {
+test('WIRE-SET 代下缺省开启:交代下全套(含 download);部署配置显式设为 0 或 false 才关闭代下', async (t) => {
   const asked = [];
   const bridge = () => ({ limits: { pageMs: 15_000 }, extraTools: [...COLLECT_PAGE_TOOLS], cancelRun: () => 0, close: async () => ({ childrenClosed: true, streamsClosed: true, workPending: 0 }),
     initiator: async () => ({ initiatorAccountId: 'a1', pageId: 'page-1', grantState: 'active' }),
     requestPage: async ({ tool }) => { asked.push(tool); return { delivered: true, answer: { ok: true, result: tool === 'collect_login' ? { opened: false, alreadyLoggedIn: true } : { loggedIn: true } } }; } });
-  const off = await toolsetKit(t, { pageBridge: bridge() });
+  // 显式设为 false 时关闭代下
+  const off = await toolsetKit(t, { pageBridge: bridge(), config: { collectDelegate: false } });
   assert.equal(off.toolset.delegateDownload(), false);
   assert.equal(off.toolset.describe().delegateDownload, false);
   const login = off.toolset.collectDelegate();
@@ -555,11 +559,14 @@ test('WIRE-SET 代下缺省不开:只交登录那两样,回给模型的话不许
   for (const text of Object.values(LOGIN_WITHOUT_DELEGATE_TEXT)) assert.doesNotMatch(text, /会由他的电脑带着登录态下载/);
   assert.deepEqual(asked, ['collect_login', 'collect_login_check'], '登录那两样照常经反向通道到发起人的页面');
 
-  const on = await toolsetKit(t, { pageBridge: bridge(), config: { collectDelegate: true } });
-  assert.equal(on.toolset.delegateDownload(), true);
-  const full = on.toolset.collectDelegate();
+  // 缺省开启代下
+  const def = await toolsetKit(t, { pageBridge: bridge() });
+  assert.equal(def.toolset.delegateDownload(), true);
+  assert.equal(def.toolset.describe().delegateDownload, true);
+  const full = def.toolset.collectDelegate();
   assert.equal(typeof full.download, 'function');
-  assert.equal((await full.loginCheck({ site: 'bilibili' })).hint, COLLECT_BRIDGE_TEXT.loginChecked, '开了代下:原来那句话成立,不改');
+  assert.equal((await full.loginCheck({ site: 'bilibili' })).hint, COLLECT_BRIDGE_TEXT.loginChecked, '开了代下:原句成立');
+
   // 没有内部通道(没有反向通道)的进程:两样都没有
   const none = await toolsetKit(t, { config: { collectDelegate: true } });
   assert.equal(none.toolset.collectDelegate(), null);
@@ -649,10 +656,12 @@ test('WIRE-CONF root 入口:tools 里的键写错、值不对,启动时就拒绝
   // 两处是同一张名单:任务进程不认的键 root 一定不认,反过来也是
   for (const key of ACCOUNT_TOOL_SETTING_KEYS) assert.deepEqual(Object.keys(validateAccountToolSettings({ [key]: all[key] })), [key]);
   assert.equal(SHARED_KEYS, ACCOUNT_TOOL_SETTING_KEYS, 'account-tools.mjs 转出的就是 account-tool-settings.mjs 的那一张');
-  // 代下的开关:缺省关
-  assert.equal(readAccountToolConfig({}, { root: REPO_ROOT }).collectDelegate, false);
+  // 代下的开关:缺省开,设 0 或 false 为关
+  assert.equal(readAccountToolConfig({}, { root: REPO_ROOT }).collectDelegate, true);
   assert.equal(readAccountToolConfig({ PROMPTCUT_AGENT_COLLECT_DELEGATE: '0' }, { root: REPO_ROOT }).collectDelegate, false);
+  assert.equal(readAccountToolConfig({ PROMPTCUT_AGENT_COLLECT_DELEGATE: 'false' }, { root: REPO_ROOT }).collectDelegate, false);
   assert.equal(readAccountToolConfig({ PROMPTCUT_AGENT_COLLECT_DELEGATE: '1' }, { root: REPO_ROOT }).collectDelegate, true);
+  assert.equal(readAccountToolConfig({ PROMPTCUT_AGENT_COLLECT_DELEGATE: 'true' }, { root: REPO_ROOT }).collectDelegate, true);
 });
 
 /* ---------- 对话被删:待清的单子,任务用户一侧照单子清 ---------- */

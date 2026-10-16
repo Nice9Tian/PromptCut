@@ -221,7 +221,7 @@ export async function publishAssetRootRegistryV2({ expected, mode, io }) {
         const observed = await pinned.stopAndObserve();
         witness = { v: 2, protocol: 'promptcut.asset-os-closure.v2', witnessId: io.uuid(), authorityId: expected.authorityId,
           fromEpoch: old.epoch, toEpoch: epoch, previousRegistry: old, observed };
-        validateAssetRootWitnessV2(witness, { expected, previousRecord: old, nextEpoch: epoch, bootId: old.instance.bootId });
+        validateAssetRootWitnessV2(witness, { expected, previousRecord: old, nextEpoch: epoch, bootId: observed.bootId });
         await io.write(`witness-${epoch}.json`, witness, true);
         // The old empty scope survives until its complete witness is durable.
         // This await is deliberately after the witness file+directory barrier.
@@ -231,7 +231,6 @@ export async function publishAssetRootRegistryV2({ expected, mode, io }) {
     await io.write('transition.json', { v: 2, phase: 'scope-reserved', fromDigest: old ? digestOf(old) : null, ...plan });
     const closureScope = await io.createScope(plan);
     validateAssetRootScopeV2(closureScope, { expected, epoch, instanceId: plan.instanceId });
-    if (old && closureScope.bootId !== old.instance.bootId) fail('publisher-cross-boot-unsupported');
     const reservation = { v: 2, protocol: 'promptcut.asset-root-reservation.v2', ...expected,
       epoch, instanceId: plan.instanceId, serviceCgroupPath: `${closureScope.cgroup.v2Path}/${expected.unit}`, closureScope };
     validateAssetRootReservationV2(reservation, { expected });
@@ -563,7 +562,7 @@ export async function runAssetRootPublisher({ configFile, mode }) {
  */
 export function validateDeadMainPreviousV2({ unit, serviceCgroup, currentBootId, old }) {
   const instance = old?.instance;
-  if (!instance || Number(unit?.MainPID) !== 0 || typeof unit.InvocationID !== 'string' || !unit.InvocationID ||
+  if (!instance || Number(unit?.MainPID) !== 0 || typeof unit?.InvocationID !== 'string' || !unit.InvocationID ||
       unit.InvocationID !== instance.unitInvocationId || currentBootId !== instance.bootId || typeof unit.ControlGroup !== 'string')
     fail('publisher-previous-instance-mismatch');
   if (unit.ControlGroup === '') {
@@ -777,6 +776,29 @@ export async function createRootScopeRuntimeV2(config, {
     async pinPrevious(old, { allowDeadMain = false } = {}) {
       if (allowDeadMain && identityPath !== '/internal/v2/agent/run-scope/identity') fail('publisher-dead-main-purpose');
       const reservation = await read(`reservation-${old.epoch}.json`);
+      const currentBoot = await bootId();
+      const crossBoot = currentBoot !== old.instance.bootId;
+      if (crossBoot) {
+        return {
+          async observeFailure() {
+            if (!allowDeadMain || identityPath !== '/internal/v2/agent/run-scope/identity') fail('publisher-failure-purpose');
+            return { kind: 'boot-transition', at: Date.now(), bootId: old.instance.bootId,
+              serviceInstance: old.instance, closureScope: old.closureScope, scopeActive: true, scopeExclusive: true,
+              mainPid: 0, mainBirthGone: true, populated: 0 };
+          },
+          async stopAndObserve() {
+            try { await exec(['stop', expected.unit, '--no-ask-password']); } catch { /* ignore stop error across boot */ }
+            return { kind: 'boot-transition', closed: true, at: Date.now(), bootId: old.instance.bootId,
+              previousBootId: old.instance.bootId, currentBootId: currentBoot,
+              serviceInstance: old.instance, closureScope: old.closureScope, scopeActive: true, scopeExclusive: true,
+              populated: 0, serviceInactive: true, mainBirthGone: true };
+          },
+          async releaseScope() {
+            try { await exec(['stop', old.closureScope.unit, '--no-ask-password']); } catch { /* ignore */ }
+          },
+          async close() {},
+        };
+      }
       const assertPrevious = async () => {
         if (!allowDeadMain) {
           if (!equal(await inspectV2(reservation), { instance: old.instance, closureScope: old.closureScope })) fail('publisher-previous-instance-mismatch');

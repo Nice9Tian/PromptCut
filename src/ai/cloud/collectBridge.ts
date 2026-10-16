@@ -118,7 +118,28 @@ type Delegation = {
   stage: string; percent: number; code: string | null; receipt: CollectReceipt | null; cancelled: boolean;
   /** 云端最近一次来问这次委托(开始、问进度)的时刻 */
   lastAsk: number;
+  url?: string;
+  hashes?: string[];
 };
+
+let activeDelegationUrl: string | null = null;
+const delegationListeners = new Set<() => void>();
+const activeCollectors = new Set<{ cancelActive(): Promise<void> }>();
+
+export function getActiveCollectDelegationUrl(): string | null {
+  return activeDelegationUrl;
+}
+
+export function subscribeActiveCollectDelegation(listener: () => void): () => void {
+  delegationListeners.add(listener);
+  return () => { delegationListeners.delete(listener); };
+}
+
+export async function cancelAllCollectDelegations(): Promise<void> {
+  for (const c of [...activeCollectors]) {
+    await c.cancelActive();
+  }
+}
 
 export interface CollectBridgePageDeps {
   /** 这张页面此刻的在场页面号(每次现取;没连上文档服务时是 null,那时什么都不执行) */
@@ -164,6 +185,7 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
   run(ev: CloudEvent): Promise<CollectPageAnswer | null>;
   /** 探针与单测的观察口:在办的委托数 */
   describe(): { delegations: number; running: number };
+  cancelActive(): Promise<void>;
 } {
   const remember = deps.remember ?? 400;
   const pollMs = deps.pollMs ?? 1000;
@@ -175,6 +197,15 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
   const done = new Map<string, { nonce: string; answer: Promise<CollectPageAnswer> }>();
   const delegations = new Map<string, Delegation>();
+
+  function updateActiveUrl() {
+    const running = [...delegations.values()].find((d) => d.phase === "running" && d.url);
+    const next = running?.url ?? null;
+    if (next !== activeDelegationUrl) {
+      activeDelegationUrl = next;
+      for (const l of [...delegationListeners]) l();
+    }
+  }
 
   /** 本机下载 → 上传 → 回执。任何一步不成只记代号 */
   async function track(d: Delegation, local: CollectBridgeLocal, upload: CollectBridgeUpload): Promise<void> {
@@ -215,6 +246,7 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
           ...(typeof it.vcodec === "string" && /^[A-Za-z0-9_.-]{1,32}$/.test(it.vcodec) ? { vcodec: it.vcodec } : {}),
         });
       }
+      d.hashes = items.map((it) => it.assetRef.hash);
       // 下载的这段时间里云端已经不等了:下好的文件留在本机内容库里,不往项目的素材服务传
       if (d.cancelled) return fail("cancelled");
       if (abandoned()) return fail("abandoned");
@@ -224,7 +256,12 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
       d.percent = 92;
       if (!(await upload.push(items.map((it) => ({ hash: it.assetRef.hash, name: it.name }))))) return fail("upload-failed");
       const uploadStarted = now();
-      const withdraw = async () => { try { await upload.cancel?.(items.map((it) => it.assetRef.hash)); } catch { /* 撤不回:上传一侧自己传完,云端不会登记它 */ } };
+      const withdraw = async () => {
+        try {
+          const toCancel = d.hashes ?? items.map((it) => it.assetRef.hash);
+          if (toCancel.length) await upload.cancel?.(toCancel);
+        } catch { /* 撤不回:上传一侧自己传完,云端不会登记它 */ }
+      };
       for (const it of items) {
         for (;;) {
           if (d.cancelled) { await withdraw(); return fail("cancelled"); }
@@ -242,6 +279,8 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
       d.phase = "done";
     } catch {
       fail(d.stage === "upload" ? "upload-failed" : "local-download-failed");
+    } finally {
+      updateActiveUrl();
     }
   }
 
@@ -282,9 +321,10 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
     } catch {
       return { ok: true, result: { accepted: false, code: "local-not-ready" } };
     }
-    const d: Delegation = { id: delegationId, jobId, projectId: raw.projectId, localJobId, phase: "running", stage: "starting", percent: 0, code: null, receipt: null, cancelled: false, lastAsk: now() };
+    const d: Delegation = { id: delegationId, jobId, projectId: raw.projectId, localJobId, phase: "running", stage: "starting", percent: 0, code: null, receipt: null, cancelled: false, lastAsk: now(), url, hashes: [] };
     delegations.set(delegationId, d);
     if (delegations.size > 50) delegations.delete(delegations.keys().next().value as string);
+    updateActiveUrl();
     void track(d, local, upload);
     return { ok: true, result: { accepted: true } };
   }
@@ -305,8 +345,23 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
       d.phase = "error";
       d.code = "cancelled";
       if (d.localJobId && deps.local) await deps.local.cancel(d.localJobId).catch(() => {});
+      if (d.hashes?.length && deps.upload) await deps.upload.cancel?.(d.hashes).catch(() => {});
+      updateActiveUrl();
     }
     return { ok: true };
+  }
+
+  async function cancelActive(): Promise<void> {
+    for (const d of delegations.values()) {
+      if (d.phase === "running") {
+        d.cancelled = true;
+        d.phase = "error";
+        d.code = "cancelled";
+        if (d.localJobId && deps.local) await deps.local.cancel(d.localJobId).catch(() => {});
+        if (d.hashes?.length && deps.upload) await deps.upload.cancel?.(d.hashes).catch(() => {});
+      }
+    }
+    updateActiveUrl();
   }
 
   async function login(raw: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; code?: string }> {
@@ -342,7 +397,7 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
     !!ev && ev.type === "page.request" && ev.v === COLLECT_PAGE_REQUEST_VERSION && typeof ev.tool === "string" &&
     (COLLECT_PAGE_REQUEST_TOOLS as readonly string[]).includes(ev.tool);
 
-  return {
+  const collector = {
     handles,
     async run(ev: CloudEvent): Promise<CollectPageAnswer | null> {
       if (!handles(ev)) return null;
@@ -375,5 +430,8 @@ export function createCollectBridgePage(deps: CollectBridgePageDeps): {
       return answer;
     },
     describe: () => ({ delegations: delegations.size, running: [...delegations.values()].filter((d) => d.phase === "running").length }),
+    cancelActive,
   };
+  activeCollectors.add(collector);
+  return collector;
 }

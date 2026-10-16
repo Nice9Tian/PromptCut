@@ -10,7 +10,7 @@ export const pair = () => { const p = generateKeyPairSync('ed25519'); return { p
 export const signed = (value, key) => ({ ...value, signature: sign(null, Buffer.from(digestOf(value)), key).toString('base64url') });
 export function scopeModel(slotId = 'slot-a') {
   const doc = pair(), files = new Map(), calls = [], faults = {}; let locked = false, n = 0, key;
-  const bootId = '11111111-1111-1111-1111-111111111111';
+  let currentBootId = '11111111-1111-1111-1111-111111111111';
   const expected = { authorityId: `root-${slotId}`, slotId, docAuthorityId: 'doc', docPublicKey: doc.publicKey,
     serviceIdentity: 'agent', uid: 12001, unit: `${slotId}.service`, clientFingerprint256: '1'.repeat(64), serverFingerprint256: '2'.repeat(64),
     closurePolicy: { kind: 'systemd-slice', unitNamespace: 'pcagenttest', cgroupRoot: '/sys/fs/cgroup', placement: 'direct-child', singleEpoch: true } };
@@ -28,14 +28,14 @@ export function scopeModel(slotId = 'slot-a') {
     async assertInitial() { if ([...files.keys()].some(k => k !== '.publisher.lock')) throw Error('not-empty'); },
     async createScope(plan) {
       key = pair(); const unit = assetClosureUnitV2(scopeRuntimeExpected(expected), plan);
-      return { ...plan, authorityId: expected.authorityId, kind: 'systemd-slice', unit, unitInvocationId: String(n * 2).padStart(32, '0'), bootId,
-        cgroup: { v2Path: `/sys/fs/cgroup/${unit}`, dev: '30', ino: String(n * 2), bootId } };
+      return { ...plan, authorityId: expected.authorityId, kind: 'systemd-slice', unit, unitInvocationId: String(n * 2).padStart(32, '0'), bootId: currentBootId,
+        cgroup: { v2Path: `/sys/fs/cgroup/${unit}`, dev: '30', ino: String(n * 2), bootId: currentBootId } };
     },
     async configureService() { calls.push('configure'); }, async start() { calls.push('start'); },
     async inspect(r) {
-      const instance = { instanceId: r.instanceId, bootId, pid: 100 + n, pidBirth: { bootId, startTicks: String(1000 + n) },
+      const instance = { instanceId: r.instanceId, bootId: currentBootId, pid: 100 + n, pidBirth: { bootId: currentBootId, startTicks: String(1000 + n) },
         uid: expected.uid, unit: expected.unit, unitInvocationId: String(n * 2 + 1).padStart(32, '0'),
-        cgroup: { v2Path: r.serviceCgroupPath, dev: '30', ino: String(n * 2 + 1), bootId }, serviceIdentity: expected.serviceIdentity,
+        cgroup: { v2Path: r.serviceCgroupPath, dev: '30', ino: String(n * 2 + 1), bootId: currentBootId }, serviceIdentity: expected.serviceIdentity,
         clientFingerprint256: expected.clientFingerprint256, serverFingerprint256: expected.serverFingerprint256 };
       return { instance, closureScope: clone(r.closureScope) };
     },
@@ -44,9 +44,10 @@ export function scopeModel(slotId = 'slot-a') {
       clientFingerprint256: expected.clientFingerprint256, serverFingerprint256: expected.serverFingerprint256 }; },
     async pinPrevious(record) {
       calls.push('pin'); if (faults.pin) throw Error('old-identity-changed');
+      const crossBoot = record.instance.bootId !== currentBootId;
       return {
         async stopAndObserve() { calls.push('stop'); if (faults.observe) throw Error('ENODEV');
-          return { kind: 'cgroup-empty', closed: true, at: 100, bootId, serviceInstance: clone(record.instance), closureScope: clone(record.closureScope),
+          return { kind: crossBoot ? 'boot-transition' : 'cgroup-empty', closed: true, at: 100, bootId: record.instance.bootId, serviceInstance: clone(record.instance), closureScope: clone(record.closureScope),
             scopeActive: true, scopeExclusive: true, populated: faults.populated ?? 0, serviceInactive: true, mainBirthGone: true }; },
         async releaseScope() { calls.push('release'); if (faults.release) throw Error('release-unknown'); },
         async close() { calls.push('close-fd'); },
@@ -54,11 +55,12 @@ export function scopeModel(slotId = 'slot-a') {
     },
     async pinRetired(record) {
       const pinned = await io.pinPrevious(record);
+      const crossBoot = record.instance.bootId !== currentBootId;
       return { ...pinned, async observeFailure() {
         calls.push('observe-failure');
-        if (faults.mainGone !== true) throw Error('main-still-live');
-        return { kind: 'main-birth-gone', at: 100, bootId, serviceInstance: clone(record.instance), closureScope: clone(record.closureScope),
-          scopeActive: true, scopeExclusive: true, mainPid: 0, mainBirthGone: true, populated: faults.failurePopulated ?? 1 };
+        if (!crossBoot && faults.mainGone !== true) throw Error('main-still-live');
+        return { kind: crossBoot ? 'boot-transition' : 'main-birth-gone', at: 100, bootId: record.instance.bootId, serviceInstance: clone(record.instance), closureScope: clone(record.closureScope),
+          scopeActive: true, scopeExclusive: true, mainPid: 0, mainBirthGone: true, populated: faults.failurePopulated ?? (crossBoot ? 0 : 1) };
       } };
     },
   };
@@ -80,5 +82,7 @@ export function scopeModel(slotId = 'slot-a') {
     const intent = signed({ v: 1, protocol: 'promptcut.agent-run-scope.intent.v1', assignmentDigest: digestOf(a), terminalDigest: digestOf(terminal) }, key.privateKey);
     return { terminal, intent };
   };
-  return { expected, files, io, faults, calls, run, assignment, closing, doc, get workerKey() { return key; } };
+  return { expected, files, io, faults, calls, run, assignment, closing, doc, get workerKey() { return key; },
+    reboot(newBootId = '22222222-2222-2222-2222-222222222222') { currentBootId = newBootId; },
+    get bootId() { return currentBootId; } };
 }

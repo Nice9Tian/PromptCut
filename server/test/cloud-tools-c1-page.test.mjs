@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createCollectBridgePage, COLLECT_PAGE_REQUEST_TOOLS, COLLECT_PAGE_REQUEST_VERSION } from '../../src/ai/cloud/collectBridge.ts';
+import { createCollectBridgePage, COLLECT_PAGE_REQUEST_TOOLS, COLLECT_PAGE_REQUEST_VERSION, getActiveCollectDelegationUrl, cancelAllCollectDelegations } from '../../src/ai/cloud/collectBridge.ts';
 import { collectPageTools } from '../agent/service/collect-bridge.mjs';
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
@@ -40,7 +40,12 @@ function desk({ project = 'P1' } = {}) {
     login: async (args) => { d.calls.push(['login', args]); return d.loggedIn ? { ok: true, alreadyLoggedIn: true, userId: SECRET.user } : { ok: true, visible: true, windowHandle: 42 }; },
     loginCheck: async (args) => { d.calls.push(['loginCheck', args]); return { ok: true, loggedIn: d.loggedIn, userId: SECRET.user, path: SECRET.path }; },
   };
-  d.upload = { projectId: () => d.project, push: async (items) => { d.calls.push(['push', items]); return d.pushOk; }, stored: async () => { d.calls.push('stored'); return d.storedAfter-- <= 0; } };
+  d.upload = {
+    projectId: () => d.project,
+    push: async (items) => { d.calls.push(['push', items]); return d.pushOk; },
+    stored: async () => { d.calls.push('stored'); return d.storedAfter-- <= 0; },
+    cancel: async (hashes) => { d.calls.push(['upload.cancel', hashes]); },
+  };
   d.page = createCollectBridgePage({ pageId: () => PAGE, local: d.local, upload: d.upload, pollMs: 5 });
   return d;
 }
@@ -145,4 +150,37 @@ test('C1-PAGE-06 guard: no global hooks in the page module; nothing in src/ wire
   // 最后的接线包把它接到 useCloud.ts / session.ts 时,这里加上那一个文件
   // 接线在 accountPage.ts 一处(它把采集的页面执行器与播放头、网页接管的执行器合成一个入口)
   assert.deepEqual(users.sort(), ['ai/cloud/accountPage.ts', 'ai/cloud/collectBridge.ts']);
+});
+
+test('C1-PAGE-07 delegation prompt strip URL & cancellation of in-flight uploads', async () => {
+  const d = desk();
+  d.storedAfter = 1e9; // keeps in upload phase
+  const url = startArgs().url;
+  assert.equal(getActiveCollectDelegationUrl(), null);
+  await d.page.run(req('collect_delegate_start', startArgs()));
+  // Started: active URL is set
+  assert.equal(getActiveCollectDelegationUrl(), url);
+  // Wait until it enters upload phase
+  await pollUntil(d.page, 'running');
+  while (!d.calls.some((c) => c[0] === 'push')) await sleep(5);
+
+  // Cloud cancels delegation: local download is cancelled and upload is cancelled immediately
+  await d.page.run(req('collect_delegate_cancel', { delegationId: DID }));
+  assert.equal(getActiveCollectDelegationUrl(), null, 'Prompt strip URL is dismissed');
+  const uploadCancel = d.calls.find((c) => c[0] === 'upload.cancel');
+  assert.ok(uploadCancel, 'upload.cancel was called');
+  assert.deepEqual(uploadCancel[1], [HASH]);
+
+  // Test cancelAllCollectDelegations
+  const d2 = desk();
+  d2.storedAfter = 1e9;
+  const DID2 = 'cd-0123456789abcdef01234568';
+  await d2.page.run(req('collect_delegate_start', startArgs({ delegationId: DID2 })));
+  assert.equal(getActiveCollectDelegationUrl(), url);
+  while (!d2.calls.some((c) => c[0] === 'push')) await sleep(5);
+  await cancelAllCollectDelegations();
+  assert.equal(getActiveCollectDelegationUrl(), null);
+  const uploadCancel2 = d2.calls.find((c) => c[0] === 'upload.cancel');
+  assert.ok(uploadCancel2, 'cancelAll calls upload.cancel');
+  assert.deepEqual(uploadCancel2[1], [HASH]);
 });

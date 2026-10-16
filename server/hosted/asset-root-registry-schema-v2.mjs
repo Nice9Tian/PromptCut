@@ -124,8 +124,9 @@ export function validateAssetRootWitnessV2(value, { expected, previousRecord, ne
       !same(value.previousRegistry, previousRecord)) fail('asset-root-v2-witness-invalid');
   const o = value.observed;
   if (!exact(o, ['kind', 'closed', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive',
-    'populated', 'serviceInactive', 'mainBirthGone']) || o.kind !== 'cgroup-empty' || o.closed !== true || !positive(o.at) ||
-      o.bootId !== bootId || bootId !== previousRecord.instance.bootId ||
+    'populated', 'serviceInactive', 'mainBirthGone'], ['previousBootId', 'currentBootId']) ||
+      (o.kind !== 'cgroup-empty' && o.kind !== 'boot-transition') || o.closed !== true || !positive(o.at) ||
+      (o.kind === 'boot-transition' ? (o.bootId !== bootId && o.bootId !== previousRecord.instance.bootId) : (o.bootId !== bootId || bootId !== previousRecord.instance.bootId)) ||
       !same(o.serviceInstance, previousRecord.instance) || !same(o.closureScope, previousRecord.closureScope) ||
       o.scopeActive !== true || o.scopeExclusive !== true || o.populated !== 0 || o.serviceInactive !== true || o.mainBirthGone !== true)
     fail('asset-root-v2-witness-invalid');

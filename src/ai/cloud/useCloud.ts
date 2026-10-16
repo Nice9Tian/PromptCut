@@ -26,6 +26,7 @@ import { createPoller } from "./poll";
 import { newPageId, runPageRequest, type PageRequestExec } from "./pageRequests";
 import { createAccountPageHandler } from "./accountPage";
 import { desktopCollectLocal, desktopCollectUpload } from "./collectLocal";
+import { cancelAllCollectDelegations, type CollectBridgeUpload } from "./collectBridge";
 import { webHandoff, webOpen } from "../web";
 import { requestAgentBrowser, closeAgentBrowser } from "../agentBrowserStore";
 import { playbackHandlers } from "../../mcp/handlers/playback";
@@ -139,6 +140,21 @@ const pageExec: PageRequestExec = {
  * 账号模式的反向通道:页面号是这张页面在文档服务在场表里的那一个(每次现取);播放头三件用本机同一份实现。
  * 网页接管与采集的代下、登录要本机的浏览器与编辑器进程,只在桌面版给;在线页面如实回「做不了」。不执行读选区(账号模式读全员选区走文档服务)。
  */
+const desktopUpload = ONLINE_BUILD ? null : desktopCollectUpload(() => currentDocProjectId() || null);
+const collectUpload: CollectBridgeUpload | null = desktopUpload ? {
+  ...desktopUpload,
+  async cancel(hashes: string[]) {
+    if (!hashes?.length) return;
+    try {
+      await fetch("/api/media/upload-queue/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hashes }),
+      });
+    } catch { /* 忽略网络错误 */ }
+  },
+} : null;
+
 const accountPageHandler = createAccountPageHandler({
   pageId: () => selectionPresenceStatus().pageId,
   exec: {
@@ -164,7 +180,7 @@ const accountPageHandler = createAccountPageHandler({
     }),
   },
   local: ONLINE_BUILD ? null : desktopCollectLocal(),
-  upload: ONLINE_BUILD ? null : desktopCollectUpload(() => currentDocProjectId() || null),
+  upload: collectUpload,
 });
 
 export function useCloudApi(url: string | null, projectId: string | null = null): CloudApi {
@@ -358,6 +374,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       dead = true;
       off();
       if (pageWatch !== null) clearInterval(pageWatch);
+      void cancelAllCollectDelegations();
       session.close();
       if (cloud.accountMode) store.set([]);
       if (sessionRef.current === session) { sessionRef.current = null; sessionKeyRef.current = ""; }
@@ -466,6 +483,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     const current = () => operationScopeGuardRef.current.isCurrent(scope) && keyRef.current === key &&
       sessionKeyRef.current === key && sessionRef.current === expectedSession && convRef.current === expectedConversationId;
     if (!key || !current()) return;
+    void cancelAllCollectDelegations();
     const accountControl = cloud.accountMode ? requireAccountAbortControl(runId, requestId) : null;
     try {
       if (accountControl) await api.abort(expectedConversationId, accountControl);
@@ -485,6 +503,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       cloudConsentState().accountId === cloud.accountId && cloudConsentState().bindingVersion === consent.bindingVersion;
     if (!cloud.accountMode || !cloud.accountId || !key || !current())
       throw new CloudError("forbidden", "当前账号不能切换这段云端对话的权限。", 403);
+    if (visibility === "private") void cancelAllCollectDelegations();
     return withCloudControlConsent(
       () => requireCloudConsent({ accountId: cloud.accountId!, bindingVersion: consent.bindingVersion }),
       current,
