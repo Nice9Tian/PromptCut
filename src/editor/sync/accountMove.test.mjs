@@ -634,46 +634,60 @@ test("AM-21 本地项目搬到云端保持原编号、连续历史序号与操�
   assert.equal(r.projectId, "proj-local-123", "保持原项目编号 proj-local-123");
   assert.equal(h.entered.projectId, "proj-local-123");
 
-  // 验证 SQLite operation-history 的连续历史序号与操作历史记录
+  // 验证快照初始化的连续历史序号与提交摘要 (rev: 15)
   const os = await import("node:os");
   const path = await import("node:path");
   const fs = await import("node:fs");
-  const { openOperationHistory } = await import("../../../server/docservice/modules/operation-history.mjs");
-  const tmpDb = path.join(os.tmpdir(), `pc-op-hist-test-${Date.now()}.db`);
-  const hist = openOperationHistory(tmpDb);
+  const { createFileStore } = await import("../../../server/docservice/store/index.mjs");
+  const { projectModule, stateBlobName } = await import("../../../server/docservice/modules/project.mjs");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pc-proj-test-"));
+  const store = createFileStore({ dir: path.join(tmpDir, "tenants", localId), log: () => {} });
 
   try {
-    // 搬到云端时导入已有 baseline (rev: 15) 和历史记录
-    hist.createProject(localId, localProject, { projectRev: 15 });
-    hist.importHistory(localId, historyRecords);
+    // 写入携带 15 条历史和 rev: 15 的快照（与 account-hosted.mjs initializeProject 生产代码完全一致）
+    const snapName = stateBlobName(localId);
+    store.writeBlob(snapName, JSON.stringify({
+      v: 1,
+      projectId: localId,
+      rev: 15,
+      at: 1000,
+      project: localProject,
+      writers: [],
+      history: historyRecords,
+      opIds: [],
+    }));
 
-    // 验证历史记录在云端可查，15 条齐备
-    const acceptedBefore = hist.accepted(localId);
-    assert.equal(acceptedBefore.length, 15, "原 15 条历史记录在云端可查");
-    assert.equal(acceptedBefore[14].projectRev, 15);
+    // 挂载项目模块，验证读出的状态与历史
+    const mod = projectModule({ store });
+    let reply = null;
+    const ctx = {
+      now: () => 2000,
+      log: () => {},
+      subscribe: () => {},
+      unsubscribe: () => {},
+      publish: () => {},
+      send: (cid, m) => { reply = m; },
+      close: () => {},
+      isClosed: () => false,
+    };
+    mod.connect(ctx, "c-1", { tenantId: localId, scope: "member", userId: "user-1", deviceId: "dev-1" });
+    mod.handle(ctx, "c-1", { type: "project.open", projectId: localId });
+    assert.equal(reply?.type, "project.state");
+    assert.equal(reply?.rev, 15, "云端项目初始化后的历史序号保持 15");
 
-    // 验证后续接着改一笔变成 16
-    const op16 = {
-      v: 2,
+    // 验证后续改一笔变成 16
+    reply = null;
+    mod.handle(ctx, "c-1", {
+      type: "project.op",
       projectId: localId,
       opId: "op-16",
-      requestId: "req-16",
-      expectedRev: 15,
+      expectRev: 15,
       ops: [{ op: "set", path: "/name", value: "云端改后名称" }],
-    };
-    const prep = hist.prepareOperation(op16);
-    assert.equal(prep.projectRev, 16, "历史序号接着往上数到 16");
-    const witness = { state: "sealed", orderSeq: 16 };
-    hist.recordAcceptedOperation(prep, witness);
-    hist.materialize(prep);
-
-    const acceptedAfter = hist.accepted(localId);
-    assert.equal(acceptedAfter.length, 16, "历史序号变为 16，历史记录共有 16 条");
-    assert.equal(acceptedAfter[15].projectRev, 16);
-    assert.equal(hist.snapshot(localId).projectRev, 16);
+    });
+    assert.equal(reply?.type, "project.op.ok");
+    assert.equal(reply?.rev, 16, "历史序号接着往上数到 16");
   } finally {
-    hist.close();
-    try { fs.unlinkSync(tmpDb); fs.unlinkSync(`${tmpDb}.owner`); } catch {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
 });
 

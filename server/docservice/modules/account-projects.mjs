@@ -1,21 +1,19 @@
 import https from 'node:https';
-import { randomBytes, randomUUID } from 'node:crypto';
 import { accountError, certificateFingerprint } from '../../account/client.mjs';
 import { requireRequestId } from '../../account/protocol.mjs';
 
 const INTERNAL = '/internal/v2/';
 const PUBLIC = '/hosted/shared/account';
+/** 0.7.18 不再支持旧版本客户端(10-14 第 3.3 节);旧版点「搬到云端」时云端回的那一句 */
+export const VERSION_EXPIRED_TEXT = '当前软件版本已过期，无法搬到云端';
+/** 请求体里显式写着的客户端版本是不是 0.7.17 及更早(没写的不算:新客户端不带这一项) */
 const isOldVersion = v => {
-  if (typeof v !== 'string') return false;
-  const parts = v.split('.').map(Number);
-  if (parts.length >= 3) {
-    if (parts[0] < 0) return true;
-    if (parts[0] === 0 && parts[1] < 7) return true;
-    if (parts[0] === 0 && parts[1] === 7 && parts[2] <= 17) return true;
-  }
-  return false;
+  const m = typeof v === 'string' ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
+  if (!m) return false;
+  const [major, minor, patch] = m.slice(1).map(Number);
+  return major === 0 && (minor < 7 || (minor === 7 && patch <= 17));
 };
-const bad = (status, code, message) => { const err = accountError(status, code); if (message) err.message = message; throw err; };
+const bad = (status, code) => { throw accountError(status, code); };
 const bearer = req => {
   if (req.headers.cookie) bad(400, 'bearer-required');
   const match = /^Bearer ([A-Za-z0-9_-]{1,256})$/.exec(req.headers.authorization ?? '');
@@ -26,8 +24,8 @@ async function readBody(req) {
   if (String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase() !== 'application/json') bad(415, 'json-required');
   let size = 0; const chunks = [];
   for await (const chunk of req) {
-    const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-    size += buf.length; if (size > 1024 * 1024) bad(413, 'body-too-large'); chunks.push(buf);
+    const b = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    size += b.length; if (size > 1024 * 1024) bad(413, 'body-too-large'); chunks.push(b);
   }
   try { const body = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (!body || typeof body !== 'object' || Array.isArray(body)) bad(400, 'invalid-body'); return body; }
   catch (error) { if (error.status) throw error; bad(400, 'invalid-body'); }
@@ -59,11 +57,13 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
     requireRequestId(body.requestId);
     if (typeof body.deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.deviceId)) bad(400, 'invalid-device');
     const principal = await authority.authorizePrincipal(actor, { projectId: body.projectId });
+    // 项目二级密码改过、这个成员还没输过新的:不发票据,页面请他输一次再走 `/join`;创建者另带当前的链接口令
+    const entry = typeof authority.entryState === 'function' ? authority.entryState(principal) : {};
     const result = await issueSession({ principal, deviceId: body.deviceId, requestId: body.requestId,
       expectedAssetInstanceId: readiness?.instanceId });
     if (!result || typeof result.connectionTicket !== 'string' || !result.connectionTicket ||
       typeof result.assetTicket !== 'string' || !result.assetTicket || !Number.isSafeInteger(result.expiresAt)) bad(503, 'session-unavailable');
-    return result;
+    return { ...result, ...entry };
   };
   async function dispatch(req, res, internal, context) {
     const url = new URL(req.url, 'http://route.invalid');
@@ -110,11 +110,12 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
           // The public route cannot select a service/Agent role or supply an authoritative principal.
           if (['role', 'principal', 'loginId', 'credentialId', 'authorizationId', 'runGrantId', 'creator'].some(k => body[k] !== undefined) ||
             (body.accountId !== undefined && !url.pathname.endsWith('/admin'))) bad(400, 'invalid-authority-claim');
-          const versionHeader = req.headers['x-promptcut-version'];
-          const clientVer = typeof versionHeader === 'string' ? versionHeader : (typeof body?.clientVersion === 'string' ? body.clientVersion : null);
-          if (clientVer && isOldVersion(clientVer)) bad(400, 'version-expired', '当前软件版本已过期，无法搬到云端');
-
-          if (url.pathname === `${PUBLIC}/create`) { result = await authority.createProject(actor, body); status = 201; }
+          if (url.pathname === `${PUBLIC}/create`) {
+            // 显式写着 0.7.17 及更早版本号的新建请求按旧版本拒(真正的旧版本走的是 `/shared/*` 与整房导入口,那两处另有同一句)
+            const ver = req.headers['x-promptcut-version'] ?? body.clientVersion;
+            if (isOldVersion(ver)) bad(400, 'version-expired');
+            result = await authority.createProject(actor, body); status = 201;
+          }
           else if (url.pathname === `${PUBLIC}/join`) {
             if (typeof issueSession !== 'function') bad(503, 'session-unavailable');
             const membership = await authority.joinProject(actor, body); result = { membership, ...await session(actor, body, context?.readiness) };
@@ -143,7 +144,7 @@ export function mountAccountProjects({ authority, services = [], issueSession, r
       send(res, status, { ok: true, ...result }, cors);
     } catch (error) {
       const code = error.code ?? 'authority-unavailable';
-      const message = error.message && error.message !== code ? error.message : (code === 'version-expired' ? '当前软件版本已过期，无法搬到云端' : code);
+      const message = code === 'version-expired' ? VERSION_EXPIRED_TEXT : code;
       send(res, error.status ?? (error.code?.startsWith('bad-') ? 400 : 503), { ok: false, error: code, code, message }, cors);
     }
     return true;

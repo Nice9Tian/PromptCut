@@ -195,7 +195,7 @@ test('旧版（<= 0.7.17）调用搬到云端被拒并返回「当前软件版�
     url: '/hosted/shared/account/create',
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer token-test' },
-    async *[Symbol.asyncIterator]() { yield body17; },
+    async *[Symbol.asyncIterator]() { yield Buffer.from(body17); },
   };
   await mounted.handlePublic(req17, {
     writeHead(code) { status17 = code; },
@@ -214,7 +214,7 @@ test('旧版（<= 0.7.17）调用搬到云端被拒并返回「当前软件版�
     url: '/hosted/shared/account/create',
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer token-test', 'x-promptcut-version': '0.7.16' },
-    async *[Symbol.asyncIterator]() { yield body16; },
+    async *[Symbol.asyncIterator]() { yield Buffer.from(body16); },
   };
   await mounted.handlePublic(req16, {
     writeHead(code) { status16 = code; },

@@ -16,7 +16,7 @@ import { originalHashOf, smallHashOf } from "../../render/mediaTier";
 import { remoteAssetBase } from "../media/assetTiers";
 import { ensureActiveDraftId, getActiveDraftId, saveDraft, setActiveDraftId } from "../io/drafts";
 import { forgetSaveTarget, hasSaveTarget, serializeProc, writeProcToDisk } from "../io/proc";
-import { adminOp, dismissToast, ensureDevice, enterAccountProject, getSyncView, leaveSharedToLocal, pageSession, pushToast, whenSaved } from "./syncManager";
+import { adminOp, currentDocLineage, dismissToast, ensureDevice, enterAccountProject, getSyncView, leaveSharedToLocal, pageSession, pushToast, whenSaved } from "./syncManager";
 import { disableCollab, localCollab, pullOriginals, queueExistingMedia } from "./collab";
 import { hosted } from "./sharedApi";
 import {
@@ -239,10 +239,9 @@ async function run(c: AccountCloud, request: MoveRequest): Promise<MoveOutcome> 
     source: moveSource,
     account: async () => { const a = await accountCloudLogin(c); startedAs = a?.id ?? null; return a; },
     snapshot: async () => { await whenSaved(10_000); return structuredClone(getState().project); },
-    create: (name, stub, requestId, extra) => {
-      sameAccount();
-      return client.create(name, stub, requestId, extra);
-    },
+    create: (name, stub, requestId, extra) => { sameAccount(); return client.create(name, stub, requestId, extra); },
+    // 历史序号与提交摘要:当前这条本机文档连接(本地项目连本机文档服务、协作房间连房间)确认到的那一份
+    lineage: () => currentDocLineage(getState().project.id ?? ""),
     current: () => getState().project,
     upload: (projectId, snapshot) => { sameAccount(); return uploadProjectContent(linkTo(projectId), projectId, snapshot); },
     read: async (projectId) => (await readProjectContent(linkTo(projectId), projectId, getState().project)).project,

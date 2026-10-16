@@ -9,6 +9,9 @@ export interface ProjectSession {
    * 旧文档服务不报这一项,页面上那两行就不显示(任务书 `docs/plan/render-refactor-task.md`「甲三」)。
    */
   hosted: { agent: { available: boolean; enabled: boolean; url: string | null }; render?: { available: boolean; enabled: boolean; streams?: boolean } };
+  linkToken?: string;
+  hasSecondaryPassword?: boolean;
+  needsSecondaryPassword?: boolean;
 }
 export interface CloudAgentConsent { accountId: string; accepted: boolean; noticeVersion: 1; acceptedAt?: number }
 /** Keep the standard transport protocol alongside the opaque account credential. */
@@ -244,13 +247,14 @@ export function createAccountClient(options: AccountClientOptions) {
           value.accessRevision < 0 || value.completed !== false || value.state !== 'pending-services') throw new AccountFailure(503, 'account-protocol');
       return { eventId: value.eventId, accessRevision: value.accessRevision, completed: false, state: 'pending-services' };
     },
-    async join(projectId: string, requestId: string, joinOpts?: { linkToken?: string; secondaryPassword?: string }): Promise<ProjectSession> {
+    async join(projectId: string, requestId: string, joinOpts?: { token?: string; linkToken?: string; secondaryPassword?: string }): Promise<ProjectSession> {
       const current = await ensureLogin();
+      const token = joinOpts?.token ?? joinOpts?.linkToken;
       const body = {
         projectId,
         deviceId: options.device.deviceId,
         requestId,
-        ...(joinOpts?.linkToken ? { linkToken: joinOpts.linkToken } : {}),
+        ...(token ? { token, linkToken: token } : {}),
         ...(joinOpts?.secondaryPassword ? { secondaryPassword: joinOpts.secondaryPassword } : {}),
       };
       return validateSession(await request('/hosted/shared/account/join', body, current.accessToken), now(), projectId);
@@ -319,6 +323,9 @@ function validateSession(value: Record<string, any>, now: number, projectId: str
     ? { available: r.available as boolean, enabled: r.enabled as boolean, ...(typeof r.streams === 'boolean' ? { streams: r.streams as boolean } : {}) } : null;
   return { connectionTicket: value.connectionTicket, assetTicket: value.assetTicket, agentDelegationTicket: value.agentDelegationTicket,
     expiresAt: value.expiresAt, projectId, creator: value.creator, access: value.access, accessRevision: value.accessRevision,
-    hosted: { agent: { available: agent.available, enabled: agent.enabled, url: agent.url }, ...(render ? { render } : {}) } };
+    hosted: { agent: { available: agent.available, enabled: agent.enabled, url: agent.url }, ...(render ? { render } : {}) },
+    ...(typeof value.linkToken === 'string' ? { linkToken: value.linkToken } : {}),
+    ...(typeof value.hasSecondaryPassword === 'boolean' ? { hasSecondaryPassword: value.hasSecondaryPassword } : {}),
+    ...(typeof value.needsSecondaryPassword === 'boolean' ? { needsSecondaryPassword: value.needsSecondaryPassword } : {}) };
 }
 export type CloudAccountClient = ReturnType<typeof createAccountClient>;

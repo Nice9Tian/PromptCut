@@ -138,10 +138,10 @@ export function currentRealtimeRev(): number | null {
 
 /**
  * 账号云端项目另存为 .proc / .procp 后的重开四规则（10-14 第 3.4 节）：
- * 1. 没登录：提示登录，不直接当本地项目打开，也不抹掉关联；
- * 2. 登录的账号不是成员：提示没有权限，不打开项目；
+ * 1. 没登录：提示登录，以本地副本打开，保留关联；
+ * 2. 登录的账号不是成员：提示「这个账号不是这个云端项目的成员」，以本地副本打开；
  * 3. 云端项目已删：凭已删证明（goneProof）转成独立本地项目打开；
- * 4. 有权限且有离线修改：打开并连回云端项目，把离线修改合回云端（生成新的历史序号）。
+ * 4. 有权限且有离线修改：连回云端项目合并离线修改，网络错误回退本地副本。
  */
 export async function handleCloudAssociationReopen(
   project: Project,
@@ -219,6 +219,10 @@ export async function handleCloudAssociationReopen(
         options.openAsLocal?.(project);
         return { status: "forbidden", project };
       }
+      // 网络错误或其他临时故障：回退以本地副本打开
+      options.openAsLocal?.(project);
+      toast("连不上云端项目，当前以本地副本打开。", "warn", 6000);
+      return { status: "opened", project };
     }
   }
 
@@ -236,14 +240,20 @@ export async function handleCloudAssociationReopen(
   );
 
   if (options.enterProject && client) {
-    await options.enterProject({
-      client,
-      origin: assoc.origin || assoc.docServiceUrl,
-      projectId: assoc.projectId,
-      name: project.name,
-      initial: project,
-      firstSession: session,
-    });
+    try {
+      await options.enterProject({
+        client,
+        origin: assoc.origin || assoc.docServiceUrl,
+        projectId: assoc.projectId,
+        name: project.name,
+        initial: project,
+        firstSession: session,
+      });
+    } catch {
+      options.openAsLocal?.(project);
+      toast("连不上云端项目，当前以本地副本打开。", "warn", 6000);
+      return { status: "opened", project };
+    }
   }
 
   if (isOfflineModified) {

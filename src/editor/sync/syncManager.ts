@@ -13,7 +13,7 @@
  * 组件用 `useSync(selector)` 读。
  */
 import { useSyncExternalStore } from "react";
-import { bindStore, DocSync, type LocalBackup, type PausedInfo, type SyncNotice, type SyncStatus, type UndoResult, type Writer } from "../../store/docsync";
+import { bindStore, DocSync, type CommitSummary, type LocalBackup, type PausedInfo, type SyncNotice, type SyncStatus, type UndoResult, type Writer } from "../../store/docsync";
 import { actions, getState, subscribe, setProjectLoader } from "../../store/project";
 import { entitiesOf, entityOfPath, type PathOp } from "../../kernel/diffProject";
 import type { Project } from "../../kernel/project";
@@ -263,7 +263,12 @@ interface Current {
   /** 诊断:账号项目里这条连接的寿命 */
   accountLife?: () => { expiresAt: number | null; trusted: boolean | null; renews: number; expires: number; busy: boolean };
   accountMemberAdmin?: (operation: AccountMemberOperation) => Promise<AccountMemberResult>;
-  client?: CloudAccountClient | null;
+  /** 账号项目:创建者作废并重新生成项目链接,回新的项目链接(先续一次会话,拿当前的访问版本号) */
+  regenAccountLink?: () => Promise<string>;
+  /** 账号项目:创建者设置 / 修改(字符串)或清除(null)项目二级密码(同上,先续会话) */
+  setAccountSecondaryPassword?: (password: string | null) => Promise<void>;
+  /** 账号项目:现在的项目链接(创建者带当前的链接口令) */
+  accountLink?: () => string;
 }
 
 let cur: Current | null = null;
@@ -620,7 +625,7 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     const tick = setInterval(tickOnline, ONLINE_TICK_MS);
     offs.push(() => clearInterval(tick));
   }
-  cur = { link, kind, docProjectId, url, unbind, offs, client: accountClient };
+  cur = { link, kind, docProjectId, url, unbind, offs };
   // 云端 Agent 的身份跟着共享项目的连接走:接上就绪,回本机空间撤掉(界面据此重取一次 info 与对话列表)
   setCloudIdentity(kind === "shared" && !account ? cloudIdentityOf(link) : null);
   setCloudConsentSource(kind === "shared" && accountClient ? { client: accountClient, accountId: accountClient.account?.id ?? "" } : null);
@@ -1246,7 +1251,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         projectId: options.projectId,
         docServiceUrl: base,
         origin,
-        savedRev: (link.ds as any)?.rev ?? 1,
+        savedRev: link.ds.rev,
         savedAt: new Date().toISOString(),
       });
       patch({ shared: { projectId: options.projectId, name: options.name, mode: 'free', where: 'hosted', base,
@@ -1276,6 +1281,26 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
           await renew();
         } finally { ownHostedChange -= 1; }
       };
+      if (cur?.link === link) {
+        // 作废并重新生成项目链接、项目二级密码(10-14 第 3.3 节):与上面的开关同一个规矩 —— 先续一次会话拿到当前的访问版本号
+        // (账本按它防并发改动,写死 0 会被拒成 409),改完再续一次,让页面手里的版本号与链接口令跟上
+        cur.regenAccountLink = async () => {
+          if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
+          await renew();
+          if (!isCurrent() || !current.creator) throw new AccountFailure(403, 'creator-required');
+          const out = await options.client.regenProjectLink(options.projectId, current.accessRevision, crypto.randomUUID());
+          await renew().catch(() => undefined);
+          return projectLink(origin, options.projectId, out.linkToken);
+        };
+        cur.setAccountSecondaryPassword = async password => {
+          if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
+          await renew();
+          if (!isCurrent() || !current.creator) throw new AccountFailure(403, 'creator-required');
+          await options.client.setSecondaryPassword(options.projectId, password, current.accessRevision, crypto.randomUUID());
+          await renew().catch(() => undefined);
+        };
+        cur.accountLink = () => projectLink(origin, options.projectId, current.creator ? current.linkToken ?? undefined : undefined);
+      }
       if (cur?.link === link) {
         cur.accountMembers = async () => {
           if (!isCurrent()) throw new AccountFailure(401, 'credential-revoked');
@@ -1315,10 +1340,11 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       ready = true; resolveEntry();
       // 成员名字(提示气泡里「谁改的」)进来就取一次,之后成员有变化再取
       projectSession(current);
-      const linkText = `${origin}/editor?project=${encodeURIComponent(options.projectId)}`;
+      // 链接在点的时候再拼:创建者重新生成过项目链接的,复制到的是带新口令的那一条
+      const linkText = () => projectLink(origin, options.projectId, current.creator ? current.linkToken ?? undefined : undefined);
       pushToast(options.enteredText ?? '已进入云端项目，可以将项目链接发给另一位已登录成员。', 'info', Infinity, {
-        label: '复制项目链接', pc: 'cloud-project-copy', run: () => { void navigator.clipboard.writeText(linkText).then(
-          () => pushToast('项目链接已复制。', 'info'), () => pushToast(`项目链接：${linkText}`, 'info', Infinity)); },
+        label: '复制项目链接', pc: 'cloud-project-copy', run: () => { const text = linkText(); void navigator.clipboard.writeText(text).then(
+          () => pushToast('项目链接已复制。', 'info'), () => pushToast(`项目链接：${text}`, 'info', Infinity)); },
       });
     })().catch(fail); },
     onClosed: info => { if (!ready || info.fatal) fail(new AccountFailure(info.fatal ? 403 : 0, info.reason || 'network'));
@@ -1995,43 +2021,37 @@ export function makeCredential(password: string) {
   return client.makeCredential(password);
 }
 
-/** 重新生成账号云端项目链接使旧链接作废（10-14 第 3.3 节） */
+/**
+ * 账号云端项目:作废并重新生成项目链接(10-14 第 3.3 节)。旧链接失效,已经进来的成员不受影响,新人用回的新链接。
+ * 只有账号项目有这一项(旧办法的房间走「作废并重新生成邀请码」)。
+ */
 export async function regenAccountProjectLink(): Promise<{ ok: true; link: string } | { ok: false; error: string }> {
-  const s = view.shared;
-  if (!s || !s.accountId) return { ok: false, error: "不是账号云端项目" };
-  try {
-    if (cur?.client?.regenProjectLink) {
-      const res = await cur.client.regenProjectLink(s.projectId, 0, crypto.randomUUID());
-      const link = projectLink(s.base || location.origin, s.projectId, res.linkToken);
-      return { ok: true, link };
-    }
-    const r = await adminOp("regen-link", {});
-    if (r.ok) {
-      const link = (r.reply as any)?.link || projectLink(s.base || location.origin, s.projectId);
-      return { ok: true, link };
-    }
-    return { ok: false, error: r.error };
-  } catch (e: any) {
-    return { ok: false, error: e?.message || "regen-failed" };
-  }
+  if (!view.shared?.accountId || !cur?.regenAccountLink) return { ok: false, error: "当前不是账号云端项目。" };
+  try { return { ok: true, link: await cur.regenAccountLink() }; }
+  catch (e) { return { ok: false, error: e instanceof Error && e.message ? e.message : "重新生成项目链接失败。" }; }
 }
 
-/** 设置/修改/清除账号项目二级密码（10-14 第 3.3 节） */
+/** 账号云端项目:设置 / 修改项目二级密码(字符串,照原样,不去空白)或清除(null 或空串)(10-14 第 3.3 节) */
 export async function setAccountSecondaryPassword(password: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
-  const s = view.shared;
-  if (!s || !s.accountId) return { ok: false, error: "不是账号云端项目" };
-  try {
-    if (cur?.client?.setSecondaryPassword) {
-      await cur.client.setSecondaryPassword(s.projectId, password, 0, crypto.randomUUID());
-      return { ok: true };
-    }
-    const r = await adminOp("set-secondary-password", {}, { password });
-    return r.ok ? { ok: true } : { ok: false, error: r.error };
-  } catch (e: any) {
-    return { ok: false, error: e?.message || "set-failed" };
-  }
+  if (!view.shared?.accountId || !cur?.setAccountSecondaryPassword) return { ok: false, error: "当前不是账号云端项目。" };
+  try { await cur.setAccountSecondaryPassword(password || null); return { ok: true }; }
+  catch (e) { return { ok: false, error: e instanceof Error && e.message ? e.message : "设置项目二级密码失败。" }; }
 }
 
-export { handleCloudAssociationReopen } from "./recoveryAssociation";
+/** 账号云端项目现在的项目链接(创建者带当前的链接口令);不在账号项目里回 null */
+export function currentAccountProjectLink(): string | null {
+  return view.shared?.accountId && cur?.accountLink ? cur.accountLink() : null;
+}
 
-
+/**
+ * 「搬到云端」要带上去的历史序号与提交摘要(10-14 第 3.3 节):读当前这条本机文档连接的 `DocSync`
+ * (本地项目连本机文档服务、旧办法的协作房间连房间),只在它连的正是这份内容(`contentId`)时给;
+ * 还没拿到文档服务确认的序号(`rev` 为 0)或已经在账号云端项目里时回 null。
+ */
+export function currentDocLineage(contentId: string): { rev: number; history: CommitSummary[] } | null {
+  const ds = cur?.link.ds;
+  if (!cur || !ds || view.shared?.accountId || !contentId || ds.project.id !== contentId) return null;
+  const rev = ds.rev;
+  if (!Number.isSafeInteger(rev) || rev < 1) return null;
+  return { rev, history: ds.history.filter((h) => h.rev <= rev) };
+}

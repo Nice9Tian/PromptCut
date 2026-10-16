@@ -193,6 +193,20 @@ export interface PausedInfo {
   queued: number;
 }
 
+/**
+ * 本页面看到落地的一次提交(自己的拿到 ok、别人的收到 project.ops)的摘要,形状同文档服务历史里的那一条
+ * (`server/docservice/modules/project.mjs` 的提交摘要)。「搬到云端」把它连同历史序号带上去(`history` 读)。
+ */
+export interface CommitSummary {
+  rev: number;
+  opId: string;
+  /** 自己的提交是 null(写入身份由文档服务按连接定,本页面不知道原样) */
+  actor: unknown;
+  at: number;
+  paths: string[];
+  entities: string[];
+}
+
 export interface CommitOptions {
   /** false:不进撤销栈(素材元数据回填、总时长跟随等) */
   undoable?: boolean;
@@ -291,6 +305,10 @@ const utf8Bytes = (text: string): number => {
 const BEFORE_REMOTE_KEEP = 32;
 /** 记多少次 Agent 提交的逆操作 */
 const REMOTE_INVERSE_KEEP = 200;
+/** 提交摘要记多少条(与文档服务 `PROJECT_LIMITS.HISTORY` 同数) */
+const COMMIT_LOG_KEEP = 1000;
+/** 一条摘要里最多记几个路径(文档服务的 `capPaths` 也只留一部分) */
+const COMMIT_PATHS_KEEP = 32;
 
 let opSeq = 0;
 function defaultOpId(session: string): string {
@@ -330,6 +348,8 @@ export class DocSync {
   private remoteInverses = new Map<string, { rev: number; inverse: PathOp[] }>();
   /** rev → 应用这次远端改动之前的本地副本,给覆盖备份用 */
   private beforeRemote = new Map<number, Project>();
+  /** 本页面看到落地的提交摘要(按历史序号递增;`history` 读) */
+  private commitLog: CommitSummary[] = [];
 
   private listeners: { [K in keyof Events]: Set<Events[K]> } = { project: new Set(), status: new Set(), notice: new Set() };
   private settleWaiters: { resolve: (v: { rev: number; project: Project }) => void; reject: (e: Error) => void; timer?: ReturnType<typeof setTimeout> }[] = [];
@@ -362,6 +382,21 @@ export class DocSync {
    */
   get confirmedProject(): Project | null {
     return this.confirmed;
+  }
+
+  /**
+   * 本页面看到落地的提交摘要(历史序号递增、最多 `COMMIT_LOG_KEEP` 条;拷贝,不给改)。只含这条连接打开以来确认过的那几笔:
+   * 更早的在文档服务自己的历史里。「搬到云端」连同 `rev` 一起带上去,云端项目的历史序号与摘要接着本机这一份往下记。
+   */
+  get history(): CommitSummary[] {
+    return this.commitLog.map((c) => ({ ...c, paths: [...c.paths], entities: [...c.entities] }));
+  }
+
+  private noteCommit(rev: number, opId: string, actor: unknown, ops: { path: string }[], entities: string[]) {
+    const last = this.commitLog[this.commitLog.length - 1];
+    if (last && last.rev >= rev) return;
+    this.commitLog.push({ rev, opId, actor: actor ?? null, at: this.now(), paths: ops.slice(0, COMMIT_PATHS_KEEP).map((o) => o.path), entities: entities.slice(0, 64) });
+    if (this.commitLog.length > COMMIT_LOG_KEEP) this.commitLog.splice(0, this.commitLog.length - COMMIT_LOG_KEEP);
   }
 
   /** Device-owned crash recovery, never used as a root replacement on normal reentry. */
@@ -553,6 +588,7 @@ export class DocSync {
     }
     this.confirmed = msg.project;
     this.confirmedRev = msg.rev;
+    if (this.commitLog.length && this.commitLog[this.commitLog.length - 1].rev > msg.rev) this.commitLog = this.commitLog.filter((c) => c.rev <= msg.rev);
     this.beforeRemote.clear();
     const hasBacklog = this.offlineRev !== null && this.pending.some((p) => !p.sent);
     if (hasBacklog && !this.paused) {
@@ -629,6 +665,7 @@ export class DocSync {
     const by: Writer = { actor: msg.actor, session: msg.session ?? (msg.actor as { session?: string } | undefined)?.session };
     const remoteEntities = entitiesOf(msg.ops);
     this.remoteWrites.push({ rev: msg.rev, opId: msg.opId, by, entities: remoteEntities });
+    this.noteCommit(msg.rev, msg.opId, msg.actor, msg.ops, remoteEntities);
     this.emit("notice", { kind: "remote", rev: msg.rev, opId: msg.opId, entities: remoteEntities, by, ...(msg.undoOf ? { undoOf: msg.undoOf } : {}) });
     this.pruneRemoteWrites();
     this.beforeRemote.set(msg.rev, this.local);
@@ -691,6 +728,7 @@ export class DocSync {
     this.confirmedRev = msg.rev;
     this.pending.shift();
     this.localWrites.push({ rev: msg.rev, entities: entitiesOf(entry.ops) });
+    this.noteCommit(msg.rev, entry.opId, null, entry.ops, entitiesOf(entry.ops));
     this.pruneRemoteWrites();
     if (this.gateOpId === entry.opId) {
       this.openGate();
@@ -777,6 +815,39 @@ export class DocSync {
     this.checkSettled();
   }
 
+  /**
+   * 把一份离线改过的内容(从云端项目另存出去、之后在本地副本里改过的文件)当一次普通修改合上去(10-14 第 3.4 节)。
+   * 差异按当前已确认的那一版算,`baseRev` 是那份文件另存时的历史序号:
+   * - 文档服务现在还是 `baseRev`(期间没人改过):就是一次普通提交;
+   * - 期间有人改过:照离线批次办 —— 这一条带 `baseRev` 去试,被拒成 stale 就停下(paused),
+   *   由用户照现有的冲突处理选「重放 / 丢弃」(丢弃前存一份本地备份)。
+   * 连接还没就绪(没拿到已确认的一版、在等状态、已经停着)抛错;没有差异回 false,什么都不发。
+   */
+  mergeOffline(next: Project, baseRev: number): boolean {
+    if (!this.connected || this.awaitingState || !this.confirmed || this.paused || this.gateOpId) throw new Error("文档连接还没就绪，不能合并离线修改");
+    if (!Number.isSafeInteger(baseRev) || baseRev < 0) throw new Error("离线修改的历史序号不对");
+    if (baseRev === this.confirmedRev && this.offlineRev === null) {
+      // 不是经 store 发起的:用 replay 作原因,接 store 的一侧把结果写进 state
+      const prev = this.local;
+      return this.commitInternal(next, {}, undefined, undefined, "replay") !== prev;
+    }
+    const before = this.status;
+    const d = diffProject(this.local, next);
+    if (d.ops.length === 0) return false;
+    const r = applyOps(this.local, d.ops);
+    if (!r.ok) throw new Error(`离线修改落不下去:${r.detail}`);
+    const ops: PathOp[] = utf8Bytes(JSON.stringify(d.ops)) > MAX_OPS_BYTES ? [{ op: "set", path: "", value: r.value }] : d.ops;
+    const entry: Pending = { opId: this.newOpId(), ops, inverse: d.inverse, sent: false };
+    this.pending.push(entry);
+    this.noteOwnOp(entry.opId);
+    this.offlineRev = baseRev;
+    // 离线批次:本地副本是带着离线修改的那一份,已确认副本不动;文档服务答了再定
+    this.setLocal(r.value, "replay");
+    this.sendGate();
+    this.statusChanged(before);
+    return true;
+  }
+
   /* ---------- 本地修改 ---------- */
 
   /**
@@ -829,7 +900,7 @@ export class DocSync {
     opts: CommitOptions,
     undoOf: string | undefined,
     target: "undo" | "redo" | undefined,
-    cause: "commit" | "undo" | "redo" | "revert-remote" = target ?? "commit",
+    cause: "commit" | "undo" | "redo" | "revert-remote" | "replay" = target ?? "commit",
   ): Project {
     const prev = this.local;
     const d = diffProject(prev, next);

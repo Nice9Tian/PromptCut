@@ -40,6 +40,37 @@ const permission = (project, accountId, action) => {
   return access;
 };
 
+/** 搬到云端时带上来的历史序号最多多大、提交摘要最多几条(与文档服务 `PROJECT_LIMITS.HISTORY` 同数) */
+const IMPORTED_HISTORY_MAX = 1000;
+const shortStrings = (value, maxItems, maxLength) => Array.isArray(value)
+  ? value.filter(s => typeof s === 'string' && s.length <= maxLength).slice(0, maxItems) : [];
+/**
+ * 「搬到云端」带上来的本机提交摘要(本机 DocSync 记下的那几条):只留形状对、序号不超过起始历史序号、严格递增的,
+ * 字段只留文档服务历史里用得上的那几样(`modules/project.mjs` 的 `staleDetail`)。写入身份一律记成导入,不信页面报的身份。
+ */
+export function importedHistory(history, initialRev) {
+  if (!Array.isArray(history)) return [];
+  const out = [];
+  let last = 0;
+  for (const entry of history.slice(-IMPORTED_HISTORY_MAX)) {
+    if (!entry || typeof entry !== 'object' || !Number.isSafeInteger(entry.rev) || entry.rev <= last || entry.rev < 1 || entry.rev > initialRev) continue;
+    last = entry.rev;
+    out.push({ rev: entry.rev, ...(typeof entry.opId === 'string' && entry.opId.length <= 256 ? { opId: entry.opId } : {}),
+      actor: { userId: 'system:account-import' }, at: Number.isFinite(entry.at) ? entry.at : null,
+      paths: shortStrings(entry.paths, 32, 512), entities: shortStrings(entry.entities, 64, 256), imported: true });
+  }
+  return out;
+}
+/** 两段秘密(链接口令、二级密码的哈希)按固定时间比较;长度不同直接不等 */
+const sameSecret = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const x = Buffer.from(a, 'utf8'), y = Buffer.from(b, 'utf8');
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+const secondaryHash = (password, salt) => scryptSync(password, salt, 32).toString('base64url');
+/** 项目二级密码最长几个字(只防超长输入拖慢哈希;不限字符种类) */
+const SECONDARY_PASSWORD_MAX = 256;
+
 /**
  * 「谁可以新建云端项目、每人能建多少」的判断口子（online-browser-task.md 第一步第 4 条）。
  * 调用方（`createProject`）只问这一个函数；以后要限制，改配置或换规则，不改调用方。〔裁：v18-fixes 子 Agent〕
@@ -212,8 +243,10 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const reqProjectId = typeof body?.projectId === 'string' && body.projectId.trim() ? body.projectId.trim() : null;
     if (reqProjectId && !projectIdOK(reqProjectId)) reject(400, 'invalid-project');
     const key = requestKey(actor.accountId, body.requestId);
-    const initialRev = Number.isSafeInteger(body?.rev) && body.rev >= 1 ? body.rev : 1;
-    const initialHistory = Array.isArray(body?.history) ? body.history : [];
+    // 搬到云端:历史序号接着本机那一份往上数(本机 DocSync 确认过的序号),提交摘要只留到这个序号为止(10-14 第 3.3 节)
+    if (body?.rev !== undefined && (!Number.isSafeInteger(body.rev) || body.rev < 1)) reject(400, 'invalid-rev');
+    const initialRev = body?.rev ?? 1;
+    const initialHistory = importedHistory(body?.history, initialRev);
     const payload = { op: 'create', name, initialProject: body.initialProject ?? null, allowLinkJoin: body.allowLinkJoin ?? true,
       ...(reqProjectId ? { projectId: reqProjectId } : {}) };
     const digest = digestOf(payload);
@@ -293,15 +326,16 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
 
       // 验证链接是否已作废（仅对新加入的非创建者核对；已进来的老成员不受影响）
       if (!isCreator && !isExistingMember && p.linkToken) {
-        if (!body.linkToken || body.linkToken !== p.linkToken) reject(403, 'link-expired');
+        if (!sameSecret(body?.linkToken ?? body?.token, p.linkToken)) reject(403, 'link-expired');
       }
 
-      // 验证项目二级密码（非创建者需要核对；已经进过的成员不再问，改了密码之后才要重新输一次）
+      // 验证项目二级密码（非创建者需要核对；已经进过的成员不再问，改了密码之后才要重新输一次）。
+      // 密码照输入的原样算哈希，设置与核对两边都不去空白
       if (!isCreator && p.secondaryPassword) {
         if (p.members[actor.accountId]?.secondaryPasswordRev !== p.secondaryPassword.rev) {
-          if (!body.secondaryPassword) reject(403, 'secondary-password-required');
-          const computed = scryptSync(String(body.secondaryPassword), p.secondaryPassword.salt, 32).toString('base64url');
-          if (computed !== p.secondaryPassword.hash) reject(403, 'bad-secondary-password');
+          if (typeof body.secondaryPassword !== 'string' || body.secondaryPassword === '') reject(403, 'secondary-password-required');
+          if (body.secondaryPassword.length > SECONDARY_PASSWORD_MAX) reject(403, 'bad-secondary-password');
+          if (!sameSecret(secondaryHash(body.secondaryPassword, p.secondaryPassword.salt), p.secondaryPassword.hash)) reject(403, 'bad-secondary-password');
         }
       }
 
@@ -321,6 +355,18 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     });
     if (committed.event) notify(committed.event); return committed.result;
   }
+  /**
+   * 发项目会话前的进入核对(公开的 `/session` 路由用;`/join` 已经在 `joinProject` 里核过)。
+   * 设了项目二级密码、而这个成员还没输过当前这一版密码的(新设或改过之后):回 `secondary-password-required`,
+   * 页面据此请他输一次、凭密码走 `/join`(10-14 第 3.3 节「已经进过的成员不再问，改了密码之后才要重新输一次」)。
+   * 创建者自己不用输;回给创建者当前的链接口令(拼「复制项目链接」用)和有没有设二级密码。
+   */
+  function entryState({ accountId, projectId } = {}) {
+    const p = projectOf(ledger.read(), projectId); active(p);
+    if (accountId === p.creatorAccountId) return { linkToken: typeof p.linkToken === 'string' ? p.linkToken : null, secondaryPassword: !!p.secondaryPassword };
+    if (p.secondaryPassword && p.members[accountId]?.secondaryPasswordRev !== p.secondaryPassword.rev) reject(403, 'secondary-password-required');
+    return {};
+  }
   async function adminProject(input, body) {
     const actor = await verify(input);
     if (body?.op === 'set-hosted-option' && body.service === 'render' && body.option === 'streams' && body.enabled === true) {
@@ -329,7 +375,16 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         if (perm?.allowed !== true) reject(403, 'permission-denied');
       }
     }
-    const key = requestKey(actor.accountId, body.requestId); const digest = digestOf({ op: 'admin', body });
+    // 项目二级密码:照输入的原样(不去空白)加盐哈希;空串或 null 是清除。明文不进请求账本的摘要,也不进账本
+    let secondary;
+    if (body?.op === 'set-secondary-password') {
+      if (body.password !== null && typeof body.password !== 'string') reject(400, 'invalid-password');
+      if (typeof body.password === 'string' && body.password.length > SECONDARY_PASSWORD_MAX) reject(400, 'invalid-password');
+      secondary = body.password ? (salt => ({ salt, hash: secondaryHash(body.password, salt) }))(randomBytes(16).toString('base64url')) : null;
+    }
+    const { password: _password, ...digestBody } = body ?? {};
+    const key = requestKey(actor.accountId, body.requestId);
+    const digest = digestOf({ op: 'admin', body: digestBody, ...(body?.op === 'set-secondary-password' ? { clears: !secondary } : {}) });
     const committed = ledger.transaction(state => {
       const p = projectOf(state, body.projectId);
       if (actor.role !== 'page' || actor.accountId !== p.creatorAccountId) reject(403, 'creator-required');
@@ -360,16 +415,11 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
           if (!accountIdOK(body.accountId)) reject(400, 'invalid-member'); delete p.bans[body.accountId]; break;
         case 'delete': p.status = 'deleted'; affected.push(...Object.keys(p.members)); break;
         case 'regen-link':
+          // 作废并重新生成项目链接:旧链接失效(新人要带新口令),已经进来的成员不受影响,所以不动成员、不停任务
           p.linkToken = randomBytes(16).toString('base64url');
           break;
         case 'set-secondary-password':
-          if (typeof body.password === 'string' && body.password.trim()) {
-            const salt = randomBytes(16).toString('base64url');
-            const hash = scryptSync(body.password.trim(), salt, 32).toString('base64url');
-            p.secondaryPassword = { salt, hash, rev: ++state.revision };
-          } else {
-            p.secondaryPassword = null;
-          }
+          p.secondaryPassword = secondary ? { ...secondary, rev: ++state.revision } : null;
           break;
         case 'set-hosted-service':
           if (!['render', 'agent'].includes(body.service) || typeof body.enabled !== 'boolean') reject(400, 'invalid-service');
@@ -387,7 +437,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         accountIds: affected, accessRevision: p.accessRevision, createdAt: now(),
         ...(body.op === 'set-hosted-service' ? { service: body.service, enabled: body.enabled } : {}),
         ...(body.op === 'set-hosted-option' ? { service: body.service, option: body.option, enabled: body.enabled } : {}),
-        ...(body.op === 'regen-link' ? { linkToken: p.linkToken } : {}),
+        // 链接口令只回给创建者本人(下面的 result),不写进访问事件:各服务都读得到访问事件
         ...(body.op === 'set-secondary-password' ? { hasSecondaryPassword: !!p.secondaryPassword } : {}) });
       let control = null;
       const fence = { requestId: `access:${event.eventId}`, projectId: p.projectId, accessSeq: event.seq };
@@ -568,7 +618,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
   return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
-    createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
+    createProject, joinProject, entryState, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);

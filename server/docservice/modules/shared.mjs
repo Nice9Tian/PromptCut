@@ -34,7 +34,7 @@
  * 管理身份不在任何空间里（组装层的放行判断已挡住它发 `shared.*`）；`local` 身份没有项目，这里的请求一律 `forbidden`，
  * 只有 `shared.members` / `shared.watch` 照样回本空间（`local`）的连接。
  */
-import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   ROLES, adminPurpose, b64urlDecode, isUsername as isUsernameShape, isDeviceId, isRole, isConversation, normalizeOwner, isReservedUsername,
 } from '../../auth/protocol.mjs';
@@ -51,7 +51,6 @@ export const ADMIN_OPS = Object.freeze([
   'set-password', 'set-list', 'kick', 'unban', 'delete', 'set-creator-password', 'list-bans',
   'invite-create', 'invite-revoke', 'invite-status',
   'set-hosted-service', 'set-hosted-option',
-  'regen-link', 'set-secondary-password',
 ]);
 
 /** 成员能用的用户名：形状对，且不是留给服务身份的 `service:` 开头 */
@@ -531,26 +530,6 @@ export function sharedModule({
         }
         return;
       }
-      case 'regen-link': {
-        const at = clock(ctx);
-        const code = randomBytes(16).toString('hex');
-        st.update(space, (d) => {
-          d.invite = { ...d.invite, revokedAt: at, code };
-        });
-        const link = `/editor?project=${encodeURIComponent(space)}&link=${code}`;
-        ctx.log('shared.admin', { connId, projectId: space, op });
-        reply(ctx, connId, { type: 'shared.admin.ok', op, code, link }, reqId);
-        return;
-      }
-      case 'set-secondary-password': {
-        const { password } = msg;
-        st.update(space, (d) => {
-          d.secondaryPassword = typeof password === 'string' && password ? password : null;
-        });
-        ctx.log('shared.admin', { connId, projectId: space, op });
-        reply(ctx, connId, { type: 'shared.admin.ok', op, hasPassword: !!password }, reqId);
-        return;
-      }
       default:
         break;
     }
@@ -586,12 +565,6 @@ export function sharedModule({
 
     handle(ctx, connId, msg) {
       const reqId = isReqId(msg.reqId) ? msg.reqId : undefined;
-      if (msg.clientVersion && typeof msg.clientVersion === 'string') {
-        const parts = msg.clientVersion.split('.').map(Number);
-        if (parts.length >= 3 && (parts[0] < 0 || (parts[0] === 0 && (parts[1] < 7 || (parts[1] === 7 && parts[2] <= 17))))) {
-          return reply(ctx, connId, { type: 'error', reason: 'version-expired', detail: '当前软件版本已过期，无法搬到云端' }, reqId);
-        }
-      }
       const fn = HANDLERS[msg.type];
       if (!fn) return reply(ctx, connId, { type: 'error', reason: 'unsupported', detail: '共享项目模块不支持这种消息' }, reqId);
       try {
