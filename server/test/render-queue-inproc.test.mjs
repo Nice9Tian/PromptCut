@@ -434,8 +434,14 @@ test('I1 全链路：页面发布 plan，两个 pc 节点认领、切分、执�
     assert.deepEqual(page.done(t.id).result.ranges, [[t.range.from, t.range.to]], `${t.id}：ranges`);
     assert.equal(page.done(t.id).resultKey, t.resultKey);
   }
-  // 产物库按「结果键 + 范围」存: 一条流的稀疏流任务和满密度任务共用一项
-  assert.equal(rig.sink.entries().length, expected.filter(t => !t.density).length);
+  // 产物库按「结果键 + 范围」存(同 writeManifest):每个任务自己的键一项;稀疏流整条流一个任务,另按 8 段一桶写,
+  // 那几个桶与满密度任务的键相同、共用一项,满密度的盖掉稀疏的
+  const keyOf = t => `${t.resultKey}#${t.range.from}-${t.range.to}`;
+  assert.equal(rig.sink.entries().length, new Set(expected.map(keyOf)).size);
+  for (const t of expected.filter(x => x.kind === 'stream' && !x.density)) {
+    assert.ok(rig.sink.stores(t.resultKey, t.range), `${t.id}：满密度任务的键(也是桶)存着`);
+    assert.notEqual(rig.sink.entries().find(e => keyOf(e) === keyOf(t)).sparse, true, `${t.id}：桶是满密度的那一版`);
+  }
   hygiene(rig, { unhandledBefore: before });
 });
 

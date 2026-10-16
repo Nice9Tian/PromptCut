@@ -93,7 +93,7 @@ test('BM-01 清单形状与桌面 collectStreamResult 逐字段同形;过 manife
   const rootA = await roots.root();
   const A = roots.make(rootA, { interactive: true });
   const deskKey = F.sha256('desk-stream');
-  await F.writeStreamFixture(rootA, { streamKey: deskKey, segments: [3, 4, 5] });
+  await F.writeStreamFixture(rootA, { streamKey: deskKey, segments: [3, 4, 5], lastFrame: 164 });
   const desk = (await collectStreamResult(A, F.streamTask({ streamKey: deskKey, contentKey: 'x', from: 3, to: 5 }))).result;
 
   const task = browserTask();
@@ -117,7 +117,7 @@ test('BM-01 清单形状与桌面 collectStreamResult 逐字段同形;过 manife
 
   // 值:照任务书第四处
   assert.equal(mine.v, RESULT_VERSION);
-  assert.deepEqual(mine.header, { kind: 'card', plane: 'local', clipIds: ['clip-a'], fps: 30, originFrame: 45, bound: BOUND, offset: { x: 760, y: 420 }, tight: null });
+  assert.deepEqual(mine.header, { kind: 'card', plane: 'local', clipIds: ['clip-a'], fps: 30, originFrame: 45, lastFrame: 164, bound: BOUND, offset: { x: 760, y: 420 }, tight: null });
   // 清单不带这条流的第一帧(改分段规则之前的节点产的):两边都不认
   const { originFrame: _dropped, ...oldHeader } = mine.header;
   assert.equal(manifestMatches({ ...mine, header: oldHeader }, { kind: 'stream', resultKey: RESULT_KEY, range: { from: 3, to: 5 } }), false);

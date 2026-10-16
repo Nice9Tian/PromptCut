@@ -151,7 +151,7 @@ export const A_ENCODER = 'h264_nvenc';
 export const B_ENCODER = 'libx264';
 
 /** 在 root 下按 `frame-stream.mjs` 的格式手工造一条流（字节是造的，不是真 fMP4）。回 { manifest, files, dir } */
-export async function writeStreamFixture(root, { streamKey, segments, encoder = A_ENCODER, seed = 1, originFrame = 0 }) {
+export async function writeStreamFixture(root, { streamKey, segments, encoder = A_ENCODER, seed = 1, originFrame = 0, lastFrame }) {
   const dir = path.join(root, 'streams', streamKey);
   await fs.mkdir(dir, { recursive: true });
   const bound = { x: 0, y: 0, w: 64, h: 64 };
@@ -161,7 +161,8 @@ export async function writeStreamFixture(root, { streamKey, segments, encoder = 
   const files = { [`init-${id1}.mp4`]: init1 };
   const manifest = {
     // `originFrame`:这条流自己的第一帧(分段从它起数);清单不带它的结果别处不收(`streamAdoption`)
-    version: 1, streamKey, kind: 'card', plane: 'local', clipIds: ['clip-s'], fps: 30, originFrame, bound, offset: { x: 32, y: 32 }, tight,
+    // `lastFrame`(给了才写):这条流自己的最后一帧,推送时清单 header 带上它(写内容库时按它截 8 段一桶的终点)
+    version: 1, streamKey, kind: 'card', plane: 'local', clipIds: ['clip-s'], fps: 30, originFrame, ...(Number.isInteger(lastFrame) ? { lastFrame } : {}), bound, offset: { x: 32, y: 32 }, tight,
     inits: { [id1]: { codec: 'avc1.64001f', width: 48, height: 96, timescale: 15360, rect: tight, encoder, bytes: init1.length } },
     segments: {},
   };

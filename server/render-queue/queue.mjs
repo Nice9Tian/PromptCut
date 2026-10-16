@@ -1226,8 +1226,6 @@ export function createRenderQueue(options = {}) {
       tasks: [...tasks.values()].sort((a, b) => byId(a.id, b.id)).map((t) => ({
         id: t.id, projectId: t.source.projectId, state: t.state, version: t.version,
         attempts: t.attempts, lastError: t.lastError,
-        requires: t.requires ? { ...t.requires } : null,
-        input: t.input ? { ...t.input } : null,
         claim: t.claim && {
           nodeId: t.claim.nodeId, token: t.claim.token, leaseUntil: t.claim.leaseUntil,
           progress: { done: t.claim.progress.done, changedAt: t.claim.progress.changedAt,
@@ -1264,8 +1262,43 @@ export function createRenderQueue(options = {}) {
     return nodes.get(nodeId)?.userId ?? null;
   }
 
+  /**
+   * 判断能不能抢占一个在途流任务所需的最小任务视图（给能力更强的节点；文档服务模块挂在 `queue.snapshot` / `task.taken` 上）：
+   * 节点侧过滤（`filter.mjs`）与 `canClaim`（托管节点按项目的「生成轨道流」开关、导出位图不归它管）要看的那几项 ——
+   * 种类、版本、项目、重度、`requires`、`input` 里的密度与导出位图标记。不带认领令牌、订阅方、发布方的用户、内容键与输入细节。
+   */
+  function preemptViewOf(task) {
+    const input = {};
+    if (task.input?.density === 'sparse') input.density = 'sparse';
+    if (task.input?.exportFrames === true) input.exportFrames = true;
+    return {
+      id: task.id, kind: task.kind, version: task.version,
+      source: { projectId: task.source.projectId },
+      weight: { class: task.weight?.class ?? 'medium' },
+      requires: structuredClone(task.requires ?? {}),
+      input,
+    };
+  }
+
+  /**
+   * 这条连接看得见的、正被认领着的流任务（可选只看 `id` 这一个）：`[{ task: 最小视图, holderNodeId }]`，按 id 升序。
+   * 可见性与 open 任务同一道（`canSee`：watch 了这个项目、指纹前置过滤）；纯浏览器不抢占别人，一律回空。
+   * `holderNodeId` 只给文档服务模块换算持有方的设备等级，不往外发。
+   */
+  function claimedStreamsFor(connId, id = null) {
+    const conn = conns.get(connId);
+    if (!conn) return [];
+    const node = nodeOf(conn);
+    if (!node || node.profile === 'browser') return [];
+    const pick = id === null ? [...tasks.values()] : [tasks.get(id)].filter(Boolean);
+    return pick
+      .filter((t) => t.kind === 'stream' && t.state === 'claimed' && t.claim && canSee(conn, t))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((t) => ({ task: preemptViewOf(t), holderNodeId: t.claim.nodeId }));
+  }
+
   return Object.freeze({
-    connect, disconnect, handle, tick, describe, nodeUserOf,
+    connect, disconnect, handle, tick, describe, nodeUserOf, claimedStreamsFor,
     get epoch() { return epoch; },
   });
 }

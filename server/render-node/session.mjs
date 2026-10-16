@@ -49,6 +49,22 @@ export function deviceRank(node) {
   return 1;
 }
 
+/** 在途流任务的持有方等级:队列给了就用;只给了 profile 的按 profile 换算;都没有回 null(不当作可抢) */
+function holderRankOf(item) {
+  if (Number.isInteger(item?.holderRank)) return item.holderRank;
+  return item?.holderProfile === 'pc' ? 3 : item?.holderProfile === 'host' ? 2 : item?.holderProfile === 'browser' ? 1 : null;
+}
+
+/**
+ * 判断抢占用的任务视图:id 以 `stream:` 起头的一律是流任务,补上 `kind: 'stream'`;项目 id 归到 `source.projectId`
+ * (诊断形状的任务只有顶层 `projectId`)。这样 `canClaim`(托管节点按项目的「生成轨道流」开关)认得出它是流任务、属于哪个项目。没有回 null
+ */
+function streamTaskView(task, id) {
+  if (!task || typeof task !== 'object') return null;
+  const projectId = task.source?.projectId ?? task.projectId ?? null;
+  return { ...task, id: task.id ?? id, kind: 'stream', source: { ...(task.source ?? {}), projectId } };
+}
+
 export function createNodeSession({
   nodeId,
   node,
@@ -72,7 +88,7 @@ export function createNodeSession({
   const settings = { ...QUEUE_DEFAULTS, ...constants };
   /** 本地看到的 open 任务:id → TaskView */
   let open = new Map();
-  /** 在飞的流任务(被别的节点认领中):id → { id, version, holderProfile, holderRank, density } */
+  /** 在飞的流任务(被别的节点认领中):id → { id, version, holderProfile, holderRank, density, task }(`task` 是判断能不能抢的任务视图,见 `streamTaskView`) */
   let inFlightStreams = new Map();
   /** 持有的认领:id → { id, token, lastSentAt, done, step, projectId } */
   const holds = new Map();
@@ -229,27 +245,27 @@ export function createNodeSession({
         }
         break;
       }
-      case 'queue.snapshot':
+      case 'queue.snapshot': {
+        const before = open;
+        const beforeStreams = inFlightStreams;
         open = new Map((message.tasks ?? []).filter(task => task?.id != null).map(task => [task.id, task]));
-        inFlightStreams.clear();
+        inFlightStreams = new Map();
         if (Array.isArray(message.claimedStreams)) {
           for (const s of message.claimedStreams) {
-            if (s?.id) {
-              const rank = Number.isInteger(s.holderRank)
-                ? s.holderRank
-                : (s.holderProfile === 'pc' ? 3 : s.holderProfile === 'host' ? 2 : s.holderProfile === 'browser' ? 1 : null);
-              inFlightStreams.set(s.id, {
-                id: s.id,
-                version: Number.isInteger(s.version) ? s.version : 1,
-                holderProfile: s.holderProfile ?? null,
-                holderRank: rank,
-                density: s.density ?? (s.id.endsWith(':sparse') ? 'sparse' : null),
-                task: s.task ?? open.get(s.id) ?? null,
-              });
-            }
+            if (typeof s?.id !== 'string' || !s.id.startsWith('stream:')) continue;
+            inFlightStreams.set(s.id, {
+              id: s.id,
+              version: Number.isInteger(s.version) ? s.version : 1,
+              holderProfile: s.holderProfile ?? null,
+              holderRank: holderRankOf(s),
+              density: s.density ?? (s.id.endsWith(':sparse') ? 'sparse' : null),
+              // 本地见过的完整任务(被认领之前在 open 里的那一份、上一张快照记下的)优先,队列只给判断抢占要的最小视图
+              task: streamTaskView(before.get(s.id) ?? open.get(s.id) ?? beforeStreams.get(s.id)?.task ?? s.task, s.id),
+            });
           }
         }
         break;
+      }
       case 'task.opened':
         if (message.task?.id != null) {
           open.set(message.task.id, message.task);
@@ -257,19 +273,16 @@ export function createNodeSession({
         }
         break;
       case 'task.taken': {
-        const existingTask = open.get(message.id) ?? message.task ?? null;
+        const existingTask = open.get(message.id) ?? inFlightStreams.get(message.id)?.task ?? message.task ?? null;
         open.delete(message.id);
         if (typeof message.id === 'string' && message.id.startsWith('stream:')) {
-          const rank = Number.isInteger(message.holderRank)
-            ? message.holderRank
-            : (message.holderProfile === 'pc' ? 3 : message.holderProfile === 'host' ? 2 : message.holderProfile === 'browser' ? 1 : null);
           inFlightStreams.set(message.id, {
             id: message.id,
             version: Number.isInteger(message.version) ? message.version : 1,
             holderProfile: message.holderProfile ?? null,
-            holderRank: rank,
+            holderRank: holderRankOf(message),
             density: message.density ?? (message.id.endsWith(':sparse') ? 'sparse' : null),
-            task: existingTask,
+            task: streamTaskView(existingTask, message.id),
           });
         }
         break;

@@ -880,7 +880,7 @@ export function streamAdoption(result) {
 }
 
 /**
- * 清单里记的第一帧跟上这一版计划的(`spec.originFrame`),回同一个清单对象。
+ * 清单里记的第一帧跟上这一版计划的(`spec.originFrame`),没记过最后一帧的补上计划的(`spec.lastFrame`),回同一个清单对象。
  *
  * 清单的 `originFrame` 记的是「产这条流时它的第一帧在项目的第几帧」。现在流键里带着片段在时间轴上的位置,同一个键的清单
  * 这一项不会和计划对不上,这里什么都不改。留着这一步是给「片段在时间轴上挪动以后流不失效」(记了待办,这次不做)用的:
@@ -889,6 +889,8 @@ export function streamAdoption(result) {
  */
 export function anchorManifest(manifest, spec) {
   if (manifest && isStreamOrigin(spec?.originFrame) && manifest.originFrame !== spec.originFrame) manifest.originFrame = spec.originFrame;
+  // 这条流的最后一帧(推送时清单 header 的 `lastFrame`):流键里带着采样窗口,同一个键的它不变;没记过的(之前落盘的)补上
+  if (manifest && Number.isInteger(spec?.lastFrame) && manifest.lastFrame !== spec.lastFrame) manifest.lastFrame = spec.lastFrame;
   return manifest;
 }
 
@@ -1238,8 +1240,10 @@ export class StreamProducer {
   }
 
   freshManifest(spec) {
+    // `lastFrame`:这条流自己的最后一帧。推送时清单 header 带上它,写内容库时按它截桶(`src/render/streamBuckets.mjs`)
     return { version: STREAM_CODE_VERSION, streamKey: spec.streamKey, kind: spec.kind, plane: spec.plane, clipIds: spec.clipIds,
-      fps: spec.fps, originFrame: spec.originFrame, bound: spec.bound, offset: spec.offset, tight: null, inits: {}, segments: {} };
+      fps: spec.fps, originFrame: spec.originFrame, ...(Number.isInteger(spec.lastFrame) ? { lastFrame: spec.lastFrame } : {}),
+      bound: spec.bound, offset: spec.offset, tight: null, inits: {}, segments: {} };
   }
 
   /**
@@ -1917,7 +1921,8 @@ export class StreamProducer {
     if (live) return live;
     const { header, range } = plan;
     const manifest = (await this.store.load(key)) ?? { version: STREAM_CODE_VERSION, streamKey: key, kind: header.kind, plane: header.plane,
-      clipIds: header.clipIds, fps: header.fps, originFrame: header.originFrame, bound: header.bound, offset: header.offset ?? null, tight: header.tight ?? null, inits: {}, segments: {} };
+      clipIds: header.clipIds, fps: header.fps, originFrame: header.originFrame, ...(Number.isInteger(header.lastFrame) ? { lastFrame: header.lastFrame } : {}),
+      bound: header.bound, offset: header.offset ?? null, tight: header.tight ?? null, inits: {}, segments: {} };
     const again = this.streams.get(key);
     if (again) return again;
     const clipIds = Array.isArray(manifest.clipIds) ? manifest.clipIds : header.clipIds;
