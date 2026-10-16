@@ -158,6 +158,8 @@
 
 ### 10.3 下次接手后的顺序（直接从 `0.7.18` 剩余四块开始，无需重跑渲染重构）
 
+0. **2026-10-17 核对（Claude 主会话）：main 的全量测试是红的。** `0e99dd63` 上 `npm test` 7011 条里 58 条失败（类型检查 0 错误）。最早从 10-16 凌晨的 `rr-motion-preempt`（`7ec227f6`）起就红了，之后撤快照的页面一侧、`v18-revoke-logout`、`v18-move-proc`、`v18-chat-workflow-jobs` 又各加了一批；其中部署清单漏了 `server/render-node/session.mjs`，部署到节点会起不来。逐条出处见 `docs/reports/VERIFY-main-2026-10-17.md`。**接着做 0.7.18 之前，先把 main 修回全绿。**
+
 1. **分支 A（`v18-collect-reboot`）**：
    - 打开采集代下（在 `server/upload-queue.mjs`、`server/vite-plugin-media.ts` 补撤回并删除在途文件接口并接入 `src/ai/cloud/collectBridge.ts`；将 `PROMPTCUT_AGENT_COLLECT_DELEGATE` 改为缺省开启；桌面版代下时显示 `「云端 Agent 正在用这台电脑上的登录下载：〈网址〉」`）与 `web_handoff`（让发起人自己电脑默认浏览器打开同一网址）；
    - 节点重启后自动恢复任务槽（`account-root-slots.mjs` / `agent-run-scope-publisher.mjs` 跨 `boot_id` 自动接续），并把重启那一刻在跑的任务自动记为失败并释放（10-14 第 3.1 节）。

@@ -16,6 +16,8 @@
 
 **2026-10-16 用户叫停（现场）：** `main` 在 `710215dc`。10-15 接手后合入了下表最后 10 行。己二的页面与舞台一侧在 `gemini/rr-rm-snap-page` 上做完、暂停，没合入、没推到远端（见「在分支上、没合入的」）；服务端一侧 `rr-rm-snap-server` 还没开工。没有在跑的子 Agent 和后台进程。同一天用户定了 `user-decisions-2026-10-16.md`（见「用户已经定的」），语义与计划已由 Claude 的会话改好推到 `main`（`c533df45`、`710215dc`）。
 
+**2026-10-17 核对（Claude 主会话）：main 的全量测试是红的。** `0e99dd63` 上 `npm test` 7011 条里 58 条失败（类型检查 0 错误）。最早从 10-16 凌晨的 `rr-motion-preempt`（`7ec227f6`）起就红了，之后撤快照的页面一侧、`v18-revoke-logout`、`v18-move-proc`、`v18-chat-workflow-jobs` 又各加了一批；其中部署清单漏了 `server/render-node/session.mjs`，部署到节点会起不来。逐条出处见 `docs/reports/VERIFY-main-2026-10-17.md`。**接着做 0.7.18 之前，先把 main 修回全绿。**
+
 ## 已合进 `main` 的
 
 〔2026-10-17 更正：这几次合入后跑了 `git pull --rebase`，合并提交被拍平、分支上的提交换了号，原记的 `4ce057f5`、`cff49101`、`d68dd0f8`、`e706be5b` 不在 `main` 上；已改成 `main` 上实际的提交，拍平前后的文件内容逐字节相同。VisuHive 原记的 `be945f2` 在 VisuHive 里查不到，实际是 `fbe86bb`、`9f40aaa`、`0e64fbe`（`main` 头），本机比 GitHub 多 7 个提交〕
