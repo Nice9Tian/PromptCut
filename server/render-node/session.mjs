@@ -241,6 +241,7 @@ export function createNodeSession({
                 holderProfile: s.holderProfile ?? null,
                 holderRank: rank,
                 density: s.density ?? (s.id.endsWith(':sparse') ? 'sparse' : null),
+                task: s.task ?? open.get(s.id) ?? null,
               });
             }
           }
@@ -252,7 +253,8 @@ export function createNodeSession({
           inFlightStreams.delete(message.task.id);
         }
         break;
-      case 'task.taken':
+      case 'task.taken': {
+        const existingTask = open.get(message.id) ?? message.task ?? null;
         open.delete(message.id);
         if (typeof message.id === 'string' && message.id.startsWith('stream:')) {
           const rank = Number.isInteger(message.holderRank)
@@ -264,9 +266,11 @@ export function createNodeSession({
             holderProfile: message.holderProfile ?? null,
             holderRank: rank,
             density: message.density ?? (message.id.endsWith(':sparse') ? 'sparse' : null),
+            task: existingTask,
           });
         }
         break;
+      }
       case 'task.closed':
         // 包括 `state: 'hidden'`(契约 I.6):队列的指纹前置过滤不再让本节点看见它,和别的 closed 一样移除
         open.delete(message.id);
@@ -324,24 +328,32 @@ export function createNodeSession({
     }
     // 没有 open 候选任务时：能力更强的设备可抢占能力更弱设备执行中的 stream 任务（桌面版 > 托管服务 > 浏览器）
     const fn = filterNode();
-    const canDoStreams = fn?.capabilities?.streams !== false;
+    const canDoStreams = fn?.capabilities?.streams === true || (fn?.capabilities?.streams === undefined && fn?.capabilities?.transcode === true);
     const myRank = canDoStreams ? deviceRank(fn) : 0;
-    if (myRank > 1 && inFlightStreams.size > 0) {
-      const preemptable = [];
+    if (myRank > 1 && !fn.planOnly && inFlightStreams.size > 0) {
+      const candidates = [];
       for (const item of inFlightStreams.values()) {
         if (holds.has(item.id) || deferred.has(item.id)) continue;
-        if (Number.isInteger(item.holderRank) && item.holderRank < myRank) preemptable.push(item);
+        if (!Number.isInteger(item.holderRank) || item.holderRank >= myRank) continue;
+        // 如果有完整任务视图，必须通过 filterClaimable 与 canClaim 检查
+        if (item.task) {
+          if (!filterClaimable([item.task], fn).length) continue;
+          try {
+            if (canClaim(item.task, { held }) === false) continue;
+          } catch { continue; }
+        }
+        candidates.push(item);
       }
-      if (preemptable.length > 0) {
+      if (candidates.length > 0) {
         // 若有多个可抢占任务，优先抢占稀疏流任务（sparse 先于满密度）
-        preemptable.sort((a, b) => {
+        candidates.sort((a, b) => {
           const aSparse = a.density === 'sparse' ? 1 : 0;
           const bSparse = b.density === 'sparse' ? 1 : 0;
           if (aSparse !== bSparse) return bSparse - aSparse;
           return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
         });
-        const target = preemptable[0];
-        inflight = { id: target.id, projectId: null };
+        const target = candidates[0];
+        inflight = { id: target.id, projectId: target.task?.source?.projectId ?? null };
         try {
           send({ type: 'task.claim', id: target.id, expectVersion: target.version });
         } catch (error) {

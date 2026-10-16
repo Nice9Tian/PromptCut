@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createRenderQueue, taskIdOf } from '../render-queue/index.mjs';
 import { renderQueueModule } from '../docservice/modules/render-queue.mjs';
 import { createNodeSession, deviceRank } from '../render-node/session.mjs';
 import { splitPlan, isMotionCard } from '../render-node/split.mjs';
 import { pageStreamTasks, isMotionCard as isMotionCardPage } from '../../src/online/pageStreamPlan.ts';
 import { createFakeClock, createMessageCollector, T0 } from './fake-render-queue-env.mjs';
+import { writeManifest } from '../artifact-transfer.mjs';
+import { OnlineSnapshotSource } from '../../src/render/snapshotSource.ts';
 
 const FP_PC = 'pppppppppppppppp';
 const FP_HOST = 'hhhhhhhhhhhhhhhh';
@@ -63,17 +66,23 @@ test('MP-02 切分流任务：motion 卡至少 30 秒（60段），短于 30s �
   assert.equal(tasksMotionShort.length, 1, '短于 30 秒的 motion 卡只切 1 个任务');
   assert.deepEqual([tasksMotionShort[0].range.from, tasksMotionShort[0].range.to], [0, 9]);
 
-  // (b) Motion 卡：75 段（> 30 秒 / 60 段） -> 切成 2 个任务：[0, 59] 和 [60, 74]
-  const motionLongStreams = [{
-    streamKey: 'stream-motion-long', topClipId: 'c-m2', firstSegment: 0, lastSegment: 74, fps: 30,
-    cardId: 'focus-card',
-  }];
-  const tasksMotionLong = splitPlan({
-    planTask: baseTask, streams: motionLongStreams, envFingerprint: FP_PC, codeVersion: CV,
+  // (b) Motion 卡：超过 30 秒（60 段）切分，尾段不足 60 段并入前一段：
+  // 75 段（尾部 15 段不足 60）并入前一段 -> 1 个任务 [0, 74]
+  // 125 段（第 2 段 65 段 >= 60）-> 切成 2 个任务：[0, 59] 和 [60, 124]
+  const tasksMotion75 = splitPlan({
+    planTask: baseTask, streams: [{ streamKey: 's75', topClipId: 'c75', firstSegment: 0, lastSegment: 74, fps: 30, cardId: 'focus-card' }],
+    envFingerprint: FP_PC, codeVersion: CV,
   }).filter(t => t.kind === 'stream');
-  assert.equal(tasksMotionLong.length, 2, '超过 30 秒的 motion 卡每 60 段一份');
-  assert.deepEqual([tasksMotionLong[0].range.from, tasksMotionLong[0].range.to], [0, 59]);
-  assert.deepEqual([tasksMotionLong[1].range.from, tasksMotionLong[1].range.to], [60, 74]);
+  assert.equal(tasksMotion75.length, 1, '75 段 motion 卡尾部不足 60 段并入前一段');
+  assert.deepEqual([tasksMotion75[0].range.from, tasksMotion75[0].range.to], [0, 74]);
+
+  const tasksMotion125 = splitPlan({
+    planTask: baseTask, streams: [{ streamKey: 's125', topClipId: 'c125', firstSegment: 0, lastSegment: 124, fps: 30, cardId: 'focus-card' }],
+    envFingerprint: FP_PC, codeVersion: CV,
+  }).filter(t => t.kind === 'stream');
+  assert.equal(tasksMotion125.length, 2, '超过 60 段且每段至少 60 段');
+  assert.deepEqual([tasksMotion125[0].range.from, tasksMotion125[0].range.to], [0, 59]);
+  assert.deepEqual([tasksMotion125[1].range.from, tasksMotion125[1].range.to], [60, 124]);
 
   // (c) Remotion 卡：10 段 -> 仍按 8 段切分：[0, 7] 和 [8, 9]
   const remotionStreams = [{
@@ -128,7 +137,7 @@ function setupQueueEnv(startAt = T0) {
   return { clock, collector, q, mod, ctx };
 }
 
-function publishStreamTask(env, pubConnId, taskId, { priority = 10, fps = 30, userId = 'u1' } = {}) {
+function publishStreamTask(env, pubConnId, taskId, { priority = 10, fps = 30, userId = 'u1', requires = {} } = {}) {
   const parts = taskId.split(':');
   const resultKey = parts[1];
   const [from, to] = parts[2].split('-').map(Number);
@@ -138,7 +147,7 @@ function publishStreamTask(env, pubConnId, taskId, { priority = 10, fps = 30, us
   const task = {
     id: taskId, kind: 'stream', resultKey, range,
     source: { projectId: PROJECT, projectRev: 1 }, input,
-    weight: { class: 'medium', estMs: null, frames: (to - from + 1) * 15 }, requires: {}, priority,
+    weight: { class: 'medium', estMs: null, frames: (to - from + 1) * 15 }, requires: { ...requires }, priority,
   };
   env.mod.connect(env.ctx, pubConnId, { scope: 'local', userId });
   env.mod.handle(env.ctx, pubConnId, { type: 'publisher.hello', publisherId: 'pub-1' });
@@ -420,4 +429,241 @@ test('MP-09 被抢占的浏览器节点：收到 task.lease-lost (preempted) 立
   jobs[0].resolve({ manifest: { header: {}, segments: {} } });
   await flush();
   assert.equal(sent.filter(m => m.type === 'task.complete').length, 0, '迟到的产出被丢弃，不发 task.complete');
+});
+
+/* ------------------------------------------------------------------ 6. 端到端：20 秒 (40段) motion 卡产出稀疏与满密度流后播放器按层表分段查找 */
+
+test('MP-10 端到端：20 秒 (40段) motion 卡产出稀疏流和满密度流后，OnlineSnapshotSource 成功按层表读取第 0、10、35 段', async () => {
+  const rk = 'rk-motion-20s';
+  const lastSeg = 39; // 40 个分段：0～39
+  const storage = new Map();
+  const contentStore = {
+    async get(kind, key) {
+      if (storage.has(`${kind}/${key}`)) return { body: structuredClone(storage.get(`${kind}/${key}`)) };
+      return { missing: true };
+    },
+    async put(kind, key, body) {
+      storage.set(`${kind}/${key}`, structuredClone(body));
+      return { ok: true };
+    },
+  };
+
+  const flush = () => new Promise(r => setTimeout(r, 10));
+
+  const sha = (b) => createHash('sha256').update(b).digest('hex');
+  const bytesOf = (t) => new TextEncoder().encode(t);
+
+  const blobStore = new Map();
+  const initBytes = bytesOf('init-data-payload');
+  const initHash = sha(initBytes);
+  blobStore.set(initHash, initBytes);
+
+  const segHashes = {};
+  for (let n = 0; n <= lastSeg; n++) {
+    const segBytes = bytesOf(`seg-${n}-payload-data`);
+    const segHash = sha(segBytes);
+    blobStore.set(segHash, segBytes);
+    segHashes[n] = segHash;
+  }
+
+  const initId = initHash.slice(0, 16);
+
+  // 1. 模拟 40 段 motion 卡的流任务执行结果产出
+  const makeStreamResult = (stride) => {
+    const segments = {};
+    const inits = { [initId]: { hash: initHash, bytes: initBytes.length, encoder: 'h264_nvenc', width: 640, height: 360, timescale: 30, codec: 'avc1.640028', rect: { x: 0, y: 0, w: 640, h: 360 } } };
+    for (let n = 0; n <= lastSeg; n++) {
+      segments[n] = { hash: segHashes[n], bytes: 200, init: initId, stride, samples: 15, sig: `sig-${n}`, encoder: 'h264_nvenc' };
+    }
+    return {
+      v: 1, kind: 'stream', resultKey: rk, range: { from: 0, to: lastSeg },
+      header: { kind: 'card', plane: 'local', clipIds: ['clip-motion-20'], fps: 30, originFrame: 0, bound: { x: 0, y: 0, w: 640, h: 360 } },
+      inits, segments,
+    };
+  };
+
+  // 先写入稀疏流结果（覆盖 0～39）
+  await writeManifest(contentStore, makeStreamResult(15));
+  // 校验：写的一侧已按 8 段一桶分桶存储，且共用无 :sparse 后缀的键
+  assert.ok(storage.has(`render-manifest/${rk}:0-7`), '第 0 桶写入');
+  assert.ok(storage.has(`render-manifest/${rk}:8-15`), '第 1 桶写入');
+  assert.ok(storage.has(`render-manifest/${rk}:16-23`), '第 2 桶写入');
+  assert.ok(storage.has(`render-manifest/${rk}:24-31`), '第 3 桶写入');
+  assert.ok(storage.has(`render-manifest/${rk}:32-39`), '第 4 桶写入');
+
+  // 写入满密度结果（升级覆盖）
+  await writeManifest(contentStore, makeStreamResult(1));
+  const b0 = storage.get(`render-manifest/${rk}:0-7`);
+  assert.equal(b0.segments[0].stride, 1, '满密度覆盖稀疏版');
+
+  // 2. 模拟层表（标准 8 段一桶 segmentsPerTask: 8）
+  const layerMap = {
+    v: 3, kind: 'layer-map', projectId: PROJECT, fps: 30, span: 60, layers: [],
+    streams: [{
+      topClipId: 'clip-motion-20', clipIds: ['clip-motion-20'], kind: 'card', plane: 'local', contentKey: 'ck-m20',
+      candidates: [{ envFingerprint: FP_PC, resultKey: rk }],
+      originFrame: 0, lastSegment: lastSeg, segmentsPerTask: 8,
+    }],
+  };
+  storage.set(`layer-map/layers:${PROJECT}`, layerMap);
+
+  let readyMessages = [];
+  let currentT = 0;
+  const source = new OnlineSnapshotSource({
+    async request(msg) {
+      if (msg.key === `layers:${PROJECT}`) return { type: 'content.item', kind: 'snapshot-manifest', key: msg.key, body: storage.get(`layer-map/${msg.key}`) };
+      const item = await contentStore.get(msg.kind, msg.key);
+      if (item.missing) return { type: 'content.item', kind: msg.kind, key: msg.key, missing: true };
+      return { type: 'content.item', kind: msg.kind, key: msg.key, body: item.body };
+    },
+    assetBase: () => 'https://example.com/asset/',
+    authHeaders: async () => ({}),
+    async fetch(url) {
+      const hash = url.split('/').pop();
+      const b = blobStore.get(hash);
+      if (!b) return { ok: false, status: 404, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) };
+      return { ok: true, status: 200, headers: { get: () => 'video/mp4' }, arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) };
+    },
+    now: () => 1000,
+    setTimer: () => 0,
+    clearTimer: () => {},
+  }, { tier: 'original', playhead: { get t() { return currentT; }, fps: 30, playing: false } });
+
+  source.subscribeReady('online', 0, (m) => readyMessages.push(m));
+  source.setProject(PROJECT);
+
+  const settleSource = async (t) => {
+    currentT = t;
+    source.focus(t, 30);
+    await source.tickNow();
+    await source.idle();
+    await source.tickNow();
+    await source.idle();
+  };
+
+  // 窗口在第 0 段 (t = 0s)
+  await settleSource(0);
+
+  // 窗口在第 10 段 (10 * 15 / 30 = 5.0s)
+  await settleSource(5.0);
+
+  // 窗口在第 35 段 (35 * 15 / 30 = 17.5s)
+  await settleSource(17.5);
+
+  // 校验：第 0、10、35 段都被成功读出并进入就绪区间
+  const streamMsg = readyMessages.filter(m => m.type === 'layer' && m.kind === 'stream');
+  assert.ok(streamMsg.length > 0, '收到了 stream 就绪消息');
+  const allRanges = streamMsg.flatMap(m => m.ranges);
+  const isSegReady = (seg) => allRanges.some(([a, b]) => seg >= a && seg <= b);
+
+  assert.ok(isSegReady(0), '第 0 段已就绪');
+  assert.ok(isSegReady(10), '第 10 段已就绪');
+  assert.ok(isSegReady(35), '第 35 段已就绪');
+});
+
+/* ------------------------------------------------------------------ 7. 抢占资格校验与安全拦截 */
+
+test('MP-11 5 种非法抢占场景被拦截：不发出抢占，服务端也不释放原持有方', async () => {
+  const taskId = 'stream:rk-target:0-9';
+
+  // 场景 1：PC 指纹与任务要求指纹不符
+  {
+    const env = setupQueueEnv();
+    publishStreamTask(env, 'pub-1', taskId, { requires: { envFingerprint: FP_PC } });
+    const bConn = 'conn-b1';
+    env.mod.connect(env.ctx, bConn, { role: 'render', userId: 'u1' });
+    env.mod.handle(env.ctx, bConn, { type: 'node.hello', nodeId: 'node-b1', profile: 'browser' });
+    env.mod.handle(env.ctx, bConn, { type: 'task.claim', id: taskId, expectVersion: 1 });
+    assert.equal(env.collector.of(bConn, 'task.claimed').length, 1);
+
+    // 异指纹 PC 尝试抢占
+    const pcConn = 'conn-pc-bad-fp';
+    env.mod.connect(env.ctx, pcConn, { role: 'render', userId: 'u1' });
+    env.mod.handle(env.ctx, pcConn, { type: 'node.hello', nodeId: 'node-pc-bad', profile: 'pc', envFingerprint: 'bad-fingerprint' });
+    env.mod.handle(env.ctx, pcConn, { type: 'task.claim', id: taskId, expectVersion: 1 });
+
+    // 原持有方不被释放，抢占方未获得任务
+    assert.equal(env.collector.of(bConn, 'task.lease-lost').length, 0, '指纹不符时原持有方未丢失租约');
+    assert.equal(env.collector.of(pcConn, 'task.claimed').length, 0, '指纹不符的 PC 认领未成功');
+  }
+
+  // 场景 2：PC 节点声明 streams: false（且无 transcode）
+  {
+    const env = setupQueueEnv();
+    publishStreamTask(env, 'pub-1', taskId);
+    const bConn = 'conn-b2';
+    env.mod.connect(env.ctx, bConn, { role: 'render', userId: 'u1' });
+    env.mod.handle(env.ctx, bConn, { type: 'node.hello', nodeId: 'node-b2', profile: 'browser' });
+    env.mod.handle(env.ctx, bConn, { type: 'task.claim', id: taskId, expectVersion: 1 });
+
+    const pcConn = 'conn-pc-no-streams';
+    env.mod.connect(env.ctx, pcConn, { role: 'render', userId: 'u1' });
+    env.mod.handle(env.ctx, pcConn, { type: 'node.hello', nodeId: 'node-pc-no-streams', profile: 'pc', capabilities: { streams: false, transcode: false } });
+    env.mod.handle(env.ctx, pcConn, { type: 'task.claim', id: taskId, expectVersion: 1 });
+
+    assert.equal(env.collector.of(bConn, 'task.lease-lost').length, 0, '无流能力 PC 未踢掉原浏览器');
+    assert.equal(env.collector.of(pcConn, 'task.claimed').length, 0);
+  }
+
+  // 场景 3：节点侧 canClaim 返回 false
+  {
+    const sent = [];
+    const session = createNodeSession({
+      nodeId: 'pc-can-claim-false',
+      node: { nodeId: 'pc-can-claim-false', profile: 'pc', capabilities: { streams: true } },
+      send: (m) => sent.push(m),
+      now: () => 1000,
+      canClaim: () => false, // 明确拒绝
+    });
+    session.start();
+    session.receive({ type: 'node.welcome', nodeId: 'pc-can-claim-false', resumed: [], lost: [] });
+    // 推入弱设备在途流任务
+    session.receive({
+      type: 'task.taken', id: taskId, version: 1, holderProfile: 'browser', holderRank: 1,
+      task: { id: taskId, kind: 'stream', requires: { capabilities: { streams: true } } },
+    });
+    session.tick();
+    assert.equal(sent.filter(m => m.type === 'task.claim').length, 0, 'canClaim 为 false 时节点不发起抢占');
+  }
+
+  // 场景 4：节点声明 planOnly: true
+  {
+    const sent = [];
+    const session = createNodeSession({
+      nodeId: 'pc-plan-only',
+      node: { nodeId: 'pc-plan-only', profile: 'pc', planOnly: true, capabilities: { streams: true } },
+      send: (m) => sent.push(m),
+      now: () => 1000,
+    });
+    session.start();
+    session.receive({ type: 'node.welcome', nodeId: 'pc-plan-only', resumed: [], lost: [] });
+    session.receive({
+      type: 'task.taken', id: taskId, version: 1, holderProfile: 'browser', holderRank: 1,
+      task: { id: taskId, kind: 'stream', requires: { capabilities: { streams: true } } },
+    });
+    session.tick();
+    assert.equal(sent.filter(m => m.type === 'task.claim').length, 0, 'planOnly 节点不发起流任务抢占');
+  }
+
+  // 场景 5：托管节点 (rank 2) 在项目 streams: false 时不抢占
+  {
+    const env = setupQueueEnv();
+    publishStreamTask(env, 'pub-1', taskId);
+    const bConn = 'conn-b5';
+    env.mod.connect(env.ctx, bConn, { role: 'render', userId: 'u1' });
+    env.mod.handle(env.ctx, bConn, { type: 'node.hello', nodeId: 'node-b5', profile: 'browser' });
+    env.mod.handle(env.ctx, bConn, { type: 'task.claim', id: taskId, expectVersion: 1 });
+
+    const hostConn = 'conn-host-off';
+    env.mod.connect(env.ctx, hostConn, { role: 'render', userId: 'u1' });
+    env.mod.handle(env.ctx, hostConn, {
+      type: 'node.hello', nodeId: 'node-host-off', profile: 'host',
+      capabilities: { streams: true },
+      projectStreams: { [PROJECT]: false }, // 项目关闭了生成轨道流
+    });
+    env.mod.handle(env.ctx, hostConn, { type: 'task.claim', id: taskId, expectVersion: 1 });
+
+    assert.equal(env.collector.of(bConn, 'task.lease-lost').length, 0, '项目 streams: false 时托管节点不抢占，原持有方未丢失租约');
+    assert.equal(env.collector.of(hostConn, 'task.claimed').length, 0);
+  }
 });

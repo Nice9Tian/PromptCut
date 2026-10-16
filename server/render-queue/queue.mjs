@@ -1226,6 +1226,8 @@ export function createRenderQueue(options = {}) {
       tasks: [...tasks.values()].sort((a, b) => byId(a.id, b.id)).map((t) => ({
         id: t.id, projectId: t.source.projectId, state: t.state, version: t.version,
         attempts: t.attempts, lastError: t.lastError,
+        requires: t.requires ? { ...t.requires } : null,
+        input: t.input ? { ...t.input } : null,
         claim: t.claim && {
           nodeId: t.claim.nodeId, token: t.claim.token, leaseUntil: t.claim.leaseUntil,
           progress: { done: t.claim.progress.done, changedAt: t.claim.progress.changedAt,

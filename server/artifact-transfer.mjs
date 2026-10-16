@@ -770,8 +770,7 @@ export async function mergedForWrite(content, result) {
   return merged;
 }
 
-/** 把一段的清单写进内容库。写失败、清单超限只记日志,回 false(C6.4 第 3 节:内容库清单只是给以后复用的) */
-export async function writeManifest(content, result, log = () => {}) {
+async function writeSingleManifest(content, result, log = () => {}) {
   const kind = manifestKindOf(result?.kind);
   const key = manifestKeyOf(result);
   if (!content || typeof content.put !== 'function' || !kind || !key) return false;
@@ -789,6 +788,48 @@ export async function writeManifest(content, result, log = () => {}) {
     safeLog(log, 'manifest.put-failed', { kind, key, code: error?.code ?? null, reason: error?.reason ?? null, message: String(error?.message ?? error) });
     return false;
   }
+}
+
+/** 把一段的清单写进内容库。写失败、清单超限只记日志,回 false(C6.4 第 3 节:内容库清单只是给以后复用的) */
+export async function writeManifest(content, result, log = () => {}) {
+  const kind = manifestKindOf(result?.kind);
+  if (!content || typeof content.put !== 'function' || !kind || !result) return false;
+
+  const fullOk = await writeSingleManifest(content, result, log);
+
+  // 轨道流同时按 8 段一桶写内容库，使长任务（如 60 段的 motion 流）和整卡稀疏流与播放器（8 段一桶读取）无缝对接
+  if (result.kind === 'stream' && Number.isInteger(result.range?.from) && Number.isInteger(result.range?.to) && result.range.to - result.range.from + 1 > 8) {
+    const from = result.range.from, to = result.range.to;
+    let allOk = fullOk;
+    for (let bFrom = from; bFrom <= to; bFrom += 8) {
+      const bTo = Math.min(to, bFrom + 7);
+      const bucketSegments = {};
+      const bucketInits = {};
+      for (let n = bFrom; n <= bTo; n++) {
+        const seg = result.segments?.[n];
+        if (seg) {
+          bucketSegments[n] = seg;
+          if (seg.init && result.inits?.[seg.init]) {
+            bucketInits[seg.init] = result.inits[seg.init];
+          }
+        }
+      }
+      const bucketResult = {
+        v: result.v,
+        kind: 'stream',
+        resultKey: result.resultKey,
+        range: { from: bFrom, to: bTo },
+        header: result.header,
+        inits: bucketInits,
+        segments: bucketSegments,
+      };
+      const ok = await writeSingleManifest(content, bucketResult, log);
+      if (!ok) allOk = false;
+    }
+    return allOk;
+  }
+
+  return fullOk;
 }
 
 function safeLog(log, event, fields) {
@@ -843,6 +884,29 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
     const kind = manifestKindOf(ref?.kind);
     const key = manifestKeyOf(ref);
     if (!kind || !key) return { ok: false, reason: 'no-key', fields: {} };
+
+    // 跨多个 8 段桶的长流任务递归检查每个桶，全部齐备才算已有
+    if (ref?.kind === 'stream' && Number.isInteger(ref.range?.from) && Number.isInteger(ref.range?.to) && ref.range.to - ref.range.from + 1 > 8) {
+      const from = ref.range.from, to = ref.range.to;
+      const combinedSegments = {};
+      const combinedInits = {};
+      let header = null;
+      for (let bFrom = from; bFrom <= to; bFrom += 8) {
+        const bTo = Math.min(to, bFrom + 7);
+        const bucketRef = { ...ref, range: { from: bFrom, to: bTo } };
+        const bResult = await lookup(bucketRef, { requireSmall });
+        if (!bResult.ok) return bResult;
+        header ||= bResult.body.header;
+        Object.assign(combinedSegments, bResult.body.segments);
+        Object.assign(combinedInits, bResult.body.inits);
+      }
+      const combinedBody = {
+        v: RESULT_VERSION, kind: 'stream', resultKey: ref.resultKey, range: { from, to },
+        header, inits: combinedInits, segments: combinedSegments,
+      };
+      remembered.set(key, combinedBody);
+      return { ok: true, body: combinedBody };
+    }
     let item;
     try {
       item = await content.get(kind, key);

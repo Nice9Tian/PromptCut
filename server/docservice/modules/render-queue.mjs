@@ -194,6 +194,9 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
       capabilities: body.capabilities,
       codeVersions: body.codeVersions,
       maxConcurrent: body.maxConcurrent,
+      planOnly: body.planOnly === true,
+      projectStreams: body.projectStreams ?? null,
+      streams: body.streams ?? null,
     };
     ctx.log('role.node', { connId, nodeId: body.nodeId, profile: body.profile, userId: conn.principal.userId });
   }
@@ -367,7 +370,7 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
       // hello 由队列回 welcome；这里只在消息合法时记下这条连接的角色（队列会用同一套校验）
       if (conn && (msg.type === 'node.hello' || msg.type === 'publisher.hello')) {
         const parsed = parseInbound(msg);
-        if (parsed.ok) recordRole(ctx, connId, conn, parsed.type, parsed.body);
+        if (parsed.ok) recordRole(ctx, connId, conn, parsed.type, { ...msg, ...parsed.body });
       }
       if (msg.type === 'node.active') {
         const busy = typeof msg.busy === 'string' ? msg.busy : null;
@@ -392,7 +395,8 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
         }
       }
       if (msg.type === 'task.claim' && typeof msg.id === 'string' && msg.id.startsWith('stream:')) {
-        const claimerRank = deviceRank(conn?.node);
+        const node = conn?.node;
+        const claimerRank = deviceRank(node);
         if (claimerRank > 1 && typeof q.describe === 'function') {
           const d = q.describe();
           const targetTask = (Array.isArray(d?.tasks) ? d.tasks : []).find((t) => t.id === msg.id);
@@ -408,6 +412,39 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
             }
             const holderRank = deviceRank(holderConn?.node);
             if (claimerRank > holderRank) {
+              // 关键校验：先完整核验认领方的全部资格，全部通过后才释放原持有方
+              const hasStreams = node?.capabilities?.streams === true || (node?.capabilities?.streams !== false && (node?.profile === 'pc' || node?.capabilities?.transcode === true));
+              if (!hasStreams) return;
+
+              // 2. 托管节点（rank 2）在项目 streams: false 时不抢占
+              if (node?.profile === 'host') {
+                if (node.capabilities?.streams === false) return;
+                const targetProjectId = targetTask.projectId ?? targetTask.source?.projectId;
+                const projectStreams = node.projectStreams?.[targetProjectId] ?? node.streams;
+                if (projectStreams === false) return;
+              }
+
+              // 3. planOnly 节点不可抢占
+              if (node?.planOnly === true) return;
+
+              // 4. 环境指纹校验：若任务要求指纹且节点有指纹，两者必须匹配
+              const taskFp = targetTask.requires?.envFingerprint;
+              const nodeFp = node?.envFingerprint;
+              if (taskFp && nodeFp && taskFp !== nodeFp) return;
+
+              // 5. 卡片指纹锁校验：若当前任务的卡已被别的指纹锁定，不可抢占
+              if (Array.isArray(d?.locks)) {
+                const streamLockId = `stream:${targetTask.input?.contentKey ?? targetTask.resultKey}`;
+                const cardLockId = targetTask.input?.contentKey ? `snapshot:${targetTask.input.contentKey}` : null;
+                const matchedLock = d.locks.find(l => (l.lockKey === streamLockId || l.key === streamLockId) || (cardLockId && (l.lockKey === cardLockId || l.key === cardLockId)));
+                if (matchedLock && nodeFp && matchedLock.envFingerprint !== nodeFp) return;
+              }
+
+              // 6. 本地素材 (X2) 检查
+              const requiredLocalMedia = targetTask.requires?.localMedia;
+              if (requiredLocalMedia && requiredLocalMedia !== node?.nodeId) return;
+
+              // 全部资格校验通过，方可释放原持有方并转移认领
               const oldToken = targetTask.claim.token;
               q.handle(holderConnId, { type: 'task.release', id: targetTask.id, token: oldToken, reason: 'preempted' });
               ctx.send(holderConnId, makeMessage(q.epoch ?? null, 'task.lease-lost', { id: targetTask.id, token: oldToken, reason: 'preempted' }));
@@ -447,7 +484,7 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
         const d = typeof q.describe === 'function' ? q.describe() : null;
         const task = (Array.isArray(d?.tasks) ? d.tasks : []).find((t) => t.id === message.id);
         let holderProfile = null;
-        let holderRank = 1;
+        let holderRank = null;
         if (task?.claim?.nodeId) {
           for (const c of conns.values()) {
             if (c.node?.nodeId === task.claim.nodeId) {
@@ -460,6 +497,7 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
         message.holderProfile = holderProfile;
         message.holderRank = holderRank;
         message.density = message.id.endsWith(':sparse') ? 'sparse' : null;
+        message.task = task ? { ...task } : null;
       }
       if (message.type === 'queue.snapshot') {
         const d = typeof q.describe === 'function' ? q.describe() : null;
@@ -467,7 +505,7 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
         for (const t of Array.isArray(d?.tasks) ? d.tasks : []) {
           if (t.state === 'claimed' && typeof t.id === 'string' && t.id.startsWith('stream:')) {
             let holderProfile = null;
-            let holderRank = 1;
+            let holderRank = null;
             if (t.claim?.nodeId) {
               for (const c of conns.values()) {
                 if (c.node?.nodeId === t.claim.nodeId) {
@@ -483,6 +521,7 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
               holderProfile,
               holderRank,
               density: t.id.endsWith(':sparse') ? 'sparse' : null,
+              task: { ...t },
             });
           }
         }

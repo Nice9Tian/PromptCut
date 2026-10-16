@@ -483,12 +483,19 @@ export const PAGE_SPARSE_STREAM_PRIORITY = 30;
 /** 稀疏流任务的密度记号(`input.density` 的值、id 的结尾;与 `server/render-queue/messages.mjs` 的 `STREAM_DENSITY_SPARSE` 同一个字) */
 const STREAM_DENSITY_SPARSE = "sparse";
 
-/** `[from, to]` 闭区间:first .. last 每 span 一段(与 `split.mjs` 的 `spans` 同一个式子) */
-export function spansOf(first: number, last: number, span: number): [number, number][] {
+/** `[from, to]` 闭区间:first .. last 每 span 一段(与 `split.mjs` 的 `spans` 同一个式子)。若指定了 minSpan 且尾段不足 minSpan 则并入前一段 */
+export function spansOf(first: number, last: number, span: number, minSpan = 1): [number, number][] {
   const out: [number, number][] = [];
   const step = Math.max(1, Math.floor(Number(span) || 0));
   if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last)) return out;
   for (let from = first; from <= last; from += step) out.push([from, Math.min(last, from + step - 1)]);
+  if (minSpan > 1 && out.length > 1) {
+    const lastSpan = out[out.length - 1];
+    if (lastSpan[1] - lastSpan[0] + 1 < minSpan) {
+      out[out.length - 2][1] = lastSpan[1];
+      out.pop();
+    }
+  }
   return out;
 }
 
@@ -505,14 +512,14 @@ export function pageStreamTasks(spec: PageStreamSpec, o: { projectId: string; pr
   const sparse = o.density === STREAM_DENSITY_SPARSE;
   const isMotion = isMotionCard(spec);
   const fps = Number(spec.fps) > 0 ? Number(spec.fps) : 30;
-  const span = sparse
-    ? Math.max(1, spec.lastSegment - spec.firstSegment + 1)
-    : isMotion
-      ? Math.ceil(30 * fps / STREAM_SEGMENT_FRAMES)
-      : PAGE_STREAM_SEGMENTS_PER_TASK;
+  const motionSpan = Math.ceil(30 * fps / STREAM_SEGMENT_FRAMES);
+  const span = isMotion
+    ? (sparse ? Math.max(1, spec.lastSegment - spec.firstSegment + 1) : motionSpan)
+    : PAGE_STREAM_SEGMENTS_PER_TASK;
+  const minSpan = (!sparse && isMotion) ? motionSpan : 1;
   const stream: StreamTaskInput = { kind: "card", plane: "local", clipIds: [spec.topClipId], fps: spec.fps, bound: { ...spec.bound }, offset: { ...spec.offset },
     firstFrame: spec.firstFrame, count: spec.bake.count, total: spec.total, originFrame: spec.originFrame, lastFrame: spec.lastFrame };
-  return spansOf(spec.firstSegment, spec.lastSegment, span).map(([from, to]) => {
+  return spansOf(spec.firstSegment, spec.lastSegment, span, minSpan).map(([from, to]) => {
     const range = { unit: "segment", from, to };
     // 这一段任务的帧数:每个分段按它实际的帧数(流的末段可以不满 15 帧),与切分方算的同一个数
     let frames = 0;

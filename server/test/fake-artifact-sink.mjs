@@ -50,9 +50,21 @@ export function createArtifactSink() {
       misuse.push(bad);
       return Promise.reject(new TypeError(bad));
     }
-    // 稀疏流任务(`input.density: 'sparse'`)每段有一版就算有;别的任务要满密度的那一版(稀疏流任务存下的不算)
-    const entry = stored.get(segmentKey(args.resultKey, args.range));
-    const answer = !!entry && (sparseRef(args) || entry.sparse !== true);
+    const sparse = sparseRef(args);
+    let answer = true;
+    if (args.kind === 'stream' && args.range && Number.isInteger(args.range.from) && Number.isInteger(args.range.to) && args.range.to - args.range.from + 1 > 8) {
+      for (let bFrom = args.range.from; bFrom <= args.range.to; bFrom += 8) {
+        const bTo = Math.min(args.range.to, bFrom + 7);
+        const entry = stored.get(segmentKey(args.resultKey, { from: bFrom, to: bTo }));
+        if (!entry || (!sparse && entry.sparse === true)) {
+          answer = false;
+          break;
+        }
+      }
+    } else {
+      const entry = stored.get(segmentKey(args.resultKey, args.range));
+      answer = !!entry && (sparse || entry.sparse !== true);
+    }
     hasLog.push({ resultKey: args.resultKey, range: clone(args.range), answer });
     return Promise.resolve(answer);
   }
@@ -74,11 +86,23 @@ export function createArtifactSink() {
       complete = false;
     }
     putLog.push({ resultKey, range: clone(range), meta: clone(meta), complete });
-    const key = segmentKey(resultKey, range);
-    // 同一个键(结果键 + 范围)稀疏、满密度共用:满密度的盖掉稀疏的,稀疏的不盖满密度的(不降级)
     const sparse = sparseRef(args);
-    if (complete && (!stored.has(key) || (stored.get(key).sparse === true && !sparse))) {
-      stored.set(key, { resultKey, kind, tier, range: clone(range), artifacts: clone(artifacts), meta: clone(meta), ...(sparse ? { sparse: true } : {}) });
+    if (complete) {
+      if (kind === 'stream' && range && Number.isInteger(range.from) && Number.isInteger(range.to) && range.to - range.from + 1 > 8) {
+        for (let bFrom = range.from; bFrom <= range.to; bFrom += 8) {
+          const bTo = Math.min(range.to, bFrom + 7);
+          const bRange = { from: bFrom, to: bTo };
+          const key = segmentKey(resultKey, bRange);
+          if (!stored.has(key) || (stored.get(key).sparse === true && !sparse)) {
+            stored.set(key, { resultKey, kind, tier, range: bRange, artifacts: clone(artifacts), meta: clone(meta), ...(sparse ? { sparse: true } : {}) });
+          }
+        }
+      } else {
+        const key = segmentKey(resultKey, range);
+        if (!stored.has(key) || (stored.get(key).sparse === true && !sparse)) {
+          stored.set(key, { resultKey, kind, tier, range: clone(range), artifacts: clone(artifacts), meta: clone(meta), ...(sparse ? { sparse: true } : {}) });
+        }
+      }
     }
     return Promise.resolve({ complete });
   }
@@ -102,6 +126,16 @@ export function createArtifactSink() {
     hasCalls: () => hasLog.map(h => clone(h)),
     misuse: () => misuse.slice(),
     /** 这一段收全了没有（同步，给断言用） */
-    holds: (resultKey, range) => stored.has(segmentKey(resultKey, range)),
+    holds: (resultKey, range) => {
+      if (stored.has(segmentKey(resultKey, range))) return true;
+      if (range && Number.isInteger(range.from) && Number.isInteger(range.to) && range.to - range.from + 1 > 8) {
+        for (let bFrom = range.from; bFrom <= range.to; bFrom += 8) {
+          const bTo = Math.min(range.to, bFrom + 7);
+          if (!stored.has(segmentKey(resultKey, { from: bFrom, to: bTo }))) return false;
+        }
+        return true;
+      }
+      return false;
+    },
   };
 }
