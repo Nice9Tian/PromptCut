@@ -93,3 +93,14 @@
 
 4. **变更文件范围核实**：
    仅修改了允许的 8 个测试文件，严禁修改的生产目录与模块 0 触碰。
+
+---
+
+## 四、Opus 审查优化项（已同步落地）
+
+1. **`c10-l3-source.test.mjs`（L3-3）**：删去多余手工 `putRange`，验证由 `fetchSnapshot` 内部写进 L2 的 range 区间被重开实例真实读回并包含对应帧。
+2. **`c10-beat-feed.test.mjs`**：更新文件头 1-6 行过时说明，彻底清理未使用的 `warm()` 与 `streamPlanesAt` 导入。
+3. **用例名与死代码清理**：
+   - `onlineCardsL.test.mjs`（`OCE-L-06`）：标题由「六处」修正为「五处」。
+   - `stageLocalOnly.test.mjs`（`SL-01`）：文件头与用例名同步修正为「流平面与抑制占位」。
+   - `streamFallback.test.mjs`：清理未使用的 `fakeSnap` 及快照 DOM 选择器，更新文件头说明。

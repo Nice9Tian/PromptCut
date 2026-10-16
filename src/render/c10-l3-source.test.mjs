@@ -126,9 +126,8 @@ test("C10-L3-3 关掉再开:已在 L2 的块不再请求,就绪照样出来", as
   first.setProject("p1");
   first.focus(1, 30);
   await settle(first);
-  // 按需取一块进 L2
+  // 按需取一块进 L2(fetchSnapshot 自身会把该帧区间写进 L2)
   await first.fetchSnapshot("html", "K-a", 3);
-  await l2a.putRange("R-a", 0, 59);
   await new Promise((r) => setTimeout(r, 20));
   first.stop();
   l2a.close();
@@ -141,7 +140,8 @@ test("C10-L3-3 关掉再开:已在 L2 的块不再请求,就绪照样出来", as
   again.focus(1, 30);
   await settle(again);
   assert.equal(w.fetches.length - before, 0, "重开之后一个块都没再请求");
-  assert.ok(layerOf(index, "a", "html")?.ranges.length, "就绪从 L2 的 ranges 读回来");
+  const ranges = layerOf(index, "a", "html")?.ranges;
+  assert.ok(ranges && ranges.some(([lo, hi]) => lo <= 3 && hi >= 3), "就绪从 L2 的 ranges 读回来(含第 3 帧)");
   assert.match(await again.fetchSnapshot("html", "K-a", 3), /data-f="3"/);
   assert.equal(again.stats.snapFetches, 0);
   assert.ok(again.stats.l2Hits >= 1);

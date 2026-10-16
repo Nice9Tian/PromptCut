@@ -1,7 +1,7 @@
 /**
- * L4 按拍换快照在投递一侧(C10 契约第 6 节、第 18 节第 1 条;`snapshotFeed.ts` 的 `setBeatSwap`):
- *   - 开着时播放中的投递不受 33 ms 节流,暂停时仍受;关着(桌面)照旧;
- *   - 每拍按 fitBeatSwaps 装得下的重层才换,按从上到下的层序取,装不下的摘掉快照(舞台显示占位符)。
+ * 撤快照后投递一侧契约对齐(`snapshotFeed.ts`):
+ *   - 每张卡的 HTML 快照作废后,deliverSnapshots 在播放中清空 settled 并返回 0,不向舞台派发快照补丁;
+ *   - 播放中重卡全量由 suppressed 抑制接管,topDownOrder 保持层序,setBeatSwap / beatSwapDebug 保留兼容签名且无空指针。
  * 跑:node --experimental-test-module-mocks --test src/editor/c10-beat-feed.test.mjs
  */
 import { srcUrl } from "../testing/registerTs.mjs";
@@ -13,7 +13,7 @@ mock.module(srcUrl("editor/planDispatch.ts"), { exports: { currentPlan: () => pl
 mock.module(srcUrl("render/dataMirror.ts"), { exports: { mirrorKey: () => ({ session: "s", localRev: 1 }), pushWanted: () => {} } });
 
 const feed = await import(srcUrl("editor/snapshotFeed.ts"));
-const { deliverSnapshots, setSnapshotSource, syncSnapshotSubscription, resetSnapshotFeed, setBeatSwap, beatSwapDebug, topDownOrder, noteSettled, suppressedAt, streamPlanesAt, SNAPSHOT_THROTTLE_MS } = feed;
+const { deliverSnapshots, setSnapshotSource, syncSnapshotSubscription, resetSnapshotFeed, setBeatSwap, beatSwapDebug, topDownOrder, noteSettled, suppressedAt, SNAPSHOT_THROTTLE_MS } = feed;
 
 let now = 1000;
 performance.now = () => now;
@@ -40,12 +40,6 @@ beforeEach(() => {
   syncSnapshotSubscription(() => {});
   now += 10_000;
 });
-
-async function warm(stage, head) {
-  await deliverSnapshots(stage, "front", head);   // 第一轮取字节
-  await settle();
-  now += 1000;
-}
 
 test("C10-BF-01 撤快照后播放中投递返回 0 并清空 settled;不派发快照 RPC", async () => {
   const p = project([{ id: "t", name: "t", clips: [card("h", 0, 10)] }]);

@@ -221,7 +221,7 @@ test("OCE-L-05 参数面板的说明跟着运行状态走", () => {
   assert.match(form, /data-pc="params-run-state"/);
 });
 
-test("OCE-L-06 接线:运行状态变了,分派表、测量、时间轴片段、投递的记忆都跟着;六处判断同一个函数", () => {
+test("OCE-L-06 接线:运行状态变了,分派表、测量、时间轴片段、投递的记忆都跟着;五处判断同一个函数", () => {
   const read = (rel) => fs.readFileSync(fileURLToPath(srcUrl(rel)), "utf8");
   assert.match(read("editor/planDispatch.ts"), /onCardRunStatesChanged\(\(\) => schedule\(\)\)/, "分派表重算");
   assert.match(read("editor/ProbeGate.tsx"), /onCardRunStatesChanged\(\(\) => \{[\s\S]*?requeueProbeRun\(getState\(\)\.project\)/, "测量重排(刚载入成功的卡即时补测)");
