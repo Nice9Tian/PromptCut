@@ -32,6 +32,10 @@
 - 升级：Flash 同一处改了两轮不过，换 Sonnet 5.5 High 或 Argon High；Sonnet 两轮不过，换 Opus 5.5 High；Opus 或 Argon 两轮不过，换另一边的高档再试一轮（Opus↔Argon），仍不过照解法表走，做不到就写清楚报给用户。
 - 选谁、为什么，写在派活指令里；每个子 Agent 一个工作区（`.worktrees/<名>`）、一条分支（`gemini/<名>`）、一段不重叠的端口，报告写到 `docs/reports/AGENT-<分支名>.md`。
 - 同时跑的子 Agent 不超过五路（交接文档第 9 节：六路时 CPU 一直满载，全量测试会偶发失败）。
+- **零轮询等待与清理（照 `guide_files/multi_agent.md`）**：
+  - 派完子 Agent（`invoke_subagent` / `send_message`）或启动后台 CLI 任务（异步 `run_command`）后，若主会话手头没有别的可推进的活，**直接输出文字结束当前回合（不调任何工具）**，完全靠系统的 `SYSTEM_MESSAGE` 自动唤醒（Reactive Wakeup）。
+  - **严禁轮询与巡检闹钟**：绝不连续调用 `manage_subagents(Action="list")` 或 `manage_task(Action="status")`；**禁止用 `schedule` 设 3～5 分钟的子 Agent 巡检闹钟**（每响一次闹钟在大上下文下要空转 3～4 轮；`schedule` 只用于 5 小时额度 `< 10%` 时的跨时段休眠等待）。
+  - **归档后清理 `idle` 子 Agent**：子 Agent 分支合入 `main`、报告归档并拆掉 worktree 后，顺手调一次 `manage_subagents(Action="kill")` 把已结束的 `idle` 子 Agent 从活动列表里清掉，防止列表无限膨胀。
 - 端口避开用户常驻的 5190～5192、5210～5212；起开发服务器一律带 `PROMPTCUT_NO_PORT_FILE=1`。
 - **合入前的闸门**照交接文档第 9 节逐项跑，由主会话自己跑；闸门脚本在 `out/main-session-tools/`，说明在 `docs/local.md`「主会话合入前的闸门脚本」。脚本是 bash 写的，用 `C:\Program Files\Git\bin\bash.exe` 跑。
 

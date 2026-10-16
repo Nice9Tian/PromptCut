@@ -122,3 +122,54 @@
 - 跑全量测试要设的两个环境变量在 `docs/local.md` 文末；起开发服务器一律带 `PROMPTCUT_NO_PORT_FILE=1`。
 - 同时跑的子 Agent 不要超过五路：六路时 CPU 一直 100%，全量测试每遍都有两三条偶发失败。
 - 大块合入前另派一位不带作者结论的独立审查，今天「搬到云端」那一块又查出两处必须改的。
+
+---
+
+## 10. 2026-10-16 交接：渲染重构 100% 完成，0.7.18 合入三块后因周额度 `< 10%` 收工
+
+### 10.1 为什么停、现在在哪
+
+- **停的原因**：触发 `agy-usage` Quota Guard 周额度保护线（`< 10%`）与 `render-018-kickoff-other-agents.md` 第 3 节规定（用到 90% 停止开新内容、在途子 Agent 收尾合入并写交接文档）。2026-10-16 18:28（JST）实测 `agy -p "/usage"`：
+  - `Gemini Models`：周额度剩余 **`9%`**（重置时间 `2026-10-22T11:04:28Z`），5 小时额度剩余 `28%`（重置时间 `2026-10-16T12:07:47Z`）；
+  - `Claude and GPT models`：周额度剩余 **`0%`**（重置时间 `2026-10-22T21:13:58Z`），5 小时额度 `disabled`。
+- **仓库与工作区状态**：
+  - PromptCut 主工作区（`C:\Users\admin\Documents\PromptCut`）：在 `main`、干净，最新代码合入提交 `301f8a39`（连同本交接与进度更新提交已推送 `origin/main`）。
+  - VisuHive 主工作区（`C:\Users\admin\Documents\VisuHive`）：在 `main`、干净，最新本地提交 `be945f2`（已在 `main` 合入 `gemini/vh-stream-perm` 权限分组后台与无默认管理员修正，以及 `gemini/vh-revoke-logout` 主动撤权通知、45 秒超时、折叠详情与不退出文案更新；领先 `origin/main` 5 个提交，照部署顺序在部署节点时推送）。
+  - **无未合入分支、无残留 `.worktrees/*` 工作区**（仅保留 `.worktrees/_export-baseline/` 像素基线目录）、**无在跑子 Agent 或残留后台进程**。
+
+### 10.2 本轮（2026-10-15～2026-10-16）已完成并合入 `main` 的全部内容
+
+1. **渲染重构（Phase 1）全部完成并合入 `main`（至 `0d6dec22`）**：
+   - `08fb7cd9`（`rr-sem-1014`）：同步 `user-decisions-2026-10-14.md` 全部一级、二级、三级语义与契约文档。
+   - `16fe6882`（`rr-mobile-lowmem`）+ `5b947ca8`（`rr-mobile-node-wire`）：低内存提示文案更新、手机/平板打开项目也为本页产稀疏流（先过 `VideoEncoder.isConfigSupported`，连错 3 次停产，不认领队列任务 `claims === 0`）、`page-stream-probe.mjs` 本机模拟手机自动化闸门。
+   - `69d791ed`（`rr-frame-bake3d`）+ `61600a5b`（`rr-bake3d-stream`）：修复 Agent `see_frames` 抽帧早一帧、修复导出开头 36 帧偶发差一帧、画布卡产流缺省改为 `'always'` 直取像素、3D 视图板子贴图在播放时取轨道流随时间动态更新且打开 3D 模式时轻卡也产流、更新 `bake_card` 工具说明区分 HTML 快照与 PNG 快照。
+   - `f83500d2` / `987de00c`（`rr-stage-export-media`）：在线舞台一律跨源隔离（撤掉同源单舞台退路）、桌面版舞台锁死（禁调预渲染接口、按哈希读素材只许读当前项目）。
+   - `8a41fcd3`（`rr-stream-sched` + VisuHive `47be5d4`）：「生成轨道流」关闭时托管渲染节点稀疏与满密度都不产；增加 `render_streams` 权限分组与 VisuHive 管理员后台，去掉 `ACCOUNT_ADMINS` 默认管理员。
+   - `cf8f3e1c`（`rr-media-import`）：放开在线浏览器导入本地媒体，浏览器内用 WebCodecs + `mp4Mux` 先转视频小尺寸，严格按「所有小尺寸先传、再传原尺寸」上传到素材服务。
+   - `57bab25d`（`rr-motion-preempt`）：`motion` 式卡产流任务按至少 30 秒切分（`remotion` 式保持 8 段 4 秒）；强设备（桌面 > 托管 > 浏览器）可抢弱设备在途流任务并保留已传分段；时间轴拖动保活（S2）。
+   - `576ad0a3`（`rr-online-export-stage`）：在线浏览器导出在跨源隔离舞台内整帧活渲本页可运行的同步用户卡与素材效果卡，保留「快速导出 / 完整导出」，补齐 `export-frames` 24 小时 TTL 清理与限流。
+   - `4ce057f5`（`rr-rm-snap-page`）+ `cff49101`（`rr-rm-snap-server`）：己二彻底撤掉页面、舞台、服务端与预渲染进程中每张卡的 HTML 快照及 `.small.webp` 预渲染小尺寸；放宽暂停/拖动下 `scrub` 的抑制范围至无流非 `remotion` 重卡；在 `server/stage-gate.mjs` 放行 `/@id/__x00__vite/dynamic-import-helper.js`。
+   - `d68dd0f8` / `0d6dec22`（`rr-g0r-probes`）：更新 `preview-fallback-probe.mjs` 与 `ready-index-probe.mjs`，在 `main` 上实跑通过 G0-R 全套收尾验证（240 帧确定性 `240/240`，导出像素基线比对 `A-89c15177` `240/240` 逐字节相同），提交 `docs/reports/REPORT-render-refactor.md`，并将 59 份 `AGENT-rr-*.md` 归档至 `docs/archive/agent-reports/`。
+
+2. **0.7.18（Phase 2）已完成并合入 `main` 的三块（至 `301f8a39`）**：
+   - `611fb04c`（`v18-revoke-logout` + VisuHive `be945f2`）：落实 10-14 第 3.0.1 节与第 3.2 节（撤掉 90 秒连接轮换与轮询，账号服务主动通知文档服务撤权并带握手确认与 15 次指数退避重试、重连按 `sinceSeq` 补齐；改密退出超时改为 45 秒、调试信息缺省折叠、「不退出」文案更新）。
+   - `0ba84411`（`v18-move-proc`）：落实 10-14 第 3.3 节与第 3.4 节（本地项目/协作房间搬到云端保持原 `projectId`、连续历史序号 `rev` 与操作历史；`<= 0.7.17` 旧版拒绝并提示「当前软件版本已过期，无法搬到云端」；「版本号」改称「历史序号」；协作房间搬完提示「原来的禁入名单没有带过去」；项目设置提供「作废并重新生成项目链接」「项目二级密码」并收起旧按钮；另存 `.proc`/`.procp` 带 `cloudAssociation` 与实时 `savedRev`，重开按四条规则处理并由 `DocSync.mergeOffline` 增量合并离线修改）。
+   - `301f8a39`（`v18-chat-workflow-jobs`）：落实 10-14 第 3.1 节（后台作业排队等待提示与 1 小时超时中断说明、`auto_workflow` 主体识别缺省可选且按 `commitKey` 防重复叠放）与第 5 节（共有对话设为私有时成员端刷新仍记撤销、停止重连、禁用输入框、顶栏改为「已无读取权限」）。
+
+### 10.3 下次接手后的顺序（直接从 `0.7.18` 剩余四块开始，无需重跑渲染重构）
+
+1. **分支 A（`v18-collect-reboot`）**：
+   - 打开采集代下（在 `server/upload-queue.mjs`、`server/vite-plugin-media.ts` 补撤回并删除在途文件接口并接入 `src/ai/cloud/collectBridge.ts`；将 `PROMPTCUT_AGENT_COLLECT_DELEGATE` 改为缺省开启；桌面版代下时显示 `「云端 Agent 正在用这台电脑上的登录下载：〈网址〉」`）与 `web_handoff`（让发起人自己电脑默认浏览器打开同一网址）；
+   - 节点重启后自动恢复任务槽（`account-root-slots.mjs` / `agent-run-scope-publisher.mjs` 跨 `boot_id` 自动接续），并把重启那一刻在跑的任务自动记为失败并释放（10-14 第 3.1 节）。
+2. **分支 B（`v18-block10-turn-lock`）**：
+   - 块十 + `user-decisions-2026-10-16.md` 第 3 节「0.7.18 暂行：云端 Agent 按轮占用」+ `look` 私钥只由主服务持有并代签：
+     - 云端 Agent `see_frames` 出图先后：`成员的桌面版 > 身份为电脑的在线浏览器 > 托管方的渲染服务 > 身份为手机的在线浏览器`；
+     - 托管方的渲染服务接进账号项目；
+     - 无成员设备辅助的项目按轮占用云端渲染服务（首次向云端要画面起占，本轮收尾含后台作业或被叫停才放开；30 秒心跳、2 分钟超时；别的项目排队并在对话里显示 `「云端渲染正在给别的项目用，排在第 N 位，轮到了会接着做。」`；排队不计时，真正开始渲染起算 **3 分钟** 超时、一次不重试、超时回 `「渲染超时」` 与调试信息；队列 10 分钟不动回 `「排队异常」`；有 Agent 排队时产流做完当前任务让出；流产满且 5 分钟无修改时关掉装着的项目；多个有真人在线的项目要产流时每 5 分钟轮换）；
+     - 在 `docs/reports/ACCEPT-018-map.md` 与 `scripts/acceptance/four-stage-manifest.mjs` 补齐 `RS18-local`、`RS18-queue` 验收命令。
+3. **分支 C（`v18-block11-tools`）**：
+   - 块十一（`see_media` 素材拼图、`get_gif` 动图记录、`measure_audio_js` 音频测量脚本）+ 工具表接线第二期 + 轨道流和渲染工作进程两处入口的素材隔离。
+4. **分支 D（`v18-probes-terms`）**：
+   - 二十来支在线探针改走账号登录入口、残余子进程隐藏窗口参数、壬（改旧名词：「图卡」→「素材效果卡」，「补渲」→「预渲染重试」，含界面 17 处改前改后截图）。
+5. **块十五（发版前配置、38 行全套验收、打包 `0.7.18`、推进 `release`、节点备份与部署、删旧测试数据、真实旧文件转本地、真实网络环境验收）**：贴齐五项交付证据。
+

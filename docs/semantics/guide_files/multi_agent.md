@@ -19,13 +19,16 @@
 - 不建 `node_modules` 的 junction，不跑 `npm ci`。worktree 建在仓库目录下，依赖向上解析。
 - 报告写清：做了什么、验证结果、没做成的及原因、对任务书或语义的更正建议。
 
-## 收回之后（主 Agent）
+## 等待与收回（主 Agent）
 
+- **零轮询等待**：派完子 Agent（`invoke_subagent` / `send_message`）或启动后台任务（异步 `run_command`）后，若主 Agent 手头没有其它独立工作可推进，直接输出简短说明结束当前回合（不调用任何工具），完全依靠系统的事件通知（`SYSTEM_MESSAGE` / Reactive Wakeup）自动唤醒。
+- **禁设巡检闹钟**：不得调用 `schedule` 设置 3～5 分钟的周期性或单次巡检定时器来查子 Agent 进度（`schedule` 仅用于 5 小时额度低于阈值时的跨时段休眠等待）；更不得连续调用 `manage_subagents(Action="list")` 或 `manage_task(Action="status")` 轮询。
 - 逐个读 diff，自己重跑基线，涉及渲染的改动自己看图。
 - 审查通过后用 `--no-ff` 合并。合并进 main 须按 `suggested_agent_behavior.md` 原则 4 先得到用户授权。
 - 审查不通过或验证没过，分支保留，按 `suggested_agent_behavior.md`「验证」一节告诉用户。
 
-## 清理 worktree
+## 清理 worktree 与子 Agent
 
 - 删之前确认改动已合并或已提交在分支上。
 - 删之前确认 worktree 里没有 junction，有就按 `verification.md`「会造成真实损失的操作」一节先拆掉。直接删会顺着 junction 把主仓库的 `node_modules` 清空。
+- 分支合入 `main`、AGENT 报告归档并拆掉 worktree 后，调用 `manage_subagents(Action="kill")` 清理已结束（`idle`）的子 Agent，避免活动列表无限膨胀污染后续上下文。
