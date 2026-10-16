@@ -513,9 +513,11 @@ export function pageStreamTasks(spec: PageStreamSpec, o: { projectId: string; pr
   const isMotion = isMotionCard(spec);
   const fps = Number(spec.fps) > 0 ? Number(spec.fps) : 30;
   const motionSpan = Math.ceil(30 * fps / STREAM_SEGMENT_FRAMES);
-  const span = isMotion
-    ? (sparse ? Math.max(1, spec.lastSegment - spec.firstSegment + 1) : motionSpan)
-    : PAGE_STREAM_SEGMENTS_PER_TASK;
+  const span = sparse
+    ? Math.max(1, spec.lastSegment - spec.firstSegment + 1)
+    : isMotion
+      ? motionSpan
+      : PAGE_STREAM_SEGMENTS_PER_TASK;
   const minSpan = (!sparse && isMotion) ? motionSpan : 1;
   const stream: StreamTaskInput = { kind: "card", plane: "local", clipIds: [spec.topClipId], fps: spec.fps, bound: { ...spec.bound }, offset: { ...spec.offset },
     firstFrame: spec.firstFrame, count: spec.bake.count, total: spec.total, originFrame: spec.originFrame, lastFrame: spec.lastFrame };

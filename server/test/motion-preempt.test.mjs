@@ -300,8 +300,8 @@ test('MP-07 节点会话：无 open 候选时，PC 自动发起对弱设备 stre
     type: 'queue.snapshot',
     tasks: [],
     claimedStreams: [
-      { id: 'stream:rk-dense:0-59', version: 2, holderProfile: 'browser', holderRank: 1, density: null },
-      { id: 'stream:rk-sparse:0-59:sparse', version: 2, holderProfile: 'browser', holderRank: 1, density: 'sparse' },
+      { id: 'stream:rk-dense:0-59', version: 2, holderProfile: 'browser', holderRank: 1, density: null, task: { id: 'stream:rk-dense:0-59', kind: 'stream', requires: { envFingerprint: FP_PC, capabilities: { streams: true } } } },
+      { id: 'stream:rk-sparse:0-59:sparse', version: 2, holderProfile: 'browser', holderRank: 1, density: 'sparse', task: { id: 'stream:rk-sparse:0-59:sparse', kind: 'stream', requires: { envFingerprint: FP_PC, capabilities: { streams: true } } } },
     ],
   });
 
@@ -433,9 +433,9 @@ test('MP-09 被抢占的浏览器节点：收到 task.lease-lost (preempted) 立
 
 /* ------------------------------------------------------------------ 6. 端到端：20 秒 (40段) motion 卡产出稀疏与满密度流后播放器按层表分段查找 */
 
-test('MP-10 端到端：20 秒 (40段) motion 卡产出稀疏流和满密度流后，OnlineSnapshotSource 成功按层表读取第 0、10、35 段', async () => {
-  const rk = 'rk-motion-20s';
-  const lastSeg = 39; // 40 个分段：0～39
+test('MP-10 端到端：20 秒 (40段) 与 125 段 motion 卡产出稀疏流和满密度流后，OnlineSnapshotSource 成功按层表读取各分段', async () => {
+  const rk = 'rk-motion-125s';
+  const lastSeg = 124; // 125 个分段：0～124，切成 [0, 59] 和 [60, 124]
   const storage = new Map();
   const contentStore = {
     async get(kind, key) {
@@ -447,8 +447,6 @@ test('MP-10 端到端：20 秒 (40段) motion 卡产出稀疏流和满密度流�
       return { ok: true };
     },
   };
-
-  const flush = () => new Promise(r => setTimeout(r, 10));
 
   const sha = (b) => createHash('sha256').update(b).digest('hex');
   const bytesOf = (t) => new TextEncoder().encode(t);
@@ -468,39 +466,41 @@ test('MP-10 端到端：20 秒 (40段) motion 卡产出稀疏流和满密度流�
 
   const initId = initHash.slice(0, 16);
 
-  // 1. 模拟 40 段 motion 卡的流任务执行结果产出
-  const makeStreamResult = (stride) => {
+  // 模拟流任务执行结果产出
+  const makeStreamResult = (from, to, stride) => {
     const segments = {};
     const inits = { [initId]: { hash: initHash, bytes: initBytes.length, encoder: 'h264_nvenc', width: 640, height: 360, timescale: 30, codec: 'avc1.640028', rect: { x: 0, y: 0, w: 640, h: 360 } } };
-    for (let n = 0; n <= lastSeg; n++) {
+    for (let n = from; n <= to; n++) {
       segments[n] = { hash: segHashes[n], bytes: 200, init: initId, stride, samples: 15, sig: `sig-${n}`, encoder: 'h264_nvenc' };
     }
     return {
-      v: 1, kind: 'stream', resultKey: rk, range: { from: 0, to: lastSeg },
-      header: { kind: 'card', plane: 'local', clipIds: ['clip-motion-20'], fps: 30, originFrame: 0, bound: { x: 0, y: 0, w: 640, h: 360 } },
+      v: 1, kind: 'stream', resultKey: rk, range: { from, to },
+      header: { kind: 'card', plane: 'local', clipIds: ['clip-motion-125'], fps: 30, originFrame: 0, lastFrame: lastSeg * 15 + 14, bound: { x: 0, y: 0, w: 640, h: 360 } },
       inits, segments,
     };
   };
 
-  // 先写入稀疏流结果（覆盖 0～39）
-  await writeManifest(contentStore, makeStreamResult(15));
-  // 校验：写的一侧已按 8 段一桶分桶存储，且共用无 :sparse 后缀的键
+  // 1. 先写入整卡稀疏流结果（覆盖 0～124）
+  await writeManifest(contentStore, makeStreamResult(0, lastSeg, 15));
   assert.ok(storage.has(`render-manifest/${rk}:0-7`), '第 0 桶写入');
-  assert.ok(storage.has(`render-manifest/${rk}:8-15`), '第 1 桶写入');
-  assert.ok(storage.has(`render-manifest/${rk}:16-23`), '第 2 桶写入');
-  assert.ok(storage.has(`render-manifest/${rk}:24-31`), '第 3 桶写入');
-  assert.ok(storage.has(`render-manifest/${rk}:32-39`), '第 4 桶写入');
+  assert.ok(storage.has(`render-manifest/${rk}:56-63`), '跨界桶 56-63 写入');
+  assert.ok(storage.has(`render-manifest/${rk}:120-124`), '末尾桶写入');
 
-  // 写入满密度结果（升级覆盖）
-  await writeManifest(contentStore, makeStreamResult(1));
-  const b0 = storage.get(`render-manifest/${rk}:0-7`);
-  assert.equal(b0.segments[0].stride, 1, '满密度覆盖稀疏版');
+  // 2. 分别写入满密度两个任务：任务 1 [0, 59] 与 任务 2 [60, 124]
+  await writeManifest(contentStore, makeStreamResult(0, 59, 1));
+  await writeManifest(contentStore, makeStreamResult(60, 124, 1));
 
-  // 2. 模拟层表（标准 8 段一桶 segmentsPerTask: 8）
+  // 校验：跨越任务边界的桶 56-63 被两边无缝合并，同时包含来自任务 1 的 58 段和来自任务 2 的 62 段
+  const bCross = storage.get(`render-manifest/${rk}:56-63`);
+  assert.ok(bCross, '跨界桶 56-63 存在');
+  assert.equal(bCross.segments[58].stride, 1, '跨界桶包含任务 1 的满密度第 58 段');
+  assert.equal(bCross.segments[62].stride, 1, '跨界桶包含任务 2 的满密度第 62 段');
+
+  // 3. 模拟层表（标准 8 段一桶 segmentsPerTask: 8）
   const layerMap = {
     v: 3, kind: 'layer-map', projectId: PROJECT, fps: 30, span: 60, layers: [],
     streams: [{
-      topClipId: 'clip-motion-20', clipIds: ['clip-motion-20'], kind: 'card', plane: 'local', contentKey: 'ck-m20',
+      topClipId: 'clip-motion-125', clipIds: ['clip-motion-125'], kind: 'card', plane: 'local', contentKey: 'ck-m125',
       candidates: [{ envFingerprint: FP_PC, resultKey: rk }],
       originFrame: 0, lastSegment: lastSeg, segmentsPerTask: 8,
     }],
@@ -550,7 +550,15 @@ test('MP-10 端到端：20 秒 (40段) motion 卡产出稀疏流和满密度流�
   // 窗口在第 35 段 (35 * 15 / 30 = 17.5s)
   await settleSource(17.5);
 
-  // 校验：第 0、10、35 段都被成功读出并进入就绪区间
+  // 跨任务边界桶 56-63 内的前后段：第 58 段 (29s) 与第 62 段 (31s)
+  await settleSource(29.0);
+  await settleSource(31.0);
+
+  // 后半任务：第 70 段 (35s) 与末尾第 124 段 (62s)
+  await settleSource(35.0);
+  await settleSource(62.0);
+
+  // 校验：所有分段都被成功读出并进入就绪区间
   const streamMsg = readyMessages.filter(m => m.type === 'layer' && m.kind === 'stream');
   assert.ok(streamMsg.length > 0, '收到了 stream 就绪消息');
   const allRanges = streamMsg.flatMap(m => m.ranges);
@@ -559,6 +567,10 @@ test('MP-10 端到端：20 秒 (40段) motion 卡产出稀疏流和满密度流�
   assert.ok(isSegReady(0), '第 0 段已就绪');
   assert.ok(isSegReady(10), '第 10 段已就绪');
   assert.ok(isSegReady(35), '第 35 段已就绪');
+  assert.ok(isSegReady(58), '跨界桶前半部第 58 段已就绪');
+  assert.ok(isSegReady(62), '跨界桶后半部第 62 段已就绪');
+  assert.ok(isSegReady(70), '后半段任务第 70 段已就绪');
+  assert.ok(isSegReady(124), '最后第 124 段已就绪');
 });
 
 /* ------------------------------------------------------------------ 7. 抢占资格校验与安全拦截 */
@@ -582,9 +594,11 @@ test('MP-11 5 种非法抢占场景被拦截：不发出抢占，服务端也不
     env.mod.handle(env.ctx, pcConn, { type: 'node.hello', nodeId: 'node-pc-bad', profile: 'pc', envFingerprint: 'bad-fingerprint' });
     env.mod.handle(env.ctx, pcConn, { type: 'task.claim', id: taskId, expectVersion: 1 });
 
-    // 原持有方不被释放，抢占方未获得任务
+    // 原持有方不被释放，抢占方被明确拒绝（taken）
     assert.equal(env.collector.of(bConn, 'task.lease-lost').length, 0, '指纹不符时原持有方未丢失租约');
     assert.equal(env.collector.of(pcConn, 'task.claimed').length, 0, '指纹不符的 PC 认领未成功');
+    assert.equal(env.collector.of(pcConn, 'task.claim-rejected').length, 1, '抢占方收到 task.claim-rejected');
+    assert.equal(env.collector.of(pcConn, 'task.claim-rejected')[0].reason, 'taken');
   }
 
   // 场景 2：PC 节点声明 streams: false（且无 transcode）
@@ -603,6 +617,7 @@ test('MP-11 5 种非法抢占场景被拦截：不发出抢占，服务端也不
 
     assert.equal(env.collector.of(bConn, 'task.lease-lost').length, 0, '无流能力 PC 未踢掉原浏览器');
     assert.equal(env.collector.of(pcConn, 'task.claimed').length, 0);
+    assert.equal(env.collector.of(pcConn, 'task.claim-rejected').length, 1, '抢占方收到 task.claim-rejected');
   }
 
   // 场景 3：节点侧 canClaim 返回 false
@@ -665,5 +680,6 @@ test('MP-11 5 种非法抢占场景被拦截：不发出抢占，服务端也不
 
     assert.equal(env.collector.of(bConn, 'task.lease-lost').length, 0, '项目 streams: false 时托管节点不抢占，原持有方未丢失租约');
     assert.equal(env.collector.of(hostConn, 'task.claimed').length, 0);
+    assert.equal(env.collector.of(hostConn, 'task.claim-rejected').length, 1, '托管节点收到 task.claim-rejected');
   }
 });

@@ -413,43 +413,47 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
             const holderRank = deviceRank(holderConn?.node);
             if (claimerRank > holderRank) {
               // 关键校验：先完整核验认领方的全部资格，全部通过后才释放原持有方
+              let eligible = true;
+              if (conn?.cardLockedRejects > QUEUE_DEFAULTS.THROTTLE_REJECTS) eligible = false;
               const hasStreams = node?.capabilities?.streams === true || (node?.capabilities?.streams !== false && (node?.profile === 'pc' || node?.capabilities?.transcode === true));
-              if (!hasStreams) return;
+              if (!hasStreams) eligible = false;
 
               // 2. 托管节点（rank 2）在项目 streams: false 时不抢占
               if (node?.profile === 'host') {
-                if (node.capabilities?.streams === false) return;
+                if (node.capabilities?.streams === false) eligible = false;
                 const targetProjectId = targetTask.projectId ?? targetTask.source?.projectId;
                 const projectStreams = node.projectStreams?.[targetProjectId] ?? node.streams;
-                if (projectStreams === false) return;
+                if (projectStreams === false) eligible = false;
               }
 
               // 3. planOnly 节点不可抢占
-              if (node?.planOnly === true) return;
+              if (node?.planOnly === true) eligible = false;
 
               // 4. 环境指纹校验：若任务要求指纹且节点有指纹，两者必须匹配
               const taskFp = targetTask.requires?.envFingerprint;
               const nodeFp = node?.envFingerprint;
-              if (taskFp && nodeFp && taskFp !== nodeFp) return;
+              if (taskFp && nodeFp && taskFp !== nodeFp) eligible = false;
 
               // 5. 卡片指纹锁校验：若当前任务的卡已被别的指纹锁定，不可抢占
               if (Array.isArray(d?.locks)) {
                 const streamLockId = `stream:${targetTask.input?.contentKey ?? targetTask.resultKey}`;
                 const cardLockId = targetTask.input?.contentKey ? `snapshot:${targetTask.input.contentKey}` : null;
                 const matchedLock = d.locks.find(l => (l.lockKey === streamLockId || l.key === streamLockId) || (cardLockId && (l.lockKey === cardLockId || l.key === cardLockId)));
-                if (matchedLock && nodeFp && matchedLock.envFingerprint !== nodeFp) return;
+                if (matchedLock && nodeFp && matchedLock.envFingerprint !== nodeFp) eligible = false;
               }
 
               // 6. 本地素材 (X2) 检查
               const requiredLocalMedia = targetTask.requires?.localMedia;
-              if (requiredLocalMedia && requiredLocalMedia !== node?.nodeId) return;
+              if (requiredLocalMedia && requiredLocalMedia !== node?.nodeId) eligible = false;
 
-              // 全部资格校验通过，方可释放原持有方并转移认领
-              const oldToken = targetTask.claim.token;
-              q.handle(holderConnId, { type: 'task.release', id: targetTask.id, token: oldToken, reason: 'preempted' });
-              ctx.send(holderConnId, makeMessage(q.epoch ?? null, 'task.lease-lost', { id: targetTask.id, token: oldToken, reason: 'preempted' }));
-              q.handle(connId, { ...msg, expectVersion: targetTask.version + 1 });
-              return;
+              if (eligible) {
+                // 全部资格校验通过，方可释放原持有方并转移认领
+                const oldToken = targetTask.claim.token;
+                q.handle(holderConnId, { type: 'task.release', id: targetTask.id, token: oldToken, reason: 'preempted' });
+                ctx.send(holderConnId, makeMessage(q.epoch ?? null, 'task.lease-lost', { id: targetTask.id, token: oldToken, reason: 'preempted' }));
+                q.handle(connId, { ...msg, expectVersion: targetTask.version + 1 });
+                return;
+              }
             }
           }
         }
@@ -500,32 +504,38 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
         message.task = task ? { ...task } : null;
       }
       if (message.type === 'queue.snapshot') {
-        const d = typeof q.describe === 'function' ? q.describe() : null;
-        const claimedStreams = [];
-        for (const t of Array.isArray(d?.tasks) ? d.tasks : []) {
-          if (t.state === 'claimed' && typeof t.id === 'string' && t.id.startsWith('stream:')) {
-            let holderProfile = null;
-            let holderRank = null;
-            if (t.claim?.nodeId) {
-              for (const c of conns.values()) {
-                if (c.node?.nodeId === t.claim.nodeId) {
-                  holderProfile = c.node.profile ?? null;
-                  holderRank = deviceRank(c.node);
-                  break;
+        const destConn = conns.get(connId);
+        if (destConn?.node?.profile === 'browser') {
+          message.claimedStreams = [];
+        } else {
+          const d = typeof q.describe === 'function' ? q.describe() : null;
+          const claimedStreams = [];
+          for (const t of Array.isArray(d?.tasks) ? d.tasks : []) {
+            if (t.state === 'claimed' && typeof t.id === 'string' && t.id.startsWith('stream:')) {
+              let holderProfile = null;
+              let holderRank = null;
+              if (t.claim?.nodeId) {
+                for (const c of conns.values()) {
+                  if (c.node?.nodeId === t.claim.nodeId) {
+                    holderProfile = c.node.profile ?? null;
+                    holderRank = deviceRank(c.node);
+                    break;
+                  }
                 }
               }
+              const { claim: _claim, ...safeTask } = t;
+              claimedStreams.push({
+                id: t.id,
+                version: t.version,
+                holderProfile,
+                holderRank,
+                density: t.id.endsWith(':sparse') ? 'sparse' : null,
+                task: safeTask,
+              });
             }
-            claimedStreams.push({
-              id: t.id,
-              version: t.version,
-              holderProfile,
-              holderRank,
-              density: t.id.endsWith(':sparse') ? 'sparse' : null,
-              task: { ...t },
-            });
           }
+          message.claimedStreams = claimedStreams;
         }
-        message.claimedStreams = claimedStreams;
       }
       const id = coalesceIdOf(message);
       return id === null ? {} : { coalesceKey: `task:${id}` };

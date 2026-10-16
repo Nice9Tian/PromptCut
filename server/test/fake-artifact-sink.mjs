@@ -52,8 +52,9 @@ export function createArtifactSink() {
     }
     const sparse = sparseRef(args);
     let answer = true;
-    if (args.kind === 'stream' && args.range && Number.isInteger(args.range.from) && Number.isInteger(args.range.to) && args.range.to - args.range.from + 1 > 8) {
-      for (let bFrom = args.range.from; bFrom <= args.range.to; bFrom += 8) {
+    if (args.kind === 'stream' && args.range && Number.isInteger(args.range.from) && Number.isInteger(args.range.to) && (args.range.from !== Math.floor(args.range.from / 8) * 8 || args.range.to - args.range.from + 1 > 8)) {
+      const firstBucket = Math.floor(args.range.from / 8) * 8;
+      for (let bFrom = firstBucket; bFrom <= args.range.to; bFrom += 8) {
         const bTo = Math.min(args.range.to, bFrom + 7);
         const entry = stored.get(segmentKey(args.resultKey, { from: bFrom, to: bTo }));
         if (!entry || (!sparse && entry.sparse === true)) {
@@ -88,8 +89,9 @@ export function createArtifactSink() {
     putLog.push({ resultKey, range: clone(range), meta: clone(meta), complete });
     const sparse = sparseRef(args);
     if (complete) {
-      if (kind === 'stream' && range && Number.isInteger(range.from) && Number.isInteger(range.to) && range.to - range.from + 1 > 8) {
-        for (let bFrom = range.from; bFrom <= range.to; bFrom += 8) {
+      if (kind === 'stream' && range && Number.isInteger(range.from) && Number.isInteger(range.to) && (range.from !== Math.floor(range.from / 8) * 8 || range.to - range.from + 1 > 8 || sparse)) {
+        const firstBucket = Math.floor(range.from / 8) * 8;
+        for (let bFrom = firstBucket; bFrom <= range.to; bFrom += 8) {
           const bTo = Math.min(range.to, bFrom + 7);
           const bRange = { from: bFrom, to: bTo };
           const key = segmentKey(resultKey, bRange);
@@ -128,8 +130,9 @@ export function createArtifactSink() {
     /** 这一段收全了没有（同步，给断言用） */
     holds: (resultKey, range) => {
       if (stored.has(segmentKey(resultKey, range))) return true;
-      if (range && Number.isInteger(range.from) && Number.isInteger(range.to) && range.to - range.from + 1 > 8) {
-        for (let bFrom = range.from; bFrom <= range.to; bFrom += 8) {
+      if (range && Number.isInteger(range.from) && Number.isInteger(range.to) && (range.from !== Math.floor(range.from / 8) * 8 || range.to - range.from + 1 > 8)) {
+        const firstBucket = Math.floor(range.from / 8) * 8;
+        for (let bFrom = firstBucket; bFrom <= range.to; bFrom += 8) {
           const bTo = Math.min(range.to, bFrom + 7);
           if (!stored.has(segmentKey(resultKey, { from: bFrom, to: bTo }))) return false;
         }

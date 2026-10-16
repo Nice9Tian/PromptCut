@@ -593,23 +593,63 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
 
   /** 流任务全部分段齐后:清单写内容库(`render-manifest`,键 `<结果键>:<起>-<止>`);失败只记诊断(同快照、同桌面 writeManifest) */
   const putStreamManifest = async (task: NodeTask, manifest: Record<string, unknown>): Promise<boolean> => {
-    const key = manifestKey(task);
-    // 先和内容库里已有的那一份合并(`mergeStreamManifest`):不降级(已有的满密度分段留着),稀疏的一趟量的位置矩形带到满密度的清单里
-    const own = manifest as unknown as StreamManifestOut;
-    try {
-      const got = await docRequest({ type: "content.get", kind: "render-manifest", key });
-      if (got.type === "content.item" && got.body) manifest = mergeStreamManifest(got.body, own) as unknown as Record<string, unknown>;
-    } catch { /* 取不到就照新的写 */ }
-    try {
-      const r = await docRequest({ type: "content.put", kind: "render-manifest", key, body: manifest });
-      if (r.type === "content.stored") { manifestStats.written++; return true; }
-      manifestStats.failed++;
-      manifestStats.lastError = String(r.reason ?? r.type);
-    } catch (e) {
-      manifestStats.failed++;
-      manifestStats.lastError = String((e as Error)?.message ?? e);
+    const rawKey = manifestKey(task);
+    if (!rawKey) return false;
+    const key = rawKey.endsWith(":sparse") ? rawKey.slice(0, -7) : rawKey;
+
+    const putSingle = async (putKey: string, bodyObj: Record<string, unknown>) => {
+      let mergedBody = bodyObj;
+      try {
+        const got = await docRequest({ type: "content.get", kind: "render-manifest", key: putKey });
+        if (got.type === "content.item" && got.body) mergedBody = mergeStreamManifest(got.body, bodyObj as unknown as StreamManifestOut) as unknown as Record<string, unknown>;
+      } catch { /* 取不到就照新的写 */ }
+      try {
+        const r = await docRequest({ type: "content.put", kind: "render-manifest", key: putKey, body: mergedBody });
+        if (r.type === "content.stored") { manifestStats.written++; return true; }
+        manifestStats.failed++;
+        manifestStats.lastError = String(r.reason ?? r.type);
+      } catch (e) {
+        manifestStats.failed++;
+        manifestStats.lastError = String((e as Error)?.message ?? e);
+      }
+      return false;
+    };
+
+    let ok = await putSingle(key, manifest);
+
+    // B2：若任务范围跨 8 段或不是对齐的 8 段桶、或者是稀疏流，同步按全局 8 段一桶分桶写入内容库
+    if (task.range && (task.range.from !== Math.floor(task.range.from / 8) * 8 || task.range.to - task.range.from >= 8 || (task as any).density === "sparse" || task.id.endsWith(":sparse"))) {
+      const from = task.range.from;
+      const to = task.range.to;
+      const segCount = Number((manifest as any)?.segmentCount);
+      const lastSeg = Number.isInteger(segCount) && segCount > 0 ? segCount - 1 : to;
+      const firstBucket = Math.floor(from / 8) * 8;
+      const segMap = (manifest as any)?.segments ?? {};
+      const initsMap = (manifest as any)?.inits ?? {};
+
+      for (let bFrom = firstBucket; bFrom <= to; bFrom += 8) {
+        const bTo = Math.min(lastSeg, bFrom + 7);
+        const bucketKey = `${task.resultKey}:${bFrom}-${bTo}`;
+        const bucketSegments: Record<string, unknown> = {};
+        const bucketInits: Record<string, unknown> = {};
+        for (let n = bFrom; n <= bTo; n++) {
+          const s = segMap[n] ?? segMap[String(n)];
+          if (s) {
+            bucketSegments[n] = s;
+            if (s.init && initsMap[s.init]) bucketInits[s.init] = initsMap[s.init];
+          }
+        }
+        const bucketManifest = {
+          ...manifest,
+          range: { from: bFrom, to: bTo },
+          segments: bucketSegments,
+          inits: bucketInits,
+        };
+        const bOk = await putSingle(bucketKey, bucketManifest);
+        if (bOk) ok = true;
+      }
     }
-    return false;
+    return ok;
   };
   const finishStream = async ({ task, manifest }: { task: NodeTask; manifest: Record<string, unknown> }) => {
     await putStreamManifest(task, manifest);

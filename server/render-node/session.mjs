@@ -124,6 +124,9 @@ export function createNodeSession({
     send({
       type: 'node.hello', nodeId, profile: node?.profile, envFingerprint: node?.envFingerprint,
       capabilities: node?.capabilities, codeVersions: node?.codeVersions, maxConcurrent, resume: entries,
+      ...(node?.planOnly !== undefined ? { planOnly: Boolean(node.planOnly) } : {}),
+      ...(node?.projectStreams ? { projectStreams: node.projectStreams } : {}),
+      ...(node?.streams !== undefined ? { streams: node.streams } : {}),
     });
     send({ type: 'queue.watch', projects });
   }
@@ -335,13 +338,12 @@ export function createNodeSession({
       for (const item of inFlightStreams.values()) {
         if (holds.has(item.id) || deferred.has(item.id)) continue;
         if (!Number.isInteger(item.holderRank) || item.holderRank >= myRank) continue;
-        // 如果有完整任务视图，必须通过 filterClaimable 与 canClaim 检查
-        if (item.task) {
-          if (!filterClaimable([item.task], fn).length) continue;
-          try {
-            if (canClaim(item.task, { held }) === false) continue;
-          } catch { continue; }
-        }
+        // 必须具备完整任务视图，且通过 filterClaimable 与 canClaim 检查
+        if (!item.task) continue;
+        if (!filterClaimable([item.task], fn).length) continue;
+        try {
+          if (canClaim(item.task, { held }) === false) continue;
+        } catch { continue; }
         candidates.push(item);
       }
       if (candidates.length > 0) {

@@ -612,9 +612,11 @@ export function splitPlan({
       // 先稀疏、后满密度(同一条流里稀疏任务排在前面发);自己的那一份标了 `ownSparseOnly` 时不出满密度的
       const densities = [...(sparseStreams === true ? [STREAM_DENSITY_SPARSE] : []), ...(!forBrowser && ownSparseOnly ? [] : [null])];
       for (const density of densities) {
-        const span = isMotion
-          ? (density === STREAM_DENSITY_SPARSE ? Math.max(1, lastSegment - firstSegment + 1) : motionSpan)
-          : streamSegments;
+        const span = density === STREAM_DENSITY_SPARSE
+          ? Math.max(1, lastSegment - firstSegment + 1)
+          : isMotion
+            ? motionSpan
+            : streamSegments;
         const minSpan = (!density && isMotion) ? motionSpan : 1;
         for (const [from, to] of spans(firstSegment, lastSegment, span, minSpan)) {
         const range = { unit: 'segment', from, to };
