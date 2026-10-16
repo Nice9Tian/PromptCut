@@ -779,7 +779,7 @@ test("AM-22 账号云端项目另存为 .proc / .procp 关联与重开四规则"
   });
 
   // 规则 4：当前账号有权限，而且这份文件在离线期间被改过 -> 合回云端项目
-  await t.test("规则 4：有权限且离线期间修改过，合回云端项目", async () => {
+  await t.test("规则 4：有权限且离线期间修改过，合回云端项目及 DocSync.mergeOffline 增量合并与冲突验证", async () => {
     let enterOpts = null;
     const fakeSession = {
       connectionTicket: "ticket-conn",
@@ -808,6 +808,64 @@ test("AM-22 账号云端项目另存为 .proc / .procp 关联与重开四规则"
     assert.equal(r4.project?.name, "离线修改过的标题");
     assert.ok(enterOpts);
     assert.equal(enterOpts.projectId, "proj-cloud-789");
+
+    // 真实验证 DocSync.mergeOffline 增量合并与冲突分支
+    const { DocSync } = await import("../../store/docsync.ts");
+    const sent = [];
+    const ds = new DocSync(loadedProj, {
+      projectId: "proj-cloud-789",
+      session: "s-1",
+      send: (m) => sent.push(m),
+    });
+    ds.connect();
+    // 模拟服务端连接建立并收到 project.state (rev: 15)
+    ds.receive({
+      type: "project.state",
+      projectId: "proj-cloud-789",
+      rev: 15,
+      project: loadedProj,
+      writers: [],
+      hasBody: true,
+    });
+
+    // 1. 增量合并成功分支 (期间云端没有改动, baseRev === confirmedRev === 15)
+    const merged = ds.mergeOffline(offlineModifiedProj, 15);
+    assert.equal(merged, true, "mergeOffline 返回 true 成功合并");
+    assert.equal(ds.local.name, "离线修改过的标题", "本地副本已应用离线修改");
+    const op = sent.find((m) => m.type === "project.op");
+    assert.ok(op, "发送了 project.op 进行增量合并");
+    assert.ok(Array.isArray(op.ops) && op.ops.length > 0, "包含增量修改的 ops");
+
+    // 2. 冲突分支 (期间云端被别人改过到了 rev: 17, baseRev 15 < confirmedRev 17)
+    const conflictSent = [];
+    const conflictDs = new DocSync(loadedProj, {
+      projectId: "proj-cloud-789",
+      session: "s-2",
+      send: (m) => conflictSent.push(m),
+    });
+    conflictDs.connect();
+    conflictDs.receive({
+      type: "project.state",
+      projectId: "proj-cloud-789",
+      rev: 17,
+      project: { ...loadedProj, name: "云端别人改的名字" },
+      writers: [],
+      hasBody: true,
+    });
+    const conflictMerged = conflictDs.mergeOffline(offlineModifiedProj, 15);
+    assert.equal(conflictMerged, true);
+    assert.equal(conflictDs.offlineRev, 15, "记录离线基准版本 15");
+    const conflictOp = conflictSent.find((m) => m.type === "project.op");
+    assert.ok(conflictOp);
+    assert.equal(conflictOp.expectRev, 15, "冲突分支带上离线基准版本 15");
+    conflictDs.receive({
+      type: "project.op.rejected",
+      projectId: "proj-cloud-789",
+      opId: conflictDs.pending[0].opId,
+      reason: "stale",
+      currentRev: 17,
+    });
+    assert.equal(conflictDs.status, "paused", "冲突停下等待用户决断 (paused)");
   });
 });
 
@@ -818,6 +876,11 @@ test("AM-23 旧版（<= 0.7.17）调用搬到云端被拒并返回「当前软�
   assert.equal(r.ok, false);
   assert.equal(r.error, "version-expired");
   assert.equal(M.moveFailureText(r, "local"), "当前软件版本已过期，无法搬到云端");
+});
+
+test("AM-25 本机协作房间搬完后提示「原来的禁入名单没有带过去」", () => {
+  assert.ok(M.ACCOUNT_MOVE_TEXT.toastRoom.includes("原来的禁入名单没有带过去"), "toastRoom 提示包含禁入名单未带过去");
+  assert.ok(M.ACCOUNT_MOVE_TEXT.doneRoom.includes("原来的禁入名单没有带过去"), "doneRoom 提示包含禁入名单未带过去");
 });
 
 test("AM-24 账本 authority.mjs 真实持久化：原编号保持、重生成链接与项目二级密码", async () => {

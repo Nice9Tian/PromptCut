@@ -339,9 +339,9 @@ export const CollabSection = forwardRef<CollabHandle, { open: boolean }>(functio
   const submitSecondaryPw = async () => {
     setSecondaryBusy(true);
     try {
-      const r = await setAccountSecondaryPassword(secondaryPw.trim() || null);
+      const r = await setAccountSecondaryPassword(secondaryPw || null);
       if (r.ok) {
-        pushToast(secondaryPw.trim() ? "项目二级密码已设置。" : "项目二级密码已清除。", "info", 4000);
+        pushToast(secondaryPw ? "项目二级密码已设置。" : "项目二级密码已清除。", "info", 4000);
         setSecondaryModalOpen(false);
         setSecondaryPw("");
       } else {

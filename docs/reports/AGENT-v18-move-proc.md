@@ -92,14 +92,14 @@
 | `server/test/move-guard.test.mjs` | 断言旧整房导入口被拒时返回「当前软件版本已过期，无法搬到云端」；断言旧版被拒与界面设置按钮更新 |
 | `src/editor/io/proc.ts` | `serializeProc` 取保存时刻的实时历史序号写入 `savedRev`；保持解耦 |
 | `src/editor/sync/recoveryAssociation.ts` | 修复 `CloudAccountClient` 类型兼容问题；清理过时注释；落实重开四规则完整逻辑与文案对齐；提供实时历史序号获取钩子 |
-| `src/editor/sync/syncManager.ts` | 注册实时历史序号钩子；`onLoad` 中无缝接通四规则打开与离线修改合并同步；接通真实云端客户端二级密码与作废链接接口 |
-| `src/editor/sync/accountMove.ts` | `MoveDeps.create` 扩展传递原项目编号与历史信息；错误码增加 `version-expired` 并配置中文提示；统一提示文字 |
+| `src/editor/sync/syncManager.ts` | 注册实时历史序号钩子；`onLoad` 中无缝接通四规则打开与 `ds.mergeOffline` 增量合并同步；接通真实云端客户端二级密码与作废链接接口 |
+| `src/editor/sync/accountMove.ts` | `MoveDeps.create` 扩展传递原项目编号与历史信息；错误码增加 `version-expired` 并配置中文提示；`toastRoom` 与 `doneRoom` 补齐「原来的禁入名单没有带过去」文案 |
 | `src/editor/sync/accountMoveFlow.ts` | 直接通过 `client.create` 传递原编号与历史；通过 `currentDocLineage` 传入当前历史序号与提交历史 |
 | `src/editor/sync/labels.ts` | 新增 `historySeqLabel` 格式化函数 |
 | `src/editor/sync/labels.test.mjs` | 增加 LBL-03 历史序号文字统一命名断言 |
-| `src/editor/sync/CollabSection.tsx` | 增加历史序号展示行；账号云端项目显示「作废并重新生成项目链接」「项目二级密码」，收起旧办法的四个按钮；增加二级密码修改抽屉 |
+| `src/editor/sync/CollabSection.tsx` | 增加历史序号展示行；账号云端项目显示「作废并重新生成项目链接」「项目二级密码」，收起旧办法的四个按钮；二级密码设置不额外 .trim() |
 | `src/editor/sync/BackupsDialog.tsx` | 本地备份列表项展示增加历史序号标识 |
-| `src/editor/sync/accountMove.test.mjs` | 增加 AM-21（保持原项目编号、连续历史序号与操作历史记录测试）、AM-22（云端项目另存与重开四规则测试）、AM-23（旧版拒绝提示测试）、AM-24（真实账本持久化测试） |
+| `src/editor/sync/accountMove.test.mjs` | 增加 AM-21（保持原项目编号、连续历史序号与操作历史记录测试）、AM-22（云端项目另存与重开四规则测试及 DocSync.mergeOffline 增量合并与冲突验证）、AM-23（旧版拒绝提示测试）、AM-24（真实账本持久化测试）、AM-25（搬完协作房间提示「原来的禁入名单没有带过去」断言） |
 | `docs/reports/AGENT-v18-move-proc.md` | 本实施报告文件 |
 
 ---

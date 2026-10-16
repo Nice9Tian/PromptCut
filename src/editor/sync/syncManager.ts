@@ -762,9 +762,9 @@ function onLoad(project: Project): Project {
       openAsLocal: (p) => { switchToLocal(p, { load: false }); },
       enterProject: async (opts) => {
         await enterAccountProject(opts);
-        const confirmed = cur?.link.ds.confirmedProject;
-        if (confirmed && JSON.stringify(project) !== JSON.stringify(confirmed)) {
-          cur?.link.ds.load(project);
+        const ds = cur?.link.ds;
+        if (ds && ds.confirmedProject && JSON.stringify(project) !== JSON.stringify(ds.confirmedProject)) {
+          ds.mergeOffline(project, cloudAssoc.savedRev);
         }
       },
     });
