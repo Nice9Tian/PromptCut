@@ -112,7 +112,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         canonicalJson(priorEvent.oldLoginIds) !== canonicalJson(event.oldLoginIds))) reject(503, 'account-event-conflict');
       state.accountEvents[event.seq] = { event, digest: digestOf(event) };
       state.accountHead = event.seq;
-      if (event.type !== 'credentials-revoked') return { duplicate: false, event: null };
+      if (!['credentials-revoked', 'logout', 'account-deleted'].includes(event.type)) return { duplicate: false, event: null };
       const loginIds = event.revokedLoginIds ?? event.oldLoginIds;
       for (const loginId of loginIds) state.revokedLogins[`login:${loginId}`] = { eventId: event.eventId, seq: event.seq, accountId: event.accountId };
       const accessEvent = appendAccessEvent(state, { type: 'login-revoked', accountEventId: event.eventId,
@@ -124,7 +124,15 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       return { duplicate: false, event: accessEvent, control };
     });
     if (result.event) notify(result.event, result.control);
-    return { duplicate: result.duplicate, accountHead: ledger.read().accountHead };
+    return { duplicate: result.duplicate, accountHead: ledger.read().accountHead, ok: true, ackSeq: event.seq };
+  }
+  async function applyRevocationNotification(input) {
+    const event = validateAccountEvent(input);
+    const cursor = ledger.read().accountHead;
+    if (event.seq > cursor + 1) {
+      await synchronize();
+    }
+    return applyRevocation(input);
   }
   async function synchronize() {
     if (closed) reject(503, 'authority-closed');
@@ -135,7 +143,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
         for (;;) {
           const cursor = ledger.read().accountHead;
           let batch;
-          try { batch = validateEventBatch(await accountClient.events(cursor), cursor); }
+          try { batch = validateEventBatch(accountClient.revocations ? await accountClient.revocations(cursor) : await accountClient.events(cursor), cursor); }
           catch (error) { if (error.status) throw error; reject(503, 'account-event-gap'); }
           if (!Number.isSafeInteger(batch.headSeq) || batch.headSeq < cursor || !Array.isArray(batch.events)) reject(503, 'account-event-gap');
           if (batch.headSeq > cursor && batch.events.length === 0) reject(503, 'account-event-gap');
@@ -150,30 +158,28 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
   }
   async function verify(input, trustedRole = 'page') {
     if (!input || typeof input !== 'object') reject(401, 'login-required');
-    let token = input.accessToken, ref;
     if (input.authorizationId !== undefined) {
-      ref = refs.get(input.authorizationId);
+      const ref = refs.get(input.authorizationId);
       if (!ref) reject(401, 'authorization-expired');
-      token = ref.token;
       for (const field of ['accountId', 'loginId', 'credentialId', 'loginGeneration']) {
         if (input[field] !== undefined && input[field] !== ref.principal[field]) reject(401, 'principal-mismatch');
       }
-      if (input.accessToken !== undefined && input.accessToken !== token) reject(401, 'principal-mismatch');
+      if (input.accessToken !== undefined && input.accessToken !== ref.token) reject(401, 'principal-mismatch');
       trustedRole = ref.role;
+      const state = ledger.read();
+      if (state.revokedLogins[`login:${ref.principal.loginId}`]) reject(401, 'credential-revoked');
+      return { ...ref.principal, authorizationId: input.authorizationId, role: trustedRole };
     }
+    const token = input.accessToken;
     const principal = await accountClient.verify(token);
     await synchronize();
     const state = ledger.read();
     if (state.accountHead < principal.accountEventSeq) reject(503, 'account-event-gap');
     if (state.revokedLogins[`login:${principal.loginId}`]) reject(401, 'credential-revoked');
     if (principal.expiresAt <= now()) reject(401, 'credential-revoked');
-    if (ref && ['accountId', 'loginId', 'credentialId', 'loginGeneration'].some(k => principal[k] !== ref.principal[k])) reject(401, 'principal-mismatch');
     if (!['page', 'agent', 'render'].includes(trustedRole)) reject(403, 'invalid-role');
-    let authorizationId = input.authorizationId;
-    if (!authorizationId) {
-      authorizationId = randomUUID(); refs.set(authorizationId, { token, principal, role: trustedRole });
-    }
-    for (const [id, entry] of refs) if (entry.principal.expiresAt <= now()) refs.delete(id);
+    const authorizationId = randomUUID();
+    refs.set(authorizationId, { token, principal, role: trustedRole });
     return { ...principal, authorizationId, role: trustedRole };
   }
   async function authorizePrincipal(input, { projectId, action = 'read', trustedRole = 'page' } = {}) {
@@ -515,7 +521,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
     const state = ledger.read();
     return agentReadClosureComplete(state, eventId, state.accessAcks[`ack:${eventId}:agent`]);
   }
-  return { authorityId: ledger.authorityId, synchronize, applyRevocation, authorizePrincipal, checkAccess,
+  return { authorityId: ledger.authorityId, synchronize, applyRevocation, applyRevocationNotification, authorizePrincipal, checkAccess,
     createProject, joinProject, adminProject, listProjects, status, statusForPrincipal, legacyGoneStatus, eventsSince, ackAccessEvent, hasAgentReadClosure, revocationStatus, completeLogoutBarrier, recordLogoutTimeout, flushAccountAcknowledgements,
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');

@@ -48,52 +48,45 @@ test("ALL-01 取票据要求令牌至少剩 60 秒;进项目时那份会话够�
   assert.deepEqual([h.life_.describe().expiresAt, h.life_.describe().trusted], [h.now + 120_000, true]);
 });
 
-test("ALL-02 离到期超过 30 秒不动,不到 30 秒换,换成后按新票据算", async () => {
+test("ALL-02 建好连接后不按钟点作废或换会话:时间流逝不自动换也不断开", async () => {
   const h = harness();
   await open(h);
   h.now += 80_000;
   assert.equal(await h.life_.tick(), "idle");
-  h.now += 11_000;
-  assert.equal(await h.life_.tick(), "renewed");
-  assert.equal(h.renews, 1);
-  assert.equal(h.life_.describe().expiresAt, h.now + 120_000);
+  h.now += 50_000;
+  assert.equal(await h.life_.tick(), "idle");
+  h.now += 300_000;
+  assert.equal(await h.life_.tick(), "idle");
+  assert.equal(h.renews, 0);
+  assert.equal(h.expired, 0);
+});
+
+test("ALL-03 没有会话时不管:断线重连由重连逻辑处理", async () => {
+  const h = harness();
+  assert.equal(await h.life_.tick(), "idle");
+  h.connected = false;
   assert.equal(await h.life_.tick(), "idle");
 });
 
-test("ALL-03 账号服务一时不通:到期前只是再试;到期还没换成就 expire,只一次", async () => {
-  const h = harness();
-  await open(h);
-  h.sessionError = Object.assign(new Error("down"), { status: 503 });
-  h.now += 95_000;
-  assert.equal(await h.life_.tick(), "retry");
-  h.now += 20_000;
-  assert.equal(await h.life_.tick(), "retry");
-  assert.equal(h.expired, 0, "到期之前不动连接");
-  h.now += 6_000;
-  assert.equal(await h.life_.tick(), "expired");
-  assert.equal(h.expired, 1);
-  assert.equal(await h.life_.tick(), "idle", "已经转离线,交给断线重连");
-  assert.deepEqual(h.terminal, []);
-});
-
-test("ALL-04 会话接口回 401 / 403:onTerminal,不 expire", async () => {
+test("ALL-04 会话接口回 401 / 403:交给 onTerminal,不 expire", async () => {
   for (const status of [401, 403]) {
     const h = harness();
     await open(h);
     h.sessionError = Object.assign(new Error("x"), { status });
-    h.now += 95_000;
-    assert.equal(await h.life_.tick(), "terminal");
+    await h.life_.accessSeen("r");
+    await h.life_.accessSeen("rw");
     assert.deepEqual(h.terminal, [status]);
     assert.equal(h.expired, 0);
   }
 });
 
-test("ALL-05 已经过期才发现、或被闸拒:不换会话、不取票据,直接 expire(过期期间的改动走离线重连的版本核对)", async () => {
+test("ALL-05 只有服务端回凭证到期(authExpired)才 expire;纯时钟流逝(睡眠醒来)不自动失效", async () => {
   const slept = harness();
   await open(slept);
   slept.now += 300_000;
-  assert.equal(await slept.life_.tick(), "expired");
-  assert.deepEqual([slept.renews, slept.expired, slept.sessions.length], [0, 1, 1]);
+  assert.equal(await slept.life_.tick(), "idle", "时间流逝不会让已建好的连接失效");
+  assert.equal(slept.expired, 0);
+
   const refused = harness();
   await open(refused);
   assert.equal(await refused.life_.authExpired(), "expired");
@@ -108,17 +101,6 @@ test("ALL-06 没有会话时不管;换的途中不重入", async () => {
   h.now += 200_000;
   assert.equal(await h.life_.tick(), "idle");
   assert.equal(await h.life_.authExpired(), "idle");
-  const g = harness();
-  await open(g);
-  g.now += 95_000;
-  let release;
-  g.renew = () => new Promise((r) => { release = () => r(true); });
-  const first = g.life_.tick();
-  await new Promise((r) => setTimeout(r, 5));
-  assert.equal(await g.life_.tick(), "busy");
-  release();
-  assert.equal(await first, "renewed");
-  assert.equal(g.renews, 1);
 });
 
 test("ALL-07 权限变了(只读改可写)换一个会话;第一次读到、没变时不动;正忙着就记下,下一次 tick 补换", async () => {
@@ -128,70 +110,14 @@ test("ALL-07 权限变了(只读改可写)换一个会话;第一次读到、没�
   assert.equal(await h.life_.accessSeen("r"), "idle");
   assert.equal(await h.life_.accessSeen("rw"), "renewed");
   assert.equal(h.renews, 1);
-  // 正忙着(到期前那一轮换会话还没回来)时读到权限变了
-  h.now += 95_000;
-  let release;
-  h.renew = () => new Promise((r) => { release = () => r(true); });
-  const swapping = h.life_.tick();
-  await new Promise((r) => setTimeout(r, 5));
-  assert.equal(await h.life_.accessSeen("r"), "busy");
-  release();
-  assert.equal(await swapping, "renewed");
-  // 那一轮是在读到新权限之前取的票据:再补一轮(不受「两次至少隔 20 秒」限制的是这一种)
-  h.renew = async () => true;
-  h.now += 21_000;
-  assert.equal(await h.life_.tick(), "renewed", "补换");
-  assert.equal(h.renews, 3);
-  assert.equal(await h.life_.tick(), "idle");
   h.connected = false;
   assert.equal(await h.life_.accessSeen("rw"), "idle", "没有会话(服务端已经关掉旧连接):交给断线重连");
 });
 
-test("ALL-08 取票据的请求挂住:到期前照常等;到期后忙了超过 5 秒就 expire", async () => {
-  const h = harness();
-  await open(h);
-  h.now += 95_000;
-  h.hang = new Promise(() => {});
-  void h.life_.tick();
-  await new Promise((r) => setTimeout(r, 5));
-  h.now += 20_000;
-  assert.equal(await h.life_.tick(), "busy", "还没到期:等着");
-  assert.equal(h.expired, 0);
-  h.now += 6_000;
-  assert.equal(await h.life_.tick(), "expired", "到期了、换会话那一步 26 秒没回来");
-  assert.equal(h.expired, 1);
-});
-
-test("ALL-09 本机的钟快:算出来不够用的票据不信它的到期时刻,按从现在起 60 秒算;不凭本机的钟判过期;两次换至少隔 20 秒", async () => {
-  // 本机的钟快 100 秒:120 秒的票据算出来只剩 20 秒
-  const h = harness({ life: 20_000 });
-  await open(h);
-  assert.deepEqual([h.life_.describe().expiresAt, h.life_.describe().trusted], [h.now + 60_000, false]);
-  assert.equal(await h.life_.tick(), "idle", "不是一建成就换");
-  h.now += 25_000;
-  assert.equal(await h.life_.tick(), "idle");
-  h.now += 6_000;
-  assert.equal(await h.life_.tick(), "renewed", "约 30 秒换一次");
-  h.now += 3_000;
-  assert.equal(await h.life_.tick(), "idle");
-  // 换不成、本机的钟显示「过期」了:不 expire(到期由文档服务回的「凭证到期」说了算)
-  h.sessionError = Object.assign(new Error("down"), { status: 503 });
-  h.now += 100_000;
-  assert.equal(await h.life_.tick(), "retry");
-  assert.equal(h.expired, 0);
-  // 本机的钟快得更多(票据算出来已经过期)也一样:不会一建成就判过期、反复断开
+test("ALL-08 本机的钟快时不凭本机的钟判过期", async () => {
   const far = harness({ life: -30_000 });
   await open(far);
   assert.equal(far.life_.describe().trusted, false);
   assert.equal(await far.life_.tick(), "idle");
   assert.equal(far.expired, 0);
-  // 两次换之间至少隔 20 秒:票据寿命异常短(每次都只剩 45 秒)时不会每个 tick 都换
-  const short = harness({ life: 45_000 });
-  await open(short);
-  short.now += 16_000;
-  assert.equal(await short.life_.tick(), "renewed");
-  short.now += 16_000;
-  assert.equal(await short.life_.tick(), "idle", "离上次换不到 20 秒");
-  short.now += 5_000;
-  assert.equal(await short.life_.tick(), "renewed");
 });

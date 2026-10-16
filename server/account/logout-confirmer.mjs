@@ -21,7 +21,7 @@ const fail = (status, code) => { throw accountError(status, code); };
 /** 一次退出等各服务确认的时限，和账号服务那边（VisuHive 的 account/events.mjs）是同一个数。
  * 到时只做两件事：把当时的情况记进账本并写一条日志、报给账号服务当调试信息。退出仍然接着办（迟到的确认到齐了照样办完），
  * 也绝不因为到时把已经作废的登录放回来。网页上显示失败是账号服务按它自己的钟判的，文档服务整个不在了也照样会显示。 */
-export const LOGOUT_CONFIRM_TIMEOUT_MS = 120_000;
+export const LOGOUT_CONFIRM_TIMEOUT_MS = 45_000;
 
 export function createLogoutConfirmer({ ledger, authority, transportEvidence, operations = () => null,
   completeAgent = null, attestedServices = {}, now = Date.now, pollMs = 1000, onDiagnostic = () => {},
