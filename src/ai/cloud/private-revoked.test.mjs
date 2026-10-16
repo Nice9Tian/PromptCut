@@ -155,3 +155,59 @@ test("PRIV-9 撤销之后换到别的对话：新对话照常读(状态按每次
   assert.equal(s.getView().problem, null);
   s.close();
 });
+
+function createMemStorage() {
+  const map = new Map();
+  return {
+    getItem: (k) => map.get(k) ?? null,
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+    clear: () => map.clear(),
+  };
+}
+
+test("PRIV-10 设为私有被撤销后刷新/重新打开(404 no-conversation)：直接显示「已无法读取」，停止读不重连；恢复正常后移除撤销标记", async () => {
+  const storage = createMemStorage();
+  // 1. 之前发生过撤销
+  {
+    const store = memStore();
+    const { api, log } = fakeApi([
+      { events: content, then: "close" },
+      { fail: new CloudError("no-conversation", "no-conversation", 404) },
+    ]);
+    const s = createCloudSession({ api, store, accountMode: true, storage, flushMs: 0, backoff: () => 1 });
+    s.open("c-revoked");
+    await waitFor(() => s.getView().problem === REVOKED);
+    assert.equal(s.getView().revoked, true);
+    s.close();
+  }
+  // 2. 刷新后重新打开：服务端只回 404 no-conversation (E3 场景)
+  // 不再当作网络故障重连，而是直接显示那一句、置为 idle 停止重连
+  {
+    const store = memStore();
+    const { api, log } = fakeApi([
+      { fail: new CloudError("no-conversation", "no-conversation", 404) },
+    ]);
+    const s = createCloudSession({ api, store, accountMode: true, storage, flushMs: 0, backoff: () => 1 });
+    s.open("c-revoked");
+    await waitFor(() => s.getView().problem === REVOKED);
+    await pause(60);
+    assert.equal(log.afters.length, 1, "只请求了一次，不再重连");
+    assert.equal(s.getView().connection, "idle");
+    assert.equal(s.getView().revoked, true);
+    s.close();
+  }
+  // 3. 对话后来被改回共有，用户再次点开并成功收到正常事件流：从集合中移除，revoked 变 false
+  {
+    const store = memStore();
+    const { api, log } = fakeApi([
+      { events: content, then: "hang" },
+    ]);
+    const s = createCloudSession({ api, store, accountMode: true, storage, flushMs: 0, backoff: () => 1 });
+    s.open("c-revoked");
+    await waitFor(() => s.getView().connection === "live");
+    assert.equal(s.getView().problem, null);
+    assert.equal(s.getView().revoked, false);
+    s.close();
+  }
+});

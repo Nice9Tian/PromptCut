@@ -270,8 +270,8 @@ test('a failed stage stops the flow there: later stages are not run, nothing hal
   assert.deepEqual([status.done, status.ok, status.result], [true, false, null]);
 });
 
-test('a stage whose capability is not ready on this node says so and stops there — no placeholder job, no pretending', async (t) => {
-  const f = await makeP5Fixture(t);
+test('a stage whose capability is not ready on this node says so and stops there when not optional — no placeholder job, no pretending', async (t) => {
+  const f = await makeP5Fixture(t, { optionalStages: ['prerender'] });
   await f.addMedia({ id: 'm1' });
   f.perception.subject.ctl.unavailable = '这台云节点上主体识别的两档引擎都用不了(没有兜底档)。退回 see_frames。';
   const answer = await f.call('auto_workflow', { mediaId: 'm1' });
@@ -300,6 +300,21 @@ test('a perception package that is not wired on this node is "not available" for
   assert.match(answer.stages.find((s) => s.stage === 'shots').reason, /没有接上镜头识别/);
   assert.equal(answer.stages.find((s) => s.stage === 'transcribe').status, 'done');
   assert.equal(f.state.cards.length, 0);
+});
+
+test('default optionalStages includes subjects and prerender: subjects not ready is skipped with notice and subsequent stages finish', async (t) => {
+  const f = await makeP5Fixture(t); // 缺省 optionalStages
+  await f.addMedia({ id: 'm1' });
+  f.perception.subject.ctl.unavailable = '这台节点主体识别未就绪';
+  const answer = await f.call('auto_workflow', { mediaId: 'm1' });
+  assert.equal(answer.running, false);
+  assert.deepEqual(answer.notDone, ['主体识别']);
+  assert.equal(answer.stages.find((s) => s.stage === 'subjects').status, 'unavailable');
+  assert.match(answer.stages.find((s) => s.stage === 'subjects').reason, /主体识别未就绪/);
+  assert.equal(answer.stages.find((s) => s.stage === 'compose').status, 'done');
+  assert.equal(f.state.cards.length, 4, 'cards and captions were placed');
+  const status = await f.call('auto_workflow_status', { jobId: answer.jobId });
+  assert.deepEqual([status.ok, status.complete], [true, false]);
 });
 
 test('optionalStages lets the host decide which unready stages may be left out; the leftover is reported as not done, never as done', async (t) => {

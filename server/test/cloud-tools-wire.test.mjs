@@ -433,6 +433,22 @@ test('WIRE-SET 等后台作业:文档服务明确说这一轮不算数了才停;
   assert.equal(d.events('agent.account-tools.settle-timeout').length, 1);
 });
 
+test('WIRE-SET 等后台作业:等待时通知页面并在超时一小时时给出明确中断提示', async (t) => {
+  let waiting = null;
+  let timeout = null;
+  const d = await toolsetKit(t, { limits: { ...FAST, settleMs: 10, settleAuthMs: 60_000 } });
+  await seedRunningJob(d);
+  const result = await d.toolset.settle(null, {
+    onWaiting: (w) => { waiting = w; },
+    onTimeout: (to) => { timeout = to; },
+  });
+  assert.deepEqual(result, { waited: false, reason: 'timeout', pending: 1 });
+  assert.ok(waiting, '触发了等待后台作业回调');
+  assert.equal(waiting.text, '上一条消息发起的后台作业（转写、镜头识别等）还在做，做完就处理你这条消息。');
+  assert.ok(timeout, '触发了超时中断回调');
+  assert.equal(timeout.text, '后台作业等了一小时还没做完，已经中断；需要的话请重新发起。');
+});
+
 test('WIRE-SET 浏览器数据的记号:组内读得到;读不到、读不懂不当成「没有记号」;照记号清时记号最后撤', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-wire-mark-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));

@@ -88,8 +88,8 @@ test('real short clip: speech → shots → subjects → captions and cards in t
   assert.equal(liveProcesses(f.dir), 0, 'no stray Python or ffmpeg left');
 });
 
-test('real chain, a dependency not ready: subjects cannot run (no onnxruntime in this Python) → the flow stops there, shots stay done, the project gets nothing', { skip: missing ?? false, timeout: 600_000 }, async (t) => {
-  const { f } = await realFixture(t, { providers: { subjectPython: PLAIN_PYTHON } });
+test('real chain, a dependency not ready: subjects cannot run (no onnxruntime in this Python) → the flow stops there when not optional, shots stay done, the project gets nothing', { skip: missing ?? false, timeout: 600_000 }, async (t) => {
+  const { f } = await realFixture(t, { providers: { subjectPython: PLAIN_PYTHON }, workflowLimits: { optionalStages: ['prerender'] } });
   const answer = await f.call('auto_workflow', { mediaId: 'clip' }, f.context, { requestId: 'real-call-0002' });
   const final = answer.running ? await until(async () => { const s = await f.call('auto_workflow_status', { jobId: answer.jobId }); return s.done ? s : null; }, { ms: 540_000, step: 400, what: 'flow to stop' }) : answer;
   log('stopped', final.error);

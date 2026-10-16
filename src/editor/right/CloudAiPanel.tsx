@@ -243,7 +243,7 @@ export function CloudAiPanel(props: {
   useEffect(() => () => { if (echoTimer.current !== null) window.clearTimeout(echoTimer.current); }, []);
 
   const sendNow = async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
-    if (off || !stillCurrent() || !controlPolicy.canSend) return false;
+    if (off || !stillCurrent() || !controlPolicy.canSend || view.revoked) return false;
     if (!cloud.accountMode) markSent();
     const ok = await chat.send(text, files);
     if (!stillCurrent()) return false;
@@ -252,7 +252,7 @@ export function CloudAiPanel(props: {
   };
 
   const handleSend = async (text: string) => {
-    if (creatorReadOnly || !text.trim() && attachments.length === 0) return;
+    if (creatorReadOnly || view.revoked || (!text.trim() && attachments.length === 0)) return;
     if (off) return;
     if (!await consentForUse() || !stillCurrent()) return;
     // 还在上传或上传失败的附件这次先不带上,但发送本身不被挡住
@@ -584,8 +584,12 @@ export function CloudAiPanel(props: {
       )}
 
       {cloud.accountMode && (
-        <div className="pc-cloud-controls" data-pc="cloud-conversation-controls" data-visibility={currentMeta?.visibility ?? "unknown"}>
-          {!metadataReady ? <span data-pc="cloud-permission-loading">正在读取对话权限…</span> : currentMeta ? <>
+        <div className="pc-cloud-controls" data-pc="cloud-conversation-controls" data-visibility={view.revoked ? "revoked" : (currentMeta?.visibility ?? "unknown")}>
+          {view.revoked ? (
+            <span className="pc-cloud-access-label is-revoked" data-pc="cloud-visibility-label">
+              已无读取权限
+            </span>
+          ) : !metadataReady ? <span data-pc="cloud-permission-loading">正在读取对话权限…</span> : currentMeta ? <>
             <span className="pc-cloud-access-label" data-pc="cloud-visibility-label">
               {currentMeta.visibility === "private" ? "私有对话" : "共有对话"}{creatorReadOnly ? " · 项目创建者只读" : ""}
             </span>
@@ -621,6 +625,13 @@ export function CloudAiPanel(props: {
       {cloud.accountMode ? <CloudQueueList queue={view.queue} messages={chat.messages} senders={view.senders} /> :
         <QueueList tabId={qKey} running={view.streaming} onInsert={insertQueued} onEdit={editQueued} onResume={resumeQueue} hasDraft={hasDraft} />}
 
+      {cloud.accountMode && chat.messages.some(m => m.role === 'assistant' && m.pending && (m.progress?.waitingJobs || m.progress?.phase === 'waiting_jobs')) &&
+        (!view.queue?.items?.filter(item => item.state === 'queued').length) && (
+        <div className="ai-banner pc-cloud-waiting-jobs" data-pc="cloud-waiting-jobs">
+          上一条消息发起的后台作业（转写、镜头识别等）还在做，做完就处理你这条消息。
+        </div>
+      )}
+
       {cloud.accountMode && chat.history.atLimit && !chat.history.items.some((x) => x.id === chat.conversationId) && (
         <div className="ai-banner" data-pc="cloud-limit-note" role="status">{CLOUD_CHAT_TEXT.limitComposer}</div>
       )}
@@ -638,6 +649,8 @@ export function CloudAiPanel(props: {
         textareaRef={textareaRef}
         attachments={attachments}
         uploading={false}
+        disabled={Boolean(view.revoked)}
+        disabledReason={view.revoked ? "当前账号已无法读取这个对话，请重新选择有权限的对话。" : undefined}
         onPickFiles={() => fileInputRef.current?.click()}
         onRetryAttachment={(id) => retryAttachment(id)}
         onRemoveAttachment={removeAttachment}
