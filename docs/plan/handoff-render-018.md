@@ -134,7 +134,7 @@
   - `Claude and GPT models`：周额度剩余 **`0%`**（重置时间 `2026-10-22T21:13:58Z`），5 小时额度 `disabled`。
 - **仓库与工作区状态**：
   - PromptCut 主工作区（`C:\Users\admin\Documents\PromptCut`）：在 `main`、干净，最新代码合入提交 `301f8a39`（连同本交接与进度更新提交已推送 `origin/main`）。
-  - VisuHive 主工作区（`C:\Users\admin\Documents\VisuHive`）：在 `main`、干净，最新本地提交 `be945f2`（已在 `main` 合入 `gemini/vh-stream-perm` 权限分组后台与无默认管理员修正，以及 `gemini/vh-revoke-logout` 主动撤权通知、45 秒超时、折叠详情与不退出文案更新；领先 `origin/main` 5 个提交，照部署顺序在部署节点时推送）。
+  - VisuHive 主工作区（`C:\Users\admin\Documents\VisuHive`）：在 `main`、干净，最新本地提交 `0e64fbe`（已在 `main` 合入 `gemini/vh-stream-perm` 权限分组后台与无默认管理员修正，以及 `gemini/vh-revoke-logout` 主动撤权通知、45 秒超时、折叠详情与不退出文案更新；领先 `origin/main` 7 个提交，照部署顺序在部署节点时推送）。
   - **无未合入分支、无残留 `.worktrees/*` 工作区**（仅保留 `.worktrees/_export-baseline/` 像素基线目录）、**无在跑子 Agent 或残留后台进程**。
 
 ### 10.2 本轮（2026-10-15～2026-10-16）已完成并合入 `main` 的全部内容
@@ -148,11 +148,11 @@
    - `cf8f3e1c`（`rr-media-import`）：放开在线浏览器导入本地媒体，浏览器内用 WebCodecs + `mp4Mux` 先转视频小尺寸，严格按「所有小尺寸先传、再传原尺寸」上传到素材服务。
    - `57bab25d`（`rr-motion-preempt`）：`motion` 式卡产流任务按至少 30 秒切分（`remotion` 式保持 8 段 4 秒）；强设备（桌面 > 托管 > 浏览器）可抢弱设备在途流任务并保留已传分段；时间轴拖动保活（S2）。
    - `576ad0a3`（`rr-online-export-stage`）：在线浏览器导出在跨源隔离舞台内整帧活渲本页可运行的同步用户卡与素材效果卡，保留「快速导出 / 完整导出」，补齐 `export-frames` 24 小时 TTL 清理与限流。
-   - `4ce057f5`（`rr-rm-snap-page`）+ `cff49101`（`rr-rm-snap-server`）：己二彻底撤掉页面、舞台、服务端与预渲染进程中每张卡的 HTML 快照及 `.small.webp` 预渲染小尺寸；放宽暂停/拖动下 `scrub` 的抑制范围至无流非 `remotion` 重卡；在 `server/stage-gate.mjs` 放行 `/@id/__x00__vite/dynamic-import-helper.js`。
-   - `d68dd0f8` / `0d6dec22`（`rr-g0r-probes`）：更新 `preview-fallback-probe.mjs` 与 `ready-index-probe.mjs`，在 `main` 上实跑通过 G0-R 全套收尾验证（240 帧确定性 `240/240`，导出像素基线比对 `A-89c15177` `240/240` 逐字节相同），提交 `docs/reports/REPORT-render-refactor.md`，并将 59 份 `AGENT-rr-*.md` 归档至 `docs/archive/agent-reports/`。
+   - `59b85f09`～`35b0a803`（`rr-rm-snap-page`）+ `e13c6bcb`、`3641145e`（`rr-rm-snap-server`）：己二彻底撤掉页面、舞台、服务端与预渲染进程中每张卡的 HTML 快照及 `.small.webp` 预渲染小尺寸；放宽暂停/拖动下 `scrub` 的抑制范围至无流非 `remotion` 重卡；在 `server/stage-gate.mjs` 放行 `/@id/__x00__vite/dynamic-import-helper.js`。
+   - `52d3d2b5` / `0d6dec22`（`rr-g0r-probes`）：更新 `preview-fallback-probe.mjs` 与 `ready-index-probe.mjs`，在 `main` 上实跑通过 G0-R 全套收尾验证（240 帧确定性 `240/240`，导出像素基线比对 `A-89c15177` `240/240` 逐字节相同），提交 `docs/reports/REPORT-render-refactor.md`，并将 59 份 `AGENT-rr-*.md` 归档至 `docs/archive/agent-reports/`。
 
 2. **0.7.18（Phase 2）已完成并合入 `main` 的三块（至 `301f8a39`）**：
-   - `611fb04c`（`v18-revoke-logout` + VisuHive `be945f2`）：落实 10-14 第 3.0.1 节与第 3.2 节（撤掉 90 秒连接轮换与轮询，账号服务主动通知文档服务撤权并带握手确认与 15 次指数退避重试、重连按 `sinceSeq` 补齐；改密退出超时改为 45 秒、调试信息缺省折叠、「不退出」文案更新）。
+   - `611fb04c`（`v18-revoke-logout` + VisuHive `fbe86bb`、`9f40aaa`、`0e64fbe`）：落实 10-14 第 3.0.1 节与第 3.2 节（撤掉 90 秒连接轮换与轮询，账号服务主动通知文档服务撤权并带握手确认与 15 次指数退避重试、重连按 `sinceSeq` 补齐；改密退出超时改为 45 秒、调试信息缺省折叠、「不退出」文案更新）。
    - `0ba84411`（`v18-move-proc`）：落实 10-14 第 3.3 节与第 3.4 节（本地项目/协作房间搬到云端保持原 `projectId`、连续历史序号 `rev` 与操作历史；`<= 0.7.17` 旧版拒绝并提示「当前软件版本已过期，无法搬到云端」；「版本号」改称「历史序号」；协作房间搬完提示「原来的禁入名单没有带过去」；项目设置提供「作废并重新生成项目链接」「项目二级密码」并收起旧按钮；另存 `.proc`/`.procp` 带 `cloudAssociation` 与实时 `savedRev`，重开按四条规则处理并由 `DocSync.mergeOffline` 增量合并离线修改）。
    - `301f8a39`（`v18-chat-workflow-jobs`）：落实 10-14 第 3.1 节（后台作业排队等待提示与 1 小时超时中断说明、`auto_workflow` 主体识别缺省可选且按 `commitKey` 防重复叠放）与第 5 节（共有对话设为私有时成员端刷新仍记撤销、停止重连、禁用输入框、顶栏改为「已无读取权限」）。
 
