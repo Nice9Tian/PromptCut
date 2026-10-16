@@ -168,9 +168,10 @@
      - `npx tsc -b --force`：**0 错误**（退出码 0）
      - `npm test`：**共 `7020` 条：`7005` 通过、`0` 失败、`14` 跳过、`1` todo**（耗时 161.8 秒，退出码 0）。
 
-1. **分支 A（`v18-collect-reboot`）**：
-   - 打开采集代下（在 `server/upload-queue.mjs`、`server/vite-plugin-media.ts` 补撤回并删除在途文件接口并接入 `src/ai/cloud/collectBridge.ts`；将 `PROMPTCUT_AGENT_COLLECT_DELEGATE` 改为缺省开启；桌面版代下时显示 `「云端 Agent 正在用这台电脑上的登录下载：〈网址〉」`）与 `web_handoff`（让发起人自己电脑默认浏览器打开同一网址）；
-   - 节点重启后自动恢复任务槽（`account-root-slots.mjs` / `agent-run-scope-publisher.mjs` 跨 `boot_id` 自动接续），并把重启那一刻在跑的任务自动记为失败并释放（10-14 第 3.1 节）。
+1. **分支 A（`v18-collect-reboot`，已完成并合入 `main` `d202052c`，分支提交 `e632ac0e`，报告 `docs/reports/AGENT-v18-collect-reboot.md`）**：
+   - 打开采集代下（在 `server/upload-queue.mjs`、`server/vite-plugin-media.ts` 补撤回并删除在途文件接口并接入 `src/ai/cloud/collectBridge.ts`，已传完文件不误删；将 `PROMPTCUT_AGENT_COLLECT_DELEGATE` 改为缺省开启；桌面版代下时显示 `「云端 Agent 正在用这台电脑上的登录下载：〈网址〉」`）与 `web_handoff`（让发起人自己电脑浏览器打开同一网址）；
+   - 节点重启后自动恢复任务槽（支持跨 `boot_id` 见证 `kind: 'boot-transition'` 与 `/run` tmpfs drop-in 重建，涵盖在途卡住槽与空闲已关闭槽），并把重启那一刻在跑的任务自动记为 `failed`（`worker-failed`）并释放（10-14 第 3.1 节）。
+   - **合并后 `d202052c` 上的类型检查与全量测试结果**：`npx tsc -b --force` **0 错误**；`npm test` **共 `7025` 条：`7010` 通过、`0` 失败、`14` 跳过、`1` todo**（耗时 160.8 秒，退出码 0）。
 2. **分支 B（`v18-block10-turn-lock`）**：
    - 块十 + `user-decisions-2026-10-16.md` 第 3 节「0.7.18 暂行：云端 Agent 按轮占用」+ `look` 私钥只由主服务持有并代签：
      - 云端 Agent `see_frames` 出图先后：`成员的桌面版 > 身份为电脑的在线浏览器 > 托管方的渲染服务 > 身份为手机的在线浏览器`；
