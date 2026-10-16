@@ -8,7 +8,7 @@ import { restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
-import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom, type CloudProjectAssociation, currentCloudAssociation, noteLoadedCloudAssociation } from "../sync/recoveryAssociation";
+import { checkAssociation, convertedFromOf, currentAssociation, noteConvertedFrom, noteLoadedAssociation, onGoneConversion, type CollaborationDescriptor, type ConvertedFrom, type CloudProjectAssociation, currentCloudAssociation, noteLoadedCloudAssociation, currentRealtimeRev } from "../sync/recoveryAssociation";
 import { UNSUPPORTED_PROC_TEXT } from "../sync/recoveryTexts";
 
 /**
@@ -92,7 +92,15 @@ export interface ProcFile {
 export function serializeProc(thumbnail: string | null = null): string {
   const project = JSON.parse(exportProjectJson()) as Project;
   const cards = collectProjectCards(project);
-  const cloudAssoc: CloudProjectAssociation | undefined = currentCloudAssociation() ?? undefined;
+  const currentAssoc = currentCloudAssociation();
+  const realTimeRev = currentRealtimeRev() ?? currentAssoc?.savedRev ?? (project as any).rev ?? 1;
+  const cloudAssoc: CloudProjectAssociation | undefined = currentAssoc
+    ? {
+        ...currentAssoc,
+        savedRev: realTimeRev,
+        savedAt: new Date().toISOString(),
+      }
+    : undefined;
   const doc: ProcFile = {
     format: PROC_FORMAT,
     version: PROC_VERSION,

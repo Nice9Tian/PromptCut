@@ -128,6 +128,14 @@ export function setCloudAssociation(value: CloudProjectAssociation | null) {
   activeCloudAssoc = value;
 }
 
+let realtimeRevGetter: (() => number | null) | null = null;
+export function setRealtimeRevGetter(getter: () => number | null) {
+  realtimeRevGetter = getter;
+}
+export function currentRealtimeRev(): number | null {
+  return realtimeRevGetter ? realtimeRevGetter() : null;
+}
+
 /**
  * 账号云端项目另存为 .proc / .procp 后的重开四规则（10-14 第 3.4 节）：
  * 1. 没登录：提示登录，不直接当本地项目打开，也不抹掉关联；
@@ -143,12 +151,13 @@ export async function handleCloudAssociationReopen(
     client?: {
       account?: { id: string; name: string } | null;
       session: (projectId: string) => Promise<any>;
-      join?: (projectId: string, requestId?: string) => Promise<any>;
-    };
+      join?: (projectId: string, requestId: string, joinOpts?: any) => Promise<any>;
+    } | any;
     queryGone?: (descriptor: CollaborationDescriptor) => Promise<GoneProof | null>;
     isOfflineModified?: boolean;
     cloudProject?: Project;
     toast?: (msg: string, tone?: "info" | "warn", duration?: number) => void;
+    openAsLocal?: (p: Project) => void;
     enterProject?: (options: any) => Promise<void>;
   } = {},
 ): Promise<{ status: "opened" | "merged" | "converted" | "login-required" | "forbidden"; project?: Project }> {
@@ -168,9 +177,10 @@ export async function handleCloudAssociationReopen(
   }
 
   if (!account) {
-    toast("需要登录网站账号以核对云端权限。", "warn", 10_000);
+    toast("请先登录网站账号；当前以本地副本打开。", "info");
     setCloudAssociation(assoc);
-    return { status: "login-required" };
+    options.openAsLocal?.(project);
+    return { status: "login-required", project };
   }
 
   // 2. 核对成员权限与状态
@@ -197,21 +207,26 @@ export async function handleCloudAssociationReopen(
           const converted = convertGoneProject(project, descriptor, proof);
           setCloudAssociation(null);
           publishGoneConversion({ projectId: converted.project.id!, name: converted.project.name, from: converted.from });
-          toast("这个云端项目已在云端被删除，已转为普通本地项目打开。", "info", 8000);
+          toast("这个云端项目已不存在。", "info", 8000);
+          options.openAsLocal?.(converted.project);
           return { status: "converted", project: converted.project };
         }
       }
       // 规则 2：已登录但不是该项目成员
       if (status === 403 || code === "not-listed" || code === "banned" || code === "forbidden") {
-        toast("当前账号不是这个云端项目的成员，无法打开。", "warn", 10_000);
-        return { status: "forbidden" };
+        toast("这个账号不是这个云端项目的成员", "warn", 10_000);
+        setCloudAssociation(assoc);
+        options.openAsLocal?.(project);
+        return { status: "forbidden", project };
       }
     }
   }
 
   if (!session && !options.client) {
-    toast("当前账号不是这个云端项目的成员，无法打开。", "warn", 10_000);
-    return { status: "forbidden" };
+    toast("这个账号不是这个云端项目的成员", "warn", 10_000);
+    setCloudAssociation(assoc);
+    options.openAsLocal?.(project);
+    return { status: "forbidden", project };
   }
 
   // 规则 4：有权限。检查是否有离线修改

@@ -203,7 +203,7 @@ export function createSharedDocService({
     }
     if (accountRuntime && pathname.startsWith('/shared/') && pathname !== '/shared/service-challenge') {
       res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ ok: false, code: 'account-required' }));
+      res.end(JSON.stringify({ ok: false, code: 'account-required', error: '当前软件版本已过期，无法搬到云端', message: '当前软件版本已过期，无法搬到云端' }));
       return true;
     }
     return sharedHttp.handle(req, res, '');

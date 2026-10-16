@@ -704,15 +704,22 @@ test("AM-22 账号云端项目另存为 .proc / .procp 关联与重开四规则"
   assert.equal(loadedAssoc?.projectId, "proj-cloud-789");
   assert.equal(loadedAssoc?.savedRev, 15);
 
-  // 规则 1：当前没登录账号 -> 提示登录，不直接当本地项目打开，也不抹掉关联
-  await t.test("规则 1：未登录账号时提示登录，不当本地项目打开，保留关联", async () => {
-    const r1 = await handleCloudAssociationReopen(loadedProj, loadedAssoc, { account: null });
+  // 规则 1：当前没登录账号 -> 提示登录，以本地副本打开，保留关联
+  await t.test("规则 1：未登录账号时提示登录，以本地副本打开，保留关联", async () => {
+    let openedLocal = false;
+    const r1 = await handleCloudAssociationReopen(loadedProj, loadedAssoc, {
+      account: null,
+      openAsLocal: () => { openedLocal = true; },
+    });
     assert.equal(r1.status, "login-required");
+    assert.equal(openedLocal, true, "以本地副本打开");
     assert.equal(currentCloudAssociation()?.projectId, "proj-cloud-789", "关联仍然保留");
   });
 
-  // 规则 2：已登录但当前账号不是该云端项目成员 -> 提示没有权限，不打开项目
-  await t.test("规则 2：已登录但非成员提示无权限，不打开项目", async () => {
+  // 规则 2：已登录但当前账号不是该云端项目成员 -> 提示「这个账号不是这个云端项目的成员」，以本地副本打开
+  await t.test("规则 2：已登录但非成员提示无权限，以本地副本打开", async () => {
+    let openedLocal = false;
+    let toastMsg = "";
     const fakeClient = {
       session: async () => {
         throw Object.assign(new Error("not-listed"), { status: 403, code: "not-listed" });
@@ -721,8 +728,12 @@ test("AM-22 账号云端项目另存为 .proc / .procp 关联与重开四规则"
     const r2 = await handleCloudAssociationReopen(loadedProj, loadedAssoc, {
       account: { id: "acc_other_user", name: "路人" },
       client: fakeClient,
+      toast: (msg) => { toastMsg = msg; },
+      openAsLocal: () => { openedLocal = true; },
     });
     assert.equal(r2.status, "forbidden");
+    assert.equal(openedLocal, true, "以本地副本打开");
+    assert.equal(toastMsg, "这个账号不是这个云端项目的成员");
   });
 
   // 规则 3：云端项目已被创建者删了 -> 凭已删证明（goneProof）去掉云端记号，转成独立本地项目打开
@@ -755,6 +766,7 @@ test("AM-22 账号云端项目另存为 .proc / .procp 关联与重开四规则"
 
   // 规则 4：当前账号有权限，而且这份文件在离线期间被改过 -> 合回云端项目
   await t.test("规则 4：有权限且离线期间修改过，合回云端项目", async () => {
+    let enterOpts = null;
     const fakeSession = {
       connectionTicket: "ticket-conn",
       assetTicket: "ticket-asset",
@@ -775,10 +787,13 @@ test("AM-22 账号云端项目另存为 .proc / .procp 关联与重开四规则"
     const r4 = await handleCloudAssociationReopen(offlineModifiedProj, loadedAssoc, {
       account: { id: "acc_owner", name: "创建者" },
       client: fakeClient,
+      enterProject: async (opts) => { enterOpts = opts; },
       isOfflineModified: true,
     });
     assert.equal(r4.status, "merged");
     assert.equal(r4.project?.name, "离线修改过的标题");
+    assert.ok(enterOpts);
+    assert.equal(enterOpts.projectId, "proj-cloud-789");
   });
 });
 
@@ -790,4 +805,119 @@ test("AM-23 旧版（<= 0.7.17）调用搬到云端被拒并返回「当前软�
   assert.equal(r.error, "version-expired");
   assert.equal(M.moveFailureText(r, "local"), "当前软件版本已过期，无法搬到云端");
 });
+
+test("AM-24 账本 authority.mjs 真实持久化：原编号保持、重生成链接与项目二级密码", async () => {
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const fs = await import("node:fs");
+  const { openAccountLedger } = await import("../../../server/account/ledger.mjs");
+  const { createAccountAuthority } = await import("../../../server/account/authority.mjs");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pc-auth-test-"));
+  const ledger = openAccountLedger({ file: path.resolve(tmpDir, "ledger.sqlite"), authorityId: "auth-test" });
+  const authority = createAccountAuthority({
+    ledger,
+    accountClient: {
+      verify: async (t) => ({
+        ok: true,
+        accountId: t.includes("b") ? "acc_000000000000000000000002" : "acc_000000000000000000000001",
+        accountName: t.includes("b") ? "bob" : "alice",
+        role: "page",
+        authorizationId: "auth-id-1",
+        loginId: "log-1",
+        loginGeneration: 1,
+        expiresAt: Date.now() + 60000,
+        kind: "session",
+      }),
+      events: async () => ({ headSeq: 0, events: [] }),
+    },
+    authorityUrl: "https://auth.test",
+    signingKey: { key: "key", keyId: "kid" },
+    keyId: "kid",
+    initializeProject: async ({ projectId, initialRev = 1, initialHistory = [] }) => ({ contentId: `cid-${projectId}-${initialRev}` }),
+  });
+
+  try {
+    // 1. 创建项目保持原编号与初始 rev、history
+    const created = await authority.createProject({ accessToken: "token-a" }, {
+      name: "原编号项目",
+      requestId: "req-create-orig",
+      projectId: "proj-keep-123",
+      rev: 15,
+      history: [{ rev: 1, opId: "op-1" }],
+    });
+    assert.equal(created.projectId, "proj-keep-123", "账本中项目编号正是 proj-keep-123");
+
+    // 重复创建冲突校验
+    await assert.rejects(
+      () => authority.createProject({ accessToken: "token-b" }, {
+        name: "别名",
+        requestId: "req-dup-id",
+        projectId: "proj-keep-123",
+      }),
+      (err) => err.code === "project-id-taken" || err.status === 409,
+    );
+
+    // 2. 作废并重新生成链接
+    const regen = await authority.adminProject({ accessToken: "token-a" }, {
+      projectId: "proj-keep-123",
+      op: "regen-link",
+      expectedAccessRevision: created.accessRevision,
+      requestId: "req-regen",
+    });
+    assert.ok(regen.linkToken, "生成了 linkToken");
+
+    // 3. 项目二级密码（加盐哈希）
+    const setPw = await authority.adminProject({ accessToken: "token-a" }, {
+      projectId: "proj-keep-123",
+      op: "set-secondary-password",
+      password: "secret-second-pw",
+      expectedAccessRevision: regen.accessRevision,
+      requestId: "req-set-pw",
+    });
+    assert.equal(setPw.hasSecondaryPassword, true);
+
+    // 4. 第二个成员加入：旧链接被拒
+    await assert.rejects(
+      () => authority.joinProject({ accessToken: "token-b" }, {
+        projectId: "proj-keep-123",
+        requestId: "req-join-bad-link",
+        linkToken: "invalid-old-token",
+        secondaryPassword: "secret-second-pw",
+      }),
+      (err) => err.code === "link-expired" || err.status === 403,
+    );
+
+    // 二级密码错误被拒
+    await assert.rejects(
+      () => authority.joinProject({ accessToken: "token-b" }, {
+        projectId: "proj-keep-123",
+        requestId: "req-join-bad-pw",
+        linkToken: regen.linkToken,
+        secondaryPassword: "wrong-password",
+      }),
+      (err) => err.code === "bad-secondary-password" || err.status === 403,
+    );
+
+    // 凭新链接和正确二级密码加入成功
+    const joined = await authority.joinProject({ accessToken: "token-b" }, {
+      projectId: "proj-keep-123",
+      requestId: "req-join-ok",
+      linkToken: regen.linkToken,
+      secondaryPassword: "secret-second-pw",
+    });
+    assert.equal(joined.projectId, "proj-keep-123");
+
+    // 再次进入：已经进过的成员不再问
+    const rejoin = await authority.joinProject({ accessToken: "token-b" }, {
+      projectId: "proj-keep-123",
+      requestId: "req-rejoin",
+    });
+    assert.equal(rejoin.projectId, "proj-keep-123");
+  } finally {
+    authority.close();
+    ledger.close();
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
 

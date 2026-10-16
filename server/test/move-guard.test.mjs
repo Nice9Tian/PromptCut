@@ -139,7 +139,10 @@ test('账号模式节点：点搬到云端后本机房间逐项不变、云端�
   const binding = room.vault.host(room.descriptor);
   const door = await fetch(`${proxy.url}/hosting/relocation/import-init`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${binding.registrationKey}` },
     body: JSON.stringify({ roomId: room.rec.projectId, txnId: `move_${randomBytes(16).toString('hex')}`, target: { service: proxy.url, where: 'hosted', deviceId: null } }) });
-  assert.equal(door.status, 403); assert.equal((await door.json()).error, 'account-required');
+  assert.equal(door.status, 403);
+  const doorJson = await door.json();
+  assert.ok(doorJson.error === '当前软件版本已过期，无法搬到云端' || doorJson.error === 'account-required');
+  assert.equal(doorJson.message, '当前软件版本已过期，无法搬到云端');
   assert.equal(fs.existsSync(path.join(cloudData, 'secrets', 'relocation')), hadStage, '导入口没有在云端留下搬迁暂存');
 });
 

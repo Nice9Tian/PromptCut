@@ -21,7 +21,7 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { classifyEnterFailure, classifyProtocolError } from "./enterFailure";
 import { client, errorStatus, route, hosted, type Candidate, type SharedMode, type Where } from "./sharedApi";
-import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor, type CloudProjectAssociation, currentCloudAssociation, setCloudAssociation, takeLoadedCloudAssociation, handleCloudAssociationReopen } from "./recoveryAssociation";
+import { currentAssociation, noteConvertedFrom, publishGoneConversion, setAssociation, takeLoadedAssociation, type CollaborationDescriptor, type CloudProjectAssociation, currentCloudAssociation, setCloudAssociation, takeLoadedCloudAssociation, handleCloudAssociationReopen, setRealtimeRevGetter } from "./recoveryAssociation";
 import { convertGoneProject, restoreOfflineEdits, type GoneProof } from "./cloudGone";
 // @ts-expect-error Browser-safe proof verification, shared with the server-side tooling.
 import { queryGone } from "../../../server/recovery/gone-proof.mjs";
@@ -751,10 +751,19 @@ function onLoad(project: Project): Project {
   patch({ association, reopenState: null, rev: cur?.link.ds.rev ?? null });
   if (cloudAssoc) {
     detach(); disconnectSharedAssets();
-    patch({ shared: null, members: [], hosted: null, blocked: null, reopenState: "cloud-reopening" });
     setCloudAssociation(cloudAssoc);
-    void handleCloudAssociationReopen(project, cloudAssoc);
-    return project;
+    void handleCloudAssociationReopen(project, cloudAssoc, {
+      toast: pushToast,
+      openAsLocal: (p) => { switchToLocal(p, { load: false }); },
+      enterProject: async (opts) => {
+        await enterAccountProject(opts);
+        const confirmed = cur?.link.ds.confirmedProject;
+        if (confirmed && JSON.stringify(project) !== JSON.stringify(confirmed)) {
+          cur?.link.ds.load(project);
+        }
+      },
+    });
+    return switchToLocal(project, { load: false });
   }
   if (association) {
     detach(); disconnectSharedAssets();
@@ -1789,6 +1798,7 @@ function holdRecovery(project: Project, descriptor: CollaborationDescriptor) {
 }
 function releaseHolding() { holding?.off(); holding = null; }
 setProjectLoader(onLoad);
+setRealtimeRevGetter(() => cur?.link?.ds?.rev ?? null);
 
 /** A choice binds an existing device identity; file role fields never participate. */
 export async function recoveryIdentities(): Promise<{ as: "creator" | "member"; username: string; profile?: string }[]> {
@@ -1990,14 +2000,19 @@ export async function regenAccountProjectLink(): Promise<{ ok: true; link: strin
   const s = view.shared;
   if (!s || !s.accountId) return { ok: false, error: "不是账号云端项目" };
   try {
+    if (cur?.client?.regenProjectLink) {
+      const res = await cur.client.regenProjectLink(s.projectId, 0, crypto.randomUUID());
+      const link = projectLink(s.base || location.origin, s.projectId, res.linkToken);
+      return { ok: true, link };
+    }
     const r = await adminOp("regen-link", {});
     if (r.ok) {
       const link = (r.reply as any)?.link || projectLink(s.base || location.origin, s.projectId);
       return { ok: true, link };
     }
     return { ok: false, error: r.error };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message || "regen-failed" };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "regen-failed" };
   }
 }
 
@@ -2006,10 +2021,14 @@ export async function setAccountSecondaryPassword(password: string | null): Prom
   const s = view.shared;
   if (!s || !s.accountId) return { ok: false, error: "不是账号云端项目" };
   try {
+    if (cur?.client?.setSecondaryPassword) {
+      await cur.client.setSecondaryPassword(s.projectId, password, 0, crypto.randomUUID());
+      return { ok: true };
+    }
     const r = await adminOp("set-secondary-password", {}, { password });
     return r.ok ? { ok: true } : { ok: false, error: r.error };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message || "set-failed" };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "set-failed" };
   }
 }
 

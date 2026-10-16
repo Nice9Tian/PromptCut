@@ -168,7 +168,7 @@ export function createHostedRelocation({ paths, hosting, store, device, assets, 
       if (p.startsWith('/hosting/relocation/export-')) { void exportRun(req, res); return true; }
       if (!p.startsWith('/hosting/relocation/import-')) return false;
       // 账号模式的节点只认网站账号：旧办法（房间、项目密码、创建者口令）的整房导入口关着，不收任何写入。
-      if (accountMode) { reply(res, 403, { ok: false, error: 'account-required' }); return true; }
+      if (accountMode) { reply(res, 403, { ok: false, error: '当前软件版本已过期，无法搬到云端', code: 'account-required', message: '当前软件版本已过期，无法搬到云端' }); return true; }
       void run(req, res); return true; },
     start() { sweep(); },
     async close() { closing = true; clearTimeout(timer); await Promise.all([...workers.values()].map(worker => worker.stop())); workers.clear(); },
