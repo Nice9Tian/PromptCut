@@ -22,7 +22,7 @@ const BASE = Number(arg('--port-base') ?? 28160), TIMEOUT_MS = Number(arg('--tim
 if (!arg('--site-root') || !arg('--out') || !Number.isInteger(BASE) || BASE < 20000 || !Number.isInteger(TIMEOUT_MS)) throw Error('usage: --site-root <dir> --out <dir> [--port-base n] [--timeout-ms n]');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 const TEXT = { question: '密码已修改。要退出已登录的其它设备吗？本网站保持登录。', yes: '退出', no: '不退出',
-  exiting: '正在退出已登录设备', exited: '设备已退出', failed: '密码已修改。其它设备的退出还在处理中，稍后会自动完成，不需要再操作。' };
+  exiting: '正在退出已登录设备', exited: '设备已退出', failed: '退出没有确认完成。旧设备已经不能再使用；需要帮助时，请把下面的信息发给我们。' };
 const checks = [], shots = [];
 const check = (condition, name, detail) => { checks.push({ name, ok: Boolean(condition), ...(detail === undefined ? {} : { detail }) }); if (!condition) console.error(`✖ ${name}${detail === undefined ? '' : ` ${JSON.stringify(detail)}`}`); };
 

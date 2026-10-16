@@ -69,7 +69,7 @@ const validCreatePolicy = policy => policy !== null && typeof policy === 'object
  * This factory is deliberately not mounted in the legacy shared service by itself.
  */
 export function createAccountAuthority({ ledger, accountClient, initializeProject, authorityUrl,
-  signingKey, keyId, now = Date.now, pollMs = 1000, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
+  signingKey, keyId, now = Date.now, pollMs = 0, onDiagnostic = () => {}, getDocBarrier, verifyDocBarrier,
   runHooks = null, createPolicy = {} }) {
   if (!validCreatePolicy(createPolicy)) reject(503, 'create-policy-configuration');
   if (runHooks !== null && typeof runHooks?.fenceInState !== 'function') reject(503, 'run-authority-unavailable');

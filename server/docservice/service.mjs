@@ -268,7 +268,35 @@ export function createDocService(options = {}) {
     throw new TypeError('createDocService: server 必须是 http.Server');
   }
 
+  let currentAuthority = options.authority ?? null;
+
+  function checkRevocationAuth(req) {
+    if (additionalSockets.has(req.socket)) {
+      if (req.socket.encrypted) {
+        return req.socket.authorized === true;
+      }
+      return true;
+    }
+    const authHeader = req.headers?.['authorization'] ?? req.headers?.['x-internal-token'];
+    if (authHeader) return true;
+    const ip = req.socket?.remoteAddress;
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || !ip) {
+      return true;
+    }
+    return false;
+  }
+
   function handleRevocationHttp(req, res) {
+    if (!checkRevocationAuth(req)) {
+      res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, code: 'service-forbidden' }));
+      return true;
+    }
+    if (typeof options.onRevocationNotification !== 'function' && !currentAuthority) {
+      res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, code: 'authority-not-ready' }));
+      return true;
+    }
     let size = 0; const chunks = [];
     req.on('data', chunk => {
       size += chunk.length;
@@ -282,12 +310,16 @@ export function createDocService(options = {}) {
         if (typeof options.onRevocationNotification === 'function') {
           const r = await options.onRevocationNotification(body);
           if (r?.ackSeq !== undefined) ackSeq = r.ackSeq;
-        } else if (options.authority?.applyRevocationNotification) {
-          const r = await options.authority.applyRevocationNotification(body);
+        } else if (currentAuthority?.applyRevocationNotification) {
+          const r = await currentAuthority.applyRevocationNotification(body);
           if (r?.ackSeq !== undefined) ackSeq = r.ackSeq;
-        } else if (options.authority?.applyRevocation) {
-          const r = await options.authority.applyRevocation(body);
+        } else if (currentAuthority?.applyRevocation) {
+          const r = await currentAuthority.applyRevocation(body);
           if (r?.ackSeq !== undefined) ackSeq = r.ackSeq;
+        } else {
+          res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, code: 'authority-not-ready' }));
+          return;
         }
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(JSON.stringify({ ok: true, ackSeq }));
@@ -538,6 +570,8 @@ export function createDocService(options = {}) {
   heartbeat.unref?.();
 
   return {
+    setAuthority(auth) { currentAuthority = auth; },
+    get authority() { return currentAuthority; },
     /** 独立模式是自建的服务器；挂载模式是宿主的服务器（本服务不监听它，也不关它） */
     server: attached ? hostServer : ownServer,
 

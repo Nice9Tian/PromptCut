@@ -160,6 +160,43 @@ test('docservice handles POST /internal/v2/revocations and confirms with ackSeq'
   assert.equal(receivedEvent.seq, 7);
 });
 
+test('docservice rejects POST /internal/v2/revocations with 503 if authority is not ready', async (t) => {
+  const service = createDocService();
+  t.after(() => service.close());
+
+  let status = 0, body = '';
+  const req = {
+    url: '/internal/v2/revocations', method: 'POST', socket: { remoteAddress: '127.0.0.1' },
+    on() {},
+  };
+  const res = {
+    writeHead(s) { status = s; },
+    end(b) { body = b; },
+  };
+  service.handleTransportHttp(req, res);
+  assert.equal(status, 503);
+  assert.equal(JSON.parse(body).code, 'authority-not-ready');
+});
+
+test('docservice rejects POST /internal/v2/revocations with 403 from unauthorized remote', async (t) => {
+  const service = createDocService({ onRevocationNotification: async () => ({ ok: true }) });
+  t.after(() => service.close());
+
+  let status = 0, body = '';
+  const req = {
+    url: '/internal/v2/revocations', method: 'POST', socket: { remoteAddress: '198.51.100.1' },
+    headers: {},
+    on() {},
+  };
+  const res = {
+    writeHead(s) { status = s; },
+    end(b) { body = b; },
+  };
+  service.handleTransportHttp(req, res);
+  assert.equal(status, 403);
+  assert.equal(JSON.parse(body).code, 'service-forbidden');
+});
+
 test('docservice catches up missed events using sinceSeq when gap occurs', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-rev-catchup-'));
   const file = path.join(dir, 'account.db');
