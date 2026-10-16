@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { seedSharedProject } from './lib-seed.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
@@ -159,13 +160,11 @@ async function openMember(browser, tag) {
   const pageErrors = [], refused = [];
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 200)));
   page.on('console', (msg) => { const t = msg.text(); if (/Refused to|violates the following Content Security Policy/i.test(t)) refused.push(t.slice(0, 200)); });
-  const typeInto = async (sel, value) => { await page.waitForSelector(sel, { visible: true, timeout: 30_000 }); await page.click(sel, { clickCount: 3 }); await page.keyboard.press('Backspace'); await page.type(sel, value, { delay: 5 }); };
+  await plantResume(page, await resumeRecord({
+    base: `${ORIGINS.editor}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: NAME,
+    username: `m-${tag.toLowerCase()}`, password: PROJECT_PW, deviceId: `ocg-m-${tag.toLowerCase()}-${Date.now().toString(36)}`.padEnd(16, '0'),
+  }));
   await page.goto(`${ORIGINS.editor}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto('[data-pc="join-name"]', NAME);
-  await typeInto('[data-pc="join-username"]', `m-${tag.toLowerCase()}`);
-  await typeInto('[data-pc="join-password"]', PROJECT_PW);
-  await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until(`${tag} 时间轴`, () => page.evaluate(() => !!window.__pcStore), 30_000);
   await until(`${tag} 页面认出同步来的图卡`, () => page.evaluate((id) => !!window.__pcCardSources?.()?.cards?.some((c) => c.id === id), CARD_ID), 60_000, 500);

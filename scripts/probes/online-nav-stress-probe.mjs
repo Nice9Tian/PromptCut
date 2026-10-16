@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
 import { seedSharedProject } from './lib-seed.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 
 const argv = process.argv.slice(2);
@@ -176,8 +177,9 @@ const stamp = Date.now().toString(36);
 const NAME = `nav-${stamp}`;
 const creator = { username: 'boss', password: `boss-${randomBytes(6).toString('hex')}` };
 const PROJECT_PW = `pw-${randomBytes(6).toString('hex')}`;
+let made = null;
 if (JOIN) {
-  const made = await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
+  made = await createSharedProject({ base: DOC_DIRECT, name: NAME, mode: 'free', creator, password: PROJECT_PW });
   // 在线页面只加入、不新建(`dce4b22b`):先替创建者写进一份空项目,否则页面进不去(等不到成员按钮)
   const seeded = await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator, name: NAME });
   if (!seeded.ok) throw new Error(`替创建者写进空项目失败:${JSON.stringify(seeded)}`);
@@ -205,13 +207,6 @@ async function closeBrowser() {
   if (browserNetlog && !browserFailed) {
     for (let i = 0; i < 10; i++) { try { fs.rmSync(browserNetlog, { force: true }); break; } catch { await sleep(500); } }
   }
-}
-
-async function typeInto(page, sel, text) {
-  await page.waitForSelector(sel, { visible: true, timeout: 30_000 });
-  await page.click(sel, { clickCount: 3 });
-  await page.keyboard.press('Backspace');
-  if (text) await page.type(sel, text, { delay: 5 });
 }
 
 /** 开一页并挂上自己的 CDP 会话记网络与生命周期事件(与 puppeteer 自己的会话分开,取证时不依赖它) */
@@ -322,6 +317,12 @@ try {
     }
     sinceLaunch++;
     const p = await openPage(i);
+    if (JOIN && made) {
+      await plantResume(p.page, await resumeRecord({
+        base: `${SITE}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: NAME,
+        username: `u${i}`, password: PROJECT_PW, deviceId: `nav-u${i}-${stamp}`.padEnd(16, '0'),
+      }));
+    }
     p.rec.t0 = Date.now();
     let navErr = null;
     try {
@@ -339,11 +340,6 @@ try {
     } else if (JOIN) {
       const tj = Date.now();
       try {
-        await p.page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-        await typeInto(p.page, '[data-pc="join-name"]', NAME);
-        await typeInto(p.page, '[data-pc="join-username"]', `u${i}`);
-        await typeInto(p.page, '[data-pc="join-password"]', PROJECT_PW);
-        await p.page.click('[data-pc="join-submit"]');
         await p.page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
         r.joinMs = Date.now() - tj;
       } catch (e) { r.joinErr = String(e?.message ?? e).slice(0, 160); }

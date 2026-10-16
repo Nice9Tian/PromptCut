@@ -55,6 +55,7 @@ import { PNG } from 'pngjs';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { createTimings } from './probe-timings.mjs';
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { seedSharedProject } from './lib-seed.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
@@ -345,7 +346,7 @@ async function launch(extra = []) {
   browsers.push(b);
   return b;
 }
-async function openMember(browser, tag, { mobile = false, name = NAME, cardIds = CARD_IDS } = {}) {
+async function openMember(browser, tag, { mobile = false, name = NAME, projectId = made.projectId, cardIds = CARD_IDS } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   page.on('dialog', (d) => void d.accept());
@@ -358,13 +359,11 @@ async function openMember(browser, tag, { mobile = false, name = NAME, cardIds =
   const pageErrors = [], refused = [];
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 200)));
   page.on('console', (msg) => { const t = msg.text(); if (/Refused to|violates the following Content Security Policy/i.test(t)) refused.push(t.slice(0, 200)); });
-  const typeInto = async (sel, value) => { await page.waitForSelector(sel, { visible: true, timeout: 30_000 }); await page.click(sel, { clickCount: 3 }); await page.keyboard.press('Backspace'); await page.type(sel, value, { delay: 5 }); };
+  await plantResume(page, await resumeRecord({
+    base: `${ORIGINS.editor}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId, name,
+    username: `m-${tag.toLowerCase()}`, password: PROJECT_PW, deviceId: `oce-m-${tag.toLowerCase()}-${Date.now().toString(36)}`.padEnd(16, '0'),
+  }));
   await page.goto(`${ORIGINS.editor}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto('[data-pc="join-name"]', name);
-  await typeInto('[data-pc="join-username"]', `m-${tag.toLowerCase()}`);
-  await typeInto('[data-pc="join-password"]', PROJECT_PW);
-  await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until(`${tag} 时间轴`, () => page.evaluate(() => !!window.__pcStore), 30_000);
   await until(`${tag} 页面认出同步来的卡`, () => page.evaluate((ids) => { const c = window.__pcCardSources?.()?.cards ?? []; return ids.every((id) => c.some((x) => x.id === id)); }, cardIds), 60_000, 500);
@@ -659,18 +658,14 @@ try {
     return d?.lastClips?.includes(V.slow) && [V.v, V.snd, V.rel].every((id) => !d.lastClips.includes(id)) ? d : null;
   }, 120_000, 1000) ?? await A.page.evaluate(() => window.__pcPlanPublisher?.() ?? null);
   check('E6 页面发布的清单计划含判重的慢卡,不含判轻的画面卡、有声卡、相对导入卡', !!plan?.lastClips?.includes(V.slow) && [V.v, V.snd, V.rel].every((id) => !plan.lastClips.includes(id)), plan?.lastClips);
-  // 替渲染节点写层表与清单:慢卡换成预渲染快照
-  const layer = makeLayer(V.slow, '#7e22ce', FPS, 4 * FPS, 10 * FPS);
-  await writeManifests(layer);
-  await writeLayerMap(fp.projectId, FPS, [layer]);
-  await A.page.evaluate(() => window.__pcStore.actions.seek(11));
-  const snap = await until('A 慢卡换成预渲染快照', async () => {
-    await A.page.evaluate(() => window.__pcStore.actions.seek(11));
+  // 2026-10-13 撤除每张卡 HTML 快照(snap/):慢卡在跨源隔离舞台上挂载活 DOM(SLOW)、不出「需要本地 PC 渲染辅助」图标,不请求 snap/,时间轴不挂徽标
+  await A.page.evaluate(() => window.__pcStore.actions.seek(10));
+  const slowLive = await until('A 慢卡在跨源隔离舞台挂载活 DOM 且不出不支持图标', async () => {
     const s = await A.stageState([V.slow], PROBES);
-    return s?.[V.slow]?.snapshot && /SNAP/.test(s[V.slow].snapText ?? '') ? s : null;
+    return s?.[V.slow]?.live && s[V.slow].text === 'SLOW' && s[V.slow].reason !== 'unsupported' ? s : null;
   }, 60_000, 500);
-  check('E6 渲染节点的预渲染结果写进层表后,舞台里慢卡贴出快照,没有图标', !!snap && !snap[V.slow].placeholderShown, snap);
-  check('E6 慢卡的快照字节是经 snap/ 取到的(请求 > 0);时间轴上慢卡不挂徽标', assetLog.some((r) => r.ns === 'snap' && r.hash === layer.full) && !(await A.timeline([V.slow]))[V.slow]?.badge, { snapRequests: assetLog.filter((r) => r.ns === 'snap').length });
+  check('E6 撤除 HTML 快照后:慢卡在跨源隔离舞台挂载活 DOM(SLOW),不出「需要本地 PC 渲染辅助」图标', !!slowLive && slowLive[V.slow].reason !== 'unsupported', slowLive);
+  check('E6 全程不请求已撤除的 snap/ HTML 快照;时间轴上本页能运行的慢卡不挂徽标', assetLog.filter((r) => r.ns === 'snap').length === 0 && !(await A.timeline([V.slow]))[V.slow]?.badge, { snapRequests: assetLog.filter((r) => r.ns === 'snap').length });
   summary.E6 = { probed: heavy?.probed?.length ?? null, suppressed, planClips: plan?.lastClips ?? null };
   await A.stageShot('e6-stage');
 
@@ -685,7 +680,7 @@ try {
   }, 60_000, 500) ?? await A.stageState([V.ns, V.lod], PROBES);
   check('E7 两张坏卡按原做法:舞台里是「电脑 + 离线」图标与「需要本地 PC 渲染辅助」(没有活 DOM)', [V.ns, V.lod].every((id) => badStage?.[id]?.placeholderShown && badStage[id].reason === 'unsupported' && !badStage[id].live && (badStage[id].shownText ?? '').includes(UNSUPPORTED)), badStage);
   const tlBad = await until('A 时间轴上两张坏卡有徽标', async () => { const t = await A.timeline(ALL_V); return t[V.ns]?.badge && t[V.lod]?.badge ? t : null; }, 30_000, 500) ?? await A.timeline(ALL_V);
-  check('E7 时间轴:两张坏卡有徽标(悬停文案「需要本地 PC 渲染辅助」),判轻的卡与有层的慢卡没有', tlBad[V.ns]?.badge && tlBad[V.ns].title === UNSUPPORTED && tlBad[V.lod]?.badge && [V.v, V.snd, V.rel, V.slow].every((id) => !tlBad[id]?.badge), tlBad);
+  check('E7 时间轴:两张坏卡有徽标(悬停文案「需要本地 PC 渲染辅助」),判轻的卡与慢卡没有', tlBad[V.ns]?.badge && tlBad[V.ns].title === UNSUPPORTED && tlBad[V.lod]?.badge && [V.v, V.snd, V.rel, V.slow].every((id) => !tlBad[id]?.badge), tlBad);
   const plan2 = await until('A 清单计划含两张坏卡', async () => { const d = await A.page.evaluate(() => window.__pcPlanPublisher?.() ?? null); return d?.lastClips?.includes(V.ns) && d.lastClips.includes(V.lod) ? d : null; }, 90_000, 1000);
   check('E7 两张坏卡进清单计划(发布补渲,由渲染节点渲)', !!plan2, plan2?.lastClips);
   summary.panel.ns = await A.panelNote(V.ns);
@@ -725,7 +720,7 @@ try {
 
   }
 
-  /* ============================================================ E10 导出:同步卡要渲染节点逐帧渲,没有节点时停在等待 */
+  /* ============================================================ E10 导出:本页能运行的同步卡在跨源隔离舞台活渲导出;不能运行的卡等渲染节点 */
   console.log('\n== E10 导出页');
   {
     const NAME2 = `${NAME}-x`;
@@ -741,23 +736,31 @@ try {
     }) };
     await conn2.ask({ type: 'project.open', projectId: made2.projectId });
     const put2 = await conn2.ask({ type: 'content.put', kind: 'card-source', key: CARD_KEYS['oce-visual'], body: visualSource('OCE', '#33ccff') });
-    check('E10 准备:第二个项目(只有一张同步的画面卡)写进内容库', seeded2.ok === true && put2.type === 'content.stored', { seeded: seeded2.ok, put: put2.type });
+    const putNs2 = await conn2.ask({ type: 'content.put', kind: 'card-source', key: CARD_KEYS['oce-ns'], body: CARDS['oce-ns'] });
+    check('E10 准备:第二个项目(同步画面卡与不支持语法的卡)写进内容库', seeded2.ok === true && put2.type === 'content.stored' && putNs2.type === 'content.stored', { seeded: seeded2.ok, put: put2.type, putNs: putNs2.type });
     const b4 = await launch();
-    const X = await openMember(b4, 'X', { name: NAME2, cardIds: ['oce-visual'] });
-    const EXP_FPS = 30, EXP_COLOR = [10, 140, 60];
-    const setup2 = await X.page.evaluate(() => {
+    const X = await openMember(b4, 'X', { name: NAME2, projectId: made2.projectId, cardIds: ['oce-visual', 'oce-ns'] });
+    await X.page.evaluate(() => {
       const S = window.__pcStore;
       S.actions.editCardProject((p) => ({ ...p, duration: 1,
         tracks: [{ id: 'oce-exp-t', name: '导出', clips: [{ id: 'oce-exp-v', cardId: 'oce-visual', start: 0, end: 1, params: {}, frame: { x: 0, y: 0, w: 1920, h: 1080 } }] }] }));
       S.actions.seek(0.2);
-      const p = S.getState().project;
-      return { projectId: p.id, fps: p.fps || 30 };
     });
-    await until('X 同步卡载入成功', async () => (await X.run())?.run['oce-visual']?.state === 'ready', 120_000, 500);
+    await until('X 同步卡载入成功', async () => (await X.run())?.run['oce-visual']?.state === 'ready' && (await X.run())?.run['oce-ns']?.state === 'unsupported-syntax', 120_000, 500);
     const live2 = await until('X 导出前预览里是活 DOM', async () => (await X.stageState(['oce-exp-v'], { 'oce-exp-v': '[data-oce-visual]' }))?.['oce-exp-v']?.live, 60_000, 500);
     check('E10 导出前:预览里这张判轻的同步卡是活 DOM', !!live2);
-    // 2026-10-13 起在线导出不再取每张卡存好的 HTML 快照:同步来的卡导出时由渲染节点逐帧渲(完整流程在 `online-export-modes-probe.mjs`,那里有真的渲染节点)。
-    // 这里没有渲染节点,核的是:导出停在等待、提示说清楚在等什么、导出页没被打开、两个文档里都没有执行卡片代码
+    // 2026-10-14 §2.2:本页已就绪(ready)的同步卡由跨源隔离导出舞台直接活渲成片,编辑页面顶层文档不执行卡片代码;
+    // 本页不能运行的卡(如 unsupported-syntax 的 oce-ns)没有渲染节点时停在等待、不开导出页
+    const expReady = await X.page.evaluate(() => window.__pcIo.exportVideoBrowser({ maxFrames: 15, originals: true, waitLimit: 2 }));
+    const topMarkReady = await X.page.evaluate(() => globalThis.__pcOceMark ?? null);
+    check('E10 本页就绪(ready)的同步卡:在跨源隔离舞台里直接活渲导出成片,编辑页面顶层文档里没有卡片模块的顶层记号', expReady?.result?.frames === 15 && (expReady?.base64?.length ?? 0) > 1000 && topMarkReady === null, { frames: expReady?.result?.frames, bytes: expReady?.base64?.length ?? 0, topMark: topMarkReady });
+    // 换成不能在浏览器运行的 oce-ns:没有渲染节点时停在等待
+    await X.page.evaluate(() => {
+      const S = window.__pcStore;
+      S.actions.editCardProject((p) => ({ ...p, duration: 1,
+        tracks: [{ id: 'oce-exp-t', name: '导出', clips: [{ id: 'oce-exp-ns', cardId: 'oce-ns', start: 0, end: 1, params: {}, frame: { x: 0, y: 0, w: 1920, h: 1080 } }] }] }));
+      S.actions.seek(0.2);
+    });
     const seen = { frames: 0 };
     let done = false;
     const exportPromise = X.page.evaluate(() => window.__pcIo.exportVideoBrowser({ maxFrames: 15, originals: true, waitLimit: 2 })).then((r) => { done = true; return r; }, (e) => { done = true; return { error: String(e?.message ?? e) }; });
@@ -768,8 +771,8 @@ try {
     }
     const exp = await exportPromise;
     const topMark = await X.page.evaluate(() => globalThis.__pcOceMark ?? null);
-    summary.E10 = { result: exp?.result ?? null, error: exp?.error ?? null, cancelled: exp?.cancelled ?? null, waits: exp?.waits ?? null, exportFrames: seen.frames, topMark };
-    check('E10 没有渲染节点:导出停在等待、没有出成片', !exp?.result && exp?.cancelled === true && !exp?.base64, summary.E10);
+    summary.E10 = { readyExportFrames: expReady?.result?.frames ?? null, result: exp?.result ?? null, error: exp?.error ?? null, cancelled: exp?.cancelled ?? null, waits: exp?.waits ?? null, exportFrames: seen.frames, topMark };
+    check('E10 本页不能运行的卡且没有渲染节点:导出停在等待、没有出成片', !exp?.result && exp?.cancelled === true && !exp?.base64, summary.E10);
     check('E10 等待提示说清楚在等渲染节点(「没有渲染节点在线」那一句,带片段数)', (exp?.waits ?? []).length > 0 && exp.waits.every((w) => /没有渲染节点在线/.test(w) && /1 个片段/.test(w)), exp?.waits);
     check('E10 没到齐不开导出页(不出半截的成片),编辑页面里没有卡片模块的顶层记号', seen.frames === 0 && topMark === null, summary.E10);
     check('E10 导出页那一页没有页面错误', X.pageErrors.length === 0, X.pageErrors.slice(0, 3));

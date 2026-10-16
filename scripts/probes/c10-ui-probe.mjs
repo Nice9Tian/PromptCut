@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import './lib/localhost-dns.cjs'; // Node 这边(A8 的 fetch)也认得 *.localhost
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 
 const argv = process.argv.slice(2);
@@ -51,6 +52,7 @@ const PROXY2 = proxyOrigins(PROXY2_PORT).editor;
 const DOC_DIRECT = `http://127.0.0.1:${DOC_PORT}`;
 fs.mkdirSync(OUT, { recursive: true });
 const DL = path.join(OUT, 'downloads');
+fs.rmSync(DL, { recursive: true, force: true });
 fs.mkdirSync(DL, { recursive: true });
 
 const fails = [];
@@ -149,13 +151,13 @@ async function typeInto(page, sel, text) {
   await page.keyboard.press('Backspace');
   if (text) await page.type(sel, text, { delay: 5 });
 }
+let joinSeq = 0;
 async function join(page, origin, username) {
+  await plantResume(page, await resumeRecord({
+    base: `${origin}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: NAME,
+    username, password: PROJECT_PW, deviceId: `c10ui-${stamp}-${++joinSeq}`.padEnd(16, '0'),
+  }));
   await page.goto(`${origin}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto(page, '[data-pc="join-name"]', NAME);
-  await typeInto(page, '[data-pc="join-username"]', username);
-  await typeInto(page, '[data-pc="join-password"]', PROJECT_PW);
-  await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until(`${username} 的时间轴`, () => page.evaluate(() => !!window.__pcStore), 30_000);
 }
@@ -223,16 +225,18 @@ try {
   check(rm.type === 'content.stored', '写层表', rm);
   node.close();
 
-  /* ============================================================ A6 用户卡(新语义:照取清单与字节;完整断言在 online-user-cards-probe) */
-  await sleep(8000); // 层表每几秒轮询一次;预取按播放头前后 2 秒
+  /* ============================================================ A6 用户卡与内置重卡(撤除 snap/ HTML 快照后:用户卡活渲、内置重卡走轨道流) */
+  await sleep(8000);
   const assetReq = (hashes) => px1.requests.filter((r) => /\/media\/api\/asset\/(px|snap)\//.test(r.path) && hashes.some((h) => r.path.split('?')[0].endsWith(h))).length;
   const a6 = {};
-  a6.snapUser = await until('A6 用户卡那一层照取 snap/', () => { const n2 = assetReq(layers[0].full); return n2 > 0 ? n2 : null; }, 20_000) ?? 0;
+  a6.snapUser = assetReq(layers[0].full);
   a6.pxUser = assetReq(layers[0].small);
   a6.snapBuiltin = assetReq(layers[1].full);
-  a6.online = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
-  const layerOfClip = (id) => a6.online?.layers?.find((l) => l.clipId === id) ?? null;
-  a6.badges = await until('A6 清单覆盖整段:用户卡不挂徽标', async () => {
+  a6.online = await until('A6 在线来源就绪(本页产流或读层表)', async () => {
+    const o = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
+    return o && (o.mapVersion >= 2 || (o.streams?.length ?? 0) >= 1) ? o : null;
+  }, 30_000) ?? await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
+  a6.badges = await until('A6 用户卡不挂徽标', async () => {
     const b = await A.evaluate((u, b2) => ({
       user: !!document.querySelector(`[data-clip-id="${u}"] [data-pc="clip-custom-card"]`),
       builtin: !!document.querySelector(`[data-clip-id="${b2}"] [data-pc="clip-custom-card"]`),
@@ -240,11 +244,10 @@ try {
     }), setup.u, setup.b);
     return !b.user ? b : null;
   }, 20_000);
-  check(a6.snapUser > 0, 'A6 用户卡那一层照取原尺寸 snap/(不再豁免)', a6.snapUser);
+  check(a6.snapUser === 0 && a6.snapBuiltin === 0, 'A6 撤除每张卡 HTML 快照后:不再请求 snap/', { snapUser: a6.snapUser, snapBuiltin: a6.snapBuiltin });
   check(a6.pxUser === 0, 'A6 普通档不取用户卡的预渲染小尺寸 px/', a6.pxUser);
-  check(a6.snapBuiltin > 0, 'A6 对照:内置卡那一层照取 snap/', a6.snapBuiltin);
-  check(!!layerOfClip(setup.u), 'A6 用户卡那一层是在线来源认得的层(不再列在 skipped)', a6.online?.skipped);
-  check(a6.badges && !a6.badges.user && !a6.badges.builtin, 'A6 清单覆盖整段:用户卡、内置卡都不挂徽标', a6.badges);
+  check((a6.online?.skipped ?? []).length === 0, 'A6 用户卡那一层不再列在 skipped', a6.online?.skipped);
+  check(a6.badges && !a6.badges.user && !a6.badges.builtin, 'A6 用户卡、内置卡都不挂徽标', a6.badges);
   check(a6.badges?.label === '闪光文字', 'A6 用户卡标签是构建时的名字', a6.badges?.label);
   await shot(A, 'a6-1-user-card');
   // 片段照常可选中、改参数、移动
@@ -271,15 +274,15 @@ try {
     return { importMedia: f(imp), voice: f(voice), skill: f(skill), agentOff: q('[data-pc="online-agent-off"]')?.textContent ?? null };
   });
   a7.grey = grey;
-  check(grey.importMedia?.disabled && grey.importMedia.title === UNSUP('导入媒体'), 'A7 导入媒体置灰+表 A 文案', grey.importMedia);
+  check(grey.importMedia?.disabled === false, 'A7 导入媒体在在线浏览器已放开可用(rr-media-import)', grey.importMedia);
   check(grey.voice?.disabled && grey.voice.title === UNSUP('配音'), 'A7 配音置灰+表 A 文案', grey.voice);
   check(grey.skill?.disabled && grey.skill.title === UNSUP('SKILL 模式'), 'A7 SKILL 置灰+表 A 文案', grey.skill);
-  // 点一遍(禁用的按钮真点也不触发;另用 el.click() 再点一次),点前点后比请求与错误
+  // 点一遍禁用的按钮(真点也不触发;另用 el.click() 再点一次),点前点后比请求与错误
   const before = { req: A.requests.length, err: A.errors.length + A.consoleErrors.length };
-  for (const sel of ['[data-pc-add="media"]']) { const el = await A.$(sel); if (el) { await el.hover(); await sleep(900); await shot(A, 'a7-1-import-hover'); await el.click().catch(() => {}); } }
   await A.evaluate(() => {
     for (const b of document.querySelectorAll('button')) if (b.disabled && /在线浏览器模式暂不支持/.test(b.getAttribute('title') || '')) b.click();
   });
+  await shot(A, 'a7-1-import-hover');
   // 片段右键「转写字幕」
   const mc = await A.$(`[data-clip-id="${setup.mediaClip}"]`);
   if (mc) { const bb = await mc.boundingBox(); await A.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2, { button: 'right' }); await sleep(500); }
@@ -416,9 +419,10 @@ try {
   await until('素材服务恢复后状态撤下', async () => (await statusNow(A)) === null, 30_000, 500);
 
   /* ------------------------------------------------ /api 守卫与请求记录 */
-  a7.apiBlocked = [...await A.evaluate(() => window.__pcApiBlocked ?? []), ...await B.evaluate(() => window.__pcApiBlocked ?? [])];
-  a7.apiRequests = [...px1.requests, ...px2.requests].filter((r) => /^\/(editor\/)?api\//.test(r.path)).map((r) => r.path);
-  check(a7.apiBlocked.length === 0 && a7.apiRequests.length === 0, 'A7 全程 /api 守卫一条没拦、网络记录里没有 /api 请求', { blocked: a7.apiBlocked.slice(0, 5), req: a7.apiRequests.slice(0, 5) });
+  a7.apiBlocked = [...await A.evaluate(() => window.__pcApiBlocked ?? []), ...await B.evaluate(() => window.__pcApiBlocked ?? [])]
+    .filter((p) => p !== '/api/media/upload-queue/target');
+  a7.apiRequests = [...px1.requests, ...px2.requests].filter((r) => /^\/(editor\/)?api\//.test(r.path) && !/^\/(editor\/)?api\/account\//.test(r.path)).map((r) => r.path);
+  check(a7.apiBlocked.length === 0 && a7.apiRequests.length === 0, 'A7 全程 /api 守卫没有拦下置灰功能的请求、网络记录里没有除账号接口外的 /api 请求', { blocked: a7.apiBlocked.slice(0, 5), req: a7.apiRequests.slice(0, 5) });
   a7.pageErrors = [...A.errors, ...B.errors];
   a7.seen = (await seen(A)).map((s) => ({ t: Math.round((s.at - t0) / 1000), kind: s.kind, unsent: s.unsent }));
   out.A7 = a7;

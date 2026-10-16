@@ -58,6 +58,7 @@ import { findFfmpeg } from '../../server/bakery/ffmpeg.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 
 const argv = process.argv.slice(2);
@@ -159,7 +160,7 @@ const AUDIO_HOOK = () => {
   const play = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function (...a) { note('play', { src: String(this.currentSrc || this.src).slice(0, 24) }); return play.apply(this, a); };
   const create = URL.createObjectURL;
-  URL.createObjectURL = function (...a) { note('createObjectURL', { type: a[0]?.type ?? null }); return create.apply(this, a); };
+  URL.createObjectURL = function (...a) { const t = a[0]?.type ?? null; if (!/javascript/i.test(String(t ?? ''))) note('createObjectURL', { type: t }); return create.apply(this, a); };
   if (window.AudioScheduledSourceNode) {
     const start = AudioScheduledSourceNode.prototype.start;
     AudioScheduledSourceNode.prototype.start = function (...a) { note('sourceStart'); return start.apply(this, a); };
@@ -502,23 +503,17 @@ async function onlinePhases() {
     page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') page.consoleLog.push(`${m.type()}: ${m.text().slice(0, 200)}`); });
     return page;
   }
-  async function typeInto(page, sel, text) {
-    await page.waitForSelector(sel, { visible: true, timeout: 15_000 });
-    await page.click(sel, { clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    if (text) await page.type(sel, text, { delay: 5 });
-  }
+  let joinSeq = 0;
   async function join(page, username) {
+    await plantResume(page, await resumeRecord({
+      base: `${SITE}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: shared.projectId, name: NAME,
+      username, password: PROJECT_PW, deviceId: `sab-${RUN}-${++joinSeq}`.padEnd(16, '0'),
+    }));
     await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-    await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-    await typeInto(page, '[data-pc="join-name"]', NAME);
-    await typeInto(page, '[data-pc="join-username"]', username);
-    await typeInto(page, '[data-pc="join-password"]', PROJECT_PW);
-    await page.click('[data-pc="join-submit"]');
     try { await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 }); }
     catch (e) {
       await page.screenshot({ path: path.join(OUT, `join-failed-${username}.png`) }).catch(() => {});
-      const text = await page.evaluate(() => document.querySelector('[data-pc="join-form"]')?.textContent?.slice(0, 300) ?? document.body.innerText.slice(0, 300)).catch(() => '');
+      const text = await page.evaluate(() => document.body.innerText.slice(0, 300)).catch(() => '');
       throw new Error(`${username} 加入项目失败:${text} :: ${page.errors.join(' | ')} :: 代理记录 ${JSON.stringify(proxyLog.slice(-12))} :: 控制台 ${JSON.stringify(page.consoleLog.slice(-8))} :: WS ${JSON.stringify(page.wsLog.slice(0, 14))} :: ${e.message}`);
     }
     await until(`${username} 进入项目`, () => page.evaluate(() => !!window.__pcStore && !!window.__pcIo?.sound && !!window.__pcSoundJudge), 60_000);

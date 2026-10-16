@@ -151,6 +151,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecordFromInvite, plantResume } from './lib/online-resume-entry.mjs';
 import { judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations, parseTaskId } from './m8/lib.mjs';
 import { clipWeight } from '../../src/render/pipelinePlan.mjs';
 import { createTimings } from './probe-timings.mjs';
@@ -1508,10 +1509,11 @@ try {
   const member = await newPage(memberCtx);
   state.member = member;
   docHeaders.length = 0;
-  await member.goto(`${EDITOR}#invite=${codeOf(state.link)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await member.waitForSelector('[data-pc="join-invite-project"]', { visible: true, timeout: 60_000 });
-  await typeInto(member, '[data-pc="join-username"]', '电脑成员');
-  await member.click('[data-pc="join-submit"]');
+  await plantResume(member, await resumeRecordFromInvite({
+    base: HOSTED, derivationBase: HOSTED, code: codeOf(state.link),
+    username: '电脑成员', deviceId: `c10b-member-${RUN}`.padEnd(16, '0'),
+  }));
+  await member.goto(EDITOR, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   if (!check(await waitMembers(member).then(() => true, () => false), '成员凭邀请链接进入', { message: await joinMessage(member) })) throw new Error('成员没进去');
   // A2 第一句:首次打开在加载遮罩下测完
   let gateSeen = false;

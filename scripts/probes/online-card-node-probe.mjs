@@ -48,6 +48,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -268,19 +269,19 @@ async function typeInto(page, sel, text) {
   if (text) await page.type(sel, text, { delay: 5 });
 }
 const nodeDiag = (page) => P(page, () => { try { return JSON.parse(JSON.stringify(window.__pcBrowserNode?.() ?? null)); } catch { return null; } }).catch(() => null);
-async function openMember(label, projName, username, projectPassword) {
+let sharedProjectId = null;
+async function openMember(label, projName, username, projectPassword, projectId = sharedProjectId) {
   const { default: puppeteer } = await import('puppeteer');
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   page.label = label;
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e?.message ?? e).slice(0, 200)));
+  await plantResume(page, await resumeRecord({
+    base: HOSTED, derivationBase: `${DOC_DIRECT}/`, projectId, name: projName,
+    username, password: projectPassword, deviceId: `ocn-m-${username}-${RUN}`.padEnd(16, '0'),
+  }));
   await page.goto(EDITOR, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto(page, '[data-pc="join-name"]', projName);
-  await typeInto(page, '[data-pc="join-username"]', username);
-  await typeInto(page, '[data-pc="join-password"]', projectPassword);
-  await page.click('[data-pc="join-submit"]');
   const entered = await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 120_000 }).then(() => true, () => false);
   if (!check(entered, `成员${label}进入项目`)) throw new Error(`成员${label}没进去`);
   await until(`成员${label}页双舞台握上手`, async () => P(page, () => { const d = window.__pcPreviewDiag?.(); return d?.dual && d.onlineStages?.handshake === 'ok'; }), 120_000, 500);
@@ -331,6 +332,7 @@ try {
   const creator = { username: 'ocn-creator', password: `pw-${randomBytes(6).toString('hex')}` };
   const projectPassword = `pp-${randomBytes(6).toString('hex')}`;
   const made = await createSharedProject({ base: DOC_DIRECT, name: projName, mode: 'free', creator, password: projectPassword });
+  sharedProjectId = made.projectId;
   const seeded = await seedSharedProject({ base: DOC_DIRECT, projectId: made.projectId, creator, name: projName });
   check(seeded.ok, '替创建者写进空项目', seeded);
   const adminLink = await creatorContent(made.projectId, creator, 'admin');
@@ -349,7 +351,7 @@ try {
   /* ---------------------------------------------------------------- 1. 甲(本人)进入,当节点;A-0 */
   const A = await openMember('甲', projName, 'ocn-member-a', projectPassword);
   const clipA = await addCardClip(A, 'from-a');
-  const ready = await until('甲页面当节点、报到拿到指纹', async () => { const d = await nodeDiag(A); return d?.ready === 'ready' && d.envFingerprint ? d : null; }, 240_000, 500);
+  const ready = await until('甲页面当节点、报到拿到指纹', async () => { const d = await nodeDiag(A); return d?.ready === 'ready' && d.envFingerprint && d.eligibility?.ok ? d : null; }, 240_000, 500);
   check(ready?.eligibility?.ok, 'A-0 当节点的条件成立', ready?.eligibility);
   out.steps.ready = ready && { envFingerprint: ready.envFingerprint, cardEnvFingerprint: ready.cardEnvFingerprint, cards: ready.cards, nodeId: ready.nodeId };
   say('node.ready', out.steps.ready ?? {});
