@@ -58,13 +58,13 @@
 | `server/hosted/run-assets-current-registry.mjs` | 闭合 `validateRunAssetCurrentRecord` 的 `if` 条件语法错误；在 `boot-transition` 与 `cgroup-empty` 分支分别严密校验 `cgroup`、`unitInvocationId`、`pidBirth` 以及 `bootId` 关系。 |
 | `server/hosted/deploy/asset-root-registry-publisher.mjs` | 移除 `publisher-cross-boot-unsupported`；`createRootScopeRuntimeV2` 支持 `crossBoot` 跨开机检测生成 `kind: 'boot-transition'` 的 11 键纯净关闭/失败见证；在 `configuration` 中正确处理操作系统重启后 `/run` (tmpfs) 下临时 drop-in 随机消亡的情形，支持以 `previous: null` 干净重写新 drop-in。 |
 | `server/hosted/asset-root-registry-schema-v2.mjs` | `validateAssetRootWitnessV2` 移除多余的第 3 参数，支持 11 键 `boot-transition` 见证；`validateAssetRootRecordV2` 移除 `p.instance.bootId !== value.instance.bootId`，并在 `validateAssetRootPublicationV2` 中严密校验世代之间 `bootId` 的变化必须与 witness kind 一致。 |
-| `server/hosted/agent-run-scope-schema.mjs` | `validateAgentScopeClosure` 与 `validateAgentScopeFailure` 移除多余的第 3 参数；`validateAgentScopeHistory` 严密加固：若 `previous.closure.observed.kind === 'boot-transition'` 则必须满足 `r.instance.bootId !== previous.record.instance.bootId`（严防同 boot 伪造），若非 `boot-transition` 则必须满足 `r.instance.bootId === previous.record.instance.bootId`。 |
+| `server/hosted/agent-run-scope-schema.mjs` | `validateAgentScopeClosure` 与 `validateAgentScopeFailure` 移除多余的第 3 参数；`validateAgentScopeHistory` 严密加固：若 `previous.closure.observed.kind === 'boot-transition'` 则必须满足 `r.instance.bootId !== previous.record.instance.bootId`（严防同 boot 伪造），而对于已正常关闭处于空闲（`cgroup-empty`）的槽，放行其跨重启在新 boot 下开启新代。 |
 | `server/test/asset-root-registry-publisher.test.mjs` | 增加 `publishAssetRootRegistryV2` 跨 boot 轮转成功单测、同 boot 伪造 boot-transition 被拒单测，以及重启后 `/run` 临时 drop-in 消失重写单测。 |
 | `server/test/upload-enqueue-existing.test.mjs` | 增加 `UQE-8`（测试队列 `cancel` 中止分片及移出队列）与 `UQE-9`（测试 `/api/media/upload-queue/cancel` 接口清理在途文件且不误删已完成文件）。 |
 | `server/test/cloud-tools-wire.test.mjs` | 更新 `WIRE-TABLE` 与 `WIRE-SET` 测试用例，验证 `collectDelegate` 缺省开启、显式设为 `0` 或 `false` 关闭。 |
 | `server/test/cloud-tools-c1-page.test.mjs` | 增加 `C1-PAGE-07`，验证桌面提示条状态随代下起止动态切换，且取消时当场调用 `upload.cancel`。 |
 | `server/test/agent-run-scope-fixture.mjs` | `scopeModel` 增加 `reboot(newBootId)` 支持，模拟跨 boot 开机号变化与 `crossBoot` 关闭。 |
-| `server/test/account-root-slots.test.mjs` | 增加重启自动恢复单测，验证节点重启后接手旧世代、写失败记录、文档服务签发 `worker-failed`、强制关闭并释放锁，新世代在新 boot 下顺利开跑。 |
+| `server/test/account-root-slots.test.mjs` | 增加重启自动恢复单测，验证节点重启后接手旧世代、写失败记录、文档服务签发 `worker-failed`、强制关闭并释放锁，新世代在新 boot 下顺利开跑；并补验空闲 closed 槽跨重启后直接正常 open 开新世代。 |
 
 ---
 

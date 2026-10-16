@@ -317,6 +317,26 @@ test('节点重启后任务槽自动恢复：跨 boot_id 自动接续，卡住�
     const record3 = s.m.files.get('epoch-3.json');
     assert.equal(record3.instance.bootId, REBOOT_BOOT_ID, '第 3 代运行在新的 bootId 下');
     assert.equal(digestOf(s.m.files.get('anchor.json')), anchorDigest, '锚点链完整，无需重跑 bootstrap');
+
+    // 5. 槽正常结清回到 closed（空闲）状态后，再次经历节点重启（bootId 变为 BOOT_3），验证空闲槽仍能正常 open 开下一代
+    pending.conversations = [];
+    s.workers.get(3).settle({ kind: 'normal', ...s.m.closing() });
+    await until(() => scheduler.describe()[0].phase === 'idle', '第 3 代正常结清回到 idle');
+    assert.equal((await rebootAdapter.current()).phase, 'closed');
+    const closure3 = s.m.files.get('closure-3.json');
+    assert.equal(closure3.observed.kind, 'cgroup-empty', '第 3 代是同 boot 下正常关闭的 cgroup-empty');
+    await scheduler.stop();
+
+    // 模拟槽处于空闲 closed 状态时经历节点重启
+    const REBOOT_BOOT_ID_3 = '33333333-3333-3333-3333-333333333333';
+    s.m.reboot(REBOOT_BOOT_ID_3);
+    const idleRebootAdapter = createRootSlotAdapter(s.options());
+    assert.equal((await idleRebootAdapter.current()).phase, 'closed', '重启后空闲槽仍处于 closed 状态');
+    const opened4 = await idleRebootAdapter.open();
+    assert.equal(opened4.rootScopeRef.epoch, 4);
+    const record4 = s.m.files.get('epoch-4.json');
+    assert.equal(record4.instance.bootId, REBOOT_BOOT_ID_3, '空闲槽跨重启后第 4 代在新 boot 下顺利开启');
+    assert.equal(digestOf(s.m.files.get('anchor.json')), anchorDigest, '锚点链依然完整');
   } finally {
     await scheduler.stop();
   }

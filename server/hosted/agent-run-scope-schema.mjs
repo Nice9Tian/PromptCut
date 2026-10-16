@@ -170,7 +170,7 @@ export function validateAgentScopeHistory({ expected, anchor, configuredAnchorDi
       if (anchor.firstRecordDigest !== digestOf(r)) failScope('history');
     } else {
       if (r.previousClosureDigest !== digestOf(previous.closure)) failScope('history');
-      if (previous.closure.observed.kind === 'boot-transition' ? r.instance.bootId === previous.record.instance.bootId : r.instance.bootId !== previous.record.instance.bootId)
+      if (previous.closure.observed.kind === 'boot-transition' && r.instance.bootId === previous.record.instance.bootId)
         failScope('history');
     }
     for (const id of [`instance:${r.instance.instanceId}`, `scope:${r.closureScope.scopeId}`, `unit:${r.closureScope.unit}`,
