@@ -81,6 +81,11 @@ export function createAccountClient({ origin, tls, serverFingerprint256, timeout
       const result = await request('GET', `${INTERNAL_PATHS.events}?after=${after}`);
       try { return validateEventBatch(result, after); } catch { throw accountError(503, 'account-event-gap'); }
     },
+    async revocations(since = 0) {
+      const result = await request('GET', `${INTERNAL_PATHS.revocations}?since=${since}`)
+        .catch(() => request('GET', `${INTERNAL_PATHS.events}?after=${since}`));
+      try { return validateEventBatch(result, since); } catch { throw accountError(503, 'account-event-gap'); }
+    },
     ack(eventId, receipt) {
       requireRequestId(receipt.receiptId);
       return request('POST', `${INTERNAL_PATHS.events}/${encodeURIComponent(eventId)}/ack`, receipt);

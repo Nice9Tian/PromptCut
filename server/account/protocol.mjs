@@ -6,6 +6,7 @@ export const LOGIN_KINDS = Object.freeze(['website', 'editor']);
 export const REVOCATION_SERVICES = Object.freeze(['doc', 'asset', 'agent', 'render']);
 export const INTERNAL_PATHS = Object.freeze({
   verify: '/internal/v2/credentials/verify', events: '/internal/v2/events',
+  revocations: '/internal/v2/revocations',
   consent: '/internal/v2/consents', reserve: '/internal/v2/order/reserve',
   logoutComplete: '/internal/v2/order/logout-complete',
   permissions: '/internal/v2/permissions',
@@ -43,17 +44,21 @@ export function validateAccountPrincipal(value) {
 }
 export function validateAccountEvent(value) {
   if (!value || value.v !== 2 || value.issuer !== 'visuhive-account' ||
-      !['password-changed', 'credentials-revoked'].includes(value.type) ||
+      !['password-changed', 'credentials-revoked', 'logout', 'account-deleted', 'member-kicked', 'member-removed'].includes(value.type) ||
       typeof value.eventId !== 'string' || !value.eventId) fail('bad-event');
-  requireAccountId(value.accountId); requireSequence(value.seq); requireSequence(value.changeSeq);
-  if (value.seq < 1 || value.changeSeq < 1 || !Array.isArray(value.oldLoginIds) || value.oldLoginIds.some((id) => typeof id !== 'string' || !id) || new Set(value.oldLoginIds).size !== value.oldLoginIds.length) fail('bad-event');
-  if (value.revokedLoginIds !== undefined && (!Array.isArray(value.revokedLoginIds) ||
-      value.revokedLoginIds.some((id) => typeof id !== 'string' || !id || !value.oldLoginIds.includes(id)) ||
-      new Set(value.revokedLoginIds).size !== value.revokedLoginIds.length)) fail('bad-event');
-  if (!Number.isSafeInteger(value.changedAt) || value.changedAt < 0 ||
-      (value.type === 'password-changed' && (typeof value.initiatorWebsiteLoginId !== 'string' || !value.initiatorWebsiteLoginId)) ||
-      (value.initiatorWebsiteLoginId != null && typeof value.initiatorWebsiteLoginId !== 'string')) fail('bad-event');
-  return value;
+  requireAccountId(value.accountId); requireSequence(value.seq);
+  const changeSeq = value.changeSeq ?? value.seq;
+  requireSequence(changeSeq);
+  const oldLoginIds = value.oldLoginIds ?? (value.loginIds ? [...value.loginIds] : (value.sessionId ? [value.sessionId] : []));
+  if (value.seq < 1 || changeSeq < 1 || !Array.isArray(oldLoginIds) || oldLoginIds.some((id) => typeof id !== 'string' || !id) || new Set(oldLoginIds).size !== oldLoginIds.length) fail('bad-event');
+  const revokedLoginIds = value.revokedLoginIds ?? (value.type === 'credentials-revoked' ? oldLoginIds : undefined);
+  if (revokedLoginIds !== undefined && (!Array.isArray(revokedLoginIds) ||
+      revokedLoginIds.some((id) => typeof id !== 'string' || !id || !oldLoginIds.includes(id)) ||
+      new Set(revokedLoginIds).size !== revokedLoginIds.length)) fail('bad-event');
+  if (value.changedAt !== undefined && (!Number.isSafeInteger(value.changedAt) || value.changedAt < 0)) fail('bad-event');
+  if (value.type === 'password-changed' && (typeof value.initiatorWebsiteLoginId !== 'string' || !value.initiatorWebsiteLoginId)) fail('bad-event');
+  if (value.initiatorWebsiteLoginId != null && typeof value.initiatorWebsiteLoginId !== 'string') fail('bad-event');
+  return { ...value, changeSeq, oldLoginIds, ...(revokedLoginIds ? { revokedLoginIds } : {}) };
 }
 export function validateEventBatch(value, after = 0) {
   // This validates one page. The doc consumer must persist each receipt and pull to head before opening access.

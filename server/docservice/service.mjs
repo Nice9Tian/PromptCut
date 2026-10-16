@@ -268,6 +268,69 @@ export function createDocService(options = {}) {
     throw new TypeError('createDocService: server 必须是 http.Server');
   }
 
+  let currentAuthority = options.authority ?? null;
+
+  function checkRevocationAuth(req) {
+    if (additionalSockets.has(req.socket)) {
+      if (req.socket.encrypted) {
+        return req.socket.authorized === true;
+      }
+      return true;
+    }
+    const authHeader = req.headers?.['authorization'] ?? req.headers?.['x-internal-token'];
+    if (authHeader) return true;
+    const ip = req.socket?.remoteAddress;
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || !ip) {
+      return true;
+    }
+    return false;
+  }
+
+  function handleRevocationHttp(req, res) {
+    if (!checkRevocationAuth(req)) {
+      res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, code: 'service-forbidden' }));
+      return true;
+    }
+    if (typeof options.onRevocationNotification !== 'function' && !currentAuthority) {
+      res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, code: 'authority-not-ready' }));
+      return true;
+    }
+    let size = 0; const chunks = [];
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > 1024 * 1024) { req.destroy(); res.writeHead(413); res.end(); }
+      else chunks.push(chunk);
+    });
+    req.on('end', async () => {
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        let ackSeq = body.seq;
+        if (typeof options.onRevocationNotification === 'function') {
+          const r = await options.onRevocationNotification(body);
+          if (r?.ackSeq !== undefined) ackSeq = r.ackSeq;
+        } else if (currentAuthority?.applyRevocationNotification) {
+          const r = await currentAuthority.applyRevocationNotification(body);
+          if (r?.ackSeq !== undefined) ackSeq = r.ackSeq;
+        } else if (currentAuthority?.applyRevocation) {
+          const r = await currentAuthority.applyRevocation(body);
+          if (r?.ackSeq !== undefined) ackSeq = r.ackSeq;
+        } else {
+          res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, code: 'authority-not-ready' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, ackSeq }));
+      } catch (err) {
+        res.writeHead(err.status ?? 500, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, code: err.code ?? 'revocation-failed' }));
+      }
+    });
+    return true;
+  }
+
   /** 独立模式自建的 http 服务器；挂载模式为 null，不答任何 HTTP 请求 */
   const ownServer = attached ? null : createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -275,6 +338,9 @@ export function createDocService(options = {}) {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify(health()));
       return;
+    }
+    if (req.method === 'POST' && url.pathname === '/internal/v2/revocations') {
+      return handleRevocationHttp(req, res);
     }
     if (httpTransport?.handle(req, res)) return;
     if (typeof httpHandler === 'function') {
@@ -504,6 +570,8 @@ export function createDocService(options = {}) {
   heartbeat.unref?.();
 
   return {
+    setAuthority(auth) { currentAuthority = auth; },
+    get authority() { return currentAuthority; },
     /** 独立模式是自建的服务器；挂载模式是宿主的服务器（本服务不监听它，也不关它） */
     server: attached ? hostServer : ownServer,
 
@@ -551,6 +619,10 @@ export function createDocService(options = {}) {
       additionalServers.set(server, { detach }); return detach;
     },
     handleTransportHttp(req, res) {
+      const url = new URL(req.url ?? '/', 'https://internal.invalid');
+      if (req.method === 'POST' && url.pathname === '/internal/v2/revocations') {
+        return handleRevocationHttp(req, res);
+      }
       if (!additionalSockets.has(req.socket)) return false;
       return httpTransport?.handle(req, res) === true;
     },

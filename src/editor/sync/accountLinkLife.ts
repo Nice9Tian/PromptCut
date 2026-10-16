@@ -106,27 +106,17 @@ export function createAccountLinkLife(o: AccountLinkLifeOptions) {
     opened(): void {
       active = issued;
     },
-    /** 调用方每几秒调一次 */
+    /** 调用方每几秒调一次。按 2026-10-14 用户定：已经建好的连接不再按时间失效，也不轮询；失效一律由账号服务主动通知。 */
     async tick(): Promise<TickResult> {
       const link = o.link();
-      if (busySince !== null) {
-        // 换会话那一步挂住了(取票据的请求不回):到期之后不能一直等着,页面这时显示在线却写不进
-        if (link && link.connected && active?.trusted && active.at - now() <= 0 && now() - busySince > BUSY_EXPIRE_MS) return expire(link);
-        return "busy";
-      }
+      if (busySince !== null) return "busy";
       // 没有会话(正在断线重连)时不管:重连那条路本来就凭新票据建会话
       if (!link || !link.connected || active === null) return "idle";
-      const left = active.at - now();
-      // 已经过期(睡眠醒来):这条连接上后来做的改动文档服务没收,不能悄悄补发 —— 按断线处理,走离线重连的版本核对
-      if (left <= 0 && active.trusted) return expire(link);
-      if (left > margin && accessSeq === handledSeq) return "idle";
-      if (now() - lastRenewAt < minGap) return "idle";
-      const expiring = active;
-      const r = await swap();
-      if (r !== "retry") return r;
-      // 没换成:还没到期就等下一次;已经到期,这条连接是坏的,如实转离线
-      if (active === expiring && expiring.trusted && expiring.at - now() <= 0 && o.link() === link && link.connected) return expire(link);
-      return "retry";
+      // 只有权限变更（如只读改可写）需要换会话
+      if (accessSeq !== handledSeq && now() - lastRenewAt >= minGap) {
+        return swap();
+      }
+      return "idle";
     },
     /** 文档服务回了「凭证到期」:这条连接已经写不进去。不换(理由同上),按断线处理 */
     async authExpired(): Promise<TickResult> {

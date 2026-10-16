@@ -116,6 +116,10 @@ try {
   check(debugBlock.hidden === false && /^event: pw_[0-9a-f]+\nreason: confirmation-timeout\nwaited: \d+s \(limit \d+s\)\nconfirmed: -\npending: doc, asset, agent, render\ndoc confirmed: agent, render\ndoc pending: doc, asset\ndoc reasons: logout-pending:doc,asset$/.test(debugBlock.text),
     'debug-block-content', debugBlock.text);
   check(!/token|ticket|Bearer|login_|cred_|[A-Za-z0-9_-]{40,}/.test(debugBlock.text), 'debug-block-has-no-secrets');
+  const detailsState = await page.$eval('#password-event-details', el => ({ hidden: el.hidden, open: el.open })).catch(() => null);
+  if (detailsState) {
+    check(detailsState.hidden === false && detailsState.open === false, 'details-collapsed-by-default', detailsState);
+  }
   await shot('05-after-timeout-failed');
   // 迟到的确认：素材服务起来以后，页面照实变成已退出。
   await fixture.startAsset(); assetUp = true;

@@ -228,6 +228,7 @@ export function createSharedDocService({
 
   const service = createDocService({
     ...serviceOptions,
+    ...(accountRuntime ? { authority: accountRuntime.authority } : {}),
     gate(principal, type, msg) {
       const reason = isProjectId(principal?.tenantId) ? roomUnavailableReason(storeOf()?.peek(principal.tenantId)) : null;
       // 托管方服务身份：白名单（缺省拒绝），再核对登记表与项目的开关
@@ -248,6 +249,7 @@ export function createSharedDocService({
     ...(say ? { log: say } : {}),
   });
   accountRuntime?.bindService(service, { registry, urls: hostedServiceUrls ?? {} });
+  if (accountRuntime?.authority) service.setAuthority?.(accountRuntime.authority);
 
   const localStore = dataDir ? createFileStore({ dir: dataDir, ...(say ? { log: say } : {}) }) : createMemoryStore();
   const tenantDir = (space) => (dataDir && isProjectId(space) ? path.join(dataDir, 'tenants', space) : null);
