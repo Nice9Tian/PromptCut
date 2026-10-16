@@ -125,23 +125,19 @@ export function validateRunAssetCurrentRecord({ record, witness = null, trustAnc
       'previousRegistry', 'observed']) || witness.v !== 1 ||
         witness.protocol !== 'promptcut.asset-os-closure.v1' || !text(witness.witnessId) ||
         witness.authorityId !== record.authorityId || witness.fromEpoch !== previous.epoch ||
-        witness.toEpoch !== record.epoch || digestOf(witness) !== previous.closureWitnessDigest ||
+        witness.toEpoch !== record.epoch || digestOf(witness) !== previous.closureWitnessDigest)
+      fail('asset-current-witness-invalid');
     const o = witness.observed;
-    if (o?.kind === 'boot-transition') {
-      if ((!keys(o, ['kind', 'closed', 'at', 'bootId', 'cgroup', 'unitInvocationId', 'pidBirth']) &&
-           !keys(o, ['kind', 'closed', 'at', 'bootId', 'previousBootId', 'cgroup', 'unitInvocationId', 'pidBirth']) &&
-           !keys(o, ['kind', 'closed', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'populated', 'serviceInactive', 'mainBirthGone']) &&
-           !keys(o, ['kind', 'closed', 'at', 'bootId', 'previousBootId', 'currentBootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'populated', 'serviceInactive', 'mainBirthGone'])) ||
-          o.closed !== true || !Number.isSafeInteger(o.at) || o.at < 1)
-        fail('asset-current-witness-invalid');
+    if (!keys(o, ['kind', 'closed', 'at', 'bootId', 'cgroup', 'unitInvocationId', 'pidBirth']) ||
+        (o.kind !== 'cgroup-empty' && o.kind !== 'boot-transition') || o.closed !== true ||
+        !Number.isSafeInteger(o.at) || o.at < 1 ||
+        !same(o.cgroup, previous.instance.cgroup) ||
+        o.unitInvocationId !== previous.instance.unitInvocationId ||
+        !same(o.pidBirth, previous.instance.pidBirth)) fail('asset-current-witness-invalid');
+    if (o.kind === 'boot-transition') {
+      if (previous.instance.bootId === record.instance.bootId) fail('asset-current-witness-invalid');
     } else {
-      if (!keys(o, ['kind', 'closed', 'at', 'bootId', 'cgroup', 'unitInvocationId', 'pidBirth']) ||
-          o.kind !== 'cgroup-empty' || o.closed !== true ||
-          !Number.isSafeInteger(o.at) || o.at < 1 ||
-          o.bootId !== record.instance.bootId ||
-          !same(o.cgroup, previous.instance.cgroup) ||
-          o.unitInvocationId !== previous.instance.unitInvocationId ||
-          !same(o.pidBirth, previous.instance.pidBirth)) fail('asset-current-witness-invalid');
+      if (previous.instance.bootId !== record.instance.bootId || o.bootId !== record.instance.bootId) fail('asset-current-witness-invalid');
     }
     const old = registry(witness.previousRegistry);
     if (old.authorityId !== record.authorityId || old.epoch !== previous.epoch || old.state !== 'active' ||

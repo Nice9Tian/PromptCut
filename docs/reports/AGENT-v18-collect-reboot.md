@@ -55,9 +55,11 @@
 | `server/agent/service/cloud-tools.mjs` | `cloudSystemNote` 参数 `collectDelegate` 缺省值改为 `true`。 |
 | `server/hosted/deploy/asset-root-registry-publisher.mjs` | 移除 `publisher-cross-boot-unsupported` 异常；`createRootScopeRuntimeV2` 支持 `crossBoot` 跨开机检测，安全生成 `kind: 'boot-transition'` 的关闭/失败见证。 |
 | `server/hosted/asset-root-registry-schema-v2.mjs` | `validateAssetRootWitnessV2` 兼容并校验 `kind: 'boot-transition'` 见证。 |
-| `server/hosted/run-assets-current-registry.mjs` | `validateRunAssetCurrentRecord` 支持 `kind: 'boot-transition'` 见证。 |
-| `server/hosted/deploy/agent-run-scope-publisher.mjs` | 移除 `publishAgentScope` 在 `start` 模式下要求世代必须同 `bootId` 的 `boot-transition` 阻止检查。 |
-| `server/hosted/agent-run-scope-schema.mjs` | `validateAgentScopeClosure` 与 `validateAgentScopeFailure` 支持 `boot-transition`；`validateAgentScopeHistory` 移除跨世代必须同 `bootId` 的硬性约束。 |
+| `server/hosted/run-assets-current-registry.mjs` | 闭合 `validateRunAssetCurrentRecord` 的 `if` 条件语法错误；在 `boot-transition` 与 `cgroup-empty` 分支分别严密校验 `cgroup`、`unitInvocationId`、`pidBirth` 以及 `bootId` 关系。 |
+| `server/hosted/deploy/asset-root-registry-publisher.mjs` | 移除 `publisher-cross-boot-unsupported`；`createRootScopeRuntimeV2` 支持 `crossBoot` 跨开机检测生成 `kind: 'boot-transition'` 的 11 键纯净关闭/失败见证；在 `configuration` 中正确处理操作系统重启后 `/run` (tmpfs) 下临时 drop-in 随机消亡的情形，支持以 `previous: null` 干净重写新 drop-in。 |
+| `server/hosted/asset-root-registry-schema-v2.mjs` | `validateAssetRootWitnessV2` 移除多余的第 3 参数，支持 11 键 `boot-transition` 见证；`validateAssetRootRecordV2` 移除 `p.instance.bootId !== value.instance.bootId`，并在 `validateAssetRootPublicationV2` 中严密校验世代之间 `bootId` 的变化必须与 witness kind 一致。 |
+| `server/hosted/agent-run-scope-schema.mjs` | `validateAgentScopeClosure` 与 `validateAgentScopeFailure` 移除多余的第 3 参数；`validateAgentScopeHistory` 严密加固：若 `previous.closure.observed.kind === 'boot-transition'` 则必须满足 `r.instance.bootId !== previous.record.instance.bootId`（严防同 boot 伪造），若非 `boot-transition` 则必须满足 `r.instance.bootId === previous.record.instance.bootId`。 |
+| `server/test/asset-root-registry-publisher.test.mjs` | 增加 `publishAssetRootRegistryV2` 跨 boot 轮转成功单测、同 boot 伪造 boot-transition 被拒单测，以及重启后 `/run` 临时 drop-in 消失重写单测。 |
 | `server/test/upload-enqueue-existing.test.mjs` | 增加 `UQE-8`（测试队列 `cancel` 中止分片及移出队列）与 `UQE-9`（测试 `/api/media/upload-queue/cancel` 接口清理在途文件且不误删已完成文件）。 |
 | `server/test/cloud-tools-wire.test.mjs` | 更新 `WIRE-TABLE` 与 `WIRE-SET` 测试用例，验证 `collectDelegate` 缺省开启、显式设为 `0` 或 `false` 关闭。 |
 | `server/test/cloud-tools-c1-page.test.mjs` | 增加 `C1-PAGE-07`，验证桌面提示条状态随代下起止动态切换，且取消时当场调用 `upload.cancel`。 |
@@ -71,22 +73,22 @@
 1. **类型检查**：
    - 运行 `npx.cmd tsc -b --force`，退出码 0，零错误。
 2. **测试套件运行**：
-   - 运行综合测试命令：
+   - 运行全量相关测试命令：
      ```powershell
      $env:PROMPTCUT_ACCOUNT_PROVIDER_ROOT="C:\Users\admin\Documents\VisuHive"
      $env:PROMPTCUT_PASSWORD_ORDER_MODULE="C:\Users\admin\Documents\VisuHive\account\password-order.mjs"
      $env:PROMPTCUT_NO_PORT_FILE="1"
-     node --test server/test/cloud-tools-c1*.test.mjs server/test/cloud-tools-w2*.test.mjs server/test/cloud-tools-wire.test.mjs server/test/account-root-slots.test.mjs server/test/upload-enqueue-existing.test.mjs server/test/c66-upload.test.mjs src/ai/cloud/page-requests.test.mjs server/test/agent-run-scope*.test.mjs server/test/asset-root-registry-publisher.test.mjs
+     node --test server/test/cloud-run-assets-current-registry.test.mjs server/test/cloud-run-assets-current-registry-v2.test.mjs server/test/asset-root-registry-publisher.test.mjs server/test/agent-run-scope*.test.mjs server/test/account-root-slots.test.mjs server/test/cloud-tools-c1*.test.mjs server/test/cloud-tools-w2*.test.mjs server/test/cloud-tools-wire.test.mjs server/test/upload-enqueue-existing.test.mjs server/test/c66-upload.test.mjs src/ai/cloud/page-requests.test.mjs
      ```
-   - **结果：共 228 项测试，226 项 PASS，0 项 FAIL，2 项 SKIP**（两项为 Windows 平台按规范跳过的 Linux 文件系统权限测试），零失败。
+   - **结果：共 238 项测试，236 项 PASS，0 项 FAIL，2 项 SKIP**（两项为 Windows 平台按规范跳过的 Linux 文件系统权限测试），零失败。
 3. **行尾检查**：
-   - 运行 `node C:/Users/admin/Documents/PromptCut/out/main-session-tools/eol-audit.mjs . 5ebefdfe HEAD`，输出为空，退出码 0，零行尾翻转。
+   - 运行 `node C:/Users/admin/Documents/PromptCut/out/main-session-tools/eol-audit.mjs . 5ebefdfe HEAD`，输出 0 孤立 CR，0 行尾翻转。
 
 ---
 
 ## 4. 没做成的与原因
 
-无。本分支分配的两项功能（代下与 web_handoff 打开 + 在途撤回接口与提示条，以及节点重启后任务槽跨 boot_id 自动恢复与卡住任务记失败释放）均已高质量落地并通过全量相关测试验证。
+无。审阅指出的 4 处阻断性缺陷（`run-assets-current-registry.mjs` 语法错误、`exactScope`/`exact` 键集合一致性、跨 boot `/run` tmpfs drop-in 清空后的重新配置、跨 boot 世代历史链防伪加固）已全部彻底修复并补齐单测。
 
 ---
 
@@ -96,5 +98,7 @@
    在 `POST /api/media/upload-queue/cancel` 撤回在途分片并从队列移除时，根据 `upload-queue` 实际出队的 `cancelled` 列表精确定位待删除文件。由于传完的文件在 complete 成功那一刻已从队列移出，故传完的文件绝不会被当作在途撤回而删除，严格遵循 10-14 第 180 行原则。
 2. **桌面提示条视觉呈现（裁定）**：
    提示条文案严格遵循需求原文 `「云端 Agent 正在用这台电脑上的登录下载：〈网址〉」`，放置在 `TopBar.tsx` 的同步状态区域旁，采用半圆胶囊状柔和蓝底背景与省略号截断（最大宽度 420px），并附带全量 URL 的 `title` 气泡提示，兼顾醒目度与不挤占顶栏操作空间。
-3. **跨 boot 见证模式（裁定）**：
-   在发布器见证中，当检测到 `currentBootId !== old.instance.bootId` 时将 `observed.kind` 标为 `'boot-transition'`，同时携带 `previousBootId` 与 `currentBootId`。此举不仅让验证端能够清晰审计出这是一次由于系统关机/重启引发的代际交接，而且在数学证明和哈希链条上完全自洽闭环。
+3. **跨 boot 见证模式与防伪边界（裁定）**：
+   在发布器见证中，保持 11 个标准见证键不变。当且仅当发生真实的开机变化（`r.instance.bootId !== previous.record.instance.bootId`）时才允许使用 `boot-transition` 世代见证；同一次开机内若出现 `boot-transition` 则视为伪造并由 `validateAgentScopeHistory` 及 `validateAssetRootPublicationV2` 坚决拦截拒绝。
+4. **tmpfs 临时 Drop-In 的重启复原（裁定）**：
+   在 `createRootScopeRuntimeV2` 的 `configuration()` 中，当检测到跨 boot 重启且 `/run` 下由 tmpfs 承载的临时 drop-in 自然消失时，安全将其标识为旧开机的历史遗留并返回 `receipt: null`，驱动发布器以 `previous: null` 写入全新 drop-in 并执行 `daemon-reload`，彻底解决真实 Linux 节点重启后新世代无法启动的问题。

@@ -221,7 +221,7 @@ export async function publishAssetRootRegistryV2({ expected, mode, io }) {
         const observed = await pinned.stopAndObserve();
         witness = { v: 2, protocol: 'promptcut.asset-os-closure.v2', witnessId: io.uuid(), authorityId: expected.authorityId,
           fromEpoch: old.epoch, toEpoch: epoch, previousRegistry: old, observed };
-        validateAssetRootWitnessV2(witness, { expected, previousRecord: old, nextEpoch: epoch, bootId: observed.bootId });
+        validateAssetRootWitnessV2(witness, { expected, previousRecord: old, nextEpoch: epoch });
         await io.write(`witness-${epoch}.json`, witness, true);
         // The old empty scope survives until its complete witness is durable.
         // This await is deliberately after the witness file+directory barrier.
@@ -630,7 +630,7 @@ export async function createRootScopeRuntimeV2(config, {
       fail('publisher-unit-config-changed');
     for (const declared of [adapter.unitFragment, ...adapter.baseDropIns])
       if ((await descriptor(declared.path)).digest !== declared.sha256) fail('publisher-unit-config-changed');
-    const receipt = await read(receiptName);
+    let receipt = await read(receiptName);
     let content = null;
     const ownDir = path.dirname(adapter.ownDropInPath);
     await rootDirectory(path.dirname(ownDir));
@@ -640,13 +640,18 @@ export async function createRootScopeRuntimeV2(config, {
     if (receipt) {
       if (!exact(receipt, ['v', 'authorityId', 'epoch', 'unit', 'path', 'scopeUnit', 'file', 'adapterDigest']) || receipt.v !== 2 ||
           receipt.authorityId !== expected.authorityId || receipt.unit !== expected.unit || receipt.path !== adapter.ownDropInPath ||
-          receipt.adapterDigest !== digestOf(adapter) || !positive(receipt.epoch) || !content) fail('publisher-dropin-ownership');
+          receipt.adapterDigest !== digestOf(adapter) || !positive(receipt.epoch)) fail('publisher-dropin-ownership');
       const previousReservation = await read(`reservation-${receipt.epoch}.json`);
       validateReservation(previousReservation, expected);
-      const actual = await descriptor(adapter.ownDropInPath);
-      if (receipt.scopeUnit !== previousReservation.closureScope.unit ||
-          !equal(receipt.file, { dev: actual.dev, ino: actual.ino, digest: actual.digest }) ||
-          !content.equals(Buffer.from(sliceTextV2(expected, previousReservation)))) fail('publisher-dropin-ownership');
+      if (!reservation && !content && previousReservation.closureScope.bootId !== await bootId()) {
+        receipt = null;
+      } else {
+        if (!content) fail('publisher-dropin-ownership');
+        const actual = await descriptor(adapter.ownDropInPath);
+        if (receipt.scopeUnit !== previousReservation.closureScope.unit ||
+            !equal(receipt.file, { dev: actual.dev, ino: actual.ino, digest: actual.digest }) ||
+            !content.equals(Buffer.from(sliceTextV2(expected, previousReservation)))) fail('publisher-dropin-ownership');
+      }
     } else if (content) fail('publisher-dropin-ownership');
     const loaded = (unit.DropInPaths ?? '').split(' ').filter(Boolean).sort();
     const allowed = [...adapter.baseDropIns.map(v => v.path), ...(receipt ? [adapter.ownDropInPath] : [])].sort();
@@ -789,7 +794,6 @@ export async function createRootScopeRuntimeV2(config, {
           async stopAndObserve() {
             try { await exec(['stop', expected.unit, '--no-ask-password']); } catch { /* ignore stop error across boot */ }
             return { kind: 'boot-transition', closed: true, at: Date.now(), bootId: old.instance.bootId,
-              previousBootId: old.instance.bootId, currentBootId: currentBoot,
               serviceInstance: old.instance, closureScope: old.closureScope, scopeActive: true, scopeExclusive: true,
               populated: 0, serviceInactive: true, mainBirthGone: true };
           },

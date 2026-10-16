@@ -117,7 +117,7 @@ export function validateAgentScopeClosure(value, expected, record, assignment, t
       value.epoch !== record.epoch || value.recordDigest !== digestOf(record) || value.assignmentDigest !== (assignment ? digestOf(assignment) : null) ||
       value.terminalDigest !== digestOf(terminal) || value.intentDigest !== (intent ? digestOf(intent) : null)) failScope('closure');
   const o = value.observed;
-  if (!exactScope(o, ['kind', 'closed', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'populated', 'serviceInactive', 'mainBirthGone'], ['previousBootId', 'currentBootId']) ||
+  if (!exactScope(o, ['kind', 'closed', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive', 'populated', 'serviceInactive', 'mainBirthGone']) ||
       (o.kind !== 'cgroup-empty' && o.kind !== 'boot-transition') || o.closed !== true || !positive(o.at) || o.bootId !== record.instance.bootId ||
       !sameScope(o.serviceInstance, record.instance) || !sameScope(o.closureScope, record.closureScope) || o.scopeActive !== true ||
       o.scopeExclusive !== true || o.populated !== 0 || o.serviceInactive !== true || o.mainBirthGone !== true) failScope('closure-observation');
@@ -166,7 +166,13 @@ export function validateAgentScopeHistory({ expected, anchor, configuredAnchorDi
         e.record?.epoch !== i + 1 || !exactScope(e.publications, ['ready', 'bound', 'closed'])) failScope('history');
     const r = validateAgentScopeRecord(e.record, expected); validateAgentScopeReservation(e.reservation, expected);
     if (e.reservation.instanceId !== r.instance.instanceId || !sameScope(e.reservation.closureScope, r.closureScope)) failScope('reservation');
-    if (i === 0 ? anchor.firstRecordDigest !== digestOf(r) : r.previousClosureDigest !== digestOf(previous.closure)) failScope('history');
+    if (i === 0) {
+      if (anchor.firstRecordDigest !== digestOf(r)) failScope('history');
+    } else {
+      if (r.previousClosureDigest !== digestOf(previous.closure)) failScope('history');
+      if (previous.closure.observed.kind === 'boot-transition' ? r.instance.bootId === previous.record.instance.bootId : r.instance.bootId !== previous.record.instance.bootId)
+        failScope('history');
+    }
     for (const id of [`instance:${r.instance.instanceId}`, `scope:${r.closureScope.scopeId}`, `unit:${r.closureScope.unit}`,
       `invocation:${r.instance.unitInvocationId}`, `invocation:${r.closureScope.unitInvocationId}`, `key:${r.worker.publicKeyDigest}`]) {
       if (unique.has(id)) failScope('generation-reused'); unique.add(id);

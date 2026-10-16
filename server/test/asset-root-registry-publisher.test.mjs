@@ -9,7 +9,7 @@ import { digestOf } from '../account/ledger.mjs';
 import { publishAssetRootRegistry, parseProcStat, validatePublisherScope, validatePublisherUnit, runAssetRootPublisher,
   writePublisherArtifact, openPublisherLock, publishAssetRootRegistryV2, runAssetRootPublisherV2,
   validatePublisherRuntimeAdapterV2, writePublisherTextV2 } from '../hosted/deploy/asset-root-registry-publisher.mjs';
-import { assetClosureUnitV2, validateAssetRootHistoryV2 } from '../hosted/asset-root-registry-schema-v2.mjs';
+import { assetClosureUnitV2, validateAssetRootHistoryV2, validateAssetRootPublicationV2 } from '../hosted/asset-root-registry-schema-v2.mjs';
 
 const scope = { authorityId: 'doc-test', serviceIdentity: 'asset-test', uid: 12001,
   unit: 'promptcut-asset-test.service', cgroupPath: '/sys/fs/cgroup/system.slice/promptcut-asset-test.service',
@@ -424,5 +424,77 @@ test('v2 real file drop-in replacement refuses foreign contents/inode; post-rena
   assert.ok((await fs.lstat(path.join(dir, '.publisher.lock'))).isFile());
   await assert.rejects(openPublisherLock(dir, { directoryBarrier: async () => {} }), { code: 'EEXIST' });
   await assert.rejects(writePublisherTextV2({ filename, text: 'stale receipt', previous: first, directoryBarrier: async () => {} }), { code: 'publisher-dropin-ownership' });
+  // 模拟 Linux 重启后 /run (tmpfs) 被清空：文件消失，旧 previous 会因 ENOENT 失败，而 previous: null 能全新写入
+  await fs.unlink(filename);
+  await assert.rejects(writePublisherTextV2({ filename, text: '[Service]\nSlice=reboot.slice\n', previous: first, directoryBarrier: async () => {} }),
+    (e) => e.code === 'ENOENT' || e.code === 'publisher-dropin-ownership');
+  const freshAfterReboot = await writePublisherTextV2({ filename, text: '[Service]\nSlice=reboot.slice\n', previous: null, directoryBarrier: async () => {} });
+  assert.equal(await fs.readFile(filename, 'utf8'), '[Service]\nSlice=reboot.slice\n');
+  assert.ok(freshAfterReboot.ino);
   t.diagnostic('Real Windows file/rename/lock; injected directory fsync failure, not Linux unit or durability proof');
+});
+
+test('v2 controlled cross-boot rotation succeeds: kind boot-transition advances to epoch 2 across boot_id change', async () => {
+  const m = modelV2(); await m.run('initialize');
+  const BOOT_2 = '22222222-2222-2222-2222-222222222222';
+  m.calls.length = 0;
+  let currentInstance;
+  m.io.createScope = async (plan) => {
+    m.calls.push('create-scope');
+    const unit = assetClosureUnitV2(expectedV2, plan);
+    return { ...plan, authorityId: expectedV2.authorityId, kind: 'systemd-slice', unit,
+      unitInvocationId: String(plan.epoch * 2).padStart(32, '0'), bootId: BOOT_2,
+      cgroup: { v2Path: `/sys/fs/cgroup/${unit}`, dev: '30', ino: String(300 + plan.epoch), bootId: BOOT_2 } };
+  };
+  m.io.start = async (r) => {
+    m.calls.push('start');
+    const value = instance(r.instanceId, r.epoch);
+    value.bootId = BOOT_2;
+    value.pidBirth.bootId = BOOT_2;
+    value.cgroup.bootId = BOOT_2;
+    value.cgroup.v2Path = r.serviceCgroupPath;
+    value.unitInvocationId = String(r.epoch * 2 + 1).padStart(32, '0');
+    currentInstance = { instance: value, closureScope: clone(r.closureScope) };
+  };
+  m.io.inspect = async () => currentInstance;
+  m.io.identity = async () => {
+    const r = m.files.get('reservation.json');
+    return { v: 1, serviceId: 'asset', authorityId: expectedV2.authorityId, epoch: r.epoch, instanceId: r.instanceId,
+      pid: currentInstance.instance.pid, startedAt: 100, serviceIdentity: expectedV2.serviceIdentity, state: 'running',
+      docClientFingerprint256: expectedV2.clientFingerprint256, internalServerFingerprint256: expectedV2.serverFingerprint256 };
+  };
+  m.faults.observed = (o) => ({
+    ...o, kind: 'boot-transition',
+  });
+  const cp = await m.run('rotate');
+  assert.equal(cp.epoch, 2);
+  const witness = m.files.get('witness-2.json');
+  assert.equal(witness.observed.kind, 'boot-transition');
+  const record2 = m.files.get('epoch-2.json');
+  assert.equal(record2.instance.bootId, BOOT_2);
+  const entries = [1, 2].map(n => ({ record: m.files.get(`epoch-${n}.json`), reservation: m.files.get(`reservation-${n}.json`),
+    publication: m.files.get(`publication-${n}.json`), witness: n === 1 ? null : m.files.get(`witness-${n}.json`) }));
+  assert.deepEqual(validateAssetRootHistoryV2({ entries, currentRecord: m.files.get('current.json'), anchor: m.files.get('anchor.json'),
+    expected: expectedV2, publisherLocked: false }), cp);
+
+  // 若 boot-transition 时的 bootId 未变（同一 boot 下凭 boot-transition 关旧代）：拒绝
+  const fakeSameBoot = {
+    ...record2,
+    instance: {
+      ...record2.instance,
+      bootId: record2.previous.instance.bootId,
+      pidBirth: { ...record2.instance.pidBirth, bootId: record2.previous.instance.bootId },
+      cgroup: { ...record2.instance.cgroup, bootId: record2.previous.instance.bootId },
+    },
+    closureScope: {
+      ...record2.closureScope,
+      bootId: record2.previous.instance.bootId,
+      cgroup: { ...record2.closureScope.cgroup, bootId: record2.previous.instance.bootId },
+    },
+  };
+  const res = { ...entries[1].reservation, closureScope: fakeSameBoot.closureScope };
+  const pub = { ...entries[1].publication, registryDigest: digestOf(fakeSameBoot), reservationDigest: digestOf(res) };
+  assert.throws(() => validateAssetRootPublicationV2({
+    ...entries[1], record: fakeSameBoot, reservation: res, publication: pub, anchor: m.files.get('anchor.json'), expected: expectedV2, publisherLocked: false }),
+    { code: 'asset-root-v2-generation-invalid' });
 });
