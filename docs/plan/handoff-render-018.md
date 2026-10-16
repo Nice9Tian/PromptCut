@@ -158,7 +158,15 @@
 
 ### 10.3 下次接手后的顺序（直接从 `0.7.18` 剩余四块开始，无需重跑渲染重构）
 
-0. **2026-10-17 核对（Claude 主会话）：main 的全量测试是红的。** `0e99dd63` 上 `npm test` 7011 条里 58 条失败（类型检查 0 错误）。最早从 10-16 凌晨的 `rr-motion-preempt`（`7ec227f6`）起就红了，之后撤快照的页面一侧、`v18-revoke-logout`、`v18-move-proc`、`v18-chat-workflow-jobs` 又各加了一批；其中部署清单漏了 `server/render-node/session.mjs`，部署到节点会起不来。逐条出处见 `docs/reports/VERIFY-main-2026-10-17.md`。**接着做 0.7.18 之前，先把 main 修回全绿。**
+0. **2026-10-17 核对与修复（已完成并合入 `main` 至 `a6011825`）：main 全量测试已修回 100% 全绿。**
+   - `0e99dd63` 上 `npm test` 7011 条里 58 条失败（见 `docs/reports/VERIFY-main-2026-10-17.md`）。
+   - 经三路分支修复并独立审查后以 `--no-ff` 合入 `main`：
+     - `3e890c91`（合入 `6e379784`，报告 `docs/reports/AGENT-v18-fix-queue-streams.md`）：在 `server/hosted/files.mjs` 补齐 `server/render-node/session.mjs`、`filter.mjs`、`pick.mjs`；新增 `src/render/streamBuckets.mjs` 解决 60 段 `motion` 任务与整卡稀疏任务跨全局 8 段桶边界（如 `56-63`）读写对齐及浏览器 `putStreamManifest` 分桶写入；在 `session.mjs` 与 `render-queue.mjs` 补齐抢占前置资格预检（含 `throttled`、`!planOnly`、`streamsPass`）与拦截回 `task.claim-rejected`；更新队列与流测试切分断言。
+     - `a08d1c72`（合入 `469a03f5`，报告 `docs/reports/AGENT-v18-fix-snap-tests.md`）：核实 `beatSwapDebug().last` 无生产空指针隐患，将撤快照页面侧 8 个测试文件（14 条）对齐到撤除每张卡 HTML 快照后的新契约。
+     - `a6011825`（合入 `f63fd975`，报告 `docs/reports/AGENT-v18-fix-account-tests.md`）：在 `server/account/authority.mjs` 恢复带 `authorizationId` 请求对账号权威的实时 `accountClient.verify` 与 `synchronize` 重核（`operation-wiring-core.test.mjs` 与 `account-assembly-central.test.mjs` 零改动原样通过），同时保持已建长连接不按本地 120 秒时钟断开，并更新其余账号与守门测试。
+   - **合并后 `a6011825` 上的类型检查与全量测试结果**：
+     - `npx tsc -b --force`：**0 错误**（退出码 0）
+     - `npm test`：**共 `7020` 条：`7005` 通过、`0` 失败、`14` 跳过、`1` todo**（耗时 161.8 秒，退出码 0）。
 
 1. **分支 A（`v18-collect-reboot`）**：
    - 打开采集代下（在 `server/upload-queue.mjs`、`server/vite-plugin-media.ts` 补撤回并删除在途文件接口并接入 `src/ai/cloud/collectBridge.ts`；将 `PROMPTCUT_AGENT_COLLECT_DELEGATE` 改为缺省开启；桌面版代下时显示 `「云端 Agent 正在用这台电脑上的登录下载：〈网址〉」`）与 `web_handoff`（让发起人自己电脑默认浏览器打开同一网址）；
