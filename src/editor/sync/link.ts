@@ -437,9 +437,8 @@ export class SyncLink {
         }
         return;
       }
-      if (msg.type === "error" && typeof msg.reason === "string" && AUTH_EXPIRED_REASONS.has(msg.reason)) {
-        // 先照常分发(等这条回包的请求得到答复),再告诉调用方这条连接作废了
-        this.dispatch(msg);
+      if ((msg.type === "error" || msg.type === "project.op.rejected") && typeof msg.reason === "string" && AUTH_EXPIRED_REASONS.has(msg.reason)) {
+        if (msg.type === "error") this.dispatch(msg);
         if (this.ep === ep && !this.stopped) this.o.onAuthExpired?.(msg.reason);
         return;
       }

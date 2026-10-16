@@ -71,7 +71,7 @@ export function createOperationWiring({ history, account, verifyWitness, authori
     const verified = await authority.checkAccess({ principal, projectId, action });
     if (verified?.allowed !== true) throw historyError('operation-forbidden', 403);
     order.assertUnfenced({ projectId, actor: principal });
-    return { allowed: true };
+    return { allowed: true, ...verified };
   }
   const order = createPasswordOrder({ history, account, verifyWitness, docAttestationPrivateKey, failpoint, initializeProject,
     async checkGate({ operation }) {
@@ -117,7 +117,10 @@ export function createOperationWiring({ history, account, verifyWitness, authori
       const legacyIdentity = digest({ projectId, actor, request });
       const sameRequest = recorded => recorded === requestIdentity || recorded === legacyIdentity;
       const requestId = `project-op:${digest({ docAuthorityId, projectId, opId: request.opId })}`;
-      await checkPrincipal(principal, projectId);
+      const entryVerified = await checkPrincipal(principal, projectId);
+      if (entryVerified?.credentialId && actor?.credentialId && actor.credentialId !== entryVerified.credentialId) {
+        actor.credentialId = entryVerified.credentialId;
+      }
       const retry = history.get(projectId, request.opId);
       if (retry) {
         history.verifyPrepared(retry);
