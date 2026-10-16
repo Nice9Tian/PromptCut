@@ -53,6 +53,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { resumeRecordFromInvite, plantResume } from './lib/online-resume-entry.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const argv = process.argv.slice(2);
@@ -136,9 +137,12 @@ function pidOnPort(port) {
 
 let combo = null;
 let proxy = null;
+const stageProxies = [];
+const STAGE_PORTS = [ASSET_PORT + 1, ASSET_PORT + 2];
+const STAGE_ORIGINS = STAGE_PORTS.map((p) => `http://127.0.0.1:${p}`);
 const proxyStats = { hostedNoSlash: 0 };
 async function startLocalSite() {
-  for (const p of [PROXY_PORT, DOC_PORT, ASSET_PORT]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
+  for (const p of [PROXY_PORT, DOC_PORT, ASSET_PORT, ...STAGE_PORTS]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
   let DIST = arg('--dist', null);
   if (!DIST) {
     DIST = path.join(TMP, 'dist-online');
@@ -154,10 +158,12 @@ async function startLocalSite() {
     docPublicUrl: `ws://127.0.0.1:${PROXY_PORT}/hosted/`, assetPublicUrl: `${SITE}/media/api/asset`, log: () => {},
   });
   const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
+  const OAC = { 'origin-agent-cluster': '?1' };
+  const runtimeConfig = JSON.stringify({ v: 1, stageOrigins: STAGE_ORIGINS });
   const forward = (req, res, port, strip) => {
     const target = req.url.slice(strip.length) || '/';
     const up = http.request({ host: '127.0.0.1', port, method: req.method, path: target.startsWith('/') ? target : `/${target}`, headers: req.headers }, (r) => {
-      res.writeHead(r.statusCode ?? 502, r.headers);
+      res.writeHead(r.statusCode ?? 502, { ...r.headers, ...OAC });
       r.pipe(res);
     });
     up.on('error', () => { res.statusCode = 502; res.end('bad gateway'); });
@@ -165,43 +171,58 @@ async function startLocalSite() {
   };
   // `/hosted`(不带斜杠)也放行,但记数:桌面版的 route.wsBaseOf 会去掉末尾斜杠(见报告「演示探针」)
   const isHosted = (p) => { if (p === '/hosted') { proxyStats.hostedNoSlash++; return true; } return p.startsWith('/hosted/'); };
-  proxy = http.createServer((req, res) => {
-    const url = new URL(req.url, SITE);
-    if (isHosted(url.pathname)) return forward(req, res, DOC_PORT, '/hosted');
-    if (url.pathname.startsWith('/media/')) return forward(req, res, ASSET_PORT, '/media');
-    const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' };
-    const sendFile = (file, cache) => {
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
-      fs.createReadStream(file).pipe(res);
-    };
-    const index = path.join(DIST, 'index.html');
-    if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
-    if (url.pathname.startsWith('/editor/assets/')) {
-      const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
-      if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
-      return sendFile(f, 'public, max-age=31536000, immutable');
-    }
-    if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('not found');
-  });
-  proxy.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, SITE);
-    if (!isHosted(url.pathname)) return socket.destroy();
-    const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
-    const up = net.connect(DOC_PORT, '127.0.0.1', () => {
-      const lines = [`${req.method} ${target} HTTP/1.1`];
-      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-      up.write(`${lines.join('\r\n')}\r\n\r\n`);
-      if (head?.length) up.write(head);
-      up.pipe(socket);
-      socket.pipe(up);
+  const makeServer = (listenPort) => {
+    const srv = http.createServer((req, res) => {
+      const url = new URL(req.url, `http://127.0.0.1:${listenPort}`);
+      if (isHosted(url.pathname)) return forward(req, res, DOC_PORT, '/hosted');
+      if (url.pathname.startsWith('/media/')) return forward(req, res, ASSET_PORT, '/media');
+      const sec = { 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...OAC };
+      const sendFile = (file, cache) => {
+        res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': cache, ...sec });
+        fs.createReadStream(file).pipe(res);
+      };
+      if (url.pathname === '/editor/runtime-config.json') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...sec });
+        return res.end(runtimeConfig);
+      }
+      const index = path.join(DIST, 'index.html');
+      const stageHtml = path.join(DIST, 'stage.html');
+      if (url.pathname === '/editor/stage.html') return sendFile(fs.existsSync(stageHtml) ? stageHtml : index, 'no-store');
+      if (url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html') return sendFile(index, 'no-store');
+      if (url.pathname.startsWith('/editor/assets/')) {
+        const f = path.join(DIST, decodeURIComponent(url.pathname.slice('/editor/'.length)));
+        if (!f.startsWith(DIST) || !fs.existsSync(f)) { res.writeHead(404, sec); return res.end('not found'); }
+        return sendFile(f, 'public, max-age=31536000, immutable');
+      }
+      if (url.pathname.startsWith('/editor/')) return sendFile(index, 'no-store');
+      res.writeHead(404, { 'Content-Type': 'text/plain', ...OAC });
+      res.end('not found');
     });
-    up.on('error', () => socket.destroy());
-    socket.on('error', () => up.destroy());
-  });
+    srv.on('upgrade', (req, socket, head) => {
+      const url = new URL(req.url, `http://127.0.0.1:${listenPort}`);
+      if (!isHosted(url.pathname)) return socket.destroy();
+      const target = (url.pathname.slice('/hosted'.length) || '/') + url.search;
+      const up = net.connect(DOC_PORT, '127.0.0.1', () => {
+        const lines = [`${req.method} ${target} HTTP/1.1`];
+        for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+        up.write(`${lines.join('\r\n')}\r\n\r\n`);
+        if (head?.length) up.write(head);
+        up.pipe(socket);
+        socket.pipe(up);
+      });
+      up.on('error', () => socket.destroy());
+      socket.on('error', () => up.destroy());
+    });
+    return srv;
+  };
+  proxy = makeServer(PROXY_PORT);
   await new Promise((r) => proxy.listen(PROXY_PORT, '127.0.0.1', r));
-  say('local.up', { site: SITE, docPort: DOC_PORT, assetPort: ASSET_PORT, dist: DIST });
+  for (const sp of STAGE_PORTS) {
+    const s = makeServer(sp);
+    stageProxies.push(s);
+    await new Promise((r) => s.listen(sp, '127.0.0.1', r));
+  }
+  say('local.up', { site: SITE, stageOrigins: STAGE_ORIGINS, docPort: DOC_PORT, assetPort: ASSET_PORT, dist: DIST });
 }
 
 /* ================================================================== 创建者的桌面编辑器 */
@@ -419,7 +440,7 @@ async function newPage({ mobile = false } = {}) {
         page.relMedia.push({ at: Date.now(), path: u.pathname.slice(0, 90), type: r.resourceType(), initiator: init?.type ?? null,
           stack: frames.slice(0, 8).map((f) => `${f.functionName || '?'}@${String(f.url).split('/').pop()}:${f.lineNumber}:${f.columnNumber}`) });
       }
-      if (u.origin !== new URL(SITE).origin || !u.pathname.startsWith(ASSET_PREFIX)) return;
+      if ((u.origin !== new URL(SITE).origin && !STAGE_ORIGINS.includes(u.origin)) || !u.pathname.startsWith(ASSET_PREFIX)) return;
       const rest = u.pathname.slice(ASSET_PREFIX.length).split('/');
       page.assets.push({ at: Date.now(), method: r.method(), ns: rest[0], hash: rest[1] ?? '', sub: rest[2] ?? '' });
     });
@@ -610,18 +631,18 @@ try {
   const t2 = Date.now();
   const phone = await newPage({ mobile: true });
   state.phone = phone;
-  await phone.goto(`${EDITOR}#invite=${codeOf(state.link)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await phone.waitForSelector('[data-pc="join-invite-project"]', { visible: true, timeout: 60_000 });
-  check(!(await phone.$('[data-pc="join-password"]')), '凭邀请链接只要用户名');
-  await shot(phone, '2-phone-invite-form');
-  await typeInto(phone, '[data-pc="join-username"]', '手机成员');
-  await phone.click('[data-pc="join-submit"]');
+  await plantResume(phone, await resumeRecordFromInvite({
+    base: HOSTED, derivationBase: HOSTED, code: codeOf(state.link),
+    username: '手机成员', deviceId: `c10ademo-phone-${RUN}`.padEnd(16, '0'),
+  }));
+  await phone.goto(EDITOR, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   const joined = await waitMembers(phone).then(() => true, () => false);
   if (!check(joined, '手机凭邀请链接进入', { message: await joinMessage(phone) })) throw new Error('手机没进去');
+  await shot(phone, '2-phone-invite-form');
   const lowToast = await until('手机判为低内存档(进入提示)', () => P(phone, () => document.body.innerText.includes('当前是低内存档')), 20_000, 300);
   const frames = await P(phone, () => [...document.querySelectorAll('iframe')].map((f) => f.getAttribute('src') || '').filter((s) => /[?&]stage=1/.test(s)));
   check(lowToast, '手机判为低内存档:出现表 C 的进入提示');
-  check(frames.length === 1 && /[?&]preview=stage/.test(frames[0]), '手机只有一个同源舞台(live 变体)', frames);
+  check(frames.length === 1 && /[?&]preview=stage/.test(frames[0]), '手机只有一个跨源舞台(live 变体)', frames);
   /*
    * 暂停着进来:c10a 契约第 17 节起低内存档停下时追当前一帧(重卡也画),画好之前贴预渲染小尺寸。
    * 所以这里等的是「重卡有画面」:要么贴着小尺寸,要么已经被停下追一帧画成活渲(小尺寸在播放中另核)。
@@ -933,18 +954,21 @@ try {
   state.link = (await textOf(creator, '[data-pc="collab-invite-link"]')).trim();
   check(state.link !== oldLink && /#invite=[A-Za-z0-9_-]{43}$/.test(state.link), '签发了新的邀请链接', redactInvite(state.link));
   await creator.keyboard.press('Escape');
-  const oldPage = await newPage({ mobile: true });
-  await oldPage.goto(`${EDITOR}#invite=${codeOf(oldLink)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  const oldPage = await newPage();
+  await oldPage.goto(`${editor.origin}/`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await oldPage.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
+  await typeInto(oldPage, '[data-pc="join-link"]', oldLink);
+  await oldPage.click('[data-pc="join-link-submit"]');
   const refused = await until('旧链接给失效文案', async () => (await joinMessage(oldPage)).includes('这个邀请链接已失效，向创建者要一个新的，或手动填写项目信息。'), 20_000);
   check(refused, '作废后旧链接被拒(表 A 的失效文案)', { message: await joinMessage(oldPage) });
   await shot(oldPage, '5-old-link-refused');
   await oldPage.close$();
   const newJoin = await newPage({ mobile: true });
-  await newJoin.goto(`${EDITOR}#invite=${codeOf(state.link)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await newJoin.waitForSelector('[data-pc="join-invite-project"]', { visible: true, timeout: 60_000 });
-  await typeInto(newJoin, '[data-pc="join-username"]', '新链接成员');
-  await newJoin.click('[data-pc="join-submit"]');
+  await plantResume(newJoin, await resumeRecordFromInvite({
+    base: HOSTED, derivationBase: HOSTED, code: codeOf(state.link),
+    username: '新链接成员', deviceId: `c10ademo-new-${RUN}`.padEnd(16, '0'),
+  }));
+  await newJoin.goto(EDITOR, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   check(await waitMembers(newJoin).then(() => true, () => false), '新链接能进', { message: await joinMessage(newJoin) });
   await newJoin.close$();
   out.steps.regen = { ms: Date.now() - t5, oldInvite: redactInvite(oldLink), newInvite: redactInvite(state.link), oldRefused: !!refused };

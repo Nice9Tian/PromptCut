@@ -290,6 +290,7 @@ async function onlinePhase() {
   const { startHostedCombo } = await import('../../server/hosted/combo.mjs');
   const { createSharedProject, buildAuthProtocols } = await import('../../server/auth/client.mjs');
   const { startHostedProxy, proxyOrigins } = await import('./lib/hosted-proxy.mjs');
+  const { resumeRecord, plantResume } = await import('./lib/online-resume-entry.mjs');
   const { seedSharedProject } = await import('./lib-seed.mjs');
   const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
@@ -347,13 +348,11 @@ async function onlinePhase() {
       Object.defineProperty(window, 'Worker', { value: Wrapped, configurable: true, writable: true });
     } catch { /* 没有 Worker */ }
   });
-  const typeInto = async (sel, value) => { await page.waitForSelector(sel, { visible: true, timeout: 30_000 }); await page.click(sel, { clickCount: 3 }); await page.keyboard.press('Backspace'); await page.type(sel, value, { delay: 5 }); };
+  await plantResume(page, await resumeRecord({
+    base: `${ORIGINS.editor}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: NAME,
+    username: 'member-a', password: PROJECT_PW, deviceId: `ocsnd-m-a-${Date.now().toString(36)}`.padEnd(16, '0'),
+  }));
   await page.goto(`${ORIGINS.editor}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto('[data-pc="join-name"]', NAME);
-  await typeInto('[data-pc="join-username"]', 'member-a');
-  await typeInto('[data-pc="join-password"]', PROJECT_PW);
-  await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until('在线:时间轴与声音入口', () => page.evaluate(() => !!window.__pcStore && !!window.__pcIo?.sound), 60_000);
   const stageFrames = () => page.frames().filter((f) => /[?&]stage=1/.test(f.url()) && !f.detached);

@@ -70,6 +70,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import dnsShim from './lib/localhost-dns.cjs'; // Node 这边也认得 *.localhost(托管组合对外说的是 pc.localhost)
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecordFromInvite, plantResume } from './lib/online-resume-entry.mjs';
 import { startDevServer, viteBin } from '../lib/dev-server.mjs';
 import { createTimings } from './probe-timings.mjs';
 
@@ -905,10 +906,11 @@ try {
       const page = await newPage(pageLabel);
       page.on('console', (m) => { if (['error', 'warning'].includes(m.type())) console.log(`[${pageLabel} console ${m.type()}] ` + m.text().slice(0, 240)); });
       page.on('pageerror', (e) => console.log(`[${pageLabel} pageerror] ` + String(e?.message ?? e).slice(0, 240)));
-      await page.goto(`${SITE}/editor#invite=${code}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-      await page.waitForSelector('[data-pc="join-invite-project"]', { visible: true, timeout: 60_000 });
-      await typeInto(page, '[data-pc="join-username"]', userName);
-      await page.click('[data-pc="join-submit"]');
+      await plantResume(page, await resumeRecordFromInvite({
+        base: `${SITE}/hosted/`, derivationBase: `http://127.0.0.1:${DOC_PORT}/`, code,
+        username: userName, deviceId: `sp-${pageLabel}-${Date.now().toString(36)}`.padEnd(16, '0'),
+      }));
+      await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
       await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 90_000 });
       console.log(`[step] ${userName}已进入共享项目`);
       const ready = await until(`${userName}页看到共享项目的全部声音素材与片段`, () => P(page, () => {

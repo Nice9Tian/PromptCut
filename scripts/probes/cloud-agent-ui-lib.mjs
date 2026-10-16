@@ -20,6 +20,8 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runKeygen } from '../../server/hosted-render/keygen.mjs';
+import { lookupProject } from '../../server/auth/client.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { ROOT, startProcess, startHosted, startAgent, killTree as killTreeOf } from './cloud-agent-probe-lib.mjs';
 import { reopenEditorEnv } from './reopen-editor-env.mjs';
 
@@ -528,16 +530,18 @@ export async function sendText(page, text, panelSel = '[data-pc="cloud-ai-panel"
   await page.click(`${panelSel} [data-pc="ai-send"]`);
 }
 
-/** 在线页面:开始页填项目名、用户名、密码进项目(`asCreator` 走「我是创建者」) */
-export async function joinOnline(page, { site, name, username, password, asCreator = false }) {
+let joinOnlineSeq = 0;
+/** 在线页面:通过会话恢复记录进入共享项目(`asCreator` 走创建者身份) */
+export async function joinOnline(page, { site, name, username, password, asCreator = false, projectId = null }) {
+  const base = `${site}/hosted/`;
+  const pid = projectId ?? (await lookupProject({ base, name })).projectId;
+  const record = await resumeRecord({
+    base, derivationBase: base, projectId: pid, name, username, password,
+    as: asCreator ? 'creator' : 'member',
+    deviceId: `caui-${++joinOnlineSeq}-${Date.now().toString(36)}`.padEnd(16, '0'),
+  });
+  await plantResume(page, record);
   await page.goto(`${site}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  if (asCreator) await page.click('[data-pc="join-as-creator"]');
-  await typeInto(page, '[data-pc="join-name"]', name);
-  const userLocked = await page.$eval('[data-pc="join-username"]', (i) => i.disabled).catch(() => false);
-  if (!userLocked) await typeInto(page, '[data-pc="join-username"]', username);
-  await typeInto(page, '[data-pc="join-password"]', password);
-  await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await page.waitForFunction(() => !!window.__pcStore && window.__pcStore.getState().project.tracks.length > 0, { timeout: 60_000 });
   await gateSettled(page);

@@ -12,7 +12,7 @@
  *   await plantResume(page, record);      // 在 page.goto 之前
  *   await page.goto(editorUrl);           // 页面自己进项目,等 `[data-pc="members-button"]`
  */
-import { buildAuthProtocols } from '../../../server/auth/client.mjs';
+import { buildAuthProtocols, redeemInvite } from '../../../server/auth/client.mjs';
 
 /** sessionStorage 里那条记录的键(同 `syncManager.ts` 的 `SHARED_RESUME_KEY`) */
 export const SHARED_RESUME_KEY = 'pc.shared.resume';
@@ -29,9 +29,35 @@ export async function resumeRecord({ base, derivationBase = base, projectId, nam
   return { candidate: { where: 'hosted', base: base.endsWith('/') ? base : `${base}/`, projectId, name, mode }, as, username, key };
 }
 
+/**
+ * 凭邀请码兑换出「刷新前开着这个项目」的记录:向文档服务调 `shared/invite/redeem`(与开始页凭邀请码进入同一个端点),
+ * 拿到项目口令的 K 后装成会话恢复记录。
+ */
+export async function resumeRecordFromInvite({ base, derivationBase = base, code, username, deviceId, as = 'member' }) {
+  const red = await redeemInvite({ base: derivationBase, code, username, deviceId });
+  if (typeof red.key !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(red.key)) throw new Error('邀请码兑换不出项目口令的 K');
+  return { candidate: { where: 'hosted', base: base.endsWith('/') ? base : `${base}/`, projectId: red.projectId, name: red.name, mode: red.mode }, as, username, key: red.key };
+}
+
 /** 页面载入前把记录放进顶层文档的 sessionStorage(舞台 iframe 不放;已经有记录就不动) */
 export async function plantResume(page, record, storageKey = SHARED_RESUME_KEY) {
   await page.evaluateOnNewDocument((k, r) => {
     try { if (window.top === window && !sessionStorage.getItem(k)) sessionStorage.setItem(k, r); } catch { /* 存不了:页面留在开始页,探针等不到成员按钮 */ }
+  }, storageKey, JSON.stringify(record));
+}
+
+/**
+ * 在不整页刷新的前提下让已打开的在线编辑页切换到另一个共享项目(保留本页模块级状态,如 `measureGate` 的连接计数):
+ * 先用 `newProject` 断开当前共享连接,再写入新项目的恢复记录并调用 `syncManager` 的 `resumeShared()`。
+ */
+export async function switchSharedInPlace(page, record, storageKey = SHARED_RESUME_KEY) {
+  await page.evaluate(async (k, r) => {
+    window.__pcStore?.actions?.newProject?.('未命名');
+    sessionStorage.setItem(k, r);
+    const resUrl = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/assets\/syncManager-.*\.js$/.test(n));
+    const mod = await import(resUrl || '/src/editor/sync/syncManager.ts');
+    const fn = mod.resumeShared || Object.values(mod).find((v) => typeof v === 'function' && /docProjectId.*candidate\.projectId/.test(String(v)));
+    if (typeof fn !== 'function') throw new Error('找不到 resumeShared');
+    await fn();
   }, storageKey, JSON.stringify(record));
 }

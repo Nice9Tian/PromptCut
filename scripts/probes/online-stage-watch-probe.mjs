@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject } from '../../server/auth/client.mjs';
 import { seedSharedProject } from './lib-seed.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
@@ -203,12 +204,11 @@ async function crashStage(port) {
 
 try {
   /* ============================================================ W1 握手 */
+  await plantResume(page, await resumeRecord({
+    base: `${SITE}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: NAME,
+    username: 'boss2', password: PROJECT_PW, deviceId: `osw-boss2-${stamp}`.padEnd(16, '0'),
+  }));
   await page.goto(`${SITE}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto('[data-pc="join-name"]', NAME);
-  await typeInto('[data-pc="join-username"]', 'boss2');
-  await typeInto('[data-pc="join-password"]', PROJECT_PW);
-  await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until('时间轴', () => page.evaluate(() => !!window.__pcStore), 30_000);
   const CLIP = 'osw-b';
@@ -250,42 +250,39 @@ try {
     check(!!(await visibleDrawn(CLIP)), 'W2 可见舞台仍在画片段');
     await shot('w2-recovered');
 
-    /* ============================================================ W3 重载也握不回来 → 退回单舞台 */
+    /* ============================================================ W3 重载也握不回来 → 握手失败,绝不挂载同源单舞台 */
     const front = out.w2preview?.frontId ?? 'A';
     const frontPort = front === 'A' ? PORTS.stageA : PORTS.stageB;
     broken.add(frontPort);
     const t1 = Date.now();
     out.w3crash = await crashStage(frontPort);
     check(out.w3crash.ok, `W3 找到舞台 ${front} 的目标`, out.w3crash);
-    const fell = await until('W3 退回单舞台', async () => {
+    const fell = await until('W3 重载 20 秒没握回来判 failed', async () => {
       const w = await watchDiag();
       return w && w.handshake === 'failed' ? w : null;
     }, 120_000, 500);
     out.w3fallbackMs = fell ? Date.now() - t1 : null;
     out.w3 = fell;
-    check(/断开后重载,20 秒内没握回来/.test(fell?.reason ?? ''), 'W3 退回原因是重载 20 秒没握回来', fell);
-    const drawnAgain = await until('W3 单舞台画回片段', () => visibleDrawn(CLIP), 60_000, 500);
-    out.w3drawnMs = drawnAgain ? Date.now() - t1 : null;
+    check(/断开后重载,20 秒内没握回来/.test(fell?.reason ?? ''), 'W3 失败原因是重载 20 秒没握回来', fell);
     out.w3preview = await previewDiag();
     const frames = stageFrames();
     out.w3frames = frames.map((f) => f.url().replace(/\?.*$/, ''));
     check(out.w3preview?.dual === false, 'W3 dual 假', out.w3preview);
-    check(frames.length === 1 && frames[0].url().startsWith(`${SITE}/`), 'W3 只剩一个舞台 iframe,在编辑器页的源上', out.w3frames);
-    check(!!drawnAgain && drawnAgain.url.startsWith(`${SITE}/`), 'W3 可见舞台(同源单舞台)画出片段', drawnAgain);
-    // 重载后 20 秒才退回:从重载到退回至少 ~20 秒
-    check(out.w3fallbackMs === null || out.w3fallbackMs >= 20_000, 'W3 退回不早于重载时限', out.w3fallbackMs);
-    await shot('w3-single');
+    check(frames.every((f) => !f.url().startsWith(`${SITE}/`)) && hits(PORTS.editor) === 0, 'W3 握手失败绝不挂载同源舞台 iframe(一律跨源隔离)', { frames: out.w3frames, editorStageHits: hits(PORTS.editor) });
+    // 重载后 20 秒才判失败:从重载到失败至少 ~20 秒
+    check(out.w3fallbackMs === null || out.w3fallbackMs >= 20_000, 'W3 判失败不早于重载时限', out.w3fallbackMs);
+    await shot('w3-failed-no-same-origin');
 
-    /* ============================================================ W4 退回后不反复重载 */
-    const h0 = { a: hits(PORTS.stageA), b: hits(PORTS.stageB) };
+    /* ============================================================ W4 失败后不反复重载,仍无同源舞台 */
+    const h0 = { a: hits(PORTS.stageA), b: hits(PORTS.stageB), e: hits(PORTS.editor) };
     const r0 = (await watchDiag())?.reloads;
     await sleep(60_000);
-    const h1 = { a: hits(PORTS.stageA), b: hits(PORTS.stageB) };
+    const h1 = { a: hits(PORTS.stageA), b: hits(PORTS.stageB), e: hits(PORTS.editor) };
     const w4 = await watchDiag();
     out.w4 = { before: h0, after: h1, reloads: [r0, w4?.reloads], handshake: w4?.handshake };
-    check(h1.a === h0.a && h1.b === h0.b, 'W4 退回后两个舞台源没再收到舞台页请求', out.w4);
-    check(w4?.reloads === r0 && w4?.handshake === 'failed', 'W4 退回后 reloads 不变、握手仍是 failed', out.w4);
-    check(!!(await visibleDrawn(CLIP)), 'W4 单舞台仍在画片段');
+    check(h1.a === h0.a && h1.b === h0.b && h1.e === 0, 'W4 失败后两个舞台源没再收到舞台页请求,编辑器源无舞台页请求', out.w4);
+    check(w4?.reloads === r0 && w4?.handshake === 'failed', 'W4 失败后 reloads 不变、握手仍是 failed', out.w4);
+    check(stageFrames().every((f) => !f.url().startsWith(`${SITE}/`)), 'W4 仍不挂载同源舞台 iframe', stageFrames().map((f) => f.url()));
     check(!pageCrashed, 'W4 编辑器页没崩');
   }
 } catch (e) {

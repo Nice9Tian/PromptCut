@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { startHostedProxy, proxyOrigins } from './lib/hosted-proxy.mjs';
+import { resumeRecord, plantResume } from './lib/online-resume-entry.mjs';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
 import { createSharedProject, buildAuthProtocols } from '../../server/auth/client.mjs';
 import { normalizeEntry, sharedProtocols } from '../../server/auth/shared-config.mjs';
@@ -224,18 +225,11 @@ async function openMember(tag, { saveRtc = false, mobile = false } = {}) {
     if (typeof data !== 'string' || !data.includes('ticket')) return;
     try { const m = JSON.parse(data); if (typeof m.ticket === 'string') addSecret(`页面拿到的票据(${m.type})`, m.ticket); } catch { /* 不是 JSON */ }
   });
-  const typeInto = async (sel, value) => {
-    await page.waitForSelector(sel, { visible: true, timeout: 30_000 });
-    await page.click(sel, { clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    await page.type(sel, value, { delay: 5 });
-  };
+  await plantResume(page, await resumeRecord({
+    base: `${ORIGINS.editor}/hosted/`, derivationBase: `${DOC_DIRECT}/`, projectId: made.projectId, name: NAME,
+    username: `m-${tag.toLowerCase()}`, password: PROJECT_PW, deviceId: `ocs-m-${stamp}-${tag.toLowerCase()}`.padEnd(16, '0'),
+  }));
   await page.goto(`${ORIGINS.editor}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
-  await typeInto('[data-pc="join-name"]', NAME);
-  await typeInto('[data-pc="join-username"]', `m-${tag.toLowerCase()}`);
-  await typeInto('[data-pc="join-password"]', PROJECT_PW);
-  await page.click('[data-pc="join-submit"]');
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until(`${tag} 时间轴`, () => page.evaluate(() => !!window.__pcStore), 30_000);
   if (!clipsAdded) {
@@ -577,40 +571,49 @@ try {
     summary.C={page:d?.cardExec};await m.close();
   });
 
-  /* ============================================================ L 旧 nginx */
+  /* ============================================================ L 旧 nginx / S 关总开关 / N 无舞台源 / M 低内存档 */
   const offScenario = async (label, tag, proxyOptions, memberOptions, expect) => withProxy(proxyOptions, async (proxy) => {
     console.log(`\n== ${label}`);
     const m = await openMember(tag, memberOptions);
     const d = await settled(m);
-    // 后台舞台挂得晚:等每个舞台文档的自检都出了结论再看(闸门不再是 checking)
-    await until(`${tag} 每个舞台文档的自检出结论`, async () => { const gs = await Promise.all(m.stageFrames().map((f) => m.gateOf(f))); return gs.length >= (d?.dual ? 2 : 1) && gs.every((g) => g?.gate && g.gate.reason !== 'checking'); }, 30_000);
+    const minStages = expect.noStage ? 0 : (d?.dual ? 2 : 1);
+    if (minStages > 0) {
+      // 后台舞台挂得晚:等每个舞台文档的自检都出了结论再看(闸门不再是 checking)
+      await until(`${tag} 每个舞台文档的自检出结论`, async () => { const gs = await Promise.all(m.stageFrames().map((f) => m.gateOf(f))); return gs.length >= minStages && gs.every((g) => g?.gate && g.gate.reason !== 'checking'); }, 30_000);
+    }
     const frames = m.stageFrames();
     const gates = await Promise.all(frames.map((f) => m.gateOf(f)));
     const editorGate = await m.page.evaluate(() => window.__pcCardExecGate?.() ?? null);
     summary[tag] = { cardExec: d?.cardExec, dual: d?.dual, stages: gates.map((g) => ({ url: g?.url, gate: g?.gate, report: g?.iso?.report ?? null })) };
     check(`${tag} 本页不执行用户卡与图卡,原因是 ${expect.reason}`, d?.cardExec?.enabled === false && d.cardExec.reason === expect.reason, d?.cardExec);
-    check(`${tag} 编辑器页与每个舞台文档的执行闸门都是关的(共 ${gates.length} 个舞台文档)`, editorGate?.allowed === false && gates.length >= 1 && gates.every((g) => g?.gate?.allowed === false), { editor: editorGate, stages: gates.map((g) => g?.gate) });
-    if (expect.dual !== undefined) check(`${tag} ${expect.dual ? '仍是双舞台' : '是同源单舞台'}`, d?.dual === expect.dual && (expect.dual || frames.every((f) => f.url().startsWith(`${ORIGINS.editor}/`))), { dual: d?.dual, frames: frames.map((f) => f.url().replace(/\?.*$/, '')) });
+    check(`${tag} 编辑器页与每个舞台文档的执行闸门都是关的(共 ${gates.length} 个舞台文档)`, editorGate?.allowed === false && gates.length === minStages && gates.every((g) => g?.gate?.allowed === false), { editor: editorGate, stages: gates.map((g) => g?.gate) });
+    if (expect.noStage) {
+      check(`${tag} 未配置跨源舞台源时不挂载同源舞台 iframe(舞台数 0)`, d?.dual === false && frames.length === 0, { dual: d?.dual, frames: frames.map((f) => f.url()) });
+    } else if (expect.dual !== undefined) {
+      check(`${tag} ${expect.dual ? '仍是跨源双舞台' : '是跨源单舞台(绝不退回同源)'}`, d?.dual === expect.dual && frames.length === minStages && frames.every((f) => ORIGINS.stages.some((o) => f.url().startsWith(`${o}/`)) && !f.url().startsWith(`${ORIGINS.editor}/`)), { dual: d?.dual, frames: frames.map((f) => f.url().replace(/\?.*$/, '')) });
+    }
     if (expect.report) check(`${tag} 舞台自检的结论:${expect.report}`, gates.every((g) => g?.iso?.report?.ok === false && g.iso.report.reasons.includes(expect.report)), gates.map((g) => g?.iso?.report?.reasons));
-    const drawn = await until(`${tag} 内置卡照常画出来`, async () => { for (const f of m.stageFrames()) { if (await f.evaluate(() => [...document.querySelectorAll('[data-pc-clip]:not([data-pc-media])')].some((w) => w.childElementCount > 0)).catch(() => false)) return true; } return false; }, 30_000);
-    check(`${tag} 内置卡照常画出来`, !!drawn);
-    if (expect.legacyMedia) {
+    if (!expect.noStage) {
+      const drawn = await until(`${tag} 内置卡照常画出来`, async () => { for (const f of m.stageFrames()) { if (await f.evaluate(() => [...document.querySelectorAll('[data-pc-clip]:not([data-pc-media])')].some((w) => w.childElementCount > 0)).catch(() => false)) return true; } return false; }, 30_000);
+      check(`${tag} 内置卡照常画出来`, !!drawn);
+    }
+    if (expect.noTicketLeak) {
       const src = await until(`${tag} 舞台里的素材元素`, async () => { for (const f of m.stageFrames()) { const s = await f.evaluate((hash) => { const el = [...document.querySelectorAll('img,video')].find((e) => (e.getAttribute('src') ?? '').includes(hash)); return el ? el.getAttribute('src') : null; }, MEDIA_HASH).catch(() => null); if (s) return s; } return null; }, 20_000);
-      check(`${tag} 素材照旧走 /media 加 ?t=(这样的舞台文档不执行用户代码),没有交接请求`, /\/media\/api\/asset\/media\/[0-9a-f]{64}\?t=/.test(src ?? '') && proxy.grants.length === 0, { src: (src ?? '').replace(/\?t=.*/, '?t=…'), grants: proxy.grants.length });
+      check(`${tag} 降级/未隔离下绝不通过 URL 或 RPC 泄露票据(地址是 /media-s/<sid>/media/<哈希>、不带 ?t=,没有交接请求)`, /^\/media-s\/[0-9a-f]{32}\/media\/[0-9a-f]{64}$/.test(src ?? '') && !/[?&]t=/.test(src ?? '') && proxy.grants.length === 0, { src: (src ?? '').replace(MEDIA_HASH, '<哈希>'), grants: proxy.grants.length });
     }
     // E 编辑页面不执行:项目里有用越权探测卡的片段、内容库里有它们的源码,拨到片段上,任何文档里都没有顶层记号
     await knowsCard(m, BOUNDARY_CARDS.user);
     await m.page.evaluate(() => window.__pcStore.actions.seek(10.5));
     await sleep(5000);
     const marks = await m.marks();
-    check(`E ${tag} 不执行:拨到越权探测卡的片段上,编辑页面与 ${marks.stages.length} 个舞台文档里都没有越权探测卡的顶层记号`, marks.editor === null && marks.stages.length >= 1 && marks.stages.every((s) => s.loaded === null), marks);
+    check(`E ${tag} 不执行:拨到越权探测卡的片段上,编辑页面与 ${marks.stages.length} 个舞台文档里都没有越权探测卡的顶层记号`, marks.editor === null && marks.stages.length === minStages && marks.stages.every((s) => s.loaded === null), marks);
     check(`${tag} 没有页面错误`, m.pageErrors.length === 0, m.pageErrors.slice(0, 3));
     await m.page.screenshot({ path: path.join(OUT, `${tag.toLowerCase()}-editor.png`) }).catch(() => {});
     await m.close();
   });
-  if (ONLY.includes('L')) await offScenario('L 旧 nginx:没有策略头、没有 /media-s/(新页面先上、nginx 没改)', 'L', { policy: 'legacy' }, {}, { reason: 'not-isolated', dual: true, report: 'meta-only', legacyMedia: true });
-  if (ONLY.includes('S')) await offScenario('S 托管方关掉总开关(运行配置 onlineCardExec: false)', 'S', { policy: 'full', onlineCardExec: false }, {}, { reason: 'switch-off', dual: true, legacyMedia: true });
-  if (ONLY.includes('N')) await offScenario('N 没有舞台源(读不到运行配置;放本机、没有 nginx 子域的部署)', 'N', { policy: 'legacy', runtimeConfig: false }, {}, { reason: 'single-stage', dual: false });
+  if (ONLY.includes('L')) await offScenario('L 旧 nginx:没有策略头、没有 /media-s/(新页面先上、nginx 没改)', 'L', { policy: 'legacy' }, {}, { reason: 'not-isolated', dual: true, report: 'meta-only', noTicketLeak: true });
+  if (ONLY.includes('S')) await offScenario('S 托管方关掉总开关(运行配置 onlineCardExec: false)', 'S', { policy: 'full', onlineCardExec: false }, {}, { reason: 'switch-off', dual: true, noTicketLeak: true });
+  if (ONLY.includes('N')) await offScenario('N 没有舞台源(读不到运行配置;放本机、没有 nginx 子域的部署)', 'N', { policy: 'legacy', runtimeConfig: false }, {}, { reason: 'single-stage', dual: false, noStage: true });
   if (ONLY.includes('M')) await offScenario('M 低内存档(仿手机)', 'M', { policy: 'full' }, { mobile: true }, { reason: 'single-stage', dual: false });
 } catch (e) {
   check('探针没有中途出错', false, String(e?.stack ?? e).slice(0, 500));
