@@ -19,7 +19,7 @@ export const ACCOUNT_TOOL_SETTING_KEYS = Object.freeze([
   'PROMPTCUT_AGENT_TRACK_PYTHON', 'PROMPTCUT_AGENT_TRACK_MODELS', 'PROMPTCUT_AGENT_TRACK_PYLIBS',
   'PROMPTCUT_AGENT_BROWSER', 'PROMPTCUT_AGENT_BROWSER_ARGS',
   'PROMPTCUT_AGENT_COLLECT_PYTHON',
-  // 代下(请发起人的电脑用他本机的登录态替云端下载):缺省不开,写 '1' 才开。桌面版代下时给不给提示、提示什么还没定,定了再开
+  // 代下(请发起人的电脑用他本机的登录态替云端下载):缺省开启,写 '0' 或 'false' 才关
   'PROMPTCUT_AGENT_COLLECT_DELEGATE',
   'PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES',
 ]);
@@ -38,7 +38,7 @@ export function validateAccountToolSettings(tools) {
     if (!ACCOUNT_TOOL_SETTING_KEYS.includes(key)) bad(name, `tools 里的 ${name} 不认(键名写错了,或这一版没有这个键)`);
     if (typeof value !== 'string' || !value || value.length > 2000 || /[\r\n\0]/.test(value)) bad(name, `tools 里的 ${name} 的值不对(要是不带换行的非空字符串)`);
     // 不用看这台机器就能判的取值也在这里核(路径在不在要看任务用户那一侧,由任务进程读配置时核)
-    if (key === 'PROMPTCUT_AGENT_COLLECT_DELEGATE' && !['0', '1'].includes(value)) bad(name, `tools 里的 ${name} 只能是 0 或 1`);
+    if (key === 'PROMPTCUT_AGENT_COLLECT_DELEGATE' && !['0', '1', 'false', 'true'].includes(value)) bad(name, `tools 里的 ${name} 只能是 0 或 1`);
     if (key === 'PROMPTCUT_AGENT_WORKFLOW_OPTIONAL_STAGES' &&
         value.split(',').map((part) => part.trim()).filter(Boolean).some((part) => !ACCOUNT_WORKFLOW_STAGES.includes(part)))
       bad(name, `tools 里的 ${name} 只能是 ${ACCOUNT_WORKFLOW_STAGES.join('、')} 里的几个,用逗号隔开`);

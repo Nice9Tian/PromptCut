@@ -236,7 +236,9 @@ export function createUploadQueue({
         settle();
       }
     } catch (error) {
-      if (!running && (error?.name === 'AbortError')) {
+      if (!items.has(item.id)) {
+        // 该项已被撤回移出队列，不重试也不计失败
+      } else if (!running && (error?.name === 'AbortError')) {
         // 停下了:留在队里,下次接着传
       } else {
         counters.failures++;
@@ -273,6 +275,7 @@ export function createUploadQueue({
     const r = await client.putFile('media', filePath, {
       hash: t.hash,
       ext: t.ext || undefined,
+      signal,
       beforeChunk: async () => {
         await ownership?.assert();
         if (ownership && target()?.projectId !== item.projectId) throw Object.assign(new Error('project-mismatch'), { code: 'project-mismatch' });
@@ -336,6 +339,43 @@ export function createUploadQueue({
       controller?.abort();
       await persist();
       for (const resolve of waiters.splice(0)) resolve();
+    },
+    /**
+     * 撤回在途或排队中的素材。
+     * 若正在上传该素材，中止在途分片并移出队列；若在排队中，直接移出队列。
+     * @param {string[] | string} [targets] 要撤回的哈希列表；若未指定则撤回全部
+     * @returns {Promise<{ ok: boolean, cancelled: string[] }>}
+     */
+    async cancel(targets) {
+      const filter = targets === undefined || targets === null ? null
+        : (Array.isArray(targets) ? targets : [targets]).map((h) => String(h).toLowerCase()).filter(Boolean);
+      const matches = (item) => {
+        if (!filter || !filter.length) return true;
+        const idLower = item.id.toLowerCase();
+        if (filter.includes(idLower)) return true;
+        if (filter.some((t) => idLower.endsWith(':' + t))) return true;
+        if (item.tiers.some((t) => filter.includes(t.hash.toLowerCase()))) return true;
+        return false;
+      };
+      const toRemove = [];
+      for (const item of items.values()) {
+        if (matches(item)) toRemove.push(item);
+      }
+      if (!toRemove.length) return { ok: true, cancelled: [] };
+      const cancelledIds = [];
+      let abortCurrent = false;
+      for (const item of toRemove) {
+        items.delete(item.id);
+        cancelledIds.push(item.id);
+        if (current === item.id) abortCurrent = true;
+      }
+      say('upload.cancelled', { ids: cancelledIds });
+      if (abortCurrent && controller) {
+        controller.abort();
+      }
+      await persist();
+      settle();
+      return { ok: true, cancelled: cancelledIds };
     },
     /** 立即重排(测试拨时钟后用;也会跳过队头的退避) */
     poke({ skipBackoff = false } = {}) {

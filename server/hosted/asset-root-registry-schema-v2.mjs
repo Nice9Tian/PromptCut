@@ -88,7 +88,7 @@ export function validateAssetRootRecordV2(value, { expected, activeOnly = true }
         p.epoch !== value.epoch - 1 || !hash(p.registryDigest) || !hash(p.closureWitnessDigest)) fail('asset-root-v2-history-invalid');
     validateAssetRootScopeV2(p.closureScope, { expected, epoch: p.epoch, instanceId: p.instance?.instanceId });
     validateAssetRootInstanceV2(p.instance, { expected, closureScope: p.closureScope });
-    if (p.instance.bootId !== value.instance.bootId || p.instance.instanceId === value.instance.instanceId ||
+    if (p.instance.instanceId === value.instance.instanceId ||
         p.instance.unitInvocationId === value.instance.unitInvocationId || p.closureScope.scopeId === value.closureScope.scopeId ||
         p.closureScope.unitInvocationId === value.closureScope.unitInvocationId) fail('asset-root-v2-generation-invalid');
   }
@@ -115,7 +115,7 @@ export function validateAssetRootReservationV2(value, { expected }) {
   return structuredClone(value);
 }
 
-export function validateAssetRootWitnessV2(value, { expected, previousRecord, nextEpoch, bootId }) {
+export function validateAssetRootWitnessV2(value, { expected, previousRecord, nextEpoch }) {
   validateAssetRootRecordV2(previousRecord, { expected });
   if (!exact(value, ['v', 'protocol', 'witnessId', 'authorityId', 'fromEpoch', 'toEpoch', 'previousRegistry', 'observed']) ||
       value.v !== 2 || value.protocol !== 'promptcut.asset-os-closure.v2' || !ref(value.witnessId) ||
@@ -124,8 +124,9 @@ export function validateAssetRootWitnessV2(value, { expected, previousRecord, ne
       !same(value.previousRegistry, previousRecord)) fail('asset-root-v2-witness-invalid');
   const o = value.observed;
   if (!exact(o, ['kind', 'closed', 'at', 'bootId', 'serviceInstance', 'closureScope', 'scopeActive', 'scopeExclusive',
-    'populated', 'serviceInactive', 'mainBirthGone']) || o.kind !== 'cgroup-empty' || o.closed !== true || !positive(o.at) ||
-      o.bootId !== bootId || bootId !== previousRecord.instance.bootId ||
+    'populated', 'serviceInactive', 'mainBirthGone']) ||
+      (o.kind !== 'cgroup-empty' && o.kind !== 'boot-transition') || o.closed !== true || !positive(o.at) ||
+      o.bootId !== previousRecord.instance.bootId ||
       !same(o.serviceInstance, previousRecord.instance) || !same(o.closureScope, previousRecord.closureScope) ||
       o.scopeActive !== true || o.scopeExclusive !== true || o.populated !== 0 || o.serviceInactive !== true || o.mainBirthGone !== true)
     fail('asset-root-v2-witness-invalid');
@@ -147,8 +148,10 @@ export function validateAssetRootPublicationV2({ record, anchor, reservation, wi
     if (witness !== null || publication.closureWitnessDigest !== null || anchor.firstRegistryDigest !== digestOf(record))
       fail('asset-root-v2-anchor-invalid');
   } else {
-    validateAssetRootWitnessV2(witness, { expected, previousRecord: witness?.previousRegistry, nextEpoch: record.epoch, bootId: record.instance.bootId });
+    validateAssetRootWitnessV2(witness, { expected, previousRecord: witness?.previousRegistry, nextEpoch: record.epoch });
     const p = record.previous;
+    if (witness.observed.kind === 'cgroup-empty' ? p.instance.bootId !== record.instance.bootId : p.instance.bootId === record.instance.bootId)
+      fail('asset-root-v2-generation-invalid');
     if (p.registryDigest !== digestOf(witness.previousRegistry) || !same(p.instance, witness.previousRegistry.instance) ||
         !same(p.closureScope, witness.previousRegistry.closureScope) || p.closureWitnessDigest !== digestOf(witness) ||
         publication.closureWitnessDigest !== digestOf(witness)) fail('asset-root-v2-history-invalid');

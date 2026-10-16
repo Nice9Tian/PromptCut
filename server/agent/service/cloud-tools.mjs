@@ -261,9 +261,9 @@ const LOOK_NOTE_OFF = '- **这台云节点上看不了画面。** `see_frames`�
  * 不给 `provided`(旧托管档)时逐字是原来的那一段;给了(账号模式的任务进程)就按这个进程里真的接上了哪些族来写:
  * 接上的不再列进「这一版还没有」,并补上它在云端与本机不一样的地方。
  * @param {{ look?: boolean, provided?: Iterable<string> | null, collectDelegate?: boolean }} [o] `look`:这台节点配没配看画面的口子;
- *   `collectDelegate`:代下(请发起人的电脑带登录态替云端下载)在这个进程里开没开——缺省不开,部署配置显式打开才是 true
+ *   `collectDelegate`:代下(请发起人的电脑带登录态替云端下载)在这个进程里开没开——缺省开启,部署配置显式设为 0 或 false 才关闭
  */
-export function cloudSystemNote({ look = false, provided = null, collectDelegate = false } = {}) {
+export function cloudSystemNote({ look = false, provided = null, collectDelegate = true } = {}) {
   const has = providedTools(provided);
   const family = (name) => (CLOUD_PROVIDER_FAMILIES[name] ?? []).every((tool) => has.has(tool));
   const lines = [];

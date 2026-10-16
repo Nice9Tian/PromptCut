@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { getActiveCollectDelegationUrl, subscribeActiveCollectDelegation } from "../ai/cloud/collectBridge";
 import { actions, getState, useStore } from "../store/project";
 import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
@@ -114,6 +115,7 @@ export function TopBar() {
   const barRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const collectUrl = useSyncExternalStore(subscribeActiveCollectDelegation, getActiveCollectDelegationUrl, () => null);
 
   const [tier, setTier] = useState<BarTier>("wide");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -732,6 +734,33 @@ export function TopBar() {
       <div className="pc-bar-group">
         <SyncChips />
       </div>
+
+      {/* 桌面版代下时的醒目提示条 */}
+      {collectUrl && (
+        <div
+          className="pc-bar-group"
+          role="status"
+          aria-live="polite"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            padding: "2px 10px",
+            borderRadius: "999px",
+            fontSize: "12px",
+            color: "var(--ui-accent, #3b82f6)",
+            background: "var(--ui-accent-subtle, rgba(59, 130, 246, 0.12))",
+            border: "1px solid var(--ui-accent, rgba(59, 130, 246, 0.3))",
+            maxWidth: "420px",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontWeight: 500,
+          }}
+          title={`云端 Agent 正在用这台电脑上的登录下载：${collectUrl}`}
+        >
+          {`云端 Agent 正在用这台电脑上的登录下载：${collectUrl}`}
+        </div>
+      )}
 
       {/* 只读查看(?observe=1):告诉人这份是看的不是改的,别让人白点一下才发现 */}
       {viewOnly && (

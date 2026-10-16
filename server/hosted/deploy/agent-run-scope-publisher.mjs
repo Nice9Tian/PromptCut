@@ -106,7 +106,6 @@ export async function publishAgentScope({ expected, mode, configuredAnchorDigest
         ...before, worker: { publicKey: identity.publicKey, publicKeyDigest: identity.publicKeyDigest },
         previousClosureDigest: entry ? digestOf(entry.closure) : null };
       validateAgentScopeRecord(record, expected);
-      if (entry && record.instance.bootId !== entry.record.instance.bootId) failScope('boot-transition');
       entry = emptyEntry(record, reservation);
       if (!anchor) { anchor = { v: 1, protocol: protocol('anchor'), expected, firstRecordDigest: digestOf(record) }; await io.write('anchor.json', anchor, true); }
       entry.publications.ready = scopePublication(entry, 'ready', anchor);

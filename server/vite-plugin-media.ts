@@ -964,6 +964,42 @@ export function mediaMiddleware(root: string, options: ProjectMediaOptions = {})
           res.setHeader("Content-Type", "application/json");
           return res.end(JSON.stringify({ ok: true }));
         }
+        // POST /api/media/upload-queue/cancel | DELETE /api/media/upload-queue[/<hash>] —— 撤回在途分片并从队列移除、删掉本机未登记的代下文件
+        if ((req.method === "POST" && req.url.split("?")[0] === "/api/media/upload-queue/cancel") ||
+            (req.method === "DELETE" && req.url.startsWith("/api/media/upload-queue"))) {
+          res.setHeader("Content-Type", "application/json");
+          if (!service.queue) return res.end(JSON.stringify({ ok: false, error: "no-queue" }));
+          let targets: string[] = [];
+          if (req.method === "POST") {
+            const body = await readJsonBody(req);
+            if (Array.isArray(body?.hashes)) targets = body.hashes.map((h: any) => String(h).toLowerCase()).filter(Boolean);
+            else if (typeof body?.hash === "string" && body.hash) targets = [body.hash.toLowerCase()];
+          } else {
+            const sub = req.url.split("?")[0].replace(/^\/api\/media\/upload-queue\/?/, "");
+            if (sub && isMediaHash(sub.toLowerCase())) targets = [sub.toLowerCase()];
+            else {
+              const query = new URL(req.url, "http://promptcut.local").searchParams;
+              const q = query.get("hashes")?.split(",").map((h) => h.trim().toLowerCase()).filter(isMediaHash);
+              if (q?.length) targets = q;
+            }
+          }
+          const r = await service.queue.cancel(targets.length ? targets : undefined);
+          const cleaned: string[] = [];
+          // 删掉从队列里撤回的在途/排队文件（已完整传完出队的文件不删，见 10-14 第 180 行）
+          for (const cancelledId of r.cancelled) {
+            const h = cancelledId.includes(":") ? cancelledId.split(":").pop()! : cancelledId;
+            if (isMediaHash(h)) {
+              const filePath = await resolveHashFile(root, h);
+              if (filePath) {
+                try { await fs.rm(filePath, { force: true }); } catch { /* 忽略删除错 */ }
+                await forgetMediaIndex(root, h);
+                cleaned.push(h);
+              }
+            }
+          }
+          tiersLog("upload.cancel", { cancelled: r.cancelled.length, cleaned: cleaned.length });
+          return res.end(JSON.stringify({ ok: true, cancelled: r.cancelled, cleaned }));
+        }
       } catch (err) {
         res.statusCode = 400;
         return res.end(err instanceof Error ? err.message : String(err));

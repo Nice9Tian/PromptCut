@@ -252,6 +252,96 @@ test('上一个 root 进程留下的一代：这里没有它的通道，先让�
   assert.equal(stubborn.m.files.get('failure-2.json'), undefined);
 });
 
+test('节点重启后任务槽自动恢复：跨 boot_id 自动接续，卡住的任务自动记为失败并释放，下一条任务正常跑完', async () => {
+  const s = slotUnderTest(); await s.adapter.bootstrap();
+  const anchorDigest = digestOf(s.m.files.get('anchor.json'));
+
+  // 重启前：开第 2 代并在跑，绑定了任务
+  const opened = await s.adapter.open();
+  const prepared = await opened.worker.prepare({ projectId: 'project', conversationId: 'conversation-slot-a', requestId: 'dispatch:slot-a:2' });
+  await s.adapter.bind(prepared.assignment);
+  assert.equal(s.live.has(2), true);
+  assert.equal((await s.adapter.current()).phase, 'bound');
+  const record2 = s.m.files.get('epoch-2.json');
+  assert.equal(record2.instance.bootId, '11111111-1111-1111-1111-111111111111');
+
+  // 模拟节点重启（操作系统重启，bootId 改变，前一次开机的所有进程全部消亡）
+  const REBOOT_BOOT_ID = '22222222-2222-2222-2222-222222222222';
+  s.m.reboot(REBOOT_BOOT_ID);
+  s.kill(2);
+
+  // 重启后：root 重新拉起调度，使用相同的登记目录与锚点配置
+  const rebootAdapter = createRootSlotAdapter(s.options());
+  const pending = { conversations: [], scopeControls: [] }, controls = new Map();
+  const scheduler = createAccountSlotScheduler({
+    slots: [rebootAdapter],
+    pollMs: 20,
+    log: (event, fields) => s.log.push([event, fields.epoch ?? null]),
+    master: {
+      pending: async () => structuredClone(pending),
+      scopeControl: async (row) => controls.get(row.controlId) ?? Promise.reject(Object.assign(new Error('pending'), { status: 503 })),
+    },
+  });
+
+  await scheduler.start();
+  try {
+    // 1. 槽被 adopt 接手，检测到主进程已不在，写下跨 boot 的失败观察
+    await until(() => scheduler.describe()[0].failureObserved === true, '重启后接手旧实例并写下失败观察');
+    const failure2 = s.m.files.get('failure-2.json');
+    assert.ok(failure2, '存在第 2 代的失败记录');
+    assert.equal(failure2.observed.kind, 'boot-transition');
+    assert.equal((await rebootAdapter.current()).phase, 'bound');
+
+    // 2. 文档服务读到失败观察，签发 worker-failed 强制终态
+    const ref2 = (await rebootAdapter.current()).rootScopeRef;
+    pending.scopeControls = [{
+      projectId: 'project',
+      controlId: 'control-reboot-2',
+      runGrantId: 'grant-2',
+      assignmentDigest: digestOf(s.m.files.get('assignment-2.json')),
+      rootScopeRef: ref2,
+    }];
+    controls.set('control-reboot-2', { unassigned: false, terminal: s.forcedTerminal(2, 'worker-failed') });
+
+    // 3. root 凭强制终态执行 forced-close，记录跨 boot 见证，槽恢复 idle 并释放锁
+    await until(() => scheduler.describe()[0].phase === 'idle', '第 2 代跨 boot 关闭并释放槽位');
+    assert.equal((await rebootAdapter.current()).phase, 'closed');
+    const closure2 = s.m.files.get('closure-2.json');
+    assert.ok(closure2, '存在第 2 代的 closure 记录');
+    assert.equal(closure2.observed.kind, 'boot-transition');
+
+    // 4. 槽位恢复可用：下一条任务自动进队调度，在新 boot 下开第 3 代并正常开跑
+    pending.scopeControls = [];
+    pending.conversations = [{ projectId: 'project', conversationId: 'conversation-slot-a', queueRevision: 10 }];
+    await until(() => scheduler.describe()[0].phase === 'running' && scheduler.describe()[0].epoch === 3, '第 3 代在新 boot 下成功开跑');
+    const record3 = s.m.files.get('epoch-3.json');
+    assert.equal(record3.instance.bootId, REBOOT_BOOT_ID, '第 3 代运行在新的 bootId 下');
+    assert.equal(digestOf(s.m.files.get('anchor.json')), anchorDigest, '锚点链完整，无需重跑 bootstrap');
+
+    // 5. 槽正常结清回到 closed（空闲）状态后，再次经历节点重启（bootId 变为 BOOT_3），验证空闲槽仍能正常 open 开下一代
+    pending.conversations = [];
+    s.workers.get(3).settle({ kind: 'normal', ...s.m.closing() });
+    await until(() => scheduler.describe()[0].phase === 'idle', '第 3 代正常结清回到 idle');
+    assert.equal((await rebootAdapter.current()).phase, 'closed');
+    const closure3 = s.m.files.get('closure-3.json');
+    assert.equal(closure3.observed.kind, 'cgroup-empty', '第 3 代是同 boot 下正常关闭的 cgroup-empty');
+    await scheduler.stop();
+
+    // 模拟槽处于空闲 closed 状态时经历节点重启
+    const REBOOT_BOOT_ID_3 = '33333333-3333-3333-3333-333333333333';
+    s.m.reboot(REBOOT_BOOT_ID_3);
+    const idleRebootAdapter = createRootSlotAdapter(s.options());
+    assert.equal((await idleRebootAdapter.current()).phase, 'closed', '重启后空闲槽仍处于 closed 状态');
+    const opened4 = await idleRebootAdapter.open();
+    assert.equal(opened4.rootScopeRef.epoch, 4);
+    const record4 = s.m.files.get('epoch-4.json');
+    assert.equal(record4.instance.bootId, REBOOT_BOOT_ID_3, '空闲槽跨重启后第 4 代在新 boot 下顺利开启');
+    assert.equal(digestOf(s.m.files.get('anchor.json')), anchorDigest, '锚点链依然完整');
+  } finally {
+    await scheduler.stop();
+  }
+});
+
 test('文档服务这一侧的任务槽配置：只在 Linux 上开；主身份和任务身份必须是两把钥匙；签名钥匙和各槽对得上', () => {
   const m = scopeModel('slot-a'), authorityId = m.expected.docAuthorityId;
   const signingPem = m.doc.privateKey.export({ format: 'pem', type: 'pkcs8' });
