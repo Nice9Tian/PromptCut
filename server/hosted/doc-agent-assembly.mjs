@@ -92,11 +92,12 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         channelBinding: instanceTlsBinding(subjects.get(subject.authenticationId)) };
     } });
   const readControl = createAgentReadControl({ ledger, instanceAuthority,
-    synchronize: () => runtime.authority.synchronize(),
     async authorizeRead(body) {
       currentService();
       const trusted = await runtime.resolveAgentDelegation(body.delegation);
       if (trusted.projectId !== body.projectId) fail(403, 'project-mismatch');
+      if (trusted.accountId && trusted.loginId && trusted.credentialId && Number.isSafeInteger(trusted.loginGeneration))
+        return trusted;
       return runtime.authority.authorizePrincipal({ authorizationId: trusted.authorizationId },
         { projectId: trusted.projectId, action: 'read' });
     }, checkReadInState: conversationReadInState,
