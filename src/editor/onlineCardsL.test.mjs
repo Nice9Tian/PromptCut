@@ -225,6 +225,7 @@ test("OCE-L-06 接线:运行状态变了,分派表、测量、时间轴片段、
   const read = (rel) => fs.readFileSync(fileURLToPath(srcUrl(rel)), "utf8");
   assert.match(read("editor/planDispatch.ts"), /onCardRunStatesChanged\(\(\) => schedule\(\)\)/, "分派表重算");
   assert.match(read("editor/ProbeGate.tsx"), /onCardRunStatesChanged\(\(\) => \{[\s\S]*?requeueProbeRun\(getState\(\)\.project\)/, "测量重排(刚载入成功的卡即时补测)");
+  assert.match(read("editor/Preview.tsx"), /onPlanUpdated\(trigger\)[\s\S]*?onCardRunStatesChanged\(trigger\)/, "暂停态在同步卡 ready 与测量分派更新后重新结算当前帧");
   assert.match(read("editor/timeline/ClipView.tsx"), /useSyncExternalStore\(onCardRunStatesChanged, cardRunStatesGen\)/, "时间轴片段重绘");
   assert.match(read("editor/snapshotFeed.ts"), /cardRunStatesGen\(\)/, "投递那一侧的记忆带运行状态的代数");
   assert.match(read("editor/costIdentity.ts"), /cardRunStatesGen\(\)/, "成本身份的记忆带运行状态的代数");
