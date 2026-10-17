@@ -535,7 +535,10 @@ async function main() {
     }
     const itemDir = path.join(out, 'items', item.id + tag);
     fs.mkdirSync(itemDir, { recursive: true });
-    vars.item = itemDir;
+    const outRelTmp = path.relative(os.tmpdir(), itemDir);
+    vars.item = (!outRelTmp || outRelTmp.startsWith('..') || path.isAbsolute(outRelTmp))
+      ? fs.mkdtempSync(path.join(os.tmpdir(), `pc-accept-${item.id + tag}-`))
+      : itemDir;
     const cwd = item.cwd === 'main' ? vars.main : REPO;
     const stepSpecs = (item.cmd ? [{ cmd: item.cmd }] : item.steps.map((s) => (Array.isArray(s) ? { cmd: s } : s)));
     const env = { ...process.env, PC_ACCEPTANCE: '1' };

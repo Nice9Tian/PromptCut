@@ -16,8 +16,8 @@ import path from "node:path";
 const IGNORED_SEGMENTS = new Set([
   // Vite 的缺省忽略(传函数不会替换它们,但它们的 glob 同样受上面的 dot 问题影响,这里一并兜住)
   ".git", "node_modules", "test-results",
-  // 不是源码:桌面壳的二进制、导出产物与帧库、内置 Python。监听到正在写的 exe 会 EBUSY 把 dev server 崩掉
-  "desktop", "out", "python",
+  // 不是源码:桌面壳的二进制、导出产物与帧库、内置 Python、本地工作与验收产物、小工具编译产物、构建产物与文档
+  "desktop", "out", "python", "work", "tools", "dist", "dist-online", "docs", "archive",
   // 草稿、任务目录、会话历史:运行时数据,改一下就触发一次热更新纯属浪费
   ".pc-projects", ".pc-work", ".pc-chats",
   // 在仓库根起服务时,别的 worktree 不是本服务的源码
