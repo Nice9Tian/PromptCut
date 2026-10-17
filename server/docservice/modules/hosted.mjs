@@ -71,7 +71,8 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
   let registryVersion = null;
 
   const clock = (ctx) => (typeof now === 'function' ? now() : ctx.now());
-  const inSpace = (p) => typeof p?.tenantId === 'string' && isProjectId(p.tenantId);
+  const isHostedProjectId = (id) => isProjectId(id) || Boolean(getAccountRuntime()?.hasProject?.(id));
+  const inSpace = (p) => typeof p?.tenantId === 'string' && isHostedProjectId(p.tenantId);
   const isControl = (p) => p?.scope === 'service' && !inSpace(p);
   /** 这条连接在它的项目里算哪一类；不在共享项目里的回 null */
   const classOf = (p) => (!inSpace(p) ? null : typeof p.service === 'string' ? serviceKey(p.service) : p.scope === 'member' ? MEMBER : null);
@@ -214,7 +215,7 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
     if (msg.conversation !== undefined || msg.conversationId !== undefined || msg.delegation !== undefined || msg.purpose !== undefined) {
       return refuse('forbidden', '这个服务要不到代成员的票据');
     }
-    if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
+    if (!isHostedProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
 
     // 优先查账号模式项目
     const runtime = getAccountRuntime();
@@ -256,7 +257,7 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
 
   function demand(ctx, connId, c, msg, reqId) {
     const refuse = (reason, detail) => reply(ctx, connId, { type: 'error', reason, ...(detail ? { detail } : {}) }, reqId);
-    if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
+    if (!isHostedProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
     let holdMs = HOSTED_DEFAULTS.DEMAND_MS;
     if (msg.holdMs !== undefined && msg.holdMs !== null) {
       if (!Number.isSafeInteger(msg.holdMs) || msg.holdMs < 0 || msg.holdMs > HOSTED_DEFAULTS.DEMAND_MAX_MS) {
@@ -317,7 +318,7 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
   function memberServiceTicket(ctx, connId, c, msg, reqId) {
     const refuse = (reason, detail) => reply(ctx, connId, { type: 'error', reason, ...(detail ? { detail } : {}) }, reqId);
     const p = c.principal;
-    if (!isProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
+    if (!isHostedProjectId(msg.projectId)) return refuse('bad-message', '要 projectId');
     const role = registryOf().get(p.service).role;
     const at = clock(ctx);
 

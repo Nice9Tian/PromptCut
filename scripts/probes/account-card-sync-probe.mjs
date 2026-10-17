@@ -83,7 +83,8 @@ const CARD_REL = `src/cards/user/${CARD_ID}.tsx`;
 const AGENT_CARD_ID = `acs-agent-${RUN}`;
 const AGENT_CARD_REL = `src/cards/user/${AGENT_CARD_ID}.tsx`;
 const MARK = (v) => `ACS-${RUN}-${v}`.toUpperCase();
-const cardSource = (id, mark, bg = '#224') => `import type { CardDef, CardProps } from "../../kernel/types";
+const cardSource = (id, mark, bg = '#224') => `import "../../kernel/remotionStyle";
+import type { CardDef, CardProps } from "../../kernel/types";
 interface Params { text: string }
 function C({ params }: CardProps<Params>) {
   return <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 72, color: "#fff", background: "${bg}" }}>{"${mark}"} {params.text}</div>;
@@ -144,11 +145,12 @@ async function stopAll() {
 async function startEditor(tag, port) {
   const dir = path.join(TMP, tag);
   const overrides = path.join(dir, 'card-overrides');
-  for (const d of [overrides, path.join(dir, 'data'), path.join(dir, 'vite-cache')]) fs.mkdirSync(d, { recursive: true });
+  const viteCache = path.join(dir, 'node_modules', '.vite-probe');
+  for (const d of [overrides, path.join(dir, 'data'), viteCache]) fs.mkdirSync(d, { recursive: true });
   const p = start(`editor-${tag}`, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'], {
     PROMPTCUT_NO_PORT_FILE: '1',
     PROMPTCUT_DATA_DIR: path.join(dir, 'data'),
-    PROMPTCUT_VITE_CACHE_DIR: path.join(dir, 'vite-cache'),
+    PROMPTCUT_VITE_CACHE_DIR: viteCache,
     PROMPTCUT_PUSH: '0',
     PROMPTCUT_LAN_HOST: '',
     PROMPTCUT_CARD_OVERRIDES: overrides,

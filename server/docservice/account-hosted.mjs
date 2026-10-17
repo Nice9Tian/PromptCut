@@ -237,6 +237,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   return {
     authority,
     docInstanceId,
+    hasProject(projectId) { return authority.hasProject(projectId); },
     get sessionReady() { return assetReady; },
     setAssetReady(value) {
       if (!allowFixtureAssetReady) fail(503, 'asset-configuration');

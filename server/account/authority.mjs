@@ -671,6 +671,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       const p = ledger.read().projects[projectId];
       return p && p.status === 'active' ? p : null;
     },
+    hasProject(projectId) {
+      return typeof projectId === 'string' && Boolean(ledger.read().projects?.[projectId]);
+    },
     subscribeRevocations(context, callback) {
       if (!context || typeof context !== 'object' || typeof callback !== 'function') reject(400, 'invalid-subscription');
       const entry = { context: structuredClone(context), callback }; subscriptions.add(entry); return () => subscriptions.delete(entry);

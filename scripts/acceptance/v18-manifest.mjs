@@ -235,7 +235,7 @@ export const V18_ITEMS = [
     { account: true, needs: ['online-build'], prereq: ['G0-4'], timeoutMin: 30, known: '端口写死 28640～28658,不随 --v18-port-base 走;分支已合入 main,按文件头 --dist 指在线构建;多步要等令牌到期,整趟十几分钟' }),
   PR('V18-logout-text-probe', '改密选退出的官网页面原文:问句、两个按钮、「正在退出已登录设备」「设备已退出」,素材服务停着时超时的失败文案', ['2.1-5'], 'account-logout-text-probe',
     ['--site-root', `${VISU}/site`, '--out', '{item}', '--port-base', port(20)], { account: true, timeoutMin: 20, known: '要环境变量指到带退出确认时限的那一版 VisuHive;失败退出码 1' }),
-  PR('V18-move-probe', '账号办法「搬到云端」端到端(桌面版两个编辑器:本地项目一遍、协作房间一遍、搬的时候又改了、关了以后断)', ['2.1-6', '2.1-7'], 'account-move-probe', [],
+  PR('V18-move-probe', '账号办法「搬到云端」端到端(桌面版两个编辑器:本地项目一遍、协作房间一遍、搬的时候又改了、关了以后断)', ['2.1-6', '2.1-7'], 'account-move-probe', ['--out', '{item}'],
     { account: true, timeoutMin: 60, known: '端口写死 28950～28999(夹具 28950～28956、云端 Agent 入口 28957、编辑器 28960 与 28965),不随 --v18-port-base 走;--only local,room 可只跑一遍;行号(2.1-6、2.1-7)是按「搬」的内容归的,拿不准' }),
   REMOTE('V18-account-tools-perms-linux', '主服务与任务进程两个系统用户之间的文件权限自检(用量流水可读、浏览器数据清理记号)', ['2.1-13', '2.3-4'], 'node',
     '要 Linux、以 root 跑:sudo node scripts/probes/account-tools-perms-linux.mjs [--tmp <目录>] [--repo <检出根>];末行 PASS n/n(全过是 26/26),其他平台退出码 2',

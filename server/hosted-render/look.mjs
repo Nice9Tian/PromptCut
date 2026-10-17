@@ -125,7 +125,7 @@ export const LOOK_WORKER_PREFIXES = Object.freeze(['/api/vision/', '/api/ai/visu
 
 const sha256hex = (text) => createHash('sha256').update(text).digest('hex');
 const NONCE_RE = /^[A-Za-z0-9_-]{16,64}$/;
-const PROJECT_ID_RE = /^sp_[a-z2-7]{26}$/;
+const PROJECT_ID_RE = /^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/;
 const RUN_REF_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /** 用途串：与握手的 `promptcut.service.v1` 不同，签名不能互相挪用 */
