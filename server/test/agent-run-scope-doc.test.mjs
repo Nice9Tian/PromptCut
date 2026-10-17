@@ -382,3 +382,237 @@ test('separate trusted master certificate registers control-only and cannot sign
   assert.equal(f.instances.verifyInState(f.ledger.read(), { ...principal, ...cap }, { operation, input: requestBody }).instanceId, registration.instanceId);
   f.instances.release(cap.instanceSession);
 });
+
+test('领取请求还在路上：判定没有授权与封住请求号在同一个账本事务完成，晚到的领取（含已在 verifiedSender 途中）与登记一律 409 拒绝', async t => {
+  let holdSender = null;
+  const f = await fixture(t);
+  f.enqueue('m1'); f.enqueue('m2');
+  const masterKey = pair(), masterPrincipal = { ...f.principal, serviceKid: 'master-key' };
+  const challenge = await f.instances.beginRegistration({ servicePrincipal: masterPrincipal, requestId: 'master-reg', publicKey: pem(masterKey.publicKey) });
+  const masterReg = await f.instances.register({ servicePrincipal: masterPrincipal, challenge, signature: signature(challenge, masterKey.privateKey) });
+  const provider = createRunAuthority({
+    ...f.options,
+    async verifySender(actor) {
+      if (holdSender) await holdSender;
+      return { ...actor, accountEventSeq: f.ledger.read().accountHead };
+    },
+  });
+  async function invokeWith(reg, key, priv, operation, input) {
+    const p = { ...f.principal, serviceKid: key };
+    const proof = {
+      instanceId: reg.instanceId,
+      instanceGeneration: reg.instanceGeneration,
+      signature: signature(instanceProofPayload({
+        ...reg, channelBinding: '4'.repeat(64), method: 'POST', path: `/test/${operation}`, operation, requestDigest: digestOf(input),
+      }), priv),
+    };
+    const cap = f.instances.authenticate({ servicePrincipal: p, method: 'POST', path: `/test/${operation}`, operation, request: input, proof });
+    try { return await provider[operation]({ ...input, servicePrincipal: { ...p, ...cap } }); }
+    finally { f.instances.release(cap.instanceSession); }
+  }
+  const invokeWorker = (op, input) => invokeWith(f.registration, servicePrincipal.serviceKid, f.m.workerKey.privateKey, op, input);
+  const invokeMaster = (op, input) => invokeWith(masterReg, 'master-key', masterKey.privateKey, op, input);
+
+  // 1. 失败观察尚未写下时，master 不能把槽判成未分配
+  await assert.rejects(invokeMaster('scopeControl', { rootScopeRef: f.ref, requestId: 'dispatch:slot-a:1' }), { code: 'run-scope-failure-pending' });
+
+  // 2. 模拟 worker 已经发出 admit 请求并卡在 verifySender 异步等待途中，此时调度器超时
+  let releaseSender;
+  holdSender = new Promise(resolve => { releaseSender = resolve; });
+  const inFlightAdmit = invokeWorker('admit', { projectId, conversationId, requestId: 'dispatch:slot-a:1' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  // 3. 调度器写下失败观察，并由 master 向文档服务询问 dispatch:slot-a:1 是否有授权
+  f.m.faults.mainGone = true;
+  await f.m.run('observe-failure');
+  const decision = await invokeMaster('scopeControl', { rootScopeRef: f.ref, requestId: 'dispatch:slot-a:1' });
+  assert.deepEqual(decision, {
+    unassigned: true,
+    rootScopeRef: f.ref,
+    requestId: 'dispatch:slot-a:1',
+    reason: 'grant-never-admitted',
+  });
+  // 同一个账本事务里已同时记下 retired 槽与 abandoned 请求号；重复询问幂等
+  const stateAfter = f.ledger.read();
+  assert.ok(stateAfter.agentRunScopesV1.retired[`${f.m.expected.authorityId}:slot-a:1`]);
+  assert.ok(stateAfter.runAbandonedRequestsV2['dispatch:slot-a:1']);
+  assert.deepEqual(await invokeMaster('scopeControl', { rootScopeRef: f.ref, requestId: 'dispatch:slot-a:1' }), decision);
+
+  // 4. 在途的晚到 admit 恢复执行，进入账本事务时被 409 run-request-abandoned 拒绝，绝不建出授权或抢走消息
+  holdSender = null;
+  releaseSender();
+  await assert.rejects(inFlightAdmit, { status: 409, code: 'run-request-abandoned' });
+  assert.equal(Object.keys(f.ledger.read().runGrantsV2).length, 0);
+  assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, null);
+  assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].messages[0].queueState, 'queued');
+
+  // 5. 之后再用同一请求号、或同一代实例换请求号、或重新发起登记，一律 409 拒绝
+  await assert.rejects(invokeWorker('admit', { projectId, conversationId, requestId: 'dispatch:slot-a:1' }), { status: 409, code: 'run-request-abandoned' });
+  await assert.rejects(invokeWorker('admit', { projectId, conversationId, requestId: 'dispatch:slot-a:1-retry' }), { status: 409, code: 'run-scope-slot-retired' });
+  await assert.rejects(f.instances.beginRegistration({ ...f.request, requestId: 'late-register' }), { status: 409, code: 'run-scope-slot-retired' });
+});
+
+test('领取成功但回应丢失（文档服务已有授权、root 停在 ready）：向 scopeControl 询问未分配时走强制围栏与 docClosed，绝不提前退槽或抹掉 currentRunId', async t => {
+  const f = await fixture(t);
+  f.enqueue('m1'); f.enqueue('m2');
+  const masterKey = pair(), masterPrincipal = { ...f.principal, serviceKid: 'master-key' };
+  const challenge = await f.instances.beginRegistration({ servicePrincipal: masterPrincipal, requestId: 'master-reg', publicKey: pem(masterKey.publicKey) });
+  const masterReg = await f.instances.register({ servicePrincipal: masterPrincipal, challenge, signature: signature(challenge, masterKey.privateKey) });
+  async function invokeMaster(operation, input) {
+    const proof = {
+      instanceId: masterReg.instanceId,
+      instanceGeneration: masterReg.instanceGeneration,
+      signature: signature(instanceProofPayload({
+        ...masterReg, channelBinding: '4'.repeat(64), method: 'POST', path: `/test/${operation}`, operation, requestDigest: digestOf(input),
+      }), masterKey.privateKey),
+    };
+    const cap = f.instances.authenticate({ servicePrincipal: masterPrincipal, method: 'POST', path: `/test/${operation}`, operation, request: input, proof });
+    try { return await f.provider[operation]({ ...input, servicePrincipal: { ...masterPrincipal, ...cap } }); }
+    finally { f.instances.release(cap.instanceSession); }
+  }
+
+  // 1. admit 已经在文档服务成功落账，但回应在路上丢了（root 仍停在 ready，没 bind）
+  const grant = await f.invoke('admit', { projectId, conversationId, requestId: 'dispatch:slot-a:1' });
+  assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, grant.runId);
+  f.m.faults.mainGone = true;
+  await f.m.run('observe-failure');
+
+  // 2. master 用未分配请求形状去问 scopeControl：文档服务发现已有 grant，自动下 worker-failed 围栏；在 docClosed 完成前回 503，绝不提前退槽
+  await assert.rejects(invokeMaster('scopeControl', { rootScopeRef: f.ref, requestId: 'dispatch:slot-a:1' }), { status: 503, code: 'run-scope-doc-closure-pending' });
+  const revoked = f.ledger.read().runGrantsV2[grant.runGrantId];
+  assert.equal(revoked.state, 'revoked');
+  assert.equal(revoked.reason, 'worker-failed');
+
+  // 3. 文档服务完成本侧连接与操作围栏关闭后，scopeControl 返回 unassigned: true（reason: root-assignment-not-bound），由 root 退槽再结清
+  const doc = createDocService({ autoTick: false, log: () => {} });
+  const history = openOperationHistory(path.join(f.dir, 'edge1-operations.db'));
+  history.createProject(projectId, { id: projectId });
+  const unavailable = () => { throw Error('no-account-operation'); };
+  const operations = createPasswordOrder({ history, account: { get: unavailable }, verifyWitness: unavailable, checkGate: unavailable });
+  try {
+    await f.scope.closeDocControl({ controlId: revoked.closureControlId, docInstanceId: 'doc-live', service: doc, operationCoordinator: operations });
+    const answer = await invokeMaster('scopeControl', { rootScopeRef: f.ref, requestId: 'dispatch:slot-a:1' });
+    assert.equal(answer.unassigned, true);
+    assert.equal(answer.reason, 'root-assignment-not-bound');
+    await f.m.run('retire', {
+      terminal: {
+        v: 1, protocol: 'promptcut.agent-run-scope.unassigned-retirement.v1',
+        authorityId: f.m.expected.authorityId, slotId: f.m.expected.slotId, epoch: 1, recordDigest: f.ref.recordDigest, reason: 'assignment-failed',
+      },
+      intent: null,
+    });
+    const closed = await f.provider.reconcileScopeClosures();
+    assert.equal(closed.length, 1);
+    assert.equal(closed[0].terminalOutcome.status, 'failed');
+    assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, null);
+  } finally { await operations.idle(); history.close(); await doc.close(); }
+});
+
+test('同一个对话改派新槽（边界 3）：旧槽已成时新槽被 currentRunId 拒 run-not-ready；旧槽未成时新槽领走消息，旧槽晚到请求抢不走当前或后续消息', async t => {
+  const f = await runFixture();
+  const mA = scopeModel('slot-a'), mB = scopeModel('slot-b');
+  mA.expected.docAuthorityId = f.ledger.authorityId;
+  mB.expected.docAuthorityId = f.ledger.authorityId;
+  mB.expected.docPublicKey = mA.expected.docPublicKey;
+  await mA.run('initialize');
+  await mB.run('initialize');
+  const refA = agentScopeRef(mA.files.get('epoch-1.json'));
+  const refB = agentScopeRef(mB.files.get('epoch-1.json'));
+  const workerPin = '3'.repeat(64), masterPin = '5'.repeat(64);
+  const slotA = { expected: mA.expected, configuredAnchorDigest: digestOf(mA.files.get('anchor.json')), workerServiceKid: servicePrincipal.serviceKid, workerFingerprint256: workerPin };
+  const slotB = { expected: mB.expected, configuredAnchorDigest: digestOf(mB.files.get('anchor.json')), workerServiceKid: servicePrincipal.serviceKid, workerFingerprint256: workerPin };
+  const scope = createAgentRunScopeDoc({
+    ledger: f.ledger, signingKey: mA.doc.privateKey, slots: [slotA, slotB],
+    masterServiceKid: 'master-key', masterFingerprint256: masterPin,
+    sourceFactory: slot => ({
+      read: ({ checkpoint }) => inspectAgentScopeSource({
+        read: (slot.expected.slotId === 'slot-a' ? mA : mB).io.read,
+        expected: slot.expected, configuredAnchorDigest: slot.configuredAnchorDigest, checkpoint,
+      }),
+    }),
+  });
+  const principal = { ...servicePrincipal, authenticationId: 'test-connection' };
+  const instances = createAgentInstanceAuthority({
+    ledger: f.ledger, scopeAuthority: scope,
+    verifyTransportInState: (_s, p) => ({
+      serviceId: 'agent', serviceKid: p.serviceKid, authenticationId: p.authenticationId,
+      channelBinding: '4'.repeat(64), fingerprint256: p.serviceKid === 'master-key' ? masterPin : workerPin,
+    }),
+  });
+  t.after(() => { instances.close(); f.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+
+  const regSlot = async (m, ref, id) => {
+    const ch = await instances.beginRegistration({ servicePrincipal: principal, requestId: id, publicKey: pem(m.workerKey.publicKey), rootScopeRef: ref });
+    return instances.register({ servicePrincipal: principal, challenge: ch, signature: signature(ch, m.workerKey.privateKey) });
+  };
+  const regA1 = await regSlot(mA, refA, 'reg-a1');
+  const regB1 = await regSlot(mB, refB, 'reg-b1');
+  const provider = createRunAuthority({
+    ledger: f.ledger, conversationHooks: f.hooks, instanceAuthority: instances, scopeAuthority: scope,
+    docInstanceId: 'doc-live', synchronize: async () => {},
+    verifySender: async actor => ({ ...actor, accountEventSeq: f.ledger.read().accountHead }),
+    verifyServiceInState: (_s, p) => ({ serviceId: p.service, serviceKid: p.serviceKid }),
+  });
+  const invokeAs = async (reg, priv, operation, input) => {
+    const proof = {
+      instanceId: reg.instanceId, instanceGeneration: reg.instanceGeneration,
+      signature: signature(instanceProofPayload({
+        ...reg, channelBinding: '4'.repeat(64), method: 'POST', path: `/test/${operation}`, operation, requestDigest: digestOf(input),
+      }), priv),
+    };
+    const cap = instances.authenticate({ servicePrincipal: principal, method: 'POST', path: `/test/${operation}`, operation, request: input, proof });
+    try { return await provider[operation]({ ...input, servicePrincipal: { ...principal, ...cap } }); }
+    finally { instances.release(cap.instanceSession); }
+  };
+
+  // 子场景一：slot-a 其实已经领取成功（currentRunId 已设），放开 serving 后 slot-b 来领同一对话，被 409 run-not-ready 拒绝
+  f.enqueue('m1'); f.enqueue('m2');
+  const grantA1 = await invokeAs(regA1, mA.workerKey.privateKey, 'admit', { projectId, conversationId, requestId: 'dispatch:slot-a:1' });
+  assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, grantA1.runId);
+  await assert.rejects(
+    invokeAs(regB1, mB.workerKey.privateKey, 'admit', { projectId, conversationId, requestId: 'dispatch:slot-b:1' }),
+    { status: 409, code: 'run-not-ready' },
+  );
+
+  // 把 slot-a 第 1 代按故障结清，开启第 2 代测子场景二
+  mA.faults.mainGone = true; await mA.run('observe-failure');
+  const controls = await provider.reconcileScopeFailures();
+  const doc = createDocService({ autoTick: false, log: () => {} });
+  const history = openOperationHistory(path.join(f.dir, 'edge3-operations.db'));
+  history.createProject(projectId, { id: projectId });
+  const unavailable = () => { throw Error('no-account-operation'); };
+  const operations = createPasswordOrder({ history, account: { get: unavailable }, verifyWitness: unavailable, checkGate: unavailable });
+  try {
+    await scope.closeDocControl({ controlId: controls[0].controlId, docInstanceId: 'doc-live', service: doc, operationCoordinator: operations });
+    await mA.run('retire', {
+      terminal: {
+        v: 1, protocol: 'promptcut.agent-run-scope.unassigned-retirement.v1',
+        authorityId: mA.expected.authorityId, slotId: 'slot-a', epoch: 1, recordDigest: refA.recordDigest, reason: 'assignment-failed',
+      },
+      intent: null,
+    });
+    await provider.reconcileScopeClosures();
+    assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, null);
+
+    // 子场景二：slot-a 第 2 代领取超时并写下 failure-2.json（还未向文档服务发 scopeControl 核实），对话已改派给 slot-b
+    mA.faults.mainGone = false; await mA.run('start');
+    const refA2 = agentScopeRef(mA.files.get('epoch-2.json'));
+    const regA2 = await regSlot(mA, refA2, 'reg-a2');
+    mA.faults.mainGone = true; await mA.run('observe-failure');
+
+    // slot-b 顺利领走排队的 m2
+    const grantB1 = await invokeAs(regB1, mB.workerKey.privateKey, 'admit', { projectId, conversationId, requestId: 'dispatch:slot-b:1' });
+    assert.equal(grantB1.messageId, 'm2');
+    assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, grantB1.runId);
+
+    // slot-a 第 2 代的晚到领取到达文档服务：既抢不走正在跑的 m2，也绝不会在之后抢走新消息 m3
+    f.enqueue('m3');
+    await assert.rejects(
+      invokeAs(regA2, mA.workerKey.privateKey, 'admit', { projectId, conversationId, requestId: 'dispatch:slot-a:2' }),
+      err => [403, 409].includes(err.status),
+    );
+    assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].messages.find(m => m.messageId === 'm3').queueState, 'queued');
+  } finally { await operations.idle(); history.close(); await doc.close(); }
+});
+
+

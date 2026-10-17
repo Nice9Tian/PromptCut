@@ -252,6 +252,68 @@ test('上一个 root 进程留下的一代：这里没有它的通道，先让�
   assert.equal(stubborn.m.files.get('failure-2.json'), undefined);
 });
 
+test('孤儿槽（停在 ready、已有 failure-N.json、无 assignment-N）：收养时重复写失败观察完全幂等，核实无授权后安全 retire，对同一代重复 retire 结果确定幂等', async () => {
+  const s = slotUnderTest(); await s.adapter.bootstrap();
+  // 第 2 代：开了槽、任务进程在领取时超时（没绑定 assignment-2.json），上一个调度进程已停主进程并写过一次 failure-2.json
+  await s.adapter.open();
+  assert.equal((await s.adapter.current()).phase, 'ready');
+  assert.equal(s.m.files.get('assignment-2.json'), undefined);
+  const firstFailure = await s.adapter.observeFailure();
+  const failureBefore = structuredClone(s.m.files.get('failure-2.json'));
+  const markerBefore = structuredClone(s.m.files.get('failure-publication-2.json'));
+  assert.ok(failureBefore && markerBefore);
+  assert.equal(failureBefore.assignmentDigest, null);
+
+  // 边界 8：调度重启后收养这一个孤儿槽，会再调一次 observeFailure()——必须完全幂等，文件内容与摘要不变
+  const adopted = createRootSlotAdapter(s.options());
+  const secondFailure = await adopted.observeFailure();
+  assert.deepEqual(secondFailure, firstFailure);
+  assert.deepEqual(s.m.files.get('failure-2.json'), failureBefore);
+  assert.deepEqual(s.m.files.get('failure-publication-2.json'), markerBefore);
+
+  // 边界 5 + 边界 6：接上调度器，收养这个停在 ready 且已有 failure-2.json 的孤儿槽，向 master.scopeControl 核实未分配后执行 retire
+  const pending = { conversations: [], scopeControls: [] }, scopeCalls = [];
+  const scheduler = createAccountSlotScheduler({
+    slots: [adopted],
+    pollMs: 20,
+    log: (event, fields) => s.log.push([event, fields.epoch ?? null]),
+    master: {
+      pending: async () => structuredClone(pending),
+      async scopeControl(row) {
+        scopeCalls.push(row);
+        return { unassigned: true, rootScopeRef: row.rootScopeRef, requestId: row.requestId, reason: 'grant-never-admitted' };
+      },
+    },
+  });
+  await scheduler.start();
+  try {
+    await until(() => scheduler.describe()[0].phase === 'idle', '停在 ready 的孤儿槽经未分配核实后退槽回到 idle');
+    assert.equal(scopeCalls.length, 1);
+    assert.equal(scopeCalls[0].requestId, 'dispatch:slot-a:2');
+    assert.equal((await adopted.current()).phase, 'closed');
+    assert.equal(s.m.files.get('terminal-2.json').protocol, 'promptcut.agent-run-scope.unassigned-retirement.v1');
+    assert.equal(s.m.files.get('closure-2.json').protocol, 'promptcut.agent-run-scope.unassigned-closure.v1');
+    assert.deepEqual(s.m.files.get('failure-2.json'), failureBefore, 'retire 之后历史失败观察原样保留');
+
+    // 边界 5：对已经 retire 关掉的同一代再次调用 retire（相同原因），结果确定且幂等，且不会锁死槽位
+    const repeat = await adopted.retire({ reason: 'assignment-failed' });
+    assert.equal(repeat.head.phase, 'closed');
+    assert.equal(repeat.head.epoch, 2);
+
+    // 槽已回收：下一条排队对话顺利在第 3 代开跑
+    pending.conversations = [{ projectId: 'project', conversationId: 'conversation-slot-a', queueRevision: 1 }];
+    await until(() => scheduler.describe()[0].phase === 'running' && scheduler.describe()[0].epoch === 3, '回收后第 3 代顺利开跑');
+    pending.conversations = [];
+    s.workers.get(3).settle({ kind: 'normal', ...s.m.closing() });
+    await until(() => scheduler.describe()[0].phase === 'idle', '第 3 代正常结清');
+    // 对已绑定并正常关掉的第 3 代调用 retire，发布器确定性拒绝（agent-scope-unassigned-retirement）
+    await assert.rejects(adopted.retire({ reason: 'assignment-failed' }), { code: 'agent-scope-unassigned-retirement' });
+  } finally { await scheduler.stop(); }
+  // 对未绑定已 retire 的一代若换不同 reason 再调 retire，确定性报 agent-scope-terminal-conflict
+  const s2 = slotUnderTest(); await s2.adapter.bootstrap();
+  await assert.rejects(s2.adapter.retire({ reason: 'assignment-failed' }), { code: 'agent-scope-terminal-conflict' });
+});
+
 test('节点重启后任务槽自动恢复：跨 boot_id 自动接续，卡住的任务自动记为失败并释放，下一条任务正常跑完', async () => {
   const s = slotUnderTest(); await s.adapter.bootstrap();
   const anchorDigest = digestOf(s.m.files.get('anchor.json'));

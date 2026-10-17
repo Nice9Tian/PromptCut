@@ -52,12 +52,13 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
       slots.some(s => typeof s?.slotId !== 'string' || ['current', 'open', 'bind', 'close', 'forcedClose', 'retire', 'observeFailure']
         .some(name => typeof s[name] !== 'function')) || new Set(slots.map(s => s.slotId)).size !== slots.length)
     fail('slot-scheduler-configuration');
-  const states = slots.map(adapter => ({ adapter, phase: 'unknown', ref: null, worker: null, conversation: null,
+  const states = slots.map(adapter => ({ adapter, phase: 'unknown', ref: null, worker: null, conversation: null, bound: false,
     lane: Promise.resolve(), closing: false, failure: false, forcing: null, dispatching: null, note: null, abandoned: null }));
   let stopped = false, started = false, loop = null, wake = null, ticking = null, tickNo = 0;
-  // 一个对话领不到任务（多半是上一条还没结清）时隔一会儿再试，间隔逐次加倍，不为它反复开进程。
+  // 一个对话领不到任务（多半是上一条还没结清）或文档服务一时答不上槽状态时隔一会儿再试，间隔逐次加倍，不为它反复开进程。
   const cooldown = new Map();
   const rest = key => { const delay = Math.min((cooldown.get(key)?.delay ?? pollMs) * 2, 30_000); cooldown.set(key, { delay, until: Date.now() + delay }); };
+  const slotKey = ref => `slot:${ref?.slotId}:${ref?.epoch}`;
   const kick = () => { wake?.(); };
   const say = (event, slot, fields = {}) => { try { log(event, { slotId: slot?.adapter.slotId, epoch: slot?.ref?.epoch, ...fields }); } catch { /* 日志不影响调度 */ } };
 
@@ -68,12 +69,13 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
     return work;
   }
   function released(slot, how) {
+    if (slot.ref) cooldown.delete(slotKey(slot.ref));
     say('slot.closed', slot, { how });
-    slot.phase = 'idle'; slot.worker = null; slot.conversation = null; slot.closing = false; slot.failure = false; slot.note = how; slot.abandoned = null;
+    slot.phase = 'idle'; slot.worker = null; slot.conversation = null; slot.bound = false; slot.closing = false; slot.failure = false; slot.note = how; slot.abandoned = null;
     kick();
   }
   /** root 的动作失败以后槽上可能留着发布锁，不能再自动往下做：标出来，等人看。 */
-  function stuck(slot, code) { say('slot.stuck', slot, { code }); slot.phase = 'stuck'; slot.note = code; slot.closing = false; }
+  function stuck(slot, code) { say('slot.stuck', slot, { code }); slot.phase = 'stuck'; slot.conversation = null; slot.note = code; slot.closing = false; }
 
   function closeNormal(slot, ref, settlement) {
     return inLane(slot, async () => {
@@ -85,14 +87,19 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
       catch (error) { stuck(slot, codeOf(error)); }
     });
   }
-  function closeForced(slot, ref, row) {
+  function closeForced(slot, ref, row, { backoffKey = null } = {}) {
     if (slot.forcing) return slot.forcing;
     const work = inLane(slot, async () => {
       if (!sameRef(slot.ref, ref) || slot.phase === 'idle' || slot.phase === 'stuck') return;
       let answer;
-      // 文档服务还没把它那边的连接关完会回 503：这一轮先不做，下一轮再问。
+      // 文档服务还没把它那边的连接关完或一时不可用会回 503：这一轮先不做，下一轮再问。
       try { answer = await master.scopeControl(row); }
-      catch (error) { say('slot.forced.pending', slot, { code: codeOf(error) }); return; }
+      catch (error) {
+        if (backoffKey) rest(backoffKey);
+        say('slot.forced.pending', slot, { code: codeOf(error) });
+        return;
+      }
+      if (backoffKey) cooldown.delete(backoffKey);
       slot.closing = true;
       try {
         if (answer?.unassigned === true) { await slot.adapter.retire({ reason: 'assignment-failed' }); released(slot, 'retired'); }
@@ -111,7 +118,7 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
       catch (error) { stuck(slot, codeOf(error)); }
     });
   }
-  /** 只写「主进程不在了」的观察。之后由文档服务据此签强制终态，再走 closeForced。 */
+  /** 只写「主进程不在了」的观察。之后由文档服务据此签强制终态或确认未分配，再走 closeForced。 */
   async function observe(slot, ref) {
     if (!sameRef(slot.ref, ref) || slot.failure || slot.phase === 'idle' || slot.phase === 'stuck') return;
     try { await slot.adapter.observeFailure(); slot.failure = true; slot.phase = 'failed'; say('slot.failure-observed', slot); kick(); }
@@ -133,7 +140,7 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
   }
 
   async function dispatch(slot, target) {
-    slot.phase = 'opening'; slot.conversation = target; slot.note = null;
+    slot.phase = 'opening'; slot.conversation = target; slot.bound = false; slot.note = null;
     let opened;
     try { opened = await slot.adapter.open(); }
     catch (error) { slot.ref = null; slot.conversation = null; return stuck(slot, codeOf(error)); }
@@ -146,11 +153,11 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
       prepared = await worker.prepare({ projectId: target.projectId, conversationId: target.conversationId,
         requestId: `dispatch:${ref.slotId}:${ref.epoch}` });
     } catch (error) {
-      // 不知道文档服务有没有记下这次领取。不退槽（退了而它记下了，那条任务就永远结不清）：
-      // 让这一代主进程停下、写失败观察；文档服务有记录就会签强制终态，由 closeForced 收。
+      // 不知道文档服务有没有记下这次领取。不直接退槽（退了而它记下了，那条任务就永远结不清）：
+      // 让这一代主进程停下、写失败观察、释放对话占用；文档服务有记录就会签强制终态，没记录则封住请求号并回 unassigned，均由 closeForced 收。
       say('slot.prepare.unknown', slot, { code: codeOf(error) });
-      slot.phase = 'failed';
       try { await worker.stop?.(); } catch { /* 停不下来就等它自己退出 */ }
+      slot.phase = 'failed'; slot.conversation = null;
       return inLane(slot, () => observe(slot, ref));
     }
     if (prepared?.noTask === true) {
@@ -160,6 +167,7 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
     slot.phase = 'assigned';
     try {
       await inLane(slot, () => slot.adapter.bind(prepared.assignment));
+      slot.bound = true;
       await worker.start();
       if (sameRef(slot.ref, ref) && slot.phase === 'assigned') slot.phase = 'running';
       cooldown.delete(keyOf(target)); say('slot.running', slot, target);
@@ -176,9 +184,9 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
   async function adopt() {
     for (const slot of states) {
       const current = await slot.adapter.current();
-      if (!current || current.phase === 'closed') { slot.phase = 'idle'; slot.ref = current?.rootScopeRef ?? null; continue; }
-      // 上一个调度进程留下的一代：没有它的通道了，只能等它的主进程退出后写失败观察，再凭强制终态关。
-      slot.phase = 'orphan'; slot.ref = current.rootScopeRef; slot.worker = null; say('slot.adopted', slot, { phase: current.phase });
+      if (!current || current.phase === 'closed') { slot.phase = 'idle'; slot.ref = current?.rootScopeRef ?? null; slot.bound = false; continue; }
+      // 上一个调度进程留下的一代：没有它的通道了，只能等它的主进程退出后写失败观察，再凭强制终态或未分配确认关。
+      slot.phase = 'orphan'; slot.ref = current.rootScopeRef; slot.bound = current.phase === 'bound'; slot.worker = null; say('slot.adopted', slot, { phase: current.phase });
     }
   }
   // 第一次用之前先看一眼每个槽现在停在哪一代（只看一次）。
@@ -189,19 +197,31 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
     const thisTick = ++tickNo;
     // 主进程该没而还没写下失败观察的槽（上一个调度进程留下的、领取或启动失败的），每一轮再试一次。
     for (const slot of states) if (['orphan', 'failed'].includes(slot.phase) && !slot.failure) await inLane(slot, () => observe(slot, slot.ref));
+    const observedBeforePending = new Set(states.filter(s => s.failure && s.ref).map(s => s.ref));
     // 每一轮都先问文档服务：它在这一问里读 root 的失败观察和关闭记录，该签强制终态的签、该结清的结清。
     const listed = await master.pending();
     if (!Array.isArray(listed?.conversations)) fail('slot-scheduler-pending-protocol');
-    for (const row of listed.scopeControls ?? []) {
+    const controls = listed.scopeControls ?? [];
+    for (const row of controls) {
       const slot = states.find(s => sameRef(s.ref, row.rootScopeRef));
       if (slot && !['idle', 'stuck', 'unknown'].includes(slot.phase)) void closeForced(slot, slot.ref, row);
+    }
+    // 还没绑定过分配（停在 ready）且已写下失败观察的槽，若不在强制控制清单里，向文档服务核实这一代有没有授权：
+    // 没有授权时文档服务在同一个账本事务里封住该领取请求号并回 unassigned，这里据此安全 retire。
+    for (const slot of states) {
+      if (!slot.failure || slot.bound || !slot.ref || !observedBeforePending.has(slot.ref) ||
+          ['idle', 'stuck', 'unknown'].includes(slot.phase) || slot.closing || slot.forcing) continue;
+      if (controls.some(row => sameRef(slot.ref, row.rootScopeRef))) continue;
+      const bKey = slotKey(slot.ref);
+      if ((cooldown.get(bKey)?.until ?? 0) > Date.now()) continue;
+      void closeForced(slot, slot.ref, { rootScopeRef: slot.ref, requestId: `dispatch:${slot.ref.slotId}:${slot.ref.epoch}` }, { backoffKey: bKey });
     }
     // 放弃了正常结算、而这一次回答（它是在放弃之后才去问的）里文档服务没有要强制关它：走失败观察。
     // 「之后」很要紧：停止先落账、任务进程随后才因此放弃，所以放弃之后再问到的清单里一定已经有它；
     // 放弃之前就在路上的那一次回答不算数。
     for (const slot of states) {
       if (!slot.abandoned || slot.abandoned.tick >= thisTick || slot.phase !== 'running' || slot.closing || slot.forcing) continue;
-      if ((listed.scopeControls ?? []).some(row => sameRef(slot.ref, row.rootScopeRef))) continue;
+      if (controls.some(row => sameRef(slot.ref, row.rootScopeRef))) continue;
       const ref = slot.ref, worker = slot.worker;
       say('slot.settlement.abandoned.failing', slot, { code: slot.abandoned.code });
       slot.phase = 'failed';
@@ -211,7 +231,7 @@ export function createAccountSlotScheduler({ slots, master, pollMs = 500, log = 
         return observe(slot, ref);
       }).catch(() => {});
     }
-    const serving = new Set(states.filter(s => s.conversation).map(s => keyOf(s.conversation)));
+    const serving = new Set(states.filter(s => s.conversation && ['opening', 'assigned', 'running'].includes(s.phase)).map(s => keyOf(s.conversation)));
     for (const row of listed.conversations) {
       if (stopped) break;
       const key = keyOf(row);

@@ -207,12 +207,15 @@ test('已读之后出了暂时性故障、任务进程放弃了正常结算，�
   await f.scheduler.start();
   const held = await until(() => f.marker('held-broken'), { what: '第一条在跑' });
   assert.equal(f.grantOf(first).state, 'active', '已经读到、授权有效');
-  // 主服务收事件的口从这时起答不上：任务进程的事件交不上去，它没法形成收尾记录，只能放弃正常结算
+  // 主服务收事件的口从这时起答不上：任务进程的事件交不上去，它没法形成收尾记录，只能放弃正常结算。
+  // 先拉住写失败观察那一步，消除 25ms 轮询与 kick() 立即进入下一轮写完失败观察、触发文档服务 worker-failed 围栏之间的本机时序竞争。
+  let letObserve; f.holds.observeFailure = new Promise(resolve => { letObserve = resolve; });
   f.gates.rejectWorkerEvents = true; f.release('broken');
   await until(() => f.log.some(row => row.event === 'slot.settlement.abandoned'), { what: '任务进程报放弃' });
   // 没有人按停止，文档服务没有要强制关它：授权还有效，进程还活着。原来槽会一直停在「在跑」
   assert.equal(f.grantOf(first).state, 'active'); assert.equal(f.ledger.read().runControlsV2 ? Object.values(f.ledger.read().runControlsV2).length : 0, 0);
   await until(() => f.log.some(row => row.event === 'slot.settlement.abandoned.failing'), { what: '调度判定这一代不会自己收口' });
+  f.holds.observeFailure = null; letObserve();
   f.gates.rejectWorkerEvents = false;
   await until(() => finished(f, first), { what: '放弃的那一条结清' });
   const done1 = f.grantOf(first), chain1 = f.chain(1), stop1 = f.stops.find(row => row.epoch === 1);
@@ -340,3 +343,45 @@ test('没领到任务的一代：退掉、槽回收，不占名额；之后的�
   assert.equal(f.grantOf(next).terminalOutcome.status, 'done'); assert.equal(f.marker(`started-${next}`).epoch, 2);
   assert.deepEqual(f.scheduler.describe().map(row => row.phase), ['idle']);
 });
+
+test('领取结果不明：文档服务没有授权时封住请求号并退槽收回、同一条消息在新一代正常做完；已有授权但没拿到分配时走强制围栏结清', { timeout: 120_000 }, async t => {
+  const f = await fixture(t);
+  // 第一阶段（无授权）：任务进程去 admit 时文档服务回 503（模拟领取超时且文档服务未记下授权）
+  f.gates.rejectAdmit = true;
+  const first = f.enqueue([{ say: '第一条最终做成' }]);
+  await f.scheduler.start();
+  await until(() => f.log.some(row => row.event === 'slot.prepare.unknown') && f.chain(1).closure !== null, { what: '第 1 代因无授权被安全退槽' });
+  const chain1 = f.chain(1);
+  assert.equal(f.grantOf(first), null, '第 1 代文档服务没有建出授权');
+  assert.equal(chain1.assignment, null);
+  assert.ok(chain1.failure, '写下了第 1 代失败观察');
+  assert.equal(chain1.terminal.protocol, 'promptcut.agent-run-scope.unassigned-retirement.v1');
+  assert.equal(chain1.closure.protocol, 'promptcut.agent-run-scope.unassigned-closure.v1');
+  assert.ok(f.ledger.read().runAbandonedRequestsV2['dispatch:slot-a:1'], '第 1 代领取请求号已在账本封存');
+  assert.equal(message(f, first).queueState, 'queued', '消息仍完好排在队里');
+
+  // 恢复文档服务 admit：刚才被卡过的同一条消息不再被拦，在第 2 代里顺利领走并做完
+  f.gates.rejectAdmit = false;
+  await until(() => finished(f, first), { what: '同一条消息在第 2 代做成并结清' });
+  assert.equal(f.grantOf(first).terminalOutcome.status, 'done');
+  assert.equal(f.marker(`started-${first}`).epoch, 2);
+
+  // 第二阶段（边界 1：admit 已成功建出授权，但紧接着取 assignment 时 503 导致 prepare 抛错）：走 worker-failed 强制围栏结清，再做下一条
+  f.gates.rejectAssignment = true;
+  const second = f.enqueue([{ say: '第二条在取分配时断了' }]), third = f.enqueue([{ say: '第三条正常做成' }]);
+  f.scheduler.kick();
+  await until(() => finished(f, second), { what: '已有授权的失败槽经强制围栏结清' });
+  const g2 = f.grantOf(second), chain3 = f.chain(3);
+  assert.equal(g2.terminalOutcome.status, 'failed');
+  assert.equal(g2.terminalOutcome.reason, 'worker-failed');
+  assert.equal(chain3.assignment, null, 'root 一侧未绑定过分配');
+  assert.equal(chain3.terminal.protocol, 'promptcut.agent-run-scope.unassigned-retirement.v1');
+
+  f.gates.rejectAssignment = false;
+  f.scheduler.kick();
+  await until(() => finished(f, third), { what: '第三条在第 4 代做成并结清' });
+  assert.equal(f.grantOf(third).terminalOutcome.status, 'done');
+  assert.equal(f.marker(`started-${third}`).epoch, 4);
+  assert.deepEqual(f.scheduler.describe().map(row => row.phase), ['idle']);
+});
+

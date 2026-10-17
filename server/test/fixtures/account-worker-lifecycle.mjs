@@ -114,7 +114,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   const history = openOperationHistory(path.join(dir, 'operations.db')); history.createProject(projectId, { id: projectId });
   const unavailable = () => { throw Error('no-account-operation'); };
   const operations = createPasswordOrder({ history, account: { get: unavailable }, verifyWitness: unavailable, checkGate: unavailable });
-  const gates = { holdTerminalDelivery: false, rejectWorkerEvents: false };
+  const gates = { holdTerminalDelivery: false, rejectWorkerEvents: false, rejectAdmit: false, rejectAssignment: false };
   const deliveries = new Map();
   let provider;
   function deliver(control) {
@@ -165,7 +165,12 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
   // 读取清点（给人读对话用的那一路）只在测退出确认时挂上，见下面的 startReadControl。
   let readControl = null, readHandler = null, masterReadControl = null;
   const docServer = https.createServer({ ...pki.doc, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, async (req, res) => {
-    try { if (await readHandler?.(req, res)) return; if (await instanceHandler(req, res)) return; if (await runHandler(req, res)) return; res.writeHead(404); res.end(); }
+    try {
+      if ((gates.rejectAdmit && req.url === '/internal/v2/runs/admit') || (gates.rejectAssignment && req.url === '/internal/v2/runs/assignment')) {
+        req.resume(); res.writeHead(503, { 'content-type': 'application/json' }); res.end('{"ok":false,"code":"run-client-unavailable"}'); return;
+      }
+      if (await readHandler?.(req, res)) return; if (await instanceHandler(req, res)) return; if (await runHandler(req, res)) return; res.writeHead(404); res.end();
+    }
     catch { if (!res.writableEnded) { res.writeHead(503); res.end(); } }
   });
   docServer.on('connection', socket => { docSockets.add(socket); socket.once('close', () => docSockets.delete(socket)); });
@@ -228,7 +233,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
       } };
   };
   const headRecord = () => { const head = m.files.get('current.json'); return head ? { head, record: m.files.get(`epoch-${head.epoch}.json`) } : null; };
-  const holds = { normalClose: null };
+  const holds = { normalClose: null, observeFailure: null };
   const slot = {
     slotId,
     async current() { const now = headRecord(); return now ? { rootScopeRef: agentScopeRef(now.record), phase: now.head.phase } : null; },
@@ -244,7 +249,7 @@ export async function startWorkerLifecycleFixture({ slotId = 'slot-a', pollMs = 
     retire({ reason }) { const { record } = headRecord();
       return m.run('retire', { intent: null, terminal: { v: 1, protocol: 'promptcut.agent-run-scope.unassigned-retirement.v1',
         authorityId: m.expected.authorityId, slotId: m.expected.slotId, epoch: record.epoch, recordDigest: digestOf(record), reason } }); },
-    observeFailure: () => m.run('observe-failure'),
+    async observeFailure() { if (holds.observeFailure) await holds.observeFailure; return m.run('observe-failure'); },
   };
   const scheduler = createAccountSlotScheduler({ slots: [slot], pollMs,
     master: { pending: () => master.pending(), scopeControl: row => master.scopeControl(row) }, log: say });
