@@ -1193,7 +1193,10 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
     }
   };
   let namesRevision: number | null = null;
-  const renew = () => renewing ??= options.client.session(options.projectId).then(value => {
+  // 会话剩不到 60 秒就续（下面 `ticket.info` 与云端身份两处）。续的时候要让网站登录也至少还剩 70 秒：登录令牌只活 2 分钟，客户端缺省剩 10 秒才续它，
+  // 而会话的到期时间跟着登录令牌走；不这样要求的话，最后 50 秒里续出来的会话照样剩不到 60 秒，云端 Agent 每发一个请求就续一次
+  // （2026-10-17 实测一分钟最多 50 次 `/account/session`）
+  const renew = () => renewing ??= options.client.session(options.projectId, { minRemainingMs: 70_000 }).then(value => {
     current = value; projectSession(value); return value;
   }).finally(() => { renewing = null; });
   // 页面这条连接只能用到票据背后的访问令牌到期:到期前换到新会话上,换不成如实转离线(`accountLinkLife.ts`)

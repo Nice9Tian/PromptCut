@@ -95,6 +95,8 @@ export interface CloudQueueItem {
   messageId: string; arrivalSeq: number;
   state: 'queued' | 'preparing' | 'running' | 'cancelled' | 'done';
   position: number | null; runId: string | null;
+  /** 文档服务签的终态(结清以后才有;旧服务端不带) */
+  outcome?: { status: string; reason: string | null } | null;
 }
 export interface CloudQueueSnapshot {
   conversationId: string; queueRevision: number; aclRevision: number;

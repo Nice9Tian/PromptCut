@@ -11,7 +11,7 @@
 import type { ChatAttachment, ChatMessage, MessagePart } from "../types.ts";
 import { appendTextPart, appendThinkingPart } from "../streamBatch.ts";
 import { cloudAttachKind } from "./attach.ts";
-import type { CloudEvent, CloudQueueSnapshot, CloudAcceptedBinding, CloudRunBinding, CloudAccountMessage } from "./types.ts";
+import type { CloudEvent, CloudQueueSnapshot, CloudQueueItem, CloudAcceptedBinding, CloudRunBinding, CloudAccountMessage } from "./types.ts";
 
 export const userMessageId = (runId: string) => `cu-${runId}`;
 export const accountMessageId = (messageId: string) => `cq-${messageId}`;
@@ -241,6 +241,13 @@ export function applyCloudEvent(messages: ChatMessage[], ev: CloudEvent): ChatMe
   }
 }
 
+/** 队列行里的终态:形状不对就当没有 */
+function outcomeOf(value: unknown): CloudQueueItem['outcome'] {
+  const o = value && typeof value === 'object' ? value as Record<string, unknown> : null;
+  if (!o || typeof o.status !== 'string' || !/^[a-z-]{1,32}$/.test(o.status)) return null;
+  return { status: o.status, reason: typeof o.reason === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(o.reason) ? o.reason : null };
+}
+
 /** Queue revision is independent from the arrival cursor; all rows are authoritative. */
 export function queueSnapshot(ev: CloudEvent, conversationId: string): CloudQueueSnapshot | null {
   if (ev.type !== 'queue.state' || ev.conversationId !== conversationId || !Number.isSafeInteger(ev.queueRevision) || Number(ev.queueRevision) < 0 ||
@@ -260,7 +267,41 @@ export function queueSnapshot(ev: CloudEvent, conversationId: string): CloudQueu
   const pending = [...ev.items].filter(item => item.state === 'queued').sort((a, b) => a.arrivalSeq - b.arrivalSeq);
   if (pending.some((item, index) => item.position !== index + 1)) return null;
   return { conversationId, queueRevision: Number(ev.queueRevision), aclRevision: Number(ev.aclRevision),
-    currentRunId: ev.currentRunId as string | null, items: ev.items.map(item => ({ ...item })) };
+    currentRunId: ev.currentRunId as string | null, items: ev.items.map(item => ({ ...item, outcome: outcomeOf(item.outcome) })) };
+}
+
+/** 文档服务签的终态 → 这一轮在对话里怎么收尾 */
+function settledPatch(m: CloudAccountMessage, item: CloudQueueItem): Partial<CloudAccountMessage> {
+  const status = item.outcome?.status ?? (item.state === 'done' ? 'done' : 'interrupted');
+  const base = { pending: false, cloudSettlement: undefined, finishedAt: m.finishedAt ?? Date.now() };
+  if (status === 'done') {
+    const outcome = m.outcome === 'error' ? 'error' : m.outcome && m.outcome !== 'completed' ? m.outcome : 'completed';
+    return { ...base, outcome, progress: { ...m.progress, phase: 'completed', text: '云端已确认这一轮结束。' } as ChatMessage['progress'] };
+  }
+  if (status === 'cancelled') return { ...base, outcome: 'aborted', progress: { ...m.progress, phase: 'paused', text: '已停止' } as ChatMessage['progress'] };
+  const error = m.error ?? (item.outcome?.reason === 'worker-failed'
+    ? '云端执行这一轮的进程出了故障,这一轮没有做完。已经落地的改动保留在项目里。'
+    : cloudErrorMessage('interrupted'));
+  return { ...base, outcome: 'error', error, progress: { ...m.progress, phase: 'paused', text: error } as ChatMessage['progress'] };
+}
+
+/**
+ * 账号模式下一轮跑完只到「执行已结束，等待云端确认关闭与结算」(`runner_done`):事件流里没有结算事件,
+ * 结清与否只在 `queue.state` 里——文档服务把这条消息记成 `done` / `cancelled` 并给出终态。据它把还挂着的那一轮收掉,
+ * 否则界面会一直读秒「正在思考」(2026-10-17 实跑)。已经收掉的、队列里还没结清的不动;同一份快照折几次结果相同。
+ */
+export function settleFromQueue(messages: ChatMessage[], queue: CloudQueueSnapshot | null): ChatMessage[] {
+  if (!queue) return messages;
+  let next: ChatMessage[] | null = null;
+  for (const item of queue.items) {
+    if (!item.runId || (item.state !== 'done' && item.state !== 'cancelled') || queue.currentRunId === item.runId) continue;
+    const idx = messages.findIndex(m => m.id === assistantMessageId(item.runId as string));
+    const m = idx >= 0 ? messages[idx] as CloudAccountMessage : null;
+    if (!m || !m.cloudRun || m.pending !== true) continue;
+    next ??= messages.slice();
+    next[idx] = { ...m, ...settledPatch(m, item) };
+  }
+  return next ?? messages;
 }
 
 /** 按顺序折一串事件;文字与思考的增量由调用方先攒批再交进来也一样(这里一条一条折,结果相同) */
