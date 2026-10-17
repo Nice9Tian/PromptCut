@@ -17,6 +17,18 @@ const op = (c, projectId, opId, value = opId, extra = {}) => ask(c, { type: 'pro
 test('operation-wiring actor v2 uses trusted principal; LAN actor shape stays identical', () => {
   assert.deepEqual(actorOf({ userId: 'lan' }, 'tab'), { userId: 'lan', session: 'tab' });
   assert.throws(() => actorOf({ realm: 'account', identityVersion: 2 }, null), /invalid-account-principal/);
+  assert.deepEqual(
+    actorOf({
+      userId: 'service:render@hosted-render:1',
+      deviceId: 'hosted-render:1',
+      scope: 'service',
+      service: 'render',
+      role: 'render',
+      realm: 'account',
+      identityVersion: 2,
+    }, 's1'),
+    { userId: 'service:render@hosted-render:1', deviceId: 'hosted-render:1', role: 'render', conversation: null, session: 's1' },
+  );
 });
 
 test('operation-wiring real two WS pages, real authority, full history and original store restart', actual, async t => {
@@ -137,6 +149,36 @@ test('operation-wiring trusted run has no implicit retained authority when provi
   t.after(() => f.close()); const a = await f.connect();
   assert.equal((await op(a, f.projectId, 'no-provider')).reason, 'run-provider-unavailable');
   assert.equal(f.history.accepted(f.projectId).length, 0);
+});
+
+test('operation-wiring account-realm render service can read project when hosted.render is enabled and cannot write', actual, async t => {
+  const f = await operationFixture({ dir: tmp(), principalTransform: p => ({
+    userId: 'service:render@hosted-render:1',
+    tenantId: p.projectId,
+    projectId: p.projectId,
+    scope: 'service',
+    service: 'render',
+    serviceKid: 'k1',
+    serviceRole: 'render',
+    role: 'render',
+    realm: 'account',
+    identityVersion: 2,
+    deviceId: 'hosted-render:1',
+    deviceName: 'hosted-render:1',
+  }) });
+  t.after(() => f.close());
+  const a = await f.connect();
+  assert.equal((await open(a, f.projectId)).reason, 'service-disabled');
+  await f.authority.adminProject({ accessToken: f.sessions.a.accessToken }, {
+    projectId: f.projectId,
+    op: 'set-hosted-service',
+    service: 'render',
+    enabled: true,
+    expectedAccessRevision: f.authority.projectState(f.projectId).accessRevision,
+    requestId: 'enable-render-1',
+  });
+  assert.equal((await open(a, f.projectId)).rev, 1);
+  assert.equal((await op(a, f.projectId, 'render-write')).reason, 'operation-forbidden');
 });
 
 for (const kind of ['stop', 'private']) test(`operation-wiring ${kind} fence cancels a reserved trusted run at real WS entry`, actual, async t => {
