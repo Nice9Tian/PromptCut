@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { scopeModel, pair, signed } from './agent-run-scope-fixture.mjs';
 import { digestOf } from '../account/ledger.mjs';
-import { inspectAgentScopeSource, createAgentScopeReader } from '../hosted/agent-run-scope-reader.mjs';
+import { inspectAgentScopeSource, createAgentScopeReader, readAgentScopeRegistryFile } from '../hosted/agent-run-scope-reader.mjs';
 import { validateAgentScopeReservation, scopeRuntimeExpected } from '../hosted/agent-run-scope-schema.mjs';
 import { runAgentScopePublisher, parseAgentTcpListeners, validateAgentListenerOwner } from '../hosted/deploy/agent-run-scope-publisher.mjs';
 import { openPublisherLock, writePublisherArtifact, createRootScopeRuntimeV2 } from '../hosted/deploy/asset-root-registry-publisher.mjs';
@@ -158,4 +158,39 @@ test('probe/worker CLI guards reject before any listener, and child actual close
     });
     assert.equal(result.code, 1); assert.match(result.output, /"ok":false/);
   }
+});
+test('publisher lock is world-readable (0o644) and reader checks lock via lstat without opening it or leaking EACCES/publisher-file-changed', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-agent-scope-lock-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const release = await openPublisherLock(dir, { directoryBarrier: async () => {} });
+  try {
+    const st = await fs.lstat(path.join(dir, '.publisher.lock'));
+    if (process.platform !== 'win32') assert.equal(st.mode & 0o777, 0o644);
+    let readRootCalledForLock = false;
+    const lockProbe = await readAgentScopeRegistryFile(dir, '.publisher.lock', {
+      async readRoot() { readRootCalledForLock = true; throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); },
+    });
+    assert.deepEqual(lockProbe, { locked: true });
+    assert.equal(readRootCalledForLock, false);
+    const m = await bound();
+    await assert.rejects(
+      inspectAgentScopeSource({
+        read: name => readAgentScopeRegistryFile(dir, name, {
+          async readRoot() { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); },
+        }),
+        expected: m.expected,
+        configuredAnchorDigest: digestOf(m.files.get('anchor.json')),
+      }),
+      { code: 'agent-scope-publisher-locked' },
+    );
+  } finally {
+    await release({ publicationDurable: true });
+  }
+  assert.equal(await readAgentScopeRegistryFile(dir, '.publisher.lock'), null);
+  await assert.rejects(
+    readAgentScopeRegistryFile(dir, 'current.json', {
+      async readRoot() { throw Object.assign(new Error('publisher-file-changed'), { code: 'publisher-file-changed' }); },
+    }),
+    { code: 'agent-scope-source-changed' },
+  );
 });

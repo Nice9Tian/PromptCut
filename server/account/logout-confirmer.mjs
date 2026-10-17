@@ -22,15 +22,18 @@ const fail = (status, code) => { throw accountError(status, code); };
  * 到时只做两件事：把当时的情况记进账本并写一条日志、报给账号服务当调试信息。退出仍然接着办（迟到的确认到齐了照样办完），
  * 也绝不因为到时把已经作废的登录放回来。网页上显示失败是账号服务按它自己的钟判的，文档服务整个不在了也照样会显示。 */
 export const LOGOUT_CONFIRM_TIMEOUT_MS = 45_000;
+/** 已经超时并报过超时的退出，后台重办间隔逐次加倍，最长到这个上限；有新事件或新进展（`kick()`）时当场恢复原间隔。 */
+export const LOGOUT_CONFIRM_MAX_POLL_MS = 60_000;
 
 export function createLogoutConfirmer({ ledger, authority, transportEvidence, operations = () => null,
-  completeAgent = null, attestedServices = {}, now = Date.now, pollMs = 1000, onDiagnostic = () => {},
+  completeAgent = null, attestedServices = {}, now = Date.now, pollMs = 1000, maxPollMs = undefined, onDiagnostic = () => {},
   timeoutMs = LOGOUT_CONFIRM_TIMEOUT_MS, reportTimeout = null, docInstanceId = 'doc' } = {}) {
   if (![ledger?.read, ledger?.transaction, authority?.flushAccountAcknowledgements, authority?.revocationStatus,
     authority?.ackAccessEvent, authority?.completeLogoutBarrier, transportEvidence, operations].every(value => typeof value === 'function') ||
       Object.entries(attestedServices).some(([service, reason]) => !['agent', 'render'].includes(service) || typeof reason !== 'string' || !reason))
     fail(503, 'logout-confirmer-configuration');
-  let timer = null, running = null, again = false, stopped = false;
+  const maxPoll = maxPollMs ?? (timeoutMs >= LOGOUT_CONFIRM_TIMEOUT_MS ? LOGOUT_CONFIRM_MAX_POLL_MS : Math.max(pollMs, timeoutMs));
+  let timer = null, running = null, again = false, stopped = false, backoff = 0, nextPollAt = 0;
   const diagnostics = new Map(), agentCodes = new Map();
   const note = (eventId, code) => {
     // 同一条事件的同一个原因只报一次，原因变了再报；办完就清掉。
@@ -38,6 +41,7 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
     diagnostics.set(eventId, code); onDiagnostic({ code, eventId });
   };
   const barriers = () => Object.values(ledger.read().barriers ?? {}).filter(barrier => barrier.state !== 'complete');
+  const timedOutAndReported = barrier => Boolean(barrier.timeout && (barrier.timeout.reported === true || typeof reportTimeout !== 'function'));
 
   /** 文档服务自己这一项的证据。形成以后记进账本，以后每次给出去的都是同一份。 */
   async function getDocBarrier(barrier) {
@@ -92,7 +96,7 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
     } catch (error) { note(barrier.eventId, `logout-seal-${error.code ?? 'failed'}`); }
   }
   async function pass() {
-    if (!barriers().length) return { pending: [] };
+    if (!barriers().length) { backoff = 0; nextPollAt = 0; return { pending: [] }; }
     try {
       const agent = await completeAgent?.(); agentCodes.clear();
       for (const row of agent?.pending ?? []) agentCodes.set(row.eventId, row.code);
@@ -105,7 +109,14 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
       else await seal(barrier);
     }
     for (const barrier of barriers()) await timeout(barrier);
-    return { pending: barriers().map(barrier => barrier.eventId) };
+    const remaining = barriers();
+    if (remaining.length && remaining.every(timedOutAndReported) && pollMs > 0) {
+      backoff = Math.min(backoff + 1, 16);
+      nextPollAt = now() + Math.min(pollMs * (2 ** backoff), maxPoll);
+    } else {
+      backoff = 0; nextPollAt = 0;
+    }
+    return { pending: remaining.map(barrier => barrier.eventId) };
   }
   /** 等过了时限的退出：记一次、报一次。调试信息里只有事件号、服务名、原因码、时长和文档服务实例号，没有登录号、令牌、票据。 */
   async function timeout(barrier) {
@@ -144,9 +155,16 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
     return running;
   }
   const safeTick = () => tick().catch(error => { onDiagnostic({ code: error.code ?? 'logout-confirmer-failed' }); return { pending: null }; });
+  const timerTick = () => {
+    const current = barriers();
+    if (!current.length) { backoff = 0; nextPollAt = 0; return; }
+    if (current.some(barrier => !timedOutAndReported(barrier))) { backoff = 0; nextPollAt = 0; }
+    else if (now() < nextPollAt) return;
+    void safeTick();
+  };
   return { getDocBarrier, verifyDocBarrier, tick,
     /** 有新进展时叫一下（来了作废事件、某个服务确认了）；不叫也行，定时会再看。 */
-    kick() { void safeTick(); },
+    kick() { backoff = 0; nextPollAt = 0; void safeTick(); },
     /** 给诊断和测试看：一次退出现在还差哪几样。只读。 */
     status(eventId) {
       const value = authority.revocationStatus(eventId);
@@ -159,7 +177,7 @@ export function createLogoutConfirmer({ ledger, authority, transportEvidence, op
       if (stopped || timer) return;
       // 上一个进程留下没办完的，从这里接着办。
       void safeTick();
-      if (pollMs > 0) { timer = setInterval(safeTick, pollMs); timer.unref?.(); }
+      if (pollMs > 0) { timer = setInterval(timerTick, pollMs); timer.unref?.(); }
     },
     async close() { stopped = true; clearInterval(timer); timer = null; await running?.catch(() => {}); },
   };

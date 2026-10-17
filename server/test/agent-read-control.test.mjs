@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openAccountLedger, appendAccessEvent } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
-import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT, KEEP_CLOSED_READS_PER_INSTANCE, pruneClosedReads } from '../account/agent-read-control.mjs';
+import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT, KEEP_CLOSED_READS_PER_INSTANCE, KEEP_READ_CONTROL_NONCES, pruneClosedReads } from '../account/agent-read-control.mjs';
 import { conversationReadInState } from '../account/conversation-authority.mjs';
 import { instanceFixture } from './agent-instance-fixture.mjs';
 
@@ -229,4 +229,10 @@ test('已关的读取只留最近几十条：早关的连同开启记录删掉�
   const again = await f.open('owner');
   f.control.closeReads(f.signed('close', { readHandleIds: [again.readHandle.readHandleId] }));
   assert.equal(Object.values(f.ledger.read().agentReadsV1.handles).filter(h => h.state === 'closed').length, KEEP_CLOSED_READS_PER_INSTANCE);
+  // 长连接反复用同一个 requestId 调 open（如 SSE 事件流 250ms 轮询）时，一次性随机数表不会无限膨胀
+  const sseReqId = `sse_${randomUUID()}`;
+  for (let i = 0; i < KEEP_READ_CONTROL_NONCES + 20; i++) {
+    await f.control.open(f.signed('open', { requestId: sseReqId, delegation: 'owner', projectId: 'project', conversationId: 'conversation', action: 'get', after: 0 }));
+  }
+  assert.equal(Object.keys(f.ledger.read().agentReadsV1.nonces).length, KEEP_READ_CONTROL_NONCES);
 });

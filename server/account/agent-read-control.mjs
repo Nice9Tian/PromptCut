@@ -11,9 +11,10 @@ const tables = state => (state.agentReadsV1 ??= { head: 0, controls: [], handles
 /** 每个实例最多留多少条已关的读取。每次 HTTP 读取都开一条、用完就关，原来一条都不删，账本跟着无限变大
  * （2026-10-17 节点上一个实例攒了四百多条，占了账本的七成多）。留最近的几十条，够关闭和开启的重试认出原来那条。 */
 export const KEEP_CLOSED_READS_PER_INSTANCE = 64;
-/** 删掉用不着的已关读取，连同指向它的开启请求记录。还有控制记录在等它的回执（目标里列了它、还没回执）的不删。
+export const KEEP_READ_CONTROL_NONCES = KEEP_CLOSED_READS_PER_INSTANCE * 4;
+/** 删掉用不着的已关读取，连同指向它的开启请求记录和早期的一次性随机数记录。还有控制记录在等它的回执（目标里列了它、还没回执）的不删。
  * 开启请求号每次读取都是新的随机号，读取关了以后 Agent 不会再拿同一个号来开，所以删掉记录不会让关过的读取重新开出来。 */
-export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE) {
+export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE, keepNonces = KEEP_READ_CONTROL_NONCES) {
   const t = state.agentReadsV1;
   if (!t) return 0;
   const waiting = new Set();
@@ -29,10 +30,12 @@ export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE) {
   const removed = new Set();
   // 对象按插入顺序遍历，前面的是早关的那批
   for (const ids of closedByInstance.values()) for (const id of ids.slice(0, Math.max(0, ids.length - keep))) removed.add(id);
-  if (!removed.size) return 0;
   for (const id of removed) delete t.handles[id];
-  for (const [key, row] of Object.entries(t.requests)) if (removed.has(row.readHandleId)) delete t.requests[key];
-  return removed.size;
+  if (removed.size) for (const [key, row] of Object.entries(t.requests)) if (removed.has(row.readHandleId)) delete t.requests[key];
+  const nonceKeys = Object.keys(t.nonces ?? {});
+  const removedNonces = nonceKeys.slice(0, Math.max(0, nonceKeys.length - keepNonces));
+  for (const key of removedNonces) delete t.nonces[key];
+  return removed.size + removedNonces.length;
 }
 export const CONVERSATION_CONTROL_ROOT = '/internal/v2/conversation-controls/';
 export const conversationControlOperations = Object.freeze({ subscribe: 'conversationControlSubscribe',
@@ -152,6 +155,8 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     const t = tables(state);
     if (t.nonces[key]) fail(409, 'read-control-replay');
     t.nonces[key] = true;
+    const keys = Object.keys(t.nonces);
+    for (const old of keys.slice(0, Math.max(0, keys.length - KEEP_READ_CONTROL_NONCES))) delete t.nonces[old];
   };
   const requireLive = who => {
     const stream = streams.get(who.instanceId);

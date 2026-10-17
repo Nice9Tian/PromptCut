@@ -65,7 +65,9 @@ export function openAccountLedger({ file, authorityId, failpoint = () => {} }) {
         failpoint('ledger-before-write');
         db.prepare('UPDATE account_authority_state SET payload=? WHERE id=1').run(JSON.stringify(state));
         failpoint('ledger-before-commit'); cached = null; db.exec('COMMIT');
-        return structuredClone(result);
+        const cloned = structuredClone(result);
+        cached = deepFreeze(state); cachedVersion = dataVersion.get().data_version;
+        return cloned;
       } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
       finally { writing = false; }
     },
