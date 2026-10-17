@@ -118,7 +118,7 @@ export interface CardTiming {
 }
 
 /**
- * 素材效果卡的一路输入。`at()` 只返回一个**引用**(执行器自己解析,不落像素),
+ * 图卡的一路输入。`at()` 只返回一个**引用**(执行器自己解析,不落像素),
  * `pixels()` 才真的解出像素,`block()` 取音频采样。
  */
 export interface GraphCardSource {
@@ -132,7 +132,7 @@ export interface GraphCardSource {
   block(start: number, count: number): Promise<Float32Array>;
 }
 
-/** 素材效果卡求值时的画幅信息。`stage` 和 CardProps.stage 同一个口径。 */
+/** 图卡求值时的画幅信息。`stage` 和 CardProps.stage 同一个口径。 */
 export interface GraphCardContext {
   fps: number;
   width: number;
@@ -142,7 +142,7 @@ export interface GraphCardContext {
   stage?: { width: number; height: number; camera3dFov?: number };
 }
 
-/** 音频素材效果卡的采样区间。按采样点算,不按帧取整。 */
+/** 音频图卡的采样区间。按采样点算,不按帧取整。 */
 export interface GraphAudioRange {
   start: number;
   count: number;
@@ -171,19 +171,19 @@ export interface CardDef<P = Record<string, unknown>> {
   defaults: P;
   controls: Control[];
   /**
-   * DOM 卡的 React 组件。可同时声明 audio()，声音由宿主统一调度；视觉素材效果卡 card() 由 GraphCard 代渲;
-   * 两者都没有的定义既不是 DOM 卡也不是素材效果卡,`Stage` 会整段跳过。
+   * DOM 卡的 React 组件。可同时声明 audio()，声音由宿主统一调度；视觉图卡 card() 由 GraphCard 代渲;
+   * 两者都没有的定义既不是 DOM 卡也不是图卡,`Stage` 会整段跳过。
    */
   Component?: ComponentType<CardProps<P>>;
-  /** 素材效果卡的类别(同 cardGraph.mjs 的 CARD_KINDS)。缺省 = `animation`。 */
+  /** 图卡的类别(同 cardGraph.mjs 的 CARD_KINDS)。缺省 = `animation`。 */
   kind?: "animation" | "filter" | "transition" | "emphasis" | "audio";
   /**
-   * 素材效果卡的输入名。缺省按 kind 推:`filter` / `emphasis` / `audio` 是 `{ source: {} }`,
+   * 图卡的输入名。缺省按 kind 推:`filter` / `emphasis` / `audio` 是 `{ source: {} }`,
    * `transition` 是 `{ A: {}, B: {} }`,`animation` 没有输入。
    */
   inputs?: Record<string, { description?: string }>;
   /**
-   * 视觉素材效果卡:按片段源时间 `t`(秒，含节点 timeOffset)算出一份 GPU 描述,由宿主在 WebGL 上执行。
+   * 视觉图卡:按片段源时间 `t`(秒，含节点 timeOffset)算出一份 GPU 描述,由宿主在 WebGL 上执行。
    * `sources[name]` 见 `src/render/cards/GraphCard.tsx`;帮助函数在 `src/render/cards/graphValues.ts`。
    */
   card?: (
@@ -359,9 +359,9 @@ export interface Timeline {
   duration: number; // 秒
   clips: Clip[];
   /**
-   * 素材效果卡的节点图。**只有两个宿主算它**(ExportView / StageView),`flattenOverlay`
+   * 图卡的节点图。**只有两个宿主算它**(ExportView / StageView),`flattenOverlay`
    * 只负责原样带过来 —— 它自己不算图(算了就是每帧每片段重算一遍全图)。
-   * 算不出来(片段删了留下悬空输入之类)时是 `undefined`,舞台按「素材效果卡不画」兜底。
+   * 算不出来(片段删了留下悬空输入之类)时是 `undefined`,舞台按「图卡不画」兜底。
    */
   graph?: ReturnType<typeof import("./cardGraph.mjs").projectCardGraph>;
   /**

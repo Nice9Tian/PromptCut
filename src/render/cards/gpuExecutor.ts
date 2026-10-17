@@ -48,7 +48,7 @@ export class CardGpuExecutor {
     // further compositor ticks or freeze the canvas with toDataURL. The default
     // disposable drawing buffer can become transparent between those steps.
     //
-    // 离屏画布(素材效果卡递归解析上游时用的那种)和 DOM 画布的 getContext 是两个不同的重载,
+    // 离屏画布(图卡递归解析上游时用的那种)和 DOM 画布的 getContext 是两个不同的重载,
     // strict 下对联合类型直接调编不过,所以各调各的再收窄。
     const attributes = { alpha: true, premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true };
     const context = canvas instanceof OffscreenCanvas
