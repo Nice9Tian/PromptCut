@@ -110,6 +110,7 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
         const t0 = Date.now();
         const s = await session(who, minRemainingMs).catch((e) => { trace(name, `取会话失败 ${e?.code ?? e?.message} ${Date.now() - t0}ms`); throw e; });
         p.sessions += 1;
+        void life.accessSeen(s.access);
         trace(name, `取会话 ${Date.now() - t0}ms`);
         return { connectionTicket: s.connectionTicket, expiresAt: reportExpiry(s.expiresAt) };
       },
@@ -307,9 +308,9 @@ test('账号云端项目里页面的文档连接:到期前换会话、换的时�
       assert.deepEqual(B.terminal, []);
       A.set('whileReadonly', '甲在乙只读时改的');
       await waitFor(() => B.get('whileReadonly') === '甲在乙只读时改的', '只读的乙照常收到别人的改动');
+      const renewsBefore = B.life.describe().renews;
       const toRw = await admin(alice, { op: 'set-list', members: [{ accountId: bob.accountId, access: 'rw' }] });
       assert.equal(toRw.status, 200, JSON.stringify(toRw.body));
-      const renewsBefore = B.life.describe().renews;
       await waitFor(() => B.life.describe().renews > renewsBefore && B.online(), '乙读到权限变了,换了一个会话', 20_000);
       B.set('rwAgain', '乙改回可写之后');
       await waitFor(() => A.get('rwAgain') === '乙改回可写之后', '改回可写后乙的改动甲看得到', 20_000);
