@@ -64,6 +64,7 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 | 块十三：十七支在线探针改走恢复入口并对齐跨源舞台断言 | `8b09add4`（`f6f0fb4a`） | 将 `online-card-security`（S2-1 116/116）、`online-card-exec`（S2-2 60/60）、`online-card-graph`（S2-3 18/18）、`online-card-sound`（S2-4 19/19）、`online-card-node`（S2-5）、`online-stage-watch`、`online-stage-handshake`、`c10-ui`、`online-user-cards`、`sound-ab`（73/73）、`sound-preview`（86/86）、`hosted-stream-entry`、`online-nav-stress`、`c10-browser`、`c10a-demo`、`cloud-agent-ui-lib` 等 17 个文件改走 `lib/online-resume-entry.mjs`，并对齐 10-14「在线舞台一律跨源隔离、撤掉同源单舞台退路」与撤快照后的断言。合并后 `8b09add4` 上 `npx tsc -b --force` **0 错误**，全量 `npm test` **7025 条：7010 过、0 失败、14 跳过、1 todo** | —— |
 | 块十与 10-16 云端 Agent 按轮占用、`look` 主服务代签与渲染服务接进账号项目 | `23f078b3`（`742490e4`） | 托管方渲染服务接进账号项目（`hosted.watch`、`hosted.ticket`、数据连接 `auth.ticket` 素材票据）；`look` 私钥只由主服务持有并经内部 mTLS 口 `/internal/v2/worker/look` 按文档服务确认的 `grant.projectId` 代签；`frame-dispatcher.mjs` 落实云端 Agent 看画面四级先后（`RS18-local`：成员桌面版 > 电脑在线浏览器 > 托管渲染服务 > 手机在线浏览器）；落实 10-16 第 3 节云端 Agent 按轮占用（`RS18-queue`：首次要画面起占至本轮收尾或停止、30 秒心跳/2 分钟超时、FIFO 防插队、排队提示「云端渲染正在给别的项目用，排在第 N 位，轮到了会接着做。」、排队不计时/10 分钟不动回「排队异常」、渲染限时 3 分钟一次不重试并附调试信息、产流让位、流满且 5 分钟无修改才关停、多项目产流 5 分钟轮换），实跑 `hosted-render-queue-probe` 14/14 通过（一轮结束 1.066 秒即让位）。合并后 `23f078b3` 上 `npx tsc -b --force` **0 错误**，全量 `npm test` **7026 条：7011 过、0 失败、14 跳过、1 todo** | —— |
 | 块十一（P1 素材拼图、P6 音频测量脚本、V1 可视记录）与工具表接线第二期、轨道流/工作进程按项目素材隔离、`SEAM-2` 收口 | `3ce7f600`（`f8fc2663`） | 完成 P1 素材拼图（`hosted-media-frames.mjs` / `media-sheet.mjs`）、P6 音频测量脚本（`hosted-audio-js.mjs` / `hosted-render/audio-js.mjs`）、V1 用户可视记录与受权路由（`hosted-visuals.mjs` / `visual-routes.mjs` / `ToolVisual.tsx`）并完成中央挂载（`account-tools.mjs`、`cloud-tools.mjs`、`instance.mjs`、`http.mjs`、`look.mjs`）；加固 `server/frame-stream.mjs` 与 `server/hosted-render/worker.mjs` 按项目素材隔离；将传递闭包对 `src/` 的引用统一收归 `server/agent/ssr-host.mjs` 载入缝，消除 `SEAM-2` todo。合并后 `3ce7f600` 上 `npx tsc -b --force` **0 错误**，全量 `npm test` **7039 条：7025 过、0 失败、14 跳过、0 todo** | —— |
+| 块十四（壬：改旧名词）与生产 `TRUSTED_GONE_AUTHORITIES` 签发者公钥配置 | `4c1e7f85`（`b38f1cd4`） | 将 `src/`、`server/`、`scripts/`、`desktop/` 中的「图卡」替换为「素材效果卡」（660 处，保留「地图卡」「示意图卡」3 处）、「补渲」替换为「预渲染重试」（282 处），截取界面 17 处改前改后共 34 张对比图（`docs/reports/assets/v18-terms/`）；在 `server/recovery/gone-proof.mjs` 的 `TRUSTED_GONE_AUTHORITIES` 填入生产签发者 `doc-node-20261009-037d8e0d-2c1e-495a-b19d-501ffbf49909` 与公钥。合并后 `4c1e7f85` 上 `npx tsc -b --force` **0 错误**，全量 `npm test` **7039 条：7025 过、0 失败、14 跳过、0 todo** | —— |
 
 做完但留在分支上、没合的：
 
@@ -73,18 +74,11 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 
 ## 接下来干什么（照 `handoff-render-018.md` 第 10 节）
 
-1. **推进 0.7.18 最后一块代码分支（在途分支已全部合完，执行「壬：改旧名词」）**：
-   - ~~**分支 A（`v18-collect-reboot`）**~~：已合入 `main`（`d202052c` / `e632ac0e`）。
-   - ~~**分支 B（`v18-block10-turn-lock`）**~~：已合入 `main`（`23f078b3` / `742490e4`）。
-   - ~~**分支 C（`v18-block11-tools`）**~~：已合入 `main`（`3ce7f600` / `f8fc2663`）。
-   - ~~**分支 D 第一半（`v18-online-probes`）**~~：已合入 `main`（`8b09add4` / `f6f0fb4a`）。
-   - **分支 D 第二半（`v18-terms`）**：壬（改旧名词：「图卡」→「素材效果卡」，「补渲」→「预渲染重试」，保留「地图卡」「示意图卡」，含界面 17 处改前改后截图）。
-2. **发版前配置、全量验收与打包（块十五）**：
-   - `server/recovery/gone-proof.mjs` 的 `TRUSTED_GONE_AUTHORITIES` 填入生产签发者公钥。
+1. **0.7.18 全部功能与代码分支均已合入 `main`（至 `4c1e7f85`）**。
+2. **执行块十五（全量验收、打包 `0.7.18`、推进 `release`、节点备份与部署、删旧测试数据、真实旧文件转本地与真实网络环境验收）**：
    - 跑 38 行逐项验收（`scripts/acceptance/four-stage-acceptance.mjs`）并记录 `docs/reports/release-timings.md`。
    - 版本号升到 `0.7.18`（核对外壳版本），构建完整安装包与兼容补丁（`desktop/` 下 `npm run release -- --from-head`），推进 `release` 分支指向发版提交。
-3. **节点部署、删旧数据、真实旧文件转本地与真实网络环境验收**：
-   - 先做现用系统一致备份并验证隔离恢复；按序部署 VisuHive 账号后端（`0e64fbe`）→ PromptCut 文档/素材/渲染/Agent 服务与 nginx → 在线编辑器 → VisuHive 网页；导入生产模型 Key。
+   - 节点备份与隔离恢复验证；按序部署 VisuHive 账号后端（`0e64fbe`）→ PromptCut 文档/素材/渲染/Agent 服务与 nginx → 在线编辑器 → VisuHive 网页；导入生产模型 Key。
    - 按已批清单清理节点旧数据（每类留已验证备份），删一个旧云端项目后实测真实旧文件凭已删证明转成本地项目，再删其余三个。
    - 跑真实网络环境验收并贴出逐项结果。
 
@@ -106,7 +100,7 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 - [x] ~~云端 Agent 看画面的出图先后（桌面版 > 电脑浏览器 > 托管渲染服务 > 手机浏览器）与按轮占用的暂行办法、托管方渲染服务接进账号项目、`look` 私钥只由主服务持有并代签（`23f078b3` / `742490e4`）。~~
 - [x] ~~十七支在线探针改走恢复入口并对齐 10-14 跨源舞台断言（`8b09add4` / `f6f0fb4a`）。~~
 - [x] ~~素材隔离（轨道流与渲染工作进程两处入口）、块十一剩余 3 个工具（`see_media`、`measure_audio_js`、`get_gif` 可视记录）与接线第二期、`SEAM-2` 载入缝收口（`3ce7f600` / `f8fc2663`）。~~
-- [ ] 改旧名词（壬）、填生产 `TRUSTED_GONE_AUTHORITIES` 公钥。
+- [x] ~~改旧名词（壬）、填生产 `TRUSTED_GONE_AUTHORITIES` 公钥（`4c1e7f85` / `b38f1cd4`）。~~
 - [ ] 38 行逐项验收、发版 `0.7.18`（完整安装包 + 兼容补丁 + `release` 快进）、节点部署、旧测试项目清理、真实旧文件转本地及真实网络环境验收。
 
 0.7.19：
