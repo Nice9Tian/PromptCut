@@ -148,6 +148,38 @@ itUi('C10-UI-04 桌面（在线开关关着）用户卡、素材效果卡按分�
   assert.equal(feed.planFeed({ project: project(clips()), t: 1, playing: false }).scrub.length, 0, '桌面暂停态整台精确:一张不抑制');
 });
 
+itUi('C10-UI-05 双舞台同步卡变更为 ready 后自动重投 pumpFeed 与 localOnlyMissing（无需手动播放或跳转）', async () => {
+  const previewSrc = fs.readFileSync(repoPath('src/editor/Preview.tsx'), 'utf8');
+  assert.match(previewSrc, /onCardRunStatesChanged\(refresh\)/, 'Preview.tsx 应订阅 onCardRunStatesChanged 刷新抑制与缺失表');
+  assert.match(previewSrc, /queueMicrotask\(\(\)\s*=>\s*\{\s*void pumpRef\.current\(\);\s*\}\)/, 'Preview.tsx 应在 planDispatch 微任务之后重投 pumpRef.current()');
+
+  placeholder.setOnlineBrowserMode(true);
+  try {
+    const p = project([card('s', 'c10-synced-card')]);
+    plan = { segments: [{ fromSec: 0, toSec: 1000, heavy: new Set() }] };
+    // 初载时舞台 B 尚未报回 card-states，同步卡 s 仍属 localOnly，暂停在 t=0 时被抑制显示沙漏
+    registry.setCardRunStates([['c10-synced-card', { state: 'loading' }]]);
+    assert.deepEqual(feed.suppressedAt({ project: p, t: 0, playing: false }), ['s'], 'loading 期间暂停在 t=0 应抑制');
+
+    let pumpedSuppressed = null;
+    const offRun = registry.onCardRunStatesChanged(() => {
+      queueMicrotask(() => {
+        pumpedSuppressed = feed.suppressedAt({ project: p, t: 0, playing: false });
+      });
+    });
+    try {
+      registry.setCardRunStates([['c10-synced-card', { state: 'ready', version: 'g1' }]]);
+      await new Promise((r) => queueMicrotask(r));
+      assert.deepEqual(pumpedSuppressed, [], '变为 ready 后不经 seek/play 即解除抑制');
+    } finally {
+      offRun();
+    }
+  } finally {
+    placeholder.setOnlineBrowserMode(false);
+    registry.setCardRunStates([]);
+  }
+});
+
 /* ------------------------------------------------------------------ 棘轮（K9） */
 
 const ratchet = ratchetGate();
