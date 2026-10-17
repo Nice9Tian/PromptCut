@@ -14,7 +14,7 @@ import path from 'node:path';
 import { mock } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
-import { freePorts } from '../free-ports.mjs';
+import { freePorts, freePortRange } from '../free-ports.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -24,29 +24,20 @@ export const providerAvailable = Boolean(process.env.PROMPTCUT_ACCOUNT_PROVIDER_
 export const SKIP_WITHOUT_PROVIDER = providerAvailable ? false :
   'account provider unavailable; set PROMPTCUT_ACCOUNT_PROVIDER_ROOT and PROMPTCUT_PASSWORD_ORDER_MODULE';
 
-const canListen = port => new Promise(resolve => {
-  const probe = net.createServer();
-  probe.once('error', () => resolve(false));
-  probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)));
-});
-
 /**
- * 要连续的 count 个端口。手动跑设了 ACCEPT018_AUTH_PORT_BASE 就从那里起；否则在 31000～37999 里随机挑一段、逐个试着监听确认空着。
- * 不用系统的临时端口段：那一段也是本机发出连接时随机取源端口的地方，刚放掉的号可能马上被别的连接占走，起素材子进程时会报 EADDRINUSE。
- * 挑不到才退回向系统要空闲端口。
+ * 要连续的 count 个端口。手动跑设了 ACCEPT018_AUTH_PORT_BASE 就从那里起；否则经 freePortRange 在 20000～49151 里挑连续空闲段并登记 claimPort，
+ * 避免起素材子进程那两秒空档里与并发测试撞 EADDRINUSE。
  */
 export async function acceptPorts(count) {
   const base = Number(process.env.ACCEPT018_AUTH_PORT_BASE);
   if (Number.isInteger(base) && base >= 20000 && base + count - 1 <= 65000)
     return Array.from({ length: count }, (_, index) => base + index);
-  for (let attempt = 0; attempt < 40; attempt++) {
-    const start = 31000 + Math.floor(Math.random() * 7000);
-    const range = Array.from({ length: count }, (_, index) => start + index);
-    let free = true;
-    for (const port of range) if (!await canListen(port)) { free = false; break; }
-    if (free) return range;
+  try {
+    const start = await freePortRange(count);
+    return Array.from({ length: count }, (_, index) => start + index);
+  } catch {
+    return freePorts(count);
   }
-  return freePorts(count);
 }
 
 /** JSON 请求；返回 { status, body, cookie }，对方不是 JSON 时 body 为 null */
