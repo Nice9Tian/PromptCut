@@ -1,4 +1,5 @@
 import { serviceIdentity } from './descriptor.mjs';
+import { DEFAULT_HOSTED_URL } from '../auth/hosted-default.mjs';
 
 /**
  * 「这个云端项目确实不在了」的证明：客户端一侧的信任表与核对（浏览器与 Node 通用，只用 WebCrypto）。
@@ -41,7 +42,7 @@ export const TRUSTED_GONE_AUTHORITIES = deepFreeze([
     authorityId: 'doc-node-20261009-037d8e0d-2c1e-495a-b19d-501ffbf49909',
     origin: 'https://visuhive.com',
     services: [
-      'http://149.88.94.84:8787',
+      DEFAULT_HOSTED_URL,
       'https://149-88-94-84.sslip.io/hosted',
       'https://visuhive.com/hosted',
     ],

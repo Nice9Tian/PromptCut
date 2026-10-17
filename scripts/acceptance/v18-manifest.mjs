@@ -323,6 +323,7 @@ export const V18_EXCLUDED = {
   'framework-card-pipeline-probe.mjs': RENDER_REFACTOR, 'guide-blind-check.mjs': '建卡指南的盲写验收(派不带上下文的子 Agent),渲染重构「丙」的验收,不是 0.7.18 的依据',
   'hosted-render-remotion-probe.mjs': RENDER_REFACTOR, 'hosted-render-wipe-demo.mjs': RENDER_REFACTOR, 'hosted-stream-entry-probe.mjs': RENDER_REFACTOR,
   'online-remotion-card-probe.mjs': RENDER_REFACTOR, 'online-runtime-harness.html': RENDER_REFACTOR + '(页面夹具)',
+  'preview-3d-stream-probe.mjs': RENDER_REFACTOR,
   'preview-stop-lib.mjs': 'seek-back-exact-probe 与 scrub-hold-snapshot-probe 共用的搭法,不单独运行', 'remotion-style-harness.html': RENDER_REFACTOR + '(页面夹具)', 'remotion-style-probe.mjs': RENDER_REFACTOR,
   'scrub-hold-snapshot-probe.mjs': RENDER_REFACTOR, 'seek-back-exact-probe.mjs': RENDER_REFACTOR, 'stage-push-before-after-probe.mjs': RENDER_REFACTOR, 'stateful-seq-vs-jump-probe.mjs': RENDER_REFACTOR,
   'lottie-baseline-probe.mjs': RENDER_REFACTOR, 'lottie-pipeline-probe.mjs': RENDER_REFACTOR, 'lottie-seed-extra-probe.mjs': RENDER_REFACTOR, 'lottie-seed-probe.mjs': RENDER_REFACTOR,

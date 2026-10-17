@@ -101,9 +101,27 @@ $ git grep -n "图卡" src/ server/ scripts/ desktop/
 server/test/card-authoring-guide.test.mjs:11: *   GA-06  指南不再说过时的话：frameMode 是必填；旧值都按 motion 式读；不规定优先用哪一种；没有旧名词「图卡」
 server/test/card-authoring-guide.test.mjs:330:  // 旧名词（「地图卡」「示意图卡」不是旧名词）
 server/test/card-authoring-guide.test.mjs:331:  assert.doesNotMatch(GUIDE.replace(/地图卡|示意图卡/g, ''), /图卡/, '指南里不再有旧名词「图卡」');
+src/cards/native/sound-effects.ts:31:  useWhen: "给完成、揭晓、强调或转场加一个短提示音。先调现有参数；用生成音效入口保存 WAV 后作为独立音频段，避免与同一音频图卡重复播放。",
 src/editor/io/procCards.ts:10: * 片子里的地图卡、片头卡就只剩一个找不到的名字。
 src/editor/left/library/emphasisGroup.tsx:35:/** 示意图卡的高宽比 */
 src/editor/left/library/transitionsGroup.tsx:32:/** 示意图卡的高宽比:图形都在中间一条带里,用不着正方形 */
+src/kernel/cardGpu.ts:2: * 图卡产出的 GPU 描述的**类型**。只有类型,没有一行运行时代码 ——
+src/kernel/cardGraph.mjs:69:   * 不 fail —— 否则「给素材段套滤镜图卡再删掉这段」之后整份图算不出来,所有图卡陪葬。
+src/kernel/cardGraph.mjs:110:/** Adapt the existing project into the same graph used by 图卡 (graph cards).
+src/kernel/cardGraph.mjs:116:  /** 图卡片段(定义来自注册表、写了 card / audio)。判据只看定义,不看节点。 */
+src/kernel/cardGraph.mjs:134:        // 图卡片段**不合成 chrome 基节点**:它的输出就是它自己那个 'card' 节点
+src/kernel/cardGraph.mjs:140:      // 面板拖入 / add_clip 建的图卡片段只有 cardId,就地合成一个渲染用的节点。
+src/kernel/types.ts:121: * 图卡的一路输入。`at()` 只返回一个**引用**(执行器自己解析,不落像素),
+src/kernel/types.ts:135:/** 图卡求值时的画幅信息。`stage` 和 CardProps.stage 同一个口径。 */
+src/kernel/types.ts:145:/** 音频图卡的采样区间。按采样点算,不按帧取整。 */
+src/kernel/types.ts:174:   * DOM 卡的 React 组件。可同时声明 audio()，声音由宿主统一调度；视觉图卡 card() 由 GraphCard 代渲;
+src/kernel/types.ts:175:   * 两者都没有的定义既不是 DOM 卡也不是图卡,`Stage` 会整段跳过。
+src/kernel/types.ts:178:  /** 图卡的类别(同 cardGraph.mjs 的 CARD_KINDS)。缺省 = `animation`。 */
+src/kernel/types.ts:181:   * 图卡的输入名。缺省按 kind 推:`filter` / `emphasis` / `audio` 是 `{ source: {} }`,
+src/kernel/types.ts:186:   * 视觉图卡:按片段源时间 `t`(秒，含节点 timeOffset)算出一份 GPU 描述,由宿主在 WebGL 上执行。
+src/kernel/types.ts:362:   * 图卡的节点图。**只有两个宿主算它**(ExportView / StageView),`flattenOverlay`
+src/kernel/types.ts:364:   * 算不出来(片段删了留下悬空输入之类)时是 `undefined`,舞台按「图卡不画」兜底。
+src/render/cards/gpuExecutor.ts:51:    // 离屏画布(图卡递归解析上游时用的那种)和 DOM 画布的 getContext 是两个不同的重载,
 
 $ git grep -n "补渲" src/ server/ scripts/ desktop/
 server/test/card-authoring-guide.test.mjs:332:  // 补渲、烘焙、冻结
@@ -116,8 +134,9 @@ server/test/card-authoring-guide.test.mjs:333:  assert.doesNotMatch(GUIDE, /烘�
 3. `src/editor/left/library/transitionsGroup.tsx:32`（「示意图卡」）：特例保护，指转场库示意图卡片，非 GraphCard 旧名词。
 4. `server/test/card-authoring-guide.test.mjs:11, 330, 331`：防回退守门单测，断言卡片开发指南文档中不再出现过时的旧名词「图卡」（正则匹配 `/图卡/` 并排除地图卡/示意图卡），必须保留以守护文档质量。
 5. `server/test/card-authoring-guide.test.mjs:332, 333`：防回退守门单测，断言卡片开发指南文档中不再出现「补渲、烘焙、冻结」（正则匹配 `/烘焙|冻结|补渲/`），必须保留。
+6. `src/cards/native/sound-effects.ts`、`src/kernel/cardGpu.ts`、`src/kernel/cardGraph.mjs`、`src/kernel/types.ts`、`src/render/cards/gpuExecutor.ts`：上述 5 个文件中的注释命中位于 `src/render/audioCardSourceVersion.test.mjs` 钉住的内置有声卡源码闭包内，按 `prerender-products-contract.md` 第 9.2 节保留原注释以不改变 `cardAudioIdentity`。
 
-其余所有代码、注释、错误与断言中的旧词均已全部消除，剩余项 0 遗漏！
+其余所有代码、错误与断言中的旧词均已全部消除，剩余项均符合守门规范！
 
 ---
 
