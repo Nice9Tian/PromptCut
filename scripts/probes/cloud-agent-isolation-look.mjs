@@ -230,7 +230,8 @@ export async function runLookIsolation({ tmp, hostedData, base, agentUrl, agentD
       const msg = JSON.stringify({ projectId: p1.projectId, path: '/api/vision/snapshot', body: { project: { id: p1.projectId, tracks: [] }, t: 1 }, timeoutMs: 5000 });
       const direct = await fetch(`${STATUS}/look`, { method: 'POST', headers: { 'content-type': 'application/json', [LOOK_AUTH_HEADER]: signLookRequest(readServiceKeyFile(agentSecrets), msg) }, body: msg, signal: AbortSignal.timeout(20_000) }).then((r) => r.status).catch(() => 0);
       await stopRender();
-      const b = await run(apis.jia, p1.projectId, 'conv-look-down', [see, { say: '渲染服务停着的时候看了一次' }], 120_000);
+      // 等待时限要比 server/agent-service/look-client.mjs 的 reconnectMs(5 分钟)长:看画面客户端连着 5 分钟连不上才放弃并回「这次没看成」
+      const b = await run(apis.jia, p1.projectId, 'conv-look-down', [see, { say: '渲染服务停着的时候看了一次' }], 420_000);
       check('V3c 托管方关掉渲染服务的看画面(PROMPTCUT_RENDER_LOOK=off)后要不到画面;渲染服务停着时同样是「这次没看成」,两轮都照常结束', st.look?.enabled === false && direct === 404
         && a.state === 'idle' && a.images.length === 0 && a.tools[0]?.ok === false && /这次没看成/.test(a.tools[0].summary)
         && b.state === 'idle' && b.images.length === 0 && b.tools[0]?.ok === false && /这次没看成/.test(b.tools[0].summary), {
