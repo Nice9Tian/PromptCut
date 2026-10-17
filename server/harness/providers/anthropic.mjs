@@ -65,6 +65,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       let inputTokens = 0;
       let outputTokens = 0;
       let stopReason = null;
+      let receivedStop = false;
       let partialTools = {};
 
       for await (const { event, data } of readSse(response, { signal })) {
@@ -76,7 +77,9 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           continue;
         }
 
-        if (event === 'error' || parsed.type === 'error') throw new Error(parsed.error?.message || 'API 流返回错误');
+        if (event === 'error' || parsed.type === 'error' || parsed.error) {
+          throw new Error(typeof parsed.error === 'string' ? parsed.error : (parsed.error?.message || parsed.message || 'API 流返回错误'));
+        }
         if (event === 'message_start') {
           if (parsed.message?.usage?.input_tokens) {
             inputTokens = parsed.message.usage.input_tokens;
@@ -120,10 +123,15 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           if (parsed.usage?.output_tokens) {
             outputTokens = parsed.usage.output_tokens;
           }
-        } else if (event === 'message_stop') {
+        } else if (event === 'message_stop' || parsed.type === 'message_stop') {
+          receivedStop = true;
           yield { type: 'usage', input: inputTokens, output: outputTokens };
           yield { type: 'stop', reason: stopReason || 'end_turn' };
         }
+      }
+
+      if (!receivedStop && !signal?.aborted) {
+        throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
       }
     }
   };

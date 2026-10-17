@@ -2,8 +2,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { createRetryingFetch, RETRYABLE_STATUS, backoffMs, DEFAULT_RETRY } =
+const { createRetryingFetch, RETRYABLE_STATUS, backoffMs, DEFAULT_RETRY, isRetryableSseError } =
   await import('../harness/retry-fetch.mjs');
+const { withIdleTimeout } = await import('../harness/idle-timeout.mjs');
+const { readSse } = await import('../harness/providers/base.mjs');
 
 /** 假响应。headers.get 只认 retry-after */
 function res(status, { retryAfter } = {}) {
@@ -15,13 +17,30 @@ function res(status, { retryAfter } = {}) {
   };
 }
 
-/** 按剧本依次返回;数字 = 状态码,Error 实例 = 抛出去 */
+/** 构造一条 HTTP 200 SSE 流响应 */
+function sseRes(chunks) {
+  return {
+    status: 200,
+    ok: true,
+    headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
+    text: async () => '',
+    body: (async function* () {
+      for (const c of chunks) {
+        if (c instanceof Error) throw c;
+        yield c;
+      }
+    })(),
+  };
+}
+
+/** 按剧本依次返回;数字 = 状态码,Error 实例 = 抛出去,函数 = 调用取响应 */
 function scripted(seq) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     const step = seq[Math.min(calls.length, seq.length - 1)];
     calls.push({ url, init });
     if (step instanceof Error) throw step;
+    if (typeof step === 'function') return step(url, init);
     return res(step);
   };
   return { fetchImpl, calls };
@@ -163,3 +182,99 @@ test('错误响应的正文会被消费掉,连接才还得回去', async () => {
   await f('u', {});
   assert.equal(drained, 1);
 });
+
+test('HTTP 200 SSE 流首包返回 upstream timed out 错误时自动重试,后续正常流式返回', async () => {
+  const upstreamTimeoutChunk =
+    'data: {"error":{"message":"The upstream service timed out. Please try again later. (request id: 202610180052009722857049rKYajio)"}}\n\n';
+  const { fetchImpl, calls } = scripted([
+    () => sseRes([upstreamTimeoutChunk]),
+    () => sseRes([
+      'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n',
+      upstreamTimeoutChunk,
+    ]),
+    () => sseRes([
+      'data: {"choices":[{"delta":{"content":"恢复正常"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ]),
+  ]);
+  const reasons = [];
+  const f = createRetryingFetch(fetchImpl, {
+    baseDelayMs: 1,
+    maxDelayMs: 2,
+    onRetry: (i) => reasons.push(i.reason),
+  });
+  const r = await f('u', {});
+  assert.equal(calls.length, 3, '前两次 SSE 首包超时均应触发重试');
+  assert.equal(reasons.length, 2);
+  assert.match(reasons[0], /upstream service timed out/i);
+
+  const evs = [];
+  for await (const ev of readSse(r)) evs.push(ev.data);
+  assert.ok(evs.some((d) => d.includes('恢复正常')), '成功那次的首包不能在预读时丢失');
+  assert.ok(evs.includes('[DONE]'), '后续流也完整接着读完');
+});
+
+test('单次尝试触发 withIdleTimeout(外部 signal 未 abort)时自动重试并成功;外部 signal.aborted 时立即停止不重试', async () => {
+  let attempt = 0;
+  const userAc = new AbortController();
+  const rawFetch = (url, init) => {
+    attempt++;
+    if (attempt === 1) {
+      // 第一次尝试卡死,直到 withIdleTimeout 触发
+      return new Promise((_res, rej) => {
+        init.signal.addEventListener('abort', () => rej(init.signal.reason), { once: true });
+      });
+    }
+    return Promise.resolve(sseRes([
+      'data: {"choices":[{"delta":{"content":"第二次成了"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ]));
+  };
+  const f = createRetryingFetch(
+    withIdleTimeout(rawFetch, { idleMs: 30 }),
+    { signal: userAc.signal, baseDelayMs: 1, maxDelayMs: 2 },
+  );
+  const r = await f('u', { signal: userAc.signal });
+  assert.equal(attempt, 2, '闲置超时(外部 signal 未 abort)必须触发重试');
+  assert.equal(userAc.signal.aborted, false);
+  const evs = [];
+  for await (const ev of readSse(r)) evs.push(ev.data);
+  assert.ok(evs.some((d) => d.includes('第二次成了')));
+
+  // 用户主动点停止(外部 signal.aborted === true)时绝不重试
+  let stopAttempts = 0;
+  const stopAc = new AbortController();
+  const stopFetch = (url, init) => {
+    stopAttempts++;
+    return new Promise((_res, rej) => {
+      init.signal.addEventListener('abort', () => rej(init.signal.reason ?? new Error('user stopped')), { once: true });
+    });
+  };
+  const fStop = createRetryingFetch(
+    withIdleTimeout(stopFetch, { idleMs: 5000 }),
+    { signal: stopAc.signal, baseDelayMs: 1 },
+  );
+  const p = fStop('u', { signal: stopAc.signal });
+  setTimeout(() => stopAc.abort(new Error('user stopped')), 15);
+  await assert.rejects(() => p, /user stopped|abort/i);
+  assert.equal(stopAttempts, 1, '用户主动停止后绝不重试');
+});
+
+test('SSE 流首包返回不可重试错误(invalid api key / invalid argument)时不白白重试', async () => {
+  for (const msg of ['Invalid API key provided', 'Invalid argument: model parameters malformed']) {
+    assert.equal(isRetryableSseError({ message: msg }), false, `${msg} 不应判定为可重试`);
+    const { fetchImpl, calls } = scripted([
+      () => sseRes([`data: ${JSON.stringify({ error: { message: msg } })}\n\n`]),
+      () => sseRes(['data: {"choices":[{"delta":{"content":"不该走到这"}}]}\n\n']),
+    ]);
+    const f = createRetryingFetch(fetchImpl, { baseDelayMs: 1, maxDelayMs: 2 });
+    const r = await f('u', {});
+    assert.equal(calls.length, 1, `不可重试错误 "${msg}" 应该一次就停`);
+    const evs = [];
+    for await (const ev of readSse(r)) evs.push(ev.data);
+    assert.ok(evs[0].includes(msg), '错误事件应原样留给下游 provider 抛错');
+  }
+});
+
