@@ -242,14 +242,28 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       accessRevision: project.accessRevision, revocationSeq: state.accessHead };
   }
   async function checkAccess({ principal, projectId, action, resource } = {}) {
-    if (principal?.service === 'render') {
+    if (principal?.service === 'render' || (principal?.role === 'render' && principal?.authorizationId === 'service:render')) {
       if (principal.projectId && principal.projectId !== projectId) reject(403, 'project-mismatch');
       const state = ledger.read(); const project = projectOf(state, projectId);
       active(project);
       if (project.hosted?.render !== true) reject(403, 'service-disabled');
       if (principal.access === 'r' && action === 'write') reject(403, 'read-only');
       if (action === 'write' && (resource?.ns === 'media' || resource?.namespace === 'media')) reject(403, 'service-forbidden');
-      return { allowed: true, projectId, role: 'render', service: 'render', access: principal.access ?? 'rw' };
+      return {
+        allowed: true,
+        authorityId: ledger.authorityId,
+        accountId: 'service:render',
+        loginId: 'service:render',
+        credentialId: 'service:render',
+        loginGeneration: 1,
+        projectId,
+        authorizationId: 'service:render',
+        access: principal.access ?? 'rw',
+        accessRevision: project.accessRevision,
+        revocationSeq: state.accessHead,
+        role: 'render',
+        service: 'render',
+      };
     }
     if (!principal?.authorizationId) reject(401, 'login-required');
     if (!accountIdOK(principal.accountId) || typeof principal.loginId !== 'string' || !principal.loginId ||
