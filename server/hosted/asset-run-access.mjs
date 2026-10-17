@@ -117,7 +117,7 @@ export function createAssetRunConsumer({ client, file, assetInstanceId, serviceI
         state = saved;
         // A receipt belongs to its exact observed asset instance. A new OS
         // instance cannot rename an old pending receipt into its own proof.
-        if (saved.assetInstanceId !== assetInstanceId && (saved.pending || Object.keys(saved.leases).length))
+        if (saved.assetInstanceId !== assetInstanceId && (saved.pending || Object.values(saved.leases).some(l => l.state !== 'closed' || !l.receipt)))
           fail(503, 'asset-run-recovery-pending');
         for (const l of Object.values(state.leases)) if (l.state !== 'closed') l.state = 'unknown';
         for (const l of Object.values(state.leases)) if (l.state === 'closed' && l.receipt)
@@ -328,7 +328,9 @@ export function createAssetRunAccess({ client, consumer, projectStores, humanCon
         const dir = path.join(scope.root, '.run-imports', owner), stage = createFsStore({ dir, chunkSize: store.chunkSize });
         Object.defineProperty(stage, 'projectId', { value: input.projectId }); const staging = authorizedAssetStore(stage, lease);
         if (route.operation === 'chunks') {
-          const complete = await store.chunks(ref.hash); reply(res, 200, complete.complete ? complete : await staging.chunks(ref.hash));
+          const complete = await store.chunks(ref.hash);
+          if (complete.complete) reply(res, 200, complete);
+          else { const staged = await staging.chunks(ref.hash); reply(res, 200, { ...staged, complete: false }); }
         } else if (route.operation === 'chunk') reply(res, 200, await staging.putChunk(ref.hash, input.chunkIndex, { size: ref.size, ext: ref.ext }, Readable.from([body])));
         else {
           const existing = await store.stat(ref.hash);

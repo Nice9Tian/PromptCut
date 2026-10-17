@@ -478,6 +478,30 @@ export async function runAssetRootPublisher({ configFile, mode }) {
       } finally { await group.close(); }
     },
     async pinPrevious(previous) {
+      const checkDeadPruned = async () => {
+        const unit = await unitInfo(scope.unit), currentBootId = await bootId();
+        let cg = null;
+        try { cg = await fs.lstat(scope.cgroupPath, { bigint: true }); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        validateDeadMainPreviousV2({ unit, serviceCgroup: cg, currentBootId, old: { instance: previous } });
+        if (!['inactive', 'failed'].includes(unit.ActiveState) || cg !== null) fail('publisher-previous-instance-mismatch');
+        try {
+          if (parseProcStat(await fs.readFile(`/proc/${previous.pid}/stat`, 'utf8')).startTicks === previous.pidBirth.startTicks)
+            fail('publisher-old-birth-live');
+        } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        if (!equal(unit, await unitInfo(scope.unit))) fail('publisher-previous-instance-mismatch');
+      };
+      const beforeUnit = await unitInfo(scope.unit);
+      if (['inactive', 'failed'].includes(beforeUnit.ActiveState) && Number(beforeUnit.MainPID) === 0) {
+        await checkDeadPruned();
+        return {
+          async stopAndObserve() {
+            await checkDeadPruned();
+            return { kind: 'cgroup-empty', closed: true, at: Date.now(), bootId: previous.bootId,
+              cgroup: previous.cgroup, unitInvocationId: previous.unitInvocationId, pidBirth: previous.pidBirth };
+          },
+          async close() {},
+        };
+      }
       if (!equal(previous, await inspect(scope, previous))) fail('publisher-previous-instance-mismatch');
       const group = await fs.open(scope.cgroupPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       let events;
@@ -494,22 +518,30 @@ export async function runAssetRootPublisher({ configFile, mode }) {
             const deadline = Date.now() + 120000; let empty = false;
             try {
               while (Date.now() < deadline) {
-                const buffer = Buffer.alloc(4096), { bytesRead } = await events.read(buffer, 0, buffer.length, 0);
-                const text = buffer.subarray(0, bytesRead).toString('utf8');
-                if (!/^populated [01]$/m.test(text)) fail('publisher-cgroup-observation-invalid');
+                let pruned = false, text = '';
+                try {
+                  const buffer = Buffer.alloc(4096), { bytesRead } = await events.read(buffer, 0, buffer.length, 0);
+                  text = buffer.subarray(0, bytesRead).toString('utf8');
+                  if (!/^populated [01]$/m.test(text)) fail('publisher-cgroup-observation-invalid');
+                } catch (e) {
+                  if (e.code !== 'ENODEV') throw e;
+                  try { await fs.lstat(scope.cgroupPath); fail('publisher-cgroup-observation-invalid'); }
+                  catch (le) { if (le.code !== 'ENOENT') throw le; }
+                  pruned = true;
+                }
                 const st2 = await group.stat({ bigint: true });
                 if (String(st2.dev) !== previous.cgroup.dev || String(st2.ino) !== previous.cgroup.ino || await bootId() !== previous.bootId)
                   fail('publisher-cgroup-changed');
                 let gone = false;
                 try { const p = parseProcStat(await fs.readFile(`/proc/${previous.pid}/stat`, 'utf8')); gone = p.startTicks !== previous.pidBirth.startTicks; }
                 catch (e) { if (e.code === 'ENOENT') gone = true; else throw e; }
-                if (/^populated 0$/m.test(text) && gone) { empty = true; break; }
+                if ((pruned || /^populated 0$/m.test(text)) && gone) { empty = true; break; }
                 await new Promise(resolve => setTimeout(resolve, 20));
               }
             } finally { if (!(await stopping).ok) fail('publisher-stop-failed'); }
             if (!empty) fail('publisher-closure-unproved');
             const unit = await unitInfo(scope.unit);
-            if (unit.ActiveState !== 'inactive' || Number(unit.MainPID) !== 0) fail('publisher-unit-not-stopped');
+            if (!['inactive', 'failed'].includes(unit.ActiveState) || Number(unit.MainPID) !== 0) fail('publisher-unit-not-stopped');
             return { kind: 'cgroup-empty', closed: true, at: Date.now(), bootId: previous.bootId,
               cgroup: previous.cgroup, unitInvocationId: previous.unitInvocationId, pidBirth: previous.pidBirth };
           },
