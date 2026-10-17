@@ -6,7 +6,7 @@ import "../testing/registerTs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { playbackUrl, chooseTier, setMediaTierPolicy, mediaTierPolicy, remoteMediaUrl, TIERS_KNOWN_REMOTE, previewMediaUrl, subscribeMediaTierPolicy } = await import("./mediaTier.ts");
+const { playbackUrl, chooseTier, setMediaTierPolicy, mediaTierPolicy, remoteMediaUrl, resolveCardParams, TIERS_KNOWN_REMOTE, previewMediaUrl, subscribeMediaTierPolicy } = await import("./mediaTier.ts");
 
 const ORIG = "a".repeat(64);
 const SMALL = "b".repeat(64);
@@ -108,5 +108,24 @@ test("LMT9 编辑界面的素材预览(素材库缩略、波形):桌面原样 me
   } finally {
     setMediaTierPolicy({ online: false, lowMemory: false, remote: null });
     off();
+  }
+});
+
+test("LMT10 舞台卡片参数里的 /@media/<hash>[.ext]:桌面原样不动(同一引用);在线未就绪给空串,cookie 模式换成 /media-s/<sid>/media/<hash>", () => {
+  const raw = { photo: `/@media/${ORIG}.jpg`, caption: "户型图", sheetW: 604 };
+  try {
+    setMediaTierPolicy({ online: false, lowMemory: false, remote: null });
+    assert.equal(resolveCardParams(raw), raw, "桌面环境原样返回同一对象引用");
+
+    setMediaTierPolicy({ online: true, lowMemory: false, remote: null });
+    const pending = resolveCardParams(raw);
+    assert.deepEqual(pending, { photo: "", caption: "户型图", sheetW: 604 }, "在线远程地址未就绪前不请求 /@media");
+
+    setMediaTierPolicy({ online: true, lowMemory: false, remote: { base: "/media-s/0123456789abcdef0123456789abcdef", ticket: null } });
+    const mapped = resolveCardParams(raw);
+    assert.deepEqual(mapped, { photo: `/media-s/0123456789abcdef0123456789abcdef/media/${ORIG}`, caption: "户型图", sheetW: 604 });
+    assert.equal(resolveCardParams(raw), mapped, "同一策略下复用同一引用(不打断 memo)");
+  } finally {
+    setMediaTierPolicy({ online: false, lowMemory: false, remote: null });
   }
 });

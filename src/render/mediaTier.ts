@@ -124,6 +124,34 @@ export function remoteMediaUrl(url: string, remote: MediaTierPolicy["remote"] = 
   return `${remote.base}/media/${hash}${q}`;
 }
 
+const resolvedParamsCache = new WeakMap<object, WeakMap<MediaTierPolicy, Record<string, unknown>>>();
+
+/**
+ * 舞台给卡片传参数时，把形如 `/@media/<哈希>[.扩展名]` 的字符串换成远程素材服务地址（如 `/media-s/<sid>/media/<哈希>`）。
+ * 桌面运行环境（`!p.online && !p.remote`）原样返回；在线页面在远程地址就绪前（`p.online && !p.remote`）换成空串，不请求不存在的 `/@media/…`。
+ */
+export function resolveCardParams<T extends Record<string, unknown>>(params: T, p: MediaTierPolicy = policy): T {
+  if (!params || typeof params !== "object" || (!p.online && !p.remote)) return params;
+  let byPolicy = resolvedParamsCache.get(params);
+  const hit = byPolicy?.get(p);
+  if (hit) return hit as T;
+  let out: Record<string, unknown> | null = null;
+  for (const [k, v] of Object.entries(params)) {
+    if (typeof v !== "string" || !hashFromUrl(v)) continue;
+    const mapped = p.remote ? remoteMediaUrl(v, p.remote) : "";
+    if (mapped === v) continue;
+    if (!out) out = { ...params };
+    out[k] = mapped;
+  }
+  const result = (out as T) ?? params;
+  if (!byPolicy) {
+    byPolicy = new WeakMap();
+    resolvedParamsCache.set(params, byPolicy);
+  }
+  byPolicy.set(p, result);
+  return result;
+}
+
 export function chooseTier(
   media: TierMedia,
   localHashes: HashList = [],
