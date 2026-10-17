@@ -96,7 +96,8 @@ export function createWorkerMasterLookClient({ masterOrigin, masterFingerprint25
 
   async function callMaster(op, binding, params = {}, { signal = null } = {}) {
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
-    const payload = JSON.stringify({ op, binding, params });
+    const assignmentDigest = binding?.assignmentDigest ?? null;
+    const payload = JSON.stringify({ op, binding, assignmentDigest, params });
     const encoded = Buffer.from(payload, 'utf8');
     return new Promise((resolve, reject) => {
       const req = https.request(new URL(WORKER_LOOK_PATH, base), {
@@ -142,13 +143,15 @@ export function createWorkerMasterLookClient({ masterOrigin, masterFingerprint25
   }
 
   return {
-    forProject(projectId, { cards = null, signal = null, run = null, onProgress = null } = {}) {
+    forProject(projectId, { cards = null, signal = null, run = null, assignmentDigest = null, onProgress = null } = {}) {
       const bound = run ? { ...run } : null;
+      const digest = assignmentDigest ?? bound?.assignmentDigest ?? null;
       return async (pathname, body, opts = {}) => {
         const currentCards = typeof cards === 'function' ? cards() : cards;
         const currentSignal = opts?.signal || signal;
         const currentProgress = opts?.onProgress || onProgress;
-        const res = await callMaster('look', { projectId, ...bound, assignmentDigest: bound?.assignmentDigest }, {
+        const currentDigest = opts?.assignmentDigest ?? digest;
+        const res = await callMaster('look', { projectId, ...bound, assignmentDigest: currentDigest }, {
           path: pathname,
           body,
           cards: currentCards,
@@ -166,7 +169,7 @@ export function createWorkerMasterLookClient({ masterOrigin, masterFingerprint25
       return callMaster('heartbeat', { projectId, runId, ...rest, assignmentDigest: fields?.assignmentDigest }).catch(() => null);
     },
     cancel(requestId, fields = {}) {
-      return callMaster('cancel', { ...fields }, { requestId }).catch(() => null);
+      return callMaster('cancel', { ...fields, assignmentDigest: fields?.assignmentDigest }, { requestId }).catch(() => null);
     },
   };
 }
