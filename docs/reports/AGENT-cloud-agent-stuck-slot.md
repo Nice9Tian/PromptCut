@@ -67,7 +67,38 @@
 
 ## 3. 基线与验证结果
 
-（正在运行独立全量 `npm test`，完成后填入命令、退出码与条数。）
+### 3.1 类型检查与全量测试（`.worktrees/cloud-agent-stuck-slot`）
+
+- **类型检查命令**：
+  ```powershell
+  npx.cmd tsc -b --force
+  ```
+  - **退出码**：`0`（零错误）
+
+- **专项测试命令（覆盖全部新增与修改的测试文件，共 5 个文件）**：
+  ```powershell
+  $env:PROMPTCUT_ACCOUNT_PROVIDER_ROOT="C:\Users\admin\Documents\VisuHive"
+  $env:PROMPTCUT_PASSWORD_ORDER_MODULE="C:\Users\admin\Documents\VisuHive\account\password-order.mjs"
+  npm.cmd test -- server/test/account-slot-scheduler.test.mjs server/test/account-root-slots.test.mjs server/test/agent-run-scope-doc.test.mjs server/test/account-assembly-run-internal.test.mjs server/test/account-worker-lifecycle.test.mjs
+  ```
+  - **退出码**：`0`
+  - **条数**：`tests 47`、`pass 47`、`fail 0`、`cancelled 0`、`skipped 0`（耗时 `32836.5851 ms`）
+
+- **全量测试命令**：
+  ```powershell
+  $env:PROMPTCUT_ACCOUNT_PROVIDER_ROOT="C:\Users\admin\Documents\VisuHive"
+  $env:PROMPTCUT_PASSWORD_ORDER_MODULE="C:\Users\admin\Documents\VisuHive\account\password-order.mjs"
+  $env:PROMPTCUT_NO_PORT_FILE="1"
+  npm.cmd test
+  ```
+  - **退出码**：`0`
+  - **条数**：`tests 7051`、`pass 7037`、`fail 0`、`cancelled 0`、`skipped 14`、`todo 0`（耗时 `160655.5753 ms`）
+
+- **行尾检查命令**：
+  ```powershell
+  node C:\Users\admin\Documents\PromptCut\out\main-session-tools\eol-audit.mjs . 7c0abadc HEAD
+  ```
+  - **结果**：全部分支修改文件均为 `LF → LF 孤立CR 0`（零行尾翻转）
 
 ---
 
