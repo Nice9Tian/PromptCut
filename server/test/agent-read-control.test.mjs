@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openAccountLedger, appendAccessEvent } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
-import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT, KEEP_CLOSED_READS_PER_INSTANCE, pruneClosedReads } from '../account/agent-read-control.mjs';
+import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT, KEEP_CLOSED_READS_PER_INSTANCE, pruneClosedReads, READ_NONCE_TTL_MS, pruneNonces } from '../account/agent-read-control.mjs';
 import { conversationReadInState } from '../account/conversation-authority.mjs';
 import { instanceFixture } from './agent-instance-fixture.mjs';
 
@@ -229,4 +229,24 @@ test('已关的读取只留最近几十条：早关的连同开启记录删掉�
   const again = await f.open('owner');
   f.control.closeReads(f.signed('close', { readHandleIds: [again.readHandle.readHandleId] }));
   assert.equal(Object.values(f.ledger.read().agentReadsV1.handles).filter(h => h.state === 'closed').length, KEEP_CLOSED_READS_PER_INSTANCE);
+});
+
+test('用过的随机数只留 10 分钟:窗口内重放照样拒;过期的和老格式(true)的都删掉,账本不再无限变大', async t => {
+  const f = setup(t); f.subscribe();
+  const input = f.signed('open', { delegation: 'member', projectId: 'project', conversationId: 'conversation', action: 'get', after: 0 });
+  const opened = await f.control.open(input);
+  await assert.rejects(f.control.open(input), { code: 'read-control-replay' }, '窗口内重放照样拒');
+  const t1 = f.ledger.read().agentReadsV1.nonces;
+  assert.ok(Object.values(t1).every(v => typeof v === 'number'), '新记的都带时间');
+  // 造一条过期的、一条老格式的
+  f.ledger.transaction(state => {
+    state.agentReadsV1.nonces.expired = Date.now() - READ_NONCE_TTL_MS - 1;
+    state.agentReadsV1.nonces.legacy = true;
+  });
+  f.control.closeReads(f.signed('close', { readHandleIds: [opened.readHandle.readHandleId] }));
+  const t2 = f.ledger.read().agentReadsV1.nonces;
+  assert.equal(t2.expired, undefined); assert.equal(t2.legacy, undefined);
+  assert.ok(Object.keys(t2).length >= 2, '窗口内的留着');
+  const table = { nonces: { a: 1000, b: 999_999, c: true } };
+  assert.equal(pruneNonces(table, 1_000_000, 10), 2); assert.deepEqual(Object.keys(table.nonces), ['b']);
 });

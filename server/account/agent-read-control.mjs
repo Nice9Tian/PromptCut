@@ -34,6 +34,18 @@ export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE) {
   for (const [key, row] of Object.entries(t.requests)) if (removed.has(row.readHandleId)) delete t.requests[key];
   return removed.size;
 }
+/** 用过的一次性随机数留多久。每个请求的签名都绑着它自己那条 TLS 连接（`channelBinding`），一条连接只发一个请求就关，
+ * 换一条连接重放签名就对不上；随机数表只是同一条连接里的那一道补充，用不着永远留着。原来一条不删，
+ * 页面每 3 秒取一次对话就写进两三条，一小时一万多条，把账本撑到一百多万字节（2026-10-17 实测，又把文档服务主线程占满）。 */
+export const READ_NONCE_TTL_MS = 10 * 60_000;
+/** 删掉过了留存期的随机数；原来存成 `true`、没有时间的老记录一并删掉 */
+export function pruneNonces(t, at, ttl = READ_NONCE_TTL_MS) {
+  let removed = 0;
+  for (const [key, value] of Object.entries(t.nonces)) {
+    if (value === true || typeof value !== 'number' || value < at - ttl) { delete t.nonces[key]; removed++; }
+  }
+  return removed;
+}
 export const CONVERSATION_CONTROL_ROOT = '/internal/v2/conversation-controls/';
 export const conversationControlOperations = Object.freeze({ subscribe: 'conversationControlSubscribe',
   open: 'conversationReadOpen', close: 'conversationReadClose', ack: 'conversationControlAck' });
@@ -137,10 +149,10 @@ export function createAgentReadControlHandler({ control, resolveServicePrincipal
  * release invocation capabilities only after the complete request/stream ends.
  * Unknown historical OS instances never become closed through an empty list. */
 export function createAgentReadControl({ ledger, instanceAuthority, authorizeRead, checkReadInState,
-  synchronize = async () => {}, onProgress = () => {} } = {}) {
+  synchronize = async () => {}, onProgress = () => {}, now = Date.now } = {}) {
   if (![ledger?.read, ledger?.transaction, instanceAuthority?.verifyInState, authorizeRead, checkReadInState]
     .every(value => typeof value === 'function')) fail(503, 'read-control-configuration');
-  ledger.transaction(state => { state.agentReadControlRequired = true; tables(state); pruneClosedReads(state); });
+  ledger.transaction(state => { state.agentReadControlRequired = true; tables(state); pruneClosedReads(state); pruneNonces(tables(state), now()); });
   const streams = new Map(), waiters = new Set(); let stopped = false;
   const instance = (state, servicePrincipal, action, body) => {
     const operation = conversationControlOperations[action]; conversationControlScope(operation, body);
@@ -149,9 +161,10 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
   };
   const nonce = (state, who, body) => {
     const key = digestOf({ instanceId: who.instanceId, nonce: body.nonce });
-    const t = tables(state);
+    const t = tables(state), at = now();
     if (t.nonces[key]) fail(409, 'read-control-replay');
-    t.nonces[key] = true;
+    pruneNonces(t, at);
+    t.nonces[key] = at;
   };
   const requireLive = who => {
     const stream = streams.get(who.instanceId);
