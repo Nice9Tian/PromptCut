@@ -114,11 +114,20 @@
 
 ---
 
-## 6. 需要用户拍板的事
+## 6. 用户拍板与生产部署收口记录（2026-10-18）
 
-1. **是否合入 `main` 并部署到生产云节点（`149.88.94.84`）收回两个孤儿槽**
-   - **这是什么**：本次修复在分支 `gemini/cloud-agent-stuck-slot` 上完成了代码与测试验证。目前生产节点上 `slot-a`（第 6 代）和 `slot-b`（第 2 代）仍处于未分配孤儿状态占着槽位（6 个槽只剩 4 个可用）。
-   - **有哪些选项**：
-     - **选项 A（建议）**：同意将 `gemini/cloud-agent-stuck-slot` 合入 `main`，并按任务书第 5 节基于合入后的 `main` 制作新的发布目录，更新文档服务与 Agent 服务（含 root 入口配置与任务槽单元 SHA-256），自动收回 `slot-a` 第 6 代与 `slot-b` 第 2 代，确认 6 个槽全部回到 `idle` 后发一条真实消息验证。
-     - **选项 B**：先只合入 `main`，暂不部署节点（等其它分支任务一起打包部署）。
-     - **选项 C**：指出需要调整或返工的地方。
+用户已拍板选择 **选项 A**（合入 `main` 并部署至生产云节点 `149.88.94.84` 收回孤儿槽、发真实消息验证），已全部执行完毕：
+
+1. **合入 `main`**：
+   - 将最新 `main`（`9f3ee045`）合入 `gemini/cloud-agent-stuck-slot`（`5dc47652`），复跑类型检查与 47 条专项测试全绿，随后以 `--no-ff` 合入 `main`（提交 `35f7b2abb9db9762c49d49f64ee611636ae7c4c3`），清理工作区与分支。
+2. **基于 `35f7b2ab` 制作全新发布目录并切换服务**：
+   - 在节点上建立完整发布目录 `/opt/promptcut-v2/releases/35f7b2ab/pc`（含 `vh`）与 `/opt/promptcut-render/releases/35f7b2abb9db`（含 `node_modules`、`.cache`，经 `assertRootOwnedCode` 核验 1394 项通过）。
+   - 切换前将单元文件、`/etc/promptcut/agent-root/agent-root.json`、全部槽登记链与 `account-v2.sqlite` 备份至 `/root/promptcut-v2-backup-20261017-stuck-slot-35f7b2ab/`（`0700`）。
+   - 将 `promptcut-doc-v2.service` 切换至 `/opt/promptcut-v2/releases/35f7b2ab/pc`，将 `promptcut-agent.service`、`promptcut-agent-root.service` 及 6 个任务槽单元 `promptcut-agent-task-slot-a..f.service` 切换至 `/opt/promptcut-render/releases/35f7b2abb9db`，同步更新 `/etc/promptcut/agent-root/agent-root.json` 中 6 个槽的 `unitFragment.sha256` 与各槽 `runtime-dropin.json` 的 `adapterDigest`。
+3. **收回两个孤儿槽（`slot-a` 第 6 代、`slot-b` 第 2 代）**：
+   - `promptcut-agent-root` 启动后 1 秒内（`17:00:51.053Z`～`17:00:51.972Z`），`slot-a`（第 6 代）与 `slot-b`（第 2 代）自动写下幂等失败观察，向文档服务核实确认无授权并在账本原子封存 `dispatch:slot-a:6`、`dispatch:slot-b:2` 与对应槽代次，随后自动执行 `retire`（`reason: "assignment-failed"`），6 个槽全部回到 `idle`（`phase: "closed"`, `inactive/dead`）。
+4. **真实消息端到端验证**：
+   - 在项目 `sp_4lcukykm2blylc5lok7za46yu3` 发起临时对话 `cc-verify-slot-a-35f7b2ab` 并发送真实消息，调度器立即将其派往刚收回的 **`slot-a` 第 7 代**（`17:11:14.851Z` `root.slot.opened` → `17:11:17.249Z` `slot.running`），任务正常执行完毕并经四步结算正常关闭（`17:11:54.525Z` `root.slot.closed` `how: "normal"`，账本 `terminalOutcome.status: "done"`）。
+   - 验证完成后已调用 `DELETE /agent/v1/conversations/cc-verify-slot-a-35f7b2ab`（`200 removed: true`）清理临时验证对话，全节点 6 个槽（`slot-a` 第 7 代、`slot-b` 第 2 代、`slot-c` 第 7 代、`slot-d` 第 2 代、`slot-e` 第 1 代、`slot-f` 第 1 代）全部处于 `closed / idle` 就绪状态。
+   - 已同步更新 `docs/local.md` 部署记录。
+
