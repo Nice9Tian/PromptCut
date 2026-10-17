@@ -615,4 +615,53 @@ test('同一个对话改派新槽（边界 3）：旧槽已成时新槽被 curre
   } finally { await operations.idle(); history.close(); await doc.close(); }
 });
 
-
+test('任务跑到一半文档服务重启过:旧进程记不上自己那一行;接班进程凭独占锁记下它已结束、替它记「已关」,强制终态签得出来', async t => {
+  const f = await fixture(t); f.enqueue(); f.enqueue('message2');
+  const grant = await f.invoke('admit', { projectId, conversationId, requestId: 'restart-admit' });
+  const binding = Object.fromEntries(['projectId', 'conversationId', 'messageId', 'runId', 'runGrantId'].map(k => [k, grant[k]]));
+  const assignment = (await f.invoke('scopeAssignment', { ...binding, requestId: 'assignment' })).assignment;
+  await f.m.run('bind', { assignment });
+  // 这条任务的数据连接当时由重启前的那个文档服务进程(doc-old)接待过
+  f.ledger.transaction(s => { ((s.runDocInstancesV1 ??= {})[grant.runGrantId] ??= {})['doc-old'] = { docInstanceId: 'doc-old' }; });
+  f.m.faults.mainGone = true; await f.m.run('observe-failure');
+  const [control] = await f.provider.reconcileScopeFailures();
+  assert.deepEqual([...control.docInstanceIds].sort(), ['doc-live', 'doc-old']);
+  const doc = createDocService({ autoTick: false, log: () => {} });
+  const history = openOperationHistory(path.join(f.dir, 'restart-operations.db'));
+  history.createProject(projectId, { id: projectId });
+  const unavailable = () => { throw Error('fixture-has-no-account-operation'); };
+  const operations = createPasswordOrder({ history, account: { get: unavailable }, verifyWitness: unavailable, checkGate: unavailable });
+  try {
+    await f.scope.closeDocControl({ controlId: control.controlId, docInstanceId: 'doc-live', service: doc, operationCoordinator: operations });
+    const pending = () => f.scope.docClosed(f.ledger.read(), f.ledger.read().runControlsV2[control.controlId]);
+    assert.throws(pending, { code: 'run-scope-doc-closure-pending' }, '旧进程那一行没有:签不出来(原来就永远卡在这里)');
+    // 没有「已结束」的记录,不许替它记
+    await assert.rejects(f.scope.closeEndedDocControl({ controlId: control.controlId, endedInstanceId: 'doc-old', docInstanceId: 'doc-live', operationCoordinator: operations }),
+      { code: 'run-scope-doc-closure-unavailable' });
+    // 没握着独占锁,不记谁已结束
+    assert.deepEqual(f.scope.recordDocProcessStart({ docInstanceId: 'doc-live', exclusive: false }), []);
+    assert.equal(f.ledger.read().docProcessesV1, undefined);
+    // 自己不能替自己记「已结束」
+    await assert.rejects(f.scope.closeEndedDocControl({ controlId: control.controlId, endedInstanceId: 'doc-live', docInstanceId: 'doc-live', operationCoordinator: operations }),
+      { code: 'run-scope-doc-closure-unavailable' });
+    assert.deepEqual(f.scope.recordDocProcessStart({ docInstanceId: 'doc-live', exclusive: true, now: 1000 }), ['doc-old']);
+    const processes = f.ledger.read().docProcessesV1;
+    assert.equal(processes['doc-old'].endedBy, 'doc-live'); assert.equal(processes['doc-old'].evidence, 'exclusive-owner-lock');
+    assert.equal(processes['doc-live'].endedAt, undefined, '自己没有结束');
+    await f.scope.closeEndedDocControl({ controlId: control.controlId, endedInstanceId: 'doc-old', docInstanceId: 'doc-live', operationCoordinator: operations });
+    const row = f.ledger.read().docRunClosuresV2[control.controlId].instances['doc-old'];
+    assert.equal(row.state, 'closed'); assert.deepEqual(row.closed.connections, []);
+    assert.equal(row.closed.processEnded.endedBy, 'doc-live'); assert.equal(row.closed.processEnded.attestedBy, 'doc-live');
+    assert.doesNotThrow(pending, '两个实例都记上了');
+    // 再办一遍不重复写;再启动一次也不改已结束的记录
+    await f.scope.closeEndedDocControl({ controlId: control.controlId, endedInstanceId: 'doc-old', docInstanceId: 'doc-live', operationCoordinator: operations });
+    assert.deepEqual(f.ledger.read().docRunClosuresV2[control.controlId].instances['doc-old'], row);
+    assert.deepEqual(f.scope.recordDocProcessStart({ docInstanceId: 'doc-next', exclusive: true, now: 2000 }), ['doc-live']);
+    assert.equal(f.ledger.read().docProcessesV1['doc-old'].endedAt, 1000);
+    await f.m.run('forced-close', { terminal: f.ledger.read().runScopeForcedV1[control.controlId][grant.runGrantId], intent: null });
+    const results = await f.provider.reconcileScopeClosures();
+    assert.equal(results.length, 1); assert.equal(results[0].terminalOutcome.status, 'failed');
+    assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].currentRunId, null);
+    assert.equal(f.ledger.read().conversationsV2[projectId][conversationId].messages[1].queueState, 'queued', '下一条照常排着');
+  } finally { await operations.idle(); history.close(); await doc.close(); }
+});

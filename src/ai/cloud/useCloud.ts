@@ -121,6 +121,7 @@ function pageState() {
 }
 
 const MODEL_KEY = "pc.cloudModel";
+const EFFORT_KEY = "pc.cloudEffort";
 
 /*
  * 反向通道(契约第 28 节):这张页面的页面号(每次打开页面新起一个,只在内存里),与那几个工具在本机的同一份实现。
@@ -277,6 +278,9 @@ export interface CloudChat {
   revoked?: boolean;
   model: string;
   setModel: (m: string) => void;
+  /** 思考强度;空串 = 默认(不带这个参数,随模型自己的默认) */
+  effort: string;
+  setEffort: (e: string) => void;
 }
 
 /**
@@ -303,10 +307,11 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const [conversationId, setConversationId] = useState<string>(() => (key ? lsGet(chatKey(projectId, tabId, accountScope)) : null) ?? newCloudChatId());
   const [view, setView] = useState<CloudSessionView>({ conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0, revoked: false });
   const [model, setModelState] = useState<string>(() => lsGet(MODEL_KEY) ?? "");
+  const [effort, setEffortState] = useState<string>(() => lsGet(EFFORT_KEY) ?? "");
   const [histItems, setHistItems] = useState<CloudChatItem[]>([]);
   const [histLoading, setHistLoading] = useState(false);
   const sessionRef = useRef<CloudSession | null>(null);
-  const pendingSendRef = useRef<{ key: string; conversationId: string; text: string; requestId: string } | null>(null);
+  const pendingSendRef = useRef<{ key: string; conversationId: string; text: string; options: string; requestId: string } | null>(null);
   const sessionKeyRef = useRef("");
   const convRef = useRef(conversationId);
   convRef.current = conversationId;
@@ -442,15 +447,19 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       library: mediaLibrary(),
       creativity: getTabCreativity(tabId),
       ...(getScript().trim() ? { script: getScript() } : {}),
-      ...(model ? { model } : {}),
+      ...(model && (info?.models ?? []).some((m) => m.id === model) ? { model } : {}),
+      // 存着的档位可能是这台节点不认的(换过节点、档位清单变了):不认的不带,免得整条消息被拒
+      ...(effort && (info?.efforts ?? []).includes(effort) ? { effort } : {}),
       ...(sent.length ? { attachments: sent.map((a) => ({ url: a.url })) } : {}),
     };
     if (cloud.accountMode) {
       const presence = selectionPresenceStatus();
       if (!presence.linked || !presence.pageId || presence.unsupported) { setNotice('当前页面选区尚未连接，请稍后重试。'); return false; }
       const pending = pendingSendRef.current;
-      if (!pending || pending.key !== key || pending.conversationId !== s.conversationId || pending.text !== body.prompt)
-        pendingSendRef.current = { key, conversationId: s.conversationId!, text: body.prompt, requestId: crypto.randomUUID() };
+      // 同一条消息重发沿用同一个请求号;换了模型、思考强度或创造力就是另一条请求(文档服务按请求号核内容,同号不同内容会被拒)
+      const options = JSON.stringify([body.model ?? "", body.effort ?? "", body.creativity ?? ""]);
+      if (!pending || pending.key !== key || pending.conversationId !== s.conversationId || pending.text !== body.prompt || pending.options !== options)
+        pendingSendRef.current = { key, conversationId: s.conversationId!, text: body.prompt, options, requestId: crypto.randomUUID() };
       body.requestId = pendingSendRef.current!.requestId;
       body.selectionSnapshot = { pageId: presence.pageId };
     }
@@ -465,7 +474,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       if (err instanceof CloudError && err.code === "conversation-limit") void refreshHistoryRef.current();
       return false;
     }
-  }, [tabId, model, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
+  }, [tabId, model, effort, info, cloud.accountMode, cloud.accountId, consent.bindingVersion, key]);
 
   const attach = useCallback(async (file: File, signal?: AbortSignal): Promise<CloudAttachmentInfo> => {
     if (cloud.accountMode) {
@@ -567,6 +576,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     return () => { poller.stop(); document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); };
   }, [key, cloud.accountMode]);
   const setModel = useCallback((m: string) => { setModelState(m); lsSet(MODEL_KEY, m); }, []);
+  const setEffort = useCallback((e: string) => { setEffortState(e); lsSet(EFFORT_KEY, e); }, []);
 
   // 正在看的对话被删了：退到一个新对话，刷新列表；别人删的才提示（自己删的有自己的反馈）。有关的人另有气泡（useCloudNotices）
   onDeletedRef.current = (id: string) => {
@@ -628,6 +638,8 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     revoked: Boolean(view.revoked),
     model,
     setModel,
+    effort,
+    setEffort,
   };
 }
 

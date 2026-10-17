@@ -55,7 +55,9 @@ export function canonicalReadRecord(message, { projectId, conversationId }) {
     senderNameAtSend: message.senderNameAtSend, loginId: message.loginId,
     credentialId: message.credentialId, loginGeneration: message.loginGeneration,
     content: copy(message.content), contentDigest: message.contentDigest,
-    selectionSnapshot: copy(message.selectionSnapshot ?? null), attachments: copy(message.attachments ?? []) };
+    selectionSnapshot: copy(message.selectionSnapshot ?? null), attachments: copy(message.attachments ?? []),
+    // 运行选项只在发消息时点过才有；没有的消息记录和原来一模一样（旧消息的摘要不变）
+    ...(message.runOptions ? { runOptions: copy(message.runOptions) } : {}) };
 }
 export function acceptedMessageRef(message, context) {
   const { runId: _runId, ...record } = canonicalReadRecord(message, context);

@@ -1,7 +1,18 @@
 /** Read-only root chain source. Does not write a Doc row or finalize a run. */
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { rootDirectory, rootRead } from './deploy/asset-root-registry-publisher.mjs';
 import { failScope, sameScope, validateAgentScopeExpected, validateAgentScopeHistory, validateAgentScopeFailure } from './agent-run-scope-schema.mjs';
+
+export async function readAgentScopeRegistryFile(registryDir, name, { readRoot = rootRead } = {}) {
+  const filename = path.join(registryDir, name);
+  if (name === '.publisher.lock') {
+    try { await fs.lstat(filename); return { locked: true }; }
+    catch (e) { if (e?.code === 'ENOENT') return null; throw e; }
+  }
+  try { return await readRoot(filename, true); }
+  catch (e) { if (e?.code === 'publisher-file-changed') failScope('source-changed'); throw e; }
+}
 
 export async function loadAgentScopeChain(read, current) {
   if (!Number.isSafeInteger(current?.epoch) || current.epoch < 1 || current.epoch > 100000) failScope('history');
@@ -49,7 +60,7 @@ export function createAgentScopeReader({ registryDir, expected, configuredAnchor
     async read({ checkpoint = null } = {}) {
       if (process.platform !== 'linux') failScope('linux-required');
       await rootDirectory(registryDir);
-      return inspectAgentScopeSource({ read: name => rootRead(path.join(registryDir, name), true), expected, configuredAnchorDigest, checkpoint });
+      return inspectAgentScopeSource({ read: name => readAgentScopeRegistryFile(registryDir, name), expected, configuredAnchorDigest, checkpoint });
     },
   });
 }

@@ -5,6 +5,7 @@ import { MAIN_TAB } from "../../ai/liveChat";
 import { useStore } from "../../store/project";
 import { CREATIVITY_HINT, CREATIVITY_LABEL, CREATIVITY_LEVELS, normalizeCreativity, projectCreativity } from "../../kernel/creativity.mjs";
 import { IconMore } from "../../ui/icons";
+import { EFFORT_LABEL, type EffortLevel } from "../../ai/modelOptions";
 import { usePopover } from "./chat/usePopover";
 import "./ModelBar.css";
 
@@ -12,13 +13,16 @@ import "./ModelBar.css";
 export const CLOUD_NO_DEEP_AUTO = "云端 Agent 暂不支持深度自主与审查环路:云端用的是托管方的模型额度,目前没有上限";
 
 /**
- * 「云端」接入方式下输入区底部工具条上的一组:模型下拉(托管方配置了多个模型才出现)+「⋯」运行选项(创造力,以及置灰的深度自主)。
- * 与本机的 `ModelBar` 同一套样式;思考强度、加速、参数兼容这些是本机各驱动自己的,云端没有。
+ * 「云端」接入方式下输入区底部工具条上的一组:模型下拉(托管方配置了多个模型才出现)+ 思考强度下拉(云端报了档位才出现)
+ * +「⋯」运行选项(创造力,以及置灰的深度自主)。
+ * 与本机的 `ModelBar` 同一套样式;加速、参数兼容这些是本机各驱动自己的,云端没有。
  */
 export function CloudModelBar(props: {
   info: CloudInfo | null;
   model: string;
   onModel: (m: string) => void;
+  effort?: string;
+  onEffort?: (e: string) => void;
   disabled?: boolean;
   tabId?: string;
 }): JSX.Element {
@@ -31,6 +35,9 @@ export function CloudModelBar(props: {
   const pop = usePopover();
   const models = info?.models ?? [];
   const shown = model && models.some((m) => m.id === model) ? model : "";
+  const efforts = props.onEffort ? info?.efforts ?? [] : [];
+  const effortShown = props.effort && efforts.includes(props.effort) ? props.effort : "";
+  const effortLabel = (e: string) => EFFORT_LABEL[e as EffortLevel] ?? e;
   return (
     <>
       {models.length > 1 && (
@@ -45,6 +52,20 @@ export function CloudModelBar(props: {
         >
           <option value="">默认{info?.defaultModel ? `(${info.defaultModel})` : ""}</option>
           {models.map((m) => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+        </select>
+      )}
+      {efforts.length > 0 && (
+        <select
+          className="ai-bar-select"
+          data-pc="ai-cloud-effort"
+          aria-label="思考强度"
+          value={effortShown}
+          disabled={disabled}
+          title={`思考强度:越高想得越久、用的额度越多 · ${effortLabel(effortShown)}`}
+          onChange={(e) => props.onEffort?.(e.target.value)}
+        >
+          <option value="">思考 {EFFORT_LABEL[""]}</option>
+          {efforts.map((e) => <option key={e} value={e}>思考 {effortLabel(e)}</option>)}
         </select>
       )}
       <div className="ai-pop-anchor" ref={pop.anchorRef}>

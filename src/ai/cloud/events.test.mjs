@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyCloudEvent, applyCloudEvents, hasOpenRun } from './events.ts';
+import { applyCloudEvent, applyCloudEvents, hasOpenRun, queueSnapshot, settleFromQueue } from './events.ts';
 
 const accepted = { type: 'user', seq: 1, projectId: 'project_a', conversationId: 'conversation_a',
   messageId: 'message_a', senderAccountId: 'account_a', senderNameAtSend: 'Sender A', prompt: 'Original accepted message' };
@@ -66,4 +66,44 @@ test('legacy user/run sequence retains its existing completion behavior', () => 
   assert.equal(messages[1].text, 'LAN output');
   assert.equal(messages[1].pending, false);
   assert.equal(messages[1].outcome, 'completed');
+});
+
+const snapshot = (items, currentRunId = null, queueRevision = 5) => queueSnapshot({ type: 'queue.state', conversationId: 'conversation_a',
+  queueRevision, aclRevision: 1, currentRunId, items: items.map((item, index) => ({ messageId: `message_${index}`, arrivalSeq: index + 1,
+    position: null, runId: 'run_a', ...item })) }, 'conversation_a');
+
+test('queue settlement closes the pending run: done → completed, timer stops, waiting text replaced', () => {
+  const waiting = applyCloudEvents([], [accepted, event('run', 2), event('text', 3, { delta: 'Result' }), event('runner_done', 4, { settlement: 'pending' })]);
+  assert.equal(waiting[1].pending, true);
+  const settled = settleFromQueue(waiting, snapshot([{ state: 'done', outcome: { status: 'done', reason: null } }]));
+  assert.equal(settled[1].pending, false);
+  assert.equal(settled[1].outcome, 'completed');
+  assert.equal(typeof settled[1].finishedAt, 'number');
+  assert.equal(settled[1].cloudSettlement, undefined);
+  assert.notEqual(settled[1].progress.text, '执行已结束，等待云端确认关闭与结算。');
+  assert.equal(hasOpenRun(settled), false);
+  assert.equal(settleFromQueue(settled, snapshot([{ state: 'done', outcome: { status: 'done', reason: null } }])), settled, '再折一次不变');
+});
+
+test('queue settlement: failed shows an error the user can read; cancelled is a stop; model error text is kept', () => {
+  const waiting = applyCloudEvents([], [accepted, event('run', 2), event('runner_done', 3, { settlement: 'pending' })]);
+  const failed = settleFromQueue(waiting, snapshot([{ state: 'cancelled', outcome: { status: 'failed', reason: 'worker-failed' } }]));
+  assert.equal(failed[1].pending, false); assert.equal(failed[1].outcome, 'error'); assert.match(failed[1].error, /进程出了故障/);
+  const stopped = settleFromQueue(waiting, snapshot([{ state: 'cancelled', outcome: { status: 'cancelled', reason: 'stopped' } }]));
+  assert.equal(stopped[1].outcome, 'aborted');
+  const withModelError = applyCloudEvent(waiting, event('error', 4, { code: 'model', message: '模型的回复连续 3 次超过单次输出上限被截断' }));
+  const closed = settleFromQueue(withModelError, snapshot([{ state: 'cancelled', outcome: { status: 'failed', reason: 'runner-error' } }]));
+  assert.equal(closed[1].outcome, 'error'); assert.match(closed[1].error, /超过单次输出上限/);
+  const old = settleFromQueue(waiting, snapshot([{ state: 'done' }]));
+  assert.equal(old[1].outcome, 'completed', '旧服务端没带终态:按队列状态收');
+});
+
+test('queue settlement leaves running / queued / current runs and other runs alone', () => {
+  const waiting = applyCloudEvents([], [accepted, event('run', 2), event('runner_done', 3, { settlement: 'pending' })]);
+  assert.equal(settleFromQueue(waiting, snapshot([{ state: 'running' }])), waiting);
+  assert.equal(settleFromQueue(waiting, snapshot([{ state: 'done' }], 'run_a')), waiting, '还是当前这一轮:不收');
+  assert.equal(settleFromQueue(waiting, snapshot([{ state: 'done', runId: 'run_other' }])), waiting);
+  assert.equal(settleFromQueue(waiting, null), waiting);
+  const bad = snapshot([{ state: 'done', outcome: { status: 'DONE!!', reason: '<script>' } }]);
+  assert.equal(bad.items[0].outcome, null, '形状不对的终态丢掉');
 });

@@ -20,6 +20,13 @@ const MAX_BODY = 256 * 1024;
 const PING_MS = 15_000;
 const MAX_STREAMS = 200;
 const MAX_STREAMS_PER_OWNER = 8;
+/** 队列里一条消息的终态，只给页面看两样：结果（done / failed / interrupted / cancelled）和原因码 */
+const outcomeOf = value => {
+  const status = typeof value?.status === 'string' && /^[a-z-]{1,32}$/.test(value.status) ? value.status : null;
+  if (!status) return null;
+  const reason = typeof value.reason === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(value.reason) ? value.reason : null;
+  return { status, reason };
+};
 
 function sendJson(res, status, body, extra = {}) {
   if (res.headersSent) return;
@@ -161,7 +168,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     let view = await service.conversation(identity, conversationId, 0);
     if (!view) return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
     if (service.runEvents) {
-      await service.mirrorAccepted(identity, conversationId);
+      await service.mirrorAccepted(identity, conversationId, view);
       service.runEvents.after({ projectId: identity.projectId, conversationId, after });
     }
     const owner = identity.accountId;
@@ -195,7 +202,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       polling = true;
       try {
         view = await service.conversation(identity, conversationId, 0);
-        if (service.runEvents) await service.mirrorAccepted(identity, conversationId);
+        if (service.runEvents) await service.mirrorAccepted(identity, conversationId, view);
         const rows = service.runEvents
           ? service.runEvents.after({ projectId: identity.projectId, conversationId, after: cursor }).events
           : (view.messages ?? []).map(message => ({ eventSeq: message.arrivalSeq, event: { type: 'user',
@@ -224,7 +231,9 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           res.write(`data: ${JSON.stringify({ type: 'queue.state', conversationId,
             queueRevision: view.queueRevision, aclRevision: view.aclRevision, currentRunId: view.currentRunId,
             items: (view.messages ?? []).map(row => ({ messageId: row.messageId, arrivalSeq: row.arrivalSeq,
-              state: row.queueState, position: positions.get(row.messageId) ?? null, runId: row.runId ?? null })) })}\n\n`);
+              state: row.queueState, position: positions.get(row.messageId) ?? null, runId: row.runId ?? null,
+              // 文档服务签的终态（结清以后才有）。页面靠它把「执行已结束，等待云端确认关闭与结算」那一轮收掉：事件流里没有结算事件。
+              outcome: outcomeOf(row.terminalOutcome) })) })}\n\n`);
           queueRevision = view.queueRevision; aclRevision = view.aclRevision;
           try { attachment?.update({ aclRevision: view.aclRevision }); } catch { /* 登记表已经关了 */ }
         }
@@ -294,7 +303,8 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           'loginId', 'credentialId', 'serviceId', 'creator'].some(key => body[key] !== undefined))
           throw new AgentServiceError('invalid-authority-claim', 'identity is set by the service', 400);
         const out = await service.send(identity, conversationId, { prompt: body.prompt, requestId: body.requestId,
-          selectionSnapshot: body.selectionSnapshot, attachments: body.attachments });
+          selectionSnapshot: body.selectionSnapshot, attachments: body.attachments,
+          model: body.model, effort: body.effort, creativity: body.creativity });
         return sendJson(res, 202, { ok: true, ...out }, CORS);
       }
       if (sub[2] === 'events' && req.method === 'GET') {

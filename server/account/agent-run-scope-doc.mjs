@@ -210,6 +210,57 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
       docClosed(s, { ...now, docInstanceIds: [docInstanceId] });
     });
   }
+  /**
+   * 替一个已经结束的文档服务进程记「已关」。
+   *
+   * 控制要等列在 `docInstanceIds` 里的每个文档服务实例都记下自己已关，可是任务跑到一半文档服务重启过的话，
+   * 旧进程已经不在了，永远记不上自己那一行，强制终态就永远签不出来，槽和对话一直被占着（2026-10-17 生产上出过）。
+   * 一个已经结束的进程手上没有任何连接；「已经结束」由接班的进程在启动时记在账本里（`docProcessesV1`，
+   * 凭的是操作历史的独占锁：两个文档服务进程不可能同时握着它）。这里只认那条记录，不猜。
+   * 操作那一半照样要真的做：由当前进程在共用的操作历史里对每条操作围栏办一遍，回执和它自己那一行一样。
+   */
+  async function closeEndedDocControl({ controlId, endedInstanceId, docInstanceId, operationCoordinator }) {
+    const control = ledger.read().runControlsV2?.[controlId], ended = ledger.read().docProcessesV1?.[endedInstanceId];
+    if (!control?.docInstanceIds?.includes(endedInstanceId) || endedInstanceId === docInstanceId ||
+        !Number.isSafeInteger(ended?.endedAt) || typeof ended.endedBy !== 'string' ||
+        (control.operationFences?.length && typeof operationCoordinator?.fence !== 'function'))
+      fail(503, 'doc-closure-unavailable');
+    if (control.kind !== 'terminal' && !control.revoked?.length) fail(503, 'doc-closure-unavailable');
+    const operationReceipts = [];
+    for (const fence of control.operationFences ?? []) operationReceipts.push(await operationCoordinator.fence(fence));
+    ledger.transaction(s => {
+      const now = s.runControlsV2[controlId];
+      if (!now || now.payloadDigest !== control.payloadDigest || now.fenceRevision !== control.fenceRevision) fail(403, 'doc-control-changed');
+      const row = (s.docRunClosuresV2 ??= {})[controlId] ??= { controlId, payloadDigest: control.payloadDigest,
+        fenceRevision: control.fenceRevision, instances: {} };
+      if (row.instances[endedInstanceId]?.state === 'closed') return;
+      row.instances[endedInstanceId] = { docInstanceId: endedInstanceId, state: 'closed',
+        closed: { actualClosed: true, connections: [], pendingAdmissions: 0, rejectedAdmissions: 0,
+          processEnded: { endedAt: ended.endedAt, endedBy: ended.endedBy, attestedBy: docInstanceId, evidence: ended.evidence ?? null } },
+        operationReceipts };
+      docClosed(s, { ...now, docInstanceIds: [endedInstanceId] });
+    });
+  }
+  /**
+   * 进程启动时调：本进程握着独占锁，所以账本里记着的别的文档服务实例都已经结束。记下它们「已结束、由谁接班」，
+   * 也记下本进程自己。只增不改：已经记过结束的不再改。
+   */
+  function recordDocProcessStart({ docInstanceId, exclusive, now = Date.now() }) {
+    if (exclusive !== true || typeof docInstanceId !== 'string' || !docInstanceId) return [];
+    return ledger.transaction(s => {
+      const rows = s.docProcessesV1 ??= {}, ended = [];
+      const known = new Set([...Object.keys(rows),
+        ...Object.values(s.runDocInstancesV1 ?? {}).flatMap(byInstance => Object.keys(byInstance ?? {})),
+        ...Object.values(s.runControlsV2 ?? {}).flatMap(control => control.docInstanceIds ?? [])]);
+      for (const id of known) {
+        if (id === docInstanceId || Number.isSafeInteger(rows[id]?.endedAt)) continue;
+        rows[id] = { ...(rows[id] ?? { docInstanceId: id }), endedAt: now, endedBy: docInstanceId, evidence: 'exclusive-owner-lock' };
+        ended.push(id);
+      }
+      rows[docInstanceId] ??= { docInstanceId, startedAt: now };
+      return ended;
+    });
+  }
   function preparePayload(s, grant, receipt, drainReceiptId) {
     const assignment = assignmentInState(s, grant, { requireBound: true }).assignment;
     const control = s.runControlsV2[receipt.controlId];
@@ -362,5 +413,5 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     return { unassigned: true, rootScopeRef: copy(ref), requestId: input.requestId, reason: 'grant-never-admitted' };
   }
   return Object.freeze({ refresh, synchronize, prepareRegistration, registrationInState, assignInState, assignmentInState,
-    preparePayload, recordPrepareInState, terminalInState, forcedInState, failureInState, closedInState, docClosed, closeDocTerminal, closeDocControl, eventSourceInState, controlSourceInState, controlReferenceInState, unassignedControlInState });
+    preparePayload, recordPrepareInState, terminalInState, forcedInState, failureInState, closedInState, docClosed, closeDocTerminal, closeDocControl, closeEndedDocControl, recordDocProcessStart, eventSourceInState, controlSourceInState, controlReferenceInState, unassignedControlInState });
 }
