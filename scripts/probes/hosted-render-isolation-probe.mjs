@@ -234,6 +234,9 @@ async function makeProject(label, creator, slug) {
   const password = `p-${randomBytes(9).toString('base64url')}`;
   const name = `iso-${slug}-${RUN}`;
   const made = await createSharedProject({ base: DOC_WS, name, mode: 'free', creator: { username: creator, password: creatorPassword }, password });
+  combo.credentialStore.update(made.projectId, (rec) => {
+    rec.hosted = { render: { enabled: true, streams: true } };
+  });
   const proj = { label, projectId: made.projectId, name, creator, creatorPassword, password, slug, docId: `iso-probe-${slug}` };
   proj.conn = await joinAs(proj, creator, 'creator');
   return proj;
@@ -262,7 +265,7 @@ async function publishPlan(proj, { rev, clips, codeVersion }) {
     if (hello.type !== 'publisher.welcome') throw new Error(`publisher.hello：${JSON.stringify(hello).slice(0, 200)}`);
     proj.publisher = true;
   }
-  const task = clipsPlanTaskOf({ projectId: proj.docId, projectRev: rev, clips, codeVersion });
+  const task = clipsPlanTaskOf({ projectId: proj.docId, projectRev: rev, clips, codeVersion, streams: true });
   const r = await proj.conn.ask({ type: 'task.publish', tasks: [task] });
   if (r.type !== 'task.published') throw new Error(`task.publish：${JSON.stringify(r).slice(0, 300)}`);
   return { planId: task.id, known };
@@ -301,6 +304,7 @@ function startSupervisor(extraEnv = {}) {
     PROMPTCUT_RENDER_EDITOR_DIR: path.join(TMP, 'no-editor'),
     // 看画面的口子核对 Agent 服务签名用的登记表：这个临时托管组合的那一份
     PROMPTCUT_RENDER_LOOK_SERVICES: hostedPaths(HOSTED_DATA).servicesFile,
+    PROMPTCUT_RENDER_STREAMS: '1',
     // 换项目快一点：空闲 8 s 就结束这一轮（生产缺省五分钟：空闲满五分钟才让位）
     PROMPTCUT_RENDER_ISO_IDLE_MS: String(T(8000)),
     // 预渲染进程的全部输出（含渲染页的页面日志）追加进这个文件：探针从这里取回越权探测卡的结果对象
@@ -541,7 +545,7 @@ async function main() {
   const isoDid = (node) => !!node && /^hosted-render-iso:/.test(String(node.nodeId)) && node.claimed > 0 && node.failed === 0;
   check('A1', '甲的任务由隔离工作进程（hosted-render-iso: 节点）认领并做完', !!jiaDone && jiaDone.done === jiaDone.tasks && jiaDone.failed === 0 && isoDid(isoJia), { done: jiaDone, iso: out.jia.iso, error: out.jiaError });
   check('A1', '乙的任务由隔离工作进程认领并做完', !!yiDone && yiDone.done === yiDone.tasks && yiDone.failed === 0 && isoDid(isoYi), { done: yiDone, iso: out.yi.iso, error: out.yiError });
-  check('A1', '甲渲完后层表入库', jiaMap.type === 'content.item' && !jiaMap.missing && (jiaMap.body?.layers?.length ?? 0) > 0, { type: jiaMap.type, missing: jiaMap.missing, layers: jiaMap.body?.layers?.length });
+  check('A1', '甲渲完后层表入库', jiaMap.type === 'content.item' && !jiaMap.missing && ((jiaMap.body?.layers?.length ?? 0) > 0 || (jiaMap.body?.streams?.length ?? 0) > 0), { type: jiaMap.type, missing: jiaMap.missing, layers: jiaMap.body?.layers?.length, streams: jiaMap.body?.streams?.length });
   check('A1', '取回了甲、乙各至少一份结果对象，没有拼坏的', jiaReports.length >= 1 && yiReports.length >= 1 && out.reports.broken === 0, out.reports);
   const itemCount = jiaReports[0] ? Object.keys(jiaReports[0].items).length : 0;
   check('A1', '结果对象里固定清单的每一类都有记录（全局对象、存储、窗口、本机接口、回环、元数据、别的项目、收集站、工作目录以外的文件）',
