@@ -27,6 +27,8 @@ export interface CloudInfo {
   /** 托管方配置的模型;一个或没有时界面不给选 */
   models: CloudModelChoice[];
   defaultModel: string | null;
+  /** 云端认的思考强度档位(不含「默认」);没有时界面不给选 */
+  efforts?: string[];
   /** 这位成员在这个项目里还在跑的对话 id */
   running: string[];
   limits: { rounds?: number; runMs?: number };

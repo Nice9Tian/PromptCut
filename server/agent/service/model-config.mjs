@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { openKey, sealKey, sealedKind } from '../../runners/config-crypt.mjs';
+import { RUN_EFFORTS } from '../../account/run-options.mjs';
 
 export const MODEL_VENDORS = Object.freeze(['anthropic', 'openai', 'gemini', 'mock']);
 
@@ -87,8 +88,24 @@ export function modelReady(cfg) {
   return cfg.vendor === 'mock' || !!cfg.apiKey;
 }
 
-/** 给页面看的那一部分(`GET /v1/info`):不含地址与 Key */
-export function publicModelInfo(cfg) {
+/** 给页面看的那一部分(`GET /v1/info`):不含地址与 Key。`efforts` 是页面可点的思考强度(不含「默认」) */
+export function publicModelInfo(cfg, configured = modelReady(cfg)) {
   const models = modelListOf(cfg);
-  return { models, defaultModel: models[0] ?? null, configured: modelReady(cfg), ...(cfg?.vendor === 'mock' ? { mock: true } : {}) };
+  return { models, defaultModel: models[0] ?? null, configured, efforts: [...RUN_EFFORTS], ...(cfg?.vendor === 'mock' ? { mock: true } : {}) };
+}
+
+/**
+ * 同 `publicModelInfo(readModelConfig(dir))`,但不解 Key:账号模式的主服务报 `GET /v1/info` 用。
+ * Key 只看文件在不在,不打开(主服务不需要 Key 的明文;解不解得开由任务进程起一轮时报 `no-model-key`)。
+ */
+export function readPublicModelInfo(dataDir) {
+  const { file, keyFile } = modelConfigPaths(dataDir);
+  let api = null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    api = parsed && typeof parsed === 'object' && parsed.api && typeof parsed.api === 'object' ? parsed.api : null;
+  } catch { /* 还没配 */ }
+  if (!api || !MODEL_VENDORS.includes(api.vendor)) return publicModelInfo({}, false);
+  const cfg = { vendor: api.vendor, model: typeof api.model === 'string' ? api.model : '' };
+  return publicModelInfo(cfg, api.vendor === 'mock' || fs.existsSync(keyFile));
 }

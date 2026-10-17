@@ -364,6 +364,9 @@ test("CAU-API-01 请求带票据与对话委托、不带 Cookie;错误码换成�
   }
   assert.equal(cloudErrorText("quota-exceeded", "额度 100 万已用完"), "额度 100 万已用完");
   assert.deepEqual(normalizeInfo({}), { enabled: true, models: [], defaultModel: null, running: [], limits: { rounds: undefined, runMs: undefined } });
+  // 思考强度档位:节点报了才有;不是小写字母串的丢掉
+  assert.deepEqual(normalizeInfo({ efforts: ["low", "high", 3, "", "Bad!"] }).efforts, ["low", "high"]);
+  assert.equal("efforts" in normalizeInfo({ efforts: [] }), false);
   assert.equal(normalizeChatItem({}), null);
 });
 

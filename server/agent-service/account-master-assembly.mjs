@@ -39,6 +39,7 @@ import { reapOrphan, OWNER_FILE } from '../web/hosted/session.mjs';
 import fs from 'node:fs';
 import { MASTER_SCHEDULER_PENDING_PATH, MASTER_SCHEDULER_CONTROL_PATH } from './account-master-scheduler-client.mjs';
 import { createLookClient } from './look-client.mjs';
+import { readPublicModelInfo } from '../agent/service/model-config.mjs';
 
 export const WORKER_LOOK_PATH = '/internal/v2/worker/look';
 
@@ -56,6 +57,7 @@ export const accountWorkspaceOwnerKey = (projectId, conversationId) =>
  * @param {object} o
  * @param {string} o.dataDir 主服务自己的数据目录（事件库在这里）
  * @param {string} o.sharedDataDir 各代任务进程共用的数据目录（附件存进这里；要和任务进程设置里的 `dataDir` 是同一个）
+ * @param {string} [o.modelConfigDir] 模型配置所在目录，缺省是 `sharedDataDir`；任务进程设置里写了 `modelConfigDir` 时这里给同一个
  * @param {object} o.runClient 主身份（`createRunClient({ registrationPurpose: 'control-only' })`）
  * @param {object} o.conversationClient 已经 `useReadControl(readControl)` 的对话客户端
  * @param {object} o.readControl 读取控制连接
@@ -68,7 +70,7 @@ export const accountWorkspaceOwnerKey = (projectId, conversationId) =>
 export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runClient, conversationClient, readControl, tls,
   internalPort, internalHost = '127.0.0.1', controllerFingerprint256, schedulerStaleMs = 15_000, stopWaitMs = 15_000,
   registerRetryMs = 2_000, workspaceLimits = {}, attachmentLimits = {}, onConversationDeleted = null, purgeSweepMs = 60_000,
-  look = null, lookUrl = null, lookKey = null, now = Date.now, log = () => {} } = {}) {
+  look = null, lookUrl = null, lookKey = null, modelConfigDir = null, now = Date.now, log = () => {} } = {}) {
   const controllerPin = certificateFingerprint(controllerFingerprint256);
   let ownPin = null;
   try { ownPin = certificateFingerprint(new X509Certificate(tls?.cert).fingerprint256); } catch { ownPin = null; }
@@ -370,6 +372,8 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   // 用量:任务进程把每次模型请求、每次外部服务与工具调用记在共用数据目录的 usage/ 下(`account-runner.mjs`),成员查用量读的就是那里。
   // 主服务自己不跑任务、不写这份流水,只读。
   const base = createAccountConversationService({ conversationClient, now, usageDir: path.join(sharedDataDir, 'usage'), deleteWaitMs: stopWaitMs, onConversationDeleted: conversationDeleted,
+    // 页面的模型下拉与思考强度:读任务进程用的那一份模型配置(缺省是共用数据目录,同 account-task-worker-config.mjs),不解 Key
+    modelInfo: () => readPublicModelInfo(modelConfigDir ?? sharedDataDir),
     purger: createConversationPurger({ eventStore, sharedDataDir, log: say, now }) });
   const workspaces = createWorkspaces({ dataDir: sharedDataDir, limits: workspaceLimits, log: say });
   const workspaceFor = (identity, conversationId) => workspaces.open({ projectId: identity.projectId, conversationId,

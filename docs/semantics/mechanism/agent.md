@@ -159,6 +159,8 @@
 - 按服务名导入：`--service model`（缺省）与 `--service voice`（配音，`keys/voice.key`，另一把封装）；以后加别的外部服务只在服务表里加一项。
 - `set-key.mjs` 保留 `--mock` 与 `--clear`；交互式录入明文只作本机调试用、运行时先说明，不收命令行与环境变量里的 Key。
 - 账号模式下，模型配置与额度放在各代任务进程共用的数据目录里（任务进程读的是那一份）：`set-key.mjs`、`import-key.mjs`、`admin.mjs quota` 的 `PROMPTCUT_AGENT_DATA` 要指到它，任务用户要读得到其中的 `config/`。〔裁：见 `docs/reports/AGENT-v18-prod.md`；依据 `server/hosted/deploy/README.md`〕
+- **每条消息的运行选项**（〔用户 2026-10-18 定〕）：页面发消息时点的模型、思考强度、创造力记在文档服务的这条消息上（`runOptions`），进到交给任务进程的消息记录里；没点的消息记录与摘要和原来一样。文档服务与主服务只核形状，不认识的键或值回 400 `invalid-run-options`。任务进程按托管方的清单挑模型，点的不在清单里就用第一个；思考强度不带就随模型的默认，创造力不带就跟项目。档位清单只在 `server/account/run-options.mjs` 一处，`GET /v1/info` 的 `efforts` 报的就是它；账号模式的主服务读同一份 `config/ai.json` 报模型清单（不解 Key，Key 只看文件在不在），所以主服务用户也要读得到 `config/`。
+- 思考强度在云端走 OpenAI 兼容口径的 `reasoning_effort`。2026-10-18 在节点上对两个模型逐档实测（openlux 网关）：`low` / `medium` / `high` 被网关换成 Claude 的思考模式（与直接写 `thinking.budget_tokens` 的请求同形）；`xhigh` / `max` 不报错，但请求与不带档位时同形，等于被忽略，所以清单里不放这两档。换网关或换模型后要重测。
 
 **成员列表的计数**（〔用户 2026-10-07 定〕）
 
