@@ -249,15 +249,22 @@
 
 ---
 
-## 5. 需要用户决定的事项
+## 5. 用户拍板与收口记录（2026-10-18）
 
-请对以下 3 件事拍板（详细背景、选项与建议同步列在对话正文中）：
+用户已对上述三项全部拍板选 **选项 A**，已全部执行完毕并合入 `main`、部署至生产节点：
 
-1. **怎么处理生产节点上那条 2026-10-08 遗留的测试账号退出记录（`logout_9ca8d423fddcadf9c13d6abf`）？**
-   - **选项 A（推荐）**：作为已删测试账号的历史脏数据做一次性收口清理——先对节点数据库做一致备份并在 `/tmp` 副本演练验证，然后：（1）在文档服务账本 `account-v2.sqlite` 中保留 `revokedLogins` 里的作废记录不动（绝不放回已作废的登录），将 `barriers['event:logout_9ca8d423fddcadf9c13d6abf'].state` 标为 `'complete'`（附注清理原因），并将对应的空任务控制记录 `runControlsV2['run-control:955b626e...'].state` 标为 `'complete'`；（2）在账号服务数据库 `accounts.db` 中将 `outbox` 里 `event_id = 'logout_9ca8d423fddcadf9c13d6abf'` 的 `status` 标为 `'complete'`。
-   - **选项 B**：不动生产库里的这条记录，只部署本次「退出续办器指数退避」改动，让它从每秒空转 1 次降为每 60 秒看 1 次。
-2. **正常运行时如果 `promptcut-agent`（Agent 主服务）重启、导致它重启前打开的对话读取（SSE 流）没有关闭回执，后续「退出别的设备」怎么收口？**
-   - **选项 A（推荐）**：当新的 `control-only`（只做控制的 Agent 主服务）实例登记并连上读取控制流（`subscribe`）时，由于生产节点上 `promptcut-agent.service` 是唯一的 systemd 单例主服务，新主服务实例的启动即代表旧 `control-only` 主服务进程已经退出；文档服务可在确认新主服务实例上线（或加上 systemd 主服务单元的 `MainPID` / `InvocationID` 核对）后，将旧 `control-only` 实例名下悬着的读取标为已随旧进程终结，并补齐历史 `accessEvents` 的读取控制记录，使正常的改密退出不再因主服务重启而永久卡在「正在退出」。
-   - **选项 B**：保持现状（旧主服务重启后留下的未关读取继续让该登录的退出在 45 秒后显示超时失败，后台按本次新增的指数退避每 60 秒重试一次）。
-3. **是否批准将本分支（`gemini/docservice-eacces-logout`）合入 `main` 并部署到生产节点？**
-   - **急迫性说明**：生产节点上由于 `agentReadsV1.nonces` 未修剪，账本在过去 40 分钟内已从 432 KB 涨到近 **1 MB**（每小时 +1.9 MB），文档服务 CPU 已从 15% 升至 **67%～76%**，再过约 15～20 分钟又会顶满 100% CPU 导致云端 Agent 超时。如果批准部署，我们可以立即合入 `main` 并更新节点上的文档服务，把积压的 9,000+ 条 `nonces` 自动修剪回 256 条（账本降回 ~331 KB，CPU 立即回落）。
+1. **清理 2026-10-08 遗留测试账号退出记录（`logout_9ca8d423fddcadf9c13d6abf`）**：
+   - 先在生产节点建立一致备份 `/root/promptcut-v2-backup-20261017-logout-cleanup/`（`0700`）：
+     - `account-v2.sqlite`（SHA-256 `650a5f4f27b85cbbc3268cb739f9b949e99611c253f53e1ac8ac79175ddf91e3`）
+     - `accounts.db`（SHA-256 `5909198593397c30b157b5182fe6ec4b2fa150d51186f45267519d86bdbd3c09`）
+     - 替换前的服务代码备份于 `/root/promptcut-v2-backup-20261017-logout-cleanup/code-before/`。
+   - 在 `/tmp` 隔离副本演练通过后，以 `promptcut-doc` 与 `visuhive-account` 各自系统用户对生产库执行收口：
+     - `account-v2.sqlite`：保留 `revokedLogins` 100% 原样不动（零作废登录放回），将 `barriers['event:logout_9ca8d423fddcadf9c13d6abf'].state` 与空控制记录 `runControlsV2['run-control:955b626e...'].state` 标为 `'complete'`，`PRAGMA integrity_check` 为 `ok`。
+     - `accounts.db`：将 `outbox` 的 `seq=1`（`logout_9ca8d423fddcadf9c13d6abf`）`status` 标为 `'complete'`，`PRAGMA integrity_check` 为 `ok`。
+2. **主服务（`control-only`）重启自动收口旧主服务读取与历史访问事件补建控制记录**：
+   - 在 `server/account/agent-read-control.mjs` 中实现 `supersedePriorControlOnlyInState` 与 `reconcileAccessEvents`（并在 `doc-agent-assembly.mjs` 的 `completeReadAccessEvents` 中调用）：当新一代 `control-only` 主服务实例登记并连上 `subscribe`（或启动对账）时，更早代 `control-only` 实例自动标为 `closed` 并收口其名下残留读取与待办回执。生产节点部署后，历史遗留的 `control-only` 实例（`gen: 1, 3, 10`）已全部自动标为 `closed`，仅当前在跑的 `gen: 13` 为 `active`。
+3. **SSE 250ms 轮询复核免写盘、镜像复用 `view` 与消除重复权限同步**：
+   - `server/account/agent-read-control.mjs`：同一长连接 `requestId` 已处于 `open` 状态时，后续 `open()` 复核在内存验单次随机数与当前权限，不再每 250ms 重写整本 SQLite 账本；`pruneNonces` 同时按 10 分钟 TTL 与 `KEEP_READ_CONTROL_NONCES = 256` 条数上限封顶。
+   - `server/agent-service/http.mjs`、`account-master-assembly.mjs`、`account-runner.mjs`：`accountEvents` 的 `mirrorAccepted` 直接复用刚取到的 `view`，省掉每 250ms 的第二次重复 `open` 请求。
+   - `server/hosted/doc-agent-assembly.mjs`：`authorizeRead` 直接复用 `resolveAgentDelegation` 已经完成的 `authorizePrincipal` 与 `synchronize` 结果，省掉每次读取时重复的 2 次 `synchronize` 与 1 次 `verify` mTLS 往返。
+   - 节点实测结果：部署重启后 `slot-c` 第 4 代强制关闭（`root.slot.closed`）全程 **零 `EACCES`**，文档服务启动与运行 **零 `logout-pending:doc,agent`**，账本 `pendingBarriers: 0`，`noncesCount` 封顶在 `<= 256`，SQLite `pwrite64` 从每 5 秒 12,642 次降为每 3 秒 983 次，`fsync` 从每 5 秒 42 次降为每 3 秒 5 次。
