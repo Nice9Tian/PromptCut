@@ -244,7 +244,7 @@ function cloudProjects() {
     return null;
   };
   const tenants = walk(path.join(fixture.fixtureDir, 'doc'), 2);
-  return tenants ? fs.readdirSync(tenants).filter((n) => /^sp_[a-z2-7]{26}$/.test(n)).sort() : [];
+  return tenants ? fs.readdirSync(tenants).filter((n) => /^(?:sp_[a-z2-7]{26}|p-[a-z0-9-]+)$/.test(n)).sort() : [];
 }
 
 /* ---------------- 页面 ---------------- */

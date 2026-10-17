@@ -46,9 +46,10 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
   const coordinators = new Map(), selections = new Map();
   let closed = false, closing = null, tenantResolver = null;
   const requireOpen = () => { if (closed) throw historyError('doc-assembly-unavailable', 503); };
+  const isAccountSpace = (space) => isProjectId(space) || (typeof space === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(space) && Boolean(authority?.hasProject ? authority.hasProject(space) : true));
   const ensureTenant = space => {
     requireOpen();
-    if (!isProjectId(space)) throw historyError('projection-unavailable', 503);
+    if (!isAccountSpace(space)) throw historyError('projection-unavailable', 503);
     if (!coordinators.has(space)) tenantResolver?.(space);
     const coordinator = coordinators.get(space);
     if (!coordinator) throw historyError('projection-unavailable', 503);
@@ -91,7 +92,7 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
     async resolveRunMedia({ principal, projectId, purpose, selector, action = 'read' } = {}) {
       requireOpen();
       if (principal?.realm !== 'account' || principal.role !== 'agent' ||
-          principal.projectId !== projectId || !isProjectId(projectId))
+          principal.projectId !== projectId || !isAccountSpace(projectId))
         throw historyError('run-asset-project-forbidden', 403);
       const coordinator = ensureTenant(projectId);
       const describe = () => describeRunMedia({ snapshot: history.snapshot(projectId), projectId, purpose, selector });
@@ -108,7 +109,7 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
     },
     coordinatorForSpace({ space, store, directory }) {
       requireOpen();
-      if (!isProjectId(space)) return undefined; // local/LAN v1 keeps its existing path.
+      if (!isAccountSpace(space)) return undefined; // local/LAN v1 keeps its existing path.
       if (coordinators.has(space)) throw historyError('coordinator-already-bound', 503);
       const expected = path.resolve(dataDir, 'tenants', space);
       if (typeof directory !== 'string' || path.resolve(directory) !== expected)

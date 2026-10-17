@@ -124,7 +124,7 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
   })();
   assert.ok(tenantsDir, '找不到云端文档服务的项目目录');
   /** 云端文档服务里有内容的项目号(每个账号项目一个目录) */
-  const cloudProjects = () => fs.readdirSync(tenantsDir).filter((n) => /^sp_[a-z2-7]{26}$/.test(n)).sort();
+  const cloudProjects = () => fs.readdirSync(tenantsDir).filter((n) => /^(?:sp_[a-z2-7]{26}|p-[a-z0-9-]+)$/.test(n)).sort();
   const baseline = cloudProjects().length;
 
   /** 一台桌面上打开的一个本地项目:真的账号客户端与内容连接,本机一侧是替身 */
@@ -141,7 +141,7 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
     d.deps = {
       source: () => (d.entered ? null : { kind: 'local', contentId: d.local.id }),
       account: async () => who.client.account ?? await who.client.restore(),
-      create: (name, stub, requestId) => { d.calls.push('create'); return who.client.create(name, stub, requestId); },
+      create: (name, stub, requestId, extra) => { d.calls.push('create'); return who.client.create(name, stub, requestId, extra?.projectId?.startsWith('p-') ? extra : undefined); },
       snapshot: async () => structuredClone(d.local),
       current: () => d.local,
       upload: (projectId, snapshot) => { d.calls.push('upload'); return M.uploadProjectContent(linkTo(projectId), projectId, snapshot).then((r) => { d.lastUpload = r; return r; }); },
@@ -176,7 +176,7 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
     const mark = requests.length;
     const r = await d.move();
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.match(r.projectId, /^sp_[a-z2-7]{26}$/);
+    assert.match(r.projectId, /^(?:sp_[a-z2-7]{26}|p-[a-z0-9-]+)$/);
     assert.equal(r.link, `${origin}/editor?project=${r.projectId}`);
     assert.deepEqual(d.calls, ['create', 'upload', 'read', 'save', 'enter', 'queue']);
     const create = requests.slice(mark).filter((q) => q.route === '/hosted/shared/account/create');
@@ -265,7 +265,7 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
     d.ticketFault = Object.assign(new Error('authority-unavailable'), { status: 503, code: 'authority-unavailable' });
     const failed = await d.move();
     assert.equal(failed.ok, false); assert.equal(failed.error, 'upload-failed'); assert.equal(failed.stage, 'upload'); assert.equal(failed.localClosed, false);
-    assert.match(failed.cloud.projectId, /^sp_[a-z2-7]{26}$/);
+    assert.match(failed.cloud.projectId, /^(?:sp_[a-z2-7]{26}|p-[a-z0-9-]+)$/);
     assert.deepEqual(d.touchedLocal(), [], '本机一侧什么都没被调');
     assert.equal(d.attempt().projectId, failed.cloud.projectId);
     assert.equal(cloudProjects().length, before + 1, '云端项目建了一个(内容还是占位)');
@@ -326,10 +326,12 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
   await t.test('9 同一个账号从两台设备各搬一个本地项目', async () => {
     const second = await signedIn(0, 'move-device-a2');
     assert.equal(second.account.id, a.account.id);
-    const d1 = desk(a, bigProject('local-content-9a', '搬迁测试·设备一', 2000));
-    const d2 = desk(second, bigProject('local-content-9b', '搬迁测试·设备二', 2000));
+    const d1 = desk(a, bigProject('p-local-content-9a', '搬迁测试·设备一', 2000));
+    const d2 = desk(second, bigProject('p-local-content-9b', '搬迁测试·设备二', 2000));
     const [r1, r2] = await Promise.all([d1.move(), d2.move()]);
     assert.equal(r1.ok, true, JSON.stringify(r1)); assert.equal(r2.ok, true, JSON.stringify(r2));
+    assert.equal(r1.projectId, 'p-local-content-9a');
+    assert.equal(r2.projectId, 'p-local-content-9b');
     assert.notEqual(r1.projectId, r2.projectId);
     // 另一台设备上的同一个账号也是创建者,能直接进(不用加入)
     const fromOtherDevice = (await M.readProjectContent({ url: wsUrl, WebSocketImpl: CaWebSocket,

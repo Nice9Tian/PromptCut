@@ -120,6 +120,7 @@ export function createSharedDocService({
   const storeOf = () => store;
   const registry = mode === 'hosted' ? serviceRegistry ?? null : null;
   const registryOf = () => registry;
+  const isTenantSpace = (space) => isProjectId(space) || Boolean(accountRuntime?.hasProject?.(space));
   /** 服务身份此刻还能不能用（逐消息与接续前都问）：控制连接看登记表，数据连接另看项目与开关 */
   function serviceRefusal(principal) {
     if (typeof principal?.service !== 'string' && principal?.scope !== 'service') return null;
@@ -130,7 +131,7 @@ export function createSharedDocService({
       try { registry.refresh({ force: true }); } catch { return 'service-revoked'; }
       return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
     }
-    if (!isProjectId(principal.tenantId)) return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
+    if (!isTenantSpace(principal.tenantId)) return registry.has(principal.service, principal.serviceKid) ? null : 'service-revoked';
     const record = storeOf()?.peek(principal.tenantId) ?? null;
     const refused = serviceAdmission({ registry, record, service: principal.service, kid: principal.serviceKid, role: principal.role });
     if (refused) return refused;
@@ -260,7 +261,7 @@ export function createSharedDocService({
   if (accountRuntime?.authority) service.setAuthority?.(accountRuntime.authority);
 
   const localStore = dataDir ? createFileStore({ dir: dataDir, ...(say ? { log: say } : {}) }) : createMemoryStore();
-  const tenantDir = (space) => (dataDir && isProjectId(space) ? path.join(dataDir, 'tenants', space) : null);
+  const tenantDir = (space) => (dataDir && isTenantSpace(space) ? path.join(dataDir, 'tenants', space) : null);
   /** 空间 → 日志存储；项目版本与内容库共用一份 */
   const spaceStores = new Map([[LOCAL_SPACE, localStore]]);
   function storeForSpace(space) {
