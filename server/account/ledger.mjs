@@ -37,8 +37,9 @@ export function openAccountLedger({ file, authorityId, failpoint = () => {} }) {
     db.exec('COMMIT');
     fs.chmodSync(file, 0o600);
   } catch (error) { try { db.exec('ROLLBACK'); } catch {} db.close(); throw error; }
-  const load = () => {
-    const state = JSON.parse(db.prepare('SELECT payload FROM account_authority_state WHERE id=1').get().payload);
+  const selectPayload = db.prepare('SELECT payload FROM account_authority_state WHERE id=1');
+  const load = (raw = selectPayload.get().payload) => {
+    const state = JSON.parse(raw);
     if (state.v !== 2 || state.authorityId !== authorityId || !Number.isSafeInteger(state.accountHead) || !Number.isSafeInteger(state.accessHead)) throw accountError(503, 'authority-mismatch');
     return state;
   };
@@ -47,11 +48,12 @@ export function openAccountLedger({ file, authorityId, failpoint = () => {} }) {
   // 所以读到的结果缓存起来，账本真的变了才重新解析：自己这条连接提交过就作废，别的连接（部署脚本等）提交过由
   // `PRAGMA data_version` 看出来（它只在别的连接提交后变）。缓存是共用的，整个冻住；调用方要改就改 transaction 给的那份。
   const dataVersion = db.prepare('PRAGMA data_version');
-  let cached = null, cachedVersion = null;
+  let cached = null, cachedRaw = null, cachedVersion = null;
   const read = () => {
     const version = dataVersion.get().data_version;
     if (cached && version === cachedVersion) return cached;
-    cached = deepFreeze(load()); cachedVersion = version;
+    const raw = selectPayload.get().payload;
+    cached = deepFreeze(load(raw)); cachedRaw = raw; cachedVersion = version;
     return cached;
   };
   let writing = false;
@@ -60,13 +62,21 @@ export function openAccountLedger({ file, authorityId, failpoint = () => {} }) {
       if (writing) throw accountError(503, 'ledger-reentrant');
       writing = true;
       try {
-        db.exec('BEGIN IMMEDIATE'); const state = load(); const result = fn(state);
+        db.exec('BEGIN IMMEDIATE');
+        const vBefore = dataVersion.get().data_version;
+        const rawBefore = cached !== null && vBefore === cachedVersion ? cachedRaw : selectPayload.get().payload;
+        const state = load(rawBefore); const result = fn(state);
         if (result?.then) throw accountError(503, 'ledger-async-transaction');
         failpoint('ledger-before-write');
-        db.prepare('UPDATE account_authority_state SET payload=? WHERE id=1').run(JSON.stringify(state));
-        failpoint('ledger-before-commit'); cached = null; db.exec('COMMIT');
+        const rawAfter = JSON.stringify(state);
+        if (rawAfter === rawBefore && cached !== null && vBefore === cachedVersion) {
+          failpoint('ledger-before-commit'); db.exec('COMMIT');
+          return structuredClone(result);
+        }
+        db.prepare('UPDATE account_authority_state SET payload=? WHERE id=1').run(rawAfter);
+        failpoint('ledger-before-commit'); cached = null; cachedRaw = null; db.exec('COMMIT');
         const cloned = structuredClone(result);
-        cached = deepFreeze(state); cachedVersion = dataVersion.get().data_version;
+        cached = deepFreeze(state); cachedRaw = rawAfter; cachedVersion = dataVersion.get().data_version;
         return cloned;
       } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
       finally { writing = false; }

@@ -35,6 +35,7 @@ test('读账本：自己提交过就读到新的；transaction 给的那份可�
   assert.equal(ledger.read().projects.p.status, 'active');
   const result = ledger.transaction(state => state.projects.p);
   result.status = 'caller-owned';
+  assert.equal(ledger.read(), after);
   assert.equal(ledger.read().projects.p.status, 'active');
 });
 
