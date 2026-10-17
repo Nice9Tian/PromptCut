@@ -67,7 +67,7 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
   render_card_audio: { mode: H, render: true }, cancel_card_audio: { mode: H, render: true },
   // 测响度:素材凭成员的只读票据取到对话的工作目录,用工作区的受限子进程起 ffmpeg 量(`hosted-audio.mjs`;契约第 9.4b 节)
   measure_audio: { mode: H },
-  measure_audio_js: { mode: P, why: '模型写的测量脚本要在断网的无头浏览器里跑,Agent 服务进程不起浏览器;要渲染服务那一侧开一个跑脚本的口子,这一版还没接上' },
+  measure_audio_js: { mode: P, why: '模型写的测量脚本要在断网的无头浏览器里跑,Agent 服务进程不起浏览器;要渲染服务那一侧开一个跑脚本的口子,这一版还没接上', provider: 'audioJs' },
   // ai(19)
   detach_clip_motion: { mode: R }, get_transcript: { mode: R }, fill_captions: { mode: R }, list_captions: { mode: R }, edit_caption: { mode: R },
   // 感知四族:有提供者(账号模式的任务进程)时由它执行;`list_shots`、`list_subjects` 没有提供者时照旧在项目副本上答

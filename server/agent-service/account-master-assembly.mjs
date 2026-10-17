@@ -407,6 +407,8 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     /** 这个对话的云端浏览器数据清掉（对话被删时调；账号模式的删对话接口本身还没有开放，这里先把收场备好） */
     purgeConversationBrowser: (scope, reason = 'conversation-deleted') => purgeBrowserEventually(scope, reason),
     runEvents: eventStore,
+    dataDir: sharedDataDir,
+    sharedDataDir,
     // 主服务持有看画面能力并通过内部 mTLS 代签代发
     look: !!masterLook,
     mirrorAccepted: mirror,

@@ -264,7 +264,7 @@ export async function startAgentService({
       service = executor.service;
     } else service = createHostedAgentService(serviceOptions);
   } catch (error) { await vite.close(); throw error; }
-  const api = createAgentHttp({ service, authenticate, version, codeVersion, log });
+  const api = createAgentHttp({ service, authenticate, version, codeVersion, dataDir: accountMaster?.sharedDataDir ?? dataDir, log });
   const server = http.createServer((req, res) => { void api.handle(req, res); });
   try {
     await new Promise((resolve, reject) => {

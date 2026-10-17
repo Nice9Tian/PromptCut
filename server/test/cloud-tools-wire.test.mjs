@@ -41,14 +41,16 @@ import { tools as ALL_TOOLS } from '../mcp-tools.mjs';
 
 const SCOPE = ['detect_shots', 'list_shots', 'stt_status', 'stt_install', 'transcribe_media', 'track_status', 'track_install', 'track_points', 'get_track',
   'attach_clip_motion', 'subject_status', 'subject_install', 'detect_subjects', 'list_subjects', 'background_job_status', 'auto_workflow', 'auto_workflow_status',
-  'web_open', 'web_view', 'web_click', 'web_type', 'web_scroll', 'web_read', 'web_close', 'web_handoff', 'seek', 'play', 'pause', 'collect_login', 'collect_login_check'];
+  'web_open', 'web_view', 'web_click', 'web_type', 'web_scroll', 'web_read', 'web_close', 'web_handoff', 'seek', 'play', 'pause', 'collect_login', 'collect_login_check',
+  'measure_audio_js'];
 
-test('WIRE-TABLE 可以由提供者接的正是这一期点名的三十个;不在这一期的四样照旧', () => {
+test('WIRE-TABLE 可以由提供者接的正是点名的三十一个;不在表里的照旧', () => {
   assert.deepEqual([...CLOUD_PROVIDER_TOOLS].sort(), [...SCOPE].sort());
   for (const name of SCOPE) assert.ok(ALL_TOOLS.some((t) => t.name === name), `${name} 在工具总表里`);
-  // 不在这一期:自定义测量仍是「还没接上」,开子 Agent 固定不支持
-  assert.equal(CLOUD_TOOL_PLAN.measure_audio_js.provider, undefined);
-  assert.equal(checkCloudTool('measure_audio_js', CLOUD_PROVIDER_TOOLS).ok, false);
+  // G 第二期:measure_audio_js 标上 provider: 'audioJs',没有提供者时仍回「还没接上」,有提供者时可用;开子 Agent 固定不支持
+  assert.equal(CLOUD_TOOL_PLAN.measure_audio_js.provider, 'audioJs');
+  assert.equal(checkCloudTool('measure_audio_js').ok, false);
+  assert.deepEqual(checkCloudTool('measure_audio_js', CLOUD_PROVIDER_TOOLS), { ok: true, mode: 'provider' });
   assert.deepEqual(checkCloudTool('spawn_agent', new Set(['spawn_agent'])), { ok: false, cloudUnavailable: true, error: '云端暂不支持开子 Agent' });
   assert.equal(CLOUD_TOOL_PLAN.see_frames.provider, undefined);
   assert.equal(CLOUD_TOOL_PLAN.get_gif.provider, undefined);
@@ -84,8 +86,8 @@ test('WIRE-TABLE 这个进程里建出了提供者的才可用:只翻建出来�
   assert.equal(open.has('detect_shots'), false);
   assert.equal(open.has('see_frames'), false, '看画面的口子没配时照旧不交');
   // 不在表里标过 provider 的名字混进来不起作用
-  assert.deepEqual([...providedTools(['measure_audio_js', 'spawn_agent', 'no_such_tool', 'web_open'])], ['web_open']);
-  assert.equal(cloudOpenTools({ look: false, provided: ['measure_audio_js', 'spawn_agent'] }), CLOUD_OPEN_TOOLS_NO_LOOK);
+  assert.deepEqual([...providedTools(['spawn_agent', 'no_such_tool', 'web_open'])], ['web_open']);
+  assert.equal(cloudOpenTools({ look: false, provided: ['spawn_agent'] }), CLOUD_OPEN_TOOLS_NO_LOOK);
   assert.equal(checkCloudTool('spawn_agent', new Set(['spawn_agent'])).ok, false);
 });
 
@@ -838,3 +840,16 @@ test('WIRE-DEL 主服务自己就删得动(同一个用户:旧托管档、进程
   denyDeletesUnder(t, [stuck.conversation, stuck.browser]);
   await assert.rejects(createConversationPurger({ sharedDataDir: dataDir, timeoutMs: 100 }).purge({ projectId: 'p1', conversationId: 'c9' }), { code: 'purge-failed', status: 503 });
 });
+
+test('WIRE-BLOCK11 G 第二期中央挂载:createAccountToolset 挂上 mediaFrames、audioJs、visuals 三族并能执行与落盘', async (t) => {
+  const kit = await toolsetKit(t);
+  for (const [tool, family] of [['see_frames', 'mediaFrames'], ['see_media', 'mediaFrames'], ['measure_audio_js', 'audioJs'], ['get_gif', 'visuals']]) {
+    assert.equal(kit.toolset.handles(tool), true, `${tool} 已挂载`);
+    assert.equal(kit.toolset.familyOf(tool), family, `${tool} 归属 ${family}`);
+  }
+  const rec = await kit.toolset.recordVisual({ tool: 'see_frames', images: [{ mime: 'image/png', buffer: Buffer.from('PNG-test'), label: 't=1s' }] });
+  assert.ok(rec?.visualId?.startsWith('v-'), 'recordVisual 落盘生成 visualId');
+  assert.equal(rec.projectId, 'p1');
+  assert.equal(rec.conversationId, 'c1');
+});
+

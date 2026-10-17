@@ -14,6 +14,7 @@
  * 本文件不引用 `src/`。
  */
 import { AgentServiceError, CONVERSATION_ID_RE, ownerKeyOf } from '../agent/service/create-agent-service.mjs';
+import { createVisualRoutes, matchVisualRoute } from './visual-routes.mjs';
 
 const MAX_BODY = 256 * 1024;
 const PING_MS = 15_000;
@@ -60,11 +61,11 @@ function readBody(req) {
  * @param {string} [o.version]
  * @param {() => object} [o.info] `GET /v1/info` 里项目开关、模型清单这些(后面的块接上之前给缺省)
  */
-export function createAgentHttp({ service, authenticate = null, version = 'dev', codeVersion = null, info = () => ({}), log = () => {} }) {
+export function createAgentHttp({ service, authenticate = null, version = 'dev', codeVersion = null, info = () => ({}), dataDir = null, log = () => {} }) {
   // 跨源:在线页面同源,桌面版的页面从本机源来(契约第 10.4 节)。鉴权只看票据,不收不发 Cookie
   const CORS = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Attachment-Name',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Attachment-Name, X-PC-ACL-Revision',
     'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
     'Access-Control-Max-Age': '600',
   };
@@ -80,6 +81,18 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       return null;
     }
   }
+
+  const visualDataDir = dataDir ?? service?.sharedDataDir ?? service?.dataDir ?? null;
+  const visualWorkspace = service?.visualWorkspace ?? null;
+  const visualRoutes = (visualDataDir || visualWorkspace)
+    ? createVisualRoutes({
+        dataDir: visualDataDir,
+        workspace: visualWorkspace,
+        authenticate: identityOf,
+        service,
+        log,
+      })
+    : null;
 
   /** 同时开着的事件流:全节点与每个主人各有上限(契约第 11 节),超了回 busy */
   let streams = 0;
@@ -330,6 +343,12 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           // 账号版(任务在任务进程里跑):槽调度此刻有没有在问。没有时消息只排队、不会开始,部署后的核对看它
           ...(typeof service.schedulerAlive === 'function' ? { taskProcesses: true, scheduler: service.schedulerAlive() } : {}) }, CORS);
       }
+      if (visualRoutes && matchVisualRoute(pathname)) {
+        const identity = await identityOf(req);
+        if (!identity) return sendJson(res, 401, { ok: false, code: 'unauthorized', message: 'unauthorized' }, CORS);
+        await visualRoutes(req, res, identity);
+        return;
+      }
       if (!pathname.startsWith('/v1/')) return sendJson(res, 404, { ok: false, code: 'not-found', message: 'not found' }, CORS);
 
       const identity = await identityOf(req);
@@ -413,10 +432,12 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
   return { async handle(req, res) {
     const route = new URL(req.url || '/', 'http://agent.invalid').pathname.replace(/\/+$/, '') || '/';
     const history = req.method === 'GET' && /^\/v1\/conversations(?:\/[^/]+(?:\/events)?)?$/.test(route);
+    const visualRead = (req.method === 'GET' || req.method === 'HEAD') && Boolean(matchVisualRoute(route));
     // 发消息后要读回已接受的原文、传附件前要核这个人读得到这个对话：这两种也是对话读取，放在同一种读取范围里
     // 页面交回反向通道的结果时要核「交的人此刻读得到这个对话」：同样是对话读取，放在同一种读取范围里
     const messageRead = !!service.runEvents && req.method === 'POST' && /^\/v1\/conversations\/[^/]+\/(?:messages|attachments|page-results)$/.test(route);
-    if (service.accountMode !== true || (!history && !messageRead)) return handle(req, res);
+    if (service.accountMode !== true || (!history && !messageRead && !visualRead)) return handle(req, res);
+    if (visualRead && !service.readTransports && !service.runEvents) return handle(req, res);
     if (!service.readTransports) return sendJson(res, 503, { ok: false, code: 'read-control-unavailable' }, CORS);
     try { return await service.readTransports.run(req, res, () => handle(req, res)); }
     catch (error) { if (!res.destroyed && !res.headersSent) return sendJson(res, error.status ?? 503,
