@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openAccountLedger, appendAccessEvent } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
-import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT } from '../account/agent-read-control.mjs';
+import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT, KEEP_CLOSED_READS_PER_INSTANCE, pruneClosedReads } from '../account/agent-read-control.mjs';
 import { conversationReadInState } from '../account/conversation-authority.mjs';
 import { instanceFixture } from './agent-instance-fixture.mjs';
 
@@ -196,4 +196,37 @@ for (const lostOldAccountAck of [false, true]) test(`pre-existing legacy Agent A
   assert.equal(status.pendingServices.includes('agent'), true);
   assert.equal(sends, before);
   assert.deepEqual(flushed.pendingEvents, [event.eventId]);
+});
+
+test('已关的读取只留最近几十条：早关的连同开启记录删掉；还在等回执的、开着的不删；删完重启照样能读能关', async t => {
+  const f = setup(t); f.subscribe();
+  const extra = 5, ids = [];
+  for (let i = 0; i < KEEP_CLOSED_READS_PER_INSTANCE + extra; i++) {
+    const opened = await f.open(); ids.push(opened.readHandle.readHandleId);
+    f.control.closeReads(f.signed('close', { readHandleIds: [opened.readHandle.readHandleId] }));
+  }
+  const live = await f.open(), liveId = live.readHandle.readHandleId;
+  let t1 = f.ledger.read().agentReadsV1;
+  assert.equal(Object.values(t1.handles).filter(h => h.state === 'closed').length, KEEP_CLOSED_READS_PER_INSTANCE);
+  for (const id of ids.slice(0, extra)) assert.equal(t1.handles[id], undefined);
+  for (const id of ids.slice(extra)) assert.equal(t1.handles[id].state, 'closed');
+  assert.equal(t1.handles[liveId].state, 'open');
+  assert.equal(Object.values(t1.requests).filter(row => !t1.handles[row.readHandleId]).length, 0, '开启记录不留悬空的');
+  // 控制记录在等回执的那条，关了也不删，直到回执落账
+  const c = f.fence();
+  f.control.closeReads(f.signed('close', { readHandleIds: [liveId] }));
+  for (let i = 0; i < 3; i++) {
+    const opened = await f.open('owner');
+    f.control.closeReads(f.signed('close', { readHandleIds: [opened.readHandle.readHandleId] }));
+  }
+  assert.equal(f.ledger.read().agentReadsV1.handles[liveId].state, 'closed', '等回执的那条还在');
+  f.control.acknowledge(f.signed('ack', { controlId: c.controlId, payloadDigest: c.payloadDigest, seq: c.seq, readHandleIds: [liveId] }));
+  assert.equal(f.control.completion({ projectId: 'project', conversationId: 'conversation' }).complete, true);
+  t1 = f.ledger.read().agentReadsV1;
+  assert.equal(Object.values(t1.handles).filter(h => h.state === 'closed').length, KEEP_CLOSED_READS_PER_INSTANCE);
+  assert.equal(pruneClosedReads(structuredClone(f.ledger.read())), 0, '已经修剪到位');
+  f.restart(); f.subscribe();
+  const again = await f.open('owner');
+  f.control.closeReads(f.signed('close', { readHandleIds: [again.readHandle.readHandleId] }));
+  assert.equal(Object.values(f.ledger.read().agentReadsV1.handles).filter(h => h.state === 'closed').length, KEEP_CLOSED_READS_PER_INSTANCE);
 });
