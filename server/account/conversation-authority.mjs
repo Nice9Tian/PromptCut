@@ -519,6 +519,10 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
    * 由文档服务装配在主服务每次来问「有什么要办」时调用(doc-agent-assembly.mjs 的 listPendingRuns)。
    */
   function completePendingDeletions() {
+    const current = ledger.read();
+    const hasPending = Object.values(current.conversationsV2 ?? {}).some(group =>
+      Object.values(group).some(conversation => Boolean(conversation.deletion)));
+    if (!hasPending) return 0;
     return ledger.transaction(state => {
       let done = 0;
       for (const [projectId, group] of Object.entries(rows(state))) for (const conversation of Object.values(group)) {

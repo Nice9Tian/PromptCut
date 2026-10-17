@@ -56,11 +56,32 @@ export async function inspectAgentScopeSource({ read, expected, configuredAnchor
 export function createAgentScopeReader({ registryDir, expected, configuredAnchorDigest }) {
   validateAgentScopeExpected(expected);
   if (typeof registryDir !== 'string' || !path.isAbsolute(registryDir)) failScope('directory');
+  let cachedKey = null, cachedResult = null;
+  async function snapshotKey(checkpoint) {
+    try { await fs.lstat(path.join(registryDir, '.publisher.lock')); return null; }
+    catch (e) { if (e?.code !== 'ENOENT') throw e; }
+    const names = (await fs.readdir(registryDir)).sort();
+    if (names.includes('.publisher.lock') || names.some(n => n.startsWith('.'))) return null;
+    const parts = [JSON.stringify(checkpoint ?? null)];
+    for (const name of names) {
+      const st = await fs.lstat(path.join(registryDir, name), { bigint: true });
+      if (!st.isFile() || st.isSymbolicLink() || st.uid !== 0n || st.nlink !== 1n || (st.mode & 0o022n) !== 0n) return null;
+      parts.push(`${name}:${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}`);
+    }
+    try { await fs.lstat(path.join(registryDir, '.publisher.lock')); return null; }
+    catch (e) { if (e?.code !== 'ENOENT') throw e; }
+    return parts.join('|');
+  }
   return Object.freeze({
     async read({ checkpoint = null } = {}) {
       if (process.platform !== 'linux') failScope('linux-required');
       await rootDirectory(registryDir);
-      return inspectAgentScopeSource({ read: name => readAgentScopeRegistryFile(registryDir, name), expected, configuredAnchorDigest, checkpoint });
+      const beforeKey = await snapshotKey(checkpoint);
+      if (beforeKey && beforeKey === cachedKey && cachedResult) return structuredClone(cachedResult);
+      const result = await inspectAgentScopeSource({ read: name => readAgentScopeRegistryFile(registryDir, name), expected, configuredAnchorDigest, checkpoint });
+      const afterKey = await snapshotKey(checkpoint);
+      if (afterKey && afterKey === beforeKey) { cachedKey = afterKey; cachedResult = structuredClone(result); }
+      return result;
     },
   });
 }

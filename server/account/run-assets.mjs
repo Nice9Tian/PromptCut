@@ -223,12 +223,30 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
       if (canonicalJson(grantBinding(auth.grant)) !== canonicalJson(intent.grantBinding) ||
           auth.grant.readReceiptId !== intent.readReceiptId || observation.agentServiceKid !== auth.grant.serviceKid)
         fail(403, 'run-binding-mismatch');
-      const body = { projectId: request.projectId, runGrantId: request.runGrantId, action: intent.action,
-        purpose: intent.purpose, selector: intent.selector };
-      const resource = await resourceFor(body, auth.principal);
-      if (resource.resourceRev !== intent.resourceRev || resource.mediaRev !== intent.mediaRev) fail(409, 'stale-media-ref');
-      const g = await auth.check(); observerOf(observer);
+      let g = auth.grant;
+      if (!leaseId || intent.purpose === 'openRead') {
+        const body = { projectId: request.projectId, runGrantId: request.runGrantId, action: intent.action,
+          purpose: intent.purpose, selector: intent.selector };
+        const resource = await resourceFor(body, auth.principal);
+        if (resource.resourceRev !== intent.resourceRev || resource.mediaRev !== intent.mediaRev) fail(409, 'stale-media-ref');
+        g = await auth.check(); observerOf(observer);
+      }
       const id = leaseId ?? `asset-lease:${randomUUID()}`, nonceKey = digestOf({ ticketId: intent.ticketId, nonce: request.nonce });
+      if (leaseId) {
+        const currentState = ledger.read(), l = currentState.runAssetLeasesV1?.[id];
+        if (l && l.state === 'admitted' && l.inputDigest === digest &&
+            l.fenceRevision === g.fenceRevision && l.grantState === g.state &&
+            l.accessHead === currentState.accessHead &&
+            l.runAssetHead === currentState.runAssetControlOutboxV1?.length &&
+            !observed.socket.destroyed) {
+          atCommit(currentState, g);
+          liveLeases.set(id, { observerId: observed.observerId });
+          return { allowed: true, leaseId: id, projectId: request.projectId, action: request.action,
+            resource: clone(intent.resource), resourceRev: intent.resourceRev, grantState: g.state,
+            fenceRevision: g.fenceRevision, accessHead: currentState.accessHead,
+            runAssetHead: currentState.runAssetControlOutboxV1.length, docEpoch };
+        }
+      }
       const heads = ledger.transaction(s => {
         atCommit(s, g); if (observed.socket.destroyed) fail(403, 'asset-observer-forbidden');
         if (leaseId) {
