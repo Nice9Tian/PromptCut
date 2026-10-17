@@ -23,6 +23,27 @@ function timeoutError(ms) {
   return e;
 }
 
+function toBodyIterator(source) {
+  if (typeof source?.[Symbol.asyncIterator] === 'function') {
+    const it = source[Symbol.asyncIterator]();
+    return {
+      next: () => it.next(),
+      close: async () => { try { await it.return?.(); } catch {} },
+    };
+  }
+  if (typeof source?.getReader === 'function') {
+    const reader = source.getReader();
+    return {
+      next: () => reader.read(),
+      close: async () => {
+        try { await reader.cancel?.(); } catch {}
+        try { reader.releaseLock?.(); } catch {}
+      },
+    };
+  }
+  return null;
+}
+
 /**
  * 把 fetch 包成「闲置超时」的。
  *
@@ -62,13 +83,21 @@ export function withIdleTimeout(fetchImpl, { idleMs = 120000 } = {}) {
 
     const source = res.body;
     async function* watched() {
+      const iter = toBodyIterator(source);
+      if (!iter) {
+        stop();
+        return;
+      }
       try {
-        for await (const chunk of source) {
+        while (true) {
+          const { done, value } = await iter.next();
+          if (done) break;
           bump();
-          yield chunk;
+          yield value;
         }
       } finally {
         stop();
+        await iter.close();
       }
     }
 
@@ -90,3 +119,4 @@ export function withIdleTimeout(fetchImpl, { idleMs = 120000 } = {}) {
     };
   };
 }
+
