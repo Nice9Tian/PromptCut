@@ -12,6 +12,7 @@ import { modelReady, pickModel } from './model-config.mjs';
 import { openReadIntents } from './read-intents.mjs';
 import { createAccountRunEvents } from './account-run-events.mjs';
 import { canonicalReadRecord, acceptedMessageRef } from '../../account/run-authority.mjs';
+import { normalizeRunOptions } from '../../account/run-options.mjs';
 import { canonicalJson } from '../../account/ledger.mjs';
 import { PROTOCOL } from '../../auth/protocol.mjs';
 import { createRunDrainRecord } from '../../agent-service/worker-settlement.mjs';
@@ -288,23 +289,27 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       await Promise.race([binding.side.link.ready(), aborted]);
       if (signal?.aborted) fail(403, 'run-fenced');
     let handle = null;
+    // 发消息时点的模型、思考强度、创造力(文档服务核过形状、记在这条消息的记录里)。
+    // 模型不在托管方的清单里就用清单第一个;记录里的形状不对(不该有)当作都没点
+    const options = normalizeRunOptions(record.runOptions) ?? {};
+    const model = pickModel(cfg, options.model);
     return {
       async start() {
         if (handle) fail(409, 'runner-already-started');
         handle = inst.startHostedRun({ runId: grant.runId, conversationId: grant.conversationId,
           prompt: record.content, attachments: record.attachments,
           pageState: { selection: record.selectionSnapshot?.selection?.clipIds ?? [] },
-          apiConfig: cfg, model: pickModel(cfg), historyFile: path.join(dir, 'history.json'),
+          ...(options.effort ? { effort: options.effort } : {}), ...(options.creativity ? { creativity: options.creativity } : {}),
+          apiConfig: cfg, model, historyFile: path.join(dir, 'history.json'),
           sessionKey: `account-v2-${grant.conversationId}`, onModelCall: async (phase, info) => {
             if (phase === 'before') {
               await onModelCall({ phase, info });
-              const admitted = await gate.admitModelCall({ projectId: grant.projectId, userId: grant.accountId,
-                model: pickModel(cfg) });
+              const admitted = await gate.admitModelCall({ projectId: grant.projectId, userId: grant.accountId, model });
               if (admitted?.ok !== true) fail(429, admitted?.code ?? 'quota');
             } else {
               gate.record({ t: now(), projectId: grant.projectId, userId: grant.accountId,
                 username: grant.initiatorName ?? record.senderNameAtSend, conversationId: grant.conversationId, runId: grant.runId,
-                vendor: info?.vendor ?? cfg.vendor ?? '', model: info?.model ?? pickModel(cfg), input: info?.input ?? 0,
+                vendor: info?.vendor ?? cfg.vendor ?? '', model: info?.model ?? model, input: info?.input ?? 0,
                 output: info?.output ?? 0, cacheRead: info?.cacheRead ?? 0, ok: info?.ok !== false, ms: info?.ms ?? 0 });
             }
           }, beforeToolCall, onEvent });

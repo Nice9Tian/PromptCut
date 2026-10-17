@@ -294,7 +294,8 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           'loginId', 'credentialId', 'serviceId', 'creator'].some(key => body[key] !== undefined))
           throw new AgentServiceError('invalid-authority-claim', 'identity is set by the service', 400);
         const out = await service.send(identity, conversationId, { prompt: body.prompt, requestId: body.requestId,
-          selectionSnapshot: body.selectionSnapshot, attachments: body.attachments });
+          selectionSnapshot: body.selectionSnapshot, attachments: body.attachments,
+          model: body.model, effort: body.effort, creativity: body.creativity });
         return sendJson(res, 202, { ok: true, ...out }, CORS);
       }
       if (sub[2] === 'events' && req.method === 'GET') {
