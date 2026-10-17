@@ -403,11 +403,15 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
 
     connect(ctx, connId, principal) {
       bind(ctx);
-      conns.set(connId, { principal: { ...principal }, watching: false, sent: new Map() });
       const key = classOf(principal);
+      conns.set(connId, { principal: { ...principal }, key, watching: false, sent: new Map() });
       if (key !== null) {
         bump(present, principal.tenantId, key, 1);
-        lingering.get(principal.tenantId)?.delete(key);
+        const inner = lingering.get(principal.tenantId);
+        if (inner) {
+          inner.delete(key);
+          if (inner.size === 0) lingering.delete(principal.tenantId);
+        }
         sync(ctx);
       }
     },
@@ -416,7 +420,7 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
       bind(ctx);
       const c = conns.get(connId);
       conns.delete(connId);
-      const key = c ? classOf(c.principal) : null;
+      const key = c?.key ?? (c ? classOf(c.principal) : null);
       if (key !== null) {
         const id = c.principal.tenantId;
         if (bump(present, id, key, -1) === 0) {
@@ -448,6 +452,7 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
       return {
         watchers: [...conns.values()].filter((c) => c.watching).map((c) => ({ service: c.principal.service, kid: c.principal.serviceKid, projects: c.sent.size })),
         present: Object.fromEntries([...present].sort().map(([id, inner]) => [id, Object.fromEntries(inner)])),
+        lingering: Object.fromEntries([...lingering].sort().map(([id, inner]) => [id, Object.fromEntries(inner)])),
         demands: Object.fromEntries([...demands].sort().map(([id, inner]) => [id, [...inner.keys()].sort()])),
       };
     },
