@@ -64,6 +64,17 @@ export function createImportReservation(workspace) {
 /** Actual existing hosted Agent instance, one isolated instance per doc-owned run.
  * The doc-admitted grant binds this run's signed data connection; creator is never inferred.
  */
+/**
+ * 这一轮用什么模型、思考强度、创造力:取自发消息时点的(文档服务核过形状、记在这条消息的记录里)。
+ * 模型不在托管方的清单里就用清单第一个;没点的项不带(思考强度随模型的默认,创造力跟项目);
+ * 记录里的形状不对(不该有)当作都没点。
+ */
+export function hostedRunOptions(cfg, record) {
+  const asked = normalizeRunOptions(record?.runOptions) ?? {};
+  return { model: pickModel(cfg, asked.model), ...(asked.effort ? { effort: asked.effort } : {}),
+    ...(asked.creativity ? { creativity: asked.creativity } : {}) };
+}
+
 export function createExistingHostedRunnerFactory({ root, loadModule, dataClient, dataDir, modelConfig,
   assetBase = null, look = null, voiceConfig = async () => null, collect = null,
   egress: egressOptions = {}, workspaceLimits = {}, toolLimits = {}, toolFetch,
@@ -289,17 +300,14 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       await Promise.race([binding.side.link.ready(), aborted]);
       if (signal?.aborted) fail(403, 'run-fenced');
     let handle = null;
-    // 发消息时点的模型、思考强度、创造力(文档服务核过形状、记在这条消息的记录里)。
-    // 模型不在托管方的清单里就用清单第一个;记录里的形状不对(不该有)当作都没点
-    const options = normalizeRunOptions(record.runOptions) ?? {};
-    const model = pickModel(cfg, options.model);
+    const { model, ...options } = hostedRunOptions(cfg, record);
     return {
       async start() {
         if (handle) fail(409, 'runner-already-started');
         handle = inst.startHostedRun({ runId: grant.runId, conversationId: grant.conversationId,
           prompt: record.content, attachments: record.attachments,
           pageState: { selection: record.selectionSnapshot?.selection?.clipIds ?? [] },
-          ...(options.effort ? { effort: options.effort } : {}), ...(options.creativity ? { creativity: options.creativity } : {}),
+          ...options,
           apiConfig: cfg, model, historyFile: path.join(dir, 'history.json'),
           sessionKey: `account-v2-${grant.conversationId}`, onModelCall: async (phase, info) => {
             if (phase === 'before') {
