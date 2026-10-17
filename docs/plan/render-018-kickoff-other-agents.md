@@ -34,7 +34,11 @@
 - 同时跑的子 Agent 不超过五路（交接文档第 9 节：六路时 CPU 一直满载，全量测试会偶发失败）。
 - **零轮询等待与清理（照 `guide_files/multi_agent.md`）**：
   - 派完子 Agent（`invoke_subagent` / `send_message`）或启动后台 CLI 任务（异步 `run_command`）后，若主会话手头没有别的可推进的活，**直接输出文字结束当前回合（不调任何工具）**，完全靠系统的 `SYSTEM_MESSAGE` 自动唤醒（Reactive Wakeup）。
-  - **严禁轮询与巡检闹钟**：绝不连续调用 `manage_subagents(Action="list")` 或 `manage_task(Action="status")`；**禁止用 `schedule` 设 3～5 分钟的子 Agent 巡检闹钟**（每响一次闹钟在大上下文下要空转 3～4 轮；`schedule` 只用于 5 小时额度 `< 10%` 时的跨时段休眠等待）。
+  - **严禁轮询与巡检闹钟**：绝不连续调用 `manage_subagents(Action="list")` 或 `manage_task(Action="status")`；**禁止用 `schedule` 设 3～5 分钟的子 Agent 巡检闹钟**（每响一次闹钟在大上下文下要空转 3～4 轮；`schedule` 只用于 5 小时额度 `< 10%` 时的跨时段休眠等待，以及下面这一条的兜底唤醒）。
+  - **后台命令不许等输入，必须自己会结束**（2026-10-17 加：一条不带密钥的 ssh 停在问密码，挂了 3 小时，主会话一直没醒）：
+    - 起后台命令之前先确认它不会停下来等人输入（密码、确认、分页）。连节点照 `docs/local.md`「新云节点」带密钥加 `BatchMode=yes`、`ConnectTimeout=15`，能用 `scripts/remote/*.mjs` 的就用脚本。
+    - 命令自己带超时：ssh 带 `ConnectTimeout` 和 `ServerAlive*`，别的命令用它自己的超时参数，或者在外面包一层到时就杀的超时。
+    - 等的是后台命令（不是子 Agent）、又要结束本轮时，先用 `schedule` 设一次兜底唤醒，时长取命令预计用时的两倍、至少 10 分钟。醒来先查一次这条任务的状态，还没结束就照「卡住」处理：结束它，查原因，改了再起。只设这一次，不连环设。
   - **归档后清理 `idle` 子 Agent**：子 Agent 分支合入 `main`、报告归档并拆掉 worktree 后，顺手调一次 `manage_subagents(Action="kill")` 把已结束的 `idle` 子 Agent 从活动列表里清掉，防止列表无限膨胀。
 - 端口避开用户常驻的 5190～5192、5210～5212；起开发服务器一律带 `PROMPTCUT_NO_PORT_FILE=1`。
 - **合入前的闸门**照交接文档第 9 节逐项跑，由主会话自己跑；闸门脚本在 `out/main-session-tools/`，说明在 `docs/local.md`「主会话合入前的闸门脚本」。脚本是 bash 写的，用 `C:\Program Files\Git\bin\bash.exe` 跑。
