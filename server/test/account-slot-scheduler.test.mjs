@@ -43,7 +43,8 @@ function world({ slotIds = ['slot-a'], current = () => null } = {}) {
   const master = {
     async pending() { calls.push('pending'); const answer = structuredClone(pending);
       if (context.masterGate) { const gate = context.masterGate; context.masterGate = null; await gate; } return answer; },
-    async scopeControl(row) { calls.push(`scopeControl:${row.controlId}`); const answer = controls.get(row.controlId);
+    async scopeControl(row) { const id = row.controlId ?? row.requestId; calls.push(`scopeControl:${id}`);
+      const answer = controls.has(id) ? controls.get(id) : { unassigned: true };
       if (answer instanceof Error) throw answer; return answer; },
   };
   const log = [], context = { masterGate: null };
@@ -195,14 +196,15 @@ test('没领到任务就退掉这一代，同一个对话隔一会儿才再试�
   assert.deepEqual(v.calls.slice(1), ['scopeControl:private-1', 'slot-a:retire-reason:assignment-failed', 'slot-a:retire:1']);
 });
 
-test('领取的回应不确定、或进程自己没了：不退槽，停主进程、写失败观察，等文档服务的强制终态', async () => {
+test('领取的回应不确定、或进程自己没了：不退槽，停主进程、写失败观察，等文档服务的强制终态或未分配确认', async () => {
   const w = world(); w.pending.conversations = [w.conversation('c1')];
   const original = w.slots[0].open.bind(w.slots[0]);
   w.slots[0].open = async () => { const opened = await original(); w.slots[0].worker.prepareError = Object.assign(Error('run-client-unavailable'), { status: 503, code: 'run-client-unavailable' }); return opened; };
   await w.scheduler.tick(); await quiet(); w.pending.conversations = [];
   assert.deepEqual(without(w.calls, 'pending'), ['slot-a:open:1', 'slot-a:prepare:1:c1:dispatch:slot-a:1', 'slot-a:worker-stop:1', 'slot-a:observeFailure:1']);
   assert.equal(w.calls.some(call => call.startsWith('slot-a:retire')), false);
-  assert.deepEqual(w.scheduler.describe().map(row => [row.phase, row.failureObserved]), [['failed', true]]);
+  assert.deepEqual(w.scheduler.describe().map(row => [row.phase, row.failureObserved, row.conversation]), [['failed', true, null]]);
+  // 边界 1：文档服务其实记下了这次领取，下一轮在 scopeControls 里下发强制终态，绝不提前退槽
   w.pending.scopeControls = [w.controlRow(w.slots[0], 'failed-1')]; w.controls.set('failed-1', { unassigned: false, terminal: { forced: true } });
   await w.scheduler.tick(); await quiet();
   assert.deepEqual(w.phases(), ['idle']);
@@ -219,6 +221,85 @@ test('领取的回应不确定、或进程自己没了：不退槽，停主进�
   u.slots[0].worker.die(); u.slots[0].worker.settlement.open({ kind: 'normal', terminal: { t: 1 }, intent: { i: 1 } });
   u.slots[0].gates.observeFailure.open(); await quiet();
   assert.equal(u.calls.includes('slot-a:close:1'), false); assert.deepEqual(u.calls.filter(call => call === 'slot-a:observeFailure:1').length, 1);
+});
+
+test('领取结果不明且文档服务没有记下授权：写失败观察后向文档服务核实 unassigned 并退槽收回；卡着的槽不再拦住该对话改派别的槽', async () => {
+  // 边界 3 + 边界 4：slot-a 领取超时后释放 c1 的 serving 占用；即使 slot-a 问文档服务时 503 还没定论，c1 也能立刻派到 slot-b 开跑
+  const w = world({ slotIds: ['slot-a', 'slot-b'] });
+  w.pending.conversations = [w.conversation('c1')];
+  const origA = w.slots[0].open.bind(w.slots[0]);
+  w.slots[0].open = async () => {
+    const opened = await origA();
+    w.slots[0].worker.prepareError = Object.assign(Error('run-client-unavailable'), { status: 503, code: 'run-client-unavailable' });
+    return opened;
+  };
+  await w.scheduler.tick(); await quiet();
+  assert.deepEqual(w.phases(), ['failed', 'idle']);
+  assert.equal(w.scheduler.describe()[0].conversation, null, '失败槽不再挂着对话占用 serving');
+
+  // 下一轮：slot-a 去问文档服务时遇到 503 不可用，不退槽；同时 c1 不被 slot-a 拦住，立刻派到空闲的 slot-b 成功运行
+  w.controls.set('dispatch:slot-a:1', Object.assign(Error('master-scheduler-unavailable'), { status: 503, code: 'master-scheduler-unavailable' }));
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.ok(w.calls.includes('scopeControl:dispatch:slot-a:1'), '向文档服务询问该代是否有授权');
+  assert.equal(w.calls.some(call => call.startsWith('slot-a:retire')), false, '文档服务 503 时绝不盲目退槽');
+  assert.ok(w.calls.includes('slot-b:open:1') && w.calls.includes('slot-b:prepare:1:c1:dispatch:slot-b:1') && w.calls.includes('slot-b:start:1'),
+    'c1 不被卡住的 slot-a 拦住，已在 slot-b 领取并开跑');
+  assert.deepEqual(w.phases(), ['failed', 'running']);
+  w.pending.conversations = [];
+
+  // 边界 4：紧接着下一轮处于退避期内，不为 slot-a 重复发请求
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.equal(w.calls.includes('scopeControl:dispatch:slot-a:1'), false, '退避期内不紧接着重问');
+
+  // 退避到期后再次询问仍 503，间隔继续加倍；随后文档服务恢复并回答 unassigned: true，slot-a 安全退槽回到 idle
+  await new Promise(resolve => setTimeout(resolve, 25));
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.ok(w.calls.includes('scopeControl:dispatch:slot-a:1'), '退避到期后再次询问');
+  assert.equal(w.phases()[0], 'failed');
+
+  w.controls.set('dispatch:slot-a:1', { unassigned: true, reason: 'grant-never-admitted' });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  w.clear(); await w.scheduler.tick(); await quiet();
+  assert.deepEqual(without(w.calls, 'pending'), ['scopeControl:dispatch:slot-a:1', 'slot-a:retire-reason:assignment-failed', 'slot-a:retire:1']);
+  assert.deepEqual(w.phases(), ['idle', 'running']);
+});
+
+test('调度重启收养停在 ready 的孤儿槽：写失败观察后向文档服务核实无授权并退槽收回', async () => {
+  const refA = { rootAuthorityId: 'root-slot-a', slotId: 'slot-a', epoch: 6, recordDigest: 'a'.repeat(64) };
+  const refB = { rootAuthorityId: 'root-slot-b', slotId: 'slot-b', epoch: 2, recordDigest: 'b'.repeat(64) };
+  const w = world({
+    slotIds: ['slot-a', 'slot-b'],
+    current: slotId => slotId === 'slot-a' ? { rootScopeRef: refA, phase: 'ready' } : { rootScopeRef: refB, phase: 'ready' },
+  });
+  await w.scheduler.tick(); await quiet();
+  assert.ok(w.calls.includes('scopeControl:dispatch:slot-a:6') && w.calls.includes('scopeControl:dispatch:slot-b:2'));
+  assert.ok(w.calls.includes('slot-a:retire:0') && w.calls.includes('slot-b:retire:0'));
+  assert.deepEqual(w.phases(), ['idle', 'idle']);
+});
+
+test('6 个槽全部因领取结果不明卡住：全部核实无授权后退槽回到 idle，排队任务照常派发执行', async () => {
+  const slotIds = ['slot-a', 'slot-b', 'slot-c', 'slot-d', 'slot-e', 'slot-f'];
+  const w = world({ slotIds });
+  w.pending.conversations = slotIds.map((_, i) => w.conversation(`c${i + 1}`));
+  let failPrepare = true;
+  for (const slot of w.slots) {
+    const orig = slot.open.bind(slot);
+    slot.open = async () => {
+      const opened = await orig();
+      if (failPrepare) slot.worker.prepareError = Object.assign(Error('run-client-unavailable'), { status: 503, code: 'run-client-unavailable' });
+      return opened;
+    };
+  }
+  await w.scheduler.tick(); await quiet();
+  assert.deepEqual(w.phases(), ['failed', 'failed', 'failed', 'failed', 'failed', 'failed']);
+
+  // 下一轮：6 个槽全部向文档服务确认未分配并退槽；退槽唤醒下一轮后 6 个对话全部在新一代成功开跑
+  failPrepare = false;
+  await w.scheduler.tick(); await quiet();
+  assert.deepEqual(w.phases(), ['idle', 'idle', 'idle', 'idle', 'idle', 'idle']);
+  await w.scheduler.tick(); await quiet();
+  assert.deepEqual(w.phases(), ['running', 'running', 'running', 'running', 'running', 'running']);
+  for (const slotId of slotIds) assert.ok(w.calls.includes(`${slotId}:start:2`), `${slotId} 第 2 代成功开跑`);
 });
 
 test('root 的动作失败后这个槽停下等人看，不自动接着做；别的槽照常', async () => {

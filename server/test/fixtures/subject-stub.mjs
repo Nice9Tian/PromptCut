@@ -71,6 +71,7 @@ if (sub === 'install') {
   emit({ event: 'log', line: `pip install --target ${opts['--pylibs']} -r ${reqFile}` });
   if (mode === 'hang') { setInterval(() => {}, 1000); }
   else if (mode === 'ok') {
+    await new Promise((r) => setTimeout(r, 80));
     fs.writeFileSync(path.join(opts['--models-dir'] ?? '.', 'engine.txt'), 'light');
     emit({ event: 'installed', tier: 'light', needsModel: false, engine: 'light' });
     process.exit(0);

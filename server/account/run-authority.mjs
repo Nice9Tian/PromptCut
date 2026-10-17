@@ -27,6 +27,7 @@ const tables = s => {
   s.runGrantsV2 ??= {}; s.runRequestsV2 ??= {}; s.runReadRequestsV2 ??= {};
   s.runControlsV2 ??= {}; s.runReceiptsV2 ??= {};
   s.runFinishRequestsV2 ??= {}; s.runFinishReceiptsV2 ??= {};
+  s.runAbandonedRequestsV2 ??= {};
 };
 const bumpQueue = (s, c) => {
   const revision = Math.max(s.conversationClockV2 ?? 0, c.queueRevision ?? 0) + 1;
@@ -248,11 +249,20 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     for (const control of controls) onControl(copy(control)); return controls;
   }
 
+  const checkAbandonedInState = (s, svc, requestId) => {
+    const instRef = s.agentInstancesV2?.[svc?.instanceId]?.rootScopeRef;
+    const byScope = instRef && s.runAbandonedRequestsV2?.[`${instRef.rootAuthorityId}:${requestId}`];
+    const byReq = s.runAbandonedRequestsV2?.[requestId];
+    if (byScope || (byReq && (!instRef || byReq.rootScopeRef.slotId !== instRef.slotId || byReq.rootScopeRef.rootAuthorityId === instRef.rootAuthorityId)))
+      reject(409, 'run-request-abandoned');
+  };
+
   async function admit(input) {
     const { servicePrincipal, projectId, conversationId, requestId } = input;
     const invocation = { operation: 'admit', input };
     request(requestId); await sync(input);
     const before = ledger.read(), svc = service(before, servicePrincipal, invocation);
+    checkAbandonedInState(before, svc, requestId);
     const key = `${svc.instanceId}:${svc.instanceGeneration}:${requestId}`, digest = digestOf({ projectId, conversationId });
     const prior = replay(before.runRequestsV2 ?? {}, key, digest);
     if (prior) return copy(prior.result);
@@ -272,6 +282,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     await refreshScope(input);
     const result = ledger.transaction(s => {
       reconcile(s); service(s, servicePrincipal, invocation);
+      checkAbandonedInState(s, svc, requestId);
       const old = replay(s.runRequestsV2, key, digest); if (old) return old.result;
       const conv = conversation(s, projectId, conversationId);
       for (const cancelledMessage of cancelled) {
@@ -575,6 +586,39 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     await sync();
     const initial = ledger.read(), svc = service(initial, input.servicePrincipal, { operation: 'scopeControl', input });
     if (initial.agentInstancesV2[svc.instanceId]?.purpose !== 'control-only') reject(403, 'instance-purpose-forbidden');
+    if ('requestId' in input && !('controlId' in input)) {
+      request(input.requestId);
+      if (input.requestId !== `dispatch:${input.rootScopeRef?.slotId}:${input.rootScopeRef?.epoch}`)
+        reject(400, 'invalid-request-id');
+      await scopeAuthority.refresh(input.rootScopeRef);
+      const matchGrant = state => Object.values(state.runGrantsV2 ?? {}).find(row =>
+        row.scopeBinding?.rootScopeRef?.rootAuthorityId === input.rootScopeRef?.rootAuthorityId &&
+        row.scopeBinding?.rootScopeRef?.slotId === input.rootScopeRef?.slotId &&
+        row.scopeBinding?.rootScopeRef?.epoch === input.rootScopeRef?.epoch);
+      const existing = matchGrant(ledger.read());
+      if (existing && ['preparing', 'active', 'retained'].includes(existing.state)) await reconcileScopeFailures();
+      return ledger.transaction(s => {
+        reconcile(s); service(s, input.servicePrincipal, { operation: 'scopeControl', input });
+        const master = s.agentInstancesV2[svc.instanceId], grant = matchGrant(s);
+        if (grant) {
+          if (canonicalJson(grant.scopeBinding.rootScopeRef) !== canonicalJson(input.rootScopeRef))
+            reject(403, 'run-binding-mismatch');
+          if (grant.state !== 'revoked' || !grant.closureControlId) reject(503, 'run-forced-closure-pending');
+          return scopeAuthority.controlSourceInState(s, grant, master, {
+            projectId: grant.projectId, controlId: grant.closureControlId, runGrantId: grant.runGrantId,
+            assignmentDigest: grant.scopeBinding.assignmentDigest, rootScopeRef: input.rootScopeRef,
+          });
+        }
+        const decision = scopeAuthority.unassignedControlInState(s, master, input);
+        s.runAbandonedRequestsV2[`${input.rootScopeRef.rootAuthorityId}:${input.requestId}`] = {
+          rootScopeRef: copy(input.rootScopeRef), requestId: input.requestId,
+        };
+        s.runAbandonedRequestsV2[input.requestId] ??= {
+          rootScopeRef: copy(input.rootScopeRef), requestId: input.requestId,
+        };
+        return decision;
+      });
+    }
     const g = initial.runGrantsV2?.[input.runGrantId];
     if (!g || g.projectId !== input.projectId) reject(403, 'run-binding-mismatch');
     await scopeAuthority.refresh(g.scopeBinding?.rootScopeRef);

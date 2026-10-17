@@ -43,8 +43,10 @@ export function instanceRunScope(operation, input) {
   if (operation === 'pendingRuns') return { operation };
   if (operation === 'workerEventSource') return { operation, projectId: input.projectId,
     runGrantId: input.runGrantId, assignmentDigest: input.assignmentDigest };
-  if (operation === 'scopeControl') return { operation, projectId: input.projectId, controlId: input.controlId,
-    runGrantId: input.runGrantId, assignmentDigest: input.assignmentDigest, rootScopeRef: input.rootScopeRef };
+  if (operation === 'scopeControl') return 'requestId' in input && !('controlId' in input)
+    ? { operation, requestId: input.requestId, rootScopeRef: input.rootScopeRef }
+    : { operation, projectId: input.projectId, controlId: input.controlId,
+        runGrantId: input.runGrantId, assignmentDigest: input.assignmentDigest, rootScopeRef: input.rootScopeRef };
   const p = input?.principal ?? input ?? {};
   const target = { projectId: input?.projectId, runGrantId: input?.runGrantId ?? p.runGrantId };
   if (operation === 'admit') return { operation, projectId: input.projectId,

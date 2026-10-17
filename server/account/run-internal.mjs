@@ -31,6 +31,11 @@ async function bodyOf(req) {
   return body;
 }
 function validateBody(action, body) {
+  if (action === 'scope/control' && Object.keys(body).sort().join(',') === 'requestId,rootScopeRef') {
+    if (!reference(body.requestId) || !body.rootScopeRef || typeof body.rootScopeRef !== 'object' || Array.isArray(body.rootScopeRef))
+      fail(400, 'invalid-run-reference');
+    return;
+  }
   const fields = shapes[action], optional = action === 'check' ? ['action'] : action === 'finish' ? ['readReceiptId', 'outcome'] : [];
   if (Object.keys(body).some(field => !fields.includes(field) && !optional.includes(field)) ||
       fields.some(field => !Object.hasOwn(body, field))) fail(400, 'invalid-run-body');

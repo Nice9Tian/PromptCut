@@ -25,11 +25,13 @@ function settlementRequest(operation, path, body) {
   if (path !== `/internal/v2/runs/${settlementPaths[operation]}`) fail('instance-proof-input');
   if (operation === 'scopeControl') {
     const ref = body.rootScopeRef;
-    if (!exactScope(body, ['projectId', 'controlId', 'runGrantId', 'assignmentDigest', 'rootScopeRef']) ||
-        !['projectId', 'controlId', 'runGrantId'].every(k => reference(body[k])) || !hexDigest(body.assignmentDigest) ||
-        !exactScope(ref, ['rootAuthorityId', 'slotId', 'epoch', 'recordDigest']) ||
-        !reference(ref.rootAuthorityId) || !reference(ref.slotId) || !Number.isSafeInteger(ref.epoch) || ref.epoch < 1 ||
-        !hexDigest(ref.recordDigest)) fail('instance-proof-input');
+    const validRef = exactScope(ref, ['rootAuthorityId', 'slotId', 'epoch', 'recordDigest']) &&
+      reference(ref.rootAuthorityId) && reference(ref.slotId) && Number.isSafeInteger(ref.epoch) && ref.epoch >= 1 &&
+      hexDigest(ref.recordDigest);
+    const validRevoked = exactScope(body, ['projectId', 'controlId', 'runGrantId', 'assignmentDigest', 'rootScopeRef']) &&
+      ['projectId', 'controlId', 'runGrantId'].every(k => reference(body[k])) && hexDigest(body.assignmentDigest);
+    const validUnassigned = exactScope(body, ['rootScopeRef', 'requestId']) && reference(body.requestId);
+    if (!validRef || (!validRevoked && !validUnassigned)) fail('instance-proof-input');
     return;
   }
   const keys = [...bindingKeys, 'requestId'];

@@ -703,6 +703,7 @@ export function createSubjectTools({
     await authorize(context, 'write');
     if (!config) return { ok: false, cloudUnavailable: true, error: NOT_CONFIGURED };
     if (!config.install) return { ok: false, cloudUnavailable: true, error: INSTALL_OFF };
+    if (installLive) return { jobId: installLive.jobId ?? null, started: false, alreadyRunning: true, hint: '主体识别正在安装,用 subject_status 看 engine 有没有变。不要重复启动。' };
     const ws = await workspace(context);
     const status = await readStatus(context, ws, { fresh: true });
     if (status.engine) return { ok: true, ready: true, alreadyInstalled: true, engine: status.engine, hint: `这台云节点已经有 ${status.engine} 档,不用装。` };

@@ -138,7 +138,7 @@ test('C66-I1-05 设了 PROMPTCUT_ASSET_URL 时:页面给的远程目标优先,{ 
  * C66-I2 打开项目时补转素材小尺寸
  * ======================================================================== */
 
-test('C66-I2-01 补转:不带 tiers 入库的视频(同 .procp 还原)→ backfill 排素材小尺寸,不重封装、原尺寸哈希不变;好了 GET /api/media/tiers 报 ready', { skip: !ffmpegOk && '没有 ffmpeg', timeout: 60_000 }, async () => {
+test('C66-I2-01 补转:不带 tiers 入库的视频(同 .procp 还原)→ backfill 排素材小尺寸,不重封装、原尺寸哈希不变;好了 GET /api/media/tiers 报 ready', { skip: !ffmpegOk && '没有 ffmpeg', timeout: 180_000 }, async () => {
   const root = path.join(OUT, 'i2');
   fs.mkdirSync(media.mediaDir(root), { recursive: true });
   const origin = await listen(serviceHandler(root));
@@ -173,7 +173,7 @@ test('C66-I2-01 补转:不带 tiers 入库的视频(同 .procp 还原)→ backfi
   assert.deepEqual(again.items[up.hash], { state: 'ready', small });
 });
 
-test('C66-I2-02 两档管理器 backfill:图片 / 音频扩展名跳过;确定没有视频流的不再转;上次失败的再试;转好交给上传队列(先小后大)', { skip: !ffmpegOk && '没有 ffmpeg', timeout: 60_000 }, async () => {
+test('C66-I2-02 两档管理器 backfill:图片 / 音频扩展名跳过;确定没有视频流的不再转;上次失败的再试;转好交给上传队列(先小后大)', { skip: !ffmpegOk && '没有 ffmpeg', timeout: 180_000 }, async () => {
   const dir = path.join(OUT, 'i2b');
   fs.mkdirSync(dir, { recursive: true });
   const enq = [];

@@ -46,8 +46,9 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     configs.set(key, slot); sources.set(key, sourceFactory(slot));
   }
   ledger.transaction(s => {
-    s.agentRunScopesV1 ??= { required: true, checkpoints: {}, assignments: {} };
+    s.agentRunScopesV1 ??= { required: true, checkpoints: {}, assignments: {}, retired: {} };
     s.agentRunScopesV1.required = true;
+    s.agentRunScopesV1.retired ??= {};
   });
   function requireRef(ref) {
     if (!exactScope(ref, refFields) || !Number.isSafeInteger(ref.epoch) || ref.epoch < 1 || !hash(ref.recordDigest) ||
@@ -101,6 +102,7 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
       return { purpose: 'control-only', publicKey: requestedKey };
     }
     const value = projectionFor(rootScopeRef), cfg = configs.get(keyOf(rootScopeRef));
+    if (s.agentRunScopesV1?.retired?.[`${keyOf(rootScopeRef)}:${rootScopeRef.epoch}`]) fail(409, 'slot-retired');
     if (value.failure) fail(403, 'worker-failed');
     // Root controller's identity-RPC client cert is NOT the worker Doc client.
     if (transport.serviceId !== 'agent' || transport.serviceKid !== cfg.workerServiceKid ||
@@ -118,6 +120,7 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     const instance = s.agentInstancesV2?.[grant.instanceId];
     if (!instance?.rootScopeRef || instance.instanceGeneration !== grant.instanceGeneration) fail(403, 'instance-unbound');
     const ref = instance.rootScopeRef, projection = projectionFor(ref), key = `${keyOf(ref)}:${ref.epoch}`;
+    if (s.agentRunScopesV1?.retired?.[key]) fail(409, 'slot-retired');
     if (projection.failure) fail(403, 'worker-failed');
     const prior = s.agentRunScopesV1.assignments[key];
     if (prior) {
@@ -396,6 +399,19 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     return { projectId: grant.projectId, controlId: control.controlId, runGrantId: grant.runGrantId,
       assignmentDigest: grant.scopeBinding.assignmentDigest, rootScopeRef: copy(ref) };
   }
+  function unassignedControlInState(s, master, input) {
+    if (master?.purpose !== 'control-only' || master.serviceKid !== masterServiceKid) fail(403, 'master-required');
+    const ref = input.rootScopeRef, slotKey = requireRef(ref), epochKey = `${slotKey}:${ref.epoch}`;
+    if (s.agentRunScopesV1.assignments[epochKey]) fail(409, 'slot-already-assigned');
+    const p = projectionFor(ref);
+    if (!p.failure) fail(503, 'failure-pending');
+    if (p.assignment !== null || !['ready', 'closed'].includes(p.phase)) fail(403, 'already-bound');
+    const retired = s.agentRunScopesV1.retired ??= {}, prior = retired[epochKey];
+    if (prior && (canonicalJson(prior.rootScopeRef) !== canonicalJson(ref) || prior.requestId !== input.requestId))
+      fail(409, 'retirement-conflict');
+    retired[epochKey] ??= { rootScopeRef: copy(ref), requestId: input.requestId, failureDigest: digestOf(p.failure) };
+    return { unassigned: true, rootScopeRef: copy(ref), requestId: input.requestId, reason: 'grant-never-admitted' };
+  }
   return Object.freeze({ refresh, synchronize, prepareRegistration, registrationInState, assignInState, assignmentInState,
-    preparePayload, recordPrepareInState, terminalInState, forcedInState, failureInState, closedInState, docClosed, closeDocTerminal, closeDocControl, closeEndedDocControl, recordDocProcessStart, eventSourceInState, controlSourceInState, controlReferenceInState });
+    preparePayload, recordPrepareInState, terminalInState, forcedInState, failureInState, closedInState, docClosed, closeDocTerminal, closeDocControl, closeEndedDocControl, recordDocProcessStart, eventSourceInState, controlSourceInState, controlReferenceInState, unassignedControlInState });
 }
