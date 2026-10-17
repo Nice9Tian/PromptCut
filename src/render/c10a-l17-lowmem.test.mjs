@@ -6,7 +6,7 @@
  *      (C10 其余把轻重判定换成界限搜索,判定的表另见 `c10-cost-plan.test.mjs`;显示仍全部判重:低内存档播放不活渲)
  *   S1 停下追一帧:直接定位的先、推帧卡要推的帧少的先;时限 5 秒(一处常量)
  *   S2 时限到了:还没画好的层维持占位(记进 timedOut),没开始画的一并算;画好的记下耗时
- *   S3 用户卡、图卡不追:单列 skipped;在线浏览器模式下有这一帧的预渲染小尺寸就贴着,没有才显示「需要本地 PC 渲染辅助」
+ *   S3 用户卡、素材效果卡不追:单列 skipped;在线浏览器模式下有这一帧的预渲染小尺寸就贴着,没有才显示「需要本地 PC 渲染辅助」
  *      (unsupported 占位,进显隐调度;2026-09-29 用户改语义)。同步来的用户卡没有定义也认
  *   S4 被新的跳转 / 播放打断:回 ok: false,没画的层照样算没画
  *   S5 舞台 RPC:settleLowMemory 按「它自己的时限 + 余量」判超时,别的调用不变
@@ -137,7 +137,7 @@ test("C10A-L17-S2 时限到了:画到一半的与还没开始画的都维持占�
   assert.equal(r2.timeoutMs, 60_000);
 });
 
-test("C10A-L17-S3 用户卡、图卡不追:单列 skipped;在线浏览器模式下贴小尺寸,没有才显示「需要本地 PC 渲染辅助」", async () => {
+test("C10A-L17-S3 用户卡、素材效果卡不追:单列 skipped;在线浏览器模式下贴小尺寸,没有才显示「需要本地 PC 渲染辅助」", async () => {
   const H = await import(srcUrl("render/placeholderHost.ts"));
   const isUser = (id) => id === "my-user-card";
   const graphDef = { card: () => null };
@@ -145,7 +145,7 @@ test("C10A-L17-S3 用户卡、图卡不追:单列 skipped;在线浏览器模式�
   H.setOnlineBrowserMode(true);
   try {
     assert.equal(H.unsupportedHere("my-user-card", plainDef, isUser), true, "用户卡:这台设备渲染不了");
-    assert.equal(H.unsupportedHere("graph-card", graphDef, isUser), true, "图卡:这台设备渲染不了");
+    assert.equal(H.unsupportedHere("graph-card", graphDef, isUser), true, "素材效果卡:这台设备渲染不了");
     assert.equal(H.unsupportedHere("builtin", plainDef, isUser), false, "内置卡照常");
     const kind = (cardId, def) => S.settleKindOf({ unsupported: H.unsupportedHere(cardId, def, isUser), frameMode: "stateful", mountFrame: 0, targetFrame: 60 });
     const items = [

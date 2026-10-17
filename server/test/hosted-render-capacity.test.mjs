@@ -9,7 +9,7 @@
  *   HR21e 重启：记账表回放一致；半行不坏；日志行数明显多于存活条目时压缩
  *   HR21f 成员后来写了同一个块：不再只归渲染服务，删项目时不清
  *   HR21g 上限的算法：`min(20 GiB, 盘总容量的四分之一)`，环境变量可改
- *   HR21h 淘汰的前提（契约第 6 节第 2 条）：清掉的块在内容库清单里还有引用时，页面不会把它当「没有产物」重新发补渲——前提不成立，所以淘汰没有交付
+ *   HR21h 淘汰的前提（契约第 6 节第 2 条）：清掉的块在内容库清单里还有引用时，页面不会把它当「没有产物」重新发预渲染重试——前提不成立，所以淘汰没有交付
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -354,7 +354,7 @@ test('HR21g 上限的算法:min(20 GiB, 盘总容量的四分之一);环境变�
   assert.equal(serviceCapBytes({ env: { [SERVICE_CAP_ENV]: '0' }, diskTotal: 40 * GiB }), 0, '0 是合法值(等于不让写)');
 });
 
-test('HR21h 淘汰的前提不成立:块被清掉、清单还列着它时,页面不会重新发补渲(所以契约第 6 节第 2 条没有交付)', async () => {
+test('HR21h 淘汰的前提不成立:块被清掉、清单还列着它时,页面不会重新发预渲染重试(所以契约第 6 节第 2 条没有交付)', async () => {
   const { OnlineSnapshotSource, LAYER_MAP_PREFIX } = await import(srcUrl('render/snapshotSource.ts'));
   const H = (n) => n.toString(16).padStart(64, '0');
   const content = new Map();
@@ -386,7 +386,7 @@ test('HR21h 淘汰的前提不成立:块被清掉、清单还列着它时,页面
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(fetches.length, 0, '撤快照后不自动预取已废弃的快照块');
   assert.equal(src.coverage('a'), 'full', '清单还列着,页面认为这一层整段都有产物');
-  assert.equal(src.frameConfirmedMissing('a', 5), false, '页面不会确认「这一帧没有产物」,所以补渲的判据(按清单判)不会触发');
+  assert.equal(src.frameConfirmedMissing('a', 5), false, '页面不会确认「这一帧没有产物」,所以预渲染重试的判据(按清单判)不会触发');
   // 主动按需拉取被淘汰的块:页面在取块,而且取不到(404)
   await src.fetchSnapshot('html', 'K', 5).catch(() => {});
   assert.ok(fetches.length > 0, '页面在取块,而且取不到');

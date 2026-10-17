@@ -25,7 +25,7 @@ import { projectCardGraph } from '../../src/kernel/cardGraph.mjs';
 const ENV_FP = '0123456789abcdef';
 const ENVIRONMENT = { width: 1920, height: 1080, fps: 30, theme: 'dark', fontFingerprint: 'ff00ff00' };
 
-/** 测试用的卡片定义。`punch-pill`、`focus-card` 在审阅表里是独立卡;`fx-*` 不在表里(按未知处理),写了 `card()` 所以是图卡 */
+/** 测试用的卡片定义。`punch-pill`、`focus-card` 在审阅表里是独立卡;`fx-*` 不在表里(按未知处理),写了 `card()` 所以是素材效果卡 */
 const DEFS = {
   'punch-pill': { id: 'punch-pill', defaults: { text: '' } },
   'focus-card': { id: 'focus-card', defaults: { text: '' } },
@@ -253,7 +253,7 @@ test('没有上游的片段:三个键和原来的算法逐字相同', () => {
   const cases = [
     projectOf(pill('aaa'), focus('zzz')),
     projectOf(pill('aaa', { frame: { x: 10, y: 20, w: 640, h: 360 }, opacity: 0.5, fadeIn: 0.2, motion: { kind: 'slide' } }), { kind: 'media', mediaId: 'm-a', mediaOffset: 1.5 }),
-    // 图卡片段(只有 cardId,就地合成 `@clip/<id>/card` 节点);没有输入的图卡节点
+    // 素材效果卡片段(只有 cardId,就地合成 `@clip/<id>/card` 节点);没有输入的素材效果卡节点
     projectOf({ kind: 'card', cardId: 'fx-tint', params: { amount: 0.3 } }, { kind: 'card', cardId: 'fx-blend', nodeId: 'n-free', params: {} },
       { cardNodes: [{ id: 'n-free', adapter: 'card', cardId: 'fx-blend', kind: 'filter', params: {}, inputs: {} }] }),
     // 相位不为零

@@ -17,7 +17,7 @@ function isSpeakerVideoControl(ctrl: Control): boolean {
 }
 
 /**
- * 同步来的用户卡 / 图卡没在这个浏览器里运行时,说明为什么(`docs/plan/online-card-exec-contract.md` 第 8 节的表)。
+ * 同步来的用户卡 / 素材效果卡没在这个浏览器里运行时,说明为什么(`docs/plan/online-card-exec-contract.md` 第 8 节的表)。
  * 能运行、还在载入、不是同步来的卡:什么都不画。
  */
 function CardRunNote({ cardId }: { cardId: string | undefined }) {

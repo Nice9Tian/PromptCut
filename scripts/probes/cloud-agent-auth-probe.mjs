@@ -40,7 +40,7 @@
  *   P11 成员被踢后对话被停掉：丙在项目一的连接 2 秒内以 4003 `kicked` 关闭，他的委托当场失效；发起成员不在线也一样。
  *   P12 成员被移出名单后对话被停掉：甲的连接 2 秒内以 4003 `removed` 关闭，委托当场失效。
  *   P13 项目删除后对话被停掉：项目一剩下的 Agent 连接 2 秒内以 4004 `deleted` 关闭，委托换不出（`no-project`）。
- *   P14 只用来发布补渲计划的连接：能发带片段清单的计划，读不了项目、改不了项目、取不了票据；成员被踢、被移出不影响它。
+ *   P14 只用来发布预渲染重试计划的连接：能发带片段清单的计划，读不了项目、改不了项目、取不了票据；成员被踢、被移出不影响它。
  *   P15 托管组合的日志里没有委托、对话委托、票据的原文。
  *   P16 发起成员离线后对话委托继续有效：项目一的成员页面连接全部断开（成员列表里他们没有页面在线）之后，
  *       凭还在有效期内的对话委托仍能换到连接票据、连上、提交编辑；写入的署名是这位成员加 `service: 'agent'`，
@@ -635,7 +635,7 @@ async function main() {
   // ---------- P14 结论（踢人、移出之后发布连接还在）
   {
     const alive = verdict(await pub2.ask({ type: 'publisher.hello', publisherId: `agent:probe2-${tag}` }));
-    check('P14 只用来发布补渲计划的连接', p14.hello === 'publisher.welcome' && p14.clipPlan === 'task.published' && p14.wholePlan === 'error:forbidden' && p14.read === 'error:forbidden'
+    check('P14 只用来发布预渲染重试计划的连接', p14.hello === 'publisher.welcome' && p14.clipPlan === 'task.published' && p14.wholePlan === 'error:forbidden' && p14.read === 'error:forbidden'
       && p14.write === 'error:forbidden' && p14.ticket === 'error:forbidden' && p14.nodeHello === 'error:forbidden' && p14.noDelegationNoPurpose === 'forbidden' && alive === 'publisher.welcome', {
       ...p14, afterKickAndRemoval: alive,
     });

@@ -67,7 +67,7 @@ test("CAU-DIAG-01 报告含这段云端对话的过程、出错原因、客户�
   assert.equal(r.client.mode, "online");
   assert.equal(r.client.codeVersion, "abcdef123456");
   assert.equal(r.client.viewport.width, 1440);
-  // 第一轮:用户消息、两次工具调用及结果、补渲失败、文字、出错原因
+  // 第一轮:用户消息、两次工具调用及结果、预渲染重试失败、文字、出错原因
   const r1 = r.rounds[0];
   assert.equal(r1.round, 1);
   assert.match(r1.user, /把标题改成你好/);

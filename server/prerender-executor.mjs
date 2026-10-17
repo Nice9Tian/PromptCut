@@ -289,7 +289,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
         say('executor.list-streams-off', { version: id, sparse: false });
       }
     }
-    // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
+    // c10a 契约第 17 节:预渲染重试计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
     // C10 契约第 18 节第 9 条:在线页面的清单计划同一条路(清单是页面自己判重的片段)
     // 只为导出的清单计划(`export-frames.mjs`)不进预渲染集合:它只出导出位图任务,预览不用它的任何结果
     if (isListPlan(planTask) && !isExportOnlyPlan(planTask) && typeof pipeline.addBackfill === 'function') {
@@ -454,7 +454,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     say('project');
     const { entry, drifted } = await contextFor(task, signal);
     const control = matchControl(task, entry, { drifted });
-    // c10a 契约第 17 节:补渲细任务的片段在本机可能判轻(不在预渲染集合里,管线会跳过它);按任务把它记成补渲再渲。
+    // c10a 契约第 17 节:预渲染重试细任务的片段在本机可能判轻(不在预渲染集合里,管线会跳过它);按任务把它记成预渲染重试再渲。
     // 切分它的 plan 可能是别的进程、或本进程重启之前认领的,这里不能指望 plan() 已经记过。
     // 清单计划(在线页面、云端 Agent 服务发的)切出的细任务同理:清单是发布方判的,本机重启后、或换了一版算时都没记过
     if ((task.priority === 'backfill' || isListWork(task)) && typeof pipeline.addBackfill === 'function' && !pipeline.prerenderPicked(entry, control.clipId)) {

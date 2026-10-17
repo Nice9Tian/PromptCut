@@ -70,7 +70,7 @@ test('D1 浏览器可做的卡：每段两份（切分方指纹、浏览器指�
   assert.deepEqual(seg(own).map((s) => s[2]), [50, 10]);
 });
 
-test('D1 浏览器做不了的卡只出切分方一份、不带 dual：heavy、本地档、非独立、用户卡、图卡、改过源码、锁在第三种环境上', gateOpts(splitDualGate()), () => {
+test('D1 浏览器做不了的卡只出切分方一份、不带 dual：heavy、本地档、非独立、用户卡、素材效果卡、改过源码、锁在第三种环境上', gateOpts(splitDualGate()), () => {
   const cardPlan = [
     control('heavy', { capabilities: { compositing: 'independent', canvasHeavy: true } }),
     control('srcdep', { compositing: 'sourceDependent', capabilities: { compositing: 'sourceDependent' } }),

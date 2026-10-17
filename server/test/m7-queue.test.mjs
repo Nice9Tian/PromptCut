@@ -110,12 +110,12 @@ test('M7Q-D1-S2 浏览器可做的卡：先出自己的一份、再出浏览器�
   assert.deepEqual(own.map((t) => t.priority), browser.map((t) => t.priority));
 });
 
-test('M7Q-D1-S3 浏览器做不了的卡只出自己那一份：本地档、非独立卡、用户卡、图卡、改过源码、重、只在发布方本机的素材', () => {
+test('M7Q-D1-S3 浏览器做不了的卡只出自己那一份：本地档、非独立卡、用户卡、素材效果卡、改过源码、重、只在发布方本机的素材', () => {
   const cases = [
     ['本地档', control({ clipId: 'l', contentKey: 'ck-l', tier: 'local', capabilities: { frameMode: 'stateful', compositing: 'belowDependent' } }), {}],
     ['非独立卡（sourceDependent）', control({ clipId: 's', contentKey: 'ck-s', capabilities: { frameMode: 'stateful', compositing: 'sourceDependent' } }), { weightOf: () => ({ class: 'medium', estMs: null }) }],
     ['用户卡', control({ clipId: 'u', contentKey: 'ck-u' }), { isUserCard: () => true }],
-    ['图卡', control({ clipId: 'g', contentKey: 'ck-g' }), { isGraphCard: () => true }],
+    ['素材效果卡', control({ clipId: 'g', contentKey: 'ck-g' }), { isGraphCard: () => true }],
     ['改过源码', control({ clipId: 'c', contentKey: 'ck-c', cardId: 'title' }), { cardSourceVersions: { title: 'user:abc' } }],
     ['重', control({ clipId: 'h', contentKey: 'ck-h', capabilities: { frameMode: 'stateful', compositing: 'independent', canvasHeavy: true } }), {}],
     ['只在发布方本机的素材', control({ clipId: 'm', contentKey: 'ck-m' }), { localMedia: 'pc-1', usesLocalMedia: () => true }],
@@ -916,10 +916,10 @@ test('M7Q-PICK-1 锚帧段（50）与普通段（10）同时可认领：pickCand
   assert.equal(pickCandidate(rest, { k: 4, random: () => 0.99 }).id, 'h3:60');
 });
 
-test('M7Q-PICK-2 同一档里计划先于细任务（AGENT-m7-race）：积压的锚帧段、普通段都排在后来发布的清单计划之后；补渲计划仍在全部 normal 之后', async () => {
+test('M7Q-PICK-2 同一档里计划先于细任务（AGENT-m7-race）：积压的锚帧段、普通段都排在后来发布的清单计划之后；预渲染重试计划仍在全部 normal 之后', async () => {
   const { pickCandidate, rankCandidates } = await import('../render-node/pick.mjs');
   const t = (id, priority, publishedAt, kind = 'snapshot') => ({ id, kind, priority, source: { projectId: 'p1', publishedAt } });
-  // pc 手里积压着接手来的重卡段（50、10），之后页面为新加的卡发布清单计划（'normal'，名次 0），还有一份补渲计划
+  // pc 手里积压着接手来的重卡段（50、10），之后页面为新加的卡发布清单计划（'normal'，名次 0），还有一份预渲染重试计划
   const backlog = [t('z1:0', 50, 1), t('h1:60', 10, 2), t('h2:120', 10, 3), t('h3:180', 10, 4), t('z1:60', 10, 5)];
   const plan = t('plan:p@5#clips:w', 'normal', 9, 'plan');
   const backfillPlan = t('plan:p@5#backfill:w', 'backfill', 8, 'plan');
@@ -932,6 +932,6 @@ test('M7Q-PICK-2 同一档里计划先于细任务（AGENT-m7-race）：积压�
   // 两份 normal 计划：照发布先后；只在计划里挑，不混进细任务
   const plan4 = t('plan:p@4#clips:x', 'normal', 7, 'plan');
   assert.deepEqual(new Set([0, 0.99].map((r) => pickCandidate([...backlog, plan, plan4], { k: 4, random: () => r }).id)), new Set([plan4.id, plan.id]));
-  // normal 都没了才轮到补渲：补渲计划先于补渲细任务
+  // normal 都没了才轮到预渲染重试：预渲染重试计划先于预渲染重试细任务
   assert.equal(pickCandidate([backfillFine, backfillPlan], { k: 4, random: () => 0.99 }).id, backfillPlan.id);
 });

@@ -363,7 +363,7 @@ function demoteReady(project: Project, clipId: string, globalFrame: number, loca
 }
 
 /**
- * 在线浏览器模式下本页运行不了的卡（图卡、运行不了的用户卡，`placeholderHost.needsLocalPc`；C10 契约第 9 节，2026-10-06 起本页能运行的用户卡不算）：
+ * 在线浏览器模式下本页运行不了的卡（素材效果卡、运行不了的用户卡，`placeholderHost.needsLocalPc`；C10 契约第 9 节，2026-10-06 起本页能运行的用户卡不算）：
  * 有预渲染结果就照贴，与内置卡相同。它们在这台设备上**一律按重卡**：不管分派表怎么判（表还没算出来、旧记录判轻），
  * 播放中抑制；停下时不追（没有组件可追），所以暂停态的「已精确」（`settled`）对它们不成立，一直进 scrub 贴流或显示占位。
  * 判法与舞台同一个（`localOnlyClipIds`）；开关是 `setOnlineBrowserMode`，桌面恒为关，这里恒为空集合。

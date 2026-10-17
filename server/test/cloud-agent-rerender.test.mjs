@@ -1,9 +1,9 @@
 /**
- * 云端 Agent 的补渲在「项目一直往前走」时不以失败收场(契约 `docs/plan/cloud-agent-contract.md` 第 16.4 节、
+ * 云端 Agent 的预渲染重试在「项目一直往前走」时不以失败收场(契约 `docs/plan/cloud-agent-contract.md` 第 16.4 节、
  * `docs/plan/render-queue-contract.md` J.15;用例 CA-RR-01～CA-RR-07)。
  * 跑:npm test -- server/test/cloud-agent-rerender.test.mjs(不起浏览器、不开端口)
  *
- * 2026-10-06 的缺陷:云端 Agent 的写入之间隔得比补渲的防抖长时,Agent 服务每写一次就发一个指着当时版本的清单计划;项目接着往前走,
+ * 2026-10-06 的缺陷:云端 Agent 的写入之间隔得比预渲染重试的防抖长时,Agent 服务每写一次就发一个指着当时版本的清单计划;项目接着往前走,
  * 有真身的项目文档服务只给得出当前版本,渲染节点取不到旧版本的项目快照,计划与细任务以「文档服务上没有项目快照」失败。
  *
  *   CA-RR-01  间隔长的多次写入:每次写入各发一个计划,其间项目继续往前走(计划被认领时已经不是它指的那一版、细任务排到时内容已换)。
@@ -75,7 +75,7 @@ const taskIdsFor = (clip) => {
 /* ------------------------------------------------------------------ 管线替身(执行器是真的) */
 
 /**
- * `FramePipeline` 里执行器用到的那几样。预渲染集合起初是空的:只有记成补渲的片段才渲得出东西(与真管线对「本机判轻的片段」的处理相同:
+ * `FramePipeline` 里执行器用到的那几样。预渲染集合起初是空的:只有记成预渲染重试的片段才渲得出东西(与真管线对「本机判轻的片段」的处理相同:
  * 不在集合里的不产帧,产物库就收不全)。
  */
 function fakePipeline(world) {
@@ -115,7 +115,7 @@ function fakePipeline(world) {
   };
 }
 
-/* ------------------------------------------------------------------ 一整套:队列、渲染节点、Agent 服务的补渲 */
+/* ------------------------------------------------------------------ 一整套:队列、渲染节点、Agent 服务的预渲染重试 */
 
 function createWorld(t, { clips, reopenMs = 15 }) {
   const clock = createTimerClock();
@@ -175,7 +175,7 @@ function createWorld(t, { clips, reopenMs = 15 }) {
   /** 进程被杀:连接断了,手里的认领不放回(等队列按宽限期收回) */
   world.killHost = (record) => { record.dead = true; record.endpoint?.close(); };
 
-  /* ---- Agent 服务一侧:真的补渲与发布通道,WebSocket 换成接到同一个队列上的替身 */
+  /* ---- Agent 服务一侧:真的预渲染重试与发布通道,WebSocket 换成接到同一个队列上的替身 */
   let wsSeq = 0;
   class BridgeWS {
     constructor() {
@@ -253,7 +253,7 @@ function createWorld(t, { clips, reopenMs = 15 }) {
     assert.deepEqual(failedMsgs.map((e) => [e.connId, e.message.id, e.message.error]), [], '队列没有给任何人发过失败通知(作废的不算)');
     assert.deepEqual(world.nodeEvents.filter((e) => e.type === 'failed').map((e) => [e.id, e.error]), [], '渲染节点没有一个任务记成失败');
     assert.equal(world.hosts.reduce((n, h) => n + (h.host.nodes()[0]?.failed ?? 0), 0), 0, '渲染节点诊断里的 failed 是 0');
-    assert.deepEqual(world.events.filter((e) => e.type === 'render' && (e.state === 'failed' || e.state === 'unavailable')), [], '对话记录里没有补渲失败');
+    assert.deepEqual(world.events.filter((e) => e.type === 'render' && (e.state === 'failed' || e.state === 'unavailable')), [], '对话记录里没有预渲染重试失败');
     assert.deepEqual(world.started.filter((x) => !x.current).map((x) => [x.clipId, x.byRev, x.headRev]), [], '渲染节点没有为已被新版本取代的内容开工');
     assert.deepEqual(lb.errors().map((e) => String(e?.message ?? e)), [], '消息处理没有抛错');
   };
@@ -332,7 +332,7 @@ test('CA-RR-01 间隔长的多次写入:每次写入各发一个计划、项目�
   assert.equal(w.hosts[0].host.nodes()[0].superseded, w.nodeEvents.filter((e) => e.type === 'superseded').length, '诊断里的 superseded 计数');
   w.assertNothingFailed();
   w.assertFinalRendered(['a', 'b', 'c']);
-  assert.equal(w.renderStates().at(-1), 'done', '对话记录的补渲结局是完成');
+  assert.equal(w.renderStates().at(-1), 'done', '对话记录的预渲染重试结局是完成');
   assert.equal(w.renderStates().filter((s) => s === 'published').length, 8, '8 次写入各发了一次计划(中途就开始渲,不等一轮结束)');
   assert.equal(w.layerMaps.at(-1).rev, 9, '最后写的层表是最后一版的');
   const last = new Set(w.layerMaps.at(-1).clips);
@@ -409,7 +409,7 @@ test('CA-RR-03 发布方断线重连重发:断开期间细任务做完、过了�
   await w.pump(() => w.outcomes().at(-1) === 'done' && w.idle(), { what: '重连重发后收尾' });
   assert.ok(w.sockets.length > sockets, '发布通道重开过');
   assert.equal(w.task(plan2)?.state, 'done');
-  assert.ok(w.lb.log().some((e) => e.dir === 'in' && e.message.type === 'task.publish' && e.message.tasks?.[0]?.id?.includes('#backfill:')), '重发后发现计划已经切完:改发补渲档的同一份清单核对一次');
+  assert.ok(w.lb.log().some((e) => e.dir === 'in' && e.message.type === 'task.publish' && e.message.tasks?.[0]?.id?.includes('#backfill:')), '重发后发现计划已经切完:改发预渲染重试档的同一份清单核对一次');
   assert.deepEqual(h.pipeline.planned, [2, 3], '核对的那一次切分:第 2 版已经取不到,按当前版本(第 3 版)切');
   assert.deepEqual(w.outcomes(), ['published', 'done'], '旧计划对上了:完成,不是失败');
   w.assertNothingFailed();
@@ -457,7 +457,7 @@ test('CA-RR-04 渲染节点中途重启:收回的那一段由新进程接着做,
   assert.deepEqual([w.task(ids[other])?.state, w.task(ids[other])?.lastError], ['failed', SUPERSEDED], '内容换了的那一段:作废');
   assert.equal(w.rendered.some((x) => x.clipId === other), false, '没有为它开工');
   assert.equal(h2.host.nodes()[0].superseded, 1);
-  assert.equal(w.events.findLast((e) => e.type === 'render').state, 'done', '对话记录的补渲结局是完成');
+  assert.equal(w.events.findLast((e) => e.type === 'render').state, 'done', '对话记录的预渲染重试结局是完成');
   w.assertNothingFailed();
 
   // Agent 再写那一段:最后一版全部渲完
@@ -710,7 +710,7 @@ test('CA-RR-07 发布通道:细任务作废不算失败;计划有了结局就退
   assert.equal(seen.done.length, doneBefore, 'j1 的作废是旧账:不算有了结局');
   await tickMs();
   const verify = ws.sent.filter((m) => m.type === 'task.publish').at(-1).tasks[0];
-  assert.ok(verify.id.includes('#backfill:') && verify.source.projectRev === 12, '再核对一次:改发补渲档的同一份清单');
+  assert.ok(verify.id.includes('#backfill:') && verify.source.projectRev === 12, '再核对一次:改发预渲染重试档的同一份清单');
   ws.reply({ type: 'task.done', id: verify.id, result: { derived: ['k1'] } });
   assert.deepEqual(seen.done.at(-1), { id: planK.id }, '重切的清单里已经没有 j1:完成');
   assert.equal(seen.fail.length, 1, '从头到尾只有那一次真失败');

@@ -1,7 +1,7 @@
 /**
  * 父页对舞台消息的校验(契约 `docs/plan/online-card-exec-contract.md` 第 3.2 节「协议面」)。
  *
- * 跨源舞台里会执行用户卡与图卡的代码,**舞台发来的一切当不可信输入**:只认 `event.source` 是自己挂的那个舞台、`event.origin`
+ * 跨源舞台里会执行用户卡与素材效果卡的代码,**舞台发来的一切当不可信输入**:只认 `event.source` 是自己挂的那个舞台、`event.origin`
  * 是运行配置里那个舞台源的消息(来源在 `stageRpc.ts` 的客户端与 `Preview.tsx` 里核);内容在这里按形状校验,数字钳到合理范围,
  * 认不出的类型、形状不对的一律丢弃。父页从不经 RPC 回传凭证或票据,也不把舞台交来的 HTML 放进自己的活文档。
  *
@@ -144,7 +144,7 @@ export function sanitizeStageEvent(d: unknown, opts: { maxSec?: number } = {}): 
       return out;
     }
     case "card-states": {
-      // 在线执行用户卡与图卡:每张卡的运行状态。状态名只认契约第 8 节那十种,文字截短;图形能力只认名单上的几种
+      // 在线执行用户卡与素材效果卡:每张卡的运行状态。状态名只认契约第 8 节那十种,文字截短;图形能力只认名单上的几种
       const states = runStatePairs(d.states);
       if (!states) return null;
       const graph = typeof d.graph === "string" && GRAPH_CAPS.has(d.graph) ? d.graph : null;

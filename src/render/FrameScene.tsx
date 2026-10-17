@@ -213,7 +213,7 @@ export function FrameScene({
         return ct >= clip.start && ct < clip.end;
       };
   /*
-   * 图卡接管的素材段、带像素映射的素材段都不进 `VideoTrack`:前者由 `Stage` 里的图卡画,
+   * 素材效果卡接管的素材段、带像素映射的素材段都不进 `VideoTrack`:前者由 `Stage` 里的素材效果卡画,
    * 后者由 `PixelMappedMedia` 画 —— 不滤掉的话同一段素材会被画两遍。
    * **过滤必须下推进 `nextVideoLayerAfter`**(它每条序列只回一段,事后滤等于这条序列没有 `next`)。
    */

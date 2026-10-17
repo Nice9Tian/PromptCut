@@ -80,7 +80,7 @@ export const EXCLUDED_PROBE_FILES = {
   'stateful-seek-cost-probe.mjs': '有状态的卡在在线后台舞台里跳到第 N 帧要多久的实验(见 render-standard.md),要先出在线构建,只记录耗时',
   'lottie-renderer-probe.mjs': 'Lottie 用 SVG 画和用画布画的耗时与画面对比实验(见 render-standard.md),只记录',
   'snapshot-diff-apply-probe.mjs': '快照「结构一份加每帧差异」的贴图耗时实验(见 render-standard.md),只记录耗时',
-  'audio-determine-probe.mjs': '音频图卡判重方案的前提实测(历史)',
+  'audio-determine-probe.mjs': '音频素材效果卡判重方案的前提实测(历史)',
   'svg-url-serialize-probe.mjs': '序列化可行性探针(历史)',
   'inherited-props-probe.mjs': '属性表对账工具(历史)',
   'snapshot-size-probe.mjs': '快照体积实测(历史)',
@@ -273,7 +273,7 @@ const OLD_ITEMS = [
     pass: { exit: 0, must: ['^PASS$'] }, timing: 'record', timingNote: '同 GR-9', timeoutMin: 20,
   },
   {
-    id: 'GR-11', name: 'video-source-cadence-probe(视频取帧节奏)', category: 'G0-R', level: 'local', taskRef: '主计划 G0-R(改到取帧、解码、图卡视频源时另跑)',
+    id: 'GR-11', name: 'video-source-cadence-probe(视频取帧节奏)', category: 'G0-R', level: 'local', taskRef: '主计划 G0-R(改到取帧、解码、素材效果卡视频源时另跑)',
     tasks: [], covers: ['video-source-cadence-probe.mjs'], cmd: probe('video-source-cadence-probe', ['--port', B]),
     pass: { exit: 0, must: ['"fails":\\s*\\[\\]'] }, timeoutMin: 20,
     known: '上一轮整套里有过一次偶发(紧接最忙的探针之后);已在 claude/cadence-race 修过',
@@ -659,7 +659,7 @@ const OLD_ITEMS = [
     tasks: ['R4', 'R5'], remoteOnly: '只能在新节点上验:对着新节点的在线页面跑 sound-ab-probe 的在线段思路(无头打开、创建者放云端项目、在线普通档合成与导出);见 four-stage-deploy-checklist.md「换在线页面之后的实测」',
   },
 
-  /* ============================== 第二段:在线执行用户卡与图卡 ============================== */
+  /* ============================== 第二段:在线执行用户卡与素材效果卡 ============================== */
   {
     id: 'S2-1', name: '安全验收:越权探测卡读不到凭证与票据、带不走数据(核心项)', category: '第二段', level: 'local', taskRef: '任务书一 第 13、14 条(核心项)',
     tasks: ['R13', 'R14'], needs: ['online-build'], prereq: ['G0-4'], covers: ['online-card-security-probe.mjs'],
@@ -667,27 +667,27 @@ const OLD_ITEMS = [
     cmd: probe('online-card-security-probe', ['--dist', '{dist}', '--base-port', B, '--doc-port', DOC(0), '--asset-port', DOC(1), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 40,
   },
   {
-    id: 'S2-2', name: '功能验收:五张卡(用户画面卡、有声卡、相对导入、视频输入源图卡、音频图卡)', category: '第二段', level: 'local', taskRef: '任务书一 第 15 条',
+    id: 'S2-2', name: '功能验收:五张卡(用户画面卡、有声卡、相对导入、视频输入源素材效果卡、音频素材效果卡)', category: '第二段', level: 'local', taskRef: '任务书一 第 15 条',
     tasks: ['R15'], needs: ['online-build'], prereq: ['G0-4'], covers: ['online-card-exec-probe.mjs'],
     requires: ['scripts/probes/online-card-exec-probe.mjs'],
     cmd: probe('online-card-exec-probe', ['--dist', '{dist}', '--base-port', B, '--doc-port', DOC(0), '--asset-port', DOC(1), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 40,
     timing: 'record', timingNote: 'E8 写进新源码到舞台换成新版的用时(原门槛 ≤ 10 秒)',
   },
   {
-    id: 'S2-3', name: '图卡在线执行(GPU 执行、素材取帧、图形能力不够的退回)', category: '第二段', level: 'local', taskRef: '任务书一 第 15 条(图卡)',
+    id: 'S2-3', name: '素材效果卡在线执行(GPU 执行、素材取帧、图形能力不够的退回)', category: '第二段', level: 'local', taskRef: '任务书一 第 15 条(素材效果卡)',
     tasks: ['R15'], needs: ['online-build'], prereq: ['G0-4'], covers: ['online-card-graph-probe.mjs'],
     requires: ['scripts/probes/online-card-graph-probe.mjs'],
     cmd: probe('online-card-graph-probe', ['--dist', '{dist}', '--base-port', B, '--doc-port', DOC(2), '--asset-port', DOC(3), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
   },
   {
-    id: 'S2-4', name: '声音线程:在线执行用户卡、图卡的 audio()', category: '第二段', level: 'local', taskRef: '任务书一 第 15 条(声音)',
+    id: 'S2-4', name: '声音线程:在线执行用户卡、素材效果卡的 audio()', category: '第二段', level: 'local', taskRef: '任务书一 第 15 条(声音)',
     tasks: ['R15'], needs: ['online-build'], prereq: ['G0-4'], covers: ['online-card-sound-probe.mjs'],
     requires: ['scripts/probes/online-card-sound-probe.mjs'],
     cmd: probe('online-card-sound-probe', ['--port', B, '--phases', 'dev,online', '--dist', '{dist}', '--online-base', '5693', '--doc-port', DOC(4), '--asset-port', DOC(5), '--out', '{item}']), pass: { exit: 0 }, timeoutMin: 30,
     timing: 'record', timingNote: 'S6 死循环的声音代码被掐断的用时(原上界 < 8 秒;不早于 950 ms 的下界照旧是通过条件)',
   },
   {
-    id: 'S2-5', name: '纯浏览器节点认领用户卡与图卡任务', category: '第二段', level: 'local', taskRef: '任务书一 第 16 条',
+    id: 'S2-5', name: '纯浏览器节点认领用户卡与素材效果卡任务', category: '第二段', level: 'local', taskRef: '任务书一 第 16 条',
     tasks: ['R16'], needs: ['online-build'], prereq: ['G0-4'], covers: ['online-card-node-probe.mjs'],
     requires: ['scripts/probes/online-card-node-probe.mjs'],
     cmd: probe('online-card-node-probe', ['--dist', '{dist}', '--base-port', B, '--out', '{item}', '--strict']), pass: { exit: 0 }, timeoutMin: 30,
@@ -736,7 +736,7 @@ const OLD_ITEMS = [
 
   /* ============================== 第三段:云节点渲染服务 ============================== */
   {
-    id: 'S3-1', name: '渲染服务本机整套演练(接活、迟到成员、Agent 补渲、越权被拒、开关、杀进程、上限、负载、删项目)', category: '第三段', level: 'local', taskRef: '任务书一 第 20～23 条(本机能验的部分);「没过怎么办」第三段核心项',
+    id: 'S3-1', name: '渲染服务本机整套演练(接活、迟到成员、Agent 预渲染重试、越权被拒、开关、杀进程、上限、负载、删项目)', category: '第三段', level: 'local', taskRef: '任务书一 第 20～23 条(本机能验的部分);「没过怎么办」第三段核心项',
     tasks: ['R20', 'R21', 'R22', 'R23'], covers: ['hosted-render-probe.mjs'], requires: ['scripts/probes/hosted-render-probe.mjs'],
     cmd: probe('hosted-render-probe', ['--base-port', B, '--doc-port', DOC(0), '--asset-port', DOC(1)]), pass: { exit: 0 }, timeoutMin: 60,
     timing: 'record', timingNote: '渲染服务连进来 / 连回来 / 断开的用时(原门槛各 ≤ 5 秒)、load 步渲染进行中与空闲时文档服务 /healthz 往返时延(原门槛 p95 < 500 ms)',
@@ -766,7 +766,7 @@ const OLD_ITEMS = [
     tasks: ['R22'], remoteOnly: '只能在新节点上做:见 four-stage-deploy-checklist.md「部署渲染服务」;等写入停止再重启托管服务,重启前后核对各项目版本号不变并记中断时长',
   },
   {
-    id: 'S3-r2', name: '新节点实测:低内存档补渲被云节点认领、产物贴上', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 1 点',
+    id: 'S3-r2', name: '新节点实测:低内存档预渲染重试被云节点认领、产物贴上', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 1 点',
     tasks: ['R23'], remoteOnly: '只能在新节点上验:手机仿真(c10-browser-probe --site 的低内存档思路 / lowmem-online-probe)打开含重卡的测试项目,看渲染服务认领与贴上;测试房间与凭证验完删',
   },
   {
@@ -774,7 +774,7 @@ const OLD_ITEMS = [
     tasks: ['R23'], remoteOnly: '只能在新节点上验:c10-browser-probe --site <新节点地址> --no-host(不起外部主机,看云节点接活)',
   },
   {
-    id: 'S3-r4', name: '新节点实测:用户卡与图卡的任务它能渲,越权探测卡在隔离工作进程里读不到', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 3 点(「关掉软件照常运转」的一部分,不因缺夹具而退掉)',
+    id: 'S3-r4', name: '新节点实测:用户卡与素材效果卡的任务它能渲,越权探测卡在隔离工作进程里读不到', category: '第三段', level: 'network', taskRef: '任务书一 第 23 条第 3 点(「关掉软件照常运转」的一部分,不因缺夹具而退掉)',
     tasks: ['R23'], remoteOnly: '只能在新节点上验:把越权探测卡(scripts/probes/fixtures/online-card-attacks/)放进测试项目,发清单计划让渲染服务渲,断言读不到别的项目的内容与素材、节点上的凭证与令牌、工作进程自己的本机接口、工作目录以外的文件',
   },
   {
@@ -836,7 +836,7 @@ const OLD_ITEMS = [
     timing: 'record', timingNote: '点「停止」到停下的用时(原门槛 < 5 秒)、各步用时',
   },
   {
-    id: 'S4-7', name: '第四段的单测(服务、鉴权、运行、补渲、接线守门)', category: '第四段', level: 'local', taskRef: '任务书二 第 3、11 条',
+    id: 'S4-7', name: '第四段的单测(服务、鉴权、运行、预渲染重试、接线守门)', category: '第四段', level: 'local', taskRef: '任务书二 第 3、11 条',
     tasks: ['C3', 'C11'], requires: ['server/test/cloud-agent-service.test.mjs'],
     cmd: [node, '--experimental-test-module-mocks', '--test-global-setup=server/test/global-setup.mjs', '--test', 'server/test/cloud-agent-*.test.mjs'],
     pass: { exit: 0, metrics: { fail: 'ℹ fail (\\d+)' }, limits: { fail: { eq: 0 } } }, timeoutMin: 15,

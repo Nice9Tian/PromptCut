@@ -374,7 +374,7 @@ export interface OnlineSnapshotDeps {
 }
 
 /**
- * 层过期(输入签名对不上,stale-layer)之后,多久之内当「新结果在路上」:这段时间里父页不确认缺料(用户卡、图卡显示沙漏、
+ * 层过期(输入签名对不上,stale-layer)之后,多久之内当「新结果在路上」:这段时间里父页不确认缺料(用户卡、素材效果卡显示沙漏、
  * 时间轴不出徽标),等渲染节点按新输入重写层表;过了还没等到就和「层表里没有这一层」一样确认缺料(图标、徽标)。三级数字。
  */
 export const STALE_AWAIT_MS = 15_000;
@@ -1086,7 +1086,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   /**
-   * 层表里列着的片段(c10a 契约第 17 节「补渲」按清单判产物:不在层表里的判重层,素材服务里就没有它的产物)。
+   * 层表里列着的片段(c10a 契约第 17 节「预渲染重试」按清单判产物:不在层表里的判重层,素材服务里就没有它的产物)。
    * 层表还没取回来过回 null(判不了);内容库里没有层表回空集合(一层都没有)。
    */
   layerClipIds(): ReadonlySet<string> | null {

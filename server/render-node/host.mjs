@@ -29,7 +29,7 @@
  *
  * 节点侧过滤 `filter.mjs` 规则 6:`profile: 'host'` 的节点见到不带片段清单的 `plan`(桌面发布方的)直接跳过,
  * 不发认领(契约第 3、4 节),那种 `plan` 留给发布方自己的节点。带片段清单的 `plan`(在线页面的清单计划、低内存档的
- * 补渲计划)主机照常认领,用自己的指纹切分、发布细任务(C10 契约第 18 节第 9 条,对 M6c X4 的修改)。
+ * 预渲染重试计划)主机照常认领,用自己的指纹切分、发布细任务(C10 契约第 18 节第 9 条,对 M6c X4 的修改)。
  * 主机自己不发布 `plan`。
  *
  * # 看得见哪些任务(M6c X3)
@@ -106,14 +106,14 @@ export const QUOTA_PAUSE_MS = 10 * 60_000;
  * 托管方渲染服务的工作进程报的能力位(`docs/plan/hosted-render-contract.md` 第 5、7.5 节),集中在这一处:
  *   - `userCards`:只有开着卡片同步的工作进程才报 true。常驻工作进程绝不同步任何项目的卡(它不执行项目带来的代码),报 false,
  *     要用户卡的任务它不认领;按项目隔离的工作进程(方案 A)开着同步,报 true;
- *   - `graphCards`:false。第二段(在线执行用户卡与图卡)合流后由主会话对这一位;
+ *   - `graphCards`:false。第二段(在线执行用户卡与素材效果卡)合流后由主会话对这一位;
  *   - 其余能力位(`streams`、`transcode`)按预渲染管线的实测值,不在这里改。
  * @param {object} base 预渲染管线实测出的能力(`nodeCapabilities`)
  * @param {{ cardSync: boolean }} o 这个工作进程开没开卡片同步
  *
- * 图卡如实写:托管方的渲染节点**现在不渲图卡**。预渲染管线里 PC 节点与独立渲染主机报的都是 `graphCards: false`
+ * 素材效果卡如实写:托管方的渲染节点**现在不渲素材效果卡**。预渲染管线里 PC 节点与独立渲染主机报的都是 `graphCards: false`
  * (`vite-plugin-frames.ts` 的 `nodeCapabilities`),切分时写了 `requires.graphCards: true` 的任务谁都不认领——
- * 这是现有规则,不是托管方这一侧的限制;隔离工作进程照此报 false。哪天独立渲染主机能渲图卡了,这里跟着改一处即可。
+ * 这是现有规则,不是托管方这一侧的限制;隔离工作进程照此报 false。哪天独立渲染主机能渲素材效果卡了,这里跟着改一处即可。
  */
 export function hostedRenderCapabilities(base, { cardSync }) {
   return { ...base, userCards: cardSync === true, graphCards: false };

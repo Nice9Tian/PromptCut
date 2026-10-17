@@ -1,9 +1,9 @@
 /**
- * c10a 契约第 17 节「补渲」页面一侧的单测(编号 C10A-L17-B…):低内存档发现判重的层在素材服务里没有产物(按清单判:
+ * c10a 契约第 17 节「预渲染重试」页面一侧的单测(编号 C10A-L17-B…):低内存档发现判重的层在素材服务里没有产物(按清单判:
  * 不在渲染节点写的层表里)时,向队列发布带片段清单、标 backfill 的计划任务;同一批还在等的不重发;页面只发布,不认领。
  *
  *   B1 任务形状:与队列侧 `backfillPlanTaskOf` 逐字段相同,队列的入站校验收它
- *   B2 缺产物的层:全部可见卡片段减去层表里的;用户卡 / 图卡照样在内(2026-09-29 用户改语义,由桌面版等渲染节点渲);
+ *   B2 缺产物的层:全部可见卡片段减去层表里的;用户卡 / 素材效果卡照样在内(2026-09-29 用户改语义,由桌面版等渲染节点渲);
  *      素材段、隐藏轨道不算
  *   B3 不重发:还在等的片段不再发;新缺的单独成一批;到了的忘掉;过了重发时限或换了版本才再发
  *   B4 只发布不认领:发出去的只有 publisher.hello(一次)与 task.publish;发失败的不算在等,下一轮重发
@@ -19,7 +19,7 @@ import { backfillPlanTaskOf, parseInbound } from "../../server/render-queue/mess
 const B = await import(srcUrl("editor/lowMemoryBackfill.ts"));
 const { OnlineSnapshotSource, LAYER_MAP_PREFIX } = await import(srcUrl("render/snapshotSource.ts"));
 
-test("C10A-L17-B1 补渲计划任务的形状与队列侧逐字段相同,队列的入站校验收它", () => {
+test("C10A-L17-B1 预渲染重试计划任务的形状与队列侧逐字段相同,队列的入站校验收它", () => {
   for (const clips of [["c1"], ["b", "a", "a"], ["clip-3", "clip-10", "clip-2"]]) {
     const page = B.backfillPlanTask({ projectId: "proj-1", projectRev: 12, clips });
     const server = backfillPlanTaskOf({ projectId: "proj-1", projectRev: 12, clips });
@@ -32,7 +32,7 @@ test("C10A-L17-B1 补渲计划任务的形状与队列侧逐字段相同,队列�
 const project = (tracks) => ({ tracks });
 const clip = (id, extra = {}) => ({ id, cardId: `card-${id}`, start: 0, end: 4, params: {}, ...extra });
 
-test("C10A-L17-B2 缺产物的层:所有可见卡片段减去层表里的,用户卡 / 图卡(含同步来的)照样在内;素材段、隐藏轨道不算", () => {
+test("C10A-L17-B2 缺产物的层:所有可见卡片段减去层表里的,用户卡 / 素材效果卡(含同步来的)照样在内;素材段、隐藏轨道不算", () => {
   const p = project([
     { id: "t1", clips: [clip("heavy"), clip("light"), clip("user", { cardId: "my-user-card" }), clip("graph", { cardId: "graph-card" }),
       clip("synced", { cardId: "synced-user-card" })] },
@@ -41,7 +41,7 @@ test("C10A-L17-B2 缺产物的层:所有可见卡片段减去层表里的,用户
   ]);
   assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy"]) }), ["graph", "light", "synced", "user"]);
   assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set() }), ["graph", "heavy", "light", "synced", "user"]);
-  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy", "light", "user", "graph"]) }), ["synced"], "同步卡没有层:进补渲清单");
+  assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy", "light", "user", "graph"]) }), ["synced"], "同步卡没有层:进预渲染重试清单");
   assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy", "light", "user", "graph", "synced"]) }), []);
   // 判定的表(界限搜索的结果)里这台设备跑不了的卡一律判重(forcedHeavy):没有产物就进清单
   assert.deepEqual(B.missingLayers({ project: p, layerClipIds: new Set(["heavy"]), heavy: new Set(["heavy", "user", "graph", "synced"]) }), ["graph", "synced", "user"]);

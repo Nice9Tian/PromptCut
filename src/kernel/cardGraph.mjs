@@ -66,7 +66,7 @@ export function validateCardGraph(raw) {
   }
   /*
    * 指向已删片段的输入(`@clip/<id>/…`)是「片段被删了」,不是图写错了:丢边、记名字,
-   * 不 fail —— 否则「给素材段套滤镜图卡再删掉这段」之后整份图算不出来,所有图卡陪葬。
+   * 不 fail —— 否则「给素材段套滤镜素材效果卡再删掉这段」之后整份图算不出来,所有素材效果卡陪葬。
    *
    * 丢边必须在下面算 dependencies **之前**做:只在循环里 continue 的话 remaining
    * 已经按含悬空边的数量定死,缺失节点永远不进任何 level,最后撞 'dependency cycle'。
@@ -107,13 +107,13 @@ export function validateCardGraph(raw) {
   return { nodes: [...nodes.values()], outputs, levels };
 }
 
-/** Adapt the existing project into the same graph used by 图卡 (graph cards).
+/** Adapt the existing project into the same graph used by 素材效果卡 (graph cards).
  * Existing fields stay readable; native effects are adapter nodes, not a
  * separate public effect-definition or scheduling API.
  */
 export function projectCardGraph(project, getLegacyCard = () => undefined) {
   const nodes = structuredClone(project.cardNodes ?? []), outputs = [];
-  /** 图卡片段(定义来自注册表、写了 card / audio)。判据只看定义,不看节点。 */
+  /** 素材效果卡片段(定义来自注册表、写了 card / audio)。判据只看定义,不看节点。 */
   const audiovisual = def => !!def?.audio && !!(def.card || def.Component);
   const graphCard = id => { const def = getLegacyCard(id); return def && (typeof def.card === 'function' || typeof def.audio === 'function') ? def : undefined; };
   const nodeIds = new Set(nodes.map(node => node.id));
@@ -131,13 +131,13 @@ export function projectCardGraph(project, getLegacyCard = () => undefined) {
         baseId = add({ id: `@clip/${clip.id}/source`, adapter: 'media', media: source, clipId: clip.id,
           offset: clip.mediaOffset ?? 0, inputs: {}, capabilities: { need_prerendering: false, compositing: 'independent' } });
       } else if (clip.cardId && !graphDef) {
-        // 图卡片段**不合成 chrome 基节点**:它的输出就是它自己那个 'card' 节点
+        // 素材效果卡片段**不合成 chrome 基节点**:它的输出就是它自己那个 'card' 节点
         const def = getLegacyCard(clip.cardId);
         baseId = add({ id: `@clip/${clip.id}/source`, adapter: 'chrome', cardId: clip.cardId, clipId: clip.id,
           params: { ...def?.defaults, ...clip.params }, parts: clip.parts, inputs: {}, capabilities: cardCapabilities(def, { ...def?.defaults, ...clip.params }, clip.parts) });
       }
       let nodeId = clip.nodeId || baseId;
-      // 面板拖入 / add_clip 建的图卡片段只有 cardId,就地合成一个渲染用的节点。
+      // 面板拖入 / add_clip 建的素材效果卡片段只有 cardId,就地合成一个渲染用的节点。
       // 这个 id 只给渲染用 —— 片段一旦被 apply_card 碰过就由物化规则换成真节点。
       if (!nodeId && graphDef) nodeId = add({ id: `@clip/${clip.id}/card`, adapter: 'card', cardId: clip.cardId,
         kind: graphDef.kind ?? 'animation', ...(audiovisual(graphDef) ? { embeddedAudio: true, timeOffset: clip.mediaOffset ?? 0 } : {}), inputs: {}, params: { ...graphDef.defaults, ...clip.params } });

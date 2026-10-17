@@ -1,13 +1,13 @@
 /**
  * c10a 契约第 17 节「低内存档的过渡做法」队列一侧的单测(编号 C10A-L17-Q…):
- * 语义 `mechanism/document-service.md`「渲染任务队列」的「优先级」、`mechanism/rendering.md`「低内存档」的补渲。
+ * 语义 `mechanism/document-service.md`「渲染任务队列」的「优先级」、`mechanism/rendering.md`「低内存档」的预渲染重试。
  *
  *   Q1 认领顺序:normal 先于 backfill,同一优先级按发布先后;节点挑候选时 normal 还有就不碰 backfill
- *   Q2 同一个结果键已有任务不另起(补渲计划任务按片段清单定键;重复发布只合并)
+ *   Q2 同一个结果键已有任务不另起(预渲染重试计划任务按片段清单定键;重复发布只合并)
  *   Q3 已有的是 backfill 而又有人按 normal 发布:升为 normal(节点视图收到新的 task.opened);反过来不降
- *   Q4 旧客户端:不带 priority / 带整数照旧按 normal;补渲计划任务的形状校验
- *   Q5 认领补渲计划任务的节点:清单里的片段当重卡切细任务,细任务标 backfill、不切流
- *   Q6 管线:补渲登记按「项目 + 内容身份」并进预渲染集合,普通计划与轨道流不带它们
+ *   Q4 旧客户端:不带 priority / 带整数照旧按 normal;预渲染重试计划任务的形状校验
+ *   Q5 认领预渲染重试计划任务的节点:清单里的片段当重卡切细任务,细任务标 backfill、不切流
+ *   Q6 管线:预渲染重试登记按「项目 + 内容身份」并进预渲染集合,普通计划与轨道流不带它们
  *
  * 跑:node --test server/test/c10a-l17-queue.test.mjs
  */
@@ -80,7 +80,7 @@ test('C10A-L17-Q1 认领顺序:normal 先于 backfill,同一优先级按发布�
   assert.deepEqual(order, ['n1', 'n2', 'n3', 'b1', 'b2']);
 });
 
-test('C10A-L17-Q2 同一个结果键已有任务不另起:细任务重复发布只合并;补渲计划任务按片段清单定键', () => {
+test('C10A-L17-Q2 同一个结果键已有任务不另起:细任务重复发布只合并;预渲染重试计划任务按片段清单定键', () => {
   const r = rig();
   const first = r.publish([fineTask('k1', 'backfill')]);
   assert.equal(first.results[0].created, true);
@@ -88,7 +88,7 @@ test('C10A-L17-Q2 同一个结果键已有任务不另起:细任务重复发布�
   assert.equal(again.results[0].created, false);
   assert.equal(r.q.describe().tasks.length, 1);
 
-  // 补渲计划任务:同一份清单(顺序、重复不影响)同一个键;不同清单不同键;都和普通 plan 的键不同
+  // 预渲染重试计划任务:同一份清单(顺序、重复不影响)同一个键;不同清单不同键;都和普通 plan 的键不同
   const a = backfillPlanTaskOf({ projectId: 'p1', projectRev: 4, clips: ['c2', 'c1', 'c1'] });
   const b = backfillPlanTaskOf({ projectId: 'p1', projectRev: 4, clips: ['c1', 'c2'] });
   const c = backfillPlanTaskOf({ projectId: 'p1', projectRev: 4, clips: ['c1'] });
@@ -130,7 +130,7 @@ test('C10A-L17-Q3 已有的 backfill 被 normal 发布升为 normal;normal 不�
   assert.ok(r.take('node').some((m) => m.type === 'task.claimed' && m.task.priority === 10));
 });
 
-test('C10A-L17-Q4 旧客户端照旧按 normal;priority 与补渲计划任务的形状校验', () => {
+test('C10A-L17-Q4 旧客户端照旧按 normal;priority 与预渲染重试计划任务的形状校验', () => {
   const parse = (task) => parseInbound({ type: 'task.publish', tasks: [task] });
   // 不带 priority → 0;整数原样;'normal' / 'backfill' 原样
   assert.equal(parse(fineTask('a')).body.tasks[0].priority, 0);
@@ -142,7 +142,7 @@ test('C10A-L17-Q4 旧客户端照旧按 normal;priority 与补渲计划任务的
   // 别的字符串、小数都是格式错误
   assert.equal(parse(fineTask('a', 'urgent')).ok, false);
   assert.equal(parse(fineTask('a', 1.5)).ok, false);
-  // 补渲计划任务:必须标 backfill、带非空片段清单、签名合法
+  // 预渲染重试计划任务:必须标 backfill、带非空片段清单、签名合法
   const plan = backfillPlanTaskOf({ projectId: 'p1', projectRev: 2, clips: ['x'] });
   assert.equal(parse(plan).ok, true);
   assert.equal(parse({ ...plan, priority: 'normal' }).ok, false);
@@ -155,7 +155,7 @@ test('C10A-L17-Q4 旧客户端照旧按 normal;priority 与补渲计划任务的
   assert.equal(parse({ ...plan, resultKey: 'p1@2', id: 'plan:p1@2', priority: 0, input: {} }).ok, true);
 });
 
-/** 补渲测试用的 PlanContext:一张本机判重的卡(c-heavy)、一张本机判轻的卡(c-light)、一条流 */
+/** 预渲染重试测试用的 PlanContext:一张本机判重的卡(c-heavy)、一张本机判轻的卡(c-light)、一条流 */
 function contextWithLight() {
   const control = (clipId, label) => ({
     clipId, cardId: 'card', key: `png-${label}`, snapshotKey: `snap-${label}`, contentKey: `snap-${label}`, tier: 'shared',
@@ -173,7 +173,7 @@ function contextWithLight() {
   };
 }
 
-test('C10A-L17-Q5 认领补渲计划任务的节点:清单里的片段当重卡切细任务,细任务标 backfill、不切流', async () => {
+test('C10A-L17-Q5 认领预渲染重试计划任务的节点:清单里的片段当重卡切细任务,细任务标 backfill、不切流', async () => {
   let now = 5_000;
   const lb = createLoopback();
   const q = createRenderQueue({ now: () => now, send: lb.queueSend, epoch: 'e1' });
@@ -209,11 +209,11 @@ test('C10A-L17-Q5 认领补渲计划任务的节点:清单里的片段当重卡�
     node.tick();
     now += 250;
   }
-  assert.deepEqual(plans, [backfill.id], '节点认领了补渲计划任务');
+  assert.deepEqual(plans, [backfill.id], '节点认领了预渲染重试计划任务');
   const derived = nodeOut.filter((m) => m.type === 'task.publish').flatMap((m) => m.tasks);
   assert.ok(derived.length > 0, '切出了细任务');
   assert.ok(derived.every((t) => t.input.clipId === 'c-light'), '只切清单里的片段(本机判重的卡不在这一批)');
-  assert.ok(derived.every((t) => t.kind === 'snapshot'), '补渲不切轨道流');
+  assert.ok(derived.every((t) => t.kind === 'snapshot'), '预渲染重试不切轨道流');
   assert.ok(derived.every((t) => t.priority === 'backfill'), '细任务同样标 backfill');
   assert.ok(derived.every((t) => t.source.derivedFrom === backfill.id));
   assert.equal(derived.length, 2, '90 帧按 60 帧一段切两段');
@@ -226,7 +226,7 @@ test('C10A-L17-Q5 认领补渲计划任务的节点:清单里的片段当重卡�
   assert.ok(normal.every((t) => Number.isInteger(t.priority)));
 });
 
-test('C10A-L17-Q6 管线的补渲登记:并进预渲染集合、按内容身份认;普通计划与轨道流不带补渲的片段', async () => {
+test('C10A-L17-Q6 管线的预渲染重试登记:并进预渲染集合、按内容身份认;普通计划与轨道流不带预渲染重试的片段', async () => {
   const { FramePipeline } = await import('../frame-pipeline.mjs');
   const control = (clipId, label) => ({ clipId, snapshotKey: `snap-${label}`, contentKey: `ck-${label}`, tier: 'shared' });
   const entry = { key: 'e1', project: { id: 'doc-1' }, cardPlan: [control('c-heavy', 'h'), control('c-light', 'l')], basePrerenderSet: new Set(['c-heavy']) };
@@ -244,12 +244,12 @@ test('C10A-L17-Q6 管线的补渲登记:并进预渲染集合、按内容身份�
   assert.equal(pipe.addBackfill(entry, ['c-light']), 1);
   assert.equal(pipe.prerenderPicked(entry, 'c-light'), true, '进了预渲染集合');
   assert.equal(pipe.prerenderPicked(other, 'c-light'), true, '同一项目、同一内容的另一个 entry 也带上(谁写层表都列着它)');
-  assert.equal(pipe.prerenderPicked(edited, 'c-light'), false, '内容改了的不算:新内容没有产物,页面会再发补渲');
+  assert.equal(pipe.prerenderPicked(edited, 'c-light'), false, '内容改了的不算:新内容没有产物,页面会再发预渲染重试');
   assert.equal(pipe.streamPicked(entry, 'c-light'), false, '轨道流只给本机判重的卡');
   assert.equal(pipe.streamPicked(entry, 'c-heavy'), true);
   assert.deepEqual(layerMaps, ['e1'], '登记之后写一次层表');
   assert.equal(pipe.addBackfill(entry, ['c-light']), 0, '重复登记不再写');
-  // 重算集合(新的成本记录)之后补渲的片段仍在
+  // 重算集合(新的成本记录)之后预渲染重试的片段仍在
   entry.prerenderSet = entry.basePrerenderSet;
   pipe.applyBackfill(entry);
   assert.equal(pipe.prerenderPicked(entry, 'c-light'), true);

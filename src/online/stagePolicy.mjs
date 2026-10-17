@@ -1,5 +1,5 @@
 /**
- * 在线执行用户卡与图卡的**隔离策略原文**(契约 `docs/plan/online-card-exec-contract.md` 第 3.3、4.1 节)。
+ * 在线执行用户卡与素材效果卡的**隔离策略原文**(契约 `docs/plan/online-card-exec-contract.md` 第 3.3、4.1 节)。
  *
  * 策略文本只写在这一个文件里,四处从这里取,不各抄一份:
  *   - 在线构建给舞台入口 `stage.html` 注入的 `<meta http-equiv="Content-Security-Policy">`(`vite.config.ts`);

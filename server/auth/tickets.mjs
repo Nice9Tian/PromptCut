@@ -64,7 +64,7 @@ export function signTicket(rec, fields, at) {
   if (fields.sv !== undefined && fields.sv !== null) {
     payload.sv = fields.sv;
     payload.sk = fields.sk;
-    // 云端 Agent 服务的两种连接票据（`docs/plan/cloud-agent-contract.md` 第 4.3、16 节）：代成员的带 `acc`，只用来发布补渲计划的带 `pu`
+    // 云端 Agent 服务的两种连接票据（`docs/plan/cloud-agent-contract.md` 第 4.3、16 节）：代成员的带 `acc`，只用来发布预渲染重试计划的带 `pu`
     if (fields.acc !== undefined && fields.acc !== null) payload.acc = fields.acc;
     if (fields.pu !== undefined && fields.pu !== null) payload.pu = fields.pu;
   }

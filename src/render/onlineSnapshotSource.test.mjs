@@ -262,7 +262,7 @@ test('OS10 清单缺几帧小尺寸(阿里云 2026-09-27:295/300,缺第 0 帧与
   assert.deepEqual(layerOf(index2, 'a', 'html').ranges, [[0, 119]]);
 });
 
-test('C10 第 9 节:用户卡、图卡的层照常取清单与字节(不再豁免);coverageLayer 点名的层整段取清单,coverage 判整段覆盖', async () => {
+test('C10 第 9 节:用户卡、素材效果卡的层照常取清单与字节(不再豁免);coverageLayer 点名的层整段取清单,coverage 判整段覆盖', async () => {
   const w = world();
   let T = 1_000_000;
   const all = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);

@@ -1,5 +1,5 @@
 /**
- * 在线卡片实际权限验收：真实 content.put → 转译 → stage RPC → 用户卡/图卡/声音线程。
+ * 在线卡片实际权限验收：真实 content.put → 转译 → stage RPC → 用户卡/素材效果卡/声音线程。
  * 2026-10-08 P1/P3：外链照常；无 Allowlist/Trusted Types/WebRTC 护栏也执行。
  * 保留 A 父页/凭证/素材/伪造RPC/结构边界，B 插入边界，G 无 Allowlist 仍执行，C 无 header 拒绝，L/S/N/M 配置回退。
  * 旧 A5/A9/P1 外发为零与 WebRTC 封堵不适用；四类外链由 card-policy-probe.mjs 实际加载验收。
@@ -141,7 +141,7 @@ let MEDIA_HASH = '';
   const bare = await fetch(`http://127.0.0.1:${ASSET_PORT}/api/asset/media/${MEDIA_HASH}`);
   check('准备:素材服务不信回环,不带票据读素材是 401', bare.status === 401, bare.status);
   node.close();
-  // 三份夹具原样写进内容库:同步来的用户卡 / 图卡(真实加载路径)
+  // 三份夹具原样写进内容库:同步来的用户卡 / 素材效果卡(真实加载路径)
   const entry = normalizeEntry({ url: wsBaseOf(DOC_DIRECT), projectId: made.projectId, username: creator.username, password: creator.password, as: 'creator', role: 'page', deviceId: 'ocs-probe-content1', deviceName: 'ocs-probe content' });
   const ep = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'page' }), log: () => {} });
   await new Promise((r) => { if (ep.connected) r(); else ep.onOpen(r); });
@@ -365,7 +365,7 @@ try {
     const ctxA = mkCtx('user-card', false, undefined), ctxB = mkCtx('graph-card', true, undefined);
     /*
      * 「卡片代码」的执行办法与加载器相同。分三段:
-     *   一、闸门开着(A1 已核):读父页、把读得到的一切倒出来、图卡读素材、声音线程;
+     *   一、闸门开着(A1 已核):读父页、把读得到的一切倒出来、素材效果卡读素材、声音线程;
      *   二、两台舞台都开始听父页的消息,然后舞台 A 试着造一个子框架 —— 加固拦下并上报,父页改判、把取档策略重发给两台(RPC),
      *       听到的消息里不该有票据;
      *   三、伪造消息、外传、加固各条路(这时闸门已经因为第二段关上了;照样硬跑,断言看的是浏览器与加固拦不拦得住)。
@@ -409,7 +409,7 @@ try {
     check('A-真实路径 越权探测用户卡:页面转译成包、两台舞台的加载器都执行了它(运行状态 ready),探测是卡片代码自己在可见舞台里跑的', rA.runState?.per?.A?.state === 'ready' && rA.runState?.per?.B?.state === 'ready' && /\/editor\/stage\.html$/.test(rA.ranIn ?? ''), { runState: rA.runState, ranIn: rA.ranIn });
     check('E 编辑页面不执行:越权探测卡的模块顶层记号只出现在两台舞台里,编辑页面的文档里没有', rA.marks?.editor === null && rA.marks?.stages?.length === 2 && rA.marks.stages.every((s) => s.loaded?.['user-card'] === true && /\/editor\/stage\.html$/.test(s.url)), rA.marks);
     check('A6-真实路径 越权探测用户卡的 audio() 是在实例 B 起的声音线程里被调用的', rA.workerHost?.some((h) => h?.id === 'B' && h.has) && !rA.workerHost?.some((h) => h?.id === 'A' && h.has) && !rA.worker?.['worker-error'], { ask: rA.audioAsk, host: rA.workerHost, err: rA.worker?.['worker-error'] });
-    // 越权探测图卡另开一页(上一页的会话已经因为加固拦下的事不再执行);先把用户卡片段的参数清掉,它在这一页不跑
+    // 越权探测素材效果卡另开一页(上一页的会话已经因为加固拦下的事不再执行);先把用户卡片段的参数清掉,它在这一页不跑
     let rB = {}, mG = null;
     if (sA && sB) {
       await putBoundaryClip(m, 'ocs-probe-user', BOUNDARY_CARDS.user, 10, {});
@@ -422,15 +422,15 @@ try {
       ctxB.sid = sidG;
       rB = await runCard(mG, 'graph', ctxB, 14);
       rB.sid = sidG;
-      check('A-真实路径 越权探测图卡:图形能力够、两台舞台都载入成功(ready),card() 是在可见舞台里被求值的', rB.runState?.per?.A?.state === 'ready' && rB.runState?.per?.B?.state === 'ready' && rB.runState?.graph?.A === 'ok' && /\/editor\/stage\.html$/.test(rB.ranIn ?? ''), { runState: rB.runState, ranIn: rB.ranIn });
-      check('E 编辑页面不执行(图卡那一页):顶层记号只在两台舞台里', rB.marks?.editor === null && rB.marks?.stages?.length === 2 && rB.marks.stages.every((s) => s.loaded?.['graph-card'] === true), rB.marks);
-      check('A6-真实路径 越权探测图卡的 audio() 是在实例 B 起的声音线程里被调用的', rB.workerHost?.some((h) => h?.id === 'B' && h.has) && !rB.worker?.['worker-error'], { ask: rB.audioAsk, host: rB.workerHost, err: rB.worker?.['worker-error'] });
+      check('A-真实路径 越权探测素材效果卡:图形能力够、两台舞台都载入成功(ready),card() 是在可见舞台里被求值的', rB.runState?.per?.A?.state === 'ready' && rB.runState?.per?.B?.state === 'ready' && rB.runState?.graph?.A === 'ok' && /\/editor\/stage\.html$/.test(rB.ranIn ?? ''), { runState: rB.runState, ranIn: rB.ranIn });
+      check('E 编辑页面不执行(素材效果卡那一页):顶层记号只在两台舞台里', rB.marks?.editor === null && rB.marks?.stages?.length === 2 && rB.marks.stages.every((s) => s.loaded?.['graph-card'] === true), rB.marks);
+      check('A6-真实路径 越权探测素材效果卡的 audio() 是在实例 B 起的声音线程里被调用的', rB.workerHost?.some((h) => h?.id === 'B' && h.has) && !rB.worker?.['worker-error'], { ask: rB.audioAsk, host: rB.workerHost, err: rB.worker?.['worker-error'] });
     }
     await sleep(2000);
     summary.A.userCard = { parent: rA.parent, exfil: rA.exfil, harden: rA.harden, worker: rA.worker };
     summary.A.graphCard = { parent: rB.parent, media: rB.media, exfil: rB.exfil, harden: rB.harden, worker: rB.worker };
 
-    for (const [who, r] of [['越权探测用户卡(舞台 A)', rA], ['越权探测图卡(舞台 B)', rB]]) {
+    for (const [who, r] of [['越权探测用户卡(舞台 A)', rA], ['越权探测素材效果卡(舞台 B)', rB]]) {
       /* A2 父页对象 */
       const mustThrow = ['parent.document', 'parent.location.href', 'parent.localStorage', 'parent.sessionStorage', 'parent.indexedDB', 'parent.__pcStore', 'parent.__pcPreviewDiag', 'parent.fetch', 'parent.eval', 'parent.document.cookie', 'top.document', 'top.location.href', 'top.localStorage', 'parent.name'];
       const notThrown = mustThrow.filter((k) => !/^抛错:SecurityError/.test(r.parent?.[k] ?? ''));
@@ -465,17 +465,17 @@ try {
       const leftFrames = paths.filter(([, v]) => !/子框架 0 个/.test(v)).map(([k, v]) => `${k}:${v}`);
       check(`A7 ${who}:每条路试完舞台里都没有留下子框架`, leftFrames.length === 0 && r.harden?.['收尾时的子框架数'] === '0', leftFrames);
     }
-    for (const k of ['XSLT', 'importNode(从取回来的同源文档)', 'XHR responseType=document']) console.log(`        回归:${k} → 用户卡 ${rA.harden?.[k]} ; 图卡 ${rB.harden?.[k]}`);
-    /* A4 图卡干得了活 */
+    for (const k of ['XSLT', 'importNode(从取回来的同源文档)', 'XHR responseType=document']) console.log(`        回归:${k} → 用户卡 ${rA.harden?.[k]} ; 素材效果卡 ${rB.harden?.[k]}`);
+    /* A4 素材效果卡干得了活 */
     const md = rB.media ?? {};
-    check('A4 图卡:凭 cookie 按 Range 取素材是 206、字节是 PNG 的头', /^206 bytes 0-7\/\d+ 137,80,78,71,13,10,26,10$/.test(md.range ?? ''), md.range);
-    check('A4 图卡:素材画进 2D 画布、传进 WebGL2 纹理都读得回像素(没被污染)', md['img-canvas-2d'] === '10,200,30,255' && md['img-webgl2'] === '10,200,30,255', `${md['img-canvas-2d']} / ${md['img-webgl2']}`);
-    check('A4 图卡:换一个 sid、不带票据走旧路由都是 401', md['other-sid'] === '状态:401' && md['legacy-route-without-ticket'] === '状态:401', `${md['other-sid']} / ${md['legacy-route-without-ticket']}`);
-    check('A4 图卡:只放行 GET / HEAD 与素材字节那一种路径(POST 405,别的命名空间与子路由 404)', md['post-to-media'] === '状态:405' && md['other-namespace'] === '状态:404' && md['chunks-route'] === '状态:404', `${md['post-to-media']} / ${md['other-namespace']} / ${md['chunks-route']}`);
+    check('A4 素材效果卡:凭 cookie 按 Range 取素材是 206、字节是 PNG 的头', /^206 bytes 0-7\/\d+ 137,80,78,71,13,10,26,10$/.test(md.range ?? ''), md.range);
+    check('A4 素材效果卡:素材画进 2D 画布、传进 WebGL2 纹理都读得回像素(没被污染)', md['img-canvas-2d'] === '10,200,30,255' && md['img-webgl2'] === '10,200,30,255', `${md['img-canvas-2d']} / ${md['img-webgl2']}`);
+    check('A4 素材效果卡:换一个 sid、不带票据走旧路由都是 401', md['other-sid'] === '状态:401' && md['legacy-route-without-ticket'] === '状态:401', `${md['other-sid']} / ${md['legacy-route-without-ticket']}`);
+    check('A4 素材效果卡:只放行 GET / HEAD 与素材字节那一种路径(POST 405,别的命名空间与子路由 404)', md['post-to-media'] === '状态:405' && md['other-namespace'] === '状态:404' && md['chunks-route'] === '状态:404', `${md['post-to-media']} / ${md['other-namespace']} / ${md['chunks-route']}`);
     check('A6 声音线程凭同一张 cookie 取得到素材(应答头里没有票据)', /^状态:200 /.test(rB.worker?.['w.media'] ?? ''), (rB.worker?.['w.media'] ?? '').slice(0, 8));
     /* 外链是已授权能力，不能再断言收集站为零。 */
     const e1 = sinkNow();
-    check('A5 用户卡与图卡实际外链请求到达公开夹具', e1.http > 0 && [rA,rB].every(r => Object.values(r.exfil ?? {}).some(v => /到达/.test(v))), e1);
+    check('A5 用户卡与素材效果卡实际外链请求到达公开夹具', e1.http > 0 && [rA,rB].every(r => Object.values(r.exfil ?? {}).some(v => /到达/.test(v))), e1);
     notes.push('不适用：旧 A5 全面外发为零、WebRTC 构造器不存在；P1/P3 已撤销。');
     /* A7 试图造子框架之后父页不再执行 */
     const d1 = await until('A 父页收到加固拦下的上报', async () => { const d = await m.diag(); return d?.cardExec?.reason === 'breach' ? d : null; }, 10_000);
@@ -508,9 +508,9 @@ try {
     await m.page.screenshot({ path: path.join(OUT, 'a-editor.png') }).catch(() => {});
     if (mG) {
       const dG1 = await mG.diag();
-      check('A7 图卡那一页同样:试图造子框架之后父页不再判「可执行」;没有页面错误、没开出新窗口', dG1?.cardExec?.enabled === false && dG1.cardExec.reason === 'breach' && mG.pageErrors.length === 0 && mG.popups.length === 0, { page: dG1?.cardExec?.reason, errors: mG.pageErrors.slice(0, 3), popups: mG.popups });
+      check('A7 素材效果卡那一页同样:试图造子框架之后父页不再判「可执行」;没有页面错误、没开出新窗口', dG1?.cardExec?.enabled === false && dG1.cardExec.reason === 'breach' && mG.pageErrors.length === 0 && mG.popups.length === 0, { page: dG1?.cardExec?.reason, errors: mG.pageErrors.slice(0, 3), popups: mG.popups });
       await mG.page.screenshot({ path: path.join(OUT, 'a-editor-graph.png') }).catch(() => {});
-      // 收尾:图卡片段的参数也清掉 —— 后面几组的页面里这两张卡照常载入(记号断言要用),但片段没有参数、不跑探测
+      // 收尾:素材效果卡片段的参数也清掉 —— 后面几组的页面里这两张卡照常载入(记号断言要用),但片段没有参数、不跑探测
       await putBoundaryClip(mG, 'ocs-probe-graph', BOUNDARY_CARDS.graph, 14, {});
       await sleep(1500);
       await mG.close();
@@ -585,7 +585,7 @@ try {
     const gates = await Promise.all(frames.map((f) => m.gateOf(f)));
     const editorGate = await m.page.evaluate(() => window.__pcCardExecGate?.() ?? null);
     summary[tag] = { cardExec: d?.cardExec, dual: d?.dual, stages: gates.map((g) => ({ url: g?.url, gate: g?.gate, report: g?.iso?.report ?? null })) };
-    check(`${tag} 本页不执行用户卡与图卡,原因是 ${expect.reason}`, d?.cardExec?.enabled === false && d.cardExec.reason === expect.reason, d?.cardExec);
+    check(`${tag} 本页不执行用户卡与素材效果卡,原因是 ${expect.reason}`, d?.cardExec?.enabled === false && d.cardExec.reason === expect.reason, d?.cardExec);
     check(`${tag} 编辑器页与每个舞台文档的执行闸门都是关的(共 ${gates.length} 个舞台文档)`, editorGate?.allowed === false && gates.length === minStages && gates.every((g) => g?.gate?.allowed === false), { editor: editorGate, stages: gates.map((g) => g?.gate) });
     if (expect.noStage) {
       check(`${tag} 未配置跨源舞台源时不挂载同源舞台 iframe(舞台数 0)`, d?.dual === false && frames.length === 0, { dual: d?.dual, frames: frames.map((f) => f.url()) });

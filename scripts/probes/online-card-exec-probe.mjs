@@ -1,5 +1,5 @@
 /**
- * 在线浏览器执行用户卡与图卡的功能验收(任务书 `docs/plan/sound-online-render-task.md` 第 15 条;
+ * 在线浏览器执行用户卡与素材效果卡的功能验收(任务书 `docs/plan/sound-online-render-task.md` 第 15 条;
  * 契约 `docs/plan/online-card-exec-contract.md` 第 8、11.1、13A 节)。
  *
  *   npx vite build --mode online
@@ -11,8 +11,8 @@
  * 做法:创建者一侧**不起桌面编辑器**(证明没有任何预渲染产物时也画得出来),替创建者把卡片源码 `content.put` 进内容库,
  * 把一段纯色视频与一段短 WAV 传进素材服务;在线普通档的成员页加入这个协作项目,时间轴上摆好:
  *   用户画面卡 `oce-visual`、用户有声卡(画面组件加 `audio()`)`oce-sound`、带相对导入的用户卡 `oce-rel`
- *   (引同目录的 `./oce-rel-helper`、页面自带的 `../native/hud`、`./oce-rel.css`)、带视频输入源的图卡 `oce-invert`、
- *   纯合成的音频图卡 `oce-tone`、读素材采样的音频图卡 `oce-sample`,另有故意很慢的用户卡 `oce-slow`、
+ *   (引同目录的 `./oce-rel-helper`、页面自带的 `../native/hud`、`./oce-rel.css`)、带视频输入源的素材效果卡 `oce-invert`、
+ *   纯合成的音频素材效果卡 `oce-tone`、读素材采样的音频素材效果卡 `oce-sample`,另有故意很慢的用户卡 `oce-slow`、
  *   用了 `namespace` 的 `oce-ns`、引了 `lodash` 的 `oce-lodash`。
  * 创建者一侧摆法的代码放在本文件里的 `CARDS`;卡片顶层写着记号 `globalThis.__pcOceMark`,探针用它核「哪个文档里执行了卡片代码」。
  *
@@ -23,17 +23,17 @@
  * E2 判轻的直接画出来:`oce-visual`、`oce-sound`、`oce-rel` 的片段在可见舞台里是活的 DOM(带各自的记号节点与文字),没有「需要本地 PC 渲染辅助」
  *    的图标、时间轴不挂徽标、整个过程里没有 `snap/` 与 `px/` 请求;截图。相对导入生效:引到的 helper 的文字、`.css` 的背景色(算出样式)、
  *    页面自带的 `../native/hud`(数据属性里有它的导出个数)都在;编辑页面(顶层文档)里没有执行卡片代码的记号,两台舞台里有。
- * E3 听得到声音(按数字,不靠人听):用户有声卡与纯合成的音频图卡在预览里播放,`<audio>` 在走、声音源是浏览器合成的 blob 地址、解码后窗口里有能量、
+ * E3 听得到声音(按数字,不靠人听):用户有声卡与纯合成的音频素材效果卡在预览里播放,`<audio>` 在走、声音源是浏览器合成的 blob 地址、解码后窗口里有能量、
  *    实时采样有峰值;判定测量期间没有新建音频上下文、没有元素开始播放、没有新建可播放地址、没有声源启动、页面上没有在播的媒体元素;
- *    用户有声卡的声音生成后入库(WAV 在素材服务里);读素材采样的音频图卡**不在线合成**,判定是「合成不了」并给出原因说明(说明原文进输出)。
+ *    用户有声卡的声音生成后入库(WAV 在素材服务里);读素材采样的音频素材效果卡**不在线合成**,判定是「合成不了」并给出原因说明(说明原文进输出)。
  * E4 改参数即时生效:把 `oce-visual` 的文字参数改掉,舞台里的 DOM 文字几秒内跟着变;另一成员(乙)的项目里与舞台里都看得到。
- * E5 图卡:带视频输入源的图卡在舞台里画出输出(片段中心的像素是视频那一帧颜色的反色,容差 ±24),视频经舞台源上的 `/media-s/<会话号>/media/<哈希>` 取到、
+ * E5 素材效果卡:带视频输入源的素材效果卡在舞台里画出输出(片段中心的像素是视频那一帧颜色的反色,容差 ±24),视频经舞台源上的 `/media-s/<会话号>/media/<哈希>` 取到、
  *    请求里不带 `?t=`。
  * E6 判重的仍走预渲染或渲染节点:故意很慢的 `oce-slow`(摆在 10～14 秒,免得它在 0～4 秒拖慢别的卡的播放)测量后判重(进测量记录),播放中被抑制,页面发布的清单计划含它;
  *    探针替渲染节点写层表与清单后,舞台里换成预渲染快照、不挂徽标。同时判轻的卡不在清单计划里、没被抑制。
  * E7 三种退回:`namespace` 的卡(`unsupported-syntax`)、引 `lodash` 的卡(`missing-module`)按原做法 —— 图标「需要本地 PC 渲染辅助」、时间轴徽标、
- *    进清单计划;参数面板出现对应的说明(原文进输出)。另开一个 `--disable-gpu --disable-software-rasterizer` 的浏览器:图卡的运行状态是 `gpu`、
- *    参数面板说明「图形能力不够」、舞台不挂图卡的画布,DOM 用户卡不受影响。
+ *    进清单计划;参数面板出现对应的说明(原文进输出)。另开一个 `--disable-gpu --disable-software-rasterizer` 的浏览器:素材效果卡的运行状态是 `gpu`、
+ *    参数面板说明「图形能力不够」、舞台不挂素材效果卡的画布,DOM 用户卡不受影响。
  * E8 源码更新后在线页面跟着换:创建者把 `oce-visual` 的源码换一版,10 秒内舞台里的画面是新版的、成本身份(测量记录里的 identityKey)换了、
  *    浏览器节点报的代码身份换了。
  * E10 导出:同步卡的画面要渲染节点逐帧渲(2026-10-13 起在线导出不再取每张卡存好的 HTML 快照)。另开一个只有一张同步画面卡的项目,没有渲染节点:在线逐帧导出
@@ -166,12 +166,12 @@ ${MARK}
 export const oceLodash: CardDef<{}> = { id: "oce-lodash", name: "在线探针 lodash 卡", description: "在线执行探针用", frameMode: "stateful", defaults: {}, controls: [],
   Component: () => <div data-oce-lodash="1">{_.upperFirst("lodash")}</div> };
 `,
-  'oce-invert': `/** 探针:带视频输入源的图卡(反色滤镜) */
+  'oce-invert': `/** 探针:带视频输入源的素材效果卡(反色滤镜) */
 import type { CardDef } from "../../kernel/types";
 import { glsl } from "../../render/cards/graphValues";
 interface Params { amount: number }
 export const oceInvert: CardDef<Params> = {
-  id: "oce-invert", name: "在线探针反色图卡", description: "在线执行探针用", source: "user", tags: ["探针"], kind: "filter", frameMode: "direct",
+  id: "oce-invert", name: "在线探针反色素材效果卡", description: "在线执行探针用", source: "user", tags: ["探针"], kind: "filter", frameMode: "direct",
   inputs: { source: { description: "要处理的画面" } },
   defaults: { amount: 1 },
   controls: [{ key: "amount", label: "强度", type: "number", min: 0, max: 1, step: 0.01 }],
@@ -187,7 +187,7 @@ export const oceInvert: CardDef<Params> = {
   ),
 };
 `,
-  'oce-tone': `/** 探针:纯合成的音频图卡(不读素材) */
+  'oce-tone': `/** 探针:纯合成的音频素材效果卡(不读素材) */
 import type { CardDef } from "../../kernel/types";
 import { createNotificationRecipe } from "../../kernel/soundEffects";
 import { cardSoundBlock } from "../native/sound-effects";
@@ -200,7 +200,7 @@ export const oceTone: CardDef<Params> = {
     cardSoundBlock(createNotificationRecipe({ frequency: params.frequency, gain: 0.5, duration: 0.3 }), range),
 };
 `,
-  'oce-sample': `/** 探针:读素材采样的音频图卡(在线不合成,用已入库的声音) */
+  'oce-sample': `/** 探针:读素材采样的音频素材效果卡(在线不合成,用已入库的声音) */
 import type { CardDef } from "../../kernel/types";
 interface Params { gain: number }
 export const oceSample: CardDef<Params> = {
@@ -506,7 +506,7 @@ async function layOut(page) {
         { id: 'oce-n-sample', adapter: 'card', cardId: 'oce-sample', kind: 'audio', inputs: { source: '@clip/oce-clip-sample-src/source' }, params: { gain: 1 } }],
       tracks: [
         ...Object.keys(v).map((k, i) => ({ id: 'oce-t-' + k, name: '序列 ' + k, clips: [{ id: v[k], cardId: cardOf[k], start: k === 'slow' ? 10 : 0, end: k === 'slow' ? 14 : 4, params: {}, frame: { x: tiles[i][0], y: tiles[i][1], w: 640, h: 360 } }] })),
-        { id: 'oce-t-g', name: '图卡', clips: [{ id: 'oce-clip-g', mediaId: m.id, cardId: 'oce-invert', nodeId: 'oce-n-g', start: 4, end: 6, params: { amount: 1 } }] },
+        { id: 'oce-t-g', name: '素材效果卡', clips: [{ id: 'oce-clip-g', mediaId: m.id, cardId: 'oce-invert', nodeId: 'oce-n-g', start: 4, end: 6, params: { amount: 1 } }] },
         { id: 'oce-t-tone', name: '纯合成音频卡', clips: [{ id: 'oce-clip-tone', nodeId: 'oce-n-tone', start: 6, end: 8, params: {} }] },
         { id: 'oce-t-sample-src', name: '素材声音', clips: [{ id: 'oce-clip-sample-src', mediaId: a.id, start: 8, end: 9, params: {} }] },
         { id: 'oce-t-sample', name: '读采样音频卡', clips: [{ id: 'oce-clip-sample', nodeId: 'oce-n-sample', start: 8, end: 9, params: {} }] },
@@ -537,7 +537,7 @@ try {
   console.log('\n== E1 前提');
   const A = await openMember(b1, 'A');
   const fp = await layOut(A.page);
-  check('摆项目:六个画面片段、一个图卡、纯合成与读采样两个音频图卡', !!fp?.projectId, fp);
+  check('摆项目:六个画面片段、一个素材效果卡、纯合成与读采样两个音频素材效果卡', !!fp?.projectId, fp);
   const FPS = fp.fps;
   const d0 = await until('A 本页隔离生效、各张卡载入', async () => {
     const d = await A.run();
@@ -547,8 +547,8 @@ try {
   const diag0 = await A.page.evaluate(() => window.__pcPreviewDiag?.() ?? null);
   summary.E1 = { run: d0?.run, graph: d0?.graph, cardExec: diag0?.cardExec };
   check('E1 本页隔离生效(双舞台、可执行、出口由浏览器拦)', diag0?.dual === true && diag0?.cardExec?.enabled === true && diag0.cardExec.egress === 'none', diag0?.cardExec);
-  check('E1 用户画面卡、有声卡、相对导入卡、慢卡、图卡、纯合成音频卡在两台舞台里载入成功(运行状态 ready)', !!d0, d0?.run);
-  check('E1 读采样的音频图卡也载入成功(它的声音在线合成不了是另一回事,见 E3)', (await A.run())?.run['oce-sample']?.state === 'ready', (await A.run())?.run['oce-sample']);
+  check('E1 用户画面卡、有声卡、相对导入卡、慢卡、素材效果卡、纯合成音频卡在两台舞台里载入成功(运行状态 ready)', !!d0, d0?.run);
+  check('E1 读采样的音频素材效果卡也载入成功(它的声音在线合成不了是另一回事,见 E3)', (await A.run())?.run['oce-sample']?.state === 'ready', (await A.run())?.run['oce-sample']);
   check('E1 没有任何预渲染产物:层表空、没有 snap/ 与 px/ 请求', assetLog.length === 0 && ((await A.page.evaluate(() => window.__pcOnlineSnapshots?.()?.mapVersion ?? null)) === null), { requests: assetLog.length });
 
   console.log('\n== E2 判轻的直接画出来');
@@ -574,7 +574,7 @@ try {
   check('E2 整个过程没有 snap/ 与 px/ 请求', assetLog.length === 0, { requests: assetLog.length });
 
   console.log('\n== E3 听得到声音');
-  // 纯合成音频图卡:先测量(不出声),再听
+  // 纯合成音频素材效果卡:先测量(不出声),再听
   const tone = await A.page.evaluate(async (clipId) => {
     const p = window.__pcStore.getState().project, clip = p.tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
     const sound = await window.__pcIo.sound();
@@ -587,11 +587,11 @@ try {
     clearInterval(watch);
     return { key, hadRecord, synth: decision.synth, reused: decision.verdict?.reused, record: await window.__pcSoundJudge.read(key), during: window.__pcAudioLog.slice(log0), playingDuring: Math.max(0, ...mediaDuring) };
   }, TONE);
-  check('E3 纯合成音频图卡:测量确实做了(之前没有记录、测了 16 块)并判轻(在浏览器里合成)', !tone.hadRecord && tone.reused === false && tone.record?.samples === 16 && tone.synth === true,
+  check('E3 纯合成音频素材效果卡:测量确实做了(之前没有记录、测了 16 块)并判轻(在浏览器里合成)', !tone.hadRecord && tone.reused === false && tone.record?.samples === 16 && tone.synth === true,
     { record: tone.record && { kind: tone.record.kind, blockMs: +tone.record.blockMs.toFixed(3), samples: tone.record.samples }, synth: tone.synth });
   check('E3 测量期间扬声器无输出:没有新建音频上下文、没有元素开始播放、没有新建可播放地址、没有声源启动,页面上没有在播的媒体元素', tone.during.length === 0 && tone.playingDuring === 0, { during: tone.during, playingDuring: tone.playingDuring });
   const heardTone = await listen(A.page, { at: 6.0, ms: 500, clipId: TONE });
-  check('E3 纯合成音频图卡在预览里听得到:声音源是浏览器合成的(blob),解码有能量,实时采样有峰值', audible(heardTone) && heardTone.source === 'blob', brief(heardTone));
+  check('E3 纯合成音频素材效果卡在预览里听得到:声音源是浏览器合成的(blob),解码有能量,实时采样有峰值', audible(heardTone) && heardTone.source === 'blob', brief(heardTone));
   const heardSnd = await listen(A.page, { at: 0.0, ms: 500, clipId: V.snd });
   check('E3 用户有声卡在预览里听得到:声音源是浏览器合成的(blob),解码有能量,实时采样有峰值', audible(heardSnd) && heardSnd.source === 'blob', brief(heardSnd));
   const gen = await A.page.evaluate(async (clipId) => {
@@ -612,7 +612,7 @@ try {
     return { synth: d.synth, reason: d.reason ?? null, message: d.message ?? null };
   }, SAMPLE);
   summary.panel.sampleAudio = sample.message;
-  check('E3 读素材采样的音频图卡不在线合成:判定是「合成不了」并给出原因说明', sample.synth === false && sample.reason === 'not-runnable' && /读素材的声音采样/.test(sample.message ?? ''), sample);
+  check('E3 读素材采样的音频素材效果卡不在线合成:判定是「合成不了」并给出原因说明', sample.synth === false && sample.reason === 'not-runnable' && /读素材的声音采样/.test(sample.message ?? ''), sample);
 
   if (process.env.OCE_STOP_AFTER === 'E3') throw new Error('OCE_STOP_AFTER=E3(排障用:跑到 E3 为止)');
   console.log('\n== E4 改参数即时生效');
@@ -626,14 +626,14 @@ try {
   const editedB = await until('乙的舞台里文字也是 OCE edited', async () => { const s = await Bm.stageState([V.v], PROBES); return s?.[V.v]?.text === 'OCE edited' ? s : null; }, 90_000, 500);
   check('E4 乙的舞台里画出来的也是改过的文字(乙自己的浏览器里执行)', !!editedB, editedB);
 
-  console.log('\n== E5 图卡:带视频输入源');
+  console.log('\n== E5 素材效果卡:带视频输入源');
   await A.page.evaluate(() => window.__pcStore.actions.seek(5));
   const want = COLOR.map((c) => 255 - c);
   let px = null;
-  await until('A 可见舞台画出图卡的输出(片段中心是视频那一帧的反色)', async () => { px = await A.centerPixel('e5-invert'); return near(px.rgb, want); }, 60_000, 1000);
+  await until('A 可见舞台画出素材效果卡的输出(片段中心是视频那一帧的反色)', async () => { px = await A.centerPixel('e5-invert'); return near(px.rgb, want); }, 60_000, 1000);
   check(`E5 截图取预览中心的像素:是视频那一帧 (${COLOR}) 的反色 (${want}),容差 ±24`, !!px && near(px.rgb, want), { got: px?.rgb, file: px?.file });
   const gst = await A.stageState([GCLIP]);
-  check('E5 可见舞台挂的是图卡的画布,不显示图标', gst?.[GCLIP]?.graphNode === true && gst[GCLIP].canvas >= 1 && !gst[GCLIP].placeholderShown, gst?.[GCLIP]);
+  check('E5 可见舞台挂的是素材效果卡的画布,不显示图标', gst?.[GCLIP]?.graphNode === true && gst[GCLIP].canvas >= 1 && !gst[GCLIP].placeholderShown, gst?.[GCLIP]);
   const sid = diag0?.cardExec?.sid ?? '';
   const mediaReqs = proxy.requests.filter((r) => r.path === `/media-s/${sid}/media/${VIDEO_HASH}`);
   check('E5 视频经舞台源上的 /media-s/<会话号>/media/<哈希> 按 Range 取到(应答 206),请求里不带 ?t=', mediaReqs.some((r) => r.status === 206) && !proxy.requests.some((r) => r.path.includes(VIDEO_HASH) && /[?&]t=/.test(r.path)), { count: mediaReqs.length, statuses: [...new Set(mediaReqs.map((r) => r.status))] });
@@ -682,7 +682,7 @@ try {
   const tlBad = await until('A 时间轴上两张坏卡有徽标', async () => { const t = await A.timeline(ALL_V); return t[V.ns]?.badge && t[V.lod]?.badge ? t : null; }, 30_000, 500) ?? await A.timeline(ALL_V);
   check('E7 时间轴:两张坏卡有徽标(悬停文案「需要本地 PC 渲染辅助」),判轻的卡与慢卡没有', tlBad[V.ns]?.badge && tlBad[V.ns].title === UNSUPPORTED && tlBad[V.lod]?.badge && [V.v, V.snd, V.rel, V.slow].every((id) => !tlBad[id]?.badge), tlBad);
   const plan2 = await until('A 清单计划含两张坏卡', async () => { const d = await A.page.evaluate(() => window.__pcPlanPublisher?.() ?? null); return d?.lastClips?.includes(V.ns) && d.lastClips.includes(V.lod) ? d : null; }, 90_000, 1000);
-  check('E7 两张坏卡进清单计划(发布补渲,由渲染节点渲)', !!plan2, plan2?.lastClips);
+  check('E7 两张坏卡进清单计划(发布预渲染重试,由渲染节点渲)', !!plan2, plan2?.lastClips);
   summary.panel.ns = await A.panelNote(V.ns);
   summary.panel.lodash = await A.panelNote(V.lod);
   check('E7 参数面板说明 namespace 卡为什么没在浏览器里运行(用了在线页面不支持的写法)', /用了在线页面不支持的写法/.test(summary.panel.ns ?? '') && /画面由渲染节点提供/.test(summary.panel.ns), summary.panel.ns);
@@ -787,14 +787,14 @@ try {
   const b2 = await launch(['--disable-gpu', '--disable-software-rasterizer']);
   const G = await openMember(b2, 'G');
   await G.page.evaluate(() => window.__pcStore.actions.seek(5));
-  const gdiag = await until('G 图卡的运行状态有结论', async () => { const d = await G.run(); return d?.run['oce-invert'] && d.run['oce-invert'].state !== 'loading' && d.graph.A && d.graph.B ? d : null; }, 120_000, 500);
+  const gdiag = await until('G 素材效果卡的运行状态有结论', async () => { const d = await G.run(); return d?.run['oce-invert'] && d.run['oce-invert'].state !== 'loading' && d.graph.A && d.graph.B ? d : null; }, 120_000, 500);
   summary.gpu = gdiag;
-  check('E7 软件渲染或没有 GPU 的浏览器:图卡的运行状态是 gpu,两台舞台报的图形能力都不是 ok', gdiag?.run['oce-invert']?.state === 'gpu' && gdiag.graph.A !== 'ok' && gdiag.graph.B !== 'ok', { run: gdiag?.run['oce-invert'], graph: gdiag?.graph });
+  check('E7 软件渲染或没有 GPU 的浏览器:素材效果卡的运行状态是 gpu,两台舞台报的图形能力都不是 ok', gdiag?.run['oce-invert']?.state === 'gpu' && gdiag.graph.A !== 'ok' && gdiag.graph.B !== 'ok', { run: gdiag?.run['oce-invert'], graph: gdiag?.graph });
   summary.panel.gpu = await G.panelNote(GCLIP);
   check('E7 参数面板说明「图形能力不够」', /图形能力不够/.test(summary.panel.gpu ?? ''), summary.panel.gpu);
   await sleep(1500);
   const gs = await G.stageState([GCLIP]);
-  check('E7 图卡片段退回原做法:舞台不挂图卡的画布', gs?.[GCLIP]?.graphNode === false, gs?.[GCLIP]);
+  check('E7 素材效果卡片段退回原做法:舞台不挂素材效果卡的画布', gs?.[GCLIP]?.graphNode === false, gs?.[GCLIP]);
   await G.page.evaluate(() => window.__pcStore.actions.seek(1));
   const gdom = await until('G 的 DOM 用户卡不受影响(画面卡是活 DOM)', async () => { const s = await G.stageState([V.v], PROBES); return s?.[V.v]?.live ? s : null; }, 90_000, 500);
   check('E7 同一个页面里 DOM 用户卡不受影响:画面卡照样在浏览器里画', !!gdom && (await G.run())?.run['oce-visual']?.state === 'ready', { run: (await G.run())?.run['oce-visual'] });
@@ -808,9 +808,9 @@ try {
   const b3 = await launch();
   const P = await openMember(b3, 'P', { mobile: true });
   const lm = await until('P 运行状态落定为 low-memory', async () => { const d = await P.run(); return d?.run['oce-visual']?.state === 'low-memory' ? d : null; }, 120_000, 500);
-  check('E9 低内存档:同步卡的运行状态是 low-memory(现有规则:这台设备不运行用户卡与图卡的代码)', !!lm && ['oce-visual', 'oce-rel', 'oce-invert'].every((id) => lm.run[id]?.state === 'low-memory'), lm?.run);
+  check('E9 低内存档:同步卡的运行状态是 low-memory(现有规则:这台设备不运行用户卡与素材效果卡的代码)', !!lm && ['oce-visual', 'oce-rel', 'oce-invert'].every((id) => lm.run[id]?.state === 'low-memory'), lm?.run);
   summary.panel.lowmem = await P.panelNote(V.v);
-  check('E9 参数面板说明「低内存档,不运行用户卡与图卡的代码」', /低内存档/.test(summary.panel.lowmem ?? ''), summary.panel.lowmem);
+  check('E9 参数面板说明「低内存档,不运行用户卡与素材效果卡的代码」', /低内存档/.test(summary.panel.lowmem ?? ''), summary.panel.lowmem);
   await P.page.evaluate(() => window.__pcStore.actions.seek(1));
   await sleep(4000);
   const mm = await markersIn(P);

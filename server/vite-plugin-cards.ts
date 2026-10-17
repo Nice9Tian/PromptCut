@@ -774,11 +774,11 @@ export function checkCardSource(
   }
 
   /*
-   * 画面从哪来:DOM 卡写 `Component`,图卡写 `card`(视觉)或 `audio`(音频),三者至少一个。
-   * 不能只认 `Component` —— 图卡按 H1 就是不写它的,认死了三张示例图卡在 create_card 就被 400 拒掉。
+   * 画面从哪来:DOM 卡写 `Component`,素材效果卡写 `card`(视觉)或 `audio`(音频),三者至少一个。
+   * 不能只认 `Component` —— 素材效果卡按 H1 就是不写它的,认死了三张示例素材效果卡在 create_card 就被 400 拒掉。
    */
   if (!/\bComponent\s*:/.test(source) && !/\bcard\s*:/.test(source) && !/\baudio\s*:/.test(source)) {
-    errors.push('CardDef 里 Component / card / audio 一个都没有 —— DOM 卡写 Component,图卡写 card(视觉)或 audio(音频),三者至少出现一个。');
+    errors.push('CardDef 里 Component / card / audio 一个都没有 —— DOM 卡写 Component,素材效果卡写 card(视觉)或 audio(音频),三者至少出现一个。');
   }
 
   // 和 checkSourceEdit 同一条差量规则:新建卡 before = '',所以出现即拒

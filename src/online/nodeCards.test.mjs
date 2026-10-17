@@ -1,6 +1,6 @@
 /**
  * 块 N 的页面一侧与整条链路(`docs/plan/online-card-exec-contract.md` 第 7 节,任务书第二段第 16 条)。
- * 舞台里真正执行用户卡、图卡的接线还没合流,所以这里用「替身渲染结果」(`bakeFrame` 直接回确定的哈希)把
+ * 舞台里真正执行用户卡、素材效果卡的接线还没合流,所以这里用「替身渲染结果」(`bakeFrame` 直接回确定的哈希)把
  * 认领、指纹、结果键、入库后别的成员能贴上这条链路钉住;真执行的端到端见 `scripts/probes/online-card-node-probe.mjs`。
  *
  *   OCN-08 登记处:算能运行的卡、换代后一小段时间不报、订阅
@@ -148,7 +148,7 @@ test("OCN-09 browserNode:welcome 的 cardEnvFingerprint 记下并交给宿主;�
   await flush();
   assert.deepEqual(rig.of("task.claim").map((m) => m.id), [task.id], "对得上的用户卡任务认领");
 
-  // 对不上的不认领:另一个身份、图卡但没有图形能力、桌面那份指纹、别人的
+  // 对不上的不认领:另一个身份、素材效果卡但没有图形能力、桌面那份指纹、别人的
   const other = nodeRig({ info: INFO({ cardSources: { "ouc-user": "other-version" } }) });
   other.node.start(); other.welcome();
   other.node.receive({ type: "queue.snapshot", tasks: [{ ...task, state: "open", version: 1 }] });
@@ -164,7 +164,7 @@ test("OCN-09 browserNode:welcome 的 cardEnvFingerprint 记下并交给宿主;�
   noGraph.node.tick();
   assert.equal(noGraph.of("task.claim").length, 0);
   assert.deepEqual(Object.keys(noGraph.node.debug().counters.blocked).sort(), ["0:other-user", "1:env-fingerprint", "3:graph-cards"]);
-  // 有图形能力:图卡任务认领
+  // 有图形能力:素材效果卡任务认领
   const withGraph = nodeRig({ info: INFO({ graphCards: true }) });
   withGraph.node.start(); withGraph.welcome();
   withGraph.node.receive({ type: "queue.snapshot", tasks: [{ ...graphTask, state: "open", version: 1 }] });

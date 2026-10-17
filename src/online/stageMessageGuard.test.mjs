@@ -1,5 +1,5 @@
 /**
- * 父页对舞台消息的校验(契约 `docs/plan/online-card-exec-contract.md` 第 3.2 节「协议面」):跨源舞台里会执行用户卡与图卡,
+ * 父页对舞台消息的校验(契约 `docs/plan/online-card-exec-contract.md` 第 3.2 节「协议面」):跨源舞台里会执行用户卡与素材效果卡,
  * 它发来的一切当不可信输入 —— 来源、形状、白名单、数字的范围。
  * 跑:node --test src/online/stageMessageGuard.test.mjs
  */

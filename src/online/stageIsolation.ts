@@ -5,7 +5,7 @@
  *   1. 收两个跨源舞台的自检结果(`pc-stage-isolation`),按形状校验;
  *   2. 每个舞台取素材走哪条路:自检通过、票据交接成功 → **cookie**(舞台用 `/media-s/<sid>/media/<哈希>`,票据不进舞台的脚本);
  *      否则 → **旧办法**(票据经 RPC 下发、拼在地址的 `?t=` 里;这样的舞台文档不执行用户卡);
- *   3. 本页此刻能不能执行用户卡与图卡(`onlineCardExec()`):总开关开着、是双舞台、两个舞台都走 cookie、没出过加固拦下的事。
+ *   3. 本页此刻能不能执行用户卡与素材效果卡(`onlineCardExec()`):总开关开着、是双舞台、两个舞台都走 cookie、没出过加固拦下的事。
  *
  * 两条单向的规矩(「要执行就不放秘密」):
  *   - 本页会话里只要点过一次头(`cardExec: true` 发给过舞台),此后**任何舞台都不再收到票据**:哪一台后来自检不过或交接失败,
@@ -31,7 +31,7 @@ export const MEDIA_GRANT_TIMEOUT_MS = 8000;
 
 export type StageMediaMode = "cookie" | "legacy";
 
-/** 本页不执行用户卡、图卡的原因(给参数面板的说明与诊断;`ok` = 能执行) */
+/** 本页不执行用户卡、素材效果卡的原因(给参数面板的说明与诊断;`ok` = 能执行) */
 export type CardExecReason =
   | "ok"
   | "switch-off"     // 托管方关了总开关
@@ -300,7 +300,7 @@ export function pageStageIsolation(enabled?: () => boolean): StageIsolationSessi
 }
 
 /**
- * 本页此刻能不能执行用户卡与图卡,不能的话为什么(块 T、L 据此决定「这张卡在本页能不能运行」与参数面板的说明)。
+ * 本页此刻能不能执行用户卡与素材效果卡,不能的话为什么(块 T、L 据此决定「这张卡在本页能不能运行」与参数面板的说明)。
  * 还没建会话(桌面运行环境、还没挂舞台)回「单舞台、不执行」。
  */
 export function onlineCardExec(): CardExecState {

@@ -1,11 +1,11 @@
 /**
- * 块 N(`docs/plan/online-card-exec-contract.md` 第 7 节,任务书第二段第 16 条):纯浏览器节点认领用户卡与图卡任务的服务端一侧。
+ * 块 N(`docs/plan/online-card-exec-contract.md` 第 7 节,任务书第二段第 16 条):纯浏览器节点认领用户卡与素材效果卡任务的服务端一侧。
  *
  *   OCN-01 内置卡的切分与结果键一个字不变(与改动之前的字面值逐个比)
- *   OCN-02 用户卡、图卡的环境指纹:在环境三项之外加运行时版本;与 envFingerprint 永不相同;结果键不同
+ *   OCN-02 用户卡、素材效果卡的环境指纹:在环境三项之外加运行时版本;与 envFingerprint 永不相同;结果键不同
  *   OCN-03 文档服务 `node.hello`:浏览器节点报的运行时版本 → 服务端算 cardEnvFingerprint、welcome 带回;自报的不作数;别的 profile 一律没有
- *   OCN-04 节点侧过滤(filter.mjs):用户卡、图卡任务只认本人的、不要转码的、指纹按 cardEnvFingerprint、代码身份对得上、能力位在
- *   OCN-05 切分(split.mjs):用户卡、图卡的浏览器那一份(页面自报 + 文档服务确认才出),键用 cardEnvFingerprint;内置卡不受影响
+ *   OCN-04 节点侧过滤(filter.mjs):用户卡、素材效果卡任务只认本人的、不要转码的、指纹按 cardEnvFingerprint、代码身份对得上、能力位在
+ *   OCN-05 切分(split.mjs):用户卡、素材效果卡的浏览器那一份(页面自报 + 文档服务确认才出),键用 cardEnvFingerprint;内置卡不受影响
  *   OCN-06 队列:前置过滤与认领按 cardEnvFingerprint;同一台机器上桌面节点与浏览器节点的结果键不同、一层只出自一种环境
  *   OCN-07 清单计划的 input.browser:规整、签名、入站校验
  *
@@ -139,10 +139,10 @@ const browserNode = (extra = {}) => ({
   capabilities: { transcode: false, streams: false, userCards: true, graphCards: true }, cardSourceVersions: { 'ouc-user': [IDENT] }, ...extra,
 });
 
-test('OCN-04 节点侧过滤:纯浏览器认领用户卡与图卡的任务——指纹按 cardEnvFingerprint、代码身份与能力位都对得上;其余照旧', () => {
+test('OCN-04 节点侧过滤:纯浏览器认领用户卡与素材效果卡的任务——指纹按 cardEnvFingerprint、代码身份与能力位都对得上;其余照旧', () => {
   const node = browserNode();
   assert.deepEqual(checkClaimable(cardTask(), node), { ok: true }, '用户卡任务');
-  assert.deepEqual(checkClaimable(cardTask({ requires: { graphCards: true } }), node), { ok: true }, '用户图卡任务(两个能力位都要)');
+  assert.deepEqual(checkClaimable(cardTask({ requires: { graphCards: true } }), node), { ok: true }, '用户素材效果卡任务(两个能力位都要)');
   assert.deepEqual(checkClaimable(builtinTask(), node), { ok: true }, '内置卡任务照旧比 envFingerprint');
 
   // 指纹:用户卡任务拿 envFingerprint 的不收,内置卡任务拿 cardEnvFingerprint 的不收
@@ -205,7 +205,7 @@ function split({ cardPlan, page = PAGE(), docs = [CARDFP], browserFingerprints =
 }
 const of = (tasks, clipId) => tasks.filter((t) => t.input.clipId === clipId);
 
-test('OCN-05 切分:用户卡、图卡的浏览器那一份用 cardEnvFingerprint 出键(同一台机器上与桌面那份的结果键不同);条件不齐一份都不多出', () => {
+test('OCN-05 切分:用户卡、素材效果卡的浏览器那一份用 cardEnvFingerprint 出键(同一台机器上与桌面那份的结果键不同);条件不齐一份都不多出', () => {
   const plan = [control('u'), control('g'), control('m')];
   const tasks = split({ cardPlan: plan });
   // 用户卡:每段两份
@@ -221,7 +221,7 @@ test('OCN-05 切分:用户卡、图卡的浏览器那一份用 cardEnvFingerprin
   for (const t of u) { assert.equal(t.input.dual, true); assert.equal('takeover' in t, false); assert.equal(t.requires.userCards, true); assert.deepEqual(t.requires.cardSources, { 'card-u': IDENT }); }
   for (const t of brCopy) { assert.equal(t.input.compositing, 'independent'); assert.equal(t.input.bake.count, 120); }
   for (const t of deskCopy) assert.equal('bake' in t.input, false, '桌面那份不带页面生成快照的参数');
-  // 图卡:两个能力位都要
+  // 素材效果卡:两个能力位都要
   const g = of(tasks, 'g');
   assert.equal(g.length, 4);
   assert.ok(g.every((t) => t.requires.userCards === true && t.requires.graphCards === true));
@@ -231,7 +231,7 @@ test('OCN-05 切分:用户卡、图卡的浏览器那一份用 cardEnvFingerprin
   assert.equal(m.length, 2);
   assert.ok(m.every((t) => t.requires.envFingerprint === OWN && t.input.dual !== true));
 
-  // 页面没声明图卡能力:图卡不出浏览器那份,用户卡照出
+  // 页面没声明素材效果卡能力:素材效果卡不出浏览器那份,用户卡照出
   const noGraph = split({ cardPlan: plan, page: PAGE({ graphCards: false }) });
   assert.equal(of(noGraph, 'g').length, 2);
   assert.equal(of(noGraph, 'u').length, 4);
@@ -350,6 +350,6 @@ test('OCN-07 清单计划的 input.browser:规整、同内容同签名、变了�
   const noFp = parse({ ...t, input: { ...t.input, browser: { userCards: true } } });
   assert.equal(noFp.ok, true);
   assert.equal('browser' in noFp.body.tasks[0].input, false, '不合格的整项去掉,任务照发');
-  // 补渲计划、桌面 plan 不受影响
+  // 预渲染重试计划、桌面 plan 不受影响
   assert.equal(parse({ ...base, input: { clips: ['c1', 'c2'], browser: page } }).body.tasks[0].input.browser !== undefined, true, '清单计划才规整');
 });

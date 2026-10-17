@@ -2,10 +2,10 @@
  * 有声动效卡(画面是组件、另写了 `audio()`,如 `av-pulse`)的画面成本身份(2026-10-06 用户定:自动、即时补测,不默认判重)。
  * 跑:node --experimental-test-module-mocks --test src/editor/avCardCost.test.mjs
  *
- *   AVC-01 `clipCostNodes` / `clipCostIndex`:片段自己的图卡节点只在调用方说算时才当成本身份节点;键与预渲染进程按输出节点算的
+ *   AVC-01 `clipCostNodes` / `clipCostIndex`:片段自己的素材效果卡节点只在调用方说算时才当成本身份节点;键与预渲染进程按输出节点算的
  *          `costKey` 相同;图里的节点不动(不写 `clipId`,预渲染结果的键不变);不给 `ownNode` 与以前逐字相同
  *   AVC-02 `clipIdentityOf`:有声动效卡(就地合成的节点、物化过的节点)有身份、有声明的帧模式、有能力表;桌面与在线普通档都如此;
- *          画面由 `card()` 出的图卡、只有 `audio()` 的音频图卡照旧没有
+ *          画面由 `card()` 出的素材效果卡、只有 `audio()` 的音频素材效果卡照旧没有
  *   AVC-03 分派:没有成本记录时按声明兜底(`direct` 判轻;别的在测完之前判重),记录到了按记录判 —— 判轻就不在预渲染集合里
  *   AVC-04 测量:有声动效卡第一次出现就测一次(只测这一张),测量期间不调它的 `audio()`;记录写进去之后分派表判轻;
  *          重开(记录还在)不重测
@@ -65,7 +65,7 @@ const avDirect = base("av-direct", { frameMode: "direct", Component: () => null,
 /** 没声明 `direct` 的有声动效卡:没有记录时按声明是重卡,要靠测量才判得了轻 */
 const avStateful = base("av-stateful", { Component: () => null, audio });
 const plain = base("plain", { Component: () => null });
-/** 画面由 `card()` 出的图卡(带声音)、只有 `audio()` 的音频图卡 */
+/** 画面由 `card()` 出的素材效果卡(带声音)、只有 `audio()` 的音频素材效果卡 */
 const gpuCard = base("gpu-card", { frameMode: "direct", card: () => ({}), audio });
 const audioOnly = base("audio-only", { kind: "audio", audio });
 
@@ -100,7 +100,7 @@ const memoryBackend = (records) => ({ forwardFrames: false,
   load: async () => ({ costs: [...records], tuning: { COST_SCALE: 1, STEP_PERCENTILE: 0.9, STEP_MIN_SAMPLES: 16 } }),
   save: async (next) => { records.push(...next); return true; } });
 
-test("AVC-01 clipCostNodes / clipCostIndex:片段自己的图卡节点由调用方说算才算;键同预渲染进程的 costKey;节点不动", () => {
+test("AVC-01 clipCostNodes / clipCostIndex:片段自己的素材效果卡节点由调用方说算才算;键同预渲染进程的 costKey;节点不动", () => {
   setup();
   const p = project();
   const graph = G.projectCardGraph(p, R.getCard);
@@ -112,7 +112,7 @@ test("AVC-01 clipCostNodes / clipCostIndex:片段自己的图卡节点由调用�
   assert.equal(nodes.get("p")?.id, "@clip/p/source", "普通卡照旧是带 clipId 的基节点");
   assert.equal(nodes.has("g"), false, "调用方没说算的不算");
   assert.equal(JSON.stringify(graph.nodes), before, "图里的节点一个字不动");
-  assert.ok(graph.nodes.filter((n) => n.adapter === "card").every((n) => n.clipId === undefined), "图卡节点上不写 clipId(预渲染结果的键不变)");
+  assert.ok(graph.nodes.filter((n) => n.adapter === "card").every((n) => n.clipId === undefined), "素材效果卡节点上不写 clipId(预渲染结果的键不变)");
 
   const version = (node) => `builtin:v-${node.cardId}`;
   const index = P.clipCostIndex(p, graph, version, own);
@@ -131,7 +131,7 @@ test("AVC-01 clipCostNodes / clipCostIndex:片段自己的图卡节点由调用�
   assert.equal(old.identityKeys.p, index.identityKeys.p, "普通卡的键不受影响");
 });
 
-test("AVC-02 clipIdentityOf:有声动效卡有身份、帧模式、能力表(桌面与在线普通档);card() 图卡与音频图卡照旧没有", () => {
+test("AVC-02 clipIdentityOf:有声动效卡有身份、帧模式、能力表(桌面与在线普通档);card() 素材效果卡与音频素材效果卡照旧没有", () => {
   setup();
   const p = project();
   try {
@@ -145,7 +145,7 @@ test("AVC-02 clipIdentityOf:有声动效卡有身份、帧模式、能力表(桌
       assert.equal(id.capabilities.get("a")?.frameMode, "direct", `${where}:能力表(测量按它决定抽样还是推帧)`);
       assert.ok(id.capabilities.has("m"));
       for (const c of ["g", "o"]) {
-        assert.equal(id.identityKeys[c], undefined, `${where}:${c} 没有身份(图卡的输入在测量用的缩水项目里取不到 / 音频图卡没有画面)`);
+        assert.equal(id.identityKeys[c], undefined, `${where}:${c} 没有身份(素材效果卡的输入在测量用的缩水项目里取不到 / 音频素材效果卡没有画面)`);
         assert.equal(id.frameModes[c], undefined);
       }
       assert.notEqual(id.identityKeys.a, id.identityKeys.s, "不同的卡不同的键");
@@ -174,7 +174,7 @@ test("AVC-03 分派:没有记录按声明兜底,记录到了按记录判;判轻�
   // 同一张卡的另一个片段(物化过的)时长相同、参数相同 → 同一个键,一起判轻
   assert.equal(keys.m, keys.s);
   assert.equal(at(plan, "m", 11), "light");
-  // 图卡照旧按重
+  // 素材效果卡照旧按重
   assert.equal(at(plan, "g", 7), "heavy");
 });
 
@@ -229,7 +229,7 @@ test("AVC-05 卡片图里有悬空输入:普通卡与有声动效卡照样有身
   setup();
   const good = project();
   const goodKeys = CI.clipIdentityOf(good).identityKeys;
-  // 一个指向不存在节点的图卡节点:完整的图摊不出来
+  // 一个指向不存在节点的素材效果卡节点:完整的图摊不出来
   const broken = project({ cardNodes: [...good.cardNodes, { id: "dangling", adapter: "card", cardId: "gpu-card", inputs: { source: { nodeId: "gone" } }, params: {} }] });
   assert.throws(() => G.projectCardGraph(broken, R.getCard), "完整的图会抛");
   CI.resetClipIdentityCache();

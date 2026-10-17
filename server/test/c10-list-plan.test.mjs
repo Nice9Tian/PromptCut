@@ -3,7 +3,7 @@
  *
  *   LP1 清单计划的形状:`plan:<projectId>@<projectRev>#clips:<sig>`,带片段清单、normal 档;`requires` 不带
  *       envFingerprint / preferNode,只可能带 codeVersion;同一份清单同一个键;入站校验(normal 档、清单非空、签名合法)
- *   LP2 队列:带清单的 plan(清单计划、补渲计划)host 能认领;不带清单的桌面 plan host 认领 0 次(X4 保留);browser 一律不认领
+ *   LP2 队列:带清单的 plan(清单计划、预渲染重试计划)host 能认领;不带清单的桌面 plan host 认领 0 次(X4 保留);browser 一律不认领
  *   LP3 节点侧规则 6:host 见到带清单的 plan 放行,见到桌面 plan 跳过
  *   LP4 独立主机认领清单计划:用自己的指纹切分;清单里的片段当重卡、不切流、细任务 normal 档;
  *       锁在别的指纹上的卡按锁的指纹出任务(卡片级指纹锁照旧生效)
@@ -38,17 +38,17 @@ test('C10-LP1 清单计划的形状与入站校验', () => {
   assert.ok(isClipsPlan(a) && isListPlan(a) && !isBackfillPlan(a));
   const bf = backfillPlanTaskOf({ projectId: 'p1', projectRev: 3, clips: ['c1', 'c2'] });
   assert.ok(isListPlan(bf) && !isClipsPlan(bf));
-  assert.notEqual(bf.id, a.id, '补渲计划与清单计划各用各的键');
+  assert.notEqual(bf.id, a.id, '预渲染重试计划与清单计划各用各的键');
   assert.ok(!isListPlan(planTaskOf({ projectId: 'p1', projectRev: 3 })));
 
   const parse = (task) => parseInbound({ type: 'task.publish', tasks: [task] });
   assert.equal(parse(a).ok, true);
   assert.equal(parse({ ...a, priority: 0 }).ok, true, '整数也是 normal 档');
-  assert.equal(parse({ ...a, priority: 'backfill' }).ok, false, '补渲用 #backfill: 的键');
+  assert.equal(parse({ ...a, priority: 'backfill' }).ok, false, '预渲染重试用 #backfill: 的键');
   assert.equal(parse({ ...a, input: {} }).ok, false);
   assert.equal(parse({ ...a, input: { clips: [] } }).ok, false);
   assert.equal(parse({ ...a, resultKey: 'p1@3#clips:BAD!', id: 'plan:p1@3#clips:BAD!' }).ok, false);
-  // 补渲计划的旧规则不变
+  // 预渲染重试计划的旧规则不变
   assert.equal(parse({ ...bf, priority: 'normal' }).ok, false);
 });
 
@@ -81,7 +81,7 @@ test('C10-LP2 队列:带清单的 plan host 能认领;桌面 plan host 认领 0 
 
   const bf = backfillPlanTaskOf({ projectId: 'p1', projectRev: 1, clips: ['c2'] });
   s.publish(bf);
-  assert.equal(s.claim('host', bf.id).type, 'task.claimed', 'host 认领补渲计划');
+  assert.equal(s.claim('host', bf.id).type, 'task.claimed', 'host 认领预渲染重试计划');
 
   // 桌面 plan(不带清单,有 preferNode):X4 照旧,窗口内外 host 都是 plan-profile
   const desk = planTaskOf({ projectId: 'p2', projectRev: 1, codeVersion: CV, envFingerprint: FP_A, preferNode: 'PC' });

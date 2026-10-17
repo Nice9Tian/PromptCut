@@ -1,11 +1,11 @@
 /**
- * 纯浏览器节点执行用户卡与图卡时,本页「能运行什么」的登记处(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 1、3 条)。
+ * 纯浏览器节点执行用户卡与素材效果卡时,本页「能运行什么」的登记处(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 1、3 条)。
  *
  * 三方用它:
  *   - 写:`src/editor/nodeCardInfoLive.ts` 按注册表里每张同步卡的运行状态与代码身份算出来写进来(`setNodeCardInfo`),
  *     节点报到后文档服务回的 `cardEnvFingerprint` 也记在这里(`setNodeCardEnvFingerprint`);
  *   - 读:`browserNode.ts`(`node.hello` 报运行时版本;能力位与 `cardSourceVersions` 给节点侧过滤用)、
- *     `planPublisher.ts`(清单计划的 `input.browser`,切分方据此决定给浏览器出不出用户卡、图卡的那一份)。
+ *     `planPublisher.ts`(清单计划的 `input.browser`,切分方据此决定给浏览器出不出用户卡、素材效果卡的那一份)。
  *
  * 只在内存里,不读环境、不碰舞台:纯数据加订阅,Node 单测直接载它。属于 render 这一层(`src/online/`)。
  *
@@ -19,7 +19,7 @@
 export const NODE_CARD_SETTLE_MS = 1500;
 
 export interface NodeCardInfo {
-  /** 在线卡片运行时版本(`cardRuntime/version.ts`);本页不能执行用户卡与图卡时为 null */
+  /** 在线卡片运行时版本(`cardRuntime/version.ts`);本页不能执行用户卡与素材效果卡时为 null */
   cardRuntime: string | null;
   userCards: boolean;
   graphCards: boolean;
@@ -42,7 +42,7 @@ export function computeNodeCardInfo(input: {
   runtime: string;
   /** 本页此刻能不能执行同步来的卡(`cardRuntime/gate.ts` 的 `cardExecAvailable()`) */
   available: boolean;
-  /** 这台设备的图形能力够不够跑图卡(块 G 判;没判过当不够) */
+  /** 这台设备的图形能力够不够跑素材效果卡(块 G 判;没判过当不够) */
   graphCapable: boolean;
   /** 同步来的卡(`syncedUserCards()`):id 与入口文件的键 */
   cards: Iterable<{ id: string; source?: string }>;
@@ -154,8 +154,8 @@ export function __setNodeCardInfoTimers(impl: typeof timerImpl | null): void {
 
 let graphCapable = false;
 /**
- * 这台设备的图形能力够不够跑图卡(契约 4.3,块 G 判:WebGL2 可用、不是软件渲染、最大纹理够大、没丢过上下文)。
- * 缺省「不够」:判过之前不报 `graphCards`,图卡的任务不会认领到这台设备。变了通知订阅方。
+ * 这台设备的图形能力够不够跑素材效果卡(契约 4.3,块 G 判:WebGL2 可用、不是软件渲染、最大纹理够大、没丢过上下文)。
+ * 缺省「不够」:判过之前不报 `graphCards`,素材效果卡的任务不会认领到这台设备。变了通知订阅方。
  */
 export function setNodeGraphCapable(ok: boolean): boolean {
   const next = ok === true;

@@ -108,7 +108,7 @@ export function judgeFirstVideo({ project, events, state, builtin, openTools = C
   const unknown = clips.filter((c) => c.cardId && !builtin.has(c.cardId));
   const broken = clips.filter((c) => !c.cardId && !c.mediaId && !c.nodeId);
   const f2 = clips.length >= 3 && broken.length === 0;
-  add('F2 项目里有若干片段(≥ 3),每个都是卡片段或素材段(内置卡、用户卡、图卡、素材都可以,照实记)', f2, {
+  add('F2 项目里有若干片段(≥ 3),每个都是卡片段或素材段(内置卡、用户卡、素材效果卡、素材都可以,照实记)', f2, {
     clips: clips.length, cards: [...new Set(clips.map((c) => c.cardId).filter(Boolean))], mediaClips: nonCard.length, userCards: [...new Set(unknown.map((c) => c.cardId))], media: (project?.media ?? []).length, broken: broken.length,
   });
 

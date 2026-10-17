@@ -29,7 +29,7 @@ export function CardCell({ def, fill, aspect }: { def: CardDef<any>; fill?: bool
   // 动画多长:卡片声明的落定时刻(按默认参数算),没有就按 1.5s
   const animMs = animMsOf(def);
   /*
-   * 图卡(`card` / `audio`)没有 React 组件,库里跑不起来:悬停不换成动画预览,
+   * 素材效果卡(`card` / `audio`)没有 React 组件,库里跑不起来:悬停不换成动画预览,
    * 一直显示名字 + 说明那张静态占位。量包围盒也一并跳过(没有 DOM 可量)。
    */
   const live = hot && typeof def.Component === "function";

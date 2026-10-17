@@ -1,4 +1,4 @@
-// GET /@media/<hash>/pcm —— 音频图卡的素材输入(ffmpeg 按采样区间裁)。跑法:
+// GET /@media/<hash>/pcm —— 音频素材效果卡的素材输入(ffmpeg 按采样区间裁)。跑法:
 //   node --test server/test/media-pcm.test.mjs
 //
 // 和 media-hash.test.mjs 一个路数:插件是 .ts,转译到临时目录再 import,路由单独导出成

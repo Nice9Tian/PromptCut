@@ -41,7 +41,7 @@ export function onlineUnsupported(entry: string): string {
 }
 
 /**
- * 时间轴上这台设备跑不了、预渲染结果又还没覆盖整段的片段(用户卡、图卡)的徽标悬停文案。2026-09-29 用户定:与舞台上
+ * 时间轴上这台设备跑不了、预渲染结果又还没覆盖整段的片段(用户卡、素材效果卡)的徽标悬停文案。2026-09-29 用户定:与舞台上
  * `unsupported` 占位符同一句「需要本地 PC 渲染辅助」,出现条件也相同(按片段算),所以直接引用占位符那句已定的文字,不另写一份。
  */
 export const ONLINE_CUSTOM_CARD_TEXT = UNSUPPORTED_TEXT;

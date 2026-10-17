@@ -40,8 +40,8 @@ let plan: PipelinePlan | null = null;
  * - **显示用的表**(`currentPlan`,发给舞台、`snapshotFeed` 按它抑制和选帧):每张卡在每个位置都判重 ——
  *   低内存档播放时只看预渲染小尺寸,不活渲任何卡,判轻的卡也一样(没有产物就是占位,停下时画出);
  * - **判定的表**(`judgedPlan`):轻重按界限搜索的结果(`lowMemoryLight`,`src/editor/lowMemorySearch.ts`)。
- *   补渲只对它判重、又缺产物的层发(`lowMemoryBackfill.ts`);导出时判轻的卡本机逐帧渲、判重的卡用预渲染原尺寸。
- *   搜索完成之前 `lowMemoryLight` 是 null:没有结果,补渲不发,判定的表里全部按重卡。
+ *   预渲染重试只对它判重、又缺产物的层发(`lowMemoryBackfill.ts`);导出时判轻的卡本机逐帧渲、判重的卡用预渲染原尺寸。
+ *   搜索完成之前 `lowMemoryLight` 是 null:没有结果,预渲染重试不发,判定的表里全部按重卡。
  * C10a 的过渡做法(判定也全部按重卡)随之退出(契约 `docs/plan/c10-contract.md` 第 3 节)。
  */
 let lowMemory = false;
@@ -105,7 +105,7 @@ function recompute(): void {
   const dead = deadMs !== null ? { deadMs: of ? (clipId: string) => of(at, clipId) : deadMs } : {};
   /*
    * 两边都没有定义的卡片段(未知卡片)舞台不画:不当重卡、不进预渲染集合(桌面与在线一致;`knownCardsOnly`)。
-   * 不去掉的话它们没有身份、没有成本记录,会按声明兜底判重,进清单计划与低内存档补渲。
+   * 不去掉的话它们没有身份、没有成本记录,会按声明兜底判重,进清单计划与低内存档预渲染重试。
    */
   const planned = knownCardsOnly(project);
   const opts3D = view3d ? { includeLightCardsFor3D: true, view3d: true } : {};
@@ -211,7 +211,7 @@ export function planLowMemory(): boolean {
 
 /**
  * 界限搜索的结果:判轻的卡的 identityKey(`null` = 撤掉结果,判定回到全部按重)。同一份集合不重算。
- * 表同步重算(不攒拍):补渲、导出拿到结果后马上就要用判定的表。
+ * 表同步重算(不攒拍):预渲染重试、导出拿到结果后马上就要用判定的表。
  */
 export function setPlanLowMemoryLight(keys: Iterable<string> | null): void {
   const next = keys === null ? null : new Set(keys);

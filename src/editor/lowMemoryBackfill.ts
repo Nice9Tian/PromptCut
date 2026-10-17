@@ -1,14 +1,14 @@
 /**
- * 低内存档的补渲(c10a 契约第 17 节;语义 `mechanism/rendering.md`「低内存档」的补渲、`product/document-service.md`
- * 「渲染任务队列」的「补渲排在后面」):低内存档按界限搜索判轻重(`lowMemorySearch.ts`),发现**判重**的层在素材服务里没有产物
- * (按清单判:不在渲染节点写的层表里)时,向队列发布补渲任务 —— 一种带片段清单的计划任务,标 `priority: 'backfill'`。
+ * 低内存档的预渲染重试(c10a 契约第 17 节;语义 `mechanism/rendering.md`「低内存档」的预渲染重试、`product/document-service.md`
+ * 「渲染任务队列」的「预渲染重试排在后面」):低内存档按界限搜索判轻重(`lowMemorySearch.ts`),发现**判重**的层在素材服务里没有产物
+ * (按清单判:不在渲染节点写的层表里)时,向队列发布预渲染重试任务 —— 一种带片段清单的计划任务,标 `priority: 'backfill'`。
  * 判轻的卡不发(播放时一直占位,停下时画出,导出时本机逐帧渲;契约 `c10-contract.md` 第 18 节第 8 条)。
  * 界限搜索做完之前不发(还不知道谁重)。
  *
  * - 同一批还在等的不重发:发过的片段在 `BACKFILL_RESEND_MS` 之内、项目版本没变(或刚变不到 `BACKFILL_REV_GRACE_MS`)
  *   都算「还在等」;产物到了(进了层表)就忘掉它;
  * - 页面只发布,不认领(只发 `publisher.hello` 与 `task.publish`,从不发 `node.hello`);
- * - 用户卡、图卡照样发(2026-09-29 用户改语义):它们在这台设备上判重、跑不了,没有产物就进补渲清单,由桌面版等渲染节点渲,
+ * - 用户卡、素材效果卡照样发(2026-09-29 用户改语义):它们在这台设备上判重、跑不了,没有产物就进预渲染重试清单,由桌面版等渲染节点渲,
  *   结果到了自动换上;纯浏览器节点不认领它们的细任务(M7 契约)。
  *
  * 任务的形状与队列侧 `server/render-queue/messages.mjs` 的 `backfillPlanTaskOf` 逐字段相同(单测对拍);
@@ -51,7 +51,7 @@ export interface BackfillPlanTask {
   priority: "backfill";
 }
 
-/** 补渲计划任务:`plan:<projectId>@<projectRev>#backfill:<sig>`,带片段清单,标 backfill,不带 requires */
+/** 预渲染重试计划任务:`plan:<projectId>@<projectRev>#backfill:<sig>`,带片段清单,标 backfill,不带 requires */
 export function backfillPlanTask({ projectId, projectRev, clips }: { projectId: string; projectRev: number; clips: readonly string[] }): BackfillPlanTask {
   const list = [...new Set(clips)].map(String).filter(Boolean).sort();
   const resultKey = `${projectId}@${projectRev}${BACKFILL_KEY_MARK}${backfillSig(list)}`;
@@ -64,7 +64,7 @@ export function backfillPlanTask({ projectId, projectRev, clips }: { projectId: 
 
 /**
  * 缺产物的判重层:项目里可见的卡片段里页面判重的(`heavy`,界限搜索的结果;契约 `c10-contract.md` 第 18 节第 8 条:
- * 判轻的卡不发补渲),减去层表里列着的(有产物的)。升序。本机渲染不了的(用户卡、图卡)一律判重(界限搜索的 `forcedHeavy`),
+ * 判轻的卡不发预渲染重试),减去层表里列着的(有产物的)。升序。本机渲染不了的(用户卡、素材效果卡)一律判重(界限搜索的 `forcedHeavy`),
  * 照样在内(2026-09-29 起不再去掉)。不给 `heavy` 按全部判重算(C10a 过渡做法的口径,只剩单测用)。
  */
 export function missingLayers({ project, layerClipIds, heavy }: {
@@ -98,7 +98,7 @@ export interface BackfillSyncResult {
 }
 
 /**
- * 补渲的发布方。只发布、不认领。`sync` 由父页定时调(`BACKFILL_CHECK_MS`),传此刻缺产物的层;同时只跑一次。
+ * 预渲染重试的发布方。只发布、不认领。`sync` 由父页定时调(`BACKFILL_CHECK_MS`),传此刻缺产物的层;同时只跑一次。
  */
 export class BackfillPublisher {
   private readonly request: Request;

@@ -28,8 +28,8 @@
  *       规则 2 与队列侧被挡,逐条断言在单测 `server/test/online-card-n.test.mjs` OCN-04 与 `m7-browser-probe.mjs`(清单计划不切流,这里没法造)。
  *   A-5 ★ 桌面节点与浏览器节点环境不同时结果键不串:同一台机器上切分方指纹 = 页面 envFingerprint、浏览器那份指纹是 cardEnvFingerprint,
  *       两份结果键不同;锁在 cardEnvFingerprint 上、切分方那份作废(superseded);内容库里只有浏览器键的清单。
- *   A-6 图卡(2026-10-06 主会话裁定,契约 13A(二):图卡任务纯浏览器节点不认领,不放宽体积上限):图卡整屏快照典型 2 MB 以上,超过 M7 的 300 KB /
- *       画布位图 1 MB 的上限(量法见 `lib-graph-snapshot-size.mjs`),按画布卡处理。同步一张图卡(`ocn-graph`)、甲放一个片段:切分方(替身按画布卡标 canvasHeavy)
+ *   A-6 素材效果卡(2026-10-06 主会话裁定,契约 13A(二):素材效果卡任务纯浏览器节点不认领,不放宽体积上限):素材效果卡整屏快照典型 2 MB 以上,超过 M7 的 300 KB /
+ *       画布位图 1 MB 的上限(量法见 `lib-graph-snapshot-size.mjs`),按画布卡处理。同步一张素材效果卡(`ocn-graph`)、甲放一个片段:切分方(替身按画布卡标 canvasHeavy)
  *       给它出的每个细任务只有桌面那一份、没有浏览器那一份(没有 dual、没有 bake 输入、指纹不是 cardEnvFingerprint),甲的节点认领数不增加。
  *       (切分方是替身:它不会自己量体积,画布卡标记是替身按裁定给的;真实的「桌面量出超限就标」在单测 OCN-05 与 `server/render-node` 的切分测试里。)
  *
@@ -70,14 +70,14 @@ fs.mkdirSync(OUT, { recursive: true });
 const deadline = Date.now() + 40 * 60_000;
 const CARD_ID = 'ocn-card';
 const CARD_KEY = `src/cards/user/${CARD_ID}.tsx`;
-/** A-6 的图卡:同步来的整屏 glsl 图卡(纯色;体积与画布标记由切分方替身按裁定给,见 A-6) */
+/** A-6 的素材效果卡:同步来的整屏 glsl 素材效果卡(纯色;体积与画布标记由切分方替身按裁定给,见 A-6) */
 const GRAPH_ID = 'ocn-graph';
 const GRAPH_KEY = `src/cards/user/${GRAPH_ID}.tsx`;
-const GRAPH_SOURCE = `/** 探针:在线执行图卡的端到端(块 N,A-6) */
+const GRAPH_SOURCE = `/** 探针:在线执行素材效果卡的端到端(块 N,A-6) */
 import { glsl } from "../../render/cards/graphValues";
 export const ocnGraph = {
   id: "${GRAPH_ID}",
-  name: "OCN 探针图卡",
+  name: "OCN 探针素材效果卡",
   description: "块 N A-6 探针",
   tags: ["探针"],
   kind: "animation",
@@ -188,7 +188,7 @@ async function creatorContent(projectId, creator, label) {
 /* ================================================================== 切分方:同一台机器上的桌面节点(只切分、不认领细任务) */
 
 const splitterLog = [];
-/** 切分方实际出的细任务(`afterSplit` 收到的 TaskInput,只留断言要的几项):A-6 核图卡有没有出浏览器那一份 */
+/** 切分方实际出的细任务(`afterSplit` 收到的 TaskInput,只留断言要的几项):A-6 核素材效果卡有没有出浏览器那一份 */
 const splitTasks = [];
 async function startSplitter({ projectId, creator, codeVersion, envFingerprint, identity, graphIdentity, contentClient }) {
   const [{ normalizeEntry, sharedProtocols }, { createWsEndpoint }, { createLocalNode }, { createProjectClient }, { wsBaseOf }, { layerMapOf, splitCandidatesOf, layerMapKeyOf }] = await Promise.all([
@@ -220,8 +220,8 @@ async function startSplitter({ projectId, creator, codeVersion, envFingerprint, 
           const first = Math.round(c.start * fps);
           const count = Math.max(1, Math.round((c.end - c.start) * fps));
           const key = `ocn-${RUN}-${planTask.source.userId ?? 'u'}-${c.id}`.replace(/[^\w-]/g, '_');
-          // 图卡(A-6):替身按裁定(契约 13A(二))给「画布卡」标记 —— 桌面按图卡整屏快照的体积(2 MB 以上,超过浏览器 300 KB / 1 MB 的上限)与画布位图标 canvasHeavy,
-          // 切分方就不出浏览器那一份。这里验的是整条链:标了之后浏览器节点一个图卡任务都不认领。
+          // 素材效果卡(A-6):替身按裁定(契约 13A(二))给「画布卡」标记 —— 桌面按素材效果卡整屏快照的体积(2 MB 以上,超过浏览器 300 KB / 1 MB 的上限)与画布位图标 canvasHeavy,
+          // 切分方就不出浏览器那一份。这里验的是整条链:标了之后浏览器节点一个素材效果卡任务都不认领。
           const graph = c.cardId === GRAPH_ID;
           cardPlan.push({ clipId: c.id, cardId: c.cardId, snapshotKey: key, contentKey: key, tier: 'shared', start: c.start, end: c.end, count,
             sampling: { firstFrame: first, phase: { numerator: 0, denominator: 1 } }, compositing: 'independent',
@@ -322,7 +322,7 @@ try {
     synced: (key) => (key === GRAPH_KEY ? { body: GRAPH_SOURCE, hash: graphHash } : null),
     builtin: (rel) => { try { return fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch { return null; } },
   }))?.version;
-  check(!!graphIdentity, '算出探针图卡的代码身份', { graphIdentity });
+  check(!!graphIdentity, '算出探针素材效果卡的代码身份', { graphIdentity });
   out.steps.identity = identity;
 
   /* ---------------------------------------------------------------- 0. 建项目、写进空项目、卡片源码进内容库 */
@@ -339,7 +339,7 @@ try {
   const put = await adminLink.content.put('card-source', CARD_KEY, CARD_SOURCE).catch((e) => ({ error: String(e?.message ?? e) }));
   check(!put?.error, '创建者把用户卡源码写进内容库', put);
   const putGraph = await adminLink.content.put('card-source', GRAPH_KEY, GRAPH_SOURCE).catch((e) => ({ error: String(e?.message ?? e) }));
-  check(!putGraph?.error, '创建者把图卡源码写进内容库', putGraph);
+  check(!putGraph?.error, '创建者把素材效果卡源码写进内容库', putGraph);
 
   const { default: puppeteer } = await import('puppeteer');
   const { PROBE_CHROME_ARGS } = await import('./probe-chrome.mjs');
@@ -423,17 +423,17 @@ try {
   check(!!snapsB, 'A-2 ★ 乙按层表贴上甲的浏览器节点产出的这一层', out.steps.memberB, { pending: true });
   await shot(B, 'ocn-member-b');
 
-  /* ---------------------------------------------------------------- 5b. 图卡(A-6,2026-10-06 裁定改成「浏览器节点不认领图卡任务」,契约 13A(二)) */
+  /* ---------------------------------------------------------------- 5b. 素材效果卡(A-6,2026-10-06 裁定改成「浏览器节点不认领素材效果卡任务」,契约 13A(二)) */
   const beforeG = await nodeDiag(A);
   const clipG = await addCardClip(A, 'graph-a', GRAPH_ID);
-  await until('A-6 甲的图卡清单计划被切分', async () => splitterLog.some((s) => s.cards.some((c) => c.clipId === clipG)), 120_000, 500);
+  await until('A-6 甲的素材效果卡清单计划被切分', async () => splitterLog.some((s) => s.cards.some((c) => c.clipId === clipG)), 120_000, 500);
   await delay(6000);
   const afterG = await nodeDiag(A);
   const gTasks = splitTasks.filter((t) => t.clipId === clipG);
   out.steps.graph = { tasks: gTasks.map(({ id, ...rest }) => rest), before: beforeG?.counters, after: afterG?.counters, graphCards: afterG?.capabilities?.graphCards ?? null, cards: afterG?.cards ?? null };
-  check(gTasks.length >= 1 && gTasks.every((t) => t.graphCards && !t.userCards), 'A-6 切分方给图卡出了细任务,标明是图卡任务(requires.graphCards)', out.steps.graph);
-  check(gTasks.every((t) => t.canvasHeavy && !t.dual && !t.hasBake && t.fingerprint === pageEnv), 'A-6 图卡的整屏快照体积超过浏览器的上限、按画布卡处理:每个任务只有切分方(桌面)那一份,没有浏览器那一份(没有 dual、没有 bake 输入、指纹不是 cardEnvFingerprint)', gTasks);
-  check(afterG && beforeG && afterG.counters.claims === beforeG.counters.claims, 'A-6 浏览器节点不认领图卡任务:认领数没增加', { before: beforeG?.counters, after: afterG?.counters });
+  check(gTasks.length >= 1 && gTasks.every((t) => t.graphCards && !t.userCards), 'A-6 切分方给素材效果卡出了细任务,标明是素材效果卡任务(requires.graphCards)', out.steps.graph);
+  check(gTasks.every((t) => t.canvasHeavy && !t.dual && !t.hasBake && t.fingerprint === pageEnv), 'A-6 素材效果卡的整屏快照体积超过浏览器的上限、按画布卡处理:每个任务只有切分方(桌面)那一份,没有浏览器那一份(没有 dual、没有 bake 输入、指纹不是 cardEnvFingerprint)', gTasks);
+  check(afterG && beforeG && afterG.counters.claims === beforeG.counters.claims, 'A-6 浏览器节点不认领素材效果卡任务:认领数没增加', { before: beforeG?.counters, after: afterG?.counters });
 
   /* ---------------------------------------------------------------- 6. 丙(另一用户)放同一张卡:甲不认领丙的任务(A-3) */
   const C = await openMember('丙', projName, 'ocn-member-c', projectPassword);

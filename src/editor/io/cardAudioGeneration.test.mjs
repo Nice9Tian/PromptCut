@@ -174,7 +174,7 @@ test('声画卡的audio-only类型误声明在添加、换卡、新轨添加前�
   assert.equal(getState().project, p);
 });
 
-test('在线AV的上游独立用户音频图卡源码变化，也必须使持久WAV过期', async () => {
+test('在线AV的上游独立用户音频素材效果卡源码变化，也必须使持久WAV过期', async () => {
   const { cardAudioIdentity } = await import('../../kernel/cardAudioRendition.mjs');
   const { setSyncedUserCards } = await import('../../kernel/registry.ts');
   const root = { ...def, id: 'root-av' }, up = { id: 'upstream-audio', defaults: { value: 1 }, kind: 'audio', audio() {} };

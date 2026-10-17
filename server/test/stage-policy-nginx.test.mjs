@@ -1,5 +1,5 @@
 /**
- * nginx 模板里与「在线执行用户卡与图卡」的隔离有关的部分(契约 `docs/plan/online-card-exec-contract.md` 第 3.3、4.1 节):
+ * nginx 模板里与「在线执行用户卡与素材效果卡」的隔离有关的部分(契约 `docs/plan/online-card-exec-contract.md` 第 3.3、4.1 节):
  * 两个策略片段与 `src/online/stagePolicy.mjs` 同出一处;舞台源的每个 location 都带策略头;票据换 cookie 的两条路由;舞台入口 `stage.html`。
  * 跑:node --test server/test/stage-policy-nginx.test.mjs
  */

@@ -296,7 +296,7 @@ export function VideoTrack({
       completeSeen.current[i] = doneNow && (completeSeen.current[i] || fresh[i] || inUse);
       if (i === plan.active && cur) {
         // 画面淡下去的同时声音也跟着淡:交叉溶解时两段的声音不会重叠成双倍
-        // An 音频图卡 node replaces this video's native soundtrack. The visual remains in
+        // An 音频素材效果卡 node replaces this video's native soundtrack. The visual remains in
         // its usual slot while AudioLayer loads and plays the generated WAV separately.
         const target = targetTimeOf(cur.clip, t);
         // 偏差过了「暂停时该 seek」的门槛就补注册一次 rVFC(见 armFrame)

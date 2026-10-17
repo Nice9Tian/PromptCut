@@ -1,11 +1,11 @@
 /**
- * 量图卡整屏快照的体积(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节「图卡任务的一个风险」)。
- * 图卡的画面是一块画布;快照里它被 `rasterizeCanvas` 换成 `<img src="data:image/png;base64,…">`(`src/render/snapshot/rasterizeCanvas.ts`)。
+ * 量素材效果卡整屏快照的体积(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节「素材效果卡任务的一个风险」)。
+ * 素材效果卡的画面是一块画布;快照里它被 `rasterizeCanvas` 换成 `<img src="data:image/png;base64,…">`(`src/render/snapshot/rasterizeCanvas.ts`)。
  * 这里在真 Chrome 里画几种典型内容(1920×1080,舞台缺省画幅),取 `toDataURL('image/png')`,按快照里的写法量字节:
  *   - 纯色底加几块纯色矩形与文字(下界);
- *   - 矢量感画面(渐变 + 色块 + 圆):图卡里「合成、调色、叠图形」那一类;
+ *   - 矢量感画面(渐变 + 色块 + 圆):素材效果卡里「合成、调色、叠图形」那一类;
  *   - 渐变加大面积细节(模拟滤镜加在较平的素材上);
- *   - 照片感画面(多层噪声叠加,模拟视频帧):图卡接视频输入源时的样子。
+ *   - 照片感画面(多层噪声叠加,模拟视频帧):素材效果卡接视频输入源时的样子。
  * 与 M7 的上限比:DOM 卡 300 KB、画布位图 1 MB(`server/snapshot-store.mjs` 的 `DOM_SNAPSHOT_LIMIT` / `CANVAS_SNAPSHOT_LIMIT`)。
  *
  *   node scripts/probes/lib-graph-snapshot-size.mjs [--width 1920] [--height 1080]

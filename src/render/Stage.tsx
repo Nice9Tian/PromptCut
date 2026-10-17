@@ -28,7 +28,7 @@ setMaxAnimated(maxAnimated);
 // Their CSS/DOM stays in the same stacking tree (including paper/glass styles),
 // but their component is not run for each stateful history frame.
 const DirectCard = memo(function DirectCard({ def, params, ...props }: CardProps<any> & { def: CardDef<any> }) {
-  // 图卡没有 Component,但它在下面的分支顺序里排在这一支**前面**,走到这里必有组件。
+  // 素材效果卡没有 Component,但它在下面的分支顺序里排在这一支**前面**,走到这里必有组件。
   // 这里**不能**改成 `if (!C) return null` —— 分支顺序万一写错,那就是一张静默的空白卡。
   const C = def.Component!;
   return <C {...props} params={{ ...def.defaults, ...params }} />;
@@ -87,7 +87,7 @@ export interface StagePlaneProps {
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /**
- * 运行时载入的卡(在线浏览器里执行的同步来的用户卡与图卡)包一层错误边界:渲染时抛错只撤这一张,不带垮舞台。
+ * 运行时载入的卡(在线浏览器里执行的同步来的用户卡与素材效果卡)包一层错误边界:渲染时抛错只撤这一张,不带垮舞台。
  * 构建时就有的卡原样返回 —— 桌面、导出、预渲染的 React 树与以前逐字相同。
  */
 function guardRuntimeCard(cardId: string | undefined, body: ReactNode): ReactNode {
@@ -168,7 +168,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    *   1. 正在追帧(`settling`)—— 读它自己的虚拟时间(值是全局舞台毫秒,这里现算本地);
    *   2. 被抑制 —— 冻在抑制开始那一刻;
    *   3. 平时 —— 实时值。
-   * 四支(组合卡 / 图卡 / DirectCard / 普通卡)口径一致,都走这里。
+   * 四支(组合卡 / 素材效果卡 / DirectCard / 普通卡)口径一致,都走这里。
    */
   const localTOf = (clip: Timeline["clips"][number], base: number): number => {
     const ms = settling?.get(clip.id);
@@ -249,16 +249,16 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
         {active.map((clip, i) => {
           const def = getCard(clip.cardId);
           /*
-           * 这台设备跑不了这张卡(在线浏览器模式下的用户卡、图卡;同步来的用户卡本机连定义都没有):卡片代码不跑,
+           * 这台设备跑不了这张卡(在线浏览器模式下的用户卡、素材效果卡;同步来的用户卡本机连定义都没有):卡片代码不跑,
            * 包裹层照内置重卡的路子挂快照平面、流平面,兜底顺序什么都贴不上时占位符显示 `unsupported`(C10 契约第 9 节)。
            * 模式关着(桌面、导出、预渲染、Agent 看到的画面)恒为 false,下面每一支和以前逐字相同。
            */
           const localOnly = (onlineBrowserMode() && unsupportedHere(clip.cardId, def)) || exportSyncedMountFor(clip.cardId, def);
           /*
            * 三道都在取 def 这一格剔掉,不放到分支里:
-           *  - 定义没了(用户卡文件被删)——图卡的 def 在注册表里必然取得到,挡不住下面两种;
-           *  - 既没有 card 也没有 Component:音频图卡万一带着 cardId 进来也不炸;
-           *  - 图卡但没有图(projectCardGraph 抛了):没有图解不出输入,画不出东西。
+           *  - 定义没了(用户卡文件被删)——素材效果卡的 def 在注册表里必然取得到,挡不住下面两种;
+           *  - 既没有 card 也没有 Component:音频素材效果卡万一带着 cardId 进来也不炸;
+           *  - 素材效果卡但没有图(projectCardGraph 抛了):没有图解不出输入,画不出东西。
            * 这台设备跑不了的卡不看这三道:它不挂组件,只贴预渲染结果。
            */
           if (!localOnly && (!def || (!def.card && !def.Component) || (def.card && !timeline.graph))) return null;
@@ -369,7 +369,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 // 组合卡:部件实例树逐级渲染,画布尺寸就是这张卡的框(没有框 = 整个舞台)
                 <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={localTOf(clip, t)} playToken={gen} />
               ) : def!.card ? (
-                // 图卡:经 Stage、有包裹层,hitTest / rects / 快照 / 抑制全部照常
+                // 素材效果卡:经 Stage、有包裹层,hitTest / rects / 快照 / 抑制全部照常
                 <GraphCard def={def!} clip={clip} graph={timeline.graph} fps={timeline.fps}
                   t={localTOf(clip, cardT)} params={{ ...def!.defaults, ...clip.params }} stage={stageInfo} />
               ) : clipFrameMode(clip, def) === 'direct' ? (

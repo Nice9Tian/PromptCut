@@ -1,5 +1,5 @@
 /**
- * 图卡的三个值构造器。文件是 .ts,但里面只有 `import type`,Node 自带的类型剥离
+ * 素材效果卡的三个值构造器。文件是 .ts,但里面只有 `import type`,Node 自带的类型剥离
  * 能直接加载(试过 `import('./graphValues.ts')`),所以不用 vite。
  */
 import { test } from 'node:test';

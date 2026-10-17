@@ -42,7 +42,7 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
   const target = nodeId ? Math.max(0, t - clip.start + cardOffset) : missingAudio ? missingMaterialSourceTime(clip, t) : targetTimeOf(clip, t);
   const [cardUrl, setCardUrl] = useState<string | null>(null);
   const [cardState, setCardState] = useState<"idle" | CardState>("idle");
-  // 这一段卡片声音的播放源是当场合成的(图卡、在线页面判轻的内置声音)还是已入库的产物;只给验收探针看(`data-pc-audio-source`)
+  // 这一段卡片声音的播放源是当场合成的(素材效果卡、在线页面判轻的内置声音)还是已入库的产物;只给验收探针看(`data-pc-audio-source`)
   const [cardLive, setCardLive] = useState(false);
   // 在线页面(`product/platforms.md`「卡片声音的平台边界」):产物的字节取不到时改由浏览器合成(判轻的内置声音)。
   // `productFailed` = 这一段的产物地址已经报过读不了;`effectUrl` = 独立音效按配方合成出来的临时地址
@@ -62,7 +62,7 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
     // 只看配方身份:项目别处的改动不用重新合成
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productFailed, effectKey, clip.id]);
-  // 换了图卡(HMR 重跑 src/cards/index.ts)之后 project 引用不变,effect 不会自己重跑;
+  // 换了素材效果卡(HMR 重跑 src/cards/index.ts)之后 project 引用不变,effect 不会自己重跑;
   // configureCardAudio 每调一次 +1 的这个版本号就是重取的触发。
   const cardAudioEpoch = useSyncExternalStore(subscribeCardAudioEpoch, getCardAudioEpoch, getCardAudioEpoch);
   useEffect(() => {
@@ -107,7 +107,7 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
     return () => { current = false; release?.(); };
   }, [project, nodeId, clip.id, clip.start, clip.end, onCardState, cardAudioEpoch, embedded, localHashes, productFailed]);
   useLayoutEffect(() => {
-    // While a 图卡 node is loading or has failed there is deliberately no source URL.
+    // While a 素材效果卡 node is loading or has failed there is deliberately no source URL.
     // driveMedia may attempt play(), but it cannot emit source-media audio as a fallback.
     if (nodeId && !cardUrl) return;
     driveMedia(ref.current, { target, playing, volume, scrubbing });

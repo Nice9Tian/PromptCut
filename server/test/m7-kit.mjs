@@ -42,7 +42,7 @@
  *       `touchedAt`（`describe().locks[i].touchedAt` 可见）。门：`queue.mjs` 出现 `lockIdleMs`。
  *   K6  D1 切分侧：`server/render-node/split.mjs` 的 `splitPlan` 从 `planTask.input.browser`（`{ nodeId, envFingerprint }`）读浏览器意向
  *       （测试同时也以同名选项 `browser` 传一份，二者任一被读都行）。浏览器可做的卡 = 共享档、`weightOf(control).class` 为
- *       light / medium、`compositing`（`control.compositing ?? control.capabilities.compositing`）为 `'independent'`、非用户卡图卡、
+ *       light / medium、`compositing`（`control.compositing ?? control.capabilities.compositing`）为 `'independent'`、非用户卡素材效果卡、
  *       `cardSourceVersions` 里没有它、没锁在第三种环境上。这种卡每段出两份：切分方指纹一份、浏览器指纹一份，两份都 `input.dual: true`、
  *       都不带 `takeover`；浏览器那一份 `input.bake` 是带 `count` 与 `sampling` 两个键的对象，`input.compositing === 'independent'`。
  *       结果键照契约 B.1 自己算：`sha256(contentKey + '\n' + fp)`。门：`split.mjs` 出现 `dual`。

@@ -259,9 +259,9 @@ test("低内存档:小尺寸快照退役,picks 恒为空,未就绪重卡在暂�
   assert.deepEqual(f.scrub, ["h"]);
 });
 
-/* ---------------------------------------------------------------- C10 第 9 节:在线的用户卡、图卡 */
+/* ---------------------------------------------------------------- C10 第 9 节:在线的用户卡、素材效果卡 */
 
-test("在线浏览器模式:用户卡、图卡(含同步来的)一律按重卡;停下不认「已精确」;桌面照旧(C10 契约第 9 节,2026-09-29)", async () => {
+test("在线浏览器模式:用户卡、素材效果卡(含同步来的)一律按重卡;停下不认「已精确」;桌面照旧(C10 契约第 9 节,2026-09-29)", async () => {
   const registry = await import(srcUrl("kernel/registry.ts"));
   const host = await import(srcUrl("render/placeholderHost.ts"));
   registry.registerCards([{ id: "graphish", card: () => null, params: {} }]);

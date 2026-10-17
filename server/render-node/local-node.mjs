@@ -178,12 +178,12 @@ function mergedLocks(cardLocks, extra) {
 }
 
 /**
- * 带片段清单的计划任务:补渲计划(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」)与在线页面的清单计划
+ * 带片段清单的计划任务:预渲染重试计划(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」)与在线页面的清单计划
  * (C10 契约第 7 节、第 18 节第 9 条)。清单里的片段当重卡算键 —— 预渲染集合换成清单(与本机的判重无关)。
- * 细任务的档跟着 plan:补渲计划的一律标 `backfill`,清单计划照 normal 的名次。不是带清单的 plan 时回空对象,切分照旧。
+ * 细任务的档跟着 plan:预渲染重试计划的一律标 `backfill`,清单计划照 normal 的名次。不是带清单的 plan 时回空对象,切分照旧。
  *
  * 轨道流(`docs/plan/browser-stream-task.md` 第一处;任务书 `docs/plan/render-refactor-task.md`「甲三」):
- *   - 补渲计划照旧不切流(低内存档不消费流);
+ *   - 预渲染重试计划照旧不切流(低内存档不消费流);
  *   - 在线页面的清单计划:执行器给了 `browserStreamsFor`(按清单里的片段算流,`frame-pipeline.mjs` 的 `planForQueue`)时,
  *     这些流给浏览器出一份(单卡流、浏览器做得了的才出)。**切分方自己的那一份**看执行器给的 `ownListStreams`:
  *       - 为真(本机此刻能产流;托管方的渲染节点另要这个项目的「生成轨道流」开着,由执行器按项目收,`prerender-executor.mjs` 的 `plan`):单卡流连自己的那一份一起出,
@@ -411,8 +411,8 @@ export function createLocalNode({
     // plan 带的 cardLocks / takeover 随展开原样传给切分(契约 F.2)。
     // M7 D1:认领回包带的浏览器指纹(文档服务上本项目在线、同一用户的纯浏览器节点)交给切分
     const browserFingerprints = Array.isArray(ctx.browserFingerprints) ? ctx.browserFingerprints : [];
-    // 块 N:本页(同一用户)能运行哪些用户卡、图卡——页面自报在清单计划的 `input.browser`,文档服务给的 `browserCardEnvFingerprints`
-    // 是「确实有这样一台在线节点」的凭据;两边对得上才给浏览器出用户卡、图卡的那一份(`splitPlan` 的 `browserCards`)
+    // 块 N:本页(同一用户)能运行哪些用户卡、素材效果卡——页面自报在清单计划的 `input.browser`,文档服务给的 `browserCardEnvFingerprints`
+    // 是「确实有这样一台在线节点」的凭据;两边对得上才给浏览器出用户卡、素材效果卡的那一份(`splitPlan` 的 `browserCards`)
     const browserCards = browserCardsOf(task?.input?.browser);
     const browserCardEnvFingerprints = Array.isArray(ctx.browserCardEnvFingerprints) ? ctx.browserCardEnvFingerprints : [];
     // 执行器按别的版本切的(项目往前走了,契约 J.15):细任务的 `source.projectRev` 写实际那一版;`derivedFrom` 仍是这个 plan

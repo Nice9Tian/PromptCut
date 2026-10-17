@@ -124,7 +124,7 @@ function makeProxy(port) {
       return res.end(runtimeConfig);
     }
     const index = path.join(DIST, 'index.html');
-    // 跨源舞台载的是舞台入口 stage.html(在线执行用户卡与图卡,`online-card-exec-contract.md` 第 3.3 节);同源单舞台仍是 /editor/?stage=1
+    // 跨源舞台载的是舞台入口 stage.html(在线执行用户卡与素材效果卡,`online-card-exec-contract.md` 第 3.3 节);同源单舞台仍是 /editor/?stage=1
     const isStageEntry = url.pathname === '/editor/stage.html';
     const isPage = url.pathname === '/editor' || url.pathname === '/editor/' || url.pathname === '/editor/index.html' || isStageEntry;
     if (isPage && url.searchParams.get('stage') === '1') {

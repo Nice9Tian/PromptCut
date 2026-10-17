@@ -1,15 +1,15 @@
 import { normalizeCardInput, projectCardGraph } from './cardGraph.mjs';
 import { isAudiovisualCard, assertAudiovisualCardKind } from './cardAudioRendition.mjs';
 
-/** 图卡 = 注册表里写了 `card` 或 `audio` 的普通 CardDef。定义永远从注册表取,
+/** 素材效果卡 = 注册表里写了 `card` 或 `audio` 的普通 CardDef。定义永远从注册表取,
  * 不存进项目 JSON —— 它和 TSX 用户卡一样是 `src/cards/user/<id>.tsx` 文件。 */
 const isGraphCard = def => !!def && (typeof def.card === 'function' || typeof def.audio === 'function');
 
-/** 纯 DOM 卡(有组件、没有 card / audio)。第一版图卡不接它的输出。 */
+/** 纯 DOM 卡(有组件、没有 card / audio)。第一版素材效果卡不接它的输出。 */
 const isDomCard = def => !!def && !isGraphCard(def);
 
 /**
- * 把一张图卡挂到片段上(新建片段或套在已有片段上),一步撤销由调用方合并。
+ * 把一张素材效果卡挂到片段上(新建片段或套在已有片段上),一步撤销由调用方合并。
  *
  * `getCard` 是注册表的取卡函数(浏览器侧 `src/kernel/registry`)。定义不在项目里,
  * 所以这个参数不是可选的锦上添花 —— 不传就一张卡也找不到。
@@ -35,9 +35,9 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
   }
 
   /*
-   * ① 物化。面板拖入 / add_clip 建的图卡片段只有 cardId,渲染时靠 projectCardGraph
+   * ① 物化。面板拖入 / add_clip 建的素材效果卡片段只有 cardId,渲染时靠 projectCardGraph
    * 就地合成的 `@clip/<id>/card` 出画 —— 那个 id 只在渲染路径上存在,不能被 inputs 引用。
-   * 所以目标片段和被引用的片段里,凡是「图卡片段但没有 nodeId」的,先建出正式节点。
+   * 所以目标片段和被引用的片段里,凡是「素材效果卡片段但没有 nodeId」的,先建出正式节点。
    */
   const materialize = target => {
     if (!target || target.nodeId || !target.cardId) return;
@@ -54,17 +54,17 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
   for (const id of referencedClips) materialize(clipById(id));
 
   // 第一版不接 DOM 卡:既不套在 DOM 卡段上,也不引用 DOM 卡的输出。
-  if (isDomCard(getCard(clip.cardId))) throw new Error('图卡第一版不接 DOM 卡输入');
-  for (const id of referencedClips) if (isDomCard(getCard(clipById(id)?.cardId))) throw new Error('图卡第一版不接 DOM 卡输入');
+  if (isDomCard(getCard(clip.cardId))) throw new Error('素材效果卡第一版不接 DOM 卡输入');
+  for (const id of referencedClips) if (isDomCard(getCard(clipById(id)?.cardId))) throw new Error('素材效果卡第一版不接 DOM 卡输入');
 
   /*
-   * 同一片段不能同时挂音频图卡和视觉图卡:音频图卡不写 clip.cardId,所以判据只能看
+   * 同一片段不能同时挂音频素材效果卡和视觉素材效果卡:音频素材效果卡不写 clip.cardId,所以判据只能看
    * clip.nodeId 指向的那个节点的 kind(而且下面 `clip.nodeId = nodeId` 会把它覆盖掉)。
    */
   const priorNodeId = clip.nodeId;
   const prior = priorNodeId ? next.cardNodes?.find(node => node.id === priorNodeId) : undefined;
   if (prior?.adapter === 'card' && (prior.kind === 'audio' && !prior.embeddedAudio) !== (definition.kind === 'audio' && !isAudiovisualCard(definition)))
-    throw new Error('同一片段不能同时挂音频图卡和视觉图卡，先复制片段');
+    throw new Error('同一片段不能同时挂音频素材效果卡和视觉素材效果卡，先复制片段');
 
   const nodeId = args.nodeId || crypto.randomUUID();
   const previous = next.cardNodes?.find(node => node.id === nodeId);
@@ -73,7 +73,7 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
   const inPlace = !!args.nodeId && args.nodeId === priorNodeId;
 
   // ② 显式 inputs。`clipId` 对素材段映射成它的 `@clip/<id>/source`,
-  // 对图卡片段映射成它自己的输出节点(转场卡的一路输入是另一张图卡就靠这条)。
+  // 对素材效果卡片段映射成它自己的输出节点(转场卡的一路输入是另一张素材效果卡就靠这条)。
   const sourceOf = clipId => {
     const target = clipById(clipId);
     return target?.nodeId && isGraphCard(getCard(target.cardId)) ? target.nodeId : `@clip/${clipId}/source`;
@@ -89,12 +89,12 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
     const owner = synthetic ? clipById(synthetic[1]) : undefined;
     const node = next.cardNodes?.find(node => node.id === ref.nodeId);
     if (node?.adapter === 'chrome' || (owner && !owner.mediaId && isDomCard(getCard(owner.cardId))))
-      throw new Error('图卡第一版不接 DOM 卡输入');
+      throw new Error('素材效果卡第一版不接 DOM 卡输入');
   }
 
   /*
    * ③ 继承 / 自动接链,二选一。顺序只有这一种排法成立:继承排在兜底之后的话,
-   * 「素材段上原地改一张旧 inputs 为空的图卡」会先被兜底塞进 @clip/<id>/source
+   * 「素材段上原地改一张旧 inputs 为空的素材效果卡」会先被兜底塞进 @clip/<id>/source
    * 再被空 inputs 抹掉。
    */
   if (inPlace) {
@@ -117,8 +117,8 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
   next.cardNodes = [...(next.cardNodes || []).filter(node => node.id !== nodeId), node];
 
   /*
-   * ⑥ 写片段字段。**赋值必须排在兜底之后**:写早了,无输入的图卡会被 ④ 塞一条指向自己的 source。
-   * 音频图卡例外,只写 nodeId ——它没有 card 也没有 Component,进了 Stage 就是 <undefined />;
+   * ⑥ 写片段字段。**赋值必须排在兜底之后**:写早了,无输入的素材效果卡会被 ④ 塞一条指向自己的 source。
+   * 音频素材效果卡例外,只写 nodeId ——它没有 card 也没有 Component,进了 Stage 就是 <undefined />;
    * 它的消费方只看节点,片段照旧被素材层跳过、画面上不多一层。
    */
   clip.nodeId = nodeId;
@@ -132,7 +132,7 @@ export function applyCardDefinition(project, args, getCard = () => undefined) {
   return { project: next, clipId: clip.id, nodeId };
 }
 
-/** Clone a clip-owned 图卡 instance while deliberately sharing definitions.
+/** Clone a clip-owned 素材效果卡 instance while deliberately sharing definitions.
  * Inputs that address the old clip's synthetic source follow the new clip;
  * other inputs remain external graph references. */
 export function cloneCardClipInstance(project, oldClipId, newClipId, nodeId, timeOffset = 0) {

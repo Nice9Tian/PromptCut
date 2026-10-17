@@ -21,7 +21,7 @@
  *      `hitTest` 仍能点中它(贴着快照平面时);
  *   4. **`.pc-awaiting` 的 500 ms 兜底**:快照没来也要自己摘掉,不能永久隐身;
  *   5. **素材层在舞台里**:视频出画面、图片出画面、带像素映射的素材段也出;`rects()` 含素材段;
- *      被别人接管的素材段(像素映射 / 图卡节点)不被画两遍;
+ *      被别人接管的素材段(像素映射 / 素材效果卡节点)不被画两遍;
  *   6. **E4b 两条**:`setInterval` 每 100 ms 一格的打字机卡补跑到第 3 秒恰好 30 格;
  *      `Date.now()` 倒计时卡续推 10 秒后恰好少 10 秒。
  *
@@ -232,11 +232,11 @@ try {
   check(['c-video', 'c-image', 'c-pixel'].every((id) => out.rects.includes(id)), 'rects() 含素材段(D3 第 4 步)', out.rects);
   check(new Set(out.rects).size === out.rects.length, 'rects() 里每个 clipId 只出现一次', out.rects);
 
-  /* 图卡接管的素材段:节点是 adapter:'card' 的,素材层不画它 */
+  /* 素材效果卡接管的素材段:节点是 adapter:'card' 的,素材层不画它 */
   const graphProject = await page.evaluate(() => window.__mk([
     { id: 'tr-v', clips: [{ id: 'c-video', mediaId: 'mv', start: 0, end: 4, params: {} }] },
     { id: 'tr-g', clips: [{ id: 'c-graph', mediaId: 'mv', nodeId: 'gnode', start: 0, end: 4, params: {} }] },
-  ], { cardNodes: [{ id: 'gnode', adapter: 'card', cardId: 'punch-pill', kind: 'animation', inputs: {}, params: { text: '图卡' } }] }));
+  ], { cardNodes: [{ id: 'gnode', adapter: 'card', cardId: 'punch-pill', kind: 'animation', inputs: {}, params: { text: '素材效果卡' } }] }));
   await page.evaluate(async (p) => { await window.__rpc.setProject(p, { reset: true }); await window.__rpc.setMediaT(1); await window.__rpc.setTime(1); }, graphProject);
   await new Promise((r) => setTimeout(r, 800));
   out.graphTakeover = await fa.evaluate(() => ({
@@ -245,7 +245,7 @@ try {
     videosOnPlainTrack: [...document.querySelectorAll('[data-pc-track="tr-v"] video[src]')].length,
   }));
   check(out.graphTakeover.videosOnGraphTrack === 0 && out.graphTakeover.videosOnPlainTrack >= 1,
-    '图卡接管的素材段不被 VideoTrack 画(普通素材段照画)', out.graphTakeover);
+    '素材效果卡接管的素材段不被 VideoTrack 画(普通素材段照画)', out.graphTakeover);
 
   /* ================================================================
    * B. 平面与类(E7 第 4、5 条)+ 组件实例不变

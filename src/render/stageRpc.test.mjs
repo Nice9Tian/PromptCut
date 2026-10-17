@@ -24,7 +24,7 @@ test("七种事件各只认一个角色发来的(E0:不过滤就会在互换那�
   assert.equal(stageEventRole("bake-frame"), "back");
 });
 
-test("事件白名单就是这十种(E0 的七种 + M7 的 bake-frame + 在线执行用户卡与图卡的 card-states、sound-state),一个不多一个不少", () => {
+test("事件白名单就是这十种(E0 的七种 + M7 的 bake-frame + 在线执行用户卡与素材效果卡的 card-states、sound-state),一个不多一个不少", () => {
   assert.deepEqual(
     [...STAGE_EVENT_TYPES].sort(),
     ["bake-frame", "card-states", "demote", "ended", "frame", "mediaReady", "probe", "probe-frame", "settled", "sound-state"],

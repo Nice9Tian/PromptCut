@@ -13,7 +13,7 @@
  *
  * 夹具是「越权探测卡」（`fixtures/render-isolation/`，防御性测试夹具、只读只报告）：
  *   overreach-probe.tsx + overreach-probe-lib.ts   用户卡：按固定清单逐项尝试，结果打进页面日志，探针从工作进程的输出里取回
- *   overreach-graph.tsx                            图卡形态（同一份清单）
+ *   overreach-graph.tsx                            素材效果卡形态（同一份清单）
  *   overreach-marker-jia.tsx                       只有项目甲才有的一张卡（验「乙的页面里没有甲的代码」）
  *   overreach-node-side.css / .ts                  Node 一侧处理时的读盘写法（预期被同步文件预检整份拒掉）
  *
@@ -73,7 +73,7 @@
  *   2. 外链正常可达：公开collector是正向对照，不再承诺卡片内容不外发。
  *   3. 环境变量：名字不像秘密的那一个（F3 的第二个）会被工作进程继承——页面读不到进程环境变量，Node 一侧又过不了同步文件预检，所以带不回来；
  *      名字像秘密的那一个根本不传给工作进程。
- *   4. 图卡：见结果里的 `graph` 一项（渲染节点有没有对图卡的 `card()` 求值）。
+ *   4. 素材效果卡：见结果里的 `graph` 一项（渲染节点有没有对素材效果卡的 `card()` 求值）。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import：不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import { spawn } from 'node:child_process';
@@ -727,7 +727,7 @@ async function main() {
 
   out.proxyOnly={status:'not-applicable',reason:'P1/P3撤销出口护栏，没有出口代理或对应测试开关；不执行旧对照段'};
 
-  /* ---- 残余面与图卡 */
+  /* ---- 残余面与素材效果卡 */
   const assetItems = itemsOf(jiaReports, 'other.asset.');
   const cardGotYiAsset = assetItems.some((it) => (it.got ?? '').includes(F.yiAsset));
   residual.push({ id: 1, what: '素材按哈希寻址', memberCanReadOtherProjectBlobByHash: memberCanReadByHash, cardReadIt: cardGotYiAsset, routes: assetItems.map((it) => `${it.name}=${short(it.got ?? it.err).slice(0, 60)}`) });
@@ -736,7 +736,7 @@ async function main() {
   residual.push({ id: 3, what: '名字不像秘密的环境变量会被工作进程继承', inResults: fakesIn(rawAll).includes('F3-ENV-PLAINNAME'), inLogs: fakesIn(logsText).includes('F3-ENV-PLAINNAME') });
   const graphEvaluated = /OVERREACH-GRAPH-EVALUATED/.test(text);
   out.graph = { cardEvaluated: graphEvaluated, reports: graphReports.length, loadedWithUserCards: itemsOf(jiaReports, 'other.loadedMarkers').some((it) => /overreach-graph/.test(it.got ?? '')), resultsClean: graphReports.every((r) => fakesIn(r.raw, allowJia).length === 0) };
-  residual.push({ id: 4, what: '图卡', ...out.graph });
+  residual.push({ id: 4, what: '素材效果卡', ...out.graph });
   out.sample = Object.fromEntries(Object.entries(jiaReports[0]?.items ?? {}).map(([k, v]) => [k, scrub(String(v.ok ? v.got : `✗ ${v.err}`).slice(0, 90))]));
 }
 

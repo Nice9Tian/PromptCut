@@ -1,10 +1,10 @@
 /**
  * 真实的浏览器 + vision HTTP 错误传输，不是打桩的 shader。
  *
- * 测的是「GLSL 编译诊断经 frameReady → see_frames 原样传出来」。图卡走的是和从前
+ * 测的是「GLSL 编译诊断经 frameReady → see_frames 原样传出来」。素材效果卡走的是和从前
  * Python 卡同一条路（`CardGpuExecutor` 在 WebGL 上编译），所以断言一个字没改。
  *
- * 仓库里没有「注册」函数，图卡只能是文件：脚本先把这张故意写错 uniform 的图卡写成
+ * 仓库里没有「注册」函数，素材效果卡只能是文件：脚本先把这张故意写错 uniform 的素材效果卡写成
  * 临时文件 `src/cards/user/__probe-broken-shader.tsx`（**写在 createServer 之前**，
  * 别和 vite 的文件发现抢时间），再用 `server.ssrLoadModule` 把它加载进来当 `getCard`
  * 传给 `applyCardDefinition`（裸 Node `import('*.tsx')` 会 ERR_UNKNOWN_FILE_EXTENSION，
@@ -26,7 +26,7 @@ import { glsl } from "../../render/cards/graphValues";
 export const brokenShader: CardDef<Record<string, never>> = {
   id: "${CARD_ID}",
   name: "编译诊断探针",
-  description: "故意写错 uniform 的 GLSL 图卡,只给 verify-card-gpu-diagnostics 用",
+  description: "故意写错 uniform 的 GLSL 素材效果卡,只给 verify-card-gpu-diagnostics 用",
   source: "user",
   kind: "animation",
   frameMode: "direct",
@@ -48,7 +48,7 @@ try {
   const mod = await server.ssrLoadModule(`/src/cards/user/${CARD_ID}.tsx`);
   // ssrLoadModule 回的是模块命名空间,不是函数 —— 取出里面那个 CardDef 再包成 getCard
   const definition = Object.values(mod).find((value) => value && typeof value === 'object' && value.id === CARD_ID);
-  assert.ok(definition, `临时图卡没有导出 id 为 ${CARD_ID} 的 CardDef`);
+  assert.ok(definition, `临时素材效果卡没有导出 id 为 ${CARD_ID} 的 CardDef`);
   const getCard = (id) => (id === definition.id ? definition : undefined);
 
   const base = { id: 'shader-error-' + randomUUID(), width: 64, height: 64, fps: 10, duration: 1, themeId: 'default', media: [], tracks: [{ id: 'main', kind: 'video', clips: [] }] };

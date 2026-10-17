@@ -17,7 +17,7 @@ test('node identity invalidates downstream source/code/used style, preserves unr
   assert.deepEqual(base, moved); // 时间轴位置不进身份
   const restyled = cardNodeIdentities(value, { style: { color: 'blue', font: 'sans' } });
   assert.equal(base.get('source'), restyled.get('source'));
-  // 图卡**有意**不吃 project.style(要用的样式值写进 params),改全局风格不换它的身份;
+  // 素材效果卡**有意**不吃 project.style(要用的样式值写进 params),改全局风格不换它的身份;
   // DOM 卡照旧整份吃 style,用例挂在它身上。
   assert.equal(base.get('effect'), restyled.get('effect'));
   assert.notEqual(base.get('dom'), restyled.get('dom'));
@@ -43,7 +43,7 @@ test('local MOV sampling retains subframe phase and reuses integer-frame transla
   assert.equal(cardSampling(0.1, 30).phase.numerator, '0');
 });
 test('whole scene cache includes the card graph nodes and global style', () => {
-  // 图卡的源码不在项目里(它是 src/cards/user/<id>.tsx 文件),整片缓存看的是节点
+  // 素材效果卡的源码不在项目里(它是 src/cards/user/<id>.tsx 文件),整片缓存看的是节点
   const project = { tracks: [], media: [], cardNodes: [{ id: 'n', adapter: 'card', cardId: 'invert', params: { amount: .5 } }], style: { tint: 'red' } };
   const before = frameIdentity(project);
   project.cardNodes[0].params.amount = .9; assert.notEqual(frameIdentity(project), before);

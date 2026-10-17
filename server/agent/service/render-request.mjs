@@ -1,5 +1,5 @@
 /**
- * 没有任何成员在线时的补渲(契约 `docs/plan/cloud-agent-contract.md` 第 16 节):云端 Agent 的写入落地后,
+ * 没有任何成员在线时的预渲染重试(契约 `docs/plan/cloud-agent-contract.md` 第 16 节):云端 Agent 的写入落地后,
  * 由 Agent 服务以**服务身份**发布清单计划,让渲染节点把被改到的片段渲出来;保持到结果入库。
  *
  * - 发什么:与在线页面同一种清单计划(`server/render-queue/messages.mjs` 的 `clipsPlanTaskOf`,与页面那份单测对拍)。
@@ -74,8 +74,8 @@ const chunk = (list, n) => { const out = []; for (let i = 0; i < list.length; i 
  */
 export function createRenderRequests({ publisher = null, store, now = () => Date.now(), limits: limitsIn = {}, log = () => {} } = {}) {
   const limits = { ...RENDER_REQUEST_DEFAULTS, ...limitsIn };
-  const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响补渲 */ } };
-  /** 对话键 → 这个对话的补渲状态 */
+  const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响预渲染重试 */ } };
+  /** 对话键 → 这个对话的预渲染重试状态 */
   const jobs = new Map();
   /** projectId → { handle, opening, plans: Set(planId), retry, retryTimer } */
   const channels = new Map();

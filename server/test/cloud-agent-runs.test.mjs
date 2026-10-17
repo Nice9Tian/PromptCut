@@ -1,5 +1,5 @@
 /**
- * 云端 Agent 服务:一轮的生命周期、事件补发、对话状态落盘、闸与用量、Key、补渲发布
+ * 云端 Agent 服务:一轮的生命周期、事件补发、对话状态落盘、闸与用量、Key、预渲染重试发布
  * (契约 `docs/plan/cloud-agent-contract.md` 第 2.4、6、7、8、9.4、16 节,第 13.1 节的编号)。
  * 跑:node --test server/test/cloud-agent-runs.test.mjs
  *
@@ -27,7 +27,7 @@
  *                 连续没有进度 → 放弃并撤回;
  *   CA-RENDER-03  没渲完时进程没了再起:按 pending-render.json 重新发布,不需要任何成员连接。
  *
- * 文档服务是本机回环的内存实例,模型是模拟提供方,全部不出网。鉴权、凭证、补渲的发布通道是测试替身(乙块与第三段合流后接真的)。
+ * 文档服务是本机回环的内存实例,模型是模拟提供方,全部不出网。鉴权、凭证、预渲染重试的发布通道是测试替身(乙块与第三段合流后接真的)。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -703,7 +703,7 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
   });
 });
 
-/** 补渲发布通道的测试替身(真的要第三段的队列与乙块的服务身份) */
+/** 预渲染重试发布通道的测试替身(真的要第三段的队列与乙块的服务身份) */
 function fakePublisher(state = { available: true, enabled: true }) {
   const pub = {
     state, log: [], handlers: new Map(), opens: 0,
@@ -724,7 +724,7 @@ function fakePublisher(state = { available: true, enabled: true }) {
   return pub;
 }
 
-test('CA-RENDER-01 / 02 / 03 没人在线时的补渲:攒批发布、撤回旧计划、完成与失败记进对话、重启后重发', { timeout: 240_000 }, async (t) => {
+test('CA-RENDER-01 / 02 / 03 没人在线时的预渲染重试:攒批发布、撤回旧计划、完成与失败记进对话、重启后重发', { timeout: 240_000 }, async (t) => {
   const pub = fakePublisher();
   const kit = await startKit(t, { extra: { publisher: pub, renderLimits: { debounceMs: 200, stallMs: 600, progressEveryMs: 0 } } });
   const p = project('p-a', '甲');

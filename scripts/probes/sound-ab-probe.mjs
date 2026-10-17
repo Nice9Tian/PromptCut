@@ -607,7 +607,7 @@ async function onlinePhases() {
     check('O2 键盘声(素材服务里没有文件):在线预览听得到,声音源是浏览器按配方合成的', audible(heardKeys) && heardKeys.source === 'blob', brief(heardKeys));
     const blobs = (await audioLogSince(A, logBeforePlay)).filter((e) => e.kind === 'createObjectURL' && e.type === 'audio/wav').length;
     check('O2 三段声音各合成了一份临时声音(项目与素材服务都没变)', blobs === 3 && (await clipsOf(A)).find((c) => c.id === made.pulse)?.hasAudio === false && blocked.size === 2, { blobs, blocked: blocked.size });
-    // 内置有声卡的画面:在线页面照常渲染(它是普通的 DOM 卡,不是图卡),不出「需要本地 PC 渲染辅助」
+    // 内置有声卡的画面:在线页面照常渲染(它是普通的 DOM 卡,不是素材效果卡),不出「需要本地 PC 渲染辅助」
     await A.evaluate(() => { const { actions } = window.__pcStore; actions.pause(); actions.seek(0.6); });
     await sleep(1200);
     const picture = { stage: null, badge: null };

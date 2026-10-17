@@ -18,7 +18,7 @@
  *   最多等 `BROWSER_NODE_WAIT_MS`(3 s,三级数字),超时照发。切分方认领计划时,队列按此刻在线、同一用户、watch 着本项目的浏览器节点
  *   给指纹(`claude/rq-m7-queue`),先发计划就轮不到本页。计划本身不写浏览器意向(页面自报的不作数)。由 `nodeReady()` 判;
  *   节点报到完时宿主调 `nodeChanged()`,等着的那一版马上发。
- * - 用户卡、图卡(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条):本页能执行同步来的卡、且节点已报到拿到了
+ * - 用户卡、素材效果卡(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条):本页能执行同步来的卡、且节点已报到拿到了
  *   `cardEnvFingerprint` 时,`input.browser` 带 `{ cardEnvFingerprint, userCards, graphCards, cardSources }`(`cardSources`:本页已载入成功、
  *   代码身份已定下来的卡片 id → 身份),切分方据此给浏览器出这几类卡的那一份。登记变了(转译好一张、换代、能力变了)就是另一个计划
  *   (签名里带它的摘要),马上重发;没有这类卡时不带这一项,计划与原来逐字相同。登记在 `nodeCardInfo.ts`,由 `deps.browser` 注入或缺省读它。
@@ -148,7 +148,7 @@ export interface PlanPublisherDeps {
   /** 发这一版之前调(M7 D6:宿主留存这一版的已确认项目) */
   onPublish?: (v: Version) => void;
   /**
-   * 本页能运行的用户卡、图卡(块 N):回 `input.browser` 要的内容,本页不能执行或节点还没拿到 `cardEnvFingerprint` 回 null。
+   * 本页能运行的用户卡、素材效果卡(块 N):回 `input.browser` 要的内容,本页不能执行或节点还没拿到 `cardEnvFingerprint` 回 null。
    * 缺省读 `nodeCardInfo.ts` 的登记处。
    */
   browser?: () => unknown | null;

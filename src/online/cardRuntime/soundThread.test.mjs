@@ -1,5 +1,5 @@
 /**
- * 在线执行用户卡与图卡 · 声音线程(`docs/plan/online-card-exec-contract.md` 3.5、第 6 节)。跑:
+ * 在线执行用户卡与素材效果卡 · 声音线程(`docs/plan/online-card-exec-contract.md` 3.5、第 6 节)。跑:
  *   node --experimental-test-module-mocks --test src/online/cardRuntime/soundThread.test.mjs
  *
  *   OCE-A-01 占位模块:引进来、取上面的名字、一路点下去都不报错;调用、`new` 才抛「声音代码里不能用 <名字>」;真的载入不了就给占位
@@ -343,10 +343,10 @@ test("OCE-A-04 编辑页面的分派:内置卡在页面里求值,同步来的卡
     const iso = fakeIsolated();
     CA.setIsolatedCardAudioHost(iso);
     assert.deepEqual(CA.cardAudioRoute(p, node("s")), { route: "isolated" });
-    assert.deepEqual(CA.cardAudioRoute(p, "n-audio"), { route: "isolated" }, "同步来的音频图卡(不读素材)");
+    assert.deepEqual(CA.cardAudioRoute(p, "n-audio"), { route: "isolated" }, "同步来的音频素材效果卡(不读素材)");
     assert.deepEqual(CA.cardAudioRoute(p, node("x")), { route: null, reason: "声音代码里不能用 lottie-web" }, "线程里载入不成:原因照搬");
     assert.deepEqual(CA.cardAudioRoute(p, "n-mix"), { route: null, reason: CA.ONLINE_AUDIO_MIXED });
-    assert.deepEqual(CA.cardAudioRoute(p, "n-media"), { route: null, reason: CA.ONLINE_AUDIO_NEEDS_MEDIA }, "要读素材采样的音频图卡不在线合成");
+    assert.deepEqual(CA.cardAudioRoute(p, "n-media"), { route: null, reason: CA.ONLINE_AUDIO_NEEDS_MEDIA }, "要读素材采样的音频素材效果卡不在线合成");
     assert.equal(CA.onlineCardAudioBlocker(p, "n-media"), CA.ONLINE_AUDIO_NEEDS_MEDIA);
     assert.equal(CA.onlineCardAudioBlocker(p, node("s")), null);
 

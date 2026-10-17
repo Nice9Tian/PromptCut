@@ -130,7 +130,7 @@ test("ST-A-05 只装得下一层;最上层自己就装不下时一层都不换(�
   assert.deepEqual(none.placeholder, ["big", "small"]);
 });
 
-test("ST-A-06 卡种:Lottie、画布(粒子、画布契约、canvasHeavy)、其余 DOM;页面上没有定义的与图卡认不出来", () => {
+test("ST-A-06 卡种:Lottie、画布(粒子、画布契约、canvasHeavy)、其余 DOM;页面上没有定义的与素材效果卡认不出来", () => {
   assert.equal(swapKindOf({ cardId: "lottie-adrock", known: true }), "lottie");
   assert.equal(swapKindOf({ cardId: "lottie", known: true }), "lottie");
   assert.equal(swapKindOf({ cardId: "particles-basic", known: true }), "canvas");
@@ -140,7 +140,7 @@ test("ST-A-06 卡种:Lottie、画布(粒子、画布契约、canvasHeavy)、其�
   assert.equal(swapKindOf({ cardId: "mu-animated-shiny-text", known: true, source: "user" }), "dom", "按声明是 DOM 的用户卡");
   assert.equal(swapKindOf({ cardId: "u-canvas", known: true, source: "user", canvasHeavy: true }), "canvas");
   assert.equal(swapKindOf({ cardId: "synced-user-card", known: false, source: "user" }), null, "代码不在这个页面上:认不出来,走兜底");
-  assert.equal(swapKindOf({ cardId: null }), null, "图卡(只有 nodeId)");
+  assert.equal(swapKindOf({ cardId: null }), null, "素材效果卡(只有 nodeId)");
   assert.equal(swapKindOf(undefined), null);
   // 表:三种都有正数;缺省 SWAP_MS 仍是 3(C10-BS-01)
   for (const k of ["dom", "lottie", "canvas"]) assert.ok(SWAP_MS_BY_KIND[k] > 0, k);

@@ -49,7 +49,7 @@ export const STAGE_ALLOW = [
   { upgrade: true, methods: ["GET"], exact: "/", test: (_raw, headers) => /(^|,)\s*vite-(hmr|ping)\s*(,|$)/.test(String(headers["sec-websocket-protocol"] ?? "")),
     who: "舞台 iframe", why: "热更新的 WebSocket(改卡之后舞台跟着换);只认开发服务器自己的子协议,文档服务等别的升级不放行" },
   // —— 素材 ——
-  { methods: READ, prefix: "/@media/", who: "舞台里的 <video>、<img>、音频图卡、素材效果卡", why: "本机内容库里的素材字节(按哈希或文件名,分段取);含 `/@media/<哈希>/pcm`" },
+  { methods: READ, prefix: "/@media/", who: "舞台里的 <video>、<img>、音频素材效果卡、素材效果卡", why: "本机内容库里的素材字节(按哈希或文件名,分段取);含 `/@media/<哈希>/pcm`" },
   { methods: READ, exact: "/api/media/file", who: "舞台里的 <video>、<img>", why: "迁移期的老项目按路径取素材;接口自己只给素材目录里的文件" },
   { methods: READ, prefix: "/catalog/", who: "Lottie 卡、粒子卡", why: "动效素材目录里登记过的 JSON(接口只认登记过的名字)" },
   // —— 两条只读接口 ——

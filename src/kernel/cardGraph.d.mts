@@ -11,7 +11,7 @@ export interface UnifiedCardDefinition {
 export interface CardInput { nodeId: string; offset?: number; rate?: number }
 export interface CardNode {
   id: string; adapter: 'card' | 'chrome' | 'media' | 'filter' | 'audio' | 'emphasis' | 'transition';
-  /** 图卡节点指向 src/cards/user/<id>.tsx 的那张卡 */
+  /** 素材效果卡节点指向 src/cards/user/<id>.tsx 的那张卡 */
   cardId?: string;
   /** 定义里的 kind 抄进节点:Node 侧脚本读不到 TSX 定义,只能看节点 */
   kind?: string;

@@ -8,7 +8,7 @@ const withAudio = async (fn) => {
   finally { await server.close(); }
 };
 
-/** 一份最小的音频图卡项目:一个 adapter:'card' / kind:'audio' 的节点,没有输入 */
+/** 一份最小的音频素材效果卡项目:一个 adapter:'card' / kind:'audio' 的节点,没有输入 */
 const audioProject = (nodeId = "generated") => ({
   media: [], tracks: [],
   cardNodes: [{ id: nodeId, adapter: "card", cardId: "beep", kind: "audio", inputs: {}, params: {} }],
@@ -99,7 +99,7 @@ test("card audio cache key follows the card source version", async () => withAud
   assert.equal(calls, 1);
   version = "v2";
   await requestCardAudio({ project, nodeId: "n", start: 0, count: 4, sampleRate: 48000 });
-  assert.equal(calls, 2, "改了图卡源码之后 project 对象不变,旧采样块不能一直用");
+  assert.equal(calls, 2, "改了素材效果卡源码之后 project 对象不变,旧采样块不能一直用");
 }));
 
 test("card audio refuses to evaluate before the registry injects its hooks", async () => withAudio(async ({ requestCardAudio, getCardAudioEpoch, configureCardAudio, subscribeCardAudioEpoch }) => {
@@ -135,7 +135,7 @@ test("preview selects generated-only and video-backed audio once and mutes their
     assert.equal(generated.find(x => x.clip.id === "generated-only").media, undefined);
     assert.equal(shouldMuteNativeAudio(project, project.tracks[0].clips[0]), true);
     assert.equal(shouldMuteNativeAudio(project, project.tracks[0].clips[2]), false);
-    // 只看节点:kind 不是 audio 的图卡节点不算音频卡(Node 侧的 mux-audio.mjs 用同一条判据)
+    // 只看节点:kind 不是 audio 的素材效果卡节点不算音频卡(Node 侧的 mux-audio.mjs 用同一条判据)
     assert.equal(isCardAudioNode(project, "visual-node"), false);
     assert.equal(isCardAudioNode(project, "bare-node"), true);
 }));

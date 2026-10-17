@@ -1,5 +1,5 @@
-/** 图卡音频按片段本地的采样块取,块协议不变,只是求值搬回了页面里。这个文件刻意是它
- * 唯一的浏览器适配层:图卡音频节点还在算或者算失败时,消费方绝不拿 media.url 顶上。 */
+/** 素材效果卡音频按片段本地的采样块取,块协议不变,只是求值搬回了页面里。这个文件刻意是它
+ * 唯一的浏览器适配层:素材效果卡音频节点还在算或者算失败时,消费方绝不拿 media.url 顶上。 */
 import { opacityAt, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import type { CardDef } from "../kernel/types";
 import { cyrb53 } from "../render/cyrb53.mjs";
@@ -59,7 +59,7 @@ export function requireCardAudioHooks(): CardAudioHooks {
 }
 
 /* ------------------------------------------------------------------ *
- * 同步来的用户卡与图卡:声音在隔离的声音线程里合成(`docs/plan/online-card-exec-contract.md` 3.5、第 6 节)
+ * 同步来的用户卡与素材效果卡:声音在隔离的声音线程里合成(`docs/plan/online-card-exec-contract.md` 3.5、第 6 节)
  * ------------------------------------------------------------------ */
 
 /**
@@ -88,11 +88,11 @@ export function isolatedCardAudioHost(): IsolatedCardAudioHost | null { return i
 
 export const SYNCED_AUDIO_NOT_HERE = "同步来的卡的声音代码不在编辑页面里执行";
 export const ONLINE_AUDIO_NEEDS_MEDIA = "这张卡要读素材的声音采样,在线页面取不到,用已经生成的声音(没有就由渲染节点提供)";
-export const ONLINE_AUDIO_NO_THREAD = "这个页面没有隔离的声音线程,用户卡与图卡的声音用已经生成的(没有就由渲染节点提供)";
+export const ONLINE_AUDIO_NO_THREAD = "这个页面没有隔离的声音线程,用户卡与素材效果卡的声音用已经生成的(没有就由渲染节点提供)";
 export const ONLINE_AUDIO_MIXED = "同步来的卡与内置卡串在一起的声音在线合成不了,用已经生成的声音(没有就由渲染节点提供)";
 
 /**
- * 同步来的有声用户卡在编辑页面里的替身:只给「把项目摊成图、算身份」用(要有 `audio` 才会合成图卡节点,要有默认参数才算得出身份)。
+ * 同步来的有声用户卡在编辑页面里的替身:只给「把项目摊成图、算身份」用(要有 `audio` 才会合成素材效果卡节点,要有默认参数才算得出身份)。
  * 它的 `audio()` 一调就抛 —— 编辑页面的源里永远不会真去执行同步来的卡的声音代码;真的定义只在声音线程里。
  */
 const standIns = new WeakMap<object, CardDef<any>>();
@@ -204,7 +204,7 @@ interface CachedClip { promise: Promise<string>; url?: string; refs: number; }
 const projectClips = new WeakMap<object, Map<string, CachedClip>>();
 
 /**
- * 缓存键带图卡源码版本:改了图卡源码之后 `project` 对象不变,不带它就一直播旧采样块
+ * 缓存键带素材效果卡源码版本:改了素材效果卡源码之后 `project` 对象不变,不带它就一直播旧采样块
  * 和旧 `blob:`。沿 `inputs[*]` 向上游走,只收 `adapter === 'card'` 的节点(素材节点没有源码)。
  */
 function versionKeyOf(project: unknown, nodeId: string): string {
@@ -269,7 +269,7 @@ export function shouldMuteNativeAudio(project: Project, clip: TrackClip, globall
 /** Active generated audio is independent of whether its source happened to be an audio asset, video, or no media asset. */
 export function generatedCardAudioClipsAt(project: Project, t: number): { clip: TrackClip; media?: MediaAsset; volume: number }[] {
   const out: { clip: TrackClip; media?: MediaAsset; volume: number }[] = [];
-  // 在线浏览器模式:图卡(含音频图卡)在这台设备上渲染不了(C10 契约第 9 节,常驻「需要本地 PC 渲染辅助」),
+  // 在线浏览器模式:素材效果卡(含音频素材效果卡)在这台设备上渲染不了(C10 契约第 9 节,常驻「需要本地 PC 渲染辅助」),
   // 不求值、不发 `/@media/<hash>/pcm` 请求;这一段的原生声音照旧被 `shouldMuteNativeAudio` 静掉,不拿素材声音顶上
   for (const track of project.tracks) for (const clip of track.clips) {
     if (track.hidden || track.muted || clip.audioMuted || !cardAudioNodeOf(project, clip) || t < clip.start || t >= clip.end) continue;

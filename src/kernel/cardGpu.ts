@@ -1,5 +1,5 @@
 /**
- * 图卡产出的 GPU 描述的**类型**。只有类型,没有一行运行时代码 ——
+ * 素材效果卡产出的 GPU 描述的**类型**。只有类型,没有一行运行时代码 ——
  * 执行它们的 WebGL 执行器在 src/render/cards/gpuExecutor.ts,那是渲染层的事。
  *
  * 分出这个文件是为了拆掉一条反向边:CardDef(kernel/types.ts)的 `card()` 要声明

@@ -19,7 +19,7 @@ const KIND: Record<string, string> = {
   transitions: "转场",
   cuts: "剪辑",
   media: "素材",
-  cardNodes: "图卡节点",
+  cardNodes: "素材效果卡节点",
   cardDefinitions: "卡片定义",
   filters: "滤镜",
   pixelMaps: "像素映射",

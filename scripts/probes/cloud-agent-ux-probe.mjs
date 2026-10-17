@@ -39,9 +39,9 @@
  *       成员列表里 alice 那一行下有 `service: 'agent'` 的连接。
  *   U9  创建者在另一台设备(另一个设备号、同一创建者身份、另一个进程)打开:`info.running` 里有这个对话,接上事件流看得到过程;
  *       停掉 → 2 秒内收尾,项目停在最后一次成功写入的版本上;接着在这台设备上说一句,新的一轮正常跑完,`seq` 接着往后。
- * 五之二、写入之间隔得比补渲的防抖长(步骤 spaced;真模型的每次往返都是几秒,就是这种节奏。契约 `cloud-agent-contract.md` 第 16.4 节)
- *   U17 发起方发出一个连写 12 处、每次隔 9 秒(补渲的防抖是 3 秒)的任务后被结束,全程没有任何成员连接:每次写入之后 Agent 服务都按
- *       当时的版本发清单计划(中途就开始渲),项目接着往前走。补渲的结局是「渲染完成」,对话记录里没有 `render failed`。
+ * 五之二、写入之间隔得比预渲染重试的防抖长(步骤 spaced;真模型的每次往返都是几秒,就是这种节奏。契约 `cloud-agent-contract.md` 第 16.4 节)
+ *   U17 发起方发出一个连写 12 处、每次隔 9 秒(预渲染重试的防抖是 3 秒)的任务后被结束,全程没有任何成员连接:每次写入之后 Agent 服务都按
+ *       当时的版本发清单计划(中途就开始渲),项目接着往前走。预渲染重试的结局是「渲染完成」,对话记录里没有 `render failed`。
  *   U18 渲染节点这一轮没有一个任务以失败收场:取不到旧版本时改按当前版本核对,内容没变的照做,已被新版本取代的记成作废
  *       (诊断里的 `superseded`,不计入 `failed`)。
  *   U19 渲完之后才上线的成员:不发任何渲染任务,取到的层表是最后一版的——这一轮改到的两张卡各有一层、每层的输入签名与他读到的项目对得上
@@ -55,7 +55,7 @@
  *   每一种都断言:项目内容完好(结构不变、片段都在)、版本号等于成功写入的次数、之后 1.5 秒没有新的写入。
  * 附:节点资源(步骤 load,任务书完成条件第 9 条的本机版,数字只作参考)
  *   U20 〔契约第 16 节 R8 改回方案 A〕云端 Agent 建一张用户卡(判重:`frameMode: stateful`)并用它加一个片段,发起方的进程被结束,
- *       全程没有成员连接:卡片源码进了项目的内容库;补渲计划由渲染服务的**隔离工作进程**(`hosted-render-iso:` 节点)认领并渲完,
+ *       全程没有成员连接:卡片源码进了项目的内容库;预渲染重试计划由渲染服务的**隔离工作进程**(`hosted-render-iso:` 节点)认领并渲完,
  *       常驻工作进程对这个项目一个任务也没认领;之后才上线的成员不发任何渲染任务,取到的层表里有这张用户卡的那一层、块在素材服务里。
  *   U15 全节点同时进行的一轮不超过 6、每个项目不超过 3:超出的回 429 busy。
  *   U16 满载(6 轮对话同时写 + 渲染服务在渲)时文档服务 `/healthz` 与一次读项目的往返时延、同机素材服务的下载速度
@@ -168,7 +168,7 @@ if (args.includes('--child')) {
 /* ================================================================== 主进程 */
 
 const ALL_STEPS = ['leave', 'later', 'reopen', 'stop', 'spaced', 'usercard', 'errors', 'load'];
-/** 步骤 spaced 里两次写入之间等多久(要大于补渲的防抖 3 秒) */
+/** 步骤 spaced 里两次写入之间等多久(要大于预渲染重试的防抖 3 秒) */
 const SPACED_GAP_MS = 9000;
 const STEPS = String(argOf('--steps', ALL_STEPS.join(','))).split(',').map((s) => s.trim()).filter(Boolean);
 const DOC_PORT = Number(argOf('--doc-port', 8798));
@@ -394,7 +394,7 @@ async function main() {
     let sawMembers = false;
     const polling = setInterval(() => { void membersOnline(UID).then((m) => { if (m === true) sawMembers = true; }).catch(() => {}); }, 500);
     const endLog = await waitFor(() => agent.logs.find((l) => l.event === 'agent.run.end' && l.projectId === UID), 120_000, '建卡的对话跑到结束', 200);
-    const rendered = await waitFor(() => agent.logs.find((l) => (l.event === 'agent.render.done' || l.event === 'agent.render.failed' || l.event === 'agent.render.unavailable' || l.event === 'agent.render.gave-up') && l.projectId === UID), 300_000, '含用户卡的补渲有结果', 500).catch(() => null);
+    const rendered = await waitFor(() => agent.logs.find((l) => (l.event === 'agent.render.done' || l.event === 'agent.render.failed' || l.event === 'agent.render.unavailable' || l.event === 'agent.render.gave-up') && l.projectId === UID), 300_000, '含用户卡的预渲染重试有结果', 500).catch(() => null);
     timings.usercardRenderedMs = Date.now() - t0;
     clearInterval(polling);
     const disk = diskConversation(UID, 'ux-usercard');
@@ -451,7 +451,7 @@ async function main() {
     const polling = setInterval(() => { void membersOnline(PID).then((m) => { if (m === true) sawMembers = true; }).catch(() => {}); }, 500);
     const endLog = await waitFor(() => agent.logs.find((l) => l.event === 'agent.run.end' && l.projectId === PID), 120_000, '对话跑到结束', 200);
     timings.runMs = Date.now() - t0;
-    const rendered = await waitFor(() => agent.logs.find((l) => (l.event === 'agent.render.done' || l.event === 'agent.render.failed' || l.event === 'agent.render.unavailable' || l.event === 'agent.render.gave-up') && l.projectId === PID), 400_000, '补渲有结果', 500);
+    const rendered = await waitFor(() => agent.logs.find((l) => (l.event === 'agent.render.done' || l.event === 'agent.render.failed' || l.event === 'agent.render.unavailable' || l.event === 'agent.render.gave-up') && l.projectId === PID), 400_000, '预渲染重试有结果', 500);
     timings.renderedMs = Date.now() - t0;
     clearInterval(polling);
     const disk = diskConversation(PID, 'ux-main');
@@ -571,7 +571,7 @@ async function main() {
     });
   }
 
-  /* ---------------------------------------------------------------- 五之二:写入之间隔得比补渲的防抖长 */
+  /* ---------------------------------------------------------------- 五之二:写入之间隔得比预渲染重试的防抖长 */
   if (STEPS.includes('spaced')) {
     // 全程没有成员连接:先把探针手里 bob 的连接关掉,等渲染服务的目录里 members 变假
     bob?.close();
@@ -586,7 +586,7 @@ async function main() {
     const polling = setInterval(() => { void membersOnline(PID).then((m) => { if (m === true) sawMembers = true; }).catch(() => {}); }, 1000);
     // 发起方被结束后,文档服务把它断掉的会话保留 60 秒:这段时间 members 仍为真,之后恒为假。只在保留期过后开始记
     const ended = await waitFor(() => { const d = diskConversation(PID, id); return d && d.meta.state !== 'running' && d.events.some((e) => e.type === 'end') ? d : null; }, 300_000, `${id} 跑到结束`, 300);
-    // 一轮结束时补发的那一个计划渲完才算数:最后一条补渲事件是结局,并且之后 8 秒没有新的补渲事件
+    // 一轮结束时补发的那一个计划渲完才算数:最后一条预渲染重试事件是结局,并且之后 8 秒没有新的预渲染重试事件
     const renderEventsOf = () => (diskConversation(PID, id)?.events ?? []).filter((e) => e.type === 'render');
     let quietSince = Date.now();
     let lastCount = -1;
@@ -594,12 +594,12 @@ async function main() {
       const ev = renderEventsOf();
       if (ev.length !== lastCount) { lastCount = ev.length; quietSince = Date.now(); }
       return ['done', 'failed', 'unavailable'].includes(ev.at(-1)?.state) && Date.now() - quietSince >= 8000;
-    }, 400_000, '补渲收尾', 500);
+    }, 400_000, '预渲染重试收尾', 500);
     clearInterval(polling);
     void sawMembers;
     const states = renderEventsOf().map((e) => ({ state: e.state, ...(e.reason ? { reason: String(e.reason).slice(0, 80) } : {}) }));
     const toolOk = ended.events.filter((e) => e.type === 'tool_result' && e.ok === true).length;
-    check(`U17 写入之间隔 ${SPACED_GAP_MS / 1000} 秒(大于补渲的防抖 3 秒)、连写 ${N} 次,发起方已被结束:中途就按当时的版本发计划,补渲的结局是「渲染完成」,对话记录里没有渲染失败`, left.killed && ended.meta.state === 'idle' && toolOk === N
+    check(`U17 写入之间隔 ${SPACED_GAP_MS / 1000} 秒(大于预渲染重试的防抖 3 秒)、连写 ${N} 次,发起方已被结束:中途就按当时的版本发计划,预渲染重试的结局是「渲染完成」,对话记录里没有渲染失败`, left.killed && ended.meta.state === 'idle' && toolOk === N
       && states.filter((x) => x.state === 'published').length >= 3 && states.at(-1)?.state === 'done' && !states.some((x) => x.state === 'failed' || x.state === 'unavailable'), {
       initiatorGone: left.killed, writesLanded: toolOk, published: states.filter((x) => x.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((x) => x.state === 'failed'), states: states.map((x) => x.state).join(','),
     });
@@ -708,12 +708,12 @@ async function main() {
     }
     // 渲染失败:渲染服务停着
     {
-      // 渲染服务停掉;Agent 服务重起一遍,把补渲「连续没有进度就放弃」的时限缩短(生产 10 分钟),别的步骤都用缺省值
+      // 渲染服务停掉;Agent 服务重起一遍,把预渲染重试「连续没有进度就放弃」的时限缩短(生产 10 分钟),别的步骤都用缺省值
       await stopRender();
       await bootAgent({ PROMPTCUT_AGENT_RENDER_STALL_MS: String(RENDER_STALL_MS) });
       const failedBefore = agentLogCount('agent.render.gave-up', PID) + agentLogCount('agent.render.failed', PID);
       const x = await offlineRun(aliceCfg(dev.a1), 'ux-fail-render', mockScript([writeStep(3, 'rf'), { sleepMs: 200 }, writeStep(2, 'rf'), { say: '改完了,渲染节点不在' }]));
-      await waitFor(() => agentLogCount('agent.render.gave-up', PID) + agentLogCount('agent.render.failed', PID) > failedBefore, RENDER_STALL_MS * 4 + 20_000, '补渲放弃', 300);
+      await waitFor(() => agentLogCount('agent.render.gave-up', PID) + agentLogCount('agent.render.failed', PID) > failedBefore, RENDER_STALL_MS * 4 + 20_000, '预渲染重试放弃', 300);
       await sleep(300);
       const d = diskConversation(PID, 'ux-fail-render');
       const rf = d.events.filter((e) => e.type === 'render');
@@ -722,7 +722,7 @@ async function main() {
       check('U14 渲染失败:对话照常做完,对话记录里留下 render failed 与原因、涉及的片段;项目内容不受影响', sane(x, 2) && x.disk.meta.state === 'idle' && !!failed && typeof failed.reason === 'string' && failed.reason.length > 0
         && failed.clips?.includes('clip-bars') && rf.findIndex((e) => e.state === 'failed') > 0 && after.rev === x.after.rev && intact(after.project), {
         ...brief(x), renderEvents: rf.map((e) => ({ state: e.state, clips: e.clips ?? [], ...(e.reason ? { reason: e.reason } : {}) })), renderEventsAfterEnd: d.events.findIndex((e) => e.type === 'render') > d.events.findIndex((e) => e.type === 'end'),
-        note: `渲染服务被探针停掉;补渲「连续没有进度」的时限在这次演练里缩成 ${RENDER_STALL_MS / 1000} 秒(生产 10 分钟,原因文字是固定的那一句)`,
+        note: `渲染服务被探针停掉;预渲染重试「连续没有进度」的时限在这次演练里缩成 ${RENDER_STALL_MS / 1000} 秒(生产 10 分钟,原因文字是固定的那一句)`,
       });
     }
   }
@@ -784,11 +784,11 @@ async function main() {
     await sleep(3000);
     const idle = await sample(40, 100);
     const idleDownload = await download(3);
-    // 先让渲染服务有活:一个很短的对话改两张卡,它一结束补渲计划就发出去,渲染要几十秒;6 轮对话在它渲的时候起
+    // 先让渲染服务有活:一个很短的对话改两张卡,它一结束预渲染重试计划就发出去,渲染要几十秒;6 轮对话在它渲的时候起
     const renderMark = agent.logs.length;
     await api.alice.send('load-pre', mockScript([writeStep(3, `${salt}-pre`), writeStep(2, `${salt}-pre`), { say: '先让渲染服务忙起来' }]));
     await api.alice.settled('load-pre');
-    await waitFor(() => agent.logs.slice(renderMark).some((l) => l.event === 'agent.render.published' && l.projectId === PID), 20_000, '补渲计划发出');
+    await waitFor(() => agent.logs.slice(renderMark).some((l) => l.event === 'agent.render.published' && l.projectId === PID), 20_000, '预渲染重试计划发出');
     const rendering = () => { const l = agent.logs.slice(renderMark).filter((x) => x.projectId === PID); return l.some((x) => x.event === 'agent.render.published') && !l.some((x) => x.event === 'agent.render.done' || x.event === 'agent.render.failed' || x.event === 'agent.render.gave-up'); };
     // 一轮最多 24 次模型往返(契约第 7.3 节):每轮 22 次写入、间隔 700 毫秒,约 16 秒,量时延的那 5 秒落在中间
     const long = (who) => writeScript(22, 700, `${salt}-load-${who}`);
@@ -800,7 +800,7 @@ async function main() {
     check('U15 并发上限生效:每个项目同时 3 轮、全节点 6 轮,超出的回 429 busy', sends.every(([, s]) => s.status === 202) && fourth.status === 429 && fourth.code === 'busy' && seventh.status === 429 && seventh.code === 'busy', {
       accepted: sends.map(([k, s]) => `${k}:${s.status}`), fourthInProject: `${fourth.status}:${fourth.code}`, seventhOnNode: `${seventh.status}:${seventh.code}`,
     });
-    await sleep(3500); // 让补渲的计划发出去、渲染服务开始渲
+    await sleep(3500); // 让预渲染重试的计划发出去、渲染服务开始渲
     const st0 = await renderStatus();
     const runningNow = async () => [...(await api.alice.info()).running ?? [], ...(await api.dan.info()).running ?? [], ...(await api.bob.info()).running ?? [], ...(await api.eve.info()).running ?? []].length;
     const runsAtStart = await runningNow();
@@ -852,7 +852,7 @@ async function realModelFlow({ proj, PID, creds, dev, aliceCfg, blobBytes, asset
   const polling = setInterval(() => { void membersOnline(PID).then((m) => { if (m === true) sawMembers = true; }).catch(() => {}); }, 500);
   const endLog = await waitFor(() => agent.logs.find((l) => l.event === 'agent.run.end' && l.projectId === PID), 600_000, '对话跑到结束', 300);
   timings.runMs = Date.now() - t0;
-  const rendered = await waitFor(() => agent.logs.find((l) => (l.event === 'agent.render.done' || l.event === 'agent.render.failed' || l.event === 'agent.render.unavailable' || l.event === 'agent.render.gave-up') && l.projectId === PID), 600_000, '补渲有结果', 500).catch(() => null);
+  const rendered = await waitFor(() => agent.logs.find((l) => (l.event === 'agent.render.done' || l.event === 'agent.render.failed' || l.event === 'agent.render.unavailable' || l.event === 'agent.render.gave-up') && l.projectId === PID), 600_000, '预渲染重试有结果', 500).catch(() => null);
   timings.renderedMs = Date.now() - t0;
   clearInterval(polling);
   const disk = diskConversation(PID, 'ux-real');

@@ -1,5 +1,5 @@
 /**
- * nginx 模板里与「在线执行用户卡与图卡」的隔离有关的两个片段(契约 `docs/plan/online-card-exec-contract.md` 第 3.3 节)。
+ * nginx 模板里与「在线执行用户卡与素材效果卡」的隔离有关的两个片段(契约 `docs/plan/online-card-exec-contract.md` 第 3.3 节)。
  * 策略原文取自 `src/online/stagePolicy.mjs`,与在线构建的 `<meta>`、本机代理同出一处;这里只负责写成 nginx 的 `add_header`。
  *
  *   node scripts/gen-stage-policy-nginx.mjs            重新生成 `server/hosted/deploy/` 下的两个片段

@@ -168,7 +168,7 @@ export function sharedModule({
     const rows = new Map();
     for (const [connId, c] of connsIn(space)) {
       const p = c.principal;
-      // 云端 Agent 服务只用来发布补渲计划的连接（`cloud-agent-contract.md` 第 16 节）不是谁的设备，也不代表任何成员，不列出来
+      // 云端 Agent 服务只用来发布预渲染重试计划的连接（`cloud-agent-contract.md` 第 16 节）不是谁的设备，也不代表任何成员，不列出来
       if (p.purpose === 'publish') continue;
       const key = p.userId;
       let row = rows.get(key);

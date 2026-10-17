@@ -277,7 +277,7 @@ export function createHandshakeAuth({
         if (registry.get(p.sv).actsFor === 'member') {
           // 代成员进项目（云端 Agent 服务）：票据的 `u`、`ug` 是成员的，名单、禁入表照成员查
           if (own) {
-            // 这种服务自己的身份只有一种用法：只用来发布补渲计划的连接（`cloud-agent-contract.md` 第 16 节）。
+            // 这种服务自己的身份只有一种用法：只用来发布预渲染重试计划的连接（`cloud-agent-contract.md` 第 16 节）。
             // 不是成员：不查名单与禁入表，也不带任何成员的权限；白名单只放发布那几种消息
             if (p.pu !== 'publish') return reject('bad-format');
             return {

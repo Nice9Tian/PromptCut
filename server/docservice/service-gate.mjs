@@ -8,7 +8,7 @@
  * - **控制连接**（`scope: 'service'`、没有 `tenantId`，握手凭服务私钥得到）：只能发目录模块的 `hosted.watch`、`hosted.ticket`、
  *   `hosted.demand`、`hosted.delegate.verify`（最后一个只对云端 Agent 服务开，目录模块里判）；
  * - **数据连接**（凭目录模块签的票据进某个项目）：按服务名查 `SERVICE_ALLOW`：渲染服务一行；云端 Agent 代成员开的连接一行
- *   （`docs/plan/cloud-agent-contract.md` 第 4.4 节，只读成员的另拒改项目的两种）。云端 Agent 服务只用来发布补渲计划的连接
+ *   （`docs/plan/cloud-agent-contract.md` 第 4.4 节，只读成员的另拒改项目的两种）。云端 Agent 服务只用来发布预渲染重试计划的连接
  *   （principal 带 `purpose: 'publish'`）查另一张表 `SERVICE_PUBLISH_ALLOW`，`task.publish` 只许带片段清单的计划任务。
  *   三种消息另看内容：`content.put` 只许写预渲染清单，`auth.ticket` 只许要素材票据（要连接票据等于给自己换角色），
  *   `task.publish` 不许发布计划任务（渲染服务只发布自己切分出来的细任务）；云端 Agent 代成员的连接：`content.*` 只许
@@ -59,7 +59,7 @@ export const SERVICE_ALLOW = Object.freeze({
 export const AGENT_CONTENT_KINDS = Object.freeze(['card-source']);
 
 /**
- * 以服务自己的身份开、只用来发布补渲计划的连接（principal 的 `purpose: 'publish'`，同上第 16 节 R2）：服务名 → 能发的消息。
+ * 以服务自己的身份开、只用来发布预渲染重试计划的连接（principal 的 `purpose: 'publish'`，同上第 16 节 R2）：服务名 → 能发的消息。
  * `task.publish` 只许发带片段清单的计划任务（下面再判）；不能报到成节点、不能认领、不能读写项目与内容库、不能取任何票据。
  */
 export const SERVICE_PUBLISH_ALLOW = Object.freeze({

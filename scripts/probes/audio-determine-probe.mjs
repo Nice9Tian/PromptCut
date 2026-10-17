@@ -1,4 +1,4 @@
-// 探针:音频图卡判重(轻 / 重分类)方案的三组前提实测。计划见 docs/plan/audio_determine_plan.md。
+// 探针:音频素材效果卡判重(轻 / 重分类)方案的三组前提实测。计划见 docs/plan/audio_determine_plan.md。
 //
 //   node scripts/probes/audio-determine-probe.mjs                  -> puppeteer 自带的 Chrome
 //   node scripts/probes/audio-determine-probe.mjs --connect        -> 桌面壳 WebView2(9333)
@@ -7,7 +7,7 @@
 //   --serve-only --host 0.0.0.0  -> 只起页面不开浏览器,给 iPad Safari 之类手动打开 http://<本机IP>:5231/ ,结果看 window.__probe
 //
 // 三组:
-//   (A) cost  —— 七张合成音频图卡在 Worker 里逐块求值(块 = 0.5 s),量整趟每块耗时(实时倍率 RTF =
+//   (A) cost  —— 七张合成音频素材效果卡在 Worker 里逐块求值(块 = 0.5 s),量整趟每块耗时(实时倍率 RTF =
 //                 计算耗时 / 这块声音时长),再用「随机抽 16 块取 p90」估一遍,看抽样估计和整趟真值差多少。
 //   (B) codec —— WebCodecs AudioEncoder / AudioDecoder 支持哪些编码;AAC / Opus 编解码往返的速度和误差。
 //   (C) chunk —— 真的 src/audio/fxChain.ts 效果链:一次渲完 vs 分段(10 s 一段)+ 不同预滚时长,接缝误差多大。
@@ -36,7 +36,7 @@ const fxTs = fs.readFileSync(path.join(ROOT, 'src/audio/fxChain.ts'), 'utf8');
 fs.writeFileSync(path.join(dir, 'fxChain.js'), stripTypeScriptTypes(fxTs).replace('"../kernel/audioFx.mjs"', '"./audioFx.mjs"'));
 for (const f of ['audioFx.mjs', 'filters.mjs']) fs.copyFileSync(path.join(ROOT, 'src/kernel', f), path.join(dir, f));
 
-// ── 合成音频图卡:签名和 CardDef.audio 一样 (sources, { start, count, sampleRate }, params) → 交错 Float32 ──
+// ── 合成音频素材效果卡:签名和 CardDef.audio 一样 (sources, { start, count, sampleRate }, params) → 交错 Float32 ──
 // 写成字符串,原样塞进 Worker。source 输入是确定性噪声(模拟已解码的素材,取样本身不计成本)。
 const CARDS = String.raw`
 const TAU = Math.PI * 2;

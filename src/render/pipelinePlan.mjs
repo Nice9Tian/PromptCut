@@ -294,9 +294,9 @@ export function pipelineAt(plan, clipId, tSec) {
  * 片段 → 成本身份用的那个节点。
  *
  * 1. 图里带着这个片段 `clipId` 的节点（`cardGraph.mjs` 给素材段和普通卡合成的基节点）；
- * 2. 没有的话，看片段**自己那个图卡节点**（`clip.nodeId` 指的那个，或只有 `cardId` 时就地合成的
+ * 2. 没有的话，看片段**自己那个素材效果卡节点**（`clip.nodeId` 指的那个，或只有 `cardId` 时就地合成的
  *    `@clip/<id>/card`）：调用方用 `opts.ownNode(node, clip)` 说它算不算。有声动效卡（画面是组件、另写了
- *    `audio()`）走的是图卡那一支，它的节点上没有 `clipId`，2026-10-06 之前因此没有成本身份、从不测量、
+ *    `audio()`）走的是素材效果卡那一支，它的节点上没有 `clipId`，2026-10-06 之前因此没有成本身份、从不测量、
  *    画面在桌面与在线都永远按重卡。它的画面就是一张普通的 DOM 卡，能测，所以 `costIdentity.ts` 对它回 true。
  *    不给 `ownNode` = 一律不算（与以前相同）。
  *

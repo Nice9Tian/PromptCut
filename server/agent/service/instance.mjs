@@ -1688,11 +1688,11 @@ export function createAgentInstance(env) {
     },
     /** 这个实例绑着的项目副本与各对话读到的版本(诊断);没绑回 null */
     describe: () => (agentBinding ? agentBinding.side.describe() : null),
-    /** 托管档:这个项目的内容库里有没有卡片源码(有的话由渲染服务的隔离工作进程渲,补渲要排队) */
+    /** 托管档:这个项目的内容库里有没有卡片源码(有的话由渲染服务的隔离工作进程渲,预渲染重试要排队) */
     hasProjectCards: () => (hostedShared?.cards.items.size ?? 0) > 0,
     /** 托管档:这个项目内容库里卡片源码的「键 → 版本」(看画面时交给渲染服务:有卡就走隔离工作进程,并等它装到这个版本) */
     cardRevs: () => Object.fromEntries([...(hostedShared?.cards.items ?? [])].map(([key, v]) => [key, Number.isFinite(v?.rev) ? v.rev : null])),
-    /** 此刻的项目副本与它的版本(托管档的宿主挑要补渲的片段用);没绑或还没内容回 null */
+    /** 此刻的项目副本与它的版本(托管档的宿主挑要预渲染重试的片段用);没绑或还没内容回 null */
     replica: () => {
       const r = agentBinding?.side?.link?.replica;
       return r && r.hasBody ? { project: r.project, rev: r.rev } : null;

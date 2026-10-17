@@ -192,7 +192,7 @@ export function updateTrack(p: Project, trackId: string, fn: (t: Track) => Track
 }
 
 /**
- * 删片段 / 删序列之后剔掉没人要的图卡节点。
+ * 删片段 / 删序列之后剔掉没人要的素材效果卡节点。
  *
  * cardNodes 的写入方只有 cardAuthoring,片段是它唯一的入口,所以判据就是
  * 「从还在的片段出发走不走得到」。走不到的、以及输入指着已删片段那个合成源
