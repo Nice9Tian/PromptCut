@@ -6,7 +6,10 @@
  * 档位清单只写在这里：`/v1/info` 报给页面的、任务进程认的，都取这一份。
  */
 
-/** 云端认的思考强度（不含「默认」：不带就是随模型自己的默认）。与本机 API 直连这条路的档位相同 */
+/**
+ * 云端认的思考强度（不含「默认」：不带就是随模型自己的默认）。与本机 API 直连这条路的档位相同。
+ * xhigh / max 网关接了但不换成思考模式（2026-10-18 节点实测，见 docs/semantics/mechanism/agent.md「Key 与模型」），不放进来。
+ */
 export const RUN_EFFORTS = Object.freeze(['low', 'medium', 'high']);
 /** 与 `src/kernel/creativity.mjs` 的 CREATIVITY_LEVELS 相同（文档服务不引 src/，测试核两份一致） */
 export const RUN_CREATIVITY = Object.freeze(['low', 'medium', 'high']);
