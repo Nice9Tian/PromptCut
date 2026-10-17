@@ -5,6 +5,7 @@
 - **应用版本 / 桌面外壳版本**：`0.7.18` / `0.2.8`（`minShellVersion: "0.2.0"`，`shellGeneration: "0.2"`）
 - **VisuHive 生产版本**：`0e64fbe49b5d71c60e5265f98fa558919a1d245f`
 - **完成日期**：2026-10-17
+- **更正**：2026-10-17 Claude 照 `docs/reports/VERIFY-release-0.7.18.md` 第 3 节更正了第 2、3.1、3.2、4.2、4.3、4.4 节，并按用户当天的决定补了第 6 节（决定原话在该核对报告第 7 节）。
 
 ---
 
@@ -29,7 +30,7 @@
 | 兼容补丁（ZIP 归档） | `C:\Users\admin\Documents\PromptCut\desktop\release\PromptCut-patch-0.7.18.zip` | `130,042,302` (`124.02 MB`) | `6C7B165E0947F44522B61EFD4D7A4C7DDFA8700A380B4E469BFC1317C78239CF` |
 | 补丁版本清单 | `C:\Users\admin\Documents\PromptCut\desktop\release\manifest-0.7.18.json` | `487,266` (`0.46 MB`) | `FAD3DFB49ADC2C821187329A6B45FB6D0CE76C565CB6584718B7E83F2C489DD2` |
 
-- `manifest-0.7.18.json` 元数据：`version: "0.7.18"`, `shellVersion: "0.2.8"`, `shellGeneration: "0.2"`, `minShellVersion: "0.2.0"`, `gitHead: "41b6d33584384cb2e2442295125625cd7219cae8"`, `fileCount: 2566`。
+- `manifest-0.7.18.json` 元数据：`appVersion: "0.7.18"`、`shellGeneration: "0.2"`、`minShellVersion: "0.2.0"`、`baseAppVersion: "0.7.17"`、`builtAt: 2026-10-17T08:49:33Z`、`payloadFiles: 4168`、`depsFiles: 12065`、`includesDeps: true`（依赖与 0.7.17 不同，补丁带整份 `node_modules`）。清单里没有记来源提交的字段；Claude 核对时把清单里 4043 个非 `dist/` 文件逐个和 `41b6d335` 检出的文件比了哈希，全部相同。
 
 ---
 
@@ -37,8 +38,9 @@
 
 ### 3.1 运行器本机 59 项直出表（`four-stage-acceptance.mjs --rows`）
 
-- 提交：`41b6d33584384cb2e2442295125625cd7219cae8`；机器 `DESKTOP-GS40TCK`；`2026-10-17T08:26:11.344Z → 2026-10-17T08:35:44.826Z`
+- 提交：`41b6d33584384cb2e2442295125625cd7219cae8`；机器 `DESKTOP-GS40TCK`；`2026-10-17T08:26:11.344Z → 2026-10-17T08:35:44.826Z`（这是最后一次续跑的起止）
 - 运行器本机自动跑的 59 项 **59 过、0 失败**（`S4-2` 放宽 `conv-look-down` 等待时限至 420 秒后 35/35 全过，耗时 404 秒）。
+- **这 59 项不全是在发版提交上跑的**：只有 G0-1、G0-2、S4-2 是在 `41b6d335` 上跑的。其余 56 项用 `--resume --force-resume` 沿用了当天更早的结果：`e82c72f1` 上 48 项（10:56～12:03），`bb360375` 上 2 项（13:02），`151d0273` 上 6 项（13:23～13:32）。这几个提交和 `41b6d335` 之间，产品代码只差版本号和 `server/vite-scan-ignore.mjs` 的 4 行。用户 2026-10-17 定不重跑。
 - 按运行器原样口径（只要行内含人工看、安装包、节点部署后或真实网络的项未并入 `results.json` 即标「未跑」），合计 38 行：通过 11、失败 0、未跑 25、不适用 2：
 
 | 行 | 项目 | 结论 | 由哪些清单项得出 | 失败原因 / 没跑的原因 |
@@ -90,14 +92,15 @@
 |---|---|:---:|---|
 | `2.1-13` / `2.3-4` / `2.3-9` / `2.3-12` | `V18-account-tools-perms-linux`、`V18-linux-os-probes`、`S4-r1` | **通过** | 在节点 `root@149.88.94.84` 实跑：`account-tools-perms-linux.mjs` **26/26 过**；`account-root-entry-linux.mjs` **11/11 过**；`account-task-worker-config-linux.mjs` **9/9 过**；`asset-root-cgroup-os-probe.mjs` **`ok: true`**（cgroup v2 内存峰值 `12.66 MB`）；`cloud-tools-spawn-linux-demo.mjs` **7/7 过**；`cloud-tools-w1-linux-demo.mjs` **全过**（杀进程后残留浏览器进程 `0`）；生产 `promptcut-agent.service`（`promptcut-agent-master`）与 `promptcut-agent-root.service`（6 个任务槽 `slot-a`..`slot-f`，用户 `promptcut-agent-task`）均 `active (running)`。 |
 | `2.1-14` | `V18-backup-node` | **通过** | 节点一致备份 `/root/promptcut-v2-consistent-20261017-0718-7314b190`（`0700`，停写窗口仅 `0.15s`，23 个数据文件 `517,558` 字节），隔离恢复到 `/var/tmp/pc-v2-restore-20261017-0718-7314b190`：23 个文件 SHA-256 逐一核对一致，3 个 SQLite 库 `integrity: "ok"`，回环端口 `6590–6595` 起三服务通过 **5/5** 项核验，`productionUnchanged: true`。 |
-| `2.1-15` | `V18-release-timings` | **通过** | 已生成并写入 `docs/reports/release-timings.md` `## 0.7.18` 章节（59 项全过，机器耗时 55 分钟）。 |
+| `2.1-15` | `V18-release-timings` | **通过** | 已生成并写入 `docs/reports/release-timings.md` `## 0.7.18` 章节（59 项全过，机器耗时 55 分钟）。其中 56 项沿用更早提交的结果，见 3.1 节。 |
 | `2.1-16` / `2.1-17` | `V18-installer-build` | **通过** | 在 `41b6d33584384cb2e2442295125625cd7219cae8` 上执行 `npm run release -- --from-head` 产出 `PromptCut-0.7.18-setup.exe`、`PromptCut-patch-0.7.18.exe`、`PromptCut-patch-0.7.18.zip` 与 `manifest-0.7.18.json`。 |
+| `2.1-16` / `2.1-17` | `V18-installer-smoke`、`V18-installer-compat` | **未跑** | 装好以后的冒烟和旧外壳上打补丁的演练都没做：两项都要操作桌面，用户说 Argon 这边没有电脑操作工具。用户 2026-10-17 定自己测。 |
 | `2.1-18` | `V18-net-public-pages`、`V18-net-cert-proxy`、`V18-net-reconnect`、`V18-net-account-limits`、`S1-r2`、`S2-r1`、`S4-r2`、`S4-r4` | **通过** | 见第 4.5 节真实网络环境验收明细。 |
 | `2.1-19` | `V18-old-files-cleanup` | **通过** | 节点登记 4 个旧项目 `legacyTombstones`（公网验证 `4/4` 签发 `goneProof`），拿用户桌面真实旧文件 `C:\Users\admin\Desktop\9tianver7.proc` 连公网节点实测：原文件 SHA-256（`01e24c69...`）一字节未变，自动验签转为本地项目（保留 26 个片段、7 个音频素材，重开不再连云端，素材不可达时 7 条旁白完整列出缺失素材项）；随后按已批清单清理节点旧数据，根分区占用从 `43%`（`17G`）降至 `27%`（`11G`）。 |
-| `2.3-2` | `S4-m1`、`V18-desktop-shell` | **通过** | `V18-ssr-seam`（含 `SEAM-2` 传递闭包收归 `server/agent/ssr-host.mjs`）单测全过；`git diff 073c8cca..41b6d335 -- desktop/src-tauri/` 仅改动版本号（`0.2.7` → `0.2.8`），未改动 Rust 外壳代码。 |
-| `2.3-4` | `V18-gap-stop-immediate` | **通过** | 任务进程由 `promptcut-agent-root` 经 systemd unit 停掉（`S4-2` 实测 disabled/removed/kicked/deleted 到停下仅 `19–23 ms`，`S4-4` 页面点停止到停下 `867 ms`）。 |
-| `2.3-8` | `S4-m3`、`S4-r4` | **通过** | 节点导入 `/root/promptcut-pending/agent-model-key.blob`（保留原密文不删），公网发起云端 Agent 对话后断开客户端 WebSocket，任务进程 `slot-a` 真实调用 `openai/claude-sonnet-5-5` 执行 `set_project_meta` 改项目名为 `"CloudRealModelVerified"`（`rev: 2`，记账 `tokens: 72338, calls: 1`）。 |
-| `2.3-10` | `S4-m2`、`V18-doc-semantics-judge` | **通过** | `product/agent.md`、`architecture.md`、`platforms.md`、`hosting.md` 与契约文档已按决定 E～J 及 10-13、10-14、10-16 决议逐条同步并经 `V18-doc-contracts`、`V18-doc-semantics` 守门验证。 |
+| `2.3-2` | `S4-m1`、`V18-desktop-shell` | **通过** | `V18-ssr-seam`（含 `SEAM-2` 传递闭包收归 `server/agent/ssr-host.mjs`）单测全过。`git diff 073c8cca..41b6d335 -- desktop/` 有 17 个文件改动：外壳新增账号安全存储（`src/account_vault.rs` 139 行、`src/lib.rs` 改 72 行、`capabilities/account.json` 等），来自 10-09 的账号任务（`cc144c2a`～`092fbed4`）；打包与冒烟脚本的小改来自 `a098d292`（10-13，子进程不弹窗）；其余是 `d767698e` 的版本号。〔2026-10-17 更正：原写「只改动版本号、未改动 Rust 外壳代码」不对〕 |
+| `2.3-4` | `V18-gap-stop-immediate` | **未跑** | 本项要核的是创建者关开关后，正在跑的对话「立刻」停（清单注明账号模式原先要到下一个检查点才停）。没有单独做；本机 `S4-2` 量到撤销（disabled/removed/kicked/deleted）后 19～23 ms 停下，`S4-4` 页面点停止到停下 867 ms，只作参考。用户 2026-10-17 定不补跑。〔2026-10-17 更正：原记「通过」〕 |
+| `2.3-8` | `S4-m3`、`S4-r4` | **通过** | 节点导入 `/root/promptcut-pending/agent-model-key.blob`（保留原密文不删），公网发起云端 Agent 对话后断开客户端 WebSocket，任务进程 `slot-a` 真实调用 `openai/claude-sonnet-5-5` 执行 `set_project_meta` 改项目名为 `"CloudRealModelVerified"`（`rev: 2`，记账 `tokens: 72338, calls: 1`）。本行要求真实模型跑三遍，只跑了 `S4-r4` 这一遍；用户 2026-10-17 定一遍即可，`S4-r5`、`S4-r6` 不跑。 |
+| `2.3-10` | `S4-m2`、`V18-doc-semantics-judge` | **未跑** | 自动守门 `V18-doc-contracts`、`V18-doc-semantics` 过了，但它们只查该有的段落在不在；清单要的逐句对照没做。用户 2026-10-17 定不补跑。〔2026-10-17 更正：原记「通过」〕 |
 | `2.3-12` | `S4-m4`、`V18-release-merge`、`V18-release-docs` | **通过** | 版本号升至 `0.7.18` / `0.2.8`，`release` 快进至 `41b6d33584384cb2e2442295125625cd7219cae8` 并推送 `origin`，生产节点六个服务与在线编辑器、官网全部部署就绪。 |
 | `2.3-13` | `V18-report` | **通过** | 本报告（含第 5 节各块 `〔裁〕` 汇总）。 |
 
@@ -117,18 +120,18 @@
 
 | 服务 / 站点 | 运行方式与端口 | 部署路径与运行提交 | 状态 |
 |---|---|---|---|
-| 账号服务 (`promptcut-account-v2.service`) | systemd (`visuhive-account`)，`127.0.0.1:8790`，内部 mTLS `127.0.0.1:8792` | `/opt/promptcut-v2/current-account -> releases/vh-0e64fbe` (`0e64fbe49b5d71c60e5265f98fa558919a1d245f`) | `active (running)` |
-| 文档服务 (`promptcut-doc-v2.service`) | systemd (`root`)，`0.0.0.0:8787`，内部 mTLS `127.0.0.1:8793` | `/opt/promptcut-v2/current-pc -> releases/41b6d335/pc` (`41b6d33584384cb2e2442295125625cd7219cae8`) | `active (running)` |
-| 素材服务 (`promptcut-asset-v2.service`) | systemd (`root`)，`0.0.0.0:8788`，内部 mTLS `127.0.0.1:8794` | `/opt/promptcut-v2/current-pc -> releases/41b6d335/pc` (`41b6d33584384cb2e2442295125625cd7219cae8`) | `active (running)` |
+| 账号服务 (`promptcut-account-v2.service`) | systemd (`visuhive-account`)，`127.0.0.1:8790`，内部 mTLS `127.0.0.1:8792` | `/opt/promptcut-v2/releases/vh-0e64fbe` (`0e64fbe49b5d71c60e5265f98fa558919a1d245f`) | `active (running)` |
+| 文档服务 (`promptcut-doc-v2.service`) | systemd (`root`)，`0.0.0.0:8787`，内部 mTLS `127.0.0.1:8793` | `/opt/promptcut-v2/releases/41b6d335/pc` (`41b6d33584384cb2e2442295125625cd7219cae8`) | `active (running)` |
+| 素材服务 (`promptcut-asset-v2.service`) | systemd (`root`)，`0.0.0.0:8788`，内部 mTLS `127.0.0.1:8794` | `/opt/promptcut-v2/releases/41b6d335/pc` (`41b6d33584384cb2e2442295125625cd7219cae8`) | `active (running)` |
 | 托管渲染服务 (`promptcut-render`) | PM2，`127.0.0.1:5399`（工作进程 `5400`、隔离舞台 `5410`） | `/opt/promptcut-render/current -> releases/41b6d3358438` (`41b6d33584384cb2e2442295125625cd7219cae8`)，`kid: fqJiGn8b` | `online`（`codeVersion.match: true`） |
-| 云端 Agent 主服务 (`promptcut-agent.service`) | systemd (`promptcut-agent-master`)，`127.0.0.1:8791`，内部 mTLS `127.0.0.1:8795` | `/opt/promptcut-v2/current-pc -> releases/41b6d335/pc`，`look` 私钥 `/etc/promptcut/agent-master-look-key`（`kid: _yTY0wwd`），控制口密钥 `Ilw2yfFI` | `active (running)` |
-| 云端 Agent Root 调度服务 (`promptcut-agent-root.service`) | systemd (`root`)，管理 6 个隔离任务槽 `slot-a`..`slot-f`（`127.0.0.1:8801`..`8806`，用户 `promptcut-agent-task`） | `/opt/promptcut-v2/current-pc -> releases/41b6d335/pc`，权威 `promptcut-agent-root-20261017b` | `active (running)` |
+| 云端 Agent 主服务 (`promptcut-agent.service`) | systemd (`promptcut-agent-master`)，`127.0.0.1:8791`，内部 mTLS `127.0.0.1:8795` | `/opt/promptcut-render/releases/41b6d3358438`（`41b6d335`），`look` 私钥 `/etc/promptcut/agent-master-look-key`（`kid: _yTY0wwd`），控制口密钥 `Ilw2yfFI` | `active (running)` |
+| 云端 Agent Root 调度服务 (`promptcut-agent-root.service`) | systemd (`root`)，管理 6 个隔离任务槽（单元 `promptcut-agent-task-slot-a`～`f.service`，`127.0.0.1:8801`..`8806`，用户 `promptcut-agent-task`；空闲时不在跑） | `/opt/promptcut-render/releases/41b6d3358438`（`41b6d335`），权威 `promptcut-agent-root-20261017b` | `active (running)` |
 | 在线编辑器 (`/opt/promptcut-hosted/editor`) | nginx 静态与反代（`https://visuhive.com/editor/` 与 `https://149-88-94-84.sslip.io/editor`） | `41b6d33584384cb2e2442295125625cd7219cae8`（183 个产物文件，54 个 `.gz`，保留 `runtime-config.json`） | `200 OK` |
 | 官网落地页 (`/var/www/landing` / `/opt/visuhive`) | nginx `https://visuhive.com` | `0e64fbe49b5d71c60e5265f98fa558919a1d245f` | `200 OK` |
 
 ### 4.3 模型 Key 导入
 
-- 从 `/root/promptcut-pending/agent-model-key.blob` 导入至 `/var/lib/promptcut/agent-shared/keys/model-key.json`（属主 `promptcut-agent-master:promptcut-agent-master`，权限 `0600`）：
+- 从 `/root/promptcut-pending/agent-model-key.blob` 导入。节点上没有原先写的 `agent-shared/keys/model-key.json`；导入的 Key 看着在 `/var/lib/promptcut/agent-shared/config/keys/custom.key`（属主 `promptcut-agent-task:promptcut-agent`，权限 `0640`，与 `config/ai.json` 同在 18:44 建）〔2026-10-17 更正〕：
   - `provider: "openai"`, `models: ["claude-sonnet-5-5", "claude-opus-5-5"]`, `defaultModel: "claude-sonnet-5-5"`, `keyLast4: "T1uU"`。
   - 按 `user-decisions-2026-10-13.md` 第 3 节规定，原密文文件 `/root/promptcut-pending/agent-model-key.blob` 保持不动（未删除）。
 
@@ -140,7 +143,7 @@
    - 在本机开发服务器打开该副本并连向真实生产节点：自动取得并验过 `goneProof`，转为本地项目（协作状态关闭，26 个片段、7 个音频素材完整保留，保存并重新打开后不再连向云端；当本地素材路径不可达时，7 个旁白素材全部在缺失素材面板 `[data-pc="missing-material-item"]` 列出）。
 3. **清理已批旧数据**：
    - 删除 5 个 `pcpub_` 测试账号及其会话、授权记录，仅保留用户本人账号 `9tian`（`acc_f17cf0ab2b14547df056b54f`）。
-   - 删除 4 个测试云端项目（`sp_f6e9a5073dd09d6dc956c8bf`、`sp_fb525f6084e1dc5a365b4db9`、`sp_6a3f0a06fa63cf9ef5e8249f`、`sp_6e3ddfb2a54695d1ef3d8aa1`）及 4 个旧口令式项目目录（均已含在一致备份中）。
+   - 删除 4 个测试云端项目（`sp_f6e9a5073dd09d6dc956c8bf`、`sp_fb525f6084e1dc5a365b4db9`、`sp_6a3f0a06fa63cf9ef5e8249f`、`sp_6e3ddfb2a54695d1ef3d8aa1`）及 4 个旧口令式项目目录。这 4 个旧项目的备份在 10-09 那份完整备份 `/root/promptcut-full-backup-20261009-account-cutover`（3.2 GB）里；10-17 一致备份里的数据包只有 0.5 MB，不含它们〔2026-10-17 更正：原写「均已含在一致备份中」〕。
    - 删除 `/var/tmp/pc-hosted-restore-20261009-account-cutover` 与 `/var/lib/promptcut/hosted.test-20261006`（后者已打包备份至 `/root/promptcut-v2-consistent-20261017-0718-7314b190/hosted-test-20261006.tar`）。
    - 清理后节点根分区 `/` 占用从 `17G (43%)` 降至 `11G (27%)`，可用空间 `27G`。
 
@@ -186,3 +189,7 @@
 1. **本机在用的桌面版升级**：构建产物已在 `desktop/release/PromptCut-0.7.18-setup.exe` 与 `desktop/release/PromptCut-patch-0.7.18.exe`，按规则我们未触碰您正在运行的 5190/5210 桌面实例，您可在空闲时自行安装升级。
 2. **节点 root 密码**：照 `docs/local.md` 备忘，部署完成后您可按计划更换节点 root 密码（SSH 公钥登录已配置稳妥）。
 3. **真实手机硬件解码与两台局域网实机回归（`V18-lan-real`）**：本次按开工指令只用这台 PC 与云节点完成全部验证，未动用第二台局域网电脑或真手机。
+4. **安装包冒烟与补丁演练由用户自己测**（2026-10-17 用户定）：`V18-installer-smoke`（装好以后启动、关闭、走账号路径、双击文件打开）和 `V18-installer-compat`（0.2.0、0.2.7 外壳上打补丁）没跑，结果出来前 2.1-16、2.1-17 记「未跑」。
+5. **已知问题：0.2.8 以前的外壳打 0.7.18 补丁**：0.7.18 桌面版的账号功能（云端项目列表、搬到云端）要调外壳的 `account_bridge` 命令，0.2.8 的外壳才有；补丁写的最低外壳是 0.2.0。按代码推断，旧外壳打完补丁后本地项目照常，账号和云端项目入口会报错（没实测）。用户 2026-10-17 定：最低外壳不抬，0.7.19 给账号入口加一句「这个功能要装完整安装包」。
+6. **补丁比以前大**：依赖变了（多了 sucrase），补丁带整份 `node_modules`，补丁安装器 109 MB（0.7.17 的是 18 MB）。
+7. **没跑、用户 2026-10-17 定不补跑的**：运行器加了 `--no-optional`，11 支补充探针没跑；`V18-gap-stop-immediate`、`V18-doc-semantics-judge`、`V18-queue-node-pressure` 没做；真实模型只跑了一遍（`S4-r4`），用户定一遍即可。

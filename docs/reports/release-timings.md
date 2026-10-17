@@ -33,6 +33,7 @@ node scripts/acceptance/four-stage-acceptance.mjs --timings-from <输出目录>/
 - 机器:DESKTOP-GS40TCK;处理器 Intel(R) Core(TM) i7-14700KF;核数 20 物理 / 20 逻辑;内存 31.8 GB;显卡 NVIDIA GeForce RTX 3080;系统 Microsoft Windows 11 Pro 10.0.26200 x64;Node v24.19.0
 - 范围:59 项(验收运行器跑过的;人工项与真实网络验证的项不在内)。合计机器耗时 55 分钟
 - 这些数字只记录,不决定过不过。相邻两版之间某项明显变差,在发版汇报里指出来,由用户决定要不要查。
+- 说明（2026-10-17 Claude 核对时补）：上面的提交和起止时间只对 G0-1、G0-2、S4-2 这 3 项成立。其余 56 项是运行器用 `--resume --force-resume` 沿用的当天更早的结果：`e82c72f1` 上 48 项（10:56～12:03，日本时间），`bb360375` 上 2 项，`151d0273` 上 6 项。这几个提交和 `41b6d335` 之间，产品代码只差版本号和 `server/vite-scan-ignore.mjs` 的 4 行。用户 2026-10-17 定不重跑。核对见 `docs/reports/VERIFY-release-0.7.18.md`。
 
 ### 各项整项用时
 
