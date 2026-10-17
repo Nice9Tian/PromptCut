@@ -94,3 +94,23 @@
 ## 4. 对任务书或语义的更正建议
 
 无。本次改动全部属于三级具体机制（`server/harness/` 与 `server/runners/api.mjs` 内部流式首块前重试与超时信号判别），不改变任何对外接口或一二级语义。
+
+---
+
+## 5. 合入 `main` 与生产节点部署记录（2026-10-18）
+
+1. **合入 `main` 与清理工作区**：
+   - 分支 `gemini/sse-upstream-timeout-retry`（`c8684fa3`）已通过 `--no-ff` 合入 `main`（合并提交 `cd275a14`），工作区 `.worktrees/sse-upstream-timeout-retry` 与本地临时分支已清理。
+2. **生产节点互斥检查与备份更新（`root@149.88.94.84`）**：
+   - 经 `systemctl show promptcut-agent -p ExecStart` 与 `/etc/promptcut/agent-root/agent-root.json` 核实，当前生产节点 `promptcut-agent.service`、`promptcut-agent-root.service` 及 6 个任务槽单元 `promptcut-agent-task-slot-a..f.service` 均运行在 `/opt/promptcut-render/releases/35f7b2abb9db`。
+   - 经 `find /opt/promptcut-* /etc/promptcut* -newermt '-10 minutes'`、文档服务账本（`/var/lib/promptcut-v2/doc/docservice/account-v2.sqlite`：`activeCount: 0`）与 `account-root-main.mjs --status` 核实，无其它会话正在部署且 6 个槽全部处于 `closed / inactive / dead`。
+   - 先将原文件备份至 `/root/sse-retry-backup-20261017T1851Z/`（`0700`），随后将本次改动的 6 个文件就地更新至 `/opt/promptcut-render/releases/35f7b2abb9db`（属主 `root:root`、权限 `0644`，LF 行尾，SHA-256 与本地 git blob 逐字节一致）：
+     - `server/harness/retry-fetch.mjs`：`1635434f4777e857b029de0901c10fb8092378d68ad857159a32e37afd8811d3`
+     - `server/harness/idle-timeout.mjs`：`ee32005cd0192be174538e1eafbf9121251f7e9af67af1d122e773bf913cb66f`
+     - `server/harness/providers/openai.mjs`：`f75f4f32525ccf472767a794a140cefc1722d32251fb0205ad05260e377dcc46`
+     - `server/harness/providers/anthropic.mjs`：`56927c62831358cf822697667a07ed42c540c1e10f89af32c160ffdccbadc7c8`
+     - `server/harness/providers/gemini.mjs`：`cbd254a27b6cd1f2ab0d6c8fbbd7649bace5d9a4085d03542a4f479ef33d6e8e`
+     - `server/runners/api.mjs`：`4c34269abc87ef96fd7951f4a25efef01849aeab5d6770ce8b0846f57850e53f`
+   - 核验 `account-root-main.mjs --config /etc/promptcut/agent-root/agent-root.json --status`（包含 `assertRootOwnedCode`）6 个槽全部正常，且 `curl -sS http://127.0.0.1:8791/healthz` 返回 `{"ok":true,"version":"0.7.18","codeVersion":"0.7.18","egressTestAllow":false,"look":true,"collect":false,"collectTestRunner":false,"taskProcesses":true,"scheduler":true}`。
+   - 部署与回滚说明已写入 `docs/local.md`。
+
