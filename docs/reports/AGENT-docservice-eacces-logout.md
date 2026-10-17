@@ -219,9 +219,33 @@
 1. **类型检查**：
    - 命令：`npx.cmd tsc -b --force`
    - 退出码：`0`（零错误，输出为空）
-2. **全量测试**：
-   - 命令：设置 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT=C:\Users\admin\Documents\VisuHive`、`PROMPTCUT_PASSWORD_ORDER_MODULE=C:\Users\admin\Documents\VisuHive\account\password-order.mjs` 后执行 `npm.cmd test`
-   - 结果见下节贴出的完整统计（退出码 `0`，零失败）。
+2. **相关专项测试**：
+   - `npm.cmd test -- server/test/agent-run-scope-core.test.mjs server/test/agent-read-control.test.mjs server/test/account-ledger-read-cache.test.mjs server/test/asset-root-registry-publisher.test.mjs`：退出码 `0`；`tests 109, pass 109, fail 0, cancelled 0, skipped 0`（`1425.0306ms`）。
+   - `npm.cmd test -- server/test/account-logout-confirmation.test.mjs server/test/account-logout-timeout.test.mjs`：退出码 `0`；`tests 8, pass 8, fail 0, cancelled 0, skipped 0`（`15223.4181ms`）。
+3. **全量测试**：
+   - 命令：
+     ```powershell
+     $env:PROMPTCUT_ACCOUNT_PROVIDER_ROOT="C:\Users\admin\Documents\VisuHive"
+     $env:PROMPTCUT_PASSWORD_ORDER_MODULE="C:\Users\admin\Documents\VisuHive\account\password-order.mjs"
+     npm.cmd test
+     ```
+   - 退出码：`0`
+   - 汇总输出：
+     ```text
+     ℹ tests 7045
+     ℹ suites 0
+     ℹ pass 7031
+     ℹ fail 0
+     ℹ cancelled 0
+     ℹ skipped 14
+     ℹ todo 0
+     ℹ duration_ms 165646.6134
+     ✓ npm test 最终结果：零失败
+     NPM_TEST_EXIT_CODE=0
+     ```
+4. **行尾审计**：
+   - 命令：`node C:/Users/admin/Documents/PromptCut/out/main-session-tools/eol-audit.mjs . main HEAD`
+   - 结果：全部修改与新增文件均为 `LF → LF 孤立CR 0`。
 
 ---
 
