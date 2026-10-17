@@ -23,12 +23,13 @@ const seq = s => {
   if (!Number.isSafeInteger(next)) reject(503, 'run-clock-overflow');
   return s.runClockV2 = next;
 };
+const tableNames = ['runGrantsV2', 'runRequestsV2', 'runReadRequestsV2', 'runControlsV2',
+  'runReceiptsV2', 'runFinishRequestsV2', 'runFinishReceiptsV2', 'runAbandonedRequestsV2'];
 const tables = s => {
-  s.runGrantsV2 ??= {}; s.runRequestsV2 ??= {}; s.runReadRequestsV2 ??= {};
-  s.runControlsV2 ??= {}; s.runReceiptsV2 ??= {};
-  s.runFinishRequestsV2 ??= {}; s.runFinishReceiptsV2 ??= {};
-  s.runAbandonedRequestsV2 ??= {};
+  for (const name of tableNames) s[name] ??= {};
 };
+const needsReconcile = s => tableNames.some(name => !s[name]) ||
+  s.accessEvents.some(e => e.seq > (s.runAccessCursorV2 ?? 0));
 const bumpQueue = (s, c) => {
   const revision = Math.max(s.conversationClockV2 ?? 0, c.queueRevision ?? 0) + 1;
   if (!Number.isSafeInteger(revision)) reject(503, 'conversation-clock-overflow');
@@ -237,6 +238,8 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   const sync = async input => {
     await synchronize();
     await refreshScope(input);
+    const cur = ledger.read();
+    if (!needsReconcile(cur)) return Object.values(cur.runControlsV2).filter(c => c.state === 'pending').map(copy);
     return ledger.transaction(s => { reconcile(s); return Object.values(s.runControlsV2).filter(c => c.state === 'pending'); });
   };
   function applyAccessEvent(event) {
@@ -379,8 +382,8 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     // Retained references intentionally do not renew/reuse the revoked user's token.
     const verified = original.state === 'active' ? await verifiedSender(original, original.messageRef) : null;
     await refreshScope({ principal });
-    return ledger.transaction(s => {
-      reconcile(s); const v = service(s, principal.servicePrincipal, invocation), g = bound(s, principal, v);
+    const checkInState = s => {
+      const v = service(s, principal.servicePrincipal, invocation), g = bound(s, principal, v);
       const { c, m } = current(s, g); project(s, projectId);
       if (scopeAuthority) scopeAuthority.assignmentInState(s, g, { requireBound: true });
       if (canonicalJson(acceptedMessageRef(m, g)) !== canonicalJson(g.messageRef)) reject(503, 'accepted-message-changed');
@@ -390,9 +393,12 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
         if (!verified) reject(403, 'run-state-changed'); senderAtCommit(s, c, g, verified);
       } else if (c.visibility !== 'shared' || g.visibilityAtRead !== 'shared') reject(403, 'run-retained-invalid');
       return { allowed: true, projectId, accountId: g.accountId, runGrant: copy(g),
-        ...(g.state === 'active' ? { activeGrant: { ...g, readConfirmed: true, currentRun: true } } : {}),
-        ...(g.state === 'retained' ? { retainedGrant: { ...g, readConfirmed: true, currentRun: true } } : {}) };
-    });
+        ...(g.state === 'active' ? { activeGrant: { ...copy(g), readConfirmed: true, currentRun: true } } : {}),
+        ...(g.state === 'retained' ? { retainedGrant: { ...copy(g), readConfirmed: true, currentRun: true } } : {}) };
+    };
+    const snapshot = ledger.read();
+    if (!needsReconcile(snapshot)) return checkInState(snapshot);
+    return ledger.transaction(s => { reconcile(s); return checkInState(s); });
   }
   const checkAccess = input => checkWithScope(input, { operation: 'checkAccess', input });
   async function authorizeQuery(input) {
@@ -489,6 +495,9 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     for (const initial of Object.values(ledger.read().runGrantsV2 ?? {}).filter(g => g.scopeBinding && ['preparing', 'active', 'retained'].includes(g.state))) {
       try {
         await scopeAuthority.refresh(initial.scopeBinding.rootScopeRef);
+        const snap = ledger.read(), snapGrant = snap.runGrantsV2?.[initial.runGrantId];
+        if (!needsReconcile(snap) && (!['preparing', 'active', 'retained'].includes(snapGrant?.state) || !scopeAuthority.failureInState(snap, snapGrant)))
+          continue;
         const control = ledger.transaction(s => {
           reconcile(s); const grant = s.runGrantsV2[initial.runGrantId];
           if (!['preparing', 'active', 'retained'].includes(grant.state)) return null;
@@ -508,7 +517,7 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
   async function reconcileScopeClosures() {
     if (!scopeAuthority) return [];
     const completed = [];
-    for (const initial of Object.values(ledger.read().runGrantsV2 ?? {}).filter(g => g.scopeBinding && g.state !== 'finished')) {
+    for (const initial of Object.values(ledger.read().runGrantsV2 ?? {}).filter(g => g.scopeBinding && g.state !== 'finished' && (Boolean(g.finishReceiptId) || g.state === 'revoked'))) {
       try {
         await scopeAuthority.refresh(initial.scopeBinding.rootScopeRef);
         const result = ledger.transaction(s => {

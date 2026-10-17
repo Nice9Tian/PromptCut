@@ -117,6 +117,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
     // 看画面要绑的那条任务上下文必须是执行器给的、和这条授权对得上；没有就不开这一轮（不带着不过闸的看画面往下跑）
     if (look && (!context || context.projectId !== grant.projectId || context.runGrantId !== grant.runGrantId))
       fail(503, 'look-context-unavailable');
+    const assignmentDigest = grant.assignmentDigest ?? grant.scopeBinding?.assignmentDigest ?? null;
     let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null, heartbeatTimer = null;
     let removeAbort = () => {};
     if (look && typeof look.heartbeat === 'function') {
@@ -126,7 +127,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             runId: grant.runId,
             runGrantId: grant.runGrantId,
             conversationId: grant.conversationId,
-            assignmentDigest: grant.assignmentDigest,
+            assignmentDigest,
           });
         } catch {}
       }, 30_000);
@@ -141,7 +142,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             runId: grant.runId,
             runGrantId: grant.runGrantId,
             conversationId: grant.conversationId,
-            assignmentDigest: grant.assignmentDigest,
+            assignmentDigest,
             aborted: true,
           });
         } catch {}
@@ -240,6 +241,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       signal: signal ?? null,
       authorize: () => resources.authorize(context, 'read'),
       instance: grant.instanceId,
+      assignmentDigest,
       run: { runGrantId: grant.runGrantId, runId: grant.runId, conversationId: grant.conversationId },
       onProgress: onLookProgress,
     }) : null;
@@ -248,7 +250,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       if (pathname === '/api/vision/snapshot') {
         let memberNodes = [];
         try {
-          if (bound?.side?.executor?.request) {
+          if (typeof toolset?.pageBridge?.call === 'function' && bound?.side?.executor?.request) {
             const reply = await bound.side.executor.request(
               grant.conversationId,
               { type: 'selection.query', projectId: grant.projectId, runGrantId: grant.runGrantId },
@@ -372,7 +374,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
                   runId: grant.runId,
                   runGrantId: grant.runGrantId,
                   conversationId: grant.conversationId,
-                  assignmentDigest: grant.assignmentDigest,
+                  assignmentDigest,
                   aborted: false,
                 });
               } catch {}
@@ -392,7 +394,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             runId: grant.runId,
             runGrantId: grant.runGrantId,
             conversationId: grant.conversationId,
-            assignmentDigest: grant.assignmentDigest,
+            assignmentDigest,
             aborted: true,
           });
         } catch {}
@@ -405,7 +407,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             runId: grant.runId,
             runGrantId: grant.runGrantId,
             conversationId: grant.conversationId,
-            assignmentDigest: grant.assignmentDigest,
+            assignmentDigest,
             aborted: true,
           });
         } catch {}
@@ -420,7 +422,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
           runId: grant.runId,
           runGrantId: grant.runGrantId,
           conversationId: grant.conversationId,
-          assignmentDigest: grant.assignmentDigest,
+          assignmentDigest,
           aborted: true,
         });
       } catch {}

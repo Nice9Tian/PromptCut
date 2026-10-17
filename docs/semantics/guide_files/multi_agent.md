@@ -22,7 +22,7 @@
 ## 等待与收回（主 Agent）
 
 - **零轮询等待**：派完子 Agent（`invoke_subagent` / `send_message`）或启动后台任务（异步 `run_command`）后，若主 Agent 手头没有其它独立工作可推进，直接输出一句简短状态说明并立即结束当前回合（不调用任何工具，句末严禁输出重复符号、多余标点或空行），完全依靠系统的事件通知（`SYSTEM_MESSAGE` / Reactive Wakeup）自动唤醒。
-- **禁设巡检闹钟**：不得调用 `schedule` 设置 3～5 分钟的周期性或单次巡检定时器来查子 Agent 进度（`schedule` 仅用于 5 小时额度低于阈值时的跨时段休眠等待）；更不得在启动后台任务或子 Agent 后调用 `manage_subagents(Action="list")` 或 `manage_task(Action="status")` 轮询。
+- **禁设轮询闹钟，允许绑定任务 ID 的单次死锁看门狗**：严禁对子 Agent 或后台任务设置周期性 `CronExpression` 或 `TimerCondition="never"` 的无条件巡检闹钟（无条件睡眠仅用于 5 小时额度低于阈值时的跨时段休眠等待），更不得调用 `manage_subagents(Action="list")` 或 `manage_task(Action="status")` 手工轮询。但当 `run_command` 转入后台（返回 `task-xxx`）且存在远端 SSH、WebSocket、无头浏览器等潜在挂死风险时，允许设置一个**单次、绑定该任务 ID 的超长兜底看门狗** `schedule(DurationSeconds=300, TimerCondition="task-xxx")`——任务正常结束时系统会自动静默取消该定时器（零额外唤醒开销），仅在命令真正死锁超时后唤醒会话查日志并 `manage_task(Action="kill")`。
 - 逐个读 diff，自己重跑基线，涉及渲染的改动自己看图。
 - 审查通过后用 `--no-ff` 合并。合并进 main 须按 `suggested_agent_behavior.md` 原则 4 先得到用户授权。
 - 审查不通过或验证没过，分支保留，按 `suggested_agent_behavior.md`「验证」一节告诉用户。

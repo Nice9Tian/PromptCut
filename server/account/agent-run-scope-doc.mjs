@@ -80,15 +80,24 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     if (!projection || canonicalJson(agentScopeRef(projection.record)) !== canonicalJson(ref)) fail(403, 'epoch-changed');
     projection.phase = projection.closure ? 'closed' : projection.assignment ? 'bound' : 'ready';
     projection.failure = result.failures?.[ref.epoch] ?? null;
-    ledger.transaction(s => {
-      const old = s.agentRunScopesV1.checkpoints[key];
-      if (canonicalJson(old ?? null) !== canonicalJson(checkpoint)) fail(409, 'refresh-race');
-      const imported = (s.agentRunScopesV1.failureDigests ??= {})[key] ??= {};
-      for (const [epoch, digest] of Object.entries(imported))
-        if (!result.failures?.[epoch] || digestOf(result.failures[epoch]) !== digest) fail(503, 'failure-history-changed');
-      for (const [epoch, observation] of Object.entries(result.failures ?? {})) imported[epoch] = digestOf(observation);
-      s.agentRunScopesV1.checkpoints[key] = projection.checkpoint;
-    });
+    const cur = ledger.read(), curImported = cur.agentRunScopesV1?.failureDigests?.[key];
+    const failures = result.failures ?? {};
+    const unchanged = Boolean(curImported) &&
+      canonicalJson(cur.agentRunScopesV1?.checkpoints?.[key] ?? null) === canonicalJson(checkpoint) &&
+      canonicalJson(checkpoint) === canonicalJson(projection.checkpoint) &&
+      Object.entries(curImported).every(([epoch, digest]) => failures[epoch] && digestOf(failures[epoch]) === digest) &&
+      Object.entries(failures).every(([epoch, observation]) => curImported[epoch] === digestOf(observation));
+    if (!unchanged) {
+      ledger.transaction(s => {
+        const old = s.agentRunScopesV1.checkpoints[key];
+        if (canonicalJson(old ?? null) !== canonicalJson(checkpoint)) fail(409, 'refresh-race');
+        const imported = (s.agentRunScopesV1.failureDigests ??= {})[key] ??= {};
+        for (const [epoch, digest] of Object.entries(imported))
+          if (!result.failures?.[epoch] || digestOf(result.failures[epoch]) !== digest) fail(503, 'failure-history-changed');
+        for (const [epoch, observation] of Object.entries(result.failures ?? {})) imported[epoch] = digestOf(observation);
+        s.agentRunScopesV1.checkpoints[key] = projection.checkpoint;
+      });
+    }
     live.set(key, copy(projection)); return copy(projection);
   }
   function projectionFor(ref) {

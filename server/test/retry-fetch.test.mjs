@@ -278,3 +278,51 @@ test('SSE 流首包返回不可重试错误(invalid api key / invalid argument)�
   }
 });
 
+test('DEFAULT_RETRY.maxTotalMs 为 20 分钟:每次耗时 95 秒返回 SSE upstream timed out、连续失败 4 次(累计 380 秒 > 旧 5 分钟)后不提前中止,继续第 4 次重试并在第 5 次尝试成功返回正文', async () => {
+  assert.equal(DEFAULT_RETRY.maxTotalMs, 20 * 60 * 1000, '默认总时间预算应为 20 分钟');
+  assert.equal(DEFAULT_RETRY.maxRetries, 10, '默认最大重试次数应为 10 次');
+
+  const upstreamTimeoutChunk =
+    'data: {"error":{"message":"The upstream service timed out. Please try again later. (request id: 202610180052009722857049rKYajio)"}}\n\n';
+  let clock = 0;
+  const timedTimeoutStep = () => {
+    clock += 95_000; // 模拟单次上游挂起 95 秒后返回 SSE error
+    return sseRes([upstreamTimeoutChunk]);
+  };
+  const { fetchImpl, calls } = scripted([
+    timedTimeoutStep,
+    timedTimeoutStep,
+    timedTimeoutStep,
+    timedTimeoutStep,
+    () => sseRes([
+      'data: {"choices":[{"delta":{"content":"第5次尝试成功返回正文"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ]),
+  ]);
+
+  const retries = [];
+  const f = createRetryingFetch(fetchImpl, {
+    baseDelayMs: 1,
+    maxDelayMs: 2,
+    now: () => clock,
+    onRetry: (info) => {
+      retries.push(info);
+      clock += info.delayMs;
+    },
+  });
+
+  const r = await f('u', {});
+  assert.ok(clock >= 380_000, `4 次 95 秒超时累计耗时应超过旧的 5 分钟(300_000ms),实际 ${clock}ms`);
+  assert.equal(calls.length, 5, '首次 + 4 次重试共 5 次尝试');
+  assert.equal(retries.length, 4, '应完整经历 4 次重试而不在第 3 次重试后因旧 5 分钟预算耗尽放弃');
+  assert.equal(retries[3].attempt, 4);
+  assert.equal(retries[3].of, 10);
+
+  const evs = [];
+  for await (const ev of readSse(r)) evs.push(ev.data);
+  assert.ok(evs.some((d) => d.includes('第5次尝试成功返回正文')), '第 5 次尝试应正常拿到正文');
+  assert.ok(evs.includes('[DONE]'));
+});
+
+

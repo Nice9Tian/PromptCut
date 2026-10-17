@@ -339,7 +339,7 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
         return reply(res, 200, { ok: true });
       }
       const ac = new AbortController();
-      req.on('close', () => { ac.abort(new Error('client-closed')); });
+      res.once('close', () => { if (!res.writableEnded) ac.abort(new Error('client-closed')); });
       const post = masterLook.forProject(targetProjectId, {
         cards: () => params?.cards ?? {},
         run: { runGrantId: grant.runGrantId, runId: grant.runId, conversationId: grant.conversationId },
