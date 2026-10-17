@@ -26,6 +26,7 @@ import { createSlot, createSoundTools, newSoundState } from './hosted-sound.mjs'
 import { createAudioTools } from './hosted-audio.mjs';
 import { createCardAudioTools, newCardAudioState } from './hosted-card-audio.mjs';
 import { createCollect, newCollectState } from './hosted-collect.mjs';
+import { loadCardLib } from '../ssr-host.mjs';
 
 const SERVER_DIR = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -256,16 +257,8 @@ export function createHostedTools({
   /** 测响度(ffmpeg 子进程)同理 */
   const measureSlot = createSlot();
 
-  /** 卡片的翻译、审查、语法检查:纯函数,在 `server/vite-plugin-cards.ts` 里(桌面版建卡用的同一份) */
-  let cardLibPromise = null;
-  const cardLib = () => {
-    cardLibPromise ??= import(new URL('../../vite-plugin-cards.ts', import.meta.url).href).catch(async (err) => {
-      // 这台机器的 Node 不能直接载入 TypeScript:借 vite 转一下(只是转译这一个服务端文件,不碰 `src/`)
-      if (typeof loadModule !== 'function') throw err;
-      return loadModule('/server/vite-plugin-cards.ts');
-    });
-    return cardLibPromise;
-  };
+  /** 卡片的翻译、审查、语法检查:纯函数,经 `ssr-host.mjs` 载入缝取(桌面版建卡用的同一份) */
+  const cardLib = () => loadCardLib(loadModule);
 
   /**
    * 一个对话的工具上下文。

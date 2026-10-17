@@ -24,7 +24,7 @@
  */
 import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { LOOK_AUTH_HEADER } from './look.mjs';
+import { LOOK_AUTH_HEADER, HOSTED_AUDIO_JS_ROUTE } from './look.mjs';
 
 /** 节点 id：`hosted-render:<instanceId 前 12 位>/<projectId 去掉 sp_ 的前 8 位>` */
 export const nodeIdFor = (instanceId, projectId) => `hosted-render:${String(instanceId).slice(0, 12)}/${String(projectId).replace(/^sp_/, '').slice(0, 8)}`;
@@ -130,6 +130,11 @@ export function createBroker({ key, listing, ticket, report, status, clients = n
       const url = new URL(req.url ?? '/', 'http://broker.local');
       if (fromBrowser(req)) { req.resume(); log('broker.browser-refused', { path: url.pathname.slice(0, 80) }); return send(res, 403, { ok: false, error: 'forbidden' }); }
       if (req.method === 'GET' && url.pathname === '/status') return send(res, 200, { ok: true, ...status() });
+      // 音频自定义测量沙箱签名路由（`/api/audio/measure-js`）：同样凭服务私钥签名核验
+      if (url.pathname === HOSTED_AUDIO_JS_ROUTE) {
+        if (!look || !look.enabled || typeof look.audioJs !== 'function') { req.resume(); return send(res, 404, { ok: false, error: 'not-found' }); }
+        return await look.audioJs(req, res);
+      }
       // 看画面：云端 Agent 服务凭服务私钥的签名来要，不走工作进程的口令（工作进程的口令要不到画面，Agent 服务的签名也要不到清单与票据）
       const lookOp = req.method === 'POST' ? { '/look': 'handle', '/look/poll': 'poll', '/look/cancel': 'cancel', '/look/release': 'release', '/look/heartbeat': 'heartbeat' }[url.pathname] : undefined;
       if (lookOp) {

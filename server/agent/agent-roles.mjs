@@ -12,10 +12,9 @@
 import fs from 'node:fs';
 
 import { SPAWN_ROLE_IDS, SPAWN_ROLE_HINTS } from './spawn-roles.mjs';
+import { ROLES_DIR } from './ssr-host.mjs';
 
 export { SPAWN_ROLE_IDS, SPAWN_ROLE_HINTS };
-
-const ROLES_DIR = new URL('../../src/ai/roles/', import.meta.url);
 
 function splitFrontmatter(raw) {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);

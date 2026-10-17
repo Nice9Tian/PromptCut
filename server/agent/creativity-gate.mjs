@@ -18,7 +18,7 @@
  * | `measure_audio_js` | 高 | 写自定义测量代码(计划 A6;语义 `user-workflow.md`「创造力等级」:低档「测量只用内置方法」) |
  * | 其余(含 `apply_card`、`apply_*`、组合卡的部件工具、`measure_audio`) | 低 | 用已有的卡片 / 效果 / 部件、改参数、内置测量 |
  */
-import { CREATIVITY_HINT, CREATIVITY_LABEL, creativityAllows, normalizeCreativity } from '../../src/kernel/creativity.mjs';
+import { CREATIVITY_HINT, CREATIVITY_LABEL, creativityAllows, normalizeCreativity } from './ssr-host.mjs';
 
 /** 用户卡 id 的形状(和 `server/vite-plugin-cards.ts` 的 kebab-case 白名单一致);不合形状的不去碰文件系统 */
 const CARD_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;

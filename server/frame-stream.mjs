@@ -1062,7 +1062,7 @@ export class StreamProducer {
    * 或只是拉来的 `adoptedOnly`)就按 `spec` 建一个 `queueOnly` 的:有隔离工程、能发层,但自动生产不碰它。
    */
   async queueState(entry, spec) {
-    await this.assertProjectScope(entry, spec);
+    await this.assertProjectScope?.(entry, spec);
     const usable = state => state && !state.adoptedOnly && (!this.projectId || !state.projectId || state.projectId === this.projectId);
     let state = this.streams.get(spec.streamKey);
     if (!usable(state)) {
@@ -1097,7 +1097,7 @@ export class StreamProducer {
    * `progress(done)`:这一段里已经就绪的帧数(每个分段按它实际的帧数,流的末段可以不满 15 帧)。回 `{ produced, skipped }`。
    */
   async produceRange(entry, spec, range, { signal, progress, density = null } = {}) {
-    await this.assertProjectScope(entry, spec);
+    await this.assertProjectScope?.(entry, spec);
     const sparse = density === 'sparse';
     const stride = sparse ? SPARSE_STRIDE : 1;
     /** 这一段还要不要产:稀疏任务只补一张都没有的(和签名对不上的),满密度任务补到满密度为止 */
@@ -1165,7 +1165,7 @@ export class StreamProducer {
    * 不会和同一张卡的轨道流接上同一份租约。一个分段连续 `QUEUE_SEGMENT_ATTEMPTS` 次没取成抛可重试的错误。
    */
   async produceExportRange(entry, spec, range, { signal, progress, onFrame } = {}) {
-    await this.assertProjectScope(entry, spec);
+    await this.assertProjectScope?.(entry, spec);
     const cancelled = () => Object.assign(new Error('Queue task cancelled'), { cancelled: true });
     if (this.closed) throw cancelled();
     if (typeof onFrame !== 'function') throw new Error('produceExportRange 要 onFrame');
@@ -1219,7 +1219,7 @@ export class StreamProducer {
    */
   async update(entry) {
     if (!this.enabled || this.closed || !entry) return [];
-    await this.assertProjectScope(entry);
+    await this.assertProjectScope?.(entry);
     if (!this.routeAttached) { this.pendingEntry = entry; return []; }
     const specs = planStreams(entry, {
       // c10a 契约第 17 节:补渲进集合的片段不产流(`streamPicked`);旧的管线替身没有它时退回 `prerenderPicked`

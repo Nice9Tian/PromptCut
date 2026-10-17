@@ -58,6 +58,9 @@
 import { createHash, createPrivateKey, randomBytes, sign, verify } from 'node:crypto';
 import { publicKeyOf, SERVICE_SIG_BYTES } from '../auth/service-identity.mjs';
 import { createRenderRequests, isFinal, REQUEST_ID_RE } from './render-requests.mjs';
+import { createHostedAudioJsHandler, HOSTED_AUDIO_JS_ROUTE } from './audio-js.mjs';
+
+export { createHostedAudioJsHandler, HOSTED_AUDIO_JS_ROUTE };
 
 export const LOOK_AUTH_HEADER = 'x-pc-service-auth';
 /** 管理进程转给工作进程时带的口令头（值是那个工作进程自己的代理口口令） */
@@ -245,11 +248,16 @@ const pending202 = (requests, e) => ({
  */
 export function createLook({
   enabled = true, verify: verifyAuth, project, directoryReady = () => true, paused = () => false, storagePaused = () => false, resident, iso, want = () => {},
-  requests: requestsIn = null, isolation = null,
+  requests: requestsIn = null, isolation = null, audioJs: audioJsIn = null,
   fetch: fetchImpl = globalThis.fetch, now = Date.now, log = () => {}, limits: limitsIn = {},
 } = {}) {
   const limits = { ...LOOK_DEFAULTS, ...limitsIn };
   const requests = requestsIn ?? createRenderRequests({ now, log });
+  const audioJs = audioJsIn ?? createHostedAudioJsHandler({
+    verifyServiceRequest: verifyAuth,
+    now,
+    log,
+  });
   const stats = { requests: 0, served: 0, refused: 0, failed: 0, unauthorized: 0, retried: 0, over5min: 0, lastMs: null, lastAt: null, byWorker: { resident: 0, isolated: 0 } };
   /** 在途的那一个：`{ id, projectId, worker, since, abort }` */
   let current = null;
@@ -612,7 +620,17 @@ export function createLook({
     /** 管理进程起来、把盘上的队列接回来之后调一次：让调度转起来 */
     resume() { kick(); },
     /** 停表（管理进程退出时；排着的留在盘上，下次起来接着做） */
-    close() { if (timer) clearTimeout(timer); timer = null; },
+    close() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      void audioJs?.close?.().catch?.(() => {});
+    },
+    audioJs,
+    async measureAudioJs({ auth, bodyText, signal = null }) {
+      const a = admit(auth, bodyText);
+      if (a.out) return a.out;
+      return audioJs.run(a.msg, { signal });
+    },
     /** 在途的那个请求正在哪个工作进程上出图（管理进程据此让出一个并发名额）；没有回 null */
     busyOn: () => current?.worker ?? null,
     /** 在途的那个请求是哪个项目的；没有回 null */

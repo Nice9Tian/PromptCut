@@ -330,8 +330,9 @@ export function createAgentInstance(env) {
       ...(env.accountMode === true && env.accountDataWebSocketImpl ? { WebSocketImpl: env.accountDataWebSocketImpl } : {}),
       // 托管档:几个只读项目与注册表的页面工具改在服务端副本上执行;在服务端另有实现的(导入素材、建卡改卡、配音)
       // 标成经「页面」执行——托管档的「页面」就是下面的 hostedCallPage,由它交给 hosted-tools.mjs
-      // 这个进程里建出了提供者的工具(账号模式,`account-tools.mjs`)一律交给它(走「经页面执行」那条分派,见 hostedCallPage);其余照旧
-      tools: HOSTED ? tools.map((t) => (accountProvided?.has(t.name) ? { ...t, side: "page" } : CLOUD_AGENT_SIDE.has(t.name) ? { ...t, side: "agent" } : CLOUD_HOSTED_TOOLS.has(t.name) ? { ...t, side: "page" } : t)) : tools,
+      // 这个进程里建出了提供者的工具(账号模式,`account-tools.mjs`)一律交给它(走「经页面执行」那条分派,见 hostedCallPage);
+      // `see_frames` 保持 `side: "agent"`,时间轴看画面照旧在副本上执行,素材拼图(`source: "media"`)在执行器回 undefined 后落到 hostedCallPage
+      tools: HOSTED ? tools.map((t) => (accountProvided?.has(t.name) && t.name !== 'see_frames' ? { ...t, side: "page" } : CLOUD_AGENT_SIDE.has(t.name) ? { ...t, side: "agent" } : CLOUD_HOSTED_TOOLS.has(t.name) ? { ...t, side: "page" } : t)) : tools,
       toolGroups,
       // 托管档没有编辑器进程:工具实现里漏网的 /api/* 调用指到一个解析不了的地址,立刻失败,不会打到同机别的服务
       loadHost: () => loadSsrHost((id) => server.ssrLoadModule(id), { apiBase: HOSTED ? "http://agent-service.invalid" : `http://127.0.0.1:${editorPortOf()}` }),
@@ -581,8 +582,18 @@ export function createAgentInstance(env) {
         agentLog('agent.cloud-unavailable', { tool });
         return open;
       }
-      // 看画面的(契约第 9.8 节):这台节点没配看画面的口子就明说;素材的镜头拼图云端还没有
+      // 看画面的(契约第 9.8 节):这台节点没配看画面的口子就明说;素材的镜头拼图在账号模式有 mediaFrames 提供者时由其执行
       if (CLOUD_LOOK_TOOLS.has(tool)) {
+        const isMediaFrames = tool === 'see_frames' && (args?.source === 'media' || (args?.source === undefined && typeof args?.mediaId === 'string'));
+        if (isMediaFrames) {
+          if (!accountProvided?.has('see_frames')) return lookSourceUnavailable();
+          const mediaArgs = args?.source === 'media' ? args : { ...args, source: 'media' };
+          return await callToolChecked(tool, toolDef, mediaArgs, agent, callId);
+        }
+        if (tool === 'get_gif' && accountProvided?.has('get_gif')) {
+          await hostedContext(agent || '')?.refreshCards().catch(() => {});
+          return await callToolChecked(tool, toolDef, args, agent, callId);
+        }
         if (!prerenderPost) return lookUnavailable(tool);
         if (tool === 'see_frames' && args?.source !== undefined && args.source !== 'timeline') return lookSourceUnavailable();
         // 这个项目的卡片源码表先列到最新(渲染服务据它决定走不走隔离工作进程、等卡装到哪个版本)

@@ -34,6 +34,9 @@ import { createPageControlTools } from './page-bridge.mjs';
 import { createHandoffTools } from './hosted-handoff.mjs';
 import { createCollectBridge, COLLECT_BRIDGE_TEXT } from './collect-bridge.mjs';
 import { readCollectConfig } from './hosted-collect.mjs';
+import { createMediaFramesTools } from './hosted-media-frames.mjs';
+import { createAudioJsTools } from './hosted-audio-js.mjs';
+import { createVisualsTools } from './hosted-visuals.mjs';
 import { CLOUD_PROVIDER_FAMILIES } from './cloud-tools.mjs';
 import { ACCOUNT_TOOL_SETTING_KEYS, validateAccountToolSettings } from '../../agent-service/account-tool-settings.mjs';
 import { CONVERSATION_PURGE_DIR, queueConversationPurge, listConversationPurges, purgeConversationData, conversationPurgeState } from './conversation-purge.mjs';
@@ -418,15 +421,14 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
   const byTool = new Map();         // 工具名 → 族
   const closers = [];               // 收的顺序与建的顺序相反的那一批,另按下面 close() 里写死的次序
   const skipped = {};
-  const mount = (family, build) => {
+  const mount = (family, build, toolNames = CLOUD_PROVIDER_FAMILIES[family] ?? []) => {
     try {
       const provider = build();
       if (!provider) return null;
-      const names = CLOUD_PROVIDER_FAMILIES[family] ?? [];
       // 表里这一族的工具它得全认;认不全说明两边对不上,这一族不算接上
-      if (names.some((name) => !provider.handles?.has?.(name))) throw coded('account-tools-family-mismatch');
+      if (toolNames.some((name) => !provider.handles?.has?.(name))) throw coded('account-tools-family-mismatch');
       providers.set(family, provider);
-      for (const name of names) byTool.set(name, family);
+      for (const name of toolNames) byTool.set(name, family);
       return provider;
     } catch (error) {
       skipped[family] = typeof error?.code === 'string' ? error.code : 'error';
@@ -475,6 +477,25 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     // 「发布预渲染任务」这一阶段保持注入的接缝,这一期不配(渲染那一带另有改动):阶段标「用不了」,不算失败
     prerender: null, kernel: { getCard: kernel.getCard }, errorTexts: { 'track.': TRACK_ERROR_TEXT },
     limits: { ...(config.workflow ?? {}), ...(limitsIn.workflow ?? {}) }, now, log }));
+  mount('mediaFrames', () => createMediaFramesTools({
+    contextAccess: trackedResources.contextAccess, resources: trackedResources, assets, workspace: workspaceFor,
+    project, ffmpeg: config.shots?.ffmpeg ?? null, ffprobe: config.shots?.ffprobe ?? null, config: config.shots ?? null,
+    kernel, limits: limitsIn.mediaFrames ?? {}, now, log,
+  }), ['see_frames', 'see_media']);
+  mount('audioJs', () => createAudioJsTools({
+    contextAccess: trackedResources.contextAccess, resources: trackedResources, assets, project, workspace: workspaceFor,
+    ffmpeg: config.shots?.ffmpeg ?? null, ffprobe: config.shots?.ffprobe ?? null, config: config.shots ?? null,
+    endpointUrl: config.audioJs?.endpointUrl ?? limitsIn.audioJs?.endpointUrl ?? null,
+    serviceKey: config.audioJs?.serviceKey ?? limitsIn.audioJs?.serviceKey ?? null,
+    sandbox: limitsIn.audioJs?.sandbox ?? null, runSandbox: limitsIn.audioJs?.runSandbox ?? null,
+    limits: limitsIn.audioJs ?? {}, now, log,
+  }));
+  const visuals = mount('visuals', () => createVisualsTools({
+    contextAccess: trackedResources.contextAccess, resources: trackedResources, dataDir, workspace: workspaceFor,
+    project: { snapshot: () => snapshot() }, ffmpeg: config.shots?.ffmpeg ?? null,
+    renderGif: limitsIn.visuals?.renderGif ?? null, renderFrames: limitsIn.visuals?.renderFrames ?? null,
+    aclRevisionOf: limitsIn.visuals?.aclRevisionOf ?? null, now, log,
+  }), ['get_gif']);
   const web = mount('web', () => createHostedBrowserTools({ resources: trackedResources, egress, dataDir, runtime: config.browser ?? {},
     limits: limitsIn.web ?? {}, log, now }));
   let collectBridge = null;
@@ -504,7 +525,7 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     if (raw.length >= 8 && raw.length <= 64) return raw;
     return raw ? `c${sha256(`${context.runGrantId}\n${callId}`).slice(0, 40)}` : `c${randomUUID().replace(/-/g, '')}`;
   };
-  const USAGE_VENDOR = { web: 'chromium', stt: 'python', shots: 'ffmpeg', subject: 'python', track: 'python', motion: 'builtin', workflow: 'builtin' };
+  const USAGE_VENDOR = { web: 'chromium', stt: 'python', shots: 'ffmpeg', subject: 'python', track: 'python', motion: 'builtin', workflow: 'builtin', mediaFrames: 'ffmpeg', audioJs: 'chromium', visuals: 'ffmpeg' };
 
   const browserDir = hostedBrowserDir(dataDir, scope);
   const closeMs = Number.isFinite(limitsIn.web?.closeMs) ? limitsIn.web.closeMs : 8_000;
@@ -707,7 +728,7 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
       if (fencing) await fencing.catch(() => {});
       const receipts = {};
       const shut = async (family, fn) => { try { receipts[family] = await fn(); } catch (error) { receipts[family] = { childrenClosed: false, streamsClosed: false, workPending: 1, error: typeof error?.code === 'string' ? error.code : 'error' }; } };
-      for (const family of ['workflow', 'motion', 'track', 'subject', 'shots', 'stt']) {
+      for (const family of ['workflow', 'motion', 'track', 'subject', 'shots', 'stt', 'mediaFrames', 'audioJs', 'visuals']) {
         const provider = providers.get(family);
         if (provider) await shut(family, () => provider.close(reason));
       }
@@ -739,6 +760,7 @@ export async function createAccountToolset({ root, dataDir, context, resources, 
     handles: (tool) => names.has(tool),
     familyOf: (tool) => byTool.get(tool) ?? null,
     call,
+    recordVisual: (input) => (visuals ? visuals.recordVisual(context, input) : Promise.resolve(null)),
     /** 交给 `hosted-collect.mjs` 的委托口子(这一轮的);没建出来是 null */
     collectDelegate: () => {
       if (!collectBridge || fencing || closing) return null;

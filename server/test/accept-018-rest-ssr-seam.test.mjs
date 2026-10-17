@@ -105,15 +105,7 @@ const closure = closureOf(entryFiles);
  * 契约(`cloud-agent-contract.md` 2.1 节)只认其中 creativity.mjs 的三处是「起点就有的」;其余是后来出现的或者契约没写到的。
  * 棘轮 SEAM-3:这张表只许缩小。修掉一处就从表里删掉一行。
  */
-const KNOWN = [
-  'server/agent/agent-board.mjs -> src/kernel/agentScopes.mjs',
-  'server/agent/agent-roles.mjs -> src/ai/roles',
-  'server/agent/agent-sessions.mjs -> src/kernel/creativity.mjs',
-  'server/agent/creativity-gate.mjs -> src/kernel/creativity.mjs',
-  'server/vite-plugin-cards.ts -> src/audio/cardAudioHost.ts',
-  'server/vite-plugin-cards.ts -> src/online/cardRuntime/remotionLock.mjs',
-  'server/vite-plugin-cards.ts -> src/render/cardCodeIdentity.mjs',
-].sort();
+const KNOWN = [];
 
 test('SEAM-1 独立入口两个目录(含子目录)里除 ssr-host 外没有指向 src/ 的 import', () => {
   // 0.7.18 工具表接线之后是硬断言:镜头、主体两个工具包要的内核函数经 ssr-host 的载入缝取来、由宿主(account-tools.mjs)注入,
@@ -123,7 +115,7 @@ test('SEAM-1 独立入口两个目录(含子目录)里除 ssr-host 外没有指�
   assert.deepEqual(srcImportsOf(entryFiles), []);
 });
 
-test('SEAM-2 独立入口的传递闭包里除 ssr-host 外没有任何文件 import src/', { todo: '现状不成立:闭包里 server/agent/{agent-board,agent-roles,agent-sessions,creativity-gate}.mjs 与 server/vite-plugin-cards.ts 直接引用 src/' }, () => {
+test('SEAM-2 独立入口的传递闭包里除 ssr-host 外没有任何文件 import src/', () => {
   assert.ok(closure.length > entryFiles.length, '闭包应比入口目录本身大');
   assert.deepEqual(srcImportsOf(closure), []);
 });

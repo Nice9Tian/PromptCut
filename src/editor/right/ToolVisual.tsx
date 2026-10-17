@@ -119,13 +119,15 @@ function getScopeSnapshot(): string {
   return `${scopeEpoch}:${scopeKeyOf(currentCloudScope)}`;
 }
 
+const AGENT_V1_PREFIX = "/agent/v1";
+
 function resolveCloudEndpointUrl(baseUrl: string, rawPath: string, aclRevision?: number): string {
   const base = baseUrl.replace(/\/+$/, "");
   let resolved: string;
   if (/^https?:\/\//i.test(rawPath)) {
     resolved = rawPath;
-  } else if (rawPath.startsWith("/agent/v1/")) {
-    resolved = `${base}${rawPath.slice("/agent/v1".length)}`;
+  } else if (rawPath.startsWith(AGENT_V1_PREFIX) && rawPath[AGENT_V1_PREFIX.length] === "/") {
+    resolved = `${base}${rawPath.slice(AGENT_V1_PREFIX.length)}`;
   } else if (rawPath.startsWith("/v1/")) {
     resolved = `${base}${rawPath.slice("/v1".length)}`;
   } else if (rawPath.startsWith("/")) {

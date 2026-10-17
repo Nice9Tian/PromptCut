@@ -10,10 +10,10 @@
  */
 import { createAudioSandbox, SANDBOX_LIMITS, clampTimeout } from '../audio-sandbox.mjs';
 import { PCM_LIMITS, pcmFormat, sampleBudgetError } from '../audio-pcm.mjs';
-import { createLookVerifier, LOOK_AUTH_HEADER } from './look.mjs';
+import { createLookVerifier } from './look.mjs';
 
 export const HOSTED_AUDIO_JS_ROUTE = '/api/audio/measure-js';
-export const HOSTED_AUDIO_JS_AUTH_HEADER = LOOK_AUTH_HEADER;
+export const HOSTED_AUDIO_JS_AUTH_HEADER = 'x-pc-service-auth';
 export const HOSTED_AUDIO_JS_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 /**

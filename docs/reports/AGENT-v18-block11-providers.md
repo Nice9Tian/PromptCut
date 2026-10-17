@@ -28,6 +28,12 @@
 | `server/test/cloud-tools-v1-visuals.test.mjs` | 新建 | V1 用户可视记录单测：覆盖模型 `get_gif` 落盘记录、同对话成员读取、创建者只读 `private`、非 owner 成员读 `private` 被拒、共有切私有后立即不可读、跨对话/跨项目被拒、重启后持久保留，以及 `ToolVisual.tsx` 云端加载与切私有撤权即刻清理 |
 | `server/frame-stream.mjs`、`server/hosted-render/worker.mjs`、`server/test/asset-project-workers.test.mjs` | 修改 | 加固 `planStreams`、`segmentSignature`、`StreamProducer` 按 `projectId` 绑定衍生流键、清单与分段读写；在 `hosted-render/worker.mjs` 新增 `createWorkerProjectScope` 与 `worker.switchProject`，将素材缓存、代理口令/票据、环境变量严格绑定 `projectId`；在 `asset-project-workers.test.mjs` 补齐跨项目同卡片参数流键隔离与跨项目同哈希素材缓存/票据隔离的硬断言单测 |
 
+| `server/agent/service/cloud-tools.mjs`、`server/agent/service/account-tools.mjs`、`server/agent/service/instance.mjs` | 修改 | **G 第二期中央挂载**：在 `cloud-tools.mjs` 将 `measure_audio_js` 标上 `provider: 'audioJs'`（旧单进程托管档行为不变，账号模式建出提供者时放行可用）；在 `createAccountToolset` 挂入 `mediaFrames`（`see_frames` 素材拼图 / `see_media`）、`audioJs`（`measure_audio_js`）、`visuals`（`get_gif` 与 `recordVisual`），并在 `close()` 中统一回收；在 `instance.mjs` 将 `see_frames({ source: 'media' })`（及带 `mediaId` 调用）与账号模式的 `get_gif` 路由到 `accountTools` |
+| `server/agent-service/http.mjs`、`server/agent-service/main.mjs`、`server/agent-service/account-master-assembly.mjs`、`server/agent/service/account-runner.mjs` | 修改 | 在 Agent HTTP 主服务中挂载 `createVisualRoutes`，使 `GET /v1/conversations/:id/visuals/:vid` 与 `GET /agent/v1/conversations/:id/visuals/:vid`（及 `/files/:name`）可达并经过读取控制通道与对话 ACL 核验 |
+| `server/hosted-render/look.mjs`、`server/hosted-render/broker.mjs`、`server/hosted-render/audio-js.mjs` | 修改 | 在 `createLook` 与管理进程 `broker.mjs` 上挂载 `createHostedAudioJsHandler` 到 `/api/audio/measure-js`（`HOSTED_AUDIO_JS_ROUTE`）签名路由，保持 `/look`、`/look/poll`、`/look/cancel` 等原有路由 100% 不变 |
+| `server/agent/ssr-host.mjs`、`server/agent/{agent-board,agent-roles,agent-sessions,creativity-gate}.mjs`、`server/agent/service/hosted-tools.mjs`、`server/test/accept-018-rest-ssr-seam.test.mjs` | 修改 | **收口 `SEAM-2`**：将 `agentScopes.mjs`、`creativity.mjs`、`ROLES_DIR` 与 `loadCardLib` 统一由唯一载入缝 `server/agent/ssr-host.mjs` 转出，使独立入口传递闭包除 `ssr-host.mjs` 外对 `src/` 的直接引用降为 **0 处（`KNOWN = []`）**，去掉 `SEAM-2` 的 `todo` 转为硬断言 |
+| `src/editor/right/ToolVisual.tsx`、`server/frame-stream.mjs` | 修改 | 修复两处回归：`ToolVisual.tsx` 使用 `AGENT_V1_PREFIX = "/agent/v1"` 消除 `"/agent/v1/"` 字面量使 `C10A-API-05` 100% 通过；`frame-stream.mjs` 中 `StreamProducer` 各方法改为 `await this.assertProjectScope?.(...)` 使 `export-frames-retry.test.mjs`（`EFR-04`）100% 通过 |
+
 ---
 
 ## 2. 验证结果
@@ -35,123 +41,29 @@
 | 验证项 | 命令 | 退出码 | 结果 |
 |---|---|---|---|
 | TypeScript 类型检查 | `npx.cmd tsc -b --force` | 0 | 0 错误，无输出 |
-| 块十一全部新增及修改单测 | `npm.cmd test -- server/test/cloud-tools-p1-media-frames.test.mjs server/test/cloud-tools-p6-audio-js.test.mjs server/test/cloud-tools-v1-visuals.test.mjs server/test/asset-project-workers.test.mjs` | 0 | 21 条测试全部通过（21 pass, 0 fail, 0 skipped） |
-| 关联回归与守门单测 | `node --test server/test/accept-018-rest-ssr-seam.test.mjs server/test/windows-hide-silent-spawn.test.mjs server/test/custom-measure.test.mjs server/test/frame-stream.test.mjs server/test/hosted-render-process.test.mjs` | 0 | 全部通过（SEAM-1/3/4/5 通过，子进程静默守门通过，`custom-measure` 14/14 通过，`frame-stream` 与 `hosted-render-process` 36/36 通过） |
-| 行尾审计 | `node C:/Users/admin/Documents/PromptCut/out/main-session-tools/eol-audit.mjs . b6b5a8d8 HEAD` | 0 | 全部 `LF → LF` / `新文件 → LF`，孤立 CR 0，0 行尾翻转 |
+| 在线版构建 + 中央接线与回归全套单测 | `node node_modules/vite/bin/vite.js build --mode online; npm.cmd test -- server/test/c10a-online-build.test.mjs server/test/export-frames-retry.test.mjs server/test/accept-018-rest-ssr-seam.test.mjs server/test/cloud-agent-service.test.mjs server/test/cloud-agent-tools.test.mjs server/test/cloud-tools-wire.test.mjs server/test/cloud-tools-p1-media-frames.test.mjs server/test/cloud-tools-p6-audio-js.test.mjs server/test/cloud-tools-v1-visuals.test.mjs server/test/asset-project-workers.test.mjs server/test/hosted-render-look.test.mjs server/test/hosted-render-queue.test.mjs` | 0 | 114 条测试：**112 pass, 0 fail, 2 skipped（Windows 平台权限跳过项）, 0 todo** |
+| 关联看画面与子进程静默守门单测 | `npm.cmd test -- server/test/cloud-agent-look.test.mjs server/test/windows-hide-silent-spawn.test.mjs` | 0 | 8 条测试全部通过（8 pass, 0 fail, 0 todo） |
+| 行尾审计 | `node C:/Users/admin/Documents/PromptCut/out/main-session-tools/eol-audit.mjs . 022e0c19 HEAD` | 0 | 全部 `LF → LF` / `新文件 → LF`，孤立 CR 0，0 行尾翻转 |
 
 ---
 
 ## 3. 没做成的与原因
 
-无未完成项。本块范围内的四个子任务（P1 素材拼图提供者、P6 音频测量脚本提供者与签名处理器、V1 用户可视记录提供者与受权路由、轨道流与渲染工作进程按项目素材隔离）及对应单测全部完成并通过验证。中央文件的挂载按分工表留给下一棒中央接线。
+无未完成项。块十一的四个提供者与隔离项、G 第二期中央接线、两处全量回归修复（`C10A-API-05` 与 `EFR-04`）以及 `SEAM-2` 载入缝收口（0 处违反、0 todo）已全部完成并通过验证。
 
 ---
 
 ## 4. 对任务书或语义的更正建议
 
-1. **`docs/plan/cloud-agent-tools-implementation.md` 拆包表状态更新**：在下一棒中央接线合入后，可将 P1 的 `see_frames({ source: 'media' })`、P6 的 `measure_audio_js`、V1 的 `hosted-visuals.mjs` / `visual-routes.mjs` 状态从「未做」更新为「已实现并完成单测」。
+1. **`docs/plan/cloud-agent-tools-implementation.md` 拆包表状态更新**：P1 的 `see_frames({ source: 'media' })`、P6 的 `measure_audio_js`、V1 的 `hosted-visuals.mjs` / `visual-routes.mjs` 及 G 第二期中央挂载均已完成并合入。
 2. **语义文档（`docs/semantics/`）**：本块实现严格遵循既有二级/三级语义契约，无需修改语义文档。
 
 ---
 
-## 5. 要主会话决定或注意的（下一棒中央接线导出函数签名）
+## 5. 中央接线挂载摘要（已落地）
 
-下一棒中央接线只需调用以下导出函数即可完成挂载：
+1. **P1 素材拼图提供者（`server/agent/service/hosted-media-frames.mjs`）**：已挂载至 `account-tools.mjs`（`mediaFrames` 族），`instance.mjs` 在 `see_frames` 带 `source: 'media'` 或 `mediaId` 时路由至该提供者，时间轴 `see_frames` 保持原路径。
+2. **P6 音频测量脚本提供者与签名处理器（`server/agent/service/hosted-audio-js.mjs`、`server/hosted-render/audio-js.mjs`）**：`cloud-tools.mjs` 已为 `measure_audio_js` 标注 `provider: 'audioJs'`，`account-tools.mjs` 已挂载 `audioJs` 族；`look.mjs` 与 `broker.mjs` 已挂载 `/api/audio/measure-js`（`HOSTED_AUDIO_JS_ROUTE`）签名路由。
+3. **V1 用户可视记录提供者与受权路由（`server/agent/service/hosted-visuals.mjs`、`server/agent-service/visual-routes.mjs`）**：`account-tools.mjs` 已挂载 `visuals` 族并暴露 `recordVisual`；`agent-service/http.mjs` 已挂载 `createVisualRoutes` 处理 `/v1/conversations/:id/visuals/:vid` 与 `/agent/v1/conversations/:id/visuals/:vid`（含 `/files/:name`）。
+4. **载入缝 `SEAM-2` 收口（`server/agent/ssr-host.mjs`）**：`agent-board.mjs`、`agent-roles.mjs`、`agent-sessions.mjs`、`creativity-gate.mjs` 及 `hosted-tools.mjs` 统一经 `ssr-host.mjs` 载入缝引用前端模块与卡片辅助库，`accept-018-rest-ssr-seam.test.mjs` 中 `KNOWN = []` 且 `SEAM-2` 转为硬断言通过。
 
-### 5.1 P1 素材拼图提供者（`server/agent/service/hosted-media-frames.mjs`）
-```js
-import { createMediaFramesTools } from './hosted-media-frames.mjs';
-
-const mediaFrames = createMediaFramesTools({
-  contextAccess: trackedResources.contextAccess,
-  resources: trackedResources,
-  assets,
-  workspace: workspaceFor,
-  project,                  // { getMedia(context, mediaId), getStage?(context) }
-  ffmpeg: config.shots?.ffmpeg ?? null,
-  ffprobe: config.shots?.ffprobe ?? null,
-  kernel,                   // 可选：{ subjectForRange, suggestPosition, rectForSafeSide }
-});
-// mediaFrames.handles -> Set { 'see_frames', 'see_media' }
-// 当 name === 'see_frames' 且 (args?.source === 'media' || args?.mediaId) 时交由 mediaFrames.call('see_frames', args, context, { requestId }) 处理
-// 关闭时调用 await mediaFrames.close(reason)
-```
-
-### 5.2 P6 音频测量脚本提供者与签名处理器
-1. **渲染服务侧挂载（`server/hosted-render/audio-js.mjs`）**：
-   ```js
-   import { createHostedAudioJsHandler, HOSTED_AUDIO_JS_ROUTE } from './audio-js.mjs';
-
-   const audioJsHandler = createHostedAudioJsHandler({
-     verifyServiceRequest: verifyLook, // 或传 registry: serviceRegistry
-   });
-   // 在管理进程/内部 HTTP 路由上：if (pathname === HOSTED_AUDIO_JS_ROUTE) return audioJsHandler(req, res);
-   // 退出时：await audioJsHandler.close();
-   ```
-2. **Agent 任务进程侧挂载（`server/agent/service/hosted-audio-js.mjs`）**：
-   ```js
-   import { createAudioJsTools } from './hosted-audio-js.mjs';
-
-   const audioJs = createAudioJsTools({
-     contextAccess: trackedResources.contextAccess,
-     resources: trackedResources,
-     assets,
-     project,               // { getMedia(context, mediaId), getTimeline(context) }
-     workspace: workspaceFor,
-     ffmpeg: config.shots?.ffmpeg ?? null,
-     ffprobe: config.shots?.ffprobe ?? null,
-     endpointUrl,           // 可选：指向渲染服务 HOSTED_AUDIO_JS_ROUTE；不传则使用本进程隔离 createAudioSandbox()
-     serviceKey,            // 可选：配 endpointUrl 时用于 signLookRequest 签名
-   });
-   // audioJs.handles -> Set { 'measure_audio_js' }
-   // 调用：await audioJs.call('measure_audio_js', args, context, { requestId })
-   // 关闭：await audioJs.close(reason)
-   ```
-
-### 5.3 V1 用户可视记录提供者与受权路由
-1. **Agent 任务进程侧提供者（`server/agent/service/hosted-visuals.mjs`）**：
-   ```js
-   import { createVisualsTools } from './hosted-visuals.mjs';
-
-   const visuals = createVisualsTools({
-     contextAccess: trackedResources.contextAccess,
-     resources: trackedResources,
-     dataDir,
-     workspace: workspaceFor,
-     project: { snapshot: () => exec().snapshot(agentKey) },
-     renderGif,             // (context, { clipId, spec, times, key }) => Promise<{ gif, grid, frames? }>
-     aclRevisionOf,         // 可选：(context) => Promise<number>
-   });
-   // visuals.handles -> Set { 'get_gif' }
-   // 另提供 visuals.recordVisual(context, input) 供记录 see_frames / 前后对比动图
-   ```
-2. **Agent HTTP 主服务侧路由（`server/agent-service/visual-routes.mjs`）**：
-   ```js
-   import { createVisualRoutes } from './visual-routes.mjs';
-
-   const visualRoutes = createVisualRoutes({
-     dataDir,
-     authenticate: identityOf,
-     service,               // 调 service.access(identity, conversationId, 'read') 核验 shared/private/creatorReadOnly 与 aclRevision
-   });
-   // 在 http.mjs 路由分发前：if (await visualRoutes(req, res, identity)) return;
-   ```
-3. **前端云端对话面板（`src/editor/right/ToolVisual.tsx`）**：
-   ```ts
-   import { setCloudVisualScope, clearVisualCache } from './ToolVisual';
-   // 云端对话激活或 aclRevision / visibility / revoked 变化时调用：
-   setCloudVisualScope({
-     baseUrl: cloud.url,
-     projectId: cloud.projectId,
-     conversationId: chat.conversationId,
-     accountId: cloud.accountId,
-     aclRevision: view.queue?.aclRevision,
-     visibility: currentMeta?.visibility,
-     revoked: view.revoked,
-   });
-   // 离开云端模式或卸载时调用：setCloudVisualScope(null);
-   ```
-
-### 5.4 轨道流与渲染工作进程项目隔离（`server/frame-stream.mjs`、`server/hosted-render/worker.mjs`）
-- `planStreams(entry, { ..., projectId })` 与 `new StreamProducer(pipeline, { ownership, projectAccess, projectId })` 已支持传入 `projectId` 将衍生流键、分段签名与清单读写严格绑定到项目；
-- `createWorker({ ..., projectId, dataDir, brokerUrl, brokerKey, ticket })` 及 `createWorkerProjectScope({ dataDir, projectId, ... })`、`await worker.switchProject(nextProjectId, { brokerKey, ticket, wipePreviousDisk })` 已就绪，供隔离工作进程切换项目时直接调用。

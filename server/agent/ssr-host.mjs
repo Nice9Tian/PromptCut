@@ -12,6 +12,28 @@
 /** 注册表要先于工具实现就位:卡片、部件都靠 import 时的副作用登记 */
 const REGISTRIES = ['/src/cards/index.ts', '/src/parts/index.ts'];
 
+export { diffScopes, overlappingScopes, splitScopes, scopeOverlaps } from '../../src/kernel/agentScopes.mjs';
+export {
+  CREATIVITY_HINT,
+  CREATIVITY_LABEL,
+  creativityAllows,
+  creativityRank,
+  effectiveCreativity,
+  normalizeCreativity,
+  projectCreativity,
+} from '../../src/kernel/creativity.mjs';
+export const ROLES_DIR = new URL('../../src/ai/roles/', import.meta.url);
+
+/** 卡片的翻译、审查、语法检查:纯函数,在 `server/vite-plugin-cards.ts` 里(桌面版建卡用的同一份) */
+let cardLibPromise = null;
+export function loadCardLib(loadModule = null) {
+  cardLibPromise ??= import(new URL('../vite-plugin-cards.ts', import.meta.url).href).catch(async (err) => {
+    if (typeof loadModule !== 'function') throw err;
+    return loadModule('/server/vite-plugin-cards.ts');
+  });
+  return cardLibPromise;
+}
+
 /** store 模块 → 它刚载入时的那份空项目(`clearProject` 放回去的就是它) */
 const EMPTY_PROJECT = new WeakMap();
 
