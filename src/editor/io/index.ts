@@ -43,7 +43,8 @@ export function registerMediaFile(id: string, file: File): void {
  * 留着它渲染进程 / 导出进程都打不开。入库(上传 + 边落盘边算 sha256)期间素材挂
  * pending,片段已经在时间轴上、素材层先画「上传中」占位,传完自动出画。
  */
-export async function importVideoFiles(files: FileList | File[]): Promise<string[]> {
+/** `place: false` 只进素材库、不放到时间轴(云端对话的附件发送时放进素材库用,2026-10-18 用户定) */
+export async function importVideoFiles(files: FileList | File[], { place = true }: { place?: boolean } = {}): Promise<string[]> {
   const releaseHold = holdOnlineQueueOriginals();
   try {
     const fileArray = Array.from(files);
@@ -85,11 +86,13 @@ export async function importVideoFiles(files: FileList | File[]): Promise<string
       mediaFiles.set(media.id, file);
       mediaIds.push(media.id);
 
-      const clip = actions.addMediaClip(media.id, cursor);
-      if (clip) {
-        cursor = clip.end;
-      } else {
-        console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
+      if (place) {
+        const clip = actions.addMediaClip(media.id, cursor);
+        if (clip) {
+          cursor = clip.end;
+        } else {
+          console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
+        }
       }
 
       applyUploadedMedia(media.id, await uploadMediaFile(file));

@@ -432,7 +432,12 @@ export async function startHostedCombo({
           if (await docAgentAssembly?.handleInternal(req, res)) return;
           if (docService?.handleTransportHttp(req, res)) return;
           const route = new URL(req.url ?? '/', 'https://internal.invalid').pathname;
-          if (route.startsWith('/internal/v2/run-assets/') || route.startsWith('/internal/v2/runs/') || route.startsWith('/internal/v2/conversations/') ||
+          // 运行素材没开（没配 PROMPTCUT_DOC_RUN_ASSETS_ENABLED）：明说，不当成一时连不上（那样 Agent 会白白重试三遍）
+          if (route.startsWith('/internal/v2/run-assets/')) {
+            res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            res.end(JSON.stringify({ ok: false, code: 'run-assets-unconfigured' })); return;
+          }
+          if (route.startsWith('/internal/v2/runs/') || route.startsWith('/internal/v2/conversations/') ||
               route.startsWith('/internal/v2/instances/')) {
             res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
             res.end(JSON.stringify({ ok: false, code: 'doc-agent-unavailable' })); return;

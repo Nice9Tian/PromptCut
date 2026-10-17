@@ -450,7 +450,8 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       ...(model && (info?.models ?? []).some((m) => m.id === model) ? { model } : {}),
       // 存着的档位可能是这台节点不认的(换过节点、档位清单变了):不认的不带,免得整条消息被拒
       ...(effort && (info?.efforts ?? []).includes(effort) ? { effort } : {}),
-      ...(sent.length ? { attachments: sent.map((a) => ({ url: a.url })) } : {}),
+      ...(sent.length ? { attachments: sent.map((a) => ({ url: a.url,
+        ...(a.inLibrary ? { library: { mediaId: a.inLibrary.mediaId, url: a.inLibrary.url } } : a.libraryError ? { libraryError: a.libraryError } : {}) })) } : {}),
     };
     if (cloud.accountMode) {
       const presence = selectionPresenceStatus();

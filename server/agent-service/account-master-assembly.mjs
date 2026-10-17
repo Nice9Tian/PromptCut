@@ -20,6 +20,7 @@
  * `GET /v1/info` 的 `executorMounted` 与 `/healthz` 如实报「没有」，不装作在执行。
  */
 import https from 'node:https';
+import { attachmentKeysOK } from '../account/conversation-authority.mjs';
 import path from 'node:path';
 import { createHash, randomUUID, X509Certificate } from 'node:crypto';
 import { certificateFingerprint } from '../account/client.mjs';
@@ -429,7 +430,11 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
           let stat = null;
           if (/^work:attachments\/[^\\/]{1,200}$/.test(url)) { try { stat = workspace.stat(url.slice(5)); } catch { stat = null; } }
           if (!stat || !(stat.size > 0) || verifiedAttachments.some(row => row.url === url)) throw new AgentServiceError('attachment-missing', 'attachment-missing', 400);
-          verifiedAttachments.push({ name: url.slice('work:attachments/'.length), url, size: stat.size });
+          // 页面已经把它放进素材库（或放不进去）的说明一并带上，形状不对就整条拒（文档服务也按同一规矩核）
+          const row = { name: url.slice('work:attachments/'.length), url, size: stat.size,
+            ...(item.library !== undefined ? { library: item.library } : {}), ...(item.libraryError !== undefined ? { libraryError: item.libraryError } : {}) };
+          if (!attachmentKeysOK(row)) throw new AgentServiceError('bad-request', 'bad-request', 400);
+          verifiedAttachments.push(row);
         }
       }
       const response = await base.send(identity, conversationId, { ...body, ...(verifiedAttachments ? { verifiedAttachments } : {}) });

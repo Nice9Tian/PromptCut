@@ -43,6 +43,11 @@ export const HOSTED_TOOL_DEFAULTS = Object.freeze({
   inlineTextBytes: 64 * 1024,
 });
 
+/** 运行素材没开时给模型的话：不要重试，告诉它素材从哪儿来 */
+export const RUN_ASSETS_OFF_TEXT = '云端这一版还不能由 Agent 把文件装进素材库(运行素材没有开),再试也一样,不要重试。' +
+  '用户在对话里发的图片、视频、音频,页面发送时已经放进素材库,用 list_media 找到那一条直接用;' +
+  '别的文件请告诉用户自己在左侧素材库点「导入媒体」放进去。';
+
 export class HostedToolError extends Error {
   constructor(message, extra = {}) {
     super(message);
@@ -347,6 +352,7 @@ export function createHostedTools({
           throw new HostedToolError('素材服务拒绝了这次写入:这条任务现在不能往项目里写素材(任务已被停止,或发起人没有写权限)。', { code: 'forbidden' });
         }
         if (err?.workspace) throw new HostedToolError(`素材没有入库:${err.message}`, { code: err.code ?? 'quota' });
+        if (err?.code === 'run-assets-unconfigured') throw new HostedToolError(RUN_ASSETS_OFF_TEXT, { code: 'run-assets-unconfigured' });
         throw err;
       }
     }
@@ -945,6 +951,7 @@ export async function saveAttachment(workspace, nameIn, stream, { maxBytes = HOS
 /** 这条消息带的附件 → 拼进提示词的那一段(只认这个对话工作区里真有的文件;不给磁盘路径) */
 export function attachmentsPrompt(workspace, attachments, { inlineTextBytes = HOSTED_TOOL_DEFAULTS.inlineTextBytes } = {}) {
   const lines = [];
+  let inLibrary = 0;
   for (const a of Array.isArray(attachments) ? attachments.slice(0, 32) : []) {
     const url = typeof a?.url === 'string' ? a.url : '';
     if (!url.startsWith('work:attachments/')) continue;
@@ -954,11 +961,20 @@ export function attachmentsPrompt(workspace, attachments, { inlineTextBytes = HO
     if (!st) continue;
     const kind = kindOfName(rel);
     let line = `- [${kind ? KIND_LABEL[kind] : '文件'}] ${rel.slice('attachments/'.length)} · 地址 ${url}`;
+    // 页面发送时已经放进素材库的(云端对话,2026-10-18 用户定):直接用素材库那一条,不要再导入
+    const lib = a?.library && typeof a.library === 'object' ? a.library : null;
+    if (lib && typeof lib.mediaId === 'string' && typeof lib.url === 'string') {
+      line += ` · 已在素材库:mediaId ${lib.mediaId} · cardUrl ${lib.url}(直接用这一条,不要再 import_media)`; inLibrary++;
+    } else if (typeof a?.libraryError === 'string' && a.libraryError) line += ` · 页面没能把它放进素材库:${a.libraryError}`;
     if (TEXT_EXT.has(extOf(rel)) && st.size <= inlineTextBytes) {
       try { line += `\n\`\`\`\n${workspace.read(rel).toString('utf8')}\n\`\`\``; } catch { /* 读不出就不内联 */ }
     }
     lines.push(line);
   }
   if (!lines.length) return '';
-  return `\n\n附件(在这个对话的工作目录里,不在素材库;要剪辑、转写或配动效,先用 import_media 传它的地址装进素材库):\n${lines.join('\n')}`;
+  // 都已经在素材库里时不再叫它 import_media(云端运行素材没开时那样做只会失败)
+  const head = inLibrary === lines.length
+    ? '附件(页面已放进素材库,用标出的 mediaId / cardUrl;工作目录里另有一份原文件)'
+    : '附件(在这个对话的工作目录里;标了「已在素材库」的直接用那一条,其余要剪辑、转写或配动效,先用 import_media 传它的地址装进素材库)';
+  return `\n\n${head}:\n${lines.join('\n')}`;
 }

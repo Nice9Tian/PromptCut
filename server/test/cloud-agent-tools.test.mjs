@@ -97,6 +97,13 @@ test('CA-HT-02 附件:只进对话工作区,回 work: 地址;提示词里只有�
   assert.equal(text.includes('secret.txt'), false);
   assert.equal(text.includes(ws.root), false, '不给磁盘路径');
   assert.equal(attachmentsPrompt(w, []), '');
+  // 页面发送时已放进素材库的(2026-10-18 用户定):写明是哪一条、叫它别再 import_media;放不进去的写原因
+  const lib = attachmentsPrompt(w, [{ url: v.url, library: { mediaId: 'm-abc', url: '/@media/abc.mp4' } }]);
+  assert.match(lib, /clip\.mp4 · 地址 work:attachments\/clip\.mp4 · 已在素材库:mediaId m-abc · cardUrl \/@media\/abc\.mp4\(直接用这一条,不要再 import_media\)/);
+  assert.match(lib, /^\n\n附件\(页面已放进素材库/);
+  const mixed = attachmentsPrompt(w, [{ url: v.url, library: { mediaId: 'm-abc', url: '/@media/abc.mp4' } }, { url: a.url, libraryError: '上传超时' }]);
+  assert.match(mixed, /标了「已在素材库」的直接用那一条/);
+  assert.match(mixed, /字幕\.srt · 地址 work:attachments\/字幕\.srt · 页面没能把它放进素材库:上传超时/);
 });
 
 const CARD = (id, marker = '') => [

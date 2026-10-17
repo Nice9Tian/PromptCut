@@ -61,6 +61,19 @@ function conversationAccessInState(state, principal, projectId, conversationId, 
   return { conversation, project, owner, creator, creatorReadOnly };
 }
 
+/** 附件引用的字段：`name,size,url` 必有；`library`（素材库里的哪一条）、`libraryError`（为什么没放进去）二者最多一个 */
+export function attachmentKeysOK(a) {
+  const extra = Object.keys(a).filter(k => !['name', 'size', 'url'].includes(k));
+  if (['name', 'size', 'url'].some(k => !Object.hasOwn(a, k)) || extra.length > 1) return false;
+  if (!extra.length) return true;
+  if (extra[0] === 'libraryError') return typeof a.libraryError === 'string' && a.libraryError.length > 0 && a.libraryError.length <= 200 && !/[\0\r\n]/.test(a.libraryError);
+  if (extra[0] !== 'library') return false;
+  const lib = a.library;
+  return !!lib && typeof lib === 'object' && !Array.isArray(lib) && Object.keys(lib).sort().join(',') === 'mediaId,url' &&
+    typeof lib.mediaId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(lib.mediaId) &&
+    typeof lib.url === 'string' && /^\/@media\/[^\s\0]{1,300}$/.test(lib.url);
+}
+
 function publicMessage(message) {
   const { credentialId: _credentialId, loginId: _loginId, loginGeneration: _loginGeneration, ...visible } = message;
   return visible;
@@ -213,8 +226,10 @@ export function createConversationAuthority({ ledger, accountAuthority, checkCon
     // 这条消息带的附件：只是几个引用（名字、对话工作目录里的地址、大小），字节在 Agent 节点上、不经文档服务。
     // 文档服务核不了文件在不在，只核形状并原样记下；Agent 主服务在发之前已经核过这些文件确实在这个对话的工作目录里。
     const attachments = attached === undefined ? [] : attached;
+    // 可选两项（2026-10-18 用户定：云端对话里的图片、视频、音频附件发送时由页面放进素材库）：
+    // `library` 是素材库里的那一条（mediaId、卡片引用地址），`libraryError` 是放不进去的原因。只核形状。
     if (!Array.isArray(attachments) || attachments.length > 32 || attachments.some(a => !a || typeof a !== 'object' || Array.isArray(a) ||
-        Object.keys(a).sort().join(',') !== 'name,size,url' || typeof a.name !== 'string' || !a.name || a.name.length > 200 || /[\\/\0\r\n]/.test(a.name) ||
+        !attachmentKeysOK(a) || typeof a.name !== 'string' || !a.name || a.name.length > 200 || /[\\/\0\r\n]/.test(a.name) ||
         a.url !== `work:attachments/${a.name}` || !Number.isSafeInteger(a.size) || a.size < 1) ||
         new Set(attachments.map(a => a.url)).size !== attachments.length) fail(400, 'invalid-message');
     // 这一轮的运行选项（模型、思考强度、创造力）：只核形状，原样记在消息上交给任务进程（run-options.mjs）

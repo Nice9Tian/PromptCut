@@ -29,6 +29,7 @@ import { CODE_VERSION } from "../../online/buildInfo";
 import { acceptCloudConsent, cloudConsentState, refreshCloudConsent, subscribeCloudConsent } from "../../ai/cloud/consent";
 import { CloudAgentConsentDialog } from "./CloudAgentConsentDialog";
 import { CloudDeleteChatDialog, type CloudDeleteAsk } from "./CloudDeleteChatDialog";
+import { LIBRARY_KINDS, putInLibrary, type LibraryOutcome } from "./cloudAttachLibrary";
 import { CLOUD_CHAT_TEXT } from "../../ai/cloud/chatTexts";
 import { createPoller, type Poller } from "../../ai/cloud/poll";
 import type { CloudChatItem } from "../../ai/cloud/types";
@@ -184,13 +185,26 @@ export function CloudAiPanel(props: {
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** 附件占位 id → 原始文件(失败重试用)与进行中的上传(移除时取消) */
   const retryFilesRef = useRef<Map<string, File>>(new Map());
+  /** 附件放进素材库的结果,按附件卡的 id 记:同一条消息重发不重复放、请求内容也不变(文档服务按请求号核内容) */
+  const libraryRef = useRef<Map<string, LibraryOutcome>>(new Map());
+  const withLibrary = async (files: ChatAttachment[]): Promise<ChatAttachment[]> => {
+    const out: ChatAttachment[] = [];
+    for (const a of files) {
+      const file = a.id ? retryFilesRef.current.get(a.id) : undefined;
+      if (!a.id || !file || !LIBRARY_KINDS.includes(a.kind)) { out.push(a); continue; }
+      let got = libraryRef.current.get(a.id);
+      if (!got) { got = await putInLibrary(file); libraryRef.current.set(a.id, got); }
+      out.push({ ...a, ...got });
+    }
+    return out;
+  };
   const uploadsRef = useRef<Map<string, AbortController>>(new Map());
   useEffect(() => {
     if (!cloud.accountMode) return;
     setInputText("");
     setAttachments([]);
     for (const upload of uploadsRef.current.values()) upload.abort();
-    uploadsRef.current.clear(); retryFilesRef.current.clear();
+    uploadsRef.current.clear(); retryFilesRef.current.clear(); libraryRef.current.clear();
   }, [cloud.accountMode, qKey]);
   // 换了对话(新对话、历史里点了别的、进入时自动接上在跑的):附件只在传去的那个对话的工作目录里,不跟过去
   useEffect(() => {
@@ -245,7 +259,10 @@ export function CloudAiPanel(props: {
   const sendNow = async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
     if (off || !stillCurrent() || !controlPolicy.canSend || view.revoked) return false;
     if (!cloud.accountMode) markSent();
-    const ok = await chat.send(text, files);
+    // 账号模式:图片、视频、音频附件先放进素材库,告诉 Agent 是哪一条(2026-10-18 用户定)
+    const prepared = cloud.accountMode && files?.length ? await withLibrary(files) : files;
+    if (!stillCurrent()) return false;
+    const ok = await chat.send(text, prepared);
     if (!stillCurrent()) return false;
     if (!ok) { echoWait.current = false; bump((n) => n + 1); }
     return ok;

@@ -164,6 +164,10 @@ export interface ChatAttachment {
    * 这一类的 url 是卡片能直接引用的 /@media/<文件名>,服务端按「素材库」单列一段,不给磁盘路径。
    */
   library?: boolean;
+  /** 云端对话的附件发送时由页面放进了素材库:素材库里的哪一条(随消息告诉 Agent 直接用它) */
+  inLibrary?: { mediaId: string; url: string };
+  /** 云端对话的附件没能放进素材库的原因(随消息告诉 Agent) */
+  libraryError?: string;
 }
 
 export interface ToolCallInfo {
