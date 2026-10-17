@@ -774,10 +774,10 @@ export function createAccountRunnerService({ conversationClient, runClient, read
       look: !runnerFactory && !!runnerOptions.look,
       // Internal assembly seam only. A production caller must already own a
       // genuine conversation read-control invocation owned by HTTP/SSE.
-      async mirrorAccepted(identity, conversationId) {
+      async mirrorAccepted(identity, conversationId, snapshot = null) {
         if (!runEvents) fail(503, 'run-events-configuration');
         return runEvents.mirrorAccepted({ projectId: identity?.projectId, conversationId,
-          read: () => base.conversation(identity, conversationId, 0) });
+          read: () => snapshot ? Promise.resolve(snapshot) : base.conversation(identity, conversationId, 0) });
       },
       async send(identity, conversationId, body) {
         const response = await base.send(identity, conversationId, body);

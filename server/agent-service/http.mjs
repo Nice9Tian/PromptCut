@@ -161,7 +161,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     let view = await service.conversation(identity, conversationId, 0);
     if (!view) return sendJson(res, 404, { ok: false, code: 'not-found' }, CORS);
     if (service.runEvents) {
-      await service.mirrorAccepted(identity, conversationId);
+      await service.mirrorAccepted(identity, conversationId, view);
       service.runEvents.after({ projectId: identity.projectId, conversationId, after });
     }
     const owner = identity.accountId;
@@ -195,7 +195,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       polling = true;
       try {
         view = await service.conversation(identity, conversationId, 0);
-        if (service.runEvents) await service.mirrorAccepted(identity, conversationId);
+        if (service.runEvents) await service.mirrorAccepted(identity, conversationId, view);
         const rows = service.runEvents
           ? service.runEvents.after({ projectId: identity.projectId, conversationId, after: cursor }).events
           : (view.messages ?? []).map(message => ({ eventSeq: message.arrivalSeq, event: { type: 'user',
