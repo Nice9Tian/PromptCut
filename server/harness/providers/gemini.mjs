@@ -128,8 +128,9 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       let promptTokens = 0;
       let candidatesTokens = 0;
       let stopReason = null;
+      let sawCandidate = false;
 
-      for await (const { data } of readSse(response, { signal })) {
+      for await (const { event, data } of readSse(response, { signal })) {
         if (!data || data === '[DONE]') continue;
         let parsed;
         try {
@@ -138,8 +139,13 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           continue;
         }
 
+        if (event === 'error' || parsed.type === 'error' || parsed.error) {
+          throw new Error(typeof parsed.error === 'string' ? parsed.error : (parsed.error?.message || parsed.message || 'API 流返回错误'));
+        }
+
         const candidate = parsed.candidates?.[0];
         if (candidate) {
+          sawCandidate = true;
           if (candidate.content?.parts) {
             for (const part of candidate.content.parts) {
               /*
@@ -176,6 +182,10 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
              candidatesTokens = parsed.usageMetadata.candidatesTokenCount;
           }
         }
+      }
+
+      if (!sawCandidate && !stopReason && !signal?.aborted) {
+        throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
       }
 
       yield { type: 'usage', input: promptTokens, output: candidatesTokens };

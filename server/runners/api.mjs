@@ -286,8 +286,10 @@ export function startRun(opts) {
         { idleMs: Number(opts.idleMsForTest) > 0 ? Number(opts.idleMsForTest) : (useLoop ? 300000 : 120000) },
       ),
       {
+        ...(opts.retryForTest && typeof opts.retryForTest === 'object' ? opts.retryForTest : {}),
         signal: abortController.signal,
         onRetry: ({ attempt, of, reason, delayMs }) => {
+          opts.retryForTest?.onRetry?.({ attempt, of, reason, delayMs });
           console.error(`[api] ${reason},${delayMs}ms 后重试(第 ${attempt}/${of} 次)`);
         },
       },

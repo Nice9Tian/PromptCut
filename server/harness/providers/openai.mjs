@@ -234,7 +234,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           cacheRead = Number(parsed.usage.prompt_tokens_details?.cached_tokens) || 0;
         }
 
-        if (parsed.error) throw new Error(parsed.error.message || 'API 流返回错误');
+        if (parsed.error) throw new Error(typeof parsed.error === 'string' ? parsed.error : (parsed.error.message || 'API 流返回错误'));
         const choice = parsed.choices?.[0];
         if (choice) {
           if (choice.delta?.content) {
