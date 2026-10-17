@@ -74,6 +74,9 @@ export function createDocAssembly({ dataDir, authority, account, runProvider = n
   return {
     history,
     runProvider: trustedRuns,
+    /** 这个进程是不是这个数据目录唯一在跑的文档服务：打开操作历史时拿到了 `.owner` 的独占锁（拿不到就整个起不来），关掉之前一直握着。
+     * 据此可以断定账本里记着的别的文档服务实例都已经结束（`doc-agent-assembly.mjs` 替它们记「已关」）。 */
+    exclusiveOwner: () => !closed,
     bindTenantResolver(resolve) {
       requireOpen();
       if (tenantResolver || typeof resolve !== 'function') throw historyError('projection-unavailable', 503);

@@ -125,6 +125,22 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
   }
   // Operation and doc-transport closure are real partial evidence. Until the
   // registered Agent instance/resource witness exists, no control is ACKed.
+  /** 替已经结束的文档服务进程把还在等的控制记「已关」（`agent-run-scope-doc.mjs` 的 `closeEndedDocControl`）。
+   * 任务跑到一半文档服务重启过，旧进程记不上自己那一行，不这样做强制终态永远签不出来。 */
+  async function closeEndedInstances() {
+    if (!scopeAuthority) return;
+    const state = ledger.read(), ended = state.docProcessesV1 ?? {};
+    for (const control of Object.values(state.runControlsV2 ?? {})) {
+      if (control.state !== 'pending' || !(control.kind === 'terminal' || control.revoked?.length)) continue;
+      for (const id of control.docInstanceIds ?? []) {
+        if (id === docInstanceId || !Number.isSafeInteger(ended[id]?.endedAt) ||
+            state.docRunClosuresV2?.[control.controlId]?.instances?.[id]?.state === 'closed') continue;
+        await scopeAuthority.closeEndedDocControl({ controlId: control.controlId, endedInstanceId: id, docInstanceId,
+          operationCoordinator: getDocAssembly() })
+          .catch(error => onDiagnostic({ code: error.code ?? 'doc-ended-closure-pending', controlId: control.controlId }));
+      }
+    }
+  }
   async function deliver(control) {
     readControl.publish();
     if (deliveries.has(control.controlId)) return deliveries.get(control.controlId);
@@ -440,6 +456,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
           if (control.state === 'pending' && (control.kind === 'terminal' || control.revoked?.length) &&
               ledger.read().docRunClosuresV2?.[control.controlId]?.instances?.[docInstanceId]?.state !== 'closed')
             await deliver(control).catch(error => onDiagnostic({ code: error.code ?? 'run-control-pending', controlId: control.controlId }));
+        await closeEndedInstances();
         await runAuthority.reconcileScopeClosures();
       }
       // 删到一半的对话：任务已结清就由这里收尾，不等任何人回来点(用户 2026-10-13 定「不给取消」，不能永久卡在「正在删除」)
@@ -469,7 +486,10 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
       await runsHandler(req, res) || await conversationsHandler(req, res); },
     async start() { for (const control of await runAuthority.synchronize()) await deliver(control);
       if (scopeAuthority) {
+        // 本进程握着操作历史的独占锁：账本里记着的别的文档服务实例都已经结束，记下来，再替它们把还在等的控制记「已关」
+        scopeAuthority.recordDocProcessStart({ docInstanceId, exclusive: getDocAssembly()?.exclusiveOwner?.() === true, now: now() });
         for (const control of await runAuthority.reconcileScopeFailures()) await deliver(control);
+        await closeEndedInstances();
         await runAuthority.reconcileScopeClosures();
       } },
     async close() { stopped = true; readControl.close(); await Promise.allSettled([...deliveries.values()]); runAssets?.close(); assetInstanceAdapter?.close(); instanceAuthority.close(); subjects.clear();
