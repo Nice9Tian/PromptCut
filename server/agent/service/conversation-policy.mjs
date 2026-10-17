@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AgentServiceError } from './create-agent-service.mjs';
 import { queryUsage } from './usage.mjs';
+import { normalizeRunOptions } from '../../account/run-options.mjs';
 
 const translated = error => {
   if (error instanceof AgentServiceError) return error;
@@ -27,6 +28,8 @@ export function createAccountConversationService({ conversationClient, usageDir 
    * 缺省什么都不做；claude/v18-wire(云端工具表接线)合入后由装配把它接到 hosted-tools 的「收掉这个对话的子进程」上。
    */
   onConversationDeleted = null,
+  /** `GET /v1/info` 里的模型清单与思考强度档位:`() => { models, defaultModel, configured, efforts }`(model-config.mjs 的 readPublicModelInfo);不给就不报 */
+  modelInfo = null,
   /** 删除时对话里有任务在跑：围栏(强制结束)下去以后，替页面等 root 把进程关掉、文档服务结清，最多等这么久(毫秒)，同「停止最多等 15 秒」 */
   deleteWaitMs = 15_000, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   if (!conversationClient || ['identity', 'access', 'list', 'get', 'send', 'switchVisibility', 'stop', 'rename']
@@ -77,14 +80,23 @@ export function createAccountConversationService({ conversationClient, usageDir 
       const attachments = body.verifiedAttachments ?? null;
       if (Array.isArray(body.attachments) && body.attachments.length && !attachments) throw new AgentServiceError('attachment-unavailable', 'attachment authority is not mounted', 503);
       const requestId = typeof body.requestId === 'string' ? body.requestId : randomUUID();
+      // 这一轮点的模型、思考强度、创造力：形状不对当场拒；都没点就不带(文档服务里的消息和原来一样)
+      const runOptions = normalizeRunOptions({ model: body.model, effort: body.effort, creativity: body.creativity });
+      if (runOptions === undefined) throw new AgentServiceError('invalid-run-options', 'invalid-run-options', 400);
       return call('send', identity, conversationId, { requestId, content: body.prompt, selectionInput: body.selectionSnapshot ?? null,
-        ...(attachments?.length ? { attachments } : {}) });
+        ...(attachments?.length ? { attachments } : {}), ...(runOptions ? { runOptions } : {}) });
     },
     switchVisibility: (identity, conversationId, visibility, requestId = randomUUID()) =>
       call('switchVisibility', identity, conversationId, { visibility, requestId }),
     rename: (identity, conversationId, title) => call('rename', identity, conversationId, { title }),
     abort: (identity, conversationId, runId, requestId = randomUUID()) => call('stop', identity, conversationId, { runId, requestId }),
-    async info(identity) { await call('identity', identity); return { enabled: true, accountMode: true, executorMounted: false, running: [] }; },
+    async info(identity) {
+      await call('identity', identity);
+      // 模型配置读不到不挡 info:不报清单,页面就不出下拉、照常用缺省
+      let models = {};
+      try { models = modelInfo ? (await modelInfo()) ?? {} : {}; } catch { models = {}; }
+      return { enabled: true, accountMode: true, executorMounted: false, running: [], ...models };
+    },
     /** 本项目的用量(契约第 6.3 节:项目内的成员可查总量与各成员、各模型的量)。身份由文档服务按账号核对:
      * `identity` 对不上这个项目的成员(没登录、不是成员、被踢)就在这里抛错,不回任何数字;只回自己项目的流水。
      * 没挂用量目录(没有执行器)、或者流水在但读不到,都回 503,不编造零。成员只给显示名,不给账号编号。 */

@@ -69,6 +69,8 @@ export interface CloudReportInput {
   info?: CloudInfo | null;
   /** 此刻选的模型(空 = 服务端缺省) */
   model?: string;
+  /** 此刻选的思考强度(空 = 默认) */
+  effort?: string;
   /** 页面上此刻挂着的提示(发送失败、身份没就绪、开关被关等) */
   notice?: string | null;
   client: CloudReportClient;
@@ -147,6 +149,8 @@ export function cloudConversationReport(input: CloudReportInput): string {
       models: input.info?.models ?? null,
       defaultModel: input.info?.defaultModel ?? null,
       selectedModel: input.model || null,
+      efforts: input.info?.efforts ?? null,
+      selectedEffort: input.effort || null,
       limits: input.info?.limits ?? null,
       runningConversations: input.info?.running ?? null,
     },

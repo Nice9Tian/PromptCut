@@ -13,7 +13,7 @@
 import type { ChatAttachment, ChatMessage } from "../types.ts";
 import type { ChatStore } from "../liveChat.ts";
 import { CloudError, cloudErrorText, type CloudApi } from "./cloudApi.ts";
-import { accountMessageId, queueSnapshot, applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, userMessageId } from "./events.ts";
+import { accountMessageId, queueSnapshot, applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, settleFromQueue, userMessageId } from "./events.ts";
 import type { CloudEvent, CloudSendBody, CloudSendAccepted, CloudQueueSnapshot, CloudSender } from "./types.ts";
 import type { PageRequestAnswer } from "./pageRequests.ts";
 
@@ -277,7 +277,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     if (ev.type === 'queue.state' && conversationId) {
       const snapshot = queueSnapshot(ev, conversationId);
       if (!snapshot || (queue && (snapshot.queueRevision < queue.queueRevision || snapshot.aclRevision < queue.aclRevision))) return;
-      queue = snapshot; publish(); return;
+      queue = snapshot; flush(); store.set((prev) => settleFromQueue(prev, queue)); publish(); return;
     }
     if (typeof ev.seq === "number") {
       if (ev.seq <= lastSeq) return; // 补发与实时交界处、重连后重复的:不重
@@ -291,7 +291,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
       flush();
       if (ev.type === 'user' && typeof ev.messageId === 'string' && typeof ev.senderAccountId === 'string' && typeof ev.senderNameAtSend === 'string')
         senders = { ...senders, [accountMessageId(ev.messageId)]: { accountId: ev.senderAccountId, name: ev.senderNameAtSend } };
-      store.set((prev) => applyCloudEvent(prev, ev));
+      store.set((prev) => settleFromQueue(applyCloudEvent(prev, ev), queue));
       if (ev.type === "user" && typeof ev.runId === "string") applyPendingAttachments(ev.runId);
     }
     publish();

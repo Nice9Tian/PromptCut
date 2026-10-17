@@ -300,7 +300,9 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       }
 
       if (!stopReason) throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
-      if (stopReason === 'length' && Object.keys(partialToolCalls).length) throw new Error('模型输出达到长度上限，工具参数未完成。');
+      // 写到长度上限、工具参数没写完：没写完的调用不交出去（参数不完整，执行了也是错的），照常报 `length` 收尾，
+      // 由 `agent.mjs` 让模型接着做、连续截断再明说没做成。原来在这里直接抛错，这一轮的用量也就记不上了。
+      if (stopReason === 'length') partialToolCalls = {};
       yield { type: 'usage', input: promptTokens, output: completionTokens, cacheRead };
       // 收尾:扣住的尾巴要放出来(可能是半个标签,也可能就是正常正文)
       for (const ev of think.flush()) {

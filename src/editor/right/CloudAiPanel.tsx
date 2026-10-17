@@ -472,6 +472,7 @@ export function CloudAiPanel(props: {
       view,
       info: chat.info,
       model: chat.model,
+      effort: chat.effort,
       notice: chat.notice,
       client: {
         mode: ONLINE_BUILD ? "online" : "desktop",
@@ -685,7 +686,7 @@ export function CloudAiPanel(props: {
           selected: true,
           onSelect: () => {},
           onLeave: (p) => { if (desktop) { leaveCloudTab(tabId); desktop.onLeave(p); } },
-          toolbar: <CloudModelBar info={chat.info} model={chat.model} onModel={chat.setModel} disabled={streaming} tabId={tabId} />,
+          toolbar: <CloudModelBar info={chat.info} model={chat.model} onModel={chat.setModel} effort={chat.effort} onEffort={chat.setEffort} disabled={streaming} tabId={tabId} />,
           attachTitle: CLOUD_ATTACH_TITLE,
         }}
       />}

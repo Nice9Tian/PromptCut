@@ -1,6 +1,10 @@
 import { MessageHistory } from './history.mjs';
 
 const canonical = value => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+/** 各家「写到单次输出上限被截断」的停止原因：OpenAI 兼容口 `length`、Anthropic `max_tokens`、Gemini `MAX_TOKENS` */
+const TRUNCATED = new Set(['length', 'max_tokens', 'MAX_TOKENS']);
+/** 连续截断几次以后不再让它接着写，明说没做成 */
+const MAX_TRUNCATIONS = 2;
 const checkAbort = signal => { if (signal?.aborted) throw Object.assign(new Error('已停止'), { name: 'AbortError' }); };
 
 export class Agent {
@@ -36,7 +40,7 @@ export class Agent {
     const started = Date.now();
     const progress = (round, phase, text) => this.onEvent({ type: 'progress', round, maxRounds: this.maxIterations, phase, completed, failed, elapsedMs: Date.now() - started, text });
     const system = this.system + '\n\n执行规则：每组操作前用一句简短的话说明将做什么；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。';
-    let summaryReason = '';
+    let summaryReason = '', truncations = 0;
 
     // The budget counts model/tool round trips, not individual calls.
     for (let round = 1; round <= this.maxIterations + 1; round++) {
@@ -50,7 +54,7 @@ export class Agent {
       progress(round, summarizing ? 'summarizing' : 'requesting', summarizing ? '正在整理执行结果和未完成事项…' : `${roundText}：正在等待模型响应…`);
       this.onEvent({ type: 'diagnostic', stage: 'request', data: { round, summaryOnly: summarizing, messages: this.history.get().length, tools: summarizing ? 0 : this.tools.length } });
       const content = [], calls = [];
-      let text = '', current = '', lastInput = 0;
+      let text = '', current = '', lastInput = 0, stopReason = null;
       const flush = () => { if (current) { content.push({ type: 'text', text: current }); current = ''; } };
       if (this.onModelCall) {
         await this.onModelCall('before', { round });
@@ -86,6 +90,7 @@ export class Agent {
             calls.push(call);
             content.push({ type: 'tool_use', id: call.id, name: call.name, input: call.input });
           } else if (ev.type === 'stop') {
+            stopReason = ev.reason;
             this.onEvent({ type: 'diagnostic', stage: 'response', data: { round, stopReason: ev.reason, toolCalls: calls.length } });
           } else if (ev.type === 'usage') {
             usage.input += Number(ev.input) || 0; usage.output += Number(ev.output) || 0;
@@ -125,10 +130,25 @@ export class Agent {
         break;
       }
       if (content.length) this.history.append({ role: 'assistant', content });
+      if (!calls.length && TRUNCATED.has(stopReason)) {
+        /*
+         * 回复写到单次输出上限被截断、一个工具都没调：不能当成「说完了」收工（2026-10-17 实跑：模型把 4096 个 token
+         * 全花在打草稿和写一个巨大的工具参数上，网关把没写完的工具调用整个丢掉，这一轮就以 0 次操作「完成」了，用户什么也没看到）。
+         * 让它接着做，并提示拆小；连续截断到第 MAX_TRUNCATIONS 次就明说没做成，结束这一轮。
+         */
+        truncations++;
+        if (truncations > MAX_TRUNCATIONS || round >= this.maxIterations) {
+          throw new Error(`${truncations > 1 ? `模型的回复连续 ${truncations} 次` : '模型的回复'}超过单次输出上限被截断，这一轮没能完成。可以把要求拆小一点再发，或请管理员调大单次输出上限。`);
+        }
+        this.onEvent({ type: 'status', text: '模型这次回复超过单次输出上限被截断了，没有执行任何操作；已让它接着做。' });
+        this.history.appendUserText('（系统）你上一条回复超过了单次输出上限，被截断了，其中没写完的工具调用没有执行。不要重复已经写过的内容，直接接着做：要写大段代码或长文本时，拆成几次较小的工具调用。');
+        continue;
+      }
       if (!calls.length) {
         if (!text.trim()) throw new Error('API 没有返回文字或工具调用，请检查模型和接口协议设置。');
         break;
       }
+      truncations = 0;
       progress(round, 'executing', `本轮收到 ${calls.length} 个工具调用，正在执行…`);
       const results = [];
       // 工具返回的图片不留在 tool_result 里，改挂到同一条 user 消息的末尾。

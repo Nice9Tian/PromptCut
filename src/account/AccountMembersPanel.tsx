@@ -35,7 +35,8 @@ export function AccountMembersPanel() {
     generation.current++; setSnapshot(null); setAttempt(null); setOpen(false); setBansOpen(false);
     // Display polling only. The server's access fence closes actual connections.
     void refresh().catch(() => undefined);
-    const timer = setInterval(() => { void refresh().catch(() => undefined); }, 3000);
+    // 页签在后台时不取（看不见，不用刷新）；切回来以后下一次就取到最新的
+    const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh().catch(() => undefined); }, 3000);
     return () => { generation.current++; clearInterval(timer); };
   }, [shared?.projectId, shared?.accountId, refresh]);
   useEffect(() => {

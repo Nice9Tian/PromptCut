@@ -168,12 +168,14 @@ export function normalizeInfo(raw: Record<string, unknown>): CloudInfo {
         .filter((m): m is { id: string; label?: string } => !!m)
     : [];
   const limits = raw.limits && typeof raw.limits === "object" ? (raw.limits as Record<string, unknown>) : {};
+  const efforts = Array.isArray(raw.efforts) ? raw.efforts.filter((x): x is string => typeof x === "string" && /^[a-z]{1,16}$/.test(x)) : [];
   const usage = raw.usage && typeof raw.usage === "object" ? (raw.usage as Record<string, unknown>) : undefined;
   return {
     ...(raw.accountMode === true ? { accountMode: true, executorMounted: raw.executorMounted === true } : {}),
     enabled: raw.enabled !== false,
     models,
     defaultModel: typeof raw.defaultModel === "string" ? raw.defaultModel : null,
+    ...(efforts.length ? { efforts } : {}),
     running: Array.isArray(raw.running) ? raw.running.filter((x): x is string => typeof x === "string") : [],
     limits: { rounds: typeof limits.rounds === "number" ? limits.rounds : undefined, runMs: typeof limits.runMs === "number" ? limits.runMs : undefined },
     ...(usage ? { usage: { tokens: typeof usage.tokens === "number" ? usage.tokens : undefined, limitTokens: typeof usage.limitTokens === "number" ? usage.limitTokens : null } } : {}),

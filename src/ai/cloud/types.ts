@@ -27,6 +27,8 @@ export interface CloudInfo {
   /** 托管方配置的模型;一个或没有时界面不给选 */
   models: CloudModelChoice[];
   defaultModel: string | null;
+  /** 云端认的思考强度档位(不含「默认」);没有时界面不给选 */
+  efforts?: string[];
   /** 这位成员在这个项目里还在跑的对话 id */
   running: string[];
   limits: { rounds?: number; runMs?: number };
@@ -95,6 +97,8 @@ export interface CloudQueueItem {
   messageId: string; arrivalSeq: number;
   state: 'queued' | 'preparing' | 'running' | 'cancelled' | 'done';
   position: number | null; runId: string | null;
+  /** 文档服务签的终态(结清以后才有;旧服务端不带) */
+  outcome?: { status: string; reason: string | null } | null;
 }
 export interface CloudQueueSnapshot {
   conversationId: string; queueRevision: number; aclRevision: number;

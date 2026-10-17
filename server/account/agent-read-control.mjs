@@ -12,9 +12,9 @@ const tables = state => (state.agentReadsV1 ??= { head: 0, controls: [], handles
  * （2026-10-17 节点上一个实例攒了四百多条，占了账本的七成多）。留最近的几十条，够关闭和开启的重试认出原来那条。 */
 export const KEEP_CLOSED_READS_PER_INSTANCE = 64;
 export const KEEP_READ_CONTROL_NONCES = KEEP_CLOSED_READS_PER_INSTANCE * 4;
-/** 删掉用不着的已关读取，连同指向它的开启请求记录和早期的一次性随机数记录。还有控制记录在等它的回执（目标里列了它、还没回执）的不删。
+/** 删掉用不着的已关读取，连同指向它的开启请求记录。还有控制记录在等它的回执（目标里列了它、还没回执）的不删。
  * 开启请求号每次读取都是新的随机号，读取关了以后 Agent 不会再拿同一个号来开，所以删掉记录不会让关过的读取重新开出来。 */
-export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE, keepNonces = KEEP_READ_CONTROL_NONCES) {
+export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE) {
   const t = state.agentReadsV1;
   if (!t) return 0;
   const waiting = new Set();
@@ -30,12 +30,26 @@ export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE, k
   const removed = new Set();
   // 对象按插入顺序遍历，前面的是早关的那批
   for (const ids of closedByInstance.values()) for (const id of ids.slice(0, Math.max(0, ids.length - keep))) removed.add(id);
+  if (!removed.size) return 0;
   for (const id of removed) delete t.handles[id];
-  if (removed.size) for (const [key, row] of Object.entries(t.requests)) if (removed.has(row.readHandleId)) delete t.requests[key];
-  const nonceKeys = Object.keys(t.nonces ?? {});
-  const removedNonces = nonceKeys.slice(0, Math.max(0, nonceKeys.length - keepNonces));
-  for (const key of removedNonces) delete t.nonces[key];
-  return removed.size + removedNonces.length;
+  for (const [key, row] of Object.entries(t.requests)) if (removed.has(row.readHandleId)) delete t.requests[key];
+  return removed.size;
+}
+/** 用过的一次性随机数留多久。每个请求的签名都绑着它自己那条 TLS 连接（`channelBinding`），一条连接只发一个请求就关，
+ * 换一条连接重放签名就对不上；随机数表只是同一条连接里的那一道补充，用不着永远留着。原来一条不删，
+ * 页面每 3 秒取一次对话就写进两三条，一小时一万多条，把账本撑到一百多万字节（2026-10-17 实测，又把文档服务主线程占满）。 */
+export const READ_NONCE_TTL_MS = 10 * 60_000;
+/** 删掉过了留存期的随机数；原来存成 `true`、没有时间的老记录一并删掉；同时按条数上限封顶。 */
+export function pruneNonces(t, at, ttl = READ_NONCE_TTL_MS, maxCount = KEEP_READ_CONTROL_NONCES) {
+  let removed = 0;
+  for (const [key, value] of Object.entries(t.nonces)) {
+    if (value === true || typeof value !== 'number' || value < at - ttl) { delete t.nonces[key]; removed++; }
+  }
+  const keys = Object.keys(t.nonces);
+  for (const key of keys.slice(0, Math.max(0, keys.length - maxCount))) {
+    delete t.nonces[key]; removed++;
+  }
+  return removed;
 }
 export const CONVERSATION_CONTROL_ROOT = '/internal/v2/conversation-controls/';
 export const conversationControlOperations = Object.freeze({ subscribe: 'conversationControlSubscribe',
@@ -140,7 +154,7 @@ export function createAgentReadControlHandler({ control, resolveServicePrincipal
  * release invocation capabilities only after the complete request/stream ends.
  * Unknown historical OS instances never become closed through an empty list. */
 export function createAgentReadControl({ ledger, instanceAuthority, authorizeRead, checkReadInState,
-  synchronize = async () => {}, onProgress = () => {} } = {}) {
+  synchronize = async () => {}, onProgress = () => {}, now = Date.now } = {}) {
   if (![ledger?.read, ledger?.transaction, instanceAuthority?.verifyInState, authorizeRead, checkReadInState]
     .every(value => typeof value === 'function')) fail(503, 'read-control-configuration');
   const streams = new Map(), waiters = new Set(), seenNonces = new Set(); let stopped = false;
@@ -158,11 +172,10 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
   };
   const nonce = (state, who, body) => {
     const key = digestOf({ instanceId: who.instanceId, nonce: body.nonce });
-    const t = tables(state);
+    const t = tables(state), at = now();
     if (t.nonces[key] || seenNonces.has(key)) fail(409, 'read-control-replay');
-    t.nonces[key] = true; rememberNonce(key);
-    const keys = Object.keys(t.nonces);
-    for (const old of keys.slice(0, Math.max(0, keys.length - KEEP_READ_CONTROL_NONCES))) delete t.nonces[old];
+    t.nonces[key] = at; rememberNonce(key);
+    pruneNonces(t, at);
   };
   /** 只做控制的主服务（`control-only`）是单实例服务：新一代主服务实例已经登记并连上读取控制流时，
    * 更早代的主服务进程必然已经退出，把旧主服务名下残留的读取与待办回执一并收口。 */
@@ -370,6 +383,7 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
       .sort((a, b) => a.instanceGeneration - b.instanceGeneration).at(-1);
     if (latestControlOnly) supersedePriorControlOnlyInState(state, latestControlOnly);
     pruneClosedReads(state);
+    pruneNonces(t, now());
   });
   function acknowledge({ servicePrincipal, body }) {
     const result = ledger.transaction(state => {
