@@ -36,7 +36,20 @@ export function canonicalJson(value) {
  * 生产签发方的 `authorityId` 与公钥要在部署后由主会话填进来（公钥不是秘密；取法见
  * `server/hosted/deploy/legacy-tombstones.mjs --print-public-key`）。没填之前旧文件一律不转换，只提示。
  */
-export const TRUSTED_GONE_AUTHORITIES = deepFreeze([]);
+export const TRUSTED_GONE_AUTHORITIES = deepFreeze([
+  {
+    authorityId: 'doc-node-20261009-037d8e0d-2c1e-495a-b19d-501ffbf49909',
+    origin: 'https://visuhive.com',
+    services: [
+      'http://149.88.94.84:8787',
+      'https://149-88-94-84.sslip.io/hosted',
+      'https://visuhive.com/hosted',
+    ],
+    keys: {
+      'doc-signing-20261009': '4jrgCaic8y8ei7P0r-Bpb1k8GkSglUKc-rlWLCLCh34',
+    },
+  },
+]);
 
 /** 信任表连同里面每一条都冻住：运行时没有任何代码能往里加签发方或钥匙 */
 function deepFreeze(value) {
