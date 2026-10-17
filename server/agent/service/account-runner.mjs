@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { coalesceRunEvents } from './coalesce-run-events.mjs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createAgentInstance } from './instance.mjs';
@@ -487,7 +488,8 @@ export function createAccountRunManager({ runClient, readIntents, runnerFactory,
     try {
       if (runEvents) {
         await runEvents.mirrorRunMessage({ grant });
-        events = await runEvents.writer({ grant });
+        // 文字 / 思考增量攒一下再交（`coalesce-run-events.mjs`）：每段一条事件会把文档服务压垮
+        events = coalesceRunEvents(await runEvents.writer({ grant }));
         if (selectedTask && typeof events.receiptOf !== 'function') fail(503, 'account-worker-task-configuration');
         // instance.mjs deliberately has a synchronous, exception-swallowing emit.
         // Never return an unobserved append promise to it: latch/abort here, and
