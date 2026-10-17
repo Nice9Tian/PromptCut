@@ -179,8 +179,9 @@
      - 无成员设备辅助的项目按轮占用云端渲染服务（首次向云端要画面起占，本轮收尾含后台作业或被叫停才放开；30 秒心跳、2 分钟超时；别的项目排队并在对话里显示 `「云端渲染正在给别的项目用，排在第 N 位，轮到了会接着做。」`；排队不计时，真正开始渲染起算 **3 分钟** 超时、一次不重试、超时回 `「渲染超时」` 与调试信息；队列 10 分钟不动回 `「排队异常」`；有 Agent 排队时产流做完当前任务让出；流产满且 5 分钟无修改时关掉装着的项目；多个有真人在线的项目要产流时每 5 分钟轮换）；
      - 在 `docs/reports/ACCEPT-018-map.md` 与 `scripts/acceptance/four-stage-manifest.mjs` 补齐 `RS18-local`、`RS18-queue` 验收命令，实跑 `hosted-render-queue-probe.mjs` 14/14 全过（一轮结束 1.066 秒即让位）。
    - **合并后 `23f078b3` 上的类型检查与全量测试结果**：`npx tsc -b --force` **0 错误**；`npm test` **共 `7026` 条：`7011` 通过、`0` 失败、`14` 跳过、`1` todo**（耗时 152.7 秒，退出码 0）。
-3. **分支 C（`v18-block11-providers` + `v18-block11-glue`）**：
-   - 块十一（`see_media` 素材拼图、`get_gif` 动图记录、`measure_audio_js` 音频测量脚本）+ 工具表接线第二期 + 轨道流和渲染工作进程两处入口的素材隔离。
+3. **分支 C（`v18-block11-tools`，已完成并合入 `main` `3ce7f600`，分支提交 `f8fc2663`，报告 `docs/reports/AGENT-v18-block11-providers.md`）**：
+   - 块十一（P1 `see_frames({source:'media'})` 素材拼图 `hosted-media-frames.mjs` / `media-sheet.mjs`、P6 `measure_audio_js` 隔离音频测量脚本 `hosted-audio-js.mjs` / `hosted-render/audio-js.mjs`、V1 `get_gif` 用户可视记录与受权路由 `hosted-visuals.mjs` / `visual-routes.mjs` / `ToolVisual.tsx`）+ 工具表接线第二期（挂载至 `account-tools.mjs`、`cloud-tools.mjs`、`instance.mjs`、`http.mjs`、`look.mjs`）+ `server/frame-stream.mjs` 与 `server/hosted-render/worker.mjs` 按项目素材隔离加固 + `accept-018-rest-ssr-seam.test.mjs` 的 `SEAM-2` 载入缝收口（全部 7 处对 `src/` 的引用统一收归 `server/agent/ssr-host.mjs`，去掉 `{ todo }` 转为硬断言）。
+   - **合并后 `3ce7f600` 上的类型检查与全量测试结果**：`npx tsc -b --force` **0 错误**；`npm test` **共 `7039` 条：`7025` 通过、`0` 失败、`14` 跳过、`0` todo**（耗时 157.9 秒，退出码 0）。
 4. **分支 D（`v18-online-probes` 与 `v18-terms`）**：
    - **第一半（`v18-online-probes`，已完成并合入 `main` `8b09add4`，分支提交 `f6f0fb4a`，报告 `docs/reports/AGENT-v18-online-probes.md`）**：十七支在线探针改走会话恢复入口（`lib/online-resume-entry.mjs`），对齐 10-14「在线舞台一律跨源隔离、撤掉同源单舞台退路」与撤快照后的断言，实跑 S2-1（116/116）～S2-5、`online-stage-watch`、`online-stage-handshake`、`c10-ui`、`online-user-cards`、`sound-ab`、`sound-preview` 等 14 支探针 100% 通过。合并后 `8b09add4` 上 `npx tsc -b --force` **0 错误**，全量 `npm test` **共 `7025` 条：`7010` 通过、`0` 失败、`14` 跳过、`1` todo**（耗时 160.8 秒，退出码 0）。
    - **第二半（`v18-terms`，等在途分支全部合完后执行）**：壬（改旧名词：「图卡」→「素材效果卡」，「补渲」→「预渲染重试」，含界面 17 处改前改后截图）。
