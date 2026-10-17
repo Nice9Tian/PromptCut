@@ -51,7 +51,7 @@
  *                                  **只给本机演练**:设成 1 时模型配置改读这台电脑上桌面版已配好的 API 直连配置(只读,见 `rehearsal-model.mjs`),
  *                                  用来在本机跑真实模型。云节点上不设(节点的 Key 走加密分发)
  *   PROMPTCUT_AGENT_RENDER_STALL_MS / PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS
- *                                  可不设:补渲「连续多久没有进度就放弃」(缺省 10 分钟)与「写入落地后攒多久再发」(缺省 3 秒),排查与演练用
+ *                                  可不设:预渲染重试「连续多久没有进度就放弃」(缺省 10 分钟)与「写入落地后攒多久再发」(缺省 3 秒),排查与演练用
  *
  * 失败即关(打一行 `config.error { reason }`,退出码 1):`account-task-processes`(账号版缺配置或带着旧路的变量)、`account-master`(账号版:文档服务不认主身份、
  * 内部口占不上;`detail` 里是原因码)、`data-dir`、`doc-url`、`asset-url`、`service-identity`(私钥读不到、格式不对、
@@ -60,7 +60,7 @@
  * 数据目录里(契约第 2.2 节):`config/ai.json` 与 `config/keys/custom.key`(模型配置与 Key 的密文,`set-key.mjs` 写)、
  * `config/voice.json` 与 `config/keys/voice.key`(托管方的配音配置与令牌的密文,可没有)、`work/`(各对话的工作目录:附件、下载的文件)、
  * `config/limits.json`(各项目额度与节点并发,`admin.mjs quota` 写,改了即生效)、`tenants/`(对话)、`usage/`(用量流水)。
- * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发补渲。
+ * 进程起来时把上一个进程没收尾的对话标成「中断」(不自动续跑),并按各对话的 `pending-render.json` 重发预渲染重试。
  * 收到 SIGTERM / SIGINT:旧 LAN 模式记「中断」并停下,状态落盘,5 秒内退出。
  * 账号模式等待 owned 资源真实关闭;不以 5 秒超时替代关闭证明或成功退出。
  *
@@ -69,7 +69,7 @@
  * `startAgentService({ accountExecutor })`（在主进程里跑任务的装配）只留给进程内的调用方（测试夹具），命令行入口不走它。
  * 旧模式鉴权(契约第 4 节):命令行入口凭服务私钥连文档服务的控制连接(`server/auth/service-client.mjs`),每个请求的委托票据、
  * 每一轮的对话委托都交文档服务核验;连文档服务的数据连接用凭对话委托换来的连接票据(`hosted-wiring.mjs`)。
- * 补渲经服务身份的发布连接进文档服务的任务队列(`render-publisher.mjs`)。测试经 `startAgentService({ authenticate, credentials })` 给替身。
+ * 预渲染重试经服务身份的发布连接进文档服务的任务队列(`render-publisher.mjs`)。测试经 `startAgentService({ authenticate, credentials })` 给替身。
  * 本文件不引用 `src/`。
  */
 import fs from 'node:fs';
@@ -160,7 +160,7 @@ export function accountTaskProcessConfig({ env, port }) {
  * @param {(req) => object | null} [o.authenticate] 请求 → 身份;不给时一律 401
  * @param {{ protocolsFor(identity, n): string[] | Promise<string[]> }} [o.credentials] 连文档服务的凭证;不给时任何对话都起不来
  * @param {() => object | Promise<object>} [o.modelConfig] 不给就读数据目录里的模型配置
- * @param {object} [o.publisher] 补渲的发布通道(接口位,见 `server/agent/service/render-request.mjs`)
+ * @param {object} [o.publisher] 预渲染重试的发布通道(接口位,见 `server/agent/service/render-request.mjs`)
  * @param {object} [o.projectState] 各项目的开关(接口位,见 `create-agent-service.mjs`)
  */
 export async function startAgentService({

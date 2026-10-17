@@ -1,5 +1,5 @@
 /**
- * 在线执行用户卡与图卡的隔离策略原文与票据换 cookie 的判定(契约 `docs/plan/online-card-exec-contract.md` 第 3.3、4.1 节)。
+ * 在线执行用户卡与素材效果卡的隔离策略原文与票据换 cookie 的判定(契约 `docs/plan/online-card-exec-contract.md` 第 3.3、4.1 节)。
  * 跑:node --test src/online/stagePolicy.test.mjs
  */
 import { test } from "node:test";

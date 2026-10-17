@@ -1,13 +1,13 @@
 /**
- * 在线执行用户卡与图卡 · 轻重与界面(`docs/plan/online-card-exec-contract.md` 第 6、8 节)。跑:
+ * 在线执行用户卡与素材效果卡 · 轻重与界面(`docs/plan/online-card-exec-contract.md` 第 6、8 节)。跑:
  *   node --experimental-test-module-mocks --test src/editor/onlineCardsL.test.mjs
  *
- *   OCE-L-01 「本页运行不了」的判法(`placeholderHost.needsLocalPc`):图卡照旧算;用户卡只有运行不了的才算 ——
+ *   OCE-L-01 「本页运行不了」的判法(`placeholderHost.needsLocalPc`):素材效果卡照旧算;用户卡只有运行不了的才算 ——
  *            构建时就在包里的不算,同步来的看运行状态(只有 `ready` 不算),低内存档一律算;桌面恒不算
  *   OCE-L-02 时间轴徽标「需要本地 PC 渲染辅助」:只对本页运行不了的卡、且确认没覆盖整段时出;能运行的同步卡不出
  *   OCE-L-03 测量门:卡片源码同步完之后,再等同步来的卡第一次载入有结果(没有 `loading` 的了)才开;成功失败都算;
  *            仍受同一个上限封顶;没有在载入的卡时与原来相同
- *   OCE-L-04 导出:同步来的用户卡与图卡不管判轻判重都必须用预渲染原尺寸(导出页不执行它们的代码);层表里没有它们的层、
+ *   OCE-L-04 导出:同步来的用户卡与素材效果卡不管判轻判重都必须用预渲染原尺寸(导出页不执行它们的代码);层表里没有它们的层、
  *            或没有层表,算缺;低内存档的「只核对判重的卡」不把它们放过去;别的卡的核对与原来相同
  *   OCE-L-05 参数面板的说明跟着运行状态走:能运行、还在载入不出说明,十种里其余八种各有一句(文字见 `cardRunStates.ts`)
  *   OCE-L-06 接线(按源码核):分派表、测量、时间轴片段都订阅了运行状态;六处判断都经 `placeholderHost` 的同一个函数
@@ -43,12 +43,12 @@ function setup() {
 const cleanup = () => { H.setOnlineBrowserMode(false); H.setLocalOnlyLowMemory(false); R.setCardRunStates([]); R.setRuntimeCards([]); R.setSyncedUserCards([]); };
 const local = (id) => H.unsupportedHere(id, R.getCard(id));
 
-test("OCE-L-01 本页运行不了的判法:图卡照旧;用户卡看能不能运行;低内存档一律算;桌面恒不算", () => {
+test("OCE-L-01 本页运行不了的判法:素材效果卡照旧;用户卡看能不能运行;低内存档一律算;桌面恒不算", () => {
   setup();
   try {
     assert.equal(local("builtin"), false);
     assert.equal(local("av"), false, "内置有声动效卡的画面是普通 DOM 卡");
-    assert.equal(local("gpu"), true, "图卡:在线执行还没放开,照旧算");
+    assert.equal(local("gpu"), true, "素材效果卡:在线执行还没放开,照旧算");
     assert.equal(local("audio-only"), true);
     assert.equal(local("repo-user"), false, "构建时就在包里的仓库用户卡:本页能运行");
     assert.equal(local("nobody"), false, "两边都没有的 id(未知卡片)不算");
@@ -62,7 +62,7 @@ test("OCE-L-01 本页运行不了的判法:图卡照旧;用户卡看能不能运
     R.setRuntimeCards([dom("synced")]);
     assert.equal(local("synced"), false, "舞台里载入成功的同步卡");
     R.setRuntimeCards([dom("synced", { Component: undefined, card: () => ({}) })]);
-    assert.equal(local("synced"), true, "舞台里载入的同步图卡:图卡照旧算");
+    assert.equal(local("synced"), true, "舞台里载入的同步素材效果卡:素材效果卡照旧算");
     R.setRuntimeCards([]);
     // 低内存档:不执行用户卡的代码
     R.setCardRunStates([["synced", { state: "ready" }]]);
@@ -94,7 +94,7 @@ test("OCE-L-02 时间轴徽标:只对本页运行不了的卡、确认没覆盖�
     R.setCardRunStates([["synced", { state: "missing-module", detail: "lodash" }]]);
     assert.equal(badge("synced", "partial"), true, "引用了页面里没有的模块:出");
     assert.equal(badge("repo-user", "none"), false, "构建时的用户卡:不出");
-    assert.equal(badge("gpu", "none"), true, "图卡:照旧出");
+    assert.equal(badge("gpu", "none"), true, "素材效果卡:照旧出");
     H.setLocalOnlyLowMemory(true);
     assert.equal(badge("repo-user", "none"), true, "低内存档:构建时的用户卡照旧出");
   } finally { cleanup(); }

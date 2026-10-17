@@ -13,7 +13,7 @@
  *   4. 手机成员(Chrome 移动端仿真、`deviceMemory: 4`,判为低内存档)凭邀请链接加入,等界限搜索做完(`window.__pcLowMemSearch()`):
  *      - 取到了本项目的全部记录;测量次数 ≤ ⌈log₂(n + 1)⌉ + 4(约 log₂(n) + 2);
  *      - 判出轻重:实测过的按实测(× 成本倍率 > B 为重),没测的按界限;本机耗时单调时,判轻的卡正好是 `burnMs` 小的那一半;
- *      - 补渲只为判重又缺产物的层发(`window.__pcBackfill()` 的片段清单 ⊆ 判重的片段,不含任何判轻的片段);
+ *      - 预渲染重试只为判重又缺产物的层发(`window.__pcBackfill()` 的片段清单 ⊆ 判重的片段,不含任何判轻的片段);
  *      - 播放时判轻的卡同样抑制着、不活渲(显示用的表全部判重)。
  *   5. 收尾:以创建者身份删掉云端项目,结束自己起的进程,删临时目录。
  *
@@ -448,12 +448,12 @@ try {
   const monotone = firstHeavy < 0 || byBurn.slice(firstHeavy).every((x) => !x.light);
   check(monotone, '判轻的卡是 burnMs 小的那一段、判重的是大的那一段', byBurn);
   check(o.light.length > 0 && o.heavy.length > 0, '既有判轻也有判重', { light: o.light.length, heavy: o.heavy.length });
-  // 补渲:只为判重又缺产物的层(没有渲染节点,判重的层都缺)
+  // 预渲染重试:只为判重又缺产物的层(没有渲染节点,判重的层都缺)
   const heavyClips = new Set(s.judgedHeavyClips);
   const lightClips = state.clips.filter((c) => keyLight.has(desk.keys[c.id])).map((c) => c.id);
-  const bf = await until('手机为判重又缺产物的层发补渲', () => P(phone, () => { const d = window.__pcBackfill?.(); const hit = d?.log?.find((e) => !e.error); return hit ? { id: hit.id, clips: hit.clips, log: d.log.length } : null; }), 30_000, 500);
+  const bf = await until('手机为判重又缺产物的层发预渲染重试', () => P(phone, () => { const d = window.__pcBackfill?.(); const hit = d?.log?.find((e) => !e.error); return hit ? { id: hit.id, clips: hit.clips, log: d.log.length } : null; }), 30_000, 500);
   if (!bf) {
-    // 排障:补渲没发时记下在线来源、补渲发布器、舞台与分派的状态
+    // 排障:预渲染重试没发时记下在线来源、预渲染重试发布器、舞台与分派的状态
     out.steps.backfillDiag = await P(phone, () => {
       const pick = (f) => { try { return f(); } catch (e) { return String(e); } };
       const pd = pick(() => window.__pcPreviewDiag?.());
@@ -465,9 +465,9 @@ try {
       };
     }).catch((e) => String(e));
   }
-  check(bf && bf.clips.length > 0 && bf.clips.every((id) => heavyClips.has(id)), '补渲的片段清单都是判重的片段', { clips: bf?.clips?.length, heavy: heavyClips.size });
-  check(bf && lightClips.every((id) => !bf.clips.includes(id)), '判轻的卡不发补渲', { light: lightClips.length });
-  check(bf && [...heavyClips].every((id) => bf.clips.includes(id)), '判重又缺产物的层都进了补渲清单', { missing: [...heavyClips].filter((id) => !bf?.clips?.includes(id)).length });
+  check(bf && bf.clips.length > 0 && bf.clips.every((id) => heavyClips.has(id)), '预渲染重试的片段清单都是判重的片段', { clips: bf?.clips?.length, heavy: heavyClips.size });
+  check(bf && lightClips.every((id) => !bf.clips.includes(id)), '判轻的卡不发预渲染重试', { light: lightClips.length });
+  check(bf && [...heavyClips].every((id) => bf.clips.includes(id)), '判重又缺产物的层都进了预渲染重试清单', { missing: [...heavyClips].filter((id) => !bf?.clips?.includes(id)).length });
   // 播放:判轻的卡同样抑制着,不活渲(显示用的表全部判重)
   await P(phone, () => { const st = window.__pcStore; st.actions.seek(0); st.actions.play(); });
   const samples = [];

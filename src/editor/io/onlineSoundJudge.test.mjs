@@ -170,12 +170,12 @@ test('B15 交给渲染节点的接口:没有接收方回 false,接上后把片�
   assert.deepEqual(seen, [[b.clip.id, 'heavy']]);
 });
 
-test('B16 内置有声动效卡不是图卡:在线页面照常渲染它的画面;写了 card() 的、只有 audio() 的、用户卡仍要本地 PC', async () => {
+test('B16 内置有声动效卡不是素材效果卡:在线页面照常渲染它的画面;写了 card() 的、只有 audio() 的、用户卡仍要本地 PC', async () => {
   const { needsLocalPc, unsupportedHere, setOnlineBrowserMode, onlineBrowserMode } = await import('../../render/placeholderHost.ts');
   const never = () => false, Component = () => null;
   assert.equal(needsLocalPc('av', { Component, audio() {} }, never), false, '有画面组件又带 audio():普通 DOM 卡加声音');
-  assert.equal(needsLocalPc('audio-only', { audio() {} }, never), true, '只有 audio():音频图卡');
-  assert.equal(needsLocalPc('gpu', { card() {} }, never), true, '写了 card():视觉图卡');
+  assert.equal(needsLocalPc('audio-only', { audio() {} }, never), true, '只有 audio():音频素材效果卡');
+  assert.equal(needsLocalPc('gpu', { card() {} }, never), true, '写了 card():视觉素材效果卡');
   assert.equal(needsLocalPc('gpu-av', { card() {}, audio() {}, Component }, never), true, '写了 card() 的不因为带了组件就放开');
   assert.equal(needsLocalPc('dom', { Component }, never), false);
   assert.equal(needsLocalPc('u', { Component, audio() {} }, (id) => id === 'u'), true, '用户卡不看形态');

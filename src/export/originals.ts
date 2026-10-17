@@ -38,7 +38,7 @@ function segmentsOf(layer: OnlineLayer, span: number): Array<[number, number]> {
 /** 读层表与每一段清单,核对原尺寸是否齐全 */
 export async function loadOriginalsIndex(projectId: string | null, deps: OriginalsDeps, { fallbackHeavy = [] as readonly string[], onlyClips = null as readonly string[] | null, project = null as unknown, requiredClips = [] as readonly string[] } = {}): Promise<OriginalsIndex> {
   /*
-   * `requiredClips`:导出时**必须**用预渲染原尺寸的片段,不管页面判它轻还是重 —— 同步来的用户卡与图卡
+   * `requiredClips`:导出时**必须**用预渲染原尺寸的片段,不管页面判它轻还是重 —— 同步来的用户卡与素材效果卡
    * (`docs/plan/online-card-exec-contract.md` 第 8 节「在线导出」:导出页与编辑页面同源,不执行它们的代码)。
    * 它们不受 `onlyClips` 限制;层表里没有它们的层、或没有层表,都算缺。
    */

@@ -32,7 +32,7 @@
  * - D9 nodeId 绑到 userId：节点记录在时，别的 userId 拿同一个 nodeId 报到回 forbidden。
  * - D10 `node.welcome` 回这个节点的 `envFingerprint`（浏览器的指纹由文档服务模块按页面报的原始值算好再交进来）。
  *
- * 在线执行用户卡与图卡（块 N，`docs/plan/online-card-exec-contract.md` 第 7 节）：
+ * 在线执行用户卡与素材效果卡（块 N，`docs/plan/online-card-exec-contract.md` 第 7 节）：
  * - 纯浏览器节点另有 `cardEnvFingerprint`（环境三项再加在线卡片运行时版本，同样由文档服务算好交进来），`node.welcome` 带回；
  *   别的 profile、没报运行时版本的浏览器没有这一项。
  * - 浏览器节点对 `requires.userCards` / `requires.graphCards` 为真的任务，前置过滤、认领的指纹检查、锁的闲置判断都按
@@ -145,13 +145,13 @@ export function createRenderQueue(options = {}) {
   /** 非空字符串才算带了指纹；空串、null、缺省都当没带 */
   const fingerprintOf = (v) => (typeof v === 'string' && v !== '' ? v : null);
 
-  /** 任务要不要在节点里执行用户卡、图卡的代码(`requires.userCards` / `requires.graphCards`) */
+  /** 任务要不要在节点里执行用户卡、素材效果卡的代码(`requires.userCards` / `requires.graphCards`) */
   const runsCardCode = (task) => !!task?.requires && typeof task.requires === 'object' && (task.requires.userCards === true || task.requires.graphCards === true);
   /**
    * 这个节点认领这个任务时用的环境指纹(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 4 条)。
-   * 纯浏览器节点执行用户卡、图卡的任务用 `cardEnvFingerprint`(三项环境值再加在线卡片运行时版本);其余一律是 `envFingerprint`,
+   * 纯浏览器节点执行用户卡、素材效果卡的任务用 `cardEnvFingerprint`(三项环境值再加在线卡片运行时版本);其余一律是 `envFingerprint`,
    * 内置卡的任务与别的 profile 一个字不变。浏览器节点没有 `cardEnvFingerprint`(没报运行时版本、旧页面)时,
-   * 用户卡、图卡的任务对它一律对不上(`NO_CARD_RUNTIME` 不等于任何指纹):看不见、认领被指纹挡下——没声明能执行这些卡的页面
+   * 用户卡、素材效果卡的任务对它一律对不上(`NO_CARD_RUNTIME` 不等于任何指纹):看不见、认领被指纹挡下——没声明能执行这些卡的页面
    * 不会拿到它们的任务(同一台机器上它的 `envFingerprint` 与桌面那份相同,不挡的话它会看见桌面那份)。
    */
   const NO_CARD_RUNTIME = '<no-card-runtime>';
@@ -301,7 +301,7 @@ export function createRenderQueue(options = {}) {
       }
       if (t.state === 'claimed') { p.claimed += 1; continue; }
       p.open += 1;
-      // c10a 契约第 17 节:`priority` 可以是 'normal' / 'backfill',摘要只比数(补渲档算 -1)
+      // c10a 契约第 17 节:`priority` 可以是 'normal' / 'backfill',摘要只比数(预渲染重试档算 -1)
       const value = prioritySummaryValue(t.priority);
       if (p.topPriority === null || value > p.topPriority) p.topPriority = value;
       const fp = t.requires && typeof t.requires.envFingerprint === 'string' ? t.requires.envFingerprint : '';
@@ -617,7 +617,7 @@ export function createRenderQueue(options = {}) {
     }
     Object.assign(node, {
       profile: body.profile, envFingerprint: body.envFingerprint, capabilities: body.capabilities,
-      // 块 N:纯浏览器节点执行用户卡、图卡用的指纹(文档服务按页面报的运行时版本算好交进来);别的 profile 一律没有
+      // 块 N:纯浏览器节点执行用户卡、素材效果卡用的指纹(文档服务按页面报的运行时版本算好交进来);别的 profile 一律没有
       cardEnvFingerprint: body.profile === 'browser' ? (body.cardEnvFingerprint ?? null) : null,
       codeVersions: body.codeVersions, maxConcurrent: body.maxConcurrent,
       conn, disconnectedAt: null,
@@ -660,7 +660,7 @@ export function createRenderQueue(options = {}) {
       // 这个队列认稀疏流任务(id 末尾带 `:sparse`,`messages.mjs` 的 `taskIdOf`):切分方看到这一项才切稀疏流任务;
       // 旧队列不带,切分方就只切满密度的(旧队列校验 id 时不认这种写法,发了会被整批拒掉)
       sparseStreams: true,
-      // 块 N:浏览器节点另有一个用户卡、图卡用的指纹;别的节点与没报运行时版本的浏览器不带这一项(旧形状不变)
+      // 块 N:浏览器节点另有一个用户卡、素材效果卡用的指纹;别的节点与没报运行时版本的浏览器不带这一项(旧形状不变)
       ...(node.profile === 'browser' && fingerprintOf(node.cardEnvFingerprint) !== null ? { cardEnvFingerprint: node.cardEnvFingerprint } : {}),
     }, reqId);
     for (const l of lost) emit(conn, 'task.lease-lost', l);
@@ -897,7 +897,7 @@ export function createRenderQueue(options = {}) {
       return emit(conn, 'task.claim-rejected', { id, reason: 'forbidden' }, reqId);
     }
     // X4：plan 只给 pc。独立主机不替任何页面做计划，纯浏览器没有 Chrome 和 card-cache（filter.mjs 规则 6 在节点侧也挡）。
-    // C10 契约第 18 节第 9 条〔裁〕对 X4 的修改：带片段清单的 plan（在线页面的清单计划、低内存档的补渲计划）host 也能认领，
+    // C10 契约第 18 节第 9 条〔裁〕对 X4 的修改：带片段清单的 plan（在线页面的清单计划、低内存档的预渲染重试计划）host 也能认领，
     // 由认领的节点用自己的指纹切分；不带清单的桌面 plan 照旧只给 pc。纯浏览器一律不认领 plan
     if (task.kind === 'plan' && (node.profile === 'browser' || (node.profile === 'host' && !isListPlan(task)))) {
       return emit(conn, 'task.claim-rejected', { id, reason: 'plan-profile' }, reqId);
@@ -978,7 +978,7 @@ export function createRenderQueue(options = {}) {
     if (task.kind === 'plan') {
       const browserFingerprints = browserFingerprintsFor(task);
       if (browserFingerprints.length > 0) claimed.browserFingerprints = browserFingerprints;
-      // 块 N:同样的节点用户卡、图卡的指纹(`cardEnvFingerprint`)。切分方只给「文档服务确认过有这样一台在线节点」的指纹出用户卡、图卡的浏览器那一份
+      // 块 N:同样的节点用户卡、素材效果卡的指纹(`cardEnvFingerprint`)。切分方只给「文档服务确认过有这样一台在线节点」的指纹出用户卡、素材效果卡的浏览器那一份
       const browserCardEnvFingerprints = browserFingerprintsFor(task, 'cardEnvFingerprint');
       if (browserCardEnvFingerprints.length > 0) claimed.browserCardEnvFingerprints = browserCardEnvFingerprints;
     }

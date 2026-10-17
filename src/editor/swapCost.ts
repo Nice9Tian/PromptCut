@@ -4,7 +4,7 @@
  * (`planDispatch.ts` 的 `planPipelines` `deadMs`)用同一个数。
  *
  * 卡种按这个页面上的卡片定义判:定义里声明了画布契约(`dom2d` 除外)或审阅表登记成画布(`surface` 是 canvas2d / webgl)、定义标了 `canvasHeavy` 的算画布卡;
- * 页面上没有定义的(代码不在这里的用户卡、未知卡片)与图卡(只有 `nodeId`)认不出来,走兜底。
+ * 页面上没有定义的(代码不在这里的用户卡、未知卡片)与素材效果卡(只有 `nodeId`)认不出来,走兜底。
  */
 import type { Project } from "../kernel/project";
 import { cardsRegistryGen, getCard, syncedUserCardsGen } from "../kernel/registry";

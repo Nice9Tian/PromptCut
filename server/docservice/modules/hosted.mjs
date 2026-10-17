@@ -24,7 +24,7 @@
  * - 票据是普通的连接票据（2 分钟，那个项目的 `ticketKey` 签），多带 `sv`（服务名）与 `sk`（服务此刻所用公钥的 `kid`），
  *   `u` 是 `service:<服务名>@<instanceId>`，角色取登记表。
  * - `hosted.ticket` 的分发点：代成员进项目的服务（登记表 `actsFor: 'member'`，云端 Agent）凭对话委托换代成员的连接票据、
- *   或要只用来发布补渲计划的票据（`purpose: 'publish'`），见 `memberServiceTicket`；渲染服务带这几个字段回 `forbidden`。
+ *   或要只用来发布预渲染重试计划的票据（`purpose: 'publish'`），见 `memberServiceTicket`；渲染服务带这几个字段回 `forbidden`。
  * - 只有控制连接（`scope: 'service'`、不在任何空间里）能发这几种消息，别的身份一律 `forbidden`（组装层的 gate 也挡一次）。
  * - `tick` 另看一眼登记表：公钥已不在表里的服务连接（控制连接与各项目里的数据连接）以 4003 `service-revoked` 关闭。
  */
@@ -308,7 +308,7 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
    *   `u`、`ug` 是成员的，带 `sv`、`sk`、`c`、`acc`、`dn`、`cr?`。只认对话委托（带 `cid`、`run`），短的委托票据换不出；
    *   委托的 `p` 必须等于 `projectId`、`cid` 必须等于 `conversationId`；登记表、开关、名单、禁入表、代数都重新核一次，**不看成员在不在线**。
    *   回 `hosted.ticket.ok { ticket, exp, userId, username, access, ownerKey, conversation, conversationId }`；
-   * - `{ projectId, purpose: 'publish' }`（不带委托）→ 只用来发布补渲计划的连接票据：`u` 是服务自己的 `service:<服务名>@<instanceId>`，
+   * - `{ projectId, purpose: 'publish' }`（不带委托）→ 只用来发布预渲染重试计划的连接票据：`u` 是服务自己的 `service:<服务名>@<instanceId>`，
    *   带 `pu: 'publish'`，不带任何成员的身份与权限。回 `hosted.ticket.ok { ticket, exp }`。
    * 它没有「服务自己读写项目」这回事：不带委托又不是发布用的，`forbidden`。
    * 委托不对时的 `reason`（只在这条受信的连接上给）：`format`、`signature`、`expired`、`generation`、`audience`、`no-project`、

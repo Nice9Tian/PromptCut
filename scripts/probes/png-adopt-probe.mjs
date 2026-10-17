@@ -315,7 +315,7 @@ try {
   for (const [name, buf] of pngB) if (pngA.get(name)?.equals(buf)) same++;
   out.pngFrames = { a: pngA.size, b: pngB.size, identical: same };
   out.identicalPng = pngB.size > 0 && same === pngB.size;
-  check(out.identicalPng, 'B 的 PNG 缓存与 A 逐字节相同(原样取回,不是本机补渲的)', out.pngFrames);
+  check(out.identicalPng, 'B 的 PNG 缓存与 A 逐字节相同(原样取回,不是本机预渲染重试的)', out.pngFrames);
 } catch (error) {
   fails.push(`探针自己出错:${error?.stack || error}`);
 } finally {

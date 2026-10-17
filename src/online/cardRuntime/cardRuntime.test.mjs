@@ -1,5 +1,5 @@
 /**
- * 在线浏览器执行用户卡与图卡:转译接入这一块(`docs/plan/online-card-exec-contract.md` 第 1、2、5、8 节)。
+ * 在线浏览器执行用户卡与素材效果卡:转译接入这一块(`docs/plan/online-card-exec-contract.md` 第 1、2、5、8 节)。
  * 跑:node --experimental-test-module-mocks --test src/online/cardRuntime/cardRuntime.test.mjs
  *
  *   OCE-T-01 写法预检:六种不支持的写法各自认得出;注释、字符串、JSX 文本、类型里出现这些词不算
@@ -323,7 +323,7 @@ test("OCE-T-08 运行状态:摊到卡上;编辑页面一侧的先后;面板说�
   assert.equal(typeof verOf("gen-a-1"), "string");
   assert.equal(verOf("gen-a-1"), verOf("gen-a-1"));
   assert.notEqual(verOf("gen-a-1"), verOf("gen-a-2"));
-  assert.equal(ERS.editorRunStates({ cards, lowMemory: false, available: false, blockedDetail: "这个站点没有开启在线运行用户卡与图卡", bundles: [] }).get("a").detail, "这个站点没有开启在线运行用户卡与图卡");
+  assert.equal(ERS.editorRunStates({ cards, lowMemory: false, available: false, blockedDetail: "这个站点没有开启在线运行用户卡与素材效果卡", bundles: [] }).get("a").detail, "这个站点没有开启在线运行用户卡与素材效果卡");
   // 十种状态各有说明(ready、loading 不出)
   const msg = (s) => ERS.runStateMessage(s);
   assert.equal(msg({ state: "ready" }), null);
@@ -332,12 +332,12 @@ test("OCE-T-08 运行状态:摊到卡上;编辑页面一侧的先后;面板说�
   assert.equal(msg({ state: "unsupported-syntax", detail: "namespace(第 3 行)", file: `${U}x.tsx` }), "在线浏览器不能运行这张卡:用了在线页面不支持的写法(namespace(第 3 行),x.tsx)。画面由渲染节点提供。");
   assert.equal(msg({ state: "missing-module", detail: "lodash" }), "在线浏览器不能运行这张卡:引用了在线页面里没有的模块 lodash。画面由渲染节点提供。");
   assert.equal(msg({ state: "load-error", detail: "炸了" }), "在线浏览器不能运行这张卡:载入时出错(炸了)。");
-  assert.equal(msg({ state: "gpu" }), "这台设备的图形能力不够,图卡的画面由渲染节点提供。");
-  assert.equal(msg({ state: "media" }), "这台设备解不了这段素材,图卡的画面由渲染节点提供。");
+  assert.equal(msg({ state: "gpu" }), "这台设备的图形能力不够,素材效果卡的画面由渲染节点提供。");
+  assert.equal(msg({ state: "media" }), "这台设备解不了这段素材,素材效果卡的画面由渲染节点提供。");
   assert.equal(msg({ state: "runtime-error" }), "这张卡在在线浏览器里运行出错,本次改由渲染节点提供画面。");
-  assert.equal(msg({ state: "not-isolated" }), "这个页面没有隔离的运行环境,用户卡与图卡的画面由渲染节点提供。");
-  assert.equal(msg({ state: "not-isolated", detail: "这个站点没有开启在线运行用户卡与图卡" }), "这个站点没有开启在线运行用户卡与图卡,用户卡与图卡的画面由渲染节点提供。");
-  assert.equal(msg({ state: "low-memory" }), "这台设备在低内存档,不运行用户卡与图卡的代码。");
+  assert.equal(msg({ state: "not-isolated" }), "这个页面没有隔离的运行环境,用户卡与素材效果卡的画面由渲染节点提供。");
+  assert.equal(msg({ state: "not-isolated", detail: "这个站点没有开启在线运行用户卡与素材效果卡" }), "这个站点没有开启在线运行用户卡与素材效果卡,用户卡与素材效果卡的画面由渲染节点提供。");
+  assert.equal(msg({ state: "low-memory" }), "这台设备在低内存档,不运行用户卡与素材效果卡的代码。");
   assert.equal(R.CARD_RUN_STATES.length, 10);
   for (const s of R.CARD_RUN_STATES) if (s !== "ready" && s !== "loading") assert.ok(msg({ state: s }), s);
 });
@@ -505,7 +505,7 @@ test("OCE-T-13 执行的前提:缺省不执行;总开关只有明写 false 才�
   assert.equal(n, 1, "没变不通知");
   G.setCardExecGate({ site: false });
   assert.equal(G.cardExecAvailable(), false, "站点关了:隔离再好也不执行");
-  assert.equal(G.cardExecBlockedDetail(), "这个站点没有开启在线运行用户卡与图卡");
+  assert.equal(G.cardExecBlockedDetail(), "这个站点没有开启在线运行用户卡与素材效果卡");
   G.setCardExecGate({ site: true, isolated: false, reason: "策略没生效" });
   assert.equal(G.cardExecAvailable(), false);
   assert.equal(G.cardExecBlockedDetail(), null);

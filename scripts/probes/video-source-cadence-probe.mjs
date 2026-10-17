@@ -1,6 +1,6 @@
 /**
- * 视频取帧节奏探针(`docs/plan/TODO.md`「用户真机缺陷」一条:图卡的视频输入源在 0.5 倍慢放导出时节奏不均)。
- * 这条行为此后的回归基线;G0-R「预渲染探针」一行,改到取帧、解码、图卡视频源、`src/render/frameMedia.ts` 时必跑。
+ * 视频取帧节奏探针(`docs/plan/TODO.md`「用户真机缺陷」一条:素材效果卡的视频输入源在 0.5 倍慢放导出时节奏不均)。
+ * 这条行为此后的回归基线;G0-R「预渲染探针」一行,改到取帧、解码、素材效果卡视频源、`src/render/frameMedia.ts` 时必跑。
  *
  *   node scripts/probes/video-source-cadence-probe.mjs [--port 6030] [--keep]
  *
@@ -8,11 +8,11 @@
  *   - ffmpeg 合成两份素材:30 fps 与 25 fps,各 3 s、64×64,第 n 帧整幅灰度 = 16 × (n mod 16)(RGB 值,色度中性;
  *     阶梯 16,扛有损编码)。TODO 写的是 2 s,这里取 3 s:用例③的 mediaOffset 0.35 要取到第 69 帧,2 s 只有 60 帧。
  *   - 一份 30 fps、256×144 的项目,每个用例一段 2 s(60 帧)、首尾相接排在时间轴上:
- *       ① 图卡节点(原样输出上游的直通图卡 `probe-cadence-pass`)输入源 rate 0.5、offset 0 与 0.35(10.5 帧,非整帧);
- *       ② 同一图卡 rate 1、offset 0;
+ *       ① 素材效果卡节点(原样输出上游的直通素材效果卡 `probe-cadence-pass`)输入源 rate 0.5、offset 0 与 0.35(10.5 帧,非整帧);
+ *       ② 同一素材效果卡 rate 1、offset 0;
  *       ③ 时间轴普通视频片段 mediaOffset 0 与 0.35(覆盖 `src/render/frameMedia.ts`);
- *       ④ 25 fps 素材经图卡 rate 1(另加一段 25 fps 的时间轴片段,同一条规则)。
- *   - 起一台 dev server(导出目录、数据目录都是新建的临时目录;直通图卡写进临时的卡片改动层 `PROMPTCUT_CARD_OVERRIDES`,
+ *       ④ 25 fps 素材经素材效果卡 rate 1(另加一段 25 fps 的时间轴片段,同一条规则)。
+ *   - 起一台 dev server(导出目录、数据目录都是新建的临时目录;直通素材效果卡写进临时的卡片改动层 `PROMPTCUT_CARD_OVERRIDES`,
  *     检出目录一个文件都不写),`exportFrames` 单进程导出全片 PNG。
  *   - 读每帧中心 16×16 的平均灰度,四舍五入到 16 的倍数得到 n mod 16,按单调性还原成源帧号 m(n)。
  *   - 断言 m(n) = floor((offset + rate × n / 30) × 源帧率 + 1e-6)(n 是这一段里的第几帧)。
@@ -68,7 +68,7 @@ function makeSource(rate) {
 const src30 = makeSource(30);
 const src25 = makeSource(25);
 
-/* ---------------- 直通图卡(写进临时改动层) ---------------- */
+/* ---------------- 直通素材效果卡(写进临时改动层) ---------------- */
 
 const CARD_ID = 'probe-cadence-pass';
 const cardFile = path.join(OVERRIDES, 'src', 'cards', 'user', `${CARD_ID}.tsx`);
@@ -97,14 +97,14 @@ export const probeCadencePass: CardDef<Record<string, never>> = {
 
 /* ---------------- 项目 ---------------- */
 
-/** kind: 'card' 走图卡节点;'clip' 走时间轴视频片段 */
+/** kind: 'card' 走素材效果卡节点;'clip' 走时间轴视频片段 */
 const CASES = [
-  { name: '①图卡 rate 0.5 offset 0', kind: 'card', media: src30, rate: 0.5, offset: 0 },
-  { name: '①图卡 rate 0.5 offset 0.35', kind: 'card', media: src30, rate: 0.5, offset: 0.35 },
-  { name: '②图卡 rate 1 offset 0', kind: 'card', media: src30, rate: 1, offset: 0 },
+  { name: '①素材效果卡 rate 0.5 offset 0', kind: 'card', media: src30, rate: 0.5, offset: 0 },
+  { name: '①素材效果卡 rate 0.5 offset 0.35', kind: 'card', media: src30, rate: 0.5, offset: 0.35 },
+  { name: '②素材效果卡 rate 1 offset 0', kind: 'card', media: src30, rate: 1, offset: 0 },
   { name: '③时间轴片段 mediaOffset 0', kind: 'clip', media: src30, rate: 1, offset: 0 },
   { name: '③时间轴片段 mediaOffset 0.35', kind: 'clip', media: src30, rate: 1, offset: 0.35 },
-  { name: '④图卡 25 fps 素材 rate 1', kind: 'card', media: src25, rate: 1, offset: 0 },
+  { name: '④素材效果卡 25 fps 素材 rate 1', kind: 'card', media: src25, rate: 1, offset: 0 },
   { name: '④时间轴片段 25 fps 素材', kind: 'clip', media: src25, rate: 1, offset: 0 },
 ];
 

@@ -61,16 +61,16 @@ import { reviewedCard } from '../../src/kernel/frameMode.mjs';
  * 已锁的卡照旧按锁出一份(锁在浏览器指纹上时那一份同样带 bake / compositing);浏览器指纹与自己相同、
  * 或没给浏览器指纹时,切分与原来完全相同。
  *
- * # 用户卡、图卡也可以给浏览器(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条,2026-10-06 用户改语义)
+ * # 用户卡、素材效果卡也可以给浏览器(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条,2026-10-06 用户改语义)
  *
- * 任务的 `requires.userCards` 或 `requires.graphCards` 为真的卡(在线页面在舞台里转译、执行同步来的用户卡与图卡),
+ * 任务的 `requires.userCards` 或 `requires.graphCards` 为真的卡(在线页面在舞台里转译、执行同步来的用户卡与素材效果卡),
  * 调用方给 `browserCards`(页面自报在清单计划 `input.browser` 里的 `{ cardEnvFingerprint, userCards, graphCards, cardSources }`,
  * 经 `browserCardsOf` 规整)和 `browserCardEnvFingerprints`(文档服务确认「本项目有同一用户的在线浏览器节点带着这些
  * `cardEnvFingerprint`」)时,两边对得上才出浏览器那一份:
  *   - 页面声明了对应能力(`userCards` / `graphCards`),且这张卡 `requires.cardSources` 里每一项的代码身份都在 `browserCards.cardSources` 里;
  *   - 浏览器那一份的指纹和结果键用 `cardEnvFingerprint`(不是页面的 `envFingerprint`):结果键 = 内容键 × cardEnvFingerprint,
- *     所以同一台机器上的桌面节点与浏览器节点对同一张用户卡 / 图卡的结果键不同、不串。
- * 不给 `browserCards` 或对不上时,用户卡、图卡不出浏览器那一份,切分与原来相同。内置卡片的切分与结果键一个字不变。
+ *     所以同一台机器上的桌面节点与浏览器节点对同一张用户卡 / 素材效果卡的结果键不同、不串。
+ * 不给 `browserCards` 或对不上时,用户卡、素材效果卡不出浏览器那一份,切分与原来相同。内置卡片的切分与结果键一个字不变。
  *
  * # 单卡轨道流也给浏览器一份(`docs/plan/browser-stream-task.md` 第一处)
  *
@@ -154,7 +154,7 @@ export function planTaskOf({ projectId, projectRev, priority = 0, codeVersion, e
 }
 
 /**
- * 补渲计划任务(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档发现判重的层在素材服务里
+ * 预渲染重试计划任务(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档发现判重的层在素材服务里
  * 没有产物时发布,带片段清单(`input.clips`),标 `priority: 'backfill'`。认领它的节点把清单里的片段当重卡算键、
  * 切出细任务,细任务同样标 `backfill`(`splitPlan` 的 `lane`)。形状与校验在队列那边(`messages.mjs`)。
  */
@@ -313,7 +313,7 @@ export function withInnerCards(cardPlan, graph) {
 
 /**
  * 这张卡纯浏览器做不做得了(M7 契约 D1、D4):共享档、独立卡、light / medium、不用只在发布方本机的素材;
- * 内置卡片要没改过源码(`cardSources` 为空);用户卡、图卡(块 N)要本页声明能运行(`pageCards`)且这张卡要的代码身份本页都有;
+ * 内置卡片要没改过源码(`cardSources` 为空);用户卡、素材效果卡(块 N)要本页声明能运行(`pageCards`)且这张卡要的代码身份本页都有;
  * 另外不是画布卡(`canvasHeavy`:逐帧顺推与桌面不等价)、
  * (Lottie 素材卡不再排除:2026-10-14 渲染重构「癸二」量过,浏览器当场生成快照画成位图的体积、耗时和别的内置重卡同一量级,见 `docs/plan/render-standard.md` 的 Lottie 一节)、
  * 里面不超过一张卡且认得出是哪张(`cardIdsOf`、`cardIdsUnsure`;拿不准一律不给)、
@@ -330,13 +330,13 @@ function browserEligible({ tier, compositing, requires, weight, control, pageCar
     && control?.snapshotOversize !== true;
 }
 
-/** 这张卡的任务用不用在节点里执行用户卡、图卡的代码 */
+/** 这张卡的任务用不用在节点里执行用户卡、素材效果卡的代码 */
 const runsCardCode = requires => requires.userCards === true || requires.graphCards === true;
 
 /**
  * 卡片代码这一条(`browserEligible` 的一部分):
  *   内置卡片:`cardSources` 为空(没改过源码);
- *   用户卡、图卡:页面声明了对应能力、`cardSources` 非空(用户卡一定有代码身份,空了说明切分方没有身份可对)、
+ *   用户卡、素材效果卡:页面声明了对应能力、`cardSources` 非空(用户卡一定有代码身份,空了说明切分方没有身份可对)、
  *   每一项的代码身份页面都在 `pageCards.cardSources` 里(同一张卡的身份对不上就是页面手里是另一版,不给)。
  */
 function cardCodeAllowed(requires, pageCards) {
@@ -403,16 +403,16 @@ export function splitPlan({
   takeover = false,         // boolean | Set<lockKey> | (lockKey) => boolean
   localMedia = null,        // 发布方的 nodeId(M6c X2):给了,且 usesLocalMedia 判真的任务写进 requires.localMedia
   usesLocalMedia = () => true,   // (control) => boolean;流任务传 { clipId: topClipId, kind: 'stream' }
-  lane = 'normal',          // 'backfill':补渲计划任务切出的细任务,priority 一律标 'backfill'(c10a 契约第 17 节)
+  lane = 'normal',          // 'backfill':预渲染重试计划任务切出的细任务,priority 一律标 'backfill'(c10a 契约第 17 节)
   sparseStreams = false,    // 队列认不认稀疏流任务(`node.welcome.sparseStreams`):为真才切稀疏流任务,见文件头「稀疏流任务」
   browserFingerprints = [], // 本项目在线、同一用户的纯浏览器节点的指纹(M7 契约 D1):浏览器可做、没锁的卡另出这些指纹的一份
-  browserCards = null,      // 块 N:本页能运行的用户卡、图卡(`browserCardsOf(planTask.input.browser)` 的结果),见上文「用户卡、图卡也可以给浏览器」
-  browserCardEnvFingerprints = [], // 块 N:文档服务确认的在线浏览器节点的 cardEnvFingerprint;`browserCards.cardEnvFingerprint` 不在里面就不出用户卡、图卡的浏览器那一份
+  browserCards = null,      // 块 N:本页能运行的用户卡、素材效果卡(`browserCardsOf(planTask.input.browser)` 的结果),见上文「用户卡、素材效果卡也可以给浏览器」
+  browserCardEnvFingerprints = [], // 块 N:文档服务确认的在线浏览器节点的 cardEnvFingerprint;`browserCards.cardEnvFingerprint` 不在里面就不出用户卡、素材效果卡的浏览器那一份
   exportStreams = [],       // 导出专用的逐帧位图(只为导出的清单计划才有),见文件头「导出专用的逐帧位图」
   browser = null,           // 同上的另一种写法:`{ nodeId, envFingerprint }` 或它的数组(契约第 3.3 节的形状)。
                             // 注意:切分方不读 `planTask.input.browser`(页面自报的),浏览器指纹以文档服务给的为准
 }) {
-  /** 细任务的 priority:补渲档一律 'backfill';normal 档照旧按锚帧给整数名次 */
+  /** 细任务的 priority:预渲染重试档一律 'backfill';normal 档照旧按锚帧给整数名次 */
   const priorityOf = anchored => (lane === 'backfill' ? 'backfill' : anchored ? ANCHOR_PRIORITY : NORMAL_PRIORITY);
   const snapshotSpan = stepOf(constants.SNAPSHOT_SPAN ?? QUEUE_DEFAULTS.SNAPSHOT_SPAN);
   const streamSegments = stepOf(constants.STREAM_SEGMENTS ?? QUEUE_DEFAULTS.STREAM_SEGMENTS);
@@ -427,7 +427,7 @@ export function splitPlan({
   const browserSet = new Set([...(Array.isArray(browserFingerprints) ? browserFingerprints : []), ...browserAlias]
     .filter(fp => typeof fp === 'string' && fp !== ''));
   const browserFps = [...browserSet].filter(fp => fp !== envFingerprint);
-  /** 本页的用户卡、图卡运行情况:页面自报、且文档服务确认过有这样一台在线节点才算数 */
+  /** 本页的用户卡、素材效果卡运行情况:页面自报、且文档服务确认过有这样一台在线节点才算数 */
   const cardEnvSet = new Set((Array.isArray(browserCardEnvFingerprints) ? browserCardEnvFingerprints : []).filter(fp => typeof fp === 'string' && fp !== ''));
   const pageCards = browserCards && typeof browserCards.cardEnvFingerprint === 'string' && cardEnvSet.has(browserCards.cardEnvFingerprint) ? browserCards : null;
   const mediaOwner = typeof localMedia === 'string' && localMedia !== '' ? localMedia : null;
@@ -519,7 +519,7 @@ export function splitPlan({
     gateLocalMedia(requires, control);
     const weight = cardWeightOf(control);
     // M7 D1:这张卡出哪几份。没锁(或锁在自己的指纹上)、浏览器做得了时另出浏览器指纹的;锁在别处的照锁只出一份
-    // 用户卡、图卡(块 N)的浏览器那一份用页面的 cardEnvFingerprint;内置卡片照旧用浏览器的 envFingerprint
+    // 用户卡、素材效果卡(块 N)的浏览器那一份用页面的 cardEnvFingerprint;内置卡片照旧用浏览器的 envFingerprint
     const { eligible, copyFps, browserOf } = browserPlanOf({ tier, compositing, requires, weight, control });
     const fingerprints = eligible && lockOf(lockKey) == null && keying.fingerprint === envFingerprint ? [keying.fingerprint, ...copyFps] : [keying.fingerprint];
     const dual = fingerprints.length > 1;

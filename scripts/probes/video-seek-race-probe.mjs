@@ -145,7 +145,7 @@ try {
   await page.waitForFunction(() => window.fixedReady === true, { timeout: 60000 });
   await page.evaluate(() => window.ready);
   for (let i = 0; i < HOGS; i++) hogs.push(spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore', windowsHide: true }));
-  // ①图卡 rate 0.5 offset 0.35 与 rate 0.5 offset 0 两段的取帧时刻
+  // ①素材效果卡 rate 0.5 offset 0.35 与 rate 0.5 offset 0 两段的取帧时刻
   const times = [];
   for (const offset of [0.35, 0]) for (let n = 0; n < 60; n++) times.push(offset + 0.5 * n / 30);
   for (let loop = 0; loop < LOOPS; loop++) {

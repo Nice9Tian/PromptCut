@@ -6,7 +6,7 @@
  * - 画出来之前各层照兜底顺序显示(贴着预渲染小尺寸,没有就是占位符),画好的层替换上去;
  * - 时限 `LOW_MEMORY_SETTLE_MS`(可调的唯一一处),到时限还没画好的层维持占位符,直到下一次停下;
  * - 推帧卡按从入点追到当前帧算,同样受时限;
- * - 用户卡、图卡不追(这台设备渲染不了):有这一帧的预渲染小尺寸就照贴,没有才显示「电脑 + 离线」图标与
+ * - 用户卡、素材效果卡不追(这台设备渲染不了):有这一帧的预渲染小尺寸就照贴,没有才显示「电脑 + 离线」图标与
  *   「需要本地 PC 渲染辅助」(2026-09-29 用户改语义;显隐由舞台的占位调度管,不是常驻);
  * - 下一次播放回到只贴小尺寸。
  *
@@ -42,7 +42,7 @@ export interface LowMemorySettleResult {
   drawn: { clipId: string; ms: number }[];
   /** 到时限还没画好、维持占位符的层 */
   timedOut: string[];
-  /** 不追的层(用户卡、图卡:贴着预渲染小尺寸,没有才显示「需要本地 PC 渲染辅助」) */
+  /** 不追的层(用户卡、素材效果卡:贴着预渲染小尺寸,没有才显示「需要本地 PC 渲染辅助」) */
   skipped: string[];
 }
 
@@ -54,7 +54,7 @@ export function clampSettleTimeout(ms: unknown): number {
 }
 
 /**
- * 这张卡怎么追。`unsupported`(用户卡、图卡)不追;`direct` 帧模式或者播放头就在入点上的,一次提交就画好;
+ * 这张卡怎么追。`unsupported`(用户卡、素材效果卡)不追;`direct` 帧模式或者播放头就在入点上的,一次提交就画好;
  * 其余从入点逐帧推到当前帧。
  */
 export function settleKindOf(o: { unsupported: boolean; frameMode: string | undefined; mountFrame: number; targetFrame: number }): LowMemorySettleItem["kind"] {

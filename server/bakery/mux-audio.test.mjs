@@ -23,7 +23,7 @@ test("generated-only and video-backed card audio replace source entries without 
   assert.throws(() => buildFfmpegArgs("video.mp4", plan, "out.mp4", 5), /cannot render card audio/);
   // 只看节点:Node 侧读不到 TSX 定义,kind 是 H2 从定义抄进节点的那一份
   assert.equal(isCardAudioNode(project, "n1"), true);
-  assert.equal(isCardAudioNode(project, "n3"), false, "kind 不是 audio 的图卡节点不出声");
+  assert.equal(isCardAudioNode(project, "n3"), false, "kind 不是 audio 的素材效果卡节点不出声");
   assert.equal(isCardAudioNode(project, undefined), false);
 });
 
@@ -37,7 +37,7 @@ test("持久化合成 WAV 保留采样定位，缺文件或无音轨必须报错
   assert.throws(() => buildAudioPlan(project, ".", () => false, source), /合成音效文件缺失/);
   assert.throws(() => buildAudioPlan(project, ".", () => true, () => null), /合成音效文件缺失/);
   const plan = buildAudioPlan(project, ".", () => true, source);
-  assert.equal(plan.length, 1, "只播普通素材一次，不加入图卡音频");
+  assert.equal(plan.length, 1, "只播普通素材一次，不加入素材效果卡音频");
   assert.equal(plan[0].soundEffect, true);
   assert.equal(plan[0].start, clip.start);
   assert.equal(plan[0].offset, clip.mediaOffset);

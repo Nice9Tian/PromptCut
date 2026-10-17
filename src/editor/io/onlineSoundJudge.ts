@@ -2,7 +2,7 @@
  * 在线浏览器模式:一段声音在本页合成、还是用已有产物(`docs/semantics/product/platforms.md`「卡片声音的平台边界」;
  * 做法 `mechanism/rendering.md`「声音的轻重」)。
  *
- *   - 这台设备跑不了它的代码 → 不合成。内置卡在编辑页面里跑;同步来的用户卡与图卡只在隔离的声音线程里跑(`cardAudio.ts` 的
+ *   - 这台设备跑不了它的代码 → 不合成。内置卡在编辑页面里跑;同步来的用户卡与素材效果卡只在隔离的声音线程里跑(`cardAudio.ts` 的
  *     `cardAudioRoute`):本页没有那条线程、这张卡在线程里载入不成、要读素材的采样、与内置卡串在一起的,都算跑不了,说明里写原因;
  *   - 低内存档 → 不合成(它现有的规则:不活渲、没有成本记录的一律按重;本模块不改它);
  *   - 其余:测一次合成耗时(不出声,`src/audio/soundCost.ts`),判轻才在浏览器里合成,判重用已有产物。
@@ -88,7 +88,7 @@ export function soundTargetOf(project: Project, clip: TrackClip): SoundJudgeTarg
   // 身份:同步来的卡用替身的默认参数与内容库里的声音源码版本(`cardAudioIdentityHooks`),与持久产物的身份同一口径
   const identity = cardJson(cardAudioIdentity(project, clip, cardAudioIdentityHooks()));
   /*
-   * 怎么合成一块:内置卡在编辑页面里求值;同步来的用户卡与图卡交给隔离的声音宿主(`cardAudio.ts` 的 `cardAudioBlockRenderer`)。
+   * 怎么合成一块:内置卡在编辑页面里求值;同步来的用户卡与素材效果卡交给隔离的声音宿主(`cardAudio.ts` 的 `cardAudioBlockRenderer`)。
    * 测量走的也是这一条 —— 只拿采样块、当场丢掉,不建音频上下文,所以两种卡的测量都不出声。
    */
   let block: ((start: number, count: number) => Promise<Float32Array>) | null = null;

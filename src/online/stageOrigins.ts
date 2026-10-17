@@ -6,7 +6,7 @@
  *
  *       { "v": 1, "stageOrigins": ["https://s1.<主机>", "https://s2.<主机>"] }
  *
- *   同一份配置里另有托管方的总开关 `"onlineCardExec": false`(契约 `online-card-exec-contract.md`;缺省开):关掉就不在线执行用户卡与图卡,
+ *   同一份配置里另有托管方的总开关 `"onlineCardExec": false`(契约 `online-card-exec-contract.md`;缺省开):关掉就不在线执行用户卡与素材效果卡,
  *   整体退回原来的做法(`parseCardExecSwitch`)。
  *
  * - **跨源隔离**:所有舞台一律跨源隔离，撤掉退回同源单舞台的路（2026-10-14 用户定）。读不到配置、配置不对或握手失败不再退回同源单舞台，而是不挂载舞台；低内存档开单舞台 A，也必须从跨源舞台源加载。
@@ -72,7 +72,7 @@ export function parseStageOrigins(config: unknown): StageOrigins | null {
 }
 
 /**
- * 运行配置里的总开关「在线执行用户卡与图卡」(托管方可关):只有明写 `"onlineCardExec": false` 才是关,没写、写别的值、
+ * 运行配置里的总开关「在线执行用户卡与素材效果卡」(托管方可关):只有明写 `"onlineCardExec": false` 才是关,没写、写别的值、
  * 配置不是对象都按缺省(开)。读不到配置时没有舞台源,本来就是同源单舞台、不执行,所以「读不到」不用另判。
  */
 export function parseCardExecSwitch(config: unknown): boolean {
@@ -119,7 +119,7 @@ interface State {
   handshake: Handshake;
   /** 握手失败时的原因(诊断) */
   reason: string | null;
-  /** 托管方的总开关:在线执行用户卡与图卡(缺省开;运行配置里 `onlineCardExec: false` 才关) */
+  /** 托管方的总开关:在线执行用户卡与素材效果卡(缺省开;运行配置里 `onlineCardExec: false` 才关) */
   cardExec: boolean;
   /** 什么时候进的 `interim`(`Date.now()`);没进过为 null。换回双舞台之后仍留着(Preview 据此做换回那一下的画面衔接) */
   interimAt: number | null;

@@ -1,6 +1,6 @@
 /**
- * 这台设备的图形能力够不够跑图卡(`docs/plan/online-card-exec-contract.md` 4.3)。舞台第一次要挂图卡时判一次,
- * 结果随运行状态报给编辑页面。满足任一条就算不够,这台舞台本次会话的图卡全部退回原做法:
+ * 这台设备的图形能力够不够跑素材效果卡(`docs/plan/online-card-exec-contract.md` 4.3)。舞台第一次要挂素材效果卡时判一次,
+ * 结果随运行状态报给编辑页面。满足任一条就算不够,这台舞台本次会话的素材效果卡全部退回原做法:
  *
  *   - 拿不到 WebGL2 上下文,或带 `failIfMajorPerformanceCaveat: true` 时拿不到;
  *   - `UNMASKED_RENDERER_WEBGL` 是软件渲染(`swiftshader`、`llvmpipe`、`software`、`basic render`);

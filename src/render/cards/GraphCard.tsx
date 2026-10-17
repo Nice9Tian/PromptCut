@@ -14,7 +14,7 @@ import { noteGraphCardError, noteGraphCardOk } from "./cardTrouble";
 
 type Graph = Timeline["graph"];
 
-/** 只看节点:图里有这个节点、是图卡节点、不是音频卡 —— 那这个片段的画面由 GraphCard 出,
+/** 只看节点:图里有这个节点、是素材效果卡节点、不是音频卡 —— 那这个片段的画面由 GraphCard 出,
  * 原始素材层不再画(否则滤镜卡会叠成「原素材 + 滤镜」两层)。 */
 export function graphVisualNode(graph: Graph, nodeId?: string) {
   if (!nodeId) return false;
@@ -26,10 +26,10 @@ export function graphVisualNode(graph: Graph, nodeId?: string) {
 const MAX_DEPTH = 8;
 
 /**
- * 图卡的宿主组件:`card()` 在页面里跑(没有任何服务端往返),
+ * 素材效果卡的宿主组件:`card()` 在页面里跑(没有任何服务端往返),
  * 算出的 `CardGpuValue` 交 `CardSurface` 在 WebGL 上执行。
  *
- * 输入自己解:素材节点走浏览器的 `CardMediaSource`,上游图卡节点在一块离屏画布上
+ * 输入自己解:素材节点走浏览器的 `CardMediaSource`,上游素材效果卡节点在一块离屏画布上
  * 递归执行成位图。整条路上一个请求都不发(素材经 `/@media` 的那条照常)。
  */
 export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
@@ -51,17 +51,17 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
 
   const width = stage?.width ?? 1920;
   const height = stage?.height ?? 1080;
-  // 面板拖入 / add_clip 建的图卡片段没有 nodeId,图里是就地合成的那个渲染节点
+  // 面板拖入 / add_clip 建的素材效果卡片段没有 nodeId,图里是就地合成的那个渲染节点
   const nodeId = clip.nodeId ?? `@clip/${clip.id}/card`;
   const duration = clip.end - clip.start;
 
   const nodeAt = useCallback((id: string) => graph?.nodes.find((node) => node.id === id), [graph]);
 
-  /** 一个节点在 `time` 的画面,解成位图。素材节点走解码器,图卡节点递归执行。 */
+  /** 一个节点在 `time` 的画面,解成位图。素材节点走解码器,素材效果卡节点递归执行。 */
   const renderNode = useCallback(async (id: string, time: number, depth: number, signal?: AbortSignal): Promise<ImageBitmap> => {
-    if (depth > MAX_DEPTH) throw new Error("图卡输入嵌套过深");
+    if (depth > MAX_DEPTH) throw new Error("素材效果卡输入嵌套过深");
     const node = nodeAt(id);
-    if (!node) throw new Error(`图卡输入节点不存在：${id}`);
+    if (!node) throw new Error(`素材效果卡输入节点不存在：${id}`);
     const media = node.adapter === "media" ? (node.media as { url?: string } | undefined) : undefined;
     const key = media?.url
       ? `media:${media.url}:${time + (Number(node.offset) || 0)}`
@@ -83,9 +83,9 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
   }, [nodeAt, width, height]);
 
   const renderUpstream = useCallback(async (node: CardNode, time: number, depth: number, signal?: AbortSignal): Promise<ImageBitmap> => {
-    if (node.adapter !== "card") throw new Error(`图卡输入节点不是图卡：${node.id}`);
+    if (node.adapter !== "card") throw new Error(`素材效果卡输入节点不是素材效果卡：${node.id}`);
     const upstreamDef = getCard(node.cardId as string);
-    if (typeof upstreamDef?.card !== "function") throw new Error(`上游图卡的定义找不到：${node.cardId}`);
+    if (typeof upstreamDef?.card !== "function") throw new Error(`上游素材效果卡的定义找不到：${node.cardId}`);
     const upstreamParams = { ...upstreamDef.defaults, ...(node.params as Record<string, unknown>) };
     const sourceTime = time + (Number(node.timeOffset) || 0);
     const upstreamValue = await upstreamDef.card(sourcesOf(node, sourceTime, depth), sourceTime, upstreamParams,
@@ -107,7 +107,7 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
   }, [fps, width, height, duration, stage]);
 
   const resolveValue = useCallback(async (source: SourceValue | PixelsValue, requestedTime: number, depth: number, signal?: AbortSignal) => {
-    if (source.type !== "source") throw new Error("图卡不产生需要宿主下载的像素结果");
+    if (source.type !== "source") throw new Error("素材效果卡不产生需要宿主下载的像素结果");
     return renderNode(source.nodeId, requestedTime, depth, signal);
   }, [renderNode]);
 
@@ -142,18 +142,18 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
     if (!graph) return;
     const controller = new AbortController();
     ticket.current?.dispose();
-    const work = beginFrameWork(`图卡 ${nodeId} @ ${t}`); ticket.current = work;
+    const work = beginFrameWork(`素材效果卡 ${nodeId} @ ${t}`); ticket.current = work;
     setFailure("");
     const evaluate = (async () => {
       const node = nodeAt(nodeId);
-      if (!node) throw new Error(`图卡节点不存在：${nodeId}`);
-      if (typeof def.card !== "function") throw new Error(`${def.id} 不是视觉图卡`);
+      if (!node) throw new Error(`素材效果卡节点不存在：${nodeId}`);
+      if (typeof def.card !== "function") throw new Error(`${def.id} 不是视觉素材效果卡`);
       const sourceTime = t + (Number(node.timeOffset) || 0);
       return def.card(sourcesOf(node, sourceTime, 0), sourceTime, params, { fps, width, height, duration, stage });
     })();
     void evaluate
       .then((result) => { if (!controller.signal.aborted) setValue({ value: result, evaluatedTime: t, evaluatedGraph: graph, evaluatedNodeId: nodeId }); })
-      // 出事只记一笔(`cardTrouble.ts`):在线舞台据此把这张图卡退回原做法;没有订阅方的文档(桌面、导出)行为不变
+      // 出事只记一笔(`cardTrouble.ts`):在线舞台据此把这张素材效果卡退回原做法;没有订阅方的文档(桌面、导出)行为不变
       .catch((error) => { if (!controller.signal.aborted) { noteGraphCardError(def.id, error); work.fail(error); setFailure(error instanceof Error ? error.message : String(error)); } });
     return () => { controller.abort(); work.dispose(); };
     // `params` 每次 render 都是新对象,直接进依赖就是 effect → setValue → 重渲染 → 自激死循环
@@ -175,7 +175,7 @@ export function GraphCard({ def, clip, graph, fps, t, params, stage }: {
     };
   }, [graph]);
 
-  // 这一帧画出来了 / 上 GPU 或解输入时出错:各记一笔(`cardTrouble.ts`;在线舞台据此把解不了输入、连着出错的图卡退回原做法)
+  // 这一帧画出来了 / 上 GPU 或解输入时出错:各记一笔(`cardTrouble.ts`;在线舞台据此把解不了输入、连着出错的素材效果卡退回原做法)
   const ready = useCallback(() => { noteGraphCardOk(def.id); ticket.current?.ready(); }, [def.id]);
   const failed = useCallback((error: CardGpuError) => { noteGraphCardError(def.id, error); ticket.current?.fail(error); setFailure(error.message); }, [def.id]);
 

@@ -28,7 +28,7 @@ export async function cardSoundBlock(recipe: SoundEffectRecipe, range: GraphAudi
 export const notificationSoundCard: CardDef<NotificationCardParams> = {
   id: "sound-notification", name: "合成提示音", source: "native", kind: "audio", frameMode: "direct", inputs: {},
   description: "原生合成的短提示音，支持柔和叮声、正弦、三角音色与短音列；无需录音素材。",
-  useWhen: "给完成、揭晓、强调或转场加一个短提示音。先调现有参数；用生成音效入口保存 WAV 后作为独立音频段，避免与同一音频图卡重复播放。",
+  useWhen: "给完成、揭晓、强调或转场加一个短提示音。先调现有参数；用生成音效入口保存 WAV 后作为独立音频段，避免与同一音频素材效果卡重复播放。",
   tags: ["音频", "音效", "提示音", "叮", "合成", "notification"],
   defaults: { ...NOTIFICATION_SOUND_DEFAULTS, notes: "0", seed: 0 },
   controls: [

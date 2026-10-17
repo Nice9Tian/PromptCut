@@ -1,9 +1,9 @@
 /**
- * C10 其余第 3 节(低内存档的完整规则)接进分派、补渲与导出:用例 CP-01～CP-06。
+ * C10 其余第 3 节(低内存档的完整规则)接进分派、预渲染重试与导出:用例 CP-01～CP-06。
  *
  *   CP-01 planPipelines 的 lowMemoryLight:集合里的卡每个位置都判轻(不受预算挤出),其余(含没有身份的)每个位置都判重
  *   CP-02 planDispatch:低内存档的判定表按界限搜索的结果;搜索完成前全部判重、lowMemoryJudged 为 false;显示用的表一直全部判重
- *   CP-03 补渲只对判重又缺产物的层:判轻的卡不发
+ *   CP-03 预渲染重试只对判重又缺产物的层:判轻的卡不发
  *   CP-04 导出:低内存档只核对、只取判重卡的预渲染原尺寸,判轻的卡(层表里有也)本机渲
  *   CP-05 普通档不受影响:没开低内存档时判定表就是显示表,planPipelines 不给新选项时结果与原来逐字段相同
  *   CP-06 lowMemoryLight 与 allHeavy 同时给:allHeavy 优先(显示用)
@@ -70,7 +70,7 @@ test("CP-02 planDispatch:判定表按搜索结果;搜索完成前全部判重、
 
 const B = await import(srcUrl("editor/lowMemoryBackfill.ts"));
 
-test("CP-03 补渲只对判重又缺产物的层:判轻的卡不发;判重已有产物的不发", () => {
+test("CP-03 预渲染重试只对判重又缺产物的层:判轻的卡不发;判重已有产物的不发", () => {
   const clip = (id, extra = {}) => ({ id, cardId: `card-${id}`, start: 0, end: 4, params: {}, ...extra });
   const p = { tracks: [{ id: "t", clips: [clip("h1"), clip("h2"), clip("l1"), clip("l2"), clip("u", { cardId: "user-card" })] }] };
   // 用户卡 u 判重、没有产物:照样发(2026-09-29 起不再豁免,由桌面版等渲染节点渲)

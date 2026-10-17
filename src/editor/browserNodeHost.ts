@@ -938,7 +938,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
         if (outcome === "completed" || outcome === "dedup") { try { deps.onAlive?.(task.resultKey); } catch { /* 宿主坏了 */ } }
       },
       onFingerprint: () => setReady("ready"),
-      // 块 N:能执行用户卡与图卡时的登记(运行时版本、能力位、卡片代码身份),与文档服务回的 cardEnvFingerprint
+      // 块 N:能执行用户卡与素材效果卡时的登记(运行时版本、能力位、卡片代码身份),与文档服务回的 cardEnvFingerprint
       cardInfo: () => getNodeCardInfo(),
       onCardEnvFingerprint: (fp) => setNodeCardEnvFingerprint(fp),
       onRefused: (reason) => { fatal = `refused-${reason}`; lastError = `报到被拒:${reason}`; teardown(fatal); },
@@ -999,7 +999,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     try { pages.tick(); } catch (e) { lastError = String((e as Error)?.message ?? e); }
   };
   const timer = setInterval(loop, HOST_TICK_MS);
-  // 块 N:本页能运行哪些用户卡与图卡的登记(随注册表、闸门、图形能力更新)
+  // 块 N:本页能运行哪些用户卡与素材效果卡的登记(随注册表、闸门、图形能力更新)
   const offCardInfo = startNodeCardInfoLive();
   loop();
 

@@ -2,8 +2,8 @@
  * 声音线程里求一段采样(`docs/plan/online-card-exec-contract.md` 3.5)。纯逻辑:不碰 Worker 的消息、不碰网络,
  * 所以声音线程(`soundWorker.ts`)与单测用同一份。
  *
- * 同步来的用户卡与图卡的 `audio()` 只在这里执行(舞台起的专用后台线程里)。求值照桌面那一套:
- * `projectCardGraph` 把项目摊成图 → `evaluateCardAudio` 找节点、调定义的 `audio(sources, range, params)`,上游图卡递归。
+ * 同步来的用户卡与素材效果卡的 `audio()` 只在这里执行(舞台起的专用后台线程里)。求值照桌面那一套:
+ * `projectCardGraph` 把项目摊成图 → `evaluateCardAudio` 找节点、调定义的 `audio(sources, range, params)`,上游素材效果卡递归。
  *
  * 不做的(本期范围,见契约 3.5 与第 13 节第 4 条):
  *   - 读素材采样的输入(片段素材、素材节点):远程素材服务没有取采样块的路由,浏览器解码与桌面的 ffmpeg 不逐样本相同;
@@ -29,7 +29,7 @@ export const SOUND_NEEDS_MEDIA = "这张卡要读素材的声音采样,在线页
 
 interface GraphNode { id: string; adapter?: string; cardId?: string; inputs?: Record<string, unknown> }
 
-/** 这个节点连同上游:全是有定义的图卡节点才求得了;不行回原因 */
+/** 这个节点连同上游:全是有定义的素材效果卡节点才求得了;不行回原因 */
 export function soundBlocker(nodes: readonly GraphNode[], nodeId: string, getCard: (id: string) => CardDef<any> | undefined): string | null {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const seen = new Set<string>();

@@ -82,7 +82,7 @@ export function isolateClip(project, clipId, { preserveContext = false, capabili
   const clip = targetTrack.clips[clipIndex];
   const node = (project.cardNodes || []).find(node => node.id === clip.nodeId);
   // Unknown Chrome composition must keep its lower browser scene. Reviewed
-  // independent 图卡 still resolve hidden inputs through sourceProject.
+  // independent 素材效果卡 still resolve hidden inputs through sourceProject.
   const context = preserveContext && (node ? capabilities(clip.cardId)?.compositing !== 'independent' : !!clip.cardId);
   const ids = new Set(project.tracks.map(track => track.id));
   const tracks = project.tracks.flatMap((track, index) => {

@@ -1,9 +1,9 @@
 /**
- * 在线浏览器执行用户卡与图卡:合流接线与块 G(图卡在线执行)的纯逻辑(`docs/plan/online-card-exec-contract.md` 第 3.4、4.3、8 节)。
+ * 在线浏览器执行用户卡与素材效果卡:合流接线与块 G(素材效果卡在线执行)的纯逻辑(`docs/plan/online-card-exec-contract.md` 第 3.4、4.3、8 节)。
  * 跑:node --experimental-test-module-mocks --test src/online/cardRuntime/onlineCardsG.test.mjs
  *
  *   OCE-G-01 图形能力判定:拿不到 WebGL2、软件渲染、最大纹理小于画幅长边、丢过上下文各判各的;够就是 ok;面板细节
- *   OCE-G-02 图卡在哪份文档里能跑:缺省不能(编辑页面、同源单舞台、桌面仿在线);舞台写了「能跑图卡」之后才能;低内存档一律不能;
+ *   OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能(编辑页面、同源单舞台、桌面仿在线);舞台写了「能跑素材效果卡」之后才能;低内存档一律不能;
  *            出过事的卡(`setLocalCardExec` 的 blocked)在舞台里按运行不了处理;桌面运行环境恒不算
  *   OCE-G-03 出事登记:素材解不了一次就算 `media`;求值错连着两次才算 `runtime-error`,中间成功过清零;渲染错一次就算;换代清掉
  *   OCE-G-04 画面那一半的闸门(页面一侧):隔离就绪且出口由浏览器拦才执行画面;只靠脚本加固时本页仍「能执行」(声音),画面不执行并给出原因
@@ -55,10 +55,10 @@ const dom = (id, extra = {}) => ({ id, name: id, defaults: {}, controls: [], fra
 const graphDef = (id) => dom(id, { Component: undefined, card: () => ({}) });
 const local = (id) => H.unsupportedHere(id, R.getCard(id));
 
-test("OCE-G-02 图卡在哪份文档里能跑:缺省不能;舞台写了之后才能;低内存档不能;出过事的卡按运行不了;桌面恒不算", () => {
+test("OCE-G-02 素材效果卡在哪份文档里能跑:缺省不能;舞台写了之后才能;低内存档不能;出过事的卡按运行不了;桌面恒不算", () => {
   R.resetCards(); R.resetRuntimeCardsForTest();
   R.registerCards([dom("builtin")]);
-  R.setSyncedUserCards([{ id: "g-synced", name: "同步图卡" }, { id: "u-synced", name: "同步用户卡" }]);
+  R.setSyncedUserCards([{ id: "g-synced", name: "同步素材效果卡" }, { id: "u-synced", name: "同步用户卡" }]);
   H.setLocalOnlyLowMemory(false);
   H.setOnlineBrowserMode(true);
   try {
@@ -69,16 +69,16 @@ test("OCE-G-02 图卡在哪份文档里能跑:缺省不能;舞台写了之后才
     R.setCardRunStates([["g-synced", { state: "ready" }]]);
     assert.equal(local("g-synced"), false, "编辑页面:舞台说能运行就不算");
     R.setCardRunStates([]);
-    // 舞台:载入成功(运行时注册表里有定义)。图卡还要这份文档「能跑图卡」
+    // 舞台:载入成功(运行时注册表里有定义)。素材效果卡还要这份文档「能跑素材效果卡」
     R.setRuntimeCards([graphDef("g-synced"), dom("u-synced")]);
     assert.equal(R.graphCardsRunnableHere(), false);
     assert.equal(local("u-synced"), false, "用户卡:载入成功就能运行");
-    assert.equal(local("g-synced"), true, "图卡:这份文档还没说能跑图卡");
+    assert.equal(local("g-synced"), true, "素材效果卡:这份文档还没说能跑素材效果卡");
     const gen = R.cardsRegistryGen();
     assert.equal(R.setLocalCardExec({ graph: true }), true);
     assert.ok(R.cardsRegistryGen() > gen, "变了要让按代数记忆的地方重算");
     assert.equal(R.setLocalCardExec({ graph: true }), false, "没变不通知");
-    assert.equal(local("g-synced"), false, "能跑图卡的舞台:图卡能运行");
+    assert.equal(local("g-synced"), false, "能跑素材效果卡的舞台:素材效果卡能运行");
     H.setLocalOnlyLowMemory(true);
     assert.equal(local("g-synced"), true, "低内存档一律不能");
     assert.equal(local("u-synced"), true);
@@ -94,7 +94,7 @@ test("OCE-G-02 图卡在哪份文档里能跑:缺省不能;舞台写了之后才
     // 桌面运行环境:模式关着恒不算
     H.setOnlineBrowserMode(false);
     assert.equal(local("g-synced"), false);
-    // 直接问 needsLocalPc(桌面仿在线模式的调用方):图卡在没说「能跑图卡」的文档里照旧算
+    // 直接问 needsLocalPc(桌面仿在线模式的调用方):素材效果卡在没说「能跑素材效果卡」的文档里照旧算
     assert.equal(H.needsLocalPc("x", graphDef("x"), () => false), true);
     assert.equal(H.needsLocalPc("x", graphDef("x"), () => false, () => true, () => true), false);
   } finally {

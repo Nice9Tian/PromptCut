@@ -720,14 +720,14 @@ try {
     ...(phoneDiag ? { diag: phoneDiag } : {}), lowmem: state.lowmem };
   say('step2.done', out.steps.phone);
 
-  /* ---------------------------------------------------------------- 2c. 轻重判定与补渲(C10 其余第 3 节:共享成本记录加界限搜索) */
+  /* ---------------------------------------------------------------- 2c. 轻重判定与预渲染重试(C10 其余第 3 节:共享成本记录加界限搜索) */
   /*
    * C10 其余第 3 节取代 c10a 第 17 节的「全部按重卡」(契约 c10-contract.md 第 3 节、第 18 节第 8 条):
    * - 创建者桌面版测完卡、把成本记录转写进文档服务(钉死的重卡片段那两条记录没有单帧耗时,不转写);
    * - 手机打开项目时取本项目的记录做界限搜索:轻卡(chapter-bar)有记录、本机跑得动 → 判轻;重卡片段没有记录 → 判重;
-   * - 补渲只对判重又缺产物的层:重卡片段已有产物,轻卡判轻 —— 这一步不该发出任何补渲;
-   * - 判轻的卡播放时同样不活渲,没有产物就占位(以前这里断言「轻卡补渲来的小尺寸」,按新规则改成断言它不补渲、占位)。
-   * 补渲的整条路(发布、节点认领、backfill 排在 normal 之后、小尺寸回到手机)由第 3 步新放的卡覆盖:它还没有成本记录,按重卡。
+   * - 预渲染重试只对判重又缺产物的层:重卡片段已有产物,轻卡判轻 —— 这一步不该发出任何预渲染重试;
+   * - 判轻的卡播放时同样不活渲,没有产物就占位(以前这里断言「轻卡预渲染重试来的小尺寸」,按新规则改成断言它不预渲染重试、占位)。
+   * 预渲染重试的整条路(发布、节点认领、backfill 排在 normal 之后、小尺寸回到手机)由第 3 步新放的卡覆盖:它还没有成本记录,按重卡。
    */
   const t2c = Date.now();
   const search = await until('手机的界限搜索做完', () => P(phone, () => { const d = window.__pcLowMemSearch?.(); return d?.outcome ? d : null; }), 300_000, 500);
@@ -736,9 +736,9 @@ try {
   check(search && search.outcome.light.includes(lightKey), '轻卡(有记录、本机跑得动)判轻', search?.outcome ? { light: search.outcome.light.length, heavy: search.outcome.heavy.length, trace: search.outcome.trace } : null);
   check(search && search.judgedHeavyClips.includes(heavyClip) && !search.judgedHeavyClips.includes(state.lightClip), '重卡片段(没有单帧耗时记录)判重,轻卡不在判重的片段里', search ? { heavy: search.judgedHeavyClips } : null);
   check(search && search.outcome.measurements <= Math.ceil(Math.log2(search.outcome.order.length + 1)) + 4, '测量次数 ≤ ⌈log₂(n+1)⌉ + 4', search ? { measurements: search.outcome.measurements, n: search.outcome.order.length } : null);
-  await delay(5000); // 补渲每 3 秒核一次:给它两轮
+  await delay(5000); // 预渲染重试每 3 秒核一次:给它两轮
   const bfLog = await P(phone, () => window.__pcBackfill?.()?.log ?? []);
-  check(!bfLog.some((e) => e.clips.includes(state.lightClip) || e.clips.includes(heavyClip)), '判轻的轻卡、已有产物的重卡都不发补渲', bfLog.map((e) => ({ id: e.id.slice(0, 30), clips: e.clips.length })));
+  check(!bfLog.some((e) => e.clips.includes(state.lightClip) || e.clips.includes(heavyClip)), '判轻的轻卡、已有产物的重卡都不发预渲染重试', bfLog.map((e) => ({ id: e.id.slice(0, 30), clips: e.clips.length })));
   await P(phone, () => { const s = window.__pcStore; s.actions.seek(0.5); s.actions.play(); });
   /*
    * 低内存档的规则(不许动):播放中一律不活渲,判轻的卡也一样;有产物贴小尺寸,没有产物显示占位。
@@ -788,9 +788,9 @@ try {
   // L22:第 3 步的时刻分解。改完就开始采样(手机每秒一次、创建者的队列诊断每 2 秒一次),第 3 步末尾算各段时刻
   const tl3 = startStep3Timeline({ t0: t3, heavyClip, creatorSawAt: editAt });
   /*
-   * c10a 契约第 17 节(4):补渲排在本机判重的任务之后。改动让重卡重渲(本机判重的 normal 任务),
-   * 同时在手机上再放一张轻卡(缺产物 → 补渲);节点先做完 normal 的,空下来再做 backfill 的。
-   * C10 其余第 3 节起:这张新放的卡片段长度与第一张不同(卡片身份不同),手机打开时取到的成本记录里没有它 → 按重卡 → 缺产物就补渲。
+   * c10a 契约第 17 节(4):预渲染重试排在本机判重的任务之后。改动让重卡重渲(本机判重的 normal 任务),
+   * 同时在手机上再放一张轻卡(缺产物 → 预渲染重试);节点先做完 normal 的,空下来再做 backfill 的。
+   * C10 其余第 3 节起:这张新放的卡片段长度与第一张不同(卡片身份不同),手机打开时取到的成本记录里没有它 → 按重卡 → 缺产物就预渲染重试。
    */
   state.extraClip = await P(phone, (spec) => {
     const s = window.__pcStore;
@@ -810,7 +810,7 @@ try {
   /*
    * L22:「新的小尺寸到手机」按手机的就绪表判:层表换了新键、新键下已有带小尺寸的清单进了就绪表(页面据此贴图)。
    * 不再按「手机请求了以前没见过的 px/ 哈希」判:重卡改的 probeSalt 不影响画面,新键下的小位图与旧键逐字节相同、哈希相同,
-   * 手机缓存里已有,根本不会再请求;以前量到的「新 px」其实是同一步里新放的轻卡的补渲产物,排在全部普通任务之后。
+   * 手机缓存里已有,根本不会再请求;以前量到的「新 px」其实是同一步里新放的轻卡的预渲染重试产物,排在全部普通任务之后。
    * 旧量法的数仍记在 newPxMs。暂停着时低内存档把当前帧活渲出来(停下追一帧),舞台不贴小尺寸,所以「舞台换上」
    * 另在就绪之后放一小段播放来看(mountedWhilePlayingMs),只记录、不判。
    */
@@ -838,13 +838,13 @@ try {
   }
   const layer1 = await layer1P;
   check(layer1, '层表里重卡片段换了新的键、整段重渲完成', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12), why: layer1 ? undefined : state.layerWhy });
-  // 补渲排在后面:手机为新放的轻卡发的补渲做完,核对节点的认领先后
-  const bf3 = state.extraClip ? await until('手机为新放的轻卡发出补渲任务', () => P(phone, (spec) => {
+  // 预渲染重试排在后面:手机为新放的轻卡发的预渲染重试做完,核对节点的认领先后
+  const bf3 = state.extraClip ? await until('手机为新放的轻卡发出预渲染重试任务', () => P(phone, (spec) => {
     const d = window.__pcBackfill?.();
     const hit = [...(d?.log ?? [])].reverse().find((e) => !e.error && e.at >= spec.at && e.clips.includes(spec.id));
     return hit ? { id: hit.id, clips: hit.clips } : null;
   }, { id: state.extraClip, at: editAt - 1000 }), 120_000, 500) : null;
-  const order = bf3 ? await until('新放的轻卡的补渲细任务做完', async () => {
+  const order = bf3 ? await until('新放的轻卡的预渲染重试细任务做完', async () => {
     const q = await diag();
     const derived = q?.plans?.[bf3.id];
     if (!Array.isArray(derived) || !derived.length) return null;
@@ -852,25 +852,25 @@ try {
     const claims = (q.claims ?? []).filter((c) => c.at >= editAt && !c.id.startsWith('plan:'));
     const normal = claims.map((c, i) => [c, i]).filter(([c]) => c.priority !== 'backfill').map(([, i]) => i);
     const backfill = claims.map((c, i) => [c, i]).filter(([c]) => c.priority === 'backfill').map(([, i]) => i);
-    // 补渲切出的细任务里,认领时是 normal 档的(同一个结果键已有创建方的 normal 任务:不另起、按 normal 做)
+    // 预渲染重试切出的细任务里,认领时是 normal 档的(同一个结果键已有创建方的 normal 任务:不另起、按 normal 做)
     const derivedClaims = (q.claims ?? []).filter((c) => derived.includes(c.id));
     // 创建方这一版 normal 计划的发布时刻(同一个预渲染进程记的,与认领时刻可比)
     const pubs = (q.published ?? []).filter((p) => p.at >= editAt - 1000).map((p) => p.at);
     const normalPublishedAt = pubs.length ? Math.min(...pubs) : null;
     const lastNormalIdx = normal.length ? Math.max(...normal) : null;
-    // 「抢先」的补渲认领:排在最后一个 normal 之前的 backfill。合乎规则的只有一种——认领时 normal 那一版计划还没发布
+    // 「抢先」的预渲染重试认领:排在最后一个 normal 之前的 backfill。合乎规则的只有一种——认领时 normal 那一版计划还没发布
     const early = backfill.filter((i) => lastNormalIdx !== null && i < lastNormalIdx).map((i) => ({ i, afterPublishMs: normalPublishedAt === null ? null : claims[i].at - normalPublishedAt }));
     return { claims: claims.length, normal: normal.length, backfill: backfill.length, lastNormal: lastNormalIdx, firstBackfill: backfill.length ? Math.min(...backfill) : null,
       seq: claims.map((c) => (c.priority === 'backfill' ? 'B' : 'N')).join(''), derived: derived.length, derivedNormal: derivedClaims.filter((c) => c.priority !== 'backfill').length,
       normalPublishedMs: normalPublishedAt === null ? null : normalPublishedAt - editAt, early };
   }, 900_000, 2000) : null;
   /*
-   * 两种结果都合乎「补渲排在后面」(mechanism/document-service.md「优先级」):
-   * - 补渲的细任务是新键:标 backfill,节点先做完 normal 再做它们;
+   * 两种结果都合乎「预渲染重试排在后面」(mechanism/document-service.md「优先级」):
+   * - 预渲染重试的细任务是新键:标 backfill,节点先做完 normal 再做它们;
    * - 创建方这一版的 normal 计划也切到了新放的卡(它在创建方那边还没测、按声明判重),细任务同键:不另起、按 normal 做,
    *   一张 backfill 都不出现(c10-cost 第 2 轮实测 `NNNNNNN`,第 1 轮 `NNNNNNNNBB`,取决于两边谁先发布)。
-   * 第三种(完整验收实测 `BNNNNBB`、`BNNNNNNNNNNB`,main 上同样):手机的补渲计划比创建方的 normal 计划先发布(手机约 1 秒、
-   * 创建方约 2 秒),节点那时手里没有 normal 的活,按「先认 normal,没有了才认 backfill」认下了一个补渲细任务——合乎规则,
+   * 第三种(完整验收实测 `BNNNNBB`、`BNNNNNNNNNNB`,main 上同样):手机的预渲染重试计划比创建方的 normal 计划先发布(手机约 1 秒、
+   * 创建方约 2 秒),节点那时手里没有 normal 的活,按「先认 normal,没有了才认 backfill」认下了一个预渲染重试细任务——合乎规则,
    * 节点不抢占已经在做的任务。所以排在 normal 前面的 backfill 认领,只在「认领时 normal 计划还没发布」时才算合规:
    * 认领时刻不晚于 normal 计划的发布时刻加 EARLY_SLACK_MS(发布到节点看得见要过一趟文档服务)。normal 发布之后、
    * normal 还没认完之前出现的 backfill 认领仍然判不过。
@@ -878,12 +878,12 @@ try {
   const EARLY_SLACK_MS = 1000;
   const earlyOk = !!order && order.early.every((e) => e.afterPublishMs !== null && e.afterPublishMs <= EARLY_SLACK_MS);
   const orderOk = !!order && order.normal > 0 && (order.backfill > 0 ? earlyOk : order.derivedNormal > 0);
-  check(orderOk, '补渲细任务排在本机判重的任务之后(normal 发布之后节点先做完 normal、再做 backfill;normal 发布之前已认下的补渲不算;同键已有 normal 任务时按 normal 做)', order);
+  check(orderOk, '预渲染重试细任务排在本机判重的任务之后(normal 发布之后节点先做完 normal、再做 backfill;normal 发布之前已认下的预渲染重试不算;同键已有 normal 任务时按 normal 做)', order);
   const extraSmall = state.extraClip ? await until('新放的轻卡的小尺寸回到手机', () => P(phone, (id) => {
     const l = (window.__pcOnlineSnapshots?.()?.layers ?? []).find((x) => x.clipId === id);
     return l && l.ready > 0 ? { ready: l.ready } : null;
   }, state.extraClip), 300_000, 1000) : null;
-  check(extraSmall, '新放的轻卡的补渲小尺寸回到手机', extraSmall);
+  check(extraSmall, '新放的轻卡的预渲染重试小尺寸回到手机', extraSmall);
   state.order = order;
   await shot(phone, '3-phone-after-edit');
   const timeline = await tl3.finish({ layer1, pxBefore, extraClip: state.extraClip, fullRerenderAt: layer1At });
@@ -916,7 +916,7 @@ try {
   await waitPlanSettled('改后重渲', new Set(settled?.plans ?? []));
   const exportMark = phone.assets.length;
   let exported = null;
-  // 补渲进层表的轻卡也按预渲染原尺寸导出,改动之后要等它们补渲完,多给几轮
+  // 预渲染重试进层表的轻卡也按预渲染原尺寸导出,改动之后要等它们预渲染重试完,多给几轮
   for (let attempt = 0; attempt < 60 && !exported?.result && Date.now() < deadline; attempt++) {
     exported = await P(phone, async (frames) => window.__pcIo.exportVideoBrowser({ maxFrames: frames, originals: true }), EXPORT_SECONDS * FPS);
     if (!exported?.result) { say('export.retry', { attempt, waits: exported?.waits?.slice(0, 2), error: exported?.error }); await delay(15_000); }

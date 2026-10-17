@@ -90,7 +90,7 @@ test("CAU-EV-01 事件折成消息,从头折与边收边折相同", () => {
   assert.equal(applyCloudEvent(all, { type: "future-thing", runId: "r1" }), all);
 });
 
-test("CAU-EV-01b 两轮、补渲进展、思考片段", () => {
+test("CAU-EV-01b 两轮、预渲染重试进展、思考片段", () => {
   const evs = [
     ...run1,
     { type: "user", seq: 10, runId: "r2", prompt: "再来" },
@@ -107,7 +107,7 @@ test("CAU-EV-01b 两轮、补渲进展、思考片段", () => {
   assert.deepEqual(a2.statuses, ["已把 2 个片段交给云端渲染", "云端渲染中:1/2", "云端渲染失败:渲染节点不可用"]);
 });
 
-test("CAU-EV-03 补渲进展另记在消息上(气泡末尾常驻一行),失败的不只藏在状态行里", () => {
+test("CAU-EV-03 预渲染重试进展另记在消息上(气泡末尾常驻一行),失败的不只藏在状态行里", () => {
   const base = [{ type: "user", seq: 1, runId: "r", prompt: "x" }, { type: "end", seq: 2, runId: "r", state: "idle" }];
   const done = applyCloudEvents([], [...base, { type: "render", seq: 3, state: "published", clips: ["a"] }, { type: "render", seq: 4, state: "done", clips: ["a"] }]);
   assert.deepEqual(done[1].cloudRender, { state: "done", text: "云端渲染完成" });

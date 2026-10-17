@@ -348,7 +348,7 @@ export interface StageRpcApi {
   /** M7:停掉正在推的那一帧(帧边界停;在飞的 `bakeFrame` 回 `cancelled`),清掉顺推的接续点 */
   bakeCancel(): Promise<{ ok: true }>;
   /**
-   * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 2、8 节):编辑页面把转译好的包(全量)发给舞台。
+   * 在线执行同步来的用户卡与素材效果卡(`docs/plan/online-card-exec-contract.md` 第 2、8 节):编辑页面把转译好的包(全量)发给舞台。
    * 包里只有转译结果(`src/online/cardRuntime/protocol.ts` 的 `CardBundle`),**不带任何凭证或票据**。舞台先记下,
    * 自己的执行闸门开着才执行(`online/isolation/execGate.ts`;画面不另要求出口拦截),闸门晚开就到时再执行;载入结果经
    * `card-states` 事件报回。`opts.sound`:这一台同时起声音线程(舞台实例 B;线程跟实例走,不跟角色走),结果经 `sound-state` 事件报回。
@@ -356,7 +356,7 @@ export interface StageRpcApi {
    */
   loadUserCards(bundles: unknown[], opts?: { sound?: boolean }): Promise<LoadUserCardsReply>;
   /**
-   * 同步来的用户卡与图卡的声音(契约 3.5):在这一台舞台起的声音线程里求一块采样。请求的形状见
+   * 同步来的用户卡与素材效果卡的声音(契约 3.5):在这一台舞台起的声音线程里求一块采样。请求的形状见
    * `src/online/cardRuntime/stageSound.ts` 的 `StageSoundRequest`。没有声音线程(没起、闸门关着)就抛错。
    */
   synthCardAudio(request: StageSoundRpcRequest): Promise<Float32Array>;
@@ -377,7 +377,7 @@ export interface StageSoundRpcRequest {
   sampleRate: number;
 }
 
-/** 这一台舞台的图形能力(契约 4.3):`ok` 能跑图卡;其余是不够的原因;`unknown` = 还没判(还没挂过图卡) */
+/** 这一台舞台的图形能力(契约 4.3):`ok` 能跑素材效果卡;其余是不够的原因;`unknown` = 还没判(还没挂过素材效果卡) */
 export type StageGraphCapability = "unknown" | "ok" | "no-webgl2" | "software" | "texture" | "context-lost";
 
 export type StageEvent =
@@ -407,7 +407,7 @@ export type StageEvent =
     small?: { hash: string; bytes: number; webp: ArrayBuffer } | null;
     pixels?: { rect: BakePixelRect; bitmap: ImageBitmap } | null }
   /**
-   * 在线执行用户卡与图卡:这一台舞台里每张同步卡的运行状态(整份;卡片 id → 状态,契约第 8 节),连同这一台的图形能力
+   * 在线执行用户卡与素材效果卡:这一台舞台里每张同步卡的运行状态(整份;卡片 id → 状态,契约第 8 节),连同这一台的图形能力
    * 与「画面那一半在这一台执行不执行」。两台都发(不分角色);父页当不可信输入收(`online/stageMessageGuard.ts`)。
    */
   | { type: "card-states"; states: [string, CardRunState][]; graph: StageGraphCapability; visual: boolean }
@@ -523,7 +523,7 @@ export function isShortStageUpdate(method: string, args: unknown[]): boolean {
  * 父页侧:给一个舞台 iframe 建一个 RPC 客户端。
  * `targetOrigin` 现在是 `location.origin`(同源);第 4 步 E1 跨源时传舞台端口的 origin。
  *
- * `opts.untrusted`(在线的跨源舞台,契约 `online-card-exec-contract.md` 第 3.2 节):舞台里会执行用户卡与图卡,它发来的一切当不可信输入 ——
+ * `opts.untrusted`(在线的跨源舞台,契约 `online-card-exec-contract.md` 第 3.2 节):舞台里会执行用户卡与素材效果卡,它发来的一切当不可信输入 ——
  * 只认 `event.origin` 等于 `targetOrigin` 的消息;事件与回包按形状校验、数字钳到合理范围(`online/stageMessageGuard.ts`;
  * `opts.maxSec` 给了就把事件里的时刻钳到它以内,一般是项目时长),
  * 不合形状的事件丢弃、回包按失败回绝。不给(桌面运行环境、同源单舞台)照旧,一个字节不变。
@@ -708,7 +708,7 @@ export interface StageCardsMessage {
  * `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据)。
  *
  * 隔离的跨源舞台(契约 `online-card-exec-contract.md` 第 4.1 节):`remote.base` 是舞台自己源上的 `/media-s/<sid>`、`remote.ticket` 恒为 null
- * (票据由编辑器页交给舞台源的服务端换成 HttpOnly cookie,不进舞台的脚本);`cardExec` 为真 = 父页点头,这一台可以执行用户卡与图卡
+ * (票据由编辑器页交给舞台源的服务端换成 HttpOnly cookie,不进舞台的脚本);`cardExec` 为真 = 父页点头,这一台可以执行用户卡与素材效果卡
  * (舞台自己还要核自检与「本文档没见过票据」,`online/isolation/execGate.ts`)。旧办法(同源单舞台、低内存档、没隔离的舞台)照旧带票据、不带 `cardExec`。
  */
 export interface StageMediaPolicy {

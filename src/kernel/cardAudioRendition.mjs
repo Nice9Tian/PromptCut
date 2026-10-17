@@ -1,6 +1,6 @@
 import { cardJson } from './cardGraph.mjs';
 
-/** 声画一体卡的声音属于原片段，不能当普通素材分离。纯音频图卡不是声画卡。 */
+/** 声画一体卡的声音属于原片段，不能当普通素材分离。纯音频素材效果卡不是声画卡。 */
 export const isAudiovisualCard = def => !!def && typeof def.audio === 'function' &&
   (typeof def.Component === 'function' || typeof def.Component === 'object' && def.Component !== null || typeof def.card === 'function');
 export function assertAudiovisualCardKind(def) {

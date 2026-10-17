@@ -153,7 +153,7 @@ export interface GlWorkerDiag {
 declare module "../../kernel/types" {
   interface CardDef<P = Record<string, unknown>> {
     /**
-     * canvas 卡的可序列化契约(R9 M1)。**不用顶层 `kind`**:那个名字被图卡的类别占了。
+     * canvas 卡的可序列化契约(R9 M1)。**不用顶层 `kind`**:那个名字被素材效果卡的类别占了。
      * 有这个字段的卡就是 canvas 卡:`Stage` 在包裹层里多渲一个 `[data-pc-gl-plane]`(`dom2d` 除外),
      * 卡的 `Component` 不再自己渲 `<canvas>`;函数的那一半在同目录的 `<id>.gl.ts`。
      */

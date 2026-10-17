@@ -1,5 +1,5 @@
 /**
- * 音频图卡的输入取样 —— `sources[name].block(start, count)` 的实现,以及一个节点的
+ * 音频素材效果卡的输入取样 —— `sources[name].block(start, count)` 的实现,以及一个节点的
  * `audio()` 求值。视觉那条路(`at()` / `pixels()`)由 `GraphCard.tsx` 自己给,这里只管声音。
  *
  * ## 导出的接口
@@ -15,7 +15,7 @@
  *     `cardNodes` 里没有节点,得回片段上取 `mediaId`(→ 内容哈希)和 `mediaOffset`。
  *   - `getCard(id)` —— 卡片注册表(`src/kernel/registry`)。
  *   - `sampleRate` —— 本次求值的采样率(48000)。
- * - `ref: AudioSourceRef` —— **解析过的**输入:`{ nodeId }`(图卡节点)或 `{ clipId }`
+ * - `ref: AudioSourceRef` —— **解析过的**输入:`{ nodeId }`(素材效果卡节点)或 `{ clipId }`
  *   (素材片段),都可以带边上的 `offset`(秒)/ `rate`(播放速率)。
  * - 返回 **交错**(frame-major)的 `Float32Array`,长度 = `count × 声道数`,和
  *   `cardAudio.ts` 的 `wavOf` 同一口径。
@@ -110,9 +110,9 @@ async function mediaBlock(hash: string, position: number, count: number, sampleR
   }
   /*
    * 在线浏览器模式:`/@media/<hash>/pcm` 是编辑器进程(ffmpeg 裁采样)的接口,远程素材服务没有这一路;
-   * 图卡在这台设备上本来就渲染不了(常驻「需要本地 PC 渲染辅助」,C10 契约第 9 节),这里不发请求,当场失败。
+   * 素材效果卡在这台设备上本来就渲染不了(常驻「需要本地 PC 渲染辅助」,C10 契约第 9 节),这里不发请求,当场失败。
    */
-  if (onlinePage()) fail("在线浏览器模式不取素材的采样块(图卡需要本地 PC 渲染辅助)");
+  if (onlinePage()) fail("在线浏览器模式不取素材的采样块(素材效果卡需要本地 PC 渲染辅助)");
   const pending = (async () => {
     const url = `/@media/${hash}/pcm?start=${position}&count=${count}&sampleRate=${sampleRate}&ch=${MEDIA_PCM_CHANNELS}`;
     const response = await fetch(url);
@@ -135,7 +135,7 @@ async function mediaBlock(hash: string, position: number, count: number, sampleR
 function mediaOf(ctx: AudioSourceContext, clip: TrackClip): MediaAsset {
   const media = clip.mediaId ? (ctx.project.media ?? []).find((m) => m.id === clip.mediaId) : undefined;
   if (!media) fail(`clip ${clip.id} has no media input`);
-  if (!media!.hash) fail(`素材「${media!.name || media!.id}」还没有内容哈希,重新导入一次再用它喂音频图卡`);
+  if (!media!.hash) fail(`素材「${media!.name || media!.id}」还没有内容哈希,重新导入一次再用它喂音频素材效果卡`);
   return media!;
 }
 
@@ -162,7 +162,7 @@ export function paramsOfAudioNode(ctx: AudioSourceContext, node: CardNode): Reco
 export async function blockOf(ctx: AudioSourceContext, ref: AudioSourceRef, start: number, count: number): Promise<Float32Array> {
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count) || count < 1) fail("audio block range must be whole samples");
   const rate = ref.rate ?? 1;
-  if (rate !== 1) fail("音频图卡输入边上的播放速率第一版不支持(rate ≠ 1)");
+  if (rate !== 1) fail("音频素材效果卡输入边上的播放速率第一版不支持(rate ≠ 1)");
   const edge = Math.round((ref.offset ?? 0) * ctx.sampleRate);
   if (ref.clipId !== undefined) {
     const clip = clipOf(ctx.project, ref.clipId);
@@ -181,7 +181,7 @@ export async function blockOf(ctx: AudioSourceContext, ref: AudioSourceRef, star
     const position = start + edge + Math.round((Number(node!.offset) || 0) * ctx.sampleRate);
     return mediaBlock(media!.hash!.toLowerCase(), position, count, ctx.sampleRate);
   }
-  // 图卡节点:递归调它的 audio()
+  // 素材效果卡节点:递归调它的 audio()
   return evaluateCardAudio(ctx, ref.nodeId!, { start: start + edge, count, sampleRate: ctx.sampleRate });
 }
 
@@ -192,8 +192,8 @@ export function audioSourcesOf(ctx: AudioSourceContext, node: CardNode): Record<
     const ref = resolveAudioRef(ctx, input);
     out[name] = {
       nodeId: ref.nodeId ?? `@clip/${ref.clipId}/source`,
-      at() { return fail("音频图卡的 sources 只支持 block(),没有画面"); },
-      pixels() { return Promise.reject(new Error("Card audio: 音频图卡的 sources 只支持 block(),没有画面")); },
+      at() { return fail("音频素材效果卡的 sources 只支持 block(),没有画面"); },
+      pixels() { return Promise.reject(new Error("Card audio: 音频素材效果卡的 sources 只支持 block(),没有画面")); },
       block: (start: number, count: number) => blockOf(ctx, ref, start, count),
     };
   }

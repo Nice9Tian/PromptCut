@@ -569,7 +569,7 @@ test('CA-REVOKE-02a / CA-GRANT-03 成员被移出名单（成员离线）：连�
   // 就算有一张按新代数签的委托，名单也拦
   const resigned = signDelegation(r.env.store.peek(r.proj.projectId), { u: r.bob.userId, aud: 'agent', acc: 'rw', cid: 'conv-1' }, r.env.clock.now()).ticket;
   assert.equal(await swapReason(r.control, r.proj.projectId, resigned), 'not-listed');
-  assert.equal(await outcome(r.pub, { type: 'publisher.hello', publisherId: 'agent:pub' }, 'publisher.welcome'), 'publisher.welcome', '补渲的发布连接照常（改动已经在项目里了）');
+  assert.equal(await outcome(r.pub, { type: 'publisher.hello', publisherId: 'agent:pub' }, 'publisher.welcome'), 'publisher.welcome', '预渲染重试的发布连接照常（改动已经在项目里了）');
   // 渲染服务的连接同理：改名单不关它（它不是成员）
   const render = await openControl(r.env, r.env.keys.render);
   const rt = await requestServiceTicket(render, r.proj.projectId);
@@ -647,7 +647,7 @@ test('CA-RENDER-04 只用来发布的连接：能发带片段清单的计划；�
   const published = await ask(pub, { type: 'task.publish', tasks: [plan] }, 'task.published');
   assert.equal(published.type, 'task.published', JSON.stringify(published));
   const backfill = backfillPlanTaskOf({ projectId: DOC, projectRev: 1, clips: ['clip-a'] });
-  assert.equal(await outcome(pub, { type: 'task.publish', tasks: [backfill] }, 'task.published'), 'task.published', '补渲档的清单计划也行');
+  assert.equal(await outcome(pub, { type: 'task.publish', tasks: [backfill] }, 'task.published'), 'task.published', '预渲染重试档的清单计划也行');
   const gateOk = await ask(pub, { type: 'task.unsubscribe', ids: [plan.id] });
   assert.notEqual(gateOk.reason, 'forbidden', `撤回自己发的：${JSON.stringify(gateOk)}`);
 

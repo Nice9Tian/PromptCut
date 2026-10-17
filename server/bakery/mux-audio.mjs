@@ -65,7 +65,7 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
     out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: missingMaterial ? 0 : e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx,
       ...(missingMaterial ? { missingMaterial: true } : null), ...(soundEffect ? { soundEffect: true } : {}) });
   }
-  // 音频图卡节点 have no ffmpeg-readable source file.  Keep them in the one common
+  // 音频素材效果卡节点 have no ffmpeg-readable source file.  Keep them in the one common
   // plan so Chrome's OfflineAudioContext can request their true WAV blocks.  A caller that
   // explicitly selects the old --audio ffmpeg path must reject them, never silently omit them.
   for (const track of project.tracks ?? []) {

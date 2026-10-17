@@ -4,7 +4,7 @@
  *   推送侧:快照清单(C6.2 的 `SnapshotResult`)另带这一段的 PNG 缓存帧 `pngs: [{ key, fps, frames: [[帧, 哈希, 字节数]] }]`,
  *          块推进素材服务的 `px`;
  *   拉取侧:`applyResult` 落地快照时,清单带着 `pngs` 就一并取回,原样写进本机 PNG 缓存
- *          (`CardFrameCache` 的 `controls/<key>/mov/frames/`);没有 `pngs` 的保持原样(legacy 通道照旧画占位),不在本机补渲。
+ *          (`CardFrameCache` 的 `controls/<key>/mov/frames/`);没有 `pngs` 的保持原样(legacy 通道照旧画占位),不在本机预渲染重试。
  *
  * 两个临时帧库 A(远端,产)、B(本机,取),各一个真的 `FramePipeline`(`bakery/index.mjs` 换成假的,不起 Chrome);
  * 一台真 HTTP 的素材服务(memory,端口 0)。A、B 的 entry 用真的 `CardFrameCache`,PNG 用 pngjs 现造。
@@ -183,7 +183,7 @@ test('X7-2 拉取侧:applyResult 把 PNG 原样写进本机 PNG 缓存,legacy �
   });
 });
 
-test('X7-3 清单里没有 pngs:保持原样(缺料、占位),不下载任何像素块,也不在本机补渲', async () => {
+test('X7-3 清单里没有 pngs:保持原样(缺料、占位),不下载任何像素块,也不在本机预渲染重试', async () => {
   await withLibs(async (make) => {
     const A = await make();
     const B = await make();

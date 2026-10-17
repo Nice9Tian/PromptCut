@@ -15,7 +15,7 @@
  *     u   仓库用户卡 `mu-animated-shiny-text`(有层)
  *     s1  内容库同步来的用户卡 `probe-synced-card`(有层)
  *     s2  同一张同步卡(先没有层,后补)
- *     s3  同一张同步卡(一直没有层;低内存档核补渲用)
+ *     s3  同一张同步卡(一直没有层;低内存档核预渲染重试用)
  *     x   未知 id `probe-unknown-card`
  *   4～8 秒(核图标与沙漏在屏幕上的大小):
  *     s4、s5  同步卡,两个 320×180 的小框左右挨着(没有层):图标只留图标、各在自己的框里、不相交
@@ -37,7 +37,7 @@
  *     - 另一成员(乙)页面一打开就每 100 ms 采样一次,直到快照贴上:有层的 u、s1 任何一次采样都没有图标、没有徽标;
  *       没层的 s2、s3 先可以是沙漏,层表取到之后才是图标加徽标;
  *     - 甲、乙两页的测量(常驻探针)从头到尾没测过同步卡片段,测量门按「卡片源码同步完」开;
- *     - 未知卡片 ouc-x(两边都没有定义)从头到尾没被测过,不在清单计划里;低内存档的补渲清单也没有它;
+ *     - 未知卡片 ouc-x(两边都没有定义)从头到尾没被测过,不在清单计划里;低内存档的预渲染重试清单也没有它;
  *     - 乙在页面里点「首页」、加入另一个带同步卡的项目(丁先摆好片段):测量门按新连接等卡片源码同步完,新项目的同步卡没被测过。
  *   低内存档(仿手机):`__pcBackfill()` 在等的片段含 s3;舞台上 u、s1 贴小尺寸(`px/` 请求 > 0),s3 是图标。
  * 不打印口令;结果最后一行是一行 JSON(`ok`、`fails`、各项数字),截图在 --out。
@@ -695,14 +695,14 @@ try {
   await join(P, '丙');
   const lm = {};
   lm.diag = await P.evaluate(() => ({ lowMemory: !!document.querySelector('[data-pc-low-memory]') || null, stages: [...document.querySelectorAll('iframe')].filter((f) => /[?&]stage=1/.test(f.src)).length }));
-  lm.backfill = await until('低内存档:补渲在等的片段含 s3', async () => {
+  lm.backfill = await until('低内存档:预渲染重试在等的片段含 s3', async () => {
     const d = await P.evaluate(() => window.__pcBackfill?.() ?? null);
     const waiting = new Set([...(d?.waiting ?? []).map((w) => w.clip), ...(d?.log ?? []).flatMap((e) => e.clips ?? [])]);
     return waiting.has(ID.s3) ? { waiting: [...waiting], log: d.log.slice(-3) } : null;
   }, 120_000);
   check(lm.backfill?.waiting?.includes(ID.s3), '低内存档:__pcBackfill 的缺口含没有层的同步卡 s3', lm.backfill);
-  check(!(lm.backfill?.waiting ?? []).includes(ID.u) && !(lm.backfill?.waiting ?? []).includes(ID.s1), '低内存档:有层的 u、s1 不进补渲', lm.backfill);
-  check(!(lm.backfill?.waiting ?? []).includes(ID.x), '低内存档:未知卡片 ouc-x 不在补渲清单里', lm.backfill);
+  check(!(lm.backfill?.waiting ?? []).includes(ID.u) && !(lm.backfill?.waiting ?? []).includes(ID.s1), '低内存档:有层的 u、s1 不进预渲染重试', lm.backfill);
+  check(!(lm.backfill?.waiting ?? []).includes(ID.x), '低内存档:未知卡片 ouc-x 不在预渲染重试清单里', lm.backfill);
   await store(P, `S.actions.seek(1.5); return true;`);
   lm.stage = await until('低内存档舞台:s3 是图标,u、s1 不出不支持图标', async () => {
     const s = await stageState(P, [ID.u, ID.s1, ID.s3, ID.x]);

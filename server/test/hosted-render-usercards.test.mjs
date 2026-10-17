@@ -497,7 +497,7 @@ test('HR32 脚本：包名与 src 里的相对路径放行；走出 src、/@fs/�
   assert.match(checkSyncedSource(ts, 'const a = 1;\n\nimport x from "../../../../x";').errors[0], /^第 3 行/);
 });
 
-test('HR32 越权探测卡的夹具：主卡、清单、记号卡、图卡过得了预检；Node 一侧读盘的那两份被整份拒掉，每一种写法各有一条理由', () => {
+test('HR32 越权探测卡的夹具：主卡、清单、记号卡、素材效果卡过得了预检；Node 一侧读盘的那两份被整份拒掉，每一种写法各有一条理由', () => {
   const read = (name) => fs.readFileSync(path.join(FIXTURES, name), 'utf8');
   for (const name of ['overreach-probe.tsx', 'overreach-probe-lib.ts', 'overreach-marker-jia.tsx', 'overreach-graph.tsx']) {
     assert.deepEqual(checkSyncedSource(`src/cards/user/${name}`, read(name)), { ok: true, errors: [] }, name);

@@ -1,5 +1,5 @@
 /**
- * 越权探测图卡(夹具):`card()` 求值时把探测跑一遍(多一组「凭 cookie 读素材、进 GPU」),`audio()` 在声音线程里跑 Worker 那一组。
+ * 越权探测素材效果卡(夹具):`card()` 求值时把探测跑一遍(多一组「凭 cookie 读素材、进 GPU」),`audio()` 在声音线程里跑 Worker 那一组。
  * 探测代码本体在 `probe-boundary-attempts.ts`。经真实加载路径用,办法同 `probe-boundary-card.tsx`;结果在 `globalThis.__pcBoundary["graph-card"]`。
  */
 import { glsl } from "../../render/cards/graphValues";
@@ -11,8 +11,8 @@ let audioStarted = false;
 
 export const probeBoundaryGraph = {
   id: "probe-boundary-graph",
-  name: "探针越权探测图卡",
-  description: "安全验收探针用:图卡形态的同一组探测,外加凭 cookie 读素材",
+  name: "探针越权探测素材效果卡",
+  description: "安全验收探针用:素材效果卡形态的同一组探测,外加凭 cookie 读素材",
   tags: ["探针"],
   kind: "animation",
   frameMode: "direct",

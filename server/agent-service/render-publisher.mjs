@@ -1,5 +1,5 @@
 /**
- * 补渲的发布通道(真的那一个):Agent 服务以**服务身份**在文档服务的任务队列里发布清单计划,让渲染节点把云端 Agent
+ * 预渲染重试的发布通道(真的那一个):Agent 服务以**服务身份**在文档服务的任务队列里发布清单计划,让渲染节点把云端 Agent
  * 改到的片段渲出来(契约 `docs/plan/cloud-agent-contract.md` 第 16 节;`docs/plan/hosted-render-contract.md` 第 5a 节)。
  * 形状是 `server/agent/service/render-request.mjs` 文件头写的 `publisher`。
  *
@@ -14,7 +14,7 @@
  *   - 发布连接至少要保持到计划被认领:计划还没被认领、发布方又断开超过队列的宽限期(10 秒),计划会被撤。
  *     本模块的连接一直保持到计划完成;中途断了由 `render-request.mjs` 退避重开并**重发同一个计划**。
  *   - 断开期间做完的细任务不会补发通知;重发时计划若已经切完(回包 `state: 'done'`),或者别的发布方(在线页面)先发过同一个计划,
- *     发布方不在那些细任务的订阅者里。这时改发同一份清单的补渲档计划(结果键不同,所以是一个新的计划任务):
+ *     发布方不在那些细任务的订阅者里。这时改发同一份清单的预渲染重试档计划(结果键不同,所以是一个新的计划任务):
  *     渲染节点重新切一次,已有的细任务把发布方并进订阅者、做完的当场各补一条 `task.done`。同一份清单十分钟内只这样核对一次;
  *     还对不上就交给 `render-request.mjs` 的「连续没有进度」去放弃,由之后进来的页面按现有规则自己发。
  *
@@ -84,7 +84,7 @@ export function createQueuePublisher({
     const ws = new WebSocketImpl(docUrl, client.dataProtocols(t.ticket));
     /** reqId → { resolve, timer } */
     const waiting = new Map();
-    /** 核对用的补渲档计划 id → 原计划 id */
+    /** 核对用的预渲染重试档计划 id → 原计划 id */
     const alias = new Map();
     let closing = false;
     let down = false;
@@ -161,7 +161,7 @@ export function createQueuePublisher({
       dropBookIfIdle(projectId);
     }
 
-    /** 这个计划切完了却有细任务的结果没见过(发布方不在它们的订阅者里):改发补渲档的同一份清单,让渲染节点重新切一次 */
+    /** 这个计划切完了却有细任务的结果没见过(发布方不在它们的订阅者里):改发预渲染重试档的同一份清单,让渲染节点重新切一次 */
     async function verify(plan) {
       if (plan.verified || down) return;
       plan.verified = true;

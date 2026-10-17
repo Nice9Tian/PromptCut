@@ -31,7 +31,7 @@ export function cloudErrorMessage(code: string | undefined, message?: string): s
   }
 }
 
-/** 补渲进展(契约 16 节)写成一行状态 */
+/** 预渲染重试进展(契约 16 节)写成一行状态 */
 export function renderStatusText(ev: CloudEvent): string {
   const clips = Array.isArray(ev.clips) ? ev.clips.length : typeof ev.clips === "number" ? ev.clips : 0;
   const done = typeof ev.done === "number" ? ev.done : null;

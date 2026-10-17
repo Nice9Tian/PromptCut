@@ -4,7 +4,7 @@
  *   SIG-1 同一份项目两边算出同一个签名(JSON 往返后也一样);参数改了就变,改回原来的参数又回到原来的签名
  *   SIG-2 不进快照的东西(位置、缩放、旋转、不透明度、淡入淡出、motion、音量、整帧平移)改了签名不变
  *   SIG-3 进快照的东西(时长、亚帧相位、框宽高、parts、强调、画幅、fps、主题、style、滤镜库条目)改了签名变
- *   SIG-4 图卡:上游节点、上游片段的参数改了,下游片段的签名变;环路不死循环
+ *   SIG-4 素材效果卡:上游节点、上游片段的参数改了,下游片段的签名变;环路不死循环
  *   SIG-5 比对:任何一边没有签名、算法版本不同都不判过期;片段不在项目里回 null
  *   SIG-6 服务端 `layerMapOf` 写进层表的 `inputSig` 与页面对同一份项目算的相同;项目里没有这个片段就不写这一项
  * 跑:node --test src/render/layerInputSig.test.mjs
@@ -96,7 +96,7 @@ test("SIG-3 进快照的东西改了签名变", () => {
   assert.equal(clipInputSig({ ...p, media: [{ ...p.media[0], url: "/@media/xyz" }] }, "v"), vs, "素材地址改写(renderProject)不算");
 });
 
-test("SIG-4 图卡:上游节点、上游片段改了下游变;环路不死循环", () => {
+test("SIG-4 素材效果卡:上游节点、上游片段改了下游变;环路不死循环", () => {
   const p = project();
   const g = clipInputSig(p, "g");
   const upNode = { ...p, cardNodes: p.cardNodes.map((n) => (n.id === "n1" ? { ...n, params: { level: 2 } } : n)) };

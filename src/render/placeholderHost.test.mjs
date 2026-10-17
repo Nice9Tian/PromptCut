@@ -232,7 +232,7 @@ test("OCE-X-01 在线导出的导出页:开关打开后,同步来的用户卡(�
   }
 });
 
-test("unsupported:只在在线浏览器模式下,且只认用户卡和图卡", () => {
+test("unsupported:只在在线浏览器模式下,且只认用户卡和素材效果卡", () => {
   const isUser = (id) => id === "my-card";
   const dom = { Component: () => null };
   const graph = { card: () => ({}) };
@@ -242,8 +242,8 @@ test("unsupported:只在在线浏览器模式下,且只认用户卡和图卡", (
   try {
     assert.equal(unsupportedHere("my-card", dom, isUser), true, "用户卡");
     assert.equal(unsupportedHere("builtin-dom", dom, isUser), false, "内置 DOM 卡照常渲");
-    assert.equal(unsupportedHere("builtin-graph", graph, isUser), true, "图卡");
-    assert.equal(unsupportedHere("builtin-audio", audio, isUser), true, "音频图卡");
+    assert.equal(unsupportedHere("builtin-graph", graph, isUser), true, "素材效果卡");
+    assert.equal(unsupportedHere("builtin-audio", audio, isUser), true, "音频素材效果卡");
     assert.equal(unsupportedHere(undefined, dom, isUser), false, "素材段没有 cardId");
   } finally {
     setOnlineBrowserMode(false);

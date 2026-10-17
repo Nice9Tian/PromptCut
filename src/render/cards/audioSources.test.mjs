@@ -22,7 +22,7 @@ function stubFetch(log) {
   };
 }
 
-/** 一段裁过的素材(mediaOffset = 2 秒)+ 一张接它的音频图卡 */
+/** 一段裁过的素材(mediaOffset = 2 秒)+ 一张接它的音频素材效果卡 */
 const project = {
   media: [{ id: "m", kind: "video", name: "clip.mp4", url: `/@media/${HASH}`, hash: HASH }],
   tracks: [{ id: "t", clips: [
@@ -81,7 +81,7 @@ test("边上的播放速率 ≠ 1 第一版报错", async () => withSources(asyn
   assert.equal(log.length, 0);
 }));
 
-test("图卡输入递归调它的 audio(),实例参数按 H2 的口径(clip.params 覆盖 clip.nodeId 指向的那个节点)", async () => withSources(async ({ blockOf, evaluateCardAudio, clearAudioBlockCache }) => {
+test("素材效果卡输入递归调它的 audio(),实例参数按 H2 的口径(clip.params 覆盖 clip.nodeId 指向的那个节点)", async () => withSources(async ({ blockOf, evaluateCardAudio, clearAudioBlockCache }) => {
   const log = []; stubFetch(log); clearAudioBlockCache();
   const seen = [];
   const cards = {
@@ -105,12 +105,12 @@ test("图卡输入递归调它的 audio(),实例参数按 H2 的口径(clip.para
   assert.equal(log[0].start, 120000);
   assert.equal(out[0], 120000 * 3);
 
-  // 直接从 n1 起跳也一样(blockOf 对图卡节点就是递归求值)
+  // 直接从 n1 起跳也一样(blockOf 对素材效果卡节点就是递归求值)
   const direct = await blockOf(ctx, { nodeId: "n1" }, 4, 4);
   assert.equal(direct.length, 8);
 }));
 
-test("图卡 audio() 回的采样数不是 count 的整数倍就报错", async () => withSources(async ({ evaluateCardAudio, clearAudioBlockCache }) => {
+test("素材效果卡 audio() 回的采样数不是 count 的整数倍就报错", async () => withSources(async ({ evaluateCardAudio, clearAudioBlockCache }) => {
   stubFetch([]); clearAudioBlockCache();
   const ctx = { graph: nodes, project, getCard: () => ({ id: "gain", defaults: {}, audio: (_s, range) => new Float32Array(range.count * 2 - 1) }), sampleRate: SR };
   await assert.rejects(() => evaluateCardAudio(ctx, "n1", { start: 0, count: 4, sampleRate: SR }), /not a whole number of channels/);

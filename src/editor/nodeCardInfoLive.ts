@@ -1,5 +1,5 @@
 /**
- * 把本页「能运行哪些用户卡与图卡」写进登记处(`src/online/nodeCardInfo.ts`,块 N,
+ * 把本页「能运行哪些用户卡与素材效果卡」写进登记处(`src/online/nodeCardInfo.ts`,块 N,
  * `docs/plan/online-card-exec-contract.md` 第 7 节第 1 条):纯浏览器节点的能力位、`cardSourceVersions`
  * 和清单计划的 `input.browser` 都读那里。
  *

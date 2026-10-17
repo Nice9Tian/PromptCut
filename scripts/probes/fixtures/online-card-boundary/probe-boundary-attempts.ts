@@ -5,7 +5,7 @@
  * 把每一项「读到了 / 被拒了 / 报了什么错」记成结果由探针取回来断言。只读、只报告:不删、不改、不占资源、不绕过浏览器或系统的安全机制;
  * 用到的口令、票据、收集站地址全是探针事先放好的**假凭证与本机地址**,不使用任何真实凭证、真实项目、真实外部地址。
  *
- * 这是**探测代码本体**,越权探测用户卡 `probe-boundary-card.tsx` 与越权探测图卡 `probe-boundary-graph.tsx` 都引它。两种跑法共用这一份:
+ * 这是**探测代码本体**,越权探测用户卡 `probe-boundary-card.tsx` 与越权探测素材效果卡 `probe-boundary-graph.tsx` 都引它。两种跑法共用这一份:
  *   - 现在(加载器还没接到舞台上):`scripts/probes/online-card-security-probe.mjs` 把本文件的 `export` 换成 CommonJS 的写法,
  *     在舞台的帧里用 `new Function("require", "module", "exports", 代码)` 执行(与加载器执行转译结果的办法相同);
  *   - 与块 T 合流之后:三份文件原样 `content.put` 进内容库,经真实的转译与加载路径执行,结果从 `globalThis.__pcBoundary` 读。
@@ -167,7 +167,7 @@ export async function dumpEverything(ctx) {
   await t("performance", () => text(performance.getEntries().map((e) => e.name)));
   await t("dom", () => dumpDom());
   await t("globals", () => dumpGlobals());
-  // 凭 cookie 读素材:读得到字节(图卡本来就要),但应答头里不该有票据
+  // 凭 cookie 读素材:读得到字节(素材效果卡本来就要),但应答头里不该有票据
   if (ctx.sid && ctx.mediaHash) {
     await t("media-headers", () => fetch("/media-s/" + ctx.sid + "/media/" + ctx.mediaHash).then((r) => r.status + " " + text(Array.from(r.headers.entries()))));
     await t("grant-from-stage", () => fetch("/media-s/" + ctx.sid + "/_grant", { method: "POST", credentials: "include" }).then((r) => r.status + " " + text(Array.from(r.headers.entries()))));
@@ -422,7 +422,7 @@ export function forgedMessages(ctx) {
   return { sent: String(sent) };
 }
 
-/* ------------------------------------------------------------------ 图卡那一半:凭 cookie 读素材、进 GPU */
+/* ------------------------------------------------------------------ 素材效果卡那一半:凭 cookie 读素材、进 GPU */
 export async function mediaWork(ctx) {
   const out = {};
   const t = runner(out, ctx.only);
@@ -489,11 +489,11 @@ export function navAttack(ctx) {
   }
 }
 
-/** 一张卡把上面几组连着跑一遍(用户卡与图卡的入口都调它;图卡多一组读素材进 GPU) */
+/** 一张卡把上面几组连着跑一遍(用户卡与素材效果卡的入口都调它;素材效果卡多一组读素材进 GPU) */
 export async function runAll(ctx) {
   const result = { tag: ctx.tag, at: Date.now() };
   result.parent = await parentReads(ctx);
-  // 一边听父页的消息,一边:把读得到的一切倒出来、(图卡)凭 cookie 读素材进 GPU、试着造一个子框架(加固拦下并上报,
+  // 一边听父页的消息,一边:把读得到的一切倒出来、(素材效果卡)凭 cookie 读素材进 GPU、试着造一个子框架(加固拦下并上报,
   // 父页改判、把取档策略重发给两台 —— 听到的消息里不该有票据)
   const heard = [];
   const onMessage = (e) => { try { heard.push(text(e.data).slice(0, 200000)); } catch (err) { heard.push("消息读不了"); } };

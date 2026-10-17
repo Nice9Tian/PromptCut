@@ -56,16 +56,16 @@
  *   E5  发起成员中途被移出:她的对话被停下;她的页面当场被阻断并写明「你已被移出名单」(她已不在项目里,对话记录她读不到了),
  *       云端的对话记录里留着「已被移出」的原因;项目停在完好的版本上。
  *   每一种都断言:项目结构完好(三张卡都在)、版本号只多了成功写入的次数、之后 1.5 秒没有新的写入。
- * 七、写入之间隔得比补渲的防抖长(步骤 spaced,排在 errors 之前跑;真模型的每次往返都是几秒,就是这种节奏。契约 `cloud-agent-contract.md` 第 16.4 节)
- *   K1  创建者的在线页面开着,云端 Agent 连写 12 处、每次隔 9 秒(补渲的防抖是 3 秒):每次写入之后 Agent 服务都按当时的版本发清单计划
- *       (中途就开始渲,不等一轮结束),项目接着往前走。补渲的结局是「渲染完成」,对话记录里没有「云端渲染失败」。
+ * 七、写入之间隔得比预渲染重试的防抖长(步骤 spaced,排在 errors 之前跑;真模型的每次往返都是几秒,就是这种节奏。契约 `cloud-agent-contract.md` 第 16.4 节)
+ *   K1  创建者的在线页面开着,云端 Agent 连写 12 处、每次隔 9 秒(预渲染重试的防抖是 3 秒):每次写入之后 Agent 服务都按当时的版本发清单计划
+ *       (中途就开始渲,不等一轮结束),项目接着往前走。预渲染重试的结局是「渲染完成」,对话记录里没有「云端渲染失败」。
  *   K2  渲染节点这一轮没有一个任务以失败收场:取不到旧版本时改按当前版本核对,内容没变的照做,已被新版本取代的记成作废
  *       (诊断里的 `superseded`,不计入 `failed`)。2026-10-06 修之前这一步渲染节点要失败 22～24 个任务(全是「文档服务上没有项目快照」)。
  *   K3  渲完之后才上线的成员(bob,新的浏览器进程):项目是最后一版,舞台上两张重卡贴的是最后一版的预渲染结果。
  * 八、用户卡(步骤 usercard,排在 errors 之前;单独一个项目,免得主项目带上卡片源码改走隔离工作进程。不带界面的那条探针 `cloud-agent-ux-probe` 的 U20 是同一件事)
  *   UC1 创建者在在线浏览器里把这个对话的创造力调到「高」,让云端 Agent 建一张用户卡(判重:`frameMode: stateful`)并用它加一个片段;
  *       界面上看到建卡成功后,发起方的浏览器进程被真的结束。之后云端把这一轮做完:卡片源码进了项目的内容库、片段在时间轴上,
- *       补渲由渲染服务的**隔离工作进程**(`hosted-render-iso:` 节点)认领并渲完(对话记录里有「渲染完成」),常驻工作进程没有认领这个项目的任务。
+ *       预渲染重试由渲染服务的**隔离工作进程**(`hosted-render-iso:` 节点)认领并渲完(对话记录里有「渲染完成」),常驻工作进程没有认领这个项目的任务。
  *   UC2 之后才上线的成员(另一个浏览器进程,真实页面):项目里有这张卡的片段;舞台上这张用户卡贴的是预渲染结果(快照层在、没有占位),
  *       层表里有它这一层;没有「需要本地 PC 渲染辅助」的图标;舞台截图不是空白;页面没有错误。
  * 最后一行是汇总 `{ summary }`,有失败退出码 1,起不来退出码 2。不打印口令、票据、私钥。
@@ -126,7 +126,7 @@ const LEAVE_WAIT_MS = 14_000;
 const LEAVE_TOOLS = 2 + LEAVE_READS + N;
 /** 文档服务保留断掉的会话多久(`server/docservice/session.mjs` 的 `RETAIN_MS`) */
 const RETAIN_MS = 60_000;
-/** 步骤 spaced 里两次写入之间等多久(要大于补渲的防抖 3 秒) */
+/** 步骤 spaced 里两次写入之间等多久(要大于预渲染重试的防抖 3 秒) */
 const SPACED_GAP_MS = 9000;
 const CLIPS = { bars: 'clip-bars', stateful: 'clip-stateful', canvas: 'clip-canvas' };
 const HEAVY = [CLIPS.stateful, CLIPS.canvas];
@@ -145,12 +145,12 @@ let moveSeq = 0;
 /** 第 i 次写入(从 1 起):改文案、挪片段、调卡片参数轮着来。`fixed` 的值好在后面逐个核对;别的每次都与现状不同(同值的写入不产生新版本) */
 function writeStep(i, salt, fixed) {
   if (i % 3 === 1) return { tool: 'update_clip', input: { clipId: CLIPS.bars, params: { title: `${salt} 第 ${i} 次:改文案` } } };
-  // 挪片段:两张重卡轮着挪(第 2、8 次挪推帧卡,第 5、11 次挪画布卡),它们都进云端的补渲清单
+  // 挪片段:两张重卡轮着挪(第 2、8 次挪推帧卡,第 5、11 次挪画布卡),它们都进云端的预渲染重试清单
   if (i % 3 === 2 && fixed) return { tool: 'update_clip', input: { clipId: i % 2 ? CLIPS.canvas : CLIPS.stateful, start: 0, end: i === 2 || i === 11 ? 2 : 2.5 } };
   if (i % 3 === 2) return { tool: 'update_clip', input: { clipId: CLIPS.stateful, start: 0, end: Number((1.81 + ((moveSeq += 1) % 23) / 20).toFixed(2)) } };
   return { tool: 'update_clip', input: { clipId: CLIPS.bars, params: { rows: rowsOf(salt, i) } } };
 }
-/** 「发出后退出」的任务:先读、等,再连着写 12 处(连着写的那一段合成一个补渲计划) */
+/** 「发出后退出」的任务:先读、等,再连着写 12 处(连着写的那一段合成一个预渲染重试计划) */
 /** 读项目的几种工具轮着用(连着三次一模一样的调用会被驱动的「重复操作」保护停掉) */
 const READ_TOOLS = ['list_media', 'get_project', 'list_transitions', 'list_cuts', 'list_media', 'get_project', 'list_transitions', 'list_cuts'];
 const leaveScript = (salt) => mockSteps([
@@ -268,14 +268,14 @@ function watchMembers() {
   return w;
 }
 const renderNode = async () => ((await S.renderStatus()).queue?.nodes ?? []).find((n) => n.projectId === PID) ?? null;
-/** 等一个对话收尾;`render` 为真再等它引出的补渲有结果。全程只读 Agent 服务盘上的对话记录与渲染服务的诊断 */
+/** 等一个对话收尾;`render` 为真再等它引出的预渲染重试有结果。全程只读 Agent 服务盘上的对话记录与渲染服务的诊断 */
 async function cloudFinishes(conversationId, { runMs = 120_000, render = true, renderMs = 420_000 } = {}) {
   const t0 = Date.now();
   const done = await until(`对话 ${conversationId} 跑到收尾`, () => { const d = S.diskConversation(PID, conversationId); return d && d.meta.state !== 'running' && d.events.some((e) => e.type === 'end') ? d : null; }, runMs, 200);
   const runMsTook = Date.now() - t0;
   let disk = done;
   if (render && done) {
-    disk = await until(`对话 ${conversationId} 的补渲有结果`, () => { const d = S.diskConversation(PID, conversationId); return d && d.events.some((e) => e.type === 'render' && ['done', 'failed', 'unavailable'].includes(e.state)) ? d : null; }, renderMs, 500) ?? S.diskConversation(PID, conversationId);
+    disk = await until(`对话 ${conversationId} 的预渲染重试有结果`, () => { const d = S.diskConversation(PID, conversationId); return d && d.events.some((e) => e.type === 'render' && ['done', 'failed', 'unavailable'].includes(e.state)) ? d : null; }, renderMs, 500) ?? S.diskConversation(PID, conversationId);
   }
   const events = disk?.events ?? [];
   return {
@@ -795,7 +795,7 @@ async function errorsStep() {
       && disk?.meta?.state === 'revoked' && disk.meta.reason === 'disabled' && landed >= 1 && landed < 30 && s.ok && !!again, { shown: e.error, banner, recorded: disk ? { state: disk.meta.state, reason: disk.meta.reason } : null, writesLanded: landed, ...s, afterReenable: !!again });
   }
 
-  /* ---- E4:渲染失败(渲染服务停着;Agent 服务重起一遍,把补渲「连续没有进度就放弃」的时限缩短) */
+  /* ---- E4:渲染失败(渲染服务停着;Agent 服务重起一遍,把预渲染重试「连续没有进度就放弃」的时限缩短) */
   {
     await until('E4:上一轮收尾', () => idle(c.page), 20_000, 100);
     await S.stopRender();
@@ -821,7 +821,7 @@ async function errorsStep() {
     const e = await errText(c.page);
     check('E4 渲染失败(渲染服务停着):对话照常做完,对话记录里有「云端渲染失败」与原因;项目内容不受影响', !!conv && e.outcome !== 'error' && typeof failed === 'string' && /云端渲染失败:.+/.test(failed) && /云端渲染失败:.+/.test(String(note ?? '')) && okOf(conv, mark) === 2 && s.ok, {
       shown: note, outcome: e.outcome, writesLanded: conv ? okOf(conv, mark) : null, ...s,
-      note: `渲染服务被探针停掉;补渲「连续没有进度」的时限在这次演练里缩成 ${RENDER_STALL_MS / 1000} 秒(生产 10 分钟,原因文字是固定的那一句)`,
+      note: `渲染服务被探针停掉;预渲染重试「连续没有进度」的时限在这次演练里缩成 ${RENDER_STALL_MS / 1000} 秒(生产 10 分钟,原因文字是固定的那一句)`,
     });
     await shot(c.page, 'E4-render-failed');
   }
@@ -850,7 +850,7 @@ async function errorsStep() {
 }
 
 /**
- * 写入之间隔得比补渲的防抖长(见文件头 K1～K3)。创建者的在线页面在这一轮里一直开着(它自己也按每一版发清单计划,与 Agent 服务的
+ * 写入之间隔得比预渲染重试的防抖长(见文件头 K1～K3)。创建者的在线页面在这一轮里一直开着(它自己也按每一版发清单计划,与 Agent 服务的
  * 计划同时在队列里);渲完之后另一位成员才上线看。
  */
 /* ================================================================== 用户卡:云端 Agent 建卡并判重,发起方退出后,后来的成员在舞台上贴得上它的预渲染结果 */
@@ -897,7 +897,7 @@ async function usercardStep() {
   const disk = () => S.diskConversation(UID, conv);
   const ended = await until('UC1:建卡的对话在云端跑到结束', () => { const d = disk(); return d && d.meta.state !== 'running' && d.events.some((e) => e.type === 'end') ? d : null; }, 120_000, 300);
   const renderEvents = () => (disk()?.events ?? []).filter((e) => e.type === 'render');
-  await until('UC1:含用户卡的补渲有结局', () => (['done', 'failed', 'unavailable'].includes(renderEvents().at(-1)?.state) ? true : null), 420_000, 500);
+  await until('UC1:含用户卡的预渲染重试有结局', () => (['done', 'failed', 'unavailable'].includes(renderEvents().at(-1)?.state) ? true : null), 420_000, 500);
   timings.usercardRenderedMs = Date.now() - t0;
   const results = (disk()?.events ?? []).filter((e) => e.type === 'tool_result').map((e) => `${e.name}:${e.ok ? 'ok' : `error ${String(e.summary ?? '').slice(0, 120)}`}`);
   // 工作进程每秒向管理进程交一次诊断:渲完的那一刻读到的可能还是上一拍的计数,等两拍再读
@@ -906,7 +906,7 @@ async function usercardStep() {
   const resident = (st.queue?.nodes ?? []).find((n) => n.projectId === UID) ?? null;
   const iso = (st.isolation?.queue?.nodes ?? []).find((n) => n.projectId === UID) ?? null;
   const states = renderEvents().map((e) => e.state);
-  check('UC1 云端 Agent 建一张用户卡(判重)并用它加片段,发起方的浏览器被结束:对话照样做完,补渲由隔离工作进程渲完(对话记录里有「渲染完成」)', level === 'high' && sent.accepted && k.gone && ended?.meta?.state === 'idle'
+  check('UC1 云端 Agent 建一张用户卡(判重)并用它加片段,发起方的浏览器被结束:对话照样做完,预渲染重试由隔离工作进程渲完(对话记录里有「渲染完成」)', level === 'high' && sent.accepted && k.gone && ended?.meta?.state === 'idle'
     && results.join() === 'create_card:ok,add_clip:ok' && states.at(-1) === 'done' && !states.includes('failed')
     && /^hosted-render-iso:/.test(String(iso?.nodeId ?? '')) && (iso?.claimed ?? 0) > 0 && (iso?.failed ?? 0) === 0 && (resident?.claimed ?? 0) === 0 && S.assetFiles() > filesBefore, {
     creativity: level, accepted: sent.accepted, initiatorGone: k.gone, end: ended?.meta?.state ?? null, toolResults: results, renderStates: states.join(','), renderedMs: timings.usercardRenderedMs,
@@ -943,11 +943,11 @@ async function spacedStep() {
   await until('K1:这一轮开始', async () => (await view(c.page))?.streaming, 15_000, 50);
   const conv = await conversationOf(c.page);
   const fin = await cloudFinishes(conv, { runMs: 240_000, renderMs: 400_000 });
-  // 一轮结束时补发的那一个计划渲完才算数:等「最后一条补渲事件是结局、并且它之后 8 秒没有新的补渲事件」
+  // 一轮结束时补发的那一个计划渲完才算数:等「最后一条预渲染重试事件是结局、并且它之后 8 秒没有新的预渲染重试事件」
   const renderEvents = () => (S.diskConversation(PID, conv)?.events ?? []).filter((e) => e.type === 'render');
   let quietSince = Date.now();
   let lastCount = -1;
-  await until('K1:补渲收尾(最后一条是结局,之后 8 秒没有新的补渲事件)', () => {
+  await until('K1:预渲染重试收尾(最后一条是结局,之后 8 秒没有新的预渲染重试事件)', () => {
     const ev = renderEvents();
     if (ev.length !== lastCount) { lastCount = ev.length; quietSince = Date.now(); }
     return ['done', 'failed', 'unavailable'].includes(ev.at(-1)?.state) && Date.now() - quietSince >= 8000 ? true : null;
@@ -962,7 +962,7 @@ async function spacedStep() {
     if (!m) continue;
     try { const j = JSON.parse(m[2]); const k = `${m[1]}|${String(j.id).split(':')[0]}|${String(j.error ?? j.why ?? '').replace(/[0-9a-f]{8,}|sp_[A-Za-z0-9_-]+|clip-[a-z]+|@\d+/g, '~').slice(0, 60)}`; reasons[k] = (reasons[k] ?? 0) + 1; } catch { /* 这一行被截断了 */ }
   }
-  check(`K1 写入之间隔 ${SPACED_GAP_MS / 1000} 秒(大于补渲的防抖 3 秒)、连写 ${N} 次:中途就按当时的版本发计划(不等一轮结束),补渲的结局是「渲染完成」,对话记录里没有渲染失败`, fin.toolOk === N && states.filter((x) => x.state === 'published').length >= 3 && states.at(-1)?.state === 'done' && !states.some((x) => x.state === 'failed' || x.state === 'unavailable'), {
+  check(`K1 写入之间隔 ${SPACED_GAP_MS / 1000} 秒(大于预渲染重试的防抖 3 秒)、连写 ${N} 次:中途就按当时的版本发计划(不等一轮结束),预渲染重试的结局是「渲染完成」,对话记录里没有渲染失败`, fin.toolOk === N && states.filter((x) => x.state === 'published').length >= 3 && states.at(-1)?.state === 'done' && !states.some((x) => x.state === 'failed' || x.state === 'unavailable'), {
     writesLanded: fin.toolOk, published: states.filter((x) => x.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((x) => x.state === 'failed'), states: states.map((x) => x.state).join(','),
   });
   check('K2 渲染节点这一轮没有一个任务以失败收场;被新版本取代的旧任务记成作废(不计入失败)', delta('failed') === 0 && delta('completed') + delta('dedup') > 0 && !Object.keys(reasons).some((k) => k.startsWith('failed|')), {

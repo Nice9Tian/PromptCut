@@ -16,11 +16,11 @@
  * 指纹由文档服务按原始值算、在 `node.welcome.envFingerprint` 回来,节点记下它(节点侧过滤按它比任务的指纹),
  * 并交给宿主(清单计划的 `input.browser` 要它,第 3.3 节)。`queue.watch` 只列本项目(队列不许纯浏览器 watch `'all'`)。
  *
- * # 用户卡与图卡(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节)
+ * # 用户卡与素材效果卡(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节)
  *
- * 本页能执行同步来的用户卡与图卡时(`deps.cardInfo()` 回登记处的内容,`nodeCardInfo.ts`):
+ * 本页能执行同步来的用户卡与素材效果卡时(`deps.cardInfo()` 回登记处的内容,`nodeCardInfo.ts`):
  *   - `node.hello` 多报一项 `cardRuntime`(在线卡片运行时版本,原始值;指纹仍由文档服务算);
- *   - 文档服务在 `node.welcome` 多回 `cardEnvFingerprint`(环境三项再加运行时版本),节点记下:用户卡、图卡的任务用它比指纹
+ *   - 文档服务在 `node.welcome` 多回 `cardEnvFingerprint`(环境三项再加运行时版本),节点记下:用户卡、素材效果卡的任务用它比指纹
  *     (`filter.mjs` 规则 1),内置卡的任务照旧比 `envFingerprint`;
  *   - 能力位 `capabilities.userCards` / `graphCards` 与 `cardSourceVersions`(每张本页已载入成功的卡的代码身份)随登记处实时更新,
  *     节点侧过滤(规则 1、3)据此认领;换代后一小段时间不报(登记处的 `NODE_CARD_SETTLE_MS`)。
@@ -440,11 +440,11 @@ export interface BrowserNodeDeps {
   /** `node.welcome` 回了指纹 */
   onFingerprint?: (envFingerprint: string) => void;
   /**
-   * 本页能执行同步来的用户卡与图卡时回登记处的内容(`nodeCardInfo.ts` 的 `getNodeCardInfo`);不能或不给就是原来的纯浏览器节点。
+   * 本页能执行同步来的用户卡与素材效果卡时回登记处的内容(`nodeCardInfo.ts` 的 `getNodeCardInfo`);不能或不给就是原来的纯浏览器节点。
    * 每个节拍读一次,不缓存。
    */
   cardInfo?: () => { cardRuntime: string | null; userCards: boolean; graphCards: boolean; cardSources: Readonly<Record<string, string>> } | null;
-  /** `node.welcome` 回了(或没回)用户卡、图卡用的指纹(没有时传 null) */
+  /** `node.welcome` 回了(或没回)用户卡、素材效果卡用的指纹(没有时传 null) */
   onCardEnvFingerprint?: (cardEnvFingerprint: string | null) => void;
   /** 报到被文档服务拒了(`forbidden`、`not-chromium`、`bad-message`……):宿主结束会话,不重连 */
   onRefused?: (reason: string) => void;
@@ -462,9 +462,9 @@ export interface BrowserNodeDebug {
   reason: string | null;
   nodeId: string;
   envFingerprint: string | null;
-  /** 用户卡、图卡的任务用的指纹(块 N);没报运行时版本或旧队列为 null */
+  /** 用户卡、素材效果卡的任务用的指纹(块 N);没报运行时版本或旧队列为 null */
   cardEnvFingerprint: string | null;
-  /** 此刻报给节点侧过滤的用户卡、图卡能力与卡片代码身份(块 N):卡片 id → 身份 */
+  /** 此刻报给节点侧过滤的用户卡、素材效果卡能力与卡片代码身份(块 N):卡片 id → 身份 */
   cards: { runtime: string | null; userCards: boolean; graphCards: boolean; sources: Record<string, string> };
   /** 此刻报给节点侧过滤的「能产轨道流」(宿主探到了编码器、给了执行流任务的方法) */
   streams: boolean;
@@ -578,7 +578,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     nodeId: deps.nodeId,
     userId: deps.userId,
     envFingerprint: null as string | null,
-    /** 用户卡、图卡的任务用的指纹(块 N,`node.welcome.cardEnvFingerprint`);filter.mjs 规则 1 对这类任务拿它比 */
+    /** 用户卡、素材效果卡的任务用的指纹(块 N,`node.welcome.cardEnvFingerprint`);filter.mjs 规则 1 对这类任务拿它比 */
     cardEnvFingerprint: null as string | null,
     codeVersions: deps.codeVersion ? [deps.codeVersion] : [],
     capabilities: { transcode: false, streams: false, userCards: false, graphCards: false },
@@ -635,7 +635,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     if (m.type === "node.hello") {
       const { envFingerprint: _own, ...rest } = m;
       m = { ...rest, profile: "browser", maxConcurrent: 1, environment: { ...deps.environment } };
-      // 块 N:能执行用户卡与图卡就多报运行时版本(原始值,文档服务算 cardEnvFingerprint);不能执行时与原来一字不差
+      // 块 N:能执行用户卡与素材效果卡就多报运行时版本(原始值,文档服务算 cardEnvFingerprint);不能执行时与原来一字不差
       const runtime = readCardInfo().runtime;
       helloRuntime = runtime;
       if (runtime) m = { ...m, cardRuntime: runtime };
@@ -916,7 +916,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
           nodeDesc.envFingerprint = fp;
           try { deps.onFingerprint?.(fp); } catch { /* 宿主坏了 */ }
         }
-        // 块 N:用户卡、图卡用的指纹(没有就清掉:重新报到、旧队列)
+        // 块 N:用户卡、素材效果卡用的指纹(没有就清掉:重新报到、旧队列)
         const cardFp = typeof message.cardEnvFingerprint === "string" && message.cardEnvFingerprint ? message.cardEnvFingerprint : null;
         if (cardFp !== nodeDesc.cardEnvFingerprint) {
           nodeDesc.cardEnvFingerprint = cardFp;

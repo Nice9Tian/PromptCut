@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeCardDefinition, selectedCardStyle, validateCardGraph, projectCardGraph } from './cardGraph.mjs';
 
-/** 图卡 = 注册表里写了 `card` / `audio` 的普通 CardDef。测试里直接写成对象,
+/** 素材效果卡 = 注册表里写了 `card` / `audio` 的普通 CardDef。测试里直接写成对象,
  * 用一个 getCard 桩喂给 projectCardGraph —— 仓库里没有「注册」函数,真卡是文件。 */
 const invert = {
   id: 'invert', name: '反色', description: '把输入整幅反色', source: 'user',
@@ -70,7 +70,7 @@ test('old effects and graph cards appear in one graph with ordered outputs', () 
   assert.ok(graph.nodes.some(n => n.adapter === 'emphasis'));
   assert.ok(graph.nodes.some(n => n.adapter === 'card'));
   assert.equal(graph.nodes.find(n => n.id === 'gc').inputs.source.nodeId, '@clip/media/source');
-  // 图卡片段不再合成 chrome 基节点:它的输出就是它自己那个节点
+  // 素材效果卡片段不再合成 chrome 基节点:它的输出就是它自己那个节点
   assert.equal(graph.nodes.find(n => n.id === '@clip/custom/source'), undefined);
   // 片段指向的那个节点以 clip.params 为准(右栏改参数动的就是它)
   assert.deepEqual(graph.nodes.find(n => n.id === 'gc').params, { amount: .9 });

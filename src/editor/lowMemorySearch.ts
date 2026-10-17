@@ -6,7 +6,7 @@
  * # 流程
  *
  * 1. 打开项目时经共享项目的文档服务连接读本项目的全部成本记录(`sharedCosts.ts` 的 `listSharedCosts`),顺带拿到本机环境的指纹;
- * 2. 项目里每张卡(按 `identityKey` 去重;用户卡、图卡这台设备渲染不了,不参加、按重卡)交给 `boundarySearch`;
+ * 2. 项目里每张卡(按 `identityKey` 去重;用户卡、素材效果卡这台设备渲染不了,不参加、按重卡)交给 `boundarySearch`;
  * 3. 测量在**自己的舞台**里做:低内存档只有一个舞台,不开后台舞台。测量期间把它临时切成 `back` 角色(舞台的探针闸门只认 `back`),
  *    一次只测一个片段(缩水项目,同 `probeRunner.ts`),只走计时趟、不生成快照(`render(…, { probe: 'time' })`;
  *    `direct` 卡按播种的随机帧逐帧 `setTime(…, { probe: true })`),单帧耗时按 `summarizeProbe` 同一口径取;
@@ -201,7 +201,7 @@ export interface LowMemorySearchDeps {
   environment: PageEnvironment;
   identityKeys: Record<string, string>;
   capabilities: ReadonlyMap<string, Record<string, unknown>>;
-  /** 这台设备渲染不了的片段(用户卡、图卡):不参加、按重卡 */
+  /** 这台设备渲染不了的片段(用户卡、素材效果卡):不参加、按重卡 */
   unsupported: (clip: Clip) => boolean;
   /** 唯一那个舞台 */
   stage: () => StageRpcClient | null;
@@ -222,7 +222,7 @@ export interface LowMemorySearchOutcome {
   envFingerprint: string;
   /** 参加搜索的卡(identityKey) */
   keys: string[];
-  /** 用户卡、图卡(identityKey):按重卡 */
+  /** 用户卡、素材效果卡(identityKey):按重卡 */
   forcedHeavy: string[];
   /** 判轻的卡(identityKey),交给 `setPlanLowMemoryLight` */
   light: Set<string>;

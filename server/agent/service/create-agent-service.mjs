@@ -5,7 +5,7 @@
  * 一切查找先由 `identity`(来自鉴权,不来自请求体)定范围,再在范围里按对话 id 找。
  *
  * 运行实例与对话的**归属**是两回事(契约第 3.1、7.2 节):
- *   - 对话(事件记录、状态、模型历史、补渲清单)按「项目 × 主人键」存在数据目录里(`conversations.mjs`),不随实例回收而消失,
+ *   - 对话(事件记录、状态、模型历史、预渲染重试清单)按「项目 × 主人键」存在数据目录里(`conversations.mjs`),不随实例回收而消失,
  *     不依赖任何连接;主人换一台设备能找回;
  *   - 每一轮在发起它的那台设备的实例里跑。同一个对话先后两轮可以在两个实例里跑,同一时刻只有一轮。
  *
@@ -19,7 +19,7 @@
  * 进程级的东西:
  *   - `execSerial`:服务端 store 是进程里的单例(`src/store/core.ts`),所有实例的工具实现经同一把锁串行执行、进锁清场;
  *   - 闸与用量记录(`gate.mjs`、`usage.mjs`);
- *   - 对话存储(`conversations.mjs`)与补渲发布(`render-request.mjs`)。
+ *   - 对话存储(`conversations.mjs`)与预渲染重试发布(`render-request.mjs`)。
  * 本文件不引用 `src/`。
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -142,7 +142,7 @@ const scrub = (text) => String(text ?? '').replace(/https?:\/\/[^\s"'<>)]+/g, '[
  * @param {() => Promise<object> | object} o.modelConfig 这一轮用的模型配置 `{ vendor, model, apiKey?, baseUrl?, maxTokens? }`
  * @param {string | null} [o.dataDir] 数据目录;不给时对话只在内存里、不记用量流水(只给测试)
  * @param {object} [o.gate] 闸;不给就用 `gate.mjs` 的(读 `<数据目录>/config/limits.json`)
- * @param {object | null} [o.publisher] 补渲的发布通道(接口位,形状见 `render-request.mjs`);不给就不发补渲
+ * @param {object | null} [o.publisher] 预渲染重试的发布通道(接口位,形状见 `render-request.mjs`);不给就不发预渲染重试
  * @param {{ agentEnabled?(projectId): boolean, renderEnabled?(projectId): boolean }} [o.projectState]
  *   各项目的开关(接口位;真的由文档服务的推送喂)。不给时都算开
  * @param {string | null} [o.assetBase] 同机素材服务的地址(`http://127.0.0.1:<端口>`);不给时导入素材、配音入库做不了(工具回明确的原因)
@@ -235,7 +235,7 @@ export function createHostedAgentService({
     log: say,
   });
 
-  // 上一个进程没收尾就没了的对话:标中断,不自动续跑(契约第 7.5 节)。没渲完的补渲清单重新发布(只用服务身份)
+  // 上一个进程没收尾就没了的对话:标中断,不自动续跑(契约第 7.5 节)。没渲完的预渲染重试清单重新发布(只用服务身份)
   store.recover();
   const restored = Promise.resolve().then(() => render.restore()).catch((err) => { say('agent.render.restore-failed', { message: String(err?.message ?? err).slice(0, 160) }); return 0; });
 
@@ -372,7 +372,7 @@ export function createHostedAgentService({
     });
   }
 
-  /** 这个实例里的一次写入落地了:挑出要预渲染的片段,交给补渲(契约第 16 节) */
+  /** 这个实例里的一次写入落地了:挑出要预渲染的片段,交给预渲染重试(契约第 16 节) */
   function onWrite(entry, conversationId, write) {
     if (!render.enabled) return;
     const conv = entry.runs.get(conversationId);
@@ -477,7 +477,7 @@ export function createHostedAgentService({
 
   const api = {
     limits,
-    /** 起来时的补渲重发做完了没有(测试等它) */
+    /** 起来时的预渲染重试重发做完了没有(测试等它) */
     restored,
 
     /**
@@ -558,7 +558,7 @@ export function createHostedAgentService({
         store.setState(conv, { state, reason, message, endedAt: now() });
         store.compact(conv);
         say('agent.run.end', { projectId: identity.projectId, runId, state, ...(reason ? { reason } : {}) });
-        // 一轮结束:攒着的补渲马上发,保证最后的版本有计划
+        // 一轮结束:攒着的预渲染重试马上发,保证最后的版本有计划
         void render.flush(conv);
       };
 
@@ -766,7 +766,7 @@ export function createHostedAgentService({
       return true;
     },
 
-    /** 删对话:进行中的先停;连模型历史、补渲清单、工作目录(附件、下载的文件)一起删。没有这个对话回 false */
+    /** 删对话:进行中的先停;连模型历史、预渲染重试清单、工作目录(附件、下载的文件)一起删。没有这个对话回 false */
     remove(identity, conversationId) {
       const conv = conversationOf(identity, conversationId, false);
       if (!conv) return false;
@@ -844,7 +844,7 @@ export function createHostedAgentService({
 
     /**
      * 撤销(契约第 4.5 节):受影响实例里进行中的一轮各记原因后立刻停下,实例关掉。`userId` 不给表示整个项目。
-     * `reason`:`disabled`(开关关了)、`removed`、`kicked`、`deleted`。开关关了与项目删除时撤回并清掉补渲清单;
+     * `reason`:`disabled`(开关关了)、`removed`、`kicked`、`deleted`。开关关了与项目删除时撤回并清掉预渲染重试清单;
      * 项目删除时删掉这个项目的对话记录与模型历史(用量记录留着,它是托管方的账)。
      */
     revoke({ projectId, userId = null, reason }) {
@@ -898,7 +898,7 @@ export function createHostedAgentService({
 
     /**
      * 收尾(SIGTERM,契约第 3.4 节):不再接新请求 → 进行中的每一轮记「中断」并停下 → 状态落盘 → 关连接。
-     * 没渲完的补渲清单留在盘上,下次起来重发。
+     * 没渲完的预渲染重试清单留在盘上,下次起来重发。
      */
     async close() {
       if (closed) return;

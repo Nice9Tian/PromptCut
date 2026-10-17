@@ -140,7 +140,7 @@ export default function ExportView() {
       let proj: Project | null = null;
       /*
        * 整个 install() 只算这一次图,下面的 __pcCardPlan 闭包和渲染体都复用它。
-       * **必须兜底**:projectCardGraph 会对悬空输入抛(删掉套了滤镜图卡的素材段就是这种),
+       * **必须兜底**:projectCardGraph 会对悬空输入抛(删掉套了滤镜素材效果卡的素材段就是这种),
        * 在这一层不接住就是舞台整棵树卸载、预渲染页永远不 ready。
        */
       let graph: ReturnType<typeof projectCardGraph> | undefined;
@@ -189,17 +189,17 @@ export default function ExportView() {
             // 画出来的 HTML 不一样,不能和有字体的机器共用一份快照。
             fontFingerprint: fontFingerprintOf(document.fonts as unknown as Iterable<{ family: string; status: string }>) } };
       };
-      /** 音频图卡的片段:有 nodeId、没有 cardId(按 H2 它不写 cardId) */
+      /** 音频素材效果卡的片段:有 nodeId、没有 cardId(按 H2 它不写 cardId) */
       const audioNode = (nodeId?: string) => !!nodeId && !!proj?.cardNodes?.some(node => node.id === nodeId && node.kind === 'audio');
       /*
-       * 音频图卡的片段整个排除:它没有 cardId,照字面收进来就是 getCard('') → 兜底 stateful,
+       * 音频素材效果卡的片段整个排除:它没有 cardId,照字面收进来就是 getCard('') → 兜底 stateful,
        * 于是一条铺满全片的音频卡被算进 replayClips,每个导出分片都从第 0 帧回放。
        */
       const plannedClips = [...tl.clips, ...(proj?.tracks.filter(track => !track.hidden).flatMap(track => track.clips
         .filter(clip => clip.nodeId && !clip.cardId && !audioNode(clip.nodeId)).map(clip => ({ ...clip, cardId: '' }))) || [])];
       // Parallel export cuts only where no stateful card is mounted on both sides.
-      // 只有**不出画**的音频图卡才无条件 direct;其余图卡片段照它自己的声明算 ——
-      // 沿用「有节点就 direct」会让声明 stateful 的图卡在导出里不进回放窗口,
+      // 只有**不出画**的音频素材效果卡才无条件 direct;其余素材效果卡片段照它自己的声明算 ——
+      // 沿用「有节点就 direct」会让声明 stateful 的素材效果卡在导出里不进回放窗口,
       // 而预览按 clipFrameMode 给它回放钟,两边时间口径静默分叉且不报错。
       window.__pcClipFrameModes = () => plannedClips.map(clip => ({ id: clip.id, start: clip.start, end: clip.end,
         mode: audioNode(clip.nodeId) ? 'direct' : clipFrameMode(clip, getCard(clip.cardId)) }));

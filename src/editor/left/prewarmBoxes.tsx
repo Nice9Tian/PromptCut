@@ -184,7 +184,7 @@ function buildQueue(w: number, h: number, force: boolean): Job[] {
   for (const def of allCards()) {
     // 粒子卡不排队:见上面的说明
     if (assetCardKind(def) === "particles") continue;
-    // 图卡没有 React 组件,离屏量不出包围盒 —— 库里也只显示静态占位,不用预热
+    // 素材效果卡没有 React 组件,离屏量不出包围盒 —— 库里也只显示静态占位,不用预热
     const Component = def.Component;
     if (typeof Component !== "function") continue;
     const key = `card:${def.id}`;

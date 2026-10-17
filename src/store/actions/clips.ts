@@ -49,9 +49,9 @@ export const clips = {
     const def = getCard(cardId);
     if (!def) return null;
     assertAudiovisualCardKind(def);
-    // 音频图卡拖进时间轴是个既无声又无画的空片段(没有 nodeId,消费方只看节点):
+    // 音频素材效果卡拖进时间轴是个既无声又无画的空片段(没有 nodeId,消费方只看节点):
     // 它只能经 apply_card 挂到片段上。
-    if (def.kind === "audio" && !isAudiovisualCard(def)) throw new Error("音频图卡请用 apply_card");
+    if (def.kind === "audio" && !isAudiovisualCard(def)) throw new Error("音频素材效果卡请用 apply_card");
     const p = state.project;
     const track = opts.trackId ? p.tracks.find((t) => t.id === opts.trackId) : p.tracks[0];
     if (!track) return null;
@@ -97,7 +97,7 @@ export const clips = {
       const def = getCard(spec.cardId!);
       if (!def) return null;
       assertAudiovisualCardKind(def);
-      if (def.kind === "audio" && !isAudiovisualCard(def)) throw new Error("音频图卡请用 apply_card");
+      if (def.kind === "audio" && !isAudiovisualCard(def)) throw new Error("音频素材效果卡请用 apply_card");
       const dur = spec.duration ?? DEFAULT_CARD_DUR;
       clip = { id: newId("c"), cardId: spec.cardId!, ...(isAudiovisualCard(def) ? { embeddedAudio: true } : {}), start, end: start + dur, params: { ...def.defaults } };
     } else {

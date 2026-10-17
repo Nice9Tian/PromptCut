@@ -6,7 +6,7 @@
  * 没有 `node:` 内置模块。两边各写一遍的话,改一处漏一处不报错,只是浏览器生成的快照与桌面的悄悄对不上。
  *
  * 目标片段平移到 `-phase` 起(`phase = sampling.phase.numerator / denominator`),是唯一可见输出;同轨的兄弟片段挪进一条
- * 隐藏的源轨(图卡输入还要能解到),别的轨一律隐藏、只作源。`control` 要 `clipId`、`start`、`end`、`count`、`sampling.phase`。
+ * 隐藏的源轨(素材效果卡输入还要能解到),别的轨一律隐藏、只作源。`control` 要 `clipId`、`start`、`end`、`count`、`sampling.phase`。
  */
 export function isolatedCardProject(project, control) {
   const targetId = control.clipId;
@@ -20,7 +20,7 @@ export function isolatedCardProject(project, control) {
     if (target) {
       found = true;
       // The target is the only visible output.  Siblings can nevertheless be
-      // raw graph inputs (especially multi-input 图卡), so retain
+      // raw graph inputs (especially multi-input 素材效果卡), so retain
       // them in a separate hidden source track rather than dropping them.
       tracks.push({ ...structuredClone(track), hidden: false, sourceOnly: false,
         clips: [{ ...structuredClone(target), start: -phase, end: duration - phase }] });
@@ -33,7 +33,7 @@ export function isolatedCardProject(project, control) {
       }
       continue;
     }
-    // Keep original clips available to 图卡 source resolution without
+    // Keep original clips available to 素材效果卡 source resolution without
     // letting them paint.  The browser's source-only tracks are deliberately
     // explicit rather than attempting to infer graph dependencies here.
     tracks.push({ ...structuredClone(track), hidden: true, sourceOnly: true });

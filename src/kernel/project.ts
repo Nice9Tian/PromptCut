@@ -289,7 +289,7 @@ export interface Cut {
 
 export interface Project {
   version: 1;
-  /** 图卡的实例节点。定义不在项目里 —— 它是 `src/cards/user/<id>.tsx` 文件,从注册表取。 */
+  /** 素材效果卡的实例节点。定义不在项目里 —— 它是 `src/cards/user/<id>.tsx` 文件,从注册表取。 */
   cardNodes?: import('./cardGraph.mjs').CardNode[];
   style?: Record<string, unknown>;
   /**
@@ -501,7 +501,7 @@ export function videoLayersAt(
  * 不看不透明度:下一段开头若是淡入,起点那一刻是 0,但要提前装好的恰恰是它。
  *
  * `skip`:**过滤必须下推进来**(E7 第 1 条)。这个函数每条序列只回一段,事后在外面滤掉
- * (比如图卡接管的素材段)就等于这条序列没有 `next` —— 双 `<video>` 预装整条失效。
+ * (比如素材效果卡接管的素材段)就等于这条序列没有 `next` —— 双 `<video>` 预装整条失效。
  * 给了谓词就接着往后找这条序列上的下一段。
  */
 export function nextVideoLayerAfter(

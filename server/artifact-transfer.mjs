@@ -13,7 +13,7 @@
  *
  * X7(`docs/plan/m6c-contract.md`):快照清单可以另带这一段的 **PNG 缓存**帧(`pngs`,见 `collectSnapshotResult`),
  * 块推进 `px`;拉取方把它们原样写进本机 PNG 缓存(`CardFrameCache` 的 `controls/<key>/mov/frames/`),
- * `?preview=legacy` 的整帧通道因此不再给远端节点产的卡画占位符。清单里没有 `pngs` 的照旧,不在本机补渲。
+ * `?preview=legacy` 的整帧通道因此不再给远端节点产的卡画占位符。清单里没有 `pngs` 的照旧,不在本机预渲染重试。
  *
  * C6.4(`docs/plan/manifest-contract.md` 第 1、3 节):每一段的清单另写进文档服务的内容库
  * (`snapshot-manifest` / `render-manifest`,键 `<resultKey>:<from>-<to>`);sink 开工前先查它去重。

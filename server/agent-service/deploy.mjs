@@ -3,7 +3,7 @@
  * 纯函数:`scripts/remote/docservice.mjs` 的 `*-agent` 子命令只负责执行;`--dry-run` 与单测都走这里,不连任何远端。
  *
  * Agent 服务**与渲染服务共用同一份检出**(`<渲染服务的部署目录>/current`,由 `deploy-render` 上传、装依赖、换链接):
- * 它要完整的仓库加依赖(vite 与 `src/`),并且必须与渲染服务、在线页面出自同一个提交(补渲计划的代码版本要对得上)。
+ * 它要完整的仓库加依赖(vite 与 `src/`),并且必须与渲染服务、在线页面出自同一个提交(预渲染重试计划的代码版本要对得上)。
  * 所以这里没有上传代码的一步;升级与回退跟着渲染服务的 `current` 走,换完链接再 `deploy-agent` 重载一次。
  *
  * 不含任何秘密:服务私钥在节点上由 `keygen-agent` 生成(不离开节点、不打印);模型 Key 与配音令牌走加密分发
@@ -122,7 +122,7 @@ export function agentStatusScript(inst) {
     'if [ -n "$H" ]; then echo "$H"; else echo "端口 $PORT 没回应(pm2 logs $APP --lines 40 --nostream)"; fi',
     'echo "== 代码版本(要与渲染服务、在线页面相同)"',
     'R="$(curl -fsS "http://127.0.0.1:$RENDER_STATUS_PORT/status" 2>/dev/null || true)"',
-    'H="$H" R="$R" node -e \'const j=(t)=>{try{return JSON.parse(t)}catch{return null}};const a=j(process.env.H)?.codeVersion??null;const r=j(process.env.R)?.codeVersion?.self??null;const line="agent="+(a??"?")+"  render="+(r??"?");console.log(a&&r&&a!==r?"\\x1b[31m!! "+line+"  不一致:补渲计划渲染服务不会认领,重新部署同一个提交\\x1b[0m":line)\'',
+    'H="$H" R="$R" node -e \'const j=(t)=>{try{return JSON.parse(t)}catch{return null}};const a=j(process.env.H)?.codeVersion??null;const r=j(process.env.R)?.codeVersion?.self??null;const line="agent="+(a??"?")+"  render="+(r??"?");console.log(a&&r&&a!==r?"\\x1b[31m!! "+line+"  不一致:预渲染重试计划渲染服务不会认领,重新部署同一个提交\\x1b[0m":line)\'',
     'echo "== 数据目录"',
     'if [ -d "$DATA" ]; then du -sh "$DATA" 2>/dev/null | cut -f1; echo "对话所在的项目数:$(ls -1 "$DATA/tenants" 2>/dev/null | wc -l)"; ls -1 "$DATA/usage" 2>/dev/null | tail -n 3 || true; else echo "$DATA 不存在"; fi',
     // 配置文件的形状是 { v, api: { vendor, model, … } }(server/agent/service/model-config.mjs);只读厂商与型号,不读 Key

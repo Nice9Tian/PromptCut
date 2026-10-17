@@ -6,7 +6,7 @@
  *
  *   0  纯浏览器只接本人的任务(服务端已按凭证把关,这里再挡一次)
  *   1  环境指纹、代码版本、卡片源码版本对得上(`plan` 任务只查代码版本:谁认领谁的指纹就是这一版的指纹;
- *      带 `requires.preferNode` 的 `plan` 另查指纹,M6c X4;纯浏览器节点接用户卡、图卡的任务时比的是
+ *      带 `requires.preferNode` 的 `plan` 另查指纹,M6c X4;纯浏览器节点接用户卡、素材效果卡的任务时比的是
  *      `node.cardEnvFingerprint`——环境三项再加在线卡片运行时版本,块 N);`requires.localMedia` 给了就要等于本节点的
  *      `nodeId`(M6c X2 本地档能力闸,`node.nodeId` 由会话补上)
  *   2  要求 `capabilities.streams` 的任务(M6c X1 起的流任务)需要节点报 `streams: true`(没报这一项的旧形状
@@ -14,16 +14,16 @@
  *      任务自己写了 `requires.transcode: true` 的需要转码能力。只看任务写的这一项,不再按「是流任务」一律要求转码
  *      (`docs/plan/browser-stream-task.md` 第二处):切分方自己的流任务本来就写 `transcode: true`,行为不变;
  *      给浏览器的单卡流那一份写 `transcode: false`(浏览器用自带的编码器压),只凭 `capabilities.streams` 认领
- *   3  用户卡、图卡需要对应能力
+ *   3  用户卡、素材效果卡需要对应能力
  *   4  重度策略(见 `DEFAULT_WEIGHT_POLICY`)
  *   5  内存要求不超过本机可用内存
  *   6  `plan` 任务要 Chrome 和服务端的 card-cache,纯浏览器不接;独立渲染主机(`host`)不接不带片段清单的 `plan` ——
  *      桌面 `plan` 留给发布方自己的节点(M6b,`docs/plan/render-host-contract.md` 第 3、4 节);带片段清单的 `plan`
- *      (在线页面的清单计划、低内存档的补渲计划)`host` 接,用自己的指纹切分(C10 契约第 18 节第 9 条,对 M6c X4 的修改)
+ *      (在线页面的清单计划、低内存档的预渲染重试计划)`host` 接,用自己的指纹切分(C10 契约第 18 节第 9 条,对 M6c X4 的修改)
  *   7  纯浏览器的快照任务只收共享档(`tier: 'shared'`)的独立卡(`input.compositing === 'independent'`,切分方在浏览器那一份
  *      里写):M7 契约第 3.2 节与 D4(桌面只把独立卡的页面测量帧当预渲染结果;本地档要整场景渲)。不只靠切分方把本地档记 heavy。
  *      画布卡(`input.canvasHeavy`)也不收:浏览器逐帧顺推生成快照,画布卡与桌面 4 帧一批的结果不等价(M7 探针 P2,主会话裁定)
- *      用户卡、图卡的任务(块 N)另要 `requires.cardSources` 非空:用户卡一定有代码身份,空了说明切分方没给身份可对
+ *      用户卡、素材效果卡的任务(块 N)另要 `requires.cardSources` 非空:用户卡一定有代码身份,空了说明切分方没给身份可对
  *      纯浏览器的流任务同理,只收切分方按浏览器的形状出的单卡流:`input.stream` 是 `{ kind: 'card', plane: 'local' }`、带 `input.bake`、
  *      独立卡、不是画布卡(组流要连摆放一起画,浏览器这条路画不了);不只靠规则 2 挡。
  *      依赖下层的流(`requires.belowDependent: true` 的流任务,`docs/plan/prerender-products-contract.md` 第 5.1 节)要整场景的
@@ -81,7 +81,7 @@ export function checkClaimable(task, node) {
   // 1
   // 带 preferNode 的 plan(M6c X4)窗口过后给「指纹符合的 pc」,所以也查指纹;没带的旧形状照旧不查
   const checksFingerprint = !plan || requires.preferNode != null;
-  // 块 N:纯浏览器节点执行用户卡、图卡的任务,指纹按「环境三项 + 在线卡片运行时版本」比;内置卡与别的节点照旧比 envFingerprint。
+  // 块 N:纯浏览器节点执行用户卡、素材效果卡的任务,指纹按「环境三项 + 在线卡片运行时版本」比;内置卡与别的节点照旧比 envFingerprint。
   // 浏览器没有 cardEnvFingerprint(没报运行时版本)时拿 envFingerprint 比,与这种任务的指纹自然对不上
   const runsCardCode = requires.userCards === true || requires.graphCards === true;
   const nodeFingerprint = browser && runsCardCode && typeof node?.cardEnvFingerprint === 'string' && node.cardEnvFingerprint !== ''
@@ -130,7 +130,7 @@ export function checkClaimable(task, node) {
     if (task.tier !== 'shared') return reject(7, 'tier');
     if (task.input?.compositing !== 'independent') return reject(7, 'not-independent');
     if (task.input?.canvasHeavy === true) return reject(7, 'canvas-heavy');
-    // 块 N:用户卡、图卡一定有代码身份;没有(`cardSources` 为空)说明切分方没给身份可对,浏览器不接
+    // 块 N:用户卡、素材效果卡一定有代码身份;没有(`cardSources` 为空)说明切分方没给身份可对,浏览器不接
     if (runsCardCode && Object.keys(requires.cardSources ?? {}).length === 0) return reject(7, 'card-source-missing');
   }
 

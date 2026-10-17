@@ -10,7 +10,7 @@
  * const who = await client.verifyDelegation(委托票据);     // { ok: true, projectId, userId, username, acc, ownerKey, … } | { ok: false, reason }
  * const t = await client.memberTicket({ projectId, conversation, conversationId, delegation: 对话委托 });
  * const protocols = client.dataProtocols(t.ticket);       // 交给数据连接（`promptcut.ticket.<票据>`）
- * const p = await client.publishTicket(projectId);        // 只用来发布补渲计划的连接票据
+ * const p = await client.publishTicket(projectId);        // 只用来发布预渲染重试计划的连接票据
  * await client.demand(projectId, holdMs);                 // 声明「这个项目有活要别的托管方服务做」
  * client.close();
  * ```
@@ -278,7 +278,7 @@ export function createServiceClient({
       return strip(await request({ type: 'hosted.ticket', projectId, conversation, conversationId, delegation }), 'hosted.ticket.ok');
     },
 
-    /** 只用来发布补渲计划的连接票据（服务自己的身份，不带任何成员的权限） */
+    /** 只用来发布预渲染重试计划的连接票据（服务自己的身份，不带任何成员的权限） */
     async publishTicket(projectId) {
       return strip(await request({ type: 'hosted.ticket', projectId, purpose: 'publish' }), 'hosted.ticket.ok');
     },

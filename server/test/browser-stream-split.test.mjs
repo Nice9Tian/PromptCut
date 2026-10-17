@@ -364,7 +364,7 @@ async function publishedBy({ planTask, plan }) {
   return publish?.tasks ?? null;
 }
 
-test('BS-16 local-node:在线页面的清单计划只给浏览器出流(browserStreamsFor);补渲计划、旧执行器、桌面的普通计划照旧', async () => {
+test('BS-16 local-node:在线页面的清单计划只给浏览器出流(browserStreamsFor);预渲染重试计划、旧执行器、桌面的普通计划照旧', async () => {
   const cardPlan = [control('a')];
   const base = { entryKey: 'entry-1', cardPlan, weightOf, streams: [cardStream('a')] };
   const asked = [];
@@ -382,7 +382,7 @@ test('BS-16 local-node:在线页面的清单计划只给浏览器出流(browserS
   // 旧执行器(不给 browserStreamsFor):清单计划照旧不切流,哪怕上下文里带着 streams
   const old = await publishedBy({ planTask: clips, plan: base });
   assert.equal(old.filter(t => t.kind === 'stream').length, 0);
-  // 补渲计划:照旧不切流
+  // 预渲染重试计划:照旧不切流
   const backfill = { ...clips, id: clips.id.replace('#clips:', '#backfill:'), resultKey: clips.resultKey.replace('#clips:', '#backfill:'), priority: 'backfill' };
   const filled = await publishedBy({ planTask: backfill, plan: { ...base, browserStreamsFor } });
   assert.equal(filled.filter(t => t.kind === 'stream').length, 0);

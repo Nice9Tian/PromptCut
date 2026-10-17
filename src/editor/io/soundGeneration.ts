@@ -33,7 +33,7 @@ export function soundPresets() {
         useWhen: "mu-typing 逐字同步;传 sourceClipId 复用其文字与节奏" },
     ],
     limits: { ...SOUND_EFFECT_LIMITS, ...SOUND_JOB_LIMITS },
-    hint: "先复用这些预设。sound_generate 只生成 WAV 普通音频段,不另挂音频图卡。文字或速度改变后 refreshSource:true 显式重生成;用 sound_status 查进度,sound_cancel 取消。",
+    hint: "先复用这些预设。sound_generate 只生成 WAV 普通音频段,不另挂音频素材效果卡。文字或速度改变后 refreshSource:true 显式重生成;用 sound_status 查进度,sound_cancel 取消。",
   };
 }
 

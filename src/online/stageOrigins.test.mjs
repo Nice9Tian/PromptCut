@@ -67,7 +67,7 @@ test("C10-SO-05 握手失败之后本页会话里不再回到双舞台", () => {
   assert.equal(onlineStageState().reason, "B 没握手");
 });
 
-test("C10-SO-06 总开关「在线执行用户卡与图卡」(托管方可关):只有明写 onlineCardExec: false 才是关,没写、写别的、配置不对都按缺省(开)", async () => {
+test("C10-SO-06 总开关「在线执行用户卡与素材效果卡」(托管方可关):只有明写 onlineCardExec: false 才是关,没写、写别的、配置不对都按缺省(开)", async () => {
   const { parseCardExecSwitch } = await import("./stageOrigins.ts");
   assert.equal(parseCardExecSwitch({ v: 1, stageOrigins: ["https://s1.x.io", "https://s2.x.io"], onlineCardExec: false }), false);
   assert.equal(parseCardExecSwitch('{"v":1,"onlineCardExec":false}'), false);

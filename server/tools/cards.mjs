@@ -79,7 +79,7 @@ export const cardsTools = [
   },
   {
     name: "apply_card",
-    description: "把一张图卡定义应用为实例。同一定义可用于多段素材。clipId为已有片段；或trackId/start/end创建新动画或音频片段。inputs以名称映射到{clipId}（指素材段 = 该素材，指图卡片段 = 那张图卡的输出）或{nodeId}另一卡输出，可加offset秒和rate倍率；不传inputs时：片段上已有图卡就接它的输出，否则接目标clip的原始素材。多输入转场常用A/B。params作为实例参数传入。nodeId不传自动生成，传当前clip.nodeId可编辑该实例参数和输入。",
+    description: "把一张素材效果卡定义应用为实例。同一定义可用于多段素材。clipId为已有片段；或trackId/start/end创建新动画或音频片段。inputs以名称映射到{clipId}（指素材段 = 该素材，指素材效果卡片段 = 那张素材效果卡的输出）或{nodeId}另一卡输出，可加offset秒和rate倍率；不传inputs时：片段上已有素材效果卡就接它的输出，否则接目标clip的原始素材。多输入转场常用A/B。params作为实例参数传入。nodeId不传自动生成，传当前clip.nodeId可编辑该实例参数和输入。",
     inputSchema: { type: "object", properties: {
       cardId: { type: "string" }, clipId: { type: "string" }, trackId: { type: "string" }, start: { type: "number" }, end: { type: "number" },
       nodeId: { type: "string" }, params: { type: "object" }, frame: { type: "object" },

@@ -16,7 +16,7 @@ export function CardAudioForm({ clip }: { clip: TrackClip }) {
   const active = useRef(false);
   if (!clipHasEmbeddedAudio(project, clip, getCard)) return null;
   const locked = project.tracks.find(track => track.clips.some(c => c.id === clip.id))?.locked;
-  // 在线页面(`product/platforms.md`「卡片声音的平台边界」):内置有声卡可以在浏览器里合成(判轻的);用户卡、图卡与低内存档照旧只用同步来的声音
+  // 在线页面(`product/platforms.md`「卡片声音的平台边界」):内置有声卡可以在浏览器里合成(判轻的);用户卡、素材效果卡与低内存档照旧只用同步来的声音
   const online = onlinePage(), synthHere = !online || (clipSoundRunnable(project, clip) && !planLowMemory());
   let ready = false, status = "尚未生成卡片声音";
   try { persistentCardAudio(project, clip); ready = true; status = "声音已保存，预览和导出共用同一份 WAV"; }

@@ -650,7 +650,7 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
 }
 
 /* ------------------------------------------------------------------ *
- * GET /@media/<hash>/pcm —— 音频图卡的素材输入
+ * GET /@media/<hash>/pcm —— 音频素材效果卡的素材输入
  * ------------------------------------------------------------------ */
 
 /** 路由里的哈希。必须排在 /@media/<文件名> 之前,不然 `.pop()` 取出来的是 "pcm" */
@@ -1025,7 +1025,7 @@ export function mediaMiddleware(root: string, options: ProjectMediaOptions = {})
       return handleMediaFile(req, res, root);
     }
 
-    // GET /@media/<hash>/pcm?start=&count=&sampleRate=&ch=2 —— 音频图卡的素材输入。
+    // GET /@media/<hash>/pcm?start=&count=&sampleRate=&ch=2 —— 音频素材效果卡的素材输入。
     // 一定要排在下面 /@media/<文件名> 那支之前:那支用 .split("/").pop() 取名,
     // 取到的会是 "pcm",取到了就直接 serveFile,这条路由永远轮不上。
     if (req.method === "GET") {

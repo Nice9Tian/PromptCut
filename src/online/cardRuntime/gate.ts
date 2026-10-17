@@ -1,5 +1,5 @@
 /**
- * 本页能不能执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 3.1 的前提)。
+ * 本页能不能执行同步来的用户卡与素材效果卡(`docs/plan/online-card-exec-contract.md` 3.1 的前提)。
  *
  * 缺一条就不执行,整体退回原做法:
  *   - `site`:站点的总开关没关(运行配置 `runtime-config.json` 的 `onlineCardExec`,缺省开);
@@ -41,7 +41,7 @@ export function cardVisualExecAvailable(): boolean {
 
 /** 不能执行时,卡片该报哪一句(参数面板):站点关了与没有隔离环境是两句话,状态都是 `not-isolated` */
 export function cardExecBlockedDetail(): string | null {
-  if (gate.site === false) return "这个站点没有开启在线运行用户卡与图卡";
+  if (gate.site === false) return "这个站点没有开启在线运行用户卡与素材效果卡";
   if (!gate.isolated) return null;
   return null;
 }

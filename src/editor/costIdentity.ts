@@ -60,7 +60,7 @@ let cached: ClipIdentity = EMPTY;
 let cachedLocalKey = "";
 
 /**
- * 在线浏览器模式下本页运行不了的片段(图卡、运行不了的用户卡;C10 契约第 9 节,`placeholderHost.needsLocalPc`)不给身份 ——
+ * 在线浏览器模式下本页运行不了的片段(素材效果卡、运行不了的用户卡;C10 契约第 9 节,`placeholderHost.needsLocalPc`)不给身份 ——
  * 本页能运行的用户卡(构建时就在包里的、同步来且载入成功的)照内置卡给身份、照测(`online-card-exec-contract.md` 第 6 节):页面不测它们(`probeRunner` 按身份挑卡)、
  * 分派表查不到成本记录也查不到声明的帧模式,一律按重卡(`clipWeight` 的 `declared-heavy`)—— 旧的 L2 里哪怕留着
  * 以前在后台舞台上测过的记录也不认;舞台拿不到它们的身份,停下也就不追;不把它们的记录转写进文档服务。
@@ -90,12 +90,12 @@ function dropClips(id: ClipIdentity, local: ReadonlySet<string>): ClipIdentity {
 }
 
 /**
- * 有声动效卡(画面是组件、另写了 `audio()`)片段自己的图卡节点算它的成本身份节点(`pipelinePlan.mjs` 的 `clipCostNodes`):
+ * 有声动效卡(画面是组件、另写了 `audio()`)片段自己的素材效果卡节点算它的成本身份节点(`pipelinePlan.mjs` 的 `clipCostNodes`):
  * 它的画面就是一张普通的 DOM 卡,和别的卡一样第一次要用时就测、测完按结果判轻重。2026-10-06 之前它没有身份
- * (图卡那一支合成的节点不带 `clipId`),从不测量,画面在桌面与在线都永远按重卡。
+ * (素材效果卡那一支合成的节点不带 `clipId`),从不测量,画面在桌面与在线都永远按重卡。
  *
- * 画面由 `card()` 出的图卡、只有 `audio()` 的音频图卡不算,照旧没有身份:测量用的是只留这一个片段的缩水项目
- * (`probeRunner.ts` 的 `shrinkProject`,不带素材与卡片图节点),图卡的输入在那里取不到;音频图卡没有画面。
+ * 画面由 `card()` 出的素材效果卡、只有 `audio()` 的音频素材效果卡不算,照旧没有身份:测量用的是只留这一个片段的缩水项目
+ * (`probeRunner.ts` 的 `shrinkProject`,不带素材与卡片图节点),素材效果卡的输入在那里取不到;音频素材效果卡没有画面。
  */
 function ownsVisual(node: { cardId?: unknown }): boolean {
   const def = typeof node.cardId === "string" ? getCard(node.cardId) : undefined;
@@ -105,7 +105,7 @@ function ownsVisual(node: { cardId?: unknown }): boolean {
 /**
  * 摊成图。卡片图里有悬空输入时 `projectCardGraph` 会抛(删片段不清 `cardNodes`):以前这一轮整个项目都没有身份,
  * 全部卡不测、按声明兜底(没声明 `direct` 的一律按重)。现在退一步只按片段自己的卡再摊一遍(不带卡片图节点、
- * 不看片段的 `nodeId`):普通卡与有声动效卡的节点内容与完整的图里相同,身份照给、照测;坏掉的图卡链路本来就没有身份。
+ * 不看片段的 `nodeId`):普通卡与有声动效卡的节点内容与完整的图里相同,身份照给、照测;坏掉的素材效果卡链路本来就没有身份。
  * 这一遍也抛才当作没有身份。
  */
 function costGraph(project: Project, cardOf: (id: string) => ReturnType<typeof getCard> = getCard): ReturnType<typeof projectCardGraph> {

@@ -450,7 +450,7 @@ async function startQueueNode(root: string, service: FramePipeline, auto: AutoLi
    */
   const mine = { claimed: new Set<string>(), completed: new Set<string>(), dedup: new Set<string>(), failed: new Set<string>() };
   /**
-   * 认领的先后(c10a 契约第 17 节的验收:补渲细任务排在本机判重的任务之后):每条 `task.claimed` 记 id、时刻、优先级,
+   * 认领的先后(c10a 契约第 17 节的验收:预渲染重试细任务排在本机判重的任务之后):每条 `task.claimed` 记 id、时刻、优先级,
    * 最多留 CLAIM_LOG 条。只给诊断与 c10a-demo-probe 看。
    */
   const claimLog: { id: string, at: number, priority: unknown }[] = [];
@@ -908,7 +908,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
       rec.assets = hostAssetClient({ node, endpoint: rec.endpoint, docUrl: entry.url, origin, ticket: rec.ticket, createAssetClient, owner: `host:p${index}` });
       const sink = createAssetSink({ pipeline: service, client: rec.assets.client, content, log });
       /*
-       * C10 契约第 18 节第 9 条:主机认领在线页面的清单计划、补渲计划时,按这条连接的内容库写这一版的层表(`layers:<项目文档 id>`,
+       * C10 契约第 18 节第 9 条:主机认领在线页面的清单计划、预渲染重试计划时,按这条连接的内容库写这一版的层表(`layers:<项目文档 id>`,
        * 在线页面按它找清单)。主机没有推送队列,管线自己的 publishLayerMap 写不出去。
        */
       const publishLayerMap = (entry: any) => {

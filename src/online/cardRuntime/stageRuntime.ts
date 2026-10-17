@@ -9,7 +9,7 @@
  *
  * 运行状态的摊法:载入成功的卡是 `ready`;失败的入口摊到「同步表里源码是这个入口」的那些卡上
  * (同步表由编辑页面经 `setSyncedUserCards` 发来,在舞台自己的注册表里)。载入成功之后再按两样改判:
- *   - 图卡(有 `card()`)而这台舞台的图形能力不够 → `gpu`(4.3;第一次载入图卡时判一次,丢过上下文改判);
+ *   - 素材效果卡(有 `card()`)而这台舞台的图形能力不够 → `gpu`(4.3;第一次载入素材效果卡时判一次,丢过上下文改判);
  *   - 这张卡在这份文档里出过事(`render/cards/cardTrouble.ts`:输入解不了 → `media`,运行中抛错 → `runtime-error`)。
  * 改判的卡写进注册表的 `setLocalCardExec`,舞台不再挂它们,照原做法贴预渲染结果。
  */
@@ -26,9 +26,9 @@ export interface StageCardRuntime {
   setBundles(bundles: readonly CardBundle[]): Promise<LoadResult[]>;
   /** 此刻每张同步卡的运行状态(卡片 id → 状态) */
   states(): [string, CardRunState][];
-  /** 这台舞台的图形能力;还没载入过图卡是 `unknown` */
+  /** 这台舞台的图形能力;还没载入过素材效果卡是 `unknown` */
   graph(): StageGraphCapability;
-  /** 运行中丢了 WebGL 上下文:图形能力改判为不够,图卡全部退回 */
+  /** 运行中丢了 WebGL 上下文:图形能力改判为不够,素材效果卡全部退回 */
   noteContextLost(): void;
   /** 项目画幅变了:按新的长边重判(最大纹理尺寸那一条) */
   refreshGraph(): void;

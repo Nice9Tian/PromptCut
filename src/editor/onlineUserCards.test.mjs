@@ -1,5 +1,5 @@
 /**
- * 在线浏览器模式下这台设备跑不了的卡(用户卡、图卡、内容库同步来的用户卡)在父页一侧的判定(C10 契约第 9 节,2026-09-29 用户改语义)。
+ * 在线浏览器模式下这台设备跑不了的卡(用户卡、素材效果卡、内容库同步来的用户卡)在父页一侧的判定(C10 契约第 9 节,2026-09-29 用户改语义)。
  * 跑:node --experimental-test-module-mocks --test src/editor/onlineUserCards.test.mjs
  *
  *   OU-01 `clipIdentityOf`:在线时不给它们身份(不测、查不到旧成本记录、查不到声明的帧模式);桌面照旧;同步表变了跟着变;
@@ -59,7 +59,7 @@ test("OU-01 clipIdentityOf:在线时本页运行不了的卡没有身份,能运�
     assert.equal(on1.identityKeys.u, desk.identityKeys.u, "构建时的用户卡:有身份(与桌面同一个键)");
     assert.equal(on1.frameModes.u, "direct");
     assert.equal(on1.capabilities.has("u"), true);
-    assert.equal(on1.identityKeys.g, undefined, "图卡:没有身份(图卡的在线执行还没放开)");
+    assert.equal(on1.identityKeys.g, undefined, "素材效果卡:没有身份(素材效果卡的在线执行还没放开)");
     R.setSyncedUserCards([{ id: "synced-card", name: "同步卡", defaults: { n: 1 } }]);
     const on2 = CI.clipIdentityOf(p);
     assert.equal(on2.identityKeys.s, undefined, "同步表到了、还没有运行状态:同步卡没有身份");
@@ -109,7 +109,7 @@ test("OU-02 planDispatch:在线时本页运行不了的卡一律判重、进预�
     CI.resetClipIdentityCache();
     D.setPlanCosts(Object.values(keys).map(lightRec), null);
     await settle();
-    assert.deepEqual([...D.currentPlan().prerenderSet], ["g"], "在线:图卡判重;构建时的用户卡本页能运行,按它的记录判轻;同步表还没到");
+    assert.deepEqual([...D.currentPlan().prerenderSet], ["g"], "在线:素材效果卡判重;构建时的用户卡本页能运行,按它的记录判轻;同步表还没到");
     R.setSyncedUserCards([{ id: "synced-card", name: "同步卡" }]);
     await settle();
     assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s"], "同步表到了、还没载入:没有定义的同步卡判重,算表不崩");
@@ -163,7 +163,7 @@ test("OU-05 未知卡片(两边都没有定义):桌面与在线都不测、不�
       const tag = online ? "在线" : "桌面";
       assert.equal(CI.clipIdentityOf(p).identityKeys.x, undefined, `${tag}:未知卡片没有身份(测量不挑它)`);
       assert.ok(CI.clipIdentityOf(p).identityKeys.b, `${tag}:内置卡照旧有身份`);
-      assert.equal(D.currentPlan().prerenderSet.has("x"), false, `${tag}:不进预渲染集合(清单计划、低内存档补渲都不含它)`);
+      assert.equal(D.currentPlan().prerenderSet.has("x"), false, `${tag}:不进预渲染集合(清单计划、低内存档预渲染重试都不含它)`);
       assert.ok(!D.currentPlan().segments.some((sg) => sg.heavy.has("x") || sg.light.has("x")), `${tag}:分派表里没有它`);
       D.setPlanLowMemory(true);
       await settle();
@@ -202,7 +202,7 @@ test("OU-03 时间轴:标签与「需要本地 PC 渲染辅助」徽标的判定
     assert.equal(badge(true, "synced-card", "full"), false, "覆盖齐了:撤");
     assert.equal(badge(true, "mine", null), false, "没有在线来源(判不了覆盖):还不知道,不出");
     assert.equal(badge(true, "synced-card", "unknown"), false, "层表没取到、有哪一段清单从没取到过:还不知道,不出");
-    assert.equal(badge(true, "graphish", "partial"), true, "图卡");
+    assert.equal(badge(true, "graphish", "partial"), true, "素材效果卡");
     assert.equal(badge(true, "builtin", "none"), false, "内置卡从不出");
     assert.equal(badge(true, "nobody", "none"), false, "两边都没有的 id:只标未知卡片,不挂徽标");
     assert.equal(badge(false, "mine", "none"), false, "桌面从不出");

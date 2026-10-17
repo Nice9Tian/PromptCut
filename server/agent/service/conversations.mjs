@@ -301,7 +301,7 @@ export function createConversationStore({ dataDir = null, now = () => Date.now()
     }
   }
 
-  /** 删一个对话:事件记录、状态、模型历史、补渲清单一起删 */
+  /** 删一个对话:事件记录、状态、模型历史、预渲染重试清单一起删 */
   function remove(conv) {
     closeFd(conv);
     for (const l of [...conv.listeners]) conv.listeners.delete(l);

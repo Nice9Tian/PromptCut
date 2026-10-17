@@ -2,10 +2,10 @@
  * 舞台(`Stage.tsx`)上这台设备跑不了的卡(C10 契约第 9 节,2026-09-29 用户改语义)。服务端渲染出 HTML 来核,跑:
  *   node --test src/render/stageLocalOnly.test.mjs
  *
- *   SL-01 在线浏览器模式:构建时的用户卡、图卡、同步来的用户卡(没有定义)不挂组件;包裹层照内置重卡的路子挂流平面与
+ *   SL-01 在线浏览器模式:构建时的用户卡、素材效果卡、同步来的用户卡(没有定义)不挂组件;包裹层照内置重卡的路子挂流平面与
  *         抑制占位(撤快照后无快照平面);占位槽位不再是常驻的(没有 `data-pc-placeholder-fixed`),默认 `hidden`(进显隐调度);父页没确认这一帧没有结果时
  *         是沙漏(`awaiting`),确认了才是「需要本地 PC 渲染辅助」图标;图标与沙漏按预览缩放补偿(`fit`);两边都没有的 id 不画
- *   SL-02 模式关着(桌面、导出、预渲染):用户卡、图卡照常挂组件,同步表不起作用,没有 `unsupported`
+ *   SL-02 模式关着(桌面、导出、预渲染):用户卡、素材效果卡照常挂组件,同步表不起作用,没有 `unsupported`
  */
 import test from "node:test";
 import assert from "node:assert/strict";

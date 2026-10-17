@@ -8,7 +8,7 @@
  *   CA-WIRE-02  对话委托:不是对话委托、别的项目、别的成员、别的对话的,都不放行;换票据被拒时带着文档服务给的原因
  *   CA-WIRE-03  目录推送:开关被关 → 撤销(disabled);项目从目录里消失 → 文档服务说没有这个项目才当删除,搬迁只停不删,问不到不动
  *   CA-PUB-01   发布通道:计划切完后按细任务逐个到齐才算完成,每条完成通知都报进度;有细任务失败报失败
- *   CA-PUB-02   别的发布方先发过、已经切完的计划(或断线后重发):改发补渲档的同一份清单核对一次,做完的补到齐即完成
+ *   CA-PUB-02   别的发布方先发过、已经切完的计划(或断线后重发):改发预渲染重试档的同一份清单核对一次,做完的补到齐即完成
  *   CA-PUB-03   撤回:退订计划与它切出的细任务;关闭时撤回「这个项目有活」的声明;连接自己断了通知上层重开
  *   CA-DEPLOY-01 部署脚本:四个子命令的脚本里没有没填的占位符、不含任何秘密;参数不对拒绝;PM2 配置的内存上限与入口
  *
@@ -121,7 +121,7 @@ test('CA-WIRE-03 目录推送:关开关即撤销;项目消失时删除与搬迁�
   assert.equal(w.projectState.agentEnabled('sp_a'), true);
   assert.equal(w.projectState.renderEnabled('sp_b'), false);
   assert.deepEqual(w.publisher.availability('sp_b'), { available: true, enabled: false });
-  assert.deepEqual(w.publisher.availability('sp_unknown'), { available: false, enabled: false }, '目录里没有的项目不发补渲');
+  assert.deepEqual(w.publisher.availability('sp_unknown'), { available: false, enabled: false }, '目录里没有的项目不发预渲染重试');
   assert.equal(w.projectState.agentEnabled('sp_unknown'), true, '目录里还没有的项目按缺省(开)答,真假由文档服务核验把关');
   client.push(item('sp_a', false));
   assert.deepEqual(revoked, ['sp_a:disabled']);
@@ -219,7 +219,7 @@ test('CA-PUB-01 计划切完后细任务逐个到齐才算完成,每条完成通
   pub.close();
 });
 
-test('CA-PUB-02 已经切完的计划(别人先发过,或断线后重发):改发补渲档的同一份清单核对一次', async () => {
+test('CA-PUB-02 已经切完的计划(别人先发过,或断线后重发):改发预渲染重试档的同一份清单核对一次', async () => {
   const { pub, handle, seen, ws } = await openPublisher();
   const plan = planOf(8);
   const verifyId = backfillPlanTaskOf({ projectId: 'sp_a', projectRev: 8, clips: ['c1', 'c2'] }).id;
@@ -230,7 +230,7 @@ test('CA-PUB-02 已经切完的计划(别人先发过,或断线后重发):改发
   await handle.publish(plan);
   await tick();
   const verify = ws.sent.filter((m) => m.type === 'task.publish').at(-1).tasks[0];
-  assert.equal(verify.id, verifyId, '核对用的是补渲档的同一份清单');
+  assert.equal(verify.id, verifyId, '核对用的是预渲染重试档的同一份清单');
   assert.equal(verify.priority, 'backfill');
   assert.deepEqual(verify.requires, { codeVersion: 'code-1' });
   assert.deepEqual(seen.done, []);

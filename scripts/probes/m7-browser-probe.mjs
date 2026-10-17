@@ -996,7 +996,7 @@ async function serverChecks(ctx) {
     add('medium', base('medium', 2, {}, { weight: { class: 'medium', estMs: null, frames: 60 } }));
     add('heavy', base('heavy', 2, {}, { weight: { class: 'heavy', estMs: null, frames: 60 } }));
     add('local', base('local', 2, {}, { tier: 'local' }));
-    // 2026-10-06 新语义(契约 11.3):用户卡、图卡的任务本页能运行时纯浏览器节点也认领。认领的条件是任务的 requires.cardSources 里有这张卡的代码身份、
+    // 2026-10-06 新语义(契约 11.3):用户卡、素材效果卡的任务本页能运行时纯浏览器节点也认领。认领的条件是任务的 requires.cardSources 里有这张卡的代码身份、
     // 且节点的 cardEnvFingerprint 对得上。这里的任务 cardSources 为空、指纹是普通指纹,所以仍然认领 0 次(「没有对应代码身份的认领 0 次」那一半,规则 1、7);
     // 「有代码身份的认领并完成」那一半在 online-card-node-probe.mjs(A-1~A-5)与单测 OCN-09/OCN-11 里验
     add('userCard', base('user', 2, { userCards: true }));
@@ -1148,7 +1148,7 @@ async function twinChecks(ctx) {
 }
 
 /**
- * 诊断：本项目全部计划任务的去向（主会话 2026-09-28 追问「低内存页的补渲计划为什么一直 open」）。
+ * 诊断：本项目全部计划任务的去向（主会话 2026-09-28 追问「低内存页的预渲染重试计划为什么一直 open」）。
  * 每个计划：清单种类（#clips / #backfill）、档、requires、状态、认领过它的节点；按 pc 节点的描述跑一遍节点侧过滤与挑选；
  * pc 诊断里的认领记录、持有、闲时门槛、最近事件。全文写进 <out>/plan-dump.json，结果行里放摘要。
  */

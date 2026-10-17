@@ -35,7 +35,7 @@ registerCards(safeUserCards);
 setUserCardSources(userCardFiles, userCardFileOf, userCardDependencies);
 
 /**
- * 音频图卡在页面里求值,`src/audio/cardAudio.ts` 要的定义和源码版本从这里注入
+ * 音频素材效果卡在页面里求值,`src/audio/cardAudio.ts` 要的定义和源码版本从这里注入
  * (模块级,不逐层传参)。每次 HMR 重跑这个模块都会再调一次,`cardAudio` 那边的
  * 版本号跟着 +1 —— 换了卡之后 project 引用不变,靠它让预览重新取块。
  *

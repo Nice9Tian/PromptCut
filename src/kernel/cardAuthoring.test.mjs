@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { applyCardDefinition, cloneCardClipInstance } from './cardAuthoring.mjs';
 import { projectCardGraph } from './cardGraph.mjs';
 
-/* 图卡在仓库里是 src/cards/user/<id>.tsx 文件,定义永远从注册表取。测试里把三张卡
+/* 素材效果卡在仓库里是 src/cards/user/<id>.tsx 文件,定义永远从注册表取。测试里把三张卡
  * 写成普通对象,用一个 getCard 桩当注册表 —— 和浏览器侧传 src/kernel/registry 同一姿势。 */
 const invert = {
   id: 'invert', name: '反色', description: '', source: 'user', kind: 'filter', frameMode: 'direct',
@@ -62,7 +62,7 @@ test('同一片段连套两张:第二张的输入自动接第一张的输出,不
   assert.equal(clipOf(second, 'a').cardId, 'blur');
   assert.deepEqual(second.cardNodes.find(n => n.id === 'n2').inputs.source, { nodeId: 'n1', offset: 0, rate: 1 });
   assert.deepEqual(second.cardNodes.find(n => n.id === 'n1').inputs.source, { nodeId: '@clip/a/source', offset: 0, rate: 1 });
-  // 兜底那条不能再塞一条指向本卡自己的 source(clip.cardId 这时已经是图卡 id)
+  // 兜底那条不能再塞一条指向本卡自己的 source(clip.cardId 这时已经是素材效果卡 id)
   assert.equal(Object.keys(second.cardNodes.find(n => n.id === 'n2').inputs).length, 1);
 });
 
@@ -85,17 +85,17 @@ test('params 覆盖的优先级:节点存一份,片段指向的那个节点在�
   assert.deepEqual(graph.nodes.find(n => n.id === 'n1').params, { amount: .25 }); // 内层保留建卡时那份
 });
 
-test('转场卡的一路输入是另一张图卡的输出,另一路是素材段', () => {
+test('转场卡的一路输入是另一张素材效果卡的输出,另一路是素材段', () => {
   const first = applyCardDefinition(base(), { cardId: 'invert', clipId: 'a', nodeId: 'n1' }, getCard).project;
   const mixed = applyCardDefinition(first, { cardId: 'crossfade', trackId: 'track', start: 2, end: 3, newClipId: 'mix',
     nodeId: 'nmix', inputs: { A: { clipId: 'a' }, B: { clipId: 'b' } } }, getCard).project;
   const node = mixed.cardNodes.find(n => n.id === 'nmix');
-  assert.equal(node.inputs.A.nodeId, 'n1'); // 图卡片段映射成它自己的输出节点
+  assert.equal(node.inputs.A.nodeId, 'n1'); // 素材效果卡片段映射成它自己的输出节点
   assert.equal(node.inputs.B.nodeId, '@clip/b/source'); // 素材段照旧
   assert.doesNotThrow(() => projectCardGraph(mixed, getCard));
 });
 
-test('没有 nodeId 的图卡片段在被引用 / 被套之前先物化成正式节点', () => {
+test('没有 nodeId 的素材效果卡片段在被引用 / 被套之前先物化成正式节点', () => {
   const project = base();
   project.tracks[0].clips.push({ id: 'dropped', cardId: 'invert', start: 2, end: 3, params: { amount: .4 } });
   const result = applyCardDefinition(project, { cardId: 'blur', clipId: 'dropped', nodeId: 'n2' }, getCard);
@@ -108,7 +108,7 @@ test('没有 nodeId 的图卡片段在被引用 / 被套之前先物化成正式
   assert.deepEqual(result.project.cardNodes.find(n => n.id === 'n2').inputs.source, { nodeId: inner.id, offset: 0, rate: 1 });
 });
 
-test('音频图卡只写 nodeId、不写 cardId;同一片段再套视觉图卡报错「先复制片段」', () => {
+test('音频素材效果卡只写 nodeId、不写 cardId;同一片段再套视觉素材效果卡报错「先复制片段」', () => {
   const withAudio = applyCardDefinition(base(), { cardId: 'tone', clipId: 'a', nodeId: 'na' }, getCard).project;
   assert.equal(clipOf(withAudio, 'a').cardId, undefined);
   assert.equal(clipOf(withAudio, 'a').nodeId, 'na');

@@ -16,7 +16,7 @@ export const audioTools = [
   },
   {
     name: "sound_generate",
-    description: "生成可编辑的 WAV 音效并经素材服务入库。preset:notification 为提示音,keyboard 为键盘声。给 sourceClipId(mu-typing)自动复用其文字、每字毫秒、延迟、停顿、种子,放到相同时间轴锚点的独立音频段;不能再给该段挂音频图卡。普通提示音用 start 放置,不传只进素材库。给 clipId 重生成原音效段,成功上传才替换,取消/失败保持旧声音。recipe 可传之前完整配方;params 只改声音参数;refreshSource:true 从当前打字卡重建事件(改文字/速度后用)。工具等待合成和入库完成后返回结果,页面显示进度并可取消;其它会话可用 sound_status 查询、sound_cancel 取消。requestId 是幂等请求键,重试必须复用,不同音效必须换键。音效不会隐式延长项目出点,指定序列重叠会报错。",
+    description: "生成可编辑的 WAV 音效并经素材服务入库。preset:notification 为提示音,keyboard 为键盘声。给 sourceClipId(mu-typing)自动复用其文字、每字毫秒、延迟、停顿、种子,放到相同时间轴锚点的独立音频段;不能再给该段挂音频素材效果卡。普通提示音用 start 放置,不传只进素材库。给 clipId 重生成原音效段,成功上传才替换,取消/失败保持旧声音。recipe 可传之前完整配方;params 只改声音参数;refreshSource:true 从当前打字卡重建事件(改文字/速度后用)。工具等待合成和入库完成后返回结果,页面显示进度并可取消;其它会话可用 sound_status 查询、sound_cancel 取消。requestId 是幂等请求键,重试必须复用,不同音效必须换键。音效不会隐式延长项目出点,指定序列重叠会报错。",
     inputSchema: { type: "object", properties: {
       preset: { type: "string", enum: ["notification", "keyboard"] },
       sourceClipId: { type: "string" }, clipId: { type: "string" },

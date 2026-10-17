@@ -4,7 +4,7 @@
  *        等满 STALE_AWAIT_MS 还没新层才确认(图标、徽标),并叫覆盖订阅方;新层表到了照常换上
  *   SL-2 改回原来的参数:原来那一层还在,照贴
  *   SL-3 旧层表(没有 inputSig)照旧贴,改参数也不撤(向后兼容);页面没给项目也不比
- *   SL-4 普通档(原尺寸、层表 v 3 候选)同样撤;layerClipIds 不含过期的层(低内存档据此补渲);layerRefOf 带签名比对
+ *   SL-4 普通档(原尺寸、层表 v 3 候选)同样撤;layerClipIds 不含过期的层(低内存档据此预渲染重试);layerRefOf 带签名比对
  *   SL-5 导出(`originals.ts`):给了项目时,旧输入的层算缺
  * 跑:node --test src/render/staleLayer.test.mjs
  */

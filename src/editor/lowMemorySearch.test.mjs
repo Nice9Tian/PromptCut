@@ -4,7 +4,7 @@
  *   LS-01 取记录 → 在唯一那个舞台里测(临时切 back、只走计时趟、一次一个缩水项目)→ 切回 front、整份重灌、restore 一次
  *   LS-02 测量期间 lowMemoryMeasuring() 为真(父页据此不投快照、不拨时间),测完为假;遮罩状态带进度
  *   LS-03 本地复用:第二次打开全命中,一次都不测、不切角色、不 restore
- *   LS-04 用户卡、图卡不参加、按重卡;没有记录的卡按重卡不测;direct 卡按随机帧逐帧 setTime(probe)
+ *   LS-04 用户卡、素材效果卡不参加、按重卡;没有记录的卡按重卡不测;direct 卡按随机帧逐帧 setTime(probe)
  *   LS-05 取不到记录抛错(调用方稍后再试),舞台一下都不碰;项目重灌打断的那一张重来
  *
  * 跑:node --test src/editor/lowMemorySearch.test.mjs
@@ -139,7 +139,7 @@ test("LS-03 本地复用:第二次打开全命中,一次都不测、不切角色
   assert.deepEqual([...b.light].sort(), [...a.light].sort());
 });
 
-test("LS-04 用户卡、图卡不参加按重卡;没有记录的卡按重卡不测;direct 卡按随机帧逐帧 setTime(probe)", async () => {
+test("LS-04 用户卡、素材效果卡不参加按重卡;没有记录的卡按重卡不测;direct 卡按随机帧逐帧 setTime(probe)", async () => {
   L.resetLowMemorySearch();
   const extra = [
     { id: "cuser", cardId: "user-card", start: 0, end: 2, params: {} },

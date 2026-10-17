@@ -213,7 +213,7 @@ export function Scene3DView({ project, t }: Props) {
    * 前台渲成功一次就 +1。**只有成功才加。**
    *
    * 要它是因为 momentSig 盯不住这件事:贴图缓存是个 ref,粗粒度那张落地之后 momentSig 一个字都没变
-   * (bakeTOf 前后都返回同一个粗粒度时刻),效果不重跑,下面「停住了就补渲精确帧」那条路就永远够不着。
+   * (bakeTOf 前后都返回同一个粗粒度时刻),效果不重跑,下面「停住了就预渲染重试精确帧」那条路就永远够不着。
    * 失败不加是防死循环:失败后要渲的还是那几张,加了就会一直重试。
    */
   const [bakeGen, setBakeGen] = useState(0);
@@ -976,7 +976,7 @@ export function Scene3DView({ project, t }: Props) {
      *   need 非空 —— 板子上现在是色块,按 bakeTOf 渲。那可能是粗粒度那一档(0.25 秒一格),
      *                拖动时这很划算:一张图管一片区域,不用每落一个位置就渲四五秒。
      *   need 为空、但播放头**停住**了 —— 画面已经有了,可它可能只是那个替身。
-     *                用户在盯着看,补渲播放头自己那一帧(实测停在第 121 帧时,
+     *                用户在盯着看,预渲染重试播放头自己那一帧(实测停在第 121 帧时,
      *                三维拿的是第 120 帧,和二维差整整一帧)。
      * 拖动中不补(省渲染),停住才补(要准)。
      */
@@ -1058,7 +1058,7 @@ export function Scene3DView({ project, t }: Props) {
            * 键就是「那一刻」,扔掉的话拖回去还得再等一遍。
            * 但只有播放头还停在这一刻时才往板子上贴 —— 挪走了还贴,贴的就是别的时刻的画面。
            */
-          // 存到**我们要的那一刻**上,不是 momentKey —— 补渲精确帧时这两个键不是同一个
+          // 存到**我们要的那一刻**上,不是 momentKey —— 预渲染重试精确帧时这两个键不是同一个
           if (a) moments.current.set(texKeyOf(a.clip, a.at), b.url);
           // 存完再算 momentKey:精确帧一进缓存,bakeTOf 就改口选它,这里正好对上、换上去
           if (!dead && a && texKeyOf(a.clip, a.at) === momentKey(a.clip)) swap.current.get(b.clipId)?.(b.url, true);

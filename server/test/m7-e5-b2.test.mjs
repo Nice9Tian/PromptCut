@@ -158,7 +158,7 @@ function b2Tasks() {
     [streamTask({ fp: FP }), false, '轨道流'],
     [clipsPlan(), false, 'plan'],
     [snapTask({ contentKey: 'usercard', fp: FP, requires: { userCards: true } }), false, '用户卡'],
-    [snapTask({ contentKey: 'graph', fp: FP, requires: { graphCards: true } }), false, '图卡'],
+    [snapTask({ contentKey: 'graph', fp: FP, requires: { graphCards: true } }), false, '素材效果卡'],
     [snapTask({ contentKey: 'modded', fp: FP, requires: { cardSources: { motion: 'user:abc' } } }), false, '改过源码的卡'],
     [snapTask({ contentKey: 'oldcode', fp: FP, requires: { codeVersion: 'cv-0' } }), false, '代码版本不同'],
     [snapTask({ contentKey: 'otherfp', fp: OTHER_FP }), false, '别的环境指纹'],
@@ -166,7 +166,7 @@ function b2Tasks() {
   ];
 }
 
-test('B2 节点侧过滤：纯浏览器只收 light / medium 共享档快照，heavy、流、plan、本地档、用户卡、图卡、改过源码的卡一律不收', () => {
+test('B2 节点侧过滤：纯浏览器只收 light / medium 共享档快照，heavy、流、plan、本地档、用户卡、素材效果卡、改过源码的卡一律不收', () => {
   const node = BROWSER_NODE('zoe@devA');
   for (const [task, want, what] of b2Tasks()) {
     const withUser = { ...task, source: { ...task.source, userId: 'zoe@devA' } };

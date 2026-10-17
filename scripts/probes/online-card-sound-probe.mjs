@@ -1,5 +1,5 @@
 /**
- * 在线执行用户卡与图卡 · 声音线程的真实浏览器探针(`docs/plan/online-card-exec-contract.md` 3.5)。
+ * 在线执行用户卡与素材效果卡 · 声音线程的真实浏览器探针(`docs/plan/online-card-exec-contract.md` 3.5)。
  * 全程在本机:本探针自己起的 dev server,不连任何托管端,不向扬声器出声(Chrome 无头、`--mute-audio`;声音线程只算采样、不播)。
  *
  *   node scripts/probes/online-card-sound-probe.mjs [--port 5783] [--out <目录>] [--phases dev,online]

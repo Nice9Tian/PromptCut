@@ -104,7 +104,7 @@ function admitNodeHello(principal, msg, nodeUserOf) {
       const envFingerprint = describeEnvironment({ platform: env.platform, renderer: env.renderer, vendor: env.vendor, chromeVersion: env.userAgent }).fingerprint;
       out = { ...msg, envFingerprint };
     }
-    // 块 N(`docs/plan/online-card-exec-contract.md` 第 7 节第 2 条):纯浏览器节点执行用户卡、图卡用的指纹 = 三项环境值再加
+    // 块 N(`docs/plan/online-card-exec-contract.md` 第 7 节第 2 条):纯浏览器节点执行用户卡、素材效果卡用的指纹 = 三项环境值再加
     // 页面报的「在线卡片运行时版本」(`msg.cardRuntime`),同样由这里算、自报的不作数;没报或不合格就没有这个指纹。
     // 别的 profile、没有 environment 的连接一律去掉这一项:只有浏览器节点有它。`envFingerprint` 一个字不变。
     const { cardRuntime, ...rest } = out;
@@ -305,7 +305,7 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
     const parsed = parseInbound(msg);
     if (!parsed.ok) return q.handle(connId, msg);
     const pending = new Map();
-    // c10a 契约第 17 节:`priority` 可以是 'normal' / 'backfill';摘要只比数(补渲档算 -1)
+    // c10a 契约第 17 节:`priority` 可以是 'normal' / 'backfill';摘要只比数(预渲染重试档算 -1)
     for (const t of parsed.body.tasks) pending.set(t.id, { priority: prioritySummaryValue(t.priority), fp: fingerprintOf(t.requires) });
     publishing = { connId, pending, seen: false };
     try {

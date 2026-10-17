@@ -44,7 +44,7 @@ import {
 
 /*
  * 在线浏览器模式(product/platforms.md「在线浏览器模式」):在线构建(`ONLINE`)恒开;桌面上由舞台地址的 `platform=browser`
- * 显式打开(截图和探针用,编辑页的同名参数经 `stageSrc` 转发过来)。开着时这台设备跑不了的卡(用户卡、图卡)不挂组件,
+ * 显式打开(截图和探针用,编辑页的同名参数经 `stageSrc` 转发过来)。开着时这台设备跑不了的卡(用户卡、素材效果卡)不挂组件,
  * 照贴预渲染结果,什么都贴不上才显示 `unsupported` 占位(C10 契约第 9 节)。
  */
 try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location:导出 / 单测 */ }
@@ -323,7 +323,7 @@ export default function StageView() {
   const projectGen = useRef(0);
 
   /*
-   * 卡片图(H3):图卡的输入在这里解。projectCardGraph 对悬空输入会 throw
+   * 卡片图(H3):素材效果卡的输入在这里解。projectCardGraph 对悬空输入会 throw
    * (删片段不清 cardNodes),所以包 try —— 一张坏卡不能让整台舞台卸载。
    * 放在 `if (!project) return null` 之前:hooks 不能条件调用。
    */
@@ -336,7 +336,7 @@ export default function StageView() {
   useEffect(() => {
     if (cardsGen > 0) postStageCards(cardsStamp());
   }, [cardsGen]);
-  // 在线舞台里运行时载入的用户卡与图卡换了一批(`online/cardRuntime/stageRuntime.ts`):卡片图按新定义重解。桌面运行环境里这个数恒为 0
+  // 在线舞台里运行时载入的用户卡与素材效果卡换了一批(`online/cardRuntime/stageRuntime.ts`):卡片图按新定义重解。桌面运行环境里这个数恒为 0
   const runtimeGen = useSyncExternalStore(onRuntimeCardsChanged, runtimeCardsGen, runtimeCardsGen);
   const graph = useMemo(() => {
     if (!project) return undefined;
@@ -456,7 +456,7 @@ export default function StageView() {
     };
     if (ONLINE) for (const type of ["webglcontextlost", "error", "loadeddata"]) document.addEventListener(type, onTrouble, true);
     /*
-     * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 2、3、4、8 节)。编辑页面经 `loadUserCards` 发来转译好的包;
+     * 在线执行同步来的用户卡与素材效果卡(`docs/plan/online-card-exec-contract.md` 第 2、3、4、8 节)。编辑页面经 `loadUserCards` 发来转译好的包;
      * 这里只在**本文档自己的执行闸门**开着时执行(`online/isolation/execGate.ts`:是跨源舞台入口、自检通过、父页点头、从没见过票据、没出过加固拦下的事):
      *   - 画面那一半还要本文档的出口由浏览器拦(`cardVisualExecAllowed`;〔裁:主会话 2026-10-06〕只靠脚本加固的浏览器上不执行画面);
      *   - 声音那一半在这一台起的后台线程里执行(线程从 blob 地址引导,继承本文档的策略),只有父页点名的那一台(实例 B)起。
@@ -500,7 +500,7 @@ export default function StageView() {
           cardExec.runtime?.dispose(); cardExec.runtime = null;
           postStageEvent({ type: "card-states", states: [], graph: "unknown", visual: false });
         }
-        // 没有同步来的卡就不起声音线程(也不报声音状态):项目里没有用户卡、图卡时这一台与以前一样安静
+        // 没有同步来的卡就不起声音线程(也不报声音状态):项目里没有用户卡、素材效果卡时这一台与以前一样安静
         if (cardExec.sound && (bundles.length > 0 || cardExec.soundHost)) {
           if (!cardExec.soundHost) {
             const [m, sp] = await Promise.all([import("./online/cardRuntime/stageSound"), import("./online/cardRuntime/soundSpawn")]);
@@ -614,7 +614,7 @@ export default function StageView() {
     };
     const NO_CLIPS: ReadonlySet<string> = new Set();
     /**
-     * 这份项目里这台设备跑不了的片段(在线浏览器模式下的用户卡、图卡;`localOnlyClipIds`)。按项目引用、注册表与同步表的代数记忆化;
+     * 这份项目里这台设备跑不了的片段(在线浏览器模式下的用户卡、素材效果卡;`localOnlyClipIds`)。按项目引用、注册表与同步表的代数记忆化;
      * 模式关着(桌面)恒为空集合,不多花一次遍历。
      */
     let localOnlyMemo: { project: unknown; reg: number; synced: number; ids: ReadonlySet<string> } | null = null;
@@ -1769,7 +1769,7 @@ export default function StageView() {
         // R9:项目选项的路线(生效值;切了就重建 glHost 那一侧的连接,M2 / 约束第 1 条)
         gl.setRoute(resolveGlRoute(full.glRoute, caps.lowMemory));
         flushSync(() => setProject(full));
-        // 画幅可能变了:图卡的图形能力(最大纹理尺寸那一条)按新的长边重判
+        // 画幅可能变了:素材效果卡的图形能力(最大纹理尺寸那一条)按新的长边重判
         if (!prev || prev.width !== full.width || prev.height !== full.height) cardExec.runtime?.refreshGraph();
         window.clearTimeout(ref.current.settle);
         // 项目变了,在飞的补跑作废:探针会按新项目重发
@@ -2295,7 +2295,7 @@ export default function StageView() {
       /**
        * 低内存档停下追当前一帧(c10a 契约第 17 节;纯的部分在 `render/lowMemorySettle.ts`)。父页在暂停、点击或拖动松开、
        * 播放到头的那次 `setTime` 之后发。当前这一帧的所有卡(重卡也画)按「直接定位的先、推帧卡要推的帧少的先」一层层活渲,
-       * 画好的层撤兜底、换上活渲;到 `timeoutMs` 还没画好的维持占位符。用户卡、图卡不追:有这一帧的预渲染小尺寸就贴,
+       * 画好的层撤兜底、换上活渲;到 `timeoutMs` 还没画好的维持占位符。用户卡、素材效果卡不追:有这一帧的预渲染小尺寸就贴,
        * 没有才显示 `unsupported` 占位(2026-09-29 用户改语义)。
        * 新的 `setTime` / `play` / `setProject` / `setRole` 递增 `catchUpGen`,这一次随之收摊、回 `ok: false`。
        */
@@ -2317,7 +2317,7 @@ export default function StageView() {
         for (const clip of cardClipsAt(sec)) {
           const c = clip as { id: string; start: number; end: number; cardId?: string; parts?: unknown[]; params?: unknown };
           const def = c.cardId ? getCard(c.cardId) : undefined;
-          // 这台设备跑不了的卡(用户卡、图卡)不追:有这一帧的预渲染小尺寸就贴着,没有就是 `unsupported` 占位
+          // 这台设备跑不了的卡(用户卡、素材效果卡)不追:有这一帧的预渲染小尺寸就贴着,没有就是 `unsupported` 占位
           const unsupported = unsupportedHere(c.cardId, def);
           const mountFrame = mountFrameOf(clip, fps);
           const frameMode = def ? clipFrameMode(c as never, def) : undefined;
@@ -2599,7 +2599,7 @@ export default function StageView() {
         bakeCursor = null;
         return { ok: true as const };
       },
-      /** 在线执行同步来的用户卡与图卡:收下编辑页面发来的包(全量);执行不执行看本文档自己的闸门(见上面 `applyCardBundles`) */
+      /** 在线执行同步来的用户卡与素材效果卡:收下编辑页面发来的包(全量);执行不执行看本文档自己的闸门(见上面 `applyCardBundles`) */
       async loadUserCards(bundles, opts = {}) {
         if (import.meta.env.VITE_PC_ONLINE !== "1") return { ok: false, reason: "unsupported" as const };
         const gate = stageExecGate();
@@ -2798,7 +2798,7 @@ export default function StageView() {
          * E7:舞台页渲 `FrameScene` 的**活播放变体** —— 素材层在舞台里(第 1 条)、
          * 卡片活跃判据用 `cardMountedAt`(第 2 条)、六个平面 prop 原样透传(第 3～5 条)。
          * `graph` 就是上面那个 `useMemo`:**漏传的话** `graphVisualNode` 恒为 false、
-         * 素材段被画两层,而且 `timeline.graph` 为空、图卡解不出输入,编译器不会拦。
+         * 素材段被画两层,而且 `timeline.graph` 为空、素材效果卡解不出输入,编译器不会拦。
          */
         <FrameScene
           project={project}

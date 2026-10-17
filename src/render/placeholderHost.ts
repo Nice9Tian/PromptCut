@@ -9,7 +9,7 @@
  *   2. **显示谁**(`placeholderWanted`,纯函数):T1 兜底链尽头(被抑制、这一拍流 blank、又没挂快照)、
  *      T2 `.pc-awaiting`(快照还没到、这一拍流也没在画)、T3 `.pc-settling` 且没挂快照(不可见地追帧)、
  *      T4 等后台补跑互换的轻卡(被抑制、分派表说它这一刻是轻卡);在线浏览器模式下这台设备跑不了的卡
- *      (用户卡、图卡)没有可贴的快照 / 流时一律是 `unsupported`。
+ *      (用户卡、素材效果卡)没有可贴的快照 / 流时一律是 `unsupported`。
  *   3. **显隐**:`StageView` 每拍 / 每次平面提交之后按上面的结果只用 contract 的 `setPlaceholderShown`
  *      切槽位的 `hidden`,不经 React 提交(`applyPlaceholders`)。满 120 ms 才可见由占位组件的 CSS 负责。
  *   4. **几何**(`geometryFor`):流清单的实体框(`tight ?? bound`)→ 这张卡上次活渲时量到的墨迹框 →
@@ -89,7 +89,7 @@ export interface PlaceholderState {
   /** 被抑制但这一刻判轻的卡(K3(b) 的 `vtOk = false` 轻卡在等后台补跑);缺省看 `setCatchingUpClips` 那一份 */
   isLight?: (clipId: string) => boolean;
   /**
-   * 此刻在场、这台设备跑不了的卡(在线浏览器模式下的用户卡、图卡;`localOnlyClipIds`)。它们照兜底顺序贴快照 / 流;
+   * 此刻在场、这台设备跑不了的卡(在线浏览器模式下的用户卡、素材效果卡;`localOnlyClipIds`)。它们照兜底顺序贴快照 / 流;
    * 什么都贴不上时,父页已确认这一帧没有可贴的结果(`confirmedMissing`)的显示 `unsupported`(「电脑 + 离线」图标),
    * 其余(层表没取到、清单没到、字节在路上)显示普通加载占位 `awaiting`(沙漏),暂停时也一样。不管在不在抑制、等快照里。缺省空。
    */
@@ -166,7 +166,7 @@ export function placeholderWanted(s: PlaceholderState): Map<string, PlaceholderR
 /* ------------------------------------------------------------------ 2b. 本机渲染不了的卡(unsupported) */
 
 /**
- * 在线浏览器模式(product/platforms.md「在线浏览器模式」,2026-09-29 用户改语义):用户卡、图卡的代码这台设备跑不了,
+ * 在线浏览器模式(product/platforms.md「在线浏览器模式」,2026-09-29 用户改语义):用户卡、素材效果卡的代码这台设备跑不了,
  * 但有预渲染结果就照贴,与内置卡相同(一律按重卡:播放中抑制、不活渲,停下不追)。只有这一帧没有可贴的结果、又轮到
  * 这台设备自己渲染时,才在兜底顺序尽头显示 `unsupported` 占位(「电脑 + 离线」图标和「需要本地 PC 渲染辅助」),
  * 不透明、顶替沙漏;结果到了自动换上(C10 契约第 9 节)。
@@ -185,7 +185,7 @@ export function onlineBrowserMode(): boolean {
  * 在线逐帧导出的导出页(与编辑页面同源的 `?export=1` 文档,`src/export/frameCompositor.ts` 开的 iframe)里同步来的用户卡:
  * 这个文档不执行卡片代码、也没有它们的定义,但导出要把每一帧里这些卡的包裹层换成预渲染原尺寸(契约第 8 节「在线导出」),
  * 所以包裹层得先挂出来。编辑页面经 `__pcSetSyncedUserCards` 把同步表交给导出页并打开这个开关;只对「没有定义的同步卡」生效,
- * 内置卡、图卡与桌面的导出一个字不变(开关只有在线导出才会打开)。
+ * 内置卡、素材效果卡与桌面的导出一个字不变(开关只有在线导出才会打开)。
  */
 let exportSyncedMount = false;
 export function setExportSyncedMount(on: boolean): void {
@@ -196,7 +196,7 @@ export function exportSyncedMountFor(cardId: string | undefined, def: unknown): 
 }
 
 /*
- * 低内存档不执行用户卡、图卡的代码(`product/platforms.md`「面向的平台」;它的现有规则,不因在线执行放开而变):
+ * 低内存档不执行用户卡、素材效果卡的代码(`product/platforms.md`「面向的平台」;它的现有规则,不因在线执行放开而变):
  * 构建时就在在线包里的仓库用户卡在低内存档也照旧算运行不了(同步来的卡另有运行状态 `low-memory`)。
  * 档位从两处得知:编辑页面由 `planDispatch.setPlanLowMemory` 写进来;舞台是另一个文档,看它启动时写下的取档策略
  * (`mediaTier.ts` 的 `mediaTierPolicy().lowMemory`,`StageView` 按能力表设)。桌面两处恒为 false。
@@ -209,7 +209,7 @@ export function localOnlyLowMemory(): boolean {
   return lowMemoryTier || mediaTierPolicy().lowMemory === true;
 }
 
-/** 这份文档能不能跑图卡:低内存档一律不能;其余看注册表(`registry.graphCardsRunnableHere`,只有执行卡片的舞台为真) */
+/** 这份文档能不能跑素材效果卡:低内存档一律不能;其余看注册表(`registry.graphCardsRunnableHere`,只有执行卡片的舞台为真) */
 export function graphCardsHere(): boolean {
   return !localOnlyLowMemory() && graphCardsRunnableHere();
 }
@@ -221,7 +221,7 @@ export function userCardRunnableHere(cardId: string): boolean {
 
 /**
  * 这张卡在此刻的平台上是不是渲染不了。`isUserCard` 缺省查注册表的 `isUserCardId`(构建时的定制卡登记,
- * 加上内容库同步来的用户卡);图卡的判法见 `needsLocalPc`。
+ * 加上内容库同步来的用户卡);素材效果卡的判法见 `needsLocalPc`。
  */
 export function unsupportedHere(
   cardId: string | undefined,
@@ -239,9 +239,9 @@ export function unsupportedHere(
  * 用户卡:本页能运行的不算 —— 构建时就在包里的仓库用户卡(它是页面自己的代码);同步来的、运行状态是 `ready` 的
  * (编辑页面看舞台报回的状态,舞台看自己载入成功没有)。转译失败、引用了页面里没有的模块、没有隔离环境、低内存档的照旧算。
  *
- * 图卡 = 写了 `card()` 的(画面由宿主在 GPU 上执行),或只写了 `audio()`、没有画面组件的(音频图卡)。
- * 有画面组件、同时带 `audio()` 的内置有声动效卡不是图卡:它的画面就是一张普通的 DOM 卡,在线页面照常渲染
- * (声音另由宿主合成,`product/platforms.md`「卡片声音的平台边界」)。2026-10-06 之前这里把凡是写了 `audio()` 的都当图卡,
+ * 素材效果卡 = 写了 `card()` 的(画面由宿主在 GPU 上执行),或只写了 `audio()`、没有画面组件的(音频素材效果卡)。
+ * 有画面组件、同时带 `audio()` 的内置有声动效卡不是素材效果卡:它的画面就是一张普通的 DOM 卡,在线页面照常渲染
+ * (声音另由宿主合成,`product/platforms.md`「卡片声音的平台边界」)。2026-10-06 之前这里把凡是写了 `audio()` 的都当素材效果卡,
  * 内置有声卡的画面在在线页面里因此成了「需要本地 PC 渲染辅助」、导出时一直等预渲染原尺寸。
  */
 export function needsLocalPc(
@@ -253,9 +253,9 @@ export function needsLocalPc(
 ): boolean {
   if (!cardId) return false;
   /*
-   * 图卡(画面由 card() 出,或只有 audio()):只在能跑图卡的文档里运行 —— 跨源舞台、画面那一半允许执行、图形能力够
+   * 素材效果卡(画面由 card() 出,或只有 audio()):只在能跑素材效果卡的文档里运行 —— 跨源舞台、画面那一半允许执行、图形能力够
    * (`registry.graphCardsRunnableHere`,由舞台写;契约 4.3)。编辑页面、同源单舞台、低内存档、桌面仿在线模式里恒为运行不了。
-   * 能跑图卡的文档里再看这张卡自己(下面用户卡那一支:载入成功、没出过事)。
+   * 能跑素材效果卡的文档里再看这张卡自己(下面用户卡那一支:载入成功、没出过事)。
    */
   if (!!def && (typeof def.card === "function" || (typeof def.audio === "function" && !def.Component)) && !graphRunnable()) return true;
   // 用户卡:本页能运行的不算(构建时就在包里的仓库用户卡;同步来的、载入成功的,`registry.cardRunnableHere`);低内存档一律算运行不了

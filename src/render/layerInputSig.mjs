@@ -11,7 +11,7 @@
  *   - 片段:`cardId`、`params`、`parts`、`emphasis`、`mediaId`、`mediaOffset`、`filter`、`pixelMap`,
  *     框的宽高(`frame.w` / `frame.h`)、时长(`end - start`)、采样相位(`start` 落在帧格里的小数部分);
  *   - 片段引用的库条目:`project.filters` / `project.pixelMaps` 里那一条,素材的 `hash`(没有就 id);
- *   - 图卡(`nodeId`):`project.cardNodes` 里这个节点和它沿 `inputs` 能走到的节点;输入指向别的片段(`@clip/<id>/…`)时
+ *   - 素材效果卡(`nodeId`):`project.cardNodes` 里这个节点和它沿 `inputs` 能走到的节点;输入指向别的片段(`@clip/<id>/…`)时
  *     递归取那个片段的签名输入,加上它相对本片段的起点差;
  *   - 项目:画幅宽高、fps、`camera3dFov`、`themeId`、`style`。
  * 不进签名:x / y / 锚点 / 缩放 / 旋转、不透明度、淡入淡出、motion、音量与音频效果、片段在时间轴上整帧的平移 ——

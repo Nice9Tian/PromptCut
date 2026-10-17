@@ -137,7 +137,7 @@ function l2LowMemoryCostStore(): CostStore {
 
 /*
  * 父页的在线浏览器模式开关(C10 契约第 9 节):与舞台 `StageView` 同一个判据(在线构建,或编辑页地址上的
- * `platform=browser`,后者经 `stageSrc` 转给舞台)。开着时这台设备跑不了的卡(用户卡、图卡)一律按重卡贴预渲染结果
+ * `platform=browser`,后者经 `stageSrc` 转给舞台)。开着时这台设备跑不了的卡(用户卡、素材效果卡)一律按重卡贴预渲染结果
  * (`snapshotFeed` 的 `localOnlyOf`、`costIdentity.ts` 不给它们身份),时间轴在它们的结果没覆盖整段时挂
  * 「需要本地 PC 渲染辅助」徽标。
  */
@@ -351,7 +351,7 @@ export function Preview() {
    */
   const sharedGlRef = useRef<SharedGl | null>(null);
   /*
-   * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 2、8 节)的页面一侧:转译好的包、各舞台报回的运行状态与图形能力、
+   * 在线执行同步来的用户卡与素材效果卡(`docs/plan/online-card-exec-contract.md` 第 2、8 节)的页面一侧:转译好的包、各舞台报回的运行状态与图形能力、
    * 声音线程的连接。编辑页面只转译、发包、收状态,**不执行任何卡片代码**;包里只有转译结果,不带凭证或票据。
    */
   const cardBundlesRef = useRef<BundleResult[]>([]);
@@ -467,7 +467,7 @@ export function Preview() {
   }, [lowMem, pushMediaPolicy]);
   /*
    * 低内存档(语义 `product/platforms.md`「面向的平台」):播放时一律贴预渲染小尺寸、不活渲任何卡(显示用的表全部判重);
-   * 轻重判定按共享成本记录加界限搜索(下面那个 effect),只决定补渲发给谁、导出时谁本机渲。普通档(电脑浏览器)不变。
+   * 轻重判定按共享成本记录加界限搜索(下面那个 effect),只决定预渲染重试发给谁、导出时谁本机渲。普通档(电脑浏览器)不变。
    */
   useEffect(() => {
     setPlanLowMemory(ONLINE && lowMem);
@@ -1181,7 +1181,7 @@ export function Preview() {
     const src = new OnlineSnapshotSource({
       request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders,
       /*
-       * 用户卡、图卡的层与内置卡一样取清单与字节(C10 契约第 9 节,2026-09-29 起不再豁免);另外整段的清单都取,
+       * 用户卡、素材效果卡的层与内置卡一样取清单与字节(C10 契约第 9 节,2026-09-29 起不再豁免);另外整段的清单都取,
        * 时间轴据此判「预渲染结果覆盖整段没有」(徽标)。
        */
       coverageLayer: (clipId) => localOnlyOf(getState().project).has(clipId),
@@ -1217,7 +1217,7 @@ export function Preview() {
   }, [online, lowMem]);
   /*
    * stale-layer:项目每变一次(本页改的、别的成员改了同步过来的)都把它交给在线来源。来源按它算各片段的输入签名,
-   * 与层表里每层记的 `inputSig` 比对:对不上的旧参数层马上撤掉(就绪区间发空,下一次投递就不再贴,用户卡、图卡显示沙漏,
+   * 与层表里每层记的 `inputSig` 比对:对不上的旧参数层马上撤掉(就绪区间发空,下一次投递就不再贴,用户卡、素材效果卡显示沙漏,
    * 内置重卡照在线普通档的兜底),渲染节点按新输入重写层表后新结果照常换上;改回原来的参数、原来那一层还在就照贴。
    * 放在建来源那个 effect 之后:同一次提交里先建好来源再交项目。
    */
@@ -1246,7 +1246,7 @@ export function Preview() {
       builtins: builtinSourceExports, sourceFiles: builtinCardSourceFiles,
       onFirstSettled: (ok, link) => releaseMeasureGate(ok, link),
       /*
-       * 在线执行同步来的用户卡与图卡(`docs/plan/online-card-exec-contract.md` 第 1、8 节):本页能执行时(`cardRuntime/gate.ts`,
+       * 在线执行同步来的用户卡与素材效果卡(`docs/plan/online-card-exec-contract.md` 第 1、8 节):本页能执行时(`cardRuntime/gate.ts`,
        * 由舞台的隔离自检立起来)把源码转译成包。转译器按需载入,不能执行的页面不取它。编辑页面只转译、不执行。
        */
       bundling: {
@@ -1421,7 +1421,7 @@ export function Preview() {
   }, [online, lowMem]);
   /*
    * C10 契约第 7 节、第 18 节第 9 条:在线普通档自己发布清单计划 —— 测量落定后发、防抖、项目每次改动(文档服务确认的版本变了)
-   * 或清单变了就重发;清单是页面自己判重的片段(预渲染集合)。这台设备跑不了的用户卡、图卡一律判重(`costIdentity.ts`),
+   * 或清单变了就重发;清单是页面自己判重的片段(预渲染集合)。这台设备跑不了的用户卡、素材效果卡一律判重(`costIdentity.ts`),
    * 照样进清单,由桌面版等渲染节点认领(C10 契约第 9 节,2026-09-29 起不再去掉)。没人认领不报错。
    */
   useEffect(() => {
@@ -1471,9 +1471,9 @@ export function Preview() {
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
 
   /*
-   * 低内存档的补渲(c10a 契约第 17 节):判重的层在素材服务里没有产物(不在渲染节点写的层表里)时,
-   * 向队列发布带片段清单的补渲计划任务(标 backfill)。同一批还在等的不重发;页面只发布,不认领。
-   * 用户卡、图卡照样发(它们判重,由桌面版等渲染节点渲;2026-09-29 起不再豁免)。经在线来源同一条文档服务连接发。
+   * 低内存档的预渲染重试(c10a 契约第 17 节):判重的层在素材服务里没有产物(不在渲染节点写的层表里)时,
+   * 向队列发布带片段清单的预渲染重试计划任务(标 backfill)。同一批还在等的不重发;页面只发布,不认领。
+   * 用户卡、素材效果卡照样发(它们判重,由桌面版等渲染节点渲;2026-09-29 起不再豁免)。经在线来源同一条文档服务连接发。
    */
   useEffect(() => {
     if (!online || !lowMem) return;
@@ -1483,7 +1483,7 @@ export function Preview() {
       const src = onlineSourceRef.current;
       const layers = src?.layerClipIds() ?? null;
       const shared = currentSharedLink();
-      // 界限搜索做完之前不知道谁重,不发(契约 c10-contract.md 第 18 节第 8 条:判轻的卡不发补渲)
+      // 界限搜索做完之前不知道谁重,不发(契约 c10-contract.md 第 18 节第 8 条:判轻的卡不发预渲染重试)
       if (!src || !layers || !shared || !lowMemoryJudged()) return;
       // 连接换了(重连、换项目):重新报到,还缺的重发(队列只在内存里)
       if (shared !== link) { link = shared; publisher.reset(); }
@@ -1513,7 +1513,7 @@ export function Preview() {
     // 本地复用接 L2(要在第一次界限搜索之前接上,否则那一轮用页面内存)
     setLowMemoryCostStore(l2LowMemoryCostStore());
     let disposed = false;
-    // 这台设备跑不了的卡(用户卡、图卡)不测、一律判重(界限搜索的 `forcedHeavy`)
+    // 这台设备跑不了的卡(用户卡、素材效果卡)不测、一律判重(界限搜索的 `forcedHeavy`)
     const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined);
     const tick = async () => {
       if (disposed) return;
@@ -1738,7 +1738,7 @@ export function Preview() {
       // C10:在线双舞台、按拍换快照、后台活开关、探针帧的可转移字节
       dual: dualRef.current,
       onlineStages: onlineStageState(),
-      // 在线执行用户卡与图卡:本页此刻能不能执行、为什么不能、会话号(不是秘密;票据不在这里)
+      // 在线执行用户卡与素材效果卡:本页此刻能不能执行、为什么不能、会话号(不是秘密;票据不在这里)
       cardExec: ONLINE ? { ...onlineCardExec(), sid: pageStageIsolation().sid } : null,
       // 首次握手过渡期之后换回双舞台那一下(盖板因为什么、多久撤下)
       handover: { ...handoverInfoRef.current },

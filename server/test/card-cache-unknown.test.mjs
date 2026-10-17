@@ -4,7 +4,7 @@
  *
  *   CU-01 同一个项目带或不带一个未知卡片段:其余片段的控件(`key` / `contentKey` / `snapshotKey` / `cacheContentKey` /
  *         `costKey` / 结果键)逐字相同;未知卡片段没有控件
- *   CU-02 未知卡当别的卡的输入(图卡滤镜吃它的输出):那张卡照常有控件,键与不跳过时逐字相同
+ *   CU-02 未知卡当别的卡的输入(素材效果卡滤镜吃它的输出):那张卡照常有控件,键与不跳过时逐字相同
  *   CU-03 预渲染集合(`prerenderSetOfPlan`,两条路:没有成本记录按声明、有成本记录按分派表)不含未知卡片段;
  *         不带 `unknownClipIds`(旧行为)时它按「没有定义」的缺省能力(stateful、要预渲染)判重 —— 这就是修掉的副作用
  *   CU-04 接线:导出页的 `__pcCardPlan` 带上 `unknownClipIds`(注册表的 `unknownCardClipIds`)
@@ -38,7 +38,7 @@ function project({ unknown = false, consumer = false } = {}) {
   if (unknown) tracks.push({ id: 't-x', name: 'x', clips: [{ id: 'x', cardId: 'nobody', start: 0, end: 4, params: { text: 'hi' } }] });
   const p = { version: 1, id: 'p', name: 'p', width: 640, height: 360, fps: 30, duration: 4, media: [], tracks };
   if (consumer) {
-    // 图卡滤镜吃未知卡片段的输出(`@clip/x/source`),另一个片段 f 指向这个滤镜节点
+    // 素材效果卡滤镜吃未知卡片段的输出(`@clip/x/source`),另一个片段 f 指向这个滤镜节点
     p.cardNodes = [{ id: 'n-f', adapter: 'card', cardId: 'gfx', kind: 'filter', inputs: { source: { nodeId: '@clip/x/source' } }, params: { amount: 0.5 } }];
     tracks.push({ id: 't-f', name: 'f', clips: [{ id: 'f', nodeId: 'n-f', start: 0, end: 4, params: { amount: 0.5 } }] });
   }

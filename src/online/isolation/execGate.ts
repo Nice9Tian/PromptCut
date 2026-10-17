@@ -1,7 +1,7 @@
 /**
  * 舞台这一侧的**执行闸门**(契约 `docs/plan/online-card-exec-contract.md` 第 3.1 节「执行的前提」)。
  *
- * 加载器(块 T 的 `loader.ts`)执行任何用户卡、图卡的代码之前先问 `cardExecGate().allowed`;为假就不执行,
+ * 加载器(块 T 的 `loader.ts`)执行任何用户卡、素材效果卡的代码之前先问 `cardExecGate().allowed`;为假就不执行,
  * 把 `reason` 映射成那张卡的运行状态 `not-isolated`。闸门开着的条件,缺一条就关:
  *
  *   - 本文档是跨源舞台(在线构建的 `stage.html`),加固装上了、自检通过(`isolationCheck.ts`);
@@ -63,14 +63,14 @@ function update(): void {
   for (const l of [...listeners]) { try { l(); } catch { /* 订阅方坏了不影响闸门 */ } }
 }
 
-/** 此刻能不能执行用户卡、图卡的代码。对象身份在状态没变时不变(可直接给 `useSyncExternalStore`) */
+/** 此刻能不能执行用户卡、素材效果卡的代码。对象身份在状态没变时不变(可直接给 `useSyncExternalStore`) */
 export function cardExecGate(): ExecGateState {
   return cached;
 }
 
 /**
  * 本文档能不能执行卡片画面：与执行闸门相同，不要求浏览器支持出口白名单、Trusted Types 或 WebRTC 拦截。
- * 图卡的实际GPU/素材/语法能力仍由运行时另判。
+ * 素材效果卡的实际GPU/素材/语法能力仍由运行时另判。
  */
 export function cardVisualExecAllowed(): boolean {
   return cached.allowed;

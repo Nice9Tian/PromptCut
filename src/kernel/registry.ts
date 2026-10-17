@@ -281,8 +281,8 @@ export function isKnownCardId(id: string | undefined | null): boolean {
 
 /**
  * 两边都没有定义的卡片段(未知卡片;桌面与在线一致)。舞台本来就不画它们,所以测量不测(不给身份)、
- * 分派表不把它们当重卡、不进预渲染集合,页面发的清单计划与低内存档补渲也就不含它们。
- * 只看写了 `cardId` 的片段(只有 `nodeId` 的图卡片段、素材段不算)。
+ * 分派表不把它们当重卡、不进预渲染集合,页面发的清单计划与低内存档预渲染重试也就不含它们。
+ * 只看写了 `cardId` 的片段(只有 `nodeId` 的素材效果卡片段、素材段不算)。
  */
 export function unknownCardClipIds(clips: Iterable<{ id: string; cardId?: string }>): Set<string> {
   const out = new Set<string>();
@@ -291,7 +291,7 @@ export function unknownCardClipIds(clips: Iterable<{ id: string; cardId?: string
 }
 
 /* ------------------------------------------------------------------ *
- * 运行时载入的卡(在线浏览器执行同步来的用户卡与图卡,`docs/plan/online-card-exec-contract.md` 第 2、8 节)
+ * 运行时载入的卡(在线浏览器执行同步来的用户卡与素材效果卡,`docs/plan/online-card-exec-contract.md` 第 2、8 节)
  * ------------------------------------------------------------------ */
 
 /**
@@ -427,8 +427,8 @@ export function cardRunnableHere(id: string | undefined | null): boolean {
 
 /**
  * 执行卡片的那份文档(跨源舞台)自己的两条结论(`docs/plan/online-card-exec-contract.md` 4.3、第 8 节):
- *   - `graph`:这份文档能不能跑图卡(画面那一半允许执行,而且图形能力够);缺省不能;
- *   - `blocked`:运行时载入、但在这份文档里出了事的卡(图卡的输入解不了、运行中抛错):撤下、退回原做法。
+ *   - `graph`:这份文档能不能跑素材效果卡(画面那一半允许执行,而且图形能力够);缺省不能;
+ *   - `blocked`:运行时载入、但在这份文档里出了事的卡(素材效果卡的输入解不了、运行中抛错):撤下、退回原做法。
  * 只有舞台写它;编辑页面不写(那里看舞台报回来的运行状态)。变了 `cardsRegistryGen()` 与 `cardRunStatesGen()` 各加一并通知。
  */
 let localExec: { graph: boolean; blocked: ReadonlySet<string> } = { graph: false, blocked: new Set() };
@@ -445,7 +445,7 @@ export function setLocalCardExec(next: { graph: boolean; blocked?: Iterable<stri
   }
   return true;
 }
-/** 这份文档能不能跑图卡(只在执行卡片的舞台里为真) */
+/** 这份文档能不能跑素材效果卡(只在执行卡片的舞台里为真) */
 export function graphCardsRunnableHere(): boolean {
   return localExec.graph;
 }

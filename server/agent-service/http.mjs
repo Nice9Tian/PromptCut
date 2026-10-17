@@ -102,7 +102,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
   service.onRevoke?.(({ projectId, userId }) => {
     for (const s of [...openStreams]) {
       if (s.projectId !== projectId || (userId != null && s.userId !== userId)) continue;
-      // 收尾的那几条事件(原因与 end)已经先写出去了,这里只是把流结束。先退订再结束:结束之后这个对话再有事件(补渲的进展)不能再往这条流上写
+      // 收尾的那几条事件(原因与 end)已经先写出去了,这里只是把流结束。先退订再结束:结束之后这个对话再有事件(预渲染重试的进展)不能再往这条流上写
       s.close();
     }
   });

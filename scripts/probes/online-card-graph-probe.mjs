@@ -1,25 +1,25 @@
 /**
- * 图卡在线执行的探针(块 G;契约 `docs/plan/online-card-exec-contract.md` 第 4 节、第 13A 节;任务书
- * `docs/plan/sound-online-render-task.md` 第 15 条里「带视频输入源的图卡」「图形能力不够的卡退回原做法」两句)。
+ * 素材效果卡在线执行的探针(块 G;契约 `docs/plan/online-card-exec-contract.md` 第 4 节、第 13A 节;任务书
+ * `docs/plan/sound-online-render-task.md` 第 15 条里「带视频输入源的素材效果卡」「图形能力不够的卡退回原做法」两句)。
  *
  *   npx vite build --mode online
  *   node scripts/probes/online-card-graph-probe.mjs [--dist dist-online] [--base-port 5720] [--doc-port 8796] [--asset-port 8797] [--out <截图目录>]
  *
  * 全程在本机、不连任何远端:本机托管组合(素材服务真核票据) + 仿 nginx 的代理 `lib/hosted-proxy.mjs`(带全套策略头的摆法) + 在线构建。
- * 创建者把一张带视频输入源的图卡(反色滤镜,`src/cards/user/ocg-invert.tsx`)的源码写进内容库,把一段纯色视频与一段解不了的「视频」
+ * 创建者把一张带视频输入源的素材效果卡(反色滤镜,`src/cards/user/ocg-invert.tsx`)的源码写进内容库,把一段纯色视频与一段解不了的「视频」
  * 传进素材服务;在线成员页加入,没有任何预渲染产物。
  *
  * # 验收标准(每条一行「过 / 不过」,最后一行是 JSON `{ ok, pass, fail, fails }`;退出码 = 有没有「不过」)
  *
- * G1 隔离生效、图形能力够(真显卡):图卡在两台舞台里载入成功(运行状态 `ready`),两台的图形能力都是 `ok`;
- *    可见舞台把这段素材的画面换成图卡的输出 —— 截图取片段中心的像素,是视频那一帧颜色的反色(容差 ±24);
+ * G1 隔离生效、图形能力够(真显卡):素材效果卡在两台舞台里载入成功(运行状态 `ready`),两台的图形能力都是 `ok`;
+ *    可见舞台把这段素材的画面换成素材效果卡的输出 —— 截图取片段中心的像素,是视频那一帧颜色的反色(容差 ±24);
  *    视频经舞台自己源上的 `/media-s/<会话号>/media/<哈希>` 按 Range 取(应答 206),请求里不带 `?t=`,舞台里的 `<video>` 地址不带票据;
  *    不显示「需要本地 PC 渲染辅助」,时间轴不挂徽标;没有页面错误。
  * G2 改参数即时生效:把反色强度从 1 改成 0,同一个像素变回视频的原色。
- * G3 输入解不了:另一段素材的字节不是视频,套同一张图卡 —— 这张卡的运行状态变成 `media`(这台设备解不了这段素材),
+ * G3 输入解不了:另一段素材的字节不是视频,套同一张素材效果卡 —— 这张卡的运行状态变成 `media`(这台设备解不了这段素材),
  *    参数面板的说明是那一句;它不再在舞台里运行(两段都退回原做法),舞台没有垮(内置卡照常画)。
- * G4 图形能力不够(另起一个 `--disable-gpu` 的浏览器,软件渲染):图卡的运行状态是 `gpu`,两台舞台报的图形能力是 `software`;
- *    片段退回原做法(舞台不挂图卡的画布);同一个项目里的内置卡照常画;没有页面错误。
+ * G4 图形能力不够(另起一个 `--disable-gpu` 的浏览器,软件渲染):素材效果卡的运行状态是 `gpu`,两台舞台报的图形能力是 `software`;
+ *    片段退回原做法(舞台不挂素材效果卡的画布);同一个项目里的内置卡照常画;没有页面错误。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import puppeteer from 'puppeteer';
@@ -130,7 +130,7 @@ let VIDEO_HASH = '', BAD_HASH = '';
   const ep = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'page' }), log: () => {} });
   await new Promise((r) => { if (ep.connected) r(); else ep.onOpen(r); });
   const put = await createContentClient(ep).put('card-source', `src/cards/user/${CARD_ID}.tsx`, CARD_SOURCE).catch((e) => ({ error: String(e?.message ?? e) }));
-  check('准备:创建者把图卡源码写进内容库', !put?.error, put?.error);
+  check('准备:创建者把素材效果卡源码写进内容库', !put?.error, put?.error);
   try { ep.close?.(); } catch { /* 已经关了 */ }
   const protocols = await buildAuthProtocols({ base: DOC_DIRECT, projectId: made.projectId, username: creator.username, deviceId: 'ocg-probe-node-01', deviceName: 'probe-node', as: 'creator', password: creator.password, role: 'page' });
   const ws = new WebSocket(DOC_DIRECT.replace(/^http/, 'ws'), protocols);
@@ -167,17 +167,17 @@ async function openMember(browser, tag) {
   await page.goto(`${ORIGINS.editor}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
   await until(`${tag} 时间轴`, () => page.evaluate(() => !!window.__pcStore), 30_000);
-  await until(`${tag} 页面认出同步来的图卡`, () => page.evaluate((id) => !!window.__pcCardSources?.()?.cards?.some((c) => c.id === id), CARD_ID), 60_000, 500);
+  await until(`${tag} 页面认出同步来的素材效果卡`, () => page.evaluate((id) => !!window.__pcCardSources?.()?.cards?.some((c) => c.id === id), CARD_ID), 60_000, 500);
   if (!clipsAdded) {
     clipsAdded = true;
-    // 时间轴:0~2 秒 好视频套图卡;4~6 秒 一张内置卡;8~10 秒 解不了的「视频」套同一张图卡(先不放,G3 再放)
+    // 时间轴:0~2 秒 好视频套素材效果卡;4~6 秒 一张内置卡;8~10 秒 解不了的「视频」套同一张素材效果卡(先不放,G3 再放)
     await page.evaluate((hash, cardId) => {
       const S = window.__pcStore;
       S.actions.addClipOnNewTrack({ index: 0, cardId: 'punch-pill', start: 4, duration: 2 });
       const m = S.actions.addMedia({ kind: 'video', name: 'solid.mp4', url: '/@media/' + hash, hash, ext: 'mp4', size: 1000, width: 320, height: 180, duration: 2 });
       S.actions.editCardProject((p) => ({ ...p, duration: Math.max(p.duration, 12),
         cardNodes: [...(p.cardNodes ?? []), { id: 'ocg-n1', adapter: 'card', cardId, kind: 'filter', inputs: { source: '@clip/ocg-clip/source' }, params: { amount: 1 } }],
-        tracks: [{ id: 'ocg-t1', name: '图卡', clips: [{ id: 'ocg-clip', mediaId: m.id, cardId, nodeId: 'ocg-n1', start: 0, end: 2, params: { amount: 1 } }] }, ...p.tracks] }));
+        tracks: [{ id: 'ocg-t1', name: '素材效果卡', clips: [{ id: 'ocg-clip', mediaId: m.id, cardId, nodeId: 'ocg-n1', start: 0, end: 2, params: { amount: 1 } }] }, ...p.tracks] }));
     }, VIDEO_HASH, CARD_ID);
   }
   await page.evaluate(() => window.__pcStore.actions.seek(1));
@@ -220,23 +220,23 @@ const summary = { out: OUT };
 
 try {
   /* ============================================================ G1 / G2 / G3:真显卡 */
-  console.log('\n== G1 隔离生效、图形能力够:带视频输入源的图卡在浏览器里活渲');
+  console.log('\n== G1 隔离生效、图形能力够:带视频输入源的素材效果卡在浏览器里活渲');
   const b1 = await launch();
   summary.chrome = await b1.version();
   const m = await openMember(b1, 'A');
-  const d1 = await until('A 图卡在两台舞台里载入成功', async () => { const d = await m.diag(); return d && d.per.A?.state === 'ready' && d.per.B?.state === 'ready' && d.run?.state === 'ready' ? d : null; }, 90_000, 500);
+  const d1 = await until('A 素材效果卡在两台舞台里载入成功', async () => { const d = await m.diag(); return d && d.per.A?.state === 'ready' && d.per.B?.state === 'ready' && d.run?.state === 'ready' ? d : null; }, 90_000, 500);
   const dNow = d1 ?? await m.diag();
   summary.G1 = dNow;
   check('G1 本页隔离生效(双舞台、可执行、外链允许)', dNow?.dual === true && dNow?.cardExec?.enabled === true && dNow.cardExec.egress === 'none', dNow?.cardExec);
-  check('G1 图卡在两台舞台里载入成功(运行状态 ready),两台的图形能力都是 ok', dNow?.run?.state === 'ready' && dNow?.graph?.A === 'ok' && dNow?.graph?.B === 'ok', { run: dNow?.run, per: dNow?.per, graph: dNow?.graph, bundles: dNow?.bundles });
+  check('G1 素材效果卡在两台舞台里载入成功(运行状态 ready),两台的图形能力都是 ok', dNow?.run?.state === 'ready' && dNow?.graph?.A === 'ok' && dNow?.graph?.B === 'ok', { run: dNow?.run, per: dNow?.per, graph: dNow?.graph, bundles: dNow?.bundles });
   const sid = dNow?.cardExec?.sid ?? '';
   const want = COLOR.map((c) => 255 - c);
   let px = null;
-  await until('A 可见舞台画出图卡的输出(片段中心是视频那一帧的反色)', async () => { px = await m.centerPixel('g1-invert'); return near(px.rgb, want); }, 45_000, 1000);
+  await until('A 可见舞台画出素材效果卡的输出(片段中心是视频那一帧的反色)', async () => { px = await m.centerPixel('g1-invert'); return near(px.rgb, want); }, 45_000, 1000);
   const c1 = await m.clipIn('ocg-clip');
   const front = c1.find((c) => c.role === 'front') ?? c1[0];
   check(`G1 截图取片段中心的像素:是视频那一帧 (${COLOR}) 的反色 (${want}),容差 ±24`, !!px && near(px.rgb, want), { got: px?.rgb, file: px?.file });
-  check('G1 可见舞台挂的是图卡的画布,不显示「需要本地 PC 渲染辅助」,图卡没有报错', front?.mounted === true && front.graphNode === true && front.canvas >= 1 && front.placeholder === false && !front.error, front);
+  check('G1 可见舞台挂的是素材效果卡的画布,不显示「需要本地 PC 渲染辅助」,素材效果卡没有报错', front?.mounted === true && front.graphNode === true && front.canvas >= 1 && front.placeholder === false && !front.error, front);
   const mediaReqs = proxy.requests.filter((r) => r.path === `/media-s/${sid}/media/${VIDEO_HASH}`);
   check('G1 视频经舞台自己源上的 /media-s/<会话号>/media/<哈希> 按 Range 取到(应答 206)', mediaReqs.some((r) => r.status === 206), { count: mediaReqs.length, statuses: [...new Set(mediaReqs.map((r) => r.status))] });
   const leaky = proxy.requests.filter((r) => r.path.includes(VIDEO_HASH) && /[?&]t=/.test(r.path + (r.query ?? ''))).length;
@@ -267,9 +267,9 @@ try {
   await until('A 项目时长含新片段', () => m.page.evaluate(() => window.__pcStore.getState().project.duration >= 10), 10_000);
   await m.page.evaluate(() => window.__pcStore.actions.seek(9));
   if (process.env.PROBE_DEBUG) { await sleep(3000); console.error('[debug]', JSON.stringify(await m.page.evaluate(() => { const p = window.__pcStore.getState().project; return { t: window.__pcStore.getState().t, duration: p.duration, tracks: p.tracks.map((tr) => tr.clips.map((c) => [c.id, c.start, c.end, c.cardId ?? null, c.mediaId ?? null, c.nodeId ?? null])), nodes: (p.cardNodes ?? []).map((n) => [n.id, n.inputs]), media: p.media.map((x) => [x.id, x.kind, x.hash?.slice(0, 6)]) }; })), JSON.stringify(await m.clipIn('ocg-bad')), JSON.stringify(await Promise.all(m.stageFrames().map((f) => f.evaluate(() => ({ err: [...document.querySelectorAll('[data-pc-card-error]')].map((e) => e.getAttribute('data-pc-card-error')), clips: [...document.querySelectorAll('[data-pc-clip]')].map((e) => e.getAttribute('data-pc-clip')), t: window.__pcStageDiag?.().t })))))); }
-  const d3 = await until('A 图卡的运行状态变成 media', async () => { const d = await m.diag(); return d?.run?.state === 'media' ? d : null; }, 45_000, 500);
+  const d3 = await until('A 素材效果卡的运行状态变成 media', async () => { const d = await m.diag(); return d?.run?.state === 'media' ? d : null; }, 45_000, 500);
   summary.G3 = d3 ?? await m.diag();
-  check('G3 输入解不了:这张图卡的运行状态是 media', summary.G3?.run?.state === 'media', { run: summary.G3?.run, per: summary.G3?.per });
+  check('G3 输入解不了:这张素材效果卡的运行状态是 media', summary.G3?.run?.state === 'media', { run: summary.G3?.run, per: summary.G3?.per });
   await m.page.evaluate(() => { const S = window.__pcStore; S.actions.select(['ocg-bad']); });
   // 参数面板在左栏的「编辑」页签里
   await m.page.evaluate(() => { document.querySelector('[data-pc-rail="edit"]')?.click(); });
@@ -280,7 +280,7 @@ try {
   await sleep(1500);
   const c3 = await m.clipIn('ocg-bad');
   const front3 = c3.find((c) => c.role === 'front') ?? c3[0];
-  check('G3 这张图卡不再在舞台里运行(片段不挂图卡的画布),退回原做法', front3?.mounted === true && front3.graphNode === false, front3);
+  check('G3 这张素材效果卡不再在舞台里运行(片段不挂素材效果卡的画布),退回原做法', front3?.mounted === true && front3.graphNode === false, front3);
   await m.page.evaluate(() => window.__pcStore.actions.seek(5));
   const builtin = await until('A 内置卡照常画', async () => { for (const f of m.stageFrames()) { if (await f.evaluate(() => [...document.querySelectorAll('[data-pc-clip]:not([data-pc-media])')].some((w) => w.childElementCount > 0 && w.textContent.trim().length > 0)).catch(() => false)) return true; } return false; }, 20_000);
   check('G3 舞台没有垮:拨到内置卡上照常画出来;没有页面错误', !!builtin && m.pageErrors.length === 0, m.pageErrors.slice(0, 3));
@@ -296,13 +296,13 @@ try {
   console.log('\n== G4 图形能力不够(--disable-gpu,软件渲染):退回原做法');
   const b2 = await launch(['--disable-gpu']);
   const n = await openMember(b2, 'B');
-  const d4 = await until('B 图卡的运行状态有结论', async () => { const d = await n.diag(); return d?.run && d.run.state !== 'loading' && d.per.A && d.per.B ? d : null; }, 90_000, 500);
+  const d4 = await until('B 素材效果卡的运行状态有结论', async () => { const d = await n.diag(); return d?.run && d.run.state !== 'loading' && d.per.A && d.per.B ? d : null; }, 90_000, 500);
   summary.G4 = d4 ?? await n.diag();
-  check('G4 软件渲染的浏览器:图卡的运行状态是 gpu,两台舞台报的图形能力都不是 ok', summary.G4?.run?.state === 'gpu' && summary.G4?.graph?.A !== 'ok' && summary.G4?.graph?.B !== 'ok' && !!summary.G4?.graph?.A, { run: summary.G4?.run, graph: summary.G4?.graph });
+  check('G4 软件渲染的浏览器:素材效果卡的运行状态是 gpu,两台舞台报的图形能力都不是 ok', summary.G4?.run?.state === 'gpu' && summary.G4?.graph?.A !== 'ok' && summary.G4?.graph?.B !== 'ok' && !!summary.G4?.graph?.A, { run: summary.G4?.run, graph: summary.G4?.graph });
   await sleep(1500);
   const c4 = await n.clipIn('ocg-clip');
   const front4 = c4.find((c) => c.role === 'front') ?? c4[0];
-  check('G4 片段退回原做法:舞台不挂图卡的画布', front4?.mounted === true && front4.graphNode === false, front4);
+  check('G4 片段退回原做法:舞台不挂素材效果卡的画布', front4?.mounted === true && front4.graphNode === false, front4);
   await n.page.evaluate(() => window.__pcStore.actions.seek(5));
   const builtin4 = await until('B 内置卡照常画', async () => { for (const f of n.stageFrames()) { if (await f.evaluate(() => [...document.querySelectorAll('[data-pc-clip]:not([data-pc-media])')].some((w) => w.childElementCount > 0 && w.textContent.trim().length > 0)).catch(() => false)) return true; } return false; }, 20_000);
   check('G4 同一个项目里的内置卡照常画;没有页面错误', !!builtin4 && n.pageErrors.length === 0, n.pageErrors.slice(0, 3));

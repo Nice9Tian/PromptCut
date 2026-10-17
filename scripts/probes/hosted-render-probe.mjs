@@ -35,14 +35,14 @@
  *              成员列表里有 `service: 'render'` 一行
  *   late       发布方走了(成员全部断开)之后才上线的另一位成员:不发任何任务,直接取得到层表与清单里的块
  *   agent      没有任何成员在线时的预渲染:成员全部离开、渲染服务过了保持期(60 s)断开之后,一个「假 Agent 服务」(本进程,另一把服务私钥)
- *              声明这个项目有活 → 渲染服务 5 s 内连回来;它发布一个补渲计划 → 渲染服务认领、做完、层表与产物入库,全程没有任何成员连接;
+ *              声明这个项目有活 → 渲染服务 5 s 内连回来;它发布一个预渲染重试计划 → 渲染服务认领、做完、层表与产物入库,全程没有任何成员连接;
  *              之后才上线的成员不发任何任务就取得到层表与块。发布方是服务身份(`hosted.ticket { purpose: 'publish' }` 要来的只能发布的
  *              连接票据),结果里 `publisher` 应为 `service`;发布连接一直留着,断言它收到计划的完成通知(带切出的细任务清单)
  *              与**每一段**的完成通知。要不到发布票据算不过(`publisher` 会写成 `member-standin`,只为把后半段走完看清坏在哪)
  *   usercard   含用户卡的项目(另建一个项目,内容库里放一张用户卡的源码;夹具是 `fixtures/render-isolation/` 里只留记号、什么都不探的那张卡):
  *              计划与细任务由**隔离工作进程**(`hosted-render-iso:` 节点)认领并做完,层表与产物入库;常驻工作进程对这个项目一个任务也没认领
  *              (搁着、报「有卡片代码」);发布方走了之后才上线的成员不发任何任务就取得到层表与块;再来一轮「没有任何成员在线」:成员全部离开,
- *              假 Agent 服务声明有活、发布补渲计划(发布方是哪一种同 `agent` 一步),隔离工作进程照样认领做完,全程没有成员连接,之后上线的成员直接取得到。
+ *              假 Agent 服务声明有活、发布预渲染重试计划(发布方是哪一种同 `agent` 一步),隔离工作进程照样认领做完,全程没有成员连接,之后上线的成员直接取得到。
  *              隔离本身(读不到别的项目、凭证、本机接口、工作目录以外的文件)由 `hosted-render-isolation-probe.mjs` 验,不在这里
  *   forbidden  用渲染服务的身份提交一次编辑(`project.op`)被拒,项目版本号不变;写卡片源码、给自己签 page 票据同样被拒
  *   switch     创建者关掉开关:5 s 内渲染服务断开这个项目,之后发的计划它不认领;再打开:连回来并认领
@@ -462,7 +462,7 @@ function memberConns(projectId) {
  * 没有任何成员在线时的预渲染(契约第 5a 节 R1～R5;`cloud-agent-task.md`「用户体验验收」里渲染服务这一侧):
  * 成员全部离开、渲染服务按保持期断开这个项目之后,由一个「假 Agent 服务」(本进程里的 Node 脚本,另一把服务私钥)——
  *   1. 在控制连接上声明这个项目有活(`hosted.demand`)→ 渲染服务 5 s 内连回来(此刻没有任何成员连接);
- *   2. 发布一个带片段清单的补渲计划。两种发布方,结果里的 `publisher` 写明用的是哪一种:
+ *   2. 发布一个带片段清单的预渲染重试计划。两种发布方,结果里的 `publisher` 写明用的是哪一种:
  *      - `service`:以服务身份要一张只能发布的票据(`hosted.ticket { purpose: 'publish' }`,第四段实现),发布连接一直留着、数完成通知(进度);
  *      - `member-standin`:目录回 `unsupported`(只有第三段的分支上是这样)时,用一条成员连接代发,计划一被认领就断开,
  *        之后全程没有任何成员连接——这同时演了「发布方断开超过宽限期,已切出的细任务不丢、照样做完」(R4);
@@ -503,7 +503,7 @@ async function stepAgent() {
   timings.record('agent 声明有活到渲染服务连回来', r.joinOnDemandMs, { formerLimit: '≤ 5 秒' });
   check(memberConns(projectId) === 0, 'agent:渲染服务连回来时没有任何成员连接', { members: memberConns(projectId) });
 
-  // 发布补渲计划
+  // 发布预渲染重试计划
   knownTasks.clear();
   for (const t of queueTasks(projectId)) knownTasks.add(t.id);
   const plan = backfillPlanTaskOf({ projectId: DOC_ID, projectRev: rev, clips: clipIdsOf(project) });
@@ -523,7 +523,7 @@ async function stepAgent() {
   const hello = await pub.ask({ type: 'publisher.hello', publisherId: `hrp-agent-${RUN}` });
   check(hello.type === 'publisher.welcome', 'agent:发布方报到', hello);
   const published = await pub.ask({ type: 'task.publish', tasks: [plan] });
-  check(published.type === 'task.published' && published.results?.[0]?.created === true, 'agent:补渲计划发布成功', published);
+  check(published.type === 'task.published' && published.results?.[0]?.created === true, 'agent:预渲染重试计划发布成功', published);
   const tPub = Date.now();
   if (r.publisher === 'member-standin') {
     // 计划一被认领就断开代发的连接:之后没有任何成员在线,发布方也不在
@@ -577,7 +577,7 @@ async function stepAgent() {
 
 /**
  * 含用户卡的项目（契约第 7.5 节，方案 A）：任务由按项目隔离的工作进程做，常驻工作进程不碰。用另一个项目，不动 `ctx.proj`（别的步骤验的是常驻工作进程）。
- * 两轮：有成员在线时由成员发布清单计划；没有任何成员在线时由假 Agent 服务发布补渲计划（发布方两种同 `stepAgent`）。
+ * 两轮：有成员在线时由成员发布清单计划；没有任何成员在线时由假 Agent 服务发布预渲染重试计划（发布方两种同 `stepAgent`）。
  */
 async function stepUsercard() {
   const r = {};
@@ -636,7 +636,7 @@ async function stepUsercard() {
   await delay(1500);
   r.late = await lateMemberSees('usercard', 'late-uma', rev1, proj, docId);
 
-  // ---- 第二轮：没有任何成员在线，假 Agent 服务声明有活并发布补渲计划
+  // ---- 第二轮：没有任何成员在线，假 Agent 服务声明有活并发布预渲染重试计划
   creator = await joinAs(proj, { username: 'ursula', as: 'creator' });
   const p2 = projectOf(`${RUN}-uc2`);
   const rev2 = await putProject(creator, p2, docId);
@@ -663,9 +663,9 @@ async function stepUsercard() {
   const hello = await pub.ask({ type: 'publisher.hello', publisherId: `hrp-agent-uc-${RUN}` });
   check(hello.type === 'publisher.welcome', 'usercard:发布方报到', hello);
   const published = await pub.ask({ type: 'task.publish', tasks: [plan2] });
-  check(published.type === 'task.published' && published.results?.[0]?.created === true, 'usercard:补渲计划发布成功', published);
+  check(published.type === 'task.published' && published.results?.[0]?.created === true, 'usercard:预渲染重试计划发布成功', published);
   if (r.publisher === 'member-standin') {
-    await waitFor(() => { const p = queueTasks(proj.projectId).find((t) => t.id === plan2.id); return p && p.state !== 'open'; }, 300_000, '补渲计划被认领', 50);
+    await waitFor(() => { const p = queueTasks(proj.projectId).find((t) => t.id === plan2.id); return p && p.state !== 'open'; }, 300_000, '预渲染重试计划被认领', 50);
     pub.close();
     await waitFor(() => memberConns(proj.projectId) === 0, 10_000, '代发的连接断开');
   }
@@ -678,7 +678,7 @@ async function stepUsercard() {
   if (r.publisher === 'service') pub.close();
   const n2 = await nodesFor().catch(() => null);
   r.noMembers = { tasks: done2.tasks, done: done2.done, failed: done2.failed, membersOnlineWhileRendering: maxMembers, residentClaimed: n2?.resident?.claimed ?? null, ms: done2.ms };
-  check(done2.done === done2.tasks && done2.tasks > 0 && done2.failed === 0, 'usercard:没有成员在线,含用户卡的补渲计划照样做完', done2);
+  check(done2.done === done2.tasks && done2.tasks > 0 && done2.failed === 0, 'usercard:没有成员在线,含用户卡的预渲染重试计划照样做完', done2);
   check(maxMembers === 0, 'usercard:第二轮渲染全程没有任何成员连接', { maxMembers });
   check((n2?.resident?.claimed ?? 0) === 0, 'usercard:第二轮常驻工作进程仍然没有认领', r.noMembers);
   await delay(1000);

@@ -3,7 +3,7 @@
  *
  * 一组固定输入喂给 `splitPlan` 与指纹函数,收齐每份输出;测试把每一份输出的摘要、以及每个任务的结果键,
  * 与**改动之前**(起点提交 3820592c)的代码跑出来的字面值逐个比对。
- * 里面没有任何用户卡、图卡、`browserCards`:全是内置卡的老形状,所以改前改后必须逐字相同。
+ * 里面没有任何用户卡、素材效果卡、`browserCards`:全是内置卡的老形状,所以改前改后必须逐字相同。
  */
 import crypto from 'node:crypto';
 import { splitPlan } from '../render-node/split.mjs';
@@ -47,7 +47,7 @@ export function batteryInputs() {
     ['browser 对象写法', { ...base, browser: { nodeId: 'n-br', envFingerprint: BR } }],
     ['锁在第三种环境', { ...base, browserFingerprints: [BR], cardLocks: { 'snapshot:ck-a': THIRD } }],
     ['锁在第三种环境并接手', { ...base, browserFingerprints: [BR], cardLocks: { 'snapshot:ck-a': THIRD }, takeover: true }],
-    ['补渲档', { ...base, browserFingerprints: [BR], lane: 'backfill' }],
+    ['预渲染重试档', { ...base, browserFingerprints: [BR], lane: 'backfill' }],
     ['改过源码的内置卡', { ...base, browserFingerprints: [BR], cardSourceVersions: { 'card-a': 'ver-a' } }],
     ['含本地素材', { ...base, browserFingerprints: [BR], localMedia: 'node-1', usesLocalMedia: (c) => c.clipId === 'a' }],
     ['有流', { ...base, browserFingerprints: [BR], streams: [{ streamKey: sk('st', OWN), contentKey: 'st', topClipId: 'bg', firstSegment: 0, lastSegment: 11 }] }],

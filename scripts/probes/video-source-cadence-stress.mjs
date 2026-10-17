@@ -1,6 +1,6 @@
 /**
  * 视频取帧节奏探针的压力版:一边让机器满载,一边把 `video-source-cadence-probe.mjs` 连跑若干遍,数挂了几遍。
- * 用来复现「图卡的视频输入源偶发取到上一帧」(机器忙时 `seeked` 之后读到的还是 seek 前那一帧)。
+ * 用来复现「素材效果卡的视频输入源偶发取到上一帧」(机器忙时 `seeked` 之后读到的还是 seek 前那一帧)。
  *
  *   node scripts/probes/video-source-cadence-stress.mjs [--port 6210] [--runs 20] [--hogs 16] [--parallel 1] [--logdir DIR]
  *

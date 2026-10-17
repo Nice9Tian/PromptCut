@@ -646,7 +646,7 @@ export function planListStreams(entry, clips, options = {}) {
  * 这条流的**隔离工程**(G4「单卡像素怎么隔离」:`isolatedCardProject` 的流版本)。
  *
  * 只留这条流的卡(单卡流一张、组流一组)可见;同一条序列上的其它片段和别的序列都变成
- * 隐藏的 `sourceOnly` 序列 —— 不出画,但图卡按源片段解输入时还找得到。**时间不平移**(隔离工程里
+ * 隐藏的 `sourceOnly` 序列 —— 不出画,但素材效果卡按源片段解输入时还找得到。**时间不平移**(隔离工程里
  * 片段还在它原来的时刻,产分段时按项目帧号推帧;分段号由 `originFrame` 换算);背景透明由导出页自己保证。
  *
  * 单卡流还要把包裹层外观拿掉(框摆到 `offset`、不缩放不旋转、不透明度 / 淡入淡出 / motion / 强调
@@ -1222,7 +1222,7 @@ export class StreamProducer {
     await this.assertProjectScope?.(entry);
     if (!this.routeAttached) { this.pendingEntry = entry; return []; }
     const specs = planStreams(entry, {
-      // c10a 契约第 17 节:补渲进集合的片段不产流(`streamPicked`);旧的管线替身没有它时退回 `prerenderPicked`
+      // c10a 契约第 17 节:预渲染重试进集合的片段不产流(`streamPicked`);旧的管线替身没有它时退回 `prerenderPicked`
       picked: clipId => (this.pipeline.streamPicked ?? this.pipeline.prerenderPicked).call(this.pipeline, entry, clipId),
       budget: this.budget,
       codeVersion: `${STREAM_CODE_VERSION}:${this.pipeline.captureCode?.() || ''}`,

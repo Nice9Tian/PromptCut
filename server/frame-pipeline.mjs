@@ -177,7 +177,7 @@ export const measureEntityRects = page => page.evaluate(() => {
 const NO_PLAYHEAD = () => /** @type {{ t: number, playing: boolean, wanted?: { clipId: string, frame: number }[] } | null} */ (null);
 
 /**
- * 补渲登记(c10a 契约第 17 节)里一张卡的内容身份:共享档用内容键(与环境、锁定方无关),本地档再带上整场景的 entry.key。
+ * 预渲染重试登记(c10a 契约第 17 节)里一张卡的内容身份:共享档用内容键(与环境、锁定方无关),本地档再带上整场景的 entry.key。
  * 没有快照键的卡不产快照,回 null。
  */
 function backfillIdentity(entry, control) {
@@ -1500,8 +1500,8 @@ export class FramePipeline {
     return set.has(clipId);
   }
   /**
-   * 轨道流只给**本机判重**的卡(`basePrerenderSet`,不含补渲进来的片段):低内存档不消费流(c10a 契约第 9 节),
-   * 为补渲进集合的轻卡产流只是白做。没有基础集合时退回 `prerenderPicked`。
+   * 轨道流只给**本机判重**的卡(`basePrerenderSet`,不含预渲染重试进来的片段):低内存档不消费流(c10a 契约第 9 节),
+   * 为预渲染重试进集合的轻卡产流只是白做。没有基础集合时退回 `prerenderPicked`。
    */
   streamPicked(entry, clipId) {
     const base = entry?.basePrerenderSet;
@@ -1509,13 +1509,13 @@ export class FramePipeline {
     return base.has(clipId);
   }
   /**
-   * 补渲(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档判重、素材服务里又没有产物的片段,
-   * 页面发布带片段清单的补渲计划任务;认领它的节点在这里把清单里的片段记成「这张卡的这一份内容要产」,
+   * 预渲染重试(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档判重、素材服务里又没有产物的片段,
+   * 页面发布带片段清单的预渲染重试计划任务;认领它的节点在这里把清单里的片段记成「这张卡的这一份内容要产」,
    * 于是它们进这一版的预渲染集合(`prerenderPicked` 为真:细任务渲得出来、层表里列着它们,在线页面据此取小尺寸)。
    *
    * 按「项目 id → 片段 + 内容身份」记,不按 entry:同一版项目在本机可能有不止一个 entry(页面推来的、从文档服务取的),
-   * 谁写层表都要带上补渲的片段,不然两边轮流写,页面上它们时有时无。内容身份换了(这张卡改了参数)就不再算 ——
-   * 新内容没有产物,页面会再发一次补渲。只记在内存里,和队列一样随进程作废。
+   * 谁写层表都要带上预渲染重试的片段,不然两边轮流写,页面上它们时有时无。内容身份换了(这张卡改了参数)就不再算 ——
+   * 新内容没有产物,页面会再发一次预渲染重试。只记在内存里,和队列一样随进程作废。
    * 回新记下了几个片段。
    */
   addBackfill(entry, clipIds) {
@@ -1539,7 +1539,7 @@ export class FramePipeline {
     this.publishLayerMap(entry);
     return added;
   }
-  /** 按补渲登记把片段并进这个 entry 的预渲染集合(`basePrerenderSet` ∪ 登记过、内容身份对得上的片段) */
+  /** 按预渲染重试登记把片段并进这个 entry 的预渲染集合(`basePrerenderSet` ∪ 登记过、内容身份对得上的片段) */
   applyBackfill(entry) {
     const base = entry?.basePrerenderSet;
     if (!(base instanceof Set)) return;
@@ -1892,7 +1892,7 @@ export class FramePipeline {
     return null;
   }
   /**
-   * 卡级推送优先级(A5):`canvasHeavy`、图卡、`unknown`、`belowDependent`(以及同属下层依赖的 `context`),或本地档 → 1 `low`;
+   * 卡级推送优先级(A5):`canvasHeavy`、素材效果卡、`unknown`、`belowDependent`(以及同属下层依赖的 `context`),或本地档 → 1 `low`;
    * 其余共享档 → 0 `normal`。块级(`data:image` 过半、超体积帧)由推送队列轮到这一段时自己算,取低的那个。
    */
   cardPushPriority(control, tier, capabilities) {
@@ -1906,7 +1906,7 @@ export class FramePipeline {
     return PUSH_NORMAL;
   }
   /**
-   * 这张卡是不是图卡(H)。服务端的 card plan 里目前没有能判它的字段(`split.mjs` 的 `isGraphCard` 也由调用方注入、
+   * 这张卡是不是素材效果卡(H)。服务端的 card plan 里目前没有能判它的字段(`split.mjs` 的 `isGraphCard` 也由调用方注入、
    * 缺省 false),所以缺省回 false;只认 control 上明写的 `graphCard: true`。报告里记为疑点。
    */
   isGraphCardControl(control) {
@@ -2173,7 +2173,7 @@ export class FramePipeline {
    * 内容键 → 指纹表,切分方自己的在前),之后写层表(本机推送队列写的、独立渲染主机写的)都按它列候选。
    * 后记的覆盖先记的;最多留 SPLIT_CANDIDATES_MAX 张卡(按记下的先后淘汰)。
    * 落盘在库根的 `split-candidates.json`(整份重写),进程重启后照样按它列候选 —— 不然重启后的第一次写层表
-   * (preload、补渲登记)只剩自己一个候选,页面找不到自己产的那一层(M7 验收探针查出)。读写失败只当没有记录。
+   * (preload、预渲染重试登记)只剩自己一个候选,页面找不到自己产的那一层(M7 验收探针查出)。读写失败只当没有记录。
    */
   splitCandidatesPath() {
     return typeof this.root === 'string' && this.root ? path.join(this.root, 'split-candidates.json') : null;
@@ -2501,7 +2501,7 @@ export class FramePipeline {
     // K2 / K6:真的按 planPipelines 的表算(costs / tuning 由编辑器进程转发过来、落在本机那一份)
     entry.basePrerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.dataRoot });
     entry.prerenderSet = entry.basePrerenderSet;
-    // c10a 契约第 17 节:补渲登记过的片段并进来(`addBackfill`)
+    // c10a 契约第 17 节:预渲染重试登记过的片段并进来(`addBackfill`)
     this.applyBackfill(entry);
     // 存储占用:任何 lane 用到这一版的计划,它的键都记为使用
     this.usage?.touchEntry(entry);
@@ -3183,7 +3183,7 @@ export class FramePipeline {
     const ownListStreams = await this.streamCapable();
     const context = {
       entryKey: entry.key,
-      // 普通计划只切本机判重的卡;补渲进集合的片段只由补渲计划任务切(标 backfill,排在本机判重的任务之后,c10a 契约第 17 节)
+      // 普通计划只切本机判重的卡;预渲染重试进集合的片段只由预渲染重试计划任务切(标 backfill,排在本机判重的任务之后,c10a 契约第 17 节)
       prerenderSet: entry.basePrerenderSet instanceof Set ? new Set(entry.basePrerenderSet)
         : entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
       cardPlan,

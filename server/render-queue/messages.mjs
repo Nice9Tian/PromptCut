@@ -30,12 +30,12 @@ export const PUBLISHER_TYPES = new Set(['task.publish', 'task.unsubscribe', 'car
 
 /**
  * 任务的优先级档（语义 `mechanism/document-service.md`「渲染任务队列」的「优先级」，c10a 契约第 17 节）：
- * `priority` 取 `'normal'`（缺省，本机判重而发布的）或 `'backfill'`（为低内存档补渲）。
+ * `priority` 取 `'normal'`（缺省，本机判重而发布的）或 `'backfill'`（为低内存档预渲染重试）。
  * 早先的整数 `priority`（锚帧段 50、其余 10，契约 A.4）照旧收，算 `normal` 档里的名次：
  * 没带 `priority` 或带整数的旧客户端一律按 `normal` 处理。
  */
 export const PRIORITY_BANDS = Object.freeze(['normal', 'backfill']);
-/** 这个 `priority` 落在哪一档：只有 `'backfill'` 是补渲档，其余（缺省、整数、`'normal'`）都是 `normal` */
+/** 这个 `priority` 落在哪一档：只有 `'backfill'` 是预渲染重试档，其余（缺省、整数、`'normal'`）都是 `normal` */
 export function priorityBand(priority) {
   return priority === 'backfill' ? 'backfill' : 'normal';
 }
@@ -45,28 +45,28 @@ export function priorityRank(priority) {
 }
 /**
  * 摘要（契约 H.3 的 `topPriority`）用的数：整数原样、`'normal'` 算 0、`'backfill'` 算 -1 ——
- * 摘要只比大小，补渲档排在任何 `normal` 之下。
+ * 摘要只比大小，预渲染重试档排在任何 `normal` 之下。
  */
 export function prioritySummaryValue(priority) {
   if (Number.isSafeInteger(priority)) return priority;
   return priority === 'backfill' ? -1 : 0;
 }
 
-/** 补渲计划任务（c10a 契约第 17 节）结果键的后缀：`<projectId>@<projectRev>#backfill:<sig>` */
+/** 预渲染重试计划任务（c10a 契约第 17 节）结果键的后缀：`<projectId>@<projectRev>#backfill:<sig>` */
 export const BACKFILL_KEY_MARK = '#backfill:';
 const BACKFILL_SIG_RE = /^[0-9a-z]{1,32}$/;
-/** 补渲计划任务的片段清单上限 */
+/** 预渲染重试计划任务的片段清单上限 */
 export const BACKFILL_MAX_CLIPS = 1000;
 /**
  * 清单计划(C10 契约第 7 节、第 18 节第 9 条〔裁〕):在线页面发布的 `plan`,带它自己判重的片段清单,`priority` 为 normal。
- * 结果键 `<projectId>@<projectRev>#clips:<sig>`(签名与补渲同一个算法)。与补渲计划合称「带片段清单的计划任务」:
+ * 结果键 `<projectId>@<projectRev>#clips:<sig>`(签名与预渲染重试同一个算法)。与预渲染重试计划合称「带片段清单的计划任务」:
  * `host` 也能认领、由认领的节点用自己的指纹切分(对 M6c X4 的修改,见 `queue.mjs`)。
  */
 export const CLIPS_KEY_MARK = '#clips:';
 
 /**
  * 任务 id 由内容决定（设计第 2 节）：同一个结果只会有一个任务，重复发布才能幂等合并。
- * `plan` 任务没有范围，id 就是 `plan:<projectId>@<projectRev>`（补渲计划任务是 `plan:<projectId>@<projectRev>#backfill:<sig>`）。
+ * `plan` 任务没有范围，id 就是 `plan:<projectId>@<projectRev>`（预渲染重试计划任务是 `plan:<projectId>@<projectRev>#backfill:<sig>`）。
  *
  * 稀疏流任务（`kind: 'stream'`、`input.density: 'sparse'`，见 `STREAM_DENSITY_SPARSE`）的 id 在末尾多一段 `:sparse`：
  * 它和同一条流、同一段的满密度任务是两个任务（先后各做一次），结果键、范围、内容库里的清单键都相同。
@@ -187,16 +187,16 @@ function parseTaskInput(v, i) {
     if (!absent(v.range)) bad(`${at}.range：plan 任务没有范围，必须是 null`);
     const base = `${projectId}@${projectRev}`;
     if (resultKey.startsWith(`${base}${BACKFILL_KEY_MARK}`)) {
-      // 补渲计划任务（c10a 契约第 17 节）：带片段清单、标 backfill；不同的清单是不同的结果键
-      if (!BACKFILL_SIG_RE.test(resultKey.slice(base.length + BACKFILL_KEY_MARK.length))) bad(`${at}.resultKey 的补渲签名只能是 1～32 位小写字母与数字`);
-      if (priority !== 'backfill') bad(`${at}.priority：补渲计划任务必须标 'backfill'`);
+      // 预渲染重试计划任务（c10a 契约第 17 节）：带片段清单、标 backfill；不同的清单是不同的结果键
+      if (!BACKFILL_SIG_RE.test(resultKey.slice(base.length + BACKFILL_KEY_MARK.length))) bad(`${at}.resultKey 的预渲染重试签名只能是 1～32 位小写字母与数字`);
+      if (priority !== 'backfill') bad(`${at}.priority：预渲染重试计划任务必须标 'backfill'`);
       input = { ...input, clips: backfillClips(input.clips, `${at}.input.clips`) };
     } else if (resultKey.startsWith(`${base}${CLIPS_KEY_MARK}`)) {
-      // 清单计划（C10 契约第 18 节第 9 条）：带片段清单、normal 档；补渲档另用 #backfill: 的键
+      // 清单计划（C10 契约第 18 节第 9 条）：带片段清单、normal 档；预渲染重试档另用 #backfill: 的键
       if (!BACKFILL_SIG_RE.test(resultKey.slice(base.length + CLIPS_KEY_MARK.length))) bad(`${at}.resultKey 的清单签名只能是 1～32 位小写字母与数字`);
-      if (priorityBand(priority) !== 'normal') bad(`${at}.priority：清单计划是 normal 档，补渲用 #backfill: 的键`);
+      if (priorityBand(priority) !== 'normal') bad(`${at}.priority：清单计划是 normal 档，预渲染重试用 #backfill: 的键`);
       input = { ...input, clips: backfillClips(input.clips, `${at}.input.clips`) };
-      // 在线页面自报的用户卡、图卡运行情况(块 N):只留合格的形状,不合格的整项去掉(任务照发,只是切分方不给浏览器出用户卡、图卡的那一份)
+      // 在线页面自报的用户卡、素材效果卡运行情况(块 N):只留合格的形状,不合格的整项去掉(任务照发,只是切分方不给浏览器出用户卡、素材效果卡的那一份)
       const browser = browserCardsOf(input.browser);
       if (browser) input = { ...input, browser }; else delete input.browser;
       // 页面看到这个项目的「生成轨道流」开着(见 `clipsPlanTaskOf`):只认布尔 true,别的值去掉
@@ -235,7 +235,7 @@ function parsePriority(v, name) {
 }
 
 /**
- * 清单计划的 `input.browser`(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条):在线页面自报「本页能运行哪些用户卡、图卡」——
+ * 清单计划的 `input.browser`(块 N,`docs/plan/online-card-exec-contract.md` 第 7 节第 3 条):在线页面自报「本页能运行哪些用户卡、素材效果卡」——
  *   { cardEnvFingerprint, userCards, graphCards, cardSources: { 卡片 id: 代码身份 } }
  * 页面自报的,不作数的部分由别处把关:纯浏览器节点只认领本人的任务,节点侧过滤(规则 1)还要再核卡片代码身份;
  * 谎报最坏的结果是切分方多出一份谁也认领不了的备份任务(同锁键的另一份会照旧被认领)。
@@ -261,14 +261,14 @@ export function browserCardsSig(cards) {
   return [cards.cardEnvFingerprint, cards.userCards ? 1 : 0, cards.graphCards ? 1 : 0, ...Object.keys(cards.cardSources).sort().map((id) => `${id}=${cards.cardSources[id]}`)].join('|');
 }
 
-/** 补渲计划任务的片段清单：非空、去重、升序的非空字符串数组 */
+/** 预渲染重试计划任务的片段清单：非空、去重、升序的非空字符串数组 */
 function backfillClips(v, name) {
   if (!Array.isArray(v) || v.length === 0 || v.length > BACKFILL_MAX_CLIPS) bad(`${name} 必须是 1～${BACKFILL_MAX_CLIPS} 个片段 id`);
   if (v.some((x) => typeof x !== 'string' || x === '')) bad(`${name} 的每一项都必须是非空字符串`);
   return [...new Set(v)].sort();
 }
 
-/** 这是不是补渲计划任务（入站任务、TaskView、队列内部的任务都能传） */
+/** 这是不是预渲染重试计划任务（入站任务、TaskView、队列内部的任务都能传） */
 export function isBackfillPlan(task) {
   return isObj(task) && task.kind === 'plan' && typeof task.resultKey === 'string' && task.resultKey.includes(BACKFILL_KEY_MARK);
 }
@@ -278,13 +278,13 @@ export function isClipsPlan(task) {
   return isObj(task) && task.kind === 'plan' && typeof task.resultKey === 'string' && task.resultKey.includes(CLIPS_KEY_MARK);
 }
 
-/** 带片段清单的计划任务（补渲计划或清单计划）：`host` 能认领，认领的节点按清单切分 */
+/** 带片段清单的计划任务（预渲染重试计划或清单计划）：`host` 能认领，认领的节点按清单切分 */
 export function isListPlan(task) {
   return isBackfillPlan(task) || isClipsPlan(task);
 }
 
 /**
- * 片段清单的签名（补渲计划任务结果键的后缀）：升序去重后按 FNV-1a（32 位，两轮不同种子拼成 64 位）取 base36。
+ * 片段清单的签名（预渲染重试计划任务结果键的后缀）：升序去重后按 FNV-1a（32 位，两轮不同种子拼成 64 位）取 base36。
  * 同一份清单一定得到同一个键，页面与节点各算各的也对得上。纯函数，浏览器可以照抄。
  */
 export function backfillSig(clips, extra) {
@@ -300,7 +300,7 @@ export function backfillSig(clips, extra) {
   return fnv(0x811c9dc5).toString(36) + fnv(0x2f4a7c15).toString(36);
 }
 
-/** 补渲计划任务（c10a 契约第 17 节）：带片段清单的 `plan`，标 `priority: 'backfill'`，不带 `requires` */
+/** 预渲染重试计划任务（c10a 契约第 17 节）：带片段清单的 `plan`，标 `priority: 'backfill'`，不带 `requires` */
 export function backfillPlanTaskOf({ projectId, projectRev, clips }) {
   const list = [...new Set(clips ?? [])].map(String).filter(Boolean).sort();
   const resultKey = `${projectId}@${projectRev}${BACKFILL_KEY_MARK}${backfillSig(list)}`;
@@ -360,7 +360,7 @@ const PARSERS = new Map([
     nodeId: nonEmpty(m.nodeId, 'nodeId'),
     profile: oneOf(m.profile, PROFILES, 'profile'),
     envFingerprint: optStr(m.envFingerprint, 'envFingerprint'),
-    // 纯浏览器节点执行用户卡、图卡用的环境指纹(块 N):由文档服务按页面报的运行时版本算好再交进来,自报的不作数(`admitNodeHello`)
+    // 纯浏览器节点执行用户卡、素材效果卡用的环境指纹(块 N):由文档服务按页面报的运行时版本算好再交进来,自报的不作数(`admitNodeHello`)
     cardEnvFingerprint: optStr(m.cardEnvFingerprint, 'cardEnvFingerprint'),
     capabilities: absent(m.capabilities) ? {} : plainObject(m.capabilities, 'capabilities'),
     codeVersions: absent(m.codeVersions) ? [] : strArray(m.codeVersions, 'codeVersions'),
