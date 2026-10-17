@@ -44,6 +44,7 @@ export function createAssetRevocationConsumer({ authority, file, serviceId = 'as
       return result;
     });
     deliveries.set(event.eventId, done);
+    void done.catch(() => { if (deliveries.get(event.eventId) === done) deliveries.delete(event.eventId); });
     return done;
   }
   async function ackPending() {

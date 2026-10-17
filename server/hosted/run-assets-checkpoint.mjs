@@ -35,7 +35,9 @@ export function createRunAssetCheckpoint({ ledger, files, expected } = {}) {
     const first = read();
     const previous = checkpointOf();
     assertRunAssetCheckpointTransition(previous, first);
-    if (same(previous, first.checkpoint)) return current();
+    if (same(previous, first.checkpoint)) {
+      return Object.freeze({ ...first.checkpoint, instance: structuredClone(first.record.instance) });
+    }
     // The root publication and the existing checkpoint are checked again
     // inside the same durable SQLite transaction that advances the high water.
     ledger.transaction(state => {
