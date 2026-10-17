@@ -495,6 +495,9 @@ export function createRunAuthority({ ledger, conversationHooks, verifySender, ve
     for (const initial of Object.values(ledger.read().runGrantsV2 ?? {}).filter(g => g.scopeBinding && ['preparing', 'active', 'retained'].includes(g.state))) {
       try {
         await scopeAuthority.refresh(initial.scopeBinding.rootScopeRef);
+        const snap = ledger.read(), snapGrant = snap.runGrantsV2?.[initial.runGrantId];
+        if (!needsReconcile(snap) && (!['preparing', 'active', 'retained'].includes(snapGrant?.state) || !scopeAuthority.failureInState(snap, snapGrant)))
+          continue;
         const control = ledger.transaction(s => {
           reconcile(s); const grant = s.runGrantsV2[initial.runGrantId];
           if (!['preparing', 'active', 'retained'].includes(grant.state)) return null;

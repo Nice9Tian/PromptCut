@@ -223,13 +223,14 @@ test('reconcileScopeClosures skips active running grants without finishReceiptId
   assert.equal(f.ledger.read().runGrantsV2[grant.runGrantId].state, 'active');
 
   txCount = 0;
-  // While grant is in 'active' state without finishReceiptId, reconcileScopeClosures must not enter ledger.transaction.
+  // While grant is in 'active' state without finishReceiptId or failure, both reconcileScopeClosures and reconcileScopeFailures must not enter ledger.transaction.
   for (let i = 0; i < 3; i += 1) {
     assert.deepEqual(await provider.reconcileScopeClosures(), []);
+    assert.deepEqual(await provider.reconcileScopeFailures(), []);
   }
-  assert.equal(txCount, 0, 'reconcileScopeClosures should skip active grant without finishReceiptId');
+  assert.equal(txCount, 0, 'reconcileScopeClosures and reconcileScopeFailures should skip active grant without finishReceiptId or failure');
 
-  // Verify checkAccess with scopeAuthority only executes scopeAuthority.refresh transactions (2) and 0 runAuthority reconcile transactions.
+  // Verify checkAccess with scopeAuthority uses read-only fastpath (0 ledger.transaction calls when checkpoint and failureDigests are unchanged).
   const checkPrincipal = {
     ...f.ledger.read().runGrantsV2[grant.runGrantId],
     realm: 'account',
@@ -268,5 +269,5 @@ test('reconcileScopeClosures skips active running grants without finishReceiptId
   } finally {
     instances.release(cap.instanceSession);
   }
-  assert.equal(txCount, 2, 'checkAccess with bound scopeAuthority should skip both sync and checkWithScope reconcile transactions');
+  assert.equal(txCount, 0, 'checkAccess with bound scopeAuthority should not enter ledger.transaction when nothing changed');
 });
