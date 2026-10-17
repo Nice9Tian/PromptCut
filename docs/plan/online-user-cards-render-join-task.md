@@ -8,7 +8,7 @@
 
 ## 1. 现状与证据（2026-10-18 02:40～03:00 JST 实测）
 
-### 1.1 舞台站点的 nginx 只认旧票据
+### 1.1 舞台站点的 nginx 只认旧票据（**已由主会话修好**，2026-10-17 18:00 UTC 节点上第 17 行已认两种票据；验收第 1 条只做回归核对，不再改）
 
 - 页面上：两台舞台握手正常（`__pcStageHandshake().phase === "ok"`，`__pcStageWatch()` A、B 都是 `alive`），`/editor/runtime-config.json` 的 `onlineCardExec` 是 `true`，但 `__pcCardExecDiag()` 回 `available: false`，`fp-photo-scan` 的运行状态是 `not-isolated`。
 - 节点上：`/etc/nginx/sites-available/promptcut-stages` 第 17 行 `map $http_authorization` 只认 `v1\.…\.…`，第 28 行 `pc_grant_cookie` 也只认 `v1\..+`。账号项目的素材票据是 43 个字符的 base64url，所以 `/media-s/<sid>/_grant` 的交接被拒，执行闸门一直关着。
@@ -31,7 +31,7 @@
 
 每一项的证据（命令、退出码、`status` 的那几个字段、页面诊断函数的返回值、截图）直接贴在对话里。
 
-1. 节点上 `promptcut-stages` 按当前模板重新生成：替换占位符后，先和节点现有文件逐段 diff，只改票据那两处，别的手工改动保留（见 `docs/plan/four-stage-deploy-checklist.md` 第 99 行附近）。然后 `nginx -t`、`systemctl reload nginx`。在线页面进这个项目后：`__pcCardExecDiag().available === true`；`fp-photo-scan` 的运行状态是 `ready`（或先 `loading` 再 `ready`）；舞台上画得出户型图，没有「需要本地 PC 渲染辅助」的图标和时间轴徽标。回归：旧共享项目（`v1.` 票据）的舞台交接照常。
+1. （已由主会话做完，只核对，不重做；主会话另报卡里的户型图仍是空白、后面还有三处断点，开工前先问用户那几处归谁）节点上 `promptcut-stages` 按当前模板重新生成：替换占位符后，先和节点现有文件逐段 diff，只改票据那两处，别的手工改动保留（见 `docs/plan/four-stage-deploy-checklist.md` 第 99 行附近）。然后 `nginx -t`、`systemctl reload nginx`。在线页面进这个项目后：`__pcCardExecDiag().available === true`；`fp-photo-scan` 的运行状态是 `ready`（或先 `loading` 再 `ready`）；舞台上画得出户型图，没有「需要本地 PC 渲染辅助」的图标和时间轴徽标。回归：旧共享项目（`v1.` 票据）的舞台交接照常。
 2. 文档服务修好以后，有成员页面在线时，渲染服务 `status` 的 `directory.list` 里这个项目是 `members: true, active: true`，`projects` 里有它；成员全部离开、过了 `lingerMs` 后回到 `active: false`。单测覆盖：账号成员连接计入和撤出、`bump` 归零删键、`lingering` 写入。
 3. 渲染服务升到当前发布目录以后，`status.codeVersion.match === true`（至少不再报 `code-mismatch`）；带用户卡的这个项目能起隔离工作进程（`isolation.runs >= 1`）；`fp-photo-scan` 那一段有渲染服务渲的层（层表里有）。
 4. `docs/local.md`「新节点 0.7.18 正式部署与清理记录」那一节补上这次的记录：改了哪些文件、备份在哪、怎么回退。
