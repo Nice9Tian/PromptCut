@@ -312,15 +312,15 @@ export async function writePublisherArtifact({ dir, name, value, exclusive = fal
   if (!/^[a-z][a-z0-9.-]*\.json$/.test(name)) fail('publisher-artifact-name');
   const target = path.join(dir, name);
   const tmp = path.join(dir, `.${name}.${randomUUID()}.tmp`), fd = await fs.open(tmp, 'wx', 0o644);
-  try { if (publicMetadata) await fd.chmod(0o644); await fd.writeFile(JSON.stringify(value)); await fd.sync(); } finally { await fd.close(); }
+  try { await fd.chmod(0o644); await fd.writeFile(JSON.stringify(value)); await fd.sync(); } finally { await fd.close(); }
   if (exclusive) { await fs.link(tmp, target); await fs.unlink(tmp); }
   else await fs.rename(tmp, target);
   await directoryBarrier(dir, { name, value, exclusive });
 }
 export async function openPublisherLock(dir, { directoryBarrier = syncDirectory } = {}) {
-  const filename = path.join(dir, '.publisher.lock'), fd = await fs.open(filename, 'wx', 0o600);
+  const filename = path.join(dir, '.publisher.lock'), fd = await fs.open(filename, 'wx', 0o644);
   const stat = await fd.stat();
-  try { await fd.writeFile(JSON.stringify({ pid: process.pid })); await fd.sync(); await directoryBarrier(dir); }
+  try { await fd.chmod(0o644); await fd.writeFile(JSON.stringify({ pid: process.pid })); await fd.sync(); await directoryBarrier(dir); }
   catch (error) { await fd.close(); throw error; }
   return async ({ publicationDurable = false } = {}) => {
     try {

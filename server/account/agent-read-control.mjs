@@ -11,6 +11,7 @@ const tables = state => (state.agentReadsV1 ??= { head: 0, controls: [], handles
 /** 每个实例最多留多少条已关的读取。每次 HTTP 读取都开一条、用完就关，原来一条都不删，账本跟着无限变大
  * （2026-10-17 节点上一个实例攒了四百多条，占了账本的七成多）。留最近的几十条，够关闭和开启的重试认出原来那条。 */
 export const KEEP_CLOSED_READS_PER_INSTANCE = 64;
+export const KEEP_READ_CONTROL_NONCES = KEEP_CLOSED_READS_PER_INSTANCE * 4;
 /** 删掉用不着的已关读取，连同指向它的开启请求记录。还有控制记录在等它的回执（目标里列了它、还没回执）的不删。
  * 开启请求号每次读取都是新的随机号，读取关了以后 Agent 不会再拿同一个号来开，所以删掉记录不会让关过的读取重新开出来。 */
 export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE) {
@@ -38,11 +39,15 @@ export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE) {
  * 换一条连接重放签名就对不上；随机数表只是同一条连接里的那一道补充，用不着永远留着。原来一条不删，
  * 页面每 3 秒取一次对话就写进两三条，一小时一万多条，把账本撑到一百多万字节（2026-10-17 实测，又把文档服务主线程占满）。 */
 export const READ_NONCE_TTL_MS = 10 * 60_000;
-/** 删掉过了留存期的随机数；原来存成 `true`、没有时间的老记录一并删掉 */
-export function pruneNonces(t, at, ttl = READ_NONCE_TTL_MS) {
+/** 删掉过了留存期的随机数；原来存成 `true`、没有时间的老记录一并删掉；同时按条数上限封顶。 */
+export function pruneNonces(t, at, ttl = READ_NONCE_TTL_MS, maxCount = KEEP_READ_CONTROL_NONCES) {
   let removed = 0;
   for (const [key, value] of Object.entries(t.nonces)) {
     if (value === true || typeof value !== 'number' || value < at - ttl) { delete t.nonces[key]; removed++; }
+  }
+  const keys = Object.keys(t.nonces);
+  for (const key of keys.slice(0, Math.max(0, keys.length - maxCount))) {
+    delete t.nonces[key]; removed++;
   }
   return removed;
 }
@@ -152,20 +157,59 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
   synchronize = async () => {}, onProgress = () => {}, now = Date.now } = {}) {
   if (![ledger?.read, ledger?.transaction, instanceAuthority?.verifyInState, authorizeRead, checkReadInState]
     .every(value => typeof value === 'function')) fail(503, 'read-control-configuration');
-  ledger.transaction(state => { state.agentReadControlRequired = true; tables(state); pruneClosedReads(state); pruneNonces(tables(state), now()); });
-  const streams = new Map(), waiters = new Set(); let stopped = false;
+  const streams = new Map(), waiters = new Set(), seenNonces = new Set(); let stopped = false;
   const instance = (state, servicePrincipal, action, body) => {
     const operation = conversationControlOperations[action]; conversationControlScope(operation, body);
     if (stopped) fail(503, 'read-control-closed');
     return instanceAuthority.verifyInState(state, servicePrincipal, { operation, input: body });
   };
+  const rememberNonce = key => {
+    seenNonces.add(key);
+    if (seenNonces.size > KEEP_READ_CONTROL_NONCES * 4) {
+      const oldest = seenNonces.values().next().value;
+      if (oldest !== undefined) seenNonces.delete(oldest);
+    }
+  };
   const nonce = (state, who, body) => {
     const key = digestOf({ instanceId: who.instanceId, nonce: body.nonce });
     const t = tables(state), at = now();
-    if (t.nonces[key]) fail(409, 'read-control-replay');
+    if (t.nonces[key] || seenNonces.has(key)) fail(409, 'read-control-replay');
+    t.nonces[key] = at; rememberNonce(key);
     pruneNonces(t, at);
-    t.nonces[key] = at;
   };
+  /** 只做控制的主服务（`control-only`）是单实例服务：新一代主服务实例已经登记并连上读取控制流时，
+   * 更早代的主服务进程必然已经退出，把旧主服务名下残留的读取与待办回执一并收口。 */
+  function supersedePriorControlOnlyInState(state, who) {
+    if (state.agentInstancesV2?.[who?.instanceId]?.purpose !== 'control-only') return false;
+    const t = tables(state); let changed = false;
+    for (const prior of Object.values(state.agentInstancesV2 ?? {})) {
+      if (prior.purpose !== 'control-only' || prior.instanceId === who.instanceId ||
+          prior.serviceId !== who.serviceId || prior.serviceKid !== who.serviceKid ||
+          prior.instanceGeneration >= who.instanceGeneration) continue;
+      const priorWho = Object.fromEntries(instanceKeys.map(k => [k, prior[k]]));
+      const supersededTag = `superseded:${who.instanceId}:${who.instanceGeneration}`;
+      if (prior.state !== 'closed' || !prior.closure) {
+        prior.state = 'closed';
+        prior.closure = { complete: true, witnessId: supersededTag,
+          supersededByInstanceId: who.instanceId, supersededByGeneration: who.instanceGeneration };
+        changed = true;
+      }
+      for (const handle of Object.values(t.handles)) {
+        if (!sameInstance(handle, priorWho) || (handle.state === 'closed' && handle.closeReceipt)) continue;
+        handle.state = 'closed';
+        handle.closeReceipt ??= { requestId: supersededTag, ...priorWho };
+        changed = true;
+      }
+      for (const control of t.controls) {
+        const target = control.targets[prior.instanceId];
+        if (!target || target.receipt || !sameInstance(target, priorWho)) continue;
+        target.receipt = { controlId: control.controlId, seq: control.seq, payloadDigest: control.payloadDigest,
+          ...priorWho, closedReadHandleIds: [...target.readHandleIds].sort() };
+        changed = true;
+      }
+    }
+    return changed;
+  }
   const requireLive = who => {
     const stream = streams.get(who.instanceId);
     if (!stream || !sameInstance(stream.who, who)) fail(503, 'read-control-disconnected');
@@ -174,13 +218,17 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
   };
   function subscribe({ servicePrincipal, body, send, onFailure }) {
     if (typeof send !== 'function' || typeof onFailure !== 'function') fail(503, 'read-control-configuration');
+    let progressed = false;
     const who = ledger.transaction(state => {
       const who = instance(state, servicePrincipal, 'subscribe', body); nonce(state, who, body);
       const t = tables(state), old = t.instances[who.instanceId];
       if (old && !sameInstance(old, who)) fail(403, 'read-instance-mismatch');
       t.instances[who.instanceId] ??= { ...who };
+      progressed = supersedePriorControlOnlyInState(state, who);
+      if (progressed) pruneClosedReads(state);
       return who;
     });
+    if (progressed) queueMicrotask(() => { for (const wake of waiters) wake(); onProgress(); });
     // A reconnect invalidates the old stream before publishing any ready frame.
     streams.get(who.instanceId)?.close();
     const stream = { who, seq: 0, closed: false,
@@ -215,6 +263,23 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     // The adapter resolves the opaque delegation, and doc reconstructs the
     // principal. No caller-supplied user/creator/run field becomes authority.
     const principal = await authorizeRead(body);
+    // 同一个长连接（如 SSE 事件流）已经开好读取且仍在 open 状态时，后续 250ms 轮询只需在内存里验单次随机数与当前权限，不必每秒重写整本 SQLite 账本。
+    const currentState = ledger.read(), currentNow = instance(currentState, servicePrincipal, 'open', body);
+    requireLive(currentNow);
+    const reqKey = digestOf({ instanceId: currentNow.instanceId, requestId: body.requestId });
+    const existing = currentState.agentReadsV1?.requests?.[reqKey];
+    if (existing) {
+      const nonceKey = digestOf({ instanceId: currentNow.instanceId, nonce: body.nonce });
+      if (currentState.agentReadsV1?.nonces?.[nonceKey] || seenNonces.has(nonceKey)) fail(409, 'read-control-replay');
+      rememberNonce(nonceKey);
+      const value = checkReadInState(currentState, principal, body);
+      const binding = { ...currentNow, projectId: body.projectId, conversationId: body.conversationId,
+        ...Object.fromEntries(['accountId', 'loginId', 'credentialId', 'loginGeneration'].map(k => [k, principal[k]])) };
+      if (existing.digest !== digestOf(binding)) fail(409, 'read-request-mismatch');
+      const handle = currentState.agentReadsV1?.handles?.[existing.readHandleId];
+      if (handle?.state !== 'open') fail(403, 'read-handle-closed');
+      return { readHandle: clone(handle), value };
+    }
     return ledger.transaction(state => {
       const current = instance(state, servicePrincipal, 'open', body); requireLive(current); nonce(state, current, body);
       const value = checkReadInState(state, principal, body);
@@ -288,6 +353,38 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     queueMicrotask(() => { publish(); onProgress(); });
     return clone(control);
   }
+  function reconcileInState(state) {
+    const t = tables(state);
+    for (const e of state.accessEvents ?? []) {
+      if (e.seq <= (t.accessCursor ?? 0)) continue;
+      if (!t.controls.some(c => c.accessSeq === e.seq)) {
+        const base = { requestId: `access:${e.eventId}`, accessSeq: e.seq, ...(e.projectId ? { projectId: e.projectId } : {}) };
+        if (e.type === 'login-revoked') fenceInState(state, { ...base, kind: 'credential', loginIds: e.loginIds });
+        else if (e.type === 'project-access-changed') {
+          if (e.reason === 'delete') fenceInState(state, { ...base, kind: 'delete' });
+          else if (e.reason === 'set-hosted-service' && e.service === 'agent' && e.enabled === false)
+            fenceInState(state, { ...base, kind: 'agent-disabled' });
+          else if (e.accountIds?.length) fenceInState(state, { ...base, kind: 'member', accountIds: e.accountIds });
+        }
+      }
+      t.accessCursor = e.seq;
+    }
+  }
+  function reconcileAccessEvents() {
+    const s = ledger.read(), t = s.agentReadsV1;
+    if (t && (t.accessCursor ?? 0) >= (s.accessEvents?.at(-1)?.seq ?? 0)) return;
+    ledger.transaction(reconcileInState);
+  }
+  ledger.transaction(state => {
+    state.agentReadControlRequired = true;
+    const t = tables(state);
+    const latestControlOnly = Object.values(t.instances)
+      .filter(row => state.agentInstancesV2?.[row.instanceId]?.purpose === 'control-only')
+      .sort((a, b) => a.instanceGeneration - b.instanceGeneration).at(-1);
+    if (latestControlOnly) supersedePriorControlOnlyInState(state, latestControlOnly);
+    pruneClosedReads(state);
+    pruneNonces(t, now());
+  });
   function acknowledge({ servicePrincipal, body }) {
     const result = ledger.transaction(state => {
       const who = instance(state, servicePrincipal, 'ack', body); nonce(state, who, body);
@@ -338,7 +435,7 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
       rows[eventId] = result; return result;
     });
   }
-  return { open, closeReads, subscribe, publish, acknowledge, completion, waitCompletion, finalizeAccessEvent,
-    hooks: { fenceInState }, close() { stopped = true; for (const stream of [...streams.values()]) stream.close();
+  return { open, closeReads, subscribe, publish, acknowledge, completion, waitCompletion, finalizeAccessEvent, reconcileAccessEvents,
+    hooks: { fenceInState }, close() { stopped = true; seenNonces.clear(); for (const stream of [...streams.values()]) stream.close();
       for (const wake of waiters) wake(); } };
 }

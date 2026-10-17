@@ -106,6 +106,7 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
    * 「Agent 已确认」。没办完就保持待办，下次再试；办完以后重复调用不会记第二次。
    * 判断任务那一半见 `agent-read-control.mjs` 的 `accessEventRunClosure`：保留下来继续跑的共有已读任务不在等的范围里。 */
   function completeReadAccessEvents() {
+    readControl.reconcileAccessEvents();
     const state = ledger.read(), pending = [];
     for (const event of state.accessEvents) {
       if (runtime.authority.hasAgentReadClosure(event.eventId) ||

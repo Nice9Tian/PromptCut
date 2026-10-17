@@ -378,8 +378,8 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   const workspaces = createWorkspaces({ dataDir: sharedDataDir, limits: workspaceLimits, log: say });
   const workspaceFor = (identity, conversationId) => workspaces.open({ projectId: identity.projectId, conversationId,
     ownerKey: accountWorkspaceOwnerKey(identity.projectId, conversationId) });
-  const mirror = (identity, conversationId) => eventStore.mirrorAccepted({ projectId: identity?.projectId, conversationId,
-    read: () => base.conversation(identity, conversationId, 0) });
+  const mirror = (identity, conversationId, snapshot = null) => eventStore.mirrorAccepted({ projectId: identity?.projectId, conversationId,
+    read: () => snapshot ? Promise.resolve(snapshot) : base.conversation(identity, conversationId, 0) });
   const service = { ...base,
     /** 页面的事件流挂上反向通道用（`http.mjs` 的 `accountEvents`）；只有这三样，登记表本身不外露 */
     pageBridge: Object.freeze({ attach: input => pageBridge.attach(input) }),

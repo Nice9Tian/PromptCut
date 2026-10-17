@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openAccountLedger, appendAccessEvent } from '../account/ledger.mjs';
 import { createAccountAuthority } from '../account/authority.mjs';
-import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT, KEEP_CLOSED_READS_PER_INSTANCE, pruneClosedReads, READ_NONCE_TTL_MS, pruneNonces } from '../account/agent-read-control.mjs';
+import { createAgentReadControl, conversationControlOperations, CONVERSATION_CONTROL_ROOT, KEEP_CLOSED_READS_PER_INSTANCE, KEEP_READ_CONTROL_NONCES, pruneClosedReads, READ_NONCE_TTL_MS, pruneNonces } from '../account/agent-read-control.mjs';
 import { conversationReadInState } from '../account/conversation-authority.mjs';
 import { instanceFixture } from './agent-instance-fixture.mjs';
 
@@ -229,6 +229,46 @@ test('已关的读取只留最近几十条：早关的连同开启记录删掉�
   const again = await f.open('owner');
   f.control.closeReads(f.signed('close', { readHandleIds: [again.readHandle.readHandleId] }));
   assert.equal(Object.values(f.ledger.read().agentReadsV1.handles).filter(h => h.state === 'closed').length, KEEP_CLOSED_READS_PER_INSTANCE);
+  // 长连接反复用同一个 requestId 调 open（如 SSE 事件流 250ms 轮询）时，第一次落盘后后续复核不再重写 SQLite，且重放随机数仍被拒
+  const sseReqId = `sse_${randomUUID()}`;
+  await f.control.open(f.signed('open', { requestId: sseReqId, delegation: 'owner', projectId: 'project', conversationId: 'conversation', action: 'get', after: 0 }));
+  const noncesAfterFirstSse = Object.keys(f.ledger.read().agentReadsV1.nonces).length;
+  const replayedCall = f.signed('open', { requestId: sseReqId, delegation: 'owner', projectId: 'project', conversationId: 'conversation', action: 'get', after: 0 });
+  await f.control.open(replayedCall);
+  await assert.rejects(f.control.open(replayedCall), { status: 409, code: 'read-control-replay' });
+  for (let i = 0; i < 20; i++) {
+    await f.control.open(f.signed('open', { requestId: sseReqId, delegation: 'owner', projectId: 'project', conversationId: 'conversation', action: 'get', after: 0 }));
+  }
+  assert.equal(Object.keys(f.ledger.read().agentReadsV1.nonces).length, noncesAfterFirstSse, '已处于 open 的同一 requestId 复核不再重复写 SQLite');
+  f.control.closeReads(f.signed('close', { readHandleIds: [`read_${f.ledger.read().agentReadsV1.requests[Object.keys(f.ledger.read().agentReadsV1.requests).at(-1)].readHandleId.slice(5)}`] }));
+  // 不同 requestId 的大量新建读取：nonces 表严格封顶在 KEEP_READ_CONTROL_NONCES
+  for (let i = 0; i < KEEP_READ_CONTROL_NONCES + 20; i++) {
+    const opened = await f.open('owner');
+    f.control.closeReads(f.signed('close', { readHandleIds: [opened.readHandle.readHandleId] }));
+  }
+  assert.equal(Object.keys(f.ledger.read().agentReadsV1.nonces).length, KEEP_READ_CONTROL_NONCES);
+});
+
+test('只做控制的主服务（control-only）重启登记新一代实例并订阅后，旧主服务残留的未关读取自动收口，历史访问事件补建控制记录', async t => {
+  const f = setup(t);
+  f.ledger.transaction(state => { state.agentInstancesV2[f.process.registration.instanceId].purpose = 'control-only'; });
+  f.subscribe();
+  await f.open('member');
+  // 模拟：访问事件先写入账本（当时未调 fenceInState），且旧 control-only 实例带着未关读取退出了
+  const event = f.ledger.transaction(state => appendAccessEvent(state, {
+    type: 'login-revoked', accountEventId: 'logout-after-restart', accountEventSeq: 1,
+    accountIds: ['member-account'], loginIds: ['login-member'], createdAt: 1,
+  }));
+  f.control.reconcileAccessEvents();
+  assert.throws(() => f.control.finalizeAccessEvent({ eventId: event.eventId }), { code: 'read-close-pending' });
+  // 新一代 control-only 主服务实例登记并连上 subscribe
+  const nextProc = f.instances.boot();
+  f.ledger.transaction(state => { state.agentInstancesV2[nextProc.registration.instanceId].purpose = 'control-only'; });
+  const unsub = f.subscribe(nextProc);
+  t.after(() => unsub());
+  const closure = f.control.finalizeAccessEvent({ eventId: event.eventId });
+  assert.equal(closure.payload.complete, true);
+  assert.equal(f.ledger.read().agentInstancesV2[f.process.registration.instanceId].state, 'closed');
 });
 
 test('用过的随机数只留 10 分钟:窗口内重放照样拒;过期的和老格式(true)的都删掉,账本不再无限变大', async t => {
