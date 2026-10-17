@@ -184,7 +184,7 @@ try {
   browser = await launchBrowser({ extraArgs: ['--disable-gpu', '--ignore-certificate-errors', '--host-resolver-rules=MAP s1.pc.localhost 127.0.0.1,MAP s2.pc.localhost 127.0.0.1'] });
   if (PHASES.has('desktop')) say('desktop.skipped', { why: '桌面版阶段(D1～D12)走旧入口,已废:见文件头「没搬过来的」' });
 
-  if (PHASES.has('online')) {
+  if (PHASES.has('online') || PHASES.has('reverse')) {
     const [acctA, acctB] = fixture.accounts;
     const ctxA = await browser.createBrowserContext();
     const A = await newPage(ctxA);
@@ -293,7 +293,7 @@ try {
       const sel12 = String(tools12.find((t) => t.name === 'get_selection')?.summary ?? '');
       check('O12:get_selection 回的是页面当下的选区(挪的那张),不是发消息时的(第三张)', sel0.join() === cParam && sel12.includes(cMove) && !sel12.includes(cParam), { sel0, summary: sel12.slice(0, 200) });
       const results12 = agentReqs(A).slice(reqBase).filter((r) => r.method === 'POST' && /\/page-results$/.test(r.url));
-      check('O12:页面交回结果的请求(POST …/page-results)四次、都带委托票据', results12.length === 4 && results12.every((r) => r.auth !== null), { results: results12.length, auth: results12.map((r) => r.auth) });
+      check('O12:页面交回结果的请求(POST …/page-results)三次(seek/play/pause;get_selection 走文档服务全员选区)、都带委托票据', results12.length === 3 && results12.every((r) => r.auth !== null), { results: results12.length, auth: results12.map((r) => r.auth) });
       await P(A, () => { window.__pcStore.actions.pause(); window.__pcStore.actions.select([]); });
     }
 
