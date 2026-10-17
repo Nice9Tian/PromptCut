@@ -26,7 +26,12 @@ export function createRunAssetObserverAuthority({ checkpoint, privateClient, ass
     return { assetInstanceId: binding.instance.instanceId, serviceIdentity: binding.instance.serviceIdentity };
   }
   async function resolveObserver(input) {
-    const socket = socketOf(input), first = checkpoint.current();
+    const socket = socketOf(input), first = checkpoint.current(), existing = bound.get(socket);
+    if (existing && existing.recordDigest === first.recordDigest && existing.epoch === first.epoch &&
+        same(existing.instance, first.instance)) {
+      return { ...currentAsset({ socket }), authorityId: first.authorityId,
+        epoch: first.epoch, recordDigest: first.recordDigest };
+    }
     const proofInput = { challenge: randomBytes(24).toString('base64url'),
       exporterDigest: assetObserverExporterDigest(socket), epoch: first.epoch,
       recordDigest: first.recordDigest, docAuthorityId: first.authorityId,

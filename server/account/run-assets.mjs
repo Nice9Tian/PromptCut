@@ -45,8 +45,11 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
   ledger.transaction(s => { tables(s); s.runAssetsEpochV1 = docEpoch; for (const l of Object.values(s.runAssetLeasesV1))
     if (l.state === 'admitted') l.state = 'unknown'; return null; });
 
+  let lastMirroredState = null, lastMirroredResult = null;
   function mirror() {
-    return ledger.transaction(s => {
+    const current = ledger.read();
+    if (current === lastMirroredState && lastMirroredResult) return { ...lastMirroredResult };
+    const result = ledger.transaction(s => {
       tables(s);
       for (const [index, event] of s.runAssetControlOutboxV1.entries()) {
         const m = s.runAssetControlMirrorsV1[event.controlId];
@@ -84,6 +87,9 @@ export function createRunAssets({ ledger, runProvider, authenticateDirect, authe
       }
       return { accessHead: s.accessHead, runAssetHead: s.runAssetControlOutboxV1.length };
     });
+    lastMirroredState = ledger.read();
+    lastMirroredResult = result;
+    return { ...result };
   }
   async function synchronize() { requireOpen(); await runProvider.synchronize(); requireOpen(); return mirror(); }
   function observerOf(observer) {
