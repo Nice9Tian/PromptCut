@@ -15,7 +15,7 @@ import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, interimStage, liveStage, singleL
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
-import { cardRunState, getCard, onSyncedUserCardsChanged, setCardRunStates, syncedUserCards, type CardRunState } from "../kernel/registry";
+import { cardRunState, getCard, onCardRunStatesChanged, onSyncedUserCardsChanged, setCardRunStates, syncedUserCards, type CardRunState } from "../kernel/registry";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
@@ -1346,9 +1346,16 @@ export function Preview() {
   useEffect(() => { pushMissingRef.current(); }, [t, project, online, lowMem]);
   useEffect(() => {
     if (!onlineBrowserMode()) return;
+    const refresh = () => {
+      pushMissingRef.current();
+      // planDispatch 在同一批通知里用 queueMicrotask 重算 currentPlan;排在它后面重投一次流平面与抑制集合,
+      // 让刚变成 ready 的同步用户卡当场解除抑制(不必等用户点播放或拖时间轴)
+      queueMicrotask(() => { void pumpRef.current(); });
+    };
     const offCoverage = subscribeCoverage(() => pushMissingRef.current());
-    const offSynced = onSyncedUserCardsChanged(() => pushMissingRef.current());
-    return () => { offCoverage(); offSynced(); };
+    const offSynced = onSyncedUserCardsChanged(refresh);
+    const offRun = onCardRunStatesChanged(refresh);
+    return () => { offCoverage(); offSynced(); offRun(); };
   }, [online]);
   /*
    * C10 契约第 7 节:队列报 task.done(本页发布的清单计划或它切出的细任务做完了):马上重取层表与清单,新快照下一拍换上。
