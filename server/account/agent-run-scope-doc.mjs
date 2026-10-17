@@ -102,7 +102,7 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
       return { purpose: 'control-only', publicKey: requestedKey };
     }
     const value = projectionFor(rootScopeRef), cfg = configs.get(keyOf(rootScopeRef));
-    if (s.agentRunScopesV1.retired?.[`${keyOf(rootScopeRef)}:${rootScopeRef.epoch}`]) fail(409, 'slot-retired');
+    if (s.agentRunScopesV1?.retired?.[`${keyOf(rootScopeRef)}:${rootScopeRef.epoch}`]) fail(409, 'slot-retired');
     if (value.failure) fail(403, 'worker-failed');
     // Root controller's identity-RPC client cert is NOT the worker Doc client.
     if (transport.serviceId !== 'agent' || transport.serviceKid !== cfg.workerServiceKid ||
@@ -120,7 +120,7 @@ export function createAgentRunScopeDoc({ ledger, signingKey, slots, masterServic
     const instance = s.agentInstancesV2?.[grant.instanceId];
     if (!instance?.rootScopeRef || instance.instanceGeneration !== grant.instanceGeneration) fail(403, 'instance-unbound');
     const ref = instance.rootScopeRef, projection = projectionFor(ref), key = `${keyOf(ref)}:${ref.epoch}`;
-    if (s.agentRunScopesV1.retired?.[key]) fail(409, 'slot-retired');
+    if (s.agentRunScopesV1?.retired?.[key]) fail(409, 'slot-retired');
     if (projection.failure) fail(403, 'worker-failed');
     const prior = s.agentRunScopesV1.assignments[key];
     if (prior) {
