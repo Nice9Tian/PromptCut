@@ -226,7 +226,7 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
             existingRef.principal.loginId === principal.loginId &&
             existingRef.principal.loginGeneration === principal.loginGeneration) {
           existingRef.token = token;
-          existingRef.principal = { ...existingRef.principal, expiresAt: principal.expiresAt };
+          existingRef.principal = { ...existingRef.principal, credentialId: principal.credentialId, expiresAt: principal.expiresAt };
         }
       }
     }

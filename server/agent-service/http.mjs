@@ -208,19 +208,21 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           : (view.messages ?? []).map(message => ({ eventSeq: message.arrivalSeq, event: { type: 'user',
             messageId: message.messageId, prompt: message.content, senderAccountId: message.senderAccountId,
             senderNameAtSend: message.senderNameAtSend, queueState: message.queueState } }));
-        for (const row of rows) {
-          if (released || res.destroyed) break;
-          if (row.eventSeq <= cursor) continue;
+        const freshRows = rows.filter(row => row.eventSeq > cursor);
+        if (freshRows.length > 0 && !released && !res.destroyed) {
           // Recheck even when a batch was fetched before a private switch or kick.
           const access = await service.access(identity, conversationId, 'read');
-          if (released || res.destroyed) break;
+          if (released || res.destroyed) return;
           if (access.allowed !== true || access.aclRevision !== view.aclRevision) return;
-          // Accepted user events predate the run and keep scope on the FULL
-          // durable row. Project this trusted scope after the event payload;
-          // event fields cannot override it. Queued-only/LAN wire stays intact.
-          res.write(`data: ${JSON.stringify({ ...row.event, ...(service.runEvents
-            ? { projectId: row.projectId, conversationId: row.conversationId } : {}), seq: row.eventSeq })}\n\n`);
-          cursor = row.eventSeq;
+          for (const row of freshRows) {
+            if (released || res.destroyed) break;
+            // Accepted user events predate the run and keep scope on the FULL
+            // durable row. Project this trusted scope after the event payload;
+            // event fields cannot override it. Queued-only/LAN wire stays intact.
+            res.write(`data: ${JSON.stringify({ ...row.event, ...(service.runEvents
+              ? { projectId: row.projectId, conversationId: row.conversationId } : {}), seq: row.eventSeq })}\n\n`);
+            cursor = row.eventSeq;
+          }
         }
         if (!released && !res.destroyed && (view.queueRevision !== queueRevision || view.aclRevision !== aclRevision)) {
           const access = await service.access(identity, conversationId, 'read');

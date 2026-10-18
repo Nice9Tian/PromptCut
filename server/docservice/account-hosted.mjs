@@ -101,6 +101,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
   const issue = (kind, principal, deviceId, expiresAt) => {
     const ticket = randomBytes(32).toString('base64url');
     tickets.set(ticket, { kind, authorizationId: principal.authorizationId, projectId: principal.projectId,
+      accountId: principal.accountId, loginId: principal.loginId, loginGeneration: principal.loginGeneration,
       deviceId, expiresAt });
     return ticket;
   };
@@ -268,7 +269,14 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       principal = await authority.authorizePrincipal({ authorizationId: principal.authorizationId }, { projectId: principal.projectId });
       const expiresAt = Math.min(principal.expiresAt, now() + 5 * 60_000);
       if (expiresAt <= now()) fail(401, 'credential-revoked');
-      for (const [ticket, entry] of tickets) if (entry.expiresAt <= now()) tickets.delete(ticket);
+      for (const [ticket, entry] of tickets) {
+        if (entry.expiresAt <= now()) { tickets.delete(ticket); continue; }
+        if (entry.projectId === principal.projectId && entry.deviceId === deviceId &&
+            entry.accountId === principal.accountId && entry.loginId === principal.loginId &&
+            entry.loginGeneration === principal.loginGeneration && expiresAt > entry.expiresAt) {
+          entry.expiresAt = expiresAt;
+        }
+      }
       const project = ledger.read().projects[principal.projectId];
       hostedConfig?.registry?.refresh({ force: true });
       const registered = hostedConfig?.registry?.get('agent');

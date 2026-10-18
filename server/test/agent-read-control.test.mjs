@@ -42,7 +42,7 @@ function setup(t) {
     return control.hooks.fenceInState(state, { kind: 'private', projectId: 'project', conversationId: 'conversation', requestId: 'private', ...input });
   });
   t.after(() => { control.close(); for (const release of releases) release(); instances.close(); ledger.close(); fs.rmSync(dir, { recursive: true }); });
-  return { ledger, file, instances, process, signed, subscribe, open, fence, frames,
+  return { ledger, file, instances, process, principals, signed, subscribe, open, fence, frames,
     get control() { return control; }, restart() { control.close(); control = create(); } };
 }
 
@@ -290,3 +290,17 @@ test('用过的随机数只留 10 分钟:窗口内重放照样拒;过期的和�
   const table = { nonces: { a: 1000, b: 999_999, c: true } };
   assert.equal(pruneNonces(table, 1_000_000, 10), 2); assert.deepEqual(Object.keys(table.nonces), ['b']);
 });
+
+test('同一登录续期访问令牌(credentialId 轮换、loginId 与 loginGeneration 不变)不会掐断已打开的 SSE 读取流', async t => {
+  const f = setup(t); f.subscribe();
+  const reqId = `http-read_${randomUUID()}`;
+  const first = await f.open('member', { requestId: reqId });
+  assert.equal(first.readHandle.credentialId, 'cred-member');
+  f.principals.member.credentialId = 'cred-member-renewed';
+  const second = await f.open('member', { requestId: reqId });
+  assert.equal(second.readHandle.readHandleId, first.readHandle.readHandleId);
+  assert.equal(second.readHandle.credentialId, 'cred-member-renewed');
+  f.principals.member.loginGeneration = 2;
+  await assert.rejects(f.open('member', { requestId: reqId }), { status: 409, code: 'read-request-mismatch' });
+});
+
