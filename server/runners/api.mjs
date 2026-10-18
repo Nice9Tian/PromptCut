@@ -283,7 +283,7 @@ export function startRun(opts) {
          * 照样超时 —— 三次都卡在同一个回合,整个环路作废。那不是断线,是想得慢。
          * 普通对话仍是 120 秒:真卡住的时候还是该早点告诉用户。
          */
-        { idleMs: Number(opts.idleMsForTest) > 0 ? Number(opts.idleMsForTest) : (useLoop ? 300000 : 120000) },
+        { idleMs: Number(opts.idleMsForTest) > 0 ? Number(opts.idleMsForTest) : (useLoop || opts.checkpoint ? 300000 : 120000) },
       ),
       {
         ...(opts.retryForTest && typeof opts.retryForTest === 'object' ? opts.retryForTest : {}),

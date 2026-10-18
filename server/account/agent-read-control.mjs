@@ -267,34 +267,37 @@ export function createAgentReadControl({ ledger, instanceAuthority, authorizeRea
     const currentState = ledger.read(), currentNow = instance(currentState, servicePrincipal, 'open', body);
     requireLive(currentNow);
     const reqKey = digestOf({ instanceId: currentNow.instanceId, requestId: body.requestId });
+    const reqBinding = (who, p) => ({ ...who, projectId: body.projectId, conversationId: body.conversationId,
+      ...Object.fromEntries(['accountId', 'loginId', 'loginGeneration'].map(k => [k, p[k]])) });
     const existing = currentState.agentReadsV1?.requests?.[reqKey];
     if (existing) {
       const nonceKey = digestOf({ instanceId: currentNow.instanceId, nonce: body.nonce });
       if (currentState.agentReadsV1?.nonces?.[nonceKey] || seenNonces.has(nonceKey)) fail(409, 'read-control-replay');
       rememberNonce(nonceKey);
       const value = checkReadInState(currentState, principal, body);
-      const binding = { ...currentNow, projectId: body.projectId, conversationId: body.conversationId,
-        ...Object.fromEntries(['accountId', 'loginId', 'credentialId', 'loginGeneration'].map(k => [k, principal[k]])) };
-      if (existing.digest !== digestOf(binding)) fail(409, 'read-request-mismatch');
+      const binding = { ...reqBinding(currentNow, principal), credentialId: principal.credentialId };
+      if (existing.digest !== digestOf(reqBinding(currentNow, principal)) && existing.digest !== digestOf(binding))
+        fail(409, 'read-request-mismatch');
       const handle = currentState.agentReadsV1?.handles?.[existing.readHandleId];
       if (handle?.state !== 'open') fail(403, 'read-handle-closed');
-      return { readHandle: clone(handle), value };
+      return { readHandle: { ...clone(handle), credentialId: principal.credentialId }, value };
     }
     return ledger.transaction(state => {
       const current = instance(state, servicePrincipal, 'open', body); requireLive(current); nonce(state, current, body);
       const value = checkReadInState(state, principal, body);
-      const t = tables(state), binding = { ...current, projectId: body.projectId, conversationId: body.conversationId,
-        ...Object.fromEntries(['accountId', 'loginId', 'credentialId', 'loginGeneration'].map(k => [k, principal[k]])) };
+      const t = tables(state), reqDigest = digestOf(reqBinding(current, principal));
+      const binding = { ...reqBinding(current, principal), credentialId: principal.credentialId };
       const key = digestOf({ instanceId: current.instanceId, requestId: body.requestId });
       const old = t.requests[key];
       if (old) {
-        if (old.digest !== digestOf(binding)) fail(409, 'read-request-mismatch');
+        if (old.digest !== reqDigest && old.digest !== digestOf(binding)) fail(409, 'read-request-mismatch');
         const handle = t.handles[old.readHandleId];
         if (handle.state !== 'open') fail(403, 'read-handle-closed');
+        handle.credentialId = principal.credentialId;
         return { readHandle: clone(handle), value };
       }
       const handle = { ...binding, readHandleId: `read_${key}`, state: 'open', head: t.head };
-      t.handles[handle.readHandleId] = handle; t.requests[key] = { digest: digestOf(binding), readHandleId: handle.readHandleId };
+      t.handles[handle.readHandleId] = handle; t.requests[key] = { digest: reqDigest, readHandleId: handle.readHandleId };
       return { readHandle: clone(handle), value };
     });
   }

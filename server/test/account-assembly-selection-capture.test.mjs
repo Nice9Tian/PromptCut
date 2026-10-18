@@ -56,3 +56,16 @@ test('credential revocation during capture is rechecked and a blocked record is 
   revoked = false; f.mod.revoke({ projectId: principal.projectId, accountId: principal.accountId });
   await assert.rejects(f.capture(), /selection-page-unavailable/);
 });
+test('access token renewal rotating credentialId on the same loginId and loginGeneration preserves live page capture', async () => {
+  let activeCredentialId = 'credential-a';
+  const f = fixture(async ({ principal: p }) => ({ allowed: true, projectId: p.projectId, accountId: p.accountId, credentialId: activeCredentialId }));
+  await f.set();
+  activeCredentialId = 'credential-renewed';
+  const snapshot = await f.mod.captureSnapshot({
+    principal: { ...principal, credentialId: 'credential-renewed' },
+    projectId: principal.projectId,
+    pageId: 'page-a',
+  });
+  assert.deepEqual(snapshot.selection, { clipIds: ['clip-a'] });
+});
+

@@ -166,12 +166,13 @@ export function CloudAiPanel(props: {
   }, [cloud.accountMode, consent.accepted, chat.conversationId, chat.history.refresh, metadataKey]);
 
   // 新建的云端对话首次落地消息后才出现在服务器列表里；刷新会话元数据时确认其真实所有者与权限。
+  const hasMessages = chat.messages.length > 0;
   useEffect(() => {
-    if (!cloud.accountMode || chat.messages.length === 0) return;
+    if (!cloud.accountMode || !hasMessages) return;
     let live = true;
     void chat.history.refresh().then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
     return () => { live = false; };
-  }, [cloud.accountMode, consent.accepted, chat.conversationId, chat.messages.length, chat.history.refresh, metadataKey]);
+  }, [cloud.accountMode, consent.accepted, chat.conversationId, hasMessages, chat.history.refresh, metadataKey]);
 
   // 创建者关了开关:成员列表通知过来的(`cloud.enabled`)或 info 报的
   const off = !cloud.enabled || chat.info?.enabled === false;

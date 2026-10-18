@@ -83,7 +83,8 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
     if (answer === true) return principal;
     if (!answer || typeof answer !== 'object' || answer.allowed !== true) throw error(403, 'forbidden');
     if (answer.accountId !== principal.accountId || answer.projectId !== projectId) throw error(403, 'principal-mismatch');
-    return { ...principal, accountName: answer.accountName ?? principal.accountName };
+    return { ...principal, ...(typeof answer.credentialId === 'string' && answer.credentialId ? { credentialId: answer.credentialId } : {}),
+      accountName: answer.accountName ?? principal.accountName };
   }
   /**
    * 问一位在线成员的页面时出的错,算「这一位不算」还是「整次查询失败」。
@@ -245,20 +246,24 @@ export function mountSelection({ project, checkAccess, authorizeQuery, now = Dat
     if (!validId(projectId) || !validId(pageId)) throw error(400, 'invalid-selection');
     const current = await checked(principal, projectId);
     const fields = ['accountId', 'loginId', 'credentialId', 'loginGeneration'];
+    const loginFields = ['accountId', 'loginId', 'loginGeneration'];
     if (fields.some(field => current[field] === undefined)) throw error(403, 'principal-mismatch');
     const live = () => [...(projects.get(projectId)?.values() ?? [])].filter(entry =>
       !blocked.has(entry.connId) && principals.has(entry.connId) && !entry.synthetic && entry.pageId === pageId &&
-      fields.every(field => entry.principal[field] === current[field]));
+      loginFields.every(field => entry.principal[field] === current[field]));
     const matches = live();
     if (matches.length !== 1) throw error(403, 'selection-page-unavailable');
     const entry = matches[0];
     // The live record and both principals are checked across asynchronous authority
     // calls. A new revision/disconnect/revocation cannot substitute another page.
-    await checked(entry.principal, projectId);
-    await checked(principal, projectId);
+    const checkedEntry = await checked(entry.principal, projectId);
+    const checkedSender = await checked(principal, projectId);
+    if (fields.some(field => checkedEntry[field] !== checkedSender[field]))
+      throw error(403, 'selection-page-unavailable');
     const after = live();
     if (after.length !== 1 || after[0] !== entry || projects.get(projectId)?.get(entry.connId) !== entry)
       throw error(403, 'selection-page-changed');
+    entry.principal = checkedEntry;
     const sentAt = clock();
     if (!Number.isSafeInteger(sentAt)) throw error(503, 'selection-clock-unavailable');
     return { source: 'sent-snapshot', projectId, accountId: current.accountId, pageId,
