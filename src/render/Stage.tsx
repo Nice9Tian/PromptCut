@@ -20,6 +20,7 @@ import { GlPlane } from "./gl/GlPlane";
 /* 占位组件(product/rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
 import { PlaceholderPlane, PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, maxAnimated } from "./placeholder";
 import { ensurePlaceholderStyle, exportSyncedMountFor, geometryFor, isCatchingUpClip, localOnlyReason, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholderFitFor, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
+import { resolveCardParams } from "./mediaTier";
 import type { PlaceholderReason } from "./placeholder/contract";
 
 setMaxAnimated(maxAnimated);
@@ -31,7 +32,7 @@ const DirectCard = memo(function DirectCard({ def, params, ...props }: CardProps
   // 素材效果卡没有 Component,但它在下面的分支顺序里排在这一支**前面**,走到这里必有组件。
   // 这里**不能**改成 `if (!C) return null` —— 分支顺序万一写错,那就是一张静默的空白卡。
   const C = def.Component!;
-  return <C {...props} params={{ ...def.defaults, ...params }} />;
+  return <C {...props} params={resolveCardParams({ ...def.defaults, ...params })} />;
 });
 
 /**
@@ -371,11 +372,11 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               ) : def!.card ? (
                 // 素材效果卡:经 Stage、有包裹层,hitTest / rects / 快照 / 抑制全部照常
                 <GraphCard def={def!} clip={clip} graph={timeline.graph} fps={timeline.fps}
-                  t={localTOf(clip, cardT)} params={{ ...def!.defaults, ...clip.params }} stage={stageInfo} />
+                  t={localTOf(clip, cardT)} params={resolveCardParams({ ...def!.defaults, ...clip.params })} stage={stageInfo} />
               ) : clipFrameMode(clip, def) === 'direct' ? (
-                <DirectCard def={def!} params={clip.params} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} duration={clip.end - clip.start} stage={stageInfo} />
+                <DirectCard def={def!} params={resolveCardParams(clip.params)} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} duration={clip.end - clip.start} stage={stageInfo} />
               ) : (
-                <C params={{ ...def!.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} mountClockMs={mountClockMs} duration={clip.end - clip.start} stage={stageInfo} />
+                <C params={resolveCardParams({ ...def!.defaults, ...clip.params })} playToken={gen} t={localTOf(clip, cardT) + embeddedOffset} sourceOffset={clip.sourceOffset} mountClockMs={mountClockMs} duration={clip.end - clip.start} stage={stageInfo} />
               ))}
               {/*
                 gl 平面(R9,E7 的第五种兄弟平面)。它是**活渲的一部分**,不进四条平面选择器的放过名单 ——
@@ -385,7 +386,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               {glContract && glBox ? (
                 <GlPlane clipId={clip.id} cardId={clip.cardId} contract={glContract}
                   w={glBox.width} h={glBox.height} t={localTOf(clip, cardT)} frame={localFrame}
-                  params={{ ...def!.defaults, ...clip.params }} gen={gen}
+                  params={resolveCardParams({ ...def!.defaults, ...clip.params })} gen={gen}
                   skip={supNow.has(clip.id)} stage={stageInfo} />
               ) : null}
               {/*

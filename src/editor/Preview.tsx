@@ -50,7 +50,7 @@ import { createIsolatedSoundLink, type IsolatedSoundLink } from "./io/isolatedSo
 import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
 import { setCoverageSource, subscribeCoverage } from "./onlineCoverage";
 import { localOnlyMissingAt } from "./localOnlyMissing";
-import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
+import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, onPlanUpdated, planLowMemoryLight, sendPlanTo, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
 import { lowMemoryMeasuring, lowMemorySearchState, reclassify, runLowMemorySearch, type LowMemorySearchOutcome } from "./lowMemorySearch";
 import { LowMemoryGate } from "./LowMemoryGate";
 import { SHARED_COST_RELAY_MS, SharedCostRelay, publishSharedCosts, toSharedInput, type SharedCostInput } from "./sharedCosts";
@@ -80,7 +80,7 @@ import { createPlanPublisher, type PlanPublisher } from "../online/planPublisher
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { onCostRecords, onProbeProgress, probeFrameDiag, probeRunDiag, probeSettledFor, setCostBackend } from "./probeRunner";
+import { onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, setCostBackend } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
@@ -2056,6 +2056,39 @@ export function Preview() {
     // 低内存档同样带 settle:停下时追当前一帧(c10a 契约第 17 节),拖动过程中不带
     void sendSetTime(t, live && !scrubbingRef.current ? { settle: true } : {});
   }, [stageReady, live, playing, t, playToken, scrubbing, sendSetTime]);
+
+  /*
+   * 同步卡运行状态变成 ready、或测量结果到了导致分派表重算后，停着的舞台重新投递抑制并结算当前帧：
+   * 刚打开项目时同步卡尚未 ready，首次 setTime(t, { settle: true }) 按 localOnly 把它记入抑制（显示沙漏）、
+   * swapTrace 也只记下没测过的那一次；之后卡 ready、测量完成，暂停中若不再触发结算就会一直停在沙漏。
+   */
+  useEffect(() => {
+    if (!live) return;
+    let queued = false;
+    const settlePaused = () => {
+      queued = false;
+      if (!liveRef.current || !stageReadyRef.current || playingRef.current || scrubbingRef.current || lowMemoryMeasuring()) return;
+      void sendPlanTo("front");
+      void pumpRef.current();
+      if (!probeProgress().running) {
+        void sendSetTimeRef.current(tRef.current, { settle: true });
+      }
+    };
+    const trigger = () => {
+      if (queued) return;
+      queued = true;
+      queueMicrotask(settlePaused);
+    };
+    const offPlan = onPlanUpdated(trigger);
+    const offRunStates = onCardRunStatesChanged(trigger);
+    let wasRunning = probeProgress().running;
+    const offProbe = onProbeProgress((p) => {
+      const finished = wasRunning && !p.running;
+      wasRunning = p.running;
+      if (finished) trigger();
+    });
+    return () => { offPlan(); offRunStates(); offProbe(); };
+  }, [live]);
 
   /* E6:播放中 `refreshRects` 改成定时器,一次往返、结果按序号丢过期的 */
   useEffect(() => {

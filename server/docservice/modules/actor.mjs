@@ -12,6 +12,17 @@
  */
 export function actorOf(principal, session) {
   if (principal?.realm === 'account' || principal?.identityVersion === 2) {
+    if (principal.realm === 'account' && principal.identityVersion === 2 &&
+        principal.scope === 'service' && principal.service === 'render' && principal.role === 'render' &&
+        typeof principal.userId === 'string' && principal.userId.startsWith('service:render@')) {
+      return {
+        userId: principal.userId,
+        deviceId: principal.deviceId ?? null,
+        role: 'render',
+        conversation: null,
+        session,
+      };
+    }
     if (principal.realm !== 'account' || principal.identityVersion !== 2 ||
         ['accountId', 'loginId', 'credentialId'].some(key => typeof principal[key] !== 'string' || !principal[key]) ||
         !Number.isSafeInteger(principal.loginGeneration) || principal.loginGeneration < 1) {

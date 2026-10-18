@@ -117,12 +117,20 @@ test("OU-02 planDispatch:在线时本页运行不了的卡一律判重、进预�
     const byId = new Map(p.tracks[0].clips.map((c) => [c.id, c]));
     assert.deepEqual([...D.currentPlan().prerenderSet].filter((id) => !!byId.get(id)?.cardId), ["g", "s"]);
     // 载入成功(运行状态 ready):有身份;还没有记录时按声明兜底(同步卡没有声明,判重),记录到了按记录判
-    R.setCardRunStates([["synced-card", { state: "ready", version: "g1" }]]);
-    await settle();
-    assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s"], "刚载入成功、还没测:按声明兜底");
-    D.mergePlanCosts([lightRec(CI.clipIdentityOf(p).identityKeys.s)]);
-    await settle();
-    assert.deepEqual([...D.currentPlan().prerenderSet], ["g"], "测完判轻:不进预渲染集合,活渲");
+    let planNotifications = 0;
+    const offPlan = D.onPlanUpdated(() => { planNotifications++; });
+    try {
+      R.setCardRunStates([["synced-card", { state: "ready", version: "g1" }]]);
+      await settle();
+      assert.deepEqual([...D.currentPlan().prerenderSet], ["g", "s"], "刚载入成功、还没测:按声明兜底");
+      assert.equal(planNotifications, 1, "运行状态变成 ready 时通知分派表已更新");
+      D.mergePlanCosts([lightRec(CI.clipIdentityOf(p).identityKeys.s)]);
+      await settle();
+      assert.deepEqual([...D.currentPlan().prerenderSet], ["g"], "测完判轻:不进预渲染集合,活渲");
+      assert.equal(planNotifications, 2, "测量记录并入后再次通知分派表已更新(Preview 据此重新结算暂停帧)");
+    } finally {
+      offPlan();
+    }
     // 运行不了了(新一代转译失败):回到一律按重,手里那条判轻的记录不认
     R.setCardRunStates([["synced-card", { state: "unsupported-syntax", detail: "namespace" }]]);
     await settle();

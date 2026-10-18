@@ -59,7 +59,15 @@ let deadMs: number | null = null;
 let deadMsOf: ((project: Project, clipId: string) => number) | null = null;
 /** 上一次真的发出去的那份表的序列化结果，用来省掉「没变还发一遍」 */
 let sentWire = "";
+let lastNotifiedWire = "";
 let scheduled = false;
+const planListeners = new Set<() => void>();
+
+/** 分派表或成本记录重算且内容变化后通知（Preview 在暂停态据此重发流平面/抑制并重新结算当前帧） */
+export function onPlanUpdated(cb: () => void): () => void {
+  planListeners.add(cb);
+  return () => { planListeners.delete(cb); };
+}
 
 /** 这一刻算出来的分派表（R5 / 验收探针用）。低内存档里是显示用的那一张（全部判重），判定看 `judgedPlan` */
 export function currentPlan(): PipelinePlan | null {
@@ -150,7 +158,15 @@ function schedule(): void {
   queueMicrotask(() => {
     scheduled = false;
     recompute();
+    const wire = plan && project ? JSON.stringify({ wire: wirePlan(plan, clipIdentityOf(project), tuning), costs }) : "";
+    const changed = wire !== lastNotifiedWire;
+    lastNotifiedWire = wire;
     void sendPlanTo("front");
+    if (changed) {
+      for (const cb of [...planListeners]) {
+        try { cb(); } catch { /* 订阅方出错不影响分派 */ }
+      }
+    }
   });
 }
 
@@ -280,5 +296,6 @@ export function resetPlanDispatch(): void {
   tuning = resolveTuning(null);
   plan = null;
   sentWire = "";
+  lastNotifiedWire = "";
   scheduled = false;
 }

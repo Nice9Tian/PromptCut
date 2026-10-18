@@ -60,6 +60,14 @@ export function createOperationWiring({ history, account, verifyWitness, authori
   async function checkPrincipal(principal, projectId, action = 'write') {
     if (principal?.realm !== 'account' || principal.identityVersion !== 2 || principal.projectId !== projectId) throw historyError('operation-forbidden', 403);
     order.assertUnfenced({ projectId, actor: principal });
+    if (principal.scope === 'service' && principal.service === 'render' && principal.role === 'render' &&
+        !runFields.some(key => principal[key] !== undefined)) {
+      if (action !== 'read') throw historyError('operation-forbidden', 403);
+      const verified = await authority.checkAccess({ principal, projectId, action });
+      if (verified?.allowed !== true) throw historyError('operation-forbidden', 403);
+      order.assertUnfenced({ projectId, actor: principal });
+      return { allowed: true, ...verified };
+    }
     const isRun = principal.role !== 'page' || runFields.some(key => principal[key] !== undefined);
     if (isRun) {
       if (!runProvider?.checkAccess || runFields.some(key => typeof principal[key] !== 'string' || !principal[key])) throw historyError('run-provider-unavailable', 503);

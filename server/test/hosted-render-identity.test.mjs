@@ -534,3 +534,134 @@ test('HR15 托管组合：读数据目录下的 secrets/services.json，服务�
   assert.deepEqual(await watchDirectory(control), [], '文件出现后不用重启就能握手');
   assert.ok(!JSON.stringify(logs).includes(key.priv));
 });
+
+test('HR5b 账号项目成员连接计入与撤出、bump 归零删键、lingering 写入与到期清零', async () => {
+  const { hostedModule } = await import('../docservice/modules/hosted.mjs');
+  let nowMs = 10_000;
+  const projectId = 'sp_4lcukykm2blylc5lok7za46yu3';
+  const movedId = 'p-mvcg7qba-763f629a';
+  const activeMap = new Map([
+    [projectId, { projectId, status: 'active', hosted: { render: true, agent: true } }],
+    [movedId, { projectId: movedId, status: 'active', hosted: { render: true, agent: true } }],
+  ]);
+  const accountRuntime = {
+    hasProject: (id) => activeMap.has(id),
+    authority: {
+      listActiveProjects: () => [...activeMap.values()],
+      projectState: (id) => activeMap.get(id) ?? null,
+    },
+  };
+  const registry = {
+    version: 1,
+    get: (name) => (name === 'render' || name === 'agent' ? { role: name } : null),
+    has: () => true,
+  };
+  const sent = [];
+  const ctx = {
+    now: () => nowMs,
+    send: (connId, msg) => sent.push({ connId, msg }),
+    log: () => {},
+  };
+  const mod = hostedModule({
+    store: () => null,
+    registry: () => registry,
+    now: () => nowMs,
+    lingerMs: 60_000,
+    accountRuntime,
+  });
+
+  // 控制连接订阅目录
+  mod.connect(ctx, 'ctrl-render', { userId: 'service:render@inst1', tenantId: null, scope: 'service', service: 'render', serviceKid: 'k1' });
+  mod.handle(ctx, 'ctrl-render', { type: 'hosted.watch', reqId: 'w1' });
+  const initial = sent.pop().msg;
+  assert.equal(initial.type, 'hosted.projects');
+  assert.deepEqual(initial.projects.find((p) => p.projectId === projectId), {
+    projectId,
+    enabled: true,
+    active: false,
+    members: false,
+    hosted: { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true } },
+  });
+  assert.deepEqual(mod.describe().present, {});
+  assert.deepEqual(mod.describe().lingering, {});
+
+  // 账号项目成员 1 进入：present 计入 1，推送 members: true, active: true
+  const member1 = {
+    userId: 'account:acc_f17cf0ab2b14547df056b54f@dev1',
+    tenantId: projectId,
+    scope: 'member',
+    realm: 'account',
+    identityVersion: 2,
+    role: 'page',
+  };
+  mod.connect(ctx, 'conn-m1', member1);
+  assert.deepEqual(mod.describe().present, { [projectId]: { member: 1 } }, '第一个账号成员进入');
+  assert.deepEqual(sent.pop().msg, {
+    type: 'hosted.project',
+    projectId,
+    enabled: true,
+    active: true,
+    members: true,
+    hosted: { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true } },
+  });
+
+  // 账号项目成员 2 进入（同一项目第二条连接）：计数升至 2
+  mod.connect(ctx, 'conn-m2', { ...member1, userId: 'account:acc_f17cf0ab2b14547df056b54f@dev2' });
+  assert.deepEqual(mod.describe().present, { [projectId]: { member: 2 } }, '第二个账号成员进入');
+
+  // 成员 1 离开：计数降为 1，仍在线，不写 lingering
+  mod.disconnect(ctx, 'conn-m1');
+  assert.deepEqual(mod.describe().present, { [projectId]: { member: 1 } }, '还剩一条成员连接');
+  assert.deepEqual(mod.describe().lingering, {}, '未归零不写 lingering');
+
+  // 成员 2 离开（最后一条离开）：bump 归零删键，写 lingering，members 变 false、active 保持 true
+  nowMs = 20_000;
+  mod.disconnect(ctx, 'conn-m2');
+  assert.deepEqual(mod.describe().present, {}, 'bump 归零后删除 member 键与项目键');
+  assert.deepEqual(mod.describe().lingering, { [projectId]: { member: 80_000 } }, '最后一条离开写入 lingering');
+  assert.deepEqual(sent.pop().msg, {
+    type: 'hosted.project',
+    projectId,
+    enabled: true,
+    active: true,
+    members: false,
+    hosted: { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true } },
+  });
+
+  // 保持期内成员重入：清除 lingering，恢复 members: true
+  nowMs = 50_000;
+  mod.connect(ctx, 'conn-m3', member1);
+  assert.deepEqual(mod.describe().present, { [projectId]: { member: 1 } });
+  assert.deepEqual(mod.describe().lingering, {}, '重入清除 lingering');
+  assert.equal(sent.pop().msg.members, true);
+
+  // 再次离开并等过 lingerMs：active 回到 false，lingering 清空
+  nowMs = 60_000;
+  mod.disconnect(ctx, 'conn-m3');
+  assert.deepEqual(mod.describe().present, {});
+  assert.deepEqual(mod.describe().lingering, { [projectId]: { member: 120_000 } });
+  assert.equal(sent.pop().msg.active, true);
+
+  nowMs = 119_999;
+  mod.tick(ctx);
+  assert.equal(sent.length, 0, '未到期不变');
+
+  nowMs = 120_000;
+  mod.tick(ctx);
+  assert.deepEqual(mod.describe().lingering, {}, '到期清理 lingering');
+  assert.deepEqual(sent.pop().msg, {
+    type: 'hosted.project',
+    projectId,
+    enabled: true,
+    active: false,
+    members: false,
+    hosted: { render: { available: true, enabled: true, streams: false }, agent: { available: true, enabled: true } },
+  });
+
+  // 搬迁上云的非 sp_ 项目 ID 同样支持计入与撤出（即使断开前项目已从活跃表移除也能删键）
+  mod.connect(ctx, 'conn-moved', { ...member1, tenantId: movedId });
+  assert.deepEqual(mod.describe().present, { [movedId]: { member: 1 } });
+  activeMap.delete(movedId);
+  mod.disconnect(ctx, 'conn-moved');
+  assert.deepEqual(mod.describe().present, {}, '项目移除后断开连接仍归零删键');
+});

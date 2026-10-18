@@ -653,7 +653,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   return null;
 }
 
-if (path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+const realOf = (f) => { try { return fs.realpathSync(f); } catch { return path.resolve(f); } };
+if (process.argv[1] && realOf(process.argv[1]) === realOf(fileURLToPath(import.meta.url))) {
   const code = await main();
   if (code !== null) process.exit(code);
 }

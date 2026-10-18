@@ -52,3 +52,106 @@ test('doc status probe真实mTLS且精确head，无证书/错身份/错误head�
   const wrong = createAssetReadyProbe({ ...config, tls: pki.wrong }); t.after(() => wrong.close()); await assert.rejects(wrong({ authorityId: 'doc-a', requiredAccessHead: 7 }), { status: 403 });
   assert.throws(() => createAssetMtlsTransport({ ...config, tls: { ca: pki.ca } }), { status: 503 });
 });
+
+test('渲染服务素材票据经 createAssetDocClient.resolveAssetTicket 与 checkAccess 核验通过（写 px 允许、写 media 拒绝）', async t => {
+  const { openAccountLedger } = await import('../account/ledger.mjs');
+  const { createAccountHostedRuntime } = await import('../docservice/account-hosted.mjs');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-asset-render-ticket-'));
+  let runtime = null, server = null, client = null;
+  t.after(async () => {
+    try { client?.close(); } catch {}
+    if (server?.listening) await close(server);
+    try { runtime?.close(); } catch {}
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+  const pki = assetWiringPki(dir);
+  const ledger = openAccountLedger({ file: path.join(dir, 'doc.sqlite'), authorityId: 'doc-render-asset' });
+  const accountId = 'acc_' + 'a'.repeat(24);
+  const accountClient = {
+    verify: async () => ({
+      accountId,
+      accountName: 'Alice',
+      loginId: 'login-a',
+      credentialId: 'cred-a',
+      loginGeneration: 1,
+      expiresAt: Date.now() + 3_600_000,
+      accountEventSeq: 0,
+      kind: 'editor',
+    }),
+    events: async () => ({ events: [], headSeq: 0 }),
+  };
+  runtime = createAccountHostedRuntime({
+    ledger,
+    accountClient,
+    dataDir: null,
+    authorityUrl: 'https://fixture.invalid',
+    allowFixtureAssetReady: true,
+    pollMs: 0,
+  });
+  runtime.setAssetReady(true);
+  runtime.bindService(
+    { describe: () => ({ conns: [] }), fencePrincipals: async () => ({ actualClosed: true }) },
+    { registry: { refresh() {}, get: () => ({ role: 'render', actsFor: 'self', keys: [{ kid: 'k1' }] }) }, urls: {} }
+  );
+  await runtime.start();
+  const created = await runtime.authority.createProject(
+    { accessToken: 'tok-a' },
+    { name: 'RenderAssetTest', requestId: 'create-render-asset', initialProject: { tracks: [] } }
+  );
+  const { accessRevision } = await runtime.authority.authorizePrincipal(
+    { accessToken: 'tok-a' },
+    { projectId: created.projectId }
+  );
+  await runtime.authority.adminProject(
+    { accessToken: 'tok-a' },
+    {
+      projectId: created.projectId,
+      expectedAccessRevision: accessRevision,
+      op: 'set-hosted-service',
+      service: 'render',
+      enabled: true,
+      requestId: 'enable-render-asset',
+    }
+  );
+  const { assetTicket } = runtime.issueServiceAssetTicket({
+    service: 'render',
+    serviceKid: 'k1',
+    deviceId: 'hosted-render:1',
+    projectId: created.projectId,
+    access: 'rw',
+  });
+  server = createAccountProjectsInternalServer({
+    tls: pki.doc,
+    authority: runtime.authority,
+    services: [{ serviceId: 'asset', fingerprint256: pki.asset.fingerprint256 }],
+    resolveAssetTicket: ticket => runtime.resolveAssetTicket(ticket),
+  });
+  await listen(server);
+  client = createAssetDocClient({
+    origin: `https://127.0.0.1:${server.address().port}`,
+    authorityId: 'doc-render-asset',
+    tls: pki.asset,
+    serverFingerprint256: pki.doc.fingerprint256,
+  });
+  const resolved = await client.resolveAssetTicket(assetTicket, created.projectId);
+  assert.equal(resolved.projectId, created.projectId);
+  assert.equal(resolved.role, 'render');
+  assert.equal(resolved.authorizationId, 'service:render');
+  const writePx = await client.checkAccess({
+    principal: resolved,
+    projectId: created.projectId,
+    action: 'write',
+    resource: { ns: 'px' },
+  });
+  assert.equal(writePx.allowed, true);
+  await assert.rejects(
+    client.checkAccess({
+      principal: resolved,
+      projectId: created.projectId,
+      action: 'write',
+      resource: { ns: 'media' },
+    }),
+    { status: 403 }
+  );
+});
+
