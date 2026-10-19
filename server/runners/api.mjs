@@ -320,7 +320,7 @@ export function startRun(opts) {
       onEvent: safeOnEvent,
       signal: abortController.signal,
       history,
-      // 用户只看得到 report_progress 的条目:收工前没交收尾汇报就提醒一次,仍不交由 harness 按文字回复代交(见 harness/agent.mjs)
+      // 用户只看得到 report_progress 的条目:收工时没交过收尾汇报,由 harness 按文字回复代交(见 harness/agent.mjs)
       requireFinalReport: true,
       /*
        * 每次模型请求前后的回调(托管档的闸与用量记录)。`opts.checkpoint` 为真时,从第二次请求起每次请求之前把历史落一次盘:

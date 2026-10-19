@@ -1,7 +1,7 @@
 /**
  * 用户只看得到 report_progress 交的条目,文字回复不直接显示(product/agent.md「Agent 的文字回复不直接展示给用户」)。
  * 2026-10-19 生产实测:用户说「请只回复一个字：好」,模型只回了文字「好」、没交汇报,界面上是一个空气泡,
- * 刷新后历史里也是空的。收工前没交收尾汇报:提醒一次;还不交就按文字回复代交,不让这一轮看起来什么都没说。
+ * 刷新后历史里也是空的。收工时没交过收尾汇报,就按文字回复代交一份,不让这一轮看起来什么都没说。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,31 +21,34 @@ function scripted(rounds) {
 }
 const reports = events => events.filter(e => e.type === 'tool_call' && e.name === 'report_progress');
 
-test('只回文字、没交汇报:提醒一次,模型补交以后照常收尾,不另外代交', async () => {
-  const s = scripted([{ text: '好' }, { report: { final: true, done: ['好'] }, stop: 'tool_use' }, { text: '' }]);
-  const events = [];
-  const out = await new Agent({ provider: s.provider, system: 's', tools: [REPORT, NOOP], requireFinalReport: true, onEvent: e => events.push(e) }).run('请只回复一个字：好');
-  assert.equal(out.outcome, 'completed');
-  assert.equal(s.calls, 3, '提醒一次、补交一次、交完以后最后一次空回复也算说完');
-  assert.match(JSON.stringify(s.seen[1].at(-1)), /还没有调用 final 为 true 的 report_progress/);
-  assert.deepEqual(reports(events).map(e => e.input.done), [['好']]);
-  assert.equal(reports(events).some(e => e.synthetic), false);
-});
-
-test('提醒以后还是只回文字:按文字回复代交一份收尾汇报(界面据此画出条目),这一轮照常算完成', async () => {
-  const s = scripted([{ text: '好' }, { text: '好。' }]);
+test('只回文字、没交汇报:按文字回复代交一份收尾汇报(界面据此画出条目),不多一次模型请求,这一轮照常算完成', async () => {
+  const s = scripted([{ text: '好' }]);
   const events = [];
   const out = await new Agent({ provider: s.provider, system: 's', tools: [REPORT], requireFinalReport: true, onEvent: e => events.push(e) }).run('请只回复一个字：好');
-  assert.equal(out.outcome, 'completed'); assert.equal(s.calls, 2);
+  assert.equal(out.outcome, 'completed'); assert.equal(s.calls, 1);
   const [auto] = reports(events);
   assert.ok(auto?.synthetic, '代交的那一份要标出来');
-  assert.equal(auto.input.final, true); assert.deepEqual(auto.input.done, ['好。']);
+  assert.equal(auto.input.final, true); assert.deepEqual(auto.input.done, ['好']);
   assert.match(auto.input.problems.join(''), /没有按要求交进度汇报/);
   assert.ok(events.some(e => e.type === 'tool_result' && e.callId === auto.callId && e.ok === true));
-  assert.equal(s.seen.at(-1).some(m => JSON.stringify(m).includes('auto-report')), false, '代交只给屏幕,不进模型历史');
+  assert.equal(JSON.stringify(out.history.get()).includes('auto-report'), false, '代交只给屏幕,不进模型历史');
 });
 
-test('工具做完、交了收尾汇报,最后一次没说话:不报「API 没有返回文字」,不提醒', async () => {
+test('自己交过收尾汇报再说话:不代交', async () => {
+  const s = scripted([{ report: { final: true, done: ['好'] }, stop: 'tool_use' }, { text: '好' }]);
+  const events = [];
+  await new Agent({ provider: s.provider, system: 's', tools: [REPORT], requireFinalReport: true, onEvent: e => events.push(e) }).run('好');
+  assert.equal(s.calls, 2); assert.deepEqual(reports(events).map(e => !!e.synthetic), [false]);
+});
+
+test('只交过阶段汇报(final 为 false):收工时仍代交收尾那一份', async () => {
+  const s = scripted([{ report: { final: false, done: ['铺好字幕'] }, stop: 'tool_use' }, { text: '都做完了' }]);
+  const events = [];
+  await new Agent({ provider: s.provider, system: 's', tools: [REPORT], requireFinalReport: true, onEvent: e => events.push(e) }).run('做');
+  assert.deepEqual(reports(events).map(e => !!e.synthetic), [false, true]);
+});
+
+test('工具做完、交了收尾汇报,最后一次没说话:不报「API 没有返回文字」,不代交', async () => {
   const s = scripted([{ tool: true, stop: 'tool_use' }, { report: { final: true, done: ['加了一张标题卡'] }, stop: 'tool_use' }, { text: '' }]);
   const events = [];
   const out = await new Agent({ provider: s.provider, system: 's', tools: [REPORT, NOOP], requireFinalReport: true, onEvent: e => events.push(e) }).run('加卡');
@@ -59,7 +62,7 @@ test('真的什么都没回(没有文字、没有工具、没交过汇报):照�
   assert.equal(s.calls, 1);
 });
 
-test('最后一轮(轮数到顶)不再提醒,直接代交', async () => {
+test('最后一轮(轮数到顶)照样代交', async () => {
   const s = scripted([{ tool: true, stop: 'tool_use' }, { text: '做完了' }]);
   const events = [];
   await new Agent({ provider: s.provider, system: 's', tools: [REPORT, NOOP], requireFinalReport: true, maxIterations: 2, onEvent: e => events.push(e) }).run('做');

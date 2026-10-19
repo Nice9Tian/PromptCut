@@ -39,9 +39,10 @@ export class Agent {
     Object.assign(this, { provider, system, tools, maxIterations, deepAuto, maxInputTokens, signal });
     /*
      * 文字回复不直接给用户看(product/agent.md「Agent 的文字回复不直接展示给用户」),用户只看得到 report_progress 交的条目。
-     * 打开这一项、且工具里有 report_progress 时:模型不调工具就要收工、这一轮却还没交过收尾汇报(final 为 true),
-     * 先提醒它一次补交;还是不交,就由这里按它的文字回复代交一份,不让这一轮在界面上变成一个空气泡
-     * (2026-10-19 生产实测:模型只回了一个「好」,气泡是空的)。环路里的各角色有自己的提交工具,不打开这一项。
+     * 打开这一项、且工具里有 report_progress 时:模型不调工具就收工、这一轮却没交过收尾汇报(final 为 true),
+     * 由这里按它的文字回复代交一份,不让这一轮在界面上变成一个空气泡(2026-10-19 生产实测:模型只回了一个「好」,
+     * 气泡是空的)。不另外提醒模型补交:那要多一次模型请求(生产上一次就是七万多 token 的输入),代交不花钱。
+     * 环路里的各角色有自己的提交工具,不打开这一项。
      */
     this.reportTool = requireFinalReport ? (tools || []).find(t => isReportTool(t?.name)) ?? null : null;
     /*
@@ -65,8 +66,8 @@ export class Agent {
     const progress = (round, phase, text) => this.onEvent({ type: 'progress', round, maxRounds: this.maxIterations, phase, completed, failed, elapsedMs: Date.now() - started, text });
     const system = this.system + '\n\n执行规则：每组操作前用一句简短的话说明将做什么；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。';
     let summaryReason = '', truncations = 0;
-    // 这一轮有没有交过收尾汇报;提醒过没有
-    let reported = false, reminded = false;
+    // 这一轮有没有交过收尾汇报
+    let reported = false;
     const autoReport = (round, text, extraProblems = []) => {
       if (!this.reportTool || reported) return;
       const done = reportItemsFromText(text);
@@ -185,13 +186,6 @@ export class Agent {
       if (!calls.length) {
         // 已经交过收尾汇报,最后这次没说话也算说完了(汇报就是给用户的话)
         if (!text.trim() && !reported) throw new Error('API 没有返回文字或工具调用，请检查模型和接口协议设置。');
-        if (this.reportTool && !reported && !reminded && round < this.maxIterations) {
-          // 只提醒一次:进模型上下文,不给屏幕(屏幕上这一轮接着往下跑)
-          reminded = true;
-          this.onEvent({ type: 'diagnostic', stage: 'report-reminder', data: { round } });
-          this.history.appendUserText(`（系统）你还没有调用 final 为 true 的 ${this.reportTool.name}。用户看不到你的文字回复，只看得到汇报条目。现在调用它交代这一轮的结果（用户只要你回一句话时，就把那句话写进 done）；不要再做别的操作。`);
-          continue;
-        }
         autoReport(round, text);
         break;
       }
