@@ -199,7 +199,12 @@ try {
     await fill(A, '[data-pc="cloud-project-name"]', 'Cloud UI probe project'); await A.click('[data-pc="cloud-create"]');
     await A.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true });
     await consent(A);
-    await enabled(A, '[data-pc="cloud-agent-enable"]'); await A.click('[data-pc="cloud-agent-enable"]');
+    // 账号项目的「云端 Agent」开关缺省开(2026-10-20 集成分支起):新建的项目直接就是开着的,没有「开启云端 Agent」按钮;
+    // 旧版本缺省关时还要点一下。两种都认:先等到「开着(云端 AI 栏)」或「关着(开启按钮)」之一
+    const state0 = await until('新项目的云端 Agent 开关状态', async () => (await A.$('[data-pc="cloud-agent-enable"]')) ? 'off' : (await A.$(CLOUD_PANEL)) && !(await A.$('[data-pc="cloud-off"]')) ? 'on' : null, 30_000, 200);
+    if (state0 === 'off') {
+      await enabled(A, '[data-pc="cloud-agent-enable"]'); await A.click('[data-pc="cloud-agent-enable"]');
+    }
     await A.waitForSelector('[data-pc="cloud-off"]', { hidden: true });
     await A.waitForSelector(CLOUD_PANEL, { timeout: 30_000 }).catch(() => {});
     // 会话对象在发第一条消息时才建,之前 view() 是 null;所以这里等页面挂出云端 AI 栏的读取钩子
@@ -347,7 +352,9 @@ try {
         await B.waitForFunction((id) => window.__pcCloud?.main?.conversationId?.() === id, { timeout: 30_000 }, convId).catch(() => {});
         const back = await until('O4:点开后找回完整过程(含刚才的工具调用与回复)', async () => {
           const text = await panelText(B);
-          // 工具调用在底部「Agent 操作」里,显示最新一轮(读项目 + 三处改动 = 4 次;撤销那一步不算 Agent 的操作)
+          // 工具调用在底部「Agent 操作」里,一次显示一轮、缺省是最新一轮;O1 那一轮后面还有别的轮次,
+          // 所以先点回复里有「三处都改好了」的那个气泡,让面板切到 O1 那一轮(读项目 + 三处改动 = 4 次)
+          await P(B, () => [...document.querySelectorAll('[data-pc="agent-bubble"]')].find((el) => el.textContent?.includes('三处都改好了'))?.click()).catch(() => {});
           const ops = (await activity(B))?.count ?? 0;
           return text.includes('三处都改好了') && ops >= 4 ? { ops } : null;
         }, 30_000, 300);

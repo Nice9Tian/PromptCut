@@ -118,7 +118,11 @@ try {
   await a.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true }); await consent(a);
   const id = a.createdProjectId;
   check(typeof id === 'string' && /^sp_/.test(id), 'authoritative-created-project'); result.projectId = id;
-  phase = 'enable'; await enabled(a, '[data-pc="cloud-agent-enable"]'); await a.click('[data-pc="cloud-agent-enable"]');
+  // 账号项目的「云端 Agent」开关缺省开(2026-10-20 集成分支起)时没有「开启」按钮;缺省关的旧版本照旧点一下
+  phase = 'enable';
+  const switchState = await a.waitForFunction(() => document.querySelector('[data-pc="cloud-agent-enable"]') ? 'off'
+    : document.querySelector('[data-pc="cloud-ai-panel"]') && !document.querySelector('[data-pc="cloud-off"]') ? 'on' : null, { timeout: TIMEOUT }).then(h => h.jsonValue());
+  if (switchState === 'off') { await enabled(a, '[data-pc="cloud-agent-enable"]'); await a.click('[data-pc="cloud-agent-enable"]'); }
   await a.waitForSelector('[data-pc="cloud-off"]', { hidden: true });
   phase = 'join'; await enabled(b, '[data-pc="cloud-join"]'); await fill(b, '[data-pc="cloud-project-link"]', `${ORIGIN}/editor?project=${encodeURIComponent(id)}`); await b.click('[data-pc="cloud-join"]');
   await b.waitForSelector('[data-pc="cloud-project-copy"]', { visible: true }); await consent(b);
