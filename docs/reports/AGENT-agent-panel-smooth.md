@@ -109,7 +109,7 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误（最后一次在提交 `55c4aad8` 之后跑） |
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误（最后一次在提交 `45b0788b` 上跑） |
 | 全量测试 | `npm test`（带 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`） | 最后一次：7122 项，通过 7107，失败 1，跳过 14。失败的是 `server/test/asset-store-http.test.mjs` 的 H1（`connect ETIMEDOUT 127.0.0.1:1414`，满负载下连本机端口超时，与本分支无关），单独重跑 3 次各 6/6 通过。前两次全量各有 3 项满负载失败（`move-guard`、`user-editing` UE-S7、`prerender-executor` J10b、`cloud-chat` CAU-SES-04 的 3 秒等待），这四个文件合起来单独重跑 3 次，47/47 全过。 |
 | 新增与改动处的单测 | `node --test` 下列文件 | `agent-read-closed-prune` 1/1、`agent-events-idle-poll` 4/4、`agent-read-control` 15/15、`history-store` 6/6、`persist-keys` 2/2、`optimistic-send` 4/4、`events` 加的一条在内全过；`cloud-chat`、`account-queue`、`account-page-wire`、`account-read-revocation`、`newchat-absent`、`private-revoked`、`chat-delete`、`account-conversation-controls`、`agent-events-denial`、`cloud-queue-http`、`agent-access-http`、`account-real-runner-sse`、`agent-read-control-transport` 全过 |
 | 新探针 | `node scripts/probes/agent-panel-smooth-probe.mjs --dist out/dist-online-new --site-root <VisuHive/site> --out <temp> --base-port 5320` | 17 项全过（`completed:true`）。改前（main `669ba647` 的在线构建与服务端，同一探针）O1 失败：刷新后对话号变了、面板只剩示例句 |
