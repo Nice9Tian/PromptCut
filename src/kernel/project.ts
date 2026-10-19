@@ -1,6 +1,7 @@
 import type { Clip, Timeline } from "./types";
 import type { SoundEffectRecipe } from "./soundEffects";
-import { cutSegmentRender, envelopeAt, CUT_SEGMENT_CARD, type CutRenderProject } from "./cutSegments.ts";
+import { cutSegmentRender, CUT_SEGMENT_CARD, type CutRenderProject } from "./cutSegments.ts";
+import { envelopeAt } from "./cutAudio.mjs";
 
 /** 可重生成的音效配方。reuseKey 是合成输入身份,不是 WAV 内容哈希。 */
 export interface SoundEffectLink {
@@ -273,9 +274,9 @@ export interface TrackClip extends Clip {
    * **只在渲染派生出来的片段上有,不落盘**:外层剪辑段一层层的包络(父剪辑时间)。
    * `opacityAt` 乘上去;混音器(`audioPlan.mjs`)照同一组包络算增益。见 kernel/cutSegments.ts 的 audioProjectOf。
    */
-  cutEnv?: import("./cutSegments.ts").CutEnvelope[];
+  cutEnv?: import("./cutAudio.mjs").CutEnvelope[];
   /** **只在渲染派生出来的片段上有,不落盘**:展开前的片段 id 和经过的剪辑段 */
-  cutOrigin?: import("./cutSegments.ts").CutAudioOrigin;
+  cutOrigin?: import("./cutAudio.mjs").CutAudioOrigin;
 }
 
 /**

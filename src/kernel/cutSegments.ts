@@ -39,15 +39,7 @@ const FALLBACK_CUT_DURATION = 30;
 /** 嵌套深度的硬上限。正常的项目远到不了(防环之后深度就是剪辑数),这里只防坏数据把渲染拖死 */
 export const MAX_CUT_DEPTH = 32;
 
-/** 一层剪辑段的包络(父剪辑的时间):窗口外是 0,窗口内是不透明度 × 淡入 × 淡出 */
-export interface CutEnvelope {
-  start: number;
-  end: number;
-  fadeIn?: number;
-  fadeOut?: number;
-  /** 只给画面用;声音那份包络不带它(段的不透明度不是音量) */
-  opacity?: number;
-}
+import type { CutEnvelope } from "./cutAudio.mjs";
 
 /** 这一段是剪辑段吗 */
 export function isCutSegment(c: { cutId?: unknown } | null | undefined): boolean {
@@ -373,118 +365,7 @@ export function cutSegmentRender(p: CutRenderProject, clip: TrackClip): CutSegme
   return { cutId: clip.cutId!, offset: Math.max(0, clip.cutOffset ?? 0) - pre, from: clip.start, duration: sub.duration, project: sub, frameMode: cutFrameMode(sub) };
 }
 
-/* ───────────────────── 包络 ───────────────────── */
+/* ───────────────────── 包络与声音(实现在 cutAudio.mjs:导出混音在服务端直接 import) ───────────────────── */
 
-/** 一层包络在 t 时刻的值 */
-export function envelopeAt(e: CutEnvelope, t: number, withOpacity = true): number {
-  if (t < e.start || t >= e.end) return 0;
-  let a = withOpacity ? e.opacity ?? 1 : 1;
-  const fin = e.fadeIn ?? 0;
-  const fout = e.fadeOut ?? 0;
-  if (fin > 0 && t < e.start + fin) a *= (t - e.start) / fin;
-  if (fout > 0 && t > e.end - fout) a *= (e.end - t) / fout;
-  return Math.max(0, Math.min(1, a));
-}
-
-/* ───────────────────── 声音:把剪辑段平移展开 ───────────────────── */
-
-/** 展开出来的片段身上的记号:原片段 id、经过的剪辑段 id(外层在前) */
-export interface CutAudioOrigin {
-  clipId: string;
-  segments: string[];
-}
-
-const audioMemo = new WeakMap<object, Project>();
-
-/**
- * 只给混音用的项目:激活剪辑里的每个剪辑段,换成被引用剪辑里出声的片段(素材段、带声音的卡片段、音效),
- * 平移到段的时间上、裁到段的窗口里;嵌套的剪辑段递归展开。展开出来的片段放在各自新的序列里
- * (同一个剪辑段的不同子序列在时间上会重叠),序列 id、片段 id 都带上剪辑段的路径前缀,不和原有的撞。
- *
- * - 音量 = 子片段自己的音量 × 每一层剪辑段的音量(`audioVolume`);
- * - 静音:任何一层剪辑段静音、所在序列静音,展开出来的就静音;
- * - 淡入淡出:子片段自己的(按它原来的起止)和每一层剪辑段的,都写进 `cutEnv`(不带段的不透明度 —— 那是画面的);
- * - 被引用剪辑事后变短:窗口截到它的总时长为止,超出的部分没有声音。
- *
- * 没有剪辑段的项目原样返回同一个对象(老项目的混音一个字节不变)。
- */
-export function audioProjectOf(p: Project): Project {
-  if (!hasCutSegments(p.tracks)) return p;
-  const hit = audioMemo.get(p);
-  if (hit) return hit;
-  const tracks: Track[] = [];
-  for (const tr of p.tracks) {
-    const plain = tr.clips.filter((c) => !isCutSegment(c));
-    tracks.push(plain.length === tr.clips.length ? tr : { ...tr, clips: plain });
-    for (const seg of tr.clips) {
-      if (!isCutSegment(seg)) continue;
-      tracks.push(...expandSegmentAudio(p, seg, tr, [], []));
-    }
-  }
-  const out = { ...p, tracks };
-  audioMemo.set(p, out);
-  return out;
-}
-
-function expandSegmentAudio(p: CutRenderProject, seg: TrackClip, hostTrack: Track, prefix: string[], outer: CutEnvelope[]): Track[] {
-  const sub = cutSubProject(p, seg.cutId!);
-  if (!sub) return [];
-  const offset = Math.max(0, seg.cutOffset ?? 0);
-  const shift = seg.start - offset; // 子剪辑时间 τ ↔ 父时间 τ + shift
-  const w0 = seg.start;
-  const w1 = Math.min(seg.end, sub.duration + shift);
-  if (!(w1 > w0)) return [];
-  const env: CutEnvelope = { start: seg.start, end: seg.end, ...(seg.fadeIn ? { fadeIn: seg.fadeIn } : {}), ...(seg.fadeOut ? { fadeOut: seg.fadeOut } : {}) };
-  const envs = [...outer, env];
-  const path = [...prefix, seg.id];
-  const segVolume = seg.audioVolume ?? 1;
-  const segMuted = !!seg.audioMuted || !!hostTrack.muted;
-  const out: Track[] = [];
-  for (const child of sub.tracks) {
-    if (child.hidden) continue;
-    const clips: TrackClip[] = [];
-    const nested: Track[] = [];
-    for (const c of child.clips) {
-      if (isCutSegment(c)) {
-        // 嵌套的剪辑段:先把它自己平移、裁到这一层的窗口,再递归
-        const s = c.start + shift, e = c.end + shift;
-        const a = Math.max(s, w0), b = Math.min(e, w1);
-        if (!(b > a)) continue;
-        const moved: TrackClip = {
-          ...c, start: a, end: b, cutOffset: Math.max(0, c.cutOffset ?? 0) + (a - s),
-          fadeIn: undefined, fadeOut: undefined,
-          audioVolume: (c.audioVolume ?? 1) * segVolume,
-          audioMuted: !!c.audioMuted || segMuted || !!child.muted,
-        };
-        // 内层段自己的淡化按它原来的起止,写成包络,和外层的一起乘
-        const ownEnv: CutEnvelope = { start: s, end: e, ...(c.fadeIn ? { fadeIn: c.fadeIn } : {}), ...(c.fadeOut ? { fadeOut: c.fadeOut } : {}) };
-        nested.push(...expandSegmentAudio(sub, moved, { ...child, muted: false }, path, [...envs, ownEnv]));
-        continue;
-      }
-      const s = c.start + shift, e = c.end + shift;
-      const a = Math.max(s, w0), b = Math.min(e, w1);
-      if (!(b > a)) continue;
-      const own: CutEnvelope = { start: s, end: e, ...(c.fadeIn ? { fadeIn: c.fadeIn } : {}), ...(c.fadeOut ? { fadeOut: c.fadeOut } : {}) };
-      const isMedia = !!c.mediaId;
-      const moved: TrackClip = {
-        ...c,
-        id: `${path.join("/")}/${c.id}`,
-        // 素材段裁到窗口(素材内偏移跟着走);卡片段的声音和它的源时钟绑在起点上,不裁,只靠包络在窗口外归零
-        start: isMedia ? a : s,
-        end: isMedia ? b : e,
-        ...(isMedia ? { mediaOffset: (c.mediaOffset ?? 0) + (a - s) } : {}),
-        fadeIn: undefined,
-        fadeOut: undefined,
-        audioVolume: (c.audioVolume ?? 1) * segVolume,
-        ...(segMuted || child.muted ? { audioMuted: true } : {}),
-        // 外层各段的包络、子片段自己按原起止的淡化、这一层的窗口(被引用剪辑变短时截到它的总时长)
-        cutEnv: [...envs, own, { start: w0, end: w1 }],
-        cutOrigin: { clipId: c.id, segments: path },
-      };
-      clips.push(moved);
-    }
-    if (clips.length) out.push({ ...child, id: `${path.join("/")}/${child.id}`, muted: false, clips });
-    out.push(...nested);
-  }
-  return out;
-}
+export { envelopeAt, audioProjectOf } from "./cutAudio.mjs";
+export type { CutEnvelope, CutAudioOrigin } from "./cutAudio.mjs";

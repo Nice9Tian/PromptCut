@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { audioPlanOf } from "../../src/kernel/audioPlan.mjs";
+import { audioProjectOf } from "../../src/kernel/cutAudio.mjs";
 import { audioFxOfClip } from "../../src/kernel/audioFx.mjs";
 
 export const MISSING_MATERIAL_WAV = fileURLToPath(new URL("../../src/audio/assets/missing-material.wav", import.meta.url));
@@ -47,7 +48,9 @@ export function localPathOf(url, outDir) {
  * 和画面层同一套规则。以前只认 localPathOf(/@export/<id>/media/),素材库里的 /@media/<文件> 一律被跳过,
  * 配乐、配音、打开 .proc 后的视频原声都进不了成片。
  */
-export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf = (m) => localPathOf(m.url, outDir)) {
+export function buildAudioPlan(source, outDir, exists = fs.existsSync, sourceOf = (m) => localPathOf(m.url, outDir)) {
+  // 剪辑段:按 kernel/cutAudio.mjs 展开成平移、裁好的片段(和 audioPlanOf 同一份),下面按 clipId 找片段也在这一份里找
+  const project = audioProjectOf(source);
   const out = [];
   // 谁出声、多响的规则在 kernel/audioPlan.mjs(和测响度、Chrome 离线混音同一份);这里只补文件在哪
   for (const e of audioPlanOf(project)) {
@@ -63,6 +66,7 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
       continue;
     }
     out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: missingMaterial ? 0 : e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx,
+      ...(e.env ? { env: e.env } : null),
       ...(missingMaterial ? { missingMaterial: true } : null), ...(soundEffect ? { soundEffect: true } : {}) });
   }
   // 音频素材效果卡节点 have no ffmpeg-readable source file.  Keep them in the one common
@@ -79,7 +83,7 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
       const definition = audioFxOfClip(project, clip);
       out.push({ cardAudio: true, nodeId: clip.nodeId, clipId: clip.id, start: clip.start, dur,
         offset: 0, volume: (clip.opacity ?? 1) * (clip.audioVolume ?? 1), fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0,
-        fx: definition ? { def: definition, params: clip.audioFx?.params } : null });
+        fx: definition ? { def: definition, params: clip.audioFx?.params } : null, ...(clip.cutEnv?.length ? { env: clip.cutEnv } : null) });
     }
   }
   return out;
@@ -132,6 +136,11 @@ export function buildFfmpegArgs(videoIn, plan, videoOut, durationSec) {
     if (p.fadeOut > 0) {
       const fadeStart = p.start + p.dur - p.fadeOut;
       chain.push(`afade=t=out:st=${p.soundEffect ? fadeStart : fadeStart.toFixed(3)}:d=${p.fadeOut}`);
+    }
+    // 剪辑段的包络(时间轴绝对时间):每层的淡入淡出各一条 afade,相乘(和 kernel/audioPlan.mjs 的 gainCurve 同一语义)
+    for (const e of p.env ?? []) {
+      if ((e.fadeIn ?? 0) > 0) chain.push(`afade=t=in:st=${e.start.toFixed(3)}:d=${e.fadeIn}`);
+      if ((e.fadeOut ?? 0) > 0) chain.push(`afade=t=out:st=${(e.end - e.fadeOut).toFixed(3)}:d=${e.fadeOut}`);
     }
     if (p.volume !== 1) chain.push(`volume=${p.volume}`);
     filters.push(`[${k}:a]${chain.join(",")}[a${k}]`);

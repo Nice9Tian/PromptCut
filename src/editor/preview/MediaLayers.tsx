@@ -6,6 +6,7 @@ import { releasePreviewAudio, routePreviewAudio } from "../../audio/previewAudio
 import { MISSING_MATERIAL_WAV_URL, missingMaterialSourceTime } from "../../audio/missingMaterial";
 import { CARD_AUDIO_SAMPLE_RATE, acquireCardAudioClipUrl, cardAudioNodeOf, generatedCardAudioClipsAt, getCardAudioEpoch, subscribeCardAudioEpoch, persistentCardAudio } from "../../audio/cardAudio";
 import { audioClipsAt, isImageMedia, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
+import { audioProjectOf } from "../../kernel/cutAudio.mjs";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
 import { driveMedia, releaseMedia, targetTimeOf } from "../../render/mediaDrive";
 import { VideoTrack } from "../../render/VideoTrack";
@@ -175,10 +176,12 @@ export function MediaLayers({
 }) {
   // 手按着播放头时 seek 放疏一点;松手那一刻它变回 false,各层按 0.03s 精确对齐一次(见 mediaSync 的 SCRUB_SEEK_MIN_MS)
   const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
-  const layers = videoLayersAt(project, t);
+  // 只出声音时(编辑器主文档):剪辑段按 kernel/cutAudio.mjs 展开成平移、裁好的片段,被引用剪辑的声音跟着出
+  const sound = audioOnly ? audioProjectOf(project) : project;
+  const layers = videoLayersAt(sound, t);
   const nexts = nextVideoLayerAfter(project, t);
-  const audios = muted ? [] : audioClipsAt(project, t);
-  const generated = muted ? [] : generatedCardAudioClipsAt(project, t);
+  const audios = muted ? [] : audioClipsAt(sound, t);
+  const generated = muted ? [] : generatedCardAudioClipsAt(sound, t);
   const [cardStatus, setCardStatus] = useState<Record<string, { state: CardState; message?: string }>>({});
   const setGeneratedStatus = useCallback((clipId: string, state: CardState, message?: string) => setCardStatus(status => ({ ...status, [clipId]: { state, message } })), []);
   const master = Math.max(0, Math.min(1, masterVolume));
@@ -201,13 +204,13 @@ export function MediaLayers({
           localHashes={localHashes}
         />
       ))}
-      {audioOnly && !muted && layers.filter(l => !cardAudioNodeOf(project, l.clip) && !isImageMedia(l.media) && l.media.kind === "video" && !l.clip.audioMuted && !project.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
-        <AudioLayer key={l.clip.id} project={project} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} localHashes={localHashes} />
+      {audioOnly && !muted && layers.filter(l => !cardAudioNodeOf(sound, l.clip) && !isImageMedia(l.media) && l.media.kind === "video" && !l.clip.audioMuted && !sound.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
+        <AudioLayer key={l.clip.id} project={sound} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} localHashes={localHashes} />
       ))}
-      {audios.filter(a => !cardAudioNodeOf(project, a.clip)).map((a) => (
-        <AudioLayer key={a.clip.id} project={project} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} localHashes={localHashes} />
+      {audios.filter(a => !cardAudioNodeOf(sound, a.clip)).map((a) => (
+        <AudioLayer key={a.clip.id} project={sound} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} localHashes={localHashes} />
       ))}
-      {generated.map((a) => <AudioLayer key={`card-audio:${a.clip.id}`} project={project} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} onCardState={setGeneratedStatus} localHashes={localHashes} />)}
+      {generated.map((a) => <AudioLayer key={`card-audio:${a.clip.id}`} project={sound} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} onCardState={setGeneratedStatus} localHashes={localHashes} />)}
       {generated.map(({ clip }) => {
         const status = cardStatus[clip.id]; if (!status || status.state === "ready") return null;
         return <div key={`card-audio-status:${clip.id}`} role="status" aria-live="polite" style={{ position: "absolute", left: 12, bottom: 12, zIndex: 100, padding: "6px 9px", borderRadius: 4, color: "#fff", background: status.state === "error" ? "#a11" : "#333", fontSize: 12 }}>{status.state === "pending" ? `正在生成音频：${clip.label ?? clip.id}` : `音频生成失败：${status.message ?? clip.label ?? clip.id}`}</div>;

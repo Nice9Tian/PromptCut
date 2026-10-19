@@ -45,8 +45,8 @@ test("顶层字段表和 frameClient 的签名逐字一致", () => {
    * 可以在那个字段上不一致而谁都不报。所以这里直接去读它的源码对。
    */
   const src = readFileSync(new URL("./frameClient.ts", import.meta.url), "utf8");
-  const body = /const signature = \(project: Project\) => JSON\.stringify\(\[([^\]]*)\]\)/.exec(src);
-  assert.ok(body, "frameClient.ts 里的 signature() 长得和这条正则对不上了,改了形状就同步改这里");
+  const body = /const signatureFields = \(project: Project\) => JSON\.stringify\(\[([^\]]*)\]\)/.exec(src);
+  assert.ok(body, "frameClient.ts 里的 signatureFields() 长得和这条正则对不上了,改了形状就同步改这里");
   const fields = body[1].split(",").map((s) => s.trim().replace(/^project\./, ""));
   assert.deepEqual([...TOP_FIELDS], fields);
 });
@@ -256,4 +256,25 @@ test("clips 在轨道对象里排第几个不影响哈希", () => {
   const a = project([{ id: "t1", clips: [c], name: "t1", hidden: false }]);
   const b = project([{ id: "t1", name: "t1", hidden: false, clips: [c] }]);
   assert.equal(projectHash(b), projectHash(a));
+});
+
+test("剪辑段引用的剪辑进项目哈希;没有剪辑段的项目哈希不变;没被引用的剪辑改了不影响", () => {
+  const seg = { id: "s1", cardId: "", cutId: "B", start: 0, end: 2, params: {} };
+  const cuts = (bClips, cClips = []) => [
+    { id: "A", name: "A" },
+    { id: "B", name: "B", tracks: [{ id: "tb", name: "tb", clips: bClips }], duration: 5, transitions: [] },
+    { id: "C", name: "C", tracks: [{ id: "tc", name: "tc", clips: cClips }], duration: 5, transitions: [] },
+  ];
+  const plain = project([track("t1", 1)]);
+  const withCutsNoSeg = { ...plain, cuts: cuts([clip("b1")]), activeCutId: "A" };
+  // 没有剪辑段:多带 cuts 也不改哈希(cuts 本来就不在顶层字段表里)
+  assert.equal(projectHash(withCutsNoSeg), projectHash(plain));
+  const tracks = [{ id: "t1", name: "t1", clips: [seg] }];
+  const a = { ...plain, tracks, cuts: cuts([clip("b1")]), activeCutId: "A" };
+  const b = { ...plain, tracks, cuts: cuts([clip("b1", { start: 0.5 })]), activeCutId: "A" };
+  const c = { ...plain, tracks, cuts: cuts([clip("b1")], [clip("c1")]), activeCutId: "A" };
+  assert.notEqual(projectHash(a), projectHash(b), "被引用剪辑 B 改了,哈希要变");
+  // c 和 a 只差没被引用的 C;b1 的 params 每次 clip() 都不同,所以拿 a 的 B 条目重建 c
+  const c2 = { ...c, cuts: [a.cuts[0], a.cuts[1], c.cuts[2]] };
+  assert.equal(projectHash(c2), projectHash(a), "没被引用的 C 改了,哈希不变");
 });

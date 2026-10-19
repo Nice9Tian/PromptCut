@@ -10,14 +10,19 @@
 
 import { audioFxOfClip } from "./audioFx.mjs";
 import { clipHasEmbeddedAudio, resolveCardAudioRendition } from "./cardAudioRendition.mjs";
+import { audioProjectOf, envelopeAt } from "./cutAudio.mjs";
 
 const r3 = (n) => +Number(n).toFixed(3);
 
 /**
- * @returns 每一条:{ clipId, trackId, mediaId, start, dur, offset, volume, fadeIn, fadeOut, fx: { def, params } | null }
+ * @returns 每一条:{ clipId, trackId, mediaId, start, dur, offset, volume, fadeIn, fadeOut, fx: { def, params } | null, env? }
  *   start / dur 是时间轴上的位置(秒),offset 是从素材第几秒开始。顺序按序列从上到下、片段原顺序。
+ *   剪辑段(kernel/cutSegments.ts):先按 `audioProjectOf` 把激活剪辑里的剪辑段展开成平移、裁好的片段,
+ *   它们的 clipId 带剪辑段路径前缀,`env` 是外层各段的包络(时间轴绝对时间),混音器乘上去(`gainCurve`)。
+ *   没有剪辑段的项目和以前逐字节相同。
  */
-export function audioPlanOf(project) {
+export function audioPlanOf(source) {
+  const project = audioProjectOf(source);
   const out = [];
   for (const tr of project.tracks || []) {
     if (tr.hidden || tr.muted) continue;
@@ -47,6 +52,7 @@ export function audioPlanOf(project) {
         fadeIn: c.fadeIn ?? 0,
         fadeOut: c.fadeOut ?? 0,
         fx: def ? { def, params: c.audioFx.params } : null,
+        ...(c.cutEnv?.length ? { env: c.cutEnv } : null),
       });
     }
   }
@@ -71,6 +77,27 @@ export function fadeEnvelope(volume, fadeIn, fadeOut, dur, n) {
     out[i] = Math.max(0, g);
   }
   return out;
+}
+
+/**
+ * 一段的完整增益曲线:`fadeEnvelope` 再乘上剪辑段的包络(`entry.env`,时间轴绝对时间)。
+ * 没有包络时和 `fadeEnvelope` 逐点相同。
+ */
+export function gainCurve(entry, n) {
+  const curve = fadeEnvelope(entry.volume, entry.fadeIn, entry.fadeOut, entry.dur, n);
+  if (!entry.env?.length) return curve;
+  const count = curve.length;
+  for (let i = 0; i < count; i++) {
+    // 包络在区间右端是开的;曲线最后一个点落在段尾,取一个极小的回退,免得最后一点被算成 0 产生咔哒声
+    const t = entry.start + Math.min((i / (count - 1)) * entry.dur, entry.dur - 1e-6);
+    for (const e of entry.env) curve[i] *= envelopeAt(e, t, false);
+  }
+  return curve;
+}
+
+/** 这一段需不需要逐点的增益曲线(有淡化或剪辑段包络) */
+export function needsGainCurve(entry) {
+  return entry.fadeIn > 0 || entry.fadeOut > 0 || !!entry.env?.some((e) => (e.fadeIn ?? 0) > 0 || (e.fadeOut ?? 0) > 0);
 }
 
 /** 时间轴时刻 T 正在出声的片段(给测响度的逐秒归因用) */

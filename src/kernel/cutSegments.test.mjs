@@ -211,3 +211,21 @@ test("cutContent:激活的在 tracks 上,停放的在条目里", () => {
   const added = addCut(normalizeCuts(createEmptyProject())).project;
   assert.equal(added.cuts.length, 2);
 });
+
+test("导出混音清单:剪辑段展开后进 audioPlanOf,包络进 gainCurve", async () => {
+  const { audioPlanOf, gainCurve, needsGainCurve, fadeEnvelope } = await import("./audioPlan.mjs");
+  const p = proj({ a: [seg("s1", "B", 10, 14, { fadeIn: 2 })], b: [media("v1", 0, 4)] });
+  const plan = audioPlanOf(p);
+  assert.equal(plan.length, 1);
+  const e = plan[0];
+  assert.equal(e.clipId, "s1/v1");
+  assert.deepEqual([e.start, e.dur, e.offset], [10, 4, 0]);
+  assert.ok(needsGainCurve(e));
+  const curve = gainCurve(e, 5); // 10, 11, 12, 13, 14
+  assert.ok(Math.abs(curve[0]) < 1e-6 && Math.abs(curve[1] - 0.5) < 1e-6 && Math.abs(curve[2] - 1) < 1e-6);
+  // 没有包络:和 fadeEnvelope 逐点一样
+  const plainEntry = { volume: 0.7, fadeIn: 1, fadeOut: 1, dur: 3, start: 0 };
+  assert.deepEqual([...gainCurve(plainEntry, 7)], [...fadeEnvelope(0.7, 1, 1, 3, 7)]);
+  // 没有剪辑段的项目:清单和以前一样(没有 env 键)
+  assert.equal("env" in audioPlanOf(proj({ a: [media("v1", 0, 4)] }))[0], false);
+});
