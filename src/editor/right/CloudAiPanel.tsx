@@ -595,8 +595,10 @@ export function CloudAiPanel(props: {
   const historyItems = useMemo(() => {
     // 当前对话刚发出第一条、服务端列表还没刷新时,先把它列进去
     const hit = chat.history.items.some((x) => x.id === chat.conversationId);
-    if (hit || chat.messages.length === 0) return chat.history.items;
-    const title = chat.messages.find((m) => m.role === "user")?.text.slice(0, 40) || "云端对话";
+    // 只算云端已经有的消息：点发送当场放的本地气泡(还在发、没发出去的，sendState)不算，没发出去的对话不能先列进历史
+    const landed = chat.messages.filter((m) => !m.sendState || m.id.startsWith("cq-"));
+    if (hit || landed.length === 0) return chat.history.items;
+    const title = landed.find((m) => m.role === "user")?.text.slice(0, 40) || "云端对话";
     return [{ id: chat.conversationId, title, updatedAt: Date.now(), state: streaming ? "running" as const : "idle" as const, lastSeq: view.lastSeq }, ...chat.history.items];
   }, [chat.history.items, chat.conversationId, chat.messages, streaming, view.lastSeq]);
 

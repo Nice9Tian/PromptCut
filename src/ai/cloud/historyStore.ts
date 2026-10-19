@@ -48,6 +48,8 @@ export function createCloudHistory(deps: CloudHistoryDeps): CloudHistoryEntry {
   const now = deps.now ?? Date.now;
   let snap: CloudHistorySnapshot = { items: [], loaded: false, loadedAt: 0 };
   let inflight: Promise<boolean> | null = null;
+  /** 在途那一次之后再读的那一次(几处同时要「新的」时共用) */
+  let followUp: Promise<boolean> | null = null;
   let error: unknown = null;
   const listeners = new Set<() => void>();
   let poller: Poller | null = null;
@@ -78,8 +80,15 @@ export function createCloudHistory(deps: CloudHistoryDeps): CloudHistoryEntry {
     get: () => snap,
     async refresh(o = {}) {
       if (o.maxAgeMs !== undefined && snap.loaded && now() - snap.loadedAt <= o.maxAgeMs && !inflight) return true;
-      if (!o.silent) return load();
-      try { return await load(); } catch { return false; }
+      // 要「新的」：在途的那一次可能是在刚才的改动(新建、删除、发出第一条)之前发出的，不能拿它的结果充数，等它回来再读一次
+      const fresh = (): Promise<boolean> => {
+        if (!inflight) return load();
+        followUp ??= inflight.then(() => undefined, () => undefined).then(() => { followUp = null; return load(); });
+        return followUp;
+      };
+      const want = o.maxAgeMs !== undefined ? load : fresh;
+      if (!o.silent) return want();
+      try { return await want(); } catch { return false; }
     },
     lastError: () => error,
     subscribe(fn) {

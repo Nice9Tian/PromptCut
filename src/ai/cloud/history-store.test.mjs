@@ -30,14 +30,23 @@ test("几个分页订阅同一份：只起一个轮询；都走了就停", async
   offB(); assert.equal(f.made[0].stopped, 1, "都走了就停");
 });
 
-test("同时只有一次在途：几处同时要读，等同一次的结果", async () => {
-  let lists = 0, release;
-  const h = createCloudHistory({ list: () => { lists++; return new Promise((r) => { release = () => r([]); }); }, pollMs: 0 });
+test("同时只有一次在途；在途时又要「新的」：等它回来再读一次，几处共用这一次", async () => {
+  let lists = 0; const releases = [];
+  const h = createCloudHistory({ list: () => { lists++; const n = lists; return new Promise((r) => { releases.push(() => r([{ id: `c${n}` }])); }); }, pollMs: 0 });
   const p1 = h.refresh(), p2 = h.refresh(), p3 = h.refresh({ silent: true });
   await settle();
-  assert.equal(lists, 1);
-  release();
+  assert.equal(lists, 1, "同时只有一次在途");
+  releases[0](); await settle(); await settle();
+  assert.equal(lists, 2, "在途那一次可能早于刚才的改动：回来后再读一次，p2、p3 共用");
+  releases[1]();
   assert.deepEqual(await Promise.all([p1, p2, p3]), [true, true, true]);
+  assert.equal(h.get().items[0].id, "c2", "拿到的是后一次的结果");
+  // 只要「够新」的(maxAgeMs)：在途就等这一次，不另起
+  let n2 = 0, rel2;
+  const g = createCloudHistory({ list: () => { n2++; return new Promise((r) => { rel2 = () => r([]); }); }, pollMs: 0 });
+  const q1 = g.refresh(), q2 = g.refresh({ maxAgeMs: 2000 });
+  await settle(); rel2(); await Promise.all([q1, q2]);
+  assert.equal(n2, 1);
 });
 
 test("刚读回来不到 maxAgeMs 的直接用，不再读；过了就读", async () => {
