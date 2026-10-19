@@ -15,6 +15,7 @@ import { InsertZones } from "./InsertZones";
 import { NewTrackZone } from "./NewTrackZone";
 import { Playhead } from "./Playhead";
 import { Toolbar } from "./Toolbar";
+import { CutTabBar } from "./CutTabs";
 import { Scrollbar } from "./Scrollbar";
 import { ResizeHandle } from "../ResizeHandle";
 import { IconPlus } from "../../ui/icons";
@@ -56,6 +57,8 @@ function TimelineInner() {
 
   return (
     <div data-pc="timeline" className="flex flex-col h-full bg-neutral-900 border-t border-neutral-800 text-neutral-300 select-none overflow-hidden text-sm relative">
+      {/* 剪辑标签栏(workflow/editing.md「剪辑标签」):打开的剪辑一个标签,× 只关标签 */}
+      <CutTabBar />
       <Toolbar />
       <div className="flex-1 min-h-0 overflow-auto pc-tl-scroll" ref={scrollRef}>
         {/* Keep both sticky columns as tall as the complete scroll content. */}

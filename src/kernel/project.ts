@@ -1,5 +1,7 @@
 import type { Clip, Timeline } from "./types";
 import type { SoundEffectRecipe } from "./soundEffects";
+import { cutSegmentRender, CUT_SEGMENT_CARD, type CutRenderProject, type TimelineCutClip } from "./cutSegments.ts";
+import { envelopeAt } from "./cutAudio.mjs";
 
 /** 可重生成的音效配方。reuseKey 是合成输入身份,不是 WAV 内容哈希。 */
 export interface SoundEffectLink {
@@ -261,6 +263,20 @@ export interface TrackClip extends Clip {
   audioFx?: import("./audioFx.mjs").ClipAudioFx;
   // fadeIn / fadeOut / opacity 挪到了 kernel/types.ts 的 Clip 上:卡片 clip 现在也吃它们,
   // 不再是素材段专属。
+  /**
+   * 剪辑段:引用的剪辑 id(见 kernel/cutSegments.ts)。有它的段 cardId 为空串、没有 mediaId。
+   * 0.7.18 及更早的页面不认它,只是不画、不出声,字段原样保留。
+   */
+  cutId?: string;
+  /** 剪辑段从被引用剪辑的第几秒开始(缺省 0)。切分时后半段累加前半段的长度 */
+  cutOffset?: number;
+  /**
+   * **只在渲染派生出来的片段上有,不落盘**:外层剪辑段一层层的包络(父剪辑时间)。
+   * `opacityAt` 乘上去;混音器(`audioPlan.mjs`)照同一组包络算增益。见 kernel/cutSegments.ts 的 audioProjectOf。
+   */
+  cutEnv?: import("./cutAudio.mjs").CutEnvelope[];
+  /** **只在渲染派生出来的片段上有,不落盘**:展开前的片段 id 和经过的剪辑段 */
+  cutOrigin?: import("./cutAudio.mjs").CutAudioOrigin;
 }
 
 /**
@@ -402,6 +418,24 @@ export function flattenOverlay(p: Project, graph?: Timeline["graph"]): Timeline 
   for (const tr of [...p.tracks].reverse()) {
     if (tr.hidden) continue;
     for (const c of tr.clips) {
+      if (c.cutId) {
+        // 剪辑段:交成一张「卡」(注册表里没有它,舞台按 clip.cut 认),包裹层照卡片的规矩摆框、
+        // 算不透明度与淡入淡出、定层序,里面挂被引用剪辑的嵌套场景(kernel/cutSegments.ts 文件头)。
+        // 悬空引用、循环引用:这一段不画,不抛。
+        const cut = cutSegmentRender(p as CutRenderProject, c);
+        if (!cut) continue;
+        // 预卷:时间轴片段的起点比段的起点早(cut.from − (cutOffset − cut.offset)),露出来的仍从 cut.from 起
+        const seg: TimelineCutClip = {
+          id: c.id, cardId: CUT_SEGMENT_CARD, start: c.start - (Math.max(0, c.cutOffset ?? 0) - cut.offset), end: c.end, params: {}, cut,
+          ...(c.frame ? { frame: c.frame } : null),
+          ...(c.opacity !== undefined ? { opacity: c.opacity } : null),
+          ...(c.emphasis ? { emphasis: c.emphasis } : null),
+          ...(c.fadeIn ? { fadeIn: c.fadeIn } : null),
+          ...(c.fadeOut ? { fadeOut: c.fadeOut } : null),
+        };
+        clips.push(seg);
+        continue;
+      }
       if (!c.cardId) continue; // 素材段交给视频层
       // motion 必须带过来:它是**播放时**才用得上的东西,漏在这里的话
       // 绑定看起来存下了、时间轴上也显示绑了,可预览和导出都一动不动。
@@ -440,6 +474,9 @@ export function opacityAt(clip: Clip, t: number): number {
   const fout = clip.fadeOut ?? 0;
   if (fin > 0 && t < clip.start + fin) a *= (t - clip.start) / fin;
   if (fout > 0 && t > clip.end - fout) a *= (clip.end - t) / fout;
+  // 剪辑段展开出来的片段(只在声音那份派生项目里有):外层各段的包络乘上去
+  const env = (clip as TrackClip).cutEnv;
+  if (env) for (const e of env) a *= envelopeAt(e, t);
   return Math.max(0, Math.min(1, a));
 }
 

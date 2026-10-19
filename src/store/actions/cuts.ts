@@ -1,9 +1,11 @@
 import {
   switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure
+  removeCut as removeCutPure, placeCutSegment,
 } from "../../kernel/cuts";
+import { cutCycleReason, cutDuration, cutReferences, isCutSegment } from "../../kernel/cutSegments";
+import { findClip, newId, type Track, type TrackClip } from "../../kernel/project";
 
-import { state, set, setProject } from "../core";
+import { state, set, setProject, updateTrack } from "../core";
 
 export const cuts = {
 
@@ -29,10 +31,70 @@ export const cuts = {
   renameCut(cutId: string, name: string) {
     setProject(renameCutPure(state.project, cutId, name));
   },
-  /** 删一条剪辑。删激活那条会先切到相邻的;最后一条不能删(纯逻辑里会抛) */
+  /**
+   * 删一条剪辑。删激活那条会先切到相邻的;最后一条不能删(纯逻辑里会抛)。
+   * 被别的剪辑引用着时,引用它的剪辑段连同转场一起删(说明与确认是调用方的事:素材库弹确认、
+   * Agent 工具要 force)。一步撤销就全回来。返回删掉的剪辑段在哪些剪辑里。
+   */
   removeCut(cutId: string) {
-    const { project, switchedTo, t } = removeCutPure(state.project, cutId, state.t);
+    const { project, switchedTo, t, removedSegments } = removeCutPure(state.project, cutId, state.t);
     setProject(project);
     if (switchedTo) set({ t, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
+    else set({ selection: state.selection.filter((id) => !removedSegments.some((r) => r.clipIds.includes(id))) });
+    return { removedSegments };
+  },
+  /** 直接引用了这条剪辑的那些剪辑(删之前给人看) */
+  cutReferences(cutId: string) {
+    return cutReferences(state.project, cutId);
+  },
+  /** 把剪辑 `childCutId` 放进激活剪辑会不会循环引用;会的话返回原因 */
+  cutCycleReason(childCutId: string): string | null {
+    const host = state.project.activeCutId;
+    return host ? cutCycleReason(state.project, host, childCutId) : null;
+  },
+  /**
+   * 在激活剪辑里放一个引用 `childCutId` 的剪辑段(拖放、Agent 工具)。`newTrackIndex` 给了就新建一条序列放上去;
+   * 循环引用、找不到剪辑、序列放不下都抛,错误信息给人看。默认长度 = 被引用剪辑(从 offset 起)剩下的长度。
+   */
+  addCutSegment(childCutId: string, start: number, opts: { trackId?: string; newTrackIndex?: number; duration?: number; offset?: number } = {}): TrackClip {
+    let p = state.project;
+    let trackId = opts.trackId;
+    if (opts.newTrackIndex !== undefined || (!trackId && !p.tracks.length)) {
+      const track: Track = { id: newId("t"), name: `序列 ${p.tracks.length + 1}`, clips: [] };
+      const tracks = [...p.tracks];
+      const at = Math.max(0, Math.min(tracks.length, opts.newTrackIndex ?? tracks.length));
+      tracks.splice(at, 0, track);
+      p = { ...p, tracks };
+      trackId = track.id;
+    } else if (!trackId) {
+      // 不指定序列:挑第一条这段时间空着、没锁的
+      const free = p.tracks.find((t) => !t.locked && !t.clips.some((c) => c.start < start + 0.05 && start < c.end));
+      trackId = (free ?? p.tracks.find((t) => !t.locked))?.id;
+    }
+    const { project, clip } = placeCutSegment(p, childCutId, start, { trackId, duration: opts.duration, offset: opts.offset });
+    setProject(project);
+    set({ selection: [clip.id] });
+    return clip;
+  },
+  /**
+   * 改剪辑段引用哪条剪辑、从被引用剪辑的哪一秒开始。会循环引用、偏移超出被引用剪辑的总长都抛。
+   * 改完段太长的话出点截到被引用剪辑剩下的长度(新建或拉长剪辑段时不能超出被引用剪辑当时的总时长)。
+   */
+  setCutSegment(clipId: string, patch: { cutId?: string; cutOffset?: number }): TrackClip {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit || !isCutSegment(hit.clip)) throw new Error(`${clipId} 不是剪辑段`);
+    if (hit.track.locked) throw new Error(`序列「${hit.track.name}」锁着`);
+    const cutId = patch.cutId ?? hit.clip.cutId!;
+    if (!(p.cuts ?? []).some((c) => c.id === cutId)) throw new Error(`找不到剪辑 ${cutId}`);
+    const reason = p.activeCutId ? cutCycleReason(p, p.activeCutId, cutId) : null;
+    if (reason) throw new Error(reason);
+    const offset = Math.max(0, patch.cutOffset ?? hit.clip.cutOffset ?? 0);
+    const total = cutDuration(p, cutId);
+    if (offset >= total) throw new Error(`偏移 ${offset} 秒超出了被引用剪辑的总时长 ${total} 秒`);
+    const { cutOffset: _o, ...rest } = hit.clip;
+    const next: TrackClip = { ...rest, cutId, end: Math.min(hit.clip.end, hit.clip.start + (total - offset)), ...(offset > 0 ? { cutOffset: offset } : {}) };
+    setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? next : c)) })));
+    return next;
   },
 };

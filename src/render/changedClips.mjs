@@ -41,6 +41,8 @@ export const TOP_FIELDS = [
   "cardNodes", "style",
 ];
 
+import { reachableCutContents } from "../kernel/cutIdentity.mjs";
+
 /** 重算次数(缓存未命中)。测试用它证明「同一批引用不会重算」 */
 const stats = { fields: 0, tracks: 0, clips: 0, values: 0 };
 /** 取一份重算计数的快照 */
@@ -113,6 +115,9 @@ export function projectHash(project) {
       const v = project[k];
       parts.push(k + ":" + (k === "tracks" ? tracksHash(Array.isArray(v) ? v : []) : valueHash(v)));
     }
+    // 剪辑段引用的剪辑(kernel/cutIdentity.mjs):有才加,没有剪辑段的项目哈希一个字节不变
+    const cutRefs = reachableCutContents(project);
+    if (cutRefs.length) parts.push("cutRefs:" + hashString(JSON.stringify(cutRefs)));
     h = hashString(parts.join("|"));
     fieldsCache.set(project, h);
   }

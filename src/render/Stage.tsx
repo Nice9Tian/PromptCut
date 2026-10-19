@@ -22,6 +22,8 @@ import { PlaceholderPlane, PLACEHOLDER_CSS, PLACEHOLDER_ONLINE_CSS, maxAnimated 
 import { ensurePlaceholderStyle, exportSyncedMountFor, geometryFor, isCatchingUpClip, localOnlyReason, onlineBrowserMode, PLACEHOLDER_SLOT_ATTR, placeholderFitFor, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
 import { resolveCardParams } from "./mediaTier";
 import type { PlaceholderReason } from "./placeholder/contract";
+import { CutSegmentScene } from "./CutSegmentScene";
+import { cutOf, envelopeAt } from "../kernel/cutSegments";
 
 setMaxAnimated(maxAnimated);
 
@@ -99,8 +101,13 @@ function guardRuntimeCard(cardId: string | undefined, body: ReactNode): ReactNod
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
-export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting, mountClock = false }: {
+export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting, mountClock = false, nested = false }: {
   timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender;
+  /**
+   * 剪辑段里的嵌套舞台(`CutSegmentScene`):包裹层挂 `data-pc-nested-clip` 而不是 `data-pc-clip`,
+   * 命中测试、钉动画、量框这些按舞台顶层片段工作的地方只看得到剪辑段那一层。顶层一律 false,DOM 一个字不变。
+   */
+  nested?: boolean;
   /**
    * 给「按挂载时刻计时」的卡传挂载钟(`CardProps.mountClockMs`)。**只有平铺时间轴的导出页传 true**:
    * 那条路径上卡片提前 `CARD_MOUNT_LEAD` 挂载,旧的打字卡从挂载那一帧起计时,导出像素基线(演示项目)就是那样渲出来的。
@@ -192,6 +199,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    */
   const stageRef = useRef<HTMLDivElement>(null);
   const guardKey = active.map((c) => c.cardId).join("|");
+  const clipAttr = nested ? "data-pc-nested-clip" : "data-pc-clip";
   useEffect(() => {
     if (!shouldGuard()) return;
     const handle = requestAnimationFrame(() => {
@@ -254,7 +262,9 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            * 包裹层照内置重卡的路子挂快照平面、流平面,兜底顺序什么都贴不上时占位符显示 `unsupported`(C10 契约第 9 节)。
            * 模式关着(桌面、导出、预渲染、Agent 看到的画面)恒为 false,下面每一支和以前逐字相同。
            */
-          const localOnly = (onlineBrowserMode() && unsupportedHere(clip.cardId, def)) || exportSyncedMountFor(clip.cardId, def);
+          // 剪辑段(kernel/cutSegments.ts):不是注册表里的卡,包裹层里挂被引用剪辑的嵌套场景
+          const seg = cutOf(clip);
+          const localOnly = !seg && ((onlineBrowserMode() && unsupportedHere(clip.cardId, def)) || exportSyncedMountFor(clip.cardId, def));
           /*
            * 三道都在取 def 这一格剔掉,不放到分支里:
            *  - 定义没了(用户卡文件被删)——素材效果卡的 def 在注册表里必然取得到,挡不住下面两种;
@@ -262,7 +272,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            *  - 素材效果卡但没有图(projectCardGraph 抛了):没有图解不出输入,画不出东西。
            * 这台设备跑不了的卡不看这三道:它不挂组件,只贴预渲染结果。
            */
-          if (!localOnly && (!def || (!def.card && !def.Component) || (def.card && !timeline.graph))) return null;
+          if (!seg && !localOnly && (!def || (!def.card && !def.Component) || (def.card && !timeline.graph))) return null;
           const C = def?.Component!;
           // 声画卡的 DOM/图形由视觉出口选择，audio() 不改变视觉分派。
           const embeddedOffset = def?.audio ? (clip.sourceOffset ?? 0) : 0;
@@ -277,7 +287,11 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           // 卡片的框(位置/尺寸/锚点/缩放/旋转)和轨迹平移一样放在外层:卡片不知道自己被摆到了哪儿。
           // 没有 frame 时 frameCss 输出的就是以前那套 inset:0,老项目逐字节不变。
           // 不透明度 / 淡入淡出同理放外层,而且只在设了的时候才写 opacity —— 没设的卡 DOM 一个字不变。
-          const op = hasOpacityControls(clip) ? cardOpacityAt(clip, cardT) : 1;
+          // 剪辑段的淡入淡出从它真正露出来的起点(`seg.from`)算,预卷那一截不露
+          const op = seg
+            ? envelopeAt({ start: seg.from, end: clip.end, fadeIn: clip.fadeIn, fadeOut: clip.fadeOut, opacity: clip.opacity }, cardT)
+            : hasOpacityControls(clip) ? cardOpacityAt(clip, cardT) : 1;
+          const prerolling = !!seg && cardT < seg.from;
           // 强调(阴影 / 描边)沿 alpha 边缘走,所以挂在卡片外层这一格上;没设就一个字不写
           const filter = emphasisFilter(clip.emphasis);
           /*
@@ -329,7 +343,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           return (
             <div
               key={`${clip.id}:${gen}`}
-              data-pc-clip={clip.id}
+              {...{ [clipAttr]: clip.id }}
               data-pc-stream-member={groupMember ? "" : undefined}
               data-pc-local-frame={localFrame}
               data-pc-frame-mode={clipFrameMode(clip, def)}
@@ -355,6 +369,9 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                  */
                 zIndex: i + 1,
                 isolation: "isolate",
+                // 剪辑段:被引用剪辑的整帧只在段的框里露出来;预卷那一截整层藏着(也不让点中)
+                ...(seg ? { overflow: "hidden" } : null),
+                ...(prerolling ? { pointerEvents: "none" as const } : null),
               }}
             >
               {/*
@@ -363,7 +380,11 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 里没有那个键,没有这层就会把 undefined 传进组件。
                 正常情况下它一项都不会补 —— 补上了就说明 clip 缺参数。
               */}
-              {guardRuntimeCard(clip.cardId, unsupported ? (
+              {seg ? (
+                <CutSegmentScene seg={seg} start={clip.start} localT={localTOf(clip, t)}
+                  localDirectT={settling?.has(clip.id) || frozenT.current.has(clip.id) ? localTOf(clip, t) : Math.max(0, directT - clip.start)}
+                  playToken={gen} size={frameBox(clip.frame, timeline)} />
+              ) : guardRuntimeCard(clip.cardId, unsupported ? (
                 /* 这台设备跑不了的卡:卡片代码不跑,不挂组件(快照 / 流平面与占位槽位照常挂在下面) */
                 null
               ) : clip.cardId === "composite" && clip.parts?.length ? (

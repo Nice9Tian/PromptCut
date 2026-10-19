@@ -3,6 +3,7 @@ import { getState, actions } from "../../store/project";
 import { describeTransition, transitionsOf, type TransitionKind } from "../../kernel/transitions";
 import { timelineDigest } from "../tools/toolEcho";
 import { listCuts, resolveCut } from "../../kernel/cuts";
+import { removeCutGate } from "./cutSegments";
 
 import { clipGuard, filterTools, pixelMapTools } from "../common";
 
@@ -49,6 +50,7 @@ export const effectsHandlers = {
     return { ok: true, ...(r.note ? { note: r.note } : {}), timeline: timelineDigest(getState().project) };
   },
   /* ---------- 剪辑(多条时间轴) ---------- */
+  // 每条剪辑带上引用关系(referencedBy:哪些剪辑的哪几段引用了它;references:它里面的剪辑段引用了谁)
   listCuts: () => ({ activeCutId: getState().project.activeCutId, cuts: listCuts(getState().project) }),
   switchCut: (args) => {
     const cut = resolveCut(getState().project, args);
@@ -71,20 +73,18 @@ export const effectsHandlers = {
   removeCut: (args) => {
     const p = getState().project;
     const cut = resolveCut(p, { cutId: args.cutId });
-    const info = listCuts(p).find((c) => c.id === cut.id)!;
-    // 门槛和 remove_clip 一个道理:有内容的剪辑不能一句话删掉,要 force + reason,理由回显给用户
-    if (info.clipCount > 0 && !args.force) {
-      throw new Error(`「${cut.name}」里有 ${info.clipCount} 段内容,不能直接删;确实要删就传 force:true 并在 reason 里写明理由`);
-    }
-    if (args.force && !(args.reason && args.reason.trim())) throw new Error("force 删除必须在 reason 里写明理由");
+    // 门槛和 remove_clip 一个道理:有内容、或被别的剪辑引用着(剪辑段),都不能一句话删掉,要 force + reason,理由回显给用户
+    const blocked = removeCutGate(cut.id, !!args.force, args.reason);
+    if (blocked) throw new Error(blocked);
     const before = p.activeCutId;
-    actions.removeCut(cut.id);
+    const { removedSegments } = actions.removeCut(cut.id);
     clipGuard.noteMutation();
     const q = getState().project;
     return {
       ok: true, removed: cut.id,
       ...(before === cut.id ? { switchedTo: q.activeCutId } : null),
       ...(args.reason ? { reason: args.reason } : null),
+      ...(removedSegments.length ? { removedSegments } : null),
       cuts: listCuts(q),
     };
   },

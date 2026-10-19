@@ -44,6 +44,7 @@ import { directCaptureMode, directSegmentCapture, newDirectRecord, rgbaAlphaBox 
 import { belowSegmentCapture, newBelowRecord } from './bakery/capture-below.mjs';
 import { prepareFrameMedia } from './bakery/frame-media.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
+import { reachableMediaIds } from '../src/kernel/cutIdentity.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
@@ -739,7 +740,8 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
   const controlOf = new Map();
   for (const control of entry.cardPlan ?? []) if (control?.clipId && !controlOf.has(control.clipId)) controlOf.set(control.clipId, control);
   const visualMedia = new Set((project.media ?? []).filter(m => m && m.kind !== 'audio').map(m => m.id));
-  const hasMedia = (project.tracks ?? []).some(track => (track.clips ?? []).some(c => c?.mediaId && visualMedia.has(c.mediaId)));
+  // 剪辑段里的素材也算(kernel/cutIdentity.mjs):截图前要等它们就位
+  const hasMedia = [...reachableMediaIds(project)].some(id => visualMedia.has(id));
   const view = { x: 0, y: 0, w: stage.width, h: stage.height };
   const specs = [];
   for (const target of targets) {

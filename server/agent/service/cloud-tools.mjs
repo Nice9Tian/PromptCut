@@ -52,9 +52,9 @@ export const CLOUD_TOOL_PLAN = Object.freeze({
   // effects(10)
   list_filters: { mode: R }, create_filter: { mode: R }, update_filter: { mode: R }, remove_filter: { mode: R }, apply_filter: { mode: R },
   list_pixel_maps: { mode: R }, create_pixel_map: { mode: R }, update_pixel_map: { mode: R }, remove_pixel_map: { mode: R }, apply_pixel_map: { mode: R },
-  // cuts(8):切剪辑的三个要播放头,发起方在线用发消息时的,不在线按 0 记并注明
+  // cuts(10):切剪辑的三个要播放头,发起方在线用发消息时的,不在线按 0 记并注明;剪辑段的两个(2026-10-20)在副本上同步执行
   list_transitions: { mode: R }, add_transition: { mode: R }, remove_transition: { mode: R }, list_cuts: { mode: R }, rename_cut: { mode: R },
-  switch_cut: { mode: R }, add_cut: { mode: R }, remove_cut: { mode: R },
+  switch_cut: { mode: R }, add_cut: { mode: R }, remove_cut: { mode: R }, add_cut_segment: { mode: R }, set_cut_segment: { mode: R },
   // audio(19)
   set_clip_volume: { mode: R }, set_clip_muted: { mode: R }, separate_audio: { mode: R }, create_audio: { mode: R },
   list_audio_fx: { mode: R }, create_audio_fx: { mode: R }, update_audio_fx: { mode: R }, remove_audio_fx: { mode: R }, apply_audio_fx: { mode: R },

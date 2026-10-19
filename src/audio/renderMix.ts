@@ -11,7 +11,8 @@
  */
 
 import { isAudioFxAnimated, type AudioFxDef } from "../kernel/audioFx.mjs";
-import { fadeEnvelope } from "../kernel/audioPlan.mjs";
+import { gainCurve, needsGainCurve } from "../kernel/audioPlan.mjs";
+import type { CutEnvelope } from "../kernel/cutAudio.mjs";
 import { buildFxChain } from "./fxChain";
 import { decodeCardAudioClip, type CardAudioClip } from "./cardAudio";
 
@@ -27,6 +28,8 @@ export interface MixPlanClip {
   fx: { def: AudioFxDef; params?: Record<string, number> } | null;
   /** 音频素材效果卡产的声音。有它就完全取代 url,而且一定要拿到。 */
   cardAudio?: CardAudioClip;
+  /** 剪辑段展开出来的片段:外层各段的包络(时间轴绝对时间,kernel/audioPlan.mjs 的 gainCurve 乘上去) */
+  env?: CutEnvelope[];
 }
 
 export interface MixPlan {
@@ -77,8 +80,8 @@ export async function renderMix(plan: MixPlan, fetchImpl: typeof fetch = fetch):
     const g = ctx.createGain();
     // 淡入淡出 × 音量:一条曲线铺进去(kernel/audioPlan.mjs 的 fadeEnvelope,和 ffmpeg 两条 afade 相乘一致)。
     // 不用两段自动化拼:淡入淡出重叠时事件按时间排序,setValueAtTime 会插到淡入的 ramp 前面,把淡入整个吃掉
-    if (c.fadeIn > 0 || c.fadeOut > 0) {
-      g.gain.setValueCurveAtTime(fadeEnvelope(c.volume, c.fadeIn, c.fadeOut, c.dur, Math.ceil(c.dur * 200) + 1), c.start, c.dur);
+    if (needsGainCurve(c)) {
+      g.gain.setValueCurveAtTime(gainCurve(c, Math.ceil(c.dur * 200) + 1), c.start, c.dur);
     } else {
       g.gain.value = c.volume;
     }

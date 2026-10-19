@@ -49,14 +49,15 @@ export async function mixAudioInChrome({ ffmpegCmd, outDir, plan, project, pageU
       const e = plan[i];
       if (e.cardAudio) {
         clips[i] = { clipId: e.clipId, url: '', start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut,
-          fx: e.fx, cardAudio: { project, nodeId: e.nodeId, frames: Math.max(1, Math.ceil(e.dur * 48000)) } };
+          fx: e.fx, cardAudio: { project, nodeId: e.nodeId, frames: Math.max(1, Math.ceil(e.dur * 48000)) }, ...(e.env ? { env: e.env } : null) };
         continue;
       }
       const wav = path.join(audioDir, 'clip-' + i + '.wav');
       const input = audioClipInput(e);
       await run(['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(input.offset), '-t', String(e.dur), '-i', input.file,
         '-vn', '-sn', '-dn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_f32le', wav]);
-      clips[i] = { clipId: e.clipId, url: '/@export/' + id + '/audio/clip-' + i + '.wav', start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx };
+      clips[i] = { clipId: e.clipId, url: '/@export/' + id + '/audio/clip-' + i + '.wav', start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx,
+        ...(e.env ? { env: e.env } : null) };
     }
   };
   // 一个裁段失败就让其余 worker 停下来,别让孤儿 ffmpeg 继续往 audio/ 里写

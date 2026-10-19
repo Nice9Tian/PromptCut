@@ -32,7 +32,8 @@
  * 规则见 `src/render/playEntry.mjs`）。
  */
 import { getState } from "../store/project";
-import type { Project } from "../kernel/project";
+import { flattenOverlay, type Project } from "../kernel/project";
+import { cutOf } from "../kernel/cutSegments";
 import { cardMountedAt, mountFrameOf } from "../render/frameWindow.mjs";
 import { createPlayRun, enteredNaturally, notePlayBeat, notePlaySeam, notePlayStart } from "../render/playEntry.mjs";
 import { catchUpEstimateMs, playingLeadMs, sceneCatchUpCost } from "../render/catchUpEstimate.mjs";
@@ -197,6 +198,17 @@ function recordOf(project: Project, clipId: string): CardCostRecord | undefined 
 }
 
 /**
+ * 此刻挂着、要按历史推进的**剪辑段**(`kernel/cutSegments.ts`)。它们不是注册表里的卡,没有成本记录、不进分派表,
+ * 舞台的子树虚拟时间推不动里面那些按全局时钟走的卡,所以跳转、从段中间开始播放都要整场景在后台补跑后互换
+ * (和 `vtOk = false` 的卡同一条第二路)。停在挂载帧上的不用补。
+ */
+export function statefulSegmentsAt(project: Project, t: number): { id: string; start: number; end: number }[] {
+  const fps = Math.max(1, project.fps || 30);
+  const frame = Math.round(t * fps);
+  return flattenOverlay(project).clips.filter((c) => cutOf(c)?.frameMode === "stateful" && cardMountedAt(c, t) && frame > mountFrameOf(c, fps));
+}
+
+/**
  * 这一刻有没有「判重 + `vtOk = false`」的卡 —— 有就得走第二路（整场景补跑后互换）。
  * 只要有一张，就整场景走（正在自己追的 `vtOk` 卡被整场景结果覆盖，无害）。
  */
@@ -278,10 +290,11 @@ export function notePlayFrame(sec: number): "continuous" | "repeat" | "break" {
  * 暂停态第二路（`staleOnBackCatchUp`）不经这里，照旧收全部 (b) 档 `vtOk = false` 的轻卡。
  */
 export function playingSwapTargets(project: Project, t: number): string[] {
-  const all = playingCatchUpTargets(project, t);
+  const segments = statefulSegmentsAt(project, t);
+  const all = [...playingCatchUpTargets(project, t), ...segments.map((c) => c.id)];
   if (!all.length) return all;
   const fps = Math.max(1, project.fps || 30);
-  const clipOf = new Map(activeCardClips(project, t).map((c) => [c.id, c]));
+  const clipOf = new Map([...activeCardClips(project, t), ...segments].map((c) => [c.id, c]));
   const out: string[] = [];
   const natural: string[] = [];
   for (const id of all) {
@@ -311,7 +324,7 @@ export function playingSwapTargets(project: Project, t: number): string[] {
  * 的那一刻也真的走一次互换。
  */
 export function staleOnBackCatchUp(project: Project, t: number): string[] {
-  return [...new Set([...needsBackCatchUp(project, t), ...playingCatchUpTargets(project, t)])].sort();
+  return [...new Set([...needsBackCatchUp(project, t), ...playingCatchUpTargets(project, t), ...statefulSegmentsAt(project, t).map((c) => c.id)])].sort();
 }
 
 /**

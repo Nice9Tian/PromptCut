@@ -1,3 +1,4 @@
+import { reachableMediaIds } from "../kernel/cutIdentity.mjs";
 import type { MediaAsset, Project } from "../kernel/project";
 import { playableOnThisHost, probePlayable, shouldProbe } from "./playability.ts";
 
@@ -334,8 +335,8 @@ export interface MissingOriginal {
  */
 export function missingOriginals(project: Pick<Project, "tracks" | "media">, complete: HashList): MissingOriginal[] {
   const have = asSet(complete);
-  const used = new Set<string>();
-  for (const tr of project.tracks ?? []) for (const c of tr.clips ?? []) if (c.mediaId) used.add(c.mediaId);
+  // 剪辑段引用的剪辑里用到的素材也算(kernel/cutIdentity.mjs):导出要画它们
+  const used = reachableMediaIds(project);
   const out: MissingOriginal[] = [];
   const seen = new Set<string>();
   for (const m of mediaInTimelineOrder(project)) {

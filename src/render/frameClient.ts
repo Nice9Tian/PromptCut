@@ -1,6 +1,7 @@
 import type { Project } from "../kernel/project";
 import { invalidatePrerenderBase, prerenderUrl } from "./prerender";
 import { alignMirror, resyncDataMirror } from "./dataMirror";
+import { reachableCutContents } from "../kernel/cutIdentity.mjs";
 
 export type FrameTarget = "user" | "prerender";
 export type FrameLane = "user" | "inter_face" | "agent" | "background" | "archive" | "playback";
@@ -10,7 +11,12 @@ export interface FrameRequestOptions {
   lane?: FrameLane;
 }
 
-const signature = (project: Project) => JSON.stringify([project.width, project.height, project.fps, project.duration, project.themeId, project.camera3dFov, project.tracks, project.media, project.filters, project.pixelMaps, project.audioFx, project.cardNodes, project.style]);
+const signatureFields = (project: Project) => JSON.stringify([project.width, project.height, project.fps, project.duration, project.themeId, project.camera3dFov, project.tracks, project.media, project.filters, project.pixelMaps, project.audioFx, project.cardNodes, project.style]);
+// 剪辑段引用的剪辑有才加(kernel/cutIdentity.mjs),没有剪辑段的项目签名一个字节不变
+const signature = (project: Project) => {
+  const cutRefs = reachableCutContents(project);
+  return signatureFields(project) + (cutRefs.length ? JSON.stringify(cutRefs) : "");
+};
 let saved: { signature: string; snapshots: string } | null = null;
 let restorePending: Promise<void> | null = null;
 export function snapshotsFor(project: Project) { return saved?.signature === signature(project) ? saved.snapshots : undefined; }

@@ -102,8 +102,8 @@ test('CA-TOOL-02 工具表里的每个工具都归了类;在副本上执行的�
   assert.deepEqual(Object.keys(CLOUD_TOOL_PLAN).filter((n) => !names.includes(n)), [], '云端工具表里有工具表没有的名字');
   const count = (mode) => Object.values(CLOUD_TOOL_PLAN).filter((p) => p.mode === mode).length;
   assert.deepEqual({ route: count('route'), hosted: count('hosted'), server: count('server'), initiator: count('initiator'), pending: count('pending') },
-    { route: 71, hosted: 20, server: 6, initiator: 8, pending: 23 });
-  assert.equal(CLOUD_OPEN_TOOLS.size, 104, 'pending 与明确关闭的 spawn_agent 不交给模型(看画面的四个要节点配了看画面的口子才交)');
+    { route: 73, hosted: 20, server: 6, initiator: 8, pending: 23 });
+  assert.equal(CLOUD_OPEN_TOOLS.size, 106, 'pending 与明确关闭的 spawn_agent 不交给模型(看画面的四个要节点配了看画面的口子才交)');
   assert.equal(CLOUD_OPEN_TOOLS.has('spawn_agent'), false);
   // 在副本上执行的:走路由表的必须是同步实现(进程级的锁里不等外部);点名的两个例外实现本身是同步的
   const route = Object.entries(CLOUD_TOOL_PLAN).filter(([, p]) => p.mode === 'route').map(([n]) => n);

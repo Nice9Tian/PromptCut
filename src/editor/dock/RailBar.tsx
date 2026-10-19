@@ -9,7 +9,6 @@ import { useRailCollapsed } from "../sideRails";
 import { useAgentAttentionMap } from "./agentAttention";
 import { beginRailPointer } from "./railDrag";
 import { RAIL_MORE_H, RailMoreButton, RailOverflowMenu } from "./railOverflow";
-import { CutsRailGroup } from "../timeline/CutTabs";
 import { CUTS_ITEM, agentIdOf, effectiveActive, isSectionItem, plusAnchor, visibleItems, type ItemId, type SectionId, type Side } from "./railLayout";
 import { addAgentOnSide, clickRailItem, useRailLayout } from "./railStore";
 import "../right/chat/chat.css";
@@ -125,8 +124,8 @@ export function RailBar({ side, part = "head" }: { side: Side; part?: RailPart }
           onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => beginRailPointer(e, id),
         };
 
-    // 剪辑组:整组一项,自己处理点击 / 改名 / 拖动(按住组里任何一格拖的都是整组),不开抽屉
-    if (id === CUTS_ITEM) return <CutsRailGroup key={id} />;
+    // 剪辑组 2026-10-20 撤掉(Argon 审核意见:剪辑入口只留素材库剪辑组和时间轴上方标签栏);老布局里残留的这一项不画
+    if (id === CUTS_ITEM) return null;
 
     if (isSectionItem(id)) {
       const { label, Icon } = SECTION_META[id];

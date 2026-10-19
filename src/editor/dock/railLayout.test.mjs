@@ -32,9 +32,9 @@ const L = (left, right, active = {}) => ({
   active: { left: active.left ?? left[0] ?? null, right: active.right ?? right[0] ?? null },
 });
 
-test("默认布局 = 改版前:左边五个分区 + 剪辑组,右边剧本 + 各 Agent;选中项沿用旧键", () => {
+test("默认布局 = 改版前:左边五个分区,右边剧本 + 各 Agent;选中项沿用旧键(剪辑组 2026-10-20 撤掉)", () => {
   const d = defaultLayout(["main", "t2"]);
-  assert.deepEqual(d.left, [...SECTION_IDS, CUTS_ITEM]);
+  assert.deepEqual(d.left, [...SECTION_IDS]);
   assert.deepEqual(d.right, ["script", A("main"), A("t2")]);
   assert.deepEqual(d.active, { left: "library", right: A("main") });
 
@@ -59,21 +59,21 @@ test("校验:去掉已不存在的 Agent 和不认识的项,重复的只留第�
     active: { left: "edit", right: A("main") },
   };
   const v = validateLayout(raw, ["main"]);
-  assert.deepEqual(v.left, ["edit", "library", CUTS_ITEM]);
+  assert.deepEqual(v.left, ["edit", "library"]);
   assert.deepEqual(v.right, [A("main"), "script", "captions", "animations", "effects"]);
   assert.deepEqual(v.active, { left: "edit", right: A("main") });
 });
 
 test("校验:缺的分区按固定顺序补回左边末尾,缺的剧本补回右边顶上", () => {
   const v = validateLayout({ left: ["captions"], right: [A("main")], active: {} }, ["main"]);
-  assert.deepEqual(v.left, ["captions", "library", "animations", "effects", "edit", CUTS_ITEM]);
+  assert.deepEqual(v.left, ["captions", "library", "animations", "effects", "edit"]);
   assert.deepEqual(v.right, ["script", A("main")]);
 });
 
 test("校验:剧本和分区在另一侧也算数,不重复补", () => {
   const v = validateLayout({ left: ["script", ...SECTION_IDS], right: [A("main"), CUTS_ITEM], active: { left: "script" } }, ["main"]);
   assert.deepEqual(v.left, ["script", ...SECTION_IDS]);
-  assert.deepEqual(v.right, [A("main"), CUTS_ITEM]);
+  assert.deepEqual(v.right, [A("main")], "老布局里的剪辑组读进来就丢掉");
   assert.equal(v.active.left, "script");
 });
 
@@ -93,8 +93,8 @@ test("校验:active 不在那一侧就退回 fallback 的选中项,再退回第�
   assert.equal(v.active.right, A("main"), "fallback 的 agent:main 还在右边");
 
   const empty = validateLayout({ left: [], right: ["script", ...SECTION_IDS, A("main")], active: { left: "library" } }, ["main"]);
-  assert.deepEqual(empty.left, [CUTS_ITEM], "老布局没有剪辑组:补回左边");
-  assert.equal(empty.active.left, null, "只剩剪辑组的一侧没有选中项");
+  assert.deepEqual(empty.left, [], "剪辑组 2026-10-20 撤掉,不再补回左边");
+  assert.equal(empty.active.left, null, "空的一侧没有选中项");
   assert.equal(empty.active.left, null);
   assert.equal(empty.active.right, A("main"), "没存 right 的选中项:默认布局的 agent:main 还在右边,就用它");
 

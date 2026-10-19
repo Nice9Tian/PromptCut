@@ -16,6 +16,7 @@ import { driveMedia, filterOf, releaseMedia, targetTimeOf } from "./mediaDrive";
 import { playbackUrl } from "./mediaTier";
 import { confirmedMissingVisual, missingMaterialLabel } from "../audio/missingMaterial";
 import { MissingMaterial } from "./MissingMaterial";
+import { SceneHostContext } from "./CutSegmentScene";
 
 const NO_HASHES: readonly string[] = [];
 
@@ -158,9 +159,14 @@ function CostMark({ at }: { at: (now: number) => void }) {
 export function FrameScene({
   project, sourceProject = project, t, directT = t, playToken, graph,
   mediaMode = "placeholder", mediaT = t, scrubbing = false, playing = false, proxy,
-  suppressed, streamPlanes, snapshots, remountGen, settling, awaiting, localHashes, onMediaFrame, onCardCost,
+  suppressed, streamPlanes, snapshots, remountGen, settling, awaiting, localHashes, onMediaFrame, onCardCost, nested = false,
 }: {
   project: Project; sourceProject?: Project; t: number; directT?: number; playToken: number; graph?: Timeline["graph"];
+  /**
+   * 剪辑段里的嵌套场景(`CutSegmentScene`):序列层不挂 `data-pc-track`、片段层挂 `data-pc-nested-clip`
+   * (预渲染按轨道前缀拆层、命中测试、钉动画只认舞台顶层)。顶层一律 false,DOM 一个字不变。
+   */
+  nested?: boolean;
   /** 素材层怎么画:导出页 / legacy 的占位,还是舞台里真的在放的那套(E7 第 1 条) */
   mediaMode?: "placeholder" | "live";
   /** 素材层跟的时刻(秒)。平时等于 `t`;K5 第二路的补跑里父页会单独给 `back` 下发目标拍 */
@@ -236,7 +242,10 @@ export function FrameScene({
     return timeline;
   };
   const stageSize = { width: project.width, height: project.height };
-  return <>{tracks.map((tr, index) => {
+  const clipAttr = nested ? "data-pc-nested-clip" : "data-pc-clip";
+  // 嵌套的剪辑段场景照同一种素材变体渲(CutSegmentScene)
+  const host = { live, mediaT, playing, scrubbing, localHashes: hashes };
+  return <SceneHostContext.Provider value={host}>{tracks.map((tr, index) => {
     const curOf = (trackId: string) => layers.find((l) => l.trackId === trackId && !takenByOther(l.clip) && !replaced(l.clip.id)) ?? null;
     // 这条序列上有没有画面段(视频 / 图片)。没有就不挂 VideoTrack,免得多两个空 <video>
     const hasVisual = tr.clips.some((c) => {
@@ -244,7 +253,7 @@ export function FrameScene({
       const m = project.media.find((x) => x.id === c.mediaId);
       return !!m && m.kind !== "audio";
     });
-    return <div key={tr.id} data-pc-track={tr.id} style={{ position: "absolute", inset: 0, zIndex: index }}>
+    return <div key={tr.id} {...(nested ? { "data-pc-nested-track": tr.id } : { "data-pc-track": tr.id })} style={{ position: "absolute", inset: 0, zIndex: index }}>
       {live && hasVisual ? (
         <VideoTrack
           project={project}
@@ -267,7 +276,7 @@ export function FrameScene({
         const ops = project.filters?.length ? clipFilterOpsAt(project, clip, mediaT) : null;
         const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
         const style = { display: "block", width: "100%", height: "100%", objectFit: "cover" as const, opacity, filter: filter || undefined };
-        return <div key={clip.id} data-pc-clip={clip.id} data-pc-media="" data-pc-local-frame={Math.round((mediaT - clip.start) * project.fps)} style={{ position: "absolute", overflow: "hidden", ...frameCss(clip.frame, project) }}>
+        return <div key={clip.id} {...{ [clipAttr]: clip.id }} data-pc-media="" data-pc-local-frame={Math.round((mediaT - clip.start) * project.fps)} style={{ position: "absolute", overflow: "hidden", ...frameCss(clip.frame, project) }}>
           <PixelMappedMedia media={media as MediaAsset} clip={clip} t={mediaT} project={project} style={style} def={def} live playing={playing} scrubbing={scrubbing} localHashes={hashes} />
         </div>;
       }) : null}
@@ -276,7 +285,7 @@ export function FrameScene({
         const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
         const style = { display: "block", width: "100%", height: "100%", objectFit: "cover" as const, opacity, filter: filter || undefined };
         // data-pc-media:生成快照时 controls 的选择器靠它把素材层排除掉(见 render/createSnapshot.ts)
-        return <div key={clip.id} data-pc-clip={clip.id} data-pc-media="" data-pc-local-frame={Math.round((t - clip.start) * project.fps)} style={{ position: "absolute", overflow: "hidden", ...frameCss(clip.frame, project) }}>
+        return <div key={clip.id} {...{ [clipAttr]: clip.id }} data-pc-media="" data-pc-local-frame={Math.round((t - clip.start) * project.fps)} style={{ position: "absolute", overflow: "hidden", ...frameCss(clip.frame, project) }}>
           {clip.pixelMap && project.pixelMaps?.find((x) => x.id === clip.pixelMap!.id) ? (() => {
             const def = project.pixelMaps!.find((x) => x.id === clip.pixelMap!.id)!;
             return <PixelMappedMedia media={media} clip={clip} t={t} project={project} style={style} def={def} />;
@@ -287,13 +296,17 @@ export function FrameScene({
         </div>;
       })}
       {tr.clips.map((clip, clipIndex) => {
-        if (!active(clip)) return null;
+        // 剪辑段:活跃判据看 flattenOverlay 交出的那份(起点含预卷、推帧口径取被引用剪辑的),不看序列上的原段
+        if (clip.cutId) {
+          const seg = legacyTimeline(tr, clip).clips[0];
+          if (!seg || !active(seg as TrackClip)) return null;
+        } else if (!active(clip)) return null;
         const layerStyle: React.CSSProperties = { position: "absolute", inset: 0, zIndex: clipIndex };
         const media = clip.mediaId ? project.media.find((item) => item.id === clip.mediaId) : undefined;
         if (media && confirmedMissingVisual(media)) {
           if (live && !takenByOther(clip)) return null; // The live VideoTrack owns ordinary visual media layers.
           const sceneTime = live ? mediaT : t;
-          return <div key={clip.id} data-pc-clip={clip.id} data-pc-media="" data-pc-confirmed-missing="1"
+          return <div key={clip.id} {...{ [clipAttr]: clip.id }} data-pc-media="" data-pc-confirmed-missing="1"
             style={{ ...layerStyle, ...frameCss(clip.frame, project), opacity: opacityAt(clip, sceneTime), filter: filterOf(clip, project.filters, sceneTime), pointerEvents: "none" }}>
             <MissingMaterial name={missingMaterialLabel(media)} />
           </div>;
@@ -304,10 +317,10 @@ export function FrameScene({
           // already been baked by the capture, so applying frameCss here would
           // transform them twice. Opacity and fades are baked there as well.
           return url
-            ? <div key={clip.id} data-pc-clip={clip.id} style={layerStyle}>
+            ? <div key={clip.id} {...{ [clipAttr]: clip.id }} style={layerStyle}>
               <img data-pc-cached-control={clip.id} src={url} alt="" style={{ display: "block", width: "100%", height: "100%" }} />
             </div>
-            : <div key={clip.id} data-pc-clip={clip.id} data-pc-incomplete={clip.id} style={{ ...layerStyle, ...frameCss(clip.frame, project), border: "2px dashed #dcb66a", boxSizing: "border-box", display: "grid", placeItems: "center", background: "#1e273050", opacity: opacityAt(clip, directT) }}>
+            : <div key={clip.id} {...{ [clipAttr]: clip.id }} data-pc-incomplete={clip.id} style={{ ...layerStyle, ...frameCss(clip.frame, project), border: "2px dashed #dcb66a", boxSizing: "border-box", display: "grid", placeItems: "center", background: "#1e273050", opacity: opacityAt(clip, directT) }}>
               <span style={{ color: "#fff", fontSize: 28 }}>⌛</span>
             </div>;
         }
@@ -319,7 +332,7 @@ export function FrameScene({
         // `placeholder` 路一个都不传(宿主本来就不给),DOM 一个字不变。
         if (!timeline.clips.length) return null;
         const stage = (
-          <Stage timeline={timeline} t={t} directT={directT} playToken={playToken}
+          <Stage timeline={timeline} t={t} directT={directT} playToken={playToken} nested={nested}
             proxy={proxy} snapshots={snapshots} suppressed={suppressed} streamPlanes={streamPlanes}
             remountGen={remountGen} settling={settling} awaiting={awaiting} />
         );
@@ -330,7 +343,7 @@ export function FrameScene({
          * (`CostMark` 本身回 `null`,live 路的 DOM 也一个节点都不多)。
          */
         return (
-          <div key={clip.id} data-pc-native-layer={clip.id} style={layerStyle}>
+          <div key={clip.id} {...(nested ? null : { "data-pc-native-layer": clip.id })} style={layerStyle}>
             {live ? <CostMark at={(now) => { costMarkAt = now; }} /> : null}
             {stage}
             {live ? <CostMark at={(now) => onCardCost?.(clip.id, now - costMarkAt)} /> : null}
@@ -338,5 +351,5 @@ export function FrameScene({
         );
       })}
     </div>;
-  })}</>;
+  })}</SceneHostContext.Provider>;
 }

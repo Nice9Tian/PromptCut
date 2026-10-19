@@ -182,12 +182,12 @@ export async function encodeAudio(deps: BrowserExportDeps, durationSec: number):
   const plan: MixPlan = {
     sampleRate: AUDIO_SAMPLE_RATE,
     duration: durationSec,
-    clips: entries.map((e: { clipId: string; mediaId: string; start: number; dur: number; offset: number; volume: number; fadeIn: number; fadeOut: number; fx: MixPlan["clips"][number]["fx"] }, i: number) => {
+    clips: entries.map((e: { clipId: string; mediaId: string; start: number; dur: number; offset: number; volume: number; fadeIn: number; fadeOut: number; fx: MixPlan["clips"][number]["fx"]; env?: MixPlan["clips"][number]["env"] }, i: number) => {
       const m = byId.get(e.mediaId)!;
       const key = `pc-slice:${i}`;
       const missing = confirmedMissingAudio(m, project);
       slices.set(key, { mediaId: m.id, offset: missing ? 0 : e.offset, dur: missing ? missingMaterialAudibleDuration({ start: 0, end: e.dur }) : e.dur });
-      return { clipId: e.clipId, url: key, start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx };
+      return { clipId: e.clipId, url: key, start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx, ...(e.env ? { env: e.env } : null) };
     }),
   };
   const fetchSlice = (async (input: RequestInfo | URL) => {
