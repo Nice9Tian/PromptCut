@@ -304,6 +304,29 @@ export function settleFromQueue(messages: ChatMessage[], queue: CloudQueueSnapsh
   return next ?? messages;
 }
 
+/**
+ * 对话空闲(没有在跑的一轮)时排在第一位的那条消息马上就要开始,不算「排队」:界面不把它列进队列,
+ * 只在它自己的气泡下写一行「已发出，等待云端开始处理…」(`sendState: "accepted"`);开始跑了、或前面有别人的一轮在跑时去掉这行。
+ * 前面有一轮在跑时照旧显示排在第几(2026-10-08 用户定「界面显示排在第几」)。同一份快照折几次结果相同。
+ */
+export function isIdleHead(queue: CloudQueueSnapshot | null | undefined, item: CloudQueueItem): boolean {
+  return Boolean(queue && !queue.currentRunId && item.state === "queued" && item.position === 1);
+}
+export function markWaitingFromQueue(messages: ChatMessage[], queue: CloudQueueSnapshot | null): ChatMessage[] {
+  if (!queue) return messages;
+  const waiting = new Set(queue.items.filter((item) => isIdleHead(queue, item)).map((item) => accountMessageId(item.messageId)));
+  let next: ChatMessage[] | null = null;
+  messages.forEach((m, i) => {
+    if (m.role !== "user" || !m.id.startsWith("cq-")) return;
+    const want = waiting.has(m.id) ? "accepted" : undefined;
+    if (m.sendState === want) return;
+    next ??= messages.slice();
+    const { sendState: _drop, ...rest } = m;
+    next[i] = want ? { ...rest, sendState: want } : rest;
+  });
+  return next ?? messages;
+}
+
 /** 按顺序折一串事件;文字与思考的增量由调用方先攒批再交进来也一样(这里一条一条折,结果相同) */
 export function applyCloudEvents(messages: ChatMessage[], events: Iterable<CloudEvent>): ChatMessage[] {
   let out = messages;

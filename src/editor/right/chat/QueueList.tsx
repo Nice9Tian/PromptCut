@@ -4,11 +4,12 @@ import { playEnter, prefersReducedMotion } from "../../enterMotion";
 import "./queue.css";
 import type { ChatMessage } from "../../../ai/types";
 import type { CloudQueueSnapshot, CloudSender } from "../../../ai/cloud/types";
-import { accountMessageId } from "../../../ai/cloud/events";
+import { accountMessageId, isIdleHead } from "../../../ai/cloud/events";
 
 /** Server FIFO is already accepted; local insert/edit/remove controls do not apply. */
 export function CloudQueueList(props: { queue?: CloudQueueSnapshot | null; messages: ChatMessage[]; senders?: Record<string, CloudSender> }) {
-  const items = props.queue?.items.filter(item => item.state === 'queued').sort((a, b) => (a.position ?? 0) - (b.position ?? 0)) ?? [];
+  // 对话空闲时排第一的那条马上开始,不算排队(它的气泡下写「已发出，等待云端开始处理…」,见 events.ts 的 isIdleHead)
+  const items = props.queue?.items.filter(item => item.state === 'queued' && !isIdleHead(props.queue, item)).sort((a, b) => (a.position ?? 0) - (b.position ?? 0)) ?? [];
   const waitingJobs = props.messages.some(m => m.role === 'assistant' && m.pending && (m.progress?.waitingJobs || m.progress?.phase === 'waiting_jobs'));
   const queuedLook = props.messages.find(m => m.role === 'assistant' && m.pending && ((m.progress as Record<string, any>)?.renderQueuePosition || m.progress?.phase === 'render_queued'));
   const renderQueuePos = (queuedLook?.progress as Record<string, any>)?.renderQueuePosition ?? 1;

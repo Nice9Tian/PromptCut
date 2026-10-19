@@ -260,13 +260,13 @@ export function CloudAiPanel(props: {
   };
   useEffect(() => () => { if (echoTimer.current !== null) window.clearTimeout(echoTimer.current); }, []);
 
-  const sendNow = async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
-    if (off || !stillCurrent() || !controlPolicy.canSend || view.revoked) return false;
+  const sendNow = async (text: string, files?: ChatAttachment[], staged?: string | null): Promise<boolean> => {
+    if (off || !stillCurrent() || !controlPolicy.canSend || view.revoked) { if (staged) chat.failStaged(staged, "现在不能在这个对话里发消息。"); return false; }
     if (!cloud.accountMode) markSent();
     // 账号模式:图片、视频、音频附件先放进素材库,告诉 Agent 是哪一条(2026-10-18 用户定)
     const prepared = cloud.accountMode && files?.length ? await withLibrary(files) : files;
     if (!stillCurrent()) return false;
-    const ok = await chat.send(text, prepared);
+    const ok = await chat.send(text, prepared, staged ?? undefined);
     if (!stillCurrent()) return false;
     if (!ok) { echoWait.current = false; bump((n) => n + 1); }
     return ok;
@@ -275,6 +275,28 @@ export function CloudAiPanel(props: {
   const handleSend = async (text: string) => {
     if (creatorReadOnly || view.revoked || (!text.trim() && attachments.length === 0)) return;
     if (off) return;
+    if (cloud.accountMode && text.trim()) {
+      // 账号模式:点发送当场在对话里出气泡、清空输入框(乐观显示,2026-10-19 用户要求);告知确认、放进素材库、发送都在后面做,
+      // 没发出去时气泡标「没有发出去」并写原因,原文放回输入框(框里此刻是空的才放)。云端收下前气泡只写「发送中…」,不显示成已发送
+      const { usable, skipped } = pickSendable(attachments, chat.conversationId);
+      const sentAttachments = attachments;
+      const staged = chat.stage(text, usable);
+      setInputText(previous => previous === text ? "" : previous);
+      setAttachments(previous => previous === sentAttachments ? [] : previous);
+      const restore = () => {
+        if (!stillCurrent()) return;
+        setInputText(previous => previous ? previous : text);
+        setAttachments(previous => previous.length ? previous : sentAttachments);
+      };
+      if (!await consentForUse() || !stillCurrent()) {
+        if (staged) chat.failStaged(staged, "使用云端 Agent 前，请先阅读并确认告知。");
+        restore();
+        return;
+      }
+      if (skipped > 0) chat.notify(`${skipped} 个附件还在上传或上传失败,这次没带上。`);
+      if (!await sendNow(text.trim(), usable, staged)) restore();
+      return;
+    }
     if (!await consentForUse() || !stillCurrent()) return;
     // 还在上传或上传失败的附件这次先不带上,但发送本身不被挡住
     const { usable, skipped } = pickSendable(attachments, chat.conversationId);

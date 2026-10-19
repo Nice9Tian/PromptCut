@@ -254,8 +254,14 @@ export interface CloudChat {
   /** 给用户看一句话(「某些附件没带上」之类页面自己的提示) */
   notify: (text: string) => void;
   conversationId: string;
-  /** `files`:已经传好的附件(`attach` 回来的那些);其 `url` 随消息带给服务端,名字显示在本页的气泡里 */
-  send: (text: string, files?: ChatAttachment[]) => Promise<boolean>;
+  /** `files`:已经传好的附件(`attach` 回来的那些);其 `url` 随消息带给服务端,名字显示在本页的气泡里。
+   *  `staged`:先用 `stage` 放进对话的那条本地气泡;发不出去时它标成「没发出去」 */
+  send: (text: string, files?: ChatAttachment[], staged?: string) => Promise<boolean>;
+  /** 账号模式:点发送的那一刻先在对话里放一条本地气泡(乐观显示),回它的号;没有会话时回 null */
+  stage: (text: string, files?: ChatAttachment[]) => string | null;
+  /** 本地气泡在发出之前就被挡下了(没确认告知、对话已切走等):标成没发出去 */
+  failStaged: (id: string, reason: string) => void;
+  dropStaged: (id: string) => void;
   /** 传一个文件到这个对话的工作目录(对话还没发过消息也行);出错抛 `CloudError` */
   attach: (file: File, signal?: AbortSignal) => Promise<CloudAttachmentInfo>;
   abort: (runId?: string, requestId?: string) => Promise<void>;
@@ -438,15 +444,16 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     if (sessionKeyRef.current === key) rememberTitle(projectId, convRef.current, titleOf(messages), persistScope);
   }, [projectId, messages, key, persistScope]);
 
-  const send = useCallback(async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
-    if (!text.trim() || view.revoked) return false;
+  const send = useCallback(async (text: string, files?: ChatAttachment[], staged?: string): Promise<boolean> => {
+    const fail = (reason: string) => { if (staged) sessionRef.current?.failStaged(staged, reason); return false; };
+    if (!text.trim() || view.revoked) return fail(cloudErrorText("forbidden"));
     if (cloud.accountMode) {
-      if (!cloud.accountId || !key) return false;
+      if (!cloud.accountId || !key) return fail(cloudErrorText("unauthorized"));
       try { await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }); }
-      catch (err) { setNotice(err instanceof Error ? err.message : cloudErrorText("network")); return false; }
+      catch (err) { const reason = err instanceof Error ? err.message : cloudErrorText("network"); setNotice(reason); return fail(reason); }
     }
     const s = sessionRef.current;
-    if (!s || !key || keyRef.current !== key || sessionKeyRef.current !== key) return false;
+    if (!s || !key || keyRef.current !== key || sessionKeyRef.current !== key) return fail("账号、项目或对话已切换。");
     setNotice(null);
     const sent = (files ?? []).filter((a) => !!a.url);
     const body: CloudSendBody = {
@@ -463,7 +470,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     };
     if (cloud.accountMode) {
       const presence = selectionPresenceStatus();
-      if (!presence.linked || !presence.pageId || presence.unsupported) { setNotice('当前页面选区尚未连接，请稍后重试。'); return false; }
+      if (!presence.linked || !presence.pageId || presence.unsupported) { setNotice('当前页面选区尚未连接，请稍后重试。'); return fail('当前页面选区尚未连接，请稍后重试。'); }
       const pending = pendingSendRef.current;
       // 同一条消息重发沿用同一个请求号;换了模型、思考强度或创造力就是另一条请求(文档服务按请求号核内容,同号不同内容会被拒)
       const options = JSON.stringify([body.model ?? "", body.effort ?? "", body.creativity ?? ""]);
@@ -473,7 +480,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       body.selectionSnapshot = { pageId: presence.pageId };
     }
     try {
-      await s.send(body, sent.length ? bubbleAttachments(sent) : undefined);
+      await s.send(body, sent.length ? bubbleAttachments(sent) : undefined, staged ? { staged } : undefined);
       pendingSendRef.current = null;
       if (projectId) lsSet(freshKey(projectId, tabId, persistScope), "");
       return true;
@@ -623,6 +630,14 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     notify: setNotice,
     conversationId,
     send,
+    stage: (text: string, files?: ChatAttachment[]) => {
+      const s = sessionRef.current;
+      if (!s || !cloud.accountMode || blocked) return null;
+      const shown = (files ?? []).filter((a) => !!a.url);
+      return s.stage(text.trim(), shown.length ? bubbleAttachments(shown) : undefined);
+    },
+    failStaged: (id: string, reason: string) => sessionRef.current?.failStaged(id, reason),
+    dropStaged: (id: string) => sessionRef.current?.dropStaged(id),
     attach,
     abort,
     switchVisibility,
