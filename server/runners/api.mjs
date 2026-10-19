@@ -317,9 +317,11 @@ export function startRun(opts) {
        * 网关自动缓存,实测同一前缀第二次命中约八成,长上下文的费用压得住。
        */
       maxInputTokens: 1_000_000 - (Number(cfg.maxTokens) || 4096) - 30_000,
-      onEvent: safeOnEvent, 
+      onEvent: safeOnEvent,
       signal: abortController.signal,
       history,
+      // 用户只看得到 report_progress 的条目:收工时没交过收尾汇报,由 harness 按文字回复代交(见 harness/agent.mjs)
+      requireFinalReport: true,
       /*
        * 每次模型请求前后的回调(托管档的闸与用量记录)。`opts.checkpoint` 为真时,从第二次请求起每次请求之前把历史落一次盘:
        * 这时上一次工具往返刚做完 —— 进程被杀也只丢正在进行的那一次(契约 cloud-agent-contract.md 第 7.1 节)。
