@@ -8,9 +8,14 @@
 // "./project" 补扩展名)。tsconfig 开了 allowImportingTsExtensions(noEmit 下允许)。
 // id 必须复用 project.ts 的 newId —— 两个各自从 0 起的计数器同一毫秒里会撞出同一个 t-… id。
 import { newId, type Cut, type Project, type Track } from "./project.ts";
+import { cutCycleReason, cutDuration, cutReferences, stripCutReferences } from "./cutSegments.ts";
 
-/** 默认剪辑数:新项目和没有 cuts 字段的老文件都补成这三条 */
-export const DEFAULT_CUT_COUNT = 3;
+/**
+ * 默认剪辑数:新项目和没有 cuts 字段的老文件只补「剪辑1」这一条,其余由用户或 Agent 新建
+ * (2026-10-20 用户定:「剪辑默认有3个,这不符合预期——用户又没创建那么多,只留一个就行了」)。
+ * 已经带着 cuts 的项目原样保留,不因此删减。
+ */
+export const DEFAULT_CUT_COUNT = 1;
 const DEFAULT_CUT_DURATION = 30;
 
 function emptyTracks(): Track[] {
@@ -32,7 +37,7 @@ export function nextCutName(cuts: Cut[]): string {
 
 /**
  * 把项目补成合法的多剪辑形状。幂等,加载时调一次:
- *   - 没有 cuts:当前 tracks 就是「剪辑1」,再补两条空的;
+ *   - 没有 cuts:当前 tracks 就是「剪辑1」(DEFAULT_CUT_COUNT 为 1 时不再补空的);
  *   - activeCutId 不在 cuts 里:取第一条;
  *   - 激活那条的条目不该带 tracks(内容在 Project 上)。真带了且 Project.tracks 是空的,
  *     就把它收进来 —— 这是文件被手改过的情况,宁可保住内容;否则丢掉条目里的;
@@ -72,12 +77,20 @@ export function normalizeCuts(p: Project): Project {
   return { ...p, tracks, duration, cuts, activeCutId: activeId };
 }
 
-/** 选项栏 / list_cuts 要的摘要。激活那条的数字从 Project.tracks 上取 */
-export function listCuts(p: Project): { id: string; name: string; active: boolean; trackCount: number; clipCount: number; duration: number }[] {
+/** 素材库 / 标签栏 / list_cuts 要的摘要。激活那条的数字从 Project.tracks 上取 */
+export function listCuts(p: Project): {
+  id: string; name: string; active: boolean; trackCount: number; clipCount: number; duration: number;
+  /** 直接引用了这条剪辑的那些剪辑(各自哪几段) */
+  referencedBy: { cutId: string; name: string; clipIds: string[] }[];
+  /** 这条剪辑里的剪辑段直接引用了哪些剪辑 */
+  references: string[];
+}[] {
   const q = normalizeCuts(p);
   return q.cuts!.map((c) => {
     const active = c.id === q.activeCutId;
     const tracks = active ? q.tracks : c.tracks ?? [];
+    const refs: string[] = [];
+    for (const t of tracks) for (const cl of t.clips) if (cl.cutId && !refs.includes(cl.cutId)) refs.push(cl.cutId);
     return {
       id: c.id,
       name: c.name,
@@ -85,6 +98,8 @@ export function listCuts(p: Project): { id: string; name: string; active: boolea
       trackCount: tracks.length,
       clipCount: tracks.reduce((n, t) => n + t.clips.length, 0),
       duration: active ? q.duration : c.duration ?? DEFAULT_CUT_DURATION,
+      referencedBy: cutReferences(q, c.id),
+      references: refs,
     };
   });
 }
@@ -154,12 +169,18 @@ export function renameCut(p: Project, cutId: string, name: string): Project {
 /**
  * 删一条剪辑。最后一条不能删。删的是激活那条时先切到相邻的一条(优先左边),
  * 返回里 switchedTo 告诉调用方切去了哪、播放头该是多少。
+ *
+ * 被别的剪辑引用着(剪辑段)时,引用它的那些剪辑段连同绑着它们的转场一起删
+ * (`product/project-model.md`「剪辑」:先说明被哪些剪辑用着,确认后连同引用它的剪辑段一起删)。
+ * 说明与确认是调用方的事(界面弹确认、Agent 工具要 force);这里返回 removedSegments 供调用方汇报。
  */
-export function removeCut(p: Project, cutId: string, t: number): { project: Project; switchedTo: string | null; t: number } {
+export function removeCut(p: Project, cutId: string, t: number): { project: Project; switchedTo: string | null; t: number; removedSegments: { cutId: string; name: string; clipIds: string[] }[] } {
   let q = normalizeCuts(p);
   const idx = q.cuts!.findIndex((c) => c.id === cutId);
   if (idx < 0) throw new Error(`找不到剪辑 ${cutId}`);
   if (q.cuts!.length <= 1) throw new Error("这是最后一条剪辑,不能删;要清空的话删掉里面的段就行");
+  const removedSegments = cutReferences(q, cutId).filter((r) => r.cutId !== cutId);
+  q = stripCutReferences(q, cutId);
 
   let switchedTo: string | null = null;
   let nextT = t;
@@ -170,7 +191,43 @@ export function removeCut(p: Project, cutId: string, t: number): { project: Proj
     nextT = s.t;
     switchedTo = neighbor.id;
   }
-  return { project: { ...q, cuts: q.cuts!.filter((c) => c.id !== cutId) }, switchedTo, t: nextT };
+  return { project: { ...q, cuts: q.cuts!.filter((c) => c.id !== cutId) }, switchedTo, t: nextT, removedSegments };
+}
+
+/**
+ * 把剪辑 `childCutId` 作为剪辑段放进激活剪辑的一条序列。纯函数:返回新项目和新段;放不下(重叠)、
+ * 会循环引用、找不到剪辑时抛,错误信息给人看(拖放的提示条、Agent 工具都用它)。
+ *
+ * 剪辑段的默认长度 = 被引用剪辑(从 offset 起)剩下的长度;给了 duration 也不能超出它。
+ */
+export function placeCutSegment(
+  p: Project,
+  childCutId: string,
+  start: number,
+  opts: { trackId?: string; duration?: number; offset?: number; id?: string } = {},
+): { project: Project; clip: import("./project.ts").TrackClip } {
+  const q = normalizeCuts(p);
+  const host = q.activeCutId!;
+  if (!q.cuts!.some((c) => c.id === childCutId)) throw new Error(`找不到剪辑 ${childCutId}`);
+  const reason = cutCycleReason(q, host, childCutId);
+  if (reason) throw new Error(reason);
+  const offset = Math.max(0, opts.offset ?? 0);
+  const total = cutDuration(q, childCutId);
+  const room = total - offset;
+  if (!(room > 0.05)) throw new Error(`剪辑「${q.cuts!.find((c) => c.id === childCutId)!.name}」从第 ${offset} 秒起已经没有内容可放(总时长 ${total} 秒)`);
+  const dur = Math.min(opts.duration ?? room, room);
+  if (!(dur > 0)) throw new Error("剪辑段的长度要大于 0");
+  const s = Math.max(0, start);
+  const track = opts.trackId ? q.tracks.find((t) => t.id === opts.trackId) : q.tracks[0];
+  if (!track) throw new Error(`找不到序列 ${opts.trackId ?? ""}`);
+  if (track.locked) throw new Error(`序列「${track.name}」锁着`);
+  const clip = {
+    id: opts.id ?? newId("k"), cardId: "", cutId: childCutId, start: s, end: s + dur, params: {},
+    ...(offset > 0 ? { cutOffset: offset } : {}),
+  };
+  if (track.clips.some((c) => c.start < clip.end - 1e-9 && clip.start < c.end - 1e-9)) throw new Error(`序列「${track.name}」在 ${s} ~ ${s + dur} 秒已经有片段`);
+  const tracks = q.tracks.map((t) => (t.id === track.id ? { ...t, clips: [...t.clips, clip].sort((a, b) => a.start - b.start) } : t));
+  return { project: { ...q, tracks, duration: Math.max(q.duration, clip.end) }, clip };
 }
 
 /** 素材是项目级的:删素材要把停放剪辑里引用它的段也清掉,不能只清激活那条 */

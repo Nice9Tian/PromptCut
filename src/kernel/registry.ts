@@ -1,5 +1,6 @@
 import type { CardDef, Control } from "./types";
-import { cardCapabilities } from "./frameMode.mjs";
+import { cardCapabilities, clipFrameMode } from "./frameMode.mjs";
+import { setCutClipFrameMode } from "./cutSegments.ts";
 
 const map = new Map<string, CardDef<any>>();
 /** 注册表每变一次(注册、清空)加一:按「注册表里有哪些卡」记忆化的一方(源码版本表)拿它当键 */
@@ -86,6 +87,9 @@ export function unregisterCards(ids: readonly string[]) {
 export function getCard(id: string): CardDef<any> | undefined {
   return map.get(id) ?? runtimeCards.get(id);
 }
+
+// 剪辑段的推帧口径要看被引用剪辑里每张卡的口径;cutSegments 不能反过来 import 注册表,在这里注入
+setCutClipFrameMode((clip) => clipFrameMode(clip, getCard(clip.cardId)));
 
 export function allCards(): CardDef<any>[] {
   return [...map.values()];

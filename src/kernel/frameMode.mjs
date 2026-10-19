@@ -114,6 +114,8 @@ export function cardCapabilities(def, params = def?.defaults || {}, parts) {
     canvasHeavy, independentCache: compositing === 'independent' };
 }
 export function clipFrameMode(clip, def) {
+  // 剪辑段(kernel/cutSegments.ts):口径由被引用剪辑里的卡决定,flattenOverlay 时已经算好
+  if (clip.cut) return clip.cut.frameMode === 'direct' ? 'direct' : 'stateful';
   if (clip.parts?.length) return 'stateful';
   return cardFrameMode(def, { ...def?.defaults, ...clip.params });
 }
