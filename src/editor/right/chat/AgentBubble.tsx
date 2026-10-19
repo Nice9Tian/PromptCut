@@ -88,7 +88,7 @@ export function progressMeta(m: ChatMessage, liveElapsedMs?: number): string | n
 /**
  * 轮次那行小字里的已用时间每秒往前走。进度只在换一步时才报一次(等模型回话的那一段可能好几十秒都没有新的),
  * 原来照抄进度里那个数,「第 1/24 轮 · 0 秒」就一直停在 0 秒(2026-10-19 在线实测)。
- * 以收到这条进度的时刻为起点,在它报的已用时间上往前加;换了一条进度就重新对齐。跑完了就停表。
+ * 以收到这条进度的时刻为起点,在它报的已用时间上往前加;换了一条进度就重新对齐;也按这一轮的开始时间算一份,取大的。跑完了就停表。
  */
 export function LiveProgressMeta({ m }: { m: ChatMessage }) {
   const p = m.progress;
@@ -102,7 +102,11 @@ export function LiveProgressMeta({ m }: { m: ChatMessage }) {
     const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
     return () => window.clearInterval(timer);
   }, [ticking]);
-  const live = ticking && anchor.current ? anchor.current.elapsed + (Date.now() - anchor.current.at) : undefined;
+  const now = Date.now();
+  // 这一轮的开始时间(云端的 `run` 事件带的时刻)也算一份：重新打开页面时进度是重放来的，按收到时刻对齐会少算；
+  // 两边取大的。开始时间离谱(比现在还晚、或超过一天，多半是两边时钟不准)就不用它
+  const sinceStart = typeof m.startedAt === "number" && now >= m.startedAt && now - m.startedAt < 86_400_000 ? now - m.startedAt : 0;
+  const live = ticking && anchor.current ? Math.max(anchor.current.elapsed + (now - anchor.current.at), sinceStart) : undefined;
   const text = progressMeta(m, live);
   return text ? <div className="ai-activity-meta" data-pc="activity-meta">{text}</div> : null;
 }
