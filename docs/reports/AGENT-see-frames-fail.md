@@ -44,7 +44,8 @@
 ## 验证
 
 - 新测试先对旧的 `frame-dispatcher.mjs` 跑：`# pass 2 # fail 4`（01、02、03、06 失败，复现了吞原因）；换回新文件：`see-frames-cloud-reason` + `cloud-agent-look` 共 `# tests 10 # pass 10 # fail 0`。
-- `npx tsc -b --force`、`npm test`：见下节（跑完补）。
+- `npx tsc -b --force`：退出码 0，零错误。
+- `npm test`（带 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`，后台静默跑）：`tests 7140 / pass 7126 / fail 0 / skipped 14`，退出码 0，一次通过，没有需要单独重跑的。
 - 渲染附加项不适用：没改画面、渲染管线、取帧本身。
 - 真实网络验证未跑：本任务对节点只读，不部署。
 
