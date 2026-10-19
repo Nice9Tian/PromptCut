@@ -11,17 +11,21 @@ const operations = Object.freeze({ admit: 'admit', confirmRead: 'confirmRead', q
   checkAccess: 'checkAccess', finish: 'finish', queryFinish: 'queryFinish', scopePrepare: 'scopePrepare',
   scopeTerminal: 'scopeTerminal', scopeControl: 'scopeControl', runTicket: 'resolveRunPrincipal' });
 const fail = code => { throw accountError(503, code); };
+/** 只读、可以原样再问的核对（「这一轮此刻还能不能读写」）。文档服务一时答不上（503）时隔一会儿再问，
+ * 不让一次几秒的卡顿把整条任务判死：每次模型请求、工具调用之前都要问它一次，任务进程建事件通道之前也要问。 */
+const CHECK_RETRY_DELAYS_MS = Object.freeze([500, 1500, 4000]);
 
 /** Agent-owned mTLS transport. Doc derives the service principal from the pinned
  * client certificate; no caller can supply servicePrincipal or a human identity.
  */
-export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs = 5000, scopePrepareSource = null,
-  registrationPurpose = null, workerEventSource = null } = {}) {
+export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs = 15_000, scopePrepareSource = null,
+  registrationPurpose = null, workerEventSource = null, checkRetryDelaysMs = CHECK_RETRY_DELAYS_MS } = {}) {
   let base;
   try { base = new URL(origin); } catch { fail('run-client-configuration'); }
   const pin = certificateFingerprint(serverFingerprint256);
   if (base.protocol !== 'https:' || base.pathname !== '/' || base.search || base.hash || base.username || base.password ||
-    !tls?.key || !tls?.cert || !tls?.ca || !/^[a-f0-9]{64}$/.test(pin) || !Number.isInteger(timeoutMs) || timeoutMs < 1)
+    !tls?.key || !tls?.cert || !tls?.ca || !/^[a-f0-9]{64}$/.test(pin) || !Number.isInteger(timeoutMs) || timeoutMs < 1 ||
+    !Array.isArray(checkRetryDelaysMs) || checkRetryDelaysMs.some(v => !Number.isInteger(v) || v < 0))
     fail('run-client-configuration');
   const active = new Set(), sockets = new Set(); let closed = false, closing = null;
   /** Every call opens its own real TLS socket. The signature is constructed only
@@ -107,9 +111,24 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     return transmit(`/internal/v2/runs/${paths[name]}`, fields,
       name === 'pending' && instanceSession.identity()?.purpose ? 'pendingRuns' : operations[name] ?? null);
   }
+  const waits = new Set();
+  const pause = ms => new Promise(resolve => {
+    const entry = { timer: setTimeout(() => { waits.delete(entry); resolve(); }, ms), resolve }; waits.add(entry);
+  });
+  async function checkAccess(input) {
+    for (let attempt = 0; ; attempt++) {
+      try { return await request('checkAccess', input); }
+      catch (error) {
+        // 明确的答复（没权限、被撤销、参数不对）照原样交回；只有「一时答不上」再问，客户端关了就不再问。
+        if (closed || error?.status !== 503 || attempt >= checkRetryDelaysMs.length) throw error;
+        await pause(checkRetryDelaysMs[attempt]);
+        if (closed) throw error;
+      }
+    }
+  }
   return {
     admit: input => request('admit', input), confirmRead: input => request('confirmRead', input),
-    queryRead: input => request('queryRead', input), checkAccess: input => request('checkAccess', input),
+    queryRead: input => request('queryRead', input), checkAccess,
     finish: input => request('finish', input), runTicket: input => request('runTicket', input),
     queryFinish: input => request('queryFinish', input), scopePrepare: input => request('scopePrepare', input),
     scopeTerminal: input => request('scopeTerminal', input), scopeControl: input => request('scopeControl', input),
@@ -156,6 +175,7 @@ export function createRunClient({ origin, tls, serverFingerprint256, timeoutMs =
     close() {
       if (closing) return closing;
       closed = true; instanceSession.close();
+      for (const entry of waits) { clearTimeout(entry.timer); entry.resolve(); } waits.clear();
       const resources = new Set([...active, ...sockets]);
       closing = Promise.all([...resources].map(resource => new Promise(resolve => {
         if (resource.closed === true) return resolve();
