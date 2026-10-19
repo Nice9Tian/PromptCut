@@ -543,6 +543,12 @@ export function OpDetailPreview(props: {
             <OpHead t={call} />
           </div>
         ) : null}
+        {/* 改了项目的那一步在画面页上也能「撤销这步」:原来 AI 栏底部的「Agent 操作记录」每行都有,那块换成「Agent 操作」之后撤销只在这个控件里(2026-10-20) */}
+        {call && call.ok === true && (p.kind === "change" || p.kind === "diff") ? (
+          <div className="ai-odp-over-undo" data-pc="odp-over-undo">
+            <AgentUndoButton callId={call.callId} />
+          </div>
+        ) : null}
         {note ? (
           <div className="ai-odp-over-note" data-pc="odp-over-note">
             {note}

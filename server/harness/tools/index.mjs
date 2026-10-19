@@ -3,6 +3,8 @@ import { thinkTool } from './think.mjs';
 import { createTextEditorTool } from './textEditor.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { injectCardParams, injectPartParams } from '../../card-params-schema.mjs';
+import { isUserMessageCall } from '../agent.mjs';
+import { userMessageTool, answerUserMessage } from './userMessage.mjs';
 
 /**
  * `only`:给了就只把名单里的工具交给模型(托管档的开放清单);`localTools: false` 不带读写本地文件的 text_editor。
@@ -38,6 +40,16 @@ export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, p
     // context.callId 是这次 tool_use 的 id:交给编辑器放进工具调用事件,页面 AI 栏按它对上聊天记录(c65-integ2)
     async execute(input, context = {}) { return waitForJob(t.name, input, await callTool(t.name, input, { callId: context.callId }), context); },
   }));
+  /*
+   * send_message 的 to: "user"(对用户说一两句话,界面画进气泡,2026-10-20 用户定)在这里就地答,不经公告板:
+   * 云端与本机都走这一层,不用另开路由。别的收件人照旧交给 callTool(多 Agent 协调)。
+   * 托管档的开放清单里没有 send_message 时,单独补一个只能发给用户的。
+   */
+  const coord = result.find((t) => t.name === 'send_message');
+  if (coord) {
+    const forward = coord.execute;
+    coord.execute = async (input, context = {}) => (isUserMessageCall(coord.name, input) ? answerUserMessage(input) : forward(input, context));
+  } else result.push(userMessageTool());
   result.push(thinkTool);
   if (localTools) result.push(createTextEditorTool(workspaceDir));
 

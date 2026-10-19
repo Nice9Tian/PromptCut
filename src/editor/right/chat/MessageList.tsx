@@ -8,46 +8,12 @@ import { RoleAvatar } from "../RoleAvatar";
 import { playEnter } from "../../enterMotion";
 import type { ViewMode } from "./viewPrefs";
 import type { InboundAgentMessage } from "../../../ai/types";
-import { reportsOf } from "../../../ai/progressReport";
+import { inboundPlan } from "./rowPlan";
 import { HeightBook, isAtBottom, planSegments, prefixOffsets, shouldWindow, touchRecent, windowRange, type Segment } from "./listWindow";
 import "./chat.css";
 
-/**
- * 合并气泡的上限:一个组最多并这么多轮 / 前几轮合计这么多次操作,够了下一条回复就另起一组。
- * 模型或驱动一直不交本轮小结时(有些 runner、API 模型会漏),不然整段历史会并成一个不收口的组,流式时整组重算
- */
 /** 空对话里唯一的示例句(本机与云端都用它;云端用它也要能只靠内置卡做出一支短片,见 `scripts/probes/cloud-agent-first-video-probe.mjs`) */
 export const EMPTY_EXAMPLE = "为我快速创建一个视频告诉我软件都可以做什么。";
-
-const MAX_GROUP_ROUNDS = 10;
-const MAX_GROUP_TOOLS = 120;
-
-const toolCountCache = new WeakMap<ChatMessage, number>();
-function toolCount(m: ChatMessage): number {
-  let v = toolCountCache.get(m);
-  if (v === undefined) {
-    v = m.parts ? m.parts.filter((p) => p.kind === "tool").length : (m.tools?.length ?? 0);
-    toolCountCache.set(m, v);
-  }
-  return v;
-}
-
-/** 这条回复交没交本轮小结(final 报告)。消息对象不可变,按对象缓存,流式时不用每个片段都把整段历史的报告重新解析一遍 */
-const finalCache = new WeakMap<ChatMessage, boolean>();
-function hasFinalReport(m: ChatMessage): boolean {
-  let v = finalCache.get(m);
-  if (v === undefined) {
-    v = reportsOf(m).some((r) => r.final);
-    finalCache.set(m, v);
-  }
-  return v;
-}
-
-function sameList<T>(a: readonly T[] | undefined, b: readonly T[] | undefined): boolean {
-  if (a === b) return true;
-  if (!a || !b || a.length !== b.length) return false;
-  return a.every((x, i) => x === b[i]);
-}
 
 /** 工具方块 / 工具详情的展开回调。AiPanel 里经 ref 中转,引用永远不变 */
 export interface RowHandlers {
@@ -103,14 +69,10 @@ interface MessageRowProps {
   on: RowHandlers;
   /** 用户气泡上「回退到这里」的回调,同样是稳定引用;不给就不显示回退入口 */
   rewind?: RewindHandlers;
-  /** 这条 Agent 回复之前收到的其他 Agent 的消息;每次渲染都是新数组,memo 只看 inboundKey */
-  inbound?: InboundAgentMessage[];
-  /** 那几条不画出来的用户消息 id 拼起来(连同合并进来的几轮的) */
-  inboundKey?: string;
-  /** 合并进这个气泡的后续几轮回复(上一轮没交本轮小结就接着累计);memo 按元素逐个比 */
-  followers?: ChatMessage[];
-  /** followers 各自之前收到的其他 Agent 消息 */
-  followerInbound?: (InboundAgentMessage[] | undefined)[];
+  /** 「Agent 操作」此刻显示的是不是这一轮(只对 Agent 回复有意义) */
+  selected?: boolean;
+  /** 点 Agent 回复的气泡:「Agent 操作」切到这一轮;稳定引用 */
+  onSelectRound?: (id: string) => void;
 }
 
 /**
@@ -139,24 +101,13 @@ const MessageRow = /* @__PURE__ */ React.memo(function MessageRow(props: Message
       <span className="ai-row-avatar">
         {m.roleId ? <RoleAvatar roleId={m.roleId} size={28} /> : <span className="ai-avatar-ai" aria-hidden="true">AI</span>}
       </span>
-      <AgentBubble
-        m={m}
-        view={props.view}
-        showThinking={props.showThinking}
-        installJobs={props.installJobs}
-        expanded={props.expanded}
-        openRuns={props.openRuns}
-        on={props.on}
-        inbound={props.inbound}
-        followers={props.followers}
-        followerInbound={props.followerInbound}
-      />
+      <AgentBubble m={m} showThinking={props.showThinking} selected={props.selected} onSelect={props.onSelectRound} />
     </div>
   );
 }, (a, b) =>
   a.m === b.m && a.view === b.view && a.showThinking === b.showThinking && a.installJobs === b.installJobs &&
   a.openKeys === b.openKeys && a.runKeys === b.runKeys && a.on === b.on && a.rewind === b.rewind &&
-  a.inboundKey === b.inboundKey && a.sender === b.sender && sameList(a.followers, b.followers)
+  a.sender === b.sender && a.selected === b.selected && a.onSelectRound === b.onSelectRound
 );
 
 export interface MessageListProps {
@@ -172,6 +123,10 @@ export interface MessageListProps {
   onPickExample: (text: string) => void;
   /** 用户气泡上「回退到这里」的回调(稳定引用,见 UserBubble 的 RewindHandlers);不给就不显示回退入口 */
   rewind?: RewindHandlers;
+  /** 「Agent 操作」此刻显示的那一轮(ActivityPanel 的 useRoundSelection) */
+  selectedRound?: string | null;
+  /** 点 Agent 回复的气泡:让「Agent 操作」切到这一轮(稳定引用) */
+  onSelectRound?: (id: string) => void;
 }
 
 /** 列表里的一条:消息气泡、时间分隔行、「收到其他 Agent 的消息」小字、编排折叠块。每条渲染出来恰好是滚动区的一个直接子元素 */
@@ -213,7 +168,7 @@ const overscanFor = (h: number) => Math.max(300, h / 2);
  * 上面的条换了高度、占位换了估计、窗口挪了,在绘制之前把它挪回原处;贴底时照旧滚到底。
  */
 export function MessageList(props: MessageListProps) {
-  const { messages, view, showThinking, installJobs, expanded, openRuns, rowHandlers, onPickExample, rewind } = props;
+  const { messages, view, showThinking, installJobs, expanded, openRuns, rowHandlers, onPickExample, rewind, selectedRound, onSelectRound } = props;
   const messagesScrollRef = useRef<HTMLDivElement>(null);
 
   /**
@@ -392,68 +347,8 @@ export function MessageList(props: MessageListProps) {
   /** 到上一条为止最晚的时间点;新一轮(用户消息)离它超过 TIME_GAP_MS 就插时间行 */
   let lastAt: number | null = null;
 
-  /*
-   * 其他 Agent 发来的消息(AiPanel 自动投递时在用户消息上带着 inbound 字段,不靠正文前缀认)不是用户说的话:
-   * 不画用户气泡,交给紧跟着的那条 Agent 回复,在它的操作详细预览控件里当「收到消息」展示(行首一个对话图标)。
-   * 后面暂时还没有回复可挂的,在原位留一行小字。
-   */
-  const inboundFor = new Map<string, { list: InboundAgentMessage[]; key: string }>();
-  const inboundOnly = new Set<string>();
-  const orphanNote = new Map<string, number>();
-  {
-    let pending: { list: InboundAgentMessage[]; ids: string[] } | null = null;
-    const dropPending = () => {
-      if (pending) orphanNote.set(pending.ids[pending.ids.length - 1], pending.list.length);
-      pending = null;
-    };
-    for (const m of messages) {
-      if (m.role === "user") {
-        const got = m.inbound?.length ? m.inbound : null;
-        if (!got) {
-          dropPending();
-          continue;
-        }
-        inboundOnly.add(m.id);
-        pending = pending ? { list: [...pending.list, ...got], ids: [...pending.ids, m.id] } : { list: got, ids: [m.id] };
-      } else if (pending) {
-        inboundFor.set(m.id, { list: pending.list, key: pending.ids.join(",") });
-        pending = null;
-      }
-    }
-    dropPending();
-  }
-
-  /*
-   * 没交本轮小结的回复,下一轮接着累计在它的气泡里(简洁模式):一组从一条 Agent 回复开始,
-   * 后面的回复都并进来,直到某一轮交了 final 报告才收口,再下一条回复另起一组。
-   * 不同角色(roleId)的回复不合并;一组并满 MAX_GROUP_ROUNDS 轮或前几轮合计 MAX_GROUP_TOOLS 次操作,下一条另起一组。
-   * 中间用户说的话照常在原位置显示;并进去的那几条自己不再画气泡。
-   */
-  const followersOf = new Map<string, ChatMessage[]>();
-  const followerIds = new Set<string>();
-  const leaderOf = new Map<string, string>();
-  if (view !== "verbose") {
-    let leader: ChatMessage | null = null;
-    let groupRounds = 0;
-    let groupTools = 0;
-    for (const m of messages) {
-      if (m.role !== "assistant") continue;
-      if (leader && (leader.roleId ?? "") === (m.roleId ?? "") && groupRounds < MAX_GROUP_ROUNDS && groupTools < MAX_GROUP_TOOLS) {
-        const list = followersOf.get(leader.id) ?? [];
-        list.push(m);
-        followersOf.set(leader.id, list);
-        followerIds.add(m.id);
-        leaderOf.set(m.id, leader.id);
-        groupRounds += 1;
-        groupTools += toolCount(m);
-      } else {
-        leader = m;
-        groupRounds = 1;
-        groupTools = toolCount(m);
-      }
-      if (hasFinalReport(m)) leader = null;
-    }
-  }
+  // 只装其他 Agent 消息的用户消息不画,挂到紧跟着的回复上(在「Agent 操作」里显示);每一轮的回复各画各的气泡,不合并(rowPlan.ts)
+  const { inboundOnly, orphanNote } = inboundPlan(messages);
 
   /*
    * 摊平成一条条(Entry):每条渲染出来是滚动区的一个直接子元素,key 各自独立 ——
@@ -463,14 +358,14 @@ export function MessageList(props: MessageListProps) {
   const entries: Entry[] = [];
   /** 流式中的消息画在哪一条里(并进前面气泡的,画在组头那一条) */
   const liveKeys = new Set<string>();
-  messages.forEach((m, i) => {
-    const hidden = inboundOnly.has(m.id) || followerIds.has(m.id);
+  messages.forEach((m) => {
+    const hidden = inboundOnly.has(m.id);
     const at = timeOf(m);
     if (!hidden && m.role === "user" && at !== null && lastAt !== null && at - lastAt >= TIME_GAP_MS) {
       const stampAt = at;
       entries.push({ key: `${m.id}:time`, kind: "time", render: () => <div key={`${m.id}:time`} className="ai-time-sep">{formatStamp(stampAt)}</div> });
     }
-    // 不画出来的(收到的 Agent 消息、并进前面气泡的回复)也照样推进时间点,不然后面会多出时间分隔行
+    // 不画出来的(收到的 Agent 消息)也照样推进时间点,不然后面会多出时间分隔行
     const end = typeof m.finishedAt === "number" ? m.finishedAt : at;
     if (end !== null) lastAt = lastAt === null ? end : Math.max(lastAt, end);
     if (inboundOnly.has(m.id)) {
@@ -486,12 +381,8 @@ export function MessageList(props: MessageListProps) {
           ),
         });
       }
-    } else if (followerIds.has(m.id)) {
-      // 并进前面某个气泡的那几轮:自己不画
-      if (m.pending) liveKeys.add(leaderOf.get(m.id) ?? m.id);
     } else {
       if (m.pending) liveKeys.add(m.id);
-      const followers = followersOf.get(m.id);
       entries.push({
         key: m.id,
         kind: m.role === "user" ? "user" : "assistant",
@@ -509,10 +400,8 @@ export function MessageList(props: MessageListProps) {
             runKeys={keysFor(openRuns, m.id)}
             on={rowHandlers}
             rewind={rewind}
-            inbound={inboundFor.get(m.id)?.list}
-            inboundKey={[inboundFor.get(m.id)?.key ?? "", ...(followers ?? []).map((f) => inboundFor.get(f.id)?.key ?? "")].join("|")}
-            followers={followers}
-            followerInbound={followers?.map((f) => inboundFor.get(f.id)?.list)}
+            selected={m.role === "assistant" && selectedRound === m.id}
+            onSelectRound={m.role === "assistant" ? onSelectRound : undefined}
           />
         ),
       });

@@ -384,7 +384,9 @@ export function createAgentBoard({ now = () => Date.now(), labelOf = () => null,
       const text = typeof args?.text === 'string' ? args.text.trim().slice(0, 4000) : '';
       const to = typeof args?.to === 'string' ? args.to.trim() : '';
       if (!text) throw new Error('text 必填');
-      if (!to) throw new Error('to 必填:收件 Agent 的对话 ID,用 list_agents 查;写 all 就是发给所有其他 Agent');
+      if (!to) throw new Error('to 必填:收件 Agent 的对话 ID,用 list_agents 查;写 all 就是发给所有其他 Agent;写 user 是对用户说话');
+      // 对用户说话(2026-10-20 用户定):界面按工具调用里的 text 画进这一轮的气泡,公告板不投递(server/harness/tools/userMessage.mjs)
+      if (to.toLowerCase() === 'user') return { ok: true, shown: true, note: '已显示在用户的对话气泡里' };
       const targets = to === 'all' ? liveAgents().filter((a) => a.id !== key).map((a) => a.id) : [to];
       if (targets.length === 0) return { ok: false, error: '没有别的 Agent 在跑' };
       const hops = (key && agents.get(key)?.hops) || 0;

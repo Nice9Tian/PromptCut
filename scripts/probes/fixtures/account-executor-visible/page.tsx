@@ -1,6 +1,7 @@
 import React, { useEffect, useSyncExternalStore, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MessageList } from '../../../../src/editor/right/chat/MessageList';
+import { AgentActivityPanel, useRoundSelection } from '../../../../src/editor/right/chat/ActivityPanel';
 import { getChatStore, useChatMessages } from '../../../../src/ai/liveChat';
 import { useInstallJobs } from '../../../../src/ai/sttInstallStore';
 import { createCloudApi } from '../../../../src/ai/cloud/cloudApi';
@@ -17,6 +18,7 @@ function Page() {
   const messages = useChatMessages(store);
   const view = useSyncExternalStore(session.subscribe, session.getView, session.getView);
   const installJobs = useInstallJobs();
+  const round = useRoundSelection(messages);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState(false);
   useEffect(() => { session.open(config.conversationId); return () => session.close(); }, []);
@@ -31,7 +33,10 @@ function Page() {
       data-cursor={view.lastSeq} data-error={error || !!view.problem}>{view.connection}</output>
     <MessageList messages={messages} senders={view.senders}
       view="verbose" showThinking={true} installJobs={installJobs} expanded={new Set()} openRuns={new Set()}
-      rowHandlers={{ toggleTool() {}, toggleChip() {}, toggleRun() {} }} onPickExample={() => {}} />
+      rowHandlers={{ toggleTool() {}, toggleChip() {}, toggleRun() {} }} onPickExample={() => {}} selectedRound={round.id} onSelectRound={round.select} />
+    {/* 操作与汇报在气泡下方的「Agent 操作」里(2026-10-20 用户定:气泡里只展示在做什么) */}
+    <AgentActivityPanel messages={messages} selectedId={round.id} onSelect={round.select} view="verbose"
+      installJobs={installJobs} expanded={new Set()} on={{ toggleTool() {}, toggleChip() {}, toggleRun() {} }} />
   </main>;
 }
 createRoot(document.getElementById('root')!).render(<Page />);

@@ -262,7 +262,7 @@ test('云端 Agent 的反向通道(服务层)', async (t) => {
     assert.ok(me.events.filter((e) => e.type === 'tool_result').every((e) => e.ok === true));
     me.off(); // 关掉页面
     const events = await kit.finished(alice, 'c-r9');
-    // 末尾那一条是代交的收尾汇报(模型没交;harness/agent.mjs requireFinalReport),不算脚本里的步骤
+    // 汇报不算脚本里的步骤
     const results = events.filter((e) => e.type === 'tool_result' && e.name !== 'report_progress');
     assert.equal(results.length, 6);
     assert.deepEqual(results.slice(4).map((e) => e.ok), [false, false], '页面走了之后的两步没做成');
@@ -358,7 +358,7 @@ test('CA-REV-10 HTTP:pageId、?page=、POST page-results;别人的对话 404,不
   assert.deepEqual(reqs.map((r) => [r.tool, r.args]), [['seek', { t: 6 }], ['pause', {}]]);
   assert.ok(reqs.every((r) => r.seq === undefined));
   const results = mine.events.filter((e) => e.type === 'tool_result');
-  assert.deepEqual(results.map((e) => [e.name, e.ok]), [['seek', true], ['pause', true], /* 模型没交收尾汇报:运行器按文字回复代交一份(harness/agent.mjs requireFinalReport) */ ['report_progress', true]]);
+  assert.deepEqual(results.map((e) => [e.name, e.ok]), [['seek', true], ['pause', true]]);
   // 按请求聚合回答,保留原来 3 秒的防卡死上限;任何回答失败都向测试传播。
   let answerTimer;
   try {

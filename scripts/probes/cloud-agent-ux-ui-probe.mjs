@@ -34,7 +34,8 @@
  *       `members`(渲染服务的目录里看)恒为假。
  *   A3  被改动的重卡由渲染服务渲出来、产物入库(对话记录里有「渲染完成」,渲染节点做完的任务数增加,素材服务里多出文件);渲染全程没有成员在线。
  * 三、另一位成员从在线浏览器进项目(真实页面)
- *   A4  bob 进项目:页面里的项目就是 12 次改动之后的样子;「Agent 操作记录」里这一轮的工具调用都在,署名是「〈创建者〉的云端 Agent」。
+ *   A4  bob 进项目:页面里的项目就是 12 次改动之后的样子;bob 的 AI 栏底部「Agent 操作」不混进创建者那个对话的操作(2026-10-20 起「Agent 操作」
+ *       只显示自己正在看的对话,取代按项目频道列全部工具事件的「Agent 操作记录」;署名改由 B1 的成员列表核对)。
  *   A5  舞台上的画面是渲好的预渲染结果:播放时两张重卡都贴着快照、没有占位;没有「需要本地 PC 渲染辅助」的图标与时间轴徽标;
  *       层表里这几层的环境指纹是云节点渲染服务的;舞台截图不是空白(颜色不止一种)。
  * 四、创建者重新打开(新进程)
@@ -42,8 +43,9 @@
  *       (全部工具调用、最后的回复、「云端渲染完成」);项目是最新版本;预渲染结果已在(层表有层;在线页面播放时贴快照)。
  *   A7  点「撤销这步」撤掉 Agent 的最后一处改动:创建者页面里那个参数回到上一次的值,按钮变成「已撤销」;bob 的页面也看到撤销的结果。
  * 五、中途想停、换设备(步骤 stop)
- *   B1  另起一遍更长的任务(桌面版发起),发起方同样被结束。之后 bob 从在线浏览器进项目看着:「Agent 操作记录」的条数一点点涨(改动一条条出现),
- *       署名是「〈创建者〉的云端 Agent」;成员列表里创建者那一行下有「〈创建者〉的云端 Agent」而他本人不在线(没有「编辑中」)。
+ *   B1  另起一遍更长的任务(桌面版发起),发起方同样被结束。之后 bob 从在线浏览器进项目看着:页面里的项目一次次变(改动一条条出现);
+ *       成员列表里创建者那一行下有「〈创建者〉的云端 Agent」而他本人不在线(没有「编辑中」)——署名在这里核对。
+ *       (原先看「Agent 操作记录」的条数与每行署名;2026-10-20 那块换成只显示自己对话的「Agent 操作」,别的成员的操作不再列在 AI 栏里。)
  *   B2  创建者重新打开桌面版(新进程、同一台设备):AI 栏仍是本机驱动,出现「云端有一个对话正在进行」,点「接上看看」接上、看得到过程;
  *       点「停止」后 5 秒内停下,对话记录里是已停止;之后项目不再变。
  *   B3  另一台设备(另一个浏览器进程与设备号、同一创建者身份,在线页面):历史里打开同一个对话接着看(过程都在、是已停止的),
@@ -82,7 +84,7 @@ import { createTimings } from './probe-timings.mjs';
 import {
   ROOT, sleep, USER_PORTS, createUi, startStack, startDesktop, killDesktop, launchBrowser, killBrowser, alive, newPage, P, mockSteps, msgs, view, conversationOf,
   toolParts, lastAssistant, idle, panelText, providerOptions, sendText, joinOnline, sharedProjectOf, hostedToggle, openProjectSettings,
-  creatorToggleService, closeDialogs, eventLog, membersList, clipOnStage, stageShot, pixelStats, portFree, gateSettled, clickUntil,
+  creatorToggleService, closeDialogs, activity, undoLatestStep, membersList, clipOnStage, stageShot, pixelStats, portFree, gateSettled, clickUntil,
 } from './cloud-agent-ui-lib.mjs';
 
 const argv = process.argv.slice(2);
@@ -390,10 +392,10 @@ async function leavePass(how, tag, salt) {
   const bob = await onlineUp(CRED.bob);
   const want = { title: `${salt} 第 10 次:改文案`, rows: rowsOf(salt, 12), statefulEnd: 2.5, canvasEnd: 2 };
   const got = await until(`${tag}:bob 的页面读到最新的项目`, async () => { const p = await pageProject(bob.page); return p && p.rows === want.rows ? p : null; }, 30_000, 200);
-  const log = await until(`${tag}:bob 的「Agent 操作记录」里这一轮的工具调用都在`, async () => { const l = await eventLog(bob.page); return l && l.rows.length > 0 && l.count >= LEAVE_TOOLS ? l : null; }, 20_000, 200);
-  const whos = [...new Set((log?.rows ?? []).map((r) => r.who))];
-  check(`${tag} A4 另一位成员从在线浏览器进项目:项目是改动之后的样子,「Agent 操作记录」里每一步的署名是「${CREATOR_SIGN}」`, !!got && got.title === want.title && got.statefulEnd === want.statefulEnd && got.canvasEnd === want.canvasEnd && !!log && whos.length === 1 && whos[0] === CREATOR_SIGN, {
-    project: got, eventLog: log ? { count: log.count, shown: log.rows.length, who: whos, tools: [...new Set(log.rows.map((r) => r.tool))] } : null,
+  // 「Agent 操作」只显示 bob 自己正在看的对话:创建者那个对话的这一轮不该出现在 bob 这里
+  const bobAct = await activity(bob.page);
+  check(`${tag} A4 另一位成员从在线浏览器进项目:项目是改动之后的样子;bob 的「Agent 操作」里没有混进创建者那个对话的操作`, !!got && got.title === want.title && got.statefulEnd === want.statefulEnd && got.canvasEnd === want.canvasEnd && (bobAct === null || bobAct.count < LEAVE_TOOLS), {
+    project: got, bobActivity: bobAct ? { round: `${bobAct.index}/${bobAct.total}`, count: bobAct.count } : null,
   });
   await shot(bob.page, `${tag}-2-bob-sees-changes`);
   const play = await playbackSnapshots(bob.page, `${tag}-3-bob-stage-prerendered`);
@@ -442,16 +444,13 @@ async function leavePass(how, tag, salt) {
   });
   await shot(back.page, `${tag}-4-creator-reopened`);
   // 撤销 Agent 的最后一处改动(第 12 次写入:rows 回到第 9 次的值)
-  const logBack = await until(`${tag}:创建者的「Agent 操作记录」里有可撤销的步骤`, async () => { const l = await eventLog(back.page); return l && l.rows.some((r) => r.undo === 'ready') ? l : null; }, 20_000, 200);
-  const target = logBack?.rows.find((r) => r.undo === 'ready') ?? null;
-  if (target) await clickUntil(back.page, `[data-pc="agent-event"][data-event-id="${target.id}"] [data-pc="agent-undo"]:not([disabled])`, async () => (await eventLog(back.page))?.rows.find((r) => r.id === target.id)?.undo === 'done');
+  const actBack = await until(`${tag}:创建者的「Agent 操作」显示这一轮`, async () => { const a = await activity(back.page); return a && a.count > 0 ? a : null; }, 20_000, 200);
+  const target = actBack ? await undoLatestStep(back.page) : null;
   const undoneMine = await until(`${tag}:撤销后创建者页面里参数回到上一次的值`, async () => ((await pageProject(back.page))?.rows === rowsOf(salt, 9) ? true : null), 10_000, 150);
   const undoneBob = await until(`${tag}:bob 的页面也看到撤销的结果`, async () => ((await pageProject(bob.page))?.rows === rowsOf(salt, 9) ? true : null), 10_000, 150);
-  const rowAfter = (await eventLog(back.page))?.rows.find((r) => r.id === target?.id) ?? null;
   const titleKept = (await pageProject(bob.page))?.title === want.title;
-  check(`${tag} A7 「撤销这步」撤掉 Agent 的最后一处改动:参数回到上一次的值、按钮变成「已撤销」;别的成员看到撤销的结果,别的改动还在`, !!target && !!undoneMine && !!undoneBob && rowAfter?.undo === 'done' && titleKept, {
-    undone: target ? { tool: target.tool, who: target.who } : null, button: rowAfter?.undo ?? null, creatorSees: !!undoneMine, otherMemberSees: !!undoneBob, otherChangesKept: titleKept,
-    signOnCreatorPage: [...new Set((logBack?.rows ?? []).map((r) => r.who))],
+  check(`${tag} A7 在「Agent 操作」里点「撤销这步」撤掉 Agent 的最后一处改动:参数回到上一次的值、按钮变成「已撤销」;别的成员看到撤销的结果,别的改动还在`, !!target?.done && !!undoneMine && !!undoneBob && titleKept, {
+    undone: target ?? null, round: actBack ? `${actBack.index}/${actBack.total} · ${actBack.count} 次操作` : null, creatorSees: !!undoneMine, otherMemberSees: !!undoneBob, otherChangesKept: titleKept,
   });
   await shot(back.page, `${tag}-6-creator-undone`);
   const errors = [...(bob.page.pageErrors ?? []), ...(back.page.pageErrors ?? [])];
@@ -504,10 +503,9 @@ async function realPass(how, tag) {
 
   const bob = await onlineUp(CRED.bob);
   const got = await until(`${tag}:bob 的页面读到改动`, async () => { const p = await pageProject(bob.page); return p && p.title === '季度渠道占比' ? p : null; }, 30_000, 200);
-  const log = await until(`${tag}:bob 的「Agent 操作记录」里有这一轮`, async () => { const l = await eventLog(bob.page); return l && l.rows.length > 0 ? l : null; }, 20_000, 200);
-  const whos = [...new Set((log?.rows ?? []).map((r) => r.who))];
-  check(`${tag} RA4 另一位成员从在线浏览器进项目:三处改动都在,「Agent 操作记录」里的署名是「${CREATOR_SIGN}」`, !!got && /微信\s*,\s*91/.test(String(got.rows ?? '')) && got.statefulEnd === 2.5 && whos.length === 1 && whos[0] === CREATOR_SIGN, {
-    project: got, eventLog: log ? { count: log.count, who: whos, tools: [...new Set(log.rows.map((r) => r.tool))] } : null,
+  const bobAct = await activity(bob.page);
+  check(`${tag} RA4 另一位成员从在线浏览器进项目:三处改动都在;bob 的「Agent 操作」里没有混进创建者那个对话的操作`, !!got && /微信\s*,\s*91/.test(String(got.rows ?? '')) && got.statefulEnd === 2.5 && (bobAct === null || bobAct.count === 0), {
+    project: got, bobActivity: bobAct ? { round: `${bobAct.index}/${bobAct.total}`, count: bobAct.count } : null,
   });
   await shot(bob.page, `${tag}-2-bob-sees-changes`);
   const play = await playbackSnapshots(bob.page, `${tag}-3-bob-stage-prerendered`);
@@ -534,15 +532,13 @@ async function realPass(how, tag) {
   });
   await shot(back.page, `${tag}-4-creator-reopened`);
   const before = JSON.stringify(await pageProject(back.page));
-  const logBack = await until(`${tag}:创建者的「Agent 操作记录」里有可撤销的步骤`, async () => { const l = await eventLog(back.page); return l && l.rows.some((r) => r.undo === 'ready') ? l : null; }, 20_000, 200);
-  const target = logBack?.rows.find((r) => r.undo === 'ready') ?? null;
-  if (target) await clickUntil(back.page, `[data-pc="agent-event"][data-event-id="${target.id}"] [data-pc="agent-undo"]:not([disabled])`, async () => (await eventLog(back.page))?.rows.find((r) => r.id === target.id)?.undo === 'done');
+  const actBack = await until(`${tag}:创建者的「Agent 操作」显示这一轮`, async () => { const a = await activity(back.page); return a && a.count > 0 ? a : null; }, 20_000, 200);
+  const target = actBack ? await undoLatestStep(back.page) : null;
   const undoneMine = await until(`${tag}:撤销后创建者页面里项目变了`, async () => (JSON.stringify(await pageProject(back.page)) !== before ? true : null), 10_000, 150);
   const mineAfter = await pageProject(back.page);
   const undoneBob = await until(`${tag}:bob 的页面也看到撤销的结果`, async () => { const p = await pageProject(bob.page); return p && p.title === mineAfter?.title && p.rows === mineAfter?.rows && p.statefulEnd === mineAfter?.statefulEnd ? true : null; }, 10_000, 150);
-  const rowAfter = (await eventLog(back.page))?.rows.find((r) => r.id === target?.id) ?? null;
-  check(`${tag} RA7 「撤销这步」撤掉 Agent 的一处改动:按钮变成「已撤销」,创建者与别的成员都看到撤销的结果`, !!target && !!undoneMine && !!undoneBob && rowAfter?.undo === 'done', {
-    undone: target ? { tool: target.tool, who: target.who } : null, button: rowAfter?.undo ?? null, after: mineAfter ? { title: mineAfter.title, rows: mineAfter.rows, statefulEnd: mineAfter.statefulEnd } : null, otherMemberSees: !!undoneBob,
+  check(`${tag} RA7 在「Agent 操作」里点「撤销这步」撤掉 Agent 的一处改动:按钮变成「已撤销」,创建者与别的成员都看到撤销的结果`, !!target?.done && !!undoneMine && !!undoneBob, {
+    undone: target ?? null, after: mineAfter ? { title: mineAfter.title, rows: mineAfter.rows, statefulEnd: mineAfter.statefulEnd } : null, otherMemberSees: !!undoneBob,
   });
   const errors = [...(back.errors ?? []), ...(bob.errors ?? [])];
   check(`${tag} 这一遍的页面没有页面错误`, errors.length === 0, { sample: errors.slice(0, 3) });
@@ -622,12 +618,14 @@ async function stopStep() {
   // 创建者那台电脑上的软件进程先起来(还没开页面、没有任何连接),省下后面等它启动的时间
   const server2 = await desktopServer();
   const bob = await onlineUp(CRED.bob);
+  // 改动一条条出现:bob 页面里的项目在 20 秒里变了几次(原先数「Agent 操作记录」的条数;2026-10-20 那块只显示自己的对话了)
   const counts = [];
-  const signs = new Set();
   const t0 = Date.now();
+  let lastState = null;
   while (Date.now() - t0 < 20_000) {
-    const l = await eventLog(bob.page);
-    if (l) { if (counts.at(-1) !== l.count) counts.push(l.count); for (const r of l.rows.slice(0, 3)) signs.add(r.who); }
+    const p = await pageProject(bob.page).catch(() => null);
+    const state = p ? JSON.stringify(p) : null;
+    if (state && state !== lastState) { counts.push(counts.length + 1); lastState = state; }
     await sleep(250);
   }
   // 创建者断掉的会话保留期满之后,成员列表里他那一行只剩云端 Agent
@@ -641,9 +639,9 @@ async function stopStep() {
     await sleep(2000);
   }
   check('S B1 发起方退出后,另一位成员从在线浏览器进项目看着:改动一条条出现,署名是创建者的云端 Agent;成员列表里创建者名下有云端 Agent 而他本人不在线', sent.accepted && k.browserGone && k.serverGone
-    && counts.length >= 3 && counts.every((c, i) => i === 0 || c > counts[i - 1]) && signs.size === 1 && signs.has(CREATOR_SIGN)
+    && counts.length >= 3
     && !!aliceRow && aliceRow.cloudRow === CREATOR_SIGN && !aliceRow.editing && !(mem?.rows ?? []).some((r) => r.editing && !/自己/.test(r.text)), {
-    initiatorGone: k.browserGone && k.serverGone, eventLogCountsOverTime: counts, sign: [...signs], members: { button: mem?.button, rows: mem?.rows.map((r) => r.text.slice(0, 70)) },
+    initiatorGone: k.browserGone && k.serverGone, projectChangesSeen: counts.length, members: { button: mem?.button, rows: mem?.rows.map((r) => r.text.slice(0, 70)) },
   });
   await shot(bob.page, 'S-1-bob-watching');
 

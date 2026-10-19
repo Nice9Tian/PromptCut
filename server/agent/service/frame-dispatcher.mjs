@@ -161,6 +161,9 @@ export async function dispatchFrameSnapshot({
   }
 
   // 3. 托管方的渲染服务（进入按轮占用队列）
+  // 托管渲染没出图时记下它的回话：手机浏览器也兜不住时原样交回，模型看到真正的原因
+  // （项目没开渲染节点、渲染超时及其调试信息、片段不存在……），而不是笼统的「没有可用的出图节点」
+  let cloudOutcome = null;
   if (typeof cloudLook === 'function') {
     try {
       log('frame.dispatch', { source: FRAME_SOURCE_LEVELS.HOSTED_RENDER });
@@ -169,10 +172,12 @@ export async function dispatchFrameSnapshot({
         log('frame.success', { source: FRAME_SOURCE_LEVELS.HOSTED_RENDER });
         return { ...res, source: FRAME_SOURCE_LEVELS.HOSTED_RENDER };
       }
-      log('frame.cloud-unsuccessful', { source: FRAME_SOURCE_LEVELS.HOSTED_RENDER, res });
+      log('frame.cloud-unsuccessful', { source: FRAME_SOURCE_LEVELS.HOSTED_RENDER, error: typeof res?.error === 'string' ? res.error.slice(0, 200) : null });
+      if (res && typeof res === 'object') cloudOutcome = { result: { ...res, source: FRAME_SOURCE_LEVELS.HOSTED_RENDER } };
     } catch (err) {
       if (signal?.aborted) throw err;
-      log('frame.cloud-failed', { source: FRAME_SOURCE_LEVELS.HOSTED_RENDER, message: String(err?.message ?? err) });
+      log('frame.cloud-failed', { source: FRAME_SOURCE_LEVELS.HOSTED_RENDER, look: err?.look ?? null, message: String(err?.message ?? err) });
+      cloudOutcome = { error: err };
       // 若云端抛出不可用的错误且有手机浏览器，尝试手机浏览器兜底
     }
   }
@@ -202,5 +207,10 @@ export async function dispatchFrameSnapshot({
     }
   }
 
+  if (signal?.aborted) {
+    throw signal.reason ?? Object.assign(new Error('run-fenced'), { status: 403, code: 'run-fenced' });
+  }
+  if (cloudOutcome?.error) throw cloudOutcome.error;
+  if (cloudOutcome?.result) return cloudOutcome.result;
   throw new Error('这次没看成：没有可用的出图节点（成员设备离线或不合格，云端渲染服务不可用）。');
 }
