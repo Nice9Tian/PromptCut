@@ -51,6 +51,8 @@ import { setCloudConsentSource } from "../../ai/cloud/consent";
  * 写成 `!ONLINE_BUILD && !ONLINE`:在线构建里整句折成 false,单测里把 `mode.ts` 换成在线桩时照旧按 `ONLINE` 走。
  */
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+/** 账号项目：续会话读创建者改过的服务开关、自己的权限与成员变化的间隔(毫秒)；会话快到期时随时续 */
+export const ACCOUNT_METADATA_RENEW_MS = 15_000;
 import { loadBrowserDevice } from "../../online/device";
 import type { CloudAccountClient, ProjectSession, AccountMembersSnapshot, AccountMemberOperation, AccountMemberResult } from "../../account/client";
 import { hostedWsUrlOf } from "../../online/invite";
@@ -1324,9 +1326,16 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         };
       }
       if (cur?.link === link) {
+        // 每 3 秒看一眼连接到期没有(本机算，不发请求)；续会话(读创建者改过的服务开关、自己的权限、成员变化)
+        // 每 15 秒一次，会话快到期时随时续。原来每 3 秒无条件续一次，2 分钟 34 次 `/account/session`(2026-10-19 在线实测)，
+        // 文档服务每次都要签三张票据
+        let lastRenew = Date.now();
         const metadataTimer = setInterval(() => {
           if (!isCurrent()) return;
-          void renew().catch(error => { if (error instanceof AccountFailure && (error.status === 401 || error.status === 403)) fail(error); });
+          if (Date.now() - lastRenew >= ACCOUNT_METADATA_RENEW_MS || current.expiresAt <= Date.now() + 60_000) {
+            lastRenew = Date.now();
+            void renew().catch(error => { if (error instanceof AccountFailure && (error.status === 401 || error.status === 403)) fail(error); });
+          }
           void life.tick();
         }, 3000);
         cur.offs.push(() => clearInterval(metadataTimer));

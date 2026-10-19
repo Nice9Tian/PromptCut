@@ -7,10 +7,21 @@ import { CONVERSATION_CONTROL_ROOT, conversationControlOperations, conversationC
 import { createConversationTransports } from '../agent/service/conversation-transports.mjs';
 
 const fail = code => { throw accountError(503, code); };
+/**
+ * 本地「已关读取」回执在文档服务确认关掉以后还留多久（毫秒）。
+ *
+ * 每次 HTTP 读取（列对话、开事件流、发消息后的读回）关掉时都在本地账本里记一行，原来一行都不删：
+ * 2026-10-19 节点上这本账攒到 10.6 MB 的一段 JSON，每记一行都要整段解析、整段写回并落盘（约 0.25 秒 CPU 加一次 10 MB 的写），
+ * 把主服务的事件循环占住，页面上列对话、发消息、取 info 一个个排着等 2～7 秒。
+ * 这一行只在两种时候有用：文档服务的读取控制流点名要关它（`consume` 里的 `closeHandles` 要先在本地查到它），
+ * 或重连后文档服务报它还开着（`ready`）。文档服务确认关掉以后不会再点名它；点名与确认在两条连接上，先后不定，
+ * 所以确认以后再留一阵才删。别的实例（重启前的进程、旧的一代）的行这个实例永远用不上（`closeHandles` 按实例与代核对），直接删。
+ */
+export const CONFIRMED_CLOSE_KEEP_MS = 10 * 60_000;
 /** One OS instance, one actual pinned control connection. No human token or
  * delegation is persisted. Local receipts are produced by actual close only. */
 export function createConversationControlClient({ origin, tls, serverFingerprint256, runClient,
-  receiptFile, retryMs = 500, onDiagnostic = () => {} } = {}) {
+  receiptFile, retryMs = 500, onDiagnostic = () => {}, now = Date.now, confirmedKeepMs = CONFIRMED_CLOSE_KEEP_MS } = {}) {
   const base = new URL(origin), pin = certificateFingerprint(serverFingerprint256);
   if (base.protocol !== 'https:' || base.pathname !== '/' || base.search || base.hash || base.username || base.password ||
       !tls?.key || !tls?.cert || !tls?.ca || !/^[a-f0-9]{64}$/.test(pin) ||
@@ -18,12 +29,22 @@ export function createConversationControlClient({ origin, tls, serverFingerprint
   let closed = false, store = null, stream = null, retry = null, starting = null, expectedSeq = 0, identity = null;
   const requests = new Set(), work = new Map();
   const local = () => store.read().agentReadClosedV1 ?? {};
+  /** 文档服务确认关掉的读取 → 确认的时刻（只在内存里；重启后是新实例，旧行整批按「别的实例」删） */
+  const confirmed = new Map();
+  const markConfirmed = ids => { const at = now(); for (const id of ids) confirmed.set(id, at); };
   function persistClosed(ids) {
+    const cutoff = now() - confirmedKeepMs, dropped = [];
     store.transaction(state => {
       const rows = state.agentReadClosedV1 ??= {};
+      for (const [readHandleId, row] of Object.entries(rows)) {
+        const otherInstance = row?.instanceId !== identity.instanceId || row?.instanceGeneration !== identity.instanceGeneration;
+        const at = confirmed.get(readHandleId);
+        if (otherInstance || (at !== undefined && at <= cutoff)) { delete rows[readHandleId]; dropped.push(readHandleId); }
+      }
       for (const readHandleId of ids) rows[readHandleId] ??= { readHandleId,
         instanceId: identity.instanceId, instanceGeneration: identity.instanceGeneration };
     });
+    for (const id of dropped) confirmed.delete(id);
   }
   const transports = createConversationTransports({ instanceIdentity: () => identity,
     async onClosed(id) { if (!store || closed) return; persistClosed([id]); await closeHandles([id]); } });
@@ -96,7 +117,9 @@ export function createConversationControlClient({ origin, tls, serverFingerprint
       if (!row || row.instanceId !== identity.instanceId || row.instanceGeneration !== identity.instanceGeneration)
         fail('read-resource-unknown');
     }
-    return request('close', { requestId: `close:${ids.join(':').slice(0, 180)}`, readHandleIds: ids });
+    const result = await request('close', { requestId: `close:${ids.join(':').slice(0, 180)}`, readHandleIds: ids });
+    markConfirmed(ids);
+    return result;
   }
   function consume(value) {
     if (value?.authorityId !== identity.authorityId) fail('read-control-authority-mismatch');
@@ -151,5 +174,6 @@ export function createConversationControlClient({ origin, tls, serverFingerprint
     async close() { closed = true; clearTimeout(retry); const draining = transports.close();
       for (const req of requests) req.destroy(); await Promise.allSettled([draining, stream, ...work.values()]);
       store?.close(); },
-    describe: () => ({ ...transports.describe(), executorMounted: false }) };
+    describe: () => ({ ...transports.describe(), executorMounted: false,
+      localClosedReceipts: store ? Object.keys(local()).length : 0 }) };
 }
