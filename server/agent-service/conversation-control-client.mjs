@@ -175,5 +175,5 @@ export function createConversationControlClient({ origin, tls, serverFingerprint
       for (const req of requests) req.destroy(); await Promise.allSettled([draining, stream, ...work.values()]);
       store?.close(); },
     describe: () => ({ ...transports.describe(), executorMounted: false,
-      localClosedReceipts: store ? Object.keys(local()).length : 0 }) };
+      localClosedReceipts: store ? Object.keys(local()).length : 0, confirmedClosedReceipts: confirmed.size }) };
 }

@@ -121,6 +121,8 @@ test('本地已关读取回执：别的实例的整批删、确认关掉过了�
   for (let i = 0; i < 5; i++) { r = await list(); assert.equal(r.status, 200); }
   await until(() => docClosed() >= 6);
   assert.equal(controlClient.describe().localClosedReceipts, 6);
+  // 文档服务记「已关」先于本机收到关闭请求的回应(那时才记「确认」)：等 6 行都确认了再拨时钟，否则满负载下最后一行的确认落在拨钟之后
+  await until(() => controlClient.describe().confirmedClosedReceipts >= 6);
 
   // 过了留存期：下一次记行时把它们删掉
   clock += 61_000;
