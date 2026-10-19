@@ -8,7 +8,8 @@
  *   剪辑2:一条序列,tone 0～6 秒;
  *   剪辑1(激活):一个剪辑段,起点 2 秒、终点 7 秒、cutOffset 1、淡入 1 秒,引用剪辑2;总时长 9 秒。
  * 期望成片的声音:0～2 秒静音;2～3 秒淡入;3～7 秒是正弦波(取自 tone 的 1～5 秒);7～9 秒静音。
- * 断言:用 ffmpeg 的 astats 量各段的 RMS(dB):静音段 < -60 dB,有声段 > -20 dB,淡入段 2.0～2.5 秒的 RMS 比 3～3.5 秒低 6 dB 以上。
+ * 断言:用 ffmpeg 的 astats 量各段的 RMS(dB):段前 < -60 dB;3～7 秒和原素材 1～5 秒的电平差不到 1 dB;段后静音或没有声音样本;
+ * 淡入段 2.0～2.5 秒的 RMS 比 3～3.5 秒低 6 dB 以上。
  * 两条路各导一遍(缺省 Chrome 混音;`--audio ffmpeg`)。最后一行打一行 JSON。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -40,6 +41,12 @@ const project = {
 };
 
 const server = await startDevServer({ env: { PROMPTCUT_EXPORT_DIR: exportDir }, logFile: path.join(OUT, 'vite.log'), port: PORT, log: (m) => console.log('[dev]', m) });
+/** 一个文件 [from, to) 秒的整体 RMS(dB);没有声音样本时 null */
+function rmsOf(file, from, to) {
+  const r = spawnSync('ffmpeg', ['-hide_banner', '-ss', String(from), '-t', String(to - from), '-i', file, '-vn', '-af', 'astats=metadata=0:reset=0', '-f', 'null', '-'], { encoding: 'utf8', windowsHide: true });
+  const m = /Overall[\s\S]*?RMS level dB:\s*(-?inf|-?[\d.]+)/.exec(r.stderr);
+  return m ? (m[1].includes('inf') ? -200 : Number(m[1])) : null;
+}
 const results = {};
 const fails = [];
 try {
@@ -54,17 +61,18 @@ try {
       const p = spawn(process.execPath, args, { cwd: REPO, env: { ...process.env, PROMPTCUT_EXPORT_DIR: exportDir }, stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
       p.on('close', resolve);
     });
-    const video = fs.readdirSync(out).find((f) => /\.(mp4|mov|webm)$/i.test(f));
+    // 带声音的是 preview.mp4(overlay.mov 只是透明的画面层)
+    const video = fs.readdirSync(out).find((f) => f === 'preview.mp4') ?? fs.readdirSync(out).find((f) => /\.mp4$/i.test(f));
     if (code !== 0 || !video) { fails.push(`${mode}: 导出失败(退出码 ${code})`); continue; }
     const file = path.join(out, video);
-    const rms = (from, to) => {
-      const r = spawnSync('ffmpeg', ['-hide_banner', '-ss', String(from), '-t', String(to - from), '-i', file, '-vn', '-af', 'astats=metadata=0:reset=0', '-f', 'null', '-'], { encoding: 'utf8', windowsHide: true });
-      const m = /Overall[\s\S]*?RMS level dB:\s*(-?inf|-?[\d.]+)/.exec(r.stderr);
-      return m ? (m[1].includes('inf') ? -200 : Number(m[1])) : null;
-    };
+    const rms = (from, to) => rmsOf(file, from, to);
     const w = { pre: rms(0.1, 1.9), fadeHead: rms(2.0, 2.5), fadeTail: rms(3.0, 3.5), body: rms(3.5, 6.9), post: rms(7.1, 8.9) };
     results[mode] = { file, ...w };
-    const ok = w.pre !== null && w.pre < -60 && w.body > -20 && w.post < -60 && w.fadeTail - w.fadeHead > 6;
+    // 有声段的电平要和原素材一样(段音量 1);段尾之后成片里没有声音样本(astats 量不到)或是静音都算对
+    const ref = rmsOf(tone, 1, 5);
+    const ok = w.pre !== null && w.pre < -60 && w.body !== null && Math.abs(w.body - ref) < 1 && Math.abs(w.fadeTail - ref) < 1
+      && (w.post === null || w.post < -60) && w.fadeTail - w.fadeHead > 6;
+    w.reference = ref;
     if (!ok) fails.push(`${mode}: 声音窗口不对 ${JSON.stringify(w)}`);
     console.log(`${ok ? 'PASS' : 'FAIL'} ${mode}`, JSON.stringify(w));
   }
