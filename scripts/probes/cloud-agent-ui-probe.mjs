@@ -352,7 +352,9 @@ try {
         await B.waitForFunction((id) => window.__pcCloud?.main?.conversationId?.() === id, { timeout: 30_000 }, convId).catch(() => {});
         const back = await until('O4:点开后找回完整过程(含刚才的工具调用与回复)', async () => {
           const text = await panelText(B);
-          // 工具调用在底部「Agent 操作」里,显示最新一轮(读项目 + 三处改动 = 4 次;撤销那一步不算 Agent 的操作)
+          // 工具调用在底部「Agent 操作」里,一次显示一轮、缺省是最新一轮;O1 那一轮后面还有别的轮次,
+          // 所以先点回复里有「三处都改好了」的那个气泡,让面板切到 O1 那一轮(读项目 + 三处改动 = 4 次)
+          await P(B, () => [...document.querySelectorAll('[data-pc="agent-bubble"]')].find((el) => el.textContent?.includes('三处都改好了'))?.click()).catch(() => {});
           const ops = (await activity(B))?.count ?? 0;
           return text.includes('三处都改好了') && ops >= 4 ? { ops } : null;
         }, 30_000, 300);
