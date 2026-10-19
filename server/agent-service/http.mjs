@@ -13,6 +13,7 @@
  * URL 与请求体里没有项目与成员的字段,页面自报不了。乙块接上之前 `authenticate` 由测试替身给;没给时一律 401。
  * 本文件不引用 `src/`。
  */
+import { AsyncResource } from 'node:async_hooks';
 import { AgentServiceError, CONVERSATION_ID_RE, ownerKeyOf } from '../agent/service/create-agent-service.mjs';
 import { createVisualRoutes, matchVisualRoute } from './visual-routes.mjs';
 
@@ -203,7 +204,9 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
     }
     const kickKey = streamKey(identity.projectId, conversationId);
     let lastDocRead = 0, kicked = false;
-    const kick = () => { kicked = true; void poll().catch(() => {}); };
+    // 叫醒来自别人的请求(发消息、切权限、停止)：读取要记在这条流自己的读取通道上，不能记在叫醒它的那个请求名下
+    // (读取通道按异步上下文认是哪一个 HTTP 读取)，所以绑定在这条流的上下文里跑
+    const kick = AsyncResource.bind(() => { kicked = true; void poll().catch(() => {}); });
     if (!streamKicks.has(kickKey)) streamKicks.set(kickKey, new Set());
     streamKicks.get(kickKey).add(kick);
     const release = () => {

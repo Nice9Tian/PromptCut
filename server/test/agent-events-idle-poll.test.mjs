@@ -64,3 +64,40 @@ test('这个对话刚收下一条消息：马上读一次，不等空闲间隔',
   t.diagnostic(JSON.stringify({ before, afterSend: after }));
   assert.ok(after >= 1, '发送后 120 毫秒内已经读过一次');
 });
+
+test('叫醒的读取记在这条事件流自己的读取通道上，不记在叫醒它的那个发消息请求名下', async t => {
+  const { AsyncLocalStorage } = await import('node:async_hooks');
+  const als = new AsyncLocalStorage();
+  const owners = [];
+  let seq = 0;
+  const idle = { aclRevision: 1, queueRevision: 0, currentRunId: null, messages: [] };
+  const service = {
+    accountMode: true,
+    // 同真读取通道：每个 HTTP 请求一个上下文，读取按当前上下文认是哪一个请求
+    readTransports: { run: (req, _res, callback) => als.run({ id: ++seq, path: new URL(req.url, 'http://x').pathname }, callback),
+      dispatch: callback => callback() },
+    async conversation() { owners.push(als.getStore()?.path ?? null); return idle; },
+    async access() { return { allowed: true, aclRevision: 1 }; },
+    async send() { return { messageId: 'm1', runId: null, seq: 0 }; },
+  };
+  const api = createAgentHttp({ service, authenticate: async () => ({ accountMode: true, projectId: 'p', accountId: 'a', userId: 'a', delegation: 'd' }) });
+  // 真读取通道里发消息也在同一种读取范围里(http.mjs 的 messageRead)；这里让 messages 也走 run
+  service.runEvents = null;
+  const server = http.createServer((req, res) => { void service.readTransports.run(req, res, () => api.handle(req, res)); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const stream = http.get(`${base}/v1/conversations/c1/events?after=0`, res => { res.resume(); });
+  stream.on('error', () => {});
+  t.after(async () => { stream.destroy(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  await sleep(400);
+  const before = owners.length;
+  await new Promise((resolve, reject) => {
+    const req = http.request(`${base}/v1/conversations/c1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' } }, res => { res.resume(); res.on('end', resolve); });
+    req.on('error', reject); req.end(JSON.stringify({ prompt: 'hi', requestId: 'r1' }));
+  });
+  await sleep(150);
+  const kicked = owners.slice(before);
+  t.diagnostic(JSON.stringify(kicked));
+  assert.ok(kicked.length >= 1, '发送后读过');
+  assert.ok(kicked.every(p => p === '/v1/conversations/c1/events'), `被叫醒的读取都记在事件流名下：${JSON.stringify(kicked)}`);
+});
