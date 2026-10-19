@@ -13,7 +13,7 @@
 import type { ChatAttachment, ChatMessage } from "../types.ts";
 import type { ChatStore } from "../liveChat.ts";
 import { CloudError, cloudErrorText, type CloudApi } from "./cloudApi.ts";
-import { accountMessageId, queueSnapshot, applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, settleFromQueue, userMessageId } from "./events.ts";
+import { accountMessageId, queueSnapshot, applyCloudEvent, applyCloudEvents, cloudErrorMessage, hasOpenRun, markWaitingFromQueue, settleFromQueue, userMessageId } from "./events.ts";
 import type { CloudEvent, CloudSendBody, CloudSendAccepted, CloudQueueSnapshot, CloudSender } from "./types.ts";
 import type { PageRequestAnswer } from "./pageRequests.ts";
 
@@ -181,6 +181,36 @@ export function createCloudSession(deps: CloudSessionDeps) {
   let readEpoch = 0;
   /** 这一页刚发出去的消息带的附件(气泡里显示名字用):runId → 附件;服务端的 user 事件到了(或已经在)就贴上、从表里去掉 */
   const pendingAttachments = new Map<string, ChatAttachment[]>();
+  /**
+   * 账号模式:这一页刚发出、服务端的记录(`user` 事件)还没回来的用户消息(乐观显示,2026-10-19 用户要求「点发送当场出气泡」)。
+   * 本地气泡号 → 气泡;云端收下以后记上它的消息号,对应的 `user` 事件一到就把本地气泡换掉。
+   * 只是这一页自己的显示:云端没收下(没权限、被拒、网络断)时标成「没发出去」,不会显示成已发送;别的成员看不到它。
+   * 读取授权重来(断流重放、撤权清屏)时正文从头重放,本地气泡留在表里、重放后补回末尾。换对话时清掉。
+   */
+  const staged = new Map<string, ChatMessage & { cloudMessageId?: string }>();
+  function showStaged() {
+    if (!staged.size) return;
+    store.set((prev) => {
+      const ids = new Set(prev.map((m) => m.id));
+      const add = [...staged.values()].filter((m) => !ids.has(m.id));
+      return add.length ? [...prev, ...add] : prev;
+    });
+  }
+  function patchStaged(id: string, patch: Partial<ChatMessage> & { cloudMessageId?: string }) {
+    const cur = staged.get(id);
+    if (!cur) return;
+    const next = { ...cur, ...patch };
+    staged.set(id, next);
+    store.set((prev) => (prev.some((m) => m.id === id) ? prev.map((m) => (m.id === id ? next : m)) : [...prev, next]));
+  }
+  /** 云端这条消息的记录到了:本地气泡退场(服务端那条已经在对话里) */
+  function settleStaged(messageId: string) {
+    for (const [id, m] of staged) {
+      if (m.cloudMessageId !== messageId) continue;
+      staged.delete(id);
+      store.set((prev) => prev.filter((x) => x.id !== id));
+    }
+  }
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   /** 反向通道:两样都给了才开 */
   const pageSource = deps.pageId && deps.onPageRequest && api.pageResult ? deps.pageId : undefined;
@@ -254,6 +284,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     queue = null;
     senders = {};
     store.set([]);
+    showStaged();
     publish();
   }
 
@@ -277,7 +308,7 @@ export function createCloudSession(deps: CloudSessionDeps) {
     if (ev.type === 'queue.state' && conversationId) {
       const snapshot = queueSnapshot(ev, conversationId);
       if (!snapshot || (queue && (snapshot.queueRevision < queue.queueRevision || snapshot.aclRevision < queue.aclRevision))) return;
-      queue = snapshot; flush(); store.set((prev) => settleFromQueue(prev, queue)); publish(); return;
+      queue = snapshot; flush(); store.set((prev) => markWaitingFromQueue(settleFromQueue(prev, queue), queue)); publish(); return;
     }
     if (typeof ev.seq === "number") {
       if (ev.seq <= lastSeq) return; // 补发与实时交界处、重连后重复的:不重
@@ -291,8 +322,9 @@ export function createCloudSession(deps: CloudSessionDeps) {
       flush();
       if (ev.type === 'user' && typeof ev.messageId === 'string' && typeof ev.senderAccountId === 'string' && typeof ev.senderNameAtSend === 'string')
         senders = { ...senders, [accountMessageId(ev.messageId)]: { accountId: ev.senderAccountId, name: ev.senderNameAtSend } };
-      store.set((prev) => settleFromQueue(applyCloudEvent(prev, ev), queue));
+      store.set((prev) => markWaitingFromQueue(settleFromQueue(applyCloudEvent(prev, ev), queue), queue));
       if (ev.type === "user" && typeof ev.runId === "string") applyPendingAttachments(ev.runId);
+      if (ev.type === "user" && typeof ev.messageId === "string") settleStaged(ev.messageId);
     }
     publish();
   }
@@ -475,12 +507,34 @@ export function createCloudSession(deps: CloudSessionDeps) {
       revoked = false;
       queued = [];
       pendingAttachments.clear();
+      staged.clear();
       queue = null; senders = {};
       problem = null;
       store.set([]);
       publish();
       ensureLoop();
     },
+
+    /**
+     * 账号模式:用户一点发送就先在对话里放一条本地气泡(`sendState: "sending"`),回 它的号;之后 `send(…, { staged })` 用同一个号。
+     * `key`:同一条消息重发用同一个键(页面的请求号),气泡复用、不叠第二条;上一次没发出去的别的气泡这时撤掉。
+     */
+    stage(text: string, attachments?: ChatAttachment[], key?: string): string {
+      const id = `local-${key ?? Math.random().toString(36).slice(2, 10)}`;
+      for (const [other, m] of staged) if (other !== id && m.sendState === "failed") { staged.delete(other); store.set((prev) => prev.filter((x) => x.id !== other)); }
+      const prev = staged.get(id);
+      const message: ChatMessage & { cloudMessageId?: string } = { id, role: "user", text, sendState: "sending",
+        ...(attachments?.length ? { attachments } : {}), ...(prev?.cloudMessageId ? { cloudMessageId: prev.cloudMessageId } : {}) };
+      staged.set(id, message);
+      if (prev) patchStaged(id, { sendState: "sending", error: undefined }); else showStaged();
+      return id;
+    },
+
+    /** 本地气泡没发出去(发送前的检查没过,或发送失败):标出来、写上原因 */
+    failStaged(id: string, reason: string) { patchStaged(id, { sendState: "failed", error: `没有发出去：${reason}` }); },
+
+    /** 撤掉一条本地气泡(用户换了内容重新发等) */
+    dropStaged(id: string) { if (staged.delete(id)) store.set((prev) => prev.filter((x) => x.id !== id)); },
 
     /** 登记「正在看的对话被删了」的处理(界面退到新对话)。单独一个方法，免得改动创建会话那一处的接线 */
     setOnConversationDeleted(fn: ((conversationId: string) => void) | null) { onConversationDeleted = fn; },
@@ -489,20 +543,29 @@ export function createCloudSession(deps: CloudSessionDeps) {
     get conversationId() { return conversationId; },
 
     /** 发一条消息(`shown`:带的附件,只用于本页气泡的显示)。服务端回 202 之后保证流连着。出错抛 `CloudError`(界面显示它的 `message`) */
-    async send(body: CloudSendBody, shown?: ChatAttachment[]): Promise<void> {
+    async send(body: CloudSendBody, shown?: ChatAttachment[], opts?: { staged?: string }): Promise<void> {
       if (!conversationId || closed) throw new CloudError("bad-request", "还没有打开对话。");
       const seenBefore = lastSeq;
+      const stagedId = deps.accountMode ? opts?.staged : undefined;
+      const sentTo = conversationId;
       let accepted: CloudSendAccepted;
       try {
         // 旧通道在发消息时报页面号;账号模式的页面号由文档服务从选区快照里取(`selectionSnapshot.pageId`),这里不另报
         const page = deps.accountMode ? undefined : currentPage();
         accepted = await api.send(conversationId, page ? { ...body, pageId: page } : body);
       } catch (err) {
-        if (err instanceof CloudError) throw err;
-        throw new CloudError("network", cloudErrorText("network"));
+        const error = err instanceof CloudError ? err : new CloudError("network", cloudErrorText("network"));
+        if (stagedId && sentTo === conversationId) patchStaged(stagedId, { sendState: "failed", error: `没有发出去：${error.message}` });
+        throw error;
       }
       problem = null;
       known = true;
+      // 云端收下了:本地气泡改成「已发出」,等服务端的记录来换掉它;记录已经先从流里到了就直接撤掉
+      if (stagedId && sentTo === conversationId && staged.has(stagedId)) {
+        if (accepted.messageId && store.get().some((m) => m.id === accountMessageId(accepted.messageId!))) { staged.delete(stagedId); store.set((prev) => prev.filter((x) => x.id !== stagedId)); }
+        else if (!accepted.messageId) { staged.delete(stagedId); store.set((prev) => prev.filter((x) => x.id !== stagedId)); }
+        else patchStaged(stagedId, { sendState: "accepted", error: undefined, cloudMessageId: accepted.messageId });
+      }
       // 带了附件:气泡里照桌面版显示附件名(服务端的 user 事件自己带了就以它为准)
       if (shown?.length && accepted.runId) {
         pendingAttachments.set(accepted.runId, shown);

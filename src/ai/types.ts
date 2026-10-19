@@ -237,6 +237,12 @@ export interface ChatMessage {
   roleId?: string;
   /** 纯文字部分的拼接;简洁模式和会话历史都用它 */
   text: string;
+  /**
+   * 云端对话里这一页刚发出、服务端的记录还没回来的那条用户消息(乐观显示,`src/ai/cloud/session.ts` 的 `stage`):
+   * `sending` 正在发、`accepted` 云端已收下、等它开始处理、`failed` 没发出去(原因在 `error`)。
+   * 服务端的记录到了就换成它,这个字段跟着本地气泡一起消失。
+   */
+  sendState?: "sending" | "accepted" | "failed";
   attachments?: ChatAttachment[];
   /** 按发生顺序的片段,渲染以它为准;旧历史里没有时由 text/tools/statuses 兜底 */
   parts?: MessagePart[];

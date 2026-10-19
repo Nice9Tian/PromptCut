@@ -168,6 +168,16 @@ test('operation-wiring account-realm render service can read project when hosted
   }) });
   t.after(() => f.close());
   const a = await f.connect();
+  // 账号项目的渲染节点缺省开(product/document-service.md);先由创建者关掉,看拒绝,再开回来
+  assert.equal(f.authority.projectState(f.projectId).hosted?.render, true);
+  await f.authority.adminProject({ accessToken: f.sessions.a.accessToken }, {
+    projectId: f.projectId,
+    op: 'set-hosted-service',
+    service: 'render',
+    enabled: false,
+    expectedAccessRevision: f.authority.projectState(f.projectId).accessRevision,
+    requestId: 'disable-render-1',
+  });
   assert.equal((await open(a, f.projectId)).reason, 'service-disabled');
   await f.authority.adminProject({ accessToken: f.sessions.a.accessToken }, {
     projectId: f.projectId,

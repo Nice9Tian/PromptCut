@@ -23,6 +23,8 @@ import type { ChatAttachment } from "../types";
 import type { CloudChatItem, CloudInfo, CloudSendBody } from "./types";
 import { CLOUD_CHAT_LIMIT, CLOUD_CHAT_TEXT, cloudNoticeText } from "./chatTexts";
 import { createPoller } from "./poll";
+import { chatKey, freshKey, legacyCloudChatId, persistScopeOf, titlesKey } from "./persistKeys";
+import { cloudHistoryFor, type CloudHistoryEntry, type CloudHistorySnapshot } from "./historyStore";
 import { newPageId, runPageRequest, type PageRequestExec } from "./pageRequests";
 import { createAccountPageHandler } from "./accountPage";
 import { desktopCollectLocal, desktopCollectUpload } from "./collectLocal";
@@ -66,6 +68,7 @@ export function useCloudAgent(): CloudAgentState {
 /* ---------------- 小工具 ---------------- */
 
 const lsGet = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
+const safeStorage = (): Storage | null => { try { return typeof localStorage === "undefined" ? null : localStorage; } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* 存不了就只在这次页面里有效 */ } };
 
 export function newCloudChatId(): string {
@@ -74,14 +77,6 @@ export function newCloudChatId(): string {
 }
 
 const CHAT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const chatKey = (projectId: string, tabId: string, accountScope = "") => accountScope
-  ? `pc.cloudChat:${accountScope}:${projectId}:${tabId}` : `pc.cloudChat:${projectId}:${tabId}`;
-/** 这一页上「刚建的、还没发过消息」的新对话的 id(服务端还没有它;发出第一条消息后清掉)。刷新页面后靠它认出这仍是新对话 */
-const freshKey = (projectId: string, tabId: string, accountScope = "") => accountScope
-  ? `pc.cloudFresh:${accountScope}:${projectId}:${tabId}` : `pc.cloudFresh:${projectId}:${tabId}`;
-const titlesKey = (projectId: string, accountScope = "") => accountScope
-  ? `pc.cloudTitles:${accountScope}:${projectId}` : `pc.cloudTitles:${projectId}`;
-
 function readTitles(projectId: string, accountScope = ""): Record<string, string> {
   try {
     const v = JSON.parse(lsGet(titlesKey(projectId, accountScope)) ?? "{}");
@@ -224,7 +219,7 @@ export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudD
       const [info, list] = await Promise.all([withInfo ? api.info().catch(() => null) : Promise.resolve(null), api.list().catch(() => null)]);
       if (keyRef.current !== k) return;
       if (list) {
-        const titles = readTitles(cloud.projectId ?? "", accountScope);
+        const titles = readTitles(cloud.projectId ?? "", persistScopeOf(cloud.accountMode, cloud.accountId));
         setItems(list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x)));
         setRunning(list.filter((x) => x.state === "running").map((x) => x.id));
         setLoadedKey(k);
@@ -233,7 +228,7 @@ export function useCloudDigest(cloud: CloudAgentState, enabled: boolean): CloudD
     } finally {
       if (keyRef.current === k) setLoading(false);
     }
-  }, [api, cloud.projectId, accountScope]);
+  }, [api, cloud.projectId, cloud.accountMode, cloud.accountId]);
 
   useEffect(() => {
     setItems([]);
@@ -259,8 +254,14 @@ export interface CloudChat {
   /** 给用户看一句话(「某些附件没带上」之类页面自己的提示) */
   notify: (text: string) => void;
   conversationId: string;
-  /** `files`:已经传好的附件(`attach` 回来的那些);其 `url` 随消息带给服务端,名字显示在本页的气泡里 */
-  send: (text: string, files?: ChatAttachment[]) => Promise<boolean>;
+  /** `files`:已经传好的附件(`attach` 回来的那些);其 `url` 随消息带给服务端,名字显示在本页的气泡里。
+   *  `staged`:先用 `stage` 放进对话的那条本地气泡;发不出去时它标成「没发出去」 */
+  send: (text: string, files?: ChatAttachment[], staged?: string) => Promise<boolean>;
+  /** 账号模式:点发送的那一刻先在对话里放一条本地气泡(乐观显示),回它的号;没有会话时回 null */
+  stage: (text: string, files?: ChatAttachment[]) => string | null;
+  /** 本地气泡在发出之前就被挡下了(没确认告知、对话已切走等):标成没发出去 */
+  failStaged: (id: string, reason: string) => void;
+  dropStaged: (id: string) => void;
   /** 传一个文件到这个对话的工作目录(对话还没发过消息也行);出错抛 `CloudError` */
   attach: (file: File, signal?: AbortSignal) => Promise<CloudAttachmentInfo>;
   abort: (runId?: string, requestId?: string) => Promise<void>;
@@ -272,7 +273,9 @@ export interface CloudChat {
    * 界面用同一个请求号重试。成功时如果删的是当前打开的，自动退到一个新对话。
    */
   removeChat: (id: string, requestId: string) => Promise<{ already: boolean }>;
-  history: { items: CloudChatItem[]; loading: boolean; refresh: (silent?: boolean) => Promise<boolean>;
+  history: { items: CloudChatItem[]; loading: boolean; refresh: (silent?: boolean, maxAgeMs?: number) => Promise<boolean>;
+    /** 这个项目的对话列表读到过（几个分页共用一份，进入项目就开始读；打开分页时通常已经有了） */
+    loaded: boolean;
     /** 这位账号在这个项目里自己开的对话数（共有对话算在开它的人名下）；满 CLOUD_CHAT_LIMIT 个就不让新建 */
     ownedCount: number; atLimit: boolean };
   revoked?: boolean;
@@ -292,6 +295,8 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   const consent = useSyncExternalStore(subscribeCloudConsent, cloudConsentState, cloudConsentState);
   const projectId = cloud.projectId ?? "";
   const accountScope = cloud.accountMode ? `${cloud.accountId ?? "none"}:${consent.bindingVersion}` : "";
+  /** 本地存储的键只按账号分(见 persistScopeOf) */
+  const persistScope = persistScopeOf(cloud.accountMode, cloud.accountId);
   const storeKey = cloud.accountMode ? `cloud:${tabId}:${projectId}:${accountScope}` : `cloud:${tabId}`;
   const store = useMemo(() => getChatStore(storeKey), [storeKey]);
   const messages = useChatMessages(store);
@@ -304,11 +309,22 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
 
   const [info, setInfo] = useState<CloudInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [conversationId, setConversationId] = useState<string>(() => (key ? lsGet(chatKey(projectId, tabId, accountScope)) : null) ?? newCloudChatId());
+  const [conversationId, setConversationId] = useState<string>(() => (key ? lsGet(chatKey(projectId, tabId, persistScope)) : null) ?? newCloudChatId());
   const [view, setView] = useState<CloudSessionView>({ conversationId: null, streaming: false, connection: "idle", problem: null, lastSeq: 0, revoked: false });
   const [model, setModelState] = useState<string>(() => lsGet(MODEL_KEY) ?? "");
   const [effort, setEffortState] = useState<string>(() => lsGet(EFFORT_KEY) ?? "");
-  const [histItems, setHistItems] = useState<CloudChatItem[]>([]);
+  // 对话列表：同一个项目、同一账号范围在这张页面里只有一份、一个轮询(historyStore.ts)，几个分页共用
+  const historyKey = key ? `${projectId}|${cloud.url}|${cloud.identityVersion}|${accountScope}` : "";
+  const history: CloudHistoryEntry | null = useMemo(() => (historyKey ? cloudHistoryFor(historyKey, () => ({
+    list: () => api.list(), pollMs: cloud.accountMode ? HISTORY_POLL_MS : 0,
+    onPollError: (err: unknown) => (authLost(err) ? "stop" as const : undefined) })) : null),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [historyKey]);
+  const histSnap = useSyncExternalStore(history?.subscribe ?? noHistorySubscribe, history?.get ?? emptyHistory, history?.get ?? emptyHistory);
+  const histItems = useMemo(() => {
+    const titles = readTitles(projectId, persistScope);
+    return histSnap.items.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x));
+  }, [histSnap.items, projectId, persistScope]);
   const [histLoading, setHistLoading] = useState(false);
   const sessionRef = useRef<CloudSession | null>(null);
   const pendingSendRef = useRef<{ key: string; conversationId: string; text: string; options: string; requestId: string } | null>(null);
@@ -322,8 +338,6 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   /** 进入时的那一次「取 info、定对话」还没做完,用户已经自己选了对话(历史列表里点的、新对话):后到的结果不再改写他的选择 */
   const pickedRef = useRef(false);
   const refreshHistoryRef = useRef<(silent?: boolean) => Promise<boolean>>(async () => false);
-  /** 后台刷新列表最近一次失败的原因(轮询据此判断是退避还是登录失效就停) */
-  const histErrorRef = useRef<unknown>(null);
   /** 自己正在删的对话号：它被删时流上的 conversation.deleted 不再当「别人删了」提示 */
   const selfDeletingRef = useRef<Set<string>>(new Set());
   const onDeletedRef = useRef<(id: string) => void>(() => {});
@@ -334,17 +348,17 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       sessionRef.current?.close();
       sessionRef.current = null;
       sessionKeyRef.current = "";
-      if (cloud.accountMode) { store.set([]); setInfo(null); setHistItems([]); }
+      if (cloud.accountMode) { store.set([]); setInfo(null); }
       return;
     }
     let dead = false;
     pickedRef.current = false;
-    if (cloud.accountMode) { setInfo(null); setHistItems([]); setNotice(null); }
-    const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : lsGet(chatKey(projectId, tabId, accountScope));
+    if (cloud.accountMode) { setInfo(null); setNotice(null); }
+    const stored = o.initialConversation && CHAT_ID_RE.test(o.initialConversation) ? o.initialConversation : (lsGet(chatKey(projectId, tabId, persistScope)) ?? (cloud.accountMode && cloud.accountId ? legacyCloudChatId(safeStorage(), projectId, tabId, cloud.accountId) : null));
     const first = stored && CHAT_ID_RE.test(stored) ? stored : newCloudChatId();
     // 没有记着的对话 = 这是新建的;记着的那个若正是上次留下的「还没发过消息」的新对话,也算
-    const firstFresh = !(stored && CHAT_ID_RE.test(stored)) || lsGet(freshKey(projectId, tabId, accountScope)) === first;
-    if (firstFresh) lsSet(freshKey(projectId, tabId, accountScope), first);
+    const firstFresh = !(stored && CHAT_ID_RE.test(stored)) || lsGet(freshKey(projectId, tabId, persistScope)) === first;
+    if (firstFresh) lsSet(freshKey(projectId, tabId, persistScope), first);
     const session = cloud.accountMode
       ? createCloudSession({ api, store, accountMode: true, projectId: () => cloud.projectId, accountId: () => cloud.accountId, pageId: () => selectionPresenceStatus().pageId, onPageRequest: (ev) => accountPageHandler(ev) })
       : createCloudSession({ api, store, accountMode: false, pageId: PAGE_ID, onPageRequest: (ev) => runPageRequest(ev, pageExec) });
@@ -372,7 +386,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       }
       if (dead || pickedRef.current) return;
       setConversationId(id);
-      lsSet(chatKey(projectId, tabId, accountScope), id);
+      lsSet(chatKey(projectId, tabId, persistScope), id);
       session.open(id, { fresh: firstFresh && id === first });
     })();
     return () => {
@@ -427,18 +441,19 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
   // 记下对话标题,历史列表里没有服务端标题时用
   useEffect(() => {
     if (!projectId || !messages.length) return;
-    if (sessionKeyRef.current === key) rememberTitle(projectId, convRef.current, titleOf(messages), accountScope);
-  }, [projectId, messages, key, accountScope]);
+    if (sessionKeyRef.current === key) rememberTitle(projectId, convRef.current, titleOf(messages), persistScope);
+  }, [projectId, messages, key, persistScope]);
 
-  const send = useCallback(async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
-    if (!text.trim() || view.revoked) return false;
+  const send = useCallback(async (text: string, files?: ChatAttachment[], staged?: string): Promise<boolean> => {
+    const fail = (reason: string) => { if (staged) sessionRef.current?.failStaged(staged, reason); return false; };
+    if (!text.trim() || view.revoked) return fail(cloudErrorText("forbidden"));
     if (cloud.accountMode) {
-      if (!cloud.accountId || !key) return false;
+      if (!cloud.accountId || !key) return fail(cloudErrorText("unauthorized"));
       try { await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }); }
-      catch (err) { setNotice(err instanceof Error ? err.message : cloudErrorText("network")); return false; }
+      catch (err) { const reason = err instanceof Error ? err.message : cloudErrorText("network"); setNotice(reason); return fail(reason); }
     }
     const s = sessionRef.current;
-    if (!s || !key || keyRef.current !== key || sessionKeyRef.current !== key) return false;
+    if (!s || !key || keyRef.current !== key || sessionKeyRef.current !== key) return fail("账号、项目或对话已切换。");
     setNotice(null);
     const sent = (files ?? []).filter((a) => !!a.url);
     const body: CloudSendBody = {
@@ -455,7 +470,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     };
     if (cloud.accountMode) {
       const presence = selectionPresenceStatus();
-      if (!presence.linked || !presence.pageId || presence.unsupported) { setNotice('当前页面选区尚未连接，请稍后重试。'); return false; }
+      if (!presence.linked || !presence.pageId || presence.unsupported) { setNotice('当前页面选区尚未连接，请稍后重试。'); return fail('当前页面选区尚未连接，请稍后重试。'); }
       const pending = pendingSendRef.current;
       // 同一条消息重发沿用同一个请求号;换了模型、思考强度或创造力就是另一条请求(文档服务按请求号核内容,同号不同内容会被拒)
       const options = JSON.stringify([body.model ?? "", body.effort ?? "", body.creativity ?? ""]);
@@ -465,9 +480,9 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       body.selectionSnapshot = { pageId: presence.pageId };
     }
     try {
-      await s.send(body, sent.length ? bubbleAttachments(sent) : undefined);
+      await s.send(body, sent.length ? bubbleAttachments(sent) : undefined, staged ? { staged } : undefined);
       pendingSendRef.current = null;
-      if (projectId) lsSet(freshKey(projectId, tabId, accountScope), "");
+      if (projectId) lsSet(freshKey(projectId, tabId, persistScope), "");
       return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
@@ -525,57 +540,44 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     if (cloud.accountMode && (!key || keyRef.current !== key || sessionKeyRef.current !== key)) return;
     pickedRef.current = true;
     setConversationId(id);
-    if (projectId) { lsSet(chatKey(projectId, tabId, accountScope), id); lsSet(freshKey(projectId, tabId, accountScope), fresh ? id : ""); }
+    if (projectId) { lsSet(chatKey(projectId, tabId, persistScope), id); lsSet(freshKey(projectId, tabId, persistScope), fresh ? id : ""); }
     setNotice(null);
     sessionRef.current?.open(id, { fresh });
-  }, [projectId, tabId, accountScope, cloud.accountMode, key]);
+  }, [projectId, tabId, persistScope, cloud.accountMode, key]);
 
   const newChat = useCallback(() => switchTo(newCloudChatId(), true), [switchTo]);
 
-  /** `silent`：后台定时刷新用，不闪「读取中」、失败也不弹提示 */
-  const refreshHistory = useCallback(async (silent = false): Promise<boolean> => {
-    const scope = operationScope;
-    const expectedConversationId = conversationId;
-    const expectedSession = sessionRef.current;
-    const current = () => operationScopeGuardRef.current.isCurrent(scope) && keyRef.current === key &&
-      sessionKeyRef.current === key && sessionRef.current === expectedSession && convRef.current === expectedConversationId;
-    if (!key || !current()) return false;
+  /**
+   * 读一次对话列表(大家共用的那一份)。`silent`：不闪「读取中」、失败也不弹提示。
+   * `maxAgeMs`：这么久以内读回来过就直接用，不再读（换对话、切分页时不必每次都等一个来回）。
+   * 结果按项目与账号范围存，换了范围的旧结果不会落到新范围里；回 true 表示此刻这一页的范围没变、列表是新的。
+   */
+  const refreshHistory = useCallback(async (silent = false, maxAgeMs?: number): Promise<boolean> => {
+    const current = () => keyRef.current === key && sessionKeyRef.current === key;
+    if (!key || !history || !current()) return false;
     if (!silent) setHistLoading(true);
     try {
-      const list = await api.list();
-      if (!current()) return false;
-      const titles = readTitles(projectId, accountScope);
-      const next = list.map((x) => (x.title === "云端对话" && titles[x.id] ? { ...x, title: titles[x.id] } : x));
-      // 没变就沿用原数组，后台每 3 秒读一次时不白白重绘
-      setHistItems((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
-      return true;
+      await history.refresh(maxAgeMs !== undefined ? { maxAgeMs } : {});
+      return current();
     } catch (err) {
-      if (silent) histErrorRef.current = err;
       if (current() && !silent) setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
       return false;
     } finally {
       if (current() && !silent) setHistLoading(false);
     }
-  }, [api, key, projectId, accountScope, conversationId, operationScope]);
+  }, [key, history]);
 
   refreshHistoryRef.current = refreshHistory;
   // 对话列表与「我的 N/50」实时更新(2026-10-13 用户定)：别人(或自己的另一页)新建、删除以后，这一页不刷新也跟着变。
-  // 后台每 3 秒(HISTORY_POLL_MS)读一次列表；同时只有一次在途、失败退避、登录失效就停、页面不可见就不排(poll.ts)；
-  // 回到前台和页面里有人删了对话时立刻读一次。
+  // 后台每 3 秒(HISTORY_POLL_MS)读一次列表，整张页面一个轮询(historyStore.ts，上面 useSyncExternalStore 订阅时起)；
+  // 同时只有一次在途、失败退避、登录失效就停、页面不可见就不排(poll.ts)；回到前台和页面里有人删了对话时立刻读一次。
   useEffect(() => {
-    if (!key || !cloud.accountMode) return;
-    const poller = createPoller({ baseMs: HISTORY_POLL_MS, run: async () => {
-      histErrorRef.current = null;
-      const ok = await refreshHistoryRef.current(true);
-      const err = histErrorRef.current;
-      if (!ok && err) { if (authLost(err)) return "stop"; throw err; }
-    } });
-    const kick = () => { if (document.visibilityState === "visible") poller.kick(); };
-    poller.start();
+    if (!history || !cloud.accountMode) return;
+    const kick = () => { if (document.visibilityState === "visible") history.kick(); };
     document.addEventListener("visibilitychange", kick);
     window.addEventListener(NOTICES_REFRESH_EVENT, kick);
-    return () => { poller.stop(); document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); };
-  }, [key, cloud.accountMode]);
+    return () => { document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); };
+  }, [history, cloud.accountMode]);
   const setModel = useCallback((m: string) => { setModelState(m); lsSet(MODEL_KEY, m); }, []);
   const setEffort = useCallback((e: string) => { setEffortState(e); lsSet(EFFORT_KEY, e); }, []);
 
@@ -628,6 +630,14 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     notify: setNotice,
     conversationId,
     send,
+    stage: (text: string, files?: ChatAttachment[]) => {
+      const s = sessionRef.current;
+      if (!s || !cloud.accountMode || blocked) return null;
+      const shown = (files ?? []).filter((a) => !!a.url);
+      return s.stage(text.trim(), shown.length ? bubbleAttachments(shown) : undefined);
+    },
+    failStaged: (id: string, reason: string) => sessionRef.current?.failStaged(id, reason),
+    dropStaged: (id: string) => sessionRef.current?.dropStaged(id),
     attach,
     abort,
     switchVisibility,
@@ -635,6 +645,7 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
     openChat: (id: string) => switchTo(id),
     removeChat,
     history: { items: blocked ? [] : histItems, loading: blocked ? false : histLoading, refresh: refreshHistory,
+      loaded: blocked ? false : histSnap.loaded,
       ownedCount: blocked ? 0 : ownedCount, atLimit: blocked ? false : atLimit },
     revoked: Boolean(view.revoked),
     model,
@@ -651,6 +662,10 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
  * 那些靠退避(poll.ts)慢慢等。
  */
 const authLost = (err: unknown) => err instanceof CloudError && err.status === 401;
+
+const emptyHistorySnap: CloudHistorySnapshot = { items: [], loaded: false, loadedAt: 0 };
+const emptyHistory = () => emptyHistorySnap;
+const noHistorySubscribe = () => () => {};
 
 /** 页面里有人（含自己）刚删了对话时发这个事件，通知钩子立刻再取一次，不等下一次轮询 */
 export const NOTICES_REFRESH_EVENT = "pc-cloud-notices-refresh";
@@ -671,6 +686,12 @@ export function useCloudNotices(cloud: CloudAgentState, enabled: boolean): void 
     ? `${cloud.projectId}|${cloud.url}|${cloud.accountId}|${cloud.identityVersion}` : "";
   useEffect(() => {
     if (!key) return;
+    // 每个 Agent 分页都挂着这个钩子：同一个项目同一账号整张页面只起一个轮询(按键共用、引用计数)，不按分页数翻倍
+    const shared = noticePollers.get(key);
+    if (shared) {
+      shared.refs++;
+      return () => { if (--shared.refs === 0) { shared.stop(); noticePollers.delete(key); } };
+    }
     // 同时只有一次在途、失败退避(取不到、回执失败)、登录失效就停、页面不可见就不排(poll.ts)；没回执成功的下次还会给，已弹过的本页不重复弹
     const poller = createPoller({ baseMs: NOTICES_POLL_MS, run: async () => {
       try {
@@ -687,6 +708,10 @@ export function useCloudNotices(cloud: CloudAgentState, enabled: boolean): void 
     poller.start();
     document.addEventListener("visibilitychange", kick);
     window.addEventListener(NOTICES_REFRESH_EVENT, kick);
-    return () => { poller.stop(); document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); };
+    const mine = { refs: 1, stop: () => { poller.stop(); document.removeEventListener("visibilitychange", kick); window.removeEventListener(NOTICES_REFRESH_EVENT, kick); } };
+    noticePollers.set(key, mine);
+    return () => { if (--mine.refs === 0) { mine.stop(); if (noticePollers.get(key) === mine) noticePollers.delete(key); } };
   }, [api, key]);
 }
+/** 删除通知的轮询，按键共用(见 useCloudNotices) */
+const noticePollers = new Map<string, { refs: number; stop: () => void }>();

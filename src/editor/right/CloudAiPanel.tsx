@@ -21,7 +21,7 @@ import { CloudQueueList, QueueList } from "./chat/QueueList";
 import { pushToast, setAccountAgentEnabled, useSync } from "../sync/syncManager";
 import { Composer } from "./chat/Composer";
 import { CloudModelBar } from "./CloudModelBar";
-import { AgentEventLog } from "../sync/AgentEventLog";
+import { AgentActivityPanel, useRoundSelection } from "./chat/ActivityPanel";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { ReportDialog } from "./ReportDialog";
 import { cloudConversationReport } from "../../ai/cloud/report";
@@ -145,7 +145,9 @@ export function CloudAiPanel(props: {
   // during the render before the refresh effect runs.
   const metadataAvailabilityKey = `${cloud.enabled ? "on" : "off"}:${chat.info?.enabled === false ? "off" : "on"}`;
   const metadataKey = `${qKey}:${chat.conversationId}:${metadataAvailabilityKey}`;
-  const metadataReady = !cloud.accountMode || metadataReadyKey === metadataKey;
+  // 这个项目的对话列表(几个分页共用一份，进项目就开始读)读到过就能判断这段对话是谁的、能不能发：不必每次换对话、开分页都再等一个来回。
+  // 列表只决定界面开关；发消息、切权限、停止在服务端逐次核对。
+  const metadataReady = !cloud.accountMode || chat.history.loaded || metadataReadyKey === metadataKey;
   const creatorReadOnly = controlPolicy.creatorReadOnly;
   const canSwitchVisibility = controlPolicy.canSwitchVisibility;
   useEffect(() => { setTabBusy(tabId, streaming); }, [tabId, streaming]);
@@ -161,7 +163,8 @@ export function CloudAiPanel(props: {
       controlPendingRef.current = null;
       setControlPending(null);
     }
-    void chat.history.refresh().then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
+    // 两秒内读回来过的直接用(切分页、换对话时常见)，不再等一个来回
+    void chat.history.refresh(false, 2000).then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
     return () => { live = false; };
   }, [cloud.accountMode, consent.accepted, chat.conversationId, chat.history.refresh, metadataKey]);
 
@@ -257,13 +260,13 @@ export function CloudAiPanel(props: {
   };
   useEffect(() => () => { if (echoTimer.current !== null) window.clearTimeout(echoTimer.current); }, []);
 
-  const sendNow = async (text: string, files?: ChatAttachment[]): Promise<boolean> => {
-    if (off || !stillCurrent() || !controlPolicy.canSend || view.revoked) return false;
+  const sendNow = async (text: string, files?: ChatAttachment[], staged?: string | null): Promise<boolean> => {
+    if (off || !stillCurrent() || !controlPolicy.canSend || view.revoked) { if (staged) chat.failStaged(staged, "现在不能在这个对话里发消息。"); return false; }
     if (!cloud.accountMode) markSent();
     // 账号模式:图片、视频、音频附件先放进素材库,告诉 Agent 是哪一条(2026-10-18 用户定)
     const prepared = cloud.accountMode && files?.length ? await withLibrary(files) : files;
     if (!stillCurrent()) return false;
-    const ok = await chat.send(text, prepared);
+    const ok = await chat.send(text, prepared, staged ?? undefined);
     if (!stillCurrent()) return false;
     if (!ok) { echoWait.current = false; bump((n) => n + 1); }
     return ok;
@@ -272,6 +275,28 @@ export function CloudAiPanel(props: {
   const handleSend = async (text: string) => {
     if (creatorReadOnly || view.revoked || (!text.trim() && attachments.length === 0)) return;
     if (off) return;
+    if (cloud.accountMode && text.trim()) {
+      // 账号模式:点发送当场在对话里出气泡、清空输入框(乐观显示,2026-10-19 用户要求);告知确认、放进素材库、发送都在后面做,
+      // 没发出去时气泡标「没有发出去」并写原因,原文放回输入框(框里此刻是空的才放)。云端收下前气泡只写「发送中…」,不显示成已发送
+      const { usable, skipped } = pickSendable(attachments, chat.conversationId);
+      const sentAttachments = attachments;
+      const staged = chat.stage(text, usable);
+      setInputText(previous => previous === text ? "" : previous);
+      setAttachments(previous => previous === sentAttachments ? [] : previous);
+      const restore = () => {
+        if (!stillCurrent()) return;
+        setInputText(previous => previous ? previous : text);
+        setAttachments(previous => previous.length ? previous : sentAttachments);
+      };
+      if (!await consentForUse() || !stillCurrent()) {
+        if (staged) chat.failStaged(staged, "使用云端 Agent 前，请先阅读并确认告知。");
+        restore();
+        return;
+      }
+      if (skipped > 0) chat.notify(`${skipped} 个附件还在上传或上传失败,这次没带上。`);
+      if (!await sendNow(text.trim(), usable, staged)) restore();
+      return;
+    }
     if (!await consentForUse() || !stillCurrent()) return;
     // 还在上传或上传失败的附件这次先不带上,但发送本身不被挡住
     const { usable, skipped } = pickSendable(attachments, chat.conversationId);
@@ -474,6 +499,8 @@ export function CloudAiPanel(props: {
     toggleChip: (k: string) => handlersRef.current.toggleChip(k),
     toggleRun: (k: string) => handlersRef.current.toggleRun(k),
   }), []);
+  /** 「Agent 操作」显示哪一轮:缺省最新一轮,点气泡切过去 */
+  const round = useRoundSelection(chat.messages);
 
   /* ---------- 诊断报告(〔用户 2026-10-07 定〕云端下照常能用) ----------
    * 在页面里由这段云端对话的事件重建出的消息、会话状态与客户端信息生成,不请求任何 `/api/*`,不含票据、委托与模型 Key。
@@ -570,8 +597,10 @@ export function CloudAiPanel(props: {
   const historyItems = useMemo(() => {
     // 当前对话刚发出第一条、服务端列表还没刷新时,先把它列进去
     const hit = chat.history.items.some((x) => x.id === chat.conversationId);
-    if (hit || chat.messages.length === 0) return chat.history.items;
-    const title = chat.messages.find((m) => m.role === "user")?.text.slice(0, 40) || "云端对话";
+    // 只算云端已经有的消息：点发送当场放的本地气泡(还在发、没发出去的，sendState)不算，没发出去的对话不能先列进历史
+    const landed = chat.messages.filter((m) => !m.sendState || m.id.startsWith("cq-"));
+    if (hit || landed.length === 0) return chat.history.items;
+    const title = landed.find((m) => m.role === "user")?.text.slice(0, 40) || "云端对话";
     return [{ id: chat.conversationId, title, updatedAt: Date.now(), state: streaming ? "running" as const : "idle" as const, lastSeq: view.lastSeq }, ...chat.history.items];
   }, [chat.history.items, chat.conversationId, chat.messages, streaming, view.lastSeq]);
 
@@ -637,11 +666,15 @@ export function CloudAiPanel(props: {
         openRuns={openRuns}
         rowHandlers={rowHandlers}
         onPickExample={setInputText}
+        selectedRound={round.id}
+        onSelectRound={round.select}
       />
 
-      <AgentEventLog />
+      {/* 「Agent 操作」:这个对话按轮显示的操作与汇报(取代按项目频道列的「Agent 操作记录」,2026-10-20 用户定) */}
+      <AgentActivityPanel messages={chat.messages} selectedId={round.id} onSelect={round.select} view={viewMode}
+        installJobs={installJobs} expanded={expanded} on={rowHandlers} />
       <ThinkingStrip messages={chat.messages} streaming={streaming} />
-      {cloud.accountMode ? <CloudQueueList queue={view.queue} messages={chat.messages} senders={view.senders} /> :
+      {cloud.accountMode ? <CloudQueueList queue={view.queue} messages={chat.messages} senders={view.senders} executorMounted={chat.info?.executorMounted === true} /> :
         <QueueList tabId={qKey} running={view.streaming} onInsert={insertQueued} onEdit={editQueued} onResume={resumeQueue} hasDraft={hasDraft} />}
 
       {cloud.accountMode && chat.messages.some(m => m.role === 'assistant' && m.pending && (m.progress?.waitingJobs || m.progress?.phase === 'waiting_jobs')) &&

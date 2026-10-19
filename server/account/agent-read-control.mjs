@@ -28,8 +28,12 @@ export function pruneClosedReads(state, keep = KEEP_CLOSED_READS_PER_INSTANCE) {
     closedByInstance.get(key).push(handle.readHandleId);
   }
   const removed = new Set();
+  // 实例本身已经收口（主服务换了新一代，旧一代 `closed` 且有收口记录）：它不会再拿这些读取来关闭或开启重试，一条都不用留。
+  // 2026-10-19 节点上 8 个退出了的旧主服务各留 64 条，占了这本账四分之一（每次读取都要整段解析、整段写回）。
+  const finished = key => { const row = state.agentInstancesV2?.[key.split('\n')[2]];
+    return row?.state === 'closed' && Boolean(row.closure) && row.instanceGeneration === Number(key.split('\n')[3]); };
   // 对象按插入顺序遍历，前面的是早关的那批
-  for (const ids of closedByInstance.values()) for (const id of ids.slice(0, Math.max(0, ids.length - keep))) removed.add(id);
+  for (const [key, ids] of closedByInstance) for (const id of ids.slice(0, finished(key) ? ids.length : Math.max(0, ids.length - keep))) removed.add(id);
   if (!removed.size) return 0;
   for (const id of removed) delete t.handles[id];
   for (const [key, row] of Object.entries(t.requests)) if (removed.has(row.readHandleId)) delete t.requests[key];

@@ -6,6 +6,10 @@ import { useCloudAgent, useCloudApi } from '../ai/cloud/useCloud';
 import { CLOUD_CHAT_TEXT } from '../ai/cloud/chatTexts';
 import { CloudError } from '../ai/cloud/cloudApi';
 
+/** 成员列表展开 / 收着时取成员名单的间隔(毫秒) */
+export const MEMBERS_POLL_OPEN_MS = 3000;
+export const MEMBERS_POLL_CLOSED_MS = 15_000;
+
 /** Account membership is independent of device names and the old LAN passwords. */
 export function AccountMembersPanel() {
   const shared = useSync(v => v.shared);
@@ -35,10 +39,14 @@ export function AccountMembersPanel() {
     generation.current++; setSnapshot(null); setAttempt(null); setOpen(false); setBansOpen(false);
     // Display polling only. The server's access fence closes actual connections.
     void refresh().catch(() => undefined);
-    // 页签在后台时不取（看不见，不用刷新）；切回来以后下一次就取到最新的
-    const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh().catch(() => undefined); }, 3000);
-    return () => { generation.current++; clearInterval(timer); };
   }, [shared?.projectId, shared?.accountId, refresh]);
+  // 展开成员列表时每 3 秒取一次；收着时只显示人数，每 15 秒取一次(原来不论展开与否都 3 秒一次，
+  // 2026-10-19 在线实测 2 分钟 35 次)。页签在后台时不取（看不见，不用刷新）；切回来以后下一次就取到最新的
+  useEffect(() => {
+    const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh().catch(() => undefined); },
+      open ? MEMBERS_POLL_OPEN_MS : MEMBERS_POLL_CLOSED_MS);
+    return () => clearInterval(timer);
+  }, [shared?.projectId, shared?.accountId, refresh, open]);
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent) => {

@@ -7,24 +7,37 @@ import { acceptedMessageRef } from '../account/run-authority.mjs';
 import { WORKER_EVENT_PATH, WORKER_EVENT_BINDING_FIELDS } from './worker-event-internal.mjs';
 
 const fail = code => { throw accountError(503, code); };
+/** 交不上去时值得用同一个包再交一次的错：主服务或它背后的文档服务一时答不上（503 一类、超时、连接断了、回应没收全）。
+ * 主服务按「同一条任务的同一个序号」认包，交过的再交只回原来那张回执，所以重交不会多出事件。
+ * 不重交的：本机自己的错（没有 status）、主服务明确拒绝（400/401/403/409/413）、对不上账（worker-event-gap）、回应坏了。 */
+const NOT_TRANSIENT = new Set(['worker-sink-closed', 'worker-sink-configuration', 'worker-event-gap',
+  'worker-sink-response-too-large', 'worker-sink-protocol', 'worker-sink-server-certificate']);
+const transient = error => error?.status === 503 && !NOT_TRANSIENT.has(error.code);
 const bindingOf = grant => Object.fromEntries(WORKER_EVENT_BINDING_FIELDS.map(k => [k,
   k === 'senderAccountId' ? grant?.accountId : grant?.[k]]));
 /** One task, one local journal, original worker RAM signer. The master receives
  * event evidence only. Model/tool execution is still gated by the current Doc
  * run authority, and a delivered runner_done remains settlement pending. */
 export function createWorkerEventSink({ journal, runClient, origin, tls, serverFingerprint256,
-  timeoutMs = 5000, verifyGrant } = {}) {
+  timeoutMs = 20_000, retryBudgetMs = 90_000, retryBaseMs = 500, retryMaxMs = 8_000, verifyGrant } = {}) {
   let base;
   try { base = new URL(origin); } catch { fail('worker-sink-configuration'); }
   const pin = certificateFingerprint(serverFingerprint256);
   if (base.protocol !== 'https:' || base.pathname !== '/' || base.search || base.hash || base.username || base.password ||
       !tls?.key || !tls.cert || !tls.ca || !/^[a-f0-9]{64}$/.test(pin) ||
       !Number.isInteger(timeoutMs) || timeoutMs < 1 ||
+      ![retryBudgetMs, retryBaseMs, retryMaxMs].every(v => Number.isInteger(v) && v >= 0) ||
       !['append', 'source', 'pending', 'receipt', 'acknowledge', 'scope', 'inspect', 'close'].every(k => typeof journal?.[k] === 'function') ||
       typeof runClient?.workerEventProofFor !== 'function' || typeof verifyGrant !== 'function') fail('worker-sink-configuration');
   const scope = journal.scope(), requests = new Set(), sockets = new Set(), responses = new Set();
   let tail = Promise.resolve(), fatal = null, stopped = false, closing = null, writerCreated = false;
   const usable = () => { if (fatal) throw fatal; if (stopped) fail('worker-sink-closed'); };
+  // 重交之间的等待：收尾（close）时立刻放行，循环随即因为 usable() 报「已关」而结束，不拖住收尾。
+  const waits = new Set();
+  const pause = ms => new Promise(resolve => {
+    const entry = { timer: setTimeout(() => { waits.delete(entry); resolve(); }, ms), resolve };
+    waits.add(entry);
+  });
   const latch = error => { fatal ??= error; };
   function send(packet) {
     usable(); const bodyText = canonicalJson(journal.source(packet)), encoded = Buffer.from(bodyText);
@@ -83,8 +96,19 @@ export function createWorkerEventSink({ journal, runClient, origin, tls, serverF
     // Observe immediately; original caller/flush still receives the first fault.
     tail = work.catch(latch); return work;
   }
+  /** 同一个包交到主服务确认为止。一时交不上（文档服务卡了几秒、主服务在重启）就隔一会儿用新连接、新签名再交，
+   * 间隔逐次加倍，总共最多等 `retryBudgetMs`；还交不上才把错交出去（这条任务随之停下、交给强制路径记「失败」）。 */
   async function deliver(packet) {
-    const receipt = await send(packet); usable(); return journal.acknowledge(receipt);
+    const started = Date.now();
+    for (let delay = retryBaseMs; ; delay = Math.min(delay * 2, retryMaxMs)) {
+      try {
+        const receipt = await send(packet); usable(); return journal.acknowledge(receipt);
+      } catch (error) {
+        usable();
+        if (!transient(error) || Date.now() - started + delay > retryBudgetMs) throw error;
+        await pause(delay); usable();
+      }
+    }
   }
   async function checked(grant) {
     usable();
@@ -137,6 +161,7 @@ export function createWorkerEventSink({ journal, runClient, origin, tls, serverF
     close() {
       if (closing) return closing;
       stopped = true;
+      for (const entry of waits) { clearTimeout(entry.timer); entry.resolve(); } waits.clear();
       const resources = new Set([...requests, ...responses, ...sockets]);
       const ownedClose = [...resources].map(resource => new Promise(resolve => {
         if (resource.closed === true) return resolve(); resource.once('close', resolve); resource.destroy();

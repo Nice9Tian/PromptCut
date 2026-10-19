@@ -317,7 +317,7 @@ export function startRun(opts) {
        * 网关自动缓存,实测同一前缀第二次命中约八成,长上下文的费用压得住。
        */
       maxInputTokens: 1_000_000 - (Number(cfg.maxTokens) || 4096) - 30_000,
-      onEvent: safeOnEvent, 
+      onEvent: safeOnEvent,
       signal: abortController.signal,
       history,
       /*

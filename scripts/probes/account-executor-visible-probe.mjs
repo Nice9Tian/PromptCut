@@ -73,8 +73,9 @@ try {
     assistantCount: document.querySelectorAll('[data-pc-msg^="ca-"]').length,
     textVisible: document.querySelector('.ai-messages')?.textContent?.includes('Controlled result'),
     senderVisible: document.querySelector('.ai-messages')?.textContent?.includes('Controlled actor'),
-    toolVisible: document.querySelector('.ai-messages')?.textContent?.includes('get_project') ||
-      document.querySelector('.ai-messages')?.textContent?.includes('Controlled project read'),
+    // 工具调用在气泡下方的「Agent 操作」里(2026-10-20:气泡里只展示 Agent 在做什么)
+    toolVisible: document.querySelector('[data-pc="agent-activity"]')?.textContent?.includes('get_project') ||
+      document.querySelector('[data-pc="agent-activity"]')?.textContent?.includes('Controlled project read'),
     pending: document.querySelector('[data-pc="visible-state"]')?.getAttribute('data-live') === 'true',
     cursor: Number(document.querySelector('[data-pc="visible-state"]')?.getAttribute('data-cursor')),
     error: document.querySelector('[data-pc="visible-state"]')?.getAttribute('data-error') === 'true',

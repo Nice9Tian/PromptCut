@@ -69,7 +69,7 @@ async function waitFor(fn, ms = 10_000, what = '条件') {
   }
 }
 
-/** 造 2000 条:用户、回复交替;回复都交了本轮小结(不合并,2000 条各自一个气泡),条目数和长短不一,高度各不相同 */
+/** 造 2000 条:用户、回复交替;每条回复各自一个气泡,条目数和长短不一,高度各不相同 */
 function makeMessages() {
   const out = [];
   let t = Date.UTC(2026, 8, 1, 1, 0, 0);
@@ -403,8 +403,8 @@ try {
     smallSamples.push(...(await sampleStream(async (s) => ({ fromBottom: s.fromBottom, spacers: s.spacers, nodes: s.nodes }))));
   }
   const small = await listState(page);
-  // 假流的回复不交本轮小结,简洁模式下三轮回复并成一个气泡:3 条用户消息 + 1 个回复气泡
-  check('small.all-rendered-no-spacer', small.nodes === 4 && smallSamples.every((x) => x.spacers === 0), { nodes: small.nodes, spacers: small.spacers });
+  // 每一轮的回复各占一个气泡(2026-10-20 去掉了「没交本轮小结就并进上一个气泡」):3 条用户消息 + 3 个回复气泡
+  check('small.all-rendered-no-spacer', small.nodes === 6 && smallSamples.every((x) => x.spacers === 0), { nodes: small.nodes, spacers: small.spacers });
   check('small.stuck', smallSamples.every((x) => x.fromBottom <= 40) && small.fromBottom <= 2, {
     last: small.fromBottom,
     worst: Math.max(...smallSamples.map((x) => x.fromBottom)),

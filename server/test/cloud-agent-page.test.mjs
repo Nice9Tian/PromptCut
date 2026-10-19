@@ -262,7 +262,8 @@ test('云端 Agent 的反向通道(服务层)', async (t) => {
     assert.ok(me.events.filter((e) => e.type === 'tool_result').every((e) => e.ok === true));
     me.off(); // 关掉页面
     const events = await kit.finished(alice, 'c-r9');
-    const results = events.filter((e) => e.type === 'tool_result');
+    // 汇报不算脚本里的步骤
+    const results = events.filter((e) => e.type === 'tool_result' && e.name !== 'report_progress');
     assert.equal(results.length, 6);
     assert.deepEqual(results.slice(4).map((e) => e.ok), [false, false], '页面走了之后的两步没做成');
     assert.ok(results.slice(4).every((e) => /发起方不在线/.test(String(e.summary ?? ''))), `结果摘要里写了发起方不在线:${JSON.stringify(results.slice(4).map((e) => e.summary))}`);
