@@ -1,6 +1,6 @@
 import type { Clip, Timeline } from "./types";
 import type { SoundEffectRecipe } from "./soundEffects";
-import { cutSegmentRender, CUT_SEGMENT_CARD, type CutRenderProject } from "./cutSegments.ts";
+import { cutSegmentRender, CUT_SEGMENT_CARD, type CutRenderProject, type TimelineCutClip } from "./cutSegments.ts";
 import { envelopeAt } from "./cutAudio.mjs";
 
 /** 可重生成的音效配方。reuseKey 是合成输入身份,不是 WAV 内容哈希。 */
@@ -425,14 +425,15 @@ export function flattenOverlay(p: Project, graph?: Timeline["graph"]): Timeline 
         const cut = cutSegmentRender(p as CutRenderProject, c);
         if (!cut) continue;
         // 预卷:时间轴片段的起点比段的起点早(cut.from − (cutOffset − cut.offset)),露出来的仍从 cut.from 起
-        clips.push({
+        const seg: TimelineCutClip = {
           id: c.id, cardId: CUT_SEGMENT_CARD, start: c.start - (Math.max(0, c.cutOffset ?? 0) - cut.offset), end: c.end, params: {}, cut,
           ...(c.frame ? { frame: c.frame } : null),
           ...(c.opacity !== undefined ? { opacity: c.opacity } : null),
           ...(c.emphasis ? { emphasis: c.emphasis } : null),
           ...(c.fadeIn ? { fadeIn: c.fadeIn } : null),
           ...(c.fadeOut ? { fadeOut: c.fadeOut } : null),
-        });
+        };
+        clips.push(seg);
         continue;
       }
       if (!c.cardId) continue; // 素材段交给视频层

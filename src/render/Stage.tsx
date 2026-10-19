@@ -23,7 +23,7 @@ import { ensurePlaceholderStyle, exportSyncedMountFor, geometryFor, isCatchingUp
 import { resolveCardParams } from "./mediaTier";
 import type { PlaceholderReason } from "./placeholder/contract";
 import { CutSegmentScene } from "./CutSegmentScene";
-import { envelopeAt } from "../kernel/cutSegments";
+import { cutOf, envelopeAt } from "../kernel/cutSegments";
 
 setMaxAnimated(maxAnimated);
 
@@ -263,7 +263,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            * 模式关着(桌面、导出、预渲染、Agent 看到的画面)恒为 false,下面每一支和以前逐字相同。
            */
           // 剪辑段(kernel/cutSegments.ts):不是注册表里的卡,包裹层里挂被引用剪辑的嵌套场景
-          const seg = clip.cut;
+          const seg = cutOf(clip);
           const localOnly = !seg && ((onlineBrowserMode() && unsupportedHere(clip.cardId, def)) || exportSyncedMountFor(clip.cardId, def));
           /*
            * 三道都在取 def 这一格剔掉,不放到分支里:

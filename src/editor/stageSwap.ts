@@ -33,6 +33,7 @@
  */
 import { getState } from "../store/project";
 import { flattenOverlay, type Project } from "../kernel/project";
+import { cutOf } from "../kernel/cutSegments";
 import { cardMountedAt, mountFrameOf } from "../render/frameWindow.mjs";
 import { createPlayRun, enteredNaturally, notePlayBeat, notePlaySeam, notePlayStart } from "../render/playEntry.mjs";
 import { catchUpEstimateMs, playingLeadMs, sceneCatchUpCost } from "../render/catchUpEstimate.mjs";
@@ -204,7 +205,7 @@ function recordOf(project: Project, clipId: string): CardCostRecord | undefined 
 export function statefulSegmentsAt(project: Project, t: number): { id: string; start: number; end: number }[] {
   const fps = Math.max(1, project.fps || 30);
   const frame = Math.round(t * fps);
-  return flattenOverlay(project).clips.filter((c) => c.cut?.frameMode === "stateful" && cardMountedAt(c, t) && frame > mountFrameOf(c, fps));
+  return flattenOverlay(project).clips.filter((c) => cutOf(c)?.frameMode === "stateful" && cardMountedAt(c, t) && frame > mountFrameOf(c, fps));
 }
 
 /**

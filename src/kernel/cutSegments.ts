@@ -40,6 +40,8 @@ const FALLBACK_CUT_DURATION = 30;
 export const MAX_CUT_DEPTH = 32;
 
 import type { CutEnvelope } from "./cutAudio.mjs";
+import { clipFrameMode } from "./frameMode.mjs";
+import { getCard } from "./registry.ts";
 
 /** 这一段是剪辑段吗 */
 export function isCutSegment(c: { cutId?: unknown } | null | undefined): boolean {
@@ -283,15 +285,18 @@ export function cutSubProject(p: CutRenderProject, cutId: string): CutRenderProj
   return sub;
 }
 
-/* 卡片查表由注册表在加载时注入:kernel 里的这个模块不能反过来 import 注册表(注册表 import 了 frameMode,环)。 */
-type CardLookup = (id: string) => { frameMode?: unknown; need_prerendering?: unknown; defaults?: Record<string, unknown> } | undefined;
+/*
+ * 卡片的推帧口径直接问注册表。注意:不能反过来让注册表(或 frameMode.mjs、types.ts)import 这个模块 ——
+ * 它们在卡片声音身份的源码闭包里(`render/audioCardSourceVersion.test.mjs`),多一个文件就会让用户已生成的卡片声音全部判过期。
+ * 单测可以用 `setCutClipFrameMode` 换掉。
+ */
 type ModeOf = (clip: TrackClip) => "direct" | "stateful";
-let modeOfClip: ModeOf | null = null;
-/** 注册表装好以后告诉这里怎么算一张卡的推帧口径(`registry.ts` 调) */
+const registryMode: ModeOf = (clip) => (clipFrameMode(clip, getCard(clip.cardId)) === "direct" ? "direct" : "stateful");
+let modeOfClip: ModeOf | null = registryMode;
+/** 单测用:换掉查卡的口径;传 null 恢复成查注册表 */
 export function setCutClipFrameMode(fn: ModeOf | null): void {
-  modeOfClip = fn;
+  modeOfClip = fn ?? registryMode;
 }
-export type { CardLookup };
 
 const modeMemo = new WeakMap<object, "direct" | "stateful">();
 /** 子项目的推帧口径:有任何一段卡(或嵌套的剪辑段)要按历史推进就是 stateful。查不了卡时保守地算 stateful */
@@ -354,6 +359,15 @@ export function cutPreroll(p: CutRenderProject, clip: TrackClip, sub: CutRenderP
   if (offset <= 0) return 0;
   const need = offset - cutHistoryStart(sub, offset);
   return Math.max(0, Math.min(need, clip.start));
+}
+
+/**
+ * `flattenOverlay` 交出的时间轴片段:剪辑段那一条多带一个 `cut`。不写进 `types.ts` 的 `Clip`(那份在卡片声音身份的源码闭包里)。
+ */
+export type TimelineCutClip = import("./types").Clip & { cut?: CutSegmentRender };
+/** 时间轴片段是不是剪辑段;是的话给出它的渲染信息 */
+export function cutOf(clip: unknown): CutSegmentRender | undefined {
+  return (clip as TimelineCutClip | null)?.cut;
 }
 
 /** 剪辑段在 `flattenOverlay` 里交出去的那份渲染信息;悬空、成环返回 null */

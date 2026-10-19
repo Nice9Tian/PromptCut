@@ -21,4 +21,4 @@ export function degradeCard(id?: string, reason?: string): boolean;
 export function degradedCards(): Map<string, string>;
 export function resetDegradedCards(): void;
 export function cardCapabilities(def?: Definition, params?: any, parts?: PartSource[]): { frameMode: FrameMode; need_prerendering: boolean; compositing: CardCompositing; canvasHeavy: boolean; independentCache: boolean };
-export function clipFrameMode(clip: { parts?: unknown[]; params?: any; cut?: { frameMode?: string } }, def?: Definition): FrameMode;
+export function clipFrameMode(clip: { parts?: unknown[]; params?: any }, def?: Definition): FrameMode;

@@ -350,11 +350,6 @@ export interface Clip {
   emphasis?: ClipEmphasis;
   /** 组合卡(cardId "composite")的部件实例树。别的卡没有这个字段 */
   parts?: PartInstance[];
-  /**
-   * 剪辑段(只在 `flattenOverlay` 交出的时间轴片段上有,`cardId` 是 `CUT_SEGMENT_CARD`):
-   * 被引用剪辑的子项目、起点偏移、总时长和推帧口径。舞台按它挂嵌套场景,见 kernel/cutSegments.ts。
-   */
-  cut?: import("./cutSegments.ts").CutSegmentRender;
 }
 
 export interface Timeline {
