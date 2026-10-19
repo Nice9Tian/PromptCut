@@ -54,7 +54,8 @@
 | `server/agent-service/run-client.mjs` | 缺省时限从 5 秒改为 15 秒，主服务和任务进程问文档服务都用它。`checkAccess`（「这一轮此刻还能不能读写」，只读）遇到 503 时隔 0.5、1.5、4 秒再问，最多 3 次；明确拒绝照原样交回；客户端关闭时不再问。 |
 | `server/harness/agent.mjs` | 新增选项 `requireFinalReport`。打开后，这一轮收工（不再调工具）时如果没有交过 `final: true` 的 `report_progress`，就按模型的文字回复代交一份收尾汇报：发 `tool_call` 和 `tool_result` 两条事件，标 `synthetic: true`，不进模型历史。文字按行、按句切，每条不超过 60 字，最多 8 条；`problems` 里注明「Agent 没有按要求交进度汇报」。轮数到顶的收尾摘要（那一次不给工具）也照此代交，停下的原因写进 `problems`。另外，已经交过收尾汇报后，最后一次空回复不再误报「API 没有返回文字或工具调用」。真的什么都没回（没有文字、没有工具、没交过汇报）时，照旧以错误结束。 |
 | `server/runners/api.mjs` | API 直连运行器打开 `requireFinalReport`。云端和桌面 API 直连都走这里。环路（`loop.mjs`）里的各角色不打开。 |
-| 测试 | 新增 `server/test/run-client-check-retry.test.mjs`（3 项）、`server/test/agent-final-report.test.mjs`（10 项）；改 `server/test/worker-event-sink-mtls.test.mjs`：新增「回执丢一次」「主服务连着回两次 503」都靠重交续上，以及「超出时限才交出错、之后可补交」。 |
+| `server/harness/agent.mjs`（补） | 代交的 `tool_call` 和 `tool_result` 两条事件都带 `synthetic: true`，测试和排障可以据此分辨。 |
+| 测试 | 新增 `server/test/run-client-check-retry.test.mjs`（3 项）、`server/test/agent-final-report.test.mjs`（10 项）；改 `server/test/worker-event-sink-mtls.test.mjs`：新增「回执丢一次」「主服务连着回两次 503」都靠重交续上，以及「超出时限才交出错、之后可补交」。9 个端到端测试的工具清单里补上代交的汇报（或按 `synthetic` 排除）。`fixtures/account-worker-child-config.mjs` 把交事件的重交时限缩到 2 秒。 |
 
 开始时做过「先提醒模型补交一次，再代交」的版本，提交在 `e275b7b2`，已经撤掉，现行的是 `760d1138`。撤掉的原因有两个：生产上多一次请求就是七万多 token 的输入；这个版本还会让大批用模拟模型的端到端测试改变调用次数。
 
@@ -71,7 +72,16 @@
 
 ### 基线
 
-（全量测试跑完后补）
+在提交 `04190ecc` 上跑：
+
+- `npx tsc -b --force`：退出码 0，零错误。
+- `npm test`（命令里设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`）：退出码 0。共 7115 项，通过 7101，失败 0，跳过 14，结果为「零失败」。
+- 过程记录：
+  - 第一次全量（`760d1138`）失败 12 项，原因都在本分支，已逐项处理：
+    - 9 处端到端测试列举工具结果时，多出了代交的 `report_progress`。这些模拟模型都不交汇报，代交是本次改动的预期行为，所以在期望清单里补上，或者按 `synthetic` 排除。
+    - `account-worker-lifecycle` 测的是「主服务一直答不上 → 任务进程放弃」。现在要等满 90 秒的重交时限才放弃，测试等不到。已把这个测试夹具的重交时限缩到 2 秒，这个场景照样测得到。
+  - 修完以后单独重跑这些文件，`cloud-agent-page` 的 CA-REV-09 有一次「等前四步做完超时(15000 ms)」。随后这个文件单独连跑两次 12/12 全过，全量里也过了，判断是负载下的时序问题，不是这次改动引起的。
+- 没跑渲染附加项：这次没改画面。
 
 ## 部署清单（由主会话审查、经用户授权后再做）
 
