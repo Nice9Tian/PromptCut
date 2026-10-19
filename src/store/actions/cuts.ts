@@ -2,10 +2,10 @@ import {
   switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
   removeCut as removeCutPure, placeCutSegment,
 } from "../../kernel/cuts";
-import { cutCycleReason, cutReferences } from "../../kernel/cutSegments";
-import { newId, type Track, type TrackClip } from "../../kernel/project";
+import { cutCycleReason, cutDuration, cutReferences, isCutSegment } from "../../kernel/cutSegments";
+import { findClip, newId, type Track, type TrackClip } from "../../kernel/project";
 
-import { state, set, setProject } from "../core";
+import { state, set, setProject, updateTrack } from "../core";
 
 export const cuts = {
 
@@ -75,5 +75,26 @@ export const cuts = {
     setProject(project);
     set({ selection: [clip.id] });
     return clip;
+  },
+  /**
+   * 改剪辑段引用哪条剪辑、从被引用剪辑的哪一秒开始。会循环引用、偏移超出被引用剪辑的总长都抛。
+   * 改完段太长的话出点截到被引用剪辑剩下的长度(新建或拉长剪辑段时不能超出被引用剪辑当时的总时长)。
+   */
+  setCutSegment(clipId: string, patch: { cutId?: string; cutOffset?: number }): TrackClip {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit || !isCutSegment(hit.clip)) throw new Error(`${clipId} 不是剪辑段`);
+    if (hit.track.locked) throw new Error(`序列「${hit.track.name}」锁着`);
+    const cutId = patch.cutId ?? hit.clip.cutId!;
+    if (!(p.cuts ?? []).some((c) => c.id === cutId)) throw new Error(`找不到剪辑 ${cutId}`);
+    const reason = p.activeCutId ? cutCycleReason(p, p.activeCutId, cutId) : null;
+    if (reason) throw new Error(reason);
+    const offset = Math.max(0, patch.cutOffset ?? hit.clip.cutOffset ?? 0);
+    const total = cutDuration(p, cutId);
+    if (offset >= total) throw new Error(`偏移 ${offset} 秒超出了被引用剪辑的总时长 ${total} 秒`);
+    const { cutOffset: _o, ...rest } = hit.clip;
+    const next: TrackClip = { ...rest, cutId, end: Math.min(hit.clip.end, hit.clip.start + (total - offset)), ...(offset > 0 ? { cutOffset: offset } : {}) };
+    setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? next : c)) })));
+    return next;
   },
 };

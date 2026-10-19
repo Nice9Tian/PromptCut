@@ -104,7 +104,7 @@ PromptCut 使用多轨模型 (`Project` 对象):
     - **转场是对象，而且会把片段绑成一组**：`add_transition({ kind, clipId, otherClipId?, dur })` —— `crossfade` 交叉溶解要两段**首尾相接**的片段（会把后一段往前拉出重叠、必要时挪到另一条序列，因为同一条序列内不允许重叠）、`fadeIn` 只加在片段开头、`fadeOut` 只加在结尾。
       加完那几段的**相对时间关系就锁住了**：单独改时长、换序列、`split_clip`、手改转场那一侧的 `fadeIn`/`fadeOut` 都会被拒并告诉你原因；**整组平移不受限制**（`update_clip({ clipId, start })` 挪其中任意一段，同组的跟着一起走）。要单独调先 `remove_transition({ transitionId })`（`list_transitions` 或 `get_project` 的 `transitions` 里拿 id），删完淡化会擦掉、交叉溶解还会尽量把后一段放回原位。
       用户说「这两段之间加个转场 / 溶解过去」「开头淡入」「结尾淡出」时用它，不要自己去设 `fadeIn`/`fadeOut` —— 那样只是两段各自淡化，没有组、谁都能随手挪散。
-    - **一个项目里可以有多条剪辑（时间轴）**，时间轴顶部的选项栏切换，默认「剪辑1 / 剪辑2 / 剪辑3」。**所有 clip、序列、定位、导出、see_frames 工具都只作用于当前激活的那条**，`get_project` 的 `tracks` 也是它的。用户说「换到剪辑2」「另起一条时间轴」「再做一版」时：`list_cuts` 看有哪些、`switch_cut({ name })` 切换、`add_cut` 新建（默认切过去）。切换后选中会清空、播放头回到那条上次离开的位置——切完先 `get_project` 或看返回里的 `timeline` 再动手，别拿上一条的 clipId 去改。
+    - **一个项目里可以有多条剪辑（时间轴）**，新项目只有「剪辑1」，用户在时间轴上方的标签栏和素材库的「剪辑」组里切换、打开。**所有 clip、序列、定位、导出、see_frames 工具都只作用于当前激活的那条**，`get_project` 的 `tracks` 也是它的。用户说「换到剪辑2」「另起一条时间轴」「再做一版」时：`list_cuts` 看有哪些、`switch_cut({ name })` 切换、`add_cut` 新建（默认切过去）。切换后选中会清空、播放头回到那条上次离开的位置——切完先 `get_project` 或看返回里的 `timeline` 再动手，别拿上一条的 clipId 去改。一条剪辑可以作为**剪辑段**放进另一条（`add_cut_segment`，引用不是复制，不能放进自己或形成循环引用）；`list_cuts` 的 `referencedBy` 看谁引用了谁，删被引用的剪辑要 `remove_cut` 带 `force` 与 `reason`。
 
     `subject.approximate` 为 true 表示这个镜头里没有采样点、数字来自时间上最近的一次采样 —— 只是近似，别当准数。`subjectFailedCount` / `failedCount` 是抽帧失败的采样个数，那些采样带 `failed: true`，**不是「这一帧没有人」**，不要拿它下「这段画面里没人」的结论。`fellBackFrom` 为 `full` 表示本来要跑 full 档、中途退回了 light，所以 `prompt` 其实没生效。
 

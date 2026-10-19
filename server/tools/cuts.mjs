@@ -32,7 +32,7 @@ export const cutsTools = [
   },
   {
     name: "list_cuts",
-    description: "列出项目里的全部剪辑(时间轴)。一个项目可以有多条剪辑,时间轴顶部的选项栏切换,默认三条:剪辑1 / 剪辑2 / 剪辑3。**所有 clip / 序列 / 定位 / 导出 / see_frames 工具都只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容;要动别的剪辑先 switch_cut。返回每条的 id、name、active、trackCount、clipCount、duration。",
+    description: "列出项目里的全部剪辑(时间轴)。一个项目可以有多条剪辑,新项目只有「剪辑1」,其余由用户或你新建(add_cut)。用户在时间轴上方的标签栏和素材库的「剪辑」组里切换、打开。**所有 clip / 序列 / 定位 / 导出 / see_frames 工具都只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容;要动别的剪辑先 switch_cut。一条剪辑可以作为**剪辑段**放进另一条剪辑(add_cut_segment),引用而不是复制。返回每条的 id、name、active、trackCount、clipCount、duration,以及 referencedBy(哪些剪辑的哪几段引用了它)和 references(它里面的剪辑段引用了哪些剪辑)。",
     inputSchema: { type: "object", properties: {} },
     side: "agent"
   },
@@ -75,7 +75,7 @@ export const cutsTools = [
   },
   {
     name: "remove_cut",
-    description: "删除一条剪辑。最后一条不能删。里面有内容(clipCount > 0)时会被拒,确实要删就传 force:true 并在 reason 里写明理由(用户会看到)。删的是当前激活那条时会自动切到相邻的一条,返回里 switchedTo 说明切去了哪。",
+    description: "删除一条剪辑。最后一条不能删。里面有内容(clipCount > 0)、或正被别的剪辑引用着(list_cuts 的 referencedBy 不为空)时会被拒并告诉你被哪些剪辑的哪几段用着;确实要删就传 force:true 并在 reason 里写明理由(用户会看到),引用它的剪辑段(连同绑着它们的转场)会一起删掉,返回里 removedSegments 列出删了哪些;用户可以撤销。删的是当前激活那条时会自动切到相邻的一条,返回里 switchedTo 说明切去了哪。",
     inputSchema: {
       type: "object",
       properties: {
@@ -84,6 +84,38 @@ export const cutsTools = [
         reason: { type: "string" }
       },
       required: ["cutId"]
+    },
+    side: "agent"
+  },
+  {
+    name: "add_cut_segment",
+    description: "在当前激活的剪辑里放一个**剪辑段**:引用另一条剪辑(cutId 或 name 二选一),画面是那条剪辑在对应时刻的整帧,声音是它的混音。引用不是复制 —— 被引用的剪辑改了,这里跟着变。start 是放在当前剪辑的第几秒;duration 缺省 = 被引用剪辑(从 cutOffset 起)剩下的长度,给了也不能超出它;cutOffset 是从被引用剪辑的第几秒开始(缺省 0);trackId 缺省挑一条这段时间空着的序列。**不能放进它自己,也不能形成循环引用**(A 引用 B、B 再引用 A,任意深度),会被拒并说明原因。放好以后和别的片段一样用 update_clip 改起止 / 不透明度 / 淡入淡出、set_position / set_rect 改框、set_clip_volume / set_clip_muted 调声音、split_clip 切开(后半段的 cutOffset 自动累加)、duplicate_clip 复制;get_clip 的 cutSegment 里看引用哪条、偏移和被引用剪辑的总时长。返回 segment 与 timeline。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cutId: { type: "string", description: "被引用的剪辑 id(list_cuts 里拿)" },
+        name: { type: "string", description: "被引用的剪辑名,和 cutId 二选一" },
+        start: { type: "number", description: "放在当前剪辑的第几秒" },
+        duration: { type: "number", description: "秒;缺省 = 被引用剪辑剩下的长度,不能超出它" },
+        cutOffset: { type: "number", description: "从被引用剪辑的第几秒开始,缺省 0" },
+        trackId: { type: "string", description: "放到哪条序列;缺省挑这段时间空着的" }
+      },
+      required: ["start"]
+    },
+    side: "agent"
+  },
+  {
+    name: "set_cut_segment",
+    description: "改一个剪辑段引用哪条剪辑(cutId 或 name)、从被引用剪辑的第几秒开始(cutOffset)。会循环引用、偏移超出被引用剪辑的总时长都会被拒;改完段比被引用剪辑剩下的还长时,出点截到剩下的长度。起止、框、不透明度、淡入淡出、音量与静音不在这里改(见 add_cut_segment 的说明)。不是剪辑段的片段用 update_clip。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        cutId: { type: "string" },
+        name: { type: "string", description: "剪辑名,和 cutId 二选一" },
+        cutOffset: { type: "number", description: "秒,不小于 0" }
+      },
+      required: ["clipId"]
     },
     side: "agent"
   }

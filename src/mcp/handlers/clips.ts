@@ -10,9 +10,13 @@ import { findClip } from "../../kernel/project";
 import { timelineDigest, lookHint } from "../tools/toolEcho";
 
 import { stageSize, clipGuard } from "../common";
+import { cutSegmentHandlers, segmentInfo } from "./cutSegments";
 
 export const clipsHandlers = {
   addClip: (args) => {
+    // add_cut_segment 也路由到这里(routes.mjs):带被引用剪辑(cutId / name)而没有 cardId 的是放剪辑段
+    const loose = args as Record<string, any>;
+    if (loose.cardId === undefined && (loose.cutId !== undefined || loose.name !== undefined)) return cutSegmentHandlers.addCutSegment(loose) as any;
     // 先校验再落库:参数错了当场报错,而不是建出一张播默认值的空壳卡
     validateCardParams(args.cardId, args.params);
     // 字幕卡没指定序列时统一去「字幕」序列(没有就建一条,建在最上层):
@@ -31,6 +35,13 @@ export const clipsHandlers = {
     return { ...clip, look: lookHint(clip.id), timeline: timelineDigest(getState().project) };
   },
   updateClip: (args) => {
+    // set_cut_segment 也路由到这里(routes.mjs):剪辑段的引用与偏移先改,其余字段照 update_clip 往下走
+    const loose = args as Record<string, any>;
+    if (loose.cutId !== undefined || loose.cutOffset !== undefined || loose.name !== undefined) {
+      const r = cutSegmentHandlers.setCutSegment(loose);
+      const rest = Object.keys(loose).filter((k) => !["clipId", "cutId", "cutOffset", "name"].includes(k));
+      if (!rest.length) return r as any;
+    }
     rejectAudioVolumeKeys(args, "update_clip");
     if (args.params || args.cardId !== undefined) {
       const hit = findClip(getState().project, args.clipId);
@@ -104,7 +115,9 @@ export const clipsHandlers = {
   getClip: (args) => {
     const hit = findClip(getState().project, args.clipId);
     if (!hit) throw new Error(`找不到 clip ${args.clipId}`);
-    return envelopeOf(getState().project, hit.clip, getCard(hit.clip.cardId), stageSize());
+    const envelope = envelopeOf(getState().project, hit.clip, getCard(hit.clip.cardId), stageSize());
+    // 剪辑段:另带引用哪条剪辑、偏移、被引用剪辑的总时长、音量与静音(kernel/cutSegments.ts)
+    return hit.clip.cutId ? { ...envelope, cutSegment: segmentInfo(hit.clip.id) } : envelope;
   },
   setClip: (args) => {
     const hit = findClip(getState().project, args.clipId);
