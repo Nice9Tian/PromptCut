@@ -18,6 +18,13 @@
 - 只读页面独有状态（当前选中、播放头交互、面板界面）的工具在编辑界面里执行。
 - 工具的清单和参数由卡片定义等数据自动生成，加卡片不需要改工具。
 
+## 汇报与对用户说话（2026-10-20 用户定，见 `../product/agent.md`「汇报」）
+
+- Agent 对用户说话用工具 `send_message`，`to` 填 `"user"`、`text` 写一两句话。它和多 Agent 协调的 `send_message`（发给别的 Agent 的对话 ID 或 `all`）是同一个工具。API 直连（本机与云端）由 `server/harness/tools/index.mjs` 就地答，不经公告板；经 MCP 的 CLI 驱动由公告板 `server/agent/agent-board.mjs` 直接答「已显示」。托管档的开放清单里没有 `send_message` 时，harness 补一个只能发给用户的（`server/harness/tools/userMessage.mjs`）。
+- harness 的执行规则在有 `send_message` 时让模型每组操作前后用它说一两句，和这一组的工具调用放在同一次回复里；收尾仍交 `final: true` 的 `report_progress`。说过话的一轮，最后一次空回复不算「没有返回」。
+- 气泡里显示的话由页面从这一轮的事件里取（`src/ai/userMessages.ts`）：这一轮调过 `send_message`（发给 user、没失败）的，按先后列出它们的 `text`；一次都没调的，用文字回复（相邻的文字并成一句）。两种不混：调过的那一轮，文字回复只在「显示思考」里看得到。原先「没交收尾汇报就按文字回复代交一份汇报」（2026-10-19）撤掉，免得同一段话在气泡和汇报里各出现一次。
+- 操作区（`src/editor/right/chat/ActivityPanel.tsx`）一次显示一轮：缺省跟着最新一轮，点气泡切到那一轮，也能前后翻；内容是这一轮的操作图标、操作详细预览（写了项目的那一步能「撤销这步」）和阶段 / 本轮小结。只取这个对话的消息，不取文档服务项目频道上的工具事件（原「Agent 操作记录」`src/editor/sync/AgentEventLog.tsx` 按项目频道列，会混进别的对话和别的成员的调用，已不挂在 AI 栏）。每一轮的回复各占一个气泡，紧跟在发起它的用户消息后面，不再把没交本轮小结的回复和后面几轮并成一个气泡。
+
 ## 桌面 APP 接入
 
 - 桌面工具经 stdio MCP 服务 `server/mcp-server.mjs` 接入。找实例的优先级为 `--port`、`PROMPTCUT_PORT`、`--port-file` / `PROMPTCUT_PORT_FILE`、公共 `%TEMP%\promptcut\port.json`；每次调用重新找。找不到、进程已退出或端口无人监听时返回说明。
