@@ -271,6 +271,31 @@ test('只做控制的主服务（control-only）重启登记新一代实例并�
   assert.equal(f.ledger.read().agentInstancesV2[f.process.registration.instanceId].state, 'closed');
 });
 
+test('旧一代主服务收口以后，它名下已关的读取一条不留（不再按每个实例留 64 条）', async t => {
+  const f = setup(t);
+  f.ledger.transaction(state => { state.agentInstancesV2[f.process.registration.instanceId].purpose = 'control-only'; });
+  const unsubOld = f.subscribe();
+  for (let i = 0; i < 5; i++) {
+    const opened = await f.open('member');
+    f.control.closeReads(f.signed('close', { readHandleIds: [opened.readHandle.readHandleId] }));
+  }
+  const oldId = f.process.registration.instanceId;
+  const ofOld = () => Object.values(f.ledger.read().agentReadsV1.handles).filter(h => h.instanceId === oldId);
+  assert.equal(ofOld().length, 5, '还活着的实例照旧留着');
+  unsubOld();
+  const nextProc = f.instances.boot();
+  f.ledger.transaction(state => { state.agentInstancesV2[nextProc.registration.instanceId].purpose = 'control-only'; });
+  const unsub = f.subscribe(nextProc);
+  t.after(() => unsub());
+  assert.equal(f.ledger.read().agentInstancesV2[oldId].state, 'closed');
+  assert.equal(ofOld().length, 0, '收口了的旧一代：已关读取全删');
+  assert.equal(Object.values(f.ledger.read().agentReadsV1.requests).filter(row => !f.ledger.read().agentReadsV1.handles[row.readHandleId]).length, 0, '开启记录不留悬空的');
+  // 新一代照常能读能关
+  const opened = await f.open('member', {}, nextProc);
+  f.control.closeReads(f.signed('close', { readHandleIds: [opened.readHandle.readHandleId] }, nextProc));
+  assert.equal(f.ledger.read().agentReadsV1.handles[opened.readHandle.readHandleId].state, 'closed');
+});
+
 test('用过的随机数只留 10 分钟:窗口内重放照样拒;过期的和老格式(true)的都删掉,账本不再无限变大', async t => {
   const f = setup(t); f.subscribe();
   const input = f.signed('open', { delegation: 'member', projectId: 'project', conversationId: 'conversation', action: 'get', after: 0 });
