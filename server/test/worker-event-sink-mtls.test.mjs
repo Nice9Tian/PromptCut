@@ -17,10 +17,10 @@ import { canonicalJson, digestOf } from '../account/ledger.mjs';
 // Actual mTLS/exporter/original RAM signer/Ed25519/FULL worker+master SQLite.
 // Registration, root OS and current Doc getter are CONTROLLED in this component
 // target. It does not prove production Doc/UID/OS-worker admission or settlement.
-test('durable worker → signed actual TLS → durable master → durable ACK; lost ACK replays only packet', { timeout: 45000 }, async t => {
+test('durable worker → signed actual TLS → durable master → durable ACK; lost ACK and brief 503 retried with the same packet', { timeout: 45000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-worker-sink-tls-'));
   const pki = assetWiringPki(dir), model = scopeModel('event-tls');
-  let journal, sink, drop = false, denied = false, getterCalls = 0, wireKey;
+  let journal, sink, drop = 0, unavailable = 0, denied = false, getterCalls = 0, wireKey;
   const session = createAgentInstanceSession({ registrationPurpose: 'run-worker', workerEventSource: async packet => journal.source(packet),
     requestRegistration: async (name, body) => {
       if (name === 'challenge') {
@@ -56,11 +56,13 @@ test('durable worker → signed actual TLS → durable master → durable ACK; l
   const handler = createWorkerEventInternalHandler({ eventStore: store, resolveWorker: async input => {
     getterCalls++; assert.deepEqual(input, { projectId: binding.projectId, runGrantId: binding.runGrantId, assignmentDigest: scope.assignmentDigest });
     if (denied) throw Object.assign(Error('current-run-revoked'), { status: 403, code: 'current-run-revoked' });
+    // 生产里见过的样子：主服务问文档服务超时，回 503 run-client-unavailable（2026-10-19 16:56 那一条就是这样整条任务没了）
+    if (unavailable > 0) { unavailable--; throw Object.assign(Error('run-client-unavailable'), { status: 503, code: 'run-client-unavailable' }); }
     return source;
   } });
   const sockets = new Set();
   const server = https.createServer({ ...pki.asset, requestCert: true, rejectUnauthorized: true, minVersion: 'TLSv1.3' }, (req, res) => {
-    if (drop) { drop = false; res.end = () => { res.destroy(); }; }
+    if (drop > 0) { drop--; res.end = () => { res.destroy(); }; }
     void handler(req, res).catch(() => res.destroy());
   });
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
@@ -79,9 +81,9 @@ test('durable worker → signed actual TLS → durable master → durable ACK; l
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const origin = `https://127.0.0.1:${server.address().port}`;
-  const open = () => {
+  const open = (retry = {}) => {
     journal = createWorkerEventJournal({ file: path.join(dir, 'worker.sqlite'), ...scope });
-    sink = createWorkerEventSink({ journal, runClient: session, origin, tls: pki.wrong,
+    sink = createWorkerEventSink({ journal, runClient: session, origin, tls: pki.wrong, retryBaseMs: 50, ...retry,
       serverFingerprint256: pki.asset.fingerprint256, timeoutMs: 5000, verifyGrant: async () => ({ allowed: true, runGrant: grant }) });
   };
   open(); const writer = await sink.writer({ grant });
@@ -89,19 +91,31 @@ test('durable worker → signed actual TLS → durable master → durable ACK; l
   await writer.beforeCall(); assert.equal(journal.inspect().ackHead, 2);
   assert.equal(journal.receipt(`event:${binding.runGrantId}:2`).row.event.output, undefined);
   assert.deepEqual(store.after({ ...binding }).events.map(row => row.event.type), ['user', 'text', 'tool_result']);
-  drop = true; writer.emit({ type: 'text', delta: 'ACK will be lost' });
-  await writer.failed; await assert.rejects(writer.flush());
-  assert.equal(journal.pending().length, 1); assert.equal(store.after({ ...binding }).head, 4);
+  // 回执丢了一次（主服务已落盘、回应没送到）：同一个包换新连接、新签名再交，主服务回原来那张回执，不多出事件，任务不中断。
+  drop = 1; writer.emit({ type: 'text', delta: 'ACK lost once' });
+  const readsBeforeRetry = getterCalls;
+  await writer.beforeCall(); assert.equal(journal.inspect().ackHead, 3);
+  assert.equal(store.after({ ...binding }).head, 4); assert.equal(getterCalls, readsBeforeRetry + 2);
+  assert.deepEqual(store.after({ ...binding }).events.map(row => row.event.type), ['user', 'text', 'tool_result', 'text']);
+  // 文档服务一时答不上（主服务回 503）连着两次：隔一会儿再交，第三次落盘，任务照常往下走。
+  unavailable = 2; writer.emit({ type: 'text', delta: 'doc briefly unavailable' });
+  await writer.beforeCall(); assert.equal(journal.inspect().ackHead, 4); assert.equal(store.after({ ...binding }).head, 5);
+  assert.equal(unavailable, 0);
+  await sink.close();
+  // 一直交不上（超出重交时限）：把错交出去，包留在本机日志里；之后能原样补交。
+  open({ retryBudgetMs: 300, retryBaseMs: 50 }); await assert.rejects(sink.writer({ grant }), /execution-replay-pending/);
+  journal.append({ eventId: 'later-event', event: { type: 'text', delta: 'delivered after outage' } });
+  drop = Infinity; await assert.rejects(sink.replayPending(), e => e.status === 503);
+  assert.equal(journal.pending().length, 1); assert.equal(store.after({ ...binding }).head, 6);
   const pending = journal.pending()[0], readsBefore = getterCalls;
   await assert.rejects(sink.close(), /worker-sink-close-pending/);
-  open(); await assert.rejects(sink.writer({ grant }), /execution-replay-pending/);
-  await sink.replayPending(); assert.equal(journal.inspect().ackHead, 3);
+  drop = 0; open(); await sink.replayPending(); assert.equal(journal.inspect().ackHead, 5);
   assert.equal(journal.receipt(pending.eventId).sourceSeq, pending.sourceSeq);
-  assert.equal(store.after({ ...binding }).head, 4); assert.equal(getterCalls, readsBefore + 1);
+  assert.equal(store.after({ ...binding }).head, 6); assert.equal(getterCalls, readsBefore + 1);
   denied = true;
   journal.append({ eventId: 'revoked-event', event: { type: 'text', delta: 'must not become visible' } });
   await assert.rejects(sink.replayPending(), { code: 'current-run-revoked' });
-  assert.equal(store.after({ ...binding }).head, 4); assert.equal(journal.pending().length, 1);
+  assert.equal(store.after({ ...binding }).head, 6); assert.equal(journal.pending().length, 1);
   assert.equal(sink.describe().sockets, 0); assert.equal(sink.describe().requests, 0); assert.equal(sink.describe().responses, 0);
   t.diagnostic('owned master HTTPS on an ephemeral port; real worker/master FULL journals and exporter signatures; controlled registration/root OS/Doc getter; settlement pending');
 });

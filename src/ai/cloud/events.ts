@@ -294,13 +294,51 @@ export function settleFromQueue(messages: ChatMessage[], queue: CloudQueueSnapsh
   if (!queue) return messages;
   let next: ChatMessage[] | null = null;
   for (const item of queue.items) {
-    if (!item.runId || (item.state !== 'done' && item.state !== 'cancelled') || queue.currentRunId === item.runId) continue;
-    const idx = messages.findIndex(m => m.id === assistantMessageId(item.runId as string));
-    const m = idx >= 0 ? messages[idx] as CloudAccountMessage : null;
-    if (!m || !m.cloudRun || m.pending !== true) continue;
-    next ??= messages.slice();
+    if ((item.state !== 'done' && item.state !== 'cancelled') || (item.runId && queue.currentRunId === item.runId)) continue;
+    const cur: ChatMessage[] = next ?? messages;
+    const idx = item.runId ? cur.findIndex(m => m.id === assistantMessageId(item.runId as string)) : -1;
+    if (idx < 0) {
+      // 这一轮在第一个事件之前就失败或中断了(任务进程起不来、领到就死)：流里没有它的任何事件，只有队列里的终态。
+      // 在那条用户消息后面补一条失败的回复，写上原因；不补的话用户什么都看不到(2026-10-19 在线实测：账本记了 failed / worker-failed，页面空白)。
+      const status = item.outcome?.status;
+      if (status !== 'failed' && status !== 'interrupted') continue;
+      const id = item.runId ? assistantMessageId(item.runId) : `ca-q-${item.messageId}`;
+      if (cur.some(m => m.id === id)) continue;
+      const userIndex = cur.findIndex(m => m.id === accountMessageId(item.messageId) && m.role === 'user');
+      if (userIndex < 0) continue;
+      const failed: CloudAccountMessage = { id, role: 'assistant', text: '', parts: [], tools: [], statuses: [], pending: false,
+        ...settledPatch({ id, role: 'assistant', text: '', pending: true } as CloudAccountMessage, item) };
+      next = [...cur.slice(0, userIndex + 1), failed, ...cur.slice(userIndex + 1)];
+      continue;
+    }
+    const m = cur[idx] as CloudAccountMessage;
+    if (!m.cloudRun || m.pending !== true) continue;
+    next = cur === messages ? messages.slice() : cur;
     next[idx] = { ...m, ...settledPatch(m, item) };
   }
+  return next ?? messages;
+}
+
+/**
+ * 对话空闲(没有在跑的一轮)时排在第一位的那条消息马上就要开始,不算「排队」:界面不把它列进队列,
+ * 只在它自己的气泡下写一行「已发出，等待云端开始处理…」(`sendState: "accepted"`);开始跑了、或前面有别人的一轮在跑时去掉这行。
+ * 前面有一轮在跑时照旧显示排在第几(2026-10-08 用户定「界面显示排在第几」)。同一份快照折几次结果相同。
+ */
+export function isIdleHead(queue: CloudQueueSnapshot | null | undefined, item: CloudQueueItem): boolean {
+  return Boolean(queue && !queue.currentRunId && item.state === "queued" && item.position === 1);
+}
+export function markWaitingFromQueue(messages: ChatMessage[], queue: CloudQueueSnapshot | null): ChatMessage[] {
+  if (!queue) return messages;
+  const waiting = new Set(queue.items.filter((item) => isIdleHead(queue, item)).map((item) => accountMessageId(item.messageId)));
+  let next: ChatMessage[] | null = null;
+  messages.forEach((m, i) => {
+    if (m.role !== "user" || !m.id.startsWith("cq-")) return;
+    const want = waiting.has(m.id) ? "accepted" : undefined;
+    if (m.sendState === want) return;
+    next ??= messages.slice();
+    const { sendState: _drop, ...rest } = m;
+    next[i] = want ? { ...rest, sendState: want } : rest;
+  });
   return next ?? messages;
 }
 

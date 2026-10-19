@@ -6,6 +6,22 @@ const TRUNCATED = new Set(['length', 'max_tokens', 'MAX_TOKENS']);
 /** 连续截断几次以后不再让它接着写，明说没做成 */
 const MAX_TRUNCATIONS = 2;
 const checkAbort = signal => { if (signal?.aborted) throw Object.assign(new Error('已停止'), { name: 'AbortError' }); };
+/** 交给用户看的进度汇报工具（各家前缀不同，只认以它结尾的名字，规则同 src/ai/progressReport.ts 的 isReportTool） */
+const isReportTool = name => typeof name === 'string' && (name === 'report_progress' || /(?:__|[.:/])report_progress$/.test(name));
+/** 汇报的上限：每组最多 8 条、每条 60 个字（同 server/progress-report.mjs） */
+const REPORT_ITEMS = 8, REPORT_ITEM_CHARS = 60;
+/** 把一段文字回复切成汇报条目：按行、按句，去掉列表符号，每条截到 60 个字，最多 8 条（排不下的在最后一条注明） */
+export function reportItemsFromText(text) {
+  const pieces = String(text ?? '').split(/\n+|(?<=[。！？!?；;])/u)
+    .map(piece => piece.replace(/^\s*(?:[-*•·]|\d+[.、)]|#+)\s*/u, '').replace(/\*\*/g, '').trim()).filter(Boolean);
+  const items = [];
+  for (const piece of pieces) {
+    const chars = Array.from(piece);
+    for (let i = 0; i < chars.length; i += REPORT_ITEM_CHARS) items.push(chars.slice(i, i + REPORT_ITEM_CHARS).join(''));
+  }
+  if (items.length <= REPORT_ITEMS) return items;
+  return [...items.slice(0, REPORT_ITEMS - 1), '……原话较长,打开「显示思考」可看全文'];
+}
 
 export class Agent {
   /**
@@ -18,8 +34,17 @@ export class Agent {
    * maxInputTokens:单次请求的输入 token 预算。给了就按每轮 API 报回的真实 token 数截断
    * (见 history.fitTokens),不给就还是老的按字符数截。
    */
-  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, maxInputTokens = 0, onEvent, signal, history, onModelCall = null }) {
+  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, maxInputTokens = 0, onEvent, signal, history, onModelCall = null,
+    requireFinalReport = false }) {
     Object.assign(this, { provider, system, tools, maxIterations, deepAuto, maxInputTokens, signal });
+    /*
+     * 文字回复不直接给用户看(product/agent.md「Agent 的文字回复不直接展示给用户」),用户只看得到 report_progress 交的条目。
+     * 打开这一项、且工具里有 report_progress 时:模型不调工具就收工、这一轮却没交过收尾汇报(final 为 true),
+     * 由这里按它的文字回复代交一份,不让这一轮在界面上变成一个空气泡(2026-10-19 生产实测:模型只回了一个「好」,
+     * 气泡是空的)。不另外提醒模型补交:那要多一次模型请求(生产上一次就是七万多 token 的输入),代交不花钱。
+     * 环路里的各角色有自己的提交工具,不打开这一项。
+     */
+    this.reportTool = requireFinalReport ? (tools || []).find(t => isReportTool(t?.name)) ?? null : null;
     /*
      * 每次向模型发请求的前后各调一次(可选;云端 Agent 的额度检查与用量记录接在这里,契约 cloud-agent-contract.md 第 6.2 节):
      *   onModelCall('before', { round })  —— 抛错就不发这次请求,整轮以这个错结束;
@@ -41,6 +66,19 @@ export class Agent {
     const progress = (round, phase, text) => this.onEvent({ type: 'progress', round, maxRounds: this.maxIterations, phase, completed, failed, elapsedMs: Date.now() - started, text });
     const system = this.system + '\n\n执行规则：每组操作前用一句简短的话说明将做什么；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。';
     let summaryReason = '', truncations = 0;
+    // 这一轮有没有交过收尾汇报
+    let reported = false;
+    const autoReport = (round, text, extraProblems = []) => {
+      if (!this.reportTool || reported) return;
+      const done = reportItemsFromText(text);
+      // 只有真问题(轮数到顶、重复操作停下)才进「问题」;是不是代交看事件上的 synthetic,不在汇报里另写一条
+      const problems = [...extraProblems];
+      const input = { final: true, has_done: done.length > 0, has_todo: false, has_problem: problems.length > 0, done, todo: [], problems };
+      const callId = `auto-report-${round}`;
+      this.onEvent({ type: 'tool_call', callId, round, name: this.reportTool.name, input, synthetic: true });
+      this.onEvent({ type: 'tool_result', callId, round, name: this.reportTool.name, ok: true, summary: '已由服务端按文字回复代交', output: { ok: true, synthetic: true }, durationMs: 0, synthetic: true });
+      reported = true;
+    };
 
     // The budget counts model/tool round trips, not individual calls.
     for (let round = 1; round <= this.maxIterations + 1; round++) {
@@ -126,6 +164,8 @@ export class Agent {
          */
         content.push({ type: 'text', text: note });
         if (content.length) this.history.append({ role: 'assistant', content });
+        // 收尾摘要这一次不给工具,模型交不了汇报:按摘要代交,停下的原因写进问题
+        autoReport(round, text, [`${summaryReason};已成功 ${completed} 次、失败 ${failed} 次操作`]);
         lastText += note;
         break;
       }
@@ -145,7 +185,9 @@ export class Agent {
         continue;
       }
       if (!calls.length) {
-        if (!text.trim()) throw new Error('API 没有返回文字或工具调用，请检查模型和接口协议设置。');
+        // 已经交过收尾汇报,最后这次没说话也算说完了(汇报就是给用户的话)
+        if (!text.trim() && !reported) throw new Error('API 没有返回文字或工具调用，请检查模型和接口协议设置。');
+        autoReport(round, text);
         break;
       }
       truncations = 0;
@@ -195,6 +237,7 @@ export class Agent {
         }
         const output = typeof result === 'string' ? result : JSON.stringify(result ?? null);
         ok ? completed++ : failed++;
+        if (ok && isReportTool(call.name) && call.input?.final === true) reported = true;
         this.onEvent({ type: 'tool_result', callId: call.id, round, name: call.name, ok, summary: output.slice(0, 1000), output: result, durationMs: Date.now() - begin });
         results.push({ type: 'tool_result', tool_use_id: call.id, content: output, is_error: !ok });
       }

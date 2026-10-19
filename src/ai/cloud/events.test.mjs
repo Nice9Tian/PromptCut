@@ -107,3 +107,27 @@ test('queue settlement leaves running / queued / current runs and other runs alo
   const bad = snapshot([{ state: 'done', outcome: { status: 'DONE!!', reason: '<script>' } }]);
   assert.equal(bad.items[0].outcome, null, '形状不对的终态丢掉');
 });
+
+test('a run that failed before its first event: a failed assistant reply is added after the user message with the reason', () => {
+  // 2026-10-19 在线实测：服务端账本记了 failed / worker-failed，queue.state 也送到了页面，流里却没有这一轮的任何事件，页面什么都不显示
+  const onlyUser = applyCloudEvents([], [accepted, { ...accepted, seq: 2, messageId: 'message_b', prompt: 'later one' }]);
+  const dead = snapshot([{ messageId: 'message_a', state: 'cancelled', outcome: { status: 'failed', reason: 'worker-failed' } },
+    { messageId: 'message_b', state: 'queued', position: 1, runId: null }]);
+  const shown = settleFromQueue(onlyUser, dead);
+  assert.deepEqual(shown.map(m => m.id), ['cq-message_a', 'ca-run_a', 'cq-message_b'], '失败的回复紧跟在它那条用户消息后面');
+  assert.equal(shown[1].role, 'assistant'); assert.equal(shown[1].pending, false); assert.equal(shown[1].outcome, 'error');
+  assert.match(shown[1].error, /进程出了故障/);
+  assert.equal(hasOpenRun(shown), false);
+  assert.equal(settleFromQueue(shown, dead), shown, '再折一次不变，不叠第二条');
+  // 没领到运行号就中断的：用消息号起一个号
+  const interrupted = settleFromQueue(onlyUser, snapshot([{ messageId: 'message_a', state: 'cancelled', runId: null, outcome: { status: 'interrupted', reason: 'agent-restart' } }]));
+  assert.equal(interrupted[1].id, 'ca-q-message_a'); assert.equal(interrupted[1].outcome, 'error');
+  // 停止、完成、没有终态的、找不到用户消息的：不补
+  assert.equal(settleFromQueue(onlyUser, snapshot([{ messageId: 'message_a', state: 'cancelled', outcome: { status: 'cancelled', reason: 'stopped' } }])), onlyUser);
+  assert.equal(settleFromQueue(onlyUser, snapshot([{ messageId: 'message_a', state: 'done', outcome: { status: 'done', reason: null } }])), onlyUser);
+  assert.equal(settleFromQueue(onlyUser, snapshot([{ messageId: 'message_a', state: 'cancelled' }])), onlyUser);
+  assert.equal(settleFromQueue([], dead).length, 0, '用户消息还没到：先不补，到了再补');
+  // 用户消息后到：随后的那次折叠补上
+  const late = settleFromQueue(applyCloudEvent([], accepted), dead);
+  assert.equal(late[1].id, 'ca-run_a');
+});

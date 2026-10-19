@@ -73,7 +73,7 @@ export function UserBubble(props: { m: ChatMessage; rewind?: RewindHandlers }) {
             </button>
           </div>
         )}
-        <div className="ai-message user">
+        <div className={`ai-message user${m.sendState === "sending" ? " is-sending" : m.sendState === "failed" ? " is-failed" : ""}`}>
           {m.attachments && m.attachments.length > 0 && (
             <div className="ai-bubble-files">
               {m.attachments.map((a, i) => (
@@ -90,7 +90,9 @@ export function UserBubble(props: { m: ChatMessage; rewind?: RewindHandlers }) {
               <LiveMarkdown text={m.text} live={!!m.pending} />
             </div>
           ) : null}
-          {m.error && <div className="ai-message-error">{m.error}</div>}
+          {m.sendState === "sending" && <div className="ai-message-send-state" data-pc="cloud-send-state" data-state="sending">发送中…</div>}
+          {m.sendState === "accepted" && <div className="ai-message-send-state" data-pc="cloud-send-state" data-state="accepted">已发出，等待云端开始处理…</div>}
+          {m.error && <div className="ai-message-error" data-pc={m.sendState === "failed" ? "cloud-send-failed" : undefined}>{m.error}</div>}
         </div>
       </div>
       {rewind && confirm && (

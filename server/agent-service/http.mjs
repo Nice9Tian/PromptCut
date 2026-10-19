@@ -13,6 +13,7 @@
  * URL 与请求体里没有项目与成员的字段,页面自报不了。乙块接上之前 `authenticate` 由测试替身给;没给时一律 401。
  * 本文件不引用 `src/`。
  */
+import { AsyncResource } from 'node:async_hooks';
 import { AgentServiceError, CONVERSATION_ID_RE, ownerKeyOf } from '../agent/service/create-agent-service.mjs';
 import { createVisualRoutes, matchVisualRoute } from './visual-routes.mjs';
 
@@ -20,6 +21,15 @@ const MAX_BODY = 256 * 1024;
 const PING_MS = 15_000;
 const MAX_STREAMS = 200;
 const MAX_STREAMS_PER_OWNER = 8;
+/** 账号模式事件流的轮询节拍：本机的运行事件每这么久看一次（只读本机 SQLite，便宜） */
+export const ACCOUNT_STREAM_TICK_MS = 250;
+/**
+ * 对话空闲（没有在跑的一轮、没有排队或准备中的消息、本机也没有新的运行事件）时，向文档服务读对话与核权限的间隔。
+ * 原来不论忙闲每 250 毫秒都读一次：每开着一个对话页面，文档服务每秒多 4 次带双向证书的新连接与读取核对
+ * （2026-10-19 节点上文档服务空闲时也占着约 25% CPU）。忙的时候、本机有新事件时、这个对话刚收下一条消息时照旧马上读。
+ * 撤销（设为私有、被踢、关 Agent）另有文档服务的读取控制流当场掐断这条流，不靠这个轮询。
+ */
+export const ACCOUNT_STREAM_IDLE_DOC_MS = 1000;
 /** 队列里一条消息的终态，只给页面看两样：结果（done / failed / interrupted / cancelled）和原因码 */
 const outcomeOf = value => {
   const status = typeof value?.status === 'string' && /^[a-z-]{1,32}$/.test(value.status) ? value.status : null;
@@ -159,6 +169,10 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
 
   /** 文档服务对读取的明确拒绝(不是故障),见 accountEvents 里轮询的 catch */
   const DENIAL_STATUS = new Set([401, 403, 404]);
+  /** 开着的账号事件流按对话登记的「马上读一次」：这个对话刚收下一条消息时叫醒它们，不等空闲间隔 */
+  const streamKicks = new Map();
+  const streamKey = (projectId, conversationId) => `${projectId}\n${conversationId}`;
+  const kickStreams = (projectId, conversationId) => { for (const kick of streamKicks.get(streamKey(projectId, conversationId)) ?? []) kick(); };
 
   /** Account-v2 stream: authorize before headers and on every poll/event. Doc remains
    * the source of the durable queue; this stream has no model output until run wiring. */
@@ -188,9 +202,17 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
           send: (ev) => { if (!released && !res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify(ev)}\n\n`); } });
       } catch { attachment = null; }
     }
+    const kickKey = streamKey(identity.projectId, conversationId);
+    let lastDocRead = 0, kicked = false;
+    // 叫醒来自别人的请求(发消息、切权限、停止)：读取要记在这条流自己的读取通道上，不能记在叫醒它的那个请求名下
+    // (读取通道按异步上下文认是哪一个 HTTP 读取)，所以绑定在这条流的上下文里跑
+    const kick = AsyncResource.bind(() => { kicked = true; void poll().catch(() => {}); });
+    if (!streamKicks.has(kickKey)) streamKicks.set(kickKey, new Set());
+    streamKicks.get(kickKey).add(kick);
     const release = () => {
       if (released) return;
       released = true; clearInterval(timer); openStreams.delete(entry);
+      const kicks = streamKicks.get(kickKey); kicks?.delete(kick); if (kicks && !kicks.size) streamKicks.delete(kickKey);
       try { attachment?.detach(); } catch { /* 登记表已经关了 */ }
       streams -= 1; const left = (streamsByOwner.get(owner) ?? 1) - 1;
       if (left > 0) streamsByOwner.set(owner, left); else streamsByOwner.delete(owner);
@@ -201,6 +223,11 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       if (polling || released || res.destroyed) return;
       polling = true;
       try {
+        // 空闲时不必每拍都问文档服务：本机没有新事件、对话里没有在跑或排着的、也没被叫醒，就等到空闲间隔再读
+        const busy = Boolean(view?.currentRunId) || (view?.messages ?? []).some(row => ['queued', 'preparing', 'running'].includes(row.queueState));
+        const localFresh = service.runEvents ? service.runEvents.after({ projectId: identity.projectId, conversationId, after: cursor }).events.length > 0 : false;
+        if (!kicked && !busy && !localFresh && Date.now() - lastDocRead < ACCOUNT_STREAM_IDLE_DOC_MS) return;
+        kicked = false; lastDocRead = Date.now();
         view = await service.conversation(identity, conversationId, 0);
         if (service.runEvents) await service.mirrorAccepted(identity, conversationId, view);
         const rows = service.runEvents
@@ -256,7 +283,7 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       try { await (service.readTransports ? service.readTransports.dispatch(pollWork) : pollWork()); }
       catch { entry.close(); }
     };
-    const timer = setInterval(() => { void poll().catch(() => {}); }, 250); timer.unref?.();
+    const timer = setInterval(() => { void poll().catch(() => {}); }, ACCOUNT_STREAM_TICK_MS); timer.unref?.();
     req.on('aborted', release); res.on('close', release);
     void poll().catch(() => {});
     return undefined;
@@ -307,6 +334,8 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
         const out = await service.send(identity, conversationId, { prompt: body.prompt, requestId: body.requestId,
           selectionSnapshot: body.selectionSnapshot, attachments: body.attachments,
           model: body.model, effort: body.effort, creativity: body.creativity });
+        // 开着这个对话的事件流马上读一次（排队状态、刚收下的这条），不等空闲间隔
+        kickStreams(identity.projectId, conversationId);
         return sendJson(res, 202, { ok: true, ...out }, CORS);
       }
       if (sub[2] === 'events' && req.method === 'GET') {
@@ -316,11 +345,15 @@ export function createAgentHttp({ service, authenticate = null, version = 'dev',
       }
       if (sub[2] === 'visibility' && req.method === 'POST') {
         const body = await readBody(req);
-        return sendJson(res, 200, { ok: true, ...await service.switchVisibility(identity, conversationId, body.visibility, body.requestId) }, CORS);
+        const out = await service.switchVisibility(identity, conversationId, body.visibility, body.requestId);
+        kickStreams(identity.projectId, conversationId);
+        return sendJson(res, 200, { ok: true, ...out }, CORS);
       }
       if (sub[2] === 'abort' && req.method === 'POST') {
         const body = await readBody(req);
-        return sendJson(res, 200, { ok: true, ...await service.abort(identity, conversationId, body.runId, body.requestId) }, CORS);
+        const out = await service.abort(identity, conversationId, body.runId, body.requestId);
+        kickStreams(identity.projectId, conversationId);
+        return sendJson(res, 200, { ok: true, ...out }, CORS);
       }
       if (sub[2] === 'attachments' && req.method === 'POST') {
         // 文件名在查询串或请求头里(百分号编码);字节直接是请求体,边收边写进这个对话的工作目录。

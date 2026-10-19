@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { playEnter } from "../../enterMotion";
 import type { ChatMessage, MessagePart, ToolCallInfo } from "../../../ai/types";
 import { RoleName } from "../RoleAvatar";
@@ -69,16 +69,46 @@ export function activityText(m: ChatMessage, busyTool: ToolCallInfo | null): str
   return busyTool ? `正在执行 ${bareToolName(busyTool.name)}` : "正在思考";
 }
 
-/** 进度里的轮次和成败,单独放一行小字;没有轮次信息(CLI 驱动)就不显示 */
-export function progressMeta(m: ChatMessage): string | null {
+/**
+ * 进度里的轮次和成败,单独放一行小字;没有轮次信息(CLI 驱动)就不显示。
+ * `liveElapsedMs`:界面自己往前走的已用时间(见 LiveProgressMeta);不给就用进度里报的那个数。
+ */
+export function progressMeta(m: ChatMessage, liveElapsedMs?: number): string | null {
   const p = m.progress;
   if (!p?.round) return null;
   // maxRounds 为 null 是「不限轮次」(深度自主 + 自主轮次填 0):Infinity 过一趟 JSON 就是 null。
   // 写成「第 12/? 轮」会让人以为丢了信息,其实是本来就没有分母
   const bits = [p.maxRounds ? `第 ${p.round}/${p.maxRounds} 轮` : `第 ${p.round} 轮(不限)`];
   if (p.completed || p.failed) bits.push(`成功 ${p.completed ?? 0}·失败 ${p.failed ?? 0}`);
-  if (p.elapsedMs) bits.push(`${Math.floor(p.elapsedMs / 1000)} 秒`);
+  const elapsed = liveElapsedMs ?? p.elapsedMs;
+  if (elapsed) bits.push(`${Math.floor(elapsed / 1000)} 秒`);
   return bits.join(" · ");
+}
+
+/**
+ * 轮次那行小字里的已用时间每秒往前走。进度只在换一步时才报一次(等模型回话的那一段可能好几十秒都没有新的),
+ * 原来照抄进度里那个数,「第 1/24 轮 · 0 秒」就一直停在 0 秒(2026-10-19 在线实测)。
+ * 以收到这条进度的时刻为起点,在它报的已用时间上往前加;换了一条进度就重新对齐;也按这一轮的开始时间算一份,取大的。跑完了就停表。
+ */
+export function LiveProgressMeta({ m }: { m: ChatMessage }) {
+  const p = m.progress;
+  const sig = p ? `${p.round}|${p.elapsedMs ?? 0}|${p.phase ?? ""}|${p.text ?? ""}` : "";
+  const anchor = useRef<{ sig: string; elapsed: number; at: number } | null>(null);
+  if (p && anchor.current?.sig !== sig) anchor.current = { sig, elapsed: p.elapsedMs ?? 0, at: Date.now() };
+  const ticking = Boolean(m.pending && p?.round);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!ticking) return;
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [ticking]);
+  const now = Date.now();
+  // 这一轮的开始时间(云端的 `run` 事件带的时刻)也算一份：重新打开页面时进度是重放来的，按收到时刻对齐会少算；
+  // 两边取大的。开始时间离谱(比现在还晚、或超过一天，多半是两边时钟不准)就不用它
+  const sinceStart = typeof m.startedAt === "number" && now >= m.startedAt && now - m.startedAt < 86_400_000 ? now - m.startedAt : 0;
+  const live = ticking && anchor.current ? Math.max(anchor.current.elapsed + (now - anchor.current.at), sinceStart) : undefined;
+  const text = progressMeta(m, live);
+  return text ? <div className="ai-activity-meta" data-pc="activity-meta">{text}</div> : null;
 }
 
 /**
@@ -489,7 +519,7 @@ export function AgentBubble(props: {
               <i />
             </span>
           </div>
-          {progressMeta(pendingRound) && <div className="ai-activity-meta">{progressMeta(pendingRound)}</div>}
+          <LiveProgressMeta m={pendingRound} />
         </div>
       )}
 

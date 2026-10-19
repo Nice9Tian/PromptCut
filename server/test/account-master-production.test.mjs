@@ -91,7 +91,7 @@ test('生产的主服务装配：任务在任务进程里跑；停止真的停�
     assert.equal(stopA.how, 'graceful');
     // 任务进程读到了主服务存的那个附件，并把它导入了项目素材库
     const results = rowsOf(shared).filter(row => kind(row) === 'tool_result').map(row => [row.event.name, row.event.ok !== false]);
-    assert.deepEqual(results, [['get_project', true], ['import_media', true]]);
+    assert.deepEqual(results, [['get_project', true], ['import_media', true], /* 模型没交收尾汇报:运行器按文字回复代交一份(harness/agent.mjs requireFinalReport) */ ['report_progress', true]]);
     // 用量:任务进程把这条任务的模型请求记在共用数据目录里;成员经主服务(生产的装配)查得到,是这条任务记的那几行
     const usageA = await a.agent('/usage');
     assert.equal(usageA.status, 200, safeCode(usageA.body));
