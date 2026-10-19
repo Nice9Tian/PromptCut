@@ -160,3 +160,23 @@
 - 第 75 行（桌面 APP 的 Agent 文字输出拿不到、按 SKILL 汇报）没动：桌面 APP 会话的分组显示不在这次改动里。
 
 验证：`npx tsc -b --force` 退出码 0。按主会话说的没再跑全量。
+
+## 第三轮（主会话在集成分支上跑探针后：对照与修复）
+
+先把 `claude/accept-018-fixes`（`3f8375e4`，含 see_frames 分支与「账号项目两个托管开关缺省开」）用 `--no-ff` 合进本分支（`d8a041c3`）。对照基线是改动前的 `c5285cfc`：另建临时 worktree `.worktrees/pa-base`（detached，没建 junction；里面的 `node_modules` 只有 Vite 缓存，是普通目录），两边都 `vite build --mode online` 现打在线构建，同一命令、同一端口各跑一遍。用完已 `git worktree remove`。
+
+| 探针 | 改动前 `c5285cfc` | 本分支（修后） | 结论 |
+|---|---|---|---|
+| `account-executor-visible-probe` | —（主会话在集成分支上已 7/7） | 7/7，`completed: true` | 通过 |
+| `cloud-agent-ui-probe --base-port 29003` | 29 项失败 3：O1（多出代交的 `report_progress`）、O4 两项 | 28 项全过（`failed: 0`） | 集成分支上卡在 `enabled('[data-pc="cloud-agent-enable"]')` 是**这次合进来的「开关缺省开」引入的**：新建的账号项目直接开着，页面上没有「开启云端 Agent」按钮了。探针改成先看开关状态，关着才点。O4 改成先点回 O1 那一轮的气泡（「Agent 操作」缺省显示最新一轮，O1 后面还有别的轮次）。O1 在基线不过是旧的代交汇报，本分支已撤掉 |
+| `cloud-agent-ux-ui-probe`（缺省端口） | 15 项失败 7：D A2、D A3、D A5、D:点开后完整过程都在、D A6、接入方式里有可选的「云端」、探针自己没出错 | 14 项失败 5：D A3、D A5、D A6、接入方式里有可选的「云端」、探针自己没出错 | 剩下 5 项**原来就不过**（基线同样失败），本分支没有引入新失败，还修好两项（A2 多出代交汇报、A6 的「完整过程」）。原因见下 |
+| `account-real-runner-probe` | `completed: false`，停在 `expand-actual-output-b` | `completed: true`，17 项，退出码 0 | 集成分支上第 19 行抛 `private-output-and-site-required` 是调用方式：这支要带 `--site-root <VisuHive/site>`，`--out` 要在系统临时目录下。带上以后停在 `enable`，同样是「开关缺省开」引入的，探针已同样改法修好 |
+
+`cloud-agent-ux-ui-probe` 原来就不过的 5 项：
+
+- **D A3 / D A5 / D A6**：同一个原因。三项断言都靠「本机这套托管组合里的渲染服务把被改的重卡渲出来、入库」：A3 读渲染服务诊断口的完成数，两边都是 `completed: [0, 0]`、素材文件数 `1 → 1`；A5 播放时没有贴快照（`stage: null`、层表空）；A6 其余全过（同一项目、历史里找得到、20 次工具调用全成功、回复与「云端渲染完成」都在、项目是最新版本），只有 `prerender.ok: false`（`layers:<项目>` 的层表存在但是空的）。对话里的 `render` 事件照常是 `published → done`，也就是说 Agent 一侧认为交了，但渲染服务这边没干活。基线上一模一样，和本任务无关（预渲染与渲染服务不在我的范围），没往下查。
+- **接入方式里有可选的「云端」 / 探针自己没出错**：在线浏览器那一遍（步骤 online）里，页面上没有 `[data-pc="ai-provider"]` 这个下拉，`selectCloud` 第 240 行 `page.select` 找不到元素就抛错，后面的步骤都没跑。基线同样如此。推测是这套局域网托管档的在线页面后来不再出接入方式下拉（账号模式的探针里是「只有云端一项的下拉」），探针还按旧界面写；没在范围内改。
+
+截图：本分支 `%TEMP%/pa-ux-new/`、基线 `%TEMP%/pa-ux-base/`；ui 探针 `%TEMP%/pa-ui-new2/`。
+
+本轮提交：`a24a53bc`（ui 探针：开关缺省开）、O4 点回那一轮、`account-real-runner` 探针：开关缺省开。之后 `npx tsc -b --force` 退出码 0；三份新增单测 17/17。按主会话说的没再跑全量。
