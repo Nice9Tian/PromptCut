@@ -317,7 +317,9 @@ export function createAccountAuthority({ ledger, accountClient, initializeProjec
       state.projects[projectId] = { v: 2, identityRealm: 'account', projectId, authorityId: ledger.authorityId,
         name, status: 'pending', creatorAccountId: actor.accountId, allowLinkJoin: payload.allowLinkJoin,
         members: { [actor.accountId]: { access: 'rw', joinedAt: now(), accountNameAtJoin: actor.accountName } }, bans: {}, accessRevision: 0,
-        hosted: { render: false, agent: false }, creationRequestId: body.requestId, initialProject: payload.initialProject,
+        // 托管方的两个服务（渲染节点、云端 Agent）缺省开（product/document-service.md、product/agent.md），创建者可以关；
+        // 「生成轨道流」等子选项不在这里，没有记就是关（hostedOptions）
+        hosted: { render: true, agent: true }, creationRequestId: body.requestId, initialProject: payload.initialProject,
         initialRev, initialHistory };
       state.requests[key] = { digest, projectId, state: 'pending' }; return { projectId, result: null };
     });

@@ -2,7 +2,9 @@
  * 账号项目那条路的「托管方的渲染节点」与「生成轨道流」(任务书 `docs/plan/render-refactor-task.md`「甲三」;
  * 契约 `docs/plan/hosted-render-contract.md` 第 3.1 节):创建者经 `/hosted/shared/account/admin` 改,成员只读(从会话里读)。
  *
- *   AHO-1  新建的账号项目:会话里 `hosted.render` 是 `{ available, enabled: false, streams: false }`;`available` 看登记表里有没有渲染服务的公钥
+ *   AHO-1  新建的账号项目:托管方的两个服务缺省开(`product/document-service.md`、`product/agent.md`),「生成轨道流」缺省关:
+ *          会话里 `hosted.render` 是 `{ available, enabled: true, streams: false }`、`hosted.agent.enabled` 为真;`available` 看登记表里有没有渲染服务的公钥
+ *          (2026-10-20 按语义更正:原先断言两个开关缺省关,与语义冲突,见 `docs/reports/AGENT-see-frames-fail.md`)
  *   AHO-2  创建者 `set-hosted-option { service: 'render', option: 'streams' }`:记进账本的 `hostedOptions.render.streams`,会话跟着变;
  *          与服务的开关互不冲掉;记一条访问事件(不带受影响的成员,不停任何任务);同一个 requestId 重放回同一个结果
  *   AHO-3  校验:服务、选项、布尔值不对回 400 `invalid-option`;版本号对不上回 409;不落账
@@ -60,14 +62,16 @@ async function fixture(t, { render = true } = {}) {
 }
 const fails = async (fn, status, code) => assert.rejects(fn, (error) => error.status === status && error.code === code);
 
-test('AHO-1 新建的账号项目:会话里渲染节点与「生成轨道流」都是关的;available 看登记表里有没有渲染服务', async (t) => {
+test('AHO-1 新建的账号项目:渲染节点与云端 Agent 缺省开,「生成轨道流」缺省关;available 看登记表里有没有渲染服务', async (t) => {
   const f = await fixture(t);
   const s = await f.session('tok-a');
-  assert.deepEqual(s.hosted.render, { available: true, enabled: false, streams: false });
+  assert.deepEqual(s.hosted.render, { available: true, enabled: true, streams: false });
   assert.equal(s.creator, true);
-  assert.deepEqual(s.hosted.agent, { available: false, enabled: false, url: null }, '云端 Agent 那一项不变');
+  assert.deepEqual(s.hosted.agent, { available: false, enabled: true, url: null }, '云端 Agent 缺省开(登记表里没有 Agent 服务,available 为假)');
+  assert.deepEqual(f.record().hosted, { render: true, agent: true }, '账本里两个开关缺省开');
+  assert.equal(f.record().hostedOptions, undefined, '子选项没有记,就是关');
   const none = await fixture(t, { render: false });
-  assert.deepEqual((await none.session('tok-a')).hosted.render, { available: false, enabled: false, streams: false }, '登记表里没有渲染服务:available 为假(页面上不出这两行)');
+  assert.deepEqual((await none.session('tok-a')).hosted.render, { available: false, enabled: true, streams: false }, '登记表里没有渲染服务:available 为假(页面上不出这两行)');
   // 登记与口令项目那条路是同一份
   assert.deepEqual(ACCOUNT_OPTIONS, HOSTED_OPTIONS);
   assert.deepEqual(accountRenderState({}), { enabled: false, streams: false });
@@ -83,8 +87,8 @@ test('AHO-2 创建者改「生成轨道流」:落账、会话跟着变、与服�
   assert.equal(on.completed, false);
   assert.equal(on.state, 'pending-services');
   assert.deepEqual(f.record().hostedOptions, { render: { streams: true } });
-  assert.deepEqual(f.record().hosted, { render: false, agent: false }, '服务的开关仍是布尔,没有被动到');
-  assert.deepEqual((await f.session('tok-a')).hosted.render, { available: true, enabled: false, streams: true }, '渲染节点关着时照样能改(界面置灰)');
+  assert.deepEqual(f.record().hosted, { render: true, agent: true }, '服务的开关仍是布尔,没有被动到');
+  assert.deepEqual((await f.session('tok-a')).hosted.render, { available: true, enabled: true, streams: true });
   const state = f.ledger.read();
   assert.equal(state.accessHead, headBefore + 1);
   const event = state.accessEvents.at(-1);
@@ -97,7 +101,9 @@ test('AHO-2 创建者改「生成轨道流」:落账、会话跟着变、与服�
   // 同一个 requestId 换了内容:拒
   await fails(() => f.authority.adminProject({ accessToken: 'tok-a' }, { ...request, enabled: false }), 409, 'request-mismatch');
 
-  // 开渲染节点:不冲掉子选项;关子选项:不冲掉渲染节点的开关
+  // 关、开渲染节点:不冲掉子选项;关子选项:不冲掉渲染节点的开关
+  await f.admin('tok-a', { op: 'set-hosted-service', service: 'render', enabled: false, requestId: 'render-off' });
+  assert.deepEqual((await f.session('tok-a')).hosted.render, { available: true, enabled: false, streams: true }, '渲染节点关着时子选项照旧(界面置灰)');
   await f.admin('tok-a', { op: 'set-hosted-service', service: 'render', enabled: true, requestId: 'render-on' });
   assert.deepEqual((await f.session('tok-a')).hosted.render, { available: true, enabled: true, streams: true });
   await f.admin('tok-a', { op: 'set-hosted-option', service: 'render', option: 'streams', enabled: false, requestId: 'streams-off' });
@@ -147,7 +153,7 @@ test('AHO-5 公开路由 /hosted/shared/account/admin:创建者凭登录令牌�
   };
   const before = await post('tok-a', '/hosted/shared/account/session', { projectId: f.projectId, deviceId: 'device-a', requestId: 'session-1' });
   assert.equal(before.status, 200);
-  assert.deepEqual(before.value.hosted.render, { available: true, enabled: false, streams: false });
+  assert.deepEqual(before.value.hosted.render, { available: true, enabled: true, streams: false });
   const body = { projectId: f.projectId, op: 'set-hosted-option', service: 'render', option: 'streams', enabled: true, expectedAccessRevision: before.value.accessRevision, requestId: 'route-on' };
   const denied = await post('tok-b', '/hosted/shared/account/admin', { ...body, requestId: 'route-b' });
   assert.deepEqual([denied.status, denied.value.code], [403, 'creator-required']);
@@ -155,7 +161,7 @@ test('AHO-5 公开路由 /hosted/shared/account/admin:创建者凭登录令牌�
   assert.equal(ok.status, 200);
   assert.equal(ok.value.state, 'pending-services');
   const after = await post('tok-b', '/hosted/shared/account/session', { projectId: f.projectId, deviceId: 'device-b', requestId: 'session-2' });
-  assert.deepEqual(after.value.hosted.render, { available: true, enabled: false, streams: true });
+  assert.deepEqual(after.value.hosted.render, { available: true, enabled: true, streams: true });
   assert.equal(after.value.creator, false);
 });
 
@@ -187,7 +193,7 @@ test('AHO-6 权限组:创建者开启 streams 需要 render_streams 权限组，
   // Alice initially NOT in group:
   // 1. Session returns streamsAllowed: false
   const s1 = await runtime.issueSession({ principal: await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId }), deviceId: 'dev-1' });
-  assert.deepEqual(s1.hosted.render, { available: true, enabled: false, streams: false, streamsAllowed: false });
+  assert.deepEqual(s1.hosted.render, { available: true, enabled: true, streams: false, streamsAllowed: false });
 
   // 2. Alice tries to enable streams: rejected with 403 permission-denied
   const reqOn = { projectId, expectedAccessRevision: (await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId })).accessRevision,
@@ -197,18 +203,18 @@ test('AHO-6 权限组:创建者开启 streams 需要 render_streams 权限组，
   // 3. Add Alice to group: Alice can enable streams
   allowedAccounts.add(A);
   const s2 = await runtime.issueSession({ principal: await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId }), deviceId: 'dev-2' });
-  assert.deepEqual(s2.hosted.render, { available: true, enabled: false, streams: false, streamsAllowed: true });
+  assert.deepEqual(s2.hosted.render, { available: true, enabled: true, streams: false, streamsAllowed: true });
 
   const ok = await authority.adminProject({ accessToken: 'tok-a' }, { ...reqOn, requestId: 'req-ok' });
   assert.equal(ok.state, 'pending-services');
 
   const s3 = await runtime.issueSession({ principal: await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId }), deviceId: 'dev-3' });
-  assert.deepEqual(s3.hosted.render, { available: true, enabled: false, streams: true, streamsAllowed: true });
+  assert.deepEqual(s3.hosted.render, { available: true, enabled: true, streams: true, streamsAllowed: true });
 
   // 4. Remove Alice from group: previously enabled project returns streams: false and streamsAllowed: false
   allowedAccounts.delete(A);
   const s4 = await runtime.issueSession({ principal: await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId }), deviceId: 'dev-4' });
-  assert.deepEqual(s4.hosted.render, { available: true, enabled: false, streams: false, streamsAllowed: false });
+  assert.deepEqual(s4.hosted.render, { available: true, enabled: true, streams: false, streamsAllowed: false });
 
   // 5. Turning OFF streams is allowed even without permission
   const rev = (await authority.authorizePrincipal({ accessToken: 'tok-a' }, { projectId })).accessRevision;
