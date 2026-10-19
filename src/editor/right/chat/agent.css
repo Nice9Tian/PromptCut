@@ -1210,6 +1210,8 @@
   overflow-y: auto;
   min-width: 0;
 }
+/* 内容比最大高度高时滚动,子块不被压扁 */
+.pc-activity-body > * { flex: none; }
 .pc-activity-prompt {
   color: var(--ui-fg-faint, #77758A);
   white-space: nowrap;
