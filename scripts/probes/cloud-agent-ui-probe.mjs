@@ -22,7 +22,7 @@
  *       以外的编辑器进程请求;页面打 Agent 服务的每个请求都带账号会话签的委托票据,发消息的请求体里带对话委托;
  *   O8  空对话只有一条示例句「为我快速创建一个视频告诉我软件都可以做什么。」;云端下一键配特效置灰并写真实原因,诊断报告不隐藏;
  *   O1  发一条消息(模型脚本:先加一条轨道和三张文字卡,再读项目、改文案、挪片段、调卡片参数各一次):收尾之前就能看到停止按钮与工具调用(流式),
- *       最后有回复;页面编辑区看到三处改动;「Agent 操作记录」里这几步有记录,点「撤销这步」撤掉最后一步;
+ *       最后有回复(气泡里);页面编辑区看到三处改动;「Agent 操作」(2026-10-20 取代「Agent 操作记录」)显示这一轮的这几步,在里面点「撤销这步」撤掉最后一步;
  *   O9  云端下「诊断报告」可用:报告是这段云端对话的过程、客户端与版本信息,没有票据形状的串、Bearer、Key;在线页面的「保存为文件」是浏览器下载;
  *   O12 〔反向通道;--phases reverse 才跑〕发起方在线时云端 Agent 能操作他的页面:调 `seek` 后播放头到了那个时刻;`play` 后在播、`pause` 后停下;`get_selection` 回当下的选区。
  *       账号模式下这一段现在不通(云端 Agent 回「发起方不在线」,页面没收到要它执行的请求),先单独成一段,免得它拖死别的断言;见报告「发现的产品问题」;
@@ -47,7 +47,7 @@ import { startRunnerProcessFixture } from '../../server/test/fixtures/account-ru
 import { createTimings } from './probe-timings.mjs';
 import {
   ROOT, sleep, USER_PORTS, portFree, createUi, launchBrowser, killBrowser, newPage, P, mockSteps, msgs, conversationOf,
-  toolCount, lastAssistant, panelText, providerOptions, sendText, eventLog, gateSettled,
+  toolCount, lastAssistant, panelText, providerOptions, sendText, activity, undoLatestStep, gateSettled,
 } from './cloud-agent-ui-lib.mjs';
 
 const argv = process.argv.slice(2);
@@ -252,15 +252,14 @@ try {
     check('O1:AI 栏里能读到回复文字与「在云端运行」说明', (await panelText(A)).includes('三处都改好了') && (await panelText(A)).includes('在云端运行,关闭后继续'), { head: (await panelText(A)).slice(0, 160) });
     const post1 = agentReqs(A).slice(reqBase1).filter((r) => r.method === 'POST' && /\/messages$/.test(new URL(r.url).pathname));
     check('O1:发消息的请求带账号会话签的委托票据(账号模式的请求体里没有单独的 grant 字段,detail 里记下)', post1.length === 1 && post1[0].auth !== null, { posts: post1.length, auth: post1[0]?.auth ?? null, grant: post1[0]?.grant ?? null });
-    const log1 = await until('O1:Agent 操作记录里出现这几步', async () => { const l = await eventLog(A); return l && l.count >= 4 ? l : null; }, 15_000, 200);
-    check('O1:「Agent 操作记录」里有这几步的记录,署名是云端 Agent', !!log1 && log1.rows.length >= 4 && log1.rows.every((r) => /云端 Agent/.test(r.who)), { count: log1?.count, who: [...new Set((log1?.rows ?? []).map((r) => r.who))] });
-    const undoRow = (log1?.rows ?? []).find((r) => r.undo === 'ready' && r.tool.includes('update_clip')) ?? (log1?.rows ?? []).find((r) => r.undo === 'ready');
+    // 「Agent 操作」只显示这个对话、这一轮:读项目 + 三处改动 = 4 次操作(2026-10-20 取代按项目频道列的「Agent 操作记录」)
+    const act1 = await until('O1:「Agent 操作」里显示这一轮的这几步', async () => { const a = await activity(A); return a && a.index === a.total && a.count >= 4 && !a.live ? a : null; }, 15_000, 200);
+    const lastId = lastAssistant(await msgs(A))?.id ?? null;
+    check('O1:「Agent 操作」显示的是这个对话的最新一轮(读项目 + 三处改动)', !!act1 && act1.roundId === lastId && act1.count === 4, { roundId: act1?.roundId ?? null, lastAssistant: lastId, count: act1?.count ?? null, round: act1 ? `${act1.index}/${act1.total}` : null });
     const beforeUndo = JSON.stringify(await pageProject(A));
-    if (undoRow) await A.click(`[data-pc="agent-event"][data-event-id="${undoRow.id}"] [data-pc="agent-undo"]`);
-    const undone = undoRow ? await until('O1:撤销后页面里的项目内容变了', async () => (JSON.stringify(await pageProject(A)) !== beforeUndo ? true : null), 10_000, 200) : null;
-    const after = await eventLog(A);
-    const rowAfter = after?.rows.find((r) => r.id === undoRow?.id) ?? null;
-    check('O1:点「撤销这步」:这一步的按钮变成「已撤销」,页面里的项目内容回到改之前', !!undoRow && rowAfter?.undo === 'done' && !!undone, { tool: undoRow?.tool ?? null, undo: rowAfter?.undo ?? null });
+    const undoneStep = await undoLatestStep(A);
+    const undone = undoneStep ? await until('O1:撤销后页面里的项目内容变了', async () => (JSON.stringify(await pageProject(A)) !== beforeUndo ? true : null), 10_000, 200) : null;
+    check('O1:在「Agent 操作」里点「撤销这步」:这一步的按钮变成「已撤销」,页面里的项目内容回到改之前', !!undoneStep?.done && !!undone, { icon: undoneStep?.icon ?? null, done: undoneStep?.done ?? null });
     await shot(A, 'O1-online-done');
 
     /* ---- O9:诊断报告 */
@@ -348,10 +347,11 @@ try {
         await B.waitForFunction((id) => window.__pcCloud?.main?.conversationId?.() === id, { timeout: 30_000 }, convId).catch(() => {});
         const back = await until('O4:点开后找回完整过程(含刚才的工具调用与回复)', async () => {
           const text = await panelText(B);
-          const ops = await P(B, () => document.querySelectorAll('button[data-pc-op].is-ok').length);
+          // 工具调用在底部「Agent 操作」里,显示最新一轮(读项目 + 三处改动 = 4 次;撤销那一步不算 Agent 的操作)
+          const ops = (await activity(B))?.count ?? 0;
           return text.includes('三处都改好了') && ops >= 4 ? { ops } : null;
         }, 30_000, 300);
-        check('O4:点开后过程完整:工具调用的小标都在(至少四个)、回复里有「三处都改好了」', !!back, back ?? { text: (await panelText(B)).slice(-200) });
+        check('O4:点开后过程完整:「Agent 操作」里这一轮的操作都在(至少四次)、气泡里有「三处都改好了」', !!back, back ?? { text: (await panelText(B)).slice(-200) });
       }
       await shot(B, 'O4-reopen-history');
     }
