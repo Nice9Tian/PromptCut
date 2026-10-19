@@ -666,7 +666,7 @@ export function CloudAiPanel(props: {
 
       <AgentEventLog />
       <ThinkingStrip messages={chat.messages} streaming={streaming} />
-      {cloud.accountMode ? <CloudQueueList queue={view.queue} messages={chat.messages} senders={view.senders} /> :
+      {cloud.accountMode ? <CloudQueueList queue={view.queue} messages={chat.messages} senders={view.senders} executorMounted={chat.info?.executorMounted === true} /> :
         <QueueList tabId={qKey} running={view.streaming} onInsert={insertQueued} onEdit={editQueued} onResume={resumeQueue} hasDraft={hasDraft} />}
 
       {cloud.accountMode && chat.messages.some(m => m.role === 'assistant' && m.pending && (m.progress?.waitingJobs || m.progress?.phase === 'waiting_jobs')) &&
