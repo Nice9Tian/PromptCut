@@ -75,7 +75,7 @@ export class Agent {
       const input = { final: true, has_done: done.length > 0, has_todo: false, has_problem: true, done, todo: [], problems };
       const callId = `auto-report-${round}`;
       this.onEvent({ type: 'tool_call', callId, round, name: this.reportTool.name, input, synthetic: true });
-      this.onEvent({ type: 'tool_result', callId, round, name: this.reportTool.name, ok: true, summary: '已由服务端按文字回复代交', output: { ok: true, synthetic: true }, durationMs: 0 });
+      this.onEvent({ type: 'tool_result', callId, round, name: this.reportTool.name, ok: true, summary: '已由服务端按文字回复代交', output: { ok: true, synthetic: true }, durationMs: 0, synthetic: true });
       reported = true;
     };
 

@@ -56,7 +56,9 @@ export function createWorkerConfiguration() {
     expected: settings.expected, reservation: settings.reservation, identityTls: tls('asset'),
     doc: { origin: settings.docOrigin, tls: tls('wrong'), serverFingerprint256: settings.docFingerprint256 },
     readRootRecord: async () => JSON.parse(fs.readFileSync(path.join(settings.chainDir, `epoch-${settings.reservation.epoch}.json`), 'utf8')),
-    eventSink: { file: settings.journalFile, origin: settings.masterOrigin, tls: tls('wrong'), serverFingerprint256: settings.masterFingerprint256 },
+    // 交事件一时交不上的重交时限缩到 2 秒:「主服务一直答不上 → 任务进程放弃」那一项不必等生产的 90 秒
+    eventSink: { file: settings.journalFile, origin: settings.masterOrigin, tls: tls('wrong'), serverFingerprint256: settings.masterFingerprint256,
+      retryBudgetMs: 2_000, retryBaseMs: 100 },
     createAssemblyOptions: async () => ({ dataDir: settings.dataDir, controlPort: 0, root: settings.dataDir,
       loadModule: async () => { throw new Error('controlled-runner-has-no-ssr'); },
       modelConfig: async () => ({ vendor: 'controlled' }), runnerFactory: scriptedRunner }),

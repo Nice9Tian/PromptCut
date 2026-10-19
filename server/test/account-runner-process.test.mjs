@@ -63,7 +63,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     // 真实的工具在这个进程里跑了：三个工具都成功，项目真的被改了（文档服务的版本往前走了，名字换了）
     const rows1 = f.events(conversationId).filter(row => row.runGrantId === g1.runGrantId);
     assert.deepEqual(rows1.filter(row => row.event.type === 'tool_result').map(row => [row.event.name, row.event.ok]),
-      [['get_project', true], ['set_project_meta', true], ['see_frames', true], ['import_media', true]],
+      [['get_project', true], ['set_project_meta', true], ['see_frames', true], ['import_media', true], /* 模型没交收尾汇报:运行器按文字回复代交一份(harness/agent.mjs requireFinalReport) */ ['report_progress', true]],
       `${JSON.stringify(rows1.filter(row => row.event.type === 'tool_result').map(row => row.event.summary ?? null))} :: ${diagnose()}`);
     assert.equal(rows1.filter(row => row.event.type === 'text').map(row => row.event.delta).join(''), '第一条做完');
     const state = await actor.project();
@@ -116,7 +116,7 @@ test('真实运行器在任务进程里：带工具调用的任务做完并结�
     await waitFinished(reader, '读素材的那一条结清'); mark('reader');
     const gr = f.grantOf(reader), rowsR = f.events(conversationId).filter(row => row.runGrantId === gr.runGrantId);
     assert.equal(gr.terminalOutcome.status, 'done');
-    assert.deepEqual(rowsR.filter(row => row.event.type === 'tool_result').map(row => [row.event.name, row.event.ok]), [['measure_audio', true]],
+    assert.deepEqual(rowsR.filter(row => row.event.type === 'tool_result').map(row => [row.event.name, row.event.ok]), [['measure_audio', true], /* 模型没交收尾汇报:运行器按文字回复代交一份(harness/agent.mjs requireFinalReport) */ ['report_progress', true]],
       `measure_audio: ${JSON.stringify(rowsR.filter(row => row.event.type === 'tool_result').map(row => row.event.summary ?? null))} :: ${diagnose()}`);
     const readIntent = Object.values(f.ledger().runAssetIntentsV1 ?? {}).find(row => row.purpose === 'openRead' && row.grantBinding.runGrantId === gr.runGrantId);
     assert.ok(readIntent, '文档服务给这条任务签过这次读取'); assert.equal(readIntent.resource.hash, wavHash);

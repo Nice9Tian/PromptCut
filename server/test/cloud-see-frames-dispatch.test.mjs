@@ -236,7 +236,8 @@ test('cloud see_frames dispatch: scopeBinding.assignmentDigest propagation, look
   await handle.done;
   await runner.drain();
 
-  const toolResults = events.filter((e) => e.type === 'tool_result');
+  // 代交的收尾汇报(模型没交;harness/agent.mjs requireFinalReport)不算
+  const toolResults = events.filter((e) => e.type === 'tool_result' && e.name !== 'report_progress');
   assert.equal(toolResults.length, 1);
   assert.equal(toolResults[0].name, 'see_frames');
   assert.equal(toolResults[0].ok, true, `see_frames 应当成功，实际: ${JSON.stringify(toolResults[0])}`);

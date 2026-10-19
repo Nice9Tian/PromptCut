@@ -64,7 +64,7 @@ test('CA-LOOK-02 配了看画面的口子:画面进模型的历史;项目来自�
   const ea = await kit.finished(alice, 'c-look');
   assert.equal(ea.at(-1).state, 'idle');
   const results = ea.filter((e) => e.type === 'tool_result');
-  assert.deepEqual(results.map((e) => [e.name, e.ok]), [['update_clip', true], ['see_frames', true], ['get_layout', true], ['see_frames', false]]);
+  assert.deepEqual(results.map((e) => [e.name, e.ok]), [['update_clip', true], ['see_frames', true], ['get_layout', true], ['see_frames', false], /* 模型没交收尾汇报:运行器按文字回复代交一份(harness/agent.mjs requireFinalReport) */ ['report_progress', true]]);
   // 交给渲染服务的:这个实例的项目、这一版副本(含刚落地的改动)、要的时刻
   const snap = look.calls.find((c) => c.path === '/api/vision/snapshot');
   assert.equal(snap.projectId, 'p-a');
@@ -98,7 +98,7 @@ test('CA-LOOK-02 配了看画面的口子:画面进模型的历史;项目来自�
   const e2 = await kit.finished(alice, 'c-look-2');
   assert.equal(e2.at(-1).state, 'idle');
   const r2 = e2.filter((e) => e.type === 'tool_result');
-  assert.deepEqual(r2.map((e) => [e.name, e.ok]), [['see_frames', false], ['bake_card', false]]);
+  assert.deepEqual(r2.map((e) => [e.name, e.ok]), [['see_frames', false], ['bake_card', false], /* 模型没交收尾汇报:运行器按文字回复代交一份(harness/agent.mjs requireFinalReport) */ ['report_progress', true]]);
   assert.match(r2[0].summary, /这次没看成：渲染服务正在渲别的项目的自定义卡片/);
   assert.ok(Date.now() - t0 < 20_000);
   assert.equal(imagesIn(historyOf(kit, alice, 'c-look-2')).length, 0);

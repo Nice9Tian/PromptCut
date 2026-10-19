@@ -36,7 +36,8 @@ test('2.3-6 账号模式端到端：改文案、挪片段、调卡片参数各�
     await until(() => rowsOf(conversationId).some(row => row.event.type === 'runner_done'), `${conversationId} 跑完`);
     return rowsOf(conversationId);
   };
-  const tools = rows => rows.filter(row => row.event.type === 'tool_result').map(row => ({ name: row.event.name, ok: row.event.ok }));
+  // 运行器代交的收尾汇报(模型没交时,harness/agent.mjs requireFinalReport)不算模型自己的工具调用
+  const tools = rows => rows.filter(row => row.event.type === 'tool_result' && !row.event.synthetic).map(row => ({ name: row.event.name, ok: row.event.ok }));
   const projectOf = async actor => (await actor.send({ type: 'project.open', projectId })).project;
   const clipsOf = project => project.tracks.flatMap(track => track.clips);
 

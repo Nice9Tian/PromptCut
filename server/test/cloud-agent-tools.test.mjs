@@ -153,7 +153,7 @@ test('CA-HT-03 / CA-HT-04 / CA-HT-05 建卡改卡、创造力等级、导入素�
     const r = toolResults(await kit.finished(A, 'c-card', 120_000));
     assert.deepEqual(r.map((x) => `${x.name}:${x.ok}`), [
       'create_card:true', 'list_cards:true', 'add_clip:true', 'get_card_source:true', 'edit_card:true',
-      'create_card:false', 'create_card:false', 'create_card:false', 'get_card_source:true', 'card_authoring_guide:true',
+      'create_card:false', 'create_card:false', 'create_card:false', 'get_card_source:true', 'card_authoring_guide:true', /* 模型没交收尾汇报:运行器按文字回复代交一份(harness/agent.mjs requireFinalReport) */ 'report_progress:true',
     ], JSON.stringify(r.filter((x) => !x.ok).map((x) => x.summary.slice(0, 160))));
     assert.match(r[5].summary, /已存在/);
     assert.match(r[7].summary, /setTimeout/);
