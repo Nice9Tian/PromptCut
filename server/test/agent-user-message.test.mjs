@@ -112,3 +112,27 @@ test('经 MCP 的路(CLI 驱动、公告板):send_message 发给 user 直接答�
   assert.deepEqual(board.sendMessage('cc-me', { to: 'user', text: '先看画面' }), { ok: true, shown: true, note: '已显示在用户的对话气泡里' });
   assert.throws(() => board.sendMessage('cc-me', { to: 'cc-nobody', text: 'x' }), /没有这个 Agent/);
 });
+
+test('工具出错时调试信息(debug)与错误码一并交给模型:去掉凭证、截短', async () => {
+  const { toolErrorResult, TOOL_DEBUG_CHARS } = await import('../harness/agent.mjs');
+  const debug = { card: 'user-card-1', line: 42, stage: 'render', pageError: 'ReferenceError: x is not defined',
+    token: 'abc', headers: { Authorization: 'Bearer abcdef123456' }, note: 'key sk-ABCDEFGHIJKLMNOP and ticket v1.AAAAAAAAAAAAAAAAAAAA.BBBB' };
+  const r = toolErrorResult(Object.assign(new Error('渲染超时'), { code: 'look-timeout', debug }));
+  assert.equal(r.error, '渲染超时'); assert.equal(r.code, 'look-timeout');
+  assert.match(r.debug, /user-card-1/); assert.match(r.debug, /"line":42/); assert.match(r.debug, /ReferenceError/);
+  assert.doesNotMatch(r.debug, /abcdef123456|sk-ABCDEFGHIJKLMNOP|v1\.AAAA/); assert.doesNotMatch(r.debug, /"token":"abc"/);
+  const long = toolErrorResult(Object.assign(new Error('x'), { debug: 'y'.repeat(5000) }));
+  assert.ok(long.debug.length < TOOL_DEBUG_CHARS + 40); assert.match(long.debug, /已截断/);
+  assert.deepEqual(toolErrorResult(new Error('plain')), { error: 'plain' });
+
+  // 走一遍 Agent:模型拿到的 tool_result 里有 debug
+  const BOOM = { name: 'see_frames', description: 'x', inputSchema: { type: 'object', properties: {} },
+    async execute() { throw Object.assign(new Error('渲染超时'), { debug: { card: 'c9', line: 7 } }); } };
+  let n = 0; const seen = [];
+  const provider = { name: 'f', async *stream(messages) { seen.push(structuredClone(messages));
+    if (n++ === 0) { yield { type: 'tool_use', id: 'c1', name: 'see_frames', input: {} }; yield { type: 'stop', reason: 'tool_use' }; }
+    else { yield { type: 'text_delta', text: '看不了' }; yield { type: 'stop', reason: 'stop' }; } } };
+  await new Agent({ provider, system: 's', tools: [BOOM], onEvent: () => {} }).run('看');
+  const toolResult = seen[1].flatMap(m => Array.isArray(m.content) ? m.content : []).find(b => b.type === 'tool_result');
+  assert.equal(toolResult.is_error, true); assert.match(toolResult.content, /"debug":"\{\\"card\\":\\"c9\\",\\"line\\":7\}"/);
+});

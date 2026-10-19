@@ -16,6 +16,37 @@ const isReportTool = name => typeof name === 'string' && (name === 'report_progr
 export const isUserMessageCall = (name, input) => typeof name === 'string' && (name === 'send_message' || /(?:__|[.:/])send_message$/.test(name)) &&
   !!input && typeof input === 'object' && typeof input.to === 'string' && input.to.trim().toLowerCase() === 'user';
 
+/** 调试信息交给模型的上限(字符);整份截到这么长 */
+export const TOOL_DEBUG_CHARS = 2000;
+/** 键名像密钥、令牌、票据的,值一律换成 [已隐去] */
+const SECRET_KEY = /token|secret|password|passwd|authorization|cookie|ticket|credential|signature|api[-_]?key|private[-_]?key|^key$|bearer/i;
+/** 值本身像凭证的:Bearer 头、sk- 形状的 Key、票据(v1.xxx.yyy)、JWT */
+const SECRET_VALUE = /Bearer\s+[A-Za-z0-9._~+/=-]+|\bsk-[A-Za-z0-9_-]{12,}|\bv1\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_.-]+|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/g;
+function redact(value, depth = 0) {
+  if (typeof value === 'string') return value.replace(SECRET_VALUE, '[已隐去]');
+  if (!value || typeof value !== 'object') return value;
+  if (depth > 6) return '[层数太深,省略]';
+  if (Array.isArray(value)) return value.slice(0, 50).map(v => redact(v, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, SECRET_KEY.test(k) ? '[已隐去]' : redact(v, depth + 1)]));
+}
+/**
+ * 工具抛错时交给模型的结果:原因(message)之外,工具附带的错误码(code)与调试信息(debug)一并给。
+ * product/agent.md「看画面渲染超时就停」要求 Agent 拿得到调试信息(卡在哪张卡哪一行、页面报的错……);
+ * 原先只给 message,debug 被丢掉了(2026-10-20 主会话查到)。debug 去掉像凭证的键和值,整份截到 TOOL_DEBUG_CHARS 字。
+ */
+export function toolErrorResult(err) {
+  const result = { error: err?.message || String(err) };
+  if (err && typeof err === 'object') {
+    if (typeof err.code === 'string' && err.code) result.code = err.code;
+    if (err.debug !== undefined && err.debug !== null) {
+      let text;
+      try { text = typeof err.debug === 'string' ? redact(err.debug) : JSON.stringify(redact(err.debug)); } catch { text = String(err.debug); }
+      if (typeof text === 'string' && text) result.debug = text.length > TOOL_DEBUG_CHARS ? `${text.slice(0, TOOL_DEBUG_CHARS)}……(调试信息较长,已截断)` : text;
+    }
+  }
+  return result;
+}
+
 export class Agent {
   /**
    * maxIterations 允许是 Infinity(深度自主 + 自主轮次填 0)。这时循环没有终点,
@@ -197,7 +228,7 @@ export class Agent {
           checkAbort(this.signal);
         } catch (err) {
           checkAbort(this.signal);
-          ok = false; result = { error: err.message || String(err) };
+          ok = false; result = toolErrorResult(err);
         } finally { clearInterval(toolHeartbeat); }
         // 图片从工具结果里摘出来。留在 JSON 里的话，base64 会被当成普通文本灌进历史：
         // 模型看不见画面，几十万字符还会立刻把上下文撑爆并触发截断。摘出来还有个好处是
