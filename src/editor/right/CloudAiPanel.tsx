@@ -145,7 +145,9 @@ export function CloudAiPanel(props: {
   // during the render before the refresh effect runs.
   const metadataAvailabilityKey = `${cloud.enabled ? "on" : "off"}:${chat.info?.enabled === false ? "off" : "on"}`;
   const metadataKey = `${qKey}:${chat.conversationId}:${metadataAvailabilityKey}`;
-  const metadataReady = !cloud.accountMode || metadataReadyKey === metadataKey;
+  // 这个项目的对话列表(几个分页共用一份，进项目就开始读)读到过就能判断这段对话是谁的、能不能发：不必每次换对话、开分页都再等一个来回。
+  // 列表只决定界面开关；发消息、切权限、停止在服务端逐次核对。
+  const metadataReady = !cloud.accountMode || chat.history.loaded || metadataReadyKey === metadataKey;
   const creatorReadOnly = controlPolicy.creatorReadOnly;
   const canSwitchVisibility = controlPolicy.canSwitchVisibility;
   useEffect(() => { setTabBusy(tabId, streaming); }, [tabId, streaming]);
@@ -161,7 +163,8 @@ export function CloudAiPanel(props: {
       controlPendingRef.current = null;
       setControlPending(null);
     }
-    void chat.history.refresh().then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
+    // 两秒内读回来过的直接用(切分页、换对话时常见)，不再等一个来回
+    void chat.history.refresh(false, 2000).then(ok => { if (live && ok) setMetadataReadyKey(metadataKey); });
     return () => { live = false; };
   }, [cloud.accountMode, consent.accepted, chat.conversationId, chat.history.refresh, metadataKey]);
 
