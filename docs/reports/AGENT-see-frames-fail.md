@@ -49,23 +49,39 @@
 - 渲染附加项不适用：没改画面、渲染管线、取帧本身。
 - 真实网络验证未跑：本任务对节点只读，不部署。
 
-## 部署清单（交主会话执行）
+## 部署清单（交主会话执行；含第二轮）
 
-| 文件 | 目标 | 说明 |
-|---|---|---|
-| `server/agent/service/frame-dispatcher.mjs` | `/opt/promptcut-render/releases/35f7b2abb9db/server/agent/service/` | `root:root`、`0644`。它只在任务进程里加载（`account-runner.mjs` 引入），任务槽每代新开进程，换完下一轮就生效，不用重启服务。 |
+节点上这几份文件现在的内容与 `c5285cfc` 相同，只是 CRLF 行尾（`diff --strip-trailing-cr` 核过 `frame-dispatcher.mjs`、`look.mjs`；`authority.mjs` 的 SHA-256 与 git blob 一致）。换上的用 git blob 的 LF 字节（`git show <提交>:<路径>`），`root:root`、`0644`。
 
-- 换前：`systemctl show promptcut-agent-root -p ExecStart` 确认在用的仍是 `35f7b2abb9db`；确认没有在跑的任务。
-- 备份：`install -d -m 700 /root/see-frames-reason-backup-<时间>/ && cp -p <目标文件> 那里`。
-- 回滚：拷回备份文件，同样不用重启。
-- 验收：在一个渲染节点关着的测试项目里让云端 Agent 调 `see_frames`，tool_result 应是渲染服务那句 `service-disabled` 的话；在渲染节点开着的项目里照常出图。
+| 文件 | 换哪棵树 | 谁加载 | 要重启 |
+|---|---|---|---|
+| `server/account/authority.mjs` | 文档服务 `/opt/promptcut-v2/releases/35f7b2ab/pc`（`promptcut-doc-v2` 实际跑的目录，`ExecStart` 已核）；Agent 树 `/opt/promptcut-render/releases/35f7b2abb9db` 也换，保持两棵一致 | 只有文档服务（`createProject` 在 `docservice/modules/account-projects.mjs` 里调）；Agent 主服务、任务进程、渲染服务都不引入它 | `systemctl restart promptcut-doc-v2`，随后按 `docs/local.md` 跑一次 `node /opt/promptcut-v2/releases/35f7b2ab/pc/server/hosted/deploy/asset-root-registry-publisher.mjs --config /etc/promptcut/asset-root/publisher.json --rotate`。Agent 树那份不用重启 |
+| `server/hosted-render/look.mjs` | Agent 树 `/opt/promptcut-render/releases/35f7b2abb9db`（`/opt/promptcut-render/current` 指向它）；文档服务树那份可一并换，不加载 | 渲染服务（PM2 `promptcut-render`）出这句话；任务进程也引入但只用常量 | `pm2 restart promptcut-render`（在跑的看画面请求会被打断，Agent 一侧按退避接着问） |
+| `server/agent/service/frame-dispatcher.mjs` | Agent 树 `/opt/promptcut-render/releases/35f7b2abb9db` | 任务进程（`account-runner.mjs`） | 不用，任务槽每代新开进程 |
+
+- 换前：确认 0 条活跃任务、6 个任务槽 `closed / inactive`；备份三份原文件（两棵树各自）到 `/root/see-frames-default-backup-<时间>/`（`0700`）。
+- 回滚：拷回备份，照上表重启 `promptcut-doc-v2`（加 `--rotate`）与 `promptcut-render`。
+- 已有项目不动数据。「验收018-Claude」仍是 `render: false`，要看画面须创建者在项目设置里开渲染节点（或主会话另定是否给已有项目补开）。
+- 部署后验收：① 新建一个账号测试项目，会话里 `hosted.render.enabled`、`hosted.agent.enabled` 都为真，云端 Agent 不用点「开启云端 Agent」就能用，`see_frames` 出图；② 创建者关掉渲染节点后 `see_frames` 回「这次没看成：这个项目没开托管方的渲染节点（创建者在项目设置里打开），云端渲不了画面。」；③ 删掉测试项目。
 
 ## 要在节点上（或由用户）做的事
 
 - 让「验收018-Claude」能看画面：创建者在项目设置（成员面板的托管方服务）里打开「渲染节点」。这是用户操作，不用改节点；不要手改账本。
 
-## 没做的与交回主会话的
+## 第二轮（主会话 2026-10-20 追加）
 
-1. 缺陷 B（账号项目托管开关缺省关，与语义「缺省开」冲突）：改 `server/account/authority.mjs` 的 `createProject` 默认值，可能还要配 `src/editor/right/CloudAiPanel.tsx` 的提示，都在我的文件范围之外，没动。另需主会话定：已建的账号项目是否补开（会让托管渲染服务开始进这些项目；「生成轨道流」仍缺省关，不额外产流）。
-2. 渲染超时的调试信息即使本次修好不再被分级吞掉，`server/harness/agent.mjs` 第 221 行把工具抛的错只留 `err.message`，`err.debug` 仍到不了模型。语义要求附调试信息，要改 harness 或在 `look-client.mjs` 把调试摘要拼进消息，前者属于别的子 Agent 的范围，留给主会话定。
-3. `LOOK_ERRORS['service-disabled']` 的措辞「项目创建者关掉了这个项目的渲染节点」在缺省关的情况下不准确（创建者从没开过）。措辞写在 `docs/plan/cloud-agent-contract.md` 第 1666 行，没改；建议改成「这个项目没开托管方的渲染节点（创建者在项目设置里打开），云端渲不了画面」。
+1. **两个托管开关按语义缺省开**：`server/account/authority.mjs` `createProject` 由 `hosted: { render: false, agent: false }` 改为 `{ render: true, agent: true }`。「生成轨道流」语义缺省关（`product/rendering.md`、`workflow/project.md`），子选项没记就是关，不动。
+   - 创建账号项目只有这一条路：`docservice/modules/account-projects.mjs` 调 `authority.createProject`；页面（`src/account/client.ts`）只传名字、`initialProject`、`allowLinkJoin`、`projectId`，不传开关；`state.projects[...] =` 全仓只此一处。
+   - 已有项目数据不动。
+   - 改了期望的测试（原先断言缺省关）：`server/test/account-hosted-option.test.mjs` 的 AHO-1（两个开关缺省开、账本里 `{render:true, agent:true}`、子选项没记）、AHO-2（账本开关期望改为开；「渲染节点关着时子选项照旧」改为先关再开）、AHO-5、AHO-6（会话里 `enabled` 改为真）；`server/test/operation-wiring-core.test.mjs`「render service can read project when hosted.render is enabled」改为先断言缺省开、创建者关掉后被拒、开回来能读。
+   - `CloudAiPanel.tsx` 的「开启云端 Agent」按钮没动（创建者关过时仍有用）。
+2. **`service-disabled` 措辞**：`server/hosted-render/look.mjs` 改成「这次没看成：这个项目没开托管方的渲染节点（创建者在项目设置里打开），云端渲不了画面。」；`docs/plan/cloud-agent-contract.md` 25.6 第 4 条同步改，标「2026-10-20 主会话按实测更正」。
+3. harness 丢 `err.debug` 主会话已转给负责 harness 的子 Agent，本分支不管。
+
+第二轮验证：受影响的 6 个测试文件（`account-hosted-option`、`operation-wiring-core`、`hosted-render-look`、`hosted-render-queue`、`see-frames-cloud-reason`、`cloud-agent-look`）`tests 53 / pass 53 / fail 0`；改测试前的全量跑出的 5 个失败正是上面 5 条缺省关断言（AHO-1/2/5/6、operation-wiring 那条），其余 7121 过。全量复跑结果见下。
+
+第二轮全量（改测试后，`76296d7a`）：`npx tsc -b --force` 退出码 0；`npm test` `tests 7140 / pass 7124 / fail 1 / skipped 14`，满负载下两条偶发：
+- `asset-project-workers.test.mjs`「真实ffmpeg项目worker独立转码/登记…」20 秒超时（真实 ffmpeg 转码，满负载慢）；
+- `reopen-hosting.test.mjs`「真实中继 restricted…」`Cannot read properties of null (reading 'expiresAt')`（旧口令式中继，不经过账号项目创建，与本改动无关）。
+
+单独重跑：两个文件一起 `node scripts/test-suite.mjs …` `tests 14 / pass 14 / fail 0`；`reopen-hosting.test.mjs` 再连跑 3 次，每次 `pass 3 / fail 0`。两条在第一轮全量（改动前）都是通过的，属满负载偶发，不是本改动引入。
