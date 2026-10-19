@@ -115,7 +115,7 @@
 | 项 | 命令 | 结果 |
 |---|---|---|
 | 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
-| 全量测试 | `npm test`（命令里设两个 VisuHive 变量） | 第二轮 7160 条：7144 过、2 败（同一处 CA-TOOL-03 计数 73→75，随两个新工具），修后单独重跑 `server/test/cloud-agent-runs.test.mjs` 30/30 过；第一轮暴露的 11 条（卡片声音源码闭包、cards.test、云端工具归类、探针 import 顺序）全部修掉并单独重跑过。最后一次改动后没有再整轮跑全量 |
+| 全量测试 | `npm test`(命令里设两个 VisuHive 变量) | 最终一轮(提交 `391cc7d6` 上)7160 条:7146 过、0 败、0 取消,「零失败」,退出码 0。前两轮暴露的问题(卡片声音源码闭包、cards.test、云端工具归类与计数、探针 import 顺序)都已修掉 |
 | 导出确定性 | `node scripts/verify-determinism.mjs --url <剪辑段项目 D>` | 270/270 相同，退出码 0 |
 | 导出确定性（缺省 demo） | `node scripts/verify-determinism.mjs --url http://127.0.0.1:5350/?export=1` | 1800/1800 相同，退出码 0 |
 | 快照重放一致 | `baseline-driver.mjs --mode unified --port 5356` | PASS，退出码 0 |
