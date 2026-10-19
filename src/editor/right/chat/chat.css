@@ -204,6 +204,13 @@
   color: var(--ui-fg, #F2F1F6);
   background: var(--ui-float, #34333D);
 }
+.pc-rr-x:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.pc-rr-tab:hover .pc-rr-x:disabled {
+  opacity: 0.35;
+}
 
 /* 跟随系统「减少动态效果」:流光不转,只留一圈静止的光 */
 @media (prefers-reduced-motion: reduce) {

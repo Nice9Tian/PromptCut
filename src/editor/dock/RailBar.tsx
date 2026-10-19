@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { closeTab, useAgentTabs } from "../../ai/agentTabs";
-import { MAIN_TAB } from "../../ai/liveChat";
+import { canCloseTab, closeTab, useAgentTabs } from "../../ai/agentTabs";
 import { useScript } from "../../ai/script";
 import { IconBubblePlus } from "../../ui/icons";
 import { RailIconAnimations, RailIconCaptions, RailIconEdit, RailIconEffects, RailIconLibrary } from "../left/railIcons";
@@ -171,7 +170,7 @@ export function RailBar({ side, part = "head" }: { side: Side; part?: RailPart }
     const index = tabs.findIndex((t) => t.id === tabId);
     const t = tabs[index];
     if (!t) return null;
-    const closable = tabs.length > 1 && t.id !== MAIN_TAB;
+    const closable = canCloseTab(t.id);
     // 跑的时候头像背景流光;跑完 / 中断且用户还没看这一页时一个小点(蓝 / 黄),见 agentAttention.tsx
     const state = t.busy ? "busy" : attention.get(t.id) ?? "idle";
     const stateTip = AGENT_STATE_TIP[state];
@@ -194,20 +193,19 @@ export function RailBar({ side, part = "head" }: { side: Side; part?: RailPart }
             <b className="pc-rr-badge" title={`${t.unread} 条其他 Agent 的消息待处理`}>{t.unread}</b>
           )}
         </button>
-        {closable && (
-          <button
-            type="button"
-            className="pc-rr-x"
-            aria-label={`关闭 ${t.title}`}
-            title={t.busy ? "还在跑,关掉会中断它" : "关闭这一页"}
-            onClick={() => {
-              if (t.busy && !confirm(`${t.title} 还在跑,关掉会中断它。确定关闭?`)) return;
-              closeTab(t.id);
-            }}
-          >
-            ×
-          </button>
-        )}
+        <button
+          type="button"
+          className="pc-rr-x"
+          aria-label={`关闭 ${t.title}`}
+          disabled={!closable}
+          title={!closable ? "至少保留一个 Agent 标签" : t.busy ? "还在跑,关掉会中断它" : "关闭这一页"}
+          onClick={() => {
+            if (t.busy && !confirm(`${t.title} 还在跑,关掉会中断它。确定关闭?`)) return;
+            closeTab(t.id);
+          }}
+        >
+          ×
+        </button>
       </div>
     );
   };

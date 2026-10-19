@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { MAIN_TAB, dropChatStore } from "./liveChat.ts";
+import { MAIN_TAB, dropChatStore, getChatStore } from "./liveChat.ts";
 import { normalizeCreativity, type CreativityLevel } from "../kernel/creativity.mjs";
 
 /**
@@ -18,6 +18,8 @@ export interface AgentTab {
   conversationId: string | null;
   /** 用户可见的名字;没声明范围之前是「Agent N」 */
   title: string;
+  /** 「Agent N」的 N:创建时取当前最小的空号,关掉别的页不改它;子 Agent 页(有角色名)没有 */
+  num?: number;
   /** Agent 用 declare_scope 声明的修改范围,如「剪辑1->序列2」 */
   scope: string | null;
   /** 正在跑(流式回复中) */
@@ -48,9 +50,25 @@ interface TabsState {
 const STORAGE_KEY = "pc.agentTabs";
 const ACTIVE_KEY = "pc.agentTabs.active";
 
+/** 老数据没存编号:从「Agent N」的名字里认;改过名又没有角色的按位置给;子 Agent 页没有 */
+function tabNumber(t: Partial<AgentTab>, i: number): number | undefined {
+  if (typeof t.num === "number" && t.num > 0) return t.num;
+  const m = typeof t.title === "string" ? /^Agent (\d+)$/.exec(t.title) : null;
+  if (m) return Number(m[1]);
+  return t.roleName ? undefined : i + 1;
+}
+
+/** 当前最小的没被占用的「Agent N」编号 */
+function smallestFreeNum(tabs: readonly AgentTab[]): number {
+  const used = new Set(tabs.map((t) => t.num));
+  let n = 1;
+  while (used.has(n)) n++;
+  return n;
+}
+
 function load(): TabsState {
   let tabs: AgentTab[] = [];
-  let activeId = MAIN_TAB;
+  let activeId = "";
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const arr = raw ? (JSON.parse(raw) as Partial<AgentTab>[]) : [];
@@ -60,6 +78,7 @@ function load(): TabsState {
         id: t.id!,
         conversationId: typeof t.conversationId === "string" ? t.conversationId : null,
         title: typeof t.title === "string" && t.title ? t.title : `Agent ${i + 1}`,
+        num: tabNumber(t, i),
         scope: typeof t.scope === "string" ? t.scope : null,
         busy: false,
         unread: 0,
@@ -75,10 +94,11 @@ function load(): TabsState {
   } catch {
     /* 本地存储不可用就从一页开始 */
   }
-  if (!tabs.some((t) => t.id === MAIN_TAB)) {
-    tabs.unshift({ id: MAIN_TAB, conversationId: null, title: "Agent 1", scope: null, busy: false, unread: 0, createdAt: 0, creativity: null });
+  // 主页(MAIN_TAB)也能关;只有一页都没有(第一次打开)时才补一个,AI 栏总有一页
+  if (tabs.length === 0) {
+    tabs.push({ id: MAIN_TAB, conversationId: null, title: "Agent 1", num: 1, scope: null, busy: false, unread: 0, createdAt: 0, creativity: null });
   }
-  if (!tabs.some((t) => t.id === activeId)) activeId = MAIN_TAB;
+  if (!tabs.some((t) => t.id === activeId)) activeId = tabs[0].id;
   return { tabs, activeId };
 }
 
@@ -89,7 +109,7 @@ function persist() {
   try {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify(state.tabs.map(({ id, conversationId, title, scope, createdAt, creativity, role, roleName, parent, provider }) => ({ id, conversationId, title, scope, createdAt, creativity, role, roleName, parent, provider }))),
+      JSON.stringify(state.tabs.map(({ id, conversationId, title, num, scope, createdAt, creativity, role, roleName, parent, provider }) => ({ id, conversationId, title, num, scope, createdAt, creativity, role, roleName, parent, provider }))),
     );
     localStorage.setItem(ACTIVE_KEY, state.activeId);
   } catch {
@@ -117,11 +137,12 @@ export function getActiveTabId(): string {
 }
 
 export function addTab(): AgentTab {
-  const n = state.tabs.length + 1;
+  const n = smallestFreeNum(state.tabs);
   const tab: AgentTab = {
     id: `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
     conversationId: null,
     title: `Agent ${n}`,
+    num: n,
     scope: null,
     busy: false,
     unread: 0,
@@ -169,14 +190,22 @@ export function getTabProvider(id: string): string | null {
   return state.tabs.find((x) => x.id === id)?.provider ?? null;
 }
 
-/** 关页。主页不能关;关掉的是当前页就切到左边那页 */
+/** 还能不能关这一页:每页都能关(含主页),只剩最后一页时不能 */
+export function canCloseTab(id: string): boolean {
+  return state.tabs.length > 1 && state.tabs.some((t) => t.id === id);
+}
+
+/**
+ * 关页。每页都能关,最后一页不能关;关掉的是当前页就切到左边那页(它在最左就切到右边那页)。
+ * 主页的对话 store 是随项目存取的那一份、不销毁,关它时清空,免得隐形地留着一段没人看的对话。
+ */
 export function closeTab(id: string): void {
-  if (id === MAIN_TAB) return;
+  if (!canCloseTab(id)) return;
   const idx = state.tabs.findIndex((t) => t.id === id);
-  if (idx < 0) return;
   const tabs = state.tabs.filter((t) => t.id !== id);
   const activeId = state.activeId === id ? tabs[Math.max(0, idx - 1)].id : state.activeId;
-  dropChatStore(id);
+  if (id === MAIN_TAB) getChatStore(MAIN_TAB).replace([]);
+  else dropChatStore(id);
   commit({ tabs, activeId });
 }
 
@@ -223,7 +252,7 @@ export function setScopeByConversation(conversationId: string, scope: string | n
   if (t.scope === scope) return t;
   // 子 Agent 的页签名以角色名打头,声明了范围再接上范围
   const base = t.roleName ? (t.title.startsWith(t.roleName) ? t.title.split(" · ")[0] : t.roleName) : null;
-  patchTab(t.id, { scope, title: base ? (scope ? `${base} · ${scope}` : base) : scope || `Agent ${idx + 1}` });
+  patchTab(t.id, { scope, title: base ? (scope ? `${base} · ${scope}` : base) : scope || `Agent ${t.num ?? idx + 1}` });
   return state.tabs.find((x) => x.id === t.id) ?? null;
 }
 
