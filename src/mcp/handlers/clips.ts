@@ -14,9 +14,9 @@ import { cutSegmentHandlers, segmentInfo } from "./cutSegments";
 
 export const clipsHandlers = {
   addClip: (args) => {
-    // add_cut_segment 也路由到这里(routes.mjs):带被引用剪辑(cutId / name)而没有 cardId 的是放剪辑段
+    // add_cut_segment 也路由到这里(routes.mjs):没有 cardId 的就是放剪辑段(add_clip 的 cardId 是必填,到不了这一支)
     const loose = args as Record<string, any>;
-    if (loose.cardId === undefined && (loose.cutId !== undefined || loose.name !== undefined)) return cutSegmentHandlers.addCutSegment(loose) as any;
+    if (loose.cardId === undefined) return cutSegmentHandlers.addCutSegment(loose) as any;
     // 先校验再落库:参数错了当场报错,而不是建出一张播默认值的空壳卡
     validateCardParams(args.cardId, args.params);
     // 字幕卡没指定序列时统一去「字幕」序列(没有就建一条,建在最上层):

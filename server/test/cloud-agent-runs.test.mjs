@@ -692,7 +692,7 @@ test('CA-PAGE-01 / CA-TOOL-03 页面状态按对话找、发起方在线才用;�
     } finally {
       globalThis.fetch = realFetch;
     }
-    assert.equal(ran.length, 73);
+    assert.equal(ran.length, 75);
     assert.deepEqual(fetched, [], '没有一次请求发出去(更不会打到 agent-service.invalid)');
     assert.deepEqual(sizes(), before, '作业表与结果表没有被碰');
     const okCount = ran.filter(([, o]) => o === 'ok').length;
