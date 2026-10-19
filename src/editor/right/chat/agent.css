@@ -1129,3 +1129,99 @@
     animation: none;
   }
 }
+
+/*
+ * 气泡里 Agent 说的话(send_message 发给 user,或没调它时的文字回复),2026-10-20 用户定「气泡里面只展示在做什么」。
+ * 一句一块,按先后排;操作和汇报在下面的「Agent 操作」里。
+ */
+.ai-saying {
+  overflow-wrap: anywhere;
+}
+.ai-saying > :first-child { margin-top: 0; }
+.ai-saying > :last-child { margin-bottom: 0; }
+.ai-saying-none {
+  font-size: 12px;
+  color: var(--ui-fg-muted, #A6A4B2);
+}
+/* 点气泡让「Agent 操作」切到这一轮:可点的有手型,正在看的那一轮描一圈淡强调色 */
+.ai-message.assistant.is-selectable { cursor: pointer; }
+.ai-message.assistant.is-selected {
+  box-shadow: 0 0 0 1px var(--ui-accent-soft, rgba(0, 219, 219, 0.35));
+}
+
+/* AI 栏底部的「Agent 操作」:一轮的操作图标、操作详细预览、阶段 / 本轮小结(ActivityPanel.tsx) */
+.pc-activity {
+  margin: 0 10px 6px;
+  border: 1px solid var(--ui-border, #3A3944);
+  border-radius: 8px;
+  background: var(--ui-panel, #23222A);
+  font-size: 12px;
+  flex: none;
+  min-width: 0;
+}
+.pc-activity-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+}
+.pc-activity-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: none;
+  border: 0;
+  color: var(--ui-fg-muted, #A6A4B2);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.pc-activity-count {
+  color: var(--ui-fg-faint, #77758A);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pc-activity-nav {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ui-fg-muted, #A6A4B2);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pc-activity-nav:hover:not(:disabled) { background: var(--ui-panel-2, #2C2B34); color: var(--ui-fg, #F2F1F6); }
+.pc-activity-nav:disabled { opacity: 0.35; cursor: default; }
+.pc-activity-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--ui-border, #3A3944);
+  max-height: 45vh;
+  overflow-y: auto;
+  min-width: 0;
+}
+.pc-activity-prompt {
+  color: var(--ui-fg-faint, #77758A);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-activity-empty {
+  color: var(--ui-fg-faint, #77758A);
+}
+.ai-activity-verbose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
