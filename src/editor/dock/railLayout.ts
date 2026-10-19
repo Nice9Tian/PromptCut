@@ -99,10 +99,13 @@ export function plusAnchor(items: readonly ItemId[]): number {
 /**
  * 从 old 里拿掉一些项之后,原来 index 处那一项的「相邻项」:
  * 先往上找(和 agentTabs.closeTab 关页后切到左边那页一个方向),再往下找;
+ * 拿掉的是 Agent 项时先在剩下的 Agent 项里找(关掉 Agent 1 要切到别的 Agent,不跳到剧本或分区,2026-10-20 实测),找不到再放宽;
  * 给了 isVisible 就先在看得见的项里找,找不到再放宽。都没有返回 null。
  */
 function neighborOf(old: readonly ItemId[], index: number, keep: ReadonlySet<ItemId>, isVisible?: (id: ItemId) => boolean): ItemId | null {
-  const passes = isVisible ? [isVisible, () => true] : [() => true];
+  const kinds: ((id: ItemId) => boolean)[] = isAgentItem(old[index]) ? [isAgentItem, () => true] : [() => true];
+  const visible = isVisible ? [isVisible, () => true] : [() => true];
+  const passes = kinds.flatMap(kind => visible.map(vis => (id: ItemId) => kind(id) && vis(id)));
   for (const pass of passes) {
     // 剪辑组不能当选中项
     const ok = (id: ItemId) => isPageItem(id) && pass(id);

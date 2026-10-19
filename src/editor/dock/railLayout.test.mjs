@@ -197,8 +197,15 @@ test("关掉 Agent:拿掉那一项;是选中项就改选相邻项;那一侧空�
   const base = L(["library", A("t2"), A("t3")], [A("main")], { left: A("t2") });
   const r = syncAgents(base, ["main", "t3"]);
   assert.deepEqual(r.layout.left, ["library", A("t3")]);
-  assert.equal(r.layout.active.left, "library", "先往上找");
+  assert.equal(r.layout.active.left, A("t3"), "关掉的是 Agent:先在剩下的 Agent 里找");
   assert.deepEqual(r.emptied, []);
+
+  // 关掉右侧选中的主 Agent(Agent 1):切到剩下的 Agent,不跳到剧本
+  const main = syncAgents(L(["library"], ["script", A("main"), A("t3")], { right: A("main") }), ["t3"]);
+  assert.equal(main.layout.active.right, A("t3"));
+  // 这一侧没有别的 Agent 了才退回原来的「先上后下」
+  const noAgent = syncAgents(L(["library"], ["script", A("main")], { right: A("main") }), ["t9"]);
+  assert.equal(noAgent.layout.active.right, "script");
 
   const empty = syncAgents(L([A("t2")], ["script", A("main")]), ["main"]);
   assert.deepEqual(empty.layout.left, []);
