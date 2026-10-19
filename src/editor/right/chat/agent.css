@@ -1227,3 +1227,12 @@
   gap: 6px;
   min-width: 0;
 }
+
+/* 画面页右上角的「撤销这步」:叠层本身不吃鼠标,按钮要吃 */
+.ai-odp-over-undo {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  pointer-events: auto;
+}
+.ai-odp-over-undo .ai-opcard-undo { margin-top: 0 !important; }
