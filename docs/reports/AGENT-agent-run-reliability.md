@@ -52,7 +52,7 @@
 |---|---|
 | `server/agent-service/worker-event-sink.mjs` | 交事件遇到一时性故障（503 一类、超时、连接断、回应没收全）时，用同一个包、新连接、新签名退避重交（0.5 秒起逐次加倍，最长 8 秒一次，总共最多 90 秒）。单次超时从 5 秒改为 20 秒，比主服务问文档服务的时限长。主服务按「同一 grant 的同一 sourceSeq」认包，重复交只回原来那张回执，所以重交不会多出事件。明确拒绝（400/401/403/409/413）、`worker-event-gap`、本机的错都不重交。`close()` 时立即结束等待。**注意：这个文件不在任务书给我的文件清单里，也不在另一位子 Agent 的清单里**，单独做成一次提交（`f0cfedec`），主会话可以单独取舍。 |
 | `server/agent-service/run-client.mjs` | 缺省时限从 5 秒改为 15 秒，主服务和任务进程问文档服务都用它。`checkAccess`（「这一轮此刻还能不能读写」，只读）遇到 503 时隔 0.5、1.5、4 秒再问，最多 3 次；明确拒绝照原样交回；客户端关闭时不再问。 |
-| `server/harness/agent.mjs` | 新增选项 `requireFinalReport`。打开后，这一轮收工（不再调工具）时如果没有交过 `final: true` 的 `report_progress`，就按模型的文字回复代交一份收尾汇报：发 `tool_call` 和 `tool_result` 两条事件，标 `synthetic: true`，不进模型历史。文字按行、按句切，每条不超过 60 字，最多 8 条；`problems` 里注明「Agent 没有按要求交进度汇报」。轮数到顶的收尾摘要（那一次不给工具）也照此代交，停下的原因写进 `problems`。另外，已经交过收尾汇报后，最后一次空回复不再误报「API 没有返回文字或工具调用」。真的什么都没回（没有文字、没有工具、没交过汇报）时，照旧以错误结束。 |
+| `server/harness/agent.mjs` | 新增选项 `requireFinalReport`。打开后，这一轮收工（不再调工具）时如果没有交过 `final: true` 的 `report_progress`，就按模型的文字回复代交一份收尾汇报：发 `tool_call` 和 `tool_result` 两条事件，标 `synthetic: true`，不进模型历史。文字按行、按句切，每条不超过 60 字，最多 8 条；普通代交 `problems` 为空、`has_problem` 为 false，是否代交只看事件上的 `synthetic: true`（主会话审查意见改定）。轮数到顶的收尾摘要（那一次不给工具）也照此代交，停下的原因写进 `problems`。另外，已经交过收尾汇报后，最后一次空回复不再误报「API 没有返回文字或工具调用」。真的什么都没回（没有文字、没有工具、没交过汇报）时，照旧以错误结束。 |
 | `server/runners/api.mjs` | API 直连运行器打开 `requireFinalReport`。云端和桌面 API 直连都走这里。环路（`loop.mjs`）里的各角色不打开。 |
 | `server/harness/agent.mjs`（补） | 代交的 `tool_call` 和 `tool_result` 两条事件都带 `synthetic: true`，测试和排障可以据此分辨。 |
 | 测试 | 新增 `server/test/run-client-check-retry.test.mjs`（3 项）、`server/test/agent-final-report.test.mjs`（10 项）；改 `server/test/worker-event-sink-mtls.test.mjs`：新增「回执丢一次」「主服务连着回两次 503」都靠重交续上，以及「超出时限才交出错、之后可补交」。9 个端到端测试的工具清单里补上代交的汇报（或按 `synthetic` 排除）。`fixtures/account-worker-child-config.mjs` 把交事件的重交时限缩到 2 秒。 |
@@ -65,7 +65,7 @@
 - `node --test` 跑相关单测：sink 4/4，run-client 3/3，harness 的截断、摘要、深度自主、汇报等 35/35（之后又跑 agent-final-report 10/10）。
 - 真实模型（本机 openlux 网关，`gemini-3.8-flash`，真实系统提示词）：
   - 修复前（`requireFinalReport` 关）：事件只有 `text:"好"`，没有汇报，页面会是空气泡。
-  - 修复后：`text:"好"` 之后有 `tool_call:report_progress(代交) {"final":true,"done":["好"],"problems":["Agent 没有按要求交进度汇报,…"]}` 和 `tool_result ok=true`。
+  - 修复后：`text:"好"` 之后有 `tool_call:report_progress(代交) {"final":true,"done":["好"],"problems":[]}（审查后改定，原先这里有一条「没有按要求交汇报」的问题）` 和 `tool_result ok=true`。
   - 把这组事件喂给页面的 `applyCloudEvents` 和 `reportsOf`，能解析出一张收尾汇报卡：`done: ["好"]`。
   - 生产上用的是 openlux 的 claude-opus，本机令牌下只有 Gemini，所以 Opus 没在本机跑。
 - 类型检查与全量测试：见下节「基线」。

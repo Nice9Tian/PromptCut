@@ -71,8 +71,9 @@ export class Agent {
     const autoReport = (round, text, extraProblems = []) => {
       if (!this.reportTool || reported) return;
       const done = reportItemsFromText(text);
-      const problems = [...extraProblems, 'Agent 没有按要求交进度汇报,上面几条摘自它的文字回复'];
-      const input = { final: true, has_done: done.length > 0, has_todo: false, has_problem: true, done, todo: [], problems };
+      // 只有真问题(轮数到顶、重复操作停下)才进「问题」;是不是代交看事件上的 synthetic,不在汇报里另写一条
+      const problems = [...extraProblems];
+      const input = { final: true, has_done: done.length > 0, has_todo: false, has_problem: problems.length > 0, done, todo: [], problems };
       const callId = `auto-report-${round}`;
       this.onEvent({ type: 'tool_call', callId, round, name: this.reportTool.name, input, synthetic: true });
       this.onEvent({ type: 'tool_result', callId, round, name: this.reportTool.name, ok: true, summary: '已由服务端按文字回复代交', output: { ok: true, synthetic: true }, durationMs: 0, synthetic: true });

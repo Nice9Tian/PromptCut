@@ -29,7 +29,8 @@ test('只回文字、没交汇报:按文字回复代交一份收尾汇报(界面
   const [auto] = reports(events);
   assert.ok(auto?.synthetic, '代交的那一份要标出来');
   assert.equal(auto.input.final, true); assert.deepEqual(auto.input.done, ['好']);
-  assert.match(auto.input.problems.join(''), /没有按要求交进度汇报/);
+  assert.deepEqual(auto.input.problems, [], '普通代交不加「问题」:用户只问了一句话');
+  assert.equal(auto.input.has_problem, false);
   assert.ok(events.some(e => e.type === 'tool_result' && e.callId === auto.callId && e.ok === true));
   assert.equal(JSON.stringify(out.history.get()).includes('auto-report'), false, '代交只给屏幕,不进模型历史');
 });
@@ -75,7 +76,8 @@ test('轮数到顶的收尾摘要(不给工具,模型交不了汇报):按摘要�
   const out = await new Agent({ provider: s.provider, system: 's', tools: [REPORT, NOOP], requireFinalReport: true, maxIterations: 1, onEvent: e => events.push(e) }).run('做');
   assert.equal(out.outcome, 'round_limit');
   const [auto] = reports(events);
-  assert.ok(auto?.synthetic); assert.deepEqual(auto.input.done, ['已完成一半']); assert.match(auto.input.problems[0], /轮模型往返上限/);
+  assert.ok(auto?.synthetic); assert.deepEqual(auto.input.done, ['已完成一半']); assert.equal(auto.input.problems.length, 1); assert.match(auto.input.problems[0], /轮模型往返上限/);
+  assert.equal(auto.input.has_problem, true);
 });
 
 test('没打开这一项(环路里的角色、旧调用方):行为不变,一次收尾,不代交', async () => {
