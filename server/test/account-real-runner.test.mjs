@@ -23,8 +23,7 @@ test('actual hosted factory signs WSS/project.open, executes real tools and comm
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       const tools = rows.filter(row => row.event.type === 'tool_result');
-      assert.deepEqual(tools.map(row => row.event.name), ['get_project', 'get_selection', 'report_progress', 'set_project_meta',
-        /* 前一份是阶段汇报(final 不是 true):收工时代交收尾那一份 */ 'report_progress']);
+      assert.deepEqual(tools.map(row => row.event.name), ['get_project', 'get_selection', 'report_progress', 'set_project_meta']);
       assert.ok(tools.every(row => row.event.ok === true));
       assert.equal(rows.filter(row => row.event.type === 'text').map(row => row.event.delta).join(''), REAL_RUNNER_TEXT);
       const state = await actor.send({ type: 'project.open', projectId: fixture.projectId });

@@ -37,11 +37,12 @@ export const agentTools = [
   },
   {
     name: "send_message",
-    description: "给另一个 Agent 发一段话协调分工(比如「序列2 我来改,你别动」「我改完了序列3,你可以接着放字幕」)。to 是对方的对话 ID(list_agents 里的 id),写 all 就发给所有其他 Agent。对方空闲时这段话会立刻作为一条消息发给它;它正忙就带在它下一次工具调用的结果里。连续互发有层数上限,超过就留在对方信箱里等用户下次开口时带上,所以不要用它来回闲聊,说清楚一次就够。",
+    // to 填 "user" 是对用户说话(2026-10-20 用户定:气泡里只展示 Agent 在做什么);API 直连由 harness/tools/index.mjs 就地答,经 MCP 的由公告板(agent-board.mjs)答
+    description: "发一段话。to 填 \"user\" 是对用户说话:每组操作前用一两句话告诉用户接下来要做什么、做完一组说一句做好了什么,按顺序显示在这一轮的对话气泡里(收尾仍交 final 为 true 的 report_progress)。to 填别的 Agent 的对话 ID(list_agents 里的 id)或 all,是给其他 Agent 发话协调分工(比如「序列2 我来改,你别动」):对方空闲时这段话会立刻作为一条消息发给它;它正忙就带在它下一次工具调用的结果里。Agent 之间连续互发有层数上限,超过就留在对方信箱里等用户下次开口时带上,所以不要用它来回闲聊,说清楚一次就够。",
     inputSchema: {
       type: "object",
       properties: {
-        to: { type: "string", description: "收件 Agent 的对话 ID,或 all" },
+        to: { type: "string", description: "user(对用户说话),或收件 Agent 的对话 ID,或 all" },
         text: { type: "string", description: "要说的话" }
       },
       required: ["to", "text"]
