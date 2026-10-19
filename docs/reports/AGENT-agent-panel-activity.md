@@ -115,14 +115,48 @@
 - **新旧组合**：新服务端 + 旧前端：模型会调 `send_message(to user)`，旧前端把它当一次「Agent」类操作画成图标，汇报照旧；不出错。旧服务端 + 新前端：模型不调 send_message，气泡显示文字回复，操作在底部；也不出错。没有数据格式变化。
 - **部署后验证**：在测试项目里发「在时间轴开头加一张标题文字卡」，气泡里应出现一两句「先……」「……好了」，底部「Agent 操作」显示这一轮的图标与本轮小结；发「请只回复一个字：好」，气泡里是「好」，底部「这一轮没有操作」。
 - **回滚**：服务端把备份的文件拷回、重启 `promptcut-agent`；前端换回上一版在线构建。两边可以分别回滚。
-- **探针要跟着改**（`scripts/probes/` 不在我的范围）：`cloud-agent-ui-probe.mjs` 的 O1、`cloud-agent-ux-ui-probe.mjs` 的 A6 撤销步、`cloud-agent-ui-lib.mjs` 的 `eventLog()` 读的是 `[data-pc="agent-event-log"]` / `[data-pc="agent-event"]`，那块已经不挂了。要改成在「Agent 操作」的操作详细预览里点 `[data-pc="agent-undo"]`（`data-pc="agent-activity"` 下）。这几支探针要整套托管环境，我没跑。
+- 探针已跟着改（见文末「第二轮」）。
 
 ## 没做成的与原因
 
-- 上面「探针要跟着改」：文件不在范围。
-- `user-workflow.md` 第 74 行的一级语义：不在范围，交回（建议文字见上）。
 - 没有用真实模型跑新提示词（看模型会不会按规则调 send_message）：本机网关只有 Gemini，这轮没跑；部署后按上面的验证步骤在节点上看。
 
 ## 对任务书的更正
 
 - 「失败补位的 id？runId 复用？折叠时按什么找助手消息？」三处都查过，都不是原因；原因是画的时候的「合并气泡」，见第 4 条。
+
+## 第二轮（主会话审后追加：探针与 user-workflow.md）
+
+### 探针与库（`scripts/probes/`；`scripts/acceptance/` 里 grep 不到 `agent-event-log` / `agent-event`，没有要改的）
+
+| 文件 | 改了什么 |
+|---|---|
+| `cloud-agent-ui-lib.mjs` | `eventLog()` 换成 `activity(page)`（读 `[data-pc="agent-activity"]`：第几轮 / 共几轮、这一轮几次操作、是否进行中、图标、此刻画出来的撤销按钮）和 `undoLatestStep(page)`（从最后一个写入类图标往前点，在那一页上点最后一个可用的「撤销这步」，等它变「已撤销」） |
+| `cloud-agent-ui-probe.mjs` | O1：「Agent 操作」显示的是这个对话最新一轮、4 次操作；在面板里撤销最后一步，项目内容变回去。O4：从历史点开后，操作次数改读面板（面板按轮显示，图标同类会合并，不能再数图标个数） |
+| `cloud-agent-ux-ui-probe.mjs` | A4 / RA4：bob 的「Agent 操作」里不混进创建者那个对话的操作（原先断言 bob 在「Agent 操作记录」里看到创建者的每一步、署名对）；A7 / RA7：创建者在面板里撤销最后一步；B1：「改动一条条出现」改为数 bob 页面里项目变了几次，署名由原有的成员列表那一项核对（「〈创建者〉的云端 Agent」） |
+| `account-real-runner-probe.mjs` | 汇报文字改在「Agent 操作」里找（先点小结图标翻到那一页） |
+| `account-executor-visible-probe.mjs` + `fixtures/account-executor-visible/page.tsx` | 页面加上 `AgentActivityPanel`；「工具可见」改在面板里找 |
+| `chat-window-probe.mjs` | 三轮假流回复各占一个气泡（3 + 3 = 6 行，原先合并成 4 行） |
+
+另外补了一处界面：操作详细预览的画面页（修改、参数差异）原来没有「撤销这步」，只有无画面的操作卡页有；原先靠底部「Agent 操作记录」每行都能撤，换掉之后有画面的那几步就撤不了。现在画面页右上角也挂上 `AgentUndoButton`（`OpDetailPreview.tsx`、`agent.css`）。
+
+跑过的：
+
+- `node scripts/probes/chat-window-probe.mjs --port 5330`（占 5330～5332）：19 项全过（`failed: 0`）。看了截图 `6-small-chat.png`：右侧 AI 栏底部是「Agent 操作　第 3/3 轮 · 1 次操作」，回应那一行、读取图标、操作卡都在。截图里也看到窗口矮（AI 栏约 480 像素高、上面还有一条「Claude Code 还没登录」横幅）时，「Agent 操作」把对话列表挤得只剩一小截；把正文最大高度从 45vh 改成 30vh。是否还要再收（比如缺省折起、或预览更小）留给用户看实际效果定。
+
+没跑的与原因：
+
+- `cloud-agent-ui-probe.mjs`：要从 `--base-port` 起连着 45 个端口，分给我的只有 5330～5339。
+- `cloud-agent-ux-ui-probe.mjs`：同样要一大段端口（编辑器、两个舞台、桌面版、渲染服务三个工作端口与诊断口、文档 / 素材 / Agent 服务），超出分配。
+- `account-real-runner-probe.mjs`（固定 6708 等）、`account-executor-visible-probe.mjs`（固定 6640～6643）：端口写死，不在分配段里。
+- 这几支都只做了 `node --check` 语法检查。主会话集成时跑。
+
+**交回主会话一件事（功能面）**：原「Agent 操作记录」是 AI 栏里唯一一处能看到别的成员的云端 Agent 每一步操作和署名的地方。现在 AI 栏只显示自己正在看的对话；共享项目里别人的 Agent 改了什么，在 AI 栏里看不到逐步记录了（署名仍体现在成员列表「〈用户名〉的云端 Agent」、`RemoteAgentsStrip` 的「谁在改哪儿」、覆盖提示「由 X 修改」）。用户原话是把那块换掉，我照做了；如果用户还想在某处看别人的 Agent 逐步记录，要另定位置。
+
+### `docs/semantics/user-workflow.md` 第 74 行（「进度可见」第一条）
+
+- 改前：「Agent 的文字回复不显示给用户。用户看到的是 Agent 交上来的进度条目（做了、待办、问题）和操作详细预览。」
+- 改后：「对话气泡里显示 Agent 说的在做什么（它用 send_message 对用户说的话；没说时是它的文字回复）。进度条目（做了、待办、问题）和操作详细预览在气泡下方的「Agent 操作」里按轮显示（2026-10-20 用户定，原话「把Agent操作记录哪里换成气泡里面那个可视化组件。气泡里面只展示在做什么（harness可能要改，比如加入send_message(user,xxx)的用法。）。」；取代原来的「Agent 的文字回复不显示给用户。用户看到的是 Agent 交上来的进度条目（做了、待办、问题）和操作详细预览。」）。」
+- 第 75 行（桌面 APP 的 Agent 文字输出拿不到、按 SKILL 汇报）没动：桌面 APP 会话的分组显示不在这次改动里。
+
+验证：`npx tsc -b --force` 退出码 0。按主会话说的没再跑全量。

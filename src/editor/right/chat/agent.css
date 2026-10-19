@@ -1206,7 +1206,8 @@
   gap: 8px;
   padding: 8px;
   border-top: 1px solid var(--ui-border, #3A3944);
-  max-height: 45vh;
+  /* 窗口矮时不把上面的对话挤没:正文最多占三成高,其余滚动 */
+  max-height: 30vh;
   overflow-y: auto;
   min-width: 0;
 }
