@@ -190,7 +190,7 @@ export function createLookVerifier({ registry, now = Date.now, skewMs = LOOK_DEF
 export const LOOK_ERRORS = Object.freeze({
   off: '这次没看成：这台云节点的渲染服务没有开看画面。',
   'no-project': '这次没看成：渲染服务的目录里没有这个项目。',
-  'service-disabled': '这次没看成：项目创建者关掉了这个项目的渲染节点，云端渲不了画面。',
+  'service-disabled': '这次没看成：这个项目没开托管方的渲染节点（创建者在项目设置里打开），云端渲不了画面。',
   'agent-disabled': '这次没看成：项目创建者关掉了这个项目的云端 Agent。',
   busy: '这次没看成：渲染服务现在忙（看画面的请求排满了，或节点正在让出资源）。过一会儿再看，先按项目内容继续。',
   'not-ready': '这次没看成：渲染服务还没连上这个项目。过几秒再看一次。',
