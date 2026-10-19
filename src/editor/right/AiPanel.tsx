@@ -20,7 +20,7 @@ import { CollapsePanelButton } from "./chat/CollapsePanelButton";
 import { MessageList } from "./chat/MessageList";
 import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { QueueList } from "./chat/QueueList";
-import { AgentEventLog } from "../sync/AgentEventLog";
+import { AgentActivityPanel, useRoundSelection } from "./chat/ActivityPanel";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { DesktopSessionsStrip } from "./DesktopSessionsStrip";
 import { Composer } from "./chat/Composer";
@@ -259,6 +259,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     toggleChip: (k: string) => handlersRef.current.toggleChip(k),
     toggleRun: (k: string) => handlersRef.current.toggleRun(k),
   }), []);
+  /** 「Agent 操作」显示哪一轮:缺省最新一轮,点气泡切过去 */
+  const round = useRoundSelection(messages);
 
   /** 输入框里有没有东西(文字或附件):队列「编辑」、回退放回原话之前都要看它,有就先确认替换 */
   const hasDraft = () => inputText.trim().length > 0 || attachments.length > 0;
@@ -578,10 +580,13 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         rowHandlers={rowHandlers}
         onPickExample={setInputText}
         rewind={rewindHandlers}
+        selectedRound={round.id}
+        onSelectRound={round.select}
       />
 
-      {/* 文档服务推来的工具调用记录(D2):命令行、别的页面、共享项目里别人的 Agent 的调用也在这里,写了项目的能撤这一步 */}
-      <AgentEventLog />
+      {/* 「Agent 操作」:这个对话按轮显示的操作与汇报(取代按项目频道列的「Agent 操作记录」,2026-10-20 用户定);写了项目的那一步在详细预览里能撤 */}
+      <AgentActivityPanel messages={messages} selectedId={round.id} onSelect={round.select} view={view}
+        installJobs={installJobs} expanded={expanded} on={rowHandlers} />
       <ThinkingStrip messages={messages} streaming={streaming} />
       <QueueList
         tabId={tabId}

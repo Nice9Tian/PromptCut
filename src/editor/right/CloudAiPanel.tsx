@@ -21,7 +21,7 @@ import { CloudQueueList, QueueList } from "./chat/QueueList";
 import { pushToast, setAccountAgentEnabled, useSync } from "../sync/syncManager";
 import { Composer } from "./chat/Composer";
 import { CloudModelBar } from "./CloudModelBar";
-import { AgentEventLog } from "../sync/AgentEventLog";
+import { AgentActivityPanel, useRoundSelection } from "./chat/ActivityPanel";
 import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { ReportDialog } from "./ReportDialog";
 import { cloudConversationReport } from "../../ai/cloud/report";
@@ -499,6 +499,8 @@ export function CloudAiPanel(props: {
     toggleChip: (k: string) => handlersRef.current.toggleChip(k),
     toggleRun: (k: string) => handlersRef.current.toggleRun(k),
   }), []);
+  /** 「Agent 操作」显示哪一轮:缺省最新一轮,点气泡切过去 */
+  const round = useRoundSelection(chat.messages);
 
   /* ---------- 诊断报告(〔用户 2026-10-07 定〕云端下照常能用) ----------
    * 在页面里由这段云端对话的事件重建出的消息、会话状态与客户端信息生成,不请求任何 `/api/*`,不含票据、委托与模型 Key。
@@ -664,9 +666,13 @@ export function CloudAiPanel(props: {
         openRuns={openRuns}
         rowHandlers={rowHandlers}
         onPickExample={setInputText}
+        selectedRound={round.id}
+        onSelectRound={round.select}
       />
 
-      <AgentEventLog />
+      {/* 「Agent 操作」:这个对话按轮显示的操作与汇报(取代按项目频道列的「Agent 操作记录」,2026-10-20 用户定) */}
+      <AgentActivityPanel messages={chat.messages} selectedId={round.id} onSelect={round.select} view={viewMode}
+        installJobs={installJobs} expanded={expanded} on={rowHandlers} />
       <ThinkingStrip messages={chat.messages} streaming={streaming} />
       {cloud.accountMode ? <CloudQueueList queue={view.queue} messages={chat.messages} senders={view.senders} executorMounted={chat.info?.executorMounted === true} /> :
         <QueueList tabId={qKey} running={view.streaming} onInsert={insertQueued} onEdit={editQueued} onResume={resumeQueue} hasDraft={hasDraft} />}

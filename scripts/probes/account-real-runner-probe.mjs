@@ -143,6 +143,9 @@ try {
   await b.waitForFunction(text => document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text), { timeout: TIMEOUT }, REAL_RUNNER_TEXT);
   for (const [i, page] of [a,b].entries()) {
     await page.waitForFunction(name => window.__pcStore?.getState()?.project?.name === name, { timeout: TIMEOUT }, REAL_RUNNER_NAME);
+    // 汇报在底部「Agent 操作」的操作详细预览里:点小结图标翻到那一页再读
+    await page.click('[data-pc="agent-activity"] .ai-op--summary').catch(() => {});
+    await new Promise(r => setTimeout(r, 400));
     const visible = await page.evaluate(({text,name}) => ({
       text: document.querySelector('[data-pc-msg^="ca-"]')?.textContent?.includes(text),
       pending: document.querySelector('.ai-messages')?.textContent?.includes('等待云端确认关闭与结算'),
@@ -151,7 +154,8 @@ try {
       projectName: window.__pcStore?.getState()?.project?.name === name,
       tools: ['get_project','get_selection','set_project_meta'].map(tool=>({name:tool,
         visible:Array.from(document.querySelectorAll('button[data-pc-op].is-ok')).some(el=>el.getAttribute('title')?.includes(tool))})),
-      reportVisible: document.querySelector('.ai-messages')?.textContent?.includes('真实工具短链'),
+      // 汇报(本轮小结)在底部「Agent 操作」里,不在气泡里(2026-10-20)
+      reportVisible: document.querySelector('[data-pc="agent-activity"]')?.textContent?.includes('真实工具短链'),
     }), {text:REAL_RUNNER_TEXT,name:REAL_RUNNER_NAME});
     result['page'+i] = visible;
     check(visible.text && visible.pending && visible.userCount===1 && visible.assistantCount===1, 'full-editor-bound-output-'+i);

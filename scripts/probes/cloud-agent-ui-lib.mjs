@@ -636,18 +636,60 @@ export async function closeDialogs(page) {
   }
 }
 
-/** AI 栏里的「Agent 操作记录」:总条数,与此刻画出来的几行(最新的在前;列表是虚拟化的,只画可见的十来行) */
-export const eventLog = (page) => P(page, () => {
-  const box = document.querySelector('[data-pc="agent-event-log"]');
+/**
+ * AI 栏底部的「Agent 操作」(2026-10-20 取代按项目频道列工具事件的「Agent 操作记录」):这个页面此刻看的对话里,显示着的那一轮。
+ * 返回 null = 面板没出来(这个对话还没有 Agent 回复)。
+ *   roundId / index / total:显示的是第几轮(共几轮);count:这一轮的操作次数(对用户说的话不算);live:这一轮还在跑;
+ *   icons:图标(data-pc-op 与类名);undo:此刻画出来的「撤销这步」按钮(ready / done);open:正文是不是展开着。
+ */
+export const activity = (page) => P(page, () => {
+  const box = document.querySelector('[data-pc="agent-activity"]');
   if (!box) return null;
+  const head = box.querySelector('.pc-activity-count')?.textContent ?? '';
+  const m = head.match(/第\s*(\d+)\/(\d+)\s*轮\s*·\s*(\d+)\s*次操作/);
   return {
-    count: Number((box.querySelector('.pc-evlog-count')?.textContent ?? '').replace(/\D/g, '')) || 0,
-    rows: [...box.querySelectorAll('[data-pc="agent-event"]')].map((r) => {
-      const undo = r.querySelector('[data-pc="agent-undo"]');
-      return { id: r.getAttribute('data-event-id'), tool: r.querySelector('.pc-evlog-tool')?.textContent ?? '', who: r.querySelector('.pc-evlog-who')?.textContent ?? '', status: r.getAttribute('data-status'), undo: undo ? (undo.disabled ? 'done' : 'ready') : null };
-    }),
+    roundId: box.getAttribute('data-round-id'), index: Number(m?.[1] ?? 0), total: Number(m?.[2] ?? 0), count: Number(m?.[3] ?? 0), live: /进行中/.test(head),
+    open: !!box.querySelector('.pc-activity-body'),
+    icons: [...box.querySelectorAll('[data-pc-op]')].map((b) => ({ key: b.getAttribute('data-pc-op'), cls: b.className })),
+    undo: [...box.querySelectorAll('[data-pc="agent-undo"]')].map((u) => (u.disabled ? 'done' : 'ready')),
   };
 }).catch(() => null);
+
+/**
+ * 在「Agent 操作」里撤掉显示着的这一轮里**最新的**一步写入:从最后一个图标往前点,点到的那一页上有可撤的就点最后一个「撤销这步」,
+ * 等它变成「已撤销」。返回 { icon, done } 或 null(没找到能撤的)。
+ */
+export async function undoLatestStep(page, { ms = 20_000 } = {}) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const a = await activity(page);
+    if (a && !a.open) { await page.click('[data-pc="agent-activity"] .pc-activity-toggle').catch(() => {}); await delay(200); continue; }
+    for (const icon of [...(a?.icons ?? [])].reverse()) {
+      if (/ai-op--summary|ai-op--agent|ai-op--read|ai-op--look/.test(icon.cls)) continue;
+      await page.click(`[data-pc="agent-activity"] [data-pc-op="${icon.key}"]`).catch(() => {});
+      await delay(600);
+      const clicked = await P(page, () => {
+        const ready = [...document.querySelectorAll('[data-pc="agent-activity"] [data-pc="agent-undo"]')].filter((u) => !u.disabled && u.offsetParent);
+        const last = ready.at(-1);
+        if (!last) return false;
+        last.setAttribute('data-probe-undo', '1');
+        last.click();
+        return true;
+      }).catch(() => false);
+      if (!clicked) continue;
+      const done = await (async () => {
+        for (let i = 0; i < 50; i++) {
+          if (await P(page, () => document.querySelector('[data-probe-undo="1"]')?.disabled === true).catch(() => false)) return true;
+          await delay(200);
+        }
+        return false;
+      })();
+      return { icon: icon.key, done };
+    }
+    await delay(500);
+  }
+  return null;
+}
 
 /** 成员列表弹层里的行(点开再读,读完关上) */
 export async function membersList(page, opts = {}) {
