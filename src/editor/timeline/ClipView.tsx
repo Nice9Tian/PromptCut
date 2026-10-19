@@ -23,6 +23,8 @@ import { describeEmphasis } from "../../kernel/emphasis";
 import { requestCaptions } from "../left/captionsBus";
 import { CaptionLines } from "./CaptionLines";
 import { captionsOf, isCaptionClip } from "../../kernel/captions";
+import { cutDuration } from "../../kernel/cutSegments";
+import { openCutInTimeline } from "./CutTabs";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
@@ -38,7 +40,10 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   // 同步来的卡的运行状态变了也重绘:载入成功的不再挂「需要本地 PC 渲染辅助」的徽标,运行不了的照挂
   useSyncExternalStore(onCardRunStatesChanged, cardRunStatesGen);
   // 标签:构建时定义的名字 → 同步表里的名字 →「未知卡片」(C10 契约第 9 节)
-  const label = clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
+  // 剪辑段(kernel/cutSegments.ts):标签跟着被引用剪辑现在的名字走;找不到(悬空引用)就写明
+  const cutName = useStore((s) => (clip.cutId ? s.project.cuts?.find((c) => c.id === clip.cutId)?.name ?? null : null));
+  const cutTotal = useStore((s) => (clip.cutId ? cutDuration(s.project, clip.cutId) : 0));
+  const label = clip.cutId ? (cutName ? `剪辑 · ${cutName}` : "剪辑 · (已不存在)") : clip.cardId ? clipCardLabel(knownCardName(clip.cardId)) : clip.label;
   /*
    * 在线浏览器模式下这台设备跑不了的卡(用户卡、素材效果卡、同步来的用户卡),预渲染结果又还没覆盖整段时:片段里挂个小徽标,
    * 悬停出「需要本地 PC 渲染辅助」(与舞台上的图标同一句、同一条件;C10 契约第 9 节)。覆盖变了重绘,齐了撤掉。
@@ -69,7 +74,11 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
     subtitle = clipSubtitleOf(paramsView, clip.params);
   } else if (clip.mediaId) {
     subtitle = "时长 " + formatTime(clip.end - clip.start);
+  } else if (clip.cutId) {
+    subtitle = `${(clip.cutOffset ?? 0) > 0 ? `从 ${formatTime(clip.cutOffset ?? 0)} 起 · ` : ""}时长 ${formatTime(clip.end - clip.start)} · 双击打开`;
   }
+  // 被引用剪辑事后变短:超出它总时长的那一截透明无声(段的起止不动),斜线标出来
+  const cutOverSec = clip.cutId && cutName ? Math.max(0, (clip.end - clip.start) - Math.max(0, cutTotal - (clip.cutOffset ?? 0))) : 0;
 
   // 挂在这段上的转场:画出淡化区间、右键能删,而且它锁着这段的时间关系(单独拖会被 store 挡回来,整组一起走)
   const allTransitions = useStore((s) => s.project.transitions);
@@ -241,7 +250,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
       <div
         ref={dragRef}
         data-clip-id={clip.id}
-        data-track-kind={trackKind}
+        data-track-kind={clip.cutId ? "video" : trackKind}
+        data-pc-cut-segment={clip.cutId ? clip.cutId : undefined}
         data-audio-muted={muteReason ? "true" : undefined}
         aria-label={muteReason ? `${label || "片段"}，${muteReason}` : undefined}
         title={muteReason ? `${label || "片段"}：${muteReason}` : undefined}
@@ -253,6 +263,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           transition: dragState ? 'none' : 'width 0.1s, left 0.1s',
         }}
         onContextMenu={handleContextMenu}
+        // 剪辑段:双击在时间轴上方打开被引用的剪辑(Argon 审核意见决定 3 补充)
+        onDoubleClick={clip.cutId && cutName ? (e) => { e.stopPropagation(); openCutInTimeline(clip.cutId!); } : undefined}
       >
         <div
           ref={resizeLeftRef}
@@ -282,6 +294,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
         )}
         {(clip.fadeOut ?? 0) > 0 && (
           <div className="pc-clip-fade is-out" style={{ width: (clip.fadeOut ?? 0) * pxPerSec }} aria-hidden="true" />
+        )}
+        {cutOverSec > 0.01 && (
+          <div className="pc-clip-cut-over" style={{ width: cutOverSec * pxPerSec }} title="被引用的剪辑变短了:这一截透明、无声" aria-hidden="true" />
         )}
         {lock && (
           <span className="pc-clip-link" title={lock.message}>
@@ -329,6 +344,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
             ...(clip.emphasis
               ? [{ label: `去掉强调:${describeEmphasis(clip.emphasis)}`, action: () => actions.setClipEmphasis(clip.id, null) }]
               : []),
+            ...(clip.cutId && cutName ? [{ label: `打开剪辑「${cutName}」`, action: () => openCutInTimeline(clip.cutId!) }] : []),
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
             ...(hasAudio ? [
               { label: clip.audioMuted ? "恢复片段声音" : "静音片段", disabled: !!track.locked, action: () => reportAudio(actions.setClipMuted(clip.id, !clip.audioMuted)) },

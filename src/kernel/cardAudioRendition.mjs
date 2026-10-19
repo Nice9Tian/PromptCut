@@ -12,6 +12,8 @@ export function clipHasEmbeddedAudio(project, clip, getCard = () => undefined) {
   return isAudiovisualCard(getCard(clip.cardId || node?.cardId)) || clip.embeddedAudio === true || node?.embeddedAudio === true || !!clip.cardAudio;
 }
 export function clipHasAudio(project, clip, getCard = () => undefined) {
+  // 剪辑段(kernel/cutSegments.ts)带着被引用剪辑的混音:可以独立静音、调音量
+  if (typeof clip.cutId === 'string' && clip.cutId) return true;
   const node = nodeOf(project, clip), media = project.media?.find(m => m.id === clip.mediaId);
   return clipHasEmbeddedAudio(project, clip, getCard) || node?.adapter === 'card' && node.kind === 'audio' ||
     typeof getCard(clip.cardId || node?.cardId)?.audio === 'function' || media?.kind === 'video' || media?.kind === 'audio';

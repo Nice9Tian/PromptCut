@@ -3,6 +3,7 @@ import { planPlacement } from "../../store/project";
 import { formatTime, snapTime } from "./utils";
 import { checkCrossfade, checkFade, clampDur, planTransitionDrop, TRANSITION_LABEL } from "../../kernel/transitions";
 import { describeEmphasis } from "../../kernel/emphasis";
+import { cutCycleReason } from "../../kernel/cutSegments";
 import { type DragPayload } from "../dnd";
 
 /**
@@ -123,6 +124,14 @@ export function planDrop(
   const dur = Math.max(0.1, payload.duration);
   const start = Math.max(0, snapTime(rawSec, opts.altKey, project, opts.t, undefined, opts.pxPerSec));
   const base = { label: payload.name, trackId: null as string | null, newTrackIndex: null as number | null };
+
+  // 剪辑:放进自己或会循环引用(任意深度)时不接受,落点预览上写明原因(workflow/materials.md「素材库里的剪辑」)
+  if (payload.kind === "cut") {
+    const reason = project.activeCutId ? cutCycleReason(project, project.activeCutId, payload.cutId) : null;
+    if (reason) {
+      return { ...base, ...("trackId" in target ? { trackId: target.trackId } : { newTrackIndex: target.newTrackIndex }), start, end: start + dur, status: "forbidden", hint: reason };
+    }
+  }
 
   if ("newTrackIndex" in target) {
     return {

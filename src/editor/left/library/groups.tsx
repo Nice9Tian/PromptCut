@@ -34,6 +34,8 @@ export const LIBRARY_GROUPS: readonly GroupDef[] = [
   { id: "videos", title: "视频", layout: "big_16_9", category: "视觉", empty: "import" },
   { id: "images", title: "图片", layout: "big_16_9", category: "视觉", empty: "import" },
   { id: "music", title: "音频", layout: "big_strip", category: "音频", empty: "import" },
+  // 项目里的每条剪辑(2026-10-20 用户定:「剪辑应该也出现在素材库中」);单击在时间轴上打开,拖到序列上放剪辑段
+  { id: "cuts", title: "剪辑", layout: "big_16_9", category: "视觉", empty: "hint", hook: "lib-cuts", hint: "单击在时间轴上打开,拖到序列上放一个引用它的剪辑段" },
 ];
 
 /** 动画:各类卡片和部件,全是视觉类(GroupBrowser 据此不画分类胶囊行) */

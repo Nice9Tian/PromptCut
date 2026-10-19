@@ -8,6 +8,7 @@ import { useOpenGroup } from "./stored";
 import { KIND_GROUP, LIBRARY_GROUPS, LIBRARY_GROUP_IDS, type GroupData } from "./library/groups";
 import { GroupBrowser } from "./library/GroupBrowser";
 import { useMediaGroup, useMediaMenu } from "./library/mediaGroups";
+import { useCutsGroup } from "./library/cutsGroup";
 
 /**
  * 「素材库」分区:导入媒体 → 搜索 → 分类胶囊 → 分组(视频 / 图片 / 音频)。
@@ -31,7 +32,9 @@ export function LibrarySection() {
   const images = useMediaGroup("image", q, mediaMenu.openMenu);
   const music = useMediaGroup("audio", q, mediaMenu.openMenu);
 
-  const data: Record<string, GroupData> = { videos, images, music };
+  const cuts = useCutsGroup(q, flash);
+
+  const data: Record<string, GroupData> = { videos, images, music, cuts: cuts.data };
 
   const importMedia = useCallback(() => { mediaInputRef.current?.click(); }, []);
 
@@ -88,6 +91,7 @@ export function LibrarySection() {
       <FlashBar msg={msg} />
 
       {mediaMenu.overlay}
+      {cuts.overlay}
 
       <input ref={mediaInputRef} type="file" accept={MEDIA_ACCEPT} multiple style={{ display: "none" }} onChange={handleMediaFileChange} />
     </div>

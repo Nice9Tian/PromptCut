@@ -131,7 +131,8 @@ export interface LegacyState {
  * 选中项沿用旧键,老用户升级后停在原来那一页。
  */
 export function defaultLayout(agentIds: readonly string[], legacy: LegacyState = {}): RailLayout {
-  const left: ItemId[] = [...SECTION_IDS, CUTS_ITEM];
+  // 剪辑组 2026-10-20 撤掉(入口挪到素材库剪辑组与时间轴上方标签栏),默认布局里不再有它
+  const left: ItemId[] = [...SECTION_IDS];
   const right: ItemId[] = ["script", ...agentIds.map(agentItem)];
   const section: SectionId = legacy.section && isSectionItem(legacy.section) ? legacy.section : "library";
   const tab = legacy.activeTabId && agentIds.includes(legacy.activeTabId) ? legacy.activeTabId : agentIds[0];
@@ -237,7 +238,8 @@ export function validateLayout(raw: unknown, agentIds: readonly string[], fallba
     for (const v of arr) {
       if (typeof v !== "string" || seen.has(v)) continue;
       const agent = agentIdOf(v);
-      if (!(isSectionItem(v) || v === "script" || v === CUTS_ITEM || (agent !== null && known.has(agent)))) continue;
+      // 老布局里存着的剪辑组(CUTS_ITEM)读进来就丢掉:2026-10-20 起左右栏都没有它
+      if (!(isSectionItem(v) || v === "script" || (agent !== null && known.has(agent)))) continue;
       seen.add(v);
       out.push(v as ItemId);
     }
@@ -246,8 +248,6 @@ export function validateLayout(raw: unknown, agentIds: readonly string[], fallba
   const left = clean(r.left);
   const right = clean(r.right);
   for (const s of SECTION_IDS) if (!seen.has(s)) left.push(s);
-  // 剪辑组是后加的:老布局里没有,放到左边末尾(分区下面)
-  if (!seen.has(CUTS_ITEM)) left.push(CUTS_ITEM);
   if (!seen.has("script")) right.unshift("script");
   let layout: RailLayout = { left, right, active: { left: null, right: null } };
   layout = syncAgents(layout, agentIds).layout;

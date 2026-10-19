@@ -3,7 +3,7 @@ import { DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR } from "../../kernel/project";
 import { timeOfX } from "./utils";
 import { useTimelineContext } from "./TimelineContext";
 import { clipAt, planDrop, planTransition, type DropPlan, type DropTarget } from "./dropPlan";
-import { clearDragPayload, getDragPayload, MIME_CARD, MIME_MEDIA, type DragPayload } from "../dnd";
+import { clearDragPayload, getDragPayload, MIME_CARD, MIME_CUT, MIME_MEDIA, type DragPayload } from "../dnd";
 
 /** 拖动没经过本窗口的 dragstart(跨窗口拖进来)时的兜底:只认得种类,时长用默认值 */
 function fallbackPayload(types: readonly string[]): DragPayload | null {
@@ -85,6 +85,21 @@ export function useDropTarget(target: DropTarget) {
       const r = planTransition(getState().project, payload.transition, plan.trackId, sec, payload.duration);
       if (!r.plan) return;
       actions.addTransition({ kind: r.plan.kind, clipId: r.plan.aId, otherClipId: r.plan.bId, dur: r.plan.dur });
+      return;
+    }
+
+    // 剪辑:在激活剪辑里放一个引用它的剪辑段(循环引用在 planDrop 里已经拦下、写明了原因)
+    if (payload.kind === "cut") {
+      const cutId = dt.getData(MIME_CUT) || payload.cutId;
+      let seg = null;
+      try {
+        seg = actions.addCutSegment(cutId, plan.start, plan.trackId ? { trackId: plan.trackId } : { newTrackIndex: plan.newTrackIndex ?? undefined });
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      const st = getState();
+      if (!st.playing && (st.t < seg.start || st.t >= seg.end)) actions.seek(seg.start);
       return;
     }
 

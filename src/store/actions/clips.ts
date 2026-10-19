@@ -4,6 +4,7 @@ import { isAudiovisualCard, clipHasEmbeddedAudio, assertAudiovisualCardKind } fr
 import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
 import type { PartInstance } from "../../kernel/types";
 import { fadeOwner, groupOf, timingLock, transitionsOf, transitionsOfClip } from "../../kernel/transitions";
+import { cutDuration } from "../../kernel/cutSegments";
 
 import {
   state, set,
@@ -160,6 +161,23 @@ export const clips = {
     if (!target || target.locked) return;
     let clip: TrackClip | null = { ...hit.clip, start: patch.start ?? hit.clip.start, end: patch.end ?? hit.clip.end };
     if (clip.end - clip.start < 0.1) clip.end = clip.start + 0.1;
+    /*
+     * 剪辑段(kernel/cutSegments.ts):修头 = 起点偏移跟着走(画面留在原处),往前拉不能越过被引用剪辑的开头;
+     * 往后拉出点不能超出被引用剪辑此刻剩下的长度。被引用剪辑事后变短、段已经超出的,不自动裁,
+     * 只是出点不能再往外拉(Argon 审核意见决定 4 补充 1)。整段平移不动偏移。
+     */
+    if (clip.cutId) {
+      const trimming = Math.abs((clip.end - hit.clip.end) - (clip.start - hit.clip.start)) > 1e-9;
+      let offset = Math.max(0, hit.clip.cutOffset ?? 0);
+      if (trimming && Math.abs(clip.start - hit.clip.start) > 1e-9) {
+        offset += clip.start - hit.clip.start;
+        if (offset < 0) { clip.start -= offset; offset = 0; }
+      }
+      const maxEnd = clip.start + Math.max(0.1, cutDuration(p, clip.cutId) - offset);
+      if (clip.end > maxEnd && clip.end > hit.clip.end + 1e-9) clip.end = Math.max(maxEnd, hit.clip.end);
+      const { cutOffset: _old, ...rest } = clip;
+      clip = offset > 0 ? { ...rest, cutOffset: offset } : rest;
+    }
     const collisionTarget = { ...target, clips: target.clips.filter(c => c.soundEffect?.sourceClipId !== clipId) };
     clip = resolveOverlap(collisionTarget, clip);
     if (!clip) return; // 目标位置放不下整段:拒绝移动,不压扁
@@ -234,6 +252,11 @@ export const clips = {
     if (hit.track.locked || p.tracks.some(track => track.locked && track.clips.some(c => c.soundEffect?.sourceClipId === clipId))) return null;
     const left: TrackClip = { ...hit.clip, end: t };
     let right: TrackClip = { ...hit.clip, id: newId("c"), start: t, mediaOffset: (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start), ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
+    // 剪辑段:后半段从被引用剪辑的「前半段的偏移 + 前半段的长度」开始(不用 mediaOffset)
+    if (hit.clip.cutId) {
+      const { mediaOffset: _m, ...rest } = right;
+      right = { ...rest, cutOffset: Math.max(0, hit.clip.cutOffset ?? 0) + (t - hit.clip.start) };
+    }
     if (right.soundEffect) right = { ...right, soundEffect: { ...right.soundEffect, requestId: newId("sound-request") } };
     const cloned = cloneCardClipInstance(p, hit.clip.id, right.id, hit.clip.nodeId, t - hit.clip.start);
     if (cloned.nodeId !== hit.clip.nodeId) right = { ...right, nodeId: cloned.nodeId };
