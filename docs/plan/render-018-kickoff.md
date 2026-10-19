@@ -60,7 +60,7 @@
 | Opus | Agent 工具的 `opus-dev`（medium）、`opus-dev-high`（high）；要 Extra 就用 `opus-dev-high` 并把 `effort` 设成 `xhigh` | medium～Extra | 渲染管线、预渲染产物、舞台、队列与同步、独立任务进程、鉴权与票据、并发与时序、会动像素基线或对外接口的改动。有清楚契约的用 medium，要自己定方案的用 high，写契约、根因不明、前一档两轮没过的用 Extra |
 | Sonnet | `sonnet-dev-high`（high）；要 medium 就把 `effort` 设成 `medium` | medium～high | 日常用 high：照契约实现、写测试、页面、云端 Agent 的各个工具包、探针。机械的批量活用 medium：改旧名词、清单整理、报告归档 |
 | GPT | `/subagent-gpt` | 见 `solution_table.md` 第 5 步 | 查资料和攻坚用 `gpt-6.1-sol`（medium～xhigh），升级攻坚用 `gpt-6-astra`（low～high） |
-| Gemini | `/subagent-agy`，`gemini-3.1-pro-high` | high | 文科顾问：界面文案、交互流程稿、建卡指南这类给人读的文字，卡住时给至少三条不同的思路。产出写成文件交付，核实后再用；不让它审代码、定架构 |
+| Gemini | `/subagent-agy`（`agy-manager`），`gemini-4-argon-high` | high | 文科顾问：界面文案、交互流程稿、建卡指南这类给人读的文字，卡住时给至少三条不同的思路，产出写成文件交付，核实后再用。2026-10-20 起也写代码：目标明确、边界清楚的非前端活（照契约实现、写测试、工具包、探针），派活指令里给 worktree、能改的文件清单和验收命令；它积极、爱发散，边界要写死。不派前端，不让它审代码、定架构；它交回的代码照常由主会话读差异、重跑基线 |
 
 - 选谁、哪一档、为什么，写在派活指令里。拿不准往高一档。每一档按难度一次选定，不逐档重交。
 - Sonnet 同一处改了两轮不过，换 Opus 重派。Opus 两轮不过，或者遇到偶发、时序、跨进程才复现的问题，交 GPT 攻坚。
