@@ -78,7 +78,8 @@
 |---|---|---|---|
 | 剪辑 | 项目里的一条独立时间轴；同一时刻只有一条激活 | 二 | product/project-model.md |
 | 序列 | 时间轴上的一行，不分种类；靠上的画在上层 | 二 | product/project-model.md |
-| 片段 | 序列上的一段，分卡片段和素材段 | 二 | product/project-model.md |
+| 片段 | 序列上的一段，分卡片段、素材段和剪辑段 | 二 | product/project-model.md |
+| 剪辑段 | 放在一条剪辑序列里、引用另一条剪辑的片段 | 二 | product/project-model.md |
 | 效果库 | 项目里的滤镜、像素映射、音频效果定义 | 二 | product/project-model.md |
 | 滤镜 | 整帧调色 | 二 | product/project-model.md |
 | 像素映射 | 需要逐像素判断的选区处理 | 二 | product/project-model.md |
