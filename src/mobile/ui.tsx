@@ -178,6 +178,13 @@ export function SubNav({ items, pcm }: { items: SubItem[]; pcm: string }) {
   );
 }
 
+/** 缩略卡、素材格子、卡片格子的底色:按 id 算一个固定的色相(只为相邻的分得开,不代表内容) */
+export function tint(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
+  return `hsl(${h} 42% 34%)`;
+}
+
 /** 时长:00:06 / 00:06.5 */
 export function fmtDur(d: number): string {
   d = Math.round(d * 10) / 10;

@@ -4,7 +4,7 @@
  *
  *   npx vite build --mode online
  *   node scripts/probes/mobile-ui-probe.mjs [--dist dist-online] [--out <截图目录>] [--base-port 5820] [--base2-port 5825] [--doc-port 5828] [--asset-port 5829]
- *   node scripts/probes/mobile-ui-probe.mjs --origin https://visuhive.com --only nav   # 生产上只跑不改项目的条目(M7)
+ *   生产上的检查(不进项目、不改数据)见 `mobile-prod-check.mjs`。
  *
  * M1:安卓 Chrome 仿真(UA + userAgentData.mobile=true)进手机版;桌面仿真进桌面界面;`?layout=desktop|mobile` 能强制。
  * M2(375×812、触屏,逐条对演示稿第四～十三轮 README 里可量的条目):

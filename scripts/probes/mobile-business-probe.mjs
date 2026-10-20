@@ -88,7 +88,9 @@ try {
   const A = await env.newPage(browser, 'phone');
   // 手机浏览器没有「另存为」(showSaveFilePicker):导出攒成文件下载
   await A.evaluateOnNewDocument(() => { try { delete window.showSaveFilePicker; } catch { /* */ } window.showSaveFilePicker = undefined; });
-  await A.cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL, eventsEnabled: true }).catch(() => A.cdp.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DL }));
+  // 下载落到 DL:浏览器级会话按这个页面所在的上下文设(页面级的设置对新开的上下文不生效)
+  const bcdp = await browser.target().createCDPSession();
+  await bcdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL, browserContextId: A.browserContext().id, eventsEnabled: true });
   await env.enter(A, { username: 'jia' });
   await A.waitForSelector('[data-pcm="editor"]', { visible: true });
 
@@ -263,6 +265,7 @@ try {
   await tap(A, '[data-pcm="top-export"]');
   await tap(A, '[data-pcm="export-start"][data-mode="full"]');
   const done = await until('导出结束', () => A.evaluate(() => { const e = document.querySelector('[data-pcm="export-progress"]'); const ph = e?.getAttribute('data-phase'); return ph && ph !== 'running' ? { phase: ph, text: e.textContent } : null; }), 420_000, 1000);
+  await until('下载落盘', () => fs.readdirSync(DL).some((f) => f.endsWith('.mp4')), 30_000, 500);
   const files = fs.readdirSync(DL).filter((f) => !f.endsWith('.crdownload'));
   const mp4 = files.find((f) => f.endsWith('.mp4'));
   step('export', { done, files, bytes: mp4 ? fs.statSync(path.join(DL, mp4)).size : 0 });

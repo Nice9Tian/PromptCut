@@ -8,17 +8,10 @@ import type { Project, TrackClip } from "../kernel/project";
 import type { Transition } from "../kernel/transitions";
 import { boundaryTransition, cardPosAtTime, clipKind, mainTotal, timeAtCardPos } from "./mainContent";
 import { Icon } from "./icons";
-import { fmtDur } from "./ui";
+import { fmtDur, tint } from "./ui";
 
 /** 长按多久才算拿起来换顺序 */
 const LIFT_MS = 350;
-
-/** 缩略卡的底色:按素材 id 算一个固定的色相(只是让相邻的卡分得开,不代表内容) */
-function tint(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
-  return `hsl(${h} 42% 34%)`;
-}
 
 export function ThumbStrip(props: {
   project: Project;

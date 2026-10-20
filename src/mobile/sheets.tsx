@@ -20,7 +20,7 @@ import { ONLINE_EXPORT_TEXT } from "../export/text";
 import type { ExportMode } from "../export/cardLayers";
 import { clipKind, clipName, mainClipsOf, mainTrackOf } from "./mainContent";
 import { Icon } from "./icons";
-import { Sheet, fmtDur, fmtTc, useConfirm, useToast } from "./ui";
+import { Sheet, fmtDur, fmtTc, tint, useToast } from "./ui";
 import type { MembersInfo } from "./useMembers";
 
 /* ======================== 素材库 ======================== */
@@ -97,7 +97,7 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
                   if (!clip) { toast("放不下：没有空着的序列"); return; }
                   props.onPlaced(clip, m);
                 }}>
-                  <div className="pic"><Icon name={m.kind === "audio" ? "audio" : m.kind === "image" ? "image" : "video"} />
+                  <div className="pic" style={{ background: `linear-gradient(135deg, ${tint(m.id)}, var(--shade-art))` }}><Icon name={m.kind === "audio" ? "audio" : m.kind === "image" ? "image" : "video"} />
                     {m.duration ? <span className="dur">{fmtDur(m.duration)}</span> : null}
                     {m.pending ? <span className="st">上传中</span> : m.transcript ? <span className="st">已转写</span> : null}
                   </div>
@@ -184,7 +184,7 @@ export function CardsSheet(props: { tab: CardTab; onTab: (t: CardTab) => void; t
               toast(`已加到 ${fmtTc(clip.start)}`);
               props.onAdded(clip);
             }}>
-              <div className="pic"><Icon name={isTextCard(c) ? "text" : "card"} /></div>
+              <div className="pic" style={{ background: `linear-gradient(135deg, ${tint(c.id)}, var(--shade-art))` }}><Icon name={isTextCard(c) ? "text" : "card"} /></div>
               <div className="cap">{c.name}<small>{c.description}</small></div>
             </button>
           ))}
