@@ -85,3 +85,24 @@ test('声画卡错误声明audio-only类型时apply在写项目之前明确拒�
     assert.deepEqual(p.tracks[0].clips, []); assert.equal(p.cardNodes, undefined);
   }
 });
+
+test('剪辑段展开出来的有声卡:按被引用剪辑里的原片段核身份(含按片段 id 找的输入素材),偏移加上裁掉的那一截', () => {
+  const vhash = 'b'.repeat(64);
+  const src = { id: 'v', cardId: '', mediaId: 'vid', start: 0, end: 6, params: {} };
+  const clip = { id: 'c', cardId: 'av', nodeId: 'n', embeddedAudio: true, params: {}, start: 2, end: 4 };
+  const child = { tracks: [{ id: 't', clips: [src, clip] }], media: [{ id: 'wav', kind: 'audio', hash, url: `/@media/${hash}` }, { id: 'vid', kind: 'video', hash: vhash, url: `/@media/${vhash}` }],
+    cardNodes: [{ id: 'n', cardId: 'av', inputs: { video: '@clip/v/source' } }] };
+  clip.cardAudio = { version: 1, mediaId: 'wav', cardId: 'av', sourceKey: 'k', sourceOffset: 0, duration: 2, sampleRate: 48000, frames: 96000, channels: 2,
+    identity: cardAudioIdentity(child, clip, hooks) };
+  assert.equal(clip.cardAudio.identity.inputs.video.media, vhash);
+  // 剪辑1 里一个剪辑段:起点 10、cutOffset 3、长 5 → 子剪辑 3~8 秒;卡片 2~4 秒被裁成 3~4 秒,落在父时间 10~11 秒
+  const root = { ...child, tracks: [{ id: 'r', clips: [{ id: 's', cardId: '', cutId: 'B', cutOffset: 3, start: 10, end: 15, params: {} }] }],
+    cuts: [{ id: 'A', name: '剪辑1' }, { id: 'B', name: '剪辑2', tracks: child.tracks, duration: 6, transitions: [] }], activeCutId: 'A' };
+  const plan = audioPlanOf(root).filter(e => e.mediaId === 'wav');
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].start, 10); assert.equal(plan[0].dur, 1);
+  assert.equal(plan[0].offset, 1, 'WAV 从第 1 秒起(裁掉的那一截)');
+  // 被引用剪辑里改了参数:展开出来的同样判过期,报的是原片段 id
+  const stale = structuredClone(root); stale.cuts[1].tracks[0].clips[1].params = { gain: .9 };
+  assert.throws(() => audioPlanOf(stale), /^Error: c 的卡片声音已过期|c 的卡片声音已过期/);
+});

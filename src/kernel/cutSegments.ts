@@ -164,6 +164,33 @@ export function cutCycles(p: Project): string[][] {
   return out;
 }
 
+/**
+ * 「切到剪辑 `cutId` 时项目的样子」,只读:tracks / 总时长 / 转场换成那条剪辑的内容,其余项目级字段照旧。
+ * 给要按「片段所在的那条剪辑」算东西的地方用(导出前在被引用剪辑里生成卡片声音:身份、合成都按这条剪辑的序列算,
+ * 和用户切过去再生成是同一个结果)。激活的那条原样返回;找不到返回 null。不落盘、不进 store。
+ */
+export function cutViewProject(p: Project, cutId: string): Project | null {
+  if (!cutId || cutId === activeCutIdOf(p)) return p;
+  const content = cutContent(p, cutId);
+  if (!content) return null;
+  return {
+    ...p,
+    tracks: content.tracks,
+    duration: content.duration,
+    transitions: content.transitions,
+    activeCutId: cutId,
+    cuts: (p.cuts ?? []).map((c) => (c.id === cutId ? { id: c.id, name: c.name } : c)) as Cut[],
+  };
+}
+
+/** 在剪辑 `cutId`(缺省激活的那条)里找片段;返回那条剪辑的只读视图和片段 */
+export function findClipInCut(p: Project, cutId: string | undefined, clipId: string): { view: Project; track: Track; clip: TrackClip } | null {
+  const view = cutId ? cutViewProject(p, cutId) : p;
+  if (!view) return null;
+  for (const track of view.tracks) for (const clip of track.clips) if (clip.id === clipId) return { view, track, clip };
+  return null;
+}
+
 /** 直接引用了剪辑 `cutId` 的那些剪辑,各自哪几段 */
 export function cutReferences(p: Project, cutId: string): { cutId: string; name: string; clipIds: string[] }[] {
   const out: { cutId: string; name: string; clipIds: string[] }[] = [];

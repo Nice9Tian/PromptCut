@@ -129,7 +129,8 @@ function expand(p, seg, hostTrack, prefix, outer) {
         ...(segMuted || child.muted ? { audioMuted: true } : {}),
         // 外层各段的包络、子片段自己按原起止的淡化、这一层的窗口(被引用剪辑变短时截到它的总时长)
         cutEnv: [...envs, fadesOf(c, s, e), { start: w0, end: w1 }],
-        cutOrigin: { clipId: c.id, segments: path },
+        // cutId:原片段住在哪条剪辑里(卡片声音的身份与覆盖范围按原片段核,`cardAudioRendition.mjs`)
+        cutOrigin: { clipId: c.id, segments: path, cutId: seg.cutId },
       });
     }
     if (clips.length) out.push({ ...child, id: `${path.join("/")}/${child.id}`, muted: false, clips });
