@@ -11,6 +11,7 @@ import { actions, getState, onLocalCommit, useStore, withMerge } from "../store/
 import { findClip, type TrackClip } from "../kernel/project";
 import { transitionsOf, type Transition } from "../kernel/transitions";
 import { getCard } from "../kernel/registry";
+import { listCuts } from "../kernel/cuts";
 import { Preview } from "../editor/Preview";
 import { ProbeGate } from "../editor/ProbeGate";
 import { MediaMigrationDialog } from "../editor/MediaMigrationDialog";
@@ -78,7 +79,7 @@ export function MobileEditor() {
   const mainTrack = mainTrackOf(project);
   const selClip = selection[0] && findClip(project, selection[0]) ? selection[0] : null;
   const tr = selTr ? transitionsOf(project).find((x) => x.id === selTr) ?? null : null;
-  const cutName = project.cuts?.find((c) => c.id === project.activeCutId)?.name ?? "剪辑";
+  const cutName = useMemo(() => listCuts(project).find((c) => c.active)?.name ?? "剪辑", [project]);
 
   /* ---------- 编辑器基础设施:同 Editor.tsx(不塞演示卡:手机版不放假数据) ---------- */
   useEffect(() => { void startSync().then(() => resumeShared()); }, []);
@@ -87,11 +88,14 @@ export function MobileEditor() {
 
   /* ---------- 返回层级与浏览器后退 ---------- */
   const pushedBase = useRef(false);
+  /** 自己发起的后退(分页 → 缩略预览):页面已经当场切好,对应的 popstate 到了就跳过,免得把这之后刚打开的面板关掉 */
+  const ownBack = useRef(0);
   useEffect(() => {
     const s = navState();
     if (!s) { history.pushState({ pcm: 1, lvl: 1 } satisfies NavState, ""); pushedBase.current = true; }
     else if (s.lvl !== 1) history.replaceState({ pcm: 1, lvl: 1 } satisfies NavState, "");
     const onPop = () => {
+      if (ownBack.current > 0) { ownBack.current--; return; }
       const st = navState();
       if (!st) { window.dispatchEvent(new Event("pc-go-home")); return; }
       setSheet(null);
@@ -103,7 +107,11 @@ export function MobileEditor() {
   const goPage = (next: Page) => {
     setSheet(null);
     if (next === page) return;
-    if (next === "preview") { if (navState()?.lvl === 2) history.back(); else setPage("preview"); return; }
+    if (next === "preview") {
+      if (navState()?.lvl === 2) { ownBack.current++; history.back(); }
+      setPage("preview");
+      return;
+    }
     const st: NavState = { pcm: 1, lvl: 2, page: next };
     if (page === "preview") history.pushState(st, ""); else history.replaceState(st, "");
     setPage(next);
