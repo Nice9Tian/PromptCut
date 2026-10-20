@@ -9,6 +9,7 @@ import { onlinePage } from "../online/pageFlag";
 import { ONLINE_CARD_AUDIO_BLOCKED, onlineCardAudioRunnable } from "../online/soundPolicy";
 import { projectCardGraph, cardJson } from "../kernel/cardGraph.mjs";
 import { clipHasEmbeddedAudio, cardAudioIdentity, resolveCardAudioRendition, assertAudiovisualCardKind } from "../kernel/cardAudioRendition.mjs";
+import { audioProjectOf } from "../kernel/cutAudio.mjs";
 
 export const CARD_AUDIO_SAMPLE_RATE = 48000 as const;
 export const CARD_AUDIO_MAX_BLOCK_FRAMES = 1_048_576;
@@ -394,8 +395,9 @@ export function persistentCardAudio(project: Project, clip: TrackClip) {
       ? syncedUserCards().get(id)!.audioSourceVersion
       : hooks?.getCard(id) ? hooks.sourceVersionOf(id) : syncedUserCards().get(id)?.audioSourceVersion });
 }
+/** 导出前核一遍:剪辑段按混音同一份展开(`audioProjectOf`)走进被引用的剪辑,里面出声的有声卡缺了、过期了同样当场报出原片段 */
 export function assertProjectCardAudio(project: Project) {
-  for (const track of project.tracks) for (const clip of track.clips) {
+  for (const track of audioProjectOf(project).tracks) for (const clip of track.clips) {
     if (track.hidden || track.muted || clip.audioMuted || !(clipHasEmbeddedAudio(project, clip, hooks?.getCard) || syncedUserCards().get(clip.cardId)?.embeddedAudio)) continue;
     persistentCardAudio(project, clip);
   }

@@ -36,10 +36,9 @@ export const TOOL_ROUTES = {
   add_cut: { method: "addCut", passArgs: true, awaited: false },
   rename_cut: { method: "renameCut", passArgs: true, awaited: false },
   remove_cut: { method: "removeCut", passArgs: true, awaited: false },
-  // 剪辑段:EditorApi 的类型在 src/ai/mcpExecutor.ts(本任务不改它),所以借 addClip / updateClip 两个方法名,
-  // 处理函数按参数分支(带 cutId / name 而没有 cardId 的 addClip、带 cutId / cutOffset 的 updateClip),见 src/mcp/handlers/cutSegments.ts
-  add_cut_segment: { method: "addClip", passArgs: true, awaited: false },
-  set_cut_segment: { method: "updateClip", passArgs: true, awaited: false },
+  // 剪辑段(src/mcp/handlers/cutSegments.ts)
+  add_cut_segment: { method: "addCutSegment", passArgs: true, awaited: false },
+  set_cut_segment: { method: "setCutSegment", passArgs: true, awaited: false },
   set_position: { method: "setPosition", passArgs: true, awaited: false },
   set_rect: { method: "setRect", passArgs: true, awaited: false },
   align: { method: "align", passArgs: true, awaited: false },

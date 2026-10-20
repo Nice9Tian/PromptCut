@@ -269,3 +269,80 @@ test('A12 在线低内存档:不合成;声音齐全照常导出,缺了就失败�
     } finally { restore(); }
   } finally { f.restore(); }
 });
+
+/*
+ * 剪辑段(`product/rendering.md`「导出时自动生成声音」递归进剪辑段):被引用剪辑里的有声卡,导出前在它自己那条剪辑里生成,
+ * 结果写回那条停放的剪辑;混音按剪辑段的音量、淡入淡出、静音处理。
+ */
+async function nestedProject({ muted = false } = {}) {
+  sourceVersion = 'v1'; failAudio = null;
+  actions.newProject('剪辑段里的有声卡');
+  const child = actions.addCut('剪辑2', { switchTo: true });
+  const inner = actions.addCardClip(def.id, 0.5, { duration: .4, params: { value: .25 } });
+  const outside = actions.addCardClip(def.id, 5, { duration: .4, params: { value: .5 } }); // 落在剪辑段窗口外
+  const root = getState().project.cuts[0].id;
+  actions.switchCut(root);
+  const seg = actions.addCutSegment(child.id, 1, { duration: 2 });
+  actions.setClipVolume(seg.id, .5);
+  if (muted) actions.setClipMuted(seg.id, true);
+  const seg2 = actions.addCutSegment(child.id, 4, { duration: 1 }); // 同一条剪辑引用两次:里面的片段只列一次
+  if (muted) actions.setClipMuted(seg2.id, true);
+  return { child, inner, outside, seg, seg2, root };
+}
+const parked = (cutId, clipId) => getState().project.cuts.find(c => c.id === cutId).tracks.flatMap(t => t.clips).find(c => c.id === clipId);
+
+test('C1 剪辑段:清单走进被引用剪辑,窗口外和重复引用的不重复列;生成写回停放的剪辑;混音按段音量出声', async () => {
+  const f = service();
+  try {
+    const { child, inner, outside, seg } = await nestedProject();
+    assert.throws(() => assertProjectCardAudio(getState().project), new RegExp(`${inner.id} 的卡片声音尚未生成`), '改动前:导出直接失败并点名原片段');
+    const needs = await listExportSoundNeeds(signal());
+    assert.deepEqual(needs.map(n => [n.clipId, n.cutId, n.kind, n.reason]), [[inner.id, child.id, 'card', 'ungenerated']]);
+    assert.match(needs[0].label, /剪辑「剪辑2」里的/);
+    assert.ok(!needs.some(n => n.clipId === outside.id), '落在剪辑段窗口外的不出声,不用生成');
+    const activeBefore = getState().project.tracks;
+    const result = await prepareExportSounds({ signal: signal() });
+    assert.deepEqual(result.generated, [inner.id]);
+    const p = getState().project;
+    assert.ok(parked(child.id, inner.id).cardAudio, '声音记在被引用剪辑里的原片段上');
+    assert.equal(parked(child.id, outside.id).cardAudio, undefined);
+    assert.equal(p.tracks, activeBefore, '激活剪辑的序列不动');
+    assertProjectCardAudio(p);
+    const plan = audioPlanOf(p);
+    assert.equal(plan.length, 2, '两个剪辑段各出一份(同一份 WAV):1.5 秒与 4.5 秒');
+    assert.deepEqual(plan.map(e => e.start).sort(), [1.5, 4.5]);
+    assert.equal(new Set(plan.map(e => e.mediaId)).size, 1);
+    const first = plan.find(e => e.clipId.startsWith(`${seg.id}/`));
+    assert.ok(first, '第一个剪辑段的那份进了混音');
+    assert.equal(first.start, 1.5); assert.equal(first.volume, .5, '音量乘上剪辑段的音量');
+    assert.ok(f.stored.has(p.media.find(m => m.id === first.mediaId).hash));
+    assert.deepEqual(await listExportSoundNeeds(signal()), []);
+  } finally { f.restore(); }
+});
+
+test('C2 剪辑段静音:里面的有声卡不出声,不用生成;取消静音后要生成', async () => {
+  const f = service();
+  try {
+    const { inner, seg } = await nestedProject({ muted: true });
+    const needs = await listExportSoundNeeds(signal());
+    assert.ok(!needs.some(n => n.clipId === inner.id), '两个剪辑段都静音:里面的不列');
+    actions.setClipMuted(seg.id, false);
+    assert.deepEqual((await listExportSoundNeeds(signal())).map(n => n.clipId), [inner.id]);
+  } finally { f.restore(); }
+});
+
+test('C3 被引用剪辑里的片段已经生成过、又改了参数:判过期,导出前按新参数重生成', async () => {
+  const f = service();
+  try {
+    const { child, inner, root } = await nestedProject();
+    await prepareExportSounds({ signal: signal() });
+    actions.switchCut(child.id);
+    actions.setClipParams(inner.id, { value: .75 });
+    actions.switchCut(root);
+    const needs = await listExportSoundNeeds(signal());
+    assert.deepEqual(needs.map(n => [n.clipId, n.reason]), [[inner.id, 'stale']]);
+    await prepareExportSounds({ signal: signal() });
+    assert.equal(parked(child.id, inner.id).cardAudio.identity.params.value, .75);
+    assertProjectCardAudio(getState().project);
+  } finally { f.restore(); }
+});

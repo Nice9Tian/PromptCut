@@ -19,6 +19,7 @@ import { mixAudioInChrome } from './audio-mix.mjs';
 // 统一管线。以前是 exportFrames 里的动态 import,只为绕开 export-frames ↔ export-unified
 // 的运行时环;环已经解开(export-unified 只依赖 chrome / bake / shards / ffmpeg),这里静态引。
 import { exportUnified } from './export-unified.mjs';
+import { reachableCutContents } from '../../src/kernel/cutIdentity.mjs';
 
 const MISSING_MATERIAL_FONT_CANDIDATES = Object.freeze({
   win32: (windir) => [
@@ -61,11 +62,27 @@ export function findMissingMaterialFontFile({ platform = process.platform, windi
  * opts.audio:声音怎么混。默认在 Chrome 里(OfflineAudioContext,带音频效果,见 mixAudioInChrome);
  *   'ffmpeg' 走 scripts/mux-audio.mjs 的滤镜图直接混(没有效果),对账和兜底用。
  */
+/**
+ * 剪辑段里有没有视频 / 图片(任意深度)。兼容旁路的 ffmpeg 合成只摆得了激活剪辑里的素材段,
+ * 剪辑段里的素材要经段的框、裁切、组不透明度嵌套摆放,这一路摆不出来。
+ */
+export function cutSegmentsHaveVisualMedia(project) {
+  if (!project) return false;
+  const visual = new Set((project.media ?? []).filter((m) => m && m.kind !== 'audio').map((m) => m.id));
+  return reachableCutContents(project).some((c) => (c.tracks ?? []).some((t) => !t.hidden && (t.clips ?? []).some((cl) => cl.mediaId && visual.has(cl.mediaId))));
+}
+
 export async function exportFrames(opts) {
   const outDir = opts.out || 'out';
   const noVideo = opts.noVideo || false;
   const workers = (opts.bakery || opts.targetFrames) ? 1 : await resolveWorkers(opts.workers);
-  const mediaMode = opts.media === 'ffmpeg' && !opts.bakery ? 'ffmpeg' : 'chrome';
+  let mediaMode = opts.media === 'ffmpeg' && !opts.bakery ? 'ffmpeg' : 'chrome';
+  // 剪辑段里有视频 / 图片:兼容旁路画不出它们,改走缺省的完整整帧路线(FrameScene 连素材一起渲),成片里照样有
+  // (`mechanism/rendering.md`「剪辑段」的兼容旁路一条)
+  if (mediaMode === 'ffmpeg' && cutSegmentsHaveVisualMedia(await loadProject(opts.url || DEFAULT_URL, outDir).catch(() => null))) {
+    console.log('[export] 剪辑段里有视频或图片:--media=ffmpeg 的兼容旁路摆不出嵌套的素材,这次改走缺省的完整整帧路线');
+    mediaMode = 'chrome';
+  }
   const ffmpegCmd = await findFfmpeg();
   let plan = null;
   let bakeOpts = opts;
