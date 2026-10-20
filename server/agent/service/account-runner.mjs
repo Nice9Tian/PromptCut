@@ -3,7 +3,7 @@ import { coalesceRunEvents } from './coalesce-run-events.mjs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createAgentInstance } from './instance.mjs';
-import { createRenderClipPicker } from './render-clips.mjs';
+import { createRenderClipPicker, FLAT_KERNEL_MODULE } from './render-clips.mjs';
 import { createAccountConversationService } from './conversation-policy.mjs';
 import { createWorkspaces } from './workspace.mjs';
 import { createEgressGate } from './egress.mjs';
@@ -107,6 +107,9 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
   const gate = createGate({ limitsFile: limitsFileOf(dataDir), usage, now, log });
   const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log });
   const egress = createEgressGate({ ...egressOptions, log });
+  // 剪辑段的摊平视图(发布预渲染时收剪辑段里的卡,`render-clips.mjs`):经载入缝取内核函数,载不了就只按片段 id 挑
+  let flatKernel = null;
+  const flatKernelReady = Promise.resolve().then(() => loadModule(FLAT_KERNEL_MODULE)).then((m) => { flatKernel = m; }, () => {});
   const hostedTools = createHostedTools({ root, loadModule, workspaces, egress, assetBase, voiceConfig, collect: toolOptions?.config?.collect ?? collect,
     ...(toolFetch ? { fetchImpl: toolFetch } : {}), limits: toolLimits, log,
     recordService: row => gate.record(row) });
@@ -120,7 +123,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       fail(503, 'look-context-unavailable');
     const assignmentDigest = grant.assignmentDigest ?? grant.scopeBinding?.assignmentDigest ?? null;
     let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null, heartbeatTimer = null;
-    const renderPicker = createRenderClipPicker();
+    const renderPicker = createRenderClipPicker(() => flatKernel);
     let removeAbort = () => {};
     if (look && typeof look.heartbeat === 'function') {
       heartbeatTimer = setInterval(() => {
@@ -283,6 +286,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       throw new Error(`云端的渲染服务不提供 ${pathname}`);
     };
 
+    await flatKernelReady;
     inst = createAgentInstance({ profile: 'hosted', server: { httpServer: null, ssrLoadModule: loadModule,
       config: { root }, middlewares: { use() {} } },
       // 这一轮被停掉(signal)时,它排在渲染服务队列里的看画面请求一并撤回,不占着队列、不在失权之后还出图

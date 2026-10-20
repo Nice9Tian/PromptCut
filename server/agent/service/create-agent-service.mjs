@@ -22,7 +22,7 @@
  *   - 对话存储(`conversations.mjs`)与预渲染重试发布(`render-request.mjs`)。
  * 本文件不引用 `src/`。
  */
-import { createRenderClipPicker } from './render-clips.mjs';
+import { createRenderClipPicker, FLAT_KERNEL_MODULE } from './render-clips.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createAgentInstance } from './instance.mjs';
@@ -220,6 +220,9 @@ export function createHostedAgentService({
   // 工具在节点上读写的一切按「项目 × 对话」隔离;按模型给的地址出网只经出网闸(任务书 J,契约第 9.5、9.6 节)
   const workspaces = createWorkspaces({ dataDir, limits: workspaceLimits, log: say });
   const egress = createEgressGate({ ...egressOptions, log: say });
+  // 剪辑段的摊平视图(发布预渲染时收剪辑段里的卡,`render-clips.mjs`):经载入缝取内核函数,载好之前只按片段 id 挑
+  let flatKernel = null;
+  Promise.resolve().then(() => loadModule(FLAT_KERNEL_MODULE)).then((m) => { flatKernel = m; }, () => {});
   const hostedTools = createHostedTools({
     root,
     loadModule,
@@ -380,7 +383,7 @@ export function createHostedAgentService({
     if (!conv?.run) return;
     const replica = entry.inst.replica();
     // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`;一个实例一份上一次的签名表)
-    entry.renderPicker ??= createRenderClipPicker();
+    entry.renderPicker ??= createRenderClipPicker(() => flatKernel);
     const clips = entry.renderPicker.pick(replica?.project ?? null, write?.clipIds ?? []);
     render.noteWrite(conv, { clips, rev: write?.rev ?? replica?.rev, project: replica?.project ?? null, runId: conv.run.runId, userCards: entry.inst.hasProjectCards?.() === true });
   }
