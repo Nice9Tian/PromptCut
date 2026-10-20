@@ -49,10 +49,48 @@
 
 新增：`scripts/probes/cut-segment-prerender-probe.mjs`（管线级）、`scripts/probes/cut-segment-prerender-editor-probe.mjs`（编辑台级）、`server/test/cut-segment-prerender.test.mjs`、截图与结果 `docs/reports/assets/cut-segment-prerender/**`、本报告。
 
-修改：`src/kernel/{cutSegments.ts,cutIdentity.mjs,cutIdentity.d.mts}`、`src/ExportView.tsx`、`src/editor/{costIdentity.ts,browserNodeHost.ts,probeRunner.ts,snapshotFeed.ts,stageSwap.ts}`、`src/render/{CutSegmentScene.tsx,Stage.tsx,layerInputSig.mjs,streamInputSig.mjs,streamPlanRules.mjs,streamPlanRules.d.mts,cardCostKey.d.mts,snapshotSource.ts}`、`server/{card-cache.mjs,frame-stream.mjs,ready-index.mjs}`、`server/render-node/split.mjs`；测试替身 `src/editor/{stageSwap.test.mjs,stageSwapBaseline.test.mjs,c10a-swap-gate.test.mjs}`（`snapshotFeed` 的替身补一个 `cutStreamHeavy`）；语义 `docs/semantics/mechanism/rendering.md`。
+修改：`src/kernel/{cutSegments.ts,cutIdentity.mjs,cutIdentity.d.mts}`、`src/ExportView.tsx`、`src/editor/{costIdentity.ts,browserNodeHost.ts,probeRunner.ts,snapshotFeed.ts,stageSwap.ts,Preview.tsx}`、`src/render/{CutSegmentScene.tsx,Stage.tsx,layerInputSig.mjs,streamInputSig.mjs,streamPlanRules.mjs,streamPlanRules.d.mts,cardCostKey.d.mts,snapshotSource.ts}`、`server/{card-cache.mjs,frame-stream.mjs,ready-index.mjs}`、`server/render-node/split.mjs`；测试替身 `src/editor/{stageSwap.test.mjs,stageSwapBaseline.test.mjs,c10a-swap-gate.test.mjs}`（`snapshotFeed` 的替身补一个 `cutStreamHeavy`）；语义 `docs/semantics/mechanism/rendering.md`。
 
 没动 `server/hosted-render/**`：托管渲染服务的工作进程跑的是同一份预渲染管线和导出页，按同一份 `planStreams` 认剪辑段。
 
 ## 验证
 
-（收尾时填）
+（下表在收尾时填数）
+
+## 用户看得出的区别（请审）
+
+- **重的剪辑段播放时贴流**：测得重、流铺满以后，播放中剪辑段的画面来自它的轨道流。只有稀疏版时（打开项目后最先产出的那一版，每 15 帧一张）播放中剪辑段的画面一卡一卡地跳，满密度补上以后就是逐帧的；原来是在舞台里活渲、整个预览按「慢帧就等」变慢。这和 `product/rendering.md` 对一切重卡的承诺一致（「重管线：预渲染」「兜底顺序」），所以没有改 `product/`，按三级办、标〔裁〕；但它确实是看得见的变化，请用户审。
+- **没流时照旧活渲，不显示占位符**：`product/rendering.md`「兜底顺序」对重卡说的是「该层还没有任何预渲染结果时显示占位符」。剪辑段这里按任务书「没流照旧活渲」办（就是原来的样子）；流铺满的那一刻起改贴流（播放中途也换，画面是同一帧）。反过来从流退回活渲只在旧流失效时发生（播放中改了被引用剪辑）：那一下要按历史推进的内容停在开始贴流时的状态，直到下一次跳转、暂停或起播补跑——这和改了参数的普通重卡在流重产好之前的情形同类。这是对二级兜底规则的一个例外，写在三级里、标〔裁〕，请用户定要不要把它写进 `product/`，或改成和别的重卡一样显示占位符。
+
+## 〔裁〕清单
+
+〔裁〕= 执行中自己定、用户合入前要审的决定。
+
+| # | 级 | 内容 | 写在 |
+|---|---|---|---|
+| 1 | 三 | 剪辑段整段当一张卡：身份（内容身份 + 里面各卡源码版本）、测量口径（`kind: random`、`vtOk`/`seekOk` false）、产剪辑段级单卡流（`solo: 'cut'`，浏览器不产）、不走整帧 PNG | `mechanism/rendering.md`「剪辑段」第「测量与预渲染」条 |
+| 2 | 三（看得见，请审） | 判重且流铺满（至少稀疏版）、签名对得上才贴流；否则照旧活渲、不显示占位符 | 同上「贴流」小条 |
+| 3 | 三 | 贴着流的剪辑段停下时整场景补跑互换，补跑好之前照旧贴流 | 同上「停下就精确」条 |
+
+## 没做成的与原因
+
+1. **在线浏览器页面不产剪辑段的流**：剪辑段的流要整套嵌套场景（含素材、素材效果卡），和另两类单独成流的卡一样只由桌面应用、托管方的渲染服务（「生成轨道流」打开时）和渲染主机产。在线页面只有桌面成员或托管渲染服务能产时才贴得上流；都没有时照旧活渲（不比现在差）。
+2. **在线页面不比剪辑段流的输入签名**：在线页面从层表（`server/artifact-transfer.mjs` 的 `layerMapOf`，`src/render/snapshotSource.ts` 的在线来源）拿流，层表那一行没有带 `streamKind: 'cut'` 和签名，被引用剪辑改过、渲染节点还没换键之前的那一小段，在线页面可能贴旧流（和在线页面上别的单卡流同一个口径：靠渲染节点换键重写层表）。桌面版预渲染进程发的层带签名，页面对不上就不贴（编辑台探针第 5 条）。要补的话改 `layerMapOf` 与在线来源，属另一位子 Agent 正在动的托管与在线那一片，没碰。
+3. **成本记录事后变了不重排这一版的流**：预渲染进程只在一版项目的后台那一趟里按成本记录定产哪些流；同一版里记录后来才判重（降级、人工钉死）不会马上产流，要等项目下一次变动。这是原有的行为，所有卡都一样，不是剪辑段特有的；编辑台探针钉死以后用「加一条空的隐藏序列」换一版来绕。
+4. **`probe-slow` 烧时间的剪辑段产不了流**：探针卡 `probe-slow` 靠舞台的真时钟 `__pcRealNow` 忙等，导出页把时间钉死、没有真时钟，它在导出页会一直烧下去（页面主线程卡死）。所以「测出来判重」用它在编辑台里测（`--burn 60`：单帧 63 ms，判重），产流与贴流用人工钉死为重卡（`pinnedHeavy`）的同一个剪辑段。这是探针卡的限制；真实的重内容（多张卡、粒子、视频）能在导出页渲，不受影响。
+5. **播放头走多快没有当闸门**：编辑台探针记录了贴流与活渲时墙上 3 秒内播放头前进多少，但钉死为重卡的那一段内容本身不重，两者都约 4 秒，看不出差别；烧时间的那一段又产不了流（上一条）。贴流时嵌套场景不重渲由 `CutSegmentScene` 的 `frozen` 保证（代码层面），没有用耗时数字证明。
+
+## 对任务书或语义的更正建议
+
+- 任务书写「本机预渲染进程与托管渲染服务按同一份分派认它」：托管渲染服务的工作进程跑的就是同一份预渲染管线与导出页（`__pcCardPlan`），不用动 `server/hosted-render/**`；但托管渲染服务「不测卡片轻重」，按在线页面发来的清单计划和已有成本记录产流。在线页面的清单原来只收有 `cardId` 的片段（`src/editor/Preview.tsx` 的 `heavyCardClips`），剪辑段进不去；本轮把剪辑段加进去了（判重的剪辑段进清单，切分只出切分方自己的那一份）。托管那一侧按清单为剪辑段产流、在线页面贴上，没有端到端实测（不碰生产节点），部署后由主会话验。
+- `server/test/account-v2-deploy-config.test.mjs` 的「registers an optional service only when its distinct identity is enabled」用 `JSON.stringify(result).includes('render') === false` 判断，结果里带着工作区路径，本工作区名字 `cut-segment-prerender` 里有 `render`，于是在这个工作区里必红（与改动无关，在别的路径下是绿的）。建议把判断改成只看服务列表，不看整份结果的字符串。
+- `product/rendering.md`「兜底顺序」可以考虑补一句剪辑段的例外（见上「用户看得出的区别」第 2 条），由用户定。
+
+## 部署要换什么
+
+改了 `src/`：**整份 `src/` 同步进渲染树**（预渲染进程、托管渲染服务、托管 Agent 服务都按 `src/` 加载；导出页 `ExportView.tsx` 是产流用的那一页）。
+
+- **在线前端重建并换静态页**：编辑台（测量、贴流、`snapshotFeed`、`stageSwap`）、舞台（`Stage`、`CutSegmentScene`）、导出页都在前端构建里。
+- **渲染服务 / 预渲染进程**（桌面版的预渲染进程、托管方的渲染服务及其工作进程、渲染主机）：换 `server/card-cache.mjs`、`server/frame-stream.mjs`、`server/ready-index.mjs`、`server/render-node/split.mjs`，以及它们 import 的 `src/kernel/cutIdentity.mjs`、`src/render/{streamPlanRules.mjs,streamInputSig.mjs,layerInputSig.mjs}`；重启这些服务。没有剪辑段的项目，卡片计划、键、层表一个字节不变，旧缓存照用。
+- 文档服务、素材服务、Agent 服务不用换（没有新数据字段落盘：剪辑段的节点只在卡片计划里，成本记录多一个 `cutSegment` 标记）。
+- 桌面版：随下一个补丁一起出。
