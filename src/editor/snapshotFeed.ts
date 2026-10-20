@@ -392,11 +392,7 @@ function activeCardClips(project: Project, t: number): TrackClip[] {
   return out;
 }
 
-/**
- * 剪辑段(`kernel/cutSegments.ts`)这一刻按重卡办吗:分派表判它重,**而且**它的剪辑段级轨道流已经把整段铺满(每个分段至少有稀疏版)。
- * 有流就贴流;流还没铺满(还在产、没有渲染节点产得了它、判重之前)就照旧在舞台里活渲 —— 不显示占位符,也不在播放中途
- * 从流换回活渲(`mechanism/rendering.md`「剪辑段」)。`stageSwap.ts` 判暂停时要不要整场景补跑用的是同一个函数。
- */
+/** 剪辑段的流输入签名(每份项目一张缓存,同 `belowSigOf`) */
 const cutSigs = new WeakMap<Project, Map<string, string | null>>();
 function cutSigOf(project: Project, clipId: string): string | null {
   let byClip = cutSigs.get(project);
@@ -405,6 +401,11 @@ function cutSigOf(project: Project, clipId: string): string | null {
   return byClip.get(clipId) ?? null;
 }
 
+/**
+ * 剪辑段(`kernel/cutSegments.ts`)这一刻按重卡办吗:分派表判它重,**而且**它的剪辑段级轨道流已经把整段铺满(每个分段至少有稀疏版),
+ * 而且那一层带的输入签名和当前项目对得上。是就贴流;否则(还在产、没有渲染节点产得了它、判重之前、被引用剪辑刚改过)
+ * 照旧在舞台里活渲,不显示占位符(`mechanism/rendering.md`「剪辑段」)。`stageSwap.ts` 判停下时要不要整场景补跑用的是同一个函数。
+ */
 export function cutStreamHeavy(project: Project, clip: { id: string; start: number; end: number; cutId?: string }, t: number): boolean {
   if (!clip.cutId) return false;
   if (pipelineAt(planDispatch.currentPlan(), clip.id, t) !== "heavy") return false;
