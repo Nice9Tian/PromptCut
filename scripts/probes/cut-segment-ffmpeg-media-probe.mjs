@@ -47,7 +47,7 @@ const project = {
 
 /** 成片 t 秒那一帧,(x, y) 处的 RGB */
 function pixelAt(file, t, x, y) {
-  const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-ss', String(t), '-i', file, '-frames:v', '1', '-vf', `crop=1:1:${x}:${y}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { windowsHide: true });
+  const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-ss', String(t), '-i', file, '-frames:v', '1', '-vf', `format=rgb24,crop=1:1:${x}:${y}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { windowsHide: true });
   const b = r.stdout;
   return b && b.length >= 3 ? [b[0], b[1], b[2]] : null;
 }
@@ -82,7 +82,7 @@ try {
     if (mode === 'ffmpeg') check('F1', /剪辑段里有视频或图片/.test(log), '--media ffmpeg:日志写明改走完整整帧路线');
     const inSeg = pixelAt(file, 2, W / 4, H / 4), outside = pixelAt(file, 2, (3 * W) / 4, (3 * H) / 4), before = pixelAt(file, 0.5, W / 4, H / 4);
     check(`F2-${mode}`, isRed(inSeg) && !isRed(outside), `${mode}:2 秒处左上四分之一是剪辑段里的红色视频,右下不是`, { inSeg, outside });
-    check(`F3-${mode}`, !isRed(before), `${mode}:0.5 秒(剪辑段之前)左上不是红色`, { before });
+    check(`F3-${mode}`, !!before && !isRed(before), `${mode}:0.5 秒(剪辑段之前)左上不是红色`, { before });
     spawnSync('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-ss', '2', '-i', file, '-frames:v', '1', path.join(OUT, `${mode}-2s.png`)], { windowsHide: true });
   }
 } finally {
