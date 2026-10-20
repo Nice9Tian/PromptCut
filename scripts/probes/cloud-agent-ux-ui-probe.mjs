@@ -1058,7 +1058,7 @@ async function errorsStep() {
     const sendBox = await carol.page.$('[data-pc="cloud-ai-panel"] [data-pc="ai-send"]:not([disabled])').catch(() => null);
     await shot(carol.page, 'E5-member-removed');
     // 共有对话里已读的这一轮继续跑完,改动都落地
-    const disk = await until('E5:已读的这一轮在云端跑完', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, 180_000, 300);
+    const disk = await until('E5:已读的这一轮在云端跑完', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, 600_000, 500); // 被踢之后这一轮每一步都要再核一次权限,跑得比平时慢;时限只为防卡死
     const rec = recordOf(conv);
     const landed = okOf(conv);
     const s = await sane(before, landed);

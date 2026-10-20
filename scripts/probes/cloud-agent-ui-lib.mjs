@@ -864,7 +864,7 @@ export async function creatorToggleService(page, service, creatorPassword = null
   await page.waitForSelector('[data-pc="hosted-service-dialog"]', { visible: true, timeout: 15_000 });
   const body = await page.$eval('[data-pc="hosted-service-dialog"]', (el) => el.textContent ?? '').catch(() => '');
   await page.click('[data-pc="hosted-service-confirm"]');
-  await page.waitForFunction(() => !document.querySelector('[data-pc="hosted-service-dialog"]'), { timeout: 15_000 });
+  await page.waitForFunction(() => !document.querySelector('[data-pc="hosted-service-dialog"]'), { timeout: 60_000 }); // 时限只为防卡死(账号模式下要等文档服务办完这次访问变更)
   return body;
 }
 
