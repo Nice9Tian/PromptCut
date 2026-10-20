@@ -5,7 +5,7 @@
 
 ## 状态
 
-见文末「结论」。没有推送、没有合并。
+做完，等主会话审查。剪辑段作为一个整体参与测量、分派、产流、贴流；基线全绿（全量测试的两条失败与本改动无关，见下）。没有推送、没有合并。
 
 ## 做法（一句话版）
 
@@ -55,7 +55,40 @@
 
 ## 验证
 
-（下表在收尾时填数）
+最终代码上跑（`7b348520`；类型检查在最后一处代码改动之后另跑了一次）。端口：dev server 5400、5403、5406（各另占 +1、+2 当舞台端口）；预渲染进程自己挑空闲端口（如 2558、10878、10268，探针结束后连同 dev server 一起收掉）。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，输出 0 行（两次） |
+| 全量测试 | `npm test`（命令里设 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`） | 7212 条：7195 过、3 败、0 取消、14 跳过。失败两项都与本改动无关：① `server/test/account-v2-deploy-config.test.mjs`「registers an optional service…」——断言整份结果的字符串里不含 `render`，结果里带着工作区路径 `.worktrees/cut-segment-prerender`（含 `render`），这个工作区里必红（第一轮全量也红，单独跑同样红）；② `server/test/multi-agent-presence.test.mjs` MA-X2（等在场消息 15 秒超时，负载下的偶发；第一轮全量里是过的，单独重跑 6/6 过） |
+| 新增单测 | `server/test/cut-segment-prerender.test.mjs` | 8 条全过（也在 npm test 里） |
+| 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5406/?export=1"` | 退出码 0；1800/1800 帧相同 |
+| 快照重放一致 | `PC_FRAME_TEST_URL=http://127.0.0.1:5406 node scripts/verify-unified-frames.mjs` | 退出码 0；PASS |
+| 与 main 的导出像素比对 | `bash .worktrees/_export-baseline/check.sh <本树> cut-segment-prerender 5406` | 240 帧；对 89c15177 第二种结果（A）240/240 逐字节相同，PASS（不含剪辑段的项目像素不变） |
+| 剪辑段预渲染（管线级，新） | `node scripts/probes/cut-segment-prerender-probe.mjs --port 5400 --out docs/reports/assets/cut-segment-prerender/pipeline` | 退出码 0，零失败，见下 |
+| 剪辑段预渲染（编辑台，新） | `node scripts/probes/cut-segment-prerender-editor-probe.mjs --port 5403 --out docs/reports/assets/cut-segment-prerender/editor` | 退出码 0，零失败，见下 |
+| 测量判重（编辑台，新） | 同上加 `--burn 60` | 退出码 0：S 的记录 `stepMs` 63、`capped: true`、`kind: random`、`vtOk`/`seekOk` false、`cutSegment: true`，父页分派表在 S 的位置判重（`editor-measure-burn60.json`） |
+| 上一轮剪辑段界面探针 | `node scripts/probes/cut-nesting-ui-probe.mjs --origin http://127.0.0.1:5406` | 退出码 0；A1～A9 全过，页面零报错 |
+| 上一轮剪辑段面板探针 | `node scripts/probes/cut-segment-panel-probe.mjs --origin http://127.0.0.1:5406` | 退出码 0；P1～P9、L1、E0 全过 |
+| 上一轮剪辑段声音探针 | `node scripts/probes/cut-segment-audio-probe.mjs --port 5400` | 退出码 0；chrome、ffmpeg 两遍 PASS（段前 −200 dB、淡入头 −34.89 dB、主体 −24.09 dB，原素材 −24.08 dB） |
+| 上一轮剪辑段有声卡导出探针 | `node scripts/probes/cut-segment-card-sound-probe.mjs --port 5400` | 退出码 0；全过（段间五个窗口 −200 dB，页面零报错） |
+| 上一轮兼容旁路探针 | `node scripts/probes/cut-segment-ffmpeg-media-probe.mjs --port 5400` | 退出码 0；F1、F2、F3 两遍全过（2 秒处左上 RGB (252,0,0)） |
+
+**管线级探针**（`FramePipeline` 同预渲染进程的代码、真 Chrome、真编码器；项目：激活剪辑上一个剪辑段 S，第 1～5 秒、框 960×540 居中、偏移 1 秒，引用「重」——一张推帧卡 `r6-stateful` 加一个剪辑段引用「里」——两层嵌套）：
+
+1. 卡片计划里有 S 的控件：`cutSegment`、预卷 1 秒、`frameMode: stateful`、成本键 `1c7e552f070c88`、`cacheable: false`。
+2. 流的计划：一条 `solo: 'cut'`、`plane: 'local'` 的单卡流，第 30～149 帧，`replay: true`、挂载帧 0（含预卷），隔离工程把框摆在原处。
+3. 流用的隔离工程导出 120 帧，与整个项目导出的同一帧**逐像素相同**（120/120，含段起点那一帧——预卷对了）。
+4. 稀疏版 8 个分段，每段一张、最像分段第一帧（平均误差 0.20～0.21/255）；满密度 120 帧逐帧最像自己那一帧，最差平均误差 0.71/255。
+5. 真舞台（跨源两台）上抑制 S、发它的流平面，停在第 31、47、75、100、133、149 帧截图，与整个项目的活渲导出比：每一帧最像的都是它自己那一帧，框内平均差 0.22～0.26/255；剪辑段的活子树藏着、流平面露着。
+6. 改「里」（两层深）那张卡的文字：成本键 `1c7e552f070c88`→`f9f1523b1faaa`，流键也变；激活剪辑里加一条隐藏序列：键都不变。
+
+**编辑台探针**（真编辑台、真预渲染进程）：测量记录按剪辑段口径；页面与预渲染进程算出同一个成本键；钉死为重卡、项目换一版后，预渲染进程产出 `solo: 'cut'` 的流（8 段满密度），父页就绪索引收到流层、`cutStreamHeavy` 为真；从头播放 3 秒，S 被抑制、流平面露着、父页发了带这条流键的流平面、流画出 64 帧零解码错误；暂停后整场景补跑互换，S 不再抑制（回到精确活渲）；改两层深的被引用剪辑：成本身份换了，**当场**父页不再判流铺满（旧流签名对不上、不贴），新身份测量、钉死后重产了一条新流（流键不同），父页换上新流的层；页面零报错。没流时（钉死之前）从头播放，S 照旧活渲、不抑制。
+
+看过的图（`docs/reports/assets/cut-segment-prerender/`）：
+- `pipeline/export-30.png`、`export-75.png`、`export-149.png`：整个项目活渲导出（段起点 r6 推帧卡在中间——预卷正确；第 75 帧往左走了）；
+- `pipeline/stage-stream-75.png`：舞台贴流的第 75 帧，与 `export-75.png` 肉眼无差；
+- `editor/editor-playing-stream.png`：编辑台播放中（4.03 秒）预览贴着剪辑段的流；`editor/editor-paused-live.png`：暂停后回到活渲（4.07 秒），画面一致。
 
 ## 用户看得出的区别（请审）
 
