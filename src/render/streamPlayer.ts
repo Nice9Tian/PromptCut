@@ -1735,7 +1735,8 @@ export class StreamPlayer {
       && (single ? (hit.parentElement?.getAttribute("data-pc-clip") === key || hit.parentElement?.getAttribute("data-pc-flat-clip") === key) : hit.getAttribute("data-pc-stream-group") === key)) return hit;
     // 剪辑段里的卡(`kernel/cutFlatten.mjs` 的虚拟片段):包裹层在嵌套场景里,挂的是 `data-pc-flat-clip`
     const found = single
-      ? root.querySelector<HTMLCanvasElement>(`[data-pc-clip="${CSS.escape(key)}"] > canvas[data-pc-stream-plane], [data-pc-flat-clip="${CSS.escape(key)}"] > canvas[data-pc-stream-plane]`)
+      ? (root.querySelector<HTMLCanvasElement>(`[data-pc-clip="${CSS.escape(key)}"] > canvas[data-pc-stream-plane]`)
+        ?? root.querySelector<HTMLCanvasElement>(`[data-pc-flat-clip="${CSS.escape(key)}"] > canvas[data-pc-stream-plane]`))
       : root.querySelector<HTMLCanvasElement>(`canvas[data-pc-group-plane][data-pc-stream-group="${CSS.escape(key)}"]`);
     if (found) this.canvasCache.set(key, found);
     else this.canvasCache.delete(key);

@@ -8,7 +8,7 @@
 
 ## 状态
 
-开工中。
+做完，等主会话审查。剪辑段里的卡逐张参与测量、分派、产流、贴流与占位；上一轮的剪辑段级流整套拆掉。基线：见「验证」。没有推送、没有合并。
 
 ## 设计（开工时定，实现按此推进）
 
@@ -25,3 +25,23 @@
 4. **产流的隔离工程**：从真实项目出发，顶层只留这条链上的段、去掉段的框与外观（嵌套场景 1:1），被引用剪辑里只留链上下一个段或目标卡，目标卡照 `localClip` 摆到 `offset`。这样嵌套场景的预卷、截头近似与活渲完全相同；回放从 `flat.mount` 起。
 5. **贴流与占位**：`snapshotFeed` 在摊平视图上算重卡；`Stage` 把平面 prop 原样递给 `CutSegmentScene` → 嵌套 `FrameScene`/`Stage`，嵌套舞台按 `前缀 + 片段 id` 查抑制、流平面、占位；嵌套包裹层另挂 `data-pc-flat-clip`，`streamPlayer` 与 `StageView` 的占位槽位按它找。停下时贴着流的虚拟卡走整场景后台补跑互换（`needsBackCatchUp`），不走子树虚拟时间。
 6. **拆掉**：`withCutSegmentOutputs`、`cutStreamHeavy`、`streamKind: 'cut'`（就绪索引、层表、在线来源）、`CutSegmentScene` 的 `frozen`、`probeRunner` 的剪辑段口径、`card-cache` 的 `cutSegment`、`split.mjs` 的剪辑段节点、`solo: 'cut'`、相关测试与探针。
+
+## 做了什么
+
+1. **摊平视图** `src/kernel/cutFlatten.mjs`（新，纯 JS，页面与服务端共用）：`flatPlanProject`、`withFlatNodes`、`isolatedFlatProject`、`isFlatClipId`。没有剪辑段时原样回同一个对象。
+2. **身份**：导出页 `__pcCardPlan`、页面成本身份 `costIdentity.ts`、页面产流的卡片计划原料 `browserNodeHost.ts` 一律用 `projectCardGraph(摊平视图)` + `withFlatNodes`；`cardCostKey` 剥掉 `flat`（同一张卡各实例只测一次）。
+3. **测量、分派**：`probeRunner.ts` 在摊平视图上挑卡（缩水项目里虚拟片段就是一张顶层卡）；`planDispatch.ts` 的 `planPipelines` 吃摊平视图；`Preview.tsx` 的清单计划在摊平视图里认卡。
+4. **流的计划与产流**（`server/frame-stream.mjs`、`src/render/streamPlanRules.mjs`、`server/card-cache.mjs`）：`planStreams`、`belowStreamSpecs` 在摊平视图上算；`soloStreamKind` 对虚拟片段的独立卡回 `'flat'`（`streamEligible`、`belowStreamEligible` 对虚拟片段回假：不并组流、不出依赖下层的流）；回放从 `flat.mount` 起（`mountClipOf`）；`isolatedStreamProject` 遇 `solo: 'flat'` 走 `isolatedFlatProject`；虚拟片段的控件 `cacheable` 为假。
+5. **输入签名**：`streamInputSig.mjs` 的 `belowLayersOf` / `streamInputs` 内部先摊平（页面、服务端同一份认定）；`layerInputSig.mjs` 对虚拟片段多带 `flat`。顶层片段签名不变。
+6. **贴流与占位**：`snapshotFeed.ts` 在摊平视图上算活跃卡，剪辑段里非独立卡不抑制（`flatStreamable`）；`stageSwap.ts` 的 `needsBackCatchUp` 收判重、按历史推进的虚拟卡（停下时整场景补跑互换）；`Stage.tsx` 加 `flatPrefix`，平面 prop 按「前缀 + 片段 id」查，嵌套包裹层挂 `data-pc-flat-clip`，把平面 prop 递进 `CutSegmentScene` → 嵌套 `FrameScene`；`streamPlayer.ts`、`StageView.tsx` 的流平面与占位槽位也认 `data-pc-flat-clip`。导出页、预渲染页不传平面，DOM 只多一个 `data-pc-flat-clip`（只在有剪辑段的项目里）。
+7. **在线**：`pageStreamPlan.ts` 在摊平视图上算（页面不产 `'flat'` 流，只算进预算）；快速导出不从流里取虚拟片段（`streamFrames.ts`）。
+8. **拆掉上一轮**（恢复到剪辑段级流之前的样子，再加本轮改动）：`withCutSegmentOutputs`、`isCutSegmentNode`、`cutSegmentContent`、`cutSegmentHasVisualMedia`、`cutStreamHeavy`、`staleCut`、`CutSegmentScene` 的 `frozen`、`probeRunner` 的剪辑段口径、`streamKind: 'cut'`（`ready-index.mjs`、`artifact-transfer.mjs`、`snapshotSource.ts` 的整段清单与就绪口径）、`split.mjs` 的剪辑段节点、`solo: 'cut'`、`layerInputSig` 的 `cut` 项；删测试 `server/test/cut-segment-prerender.test.mjs`、`server/test/cutseg-layer-sig*.mjs`、`src/editor/snapshotFeedCutOnline.test.mjs`，删探针 `cut-segment-prerender-probe.mjs`、`cut-segment-prerender-editor-probe.mjs`。
+9. **语义**：`product/rendering.md`「用到的词」加一条（引用户原话）；`mechanism/rendering.md`「剪辑段」的「停下就精确」改写、「测量与预渲染」整条换成逐卡机制（摊平视图、身份、哪些卡有流、产流、贴流与占位、导出），标〔裁〕。
+
+## 文件清单（相对 main `16005ae4`）
+
+新增：`src/kernel/cutFlatten.mjs`、`src/kernel/cutFlatten.d.mts`、`src/kernel/cutFlatten.test.mjs`、`server/test/cut-flatten-streams.test.mjs`、`scripts/probes/cut-flatten-probe.mjs`、本报告、`docs/reports/assets/cut-flatten/**`。
+
+修改：`server/{artifact-transfer.mjs,card-cache.mjs,frame-stream.mjs,ready-index.mjs,render-node/split.mjs}`、`src/{ExportView.tsx,StageView.tsx}`、`src/editor/{Preview.tsx,browserNodeHost.ts,costIdentity.ts,planDispatch.ts,probeRunner.ts,snapshotFeed.ts,stageSwap.ts}`、`src/export/streamFrames.ts`、`src/kernel/{cutIdentity.mjs,cutIdentity.d.mts,cutSegments.ts}`、`src/online/pageStreamPlan.ts`、`src/render/{CutSegmentScene.tsx,FrameScene.tsx,Stage.tsx,cardCostKey.mjs,cardCostKey.d.mts,layerInputSig.mjs,snapshotSource.ts,streamInputSig.mjs,streamPlanRules.mjs,streamPlanRules.d.mts,streamPlayer.ts}`、测试替身 `src/editor/{c10a-swap-gate,stageSwap,stageSwapBaseline}.test.mjs`（去掉 `cutStreamHeavy`）、探针 `scripts/probes/cut-online-e2e-probe.mjs`（改逐卡口径）、语义两本。
+
+删除：见第 8 条。

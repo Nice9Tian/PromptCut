@@ -607,7 +607,8 @@ export default function StageView() {
       const hit = slotCache.get(clipId);
       if (hit && hit.isConnected && (hit.parentElement?.getAttribute("data-pc-clip") === clipId || hit.parentElement?.getAttribute("data-pc-flat-clip") === clipId)) return hit;
       // 剪辑段里的卡(`kernel/cutFlatten.mjs` 的虚拟片段):包裹层在嵌套场景里,挂的是 `data-pc-flat-clip`
-      const el = rootRef.current?.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(clipId)}"] > [${PLACEHOLDER_SLOT_ATTR}], [data-pc-flat-clip="${CSS.escape(clipId)}"] > [${PLACEHOLDER_SLOT_ATTR}]`) ?? null;
+      const el = rootRef.current?.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(clipId)}"] > [${PLACEHOLDER_SLOT_ATTR}]`)
+        ?? rootRef.current?.querySelector<HTMLElement>(`[data-pc-flat-clip="${CSS.escape(clipId)}"] > [${PLACEHOLDER_SLOT_ATTR}]`) ?? null;
       if (el) slotCache.set(clipId, el);
       else slotCache.delete(clipId);
       if (slotCache.size > 512) slotCache.clear();

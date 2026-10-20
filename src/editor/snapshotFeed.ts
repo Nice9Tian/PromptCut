@@ -71,9 +71,8 @@ import { planesWithinBudget, rangesHave, streamPlanesFor, type StreamPlaneReques
 import { localStreamPixels, lowMemoryStreamBudget, stageStreamPixels, STREAM_BUDGET_MIN_FPS } from "../render/streamBudget.mjs";
 import { isStreamOrigin, streamSegmentOf } from "../render/streamSegments.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
-import { clipFrameMode } from "../kernel/frameMode.mjs";
+import { cardCapabilities, clipFrameMode } from "../kernel/frameMode.mjs";
 import { flatPlanProject, isFlatClipId } from "../kernel/cutFlatten.mjs";
-import { clipIdentityOf } from "./costIdentity";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
 export const SNAPSHOT_THROTTLE_MS = 33;
@@ -399,9 +398,13 @@ function activeCardClips(project: Project, t: number): TrackClip[] {
   return out;
 }
 
-/** 剪辑段里的这张卡有没有自己的单卡流可产(独立卡;`streamPlanRules.mjs` 的 `soloStreamKind` 回 `'flat'` 的那一种) */
-export function flatStreamable(project: Project, clipId: string): boolean {
-  return clipIdentityOf(project).capabilities.get(clipId)?.compositing === "independent";
+/**
+ * 剪辑段里的这张卡有没有自己的单卡流可产(独立卡;`streamPlanRules.mjs` 的 `soloStreamKind` 回 `'flat'` 的那一种)。
+ * 能力表与卡片图里这张卡的节点同一个算法(`cardCapabilities`)
+ */
+export function flatStreamable(clip: TrackClip): boolean {
+  const def = clip.cardId ? getCard(clip.cardId) : undefined;
+  return cardCapabilities(def, { ...def?.defaults, ...clip.params }, clip.parts as Parameters<typeof cardCapabilities>[2]).compositing === "independent";
 }
 
 export interface Playhead {
@@ -460,7 +463,7 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
     // 这台设备跑不了的卡一律按重卡(在线浏览器模式;见 `localOnlyOf`)
     if (pipelineAt(plan, clip.id, t) !== "heavy" && !localOnly.has(clip.id)) continue;
     // 剪辑段里的卡只有独立卡产流(`streamPlanRules.mjs` 的 `'flat'`);别的(依赖下层、源依赖、没审阅过)在嵌套场景里照旧活渲,不抑制
-    if (isFlatClipId(clip.id) && !flatStreamable(project, clip.id)) continue;
+    if (isFlatClipId(clip.id) && !flatStreamable(clip)) continue;
     const { firstFrame, count } = samplingOf(clip, fps);
     if (pendingDemote.has(clip.id)) {
       // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会发流平面）
