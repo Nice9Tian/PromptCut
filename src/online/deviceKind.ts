@@ -64,9 +64,10 @@ export type Layout = "desktop" | "mobile";
 
 /**
  * 选界面：只有在线浏览器、身份为手机的进手机版；桌面版（Tauri、本机编辑器）恒为桌面界面。
- * `?layout=mobile|desktop` 只给开发和验收用，强制选界面（在线、桌面都认，方便在桌面浏览器里看手机版）。
+ * `?layout=mobile|desktop` 只给开发和验收用，在在线页面上强制选界面（方便在桌面浏览器里看手机版）；桌面版不认它。
  */
 export function pickLayout(opts: { online: boolean; kind: DeviceKind; search?: string }): Layout {
+  if (!opts.online) return "desktop";
   let forced: string | null = null;
   try {
     forced = new URLSearchParams(opts.search ?? "").get("layout");
@@ -74,5 +75,5 @@ export function pickLayout(opts: { online: boolean; kind: DeviceKind; search?: s
     forced = null;
   }
   if (forced === "mobile" || forced === "desktop") return forced;
-  return opts.online && opts.kind === "phone" ? "mobile" : "desktop";
+  return opts.kind === "phone" ? "mobile" : "desktop";
 }

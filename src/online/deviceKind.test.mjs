@@ -52,4 +52,5 @@ test('DK7 选界面:在线 + 手机 → 手机版;桌面版恒为桌面界面;?l
   assert.equal(pickLayout({ online: true, kind: 'desktop', search: '?layout=mobile' }), 'mobile');
   assert.equal(pickLayout({ online: true, kind: 'phone', search: '?layout=desktop' }), 'desktop');
   assert.equal(pickLayout({ online: true, kind: 'phone', search: '?layout=bogus' }), 'mobile');
+  assert.equal(pickLayout({ online: false, kind: 'desktop', search: '?layout=mobile' }), 'desktop', '桌面版不认强制参数');
 });

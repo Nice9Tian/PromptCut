@@ -160,7 +160,9 @@ try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("p
  *
  * 视频层:按 videoClipAt 找当前该播的素材段,src 变了换源,时间对不上(>0.2s)就 seek。
  */
-export function Preview() {
+export function Preview(props: { variant?: "mobile" } = {}) {
+  /** 手机版界面(`src/mobile/`)只要画面:不挂 2D/3D 分页、工具条、播放条,播放与 seek 由手机版自己的控件调同一套 store 动作 */
+  const mobile = props.variant === "mobile";
 
   const project = useStore((s) => s.project);
   // C6.6:两档素材的换档集合(预览挂着时每 2 秒问一次当前素材服务)
@@ -2390,8 +2392,8 @@ export function Preview() {
   const frameXY = boxSize ? frameOrigin(cam, project, boxSize) : null;
 
   return (
-    <div className="pc-pv" data-pc="preview">
-      <div className="pc-pv-tabs" data-pc="preview-tabs">
+    <div className={mobile ? "pc-pv pc-pv--mobile" : "pc-pv"} data-pc="preview">
+      {!mobile && <div className="pc-pv-tabs" data-pc="preview-tabs">
         {([["2d", "2D"], ["3d", "3D"]] as const).map(([id, label]) => (
           <button
             key={id}
@@ -2404,10 +2406,10 @@ export function Preview() {
           </button>
         ))}
         {online && <DisplayTierPicker lowMem={lowMem} />}
-      </div>
+      </div>}
       {online && lowMem && <LowMemoryGate />}
 
-      {view === "2d" && <ToolBar tool={tool} onToolChange={setTool} zoom={cam.scale} fitted={cam.auto} onFit={fitToWindow} />}
+      {view === "2d" && !mobile && <ToolBar tool={tool} onToolChange={setTool} zoom={cam.scale} fitted={cam.auto} onFit={fitToWindow} />}
 
       {/*
         * **2D 这一页在 3D 页下面常驻,只是藏起来,不卸载。**
@@ -2608,7 +2610,7 @@ export function Preview() {
       </div>
       </div>
 
-      <ControlBar />
+      {!mobile && <ControlBar />}
       
       {contextMenu && (
         <PreviewContextMenu
