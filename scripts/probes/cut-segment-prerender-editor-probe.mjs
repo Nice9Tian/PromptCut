@@ -2,17 +2,24 @@
  * 剪辑段参与测量与预渲染,**在真编辑台里**(语义 `docs/semantics/mechanism/rendering.md`「剪辑段」)——
  * 父页测量判重 → 预渲染进程产剪辑段级的轨道流 → 父页按就绪索引判「流铺满了」→ 播放贴流 → 暂停回到活渲 → 改被引用剪辑旧流失效重产。
  *
- *   node scripts/probes/cut-segment-prerender-editor-probe.mjs (--origin http://127.0.0.1:5403 | --port 5403) [--out <dir>] [--json <file>]
+ *   node scripts/probes/cut-segment-prerender-editor-probe.mjs (--origin http://127.0.0.1:5403 | --port 5403) [--burn <毫秒>] [--out <dir>] [--json <file>]
  *
  * 给 `--port` 就自己在检出根起一台 dev server(另占 +1、+2 当舞台端口;预渲染进程自己挑空闲端口),数据目录放临时目录,用完收掉。
  *
  * 项目:激活剪辑「主」上一个剪辑段 S(第 1～5 秒,框 960×540 居中,偏移 1 秒)引用「重」;「重」里一张推帧卡 `r6-stateful` 和一个剪辑段
- * 引用「里」;「里」里一张 `probe-slow`,每次渲染烧掉 `BURN` 毫秒(远超一拍预算 23.3 毫秒),所以 S 整段活渲是重的。
+ * 引用「里」;「里」里一张 `probe-slow`。
  *
- *   1. 测量:成本记录里有 S 的一条(`cutSegment: true`、`kind: random`、`vtOk: false`、判重 `capped`);父页的分派表在 S 的位置判它重。
+ * 两种跑法:
+ *   - `--burn <毫秒>`(只测量):`probe-slow` 每次渲染烧掉这么多毫秒(给 60,远超一拍预算 23.3 毫秒),只核对第 1 条(测出来判重)就收。
+ *     不能接着产流:`probe-slow` 烧时间靠舞台的真时钟 `__pcRealNow`,导出页(预渲染进程产流用的页)把时间钉死、没有真时钟,
+ *     它在那里会一直烧下去(探针卡的限制,不是剪辑段的)。
+ *   - 缺省(不烧):测完以后把 S 的成本记录人工钉死为重卡(`pinnedHeavy`,`mechanism/rendering.md`「分派」的人工钉死),接着走第 2～5 条。
+ *
+ *   1. 测量:成本记录里有 S 的一条(`cutSegment: true`、`kind: random`、`vtOk: false`、`seekOk: false`);`--burn` 时判重 `capped`、
+ *      父页的分派表在 S 的位置判它重。
  *   2. 产流:预渲染进程给 S 产出一条剪辑段级的流(满密度);父页就绪索引里有它的 `stream` 层,`cutStreamHeavy` 为真。
- *   3. 播放:从第 1.2 秒起播 3 秒,舞台把 S 抑制、发了带流键的流平面、这条流画出了帧;播放头走得动(墙上 3 秒内播放头前进的秒数,
- *      对照:同一段在流铺满之前活渲时前进了多少 —— 只记录,不当闸门)。
+ *   3. 播放:从头起播 3 秒(第 1 秒自然进入 S),舞台把 S 抑制、发了带流键的流平面、这条流画出了帧;播放头走得动(墙上 3 秒内播放头
+ *      前进的秒数,对照:同一段在流铺满之前活渲时前进了多少 —— 只记录,不当闸门)。
  *   4. 暂停:等整场景补跑互换之后 S 不再抑制、流平面撤下(回到精确活渲)。
  *   5. 失效:改「里」那张卡的文字(两层深),S 的成本身份换了、父页立刻不再判「流铺满」(旧流不贴);新身份测量后照样产流、铺满。
  *
@@ -34,7 +41,8 @@ const JSON_OUT = flagArg('json', null, args);
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-cut-prerender-editor-${Date.now().toString(36)}`));
 if (!ORIGIN && !PORT) { console.error('要给 --origin <dev server> 或 --port <自己起一台>'); process.exit(2); }
 
-const FPS = 30, WIDTH = 1280, HEIGHT = 720, BURN = 60;
+const FPS = 30, WIDTH = 1280, HEIGHT = 720;
+const BURN = Number(flagArg('burn', '0', args)) || 0;
 const SEG = 'seg-s';
 const card = (id, cardId, start, end, params = {}) => ({ id, cardId, start, end, params });
 const segOf = (id, cutId, start, end, extra = {}) => ({ id, cardId: '', cutId, start, end, params: {}, ...extra });
@@ -132,13 +140,34 @@ try {
   out.measured = measured && { key: measured.key, record: measured.record && { kind: measured.record.kind, capped: measured.record.capped, stepMs: measured.record.stepMs, vtOk: measured.record.vtOk, seekOk: measured.record.seekOk, cutSegment: measured.record.cutSegment }, pipeline: measured.pipeline };
   check(!!measured?.key, '1:剪辑段有成本身份', out.measured);
   check(measured?.record?.cutSegment === true && measured.record.kind === 'random' && measured.record.vtOk === false && measured.record.seekOk === false, '1:成本记录按剪辑段的口径记', out.measured);
-  check(measured?.record?.capped === true && measured.pipeline === 'heavy', '1:烧时间的剪辑段判重', out.measured);
+  if (BURN > 0) {
+    check(measured?.record?.capped === true && measured.pipeline === 'heavy', '1:烧时间的剪辑段判重', out.measured);
+    throw Object.assign(new Error('只测量'), { measureOnly: true });
+  }
+  check(measured?.record?.capped !== true, '1:不烧时间的剪辑段测出来不判重(对照)', out.measured);
+  // 人工钉死为重卡:页面这一份并进分派表,编辑器进程那一份 PUT(转给预渲染进程)
+  const pin = async (measured) => {
+    const pinned = { ...measured.record, pinnedHeavy: true, measuredAt: Date.now() };
+    const put = await fetch(origin + '/api/data/costs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records: [pinned] }) });
+    await page.evaluate(async (r) => (await import('/src/editor/planDispatch.ts')).mergePlanCosts([r]), pinned);
+    const now = await until('钉死以后父页判重', async () => { const s = await pageState(2); return s.pipeline === 'heavy' ? s : null; }, 30000, 300);
+    const forwarded = await until('预渲染进程收到钉死的记录', async () => {
+      const c = (await (await fetch(prerender.url + '/api/data/costs')).json())?.costs ?? [];
+      return c.some((r) => r.identityKey === measured.key && r.pinnedHeavy === true) || null;
+    }, 30000, 500);
+    return { put: put.status, pipeline: now?.pipeline ?? null, forwarded: !!forwarded };
+  };
+  {
+    const r = await pin(measured);
+    check(r.put === 200 && r.pipeline === 'heavy' && r.forwarded, '1:钉死为重卡后父页判重、预渲染进程收到记录', r);
+  }
 
-  // 对照:流铺满之前播放,S 照旧活渲(不抑制),播放头走多快只记录
+  // 对照:流铺满之前从头播放(自然进场,不走互换),S 照旧活渲(不抑制),播放头走多快只记录。
+  // 不从段中间起播:那样按「从段中间开始播放」整场景补跑互换,等待期间本来就抑制着(剪辑段补齐那一轮的做法)
   {
     const s = await pageState(1.5);
     if (!s.heavy) {
-      const r = await playFor(1.2, 3000);
+      const r = await playFor(0, 3000);
       const stage = await frontStage();
       const diag = await stage.evaluate(() => window.__pcStageDiag());
       await pause();
@@ -156,9 +185,9 @@ try {
   out.parentLayer = heavyNow?.layer ?? null;
   check(!!heavyNow, '2:父页就绪索引里有它的流层,cutStreamHeavy 为真', heavyNow);
 
-  // ---------------------------------------------------------------- 3. 播放贴流
+  // ---------------------------------------------------------------- 3. 播放贴流(同样从头自然进场)
   {
-    const r = await playFor(1.2, 3000);
+    const r = await playFor(0, 3000);
     const stage = await frontStage();
     const diag = await stage.evaluate(() => window.__pcStageDiag());
     const dom = await stage.evaluate((id) => {
@@ -203,6 +232,7 @@ try {
     check(after?.heavy === false, '5:改完当场父页不再判流铺满(旧流不贴)', out.changed);
     const remeasured = await until('新身份测完', async () => { const s = await pageState(2); return s.record && s.key === after?.key ? s : null; }, 300000, 1000);
     check(!!remeasured, '5:新身份重新测量了', remeasured?.record);
+    if (remeasured) check((await pin(remeasured)).pipeline === 'heavy', '5:新身份同样钉死为重卡');
     const restream = await until('新流满密度', async () => { await preload(); const s = await streamStatus(); return s?.dense && s.key !== stream?.key ? s : null; }, 900000, 2000);
     out.restream = restream;
     check(!!restream, '5:按新身份重新产了一条流(流键不同)', { old: stream?.key, now: restream?.key });
@@ -212,8 +242,7 @@ try {
   out.pageErrors = errors;
   check(errors.length === 0, '页面零报错', errors.slice(0, 5));
 } catch (error) {
-  fails.push(`探针出错:${error?.message || error}`);
-  say('ERROR', { error: String(error?.stack || error) });
+  if (!error?.measureOnly) { fails.push(`探针出错:${error?.message || error}`); say('ERROR', { error: String(error?.stack || error) }); }
 } finally {
   try { await browser?.close(); } catch { /* ignore */ }
   try { await dev?.stop(); } catch { /* ignore */ }
