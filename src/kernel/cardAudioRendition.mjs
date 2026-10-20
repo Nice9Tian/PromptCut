@@ -64,8 +64,29 @@ export function cardAudioIdentity(project, clip, hooks = {}, saved = clip.cardAu
   return JSON.parse(cardJson(visit(root, clip, saved)));
 }
 
+/**
+ * 剪辑段展开出来的片段(`cutAudio.mjs` 的 `audioProjectOf`,带 `cutOrigin`):它的 id 带了剪辑段路径前缀、起止被平移裁剪,
+ * 身份里按片段 id 找的输入素材在展开后的项目里找不到。所以按它在被引用剪辑里的原片段核身份与覆盖范围
+ * (和在那条剪辑里生成时同一个口径),找不到原片段(坏数据)时照展开后的片段核。
+ */
+function cutOriginOf(project, clip) {
+  const o = clip.cutOrigin;
+  if (!o || typeof o.cutId !== 'string' || typeof o.clipId !== 'string') return null;
+  const tracks = project.cuts?.find(c => c.id === o.cutId)?.tracks;
+  if (!Array.isArray(tracks)) return null;
+  const original = tracks.flatMap(t => t.clips ?? []).find(c => c.id === o.clipId);
+  return original ? { project: { ...project, tracks }, clip: original } : null;
+}
+
 /** WAV 的 sourceOffset 是它的区间起点；播放偏移是当前源时钟减区间起点。支持原 WAV 覆盖的裁切/切分。 */
 export function resolveCardAudioRendition(project, clip, hooks = {}) {
+  const origin = cutOriginOf(project, clip);
+  if (origin) {
+    // 原片段的整段核过,展开后的是它的一截:偏移加上裁掉的那一截(展开时源时钟已往后挪同样多)
+    const base = resolveCardAudioRendition(origin.project, origin.clip, hooks);
+    const shift = cardAudioSourceOffset(project, clip) - cardAudioSourceOffset(origin.project, origin.clip);
+    return { ...base, offset: base.offset + Math.round(shift * base.rendition.sampleRate) / base.rendition.sampleRate };
+  }
   const r = clip.cardAudio;
   if (!r) fail('missing', clip, '尚未生成，请先生成卡片声音');
   if (r.version !== 1 || r.cardId !== clip.cardId || r.sampleRate !== 48000 || !Number.isSafeInteger(r.frames) || r.frames < 1 ||

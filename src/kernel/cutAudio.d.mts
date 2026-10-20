@@ -11,6 +11,8 @@ export interface CutEnvelope {
 export interface CutAudioOrigin {
   clipId: string;
   segments: string[];
+  /** 原片段住在哪条剪辑里(被引用的那条;卡片声音按它在那条剪辑里的原片段核身份) */
+  cutId: string;
 }
 export function envelopeAt(e: CutEnvelope, t: number, withOpacity?: boolean): number;
 export function audioProjectOf<P extends Project>(p: P): P;

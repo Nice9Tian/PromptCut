@@ -1,3 +1,4 @@
+import type { EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
 import { findClip } from "../../kernel/project";
 import { cutCycleReason, cutDuration, cutReferences, isCutSegment } from "../../kernel/cutSegments";
@@ -11,8 +12,8 @@ import { clipGuard } from "../common";
  *   - `set_cut_segment`:改剪辑段引用哪条剪辑、从被引用剪辑的哪一秒开始(起止、框、不透明度、淡入淡出用 update_clip /
  *     set_position / set_rect,音量与静音用 set_clip_volume / set_clip_muted,切分与复制用 split_clip / duplicate_clip)。
  *
- * `EditorApi` 的类型在 src/ai/mcpExecutor.ts(本任务不改它),所以这两个工具借 addClip / updateClip 的方法名路由
- * (src/mcp/routes.mjs),由 clips.ts 的处理函数按参数分到这里。
+ * 两个工具在 `EditorApi`(src/ai/mcpExecutor.ts)上各有自己的方法,路由表(src/mcp/routes.mjs)直连;
+ * 本机(编辑台的工具执行器)与云端(托管档在项目副本上执行,server/agent/ssr-host.mjs)走同一张表、同一份实现。
  */
 type Args = Record<string, any>;
 
@@ -34,7 +35,7 @@ function segmentInfo(clipId: string) {
   };
 }
 
-export const cutSegmentHandlers = {
+export const cutSegmentHandlers: Pick<EditorApi, "addCutSegment" | "setCutSegment"> = {
   addCutSegment: (args: Args) => {
     const p = getState().project;
     const cut = resolveCut(p, { cutId: args.cutId, name: args.name });

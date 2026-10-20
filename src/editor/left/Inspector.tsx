@@ -12,6 +12,8 @@ import { ClipFilterForm } from "./ClipFilterForm";
 import { ClipAudioFxForm } from "./ClipAudioFxForm";
 import { SoundEffectForm, TypingSoundControls } from "./SoundEffectForm";
 import { CardAudioForm } from "./CardAudioForm";
+import { CutSegmentForm } from "./CutSegmentForm";
+import { isCutSegment } from "../../kernel/cutSegments";
 
 /**
  * 编辑分区的参数 / 代码两页。哪一页显示由分区头部的胶囊分页决定(tab),
@@ -35,6 +37,9 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
   }
 
   const { clip } = hit;
+
+  // 剪辑段:没有卡也没有素材,属性是引用哪条剪辑、偏移,以及框、不透明度、淡入淡出、音量与静音
+  if (isCutSegment(clip)) return <CutSegmentForm key={clip.id} clip={clip} />;
 
   if (clip.mediaId && !clip.cardId) {
     const media = project.media.find(m => m.id === clip.mediaId);

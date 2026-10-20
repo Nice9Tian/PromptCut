@@ -146,15 +146,15 @@ function CutTile({ row, canDelete, renaming, onRename, onRenamed, onDelete, onCo
       }}
       onDragEnd={() => clearDragPayload()}
     >
-      <span className="pc-tl-cut-glyph" style={{ position: "absolute", top: 12, left: 8 }}><IconFilm size={11} /></span>
+      <span className="pc-tl-cut-glyph" style={{ position: "absolute", top: 8, left: 8 }}><IconFilm size={12} /></span>
       {renaming ? (
-        <input className="pc-tl-cut-input" style={{ marginTop: 22 }} value={draft} autoFocus aria-label="剪辑名"
+        <input className="pc-tl-cut-input" value={draft} autoFocus aria-label="剪辑名"
           onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => setDraft(e.target.value)} onBlur={commit}
           onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") commit(); else if (e.key === "Escape") onRenamed(); }}
           onClick={(e) => e.stopPropagation()} />
       ) : (
-        <span className="pc-lib-cut-name" style={{ marginTop: 22 }}>{row.name}</span>
+        <span className="pc-lib-cut-name">{row.name}</span>
       )}
       <span className="pc-lib-cut-meta">
         {fmtDur(row.duration)} · {row.clipCount} 段{row.active ? " · 当前" : ""}{row.referencedBy.length ? ` · 被引用 ${row.referencedBy.length}` : ""}
