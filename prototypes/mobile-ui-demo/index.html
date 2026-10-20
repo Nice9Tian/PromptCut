@@ -90,10 +90,13 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .stage .sub-cap span { background: #000a; padding: 2px 8px; border-radius: 4px; }
 .stage .sel { position: absolute; border: 1.5px dashed var(--accent); border-radius: 3px; pointer-events: none; display: none; }
 .stage .badge { position: absolute; left: 6px; top: 6px; font-size: 10px; background: #000a; padding: 1px 6px; border-radius: 4px; color: var(--dim); }
+.cfbar { flex: none; display: flex; align-items: center; gap: 8px; height: 36px; margin: 2px 12px 4px; padding: 0 8px 0 10px; border-radius: 8px; border-left: 3px solid var(--warn); background: #e8b04a14; color: #d9c08a; font-size: 12px; }
+.cfbar svg { flex: none; color: var(--warn); }
+.cfbar .txt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cfbar button { flex: none; height: 24px; padding: 0 14px; border-radius: 12px; background: #e8b04a26; color: var(--warn); font-size: 12px; font-weight: 600; }
+.cfbar button:active { background: #e8b04a44; }
 .stage-btns { position: absolute; right: 6px; top: 6px; display: flex; gap: 4px; z-index: 8; }
 .sbtn { font-size: 10px; line-height: 1.4; padding: 2px 8px; border-radius: 999px; background: #000b; color: #fff; border: 1px solid #fff2; white-space: nowrap; backdrop-filter: blur(2px); }
-.sbtn.warn { color: var(--warn); border-color: #e8b04a55; }
-.sbtn b { font-weight: 600; }
 .sbtn .short { display: none; }
 #editor.editing .sbtn .full { display: none; }
 #editor.editing .sbtn .short { display: inline; }
@@ -380,6 +383,13 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
       <button class="icon-btn ok" onclick="exitEdit(true)" title="完成">✓</button>
     </div>
 
+    <!-- 冲突横条：顶栏正下方，三个分页和编辑状态都显示；右侧「处理」打开冲突合并面板 -->
+    <div class="cfbar" id="cfBar">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 2.8 19.5h18.4z"/><path d="M12 10v4.5M12 17.2v.1"/></svg>
+      <span class="txt" id="cfTxt">2 处改动待合并，其中 1 处有冲突</span>
+      <button onclick="openSheet('conflict')">处理</button>
+    </div>
+
     <div class="preview-area" id="previewArea">
     <div class="stage-wrap">
       <div class="stage" id="stage">
@@ -390,7 +400,6 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
         <div class="sub-cap"><span id="cap">海风、阳光，还有你</span></div>
         <div class="badge" id="stageBadge">16:9 · 30fps</div>
         <div class="stage-btns">
-          <button class="sbtn warn" id="cfBtn" onclick="openSheet('conflict')" title="冲突合并"><span class="full">冲突合并 </span><span class="short">⚠ </span><b id="cfN">2</b></button>
           <button class="sbtn" id="memBtn" onclick="openSheet('members')" title="成员：2 人 · Agent：2 个"><span class="full">2 人 · 2 Agent</span><span class="short">👥 2·2</span></button>
         </div>
         <div class="agent-flag" id="agentFlag">Agent 正在改</div>
@@ -1183,7 +1192,12 @@ function buildConflict() {
   });
   cfRefresh();
 }
-function cfRefresh() { $('#cfClose').textContent = cf.length ? '下次再说' : '完成'; $('#cfBtn').style.display = cf.length ? '' : 'none'; $('#cfN').textContent = cf.length; if (!cf.length) $('#cfList').innerHTML = '<div class="hint" style="text-align:center;padding:30px 0">全部处理完了 ✓</div>'; }
+function updateCfBar() {     // 横条：数字跟着 cf 数据走；全部处理完就收起
+  const n = cf.length, c = cf.filter(g => g.conflict).length;
+  $('#cfBar').style.display = n ? '' : 'none';
+  $('#cfTxt').textContent = n + ' 处改动待合并' + (c ? '，其中 ' + c + ' 处有冲突' : '');
+}
+function cfRefresh() { $('#cfClose').textContent = cf.length ? '下次再说' : '完成'; updateCfBar(); if (!cf.length) $('#cfList').innerHTML = '<div class="hint" style="text-align:center;padding:30px 0">全部处理完了 ✓</div>'; }
 function cfSelect(onlyOk) { document.querySelectorAll('#cfList .cf-group').forEach((d, i) => d.querySelectorAll('input').forEach(x => x.checked = onlyOk ? !cf[i].conflict : false)); }
 function cfTake(msg) {
   const keep = []; document.querySelectorAll('#cfList .cf-group').forEach((d, i) => { if (!d.querySelector('.cf-head input').checked) keep.push(cf[i]); });
@@ -1257,7 +1271,7 @@ window.addEventListener('popstate', e => {
 });
 
 /* ============ 启动 ============ */
-renderTabsA(); renderMsgs(); updateButtons();
+renderTabsA(); renderMsgs(); updateButtons(); updateCfBar();
 </script>
 </body>
 </html>
