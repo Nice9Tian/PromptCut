@@ -363,7 +363,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
   <!-- ===================== 2. 编辑主界面 ===================== -->
   <section class="screen" id="editor">
     <div class="topbar" id="topNormal">
-      <button class="icon-btn" onclick="go('home')" title="返回项目列表">‹</button>
+      <button class="icon-btn" onclick="goBack()" title="返回">‹</button>
       <h1 id="projName">夏日海边 Vlog</h1>
       <button class="btn primary" style="height:30px;padding:0 12px" onclick="openSheet('export')">导出</button>
     </div>
@@ -617,7 +617,7 @@ const fmt = t => { const m = Math.floor(t / 60), s = (t % 60); return String(m).
 const clone = o => JSON.parse(JSON.stringify(o));
 
 /* ============ 屏幕与面板 ============ */
-function go(id) { $('#editor').classList.remove('editing', 'agent'); selId = null; selMain = null; document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); closeSheets(); if (id !== 'editor') stop(); }
+function go(id) { $('#editor').classList.remove('editing', 'agent'); selId = null; selMain = null; document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); closeSheets(); if (id !== 'editor') stop(); syncNav(); }
 function openProject(id) {
   $('#editor').classList.remove('editing', 'agent'); selId = null; selMain = null; now = 0;
   $('#projName').textContent = { p1: '夏日海边 Vlog', p2: '产品发布会预告', p3: '教程：剪映迁移指南' }[id];
@@ -665,7 +665,7 @@ function reflow() {
   clips().filter(c => c.lane > 0).forEach(c => { if (c.s + c.d > TOTAL) { c.d = Math.max(.5, Math.min(c.d, TOTAL)); c.s = Math.max(0, TOTAL - c.d); } });
   now = Math.min(now, TOTAL);
 }
-function render() { reflow(); renderMain(); renderTimeline(); renderEditUI(); updateButtons(); updateTime(); }
+function render() { syncNav(); reflow(); renderMain(); renderTimeline(); renderEditUI(); updateButtons(); updateTime(); }
 
 function transitionAt(c) { const bt = c.s + c.d; return clips().find(x => x.lane === 1 && Math.abs(x.s + x.d / 2 - bt) <= 1); }
 
@@ -758,7 +758,7 @@ function bindStrip(sc) {
   });
 }
 // 点缩略卡以外的任何地方：取消选中
-document.addEventListener('pointerdown', e => { if (selMain && !e.target.closest('.mblock, #dockRef')) selectMain(null); });
+document.addEventListener('pointerdown', e => { if (selMain && !e.target.closest('.mblock, #dockRef, .pager, #topNormal')) selectMain(null); });
 
 /* ============ 选剪辑（工具栏「剪辑」） ============ */
 function clipTotal(name) { return clipsByTab[name].filter(c => c.lane === 0).reduce((a, c) => a + c.d, 0); }
@@ -1228,6 +1228,28 @@ function sheetDrag(sh, e0) {
   window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
 }
 document.querySelectorAll('.sheet').forEach(sh => sh.querySelectorAll('.grip, .sheet-head').forEach(h => h.addEventListener('pointerdown', e => { if (!e.target.closest('button')) sheetDrag(sh, e); })));
+
+/* ============ 返回的层级：Agent / 时间轴 → 缩略预览 → 项目列表 ============ */
+// 界面层级：0 项目列表，1 缩略预览，2 时间轴 / Agent 分页；浏览器历史记录跟着走。
+// 进分页时推一层，分页之间切换只替换当前这层，回缩略预览时退一层，所以来回切多次后后退一次仍回缩略预览
+const uiLevel = () => !$('#editor').classList.contains('on') ? 0 : (editing() || agentOn()) ? 2 : 1;
+function goBack() { if (editing() || agentOn()) pagePreview(); else go('home'); }
+let navT = 0;
+function syncNav() { clearTimeout(navT); navT = setTimeout(doNav, 0); }     // 合并同一轮里的中间状态
+function doNav() {
+  const ui = uiLevel(), cur = (history.state && history.state.lvl) || 0, page = editing() ? 'timeline' : agentOn() ? 'agent' : '';
+  try {
+    if (ui === cur) { if (ui === 2) history.replaceState({ lvl: 2, page }, ''); }
+    else if (ui > cur) history.pushState({ lvl: ui, page }, '');
+    else history.back();
+  } catch (e) { /* 个别环境不让改历史记录，就只保留页内返回 */ }
+}
+window.addEventListener('popstate', e => {
+  const st = e.state || { lvl: 0 }, ui = uiLevel();
+  if (st.lvl === 0) { if (ui !== 0) go('home'); }
+  else if (st.lvl === 1) { if (ui === 0) { go('editor'); render(); } else if (ui === 2) pagePreview(); }
+  else if (ui !== 2) { if (ui === 0) go('editor'); st.page === 'agent' ? pageAgent() : pageTimeline(); }
+});
 
 /* ============ 启动 ============ */
 renderTabsA(); renderMsgs(); updateButtons();
