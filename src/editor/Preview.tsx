@@ -1,4 +1,5 @@
 import { UnifiedPreview } from "./preview/UnifiedPreview";
+import { flatPlanProject } from "../kernel/cutFlatten.mjs";
 import { usePrerenderPreload } from "./preview/usePrerenderPreload";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isScrubbing, subscribeScrub } from "./timeline/useScrub";
@@ -114,10 +115,10 @@ export function setLowMemoryCostStore(store: CostStore): void {
 function heavyCardClips(): string[] {
   const plan = currentPlan();
   if (!plan) return [];
-  const p = getState().project;
+  // 剪辑段里的卡(`kernel/cutFlatten.mjs` 的虚拟片段)也在里面:它们各自产单卡流,只由桌面应用与托管方的渲染服务产
+  const p = flatPlanProject(getState().project);
   const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
-  // 剪辑段(`cutId`)也算:它整段当一张卡判重、产剪辑段级的流(`kernel/cutSegments.ts` 的 `withCutSegmentOutputs`),只由桌面应用与托管方的渲染服务产
-  return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId || !!byId.get(id)?.cutId);
+  return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId);
 }
 
 function l2LowMemoryCostStore(): CostStore {

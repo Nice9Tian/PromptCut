@@ -261,9 +261,6 @@ export function innerCardIds(graph) {
     if (memo.has(nodeId)) return memo.get(nodeId);
     const node = byId.get(nodeId);
     if (!node || path.has(nodeId)) return { cardIds: [], unsure: true, canvasHeavy: false };
-    // 剪辑段的节点(`src/kernel/cutSegments.ts` 的 `withCutSegmentOutputs`):里面是被引用剪辑的整套内容,卡片 id 在 `cut.cardIds`。
-    // 按拿不准算(要这一版全部定制卡的代码、不给浏览器节点):嵌套场景里还有素材、素材效果卡,逐张核对不了
-    if (node.capabilities?.cutSegment === true) return { cardIds: [...(Array.isArray(node.cut?.cardIds) ? node.cut.cardIds : [])], unsure: true, canvasHeavy: false };
     path.add(nodeId);
     const ids = typeof node.cardId === 'string' && node.cardId ? [node.cardId] : [];
     let unsure = false;

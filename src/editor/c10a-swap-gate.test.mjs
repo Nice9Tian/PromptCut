@@ -62,7 +62,6 @@ if (!missing) {
   mock.module(srcUrl("editor/snapshotFeed.ts"), {
     exports: {
       clearSettled: () => {},
-      cutStreamHeavy: () => false,
       deliverSnapshots: async () => 0,
       markBaselineReset: () => {},
       markAllSettled: () => {},

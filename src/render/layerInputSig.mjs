@@ -14,7 +14,7 @@
  *   - 素材效果卡(`nodeId`):`project.cardNodes` 里这个节点和它沿 `inputs` 能走到的节点;输入指向别的片段(`@clip/<id>/…`)时
  *     递归取那个片段的签名输入,加上它相对本片段的起点差;
  *   - 项目:画幅宽高、fps、`camera3dFov`、`themeId`、`style`;
- *   - 剪辑段(`cutId`):`cutSegmentContent` —— 引用哪条、偏移,被引用剪辑任意深度的内容、用到的素材、节点与效果库条目。
+ *   - 剪辑段里摊出来的卡(`kernel/cutFlatten.mjs` 的虚拟片段):它的 `flat`(露出起点时的本地时间、经过哪几层剪辑段)。
  * 不进签名:x / y / 锚点 / 缩放 / 旋转、不透明度、淡入淡出、motion、音量与音频效果、片段在时间轴上整帧的平移 ——
  * 它们不在快照里(A2(5)),改了照贴原来那一层。卡片源码、字体、环境不进签名(页面拿不到同口径的值):这几样变了,
  * 渲染节点换键重写层表之后页面跟着换(和以前一样)。
@@ -28,7 +28,6 @@
  */
 import { cardJson } from "../kernel/cardGraph.mjs";
 import { hashString } from "./changedClips.mjs";
-import { cutSegmentContent } from "../kernel/cutIdentity.mjs";
 
 /** 签名算法的版本;改了进签名的内容就加一 */
 export const LAYER_INPUT_SIG_VERSION = 1;
@@ -94,8 +93,8 @@ export function clipInputs(project, clipId) {
       duration: (Number(clip.end) || 0) - start,
       phase: phaseOf(start, fps),
       node: typeof clip.nodeId === "string" && clip.nodeId ? describeNode(clip.nodeId, inner, start) : undefined,
-      // 剪辑段:被引用剪辑(任意深度)的内容、用到的素材与节点、效果库条目(`kernel/cutIdentity.mjs`)。不是剪辑段的片段没有这一项,签名不变
-      ...(typeof clip.cutId === "string" && clip.cutId ? { cut: cutSegmentContent(project, clip) } : null),
+      // 剪辑段里摊出来的卡(`kernel/cutFlatten.mjs`):截了多少头、经过哪几层段。顶层片段没有这一项,签名不变
+      ...(clip.flat && typeof clip.flat === "object" ? { flat: clip.flat } : null),
     };
   };
 

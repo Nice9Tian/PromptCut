@@ -35,6 +35,7 @@ import { isStreamOrigin, streamSegmentFrameCount, streamSegmentSpan, STREAM_SEGM
 import { belowTargets, frame3d, soloStreamKind, streamEligible } from "../render/streamPlanRules.mjs";
 import { groupStreams, localStreamPixels, stageStreamPixels, streamCost, STREAM_COUNT_BUDGET, type StreamBudget, type StreamGroupItem } from "../render/streamBudget.mjs";
 import { reviewedCard } from "../kernel/frameMode.mjs";
+import { flatPlanProject } from "../kernel/cutFlatten.mjs";
 import type { NodeTask, StreamTaskInput } from "./browserNode.ts";
 
 /**
@@ -396,7 +397,9 @@ export async function planPageStreams(o: {
   envFingerprint: string | null;
   budget?: StreamBudget;
 }): Promise<PageStreamPlan> {
-  const { project, codes, envFingerprint } = o;
+  const { codes, envFingerprint } = o;
+  // 剪辑段换成它里面的卡(`kernel/cutFlatten.mjs`),与切分方的 `planStreams` 同一份视图(没有剪辑段时原样)
+  const project = o.project ? flatPlanProject(o.project) : o.project;
   const empty: PageStreamPlan = { specs: [], skipped: {} };
   if (!project || !codes || typeof envFingerprint !== "string" || !envFingerprint) return empty;
   // 桌面那一侧的图是经调试协议从导出页取回来的(JSON 往返过一次):这里照样往返一次,函数、undefined 这类取不过去的值两边都没有

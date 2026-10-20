@@ -69,11 +69,10 @@ const layerId = (clipId, kind) => `${kind}:${clipId}`;
 const originOf = (kind, originFrame) => (kind === 'stream' && Number.isInteger(originFrame) && originFrame >= 0 ? { originFrame } : {});
 /**
  * 依赖下层的流的层另带的两项(`server/frame-stream.mjs` 的 `belowLayerMark`):`streamKind: 'below'`(页面按舞台坐标贴)和
- * `inputSig`(产这条流的那一版项目的输入签名,页面对不上就不贴)。剪辑段级的流同样带这两项,`streamKind` 是 `'cut'`(照单卡流贴)。
- * 别的层、别的档位不带,发出去的消息一个字不变。
+ * `inputSig`(产这条流的那一版项目的输入签名,页面对不上就不贴)。别的层、别的档位不带,发出去的消息一个字不变。
  */
-const belowOf = (kind, item) => (kind === 'stream' && (item?.streamKind === 'below' || item?.streamKind === 'cut')
-  ? { streamKind: item.streamKind, ...(typeof item.inputSig === 'string' && item.inputSig ? { inputSig: item.inputSig } : {}) } : {});
+const belowOf = (kind, item) => (kind === 'stream' && item?.streamKind === 'below'
+  ? { streamKind: 'below', ...(typeof item.inputSig === 'string' && item.inputSig ? { inputSig: item.inputSig } : {}) } : {});
 
 /**
  * `staged`:还没认领的「键 → 区间」。缺省每个索引自带一份;按会话分片时(`createReadyHub`)

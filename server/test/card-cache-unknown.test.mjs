@@ -106,5 +106,5 @@ test('CU-04 接线:导出页的 __pcCardPlan 带上 unknownClipIds', () => {
   const src = fs.readFileSync(path.join(ROOT, 'src/ExportView.tsx'), 'utf8');
   const at = src.indexOf('window.__pcCardPlan = () =>');
   const body = src.slice(at, src.indexOf('window.__pcClipFrameModes', at));
-  assert.match(body, /unknownClipIds: \[\.\.\.unknownCardClipIds\(proj\.tracks\.flatMap\(\(track\) => track\.clips\)\)\]\.sort\(\)/);
+  assert.match(body, /unknownClipIds: \[\.\.\.unknownCardClipIds\((?:proj|flat)\.tracks\.flatMap\(\(track\) => track\.clips\)\)\]\.sort\(\)/);
 });

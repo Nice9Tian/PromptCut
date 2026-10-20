@@ -41,8 +41,6 @@ export interface CardCostRecord {
    */
   samples?: number;
   kind: 'random' | 'stepped';
-  /** 剪辑段(整段当一张卡测)的记录:`kind` 按 `random` 记、`vtOk` / `seekOk` 恒 false(`probeRunner.ts`),只作诊断标记 */
-  cutSegment?: boolean;
   vtOk?: boolean;
   seekOk?: boolean;
   seekMs?: number | null;

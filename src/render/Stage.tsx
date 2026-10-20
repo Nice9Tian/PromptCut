@@ -24,6 +24,7 @@ import { resolveCardParams } from "./mediaTier";
 import type { PlaceholderReason } from "./placeholder/contract";
 import { CutSegmentScene } from "./CutSegmentScene";
 import { cutOf, envelopeAt } from "../kernel/cutSegments";
+import { FLAT_SEP } from "../kernel/cutFlatten.mjs";
 
 setMaxAnimated(maxAnimated);
 
@@ -101,13 +102,19 @@ function guardRuntimeCard(cardId: string | undefined, body: ReactNode): ReactNod
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
-export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting, mountClock = false, nested = false }: {
+export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting, mountClock = false, nested = false, flatPrefix }: {
   timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender;
   /**
    * 剪辑段里的嵌套舞台(`CutSegmentScene`):包裹层挂 `data-pc-nested-clip` 而不是 `data-pc-clip`,
    * 命中测试、钉动画、量框这些按舞台顶层片段工作的地方只看得到剪辑段那一层。顶层一律 false,DOM 一个字不变。
    */
   nested?: boolean;
+  /**
+   * 剪辑段里的嵌套舞台(`CutSegmentScene`):这一层片段在计划一侧的 id 前缀(`<段 id>~`,多层一路接下去;`kernel/cutFlatten.mjs`)。
+   * 六个平面 prop 都按「前缀 + 片段 id」查(父页按摊平视图里的虚拟片段发),包裹层另挂 `data-pc-flat-clip`(流平面、占位槽位按它找)。
+   * 顶层不传,一律按片段 id 查,DOM 一个字不变。
+   */
+  flatPrefix?: string;
   /**
    * 给「按挂载时刻计时」的卡传挂载钟(`CardProps.mountClockMs`)。**只有平铺时间轴的导出页传 true**:
    * 那条路径上卡片提前 `CARD_MOUNT_LEAD` 挂载,旧的打字卡从挂载那一帧起计时,导出像素基线(演示项目)就是那样渲出来的。
@@ -116,6 +123,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
   mountClock?: boolean;
 } & StagePlaneProps) {
   const timeOf = (c: Timeline['clips'][number]) => clipFrameMode(c, getCard(c.cardId)) === 'direct' ? directT : t;
+  /** 平面 prop 按哪个 id 查:顶层就是片段 id;嵌套场景里是计划一侧的虚拟片段 id(`flatPrefix`) */
+  const pidOf = (c: { id: string }) => (flatPrefix ? flatPrefix + c.id : c.id);
   const active = timeline.clips.filter((c) => cardMountedAt(c, timeOf(c)));
 
   /*
@@ -166,7 +175,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
   const prevSuppressed = useRef<ReadonlySet<string>>(EMPTY_SET);
   const supNow = suppressed ?? EMPTY_SET;
   for (const c of active) {
-    if (supNow.has(c.id) && !prevSuppressed.current.has(c.id)) frozenT.current.set(c.id, Math.max(0, timeOf(c) - c.start));
+    const pid = pidOf(c);
+    if (supNow.has(pid) && !prevSuppressed.current.has(pid)) frozenT.current.set(pid, Math.max(0, timeOf(c) - c.start));
   }
   for (const id of [...frozenT.current.keys()]) if (!supNow.has(id)) frozenT.current.delete(id);
   prevSuppressed.current = supNow;
@@ -179,9 +189,9 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
    * 四支(组合卡 / 素材效果卡 / DirectCard / 普通卡)口径一致,都走这里。
    */
   const localTOf = (clip: Timeline["clips"][number], base: number): number => {
-    const ms = settling?.get(clip.id);
+    const ms = settling?.get(pidOf(clip));
     if (ms !== undefined) return Math.max(0, ms / 1000 - clip.start);
-    const frozen = frozenT.current.get(clip.id);
+    const frozen = frozenT.current.get(pidOf(clip));
     if (frozen !== undefined) return frozen;
     return Math.max(0, base - clip.start);
   };
@@ -307,30 +317,31 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
            *     做整场景补跑(`render(jump)`)、探针复位、生成快照时,这张卡不再跟着整台重挂载。
            * 两个代数都只增不减,和每次重挂载都严格变大;没有按片段的代数时就是 `playToken`(导出页、legacy 一个字不变)。
            */
-          const gen = playToken + (remountGen?.get(clip.id) ?? 0);
+          const pid = pidOf(clip);
+          const gen = playToken + (remountGen?.get(pid) ?? 0);
           const mountClockMs = mountClockMsOf(`${clip.id}:${gen}`, clip, cardT);
-          const isSettling = settling?.has(clip.id) ?? false;
+          const isSettling = settling?.has(pid) ?? false;
           const cls = [
             proxy ? "pc-proxy" : "",
-            !isSettling && supNow.has(clip.id) ? "pc-suppressed" : "",
-            awaiting?.has(clip.id) ? "pc-awaiting" : "",
+            !isSettling && supNow.has(pid) ? "pc-suppressed" : "",
+            awaiting?.has(pid) ? "pc-awaiting" : "",
             isSettling ? "pc-settling" : "",
           ].filter(Boolean).join(" ");
           // 这张卡该不该挂流平面(G1:单卡流挂在包裹层里;组流和依赖下层的流挂舞台根下的 [data-pc-group-plane])
-          const ownStream = streamPlanes?.some((g) => g.clipIds.length === 1 && g.plane !== "stage" && g.clipIds[0] === clip.id) ?? false;
+          const ownStream = streamPlanes?.some((g) => g.clipIds.length === 1 && g.plane !== "stage" && g.clipIds[0] === pid) ?? false;
           /*
            * 流平面露不露:这张卡被抑制着、或正在不可见地追帧时才露。别的时候它也可能挂着 —— 暂停着把播放头下这一帧先解好、
            * 等流画出第一帧再藏活子树 —— 那时活子树还露着,流平面要藏起来(`display: none`:不占框,`solid.ts` 的实体框不算它),
            * 不然两份画面叠在一起。和 `.pc-suppressed` 在同一次提交里翻,画面从活子树换成流中间不空一拍。
            */
-          const streamShown = isSettling || supNow.has(clip.id);
+          const streamShown = isSettling || supNow.has(pid);
           /*
            * 包裹层的本地帧号。平时按 `cardT` 算;**正在追帧(`settling`)的片段按它自己的虚拟时间算**(R9 M4 的配套):
            * 子树虚拟时间下包裹层的帧号不跟着走的话,gl 平面的 `data-pc-gl-frame` 和它永远对不上,
            * 每张 canvas 卡在 K1 两趟布尔探针 / K5 第一路里都被 `rasterizeCanvas` 误判 `lossy`。
            * `settling` 只在舞台上传,导出页和 legacy 一个字不变。
            */
-          const settlingMs = settling?.get(clip.id);
+          const settlingMs = settling?.get(pid);
           const localFrame = Math.round(((settlingMs !== undefined ? settlingMs / 1000 : cardT) - clip.start) * timeline.fps);
           /*
            * canvas 卡(R9 M1):带 `canvas` 契约(`dom2d` 除外)的片段在包裹层里多渲一个 gl 平面,画面由共享渲染器画。
@@ -339,11 +350,12 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           const glContract = !unsupported && def?.canvas && def.canvas.kind !== "dom2d" ? def.canvas : null;
           const glBox = glContract ? frameBox(clip.frame, timeline) : null;
           // 组流的成员、依赖下层的流的目标卡:包裹层里没有流平面,`hitTest` / `bounds` 对它们退回包裹层框(G1「组流平面的命中与实体框」)
-          const groupMember = streamPlanes?.some((g) => (g.clipIds.length > 1 || g.plane === "stage") && g.clipIds.includes(clip.id)) ?? false;
+          const groupMember = streamPlanes?.some((g) => (g.clipIds.length > 1 || g.plane === "stage") && g.clipIds.includes(pid)) ?? false;
           return (
             <div
               key={`${clip.id}:${gen}`}
               {...{ [clipAttr]: clip.id }}
+              data-pc-flat-clip={flatPrefix ? pid : undefined}
               data-pc-stream-member={groupMember ? "" : undefined}
               data-pc-local-frame={localFrame}
               data-pc-frame-mode={clipFrameMode(clip, def)}
@@ -382,9 +394,11 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               */}
               {seg ? (
                 <CutSegmentScene seg={seg} start={clip.start} localT={localTOf(clip, t)}
-                  localDirectT={settling?.has(clip.id) || frozenT.current.has(clip.id) ? localTOf(clip, t) : Math.max(0, directT - clip.start)}
+                  localDirectT={settling?.has(pid) || frozenT.current.has(pid) ? localTOf(clip, t) : Math.max(0, directT - clip.start)}
                   playToken={gen} size={frameBox(clip.frame, timeline)}
-                  frozen={!isSettling && supNow.has(clip.id)} />
+                  /* 里面的卡各自按「段 id~卡的片段 id」查抑制、流平面、占位(`kernel/cutFlatten.mjs`);导出页、预渲染页不传平面,一个字不变 */
+                  flatPrefix={pid + FLAT_SEP}
+                  planes={usesPlanes ? { snapshots, suppressed, streamPlanes, remountGen, settling, awaiting } : undefined} />
               ) : guardRuntimeCard(clip.cardId, unsupported ? (
                 /* 这台设备跑不了的卡:卡片代码不跑,不挂组件(快照 / 流平面与占位槽位照常挂在下面) */
                 null
@@ -406,10 +420,10 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 位图由 `glHost` 在 `done` 时贴上,这里只登记这一拍要画什么。
               */}
               {glContract && glBox ? (
-                <GlPlane clipId={clip.id} cardId={clip.cardId} contract={glContract}
+                <GlPlane clipId={pid} cardId={clip.cardId} contract={glContract}
                   w={glBox.width} h={glBox.height} t={localTOf(clip, cardT)} frame={localFrame}
                   params={resolveCardParams({ ...def!.defaults, ...clip.params })} gen={gen}
-                  skip={supNow.has(clip.id)} stage={stageInfo} />
+                  skip={supNow.has(pid)} stage={stageInfo} />
               ) : null}
               {/*
                 代理色块是卡片的**兄弟**,不是把卡片包起来 —— 真卡由 .pc-proxy 那条
@@ -457,12 +471,12 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                  * 按框换排法;都不超出这一层的框。预览缩放由父页经 `setViewScale` 发来(桌面与在线都发)。
                  */
                 const size = frameBox(clip.frame, timeline);
-                const geometry = geometryFor(clip.id, size);
-                const reason = unsupported ? localOnlyReason(clip.id) : placeholderReasonOf(clip.id);
+                const geometry = geometryFor(pid, size);
+                const reason = unsupported ? localOnlyReason(pid) : placeholderReasonOf(pid);
                 return (
                   <div {...{ [PLACEHOLDER_SLOT_ATTR]: "" }} hidden style={{ position: "absolute", inset: 0 }}>
-                    <PlaceholderPlane clipId={clip.id} geometry={geometry} reason={reason}
-                      fit={placeholderFitFor(clip.id, reason, geometry, size, clip.frame?.scale ?? 1)} />
+                    <PlaceholderPlane clipId={pid} geometry={geometry} reason={reason}
+                      fit={placeholderFitFor(pid, reason, geometry, size, clip.frame?.scale ?? 1)} />
                   </div>
                 );
               })() : null}
@@ -485,7 +499,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
       */}
       {streamPlanes?.filter((g) => g.clipIds.length > 1 || g.plane === "stage").map((g) => {
         const hostId = g.host ?? g.clipIds[g.clipIds.length - 1];
-        const at = active.findIndex((c) => c.id === hostId);
+        const at = active.findIndex((c) => pidOf(c) === hostId);
         if (at < 0) return null;
         // 组里有成员被抑制着 / 在不可见地追帧才露(同单卡流的 `streamShown`:暂停着先解好这一帧时组流平面藏着)
         const shown = g.clipIds.some((id) => supNow.has(id) || (settling?.has(id) ?? false));

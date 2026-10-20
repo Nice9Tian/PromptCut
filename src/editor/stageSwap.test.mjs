@@ -69,8 +69,6 @@ mock.module(srcUrl("editor/costIdentity.ts"), { exports: { clipIdentityOf: () =>
 mock.module(srcUrl("editor/snapshotFeed.ts"), {
   exports: {
     clearSettled: (role, why) => log.push(["clearSettled", role, why]),
-    // 剪辑段贴流(`cutStreamHeavy`):这几个用例里没有剪辑段
-    cutStreamHeavy: () => false,
     deliverSnapshots: async (_stage, role, head) => { log.push(["deliverSnapshots", role, head.t, head.playing]); return 0; },
     markBaselineReset: (role) => log.push(["markBaselineReset", role]),
     markAllSettled: (role) => log.push(["markAllSettled", role]),

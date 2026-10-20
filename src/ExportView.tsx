@@ -5,7 +5,7 @@ import { Stage } from "./render/Stage";
 import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
-import { withCutSegmentOutputs } from "./kernel/cutSegments";
+import { flatPlanProject, withFlatNodes } from "./kernel/cutFlatten.mjs";
 import { themeStyle } from "./themes";
 import { allCards, getCard, setSyncedUserCards, unknownCardClipIds, userCardSources, type SyncedUserCard } from "./kernel/registry";
 import { setExportSyncedMount } from "./render/placeholderHost";
@@ -184,15 +184,20 @@ export default function ExportView() {
             sourceVersions[card.id] = `builtin:${cardSourceVersion(card, builtinCardSourceFiles)}`;
           }
         }
-        // 剪辑段作为一个整体进卡片计划(测量、分派、产剪辑段级的轨道流;`kernel/cutSegments.ts` 的 `withCutSegmentOutputs`)。
-        // 没有剪辑段的项目图原样不变
-        return { graph: withCutSegmentOutputs(proj, graph ?? projectCardGraph(proj, getCard), (id) => sourceVersions[id]), sourceVersions,
+        /*
+         * 剪辑段换成它里面的卡(`kernel/cutFlatten.mjs` 的摊平视图):剪辑段里的卡和父时间轴上的卡一样进卡片计划
+         * (测量、分派、各自产单卡流)。渲染用的图(上面的 `graph`)不变,画面照旧走嵌套场景。没有剪辑段的项目原样不变
+         */
+        const flat = flatPlanProject(proj);
+        let planGraph = graph;
+        if (flat !== proj) { try { planGraph = withFlatNodes(flat, projectCardGraph(flat, getCard)); } catch { planGraph = undefined; } }
+        return { graph: planGraph ?? projectCardGraph(flat, getCard), sourceVersions,
           /*
            * 这个页面的注册表里查不到定义的卡片段(未知卡片;预渲染进程里没有同步表,等于「没有定义」)。舞台不画它们,
            * `CardFrameCache.plan()` 据此不给它们出控件:不排预渲染、不进预渲染集合、层表里没有它们那一层。
            * 图本身不动(别的卡的键逐字不变)。
            */
-          unknownClipIds: [...unknownCardClipIds(proj.tracks.flatMap((track) => track.clips))].sort(),
+          unknownClipIds: [...unknownCardClipIds(flat.tracks.flatMap((track) => track.clips))].sort(),
           environment: { width: proj.width, height: proj.height, fps: proj.fps, theme: proj.themeId,
             // I0:这一帧排版实际用上的字体集合。共享快照键要它 —— 缺字体的机器
             // 画出来的 HTML 不一样,不能和有字体的机器共用一份快照。
