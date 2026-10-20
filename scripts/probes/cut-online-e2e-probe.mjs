@@ -1,28 +1,35 @@
 /**
- * 在线页面贴剪辑段的流、被引用剪辑改过之后不贴旧流(`docs/reports/AGENT-cutseg-layer-sig.md`)的端到端探针。
+ * 在线页面贴剪辑段里那张卡自己的流、被引用剪辑改过之后不贴旧流的端到端探针(逐卡口径:`docs/semantics/mechanism/rendering.md`
+ * 「剪辑段」、`docs/reports/AGENT-cut-flatten.md`「设计」;用户 2026-10-21 定 —— 剪辑段里的卡和没有剪辑段时一样,重卡各自走轨道流)。
  *
  *   node scripts/probes/cut-online-e2e-probe.mjs [--dist <在线构建目录>] [--base-port 5410] [--out <目录>] [--keep-temp]
  *        端口(整段 +0～+9):+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 桌面编辑器(及它的舞台端口)。都只绑 127.0.0.1。
+ *        `--dist` 不给就在临时目录现建一份(`vite build --mode online`);给的话要是当前这份源码构建的(探针核对嵌进去的代码版本)。
  *
  * 骨架照 `below-online-e2e-probe.mjs`(角色都在本机,页面用**在线构建**,隔离的跨源舞台也在链路里):
  *   - 文档服务 + 素材服务:进程内的托管组合,经本机托管代理开三个同站跨源的源;
- *   - 切分方:真的桌面预渲染进程(队列模式、测试指纹、流开着、认领细任务 —— 剪辑段的流只能由它产,浏览器节点不产);
+ *   - 切分方:真的桌面预渲染进程(队列模式、测试指纹、流开着、认领细任务 —— 剪辑段里的卡的流(`solo: 'flat'`)只能由它产,浏览器节点不产);
  *   - 甲:在线页面,建场景、播放、改被引用剪辑。
  *
- * 场景(1280×720、30 fps、3 秒):剪辑「里」上一张 `punch-pill`(文字 v1);剪辑「中」上一个剪辑段引用「里」;激活剪辑上一个剪辑段 S
- * (第 0.2～2.2 秒)引用「中」—— 两层嵌套。S 测量落定后把它的成本记录标成人工钉重(`pinnedHeavy`)再刷新页面。
+ * 场景(1280×720、30 fps、10 秒):剪辑「里」上一张 `punch-pill`(文字 v1);剪辑「中」上一个剪辑段引用「里」;激活剪辑上一个剪辑段 S
+ * (第 0.2～2.2 秒)引用「中」—— 两层嵌套。被测的是摊平视图里的虚拟片段 V = `<S 的 id>~<「中」里那个段的 id>~<pill 的片段 id>`
+ * (`src/kernel/cutFlatten.mjs`)。加 S 之后新多出来的成本记录就是这张卡的(成本键是卡自己的,`cardCostKey` 剥掉了 `flat`),
+ * 落定后把它标成人工钉重(`pinnedHeavy`)再刷新页面。
  *
  * 断言(任一不成立退出码 1):
- *   A 层表   层表里 S 那一行 `kind: card`、`plane: local`、**`streamKind: 'cut'`**、带输入签名(`s1-`);流清单每段齐、满密度
- *   B 就绪   在线来源认出这条流;父页就绪索引里 S 的流层带 `streamKind: 'cut'`;S 判重、父页发它的流平面、没有过期的
- *   C 播放   播放中 S 的包裹层被抑制、舞台上画的是这条流(父页推的字节、跟着播放头、不报错)
- *   D 改动   在页面里改「里」那张卡的文字(两层深):父页当场(≤ 1 秒)不再发旧流的流平面、S 不再判重(照旧活渲);在线来源撤掉旧流;
- *            舞台上没有旧键的轨道;随后播放,旧流没有再贴上来
- *   E 新流   切分方按新的一版重产:层表换成新的一行(内容键、签名都换了,仍带 `streamKind: 'cut'`);甲认出新流、贴它
- *   G 长剪辑段  再加一个 8 秒的剪辑段 L(16 段,超出在线来源的取数窗口)、钉重:层表那一行产齐以后,在线来源按清单认它整段就绪、
- *            字节只取了播放头附近的几段;开播 1.5 秒之内 L 就贴流(不必等播放头走过整段)
+ *   A 层表   层表里 V 一行:`kind: card`、`plane: local`、成员只有 V、带输入签名(`s1-`)、**没有 `streamKind`**;第一帧是 S 的第一帧;
+ *            流清单每段齐、满密度;层表里没有以 S 本身为顶的行
+ *   B 就绪   在线来源认出这条流(切分方那一份、没有过期的);父页就绪索引里 V 有流层;V 判重、父页发它的流平面;S 本身不判重
+ *   C 播放   播放中嵌套包裹层 `[data-pc-flat-clip="V"]` 被抑制、舞台上画的是这条流(父页推的字节、跟着播放头、不报错)
+ *   D 改动   在页面里改「里」那张卡的文字(两层深):父页当场(≤ 1 秒)不再发旧流的流平面;随后 V 不再判重(照旧活渲;要等分派表按新身份重算,毫秒只记录);在线来源撤掉旧流
+ *            (签名对不上,列进 `staleStreams`);舞台上没有旧键的轨道;随后播放,旧流没有再贴上来
+ *   E 新流   新身份测出来后钉重;切分方按新的一版重产:层表换成新的一行(内容键、结果键、签名都换了,仍没有 `streamKind`);
+ *            甲认出新流、贴它
+ *   G 长剪辑段  再加一个 8 秒的剪辑段 L(第 1～9 秒,引用「中」;16 段,超出在线来源的取数窗口):L 里那张卡(虚拟片段 VL)同样
+ *            各自出一条单卡流:钉重后层表里 VL 一行(没有 `streamKind`,分段 0～15),播放头停在 L 头上时在线来源按窗口认出就绪的分段、
+ *            父页判重发平面,开播 1.5 秒之内 VL 就贴着流在画。逐卡口径下没有「整段就绪、字节只取窗口」那一条(上一轮剪辑段级流特有),不验
  *   F 没有页面错误
- * 截图:`play-v1.png`(贴旧流播放中)、`after-edit-live.png`(改完、活渲)、`play-v2.png`(贴新流播放中)、`play-long.png`(长剪辑段开播不久贴流)。
+ * 截图:`play-v1.png`(贴旧流播放中)、`after-edit-live.png`(改完、活渲)、`play-v2.png`(贴新流播放中)、`play-long.png`(长剪辑段里的卡开播不久贴流)。
  * 耗时只记录。不打印令牌、口令。过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, ... }`。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -65,10 +72,12 @@ const DURATION = PROJECT.duration;
 const S_START = 0.2, S_LEN = 2, FIRST = Math.round(S_START * FPS);
 const TOTAL = DURATION * FPS;
 const LAST_SEGMENT = Math.floor((Math.round((S_START + S_LEN) * FPS) - 1 - FIRST) / SEG);
-/** 被引用剪辑「里」上的那张卡的参数:改之前、改之后(两层深:「里」被「中」引用,「中」被激活剪辑上的剪辑段引用) */
 /** 长剪辑段 L(G 那一步):第 1～9 秒,8 秒 = 240 帧,分段 0～15。在线来源的取数窗口(往回 1 段、往前 2 秒)装不下整段 */
 const L_START = 1, L_LEN = 8, L_FIRST = Math.round(L_START * FPS), L_LAST_SEGMENT = Math.floor((Math.round((L_START + L_LEN) * FPS) - 1 - L_FIRST) / SEG);
+/** 被引用剪辑「里」上的那张卡的参数:改之前、改之后(两层深:「里」被「中」引用,「中」被激活剪辑上的剪辑段引用) */
 const INNER_V1 = { text: '剪辑段签名 v1' }, INNER_V2 = { text: '剪辑段签名 v2' };
+/** 摊平视图里虚拟片段 id 的分隔符(`src/kernel/cutFlatten.mjs` 的 `FLAT_SEP`) */
+const FLAT_SEP = '~';
 
 const fails = [];
 const out = { ok: false, run: RUN, site: SITE, out: OUT };
@@ -141,7 +150,7 @@ const nodeDiag = (page) => P(page, () => { try { return JSON.parse(JSON.stringif
 const onlineDiag = (page) => P(page, () => { try { return JSON.parse(JSON.stringify(window.__pcOnlineSnapshots?.() ?? null)); } catch { return null; } }).catch(() => null);
 const parentDiag = (page) => P(page, () => {
   const d = window.__pcPreviewDiag?.();
-  return d ? { suppressed: d.suppressed, heavy: d.snapshotFeed?.heavy ?? [], scrub: d.snapshotFeed?.scrub ?? [], streams: d.snapshotFeed?.streams ?? [], staleBelow: d.snapshotFeed?.staleBelow ?? [], staleCut: d.snapshotFeed?.staleCut ?? [], ready: d.snapshotFeed?.ready ?? [],
+  return d ? { suppressed: d.suppressed, heavy: d.snapshotFeed?.heavy ?? [], scrub: d.snapshotFeed?.scrub ?? [], streams: d.snapshotFeed?.streams ?? [], staleBelow: d.snapshotFeed?.staleBelow ?? [], ready: d.snapshotFeed?.ready ?? [],
     picks: (d.snapshotFeed?.picks ?? []).map((p) => p.clipId), settled: d.snapshotFeed?.settled ?? [], settledAll: !!d.snapshotFeed?.settledAll } : null;
 }).catch(() => null);
 /** 父页这一刻给这张卡发的流平面(按当前播放头现算的那一份,`snapshotFeedDebug` 的 `streams`) */
@@ -159,7 +168,10 @@ async function visibleStage(page) {
   }
   return stageFrames(page)[0] ?? null;
 }
-/** 可见舞台此刻的样子:这张卡的包裹层、它的流轨道(种类、平面、对不对得上)、画布挂在哪、舞台的时刻 */
+/**
+ * 可见舞台此刻的样子:这张卡的包裹层、它的流轨道(种类、平面、对不对得上)、画布挂在哪、舞台的时刻。
+ * 剪辑段里的卡(虚拟片段 id)的包裹层在嵌套场景里,挂的是 `data-pc-flat-clip="<虚拟 id>"`(`src/render/Stage.tsx`)
+ */
 async function stageState(page, id) {
   const f = await visibleStage(page);
   if (!f) return null;
@@ -167,14 +179,14 @@ async function stageState(page, id) {
     const diag = window.__pcStageDiag?.() ?? null;
     const tracks = (diag?.streams?.tracks ?? []).map((t) => ({ id: t.id, key: t.key ?? null, clips: String(t.id).split('#')[0].split(','), pushed: !!t.pushed, drawn: t.drawn, lastDrawn: t.lastDrawn,
       level: t.level ?? null, stale: !!t.stale, plane: t.plane ?? null, kind: t.kind ?? null, fits: t.fits ?? null, decoder: t.decoder, errors: t.errors, lastError: t.lastError || null, bound: t.bound ?? null }));
-    const w = document.querySelector(`[data-pc-clip="${cid}"]:not([data-pc-media])`);
+    const w = document.querySelector(`[data-pc-flat-clip="${CSS.escape(cid)}"]`) ?? document.querySelector(`[data-pc-clip="${CSS.escape(cid)}"]:not([data-pc-media])`);
     let clip = { wrapper: false };
     if (w) {
       const snap = w.querySelector(':scope > [data-pc-snapshot-plane]');
       const slot = w.querySelector(':scope > [data-pc-placeholder-slot]');
       const planes = [...document.querySelectorAll('[data-pc-group-plane]')];
       const visible = (el) => { const cs = getComputedStyle(el); return cs.visibility !== 'hidden' && cs.display !== 'none'; };
-      clip = { wrapper: true, suppressed: w.classList.contains('pc-suppressed'), snapshot: !!snap && snap.childElementCount > 0 && getComputedStyle(snap).visibility !== 'hidden',
+      clip = { wrapper: true, flat: w.getAttribute('data-pc-flat-clip'), suppressed: w.classList.contains('pc-suppressed'), snapshot: !!snap && snap.childElementCount > 0 && getComputedStyle(snap).visibility !== 'hidden',
         placeholder: !!slot && !slot.hidden, canvasInWrapper: !!w.querySelector(':scope > canvas[data-pc-stream-plane]'),
         stagePlanes: planes.length, stagePlaneShown: planes.some(visible), stream: tracks.find((t) => t.clips.includes(cid)) ?? null };
     }
@@ -221,7 +233,7 @@ const costRecords = (page, pin = null) => P(page, async (pinKeys) => {
       for (const row of all) if (pinKeys.includes(row.record?.identityKey)) tx.objectStore('costs').put({ ...row, record: { ...row.record, pinnedHeavy: true } });
       await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
     }
-    return all.map((row) => ({ identityKey: row.record?.identityKey ?? null, stepMs: row.record?.stepMs ?? null, cutSegment: row.record?.cutSegment === true, pinnedHeavy: row.record?.pinnedHeavy === true || (!!pinKeys && pinKeys.includes(row.record?.identityKey)) }));
+    return all.map((row) => ({ identityKey: row.record?.identityKey ?? null, stepMs: row.record?.stepMs ?? null, pinnedHeavy: row.record?.pinnedHeavy === true || (!!pinKeys && pinKeys.includes(row.record?.identityKey)) }));
   } finally { db.close(); }
 }, pin);
 
@@ -287,7 +299,7 @@ function checkPlaying(who, r, key) {
   brief.perStage = perStage;
   check(perStage.every((x) => x.resets === 0) && perStage.some((x) => x.n >= 3 && x.to > x.from) && b.lastDrawn > a.lastDrawn && Math.abs(b.lastDrawn - Math.round(last.t * FPS)) <= 3, `${who}:流播放器在出帧(同一台舞台上计数只涨不回)、画着的那一帧跟着播放头`, brief);
   check((b.errors ?? 0) === 0, `${who}:流播放器没有报错`, brief.to);
-  check(r.drawn.every((s) => s.clip.suppressed), `${who}:剪辑段的包裹层一直被抑制`);
+  check(r.drawn.every((s) => s.clip.suppressed && !!s.clip.flat), `${who}:这张卡的嵌套包裹层(data-pc-flat-clip)一直被抑制`);
   return brief;
 }
 
@@ -360,9 +372,7 @@ try {
     const inner = S.actions.addCut('里', { switchTo: false });
     const A = S.getState().project.activeCutId;
     S.actions.switchCut(inner.id);
-    // 底下一层会动的粒子:每个分段的画面都不同(分段字节按哈希去重,静止的画面各段字节相同,数不出取了几段)
-    const bg = S.actions.addClipOnNewTrack({ index: 0, cardId: 'particles', start: 0, duration: args[0] });
-    S.actions.setClipParams(bg.id, { color: '#30ff60', quantity: 120, speed: 1.5, size: 4, links: 'yes', seed: 3 });
+    // 「里」上只放这一张卡:加 S 之后新多出来的成本记录就只有它的,钉重钉的就是它
     const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'punch-pill', start: 0, duration: args[0] });
     S.actions.setClipParams(c.id, args[1]);
     const mid = S.actions.addCut('中', { switchTo: true });
@@ -370,16 +380,20 @@ try {
     S.actions.switchCut(A);
     return { A, inner: inner.id, mid: mid.id, innerClip: c.id, midSeg: seg.id };`, DURATION, INNER_V1);
   check(!!cuts?.A && !!cuts.innerClip && !!cuts.midSeg, '建好两层嵌套的剪辑(「里」上一张卡,「中」引用「里」)', cuts);
+  /** 剪辑段 `segId`(激活剪辑上、引用「中」)里那张 pill 在摊平视图里的虚拟片段 id */
+  const flatIdOf = (segId) => [segId, cuts.midSeg, cuts.innerClip].join(FLAT_SEP);
   const before = (await stable(pageA, 0)) ?? [];
   const sId = await store(pageA, `const c = S.actions.addCutSegment(args[0], args[1], { newTrackIndex: 0, duration: args[2] }); return c.id;`, cuts.mid, S_START, S_LEN);
+  const vId = flatIdOf(sId);
   const afterS = (await stable(pageA, before.length + 1)) ?? [];
   const fresh = afterS.filter((r) => r.identityKey && !before.some((b) => b.identityKey === r.identityKey));
-  const sKeys = (fresh.some((r) => r.cutSegment) ? fresh.filter((r) => r.cutSegment) : fresh).map((r) => r.identityKey);
-  out.costs = { before: before.length, after: afterS.length, fresh: fresh.map((r) => ({ key: short(r.identityKey), cutSegment: r.cutSegment, stepMs: r.stepMs })) };
-  if (!check(sKeys.length >= 1, '剪辑段 S 的成本记录认出来了(加它之后新多出来的)', out.costs)) throw new Error('认不出 S 的成本记录');
+  const vKeys = fresh.map((r) => r.identityKey);
+  out.costs = { before: before.length, after: afterS.length, fresh: fresh.map((r) => ({ key: short(r.identityKey), stepMs: r.stepMs })) };
+  if (!check(vKeys.length === 1, '剪辑段里那张卡的成本记录认出来了(加 S 之后新多出来的正好一条:卡自己的成本键,段本身没有)', out.costs)) throw new Error('认不出那张卡的成本记录');
   const docId = await store(pageA, `return S.getState().project.id;`);
-  out.scene = { sId, ...cuts, order: await store(pageA, `return S.getState().project.tracks.map((t) => t.clips.map((c) => c.id));`) };
-  await costRecords(pageA, sKeys);
+  out.scene = { sId, vId, ...cuts, order: await store(pageA, `return S.getState().project.tracks.map((t) => t.clips.map((c) => c.id));`) };
+  say('scene', out.scene);
+  await costRecords(pageA, vKeys);
   await enter(pageA, 'cso-jia(刷新,钉重生效)');
   await pauseAt(pageA, 0.5);
   const nodeA = await until('甲的节点状态落定', async () => { const d = await nodeDiag(pageA); return d && (d.ready === 'ready' || d.eligibility?.ok === false) ? d : null; }, 240_000, 500);
@@ -387,53 +401,55 @@ try {
 
   /* ---------------------------------------------------------------- 2. A 层表 */
   const layerKey = `layers:${docId}`;
-  const rowNow = async () => {
+  const rowNow = async (id = vId) => {
     const body = (await content.get('snapshot-manifest', layerKey).catch(() => null))?.body ?? null;
-    return { body, row: (body?.streams ?? []).find((r) => r.topClipId === sId) ?? null };
+    return { body, row: (body?.streams ?? []).find((r) => r.topClipId === id) ?? null };
   };
   const briefRow = (row) => row && { topClipId: row.topClipId, kind: row.kind, plane: row.plane, streamKind: row.streamKind ?? null, clipIds: row.clipIds, contentKey: short(row.contentKey),
     candidates: (row.candidates ?? []).map((c) => ({ envFingerprint: c.envFingerprint, resultKey: short(c.resultKey) })), originFrame: row.originFrame ?? null, lastSegment: row.lastSegment, inputSig: row.inputSig ?? null };
-  const waitRow = (label, notKey = null) => until(label, async () => {
-    const x = await rowNow();
+  const waitRow = (label, notKey = null, id = vId, dense = true, timeoutMs = 480_000) => until(label, async () => {
+    const x = await rowNow(id);
     if (!x.row || x.row.contentKey === notKey) return null;
     const cand = x.row.candidates[0];
     for (const [from, to] of spansOf(x.row)) {
       const m = await getManifest(cand.resultKey, from, to);
       if (!m || Object.keys(m.segments ?? {}).length !== to - from + 1) return null;
-      if (!Object.values(m.segments).every((seg) => seg.stride === 1)) return null;
+      if (dense && !Object.values(m.segments).every((seg) => seg.stride === 1)) return null;
     }
     return { ...x, cand };
-  }, 480_000, 1000);
+  }, timeoutMs, 1000);
+  /** 逐卡口径的单卡流那一行:kind card、plane local、成员只有这张虚拟卡、带输入签名、没有 streamKind */
+  const soloRowOk = (row, id) => !!row && row.kind === 'card' && row.plane === 'local' && (row.clipIds ?? []).join() === id && !('streamKind' in row) && /^s1-/.test(row.inputSig ?? '');
   const tProduce = Date.now();
-  const got1 = await waitRow('A:层表里出现 S 的流,流清单满密度齐');
+  const got1 = await waitRow('A:层表里出现那张卡(虚拟片段)的流,流清单满密度齐');
   const row1 = got1?.row ?? null;
-  out.produce = { ms: got1 ? Date.now() - tProduce : null, row: briefRow(row1), others: ((await rowNow()).body?.streams ?? []).filter((r) => r.topClipId !== sId).map(briefRow) };
-  say('cut.produced', out.produce);
-  if (!check(!!row1, 'A:层表里有 S 的一行', (await rowNow()).body?.streams?.map(briefRow))) throw new Error('层表里没有 S 的流');
+  const allRows = () => rowNow().then((x) => (x.body?.streams ?? []).map(briefRow));
+  out.produce = { ms: got1 ? Date.now() - tProduce : null, row: briefRow(row1), all: await allRows() };
+  say('flat.produced', out.produce);
+  if (!check(!!row1, 'A:层表里有那张卡(虚拟片段)的一行', out.produce.all)) throw new Error('层表里没有那张卡的流');
   const key1 = got1.cand.resultKey;
-  check(row1.kind === 'card' && row1.plane === 'local' && row1.clipIds.join() === sId && row1.streamKind === 'cut' && /^s1-/.test(row1.inputSig ?? ''),
-    'A:这一行是剪辑段级的流(kind card、plane local、成员只有 S),带 streamKind: cut 与输入签名', out.produce.row);
+  check(soloRowOk(row1, vId), 'A:这一行是普通单卡流(kind card、plane local、成员只有虚拟片段、带输入签名、没有 streamKind)', out.produce.row);
   check(row1.originFrame === FIRST && row1.lastSegment === LAST_SEGMENT, `A:这一行的第一帧是 S 的第一帧(第 ${FIRST} 帧),分段 0～${LAST_SEGMENT}`, out.produce.row);
-  check(out.produce.others.every((r) => r.streamKind === null), 'A:层表里别的行不带 streamKind', out.produce.others);
+  check(out.produce.all.every((r) => r.streamKind === null && r.topClipId !== sId), 'A:层表里没有带 streamKind 的行,也没有以 S 本身为顶的行', out.produce.all);
 
   /* ---------------------------------------------------------------- 3. B 就绪 */
   await pauseAt(pageA, 0.5);
-  const readyOf = (key, label) => until(label, async () => {
+  const readyOf = (id, key, label, minReady) => until(label, async () => {
     const d = await onlineDiag(pageA);
-    const s = (d?.streams ?? []).find((x) => x.clipId === sId);
-    if (!(s && s.resultKey === key && s.ready >= LAST_SEGMENT + 1)) return null;
+    const s = (d?.streams ?? []).find((x) => x.clipId === id);
+    if (!(s && s.resultKey === key && s.ready >= minReady)) return null;
     const p = await parentDiag(pageA);
-    return p?.heavy.includes(sId) && planeOf(p, sId)?.key === short(key) ? { s, d, p } : null;
+    return p?.heavy.includes(id) && planeOf(p, id)?.key === short(key) ? { s, d, p } : null;
   }, 180_000, 300);
-  const ready1 = await readyOf(key1, 'B:甲认出这条流、整段就绪、父页判重并发它的流平面');
-  const layer1 = ready1?.p.ready.find((r) => r.clipId === sId)?.kinds.find((k) => k.kind === 'stream') ?? null;
-  out.ready = ready1 && { ready: ready1.s.ready, envFingerprint: ready1.s.envFingerprint, staleStreams: ready1.d.staleStreams, layer: layer1, staleCut: ready1.p.staleCut };
+  const ready1 = await readyOf(vId, key1, 'B:甲认出这条流、整段就绪、父页判重并发它的流平面', LAST_SEGMENT + 1);
+  const layer1 = ready1?.p.ready.find((r) => r.clipId === vId)?.kinds.find((k) => k.kind === 'stream') ?? null;
+  out.ready = ready1 && { ready: ready1.s.ready, envFingerprint: ready1.s.envFingerprint, staleStreams: ready1.d.staleStreams, layer: layer1, heavy: ready1.p.heavy, plane: planeOf(ready1.p, vId) };
   check(!!ready1 && ready1.s.envFingerprint === deskFp && ready1.d.staleStreams.length === 0, 'B:在线来源选中切分方那一份,没有过期的', out.ready);
-  check(layer1?.streamKind === 'cut', 'B:父页就绪索引里 S 的流层带 streamKind: cut(在线来源照桌面的形状交给父页)', layer1);
-  check(!!ready1 && ready1.p.staleCut.length === 0, 'B:没有签名对不上的剪辑段流', out.ready);
+  check(!!layer1 && layer1.key === short(key1), 'B:父页就绪索引里虚拟片段有这条流的流层', ready1?.p.ready);
+  check(!!ready1 && !ready1.p.heavy.includes(sId) && planeOf(ready1.p, vId)?.plane !== 'stage', 'B:判重的是虚拟片段、不是 S 本身;流平面挂在包裹层里(不是舞台根)', out.ready);
 
   /* ---------------------------------------------------------------- 4. C 播放 */
-  const play1 = await playAndSample(pageA, sId, { from: 0.3, to: 1.9, key: key1 });
+  const play1 = await playAndSample(pageA, vId, { from: 0.3, to: 1.9, key: key1 });
   await stageShot(pageA, 'play-v1');
   await store(pageA, `S.actions.pause(); return true;`);
   out.play1 = checkPlaying('C 甲·旧流', play1, key1);
@@ -441,55 +457,66 @@ try {
   /* ---------------------------------------------------------------- 5. D 改被引用剪辑(两层深) */
   await pauseAt(pageA, 1.0);
   const keysBeforeEdit = (await costRecords(pageA)).map((r) => r.identityKey);
-  const had = await until('D:改之前父页在发 S 的旧流平面', async () => { const p = await parentDiag(pageA); return planeOf(p, sId)?.key === short(key1) && p.heavy.includes(sId) ? p : null; }, 20_000, 100);
+  const had = await until('D:改之前父页在发那张卡的旧流平面', async () => { const p = await parentDiag(pageA); return planeOf(p, vId)?.key === short(key1) && p.heavy.includes(vId) ? p : null; }, 20_000, 100);
   const edit = await P(pageA, async (spec) => {
     const S = window.__pcStore;
     const feed = () => window.__pcPreviewDiag?.().snapshotFeed ?? null;
-    const hadBefore = (feed()?.streams ?? []).some((p) => (p.clipIds ?? []).includes(spec.sId));
+    const hadBefore = (feed()?.streams ?? []).some((p) => (p.clipIds ?? []).includes(spec.vId));
     const t0 = performance.now();
     S.actions.switchCut(spec.inner);
     S.actions.setClipParams(spec.innerClip, spec.patch);
     S.actions.switchCut(spec.A);
     S.actions.seek(1.0);
-    let goneMs = null, staleSeen = false, heavyAfter = null;
+    // 分开记:旧流平面不再发(planeGoneMs)、这张卡不再判重(heavyGoneMs);两样都到了才算 goneMs
+    let planeGoneMs = null, heavyGoneMs = null, heavyAfter = null, ticks = 0;
+    const samples = [];
     while (performance.now() - t0 < 5000) {
       const f = feed();
-      staleSeen = staleSeen || (f?.staleCut ?? []).includes(spec.sId);
-      const has = (f?.streams ?? []).some((p) => (p.clipIds ?? []).includes(spec.sId));
-      if (!has && f && !(f.heavy ?? []).includes(spec.sId)) { goneMs = performance.now() - t0; heavyAfter = f.heavy; break; }
+      const ms = performance.now() - t0;
+      const has = (f?.streams ?? []).some((p) => (p.clipIds ?? []).includes(spec.vId));
+      const heavy = (f?.heavy ?? []).includes(spec.vId);
+      if (ticks++ % 25 === 0) samples.push({ ms: Math.round(ms), plane: has, heavy });
+      if (f && !has && planeGoneMs === null) planeGoneMs = ms;
+      if (f && !heavy && heavyGoneMs === null) heavyGoneMs = ms;
+      if (planeGoneMs !== null && heavyGoneMs !== null) { heavyAfter = f.heavy; break; }
       await new Promise((r) => setTimeout(r, 4));
     }
-    return { hadBefore, goneMs: goneMs === null ? null : Math.round(goneMs), staleSeen, heavyAfter };
-  }, { sId, inner: cuts.inner, innerClip: cuts.innerClip, A: cuts.A, patch: INNER_V2 });
+    const r = (x) => (x === null ? null : Math.round(x));
+    return { hadBefore, planeGoneMs: r(planeGoneMs), heavyGoneMs: r(heavyGoneMs), goneMs: planeGoneMs === null || heavyGoneMs === null ? null : r(Math.max(planeGoneMs, heavyGoneMs)), heavyAfter, samples: samples.slice(0, 20) };
+  }, { vId, inner: cuts.inner, innerClip: cuts.innerClip, A: cuts.A, patch: INNER_V2 });
   out.edit = { ...edit, hadPlane: !!had };
-  check(!!had && edit?.hadBefore === true && edit.goneMs !== null && edit.goneMs <= 1000, 'D:改之前父页在发旧流;改被引用剪辑以后当场(≤ 1 秒)不再发、S 不再判重(实测毫秒记在结果里)', out.edit);
+  // 「当场不再贴旧流」看的是旧流平面:父页按就绪索引发平面,在线来源一拿到新项目就撤层(签名对不上),平面当场没了。
+  // 不再判重(heavy)要等分派表按新的成本身份重算(新身份先测一次),和顶层卡改参数是同一条路;只记毫秒、要求 5 秒内落下,不当 1 秒闸门
+  check(!!had && edit?.hadBefore === true && edit.planeGoneMs !== null && edit.planeGoneMs <= 1000, 'D:改之前父页在发旧流;改被引用剪辑以后当场(≤ 1 秒)不再发旧流的平面(实测毫秒记在结果里)', out.edit);
+  check(edit?.heavyGoneMs !== null, 'D:随后那张卡不再判重(新身份还没钉重,照旧活渲;毫秒只记录)', out.edit);
   const withdrawn = await until('D:在线来源撤掉旧流', async () => { const d = await onlineDiag(pageA); return d && !(d.streams ?? []).some((x) => x.resultKey === key1) ? d : null; }, 15_000, 50);
-  check(!!withdrawn && (withdrawn.staleStreams ?? []).includes(sId), 'D:在线来源认出旧流过期、不再列它', withdrawn && { stale: withdrawn.staleStreams });
-  const live = await until('D:舞台上没有旧键的轨道,S 照旧活渲(不抑制、没有占位符)', async () => {
-    const s = await stageState(pageA, sId);
+  out.edit.withdrawn = withdrawn && { staleStreams: withdrawn.staleStreams, streams: (withdrawn.streams ?? []).map((s) => ({ clipId: s.clipId, resultKey: short(s.resultKey) })) };
+  check(!!withdrawn && (withdrawn.staleStreams ?? []).includes(vId), 'D:在线来源认出旧流过期(签名对不上,列进 staleStreams)、不再列它', out.edit.withdrawn);
+  const live = await until('D:舞台上没有旧键的轨道,那张卡照旧活渲(不抑制、没有占位符)', async () => {
+    const s = await stageState(pageA, vId);
     return s && !s.tracks.some((t) => t.key === key1) && s.clip.wrapper && !s.clip.suppressed && !s.clip.placeholder ? s : null;
   }, 20_000, 100);
-  out.edit.stage = live && { suppressed: live.clip.suppressed, placeholder: live.clip.placeholder, tracks: live.tracks.map(trackBrief) };
-  check(!!live, 'D:舞台上旧流的轨道关掉了,S 活渲着', out.edit.stage ?? (await stageState(pageA, sId))?.clip);
+  out.edit.stage = live && { flat: live.clip.flat, suppressed: live.clip.suppressed, placeholder: live.clip.placeholder, tracks: live.tracks.map(trackBrief) };
+  check(!!live, 'D:舞台上旧流的轨道关掉了,那张卡活渲着', out.edit.stage ?? (await stageState(pageA, vId))?.clip);
   await delay(800);
   await stageShot(pageA, 'after-edit-live');
-  const playOld = await playAndSample(pageA, sId, { from: 0.3, to: 1.3, key: key1 });
+  const playOld = await playAndSample(pageA, vId, { from: 0.3, to: 1.3, key: key1 });
   await store(pageA, `S.actions.pause(); return true;`);
   check(playOld.samples.length >= 4 && playOld.samples.every((s) => !s.tracks.some((t) => t.key === key1)), 'D:改动之后播放,旧流没有再贴上来',
     { samples: playOld.samples.length, old: playOld.samples.filter((s) => s.tracks.some((t) => t.key === key1)).length });
 
   /* ---------------------------------------------------------------- 6. E 新流 */
-  // 改过之后 S 的成本身份可能换了(含被引用剪辑的内容):新身份测出来、又没被判重时,同样钉重、刷新,切分方才会为它重产。
-  // 层表先换了就不用钉(新身份沿用了判重)
+  // 改过之后那张卡的成本身份换了(参数进成本键):新身份测出来、又没被判重时,同样钉重、刷新,切分方才会为它重产。
+  // 层表先换了就不用钉
   out.edit.newCostKeys = [];
-  await until('E:S 重新判重(层表换行,或新身份测出来后钉重)', async () => {
+  await until('E:那张卡重新判重(层表换行,或新身份测出来后钉重)', async () => {
     const x = await rowNow();
     if (x.row && x.row.contentKey !== row1.contentKey) return true;
-    const fresh = (await costRecords(pageA)).filter((r) => r.cutSegment && !keysBeforeEdit.includes(r.identityKey) && !r.pinnedHeavy).map((r) => r.identityKey);
+    const fresh = (await costRecords(pageA)).filter((r) => r.identityKey && !keysBeforeEdit.includes(r.identityKey) && !r.pinnedHeavy).map((r) => r.identityKey);
     if (fresh.length) {
       out.edit.newCostKeys.push(...fresh.map(short));
       await costRecords(pageA, fresh);
-      await enter(pageA, 'cso-jia(刷新,S 的新身份钉重生效)');
+      await enter(pageA, 'cso-jia(刷新,那张卡的新身份钉重生效)');
       await pauseAt(pageA, DURATION + 1);
     }
     return null;
@@ -500,63 +527,51 @@ try {
   const row2 = got2?.row ?? null;
   const key2 = got2?.cand?.resultKey ?? null;
   out.reissue = { ms: got2 ? Date.now() - tNew : null, row: briefRow(row2) };
-  say('cut.reissued', out.reissue);
-  if (check(!!row2 && key2 !== key1 && row2.streamKind === 'cut' && row2.inputSig !== row1.inputSig && /^s1-/.test(row2.inputSig ?? ''),
-    'E:层表换成新的一行(内容键、结果键、输入签名都换了;仍带 streamKind: cut)', { old: briefRow(row1), now: briefRow(row2) })) {
+  say('flat.reissued', out.reissue);
+  if (check(!!row2 && key2 !== key1 && soloRowOk(row2, vId) && row2.inputSig !== row1.inputSig,
+    'E:层表换成新的一行(内容键、结果键、输入签名都换了;仍是普通单卡流,没有 streamKind)', { old: briefRow(row1), now: briefRow(row2) })) {
     await pauseAt(pageA, 0.5);
-    const ready2 = await readyOf(key2, 'E:甲认出新流、整段就绪、父页判重并发新流的平面');
-    out.ready2 = ready2 && { ready: ready2.s.ready, staleStreams: ready2.d.staleStreams, staleCut: ready2.p.staleCut };
-    check(!!ready2 && ready2.d.staleStreams.length === 0 && ready2.p.staleCut.length === 0, 'E:新流就绪,没有过期的', out.ready2);
-    const play2 = await playAndSample(pageA, sId, { from: 0.3, to: 1.9, key: key2 });
+    const ready2 = await readyOf(vId, key2, 'E:甲认出新流、整段就绪、父页判重并发新流的平面', LAST_SEGMENT + 1);
+    out.ready2 = ready2 && { ready: ready2.s.ready, staleStreams: ready2.d.staleStreams, plane: planeOf(ready2.p, vId) };
+    check(!!ready2 && ready2.d.staleStreams.length === 0, 'E:新流就绪,没有过期的', out.ready2);
+    const play2 = await playAndSample(pageA, vId, { from: 0.3, to: 1.9, key: key2 });
     await stageShot(pageA, 'play-v2');
     await store(pageA, `S.actions.pause(); return true;`);
     out.play2 = checkPlaying('E 甲·新流', play2, key2);
   }
 
-  /* ---------------------------------------------------------------- 6b. G 长剪辑段:整段产出就贴,不必等播放头走过整段 */
+  /* ---------------------------------------------------------------- 6b. G 长剪辑段:里面的卡同样各自出流、贴得上 */
   const beforeL = (await stable(pageA, 0)) ?? [];
   const lId = await store(pageA, `const c = S.actions.addCutSegment(args[0], args[1], { newTrackIndex: 0, duration: args[2] }); return c.id;`, cuts.mid, L_START, L_LEN);
+  const vlId = flatIdOf(lId);
   const afterL = (await stable(pageA, beforeL.length + 1)) ?? [];
   const freshL = afterL.filter((r) => r.identityKey && !beforeL.some((b) => b.identityKey === r.identityKey));
-  const lKeys = (freshL.some((r) => r.cutSegment) ? freshL.filter((r) => r.cutSegment) : freshL).map((r) => r.identityKey);
-  out.long = { lId, costs: freshL.map((r) => ({ key: short(r.identityKey), cutSegment: r.cutSegment })) };
-  if (check(lKeys.length >= 1, 'G:长剪辑段 L 的成本记录认出来了', out.long)) {
+  const lKeys = freshL.map((r) => r.identityKey);
+  out.long = { lId, vlId, costs: freshL.map((r) => ({ key: short(r.identityKey), stepMs: r.stepMs })) };
+  if (check(lKeys.length >= 1, 'G:长剪辑段 L 里那张卡的成本记录认出来了(露出窗口长短不同,和 S 里那张不是同一个成本键)', out.long)) {
     await costRecords(pageA, lKeys);
-    await enter(pageA, 'cso-jia(刷新,L 钉重生效)');
+    await enter(pageA, 'cso-jia(刷新,L 里那张卡钉重生效)');
     await pauseAt(pageA, DURATION + 1);
-    const rowOf = async (id) => ((await content.get('snapshot-manifest', layerKey).catch(() => null))?.body?.streams ?? []).find((r) => r.topClipId === id) ?? null;
     const tL = Date.now();
-    const gotL = await until('G:层表里出现 L 的流,流清单每段都齐', async () => {
-      const row = await rowOf(lId);
-      if (!row) return null;
-      for (const [from, to] of spansOf(row)) {
-        const m = await getManifest(row.candidates[0].resultKey, from, to);
-        if (!m || Object.keys(m.segments ?? {}).length !== to - from + 1) return null;
-      }
-      return row;
-    }, 600_000, 1000);
+    const gotL = await waitRow('G:层表里出现 L 里那张卡的流,流清单每段都齐', null, vlId, false, 600_000);
     out.long.produceMs = gotL ? Date.now() - tL : null;
-    out.long.row = briefRow(gotL);
-    if (check(!!gotL && gotL.streamKind === 'cut' && gotL.lastSegment === L_LAST_SEGMENT && gotL.originFrame === L_FIRST, `G:L 那一行带 streamKind: cut,分段 0～${L_LAST_SEGMENT}`, out.long.row)) {
-      const keyL = gotL.candidates[0].resultKey;
-      // 播放头停在 L 的头上:就绪按清单算,整段;字节只取了窗口里的
+    out.long.row = briefRow(gotL?.row ?? null);
+    if (check(!!gotL && soloRowOk(gotL.row, vlId) && gotL.row.lastSegment === L_LAST_SEGMENT && gotL.row.originFrame === L_FIRST,
+      `G:L 里那张卡一行普通单卡流(没有 streamKind),第一帧 ${L_FIRST},分段 0～${L_LAST_SEGMENT}`, out.long.row)) {
+      const keyL = gotL.cand.resultKey;
+      check(keyL !== key2, 'G:L 里那张卡的流和 S 里那张不是同一条(各实例各一行)', { keyL: short(keyL), key2: short(key2) });
+      // 播放头停在 L 的头上:在线来源照普通单卡流按窗口取字节,窗口里的分段就绪就判重、发平面
       await pauseAt(pageA, L_START + 0.05);
-      const readyL = await until('G:在线来源认 L 整段就绪、父页判重并发它的流平面', async () => {
-        const d = await onlineDiag(pageA);
-        const s = (d?.streams ?? []).find((x) => x.clipId === lId);
-        if (!(s && s.resultKey === keyL && s.ready === L_LAST_SEGMENT + 1)) return null;
-        const p = await parentDiag(pageA);
-        return p?.heavy.includes(lId) && planeOf(p, lId)?.key === short(keyL) ? { s, p } : null;
-      }, 120_000, 300);
-      out.long.ready = readyL && { ready: readyL.s.ready, bytes: readyL.s.bytes, segments: L_LAST_SEGMENT + 1 };
-      check(!!readyL && readyL.s.bytes < L_LAST_SEGMENT + 1, 'G:L 整段就绪(按已产出的分段),字节只取了播放头附近的几段', out.long.ready);
-      const playL = await playAndSample(pageA, lId, { from: L_START + 0.05, to: L_START + 1.6, key: keyL });
+      const readyL = await readyOf(vlId, keyL, 'G:在线来源认出 L 里那张卡的流(窗口里的分段就绪)、父页判重并发它的流平面', 1);
+      out.long.ready = readyL && { ready: readyL.s.ready, segments: L_LAST_SEGMENT + 1, staleStreams: readyL.d.staleStreams, plane: planeOf(readyL.p, vlId) };
+      check(!!readyL && readyL.d.staleStreams.length === 0, 'G:L 里那张卡的流就绪,没有过期的', out.long.ready);
+      const playL = await playAndSample(pageA, vlId, { from: L_START + 0.05, to: L_START + 1.6, key: keyL });
       await stageShot(pageA, 'play-long');
       await store(pageA, `S.actions.pause(); return true;`);
       const firstT = playL.drawn[0]?.t ?? null;
       out.long.play = { samples: playL.samples.length, drawn: playL.drawn.length, firstDrawnT: firstT, track: trackBrief(playL.drawn.at(-1)?.clip.stream) };
-      check(playL.drawn.length >= 6 && firstT !== null && firstT <= L_START + 1.5, 'G:开播 1.5 秒之内 L 就贴着流在画(不必等播放头走过整段)', out.long.play);
-      check(playL.drawn.every((x) => (x.clip.stream.errors ?? 0) === 0), 'G:L 的流播放器没有报错', out.long.play);
+      check(playL.drawn.length >= 6 && firstT !== null && firstT <= L_START + 1.5, 'G:开播 1.5 秒之内 L 里那张卡就贴着流在画', out.long.play);
+      check(playL.drawn.every((x) => (x.clip.stream.errors ?? 0) === 0 && !!x.clip.flat), 'G:L 里那张卡的流播放器没有报错、画在嵌套包裹层里', out.long.play);
     }
   }
 
