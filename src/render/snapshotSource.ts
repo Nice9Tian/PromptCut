@@ -331,6 +331,11 @@ export interface OnlineStream {
   segmentsPerTask: number;
   /** 生成这条流的项目输入的签名(`streamInputSig.mjs`);页面算的对不上就不播。没有这一项照播 */
   inputSig?: string | null;
+  /**
+   * 剪辑段级的流(层表那一行带 `streamKind: 'cut'`,只认「单卡、包裹层坐标」的行):就绪消息另带 `streamKind: "cut"` 和 `inputSig`,
+   * 父页 `cutStreamHeavy` 按 store 里当前的项目比签名,与桌面版同一个判据(被引用剪辑改过、旧流签名对不上就不贴)。
+   */
+  streamKind?: "cut";
 }
 
 export interface LayerMap {
@@ -440,8 +445,9 @@ export function parseLayerStreams(raw: unknown): OnlineStream[] {
     }
     if (!candidates.length) continue;
     const topClipId = str(r.topClipId) ? r.topClipId : clipIds[clipIds.length - 1];
+    const cut = r.streamKind === "cut" && kind === "card" && plane === "local" && clipIds.length === 1;
     out.push({ topClipId, clipIds, kind, plane, contentKey: r.contentKey, candidates, originFrame, firstSegment, lastSegment, segmentsPerTask,
-      ...(str(r.inputSig) ? { inputSig: r.inputSig } : {}) });
+      ...(str(r.inputSig) ? { inputSig: r.inputSig } : {}), ...(cut ? { streamKind: "cut" as const } : {}) });
   }
   return out;
 }
@@ -1407,11 +1413,14 @@ export class OnlineSnapshotSource implements SnapshotSource {
    * 依赖下层的流另带两项(同桌面预渲染进程发的那一层,`server/frame-stream.mjs` 的 `belowLayerMark`):`streamKind: "below"` ——
    * 父页据此发 `plane: "stage"` 的流平面(`src/editor/snapshotFeed.ts` 的 `streamLayers`),舞台把它挂在舞台根下、按舞台坐标贴;
    * `inputSig` —— 层表那一行带的输入签名,父页按 store 里当前的项目再比一次(项目一改当场撤,不等本来源收到新项目重发就绪)。
+   * 剪辑段级的流(层表那一行带 `streamKind: 'cut'`)同样带这两项,`streamKind` 是 `"cut"`(照单卡流贴在包裹层里)。
    */
   private streamMessage(s: ChosenStream): ReadyMessage {
     return { type: "layer", clipId: s.row.topClipId, kind: "stream", key: s.resultKey, ranges: framesToRanges(this.streamReady(s)),
       originFrame: s.row.originFrame, ...(s.row.kind === "group" ? { groupClipIds: [...s.row.clipIds] } : {}),
-      ...(s.row.kind === "below" ? { streamKind: "below" as const, ...(s.row.inputSig ? { inputSig: s.row.inputSig } : {}) } : {}) };
+      ...(s.row.kind === "below" ? { streamKind: "below" as const, ...(s.row.inputSig ? { inputSig: s.row.inputSig } : {}) } : {}),
+      // 剪辑段级的流:同桌面预渲染进程发的层,带 `streamKind: "cut"` 与输入签名(父页 `cutStreamHeavy` 比它)
+      ...(s.row.streamKind === "cut" ? { streamKind: "cut" as const, ...(s.row.inputSig ? { inputSig: s.row.inputSig } : {}) } : {}) };
   }
 
   /** 流的清单或字节变了:记一笔、重发就绪、叫宿主重投(流平面要带上新到的字节) */
