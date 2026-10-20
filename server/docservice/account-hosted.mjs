@@ -129,10 +129,25 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       userId: `account:${principal.accountId}@run:${principal.runId}`, deviceId: principal.runId,
       deviceName: principal.runId, creator: false };
   }
+  /** 云端 Agent 服务的只发布连接能不能进这个项目:项目在、渲染节点开着、「生成轨道流」开着(`product/rendering.md`「谁产流与托管方开关」) */
+  function publishRefusal(project) {
+    if (!project || project.status !== 'active') return 'no-project';
+    const state = accountRenderState(project);
+    return state.enabled && state.streams ? null : 'service-disabled';
+  }
   async function resolveService(ticket) {
     const entry = tickets.get(ticket);
     if (!entry || entry.kind !== 'service' || entry.expiresAt <= now()) fail(401, 'ticket-expired');
     const project = ledger.read().projects[entry.projectId];
+    if (entry.purpose === 'publish') {
+      // 只能发布预渲染重试计划的连接(云端 Agent 服务的服务身份):渲染节点与「生成轨道流」都开着才进得来
+      const refused = publishRefusal(project);
+      if (refused) fail(refused === 'no-project' ? 404 : 403, refused);
+      return { userId: `service:${entry.service}@${entry.deviceId ?? entry.service}`, tenantId: entry.projectId, projectId: entry.projectId,
+        scope: 'service', service: entry.service, serviceKid: entry.serviceKid, serviceRole: entry.service, role: entry.service,
+        purpose: 'publish', realm: 'account', identityVersion: 2,
+        deviceId: entry.deviceId ?? entry.service, deviceName: entry.deviceName ?? entry.deviceId ?? entry.service };
+    }
     if (!project || project.status !== 'active') fail(404, 'no-project');
     if (project.hosted?.[entry.service] !== true) fail(403, 'service-disabled');
     return {
@@ -211,6 +226,8 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       if (event.projectId && event.projectId !== principal.tenantId) continue;
       if (event.accountIds?.length && !event.accountIds.includes(principal.accountId)) continue;
       if (event.loginIds?.length && !event.loginIds.includes(principal.loginId)) continue;
+      // 只能发布的连接不是任务连接:没有任务授权可查,开关与项目状态由逐消息的 gate 管
+      if (principal.purpose === 'publish') continue;
       if (principal.role === 'agent' || principal.service === 'agent') { runs.push(conn); continue; }
       // Agent-off revokes tasks, not the member's page login/project membership.
       if (event.service === 'agent' && event.enabled === false) continue;
@@ -335,10 +352,17 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     hasServiceTicket(token) {
       return tickets.get(token)?.kind === 'service';
     },
-    issueServiceTicket({ service: sName, serviceKid, deviceId, deviceName, projectId }) {
+    issueServiceTicket({ service: sName, serviceKid, deviceId, deviceName, projectId, purpose }) {
       const project = ledger.read().projects[projectId];
-      if (!project || project.status !== 'active') fail(404, 'no-project');
-      if (project.hosted?.[sName] !== true) fail(403, 'service-disabled');
+      if (purpose !== undefined) {
+        // 只用来发布预渲染重试计划的票据:只发给云端 Agent 服务,项目在、渲染节点与「生成轨道流」都开着
+        if (purpose !== 'publish' || sName !== 'agent') fail(403, 'forbidden');
+        const refused = publishRefusal(project);
+        if (refused) fail(refused === 'no-project' ? 404 : 403, refused);
+      } else {
+        if (!project || project.status !== 'active') fail(404, 'no-project');
+        if (project.hosted?.[sName] !== true) fail(403, 'service-disabled');
+      }
       const ticket = randomBytes(32).toString('base64url');
       const expiresAt = now() + 2 * 60_000;
       tickets.set(ticket, {
@@ -348,6 +372,7 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
         deviceId: deviceId ?? sName,
         deviceName: deviceName ?? deviceId ?? sName,
         projectId,
+        ...(purpose === 'publish' ? { purpose: 'publish' } : {}),
         expiresAt,
       });
       return { ticket, exp: expiresAt };
@@ -402,6 +427,14 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
         if (project.hosted?.render !== true) return 'service-disabled';
         return null;
       }
+      if (principal?.purpose !== undefined) {
+        // 云端 Agent 服务只能发布的连接:消息种类由 service-gate 的 SERVICE_PUBLISH_ALLOW 管(只许带片段清单的计划);
+        // 这里只放行本项目、开关还开着的。不走任务授权,也不给它任务连接的任何别的权限
+        if (principal.purpose !== 'publish' || principal.service !== 'agent' || principal.scope !== 'service') return 'forbidden';
+        if (msg?.projectId !== undefined && msg.projectId !== principal.tenantId) return 'project-mismatch';
+        if (type === 'task.publish' && (!Array.isArray(msg?.tasks) || msg.tasks.some(task => task?.source?.projectId !== principal.tenantId))) return 'project-mismatch';
+        return publishRefusal(ledger.read().projects[principal.tenantId]);
+      }
       if (type.startsWith('shared.') || type === 'auth.ticket' || type.startsWith('hosted.') || type.startsWith('service.')) return 'forbidden';
       if (msg?.projectId !== undefined && msg.projectId !== principal.tenantId) return 'project-mismatch';
       if (type === 'selection.set' || type === 'selection.clear') {
@@ -423,6 +456,10 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
     },
     async resumeGate(principal) {
       if (principal?.realm !== 'account') return null;
+      if (principal?.purpose !== undefined) {
+        if (principal.purpose !== 'publish' || principal.service !== 'agent' || principal.scope !== 'service') return 'forbidden';
+        return publishRefusal(ledger.read().projects[principal.tenantId]);
+      }
       if (principal?.service === 'render') {
         const project = ledger.read().projects[principal.tenantId];
         if (!project || project.status !== 'active') return 'no-project';
