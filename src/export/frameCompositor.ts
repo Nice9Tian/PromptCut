@@ -162,6 +162,9 @@ export function pasteLayer(wrap: HTMLElement, layer: FrameLayer): boolean {
   return true;
 }
 
+/** 跨源导出舞台一条请求(装项目、预热、出一帧)最多等多久(真毫秒);只为防卡死,放宽到不会因机器慢而误报 */
+export const EXPORT_STAGE_RPC_TIMEOUT_MS = 120_000;
+
 export class ExportCompositor {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -203,11 +206,23 @@ export class ExportCompositor {
     }
   }
 
+  /**
+   * 给跨源导出舞台发一条请求、等它回。导出舞台没回(页面卡住、崩溃、初始化等不到头)时不无限等:`EXPORT_STAGE_RPC_TIMEOUT_MS`
+   * 真毫秒后报错;取消导出时当场拒掉。
+   */
   private sendRpc<T = any>(msg: Record<string, unknown>, transfer?: Transferable[]): Promise<T> {
     this.throwIfAborted();
     const id = ++this.rpcSeq;
     return new Promise<T>((resolve, reject) => {
-      this.pendingRpc.set(id, { resolve, reject });
+      const signal = this.opts.signal;
+      const settle = () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); this.pendingRpc.delete(id); };
+      const onAbort = () => { settle(); reject(Object.assign(new Error("已取消"), { cancelled: true })); };
+      const timer = setTimeout(() => {
+        settle();
+        reject(new Error(`导出舞台 ${Math.round(EXPORT_STAGE_RPC_TIMEOUT_MS / 1000)} 秒没有回应(${String(msg.type)})`));
+      }, EXPORT_STAGE_RPC_TIMEOUT_MS);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pendingRpc.set(id, { resolve: (v) => { settle(); resolve(v); }, reject: (e) => { settle(); reject(e); } });
       try {
         const w = this.frameEl.contentWindow;
         if (!w) throw new Error("导出舞台 iframe 已脱落");
@@ -217,7 +232,7 @@ export class ExportCompositor {
           w.postMessage({ id, ...msg }, "*");
         }
       } catch (e) {
-        this.pendingRpc.delete(id);
+        settle();
         reject(e);
       }
     });
@@ -591,7 +606,7 @@ export class ExportCompositor {
         window.removeEventListener("message", this.messageListener);
         this.messageListener = null;
       }
-      for (const handler of this.pendingRpc.values()) {
+      for (const handler of [...this.pendingRpc.values()]) {
         handler.reject(new Error("导出合成器已关闭"));
       }
       this.pendingRpc.clear();

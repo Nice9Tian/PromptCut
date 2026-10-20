@@ -23,10 +23,16 @@ import { demoTimeline } from "./demo";
 import { createGlHost, type GlHost } from "./render/gl/glHost";
 import { grabCanvasPixels } from "./render/gl/canvasGrab";
 import { cardExecGate, markIsolatedStageDocument, noteMediaPolicy } from "./online/isolation/execGate";
+import { stageGuardBooted } from "./online/isolation/stageGuard";
+import { waitReal } from "./export/realClock";
 import { pageCssText, pasteLayer, sceneToSvg } from "./export/frameCompositor";
 import { withTicket } from "./export/ticketRenewal";
 import type { FrameLayer } from "./export/exportLayers";
 import "./cards";
+
+/** 导出页初始化:等舞台自检、等项目装好的时限(真毫秒) */
+const EXPORT_GATE_WAIT_MS = 10_000;
+const EXPORT_LOAD_WAIT_MS = 30_000;
 
 // 只要进了导出视图就把页面时钟量化到导出帧(见 exportClock.ts),必须早于任何卡片挂载
 if (new URLSearchParams(location.search).has("export")) installExportClock();
@@ -527,9 +533,10 @@ export default function ExportView() {
         try {
           markIsolatedStageDocument();
           noteMediaPolicy({ ticket: null, cardExec: true });
-          const tGate = performance.now();
-          while (!cardExecGate().allowed && performance.now() - tGate < 10000) {
-            await new Promise((r) => setTimeout(r, 20));
+          // 等舞台自检出结果,最多 10 秒(真时间:导出页的 performance.now / Date.now 被导出时钟钉住,`export/realClock.ts`)。
+          // 只有装了舞台加固的文档(在线构建的 stage.html)才会有自检结果;桌面运行环境、开发服务器上的导出页没有自检,闸门一直是 checking,不等
+          if (stageGuardBooted() && cardExecGate().reason === "checking") {
+            await waitReal(() => cardExecGate().reason !== "checking", EXPORT_GATE_WAIT_MS);
           }
           if (data.syncedCards && Array.isArray(data.syncedCards)) {
             setSyncedUserCards(data.syncedCards);
@@ -553,10 +560,8 @@ export default function ExportView() {
             await stageRuntimeRef.current.setBundles(list);
           }
           await window.__pcLoadProject!(data.project);
-          const t0 = performance.now();
-          while (!window.__pcReady || typeof window.__pcSetT !== "function") {
-            if (performance.now() - t0 > 30000) throw new Error("导出舞台装配项目超时");
-            await new Promise((r) => setTimeout(r, 20));
+          if (!(await waitReal(() => !!window.__pcReady && typeof window.__pcSetT === "function", EXPORT_LOAD_WAIT_MS))) {
+            throw new Error("导出舞台装配项目超时");
           }
           reply({ type: "pc-export-init-result", ok: true });
         } catch (e) {
