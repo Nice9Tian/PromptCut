@@ -28,7 +28,6 @@
  */
 import { cardJson } from "../kernel/cardGraph.mjs";
 import { hashString } from "./changedClips.mjs";
-import { cutSegmentContent } from "../kernel/cutIdentity.mjs";
 
 /** 签名算法的版本;改了进签名的内容就加一 */
 export const LAYER_INPUT_SIG_VERSION = 1;
@@ -94,8 +93,8 @@ export function clipInputs(project, clipId) {
       duration: (Number(clip.end) || 0) - start,
       phase: phaseOf(start, fps),
       node: typeof clip.nodeId === "string" && clip.nodeId ? describeNode(clip.nodeId, inner, start) : undefined,
-      // 剪辑段:被引用剪辑(任意深度)的内容、用到的素材与节点、效果库条目(`kernel/cutIdentity.mjs`)。不是剪辑段的片段没有这一项,签名不变
-      ...(typeof clip.cutId === "string" && clip.cutId ? { cut: cutSegmentContent(project, clip) } : null),
+      // 剪辑段里摊出来的卡(`kernel/cutFlatten.mjs`):截了多少头、经过哪几层段。顶层片段没有这一项,签名不变
+      ...(clip.flat && typeof clip.flat === "object" ? { flat: clip.flat } : null),
     };
   };
 

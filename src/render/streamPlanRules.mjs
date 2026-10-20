@@ -21,6 +21,8 @@ export function streamEligible(control, clip, track) {
   if (!control?.clipId || !clip || !track) return false;
   if (track.hidden || track.sourceOnly) return false;
   if (!clip.cardId) return false;
+  // 剪辑段里摊出来的卡单独成流(`soloStreamKind` 的 `'flat'`),不并进组流
+  if (clip.flat) return false;
   const compositing = control.capabilities?.compositing ?? control.compositing;
   if (compositing !== 'independent') return false;
   if (frame3d(clip.frame)) return false;
@@ -78,11 +80,11 @@ export function graphCardWithInputs(project, clip) {
 export function soloStreamKind(control, clip, track, project) {
   if (!control?.clipId || !clip || !track) return null;
   if (track.hidden || track.sourceOnly) return null;
-  // 剪辑段(`src/kernel/cutSegments.ts` 的 `withCutSegmentOutputs`):整段当一张卡,单独一条单卡流(见下面 `'cut'`)
-  if (typeof clip.cutId === 'string' && clip.cutId) return Number.isInteger(control.count) && control.count > 0 ? 'cut' : null;
   if (!clip.cardId) return null;
   if (!(Number.isInteger(control.count) && control.count > 0)) return null;
   const compositing = control.capabilities?.compositing ?? control.compositing;
+  // 剪辑段里摊出来的卡(`kernel/cutFlatten.mjs`,片段带 `flat`):独立卡单独成流(见上 `'flat'`),别的不产流
+  if (clip.flat) return compositing === 'independent' ? 'flat' : null;
   if (compositing === 'sourceDependent') return 'source';
   if (compositing === 'independent') return frame3d(clip.frame) ? 'spatial' : null;
   if (compositing === 'belowDependent') return null;
@@ -115,6 +117,8 @@ export function belowStreamEligible(control, clip, track, rules = BELOW_STREAM_R
   if (!control?.clipId || !clip || !track) return false;
   if (track.hidden || track.sourceOnly) return false;
   if (!clip.cardId) return false;
+  // 剪辑段里摊出来的卡不出依赖下层的流(v1:嵌套场景里的毛玻璃照旧活渲)
+  if (clip.flat) return false;
   const spatial = frame3d(clip.frame);
   if (spatial && rules?.frame3d !== true) return false;
   const compositing = control.capabilities?.compositing ?? control.compositing;
