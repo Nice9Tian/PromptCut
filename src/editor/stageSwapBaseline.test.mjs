@@ -25,7 +25,7 @@ mock.module(srcUrl("store/project.ts"), { exports: { getState: () => state } });
 mock.module(srcUrl("editor/stageJobs.ts"), { exports: { runBackJob: async (_k, run) => run({ stage: bridge.backStage(), signal: new AbortController().signal }) } });
 mock.module(srcUrl("editor/planDispatch.ts"), { exports: { currentPlan: () => ({ segments: [{ fromSec: 0, toSec: 1000, heavy: new Set(["h"]) }] }), currentCosts: () => costs, currentTuning: () => undefined, sendPlanTo: async () => {} } });
 mock.module(srcUrl("editor/costIdentity.ts"), { exports: { clipIdentityOf: () => ({ identityKeys, frameModes: {} }) } });
-mock.module(srcUrl("editor/snapshotFeed.ts"), { exports: { clearSettled: () => {}, deliverSnapshots: async () => 0, markBaselineReset: () => {}, markAllSettled: () => {}, setExtraSuppressed: () => {}, suppressedAt: () => [], streamPlanesAt: () => [] } });
+mock.module(srcUrl("editor/snapshotFeed.ts"), { exports: { clearSettled: () => {}, cutStreamHeavy: () => false, deliverSnapshots: async () => 0, markBaselineReset: () => {}, markAllSettled: () => {}, setExtraSuppressed: () => {}, suppressedAt: () => [], streamPlanesAt: () => [] } });
 mock.module(srcUrl("editor/demote.ts"), { exports: { onStageDemote: async () => ({ ok: true }) } });
 
 const bridge = await import(srcUrl("editor/stageBridge.ts"));

@@ -1,5 +1,5 @@
 /**
- * 剪辑段参与测量与预渲染(`mechanism/rendering.md`「剪辑段」)的单测。跑:npm test -- src/kernel/cutSegmentPrerender.test.mjs
+ * 剪辑段参与测量与预渲染(`mechanism/rendering.md`「剪辑段」)的单测。跑:npm test -- server/test/cut-segment-prerender.test.mjs
  *
  * 钉死:
  *   - `withCutSegmentOutputs`:没有剪辑段时原样返回同一个图;有剪辑段时末尾补节点与输出(能力表、预卷、内容身份、里面各卡的源码版本);
@@ -12,15 +12,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createEmptyProject } from "./project.ts";
-import { projectCardGraph } from "./cardGraph.mjs";
-import { withCutSegmentOutputs, setCutClipFrameMode, isCutSegmentNode, CUT_SEGMENT_CARD } from "./cutSegments.ts";
-import { cutSegmentContent, cutSegmentHasVisualMedia } from "./cutIdentity.mjs";
-import { clipCostIndex } from "../render/pipelinePlan.mjs";
-import { clipInputSig } from "../render/layerInputSig.mjs";
-import { soloStreamKind } from "../render/streamPlanRules.mjs";
-import { CardFrameCache } from "../../server/card-cache.mjs";
-import { planStreams } from "../../server/frame-stream.mjs";
+import { createEmptyProject } from "../../src/kernel/project.ts";
+import { projectCardGraph } from "../../src/kernel/cardGraph.mjs";
+import { withCutSegmentOutputs, setCutClipFrameMode, isCutSegmentNode, CUT_SEGMENT_CARD } from "../../src/kernel/cutSegments.ts";
+import { cutSegmentContent, cutSegmentHasVisualMedia } from "../../src/kernel/cutIdentity.mjs";
+import { clipCostIndex } from "../../src/render/pipelinePlan.mjs";
+import { clipInputSig } from "../../src/render/layerInputSig.mjs";
+import { soloStreamKind } from "../../src/render/streamPlanRules.mjs";
+import { CardFrameCache } from "../card-cache.mjs";
+import { planStreams } from "../frame-stream.mjs";
 
 const track = (id, clips, extra = {}) => ({ id, name: id, clips, ...extra });
 const card = (id, cardId, start, end, extra = {}) => ({ id, cardId, start, end, params: {}, ...extra });
