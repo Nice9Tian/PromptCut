@@ -135,6 +135,8 @@ test("CO-1 层表那一行带 streamKind: cut 与签名:就绪消息照桌面的
   assert.deepEqual(last, { type: "layer", clipId: "S", kind: "stream", key: rk, ranges: [[0, LAST_SEG]], originFrame: ORIGIN, streamKind: "cut", inputSig: row.inputSig },
     "与桌面预渲染进程发的层同形(`belowLayerMark`)");
   assert.equal(cutStreamHeavy(p, clipS(p), T), true);
+  assert.equal(streamLayerOf(p)?.streamKind, "cut", "诊断里就绪的层带 streamKind");
+  assert.deepEqual(snapshotFeedDebug({ project: p, t: T, playing: false }).staleCut, []);
   for (const playing of [true, false]) {
     const f = planFeed({ project: p, t: T, playing });
     assert.deepEqual(f.heavy, ["S"], `playing=${playing}`);
@@ -158,6 +160,7 @@ test("CO-2 被引用剪辑改了:父页当场不贴旧流、照旧活渲;在线�
   // store 里已经是新项目,在线来源还没收到(`setInputs` 没调):就绪索引里还是旧流,父页比签名,当场不贴
   assert.ok(rk0.startsWith(streamLayerOf(p1)?.key), "就绪索引里还是旧流那一层(调试视图的键截短)");
   assert.equal(cutStreamHeavy(p1, clipS(p1), T), false, "旧流签名对不上:不贴");
+  assert.deepEqual(snapshotFeedDebug({ project: p1, t: T, playing: false }).staleCut, ["S"], "诊断里认出过期的剪辑段流");
   for (const playing of [true, false]) {
     const head = { project: p1, t: T, playing };
     const f = planFeed(head);
