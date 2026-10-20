@@ -71,3 +71,30 @@
 1. **账号项目的页面拿不到「Agent 操作」的撤销记录(A7)**:`src/editor/sync/syncManager.ts` 账号路径两处 `link.send({ type: 'events.list' })`(约第 1247、1358 行)不带 `projectId`,文档服务事件模块 `server/docservice/modules/events.mjs` 的 `list` 先 `checkProjectId(msg.projectId)`,回 `error bad-message「projectId 不合法」`。证据(探针 `PC_PROBE_WSLOG=1` 记的重开页面 WebSocket 帧):`[{"sent":"events.list","projectId":null},{"type":"error","reason":"bad-message","detail":"projectId 不合法"}]`。后果:创建者重新打开(或换设备)后,「Agent 操作」里没有「撤销这步」;只有对话进行时开着的页面靠实时 `events.event` 才有(所以 cloud-agent-ui-probe 的 O1 能过)。建议:两处补 `projectId: options.projectId`(与本机路径第 724 行一致)。
 2. **账号项目的成员列表不显示「〈创建者〉的云端 Agent」(B1)**:发起方离线、云端 Agent 在跑时,bob 页面成员按钮是「成员：1 人 · Agent：0 个」,没有「离线，Agent 在跑」(语义 `product/agent.md` 第 59 行、`mechanism/agent.md` 第 93、175 行)。原因(读代码):`server/docservice/account-hosted.mjs` `resolveRun` 给任务连接的身份是 `userId: account:<账号>@run:<runId>`、没有 `username`,`modules/shared.mjs` `devicesOf` 按 `userId` 聚合,于是任务连接单独成一行、对不上创建者那一行,署名也取不到成员名。截图 `S-1-bob-watching.png`。
 - 观察(不算缺陷,记下):账号模式点「停止」后,气泡写「云端 Agent 服务中断,这一轮没有做完…」(任务进程被强制结清);历史列表里正在跑的对话标 idle。
+3. **账号模式的出错原因没有照语义写进对话(E1、E2、E3)**(`product/agent.md` 第 42 行「出错留痕」):
+   - E1 模型调用失败:气泡写「上游接口 500(探针注入)」,没有「模型调用失败」;历史列表这个对话标 `idle`、没有「出错」(账本里这一轮 `terminalOutcome.status: failed`)。
+   - E2 额度用尽:气泡只写代号 `quota-exceeded`,没有「额度已用完(已用 N / 上限 M)」;再发一条没有被明确拒绝(没有 `cloud-notice`,也没有带「额度」的回复);那一刻账本里这个对话还是一轮在跑(`grant: active`),有一次因此拖住了紧接着的 E3(「E3:这一轮开始并有写入」等不到)。原因的文字在 `server/agent/service/gate.mjs` 第 143 行有,账号路径(`account-runner.mjs` 第 319 行 `fail(429, code)`)没带出来。
+   - E3 创建者关「云端 Agent」:AI 栏横幅写「项目创建者已关闭云端 Agent。」,账本记 `interrupted / agent-disabled`,但对话气泡里没有任何原因(`outcome`、`error` 都是空)。
+
+### 断言改前改后(按现行语义;只改进入方式、找元素与等待的不列)
+
+| 编号 | 改前 | 改后 | 依据 |
+|---|---|---|---|
+| X0 → X1(在线各步) | 创建者在桌面版页面建口令式云端项目;桌面版 AI 栏多了「云端」、本机驱动仍是缺省 | 账号组合起来、三方代码版本一致;创建者在在线页面打开「生成轨道流」(直接确认,无口令);「云端 Agent」一行勾着、可改;在线页面接入方式只有「云端」且选中;第三个账号经项目链接加入 | `product/hosting.md` 云端项目一律走账号;在线构建只认账号项目 |
+| A6(online) | 不变 | 不变(provider === cloud) | — |
+| B1 | 桌面版发起后结束桌面版进程 | 在线页面发起后结束浏览器进程;其余(改动一条条出现、成员列表里「〈创建者〉的云端 Agent」、本人不在线)不变 | 无头 dev server 页面进不了账号项目 |
+| B2 | 重新打开桌面版:AI 栏仍是本机驱动、出现「云端有一个对话正在进行」横幅,点「接上看看」;记录里 `reason: stopped` | 换一个浏览器进程重新打开在线页面:接入方式是「云端」,从历史里点开这个对话,接上后看得到它还在跑、工具调用接着增加;点「停止」后停下,云端记下这一轮已不在跑,没有说出最后那句,项目不再变 | 在线构建没有本机驱动与那条横幅;账号模式的停止由「结清」收口(任务进程被强制关),没有旧的 `reason: stopped` 字段 |
+| B3 | 「是已停止的」看 `outcome === 'aborted'` | 看「不在跑、没有最后那句」;另一台设备是第三个浏览器进程 | 账号模式的界面消息没有 `aborted` 标记(同 cloud-agent-ui-probe O2) |
+| K2 | 渲染节点诊断计数 `failed` 增量为 0、`completed + dedup` 增量 > 0 | 工作进程逐任务收尾行里这个项目做完的任务数 > 0,收尾行里没有失败 | 账号组合里工作进程会重起,诊断计数从零开始,前后相减出现负数(实测 -2) |
+| UC0(新) | — | 第二个创建者在在线页面新建账号项目:「云端 Agent」缺省勾上,打开渲染节点与「生成轨道流」,渲染服务看到 | 用户卡一步原来由探针直接建口令式项目 |
+| UC2 | 舞台上这张用户卡「快照层在」 | 「轨道流画出了帧」(或旧快照层),没有占位 | 2026-10-13 每张卡的快照作废 |
+| E3 | 记录 `state revoked / reason disabled` | 账本里这一轮 `terminalOutcome.reason === 'agent-disabled'`;气泡与横幅的原因断言不变 | 账号模式的记录形状 |
+| E4 | 渲染服务停掉后重起 Agent 服务把「连续没有进度」缩到 12 秒 | 主服务不重起,整轮用 90 秒(`RENDER_STALL_MS`) | 账号主服务在夹具里装配,不能单独重起 |
+| E5 | 发起成员被移出名单:她的对话被停下,云端记录 `revoked / removed`,写入 1～29 次 | 被踢出:她的页面当场写明被踢出;她在共有对话里已被读到的那一轮照常收尾(`done`)、踢出之后还有写入落地,项目完好 | `product/agent.md`「改密退出与被踢的已读消息例外」(2026-10-08 用户定) |
+
+### 验证
+
+- 整支缺省步骤(`node scripts/probes/cloud-agent-ux-ui-probe.mjs --dist dist-online`,桌面版 + 账号各步):45 项 38 过、7 不过(见下),退出码 1。过了的:X0 四项、D A1～A7、换组合、X1 四项、O A1～A6(A3 渲染节点完成 0→10、素材文件 4→50,A5 两张重卡贴流、层表环境指纹是渲染服务的,截图 157 种颜色)、B2、B3、K1～K3、UC0～UC2(隔离工作进程认领并渲完,后上线的成员舞台贴流)、E4(「云端渲染失败:渲染节点 10 分钟没有进展」)、收尾。
+- 不过的 7 项全是上面三处产品缺陷:O A7(及它的两条等待)、S B1、E1、E2(及「再发被拒绝」)、E3。E5 在那一轮用的旧断言(要写满 30 次,一轮最多 24 次模型往返写不满)已改;单跑 `--steps errors` 时 E5 的现象:踢出后页面写「你已被创建者踢出该项目…」,那一轮 `done`、写入 21 次、项目完好。
+- `cloud-agent-ui-probe.mjs --base-port 29003 --dist dist-online`:`{"summary":{"total":28,"failed":0}}`,退出码 0。
+- `npx tsc -b --force`:退出码 0。
