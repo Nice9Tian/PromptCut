@@ -130,13 +130,16 @@ export function Sheet(props: {
 /* ---------------- 叠在舞台上的按钮 ---------------- */
 
 /**
- * 叠在预览画面上的按钮(成员按钮)。画面下面是跨源的舞台 iframe,Chrome 会把触屏的点按手势交给 iframe,
- * 按钮收得到 pointerdown / pointerup 却收不到合成的 click(2026-10-21 探针实测)。所以触屏、触控笔在抬手时就触发,
- * 鼠标和键盘照旧走 click。
+ * 叠在预览画面上的按钮(成员按钮)。画面下面是跨源的舞台 iframe,Chrome 有时把触屏的点按手势交给 iframe,
+ * 按钮收得到 pointerdown / pointerup 却收不到合成的 click(2026-10-21 探针实测);有时又照常补发 click。
+ * 所以触屏抬手后等一小会儿:click 来了就由 click 触发,没来才由抬手触发,只触发一次。
+ * 不在抬手当时就触发:那样面板一打开,随后补发的 click 正好落在新出现的遮罩上,又把面板关了(同日账号项目实测)。
  */
+const CLICK_GRACE_MS = 350;
 export function StageButton(props: { className?: string; pcm?: string; title?: string; onTap: () => void; children: ReactNode }) {
   const down = useRef<number | null>(null);
-  const tapped = useRef(0);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   return (
     <button
       type="button"
@@ -147,11 +150,11 @@ export function StageButton(props: { className?: string; pcm?: string; title?: s
       onPointerUp={(e) => {
         if (e.pointerType === "mouse" || down.current !== e.pointerId) return;
         down.current = null;
-        tapped.current = Date.now();
-        props.onTap();
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => { timer.current = 0; props.onTap(); }, CLICK_GRACE_MS);
       }}
       onPointerCancel={() => { down.current = null; }}
-      onClick={() => { if (Date.now() - tapped.current > 600) props.onTap(); }}
+      onClick={() => { window.clearTimeout(timer.current); timer.current = 0; props.onTap(); }}
     >
       {props.children}
     </button>
