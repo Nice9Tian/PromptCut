@@ -90,7 +90,14 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .stage .sub-cap span { background: #000a; padding: 2px 8px; border-radius: 4px; }
 .stage .sel { position: absolute; border: 1.5px dashed var(--accent); border-radius: 3px; pointer-events: none; display: none; }
 .stage .badge { position: absolute; left: 6px; top: 6px; font-size: 10px; background: #000a; padding: 1px 6px; border-radius: 4px; color: var(--dim); }
-.stage .agent-flag { position: absolute; right: 6px; top: 6px; font-size: 10px; background: var(--plum-dim); color: #d3a8e6; padding: 1px 7px; border-radius: 999px; display: none; }
+.stage-btns { position: absolute; right: 6px; top: 6px; display: flex; gap: 4px; z-index: 8; }
+.sbtn { font-size: 10px; line-height: 1.4; padding: 2px 8px; border-radius: 999px; background: #000b; color: #fff; border: 1px solid #fff2; white-space: nowrap; backdrop-filter: blur(2px); }
+.sbtn.warn { color: var(--warn); border-color: #e8b04a55; }
+.sbtn b { font-weight: 600; }
+.sbtn .short { display: none; }
+#editor.editing .sbtn .full { display: none; }
+#editor.editing .sbtn .short { display: inline; }
+.stage .agent-flag { position: absolute; right: 6px; top: 28px; font-size: 10px; background: var(--plum-dim); color: #d3a8e6; padding: 1px 7px; border-radius: 999px; display: none; }
 .stage .agent-flag.on { display: block; animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .5; } }
 
@@ -355,8 +362,6 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
     <div class="topbar" id="topNormal">
       <button class="icon-btn" onclick="go('home')" title="返回项目列表">‹</button>
       <h1 id="projName">夏日海边 Vlog</h1>
-      <button class="chip warn" id="cfBtn" onclick="openSheet('conflict')">冲突合并 2</button>
-      <button class="chip" onclick="openSheet('members')" title="成员：2 人 · Agent：2 个">👥 2·2</button>
       <button class="btn primary" style="height:30px;padding:0 12px" onclick="openSheet('export')">导出</button>
     </div>
 
@@ -375,6 +380,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
         <div class="sel" id="sel"></div>
         <div class="sub-cap"><span id="cap">海风、阳光，还有你</span></div>
         <div class="badge" id="stageBadge">16:9 · 30fps</div>
+        <div class="stage-btns">
+          <button class="sbtn warn" id="cfBtn" onclick="openSheet('conflict')" title="冲突合并"><span class="full">冲突合并 </span><span class="short">⚠ </span><b id="cfN">2</b></button>
+          <button class="sbtn" id="memBtn" onclick="openSheet('members')" title="成员：2 人 · Agent：2 个"><span class="full">2 人 · 2 Agent</span><span class="short">👥 2·2</span></button>
+        </div>
         <div class="agent-flag" id="agentFlag">Agent 正在改</div>
       </div>
     </div>
@@ -1146,7 +1155,7 @@ function buildConflict() {
   });
   cfRefresh();
 }
-function cfRefresh() { $('#cfClose').textContent = cf.length ? '下次再说' : '完成'; $('#cfBtn').style.display = cf.length ? '' : 'none'; $('#cfBtn').textContent = '冲突合并 ' + cf.length; if (!cf.length) $('#cfList').innerHTML = '<div class="hint" style="text-align:center;padding:30px 0">全部处理完了 ✓</div>'; }
+function cfRefresh() { $('#cfClose').textContent = cf.length ? '下次再说' : '完成'; $('#cfBtn').style.display = cf.length ? '' : 'none'; $('#cfN').textContent = cf.length; if (!cf.length) $('#cfList').innerHTML = '<div class="hint" style="text-align:center;padding:30px 0">全部处理完了 ✓</div>'; }
 function cfSelect(onlyOk) { document.querySelectorAll('#cfList .cf-group').forEach((d, i) => d.querySelectorAll('input').forEach(x => x.checked = onlyOk ? !cf[i].conflict : false)); }
 function cfTake(msg) {
   const keep = []; document.querySelectorAll('#cfList .cf-group').forEach((d, i) => { if (!d.querySelector('.cf-head input').checked) keep.push(cf[i]); });
