@@ -27,6 +27,10 @@
  *                                  原来在主进程里跑任务的那一路（PROMPTCUT_AGENT_CONTROL_PORT、PROMPTCUT_AGENT_ACCOUNT_LOOK=1、
  *                                  PROMPTCUT_AGENT_RUN_ASSET_*）命令行入口不再接：设了其中任何一个也拒绝启动（看画面与运行素材
  *                                  现在写在 root 入口的配置里，随任务进程的设置下发）
+ *   PROMPTCUT_AGENT_RENDER_DOC_URL 账号版：预渲染重试的发布通道连的文档服务**本机**地址（如 ws://127.0.0.1:8787；控制连接只认本机发起）。
+ *                                  主服务凭 PROMPTCUT_AGENT_SECRETS 里的服务私钥（托管方的服务身份，不是任何成员的）开控制连接、订目录、
+ *                                  要只能发布的票据发清单计划（`account-render-requests.mjs`）。没设或私钥读不到：不发，
+ *                                  Agent 改到的重卡在对话里记「云端渲染暂不可用」（`agent.render.publisher-off` 一行说明原因）
  *   PROMPTCUT_AGENT_SECRETS        服务身份的私钥目录(缺省 /var/lib/promptcut/agent-secrets),里面是 keygen 生成的 service-key.json(服务名 agent)
  *   PROMPTCUT_AGENT_HOST           缺省 127.0.0.1;只许回环(对外只经反向代理)
  *   PROMPTCUT_AGENT_PORT           缺省 8790
@@ -92,6 +96,7 @@ import { createRunClient } from './run-client.mjs';
 import { createConversationControlClient } from './conversation-control-client.mjs';
 import { createAccountExecutorAssembly } from './account-executor-assembly.mjs';
 import { createAccountMasterAssembly } from './account-master-assembly.mjs';
+import { createAccountRenderPublisher } from './account-render-requests.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 
@@ -355,6 +360,7 @@ async function main() {
   if (env.PROMPTCUT_ACCOUNT_V2_REQUIRED === '1' && !accountMode) return fail('account-v2-required');
   if (accountMode && !/^wss:\/\//.test(docUrl)) return fail('account-v2', { detail: 'doc-url-must-be-wss' });
   let key = null, client = null, conversationClient = null, runClient = null, conversationControl = null, wiring, accountMaster = null;
+  let renderClient = null, renderWiring = null;
   if (accountMode) {
     // 账号版只装配「只做控制的主服务」。缺哪一样、或者还带着在主进程里跑任务那一路的配置，都拒绝启动并说清是哪一样：
     // 不留「能发消息、但任务停不了、第二条接不上」的半通状态。
@@ -396,12 +402,32 @@ async function main() {
           } catch { /* ignore */ }
         }
       }
+      // 预渲染重试的发布通道：托管方的服务身份（服务私钥）+ 本机文档服务的控制连接
+      const renderDocUrl = env.PROMPTCUT_AGENT_RENDER_DOC_URL;
+      let renderPublisher = null, renderWhy = null;
+      if (!renderDocUrl) renderWhy = 'no-render-doc-url';
+      else if (!/^wss?:\/\//.test(renderDocUrl)) renderWhy = 'bad-render-doc-url';
+      else {
+        let renderKey = null;
+        try { renderKey = readServiceKeyFile(env.PROMPTCUT_AGENT_SECRETS || '/var/lib/promptcut/agent-secrets'); } catch { renderKey = null; }
+        if (renderKey?.service !== 'agent') renderWhy = 'no-service-key';
+        else {
+          renderClient = createServiceClient({ base: renderDocUrl, key: renderKey, log: line });
+          void renderClient.ready().catch(() => {});
+          renderWiring = createAccountRenderPublisher({ client: renderClient, docUrl: renderDocUrl, root: ROOT, log: line });
+          renderPublisher = renderWiring.publisher;
+        }
+      }
+      if (renderWhy) line('agent.render.publisher-off', { why: renderWhy });
+      const renderStall = positiveMs(env.PROMPTCUT_AGENT_RENDER_STALL_MS), renderDebounce = positiveMs(env.PROMPTCUT_AGENT_RENDER_DEBOUNCE_MS);
       accountMaster = { runClient, readControl: conversationControl, tls: options.tls, internalPort: slots.internalPort,
+        render: { publisher: renderPublisher, limits: { ...(renderStall ? { stallMs: renderStall } : {}), ...(renderDebounce ? { debounceMs: renderDebounce } : {}) } },
         controllerFingerprint256: slots.controllerFingerprint256, sharedDataDir: slots.sharedDataDir,
         ...(masterLookKey ? { lookUrl, lookKey: masterLookKey } : {}) };
       wiring = createHostedWiring({ accountMode: true, conversationClient, log: line });
     } catch (error) {
       await conversationControl?.close(); conversationClient?.close(); runClient?.close();
+      renderWiring?.close(); renderClient?.close();
       return fail('account-v2');
     }
   } else {
@@ -442,7 +468,7 @@ async function main() {
       log: line,
     });
   } catch (err) {
-    wiring.close();
+    wiring.close(); renderWiring?.close(); renderClient?.close();
     await conversationControl?.close(); client?.close(); runClient?.close();
     if (err instanceof AgentConfigError) return fail(err.reason, { detail: err.message });
     throw err;
@@ -461,7 +487,7 @@ async function main() {
   const stop = () => {
     if (started.executor) {
       // No five-second successful exit can certify an unobserved old OS tree.
-      void started.close().then(() => { wiring.close(); runClient?.close(); conversationClient?.close();
+      void started.close().then(() => { wiring.close(); renderWiring?.close(); renderClient?.close(); runClient?.close(); conversationClient?.close();
         // 只做控制的主服务名下没有任务进程要等：自己的东西关完就退（留一小会儿让句柄收干净）
         if (accountMaster) setTimeout(() => process.exit(0), 3000).unref(); })
         .catch(error => { line('agent.close.pending', { code: error?.code ?? 'closure-pending' }); process.exitCode = 1; });

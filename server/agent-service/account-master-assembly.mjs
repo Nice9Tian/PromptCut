@@ -31,6 +31,7 @@ import { createWorkspaces } from '../agent/service/workspace.mjs';
 import { createConversationPurger } from '../agent/service/conversation-purge.mjs';
 import { saveAttachment } from '../agent/service/hosted-tools.mjs';
 import { createWorkerEventInternalHandler, WORKER_EVENT_PATH } from './worker-event-internal.mjs';
+import { createAccountRenderRequests } from './account-render-requests.mjs';
 import { createWorkerPageInternalHandler, WORKER_PAGE_PATH } from './worker-page-internal.mjs';
 import { createPageBridge, PageBridgeError, BRIDGE_PAGE_ID_RE } from '../agent/service/page-bridge.mjs';
 import { collectPageTools } from '../agent/service/collect-bridge.mjs';
@@ -67,11 +68,13 @@ export const accountWorkspaceOwnerKey = (projectId, conversationId) =>
  * @param {string} o.controllerFingerprint256 root 那张证书的指纹：只有它能来问调度要的那两条
  * @param {number} [o.schedulerStaleMs] 调度多久没来问就算不在了
  * @param {number} [o.stopWaitMs] 「停止」在服务器上最多等多久（等 root 把进程关掉、文档服务结清）；到时仍没办完照旧回「还在办」
+ * @param {{ publisher?: object | null, limits?: object }} [o.render] 预渲染重试（`account-render-requests.mjs`）：发布通道是托管方服务身份的那一条；
+ *   不给发布通道时 Agent 改到的重卡每次都在对话里记「云端渲染暂不可用」，不悄悄丢
  */
 export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runClient, conversationClient, readControl, tls,
   internalPort, internalHost = '127.0.0.1', controllerFingerprint256, schedulerStaleMs = 15_000, stopWaitMs = 15_000,
   registerRetryMs = 2_000, workspaceLimits = {}, attachmentLimits = {}, onConversationDeleted = null, purgeSweepMs = 60_000,
-  look = null, lookUrl = null, lookKey = null, modelConfigDir = null, now = Date.now, log = () => {} } = {}) {
+  look = null, lookUrl = null, lookKey = null, modelConfigDir = null, render = null, now = Date.now, log = () => {} } = {}) {
   const controllerPin = certificateFingerprint(controllerFingerprint256);
   let ownPin = null;
   try { ownPin = certificateFingerprint(new X509Certificate(tls?.cert).fingerprint256); } catch { ownPin = null; }
@@ -120,6 +123,9 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   // 主服务从不替哪条任务登记事件：事件只经 appendWorker 进来（每条都回文档服务核是哪一条任务的哪一代进程）
   eventStore = createAccountRunEvents({ file: path.join(dataDir, 'master-run-events.sqlite'), now, authorityId,
     verifyGrant: async () => { throw Object.assign(new Error('not-a-human-gate'), { status: 403 }); } });
+  // 预渲染重试：任务进程报「写到了哪些要预渲染的片段」，这里以服务身份发布、跟到结果入库，结果补进对话（一轮先收尾，不等渲染）
+  const renderRequests = createAccountRenderRequests({ dir: path.join(dataDir, 'render-requests'), eventStore,
+    publisher: render?.publisher ?? null, limits: render?.limits ?? {}, now, log: say });
 
   // ---------- 发起人页面的反向通道（登记表在这个进程） ----------
   // 这一轮的权威信息：向文档服务现问（主身份的 workerEventSource：任务还在、还是那一代进程；回的里面有发送者账号和发消息时的页面号）。
@@ -245,11 +251,18 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
   async function conversationDeleted({ projectId, conversationId }) {
     const scope = { projectId, conversationId };
     try { await purgeBrowser(scope, 'conversation-deleted'); } catch { /* 留不下记号不挡删除:单子上已经有这个对话 */ }
+    try { renderRequests.forget(projectId, conversationId); } catch { /* 清不掉的目录下次再清 */ }
     await onConversationDeleted?.(scope);
   }
 
   // ---------- 内部口 ----------
-  const eventHandler = createWorkerEventInternalHandler({ eventStore, resolveWorker: input => runClient.workerEventSource(input) });
+  // 每条事件收下之后（回执里的绑定是文档服务核过的）交给预渲染重试看一眼：只有 `render_request` 与一轮收尾的事件它才管
+  const workerEvents = { async appendWorker(input) {
+    const receipt = await eventStore.appendWorker(input);
+    try { renderRequests.observe(receipt); } catch (error) { say('agent.render.observe-failed', { code: error?.code ?? 'error' }); }
+    return receipt;
+  } };
+  const eventHandler = createWorkerEventInternalHandler({ eventStore: workerEvents, resolveWorker: input => runClient.workerEventSource(input) });
   const reply = (res, status, body) => { if (res.headersSent || res.destroyed) return;
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', connection: 'close' }); res.end(JSON.stringify(body)); };
   async function schedulerRoute(req, res) {
@@ -499,9 +512,12 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     catch (error) { say('agent.master.purge-reconcile-pending', { code: error?.code ?? 'unavailable' }); }
   };
   void sweepPurges();
+  // 上次没渲完的清单：按盘上的记录重发（只用服务身份，不需要成员在场）
+  void renderRequests.restore().catch(error => say('agent.render.restore-failed', { code: error?.code ?? 'error' }));
   const purgeTimer = setInterval(() => { if (!stopped) void sweepPurges(); }, purgeSweepMs); purgeTimer.unref?.();
   const close = () => closing ??= (async () => {
     stopped = true; if (registerTimer) clearTimeout(registerTimer); clearInterval(purgeTimer);
+    try { renderRequests.close(); } catch { /* 已经关了 */ }
     const closedSockets = [...sockets].map(socket => new Promise(resolve => { socket.once('close', resolve); socket.destroy(); }));
     const results = await Promise.allSettled([...closedSockets,
       server.listening ? new Promise(resolve => server.close(resolve)) : null, readControl.close()]);
@@ -515,7 +531,7 @@ export async function createAccountMasterAssembly({ dataDir, sharedDataDir, runC
     /** 不经内部口、在同一个进程里直接给调度用的那两条（没有 root 分离的机器和测试）。 */
     master: { async pending() { const value = await runClient.pending(); lastSchedulerAt = now(); return value; },
       scopeControl: row => runClient.scopeControl(row) },
-    pageBridge, purgeBrowser, conversationDeleted,
-    describe: () => ({ registered, schedulerAlive: schedulerAlive(), lastSchedulerAt, internalSockets: sockets.size, internalPort: server.address()?.port ?? null,
+    pageBridge, purgeBrowser, conversationDeleted, renderRequests,
+    describe: () => ({ render: renderRequests.describe(), registered, schedulerAlive: schedulerAlive(), lastSchedulerAt, internalSockets: sockets.size, internalPort: server.address()?.port ?? null,
       pageBridge: pageBridge.describe() }) };
 }

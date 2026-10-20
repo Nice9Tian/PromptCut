@@ -326,6 +326,20 @@ export function hostedModule({ store, registry, now, lingerMs = HOSTED_DEFAULTS.
       if (msg.purpose !== 'publish' || msg.conversation !== undefined || msg.conversationId !== undefined) {
         return refuse('forbidden', '不带对话委托只能要发布用的票据');
       }
+      // 账号项目:由账号运行时签只能发布的票据(只许本项目、只许发布;渲染节点与「生成轨道流」都开着才签)
+      const runtime = getAccountRuntime();
+      const accountProject = runtime?.authority?.projectState?.(msg.projectId);
+      if (accountProject) {
+        if (!registryOf()?.has(p.service, p.serviceKid)) return refuse('service-revoked');
+        try {
+          const out = runtime.issueServiceTicket({ service: p.service, serviceKid: p.serviceKid, deviceId: p.deviceId, deviceName: p.deviceName,
+            projectId: msg.projectId, purpose: 'publish' });
+          ctx.log('hosted.ticket', { connId, service: p.service, projectId: msg.projectId, purpose: 'publish' });
+          return reply(ctx, connId, { type: 'hosted.ticket.ok', ticket: out.ticket, exp: out.exp }, reqId);
+        } catch (err) {
+          return refuse(typeof err?.code === 'string' ? err.code : 'forbidden');
+        }
+      }
       const rec = storeOf()?.peek(msg.projectId) ?? null;
       const refused = serviceAdmission({ registry: registryOf(), record: rec, service: p.service, kid: p.serviceKid });
       if (refused) return refuse(refused);

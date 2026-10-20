@@ -42,6 +42,8 @@ export function renderStatusText(ev: CloudEvent): string {
     case "done": return "云端渲染完成";
     case "failed": return `云端渲染失败${typeof ev.reason === "string" && ev.reason ? `:${ev.reason}` : ""}`;
     case "unavailable": return "云端渲染暂不可用,画面会在渲染节点恢复后补上";
+    // 「生成轨道流」关着:托管渲染节点不为这个项目产流(product/rendering.md「谁产流与托管方开关」),云端没有渲
+    case "off": return "这个项目没开「生成轨道流」,云端没有预渲染;重卡会在打开项目的设备上生成";
     default: return "";
   }
 }
