@@ -201,10 +201,13 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .sheet.tall { height: 82%; }
 .sheet.full { height: calc(100% - 28px); border-radius: 18px 18px 0 0; }
 .sheet.on { transform: none; visibility: visible; transition: transform .25s ease, visibility 0s; }
-.grip { width: 38px; height: 4px; border-radius: 2px; background: var(--line); margin: 8px auto 4px; flex: none; }
+.grip { width: 100%; height: 24px; flex: none; position: relative; touch-action: none; cursor: grab; }
+.grip::after { content: ""; position: absolute; left: 50%; top: 10px; width: 38px; height: 4px; margin-left: -19px; border-radius: 2px; background: var(--line); }
+.sheet-head { touch-action: none; }
 .sheet-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 14px 8px; }
 .sheet-head h3 { margin: 0; font-size: 15px; flex: 1; }
-.sheet-body { flex: 1; min-height: 0; overflow: auto; padding: 0 14px 14px; }
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 0 14px 14px; }
+.msgs { overscroll-behavior: contain; }
 
 .seg { display: flex; gap: 4px; padding: 0 14px 8px; overflow-x: auto; flex: none; scrollbar-width: none; }
 .seg button { flex: none; height: 30px; padding: 0 12px; border-radius: 999px; background: var(--panel2); color: var(--dim); font-size: 13px; }
@@ -579,7 +582,7 @@ const hist = []; let redoStack = [];
 
 const ASSETS = {
   '视频': [['海浪远景', '00:06', '#1b6fa8'], ['沙滩奔跑', '00:08', '#c9803a'], ['日落', '00:10', '#b24a3a'], ['无人机俯拍', '00:12', '#2b6b4f'], ['冲浪', '00:05', '#1a8aa0'], ['海鸥', '00:04', '#6d7a90']],
-  '图片': [['合照1.jpg', '', '#7a5a9e'], ['地图.png', '', '#3a5a7a'], ['贝壳.jpg', '', '#9e7a5a']],
+  '图片': [['合照1', '', '#7a5a9e'], ['地图', '', '#3a5a7a'], ['贝壳', '', '#9e7a5a']],
   '音频': [['轻松吉他.mp3', '01:30', '#2b6b4f'], ['海浪声.wav', '00:40', '#1b5f78'], ['旁白_01 (配音)', '00:08', '#5a3a7a']],
   '剪辑': [['剪辑 1', '00:24', '#26c6e6'], ['片头', '00:03', '#8a5a9e']]
 };
@@ -590,6 +593,24 @@ const CARDS = {
   '音效': [['海浪', '音频', '#1b5f78'], ['点击', '音频', '#555'], ['Whoosh', '音频', '#5a3a7a']]
 };
 let assetTab = '视频', cardTab = '动效';
+
+// 假数据补多：每类至少 18 个，保证面板内容超过一屏，能上下滑动
+(function seed() {
+  const pal = i => `hsl(${(i * 47 + 200) % 360},42%,36%)`;
+  const more = (arr, names, f) => names.forEach((nm, i) => arr.push([nm, f(i), pal(arr.length)]));
+  const dur = i => '00:' + String(4 + (i * 3) % 11).padStart(2, '0');
+  more(ASSETS['视频'], ['礁石特写', '椰林摇曳', '渔船归港', '潮汐延时', '篝火夜话', '夜市灯火', '木栈道', '日出前', '浪花慢动作', '海边骑行', '风筝', '沙雕城堡'], dur);
+  more(ASSETS['图片'], ['贝壳特写', '海星', '沙滩全景', '日落剪影', '船票', '冰淇淋', '草帽', '椰子', '灯塔', '礁石', '云层', '渔网', '脚印', '遮阳伞', '救生圈'], () => '');
+  more(ASSETS['音频'], ['海风 BGM.mp3', '鸟鸣.wav', '脚步声.wav', '远处烟花.wav', '篝火噼啪.wav', '旁白_02 (配音)', '尤克里里.mp3', '汽笛.wav', '人群欢呼.wav', '雨声.wav', '风铃.wav', '夜虫.wav', '轻快鼓点.mp3', '钢琴小品.mp3', '氛围铺底.mp3'], i => '00:' + String(10 + (i * 7) % 50).padStart(2, '0'));
+  more(CARDS['动效'], ['渐入手写', '弹幕滚动', '光效扫过', '彩带', '倒计时', '进度条', '气泡', '星星闪烁', '闪电', '心跳', '爆炸', '雨滴', '雪花', '烟雾', '波纹'], () => '动效');
+  more(CARDS['滤镜'], ['日系清新', '复古港风', '赛博霓虹', '夕阳橙', '森林绿', '青橙', '褪色', '高饱和', '暗角', '颗粒', '漏光'], () => '调色');
+  more(CARDS['转场'], ['旋转', '缩放', '滑动', '擦除', '模糊', '故障', '翻页', '百叶窗', '圆形展开', '色块', '镜头抖动'], () => '转场');
+  more(CARDS['音效'], ['欢呼', '鼓掌', '叮咚', '失败', '咔嚓', '翻书', '键盘', '心跳', '雷声', '脚步', '开门', '气泡声'], () => '音频');
+  let uid = 0; const vs = ASSETS['视频'];
+  for (let i = 2; i <= 14; i++) {      // 另外 13 条剪辑，素材库「剪辑」一类里有 15 条
+    clipsByTab['剪辑 ' + i] = Array.from({ length: 1 + i % 3 }, (_, k) => { const v = vs[(i * 2 + k) % vs.length]; return { id: 'g' + (++uid), lane: 0, s: 0, d: 3 + (i + k * 2) % 6, name: v[0] + '.mp4', kind: 'v', col: v[2] }; });
+  }
+})();
 
 const $ = s => document.querySelector(s);
 const fmt = t => { const m = Math.floor(t / 60), s = (t % 60); return String(m).padStart(2, '0') + ':' + s.toFixed(1).padStart(4, '0'); };
@@ -618,7 +639,7 @@ function openSheet(n) {
   else $('#scrim').style.background = '';
 }
 function closeSheets(keep) {
-  document.querySelectorAll('.sheet.on').forEach(s => s.classList.remove('on'));
+  document.querySelectorAll('.sheet').forEach(s => { s.classList.remove('on'); s.style.height = ''; s.style.maxHeight = ''; s.style.transform = ''; s.style.transition = ''; s.dataset.state = ''; });
   if (!keep) { $('#scrim').classList.remove('on'); $('#scrim').style.background = ''; }
 }
 let toastT;
@@ -972,6 +993,7 @@ function addText() { addClip('T 新文字', 'cap', 2, 4, { title: true, P: { tex
 
 /* ============ 素材库 / 卡片 ============ */
 function buildAssets() {
+  ASSETS['剪辑'] = Object.keys(clipsByTab).map(n => [n, fmtD(clipTotal(n)), '#1b5f78']);
   const tb = $('#assetTabs'); tb.innerHTML = '';
   Object.keys(ASSETS).forEach(k => { const b = document.createElement('button'); b.textContent = k; b.className = k === assetTab ? 'on' : ''; b.onclick = () => { assetTab = k; buildAssets(); }; tb.appendChild(b); });
   const body = $('#assetBody');
@@ -1169,6 +1191,43 @@ function fakeExport() {
   $('#expProg').style.display = 'block'; let p = 0;
   const iv = setInterval(() => { p += 7 + Math.random() * 9; if (p >= 100) { p = 100; clearInterval(iv); $('#expTxt').textContent = '完成 · 已存到“导出产物”（假的）'; } else $('#expTxt').textContent = '渲染中 ' + Math.floor(p) + '%…'; $('#expBar').style.width = p + '%'; }, 250);
 }
+
+/* ============ 底部面板：内容区拖动滚动，横杠 / 头部拖动展开或关闭 ============ */
+// 触屏用浏览器原生滚动（含惯性）；鼠标没有原生拖动滚动，这里补上，方便桌面预览
+function bindDragScroll(body) {
+  body.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse' || e.button !== 0 || e.target.closest('input, textarea, select, .toggle')) return;
+    const y0 = e.clientY, st0 = body.scrollTop; let moved = false;
+    const mv = ev => { const dy = ev.clientY - y0; if (!moved && Math.abs(dy) > 4) moved = true; if (moved) body.scrollTop = st0 - dy; };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); if (moved) { body.dataset.noclick = '1'; setTimeout(() => delete body.dataset.noclick, 0); } };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  });
+  body.addEventListener('click', e => { if (body.dataset.noclick) { e.stopPropagation(); e.preventDefault(); } }, true);
+}
+document.querySelectorAll('.sheet-body, .msgs').forEach(bindDragScroll);
+
+// 三档：关闭 / 正常 / 展开到接近全屏；松手回弹到最近的一档
+function sheetDrag(sh, e0) {
+  if (!sh.classList.contains('on')) return;
+  const full = $('#phone').clientHeight - 28, expanded = sh.dataset.state === 'expanded';
+  const nat = expanded ? +sh.dataset.nat : sh.offsetHeight; if (!expanded) sh.dataset.nat = nat;
+  const base = expanded ? full : nat, y0 = e0.clientY; let V = base;
+  sh.style.transition = 'none'; sh.style.maxHeight = 'none';   // 盖过 CSS 里的 max-height
+  const mv = ev => {
+    V = Math.min(full, base - (ev.clientY - y0));
+    if (V > nat) { sh.style.height = V + 'px'; sh.style.transform = 'none'; }
+    else { sh.style.height = nat + 'px'; sh.style.transform = `translateY(${nat - V}px)`; }
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+    sh.style.transition = 'height .22s ease, transform .22s ease';
+    if (V < nat - 80) { sh.style.transform = 'translateY(105%)'; setTimeout(closeSheets, 200); }                       // 往下拖过一定距离：关闭
+    else if (V > nat + 60) { sh.style.height = full + 'px'; sh.style.transform = ''; sh.dataset.state = 'expanded'; }   // 往上拖：展开
+    else { sh.style.height = nat + 'px'; sh.style.transform = ''; sh.dataset.state = ''; setTimeout(() => { if (sh.dataset.state !== 'expanded') { sh.style.height = ''; sh.style.maxHeight = ''; sh.style.transition = ''; } }, 240); }
+  };
+  window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+}
+document.querySelectorAll('.sheet').forEach(sh => sh.querySelectorAll('.grip, .sheet-head').forEach(h => h.addEventListener('pointerdown', e => { if (!e.target.closest('button')) sheetDrag(sh, e); })));
 
 /* ============ 启动 ============ */
 renderTabsA(); renderMsgs(); updateButtons();
