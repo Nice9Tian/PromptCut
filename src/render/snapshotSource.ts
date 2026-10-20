@@ -1125,7 +1125,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       skipped: (this.map?.layers ?? []).filter((l) => !usable.includes(l)).map((l) => l.clipId),
       manifests: this.manifests.size,
       streams: this.streamsNow().map((s) => ({ clipId: s.row.topClipId, kind: s.row.kind, members: s.row.clipIds.length, resultKey: s.resultKey, envFingerprint: s.envFingerprint,
-        candidates: s.row.candidates.length, originFrame: s.row.originFrame, firstSegment: s.row.firstSegment, lastSegment: s.row.lastSegment, ready: this.streamReady(s).length, inputSig: s.row.inputSig ?? null })),
+        candidates: s.row.candidates.length, originFrame: s.row.originFrame, firstSegment: s.row.firstSegment, lastSegment: s.row.lastSegment, ready: this.streamReady(s).length, bytes: this.streamBytesReady(s), inputSig: s.row.inputSig ?? null })),
       staleStreams: (this.map?.streams ?? []).filter((r) => this.streamStale(r)).map((r) => r.topClipId),
       streamManifests: this.streamManifests.size, streamBlocks: this.streamBlocks.size, streamBlockBytes: this.streamBlocks.total, streamRev: this.streamRev,
       cacheBytes: this.cache.total, cacheSize: this.cache.size, ...this.stats,
@@ -1393,6 +1393,16 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const seg = state?.segments.get(n);
     const init = seg ? state!.inits.get(seg.init) : undefined;
     return state && seg && init ? { seg, init, state } : null;
+  }
+
+  /** 诊断:这条流有几段的字节已在本页(剪辑段级的流就绪区间按已产出算,字节另数) */
+  private streamBytesReady(s: ChosenStream): number {
+    let n = 0;
+    for (const state of this.streamManifests.values()) {
+      if (state.resultKey !== s.resultKey) continue;
+      for (const [k, seg] of state.segments) if (k >= s.row.firstSegment && k <= s.row.lastSegment && this.streamBlocks.has(seg.hash)) n++;
+    }
+    return n;
   }
 
   /**

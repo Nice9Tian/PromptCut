@@ -19,8 +19,10 @@
  *   D 改动   在页面里改「里」那张卡的文字(两层深):父页当场(≤ 1 秒)不再发旧流的流平面、S 不再判重(照旧活渲);在线来源撤掉旧流;
  *            舞台上没有旧键的轨道;随后播放,旧流没有再贴上来
  *   E 新流   切分方按新的一版重产:层表换成新的一行(内容键、签名都换了,仍带 `streamKind: 'cut'`);甲认出新流、贴它
+ *   G 长剪辑段  再加一个 8 秒的剪辑段 L(16 段,超出在线来源的取数窗口)、钉重:层表那一行产齐以后,在线来源按清单认它整段就绪、
+ *            字节只取了播放头附近的几段;开播 1.5 秒之内 L 就贴流(不必等播放头走过整段)
  *   F 没有页面错误
- * 截图:`play-v1.png`(贴旧流播放中)、`after-edit-live.png`(改完、活渲)、`play-v2.png`(贴新流播放中)。
+ * 截图:`play-v1.png`(贴旧流播放中)、`after-edit-live.png`(改完、活渲)、`play-v2.png`(贴新流播放中)、`play-long.png`(长剪辑段开播不久贴流)。
  * 耗时只记录。不打印令牌、口令。过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, ... }`。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
@@ -56,7 +58,7 @@ fs.mkdirSync(OUT, { recursive: true });
 const deadline = Date.now() + 60 * 60_000;
 process.env.NODE_OPTIONS = dnsShim.withLocalhostDns(process.env.NODE_OPTIONS);
 
-const PROJECT = { width: 1280, height: 720, fps: 30, duration: 3 };
+const PROJECT = { width: 1280, height: 720, fps: 30, duration: 10 };
 const FPS = PROJECT.fps, SEG = 15;
 const DURATION = PROJECT.duration;
 /** 剪辑段 S 的第一帧(0.2 秒,第 6 帧)与长度(2 秒):这条流的分段从它起数,0～3;播放头停在 0.5 秒时四段都在在线来源的取数窗口里 */
@@ -64,6 +66,8 @@ const S_START = 0.2, S_LEN = 2, FIRST = Math.round(S_START * FPS);
 const TOTAL = DURATION * FPS;
 const LAST_SEGMENT = Math.floor((Math.round((S_START + S_LEN) * FPS) - 1 - FIRST) / SEG);
 /** 被引用剪辑「里」上的那张卡的参数:改之前、改之后(两层深:「里」被「中」引用,「中」被激活剪辑上的剪辑段引用) */
+/** 长剪辑段 L(G 那一步):第 1～9 秒,8 秒 = 240 帧,分段 0～15。在线来源的取数窗口(往回 1 段、往前 2 秒)装不下整段 */
+const L_START = 1, L_LEN = 8, L_FIRST = Math.round(L_START * FPS), L_LAST_SEGMENT = Math.floor((Math.round((L_START + L_LEN) * FPS) - 1 - L_FIRST) / SEG);
 const INNER_V1 = { text: '剪辑段签名 v1' }, INNER_V2 = { text: '剪辑段签名 v2' };
 
 const fails = [];
@@ -484,6 +488,53 @@ try {
     await stageShot(pageA, 'play-v2');
     await store(pageA, `S.actions.pause(); return true;`);
     out.play2 = checkPlaying('E 甲·新流', play2, key2);
+  }
+
+  /* ---------------------------------------------------------------- 6b. G 长剪辑段:整段产出就贴,不必等播放头走过整段 */
+  const beforeL = (await stable(pageA, 0)) ?? [];
+  const lId = await store(pageA, `const c = S.actions.addCutSegment(args[0], args[1], { newTrackIndex: 0, duration: args[2] }); return c.id;`, cuts.mid, L_START, L_LEN);
+  const afterL = (await stable(pageA, beforeL.length + 1)) ?? [];
+  const freshL = afterL.filter((r) => r.identityKey && !beforeL.some((b) => b.identityKey === r.identityKey));
+  const lKeys = (freshL.some((r) => r.cutSegment) ? freshL.filter((r) => r.cutSegment) : freshL).map((r) => r.identityKey);
+  out.long = { lId, costs: freshL.map((r) => ({ key: short(r.identityKey), cutSegment: r.cutSegment })) };
+  if (check(lKeys.length >= 1, 'G:长剪辑段 L 的成本记录认出来了', out.long)) {
+    await costRecords(pageA, lKeys);
+    await enter(pageA, 'cso-jia(刷新,L 钉重生效)');
+    await pauseAt(pageA, DURATION + 1);
+    const rowOf = async (id) => ((await content.get('snapshot-manifest', layerKey).catch(() => null))?.body?.streams ?? []).find((r) => r.topClipId === id) ?? null;
+    const tL = Date.now();
+    const gotL = await until('G:层表里出现 L 的流,流清单每段都齐', async () => {
+      const row = await rowOf(lId);
+      if (!row) return null;
+      for (const [from, to] of spansOf(row)) {
+        const m = await getManifest(row.candidates[0].resultKey, from, to);
+        if (!m || Object.keys(m.segments ?? {}).length !== to - from + 1) return null;
+      }
+      return row;
+    }, 600_000, 1000);
+    out.long.produceMs = gotL ? Date.now() - tL : null;
+    out.long.row = briefRow(gotL);
+    if (check(!!gotL && gotL.streamKind === 'cut' && gotL.lastSegment === L_LAST_SEGMENT && gotL.originFrame === L_FIRST, `G:L 那一行带 streamKind: cut,分段 0～${L_LAST_SEGMENT}`, out.long.row)) {
+      const keyL = gotL.candidates[0].resultKey;
+      // 播放头停在 L 的头上:就绪按清单算,整段;字节只取了窗口里的
+      await pauseAt(pageA, L_START + 0.05);
+      const readyL = await until('G:在线来源认 L 整段就绪、父页判重并发它的流平面', async () => {
+        const d = await onlineDiag(pageA);
+        const s = (d?.streams ?? []).find((x) => x.clipId === lId);
+        if (!(s && s.resultKey === keyL && s.ready === L_LAST_SEGMENT + 1)) return null;
+        const p = await parentDiag(pageA);
+        return p?.heavy.includes(lId) && planeOf(p, lId)?.key === short(keyL) ? { s, p } : null;
+      }, 120_000, 300);
+      out.long.ready = readyL && { ready: readyL.s.ready, bytes: readyL.s.bytes, segments: L_LAST_SEGMENT + 1 };
+      check(!!readyL && readyL.s.bytes < L_LAST_SEGMENT + 1, 'G:L 整段就绪(按已产出的分段),字节只取了播放头附近的几段', out.long.ready);
+      const playL = await playAndSample(pageA, lId, { from: L_START + 0.05, to: L_START + 1.6, key: keyL });
+      await stageShot(pageA, 'play-long');
+      await store(pageA, `S.actions.pause(); return true;`);
+      const firstT = playL.drawn[0]?.t ?? null;
+      out.long.play = { samples: playL.samples.length, drawn: playL.drawn.length, firstDrawnT: firstT, track: trackBrief(playL.drawn.at(-1)?.clip.stream) };
+      check(playL.drawn.length >= 6 && firstT !== null && firstT <= L_START + 1.5, 'G:开播 1.5 秒之内 L 就贴着流在画(不必等播放头走过整段)', out.long.play);
+      check(playL.drawn.every((x) => (x.clip.stream.errors ?? 0) === 0), 'G:L 的流播放器没有报错', out.long.play);
+    }
   }
 
   /* ---------------------------------------------------------------- 7. F 页面错误 */
