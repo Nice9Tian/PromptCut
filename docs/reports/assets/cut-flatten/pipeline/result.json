@@ -1,0 +1,303 @@
+{
+  "out": "C:\\Users\\admin\\Documents\\PromptCut\\.worktrees\\cut-flatten\\docs\\reports\\assets\\cut-flatten\\pipeline",
+  "project": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "segment": "seg-s",
+    "frame": {
+      "x": 160,
+      "y": 90,
+      "w": 960,
+      "h": 540
+    },
+    "want": [
+      30,
+      149
+    ]
+  },
+  "origin": "http://127.0.0.1:5440",
+  "controls": [
+    {
+      "clipId": "seg-s~h-seg~i-pill",
+      "cacheable": false,
+      "frameMode": "stateful",
+      "compositing": "independent",
+      "firstFrame": 30,
+      "count": 120
+    },
+    {
+      "clipId": "seg-s~h-r6",
+      "cacheable": false,
+      "frameMode": "stateful",
+      "compositing": "independent",
+      "firstFrame": 30,
+      "count": 120
+    },
+    {
+      "clipId": "seg-s~h-light",
+      "cacheable": false,
+      "frameMode": "stateful",
+      "compositing": "independent",
+      "firstFrame": 30,
+      "count": 60
+    }
+  ],
+  "sparseMs": 31255,
+  "specs": [
+    {
+      "top": "seg-s~h-seg~i-pill",
+      "kind": "card",
+      "plane": "local",
+      "solo": "flat",
+      "originFrame": 30,
+      "lastFrame": 149,
+      "mountFrame": 0,
+      "replay": true,
+      "offset": {
+        "x": 360,
+        "y": 290
+      },
+      "streamKey": "d851640abc5dcd11f6fd7a2b9057e5d5181069ae4e6185859bb55c28a0626fef"
+    },
+    {
+      "top": "seg-s~h-r6",
+      "kind": "card",
+      "plane": "local",
+      "solo": "flat",
+      "originFrame": 30,
+      "lastFrame": 149,
+      "mountFrame": 0,
+      "replay": true,
+      "offset": {
+        "x": 0,
+        "y": 0
+      },
+      "streamKey": "df9f833a81754f36aa98242af18efe94547c933274ec0279739792e61b2b0ba9"
+    },
+    {
+      "top": "seg-s~h-light",
+      "kind": "card",
+      "plane": "local",
+      "solo": "flat",
+      "originFrame": 30,
+      "lastFrame": 89,
+      "mountFrame": 0,
+      "replay": true,
+      "offset": {
+        "x": 340,
+        "y": 300
+      },
+      "streamKey": "10864aac4d54dd8c0da437049f2cda4d7fa4e284fbc2337b87da992e8fcae083"
+    }
+  ],
+  "isolated": {
+    "top": [
+      "seg-s"
+    ],
+    "heavy": [
+      "h-r6"
+    ]
+  },
+  "denseMs": 14170,
+  "dense": {
+    "frames": 300,
+    "wrong": []
+  },
+  "stageDom": {
+    "heavy": [
+      {
+        "id": "seg-s~h-r6",
+        "suppressed": true,
+        "plane": true
+      },
+      {
+        "id": "seg-s~h-seg~i-pill",
+        "suppressed": true,
+        "plane": true
+      }
+    ],
+    "light": {
+      "mounted": true,
+      "suppressed": false
+    },
+    "segSuppressed": false
+  },
+  "stage": [
+    {
+      "frame": 31,
+      "best": 31,
+      "err": 0.51,
+      "scores": [
+        [
+          31,
+          0.51
+        ],
+        [
+          30,
+          1.37
+        ],
+        [
+          32,
+          1.85
+        ],
+        [
+          33,
+          3.87
+        ],
+        [
+          29,
+          14.84
+        ]
+      ]
+    },
+    {
+      "frame": 47,
+      "best": 47,
+      "err": 0.37,
+      "scores": [
+        [
+          47,
+          0.37
+        ],
+        [
+          48,
+          0.89
+        ],
+        [
+          46,
+          0.93
+        ],
+        [
+          45,
+          1.17
+        ],
+        [
+          49,
+          1.18
+        ]
+      ]
+    },
+    {
+      "frame": 75,
+      "best": 75,
+      "err": 0.31,
+      "scores": [
+        [
+          75,
+          0.31
+        ],
+        [
+          74,
+          0.8
+        ],
+        [
+          76,
+          0.8
+        ],
+        [
+          73,
+          1.04
+        ],
+        [
+          77,
+          1.04
+        ]
+      ]
+    },
+    {
+      "frame": 100,
+      "best": 100,
+      "err": 0.3,
+      "scores": [
+        [
+          100,
+          0.3
+        ],
+        [
+          101,
+          0.8
+        ],
+        [
+          99,
+          0.8
+        ],
+        [
+          102,
+          1.03
+        ],
+        [
+          98,
+          1.03
+        ]
+      ]
+    },
+    {
+      "frame": 133,
+      "best": 133,
+      "err": 0.3,
+      "scores": [
+        [
+          133,
+          0.3
+        ],
+        [
+          132,
+          0.8
+        ],
+        [
+          134,
+          0.8
+        ],
+        [
+          131,
+          1.03
+        ],
+        [
+          135,
+          1.03
+        ]
+      ]
+    },
+    {
+      "frame": 149,
+      "best": 149,
+      "err": 0.3,
+      "scores": [
+        [
+          149,
+          0.3
+        ],
+        [
+          148,
+          0.8
+        ],
+        [
+          147,
+          1.03
+        ]
+      ]
+    }
+  ],
+  "placeholder": {
+    "slot": true,
+    "hidden": false
+  },
+  "invalidation": {
+    "base": {
+      "seg-s~h-r6": "d87053a07714043e5003072173f7d13d03610deb4c298f01b13a1a68adc167d5",
+      "seg-s~h-seg~i-pill": "039f75e565716d479a39371a3baf4a5bae882f61a72af20d88dcc79f10916ea8"
+    },
+    "changedInner": {
+      "seg-s~h-r6": "d87053a07714043e5003072173f7d13d03610deb4c298f01b13a1a68adc167d5",
+      "seg-s~h-seg~i-pill": "dd9fa5cd1fe91ebcadf203bc85dd2c42733e77bc536ee65893fb24c153cbea36"
+    },
+    "unrelated": {
+      "seg-s~h-r6": "d87053a07714043e5003072173f7d13d03610deb4c298f01b13a1a68adc167d5",
+      "seg-s~h-seg~i-pill": "039f75e565716d479a39371a3baf4a5bae882f61a72af20d88dcc79f10916ea8"
+    }
+  },
+  "elapsedMs": 97478,
+  "fails": [],
+  "ok": true
+}
