@@ -196,24 +196,10 @@ interface ProbeJob {
   durationFrames: number;
   /** 缩水项目：一条轨道一个 clip，形状同 `FrameScene` 的 `legacyTimeline` */
   project: Project;
-  /** 剪辑段(`kernel/cutSegments.ts`):整段当一张卡测,记录的口径见 `probeCardOnce` 末尾 */
-  cut?: boolean;
 }
 
 /** 缩水项目（K1「一次只测一个片段」） */
 function shrinkProject(project: Project, track: Project["tracks"][number], clip: Project["tracks"][number]["clips"][number]): Project {
-  /*
-   * 剪辑段:嵌套场景要被引用剪辑里的素材、效果库、素材效果卡节点,这几样留着(`cuts` 本来就跟着 `...project` 带过去);
-   * 只换掉激活剪辑的序列。段挪到 0 起,预卷因此截到 0(只影响开头几帧推的是哪一段历史,不影响每帧多贵)。
-   */
-  if (clip.cutId) {
-    return {
-      ...project,
-      duration: Math.max(1 / Math.max(1, project.fps || 30), clip.end - clip.start),
-      tracks: [{ ...track, hidden: false, clips: [{ ...clip, start: 0, end: clip.end - clip.start }] }],
-      transitions: [],
-    } as Project;
-  }
   return {
     ...project,
     duration: Math.max(1 / Math.max(1, project.fps || 30), clip.end - clip.start),
@@ -236,7 +222,7 @@ function planJobs(project: Project, costs: CardCostRecord[], device: string): Pr
   const seen = new Set<string>();
   for (const track of project.tracks ?? []) {
     for (const clip of track.clips ?? []) {
-      if (!clip.cardId && !clip.nodeId && !clip.cutId) continue;
+      if (!clip.cardId && !clip.nodeId) continue;
       const identityKey = identityKeys[clip.id];
       if (!identityKey) continue;
       // 同一张卡的多个片段身份相同，只测一次
@@ -244,16 +230,13 @@ function planJobs(project: Project, costs: CardCostRecord[], device: string): Pr
       seen.add(identityKey);
       const caps = capsOf.get(clip.id) ?? {};
       const lenSec = Math.max(1 / fps, Number(clip.end) - Number(clip.start));
-      const cut = !!clip.cutId;
       jobs.push({
         clipId: clip.id,
-        cardId: cut ? `@cut:${clip.cutId}` : clip.cardId ?? clip.nodeId ?? "?",
+        cardId: clip.cardId ?? clip.nodeId ?? "?",
         identityKey,
         frameMode: typeof caps.frameMode === "string" ? caps.frameMode : "stateful",
         canvasHeavy: caps.canvasHeavy === true,
-        // 剪辑段的探针帧不当预渲染素材(它只产剪辑段级的轨道流)
-        independent: !cut && caps.compositing === "independent",
-        ...(cut ? { cut: true } : {}),
+        independent: caps.compositing === "independent",
         fps,
         lenSec,
         durationFrames: Math.max(1, Math.round(lenSec * fps)),
@@ -462,11 +445,9 @@ async function probeCardOnce(
 
 
 
-    /* ---- 两趟布尔探针：整趟在舞台里跑（K1）。剪辑段不跑:它的跳转一律整场景在后台补跑后互换,不靠子树虚拟时间,也不直接定位 ---- */
-    const boolPass = job.cut ? null : await stage.render(lastSec, { jump: true, probe: "booleans" });
-    if (!boolPass) {
-      // 剪辑段:见下面记录的口径
-    } else if (isAborted(boolPass)) {
+    /* ---- 两趟布尔探针：整趟在舞台里跑（K1） ---- */
+    const boolPass = await stage.render(lastSec, { jump: true, probe: "booleans" });
+    if (isAborted(boolPass)) {
       const out = onAbort(boolPass);
       if (out) return out;
     } else if (boolPass.booleans) {
@@ -493,17 +474,10 @@ async function probeCardOnce(
       // 计时趟真实采到的帧数(共享成本记录要它;没有时转写按 `device` 串里的 stepN 记,见 `sharedCosts.ts` 的 `samplesOf`)
       ...(summary.samples > 0 ? { samples: summary.samples } : {}),
       ...(capped ? { capped: true } : {}),
-      /*
-       * 剪辑段按「每拍代价 = 单帧耗时」记(`kind: 'random'`,`clipWeight` 走 `direct` 那一档、权重 `stepMs`):它的跳转、从段中间开始播放
-       * 一律整场景在后台补跑后互换(`stageSwap.ts`),可见舞台从不追它,所以追帧总耗时不进判重(照记下来,只作诊断)。
-       * `vtOk` / `seekOk` 显式写 false:舞台不在子树虚拟时间里追它、不直接定位它。
-       */
-      ...(job.cut ? { kind: "random" as const, vtOk: false, seekOk: false, cutSegment: true } : {
-        kind,
-        ...(typeof booleans.vtOk === "boolean" ? { vtOk: booleans.vtOk } : {}),
-        ...(typeof booleans.seekOk === "boolean" ? { seekOk: booleans.seekOk } : {}),
-        ...(booleans.seekMs !== undefined ? { seekMs: booleans.seekMs === null ? null : round(booleans.seekMs) } : {}),
-      }),
+      kind,
+      ...(typeof booleans.vtOk === "boolean" ? { vtOk: booleans.vtOk } : {}),
+      ...(typeof booleans.seekOk === "boolean" ? { seekOk: booleans.seekOk } : {}),
+      ...(booleans.seekMs !== undefined ? { seekMs: booleans.seekMs === null ? null : round(booleans.seekMs) } : {}),
       mode: RUN_MODE,
       // **显式写 false**（3.3）：STICKY_FLAGS 是「没带就沿用旧值」，不写的话 K6 写过一次 true
       // 之后每次重测都会被贴回 true，这张卡就永久判重了。pinnedHeavy 留给人工钉死，这里不写。
@@ -528,7 +502,7 @@ let looping = false;
 let firstPassDone = false;
 
 const hasCardClip = (p: Project | null): boolean =>
-  !!p?.tracks?.some((tr) => tr.clips?.some((c) => !!c.cardId || !!c.nodeId || !!c.cutId));
+  !!p?.tracks?.some((tr) => tr.clips?.some((c) => !!c.cardId || !!c.nodeId));
 
 /** The preload for this project can use the measured costs. */
 export function probeSettledFor(project: Project): boolean {

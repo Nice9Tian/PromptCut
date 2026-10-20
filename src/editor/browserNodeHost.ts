@@ -106,7 +106,6 @@ import { createPageStreams, type MeasureOutcome, type PlanState, type PublishedP
 import { setCardMeasuredHook, type CardMeasuredInfo } from "./probeRunner";
 import { pageStreamCodes, planPageStreams, type PageCardPlanValue } from "../online/pageStreamPlan";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
-import { withCutSegmentOutputs } from "../kernel/cutSegments";
 import { getCard, unknownCardClipIds } from "../kernel/registry";
 import { sourceVersionsOf } from "./costIdentity";
 import { fontFingerprintOf } from "../render/fontFingerprint";
@@ -204,8 +203,7 @@ export function pageCardPlanValue(project: Project): PageCardPlanValue | null {
   try {
     const fonts = typeof document !== "undefined" ? (document.fonts as unknown as Iterable<{ family: string; status: string }>) : null;
     return {
-      // 剪辑段的节点与导出页的 `__pcCardPlan` 同一份(`kernel/cutSegments.ts` 的 `withCutSegmentOutputs`):两边算出同一个键
-      graph: withCutSegmentOutputs(project, projectCardGraph(project, getCard) as unknown as PageCardPlanValue["graph"] & { nodes: Record<string, unknown>[]; outputs: Record<string, unknown>[] }, (id) => sourceVersionsOf()[id]) as unknown as PageCardPlanValue["graph"],
+      graph: projectCardGraph(project, getCard) as unknown as PageCardPlanValue["graph"],
       sourceVersions: sourceVersionsOf(),
       unknownClipIds: [...unknownCardClipIds(project.tracks.flatMap((track) => track.clips))].sort(),
       environment: { width: project.width, height: project.height, fps: project.fps, theme: project.themeId, fontFingerprint: fontFingerprintOf(fonts) },

@@ -7,6 +7,7 @@ import { snapshotTier } from './snapshot-store.mjs';
 import { MovFrameStore } from './frame-mov.mjs';
 import { findFfmpeg } from './bakery/index.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
+import { isFlatClipId } from '../src/kernel/cutFlatten.mjs';
 
 const exists = file => fs.access(file).then(() => true, () => false);
 
@@ -84,9 +85,9 @@ export class CardFrameCache {
       // 所以档位判定(`snapshotTier`)认 `sourceDependent`,`cacheable` 不认;
       // 第 4 步接上隔离工程的依赖链之后,把这里改成
       // `compositing === 'independent' || compositing === 'sourceDependent'`。
-      // 剪辑段(`src/kernel/cutSegments.ts` 的 `withCutSegmentOutputs`):只产剪辑段级的轨道流(`frame-stream.mjs` 的 `soloStreamKind` 'cut'),
-      // 不走这里的整帧 PNG 那一支 —— 隔离单卡工程把片段平移到 0,预卷会被截掉,画面和整场景里的对不上
-      const cacheable = compositing === 'independent' && caps.cutSegment !== true;
+      // 剪辑段里摊出来的卡(虚拟片段,`src/kernel/cutFlatten.mjs`):只产单卡轨道流(`soloStreamKind` 的 'flat'),不走这里的整帧 PNG 那一支 ——
+      // 那一支的隔离单卡工程按片段 id 在真实项目里找卡,虚拟片段不在那里
+      const cacheable = compositing === 'independent' && !isFlatClipId(output.clipId);
       const start = Number(output.start ?? node?.start ?? 0), end = Number(output.end ?? node?.end ?? start);
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
       const sampling = cardSampling(start, this.fps);

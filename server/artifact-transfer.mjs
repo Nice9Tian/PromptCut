@@ -266,7 +266,7 @@ export const streamCandidateKey = contentKey => (typeof contentKey === 'string' 
  * 与 `render-node/split.mjs`、推送队列同一种切法)。每行:
  *
  *   `{ topClipId, clipIds, kind: 'card' | 'group' | 'below', plane: 'local' | 'stage', contentKey,
- *      candidates: [{ envFingerprint, resultKey }], originFrame, lastSegment, segmentsPerTask, streamKind?: 'cut', inputSig? }`
+ *      candidates: [{ envFingerprint, resultKey }], originFrame, lastSegment, segmentsPerTask, inputSig? }`
  *
  *   - `originFrame`:这条流自己的第一帧(项目帧号)。分段从它起每 15 帧一段(`src/render/streamSegments.mjs`),页面按它把播放头的
  *     帧号换成分段号。行里**不再写 `firstSegment`**(它恒为 0)〔裁〕:改分段规则之前的页面认 `firstSegment`、按项目帧号找分段,
@@ -283,9 +283,6 @@ export const streamCandidateKey = contentKey => (typeof contentKey === 'string' 
  *     流标了 `ownCandidate: false`(切分只给别的指纹出过键、本机自己不产,在线页面的清单计划给浏览器出的那一份就是)时不补自己的指纹,
  *     候选只有切分实际出键的那些。一个候选也凑不出(没有任何指纹)的流不列;
  *   - `inputSig`:这条流的输入签名(`src/render/streamInputSig.mjs`),页面按当前项目算同一个签名,对不上就不播。算不出不写。
- *     剪辑段的片段签名含被引用剪辑(任意深度)的内容(`layerInputSig.mjs` 的 `cut` 项),被引用剪辑一改签名就变;
- *   - `streamKind: 'cut'`:只有剪辑段级的流(`planStreams` 的 `solo: 'cut'`,单卡流的形状)带,其它行没有这一项(没有剪辑段的项目层表一字不变)。
- *     在线来源据此在就绪消息里带上 `streamKind: 'cut'` 与 `inputSig`,父页 `cutStreamHeavy` 与桌面版同一个判据:签名对不上不贴、照旧活渲。
  * 形状不对的项跳过,不抛。
  */
 export function layerStreamsOf(entry, { streams = null, fingerprint = null, candidatesOf = null, segmentsPerTask = QUEUE_DEFAULTS.STREAM_SEGMENTS } = {}) {
@@ -315,10 +312,7 @@ export function layerStreamsOf(entry, { streams = null, fingerprint = null, cand
     if (!fps.length) continue;
     const candidates = fps.map(f => ({ envFingerprint: f, resultKey: resultKeyOf(contentKey, f) }));
     const inputSig = streamInputSig(project, { clipIds, kind });
-    // 剪辑段级的流(`solo: 'cut'`,单卡流的形状):另带 `streamKind: 'cut'`,同桌面预渲染进程发的层(`frame-stream.mjs` 的 `belowLayerMark`)
-    const cut = spec.solo === 'cut' && kind === 'card' && plane === 'local' && clipIds.length === 1;
-    out.push({ topClipId, clipIds, kind, plane, contentKey, candidates, originFrame, lastSegment, segmentsPerTask: per,
-      ...(cut ? { streamKind: 'cut' } : {}), ...(inputSig ? { inputSig } : {}) });
+    out.push({ topClipId, clipIds, kind, plane, contentKey, candidates, originFrame, lastSegment, segmentsPerTask: per, ...(inputSig ? { inputSig } : {}) });
   }
   return out;
 }

@@ -12,7 +12,6 @@
  */
 import type { Project } from "../kernel/project";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
-import { withCutSegmentOutputs } from "../kernel/cutSegments";
 import { allCards, cardRunState, cardRunStatesGen, cardsRegistryGen, getCard, syncedCardView, syncedUserCardsGen, unknownCardClipIds, userCardSources } from "../kernel/registry";
 import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
@@ -132,10 +131,9 @@ export function clipIdentityOf(project: Project | null): ClipIdentity {
      * 前缀 `user:online:`,与桌面的 `user:<闭包原文>` 不相撞 —— 两边的成本记录各记各的。
      */
     const cardOf = (id: string) => getCard(id) ?? (cardRunState(id)?.state === "ready" && syncedCardView(id) ? ({ id, defaults: syncedCardView(id)!.defaults } as unknown as ReturnType<typeof getCard>) : undefined);
+    const graph = costGraph(project, cardOf);
     const versions = sourceVersionsOf();
     const versionOf = (cardId: string) => versions[cardId] ?? (cardRunState(cardId)?.state === "ready" && cardRunState(cardId)!.version ? `user:online:${cardRunState(cardId)!.version}` : null);
-    // 剪辑段作为一个整体给身份、照测(`kernel/cutSegments.ts` 的 `withCutSegmentOutputs`;和导出页的卡片计划同一份)
-    const graph = withCutSegmentOutputs(project, costGraph(project, cardOf), versionOf);
     const own = { ownNode: ownsVisual };
     const { identityKeys, frameModes } = clipCostIndex(project, graph, (node) => versionOf((node as { cardId?: string }).cardId ?? ""), own);
     const capabilities = new Map<string, Record<string, unknown>>();

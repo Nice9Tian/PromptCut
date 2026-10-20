@@ -383,8 +383,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               {seg ? (
                 <CutSegmentScene seg={seg} start={clip.start} localT={localTOf(clip, t)}
                   localDirectT={settling?.has(clip.id) || frozenT.current.has(clip.id) ? localTOf(clip, t) : Math.max(0, directT - clip.start)}
-                  playToken={gen} size={frameBox(clip.frame, timeline)}
-                  frozen={!isSettling && supNow.has(clip.id)} />
+                  playToken={gen} size={frameBox(clip.frame, timeline)} />
               ) : guardRuntimeCard(clip.cardId, unsupported ? (
                 /* 这台设备跑不了的卡:卡片代码不跑,不挂组件(快照 / 流平面与占位槽位照常挂在下面) */
                 null

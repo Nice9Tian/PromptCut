@@ -20,6 +20,7 @@ export function stableJson(value) {
  * - Synchronous, browser-safe (cyrb53), NOT the SHA-256 `digest` used by the snapshot keys (A3a).
  */
 export function cardCostKey(node, sourceVersion, fps, durationFrames) {
-  const { clipId: _clipId, id: _id, inputs: _inputs, ...rest } = node ?? {};
+  // `flat`(剪辑段里摊出来的卡露出窗口截了多少头、经过哪几层段,`kernel/cutFlatten.mjs`)只改流里的像素,不改每帧多贵:同一张卡在各实例只测一次
+  const { clipId: _clipId, id: _id, inputs: _inputs, flat: _flat, ...rest } = node ?? {};
   return cyrb53(stableJson({ node: rest, sourceVersion: sourceVersion ?? null, fps, durationFrames }));
 }

@@ -31,8 +31,8 @@ export type ReadyMessage =
       /** `stream` 层才有:这条流自己的第一帧(项目帧号),分段从它起每 15 帧一段(`streamSegments.mjs`) */
       originFrame?: number;
       /** 依赖下层的流才有(`server/frame-stream.mjs` 的 `belowLayerMark`):这条流按舞台坐标产,平面挂在舞台根下 */
-      streamKind?: "below" | "cut";
-      /** 依赖下层的流、剪辑段级的流(`streamKind: 'cut'`)才有:产这条流的那一版项目的输入签名(`streamInputSig.mjs`);父页按当前项目算的对不上就不贴 */
+      streamKind?: "below";
+      /** 依赖下层的流才有:产这条流的那一版项目的输入签名(`streamInputSig.mjs`);父页按当前项目算的对不上就不贴 */
       inputSig?: string }
   | { type: "done"; localRev: number };
 
@@ -59,7 +59,7 @@ export function snapshotPath(kind: ReadyKind, key: string, localFrame: number): 
 }
 
 /** 就绪索引的页面侧形状(C3):同一张重卡的 `stream` 表和 `html` 表并存、互不覆盖 */
-export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[]; originFrame?: number; streamKind?: "below" | "cut"; inputSig?: string }>>;
+export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[]; originFrame?: number; streamKind?: "below"; inputSig?: string }>>;
 
 /**
  * 把一条消息应用到页面的 `readyIndex`。`reset` 清表,`layer` 整层替换
@@ -75,8 +75,8 @@ export function applyReadyMessage(index: ReadyIndex, message: ReadyMessage): Rea
   byKind.set(message.kind, { key: message.key, ranges: message.ranges, ...(message.groupClipIds?.length ? { groupClipIds: [...message.groupClipIds] } : {}),
     ...(isStreamOrigin(message.originFrame) ? { originFrame: message.originFrame } : {}),
     // 依赖下层的流的两项(只有 `stream` 层认):按舞台坐标贴、输入签名
-    ...(message.kind === "stream" && (message.streamKind === "below" || message.streamKind === "cut")
-      ? { streamKind: message.streamKind, ...(typeof message.inputSig === "string" && message.inputSig ? { inputSig: message.inputSig } : {}) } : {}) });
+    ...(message.kind === "stream" && message.streamKind === "below"
+      ? { streamKind: "below" as const, ...(typeof message.inputSig === "string" && message.inputSig ? { inputSig: message.inputSig } : {}) } : {}) });
   return index;
 }
 
@@ -331,11 +331,6 @@ export interface OnlineStream {
   segmentsPerTask: number;
   /** 生成这条流的项目输入的签名(`streamInputSig.mjs`);页面算的对不上就不播。没有这一项照播 */
   inputSig?: string | null;
-  /**
-   * 剪辑段级的流(层表那一行带 `streamKind: 'cut'`,只认「单卡、包裹层坐标」的行):就绪消息另带 `streamKind: "cut"` 和 `inputSig`,
-   * 父页 `cutStreamHeavy` 按 store 里当前的项目比签名,与桌面版同一个判据(被引用剪辑改过、旧流签名对不上就不贴)。
-   */
-  streamKind?: "cut";
 }
 
 export interface LayerMap {
@@ -445,9 +440,8 @@ export function parseLayerStreams(raw: unknown): OnlineStream[] {
     }
     if (!candidates.length) continue;
     const topClipId = str(r.topClipId) ? r.topClipId : clipIds[clipIds.length - 1];
-    const cut = r.streamKind === "cut" && kind === "card" && plane === "local" && clipIds.length === 1;
     out.push({ topClipId, clipIds, kind, plane, contentKey: r.contentKey, candidates, originFrame, firstSegment, lastSegment, segmentsPerTask,
-      ...(str(r.inputSig) ? { inputSig: r.inputSig } : {}), ...(cut ? { streamKind: "cut" as const } : {}) });
+      ...(str(r.inputSig) ? { inputSig: r.inputSig } : {}) });
   }
   return out;
 }
@@ -1125,7 +1119,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
       skipped: (this.map?.layers ?? []).filter((l) => !usable.includes(l)).map((l) => l.clipId),
       manifests: this.manifests.size,
       streams: this.streamsNow().map((s) => ({ clipId: s.row.topClipId, kind: s.row.kind, members: s.row.clipIds.length, resultKey: s.resultKey, envFingerprint: s.envFingerprint,
-        candidates: s.row.candidates.length, originFrame: s.row.originFrame, firstSegment: s.row.firstSegment, lastSegment: s.row.lastSegment, ready: this.streamReady(s).length, bytes: this.streamBytesReady(s), inputSig: s.row.inputSig ?? null })),
+        candidates: s.row.candidates.length, originFrame: s.row.originFrame, firstSegment: s.row.firstSegment, lastSegment: s.row.lastSegment, ready: this.streamReady(s).length, inputSig: s.row.inputSig ?? null })),
       staleStreams: (this.map?.streams ?? []).filter((r) => this.streamStale(r)).map((r) => r.topClipId),
       streamManifests: this.streamManifests.size, streamBlocks: this.streamBlocks.size, streamBlockBytes: this.streamBlocks.total, streamRev: this.streamRev,
       cacheBytes: this.cache.total, cacheSize: this.cache.size, ...this.stats,
@@ -1395,31 +1389,15 @@ export class OnlineSnapshotSource implements SnapshotSource {
     return state && seg && init ? { seg, init, state } : null;
   }
 
-  /** 诊断:这条流有几段的字节已在本页(剪辑段级的流就绪区间按已产出算,字节另数) */
-  private streamBytesReady(s: ChosenStream): number {
-    let n = 0;
-    for (const state of this.streamManifests.values()) {
-      if (state.resultKey !== s.resultKey) continue;
-      for (const [k, seg] of state.segments) if (k >= s.row.firstSegment && k <= s.row.lastSegment && this.streamBlocks.has(seg.hash)) n++;
-    }
-    return n;
-  }
-
-  /**
-   * 这条流就绪的分段号:清单里列着、而且分段与它的开头文件的字节都已在本页。
-   * 剪辑段级的流(`streamKind: "cut"`)例外:清单里列着(已产出)就算,字节不必已在本页 —— 同桌面预渲染进程发的层(就绪区间 = 已产出的分段,
-   * 舞台要哪段字节当场去取)。父页 `cutStreamHeavy` 要整段铺满才贴,按字节算的话长于取数窗口的剪辑段要等播放头走过整段才贴得上。
-   * 字节照旧只取播放头附近的(`prefetchStreams`),父页拿到字节就重投;这一拍的字节还没到时舞台照「这一拍画不出来」办(留着上一张、限时)。
-   */
+  /** 这条流就绪的分段号:清单里列着、而且分段与它的开头文件的字节都已在本页 */
   private streamReady(s: ChosenStream): number[] {
     const out: number[] = [];
-    const listedOnly = s.row.streamKind === "cut";
     for (const state of this.streamManifests.values()) {
       if (state.resultKey !== s.resultKey || !state.header) continue;
       for (const [n, seg] of state.segments) {
         if (n < s.row.firstSegment || n > s.row.lastSegment) continue;
         const init = state.inits.get(seg.init);
-        if (init && (listedOnly || (this.streamBlocks.has(seg.hash) && this.streamBlocks.has(init.hash))) && this.decodable(init)) out.push(n);
+        if (init && this.streamBlocks.has(seg.hash) && this.streamBlocks.has(init.hash) && this.decodable(init)) out.push(n);
       }
     }
     return out;
@@ -1429,14 +1407,11 @@ export class OnlineSnapshotSource implements SnapshotSource {
    * 依赖下层的流另带两项(同桌面预渲染进程发的那一层,`server/frame-stream.mjs` 的 `belowLayerMark`):`streamKind: "below"` ——
    * 父页据此发 `plane: "stage"` 的流平面(`src/editor/snapshotFeed.ts` 的 `streamLayers`),舞台把它挂在舞台根下、按舞台坐标贴;
    * `inputSig` —— 层表那一行带的输入签名,父页按 store 里当前的项目再比一次(项目一改当场撤,不等本来源收到新项目重发就绪)。
-   * 剪辑段级的流(层表那一行带 `streamKind: 'cut'`)同样带这两项,`streamKind` 是 `"cut"`(照单卡流贴在包裹层里)。
    */
   private streamMessage(s: ChosenStream): ReadyMessage {
     return { type: "layer", clipId: s.row.topClipId, kind: "stream", key: s.resultKey, ranges: framesToRanges(this.streamReady(s)),
       originFrame: s.row.originFrame, ...(s.row.kind === "group" ? { groupClipIds: [...s.row.clipIds] } : {}),
-      ...(s.row.kind === "below" ? { streamKind: "below" as const, ...(s.row.inputSig ? { inputSig: s.row.inputSig } : {}) } : {}),
-      // 剪辑段级的流:同桌面预渲染进程发的层,带 `streamKind: "cut"` 与输入签名(父页 `cutStreamHeavy` 比它)
-      ...(s.row.streamKind === "cut" ? { streamKind: "cut" as const, ...(s.row.inputSig ? { inputSig: s.row.inputSig } : {}) } : {}) };
+      ...(s.row.kind === "below" ? { streamKind: "below" as const, ...(s.row.inputSig ? { inputSig: s.row.inputSig } : {}) } : {}) };
   }
 
   /** 流的清单或字节变了:记一笔、重发就绪、叫宿主重投(流平面要带上新到的字节) */
@@ -1467,8 +1442,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     if (!map || !streams.length) return;
     const wanted: { resultKey: string; seg: [number, number]; key: string }[] = [];
     for (const s of streams) {
-      // 剪辑段级的流取整段的清单(只取清单,字节照旧按窗口取):父页判它铺没铺满要看整段(见 `streamReady`)
-      const [lo, hi] = s.row.streamKind === "cut" ? [s.row.firstSegment, s.row.lastSegment] : this.streamWindow(s.row);
+      const [lo, hi] = this.streamWindow(s.row);
       for (const seg of streamSpansInWindow(s.row, lo, hi)) {
         const key = this.streamManifestKey(s.resultKey, seg);
         const st = this.streamManifests.get(key);

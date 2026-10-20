@@ -116,8 +116,7 @@ function heavyCardClips(): string[] {
   if (!plan) return [];
   const p = getState().project;
   const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
-  // 剪辑段(`cutId`)也算:它整段当一张卡判重、产剪辑段级的流(`kernel/cutSegments.ts` 的 `withCutSegmentOutputs`),只由桌面应用与托管方的渲染服务产
-  return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId || !!byId.get(id)?.cutId);
+  return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId);
 }
 
 function l2LowMemoryCostStore(): CostStore {
