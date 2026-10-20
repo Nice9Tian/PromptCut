@@ -7,8 +7,9 @@ export interface ProjectSession {
   /**
    * 托管方的服务在这个项目里的状态。`render`(托管方的渲染节点,带子选项「生成轨道流」)只有新的文档服务才报;
    * 旧文档服务不报这一项,页面上那两行就不显示(任务书 `docs/plan/render-refactor-task.md`「甲三」)。
+   * `render.streamsAllowed`:创建者账号在不在 `render_streams` 权限分组(文档服务问账号服务得出);为 false 时「生成轨道流」置灰并提示。
    */
-  hosted: { agent: { available: boolean; enabled: boolean; url: string | null }; render?: { available: boolean; enabled: boolean; streams?: boolean } };
+  hosted: { agent: { available: boolean; enabled: boolean; url: string | null }; render?: { available: boolean; enabled: boolean; streams?: boolean; streamsAllowed?: boolean } };
   linkToken?: string;
   hasSecondaryPassword?: boolean;
   needsSecondaryPassword?: boolean;
@@ -41,7 +42,9 @@ export function accountErrorText(status: number, code: string): string {
     'desktop-bridge-unavailable': '请使用桌面版登录，或在官网打开在线编辑器。',
     'projects-unavailable': '暂时无法获取云端项目列表，请稍后重试。',
     'members-unavailable': '暂时无法获取项目成员，请稍后重试。', 'members-changed': '成员状态已变化，请刷新后重试。',
-    'access-revision-mismatch': '成员状态已变化，请刷新并重新选择操作。', 'creator-required': '只有项目创建者可以管理成员。' };
+    'access-revision-mismatch': '成员状态已变化，请刷新并重新选择操作。', 'creator-required': '只有项目创建者可以管理成员。',
+    'permission-denied': '你的账号没有开启这一项的权限，请联系托管方。', 'invalid-service': '这台云节点现在没有这个服务。',
+    'invalid-option': '这台云节点现在没有这个选项。' };
   return messages[code] || (status === 401 ? '登录已失效，请重新登录。' : status === 503 ? '云端服务暂时不可用，请稍后重试。' : status === 403 ? '没有访问这个项目的权限。' : status === 0 ? '连接云端失败，请检查网络后重试。' : `请求失败（${code}）。`);
 }
 /** 在线页面一次账号请求最多等多久(桌面版走外壳的账号桥,那边自己有 20 秒的时限) */
@@ -320,7 +323,9 @@ function validateSession(value: Record<string, any>, now: number, projectId: str
   // 渲染节点那一项:新的文档服务才报;形状对才收(两个布尔,子选项是布尔才带),旧文档服务没有它,页面上那两行不显示
   const r = value.hosted?.render;
   const render = r && typeof r === 'object' && typeof r.available === 'boolean' && typeof r.enabled === 'boolean'
-    ? { available: r.available as boolean, enabled: r.enabled as boolean, ...(typeof r.streams === 'boolean' ? { streams: r.streams as boolean } : {}) } : null;
+    ? { available: r.available as boolean, enabled: r.enabled as boolean, ...(typeof r.streams === 'boolean' ? { streams: r.streams as boolean } : {}),
+      // 权限分组的结论也要带上:原来这里漏收,账号项目的「生成轨道流」在创建者不在分组时不置灰、不提示(2026-10-20 在线实测)
+      ...(typeof r.streamsAllowed === 'boolean' ? { streamsAllowed: r.streamsAllowed as boolean } : {}) } : null;
   return { connectionTicket: value.connectionTicket, assetTicket: value.assetTicket, agentDelegationTicket: value.agentDelegationTicket,
     expiresAt: value.expiresAt, projectId, creator: value.creator, access: value.access, accessRevision: value.accessRevision,
     hosted: { agent: { available: agent.available, enabled: agent.enabled, url: agent.url }, ...(render ? { render } : {}) },
