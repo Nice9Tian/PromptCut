@@ -19,5 +19,9 @@ src/ai/cloud/events.ts、src/ai/cloud/events.test.mjs、src/editor/right/chat/Ac
 ## 部署
 只改了 `src/`:整份 src 同步进渲染树,先换在线前端、再重启渲染服务。服务端(server/)没改,agent 服务不用动。
 
-## 验证
-见下(提交后补)。
+## 验证(5 小时额度暂停时的状态)
+- 通过:`node --test src/ai/cloud/events.test.mjs` 14 个全过(含 5 个新增:真实事件行额度不足、重放幂等、无 error 事件的失败终态、friendlyErrorMessage 各类、已有行为不变);`node --test src/editor/right/chat/activity-failed.test.mjs` 2 个全过。
+- 通过:`npx tsc -b --force` 退出码 0,零错误。
+- 未完成:`npm test`(设了 PROMPTCUT_ACCOUNT_PROVIDER_ROOT / PROMPTCUT_PASSWORD_ORDER_MODULE,静默后台)在额度暂停时还没跑完,输出停在 /tmp/npmtest.out(账号相关用例已过到 RS18-chat),没有拿到总数。恢复后需:确认该进程是否还在(没在就重跑),取 `ℹ pass / fail` 总数;有失败的单独重跑给证据。
+- 未做:没有在浏览器里看真页面(没起 dev server);「Agent 操作」面板与气泡只做了源码级断言。恢复后若有余量,可起 5450 段 dev server 看一眼失败轮的样子。
+- 提交:fa61d73c(修)、e5bc9b6b(开工报告);本报告更新另提交。
