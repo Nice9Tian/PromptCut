@@ -38,8 +38,9 @@
   --fs-xs: 10px; --fs-s: 11px; --fs-m: 12px; --fs-l: 14px; --fs-xl: 16px;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-/* 深色细滚动条：标准写法 + ::-webkit-scrollbar 兜底；缩略时间轴等本来隐藏滚动条的地方更具体的规则仍然生效 */
-* { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) transparent; }
+/* 深色细滚动条。Chromium 121 起，只要元素上设了标准属性 scrollbar-width / scrollbar-color，::-webkit-scrollbar 就整套被忽略、改用系统滚动条（桌面上 10px 宽还带箭头），
+   所以标准写法只给不支持 ::-webkit-scrollbar 的浏览器（Firefox）用，Chrome / Safari 走下面的 ::-webkit-scrollbar（5px、无箭头、轨道透明） */
+@supports not selector(::-webkit-scrollbar) { * { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) transparent; } }
 ::-webkit-scrollbar { width: 5px; height: 5px; background: transparent; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--sb-thumb); border-radius: var(--r-s); }

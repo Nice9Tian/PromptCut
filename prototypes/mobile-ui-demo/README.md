@@ -91,3 +91,8 @@
 
 - 子导航栏：缩略预览和时间轴共用同一个组件（`.subnav`），高度 66、按钮 58 起宽、图标 20、字 11；没选中时两处都是 视频 | 图片 | 音频 | 剪辑 | 卡片 | 文字；选中时第一个是「引用」。
 - 时间轴缩放：完整时间轴下方一行有「−」「＋」「适应宽度」和「起点」「终点」对齐按钮。每秒像素在 6～120 之间，「−」「＋」每次约 1.25 倍，以播放头为中心；到上下限按钮禁用；进入时间轴默认「适应宽度」。双指捏合：用 Pointer Events 记录两个手指，距离变化 = 比例变化，以两指中点为中心；捏合时不会拖动、选中、移动播放头。刻度间隔随比例自适应（0.5s … 5 分钟一格），文字不重叠。
+
+### 滚动条（第十一轮返工）
+
+- Chromium 121 起，只要元素上设了标准属性 `scrollbar-width` / `scrollbar-color`，`::-webkit-scrollbar` 就整套被忽略，改用系统滚动条（桌面上 10px 宽还带箭头）。所以标准写法放进 `@supports not selector(::-webkit-scrollbar)`，只给 Firefox 用；Chrome / Safari 走 `::-webkit-scrollbar`（5px、轨道透明、圆角滑块、无箭头）。
+- 自测别只看计算值，也别用 headless shell（它不画滚动条）：用 `--headless=new` 的 Chromium，量 `offsetWidth - clientWidth`（竖向）/ `offsetHeight - clientHeight`（横向）应为 5。
