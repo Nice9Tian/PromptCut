@@ -52,7 +52,7 @@ const BELOW_OVERLAP_LEAD = 0.05;
  * 「依赖下层的流」的身份全靠这一份:服务端算流键(`server/frame-stream.mjs` 的 `planStreams`)、建隔离工程
  * (`isolatedBelowProject`)和页面算输入签名(下面的 `streamInputs`)用的是同一个函数,所以三处对「哪些层算下层、谁在谁下面」
  * 的认定不会各说各话。口径:
- *   - 画面层 = 所在序列没隐藏、时长为正,而且是卡片段(`cardId`)、挂着节点的素材效果卡片段(`nodeId`)或画面素材段(素材不是纯音频);
+ *   - 画面层 = 所在序列没隐藏、时长为正,而且是卡片段(`cardId`)、挂着节点的素材效果卡片段(`nodeId`)、剪辑段(`cutId`)或画面素材段(素材不是纯音频);
  *     只出声音的素材效果卡片段也会被算进来(这里分不出它出不出画),只是多作废;
  *   - 画家顺序同 `FrameScene`:`project.tracks` 里靠前的序列在上面,同一条序列里靠后的片段在上面;
  *   - 时间重叠按秒算,两头都放宽一个挂载提前量。没有再按「会不会碰到这块区域」筛(契约第 5.2 节:第一版宁可多作废)。
@@ -69,7 +69,7 @@ export function belowLayersOf(project, clipId) {
       if (!clip || typeof clip.id !== "string" || where.has(clip.id)) return;
       const m = typeof clip.mediaId === "string" ? media.get(clip.mediaId) : null;
       const { start, end } = span(clip);
-      const visual = !track?.hidden && !track?.sourceOnly && end > start && (!!clip.cardId || !!clip.nodeId || (!!m && m.kind !== "audio"));
+      const visual = !track?.hidden && !track?.sourceOnly && end > start && (!!clip.cardId || !!clip.nodeId || !!clip.cutId || (!!m && m.kind !== "audio"));
       where.set(clip.id, { clip, order: (tracks.length - 1 - ti) * 1e6 + ci, visual });
     });
   });
@@ -130,7 +130,7 @@ export function streamInputs(project, stream) {
     (Array.isArray(track?.clips) ? track.clips : []).forEach((clip, ci) => {
       if (!clip || typeof clip.id !== "string" || where.has(clip.id)) return;
       const m = typeof clip.mediaId === "string" ? media.get(clip.mediaId) : null;
-      const visual = !track.hidden && !track.sourceOnly && (!!clip.cardId || !!clip.nodeId || (!!m && m.kind !== "audio"));
+      const visual = !track.hidden && !track.sourceOnly && (!!clip.cardId || !!clip.nodeId || !!clip.cutId || (!!m && m.kind !== "audio"));
       where.set(clip.id, { clip, order: (tracks.length - 1 - ti) * 1e6 + ci, visual });
     });
   });

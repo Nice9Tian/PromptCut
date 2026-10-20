@@ -1,0 +1,73 @@
+{
+  "burnMs": 0,
+  "prerender": "http://127.0.0.1:3547",
+  "measured": {
+    "key": "1c7e552f070c88",
+    "record": {
+      "kind": "random",
+      "stepMs": 1.1,
+      "vtOk": false,
+      "seekOk": false,
+      "cutSegment": true
+    },
+    "pipeline": "light"
+  },
+  "beforeStream": {
+    "wallMs": 3004,
+    "advanced": 4.033,
+    "suppressed": false
+  },
+  "stream": {
+    "key": "19b91beabc5136cba25b2ec3536ac39d4701b3b243450fbe64a830ea7a123e65",
+    "solo": "cut",
+    "any": true,
+    "dense": true,
+    "segments": 8
+  },
+  "parentLayer": {
+    "key": "19b91beabc5136cba25b2ec3536ac39d4701b3b243450fbe64a830ea7a123e65",
+    "ranges": [
+      [
+        0,
+        7
+      ]
+    ],
+    "originFrame": 30
+  },
+  "playing": {
+    "wallMs": 3009,
+    "advanced": 4.033,
+    "suppressed": true,
+    "planes": [
+      "19b91beabc5136cba25b2ec3536ac39d4701b3b243450fbe64a830ea7a123e65"
+    ],
+    "track": {
+      "drawn": 64,
+      "errors": 0,
+      "lastDrawn": 121
+    },
+    "dom": {
+      "suppressed": true,
+      "plane": true
+    }
+  },
+  "paused": {
+    "suppressed": [],
+    "planes": 1
+  },
+  "changed": {
+    "beforeKey": "1c7e552f070c88",
+    "afterKey": "f9f1523b1faaa",
+    "heavyRightAfter": false
+  },
+  "restream": {
+    "key": "9f571be0042a139a47d191015012a6541a72405a13dd1262846f5fb39f11b55b",
+    "solo": "cut",
+    "any": true,
+    "dense": true,
+    "segments": 8
+  },
+  "pageErrors": [],
+  "fails": [],
+  "ok": true
+}

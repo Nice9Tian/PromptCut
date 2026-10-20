@@ -44,7 +44,7 @@ import { backStage, frontStage, onStageEvent, pushProject, syncProject } from ".
 import { runBackJob } from "./stageJobs";
 import { currentCosts, currentPlan, currentTuning, sendPlanTo } from "./planDispatch";
 import { clipIdentityOf } from "./costIdentity";
-import { clearSettled, markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
+import { clearSettled, cutStreamHeavy, markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
 import { onStageDemote } from "./demote";
 
 /** K5 (3)：等后台舞台的素材层画出一帧，最多等这么久（真墙钟），超时照样换 */
@@ -229,6 +229,18 @@ export function needsBackCatchUp(project: Project, t: number): string[] {
     if (!record) continue;
     if (record.vtOk === true) continue;   // 第一路自己追
     out.push(clip.id);
+  }
+  /*
+   * 贴着剪辑段级轨道流的剪辑段(`snapshotFeed.ts` 的 `cutStreamHeavy`):停下时它的活子树还冻在开始贴流那一刻,
+   * 和判重的 `vtOk = false` 卡一样整场景在后台补跑后互换(补跑好之前照旧贴流)。没贴流、照旧活渲的剪辑段不在这里
+   * (要按历史推进的那些另由 `statefulSegmentsAt` 收)。
+   */
+  for (const tr of project.tracks) {
+    if (tr.hidden) continue;
+    for (const clip of tr.clips) {
+      if (!clip.cutId || !cardMountedAt(clip, t) || out.includes(clip.id)) continue;
+      if (cutStreamHeavy(project, clip, t)) out.push(clip.id);
+    }
   }
   return out;
 }

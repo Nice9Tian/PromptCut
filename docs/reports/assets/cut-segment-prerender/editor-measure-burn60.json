@@ -1,0 +1,19 @@
+{
+  "burnMs": 60,
+  "prerender": "http://127.0.0.1:10268",
+  "measured": {
+    "key": "49355f2e6a3d8",
+    "record": {
+      "kind": "random",
+      "capped": true,
+      "stepMs": 63,
+      "vtOk": false,
+      "seekOk": false,
+      "cutSegment": true
+    },
+    "pipeline": "heavy"
+  },
+  "fails": [],
+  "ok": true
+}
+PASS

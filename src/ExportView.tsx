@@ -5,6 +5,7 @@ import { Stage } from "./render/Stage";
 import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
+import { withCutSegmentOutputs } from "./kernel/cutSegments";
 import { themeStyle } from "./themes";
 import { allCards, getCard, setSyncedUserCards, unknownCardClipIds, userCardSources, type SyncedUserCard } from "./kernel/registry";
 import { setExportSyncedMount } from "./render/placeholderHost";
@@ -183,7 +184,9 @@ export default function ExportView() {
             sourceVersions[card.id] = `builtin:${cardSourceVersion(card, builtinCardSourceFiles)}`;
           }
         }
-        return { graph: graph ?? projectCardGraph(proj, getCard), sourceVersions,
+        // 剪辑段作为一个整体进卡片计划(测量、分派、产剪辑段级的轨道流;`kernel/cutSegments.ts` 的 `withCutSegmentOutputs`)。
+        // 没有剪辑段的项目图原样不变
+        return { graph: withCutSegmentOutputs(proj, graph ?? projectCardGraph(proj, getCard), (id) => sourceVersions[id]), sourceVersions,
           /*
            * 这个页面的注册表里查不到定义的卡片段(未知卡片;预渲染进程里没有同步表,等于「没有定义」)。舞台不画它们,
            * `CardFrameCache.plan()` 据此不给它们出控件:不排预渲染、不进预渲染集合、层表里没有它们那一层。

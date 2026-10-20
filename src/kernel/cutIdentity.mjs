@@ -70,3 +70,91 @@ export function reachableMediaIds(project, tracks = project?.tracks) {
   for (const c of reachableCutContents(project, tracks)) add(c.tracks);
   return ids;
 }
+
+/* ───────────────────── 剪辑段当一张卡参与测量与预渲染:它的内容身份 ───────────────────── */
+
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** 节点 id → 节点(`cardNodes` 是数组;旧数据也可能是按 id 存的对象) */
+function nodesById(project) {
+  const raw = project?.cardNodes;
+  const list = Array.isArray(raw) ? raw : isObj(raw) ? Object.values(raw) : [];
+  const out = new Map();
+  for (const node of list) if (node && typeof node.id === 'string' && !out.has(node.id)) out.set(node.id, node);
+  return out;
+}
+
+/**
+ * 一个剪辑段(激活剪辑序列上的那个 `TrackClip`)画面所依赖的全部项目数据,给它的内容身份用
+ * (`kernel/cutSegments.ts` 的 `withCutSegmentOutputs` 把它放进剪辑段那个卡片图节点:预渲染的键、成本键;
+ * `render/layerInputSig.mjs` 的输入签名)。改了被引用剪辑(任意深度)里的任何东西,这一份就变,旧的测量与轨道流跟着失效。
+ *
+ *   - `cutId`、`cutOffset`:引用哪条、从第几秒起;
+ *   - `contents`:从这一段出发经剪辑段(任意深度)能走到的剪辑的内容(`reachableCutContents`,按 id 排);
+ *   - `media`:这些内容里用到的素材(按 id 排;每项只取 id、种类、哈希,没有哈希的取地址);
+ *   - `nodes`:这些内容里的片段挂着的素材效果卡节点,连同沿 `inputs` 能走到的(按 id 排);
+ *   - `filters` / `pixelMaps`:这些内容里的片段引用到的效果库条目(按 id 排);
+ *   - `cardIds`:里面用到的卡片 id(片段的 `cardId`、节点的 `cardId`;排好),调用方据此带上各自的源码版本。
+ *
+ * 宁可多作废(内容里的声音字段改了也算),不可漏。纯数据、可 JSON 序列化;剪辑段找不到(悬空)时 `contents` 为空。
+ */
+export function cutSegmentContent(project, clip) {
+  const contents = clip && typeof clip.cutId === 'string' && clip.cutId
+    ? reachableCutContents(project, [{ clips: [clip] }])
+    : [];
+  const mediaIds = new Set();
+  const nodeIds = new Set();
+  const filterIds = new Set();
+  const pixelMapIds = new Set();
+  const cardIds = new Set();
+  for (const c of contents) for (const tr of c.tracks ?? []) for (const cl of tr?.clips ?? []) {
+    if (typeof cl?.mediaId === 'string' && cl.mediaId) mediaIds.add(cl.mediaId);
+    if (typeof cl?.cardId === 'string' && cl.cardId) cardIds.add(cl.cardId);
+    if (typeof cl?.nodeId === 'string' && cl.nodeId) nodeIds.add(cl.nodeId);
+    if (isObj(cl?.filter) && typeof cl.filter.id === 'string') filterIds.add(cl.filter.id);
+    if (isObj(cl?.pixelMap) && typeof cl.pixelMap.id === 'string') pixelMapIds.add(cl.pixelMap.id);
+  }
+  // 素材效果卡节点沿输入往上游收(输入指向别的片段 `@clip/<id>/…` 的,那个片段已经在内容里)
+  const byId = nodesById(project);
+  const nodes = [];
+  const queue = [...nodeIds];
+  const seen = new Set();
+  while (queue.length) {
+    const id = queue.shift();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const node = byId.get(id);
+    if (!node) continue;
+    nodes.push(node);
+    if (typeof node.cardId === 'string' && node.cardId) cardIds.add(node.cardId);
+    for (const ref of Object.values(isObj(node.inputs) ? node.inputs : {})) {
+      const target = typeof ref === 'string' ? ref : isObj(ref) ? ref.nodeId : null;
+      if (typeof target === 'string' && target && !seen.has(target)) queue.push(target);
+    }
+  }
+  const byIdSort = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const pick = (list, ids) => (Array.isArray(list) ? list : []).filter((x) => x && ids.has(x.id)).slice().sort(byIdSort);
+  return {
+    cutId: clip?.cutId,
+    cutOffset: Math.max(0, Number(clip?.cutOffset) || 0),
+    contents,
+    // 素材只取认得出内容的几项:哈希(没有哈希的旧素材退回地址)、种类。页面与预渲染进程手里的素材条目别的字段可能不一样
+    media: pick(project?.media, mediaIds).map((m) => ({ id: m.id, kind: m.kind, hash: m.hash ?? null, ...(m.hash ? null : { url: m.url ?? null }) })),
+    nodes: nodes.sort(byIdSort),
+    filters: pick(project?.filters, filterIds),
+    pixelMaps: pick(project?.pixelMaps, pixelMapIds),
+    cardIds: [...cardIds].sort(),
+  };
+}
+
+/** 剪辑段里有没有画面素材(视频、图片):产它的轨道流时截图前要等素材就位 */
+export function cutSegmentHasVisualMedia(project, clip) {
+  const visual = new Set((Array.isArray(project?.media) ? project.media : []).filter((m) => m && m.kind !== 'audio').map((m) => m.id));
+  for (const c of clip && clip.cutId ? reachableCutContents(project, [{ clips: [clip] }]) : []) {
+    for (const tr of c.tracks ?? []) {
+      if (tr?.hidden) continue;
+      for (const cl of tr?.clips ?? []) if (typeof cl?.mediaId === 'string' && visual.has(cl.mediaId)) return true;
+    }
+  }
+  return false;
+}
