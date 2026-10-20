@@ -606,7 +606,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       const r = el.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) return;
       setBoxSize({ width: r.width, height: r.height });
-      if (camRef.current.auto) setCam(fitView(project, r));
+      if (camRef.current.auto) setCam(fitView(project, r, mobile ? 0 : undefined));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -620,7 +620,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
-    setCam(fitView({ width: project.width, height: project.height }, r));
+    setCam(fitView({ width: project.width, height: project.height }, r, mobile ? 0 : undefined));
   }, [project.width, project.height]);
 
   /*

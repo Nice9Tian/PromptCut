@@ -127,6 +127,37 @@ export function Sheet(props: {
   );
 }
 
+/* ---------------- 叠在舞台上的按钮 ---------------- */
+
+/**
+ * 叠在预览画面上的按钮(成员按钮)。画面下面是跨源的舞台 iframe,Chrome 会把触屏的点按手势交给 iframe,
+ * 按钮收得到 pointerdown / pointerup 却收不到合成的 click(2026-10-21 探针实测)。所以触屏、触控笔在抬手时就触发,
+ * 鼠标和键盘照旧走 click。
+ */
+export function StageButton(props: { className?: string; pcm?: string; title?: string; onTap: () => void; children: ReactNode }) {
+  const down = useRef<number | null>(null);
+  const tapped = useRef(0);
+  return (
+    <button
+      type="button"
+      className={props.className}
+      data-pcm={props.pcm}
+      title={props.title}
+      onPointerDown={(e) => { if (e.pointerType !== "mouse") down.current = e.pointerId; }}
+      onPointerUp={(e) => {
+        if (e.pointerType === "mouse" || down.current !== e.pointerId) return;
+        down.current = null;
+        tapped.current = Date.now();
+        props.onTap();
+      }}
+      onPointerCancel={() => { down.current = null; }}
+      onClick={() => { if (Date.now() - tapped.current > 600) props.onTap(); }}
+    >
+      {props.children}
+    </button>
+  );
+}
+
 /* ---------------- 子导航栏 ---------------- */
 
 export interface SubItem { icon: IconName; label: string; run: () => void; ref?: boolean; disabled?: boolean; pcm?: string }

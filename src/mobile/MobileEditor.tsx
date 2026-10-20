@@ -26,7 +26,7 @@ import { clipKind, clipName, mainClipsOf, mainTrackOf, planReorder } from "./mai
 import { ThumbStrip } from "./ThumbStrip";
 import { FullTimeline, type FullTimelineHandle } from "./FullTimeline";
 import { Icon } from "./icons";
-import { SubNav, fmtTc, useConfirm, useToast, type SubItem } from "./ui";
+import { StageButton, SubNav, fmtTc, useConfirm, useToast, type SubItem } from "./ui";
 import {
   AssetsSheet, CardsSheet, ClipsSheet, ConflictSheet, ExportSheet, MembersSheet, ParamsSheet,
   conflictBarText, useConflicts, type AssetTab, type CardTab, type ParamsTarget, type TransitionTarget,
@@ -135,7 +135,7 @@ export function MobileEditor() {
     if (page !== "preview") return;
     const off = (e: PointerEvent) => {
       if (!selClip && !selTr) return;
-      if ((e.target as HTMLElement).closest(".mblock, .mark, .subnav, .pager, .topbar, .cfbar, .sheet, .scrim, .confirm, .transport")) return;
+      if ((e.target as HTMLElement).closest(".mblock, .mark, .subnav, .pager, .topbar, .cfbar, .sheet, .scrim, .confirm, .transport, .stage-btns")) return;
       selectClip(null);
     };
     document.addEventListener("pointerdown", off);
@@ -305,9 +305,9 @@ export function MobileEditor() {
             <Preview variant="mobile" />
             <ProbeGate />
             <div className="stage-btns">
-              <button type="button" className="sbtn" data-pcm="members-btn" title="成员" onClick={() => setSheet({ kind: "members" })}>
+              <StageButton className="sbtn" pcm="members-btn" title="成员" onTap={() => setSheet({ kind: "members" })}>
                 {page === "timeline" ? <><Icon name="members" />{members.unavailable ? "" : `${members.people}·${members.agents}`}</> : memberLabel}
-              </button>
+              </StageButton>
             </div>
             {running.size > 0 && <div className="agent-flag" data-pcm="agent-flag">Agent 正在改</div>}
           </div>
@@ -370,14 +370,14 @@ export function MobileEditor() {
       </div>
 
       <div className="pager" data-pcm="pager">
-        <button type="button" className={page === "preview" ? "on" : undefined} data-pcm="pg-preview" onClick={() => goPage("preview")}><span className="ic"><Icon name="pgPreview" /></span><span className="lbl">缩略预览</span></button>
-        <button type="button" className={page === "timeline" ? "on" : undefined} data-pcm="pg-timeline" onClick={() => goPage("timeline")}><span className="ic"><Icon name="pgTimeline" /></span><span className="lbl">时间轴</span></button>
-        <button type="button" className={page === "agent" ? "on" : undefined} data-pcm="pg-agent" onClick={() => goPage("agent")}><span className="ic"><span className="disc"><Icon name="sparkle" /></span></span><span className="lbl">Agent</span></button>
+        <button type="button" className={page === "preview" ? "on" : undefined} data-pcm="pg-preview" onClick={() => goPage("preview")}><span className="ico"><Icon name="pgPreview" /></span><span className="lbl">缩略预览</span></button>
+        <button type="button" className={page === "timeline" ? "on" : undefined} data-pcm="pg-timeline" onClick={() => goPage("timeline")}><span className="ico"><Icon name="pgTimeline" /></span><span className="lbl">时间轴</span></button>
+        <button type="button" className={page === "agent" ? "on" : undefined} data-pcm="pg-agent" onClick={() => goPage("agent")}><span className="ico"><span className="disc"><Icon name="sparkle" /></span></span><span className="lbl">Agent</span></button>
       </div>
 
       {sheet?.kind === "assets" && <AssetsSheet tab={sheet.tab} onTab={(tab) => setSheet({ kind: "assets", tab })} onClose={() => setSheet(null)}
         onSwitchCut={(id) => { actions.switchCut(id); toast("已换成另一条剪辑"); }}
-        onPlaced={(clip, m) => { setSheet(null); toast(m.kind === "audio" ? `已加到 ${fmtTc(clip.start)}` : `已加到主要内容末尾（第 ${mainClipsOf(getState().project).length} 段）`); }} />}
+        onPlaced={(clip, m) => { setSheet(null); if (m.kind !== "audio") selectClip(null); toast(m.kind === "audio" ? `已加到 ${fmtTc(clip.start)}` : `已加到主要内容末尾（第 ${mainClipsOf(getState().project).length} 段）`); }} />}
       {sheet?.kind === "cards" && <CardsSheet tab={sheet.tab} transition={sheet.transition} onTab={(tab) => setSheet({ ...sheet, tab })} onClose={() => setSheet(null)}
         onAdded={(clip) => { setSheet(null); selectClip(clip.id); if (page !== "timeline") goPage("timeline"); }} />}
       {sheet?.kind === "clips" && <ClipsSheet onClose={() => setSheet(null)} onSwitched={(name) => { selectClip(null); toast(`缩略时间轴已换成“${name}”`); if (page === "timeline") requestAnimationFrame(() => timeline.current?.fit()); }} />}

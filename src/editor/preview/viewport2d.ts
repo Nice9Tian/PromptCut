@@ -50,7 +50,7 @@ export function fitScale(project: Size, box: Size, pad = FIT_PAD_PX): number {
   return clampScale(Math.min(w / Math.max(1, project.width), h / Math.max(1, project.height)));
 }
 
-export const fitView = (project: Size, box: Size): View2D => ({ scale: fitScale(project, box), tx: 0, ty: 0, auto: true });
+export const fitView = (project: Size, box: Size, pad = FIT_PAD_PX): View2D => ({ scale: fitScale(project, box, pad), tx: 0, ty: 0, auto: true });
 
 /**
  * 画框左上角在窗口里的位置(相对 stage 左上角)。
