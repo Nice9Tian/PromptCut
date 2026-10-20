@@ -471,6 +471,8 @@ export async function startAccountStack({ tmp, ports, dist, say = () => {}, rend
         PROMPTCUT_RENDER_MAX_CONCURRENT: '2', PROMPTCUT_RENDER_SAMPLE_MS: '2000', PROMPTCUT_RENDER_MEM_LOW: '256M',
         // 看画面走夹具的出图替身(本探针不验看画面);在线页面的构建就是公共入口在发的那一份:渲染服务拿它比代码版本
         PROMPTCUT_RENDER_LOOK: 'off', PROMPTCUT_RENDER_EDITOR_DIR: DIST, PROMPTCUT_RENDER_SKIP_CHECKS: 'ffmpeg',
+        // 照部署模板:能产轨道流(产不产看项目自己的「生成轨道流」)
+        PROMPTCUT_RENDER_STREAMS: '1',
         // 夹具的素材服务用私有 CA 签的证书(节点上是正式证书):渲染服务推产物时要信它
         NODE_EXTRA_CA_CERTS: f.caFile, PROMPTCUT_NO_PORT_FILE: '1',
         ...(process.platform === 'win32' && !process.env.PROMPTCUT_TEST_ENV_FINGERPRINT ? { PROMPTCUT_TEST_ENV_FINGERPRINT: '7e57c10d00000002' } : {}),
@@ -531,18 +533,21 @@ export async function startAccountStack({ tmp, ports, dist, say = () => {}, rend
   /** 一个对话的事件(`{ seq, ...event }`)与账本里的对话行 */
   A.conversation = (projectId, conversationId) => {
     let events = [];
-    try { events = (f.masterAssembly.eventStore.after({ projectId, conversationId }).events ?? []).map((r, i) => ({ seq: r.seq ?? i + 1, runId: r.runId ?? null, ...r.event })); } catch { events = []; }
+    let error = null;
+    try { events = (f.masterAssembly.eventStore.after({ projectId, conversationId }).events ?? []).map((r, i) => ({ seq: r.seq ?? i + 1, runId: r.runId ?? null, ...r.event })); } catch (e) { events = []; error = `events:${e?.code ?? e?.message ?? e}`; }
     let row = null;
-    try { row = f.ledger().conversationsV2?.[projectId]?.[conversationId] ?? null; } catch { row = null; }
-    return { events, row };
+    try { row = f.ledger().conversationsV2?.[projectId]?.[conversationId] ?? null; } catch (e) { row = null; error = `${error ?? ''} ledger:${e?.code ?? e?.message ?? e}`.trim(); }
+    return { events, row, error };
   };
   /**
    * 与旧组合的 `diskConversation` 同形状:`{ meta: { state, lastSeq, grant, outcome }, events }`。`state`:账本里这个对话此刻有一轮在跑是 running,
    * 否则 idle;`grant` / `outcome` 是最近一轮任务授权的状态与结局(文档服务记的)。
    */
+  A.readErrors = new Set();
   A.diskConversation = (projectId, conversationId) => {
-    const { events, row } = A.conversation(projectId, conversationId);
+    const { events, row, error } = A.conversation(projectId, conversationId);
     if (!row && !events.length) return null;
+    if (error && !A.readErrors.has(conversationId + error)) { A.readErrors.add(conversationId + error); say('account.conversation.read', { conversationId, error: String(error).slice(0, 120) }); }
     let grants = [];
     try { grants = Object.values(f.ledger().runGrantsV2 ?? {}).filter((g) => g.projectId === projectId && g.conversationId === conversationId).sort((x, y) => (x.admittedAt ?? 0) - (y.admittedAt ?? 0)); } catch { grants = []; }
     const last = grants.at(-1) ?? null;

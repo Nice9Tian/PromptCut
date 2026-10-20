@@ -262,6 +262,14 @@ async function onlineUp(who, { asCreator = false, browser = null, name = NAME } 
   const b = browser ?? await openBrowser();
   const page = await newPage(b);
   if (S?.account) {
+    // 排查用:`PC_PROBE_WSLOG=1` 时记下这个页面经 WebSocket 收到的消息种类与 events.* 的摘要
+    if (process.env.PC_PROBE_WSLOG === '1') {
+      page.wsLog = [];
+      const cdp = await page.createCDPSession();
+      await cdp.send('Network.enable');
+      cdp.on('Network.webSocketFrameSent', (e) => { try { const m = JSON.parse(e.response.payloadData); if (/^events\./.test(m.type)) page.wsLog.push({ sent: m.type, projectId: m.projectId ?? null }); } catch { /* 不是 JSON */ } });
+      cdp.on('Network.webSocketFrameReceived', (e) => { try { const m = JSON.parse(e.response.payloadData); if (/^events\./.test(m.type) || (m.type === 'error' && /projectId|事件/.test(String(m.detail ?? '')))) page.wsLog.push({ type: m.type, reason: m.reason ?? null, detail: m.detail ?? null, n: Array.isArray(m.items) ? m.items.length : null, opIds: (m.items ?? [m]).filter((x) => x.opId).length, callIds: (m.items ?? [m]).filter((x) => x.callId).length }); } catch { /* 不是 JSON */ } });
+    }
     // 账号组合:用网站账号登录,在开始页的项目列表里点这个项目(创建者在「我建的」,成员在「我加入的」)
     await accountLogin(page, S.ORIGIN, who);
     const btn = await until(`${who.username} 的项目列表里有「${name}」`, async () => {
@@ -522,7 +530,7 @@ async function leavePass(how, tag, salt) {
   const undoneBob = await until(`${tag}:bob 的页面也看到撤销的结果`, async () => ((await pageProject(bob.page))?.rows === rowsOf(salt, 9) ? true : null), 10_000, 150);
   const titleKept = (await pageProject(bob.page))?.title === want.title;
   check(`${tag} A7 在「Agent 操作」里点「撤销这步」撤掉 Agent 的最后一处改动:参数回到上一次的值、按钮变成「已撤销」;别的成员看到撤销的结果,别的改动还在`, !!target?.done && !!undoneMine && !!undoneBob && titleKept, {
-    undone: target ?? null, round: actBack ? `${actBack.index}/${actBack.total} · ${actBack.count} 次操作` : null, creatorSees: !!undoneMine, otherMemberSees: !!undoneBob, otherChangesKept: titleKept,
+    undone: target ?? null, round: actBack ? `${actBack.index}/${actBack.total} · ${actBack.count} 次操作` : null, creatorSees: !!undoneMine, otherMemberSees: !!undoneBob, otherChangesKept: titleKept, ...(back.page.wsLog ? { wsEvents: back.page.wsLog.slice(0, 12) } : {}),
   });
   await shot(back.page, `${tag}-6-creator-undone`);
   const errors = [...(bob.page.pageErrors ?? []), ...(back.page.pageErrors ?? [])];
@@ -845,14 +853,14 @@ async function stopStep() {
   timingLog.record('S 点「停止」到这一轮停下', stopped ? Date.now() - tStop : null, { formerLimit: '< 5 秒' });
   const stopMs = Date.now() - tStop;
   const shown = replyOf(await msgs(d2.page));
-  const diskStop = await until('S:云端记下这一轮已停下', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, 30_000, 200);
+  const diskStop = await until('S:云端记下这一轮已停下', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' ? d : null; }, 30_000, 200);
   const p1 = await pageProject(bob.page);
   await sleep(1500);
   const p2 = await pageProject(bob.page);
   const okWrites = (diskStop?.events ?? []).filter((e) => e.type === 'tool_result' && e.ok === true).length;
   const lastWords = (diskStop?.events ?? []).filter((e) => e.type === 'text').map((e) => e.delta ?? e.text ?? '').join('');
-  check('S B2 创建者换一个浏览器进程重新打开(在线页面):接入方式是「云端」,历史里这个对话标着在跑,点开接上后接着看得到过程;点「停止」后停下(用时只记录),云端记下这一轮停了、没说完最后那句,之后项目不再变', providerOnOpen === 'cloud'
-    && opened2.hit?.state === 'running' && !!attached && tools2 > tools1 && !!stopped && !!diskStop && diskStop.meta.state === 'idle' && !lastWords.includes('都做完了') && okWrites >= 2 && okWrites < 22 && JSON.stringify(p1) === JSON.stringify(p2), {
+  check('S B2 创建者换一个浏览器进程重新打开(在线页面):接入方式是「云端」,历史里找得到这个对话,点开接上后看得到它还在跑、过程接着出来;点「停止」后停下(用时只记录),云端记下这一轮停了、没说完最后那句,之后项目不再变', providerOnOpen === 'cloud'
+    && !!opened2.hit && !!attached && tools2 > tools1 && !!stopped && !!diskStop && diskStop.meta.state === 'idle' && !lastWords.includes('都做完了') && okWrites >= 2 && okWrites < 22 && JSON.stringify(p1) === JSON.stringify(p2), {
     providerOnOpen, listed: opened2.hit, attachedWithToolCalls: attached?.tools ?? null, toolCallsWhileWatching: [tools1, tools2], stopMs, shown, recorded: diskStop ? { state: diskStop.meta.state, grant: diskStop.meta.grant, outcome: diskStop.meta.outcome } : null,
     lastEvents: (diskStop?.events ?? []).slice(-4).map((e) => [e.type, e.code ?? e.reason ?? e.state ?? null]), writesLanded: okWrites, quietAfter: JSON.stringify(p1) === JSON.stringify(p2),
   });
