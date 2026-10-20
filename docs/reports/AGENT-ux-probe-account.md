@@ -59,3 +59,15 @@
 ## 验证
 
 本次没有改代码（只加了这份报告），没有跑 `tsc`、`npm test`、探针：没有可验的改动。
+
+## 第二轮(主会话:缺陷已修入 main 16005ae4,按 A 方案迁探针)
+
+- `git merge --no-ff main`(16005ae4)→ b0501cb6。
+- `cloud-agent-ui-lib.mjs` 新增 `startAccountStack`(账号组合夹具 `account-runner-process.mjs` 的生产主服务装配 + 真发布通道 + 真渲染服务 `server/hosted-render/main.mjs`,照 AR-10 的接法;`PROMPTCUT_RENDER_STREAMS=1`、`PROMPTCUT_RENDER_EDITOR_DIR=<在线构建>`、`NODE_EXTRA_CA_CERTS`)、`buildOnline`、`accountLogin`、`acceptConsentIfAsked`、`hostedOption`、`creatorToggleOption`;`creatorToggleService` 的口令改成可选(账号项目没有验证口令那一步)。端口:`--account-port 29003` 起 71 个,舞台与渲染服务沿用这支探针的 `--base-port`+1/+2 与 `--render-port`(桌面版那一遍的旧组合先停干净再起账号组合)。
+- `cloud-agent-ux-ui-probe.mjs`:桌面版那一遍不动(口令式旧组合);之后换到账号组合(`setupAccount`,新断言 X1),online / stop / spaced / usercard / errors 都在账号组合上跑。创建者 = 夹具的 dualUser0、bob = dualUser1、carol 现注册经项目链接加入;「生成轨道流」由创建者在在线页面的项目设置里打开(`ACCOUNT_ADMINS` 只设在探针进程里)。对话记录改读主服务事件库与文档服务账本(`diskConversation` 同形状)。
+
+### 查出的产品缺陷(没有改产品代码)
+
+1. **账号项目的页面拿不到「Agent 操作」的撤销记录(A7)**:`src/editor/sync/syncManager.ts` 账号路径两处 `link.send({ type: 'events.list' })`(约第 1247、1358 行)不带 `projectId`,文档服务事件模块 `server/docservice/modules/events.mjs` 的 `list` 先 `checkProjectId(msg.projectId)`,回 `error bad-message「projectId 不合法」`。证据(探针 `PC_PROBE_WSLOG=1` 记的重开页面 WebSocket 帧):`[{"sent":"events.list","projectId":null},{"type":"error","reason":"bad-message","detail":"projectId 不合法"}]`。后果:创建者重新打开(或换设备)后,「Agent 操作」里没有「撤销这步」;只有对话进行时开着的页面靠实时 `events.event` 才有(所以 cloud-agent-ui-probe 的 O1 能过)。建议:两处补 `projectId: options.projectId`(与本机路径第 724 行一致)。
+2. **账号项目的成员列表不显示「〈创建者〉的云端 Agent」(B1)**:发起方离线、云端 Agent 在跑时,bob 页面成员按钮是「成员：1 人 · Agent：0 个」,没有「离线，Agent 在跑」(语义 `product/agent.md` 第 59 行、`mechanism/agent.md` 第 93、175 行)。原因(读代码):`server/docservice/account-hosted.mjs` `resolveRun` 给任务连接的身份是 `userId: account:<账号>@run:<runId>`、没有 `username`,`modules/shared.mjs` `devicesOf` 按 `userId` 聚合,于是任务连接单独成一行、对不上创建者那一行,署名也取不到成员名。截图 `S-1-bob-watching.png`。
+- 观察(不算缺陷,记下):账号模式点「停止」后,气泡写「云端 Agent 服务中断,这一轮没有做完…」(任务进程被强制结清);历史列表里正在跑的对话标 idle。
