@@ -281,7 +281,11 @@ function checkPlaying(who, r, key) {
   if (!a || !b) return brief;
   check(b.key === key, `${who}:舞台上画的就是这条流`, brief.to);
   check(b.pushed === true, `${who}:流的字节是父页推给舞台的`, brief.to);
-  check(b.drawn > a.drawn && b.lastDrawn > a.lastDrawn && Math.abs(b.lastDrawn - Math.round(last.t * FPS)) <= 3, `${who}:流播放器在出帧、画着的那一帧跟着播放头`, brief);
+  // 双舞台:停下补跑后可见的舞台会换成另一台(各有各的流播放器和计数),按舞台分开看计数在不在涨
+  const origins = [...new Set(r.drawn.map((s) => s.origin))];
+  const perStage = origins.map((o) => { const xs = r.drawn.filter((s) => s.origin === o); return { origin: o, n: xs.length, from: xs[0].clip.stream.drawn, to: xs.at(-1).clip.stream.drawn, resets: xs.filter((s, i) => i && s.clip.stream.drawn < xs[i - 1].clip.stream.drawn).length }; });
+  brief.perStage = perStage;
+  check(perStage.every((x) => x.resets === 0) && perStage.some((x) => x.n >= 3 && x.to > x.from) && b.lastDrawn > a.lastDrawn && Math.abs(b.lastDrawn - Math.round(last.t * FPS)) <= 3, `${who}:流播放器在出帧(同一台舞台上计数只涨不回)、画着的那一帧跟着播放头`, brief);
   check((b.errors ?? 0) === 0, `${who}:流播放器没有报错`, brief.to);
   check(r.drawn.every((s) => s.clip.suppressed), `${who}:剪辑段的包裹层一直被抑制`);
   return brief;
@@ -356,6 +360,9 @@ try {
     const inner = S.actions.addCut('里', { switchTo: false });
     const A = S.getState().project.activeCutId;
     S.actions.switchCut(inner.id);
+    // 底下一层会动的粒子:每个分段的画面都不同(分段字节按哈希去重,静止的画面各段字节相同,数不出取了几段)
+    const bg = S.actions.addClipOnNewTrack({ index: 0, cardId: 'particles', start: 0, duration: args[0] });
+    S.actions.setClipParams(bg.id, { color: '#30ff60', quantity: 120, speed: 1.5, size: 4, links: 'yes', seed: 3 });
     const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'punch-pill', start: 0, duration: args[0] });
     S.actions.setClipParams(c.id, args[1]);
     const mid = S.actions.addCut('中', { switchTo: true });
@@ -433,6 +440,7 @@ try {
 
   /* ---------------------------------------------------------------- 5. D 改被引用剪辑(两层深) */
   await pauseAt(pageA, 1.0);
+  const keysBeforeEdit = (await costRecords(pageA)).map((r) => r.identityKey);
   const had = await until('D:改之前父页在发 S 的旧流平面', async () => { const p = await parentDiag(pageA); return planeOf(p, sId)?.key === short(key1) && p.heavy.includes(sId) ? p : null; }, 20_000, 100);
   const edit = await P(pageA, async (spec) => {
     const S = window.__pcStore;
@@ -471,6 +479,21 @@ try {
     { samples: playOld.samples.length, old: playOld.samples.filter((s) => s.tracks.some((t) => t.key === key1)).length });
 
   /* ---------------------------------------------------------------- 6. E 新流 */
+  // 改过之后 S 的成本身份可能换了(含被引用剪辑的内容):新身份测出来、又没被判重时,同样钉重、刷新,切分方才会为它重产。
+  // 层表先换了就不用钉(新身份沿用了判重)
+  out.edit.newCostKeys = [];
+  await until('E:S 重新判重(层表换行,或新身份测出来后钉重)', async () => {
+    const x = await rowNow();
+    if (x.row && x.row.contentKey !== row1.contentKey) return true;
+    const fresh = (await costRecords(pageA)).filter((r) => r.cutSegment && !keysBeforeEdit.includes(r.identityKey) && !r.pinnedHeavy).map((r) => r.identityKey);
+    if (fresh.length) {
+      out.edit.newCostKeys.push(...fresh.map(short));
+      await costRecords(pageA, fresh);
+      await enter(pageA, 'cso-jia(刷新,S 的新身份钉重生效)');
+      await pauseAt(pageA, DURATION + 1);
+    }
+    return null;
+  }, 300_000, 2000);
   await pauseAt(pageA, DURATION + 1);
   const tNew = Date.now();
   const got2 = await waitRow('E:层表换成新一版的流,流清单满密度齐', row1.contentKey);
