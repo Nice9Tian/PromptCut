@@ -1395,15 +1395,21 @@ export class OnlineSnapshotSource implements SnapshotSource {
     return state && seg && init ? { seg, init, state } : null;
   }
 
-  /** 这条流就绪的分段号:清单里列着、而且分段与它的开头文件的字节都已在本页 */
+  /**
+   * 这条流就绪的分段号:清单里列着、而且分段与它的开头文件的字节都已在本页。
+   * 剪辑段级的流(`streamKind: "cut"`)例外:清单里列着(已产出)就算,字节不必已在本页 —— 同桌面预渲染进程发的层(就绪区间 = 已产出的分段,
+   * 舞台要哪段字节当场去取)。父页 `cutStreamHeavy` 要整段铺满才贴,按字节算的话长于取数窗口的剪辑段要等播放头走过整段才贴得上。
+   * 字节照旧只取播放头附近的(`prefetchStreams`),父页拿到字节就重投;这一拍的字节还没到时舞台照「这一拍画不出来」办(留着上一张、限时)。
+   */
   private streamReady(s: ChosenStream): number[] {
     const out: number[] = [];
+    const listedOnly = s.row.streamKind === "cut";
     for (const state of this.streamManifests.values()) {
       if (state.resultKey !== s.resultKey || !state.header) continue;
       for (const [n, seg] of state.segments) {
         if (n < s.row.firstSegment || n > s.row.lastSegment) continue;
         const init = state.inits.get(seg.init);
-        if (init && this.streamBlocks.has(seg.hash) && this.streamBlocks.has(init.hash) && this.decodable(init)) out.push(n);
+        if (init && (listedOnly || (this.streamBlocks.has(seg.hash) && this.streamBlocks.has(init.hash))) && this.decodable(init)) out.push(n);
       }
     }
     return out;
@@ -1451,7 +1457,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
     if (!map || !streams.length) return;
     const wanted: { resultKey: string; seg: [number, number]; key: string }[] = [];
     for (const s of streams) {
-      const [lo, hi] = this.streamWindow(s.row);
+      // 剪辑段级的流取整段的清单(只取清单,字节照旧按窗口取):父页判它铺没铺满要看整段(见 `streamReady`)
+      const [lo, hi] = s.row.streamKind === "cut" ? [s.row.firstSegment, s.row.lastSegment] : this.streamWindow(s.row);
       for (const seg of streamSpansInWindow(s.row, lo, hi)) {
         const key = this.streamManifestKey(s.resultKey, seg);
         const st = this.streamManifests.get(key);

@@ -41,14 +41,14 @@ const seg = (id, cutId, start, end, extra = {}) => ({ id, cardId: "", cutId, sta
  * 激活剪辑上一个剪辑段 S(第 1～3 秒,即第 30～89 帧,这条流的分段 0～3)引用 B,B 里又有一个剪辑段引用 C(两层嵌套)。
  * 段只有 2 秒:在线来源只取播放头附近的分段(往回一段、往前 2 秒),播放头在段头时整段都在窗口里。
  */
-function project({ inner = "x" } = {}) {
+function project({ inner = "x", len = 2 } = {}) {
   return {
     id: "p1", version: 1, name: "p", width: 1280, height: 720, fps: FPS, duration: 10, media: [],
-    tracks: [track("ta", [seg("S", "B", 1, 3, { cutOffset: 1, frame: { x: 160, y: 90, w: 960, h: 540 } })]), track("tk", [card("k", "c", 0, 10)])],
+    tracks: [track("ta", [seg("S", "B", 1, 1 + len, { cutOffset: 1, frame: { x: 160, y: 90, w: 960, h: 540 } })]), track("tk", [card("k", "c", 0, 10)])],
     cuts: [
       { id: "A", name: "剪辑A" },
-      { id: "B", name: "剪辑B", duration: 6, transitions: [], tracks: [track("tb", [card("b1", "r6", 0, 6)]), track("tb2", [seg("bs", "C", 0, 6)])] },
-      { id: "C", name: "剪辑C", duration: 6, transitions: [], tracks: [track("tc", [card("c1", "slow", 0, 6, { params: { label: inner } })])] },
+      { id: "B", name: "剪辑B", duration: 12, transitions: [], tracks: [track("tb", [card("b1", "r6", 0, 12)]), track("tb2", [seg("bs", "C", 0, 12)])] },
+      { id: "C", name: "剪辑C", duration: 12, transitions: [], tracks: [track("tc", [card("c1", "slow", 0, 12, { params: { label: inner } })])] },
     ],
     activeCutId: "A",
   };
@@ -62,44 +62,55 @@ const ORIGIN = 30, LAST_SEG = 3;
  * 渲染节点按这一版项目写的那一行(服务端真的 `layerStreamsOf`;spec 的形状同 `planStreams` 给剪辑段出的那条)。
  * 流的结果键 = 内容键 × 指纹,由 `layerStreamsOf` 算;回 `{ row, rk }`。
  */
-function cutRow(p, tag) {
+function cutRow(p, tag, last = LAST_SEG) {
   const rows = layerStreamsOf({ project: p }, { streams: [{ topClipId: "S", clipIds: ["S"], kind: "card", plane: "local", solo: "cut",
-    contentKey: `ck-${tag}`, originFrame: ORIGIN, firstSegment: 0, lastSegment: LAST_SEG, envFingerprint: "fp-host" }] });
+    contentKey: `ck-${tag}`, originFrame: ORIGIN, firstSegment: 0, lastSegment: last, envFingerprint: "fp-host" }] });
   assert.equal(rows.length, 1);
   return { row: rows[0], rk: rows[0].candidates[0].resultKey };
 }
 
 /** 假内容库 + 假素材服务 */
 function world() {
-  const w = { content: new Map(), bytes: new Map(), clock: 1_000_000 };
+  const w = { content: new Map(), bytes: new Map(), clock: 1_000_000, fetched: [], requested: [] };
   w.deps = {
     async request(msg) {
+      w.requested.push(msg.key);
       if (!w.content.has(msg.key)) return { type: "content.item", kind: msg.kind, key: msg.key, missing: true };
       return { type: "content.item", kind: msg.kind, key: msg.key, body: structuredClone(w.content.get(msg.key)), hash: "x" };
     },
     assetBase: () => "https://h.example/media/api/asset/",
     authHeaders: async () => ({ Authorization: "Bearer T" }),
     async fetch(url) {
+      w.fetched.push(url.split("/").pop());
       const b = w.bytes.get(url.split("/").pop());
       if (!b) return { ok: false, status: 404, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) };
       return { ok: true, status: 200, headers: { get: () => "video/mp4" }, arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) };
     },
     now: () => w.clock, setTimer: () => 0, clearTimer: () => {},
   };
-  /** 一条剪辑段流的清单(分段 0～3,一份)和它的字节 */
-  w.putStream = (rk) => {
+  /**
+   * 一条剪辑段流的清单(分段 0～`last`,每 8 段一份)和它的字节;`skip` 里的分段不列(还没产出)。回 `{ initHash, hashes }`(分段号 → 哈希)
+   */
+  w.putStream = (rk, last = LAST_SEG, skip = []) => {
     const initBytes = bytesOf(`init ${rk}`), initHash = sha(initBytes), id = initHash.slice(0, 16);
     w.bytes.set(initHash, initBytes);
-    const segments = {};
-    for (let n = 0; n <= LAST_SEG; n++) {
-      const body = bytesOf(`seg ${rk} ${n}`), hash = sha(body);
-      w.bytes.set(hash, body);
-      segments[n] = { hash, bytes: body.length, init: id, stride: 1, samples: SEGMENT_FRAMES, sig: null, encoder: "libx264" };
-    }
-    w.content.set(`${rk}:0-${LAST_SEG}`, { v: 1, kind: "stream", resultKey: rk, range: { from: 0, to: LAST_SEG },
+    const hashes = {};
+    for (let from = 0; from <= last; from += 8) {
+      const to = Math.min(last, from + 7);
+      const segments = {};
+      for (let n = from; n <= to; n++) {
+        if (skip.includes(n)) continue;
+        const body = bytesOf(`seg ${rk} ${n}`), hash = sha(body);
+        w.bytes.set(hash, body);
+        hashes[n] = hash;
+        segments[n] = { hash, bytes: body.length, init: id, stride: 1, samples: SEGMENT_FRAMES, sig: null, encoder: "libx264" };
+      }
+      w.content.set(`${rk}:${from}-${to}`, { v: 1, kind: "stream", resultKey: rk, range: { from, to },
       header: { kind: "card", plane: "local", clipIds: ["S"], fps: FPS, bound: { x: -32, y: -32, w: 1024, h: 604 }, offset: { x: 480, y: 270 }, tight: null },
       inits: { [id]: { hash: initHash, bytes: initBytes.length, codec: "avc1.640028", width: 1024, height: 1208, timescale: 15360, rect: { x: -32, y: -32, w: 1024, h: 604 }, encoder: "libx264" } },
       segments });
+    }
+    return { initHash, hashes };
   };
   w.putMap = (streams) => w.content.set(`${LAYER_MAP_PREFIX}p1`, { v: 3, kind: "layer-map", projectId: "p1", entryKey: "e", fps: FPS, span: 60, at: 1, layers: [], streams });
   w.settle = async (src) => { await src.tickNow(); await src.idle(); await src.tickNow(); await src.idle(); };
@@ -201,5 +212,55 @@ test("CO-3 旧节点写的行(没有 streamKind、没有签名):照旧贴,与改
   // 改了也照贴(没签名可比;靠渲染节点换键重写层表 —— 这就是本次要补的口子)
   const p1 = project({ inner: "y" });
   assert.equal(cutStreamHeavy(p1, clipS(p1), T), true);
+  src.stop();
+});
+
+test("CO-4 长剪辑段(8 秒,16 段、两份清单):在线来源取整段的清单、字节只取播放头附近的;整段已产出就判重贴流,不必等播放头走过整段", async () => {
+  const p = project({ len: 8 });
+  const { row, rk } = cutRow(p, "c4", 15);
+  const { initHash, hashes } = w.putStream(rk, 15);
+  w.putMap([row]);
+  src.setProject("p1");
+  src.setInputs(p);
+  src.focus(T, FPS);
+  await w.settle(src);
+  const asked = [...new Set(w.requested.filter((k) => k.startsWith(rk)))].sort();
+  assert.deepEqual(asked, [`${rk}:0-7`, `${rk}:8-15`], "两份清单都取了(第二份在取数窗口之外)");
+  const last = messages.filter((m) => m.type === "layer" && m.kind === "stream").at(-1);
+  assert.deepEqual(last.ranges, [[0, 15]], "就绪区间 = 已产出的分段(整段),不是字节已在本页的");
+  assert.equal(last.streamKind, "cut");
+  // 字节只取了播放头附近的:开头文件 + 第 0～4 段(往前 2 秒 = 第 90 帧,这条流的第 4 段)
+  const got = new Set(w.fetched);
+  assert.ok(got.has(initHash));
+  for (let n = 0; n <= 15; n++) assert.equal(got.has(hashes[n]), n <= 4, `第 ${n} 段的字节${n <= 4 ? "取了" : "没取"}`);
+  // 父页:整段铺满、签名对上 → 开播就判重贴流
+  assert.equal(cutStreamHeavy(p, clipS(p), T), true);
+  const f = planFeed({ project: p, t: T, playing: true });
+  assert.deepEqual(f.heavy, ["S"]);
+  assert.deepEqual(f.streamPlanes, [{ clipIds: ["S"], key: rk, ranges: [[0, 15]], originFrame: ORIGIN }]);
+  // 播放头往后挪:后面那几段的字节这时才按需取
+  src.focus(1 + 6, FPS);
+  await w.settle(src);
+  assert.ok(w.fetched.includes(hashes[12]), "挪到第 12 段附近才取它的字节");
+  src.stop();
+});
+
+test("CO-5 长剪辑段还有一段没产出:整段没铺满,照旧活渲;产出以后贴", async () => {
+  const p = project({ len: 8 });
+  const { row, rk } = cutRow(p, "c5", 15);
+  w.putStream(rk, 15, [12]);
+  w.putMap([row]);
+  src.setProject("p1");
+  src.setInputs(p);
+  src.focus(T, FPS);
+  await w.settle(src);
+  assert.deepEqual(messages.filter((m) => m.type === "layer" && m.kind === "stream").at(-1).ranges, [[0, 11], [13, 15]]);
+  assert.equal(cutStreamHeavy(p, clipS(p), T), false, "第 12 段没产出:不贴");
+  assert.deepEqual(planFeed({ project: p, t: T, playing: true }).heavy, []);
+  // 切分方补上第 12 段:清单没满的那一份过一会儿再取
+  w.putStream(rk, 15);
+  w.clock += 60_000;
+  await w.settle(src);
+  assert.equal(cutStreamHeavy(p, clipS(p), T), true, "整段产出:贴");
   src.stop();
 });
