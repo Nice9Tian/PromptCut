@@ -99,7 +99,7 @@ test('AR-03 生成轨道流关着:不开发布连接、不发;对话里如实写
   assert.deepEqual(store.render().map((e) => e.state), ['off']);
   assert.equal(pub.opened.length, 0); assert.equal(pub.tasks.length, 0);
   const text = renderStatusText(store.render()[0]);
-  assert.match(text, /没开「生成轨道流」/); assert.match(text, /云端没有预渲染/); assert.doesNotMatch(text, /完成/);
+  assert.match(text, /没开「生成轨道流」/); assert.match(text, /云端不为预览生成轨道流/); assert.doesNotMatch(text, /完成/);
 });
 
 test('AR-04 没配发布通道:每次记 unavailable,不悄悄丢', async (t) => {
