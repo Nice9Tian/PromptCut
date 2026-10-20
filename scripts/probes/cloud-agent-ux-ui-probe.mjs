@@ -1072,7 +1072,9 @@ async function usercardStep() {
   const cp = await newPage(cb);
   await accountLogin(cp, S.ORIGIN, cu.ula);
   let UID = null;
-  cp.on('response', (r) => { try { if (new URL(r.url()).pathname === '/hosted/shared/account/create' && r.status() === 201) void r.json().then((b) => { UID = b.projectId; }).catch(() => {}); } catch { /* 不是这一条 */ } });
+  // 项目号取自新建的回包;项目链接的口令(创建者才拿得到)取自账号接口回包里的 linkToken(页面「复制项目链接」拼的就是它)
+  let LINK_TOKEN = null;
+  cp.on('response', (r) => { try { const p = new URL(r.url()).pathname; if (!p.startsWith('/hosted/shared/account/') || r.status() >= 300) return; void r.json().then((b) => { if (p === '/hosted/shared/account/create' && r.status() === 201) UID = b.projectId; if (typeof b?.linkToken === 'string') LINK_TOKEN = b.linkToken; }).catch(() => {}); } catch { /* 不是这一条 */ } });
   await typeIntoField(cp, '[data-pc="cloud-project-name"]', NAME_U);
   await cp.waitForFunction(() => { const b = document.querySelector('[data-pc="cloud-create"]'); return b && !b.disabled; }, { timeout: 30_000 });
   await cp.click('[data-pc="cloud-create"]');
@@ -1099,7 +1101,7 @@ async function usercardStep() {
   const streamsRow = await until('UC0:「生成轨道流」勾上', async () => { const r = await hostedOption(cp, 'render', 'streams'); return r?.checked ? r : null; }, 15_000, 200);
   const renderSees = await until('UC0:渲染服务看到这个项目「生成轨道流」开着', async () => ((await S.renderStatus()).projects ?? []).find((p) => p.projectId === UID)?.streams === true, 30_000, 300);
   check('UC0 第二个创建者(现注册的账号)在在线页面里新建云端项目:「云端 Agent」缺省勾上;打开「托管方的渲染节点」与「生成轨道流」后渲染服务看到开着', !!agentRow?.checked && !!renderRow?.checked && !!streamsRow && !!renderSees, {
-    agent: agentRow, render: renderRow, streams: streamsRow, renderSees: !!renderSees, projectId: UID ? 'sp_…' : null,
+    agent: agentRow, render: renderRow, streams: streamsRow, renderSees: !!renderSees, projectId: UID ? 'sp_…' : null, linkToken: !!LINK_TOKEN,
   });
   await closeDialogs(cp);
   // 夹具:只留一个记号、什么都不探的那张用户卡(判重的写法),由云端 Agent 用 create_card 建出来
@@ -1150,7 +1152,7 @@ async function usercardStep() {
   const ub = await openBrowser();
   const up = await newPage(ub);
   await accountLogin(up, S.ORIGIN, cu.uma);
-  await typeIntoField(up, '[data-pc="cloud-project-link"]', `${S.ORIGIN}/editor?project=${encodeURIComponent(UID)}`);
+  await typeIntoField(up, '[data-pc="cloud-project-link"]', `${S.ORIGIN}/editor?project=${encodeURIComponent(UID)}${LINK_TOKEN ? `&token=${encodeURIComponent(LINK_TOKEN)}` : ''}`);
   await up.waitForFunction(() => { const b = document.querySelector('[data-pc="cloud-join"]'); return b && !b.disabled; }, { timeout: 30_000 });
   await up.click('[data-pc="cloud-join"]');
   await acceptConsentIfAsked(up, 8000);
@@ -1197,16 +1199,19 @@ async function spacedStep() {
   const delta = (k) => (node?.[k] ?? 0) - (nodeBefore?.[k] ?? 0);
   // 渲染节点逐任务的收尾行:失败与作废各是什么原因(作废 = 这份内容已被新版本取代,不计入失败)
   const reasons = {};
+  let completedInLog = 0;
   for (const l of (S.render?.logs ?? []).slice(logsBefore)) {
-    const m = l?.event === 'worker.line' ? /node\.task-(failed|superseded) (\{.*\})/.exec(String(l.line ?? '')) : null;
+    const m = l?.event === 'worker.line' ? /node\.task-(failed|superseded|completed) (\{.*\})/.exec(String(l.line ?? '')) : null;
     if (!m) continue;
+    // 渲染节点为这个项目做完的任务数:数工作进程逐任务的收尾行(它的诊断计数在工作进程重起后从零开始,前后相减会是负的)
+    if (m[1] === 'completed') { try { if (JSON.parse(m[2]).projectId === PID) completedInLog += 1; } catch { /* 这一行被截断了 */ } continue; }
     try { const j = JSON.parse(m[2]); const k = `${m[1]}|${String(j.id).split(':')[0]}|${String(j.error ?? j.why ?? '').replace(/[0-9a-f]{8,}|sp_[A-Za-z0-9_-]+|clip-[a-z]+|@\d+/g, '~').slice(0, 60)}`; reasons[k] = (reasons[k] ?? 0) + 1; } catch { /* 这一行被截断了 */ }
   }
   check(`K1 写入之间隔 ${SPACED_GAP_MS / 1000} 秒(大于预渲染重试的防抖 3 秒)、连写 ${N} 次:中途就按当时的版本发计划(不等一轮结束),预渲染重试的结局是「渲染完成」,对话记录里没有渲染失败`, fin.toolOk === N && states.filter((x) => x.state === 'published').length >= 3 && states.at(-1)?.state === 'done' && !states.some((x) => x.state === 'failed' || x.state === 'unavailable'), {
     writesLanded: fin.toolOk, published: states.filter((x) => x.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((x) => x.state === 'failed'), states: states.map((x) => x.state).join(','),
   });
-  check('K2 渲染节点这一轮没有一个任务以失败收场;被新版本取代的旧任务记成作废(不计入失败)', delta('failed') === 0 && delta('completed') + delta('dedup') > 0 && !Object.keys(reasons).some((k) => k.startsWith('failed|')), {
-    renderNode: { failed: delta('failed'), superseded: delta('superseded'), completed: delta('completed'), dedup: delta('dedup'), lost: delta('lost'), discarded: delta('discarded') }, reasons,
+  check('K2 渲染节点这一轮没有一个任务以失败收场;被新版本取代的旧任务记成作废(不计入失败)', completedInLog + Math.max(0, delta('dedup')) > 0 && !Object.keys(reasons).some((k) => k.startsWith('failed|')), {
+    completedInLog, renderNode: { failed: delta('failed'), superseded: delta('superseded'), completed: delta('completed'), dedup: delta('dedup'), lost: delta('lost'), discarded: delta('discarded') }, reasons,
   });
   await shot(c.page, 'K1-spaced-writes');
   await closeBrowser(c.browser);
