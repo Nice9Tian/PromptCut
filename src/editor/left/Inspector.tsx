@@ -14,6 +14,7 @@ import { SoundEffectForm, TypingSoundControls } from "./SoundEffectForm";
 import { CardAudioForm } from "./CardAudioForm";
 import { CutSegmentForm } from "./CutSegmentForm";
 import { isCutSegment } from "../../kernel/cutSegments";
+import { NumberField } from "../fields/NumberField";
 
 /**
  * 编辑分区的参数 / 代码两页。哪一页显示由分区头部的胶囊分页决定(tab),
@@ -48,21 +49,9 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
         <div className="pc-left-muted mb-2">标签: <span className="pc-left-strong">{clip.label || "无"}</span></div>
         <div className="flex items-center gap-2 mb-2 pc-left-muted">
           <span>开始</span>
-          <input
-            data-pc="clip-start"
-            type="number" step={0.1} min={0}
-            value={clip.start}
-            onChange={e => { const v = Number(e.target.value); if (Number.isFinite(v)) actions.moveClip(clip.id, { start: v }); }}
-            className="w-16 pc-left-input is-sm"
-          />
+          <NumberField attrs={{ "data-pc": "clip-start" }} step={0.1} min={0} value={clip.start} onCommit={v => actions.moveClip(clip.id, { start: v })} className="w-16 pc-left-input is-sm" />
           <span>结束</span>
-          <input
-            data-pc="clip-end"
-            type="number" step={0.1} min={0}
-            value={clip.end}
-            onChange={e => { const v = Number(e.target.value); if (Number.isFinite(v)) actions.moveClip(clip.id, { end: v }); }}
-            className="w-16 pc-left-input is-sm"
-          />
+          <NumberField attrs={{ "data-pc": "clip-end" }} step={0.1} min={0} value={clip.end} onCommit={v => actions.moveClip(clip.id, { end: v })} className="w-16 pc-left-input is-sm" />
           <span className="pc-left-faint">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
         {clip.soundEffect && <SoundEffectForm key={clip.id} clip={clip} />}
@@ -115,21 +104,9 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
 
         <div className="flex items-center gap-2 text-xs pc-left-muted">
           <span>开始</span>
-          <input
-            data-pc="clip-start"
-            type="number" step={0.1} min={0}
-            value={clip.start}
-            onChange={e => { const v = Number(e.target.value); if (Number.isFinite(v)) actions.moveClip(clip.id, { start: v }); }}
-            className="w-16 pc-left-input is-sm"
-          />
+          <NumberField attrs={{ "data-pc": "clip-start" }} step={0.1} min={0} value={clip.start} onCommit={v => actions.moveClip(clip.id, { start: v })} className="w-16 pc-left-input is-sm" />
           <span>结束</span>
-          <input
-            data-pc="clip-end"
-            type="number" step={0.1} min={0}
-            value={clip.end}
-            onChange={e => { const v = Number(e.target.value); if (Number.isFinite(v)) actions.moveClip(clip.id, { end: v }); }}
-            className="w-16 pc-left-input is-sm"
-          />
+          <NumberField attrs={{ "data-pc": "clip-end" }} step={0.1} min={0} value={clip.end} onCommit={v => actions.moveClip(clip.id, { end: v })} className="w-16 pc-left-input is-sm" />
           <span className="pc-left-faint ml-auto">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
       </div>

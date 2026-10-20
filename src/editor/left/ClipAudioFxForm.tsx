@@ -3,6 +3,7 @@ import { actions, getState, useStore } from "../../store/project";
 import type { TrackClip } from "../../kernel/project";
 import { describeAudioFx } from "../../kernel/audioFx.mjs";
 import { createAudioFxTools } from "../right/audioFxTools";
+import { NumberField } from "../fields/NumberField";
 
 /** 和 Agent 的 apply_audio_fx 同一份校验 */
 const tools = createAudioFxTools({ getState, actions });
@@ -57,20 +58,16 @@ export function ClipAudioFxForm({ clip }: { clip: TrackClip }) {
             <span className="w-16 truncate pc-left-muted" title={k}>
               {spec.label ?? k}
             </span>
-            <input
-              data-pc={`clip-audiofx-param-${k}`}
-              type="number"
+            <NumberField
+              attrs={{ "data-pc": `clip-audiofx-param-${k}` }}
               step={stepOf(spec.min, spec.max, spec.default)}
               min={spec.min}
               max={spec.max}
               value={clip.audioFx?.params?.[k] ?? spec.default}
-              onChange={(e) => {
-                // 打「-」的瞬间 value 是空串,Number("") 是 0 —— 不能当成提交了 0,不然 -12 永远打不进去
-                if (e.target.value === "" || e.target.value === "-") return;
-                const n = Number(e.target.value);
+              onCommit={(n) => {
                 // 只带声明过的键:update_audio_fx 删掉过的参数还留在片段上的话,整栏都会被「没有参数 X」卡住
                 const kept = Object.fromEntries(Object.entries(clip.audioFx?.params ?? {}).filter(([key]) => cur.params && key in cur.params));
-                if (Number.isFinite(n)) apply(cur.id, { ...kept, [k]: n });
+                apply(cur.id, { ...kept, [k]: n });
               }}
               className="w-20 pc-left-input is-sm"
             />

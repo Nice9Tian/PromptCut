@@ -85,10 +85,12 @@ export interface SetProjectOptions {
   /** false:不进撤销栈 */
   undoable?: boolean;
   /**
-   * 数字框连续输入:同一个 key、300 ms 内的修改合并成撤销栈上的一步。
-   * 不传就和以前一样,每次一步。
+   * 同一个 key、合并窗口内的连续修改合并成撤销栈上的一步(滑块一次拖动、数字框连续步进)。
+   * 不传就和以前一样,每次一步。没传时取 `withMerge` 圈出的那一个。
    */
   mergeKey?: string;
+  /** 合并窗口(毫秒,以上一次合并为准往后滚);不传取 `MERGE_WINDOW_MS`。`Infinity` = 只认 key、不看时间(一次拖动的 key 是独一份的) */
+  mergeWindowMs?: number;
 }
 
 /**
@@ -124,6 +126,17 @@ let lastMerge: { key: string; at: number; project: Project } | null = null;
 export const MERGE_WINDOW_MS = 300;
 
 /**
+ * 把 `fn` 里发生的项目修改都归到同一个 mergeKey 下:界面上的滑块拖动、数字框步进靠它,
+ * 不必给每个 action 都多长一个参数。同步执行;嵌套时里层覆盖外层,出来后还原。
+ */
+let ambientMerge: { key: string; windowMs?: number } | null = null;
+export function withMerge<T>(merge: { key: string; windowMs?: number }, fn: () => T): T {
+  const outer = ambientMerge;
+  ambientMerge = merge;
+  try { return fn(); } finally { ambientMerge = outer; }
+}
+
+/**
  * 本页面自己的修改(经 setProject 落地的;远端来的改动、撤销 / 重做不经这里)。
  * 「用户正在编辑」(src/editor/userEditing.ts)据此判「选中的片段刚被用户动过」。
  */
@@ -144,6 +157,7 @@ function noteLocalCommit(prev: Project, next: Project) {
 
 /** 改项目文档(会进撤销栈) */
 export function setProject(next: Project, opts: SetProjectOptions = {}) {
+  if (ambientMerge && opts.mergeKey === undefined) opts = { ...opts, mergeKey: ambientMerge.key, mergeWindowMs: opts.mergeWindowMs ?? ambientMerge.windowMs };
   const prev = state.project;
   if (projectSync) {
     const landed = projectSync.commit(state.project, next, opts);
@@ -154,7 +168,7 @@ export function setProject(next: Project, opts: SetProjectOptions = {}) {
   if (opts.undoable !== false) {
     const now = Date.now();
     // 同一个数字框的连续输入:上一步就是它、中间没有别的修改、300 ms 内 → 不另起一步
-    const merge = !!opts.mergeKey && lastMerge !== null && lastMerge.key === opts.mergeKey && lastMerge.project === state.project && now - lastMerge.at <= MERGE_WINDOW_MS && history.length > 0;
+    const merge = !!opts.mergeKey && lastMerge !== null && lastMerge.key === opts.mergeKey && lastMerge.project === state.project && now - lastMerge.at <= (opts.mergeWindowMs ?? MERGE_WINDOW_MS) && history.length > 0;
     if (!merge) {
       history.push(state.project);
       if (history.length > 100) history.shift();

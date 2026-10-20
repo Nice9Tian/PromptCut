@@ -210,8 +210,10 @@ export interface CommitSummary {
 export interface CommitOptions {
   /** false:不进撤销栈(素材元数据回填、总时长跟随等) */
   undoable?: boolean;
-  /** 数字框连续输入:同一个 key、300 ms 内的提交合并成撤销栈上的一步 */
+  /** 同一个 key、合并窗口内的提交合并成撤销栈上的一步(滑块一次拖动、数字框连续步进) */
   mergeKey?: string;
+  /** 合并窗口(毫秒,以上一次合并为准往后滚);不传取 `MERGE_WINDOW_MS`;`Infinity` = 只认 key */
+  mergeWindowMs?: number;
 }
 
 export interface DocSyncOptions {
@@ -923,7 +925,7 @@ export class DocSync {
       if (stack.length > UNDO_LIMIT) stack.shift();
     } else if (opts.undoable !== false) {
       const top = this.undoStack[this.undoStack.length - 1];
-      if (opts.mergeKey && top && top.mergeKey === opts.mergeKey && now - top.lastAt <= MERGE_WINDOW_MS && this.redoStack.length === 0) {
+      if (opts.mergeKey && top && top.mergeKey === opts.mergeKey && now - top.lastAt <= (opts.mergeWindowMs ?? MERGE_WINDOW_MS) && this.redoStack.length === 0) {
         top.opIds.push(entry.opId);
         top.inverse = [...d.inverse, ...top.inverse];
         for (const e of entitiesOf(d.ops)) if (!top.entities.includes(e)) top.entities.push(e);
