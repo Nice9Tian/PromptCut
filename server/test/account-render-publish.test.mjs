@@ -253,3 +253,48 @@ test('AR-09 真实任务进程:Agent 加重卡 → 主服务以服务身份发�
     assert.ok(endAt >= 0 && endAt < all.indexOf(done), `渲染结果在那一轮收尾之后补进对话:${JSON.stringify(all.map((r) => [r.event.type, r.event.state ?? null]))}`);
     t.diagnostic(`ar_conv_on: ${JSON.stringify(all.map((r) => [r.event.type, r.event.state ?? null]))}`);
   });
+
+// ---------------------------------------------------------------- AR-11 真实任务进程:改被引用剪辑里的卡
+test('AR-11 真实任务进程:剪辑1 引用剪辑2,Agent 切到剪辑2 加卡再切回 → 发布清单里有父剪辑那份「段 id~卡 id」',
+  { skip: !have && 'account provider env not set', timeout: 300_000 }, async (t) => {
+    const { startRunnerProcessFixture } = await import('./fixtures/account-runner-process.mjs');
+    const { runnerPorts } = await import('./free-ports.mjs');
+    const pub = fakePublisher();
+    const f = await startRunnerProcessFixture({ ports: await runnerPorts(), productionMaster: true, render: { publisher: pub, limits: { debounceMs: 200 } } });
+    let actor;
+    t.after(async () => { await actor?.close().catch(() => {}); await f.close(); });
+    actor = await f.connectActor(0);
+    const send = async (conversationId, requestId, steps) => {
+      const posted = await actor.agent(`/conversations/${conversationId}/messages`, { prompt: script(steps), requestId, selectionSnapshot: { pageId: actor.pageId } });
+      assert.equal(posted.status, 202, JSON.stringify(posted.body));
+      return f.messageOf(conversationId, requestId).messageId;
+    };
+    const finished = (id) => f.grantOf(id)?.state === 'finished';
+    pub.state = { available: true, enabled: true, streams: true };
+    await f.scheduler.start();
+    // 一、建剪辑2(建完切过去),切回剪辑1,放一个引用剪辑2 的剪辑段
+    const first = await send('ar_cut_a', 'ar_cut_req_a', [
+      { tool: 'add_cut', input: { name: '剪辑2' } },
+      { tool: 'switch_cut', input: { name: '剪辑1' } },
+      { tool: 'add_track', input: { name: '主序列' } },
+      { tool: 'add_cut_segment', input: { name: '剪辑2', start: 0, duration: 4 } },
+      { say: '放好了' }]);
+    await until(() => finished(first), '放剪辑段的那一轮结清', 120_000);
+    const before = pub.tasks.length;
+    // 二、切到剪辑2 加一张卡,再切回剪辑1(和线上「云端 Agent 往剪辑2 里加卡」同一种写法)
+    const second = await send('ar_cut_b', 'ar_cut_req_b', [
+      { tool: 'switch_cut', input: { name: '剪辑2' } },
+      { tool: 'add_clip', input: { cardId: 'punch-pill', start: 0, duration: 4, params: { text: '剪辑2 里的卡' } } },
+      { tool: 'switch_cut', input: { name: '剪辑1' } },
+      { say: '加好了' }]);
+    await until(() => finished(second), '加卡的那一轮结清', 120_000);
+    const doc = (await actor.project()).project;
+    const seg = doc.tracks.flatMap((tr) => tr.clips).find((c) => typeof c.cutId === 'string' && c.cutId);
+    assert.ok(seg, `激活剪辑(剪辑1)里有剪辑段:${JSON.stringify(doc.tracks)}`);
+    const cut2 = (doc.cuts ?? []).find((c) => c.id === seg.cutId);
+    const inner = (cut2?.tracks ?? []).flatMap((tr) => tr.clips).find((c) => c.cardId === 'punch-pill');
+    assert.ok(inner, '剪辑2 里有那张卡');
+    const want = `${seg.id}~${inner.id}`;
+    await until(() => pub.tasks.slice(before).some((task) => task.input.clips.includes(want)), `发布清单里有 ${want}`, 20_000);
+    t.diagnostic(`AR-11 清单:${JSON.stringify(pub.tasks.slice(before).map((task) => task.input.clips))}`);
+  });

@@ -21,7 +21,8 @@
  *   - 闸与用量记录(`gate.mjs`、`usage.mjs`);
  *   - 对话存储(`conversations.mjs`)与预渲染重试发布(`render-request.mjs`)。
  * 本文件不引用 `src/`。
- */
+ */
+import { createRenderClipPicker } from './render-clips.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createAgentInstance } from './instance.mjs';
@@ -378,7 +379,10 @@ export function createHostedAgentService({
     const conv = entry.runs.get(conversationId);
     if (!conv?.run) return;
     const replica = entry.inst.replica();
-    render.noteWrite(conv, { clipIds: write?.clipIds ?? [], rev: write?.rev ?? replica?.rev, project: replica?.project ?? null, runId: conv.run.runId, userCards: entry.inst.hasProjectCards?.() === true });
+    // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`;一个实例一份上一次的签名表)
+    entry.renderPicker ??= createRenderClipPicker();
+    const clips = entry.renderPicker.pick(replica?.project ?? null, write?.clipIds ?? []);
+    render.noteWrite(conv, { clips, rev: write?.rev ?? replica?.rev, project: replica?.project ?? null, runId: conv.run.runId, userCards: entry.inst.hasProjectCards?.() === true });
   }
 
   /**

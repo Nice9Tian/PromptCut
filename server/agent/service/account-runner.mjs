@@ -3,7 +3,7 @@ import { coalesceRunEvents } from './coalesce-run-events.mjs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createAgentInstance } from './instance.mjs';
-import { renderableClips } from './render-request.mjs';
+import { createRenderClipPicker } from './render-clips.mjs';
 import { createAccountConversationService } from './conversation-policy.mjs';
 import { createWorkspaces } from './workspace.mjs';
 import { createEgressGate } from './egress.mjs';
@@ -120,6 +120,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       fail(503, 'look-context-unavailable');
     const assignmentDigest = grant.assignmentDigest ?? grant.scopeBinding?.assignmentDigest ?? null;
     let inst, DataWebSocket, projectAssets = null, toolset = null, bound = null, heartbeatTimer = null;
+    const renderPicker = createRenderClipPicker();
     let removeAbort = () => {};
     if (look && typeof look.heartbeat === 'function') {
       heartbeatTimer = setInterval(() => {
@@ -299,7 +300,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       onWrite: (_agent, write) => {
         try {
           const replica = inst?.replica?.();
-          const clips = renderableClips(replica?.project, write?.clipIds ?? []);
+          // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`):改被引用剪辑、切激活剪辑也收得到
+          const clips = renderPicker.pick(replica?.project, write?.clipIds ?? []);
           const rev = Number.isSafeInteger(write?.rev) ? write.rev : replica?.rev;
           if (!clips.length || !Number.isSafeInteger(rev)) return;
           onEvent({ type: 'render_request', clips, rev, userCards: inst.hasProjectCards?.() === true });
@@ -308,6 +310,8 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
       const binding = await Promise.race([inst.bindAgent({ projectId: grant.projectId, mode: 'hosted', signal }), aborted]);
       bound = binding;
+      // 绑定后记一份摊平视图的签名,第一次写入只发变了的剪辑段里的卡
+      try { renderPicker.prime(inst?.replica?.()?.project); } catch { /* 拿不到就第一次全发 */ }
       if (signal?.aborted) fail(403, 'run-fenced');
       // A signed welcome and current project.open reply must arrive before the
       // local read intent can move to execution-started or any model/tool call.
