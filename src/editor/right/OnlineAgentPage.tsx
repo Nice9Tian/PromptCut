@@ -17,7 +17,8 @@ export function OnlineAgentPage(props: { tabId: string; active: boolean; placeho
   return <OnlineCloudPanel tabId={props.tabId} active={props.active} />;
 }
 
-function OnlineCloudPanel(props: { tabId: string; active: boolean }) {
+/** 云端 Agent 的对话页本体。手机版界面(`src/mobile/`)直接挂它:AI 栏接入云端、不分身份(`product/platforms.md`「AI 栏」) */
+export function OnlineCloudPanel(props: { tabId: string; active: boolean }) {
   const cloud = useCloudAgent();
   useCloudNotices(cloud, cloud.available);
   return <CloudAiPanel tabId={props.tabId} active={props.active} cloud={cloud} />;

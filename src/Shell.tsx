@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { JSX } from "react";
 import Editor from "./Editor";
 import { StartPage } from "./StartPage";
@@ -9,6 +9,7 @@ import { useSkin } from "./skins/useSkin";
 import { peekCapturedInvite } from "./online/invite";
 import { forgetSharedResume, hasSharedResume, resumeShared } from "./editor/sync/syncManager";
 import { newProject } from "./editor/io/proc";
+import { currentDeviceKind, pickLayout } from "./online/deviceKind";
 
 /**
  * 开始页和编辑器之间的门。
@@ -27,6 +28,14 @@ import { newProject } from "./editor/io/proc";
  * (`ONLINE_BUILD`,写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」;M8 遗留 L24)。
  */
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
+/**
+ * 界面跟身份走(`product/platforms.md`「身份」):身份为手机的在线浏览器用手机版界面(`src/mobile/`),其余用桌面界面。
+ * 页面载入时判一次,同一个地址;`?layout=mobile|desktop` 只给开发和验收用(`src/online/deviceKind.ts` 的 `pickLayout`)。
+ * 手机版按需载入,桌面界面不下载它。
+ */
+const LAYOUT = pickLayout({ online: ONLINE_BUILD, kind: currentDeviceKind().kind, search: typeof location !== "undefined" ? location.search : "" });
+const MobileApp = lazy(() => import("./mobile/MobileApp"));
 
 export function Shell(): JSX.Element {
   // Keep the shared --ui-* palette mounted on the start page as well as the editor.
@@ -129,6 +138,13 @@ export function Shell(): JSX.Element {
       <div style={{ padding: 24, color: "var(--ui-danger)", fontFamily: "var(--ui-font)" }}>
         打不开:{bootError}
       </div>
+    );
+  }
+  if (LAYOUT === "mobile") {
+    return (
+      <Suspense fallback={null}>
+        <MobileApp inEditor={inEditor} onEnterEditor={() => setInEditor(true)} />
+      </Suspense>
     );
   }
   return (

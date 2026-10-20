@@ -237,15 +237,18 @@ function OfflineUnsentNotice() {
   );
 }
 
-/** 挂在编辑器根上一次 */
-export function SyncOverlays() {
+/**
+ * 挂在编辑器根上一次。手机版界面(`src/mobile/`)把离线对话框换成自己的冲突合并面板(`offlineDialog: false`),
+ * 其余浮层照用这里的。
+ */
+export function SyncOverlays(props: { offlineDialog?: boolean } = {}) {
   const notice = useSync((v) => v.notice);
   return (
     <>
       {notice ? <UndoNoticeBar n={notice} /> : null}
       <Toasts />
       {ONLINE ? <OfflineUnsentNotice /> : null}
-      <OfflineDialog />
+      {props.offlineDialog === false ? null : <OfflineDialog />}
       <BlockingDialog />
     </>
   );

@@ -179,19 +179,34 @@
 
 ## 进度
 
-- [ ] M1 设备判别
-- [ ] M2 界面对得上演示稿
-- [ ] M3 业务层接通
-- [ ] M4 桌面不受影响
-- [ ] M5 基线
-- [ ] M6 语义
+（分支 `claude/mobile-online`；探针都在本机隔离环境跑：本机托管组合 + 仿 nginx 的代理 + 在线构建，见 `scripts/probes/lib/mobile-env.mjs`）
+
+- [x] **M1 设备判别**：`src/online/deviceKind.ts`，单测 `deviceKind.test.mjs` DK1～DK7 全过（安卓 Chrome、桌面 Chrome、iPhone Safari、iPad Safari 桌面声明、两样都读不到、iPad 的闸门口子、界面选择与 `?layout=`）。真页面（`mobile-ui-probe.mjs` 的 M1 段）：安卓仿真（UA + `userAgentData.mobile=true`）进手机版；桌面仿真进桌面界面；手机 `?layout=desktop` 进桌面、桌面 `?layout=mobile` 进手机版。
+- [x] **M2 界面对得上演示稿**：`scripts/probes/mobile-ui-probe.mjs` 全过（0 项失败）：底部导航栏三项 113×46、图标 22×22、Agent 未选中渐变圆无描边、选中外圈青蓝描边且圆仍 22×22；子导航栏两页同高 66 同位、选中后第一个「引用」；冲突横条在顶栏正下方（顶栏底 44、横条顶 46、高 36）、处理完收起且缩略时间轴仍贴底；缩略卡点选、长按换序、未选中按住拖只滚动、点 ◇ 原地选中；＋ / − 每次 1.25 倍以播放头为中心（播放头横坐标差 < 0.1 px）、适应宽度、双指捏合比例 = 两指距离比且以中点为中心（中点时间差 0.005 s）、捏合不选中不动播放头；返回层级（浏览器后退、✓、分页之间来回切再后退一次回缩略预览、主页回项目列表）；滚动条竖向 `offsetWidth - clientWidth = 5`、横向 `offsetHeight - clientHeight = 5`；375 宽各页无横向溢出；页面无未捕获错误、控制台无报错（掐断连接造冲突时的 WebSocket 重连报错与本机环境缺账号服务的 `/api/account/me` 404 单列）。关键页面和演示稿同尺寸并排截图（`side-*.png`）已看。
+- [x] **M3 业务层接通**：`scripts/probes/mobile-business-probe.mjs` 全过：经素材库导入三张图（进项目、带内容哈希）并接到主要内容；选中、seek（拖缩略时间轴）、播放 / 暂停；长按换序（撤销一步撤回、重做回来）；拖右手柄改时长；分割、复制、删除（确认后）、撤销 / 重做；加卡片（落在播放头）、加文字卡、调整面板改文字；加交叉溶解、换成淡出；新建剪辑并切过去、切回；引用切到 Agent 并发出引用（`pc-quote-clip`）；导出（手机没有「另存为」，浏览器里逐帧导出成 mp4 下载，373,438 字节）；没有演示稿假数据；桌面界面打开同一个项目内容一致；刷新后仍在。
+- [x] **M4 桌面不受影响**：`editor-preview-smoke.mjs` 通过；`cut-nesting-ui-probe.mjs` A1～A9 全过；`c10-ui-probe.mjs` 只有 A7「点置灰的入口不发请求」一条不过，开工前的 main（`16005ae4`）同一条同样不过（舞台取 `/media-s/` 素材），属原有问题，见下「没做到的与原因」。桌面仿真下看不到手机版任何部分（M1 段）。
+- [x] **M5 基线**（提交 `76cf067d`）：`npx tsc -b --force` 零错误；`npm test` 7252 项、通过 7237、失败 0、跳过 15（同一提交上一次与构建、探针并行跑时有 3 项服务端测试超时失败，单独重跑 18/18 过，空载全量重跑零失败）；`npm run build` 与在线构建成功；导出确定性 1800/1800 帧逐像素相同；没改渲染管线、导出取帧、卡片画面（`Preview.tsx` 只加了手机版的 `variant` 与适应窗口的留边参数，缺省不变），按 `verification.md` 不跑其余渲染附加项。
+- [x] **M6 语义**：四处照写（`product/platforms.md`「身份」、`workflow/editing.md`「手机版界面」、`glossary.md`「手机版界面」一组、`mechanism/platforms.md`「身份」），`TODO.md` 竖屏一行改指向本文件。
 - [ ] M7 上线
 - [ ] M8 汇报
+
+### 没做到的与原因
+
+- `c10-ui-probe.mjs` A7 一条：main 上原本就不过（对照跑过），与本任务无关，未修。
 
 ## 解法表
 
 （格式见 `guide_files/solution_table.md`）
 
+卡点 1：M2「成员按钮打开成员面板」。触屏点叠在预览画面右上角的成员按钮，面板不出现；鼠标点得开。尺子：`mobile-ui-probe.mjs` 里「点不到 scrim」那一项。事件记录：`pointerdown`、`touchend` 都到了按钮，没有 `click`（画面下面是跨源舞台 iframe，Chrome 把点按手势交给了 iframe）。
+
+| # | 轮 | 层 | 父 | 候选 | 改善机制 | g | h | f | 验证 | 状态 | 结果 / 学到 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1 | 三级 | — | 叠在舞台上的按钮触屏在 `pointerup` 触发，鼠标、键盘照走 `click`（`src/mobile/ui.tsx` 的 `StageButton`） | 不依赖浏览器合成的 click | 1 | 1 | 2 | `mobile-ui-probe.mjs` 成员面板一项 | 已试·过 | 通过；只改实现，不改语义 |
+
 ## 〔裁〕清单
 
+无。四处语义改动都是任务书里用户已认可的（「语义改动」第 1～4 条），没有执行中另加的裁定。
+
 ## 待用户项
+
