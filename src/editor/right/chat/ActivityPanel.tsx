@@ -113,6 +113,14 @@ function RoundActivity(props: {
   };
 
   if (!segs.length && !inboundIcon) {
+    // 出错留痕:失败的一轮不能只写「没有操作」,要说明是因为失败,并带上原因
+    if (!live && (m.error || m.outcome === "error")) {
+      return (
+        <div className="ai-activity-empty is-failed" data-pc="agent-activity-empty" data-failed="1">
+          这一轮失败了,没有执行任何操作{m.error ? `:${m.error}` : "。"}
+        </div>
+      );
+    }
     return <div className="ai-activity-empty" data-pc="agent-activity-empty">{live ? "还没有操作" : "这一轮没有操作"}</div>;
   }
 

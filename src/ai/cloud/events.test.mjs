@@ -131,3 +131,84 @@ test('a run that failed before its first event: a failed assistant reply is adde
   const late = settleFromQueue(applyCloudEvent([], accepted), dead);
   assert.equal(late[1].id, 'ca-run_a');
 });
+
+// ---- 出错留痕:模型第一次请求就失败(节点上的真实事件行,2026-10-21 额度不足) ----
+import { friendlyErrorMessage, shortReason, cloudErrorMessage } from './events.ts';
+
+const QUOTA_RAW = 'openai HTTP 403: token quota is not enough, token remain quota: ＄0.124114, need quota: ＄0.127928 (request id: 20261021050740667659703KtlPNKvH)';
+// 形状取自 master-run-events.sqlite 的 run_8b0457ac(seq 211～218):页面事件流写出的是 {...row.event, projectId, conversationId, seq}
+const realBinding = { projectId: 'sp_pqqwrqehp6yw34mextkkc24vwv', conversationId: 'cc-mvfw3j7c-eqwh',
+  messageId: '603fe67e-dce3-4839-9b85-810c58ff51ef', senderAccountId: 'acc_f17cf0ab2b14547df056b54f',
+  runId: 'run_8b0457ac-10ef-46be-83c1-846066ed5574', runGrantId: 'grant_cd6ef6c3-10f2-4ace-918e-c069c5345ff3',
+  instanceId: '273d3438-c1c1-4864-8b5a-59677796f532', instanceGeneration: 76, serviceKid: '_yTY0wwd' };
+const realRun = [
+  { type: 'user', seq: 211, projectId: realBinding.projectId, conversationId: realBinding.conversationId, messageId: realBinding.messageId,
+    prompt: '请把剪辑2里那张粒子背景卡的粒子颜色改成淡蓝色,其它不动。', senderAccountId: realBinding.senderAccountId, senderNameAtSend: '9tian', arrivalSeq: 267, attachments: [] },
+  { type: 'run', seq: 212, ...realBinding },
+  { type: 'session', seq: 213, ...realBinding, sessionId: 'account-v2-cc-mvfw3j7c-eqwh' },
+  { type: 'diagnostic', seq: 214, ...realBinding, stage: 'request', data: { deepAuto: false, effort: 'high', maxRounds: 24, model: 'claude-opus-5-5', vendor: 'openai' } },
+  { type: 'progress', seq: 215, ...realBinding, phase: 'requesting', round: 1, maxRounds: 24, completed: 0, failed: 0, elapsedMs: 0, text: '第 1/24 轮：正在等待模型响应…' },
+  { type: 'diagnostic', seq: 216, ...realBinding, stage: 'request', data: { messages: 33, round: 1, summaryOnly: false, tools: 130 } },
+  { type: 'error', seq: 217, ...realBinding, message: QUOTA_RAW },
+  { type: 'runner_done', seq: 218, ...realBinding, outcome: 'failed', settlement: 'pending' },
+];
+const failedQueue = (state = 'done') => queueSnapshot({ type: 'queue.state', conversationId: realBinding.conversationId, queueRevision: 9, aclRevision: 1,
+  currentRunId: null, items: [{ messageId: realBinding.messageId, arrivalSeq: 267, position: null, runId: realBinding.runId, state,
+    outcome: { status: 'failed', reason: null } }] }, realBinding.conversationId);
+
+test('真实事件行:额度不足的一轮折出人话原因,结清后失败收尾,原文(金额、请求号)不外露', () => {
+  const folded = applyCloudEvents([], realRun);
+  const waiting = folded[1];
+  assert.equal(waiting.error, '模型服务的额度不够,这一轮没有执行(需要托管方充值)。已经落地的改动保留在项目里。');
+  const settled = settleFromQueue(folded, failedQueue())[1];
+  assert.equal(settled.pending, false);
+  assert.equal(settled.outcome, 'error');
+  assert.match(settled.error, /额度不够/);
+  assert.match(settled.error, /托管方充值/);
+  assert.doesNotMatch(settled.error, /0\.12|request id|openai|HTTP/i);
+  assert.equal(settled.text, '');
+  assert.equal(settled.tools.length, 0);
+});
+
+test('真实事件行:同一份事件重放两遍结果相同', () => {
+  const once = settleFromQueue(applyCloudEvents([], realRun), failedQueue());
+  const twice = settleFromQueue(applyCloudEvents(once, realRun), failedQueue());
+  assert.equal(twice[1].error, once[1].error);
+  assert.equal(twice.length, 2);
+});
+
+test('失败的一轮没有 error 事件时(只有队列里的终态),也要写出失败而不是「服务中断」', () => {
+  const noError = realRun.filter(e => e.type !== 'error');
+  const settled = settleFromQueue(applyCloudEvents([], noError), failedQueue())[1];
+  assert.equal(settled.outcome, 'error');
+  assert.match(settled.error, /执行失败/);
+  assert.doesNotMatch(settled.error, /服务中断/);
+});
+
+test('friendlyErrorMessage:各类模型错误说人话,不外露密钥与请求号', () => {
+  assert.match(friendlyErrorMessage(QUOTA_RAW), /额度不够.*托管方充值/);
+  assert.match(friendlyErrorMessage('openai HTTP 402: insufficient_balance'), /额度不够/);
+  assert.match(friendlyErrorMessage('openai HTTP 401: Incorrect API key provided: sk-abcdefghijklmnop1234'), /拒绝了云端 Agent 的凭证/);
+  assert.doesNotMatch(friendlyErrorMessage('openai HTTP 401: Incorrect API key provided: sk-abcdefghijklmnop1234'), /sk-/);
+  assert.match(friendlyErrorMessage('openai HTTP 429: rate limit reached'), /太忙/);
+  assert.match(friendlyErrorMessage('openai HTTP 503: upstream down'), /HTTP 503.*稍后再试/);
+  assert.match(friendlyErrorMessage('fetch failed: ECONNRESET'), /连不上模型服务/);
+  const odd = friendlyErrorMessage('openai HTTP 400: bad request: messages[3].content must be a string (request id: abcdef0123456789abcdef0123456789abcd)');
+  assert.match(odd, /^模型调用失败\(HTTP 400\)/);
+  assert.doesNotMatch(odd, /abcdef0123456789/);
+  assert.ok(odd.length < 120);
+  assert.match(friendlyErrorMessage('something broke'), /^云端 Agent 出错了:something broke$/);
+  assert.equal(friendlyErrorMessage('云端 Agent 服务中断,这一轮没有做完。'), '云端 Agent 服务中断,这一轮没有做完。');
+  assert.equal(cloudErrorMessage('model'), '模型调用失败。');
+  assert.equal(shortReason('Bearer abc.def-ghi token https://x.y/z  end'), 'token end');
+});
+
+test('已有行为不变:正常轮收尾、第一个事件之前就失败的轮(补位)', () => {
+  const ok = settleFromQueue(applyCloudEvents([], [accepted, event('run', 2), event('text', 3, { delta: 'Result' }), event('runner_done', 4, { settlement: 'pending' })]),
+    snapshot([{ state: 'done', outcome: { status: 'done', reason: null } }]));
+  assert.equal(ok[1].outcome, 'completed');
+  assert.equal(ok[1].error, undefined);
+  const early = settleFromQueue(applyCloudEvents([], [accepted]), snapshot([{ state: 'done', messageId: 'message_a', outcome: { status: 'failed', reason: 'worker-failed' } }]));
+  assert.equal(early.length, 2);
+  assert.match(early[1].error, /进程出了故障/);
+});

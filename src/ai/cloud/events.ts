@@ -19,7 +19,7 @@ export const assistantMessageId = (runId: string) => `ca-${runId}`;
 
 /** 每个收尾原因在对话里留给人看的话(契约 7.3 节)。服务端的 `error.message` 优先,没给才用这里的 */
 export function cloudErrorMessage(code: string | undefined, message?: string): string {
-  if (typeof message === "string" && message) return message;
+  if (typeof message === "string" && message) return friendlyErrorMessage(message);
   switch (code) {
     case "revoked": return "云端 Agent 的这段对话已失效(开关被关、你被移出项目或项目已删除)。已经落地的改动保留在项目里。";
     case "interrupted": return "云端 Agent 服务中断,这一轮没有做完。已经落地的改动保留在项目里。";
@@ -29,6 +29,46 @@ export function cloudErrorMessage(code: string | undefined, message?: string): s
     case "unavailable": return "云端 Agent 暂时连不上文档服务。";
     default: return "云端 Agent 出错了。";
   }
+}
+
+/** 给人看的原因最长这么多个字:模型网关回来的原文可能带整段报文 */
+const REASON_MAX = 80;
+
+/** 去掉密钥、令牌、请求号、网址这类不该给用户看的东西,压成一行并截短 */
+export function shortReason(raw: string): string {
+  const text = raw
+    .replace(/\(?\s*(?:request[ _-]?id|req[ _-]?id|trace[ _-]?id)\s*[:=]\s*[\w.-]+\s*\)?/gi, "")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "")
+    .replace(/\b(?:sk|pk|key|tok|token|api)[-_][A-Za-z0-9_-]{8,}/gi, "")
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "")
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+  return text.length > REASON_MAX ? `${text.slice(0, REASON_MAX)}…` : text;
+}
+
+/**
+ * 服务端的 `error.message` 变成给人看的话(出错留痕,语义 product/agent.md)。
+ * 模型网关的报错形如 `openai HTTP 403: token quota is not enough, ...`,原文是英文又带请求号和金额,用户读不懂也无从下手。
+ * 已经是中文的话(服务端自己写的「已失效」「中断」等)原样放过;不认得的英文报错压成一句短原因,不带密钥、请求号、网址。
+ */
+export function friendlyErrorMessage(message: string): string {
+  const http = /\bHTTP\s+(\d{3})\b/i.exec(message);
+  const status = http ? Number(http[1]) : 0;
+  const quota = /quota|insufficient[ _-]?(?:funds|balance|credit)|out of credit|billing|balance/i.test(message);
+  if (/[一-鿿]/.test(message) && !quota) return shortReason(message) || "云端 Agent 出错了。";
+  if (quota && (!status || status === 402 || status === 403 || status === 429)) return "模型服务的额度不够,这一轮没有执行(需要托管方充值)。已经落地的改动保留在项目里。";
+  if (status === 401 || (status === 403 && /api[ _-]?key|unauthori[sz]ed|forbidden|permission|invalid.*(?:key|token)/i.test(message))) {
+    return "模型服务拒绝了云端 Agent 的凭证,这一轮没有执行(需要托管方检查模型配置)。";
+  }
+  if (status === 429) return "模型服务太忙(请求过于频繁),这一轮没有执行,请稍后再试。";
+  if (status === 404) return "托管方配置的模型找不到,这一轮没有执行(需要托管方检查模型配置)。";
+  if (status >= 500) return `模型服务暂时出了故障(HTTP ${status}),这一轮没有执行,请稍后再试。`;
+  if (/timed? ?out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|fetch failed|network|socket hang up/i.test(message)) {
+    return "连不上模型服务(网络超时或被断开),这一轮没有执行,请稍后再试。";
+  }
+  const reason = shortReason(message);
+  if (http) return reason ? `模型调用失败(HTTP ${status}):${reason}` : `模型调用失败(HTTP ${status})。`;
+  return reason ? `云端 Agent 出错了:${reason}` : "云端 Agent 出错了。";
 }
 
 /** 预渲染重试进展(契约 16 节)写成一行状态 */
@@ -283,6 +323,7 @@ function settledPatch(m: CloudAccountMessage, item: CloudQueueItem): Partial<Clo
   if (status === 'cancelled') return { ...base, outcome: 'aborted', progress: { ...m.progress, phase: 'paused', text: '已停止' } as ChatMessage['progress'] };
   const error = m.error ?? (item.outcome?.reason === 'worker-failed'
     ? '云端执行这一轮的进程出了故障,这一轮没有做完。已经落地的改动保留在项目里。'
+    : status === 'failed' ? '云端 Agent 这一轮执行失败了,没有做完。已经落地的改动保留在项目里。'
     : cloudErrorMessage('interrupted'));
   return { ...base, outcome: 'error', error, progress: { ...m.progress, phase: 'paused', text: error } as ChatMessage['progress'] };
 }
