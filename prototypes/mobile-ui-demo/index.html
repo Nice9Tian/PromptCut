@@ -78,13 +78,14 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 
 /* ===== 2. 编辑主界面 ===== */
 .stage-wrap { flex: none; padding: 0 12px; }
-.stage { position: relative; width: 100%; aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; background: #000; }
+.stage { position: relative; width: 100%; aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; background: #000; container-type: inline-size; }
 .stage .bgl { position: absolute; inset: 0; transition: background .2s; }
 .stage .sun { position: absolute; width: 54px; height: 54px; border-radius: 50%; right: 18%; top: 18%; background: radial-gradient(#ffe9a8, #ffb04a); filter: blur(.5px); }
 .stage .sea { position: absolute; left: 0; right: 0; bottom: 0; height: 38%; background: linear-gradient(#1b6fa8, #0c3556); }
 .stage .wave { position: absolute; left: -10%; right: -10%; bottom: 33%; height: 10px; border-radius: 50%; background: #ffffff33; }
 .stage .title { position: absolute; left: 0; right: 0; text-align: center; font-weight: 800; color: #fff;
   text-shadow: 0 2px 10px #0008; white-space: nowrap; transition: none; cursor: grab; touch-action: none; user-select: none; }
+#titles .title { pointer-events: auto; }
 .stage .sub-cap { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; font-size: 11px; color: #fff; }
 .stage .sub-cap span { background: #000a; padding: 2px 8px; border-radius: 4px; }
 .stage .sel { position: absolute; border: 1.5px dashed var(--accent); border-radius: 3px; pointer-events: none; display: none; }
@@ -127,16 +128,51 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .clip .h.l { left: 0; border-radius: 5px 0 0 5px; } .clip .h.r { right: 0; border-radius: 0 5px 5px 0; }
 .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 4; pointer-events: none; }
 .playhead::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: var(--accent); border-bottom: 0; }
-.tl-tools { flex: none; display: flex; gap: 6px; padding: 6px; border-top: 1px solid var(--line); }
-.tl-tools button { flex: 1; height: 32px; border-radius: 8px; background: var(--panel2); font-size: 12px; color: var(--text); }
-.tl-tools button:disabled { opacity: .35; }
-.tl-tools button:not(:disabled):active { background: var(--accent-dim); }
 
 .dock { flex: none; display: flex; padding: 6px 8px 10px; gap: 4px; background: var(--bg); border-top: 1px solid var(--line); }
 .dock button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; border-radius: 10px; color: var(--dim); font-size: 11px; position: relative; }
 .dock button .g { font-size: 18px; }
 .dock button:active, .dock button.on { color: var(--accent); background: var(--panel); }
 .dock .badge-n { position: absolute; top: 2px; right: 22%; min-width: 16px; height: 16px; border-radius: 8px; background: var(--plum); color: #fff; font-size: 10px; display: grid; place-items: center; padding: 0 4px; }
+
+/* 默认态：只有一条主轨；编辑态：展开完整时间轴 */
+.pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#editor.editing #defaultPane, #editor:not(.editing) #editPane, #editor.editing #topNormal, #editor:not(.editing) #topEdit { display: none; }
+#editor.editing .stage-wrap { padding: 0 44px; }
+.edit-head { justify-content: space-between; }
+.edit-head h1 { text-align: center; font-size: 15px; }
+.edit-head .icon-btn { color: var(--text); font-size: 22px; }
+.edit-head .icon-btn.ok { color: var(--accent); }
+.mainhead { flex: none; display: flex; align-items: baseline; justify-content: space-between; padding: 12px 14px 4px; }
+.mainhead b { font-size: 14px; }
+.mainhead span { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.mainstrip { flex: none; display: flex; align-items: center; padding: 6px 12px; overflow-x: auto; scrollbar-width: none; min-height: 80px; }
+.mainstrip::-webkit-scrollbar { display: none; }
+.madd { flex: none; width: 40px; height: 64px; border-radius: 10px; background: var(--panel2); display: grid; place-items: center; font-size: 22px; margin-right: 6px; position: sticky; left: 0; z-index: 3; box-shadow: 8px 0 8px var(--bg); }
+.mblock { flex: none; width: 80px; height: 64px; border-radius: 10px; position: relative; overflow: hidden; border: 2px solid transparent; touch-action: pan-x; user-select: none; cursor: pointer; }
+.mblock .no { position: absolute; left: 5px; top: 4px; font-size: 10px; background: #0007; padding: 0 5px; border-radius: 4px; }
+.mblock .du { position: absolute; left: 6px; bottom: 4px; font-size: 12px; font-weight: 600; text-shadow: 0 1px 3px #000; font-variant-numeric: tabular-nums; }
+.mblock.lift { z-index: 5; border-color: var(--accent); box-shadow: 0 6px 18px #000a; opacity: .92; }
+.mark { flex: none; width: 24px; height: 24px; margin: 0 3px; border-radius: 50%; background: var(--panel2); display: grid; place-items: center; font-size: 11px; color: var(--dim); }
+.mark.has { background: var(--plum); color: #fff; }
+.mhint { flex: none; padding: 0 14px 6px; font-size: 11px; color: var(--dim); }
+.overlays { flex: none; padding: 8px 14px; }
+.overlays .t { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+.overlays .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ochip { height: 30px; padding: 0 10px; border-radius: 8px; background: var(--panel2); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.ochip i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.ochip small { color: var(--dim); font-size: 10px; }
+.growfill { flex: 1; }
+.align { flex: none; display: flex; justify-content: center; gap: 8px; padding: 8px 12px 0; }
+.align button { height: 30px; padding: 0 12px; border-radius: 8px; background: var(--panel2); font-size: 12px; color: var(--dim); }
+.align button:active { color: var(--accent); }
+.etools { flex: none; display: flex; gap: 2px; padding: 8px 6px 14px; overflow-x: auto; scrollbar-width: none; border-top: 1px solid var(--line); margin-top: 8px; }
+.etools::-webkit-scrollbar { display: none; }
+.etools button { flex: none; width: 62px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 0; border-radius: 10px; font-size: 11px; }
+.etools .g { font-size: 19px; }
+.etools button:active { background: var(--panel); }
+.etools .kind { flex: none; width: 58px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 0; font-size: 11px; color: var(--accent); border-right: 1px solid var(--line); margin-right: 4px; }
+.clip.v { background-image: repeating-linear-gradient(90deg, transparent 0 34px, #0005 34px 36px); }
 
 /* ===== 底部面板（sheet） ===== */
 .scrim { position: absolute; inset: 0; background: #0009; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
@@ -304,7 +340,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
 
   <!-- ===================== 2. 编辑主界面 ===================== -->
   <section class="screen" id="editor">
-    <div class="topbar">
+    <div class="topbar" id="topNormal">
       <button class="icon-btn" onclick="go('home')" title="返回项目列表">‹</button>
       <h1 id="projName">夏日海边 Vlog</h1>
       <button class="chip warn" id="cfBtn" onclick="openSheet('conflict')">冲突合并 2</button>
@@ -312,11 +348,17 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
       <button class="btn primary" style="height:30px;padding:0 12px" onclick="openSheet('export')">导出</button>
     </div>
 
+    <div class="topbar edit-head" id="topEdit">
+      <button class="icon-btn" onclick="exitEdit(false)" title="退出（放弃本次编辑）">✕</button>
+      <h1 id="editTitle">编辑</h1>
+      <button class="icon-btn ok" onclick="exitEdit(true)" title="完成">✓</button>
+    </div>
+
     <div class="stage-wrap">
       <div class="stage" id="stage">
         <div class="bgl" id="bgl"></div>
         <div class="sun"></div><div class="sea"></div><div class="wave"></div>
-        <div class="title" id="title">夏日海边</div>
+        <div id="titles" style="position:absolute;inset:0;pointer-events:none"></div>
         <div class="sel" id="sel"></div>
         <div class="sub-cap"><span id="cap">海风、阳光，还有你</span></div>
         <div class="badge" id="stageBadge">16:9 · 30fps</div>
@@ -332,25 +374,33 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
       <button class="icon-btn" id="redoBtn" onclick="redo()" title="重做">↷</button>
     </div>
 
-    <div class="cliptabs" id="cliptabs"></div>
-
-    <div class="timeline">
-      <div class="tl-scroll" id="tlScroll">
-        <div class="tl-inner" id="tlInner"></div>
-      </div>
-      <div class="tl-tools">
-        <button id="tSplit" onclick="splitClip()" disabled>✂ 在此切分</button>
-        <button id="tDup" onclick="dupClip()" disabled>⧉ 复制</button>
-        <button id="tDel" onclick="delClip()" disabled>🗑 删除</button>
-        <button id="tEdit" onclick="openSheet('params')" disabled>⚙ 调整</button>
+    <!-- 默认态：只有一条主轨，只放主要内容；各段等宽，不按真实时长缩放 -->
+    <div class="pane" id="defaultPane">
+      <div class="cliptabs" id="cliptabs"></div>
+      <div class="mainhead"><b>主要内容</b><span id="mainSum"></span></div>
+      <div class="mainstrip" id="mainStrip"></div>
+      <div class="mhint">各段等宽显示，不按真实时长 · 点一段进入编辑 · 长按拖动换顺序</div>
+      <div class="overlays" id="overlays"></div>
+      <div class="growfill"></div>
+      <div class="dock">
+        <button onclick="assetTab='视频';openSheet('assets')"><span class="g">▦</span>素材</button>
+        <button onclick="openSheet('cards')"><span class="g">✦</span>卡片</button>
+        <button onclick="addText()"><span class="g">T</span>文字</button>
+        <button onclick="assetTab='音频';openSheet('assets')"><span class="g">♪</span>音频</button>
+        <button onclick="openSheet('chat')"><span class="g">💬</span>Agent<span class="badge-n" id="chatBadge">1</span></button>
       </div>
     </div>
 
-    <div class="dock">
-      <button onclick="openSheet('assets')"><span class="g">▦</span>素材</button>
-      <button onclick="openSheet('cards')"><span class="g">✦</span>卡片</button>
-      <button onclick="openSheet('params')"><span class="g">☰</span>调整</button>
-      <button onclick="openSheet('chat')"><span class="g">💬</span>Agent<span class="badge-n" id="chatBadge">1</span></button>
+    <!-- 编辑态：展开完整时间轴（按时间缩放、刻度、多轨、播放头、两端手柄），底部是这一项的工具 -->
+    <div class="pane" id="editPane">
+      <div class="timeline" style="border-radius:10px">
+        <div class="tl-scroll" id="tlScroll"><div class="tl-inner" id="tlInner"></div></div>
+      </div>
+      <div class="align">
+        <button onclick="alignSel('s')">⇤ 起点对齐播放头</button>
+        <button onclick="alignSel('e')">终点对齐播放头 ⇥</button>
+      </div>
+      <div class="etools" id="etools"></div>
     </div>
   </section>
 
@@ -467,23 +517,23 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
 
 <script>
 /* ============ 假数据 ============ */
-const TOTAL = 24;            // 秒
+let TOTAL = 24;            // 秒
 const PX = 22;               // 每秒像素
 const LANE_LABEL = ['视', '效', '字', '音'];
 let clipsByTab = {
   '剪辑 1': [
-    { id: 'c1', lane: 0, s: 0,  d: 6,  name: '海浪远景.mp4', kind: 'v' },
-    { id: 'c2', lane: 0, s: 6,  d: 8,  name: '沙滩奔跑.mp4', kind: 'v' },
-    { id: 'c3', lane: 0, s: 14, d: 10, name: '日落.mp4', kind: 'v', muted: true },
+    { id: 'c1', lane: 0, s: 0,  d: 6,  name: '海浪远景.mp4', kind: 'v', col: '#1b6fa8' },
+    { id: 'c2', lane: 0, s: 6,  d: 8,  name: '沙滩奔跑.mp4', kind: 'v', col: '#c9803a' },
+    { id: 'c3', lane: 0, s: 14, d: 10, name: '日落.mp4', kind: 'v', col: '#b24a3a', muted: true },
     { id: 'c4', lane: 1, s: 5,  d: 2,  name: '✦ 光斑转场', kind: 'fx' },
     { id: 'c5', lane: 1, s: 13, d: 2,  name: '✦ 推拉转场', kind: 'fx' },
-    { id: 'c6', lane: 2, s: 0.5, d: 5, name: 'T 夏日海边', kind: 'cap', title: true },
+    { id: 'c6', lane: 2, s: 0.5, d: 5, name: 'T 夏日海边', kind: 'cap', title: true, P: { size: 30, opacity: 100, y: 38, color: '#ffffff', text: '夏日海边' } },
     { id: 'c7', lane: 2, s: 7,  d: 6,  name: 'T 字幕：海风…', kind: 'cap' },
     { id: 'c8', lane: 3, s: 0,  d: 24, name: '♪ 轻松吉他.mp3', kind: 'a' }
   ],
   '片头': [
-    { id: 'd1', lane: 0, s: 0, d: 3, name: '品牌 Logo 动效', kind: 'fx' },
-    { id: 'd2', lane: 2, s: 0.5, d: 2, name: 'T 夏日海边', kind: 'cap' }
+    { id: 'd1', lane: 0, s: 0, d: 3, name: '品牌 Logo 动效', kind: 'fx', col: '#8a5a9e' },
+    { id: 'd2', lane: 2, s: 0.5, d: 2, name: 'T 夏日海边', kind: 'cap', title: true, P: { size: 30, opacity: 100, y: 38, color: '#ffffff', text: '夏日海边' } }
   ]
 };
 let tabs = ['剪辑 1', '片头'];
@@ -491,7 +541,6 @@ let curTab = '剪辑 1';
 let selId = null;
 let now = 0, playing = false, raf = 0, lastT = 0;
 const hist = []; let redoStack = [];
-let P = { size: 30, opacity: 100, y: 38, color: '#ffffff', text: '夏日海边' };
 
 const ASSETS = {
   '视频': [['海浪远景', '00:06', '#1b6fa8'], ['沙滩奔跑', '00:08', '#c9803a'], ['日落', '00:10', '#b24a3a'], ['无人机俯拍', '00:12', '#2b6b4f'], ['冲浪', '00:05', '#1a8aa0'], ['海鸥', '00:04', '#6d7a90']],
@@ -512,15 +561,16 @@ const fmt = t => { const m = Math.floor(t / 60), s = (t % 60); return String(m).
 const clone = o => JSON.parse(JSON.stringify(o));
 
 /* ============ 屏幕与面板 ============ */
-function go(id) { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); closeSheets(); if (id !== 'editor') stop(); }
+function go(id) { $('#editor').classList.remove('editing'); selId = null; document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); closeSheets(); if (id !== 'editor') stop(); }
 function openProject(id) {
+  $('#editor').classList.remove('editing'); selId = null;
   $('#projName').textContent = { p1: '夏日海边 Vlog', p2: '产品发布会预告', p3: '教程：剪映迁移指南' }[id];
   go('editor'); render();
 }
 function openSheet(n) {
   closeSheets(true);
   if (n === 'params') {
-    if (!selId) { toast('先点时间轴上的一个片段，再来调整'); return; }
+    if (!selId || !findClip(selId)) { toast('先点一个片段进入编辑，再来调整'); return; }
     buildParams();
   }
   if (n === 'assets') buildAssets();
@@ -538,15 +588,32 @@ function closeSheets(keep) {
 let toastT;
 function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => e.classList.remove('on'), 2000); }
 
-/* ============ 时间轴 ============ */
+/* ============ 主要内容（默认态：只有一条主轨） ============ */
+const LCOL = { v: '#1b5f78', fx: '#8a5a9e', a: '#2b6b4f', cap: '#8a7a30' };
+const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+const fmtD = d => { d = Math.round(d * 10) / 10; const m = Math.floor(d / 60), s = d % 60; return String(m).padStart(2, '0') + ':' + (Number.isInteger(s) ? String(s).padStart(2, '0') : s.toFixed(1).padStart(4, '0')); };
+const editing = () => $('#editor').classList.contains('editing');
+
 function clips() { return clipsByTab[curTab]; }
 function findClip(id) { return clips().find(c => c.id === id); }
-function render() { renderTabs(); renderTimeline(); renderStage(); updateButtons(); }
+// 主要内容 = 主轨（视频轨）里的各段，首尾相接。
+function mainClips() {
+  // TODO(用户 2026-10-20)：需要自动判断「主要内容」的逻辑算法。演示稿里先写死为视频主轨的几段；真实产品里要按内容自动判断哪些片段算主要内容。
+  return clips().filter(c => c.lane === 0).sort((a, b) => a.s - b.s);
+}
+// 主轨各段按顺序首尾相接，总时长随之变；叠加内容保持绝对时间，只在越界时收回
+function reflow() {
+  let t = 0; mainClips().forEach(c => { c.s = t; t += c.d; });
+  TOTAL = Math.max(t, 1);
+  clips().filter(c => c.lane > 0).forEach(c => { if (c.s + c.d > TOTAL) { c.d = Math.max(.5, Math.min(c.d, TOTAL)); c.s = Math.max(0, TOTAL - c.d); } });
+  now = Math.min(now, TOTAL);
+}
+function render() { reflow(); renderTabs(); renderMain(); renderTimeline(); renderEditUI(); updateButtons(); updateTime(); }
 
 function renderTabs() {
   const box = $('#cliptabs'); box.innerHTML = '';
   tabs.forEach(t => {
-    const b = document.createElement('div'); b.className = 'ctab' + (t === curTab ? ' on' : '');
+    const b = el('div', 'ctab' + (t === curTab ? ' on' : ''));
     b.innerHTML = `<span>${t}</span>` + (tabs.length > 1 ? `<span class="x" data-x="1">✕</span>` : '');
     b.onclick = e => {
       if (e.target.dataset.x) { // 只关标签，不删剪辑；最后一个不能关
@@ -557,11 +624,105 @@ function renderTabs() {
     b.ondblclick = () => { const n = prompt('重命名剪辑', t); if (n && !clipsByTab[n]) { clipsByTab[n] = clipsByTab[t]; delete clipsByTab[t]; tabs = tabs.map(x => x === t ? n : x); curTab = n; render(); } };
     box.appendChild(b);
   });
-  const add = document.createElement('div'); add.className = 'ctab add'; add.textContent = '＋';
+  const add = el('div', 'ctab add', '＋');
   add.onclick = () => { let n = 1; while (clipsByTab['剪辑 ' + n]) n++; const name = '剪辑 ' + n; clipsByTab[name] = []; tabs.push(name); curTab = name; selId = null; render(); };
   box.appendChild(add);
 }
 
+function transitionAt(c) { const bt = c.s + c.d; return clips().find(x => x.lane === 1 && Math.abs(x.s + x.d / 2 - bt) <= 1); }
+
+function renderMain() {
+  const m = mainClips(), box = $('#mainStrip'); box.innerHTML = '';
+  const add = el('button', 'madd', '＋'); add.title = '添加素材'; add.onclick = () => { assetTab = '视频'; openSheet('assets'); }; box.appendChild(add);
+  const used = new Set();
+  m.forEach((c, i) => {
+    // 各段一样宽，不按真实时长缩放；时长写在段上
+    const b = el('div', 'mblock'); b.dataset.id = c.id; b.title = c.name; b.style.background = `linear-gradient(135deg, ${c.col || '#335'}, #0009)`;
+    b.innerHTML = `<span class="no">${i + 1}</span><span class="du">${fmtD(c.d)}${c.muted ? ' 🔇' : ''}</span>`;
+    bindMainBlock(b, c); box.appendChild(b);
+    if (i < m.length - 1) {
+      const fx = transitionAt(c); if (fx) used.add(fx.id);
+      const mk = el('button', 'mark' + (fx ? ' has' : ''), fx ? '◇' : '＋'); mk.title = fx ? fx.name : '添加转场';
+      mk.onclick = () => fx ? enterEdit(fx.id) : (cardTab = '转场', openSheet('cards'));
+      box.appendChild(mk);
+    }
+  });
+  const sum = Math.round(m.reduce((a, c) => a + c.d, 0) * 10) / 10;
+  $('#mainSum').textContent = m.length ? `${m.length} 段 · 共 ${fmtD(sum)}` : '还没有内容';
+  // 其余内容（文字、字幕、卡片、音乐）不在主轨上，列在下面，点一下进入编辑
+  const rest = clips().filter(c => c.lane > 0 && !used.has(c.id)).sort((a, b) => a.s - b.s);
+  $('#overlays').innerHTML = rest.length
+    ? `<div class="t">叠加内容 ${rest.length} 项 · 点一下进入编辑</div><div class="chips">` + rest.map(c => `<button class="ochip" data-id="${c.id}"><i style="background:${LCOL[c.kind]}"></i>${c.name}<small>${fmtD(c.s)}</small></button>`).join('') + '</div>'
+    : '<div class="t">还没有叠加内容。点下面的「文字」「卡片」「音频」加一个，加完会自动进入编辑。</div>';
+  $('#overlays').querySelectorAll('.ochip').forEach(b => b.onclick = () => enterEdit(b.dataset.id));
+}
+
+// 点一段 = 进入编辑；长按再拖 = 换顺序
+function bindMainBlock(b, c) {
+  b.addEventListener('pointerdown', e => {
+    const x0 = e.clientX, y0 = e.clientY; let dragging = false, moved = false, dx = 0;
+    const timer = setTimeout(() => { dragging = true; b.classList.add('lift'); }, 350);
+    const noScroll = ev => { if (dragging) ev.preventDefault(); };
+    b.addEventListener('touchmove', noScroll, { passive: false });
+    const mv = ev => {
+      dx = ev.clientX - x0;
+      if (!dragging) { if (Math.abs(dx) > 8 || Math.abs(ev.clientY - y0) > 8) { clearTimeout(timer); moved = true; } return; }
+      moved = true; b.style.transform = `translateX(${dx}px)`;
+    };
+    const end = ev => {
+      clearTimeout(timer); window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); b.removeEventListener('touchmove', noScroll);
+      if (dragging) {
+        const cx = b.getBoundingClientRect().left + b.offsetWidth / 2;
+        const sibs = [...$('#mainStrip').querySelectorAll('.mblock')].filter(x => x !== b);
+        const order = mainClips().filter(x => x !== c);
+        let idx = 0; sibs.forEach((s, i) => { const r = s.getBoundingClientRect(); if (cx > r.left + r.width / 2) idx = i + 1; });
+        const before = clone(clipsByTab); order.splice(idx, 0, c);
+        if (order.indexOf(c) !== mainClips().indexOf(c)) { order.forEach((x, i) => x.s = i); pushHist(before); toast('已调整顺序'); }
+        render();
+      } else if (!moved && ev.type === 'pointerup') enterEdit(c.id);
+    };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
+  });
+}
+
+/* ============ 编辑状态：展开完整时间轴 ============ */
+let editSnap = null, editHistLen = 0;
+function enterEdit(id, snap, hlen) {
+  stop(); closeSheets(); selId = id;
+  editSnap = snap || snapshot(); editHistLen = hlen == null ? hist.length : hlen;   // 点 ✕ 时回到这里
+  const c = findClip(id); if (c && (now < c.s || now > c.s + c.d)) now = c.s + Math.min(1, c.d / 2);
+  $('#editor').classList.add('editing');
+  render();
+  requestAnimationFrame(() => { const sc = $('#tlScroll'); sc.scrollLeft = Math.max(0, now * PX - sc.clientWidth / 3); renderStage(); });
+}
+function leaveEdit() { $('#editor').classList.remove('editing'); selId = null; editSnap = null; render(); requestAnimationFrame(renderStage); }
+function exitEdit(ok) {
+  closeSheets();
+  const changed = hist.length > editHistLen;
+  if (!ok && editSnap && changed) { clipsByTab = editSnap.c; hist.length = editHistLen; redoStack = []; fixTab(); toast('已放弃本次编辑'); }
+  else if (ok && changed) toast('已完成');
+  leaveEdit();
+}
+function kindLabel(c) { return c.title ? '文字' : c.kind === 'cap' ? '字幕/动效' : c.kind === 'fx' ? (c.lane === 1 ? '转场/效果' : '卡片') : c.kind === 'a' ? '音频' : '视频段'; }
+function toolsFor(c) {
+  const T = [['✂', '分割', splitClip], ['⧉', '复制', dupClip]];
+  const mute = ['🔇', c.muted ? '恢复声音' : '静音', () => toggleMute(c)];
+  if (c.title || c.kind === 'cap') T.push(['Aa', '样式', () => openSheet('params')], ['▶', '动画', () => toast('进场 / 退场动画选择（演示未做）')], ['◐', '不透明度', () => openSheet('params')]);
+  else if (c.kind === 'fx') T.push(['⏱', '时长·强度', () => openSheet('params')]);
+  else if (c.kind === 'a') T.push(mute, ['🔉', '音量', () => openSheet('params')]);
+  else T.push(mute, ['⚡', '速度', () => toast('变速（演示未做）')], ['⚙', '调整', () => openSheet('params')]);
+  T.push(['✦', '问 Agent', () => { refSelected(); openSheet('chat'); }], ['🗑', '删除', delClip]);
+  return T;
+}
+function renderEditUI() {
+  if (!editing()) return;
+  const c = selId && findClip(selId); if (!c) { leaveEdit(); return; }
+  $('#editTitle').textContent = kindLabel(c) + ' · ' + c.name.replace(/^[✦T♪] ?/, '');
+  const box = $('#etools'); box.innerHTML = `<div class="kind"><span class="g">${c.title ? 'Aa' : c.kind === 'a' ? '♪' : c.kind === 'v' ? '▶' : '✦'}</span>${kindLabel(c)}</div>`;
+  toolsFor(c).forEach(t => { const b = el('button'); b.innerHTML = `<span class="g">${t[0]}</span>${t[1]}`; b.onclick = t[2]; box.appendChild(b); });
+}
+
+/* ============ 完整时间轴（只在编辑状态出现） ============ */
 function renderTimeline() {
   const inner = $('#tlInner'); const w = TOTAL * PX + 40;
   inner.style.width = w + 'px';
@@ -571,7 +732,7 @@ function renderTimeline() {
   for (let l = 0; l < 4; l++) {
     h += `<div class="lane" data-lane="${l}"><div class="lane-head"><span>${LANE_LABEL[l]}</span></div>`;
     clips().filter(c => c.lane === l).forEach(c => {
-      h += `<div class="clip ${c.kind}${c.id === selId ? ' sel' : ''}" data-id="${c.id}" style="left:${c.s * PX + 30}px;width:${Math.max(c.d * PX - 2, 18)}px">` +
+      h += `<div class="clip ${c.kind}${c.id === selId ? ' sel' : ''}" data-id="${c.id}" style="left:${c.s * PX + 30}px;width:${Math.max(c.d * PX - 2, 18)}px${c.col ? ';background-color:' + c.col : ''}">` +
         `<span class="h l"></span>${c.name}${c.muted ? '<span class="mute">🔇 已静音</span>' : ''}<span class="h r"></span></div>`;
     });
     h += '</div>';
@@ -584,37 +745,37 @@ function renderTimeline() {
 function bindTimeline() {
   const inner = $('#tlInner');
   // 点标尺 / 空白处：移动播放头
-  inner.querySelectorAll('.ruler, .lane').forEach(el => el.addEventListener('pointerdown', e => {
+  inner.querySelectorAll('.ruler, .lane').forEach(e0 => e0.addEventListener('pointerdown', e => {
     if (e.target.closest('.clip')) return;
     stop(); scrubTo(e);
     const mv = ev => scrubTo(ev), up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
     window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
   }));
-  // 片段：点选；选中后拖动平移；拖两端改时长
-  inner.querySelectorAll('.clip').forEach(el => el.addEventListener('pointerdown', e => {
-    const c = findClip(el.dataset.id); e.stopPropagation();
+  // 片段：点选；选中后拖动平移；拖两端改起止。主轨各段首尾相接，只能拖两端裁剪
+  inner.querySelectorAll('.clip').forEach(e0 => e0.addEventListener('pointerdown', e => {
+    const c = findClip(e0.dataset.id); e.stopPropagation();
     const wasSel = selId === c.id; selId = c.id; stop();
-    inner.querySelectorAll('.clip').forEach(x => x.classList.toggle('sel', x === el)); updateButtons(); renderStage();
+    inner.querySelectorAll('.clip').forEach(x => x.classList.toggle('sel', x === e0)); updateButtons(); renderEditUI(); renderStage();
     if (!wasSel) return; // 第一次点只是选中，避免滑动时间轴时误拖
     const edge = e.target.classList.contains('l') ? 'l' : e.target.classList.contains('r') ? 'r' : 'm';
+    if (c.lane === 0 && edge === 'm') return;
     const x0 = e.clientX, s0 = c.s, d0 = c.d; let moved = false; const before = clone(clipsByTab);
     const mv = ev => {
       const dt = Math.round((ev.clientX - x0) / PX * 2) / 2; // 吸附到 0.5 秒
       if (Math.abs(ev.clientX - x0) > 3) moved = true;
+      if (c.lane === 0) { c.d = Math.max(.5, Math.min(30, edge === 'r' ? d0 + dt : d0 - dt)); e0.style.width = Math.max(c.d * PX - 2, 18) + 'px'; return; }
       if (edge === 'm') c.s = Math.max(0, Math.min(TOTAL - c.d, s0 + dt));
       else if (edge === 'r') c.d = Math.max(0.5, Math.min(TOTAL - c.s, d0 + dt));
       else { const ns = Math.max(0, Math.min(s0 + d0 - 0.5, s0 + dt)); c.d = d0 - (ns - s0); c.s = ns; }
-      el.style.left = c.s * PX + 30 + 'px'; el.style.width = Math.max(c.d * PX - 2, 18) + 'px';
+      e0.style.left = c.s * PX + 30 + 'px'; e0.style.width = Math.max(c.d * PX - 2, 18) + 'px'; renderStage();
     };
-    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); if (moved) { pushHist(before); toast('已调整（一次拖动 = 一步撤销）'); } };
+    const up = () => {
+      window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+      if (!moved) return; pushHist(before); if (c.lane === 0) render(); toast('已调整（一次拖动 = 一步撤销）');
+    };
     window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
   }));
-  // 双击片段：参数
-  inner.querySelectorAll('.clip').forEach(el => el.addEventListener('dblclick', () => {
-    const c = findClip(el.dataset.id);
-    if (c.kind === 'v' && c.name.startsWith('剪辑')) return;
-    openSheet('params');
-  }));
+  inner.querySelectorAll('.clip').forEach(e0 => e0.addEventListener('dblclick', () => openSheet('params')));
 }
 function scrubTo(e) {
   const r = $('#tlInner').getBoundingClientRect();
@@ -624,47 +785,46 @@ function updateTime() {
   $('#tcNow').textContent = fmt(now); $('#tcTotal').textContent = fmt(TOTAL);
   const ph = $('#playhead'); if (ph) ph.style.left = now * PX + 30 + 'px';
   // 播放时让播放头保持在可视范围
-  if (playing) { const sc = $('#tlScroll'); const x = now * PX + 30; if (x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; if (x < sc.scrollLeft) sc.scrollLeft = 0; }
-  renderStage(true);
+  if (playing && editing()) { const sc = $('#tlScroll'); const x = now * PX + 30; if (x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; if (x < sc.scrollLeft) sc.scrollLeft = 0; }
+  renderStage();
 }
-function updateButtons() {
-  const has = !!selId;
-  ['tSplit', 'tDup', 'tDel', 'tEdit'].forEach(i => $('#' + i).disabled = !has);
-  $('#undoBtn').style.opacity = hist.length ? 1 : .35; $('#redoBtn').style.opacity = redoStack.length ? 1 : .35;
-}
+function updateButtons() { $('#undoBtn').style.opacity = hist.length ? 1 : .35; $('#redoBtn').style.opacity = redoStack.length ? 1 : .35; }
 
 /* ============ 舞台预览 ============ */
-function renderStage(light) {
+function renderStage() {
   const hue = 200 - (now / TOTAL) * 170; // 一天里天空颜色：蓝 → 橙红
   $('#bgl').style.background = `linear-gradient(180deg, hsl(${hue},70%,${52 - now}%) 0%, hsl(${hue + 25},80%,${70 - now * .6}%) 70%)`;
-  const t = $('#title'); const c = clips().find(x => x.title);
-  const show = c && now >= c.s && now <= c.s + c.d;
-  t.style.display = show ? 'block' : 'none';
-  if (show) {
-    const k = Math.min(1, (now - c.s) / 0.8);                    // 进场 0.8 秒
-    t.textContent = P.text; t.style.fontSize = P.size + 'px'; t.style.color = P.color;
-    t.style.top = P.y + '%'; t.style.opacity = (P.opacity / 100) * k; t.style.transform = `translateY(${(1 - k) * 14}px) scale(${.9 + .1 * k})`;
-  }
+  const layer = $('#titles'); layer.innerHTML = '';
+  clips().filter(c => c.title && now >= c.s && now <= c.s + c.d).forEach(c => {
+    const p = c.P, k = Math.min(1, (now - c.s) / 0.8);          // 进场 0.8 秒
+    const t = el('div', 'title', p.text); t.dataset.id = c.id;
+    Object.assign(t.style, { fontSize: (p.size / 343 * 100) + 'cqw', color: p.color, top: p.y + '%', opacity: (p.opacity / 100) * k, transform: `translateY(${(1 - k) * 14}px) scale(${.9 + .1 * k})` });
+    layer.appendChild(t);
+  });
   const cap = clips().find(x => x.name.startsWith('T 字幕'));
   $('#cap').parentElement.style.display = cap && now >= cap.s && now <= cap.s + cap.d ? 'block' : 'none';
   // 选中框
-  const sel = $('#sel'); const sc = selId && findClip(selId);
-  if (sc && sc.title && show) {
+  const sel = $('#sel'), t = selId && layer.querySelector(`.title[data-id="${selId}"]`);
+  if (t) {
     sel.style.display = 'block'; const r = t.getBoundingClientRect(), pr = $('#stage').getBoundingClientRect();
     sel.style.left = (r.left - pr.left - 4) + 'px'; sel.style.top = (r.top - pr.top - 2) + 'px'; sel.style.width = (r.width + 8) + 'px'; sel.style.height = (r.height + 4) + 'px';
   } else sel.style.display = 'none';
 }
-// 在预览里直接拖标题
-(function () {
-  const t = document.getElementById('title');
-  t.addEventListener('pointerdown', e => {
-    const c = clips().find(x => x.title); if (!c) return; selId = c.id; renderTimeline(); updateButtons();
-    const st = $('#stage').getBoundingClientRect(); const y0 = e.clientY, p0 = P.y; const before = clone(P);
-    const mv = ev => { P.y = Math.max(5, Math.min(85, p0 + (ev.clientY - y0) / st.height * 100)); renderStage(); if ($('#sh-params').classList.contains('on')) buildParams(); };
-    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); if (before.y !== P.y) pushHistP(before); };
-    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
-  });
-})();
+// 在预览里点文字：默认态下点一下进入编辑，拖一下只是挪位置；编辑态下直接拖
+$('#titles').addEventListener('pointerdown', e => {
+  const t = e.target.closest('.title'); const c = t && findClip(t.dataset.id); if (!c) return;
+  const st = $('#stage').getBoundingClientRect(), y0 = e.clientY, p0 = c.P.y, before = clone(clipsByTab); let moved = false;
+  if (editing() && selId !== c.id) { selId = c.id; renderTimeline(); renderEditUI(); }
+  const mv = ev => {
+    if (Math.abs(ev.clientY - y0) > 3) moved = true; if (!moved) return;
+    c.P.y = Math.max(5, Math.min(85, p0 + (ev.clientY - y0) / st.height * 100)); renderStage(); if ($('#sh-params').classList.contains('on')) buildParams();
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+    if (moved) pushHist(before); else if (!editing()) enterEdit(c.id);
+  };
+  window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+});
 
 /* ============ 播放 ============ */
 function togglePlay() { playing ? stop() : play(); }
@@ -676,29 +836,50 @@ function play() {
 function stop() { playing = false; cancelAnimationFrame(raf); $('#playBtn').textContent = '▶'; }
 
 /* ============ 编辑操作与撤销 ============ */
-function pushHist(beforeClips, beforeP) { hist.push({ c: beforeClips, p: beforeP || clone(P) }); redoStack = []; updateButtons(); }
-function pushHistP(beforeP) { hist.push({ c: clone(clipsByTab), p: beforeP }); redoStack = []; updateButtons(); }
-function snapshot() { return { c: clone(clipsByTab), p: clone(P) }; }
-function undo() { if (!hist.length) return toast('没有可撤销的操作'); redoStack.push(snapshot()); const h = hist.pop(); clipsByTab = h.c; P = h.p; fixTab(); render(); toast('已撤销一步'); }
-function redo() { if (!redoStack.length) return toast('没有可重做的操作'); hist.push(snapshot()); const h = redoStack.pop(); clipsByTab = h.c; P = h.p; fixTab(); render(); }
-function fixTab() { if (!clipsByTab[curTab]) curTab = tabs[0]; selId = null; }
+function pushHist(before) { hist.push({ c: before }); redoStack = []; updateButtons(); }
+function snapshot() { return { c: clone(clipsByTab) }; }
+function undo() { if (!hist.length) return toast('没有可撤销的操作'); redoStack.push(snapshot()); clipsByTab = hist.pop().c; fixTab(true); render(); toast('已撤销一步'); }
+function redo() { if (!redoStack.length) return toast('没有可重做的操作'); hist.push(snapshot()); clipsByTab = redoStack.pop().c; fixTab(true); render(); }
+function fixTab(keepSel) { if (!clipsByTab[curTab]) curTab = tabs[0]; if (!keepSel || !findClip(selId)) selId = null; }
 function splitClip() {
   const c = findClip(selId); if (!c) return;
   if (now <= c.s + .2 || now >= c.s + c.d - .2) return toast('先把播放头移到片段中间');
   const before = clone(clipsByTab), d1 = now - c.s;
-  const n = Object.assign({}, c, { id: 'n' + Date.now(), s: now, d: c.d - d1, title: false }); c.d = d1; clips().push(n);
-  pushHist(before); render(); toast('已在播放头处切分');
+  const n = clone(c); n.id = 'n' + Date.now(); n.s = now; n.d = c.d - d1; c.d = d1; clips().push(n);
+  pushHist(before); reflow(); render(); toast('已在播放头处切分');
 }
-function dupClip() { const c = findClip(selId); if (!c) return; const before = clone(clipsByTab); const n = Object.assign({}, c, { id: 'n' + Date.now(), s: Math.min(TOTAL - c.d, c.s + c.d), title: false }); clips().push(n); pushHist(before); selId = n.id; render(); }
+function dupClip() {
+  const c = findClip(selId); if (!c) return;
+  const before = clone(clipsByTab); const n = clone(c); n.id = 'n' + Date.now();
+  n.s = c.lane === 0 ? c.s + c.d - 0.001 : Math.max(0, Math.min(TOTAL - c.d, c.s + c.d));   // 主轨的复制紧跟在原段后面
+  clips().push(n); pushHist(before); selId = n.id; reflow(); render(); toast('已复制');
+}
 function delClip() {
   const c = findClip(selId); if (!c) return;
   if (!confirm(`删除“${c.name}”？\n（破坏性操作：需要说明理由，理由会对协作者和 Agent 可见）`)) return;
   const before = clone(clipsByTab); clipsByTab[curTab] = clips().filter(x => x.id !== selId); selId = null; pushHist(before); render(); toast('已删除，可撤销');
 }
-function addClip(name, kind, lane, d) {
-  const before = clone(clipsByTab); const s = Math.min(now, TOTAL - d);
-  const c = { id: 'n' + Date.now(), lane, s, d, name, kind }; clips().push(c); selId = c.id; pushHist(before); render(); closeSheets(); toast(`已加到 ${fmt(s)}`);
+function toggleMute(c) { const before = clone(clipsByTab); c.muted = !c.muted; pushHist(before); render(); toast(c.muted ? '已静音' : '已恢复声音'); }
+function alignSel(which) {
+  const c = findClip(selId); if (!c) return;
+  if (c.lane === 0) return toast('主轨各段首尾相接，位置由顺序决定');
+  const before = clone(clipsByTab); c.s = which === 's' ? Math.max(0, Math.min(TOTAL - c.d, now)) : Math.max(0, Math.min(TOTAL - c.d, now - c.d));
+  pushHist(before); render();
 }
+function setDur(c, v) {
+  c.d = v;
+  if (c.lane === 0) { reflow(); renderMain(); renderTimeline(); updateTime(); }
+  else { if (c.s + c.d > TOTAL) c.d = TOTAL - c.s; renderTimeline(); renderStage(); }
+}
+function addClip(name, kind, lane, d, extra) {
+  const before = clone(clipsByTab), hl = hist.length;
+  const c = Object.assign({ id: 'n' + Date.now(), lane, s: 0, d, name, kind }, extra || {});
+  c.s = lane === 0 ? TOTAL + 1 : Math.max(0, Math.min(now, TOTAL - d));
+  clips().push(c); reflow(); pushHist(before); closeSheets();
+  if (lane === 0) { selId = null; render(); requestAnimationFrame(() => { const b = $('#mainStrip'); b.scrollLeft = b.scrollWidth; }); toast(`已加到主要内容末尾（第 ${mainClips().length} 段）`); }
+  else { toast(`已加到 ${fmt(c.s)}，进入编辑`); enterEdit(c.id, { c: before }, hl); }
+}
+function addText() { addClip('T 新文字', 'cap', 2, 4, { title: true, P: { text: '新文字', size: 26, opacity: 100, y: 55, color: '#ffffff' } }); }
 
 /* ============ 素材库 / 卡片 ============ */
 function buildAssets() {
@@ -718,7 +899,7 @@ function buildAssets() {
   body.querySelectorAll('.tile').forEach(t => t.onclick = () => {
     const n = t.dataset.n;
     if (isClip) { if (!tabs.includes(n)) tabs.push(n); curTab = n; selId = null; render(); closeSheets(); toast('已在时间轴打开“' + n + '”'); }
-    else addClip(n + (assetTab === '图片' ? '.jpg' : '.mp4'), 'v', 0, assetTab === '图片' ? 3 : 5);
+    else { const a = ASSETS[assetTab].find(x => x[0] === n); const m = /(\d+):(\d+)/.exec(a[1] || ''); addClip(n + (assetTab === '图片' ? '.jpg' : '.mp4'), 'v', 0, m ? +m[1] * 60 + +m[2] : 3, { col: a[2] }); }
   });
 }
 function buildCards() {
@@ -727,45 +908,47 @@ function buildCards() {
   $('#cardGrid').innerHTML = CARDS[cardTab].map(a => `<button class="tile" data-n="${a[0]}"><div class="pic" style="background:linear-gradient(135deg,${a[2]},#0008)">✦</div><div class="cap">${a[0]}<small>${a[1]}</small></div></button>`).join('');
   $('#cardGrid').querySelectorAll('.tile').forEach(t => t.onclick = () => {
     const lane = cardTab === '音效' ? 3 : cardTab === '动效' ? 2 : 1;
-    addClip((cardTab === '音效' ? '♪ ' : '✦ ') + t.dataset.n, cardTab === '音效' ? 'a' : cardTab === '动效' ? 'cap' : 'fx', lane, 2);
+    if (cardTab === '动效') addClip('T ' + t.dataset.n, 'cap', 2, 3, { title: true, P: { text: t.dataset.n, size: 28, opacity: 100, y: 55, color: '#ffffff' } });
+    else addClip((cardTab === '音效' ? '♪ ' : '✦ ') + t.dataset.n, cardTab === '音效' ? 'a' : 'fx', lane, 2);
   });
 }
 
 /* ============ 参数调整 ============ */
 function buildParams() {
   const c = findClip(selId); if (!c) return;
+  const p = c.P;
   $('#pTitle').textContent = c.name.replace(/^[✦T♪] ?/, '');
-  $('#pKind').textContent = { v: '视频素材', fx: '效果卡', a: '音频', cap: c.title ? '文字动效卡' : '字幕/动效卡' }[c.kind];
+  $('#pKind').textContent = kindLabel(c);
   let h = '';
   if (c.title) {
     h += `<div class="wrapnote"><b>约定封装：</b>进场 0.8 秒落定 · 之后停住 · 支持淡出退场</div>
-    <div class="field"><label>文字<span></span></label><input class="num" id="pText" style="width:100%;text-align:left;height:38px" value="${P.text}"></div>
-    ${slider('size', '字号', P.size, 14, 56, 'px')}
-    ${slider('y', '垂直位置', Math.round(P.y), 5, 85, '%')}
-    ${slider('opacity', '不透明度', P.opacity, 0, 100, '%')}
-    <div class="field"><label>颜色</label><div class="color-row">${['#ffffff', '#ffe08a', '#7de3f5', '#e5b8f5', '#ff8a7a'].map(x => `<button style="background:${x}" class="${x === P.color ? 'on' : ''}" data-c="${x}"></button>`).join('')}</div></div>`;
+    <div class="field"><label>文字<span></span></label><input class="num" id="pText" style="width:100%;text-align:left;height:38px" value="${p.text}"></div>
+    ${slider('size', '字号', p.size, 14, 56, 'px')}
+    ${slider('y', '垂直位置', Math.round(p.y), 5, 85, '%')}
+    ${slider('opacity', '不透明度', p.opacity, 0, 100, '%')}
+    <div class="field"><label>颜色</label><div class="color-row">${['#ffffff', '#ffe08a', '#7de3f5', '#e5b8f5', '#ff8a7a'].map(x => `<button style="background:${x}" class="${x === p.color ? 'on' : ''}" data-c="${x}"></button>`).join('')}</div></div>`;
   } else if (c.kind === 'fx') {
-    h += `<div class="wrapnote"><b>约定封装：</b>时长 ${c.d.toFixed(1)}s · 作用于相邻两段</div>
+    h += `<div class="wrapnote"><b>约定封装：</b>时长 ${fmtD(c.d)} · 作用于相邻两段</div>
     ${slider('fxd', '时长', c.d, 0.5, 4, 's', .5)}${slider('fxi', '强度', 70, 0, 100, '%')}`;
   } else {
-    h += `${slider('dur', '时长', c.d, 0.5, TOTAL, 's', .5)}${slider('vol', '音量', 80, 0, 100, '%')}
+    h += `${slider('dur', '时长', c.d, 0.5, c.lane === 0 ? 30 : TOTAL, 's', .5)}${slider('vol', '音量', 80, 0, 100, '%')}
     <div class="row"><div class="t">静音此片段<small>画面不受影响；时间轴会醒目标出“已静音”</small></div><div class="toggle ${c.muted ? 'on' : ''}" id="muteT"></div></div>`;
   }
-  h += `<div class="undo-row"><button class="btn" style="flex:1" onclick="undo();buildParams()">↶ 撤销</button><button class="btn" style="flex:1" onclick="askAgent('帮我看看这个片段还有什么可以优化的');">让 Agent 接着改</button></div>`;
+  h += `<div class="undo-row"><button class="btn" style="flex:1" onclick="undo();if(findClip(selId))buildParams();else closeSheets()">↶ 撤销</button><button class="btn" style="flex:1" onclick="askAgent('帮我看看这个片段还有什么可以优化的');">让 Agent 接着改</button></div>`;
   $('#pBody').innerHTML = h;
   const bind = (key, fn) => {
     const r = document.getElementById('r_' + key), n = document.getElementById('n_' + key); if (!r) return;
     let before = null;
-    r.oninput = () => { if (!before) before = clone(P); n.value = r.value; fn(+r.value); };     // 拖动中画面实时跟着变
-    r.onchange = () => { if (before) { pushHistP(before); before = null; } };                   // 整次拖动 = 一步撤销
-    n.onchange = () => { const b = clone(P); r.value = n.value; fn(+n.value); pushHistP(b); };    // 数字框回车/失焦才提交
+    r.oninput = () => { if (!before) before = clone(clipsByTab); n.value = r.value; fn(+r.value); };     // 拖动中画面实时跟着变
+    r.onchange = () => { if (before) { pushHist(before); before = null; } };                           // 整次拖动 = 一步撤销
+    n.onchange = () => { const b = clone(clipsByTab); r.value = n.value; fn(+n.value); pushHist(b); };    // 数字框回车/失焦才提交
     n.onkeydown = e => { if (e.key === 'Escape') { n.value = r.value; n.blur(); } if (e.key === 'Enter') n.blur(); };
   };
-  bind('size', v => { P.size = v; renderStage(); }); bind('y', v => { P.y = v; renderStage(); }); bind('opacity', v => { P.opacity = v; renderStage(); });
-  bind('fxd', v => { c.d = v; renderTimeline(); }); bind('dur', v => { c.d = Math.min(v, TOTAL - c.s); renderTimeline(); });
-  const tx = document.getElementById('pText'); if (tx) tx.onchange = () => { const b = clone(P); P.text = tx.value; pushHistP(b); renderStage(); };
-  document.querySelectorAll('.color-row button').forEach(b => b.onclick = () => { const bf = clone(P); P.color = b.dataset.c; pushHistP(bf); buildParams(); renderStage(); });
-  const mt = document.getElementById('muteT'); if (mt) mt.onclick = () => { const bf = clone(clipsByTab); c.muted = !c.muted; pushHist(bf); buildParams(); renderTimeline(); toast(c.muted ? '已静音' : '已恢复声音'); };
+  if (p) { bind('size', v => { p.size = v; renderStage(); }); bind('y', v => { p.y = v; renderStage(); }); bind('opacity', v => { p.opacity = v; renderStage(); }); }
+  bind('fxd', v => setDur(c, v)); bind('dur', v => setDur(c, v));
+  const tx = document.getElementById('pText'); if (tx) tx.onchange = () => { const b = clone(clipsByTab); p.text = tx.value; pushHist(b); renderStage(); };
+  document.querySelectorAll('.color-row button').forEach(b => b.onclick = () => { const bf = clone(clipsByTab); p.color = b.dataset.c; pushHist(bf); buildParams(); renderStage(); });
+  const mt = document.getElementById('muteT'); if (mt) mt.onclick = () => { toggleMute(c); buildParams(); };
 }
 function slider(k, label, v, min, max, unit, step) {
   return `<div class="field"><label>${label}<span><input class="num" id="n_${k}" type="number" value="${v}" min="${min}" max="${max}" step="${step || 1}"> ${unit}</span></label><input type="range" id="r_${k}" min="${min}" max="${max}" step="${step || 1}" value="${v}"></div>`;
@@ -849,7 +1032,7 @@ function askAgent(text) {
       convs[curAgent].push(op); renderMsgs();
       setTimeout(() => { items[0][0] = 'done'; items[1][0] = 'run'; renderMsgs(); }, 900);
       setTimeout(() => {
-        items[1][0] = 'done'; items[2][0] = 'done'; items.splice(2, 0, ['done', '标题字号 30 → 36，进场更缓']); P.size = 36;
+        items[1][0] = 'done'; items[2][0] = 'done'; items.splice(2, 0, ['done', '标题字号 30 → 36，进场更缓']); { const tt = clips().find(x => x.title); if (tt) tt.P.size = 36; }
         op.diff = { before: 'linear-gradient(#456,#123)', after: 'linear-gradient(#f93,#16a)', params: '字号 <s>30</s> → <em>36</em>' };
         convs[curAgent].push({ t: 'ag', x: '改好了，预览里已经更新，不满意可以直接撤销。', who: '我 · Agent · 第 1 个对话' }); renderMsgs(); renderStage(); $('#agentFlag').classList.remove('on');
       }, 1900);
