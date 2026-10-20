@@ -37,3 +37,45 @@ export function settleDraft(draft: string, current: number | null | undefined, o
 export function isTypingInput(inputType: unknown): boolean {
   return typeof inputType === "string" && inputType !== "";
 }
+
+/* ---------------- 数字框的状态机 ---------------- */
+
+/** 数字框收到的事件 */
+export type FieldEvent =
+  /** `typing`:用户在敲字 / 粘贴 / 删除(见 isTypingInput);否则是方向键、上下箭头步进 */
+  | { type: "input"; raw: string; typing: boolean }
+  | { type: "blur" }
+  | { type: "enter" }
+  | { type: "escape" };
+
+export interface FieldStep {
+  /** 事件之后的草稿;null = 没有草稿,显示项目里的值 */
+  draft: string | null;
+  /** 要提交的数。`step` = 来自步进(连续步进并成一步撤销),否则是回车 / 失焦的一次提交 */
+  commit?: { value: number; step: boolean };
+  /** 让输入框失焦(回车):失焦事件随后到,提交在那里发生 */
+  blur?: boolean;
+}
+
+/**
+ * 一个事件进来,草稿与要做的事出去(`NumberField.tsx` 逐事件调它,单测直接驱动):
+ * 敲字只改草稿;步进立即提交;回车 → 失焦;失焦 → 草稿定稿(提交或还原);Esc → 放弃草稿。
+ */
+export function reduceField(draft: string | null, ev: FieldEvent, ctx: { value: number | null | undefined; validate?: (n: number) => boolean; digits?: number }): FieldStep {
+  switch (ev.type) {
+    case "input": {
+      if (ev.typing) return { draft: ev.raw };
+      const r = settleDraft(ev.raw, ctx.value, ctx);
+      return r.kind === "commit" ? { draft: null, commit: { value: r.value, step: true } } : { draft: null };
+    }
+    case "enter":
+      return { draft, blur: true };
+    case "escape":
+      return { draft: null };
+    case "blur": {
+      if (draft === null) return { draft: null };
+      const r = settleDraft(draft, ctx.value, ctx);
+      return r.kind === "commit" ? { draft: null, commit: { value: r.value, step: false } } : { draft: null };
+    }
+  }
+}

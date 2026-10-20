@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { STEP_BURST_MS, commitMerged, newGestureKey } from "./mergedEdit";
-import { formatNumber, isTypingInput, settleDraft } from "./numberDraft";
+import { formatNumber, isTypingInput, reduceField, type FieldEvent } from "./numberDraft";
 
 /**
  * 编辑面板里改项目内容的数字框(2026-10-20 用户定,`docs/semantics/workflow/editing.md`「撤销、重做」):
@@ -38,21 +38,23 @@ export function NumberField({ value, onCommit, step, min, max, disabled, placeho
   const burstKey = useRef<string>("");
   if (!burstKey.current) burstKey.current = newGestureKey("number-step");
 
-  const settle = (text: string) => settleDraft(text, value, { validate, digits });
-
-  const finish = () => {
-    if (draft === null) return;
-    const r = settle(draft);
-    setDraft(null);
-    if (r.kind === "commit") onCommit(r.value);
+  /** 逐事件交给状态机(numberDraft.ts 的 reduceField),它决定草稿怎么变、要不要提交 */
+  const dispatch = (ev: FieldEvent, input?: HTMLInputElement) => {
+    const out = reduceField(draft, ev, { value, validate, digits });
+    setDraft(out.draft);
+    if (out.commit) {
+      const v = out.commit.value;
+      if (out.commit.step) commitMerged(burstKey.current, STEP_BURST_MS, () => onCommit(v));
+      else onCommit(v);
+    }
+    if (out.blur) input?.blur(); // 失焦事件随后到,提交在那里
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.currentTarget.blur(); // 失焦时提交
-    } else if (e.key === "Escape" && draft !== null) {
+    if (e.key === "Enter") dispatch({ type: "enter" }, e.currentTarget);
+    else if (e.key === "Escape" && draft !== null) {
       e.preventDefault();
-      setDraft(null);
+      dispatch({ type: "escape" });
     }
   };
 
@@ -67,18 +69,8 @@ export function NumberField({ value, onCommit, step, min, max, disabled, placeho
       placeholder={placeholder}
       className={className}
       value={draft ?? formatNumber(value, digits)}
-      onChange={(e) => {
-        const raw = e.target.value;
-        if (isTypingInput((e.nativeEvent as InputEvent).inputType)) {
-          setDraft(raw);
-          return;
-        }
-        // 方向键 / 上下箭头步进:立即提交,连续步进并成一步撤销
-        const r = settle(raw);
-        setDraft(null);
-        if (r.kind === "commit") commitMerged(burstKey.current, STEP_BURST_MS, () => onCommit(r.value));
-      }}
-      onBlur={finish}
+      onChange={(e) => dispatch({ type: "input", raw: e.target.value, typing: isTypingInput((e.nativeEvent as InputEvent).inputType) })}
+      onBlur={() => dispatch({ type: "blur" })}
       onKeyDown={onKeyDown}
     />
   );
