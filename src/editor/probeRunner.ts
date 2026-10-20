@@ -56,6 +56,7 @@
  * （遮罩因此等稀疏版）；产不产、等多久（最多 50 秒）由接的那一方定（`browserNodeHost.ts` → `online/pageStreams.ts` 的 `measure()`）。
  * 不挡界面的补测不调：之后要补的只在闲时产。没人接（桌面版）时一个字不变。
  */
+import { flatPlanProject, isFlatClipId } from "../kernel/cutFlatten.mjs";
 import type { Project } from "../kernel/project";
 import { costDeviceString, readGpuRenderer, resolveGlRoute } from "../render/costDevice.mjs";
 import { budgetOf } from "../render/pipelinePlan.mjs";
@@ -220,7 +221,8 @@ function planJobs(project: Project, costs: CardCostRecord[], device: string): Pr
   const fps = Math.max(1, project.fps || 30);
   const jobs: ProbeJob[] = [];
   const seen = new Set<string>();
-  for (const track of project.tracks ?? []) {
+  // 剪辑段里的卡照测(`kernel/cutFlatten.mjs` 的摊平视图;片段 id 是 `<段 id>~<卡的片段 id>`):缩水项目里它就是一张顶层卡
+  for (const track of flatPlanProject(project).tracks ?? []) {
     for (const clip of track.clips ?? []) {
       if (!clip.cardId && !clip.nodeId) continue;
       const identityKey = identityKeys[clip.id];
@@ -236,7 +238,8 @@ function planJobs(project: Project, costs: CardCostRecord[], device: string): Pr
         identityKey,
         frameMode: typeof caps.frameMode === "string" ? caps.frameMode : "stateful",
         canvasHeavy: caps.canvasHeavy === true,
-        independent: caps.compositing === "independent",
+        // 剪辑段里的卡的探针帧不当预渲染素材(它们只产单卡轨道流,隔离工程要带着剪辑段链)
+        independent: caps.compositing === "independent" && !isFlatClipId(clip.id),
         fps,
         lenSec,
         durationFrames: Math.max(1, Math.round(lenSec * fps)),
@@ -502,7 +505,7 @@ let looping = false;
 let firstPassDone = false;
 
 const hasCardClip = (p: Project | null): boolean =>
-  !!p?.tracks?.some((tr) => tr.clips?.some((c) => !!c.cardId || !!c.nodeId));
+  !!p && !!flatPlanProject(p).tracks?.some((tr) => tr.clips?.some((c) => !!c.cardId || !!c.nodeId));
 
 /** The preload for this project can use the measured costs. */
 export function probeSettledFor(project: Project): boolean {

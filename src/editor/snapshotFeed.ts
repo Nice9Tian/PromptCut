@@ -72,6 +72,8 @@ import { localStreamPixels, lowMemoryStreamBudget, stageStreamPixels, STREAM_BUD
 import { isStreamOrigin, streamSegmentOf } from "../render/streamSegments.mjs";
 import { streamInputSig, streamSigStale } from "../render/streamInputSig.mjs";
 import { clipFrameMode } from "../kernel/frameMode.mjs";
+import { flatPlanProject, isFlatClipId } from "../kernel/cutFlatten.mjs";
+import { clipIdentityOf } from "./costIdentity";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
 export const SNAPSHOT_THROTTLE_MS = 33;
@@ -101,7 +103,8 @@ function streamPixelsOf(project: Project, clipId: string, stage: boolean): numbe
   if (!byClip) { byClip = new Map(); streamPixels.set(project, byClip); }
   if (!byClip.has(clipId)) {
     let found: TrackClip | undefined;
-    for (const track of project.tracks ?? []) { found = (track.clips ?? []).find((c) => c.id === clipId); if (found) break; }
+    // 剪辑段里的卡在摊平视图里(`kernel/cutFlatten.mjs`)
+    for (const track of flatPlanProject(project).tracks ?? []) { found = (track.clips ?? []).find((c) => c.id === clipId); if (found) break; }
     byClip.set(clipId, found ? localStreamPixels(found.frame, size) : undefined);
   }
   return byClip.get(clipId);
@@ -374,15 +377,19 @@ export function localOnlyOf(project: Project): ReadonlySet<string> {
   if (!onlineBrowserMode()) return NO_IDS;
   const key = `${cardsRegistryGen()}:${syncedUserCardsGen()}:${cardRunStatesGen()}:${localOnlyLowMemory() ? 1 : 0}`;
   if (localOnlyMemo && localOnlyMemo.project === project && localOnlyMemo.key === key) return localOnlyMemo.ids;
-  const ids = localOnlyClipIds(project.tracks.flatMap((tr) => tr.clips));
+  // 剪辑段里的卡也算(摊平视图里的虚拟片段,`kernel/cutFlatten.mjs`)
+  const ids = localOnlyClipIds(flatPlanProject(project).tracks.flatMap((tr) => tr.clips));
   localOnlyMemo = { project, key, ids };
   return ids;
 }
 
-/** 这一刻活跃的卡片段（口径同 `Stage` / `FrameScene` 的 live 路：含 LEAD） */
+/**
+ * 这一刻活跃的卡片段（口径同 `Stage` / `FrameScene` 的 live 路：含 LEAD）。剪辑段换成它里面的卡(`kernel/cutFlatten.mjs` 的摊平视图;
+ * 用户 2026-10-21 定:剪辑段里的卡和没有剪辑段时一样,轻卡活渲,重卡各自贴自己的流,没流时显示占位)
+ */
 function activeCardClips(project: Project, t: number): TrackClip[] {
   const out: TrackClip[] = [];
-  for (const tr of project.tracks) {
+  for (const tr of flatPlanProject(project).tracks) {
     if (tr.hidden) continue;
     for (const clip of tr.clips) {
       if (!clip.cardId && !clip.nodeId) continue;
@@ -390,6 +397,11 @@ function activeCardClips(project: Project, t: number): TrackClip[] {
     }
   }
   return out;
+}
+
+/** 剪辑段里的这张卡有没有自己的单卡流可产(独立卡;`streamPlanRules.mjs` 的 `soloStreamKind` 回 `'flat'` 的那一种) */
+export function flatStreamable(project: Project, clipId: string): boolean {
+  return clipIdentityOf(project).capabilities.get(clipId)?.compositing === "independent";
 }
 
 export interface Playhead {
@@ -447,6 +459,8 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
   for (const clip of activeCardClips(project, t)) {
     // 这台设备跑不了的卡一律按重卡(在线浏览器模式;见 `localOnlyOf`)
     if (pipelineAt(plan, clip.id, t) !== "heavy" && !localOnly.has(clip.id)) continue;
+    // 剪辑段里的卡只有独立卡产流(`streamPlanRules.mjs` 的 `'flat'`);别的(依赖下层、源依赖、没审阅过)在嵌套场景里照旧活渲,不抑制
+    if (isFlatClipId(clip.id) && !flatStreamable(project, clip.id)) continue;
     const { firstFrame, count } = samplingOf(clip, fps);
     if (pendingDemote.has(clip.id)) {
       // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会发流平面）

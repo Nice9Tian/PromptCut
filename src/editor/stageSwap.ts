@@ -34,6 +34,7 @@
 import { getState } from "../store/project";
 import { flattenOverlay, type Project } from "../kernel/project";
 import { cutOf } from "../kernel/cutSegments";
+import { flatPlanProject, isFlatClipId } from "../kernel/cutFlatten.mjs";
 import { cardMountedAt, mountFrameOf } from "../render/frameWindow.mjs";
 import { createPlayRun, enteredNaturally, notePlayBeat, notePlaySeam, notePlayStart } from "../render/playEntry.mjs";
 import { catchUpEstimateMs, playingLeadMs, sceneCatchUpCost } from "../render/catchUpEstimate.mjs";
@@ -229,6 +230,22 @@ export function needsBackCatchUp(project: Project, t: number): string[] {
     if (!record) continue;
     if (record.vtOk === true) continue;   // 第一路自己追
     out.push(clip.id);
+  }
+  /*
+   * 剪辑段里判重、贴着自己的流(或占位)的卡(`kernel/cutFlatten.mjs` 的虚拟片段):停下时它在嵌套场景里的活子树还冻在开始抑制那一刻。
+   * 舞台的第一路(子树虚拟时间)只认顶层片段,嵌套场景里的卡推不动,所以要按历史推进的那些一律整场景在后台补跑后互换
+   * (补跑好之前照旧贴流或占位)。remotion 式的不用补:撤了抑制当场就画对。
+   */
+  const { frameModes } = clipIdentityOf(project);
+  for (const tr of flatPlanProject(project).tracks) {
+    if (tr.hidden) continue;
+    for (const clip of tr.clips) {
+      if (!isFlatClipId(clip.id) || !clip.cardId || !cardMountedAt(clip, t)) continue;
+      if (pipelineAt(plan, clip.id, t) !== "heavy" || frameModes[clip.id] === "direct") continue;
+      if (clipIdentityOf(project).capabilities.get(clip.id)?.compositing !== "independent") continue;
+      if (!recordOf(project, clip.id)) continue;
+      out.push(clip.id);
+    }
   }
   return out;
 }

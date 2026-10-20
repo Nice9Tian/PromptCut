@@ -12,6 +12,7 @@
  */
 import type { Project } from "../kernel/project";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
+import { flatPlanProject, withFlatNodes } from "../kernel/cutFlatten.mjs";
 import { allCards, cardRunState, cardRunStatesGen, cardsRegistryGen, getCard, syncedCardView, syncedUserCardsGen, unknownCardClipIds, userCardSources } from "../kernel/registry";
 import { localOnlyClipIds, localOnlyLowMemory, onlineBrowserMode } from "../render/placeholderHost";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
@@ -117,8 +118,9 @@ function costGraph(project: Project, cardOf: (id: string) => ReturnType<typeof g
   }
 }
 
-export function clipIdentityOf(project: Project | null): ClipIdentity {
-  if (!project) return EMPTY;
+export function clipIdentityOf(raw: Project | null): ClipIdentity {
+  if (!raw) return EMPTY;
+  const project = raw;
   // 注册表与同步表的代数也进键:卡片定义到了(热更新、同步到了),未知卡片变成认得的卡,身份跟着给
   const localKey = `${onlineBrowserMode() ? "on" : "off"}:${syncedUserCardsGen()}:${cardsRegistryGen()}:${cardRunStatesGen()}:${localOnlyLowMemory() ? 1 : 0}`;
   if (project === cachedProject && localKey === cachedLocalKey) return cached;
@@ -131,16 +133,21 @@ export function clipIdentityOf(project: Project | null): ClipIdentity {
      * 前缀 `user:online:`,与桌面的 `user:<闭包原文>` 不相撞 —— 两边的成本记录各记各的。
      */
     const cardOf = (id: string) => getCard(id) ?? (cardRunState(id)?.state === "ready" && syncedCardView(id) ? ({ id, defaults: syncedCardView(id)!.defaults } as unknown as ReturnType<typeof getCard>) : undefined);
-    const graph = costGraph(project, cardOf);
+    /*
+     * 剪辑段换成它里面的卡(`kernel/cutFlatten.mjs` 的摊平视图;用户 2026-10-21 定):剪辑段里的每张卡和父时间轴上的卡一样
+     * 有自己的身份(片段 id 是 `<段 id>~<卡的片段 id>`),照测、照分派。和导出页的卡片计划同一份
+     */
+    const flat = flatPlanProject(project);
+    const graph = withFlatNodes(flat, costGraph(flat, cardOf));
     const versions = sourceVersionsOf();
     const versionOf = (cardId: string) => versions[cardId] ?? (cardRunState(cardId)?.state === "ready" && cardRunState(cardId)!.version ? `user:online:${cardRunState(cardId)!.version}` : null);
     const own = { ownNode: ownsVisual };
-    const { identityKeys, frameModes } = clipCostIndex(project, graph, (node) => versionOf((node as { cardId?: string }).cardId ?? ""), own);
+    const { identityKeys, frameModes } = clipCostIndex(flat, graph, (node) => versionOf((node as { cardId?: string }).cardId ?? ""), own);
     const capabilities = new Map<string, Record<string, unknown>>();
-    for (const [clipId, node] of clipCostNodes(project, graph, own)) capabilities.set(clipId, (node.capabilities ?? {}) as Record<string, unknown>);
+    for (const [clipId, node] of clipCostNodes(flat, graph, own)) capabilities.set(clipId, (node.capabilities ?? {}) as Record<string, unknown>);
     out = { identityKeys, frameModes, capabilities };
-    if (onlineBrowserMode()) out = dropLocalOnly(project, out);
-    out = dropUnknown(project, out);
+    if (onlineBrowserMode()) out = dropLocalOnly(flat, out);
+    out = dropUnknown(flat, out);
   } catch {
     out = EMPTY;
   }

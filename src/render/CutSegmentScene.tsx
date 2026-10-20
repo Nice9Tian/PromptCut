@@ -3,6 +3,7 @@ import type { CutSegmentRender } from "../kernel/cutSegments";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
 import type { Timeline } from "../kernel/types";
 import { FrameScene } from "./FrameScene";
+import type { StagePlaneProps } from "./Stage";
 
 /**
  * 剪辑段的画面(`kernel/cutSegments.ts` 文件头、`mechanism/rendering.md`「剪辑段」)。
@@ -18,6 +19,10 @@ import { FrameScene } from "./FrameScene";
  *
  * 嵌套场景里的包裹层不挂 `data-pc-clip`(挂 `data-pc-nested-clip`):命中测试、钉动画、量实体框、
  * 预渲染按轨道前缀拆层这些按「舞台顶层片段」工作的地方,看到的只有剪辑段自己这一层。
+ *
+ * 剪辑段里的卡和父时间轴上的卡一样分轻重(用户 2026-10-21 定;`kernel/cutFlatten.mjs` 的摊平视图):舞台把六个平面 prop
+ * 原样递进来(`planes`),嵌套舞台按「`flatPrefix` + 片段 id」(计划一侧的虚拟片段 id)查 —— 判重的卡藏活子树、贴自己的流,
+ * 没流时显示占位;轻卡照常活渲。导出页、预渲染页不传平面,DOM 一个字不变。
  */
 export interface SceneHost {
   live: boolean;
@@ -44,7 +49,7 @@ function subGraph(project: CutSegmentRender["project"]): Timeline["graph"] | und
   return graph ?? undefined;
 }
 
-export function CutSegmentScene({ seg, start, localT, localDirectT = localT, playToken, size }: {
+export function CutSegmentScene({ seg, start, localT, localDirectT = localT, playToken, size, flatPrefix, planes }: {
   seg: CutSegmentRender;
   /** 这一段在父剪辑上的起点(秒) */
   start: number;
@@ -54,6 +59,10 @@ export function CutSegmentScene({ seg, start, localT, localDirectT = localT, pla
   playToken: number;
   /** 段的框(像素) */
   size: { width: number; height: number };
+  /** 这一段里的片段在计划一侧的 id 前缀(`<段 id>~`,`kernel/cutFlatten.mjs`) */
+  flatPrefix?: string;
+  /** 舞台的六个平面 prop(按虚拟片段 id 发的);导出页、预渲染页不传 */
+  planes?: StagePlaneProps;
 }) {
   const host = useContext(SceneHostContext);
   const { project, offset, duration } = seg;
@@ -72,7 +81,8 @@ export function CutSegmentScene({ seg, start, localT, localDirectT = localT, pla
     }}>
       <FrameScene nested project={project} t={tau} directT={tauDirect} playToken={playToken} graph={subGraph(project)}
         mediaMode={live ? "live" : "placeholder"} mediaT={mediaT}
-        playing={live && !!host?.playing} scrubbing={live && !!host?.scrubbing} localHashes={host?.localHashes} />
+        playing={live && !!host?.playing} scrubbing={live && !!host?.scrubbing} localHashes={host?.localHashes}
+        flatPrefix={flatPrefix} {...planes} />
     </div>
   );
 }
