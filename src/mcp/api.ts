@@ -2,6 +2,7 @@ import type { EditorApi } from "../ai/mcpExecutor";
 import { visionHandlers } from "./handlers/vision";
 import { projectHandlers } from "./handlers/project";
 import { clipsHandlers } from "./handlers/clips";
+import { cutSegmentHandlers } from "./handlers/cutSegments";
 import { layoutHandlers } from "./handlers/layout";
 import { partsHandlers } from "./handlers/parts";
 import { tracksHandlers } from "./handlers/tracks";
@@ -23,6 +24,7 @@ export const editorApi: EditorApi = /* @__PURE__ */ Object.assign(
   visionHandlers,
   projectHandlers,
   clipsHandlers,
+  cutSegmentHandlers,
   layoutHandlers,
   partsHandlers,
   tracksHandlers,

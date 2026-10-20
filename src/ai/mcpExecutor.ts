@@ -115,6 +115,10 @@ export interface EditorApi {
   addCut(args?: { name?: string; switch?: boolean }): any;
   renameCut(args: { cutId: string; name: string }): any;
   removeCut(args: { cutId: string; force?: boolean; reason?: string }): any;
+  /** 在激活剪辑里放一个引用别的剪辑的剪辑段(cutId 或 name 二选一);放进自己、循环引用时抛并说明原因 */
+  addCutSegment(args: { cutId?: string; name?: string; start: number; duration?: number; cutOffset?: number; trackId?: string }): any;
+  /** 改剪辑段引用哪条剪辑(cutId 或 name)、从被引用剪辑的第几秒开始(cutOffset) */
+  setCutSegment(args: { clipId: string; cutId?: string; name?: string; cutOffset?: number }): any;
   seek(args: { t: number }): any;
   play(): any;
   pause(): any;

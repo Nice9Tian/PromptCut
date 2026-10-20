@@ -13,7 +13,8 @@ const { actions, getState } = await import(srcUrl("store/project.ts"));
 const { TOOL_ROUTES } = await import(srcUrl("mcp/routes.mjs"));
 const { clipsHandlers } = await import(srcUrl("mcp/handlers/clips.ts"));
 const { effectsHandlers } = await import(srcUrl("mcp/handlers/effects.ts"));
-const api = { ...clipsHandlers, ...effectsHandlers };
+const { cutSegmentHandlers } = await import(srcUrl("mcp/handlers/cutSegments.ts"));
+const api = { ...clipsHandlers, ...effectsHandlers, ...cutSegmentHandlers };
 const call = (tool, args) => api[TOOL_ROUTES[tool].method](args);
 
 function load() {
@@ -62,4 +63,15 @@ test("remove_cut:被引用的剪辑不带 force 被拒并列出引用;带 force 
   assert.equal(r.ok, true);
   assert.equal(r.removedSegments[0].cutId, "A");
   assert.equal(getState().project.tracks[0].clips.length, 0);
+});
+
+test("两个工具直连 EditorApi 自己的方法,不再借 addClip / updateClip;update_clip 不再改剪辑段的引用", () => {
+  assert.equal(TOOL_ROUTES.add_cut_segment.method, "addCutSegment");
+  assert.equal(TOOL_ROUTES.set_cut_segment.method, "setCutSegment");
+  load();
+  const seg = call("add_cut_segment", { cutId: "B", start: 0 }).segment;
+  assert.throws(() => call("add_clip", { start: 0, cutId: "B" }));
+  call("update_clip", { clipId: seg.clipId, cutOffset: 2 });
+  assert.equal(call("get_clip", { clipId: seg.clipId }).cutSegment.cutOffset, 0, "update_clip 不认 cutOffset");
+  assert.equal(call("set_cut_segment", { clipId: seg.clipId, name: "剪辑B", cutOffset: 1 }).segment.cutOffset, 1);
 });
