@@ -177,14 +177,14 @@ h2.sec { font-size: var(--fs-m); color: var(--dim); font-weight: 600; letter-spa
 .pager button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 /* 底部导航栏当前项是「选中态」规则的例外：只用青蓝色图标和加粗文字，不加底；三项完全一致 */
 #editor:not(.editing):not(.agent) #pgPrev, #editor.editing #pgTl, #editor.agent #pgAg { color: var(--accent); font-weight: 600; }
-.pager .ic { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--r-pill); flex: none; }
-/* 只有「未选中」时 Agent 的图标带圆形底（青蓝→酱紫渐变、白色图标，酱紫标 Agent 的身份）；选中时去掉 */
-#pgAg .ic { background: linear-gradient(135deg, var(--accent), var(--plum)); color: var(--white); }
-#pgAg .ic svg { width: 18px; height: 18px; }
-#editor.agent #pgAg .ic { background: none; color: inherit; }
-#editor.agent #pgAg .ic svg { width: 22px; height: 22px; }
+.pager .ic { width: 28px; height: 28px; display: grid; place-items: center; flex: none; }   /* 图标区三项一样高，图标本体（SVG / 圆）都是 22×22，居中 */
+/* Agent 的外形是一个 22px 的圆，和另外两项 22px 的图标同大。未选中：渐变实心圆（青蓝→酱紫，酱紫标 Agent 的身份）+ 白色小图标；
+   选中：不填色，青蓝圆描边（1.8px，和别的图标线宽一致）+ 青蓝图标，文字照统一的选中样式 */
+#pgAg .disc { width: 22px; height: 22px; border-radius: var(--r-pill); display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), var(--plum)); color: var(--white); }
+#pgAg .disc svg { width: 13px; height: 13px; stroke-width: 2.4; }
+#editor.agent #pgAg .disc { background: none; color: inherit; box-shadow: inset 0 0 0 1.8px var(--accent); }   /* 用内阴影画描边，才能是真正的 1.8px（border 在 1x 屏上会取整成 1px） */
 /* 未读角标：属于提醒，用 --danger */
-.pager .badge-n { position: absolute; top: -1px; left: calc(50% + 7px); z-index: 2; min-width: 16px; height: 16px; border-radius: var(--r-pill); background: var(--danger); color: var(--white); font-size: var(--fs-xs); display: grid; place-items: center; padding: 0 4px; font-weight: 700; }
+.pager .badge-n { position: absolute; top: -1px; left: calc(50% + 6px); z-index: 2; min-width: 16px; height: 16px; border-radius: var(--r-pill); background: var(--danger); color: var(--white); font-size: var(--fs-xs); display: grid; place-items: center; padding: 0 4px; font-weight: 700; }
 
 /* 默认态：只有一条主轨；编辑态：展开完整时间轴 */
 .pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -507,7 +507,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
     <div class="pager">
       <button id="pgPrev" onclick="pagePreview()"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.2 9.4v5.2l4.4-2.6z"/></svg></span><span class="lbl">缩略预览</span></button>
       <button id="pgTl" onclick="pageTimeline()"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M8 12h12M4 17h7"/><path d="M16 4v16"/></svg></span><span class="lbl">时间轴</span></button>
-      <button id="pgAg" onclick="pageAgent()"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3.5l1.9 5.4 5.4 1.9-5.4 1.9L11 18.1l-1.9-5.4L3.7 10.8l5.4-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></span><span class="lbl">Agent</span><span class="badge-n" id="chatBadge">1</span></button>
+      <button id="pgAg" onclick="pageAgent()"><span class="ic"><span class="disc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3.5l1.9 5.4 5.4 1.9-5.4 1.9L11 18.1l-1.9-5.4L3.7 10.8l5.4-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></span></span><span class="lbl">Agent</span><span class="badge-n" id="chatBadge">1</span></button>
     </div>
 
   </section>

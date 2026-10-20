@@ -83,7 +83,7 @@
 
 1. 标签 / 分段 / 小按钮：青蓝淡底 + 青蓝字（素材库分类 `.seg`、创造力 `.level`、Agent 对话标签 `.atab`，子导航栏按下时）。
 2. 卡片 / 块 / 片段：青蓝边框（缩略卡 `.mblock`、转场 ◇、时间轴片段 `.clip`、素材 / 卡片 `.tile`、选剪辑 `.crow`）。色块选择器本身就是颜色，选中用白边。
-3. 例外：底部导航栏当前项只用青蓝色图标 + 加粗文字，不加底，三项完全一致；只有未选中时 Agent 的图标带圆形底。
+3. 例外：底部导航栏当前项只用青蓝色图标 + 加粗文字，不加底。三项图标本体都是 22×22：Agent 的图标是一个 22px 的圆，未选中时是渐变实心圆 + 白色小图标（13px，用来强调），选中时改成青蓝圆描边（1.8px 内阴影，不填色）+ 青蓝图标。
 
 圆角四档（`--r-s` 6 / `--r-m` 10 / `--r-l` 18 / `--r-pill` 999，手机壳外框 `--r-shell` 单列）；字号五档（`--fs-xs` 10 / `--fs-s` 11 / `--fs-m` 12 / `--fs-l` 14 / `--fs-xl` 16）。图标一律用内联线性 SVG（描边 1.8、圆角端点，颜色走 `currentColor`）。
 
@@ -96,3 +96,7 @@
 
 - Chromium 121 起，只要元素上设了标准属性 `scrollbar-width` / `scrollbar-color`，`::-webkit-scrollbar` 就整套被忽略，改用系统滚动条（桌面上 10px 宽还带箭头）。所以标准写法放进 `@supports not selector(::-webkit-scrollbar)`，只给 Firefox 用；Chrome / Safari 走 `::-webkit-scrollbar`（5px、轨道透明、圆角滑块、无箭头）。
 - 自测别只看计算值，也别用 headless shell（它不画滚动条）：用 `--headless=new` 的 Chromium，量 `offsetWidth - clientWidth`（竖向）/ `offsetHeight - clientHeight`（横向）应为 5。
+
+## 第十二轮：Agent 图标大小
+
+- 底部导航栏三项的图标本体都是 22×22，居中在同一个 28px 高的图标区里，文字顶边一致。Agent 未选中：22px 渐变实心圆 + 13px 白色图标；选中：青蓝圆描边（1.8px）+ 青蓝图标，不填色。未读角标在圆的右上方。
