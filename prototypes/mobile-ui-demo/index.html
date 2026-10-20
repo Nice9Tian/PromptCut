@@ -137,11 +137,12 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .pager button { position: relative; flex: 1; height: 46px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 11px; color: var(--dim); }
 .pager button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #editor:not(.editing):not(.agent) #pgPrev, #editor.editing #pgTl { color: var(--accent); font-weight: 600; }
-/* Agent 是主角：更大的青蓝→酱紫渐变胶囊，图标和文字横排，始终强调；当前分页再加亮边和光晕 */
-.pager #pgAg { flex: 1.5; height: 48px; flex-direction: row; gap: 7px; border-radius: 24px; background: linear-gradient(135deg, var(--accent), var(--plum)); color: #fff; font-size: 15px; font-weight: 600; box-shadow: 0 4px 14px #8a5a9e55; }
-.pager #pgAg svg { width: 24px; height: 24px; }
-#editor.agent #pgAg { box-shadow: 0 0 0 2px #ffffff55, 0 4px 18px #26c6e688; }
-.pager .badge-n { position: absolute; top: -4px; right: 10px; min-width: 16px; height: 16px; border-radius: 8px; background: #fff; color: var(--plum); font-size: 10px; display: grid; place-items: center; padding: 0 4px; font-weight: 700; }
+/* Agent 只靠颜色强调：图标和文字用青蓝→酱紫渐变色，尺寸、排法与另外两项完全一致；当前在 Agent 页时加一圈亮边（不改尺寸） */
+#pgAg svg { stroke: url(#agGrad); }
+#pgAg .lbl { background: linear-gradient(135deg, var(--accent), #c58be0); -webkit-background-clip: text; background-clip: text; color: transparent; }
+#editor.agent #pgAg { border-radius: 12px; background: linear-gradient(135deg, #26c6e61f, #8a5a9e38); box-shadow: inset 0 0 0 1.5px #8a5a9ecc; }
+#editor.agent #pgAg .lbl { font-weight: 600; }
+.pager .badge-n { position: absolute; top: 0; right: 22%; min-width: 16px; height: 16px; border-radius: 8px; background: #fff; color: var(--plum); font-size: 10px; display: grid; place-items: center; padding: 0 4px; font-weight: 700; }
 .dock .badge-n { position: absolute; top: 2px; right: 22%; min-width: 16px; height: 16px; border-radius: 8px; background: var(--plum); color: #fff; font-size: 10px; display: grid; place-items: center; padding: 0 4px; }
 
 /* 默认态：只有一条主轨；编辑态：展开完整时间轴 */
@@ -465,7 +466,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
     <div class="pager">
       <button id="pgPrev" onclick="pagePreview()"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.2 9.4v5.2l4.4-2.6z"/></svg>缩略预览</button>
       <button id="pgTl" onclick="pageTimeline()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M8 12h12M4 17h7"/><path d="M16 4v16"/></svg>时间轴</button>
-      <button id="pgAg" onclick="pageAgent()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3.5l1.9 5.4 5.4 1.9-5.4 1.9L11 18.1l-1.9-5.4L3.7 10.8l5.4-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg>Agent<span class="badge-n" id="chatBadge">1</span></button>
+      <button id="pgAg" onclick="pageAgent()"><svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="agGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#26c6e6"/><stop offset="1" stop-color="#c58be0"/></linearGradient></defs><path d="M11 3.5l1.9 5.4 5.4 1.9-5.4 1.9L11 18.1l-1.9-5.4L3.7 10.8l5.4-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg><span class="lbl">Agent</span><span class="badge-n" id="chatBadge">1</span></button>
     </div>
 
   </section>
