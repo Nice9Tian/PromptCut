@@ -43,3 +43,25 @@
   - D A3:`renderEvents ["published","progress","done"]`,渲染节点 `completed 0→5`、`failed 0→0`,素材服务文件 `1→36`,全程 `membersEverOnline:false`。
   - D A5:两张重卡 `stream.drawn 2`、`placeholder false`,状态序列 `["stream|stream"]`;层表里两条单卡流 `env 7e57c10d00000002`(渲染服务的指纹);截图 163 种颜色、最多的一种占 36%。看过截图 `D-3-bob-stage-prerendered.png`:图表卡与重卡的橙块都在,不是空白。
   - D A6:层表 `layers:["clip-canvas","clip-stateful","clip-bars"]`(流),对话里「云端渲染中:0/6」「云端渲染完成」。
+- `npx tsc -b --force`:退出码 0,零错误。
+- `npm test`(设了 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`):第一遍 7204 项里 1 项取消(`server/test/asset-project-workers.test.mjs:97` 真实 ffmpeg 转码 20 秒超时,当时另一位子 Agent 也在跑,机器忙;单独重跑这个文件 11/11 通过);第二遍全量:`tests 7204, pass 7190, fail 0, cancelled 0`(14 项跳过),「npm test 最终结果：零失败」,退出码 0。本分支只改了探针脚本,不进 `npm test`。
+- `cloud-agent-ui-probe.mjs --base-port 29003 --dist <本分支现打的在线构建>`:`{"summary":{"total":28,"failed":0}}`,退出码 0(不带 `--dist` 时它找主仓库根下的 `dist-online/`,worktree 里没有,先报 ENOENT,不是本次改动带坏的)。
+
+## 没做成的:第 4、5 项(在线浏览器那一遍)
+
+在线构建的云端 AI 栏只认账号项目(`useCloud.ts`:`accountMode = ONLINE_BUILD || …`),而这支探针整套是口令式限定进入的云端项目、在线页面靠会话恢复记录进入。按语义(`product/hosting.md` 第 9 行)云端项目一律走网站账号,这条路在产品里已经不存在,所以不是「改找元素、改等待」能修的:
+
+- 受影响的不只 `online` 一步:`stop` 的 B3、`spaced`(K1～K3)、`usercard`(UC1、UC2)、`errors`(E1～E5)发起方都是在线页面上的创建者,全部要先选「云端」。2026-10-20 的整轮里这些步骤其实一步都没跑到(在线那一遍抛出的异常直接到了顶层),所以「只差 5 项」是低估。
+- 要让它们重新有效,得把这支探针迁到账号组合上(参照 `cloud-agent-ui-probe.mjs` 0.7.18 的迁法:VisuHive 真账号后端、账号模式文档服务、登录、开始页新建云端项目、首次使用时的告知对话框、成员邀请),并且给账号组合接上真的渲染服务(现在 `startRunnerProcessFixture` 里只有渲染替身)。这已经是重写整支探针(约 1000 行),超出本任务「只改找元素与等待」的范围,也会碰到桌面版那一遍(无头 dev server 页面没有 Rust 壳里的账号保管,`cloud-agent-ui-probe.mjs` 迁移时就把桌面阶段整个拿掉了)。
+- 没有为了让探针变绿去跳过这些步骤或放宽断言。
+
+需要主会话 / 用户定:A. 立一个任务把 ux-ui 探针迁到账号组合(含真渲染服务);B. 在线发起的那几步在账号模式下由别的探针承担,ux-ui 探针收窄为桌面版发起(把缺省 `--steps` 改成 `desktop`,在线各步标注「待迁到账号组合」);C. 其它。
+
+## 产品与语义上的发现(不是本次改的)
+
+- **语义冲突(生产上也存在)**:`product/agent.md` 第 41 行承诺「被改动的重卡由云节点上托管方的渲染节点渲出来并入库，全程不需要任何成员的设备在线」;`product/rendering.md` 第 45 行定「生成轨道流」关着时托管方的渲染节点完全不为这个项目产流,而且这一项要创建者在权限分组里才能打开(缺省关)。快照作废后,项目没开这一项时,云端 Agent 改完重卡,渲染服务认领计划、切出 0 个任务,对话里却照样显示「已把 3 个片段交给云端渲染」「云端渲染完成」(本次复现的就是这个现象)。建议用户定:要么 agent.md 那句加上「项目开了『生成轨道流』时」,要么 Agent 侧在计划切出 0 个任务时不说「云端渲染完成」(改说「这个项目没开生成轨道流,由成员设备播放时自己产」之类)。
+- 生产节点没有去查:根因已在本机定位,与 `render.code-mismatch` 无关;本次没改服务端,不需要。
+
+## 部署
+
+- 只改了 `scripts/probes/` 下两个探针文件,没有改 `server/`、`src/`:不需要重启任何服务,也不需要同步渲染树。
