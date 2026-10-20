@@ -1,0 +1,898 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PromptCut 手机版 UI 演示</title>
+<style>
+:root {
+  --bg: #12151b;
+  --panel: #1a1f28;
+  --panel2: #222834;
+  --line: #2d3442;
+  --text: #e6eaf2;
+  --dim: #8b95a8;
+  --accent: #26c6e6;          /* 高饱和青蓝 */
+  --accent-dim: #12404c;
+  --plum: #8a5a9e;            /* 低饱和酱紫 */
+  --plum-dim: #3a2a45;
+  --ok: #4cc38a;
+  --warn: #e8b04a;
+  --danger: #e5604f;
+  --r: 12px;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: #07090c; color: var(--text);
+  font: 14px/1.4 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+body { display: flex; align-items: center; justify-content: center; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input { font: inherit; color: inherit; }
+
+/* 手机壳：桌面上 375x780 居中，真手机上占满屏 */
+.phone { position: relative; width: 375px; height: 780px; background: var(--bg); border-radius: 36px;
+  overflow: hidden; overflow: clip; box-shadow: 0 0 0 10px #1c2029, 0 30px 80px #000a; display: flex; flex-direction: column; }
+@media (max-width: 430px) {
+  .phone { width: 100vw; height: 100dvh; border-radius: 0; box-shadow: none; }
+}
+.status { height: 28px; flex: none; display: flex; justify-content: space-between; align-items: center;
+  padding: 0 22px; font-size: 12px; color: var(--dim); }
+.screen { flex: 1; min-height: 0; display: none; flex-direction: column; }
+.screen.on { display: flex; }
+
+/* 通用 */
+.topbar { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 12px; }
+.topbar h1 { font-size: 16px; margin: 0; flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.icon-btn { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: var(--dim); font-size: 18px; }
+.icon-btn:active { background: var(--panel2); }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 12px;
+  background: var(--panel2); color: var(--dim); white-space: nowrap; }
+.chip.accent { background: var(--accent-dim); color: var(--accent); }
+.chip.plum { background: var(--plum-dim); color: #d3a8e6; }
+.chip.warn { background: #3d3217; color: var(--warn); }
+.btn { height: 38px; padding: 0 16px; border-radius: 10px; background: var(--panel2); font-weight: 500; }
+.btn.primary { background: var(--accent); color: #04222a; font-weight: 600; }
+.btn:active { filter: brightness(1.2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+
+/* ===== 1. 项目列表（开始页） ===== */
+#home .body { flex: 1; overflow: auto; padding: 4px 16px 16px; }
+.logo { font-size: 22px; font-weight: 700; letter-spacing: .5px; }
+.logo b { color: var(--accent); }
+.quick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 18px; }
+.quick button { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 12px; text-align: left; }
+.quick button.main { background: linear-gradient(135deg, #0f5463, #15303c); border-color: #1a7a90; }
+.quick small { display: block; color: var(--dim); margin-top: 2px; font-size: 12px; }
+.quick .big { font-size: 20px; }
+h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1px; margin: 16px 0 8px; text-transform: none; }
+.proj { display: flex; gap: 12px; padding: 10px; background: var(--panel); border-radius: var(--r); margin-bottom: 8px; border: 1px solid transparent; width: 100%; text-align: left; }
+.proj:active { border-color: var(--accent); }
+.proj .th { width: 84px; height: 52px; border-radius: 8px; flex: none; position: relative; overflow: hidden; }
+.proj .meta { flex: 1; min-width: 0; }
+.proj .name { font-weight: 600; }
+.proj .sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+.proj .tags { margin-top: 6px; display: flex; gap: 6px; }
+.storage { background: var(--panel); border-radius: var(--r); padding: 12px; }
+.bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; margin: 8px 0 4px; }
+.bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--plum)); }
+.note-mobile { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--plum-dim); color: #d3a8e6; font-size: 12px; }
+
+/* ===== 2. 编辑主界面 ===== */
+.stage-wrap { flex: none; padding: 0 12px; }
+.stage { position: relative; width: 100%; aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; background: #000; }
+.stage .bgl { position: absolute; inset: 0; transition: background .2s; }
+.stage .sun { position: absolute; width: 54px; height: 54px; border-radius: 50%; right: 18%; top: 18%; background: radial-gradient(#ffe9a8, #ffb04a); filter: blur(.5px); }
+.stage .sea { position: absolute; left: 0; right: 0; bottom: 0; height: 38%; background: linear-gradient(#1b6fa8, #0c3556); }
+.stage .wave { position: absolute; left: -10%; right: -10%; bottom: 33%; height: 10px; border-radius: 50%; background: #ffffff33; }
+.stage .title { position: absolute; left: 0; right: 0; text-align: center; font-weight: 800; color: #fff;
+  text-shadow: 0 2px 10px #0008; white-space: nowrap; transition: none; cursor: grab; touch-action: none; user-select: none; }
+.stage .sub-cap { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; font-size: 11px; color: #fff; }
+.stage .sub-cap span { background: #000a; padding: 2px 8px; border-radius: 4px; }
+.stage .sel { position: absolute; border: 1.5px dashed var(--accent); border-radius: 3px; pointer-events: none; display: none; }
+.stage .badge { position: absolute; left: 6px; top: 6px; font-size: 10px; background: #000a; padding: 1px 6px; border-radius: 4px; color: var(--dim); }
+.stage .agent-flag { position: absolute; right: 6px; top: 6px; font-size: 10px; background: var(--plum-dim); color: #d3a8e6; padding: 1px 7px; border-radius: 999px; display: none; }
+.stage .agent-flag.on { display: block; animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .5; } }
+
+.transport { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 12px 4px; }
+.transport .tc { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--dim); min-width: 92px; }
+.transport .tc b { color: var(--text); font-weight: 600; }
+.play { width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #04222a; display: grid; place-items: center; font-size: 16px; }
+.spacer { flex: 1; }
+
+.cliptabs { flex: none; display: flex; gap: 6px; padding: 4px 12px; overflow-x: auto; scrollbar-width: none; }
+.cliptabs::-webkit-scrollbar { display: none; }
+.ctab { flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 10px; border-radius: 8px 8px 0 0; background: var(--panel); color: var(--dim); font-size: 12px; }
+.ctab.on { background: var(--panel2); color: var(--text); box-shadow: inset 0 -2px var(--accent); }
+.ctab .x { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 11px; }
+.ctab .x:active { background: var(--line); }
+.ctab.add { padding: 0 10px; color: var(--accent); }
+
+.timeline { flex: 1; min-height: 0; background: var(--panel); margin: 0 12px; border-radius: 0 10px 10px 10px; display: flex; flex-direction: column; overflow: hidden; }
+.tl-scroll { position: relative; flex: 1; overflow-x: auto; overflow-y: auto; scrollbar-width: thin; touch-action: pan-x pan-y; }
+.tl-inner { position: relative; min-height: 100%; }
+.ruler { position: sticky; top: 0; z-index: 3; height: 20px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 10px; color: var(--dim); }
+.ruler span { position: absolute; top: 4px; transform: translateX(-50%); }
+.lane { position: relative; height: 40px; border-bottom: 1px solid #ffffff08; }
+.lane-head { position: sticky; left: 0; z-index: 2; width: 0; }
+.lane-head span { position: absolute; left: 0; top: 4px; height: 32px; width: 26px; display: grid; place-items: center; background: var(--panel2); border-radius: 0 6px 6px 0; font-size: 10px; color: var(--dim); z-index: 2; }
+.clip { position: absolute; top: 5px; height: 30px; border-radius: 6px; padding: 0 6px 0 10px; display: flex; align-items: center; gap: 4px; font-size: 11px; overflow: hidden; white-space: nowrap; border: 1.5px solid transparent; cursor: pointer; }
+.clip.v { background: #1b5f78; }
+.clip.fx { background: var(--plum); }
+.clip.a { background: #2b6b4f; }
+.clip.cap { background: #5b5530; }
+.clip.sel { border-color: #fff; }
+.clip .mute { margin-left: auto; background: #000a; border-radius: 4px; padding: 0 4px; font-size: 10px; color: var(--warn); }
+.clip .h { position: absolute; top: 0; bottom: 0; width: 8px; background: #ffffff55; display: none; }
+.clip.sel .h { display: block; }
+.clip .h.l { left: 0; border-radius: 5px 0 0 5px; } .clip .h.r { right: 0; border-radius: 0 5px 5px 0; }
+.playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 4; pointer-events: none; }
+.playhead::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: var(--accent); border-bottom: 0; }
+.tl-tools { flex: none; display: flex; gap: 6px; padding: 6px; border-top: 1px solid var(--line); }
+.tl-tools button { flex: 1; height: 32px; border-radius: 8px; background: var(--panel2); font-size: 12px; color: var(--text); }
+.tl-tools button:disabled { opacity: .35; }
+.tl-tools button:not(:disabled):active { background: var(--accent-dim); }
+
+.dock { flex: none; display: flex; padding: 6px 8px 10px; gap: 4px; background: var(--bg); border-top: 1px solid var(--line); }
+.dock button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; border-radius: 10px; color: var(--dim); font-size: 11px; position: relative; }
+.dock button .g { font-size: 18px; }
+.dock button:active, .dock button.on { color: var(--accent); background: var(--panel); }
+.dock .badge-n { position: absolute; top: 2px; right: 22%; min-width: 16px; height: 16px; border-radius: 8px; background: var(--plum); color: #fff; font-size: 10px; display: grid; place-items: center; padding: 0 4px; }
+
+/* ===== 底部面板（sheet） ===== */
+.scrim { position: absolute; inset: 0; background: #0009; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
+.scrim.on { opacity: 1; pointer-events: auto; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--panel); border-radius: 18px 18px 0 0; z-index: 11;
+  transform: translateY(105%); visibility: hidden; transition: transform .25s ease, visibility 0s .25s; display: flex; flex-direction: column; max-height: 82%; }
+.sheet.tall { height: 82%; }
+.sheet.full { height: calc(100% - 28px); border-radius: 18px 18px 0 0; }
+.sheet.on { transform: none; visibility: visible; transition: transform .25s ease, visibility 0s; }
+.grip { width: 38px; height: 4px; border-radius: 2px; background: var(--line); margin: 8px auto 4px; flex: none; }
+.sheet-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 14px 8px; }
+.sheet-head h3 { margin: 0; font-size: 15px; flex: 1; }
+.sheet-body { flex: 1; min-height: 0; overflow: auto; padding: 0 14px 14px; }
+
+.seg { display: flex; gap: 4px; padding: 0 14px 8px; overflow-x: auto; flex: none; scrollbar-width: none; }
+.seg button { flex: none; height: 30px; padding: 0 12px; border-radius: 999px; background: var(--panel2); color: var(--dim); font-size: 13px; }
+.seg button.on { background: var(--accent-dim); color: var(--accent); }
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tile { background: var(--panel2); border-radius: 10px; overflow: hidden; text-align: left; border: 1.5px solid transparent; }
+.tile .pic { aspect-ratio: 16/10; position: relative; display: grid; place-items: center; font-size: 22px; }
+.tile .cap { padding: 5px 7px 7px; font-size: 11px; }
+.tile .cap small { display: block; color: var(--dim); font-size: 10px; }
+.tile:active, .tile.picked { border-color: var(--accent); }
+.tile .dur { position: absolute; right: 4px; bottom: 3px; font-size: 10px; background: #000a; padding: 0 4px; border-radius: 3px; }
+.tile .st { position: absolute; left: 4px; top: 3px; font-size: 9px; background: var(--plum-dim); color: #d3a8e6; border-radius: 3px; padding: 0 4px; }
+.list-row { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--panel2); border-radius: 10px; margin-bottom: 6px; }
+.list-row .i { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; background: var(--panel); }
+.hint { color: var(--dim); font-size: 12px; margin: 4px 0 10px; }
+.dropzone { border: 1.5px dashed var(--line); border-radius: 10px; padding: 12px; text-align: center; color: var(--dim); font-size: 12px; margin-bottom: 10px; }
+
+/* 参数 */
+.field { margin: 0 0 14px; }
+.field label { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+.field .num { width: 64px; height: 28px; text-align: right; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; outline: none; }
+.field .num:focus { border-color: var(--accent); }
+input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; margin: 0; }
+.toggle { width: 44px; height: 26px; border-radius: 13px; background: var(--line); position: relative; flex: none; transition: background .15s; }
+.toggle::after { content: ""; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left .15s; }
+.toggle.on { background: var(--accent); } .toggle.on::after { left: 21px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.row .t small { display: block; color: var(--dim); font-size: 11px; }
+.wrapnote { background: var(--panel2); padding: 8px 10px; border-radius: 8px; font-size: 12px; color: var(--dim); margin-bottom: 12px; }
+.wrapnote b { color: var(--text); }
+.color-row { display: flex; gap: 8px; }
+.color-row button { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; }
+.color-row button.on { border-color: #fff; }
+.undo-row { display: flex; gap: 8px; margin-top: 4px; }
+
+/* ===== 3. Agent 对话（全屏层） ===== */
+.chat-top { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px; }
+.atabs { display: flex; gap: 4px; flex: 1; overflow-x: auto; scrollbar-width: none; }
+.atab { flex: none; display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 4px 0 10px; border-radius: 8px; background: var(--panel2); color: var(--dim); font-size: 12px; }
+.atab.on { color: var(--text); box-shadow: inset 0 -2px var(--plum); }
+.atab .x { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 11px; }
+.atab .x:active { background: var(--line); }
+.chat-info { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 14px 4px; font-size: 12px; color: var(--dim); }
+.level { display: inline-flex; background: var(--panel2); border-radius: 8px; padding: 2px; }
+.level button { height: 24px; padding: 0 10px; border-radius: 6px; font-size: 12px; color: var(--dim); }
+.level button.on { background: var(--plum); color: #fff; }
+.msgs { flex: 1; min-height: 0; overflow: auto; padding: 8px 14px; display: flex; flex-direction: column; gap: 10px; }
+.msgs > * { flex: none; }
+.msg { max-width: 88%; padding: 9px 12px; border-radius: 14px; font-size: 14px; word-break: break-word; }
+.msg.me { align-self: flex-end; background: var(--accent-dim); color: #d5f6ff; border-bottom-right-radius: 4px; }
+.msg.ag { align-self: flex-start; background: var(--panel2); border-bottom-left-radius: 4px; }
+.msg .who { font-size: 11px; color: var(--dim); margin-bottom: 2px; }
+.ref { display: inline-flex; gap: 4px; align-items: center; background: #0006; border-radius: 6px; padding: 1px 6px; font-size: 11px; margin-bottom: 4px; color: var(--accent); }
+.ops { align-self: stretch; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.ops > summary { list-style: none; cursor: pointer; padding: 8px 12px; font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+.ops > summary::-webkit-details-marker { display: none; }
+.ops > summary::after { content: "›"; margin-left: auto; transition: transform .15s; }
+.ops[open] > summary::after { transform: rotate(90deg); }
+.ops .items { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+.it { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; }
+.it .mk { flex: none; width: 16px; height: 16px; border-radius: 50%; margin-top: 1px; display: grid; place-items: center; font-size: 10px; }
+.it.done .mk { background: var(--ok); color: #04200f; }
+.it.todo .mk { background: var(--line); color: var(--dim); }
+.it.run .mk { background: var(--accent); color: #04222a; animation: pulse 1s infinite; }
+.it.ask .mk { background: var(--warn); color: #2b1f00; }
+.diff { margin-top: 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.diff div { border-radius: 8px; aspect-ratio: 16/9; position: relative; overflow: hidden; }
+.diff div::after { content: attr(data-l); position: absolute; left: 4px; top: 3px; font-size: 9px; background: #000a; padding: 0 4px; border-radius: 3px; }
+.param-diff { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.param-diff s { color: var(--danger); } .param-diff em { color: var(--ok); font-style: normal; }
+.guard { align-self: stretch; border: 1px solid #6b4a14; background: #2b2112; border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+.guard .acts { display: flex; gap: 8px; margin-top: 8px; }
+.guard .btn { height: 32px; font-size: 13px; }
+.composer { flex: none; padding: 8px 10px 12px; border-top: 1px solid var(--line); background: var(--bg); }
+.quicks { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: none; }
+.quicks button { flex: none; height: 28px; padding: 0 10px; border-radius: 999px; background: var(--panel2); font-size: 12px; color: var(--dim); }
+.quicks button:active { color: var(--accent); }
+.in-row { display: flex; gap: 8px; align-items: center; }
+.in-row input { flex: 1; height: 40px; border-radius: 20px; border: 1px solid var(--line); background: var(--panel); padding: 0 14px; outline: none; }
+.in-row input:focus { border-color: var(--accent); }
+.send { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: #04222a; font-weight: 700; }
+.typing { display: inline-block; }
+.typing i { display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: 50%; background: var(--dim); animation: bl 1s infinite; }
+.typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes bl { 50% { transform: translateY(-3px); opacity: .4; } }
+
+/* 冲突合并 */
+.cf-group { background: var(--panel2); border-radius: 10px; margin-bottom: 8px; overflow: hidden; }
+.cf-head { display: flex; align-items: center; gap: 8px; padding: 10px; }
+.cf-sub { padding: 0 10px 8px 34px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--dim); }
+.cf-sub label, .cf-head label { display: flex; align-items: center; gap: 8px; }
+.cf-head input, .cf-sub input { accent-color: var(--accent); width: 16px; height: 16px; }
+.cf-head .nm { flex: 1; font-weight: 500; }
+.cf-foot { display: flex; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); flex: none; }
+.cf-foot .btn { flex: 1; }
+.cf-top { display: flex; gap: 8px; margin-bottom: 10px; }
+.cf-top .btn { flex: 1; height: 32px; font-size: 12px; }
+
+.toast { position: absolute; left: 50%; bottom: 96px; transform: translate(-50%, 20px); background: #000d; color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 12.5px; z-index: 30; opacity: 0; transition: .2s; pointer-events: none; max-width: 90%; text-align: center; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+.demo-tag { position: absolute; left: 0; right: 0; bottom: 2px; text-align: center; font-size: 9px; color: #ffffff30; z-index: 40; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="phone" id="phone">
+  <div class="status"><span>9:41</span><span>PromptCut · 演示稿</span><span>5G ▮▮▮</span></div>
+
+  <!-- ===================== 1. 项目列表 ===================== -->
+  <section class="screen on" id="home">
+    <div class="topbar">
+      <div class="logo" style="flex:1">Prompt<b>Cut</b></div>
+      <span class="chip accent"><i class="dot"></i> 云端已连接</span>
+      <button class="icon-btn" title="设置" onclick="toast('设置：外观、存储、账号（演示未做）')">⚙</button>
+    </div>
+    <div class="body">
+      <div class="quick">
+        <button class="main" onclick="toast('新建云端项目 → 进入编辑（演示直接打开示例）');openProject('p1')">
+          <span class="big">＋</span><br><b>新建项目</b><small>说一句话，Agent 开工</small>
+        </button>
+        <button onclick="openSheet('join')"><span class="big">⤵</span><br><b>加入别人的项目</b><small>链接 / 邀请码 / 扫码</small></button>
+      </div>
+
+      <h2 class="sec">最近的项目</h2>
+      <button class="proj" onclick="openProject('p1')">
+        <div class="th" style="background:linear-gradient(135deg,#ffb04a,#1b6fa8)"></div>
+        <div class="meta"><div class="name">夏日海边 Vlog</div><div class="sub">3 分钟前 · 12 条素材 · 02:34</div>
+          <div class="tags"><span class="chip plum">Agent 在改</span><span class="chip">云端</span></div></div>
+      </button>
+      <button class="proj" onclick="openProject('p2')">
+        <div class="th" style="background:linear-gradient(135deg,#5a3a7a,#1b2a4a)"></div>
+        <div class="meta"><div class="name">产品发布会预告</div><div class="sub">昨天 · 6 条素材 · 00:45</div>
+          <div class="tags"><span class="chip accent">3 人协作</span><span class="chip warn">2 项待合并</span></div></div>
+      </button>
+      <button class="proj" onclick="openProject('p3')">
+        <div class="th" style="background:linear-gradient(135deg,#2b6b4f,#12303a)"></div>
+        <div class="meta"><div class="name">教程：剪映迁移指南</div><div class="sub">10 月 12 日 · 本地草稿 · 08:10</div>
+          <div class="tags"><span class="chip">本机</span></div></div>
+      </button>
+
+      <h2 class="sec">存储</h2>
+      <div class="storage">
+        <div style="display:flex;justify-content:space-between"><span>预渲染缓存</span><b>3.2 GB / 10 GB</b></div>
+        <div class="bar"><i style="width:32%"></i></div>
+        <div style="display:flex;justify-content:space-between;color:var(--dim);font-size:12px"><span>导出产物 4 个 · 1.1 GB</span>
+          <button style="color:var(--accent)" onclick="toast('已清理缓存（假数据）')">清理缓存</button></div>
+      </div>
+
+      <div class="note-mobile">手机端是“看与改”：对话、预览、微调、审阅 Agent 的改动。重型制作（导入大素材、写卡片代码）留给桌面端。</div>
+    </div>
+  </section>
+
+  <!-- ===================== 2. 编辑主界面 ===================== -->
+  <section class="screen" id="editor">
+    <div class="topbar">
+      <button class="icon-btn" onclick="go('home')" title="返回项目列表">‹</button>
+      <h1 id="projName">夏日海边 Vlog</h1>
+      <button class="chip warn" id="cfBtn" onclick="openSheet('conflict')">冲突合并 2</button>
+      <button class="chip" onclick="openSheet('members')">2 人 · 2 Agent</button>
+      <button class="btn primary" style="height:30px;padding:0 12px" onclick="openSheet('export')">导出</button>
+    </div>
+
+    <div class="stage-wrap">
+      <div class="stage" id="stage">
+        <div class="bgl" id="bgl"></div>
+        <div class="sun"></div><div class="sea"></div><div class="wave"></div>
+        <div class="title" id="title">夏日海边</div>
+        <div class="sel" id="sel"></div>
+        <div class="sub-cap"><span id="cap">海风、阳光，还有你</span></div>
+        <div class="badge" id="stageBadge">16:9 · 30fps</div>
+        <div class="agent-flag" id="agentFlag">Agent 正在改</div>
+      </div>
+    </div>
+
+    <div class="transport">
+      <button class="play" id="playBtn" onclick="togglePlay()">▶</button>
+      <div class="tc"><b id="tcNow">00:00.0</b> / <span id="tcTotal">00:24.0</span></div>
+      <span class="spacer"></span>
+      <button class="icon-btn" id="undoBtn" onclick="undo()" title="撤销">↶</button>
+      <button class="icon-btn" id="redoBtn" onclick="redo()" title="重做">↷</button>
+    </div>
+
+    <div class="cliptabs" id="cliptabs"></div>
+
+    <div class="timeline">
+      <div class="tl-scroll" id="tlScroll">
+        <div class="tl-inner" id="tlInner"></div>
+      </div>
+      <div class="tl-tools">
+        <button id="tSplit" onclick="splitClip()" disabled>✂ 在此切分</button>
+        <button id="tDup" onclick="dupClip()" disabled>⧉ 复制</button>
+        <button id="tDel" onclick="delClip()" disabled>🗑 删除</button>
+        <button id="tEdit" onclick="openSheet('params')" disabled>⚙ 调整</button>
+      </div>
+    </div>
+
+    <div class="dock">
+      <button onclick="openSheet('assets')"><span class="g">▦</span>素材</button>
+      <button onclick="openSheet('cards')"><span class="g">✦</span>卡片</button>
+      <button onclick="openSheet('params')"><span class="g">☰</span>调整</button>
+      <button onclick="openSheet('chat')"><span class="g">💬</span>Agent<span class="badge-n" id="chatBadge">1</span></button>
+    </div>
+  </section>
+
+  <div class="scrim" id="scrim" onclick="closeSheets()"></div>
+
+  <!-- ===================== 素材库 ===================== -->
+  <div class="sheet tall" id="sh-assets">
+    <div class="grip"></div>
+    <div class="sheet-head"><h3>素材库</h3><button class="chip accent" onclick="toast('选择相册 / 文件导入（演示未做）')">＋ 导入</button><button class="icon-btn" onclick="closeSheets()">✕</button></div>
+    <div class="seg" id="assetTabs"></div>
+    <div class="sheet-body" id="assetBody"></div>
+  </div>
+
+  <!-- ===================== 卡片 ===================== -->
+  <div class="sheet tall" id="sh-cards">
+    <div class="grip"></div>
+    <div class="sheet-head"><h3>卡片（特效 / 动效）</h3><button class="icon-btn" onclick="closeSheets()">✕</button></div>
+    <div class="seg" id="cardTabs"></div>
+    <div class="sheet-body">
+      <div class="hint" id="cardHint">点一张卡片，加到播放头所在位置。想要新卡片？让 Agent 来做（创造力“高”才能新建）。</div>
+      <div class="grid" id="cardGrid"></div>
+      <button class="btn" style="width:100%;margin-top:12px" onclick="askAgent('帮我做一张“渐入的手写标题”卡片')">＋ 让 Agent 新建一张卡片</button>
+    </div>
+  </div>
+
+  <!-- ===================== 调整（参数） ===================== -->
+  <div class="sheet" id="sh-params">
+    <div class="grip"></div>
+    <div class="sheet-head"><h3 id="pTitle">调整</h3><span class="chip plum" id="pKind">动效卡</span><button class="icon-btn" onclick="closeSheets()">✕</button></div>
+    <div class="sheet-body" id="pBody"></div>
+  </div>
+
+  <!-- ===================== Agent 对话 ===================== -->
+  <div class="sheet full" id="sh-chat">
+    <div class="grip"></div>
+    <div class="chat-top">
+      <div class="atabs" id="atabs"></div>
+      <button class="icon-btn" onclick="newAgentTab()" title="新对话">＋</button>
+      <button class="icon-btn" onclick="closeSheets()" title="收起">⌄</button>
+    </div>
+    <div class="chat-info">
+      <span>创造力</span>
+      <div class="level" id="level">
+        <button data-l="低">低</button><button data-l="中">中</button><button data-l="高" class="on">高</button>
+      </div>
+      <span class="spacer"></span>
+      <span class="chip" id="visChip">共有对话</span>
+    </div>
+    <div class="msgs" id="msgs"></div>
+    <div class="composer">
+      <div class="quicks">
+        <button onclick="askAgent('把开头的标题做得更大气一点')">标题更大气</button>
+        <button onclick="askAgent('给第二段加一个转场')">加转场</button>
+        <button onclick="askAgent('配一段轻松的背景音乐')">配乐</button>
+        <button onclick="askAgent('把整体节奏剪快一点')">剪快点</button>
+        <button onclick="refSelected()">@引用选中的片段</button>
+      </div>
+      <div class="in-row">
+        <input id="chatIn" placeholder="告诉 Agent 你想怎么改…" onkeydown="if(event.key==='Enter')sendChat()">
+        <button class="send" onclick="sendChat()">↑</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 其它小面板 ===================== -->
+  <div class="sheet" id="sh-conflict">
+    <div class="grip"></div>
+    <div class="sheet-head"><h3>冲突合并</h3><button class="icon-btn" onclick="closeSheets()">✕</button></div>
+    <div class="sheet-body">
+      <div class="hint">暂时离线期间的改动。展开可以逐项勾选。</div>
+      <div class="cf-top"><button class="btn" onclick="cfSelect(true)">选中无冲突项</button><button class="btn" onclick="cfSelect(false)">取消全部勾选</button></div>
+      <div id="cfList"></div>
+    </div>
+    <div class="cf-foot"><button class="btn primary" onclick="cfMerge()">合并</button><button class="btn" onclick="cfDrop()">删除选中</button><button class="btn" id="cfClose" onclick="closeSheets()">下次再说</button></div>
+  </div>
+
+  <div class="sheet" id="sh-members">
+    <div class="grip"></div>
+    <div class="sheet-head"><h3>成员：2 人 · Agent：2 个</h3><button class="icon-btn" onclick="closeSheets()">✕</button></div>
+    <div class="sheet-body">
+      <div class="list-row"><div class="i">🙂</div><div style="flex:1"><b>我（创建者）</b><div class="hint" style="margin:0">编辑中</div></div><i class="dot"></i></div>
+      <div class="list-row"><div class="i">🧑</div><div style="flex:1"><b>小林</b><div class="hint" style="margin:0">在看 · 序列 2</div></div><i class="dot"></i></div>
+      <div class="list-row"><div class="i" style="background:var(--plum-dim)">✦</div><div style="flex:1"><b>我 · Agent · 第 1 个对话</b><div class="hint" style="margin:0">正在调整标题卡</div></div><span class="chip plum">Agent</span></div>
+      <div class="list-row"><div class="i" style="background:var(--plum-dim)">✦</div><div style="flex:1"><b>小林的云端 Agent</b><div class="hint" style="margin:0">离线，Agent 在跑</div></div><span class="chip plum">云端</span></div>
+      <button class="btn" style="width:100%;margin-top:6px" onclick="toast('邀请链接已复制（假的）')">复制项目链接 / 二维码</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="sh-export">
+    <div class="grip"></div>
+    <div class="sheet-head"><h3>导出</h3><button class="icon-btn" onclick="closeSheets()">✕</button></div>
+    <div class="sheet-body">
+      <div class="row"><div class="t">分辨率<small>手机上建议 1080p，4K 留给桌面端</small></div><span class="chip accent">1080p</span></div>
+      <div class="row"><div class="t">同时导出透明层<small>方便二次合成</small></div><div class="toggle" onclick="this.classList.toggle('on')"></div></div>
+      <div class="row"><div class="t">预计耗时<small>云端渲染节点</small></div><b>约 1 分 20 秒</b></div>
+      <div id="expProg" style="display:none"><div class="bar"><i id="expBar" style="width:0%"></i></div><div class="hint" id="expTxt">渲染中…</div></div>
+      <button class="btn primary" style="width:100%;margin-top:8px" onclick="fakeExport()">开始导出</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="sh-join">
+    <div class="grip"></div>
+    <div class="sheet-head"><h3>加入别人的项目</h3><button class="icon-btn" onclick="closeSheets()">✕</button></div>
+    <div class="sheet-body">
+      <div class="field"><label>项目链接 / 邀请码</label><input class="num" style="width:100%;text-align:left;height:40px" placeholder="粘贴链接，或扫描二维码"></div>
+      <div class="hint">云端项目需要先登录网站账号；本地项目填项目名与项目密码。</div>
+      <button class="btn primary" style="width:100%" onclick="closeSheets();toast('已申请加入（假的）')">加入</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div class="demo-tag">静态演示 · 假数据 · 不连任何服务</div>
+</div>
+
+<script>
+/* ============ 假数据 ============ */
+const TOTAL = 24;            // 秒
+const PX = 22;               // 每秒像素
+const LANE_LABEL = ['视', '效', '字', '音'];
+let clipsByTab = {
+  '剪辑 1': [
+    { id: 'c1', lane: 0, s: 0,  d: 6,  name: '海浪远景.mp4', kind: 'v' },
+    { id: 'c2', lane: 0, s: 6,  d: 8,  name: '沙滩奔跑.mp4', kind: 'v' },
+    { id: 'c3', lane: 0, s: 14, d: 10, name: '日落.mp4', kind: 'v', muted: true },
+    { id: 'c4', lane: 1, s: 5,  d: 2,  name: '✦ 光斑转场', kind: 'fx' },
+    { id: 'c5', lane: 1, s: 13, d: 2,  name: '✦ 推拉转场', kind: 'fx' },
+    { id: 'c6', lane: 2, s: 0.5, d: 5, name: 'T 夏日海边', kind: 'cap', title: true },
+    { id: 'c7', lane: 2, s: 7,  d: 6,  name: 'T 字幕：海风…', kind: 'cap' },
+    { id: 'c8', lane: 3, s: 0,  d: 24, name: '♪ 轻松吉他.mp3', kind: 'a' }
+  ],
+  '片头': [
+    { id: 'd1', lane: 0, s: 0, d: 3, name: '品牌 Logo 动效', kind: 'fx' },
+    { id: 'd2', lane: 2, s: 0.5, d: 2, name: 'T 夏日海边', kind: 'cap' }
+  ]
+};
+let tabs = ['剪辑 1', '片头'];
+let curTab = '剪辑 1';
+let selId = null;
+let now = 0, playing = false, raf = 0, lastT = 0;
+const hist = []; let redoStack = [];
+let P = { size: 30, opacity: 100, y: 38, color: '#ffffff', text: '夏日海边' };
+
+const ASSETS = {
+  '视频': [['海浪远景', '00:06', '#1b6fa8'], ['沙滩奔跑', '00:08', '#c9803a'], ['日落', '00:10', '#b24a3a'], ['无人机俯拍', '00:12', '#2b6b4f'], ['冲浪', '00:05', '#1a8aa0'], ['海鸥', '00:04', '#6d7a90']],
+  '图片': [['合照1.jpg', '', '#7a5a9e'], ['地图.png', '', '#3a5a7a'], ['贝壳.jpg', '', '#9e7a5a']],
+  '音频': [['轻松吉他.mp3', '01:30', '#2b6b4f'], ['海浪声.wav', '00:40', '#1b5f78'], ['旁白_01 (配音)', '00:08', '#5a3a7a']],
+  '剪辑': [['剪辑 1', '00:24', '#26c6e6'], ['片头', '00:03', '#8a5a9e']]
+};
+const CARDS = {
+  '动效': [['标题弹入', '文字', '#8a5a9e'], ['打字机', '文字', '#5a3a7a'], ['数字滚动', '数据', '#3a5a7a'], ['粒子飘落', '粒子', '#7a5a9e'], ['Lottie 烟花', '封装', '#a05a5a'], ['下三分之一', '条幅', '#2a6a7a']],
+  '滤镜': [['暖色胶片', '调色', '#c9803a'], ['冷青调', '调色', '#1a8aa0'], ['黑白高对比', '调色', '#666'], ['柔光', '光效', '#b39ac0']],
+  '转场': [['光斑转场', '转场', '#8a5a9e'], ['推拉', '转场', '#2a6a7a'], ['闪白', '转场', '#aaa'], ['溶解', '转场', '#5a6a8a']],
+  '音效': [['海浪', '音频', '#1b5f78'], ['点击', '音频', '#555'], ['Whoosh', '音频', '#5a3a7a']]
+};
+let assetTab = '视频', cardTab = '动效';
+
+const $ = s => document.querySelector(s);
+const fmt = t => { const m = Math.floor(t / 60), s = (t % 60); return String(m).padStart(2, '0') + ':' + s.toFixed(1).padStart(4, '0'); };
+const clone = o => JSON.parse(JSON.stringify(o));
+
+/* ============ 屏幕与面板 ============ */
+function go(id) { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); closeSheets(); if (id !== 'editor') stop(); }
+function openProject(id) {
+  $('#projName').textContent = { p1: '夏日海边 Vlog', p2: '产品发布会预告', p3: '教程：剪映迁移指南' }[id];
+  go('editor'); render();
+}
+function openSheet(n) {
+  closeSheets(true);
+  if (n === 'params') {
+    if (!selId) { toast('先点时间轴上的一个片段，再来调整'); return; }
+    buildParams();
+  }
+  if (n === 'assets') buildAssets();
+  if (n === 'cards') buildCards();
+  if (n === 'chat') { $('#chatBadge').style.display = 'none'; scrollMsgs(); }
+  if (n === 'conflict') buildConflict();
+  $('#sh-' + n).classList.add('on'); $('#scrim').classList.add('on');
+  if (n === 'params') $('#scrim').style.background = '#0004';  // 调整时让画面仍清楚可见
+  else $('#scrim').style.background = '';
+}
+function closeSheets(keep) {
+  document.querySelectorAll('.sheet.on').forEach(s => s.classList.remove('on'));
+  if (!keep) { $('#scrim').classList.remove('on'); $('#scrim').style.background = ''; }
+}
+let toastT;
+function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => e.classList.remove('on'), 2000); }
+
+/* ============ 时间轴 ============ */
+function clips() { return clipsByTab[curTab]; }
+function findClip(id) { return clips().find(c => c.id === id); }
+function render() { renderTabs(); renderTimeline(); renderStage(); updateButtons(); }
+
+function renderTabs() {
+  const box = $('#cliptabs'); box.innerHTML = '';
+  tabs.forEach(t => {
+    const b = document.createElement('div'); b.className = 'ctab' + (t === curTab ? ' on' : '');
+    b.innerHTML = `<span>${t}</span>` + (tabs.length > 1 ? `<span class="x" data-x="1">✕</span>` : '');
+    b.onclick = e => {
+      if (e.target.dataset.x) { // 只关标签，不删剪辑；最后一个不能关
+        tabs = tabs.filter(x => x !== t); if (curTab === t) { curTab = tabs[0]; selId = null; } toast('已关闭标签（剪辑还在素材库里）'); render(); return;
+      }
+      curTab = t; selId = null; render();
+    };
+    b.ondblclick = () => { const n = prompt('重命名剪辑', t); if (n && !clipsByTab[n]) { clipsByTab[n] = clipsByTab[t]; delete clipsByTab[t]; tabs = tabs.map(x => x === t ? n : x); curTab = n; render(); } };
+    box.appendChild(b);
+  });
+  const add = document.createElement('div'); add.className = 'ctab add'; add.textContent = '＋';
+  add.onclick = () => { let n = 1; while (clipsByTab['剪辑 ' + n]) n++; const name = '剪辑 ' + n; clipsByTab[name] = []; tabs.push(name); curTab = name; selId = null; render(); };
+  box.appendChild(add);
+}
+
+function renderTimeline() {
+  const inner = $('#tlInner'); const w = TOTAL * PX + 40;
+  inner.style.width = w + 'px';
+  let h = '<div class="ruler">';
+  for (let t = 0; t <= TOTAL; t += 2) h += `<span style="left:${t * PX + 30}px">${t}s</span>`;
+  h += '</div>';
+  for (let l = 0; l < 4; l++) {
+    h += `<div class="lane" data-lane="${l}"><div class="lane-head"><span>${LANE_LABEL[l]}</span></div>`;
+    clips().filter(c => c.lane === l).forEach(c => {
+      h += `<div class="clip ${c.kind}${c.id === selId ? ' sel' : ''}" data-id="${c.id}" style="left:${c.s * PX + 30}px;width:${Math.max(c.d * PX - 2, 18)}px">` +
+        `<span class="h l"></span>${c.name}${c.muted ? '<span class="mute">🔇 已静音</span>' : ''}<span class="h r"></span></div>`;
+    });
+    h += '</div>';
+  }
+  h += `<div class="playhead" id="playhead" style="left:${now * PX + 30}px"></div>`;
+  inner.innerHTML = h;
+  bindTimeline();
+}
+
+function bindTimeline() {
+  const inner = $('#tlInner');
+  // 点标尺 / 空白处：移动播放头
+  inner.querySelectorAll('.ruler, .lane').forEach(el => el.addEventListener('pointerdown', e => {
+    if (e.target.closest('.clip')) return;
+    stop(); scrubTo(e);
+    const mv = ev => scrubTo(ev), up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  }));
+  // 片段：点选；选中后拖动平移；拖两端改时长
+  inner.querySelectorAll('.clip').forEach(el => el.addEventListener('pointerdown', e => {
+    const c = findClip(el.dataset.id); e.stopPropagation();
+    const wasSel = selId === c.id; selId = c.id; stop();
+    inner.querySelectorAll('.clip').forEach(x => x.classList.toggle('sel', x === el)); updateButtons(); renderStage();
+    if (!wasSel) return; // 第一次点只是选中，避免滑动时间轴时误拖
+    const edge = e.target.classList.contains('l') ? 'l' : e.target.classList.contains('r') ? 'r' : 'm';
+    const x0 = e.clientX, s0 = c.s, d0 = c.d; let moved = false; const before = clone(clipsByTab);
+    const mv = ev => {
+      const dt = Math.round((ev.clientX - x0) / PX * 2) / 2; // 吸附到 0.5 秒
+      if (Math.abs(ev.clientX - x0) > 3) moved = true;
+      if (edge === 'm') c.s = Math.max(0, Math.min(TOTAL - c.d, s0 + dt));
+      else if (edge === 'r') c.d = Math.max(0.5, Math.min(TOTAL - c.s, d0 + dt));
+      else { const ns = Math.max(0, Math.min(s0 + d0 - 0.5, s0 + dt)); c.d = d0 - (ns - s0); c.s = ns; }
+      el.style.left = c.s * PX + 30 + 'px'; el.style.width = Math.max(c.d * PX - 2, 18) + 'px';
+    };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); if (moved) { pushHist(before); toast('已调整（一次拖动 = 一步撤销）'); } };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  }));
+  // 双击片段：参数
+  inner.querySelectorAll('.clip').forEach(el => el.addEventListener('dblclick', () => {
+    const c = findClip(el.dataset.id);
+    if (c.kind === 'v' && c.name.startsWith('剪辑')) return;
+    openSheet('params');
+  }));
+}
+function scrubTo(e) {
+  const r = $('#tlInner').getBoundingClientRect();
+  now = Math.max(0, Math.min(TOTAL, (e.clientX - r.left - 30) / PX)); updateTime();
+}
+function updateTime() {
+  $('#tcNow').textContent = fmt(now); $('#tcTotal').textContent = fmt(TOTAL);
+  const ph = $('#playhead'); if (ph) ph.style.left = now * PX + 30 + 'px';
+  // 播放时让播放头保持在可视范围
+  if (playing) { const sc = $('#tlScroll'); const x = now * PX + 30; if (x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; if (x < sc.scrollLeft) sc.scrollLeft = 0; }
+  renderStage(true);
+}
+function updateButtons() {
+  const has = !!selId;
+  ['tSplit', 'tDup', 'tDel', 'tEdit'].forEach(i => $('#' + i).disabled = !has);
+  $('#undoBtn').style.opacity = hist.length ? 1 : .35; $('#redoBtn').style.opacity = redoStack.length ? 1 : .35;
+}
+
+/* ============ 舞台预览 ============ */
+function renderStage(light) {
+  const hue = 200 - (now / TOTAL) * 170; // 一天里天空颜色：蓝 → 橙红
+  $('#bgl').style.background = `linear-gradient(180deg, hsl(${hue},70%,${52 - now}%) 0%, hsl(${hue + 25},80%,${70 - now * .6}%) 70%)`;
+  const t = $('#title'); const c = clips().find(x => x.title);
+  const show = c && now >= c.s && now <= c.s + c.d;
+  t.style.display = show ? 'block' : 'none';
+  if (show) {
+    const k = Math.min(1, (now - c.s) / 0.8);                    // 进场 0.8 秒
+    t.textContent = P.text; t.style.fontSize = P.size + 'px'; t.style.color = P.color;
+    t.style.top = P.y + '%'; t.style.opacity = (P.opacity / 100) * k; t.style.transform = `translateY(${(1 - k) * 14}px) scale(${.9 + .1 * k})`;
+  }
+  const cap = clips().find(x => x.name.startsWith('T 字幕'));
+  $('#cap').parentElement.style.display = cap && now >= cap.s && now <= cap.s + cap.d ? 'block' : 'none';
+  // 选中框
+  const sel = $('#sel'); const sc = selId && findClip(selId);
+  if (sc && sc.title && show) {
+    sel.style.display = 'block'; const r = t.getBoundingClientRect(), pr = $('#stage').getBoundingClientRect();
+    sel.style.left = (r.left - pr.left - 4) + 'px'; sel.style.top = (r.top - pr.top - 2) + 'px'; sel.style.width = (r.width + 8) + 'px'; sel.style.height = (r.height + 4) + 'px';
+  } else sel.style.display = 'none';
+}
+// 在预览里直接拖标题
+(function () {
+  const t = document.getElementById('title');
+  t.addEventListener('pointerdown', e => {
+    const c = clips().find(x => x.title); if (!c) return; selId = c.id; renderTimeline(); updateButtons();
+    const st = $('#stage').getBoundingClientRect(); const y0 = e.clientY, p0 = P.y; const before = clone(P);
+    const mv = ev => { P.y = Math.max(5, Math.min(85, p0 + (ev.clientY - y0) / st.height * 100)); renderStage(); if ($('#sh-params').classList.contains('on')) buildParams(); };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); if (before.y !== P.y) pushHistP(before); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  });
+})();
+
+/* ============ 播放 ============ */
+function togglePlay() { playing ? stop() : play(); }
+function play() {
+  if (now >= TOTAL) now = 0; playing = true; $('#playBtn').textContent = '❚❚'; lastT = performance.now();
+  const loop = t => { if (!playing) return; now += (t - lastT) / 1000; lastT = t; if (now >= TOTAL) { now = TOTAL; stop(); } updateTime(); if (playing) raf = requestAnimationFrame(loop); };
+  raf = requestAnimationFrame(loop);
+}
+function stop() { playing = false; cancelAnimationFrame(raf); $('#playBtn').textContent = '▶'; }
+
+/* ============ 编辑操作与撤销 ============ */
+function pushHist(beforeClips, beforeP) { hist.push({ c: beforeClips, p: beforeP || clone(P) }); redoStack = []; updateButtons(); }
+function pushHistP(beforeP) { hist.push({ c: clone(clipsByTab), p: beforeP }); redoStack = []; updateButtons(); }
+function snapshot() { return { c: clone(clipsByTab), p: clone(P) }; }
+function undo() { if (!hist.length) return toast('没有可撤销的操作'); redoStack.push(snapshot()); const h = hist.pop(); clipsByTab = h.c; P = h.p; fixTab(); render(); toast('已撤销一步'); }
+function redo() { if (!redoStack.length) return toast('没有可重做的操作'); hist.push(snapshot()); const h = redoStack.pop(); clipsByTab = h.c; P = h.p; fixTab(); render(); }
+function fixTab() { if (!clipsByTab[curTab]) curTab = tabs[0]; selId = null; }
+function splitClip() {
+  const c = findClip(selId); if (!c) return;
+  if (now <= c.s + .2 || now >= c.s + c.d - .2) return toast('先把播放头移到片段中间');
+  const before = clone(clipsByTab), d1 = now - c.s;
+  const n = Object.assign({}, c, { id: 'n' + Date.now(), s: now, d: c.d - d1, title: false }); c.d = d1; clips().push(n);
+  pushHist(before); render(); toast('已在播放头处切分');
+}
+function dupClip() { const c = findClip(selId); if (!c) return; const before = clone(clipsByTab); const n = Object.assign({}, c, { id: 'n' + Date.now(), s: Math.min(TOTAL - c.d, c.s + c.d), title: false }); clips().push(n); pushHist(before); selId = n.id; render(); }
+function delClip() {
+  const c = findClip(selId); if (!c) return;
+  if (!confirm(`删除“${c.name}”？\n（破坏性操作：需要说明理由，理由会对协作者和 Agent 可见）`)) return;
+  const before = clone(clipsByTab); clipsByTab[curTab] = clips().filter(x => x.id !== selId); selId = null; pushHist(before); render(); toast('已删除，可撤销');
+}
+function addClip(name, kind, lane, d) {
+  const before = clone(clipsByTab); const s = Math.min(now, TOTAL - d);
+  const c = { id: 'n' + Date.now(), lane, s, d, name, kind }; clips().push(c); selId = c.id; pushHist(before); render(); closeSheets(); toast(`已加到 ${fmt(s)}`);
+}
+
+/* ============ 素材库 / 卡片 ============ */
+function buildAssets() {
+  const tb = $('#assetTabs'); tb.innerHTML = '';
+  Object.keys(ASSETS).forEach(k => { const b = document.createElement('button'); b.textContent = k; b.className = k === assetTab ? 'on' : ''; b.onclick = () => { assetTab = k; buildAssets(); }; tb.appendChild(b); });
+  const body = $('#assetBody');
+  if (assetTab === '音频') {
+    body.innerHTML = '<div class="hint">点一下加到播放头位置；配音可让 Agent 把文字合成语音。</div>' + ASSETS['音频'].map((a, i) =>
+      `<div class="list-row" onclick="addClip('♪ ${a[0]}','a',3,6)"><div class="i" style="background:${a[2]}">♪</div><div style="flex:1"><b>${a[0]}</b><div class="hint" style="margin:0">${a[1]}</div></div><span class="chip accent">加入</span></div>`).join('') +
+      `<button class="btn" style="width:100%" onclick="askAgent('用温柔的女声给第一段配一段旁白')">＋ 让 Agent 配音</button>`;
+    return;
+  }
+  const isClip = assetTab === '剪辑';
+  body.innerHTML = (isClip ? '<div class="hint">点剪辑：在时间轴打开；长按拖到另一条剪辑上可嵌套引用（演示：点击嵌套）。最后一条剪辑不能删。</div>' :
+    '<div class="dropzone">＋ 从相册 / 文件导入，或让 Agent 从网页链接抓取</div>') + '<div class="grid">' +
+    ASSETS[assetTab].map(a => `<button class="tile" data-n="${a[0]}"><div class="pic" style="background:linear-gradient(135deg,${a[2]},#0008)">${isClip ? '🎞' : assetTab === '图片' ? '🖼' : '▶'}${a[1] ? `<span class="dur">${a[1]}</span>` : ''}${!isClip && a[0] === '日落' ? '<span class="st">已转写</span>' : ''}</div><div class="cap">${a[0]}<small>${isClip ? '剪辑' : assetTab}</small></div></button>`).join('') + '</div>';
+  body.querySelectorAll('.tile').forEach(t => t.onclick = () => {
+    const n = t.dataset.n;
+    if (isClip) { if (!tabs.includes(n)) tabs.push(n); curTab = n; selId = null; render(); closeSheets(); toast('已在时间轴打开“' + n + '”'); }
+    else addClip(n + (assetTab === '图片' ? '.jpg' : '.mp4'), 'v', 0, assetTab === '图片' ? 3 : 5);
+  });
+}
+function buildCards() {
+  const tb = $('#cardTabs'); tb.innerHTML = '';
+  Object.keys(CARDS).forEach(k => { const b = document.createElement('button'); b.textContent = k; b.className = k === cardTab ? 'on' : ''; b.onclick = () => { cardTab = k; buildCards(); }; tb.appendChild(b); });
+  $('#cardGrid').innerHTML = CARDS[cardTab].map(a => `<button class="tile" data-n="${a[0]}"><div class="pic" style="background:linear-gradient(135deg,${a[2]},#0008)">✦</div><div class="cap">${a[0]}<small>${a[1]}</small></div></button>`).join('');
+  $('#cardGrid').querySelectorAll('.tile').forEach(t => t.onclick = () => {
+    const lane = cardTab === '音效' ? 3 : cardTab === '动效' ? 2 : 1;
+    addClip((cardTab === '音效' ? '♪ ' : '✦ ') + t.dataset.n, cardTab === '音效' ? 'a' : cardTab === '动效' ? 'cap' : 'fx', lane, 2);
+  });
+}
+
+/* ============ 参数调整 ============ */
+function buildParams() {
+  const c = findClip(selId); if (!c) return;
+  $('#pTitle').textContent = c.name.replace(/^[✦T♪] ?/, '');
+  $('#pKind').textContent = { v: '视频素材', fx: '效果卡', a: '音频', cap: c.title ? '文字动效卡' : '字幕/动效卡' }[c.kind];
+  let h = '';
+  if (c.title) {
+    h += `<div class="wrapnote"><b>约定封装：</b>进场 0.8 秒落定 · 之后停住 · 支持淡出退场</div>
+    <div class="field"><label>文字<span></span></label><input class="num" id="pText" style="width:100%;text-align:left;height:38px" value="${P.text}"></div>
+    ${slider('size', '字号', P.size, 14, 56, 'px')}
+    ${slider('y', '垂直位置', Math.round(P.y), 5, 85, '%')}
+    ${slider('opacity', '不透明度', P.opacity, 0, 100, '%')}
+    <div class="field"><label>颜色</label><div class="color-row">${['#ffffff', '#ffe08a', '#7de3f5', '#e5b8f5', '#ff8a7a'].map(x => `<button style="background:${x}" class="${x === P.color ? 'on' : ''}" data-c="${x}"></button>`).join('')}</div></div>`;
+  } else if (c.kind === 'fx') {
+    h += `<div class="wrapnote"><b>约定封装：</b>时长 ${c.d.toFixed(1)}s · 作用于相邻两段</div>
+    ${slider('fxd', '时长', c.d, 0.5, 4, 's', .5)}${slider('fxi', '强度', 70, 0, 100, '%')}`;
+  } else {
+    h += `${slider('dur', '时长', c.d, 0.5, TOTAL, 's', .5)}${slider('vol', '音量', 80, 0, 100, '%')}
+    <div class="row"><div class="t">静音此片段<small>画面不受影响；时间轴会醒目标出“已静音”</small></div><div class="toggle ${c.muted ? 'on' : ''}" id="muteT"></div></div>`;
+  }
+  h += `<div class="undo-row"><button class="btn" style="flex:1" onclick="undo();buildParams()">↶ 撤销</button><button class="btn" style="flex:1" onclick="askAgent('帮我看看这个片段还有什么可以优化的');">让 Agent 接着改</button></div>`;
+  $('#pBody').innerHTML = h;
+  const bind = (key, fn) => {
+    const r = document.getElementById('r_' + key), n = document.getElementById('n_' + key); if (!r) return;
+    let before = null;
+    r.oninput = () => { if (!before) before = clone(P); n.value = r.value; fn(+r.value); };     // 拖动中画面实时跟着变
+    r.onchange = () => { if (before) { pushHistP(before); before = null; } };                   // 整次拖动 = 一步撤销
+    n.onchange = () => { const b = clone(P); r.value = n.value; fn(+n.value); pushHistP(b); };    // 数字框回车/失焦才提交
+    n.onkeydown = e => { if (e.key === 'Escape') { n.value = r.value; n.blur(); } if (e.key === 'Enter') n.blur(); };
+  };
+  bind('size', v => { P.size = v; renderStage(); }); bind('y', v => { P.y = v; renderStage(); }); bind('opacity', v => { P.opacity = v; renderStage(); });
+  bind('fxd', v => { c.d = v; renderTimeline(); }); bind('dur', v => { c.d = Math.min(v, TOTAL - c.s); renderTimeline(); });
+  const tx = document.getElementById('pText'); if (tx) tx.onchange = () => { const b = clone(P); P.text = tx.value; pushHistP(b); renderStage(); };
+  document.querySelectorAll('.color-row button').forEach(b => b.onclick = () => { const bf = clone(P); P.color = b.dataset.c; pushHistP(bf); buildParams(); renderStage(); });
+  const mt = document.getElementById('muteT'); if (mt) mt.onclick = () => { const bf = clone(clipsByTab); c.muted = !c.muted; pushHist(bf); buildParams(); renderTimeline(); toast(c.muted ? '已静音' : '已恢复声音'); };
+}
+function slider(k, label, v, min, max, unit, step) {
+  return `<div class="field"><label>${label}<span><input class="num" id="n_${k}" type="number" value="${v}" min="${min}" max="${max}" step="${step || 1}"> ${unit}</span></label><input type="range" id="r_${k}" min="${min}" max="${max}" step="${step || 1}" value="${v}"></div>`;
+}
+
+/* ============ Agent 对话 ============ */
+let agentTabs = ['Agent 1', 'Agent 2'], curAgent = 'Agent 1';
+const convs = {
+  'Agent 1': [
+    { t: 'me', x: '给开头加个标题，要有夏天的感觉，然后配点轻松的音乐' },
+    { t: 'ag', x: '好的，我先看了一下前 6 秒的画面，打算用大号手写感标题 + 暖色调。马上做。' },
+    { t: 'ops', open: true, title: '第 1 轮 · 5 项操作', items: [
+      ['done', '分析 海浪远景.mp4：主体在画面中下，上方留白适合放标题'],
+      ['done', '新建文字动效卡「夏日海边」，放在 0.5s–5.5s'],
+      ['done', '素材库里挑中「轻松吉他.mp3」，铺满整条剪辑'],
+      ['run', '调整标题颜色以匹配日落段的色温'],
+      ['todo', '检查音乐与字幕是否冲突']
+    ], diff: { before: 'linear-gradient(#456,#123)', after: 'linear-gradient(#f93,#16a)', params: '字号 <s>24</s> → <em>30</em> · 进场 <s>0s</s> → <em>0.8s</em>' } },
+    { t: 'ag', x: '标题和音乐都放好了。你可以直接在预览里拖动标题，或者告诉我想怎么改。', who: '我 · Agent · 第 1 个对话' }
+  ],
+  'Agent 2': [{ t: 'ag', x: '这是一个新对话。想让我做点什么？', who: '' }]
+};
+function renderTabsA() {
+  const box = $('#atabs'); box.innerHTML = '';
+  agentTabs.forEach(t => {
+    const b = document.createElement('div'); b.className = 'atab' + (t === curAgent ? ' on' : '');
+    b.innerHTML = `<span>${t}</span>` + (agentTabs.length > 1 ? '<span class="x" data-x="1">✕</span>' : '<span style="width:6px"></span>');
+    b.onclick = e => {
+      if (e.target.dataset.x) { const i = agentTabs.indexOf(t); agentTabs.splice(i, 1); delete convs[t]; if (curAgent === t) curAgent = agentTabs[Math.max(0, i - 1)]; renderTabsA(); renderMsgs(); return; }
+      curAgent = t; renderTabsA(); renderMsgs();
+    };
+    box.appendChild(b);
+  });
+}
+function newAgentTab() { let n = 1; while (agentTabs.includes('Agent ' + n)) n++; const name = 'Agent ' + n; agentTabs.push(name); convs[name] = [{ t: 'ag', x: '这是一个新对话。想让我做点什么？' }]; curAgent = name; renderTabsA(); renderMsgs(); }
+function renderMsgs() {
+  const box = $('#msgs'); box.innerHTML = '';
+  (convs[curAgent] || []).forEach(m => {
+    if (m.t === 'ops') {
+      const d = document.createElement('details'); d.className = 'ops'; if (m.open) d.open = true;
+      d.innerHTML = `<summary><span class="chip plum">Agent 操作</span> ${m.title}</summary><div class="items">` +
+        m.items.map(i => `<div class="it ${i[0]}"><span class="mk">${{ done: '✓', run: '…', todo: '', ask: '?' }[i[0]]}</span><span>${i[1]}</span></div>`).join('') +
+        (m.diff ? `<div class="diff"><div style="background:${m.diff.before}" data-l="改动前"></div><div style="background:${m.diff.after}" data-l="改动后"></div></div><div class="param-diff">${m.diff.params}</div>` : '') + '</div>';
+      box.appendChild(d);
+    } else if (m.t === 'guard') {
+      const g = document.createElement('div'); g.className = 'guard';
+      g.innerHTML = `<b>Agent 需要你确认</b><div style="margin-top:4px">${m.x}</div><div class="acts"><button class="btn primary" data-a="1">同意</button><button class="btn" data-a="0">不要</button></div>`;
+      g.querySelectorAll('button').forEach(b => b.onclick = () => { g.remove(); convs[curAgent] = convs[curAgent].filter(x => x !== m); pushMsg('me', b.dataset.a === '1' ? '同意，删吧。' : '先别删。'); agentReply(b.dataset.a === '1' ? '好，已删除“沙滩奔跑”里 2 秒的抖动部分，可随时撤销。' : '好的，保持原样。'); });
+      box.appendChild(g);
+    } else {
+      const d = document.createElement('div'); d.className = 'msg ' + m.t;
+      d.innerHTML = (m.ref ? `<div class="ref">@ ${m.ref}</div><br>` : '') + (m.who && m.t === 'ag' ? `<div class="who">${m.who}</div>` : '') + m.x;
+      box.appendChild(d);
+    }
+  });
+  scrollMsgs();
+}
+function scrollMsgs() { const b = $('#msgs'); b.scrollTop = b.scrollHeight; }
+function pushMsg(t, x, extra) { convs[curAgent].push(Object.assign({ t, x }, extra)); renderMsgs(); }
+function sendChat() { const i = $('#chatIn'); const v = i.value.trim(); if (!v) return; i.value = ''; askAgent(v); }
+let pendingRef = null;
+function refSelected() { const c = selId && findClip(selId); if (!c) return toast('先在时间轴选一个片段，再引用'); pendingRef = c.name; $('#chatIn').placeholder = '@' + c.name + ' 想怎么改？'; $('#chatIn').focus(); toast('已引用：' + c.name); }
+function askAgent(text) {
+  if (!$('#sh-chat').classList.contains('on')) openSheet('chat');
+  pushMsg('me', text, pendingRef ? { ref: pendingRef } : {}); pendingRef = null; $('#chatIn').placeholder = '告诉 Agent 你想怎么改…';
+  const box = $('#msgs'); const ty = document.createElement('div'); ty.className = 'msg ag'; ty.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>'; box.appendChild(ty); scrollMsgs();
+  $('#agentFlag').classList.add('on');
+  setTimeout(() => {
+    ty.remove();
+    const lvl = $('#level .on').dataset.l;
+    if (/删|去掉|剪快/.test(text)) {
+      convs[curAgent].push({ t: 'ag', x: '我想把“沙滩奔跑”里 2 秒的抖动镜头剪掉，让节奏更快。这是破坏性操作，需要你点头。', who: '我 · Agent · 第 1 个对话' });
+      convs[curAgent].push({ t: 'guard', x: '删除“沙滩奔跑.mp4”中 9.0s–11.0s 的片段。理由：镜头抖动明显，影响观感。' });
+      renderMsgs();
+    } else if (/新建|做一张/.test(text) && lvl !== '高') {
+      pushMsg('ag', `当前创造力是“${lvl}”，我只能用已有的卡片。要让我新建卡片，请把创造力调到“高”。`, { who: '我 · Agent · 第 1 个对话' });
+    } else {
+      convs[curAgent].push({ t: 'ag', x: '收到，我这就改。', who: '我 · Agent · 第 1 个对话' });
+      const items = [['run', '读取当前时间轴与你引用的片段'], ['todo', '调整参数并预览'], ['todo', '把结果交给你检查']];
+      const op = { t: 'ops', open: true, title: '第 ' + (convs[curAgent].filter(m => m.t === 'ops').length + 1) + ' 轮 · ' + items.length + ' 项操作', items };
+      convs[curAgent].push(op); renderMsgs();
+      setTimeout(() => { items[0][0] = 'done'; items[1][0] = 'run'; renderMsgs(); }, 900);
+      setTimeout(() => {
+        items[1][0] = 'done'; items[2][0] = 'done'; items.splice(2, 0, ['done', '标题字号 30 → 36，进场更缓']); P.size = 36;
+        op.diff = { before: 'linear-gradient(#456,#123)', after: 'linear-gradient(#f93,#16a)', params: '字号 <s>30</s> → <em>36</em>' };
+        convs[curAgent].push({ t: 'ag', x: '改好了，预览里已经更新，不满意可以直接撤销。', who: '我 · Agent · 第 1 个对话' }); renderMsgs(); renderStage(); $('#agentFlag').classList.remove('on');
+      }, 1900);
+      return;
+    }
+    $('#agentFlag').classList.remove('on');
+  }, 900);
+}
+document.querySelectorAll('#level button').forEach(b => b.onclick = () => { document.querySelectorAll('#level button').forEach(x => x.classList.remove('on')); b.classList.add('on'); toast(`创造力：${b.dataset.l}` + ({ 低: '（只改参数）', 中: '（可改代码，不新建）', 高: '（可新建卡片和效果）' })[b.dataset.l]); });
+
+/* ============ 冲突合并 ============ */
+let cf = [
+  { n: '标题卡「夏日海边」', conflict: false, subs: ['字号 24 → 30', '进场 0s → 0.8s'] },
+  { n: '片段「沙滩奔跑」', conflict: true, subs: ['时长 8s → 6s（小林在其后又改过）'] }
+];
+function buildConflict() {
+  const l = $('#cfList'); l.innerHTML = '';
+  cf.forEach((g, gi) => {
+    const d = document.createElement('div'); d.className = 'cf-group';
+    d.innerHTML = `<div class="cf-head"><label><input type="checkbox" data-g="${gi}"></label><span class="nm">${g.n}</span>${g.conflict ? '<span class="chip warn">有冲突</span>' : '<span class="chip">无冲突</span>'}</div>
+      <div class="cf-sub">${g.subs.map((s, si) => `<label><input type="checkbox" data-g="${gi}" data-s="${si}"> ${s}</label>`).join('')}</div>`;
+    d.querySelector('.cf-head input').onchange = e => d.querySelectorAll('.cf-sub input').forEach(x => x.checked = e.target.checked);
+    l.appendChild(d);
+  });
+  cfRefresh();
+}
+function cfRefresh() { $('#cfClose').textContent = cf.length ? '下次再说' : '完成'; $('#cfBtn').style.display = cf.length ? '' : 'none'; $('#cfBtn').textContent = '冲突合并 ' + cf.length; if (!cf.length) $('#cfList').innerHTML = '<div class="hint" style="text-align:center;padding:30px 0">全部处理完了 ✓</div>'; }
+function cfSelect(onlyOk) { document.querySelectorAll('#cfList .cf-group').forEach((d, i) => d.querySelectorAll('input').forEach(x => x.checked = onlyOk ? !cf[i].conflict : false)); }
+function cfTake(msg) {
+  const keep = []; document.querySelectorAll('#cfList .cf-group').forEach((d, i) => { if (!d.querySelector('.cf-head input').checked) keep.push(cf[i]); });
+  if (keep.length === cf.length) return toast('先勾选要处理的项'); cf = keep; buildConflict(); toast(msg);
+}
+function cfMerge() { cfTake('已合并所选（提交时会重新核对云端序号）'); }
+function cfDrop() { cfTake('已丢弃所选'); }
+
+/* ============ 导出（假） ============ */
+function fakeExport() {
+  $('#expProg').style.display = 'block'; let p = 0;
+  const iv = setInterval(() => { p += 7 + Math.random() * 9; if (p >= 100) { p = 100; clearInterval(iv); $('#expTxt').textContent = '完成 · 已存到“导出产物”（假的）'; } else $('#expTxt').textContent = '渲染中 ' + Math.floor(p) + '%…'; $('#expBar').style.width = p + '%'; }, 250);
+}
+
+/* ============ 启动 ============ */
+renderTabsA(); renderMsgs(); updateButtons();
+</script>
+</body>
+</html>
