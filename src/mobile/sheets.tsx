@@ -2,11 +2,12 @@
  * 手机版的底部面板:素材库、卡片库(含转场)、选剪辑、调整、冲突合并、成员、导出(演示稿第三～九轮)。
  * 每个按钮都调真实的 store 动作与服务,不写假数据;业务层里没有的项不显示(任务书「设计决定」3)。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { actions, getState, useStore, withMerge } from "../store/project";
 import { findClip, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import { MAX_TRANSITION_DUR, MIN_TRANSITION_DUR, transitionsOf, type Transition, type TransitionKind } from "../kernel/transitions";
 import { getCard } from "../kernel/registry";
+import { listCuts } from "../kernel/cuts";
 import type { CardDef, Control } from "../kernel/types";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
 import { useCardLibrary } from "../editor/left/library/cardGroups";
@@ -42,8 +43,9 @@ export function placeMedia(m: MediaAsset): TrackClip | null {
 
 export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void; onClose: () => void; onSwitchCut: (name: string) => void; onPlaced: (clip: TrackClip, m: MediaAsset) => void }) {
   const media = useStore((s) => s.project.media);
-  const cuts = useStore((s) => s.project.cuts ?? []);
-  const activeCut = useStore((s) => s.project.activeCutId);
+  // 剪辑列表按项目算一次(同桌面素材库的剪辑组):选择器里不能现造数组,否则每次读都是新值、无限重渲
+  const project = useStore((s) => s.project);
+  const cuts = useMemo(() => listCuts(project), [project]);
   const toast = useToast();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -78,7 +80,7 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
           <div className="hint">点剪辑：缩略时间轴和完整时间轴换成它的内容。</div>
           <div className="grid">
             {cuts.map((c) => (
-              <button key={c.id} type="button" className={c.id === activeCut ? "tile picked" : "tile"} data-pcm="asset-cut" onClick={() => { props.onSwitchCut(c.id); props.onClose(); }}>
+              <button key={c.id} type="button" className={c.active ? "tile picked" : "tile"} data-pcm="asset-cut" onClick={() => { if (!c.active) props.onSwitchCut(c.id); props.onClose(); }}>
                 <div className="pic"><Icon name="clip" /></div>
                 <div className="cap">{c.name}<small>剪辑</small></div>
               </button>
@@ -197,27 +199,25 @@ export function CardsSheet(props: { tab: CardTab; onTab: (t: CardTab) => void; t
 /* ======================== 选剪辑 ======================== */
 
 export function ClipsSheet(props: { onClose: () => void; onSwitched: (name: string) => void }) {
-  const cuts = useStore((s) => s.project.cuts ?? []);
-  const active = useStore((s) => s.project.activeCutId);
   const project = useStore((s) => s.project);
+  const cuts = useMemo(() => listCuts(project), [project]);
   const toast = useToast();
-  const summary = (id: string) => {
-    if (id === active) { const m = mainClipsOf(project); return `${m.length} 段 · 共 ${fmtDur(m.reduce((s, c) => s + c.end - c.start, 0))}`; }
-    const cut = cuts.find((c) => c.id === id);
-    return cut?.duration ? `共 ${fmtDur(cut.duration)}` : "";
+  const summary = (c: (typeof cuts)[number]) => {
+    if (c.active) { const m = mainClipsOf(project); return `${m.length} 段 · 共 ${fmtDur(m.reduce((s, x) => s + x.end - x.start, 0))}`; }
+    return `共 ${fmtDur(c.duration)}`;
   };
   return (
     <Sheet id="clips" title="选择剪辑" onClose={props.onClose}>
       <div className="hint">选一个剪辑，缩略时间轴就换成它的内容。</div>
       {cuts.map((c) => (
-        <button key={c.id} type="button" className={c.id === active ? "crow cur" : "crow"} data-pcm="cut-row" data-cut={c.id} onClick={() => {
-          if (c.id !== active) actions.switchCut(c.id);
+        <button key={c.id} type="button" className={c.active ? "crow cur" : "crow"} data-pcm="cut-row" data-cut={c.id} onClick={() => {
+          if (!c.active) actions.switchCut(c.id);
           props.onSwitched(c.name);
           props.onClose();
         }}>
           <div className="i"><Icon name="clip" /></div>
-          <div style={{ flex: 1, minWidth: 0 }}><b>{c.name}</b><div className="hint" style={{ margin: 0 }}>{summary(c.id)}</div></div>
-          {c.id === active && <span className="chip accent">当前</span>}
+          <div style={{ flex: 1, minWidth: 0 }}><b>{c.name}</b><div className="hint" style={{ margin: 0 }}>{summary(c)}</div></div>
+          {c.active && <span className="chip accent">当前</span>}
         </button>
       ))}
       <button type="button" className="btn" style={{ width: "100%", marginTop: 6 }} data-pcm="cut-new" onClick={() => {
