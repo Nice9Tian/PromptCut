@@ -44,7 +44,7 @@ import { directCaptureMode, directSegmentCapture, newDirectRecord, rgbaAlphaBox 
 import { belowSegmentCapture, newBelowRecord } from './bakery/capture-below.mjs';
 import { prepareFrameMedia } from './bakery/frame-media.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilterIdentity, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
-import { reachableMediaIds } from '../src/kernel/cutIdentity.mjs';
+import { cutSegmentHasVisualMedia, reachableMediaIds } from '../src/kernel/cutIdentity.mjs';
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
@@ -432,7 +432,8 @@ export function paintLayers(project, fps) {
   tracks.forEach((track, ti) => {
     if (track.hidden || track.sourceOnly) return;
     (track.clips ?? []).forEach((clip, ci) => {
-      const card = !!clip.cardId;
+      // 剪辑段(`cutId`)按一层画面算,和卡片一样(它挂在包裹层里、整块盖住下面)
+      const card = !!clip.cardId || (typeof clip.cutId === 'string' && !!clip.cutId);
       const m = clip.mediaId ? media.get(clip.mediaId) : null;
       if (!card && !(m && m.kind !== 'audio')) return;
       const from = card ? mountFrameOf(clip, fps) : Math.max(0, Math.floor(clip.start * fps));
@@ -531,7 +532,9 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     const firstFrame = control.sampling?.firstFrame ?? Math.ceil(at.clip.start * fps - 1e-9);
     const lastFrame = Math.min(total - 1, firstFrame + control.count - 1);
     if (lastFrame < firstFrame) continue;
-    const mountFrame = mountFrameOf(at.clip, fps);
+    // 剪辑段:嵌套场景从预卷之前起推(`capabilities.cutPreroll`,页面按被引用剪辑算好的秒数),回放要从那里的挂载帧起
+    const preroll = solo === 'cut' ? Math.max(0, Number(control.capabilities?.cutPreroll) || 0) : 0;
+    const mountFrame = mountFrameOf(preroll ? { ...at.clip, start: at.clip.start - preroll } : at.clip, fps);
     // 开销:每秒要解的像素(编码画幅 × 帧率,`src/render/streamBudget.mjs`)。单卡流按它的矩形上界算
     const bound = localPlacement(at.clip, stage).bound;
     const item = { control, clip: at.clip, clipIds: [control.clipId], order: orderOf.get(control.clipId) ?? 0, from: Math.min(mountFrame, firstFrame), to: lastFrame,
@@ -589,7 +592,9 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       ...streamSegmentSpan(firstVisible, m.to),
       fps, stage, total,
       replay: m.solo === 'source' ? sourceNeedsReplay(project, m.clip, m.control) : streamNeedsReplay([m.control]),
-    }), solo: m.solo });
+    }), solo: m.solo,
+    // 剪辑段里有视频、图片时截图前要等它们就位(`runSegment` 的 `hasMedia`)
+    ...(m.solo === 'cut' ? { hasMedia: cutSegmentHasVisualMedia(project, m.clip) } : {}) });
   }
   if (belows.length) {
     specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion: effectiveCodeVersion, envFingerprint }).map(s => ({ ...s, ...projectTag })));
@@ -764,10 +769,13 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
     let mountFrame = target.from;
     const stateful = [control];
     for (const layer of found.below) {
-      if (!layer.clip.cardId && !layer.clip.nodeId) continue;
+      const cut = typeof layer.clip.cutId === 'string' && !!layer.clip.cutId;
+      if (!layer.clip.cardId && !layer.clip.nodeId && !cut) continue;
       const lower = controlOf.get(layer.id) ?? null;
       stateful.push(lower);
-      if (streamNeedsReplay([lower])) mountFrame = Math.min(mountFrame, mountFrameOf(layer.clip, fps));
+      // 剪辑段从预卷之前起推(同 `planStreams` 里剪辑段自己的流)
+      const preroll = cut ? Math.max(0, Number(lower?.capabilities?.cutPreroll) || 0) : 0;
+      if (streamNeedsReplay([lower])) mountFrame = Math.min(mountFrame, mountFrameOf(preroll ? { ...layer.clip, start: layer.clip.start - preroll } : layer.clip, fps));
     }
     specs.push({
       clipIds: [control.clipId], topClipId: control.clipId, mountFrame,
@@ -1563,7 +1571,7 @@ export class StreamProducer {
         streamSignature: spec.streamKey, fromFrame: drawAll ? drawFrom : fromFrame, toFrame: bakeTo, stride: drawAll ? 1 : stride, fps,
         ...(replay ? { mountFrame: spec.mountFrame } : { warm: 0 }),
         // 每一拍都画的那一种:素材只在真要取的帧前面等(丢掉的那几张不用等视频就位),所以不交给 `bakeStream` 逐帧等
-        clip: viewRect, hasMedia: below && !drawAll && spec.hasMedia === true, signal: abort.signal,
+        clip: viewRect, hasMedia: (below ? !drawAll : spec.solo === 'cut') && spec.hasMedia === true, signal: abort.signal,
         ...(drawAll ? { capture: async (frame, shoot, info) => {
           if (!wanted(frame)) {
             await bakery.beginFrame({ screenshot: BELOW_DISCARD_SHOT });
