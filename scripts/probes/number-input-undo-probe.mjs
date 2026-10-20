@@ -18,6 +18,11 @@
  *   N7 滑块一次拖动(中途停顿 400 ms):撤销栈只一步;拖动中提交条数被限速(远少于指针移动次数);松手后项目里是最后的值
  *   N8 滑块键盘连按并成一步撤销
  *   N9 整个过程中不透明度从未被提交为 0
+ *   M1 卡片段「开始 / 结束」数字框(Inspector):敲字不提交,回车提交一次,撤销一次回原值
+ *   M2 卡片参数面板的数字框(ParamsForm):同上
+ *   M3 参数名上左右拖动微调(ParamsForm):一次拖动一步撤销,提交被限速
+ *   M4 三维面板(Frame3DForm)的滑块一次拖动一步撤销、数字框回车才提交
+ *   M5 素材段的滤镜参数数字框(ClipFilterForm):敲字时项目不动,回车提交一次,撤销一次回原值
  *   E0 页面零报错
  */
 import puppeteer from 'puppeteer';
@@ -242,6 +247,143 @@ try {
 
   const everCalls = await page.evaluate(() => window.__all);
   check('N9', everCalls.length > 0 && !everCalls.includes(0), `整个过程共 ${everCalls.length} 次提交,不透明度从未被提交为 0`, { everCalls: everCalls.slice(0, 12) });
+  /* ---- 其它面板:卡片段的开始 / 结束、参数数字框、参数名拖动、三维面板 ---- */
+  const cardId = await page.evaluate(() => {
+    const a = window.__pcStore.actions;
+    a.switchCut(window.__pcStore.getState().project.cuts[0].id);
+    const c = a.addCardClip('blur-text', 0, { duration: 5, params: { text: '参数面板' } });
+    a.select([c.id]);
+    a.seek(1);
+    window.__mcalls = [];
+    for (const name of ['setClipParams', 'setClipFrame', 'moveClip']) {
+      const orig = a[name].bind(a);
+      a[name] = (...args) => { window.__mcalls.push({ name, args: JSON.stringify(args.slice(1)) }); return orig(...args); };
+    }
+    return c.id;
+  });
+  await sleep(1000);
+  const clipNow = () => page.evaluate((id) => window.__pcStore.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id), cardId);
+  const mcalls = () => page.evaluate(() => window.__mcalls.length);
+  const mreset = () => page.evaluate(() => { window.__mcalls.length = 0; });
+  const selectAllAndClear = async (sel) => { await page.click(sel); await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace'); };
+
+  // M1 开始 / 结束
+  await mreset();
+  const end0 = (await clipNow()).end;
+  await selectAllAndClear('[data-pc="clip-end"]');
+  await page.keyboard.type('4.5');
+  await sleep(150);
+  const m1mid = { calls: await mcalls(), end: (await clipNow()).end };
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const m1after = { calls: await mcalls(), end: (await clipNow()).end };
+  await undo();
+  check('M1', m1mid.calls === 0 && m1mid.end === end0 && m1after.calls === 1 && m1after.end === 4.5 && (await clipNow()).end === end0,
+    '「结束」敲 4.5:敲字时零次提交,回车一次提交,撤销一次回原值', { end0, m1mid, m1after, undone: (await clipNow()).end });
+
+  // M2 参数数字框
+  const numParam = await page.evaluate(() => { const el = document.querySelector('input[type="number"][data-pc-param]'); return el ? { key: el.getAttribute('data-pc-param'), value: el.value, min: el.min, max: el.max, step: el.step } : null; });
+  if (!numParam) {
+    check('M2', false, '这张卡的参数面板里找不到数字框', numParam);
+    check('M3', false, '找不到参数名拖动', numParam);
+  } else {
+    const sel = `input[type="number"][data-pc-param="${numParam.key}"]`;
+    const before = (await clipNow()).params[numParam.key];
+    await mreset();
+    await selectAllAndClear(sel);
+    const lo = numParam.min !== '' ? Number(numParam.min) : 1;
+    const hi = numParam.max !== '' ? Number(numParam.max) : lo + 10;
+    const target = String(Math.round((lo + hi) / 2));
+    await page.keyboard.type(target);
+    await sleep(150);
+    const mid = { calls: await mcalls(), v: (await clipNow()).params[numParam.key] };
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    const after = { calls: await mcalls(), v: (await clipNow()).params[numParam.key] };
+    await panelShot('06-params-number-after-enter');
+    await undo();
+    const undone = (await clipNow()).params[numParam.key];
+    check('M2', mid.calls === 0 && mid.v === before && after.calls === 1 && after.v === Number(target) && undone === before,
+      `参数「${numParam.key}」敲 ${target}:敲字时零次提交,回车一次提交,撤销一次回原值`, { numParam, before, mid, after, undone });
+
+    // M3 参数名拖动
+    await mreset();
+    const lab = await page.$eval(`[data-pc-drag="${numParam.key}"]`, (el) => { const b = el.getBoundingClientRect(); return { x: b.x + 10, y: b.y + b.height / 2 }; });
+    await page.mouse.move(lab.x, lab.y);
+    await page.mouse.down();
+    let mv = 0;
+    for (let i = 1; i <= 30; i++) { await page.mouse.move(lab.x + i * 3, lab.y); mv++; await sleep(8); if (i === 15) await sleep(400); }
+    await page.mouse.up();
+    await sleep(400);
+    const dragCalls = await mcalls();
+    const dragged = (await clipNow()).params[numParam.key];
+    await undo();
+    const dragUndone = (await clipNow()).params[numParam.key];
+    check('M3', dragCalls >= 2 && dragCalls < mv / 2 && dragged !== before && dragUndone === before,
+      `参数名上左右拖动(${mv} 次指针移动,中途停 400 ms):提交 ${dragCalls} 条(限速),值 ${before} → ${dragged};撤销一次回 ${before}`, { dragCalls, mv, before, dragged, dragUndone });
+  }
+
+  // M4 三维面板
+  await mreset();
+  const rbox = await page.$eval('[data-pc="frame3d-rotateY"]', (el) => { el.scrollIntoView({ block: 'center' }); const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
+  await sleep(200);
+  const rbox2 = await page.$eval('[data-pc="frame3d-rotateY"]', (el) => { const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
+  const ry = rbox2.y + rbox2.h / 2;
+  const startX = rbox2.x + rbox2.w / 2; // 值 0:手柄在正中
+  await page.mouse.move(startX, ry);
+  await page.mouse.down();
+  let rmv = 0;
+  for (let i = 1; i <= 30; i++) { await page.mouse.move(startX + i * 2, ry); rmv++; await sleep(8); if (i === 15) await sleep(400); }
+  await page.mouse.up();
+  await sleep(400);
+  const rcalls = await mcalls();
+  const rval = ((await clipNow()).frame?.rotateY) ?? 0;
+  await panelShot('07-frame3d-after-drag');
+  await undo();
+  const rundone = ((await clipNow()).frame?.rotateY) ?? 0;
+  await mreset();
+  const rnum = await page.evaluate(() => { const row = document.querySelector('[data-pc="frame3d-rotateY"]').parentElement; return [...row.querySelectorAll('input[type="number"]')].length; });
+  const rnumSel = '[data-pc="frame3d-rotateY"] ~ input[type="number"]';
+  await page.click(rnumSel, { clickCount: 3 });
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type('30');
+  await sleep(150);
+  const nmid = await mcalls();
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const nval = ((await clipNow()).frame?.rotateY) ?? 0;
+  const ncalls = await mcalls();
+  await undo();
+  const nundone = ((await clipNow()).frame?.rotateY) ?? 0;
+  check('M4', rcalls >= 2 && rcalls < rmv / 2 && rval !== 0 && rundone === 0 && rnum === 1 && nmid === 0 && ncalls === 1 && nval === 30 && nundone === 0,
+    `三维:滑块一次拖动(${rmv} 次移动)提交 ${rcalls} 条、值 ${rval},撤销一次回 0;数字框敲 30 时零次提交、回车一次、撤销一次回 0`, { rcalls, rmv, rval, rundone, rnum, nmid, ncalls, nval, nundone });
+
+  // M5 滤镜参数
+  const fclip = await page.evaluate(() => {
+    const a = window.__pcStore.actions;
+    const m = a.addMedia({ kind: 'image', name: '图.svg', url: '/favicon.svg', width: 64, height: 64 });
+    const c = a.addMediaClip(m.id, 0, { duration: 4 });
+    a.addFilter({ id: 'f-probe', name: '探针亮度', params: { amount: { default: 1, min: 0, max: 3, label: '量' } }, ops: [{ kind: 'brightness', value: 'amount' }] }, { clipId: c.id, filter: { id: 'f-probe' } });
+    a.select([c.id]);
+    return c.id;
+  });
+  await sleep(1000);
+  const fstored = () => page.evaluate((id) => window.__pcStore.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)?.filter?.params?.amount ?? null, fclip);
+  const FSEL = '[data-pc="clip-filter-param-amount"]';
+  await page.waitForSelector(FSEL, { timeout: 15_000 });
+  const f0 = await fstored();
+  await selectAllAndClear(FSEL);
+  await page.keyboard.type('2');
+  await sleep(150);
+  const fmid = await fstored();
+  await page.keyboard.press('Enter');
+  await sleep(300);
+  const fafter = await fstored();
+  await panelShot('08-filter-param-after-enter');
+  await undo();
+  const fundone = await fstored();
+  check('M5', fmid === f0 && fafter === 2 && fundone === f0, '滤镜参数敲 2:敲字时项目里不动,回车一次提交,撤销一次回原值', { f0, fmid, fafter, fundone });
+
   check('E0', errors.length === 0, '页面零报错', errors);
 } finally {
   await browser.close();
