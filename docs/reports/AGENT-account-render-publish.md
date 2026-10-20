@@ -9,6 +9,7 @@
 - 开工，建报告。读完规则、语义与背景报告（`AGENT-ux-probe-account.md`）。
 - 查清根因、定做法（下节）；实现主服务一侧的预渲染重试、任务进程报片段、对话文案；补测试 AR-01～AR-09。
 - 查出发布票据这一段要改文档服务（不在本任务的文件清单里），按规矩没有动，写在「没做成的」。
+- 主会话授权扩范围（`server/docservice/**`、部署模板）：文档服务三处改动做完（测试 APT-1～4）；部署模板加变量；`mechanism/agent.md` 补一句；本机隔离托管组合 + 真实渲染服务端到端 AR-10 通过。下文「没做成的」那一节保留作历史，状态见「第二轮」。
 
 ## 根因
 
@@ -86,3 +87,69 @@ AR-09 是真实任务进程（另一个操作系统进程里的真实运行器�
 - 没改语义文档。做法在 `product/agent.md` 第 41、42 行、`product/rendering.md` 第 45 行之内。
 - 建议主会话在 `mechanism/agent.md`「补发预渲染任务」一条后补一句账号模式的做法（三级）：任务进程只报片段，主服务以托管方服务身份发布并跟到结果、补进对话；项目号取自文档服务核过的事件绑定。以及「生成轨道流」关着时对话记 `off`、发布票据被明确拒绝时记失败不重试。
 - 需要用户定的：无。`off` 那句文案是按任务书的措辞写的（「这个项目没开『生成轨道流』，云端没有预渲染；重卡会在打开项目的设备上生成」），用户想改措辞可以直接改 `src/ai/cloud/events.ts` 一行。
+
+
+## 第二轮（主会话授权扩范围后）
+
+### 文档服务（`server/docservice/account-hosted.mjs`、`modules/hosted.mjs`）
+
+- `modules/hosted.mjs` `memberServiceTicket`：不带委托、`purpose: 'publish'` 那一支先查账号运行时；项目在账号账本里就核登记表（公钥被撤回 `service-revoked`），再 `runtime.issueServiceTicket({ …, purpose: 'publish' })`。不带 `purpose` 的照旧 `forbidden`（Agent 服务没有「自己读写项目」这回事）。
+- `account-hosted.mjs`：
+  - `publishRefusal(project)`：项目 `active`、渲染节点开着、「生成轨道流」开着（`accountRenderState`）才放行，否则 `no-project` / `service-disabled`。
+  - `issueServiceTicket` 收 `purpose`：只有 `agent` + `publish` 能要，按 `publishRefusal` 判；票据条目记 `purpose`。
+  - `resolveService`：这种票据每次复核 `publishRefusal`，解出 `scope: 'service'`、`service: 'agent'`、`purpose: 'publish'`、**`role: 'publisher'`**（不是 `agent`：`realm account + role agent` 是任务连接，文档服务要逐帧的实例调用证明并走任务授权，端到端第一次跑就因此被 4003 `instance-invocation-forbidden` 关掉；改成别的角色后这条连接既不是任务连接，也拿不到任务连接的任何权限）。
+  - `gate` / `resumeGate`：带 `purpose` 的连接先单独判：只认 `agent` + `publish` + `scope: service`；消息里的 `projectId`、`task.publish` 里每个任务的 `source.projectId` 都必须是本项目；开关复核。消息种类仍由 `service-gate.mjs` 的 `SERVICE_PUBLISH_ALLOW` 管（只许 `publisher.hello`、带片段清单的计划、`task.unsubscribe`）。
+  - 访问事件的撤销循环跳过只发布连接（它没有任务授权可查；否则每次成员变动都会被误关一次）。
+- 测试 `server/test/account-agent-publish-ticket.test.mjs`（APT-1～4），反例：「生成轨道流」关、渲染节点关、项目不在、不是 agent、用途不是 publish、别的项目的计划、一条消息里夹带别的项目的计划、改项目 / 读项目 / 内容库 / 认领 / 报到成节点 / 票据 / 事件 / 在场 / 选区 / 目录消息、细任务、伪造用途、开关在连接期间被关（复核与重新鉴权都拒）、公钥被撤。4/4 通过。
+
+### 部署模板
+
+- `server/hosted/deploy/agent-account.env.example`：加 `PROMPTCUT_AGENT_SECRETS`（主服务用户自己的服务私钥目录）、`PROMPTCUT_AGENT_LOOK_URL`、`PROMPTCUT_AGENT_RENDER_DOC_URL=ws://127.0.0.1:8787`，各带一行说明。
+- `server/hosted/deploy/README.md`「Agent 服务（账号版）」第一次部署第 7 步：写明这两个变量与没设时的日志。
+
+### 生产节点只读核对（没改、没重启）
+
+- `promptcut-agent.service`：`User=promptcut-agent-master`，`EnvironmentFile=/etc/promptcut/agent-master/agent-account.env`；里面已有 `PROMPTCUT_AGENT_SECRETS=/etc/promptcut/agent-master-look-key`、`PROMPTCUT_AGENT_LOOK_URL=http://127.0.0.1:5399`，**没有** `PROMPTCUT_AGENT_RENDER_DOC_URL`。
+- `/etc/promptcut/agent-master-look-key/service-key.json`：属 `promptcut-agent-master` 0600，服务名 `agent`，kid `_yTY0wwd`。
+- 文档服务登记表 `/var/lib/promptcut-v2/doc/secrets/services.json`：`agent`（role agent、actsFor member）名下有 `_yTY0wwd` 与 `Ilw2yfFI` 两把；`render` 一把。**主服务那把钥匙已登记**，不用新生成。
+- 文档服务本机口 `127.0.0.1:8787` 在听。
+
+### 端到端 AR-10（`server/test/account-render-publish-e2e.test.mjs`）
+
+真的：VisuHive 账号后端、文档服务托管组合（账号模式）、素材服务进程、Agent 主服务生产装配、任务进程里的真实运行器与工具、主服务的**真实发布通道**（服务私钥 → 本机文档服务控制连接 → 只发布票据）、托管方渲染服务的管理进程 `server/hosted-render/main.mjs` 与它起的常驻工作进程（无头 Chrome 152，`PROMPTCUT_RENDER_STREAMS=1`，端口 5420～5426）。受控的只有模型（脚本式模拟）与 root 看操作系统的那一半。要 `PROMPTCUT_E2E_REAL_RENDER=1` 才跑（起 Chrome，慢），全量 `npm test` 里跳过。
+
+1. 「生成轨道流」关着，Agent 加一张 `blur-text` 重卡：主服务不发；对话里只有 `render off`（「这个项目没开「生成轨道流」…」）。
+2. 创建者打开「生成轨道流」（测试进程里让网站后端把创建者当托管方管理员，`ACCOUNT_ADMINS`，只改测试进程环境、跑完还原）；发完消息唯一的成员断开；Agent 改这张卡。事件序列：`… render_request, tool_result, …, runner_done, render published, render progress, render done`；渲染服务工作进程为这个项目做完两段流任务（稀疏版与满密度版），产物分块全部推进素材服务：`push { blocks: 4, pushed: 4, bytes: 28948 }`、`{ blocks: 4, pushed: 4, bytes: 73788 }`；`done` 挂在那一轮的 `runId` 下，文案「云端渲染完成」，排在 `runner_done` 之后。
+
+结果：`node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test server/test/account-render-publish-e2e.test.mjs`（设两个 VisuHive 变量与 `PROMPTCUT_E2E_REAL_RENDER=1`）退出码 0，1/1 通过，约 19 秒。
+
+调通途中暴露、已修的：只发布连接被当成任务连接（见上，角色改 `publisher`）。测试夹具一侧的：夹具的空项目没有画布与总时长，渲染节点判「不是能渲的项目」（脚本里先 `set_project_meta`）；夹具素材服务是私有 CA，渲染服务子进程要 `NODE_EXTRA_CA_CERTS`。这两样只在测试环境里，节点上不存在。期间失败都如实进了对话（「渲染节点没有接下这个计划:项目快照 … 不是能渲的项目」「渲染节点报告失败:sink-incomplete」），没有一次报成「完成」。
+
+### 第二轮的验证
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc -b --force` | 退出码 0，零错误 |
+| `account-agent-publish-ticket.test.mjs`（APT-1～4） | 4/4 通过 |
+| `account-render-publish.test.mjs`（AR-01～09） | 9/9 通过 |
+| `account-render-publish-e2e.test.mjs`（AR-10，真实渲染服务） | 1/1 通过，退出码 0 |
+| `npm test`（设两个 VisuHive 变量） | tests 7226，pass 7210，fail 1，skipped 15（AR-10 不设 `PROMPTCUT_E2E_REAL_RENDER` 时跳过），cancelled 0 |
+
+唯一失败仍是 `account-v2-deploy-config.test.mjs:114`（工作区目录名带 `render`）。在不带 `render` 的临时工作区（`git worktree add --detach .worktrees/arp-verify acd3b997`，跑完已 `git worktree remove`，里面没有 junction）单独跑这个文件：pass 9 / fail 0，退出码 0。
+
+### 部署清单（完整）
+
+按顺序：
+
+1. **代码**：整份同步到节点（同一个提交给 Agent 主服务、任务槽、文档服务、渲染服务、在线前端）。
+2. **在线前端与渲染树**：改了 `src/ai/cloud/events.ts`。整份 `src/` 同步进渲染树，先换在线前端，再重启渲染服务（`promptcut-render`）。渲染服务自身代码没改，重启是为了代码版本与清单计划的 `requires.codeVersion` 一致。
+3. **文档服务**（账号版托管组合）：改了 `server/docservice/account-hosted.mjs`、`modules/hosted.mjs`。按「重启托管服务前先确认没有正在写入的客户端」的规矩重启。不用改配置：Agent 主服务那把钥匙（kid `_yTY0wwd`）已在 `/var/lib/promptcut-v2/doc/secrets/services.json` 的 `agent` 名下。
+4. **Agent 主服务**（`promptcut-agent.service`，用户 `promptcut-agent-master`）：在 **`/etc/promptcut/agent-master/agent-account.env`** 加一行
+   `PROMPTCUT_AGENT_RENDER_DOC_URL=ws://127.0.0.1:8787`
+   （`PROMPTCUT_AGENT_SECRETS=/etc/promptcut/agent-master-look-key` 已有，不动），然后 `systemctl restart promptcut-agent`。看启动日志：不该出现 `agent.render.publisher-off`；应有 `service-client.up { service: 'agent' }`。
+5. **任务槽**（`promptcut-agent-task-slot-*`）：只换代码，下一代进程自动用新代码；root 入口配置与单元不用改，不用重启 root 入口。
+6. **部署后真实网络验收**：账号项目、创建者在权限分组里打开「生成轨道流」、成员都离开后让云端 Agent 改一张重卡，看对话里出现「已把 1 个片段交给云端渲染 → 云端渲染完成」；关掉开关再改，看到「这个项目没开「生成轨道流」…」。
+
+### 语义
+
+`mechanism/agent.md`「补发预渲染任务」一条后加了一句账号模式的做法（三级，标〔裁：主会话 2026-10-21 授权〕）。产品语义（二级）没改，无需用户定的事。
