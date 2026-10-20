@@ -379,17 +379,49 @@ export function localOnlyOf(project: Project): ReadonlySet<string> {
   return ids;
 }
 
-/** 这一刻活跃的卡片段（口径同 `Stage` / `FrameScene` 的 live 路：含 LEAD） */
+/** 这一刻活跃的卡片段（口径同 `Stage` / `FrameScene` 的 live 路：含 LEAD）。剪辑段也在里面(判重另看 `cutStreamHeavy`) */
 function activeCardClips(project: Project, t: number): TrackClip[] {
   const out: TrackClip[] = [];
   for (const tr of project.tracks) {
     if (tr.hidden) continue;
     for (const clip of tr.clips) {
-      if (!clip.cardId && !clip.nodeId) continue;
+      if (!clip.cardId && !clip.nodeId && !clip.cutId) continue;
       if (cardMountedAt(clip, t)) out.push(clip);
     }
   }
   return out;
+}
+
+/** 剪辑段的流输入签名(每份项目一张缓存,同 `belowSigOf`) */
+const cutSigs = new WeakMap<Project, Map<string, string | null>>();
+function cutSigOf(project: Project, clipId: string): string | null {
+  let byClip = cutSigs.get(project);
+  if (!byClip) { byClip = new Map(); cutSigs.set(project, byClip); }
+  if (!byClip.has(clipId)) byClip.set(clipId, streamInputSig(project, { clipIds: [clipId] }));
+  return byClip.get(clipId) ?? null;
+}
+
+/**
+ * 剪辑段(`kernel/cutSegments.ts`)这一刻按重卡办吗:分派表判它重,**而且**它的剪辑段级轨道流已经把整段铺满(每个分段至少有稀疏版),
+ * 而且那一层带的输入签名和当前项目对得上。是就贴流;否则(还在产、没有渲染节点产得了它、判重之前、被引用剪辑刚改过)
+ * 照旧在舞台里活渲,不显示占位符(`mechanism/rendering.md`「剪辑段」)。`stageSwap.ts` 判停下时要不要整场景补跑用的是同一个函数。
+ */
+export function cutStreamHeavy(project: Project, clip: { id: string; start: number; end: number; cutId?: string }, t: number): boolean {
+  if (!clip.cutId) return false;
+  if (pipelineAt(planDispatch.currentPlan(), clip.id, t) !== "heavy") return false;
+  const layer = readyIndex.get(clip.id)?.get("stream");
+  if (!layer || layer.streamKind === "below" || layer.groupClipIds?.length || !isStreamOrigin(layer.originFrame)) return false;
+  // 被引用剪辑改过、预渲染进程还没换版本的这一小段里,就绪索引里还是旧流:签名对不上的不贴(没带签名的照贴)
+  if (layer.inputSig && streamSigStale(layer.inputSig, cutSigOf(project, clip.id))) return false;
+  const fps = Math.max(1, project.fps || 30);
+  const total = Math.max(1, Math.floor((Number(project.duration) || 0) * fps));
+  const { firstFrame, count } = samplingOf(clip, fps);
+  const lastFrame = Math.min(total - 1, firstFrame + count - 1);
+  const last = streamSegmentOf(lastFrame, layer.originFrame);
+  for (let n = Math.max(0, streamSegmentOf(firstFrame, layer.originFrame)); n <= last; n++) {
+    if (!rangesHave(layer.ranges as Array<[number, number]>, n)) return false;
+  }
+  return true;
 }
 
 export interface Playhead {
@@ -445,8 +477,10 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
   const clips: { clip: TrackClip; firstFrame: number; count: number }[] = [];
   const localOnly = localOnlyOf(project);
   for (const clip of activeCardClips(project, t)) {
+    // 剪辑段:判重而且流已铺满才按重卡办,否则照旧活渲
+    if (clip.cutId) { if (!cutStreamHeavy(project, clip, t)) continue; }
     // 这台设备跑不了的卡一律按重卡(在线浏览器模式;见 `localOnlyOf`)
-    if (pipelineAt(plan, clip.id, t) !== "heavy" && !localOnly.has(clip.id)) continue;
+    else if (pipelineAt(plan, clip.id, t) !== "heavy" && !localOnly.has(clip.id)) continue;
     const { firstFrame, count } = samplingOf(clip, fps);
     if (pendingDemote.has(clip.id)) {
       // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会发流平面）

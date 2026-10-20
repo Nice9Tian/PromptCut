@@ -121,7 +121,7 @@ export function createUi({ maxLine = 1800 } = {}) {
  * `ports`:`{ site, stageA, stageB, doc, asset, agent, render? }`(`render` 给了才起渲染服务,另占 +1、+2 与 +6)。
  * 回一个句柄,见各字段的注释;`stop()` 把它起的全部停掉。
  */
-export async function startStack({ tmp, ports, dist = null, say = () => {}, agentEnv = {}, buildEnv = {} }) {
+export async function startStack({ tmp, ports, dist = null, say = () => {}, agentEnv = {}, buildEnv = {}, renderEnv = {} }) {
   const need = [ports.site, ports.stageA, ports.stageB, ports.doc, ports.asset, ports.agent, ...(ports.render ? [ports.render, ports.render + 1, ports.render + 2, ports.render + 6] : [])];
   for (const p of need) {
     if (USER_PORTS.includes(p)) throw new Error(`端口段碰到了 ${p}(用户的编辑器或安装版)`);
@@ -262,6 +262,10 @@ export async function startStack({ tmp, ports, dist = null, say = () => {}, agen
         // 在线页面的构建就是代理在发的那一份:渲染服务拿它比代码版本
         PROMPTCUT_RENDER_EDITOR_DIR: DIST, PROMPTCUT_RENDER_AGENT_STATUS_URL: `${S.AGENT_DIRECT}/healthz`,
         ...(process.platform === 'win32' && !process.env.PROMPTCUT_TEST_ENV_FINGERPRINT ? { PROMPTCUT_TEST_ENV_FINGERPRINT: '7e57c10d00000002' } : {}),
+        // 排查用:`PC_PROBE_RENDER_VERBOSE=1` 时渲染服务把工作进程(编辑器与预渲染进程)的输出原样转出来
+        ...(process.env.PC_PROBE_RENDER_VERBOSE === '1' ? { PROMPTCUT_RENDER_VERBOSE: '1' } : {}),
+        // 调用方另给的(例如 `PROMPTCUT_RENDER_STREAMS: '1'`,与部署模板一样能产轨道流)
+        ...renderEnv,
       },
     });
     return S.render;
@@ -730,13 +734,23 @@ export async function visibleStage(page) {
   }
   return stageFrames(page)[0] ?? null;
 }
-/** 可见舞台里某个片段:有没有贴着预渲染的快照(快照层里有内容)、占位显没显示与原因 */
+/**
+ * 可见舞台里某个片段:有没有贴着预渲染的快照(快照层里有内容)、有没有贴着轨道流(舞台的流播放器里含这个片段的那一条、画了几帧)、
+ * 占位显没显示与原因。2026-10-13 起每张卡的快照作废,预渲染结果只有轨道流一档(语义 `product/rendering.md`「预渲染」),
+ * 所以「贴着预渲染结果」现在看 `stream`;`snapshot` 留着给还在用旧快照的探针。
+ */
 export async function clipOnStage(page, id) {
   const f = await visibleStage(page);
   if (!f) return null;
   return f.evaluate((cid) => {
     const w = document.querySelector(`[data-pc-clip="${cid}"]:not([data-pc-media])`);
     if (!w) return { wrapper: false };
+    let stream = null;
+    try {
+      const diag = window.__pcStageDiag?.() ?? null;
+      const track = (diag?.streams?.tracks ?? []).find((t) => String(t.id).split('#')[0].split(',').includes(cid)) ?? null;
+      if (track) stream = { key: track.key ?? null, drawn: Number(track.drawn) || 0, pushed: !!track.pushed, errors: Number(track.errors) || 0 };
+    } catch { stream = null; }
     const snap = w.querySelector(':scope > [data-pc-snapshot-plane]');
     const slot = w.querySelector(':scope > [data-pc-placeholder-slot]');
     const plane = slot?.querySelector('[data-pc-placeholder-plane]');
@@ -747,6 +761,7 @@ export async function clipOnStage(page, id) {
       placeholder: !!slot && !slot.hidden,
       reason: slot && !slot.hidden ? (slot.getAttribute('data-pc-placeholder-reason') ?? plane?.getAttribute('data-pc-placeholder-reason') ?? null) : null,
       suppressed: w.classList.contains('pc-suppressed'),
+      stream,
     };
   }, id).catch(() => null);
 }

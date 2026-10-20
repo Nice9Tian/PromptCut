@@ -61,6 +61,11 @@ export function graphCardWithInputs(project, clip) {
  *   - `'spatial'` **外框用了三维变形的独立卡**:流里是变形之前的平面画面(隔离工程里框只留位置和宽高,`localClip`),
  *     贴的时候流平面是包裹层的子元素,包裹层照常带着三维变形,所以画面跟着变形。三维那几项不进流键(它们不在流里)。
  *
+ *   - `'cut'` **剪辑段**(2026-10-20 剪辑段参与预渲染):被引用剪辑在段的框里合成好的整帧,包裹层自己的坐标系(和平面独立卡同一种形状),
+ *     框的三维、不透明度、淡入淡出、强调都不在流里,贴的时候包裹层照常加。成员键是剪辑段那个节点的内容身份(被引用剪辑任意深度的内容
+ *     与里面各卡的源码版本,`cutIdentity.mjs` 的 `cutSegmentContent`),改了被引用剪辑旧流就不再对得上。里面有按历史推进的卡时
+ *     从预卷之前的挂载帧回放(`planStreams`)。不并进组流(剪辑段多半整幅不透明);浏览器不产(要整套嵌套场景和素材)。
+ *
  * 两类同时成立时算 `'source'`(框的三维照样不在流里)。别的卡回 null:平面的独立卡走 `streamEligible`,
  * 依赖下层的、没审阅过又没接输入的走 `belowStreamEligible`(外框带不带三维都走那条路:带三维时三维摆放画进流里)。
  *
@@ -72,6 +77,8 @@ export function graphCardWithInputs(project, clip) {
 export function soloStreamKind(control, clip, track, project) {
   if (!control?.clipId || !clip || !track) return null;
   if (track.hidden || track.sourceOnly) return null;
+  // 剪辑段(`src/kernel/cutSegments.ts` 的 `withCutSegmentOutputs`):整段当一张卡,单独一条单卡流(见下面 `'cut'`)
+  if (typeof clip.cutId === 'string' && clip.cutId) return Number.isInteger(control.count) && control.count > 0 ? 'cut' : null;
   if (!clip.cardId) return null;
   if (!(Number.isInteger(control.count) && control.count > 0)) return null;
   const compositing = control.capabilities?.compositing ?? control.compositing;

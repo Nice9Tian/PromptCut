@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useRef, type ReactElement } from "react";
 import type { CutSegmentRender } from "../kernel/cutSegments";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
 import type { Timeline } from "../kernel/types";
@@ -44,7 +44,7 @@ function subGraph(project: CutSegmentRender["project"]): Timeline["graph"] | und
   return graph ?? undefined;
 }
 
-export function CutSegmentScene({ seg, start, localT, localDirectT = localT, playToken, size }: {
+export function CutSegmentScene({ seg, start, localT, localDirectT = localT, playToken, size, frozen = false }: {
   seg: CutSegmentRender;
   /** 这一段在父剪辑上的起点(秒) */
   start: number;
@@ -54,8 +54,21 @@ export function CutSegmentScene({ seg, start, localT, localDirectT = localT, pla
   playToken: number;
   /** 段的框(像素) */
   size: { width: number; height: number };
+  /**
+   * 舞台把这一段抑制着、正贴着它的剪辑段级轨道流(`Stage` 的 `.pc-suppressed`,子树 `display: none`):
+   * 原样交回上一拍的那棵元素,React 整棵跳过,嵌套场景里的卡一拍都不重渲(不然藏着也照样每拍花掉活渲的钱,贴流就白贴了)。
+   * 撤掉抑制的那一拍照常渲当前时刻。导出页、预渲染页从不抑制,一个字不变。
+   */
+  frozen?: boolean;
 }) {
   const host = useContext(SceneHostContext);
+  const last = useRef<{ el: ReactElement | null } | null>(null);
+  if (frozen && last.current) return last.current.el;
+  const el = renderScene();
+  last.current = { el };
+  return el;
+
+  function renderScene(): ReactElement | null {
   const { project, offset, duration } = seg;
   const tau = offset + localT;
   const tauDirect = offset + localDirectT;
@@ -75,4 +88,5 @@ export function CutSegmentScene({ seg, start, localT, localDirectT = localT, pla
         playing={live && !!host?.playing} scrubbing={live && !!host?.scrubbing} localHashes={host?.localHashes} />
     </div>
   );
+  }
 }
