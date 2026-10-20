@@ -6,6 +6,8 @@ import { resolveFrame } from "../../kernel/layout";
 import { cutDuration } from "../../kernel/cutSegments";
 import { fadeOwner } from "../../kernel/transitions";
 import { openCutInTimeline } from "../timeline/CutTabs";
+import { NumberField } from "../fields/NumberField";
+import { RangeField } from "../fields/RangeField";
 
 /**
  * 编辑分区里剪辑段的属性(`product/project-model.md`「片段」的剪辑段一条):引用哪条剪辑、从被引用剪辑的第几秒开始,
@@ -14,6 +16,9 @@ import { openCutInTimeline } from "../timeline/CutTabs";
  * 每一项都走现有的 store 动作(`setCutSegment`、`moveClip`、`setClipFrame`、`updateClip`、`setClipVolume`、`setClipMuted`),
  * 它们换新对象写回项目、进撤销栈;循环引用、偏移超出被引用剪辑总长这类拒绝原样显示在表单底下。
  * 「打开被引用剪辑」和双击时间轴上的剪辑段同效(`openCutInTimeline`)。
+ *
+ * 数字框与滑块是 `../fields/` 里共用的 NumberField / RangeField:数字框敲字只改草稿,回车或失焦才提交一步;
+ * 滑块一次拖动只记一步撤销(2026-10-20 用户定,`docs/semantics/workflow/editing.md`「撤销、重做」)。
  */
 export function CutSegmentForm({ clip }: { clip: TrackClip }) {
   const project = useStore((s) => s.project);
@@ -39,11 +44,6 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
       setErr(e instanceof Error ? e.message : String(e));
     }
   };
-  const num = (v: string, f: (n: number) => void) => {
-    const n = Number(v);
-    if (v.trim() !== "" && Number.isFinite(n)) f(n);
-  };
-
   const stage = { width: project.width, height: project.height };
   const frame = resolveFrame(clip.frame, stage);
   const patchFrame = (p: Partial<ClipFrame>) => run(() => actions.setClipFrame(clip.id, { ...(clip.frame ?? { x: 0, y: 0 }), ...p } as ClipFrame));
@@ -55,21 +55,11 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
     </div>
   );
   const numberBox = (dataPc: string, value: number, step: number, onValue: (n: number) => void, opts: { min?: number; max?: number; disabled?: boolean } = {}) => (
-    <NumberField dataPc={dataPc} value={value} step={step} min={opts.min} max={opts.max} disabled={opts.disabled || locked} onValue={(v) => num(v, onValue)} />
+    <NumberField attrs={{ "data-pc": dataPc }} value={value} step={step} min={opts.min} max={opts.max} disabled={opts.disabled || locked} onCommit={onValue} className="w-14 shrink-0 pc-left-input is-sm" />
   );
   const sub = (text: string) => <span className="shrink-0 whitespace-nowrap pc-left-muted">{text}</span>;
   const slider = (dataPc: string, value: number, min: number, max: number, step: number, onValue: (n: number) => void, disabled = false) => (
-    <input
-      data-pc={dataPc}
-      type="range"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      disabled={disabled || locked}
-      onChange={(e) => onValue(Number(e.target.value))}
-      className="flex-1 min-w-0 pc-left-range"
-    />
+    <RangeField attrs={{ "data-pc": dataPc }} min={min} max={max} step={step} value={value} disabled={disabled || locked} onValue={onValue} className="flex-1 min-w-0 pc-left-range" />
   );
 
   const fadeInLocked = !!fadeOwner(project, clip.id, "fadeIn");
@@ -207,27 +197,3 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
   );
 }
 
-/**
- * 数字框:改一个字就提交一次(和「开始 / 结束」同一个口径),但输入中显示用户敲的原样,
- * 不被受控值改写成「0100」这种;失焦后回到项目里的值。
- */
-function NumberField({ dataPc, value, step, min, max, disabled, onValue }: {
-  dataPc: string; value: number; step: number; min?: number; max?: number; disabled?: boolean; onValue: (v: string) => void;
-}) {
-  const [draft, setDraft] = useState<string | null>(null);
-  return (
-    <input
-      data-pc={dataPc}
-      type="number"
-      step={step}
-      min={min}
-      max={max}
-      disabled={disabled}
-      value={draft ?? String(Number(value.toFixed(3)))}
-      onFocus={(e) => setDraft(e.currentTarget.value)}
-      onChange={(e) => { setDraft(e.target.value); onValue(e.target.value); }}
-      onBlur={() => setDraft(null)}
-      className="w-14 shrink-0 pc-left-input is-sm"
-    />
-  );
-}

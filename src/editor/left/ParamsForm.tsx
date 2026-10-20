@@ -7,6 +7,8 @@ import { paramsEmptyText, paramsPartialText, paramsSkippedText, type ParamsCardV
 import { ASSET_TARGET } from "../../cards/catalogAssets";
 import type { TrackClip } from "../../kernel/project";
 import { SpeakerPicker } from "./SpeakerPicker";
+import { NumberField } from "../fields/NumberField";
+import { GESTURE_COMMIT_INTERVAL_MS, GESTURE_WINDOW_MS, commitMerged, createLatestThrottle, newGestureKey } from "../fields/mergedEdit";
 
 function isSpeakerVideoControl(ctrl: Control): boolean {
   if (ctrl.type !== "text") return false;
@@ -59,6 +61,13 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
     el.classList.add("pc-left-strong");
     document.body.style.cursor = "ew-resize";
 
+    // 一次左右拖动(按下到松开)只记一步撤销;拖动中提交限速,松手补交最后一个值
+    const gestureKey = newGestureKey("params-scrub");
+    const throttle = createLatestThrottle<number>(
+      (v) => commitMerged(gestureKey, GESTURE_WINDOW_MS, () => actions.setClipParams(clip.id, { [key]: v })),
+      GESTURE_COMMIT_INTERVAL_MS,
+    );
+
     const onMove = (moveEvent: PointerEvent) => {
       let next = v0 + (moveEvent.clientX - x0) * step;
       if (min !== undefined) next = Math.max(min, next);
@@ -67,19 +76,22 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
       next = Math.round(next / step) * step;
       next = Number(next.toFixed(6));
 
-      actions.setClipParams(clip.id, { [key]: next });
+      throttle.push(next);
     };
 
     const onUp = (upEvent: PointerEvent) => {
-      el.releasePointerCapture(upEvent.pointerId);
+      throttle.flush();
+      try { el.releasePointerCapture(upEvent.pointerId); } catch { /* 已经放掉了(pointercancel) */ }
       el.classList.remove("pc-left-strong");
       document.body.style.cursor = "";
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
     };
 
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
   };
 
   const isBlank = (s: any) => s == null || String(s).trim() === "";
@@ -141,19 +153,13 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: Params
               )}
 
               {ctrl.type === "number" && (
-                <input
-                  data-pc-param={ctrl.key}
-                  type="number"
+                <NumberField
+                  attrs={{ "data-pc-param": ctrl.key }}
                   min={ctrl.min}
                   max={ctrl.max}
                   step={ctrl.step ?? 1}
-                  value={Number.isFinite(val) ? val : ""}
-                  onChange={e => {
-                    const v = Number(e.target.value);
-                    if (Number.isFinite(v)) {
-                      actions.setClipParams(clip.id, { [ctrl.key]: v });
-                    }
-                  }}
+                  value={Number.isFinite(val) ? val : undefined}
+                  onCommit={(v) => actions.setClipParams(clip.id, { [ctrl.key]: v })}
                   className="w-full pc-left-input"
                 />
               )}

@@ -4,6 +4,7 @@ import type { TrackClip } from "../../kernel/project";
 import type { Control, PartInstance } from "../../kernel/types";
 import { addPart, findPart, movePart, removePart, updatePart } from "../../kernel/parts";
 import { allParts, getPart } from "../../kernel/partRegistry";
+import { NumberField } from "../fields/NumberField";
 
 /**
  * 组合卡的参数面板:一棵部件实例树,每个实例可以改参数、框、进场时机、次序,也能加减部件。
@@ -89,15 +90,15 @@ function PartRow({ clip, tree, inst, index, count, depth, commit }: { clip: Trac
         <div className="flex flex-col gap-1 px-2 pb-2">
           <div className="flex items-center gap-1 pc-left-muted flex-wrap">
             <span className="w-8">框</span>
-            <span>x</span><input type="number" className={num} value={frame?.x ?? 0} onChange={(e) => setFrame("x", Number(e.target.value))} />
-            <span>y</span><input type="number" className={num} value={frame?.y ?? 0} onChange={(e) => setFrame("y", Number(e.target.value))} />
-            <span>w</span><input type="number" className={num} value={frame?.w ?? ""} placeholder="满" onChange={(e) => { const v = Number(e.target.value); if (v > 0) setFrame("w", v); }} />
-            <span>h</span><input type="number" className={num} value={frame?.h ?? ""} placeholder="满" onChange={(e) => { const v = Number(e.target.value); if (v > 0) setFrame("h", v); }} />
+            <span>x</span><NumberField className={num} value={frame?.x ?? 0} onCommit={(v) => setFrame("x", v)} />
+            <span>y</span><NumberField className={num} value={frame?.y ?? 0} onCommit={(v) => setFrame("y", v)} />
+            <span>w</span><NumberField className={num} value={frame?.w} placeholder="满" validate={(v) => v > 0} onCommit={(v) => setFrame("w", v)} />
+            <span>h</span><NumberField className={num} value={frame?.h} placeholder="满" validate={(v) => v > 0} onCommit={(v) => setFrame("h", v)} />
             <button type="button" className={btn} onClick={() => set({ frame: null })} title="清掉框,铺满父框">铺满</button>
           </div>
           <div className="flex items-center gap-1 pc-left-muted">
             <span className="w-8">进场</span>
-            <input type="number" className={num} min={0} step={50} value={inst.enterMs ?? 0} onChange={(e) => set({ enterMs: Math.max(0, Number(e.target.value) || 0) })} />
+            <NumberField className={num} min={0} step={50} value={inst.enterMs ?? 0} onCommit={(v) => set({ enterMs: Math.max(0, v) })} />
             <span>ms</span>
             <span className="ml-2">名字</span>
             <input type="text" className="flex-1 pc-left-input is-sm" value={inst.label ?? ""} placeholder={def?.name} onChange={(e) => set({ label: e.target.value })} />
@@ -130,7 +131,7 @@ function ControlRow({ ctrl, value, onChange }: { ctrl: Control; value: unknown; 
     <div className="flex items-center gap-2">
       <div className="w-20 shrink-0 text-[11px] pc-left-muted truncate" title={ctrl.hint ? `${ctrl.label}:${ctrl.hint}` : ctrl.label}>{ctrl.label}</div>
       {ctrl.type === "text" && <input type="text" className={cls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />}
-      {ctrl.type === "number" && <input type="number" className={cls} value={Number(value ?? 0)} min={ctrl.min} max={ctrl.max} step={ctrl.step} onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) onChange(v); }} />}
+      {ctrl.type === "number" && <NumberField className={cls} value={Number(value ?? 0)} min={ctrl.min} max={ctrl.max} step={ctrl.step} onCommit={onChange} />}
       {ctrl.type === "select" && (
         <select className="flex-1 pc-left-select is-sm" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
           {ctrl.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}

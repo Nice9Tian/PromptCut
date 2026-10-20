@@ -3,6 +3,8 @@ import { resolveFrame } from "../../kernel/layout";
 import { clampFov, DEFAULT_FOV_DEG, MAX_FOV_DEG, MIN_FOV_DEG, perspectivePx } from "../../kernel/space3d";
 import type { ClipFrame } from "../../kernel/types";
 import type { TrackClip } from "../../kernel/project";
+import { NumberField } from "../fields/NumberField";
+import { RangeField } from "../fields/RangeField";
 
 /**
  * 编辑 → 三维:把这张卡摆进空间。
@@ -48,24 +50,20 @@ export function Frame3DForm({ clip }: { clip: TrackClip }) {
   ) => (
     <div className="flex items-center gap-2" key={key} title={hint}>
       <span className="w-14 shrink-0 pc-left-muted">{label}</span>
-      <input
-        data-pc={`frame3d-${key}`}
-        type="range"
+      <RangeField
+        attrs={{ "data-pc": `frame3d-${key}` }}
         min={min}
         max={max}
         step={step}
         value={f[key]}
-        onChange={(e) => patch({ [key]: Number(e.target.value) })}
+        onValue={(v) => patch({ [key]: v })}
         className="flex-1 min-w-0 pc-left-range"
       />
-      <input
-        type="number"
+      <NumberField
         step={step}
-        value={Number(f[key].toFixed(2))}
-        onChange={(e) => {
-          const v = Number(e.target.value);
-          if (Number.isFinite(v)) patch({ [key]: v });
-        }}
+        digits={2}
+        value={f[key]}
+        onCommit={(v) => patch({ [key]: v })}
         className="w-16 pc-left-input is-sm"
       />
       <span className="w-6 shrink-0 pc-left-faint">{unit}</span>
@@ -113,14 +111,13 @@ export function Frame3DForm({ clip }: { clip: TrackClip }) {
       {on && (
         <div className="flex items-center gap-2 pc-left-muted" title="越小透视越弱(接近正交),越大越夸张。相机距离由它和画幅推出来,不单独设">
           <span className="w-14 shrink-0">视角</span>
-          <input
-            data-pc="frame3d-fov"
-            type="range"
+          <RangeField
+            attrs={{ "data-pc": "frame3d-fov" }}
             min={MIN_FOV_DEG}
             max={MAX_FOV_DEG}
             step={1}
             value={fov}
-            onChange={(e) => actions.setProjectMeta({ camera3dFov: clampFov(Number(e.target.value)) })}
+            onValue={(v) => actions.setProjectMeta({ camera3dFov: clampFov(v) })}
             className="flex-1 min-w-0 pc-left-range"
           />
           <span className="w-16 text-right pc-left-faint">{fov}°</span>
