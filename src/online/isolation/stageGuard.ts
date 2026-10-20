@@ -58,6 +58,11 @@ export function bootStageGuard({ online, base }: { online: boolean; base: string
 }
 let latest: IsolationReport | null = null;
 
+/** 本文档装了舞台加固、起了自检(只有在线构建的 stage.html 是;导出页据此判断值不值得等自检结果) */
+export function stageGuardBooted(): boolean {
+  return booted;
+}
+
 /**
  * 每次握手(`pc-stage-ready`)发出之后调:自检有结果了就发,没有就等它出来再发(舞台组件重挂会再握手一次,父页每次握手都清旧结果,所以每次都发)。
  * 不是跨源舞台的文档什么都不发(父页据此知道这一台没有隔离)。
