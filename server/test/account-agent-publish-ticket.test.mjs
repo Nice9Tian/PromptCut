@@ -81,6 +81,7 @@ test('APT-2 凭票连进来:scope service、purpose publish、本项目;开关�
   const p = await f.runtime.authenticate(reqOf(ticket));
   assert.deepEqual([p.scope, p.service, p.purpose, p.tenantId, p.realm, p.identityVersion], ['service', 'agent', 'publish', f.projectId, 'account', 2]);
   assert.equal(p.accountId, undefined, '不带任何成员的身份');
+  assert.notEqual(p.role, 'agent', '不是任务连接的角色(任务连接要实例调用证明、走任务授权)');
   assert.equal(await f.runtime.resumeGate(p), null);
   await f.streams(f.projectId, false, 'streams-off');
   assert.equal(await f.runtime.resumeGate(p), 'service-disabled');

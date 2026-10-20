@@ -144,7 +144,8 @@ export function createAccountHostedRuntime({ ledger, accountClient, dataDir, aut
       const refused = publishRefusal(project);
       if (refused) fail(refused === 'no-project' ? 404 : 403, refused);
       return { userId: `service:${entry.service}@${entry.deviceId ?? entry.service}`, tenantId: entry.projectId, projectId: entry.projectId,
-        scope: 'service', service: entry.service, serviceKid: entry.serviceKid, serviceRole: entry.service, role: entry.service,
+        // 角色不是 agent:任务连接(realm account + role agent)要逐帧的实例调用证明,这条连接不是任务连接,也拿不到任务连接的任何权限
+        scope: 'service', service: entry.service, serviceKid: entry.serviceKid, serviceRole: entry.service, role: 'publisher',
         purpose: 'publish', realm: 'account', identityVersion: 2,
         deviceId: entry.deviceId ?? entry.service, deviceName: entry.deviceName ?? entry.deviceId ?? entry.service };
     }
