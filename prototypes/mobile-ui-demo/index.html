@@ -100,13 +100,6 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .play { width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #04222a; display: grid; place-items: center; font-size: 16px; }
 .spacer { flex: 1; }
 
-.cliptabs { flex: none; display: flex; gap: 6px; padding: 4px 12px; overflow-x: auto; scrollbar-width: none; }
-.cliptabs::-webkit-scrollbar { display: none; }
-.ctab { flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 10px; border-radius: 8px 8px 0 0; background: var(--panel); color: var(--dim); font-size: 12px; }
-.ctab.on { background: var(--panel2); color: var(--text); box-shadow: inset 0 -2px var(--accent); }
-.ctab .x { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 11px; }
-.ctab .x:active { background: var(--line); }
-.ctab.add { padding: 0 10px; color: var(--accent); }
 
 .timeline { flex: 1; min-height: 0; background: var(--panel); margin: 0 12px; border-radius: 0 10px 10px 10px; display: flex; flex-direction: column; overflow: hidden; }
 .tl-scroll { position: relative; flex: 1; overflow-x: auto; overflow-y: auto; scrollbar-width: thin; touch-action: pan-x pan-y; }
@@ -129,7 +122,7 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 4; pointer-events: none; }
 .playhead::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: var(--accent); border-bottom: 0; }
 
-.dock { flex: none; display: flex; padding: 6px 8px 10px; gap: 4px; background: var(--bg); border-top: 1px solid var(--line); }
+.dock { flex: none; display: flex; padding: 6px 8px 4px; gap: 4px; background: var(--bg); border-top: 1px solid var(--line); }
 .dock button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; border-radius: 10px; color: var(--dim); font-size: 11px; position: relative; }
 .dock button .g { font-size: 18px; }
 .dock button:active, .dock button.on { color: var(--accent); background: var(--panel); }
@@ -137,16 +130,31 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 
 /* 默认态：只有一条主轨；编辑态：展开完整时间轴 */
 .pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#defaultPane { flex: none; }   /* 缩略时间轴和工具栏贴底，剩余空间全给预览 */
 #editor.editing #defaultPane, #editor:not(.editing) #editPane, #editor.editing #topNormal, #editor:not(.editing) #topEdit { display: none; }
 #editor.editing .stage-wrap { padding: 0 44px; }
+.preview-area { flex: 1; min-height: 0; display: flex; align-items: center; }   /* 预览在剩余空间里垂直居中 */
+.preview-area .stage-wrap { width: 100%; }
+#editor.editing .preview-area { flex: none; }
+#editor:not(.editing) .align { display: none; }
+.pager { flex: none; display: flex; justify-content: space-around; padding: 0 8px 12px; background: var(--bg); }
+.pager button { position: relative; height: 40px; padding: 0 22px; font-size: 15px; color: var(--dim); }
+.pager button::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 18px; height: 3px; margin-left: -9px; border-radius: 2px; background: transparent; }
+#editor:not(.editing) #pgClip, #editor.editing #pgTl { color: var(--accent); font-weight: 600; }
+#editor:not(.editing) #pgClip::after, #editor.editing #pgTl::after { background: var(--accent); }
+.mblock.cur { border-color: var(--accent); }
+.crow { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--panel2); border-radius: 10px; margin-bottom: 6px; width: 100%; text-align: left; border: 1.5px solid transparent; }
+.crow.cur { border-color: var(--accent); }
+.crow .i { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; background: var(--panel); }
+.etools .none { flex: none; padding: 8px 10px; font-size: 12px; color: var(--dim); white-space: nowrap; line-height: 1.5; }
 .edit-head { justify-content: space-between; }
 .edit-head h1 { text-align: center; font-size: 15px; }
 .edit-head .icon-btn { color: var(--text); font-size: 22px; }
 .edit-head .icon-btn.ok { color: var(--accent); }
-.mainhead { flex: none; display: flex; align-items: baseline; justify-content: space-between; padding: 12px 14px 4px; }
+.mainhead { flex: none; display: flex; align-items: baseline; justify-content: space-between; padding: 8px 14px 0; }
 .mainhead b { font-size: 14px; }
 .mainhead span { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
-.mainstrip { flex: none; display: flex; align-items: center; padding: 6px 12px; overflow-x: auto; scrollbar-width: none; min-height: 80px; }
+.mainstrip { flex: none; display: flex; align-items: center; padding: 6px 12px 10px; overflow-x: auto; scrollbar-width: none; min-height: 80px; }
 .mainstrip::-webkit-scrollbar { display: none; }
 .madd { flex: none; width: 40px; height: 64px; border-radius: 10px; background: var(--panel2); display: grid; place-items: center; font-size: 22px; margin-right: 6px; position: sticky; left: 0; z-index: 3; box-shadow: 8px 0 8px var(--bg); }
 .mblock { flex: none; width: 80px; height: 64px; border-radius: 10px; position: relative; overflow: hidden; border: 2px solid transparent; touch-action: pan-x; user-select: none; cursor: pointer; }
@@ -155,14 +163,6 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .mblock.lift { z-index: 5; border-color: var(--accent); box-shadow: 0 6px 18px #000a; opacity: .92; }
 .mark { flex: none; width: 24px; height: 24px; margin: 0 3px; border-radius: 50%; background: var(--panel2); display: grid; place-items: center; font-size: 11px; color: var(--dim); }
 .mark.has { background: var(--plum); color: #fff; }
-.mhint { flex: none; padding: 0 14px 6px; font-size: 11px; color: var(--dim); }
-.overlays { flex: none; padding: 8px 14px; }
-.overlays .t { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
-.overlays .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.ochip { height: 30px; padding: 0 10px; border-radius: 8px; background: var(--panel2); font-size: 12px; display: flex; align-items: center; gap: 6px; }
-.ochip i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-.ochip small { color: var(--dim); font-size: 10px; }
-.growfill { flex: 1; }
 .align { flex: none; display: flex; justify-content: center; gap: 8px; padding: 8px 12px 0; }
 .align button { height: 30px; padding: 0 12px; border-radius: 8px; background: var(--panel2); font-size: 12px; color: var(--dim); }
 .align button:active { color: var(--accent); }
@@ -344,7 +344,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
       <button class="icon-btn" onclick="go('home')" title="返回项目列表">‹</button>
       <h1 id="projName">夏日海边 Vlog</h1>
       <button class="chip warn" id="cfBtn" onclick="openSheet('conflict')">冲突合并 2</button>
-      <button class="chip" onclick="openSheet('members')">2 人 · 2 Agent</button>
+      <button class="chip" onclick="openSheet('members')" title="成员：2 人 · Agent：2 个">👥 2·2</button>
       <button class="btn primary" style="height:30px;padding:0 12px" onclick="openSheet('export')">导出</button>
     </div>
 
@@ -354,6 +354,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
       <button class="icon-btn ok" onclick="exitEdit(true)" title="完成">✓</button>
     </div>
 
+    <div class="preview-area" id="previewArea">
     <div class="stage-wrap">
       <div class="stage" id="stage">
         <div class="bgl" id="bgl"></div>
@@ -365,6 +366,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
         <div class="agent-flag" id="agentFlag">Agent 正在改</div>
       </div>
     </div>
+    </div>
 
     <div class="transport">
       <button class="play" id="playBtn" onclick="togglePlay()">▶</button>
@@ -374,14 +376,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
       <button class="icon-btn" id="redoBtn" onclick="redo()" title="重做">↷</button>
     </div>
 
-    <!-- 默认态：只有一条主轨，只放主要内容；各段等宽，不按真实时长缩放 -->
+    <!-- 默认布局：预览居中，播放条，贴底的缩略时间轴（缩略卡等宽、不按真实时长），工具栏 -->
     <div class="pane" id="defaultPane">
-      <div class="cliptabs" id="cliptabs"></div>
-      <div class="mainhead"><b>主要内容</b><span id="mainSum"></span></div>
+      <div class="mainhead"><b>缩略时间轴</b><span id="mainSum"></span></div>
       <div class="mainstrip" id="mainStrip"></div>
-      <div class="mhint">各段等宽显示，不按真实时长 · 点一段进入编辑 · 长按拖动换顺序</div>
-      <div class="overlays" id="overlays"></div>
-      <div class="growfill"></div>
       <div class="dock">
         <button onclick="assetTab='视频';openSheet('assets')"><span class="g">▦</span>素材</button>
         <button onclick="openSheet('cards')"><span class="g">✦</span>卡片</button>
@@ -391,7 +389,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
       </div>
     </div>
 
-    <!-- 编辑态：展开完整时间轴（按时间缩放、刻度、多轨、播放头、两端手柄），底部是这一项的工具 -->
+    <!-- 「时间轴」分页：完整时间轴（按时间缩放、刻度、多轨、播放头、两端手柄），底部是选中这一项的工具 -->
     <div class="pane" id="editPane">
       <div class="timeline" style="border-radius:10px">
         <div class="tl-scroll" id="tlScroll"><div class="tl-inner" id="tlInner"></div></div>
@@ -401,6 +399,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
         <button onclick="alignSel('e')">终点对齐播放头 ⇥</button>
       </div>
       <div class="etools" id="etools"></div>
+    </div>
+
+    <!-- 最底部分页：剪辑（选剪辑）/ 时间轴（展开完整时间轴） -->
+    <div class="pager">
+      <button id="pgClip" onclick="pageClip()">剪辑</button>
+      <button id="pgTl" onclick="pageTimeline()">时间轴</button>
     </div>
   </section>
 
@@ -477,6 +481,16 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
     <div class="cf-foot"><button class="btn primary" onclick="cfMerge()">合并</button><button class="btn" onclick="cfDrop()">删除选中</button><button class="btn" id="cfClose" onclick="closeSheets()">下次再说</button></div>
   </div>
 
+  <div class="sheet" id="sh-clips">
+    <div class="grip"></div>
+    <div class="sheet-head"><h3>选择剪辑</h3><button class="icon-btn" onclick="closeSheets()">✕</button></div>
+    <div class="sheet-body">
+      <div class="hint">选一个剪辑，缩略时间轴就换成它的内容。</div>
+      <div id="clipList"></div>
+      <button class="btn" style="width:100%;margin-top:6px" onclick="newClip()">＋ 新建剪辑</button>
+    </div>
+  </div>
+
   <div class="sheet" id="sh-members">
     <div class="grip"></div>
     <div class="sheet-head"><h3>成员：2 人 · Agent：2 个</h3><button class="icon-btn" onclick="closeSheets()">✕</button></div>
@@ -536,7 +550,6 @@ let clipsByTab = {
     { id: 'd2', lane: 2, s: 0.5, d: 2, name: 'T 夏日海边', kind: 'cap', title: true, P: { size: 30, opacity: 100, y: 38, color: '#ffffff', text: '夏日海边' } }
   ]
 };
-let tabs = ['剪辑 1', '片头'];
 let curTab = '剪辑 1';
 let selId = null;
 let now = 0, playing = false, raf = 0, lastT = 0;
@@ -577,6 +590,7 @@ function openSheet(n) {
   if (n === 'cards') buildCards();
   if (n === 'chat') { $('#chatBadge').style.display = 'none'; scrollMsgs(); }
   if (n === 'conflict') buildConflict();
+  if (n === 'clips') buildClips();
   $('#sh-' + n).classList.add('on'); $('#scrim').classList.add('on');
   if (n === 'params') $('#scrim').style.background = '#0004';  // 调整时让画面仍清楚可见
   else $('#scrim').style.background = '';
@@ -608,56 +622,31 @@ function reflow() {
   clips().filter(c => c.lane > 0).forEach(c => { if (c.s + c.d > TOTAL) { c.d = Math.max(.5, Math.min(c.d, TOTAL)); c.s = Math.max(0, TOTAL - c.d); } });
   now = Math.min(now, TOTAL);
 }
-function render() { reflow(); renderTabs(); renderMain(); renderTimeline(); renderEditUI(); updateButtons(); updateTime(); }
-
-function renderTabs() {
-  const box = $('#cliptabs'); box.innerHTML = '';
-  tabs.forEach(t => {
-    const b = el('div', 'ctab' + (t === curTab ? ' on' : ''));
-    b.innerHTML = `<span>${t}</span>` + (tabs.length > 1 ? `<span class="x" data-x="1">✕</span>` : '');
-    b.onclick = e => {
-      if (e.target.dataset.x) { // 只关标签，不删剪辑；最后一个不能关
-        tabs = tabs.filter(x => x !== t); if (curTab === t) { curTab = tabs[0]; selId = null; } toast('已关闭标签（剪辑还在素材库里）'); render(); return;
-      }
-      curTab = t; selId = null; render();
-    };
-    b.ondblclick = () => { const n = prompt('重命名剪辑', t); if (n && !clipsByTab[n]) { clipsByTab[n] = clipsByTab[t]; delete clipsByTab[t]; tabs = tabs.map(x => x === t ? n : x); curTab = n; render(); } };
-    box.appendChild(b);
-  });
-  const add = el('div', 'ctab add', '＋');
-  add.onclick = () => { let n = 1; while (clipsByTab['剪辑 ' + n]) n++; const name = '剪辑 ' + n; clipsByTab[name] = []; tabs.push(name); curTab = name; selId = null; render(); };
-  box.appendChild(add);
-}
+function render() { reflow(); renderMain(); renderTimeline(); renderEditUI(); updateButtons(); updateTime(); }
 
 function transitionAt(c) { const bt = c.s + c.d; return clips().find(x => x.lane === 1 && Math.abs(x.s + x.d / 2 - bt) <= 1); }
 
 function renderMain() {
   const m = mainClips(), box = $('#mainStrip'); box.innerHTML = '';
   const add = el('button', 'madd', '＋'); add.title = '添加素材'; add.onclick = () => { assetTab = '视频'; openSheet('assets'); }; box.appendChild(add);
-  const used = new Set();
   m.forEach((c, i) => {
     // 各段一样宽，不按真实时长缩放；时长写在段上
     const b = el('div', 'mblock'); b.dataset.id = c.id; b.title = c.name; b.style.background = `linear-gradient(135deg, ${c.col || '#335'}, #0009)`;
     b.innerHTML = `<span class="no">${i + 1}</span><span class="du">${fmtD(c.d)}${c.muted ? ' 🔇' : ''}</span>`;
     bindMainBlock(b, c); box.appendChild(b);
     if (i < m.length - 1) {
-      const fx = transitionAt(c); if (fx) used.add(fx.id);
+      const fx = transitionAt(c);
       const mk = el('button', 'mark' + (fx ? ' has' : ''), fx ? '◇' : '＋'); mk.title = fx ? fx.name : '添加转场';
       mk.onclick = () => fx ? enterEdit(fx.id) : (cardTab = '转场', openSheet('cards'));
       box.appendChild(mk);
     }
   });
   const sum = Math.round(m.reduce((a, c) => a + c.d, 0) * 10) / 10;
-  $('#mainSum').textContent = m.length ? `${m.length} 段 · 共 ${fmtD(sum)}` : '还没有内容';
-  // 其余内容（文字、字幕、卡片、音乐）不在主轨上，列在下面，点一下进入编辑
-  const rest = clips().filter(c => c.lane > 0 && !used.has(c.id)).sort((a, b) => a.s - b.s);
-  $('#overlays').innerHTML = rest.length
-    ? `<div class="t">叠加内容 ${rest.length} 项 · 点一下进入编辑</div><div class="chips">` + rest.map(c => `<button class="ochip" data-id="${c.id}"><i style="background:${LCOL[c.kind]}"></i>${c.name}<small>${fmtD(c.s)}</small></button>`).join('') + '</div>'
-    : '<div class="t">还没有叠加内容。点下面的「文字」「卡片」「音频」加一个，加完会自动进入编辑。</div>';
-  $('#overlays').querySelectorAll('.ochip').forEach(b => b.onclick = () => enterEdit(b.dataset.id));
+  $('#mainSum').textContent = m.length ? `${m.length} 段 · 共 ${fmtD(sum)}` : '还没有内容，点 ＋ 添加素材';
+  box.querySelectorAll('.mblock').forEach(b => { const c = findClip(b.dataset.id); b.classList.toggle('cur', now >= c.s && now < c.s + c.d); });
 }
 
-// 点一段 = 进入编辑；长按再拖 = 换顺序
+// 点缩略卡不进入编辑，只把预览跳到这一段开头；长按再拖 = 换顺序
 function bindMainBlock(b, c) {
   b.addEventListener('pointerdown', e => {
     const x0 = e.clientX, y0 = e.clientY; let dragging = false, moved = false, dx = 0;
@@ -679,22 +668,37 @@ function bindMainBlock(b, c) {
         const before = clone(clipsByTab); order.splice(idx, 0, c);
         if (order.indexOf(c) !== mainClips().indexOf(c)) { order.forEach((x, i) => x.s = i); pushHist(before); toast('已调整顺序'); }
         render();
-      } else if (!moved && ev.type === 'pointerup') enterEdit(c.id);
+      } else if (!moved && ev.type === 'pointerup') { now = c.s; updateTime(); }
     };
     window.addEventListener('pointermove', mv); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
   });
 }
 
-/* ============ 编辑状态：展开完整时间轴 ============ */
+/* ============ 选剪辑（最底部分页「剪辑」） ============ */
+function clipTotal(name) { return clipsByTab[name].filter(c => c.lane === 0).reduce((a, c) => a + c.d, 0); }
+function buildClips() {
+  $('#clipList').innerHTML = '';
+  Object.keys(clipsByTab).forEach(n => {
+    const b = el('button', 'crow' + (n === curTab ? ' cur' : '')); b.dataset.n = n;
+    b.innerHTML = `<div class="i">🎞</div><div style="flex:1"><b>${n}</b><div class="hint" style="margin:0">${clipsByTab[n].filter(c => c.lane === 0).length} 段 · 共 ${fmtD(clipTotal(n))}</div></div>${n === curTab ? '<span class="chip accent">当前</span>' : ''}`;
+    b.onclick = () => { curTab = n; selId = null; now = 0; closeSheets(); render(); toast('缩略时间轴已换成“' + n + '”'); };
+    $('#clipList').appendChild(b);
+  });
+}
+function newClip() { let n = 1; while (clipsByTab['剪辑 ' + n]) n++; const name = '剪辑 ' + n; clipsByTab[name] = []; curTab = name; selId = null; now = 0; closeSheets(); render(); toast('已新建“' + name + '”'); }
+
+/* ============ 时间轴分页：展开完整时间轴 ============ */
 let editSnap = null, editHistLen = 0;
 function enterEdit(id, snap, hlen) {
   stop(); closeSheets(); selId = id;
   editSnap = snap || snapshot(); editHistLen = hlen == null ? hist.length : hlen;   // 点 ✕ 时回到这里
-  const c = findClip(id); if (c && (now < c.s || now > c.s + c.d)) now = c.s + Math.min(1, c.d / 2);
+  const c = id && findClip(id); if (c && (now < c.s || now > c.s + c.d)) now = c.s + Math.min(1, c.d / 2);
   $('#editor').classList.add('editing');
   render();
   requestAnimationFrame(() => { const sc = $('#tlScroll'); sc.scrollLeft = Math.max(0, now * PX - sc.clientWidth / 3); renderStage(); });
 }
+function pageTimeline() { if (!editing()) enterEdit(null); }
+function pageClip() { if (editing()) exitEdit(true); buildClips(); openSheet('clips'); }
 function leaveEdit() { $('#editor').classList.remove('editing'); selId = null; editSnap = null; render(); requestAnimationFrame(renderStage); }
 function exitEdit(ok) {
   closeSheets();
@@ -716,9 +720,16 @@ function toolsFor(c) {
 }
 function renderEditUI() {
   if (!editing()) return;
-  const c = selId && findClip(selId); if (!c) { leaveEdit(); return; }
+  const c = selId && findClip(selId); if (!c) selId = null;
+  const box = $('#etools');
+  if (!c) {   // 还没选中任何一项：标题写当前剪辑，工具栏给出添加入口
+    $('#editTitle').textContent = '时间轴 · ' + curTab;
+    box.innerHTML = '<div class="none">点一段选中<br>或添加 →</div>';
+    [['▦', '素材', () => { assetTab = '视频'; openSheet('assets'); }], ['✦', '卡片', () => openSheet('cards')], ['T', '文字', addText], ['♪', '音频', () => { assetTab = '音频'; openSheet('assets'); }]].forEach(t => { const b = el('button'); b.innerHTML = `<span class="g">${t[0]}</span>${t[1]}`; b.onclick = t[2]; box.appendChild(b); });
+    return;
+  }
   $('#editTitle').textContent = kindLabel(c) + ' · ' + c.name.replace(/^[✦T♪] ?/, '');
-  const box = $('#etools'); box.innerHTML = `<div class="kind"><span class="g">${c.title ? 'Aa' : c.kind === 'a' ? '♪' : c.kind === 'v' ? '▶' : '✦'}</span>${kindLabel(c)}</div>`;
+  box.innerHTML = `<div class="kind"><span class="g">${c.title ? 'Aa' : c.kind === 'a' ? '♪' : c.kind === 'v' ? '▶' : '✦'}</span>${kindLabel(c)}</div>`;
   toolsFor(c).forEach(t => { const b = el('button'); b.innerHTML = `<span class="g">${t[0]}</span>${t[1]}`; b.onclick = t[2]; box.appendChild(b); });
 }
 
@@ -786,6 +797,7 @@ function updateTime() {
   const ph = $('#playhead'); if (ph) ph.style.left = now * PX + 30 + 'px';
   // 播放时让播放头保持在可视范围
   if (playing && editing()) { const sc = $('#tlScroll'); const x = now * PX + 30; if (x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; if (x < sc.scrollLeft) sc.scrollLeft = 0; }
+  document.querySelectorAll('#mainStrip .mblock').forEach(b => { const c = findClip(b.dataset.id); if (c) b.classList.toggle('cur', now >= c.s && now < c.s + c.d); });
   renderStage();
 }
 function updateButtons() { $('#undoBtn').style.opacity = hist.length ? 1 : .35; $('#redoBtn').style.opacity = redoStack.length ? 1 : .35; }
@@ -840,7 +852,7 @@ function pushHist(before) { hist.push({ c: before }); redoStack = []; updateButt
 function snapshot() { return { c: clone(clipsByTab) }; }
 function undo() { if (!hist.length) return toast('没有可撤销的操作'); redoStack.push(snapshot()); clipsByTab = hist.pop().c; fixTab(true); render(); toast('已撤销一步'); }
 function redo() { if (!redoStack.length) return toast('没有可重做的操作'); hist.push(snapshot()); clipsByTab = redoStack.pop().c; fixTab(true); render(); }
-function fixTab(keepSel) { if (!clipsByTab[curTab]) curTab = tabs[0]; if (!keepSel || !findClip(selId)) selId = null; }
+function fixTab(keepSel) { if (!clipsByTab[curTab]) curTab = Object.keys(clipsByTab)[0]; if (!keepSel || !findClip(selId)) selId = null; }
 function splitClip() {
   const c = findClip(selId); if (!c) return;
   if (now <= c.s + .2 || now >= c.s + c.d - .2) return toast('先把播放头移到片段中间');
@@ -877,7 +889,7 @@ function addClip(name, kind, lane, d, extra) {
   c.s = lane === 0 ? TOTAL + 1 : Math.max(0, Math.min(now, TOTAL - d));
   clips().push(c); reflow(); pushHist(before); closeSheets();
   if (lane === 0) { selId = null; render(); requestAnimationFrame(() => { const b = $('#mainStrip'); b.scrollLeft = b.scrollWidth; }); toast(`已加到主要内容末尾（第 ${mainClips().length} 段）`); }
-  else { toast(`已加到 ${fmt(c.s)}，进入编辑`); enterEdit(c.id, { c: before }, hl); }
+  else { toast(`已加到 ${fmt(c.s)}`); if (editing()) { selId = c.id; render(); } else enterEdit(c.id, { c: before }, hl); }
 }
 function addText() { addClip('T 新文字', 'cap', 2, 4, { title: true, P: { text: '新文字', size: 26, opacity: 100, y: 55, color: '#ffffff' } }); }
 
@@ -898,7 +910,7 @@ function buildAssets() {
     ASSETS[assetTab].map(a => `<button class="tile" data-n="${a[0]}"><div class="pic" style="background:linear-gradient(135deg,${a[2]},#0008)">${isClip ? '🎞' : assetTab === '图片' ? '🖼' : '▶'}${a[1] ? `<span class="dur">${a[1]}</span>` : ''}${!isClip && a[0] === '日落' ? '<span class="st">已转写</span>' : ''}</div><div class="cap">${a[0]}<small>${isClip ? '剪辑' : assetTab}</small></div></button>`).join('') + '</div>';
   body.querySelectorAll('.tile').forEach(t => t.onclick = () => {
     const n = t.dataset.n;
-    if (isClip) { if (!tabs.includes(n)) tabs.push(n); curTab = n; selId = null; render(); closeSheets(); toast('已在时间轴打开“' + n + '”'); }
+    if (isClip) { curTab = n; selId = null; now = 0; render(); closeSheets(); toast('缩略时间轴已换成“' + n + '”'); }
     else { const a = ASSETS[assetTab].find(x => x[0] === n); const m = /(\d+):(\d+)/.exec(a[1] || ''); addClip(n + (assetTab === '图片' ? '.jpg' : '.mp4'), 'v', 0, m ? +m[1] * 60 + +m[2] : 3, { col: a[2] }); }
   });
 }
