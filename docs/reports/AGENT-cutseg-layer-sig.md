@@ -5,7 +5,7 @@
 
 ## 状态
 
-（见文末「验证」；写完后更新。）
+做完，等主会话审查。基线全绿：类型检查零错误，全量测试 7219 条零失败；端到端探针（本机隔离托管组合 + 在线构建）全过；导出确定性、快照重放、与 main 的导出像素比对、上一轮剪辑段的四个探针都过。没有推送、没有合并。没有改语义文档（属三级的补漏：把桌面版已有的判据接到在线页面，用户看到的承诺不变）。
 
 ## 做法（一句话版）
 
@@ -20,7 +20,7 @@
    - `server/test/cutseg-layer-sig.test.mjs`（服务端，LS-1～LS-4）：真的卡片计划 + `planStreams` + `layerMapOf`。LS-1 剪辑段那一行带 `streamKind: 'cut'`，签名与桌面发层时的相同；LS-2 两层深的被引用剪辑改了，旧行签名对不上新项目，渲染节点换键重写后新行对得上；LS-3 **没有剪辑段的项目层表一个字节不变**：固定输入（`server/test/cutseg-layer-sig-fixture.mjs`：单卡流、组流、依赖下层的流、`solo: 'source'` 的流、两层快照层）的 `JSON.stringify(layerMapOf(...))` 的 SHA-256 写死为 `5840986d…a9c21c`（3733 字节），这个值是用主工作区 main `3267ce84` 未改动的 `artifact-transfer.mjs` 对同一份输入算出来的，改动后算出来相同；LS-4 形状不对的（舞台坐标、多成员）即使标了 `solo: 'cut'` 也不带。
    - `src/editor/snapshotFeedCutOnline.test.mjs`（页面，CO-1～CO-3）：真的在线来源（假内容库 + 假素材服务）接真的父页判重；层表那一行用服务端真的 `layerStreamsOf` 写。CO-1 就绪消息带 `streamKind: 'cut'` 与签名，签名对得上、流铺满 → 判重、抑制、发流平面；CO-2 改「里」那张卡（两层深）：store 里是新项目而在线来源还没收到时，父页当场不贴旧流（`cutStreamHeavy` 假、不抑制、不发流平面、诊断 `staleCut: ["S"]`），在线来源收到新项目后撤层，层表换成新行（新键、新签名）后贴新流；CO-3 旧节点写的行（没有 `streamKind` 与签名）照旧贴。
    - 反证：把 `src/render/snapshotSource.ts` 换回 main 的版本跑 CO 测试，CO-1、CO-2 失败（CO-2 恰在「旧流签名对不上:不贴」那一句），CO-3 通过——测试确实钉住了本次补的口子。
-5. **端到端探针** `scripts/probes/cut-online-e2e-probe.mjs`（骨架照 `below-online-e2e-probe.mjs`：本机隔离的托管组合 + 在线构建 + 真的桌面预渲染进程当切分方）。结果见「验证」。
+5. **端到端探针** `scripts/probes/cut-online-e2e-probe.mjs`（骨架照 `below-online-e2e-probe.mjs`：本机隔离的托管组合 + 在线构建 + 真的桌面预渲染进程当切分方）。场景：剪辑「里」上一张 `punch-pill`（文字 v1），剪辑「中」引用「里」，激活剪辑上剪辑段 S（0.2～2.2 秒）引用「中」——两层嵌套；S 测量落定后钉重。断言 A 层表、B 就绪、C 播放、D 改被引用剪辑、E 新流、F 页面错误，见文件头。
 
 ## 文件清单（相对 `3267ce84`）
 
@@ -29,8 +29,47 @@
 
 ## 验证
 
-（待补）
+全部在 `a440bba4`（代码与测试的最后一次改动）之后跑；探针脚本另在 `9ccf85c3` 定稿。端口只用 5410～5418。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，输出 0 行 |
+| 全量测试 | `node scripts/test-suite.mjs`（即 `npm test`；命令里设 `PROMPTCUT_ACCOUNT_PROVIDER_ROOT`、`PROMPTCUT_PASSWORD_ORDER_MODULE`） | 退出码 0；tests 7219、pass 7205、fail 0、cancelled 0、skipped 14 |
+| 新增单测（服务端） | `server/test/cutseg-layer-sig.test.mjs` | LS-1～LS-4 四条全过（也在全量里） |
+| 新增单测（页面） | `src/editor/snapshotFeedCutOnline.test.mjs` | CO-1～CO-3 三条全过（也在全量里）；把 `snapshotSource.ts` 换回 main 的版本时 CO-1、CO-2 失败（反证） |
+| 端到端（新） | `node scripts/probes/cut-online-e2e-probe.mjs --dist <在线构建> --base-port 5410 --out docs/reports/assets/cutseg-layer-sig` | 退出码 0，`fails: []`，结果 `docs/reports/assets/cutseg-layer-sig/e2e-result.json`，见下 |
+| 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5410/?export=1"` | 退出码 0；Identical 1800、Different 0 |
+| 快照重放一致 | `PC_FRAME_TEST_URL=http://127.0.0.1:5410 node scripts/verify-unified-frames.mjs` | 退出码 0；PASS |
+| 与 main 的导出像素比对 | `bash .worktrees/_export-baseline/check.sh <本树> cutseg-layer-sig 5413` | 退出码 0；240 帧，对 89c15177 第二种结果（A）240/240 逐字节相同，PASS（不含剪辑段的项目像素不变） |
+| 上一轮剪辑段预渲染（管线级） | `node scripts/probes/cut-segment-prerender-probe.mjs --port 5416` | 退出码 0，`fails: []`，PASS（逐帧最像自己那一帧，误差 0.24～0.26/255；改两层深的剪辑成本键 `1c7e552f070c88`→`f9f1523b1faaa`） |
+| 上一轮剪辑段预渲染（编辑台） | `node scripts/probes/cut-segment-prerender-editor-probe.mjs --port 5416` | 退出码 0，`fails: []`，PASS（改动后当场 `heavyRightAfter: false`，重产 `solo: cut` 满密度 8 段） |
+| 上一轮剪辑段界面探针 | `node scripts/probes/cut-nesting-ui-probe.mjs --origin http://127.0.0.1:5410` | 退出码 0 |
+| 上一轮剪辑段面板探针 | `node scripts/probes/cut-segment-panel-probe.mjs --origin http://127.0.0.1:5410` | 退出码 0 |
+
+没跑：上一轮的剪辑段声音、有声卡导出、兼容旁路三个探针——本次没碰声音与导出取帧（`snapshotSource.ts` 是在线预览的来源，导出页不用它），导出确定性与像素比对已覆盖画面。
+
+**端到端探针的结果**（`e2e-result.json`）：
+- A 层表：S 那一行 `kind: card`、`plane: local`、**`streamKind: cut`**、`inputSig: s1-ac218662…`、`originFrame: 6`、分段 0～3；层表里没有别的行。切分方 8 秒产完满密度。
+- B 就绪：在线来源选中切分方那一份，4 段全就绪；父页就绪索引里 S 的流层 `streamKind: "cut"`；`staleCut: []`。
+- C 播放：34 个样本里 33 个是这条流在画（`pushed: true`、`errors: 0`，画到第 56 帧跟着播放头），S 的包裹层一直被抑制。
+- D 改「里」那张卡的文字（两层深）：改之前父页在发旧流平面；改完 **1 ms** 父页不再发、S 不再判重（`heavyAfter: []`），诊断里认出过期（`staleSeen: true`）；在线来源撤掉旧流；舞台上没有旧键的轨道、S 不抑制、没有占位符（活渲）；随后播放，旧流没有再贴上来。
+- E 新流：切分方 8 秒重产；层表换成新行（内容键 `5ae22777…`→`435552bf…`、签名 `s1-ac21…`→`s1-e629…`，仍带 `streamKind: cut`）；甲认出新流、贴它（31/33 个样本在画新键）。
+- F 页面零报错。全程 42 秒。
+
+看过的图（`docs/reports/assets/cutseg-layer-sig/`）：`play-v1.png`（贴旧流播放中，药丸写「剪辑段签名 v1」）、`after-edit-live.png`（改完、活渲，写「v2」——没有贴旧流）、`play-v2.png`（贴新流播放中，写「v2」）。
+
+## 没做成的与原因
+
+无。另记一处观察（不是本任务的范围，没改）：在线来源只取播放头附近的流分段（往回 1 段、往前 2 秒），而 `cutStreamHeavy` 要求剪辑段的流**整段**每个分段都在就绪区间里才贴。在线页面的就绪区间是「字节已在本页」的分段，所以长于约 3 秒的剪辑段，在线页面要等播放头走过整段（字节都取到本页）之后才会贴流；在那之前照旧活渲（不比现在差）。桌面版的就绪区间是「已产出」的分段，没有这个问题。端到端探针特意用 2 秒的剪辑段避开它。
+
+## 对任务书或语义的更正建议
+
+- 上面那处观察：若要在线页面对长剪辑段也尽早贴流，可让在线来源对 `streamKind: 'cut'` 的行像 `coverageLayer` 那样取整段清单（判「铺满」看清单、取字节仍按窗口），或者把 `cutStreamHeavy` 在在线来源下改看清单齐不齐。属于取数策略的取舍（多取清单、不多取字节），由用户定。
+- `mechanism/rendering.md`「剪辑段」的「贴流」小条可补半句：在线页面经层表那一行的 `streamKind: 'cut'` 与签名，用同一个判据。没改（任务书没让动语义，且这是对既有判据的接线）。
 
 ## 部署要换什么
 
-（待补）
+- **服务端**：换 `server/artifact-transfer.mjs`。它被渲染服务 / 预渲染进程（桌面版的预渲染进程、托管方的渲染服务及其工作进程、渲染主机）写层表时用（`FramePipeline.publishLayerMap`、`vite-plugin-frames.ts`）。重启托管方的**渲染服务**（连同工作进程）与渲染主机。文档服务、素材服务、Agent 服务不用换（层表只是内容库里的一条，它们不解析 `streams` 的字段）。
+- **改了 `src/`**（`src/render/snapshotSource.ts`、`src/editor/snapshotFeed.ts`）：整份 `src/` 同步进渲染树；**先换在线前端**（重建在线构建、换静态页——在线来源与父页判重都在前端构建里），**再重启渲染服务**。顺序的理由：新渲染服务写的行多一个 `streamKind`，旧前端不认、照旧贴（与现在相同）；新前端读旧层表（没有 `streamKind`）也照旧贴；两种顺序都不会坏，但先换前端能让渲染服务一重启写出的新行马上生效。
+- 没有剪辑段的项目层表一个字节不变，旧缓存、旧层表照用；有剪辑段的项目，渲染服务重启后下一次写层表时那一行多出 `streamKind: 'cut'`，不用清缓存。
+- 桌面版：随下一个补丁一起出（桌面版自己的贴流判据本来就带签名，这次只是让它写给在线页面的层表也带上）。
