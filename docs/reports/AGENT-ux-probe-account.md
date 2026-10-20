@@ -98,3 +98,10 @@
 - 不过的 7 项全是上面三处产品缺陷:O A7(及它的两条等待)、S B1、E1、E2(及「再发被拒绝」)、E3。E5 在那一轮用的旧断言(要写满 30 次,一轮最多 24 次模型往返写不满)已改;单跑 `--steps errors` 时 E5 的现象:踢出后页面写「你已被创建者踢出该项目…」,那一轮 `done`、写入 21 次、项目完好。
 - `cloud-agent-ui-probe.mjs --base-port 29003 --dist dist-online`:`{"summary":{"total":28,"failed":0}}`,退出码 0。
 - `npx tsc -b --force`:退出码 0。
+- `npm test`(设两个 VisuHive 变量):退出码 0,「npm test 最终结果：零失败」。ℹ tests 7238 ℹ pass 7223 ℹ fail 0 ℹ cancelled 0 ℹ skipped 15 
+
+## 暂停点(主会话因 5 小时额度要求暂停)
+
+- 做到:探针迁移完成并提交;整支缺省跑过一遍(结果见上);cloud-agent-ui-probe 回归 28/0;tsc 0 错;npm test 零失败。
+- 没做完:E5 最新断言(踢出后那一轮 done 且有新写入)只在单跑 errors 时看过现象,还没在改断言后复跑;下一步:`--steps errors` 复跑一次确认 E5 过,然后把报告里的结论定稿。
+- 整支「全部通过」挡在三处产品缺陷上(A7、B1、E1～E3),要主会话或产品分支修;修好后再整支跑一遍。
