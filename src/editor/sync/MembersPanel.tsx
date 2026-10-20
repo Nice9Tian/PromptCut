@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, setHostedOption, setHostedService, useSync, type MemberRow } from "./syncManager";
 import { ListEditor } from "./SharedDialogs";
 import { rememberPasswords } from "./collab";
-import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, hostedFlowNeedsPassword, hostedOptionText, isCloudAgentOnly, isCloudAgentRunning, memberCountLabel, serviceRowLabel, splitMembers, visibleMembers, type HostedOptionName, type HostedServiceName } from "./hostedServices";
+import { HOSTED_SERVICE_TEXT, cloudAgentConns, cloudAgentLabel, hostedFailText, hostedFlowNeedsPassword, hostedOptionText, isCloudAgentOnly, isCloudAgentRunning, memberCountLabel, serviceRowLabel, splitMembers, visibleMembers, type HostedOptionName, type HostedServiceName } from "./hostedServices";
 import { useCloudRunning } from "./presence";
 import "./sync.css";
 import { AccountMembersPanel } from '../../account/AccountMembersPanel';
@@ -493,7 +493,7 @@ function HostedServiceDialog({ service, enabled, v, onClose }: { service: Hosted
     setBusy(true);
     const r = await setHostedService(service, enabled, v.key);
     setBusy(false);
-    if (!r.ok) return setErr(r.error === "bad-message" ? "这台云节点现在没有这个服务。" : failText(r.error));
+    if (!r.ok) return setErr(hostedFailText(r, "这台云节点现在没有这个服务。", failText));
     pushToast(enabled ? `已打开${label}。` : `已关闭${label}。`, "info", 4000);
     onClose();
   };
@@ -530,7 +530,7 @@ function HostedOptionDialog({ service, option, enabled, v, onClose }: { service:
     setBusy(true);
     const r = await setHostedOption(service, option, enabled, v.key);
     setBusy(false);
-    if (!r.ok) return setErr(r.error === "bad-message" ? "这台云节点现在没有这个选项。" : failText(r.error));
+    if (!r.ok) return setErr(hostedFailText(r, "这台云节点现在没有这个选项。", failText));
     pushToast(enabled ? `已打开${label}。` : `已关闭${label}。`, "info", 4000);
     onClose();
   };

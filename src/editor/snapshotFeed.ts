@@ -193,7 +193,7 @@ export function currentReadyIndex(): ReadyIndex {
 export function snapshotFeedDebug(head: Playhead) {
   const planned = planFeed(head);
   return {
-    ready: [...readyIndex].map(([clipId, kinds]) => ({ clipId, kinds: [...kinds].map(([kind, layer]) => ({ kind, key: layer.key.slice(0, 12), ranges: layer.ranges.length })) })),
+    ready: [...readyIndex].map(([clipId, kinds]) => ({ clipId, kinds: [...kinds].map(([kind, layer]) => ({ kind, key: layer.key.slice(0, 12), ranges: layer.ranges.length, ...(layer.streamKind ? { streamKind: layer.streamKind } : {}) })) })),
     heavy: planned.heavy,
     picks: [],
     // 这一刻发给舞台的流平面盖着哪几张卡、暂停 / 拖动时抑制哪几张(贴流)
@@ -202,6 +202,11 @@ export function snapshotFeedDebug(head: Playhead) {
     staleBelow: [...readyIndex].filter(([clipId, kinds]) => {
       const layer = kinds.get("stream");
       return layer?.streamKind === "below" && belowStreamStale(head.project, clipId, layer.inputSig);
+    }).map(([clipId]) => clipId),
+    // 就绪索引里有、但输入签名对不上当前项目的剪辑段级的流(被引用剪辑改过了,旧流不贴、照旧活渲)
+    staleCut: [...readyIndex].filter(([clipId, kinds]) => {
+      const layer = kinds.get("stream");
+      return layer?.streamKind === "cut" && !!layer.inputSig && streamSigStale(layer.inputSig, cutSigOf(head.project, clipId));
     }).map(([clipId]) => clipId),
     scrub: planned.scrub,
     mounted: [],

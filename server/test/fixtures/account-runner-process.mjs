@@ -93,9 +93,11 @@ export function toneWav({ hz = 440, seconds = 0.25, rate = 8000 } = {}) {
  * @param {Record<string, string>} [o.tools] 任务进程设置文件里的 `tools` 一节（工具要的节点依赖：ffmpeg、浏览器等的绝对路径）
  * @param {object} [o.runnerOptions] 交给真实运行器的其它选项（例如出网闸的测试例外）；只给探针与测试
  * @param {object} [o.toolLimits] 工具提供者的时限与上限（探针把它们调短）
+ * @param {object | Function} [o.render] 只在 productionMaster 时用：交给主服务装配的预渲染重试设置（`{ publisher, limits }`，测试给替身发布通道）；
+ *   给函数时在装配主服务那一刻调 `render({ docUrl, servicesFile, masterKey, dir })`（文档服务本机地址、服务登记表、主身份的服务钥匙），用它的返回值
  */
 export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 100, ports: P = RUNNER_PORTS, productionMaster = false, publicHandler = null,
-  tools = null, runnerOptions = null, toolLimits = null } = {}) {
+  tools = null, runnerOptions = null, toolLimits = null, render = null } = {}) {
   const log = [], say = (event, fields) => log.push({ at: Date.now(), event, ...fields });
   const docKey = pair(), masterKey = generateServiceKeyPair(), m = scopeModel(slotId);
   const generations = new Map(), stops = [];
@@ -152,7 +154,7 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
         fs.mkdirSync(sharedDataDir, { recursive: true }); fs.mkdirSync(masterDataDir, { recursive: true });
         masterAssembly = await createAccountMasterAssembly({ dataDir: masterDataDir, sharedDataDir, runClient: agentRunClient,
           conversationClient: agentClient, readControl: agentReadControl, tls: pki.master, internalPort: P.masterEvents,
-          controllerFingerprint256: pki.rootctl.fingerprint256, log: (event, fields) => say(`master.${event}`, { code: fields?.code ?? null,
+          controllerFingerprint256: pki.rootctl.fingerprint256, ...(render ? { render: typeof render === 'function' ? await render({ docUrl: `ws://127.0.0.1:${ports.doc}`, servicesFile, masterKey, dir: fixtureDir }) : render } : {}), log: (event, fields) => say(`master.${event}`, { code: fields?.code ?? null,
             ...(String(event).startsWith('agent.page.') ? { why: fields?.why ?? null, tool: fields?.tool ?? null } : {}) }) });
         eventStore = masterAssembly.eventStore;
         await until(() => readControl.describe().connected, { timeoutMs: 10_000, what: '主身份的读取控制连接' });

@@ -15,7 +15,9 @@
  * 发布通道(`publisher`)是接口位:真的那个要第三段的队列改动(服务身份能发清单计划)与乙块的服务身份,合流后接;
  * 这之前由测试替身给。不给 `publisher` 时本模块什么都不做、什么事件都不发。形状:
  *
- *   publisher.availability(projectId) → { available: boolean, enabled: boolean }      渲染节点对这个项目开没开
+ *   publisher.availability(projectId) → { available: boolean, enabled: boolean, streams?: boolean }  渲染节点对这个项目开没开;
+ *       `streams === false`(只有知道「生成轨道流」开关的发布通道才给,账号模式)= 托管渲染节点不为这个项目产流
+ *       (`docs/semantics/product/rendering.md`「谁产流与托管方开关」):不发,记 `render { state: 'off' }`
  *   publisher.codeVersion?.() → string | null                                         这份检出的代码版本
  *   publisher.open(projectId, { onProgress({ id, done?, total? }), onDone({ id }), onFail({ id, reason?, clips? }), onClose() })
  *       → { publish(task): Promise<void> | void, withdraw(id): Promise<void> | void, close(): void }
@@ -50,6 +52,8 @@ export const RENDER_REQUEST_DEFAULTS = Object.freeze({
 export const MEDIA_CARD_IDS = Object.freeze(new Set(['video', 'image', 'audio']));
 
 export const STALL_REASON = '渲染节点 10 分钟没有进展';
+/** 发布通道开不了、而且不是暂时性的(文档服务明确不给发布票据):这些原因直接记失败,不悄悄重试 */
+export const PERMANENT_OPEN_REASONS = Object.freeze(new Set(['no-project', 'forbidden', 'service-disabled', 'service-revoked', 'relocated', 'not-listed', 'banned']));
 /** 带用户卡的项目(隔离工作进程渲,要排队)放弃时的原因 */
 export const USER_CARD_STALL_REASON = '渲染节点 30 分钟没有进展(带用户卡的项目要排队渲)';
 
@@ -243,6 +247,16 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
       if (closed || !job.dirty.size) return;
       let avail;
       try { avail = await publisher.availability(job.projectId); } catch { avail = null; }
+      if (avail?.streams === false) {
+        // 「生成轨道流」关着:托管渲染节点完全不为这个项目产流,发了也没人渲。如实记一条,不报「完成」
+        const clips = [...job.dirty];
+        job.dirty.clear();
+        report(job, { state: 'off', clips });
+        say('agent.render.streams-off', { projectId: job.projectId, clips: clips.length });
+        persist(job);
+        dropJobIfDone(job);
+        return;
+      }
       if (!avail?.available || !avail?.enabled) {
         const clips = [...job.dirty];
         job.dirty.clear();
@@ -261,6 +275,16 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
       try {
         ch = await channelFor(job.projectId);
       } catch (err) {
+        if (PERMANENT_OPEN_REASONS.has(err?.reason)) {
+          // 文档服务明确不给这个项目发预渲染计划:记失败并说原因,不无限重试
+          for (const p of old) forgetPlan(job, p.id);
+          report(job, { state: 'failed', clips, reason: `云端渲染服务不接这个项目的预渲染(${err.reason})` });
+          say('agent.render.open-refused', { projectId: job.projectId, reason: err.reason });
+          persist(job);
+          closeChannelIfIdle(job.projectId);
+          dropJobIfDone(job);
+          return;
+        }
         // 通道开不了:片段放回去,过一会儿再试(不记失败:这是暂时性的)
         for (const c of clips) job.dirty.add(c);
         say('agent.render.open-failed', { projectId: job.projectId, message: String(err?.message ?? err).slice(0, 120) });
@@ -321,9 +345,10 @@ export function createRenderRequests({ publisher = null, store, now = () => Date
      * 一次写入落地了。`project` 是写入之后的项目内容(挑要渲的片段用),`rev` 是它的版本。
      * @param {{ projectId: string, ownerKey: string, id: string }} ref 哪个对话
      */
-    noteWrite(ref, { clipIds = [], rev, project, runId = null, userCards = false } = {}) {
+    noteWrite(ref, { clipIds = [], clips: given = null, rev, project, runId = null, userCards = false } = {}) {
       if (!publisher || closed) return;
-      const clips = renderableClips(project, clipIds);
+      // `clips`:写入方已经按项目内容挑好的片段(账号模式:任务进程挑好、经主服务转来);否则按 `project` 挑
+      const clips = Array.isArray(given) ? [...new Set(given.filter((c) => typeof c === 'string' && c))] : renderableClips(project, clipIds);
       const job = jobOf(ref, clips.length > 0);
       if (!job) return;
       // 项目带着用户卡:由隔离工作进程渲,判「没有进度」的时限放长(见 userCardStallMs)

@@ -301,7 +301,9 @@ export function createQueuePublisher({
   return {
     availability(projectId) {
       const s = renderState(projectId) ?? {};
-      return { available: s.available === true && client.connected === true, enabled: s.enabled === true };
+      // `streams`:只有知道「生成轨道流」开关的 renderState(账号模式)才给;旧路不给,行为不变
+      return { available: s.available === true && client.connected === true, enabled: s.enabled === true,
+        ...(typeof s.streams === 'boolean' ? { streams: s.streams } : {}) };
     },
     /** 这份检出的代码版本(与渲染服务、在线页面同一种算法;三者出自同一个提交时相同) */
     codeVersion() {

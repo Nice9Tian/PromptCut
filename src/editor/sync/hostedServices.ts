@@ -17,7 +17,7 @@
  *
  * 不引 React、不引同步管理的运行时（只用类型），单测直接 import。
  */
-import type { MemberRow } from "./syncManager";
+import type { AdminError, MemberRow } from "./syncManager";
 
 export type HostedServiceName = "render" | "agent";
 
@@ -109,6 +109,26 @@ export function parseHosted(raw: unknown): HostedView | null {
     if (name === "render" && typeof streamsAllowed === "boolean") out[name]!.streamsAllowed = streamsAllowed;
   }
   return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 账号项目改托管方服务开关(或「生成轨道流」)失败 → 错误种类 + 能直接给人看的原因。
+ * 账号客户端抛的 `AccountFailure` 带 `status`、`code` 与按 `code` 翻好的一句话(`accountErrorText`,例如不在权限分组时
+ * 「你的账号没有开启这一项的权限，请联系托管方。」),照它说;不再套口令项目的「密码错误。」(2026-10-20 在线实测:403 被说成别的或什么都没说)
+ */
+export function accountHostedFailure(error: unknown): { ok: false; error: AdminError; message: string } {
+  const e = (error && typeof error === "object" ? error : {}) as { status?: unknown; code?: unknown; message?: unknown };
+  const status = typeof e.status === "number" ? e.status : NaN;
+  const kind: AdminError = status === 403 ? "forbidden" : status === 400 ? "bad-message" : status === 0 || e.code === "network" ? "offline" : "other";
+  const known = typeof e.code === "string" && typeof e.message === "string" && e.message !== "" && e.message !== e.code;
+  const message = known ? (e.message as string) : kind === "offline" ? "没连上云端服务，稍后再试。" : "没做成，稍后再试。";
+  return { ok: false, error: kind, message };
+}
+
+/** 改托管方服务开关失败时对话框里的一句话:带了原因(账号项目)就照它说,否则照旧按错误种类说(口令项目,`fallback` 是那边的文案) */
+export function hostedFailText(r: { error: string; message?: string }, unavailable: string, fallback: (error: string) => string): string {
+  if (r.message) return r.message;
+  return r.error === "bad-message" ? unavailable : fallback(r.error);
 }
 
 /** `hosted-service-changed` 通知落到状态上：服务不认识或这个项目没有这项服务就原样返回 */

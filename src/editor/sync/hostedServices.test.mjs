@@ -475,3 +475,34 @@ test("HS14 本页看到「生成轨道流」在起作用(在线页面据此在�
   // 账号项目的会话形状同样读得出
   assert.equal(H.hostedStreamsOn("hosted", { agent: { available: true, enabled: false, url: null }, render: { available: true, enabled: true, streams: true } }), true);
 });
+
+test("STF2 账号项目:会话里 streamsAllowed 为 false(创建者不在权限分组)时「生成轨道流」置灰并提示;为 true 时能点", () => withRows(({ render }) => {
+  const denied = { agent: { available: true, enabled: true, url: null }, render: { available: true, enabled: true, streams: false, streamsAllowed: false } };
+  assert.equal(H.hostedOptionRowsOf("hosted", denied)[0].notAllowed, true);
+  const html = render({ where: "hosted", hosted: denied, creator: true, onToggleOption: () => {} });
+  assert.match(streamsBoxOf(html), /disabled=""/, "创建者不在分组:点不了");
+  assert.match(html, /你的账号没有开启这一项的权限，请联系托管方。/);
+  assert.match(html, /data-pc="collab-hosted-render-streams" data-state="disabled"/);
+  const allowed = { ...denied, render: { ...denied.render, streamsAllowed: true } };
+  const ok = render({ where: "hosted", hosted: allowed, creator: true, onToggleOption: () => {} });
+  assert.doesNotMatch(streamsBoxOf(ok), /disabled/, "在分组内:能打开");
+  assert.doesNotMatch(ok, /没有开启这一项的权限/);
+  const on = render({ where: "hosted", hosted: { ...allowed, render: { ...allowed.render, streams: true } }, creator: true, onToggleOption: () => {} });
+  assert.match(streamsBoxOf(on), /checked=""/); assert.doesNotMatch(streamsBoxOf(on), /disabled/, "打开后也能再关掉");
+}));
+
+test("STF3 改开关失败一定有一句看得懂的原因:账号项目照服务端的原因说,不再说「密码错误。」;口令项目照旧", () => {
+  const fallback = (e) => (e === "forbidden" ? "密码错误。" : "没做成，稍后再试。");
+  const denied = Object.assign(new Error("你的账号没有开启这一项的权限，请联系托管方。"), { status: 403, code: "permission-denied" });
+  const r = H.accountHostedFailure(denied);
+  assert.deepEqual(r, { ok: false, error: "forbidden", message: "你的账号没有开启这一项的权限，请联系托管方。" });
+  assert.equal(H.hostedFailText(r, "没有这个选项", fallback), "你的账号没有开启这一项的权限，请联系托管方。");
+  // 连不上、服务端出错、不认识的异常:也都有一句话,不会是空的
+  assert.equal(H.accountHostedFailure(Object.assign(new Error("连接云端失败，请检查网络后重试。"), { status: 0, code: "network" })).message, "连接云端失败，请检查网络后重试。");
+  assert.equal(H.accountHostedFailure(Object.assign(new Error("云端服务暂时不可用，请稍后重试。"), { status: 503, code: "account-unavailable" })).error, "other");
+  assert.equal(H.accountHostedFailure(new TypeError("boom")).message, "没做成，稍后再试。");
+  assert.equal(H.accountHostedFailure(undefined).message, "没做成，稍后再试。");
+  // 口令项目(没有 message):照旧
+  assert.equal(H.hostedFailText({ error: "forbidden" }, "没有这个选项", fallback), "密码错误。");
+  assert.equal(H.hostedFailText({ error: "bad-message" }, "没有这个选项", fallback), "没有这个选项");
+});
