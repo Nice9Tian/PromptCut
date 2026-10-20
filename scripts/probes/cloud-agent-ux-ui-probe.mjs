@@ -1048,11 +1048,13 @@ async function errorsStep() {
     await sendText(carol.page, writeScript(30, 500, 'rm'));
     await until('E5:这一轮开始并有写入', async () => toolParts(await msgs(carol.page)).filter((t) => t.ok).length >= 1 && (await runningNow(carol.page)), 40_000, 80);
     const conv = await conversationOf(carol.page);
+    const landedAtKick = () => okOf(conv);
     const visibility = S.account ? (S.diskConversation(PID, conv)?.row?.visibility ?? null) : null;
     // 账号项目:创建者把她踢出(移出并禁入,成员列表里「踢出」同一个管理操作);旧组合是改名单
     const reply = S.account
       ? await ACTOR.admin({ op: 'kick', accountId: CRED.carol.accountId, requestId: `uxui-kick-${RUN}` }).then((r) => ({ type: r.status === 200 && r.body?.ok ? 'shared.admin.ok' : `http-${r.status}`, body: r.body }))
       : await withCreatorConn((conn) => adminOp(conn, PROJ, 'set-list', { list: [{ username: 'bob', keep: true }] }));
+    const atKick = landedAtKick();
     // 她的页面当场被阻断并说明原因
     const blocked = await until('E5:她的页面写明被踢出', () => carol.page.evaluate(() => document.body.innerText.match(/[^\n]*(踢出|移出|不在名单)[^\n]*/)?.[0] ?? null), 20_000, 100);
     const sendBox = await carol.page.$('[data-pc="cloud-ai-panel"] [data-pc="ai-send"]:not([disabled])').catch(() => null);
@@ -1062,8 +1064,8 @@ async function errorsStep() {
     const rec = recordOf(conv);
     const landed = okOf(conv);
     const s = await sane(before, landed);
-    check('E5 发起成员中途被踢出:她的页面当场被阻断并写明被踢出;她在共有对话里已经被 Agent 读到的那一轮照常跑完、改动保留(现行语义的已读消息例外);项目停在完好的版本上', reply.type === 'shared.admin.ok' && /踢出|移出/.test(String(blocked ?? '')) && (visibility === null || visibility === 'shared') && !!disk && landed === 30 && s.ok, {
-      admin: reply.type, pageSays: blocked, conversationVisibility: visibility, sendStillEnabled: !!sendBox, recorded: rec, writesLanded: landed, ...s,
+    check('E5 发起成员中途被踢出:她的页面当场被阻断并写明被踢出;她在共有对话里已经被 Agent 读到的那一轮照常跑完、改动保留(现行语义的已读消息例外);项目停在完好的版本上', reply.type === 'shared.admin.ok' && /踢出|移出/.test(String(blocked ?? '')) && (visibility === null || visibility === 'shared') && !!disk && rec?.outcome?.status === 'done' && landed > atKick && s.ok, {
+      admin: reply.type, pageSays: blocked, conversationVisibility: visibility, sendStillEnabled: !!sendBox, recorded: rec, writesLanded: { atKick, atEnd: landed }, ...s,
     });
     await closeBrowser(carol.browser);
   }
