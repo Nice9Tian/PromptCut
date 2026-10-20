@@ -10,7 +10,7 @@
  *   P1 单击时间轴上的剪辑段:编辑分区显示剪辑段面板(引用的剪辑名、偏移、起止、框、不透明度、淡入淡出、音量、静音、「打开被引用剪辑」)
  *   P2 改起点偏移:store 里 cutOffset 跟着变、出点截到被引用剪辑剩下的长度;撤销一次回到原值
  *   P3 换引用:下拉里自己(会循环引用)灰掉;换成剪辑3 后 cutId 变;撤销回来
- *   P4 框:改 X、Y、缩放 → frame;「铺满」清掉 frame;撤销回来
+ *   P4 框:改 X、Y、缩放 → frame;「铺满」清掉 frame;撤销回来(数字框回车才提交,X、Y、缩放各一步,共三步)
  *   P5 不透明度、淡入、淡出 → opacity / fadeIn / fadeOut;撤销回来
  *   P6 音量、静音 → audioVolume / audioMuted;撤销回来
  *   P7 偏移超出被引用剪辑的总时长:不改项目,面板底下写明原因
@@ -83,6 +83,7 @@ try {
     await page.click(sel, { clickCount: 3 });
     await page.keyboard.press('Backspace');
     await page.type(sel, String(value));
+    await page.keyboard.press('Enter'); // 数字框敲字只改草稿,回车(失焦)才提交一步
     await sleep(250);
   };
   const setRange = async (sel, value) => {
@@ -160,10 +161,10 @@ try {
   await undo();
   s = await seg();
   check('P4r', cleared && s.frame?.scale === 0.5, '「铺满」清掉 frame;撤销回到缩放 0.5', { frame: s.frame, cleared });
-  // 数字框逐键提交(和「开始 / 结束」同一个口径):X 填 100 是三步、Y 填 50 是两步、缩放一步,共六步
+  // 数字框回车才提交(2026-10-20 用户定):X 填 100 一步、Y 填 50 一步、缩放一步,共三步
   let steps = 0;
   while (s.frame !== undefined && steps < 10) { await undo(); steps++; s = await seg(); }
-  check('P4u', s.frame === undefined && steps === 6, `再逐步撤销 ${steps} 次:框回到铺满`, { frame: s.frame, steps });
+  check('P4u', s.frame === undefined && steps === 3, `再逐步撤销 ${steps} 次:框回到铺满`, { frame: s.frame, steps });
 
   /* P5 不透明度、淡入淡出 */
   r0 = await projectRef();
