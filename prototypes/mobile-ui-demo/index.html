@@ -150,6 +150,10 @@ h2.sec { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: 1
 .crow { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--panel2); border-radius: 10px; margin-bottom: 6px; width: 100%; text-align: left; border: 1.5px solid transparent; }
 .crow.cur { border-color: var(--accent); }
 .crow .i { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; background: var(--panel); }
+.refbar { display: flex; margin-bottom: 8px; }
+.refbar .ref { font-size: 12px; padding: 3px 4px 3px 10px; gap: 6px; background: var(--accent-dim); }
+.refbar .ref b { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; font-weight: 400; cursor: pointer; }
+.dock .refbtn { color: var(--accent); }
 .etools .none { flex: none; padding: 8px 10px; font-size: 12px; color: var(--dim); white-space: nowrap; line-height: 1.5; }
 .edit-head { justify-content: space-between; }
 .edit-head h1 { text-align: center; font-size: 15px; }
@@ -388,7 +392,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
     <div class="pane" id="defaultPane">
       <div class="mainhead"><b>缩略时间轴</b><span id="mainSum"></span></div>
       <div class="mainstrip" id="mainStrip"></div>
-      <div class="dock">
+      <div class="dock" id="dock">
+        <button id="dockRef" class="refbtn" style="display:none" onclick="refMain()"><span class="g">@</span>引用</button>
         <button onclick="assetTab='视频';openSheet('assets')"><span class="g">🎬</span>视频</button>
         <button onclick="assetTab='图片';openSheet('assets')"><span class="g">🖼</span>图片</button>
         <button onclick="assetTab='音频';openSheet('assets')"><span class="g">♪</span>音频</button>
@@ -426,12 +431,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); height: 26px; marg
       </div>
       <div class="msgs" id="msgs"></div>
       <div class="composer">
-        <div class="quicks">
+        <div class="refbar" id="refBar" style="display:none"></div>
+      <div class="quicks">
           <button onclick="askAgent('把开头的标题做得更大气一点')">标题更大气</button>
           <button onclick="askAgent('给第二段加一个转场')">加转场</button>
           <button onclick="askAgent('配一段轻松的背景音乐')">配乐</button>
           <button onclick="askAgent('把整体节奏剪快一点')">剪快点</button>
-          <button onclick="refSelected()">@引用选中的片段</button>
         </div>
         <div class="in-row">
           <input id="chatIn" placeholder="告诉 Agent 你想怎么改…" onkeydown="if(event.key==='Enter')sendChat()">
@@ -657,7 +662,7 @@ function renderMain() {
   sc.appendChild(el('div', 'sp-r'));
   const sum = Math.round(m.reduce((a, c) => a + c.d, 0) * 10) / 10;
   $('#mainSum').textContent = m.length ? `${m.length} 段 · 共 ${fmtD(sum)}` : '还没有内容，点 ＋ 添加素材';
-  bindStrip(sc);
+  bindStrip(sc); updateDockRef();
 }
 
 /* ---- 缩略时间轴：滚动位置 ⇄ 当前时间 ---- */
@@ -682,8 +687,10 @@ function syncStrip() {      // 播放 / 点刻度 / 切换剪辑时，让缩略�
   const sc = stripEl(); if (!sc || !sc.clientWidth) return;
   sc.scrollLeft = scrollFromTime(sc, now); progSl = sc.scrollLeft;
 }
+function updateDockRef() { const b = $('#dockRef'); if (!b) return; b.style.display = selMain ? '' : 'none'; if (selMain) $('#dock').scrollLeft = 0; }
+function refMain() { const c = selMain && findClip(selMain); if (!c) return; selectMain(null); refClip(c); }
 function selectMain(id) {
-  selMain = id; document.querySelectorAll('#mainStrip .mblock').forEach(b => b.classList.toggle('sel', b.dataset.id === id));
+  selMain = id; updateDockRef(); document.querySelectorAll('#mainStrip .mblock').forEach(b => b.classList.toggle('sel', b.dataset.id === id));
   if (id) { const c = findClip(id); toast(`已选中第 ${mainClips().indexOf(c) + 1} 段 · 再长按这张卡拖动可换顺序`); }
 }
 
@@ -721,7 +728,7 @@ function bindStrip(sc) {
   });
 }
 // 点缩略卡以外的任何地方：取消选中
-document.addEventListener('pointerdown', e => { if (selMain && !e.target.closest('.mblock')) selectMain(null); });
+document.addEventListener('pointerdown', e => { if (selMain && !e.target.closest('.mblock, #dockRef')) selectMain(null); });
 
 /* ============ 选剪辑（工具栏「剪辑」） ============ */
 function clipTotal(name) { return clipsByTab[name].filter(c => c.lane === 0).reduce((a, c) => a + c.d, 0); }
@@ -760,13 +767,13 @@ function exitEdit(ok) {
 }
 function kindLabel(c) { return c.title ? '文字' : c.kind === 'cap' ? '字幕/动效' : c.kind === 'fx' ? (c.lane === 1 ? '转场/效果' : '卡片') : c.kind === 'a' ? '音频' : '视频段'; }
 function toolsFor(c) {
-  const T = [['✂', '分割', splitClip], ['⧉', '复制', dupClip]];
+  const T = [['✂', '分割', splitClip], ['@', '引用', () => refClip(c)], ['⧉', '复制', dupClip]];
   const mute = ['🔇', c.muted ? '恢复声音' : '静音', () => toggleMute(c)];
   if (c.title || c.kind === 'cap') T.push(['Aa', '样式', () => openSheet('params')], ['▶', '动画', () => toast('进场 / 退场动画选择（演示未做）')], ['◐', '不透明度', () => openSheet('params')]);
   else if (c.kind === 'fx') T.push(['⏱', '时长·强度', () => openSheet('params')]);
   else if (c.kind === 'a') T.push(mute, ['🔉', '音量', () => openSheet('params')]);
   else T.push(mute, ['⚡', '速度', () => toast('变速（演示未做）')], ['⚙', '调整', () => openSheet('params')]);
-  T.push(['✦', '问 Agent', () => { refSelected(); openSheet('chat'); }], ['🗑', '删除', delClip]);
+  T.push(['🗑', '删除', delClip]);
   return T;
 }
 function renderEditUI() {
@@ -1083,10 +1090,17 @@ function scrollMsgs() { const b = $('#msgs'); b.scrollTop = b.scrollHeight; }
 function pushMsg(t, x, extra) { convs[curAgent].push(Object.assign({ t, x }, extra)); renderMsgs(); }
 function sendChat() { const i = $('#chatIn'); const v = i.value.trim(); if (!v) return; i.value = ''; askAgent(v); }
 let pendingRef = null;
-function refSelected() { const c = selId && findClip(selId); if (!c) return toast('先在时间轴选一个片段，再引用'); pendingRef = c.name; $('#chatIn').placeholder = '@' + c.name + ' 想怎么改？'; $('#chatIn').focus(); toast('已引用：' + c.name); }
+// 「引用」：把选中的一项带进 Agent 对话；输入框上方显示引用标记，发送后消息里也带着
+function refClip(c) { setRef(c.name); pageAgent(); setTimeout(() => $('#chatIn').focus(), 50); toast('已引用：' + c.name); }
+function setRef(name) {
+  pendingRef = name; $('#chatIn').placeholder = '@' + name + ' 想怎么改？';
+  const bar = $('#refBar'); bar.style.display = name ? '' : 'none'; bar.innerHTML = '';
+  if (name) { const r = el('span', 'ref', '@ ' + name); const x = el('b', '', '✕'); x.onclick = () => setRef(null); r.appendChild(x); bar.appendChild(r); }
+  else $('#chatIn').placeholder = '告诉 Agent 你想怎么改…';
+}
 function askAgent(text) {
   if (!agentOn()) pageAgent();
-  pushMsg('me', text, pendingRef ? { ref: pendingRef } : {}); pendingRef = null; $('#chatIn').placeholder = '告诉 Agent 你想怎么改…';
+  pushMsg('me', text, pendingRef ? { ref: pendingRef } : {}); setRef(null);
   const box = $('#msgs'); const ty = document.createElement('div'); ty.className = 'msg ag'; ty.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>'; box.appendChild(ty); scrollMsgs();
   $('#agentFlag').classList.add('on');
   setTimeout(() => {
