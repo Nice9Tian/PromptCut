@@ -3,6 +3,7 @@ import { coalesceRunEvents } from './coalesce-run-events.mjs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createAgentInstance } from './instance.mjs';
+import { renderableClips } from './render-request.mjs';
 import { createAccountConversationService } from './conversation-policy.mjs';
 import { createWorkspaces } from './workspace.mjs';
 import { createEgressGate } from './egress.mjs';
@@ -293,6 +294,17 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       ...(accountRunAssets ? { accountRunAssets } : {}),
       ...(toolset ? { accountTools: toolset } : {}),
       pageCall: async () => ({ offline: true, why: 'initiator-unavailable' }),
+      // 一次写入落地:挑出要预渲染的片段,报给主服务(`render_request` 事件)。发布与跟到入库由常驻的主服务以服务身份做
+      // (`server/agent-service/account-render-requests.mjs`),这一代进程收尾了也照样渲;这里不拿任何发布凭证
+      onWrite: (_agent, write) => {
+        try {
+          const replica = inst?.replica?.();
+          const clips = renderableClips(replica?.project, write?.clipIds ?? []);
+          const rev = Number.isSafeInteger(write?.rev) ? write.rev : replica?.rev;
+          if (!clips.length || !Number.isSafeInteger(rev)) return;
+          onEvent({ type: 'render_request', clips, rev, userCards: inst.hasProjectCards?.() === true });
+        } catch (error) { log('agent.render.note-failed', { message: String(error?.message ?? error).slice(0, 120) }); }
+      },
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });
       const binding = await Promise.race([inst.bindAgent({ projectId: grant.projectId, mode: 'hosted', signal }), aborted]);
       bound = binding;
