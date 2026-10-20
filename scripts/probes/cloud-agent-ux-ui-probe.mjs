@@ -236,7 +236,15 @@ async function onlineUp(who, { asCreator = false, browser = null, name = NAME } 
   return { browser: b, page };
 }
 async function selectCloud(page) {
-  await until('接入方式里有可选的「云端」', async () => { const o = (await providerOptions(page))?.options.find((x) => x.value === 'cloud'); return o && !o.disabled; }, 30_000, 200);
+  const can = await until('接入方式里有可选的「云端」', async () => { const o = (await providerOptions(page))?.options.find((x) => x.value === 'cloud'); return o && !o.disabled; }, 30_000, 200);
+  if (!can) {
+    // 排查用:当场截图,并记下 AI 栏里此刻有什么
+    await shot(page, `select-cloud-missing-${Date.now().toString(36)}`);
+    const seen = await P(page, () => ({ panel: !!document.querySelector('[data-pc="cloud-ai-panel"]'), agentOff: !!document.querySelector('[data-pc="online-agent-off"]'),
+      wait: document.querySelector('[data-pc="cloud-permission-wait"], [data-pc="cloud-readonly-note"]')?.textContent ?? null,
+      text: (document.querySelector('[data-pc="cloud-ai-panel"]') ?? document.querySelector('.ai-panel'))?.innerText?.slice(0, 300) ?? null })).catch((e) => ({ error: String(e) }));
+    say('select-cloud.missing', seen);
+  }
   if ((await providerOptions(page))?.value !== 'cloud') await page.select('[data-pc="ai-provider"]', 'cloud');
   await page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 });
   await until('云端对话就绪', async () => { const v = await view(page); return v && v.conversationId && (v.connection === 'live' || v.connection === 'idle'); }, 30_000, 100);
@@ -1010,6 +1018,12 @@ try {
   for (const b of [...browsers]) await closeBrowser(b).catch(() => {});
   for (const d of [...desktops]) await killDesktop(d).catch(() => {});
   for (const c of [...nodeConns]) { try { c.close(); } catch { /* 已关 */ } }
+  // `--keep`:几个服务自己的日志一并留在临时目录里(排查用;日志里没有口令与票据原文)
+  if (KEEP && S) {
+    for (const [name, proc] of [['render', S.render], ['agent', S.agent], ['hosted', S.hosted]]) {
+      try { if (proc?.text) fs.writeFileSync(path.join(TMP, `${name}.log`), proc.text()); } catch { /* 留不下就算了 */ }
+    }
+  }
   await S?.stop().catch(() => {});
   await sleep(500);
   const busy = S ? await S.portsStillBusy().catch(() => []) : [];

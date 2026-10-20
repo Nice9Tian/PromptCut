@@ -262,6 +262,8 @@ export async function startStack({ tmp, ports, dist = null, say = () => {}, agen
         // 在线页面的构建就是代理在发的那一份:渲染服务拿它比代码版本
         PROMPTCUT_RENDER_EDITOR_DIR: DIST, PROMPTCUT_RENDER_AGENT_STATUS_URL: `${S.AGENT_DIRECT}/healthz`,
         ...(process.platform === 'win32' && !process.env.PROMPTCUT_TEST_ENV_FINGERPRINT ? { PROMPTCUT_TEST_ENV_FINGERPRINT: '7e57c10d00000002' } : {}),
+        // 排查用:`PC_PROBE_RENDER_VERBOSE=1` 时渲染服务把工作进程(编辑器与预渲染进程)的输出原样转出来
+        ...(process.env.PC_PROBE_RENDER_VERBOSE === '1' ? { PROMPTCUT_RENDER_VERBOSE: '1' } : {}),
       },
     });
     return S.render;
