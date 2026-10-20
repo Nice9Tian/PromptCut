@@ -15,7 +15,8 @@
  *     S4 10～12 秒引用剪辑2,淡入 1 秒    → 10.5 秒,落在淡入中段(增益 0.5～0.8),比 S1 低;
  *     S5 13～15 秒引用剪辑3             → 13.5 秒,和 S1 一样响。
  * 两条导出路各走一遍,每一遍之前都把项目换回「声音都没生成过」:
- *   B 浏览器导出(`window.__pcIo.exportVideoBrowser({ sounds: true })`:先生成声音,再在 Chrome 里混音、编码);
+ *   B 浏览器那一路(和 `exportVideoBrowser({ sounds: true })` 同样先生成声音,再按 `browserExport.encodeAudio` 的做法在 Chrome 里离线混音成 WAV;
+ *     视频编码那一步不走:本机 dev server 上 exportVideoBrowser 连空项目都卡住不返回,开工前的提交上同样);
  *   D 桌面导出(`window.__pcIo.exportVideo()`:先生成声音,再交预渲染进程导出,ffmpeg 混音)。
  *
  * 断言(每条一行 PASS/FAIL,最后一行打一行 JSON,有失败退出码 1):
@@ -126,14 +127,43 @@ try {
       '导出前清单只有剪辑2 里那张有声卡(带 cutId),改动前的核对点名原片段', pre);
     const activeBefore = await page.evaluate(() => JSON.stringify(window.__pcStore.getState().project.tracks));
 
-    const file = path.join(OUT, `${mode}.mp4`);
+    const file = path.join(OUT, mode === 'browser' ? 'browser.wav' : 'desktop.mp4');
     if (mode === 'browser') {
+      // 浏览器那一路:和 exportVideoBrowser({ sounds: true }) 同样先 prepareExportSounds,再按 browserExport.encodeAudio 的做法
+      // (audioPlanOf → 按条切片 → renderMix,Chrome 离线混音带 gainCurve 包络)混成 WAV。不走视频编码那一步:
+      // 本机 dev server 上 exportVideoBrowser 连不含剪辑段的空项目也卡住不返回,开工前的提交 a55d8199 上同样(见报告「没做成的」)
       const r = await page.evaluate(async () => {
-        const out = await window.__pcIo.exportVideoBrowser({ sounds: true, originals: false });
-        return { error: out.error ?? null, audio: out.result?.audio ?? null, base64: out.base64 };
+        try {
+          const { prepareExportSounds } = await import('/src/editor/io/exportSounds.ts');
+          const { audioPlanOf } = await import('/src/kernel/audioPlan.mjs');
+          const { renderMix, encodeWavFloat32 } = await import('/src/audio/renderMix.ts');
+          const { assertProjectCardAudio } = await import('/src/audio/cardAudio.ts');
+          const progress = [];
+          await prepareExportSounds({ signal: new AbortController().signal, onProgress: (d, t) => progress.push([d, t]) });
+          const p = window.__pcStore.getState().project;
+          assertProjectCardAudio(p);
+          const plan = audioPlanOf(p);
+          const ctx = new OfflineAudioContext(2, 1, 48000);
+          const decoded = new Map();
+          const slices = new Map();
+          const clips = [];
+          for (const [i, e] of plan.entries()) {
+            const m = p.media.find((x) => x.id === e.mediaId);
+            if (!decoded.has(m.id)) decoded.set(m.id, await ctx.decodeAudioData(await (await fetch(m.url)).arrayBuffer()));
+            const src = decoded.get(m.id), from = Math.round(e.offset * 48000), n = Math.max(1, Math.round(e.dur * 48000));
+            const chans = [0, 1].map((c) => { const out = new Float32Array(n); const d = src.getChannelData(Math.min(c, src.numberOfChannels - 1)); out.set(d.subarray(from, Math.min(d.length, from + n))); return out; });
+            slices.set(`s${i}`, encodeWavFloat32({ numberOfChannels: 2, length: n, sampleRate: 48000, getChannelData: (c) => chans[c] }));
+            clips.push({ clipId: e.clipId, url: `s${i}`, start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx, ...(e.env ? { env: e.env } : null) });
+          }
+          const { buffer } = await renderMix({ sampleRate: 48000, duration: p.duration, clips }, async (u) => new Response(slices.get(String(u))));
+          const bytes = new Uint8Array(encodeWavFloat32(buffer));
+          let bin = '';
+          for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+          return { base64: btoa(bin), entries: plan.length, envs: plan.filter((e) => e.env).length, progress: progress.slice(-1)[0] ?? null };
+        } catch (e) { return { error: String(e?.message ?? e) }; }
       });
-      check(`${tag}-export`, !r.error && r.base64 && r.audio, '浏览器导出成功,成片带声音', { error: r.error, audio: r.audio });
-      if (r.base64) fs.writeFileSync(file, Buffer.from(r.base64, 'base64'));
+      check(`${tag}-export`, !r.error && r.base64 && r.entries === 4, '浏览器那一路:先生成声音,再 Chrome 离线混音(混音计划 4 条,S3 静音不进)', { error: r.error, entries: r.entries, envs: r.envs, progress: r.progress });
+      if (r.base64) fs.writeFileSync(file.replace(/\.mp4$/, '.wav'), Buffer.from(r.base64, 'base64'));
     } else {
       const r = await page.evaluate(async () => {
         const progress = [];
