@@ -250,6 +250,24 @@ const drawing = (s, key = null) => {
 };
 const trackBrief = (t) => t && { key: short(t.key), plane: t.plane, kind: t.kind, fits: t.fits, level: t.level, pushed: t.pushed, lastDrawn: t.lastDrawn, drawn: t.drawn, errors: t.errors, lastError: t.lastError };
 
+/** 播一段、边播边采样;回 `{ samples, drawn }`(`drawn`:这张卡的流在画的样本)。播完不停 */
+async function playAndSample(page, id, { from, to, key }) {
+  await playFrom(page, from);
+  const samples = [];
+  const t0 = Date.now();
+  let started = false;
+  while (Date.now() - t0 < 25_000) {
+    const s = await stageState(page, id);
+    if (!s) { await delay(40); continue; }
+    if (!started) { if ((s.t ?? -1) >= from - 0.05 && (s.t ?? 99) <= from + 0.6) started = true; else { await delay(20); continue; } }
+    if ((s.t ?? 0) >= to) break;
+    samples.push(s);
+    await delay(40);
+  }
+  const drawn = samples.filter((s) => { const t = drawing(s, key); return t && t.lastDrawn <= Math.round((s.t ?? 0) * FPS) + 3; });
+  return { samples, drawn };
+}
+
 /** 播放时这条流在画:包裹层被抑制、舞台上画的是这条流(父页推的字节)、跟着播放头、不报错 */
 function checkPlaying(who, r, key) {
   const a = r.drawn[0]?.clip.stream, b = r.drawn[r.drawn.length - 1]?.clip.stream;
