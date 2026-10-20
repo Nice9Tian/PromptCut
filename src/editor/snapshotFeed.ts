@@ -397,11 +397,21 @@ function activeCardClips(project: Project, t: number): TrackClip[] {
  * 有流就贴流;流还没铺满(还在产、没有渲染节点产得了它、判重之前)就照旧在舞台里活渲 —— 不显示占位符,也不在播放中途
  * 从流换回活渲(`mechanism/rendering.md`「剪辑段」)。`stageSwap.ts` 判暂停时要不要整场景补跑用的是同一个函数。
  */
+const cutSigs = new WeakMap<Project, Map<string, string | null>>();
+function cutSigOf(project: Project, clipId: string): string | null {
+  let byClip = cutSigs.get(project);
+  if (!byClip) { byClip = new Map(); cutSigs.set(project, byClip); }
+  if (!byClip.has(clipId)) byClip.set(clipId, streamInputSig(project, { clipIds: [clipId] }));
+  return byClip.get(clipId) ?? null;
+}
+
 export function cutStreamHeavy(project: Project, clip: { id: string; start: number; end: number; cutId?: string }, t: number): boolean {
   if (!clip.cutId) return false;
   if (pipelineAt(planDispatch.currentPlan(), clip.id, t) !== "heavy") return false;
   const layer = readyIndex.get(clip.id)?.get("stream");
   if (!layer || layer.streamKind === "below" || layer.groupClipIds?.length || !isStreamOrigin(layer.originFrame)) return false;
+  // 被引用剪辑改过、预渲染进程还没换版本的这一小段里,就绪索引里还是旧流:签名对不上的不贴(没带签名的照贴)
+  if (layer.inputSig && streamSigStale(layer.inputSig, cutSigOf(project, clip.id))) return false;
   const fps = Math.max(1, project.fps || 30);
   const total = Math.max(1, Math.floor((Number(project.duration) || 0) * fps));
   const { firstFrame, count } = samplingOf(clip, fps);

@@ -147,3 +147,22 @@ test("流的划分:剪辑段是 solo cut 的单卡流,挂载帧含预卷、要�
   assert.equal(spec.replay, true);
   assert.equal(spec.hasMedia, false);
 });
+
+test("剪辑段级的流发层时带 streamKind 'cut' 与输入签名;被引用剪辑改了,页面算的签名对不上", async () => {
+  const { belowLayerMark } = await import("../frame-stream.mjs");
+  const { applyReadyMessage } = await import("../../src/render/snapshotSource.ts");
+  const { streamInputSig, streamSigStale } = await import("../../src/render/streamInputSig.mjs");
+  const p = proj();
+  const g = planGraph(p);
+  const plan = new CardFrameCache({ root: ".", project: p, envFingerprint: "fp" }).plan({ graph: g, sourceVersions: versions, environment: {} });
+  const spec = planStreams({ project: p, cardPlan: plan }, { envFingerprint: "fp", below: false }).find((s) => s.topClipId === "S");
+  const mark = belowLayerMark(spec, "S");
+  assert.equal(mark.streamKind, "cut");
+  assert.equal(mark.inputSig, streamInputSig(p, { clipIds: ["S"] }));
+  const index = applyReadyMessage(new Map(), { type: "layer", clipId: "S", kind: "stream", key: "k", ranges: [[0, 7]], originFrame: 30, ...mark });
+  assert.equal(index.get("S").get("stream").streamKind, "cut");
+  assert.equal(streamSigStale(index.get("S").get("stream").inputSig, streamInputSig(p, { clipIds: ["S"] })), false);
+  assert.equal(streamSigStale(index.get("S").get("stream").inputSig, streamInputSig(proj({ inner: { label: "y" } }), { clipIds: ["S"] })), true);
+  // 别的流不带
+  assert.deepEqual(belowLayerMark({ kind: "card", topClipId: "x" }, "x"), {});
+});

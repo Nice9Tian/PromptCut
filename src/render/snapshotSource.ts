@@ -31,8 +31,8 @@ export type ReadyMessage =
       /** `stream` 层才有:这条流自己的第一帧(项目帧号),分段从它起每 15 帧一段(`streamSegments.mjs`) */
       originFrame?: number;
       /** 依赖下层的流才有(`server/frame-stream.mjs` 的 `belowLayerMark`):这条流按舞台坐标产,平面挂在舞台根下 */
-      streamKind?: "below";
-      /** 依赖下层的流才有:产这条流的那一版项目的输入签名(`streamInputSig.mjs`);父页按当前项目算的对不上就不贴 */
+      streamKind?: "below" | "cut";
+      /** 依赖下层的流、剪辑段级的流(`streamKind: 'cut'`)才有:产这条流的那一版项目的输入签名(`streamInputSig.mjs`);父页按当前项目算的对不上就不贴 */
       inputSig?: string }
   | { type: "done"; localRev: number };
 
@@ -59,7 +59,7 @@ export function snapshotPath(kind: ReadyKind, key: string, localFrame: number): 
 }
 
 /** 就绪索引的页面侧形状(C3):同一张重卡的 `stream` 表和 `html` 表并存、互不覆盖 */
-export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[]; originFrame?: number; streamKind?: "below"; inputSig?: string }>>;
+export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[]; originFrame?: number; streamKind?: "below" | "cut"; inputSig?: string }>>;
 
 /**
  * 把一条消息应用到页面的 `readyIndex`。`reset` 清表,`layer` 整层替换
@@ -75,8 +75,8 @@ export function applyReadyMessage(index: ReadyIndex, message: ReadyMessage): Rea
   byKind.set(message.kind, { key: message.key, ranges: message.ranges, ...(message.groupClipIds?.length ? { groupClipIds: [...message.groupClipIds] } : {}),
     ...(isStreamOrigin(message.originFrame) ? { originFrame: message.originFrame } : {}),
     // 依赖下层的流的两项(只有 `stream` 层认):按舞台坐标贴、输入签名
-    ...(message.kind === "stream" && message.streamKind === "below"
-      ? { streamKind: "below" as const, ...(typeof message.inputSig === "string" && message.inputSig ? { inputSig: message.inputSig } : {}) } : {}) });
+    ...(message.kind === "stream" && (message.streamKind === "below" || message.streamKind === "cut")
+      ? { streamKind: message.streamKind, ...(typeof message.inputSig === "string" && message.inputSig ? { inputSig: message.inputSig } : {}) } : {}) });
   return index;
 }
 

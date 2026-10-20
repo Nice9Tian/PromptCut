@@ -593,8 +593,9 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
       fps, stage, total,
       replay: m.solo === 'source' ? sourceNeedsReplay(project, m.clip, m.control) : streamNeedsReplay([m.control]),
     }), solo: m.solo,
-    // 剪辑段里有视频、图片时截图前要等它们就位(`runSegment` 的 `hasMedia`)
-    ...(m.solo === 'cut' ? { hasMedia: cutSegmentHasVisualMedia(project, m.clip) } : {}) });
+    // 剪辑段里有视频、图片时截图前要等它们就位(`runSegment` 的 `hasMedia`);发层时带上这一版的输入签名(`belowLayerMark`):
+    // 被引用剪辑改了以后、这边换版本之前,页面按当前项目算的签名对不上,旧流不贴
+    ...(m.solo === 'cut' ? { hasMedia: cutSegmentHasVisualMedia(project, m.clip), inputSig: streamInputSig(project, { clipIds: [m.control.clipId] }) } : {}) });
   }
   if (belows.length) {
     specs.push(...belowStreamSpecs(entry, belows, { fps, stage, total, codeVersion: effectiveCodeVersion, envFingerprint }).map(s => ({ ...s, ...projectTag })));
@@ -802,6 +803,10 @@ function belowStreamSpecs(entry, targets, { fps, stage, total, codeVersion, envF
  *   - `inputSig`:产这条流的那一版项目的输入签名(`belowStreamSpecs` 算的)。只给这条流自己的目标卡;算不出不带(页面不比)。
  */
 export function belowLayerMark(spec, clipId) {
+  // 剪辑段级的流(`solo: 'cut'`):照单卡流贴(包裹层里),只另带 `streamKind: 'cut'` 和输入签名,页面据此认出被引用剪辑改过的旧流
+  if (spec?.solo === 'cut') {
+    return clipId === spec.topClipId && typeof spec.inputSig === 'string' && spec.inputSig ? { streamKind: 'cut', inputSig: spec.inputSig } : {};
+  }
   if (spec?.kind !== 'below') return {};
   const sig = clipId === spec.topClipId && typeof spec.inputSig === 'string' && spec.inputSig ? { inputSig: spec.inputSig } : {};
   return { streamKind: 'below', ...sig };

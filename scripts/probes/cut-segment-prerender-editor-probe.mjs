@@ -155,6 +155,15 @@ try {
       const c = (await (await fetch(prerender.url + '/api/data/costs')).json())?.costs ?? [];
       return c.some((r) => r.identityKey === measured.key && r.pinnedHeavy === true) || null;
     }, 30000, 500);
+    /*
+     * 预渲染进程只在一版项目的后台那一趟里按成本记录定这一版产哪些流;记录事后变了(这里的钉死)不重排这一版。
+     * 所以钉死以后让项目换一版(激活剪辑里加一条空的隐藏序列,剪辑段的身份不变),新的那一趟按钉死的记录产流。
+     */
+    await page.evaluate(async (n) => {
+      const { actions, getState } = await import('/src/store/project.ts');
+      const p = getState().project;
+      actions.loadProject({ ...p, tracks: [...p.tracks, { id: `tr-bump-${n}`, name: 'bump', hidden: true, clips: [] }] });
+    }, Date.now());
     return { put: put.status, pipeline: now?.pipeline ?? null, forwarded: !!forwarded };
   };
   {
