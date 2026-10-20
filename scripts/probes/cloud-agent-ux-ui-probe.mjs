@@ -10,7 +10,9 @@
  *   桌面版形态的编辑器:本 worktree 的 dev server,独立进程、临时数据目录、固定设备号;它自己不当渲染节点(要看的是云节点把活干了)
  *   每个「人」一个独立的浏览器进程:创建者的桌面页面、创建者的在线页面、另一位成员 bob、被移出的 carol。
  *   项目(限定进入):创建者在桌面版形态的页面里建、放云端;成员 bob、carol。三张内置卡:两张探针重卡(`probe-slow-stepped`,每帧烧 40 毫秒,
- *   在线页面量出来就是重卡:播放时贴预渲染的快照)加一张带参数的图表卡。
+ *   在线页面量出来就是重卡:播放时贴预渲染的轨道流)加一张带参数的图表卡。
+ *   渲染服务照部署模板的配置起(`PROMPTCUT_RENDER_STREAMS=1`,能产轨道流),创建者建好项目后打开「生成轨道流」。2026-10-13 起每张卡的快照作废,
+ *   预渲染结果只有轨道流一档;这一项关着时托管方的渲染节点完全不为这个项目产流(语义 `product/rendering.md`「预渲染」「谁产流与托管方开关」)。
  *
  *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,spaced,errors] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
  *        [--agent-port 5741] [--render-port 5830] [--dist <在线构建目录>] [--out <截图目录>] [--keep]
@@ -23,7 +25,8 @@
  * 验收标准(任务书「用户体验验收」六条,逐条对应;每条断言一行 JSON,`ok` 全为 true 才算过):
  *
  * 零、搭起来
- *   X0  三个服务起来;渲染服务、Agent 服务、在线页面的代码版本相同(同一份代码);项目设置里「云端 Agent」一行缺省勾上。
+ *   X0  三个服务起来;渲染服务、Agent 服务、在线页面的代码版本相同(同一份代码);项目设置里「云端 Agent」一行缺省勾上;
+ *       创建者打开「生成轨道流」后渲染服务看到这一项开着。
  * 一、发出任务后完全退出(桌面版发起 = 步骤 desktop;在线浏览器发起 = 步骤 online;两遍各自断言 A1～A6)
  *   A1  创建者在页面里对放云端的项目选「云端」,发一个要跑一段时间(约 100 秒)、改多处并触发重卡重渲的任务:先读几遍项目(每遍之间等十几秒,
  *       像真模型那样先看、先想),再连着改 12 处(改文案、挪片段、调卡片参数各 4 次;两张重卡都被挪到)。界面上看到第 2 个工具结果
@@ -36,11 +39,11 @@
  * 三、另一位成员从在线浏览器进项目(真实页面)
  *   A4  bob 进项目:页面里的项目就是 12 次改动之后的样子;bob 的 AI 栏底部「Agent 操作」不混进创建者那个对话的操作(2026-10-20 起「Agent 操作」
  *       只显示自己正在看的对话,取代按项目频道列全部工具事件的「Agent 操作记录」;署名改由 B1 的成员列表核对)。
- *   A5  舞台上的画面是渲好的预渲染结果:播放时两张重卡都贴着快照、没有占位;没有「需要本地 PC 渲染辅助」的图标与时间轴徽标;
+ *   A5  舞台上的画面是渲好的预渲染结果:播放时两张重卡都贴着轨道流(舞台的流播放器里含它的那条流画出了帧)、没有占位;没有「需要本地 PC 渲染辅助」的图标与时间轴徽标;
  *       层表里这几层的环境指纹是云节点渲染服务的;舞台截图不是空白(颜色不止一种)。
  * 四、创建者重新打开(新进程)
  *   A6  回到同一个项目;AI 栏仍是本机驱动(桌面版)/ 云端(在线);历史列表「云端」一组里找得到这段对话,点开后完整过程与结果都在
- *       (全部工具调用、最后的回复、「云端渲染完成」);项目是最新版本;预渲染结果已在(层表有层;在线页面播放时贴快照)。
+ *       (全部工具调用、最后的回复、「云端渲染完成」);项目是最新版本;预渲染结果已在(层表里有这几张重卡的流;在线页面播放时贴轨道流)。
  *   A7  点「撤销这步」撤掉 Agent 的最后一处改动:创建者页面里那个参数回到上一次的值,按钮变成「已撤销」;bob 的页面也看到撤销的结果。
  * 五、中途想停、换设备(步骤 stop)
  *   B1  另起一遍更长的任务(桌面版发起),发起方同样被结束。之后 bob 从在线浏览器进项目看着:页面里的项目一次次变(改动一条条出现);
@@ -71,6 +74,8 @@
  *   UC2 之后才上线的成员(另一个浏览器进程,真实页面):项目里有这张卡的片段;舞台上这张用户卡贴的是预渲染结果(快照层在、没有占位),
  *       层表里有它这一层;没有「需要本地 PC 渲染辅助」的图标;舞台截图不是空白;页面没有错误。
  * 最后一行是汇总 `{ summary }`,有失败退出码 1,起不来退出码 2。不打印口令、票据、私钥。
+ * 排查:`--keep` 时渲染服务、Agent 服务、托管组合的输出存进临时目录的 `render.log` / `agent.log` / `hosted.log`;
+ * 环境变量 `PC_PROBE_RENDER_VERBOSE=1` 让渲染服务把工作进程的输出原样转出来。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
 import { spawnSync } from 'node:child_process';
@@ -296,7 +301,13 @@ async function cloudFinishes(conversationId, { runMs = 120_000, render = true, r
   };
 }
 
-/** 播放着看舞台:等到几张重卡同时贴着快照、没有占位的那一刻,当场截图。回 `{ hit, seen, shot, stats }` */
+/**
+ * 舞台上这个片段贴着预渲染结果、没有占位:2026-10-13 起每张卡的快照作废,预渲染结果只有轨道流一档(语义 `product/rendering.md`「预渲染」),
+ * 所以看舞台的流播放器里含这个片段的那条流画出了帧;旧的快照层也认(`snapshot`),免得别的版本上误报
+ */
+const prerendered = (x) => !!x?.wrapper && !x.placeholder && (!!x.snapshot || (x.stream?.drawn ?? 0) > 0);
+const stageLabel = (x) => (!x?.wrapper ? 'none' : x.placeholder ? `ph:${x.reason}` : (x.stream?.drawn ?? 0) > 0 ? 'stream' : x.snapshot ? 'snap' : 'live');
+/** 播放着看舞台:等到几张重卡同时贴着预渲染结果(轨道流)、没有占位的那一刻,当场截图。回 `{ hit, seen, shot, stats }` */
 async function playbackSnapshots(page, name, ms = 60_000, HEAVY = HEAVY_CLIPS) {
   const t0 = Date.now();
   const seen = new Set();
@@ -307,8 +318,8 @@ async function playbackSnapshots(page, name, ms = 60_000, HEAVY = HEAVY_CLIPS) {
   while (!hit && Date.now() - t0 < ms) {
     const states = {};
     for (const id of HEAVY) states[id] = await clipOnStage(page, id);
-    seen.add(HEAVY.map((id) => { const x = states[id]; return !x?.wrapper ? 'none' : x.snapshot ? (x.placeholder ? `snap+ph:${x.reason}` : 'snap') : x.placeholder ? `ph:${x.reason}` : 'live'; }).join('|'));
-    if (HEAVY.every((id) => states[id]?.snapshot && !states[id].placeholder)) {
+    seen.add(HEAVY.map((id) => stageLabel(states[id])).join('|'));
+    if (HEAVY.every((id) => prerendered(states[id]))) {
       pic = await stageShot(page, path.join(OUT, `${name}.png`));
       hit = states;
       break;
@@ -322,6 +333,8 @@ async function playbackSnapshots(page, name, ms = 60_000, HEAVY = HEAVY_CLIPS) {
   const stats = pic ? await pixelStats(page.browser(), pic.bytes).catch(() => null) : null;
   return { hit, seen: [...seen], shot: pic?.file ?? null, stats };
 }
+/** 舞台截到的那一刻各重卡的状态(断言细节里看) */
+const stageOf = (hit, ids = HEAVY_CLIPS) => (hit ? Object.fromEntries(ids.map((id) => [id, { stream: hit[id].stream, snapshot: hit[id].snapshot, placeholder: hit[id].placeholder }])) : null);
 /** 在线页面此刻有没有「需要本地 PC 渲染辅助」的图标(舞台)或徽标(时间轴) */
 async function localPcMarks(page, HEAVY = HEAVY_CLIPS) {
   const badge = await P(page, () => document.querySelectorAll('[data-pc="clip-custom-card"]').length).catch(() => -1);
@@ -329,7 +342,17 @@ async function localPcMarks(page, HEAVY = HEAVY_CLIPS) {
   for (const id of HEAVY) { const x = await clipOnStage(page, id); if (x?.placeholder && x.reason === 'unsupported') icons += 1; }
   return { badge, icons };
 }
-const onlineLayers = (page) => P(page, () => { const d = window.__pcOnlineSnapshots?.(); return d ? { layers: d.layers.map((l) => ({ clipId: l.clipId, ready: l.ready, env: l.envFingerprint })), skipped: d.skipped, stale: d.stale.map((s) => s.clipId) } : null; }).catch(() => null);
+/**
+ * 在线页面认下的预渲染结果(层表):每张卡的快照层(`layers`,2026-10-13 起不再产)与轨道流(`streams`,按流的顶层片段)合在一起,
+ * 各带就绪的帧数(流是就绪的分段数)与出它的环境指纹;`stale` 是层表里已经过期的片段
+ */
+const onlineLayers = (page) => P(page, () => {
+  const d = window.__pcOnlineSnapshots?.();
+  if (!d) return null;
+  const layers = [...(d.layers ?? []).map((l) => ({ clipId: l.clipId, kind: 'snapshot', ready: l.ready, env: l.envFingerprint })),
+    ...(d.streams ?? []).map((s) => ({ clipId: s.clipId, kind: `stream:${s.kind}`, ready: s.ready, env: s.envFingerprint }))];
+  return { layers, skipped: d.skipped, stale: [...(d.stale ?? []).map((s) => s.clipId), ...(d.staleStreams ?? [])] };
+}).catch(() => null);
 
 /* ================================================================== 一遍「发出任务后完全退出」 */
 
@@ -411,9 +434,9 @@ async function leavePass(how, tag, salt) {
   const layers = await onlineLayers(bob.page);
   const heavyLayers = (layers?.layers ?? []).filter((l) => HEAVY.includes(l.clipId));
   const renderFp = S.renderFingerprint;
-  check(`${tag} A5 他的舞台上是渲好的预渲染结果:播放时两张重卡都贴着快照、没有占位,没有「需要本地 PC 渲染辅助」;这几层是云节点渲染服务渲的;画面不是空白`, !!play.hit && marks.badge === 0 && marks.icons === 0
+  check(`${tag} A5 他的舞台上是渲好的预渲染结果:播放时两张重卡都贴着轨道流、没有占位,没有「需要本地 PC 渲染辅助」;这几层是云节点渲染服务渲的;画面不是空白`, !!play.hit && marks.badge === 0 && marks.icons === 0
     && HEAVY.every((id) => heavyLayers.some((l) => l.clipId === id && l.ready > 0)) && (!renderFp || heavyLayers.every((l) => l.env === renderFp)) && !!play.stats && play.stats.colors >= 3 && play.stats.topShare < 0.985, {
-    stage: play.hit ? Object.fromEntries(HEAVY.map((id) => [id, { snapshot: play.hit[id].snapshot, snapNodes: play.hit[id].snapNodes, placeholder: play.hit[id].placeholder }])) : null,
+    stage: stageOf(play.hit),
     statesSeenWhilePlaying: play.seen, localPcBadges: marks.badge, localPcIcons: marks.icons, layers: heavyLayers, renderServiceFingerprint: renderFp ?? null, pixels: play.stats, shot: play.shot,
   });
 
@@ -436,8 +459,8 @@ async function leavePass(how, tag, salt) {
   const mine = await pageProject(back.page);
   let prerender;
   if (how === 'desktop') {
-    // 桌面版自己不靠层表看画面;这里只核对云端渲好的层表在文档服务里(经这个页面自己的连接取)
-    const map = await P(back.page, async () => { const M = await import('/src/editor/sync/syncManager.ts'); const id = window.__pcStore.getState().project.id; const r = await M.currentSharedLink().request({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${id}` }); return { key: `layers:${id}`, found: r.type === 'content.item' && !r.missing, layers: Array.isArray(r.body?.layers) ? r.body.layers.map((l) => l.clipId) : [] }; }).catch((e) => ({ error: String(e?.message ?? e).slice(0, 120) }));
+    // 桌面版自己不靠层表看画面;这里只核对云端渲好的层表在文档服务里(经这个页面自己的连接取):快照层(已作废)或轨道流里有这几张重卡
+    const map = await P(back.page, async () => { const M = await import('/src/editor/sync/syncManager.ts'); const id = window.__pcStore.getState().project.id; const r = await M.currentSharedLink().request({ type: 'content.get', kind: 'snapshot-manifest', key: `layers:${id}` }); return { key: `layers:${id}`, found: r.type === 'content.item' && !r.missing, layers: [...(Array.isArray(r.body?.layers) ? r.body.layers.map((l) => l.clipId) : []), ...(Array.isArray(r.body?.streams) ? r.body.streams.flatMap((x) => (Array.isArray(x.clipIds) ? x.clipIds : [x.topClipId])) : [])] }; }).catch((e) => ({ error: String(e?.message ?? e).slice(0, 120) }));
     prerender = { ok: map.found === true && HEAVY.every((id) => map.layers.includes(id)), layerMap: map };
   } else {
     const p2 = await playbackSnapshots(back.page, `${tag}-5-creator-stage-prerendered`);
@@ -518,8 +541,8 @@ async function realPass(how, tag) {
   await shot(bob.page, `${tag}-2-bob-sees-changes`);
   const play = await playbackSnapshots(bob.page, `${tag}-3-bob-stage-prerendered`);
   const marks = await localPcMarks(bob.page);
-  check(`${tag} RA5 他的舞台上是渲好的预渲染结果:两张重卡贴着快照、没有占位,没有「需要本地 PC 渲染辅助」;画面不是空白`, !!play.hit && marks.badge === 0 && !!play.stats && play.stats.colors >= 3 && play.stats.topShare < 0.985, {
-    stage: play.hit ? Object.fromEntries(HEAVY.map((id) => [id, { snapshot: play.hit[id].snapshot, placeholder: play.hit[id].placeholder }])) : null, statesSeenWhilePlaying: play.seen, localPcBadges: marks.badge, pixels: play.stats, shot: play.shot,
+  check(`${tag} RA5 他的舞台上是渲好的预渲染结果:两张重卡贴着轨道流、没有占位,没有「需要本地 PC 渲染辅助」;画面不是空白`, !!play.hit && marks.badge === 0 && !!play.stats && play.stats.colors >= 3 && play.stats.topShare < 0.985, {
+    stage: stageOf(play.hit), statesSeenWhilePlaying: play.seen, localPcBadges: marks.badge, pixels: play.stats, shot: play.shot,
   });
 
   let back;
@@ -561,7 +584,9 @@ async function realPass(how, tag) {
 /* ================================================================== 主流程 */
 
 async function setup() {
-  S = await startStack({ tmp: TMP, ports: PORTS, dist: arg('--dist', null), say, ...(REAL ? { agentEnv: { PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL: '1' } } : {}) });
+  // 渲染服务照部署模板的配置起:能产轨道流(`PROMPTCUT_RENDER_STREAMS=1`)。2026-10-13 起每张卡的快照作废,预渲染结果只有轨道流一档
+  // (语义 `product/rendering.md`「预渲染」),云端渲染出的就是重卡的轨道流
+  S = await startStack({ tmp: TMP, ports: PORTS, dist: arg('--dist', null), say, renderEnv: { PROMPTCUT_RENDER_STREAMS: '1' }, ...(REAL ? { agentEnv: { PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL: '1' } } : {}) });
   S.startRender();
   const ready = await S.waitRenderReady();
   const agentHealth = await (await fetch(`${S.AGENT_DIRECT}/healthz`)).json();
@@ -599,6 +624,11 @@ async function setup() {
   const text = await P(d.page, async () => { const [Sy, Pr] = await Promise.all([import('/src/editor/sync/syncManager.ts'), import('/src/editor/io/proc.ts')]); await Sy.whenSaved(); return Pr.serializeProc(); });
   PROC_FILE = path.join(TMP, `${NAME}.proc`);
   fs.writeFileSync(PROC_FILE, text);
+  // 创建者打开「生成轨道流」(语义 `product/rendering.md`「谁产流与托管方开关」:关着时托管方的渲染节点完全不为这个项目产流,
+  // 「云端 Agent 改完、全程没有成员在线,重卡由云节点渲出来」就只有打开这一项才成立);照页面同一个创建者操作(`shared.admin set-hosted-option`)
+  const streamsOn = await withCreatorConn((conn) => adminOp(conn, PROJ, 'set-hosted-option', { service: 'render', option: 'streams', enabled: true }));
+  const renderSees = await until('渲染服务看到这个项目「生成轨道流」开着', async () => ((await S.renderStatus()).projects ?? []).find((p) => p.projectId === PID)?.streams === true, 30_000, 300);
+  check('X0 创建者打开「生成轨道流」,渲染服务能产流、看到这一项开着', streamsOn?.type === 'shared.admin.ok' && !!renderSees, { reply: streamsOn?.type ?? null, reason: streamsOn?.reason ?? null, renderSees: !!renderSees });
   // 项目设置里的「云端 Agent」开关
   await openProjectSettings(d.page);
   const row = await until('项目设置里出现「云端 Agent」一行', () => hostedToggle(d.page, 'agent'), 15_000, 200);
@@ -988,7 +1018,7 @@ async function spacedStep() {
   check('K3 之后才上线的成员:项目是最后一版,舞台上两张重卡贴的是最后一版的预渲染结果(层表里这几层没有一层是旧输入的),没有占位、没有「需要本地 PC 渲染辅助」', !!got && got.title === want.title && got.statefulEnd === want.statefulEnd && got.canvasEnd === want.canvasEnd
     && !!play.hit && marks.badge === 0 && marks.icons === 0 && HEAVY.every((id) => heavyLayers.some((l) => l.clipId === id && l.ready > 0)) && !(layers?.stale ?? []).some((id) => HEAVY.includes(id))
     && !!play.stats && play.stats.colors >= 3, {
-    project: got, stage: play.hit ? Object.fromEntries(HEAVY.map((id) => [id, { snapshot: play.hit[id].snapshot, placeholder: play.hit[id].placeholder }])) : null, statesSeenWhilePlaying: play.seen,
+    project: got, stage: stageOf(play.hit), statesSeenWhilePlaying: play.seen,
     // 这几层是谁渲的不限:创建者的页面那一轮开着,它自己也是纯浏览器节点,先认领的得卡(渲染服务的指纹见 renderServiceFingerprint)
     renderServiceFingerprint: S.renderFingerprint ?? null, layers: heavyLayers, staleLayers: layers?.stale ?? null, localPcBadges: marks.badge, localPcIcons: marks.icons, pixels: play.stats, shot: play.shot,
   });
