@@ -14,7 +14,16 @@
  *   渲染服务照部署模板的配置起(`PROMPTCUT_RENDER_STREAMS=1`,能产轨道流),创建者建好项目后打开「生成轨道流」。2026-10-13 起每张卡的快照作废,
  *   预渲染结果只有轨道流一档;这一项关着时托管方的渲染节点完全不为这个项目产流(语义 `product/rendering.md`「预渲染」「谁产流与托管方开关」)。
  *
- *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,spaced,errors] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
+ * 2026-10-21 起:桌面版那一遍以外的各步(online、stop、spaced、usercard、errors)走**账号组合**(云端项目一律走网站账号,`product/hosting.md`;
+ *   在线构建只认账号项目):`cloud-agent-ui-lib.mjs` 的 `startAccountStack`——账号组合夹具(VisuHive 真账号后端、账号模式文档服务、
+ *   独立素材服务进程、Agent 主服务的生产装配与一条任务一个进程的任务槽)+ 主服务的真发布通道 + 真渲染服务(照 AR-10)。桌面版那一遍跑完先把
+ *   口令式的旧组合停干净,再起账号组合。创建者 = 夹具账号 dualUser0、bob = dualUser1、carol 现注册并经项目链接加入;「生成轨道流」
+ *   由创建者在在线页面的项目设置里打开(网站后端的 `ACCOUNT_ADMINS` 只设在本探针进程里,让创建者在权限分组内)。要先设
+ *   PROMPTCUT_ACCOUNT_PROVIDER_ROOT 与 PROMPTCUT_PASSWORD_ORDER_MODULE。对话记录改读主服务的事件库与文档服务的账本。
+ *   改写的断言(改前改后见 `docs/reports/AGENT-ux-probe-account.md`):X1(账号组合搭起来)、B1～B3(发起方与重开方都是在线页面)、
+ *   K2(做完的任务数按工作进程逐任务收尾行数)、UC0(新建账号项目)、UC2(看轨道流)、E5(被踢的已读消息例外)。
+ *
+ *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,spaced,usercard,errors] [--account-port 29003] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
  *        [--agent-port 5741] [--render-port 5830] [--dist <在线构建目录>] [--out <截图目录>] [--keep]
  *   端口:--base-port +0 编辑器页的源、+1 / +2 两个舞台的源、+3 桌面版编辑器(+4、+5 是它的舞台端口);`--render-port` +0/+1/+2 是渲染
  *   工作进程的三个端口,+6 是管理进程的诊断口。截图存 --out(缺省 `work/four-stage/cloud-agent/ux/`)。
@@ -994,8 +1003,8 @@ async function errorsStep() {
     await until('E3:「已关闭」的说明撤掉', async () => !(await c.page.$('[data-pc="cloud-off"]')), 15_000, 100);
     await sendText(c.page, mockSteps([{ say: '开关打开后恢复' }]));
     const again = await until('E3:开关打开后恢复', async () => (lastAssistant(await msgs(c.page))?.text ?? '').includes('开关打开后恢复'), 60_000, 150);
-    check('E3 创建者中途关了开关(项目设置里取消勾选「云端 Agent」):进行中的对话被停下,记录里写明原因,AI 栏说明已关闭;项目停在完好的版本上;勾回来恢复', !!off && e.outcome === 'error' && /关闭/.test(e.error ?? '') && /关闭/.test(String(banner ?? ''))
-      && landed >= 1 && landed < 30 && s.ok && !!again, { shown: e, banner, recorded: rec, writesLanded: landed, ...s, afterReenable: !!again });
+    check('E3 创建者中途关了开关(项目设置里取消勾选「云端 Agent」):进行中的对话被停下,对话记录里写明原因,AI 栏说明已关闭;项目停在完好的版本上;勾回来恢复', !!off && e.outcome === 'error' && /已关闭云端 Agent/.test(e.error ?? '') && /项目创建者已关闭云端 Agent/.test(String(banner ?? ''))
+      && rec?.outcome?.reason === 'agent-disabled' && landed >= 1 && landed < 30 && s.ok && !!again, { shown: e, banner, recorded: rec, writesLanded: landed, ...s, afterReenable: !!again });
   }
 
   /* ---- E4:渲染失败(渲染服务停着) */
@@ -1029,7 +1038,9 @@ async function errorsStep() {
   }
   await closeBrowser(c.browser);
 
-  /* ---- E5:发起成员中途被移出(carol;创建者从另一台设备移出她) */
+  /* ---- E5:发起成员中途被移出(carol;创建者从另一台设备把她踢出)。
+   * 现行语义(product/agent.md「改密退出与被踢的已读消息例外」,2026-10-08 用户定):共有对话里 Agent 已经读到的那条消息触发的这一轮
+   * 继续跑完、改动保留;被踢的账号所有设备都进不了项目(看不了对话、发不了消息、发不起下一轮)。原先断言「她的对话被停下」按此改写。 */
   {
     const before = await snap();
     const carol = await onlineUp(CRED.carol);
@@ -1037,18 +1048,22 @@ async function errorsStep() {
     await sendText(carol.page, writeScript(30, 500, 'rm'));
     await until('E5:这一轮开始并有写入', async () => toolParts(await msgs(carol.page)).filter((t) => t.ok).length >= 1 && (await runningNow(carol.page)), 40_000, 80);
     const conv = await conversationOf(carol.page);
-    // 账号项目:创建者把她移出名单(移出并禁入,与成员列表里「移出」同一个管理操作);旧组合是改名单
+    const visibility = S.account ? (S.diskConversation(PID, conv)?.row?.visibility ?? null) : null;
+    // 账号项目:创建者把她踢出(移出并禁入,成员列表里「踢出」同一个管理操作);旧组合是改名单
     const reply = S.account
       ? await ACTOR.admin({ op: 'kick', accountId: CRED.carol.accountId, requestId: `uxui-kick-${RUN}` }).then((r) => ({ type: r.status === 200 && r.body?.ok ? 'shared.admin.ok' : `http-${r.status}`, body: r.body }))
       : await withCreatorConn((conn) => adminOp(conn, PROJ, 'set-list', { list: [{ username: 'bob', keep: true }] }));
-    // 她被移出项目:文档服务当场断开她的页面连接,页面被阻断并说明原因;云端的那一轮停下,原因记在云端的对话记录里
-    const disk = await until('E5:服务端记下这一轮收尾', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, 30_000, 100);
-    const blocked = await until('E5:她的页面写明被移出', () => carol.page.evaluate(() => document.body.innerText.match(/[^\n]*(移出|不在名单)[^\n]*/)?.[0] ?? null), 20_000, 100);
-    const rec = recordOf(conv);
-    const s = await sane(before, okOf(conv));
+    // 她的页面当场被阻断并说明原因
+    const blocked = await until('E5:她的页面写明被踢出', () => carol.page.evaluate(() => document.body.innerText.match(/[^\n]*(踢出|移出|不在名单)[^\n]*/)?.[0] ?? null), 20_000, 100);
+    const sendBox = await carol.page.$('[data-pc="cloud-ai-panel"] [data-pc="ai-send"]:not([disabled])').catch(() => null);
     await shot(carol.page, 'E5-member-removed');
-    check('E5 发起成员中途被移出:她的对话被停下,她的页面写明「已被移出」,云端的对话记录里留着原因;项目停在完好的版本上', reply.type === 'shared.admin.ok' && /移出/.test(String(blocked ?? '')) && !!disk && okOf(conv) >= 1 && okOf(conv) < 30 && s.ok, {
-      admin: reply.type, pageSays: blocked, recorded: rec, writesLanded: okOf(conv), ...s,
+    // 共有对话里已读的这一轮继续跑完,改动都落地
+    const disk = await until('E5:已读的这一轮在云端跑完', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, 180_000, 300);
+    const rec = recordOf(conv);
+    const landed = okOf(conv);
+    const s = await sane(before, landed);
+    check('E5 发起成员中途被踢出:她的页面当场被阻断并写明被踢出;她在共有对话里已经被 Agent 读到的那一轮照常跑完、改动保留(现行语义的已读消息例外);项目停在完好的版本上', reply.type === 'shared.admin.ok' && /踢出|移出/.test(String(blocked ?? '')) && (visibility === null || visibility === 'shared') && !!disk && landed === 30 && s.ok, {
+      admin: reply.type, pageSays: blocked, conversationVisibility: visibility, sendStillEnabled: !!sendBox, recorded: rec, writesLanded: landed, ...s,
     });
     await closeBrowser(carol.browser);
   }
