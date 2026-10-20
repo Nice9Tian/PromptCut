@@ -55,18 +55,9 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
     </div>
   );
   const numberBox = (dataPc: string, value: number, step: number, onValue: (n: number) => void, opts: { min?: number; max?: number; disabled?: boolean } = {}) => (
-    <input
-      data-pc={dataPc}
-      type="number"
-      step={step}
-      min={opts.min}
-      max={opts.max}
-      disabled={opts.disabled || locked}
-      value={Number(value.toFixed(3))}
-      onChange={(e) => num(e.target.value, onValue)}
-      className="w-16 pc-left-input is-sm"
-    />
+    <NumberField dataPc={dataPc} value={value} step={step} min={opts.min} max={opts.max} disabled={opts.disabled || locked} onValue={(v) => num(v, onValue)} />
   );
+  const sub = (text: string) => <span className="shrink-0 whitespace-nowrap pc-left-muted">{text}</span>;
   const slider = (dataPc: string, value: number, min: number, max: number, step: number, onValue: (n: number) => void, disabled = false) => (
     <input
       data-pc={dataPc}
@@ -127,18 +118,16 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
       {row("起点偏移", (
         <>
           {numberBox("cut-segment-offset", offset, 0.1, (n) => run(() => actions.setCutSegment(clip.id, { cutOffset: Math.max(0, n) })), { min: 0 })}
-          <span className="pc-left-faint">秒 / 被引用剪辑共 {total.toFixed(2)} 秒</span>
+          <span className="pc-left-faint whitespace-nowrap">秒,共 {total.toFixed(2)} 秒</span>
         </>
       ), "从被引用剪辑的第几秒开始放")}
 
-      {row("开始", (
-        <>
-          {numberBox("clip-start", clip.start, 0.1, (n) => run(() => actions.moveClip(clip.id, { start: n })), { min: 0 })}
-          <span className="pc-left-muted">结束</span>
-          {numberBox("clip-end", clip.end, 0.1, (n) => run(() => actions.moveClip(clip.id, { end: n })), { min: 0 })}
-          <span className="pc-left-faint ml-auto">{len.toFixed(2)}s</span>
-        </>
-      ))}
+      <div className="flex items-center gap-2" title={`段长 ${len.toFixed(2)} 秒`}>
+        {sub("开始")}
+        {numberBox("clip-start", clip.start, 0.1, (n) => run(() => actions.moveClip(clip.id, { start: n })), { min: 0 })}
+        {sub("结束")}
+        {numberBox("clip-end", clip.end, 0.1, (n) => run(() => actions.moveClip(clip.id, { end: n })), { min: 0 })}
+      </div>
       {beyond > 0.0005 && (
         <div data-pc="cut-segment-beyond" className="pc-left-faint">
           被引用剪辑变短了:最后 {beyond.toFixed(2)} 秒超出它的总时长,那一截画面透明、无声
@@ -160,9 +149,9 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
       </div>
       {row("位置", (
         <>
-          <span className="pc-left-faint">X</span>
+          <span className="shrink-0 pc-left-faint">X</span>
           {numberBox("cut-segment-x", frame.x, 1, (n) => patchFrame({ x: n }))}
-          <span className="pc-left-faint">Y</span>
+          <span className="shrink-0 pc-left-faint">Y</span>
           {numberBox("cut-segment-y", frame.y, 1, (n) => patchFrame({ y: n }))}
         </>
       ), "锚点所在位置(像素)")}
@@ -187,14 +176,13 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
           {numberBox("cut-segment-opacity-num", clip.opacity ?? 1, 0.05, (n) => run(() => actions.updateClip(clip.id, { opacity: Math.max(0, Math.min(1, n)) })), { min: 0, max: 1 })}
         </>
       ))}
-      {row("淡入", (
-        <>
-          {numberBox("cut-segment-fadein", clip.fadeIn ?? 0, 0.1, (n) => run(() => actions.updateClip(clip.id, { fadeIn: Math.max(0, Math.min(len, n)) })), { min: 0, disabled: fadeInLocked })}
-          <span className="pc-left-muted">淡出</span>
-          {numberBox("cut-segment-fadeout", clip.fadeOut ?? 0, 0.1, (n) => run(() => actions.updateClip(clip.id, { fadeOut: Math.max(0, Math.min(len, n)) })), { min: 0, disabled: fadeOutLocked })}
-          <span className="pc-left-faint">秒</span>
-        </>
-      ), fadeInLocked || fadeOutLocked ? "由转场管着的那一侧要先删掉转场才能改" : "画面与声音一起淡")}
+      <div className="flex items-center gap-2" title={fadeInLocked || fadeOutLocked ? "由转场管着的那一侧要先删掉转场才能改" : "画面与声音一起淡(秒)"}>
+        {sub("淡入")}
+        {numberBox("cut-segment-fadein", clip.fadeIn ?? 0, 0.1, (n) => run(() => actions.updateClip(clip.id, { fadeIn: Math.max(0, Math.min(len, n)) })), { min: 0, disabled: fadeInLocked })}
+        {sub("淡出")}
+        {numberBox("cut-segment-fadeout", clip.fadeOut ?? 0, 0.1, (n) => run(() => actions.updateClip(clip.id, { fadeOut: Math.max(0, Math.min(len, n)) })), { min: 0, disabled: fadeOutLocked })}
+        <span className="shrink-0 pc-left-faint">秒</span>
+      </div>
 
       <div className="mt-1 pt-2 pc-left-divider font-semibold pc-left-strong">声音</div>
       {row("音量", (
@@ -216,5 +204,30 @@ export function CutSegmentForm({ clip }: { clip: TrackClip }) {
 
       {err && <div data-pc="cut-segment-error" className="text-red-400 mt-1" role="alert">{err}</div>}
     </div>
+  );
+}
+
+/**
+ * 数字框:改一个字就提交一次(和「开始 / 结束」同一个口径),但输入中显示用户敲的原样,
+ * 不被受控值改写成「0100」这种;失焦后回到项目里的值。
+ */
+function NumberField({ dataPc, value, step, min, max, disabled, onValue }: {
+  dataPc: string; value: number; step: number; min?: number; max?: number; disabled?: boolean; onValue: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input
+      data-pc={dataPc}
+      type="number"
+      step={step}
+      min={min}
+      max={max}
+      disabled={disabled}
+      value={draft ?? String(Number(value.toFixed(3)))}
+      onFocus={(e) => setDraft(e.currentTarget.value)}
+      onChange={(e) => { setDraft(e.target.value); onValue(e.target.value); }}
+      onBlur={() => setDraft(null)}
+      className="w-14 shrink-0 pc-left-input is-sm"
+    />
   );
 }
