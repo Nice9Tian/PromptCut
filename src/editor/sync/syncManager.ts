@@ -41,7 +41,7 @@ import { bindRenderNode, unbindRenderNode } from "./renderNodeHandoff";
 import { receivePresence, resyncPresenceLink, setPresenceLink } from "./presence";
 import { ONLINE } from "../../online/mode";
 import { cacheCollabSecrets } from "./collabSecrets";
-import { applyHostedChange, applyHostedOptionChange, hostedChangeNotices, HOSTED_SERVICE_TEXT, hostedOptionText, parseHosted, type HostedOptionName, type HostedServiceName, type HostedView } from "./hostedServices";
+import { accountHostedFailure, applyHostedChange, applyHostedOptionChange, hostedChangeNotices, HOSTED_SERVICE_TEXT, hostedOptionText, parseHosted, type HostedOptionName, type HostedServiceName, type HostedView } from "./hostedServices";
 import { clearHostedAgent, setHostedAgent, setHostedAgentEnabled } from "../../ai/cloud/endpoint";
 import { accountCloudIdentity, CloudDelegationError, setCloudIdentity, type CloudIdentity } from "../../ai/cloud/identity";
 import { setCloudConsentSource } from "../../ai/cloud/consent";
@@ -1281,8 +1281,15 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         try {
           await renew();
           if (!isCurrent() || !current.creator) throw new AccountFailure(403, 'creator-required');
-          if ('option' in change) await options.client.setHostedOption(options.projectId, change.service, change.option, change.enabled, current.accessRevision, crypto.randomUUID());
-          else await options.client.setHostedService(options.projectId, change.service, change.enabled, current.accessRevision, crypto.randomUUID());
+          try {
+            if ('option' in change) await options.client.setHostedOption(options.projectId, change.service, change.option, change.enabled, current.accessRevision, crypto.randomUUID());
+            else await options.client.setHostedService(options.projectId, change.service, change.enabled, current.accessRevision, crypto.randomUUID());
+          } catch (error) {
+            // 被拒(例如不在「生成轨道流」的权限分组)或没做成:马上再读一次会话,开关与置灰照服务器的真实状态,
+            // 不等下一次定时续会话;读不到也照样把原来的错误交给界面明说
+            await renew().catch(() => undefined);
+            throw error;
+          }
           await renew();
         } finally { ownHostedChange -= 1; }
       };
@@ -1973,14 +1980,14 @@ export async function adminOp(
  * 证明与其它创建者操作相同(`key` 是同一次流程里刚验证过的 K)。成功后马上把本页的开关状态改过来
  * (服务端随后还会推一条刷新后的成员列表,以它为准)。
  */
-export async function setHostedService(service: HostedServiceName, enabled: boolean, key: string): Promise<{ ok: true } | { ok: false; error: AdminError }> {
+export async function setHostedService(service: HostedServiceName, enabled: boolean, key: string): Promise<HostedChangeResult> {
   if (view.shared?.accountId) {
     // 账号项目:不走创建者密码的证明,凭账号的登录态,服务端按创建者身份把关(成员回 403)。改完续一次会话,界面照读到的状态走
     try {
       if (service === 'agent') await setAccountAgentEnabled(enabled);
       else await setAccountHosted({ service, enabled });
       return { ok: true };
-    } catch (error) { return { ok: false, error: accountAdminError(error) }; }
+    } catch (error) { return accountHostedFailure(error); }
   }
   const r = await adminOp("set-hosted-service", { key }, { service, enabled });
   if (!r.ok) return r;
@@ -1995,11 +2002,11 @@ export async function setHostedService(service: HostedServiceName, enabled: bool
  * `shared.admin { op: 'set-hosted-option' }`,证明与其它创建者操作相同。成功后马上把本页的状态改过来(服务端随后还会推一条刷新后的成员列表)。
  * 账号项目(云端账号那条路):创建者经 `/hosted/shared/account/admin` 的 `set-hosted-option` 改,凭账号的登录态,成员被服务端拒。
  */
-export async function setHostedOption(service: HostedServiceName, option: HostedOptionName, enabled: boolean, key: string): Promise<{ ok: true } | { ok: false; error: AdminError }> {
+export async function setHostedOption(service: HostedServiceName, option: HostedOptionName, enabled: boolean, key: string): Promise<HostedChangeResult> {
   if (view.shared?.accountId) {
     if (service !== 'render') return { ok: false, error: 'bad-message' };
     try { await setAccountHosted({ service, option, enabled }); return { ok: true }; }
-    catch (error) { return { ok: false, error: accountAdminError(error) }; }
+    catch (error) { return accountHostedFailure(error); }
   }
   const r = await adminOp("set-hosted-option", { key }, { service, option, enabled });
   if (!r.ok) return r;
@@ -2019,14 +2026,9 @@ async function setAccountHosted(change: Parameters<NonNullable<Current["setAccou
   await cur.setAccountHosted(change);
 }
 
-/** 账号那条路的失败 → 创建者操作的错误种类:不是创建者(403)是 forbidden,请求不对(400)是 bad-message,连不上是 offline */
-function accountAdminError(error: unknown): AdminError {
-  if (!(error instanceof AccountFailure)) return "other";
-  if (error.status === 403) return "forbidden";
-  if (error.status === 400) return "bad-message";
-  if (error.status === 0 || error.code === "network") return "offline";
-  return "other";
-}
+/** 改托管方服务开关的结果。账号项目失败时另带 `message`(服务端给的拒绝原因翻成的一句话),见 `hostedServices.ts` 的 `accountHostedFailure` */
+export type HostedChangeResult = { ok: true } | { ok: false; error: AdminError; message?: string };
+
 
 /** 新的一份口令凭证(改项目密码、改名单、改创建者密码用),kdf 与项目记录一致用缺省 */
 export function makeCredential(password: string) {

@@ -242,3 +242,27 @@ test('account session carries the hosted render node (with its streams option) o
   assert.deepEqual(JSON.parse(wires[0].body), { projectId, enabled: true, expectedAccessRevision: 1, requestId: 'render-on', op: 'set-hosted-service', service: 'render' });
   assert.deepEqual(JSON.parse(wires[1].body), { projectId, enabled: true, expectedAccessRevision: 1, requestId: 'streams-on', op: 'set-hosted-option', service: 'render', option: 'streams' });
 });
+
+test('STF1 account session keeps render.streamsAllowed (permission group verdict); a 403 permission-denied on set-hosted-option surfaces the readable reason', async () => {
+  let hosted = session.hosted, deny = false;
+  const client = createAccountClient({ online: true, origin: 'https://visuhive.com', device, now: () => 1000,
+    fetch: async (url) => {
+      if (url.pathname.endsWith('/me')) return reply({ ok: true, account, csrfToken: 'csrf' });
+      if (url.pathname.includes('/editor/')) return reply(credential());
+      if (url.pathname.endsWith('/admin')) return deny ? reply({ ok: false, error: 'permission-denied', code: 'permission-denied' }, 403)
+        : reply({ ok: true, eventId: 'event', accessRevision: 2, completed: false, state: 'pending-services' });
+      return reply({ ...session, hosted });
+    } });
+  await client.restore();
+  // 不在分组:文档服务下发 streamsAllowed:false,页面必须收下(原来这里被丢掉,开关不置灰)
+  hosted = { ...session.hosted, render: { available: true, enabled: true, streams: false, streamsAllowed: false } };
+  assert.deepEqual((await client.session(projectId)).hosted.render, { available: true, enabled: true, streams: false, streamsAllowed: false });
+  hosted = { ...session.hosted, render: { available: true, enabled: true, streams: true, streamsAllowed: true } };
+  assert.deepEqual((await client.session(projectId)).hosted.render, { available: true, enabled: true, streams: true, streamsAllowed: true });
+  // 不是布尔不收,其余照收
+  hosted = { ...session.hosted, render: { available: true, enabled: true, streams: false, streamsAllowed: 'no' } };
+  assert.deepEqual((await client.session(projectId)).hosted.render, { available: true, enabled: true, streams: false });
+  deny = true;
+  await assert.rejects(client.setHostedOption(projectId, 'render', 'streams', true, 1, 'streams-on'),
+    { status: 403, code: 'permission-denied', message: '你的账号没有开启这一项的权限，请联系托管方。' });
+});
