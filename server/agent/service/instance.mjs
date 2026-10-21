@@ -22,6 +22,7 @@ import { createPresenceBridge } from '../presence-bridge.mjs';
 import { loadRole } from '../agent-roles.mjs';
 import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from '../user-editing.mjs';
 import { effectiveIsFile } from '../../card-overrides.mjs';
+import { parkedCutsIndex } from '../../../src/kernel/cutsIndex.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
   CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PAGE_TOOLS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,
@@ -153,7 +154,10 @@ export function createAgentInstance(env) {
 
     if (tool === 'get_project') {
       // 和编辑器页面的 getProject 同一个形状:文字稿只给摘要,全文走 get_transcript
+      // 停放剪辑的片段索引放最前,模型不必 switch_cut 就拿得到别的剪辑里的 clipId
+      const parkedCuts = parkedCutsIndex(project);
       return {
+        ...(parkedCuts ? { parkedCuts } : null),
         ...project,
         media: (project.media || []).map((m) => m?.transcript ? {
           ...m,

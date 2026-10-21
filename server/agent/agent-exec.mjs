@@ -20,6 +20,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { annotateResult, clipIdsOfOps, overwroteView } from './user-editing.mjs';
+import { parkedCutsIndex } from '../../src/kernel/cutsIndex.mjs';
 
 export const AGENT_EXEC_DEFAULTS = Object.freeze({
   /** 被拒(stale)后等副本追上文档服务的当前版本,Agent 马上重读就能读到最新的 */
@@ -162,7 +163,10 @@ function withRev(result, rev) {
 
 /** get_project 的回包形状(和页面 handlers/project.ts 的 getProject 相同:文字稿只给摘要) */
 export function projectView(project) {
+  // 停放剪辑的片段索引放最前:tracks 只是激活剪辑的,模型要改别的剪辑里的片段得先有 clipId,没有它就 switch_cut
+  const parkedCuts = parkedCutsIndex(project);
   return {
+    ...(parkedCuts ? { parkedCuts } : null),
     ...project,
     media: (project.media || []).map((m) => (m?.transcript ? {
       ...m,

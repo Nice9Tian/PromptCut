@@ -31,9 +31,12 @@ export function clipMissingError(clipId: string): Error {
 /** 回包标上片段所在的剪辑;`look` 去掉(see_frames 只看激活的剪辑) */
 function annotate(result: unknown, cut: { cutId: string; cutName: string }): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) return result;
-  const { look: _look, ...rest } = result as Record<string, unknown>;
+  const { look: _look, timeline, ...rest } = result as Record<string, unknown>;
+  // 编辑视图里「别的剪辑」是以这条为激活算出来的(激活的那条成了「别的」),对模型是颠倒的,去掉
+  const { otherCuts: _other, ...timelineRest } = (timeline && typeof timeline === "object" ? timeline : {}) as Record<string, unknown>;
   return {
     ...rest,
+    ...(timeline && typeof timeline === "object" ? { timeline: timelineRest } : null),
     cut: { id: cut.cutId, name: cut.cutName, active: false },
     cutNote: `这张卡在没有激活的剪辑「${cut.cutName}」里,已就地处理,没有切换剪辑(别人的界面不动);回包里的 timeline 是这条剪辑的。` +
       "看画面的工具(see_frames / get_layout / get_gif)只看激活的剪辑,要看它的画面先 switch_cut。",
