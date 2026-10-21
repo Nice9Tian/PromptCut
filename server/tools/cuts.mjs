@@ -111,13 +111,11 @@ export const cutsTools = [
   },
   {
     name: "set_cut_segment",
-    description: "改一个剪辑段引用哪条剪辑(cutId 或 name)、从被引用剪辑的第几秒开始(cutOffset)。会循环引用、偏移超出被引用剪辑的总时长都会被拒;改完段比被引用剪辑剩下的还长时,出点截到剩下的长度。起止、框、不透明度、淡入淡出、音量与静音不在这里改(见 add_cut_segment 的说明)。不是剪辑段的片段用 update_clip。",
+    description: "改一个剪辑段从被引用剪辑的第几秒开始(cutOffset)。偏移超出被引用剪辑的总时长会被拒;改完段比被引用剪辑剩下的还长时,出点截到剩下的长度。**剪辑段引用哪条剪辑不能改**:带了 cutId / name 会被拒;要换就 remove_clip 删掉这段,用 add_cut_segment 放一段新的。起止、框、不透明度、淡入淡出、音量与静音不在这里改(见 add_cut_segment 的说明)。不是剪辑段的片段用 update_clip。",
     inputSchema: {
       type: "object",
       properties: {
         clipId: { type: "string" },
-        cutId: { type: "string" },
-        name: { type: "string", description: "剪辑名,和 cutId 二选一" },
         cutOffset: { type: "number", description: "秒,不小于 0" }
       },
       required: ["clipId"]

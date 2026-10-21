@@ -1,7 +1,7 @@
 import type { EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
 import { findClip } from "../../kernel/project";
-import { cutCycleReason, cutDuration, cutReferences, isCutSegment } from "../../kernel/cutSegments";
+import { CUT_SEGMENT_REF_FIXED, cutCycleReason, cutDuration, cutReferences, isCutSegment } from "../../kernel/cutSegments";
 import { listCuts, resolveCut } from "../../kernel/cuts";
 import { timelineDigest } from "../tools/toolEcho";
 import { clipGuard } from "../common";
@@ -9,7 +9,7 @@ import { clipGuard } from "../common";
 /**
  * 剪辑段的 Agent 工具(`product/project-model.md`「剪辑」「片段」,kernel/cutSegments.ts):
  *   - `add_cut_segment`:在激活剪辑里放一个引用别的剪辑的剪辑段;放进自己、会循环引用(任意深度)时拒绝并说明原因;
- *   - `set_cut_segment`:改剪辑段引用哪条剪辑、从被引用剪辑的哪一秒开始(起止、框、不透明度、淡入淡出用 update_clip /
+ *   - `set_cut_segment`:改剪辑段从被引用剪辑的哪一秒开始;引用哪条剪辑不能改(2026-10-21 用户定),带了 cutId / name 就拒(起止、框、不透明度、淡入淡出用 update_clip /
  *     set_position / set_rect,音量与静音用 set_clip_volume / set_clip_muted,切分与复制用 split_clip / duplicate_clip)。
  *
  * 两个工具在 `EditorApi`(src/ai/mcpExecutor.ts)上各有自己的方法,路由表(src/mcp/routes.mjs)直连;
@@ -55,11 +55,12 @@ export const cutSegmentHandlers: Pick<EditorApi, "addCutSegment" | "setCutSegmen
     const hit = findClip(p, String(args.clipId ?? ""));
     if (!hit) throw new Error(`找不到 clip ${args.clipId}`);
     if (!isCutSegment(hit.clip)) throw new Error(`clip ${args.clipId} 不是剪辑段;卡片段、素材段用 update_clip`);
-    const cutId = args.cutId !== undefined || args.name !== undefined ? resolveCut(p, { cutId: args.cutId, name: args.name }).id : undefined;
+    // 引用哪条剪辑不能改(2026-10-21 用户定):要换就删掉这段重新放
+    if (args.cutId !== undefined || args.name !== undefined) throw new Error(CUT_SEGMENT_REF_FIXED);
     if (args.cutOffset !== undefined && (typeof args.cutOffset !== "number" || !Number.isFinite(args.cutOffset) || args.cutOffset < 0)) {
       throw new Error(`cutOffset 必须是不小于 0 的秒数,收到 ${JSON.stringify(args.cutOffset)}`);
     }
-    actions.setCutSegment(hit.clip.id, { ...(cutId ? { cutId } : {}), ...(args.cutOffset !== undefined ? { cutOffset: args.cutOffset } : {}) });
+    actions.setCutSegment(hit.clip.id, { ...(args.cutOffset !== undefined ? { cutOffset: args.cutOffset } : {}) });
     clipGuard.noteMutation();
     return { ok: true, segment: segmentInfo(hit.clip.id), timeline: timelineDigest(getState().project) };
   },

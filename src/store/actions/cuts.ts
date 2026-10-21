@@ -2,7 +2,7 @@ import {
   switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
   removeCut as removeCutPure, placeCutSegment,
 } from "../../kernel/cuts";
-import { cutCycleReason, cutDuration, cutReferences, isCutSegment } from "../../kernel/cutSegments";
+import { CUT_SEGMENT_REF_FIXED, cutCycleReason, cutDuration, cutReferences, isCutSegment } from "../../kernel/cutSegments";
 import { findClip, newId, type Track, type TrackClip } from "../../kernel/project";
 
 import { state, set, setProject, updateTrack, runInCutScope } from "../core";
@@ -84,18 +84,18 @@ export const cuts = {
     return clip;
   },
   /**
-   * 改剪辑段引用哪条剪辑、从被引用剪辑的哪一秒开始。会循环引用、偏移超出被引用剪辑的总长都抛。
+   * 改剪辑段从被引用剪辑的哪一秒开始。偏移超出被引用剪辑的总长抛。
+   * 引用哪条剪辑不能改(2026-10-21 用户定,`workflow/editing.md`「剪辑段的属性」):要换就删掉这段重新放,
+   * 所以这个动作只收 `cutOffset`,别处也换不了引用。
    * 改完段太长的话出点截到被引用剪辑剩下的长度(新建或拉长剪辑段时不能超出被引用剪辑当时的总时长)。
    */
-  setCutSegment(clipId: string, patch: { cutId?: string; cutOffset?: number }): TrackClip {
+  setCutSegment(clipId: string, patch: { cutOffset?: number }): TrackClip {
     const p = state.project;
     const hit = findClip(p, clipId);
     if (!hit || !isCutSegment(hit.clip)) throw new Error(`${clipId} 不是剪辑段`);
     if (hit.track.locked) throw new Error(`序列「${hit.track.name}」锁着`);
-    const cutId = patch.cutId ?? hit.clip.cutId!;
-    if (!(p.cuts ?? []).some((c) => c.id === cutId)) throw new Error(`找不到剪辑 ${cutId}`);
-    const reason = p.activeCutId ? cutCycleReason(p, p.activeCutId, cutId) : null;
-    if (reason) throw new Error(reason);
+    if (patch && Object.hasOwn(patch, "cutId")) throw new Error(CUT_SEGMENT_REF_FIXED);
+    const cutId = hit.clip.cutId!;
     const offset = Math.max(0, patch.cutOffset ?? hit.clip.cutOffset ?? 0);
     const total = cutDuration(p, cutId);
     if (offset >= total) throw new Error(`偏移 ${offset} 秒超出了被引用剪辑的总时长 ${total} 秒`);
