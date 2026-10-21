@@ -333,3 +333,9 @@ test('补丁版 schema 的字段与完整版一一对应,只是少了 required',
   const patch = buildParamsSchema(CARDS, { patch: true });
   assert.deepEqual(patch.anyOf.map((b) => [b.title, Object.keys(b.properties)]), full.anyOf.map((b) => [b.title, Object.keys(b.properties)]));
 });
+
+test('set_clip 的说明写明 params 段是整份替换,与 update_clip 的补丁区分', () => {
+  const desc = mcpTools.find((t) => t.name === 'set_clip').description;
+  assert.match(desc, /整份替换/);
+  assert.match(desc, /update_clip/);
+});

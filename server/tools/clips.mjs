@@ -88,7 +88,7 @@ export const clipsTools = [
   },
   {
     name: "set_clip",
-    description: "按约定封装改一张卡:把 get_clip 拿到的对象改好后整份传回来(也可以只传要改的段)。可写:card.id(换卡)、params(全量)或 parts 里各部件的 params、time.start / time.end、frame.local(x / y / w / h / anchor / scale / rotate,以及三维的 rotateX / rotateY / translateZ —— 三维要先 set_camera3d 打开才有透视,而且只对卡片段生效,素材段会被拒;或 null 铺满)、blend.opacity / fadeIn / fadeOut(声音音量不在 blend 里,用 set_clip_volume)。只写有差异的段,任一处不合法整份不写;frame.world、motion、card.lifecycle 是只读的,传了会被忽略。返回改了哪些段、新的封装和 look。",
+    description: "按约定封装改一张卡:把 get_clip 拿到的对象改好后整份传回来(也可以只传要改的段)。可写:card.id(换卡)、params(**全量**——这一段是整份替换,没写进去的键回到卡片默认值,和 update_clip 的增量补丁不同;只想改个别参数就用 update_clip,或先 get_clip 拿到现在的整份再改)或 parts 里各部件的 params、time.start / time.end、frame.local(x / y / w / h / anchor / scale / rotate,以及三维的 rotateX / rotateY / translateZ —— 三维要先 set_camera3d 打开才有透视,而且只对卡片段生效,素材段会被拒;或 null 铺满)、blend.opacity / fadeIn / fadeOut(声音音量不在 blend 里,用 set_clip_volume)。只写有差异的段,任一处不合法整份不写;frame.world、motion、card.lifecycle 是只读的,传了会被忽略。返回改了哪些段、新的封装和 look。",
     inputSchema: {
       type: "object",
       properties: {
