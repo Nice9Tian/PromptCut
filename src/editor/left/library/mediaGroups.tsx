@@ -121,7 +121,7 @@ function startMediaDrag(e: React.DragEvent, m: MediaAsset) {
 function MediaTile({ m, onContextMenu }: { m: MediaAsset; onContextMenu: (e: React.MouseEvent) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [hot, setHot] = useState(false);
-  // 桌面是 m.url;在线浏览器模式换成远程素材服务的地址(低内存档只给小尺寸),没就绪时不挂 src
+  // 桌面是 m.url;在线浏览器模式换成远程素材服务的地址(只用小尺寸的素材只给小尺寸),没就绪时不挂 src
   const src = usePreviewMediaUrl(m) || undefined;
   const [progress, setProgress] = useState<number | null>(null);
 
@@ -302,9 +302,9 @@ export function useMediaMenu(flash: (text: string, ms?: number) => void) {
       if (!width || !height || width <= 0 || height <= 0) {
         // 图片得用 <img> 量,拿 <video> 读它只会报「加载视频元数据失败」
         // 量的必须是原尺寸(量小尺寸会把画幅设小):桌面原样 m.url,在线页面走远程素材服务上的原尺寸。
-        // 低内存档平时不拉原尺寸:素材没记下宽高就不量,照实说
+        // 最低一档平时不拉原尺寸:素材没记下宽高就不量,照实说
         const policy = mediaTierPolicy();
-        const url = policy.lowMemory ? "" : originalMediaUrl(m, policy);
+        const url = policy.smallOnly ? "" : originalMediaUrl(m, policy);
         if (!url) { alert("这份素材没有记下分辨率，在这台设备上量不了"); return; }
         const measured = m.kind === "image" ? await measureImageDimensions(url) : await measureVideoDimensions(url);
         width = measured.width;

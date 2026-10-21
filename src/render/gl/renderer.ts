@@ -26,7 +26,7 @@ import * as THREE from "three";
 import type {
   CanvasCardProgram, GlBeatCard, GlFromWorker, GlLayoutCard, GlProgram, GlWorkerDiag, ThreeBuilt, TwoDProgram,
 } from "./CanvasCardProgram";
-import { ATLAS_MAX, ATLAS_MAX_LOW_MEMORY, layoutKeyOf, packAtlas } from "./atlasPack.mjs";
+import { ATLAS_MAX, ATLAS_MAX_COMPACT, layoutKeyOf, packAtlas } from "./atlasPack.mjs";
 
 type DoneMsg = Extract<GlFromWorker, { type: "done" }>;
 type RegionsMsg = Extract<GlFromWorker, { type: "regions" }>;
@@ -109,12 +109,13 @@ const sleep = (ms: number) => new Promise<void>((r) => realTimeout(r, ms));
 type Orientation = "flipY" | "none";
 
 export function createGlRenderer(opts: {
-  lowMemory: boolean;
+  /** 只有一个舞台:图集按小的上限开(`ATLAS_MAX_COMPACT`) */
+  compact: boolean;
   programOf: (id: string) => CanvasCardProgram | undefined;
   /** 主线程退路在没有 `OffscreenCanvas` 的环境里自己给一张画布 */
   canvas?: OffscreenCanvas | HTMLCanvasElement;
 }): GlRenderer {
-  const maxAtlas = opts.lowMemory ? ATLAS_MAX_LOW_MEMORY : ATLAS_MAX;
+  const maxAtlas = opts.compact ? ATLAS_MAX_COMPACT : ATLAS_MAX;
   let canvas: OffscreenCanvas | HTMLCanvasElement;
   let gl: WebGL2RenderingContext | null = null;
   let error: string | null = null;

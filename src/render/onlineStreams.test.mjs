@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import {
   OnlineSnapshotSource, parseLayerMap, parseLayerStreams, streamSpansInWindow, applyReadyMessage, BlockLru,
   LAYER_MAP_PREFIX, MANIFEST_POLL_MS, STREAM_RETRY_MS, LAYER_MAP_POLL_MS,
-  browserDecodeSupport, LOW_MEMORY_STREAM_CACHE_MAX_BYTES, STREAM_CACHE_MAX_BYTES,
+  browserDecodeSupport, SPARSE_STREAM_CACHE_MAX_BYTES, STREAM_CACHE_MAX_BYTES,
 } from './snapshotSource.ts';
 import { streamPlanesFor, SEGMENT_FRAMES } from './streamPlayer.ts';
 import { streamInputSig } from './streamInputSig.mjs';
@@ -470,7 +470,7 @@ test('低内存档、浏览器解得了:照普通档的路取流(层表、清单
   await w2.settle(normal.src);
   assert.deepEqual(last(low.streamMessages()), last(normal.streamMessages()));
   assert.deepEqual(w.fetches.map((f) => f.url).sort(), w2.fetches.map((f) => f.url).sort());
-  assert.ok(LOW_MEMORY_STREAM_CACHE_MAX_BYTES < STREAM_CACHE_MAX_BYTES);
+  assert.ok(SPARSE_STREAM_CACHE_MAX_BYTES < STREAM_CACHE_MAX_BYTES);
   low.src.stop();
   normal.src.stop();
 });

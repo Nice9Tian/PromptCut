@@ -4,8 +4,9 @@
  *
  * # 何时当节点(第 2 节)
  *
- * 每 `HOST_TICK_MS` 判一次 `browserNodeEligibility`(在线构建且嵌了代码版本、普通档、两个跨源舞台都握上手、Chromium、以成员身份
- * 连着云端项目、测量落定)。成立就开 render 连接当节点;不成立(运行中改判低内存档、退回单舞台、离开项目……)就放回全部、结束会话。
+ * 每 `HOST_TICK_MS` 判一次 `browserNodeEligibility`(在线构建且嵌了代码版本、身份为电脑、不是最低一档、两个跨源舞台都握上手、Chromium、
+ * 以成员身份连着云端项目、测量落定)。成立就开 render 连接当节点;不成立(退回单舞台、离开项目……)就放回全部、结束会话。
+ * 身份为手机、或只有一个舞台的页面不当队列节点,但照样开 render 连接报到拿指纹、只为本页产稀疏版(2026-10-14 用户定);最低一档两样都不做。
  * 被踢(4003)、项目被删(4004)、报到被拒(`forbidden` / `not-chromium` / `bad-message`)之后这一页不再当节点。
  *
  * # render 连接与票据(第 5 节)
@@ -196,6 +197,14 @@ export interface BrowserNodeHostDeps {
 }
 
 /**
+ * 只为本页产稀疏版、不当队列节点:身份为手机(语义 `product/platforms.md`「渲染节点」:手机、平板也为本页产稀疏版),
+ * 或只有一个舞台(没有后台舞台可以兼做节点)。最低一档两样都不做(连基准卡都跑不动,不在本页产流)。
+ */
+export function ownSparseOnly(e: Pick<EligibilityInput, "phone" | "lowest" | "stageLayout">): boolean {
+  return !e.lowest && (e.phone || e.stageLayout === "single");
+}
+
+/**
  * 页面一侧的「卡片计划」原料,与导出页 `window.__pcCardPlan()` 同形(`src/ExportView.tsx`):卡片图、每张卡的源码版本、环境。
  * 切分方的键是拿导出页的这一份算的;本页产流拿这一份算,同一个项目、同一份代码两边就得出同一个键。
  * 字体指纹取本页文档已加载的字体(导出页取它自己文档的);两边加载的字体不一样时键不同,那条流切分方会当没有、按自己的键另产。
@@ -277,7 +286,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     return rw?.ticket ?? null;
   };
   const uploader: SnapUploader = createSnapUploader({ base: remoteAssetBase, ticket: rwTicket });
-  const store = pageL2({ lowMemory: false }).catch(() => null);
+  const store = pageL2().catch(() => null);
 
   /* ---------------- 生成快照的活 ---------------- */
 
@@ -763,8 +772,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
       return s === "open" || s === "claimed" || s === "done" || s === "failed" ? (s as PlanState) : "none";
     },
     codeVersion: deps.eligibility().codeVersion ?? null,
-    lowMemory: () => deps.eligibility().lowMemory === true,
-    waitMs: deps.eligibility().lowMemory ? 0 : undefined,
+    sparseOnly: () => ownSparseOnly(deps.eligibility()),
+    waitMs: ownSparseOnly(deps.eligibility()) ? 0 : undefined,
     specs: async (plan) => {
       const project = kept.get(plan.projectRev) ?? null;
       const fp = node?.envFingerprint ?? null;
@@ -930,8 +939,8 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     node = createBrowserNode({
       nodeId, projectId, userId: me().userId ?? "", codeVersion: deps.eligibility().codeVersion ?? null, environment: pageEnvironment(),
       // 本页自己在产流时不认领:两条路共用后台舞台的同一份活
-      // 测量落定之前不认领(连接先开着,为的是测量时就能产稀疏版);低内存档绝不当队列节点
-      now: Date.now, isIdle: () => !deps.eligibility().lowMemory && settled && isIdle() && !pages.running(), busy,
+      // 测量落定之前不认领(连接先开着,为的是测量时就能产稀疏版);只为本页产稀疏版的(手机、单舞台)绝不当队列节点
+      now: Date.now, isIdle: () => !ownSparseOnly(deps.eligibility()) && settled && isIdle() && !pages.running(), busy,
       send: (m) => ep?.send(m) ?? false,
       keptProject: (rev) => kept.get(rev) ?? null,
       fetchSnapshot, bakeFrame, finishTask, lookupResult,
@@ -979,11 +988,12 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     if (raw.measured && projectId) measuredProjects.add(projectId);
     const input = projectId && measuredProjects.has(projectId) ? { ...raw, measured: true } : raw;
     eligibility = browserNodeEligibility(input);
-    settled = eligibility.ok || (!!raw.lowMemory && !!raw.measured);
-    const lowMemCanConnect = !!raw.lowMemory && !!raw.online && !!raw.codeVersion && !!raw.member && isChromiumUserAgent(raw.userAgent);
+    const sparseOnly = ownSparseOnly(raw);
+    settled = eligibility.ok || (sparseOnly && !!raw.measured);
+    const ownCanConnect = sparseOnly && !!raw.online && !!raw.codeVersion && !!raw.member && isChromiumUserAgent(raw.userAgent);
     // 别的条件都成立、只差测量没落定:连接先开、照常报到拿指纹(测量时就产稀疏版要它),不认领(`settled` 为假)
-    // 低内存档下满足在线成员条件时允许开 render 连接报到拿指纹供本页算流键,但不认领队列任务
-    connectable = !fatal && !!projectId && (eligibility.ok || eligibility.reason === "measuring" || lowMemCanConnect);
+    // 身份为手机、只有一个舞台的页面满足在线成员条件时允许开 render 连接报到拿指纹供本页算流键、产本页的稀疏版,但不认领队列任务
+    connectable = !fatal && !!projectId && (eligibility.ok || eligibility.reason === "measuring" || ownCanConnect);
     if (!connectable || !projectId) {
       if (node) teardown(fatal ?? eligibility.reason ?? "no-project");
       // 测量方还在等的那一次要有人推时钟

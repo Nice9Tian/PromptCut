@@ -3,7 +3,7 @@
  *
  * - 哪些片段是重卡:渲染节点写进内容库的层表(`layers:<项目 id>`,`server/artifact-transfer.mjs` 的 `layerMapOf`);
  *   还没有层表时退回页面自己的分派表判重的片段(调用方给 `fallbackHeavy`),它们一律算缺。
- * - 低内存档(语义 `product/platforms.md`「面向的平台」的导出):只有页面判重的卡用预渲染原尺寸,判轻的卡由本机逐帧渲 ——
+ * - 在线浏览器(语义 `product/platforms.md`「在线浏览器」的导出):只有页面判重的卡用预渲染原尺寸,判轻的卡由本机逐帧渲 ——
  *   调用方给 `onlyClips`(页面判重的片段),层表里不在其中的层不算重卡、不核对、不取。
  * - 就绪:每张重卡每一段清单(`<resultKey>:<from>-<to>`)的 `frames` 盖满整段。原尺寸只认 `frames`,
  *   `small`(小尺寸)不算 —— 两档的就绪分开记。

@@ -897,7 +897,7 @@ export function createRenderQueue(options = {}) {
       return emit(conn, 'task.claim-rejected', { id, reason: 'forbidden' }, reqId);
     }
     // X4：plan 只给 pc。独立主机不替任何页面做计划，纯浏览器没有 Chrome 和 card-cache（filter.mjs 规则 6 在节点侧也挡）。
-    // C10 契约第 18 节第 9 条〔裁〕对 X4 的修改：带片段清单的 plan（在线页面的清单计划、低内存档的预渲染重试计划）host 也能认领，
+    // C10 契约第 18 节第 9 条〔裁〕对 X4 的修改：带片段清单的 plan（在线页面的清单计划、旧页面的预渲染重试计划）host 也能认领，
     // 由认领的节点用自己的指纹切分；不带清单的桌面 plan 照旧只给 pc。纯浏览器一律不认领 plan
     if (task.kind === 'plan' && (node.profile === 'browser' || (node.profile === 'host' && !isListPlan(task)))) {
       return emit(conn, 'task.claim-rejected', { id, reason: 'plan-profile' }, reqId);

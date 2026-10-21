@@ -11,8 +11,8 @@
  *
  * # 配额与淘汰
  *
- * - 软上限:普通档 256 MiB,低内存档 64 MiB,由这里自己的 LRU 守住;`navigator.storage.estimate()` 拿得到时取
- *   「上限」与「剩余额度的 10%」的较小者。按块的字节数做 LRU,`costs` 不参与淘汰。
+ * - 软上限:按实测到的环境分配(`l2LimitOf`;不按身份或档位定固定数,2026-10-07 用户定),由这里自己的 LRU 守住。
+ *   按块的字节数做 LRU,`costs` 不参与淘汰。
  *   LRU 的次序:写入时刻落盘(`snapshots` 的 `at`);读命中只更新内存里的次序,不为改一个时间戳重写整块字节 ——
  *   重开页面之后退回按写入时刻排(近似 LRU,见报告)。
  * - 写入遇到 `QuotaExceededError`:在**一个删除事务里**按 LRU 删到腾出 `max(16 MiB, 这一块的字节数)` 为止(至多 64 MiB),
@@ -24,9 +24,8 @@
  */
 
 export const MiB = 1024 * 1024;
-/** 软上限(C10 契约第 4 节〔裁〕;三级数字,`mechanism/platforms.md`) */
-export const L2_SOFT_LIMIT_NORMAL = 256 * MiB;
-export const L2_SOFT_LIMIT_LOW = 64 * MiB;
+/** 软上限拿不到实测额度时的缺省(C10 契约第 4 节〔裁〕;三级数字,`mechanism/platforms.md`) */
+export const L2_SOFT_LIMIT_DEFAULT = 256 * MiB;
 /** 配额错误后一个删除事务回收的下限与上限(第 18 节第 2 条) */
 export const L2_RECLAIM_MIN = 16 * MiB;
 export const L2_RECLAIM_MAX = 64 * MiB;
@@ -44,7 +43,6 @@ export type Range = [number, number];
 export interface L2OpenOptions {
   /** IndexedDB 工厂;缺省 `globalThis.indexedDB` */
   indexedDB?: IDBFactory;
-  lowMemory?: boolean;
   /** 缺省 `navigator.storage.estimate` */
   estimate?: () => Promise<{ quota?: number; usage?: number }>;
   now?: () => number;
@@ -72,7 +70,6 @@ export interface L2Stats {
 }
 
 export interface L2Store {
-  readonly lowMemory: boolean;
   /** 此刻的软上限(字节) */
   limit(): number;
   putBlock(key: string, bytes: Uint8Array | ArrayBuffer, type?: string): Promise<"db" | "memory">;
@@ -177,9 +174,9 @@ function openDb(factory: IDBFactory, name: string): Promise<IDBDatabase> {
   });
 }
 
-/** 软上限:按档取上限,`estimate()` 拿得到时再与剩余额度的 10% 取小 */
-export async function l2LimitOf(lowMemory: boolean, estimate?: () => Promise<{ quota?: number; usage?: number }>): Promise<number> {
-  const cap = lowMemory ? L2_SOFT_LIMIT_LOW : L2_SOFT_LIMIT_NORMAL;
+/** 软上限:`estimate()` 拿得到时与剩余额度的 10% 取小,上限 `L2_SOFT_LIMIT_DEFAULT` */
+export async function l2LimitOf(estimate?: () => Promise<{ quota?: number; usage?: number }>): Promise<number> {
+  const cap = L2_SOFT_LIMIT_DEFAULT;
   if (!estimate) return cap;
   try {
     const e = await estimate();
@@ -195,12 +192,11 @@ export async function l2LimitOf(lowMemory: boolean, estimate?: () => Promise<{ q
  * 打开 L2。IndexedDB 不可用(没有工厂、打不开)时回一个只放内存的实现(同一套接口),页面照常工作,只是关掉就没了。
  */
 export async function openL2(opts: L2OpenOptions = {}): Promise<L2Store> {
-  const lowMemory = !!opts.lowMemory;
   const now = opts.now ?? Date.now;
   const g = globalThis as unknown as { indexedDB?: IDBFactory; navigator?: { storage?: { estimate?: () => Promise<{ quota?: number; usage?: number }> } } };
   const factory = opts.indexedDB ?? g.indexedDB;
   const estimate = opts.estimate ?? (g.navigator?.storage?.estimate ? () => g.navigator!.storage!.estimate!() : undefined);
-  const limit = await l2LimitOf(lowMemory, estimate);
+  const limit = await l2LimitOf(estimate);
 
   let db: IDBDatabase | null = null;
   if (factory) {
@@ -287,7 +283,6 @@ export async function openL2(opts: L2OpenOptions = {}): Promise<L2Store> {
   };
 
   const store: L2Store = {
-    lowMemory,
     limit: () => limit,
 
     async putBlock(key, raw, type = "application/octet-stream") {
@@ -436,15 +431,12 @@ export async function openL2(opts: L2OpenOptions = {}): Promise<L2Store> {
 
 /* ------------------------------------------------------------------ 本页的那一个库 */
 
-let shared: { lowMemory: boolean; store: Promise<L2Store> } | null = null;
+let shared: Promise<L2Store> | null = null;
 
 /**
- * 本页的 L2(编辑器页只开一个;成本记录与预渲染块共用)。档变了(运行中改判低内存档)就按新档的上限重开。
+ * 本页的 L2(编辑器页只开一个;成本记录与预渲染块共用)。
  */
-export function pageL2({ lowMemory }: { lowMemory: boolean }): Promise<L2Store> {
-  if (shared && shared.lowMemory === lowMemory) return shared.store;
-  const old = shared;
-  shared = { lowMemory, store: openL2({ lowMemory }) };
-  if (old) void old.store.then((s) => s.close(), () => {});
-  return shared.store;
+export function pageL2(): Promise<L2Store> {
+  shared ??= openL2();
+  return shared;
 }

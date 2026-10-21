@@ -1,5 +1,5 @@
 export declare const ATLAS_MAX: number;
-export declare const ATLAS_MAX_LOW_MEMORY: number;
+export declare const ATLAS_MAX_COMPACT: number;
 
 export interface AtlasItem { id: string; x: number; y: number; w: number; h: number; clamped: boolean }
 export interface AtlasPage { w: number; h: number; items: AtlasItem[] }

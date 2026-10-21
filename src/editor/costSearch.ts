@@ -1,40 +1,44 @@
 /**
- * 低内存档的轻重判定:共享成本记录加界限搜索(语义 `product/platforms.md`「面向的平台」、`mechanism/rendering.md`「低内存档」;
- * 契约 `docs/plan/c10-contract.md` 第 3 节,分支 `claude/c10-cost`)。纯的部分在 `src/render/boundarySearch.mjs`,
- * 这里是页面一侧的驱动:取记录、在唯一那个舞台里测、把结果交给分派(`planDispatch.setPlanLowMemoryLight`)。
+ * 只有一个舞台时的轻重判定:共享成本记录加界限搜索(语义 `product/platforms.md`「在线浏览器」的「轻重判定」与「即时渲染闸门」、
+ * `mechanism/rendering.md`「界限搜索与成本记录」;契约 `docs/plan/c10-contract.md` 第 3 节)。纯的部分在 `src/render/boundarySearch.mjs`,
+ * 这里是页面一侧的驱动:取记录、在唯一那个舞台里测、把结果交给分派(`planDispatch.setPlanSearchLight`)、测完写进文档服务。
+ * 舞台闸门停在第一级(精简模式、低配模式)或握手失败退回单舞台时由 `Preview` 起;两个舞台的照旧由 `ProbeGate` 在后台舞台逐张测。
  *
  * # 流程
  *
  * 1. 打开项目时经共享项目的文档服务连接读本项目的全部成本记录(`sharedCosts.ts` 的 `listSharedCosts`),顺带拿到本机环境的指纹;
- * 2. 项目里每张卡(按 `identityKey` 去重;用户卡、素材效果卡这台设备渲染不了,不参加、按重卡)交给 `boundarySearch`;
- * 3. 测量在**自己的舞台**里做:低内存档只有一个舞台,不开后台舞台。测量期间把它临时切成 `back` 角色(舞台的探针闸门只认 `back`),
+ * 2. 项目里每张卡(按 `identityKey` 去重;本页跑不了的用户卡、素材效果卡不参加、按重卡)交给 `boundarySearch`:
+ *    有记录的二分只测几张,没有记录的逐张实测(`measureUnrecorded`,2026-10-07 用户定);
+ * 3. 测量在**自己的舞台**里做:只有一个舞台,不开后台舞台。测量期间把它临时切成 `back` 角色(舞台的探针闸门只认 `back`),
  *    一次只测一个片段(缩水项目,同 `probeRunner.ts`),只走计时趟、不生成快照(`render(…, { probe: 'time' })`;
  *    `direct` 卡按播种的随机帧逐帧 `setTime(…, { probe: true })`),单帧耗时按 `summarizeProbe` 同一口径取;
  *    测完切回 `front`,整份项目重灌,由调用方(`Preview`)把画面、抑制与快照重投一遍;
- * 4. 本机测过的结果按「卡片身份 + 本机环境指纹」经注入的 `store`(`getCost` / `putCost`)存下,下次打开复用。
- *    缺省是页面内存(`createMemoryCostStore`),集成时接到页面内快照库 L2 的 `costs` 表。
+ * 4. 测每张卡之前经 `beforeMeasure` 留崩溃记录(即时渲染闸门:测某张卡把页面撑崩了,重新载入后这张卡直接当重卡),测完 `afterMeasure`;
+ * 5. 本机测过的结果按「卡片身份 + 本机环境指纹」经注入的 `store`(`getCost` / `putCost`)存下,下次打开复用;
+ *    真测出来的经 `publish` 写进文档服务(所有在线浏览器测完都写,2026-10-07 用户定);
+ * 6. 之后项目里加了新卡:有记录的按已有的界限判,没有记录的补测那几张(`measureNewCards`;随项目变化更新相关测量)。
  *
  * # 界面
  *
- * 真要在舞台里测的时候(本地复用全命中就一次都不测),盖一层与桌面加载遮罩同样的遮罩(`LowMemoryGate`):舞台测量时画面会被
+ * 真要在舞台里测的时候(本地复用全命中就一次都不测),盖一层与桌面加载遮罩同样的遮罩(`CostSearchGate`):舞台测量时画面会被
  * 拨到缩水项目上,遮罩挡住这段画面和编辑操作(语义 `product/rendering.md`「测量」:打开项目时在加载遮罩下测;
- * 测量遮罩是「预览不无提示地透明」的唯一例外)。测量期间父页不投快照、不发抑制、不拨时间(`lowMemoryMeasuring()`)。
+ * 测量遮罩是「预览不无提示地透明」的唯一例外)。测量期间父页不投快照、不发抑制、不拨时间(`costSearchMeasuring()`)。
  * 取记录、判定都很快,不挡界面。
  */
 import type { Project } from "../kernel/project";
 import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, StageRpcClient } from "../render/stageRpc";
-import { boundarySearch, classifyWithBoundary, maxMeasurements, type BoundaryResult, type CostStore } from "../render/boundarySearch.mjs";
+import { boundarySearch, classifyWithBoundary, localCostKey, maxMeasurements, type BoundaryResult, type CostStore } from "../render/boundarySearch.mjs";
 import { budgetOf } from "../render/pipelinePlan.mjs";
 import { PROBE_MAX_FRAMES, resolveTuning, type PipelineTuning } from "../render/pipelineTuning.mjs";
 import { summarizeProbe } from "../render/probeSummary.mjs";
-import { listSharedCosts, type PageEnvironment, type SharedCostRecord } from "./sharedCosts";
+import { listSharedCosts, type PageEnvironment, type SharedCostInput, type SharedCostRecord } from "./sharedCosts";
 
 type Request = (msg: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>;
 type Clip = Project["tracks"][number]["clips"][number];
 
 /* ------------------------------------------------------------------ 状态(遮罩与父页的闸门读它) */
 
-export interface LowMemorySearchState {
+export interface CostSearchState {
   /** 正在舞台里测(遮罩在) */
   measuring: boolean;
   /** 这一轮已经真测了几张 */
@@ -45,24 +49,24 @@ export interface LowMemorySearchState {
   card: string | null;
 }
 
-const IDLE: LowMemorySearchState = { measuring: false, done: 0, estimate: 0, card: null };
-let state: LowMemorySearchState = IDLE;
-const listeners = new Set<(s: LowMemorySearchState) => void>();
+const IDLE: CostSearchState = { measuring: false, done: 0, estimate: 0, card: null };
+let state: CostSearchState = IDLE;
+const listeners = new Set<(s: CostSearchState) => void>();
 
-function setState(patch: Partial<LowMemorySearchState>) {
+function setState(patch: Partial<CostSearchState>) {
   state = { ...state, ...patch };
   for (const cb of listeners) cb(state);
 }
 
-export function lowMemorySearchState(): LowMemorySearchState {
+export function costSearchState(): CostSearchState {
   return state;
 }
-export function onLowMemorySearch(cb: (s: LowMemorySearchState) => void): () => void {
+export function onCostSearch(cb: (s: CostSearchState) => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };
 }
 /** 舞台此刻被测量占着:父页不投快照、不发抑制、不拨时间、不推项目 */
-export function lowMemoryMeasuring(): boolean {
+export function costSearchMeasuring(): boolean {
   return state.measuring;
 }
 
@@ -194,14 +198,14 @@ export async function measureOnce(
 
 /* ------------------------------------------------------------------ 一轮搜索 */
 
-export interface LowMemorySearchDeps {
+export interface CostSearchDeps {
   request: Request;
   projectId: string;
   project: Project;
   environment: PageEnvironment;
   identityKeys: Record<string, string>;
   capabilities: ReadonlyMap<string, Record<string, unknown>>;
-  /** 这台设备渲染不了的片段(用户卡、素材效果卡):不参加、按重卡 */
+  /** 本页跑不了的片段(没载入成功的用户卡、素材效果卡):不参加、按重卡 */
   unsupported: (clip: Clip) => boolean;
   /** 唯一那个舞台 */
   stage: () => StageRpcClient | null;
@@ -214,17 +218,23 @@ export interface LowMemorySearchDeps {
   store: CostStore;
   tuning?: PipelineTuning;
   mode?: "dev" | "build";
+  /** 测这张卡之前(即时渲染闸门留崩溃记录);`key` 是 identityKey */
+  beforeMeasure?: (key: string, cardId: string) => void;
+  /** 这张卡测完了(不论测没测出来) */
+  afterMeasure?: (key: string) => void;
+  /** 真测出来的记录写进文档服务(所有在线浏览器测完都写);失败不影响判定 */
+  publish?: (records: SharedCostInput[]) => Promise<unknown> | void;
 }
 
-export interface LowMemorySearchOutcome {
+export interface CostSearchOutcome {
   result: BoundaryResult;
   records: SharedCostRecord[];
   envFingerprint: string;
   /** 参加搜索的卡(identityKey) */
   keys: string[];
-  /** 用户卡、素材效果卡(identityKey):按重卡 */
+  /** 本页跑不了的用户卡、素材效果卡(identityKey):按重卡 */
   forcedHeavy: string[];
-  /** 判轻的卡(identityKey),交给 `setPlanLowMemoryLight` */
+  /** 判轻的卡(identityKey),交给 `setPlanSearchLight` */
   light: Set<string>;
   elapsedMs: number;
 }
@@ -248,7 +258,7 @@ export function keysOf(project: Project, identityKeys: Record<string, string>, u
 /**
  * 跑一轮界限搜索。取不到记录(没连上、被拒)抛错,由调用方稍后再试;测量中的舞台错误按那张卡跑不动算。
  */
-export async function runLowMemorySearch(deps: LowMemorySearchDeps): Promise<LowMemorySearchOutcome> {
+export async function runCostSearch(deps: CostSearchDeps): Promise<CostSearchOutcome> {
   const started = Date.now();
   const tuning = resolveTuning(deps.tuning ?? null);
   const { records, envFingerprint } = await listSharedCosts({ request: deps.request, projectId: deps.projectId, environment: deps.environment });
@@ -256,10 +266,32 @@ export async function runLowMemorySearch(deps: LowMemorySearchDeps): Promise<Low
   const jobs = measureJobsOf(deps.project, deps.identityKeys, deps.capabilities);
   const fps = Math.max(1, deps.project.fps || 30);
   const withRecords = new Set(records.map((r) => r.identityKey));
-  const estimate = maxMeasurements(keys.filter((k) => withRecords.has(k)).length);
+  const estimate = maxMeasurements(keys.filter((k) => withRecords.has(k)).length) + keys.filter((k) => !withRecords.has(k)).length;
 
+  const lease = createLease(deps, estimate, jobs, tuning);
+  let result: BoundaryResult;
+  try {
+    result = await boundarySearch({
+      keys, records, budgetMs: budgetOf(fps), measure: lease.measure, store: deps.store, envFingerprint,
+      scale: tuning.COST_SCALE, mode: deps.mode ?? "build", measureUnrecorded: true,
+    });
+  } finally {
+    await lease.end();
+  }
+  await publishMeasured(deps, lease.fresh);
+  const light = new Set(result.light);
+  for (const k of forcedHeavy) light.delete(k);
+  return { result, records, envFingerprint, keys, forcedHeavy, light, elapsedMs: Date.now() - started };
+}
+
+/**
+ * 借唯一那个舞台来测:第一次真要测时把它切成 `back`、盖遮罩;`end` 切回 `front`、整份重灌、撤遮罩。
+ * `fresh` 收这一轮真测出来的(不含本地复用命中的),测完写进文档服务。
+ */
+function createLease(deps: CostSearchDeps, estimate: number, jobs: Map<string, MeasureJob>, tuning: PipelineTuning) {
   let leased: StageRpcClient | null = null;
   let done = 0;
+  const fresh: SharedCostInput[] = [];
   const measure = async (key: string): Promise<{ stepMs: number; samples: number } | null> => {
     const job = jobs.get(key);
     const stage = deps.stage();
@@ -270,50 +302,85 @@ export async function runLowMemorySearch(deps: LowMemorySearchDeps): Promise<Low
       leased = stage;
     }
     setState({ card: job.cardId, done });
+    try { deps.beforeMeasure?.(key, job.cardId); } catch { /* 记不下崩溃记录不挡测量 */ }
     try {
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const r = await measureOnce(stage, job, deps.pushProject, tuning);
-        if (r !== "retry") return r;
+        if (r === "retry") continue;
+        if (r) fresh.push({ identityKey: key, stepMs: r.stepMs, samples: r.samples, measuredAt: Date.now(), mode: deps.mode ?? "build" });
+        return r;
       }
       return null;
     } catch {
       return null;
     } finally {
+      try { deps.afterMeasure?.(key); } catch { /* 同上 */ }
       done++;
       setState({ done });
     }
   };
+  const end = async () => {
+    if (!leased) return;
+    const stage: StageRpcClient = leased;
+    leased = null;
+    try { await stage.setRole("front"); } catch { /* iframe 换了:新的握手会重设角色 */ }
+    try { await deps.pushProject(deps.currentProject()); } catch { /* 同上 */ }
+    setState({ measuring: false, card: null });
+    try { await deps.restore(); } catch { /* 调用方自己兜 */ }
+  };
+  return { measure, end, fresh };
+}
 
-  let result: BoundaryResult;
-  try {
-    result = await boundarySearch({
-      keys, records, budgetMs: budgetOf(fps), measure, store: deps.store, envFingerprint,
-      scale: tuning.COST_SCALE, mode: deps.mode ?? "build",
-    });
-  } finally {
-    if (leased) {
-      const stage: StageRpcClient = leased;
-      try { await stage.setRole("front"); } catch { /* iframe 换了:新的握手会重设角色 */ }
-      try { await deps.pushProject(deps.currentProject()); } catch { /* 同上 */ }
-      setState({ measuring: false, card: null });
-      try { await deps.restore(); } catch { /* 调用方自己兜 */ }
-    }
-  }
-  const light = new Set(result.light);
-  for (const k of forcedHeavy) light.delete(k);
-  return { result, records, envFingerprint, keys, forcedHeavy, light, elapsedMs: Date.now() - started };
+async function publishMeasured(deps: CostSearchDeps, fresh: SharedCostInput[]): Promise<void> {
+  if (!fresh.length || !deps.publish) return;
+  try { await deps.publish(fresh); } catch { /* 写不进去不影响判定;下一次测量再写 */ }
 }
 
 /**
- * 搜索做完之后项目又变了(加了卡、改了参数):不再测,按已有的界限判新卡(`classifyWithBoundary`)。回判轻的 identityKey。
+ * 搜索做完之后项目里加了新卡:没有共享成本记录、本机也没测过的那几张补测(随项目变化更新相关测量;有记录的按已有的界限判,
+ * 不测)。回补测之后的结果(`result.measured` 里多了这几张);没有要补测的回原样。测量期间同样借舞台、盖遮罩、留崩溃记录。
  */
-export function reclassify(outcome: LowMemorySearchOutcome, project: Project, identityKeys: Record<string, string>, unsupported: (clip: Clip) => boolean): Set<string> {
+export async function measureNewCards(outcome: CostSearchOutcome, deps: Omit<CostSearchDeps, "request" | "projectId" | "environment">): Promise<CostSearchOutcome> {
+  const { keys, forcedHeavy } = keysOf(deps.project, deps.identityKeys, deps.unsupported);
+  const withRecords = new Set(outcome.records.map((r) => r.identityKey));
+  const todo = keys.filter((k) => !withRecords.has(k) && !outcome.result.measured.has(k));
+  if (!todo.length) return outcome;
+  const tuning = resolveTuning(deps.tuning ?? null);
+  const jobs = measureJobsOf(deps.project, deps.identityKeys, deps.capabilities);
+  const lease = createLease(deps as CostSearchDeps, todo.length, jobs, tuning);
+  const measured = new Map(outcome.result.measured);
+  try {
+    for (const key of todo) {
+      const local = await (async () => { try { return await deps.store.getCost(localCostKey(key, outcome.envFingerprint)); } catch { return undefined; } })() as { stepMs?: unknown } | undefined;
+      if (local && typeof local.stepMs === "number" && Number.isFinite(local.stepMs)) { measured.set(key, { ms: local.stepMs, cached: true, failed: false }); continue; }
+      const r = await lease.measure(key);
+      const ok = !!r && Number.isFinite(r.stepMs) && r.stepMs >= 0;
+      measured.set(key, { ms: ok ? r!.stepMs : Infinity, cached: false, failed: !ok });
+      if (ok) {
+        try { await deps.store.putCost(localCostKey(key, outcome.envFingerprint), { identityKey: key, envFingerprint: outcome.envFingerprint, stepMs: r!.stepMs, samples: r!.samples, measuredAt: Date.now(), mode: deps.mode ?? "build" }); } catch { /* 存不下就下次再测 */ }
+      }
+    }
+  } finally {
+    await lease.end();
+  }
+  await publishMeasured(deps as CostSearchDeps, lease.fresh);
+  const result = { ...outcome.result, measured };
+  const light = classifyWithBoundary(result, keys, outcome.records).light;
+  for (const k of forcedHeavy) light.delete(k);
+  return { ...outcome, result, keys, forcedHeavy, light };
+}
+
+/**
+ * 搜索做完之后项目又变了(加了卡、改了参数):按已有的界限判(`classifyWithBoundary`;没有记录又没测的新卡先由 `measureNewCards` 补测)。
+ * 回判轻的 identityKey。
+ */
+export function reclassify(outcome: CostSearchOutcome, project: Project, identityKeys: Record<string, string>, unsupported: (clip: Clip) => boolean): Set<string> {
   const { keys } = keysOf(project, identityKeys, unsupported);
   return classifyWithBoundary(outcome.result, keys, outcome.records).light;
 }
 
 /** 测试用 */
-export function resetLowMemorySearch(): void {
+export function resetCostSearch(): void {
   state = IDLE;
   listeners.clear();
 }

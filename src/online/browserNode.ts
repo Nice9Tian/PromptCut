@@ -98,8 +98,11 @@ export interface EligibilityInput {
   online: boolean;
   /** 在线构建嵌的代码版本(`buildInfo.ts` 的 `CODE_VERSION`);开发构建为空 */
   codeVersion: string | null | undefined;
-  lowMemory: boolean;
-  /** 两个跨源舞台都握上手为 `'dual'`;退回同源单舞台为 `'single'` */
+  /** 身份为手机(`onlineTier.ts`;语义 `product/platforms.md`「身份」:手机不当渲染节点) */
+  phone: boolean;
+  /** 最低一档(基准卡都跑不动或一个舞台都撑不住):不当节点,也不为本页产流 */
+  lowest: boolean;
+  /** 两个跨源舞台都握上手为 `'dual'`;只有一个舞台(舞台闸门第一级、握手失败退回)为 `'single'` */
   stageLayout: "dual" | "single";
   userAgent: string;
   /** 以成员身份连着放云端的共享项目(页面连接在线) */
@@ -108,14 +111,15 @@ export interface EligibilityInput {
   measured: boolean;
 }
 
-export type EligibilityReason = "not-online" | "dev-build" | "low-memory" | "single-stage" | "not-chromium" | "not-member" | "measuring";
+export type EligibilityReason = "not-online" | "dev-build" | "lowest" | "phone" | "single-stage" | "not-chromium" | "not-member" | "measuring";
 
 /** 当节点的条件(第 2 节):全部成立回 `{ ok: true }`,否则回第一条不成立的原因 */
 export function browserNodeEligibility(input: EligibilityInput): { ok: boolean; reason: EligibilityReason | null } {
   const no = (reason: EligibilityReason) => ({ ok: false, reason });
   if (input.online !== true) return no("not-online");
   if (typeof input.codeVersion !== "string" || !input.codeVersion) return no("dev-build");
-  if (input.lowMemory) return no("low-memory");
+  if (input.lowest) return no("lowest");
+  if (input.phone) return no("phone");
   if (input.stageLayout !== "dual") return no("single-stage");
   if (!isChromiumUserAgent(input.userAgent)) return no("not-chromium");
   if (input.member !== true) return no("not-member");

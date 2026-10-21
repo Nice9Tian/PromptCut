@@ -8,7 +8,8 @@
  *
  * # 什么时候轮到本页自己产(〔裁〕)
  *
- *   1. 本页是浏览器节点(当节点的条件全部成立、拿到了指纹、探到了编码器)—— 身份为手机的页面、低内存档不当节点,也就不产;
+ *   1. 本页是浏览器节点(当节点的条件全部成立、拿到了指纹、探到了编码器),或只为本页产稀疏版的页面(身份为手机、只有一个舞台;
+ *      2026-10-14 用户定「手机、平板也为本页产稀疏版」)—— 最低一档不产;
  *   2. 本页这一版的清单计划已经发出去(清单 = 本页自己判重的片段:只为自己打开的项目、自己要播的卡),其中有本页能产的单卡流还没有产物;
  *   3. **线上没有能切分的节点接这份计划**:计划发出去满 `PAGE_STREAM_WAIT_MS` 仍然没人认领(队列里它还是 `open`)。怎么知道:把同一个计划任务
  *      再发布一次(队列对同一个结果键只合并,不另起任务),回包里带它此刻的状态;有活要做的期间每 `PAGE_STREAM_POLL_MS` 问一次。
@@ -59,7 +60,6 @@
 import type { NodeTask } from "./browserNode.ts";
 import { STREAM_SEGMENT_FRAMES, YIELD_FRAME_MAX_MS, type YieldCause } from "./browserNode.ts";
 import { candidateSpans, layerStreamCandidates, mergeLayerStreams, pageStreamRow, pageStreamTasks, type PageStreamRow, type PageStreamSpec } from "./pageStreamPlan.ts";
-import { lowMemoryMode } from "./lowMemory.ts";
 import { packedSize, avcCodecFor } from "../render/streamEncode.ts";
 
 /** 清单计划发出去之后没人认领,等这么久本页才自己产(三级数字;空闲的切分方认领计划在一秒以内,留出它正忙着别的活的余量) */
@@ -159,8 +159,8 @@ export interface PageStreamsDeps {
   pollMs?: number;
   recheckMs?: number;
   rowsMs?: number;
-  /** 低内存档(手机、平板):只产稀疏版;产流前调 VideoEncoder.isConfigSupported 检查配置。缺省读 lowMemoryMode(true) */
-  lowMemory?: boolean | (() => boolean);
+  /** 只为本页产稀疏版(身份为手机、只有一个舞台):只产稀疏版;产流前调 VideoEncoder.isConfigSupported 检查配置。缺省假 */
+  sparseOnly?: boolean | (() => boolean);
   /** 检查编码器配置是否支持(单测注入桩,缺省查 globalThis.VideoEncoder.isConfigSupported) */
   isConfigSupported?: (config: Record<string, unknown>) => Promise<{ supported?: boolean } | boolean>;
 }
@@ -246,7 +246,7 @@ export interface PageStreams {
 
 export function createPageStreams(deps: PageStreamsDeps): PageStreams {
   const passes: readonly PageStreamPass[] = deps.passes?.length ? deps.passes : PAGE_STREAM_PASSES;
-  const isLow = () => typeof deps.lowMemory === "function" ? deps.lowMemory() : deps.lowMemory !== undefined ? !!deps.lowMemory : lowMemoryMode(true);
+  const isLow = () => typeof deps.sparseOnly === "function" ? deps.sparseOnly() : !!deps.sparseOnly;
   /** 这一趟是不是稀疏的(任务是稀疏流任务、先查不要求满密度) */
   const sparse = (pass: PageStreamPass) => pass.stride > 1;
   const effectivePasses = (): readonly PageStreamPass[] => {

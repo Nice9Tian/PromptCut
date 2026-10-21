@@ -1,7 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAgentTabs } from "../../ai/agentTabs";
-import { RemoteAgentsStrip } from "../right/RemoteAgentsStrip";
 import { onCaptionsRequest } from "../left/captionsBus";
 import { LibrarySection } from "../left/LibrarySection";
 // 必须静态导入:AnimationsSection → cardGroups → CardCell → previewZoom → prewarmBoxes,window.__pcPreviewBoxes 靠这条链挂上
@@ -11,7 +10,6 @@ import { EditSection } from "../left/EditSection";
 import { CaptionsSection } from "../left/CaptionsSection";
 import { AiPanel } from "../right/AiPanel";
 import { OnlineAgentPage } from "../right/OnlineAgentPage";
-import { onlineUnsupported } from "../../online/pageFlag";
 import { ScriptPage } from "../right/chat/ScriptPage";
 import { AgentAttentionTracker } from "./agentAttention";
 import { DockPageContext } from "./dockSide";
@@ -30,22 +28,13 @@ const EffectsPage = memo(EffectsSection);
 const EditPage = memo(EditSection);
 const CaptionsPage = memo(CaptionsSection);
 const ScriptPageMemo = memo(ScriptPage);
-/**
- * 在线浏览器模式的 Agent 页占位:手机竖屏(低内存档)仍是它。AI 助手的本机版要本机编辑器进程(模型配置、对话记录、工具执行都走它的 `/api/*`),
- * 在线页面按契约第 2 节不挂 AiPanel;宽屏换成「云端」接入方式的 AI 栏(`OnlineAgentPage`,云端 Agent 服务契约 9.5)。
- */
-function OnlineAgentPlaceholder(_props: { tabId: string; active: boolean; mcpConnected: boolean }) {
-  return (
-    <div className="pc-online-agent-off" data-pc="online-agent-off" style={{ padding: 16, color: "var(--ui-text-dim, #888)", fontSize: 13, lineHeight: 1.6 }}>
-      {/* 在线页面没有自己的 Agent,但看得到共享项目里别的成员那边的 Agent 在改哪儿(A3 第二阶段) */}
-      <RemoteAgentsStrip />
-      {onlineUnsupported("AI 助手")}
-    </div>
-  );
-}
 const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+/**
+ * 在线浏览器模式的 Agent 页:AI 助手的本机版要本机编辑器进程(模型配置、对话记录、工具执行都走它的 `/api/*`),在线页面按契约第 2 节
+ * 不挂 AiPanel,换成「云端」接入方式的 AI 栏(`OnlineAgentPage`,云端 Agent 服务契约 9.5;不分身份、不分档,`product/platforms.md`「AI 栏」)。
+ */
 function OnlineAgentSwitch(props: { tabId: string; active: boolean; mcpConnected: boolean }) {
-  return <OnlineAgentPage tabId={props.tabId} active={props.active} placeholder={<OnlineAgentPlaceholder {...props} />} />;
+  return <OnlineAgentPage tabId={props.tabId} active={props.active} />;
 }
 const AgentPage = memo(ONLINE_BUILD ? OnlineAgentSwitch : AiPanel);
 

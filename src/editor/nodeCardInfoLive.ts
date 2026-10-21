@@ -8,7 +8,7 @@
  * 代码身份用块 T 的 `codeIdentities()` 现算(与桌面 `cardCodeIdentity` 同一算法,算出同一个值),源码读 `OnlineCardSources` 手里的那份。
  * 转译器那一块按需载入:只在本页能执行、且有 `ready` 的同步卡时才 `import()`;桌面构建里整段剪掉。
  *
- * 由 `browserNodeHost.ts` 起,随宿主一起停;在线页面里宿主只在普通档(低内存档不当节点、也不执行用户卡)起。
+ * 由 `browserNodeHost.ts` 起,随宿主一起停;在线页面里宿主在双舞台、身份为电脑时当节点(手机、单舞台只为本页产稀疏版,最低一档都不做)。
  */
 import { onCardRunStatesChanged, onSyncedUserCardsChanged, cardRunState, syncedUserCards } from "../kernel/registry";
 import { cardVisualExecAvailable, subscribeCardExecGate } from "../online/cardRuntime/gate";

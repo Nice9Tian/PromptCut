@@ -1,23 +1,23 @@
 import { useEffect, useState } from "react";
-import { lowMemorySearchState, onLowMemorySearch, type LowMemorySearchState } from "./lowMemorySearch";
+import { costSearchState, onCostSearch, type CostSearchState } from "./costSearch";
 import "./ProbeGate.css";
 
 /**
- * 低内存档界限搜索的加载遮罩(`lowMemorySearch.ts`)。与桌面的 `ProbeGate` 同一套样式(只用主题变量):
+ * 只有一个舞台时界限搜索的加载遮罩(`costSearch.ts`)。与桌面的 `ProbeGate` 同一套样式(只用主题变量):
  * 只在真要在舞台里测的时候出现 —— 取记录、判定、本地复用全命中都不出现。
- * 低内存档只有一个舞台,测量时画面被拨到缩水项目上;遮罩挡住这段画面和编辑操作
+ * 只有一个舞台,测量时画面被拨到缩水项目上;遮罩挡住这段画面和编辑操作
  * (语义 `product/rendering.md`「测量」:打开项目时在加载遮罩下测)。
  */
-export function LowMemoryGate() {
-  const [s, setS] = useState<LowMemorySearchState>(lowMemorySearchState);
-  useEffect(() => onLowMemorySearch(setS), []);
+export function CostSearchGate() {
+  const [s, setS] = useState<CostSearchState>(costSearchState);
+  useEffect(() => onCostSearch(setS), []);
   if (!s.measuring) return null;
   const total = Math.max(1, s.estimate);
   const done = Math.min(s.done, total);
   return (
     <div
       className="pc-probe-gate"
-      data-pc="lowmem-gate"
+      data-pc="cost-search-gate"
       role="status"
       aria-live="polite"
       onPointerDown={(e) => e.stopPropagation()}
@@ -31,4 +31,4 @@ export function LowMemoryGate() {
   );
 }
 
-export default LowMemoryGate;
+export default CostSearchGate;

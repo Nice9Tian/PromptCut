@@ -30,24 +30,25 @@
  *     12 张满屏卡 × 3 帧 ≈ 225 MB(原来 6 张 × 3 帧 ≈ 113 MB)。
  *   - `STREAM_COUNT_BUDGET` = 32:流平面共用一个 WebGL 上下文以后,条数只剩解码器个数和每条流保底的解码帧两样要管。
  *     实测 64 个解码器正常、30 个各播一条按时画齐;取实测正常值的一半。32 条小卡流保底的解码帧约 87 MB。
- *     手机、平板(低内存档)另有一组小得多的数,见下一节。
+ *     最低一档另有一组小得多的数,见下一节。
  *
- * # 低内存档(手机、平板身份的在线浏览器)的预算:`lowMemoryStreamBudget()`
+ * # 最低一档(在线浏览器性能不足时)的预算:`sparseStreamBudget()`
  *
- * 这一档每条流**每个分段只解第一帧那一张**(`streamPlayer.ts` 的 `presentFirst`;2026-10-13 用户定:低内存档改贴轨道流的稀疏版),
+ * 这一档每条流**每个分段只解第一帧那一张**(`streamPlayer.ts` 的 `presentFirst`;2026-10-13 用户定「性能不足时只贴稀疏版,
+ * 同时活着的解码器给得少」,2026-10-22 起归最低一档,`mechanism/platforms.md`「三道闸门」〔裁〕),
  * 30 帧的项目一条流一秒解两张,花的不是「每秒解的像素」,是同时开着的解码器个数和留着的画面。所以这一档的开销不乘项目帧率,
  * 一律按「编码画幅 × `STREAM_BUDGET_MIN_FPS`」算(调用方把帧率传成 `STREAM_BUDGET_MIN_FPS`),像素预算就等于「同屏各条流编码画幅之和」的上限。
  * 没在真手机上量过,三个数都是保守的起点(要量什么见 `docs/reports/AGENT-rr-lowmem-streams.md`「真手机上要量的」):
  *
- *   - `LOW_MEMORY_STREAM_COUNT` = 4:同时开着的解码器不超过 4 个。手机的硬件 H.264 解码器能同时开几路各家不一,
+ *   - `SPARSE_STREAM_COUNT` = 4:同时开着的解码器不超过 4 个。手机的硬件 H.264 解码器能同时开几路各家不一,
  *     没有保证的下限;用户给的例子是 2 路,4 是「常见的入门机也开得出、开不出时浏览器还能退到软解」的取值。
- *   - `LOW_MEMORY_STREAM_PIXELS` = 2 × 1920 × 2176:同屏各条流的编码画幅之和不超过两张 1080p 的满屏卡。每条流稳态只留画布上那一张
+ *   - `SPARSE_STREAM_PIXELS` = 2 × 1920 × 2176:同屏各条流的编码画幅之和不超过两张 1080p 的满屏卡。每条流稳态只留画布上那一张
  *     解码帧(换分段的那一下两张),NV12 按 1.5 字节每像素:稳态约 12.5 MB,瞬时最多约 25 MB(普通档的解码帧预算是 80 MB)。
  *     流裁到实体框,小卡远小于满屏:四张 704×864 的小卡合计约 5 MB。
- *   - `LOW_MEMORY_STREAM_FREE` = 1:头一条不看像素。不设的话大于 1080p 的项目里一张满屏卡就超了,一条都贴不上。
+ *   - `SPARSE_STREAM_FREE` = 1:头一条不看像素。不设的话大于 1080p 的项目里一张满屏卡就超了,一条都贴不上。
  *
- * 超出的层照普通档的办法:父页标 `over`,舞台不建解码器,显示占位符(有预渲染小尺寸的先贴小尺寸,见 `snapshotFeed.ts`)。
- * 低内存档不产流、不划分流,这组数只在贴流的一侧用。
+ * 超出的层照别的档的办法:父页标 `over`,舞台不建解码器,显示占位符(`snapshotFeed.ts`)。
+ * 这组数只在贴流的一侧用(产流、划分流照各自的规矩)。
  *
  * 纯函数;服务端与页面共用这一份(`server/` 引 `src/render/` 下的 `.mjs` 是现成的做法)。
  */
@@ -69,19 +70,19 @@ export const STREAM_BUDGET_MIN_FPS = 30;
 /** 不知道编码画幅的流(没带这一项的旧消息)按一张 1920×1080 的满屏卡算 */
 export const STREAM_DEFAULT_PIXELS = 1920 * 2176;
 
-/** 低内存档:同时开着的解码器个数上限(见文件头「低内存档的预算」) */
-export const LOW_MEMORY_STREAM_COUNT = 4;
-/** 低内存档:同屏各条流的编码画幅之和的上限(见文件头) */
-export const LOW_MEMORY_STREAM_PIXELS = 2 * STREAM_DEFAULT_PIXELS;
-/** 低内存档:头这么多条不看像素(见文件头) */
-export const LOW_MEMORY_STREAM_FREE = 1;
+/** 最低一档:同时开着的解码器个数上限(见文件头「最低一档的预算」) */
+export const SPARSE_STREAM_COUNT = 4;
+/** 最低一档:同屏各条流的编码画幅之和的上限(见文件头) */
+export const SPARSE_STREAM_PIXELS = 2 * STREAM_DEFAULT_PIXELS;
+/** 最低一档:头这么多条不看像素(见文件头) */
+export const SPARSE_STREAM_FREE = 1;
 
 /**
- * 低内存档的预算,形状同 `streamBudgetOf` 的入参。和它配套的开销要按 `streamCost(pixels, STREAM_BUDGET_MIN_FPS)` 算
+ * 最低一档的预算,形状同 `streamBudgetOf` 的入参。和它配套的开销要按 `streamCost(pixels, STREAM_BUDGET_MIN_FPS)` 算
  * (不乘项目帧率,见文件头)。
  */
-export function lowMemoryStreamBudget() {
-  return { count: LOW_MEMORY_STREAM_COUNT, pixelRate: LOW_MEMORY_STREAM_PIXELS * STREAM_BUDGET_MIN_FPS, free: LOW_MEMORY_STREAM_FREE };
+export function sparseStreamBudget() {
+  return { count: SPARSE_STREAM_COUNT, pixelRate: SPARSE_STREAM_PIXELS * STREAM_BUDGET_MIN_FPS, free: SPARSE_STREAM_FREE };
 }
 
 /** 编码画幅的像素数:矩形宽 × (2 × 矩形高 + 两条黑边) */

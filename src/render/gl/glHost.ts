@@ -6,11 +6,11 @@
  *
  *   1. **按路线接上画的那一半**(M2)。
  *      - 路线 1 `perDocument`(桌面默认;导出页永远走这条):自己 `new Worker`(模块 Worker);
- *      - 路线 2 `shared`(低内存档默认):等父页经 `{ type: 'gl-port', stageId, port }` 交来的端口,
+ *      - 路线 2 `shared`(在线页面舞台闸门第一、二级):等父页经 `{ type: 'gl-port', stageId, port }` 交来的端口,
  *        在端口上收发同一套 `beat` / `done` / `layout` / `release`;收到之前 `beat` 排队、不呈现 canvas 卡;
  *      - **能力退路**:Worker 里拿不到 `OffscreenCanvas` 的 `webgl2`(或 `?glOffscreen=0` 强制)就在主线程
  *        建一个上下文顶替 Worker,import 同一张 `programs.ts`,协议不变;
- *      - 低内存档 + 路线 1 + 角色 `back`:不开 Worker,走主线程退路。
+ *      - 只有一个舞台(`compact`)+ 路线 1 + 角色 `back`:不开 Worker,走主线程退路。
  *      Worker **懒建**:第一次真有 canvas 卡要画才建,纯 DOM 的项目一个 Worker 都不开。
  *   2. **`beat`**(M3):读 `glPlanes` 里刚提交的那一帧,活跃集合变了先发 `layout`,再发
  *      `{ type: 'beat', t, cards: [{ clipId, t, params?, reset? }] }`。每发一次领一张 `beginFrameWork('gl')`
@@ -126,7 +126,8 @@ export function glOffscreenForcedOff(): boolean {
 
 export function createGlHost(opts: {
   stageId: string;
-  lowMemory: boolean;
+  /** 只有一个舞台(在线页面舞台闸门停在第一级、最低一档):图集按小的上限开,后台角色走路线 1 时不开 Worker */
+  compact: boolean;
   route: GlRoute;
   /** 不开 Worker,一律走主线程那条(导出页现在用它,见 `ExportView.tsx` 的说明) */
   mainThread?: boolean;
@@ -168,7 +169,7 @@ export function createGlHost(opts: {
       if (offeredPort === undefined) return "waiting-port";
       // 父页明说开不了共享 Worker:退回自己开
     }
-    if (route === "perDocument" && opts.lowMemory && role === "back") return "main";
+    if (route === "perDocument" && opts.compact && role === "back") return "main";
     return "worker";
   };
 
@@ -202,7 +203,7 @@ export function createGlHost(opts: {
         }
         onMessage(m);
       });
-      send({ type: "init", lowMemory: opts.lowMemory });
+      send({ type: "init", compact: opts.compact });
     });
 
   const openWorker = (): Transport => {
@@ -236,7 +237,7 @@ export function createGlHost(opts: {
   const openMain = (): Transport => {
     let renderer: GlRenderer | null = null;
     const loading = Promise.all([import("./renderer"), import("./programs")]).then(([r, p]) => {
-      renderer = r.createGlRenderer({ lowMemory: opts.lowMemory, programOf: p.programOf, canvas: typeof OffscreenCanvas !== "undefined" ? undefined : document.createElement("canvas") });
+      renderer = r.createGlRenderer({ compact: opts.compact, programOf: p.programOf, canvas: typeof OffscreenCanvas !== "undefined" ? undefined : document.createElement("canvas") });
       return renderer.ok;
     }).catch(() => false);
     const send: Transport["send"] = (m) => {

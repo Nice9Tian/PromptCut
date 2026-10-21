@@ -21,7 +21,7 @@
  * # `device` 怎么挑
  *
  * `costs` 按 `(identityKey, device)` 去重,而预渲染进程**不知道编辑器那台机器的 `device` 串**
- * (它是页面侧探测出来的:GPU、核数、低内存、`offscreenGl`、`tuning` 的两项……)。
+ * (它是页面侧探测出来的:GPU、核数、只有一个舞台、`offscreenGl`、`tuning` 的两项……)。
  * 这里按 `identityKey` 取 `measuredAt` 最新的那一条 —— 同一台机器上通常只有一条;
  * 真有两条(比如离线探针和常驻探针各写了一份)时,最近一次实测更可信。
  * **这是本实现相对任务书的一处补齐**(任务书没写这一端怎么挑 device),见报告。

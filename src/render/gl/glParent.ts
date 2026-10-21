@@ -21,7 +21,7 @@ export interface SharedGl {
   dispose(): void;
 }
 
-export function createSharedGl(opts: { lowMemory: boolean }): SharedGl {
+export function createSharedGl(opts: { compact: boolean }): SharedGl {
   let worker: Worker | null = null;
   let failed = false;
   let diagSeq = 0;
@@ -42,7 +42,7 @@ export function createSharedGl(opts: { lowMemory: boolean }): SharedGl {
         if (w) { diagWaiters.delete(m.seq); w(m.diag); }
       }
     };
-    worker.postMessage({ type: "init", lowMemory: opts.lowMemory });
+    worker.postMessage({ type: "init", compact: opts.compact });
     return worker;
   };
   return {

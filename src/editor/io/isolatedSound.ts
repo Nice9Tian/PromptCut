@@ -3,7 +3,7 @@
  * (`docs/plan/online-card-exec-contract.md` 3.5、第 6 节)。只有形状转换,不执行任何卡片代码。
  *
  *   const link = createIsolatedSoundLink({ render: (request) => 后台舞台的 RPC.synthCardAudio(request) });
- *   link.setState(舞台报来的状态);     // 载入结果变了就再叫;null = 这条线程没了(舞台换了、退回单舞台、改判低内存档)
+ *   link.setState(舞台报来的状态);     // 载入结果变了就再叫;null = 这条线程没了(舞台换了、页面不能执行了)
  *   link.dispose();
  *
  * 接上之后同步来的用户卡与素材效果卡的声音照 B 的规则走:判轻的经这里在声音线程里合成,判重的用已有产物。

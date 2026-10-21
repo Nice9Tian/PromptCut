@@ -281,7 +281,7 @@ export function isKnownCardId(id: string | undefined | null): boolean {
 
 /**
  * 两边都没有定义的卡片段(未知卡片;桌面与在线一致)。舞台本来就不画它们,所以测量不测(不给身份)、
- * 分派表不把它们当重卡、不进预渲染集合,页面发的清单计划与低内存档预渲染重试也就不含它们。
+ * 分派表不把它们当重卡、不进预渲染集合,页面发的清单计划也就不含它们。
  * 只看写了 `cardId` 的片段(只有 `nodeId` 的素材效果卡片段、素材段不算)。
  */
 export function unknownCardClipIds(clips: Iterable<{ id: string; cardId?: string }>): Set<string> {
@@ -300,7 +300,7 @@ export function unknownCardClipIds(clips: Iterable<{ id: string; cardId?: string
  */
 export type CardRunStateName =
   | "ready" | "loading" | "unsupported-syntax" | "missing-module" | "load-error"
-  | "gpu" | "media" | "runtime-error" | "not-isolated" | "low-memory";
+  | "gpu" | "media" | "runtime-error" | "not-isolated";
 
 export interface CardRunState {
   state: CardRunStateName;
@@ -313,7 +313,7 @@ export interface CardRunState {
 }
 
 export const CARD_RUN_STATES: readonly CardRunStateName[] = Object.freeze([
-  "ready", "loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated", "low-memory",
+  "ready", "loading", "unsupported-syntax", "missing-module", "load-error", "gpu", "media", "runtime-error", "not-isolated",
 ]);
 
 /**
@@ -374,7 +374,7 @@ const validRunState = (v: unknown): v is CardRunState => isRecord(v) && typeof v
 
 /**
  * 整份换掉同步卡的运行状态(卡片 id → 状态)。舞台把载入结果报给编辑页面,编辑页面再合上它自己知道的
- * (转译失败、本页没有隔离环境、低内存档),写进这里;参数面板、时间轴徽标、轻重判定都读它。
+ * (转译失败、本页没有隔离环境),写进这里;参数面板、时间轴徽标、轻重判定都读它。
  * 形状不对的条目丢掉(舞台报来的东西当不可信输入)。内容没变回 false、不通知。
  */
 export function setCardRunStates(states: Iterable<readonly [string, CardRunState]> | Record<string, CardRunState>): boolean {

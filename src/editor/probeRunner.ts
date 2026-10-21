@@ -69,6 +69,7 @@ import { mergePlanCosts, setPlanCosts } from "./planDispatch";
 import { backStage, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
 import { measureGateOpen, whenMeasureGateOpen } from "./measureGate";
+import { tierGlRoute, tierState } from "../online/onlineTier";
 
 /* ------------------------------------------------------------------ 进度 */
 
@@ -151,7 +152,7 @@ let maskRound = 0;
 const RUN_MODE: "dev" | "build" = import.meta.env.DEV ? "dev" : "build";
 
 /**
- * 本机身份（J4）。`lowMemory` / `offscreenGl` 取**舞台握手报上来的那一份** ——
+ * 本机身份（J4）。`compact` / `offscreenGl` 取**舞台握手报上来的那一份** ——
  * 离线探针拿的也是它，主文档自己再探一遍会是第二份实现、会走偏。
  */
 /*
@@ -168,14 +169,13 @@ function gpuRendererOnce(): string {
 
 function deviceStringOf(tuning: PipelineTuning): string {
   const caps = stageCapabilities("back");
-  const lowMemory = !!caps?.lowMemory;
   return costDeviceString({
     ua: navigator.userAgent,
     renderer: gpuRendererOnce(),
-    lowMemory,
+    compact: !!caps?.compact,
     offscreenGl: !!caps?.offscreenGl,
-    // 生效路线(M2):项目选项优先,否则按低内存档。切了路线等于换机器,旧记录不命中、重探针
-    glRoute: resolveGlRoute(currentProject?.glRoute ?? null, lowMemory),
+    // 生效路线(M2):桌面按项目选项、缺省路线 1;在线页面按舞台闸门(`onlineTier.ts`)。切了路线等于换机器,旧记录不命中、重探针
+    glRoute: effectiveGlRoute(currentProject),
     mode: RUN_MODE,
     tuning,
   });
@@ -533,7 +533,12 @@ function identitySignature(project: Project | null): string | null {
 
 function deviceInputs(project: Project | null): string {
   const caps = stageCapabilities("back");
-  return JSON.stringify([!!caps?.lowMemory, !!caps?.offscreenGl, resolveGlRoute(project?.glRoute ?? null, !!caps?.lowMemory)]);
+  return JSON.stringify([!!caps?.compact, !!caps?.offscreenGl, effectiveGlRoute(project)]);
+}
+
+/** 生效的 canvas 渲染路线:在线页面跟舞台闸门走(`tierGlRoute`),桌面按项目选项、缺省路线 1 */
+function effectiveGlRoute(project: Project | null): "perDocument" | "shared" {
+  return tierState().online ? tierGlRoute() : resolveGlRoute(project?.glRoute ?? null);
 }
 
 function queueProbeRun(project: Project | null, identity: string | null): void {

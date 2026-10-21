@@ -9,8 +9,9 @@
  *   同一份配置里另有托管方的总开关 `"onlineCardExec": false`(契约 `online-card-exec-contract.md`;缺省开):关掉就不在线执行用户卡与素材效果卡,
  *   整体退回原来的做法(`parseCardExecSwitch`)。
  *
- * - **跨源隔离**:所有舞台一律跨源隔离，撤掉退回同源单舞台的路（2026-10-14 用户定）。读不到配置、配置不对或握手失败不再退回同源单舞台，而是不挂载舞台；低内存档开单舞台 A，也必须从跨源舞台源加载。
- * - **低内存档**:只开单舞台 A,不开后台舞台 B,单舞台 A 同样必须是跨源隔离舞台。
+ * - **跨源隔离**:所有舞台一律跨源隔离，撤掉退回同源单舞台的路（2026-10-14 用户定）。读不到配置、配置不对时不挂载舞台；
+ *   握手失败退回跨源单舞台 A（只管当次，不留崩溃记录）。
+ * - **舞台闸门停在第一级**（精简模式、低配模式，`onlineTier.ts`）:只开单舞台 A,不开后台舞台 B,单舞台 A 同样必须是跨源隔离舞台。
  *
  * 本模块属于 render 这一层(`src/online/`):不引 editor;不读 `import.meta.env`(调用方把 `base` 传进来)。
  */
@@ -27,7 +28,7 @@ export type StageLayout = "dual" | "single";
 export const RUNTIME_CONFIG_FILE = "runtime-config.json";
 /** 取运行配置的时限 */
 export const RUNTIME_CONFIG_TIMEOUT_MS = 5000;
-/** 每个舞台从自己 iframe 的 `load` 起等握手的时限;过了算握手失败,退回同源单舞台(计时与总上限见 `stageHandshake.ts`) */
+/** 每个舞台从自己 iframe 的 `load` 起等握手的时限;过了算握手失败,退回跨源单舞台 A(计时与总上限见 `stageHandshake.ts`) */
 export const STAGE_HANDSHAKE_TIMEOUT_MS = 20_000;
 
 /** 一个源:`http(s)://host[:port]`,不带路径、查询与片段 */
@@ -85,11 +86,12 @@ export function parseCardExecSwitch(config: unknown): boolean {
 }
 
 /**
- * 开几个舞台:低内存档单舞台(只开跨源 A,不开后台 B);没有舞台源(读不到配置)、握手失败或与编辑器页同源为 single(不再挂载同源单舞台,而是不挂载);其余双舞台(握手进行中也按双舞台挂 iframe)。
+ * 开几个舞台:舞台闸门停在第一级(`single`)只开跨源 A,不开后台 B;握手失败退回跨源 A;没有舞台源(读不到配置)或与编辑器页同源
+ * 也回 single(调用方据 `origins` 判出不挂载,不挂同源单舞台);其余双舞台(握手进行中也按双舞台挂 iframe)。
  * `pageOrigin` 给了时,舞台源不能与编辑器页同源(那就不是跨源隔离,按读不到处理)。
  */
-export function stageLayout({ lowMemory, origins, handshake, pageOrigin }: { lowMemory: boolean; origins: StageOrigins | null; handshake?: Handshake; pageOrigin?: string }): StageLayout {
-  if (lowMemory) return "single";
+export function stageLayout({ single, origins, handshake, pageOrigin }: { single: boolean; origins: StageOrigins | null; handshake?: Handshake; pageOrigin?: string }): StageLayout {
+  if (single) return "single";
   if (!origins) return "single";
   if (pageOrigin && (origins.A === pageOrigin || origins.B === pageOrigin)) return "single";
   if (handshake === "failed" || handshake === "interim") return "single";

@@ -1500,8 +1500,8 @@ export class FramePipeline {
     return set.has(clipId);
   }
   /**
-   * 轨道流只给**本机判重**的卡(`basePrerenderSet`,不含预渲染重试进来的片段):低内存档不消费流(c10a 契约第 9 节),
-   * 为预渲染重试进集合的轻卡产流只是白做。没有基础集合时退回 `prerenderPicked`。
+   * 轨道流只给**本机判重**的卡(`basePrerenderSet`,不含预渲染重试进来的片段):预渲染重试计划(旧页面的 `backfill` 档;2026-10-07 起在线页面一律发普通优先级的清单计划,这一档没有新的发布方,留着只为认部署切换期间的老页面)不切流,
+   * 为它进集合的轻卡产流只是白做。没有基础集合时退回 `prerenderPicked`。
    */
   streamPicked(entry, clipId) {
     const base = entry?.basePrerenderSet;
@@ -1509,7 +1509,7 @@ export class FramePipeline {
     return base.has(clipId);
   }
   /**
-   * 预渲染重试(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档判重、素材服务里又没有产物的片段,
+   * 预渲染重试(c10a 契约第 17 节)(旧页面的 `backfill` 档;2026-10-07 起在线页面一律发普通优先级的清单计划,这一档没有新的发布方,留着只为认部署切换期间的老页面):判重、素材服务里又没有产物的片段,
    * 页面发布带片段清单的预渲染重试计划任务;认领它的节点在这里把清单里的片段记成「这张卡的这一份内容要产」,
    * 于是它们进这一版的预渲染集合(`prerenderPicked` 为真:细任务渲得出来、层表里列着它们,在线页面据此取小尺寸)。
    *

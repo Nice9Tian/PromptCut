@@ -180,7 +180,7 @@ export function smallFramesOf(result) {
 export const LAYER_MAP_PREFIX = 'layers:';
 /**
  * 层表的版本。v 2(C10 契约第 5 节、第 18 节第 3 条):每层加 `contentKey`(共享档的内容键,与环境无关)与
- * `envFingerprint`(产出这一层的环境的指纹)。在线普通档只认 v 2 且两项齐的层;低内存档 v 1、v 2 都认(只用小尺寸那几项)。
+ * `envFingerprint`(产出这一层的环境的指纹)。在线页面只认 v 2 且两项齐的层;最低一档 v 1、v 2 都认(`src/render/snapshotSource.ts` 的 `usableLayer`)。
  * v 3(M7 契约 D12,第 13 节裁定):每层另带 `candidates: [{ envFingerprint, resultKey, key, dirKey }]` —— 切分方双份出键之后
  * 一层可能有两套键(切分方自己的、纯浏览器的),哪一份活着由页面按 `task.done` 与清单认定;层上的 v 2 字段等于第一个候选,
  * 读 v 2 的页面照旧能用(当作一个候选)。
@@ -198,7 +198,7 @@ export const layerMapKeyOf = projectId => (typeof projectId === 'string' && proj
  *   `{ clipId, kind: 'html' | 'local', key(就绪索引线上的键), tier, resultKey(清单键的前半), dirKey, entryKey, firstFrame, count,
  *      contentKey(共享档的内容键), envFingerprint(产出这一层的环境) }`
  * 本层表是 `contentKey` 与 `envFingerprint` 唯一定形的地方(C10 契约第 18 节第 3 条)。取不到这两项的层照旧列出,
- * 在线普通档按「没有预渲染结果」处理,低内存档照旧能用小尺寸。
+ * 在线页面按「没有预渲染结果」处理。
  * 段与推送、与队列细任务同一种切法:本地帧 0 起每 `span` 帧一段,最后一段到 `count - 1`,清单键
  * `<resultKey>:<from>-<to>`。只列在预渲染集合里、产快照的卡(`picked` 由调用方给)。
  *

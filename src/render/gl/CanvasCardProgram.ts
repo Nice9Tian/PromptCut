@@ -18,7 +18,7 @@
 
 import type * as ThreeNs from "three";
 
-/** 纹理从哪来。`mediaId` 走项目素材(低内存档取 `tiers.small`),`url` 是写死的地址,`param` 是「地址在这个参数里」 */
+/** 纹理从哪来。`mediaId` 走项目素材(只用小尺寸的素材取 `tiers.small`),`url` 是写死的地址,`param` 是「地址在这个参数里」 */
 export interface CanvasTextureSpec {
   name: string;
   mediaId?: string;
@@ -102,7 +102,7 @@ export interface GlBeatCard {
 
 export type GlToWorker =
   /** 路线 1 / 主线程退路:探能力、建上下文 */
-  | { type: "init"; lowMemory: boolean }
+  | { type: "init"; compact: boolean }
   /** 路线 2:父页把一个舞台的端口交给 Worker */
   | { type: "connect"; stageId: string; port: MessagePort }
   | { type: "layout"; stageId: string; cards: GlLayoutCard[] }

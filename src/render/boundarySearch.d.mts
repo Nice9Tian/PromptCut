@@ -58,6 +58,7 @@ export function boundarySearch(o: {
   margin?: number;
   extraMax?: number;
   mode?: string;
+  measureUnrecorded?: boolean;
   now?: () => number;
 }): Promise<BoundaryResult>;
 export function classifyWithBoundary(result: BoundaryResult | null, keys: Iterable<string>, records: Iterable<SharedCostLike>): { heavy: Set<string>; light: Set<string> };

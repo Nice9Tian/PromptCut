@@ -1,18 +1,19 @@
 /**
- * 低内存档的界限搜索（语义 `docs/semantics/mechanism/rendering.md`「低内存档」；`product/platforms.md`「面向的平台」的轻重判定；
+ * 界限搜索（语义 `docs/semantics/mechanism/rendering.md`「界限搜索与成本记录」；`product/platforms.md`「在线浏览器」的轻重判定；
  * 契约 `docs/plan/c10-contract.md` 第 3 节）。**纯逻辑**：不碰舞台、不碰网络，测量与本地存取都由调用方注入，
  * 浏览器和 Node 单测同一份代码。
  *
  * # 做法
  *
  * 1. 每张卡取一个代表耗时：本项目的共享成本记录里这张卡（`identityKey`）各环境的活渲单帧耗时取中位数；
- * 2. 按代表耗时从小到大排序（相同的按 `identityKey` 定序）；没有记录的卡**按重卡、不测**；
+ * 2. 按代表耗时从小到大排序（相同的按 `identityKey` 定序）；没有记录的卡：`measureUnrecorded` 为真时**逐张实测**
+ *    （2026-10-07 用户定「没有就逐张实测」；在线页面一律给真），为假时按重卡、不测（旧做法，单测留着）；
  * 3. 对排好的卡做二分查找：测中间那一张在本机的活渲单帧耗时，不超过预算 B 往更耗时的一半找，超过往更省的一半找，
  *    直到找到第一张本机跑不动的卡（界限）。它和比它耗时的全判重，比它省的全判轻；
  * 4. 余量：界限两侧各再测 `margin` 张（缺省 1），取离界限最近、还不知道本机耗时的那一张。实测和排序矛盾时以实测为准，
  *    界限随之挪动（省的一侧测出跑不动：界限挪到它；重的一侧测出跑得动：界限挪到它后面），挪动之后在同一侧接着再测，
  *    这样多测的总数不超过 `extraMax`（缺省 2）；
- * 5. 测过的卡一律按实测判，没测的卡按它在界限的哪一侧判。
+ * 5. 测过的卡一律按实测判，没测的卡按它在界限的哪一侧判；没有记录又没测的按重卡。
  *
  * 测量次数上界 = ⌈log₂(卡数 + 1)⌉ + 2 × margin + extraMax，即约 log₂(卡数) + 2（`maxMeasurements`）。
  *
@@ -27,7 +28,7 @@
  * 与桌面分派同一个式子：`stepMs × COST_SCALE > B`（`pipelinePlan.mjs` 的 `clipWeight`）。`scale` 缺省 1。
  */
 
-/** 界限两侧各再测几张（三级可调，`mechanism/rendering.md`「低内存档」） */
+/** 界限两侧各再测几张（三级可调，`mechanism/rendering.md`「界限搜索与成本记录」） */
 export const BOUNDARY_MARGIN = 1;
 /** 余量测出矛盾、界限挪动之后，最多再多测几张（三级可调） */
 export const BOUNDARY_EXTRA_MAX = 2;
@@ -86,12 +87,13 @@ export function maxMeasurements(n, margin = BOUNDARY_MARGIN, extraMax = BOUNDARY
  * @param {number} [o.margin] 界限两侧各再测几张，缺省 `BOUNDARY_MARGIN`
  * @param {number} [o.extraMax] 挪界限后最多再多测几张，缺省 `BOUNDARY_EXTRA_MAX`
  * @param {string} [o.mode] 本地复用的记录里记的构建模式
+ * @param {boolean} [o.measureUnrecorded] 没有记录的卡逐张实测（缺省假：按重卡、不测）
  * @param {() => number} [o.now]
  * @returns {Promise<BoundaryResult>}
  */
 export async function boundarySearch({
   keys, records, budgetMs, measure, store = null, envFingerprint = '', scale = 1,
-  margin = BOUNDARY_MARGIN, extraMax = BOUNDARY_EXTRA_MAX, mode = 'build', now = Date.now,
+  margin = BOUNDARY_MARGIN, extraMax = BOUNDARY_EXTRA_MAX, mode = 'build', now = Date.now, measureUnrecorded = false,
 }) {
   const B = Number(budgetMs);
   const k = finite(scale) && scale > 0 ? scale : 1;
@@ -108,7 +110,9 @@ export async function boundarySearch({
   const trace = [];
 
   async function costAt(i) {
-    const key = order[i].key;
+    return costOf(order[i].key, i);
+  }
+  async function costOf(key, i) {
     const hit = known.get(key);
     if (hit) return hit.ms;
     const lk = localCostKey(key, envFingerprint);
@@ -172,9 +176,16 @@ export async function boundarySearch({
     }
   }
 
+  // 4b. 没有记录的卡逐张实测（在线页面；单测的旧做法不测）
+  if (measureUnrecorded) for (const key of unrecorded) await costOf(key, -1);
+
   // 5. 判
-  const heavy = new Set(unrecorded);
+  const heavy = new Set();
   const light = new Set();
+  for (const key of unrecorded) {
+    const hit = known.get(key);
+    (hit && !heavyMs(hit.ms) ? light : heavy).add(key);
+  }
   order.forEach(({ key }, i) => {
     const hit = known.get(key);
     const isHeavy = hit ? heavyMs(hit.ms) : i >= boundary;
@@ -190,7 +201,8 @@ export async function boundarySearch({
 
 /**
  * 搜索之后项目里又来了新卡（或别的机器补了记录）：不再测，按已有的结果判。
- * 测过的按实测；有代表耗时的按它落在界限的哪一侧（代表耗时不小于界限那张卡的算重）；没有记录的算重。
+ * 测过的按实测；有代表耗时的按它落在界限的哪一侧（代表耗时不小于界限那张卡的算重）；没有记录的算重
+ * （在线页面先把新来的、没有记录的卡补测进 `result.measured` 再来判，`src/editor/costSearch.ts` 的 `measureNewCards`）。
  * @param {BoundaryResult} result
  * @param {Iterable<string>} keys
  * @param {Iterable<{ identityKey: string, stepMs: number }>} records

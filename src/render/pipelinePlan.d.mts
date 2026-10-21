@@ -34,15 +34,15 @@ export interface PlanPipelinesOptions {
   /** clipId → 声明的帧模式。只在这张卡没有成本记录时用：`direct` 视为轻，其余视为重。 */
   frameModes?: ClipIndex<string>;
   /**
-   * 每张卡在每个位置都判重、整段进预渲染集合,不看成本记录与声明。低内存档的**显示**用它(播放时一律不活渲,
-   * 语义 `product/platforms.md`「面向的平台」);低内存档的轻重判定看 `lowMemoryLight`。
+   * 每张卡在每个位置都判重、整段进预渲染集合,不看成本记录与声明。最低一档的**显示**用它(播放时一律不活渲,
+   * 语义 `product/platforms.md`「在线浏览器」的「最低一档」);轻重判定看 `searchLight`。
    */
   allHeavy?: boolean;
   /**
-   * 低内存档的判定(界限搜索的结果,`src/render/boundarySearch.mjs`):判轻的卡的 identityKey。给了就不看成本记录与声明,
+   * 界限搜索的判定(在线页面只有一个舞台时,`src/render/boundarySearch.mjs`):判轻的卡的 identityKey。给了就不看成本记录与声明,
    * 集合里的卡在每个位置都判轻(不受预算挤出),其余在每个位置都判重。`allHeavy` 为 true 时不看它。
    */
-  lowMemoryLight?: Iterable<string> | null;
+  searchLight?: Iterable<string> | null;
   /**
    * 打开 3D 模式时把原本判轻的独立卡片也纳入单卡轨道流生产计划 prerenderSet，
    * scene-3d 自身在 3D 视图里是真三维网格，照旧除外，使得 3D 视图播放时所有卡片板子都有轨道流可贴。
@@ -67,7 +67,7 @@ export type PipelineTier =
   | 'declared-light' | 'declared-heavy'
   | 'capped' | 'over-catchup'
   | 'direct' | 'seek' | 'catchup-a' | 'catchup-b'
-  | 'lowmem-light';
+  | 'search-light';
 
 export interface ClipWeight {
   /** 每个位置都判重、不参加贪心 */

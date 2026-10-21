@@ -29,7 +29,6 @@ import {
   type PlaceholderBox, type PlaceholderGeometry, type PlaceholderReason,
 } from "./placeholder/contract.ts";
 import { cardRunnableHere, getCard, graphCardsRunnableHere, isUserCardId } from "../kernel/registry.ts";
-import { mediaTierPolicy } from "./mediaTier.ts";
 import { hourglassFit, type PlaceholderFit } from "./placeholderFit.ts";
 
 /** 包裹层里托着占位组件的槽位(常量在 contract 里,这里转出去给已有的引用方) */
@@ -168,27 +167,12 @@ export function exportSyncedMountFor(cardId: string | undefined, def: unknown): 
   return exportSyncedMount && !def && !!cardId && isUserCardId(cardId);
 }
 
-/*
- * 低内存档的档位(编辑页面由 `planDispatch.setPlanLowMemory` 写进来;舞台是另一个文档,看它启动时写下的取档策略
- * `mediaTier.ts` 的 `mediaTierPolicy().lowMemory`,`StageView` 按能力表设;桌面两处恒为 false)。
- * 2026-10-21 起它不再挡用户卡、素材效果卡:`product/platforms.md` 已撤销低内存档、在线浏览器不分身份执行它们,
- * 用户又定了「暂停时渲染出精确的帧」—— 本页有定义、能运行的(构建时就在包里的仓库用户卡等)照常挂组件、停下追精确帧;
- * 本页跑不了的(同步来的卡在低内存档的运行状态是 `low-memory`,单舞台没有隔离环境)照旧按跑不了、等渲染节点。
- */
-let lowMemoryTier = false;
-export function setLocalOnlyLowMemory(on: boolean): void {
-  lowMemoryTier = !!on;
-}
-export function localOnlyLowMemory(): boolean {
-  return lowMemoryTier || mediaTierPolicy().lowMemory === true;
-}
-
 /** 这份文档能不能跑素材效果卡:看注册表(`registry.graphCardsRunnableHere`,只有执行卡片的舞台为真) */
 export function graphCardsHere(): boolean {
   return graphCardsRunnableHere();
 }
 
-/** 这张用户卡在本页能不能运行:看注册表(`registry.cardRunnableHere`;同步来的卡在低内存档的运行状态 `low-memory` 不算能运行) */
+/** 这张用户卡在本页能不能运行:看注册表(`registry.cardRunnableHere`;同步来的卡要两台舞台、单舞台时那一台报了 `ready` 才算) */
 export function userCardRunnableHere(cardId: string): boolean {
   return cardRunnableHere(cardId);
 }
@@ -211,7 +195,7 @@ export function unsupportedHere(
  * (`def` 为 undefined),靠 `isUserCard` 认出来;两边都没有的 id(未知卡片)回 false。
  *
  * 用户卡:本页能运行的不算 —— 构建时就在包里的仓库用户卡(它是页面自己的代码);同步来的、运行状态是 `ready` 的
- * (编辑页面看舞台报回的状态,舞台看自己载入成功没有)。转译失败、引用了页面里没有的模块、没有隔离环境、同步来的卡在低内存档的照旧算。
+ * (编辑页面看舞台报回的状态,舞台看自己载入成功没有)。转译失败、引用了页面里没有的模块、没有隔离环境的照旧算。
  *
  * 素材效果卡 = 写了 `card()` 的(画面由宿主在 GPU 上执行),或只写了 `audio()`、没有画面组件的(音频素材效果卡)。
  * 有画面组件、同时带 `audio()` 的内置有声动效卡不是素材效果卡:它的画面就是一张普通的 DOM 卡,在线页面照常渲染

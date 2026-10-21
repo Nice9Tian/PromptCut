@@ -39,12 +39,13 @@ import { resolveTuning } from './pipelineTuning.mjs';
 export const DEAD_MS = 0.3;
 
 /**
- * 低内存档(语义 `product/platforms.md`「面向的平台」、`mechanism/rendering.md`「低内存档」):
+ * 按界限搜索判的轻重(在线页面只有一个舞台时;语义 `product/platforms.md`「在线浏览器」的「轻重判定」、
+ * `mechanism/rendering.md`「界限搜索与成本记录」)与最低一档的显示:
  * - 判重的卡钉死为重,不参加贪心;
- * - 判轻的卡(界限搜索的结果,`opts.lowMemoryLight`)权重记 0、不受预算挤出 —— 低内存档的轻重是按卡判的,不按位置贪心。
+ * - 判轻的卡(界限搜索的结果,`opts.searchLight`)权重记 0、不受预算挤出 —— 这时的轻重是按卡判的,不按位置贪心。
  */
-const LOW_MEMORY_WEIGHT = Object.freeze({ pinned: true, w: Infinity, tier: 'capped' });
-const LOW_MEMORY_LIGHT = Object.freeze({ pinned: false, w: 0, tier: 'lowmem-light' });
+const SEARCH_HEAVY = Object.freeze({ pinned: true, w: Infinity, tier: 'capped' });
+const SEARCH_LIGHT = Object.freeze({ pinned: false, w: 0, tier: 'search-light' });
 
 /** 追帧上界（K2）：每拍除本拍那一帧外最多再多推 4 步本地时间，最多追 `2 × fps` 拍。 */
 export const CATCHUP_STEPS_PER_BEAT = 4;
@@ -170,10 +171,10 @@ export function clipWeight(record, frameMode, fps, tuningOrOverrides) {
  * @param {number} fps 项目帧率
  * @param {object} [opts] `deadMs`（只有 L4 换成实测换帧成本：数字每张一样，函数按片段取）、`tuning`（覆盖值或已解析的一份）、
  *   `identityKeys` / `frameModes`（片段 → 成本记录的索引，见 `clipCostIndex`）、
- *   `lowMemoryLight`（低内存档界限搜索判轻的卡的 identityKey 集合；给了就不看成本记录与声明，
+ *   `searchLight`（界限搜索判轻的卡的 identityKey 集合；给了就不看成本记录与声明，
  *   集合里的卡在每个位置都判轻、其余每个位置都判重，`src/render/boundarySearch.mjs`）、
- *   `allHeavy`（每张卡在每个位置都判重。低内存档的显示用它：播放时一律不活渲、只贴预渲染小尺寸，
- *   `src/editor/planDispatch.ts` 的 `currentPlan`；轻重判定本身看 `lowMemoryLight`）、
+ *   `allHeavy`（每张卡在每个位置都判重。最低一档的显示用它：播放时一律不活渲、只贴预渲染结果，
+ *   `src/editor/planDispatch.ts` 的 `currentPlan`；轻重判定本身看 `searchLight`）、
  *   `includeLightCardsFor3D` / `view3d`（打开 3D 模式时把原本判轻的独立卡片也纳入单卡轨道流生产计划 prerenderSet，
  *   scene-3d 自身在 3D 视图里是真三维网格，照旧除外，使得 3D 视图播放时所有卡片板子都有轨道流可贴）、
  *   `capabilities` / `compositing` / `isIndependent`（判卡片是否为独立卡的能力表 / 函数，不给时除 scene-3d 外一律纳入）
@@ -205,8 +206,8 @@ export function planPipelines(project, costs, fps, opts = {}) {
     if (record && typeof record.identityKey === 'string') byKey.set(record.identityKey, record);
   }
 
-  // 低内存档的判定(界限搜索的结果):判轻的卡的 identityKey
-  const lowLight = opts.allHeavy !== true && opts.lowMemoryLight != null ? new Set(opts.lowMemoryLight) : null;
+  // 界限搜索的判定:判轻的卡的 identityKey
+  const searchLight = opts.allHeavy !== true && opts.searchLight != null ? new Set(opts.searchLight) : null;
 
   // 每张卡的权重算一次（各位置相同）
   const weights = new Map();
@@ -214,8 +215,8 @@ export function planPipelines(project, costs, fps, opts = {}) {
     const key = lookup(opts.identityKeys, clip.id);
     const record = typeof key === 'string' ? byKey.get(key) : undefined;
     let weight;
-    if (opts.allHeavy === true) weight = LOW_MEMORY_WEIGHT;
-    else if (lowLight) weight = typeof key === 'string' && lowLight.has(key) ? LOW_MEMORY_LIGHT : LOW_MEMORY_WEIGHT;
+    if (opts.allHeavy === true) weight = SEARCH_HEAVY;
+    else if (searchLight) weight = typeof key === 'string' && searchLight.has(key) ? SEARCH_LIGHT : SEARCH_HEAVY;
     else weight = clipWeight(record, lookup(opts.frameModes, clip.id), rate, tuning);
     weights.set(clip.id, weight);
   }
@@ -243,8 +244,8 @@ export function planPipelines(project, costs, fps, opts = {}) {
     const restDead = new Array(candidates.length + 1).fill(0);
     for (let i = candidates.length - 1; i >= 0; i--) restDead[i] = restDead[i + 1] + deadOf(candidates[i].id);
     for (const [i, clip] of candidates.entries()) {
-      // 低内存档按卡判轻重,判轻的不受预算挤出
-      if (lowLight) { light.add(clip.id); continue; }
+      // 按界限搜索判的轻重按卡判,判轻的不受预算挤出
+      if (searchLight) { light.add(clip.id); continue; }
       const next = sum + weights.get(clip.id).w;
       if (next + pinnedDead + restDead[i + 1] > B) break;   // 装不下就停：后面的只会更贵
       sum = next;

@@ -11,7 +11,7 @@
  *   - 解码帧:稳态每条流只留画布上那一张,换分段的那一下两张;停下全部关掉;
  *   - 这一段的字节没到:留着上一张,最多一个分段的时长,到时清空;
  *   - 浏览器没有 `VideoDecoder`、解码器连着报错:不贴(不再试),不抛错;
- *   - 低内存档的预算(`streamBudget.mjs` 的 `lowMemoryStreamBudget`):条数、画幅之和、头一条不看像素;
+ *   - 低内存档的预算(`streamBudget.mjs` 的 `sparseStreamBudget`):条数、画幅之和、头一条不看像素;
  *   - 父页给舞台发流平面时 `first` 原样带到(`StreamPlaneSender`)。
  */
 import { test, beforeEach } from 'node:test';
@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 import { StreamPlayer, StreamPlaneSender, planesWithinBudget, frameOfTimestamp, SEGMENT_FRAMES, HOLD_FRAMES, FIRST_FRAME_MAX_FAILURES, FIRST_FRAME_STALL_MS } from './streamPlayer.ts';
 import { buildStreamInit, buildStreamSegment } from './streamMux.ts';
 import { streamFirstFrameOf, streamSegmentFrameCount, streamSegmentSpan } from './streamSegments.mjs';
-import { lowMemoryStreamBudget, LOW_MEMORY_STREAM_COUNT, LOW_MEMORY_STREAM_PIXELS, LOW_MEMORY_STREAM_FREE, STREAM_BUDGET_MIN_FPS, STREAM_COUNT_BUDGET, STREAM_DEFAULT_PIXELS, streamCodedPixels } from './streamBudget.mjs';
+import { sparseStreamBudget, SPARSE_STREAM_COUNT, SPARSE_STREAM_PIXELS, SPARSE_STREAM_FREE, STREAM_BUDGET_MIN_FPS, STREAM_COUNT_BUDGET, STREAM_DEFAULT_PIXELS, streamCodedPixels } from './streamBudget.mjs';
 
 const FPS = 30;
 const HOLD_MS = (HOLD_FRAMES * 1000) / FPS;
@@ -360,10 +360,10 @@ test('不带 first 的流平面照旧逐帧解(普通档不受影响)', async ()
 /* ---------------------------------------------------------------- 预算 */
 
 test('低内存档的预算:解码器不超过 4 个;画幅之和不超过两张 1080p 满屏卡;头一条不看像素', () => {
-  const budget = lowMemoryStreamBudget();
-  assert.deepEqual(budget, { count: LOW_MEMORY_STREAM_COUNT, pixelRate: LOW_MEMORY_STREAM_PIXELS * STREAM_BUDGET_MIN_FPS, free: LOW_MEMORY_STREAM_FREE });
-  assert.equal(LOW_MEMORY_STREAM_COUNT, 4);
-  assert.ok(LOW_MEMORY_STREAM_COUNT < STREAM_COUNT_BUDGET);
+  const budget = sparseStreamBudget();
+  assert.deepEqual(budget, { count: SPARSE_STREAM_COUNT, pixelRate: SPARSE_STREAM_PIXELS * STREAM_BUDGET_MIN_FPS, free: SPARSE_STREAM_FREE });
+  assert.equal(SPARSE_STREAM_COUNT, 4);
+  assert.ok(SPARSE_STREAM_COUNT < STREAM_COUNT_BUDGET);
   const plane = (id) => ({ clipIds: [id], key: `k-${id}`, originFrame: 0 });
   const pass = (list, px) => planesWithinBudget(list, STREAM_BUDGET_MIN_FPS, (p) => px[p.clipIds[0]], budget).map((p) => p.clipIds[0]);
   const small = streamCodedPixels(704, 864);

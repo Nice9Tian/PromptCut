@@ -60,7 +60,7 @@ function findPairs(p: Project): Pair[] {
 
 /** 一段素材的静态画面:图片直接放,视频取首帧,声音没有画面就给一块底色(转场卡只看溶解,不播) */
 function Still({ media, style }: { media: MediaAsset | undefined; style?: React.CSSProperties }) {
-  // 桌面是 media.url;在线浏览器模式换成远程素材服务的地址(低内存档只给小尺寸),没就绪时不挂 src
+  // 桌面是 media.url;在线浏览器模式换成远程素材服务的地址(只用小尺寸的素材只给小尺寸),没就绪时不挂 src
   const src = usePreviewMediaUrl(media) || undefined;
   if (!media) return <div style={{ ...style, background: "var(--ui-panel-2)" }} />;
   if (media.kind === "audio") {

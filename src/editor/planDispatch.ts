@@ -30,29 +30,28 @@ import { wirePlan } from "../render/wirePlan";
 import { clipIdentityOf } from "./costIdentity";
 import { frontStage, backStage } from "./stageBridge";
 import { onCardRunStatesChanged, onCardsUpdated, onSyncedUserCardsChanged, unknownCardClipIds } from "../kernel/registry";
-import { setLocalOnlyLowMemory } from "../render/placeholderHost";
 
 let project: Project | null = null;
 let costs: CardCostRecord[] = [];
 let tuning: PipelineTuning = resolveTuning(null);
 let plan: PipelinePlan | null = null;
 /**
- * 低内存档(语义 `product/platforms.md`「面向的平台」;只有在线页面判为低内存档时由 `Preview` 打开,普通档不变)。两张表:
- * - **显示用的表**(`currentPlan`,发给舞台、`snapshotFeed` 按它抑制和选帧):每张卡在每个位置都判重 ——
- *   低内存档播放时只看预渲染小尺寸,不活渲任何卡,判轻的卡也一样(没有产物就是占位,停下时画出);
- * - **判定的表**(`judgedPlan`):轻重按界限搜索的结果(`lowMemoryLight`,`src/editor/lowMemorySearch.ts`)。
- *   预渲染重试只对它判重、又缺产物的层发(`lowMemoryBackfill.ts`);导出时判轻的卡本机逐帧渲、判重的卡用预渲染原尺寸。
- *   搜索完成之前 `lowMemoryLight` 是 null:没有结果,预渲染重试不发,判定的表里全部按重卡。
- * C10a 的过渡做法(判定也全部按重卡)随之退出(契约 `docs/plan/c10-contract.md` 第 3 节)。
+ * 在线页面的两样开关(语义 `product/platforms.md`「在线浏览器」;桌面两样恒关,两张表是同一张):
+ * - **按界限搜索判**(`search`):只有一个舞台时没有后台舞台逐张测,轻重按界限搜索的结果(`searchLight`,
+ *   `src/editor/costSearch.ts`)。搜索完成之前 `searchLight` 是 null:没有结果,清单计划不发,判定的表里全部按重卡。
+ * - **最低一档**(`lowest`):**显示用的表**(`currentPlan`,发给舞台、`snapshotFeed` 按它抑制和选帧)每张卡在每个位置都判重 ——
+ *   播放时不做任何即时渲染,判轻的卡也一样(没有预渲染结果就是占位,停下时逐层画出)。
+ * **判定的表**(`judgedPlan`)决定清单计划发哪些片段、导出时谁由本机逐帧渲:按界限搜索判时按 `searchLight`,否则按成本记录。
  */
-let lowMemory = false;
+let search = false;
+let lowest = false;
 /** 界限搜索判轻的卡的 identityKey;null = 还没有结果 */
-let lowMemoryLight: ReadonlySet<string> | null = null;
+let searchLight: ReadonlySet<string> | null = null;
 let judged: PipelinePlan | null = null;
 /** 3D 视图是否开启（打开时把独立轻卡也纳入预渲染单卡轨道流集合 prerenderSet） */
 let view3d = false;
 /**
- * L4(在线普通档,C10 契约第 6 节、第 18 节第 1 条):分派时每张重卡每拍的固定成本换成实测的换帧成本 `swapMs`
+ * L4(在线页面,C10 契约第 6 节、第 18 节第 1 条):分派时每张重卡每拍的固定成本换成实测的换帧成本 `swapMs`
  * (`planPipelines` 的 `opts.deadMs`),与播放时 `beatSwap.mjs` 的 `fitBeatSwaps` 同一个数。null = 桌面的 `DEAD_MS`。
  */
 let deadMs: number | null = null;
@@ -70,12 +69,12 @@ export function onPlanUpdated(cb: () => void): () => void {
   return () => { planListeners.delete(cb); };
 }
 
-/** 这一刻算出来的分派表（R5 / 验收探针用）。低内存档里是显示用的那一张（全部判重），判定看 `judgedPlan` */
+/** 这一刻算出来的分派表（R5 / 验收探针用）。最低一档里是显示用的那一张（全部判重），判定看 `judgedPlan` */
 export function currentPlan(): PipelinePlan | null {
   return plan;
 }
 
-/** 轻重判定的表：普通档与 `currentPlan` 是同一张；低内存档按界限搜索的结果（还没有结果时全部判重） */
+/** 轻重判定的表：不是最低一档时与 `currentPlan` 是同一张；按界限搜索判时按它的结果（还没有结果时全部判重） */
 export function judgedPlan(): PipelinePlan | null {
   return judged;
 }
@@ -114,13 +113,14 @@ function recompute(): void {
   const dead = deadMs !== null ? { deadMs: of ? (clipId: string) => of(at, clipId) : deadMs } : {};
   /*
    * 两边都没有定义的卡片段(未知卡片)舞台不画:不当重卡、不进预渲染集合(桌面与在线一致;`knownCardsOnly`)。
-   * 不去掉的话它们没有身份、没有成本记录,会按声明兜底判重,进清单计划与低内存档预渲染重试。
+   * 不去掉的话它们没有身份、没有成本记录,会按声明兜底判重,进清单计划。
    */
   // 剪辑段换成它里面的卡(`kernel/cutFlatten.mjs`):剪辑段里的卡和父时间轴上的卡一起分派。没有剪辑段时原样
   const planned = knownCardsOnly(flatPlanProject(project));
   const opts3D = view3d ? { includeLightCardsFor3D: true, view3d: true } : {};
-  plan = planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, ...(lowMemory ? { allHeavy: true } : {}), ...opts3D, ...dead });
-  judged = lowMemory ? planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, lowMemoryLight: lowMemoryLight ?? [], ...opts3D, ...dead }) : plan;
+  const judge = search ? { searchLight: searchLight ?? [] } : {};
+  judged = planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, ...judge, ...opts3D, ...dead });
+  plan = lowest ? planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, allHeavy: true, ...opts3D, ...dead }) : judged;
 }
 
 /** 去掉未知卡片段的项目(只给 `planPipelines` 看;没有未知卡片时原样回同一个对象) */
@@ -212,47 +212,57 @@ export function mergePlanCosts(records: readonly CardCostRecord[]): void {
   schedule();
 }
 
-/** 低内存档打开 / 关上。变了才重算重发;关上时丢掉搜索结果 */
-export function setPlanLowMemory(on: boolean): void {
-  if (lowMemory === !!on) return;
-  lowMemory = !!on;
-  // 低内存档不执行用户卡的代码(含构建时就在包里的仓库用户卡):哪些片段本页运行不了跟着档位走(`placeholderHost.ts`)
-  setLocalOnlyLowMemory(lowMemory);
-  if (!lowMemory) lowMemoryLight = null;
+/** 按界限搜索判轻重(只有一个舞台时由 `Preview` 打开)。变了才重算重发;关上时丢掉搜索结果 */
+export function setPlanSearch(on: boolean): void {
+  if (search === !!on) return;
+  search = !!on;
+  if (!search) searchLight = null;
   schedule();
 }
 
-/** 此刻是不是低内存档(显示用的表全部判重) */
-export function planLowMemory(): boolean {
-  return lowMemory;
+/** 此刻是不是按界限搜索判轻重 */
+export function planSearch(): boolean {
+  return search;
+}
+
+/** 最低一档打开 / 关上(显示用的表全部判重)。变了才重算重发 */
+export function setPlanLowest(on: boolean): void {
+  if (lowest === !!on) return;
+  lowest = !!on;
+  schedule();
+}
+
+/** 此刻是不是最低一档(显示用的表全部判重) */
+export function planLowest(): boolean {
+  return lowest;
 }
 
 /**
  * 界限搜索的结果:判轻的卡的 identityKey(`null` = 撤掉结果,判定回到全部按重)。同一份集合不重算。
- * 表同步重算(不攒拍):预渲染重试、导出拿到结果后马上就要用判定的表。
+ * 表同步重算(不攒拍):清单计划、导出拿到结果后马上就要用判定的表。
  */
-export function setPlanLowMemoryLight(keys: Iterable<string> | null): void {
+export function setPlanSearchLight(keys: Iterable<string> | null): void {
   const next = keys === null ? null : new Set(keys);
-  const same = next === null ? lowMemoryLight === null
-    : lowMemoryLight !== null && next.size === lowMemoryLight.size && [...next].every((k) => lowMemoryLight!.has(k));
+  const same = next === null ? searchLight === null
+    : searchLight !== null && next.size === searchLight.size && [...next].every((k) => searchLight!.has(k));
   if (same) return;
-  lowMemoryLight = next;
+  searchLight = next;
   recompute();
   schedule();
 }
 
-/** 低内存档的轻重判定有没有结果(界限搜索做完了);普通档恒为 true */
-export function lowMemoryJudged(): boolean {
-  return !lowMemory || lowMemoryLight !== null;
+/** 按界限搜索判轻重时有没有结果(搜索做完了);不按它判时恒为 true */
+export function searchJudged(): boolean {
+  return !search || searchLight !== null;
 }
 
 /** 界限搜索判轻的卡(诊断与探针用) */
-export function planLowMemoryLight(): ReadonlySet<string> | null {
-  return lowMemoryLight;
+export function planSearchLight(): ReadonlySet<string> | null {
+  return searchLight;
 }
 
 /**
- * L4:在线普通档把分派的每拍重卡成本换成实测换帧成本(`null` 回到桌面的 `DEAD_MS`)。变了才重算重发。
+ * L4:在线页面把分派的每拍重卡成本换成实测换帧成本(`null` 回到桌面的 `DEAD_MS`)。变了才重算重发。
  * `of` 给了就按片段各取各的(按卡种,与播放时 `fitBeatSwaps` 的每层成本同一个数),`ms` 只作它给不出数时的兜底。
  */
 export function setPlanDeadMs(ms: number | null, of: ((project: Project, clipId: string) => number) | null = null): void {
@@ -286,10 +296,10 @@ export function lightCostAt(t: number): number {
 
 /** 测试用 */
 export function resetPlanDispatch(): void {
-  lowMemory = false;
+  search = false;
+  lowest = false;
   view3d = false;
-  setLocalOnlyLowMemory(false);
-  lowMemoryLight = null;
+  searchLight = null;
   judged = null;
   deadMs = null;
   deadMsOf = null;

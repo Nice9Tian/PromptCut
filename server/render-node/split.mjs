@@ -154,7 +154,7 @@ export function planTaskOf({ projectId, projectRev, priority = 0, codeVersion, e
 }
 
 /**
- * 预渲染重试计划任务(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档发现判重的层在素材服务里
+ * 预渲染重试计划任务(c10a 契约第 17 节)(旧页面的 `backfill` 档;2026-10-07 起在线页面一律发普通优先级的清单计划,这一档没有新的发布方,留着只为认部署切换期间的老页面):老页面发现判重的层在素材服务里
  * 没有产物时发布,带片段清单(`input.clips`),标 `priority: 'backfill'`。认领它的节点把清单里的片段当重卡算键、
  * 切出细任务,细任务同样标 `backfill`(`splitPlan` 的 `lane`)。形状与校验在队列那边(`messages.mjs`)。
  */
