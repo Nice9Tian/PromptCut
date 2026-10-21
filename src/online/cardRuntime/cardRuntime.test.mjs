@@ -337,7 +337,7 @@ test("OCE-T-08 运行状态:摊到卡上;编辑页面一侧的先后;面板说�
   assert.equal(msg({ state: "runtime-error" }), "这张卡在在线浏览器里运行出错,本次改由渲染节点提供画面。");
   assert.equal(msg({ state: "not-isolated" }), "这个页面没有隔离的运行环境,用户卡与素材效果卡的画面由渲染节点提供。");
   assert.equal(msg({ state: "not-isolated", detail: "这个站点没有开启在线运行用户卡与素材效果卡" }), "这个站点没有开启在线运行用户卡与素材效果卡,用户卡与素材效果卡的画面由渲染节点提供。");
-  assert.equal(msg({ state: "low-memory" }), "这台设备在低内存档,不运行用户卡与素材效果卡的代码。");
+  assert.equal(msg({ state: "low-memory" }), "这台设备在低内存档,不运行同步来的用户卡与素材效果卡的代码,画面由渲染节点提供。");
   assert.equal(R.CARD_RUN_STATES.length, 10);
   for (const s of R.CARD_RUN_STATES) if (s !== "ready" && s !== "loading") assert.ok(msg({ state: s }), s);
 });
