@@ -31,8 +31,8 @@
  *    请求里不带 `?t=`。
  * E6 判重的仍走预渲染或渲染节点:故意很慢的 `oce-slow`(摆在 10～14 秒,免得它在 0～4 秒拖慢别的卡的播放)测量后判重(进测量记录),播放中被抑制,页面发布的清单计划含它;
  *    探针替渲染节点写层表与清单后,舞台里换成预渲染快照、不挂徽标。同时判轻的卡不在清单计划里、没被抑制。
- * E7 三种退回:`namespace` 的卡(`unsupported-syntax`)、引 `lodash` 的卡(`missing-module`)按原做法 —— 图标「需要本地 PC 渲染辅助」、时间轴徽标、
- *    进清单计划;参数面板出现对应的说明(原文进输出)。另开一个 `--disable-gpu --disable-software-rasterizer` 的浏览器:素材效果卡的运行状态是 `gpu`、
+ * E7 三种退回:`namespace` 的卡(`unsupported-syntax`)、引 `lodash` 的卡(`missing-module`)按原做法 —— 舞台里是沙漏(等渲染节点)、
+ *    时间轴没有徽标(2026-10-21 用户定:没有「本地 PC 辅助渲染」)、进清单计划;参数面板出现对应的说明(原文进输出)。另开一个 `--disable-gpu --disable-software-rasterizer` 的浏览器:素材效果卡的运行状态是 `gpu`、
  *    参数面板说明「图形能力不够」、舞台不挂素材效果卡的画布,DOM 用户卡不受影响。
  * E8 源码更新后在线页面跟着换:创建者把 `oce-visual` 的源码换一版,10 秒内舞台里的画面是新版的、成本身份(测量记录里的 identityKey)换了、
  *    浏览器节点报的代码身份换了。
@@ -673,14 +673,15 @@ try {
   await A.page.evaluate(() => window.__pcStore.actions.seek(1));
   const bad = await until('A 两张卡的运行状态落定', async () => { const d = await A.run(); return d?.run['oce-ns']?.state && d.run['oce-ns'].state !== 'loading' && d.run['oce-lodash']?.state && d.run['oce-lodash'].state !== 'loading' ? d : null; }, 60_000, 500);
   check('E7 namespace 的卡:运行状态 unsupported-syntax;引 lodash 的卡:运行状态 missing-module', bad?.run['oce-ns']?.state === 'unsupported-syntax' && bad?.run['oce-lodash']?.state === 'missing-module', { ns: bad?.run['oce-ns'], lodash: bad?.run['oce-lodash'] });
-  const badStage = await until('A 两张坏卡显示「需要本地 PC 渲染辅助」图标', async () => {
+  const badStage = await until('A 两张坏卡显示沙漏', async () => {
     await A.page.evaluate(() => window.__pcStore.actions.seek(1));
     const s = await A.stageState([V.ns, V.lod], PROBES);
-    return s?.[V.ns]?.placeholderShown && s?.[V.lod]?.placeholderShown && s[V.ns].reason === 'unsupported' && s[V.lod].reason === 'unsupported' ? s : null;
+    return s?.[V.ns]?.placeholderShown && s?.[V.lod]?.placeholderShown && s[V.ns].reason === 'awaiting' && s[V.lod].reason === 'awaiting' ? s : null;
   }, 60_000, 500) ?? await A.stageState([V.ns, V.lod], PROBES);
-  check('E7 两张坏卡按原做法:舞台里是「电脑 + 离线」图标与「需要本地 PC 渲染辅助」(没有活 DOM)', [V.ns, V.lod].every((id) => badStage?.[id]?.placeholderShown && badStage[id].reason === 'unsupported' && !badStage[id].live && (badStage[id].shownText ?? '').includes(UNSUPPORTED)), badStage);
-  const tlBad = await until('A 时间轴上两张坏卡有徽标', async () => { const t = await A.timeline(ALL_V); return t[V.ns]?.badge && t[V.lod]?.badge ? t : null; }, 30_000, 500) ?? await A.timeline(ALL_V);
-  check('E7 时间轴:两张坏卡有徽标(悬停文案「需要本地 PC 渲染辅助」),判轻的卡与慢卡没有', tlBad[V.ns]?.badge && tlBad[V.ns].title === UNSUPPORTED && tlBad[V.lod]?.badge && [V.v, V.snd, V.rel, V.slow].every((id) => !tlBad[id]?.badge), tlBad);
+  check('E7 两张坏卡按原做法:舞台里是沙漏(等渲染节点),没有活 DOM,没有「本地 PC 辅助渲染」', [V.ns, V.lod].every((id) => badStage?.[id]?.placeholderShown && badStage[id].reason === 'awaiting' && !badStage[id].live && !(badStage[id].shownText ?? '').includes(UNSUPPORTED)), badStage);
+  await sleep(3000);
+  const tlBad = await A.timeline(ALL_V);
+  check('E7 时间轴:所有片段都没有徽标(包括两张坏卡)', ALL_V.every((id) => !tlBad[id]?.badge), tlBad);
   const plan2 = await until('A 清单计划含两张坏卡', async () => { const d = await A.page.evaluate(() => window.__pcPlanPublisher?.() ?? null); return d?.lastClips?.includes(V.ns) && d.lastClips.includes(V.lod) ? d : null; }, 90_000, 1000);
   check('E7 两张坏卡进清单计划(发布预渲染重试,由渲染节点渲)', !!plan2, plan2?.lastClips);
   summary.panel.ns = await A.panelNote(V.ns);
@@ -816,7 +817,7 @@ try {
   const mm = await markersIn(P);
   check('E9 低内存档的任何文档里都没有执行卡片代码的记号', mm.top === null && mm.stages.every((n) => n === null), mm);
   const ps = await P.stageState([V.v, V.rel], PROBES);
-  check('E9 低内存档里没有预渲染结果的卡显示「需要本地 PC 渲染辅助」图标,没有活 DOM(同现有规则)', [V.v, V.rel].every((id) => ps?.[id]?.placeholderShown && ps[id].reason === 'unsupported' && !ps[id].live), ps);
+  check('E9 低内存档里没有预渲染结果的同步卡显示沙漏(等渲染节点),没有活 DOM,没有「本地 PC 辅助渲染」', [V.v, V.rel].every((id) => ps?.[id]?.placeholderShown && ps[id].reason === 'awaiting' && !ps[id].live && !(ps[id].shownText ?? '').includes(UNSUPPORTED)), ps);
   summary.lowmem = { run: lm?.run ?? null, markers: mm };
   await P.shot('e9-lowmem');
   check('E9 低内存档没有页面错误', P.pageErrors.length === 0, P.pageErrors.slice(0, 3));
