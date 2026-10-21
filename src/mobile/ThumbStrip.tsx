@@ -5,6 +5,7 @@
  */
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { Project, TrackClip } from "../kernel/project";
+import { ThumbImg, useThumb } from "./Thumb";
 import type { Transition } from "../kernel/transitions";
 import { boundaryTransition, cardPosAtTime, clipKind, mainTotal, timeAtCardPos } from "./mainContent";
 import { Icon } from "./icons";
@@ -152,6 +153,7 @@ export function ThumbStrip(props: {
                 data-pcm="mblock"
                 style={{ background: `linear-gradient(135deg, ${tint(c.mediaId ?? c.cutId ?? c.id)}, var(--shade-art))` }}
               >
+                <BlockThumb project={project} clip={c} />
                 <span className="no">{i + 1}</span>
                 <span className="du">{fmtDur(c.end - c.start)}{muted && <Icon name="mute" />}</span>
               </div>,
@@ -167,4 +169,11 @@ export function ThumbStrip(props: {
       </div>
     </>
   );
+}
+
+/** 缩略卡的画面:视频段取它入点那一帧,图片段取缩略图;剪辑段、取不到时只有取色底色 */
+function BlockThumb({ project, clip }: { project: Project; clip: TrackClip }) {
+  const media = clip.mediaId && !clip.cardId ? project.media.find((m) => m.id === clip.mediaId) : undefined;
+  const thumb = useThumb(media, media?.kind === "video" ? clip.mediaOffset ?? 0 : 0);
+  return media && media.kind !== "audio" ? <ThumbImg thumb={thumb} /> : null;
 }
