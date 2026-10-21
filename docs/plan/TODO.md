@@ -147,8 +147,8 @@
   - 改非流式会丢进度显示、截断时保住半截参数、卡死判断，不建议。
   - 提示词缓存和流式无关；但这个 key 现在的 Gemini 路由 `cached_tokens` 一直是 0，原因没查。
   - 原始数据和脚本在主会话 scratchpad 的 `stream-research/`（临时目录）。
-- 〔待用户定，2026-10-22 实测发现〕网关单次请求约 300 秒就被掐断：流式请求在 300.7 秒收到 SSE 里的 error（HTTP 仍是 200，原文「The upstream stream ended before the response was complete.」），没有 `finish_reason`。A07 的截断续写只认 `length`，这种中途结束走不到，没写完的工具参数全丢，`api.mjs` 的超时续跑也不认。建议：中途结束按截断处理（保住半截参数、走代码块续写），按「约 250 秒 × 实测速度」给 `max_tokens` 设上限，`mechanism/agent.md` 补这条网关上限。只见到 1 次，没复现。
-- 〔待用户定〕云端事件写文档服务的合并窗口从 250 毫秒放宽到约 1 秒：长回复写入从 121～162 条降到 44～54 条，用户看不出区别（三级）；桌面本机那一路也可加合并。
+- 〔已上线，main `2f07bf72`，2026-10-22 用户定「现在修」；报告 `docs/archive/agent-reports/AGENT-stream-cut.md`〕网关单次请求约 300 秒就被掐断：流式请求在 300.7 秒收到 SSE 里的 error（HTTP 仍是 200，原文「The upstream stream ended before the response was complete.」），没有 `finish_reason`。A07 的截断续写只认 `length`，这种中途结束走不到，没写完的工具参数全丢，`api.mjs` 的超时续跑也不认。建议：中途结束按截断处理（保住半截参数、走代码块续写），按「约 250 秒 × 实测速度」给 `max_tokens` 设上限，`mechanism/agent.md` 补这条网关上限。只见到 1 次，没复现。
+- 〔已上线，同上〕云端事件写文档服务的合并窗口从 250 毫秒放宽到约 1 秒：长回复写入从 121～162 条降到 44～54 条，用户看不出区别（三级）；桌面本机那一路也可加合并。
 
 ## 性能方向（未排期）
 
