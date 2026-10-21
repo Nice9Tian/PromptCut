@@ -23,6 +23,8 @@
   --danger: #e5604f; --ok: #4cc38a;
   /* 时间轴片段底色 */
   --clip-v: #1b5f78; --clip-a: #2b6b4f; --clip-cap: #5b5530;
+  /* 滤镜样片:一块固定的彩色样片套上滤镜,一眼看出冷暖、黑白(同桌面滤镜组的样片) */
+  --fx-sample: linear-gradient(135deg, #e8553a 0%, #f2c14e 35%, #3fa9f5 70%, #2d6a4f 100%);
   /* 遮罩与描边 */
   --scrim: #0009; --scrim-light: #0004;
   --shade-weak: #0006; --shade: #000a; --shade-strong: #000d; --shade-art: #0008;
@@ -386,3 +388,15 @@
 .pcm .confirm .acts { display: flex; gap: 8px; }
 .pcm .confirm .acts .btn { flex: 1; }
 .pcm .confirm .btn.danger { background: var(--danger); color: var(--white); }
+
+/* 滤镜(卡片库「滤镜」分类、调整面板的滤镜一栏) */
+.pcm .tile.fx { position: relative; }
+.pcm .tile.fx .fx-pick { display: block; width: 100%; text-align: left; padding: 0; background: none; border: 0; color: inherit; }
+.pcm .tile.fx .fx-pick:disabled { opacity: .55; }
+.pcm .fx-swatch { position: absolute; inset: 0; background: var(--fx-sample); }
+.pcm .tile.fx .fx-del { position: absolute; right: 3px; top: 3px; width: 22px; height: 22px; border-radius: var(--r-pill); background: var(--shade); color: var(--text); font-size: var(--fs-l); line-height: 22px; text-align: center; padding: 0; border: 0; }
+.pcm .hint.err { color: var(--danger); }
+
+/* 素材格子、缩略卡的真画面:盖在取色底色上,取到才显示;取不到就还是底色 */
+.pcm .thumb-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.pcm .tile .pic[data-thumb="ready"] > svg { display: none; }

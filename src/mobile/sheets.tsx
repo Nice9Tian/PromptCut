@@ -2,13 +2,13 @@
  * 手机版的底部面板:素材库、卡片库(含转场)、选剪辑、调整、冲突合并、成员、导出(演示稿第三～九轮)。
  * 每个按钮都调真实的 store 动作与服务,不写假数据;业务层里没有的项不显示(任务书「设计决定」3)。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { actions, getState, useStore, withMerge } from "../store/project";
 import { findClip, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import { MAX_TRANSITION_DUR, MIN_TRANSITION_DUR, transitionsOf, type Transition, type TransitionKind } from "../kernel/transitions";
 import { getCard } from "../kernel/registry";
 import { listCuts } from "../kernel/cuts";
-import type { CardDef, Control } from "../kernel/types";
+import type { CardDef } from "../kernel/types";
 import { importMediaFiles, MEDIA_ACCEPT } from "../editor/left/importAssets";
 import { useCardLibrary } from "../editor/left/library/cardGroups";
 import { currentAccountProjectLink, currentSharedUrl, discardOffline, pausedSummary, replayOffline, setOfflineOpen, useSync } from "../editor/sync/syncManager";
@@ -22,6 +22,8 @@ import type { ExportMode } from "../export/cardLayers";
 import { clipKind, clipName, mainClipsOf, mainTrackOf } from "./mainContent";
 import { Icon } from "./icons";
 import { Sheet, fmtDur, fmtTc, tint, useToast } from "./ui";
+import { ControlField, Slider } from "./controls";
+import { ClipFilterFields, FiltersGrid, filterableClip } from "./filters";
 import type { MembersInfo } from "./useMembers";
 
 /* ======================== 素材库 ======================== */
@@ -116,7 +118,7 @@ export function AssetsSheet(props: { tab: AssetTab; onTab: (t: AssetTab) => void
 
 /* ======================== 卡片库 ======================== */
 
-export type CardTab = "anim" | "text" | "transition";
+export type CardTab = "anim" | "text" | "filter" | "transition";
 const TRANSITION_KINDS: { kind: TransitionKind; name: string; desc: string }[] = [
   { kind: "crossfade", name: "交叉溶解", desc: "前一段叠着化到后一段" },
   { kind: "fadeOut", name: "淡出", desc: "前一段结尾淡到黑" },
@@ -151,17 +153,17 @@ export function CardsSheet(props: { tab: CardTab; onTab: (t: CardTab) => void; t
   const tr = props.transition;
   const hint = props.tab === "transition"
     ? tr?.replace ? "换一个转场：点一种，替换当前这一处。" : tr ? "点一种转场，加到这两段之间。" : "先在缩略时间轴上点两段之间的 ＋，再选转场。"
-    : "点一张卡片，加到播放头所在位置。";
+    : props.tab === "filter" ? null : "点一张卡片，加到播放头所在位置。";
   return (
     <Sheet
       id="cards"
       title="卡片（特效 / 动效）"
       tall
       onClose={props.onClose}
-      tabs={<div className="seg">{([["anim", "动效"], ["text", "文字"], ["transition", "转场"]] as const).map(([id, label]) => <button key={id} type="button" className={id === props.tab ? "on" : undefined} onClick={() => props.onTab(id)}>{label}</button>)}</div>}
+      tabs={<div className="seg">{([["anim", "动效"], ["text", "文字"], ["filter", "滤镜"], ["transition", "转场"]] as const).map(([id, label]) => <button key={id} type="button" className={id === props.tab ? "on" : undefined} onClick={() => props.onTab(id)}>{label}</button>)}</div>}
     >
-      <div className="hint" data-pcm="cards-hint">{hint}</div>
-      {props.tab === "transition" ? (
+      {hint && <div className="hint" data-pcm="cards-hint">{hint}</div>}
+      {props.tab === "filter" ? <FiltersGrid /> : props.tab === "transition" ? (
         <div className="grid">
           {TRANSITION_KINDS.map((k) => (
             <button key={k.kind} type="button" className={tr?.replace?.kind === k.kind ? "tile picked" : "tile"} data-pcm="transition-kind" data-kind={k.kind} disabled={!tr} onClick={() => {
@@ -234,55 +236,6 @@ export function ClipsSheet(props: { onClose: () => void; onSwitched: (name: stri
 
 /* ======================== 调整 ======================== */
 
-/** 滑块 + 数字框:拖动中只改显示,松手(或数字框回车 / 失焦)才提交一次,一次拖动 = 一步撤销 */
-function Slider(props: { label: string; value: number; min: number; max: number; step?: number; unit: string; onCommit: (v: number) => void; pcm?: string }) {
-  const [v, setV] = useState(props.value);
-  const range = useRef<HTMLInputElement>(null);
-  useEffect(() => setV(props.value), [props.value]);
-  const commit = (x: number) => { const c = Math.max(props.min, Math.min(props.max, x)); if (Math.abs(c - props.value) > 1e-9) props.onCommit(c); };
-  useEffect(() => {
-    const el = range.current;
-    if (!el) return;
-    const on = () => commit(Number(el.value));
-    el.addEventListener("change", on);
-    return () => el.removeEventListener("change", on);
-  });
-  return (
-    <div className="field" data-pcm={props.pcm}>
-      <label>{props.label}<span><input className="num" type="number" value={Math.round(v * 100) / 100} min={props.min} max={props.max} step={props.step ?? 1}
-        onChange={(e) => setV(Number(e.target.value))} onBlur={() => commit(v)} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} /> {props.unit}</span></label>
-      <input ref={range} type="range" min={props.min} max={props.max} step={props.step ?? 1} value={v} onChange={(e) => setV(Number(e.target.value))} />
-    </div>
-  );
-}
-
-function ControlField({ ctl, value, onCommit }: { ctl: Control; value: unknown; onCommit: (v: unknown) => void }) {
-  const [text, setText] = useState(String(value ?? ""));
-  useEffect(() => setText(String(value ?? "")), [value]);
-  if (ctl.type === "number" && ctl.min !== undefined && ctl.max !== undefined) {
-    return <Slider label={ctl.label} value={Number(value ?? ctl.min)} min={ctl.min} max={ctl.max} step={ctl.step} unit="" onCommit={onCommit} />;
-  }
-  if (ctl.type === "select") {
-    return (
-      <div className="field"><label>{ctl.label}</label>
-        <select className="text-in" value={String(value ?? "")} onChange={(e) => onCommit(e.target.value)}>
-          {ctl.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      </div>
-    );
-  }
-  if (ctl.type === "color") {
-    return <div className="field"><label>{ctl.label}<input type="color" value={String(value ?? "#ffffff")} onChange={(e) => onCommit(e.target.value)} /></label></div>;
-  }
-  const num = ctl.type === "number";
-  return (
-    <div className="field"><label>{ctl.label}</label>
-      <input className="text-in" data-pcm={`param-${ctl.key}`} inputMode={num ? "decimal" : undefined} value={text} onChange={(e) => setText(e.target.value)}
-        onBlur={() => { if (text !== String(value ?? "")) onCommit(num ? Number(text) : text); }} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
-    </div>
-  );
-}
-
 export type ParamsTarget = { clipId: string } | { transitionId: string };
 
 export function ParamsSheet(props: { target: ParamsTarget; onClose: () => void; onAskAgent: (clipId: string) => void }) {
@@ -331,6 +284,7 @@ export function ParamsSheet(props: { target: ParamsTarget; onClose: () => void; 
         if (getState().project === before) toast("改不了时长：后面放不下，或这一段挂着转场");
       }} />
       {kind !== "audio" && <Slider label="不透明度" pcm="param-opacity" value={Math.round((c.opacity ?? 1) * 100)} min={0} max={100} unit="%" onCommit={(v) => actions.updateClip(c.id, { opacity: v / 100 })} />}
+      {filterableClip(project, c) && <ClipFilterFields clip={c} />}
       {(kind === "video" || kind === "audio") && <>
         <Slider label="音量" pcm="param-volume" value={Math.round((c.audioVolume ?? 1) * 100)} min={0} max={100} unit="%" onCommit={(v) => actions.setClipVolume(c.id, v / 100)} />
         <div className="row"><div className="t">静音此片段<small>画面不受影响；时间轴会醒目标出“已静音”</small></div>
