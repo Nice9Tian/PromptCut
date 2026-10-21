@@ -574,6 +574,20 @@ export function requeueProbeRun(project: Project | null): void {
   queueProbeRun(project, identity);
 }
 
+/**
+ * 即时渲染闸门的口子(在线页面由 `Preview` 接到 `online/stageGate.ts`):测每张卡之前留崩溃记录、测完收;测崩过的卡(`skip`)不再测,
+ * 直接当重卡(`planDispatch.setPlanForcedHeavy`)。桌面不接。
+ */
+export interface ProbeMeasureHooks {
+  before?(identityKey: string, cardId: string): void;
+  after?(identityKey: string): void;
+  skip?(identityKey: string): boolean;
+}
+let measureHooks: ProbeMeasureHooks = {};
+export function setProbeMeasureHooks(next: ProbeMeasureHooks | null): void {
+  measureHooks = next ?? {};
+}
+
 async function runLoop(): Promise<void> {
   looping = true;
   try {
@@ -605,9 +619,16 @@ async function runLoop(): Promise<void> {
         // 门在这一轮里又关上了(换了连接):收摊,下一轮开头等门
         if (gen !== generation || !measureGateOpen()) break;
         setProgress({ card: job.cardId, done });
+        if (measureHooks.skip?.(job.identityKey)) { done++; setProgress({ done }); continue; }
         probedLog.push({ clipId: job.clipId, cardId: job.cardId, identityKey: job.identityKey, at: Date.now() });
         if (probedLog.length > 200) probedLog.splice(0, probedLog.length - 200);
-        const record = await probeCard(job, tuning, device, () => gen !== generation);
+        try { measureHooks.before?.(job.identityKey, job.cardId); } catch { /* 记不下崩溃记录不挡测量 */ }
+        let record: CardCostRecord | null;
+        try {
+          record = await probeCard(job, tuning, device, () => gen !== generation);
+        } finally {
+          try { measureHooks.after?.(job.identityKey); } catch { /* 同上 */ }
+        }
         if (gen !== generation) break;
         if (record) {
           await putCosts([record]);

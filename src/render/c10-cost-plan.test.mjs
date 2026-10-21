@@ -122,3 +122,21 @@ test("CP-06 searchLight 与 allHeavy 同时给:allHeavy 优先", () => {
   const plan = planPipelines(project([{ id: "a", start: 0, end: 1 }]), [], FPS, { identityKeys: { a: "ka" }, searchLight: ["ka"], allHeavy: true });
   assert.deepEqual([...plan.prerenderSet], ["a"]);
 });
+
+test("CP-07 即时渲染闸门:测崩过的卡直接当重卡(有记录的钉死为重,没有记录的补一条),按界限搜索判时也从判轻里去掉", async () => {
+  const d = await import(srcUrl("editor/planDispatch.ts"));
+  d.resetPlanDispatch();
+  const settle = () => new Promise((r) => queueMicrotask(r));
+  d.setPlanProject(project([{ id: "a", start: 0, end: 2 }, { id: "b", start: 0, end: 2 }, { id: "c", start: 1, end: 3 }]));
+  await settle();
+  assert.deepEqual([...d.currentPlan().prerenderSet], [], "声明 direct 的三张都判轻");
+  d.setPlanForcedHeavy(["kb"]);
+  await settle();
+  assert.deepEqual([...d.currentPlan().prerenderSet], ["b"], "测崩过的 b 当重卡");
+  d.setPlanSearch(true);
+  d.setPlanSearchLight(["ka", "kb", "kc"]);
+  await settle();
+  assert.deepEqual([...d.judgedPlan().prerenderSet], ["b"], "界限搜索判它轻也照样当重卡");
+  d.setPlanForcedHeavy([]);
+  d.resetPlanDispatch();
+});

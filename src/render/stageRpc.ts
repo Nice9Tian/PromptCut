@@ -418,6 +418,10 @@ export type StageEvent =
    * 与「画面那一半在这一台执行不执行」。两台都发(不分角色);父页当不可信输入收(`online/stageMessageGuard.ts`)。
    */
   | { type: "card-states"; states: [string, CardRunState][]; graph: StageGraphCapability; visual: boolean }
+  /**
+   * 素材闸门的网速(在线页面的舞台看素材实际下载的快慢,`render/netSpeed.ts`):先拉小尺寸还是只拉原尺寸变了时报一次,父页记进查看口。
+   */
+  | { type: "net-speed"; mbps: number | null; samples: number; smallFirst: boolean }
   /** 声音线程的状态(形状同 `src/online/cardRuntime/stageSound.ts` 的 `StageSoundState`);`state: null` = 这一台没有声音线程了 */
   | { type: "sound-state"; state: { ready: Record<string, string>; blocked: Record<string, string> } | null };
 

@@ -34,8 +34,9 @@ import { useUserEditing } from "./userEditing";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
 import { resolveGlRoute } from "../render/costDevice.mjs";
 import { ONLINE } from "../online/mode";
-import { lowestTier, phoneIdentity, subscribeTier, tierGlRoute, tierState } from "../online/onlineTier";
+import { lowestTier, phoneIdentity, setBenchmark, subscribeTier, tierGlRoute, tierState } from "../online/onlineTier";
 import { stageGate } from "../online/stageGate";
+import { MEDIA_MARK_MS, decodeLimit, originalLoadSignature, subscribeDecodeLimit } from "../online/mediaGate";
 import { TierBubble } from "./TierBubble";
 import { GateViewer, gateViewerWanted } from "./GateViewer";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
@@ -52,8 +53,9 @@ import { setNodeGraphCapable } from "../online/nodeCardInfo";
 import { createIsolatedSoundLink, type IsolatedSoundLink } from "./io/isolatedSound";
 import { holdMeasureForCardSources, measureGateDiag, measureGateOpen, releaseMeasureGate, setMeasureGateLink } from "./measureGate";
 import { setCoverageSource } from "./onlineCoverage";
-import { currentCosts, currentPlan, judgedPlan, lightCostAt, onPlanUpdated, planSearch, planSearchLight, searchJudged, sendPlanTo, setPlanDeadMs, setPlanLowest, setPlanSearch, setPlanSearchLight } from "./planDispatch";
-import { costSearchMeasuring, costSearchState, measureNewCards, reclassify, runCostSearch, type CostSearchOutcome } from "./costSearch";
+import { currentCosts, currentPlan, judgedPlan, lightCostAt, onPlanUpdated, planSearch, planSearchLight, searchJudged, sendPlanTo, setPlanDeadMs, setPlanForcedHeavy, setPlanLowest, setPlanSearch, setPlanSearchLight } from "./planDispatch";
+import { benchmarkVerdict, costSearchMeasuring, costSearchState, measureNewCards, reclassify, runBenchmark, runCostSearch, type BenchmarkOutcome, type CostSearchOutcome } from "./costSearch";
+import { runBackJob } from "./stageJobs";
 import { CostSearchGate } from "./CostSearchGate";
 import { SHARED_COST_RELAY_MS, SharedCostRelay, publishSharedCosts, toSharedInput, type SharedCostInput } from "./sharedCosts";
 import { clipIdentityOf } from "./costIdentity";
@@ -82,7 +84,7 @@ import { createPlanPublisher, type PlanPublisher } from "../online/planPublisher
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, setCostBackend } from "./probeRunner";
+import { onCostRecords, onProbeProgress, probeFrameDiag, probeProgress, probeRunDiag, probeSettledFor, setCostBackend, setProbeMeasureHooks } from "./probeRunner";
 import { browserNodeReady, keepConfirmedProject, startBrowserNodeHost, subscribeBrowserNodeReady } from "./browserNodeHost";
 import type { SettleResult } from "../render/settleFrame";
 
@@ -119,8 +121,16 @@ function heavyCardClips(): string[] {
   return [...new Set([...plan.prerenderSet, ...exportWantedClips()])].filter((id) => !!byId.get(id)?.cardId);
 }
 
-/** 界限搜索测每张卡之前、之后(即时渲染闸门留崩溃记录;第四步接上) */
-const searchMeasureHooks = { before: (_key: string, _cardId: string): void => {}, after: (_key: string): void => {} };
+/** 界限搜索、基准卡测每张卡之前、之后:即时渲染闸门留崩溃记录(`online/stageGate.ts`;测崩了的卡下次直接当重卡) */
+const searchMeasureHooks = {
+  before: (key: string, cardId: string): void => { stageGate()?.measureStart(key, cardId); },
+  after: (_key: string): void => { stageGate()?.measureEnd(); },
+};
+
+/** 测崩过的卡(identityKey;崩溃记录里的,这次使用期间不变) */
+function crashedCards(): ReadonlySet<string> {
+  return stageGate()?.heavyCards() ?? new Set();
+}
 
 /**
  * 此刻挂着哪几台舞台:桌面两台(端口没起来时 legacy 只有 A,那时不经这里);在线页面读不到舞台源时一台都不挂,
@@ -143,15 +153,19 @@ function measurementSettled(): boolean {
 }
 
 /**
- * 素材闸门的结果交给取档策略(`render/mediaTier.ts`):最低一档视频素材只用小尺寸;解码上限、网速见第四步的 `online/mediaGate.ts`。
+ * 素材闸门的结果交给取档策略(`render/mediaTier.ts`):最低一档视频素材只用小尺寸;超过解码上限(`online/mediaGate.ts`,打开时测一次)的
+ * 视频素材只用小尺寸。网速(先拉小尺寸还是只拉原尺寸)由舞台自己看(`render/netSpeed.ts`),父页不给。
  */
 function mediaGatePolicy(lowest: boolean): Pick<MediaTierPolicy, "smallOnly" | "decodeMaxPixels" | "smallFirst"> {
-  return { smallOnly: lowest, decodeMaxPixels: null, smallFirst: true };
+  return { smallOnly: lowest, decodeMaxPixels: decodeLimit()?.maxPixels ?? null, smallFirst: true };
 }
 
-/** 查看口:素材闸门的结果(第四步接上) */
+/** 各舞台报来的网速(查看口用) */
+const netSpeedByStage: Partial<Record<StageId, { mbps: number | null; samples: number; smallFirst: boolean; at: number }>> = {};
+
+/** 查看口:素材闸门的结果 */
 function mediaGateSnapshot(): unknown {
-  return null;
+  return { decode: decodeLimit(), net: { ...netSpeedByStage } };
 }
 
 function l2SearchCostStore(): CostStore {
@@ -467,7 +481,7 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       const c = rpcRef.current[id];
       if (!c) return;
       const seq = (policySeqRef.current[id] = (policySeqRef.current[id] ?? 0) + 1);
-      let stagePolicy: StageMediaPolicy = policy;
+      let stagePolicy: StageMediaPolicy = { smallOnly: policy.smallOnly, decodeMaxPixels: policy.decodeMaxPixels, remote: policy.remote };
       if (base && stageBase) {
         const plan = stageBase === MEDIA_PROXY_BASE && origins
           ? await iso.plan(id, { active: mountedStageIds().includes(id), stageOrigin: origins[id], ticket })
@@ -475,8 +489,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
         // 等自检与交接的时候这一台换了、或者又发起了一次更新的:这一次作废
         if (rpcRef.current[id] !== c || policySeqRef.current[id] !== seq) return;
         stagePolicy = plan.mode === "cookie"
-          ? { smallOnly: policy.smallOnly, decodeMaxPixels: policy.decodeMaxPixels, smallFirst: policy.smallFirst, remote: { base: plan.base!, ticket: null }, cardExec: plan.cardExec }
-          : { ...policy, remote: { base: stageBase, ticket: plan.ticket } };
+          ? { smallOnly: policy.smallOnly, decodeMaxPixels: policy.decodeMaxPixels, remote: { base: plan.base!, ticket: null }, cardExec: plan.cardExec }
+          : { smallOnly: policy.smallOnly, decodeMaxPixels: policy.decodeMaxPixels, remote: { base: stageBase, ticket: plan.ticket } };
       }
       void c.setMediaPolicy(stagePolicy).catch(() => { /* iframe 正在换:下一次握手会重发 */ });
     }));
@@ -498,6 +512,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     // 远程素材服务换了(进入 / 离开共享项目)就重发。票据按它自己的寿命续:剩一半就重发一次(15 分钟的票据约 7 分钟一次;
     // 测试里缩短了票据时限时跟着变快 —— C10 契约第 12 节),至多 5 分钟一次
     const off = subscribeRemoteAssets(() => { void pushMediaPolicy(); });
+    // 解码上限测出来了(打开时测一次):重发一次,超过上限的视频素材改用小尺寸
+    const offDecode = subscribeDecodeLimit(() => { void pushMediaPolicy(); });
     let timer = 0;
     let alive = true;
     const loop = async () => {
@@ -508,8 +524,28 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       if (alive) timer = window.setTimeout(() => { void loop(); }, Math.max(1000, Math.min(5 * 60_000, left / 2)));
     };
     timer = window.setTimeout(() => { void loop(); }, 1000);
-    return () => { alive = false; off(); window.clearTimeout(timer); };
+    return () => { alive = false; off(); offDecode(); window.clearTimeout(timer); };
   }, [lowest, pushMediaPolicy]);
+  /*
+   * 素材闸门:载入原尺寸之前留崩溃记录(`mechanism/platforms.md`「素材闸门」)。项目里要载入原尺寸的视频(没超过解码上限)换了一批
+   * (打开项目、导入了新素材)时,记「载入素材原尺寸」,`MEDIA_MARK_MS` 之后回到原来那一步;这段时间里页面崩了,下次载入解码上限调低一级。
+   * 最低一档不拉原尺寸,不记。
+   */
+  const mediaSigRef = useRef("");
+  const mediaMarkTimerRef = useRef(0);
+  useEffect(() => {
+    if (!ONLINE || lowest || !stageReady) return;
+    const g = stageGate();
+    const lim = decodeLimit();
+    if (!g || !lim) return;
+    const sig = originalLoadSignature(project.media ?? [], lim.maxPixels);
+    if (!sig || sig === mediaSigRef.current) return;
+    mediaSigRef.current = sig;
+    g.mediaStart(lim.index);
+    window.clearTimeout(mediaMarkTimerRef.current);
+    mediaMarkTimerRef.current = window.setTimeout(() => stageGate()?.mediaEnd(), MEDIA_MARK_MS);
+  }, [project.media, lowest, stageReady]);
+  useEffect(() => () => window.clearTimeout(mediaMarkTimerRef.current), []);
   /*
    * 只有一个舞台时轻重按共享成本记录加界限搜索判(下面那个 effect);最低一档播放时不做任何即时渲染(显示用的表全部判重)。
    * 判定的表决定清单计划发哪些片段、导出时谁本机渲(语义 `product/platforms.md`「在线浏览器」的「轻重判定」与「最低一档」)。
@@ -864,6 +900,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
               stageGraphRef.current[id] = e.graph;
               setNodeGraphCapable(STAGE_IDS.every((s) => stageGraphRef.current[s] === "ok"));
               refreshRunStatesRef.current();
+            } else if (e.type === "net-speed") {
+              netSpeedByStage[id] = { mbps: e.mbps, samples: e.samples, smallFirst: e.smallFirst, at: Date.now() };
             } else if (e.type === "sound-state" && id === soundStageId()) {
               soundLinkRef.current?.setState(e.state);
             }
@@ -942,6 +980,47 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     if (id === "A" && !ONLINE) setBackStageMount(true);
   }, []);
   /*
+   * 即时渲染闸门(语义 `product/platforms.md`「即时渲染闸门」;做法 `mechanism/platforms.md`「即时渲染闸门」):
+   * - 测每张卡之前留崩溃记录(后台舞台的常驻探针、单舞台的界限搜索都经这里);测崩过的卡不再测、直接当重卡;
+   * - 舞台闸门走完之后先测基准卡:连它都跑不动就进最低一档(播放时不做任何即时渲染)。最低一档(一个舞台都撑不住)不测。
+   */
+  useEffect(() => {
+    if (!ONLINE) return;
+    setProbeMeasureHooks({
+      before: (key, cardId) => stageGate()?.measureStart(key, cardId),
+      after: () => stageGate()?.measureEnd(),
+      skip: (key) => crashedCards().has(key),
+    });
+    setPlanForcedHeavy(crashedCards());
+    return () => { setProbeMeasureHooks(null); setPlanForcedHeavy([]); };
+  }, [tierNow.online]);
+  const benchmarkRunRef = useRef(false);
+  const [benchmarkInfo, setBenchmarkInfo] = useState<BenchmarkOutcome | null>(null);
+  useEffect(() => {
+    if (!ONLINE || benchmarkRunRef.current || !stageReady || tierNow.gate !== "done") return;
+    benchmarkRunRef.current = true;
+    if (tierNow.lowest) { setBenchmark("skipped"); return; }
+    const borrow = !dualRef.current;
+    void (async () => {
+      let out: BenchmarkOutcome;
+      if (borrow) {
+        out = await runBenchmark({
+          borrow: true, stage: frontStage, pushProject: (p) => pushProject("front", p, { reset: true }), currentProject: () => getState().project,
+          restore: () => { suppressedRef.current = ""; streamPlanesRef.current = "[]"; markBaselineReset("front"); setStageReady((n) => n + 1); },
+          beforeMeasure: searchMeasureHooks.before, afterMeasure: searchMeasureHooks.after,
+        });
+      } else {
+        out = await runBackJob("measure", (ctx) => runBenchmark({
+          borrow: false, stage: () => ctx.stage, pushProject: (p) => pushProject("back", p, { reset: true }), currentProject: () => getState().project,
+          restore: () => {}, beforeMeasure: searchMeasureHooks.before, afterMeasure: searchMeasureHooks.after,
+        })).catch(() => benchmarkVerdict(null));
+      }
+      setBenchmarkInfo(out);
+      setBenchmark(out.verdict === "slow" ? "slow" : out.verdict === "ok" ? "ok" : "skipped");
+    })();
+  }, [stageReady, tierNow.gate, tierNow.lowest]);
+
+  /*
    * 舞台闸门(语义 `product/platforms.md`「在线浏览器」;做法 `mechanism/platforms.md`「舞台闸门的步骤」第 2～5 条):
    * 可见舞台握上手、载入项目 → 记「可见舞台就绪」;要试第二级就记「开始试后台舞台」再挂 B,两个舞台都握上手并载入项目后记「双舞台已载入」;
    * 要试第三级就记「开始试每个舞台各一套渲染器」,两台原地换到路线 1(`setGlRoute`,不重建舞台),回包后记下;走完之后这次使用期间
@@ -1008,9 +1087,9 @@ export function Preview(props: { variant?: "mobile" } = {}) {
   useEffect(() => {
     if (!ONLINE) return;
     const w = window as unknown as Record<string, unknown>;
-    w.__pcGates = () => ({ ...(stageGate()?.snapshot() ?? null), media: mediaGateSnapshot(), driverError: gateDiag || null });
+    w.__pcGates = () => ({ ...(stageGate()?.snapshot() ?? null), media: mediaGateSnapshot(), benchmark: benchmarkInfo, driverError: gateDiag || null });
     return () => { delete w.__pcGates; };
-  }, [gateDiag]);
+  }, [gateDiag, benchmarkInfo]);
 
   /*
    * 过渡期之后换回双舞台(只换一次):两个预热 iframe 已经接任 A / B(同一个元素,没重新加载),照它们预热时发来的
@@ -1551,8 +1630,10 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     // 本地复用接 L2(要在第一次界限搜索之前接上,否则那一轮用页面内存)
     setSearchCostStore(l2SearchCostStore());
     let disposed = false;
-    // 本页跑不了的卡(没载入成功的用户卡、素材效果卡)不测、一律判重(界限搜索的 `forcedHeavy`)
-    const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined);
+    // 本页跑不了的卡(没载入成功的用户卡、素材效果卡)与测崩过的卡不测、一律判重(界限搜索的 `forcedHeavy`)
+    const crashed = crashedCards();
+    const unsupported = (clip: { id?: string; cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined)
+      || (!!clip.id && crashed.has(clipIdentityOf(getState().project).identityKeys[clip.id] ?? ""));
     const stageDeps = {
       stage: frontStage,
       pushProject: (p: Project) => pushProject("front", p, { reset: true }),
@@ -1578,6 +1659,8 @@ export function Preview(props: { variant?: "mobile" } = {}) {
       if (disposed) return;
       // 测量等卡片源码第一次同步完(`measureGate.ts`):同步卡在那之前是未知 id,不能被当成普通卡去测
       if (!measureGateOpen()) return;
+      // 先等基准卡测完(它也借这一个舞台;跑不动就进最低一档,这里不再测)
+      if (tierState().benchmark === "pending") return;
       const shared = currentSharedLink();
       const projectId = currentDocProjectId();
       const s = frontStage();

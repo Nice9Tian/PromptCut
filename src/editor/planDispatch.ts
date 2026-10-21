@@ -47,6 +47,11 @@ let search = false;
 let lowest = false;
 /** 界限搜索判轻的卡的 identityKey;null = 还没有结果 */
 let searchLight: ReadonlySet<string> | null = null;
+/**
+ * 即时渲染闸门:测这张卡把页面撑崩过的(崩溃记录里的测崩的卡,`online/stageGate.ts`),这次直接当重卡、不再测
+ * (语义 `product/platforms.md`「即时渲染闸门」:测某张卡把页面撑崩了的,重新载入后这张卡直接当重卡)。
+ */
+let forcedHeavy: ReadonlySet<string> = new Set();
 let judged: PipelinePlan | null = null;
 /** 3D 视图是否开启（打开时把独立轻卡也纳入预渲染单卡轨道流集合 prerenderSet） */
 let view3d = false;
@@ -118,9 +123,31 @@ function recompute(): void {
   // 剪辑段换成它里面的卡(`kernel/cutFlatten.mjs`):剪辑段里的卡和父时间轴上的卡一起分派。没有剪辑段时原样
   const planned = knownCardsOnly(flatPlanProject(project));
   const opts3D = view3d ? { includeLightCardsFor3D: true, view3d: true } : {};
-  const judge = search ? { searchLight: searchLight ?? [] } : {};
-  judged = planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, ...judge, ...opts3D, ...dead });
-  plan = lowest ? planPipelines(planned, costs, fps, { tuning, identityKeys, frameModes, allHeavy: true, ...opts3D, ...dead }) : judged;
+  const light = searchLight && forcedHeavy.size ? [...searchLight].filter((k) => !forcedHeavy.has(k)) : searchLight;
+  const judge = search ? { searchLight: light ?? [] } : {};
+  const planCosts = forcedHeavy.size ? withForcedHeavy(costs, forcedHeavy) : costs;
+  judged = planPipelines(planned, planCosts, fps, { tuning, identityKeys, frameModes, ...judge, ...opts3D, ...dead });
+  plan = lowest ? planPipelines(planned, planCosts, fps, { tuning, identityKeys, frameModes, allHeavy: true, ...opts3D, ...dead }) : judged;
+}
+
+/** 测崩过的卡钉死为重(`pinnedHeavy`,`pipelinePlan.mjs` 的 `clipWeight` 认它);没有记录的补一条只带身份的 */
+function withForcedHeavy(list: CardCostRecord[], keys: ReadonlySet<string>): CardCostRecord[] {
+  const seen = new Set<string>();
+  const out = list.map((r) => {
+    if (!keys.has(r.identityKey)) return r;
+    seen.add(r.identityKey);
+    return { ...r, pinnedHeavy: true } as CardCostRecord;
+  });
+  for (const k of keys) if (!seen.has(k)) out.push({ identityKey: k, pinnedHeavy: true } as unknown as CardCostRecord);
+  return out;
+}
+
+/** 测崩过的卡(identityKey):直接当重卡。同一份集合不重算 */
+export function setPlanForcedHeavy(keys: Iterable<string>): void {
+  const next = new Set(keys);
+  if (next.size === forcedHeavy.size && [...next].every((k) => forcedHeavy.has(k))) return;
+  forcedHeavy = next;
+  schedule();
 }
 
 /** 去掉未知卡片段的项目(只给 `planPipelines` 看;没有未知卡片时原样回同一个对象) */
@@ -300,6 +327,7 @@ export function resetPlanDispatch(): void {
   lowest = false;
   view3d = false;
   searchLight = null;
+  forcedHeavy = new Set();
   judged = null;
   deadMs = null;
   deadMsOf = null;

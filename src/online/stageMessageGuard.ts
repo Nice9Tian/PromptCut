@@ -110,6 +110,13 @@ export function sanitizeStageEvent(d: unknown, opts: { maxSec?: number } = {}): 
       else if (d.seekMs !== undefined) { const s = num(d.seekMs, 0, L.maxMs); if (s === null) return null; out.seekMs = s; }
       return out;
     }
+    case "net-speed": {
+      const samples = int(d.samples, 0, 1e9);
+      if (samples === null || typeof d.smallFirst !== "boolean") return null;
+      const mbps = d.mbps === null ? null : num(d.mbps, 0, 1e6);
+      if (d.mbps !== null && mbps === null) return null;
+      return { type: "net-speed", mbps, samples, smallFirst: d.smallFirst };
+    }
     case "demote": {
       const clipId = str(d.clipId, L.maxIdLength);
       return clipId === null ? null : { type: "demote", clipId };

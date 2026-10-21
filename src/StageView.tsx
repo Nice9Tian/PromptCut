@@ -55,6 +55,7 @@ import { resolveGlRoute } from "./render/costDevice.mjs";
 import { themeStyle } from "./themes";
 import { ONLINE } from "./online/mode";
 import { mediaTierPolicy, setMediaTierPolicy } from "./render/mediaTier";
+import { netSpeedState, startNetSpeed } from "./render/netSpeed";
 import { cardExecGate as stageExecGate, cardVisualExecAllowed, noteMediaPolicy, subscribeCardExecGate as subscribeStageExecGate } from "./online/isolation/execGate";
 import type { StageCardRuntime } from "./online/cardRuntime/stageRuntime";
 import type { StageSound } from "./online/cardRuntime/stageSound";
@@ -445,6 +446,15 @@ export default function StageView() {
      */
     const onContextLost = () => { cardExec.runtime?.noteContextLost(); };
     if (ONLINE) document.addEventListener("webglcontextlost", onContextLost, true);
+    /*
+     * 素材闸门的网速(`render/netSpeed.ts`):看素材实际下载的快慢,慢就先拉小尺寸、再拉原尺寸替换,快就只拉原尺寸;使用中随时切换。
+     * 素材是这一台舞台自己读的,所以在舞台里看、写进这一台的取档策略;切换时报父页一声(查看口)。只在线页面。
+     */
+    const stopNetSpeed = ONLINE ? startNetSpeed((st) => {
+      setMediaTierPolicy({ smallFirst: st.smallFirst });
+      commitPlanes();
+      postStageEvent({ type: "net-speed", mbps: st.mbps, samples: st.samples, smallFirst: st.smallFirst });
+    }) : () => {};
     /*
      * 在线执行同步来的用户卡与素材效果卡(`docs/plan/online-card-exec-contract.md` 第 2、3、4、8 节)。编辑页面经 `loadUserCards` 发来转译好的包;
      * 这里只在**本文档自己的执行闸门**开着时执行(`online/isolation/execGate.ts`:是跨源舞台入口、自检通过、父页点头、从没见过票据、没出过加固拦下的事):
@@ -2636,7 +2646,8 @@ export default function StageView() {
         const gate = ONLINE ? noteMediaPolicy({ ticket: next?.remote?.ticket ?? null, cardExec: next?.cardExec }) : { acceptTicket: true };
         const remote = next?.remote && !gate.acceptTicket && next.remote.ticket ? { ...next.remote, ticket: null } : next?.remote ?? null;
         const decode = typeof next?.decodeMaxPixels === "number" && Number.isFinite(next.decodeMaxPixels) && next.decodeMaxPixels > 0 ? next.decodeMaxPixels : null;
-        setMediaTierPolicy({ smallOnly: caps.lowest || next?.smallOnly === true, decodeMaxPixels: decode, smallFirst: next?.smallFirst !== false, remote });
+        // 网速(`smallFirst`)由这一台自己看(`netSpeed.ts`),父页不给;给了(测试)才照它
+        setMediaTierPolicy({ smallOnly: caps.lowest || next?.smallOnly === true, decodeMaxPixels: decode, smallFirst: typeof next?.smallFirst === "boolean" ? next.smallFirst : netSpeedState().smallFirst, remote });
         commitPlanes();
         return { ok: true as const };
       },
@@ -2744,6 +2755,7 @@ export default function StageView() {
       player.stop();
       window.removeEventListener("message", onGlPort);
       if (ONLINE) document.removeEventListener("webglcontextlost", onContextLost, true);
+      stopNetSpeed();
       gl.dispose();
       delete (window as unknown as Record<string, unknown>).__pcGlWorkerDiag;
       window.clearTimeout(ref.current.settle);

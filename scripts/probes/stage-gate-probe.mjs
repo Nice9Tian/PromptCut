@@ -148,6 +148,12 @@ try {
     const iframes = await page.$$eval('iframe[data-pc^="stage-frame"]', (els) => els.map((e) => ({ pc: e.dataset.pc, src: e.getAttribute('src') })));
     check('S1', iframes.length === 2 && iframes.every((f) => /[?&]gl=shared/.test(f.src)), '两个舞台,地址按起手的路线(共用)拼、不因试第三级而变', iframes);
     scenes.S1.tier = g?.tier;
+    // 即时渲染闸门的基准卡、素材闸门的解码上限(第四步):测完了,结论进查看口
+    const gb = await until(async () => { const x = await gates(page); return x?.tier?.benchmark !== 'pending' ? x : null; }, 60_000);
+    check('S1', gb?.tier?.benchmark === 'ok' && typeof gb.benchmark?.stepMs === 'number', '基准卡测了、跑得动', gb?.benchmark);
+    check('S1', typeof gb?.media?.decode?.maxPixels === 'number', '解码上限打开时测了一次', gb?.media?.decode);
+    scenes.S1.benchmark = gb?.benchmark;
+    scenes.S1.decode = gb?.media?.decode;
 
     // S2 正常刷新
     await reload(page);

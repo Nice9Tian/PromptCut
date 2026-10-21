@@ -379,6 +379,75 @@ export function reclassify(outcome: CostSearchOutcome, project: Project, identit
   return classifyWithBoundary(outcome.result, keys, outcome.records).light;
 }
 
+/* ------------------------------------------------------------------ 基准卡(即时渲染闸门的「最低一档」判据) */
+
+/**
+ * 基准卡〔裁〕:内置的「金句药丸」(`punch-pill`,一行字的胶囊弹入,DOM 卡、`motion` 写法、一层模糊光晕),缺省参数、2 秒。
+ * 语义 `product/platforms.md`「最低一档」:连最简单的一张基准卡都跑不动的设备进最低一档。跑不动的界线与判重同一个式子
+ * (单帧耗时 × 成本倍率 > 预算 B,`pipelinePlan.mjs` 的 `budgetOf`):这台设备连它都判重,别的卡更不用说。
+ */
+export const BENCHMARK_CARD_ID = "punch-pill";
+export const BENCHMARK_SECONDS = 2;
+export const BENCHMARK_FPS = 30;
+
+/** 基准卡的缩水项目与测量任务 */
+export function benchmarkJob(): MeasureJob {
+  const fps = BENCHMARK_FPS;
+  const clip = { id: "pc-benchmark-clip", cardId: BENCHMARK_CARD_ID, start: 0, end: BENCHMARK_SECONDS, params: {} } as unknown as Clip;
+  const project = {
+    version: 1, id: "pc-benchmark", name: "基准卡", width: 1920, height: 1080, fps, duration: BENCHMARK_SECONDS, themeId: "midnight", media: [],
+    tracks: [{ id: "pc-benchmark-track", name: "基准", clips: [clip] }],
+  } as unknown as Project;
+  return { clipId: clip.id, cardId: BENCHMARK_CARD_ID, frameMode: "stateful", canvasHeavy: false, fps, lenSec: BENCHMARK_SECONDS, durationFrames: BENCHMARK_SECONDS * fps, project };
+}
+
+export interface BenchmarkOutcome {
+  /** `ok` 跑得动,`slow` 跑不动(进最低一档),`unknown` 没测出来(舞台在换、被打断):不算跑不动 */
+  verdict: "ok" | "slow" | "unknown";
+  stepMs: number | null;
+  budgetMs: number;
+  scale: number;
+}
+
+/** 由单帧耗时判:单帧耗时 × 成本倍率 > 预算 B 就是跑不动 */
+export function benchmarkVerdict(stepMs: number | null, tuning: PipelineTuning = resolveTuning(null)): BenchmarkOutcome {
+  const budgetMs = budgetOf(BENCHMARK_FPS);
+  const scale = tuning.COST_SCALE;
+  if (stepMs === null || !Number.isFinite(stepMs)) return { verdict: "unknown", stepMs: null, budgetMs, scale };
+  return { verdict: stepMs * scale > budgetMs ? "slow" : "ok", stepMs, budgetMs, scale };
+}
+
+/**
+ * 在一台舞台里测基准卡。`borrow` 为真(只有一个舞台):借可见舞台,测完切回、整份重灌、`restore`(同界限搜索);
+ * 为假(有后台舞台):调用方在后台舞台的单飞队列里给 `stage` 与 `pushProject`。测之前、之后经 `beforeMeasure` / `afterMeasure` 留崩溃记录。
+ */
+export async function runBenchmark(deps: Pick<CostSearchDeps, "stage" | "pushProject" | "restore" | "currentProject" | "beforeMeasure" | "afterMeasure" | "tuning"> & { borrow: boolean }): Promise<BenchmarkOutcome> {
+  const tuning = resolveTuning(deps.tuning ?? null);
+  const job = benchmarkJob();
+  const key = "@benchmark";
+  if (deps.borrow) {
+    const lease = createLease({ ...deps, mode: "build" } as unknown as CostSearchDeps, 1, new Map([[key, job]]), tuning);
+    let r: { stepMs: number } | null = null;
+    try { r = await lease.measure(key); } finally { await lease.end(); }
+    return benchmarkVerdict(r?.stepMs ?? null, tuning);
+  }
+  const stage = deps.stage();
+  if (!stage) return benchmarkVerdict(null, tuning);
+  try { deps.beforeMeasure?.(key, BENCHMARK_CARD_ID); } catch { /* 记不下不挡 */ }
+  try {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const r = await measureOnce(stage, job, deps.pushProject, tuning);
+      if (r === "retry") continue;
+      return benchmarkVerdict(r?.stepMs ?? null, tuning);
+    }
+    return benchmarkVerdict(null, tuning);
+  } catch {
+    return benchmarkVerdict(null, tuning);
+  } finally {
+    try { deps.afterMeasure?.(key); } catch { /* 同上 */ }
+  }
+}
+
 /** 测试用 */
 export function resetCostSearch(): void {
   state = IDLE;

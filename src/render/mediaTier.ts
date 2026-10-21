@@ -223,6 +223,8 @@ export function chooseTier(
       void probePlayable(originalHash, remoteMediaUrl(withBase(original, opts.cloudBase), remote), media.ext, media.kind === "audio" ? "audio" : "video",
         { remote: !!opts.cloudBase || !!remote || complete.has(TIERS_KNOWN_REMOTE) });
     }
+    // 素材闸门的网速够快(在线页面的舞台看出来的,`netSpeed.ts`):只拉原尺寸,不先挂小尺寸;可播性照样在后台探,探出来放不了就回小尺寸
+    if (playable === undefined && (opts.smallFirst ?? policy.smallFirst) === false) return pick("original", false);
     return pick("small", false);
   }
   if (hasSmall) return pick("small", false);
