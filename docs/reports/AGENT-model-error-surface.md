@@ -42,14 +42,37 @@ src/ai/cloud/events.ts、src/ai/cloud/events.test.mjs、src/editor/right/chat/Ac
 ### 探针没跑
 `--steps errors` 的账号组合要 71 个连续端口(ACCOUNT_PORT_COUNT=71)加舞台、渲染等十几个,协调方给的 29200–29209 只有 10 个,放不下;并且探针的服务端代码取自它自己所在 worktree,要指向本 worktree 得把探针文件复制进来。没有越出端口段去跑。E1～E5 的探针结论因此没有;请主会话在给足端口段后,把本分支合到 ux-probe-account 的工作区(或相反)再跑 `--steps errors`。E4(渲染失败)、E5(被移出)不在本次范围,没动。
 
+## 第三轮:在 accept-final3 上复现 E2 崩溃、E1～E5 逐项
+
+分支已在 accept-final3(1f446ce2)之上,`npx vite build --mode online` 后跑 `--steps errors --dist dist-online`。
+
+### 「那一轮一直 running / 发送按钮找不到」的根因(探针 E2 第 971 行崩溃)
+- 不是账本里的轮没收尾:额度用尽那一轮在页面和账本里都正常收尾(failed)。
+- 探针在 960～966 行发「再发」(`x`)后等"被拒绝并说明",它的退路分支是「最后一条助手消息不在跑、error 含"额度"、用户消息数≥2」。这三条在点击发送的当下就成立:最后一条助手消息还是**上一轮**那条(error 已是带"额度"的话),用户消息数因乐观气泡立刻 +2。所以 `until` 立刻返回,不等真正的拒绝。
+- 随后探针 `admin quota clear`,实测点击发送到清额度完成只隔 **61 毫秒**(LAT 量到的 clearDone=61 ms,此刻页面还没收到任何拒绝);`x` 的请求是清额度**之后**才到服务端,额度已清,所以被**合法接受**并开始跑。探针接着 `idleNow` → `sendText`,点击时输入框已因 `x` 这一轮变成"排队/停止",`[data-pc="ai-send"]` 不在,崩溃。
+- 上一版(修之前)同样崩,原因同上;之前报告里"账本里那一轮仍 running"是这场竞态的表象,不是账本缺陷。
+
+### 改动(本轮新增)
+- `server/agent-service/account-master-assembly.mjs`:`send` 在转给文档服务前用任务进程同一份闸(`gate.mjs` 的 `admitModelCall`,上限读共用数据目录的 `config/limits.json`、用量读 `usage/` 流水,只读)预检额度,用完当场回 429 `quota-exceeded` 和"已用 N / 上限 M"那句,不收下一条注定在第一次调模型时失败的消息;页面显示成 cloud-notice,用户消息标"没有发出去:…"。
+- `server/agent-service/http.mjs`:读取被文档服务以 403 `agent-disabled` 拒绝时,`access.revoked` 带 `reason:"agent-disabled"`。
+- `src/ai/cloud/session.ts`:
+  - 创建者关开关后(`access.revoked` 带 reason;或重连取票据被拒 `disabled`;或读取 403 `agent-disabled`),正文清掉后在对话里留一条出错消息"项目创建者已关闭云端 Agent,这个对话已停止。已经落地的改动保留在项目里;重新打开云端 Agent 后可继续。",提示栏用"已关闭"那句而不是"无权读取";又读得到时(第一个事件到)撤掉这条。被踢、设私有等其它撤销照旧清空。
+  - `view.streaming` 在账号模式下把队列里 preparing / running 的一轮也算进去(与输入框按队列算的"排队/停止"一致)。空闲时刚收下、还没轮到的排第一那条仍不算(`account-queue.test.mjs` 钉着的契约)。
+- 测试:`private-revoked.test.mjs` 新增 PRIV-9/10/11 与 STREAM-1;`agent-events-denial.test.mjs` 新增 reason 用例。
+
+### E1～E5 探针结果(--steps errors,同一份代码)
+- **原版探针**(未改):E1 过;E2 在第 971 行崩溃(上述竞态),后面的 E3～E5 没跑到。多次运行同样结果。
+- **验证副本**(只在"再发 `x`"之后插一行 `sleep(5000)` 让拒绝先到,其余断言一字不动;副本是临时文件,已删,未入库):**E1、E2、E3、E4、E5 全过,退出码 0**。E2 里: 第一轮 error 为"这个项目的云端 Agent 额度已用完(已用 721 / 上限 566)。请联系托管方。",再发被拒并出 cloud-notice 同一句,清额度后恢复。
+- 结论:产品行为已满足"出错留痕"与 E1～E5;**原版探针 E2 本身有竞态**(退路分支被上一轮助手消息的 error 满足,且 61 毫秒就清了额度),与语义无关。建议把探针第 961～966 行的等待改成"等到 cloud-notice 出现,或等到**新增**的助手消息(数量比点击前多)带额度字样",并在清额度前等拒绝落定。我没有改探针。
+
 ## 验证
 - `npx tsc -b --force`:退出码 0,输出为空。
-- `npm test`(设了 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE,静默后台,记退出码):退出码 0;tests 7263,pass 7248,fail 0,skipped 15。
-- 新增/改的用例单独跑:events.test.mjs 20 个全过(含第一轮 5 个、第二轮 3 个);activity-failed.test.mjs 2 个;conversation-list-run-state.test.mjs 3 个。
-- 没起 dev server、没看真页面;没跑 UX 探针(见上)。
+- `npm test`(设了 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE,后台静默,记退出码):退出码 0;tests 7282,pass 7267,fail 0,skipped 15。
+- 单跑:`src/ai/cloud/*.test.mjs` 142 个全过;`server/test/agent-events-denial.test.mjs` 9 个全过。
 
-## 部署
-- src/ 改动(events.ts、ActivityPanel.tsx、AgentBubble.tsx):整份 src 同步进渲染树,先换在线前端,再重启渲染服务。
-- server/agent/service/account-runner.mjs:Agent 服务的任务进程用,换到 Agent 服务那棵树;任务进程是一条任务一个进程,新任务即生效,主服务建议一并重启 agent 服务。
-- server/account/conversation-authority.mjs:文档服务(账号权威)用,换到文档服务那棵树后重启文档服务(重启前确认没有正在写入的客户端)。历史列表的「出错」标签要这一项才出来;不换它,其余改动照样生效,只是列表不标。
-- 其余(测试文件)不部署。
+## 部署清单
+- **src/**(`events.ts`、`session.ts`、`ActivityPanel.tsx`、`AgentBubble.tsx`):整份 src 同步进渲染树;先换在线前端(`npx vite build --mode online` 出的 `dist-online`),再重启渲染服务。
+- **server/agent-service/account-master-assembly.mjs、server/agent-service/http.mjs**:Agent 主服务那棵树 → 重启 Agent 主服务(`promptcut-agent`)。额度预检读共用数据目录的 `config/limits.json` 与 `usage/`,主服务进程要有读权限(它本来就读 `usage/` 给成员查用量)。
+- **server/agent/service/account-runner.mjs**:任务进程用,和主服务一起换树;一条任务一个进程,新任务即生效。
+- **server/account/conversation-authority.mjs**:文档服务(账号权威)那棵树 → 重启文档服务(重启前确认没有正在写入的客户端)。不换它,其余照样生效,只是历史列表不标"出错"。
+- 测试文件不部署。
