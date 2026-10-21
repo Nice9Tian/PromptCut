@@ -118,7 +118,14 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
     - 〔裁〕**第一版变速段的原声自动静音并在界面写明**，不做保调变速（留作以后）。理由：只有静音这一种两边必然一致，不会破「导出与预览一致」。（主会话 2026-10-22 播报时先说的是「原声随倍率变速、会变调」，读完逐文件风险表后改成静音，以本条为准。）
     - 像素基线：缺省 1 时换算精确不变、身份键不加字段，基线不变；基线演示项目里没有变速段，全量比对测不到新功能，要另做一个变速项目逐帧比对。
     - 为什么排在后面：它要动 `src/render/`、`src/audio/`、`src/editor/preview/`、`src/editor/timeline/`、`server/bakery/mux-audio.mjs`、`server/export-compose.mjs`，和在线浏览器那一块（`src/editor/**`）、多项目渲染节点（`server/bakery/**`）大面积重叠，同时动会撞车。
-- [x] ~~播放停顿时让声音立刻停（音频看门狗）。~~ 核对后**早已在 main 里**（`e289b886`，2026-10-06，早于记该决定的 `1014fa19`）：`src/editor/Preview.tsx` 的 `armStallWatch` 不等迟到的那一拍就置 `mediaStalled`，第 2437 行主文档音频层跟着停。正在补正向探针（现有 `playback-probe.mjs` 只验了它不误触发）。
+- [x] ~~播放停顿时让声音立刻停（音频看门狗）。~~ 核对后**早已在 main 里**（`e289b886`，2026-10-06，早于记该决定的 `1014fa19`）：`src/editor/Preview.tsx` 的 `armStallWatch` 不等迟到的那一拍就置 `mediaStalled`，第 2437 行主文档音频层跟着停。正向探针已补好并合入 main（`e53d85f2`，`playback-probe.mjs` 新增「停顿声音」一例）。
+    - **主会话亲自复跑的证据**（`node scripts/probes/playback-probe.mjs --only 停顿声音 --port 5850`，退出码 0，41 项通过、`fails: []`、`ok: true`）：造停顿的办法是在 front 舞台的 iframe 里同步空转 700 ms / 400 ms，让舞台发不出 `frame`（不改 `src/`，也不调 `setMediaStalled`；舞台把 `performance.now` 换成了虚拟时钟，必须用 `window.__pcRealNow` 空转）。关键几条逐字如下：
+      - 「舞台真的停了:相邻两拍的间隔不短于按住时长的 80%」「父页没被一起拖住(采样器照常出行)」——先证明停顿是真的、量法有效；
+      - 「**mediaStalled 在迟到那一拍到达之前就为真(当场跳闸,不是事后)**」「mediaStallCount 随之 +1」；
+      - 「**声音元素在迟到那一拍到达之前就全部 paused**」「停下之后到迟到那一拍之间没有元素被重新 play 起来」「迟到那一拍到达之前的最后 100 ms,实时能量在阈值以下(声音确实停了)」；
+      - 「拍子回来之后 mediaStalled 回到假」「声音重新放出来」「声音位置跟着当前播放头(偏差 ≤ 0.25 s)」「没有从头重播、没有倒退」「恢复后的头 400 ms 里位置连续」。
+    - 子 Agent 另做了反向对照：临时关掉看门狗，七条关键断言全红、退出码 1，之后已把 `Preview.tsx` 还原（合并的提交里没有 `src/` 改动，主会话核过）。
+    - 待办：`playback-probe` 原有的「节拍」一例在这台机器忙时本来就会假失败（main 原版 13 遍过 10 遍），主会话待机器空闲时复跑一次。
 - [x] ~~登录框加「粘贴授权码」输入框，登录任务接上标准输入。~~（2026-10-22 合入 main `ae121cef`，语义补在 `product/agent.md`「接入」与 `mechanism/agent.md`，后者标〔裁〕三级；`release` 随之前进到 `6c571a27`）
 - [x] ~~云端 Agent 的发送接口不再重复核「首次使用告知」。~~（2026-10-22 合入 main `f58fba11`）一次发送从读两次告知降到一次，单测量得一条消息 2→1、连发四条 8→4。许可不是缓存：账号、绑定版本、登录状态、告知状态任何一样变了，期间有别的读取或确认插进来，或过了 5 秒（单调钟）就作废，退回真读取；`spendPermit` 同步先置 `used` 再校验，并发只有一次能免读。
   - **安全结论**：另派 `opus-dev-high` 做对抗性专审（`docs/reports/REVIEW-consent-once.md`，含它自写探针 6/6 通过），结论可以合入，**没有任何路径能让没接受过告知、已被撤权／被踢／已退出登录的身份把消息发给云端 Agent**。主会话另自核服务端那道关：`conversation-authority.mjs` 第 248～250 行每次收消息当场核告知、不通过回 403 `consent-required`，`authority.mjs` 第 211 行每次真调 `accountClient.verify`，该文件注释写明不采信请求体自报的发送者字段。客户端省掉的那一次只影响拒绝提示的说法。
