@@ -14,7 +14,16 @@
  *   渲染服务照部署模板的配置起(`PROMPTCUT_RENDER_STREAMS=1`,能产轨道流),创建者建好项目后打开「生成轨道流」。2026-10-13 起每张卡的快照作废,
  *   预渲染结果只有轨道流一档;这一项关着时托管方的渲染节点完全不为这个项目产流(语义 `product/rendering.md`「预渲染」「谁产流与托管方开关」)。
  *
- *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,spaced,errors] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
+ * 2026-10-21 起:桌面版那一遍以外的各步(online、stop、spaced、usercard、errors)走**账号组合**(云端项目一律走网站账号,`product/hosting.md`;
+ *   在线构建只认账号项目):`cloud-agent-ui-lib.mjs` 的 `startAccountStack`——账号组合夹具(VisuHive 真账号后端、账号模式文档服务、
+ *   独立素材服务进程、Agent 主服务的生产装配与一条任务一个进程的任务槽)+ 主服务的真发布通道 + 真渲染服务(照 AR-10)。桌面版那一遍跑完先把
+ *   口令式的旧组合停干净,再起账号组合。创建者 = 夹具账号 dualUser0、bob = dualUser1、carol 现注册并经项目链接加入;「生成轨道流」
+ *   由创建者在在线页面的项目设置里打开(网站后端的 `ACCOUNT_ADMINS` 只设在本探针进程里,让创建者在权限分组内)。要先设
+ *   PROMPTCUT_ACCOUNT_PROVIDER_ROOT 与 PROMPTCUT_PASSWORD_ORDER_MODULE。对话记录改读主服务的事件库与文档服务的账本。
+ *   改写的断言(改前改后见 `docs/reports/AGENT-ux-probe-account.md`):X1(账号组合搭起来)、B1～B3(发起方与重开方都是在线页面)、
+ *   K2(做完的任务数按工作进程逐任务收尾行数)、UC0(新建账号项目)、UC2(看轨道流)、E5(被踢的已读消息例外)。
+ *
+ *   node scripts/probes/cloud-agent-ux-ui-probe.mjs [--steps desktop,online,stop,spaced,usercard,errors] [--account-port 29003] [--base-port 5790] [--doc-port 8798] [--asset-port 8799]
  *        [--agent-port 5741] [--render-port 5830] [--dist <在线构建目录>] [--out <截图目录>] [--keep]
  *   端口:--base-port +0 编辑器页的源、+1 / +2 两个舞台的源、+3 桌面版编辑器(+4、+5 是它的舞台端口);`--render-port` +0/+1/+2 是渲染
  *   工作进程的三个端口,+6 是管理进程的诊断口。截图存 --out(缺省 `work/four-stage/cloud-agent/ux/`)。
@@ -83,13 +92,14 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSharedProject, lookupProject } from '../../server/auth/client.mjs';
-import { joinAs, adminOp, projectOf, putProject, agentApi } from './cloud-agent-probe-lib.mjs';
+import { lookupProject } from '../../server/auth/client.mjs';
+import { joinAs, adminOp, projectOf } from './cloud-agent-probe-lib.mjs';
 import { createTimings } from './probe-timings.mjs';
 import {
   ROOT, sleep, USER_PORTS, createUi, startStack, startDesktop, killDesktop, launchBrowser, killBrowser, alive, newPage, P, mockSteps, msgs, view, conversationOf,
   toolParts, lastAssistant, idle, panelText, providerOptions, sendText, joinOnline, sharedProjectOf, hostedToggle, openProjectSettings,
   creatorToggleService, closeDialogs, activity, undoLatestStep, membersList, clipOnStage, stageShot, pixelStats, portFree, gateSettled, clickUntil,
+  startAccountStack, ACCOUNT_PORT_COUNT, accountLogin, acceptConsentIfAsked, buildOnline, hostedOption, creatorToggleOption,
 } from './cloud-agent-ui-lib.mjs';
 
 const argv = process.argv.slice(2);
@@ -101,16 +111,31 @@ const STEPS = String(arg('--steps', ALL_STEPS.join(','))).split(',').map((s) => 
 const REAL = process.argv.includes('--real-model');
 const BASE = Number(arg('--base-port', 5790));
 const PORTS = { site: BASE, stageA: BASE + 1, stageB: BASE + 2, desktop: BASE + 3, doc: Number(arg('--doc-port', 8798)), asset: Number(arg('--asset-port', 8799)), agent: Number(arg('--agent-port', 5741)), render: Number(arg('--render-port', 5830)) };
-for (const p of USER_PORTS) if ([...Object.values(PORTS), PORTS.desktop + 1, PORTS.desktop + 2].includes(p)) { process.stderr.write(`端口段碰到了 ${p}(用户的编辑器或安装版)\n`); process.exit(2); }
+/** 账号组合的端口段起点(连着 ACCOUNT_PORT_COUNT 个,见 `cloud-agent-ui-lib.mjs` 的 startAccountStack);两个舞台源与渲染服务沿用上面的 */
+const ACCT_BASE = Number(arg('--account-port', 29003));
+for (const p of USER_PORTS) if ([...Object.values(PORTS), PORTS.desktop + 1, PORTS.desktop + 2, ...Array.from({ length: ACCOUNT_PORT_COUNT }, (_, n) => ACCT_BASE + n)].includes(p)) { process.stderr.write(`端口段碰到了 ${p}(用户的编辑器或安装版)\n`); process.exit(2); }
+/** 桌面版那一遍(口令式云端项目)以外的各步都走账号组合(云端项目一律走网站账号,语义 `product/hosting.md`) */
+const NEED_ACCOUNT = REAL ? arg('--real-how', 'online') === 'online' : STEPS.some((s) => s !== 'desktop');
+const NEED_OLD = REAL ? !NEED_ACCOUNT : STEPS.includes('desktop');
+if (NEED_ACCOUNT && (!process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT || !process.env.PROMPTCUT_PASSWORD_ORDER_MODULE)) { process.stderr.write('在线各步走账号组合:要先设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT 与 PROMPTCUT_PASSWORD_ORDER_MODULE\n'); process.exit(2); }
 const KEEP = argv.includes('--keep');
 const RUN = `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-ca-uxui-'));
 const OUT = path.resolve(arg('--out', path.join(ROOT, '..', '..', 'work', 'four-stage', 'cloud-agent', 'ux')));
 fs.mkdirSync(OUT, { recursive: true });
-const RENDER_STALL_MS = 12_000;
+/**
+ * 预渲染重试「连续没有进度就放弃」的时限(生产 10 分钟):E4 要在渲染服务停着时等到它放弃。旧组合在 E4 前重起 Agent 服务把它缩短;
+ * 账号组合的主服务不重起,所以整轮都用这个值(正常渲染时进度每几秒一条,远短于它)
+ */
+const RENDER_STALL_MS = 90_000;
 
 const { results, check, say, until } = createUi({ maxLine: 2200 });
+/** 当前这一套服务:桌面版那一遍是口令式的旧组合(startStack);之后换成账号组合(startAccountStack,带 `account: true`,接口同形) */
 let S = null;
+/** 账号组合里创建者的探针连接(夹具的 connectActor:网站登录 → 文档服务会话 → 页面连接) */
+let ACTOR = null;
+/** 在线构建的目录(两套共用一份;没给 --dist 就现打) */
+let DIST = arg('--dist', null);
 const browsers = new Set();
 const desktops = new Set();
 const nodeConns = new Set();
@@ -123,7 +148,7 @@ const store = (page, src, ...a) => page.evaluate((s, a2) => new Function('S', 'a
 
 /* ================================================================== 项目与脚本 */
 
-const NAME = `云端体验-${RUN}`;
+let NAME = `云端体验-${RUN}`;
 const SALT = `ux-${RUN}`;
 const N = 12;
 /** 「发出后退出」那两遍:开头读两遍项目(任务被接下),再读 LEAVE_READS 遍、每遍之前等 LEAVE_WAIT_MS(整段长过文档服务保留断掉的会话的 60 秒),然后连着写 */
@@ -140,7 +165,8 @@ const HEAVY = [CLIPS.stateful, CLIPS.canvas];
 const HEAVY_CLIPS = HEAVY;
 const pw = () => `pw-${randomBytes(6).toString('hex')}`;
 const CRED = { creator: { username: 'alice', password: pw() }, bob: { username: 'bob', password: pw() }, carol: { username: 'carol', password: pw() } };
-const CREATOR_SIGN = `${CRED.creator.username}的云端 Agent`;
+/** 成员列表里创建者名下那一行的署名(换到账号组合后是创建者的账号名) */
+const creatorSign = () => `${CRED.creator.username}的云端 Agent`;
 let PID = null;
 let PROJ = null;
 let PROC_FILE = null;
@@ -180,7 +206,8 @@ const pageProject = (page) => P(page, () => {
 /* ================================================================== 角色 */
 
 async function openBrowser() {
-  const b = await launchBrowser();
+  // 账号组合:公共入口是带私有证书的 https,两个舞台源是 s1/s2.pc.localhost(与 cloud-agent-ui-probe 同)
+  const b = await launchBrowser({ extraArgs: S?.account ? S.browserArgs : [] });
   browsers.add(b);
   return b;
 }
@@ -193,6 +220,12 @@ async function closeBrowser(b) {
 }
 /** 探针自己的一条创建者连接(Node,另一台设备):只在「没有成员在线」的窗口之外用,用完就关 */
 async function withCreatorConn(fn) {
+  if (S?.account) {
+    // 账号组合:夹具的创建者连接(另一台设备的页面连接),用完就关;`fn` 拿到 `{ actor, project() }`
+    await ACTOR.ensurePage();
+    try { return await fn({ actor: ACTOR, project: async () => { const st = await ACTOR.project(); return { rev: st.rev, project: st.project }; } }); }
+    finally { await ACTOR.close().catch(() => {}); }
+  }
   const c = await joinAs(S.DOC_WS, PROJ, { username: CRED.creator.username, password: CRED.creator.password, as: 'creator' });
   if (!c) throw new Error('探针的创建者连接没建成');
   nodeConns.add(c);
@@ -237,6 +270,29 @@ async function desktopDown(d) {
 async function onlineUp(who, { asCreator = false, browser = null, name = NAME } = {}) {
   const b = browser ?? await openBrowser();
   const page = await newPage(b);
+  if (S?.account) {
+    // 排查用:`PC_PROBE_WSLOG=1` 时记下这个页面经 WebSocket 收到的消息种类与 events.* 的摘要
+    if (process.env.PC_PROBE_WSLOG === '1') {
+      page.wsLog = [];
+      const cdp = await page.createCDPSession();
+      await cdp.send('Network.enable');
+      cdp.on('Network.webSocketFrameSent', (e) => { try { const m = JSON.parse(e.response.payloadData); if (/^events\./.test(m.type)) page.wsLog.push({ sent: m.type, projectId: m.projectId ?? null }); } catch { /* 不是 JSON */ } });
+      cdp.on('Network.webSocketFrameReceived', (e) => { try { const m = JSON.parse(e.response.payloadData); if (/^events\./.test(m.type) || (m.type === 'error' && /projectId|事件/.test(String(m.detail ?? '')))) page.wsLog.push({ type: m.type, reason: m.reason ?? null, detail: m.detail ?? null, n: Array.isArray(m.items) ? m.items.length : null, opIds: (m.items ?? [m]).filter((x) => x.opId).length, callIds: (m.items ?? [m]).filter((x) => x.callId).length }); } catch { /* 不是 JSON */ } });
+    }
+    // 账号组合:用网站账号登录,在开始页的项目列表里点这个项目(创建者在「我建的」,成员在「我加入的」)
+    await accountLogin(page, S.ORIGIN, who);
+    const btn = await until(`${who.username} 的项目列表里有「${name}」`, async () => {
+      const h = await page.evaluateHandle((n) => [...document.querySelectorAll('[data-pc="cloud-project-lists"] .sp-account-row > button')].find((x) => x.textContent.trim() === n) ?? null, name);
+      return h.asElement();
+    }, 30_000, 300);
+    if (!btn) throw new Error(`${who.username} 的项目列表里没有「${name}」`);
+    await btn.click();
+    await acceptConsentIfAsked(page);
+    await page.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
+    await page.waitForFunction(() => !!window.__pcStore && window.__pcStore.getState().project.tracks.length > 0, { timeout: 60_000 });
+    await gateSettled(page);
+    return { browser: b, page };
+  }
   await joinOnline(page, { site: S.SITE, name, username: who.username, password: who.password, asCreator });
   return { browser: b, page };
 }
@@ -282,11 +338,13 @@ function watchMembers() {
   w.timer = setInterval(() => { void S.membersOnline(PID).then((m) => { w.samples += 1; if (m === true) w.seen = true; }).catch(() => {}); }, 500);
   return w;
 }
+/** 一轮收尾的事件:旧组合的 Agent 服务记 `end`;账号组合的任务进程记 `runner_done`(收尾之后才交还任务授权) */
+const isEnd = (e) => e.type === 'end' || e.type === 'runner_done';
 const renderNode = async () => ((await S.renderStatus()).queue?.nodes ?? []).find((n) => n.projectId === PID) ?? null;
 /** 等一个对话收尾;`render` 为真再等它引出的预渲染重试有结果。全程只读 Agent 服务盘上的对话记录与渲染服务的诊断 */
 async function cloudFinishes(conversationId, { runMs = 120_000, render = true, renderMs = 420_000 } = {}) {
   const t0 = Date.now();
-  const done = await until(`对话 ${conversationId} 跑到收尾`, () => { const d = S.diskConversation(PID, conversationId); return d && d.meta.state !== 'running' && d.events.some((e) => e.type === 'end') ? d : null; }, runMs, 200);
+  const done = await until(`对话 ${conversationId} 跑到收尾`, () => { const d = S.diskConversation(PID, conversationId); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, runMs, 200);
   const runMsTook = Date.now() - t0;
   let disk = done;
   if (render && done) {
@@ -481,7 +539,7 @@ async function leavePass(how, tag, salt) {
   const undoneBob = await until(`${tag}:bob 的页面也看到撤销的结果`, async () => ((await pageProject(bob.page))?.rows === rowsOf(salt, 9) ? true : null), 10_000, 150);
   const titleKept = (await pageProject(bob.page))?.title === want.title;
   check(`${tag} A7 在「Agent 操作」里点「撤销这步」撤掉 Agent 的最后一处改动:参数回到上一次的值、按钮变成「已撤销」;别的成员看到撤销的结果,别的改动还在`, !!target?.done && !!undoneMine && !!undoneBob && titleKept, {
-    undone: target ?? null, round: actBack ? `${actBack.index}/${actBack.total} · ${actBack.count} 次操作` : null, creatorSees: !!undoneMine, otherMemberSees: !!undoneBob, otherChangesKept: titleKept,
+    undone: target ?? null, round: actBack ? `${actBack.index}/${actBack.total} · ${actBack.count} 次操作` : null, creatorSees: !!undoneMine, otherMemberSees: !!undoneBob, otherChangesKept: titleKept, ...(back.page.wsLog ? { wsEvents: back.page.wsLog.slice(0, 12) } : {}),
   });
   await shot(back.page, `${tag}-6-creator-undone`);
   const errors = [...(bob.page.pageErrors ?? []), ...(back.page.pageErrors ?? [])];
@@ -583,10 +641,10 @@ async function realPass(how, tag) {
 
 /* ================================================================== 主流程 */
 
-async function setup() {
+async function setupOld() {
   // 渲染服务照部署模板的配置起:能产轨道流(`PROMPTCUT_RENDER_STREAMS=1`)。2026-10-13 起每张卡的快照作废,预渲染结果只有轨道流一档
   // (语义 `product/rendering.md`「预渲染」),云端渲染出的就是重卡的轨道流
-  S = await startStack({ tmp: TMP, ports: PORTS, dist: arg('--dist', null), say, renderEnv: { PROMPTCUT_RENDER_STREAMS: '1' }, ...(REAL ? { agentEnv: { PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL: '1' } } : {}) });
+  S = await startStack({ tmp: TMP, ports: PORTS, dist: DIST, say, renderEnv: { PROMPTCUT_RENDER_STREAMS: '1' }, ...(REAL ? { agentEnv: { PROMPTCUT_AGENT_REHEARSAL_DESKTOP_MODEL: '1' } } : {}) });
   S.startRender();
   const ready = await S.waitRenderReady();
   const agentHealth = await (await fetch(`${S.AGENT_DIRECT}/healthz`)).json();
@@ -641,22 +699,128 @@ async function setup() {
   await desktopDown(d);
 }
 
+/* ================================================================== 账号组合(在线各步) */
+
+/** 主项目的内容:两张探针重卡加一张带参数的图表卡(与桌面版那一遍同一份) */
+const seedProject = (id, name, salt) => ({
+  version: 1, id, name, width: 1920, height: 1080, fps: 30, duration: 3, themeId: 'dark', camera3dFov: 50,
+  media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {}, transitions: [],
+  tracks: [
+    { id: 'tr-0', name: '图表', hidden: false, clips: [{ id: 'clip-bars', kind: 'card', cardId: 'rank-bars', start: 0, end: 3, params: { title: '原文案', rows: '微信,85|抖音,62', suffix: '%' } }] },
+    { id: 'tr-1', name: '重卡甲', hidden: false, clips: [{ id: 'clip-stateful', kind: 'card', cardId: 'probe-slow-stepped', start: 0, end: 3, params: { burnMs: 40, label: '重卡甲' } }] },
+    { id: 'tr-2', name: '重卡乙', hidden: false, clips: [{ id: 'clip-canvas', kind: 'card', cardId: 'probe-slow-stepped', start: 0, end: 3, params: { burnMs: 40, label: `重卡乙 ${salt}` } }] },
+  ],
+});
+/** 用户卡一步的创建者账号名(在线页面里自己新建项目;也要在「生成轨道流」的权限分组里) */
+const UC_CREATOR = `ula${randomBytes(3).toString('hex')}`;
+
+/**
+ * 换到账号组合:先把口令式的旧组合停干净(端口要让出来),再起账号组合与真渲染服务,建好主项目:
+ *   - 主项目就是账号夹具建的那个(创建者 dualUser0 新建、dualUser1 经项目链接加入;账号与口令都是夹具的测试值);
+ *   - 内容由创建者的探针连接放进去(三张卡,同桌面版那一遍);
+ *   - 创建者在在线页面的项目设置里打开「托管方的渲染节点」与「生成轨道流」(语义 `product/rendering.md`「谁产流与托管方开关」:
+ *     关着时托管方的渲染节点不为成员预览产流;探针让网站后端把创建者当托管方管理员,它总在权限分组里);
+ *   - 第三个账号(carol,探针现注册)在在线页面里经项目链接加入(E5 用)。
+ */
+async function setupAccount() {
+  if (S) {
+    await S.stop().catch(() => {});
+    await sleep(500);
+    const busy = await S.portsStillBusy().catch(() => []);
+    check('换账号组合之前:口令式的旧组合退干净,端口无监听', busy.length === 0, { stillListening: busy });
+    S = null;
+  }
+  if (!DIST) { DIST = path.join(TMP, 'dist-online'); say('build-online', { dist: DIST }); buildOnline(DIST); }
+  // 账号后端在本进程里跑,`ACCOUNT_ADMINS` 每次现读;只改本探针进程的环境
+  process.env.ACCOUNT_ADMINS = ['dualuser0', UC_CREATOR].join(',');
+  S = await startAccountStack({ tmp: TMP, ports: { base: ACCT_BASE, stageA: PORTS.stageA, stageB: PORTS.stageB, render: PORTS.render }, dist: DIST, say, renderLimits: { stallMs: RENDER_STALL_MS } });
+  S.startRender();
+  const ready = await S.waitRenderReady();
+  const renderVersion = String(ready.queue.codeVersion ?? '');
+  let pageHasVersion = false;
+  const walk = (dir) => { for (const i of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, i.name); if (i.isDirectory()) walk(p); else if (!pageHasVersion && /\.(m?js|html)$/.test(i.name) && fs.readFileSync(p, 'utf8').includes(renderVersion)) pageHasVersion = true; } };
+  if (/^[0-9a-f]{64}$/.test(renderVersion)) walk(S.DIST);
+  const agentVersion = (() => { try { return S.wiring?.publisher?.codeVersion?.() ?? null; } catch { return null; } })();
+  S.renderFingerprint = ready.queue.envFingerprint ?? ready.queue.fingerprint ?? ready.worker?.fingerprint ?? null;
+  check('X1 账号组合起来(账号后端、账号模式的文档服务、素材服务、Agent 主服务与任务槽、真渲染服务);渲染服务、云端 Agent 主服务发的计划、在线页面的代码版本相同', /^[0-9a-f]{64}$/.test(renderVersion) && agentVersion === renderVersion && pageHasVersion, {
+    renderCodeVersion: renderVersion.slice(0, 12), agentPlanCodeVersion: String(agentVersion).slice(0, 12), onlineBuildEmbedsIt: pageHasVersion, renderFingerprint: S.renderFingerprint, renderStreams: ready.streams ?? null,
+  });
+  const f = S.fixture;
+  CRED.creator = { username: f.accounts[0].name, password: f.accounts[0].password };
+  CRED.bob = { username: f.accounts[1].name, password: f.accounts[1].password };
+  CRED.carol = await S.register(`carol${randomBytes(3).toString('hex')}`, pw()).then((a) => ({ username: a.name, password: a.password, accountId: a.accountId }));
+  PID = f.projectId;
+  NAME = 'Shared dual account project';
+  PROJ = { projectId: PID };
+  ACTOR = await f.connectActor(0);
+  const put = await ACTOR.send({ type: 'project.op', projectId: PID, opId: `seed-${RUN}`, session: 's-seed', ops: [{ op: 'set', path: '', value: seedProject(PID, NAME, SALT) }] });
+  await ACTOR.close();
+  if (put.type !== 'project.op.ok') throw new Error(`放主项目的内容没成:${JSON.stringify(put).slice(0, 200)}`);
+
+  /* ---- 创建者在在线页面里打开「生成轨道流」 */
+  const c = await onlineUp(CRED.creator, { asCreator: true });
+  const provider = await until('X1:接入方式下拉出现', () => providerOptions(c.page), 30_000, 200);
+  await openProjectSettings(c.page);
+  const agentRow = await until('X1:项目设置里出现「云端 Agent」一行', () => hostedToggle(c.page, 'agent'), 15_000, 200);
+  let renderRow = await hostedToggle(c.page, 'render');
+  if (renderRow && !renderRow.checked) {
+    await creatorToggleService(c.page, 'render');
+    renderRow = await until('X1:「托管方的渲染节点」勾上', async () => { const r = await hostedToggle(c.page, 'render'); return r?.checked ? r : null; }, 15_000, 200);
+  }
+  const streamsBefore = await until('X1:渲染节点下面有「生成轨道流」一行', () => hostedOption(c.page, 'render', 'streams'), 15_000, 200);
+  const confirmText = streamsBefore && !streamsBefore.checked ? await creatorToggleOption(c.page, 'render', 'streams') : null;
+  const streamsRow = await until('X1:「生成轨道流」勾上', async () => { const r = await hostedOption(c.page, 'render', 'streams'); return r?.checked ? r : null; }, 15_000, 200);
+  const renderSees = await until('X1:渲染服务看到这个项目「生成轨道流」开着', async () => ((await S.renderStatus()).projects ?? []).find((p) => p.projectId === PID)?.streams === true, 30_000, 300);
+  const agentSees = await until('X1:云端 Agent 主服务的发布通道看到「生成轨道流」开着', () => S.wiring.publisher.availability(PID)?.streams === true, 30_000, 300);
+  await shot(c.page, 'X1-online-settings');
+  check('X1 创建者在在线页面的项目设置里打开「生成轨道流」(账号项目不再验证创建者口令,直接确认):渲染服务与云端 Agent 主服务都看到这一项开着', !!streamsBefore && !!streamsRow && !!renderSees && !!agentSees && !!renderRow?.checked, {
+    before: streamsBefore, after: streamsRow, confirm: confirmText ? confirmText.slice(0, 80) : null, renderNode: renderRow, renderSees: !!renderSees, agentSees: !!agentSees,
+  });
+  // 在线构建里接入方式只有「云端」(原来的「桌面版的 AI 栏里多了云端、本机驱动仍是缺省」那一条只属于桌面版那一遍)
+  check('X1 项目放云端(账号项目):项目设置里有「云端 Agent」一行(与「托管方的渲染节点」放在一起),勾着、创建者可改;在线页面的接入方式只有「云端」且选中', !!agentRow && agentRow.checked && !agentRow.disabled && !!provider && provider.value === 'cloud' && provider.options.length === 1, { agent: agentRow, provider });
+  await closeDialogs(c.page);
+  await closeBrowser(c.browser);
+
+  /* ---- carol 经项目链接加入 */
+  const cb = await openBrowser();
+  const cp = await newPage(cb);
+  await accountLogin(cp, S.ORIGIN, CRED.carol);
+  await cp.waitForSelector('[data-pc="cloud-project-link"]', { visible: true, timeout: 30_000 });
+  await typeIntoField(cp, '[data-pc="cloud-project-link"]', `${S.ORIGIN}/editor?project=${encodeURIComponent(PID)}`);
+  await cp.waitForFunction(() => { const b = document.querySelector('[data-pc="cloud-join"]'); return b && !b.disabled; }, { timeout: 30_000 });
+  await cp.click('[data-pc="cloud-join"]');
+  await acceptConsentIfAsked(cp, 8000);
+  const joined = await until('X1:carol 经项目链接进了项目', () => P(cp, () => !!document.querySelector('[data-pc="members-button"]') && (window.__pcStore?.getState().project.tracks.length ?? 0) > 0), 60_000, 300);
+  check('X1 第三个账号(carol)在在线页面里经项目链接加入这个项目', !!joined, { account: CRED.carol.username });
+  await closeBrowser(cb);
+}
+/** 清空一个输入框再打字(全选删掉) */
+async function typeIntoField(page, sel, text) {
+  await page.waitForSelector(sel, { visible: true, timeout: 20_000 });
+  await page.focus(sel);
+  await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace');
+  await page.type(sel, text);
+}
+
+/** 这一轮此刻在跑:云端 AI 栏里有「停止」按钮,或会话视图说在流式(账号模式下视图在第一条消息之前是空的,所以两样都看) */
+const runningNow = async (page) => !!(await page.$('[data-pc="cloud-ai-panel"] [data-pc="ai-stop"]').catch(() => null)) || !!(await view(page))?.streaming;
+const idleNow = async (page) => !(await runningNow(page));
+/** 最后一条助手消息里给人看的几样(断言细节里记) */
+const replyOf = (m) => { const a = lastAssistant(m); return a ? { outcome: a.outcome ?? null, error: a.error ?? null, statuses: a.statuses ?? [], text: (a.text ?? '').slice(0, 80), pending: a.pending ?? null } : null; };
+
 async function stopStep() {
-  const tag = 'S';
   const salt = `${SALT}-s`;
-  /* ---- B1:桌面版发起更长的任务后退出;bob 之后进来看着 */
-  const d1 = await desktopUp({ open: PROC_FILE });
-  await until('S:桌面版回到这个共享项目', async () => (await sharedProjectOf(d1.page)) === PID, 120_000, 500);
+  /* ---- B1:创建者在在线浏览器里发起更长的任务后退出(浏览器进程被结束);bob 之后进来看着 */
+  const d1 = await onlineUp(CRED.creator, { asCreator: true });
   await selectCloud(d1.page);
-  // 22 次写入、每次隔 8 秒(一轮最多 24 次模型往返),整轮约 3 分钟:够发起方断掉的会话保留期满、另一位成员看一会儿、创建者再重新打开软件接上
+  // 22 次写入、每次隔 8 秒(一轮最多 24 次模型往返),整轮约 3 分钟:够发起方断掉的会话保留期满、另一位成员看一会儿、创建者再重新打开接上
   const sent = await sendAndAccepted(d1.page, writeScript(22, 8000, salt), 2);
   const conv = sent.conversationId;
-  const k = await desktopKill(d1);
+  const k = await killBrowser(d1.browser);
+  browsers.delete(d1.browser);
   const tGone = Date.now();
-  // 创建者那台电脑上的软件进程先起来(还没开页面、没有任何连接),省下后面等它启动的时间
-  const server2 = await desktopServer();
   const bob = await onlineUp(CRED.bob);
-  // 改动一条条出现:bob 页面里的项目在 20 秒里变了几次(原先数「Agent 操作记录」的条数;2026-10-20 那块只显示自己的对话了)
+  // 改动一条条出现:bob 页面里的项目在 20 秒里变了几次
   const counts = [];
   const t0 = Date.now();
   let lastState = null;
@@ -676,70 +840,75 @@ async function stopStep() {
     if (aliceRow) break;
     await sleep(2000);
   }
-  check('S B1 发起方退出后,另一位成员从在线浏览器进项目看着:改动一条条出现,署名是创建者的云端 Agent;成员列表里创建者名下有云端 Agent 而他本人不在线', sent.accepted && k.browserGone && k.serverGone
+  check('S B1 发起方(在线浏览器)退出后,另一位成员从在线浏览器进项目看着:改动一条条出现;成员列表里创建者名下有「〈创建者〉的云端 Agent」而他本人不在线', sent.accepted && k.gone
     && counts.length >= 3
-    && !!aliceRow && aliceRow.cloudRow === CREATOR_SIGN && !aliceRow.editing && !(mem?.rows ?? []).some((r) => r.editing && !/自己/.test(r.text)), {
-    initiatorGone: k.browserGone && k.serverGone, projectChangesSeen: counts.length, members: { button: mem?.button, rows: mem?.rows.map((r) => r.text.slice(0, 70)) },
+    && !!aliceRow && aliceRow.cloudRow === creatorSign() && !aliceRow.editing && !(mem?.rows ?? []).some((r) => r.editing && !/自己/.test(r.text)), {
+    initiatorGone: k.gone, projectChangesSeen: counts.length, members: { button: mem?.button, rows: mem?.rows.map((r) => r.text.slice(0, 70)) }, sign: creatorSign(),
   });
   await shot(bob.page, 'S-1-bob-watching');
 
-  /* ---- B2:创建者重新打开桌面版(同一台设备、新进程),接上、停掉 */
-  const d2 = await desktopUp({ open: PROC_FILE, server: server2 });
-  await until('S:重新打开后回到共享项目', async () => (await sharedProjectOf(d2.page)) === PID, 120_000, 500);
-  const banner = await until('S:本机模式下出现「云端有一个对话正在进行」', () => d2.page.$('[data-pc="cloud-running-banner"]'), 40_000, 200);
+  /* ---- B2:创建者换一个新的浏览器进程(在线页面、同一个账号)重新打开:历史列表里这个对话标着在跑,点开接上看得到过程;点「停止」后停下 */
+  const d2 = await onlineUp(CRED.creator, { asCreator: true });
   const providerOnOpen = (await providerOptions(d2.page))?.value ?? null;
-  await shot(d2.page, 'S-2-creator-reopened-banner');
-  if (banner) await d2.page.click('[data-pc="cloud-running-banner"] button');
-  await d2.page.waitForSelector('[data-pc="cloud-ai-panel"]', { timeout: 20_000 }).catch(() => {});
-  const attached = await until('S:接上还在跑的对话', async () => { const v = await view(d2.page); const m = await msgs(d2.page); return v?.streaming && v.conversationId === conv && toolParts(m).length >= 2 ? { tools: toolParts(m).length } : null; }, 30_000, 100);
+  const opened2 = await openFromHistory(d2.page, conv);
+  await shot(d2.page, 'S-2-creator-reopened');
+  const attached = await until('S:接上还在跑的对话', async () => { const m = await msgs(d2.page); return (await runningNow(d2.page)) && (await conversationOf(d2.page)) === conv && toolParts(m).length >= 2 ? { tools: toolParts(m).length } : null; }, 30_000, 100);
   const tools1 = toolParts(await msgs(d2.page)).length;
   await sleep(9500);
   const tools2 = toolParts(await msgs(d2.page)).length;
   const tStop = Date.now();
   await d2.page.click('[data-pc="cloud-ai-panel"] [data-pc="ai-stop"]').catch(() => {});
-  const stopped = await until('S:点「停止」后停下', () => idle(d2.page), 60_000, 50); // 等待时限只为防卡死(原 5 秒)
+  const stopped = await until('S:点「停止」后停下', () => idleNow(d2.page), 60_000, 50); // 等待时限只为防卡死(原 5 秒)
   timingLog.record('S 点「停止」到这一轮停下', stopped ? Date.now() - tStop : null, { formerLimit: '< 5 秒' });
   const stopMs = Date.now() - tStop;
-  const aStop = lastAssistant(await msgs(d2.page));
-  const diskStop = S.diskConversation(PID, conv);
+  const shown = replyOf(await msgs(d2.page));
+  const diskStop = await until('S:云端记下这一轮已停下', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' ? d : null; }, 30_000, 200);
   const p1 = await pageProject(bob.page);
   await sleep(1500);
   const p2 = await pageProject(bob.page);
   const okWrites = (diskStop?.events ?? []).filter((e) => e.type === 'tool_result' && e.ok === true).length;
-  check('S B2 创建者重新打开桌面版(新进程):AI 栏仍是本机驱动,出现「云端有一个对话正在进行」,接上后接着看得到过程;点「停止」后停下(用时只记录),记录里是已停止,之后项目不再变', !!banner && providerOnOpen !== 'cloud'
-    && !!attached && tools2 > tools1 && !!stopped && aStop?.outcome === 'aborted' && diskStop?.meta?.state === 'idle' && diskStop.meta.reason === 'stopped' && okWrites >= 2 && okWrites < 22 && JSON.stringify(p1) === JSON.stringify(p2), {
-    providerOnOpen, attachedWithToolCalls: attached?.tools ?? null, toolCallsWhileWatching: [tools1, tools2], stopMs, outcome: aStop?.outcome ?? null, recorded: diskStop ? { state: diskStop.meta.state, reason: diskStop.meta.reason } : null, writesLanded: okWrites, quietAfter: JSON.stringify(p1) === JSON.stringify(p2),
+  const lastWords = (diskStop?.events ?? []).filter((e) => e.type === 'text').map((e) => e.delta ?? e.text ?? '').join('');
+  check('S B2 创建者换一个浏览器进程重新打开(在线页面):接入方式是「云端」,历史里找得到这个对话,点开接上后看得到它还在跑、过程接着出来;点「停止」后停下(用时只记录),云端记下这一轮停了、没说完最后那句,之后项目不再变', providerOnOpen === 'cloud'
+    && !!opened2.hit && !!attached && tools2 > tools1 && !!stopped && !!diskStop && diskStop.meta.state === 'idle' && !lastWords.includes('都做完了') && okWrites >= 2 && okWrites < 22 && JSON.stringify(p1) === JSON.stringify(p2), {
+    providerOnOpen, listed: opened2.hit, attachedWithToolCalls: attached?.tools ?? null, toolCallsWhileWatching: [tools1, tools2], stopMs, shown, recorded: diskStop ? { state: diskStop.meta.state, grant: diskStop.meta.grant, outcome: diskStop.meta.outcome } : null,
+    lastEvents: (diskStop?.events ?? []).slice(-4).map((e) => [e.type, e.code ?? e.reason ?? e.state ?? null]), writesLanded: okWrites, quietAfter: JSON.stringify(p1) === JSON.stringify(p2),
   });
   await shot(d2.page, 'S-3-creator-stopped');
 
-  /* ---- B3:另一台设备(在线页面、新的浏览器进程、同一创建者身份)打开同一个对话,接着看、接着说 */
+  /* ---- B3:另一台设备(又一个浏览器进程、同一个账号)打开同一个对话,接着看、接着说 */
   const other = await onlineUp(CRED.creator, { asCreator: true });
   const opened = await openFromHistory(other.page, conv);
   const seen = await until('S:另一台设备上看得到同一个对话的过程', async () => { const m = await msgs(other.page); return m && toolParts(m).length === toolParts(await msgs(d2.page)).length && toolParts(m).length >= 2 ? m : null; }, 30_000, 200);
-  const stoppedThere = lastAssistant(seen)?.outcome === 'aborted';
+  const shownThere = replyOf(seen);
+  const stoppedThere = !!seen && opened.hit?.state !== 'running' && !(await runningNow(other.page)) && !String(shownThere?.text ?? '').includes('都做完了');
   await sendText(other.page, mockSteps([{ tool: 'update_clip', input: { clipId: CLIPS.bars, label: '换了设备接着说' } }, { say: '在另一台设备上接着说的' }]));
-  const said = await until('S:另一台设备上接着说的这一轮跑完', async () => { const m = await msgs(other.page); const a2 = lastAssistant(m); return a2 && !a2.pending && (a2.text ?? '').includes('在另一台设备上接着说的') ? m : null; }, 40_000, 150);
-  const deskSees = await until('S:桌面版开着的同一个对话也看到这一轮', async () => { const m = await msgs(d2.page); return (lastAssistant(m)?.text ?? '').includes('在另一台设备上接着说的') ? m : null; }, 20_000, 200);
+  const said = await until('S:另一台设备上接着说的这一轮跑完', async () => { const m = await msgs(other.page); const a2 = lastAssistant(m); return a2 && !a2.pending && (a2.text ?? '').includes('在另一台设备上接着说的') ? m : null; }, 60_000, 150);
+  const deskSees = await until('S:先前那台设备开着的同一个对话也看到这一轮', async () => { const m = await msgs(d2.page); return (lastAssistant(m)?.text ?? '').includes('在另一台设备上接着说的') ? m : null; }, 20_000, 200);
   const labelBob = await until('S:改动落地(bob 的页面看到)', async () => ((await pageProject(bob.page))?.label === '换了设备接着说' ? true : null), 10_000, 150);
-  check('S B3 另一台设备(另一个浏览器进程与设备号、同一创建者身份)打开同一个对话:过程都在、是已停止的;接着说一句,新的一轮正常跑完、改动落地;桌面版那边的同一个对话也看到', !!opened.hit && !!seen && stoppedThere && !!said
+  check('S B3 另一台设备(另一个浏览器进程、同一个账号)打开同一个对话:过程都在、是停下的(不在跑、没有最后那句);接着说一句,新的一轮正常跑完、改动落地;先前那台设备上的同一个对话也看到', !!opened.hit && !!seen && stoppedThere && !!said
     && said.filter((x) => x.role === 'user').length === 2 && !!deskSees && deskSees.filter((x) => x.role === 'user').length === 2 && !!labelBob, {
-    listed: opened.hit, toolCallsSeen: seen ? toolParts(seen).length : null, stoppedShown: stoppedThere, continued: !!said, userMessages: said?.filter((x) => x.role === 'user').length ?? null, desktopSeesNewRun: !!deskSees, changeLanded: !!labelBob,
+    listed: opened.hit, toolCallsSeen: seen ? toolParts(seen).length : null, stoppedShown: stoppedThere, shownThere, continued: !!said, userMessages: said?.filter((x) => x.role === 'user').length ?? null, firstDeviceSeesNewRun: !!deskSees, changeLanded: !!labelBob,
   });
   await shot(other.page, 'S-4-other-device-continued');
   await closeBrowser(other.browser);
-  await desktopDown(d2);
+  await closeBrowser(d2.browser);
   await closeBrowser(bob.browser);
 }
 
 async function errorsStep() {
   /** 项目内容与版本号(探针自己的创建者连接;这一步不要求「没有成员在线」) */
-  const snap = () => withCreatorConn(async (c) => { const p = await projectOf(c, PID); return { rev: p.rev, project: p.project }; });
+  const snap = () => withCreatorConn(async (c) => { const p = S.account ? await c.project() : await projectOf(c, PID); return { rev: p.rev, project: p.project }; });
   const quiet = async () => { const a = (await snap()).rev; await sleep(1500); return (await snap()).rev === a; };
   const sane = async (before, okWrites) => { const calm = await quiet(); const after = await snap(); return { ok: after.rev === before.rev + okWrites && calm && intact(after.project), rev: [before.rev, after.rev], noWritesAfter: calm, projectIntact: intact(after.project) }; };
   /** 这个对话里序号大于 `after` 的成功写入数(同一个对话连着跑几轮时,只数这一轮的) */
   const okOf = (conv, after = 0) => (S.diskConversation(PID, conv)?.events ?? []).filter((e) => e.type === 'tool_result' && e.ok === true && e.seq > after).length;
   const seqOf = (conv) => S.diskConversation(PID, conv)?.meta?.lastSeq ?? 0;
-  const errText = async (page) => { const a = lastAssistant(await msgs(page)); return { outcome: a?.outcome ?? null, error: a?.error ?? null, statuses: a?.statuses ?? [] }; };
+  const errText = async (page) => { const a = lastAssistant(await msgs(page)); return { outcome: a?.outcome ?? null, error: a?.error ?? null, statuses: a?.statuses ?? [], text: (a?.text ?? '').slice(0, 120) }; };
+  /** 云端记下的这个对话最近一轮的结局(断言细节里看):账本里的任务授权状态与结局、最后几条事件 */
+  const recordOf = (conv) => { const d = S.diskConversation(PID, conv); return d ? { state: d.meta.state, grant: d.meta.grant ?? null, outcome: d.meta.outcome ?? null, reason: d.meta.reason ?? null, last: d.events.slice(-4).map((e) => [e.type, e.code ?? e.reason ?? e.state ?? null, String(e.message ?? '').slice(0, 60)]) } : null; };
+  /** 托管方管理云端 Agent 额度的命令(只改 Agent 服务数据目录下的额度配置;账号组合是各代任务进程共用的数据目录) */
+  const AGENT_DATA = S.account ? S.fixture.dataDir : S.D.agent;
+  const admin = (...a) => spawnSync(process.execPath, [path.join(ROOT, 'server', 'agent-service', 'admin.mjs'), ...a], { cwd: ROOT, env: { ...process.env, PROMPTCUT_AGENT_DATA: AGENT_DATA }, windowsHide: true, encoding: 'utf8' });
 
   /* ---- E1:模型调用失败。发起方发完就被结束,事后重新打开看 */
   {
@@ -747,11 +916,11 @@ async function errorsStep() {
     const c1 = await onlineUp(CRED.creator, { asCreator: true });
     await selectCloud(c1.page);
     await sendText(c1.page, mockSteps([{ sleepMs: 600 }, writeStep(1, 'm'), { sleepMs: 600 }, writeStep(4, 'm'), { sleepMs: 1500 }, { fail: '上游接口 500(探针注入)' }, writeStep(7, 'm')]));
-    await until('E1:消息发出、这一轮开始', async () => (await view(c1.page))?.streaming, 15_000, 50);
+    await until('E1:消息发出、这一轮开始', async () => (await runningNow(c1.page)) || (await view(c1.page))?.streaming, 30_000, 50);
     const conv = await conversationOf(c1.page);
     const k = await killBrowser(c1.browser);
     browsers.delete(c1.browser);
-    await until('E1:这一轮收尾', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' ? d : null; }, 60_000, 200);
+    await until('E1:这一轮收尾', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, 90_000, 200);
     const s = await sane(before, 2);
     const c2 = await onlineUp(CRED.creator, { asCreator: true });
     const opened = await openFromHistory(c2.page, conv);
@@ -759,7 +928,7 @@ async function errorsStep() {
     const e = await errText(c2.page);
     const text = await panelText(c2.page);
     check('E1 模型调用失败(发起方已退出,重新打开看):对话记录里有「模型调用失败」与接口给的原因,历史列表里标「出错」;项目停在失败前最后一次成功写入', k.gone && e.outcome === 'error' && /模型调用失败/.test(e.error ?? '') && /上游接口 500/.test(e.error ?? '') && text.includes('模型调用失败')
-      && opened.hit?.state === 'failed' && /出错/.test(opened.hit.text) && s.ok && okOf(conv) === 2, { initiatorGone: k.gone, shown: e.error, listed: opened.hit, writesLanded: okOf(conv), ...s });
+      && opened.hit?.state === 'failed' && /出错/.test(opened.hit.text) && s.ok && okOf(conv) === 2, { initiatorGone: k.gone, shown: e, listed: opened.hit, writesLanded: okOf(conv), recorded: recordOf(conv), ...s });
     await shot(c2.page, 'E1-model-failed');
     await closeBrowser(c2.browser);
   }
@@ -767,21 +936,21 @@ async function errorsStep() {
   // 后面三种都在创建者的同一个在线页面里做(页面开着,原因当场出现在对话里)
   const c = await onlineUp(CRED.creator, { asCreator: true });
   await selectCloud(c.page);
-  const admin = (...a) => spawnSync(process.execPath, [path.join(ROOT, 'server', 'agent-service', 'admin.mjs'), ...a], { cwd: ROOT, env: { ...process.env, PROMPTCUT_AGENT_DATA: S.D.agent }, windowsHide: true, encoding: 'utf8' });
-  const runAndWait = async (prompt, ms = 60_000) => {
-    const convBefore = await conversationOf(c.page);
+  const runAndWait = async (prompt, ms = 90_000) => {
     const usersBefore = ((await msgs(c.page)) ?? []).filter((x) => x.role === 'user').length;
     await sendText(c.page, prompt);
     // 有的轮一开始就收尾(额度用尽):看的是「对话里多了一条用户消息」,不是「此刻还在跑」
-    await until('这一轮开始', async () => ((await msgs(c.page)) ?? []).filter((x) => x.role === 'user').length > usersBefore, 15_000, 50);
-    await until('这一轮收尾', () => idle(c.page), ms, 100);
-    return convBefore;
+    await until('这一轮开始', async () => ((await msgs(c.page)) ?? []).filter((x) => x.role === 'user').length > usersBefore, 30_000, 50);
+    const convNow = await conversationOf(c.page);
+    await until('这一轮收尾', async () => { const a = lastAssistant(await msgs(c.page)); const d = S.diskConversation(PID, convNow); return (await idleNow(c.page)) && a && !a.pending && d && d.meta.state !== 'running' ? true : null; }, ms, 100);
+    return convNow;
   };
 
   /* ---- E2:额度用尽 */
   {
     const before = await snap();
-    const used = await withCreatorConn(async (conn) => (await agentApi(S.AGENT_DIRECT, conn).call('GET', '/v1/usage')).project?.tokens ?? 0);
+    const usage = (() => { const r = admin('usage', '--project', PID, '--json'); try { return JSON.parse(String(r.stdout).trim().split('\n').at(-1)); } catch { return null; } })();
+    const used = usage?.tokens ?? 0;
     const set = admin('quota', 'set', PID, '--tokens', String(used + 1));
     await sleep(400);
     const conv = await runAndWait(mockSteps([writeStep(1, 'q'), { sleepMs: 300 }, writeStep(4, 'q'), writeStep(7, 'q'), { say: '不会到' }]));
@@ -789,68 +958,74 @@ async function errorsStep() {
     const s = await sane(before, okOf(conv));
     // 再发:被明确拒绝并说明
     await sendText(c.page, mockSteps([{ say: 'x' }]));
-    const notice = await until('E2:再发被拒绝并说明', () => c.page.$eval('[data-pc="cloud-notice"]', (el) => el.textContent ?? '').catch(() => null), 10_000, 100);
+    const notice = await until('E2:再发被拒绝并说明', async () => {
+      const n = await c.page.$eval('[data-pc="cloud-notice"]', (el) => el.textContent ?? '').catch(() => null);
+      if (n) return n;
+      const a = lastAssistant(await msgs(c.page));
+      return a && !a.pending && /额度/.test(String(a.error ?? '')) && (await msgs(c.page)).filter((x) => x.role === 'user').length >= 2 ? `对话里:${a.error}` : null;
+    }, 30_000, 100);
     admin('quota', 'clear', PID);
     await sleep(400);
     await c.page.click('[data-pc="cloud-notice"]').catch(() => {});
+    await until('E2:清掉额度前那一轮收尾', () => idleNow(c.page), 30_000, 100);
     await sendText(c.page, mockSteps([{ say: '额度清掉后恢复' }]));
-    const again = await until('E2:清掉额度后恢复', async () => (lastAssistant(await msgs(c.page))?.text ?? '').includes('额度清掉后恢复'), 30_000, 150);
+    const again = await until('E2:清掉额度后恢复', async () => (lastAssistant(await msgs(c.page))?.text ?? '').includes('额度清掉后恢复'), 60_000, 150);
     check('E2 额度用尽:对话记录里有带已用与上限的原因,已落地的保留;再发被明确拒绝并说明;清掉额度后恢复', set.status === 0 && e.outcome === 'error' && /额度已用完\(已用 \d+ \/ 上限 \d+\)/.test(e.error ?? '') && okOf(conv) >= 1 && okOf(conv) < 3 && s.ok && /额度/.test(String(notice ?? '')) && !!again, {
-      shown: e.error, writesLanded: okOf(conv), ...s, nextRequestNotice: notice, afterClear: !!again,
+      usedBefore: used, shown: e, writesLanded: okOf(conv), recorded: recordOf(conv), ...s, nextRequestNotice: notice, afterClear: !!again,
     });
     await shot(c.page, 'E2-quota-exceeded');
   }
 
-  /* ---- E3:创建者中途关了开关(在项目设置里取消勾选) */
+  /* ---- E3:创建者中途关了开关(在项目设置里取消勾选;账号项目不再验证创建者口令,直接确认) */
   {
-    await until('E3:上一轮收尾', () => idle(c.page), 20_000, 100);
+    await until('E3:上一轮收尾', () => idleNow(c.page), 30_000, 100);
     const before = await snap();
     const conv = await conversationOf(c.page);
     const mark = seqOf(conv);
     await sendText(c.page, writeScript(30, 500, 'sw'));
-    await until('E3:这一轮开始并有写入', async () => okOf(conv, mark) >= 1 && (await view(c.page))?.streaming, 20_000, 80);
+    await until('E3:这一轮开始并有写入', async () => okOf(conv, mark) >= 1 && (await runningNow(c.page)), 40_000, 80);
     await openProjectSettings(c.page);
-    await creatorToggleService(c.page, 'agent', CRED.creator.password);
+    await creatorToggleService(c.page, 'agent', S.account ? null : CRED.creator.password);
     const off = await until('E3:勾选取消', async () => (await hostedToggle(c.page, 'agent'))?.checked === false, 8_000, 150);
     await closeDialogs(c.page);
-    await until('E3:进行中的对话被停下', () => idle(c.page), 10_000, 50);
+    await until('E3:进行中的对话被停下', () => idleNow(c.page), 30_000, 50);
     const e = await errText(c.page);
-    const banner = await c.page.$eval('[data-pc="cloud-off"]', (el) => el.textContent ?? '').catch(() => null);
+    const banner = await until('E3:AI 栏说明已关闭', () => c.page.$eval('[data-pc="cloud-off"]', (el) => el.textContent ?? '').catch(() => null), 10_000, 100);
+    await until('E3:云端记下这一轮收尾', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' ? d : null; }, 30_000, 200);
     const landed = okOf(conv, mark);
     const s = await sane(before, landed);
-    const disk = S.diskConversation(PID, conv);
+    const rec = recordOf(conv);
     await shot(c.page, 'E3-switched-off');
     await openProjectSettings(c.page);
-    await creatorToggleService(c.page, 'agent', CRED.creator.password);
+    await creatorToggleService(c.page, 'agent', S.account ? null : CRED.creator.password);
     await until('E3:勾回来', async () => (await hostedToggle(c.page, 'agent'))?.checked === true, 8_000, 150);
     await closeDialogs(c.page);
-    await until('E3:「已关闭」的说明撤掉', async () => !(await c.page.$('[data-pc="cloud-off"]')), 8_000, 100);
+    await until('E3:「已关闭」的说明撤掉', async () => !(await c.page.$('[data-pc="cloud-off"]')), 15_000, 100);
     await sendText(c.page, mockSteps([{ say: '开关打开后恢复' }]));
-    const again = await until('E3:开关打开后恢复', async () => (lastAssistant(await msgs(c.page))?.text ?? '').includes('开关打开后恢复'), 30_000, 150);
-    check('E3 创建者中途关了开关(项目设置里取消勾选「云端 Agent」):进行中的对话被停下,记录里写明原因,AI 栏说明已关闭;项目停在完好的版本上;勾回来恢复', !!off && e.outcome === 'error' && /已关闭云端 Agent/.test(e.error ?? '') && /项目创建者已关闭云端 Agent/.test(String(banner ?? ''))
-      && disk?.meta?.state === 'revoked' && disk.meta.reason === 'disabled' && landed >= 1 && landed < 30 && s.ok && !!again, { shown: e.error, banner, recorded: disk ? { state: disk.meta.state, reason: disk.meta.reason } : null, writesLanded: landed, ...s, afterReenable: !!again });
+    const again = await until('E3:开关打开后恢复', async () => (lastAssistant(await msgs(c.page))?.text ?? '').includes('开关打开后恢复'), 60_000, 150);
+    check('E3 创建者中途关了开关(项目设置里取消勾选「云端 Agent」):进行中的对话被停下,对话记录里写明原因,AI 栏说明已关闭;项目停在完好的版本上;勾回来恢复', !!off && e.outcome === 'error' && /已关闭云端 Agent/.test(e.error ?? '') && /项目创建者已关闭云端 Agent/.test(String(banner ?? ''))
+      && rec?.outcome?.reason === 'agent-disabled' && landed >= 1 && landed < 30 && s.ok && !!again, { shown: e, banner, recorded: rec, writesLanded: landed, ...s, afterReenable: !!again });
   }
 
-  /* ---- E4:渲染失败(渲染服务停着;Agent 服务重起一遍,把预渲染重试「连续没有进度就放弃」的时限缩短) */
+  /* ---- E4:渲染失败(渲染服务停着) */
   {
-    await until('E4:上一轮收尾', () => idle(c.page), 20_000, 100);
+    await until('E4:上一轮收尾', () => idleNow(c.page), 30_000, 100);
     await S.stopRender();
-    await S.bootAgent({ PROMPTCUT_AGENT_RENDER_STALL_MS: String(RENDER_STALL_MS) });
+    if (!S.account) await S.bootAgent({ PROMPTCUT_AGENT_RENDER_STALL_MS: String(RENDER_STALL_MS) });
     const before = await snap();
     await sleep(1500);
     await c.page.click('[data-pc="cloud-notice"]').catch(() => {});
     let conv = null;
     const mark = seqOf(await conversationOf(c.page));
-    // Agent 服务刚重起:页面的事件流在重连,第一次发送可能撞上;发不出去就再发一次
+    // 发不出去就再发一次(旧组合在这里刚重起过 Agent 服务,页面的事件流在重连)
     for (let i = 0; i < 3 && !conv; i++) {
-      // 这一轮很短:看的是「对话里多了一条用户消息」(服务端收下了),不是「此刻还在跑」
       const usersBefore = ((await msgs(c.page)) ?? []).filter((x) => x.role === 'user').length;
       await sendText(c.page, mockSteps([writeStep(3, `rf${i}`), { sleepMs: 200 }, writeStep(2, `rf${i}`), { say: '改完了,渲染节点不在' }]));
-      const started = await c.page.waitForFunction((n) => (window.__pcCloud?.main?.messages() ?? []).filter((x) => x.role === 'user').length > n, { timeout: 8000 }, usersBefore).then(() => true, () => false);
+      const started = await c.page.waitForFunction((n) => (window.__pcCloud?.main?.messages() ?? []).filter((x) => x.role === 'user').length > n, { timeout: 15_000 }, usersBefore).then(() => true, () => false);
       if (started) conv = await conversationOf(c.page); else { await c.page.click('[data-pc="cloud-notice"]').catch(() => {}); await sleep(1500); }
     }
-    await until('E4:对话照常做完', async () => { const a = lastAssistant(await msgs(c.page)); return a && !a.pending && (a.text ?? '').includes('改完了'); }, 40_000, 150);
-    const failed = await until('E4:对话记录里出现「云端渲染失败」', async () => { const a = lastAssistant(await msgs(c.page)); return (a?.statuses ?? []).find((x) => /云端渲染失败/.test(x)) ?? null; }, RENDER_STALL_MS * 4 + 30_000, 300);
+    await until('E4:对话照常做完', async () => { const a = lastAssistant(await msgs(c.page)); return a && !a.pending && (a.text ?? '').includes('改完了'); }, 60_000, 150);
+    const failed = await until('E4:对话记录里出现「云端渲染失败」', async () => { const a = lastAssistant(await msgs(c.page)); return (a?.statuses ?? []).find((x) => /云端渲染失败/.test(x)) ?? null; }, RENDER_STALL_MS * 3 + 60_000, 500);
     // 气泡末尾常驻的那一行(简洁模式也看得到)
     const note = await until('E4:气泡末尾出现渲染失败的那一行', () => c.page.$eval('[data-pc="cloud-ai-panel"] [data-pc="cloud-render-note"][data-state="failed"]', (el) => el.textContent ?? '').catch(() => null), 10_000, 200);
     const s = await sane(before, 2);
@@ -863,23 +1038,34 @@ async function errorsStep() {
   }
   await closeBrowser(c.browser);
 
-  /* ---- E5:发起成员中途被移出(carol;创建者从另一台设备改名单) */
+  /* ---- E5:发起成员中途被移出(carol;创建者从另一台设备把她踢出)。
+   * 现行语义(product/agent.md「改密退出与被踢的已读消息例外」,2026-10-08 用户定):共有对话里 Agent 已经读到的那条消息触发的这一轮
+   * 继续跑完、改动保留;被踢的账号所有设备都进不了项目(看不了对话、发不了消息、发不起下一轮)。原先断言「她的对话被停下」按此改写。 */
   {
     const before = await snap();
     const carol = await onlineUp(CRED.carol);
     await selectCloud(carol.page);
     await sendText(carol.page, writeScript(30, 500, 'rm'));
-    await until('E5:这一轮开始并有写入', async () => toolParts(await msgs(carol.page)).filter((t) => t.ok).length >= 1 && (await view(carol.page))?.streaming, 20_000, 80);
+    await until('E5:这一轮开始并有写入', async () => toolParts(await msgs(carol.page)).filter((t) => t.ok).length >= 1 && (await runningNow(carol.page)), 40_000, 80);
     const conv = await conversationOf(carol.page);
-    const reply = await withCreatorConn((conn) => adminOp(conn, PROJ, 'set-list', { list: [{ username: 'bob', keep: true }] }));
-    // 她被移出项目:文档服务当场断开她的页面连接,页面被阻断并说明原因;云端的那一轮随她的云端 Agent 连接被关而停下,原因记在云端的对话记录里
-    const disk = await until('E5:服务端记下原因', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' ? d : null; }, 10_000, 100);
-    const blocked = await until('E5:她的页面写明被移出', () => carol.page.evaluate(() => document.body.innerText.match(/[^\n]*(移出|不在名单)[^\n]*/)?.[0] ?? null), 10_000, 100);
-    const recorded = (disk?.events ?? []).find((x) => x.type === 'error') ?? null;
-    const s = await sane(before, okOf(conv));
+    const landedAtKick = () => okOf(conv);
+    const visibility = S.account ? (S.diskConversation(PID, conv)?.row?.visibility ?? null) : null;
+    // 账号项目:创建者把她踢出(移出并禁入,成员列表里「踢出」同一个管理操作);旧组合是改名单
+    const reply = S.account
+      ? await ACTOR.admin({ op: 'kick', accountId: CRED.carol.accountId, requestId: `uxui-kick-${RUN}` }).then((r) => ({ type: r.status === 200 && r.body?.ok ? 'shared.admin.ok' : `http-${r.status}`, body: r.body }))
+      : await withCreatorConn((conn) => adminOp(conn, PROJ, 'set-list', { list: [{ username: 'bob', keep: true }] }));
+    const atKick = landedAtKick();
+    // 她的页面当场被阻断并说明原因
+    const blocked = await until('E5:她的页面写明被踢出', () => carol.page.evaluate(() => document.body.innerText.match(/[^\n]*(踢出|移出|不在名单)[^\n]*/)?.[0] ?? null), 20_000, 100);
+    const sendBox = await carol.page.$('[data-pc="cloud-ai-panel"] [data-pc="ai-send"]:not([disabled])').catch(() => null);
     await shot(carol.page, 'E5-member-removed');
-    check('E5 发起成员中途被移出:她的对话被停下,她的页面写明「已被移出名单」,云端的对话记录里留着原因;项目停在完好的版本上', reply.type === 'shared.admin.ok' && /移出/.test(String(blocked ?? '')) && recorded?.code === 'revoked' && /移出/.test(recorded?.message ?? '') && disk?.meta?.state === 'revoked' && disk.meta.reason === 'removed' && okOf(conv) >= 1 && okOf(conv) < 30 && s.ok, {
-      admin: reply.type, pageSays: blocked, cloudRecordSays: recorded?.message ?? null, recorded: disk ? { state: disk.meta.state, reason: disk.meta.reason } : null, writesLanded: okOf(conv), ...s,
+    // 共有对话里已读的这一轮继续跑完,改动都落地
+    const disk = await until('E5:已读的这一轮在云端跑完', () => { const d = S.diskConversation(PID, conv); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, 600_000, 500); // 被踢之后这一轮每一步都要再核一次权限,跑得比平时慢;时限只为防卡死
+    const rec = recordOf(conv);
+    const landed = okOf(conv);
+    const s = await sane(before, landed);
+    check('E5 发起成员中途被踢出:她的页面当场被阻断并写明被踢出;她在共有对话里已经被 Agent 读到的那一轮照常跑完、改动保留(现行语义的已读消息例外);项目停在完好的版本上', reply.type === 'shared.admin.ok' && /踢出|移出/.test(String(blocked ?? '')) && (visibility === null || visibility === 'shared') && !!disk && rec?.outcome?.status === 'done' && landed > atKick && s.ok, {
+      admin: reply.type, pageSays: blocked, conversationVisibility: visibility, sendStillEnabled: !!sendBox, recorded: rec, writesLanded: { atKick, atEnd: landed }, ...s,
     });
     await closeBrowser(carol.browser);
   }
@@ -892,22 +1078,49 @@ async function errorsStep() {
 /* ================================================================== 用户卡:云端 Agent 建卡并判重,发起方退出后,后来的成员在舞台上贴得上它的预渲染结果 */
 
 async function usercardStep() {
-  const cu = { ula: { username: 'ula', password: pw() }, uma: { username: 'uma', password: pw() } };
+  // 账号组合:两个现注册的账号;ula 在在线页面里自己新建一个云端项目(探针让网站后端把它当托管方管理员,它在「生成轨道流」的权限分组里),
+  // uma 之后经项目链接加入
+  const cu = {
+    ula: await S.register(UC_CREATOR, pw()).then((a) => ({ username: a.name, password: a.password })),
+    uma: await S.register(`uma${randomBytes(3).toString('hex')}`, pw()).then((a) => ({ username: a.name, password: a.password })),
+  };
   const NAME_U = `云端体验用户卡-${RUN}`;
-  const pu = { ...(await createSharedProject({ base: S.DOC_DIRECT, name: NAME_U, mode: 'restricted', creator: cu.ula, list: [cu.uma] })), creator: cu.ula };
-  const UID = pu.projectId;
-  {
-    const seed = await joinAs(S.DOC_WS, pu, { ...cu.ula, as: 'creator' });
-    if (!seed) throw new Error('用户卡一步:探针的创建者连接没建成');
-    nodeConns.add(seed);
-    await putProject(seed, UID, {
-      version: 1, id: UID, name: NAME_U, width: 1920, height: 1080, fps: 30, duration: 2, themeId: 'dark', camera3dFov: 50,
-      media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {}, transitions: [],
-      tracks: [{ id: 'tr-0', name: 'tr-0', hidden: false, clips: [] }, { id: 'tr-1', name: 'tr-1', hidden: false, clips: [{ id: 'clip-builtin', kind: 'card', cardId: 'rank-bars', start: 0, end: 2, params: { title: `用户卡一步 ${SALT}`, rows: '微信,85|抖音,62', suffix: '%' } }] }],
-    });
-    nodeConns.delete(seed);
-    seed.close();
+  const cb = await openBrowser();
+  const cp = await newPage(cb);
+  await accountLogin(cp, S.ORIGIN, cu.ula);
+  let UID = null;
+  // 项目号取自新建的回包;项目链接的口令(创建者才拿得到)取自账号接口回包里的 linkToken(页面「复制项目链接」拼的就是它)
+  let LINK_TOKEN = null;
+  cp.on('response', (r) => { try { const p = new URL(r.url()).pathname; if (!p.startsWith('/hosted/shared/account/') || r.status() >= 300) return; void r.json().then((b) => { if (p === '/hosted/shared/account/create' && r.status() === 201) UID = b.projectId; if (typeof b?.linkToken === 'string') LINK_TOKEN = b.linkToken; }).catch(() => {}); } catch { /* 不是这一条 */ } });
+  await typeIntoField(cp, '[data-pc="cloud-project-name"]', NAME_U);
+  await cp.waitForFunction(() => { const b = document.querySelector('[data-pc="cloud-create"]'); return b && !b.disabled; }, { timeout: 30_000 });
+  await cp.click('[data-pc="cloud-create"]');
+  await acceptConsentIfAsked(cp, 15_000);
+  await cp.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
+  await until('用户卡一步:新建的云端项目回了项目号', () => UID, 30_000, 100);
+  if (!UID) throw new Error('用户卡一步:新建云端项目没回项目号');
+  await gateSettled(cp);
+  // 内容:一条空轨道(Agent 把用户卡的片段加在这里)加一张内置图表卡;在 ula 自己的页面里改(经文档服务同步)
+  await P(cp, (o) => window.__pcStore.actions.editCardProject((p) => ({
+    ...p, width: 1920, height: 1080, fps: 30, duration: 2,
+    tracks: [{ id: 'tr-0', name: 'tr-0', hidden: false, clips: [] }, { id: 'tr-1', name: 'tr-1', hidden: false, clips: [{ id: 'clip-builtin', kind: 'card', cardId: 'rank-bars', start: 0, end: 2, params: { title: o.title, rows: '微信,85|抖音,62', suffix: '%' } }] }],
+  })), { title: `用户卡一步 ${SALT}` });
+  // 新建项目的「云端 Agent」缺省开;打开「托管方的渲染节点」与「生成轨道流」(用户卡的预渲染也只在这一项开着时由托管方产)
+  await openProjectSettings(cp);
+  const agentRow = await until('UC0:项目设置里出现「云端 Agent」一行', () => hostedToggle(cp, 'agent'), 15_000, 200);
+  let renderRow = await hostedToggle(cp, 'render');
+  if (renderRow && !renderRow.checked) {
+    await creatorToggleService(cp, 'render');
+    renderRow = await until('UC0:「托管方的渲染节点」勾上', async () => { const r = await hostedToggle(cp, 'render'); return r?.checked ? r : null; }, 15_000, 200);
   }
+  const streams0 = await until('UC0:渲染节点下面有「生成轨道流」一行', () => hostedOption(cp, 'render', 'streams'), 15_000, 200);
+  if (streams0 && !streams0.checked) await creatorToggleOption(cp, 'render', 'streams');
+  const streamsRow = await until('UC0:「生成轨道流」勾上', async () => { const r = await hostedOption(cp, 'render', 'streams'); return r?.checked ? r : null; }, 15_000, 200);
+  const renderSees = await until('UC0:渲染服务看到这个项目「生成轨道流」开着', async () => ((await S.renderStatus()).projects ?? []).find((p) => p.projectId === UID)?.streams === true, 30_000, 300);
+  check('UC0 第二个创建者(现注册的账号)在在线页面里新建云端项目:「云端 Agent」缺省勾上;打开「托管方的渲染节点」与「生成轨道流」后渲染服务看到开着', !!agentRow?.checked && !!renderRow?.checked && !!streamsRow && !!renderSees, {
+    agent: agentRow, render: renderRow, streams: streamsRow, renderSees: !!renderSees, projectId: UID ? 'sp_…' : null, linkToken: !!LINK_TOKEN,
+  });
+  await closeDialogs(cp);
   // 夹具:只留一个记号、什么都不探的那张用户卡(判重的写法),由云端 Agent 用 create_card 建出来
   const CARD_ID = 'overreach-marker-jia';
   const source = fs.readFileSync(path.join(ROOT, 'scripts', 'probes', 'fixtures', 'render-isolation', 'overreach-marker-jia.tsx'), 'utf8').replace(/\r\n/g, '\n');
@@ -915,7 +1128,7 @@ async function usercardStep() {
   const t0 = Date.now();
 
   /* ---- UC1:创建者在在线浏览器里发起,建卡成功后真实结束他的浏览器 */
-  const c = await onlineUp(cu.ula, { asCreator: true, name: NAME_U });
+  const c = { browser: cb, page: cp };
   await selectCloud(c.page);
   // 建卡要「高」创造力:在 AI 栏的运行选项里给这个对话调(下拉在弹层里,不必弹出来也能选)
   await c.page.select('[data-pc="cloud-ai-panel"] [data-pc="ai-creativity"]', 'high');
@@ -931,7 +1144,7 @@ async function usercardStep() {
   const k = await killBrowser(c.browser);
   browsers.delete(c.browser);
   const disk = () => S.diskConversation(UID, conv);
-  const ended = await until('UC1:建卡的对话在云端跑到结束', () => { const d = disk(); return d && d.meta.state !== 'running' && d.events.some((e) => e.type === 'end') ? d : null; }, 120_000, 300);
+  const ended = await until('UC1:建卡的对话在云端跑到结束', () => { const d = disk(); return d && d.meta.state !== 'running' && d.events.some(isEnd) ? d : null; }, 120_000, 300);
   const renderEvents = () => (disk()?.events ?? []).filter((e) => e.type === 'render');
   await until('UC1:含用户卡的预渲染重试有结局', () => (['done', 'failed', 'unavailable'].includes(renderEvents().at(-1)?.state) ? true : null), 420_000, 500);
   timings.usercardRenderedMs = Date.now() - t0;
@@ -952,16 +1165,26 @@ async function usercardStep() {
   });
 
   /* ---- UC2:之后才上线的成员(另一个浏览器进程):舞台上贴得上这张用户卡的预渲染结果 */
-  const uma = await onlineUp(cu.uma, { name: NAME_U });
+  // uma 经项目链接加入(之后才上线的成员:新的浏览器进程)
+  const ub = await openBrowser();
+  const up = await newPage(ub);
+  await accountLogin(up, S.ORIGIN, cu.uma);
+  await typeIntoField(up, '[data-pc="cloud-project-link"]', `${S.ORIGIN}/editor?project=${encodeURIComponent(UID)}${LINK_TOKEN ? `&token=${encodeURIComponent(LINK_TOKEN)}` : ''}`);
+  await up.waitForFunction(() => { const b = document.querySelector('[data-pc="cloud-join"]'); return b && !b.disabled; }, { timeout: 30_000 });
+  await up.click('[data-pc="cloud-join"]');
+  await acceptConsentIfAsked(up, 8000);
+  await up.waitForSelector('[data-pc="members-button"]', { visible: true, timeout: 60_000 });
+  await gateSettled(up);
+  const uma = { browser: ub, page: up };
   const clip = await until('UC2:uma 的页面读到带用户卡的片段', () => P(uma.page, (cardId) => { const x = window.__pcStore.getState().project.tracks.flatMap((t) => t.clips).find((y) => y.cardId === cardId); return x ? { id: x.id, cardId: x.cardId, start: x.start, end: x.end } : null; }, CARD_ID), 30_000, 200);
   const ids = clip ? [clip.id] : [];
   const play = clip ? await playbackSnapshots(uma.page, 'UC2-uma-stage-usercard', 90_000, ids) : { hit: null, seen: [], shot: null, stats: null };
   const marks = clip ? await localPcMarks(uma.page, ids) : { badge: -1, icons: -1 };
   const layers = await onlineLayers(uma.page);
   const mine = (layers?.layers ?? []).filter((l) => l.clipId === clip?.id);
-  check('UC2 之后才上线的成员(真实浏览器):项目里有这张用户卡的片段,舞台上贴的是它的预渲染结果(快照层在、没有占位),层表里有这一层,没有「需要本地 PC 渲染辅助」', !!clip && !!play.hit && play.hit[clip.id]?.snapshot === true && play.hit[clip.id]?.placeholder === false
+  check('UC2 之后才上线的成员(真实浏览器):项目里有这张用户卡的片段,舞台上贴的是它的预渲染结果(轨道流画出了帧、没有占位),层表里有这一层,没有「需要本地 PC 渲染辅助」', !!clip && !!play.hit && prerendered(play.hit[clip.id]) && play.hit[clip.id]?.placeholder === false
     && mine.some((l) => l.ready > 0) && !(layers?.stale ?? []).includes(clip.id) && marks.icons === 0 && !!play.stats && play.stats.colors >= 2, {
-    clip, stage: clip && play.hit ? { snapshot: play.hit[clip.id].snapshot, snapNodes: play.hit[clip.id].snapNodes ?? null, placeholder: play.hit[clip.id].placeholder } : null, statesSeenWhilePlaying: play.seen,
+    clip, stage: clip && play.hit ? { stream: play.hit[clip.id].stream, snapshot: play.hit[clip.id].snapshot, snapNodes: play.hit[clip.id].snapNodes ?? null, placeholder: play.hit[clip.id].placeholder } : null, statesSeenWhilePlaying: play.seen,
     layers: mine, staleLayers: layers?.stale ?? null, localPcIcons: marks.icons, customCardBadges: marks.badge, pixels: play.stats, shot: play.shot,
   });
   const errors = [...(uma.page.pageErrors ?? [])];
@@ -993,16 +1216,19 @@ async function spacedStep() {
   const delta = (k) => (node?.[k] ?? 0) - (nodeBefore?.[k] ?? 0);
   // 渲染节点逐任务的收尾行:失败与作废各是什么原因(作废 = 这份内容已被新版本取代,不计入失败)
   const reasons = {};
+  let completedInLog = 0;
   for (const l of (S.render?.logs ?? []).slice(logsBefore)) {
-    const m = l?.event === 'worker.line' ? /node\.task-(failed|superseded) (\{.*\})/.exec(String(l.line ?? '')) : null;
+    const m = l?.event === 'worker.line' ? /node\.task-(failed|superseded|completed) (\{.*\})/.exec(String(l.line ?? '')) : null;
     if (!m) continue;
+    // 渲染节点为这个项目做完的任务数:数工作进程逐任务的收尾行(它的诊断计数在工作进程重起后从零开始,前后相减会是负的)
+    if (m[1] === 'completed') { try { if (JSON.parse(m[2]).projectId === PID) completedInLog += 1; } catch { /* 这一行被截断了 */ } continue; }
     try { const j = JSON.parse(m[2]); const k = `${m[1]}|${String(j.id).split(':')[0]}|${String(j.error ?? j.why ?? '').replace(/[0-9a-f]{8,}|sp_[A-Za-z0-9_-]+|clip-[a-z]+|@\d+/g, '~').slice(0, 60)}`; reasons[k] = (reasons[k] ?? 0) + 1; } catch { /* 这一行被截断了 */ }
   }
   check(`K1 写入之间隔 ${SPACED_GAP_MS / 1000} 秒(大于预渲染重试的防抖 3 秒)、连写 ${N} 次:中途就按当时的版本发计划(不等一轮结束),预渲染重试的结局是「渲染完成」,对话记录里没有渲染失败`, fin.toolOk === N && states.filter((x) => x.state === 'published').length >= 3 && states.at(-1)?.state === 'done' && !states.some((x) => x.state === 'failed' || x.state === 'unavailable'), {
     writesLanded: fin.toolOk, published: states.filter((x) => x.state === 'published').length, last: states.at(-1) ?? null, failed: states.filter((x) => x.state === 'failed'), states: states.map((x) => x.state).join(','),
   });
-  check('K2 渲染节点这一轮没有一个任务以失败收场;被新版本取代的旧任务记成作废(不计入失败)', delta('failed') === 0 && delta('completed') + delta('dedup') > 0 && !Object.keys(reasons).some((k) => k.startsWith('failed|')), {
-    renderNode: { failed: delta('failed'), superseded: delta('superseded'), completed: delta('completed'), dedup: delta('dedup'), lost: delta('lost'), discarded: delta('discarded') }, reasons,
+  check('K2 渲染节点这一轮没有一个任务以失败收场;被新版本取代的旧任务记成作废(不计入失败)', completedInLog + Math.max(0, delta('dedup')) > 0 && !Object.keys(reasons).some((k) => k.startsWith('failed|')), {
+    completedInLog, renderNode: { failed: delta('failed'), superseded: delta('superseded'), completed: delta('completed'), dedup: delta('dedup'), lost: delta('lost'), discarded: delta('discarded') }, reasons,
   });
   await shot(c.page, 'K1-spaced-writes');
   await closeBrowser(c.browser);
@@ -1030,11 +1256,14 @@ async function spacedStep() {
 let code = 0;
 try {
   for (const s of STEPS) if (!ALL_STEPS.includes(s)) throw new Error(`不认识的步骤 ${s}`);
-  await setup();
+  if (NEED_OLD) await setupOld();
   if (REAL) {
+    if (NEED_ACCOUNT) await setupAccount();
     await realPass(arg('--real-how', 'online'), 'R');
   } else {
     if (STEPS.includes('desktop')) await leavePass('desktop', 'D', `${SALT}-d`);
+    // 桌面版那一遍之后换到账号组合(云端项目一律走网站账号;在线构建只认账号项目)
+    if (NEED_ACCOUNT) await setupAccount();
     if (STEPS.includes('online')) await leavePass('online', 'O', `${SALT}-o`);
     if (STEPS.includes('stop')) await stopStep();
     if (STEPS.includes('spaced')) await spacedStep();
@@ -1048,8 +1277,10 @@ try {
   for (const b of [...browsers]) await closeBrowser(b).catch(() => {});
   for (const d of [...desktops]) await killDesktop(d).catch(() => {});
   for (const c of [...nodeConns]) { try { c.close(); } catch { /* 已关 */ } }
+  await ACTOR?.close().catch(() => {});
   // `--keep`:几个服务自己的日志一并留在临时目录里(排查用;日志里没有口令与票据原文)
   if (KEEP && S) {
+    if (S.account) { try { fs.writeFileSync(path.join(TMP, 'account-fixture.log'), S.fixture.log.map((x) => JSON.stringify(x)).join(String.fromCharCode(10))); fs.writeFileSync(path.join(TMP, 'publisher.log'), S.publisherLogs.map((x) => JSON.stringify(x)).join(String.fromCharCode(10))); } catch { /* 留不下就算了 */ } }
     for (const [name, proc] of [['render', S.render], ['agent', S.agent], ['hosted', S.hosted]]) {
       try { if (proc?.text) fs.writeFileSync(path.join(TMP, `${name}.log`), proc.text()); } catch { /* 留不下就算了 */ }
     }
