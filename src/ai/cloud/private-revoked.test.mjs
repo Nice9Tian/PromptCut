@@ -211,3 +211,38 @@ test("PRIV-10 设为私有被撤销后刷新/重新打开(404 no-conversation)�
     s.close();
   }
 });
+
+test("PRIV-9 创建者关了云端 Agent(流里 access.revoked 带 reason=agent-disabled)：正文清掉,对话里留一条写明原因的出错消息,提示用「已关闭」那句,不说无权读取", async () => {
+  const { s, store } = open([{ events: [...content, { type: "access.revoked", reason: "agent-disabled" }], then: "hang" }]);
+  await waitFor(() => s.getView().problem === "项目创建者已关闭云端 Agent。");
+  const messages = store.get();
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, "assistant");
+  assert.equal(messages[0].outcome, "error");
+  assert.equal(messages[0].pending, false);
+  assert.match(messages[0].error, /项目创建者已关闭云端 Agent/);
+  assert.match(messages[0].error, /已经落地的改动保留在项目里/);
+  s.close();
+});
+
+test("PRIV-10 同一条 access.revoked 不带 reason(被踢、设私有):仍是清空,不出这条消息", async () => {
+  const { s, store } = open([{ events: [...content, { type: "access.revoked" }], then: "hang" }]);
+  await waitFor(() => s.getView().problem === REVOKED);
+  assert.equal(store.get().length, 0);
+  s.close();
+});
+
+test("STREAM-1 队列里当前这一轮已被领走(preparing)但还没有任何事件:streaming 为真,与输入框一致;这一轮结清后为假", async () => {
+  const prep = { type: "queue.state", conversationId: "c-1", queueRevision: 1, aclRevision: 0, currentRunId: "run_x",
+    items: [{ messageId: "m1", arrivalSeq: 1, state: "preparing", position: null, runId: "run_x" }] };
+  const done = { type: "queue.state", conversationId: "c-1", queueRevision: 2, aclRevision: 0, currentRunId: null,
+    items: [{ messageId: "m1", arrivalSeq: 1, state: "done", position: null, runId: "run_x", outcome: { status: "failed", reason: null } }] };
+  const { s } = open([{ events: [prep], then: "hang" }]);
+  await waitFor(() => s.getView().queue?.currentRunId === "run_x");
+  assert.equal(s.getView().streaming, true);
+  s.close();
+  const after = open([{ events: [prep, done], then: "hang" }]);
+  await waitFor(() => after.s.getView().queue?.currentRunId === null && after.s.getView().queue?.queueRevision === 2);
+  assert.equal(after.s.getView().streaming, false);
+  after.s.close();
+});
