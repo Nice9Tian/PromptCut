@@ -108,3 +108,25 @@ test("对话空闲时排第一的不算排队：不进队列，气泡下写「�
   assert.equal(isIdleHead(busy, busy.items[1]), false, "前面有一轮在跑：第一位照旧算排队");
   assert.deepEqual(markWaitingFromQueue(marked, busy).map((m) => m.sendState), [undefined, undefined]);
 });
+
+test("额度已用完,发送被服务端当场拒(429 quota-exceeded):气泡标「没有发出去」带「已用 N / 上限 M」,没有助手消息、不在跑、队列空——输入框回到空闲;再发一条能正常发出", async () => {
+  const said = "这个项目的云端 Agent 额度已用完(已用 603 / 上限 602)。请联系托管方。";
+  let refuse = true;
+  const f = fakeApi({ sendImpl: async () => { if (refuse) throw new CloudError("quota-exceeded", said, 429); return { runId: null, seq: 1, messageId: "m1", queuePosition: 1, queueRevision: 1 }; } });
+  const store = fakeStore();
+  const session = createCloudSession({ api: f.api, store, accountMode: true, flushMs: 0, backoff: () => 5 });
+  session.open("c1");
+  await until(f.ready);
+  const id = session.stage("接着改");
+  await assert.rejects(session.send({ prompt: "接着改" }, undefined, { staged: id }), { code: "quota-exceeded", status: 429, message: said });
+  const m = store.get()[0];
+  assert.equal(m.sendState, "failed");
+  assert.match(m.error, /没有发出去：这个项目的云端 Agent 额度已用完\(已用 603 \/ 上限 602\)/);
+  assert.equal(store.get().some((x) => x.role === "assistant"), false, "被拒的消息没有开出一轮");
+  assert.equal(session.getView().streaming, false, "不在跑:输入框是「发送」不是「停止/排队」");
+  assert.equal(session.getView().queue, null);
+  refuse = false;
+  const again = session.stage("接着改");
+  await session.send({ prompt: "接着改" }, undefined, { staged: again });
+  assert.deepEqual(store.get().map((x) => [x.text, x.sendState]), [["接着改", "accepted"]], "额度恢复后再发:旧的失败气泡撤掉,只剩新的这一条");
+});

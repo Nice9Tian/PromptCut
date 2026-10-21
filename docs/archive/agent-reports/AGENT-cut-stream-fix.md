@@ -9,8 +9,8 @@
 ## 取证来源
 
 - 线上只读（ssh，只读文件和日志，没改任何东西）：文档服务里这个项目的真身 `…/tenants/sp_pqqwrqehp6yw34mextkkc24vwv/projects/*.state-*.json`（rev 41）、共享成本记录 `costs/*.ndjson`、Agent 对话 `cc-mvfw3j7c-eqwh` 的 `history.json`、`/var/log/syslog`、渲染服务 `/root/.pm2/logs/promptcut-render-out-6.log`。
-- 项目真身拷到本机做复现：`docs/reports/assets/cut-stream-fix/project41.json`（剪辑1 激活；剪辑段 `k-mvfskg83-2` 0–3 秒引用剪辑2；剪辑2 里组合卡 `c-mvfsjn5m-1` 和粒子卡 `c-mvhdf6ef-2`；剪辑1 里 `particles-parallax` `c-mvgz82ix-2` 4–7 秒）。
-- 复现脚本（放在 `out/cut-stream-fix/` 下跑，`out/` 不入库；入库的副本在 `docs/reports/assets/cut-stream-fix/`，路径按 `out/cut-stream-fix/` 写的）：
+- 项目真身拷到本机做复现：`docs/archive/agent-reports/assets/cut-stream-fix/project41.json`（剪辑1 激活；剪辑段 `k-mvfskg83-2` 0–3 秒引用剪辑2；剪辑2 里组合卡 `c-mvfsjn5m-1` 和粒子卡 `c-mvhdf6ef-2`；剪辑1 里 `particles-parallax` `c-mvgz82ix-2` 4–7 秒）。
+- 复现脚本（放在 `out/cut-stream-fix/` 下跑，`out/` 不入库；入库的副本在 `docs/archive/agent-reports/assets/cut-stream-fix/`，路径按 `out/cut-stream-fix/` 写的）：
   - `repro.mjs`：dev server（29300，舞台 29301/29302）+ 编辑器，载入项目，等测量完，打印分派表、身份、成本记录，再跳到 1.5 / 5.5 / 2.5 秒，各录 10 秒长任务；`--browser` 打开在线浏览器模式（`platform=browser`）。
   - `repro-online.mjs`：在线构建（`vite build --mode online`）+ 本机托管组合（文档服务 29303、素材服务 29304）+ 跨源双舞台（`s1/s2.pc.localhost:29301/29302`），成员页面进项目后同上。
   - `repro-online2.mjs --desk`：再加一台桌面预渲染进程当切分方（29305～29307），先切到剪辑2、把粒子卡钉重让它按原始 id 产出流，再取消钉重、切回剪辑1 —— 照线上那一刻的状态（就绪索引里有原始 id 的流、剪辑段里的虚拟卡判轻）。

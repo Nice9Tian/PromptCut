@@ -1,5 +1,5 @@
 /**
- * 同一条流的稀疏版任务与满密度任务并发推同一个结果键(线上 2026-10-21,`docs/reports/AGENT-cut-stream-fix.md` 缺陷 4):
+ * 同一条流的稀疏版任务与满密度任务并发推同一个结果键(线上 2026-10-21,`docs/archive/agent-reports/AGENT-cut-stream-fix.md` 缺陷 4):
  * 稀疏任务列完清单之后,满密度那一趟换掉某一段、旧的稀疏分段文件被删,稀疏任务推这一段时不该 ENOENT。
  *
  *   SPR1  collectStreamResult 之后删掉一个分段文件(模拟 `storeSegment` 5 秒后删被替换的分段):pushResult 照样推齐,

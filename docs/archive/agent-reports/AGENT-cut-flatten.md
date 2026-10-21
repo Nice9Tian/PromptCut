@@ -40,7 +40,7 @@
 
 ## 文件清单（相对 main `16005ae4`）
 
-新增：`src/kernel/cutFlatten.mjs`、`src/kernel/cutFlatten.d.mts`、`src/kernel/cutFlatten.test.mjs`、`server/test/cut-flatten-streams.test.mjs`、`scripts/probes/cut-flatten-probe.mjs`、本报告、`docs/reports/assets/cut-flatten/**`。
+新增：`src/kernel/cutFlatten.mjs`、`src/kernel/cutFlatten.d.mts`、`src/kernel/cutFlatten.test.mjs`、`server/test/cut-flatten-streams.test.mjs`、`scripts/probes/cut-flatten-probe.mjs`、本报告、`docs/archive/agent-reports/assets/cut-flatten/**`。
 
 修改：`server/{artifact-transfer.mjs,card-cache.mjs,frame-stream.mjs,ready-index.mjs,render-node/split.mjs}`、`src/{ExportView.tsx,StageView.tsx}`、`src/editor/{Preview.tsx,browserNodeHost.ts,costIdentity.ts,planDispatch.ts,probeRunner.ts,snapshotFeed.ts,stageSwap.ts}`、`src/export/streamFrames.ts`、`src/kernel/{cutIdentity.mjs,cutIdentity.d.mts,cutSegments.ts}`、`src/online/pageStreamPlan.ts`、`src/render/{CutSegmentScene.tsx,FrameScene.tsx,Stage.tsx,cardCostKey.mjs,cardCostKey.d.mts,layerInputSig.mjs,snapshotSource.ts,streamInputSig.mjs,streamPlanRules.mjs,streamPlanRules.d.mts,streamPlayer.ts}`、测试替身 `src/editor/{c10a-swap-gate,stageSwap,stageSwapBaseline}.test.mjs`（去掉 `cutStreamHeavy`）、探针 `scripts/probes/cut-online-e2e-probe.mjs`（改逐卡口径）、语义两本。
 
@@ -58,8 +58,8 @@
 | 导出确定性 | `node .worktrees/_export-baseline/baseline-driver.mjs --tree <本树> --port 5444 --mode determinism-default`（即 `verify-determinism.mjs --url <它起的 dev server>/?export=1`） | 退出码 0；Identical 1800、Different 0 |
 | 快照重放一致 | 同上 `--mode unified`（即 `verify-unified-frames.mjs`） | 退出码 0；PASS |
 | 与 main 的导出像素比对 | `bash .worktrees/_export-baseline/check.sh <本树> cut-flatten 5447` | 退出码 0；240 帧，对 89c15177 第二种结果（A）240/240 逐字节相同，PASS（不含剪辑段的项目像素不变） |
-| 逐卡探针（新） | `node scripts/probes/cut-flatten-probe.mjs --port 5440 --out docs/reports/assets/cut-flatten/pipeline` | 退出码 0，`fails: []`，见下 |
-| 在线端到端（改逐卡口径） | `node scripts/probes/cut-online-e2e-probe.mjs --dist <会话临时目录>/dist-online --base-port 5443 --out docs/reports/assets/cut-flatten/online`（在线构建取自 `f7f4a025`） | 退出码 0，`fails: []`，见下 |
+| 逐卡探针（新） | `node scripts/probes/cut-flatten-probe.mjs --port 5440 --out docs/archive/agent-reports/assets/cut-flatten/pipeline` | 退出码 0，`fails: []`，见下 |
+| 在线端到端（改逐卡口径） | `node scripts/probes/cut-online-e2e-probe.mjs --dist <会话临时目录>/dist-online --base-port 5443 --out docs/archive/agent-reports/assets/cut-flatten/online`（在线构建取自 `f7f4a025`） | 退出码 0，`fails: []`，见下 |
 | 上一轮剪辑段界面、面板探针 | `cut-nesting-ui-probe.mjs`、`cut-segment-panel-probe.mjs --origin http://127.0.0.1:5440` | 退出码 0、0；面板 P1～P9、L1、E0 全过 |
 
 没跑：剪辑段声音、有声卡导出、兼容旁路三个探针——本次没碰声音与导出取帧，导出确定性与像素比对已覆盖画面；在线 visuhive.com 实测（不碰生产节点）。
@@ -75,7 +75,7 @@
 
 **在线端到端**（本机隔离托管组合 + 在线构建 + 桌面预渲染进程当切分方；两层嵌套里那张 `punch-pill`，虚拟 id V）：加 S 只多出一条成本记录（就是 V 自己的，钉重）；层表里 V 一行 `kind: card`、`plane: local`、带 `inputSig`、没有 `streamKind`，第一帧 6、分段 0～3 满密度；父页判 V 重、流平面挂在包裹层里，S 本身不判重；播放 26/28 个样本画的是这条流、嵌套包裹层一直抑制、零错误；改「里」那张卡的文字：12 ms 内不再发旧流平面，在线来源把它列进 `staleStreams`，没有占位、活渲，旧流没再贴上；新流重产（新内容键、新签名）后贴上 26/27；另一个 8 秒剪辑段 L 里同一张卡各自一行（16 段）、开播 1.1 秒起贴流；页面零报错。
 
-看过的图（`docs/reports/assets/cut-flatten/`）：`pipeline/stage-stream-47.png`（两张重卡贴流、轻卡活渲，与 `pipeline/export-*.png` 的活渲导出一致）、`pipeline/stage-stream-75.png`、`pipeline/stage-placeholder-75.png`（没流时那张卡显示占位）、`online/play-v1.png`、`online/after-edit-live.png`、`online/play-v2.png`、`online/play-long.png`。
+看过的图（`docs/archive/agent-reports/assets/cut-flatten/`）：`pipeline/stage-stream-47.png`（两张重卡贴流、轻卡活渲，与 `pipeline/export-*.png` 的活渲导出一致）、`pipeline/stage-stream-75.png`、`pipeline/stage-placeholder-75.png`（没流时那张卡显示占位）、`online/play-v1.png`、`online/after-edit-live.png`、`online/play-v2.png`、`online/play-long.png`。
 
 ## 用户看得出的区别（请审）
 

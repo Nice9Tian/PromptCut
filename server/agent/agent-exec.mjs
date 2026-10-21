@@ -33,7 +33,7 @@ export const AGENT_EXEC_DEFAULTS = Object.freeze({
    * 提交按项目排队落地(账号项目要过顺序服务与授权核对),渲染节点、看画面同时在跑时一次可以排上几十秒;
    * 文档服务按 opId 去重 —— 已经落地的回 `project.op.ok`(`duplicate: true`)、还在排队的排在它后面一起落 ——
    * 所以重发不会落两次,只是把「这一次到底落没落」问清楚。线上 2026-10-21:switch_cut 第一次等了 15 秒没回包就报失败,
-   * 其实约 60 秒后落地了(`docs/reports/AGENT-cut-stream-fix.md` 缺陷 5)。
+   * 其实约 60 秒后落地了(`docs/archive/agent-reports/AGENT-cut-stream-fix.md` 缺陷 5)。
    */
   opResends: 4,
   /** 页面侧工具写了项目:等这些提交出现在副本里 */
