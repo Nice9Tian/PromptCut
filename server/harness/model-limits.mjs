@@ -55,12 +55,20 @@ export function modelOutputLimit(model) {
   return null;
 }
 
-/** 这一次请求真正发出去的输出上限 */
+/**
+ * 这一次请求真正发出去的输出上限:min(模型上限, 配置上限, 按实测速度算的上限)。
+ * 第三项是 `cfg.outputCap`(一个回数字的函数,`runners/api.mjs` 按 `output-speed.mjs` 给;让一次请求在网关约 300 秒掐断之前写完,
+ * 2026-10-22 用户定),没给就不算。
+ */
 export function resolveMaxOutput(cfg) {
   const known = modelOutputLimit(cfg?.model);
   const configured = Number(cfg?.maxTokens);
-  if (!Number.isFinite(configured) || configured <= 0 || configured === LEGACY_DEFAULT_MAX_TOKENS) return known ?? UNKNOWN_OUTPUT_TOKENS;
-  return known ? Math.min(Math.floor(configured), known) : Math.floor(configured);
+  const base = (!Number.isFinite(configured) || configured <= 0 || configured === LEGACY_DEFAULT_MAX_TOKENS)
+    ? (known ?? UNKNOWN_OUTPUT_TOKENS)
+    : (known ? Math.min(Math.floor(configured), known) : Math.floor(configured));
+  let speedCap = null;
+  try { speedCap = typeof cfg?.outputCap === 'function' ? Number(cfg.outputCap()) : null; } catch { speedCap = null; }
+  return Number.isFinite(speedCap) && speedCap > 0 ? Math.min(base, Math.floor(speedCap)) : base;
 }
 
 /**

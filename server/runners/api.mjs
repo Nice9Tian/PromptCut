@@ -33,6 +33,24 @@ import { buildTools } from '../harness/tools/index.mjs';
 import { resolveMaxOutput } from '../harness/model-limits.mjs';
 import { createCodeCacheStore } from '../tools/code-cache.mjs';
 import { createRetryingFetch } from '../harness/retry-fetch.mjs';
+import { outputSpeedBookFor, withOutputSpeed } from '../harness/output-speed.mjs';
+
+/**
+ * 本机的速度记录放哪(按速度设单次输出上限,harness/output-speed.mjs):和 ai.json、审查教训同目录。
+ * `opts.outputSpeedFile` 写 'local' 时用它(本机编辑器那条路这样传);云端宿主给自己的绝对路径;都没给就只记在内存里。
+ */
+export function localOutputSpeedFile() {
+  const dir = process.env.PROMPTCUT_AI_CONFIG
+    ? path.dirname(process.env.PROMPTCUT_AI_CONFIG)
+    : path.join(process.env.LOCALAPPDATA || os.homedir(), 'promptcut');
+  return path.join(dir, 'output-speed.json');
+}
+
+/**
+ * 还没收到任何数据就被网关断开的那几句(流已经出过数据的按截断处理,不会走到这里,见 providers/base.mjs):
+ * 和超时一样可以接着说 —— 上下文都在历史里,只是这一次没拿到回复。
+ */
+const STREAM_DROPPED = /upstream stream ended|before the response was complete|响应流提前结束|terminated|other side closed|socket hang up/i;
 import { withIdleTimeout } from '../harness/idle-timeout.mjs';
 
 /**
@@ -296,7 +314,18 @@ export function startRun(opts) {
         },
       },
     );
-    const provider = providerModule.createProvider(cfg, { fetchImpl: retryingFetch });
+    // 输入预算按不加速度上限时的输出上限算(这一轮里速度上限会变,按最大的那个留余量)
+    const maxOutput = resolveMaxOutput(cfg);
+    /*
+     * 按实测速度给单次输出设上限(2026-10-22 用户定:「按实测速度给单次输出设上限」):让一次请求在网关约 300 秒掐断之前写完。
+     * 速度记录按模型存(harness/output-speed.mjs),每次请求后按用量记一笔;模拟 provider 不算。
+     */
+    const speedFile = opts.outputSpeedFile === 'local' ? localOutputSpeedFile()
+      : (typeof opts.outputSpeedFile === 'string' && path.isAbsolute(opts.outputSpeedFile) ? opts.outputSpeedFile : null);
+    const speedBook = cfg.vendor === 'mock' ? null : outputSpeedBookFor(speedFile, { log: (m) => console.error(m) });
+    if (speedBook) cfg = { ...cfg, outputCap: () => speedBook.capFor(cfg.model) };
+    const rawProvider = providerModule.createProvider(cfg, { fetchImpl: retryingFetch });
+    const provider = speedBook ? withOutputSpeed(rawProvider, speedBook, cfg.model) : rawProvider;
     /*
      * 轮次上限:常规 24 轮;「深度自主」开着时换成设置里的「自主轮次」(opts.maxRounds),
      * 那个值为 0 表示不限 —— 在这里变成 Infinity,循环就没有终点了。
@@ -304,9 +333,9 @@ export function startRun(opts) {
     const maxIterations = opts.deepAuto
       ? (opts.maxRounds === 0 ? Infinity : Number(opts.maxRounds) || 300)
       : 24;
-    // 单次输出上限:配置里的 maxTokens 是上限的上限,真正发的数按模型定(harness/model-limits.mjs,A07 2026-10-22)
-    const maxOutput = resolveMaxOutput(cfg);
-    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, effort: cfg.effort || '(默认)', maxTokens: cfg.maxTokens, maxOutput, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
+    // 单次输出上限:配置里的 maxTokens 是上限的上限,真正发的数按模型定(harness/model-limits.mjs,A07 2026-10-22);
+    // 再按实测速度压一道(上面的 speedBook),每次请求实际发的数见 `output-speed` 诊断
+    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, effort: cfg.effort || '(默认)', maxTokens: cfg.maxTokens, maxOutput, speedCap: speedBook ? speedBook.capFor(cfg.model) : null, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
     /*
      * 代码块空间(server/tools/code-cache.mjs):目录由宿主给(`opts.codeCacheDir`,按项目);没给就放在这个对话的历史文件旁边,
      * 只在这个对话里有效。建不出来(目录写不了)就不给这组工具,这一轮照常跑。
@@ -427,7 +456,11 @@ export function startRun(opts) {
          * 连红字都不给,用户只看到对话无声停住。所以判「是不是用户停的」只认
          * abortController.signal.aborted 这一个真凭据。
          */
-        const isTimeout = err.name === 'TimeoutError' || /timeout|timed out|aborted due to timeout/i.test(msg);
+        /*
+         * 流已经出过数据之后被网关掐断的,在 harness 里按截断处理、让模型接着写(stream-cut,2026-10-22),不会走到这里;
+         * 走到这里的是还没收到数据就断了的,和超时一样可以接着说。截断次数超限的那句不在里面(那是明说没做成)。
+         */
+        const isTimeout = err.name === 'TimeoutError' || /timeout|timed out|aborted due to timeout/i.test(msg) || STREAM_DROPPED.test(msg);
         safeOnEvent(isTimeout ? {
           type: 'error',
           message: msg,

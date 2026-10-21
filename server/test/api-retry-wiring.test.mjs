@@ -164,12 +164,17 @@ test('b. 单次尝试触发 withIdleTimeout(外部 signal 未 abort)时自动重
   assert.equal(stopEvents.find((e) => e.type === 'error'), undefined, '用户点停止不报 error');
 });
 
-test('c. SSE 流已经吐出一半 text_delta 后再收到 parsed.error 或断流时,绝不重试,直接报错', async () => {
+test('c. SSE 流已经吐出一半 text_delta 后再收到 parsed.error 或断流时,绝不重发同一请求;按「被网关中途掐断」收尾、让模型接着做(stream-cut 2026-10-22)', async () => {
+  /*
+   * 2026-10-22 用户定:「中途被网关掐断按截断处理(保住半截参数、走代码块续写)」。原来这里断言「直接报错」;
+   * 现在同一请求仍然绝不重发(重试层不碰已经出过内容的流),但这一轮不再当错误:已经说的话保留,下一次请求是新的一轮,
+   * 带着「被网关中途掐断」的提示。这里每次都在同一处断、什么也没留下,连续 3 次之后明说没做成。
+   */
   // 场景 1:吐出一半 text_delta 后收到 parsed.error
-  let calls1 = 0;
+  const bodies1 = [];
   const events1 = await run({
-    fetchImpl: async () => {
-      calls1++;
+    fetchImpl: async (_url, init) => {
+      bodies1.push(String(init?.body ?? ''));
       return sseChunks([
         `data: ${JSON.stringify({ choices: [{ delta: { content: '已经说了一半' } }] })}\n\n`,
         'data: {"error":{"message":"The upstream service timed out. Please try again later."}}\n\n',
@@ -177,18 +182,20 @@ test('c. SSE 流已经吐出一半 text_delta 后再收到 parsed.error 或断�
     },
     retryForTest: { baseDelayMs: 5, maxDelayMs: 10 },
   });
-  assert.equal(calls1, 1, '已经产出 text_delta 后收到 SSE error 绝不重发');
+  assert.equal(bodies1.length, 3, '每次都是新的一轮(连续 3 次没留下内容就停),不是重试层重发');
+  assert.equal(new Set(bodies1).size, 3, '三次请求内容各不相同:后一次带着掐断的提示');
+  assert.match(bodies1[1], /网关中途掐断/);
   const text1 = events1.filter((e) => e.type === 'text').map((e) => e.delta).join('');
-  assert.equal(text1, '已经说了一半');
+  assert.equal(text1, '已经说了一半'.repeat(3));
   const err1 = events1.find((e) => e.type === 'error');
-  assert.ok(err1, '应直接报出 error 事件');
-  assert.match(err1.message, /upstream service timed out/i);
+  assert.ok(err1, '连续掐断超限要报错');
+  assert.match(err1.message, /连续 3 次被网关中途掐断/);
 
   // 场景 2:吐出一半 text_delta 后流异常断开(未收到 finish_reason)
-  let calls2 = 0;
+  const bodies2 = [];
   const events2 = await run({
-    fetchImpl: async () => {
-      calls2++;
+    fetchImpl: async (_url, init) => {
+      bodies2.push(String(init?.body ?? ''));
       return sseChunks([
         `data: ${JSON.stringify({ choices: [{ delta: { content: '半截话' } }] })}\n\n`,
         new Error('socket hang up'),
@@ -196,10 +203,9 @@ test('c. SSE 流已经吐出一半 text_delta 后再收到 parsed.error 或断�
     },
     retryForTest: { baseDelayMs: 5, maxDelayMs: 10 },
   });
-  assert.equal(calls2, 1, '已经产出 text_delta 后断流绝不重发');
-  const err2 = events2.find((e) => e.type === 'error');
-  assert.ok(err2, '断流应直接报错');
-  assert.match(err2.message, /socket hang up/i);
+  assert.equal(new Set(bodies2).size, bodies2.length, '断流后不重发同一请求');
+  assert.ok(events2.some((e) => e.type === 'diagnostic' && e.stage === 'stream-cut' && e.data?.how === 'connection'));
+  assert.match(events2.find((e) => e.type === 'error')?.message ?? '', /被网关中途掐断/);
 });
 
 test('d. SSE 流首包返回不可重试错误(如 invalid api key / invalid argument)时不白白重试', async () => {

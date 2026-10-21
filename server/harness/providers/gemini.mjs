@@ -1,6 +1,6 @@
 // 对应 claude-quickstarts/agents/providers/gemini.py
 // 本家 API 要点: GenerateContent 接口，role 为 user/model，工具用 functionDeclarations/functionCall/functionResponse，SSE 解析 candidates。
-import { readSse, assertOk } from './base.mjs';
+import { readSse, assertOk, STREAM_CUT, isCutReadError, streamCutNotice } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
 import { resolveMaxOutput, lowerOutputAfter400 } from '../model-limits.mjs';
 import { noteOutputFallback, asRead } from './output-fallback.mjs';
@@ -111,7 +111,9 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         body.tools = [{ functionDeclarations: geminiTools }];
       }
 
-      const post = (b) => fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(b), signal });
+      /** 最后一次真正发出请求的时刻(按速度设上限时算用时用,见 harness/output-speed.mjs) */
+      let sentAt = Date.now();
+      const post = (b) => { sentAt = Date.now(); return fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(b), signal }); };
 
       let response = await post(body);
 
@@ -143,12 +145,19 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       }
 
       await assertOk(response, 'gemini');
+      yield { type: 'response_open', sentAt };
 
       let promptTokens = 0;
       let candidatesTokens = 0;
+      let thoughtsTokens = 0;
       let stopReason = null;
       let sawCandidate = false;
+      /** 流已经出过内容(文字、思考、工具调用):之后再断就按截断收尾(STREAM_CUT),见 base.mjs */
+      let started = false;
+      /** 流在 finishReason 之前断了:{ how, detail } */
+      let cut = null;
 
+      try {
       for await (const { event, data } of readSse(response, { signal })) {
         if (!data || data === '[DONE]') continue;
         let parsed;
@@ -159,12 +168,18 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         }
 
         if (event === 'error' || parsed.type === 'error' || parsed.error) {
-          throw new Error(typeof parsed.error === 'string' ? parsed.error : (parsed.error?.message || parsed.message || 'API 流返回错误'));
+          const message = typeof parsed.error === 'string' ? parsed.error : (parsed.error?.message || parsed.message || 'API 流返回错误');
+          if (stopReason) break; // 已经正常收尾,后面来的错不影响这次回复
+          // 流已经出过内容之后来的 error(网关中途掐断):按截断收尾,已经收到的文字和整块到达的工具调用都保留
+          if (!started) throw new Error(message);
+          cut = { how: 'error-event', detail: message };
+          break;
         }
 
         const candidate = parsed.candidates?.[0];
         if (candidate) {
           sawCandidate = true;
+          if (candidate.content?.parts?.length) started = true;
           if (candidate.content?.parts) {
             for (const part of candidate.content.parts) {
               /*
@@ -200,14 +215,32 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           if (parsed.usageMetadata.candidatesTokenCount !== undefined) {
              candidatesTokens = parsed.usageMetadata.candidatesTokenCount;
           }
+          // 思考 token 不在 candidatesTokenCount 里,单独报;只给按速度设上限用(output-speed.mjs),用量照旧只记 output
+          if (parsed.usageMetadata.thoughtsTokenCount !== undefined) {
+             thoughtsTokens = Number(parsed.usageMetadata.thoughtsTokenCount) || 0;
+          }
         }
+      }
+      } catch (err) {
+        // 连接在流中途被断:出过内容、还没收尾的按截断收尾;别的照旧抛
+        if (!isCutReadError(err, signal) || (!started && !stopReason)) throw err;
+        if (!stopReason) cut = { how: 'connection', detail: err?.message || String(err) };
+      }
+
+      if (!stopReason && !cut && started && !signal?.aborted) cut = { how: 'no-finish', detail: '流在 finishReason 之前结束' };
+      if (cut) {
+        // Gemini 的工具调用整块到达,没有写了一半的调用可保;已经收到的照常执行,文字保留
+        yield streamCutNotice('gemini', cut.how, cut.detail);
+        yield { type: 'usage', input: promptTokens, output: candidatesTokens, ...(thoughtsTokens ? { thoughts: thoughtsTokens } : {}) };
+        yield { type: 'stop', reason: STREAM_CUT };
+        return;
       }
 
       if (!sawCandidate && !stopReason && !signal?.aborted) {
         throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
       }
 
-      yield { type: 'usage', input: promptTokens, output: candidatesTokens };
+      yield { type: 'usage', input: promptTokens, output: candidatesTokens, ...(thoughtsTokens ? { thoughts: thoughtsTokens } : {}) };
       /*
        * 出错的收尾不能伪装成正常结束。以前一律 yield 'stop',上层就以为这轮好好讲完了 ——
        * 而 MALFORMED_FUNCTION_CALL(模型把工具调用写坏了)、SAFETY / RECITATION(被拦下)

@@ -974,6 +974,8 @@ export function createAgentInstance(env) {
           // 代码块空间按项目放在工作目录下(server/tools/code-cache.mjs,A07 2026-10-22);没绑项目时是 local 那一份
           codeCacheDir: path.join(cwd, 'code-cache', String(currentProjectKey() || 'local').replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^\.+/, '_') || 'local'),
           codeCacheWriter: agentId || sessionId,
+          // 按实测速度设单次输出上限的速度记录:本机放在 ai.json 同目录(runners/api.mjs 的 localOutputSpeedFile)
+          outputSpeedFile: 'local',
           model,
           /*
            * 深度自主:轮次上限换成设置里的「自主轮次」(ai.json 的 deepAutoRounds,
@@ -1611,6 +1613,8 @@ export function createAgentInstance(env) {
           // 代码块空间(A07):宿主按项目给的目录;没给时 api 运行器放在这个对话的历史文件旁边
           ...(typeof o.codeCacheDir === 'string' && o.codeCacheDir ? { codeCacheDir: o.codeCacheDir } : {}),
           codeCacheWriter: agentId,
+          // 速度记录(按实测速度设单次输出上限):宿主给的文件;任务进程每轮新开一代,记录要放在各代都读得到的地方
+          ...(typeof o.outputSpeedFile === 'string' && o.outputSpeedFile ? { outputSpeedFile: o.outputSpeedFile } : {}),
           ...(Number(o.historyMaxBytes) > 0 ? { historyMaxBytes: Number(o.historyMaxBytes) } : {}),
           cwd: null,
           model: o.model,
