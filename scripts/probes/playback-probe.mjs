@@ -1,9 +1,12 @@
 /**
- * R5「播放与追帧」的验收探针（K3 / K4 / K5 / K6）。
+ * R5「播放与追帧」的验收探针（K3 / K4 / K5 / K6），外加「停顿声音」一例（音频看门狗的正向验收，见下）。
  *
  *   node scripts/probes/playback-probe.mjs [--port 5281] [--seconds 10] [--keep]
  *                                          [--origin http://127.0.0.1:5281]
- *                                          [--json out/playback.json] [--only 节拍,跳转,...]
+ *                                          [--json out/playback.json] [--only 节拍,跳转,...] [--trace]
+ *
+ * 用例名（ 认的）：节拍、停顿声音、到头、追帧、跳转、时间轴、降级。 只对「停顿声音」有用：
+ * 把每次停顿前后每 5 ms 的采样行（播放头、mediaStalled、声音元素的暂停/位置/能量）和 frame 到达时刻写进结果，排查用。
  *
  * 不带 `--origin` 时自己起一台 dev server（缺省 5281，舞台端口随之 5282 / 5283），
  * `PROMPTCUT_DATA_DIR` 指到临时目录，免得把仓库 `out/card-costs.json` 冲掉。
@@ -25,6 +28,36 @@
  * **观察不到那个现象本身**（rAF 想什么时候来就什么时候来）。能量准、也是这一条真正要保的，
  * 是**到达间隔的均值 = 1000 / fps** 和**连续两条 `frame` 的 `sec` 差恒为 1/fps**。
  * 真机（有垂直同步的会话）上的 2/3 交替要靠 `oac-probe` 那种带显示节拍的跑法验，这里记一笔。
+ *
+ * # 「停顿声音」：播放停顿时声音当场停（`e289b886`，`Preview.tsx` 的 `armStallWatch`）
+ *
+ * 「节拍」一例只验**不误触发**（正常播放 `mediaStallCount === 0`）。这一例验**它真的管用**：
+ * 上一拍之后过了「名义拍长 + 40 ms（`MEDIA_STALL_MS`）」还没有下一拍，看门狗**不等那迟到的一拍**，当场把 `mediaStalled` 置真、
+ * 让主文档的音频层 `playing` 变假，声音元素 `pause()`。
+ *
+ * 造停顿的办法（不改 src/、不调 `setMediaStalled`）：时间轴上放一段真的在出声的音频（页面里合成的 440 Hz WAV，blob 地址），
+ * 正常播放起来、声音在出之后，在 **front 舞台的 iframe 里**同步空转 700 ms（第二次 400 ms）——它的主线程被占住，节拍循环一拍也发不出，
+ * 父页收不到 `frame`。这就是「下一拍迟到」本身。空转用舞台页的真时钟 `window.__pcRealNow`（舞台把 `performance.now` 换成了虚拟时钟，
+ * 拿它空转会转到死）。父页是另一个事件循环，采样器和看门狗的定时器照常跑；按住期间父页若也被拖住（舞台和父页同进程），
+ * 「父页没被一起拖住」那条会拦下来，测量不作数。只在这一例里按住舞台，别的用例不受影响。
+ *
+ * 采样器每 5 ms 一行：播放头、`__pcPreviewDiag().mediaStalled / mediaStallCount`、每个主文档 <audio> 的 paused / currentTime / readyState /
+ * 元素重新加载次数 / 实时能量（元素 captureStream → AnalyserNode，只量不出声）。时刻都用 `performance.timeOrigin + performance.now()`
+ * （父页）与舞台页的真时钟换算成同一把尺。无头 Chrome 带 `--mute-audio` 与 `--autoplay-policy=no-user-gesture-required`，不靠人听。
+ *
+ * 断言（每次停顿各一组）：
+ *   1. 舞台真的停了（相邻两拍的间隔 ≥ 按住时长的 80%），父页没被拖住；停顿前 `mediaStalled` 为假、声音在放、量到能量；
+ *   2. **`mediaStalled` 在迟到那一拍到达之前就为真**，`mediaStallCount` 随之 +1（这是整个功能的要点：当场，不是事后）；
+ *   3. **声音当场停**：迟到那一拍到达之前，所有声音元素已 paused，且到那一拍到达之前没有被重新 play；迟到那一拍到达前的最后 100 ms，
+ *      实时能量在阈值以下；
+ *   4. **恢复**：拍子回来后 `mediaStalled` 回假、声音重新放出来；声音位置跟着当前播放头（与 t − 片段起点 差 ≤ 0.25 s），
+ *      不低于停下时的位置、不在开头（没有从头重播），恢复后头 400 ms 里位置连续（相邻采样差 < 0.2 s）；
+ *   整段采样：声音位置从不倒退，声音元素从不重新加载，`mediaStallCount` ≥ 停顿次数。
+ *
+ * 只记录、不当通过条件的时间（verification.md「耗时只记录，不当闸门」）：跳闸距停顿前最后一拍多久（名义 ≈ 73 ms）、
+ * 比迟到那一拍早多少、元素 paused 距跳闸多久、能量排空用了多久（captureStream 那条路 paused 之后还要排空 50～90 ms 的缓冲）。
+ * 断言里的先后（跳闸/停声在迟到那一拍**之前**）是顺序条件，不是耗时门槛：按住时长（700 / 400 ms）远大于跳闸所需（≈ 73 ms），
+ * 机器慢一点也不会颠倒；等待时限（60 s / 30 s）只为防卡死。
  */
 import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR,产物不落进用户的 Videos\PromptCut
 import fs from 'node:fs';
@@ -209,6 +242,103 @@ const SET_COSTS = async ({ specs }) => {
 const RESET_RECORDERS = () => { window.__pcFrames = []; window.__pcEvents = []; window.__pcLongTasks = []; };
 const READ_RECORDERS = () => ({ frames: window.__pcFrames, events: window.__pcEvents, longTasks: window.__pcLongTasks });
 
+/* ------------------------------------------------------------------ 「停顿声音」用例的页面侧脚本 */
+
+/**
+ * 项目里放一段真的在出声的声音:页面里合成一段 16 kHz 单声道 WAV(440 Hz 正弦,带 3 Hz 的幅度起伏,整段有能量),
+ * 做成 blob 地址挂到一条音频素材上,再放上时间轴。不依赖 ffmpeg、不依赖素材服务,也不走声音生成的按钮流程。
+ */
+const ADD_TONE = async ({ sec }) => {
+  const { actions } = await import('/src/store/project.ts');
+  const sr = 16000, n = Math.floor(sec * sr);
+  const buf = new ArrayBuffer(44 + n * 2);
+  const dv = new DataView(buf);
+  const w4 = (o, str) => { for (let i = 0; i < 4; i++) dv.setUint8(o + i, str.charCodeAt(i)); };
+  w4(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); w4(8, 'WAVE'); w4(12, 'fmt '); dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true);
+  dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); w4(36, 'data'); dv.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    dv.setInt16(44 + i * 2, Math.round(32767 * 0.5 * (0.75 + 0.25 * Math.sin(2 * Math.PI * 3 * t)) * Math.sin(2 * Math.PI * 440 * t)), true);
+  }
+  const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  const media = actions.addMedia({ id: 'm-stall-tone', kind: 'audio', name: 'stall-tone.wav', url, duration: sec });
+  const clip = actions.addMediaClip(media.id, 0, { duration: sec });
+  return { mediaId: media.id, clipId: clip?.id ?? null, start: clip?.start ?? null, end: clip?.end ?? null };
+};
+
+/**
+ * 页面侧采样器:每 `everyMs` 毫秒一行 { w(墙钟毫秒), t(播放头), playing, stalled(`mediaStalled`), count(`mediaStallCount`),
+ * els: 主文档每个 <audio> 的 { clip, paused, ct, ready, loads, rms } }。
+ * rms = 元素 captureStream → AnalyserNode 的实时能量(只量不出声,不接 destination)。
+ * 元素重新加载后原来那条采集音轨不再出数据、状态却仍是 live,所以握着流、每次 addtrack 重接(照 sound-preview-probe)。
+ * `w` 用 `performance.timeOrigin + performance.now()`:和舞台页里同一算法取的时刻在同一把尺上(同一台机器的同一块表)。
+ */
+const INSTALL_SAMPLER = async ({ everyMs }) => {
+  const { getState } = await import('/src/store/project.ts');
+  if (window.__stallSampler) { clearInterval(window.__stallSampler.timer); }
+  const S = { rows: [], timer: null, hooks: new WeakMap(), ctx: new AudioContext(), maxTickMs: 0 };
+  await S.ctx.resume().catch(() => {});
+  const attach = (h) => {
+    const track = h.stream.getAudioTracks().filter((x) => x.readyState === 'live').at(-1);
+    if (!track || track === h.track) return;
+    try { h.src?.disconnect(); } catch { /* 已断 */ }
+    h.track = track;
+    h.src = S.ctx.createMediaStreamSource(new MediaStream([track]));
+    h.an = S.ctx.createAnalyser();
+    h.an.fftSize = 1024;
+    h.src.connect(h.an);
+  };
+  const hook = (el) => {
+    let h = S.hooks.get(el);
+    if (!h) {
+      h = { stream: null, track: null, src: null, an: null, buf: new Float32Array(1024), loads: 0 };
+      el.addEventListener('loadstart', () => { h.loads++; });
+      S.hooks.set(el, h);
+    }
+    if (!h.stream && el.readyState >= 1 && el.captureStream) {
+      try { h.stream = el.captureStream(); h.stream.addEventListener('addtrack', () => attach(h)); } catch { /* 下一拍再试 */ }
+    }
+    if (h.stream) { try { attach(h); } catch { /* 下一拍再试 */ } }
+    return h;
+  };
+  const tick = () => {
+    const t0 = performance.now();
+    const d = typeof window.__pcPreviewDiag === 'function' ? window.__pcPreviewDiag() : null;
+    const st = getState();
+    const els = [];
+    for (const el of document.querySelectorAll('audio')) {
+      const h = hook(el);
+      let rms = null;
+      if (h.an) {
+        h.an.getFloatTimeDomainData(h.buf);
+        let e = 0;
+        for (const v of h.buf) e += v * v;
+        rms = Math.sqrt(e / h.buf.length);
+      }
+      els.push({ clip: el.getAttribute('data-pc-audio-clip'), paused: el.paused, ct: el.currentTime, ready: el.readyState, loads: h.loads, rms });
+    }
+    S.rows.push({ w: performance.timeOrigin + performance.now(), t: st.t, playing: st.playing, stalled: d ? d.mediaStalled : null, count: d ? d.mediaStallCount : null, els });
+    S.maxTickMs = Math.max(S.maxTickMs, performance.now() - t0);
+  };
+  S.timer = setInterval(tick, everyMs);
+  window.__stallSampler = S;
+  tick();
+  return true;
+};
+const READ_SAMPLER = () => ({ rows: window.__stallSampler.rows, maxTickMs: window.__stallSampler.maxTickMs });
+const STOP_SAMPLER = () => { const S = window.__stallSampler; if (S) { clearInterval(S.timer); S.timer = null; } return true; };
+/** 舞台页(front)里按住主线程 `ms` 毫秒:这段时间它的节拍循环一拍都发不出来。回起止时刻(墙钟毫秒) */
+const HOLD_STAGE = (ms) => {
+  // 舞台把 performance.now 换成了虚拟时钟(同步空转会转到死),真时钟在 __pcRealNow(src/kernel/clock.ts)
+  const now = () => performance.timeOrigin + (typeof window.__pcRealNow === 'function' ? window.__pcRealNow() : performance.now());
+  const start = now();
+  while (now() < start + ms);
+  return { start, end: now(), virtualClock: typeof window.__pcRealNow === 'function' };
+};
+/** 记录器里的 frame 另存一份墙钟时刻(INSTALL_RECORDERS 的 `at` 是 performance.now(),这里换成同一把尺) */
+const WALL_FRAMES = () => window.__pcFrames.map((f) => ({ sec: f.sec, w: performance.timeOrigin + f.at }));
+
 /* ------------------------------------------------------------------ 小工具 */
 
 /**
@@ -265,7 +395,9 @@ const browser = await puppeteer.launch({
   args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     // R2 报告:不带这两个,这台机器上无头 Chrome 的 rAF 退到 10 Hz,节拍循环根本等不到帧
-    '--disable-gpu-vsync', '--disable-frame-rate-limit'],
+    '--disable-gpu-vsync', '--disable-frame-rate-limit',
+    // 「停顿声音」用例要让主文档的 <audio> 真的起播(无手势也放)、又不让扬声器出声:不靠人听,靠元素状态与 captureStream 的能量
+    '--autoplay-policy=no-user-gesture-required', '--mute-audio'],
 });
 let exitCode = 0;
 let page = null;
@@ -342,6 +474,164 @@ try {
       check(rec.longTasks.length === 0, `${fps} fps:播放中主文档长任务为 0`, rec.longTasks.slice(0, 3));
     }
     out.cases['节拍'] = cadence;
+  }
+
+  /* ============================================================ 1b. 停顿时声音当场停(音频看门狗的正向验收) */
+  if (wants('停顿声音')) {
+    /*
+     * 造停顿:在**舞台页**(front 那个 iframe)里按住主线程 HOLD_MS 毫秒 —— 它的节拍循环在这段时间里一拍也发不出,
+     * 父页收不到 `frame`。这就是「下一拍迟到」本身,不改 src/、不碰 `setMediaStalled`,验的是 Preview 自己的看门狗。
+     * 父页是另一个文档(另一个事件循环),所以它的 setTimeout / 采样器照常跑;按住期间父页若也被拖住(长任务),
+     * 说明舞台和父页在这台 Chrome 里同进程,测量不可信,下面「父页没被拖住」那条会拦下来。
+     */
+    const TONE_SEC = 40, FPS = 30, THR = 0.003;
+    const HOLDS_MS = [700, 400];
+    const BEAT_MS = 1000 / FPS, MEDIA_STALL_MS = 40;
+    step('stall: build');
+    const built = await page.evaluate(BUILD, { fps: FPS, duration: TONE_SEC, cards: [{ id: 'probe-css' }] });
+    step('stall: add tone');
+    const tone = await page.evaluate(ADD_TONE, { sec: TONE_SEC });
+    step('stall: tone added');
+    check(!!tone.clipId, '停顿声音:声音片段放上了时间轴', tone);
+    await waitProbeIdle(page);
+    await page.evaluate(SET_COSTS, { specs: { 'probe-css': { stepMs: 1, catchUpMs: 10, vtOk: true, seekOk: true, seekMs: 1 } } });
+    await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.seek(0); });
+    await sleep(300);
+    await page.evaluate(RESET_RECORDERS);
+    step('stall: install sampler');
+    await page.evaluate(INSTALL_SAMPLER, { everyMs: 5 });
+    step('stall: play');
+    await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.play(); });
+    const waitT = (to) => page.waitForFunction(async (x) => (await import('/src/store/project.ts')).getState().t >= x, { timeout: 60000, polling: 50 }, to).then(() => true, () => false);
+    const waitSounding = () => page.waitForFunction(() => {
+      const rows = window.__stallSampler.rows; const r = rows.at(-1);
+      return !!r && !r.stalled && r.els.length > 0 && r.els.every((e) => !e.paused && e.ready >= 3 && e.ct > 0.2) && rows.length > 20 && (r.els[0].rms ?? 0) > 0.003;
+    }, { timeout: 60000, polling: 50 }).then(() => true, () => false);
+    check(await waitT(1.0), '停顿声音:播放头走到了 1 秒(舞台在逐拍推进)');
+    check(await waitSounding(), '停顿声音:停顿之前声音在出声(没暂停、数据就绪、captureStream 量到能量)');
+    const front = await frontDiag(page);
+    const frontFrame = page.frames().find((f) => f.url().includes('stage=1') && f.url().includes(`id=${front.preview.frontId}`));
+    check(!!frontFrame, '停顿声音:找到了 front 舞台的 iframe', front.preview?.frontId);
+    const holds = [];
+    for (const [i, holdMs] of HOLDS_MS.entries()) {
+      // 两次停顿之间等恢复、声音重新出声、播放头往前走一截,再来下一次(看看门狗恢复之后还会不会再次起效)
+      if (i > 0) { check(await waitSounding(), `停顿声音 #${i + 1}:上一次停顿之后声音恢复出声`); await sleep(500); }
+      step(`stall: hold #${i + 1} ${holdMs} ms`);
+      const p = frontFrame.evaluate(HOLD_STAGE, holdMs);
+      const win = await p;
+      holds.push({ holdMs, ...win });
+      // 等恢复:mediaStalled 回到假、声音回来、播放头走过按住之前的位置
+      const recovered = await page.waitForFunction(() => {
+        const r = window.__stallSampler.rows.at(-1);
+        return !!r && r.playing && r.stalled === false && r.els.every((e) => !e.paused);
+      }, { timeout: 30000, polling: 25 }).then(() => true, () => false);
+      check(recovered, `停顿声音 #${i + 1}:停顿结束后 mediaStalled 回到假、声音重新放出来`);
+      await sleep(700);   // 恢复之后再看一小段,够判「接着放」
+    }
+    await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.pause(); });
+    await sleep(300);
+    const { rows, maxTickMs } = await page.evaluate(READ_SAMPLER);
+    const frames = await page.evaluate(WALL_FRAMES);
+    const finalDiag = await page.evaluate(() => window.__pcPreviewDiag());
+    await page.evaluate(STOP_SAMPLER);
+
+    /* ---- 分析 ---- */
+    const clipStart = tone.start ?? 0;
+    const analyses = [];
+    for (const [i, h] of holds.entries()) {
+      const n = i + 1;
+      const tag = (s) => `停顿声音 #${n}(按住 ${h.holdMs} ms):${s}`;
+      // 停顿前最后一拍、迟到的那一拍:按住区间 [start,end] 内最长的那个相邻 frame 间隔
+      let best = null;
+      for (let k = 0; k + 1 < frames.length; k++) {
+        const a = frames[k], b = frames[k + 1];
+        if (a.w < h.end && b.w > h.start && (!best || b.w - a.w > best.b.w - best.a.w)) best = { a, b };
+      }
+      const A = { holdMs: h.holdMs, holdStart: h.start, holdEnd: h.end, holdActualMs: +(h.end - h.start).toFixed(1) };
+      check(!!best, tag('找到了停顿前最后一拍和迟到的那一拍'), A);
+      if (!best) continue;
+      const lastBefore = best.a.w, late = best.b.w;
+      A.beatGapMs = +(late - lastBefore).toFixed(1);
+      A.lateFrameSec = best.b.sec;
+      check(late - lastBefore >= 0.8 * h.holdMs, tag('舞台真的停了:相邻两拍的间隔不短于按住时长的 80%'), { gap: A.beatGapMs });
+      const win = rows.filter((r) => r.w >= lastBefore - 200 && r.w <= late + 200);
+      // 父页没被拖住:这一段里采样器相邻两行的间隔最大值(< 按住时长的一半,否则父页也被按住了,测量不可信)
+      let maxRowGap = 0;
+      for (let k = 1; k < win.length; k++) maxRowGap = Math.max(maxRowGap, win[k].w - win[k - 1].w);
+      A.parentMaxSampleGapMs = +maxRowGap.toFixed(1);
+      check(maxRowGap < h.holdMs / 2, tag('父页没被一起拖住(采样器照常出行)'), { maxRowGap, holdMs: h.holdMs });
+
+      const before = rows.filter((r) => r.w <= lastBefore).at(-1);
+      A.before = before && { t: before.t, stalled: before.stalled, count: before.count, ct: before.els.map((e) => +e.ct.toFixed(3)), paused: before.els.map((e) => e.paused) };
+      check(before && before.stalled === false && before.els.length > 0 && before.els.every((e) => !e.paused), tag('停顿开始前 mediaStalled 为假、声音在放'), A.before);
+      const countBefore = before?.count ?? 0;
+
+      // ② 看门狗在迟到那一拍到达**之前**跳闸
+      const trip = rows.find((r) => r.w > lastBefore && r.stalled === true);
+      A.tripAt = trip ? +(trip.w - lastBefore).toFixed(1) : null;               // 距停顿前最后一拍(名义 = 拍长 + 40 ms ≈ 73 ms,只记录)
+      A.tripMarginMs = trip ? +(late - trip.w).toFixed(1) : null;               // 比迟到那一拍早多少
+      A.expectedTripMs = +(BEAT_MS + MEDIA_STALL_MS).toFixed(1);
+      check(!!trip && trip.w < late, tag('mediaStalled 在迟到那一拍到达之前就为真(当场跳闸,不是事后)'), { tripAfterLastBeatMs: A.tripAt, marginMs: A.tripMarginMs });
+      check(!!trip && trip.count === countBefore + 1, tag('mediaStallCount 随之 +1'), { before: countBefore, atTrip: trip?.count });
+
+      // ③ 声音当场停:跳闸之后、迟到那一拍到达之前,每个声音元素都已 paused,并且一直停着
+      const paused = trip && rows.find((r) => r.w >= trip.w && r.els.length > 0 && r.els.every((e) => e.paused));
+      A.pausedAfterTripMs = paused ? +(paused.w - trip.w).toFixed(1) : null;   // 只记录
+      A.pausedAfterLastBeatMs = paused ? +(paused.w - lastBefore).toFixed(1) : null;
+      check(!!paused && paused.w < late, tag('声音元素在迟到那一拍到达之前就全部 paused'), { pausedAfterTripMs: A.pausedAfterTripMs, pausedAfterLastBeatMs: A.pausedAfterLastBeatMs });
+      if (paused) {
+        const during = rows.filter((r) => r.w >= paused.w && r.w < late);
+        const resurrected = during.filter((r) => r.els.some((e) => !e.paused));
+        check(resurrected.length === 0, tag('停下之后到迟到那一拍之间没有元素被重新 play 起来'), resurrected.slice(0, 2));
+        /*
+         * 能量:元素 paused 之后,captureStream → AnalyserNode 这条路还要排空一小截缓冲才读到静音(实测 50～90 ms,
+         * 读数在这截里还会随声音的 3 Hz 起伏上下),所以不拿「paused 之后 N 毫秒」当界,
+         * 看**迟到那一拍到达之前的最后 100 ms** 里读数都在阈值以下;排空用了多久只记录。
+         * 停顿前量到过能量,说明这条采集路是活的、读到 0 不是因为它没接上。
+         */
+        const quiet = rows.filter((r) => r.w >= late - 100 && r.w < late);
+        const loud = rows.filter((r) => r.w >= paused.w && r.w < late && r.els.some((e) => (e.rms ?? 0) >= THR)).at(-1);
+        A.energyDrainedAfterPauseMs = loud ? +(loud.w - paused.w).toFixed(1) : 0;
+        const prePeak = Math.max(0, ...rows.filter((r) => r.w <= lastBefore).flatMap((r) => r.els.map((e) => e.rms ?? 0)));
+        const quietPeak = Math.max(0, ...quiet.flatMap((r) => r.els.map((e) => e.rms ?? 0)));
+        A.energy = { prePeak: +prePeak.toFixed(4), quietPeak: +quietPeak.toFixed(5), samplesQuiet: quiet.length };
+        check(prePeak >= THR, tag('停顿前量到过能量(采集路是活的)'), A.energy);
+        check(quiet.length >= 3 && quietPeak < THR, tag('迟到那一拍到达之前的最后 100 ms,实时能量在阈值以下(声音确实停了)'), A.energy);
+        A.ctAtPause = paused.els.map((e) => +e.ct.toFixed(3));
+        A.tAtPause = +paused.t.toFixed(3);
+      }
+
+      // ④ 恢复:拍子回来后 mediaStalled 回假、声音接着当前播放头继续
+      const rec = rows.find((r) => r.w > late && r.stalled === false);
+      A.recoveredAfterLateFrameMs = rec ? +(rec.w - late).toFixed(1) : null;
+      check(!!rec, tag('拍子回来之后 mediaStalled 回到假'), A.recoveredAfterLateFrameMs);
+      const resume = rec && rows.find((r) => r.w >= rec.w && r.els.length > 0 && r.els.every((e) => !e.paused && e.ready >= 3));
+      check(!!resume, tag('声音重新放出来'));
+      if (resume) {
+        const settled = rows.find((r) => r.w >= resume.w + 400 && r.els.every((e) => !e.paused));
+        const probeRow = settled ?? resume;
+        const el = probeRow.els[0];
+        const expected = probeRow.t - clipStart;
+        A.afterResume = { t: +probeRow.t.toFixed(3), ct: +el.ct.toFixed(3), expectedCt: +expected.toFixed(3), diff: +(el.ct - expected).toFixed(3) };
+        check(Math.abs(el.ct - expected) <= 0.25, tag('声音位置跟着当前播放头(偏差 ≤ 0.25 s,即硬 seek 门槛的一半)'), A.afterResume);
+        if (paused) check(el.ct >= paused.els[0].ct - 0.02 && el.ct > 0.5, tag('没有从头重播、没有倒退(恢复后位置 ≥ 停下时位置,且不在开头)'), { ctAtPause: paused.els[0].ct, ctAfter: el.ct });
+        const jump = rows.filter((r) => r.w >= resume.w).slice(0, 80).map((r, k, arr) => (k ? Math.abs(r.els[0].ct - arr[k - 1].els[0].ct) : 0));
+        check(Math.max(0, ...jump) < 0.2, tag('恢复后的头 400 ms 里位置连续(相邻两次采样的位置差 < 0.2 s,没有跳)'), { maxStep: +Math.max(0, ...jump).toFixed(3) });
+      }
+      if (has('--trace')) A.frameTrace = frames.filter((f) => f.w >= lastBefore - 100 && f.w <= late + 150).map((f) => ({ dt: +(f.w - lastBefore).toFixed(1), sec: f.sec }));
+      if (has('--trace')) A.trace = rows.filter((r) => r.w >= lastBefore - 30 && r.w <= late + 120).map((r) => ({ dt: +(r.w - lastBefore).toFixed(1), t: +r.t.toFixed(3), st: r.stalled, n: r.count, el: r.els.map((e) => [e.paused ? 'P' : 'p', +e.ct.toFixed(3), e.ready, e.rms === null ? null : +e.rms.toFixed(3)]) }));
+      analyses.push(A);
+    }
+    // 整条采样:位置不倒退、元素没有重新加载、最后一刻没有卡在停顿里
+    let backward = 0; const loads = new Set();
+    for (let k = 1; k < rows.length; k++) {
+      if (rows[k].els[0] && rows[k - 1].els[0] && rows[k].els[0].ct < rows[k - 1].els[0].ct - 0.05) backward++;
+      for (const e of rows[k].els) loads.add(e.loads);
+    }
+    check(backward === 0, '停顿声音:整段采样里声音位置从不倒退(没有从头重来)', { backward });
+    check(loads.size === 1, '停顿声音:整段采样里声音元素没有重新加载', [...loads]);
+    check(finalDiag.mediaStallCount >= holds.length, `停顿声音:这一轮播放 mediaStallCount ≥ ${holds.length}`, finalDiag.mediaStallCount);
+    out.cases['停顿声音'] = { toneClip: tone, holds: analyses, samples: rows.length, maxSamplerTickMs: +maxTickMs.toFixed(2), mediaStallCount: finalDiag.mediaStallCount, mediaGapMaxMs: +Number(finalDiag.mediaGapMaxMs).toFixed(1), built: built.fps };
   }
 
   /* ============================================================ 2. 播放到头的收尾 */
