@@ -20,7 +20,7 @@ import { adminOp, currentDocLineage, dismissToast, ensureDevice, enterAccountPro
 import { disableCollab, localCollab, pullOriginals, queueExistingMedia } from "./collab";
 import { hosted } from "./sharedApi";
 import {
-  ACCOUNT_MOVE_TEXT, abandonMove, createAttemptStore, isAccountCloudTarget, moveToAccountCloud, pendingAttempt, readProjectContent, sameContent, uploadProjectContent,
+  ACCOUNT_MOVE_TEXT, abandonMove, cloudProjectStateOf, createAttemptStore, isAccountCloudTarget, moveToAccountCloud, pendingAttempt, readProjectContent, sameContent, uploadProjectContent,
   type AbandonResult, type ContentLinkOptions, type MoveAttempt, type MoveResult, type MoveSource, type MoveStage,
 } from "./accountMove";
 import { currentCloudAssociation, setCloudAssociation } from "./recoveryAssociation";
@@ -111,13 +111,7 @@ export function abandonPendingMove(c: AccountCloud): Promise<AbandonResult> {
     source: moveSource,
     account: () => accountCloudLogin(c),
     attempts,
-    inspect: async (projectId) => {
-      const m = await client.members(projectId);
-      return { accessRevision: m.accessRevision, creator: m.self.creator,
-        otherMembers: m.members.filter((x) => x.accountId !== m.creatorAccountId).length,
-        // 只算人开着的页面:托管方的渲染节点、云端 Agent 的连接不算(它们跟着项目走,不代表有人在用)
-        liveDevices: m.devices.filter((d) => d.conns.some((x) => x.role === "page")).length };
-    },
+    inspect: async (projectId) => cloudProjectStateOf(await client.members(projectId)),
     remove: (projectId, rev, requestId) => client.deleteProject(projectId, rev, requestId),
     // 搬迁失败时编辑器没有进过那个云端项目,本页的云端关联本来就不指向它;万一指向(进项目的半路出的错),一并清掉,另存文件时不再写进去
     forget: (projectId) => { if (currentCloudAssociation()?.projectId === projectId) setCloudAssociation(null); },

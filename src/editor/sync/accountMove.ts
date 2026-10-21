@@ -639,6 +639,19 @@ export interface AbandonDeps {
   now?(): number;
 }
 
+/** 账号接口 `/hosted/shared/account/members` 回的成员快照(`client.ts` 的 `AccountMembersSnapshot`)里用得着的几项 */
+export interface MembersLike {
+  accessRevision: number; creatorAccountId: string; self: { creator: boolean };
+  members: { accountId: string }[]; devices: { conns: { role: string }[] }[];
+}
+
+/** 成员快照 → 判「有没有人在用」要的几项。设备只算人开着的页面:托管方的渲染节点、云端 Agent 的连接跟着项目走,不代表有人在用 */
+export function cloudProjectStateOf(m: MembersLike): CloudProjectState {
+  return { accessRevision: m.accessRevision, creator: m.self.creator,
+    otherMembers: m.members.filter((x) => x.accountId !== m.creatorAccountId).length,
+    liveDevices: m.devices.filter((d) => d.conns.some((c) => c.role === "page")).length };
+}
+
 /** 云端确认这个项目不在了(删了、或从来没有):只认账号接口的这两种 404,`no-route`(不是账号模式的节点)不算 */
 const projectGone = (error: unknown): boolean => statusOf(error) === 404 && ["no-project", "project-gone"].includes(codeOf(error));
 

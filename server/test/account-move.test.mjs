@@ -18,6 +18,8 @@
  *   7  新建的回包丢了(请求到了云端):本机只知道结果不确定;再点一次用同一个请求号,拿回同一个项目
  *   8  不是账号模式的节点(新建接口回 404):not-account-cloud,本机一侧什么都没被调
  *   9  同一个账号从两台设备各搬一个不同的本地项目:互不相干(「按账号、不依托设备」的本地项目那一半)
+ *  10  放弃这次搬迁(〔裁〕H04,报告 `docs/reports/AGENT-claude-abandon-move.md`):删的回包丢了也算删成、本机记录清掉;
+ *      再删回 404 no-project;云端已删而本机记录还在时只清本机;删完再搬另建一个;别的账号加入了就不删
  */
 import { srcUrl } from '../../src/testing/registerTs.mjs';
 import test from 'node:test';
@@ -337,6 +339,60 @@ test('账号办法的搬到云端:真的账号服务与文档服务', { timeout:
     const fromOtherDevice = (await M.readProjectContent({ url: wsUrl, WebSocketImpl: CaWebSocket,
       ticket: async () => { const s = await second.client.session(r1.projectId); assert.equal(s.creator, true); return s.connectionTicket; } }, r1.projectId, { tracks: [] })).project;
     assert.equal(M.sameContent(fromOtherDevice, d1.local), true);
+  });
+
+  /** 「放弃这次搬迁」接到真的账号客户端上(与 `accountMoveFlow.ts` 的 `abandonPendingMove` 同样的接线) */
+  const abandonOf = (who, d) => M.abandonMove({
+    source: d.deps.source, account: d.deps.account, attempts: d.deps.attempts,
+    inspect: async (projectId) => M.cloudProjectStateOf(await who.client.members(projectId)),
+    remove: (projectId, rev, requestId) => who.client.deleteProject(projectId, rev, requestId),
+    newRequestId: () => `abandon-${randomUUID()}`,
+  });
+  const failedMove = async (who, local) => {
+    const d = desk(who, local, { link: { timeoutMs: 2500 } });
+    d.ticketFault = Object.assign(new Error('authority-unavailable'), { status: 503, code: 'authority-unavailable' });
+    const failed = await d.move();
+    d.ticketFault = null;
+    assert.equal(failed.error, 'upload-failed', JSON.stringify(failed));
+    return { d, projectId: failed.cloud.projectId };
+  };
+
+  await t.test('10 放弃这次搬迁(〔裁〕H04):删掉云端的半成品、清掉本机记录;幂等;有人加入了不删', async () => {
+    const name = '搬迁测试·放弃';
+    const { d, projectId } = await failedMove(a, bigProject('local-content-10', name, 2000));
+    assert.equal(M.pendingAttempt(d.deps.attempts, a.account.id, d.deps.source())?.projectId, projectId, '半成品认得出');
+    // 删的请求到了云端、回包丢了:再问一次云端,确认不在了就算删成
+    a.b.fault = (p) => (p === '/hosted/shared/account/admin' ? 'drop-response' : null);
+    const r = await abandonOf(a, d);
+    a.b.fault = null;
+    assert.deepEqual(r, { ok: true, projectId, name, already: false });
+    assert.equal(d.attempt(), null, '本机记录清掉');
+    assert.deepEqual(d.touchedLocal(), [], '本机一侧什么都没被调');
+    await assert.rejects(a.client.members(projectId), (e) => e.status === 404 && e.code === 'no-project');
+    await assert.rejects(a.client.session(projectId), (e) => e.status === 404, '云端项目进不去了');
+    // 重复删:用新请求号再删回 404 no-project(流程把它当「已经不在」)
+    await assert.rejects(a.client.deleteProject(projectId, 0, randomUUID()), (e) => e.status === 404 && e.code === 'no-project');
+    // 本机记录已清:流程再调一次是「没有可放弃的」,不发请求
+    assert.equal((await abandonOf(a, d)).error, 'no-pending');
+    // 本机记录还在(比如清本机记录前页面关了)、云端已经删了:只清本机,不报错
+    const ghost = { v: 1, accountId: a.account.id, contentId: d.local.id, requestId: 'move-ghost', name, stub: {}, projectId, at: Date.now() };
+    d.deps.attempts.put(ghost);
+    assert.deepEqual(await abandonOf(a, d), { ok: true, projectId, name, already: true });
+    assert.equal(d.attempt(), null);
+    // 删完再搬:名字放出来了,另建一个项目,不去连已经删掉的那个
+    const again = await d.move();
+    assert.equal(again.ok, true, JSON.stringify(again));
+    assert.notEqual(again.projectId, projectId);
+    assert.equal(again.name, name);
+    assert.equal(M.sameContent(await readAs(other, again.projectId), d.local), true);
+
+    // 别的账号已经凭链接加入了那个半成品:不当半成品删,云端和本机记录都不动
+    const used = await failedMove(a, bigProject('local-content-10b', '搬迁测试·放弃·有人加入', 2000));
+    await other.client.join(used.projectId, randomUUID());
+    const refused = await abandonOf(a, used.d);
+    assert.deepEqual(refused, { ok: false, error: 'in-use', name: '搬迁测试·放弃·有人加入' });
+    assert.equal(used.d.attempt().projectId, used.projectId);
+    assert.equal((await a.client.members(used.projectId)).members.length, 2, '云端项目还在');
   });
   await sleep(50);
 });
