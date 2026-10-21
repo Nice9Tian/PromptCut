@@ -5,7 +5,7 @@
  *                                          [--origin http://127.0.0.1:5281]
  *                                          [--json out/playback.json] [--only 节拍,跳转,...] [--trace]
  *
- * 用例名（ 认的）：节拍、停顿声音、到头、追帧、跳转、时间轴、降级。 只对「停顿声音」有用：
+ * 用例名（`--only` 认的）：节拍、停顿声音、到头、追帧、跳转、时间轴、降级。`--trace` 只对「停顿声音」有用：
  * 把每次停顿前后每 5 ms 的采样行（播放头、mediaStalled、声音元素的暂停/位置/能量）和 frame 到达时刻写进结果，排查用。
  *
  * 不带 `--origin` 时自己起一台 dev server（缺省 5281，舞台端口随之 5282 / 5283），
@@ -93,6 +93,8 @@ const fails = [];
 const out = { origin, editorUrl: EDITOR_URL, stagePorts: stagePortsOf(port), seconds, cases: {} };
 const check = (cond, label, extra) => {
   if (!cond) fails.push(label + (extra !== undefined ? ' :: ' + JSON.stringify(extra) : ''));
+  // 逐条打在 stderr 上(stdout 留给 JSON):通过项也留证据
+  process.stderr.write((cond ? 'PASS ' : 'FAIL ') + label + '\n');
   return cond;
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
