@@ -188,6 +188,24 @@ export default function vitePluginAi(): Plugin {
         .then(mod => mod.createSetupService());
       server.httpServer?.once('close', () => { void setupService.then(service => service.dispose()); });
       server.middlewares.use('/api/ai/setup', async (req, res) => {
+        if (req.method === 'POST') {
+          // 粘贴授权码:把用户在登录对话框里粘的那串码送进正在跑的 Claude 登录任务的标准输入。
+          // 码是凭证:不写日志,出错信息里不带它;形状校验和写入在 setup.mjs 的 submitCode。
+          if (!req.headers['content-type']?.startsWith('application/json')) return sendJson(res, 415, { ok: false, error: 'JSON required' });
+          if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host && req.headers.origin !== 'https://' + req.headers.host) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+          let body = '';
+          let over = false;
+          req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 8192, '请求体超过 8KB'); });
+          req.on('end', async () => {
+            if (over) return;
+            try {
+              const parsed = JSON.parse(body || '{}');
+              const job = (await setupService).submitCode(parsed.provider, parsed.code);
+              sendJson(res, 200, { ok: true, job });
+            } catch (e: any) { sendJson(res, 400, { ok: false, error: e instanceof SyntaxError ? '请求不是有效的 JSON' : e.message }); }
+          });
+          return;
+        }
         if (req.method === 'DELETE') {
           if (!req.headers['content-type']?.startsWith('application/json')) return sendJson(res, 415, { ok: false, error: 'JSON required' });
           if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host && req.headers.origin !== 'https://' + req.headers.host) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
@@ -201,7 +219,7 @@ export default function vitePluginAi(): Plugin {
           });
           return;
         }
-        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET, POST, DELETE only' });
         res.setHeader('Cache-Control', 'no-store');
         try { sendJson(res, 200, { ok: true, jobs: (await setupService).list() }); }
         catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }
