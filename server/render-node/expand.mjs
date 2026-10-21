@@ -17,9 +17,13 @@
  * **取超集，不取少**：没挂在这几帧上的片段不出画，多留一个不改画面；少留一个才会错。所以判「挂没挂」时前后各多放一帧
  * （`1 / fps`），和舞台的挂载公式（`frameWindow.mjs` 的 `cardMountedAt`）比只多不少。
  *
- * 纯函数，不改入参；只依赖 `src/render/frameWindow.mjs` 的挂载提前量。单项目模式（桌面版的预渲染进程）不经过这里。
+ * 纯函数，不改入参，不引 `src/`。单项目模式（桌面版的预渲染进程）不经过这里。
  */
-import { CARD_MOUNT_LEAD } from '../../src/render/frameWindow.mjs';
+/**
+ * 挂载提前量（秒），与舞台的 `src/render/frameWindow.mjs` 的 `CARD_MOUNT_LEAD` 同一个数。这里抄一份而不引用：渲染服务、Agent 服务这些
+ * 独立入口不许引 `src/`（`server/test/accept-018-rest-ssr-seam.test.mjs`）。两边相等由 `server/test/multi-project-expand.test.mjs` 核对
+ */
+export const CARD_MOUNT_LEAD = 0.05;
 
 const ACTIVE = '\u0000active';
 const MAX_DEPTH = 32;

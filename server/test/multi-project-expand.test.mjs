@@ -10,7 +10,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { expandProject, lookNeed, expandLookBody } from '../render-node/expand.mjs';
+import { expandProject, lookNeed, expandLookBody, CARD_MOUNT_LEAD } from '../render-node/expand.mjs';
+import { CARD_MOUNT_LEAD as STAGE_MOUNT_LEAD } from '../../src/render/frameWindow.mjs';
 
 const H1 = '1'.repeat(64), H2 = '2'.repeat(64), H3 = '3'.repeat(64), H4 = '4'.repeat(64);
 function demo() {
@@ -70,6 +71,7 @@ test('MPE1 只留这几帧上挂着的片段；序列不删、片段原样、项
   // 挂载提前量：2.5 起的卡在 2.45 已经挂上；再多放一帧（超集）
   assert.ok(expandProject(p, { times: [2.46] }).clipIds.includes('c-mid'), '提前量之内算挂着');
   assert.ok(!expandProject(p, { times: [2.3] }).clipIds.includes('c-mid'), '离起点超过提前量加一帧的不留');
+  assert.equal(CARD_MOUNT_LEAD, STAGE_MOUNT_LEAD, '挂载提前量与舞台的同一个数');
   // 帧号与时刻等价
   assert.deepEqual(expandProject(p, { frames: [30] }).clipIds, expandProject(p, { times: [1] }).clipIds);
 });
