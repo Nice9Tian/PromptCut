@@ -12,6 +12,7 @@
  */
 
 import type { Project } from "../../kernel/project";
+import { otherCutsHint } from "../../kernel/agentScopes.mjs";
 
 export interface TimelineDigestClip {
   id: string;
@@ -39,6 +40,11 @@ export interface TimelineDigest {
   /** 最后一张卡 / 一段素材结束在哪(秒)。空时间轴是 0 */
   contentEnd: number;
   tracks: TimelineDigestTrack[];
+  /**
+   * 只在项目里还有别的有内容的剪辑时出现:上面的 tracks 只是激活剪辑的,这里告诉模型别的剪辑的片段
+   * 不用 switch_cut 就能改(索引在 get_project 的 parkedCuts / list_cuts)。见 kernel/agentScopes.mjs。
+   */
+  otherCuts?: { cuts: { cutId: string; name: string; clipCount: number }[]; hint: string };
 }
 
 /**
@@ -65,10 +71,12 @@ export function timelineDigest(p: Project): TimelineDigest {
     })),
   }));
   const ends = p.tracks.flatMap((tr) => tr.clips.map((c) => c.end));
+  const otherCuts = otherCutsHint(p);
   return {
     duration: round2(p.duration),
     contentEnd: round2(ends.length ? Math.max(...ends) : 0),
     tracks,
+    ...(otherCuts ? { otherCuts } : null),
   };
 }
 const round2 = (n: number) => Math.round(n * 100) / 100;

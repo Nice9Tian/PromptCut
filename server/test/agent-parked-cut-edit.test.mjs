@@ -6,7 +6,10 @@
  *   PK-1 update_clip 改停放剪辑里的片段:只提交一次,activeCutId 与激活剪辑原样,
  *        回包标明在哪条剪辑;文档服务里的真身与 Agent 副本一致;
  *   PK-2 set_rect / get_clip / list_cuts({cutId}) 同样不切换;紧接着对激活剪辑里的片段写入不被拒(没有 stale);
- *   PK-3 删除停放剪辑里的片段:明确的原因(在哪条剪辑、要 switch_cut),什么都不提交。
+ *   PK-3 删除停放剪辑里的片段:明确的原因(在哪条剪辑、要 switch_cut),什么都不提交;
+ *   PK-4 模型只读 get_project(云端副本)里的 parkedCuts 就找到并改好停放剪辑里的片段,全程没有 switch_cut(线上 2026-10-21:
+ *        新对话里模型因为只在 get_project 里看得到激活剪辑,两次都 switch_cut -> update_clip -> switch_cut);
+ *   PK-5 list_cuts 不带参数也列出停放剪辑的片段;switch_cut 的回包说明切换会让所有成员的界面一起翻。
  *
  * 跑:node --test server/test/agent-parked-cut-edit.test.mjs
  */
@@ -49,7 +52,7 @@ async function startEnv(t) {
     p.tracks = [{ id: 't1', name: '画面', clips: [{ id: 'c1', cardId: 'probe', params: {}, start: 0, end: 5 }] }];
     p.cuts = [
       { id: 'cutA', name: '剪辑1' },
-      { id: 'cutB', name: '剪辑2', duration: 4, transitions: [], tracks: [{ id: 'tb', name: 'B序列', clips: [{ id: 'cb1', cardId: 'probe', params: {}, start: 0, end: 4 }] }] },
+      { id: 'cutB', name: '剪辑2', duration: 4, transitions: [], tracks: [{ id: 'tb', name: 'B序列', clips: [{ id: 'cb1', cardId: 'probe', label: '粒子背景', params: {}, start: 0, end: 4 }] }] },
     ];
     p.activeCutId = 'cutA';
     return p;
@@ -161,4 +164,53 @@ test('PK-3 删除停放剪辑里的片段:说清在哪条剪辑、要 switch_cut
   const body = await probe.open('proj-pk3');
   assert.equal(body.rev, rev0, '没有提交');
   assert.equal(cutOf(body.project, 'cutB').tracks[0].clips.length, 1);
+});
+
+test('PK-4 模型只读 get_project 的 parkedCuts 就找到并改好停放剪辑里的片段,全程没有 switch_cut', async (t) => {
+  const env = await startEnv(t);
+  const probe = await env.seeded('proj-pk4');
+  const ag = env.agent('proj-pk4');
+  /** 照着工具回包办事的「模型」:不认识 clipId,只能读 get_project 的回包找;找不到才会想到 switch_cut(线上的做法) */
+  const called = [];
+  const run = (tool, args) => { called.push(tool); return ag.call(tool, args); };
+
+  const project = await run('get_project', {});
+  assert.equal(Object.keys(project)[0], 'parkedCuts', '索引排在最前面');
+  assert.deepEqual(project.parkedCuts.cuts.map((c) => c.cutId), ['cutB']);
+  assert.deepEqual(project.parkedCuts.cuts[0].clips, [{ id: 'cb1', trackId: 'tb', cardId: 'probe', label: '粒子背景', start: 0, end: 4 }]);
+  assert.match(project.parkedCuts.note, /不用 switch_cut/);
+  assert.deepEqual(project.tracks.map((x) => x.id), ['t1'], 'tracks 仍是激活剪辑的');
+
+  const hit = project.parkedCuts.cuts.find((c) => c.name === '剪辑2')?.clips.find((c) => c.label === '粒子背景');
+  assert.ok(hit, '在 parkedCuts 里找到了,不必为了看进剪辑2 而切换');
+  const r = await run('update_clip', { clipId: hit.id, opacity: 0.25 });
+  assert.equal(r.ok, true);
+  assert.equal(r.rev, project.rev + 1, '只提交了一次');
+  assert.deepEqual(called, ['get_project', 'update_clip'], '没有 switch_cut');
+
+  const body = await probe.open('proj-pk4');
+  assert.equal(body.project.activeCutId, 'cutA', 'activeCutId 没动(其他成员的界面不翻)');
+  assert.equal(cutOf(body.project, 'cutB').tracks[0].clips[0].opacity, 0.25);
+  assert.equal(body.project.tracks[0].clips[0].opacity, undefined);
+});
+
+test('PK-5 list_cuts 不带参数也列出停放剪辑的片段;switch_cut 的回包说明切换会让所有成员的界面一起翻', async (t) => {
+  const env = await startEnv(t);
+  const probe = await env.seeded('proj-pk5');
+  const ag = env.agent('proj-pk5');
+  await ag.call('get_project', {});
+
+  const listed = await ag.call('list_cuts', {});
+  assert.deepEqual(listed.parkedCuts.cuts.map((c) => [c.cutId, c.clips.map((x) => x.id)]), [['cutB', ['cb1']]]);
+  assert.equal('timeline' in listed, false);
+
+  const edited = await ag.call('update_clip', { clipId: 'c1', opacity: 0.4 });
+  assert.deepEqual(edited.timeline.otherCuts.cuts, [{ cutId: 'cutB', name: '剪辑2', clipCount: 1 }], '激活剪辑的回包 timeline 提示别的剪辑里有片段');
+
+  const sw = await ag.call('switch_cut', { cutId: 'cutB' });
+  assert.equal(sw.activeCutId, 'cutB');
+  assert.match(sw.note, /所有成员的界面一起翻/);
+  assert.match(sw.note, /不需要它/);
+  const body = await probe.open('proj-pk5');
+  assert.equal(body.project.activeCutId, 'cutB', '用户明说要切时仍然能切');
 });

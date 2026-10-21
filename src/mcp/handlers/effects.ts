@@ -3,6 +3,8 @@ import { getState, actions } from "../../store/project";
 import { describeTransition, transitionsOf, type TransitionKind } from "../../kernel/transitions";
 import { timelineDigest } from "../tools/toolEcho";
 import { listCuts, resolveCut } from "../../kernel/cuts";
+import { parkedCutsIndex } from "../../kernel/agentScopes.mjs";
+import { getCard } from "../../kernel/registry";
 import { cutContent, activeCutIdOf } from "../../kernel/cutSegments";
 import { removeCutGate } from "./cutSegments";
 
@@ -61,7 +63,13 @@ export const effectsHandlers = {
       const cut = resolveCut(p, { cutId: String(args.cutId) });
       const content = cutContent(p, cut.id);
       if (!content) throw new Error(`剪辑「${cut.name}」(${cut.id})没有可读的内容`);
-      out.timeline = { cutId: cut.id, name: cut.name, active: cut.id === activeCutIdOf(p), ...timelineDigest({ ...p, tracks: content.tracks, duration: content.duration }) };
+      // 这里的 digest 是借 p 拼出来的别条剪辑的内容,「别的剪辑」提示对它没有意义
+      const { otherCuts: _drop, ...digest } = timelineDigest({ ...p, tracks: content.tracks, duration: content.duration });
+      out.timeline = { cutId: cut.id, name: cut.name, active: cut.id === activeCutIdOf(p), ...digest };
+    } else {
+      // 不指定剪辑时,把所有停放剪辑里的片段(有上限)直接列出来:模型拿到 clipId 就不必为了「看进去」而 switch_cut
+      const parkedCuts = parkedCutsIndex(p, { cardName: (id) => getCard(id)?.name });
+      if (parkedCuts) out.parkedCuts = parkedCuts;
     }
     return out;
   },
@@ -70,7 +78,12 @@ export const effectsHandlers = {
     actions.switchCut(cut.id);
     clipGuard.noteMutation();
     const p = getState().project;
-    return { ok: true, activeCutId: p.activeCutId, cuts: listCuts(p), timeline: timelineDigest(p) };
+    return {
+      ok: true, activeCutId: p.activeCutId, cuts: listCuts(p), timeline: timelineDigest(p),
+      note: `已切换到「${cut.name}」。切换会改共享的激活剪辑,让所有成员的界面一起翻;只是要改别的剪辑里已有的片段时不需要它——` +
+        "把 clipId(list_cuts 的 cutId 参数 / get_project 的 parkedCuts 里有)直接交给 update_clip 等就地改。" +
+        "上面的 timeline 现在是这条的;之前激活的那条已停放,它里面的片段同样可以直接改。",
+    };
   },
   addCut: (args) => {
     const cut = actions.addCut(args?.name, { switchTo: args?.switch !== false });

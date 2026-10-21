@@ -3,6 +3,8 @@ import { getState, actions } from "../../store/project";
 import { findClip } from "../../kernel/project";
 import { cameraFor, clampFov, DEFAULT_FOV_DEG, MAX_FOV_DEG, MIN_FOV_DEG } from "../../kernel/space3d";
 import { mediaCardUrl } from "../../ai/mediaRef";
+import { parkedCutsIndex } from "../../kernel/agentScopes.mjs";
+import { getCard } from "../../kernel/registry";
 
 /**
  * `set_project_meta` 收的字段,和 `server/tools/project.mjs` 里它的 inputSchema.properties 一一对应
@@ -31,7 +33,10 @@ export function projectMetaRejection(unknown: string[]): string {
 export const projectHandlers = {
   getProject: () => {
     const p = getState().project;
+    // 停放剪辑的片段索引放在最前面:tracks 只是激活剪辑的,没有它模型想看别的剪辑里有什么只能 switch_cut
+    const parkedCuts = parkedCutsIndex(p, { cardName: (id) => getCard(id)?.name });
     return {
+      ...(parkedCuts ? { parkedCuts } : null),
       ...p,
       media: p.media.map(m => {
         if (m.transcript) {
