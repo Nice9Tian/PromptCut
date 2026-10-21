@@ -253,6 +253,11 @@ export function buildWorkerConfiguration(settings, { readRootRecord, modelConfig
   } };
 }
 
+/** 任务进程的日志行:`{ t, event, ...fields }` 写到标准输出;写不出去(标准输出关了)不影响任务 */
+export function workerLogLine(event, fields = {}) {
+  try { process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event, ...fields })}\n`); } catch { /* 标准输出关了 */ }
+}
+
 /** 生产入口。只在 Linux 上、只凭 root 写好的那份设置。 */
 export async function createWorkerConfiguration() {
   if (process.platform !== 'linux') fail('account-worker-linux-required');
@@ -260,5 +265,7 @@ export async function createWorkerConfiguration() {
   if (!absolute(file)) fail('account-worker-entry-configuration');
   // 设置文件和 root 的记录都按「属主是 root、别人写不了、不是链接」来读
   const settings = validateWorkerSettings(await rootRead(file));
-  return buildWorkerConfiguration(settings, { readRootRecord: () => rootRead(settings.rootRecordFile) });
+  // 运行器、工具、看画面客户端的日志写到标准输出(一行一条 JSON,和主服务的 `main.mjs` 同一个格式):
+  // systemd 起的任务槽把标准输出收进日志,以前这里没接、全丢了
+  return buildWorkerConfiguration(settings, { readRootRecord: () => rootRead(settings.rootRecordFile), log: workerLogLine });
 }

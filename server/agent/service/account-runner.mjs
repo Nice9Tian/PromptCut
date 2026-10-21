@@ -136,9 +136,15 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
       replica: () => inst?.replica?.() ?? null,
       judge: () => heavyJudge,
       records: () => inst?.costRecords?.(grant.conversationId) ?? Promise.resolve(null),
-      emit: (clips, { rev }) => {
-        if (!Number.isSafeInteger(rev)) return;
-        onEvent({ type: 'render_request', clips, rev, userCards: inst?.hasProjectCards?.() === true });
+      // 判定摘要(`judged`)随事件交上去,主服务记进自己的日志(线上任务进程的日志不一定有人看得到)。
+      // 一张重的都没有时也交一条片段为空的事件,只带摘要:旧主服务见片段为空直接不管,新主服务照记日志
+      emit: (clips, { rev, judged }) => {
+        const userCards = inst?.hasProjectCards?.() === true;
+        if (!Number.isSafeInteger(rev)) { onEvent({ type: 'render_request', clips: [], rev: null, userCards, judged }); return; }
+        onEvent({ type: 'render_request', clips, rev, userCards, judged });
+      },
+      report: (judged, { rev }) => {
+        onEvent({ type: 'render_request', clips: [], rev: Number.isSafeInteger(rev) ? rev : null, userCards: inst?.hasProjectCards?.() === true, judged });
       },
     });
     let removeAbort = () => {};
@@ -322,7 +328,7 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
         try {
           // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`):改被引用剪辑、切激活剪辑也收得到。
           // 挑出来的是候选,攒一会儿按共享成本记录判轻重,只报判重的(语义 `product/agent.md`:托管方只为被改动的重卡产流)
-          renderGate.note(write?.clipIds ?? []);
+          renderGate.note(write?.clipIds ?? [], write?.before ?? null);
         } catch (error) { log('agent.render.note-failed', { message: String(error?.message ?? error).slice(0, 120) }); }
       },
       onFinalClose: () => { /* The next model/tool gate fails closed via doc. */ }, log });

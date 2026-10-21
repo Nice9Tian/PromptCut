@@ -9,31 +9,40 @@
  *   HG-04 剪辑段里的卡:候选是虚拟片段 id,判定按同一条规则
  *   HG-05 端到端(真文档服务 + vite 载入缝 + 托管档服务 + 发布替身):Agent 改轻卡 → 不发;改重卡 → 发;没有记录的重卡 → 发;
  *         剪辑段里的卡同一条规则(轻的不发、重的按 `段 id~片段 id` 发)
+ *   HG-06 判定摘要:有判重的随 emit 交,一张重的都没有时交给 report(主服务据此记日志);判轻的片段 id 截前 JUDGED_CLIP_IDS 个
+ *   HG-07 写之前(note 的 before)与写之后的项目都折进「同一张卡 → 身份」交给判定(opts.sameCard);close 之后清掉
+ *   HG-08 端到端(真判定模块):改了参数的轻卡,新身份没有记录、改之前的身份有页面测的记录 → 按同一张卡估,判轻不发;
+ *         同一张卡一条记录都没有的 stateful 卡 → 照原来判重发
+ *   HG-09 任务进程的日志行(`account-task-worker-config.mjs` 的 `workerLogLine`):一行一条 JSON `{ t, event, ...fields }` 写到标准输出
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as kernel from '../../src/kernel/cutFlatten.mjs';
-import { createHeavyRenderGate, createRenderClipPicker, loadHeavyJudge } from '../agent/service/render-clips.mjs';
+import { createHeavyRenderGate, createRenderClipPicker, JUDGED_CLIP_IDS, loadHeavyJudge } from '../agent/service/render-clips.mjs';
 import { waitFor, wsClient } from './fake-ws-kit.mjs';
 import { script, startKit } from './cloud-agent-kit.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const card = (id, start, end, extra = {}) => ({ id, cardId: 'punch-pill', params: { text: id }, start, end, ...extra });
 
-function gateKit({ judge = null, records = async () => [], project, delayMs = 60 } = {}) {
+function gateKit({ judge = null, groups = null, records = async () => [], project, delayMs = 60 } = {}) {
   const emitted = [];
+  const reports = [];
   const logs = [];
   const calls = { records: 0, judge: [] };
   let current = project;
+  const wrapped = judge ? (p, recs, candidates, opts) => { calls.judge.push({ recs, candidates, opts }); return judge(p, recs, candidates, opts); } : null;
+  if (wrapped && groups) wrapped.groups = groups;
   const gate = createHeavyRenderGate({
     picker: createRenderClipPicker(kernel), delayMs,
     replica: () => ({ project: current, rev: 7 }),
-    judge: () => (judge ? (p, recs, candidates) => { calls.judge.push({ recs, candidates }); return judge(p, recs, candidates); } : null),
+    judge: () => wrapped,
     records: async () => { calls.records += 1; return records(); },
-    emit: (clips, info) => emitted.push({ clips, ...info }),
+    emit: (clips, { rev, judged }) => { emitted.push({ clips, rev }); reports.push({ via: 'emit', ...judged }); },
+    report: (judged, { rev }) => reports.push({ via: 'report', rev, ...judged }),
     log: (event, fields) => logs.push({ event, ...fields }),
   });
-  return { gate, emitted, logs, calls, setProject: (p) => { current = p; } };
+  return { gate, emitted, reports, logs, calls, setProject: (p) => { current = p; } };
 }
 
 /** 替身判定:记录表里 stepMs < 10 的判轻,其余(含没有记录的)判重 */
@@ -55,11 +64,12 @@ test('HG-01 攒满才判:攒的这段时间里写进来的记录用得上;只交
   assert.deepEqual(k.emitted, [{ clips: ['b'], rev: 7 }], '轻的 a 不交、素材 v 本来就不是候选');
   assert.equal(k.calls.records, 1);
   assert.deepEqual(k.calls.judge[0].candidates, ['a', 'b']);
-  assert.deepEqual(k.logs.find((l) => l.event === 'agent.render.judged'), { event: 'agent.render.judged', candidates: 2, heavy: 1, light: 1, why: 'judged', records: 1 });
-  // 全是轻的:什么都不交
+  assert.deepEqual(k.logs.find((l) => l.event === 'agent.render.judged'), { event: 'agent.render.judged', candidates: 2, heavy: 1, light: 1, why: 'judged', records: 1, lightClips: ['a'] });
+  // 全是轻的:什么都不交(摘要交给 report)
   k.gate.note(['a']);
   await sleep(150);
   assert.equal(k.emitted.length, 1);
+  assert.deepEqual(k.reports.at(-1), { via: 'report', rev: 7, candidates: 1, heavy: 0, light: 1, why: 'judged', records: 1, lightClips: ['a'] });
 });
 
 test('HG-02 退路:没有判定函数、取不到记录、判定抛错 → 候选全部交出去', async () => {
@@ -110,6 +120,57 @@ test('HG-04 剪辑段里的卡:候选是虚拟片段 id,同一条规则', async 
   await k.gate.flush();
   assert.deepEqual(k.calls.judge[0].candidates.sort(), ['S2~H', 'S2~L', 'S~H', 'S~L']);
   assert.deepEqual(k.emitted.map((e) => e.clips.sort()), [['S2~H', 'S~H']]);
+});
+
+test('HG-06 判定摘要:有判重的随 emit 交,一张重的都没有时交给 report;判轻的 id 截前 JUDGED_CLIP_IDS 个', async () => {
+  const ids = Array.from({ length: JUDGED_CLIP_IDS + 3 }, (_, i) => `l${i}`);
+  const p = { tracks: [{ id: 't', clips: [...ids.map((id, i) => card(id, i, i + 1)), card('h', 30, 31)] }] };
+  const recs = ids.map((identityKey) => ({ identityKey, stepMs: 1 }));
+  const k = gateKit({ judge: byRecords, records: async () => recs, project: p });
+  k.gate.note([...ids, 'h']);
+  await k.gate.flush();
+  assert.deepEqual(k.emitted, [{ clips: ['h'], rev: 7 }]);
+  assert.equal(k.reports.length, 1);
+  assert.deepEqual(k.reports[0], { via: 'emit', candidates: ids.length + 1, heavy: 1, light: ids.length, why: 'judged', records: ids.length,
+    lightClips: ids.slice(0, JUDGED_CLIP_IDS) });
+  // 只改轻的:不 emit,摘要交给 report
+  k.gate.note(['l0']);
+  await k.gate.flush();
+  assert.equal(k.emitted.length, 1);
+  assert.deepEqual(k.reports[1], { via: 'report', rev: 7, candidates: 1, heavy: 0, light: 1, why: 'judged', records: ids.length, lightClips: ['l0'] });
+  // 退路(取不到记录)照全发,摘要随 emit,why 说明原因
+  const fallback = gateKit({ judge: byRecords, records: async () => null, project: p });
+  fallback.gate.note(['l0']);
+  await fallback.gate.flush();
+  assert.deepEqual(fallback.reports, [{ via: 'emit', candidates: 1, heavy: 1, light: 0, why: 'no-records' }]);
+});
+
+test('HG-07 写之前与写之后的项目都折进 opts.sameCard 交给判定;close 之后清掉', async () => {
+  const before = { tracks: [{ id: 't', clips: [card('a', 0, 1, { params: { n: 1 } })] }] };
+  const after = { tracks: [{ id: 't', clips: [card('a', 0, 1, { params: { n: 2 } })] }] };
+  // 替身:同一张卡的键就是 cardId,身份是参数 n
+  const groups = (proj) => {
+    const out = {};
+    for (const c of proj.tracks[0].clips) (out[c.cardId] ??= []).push(`id-${c.params.n}`);
+    return out;
+  };
+  const judge = (_p, _recs, candidates) => ({ heavy: [], light: candidates, estimated: candidates });
+  const k = gateKit({ judge, groups, project: before });
+  k.setProject(after);
+  k.gate.note(['a'], before);
+  await k.gate.flush();
+  assert.deepEqual(k.calls.judge[0].opts, { sameCard: { 'punch-pill': ['id-1', 'id-2'] } }, '改之前(before)与改之后的身份都在');
+  assert.deepEqual(k.logs.find((l) => l.event === 'agent.render.judged'), { event: 'agent.render.judged', candidates: 1, heavy: 0, light: 1, why: 'judged', records: 0, estimated: 1, lightClips: ['a'] });
+  // 没有 groups 的判定函数(旧模块):照常判,sameCard 为空
+  const plain = gateKit({ judge, project: before });
+  plain.gate.note(['a'], before);
+  await plain.gate.flush();
+  assert.deepEqual(plain.calls.judge[0].opts, { sameCard: {} });
+  // close 之后 prime / note 都不记
+  k.gate.close();
+  k.gate.note(['a'], before);
+  await k.gate.flush();
+  assert.equal(k.calls.judge.length, 1);
 });
 
 /* ------------------------------------------------------------------ HG-05 端到端 */
@@ -201,4 +262,62 @@ test('HG-05 端到端:改轻卡不发、改重卡发、没有记录的重卡发;
   svc.subscribe({ ...A1, userId: 'alice@d1#watch' }, 'c-h1', 0, (ev) => seen.push(ev))?.();
   const renderClips = [...new Set(seen.filter((e) => e.type === 'render').flatMap((e) => e.clips ?? []))].sort();
   assert.deepEqual(renderClips, ['S~Y', 'hvy', 'norec']);
+});
+
+test('HG-08 端到端:改了参数的轻卡,新身份没有记录、改之前的身份有记录 → 按同一张卡估,不发;同一张卡一条记录都没有 → 照原来判重发', { timeout: 240_000 }, async (t) => {
+  const pub = fakePublisher();
+  const kit = await startKit(t, { extra: { publisher: pub, renderLimits: { debounceMs: 200, stallMs: 600_000, progressEveryMs: 0 } } });
+  const clip = (id, cardId, start, end, params) => ({ id, cardId, start, end, params, label: id });
+  const p = {
+    version: 1, id: 'p-h', name: '改参数', width: 1920, height: 1080, fps: 30, duration: 40, themeId: 'midnight', media: [], transitions: [],
+    tracks: [{ id: 't1', name: '序列 1', clips: [
+      clip('lite', 'particles', 0, 4, { quantity: 80 }),
+      clip('fresh', 'blur-text', 5, 9, { text: '没测过的卡' }),
+    ] }],
+  };
+  await kit.doc.seed(p);
+  // 页面只测过改之前的粒子卡(约 2 ms/帧);blur-text 一条记录都没有
+  const judge = await loadHeavyJudge((id) => kit.vite.ssrLoadModule(id));
+  assert.equal(typeof judge.groups, 'function', '判定模块带 cardIdentityGroups');
+  const CI = await kit.vite.ssrLoadModule('/src/editor/costIdentity.ts');
+  CI.resetClipIdentityCache();
+  const oldKey = CI.clipIdentityOf(p).identityKeys.lite;
+  assert.ok(oldKey);
+  const page = wsClient(kit.doc.url);
+  t.after(() => page.close());
+  await page.opened;
+  page.send({ type: 'cost.put', projectId: 'p-h', envFingerprint: '00000000000000aa', reqId: 'cost-1',
+    records: [{ identityKey: oldKey, stepMs: 2.1, samples: 30, measuredAt: Date.now(), mode: 'build' }] });
+  assert.equal((await page.next((m) => m.reqId === 'cost-1', 5000)).type, 'cost.stored');
+
+  await kit.service.send(A1, 'c-h8', { prompt: script([
+    { tool: 'update_clip', input: { clipId: 'lite', params: { quantity: 120 } } },
+    { tool: 'update_clip', input: { clipId: 'fresh', params: { text: '改了字' } } },
+    { say: '改好了' },
+  ]) });
+  await kit.finished(A1, 'c-h8');
+  await waitFor(() => pub.published().length >= 1, 30_000, '发出计划');
+  await sleep(600);
+  const published = [...new Set(pub.published().flatMap((task) => task.input.clips))].sort();
+  const judged = kit.logs.filter((l) => l.event === 'agent.render.judged');
+  t.diagnostic(`发布:${JSON.stringify(published)};判定:${JSON.stringify(judged)}`);
+  assert.deepEqual(published, ['fresh'], '改了参数的粒子卡按改之前的记录估为轻,不发;一条记录都没有的 stateful 卡照发');
+  assert.ok(judged.some((l) => l.why === 'judged' && l.estimated === 1 && (l.lightClips ?? []).includes('lite')), JSON.stringify(judged));
+  // 新身份确实没有记录(不是页面刚好测完)
+  CI.resetClipIdentityCache();
+  const replicaKeys = CI.clipIdentityOf({ ...p, tracks: [{ ...p.tracks[0], clips: [{ ...p.tracks[0].clips[0], params: { quantity: 120 } }, p.tracks[0].clips[1]] }] }).identityKeys;
+  assert.notEqual(replicaKeys.lite, oldKey, '改参数换成本身份');
+});
+
+test('HG-09 任务进程的日志行:一行一条 JSON 写到标准输出(systemd 收进日志)', async () => {
+  const { workerLogLine } = await import('../agent-service/account-task-worker-config.mjs');
+  const lines = [];
+  const original = process.stdout.write;
+  process.stdout.write = (chunk) => { lines.push(String(chunk)); return true; };
+  try { workerLogLine('agent.render.judged', { candidates: 2, heavy: 0, light: 2, why: 'judged' }); }
+  finally { process.stdout.write = original; }
+  assert.equal(lines.length, 1);
+  assert.ok(lines[0].endsWith('\n') && !lines[0].slice(0, -1).includes('\n'), '一条一行');
+  const row = JSON.parse(lines[0]);
+  assert.equal(row.event, 'agent.render.judged'); assert.equal(row.heavy, 0); assert.equal(typeof row.t, 'string');
 });

@@ -155,7 +155,9 @@ export async function startRunnerProcessFixture({ slotId = 'slot-a', pollMs = 10
         masterAssembly = await createAccountMasterAssembly({ dataDir: masterDataDir, sharedDataDir, runClient: agentRunClient,
           conversationClient: agentClient, readControl: agentReadControl, tls: pki.master, internalPort: P.masterEvents,
           controllerFingerprint256: pki.rootctl.fingerprint256, ...(render ? { render: typeof render === 'function' ? await render({ docUrl: `ws://127.0.0.1:${ports.doc}`, servicesFile, masterKey, dir: fixtureDir }) : render } : {}), log: (event, fields) => say(`master.${event}`, { code: fields?.code ?? null,
-            ...(String(event).startsWith('agent.page.') ? { why: fields?.why ?? null, tool: fields?.tool ?? null } : {}) }) });
+            ...(String(event).startsWith('agent.page.') ? { why: fields?.why ?? null, tool: fields?.tool ?? null } : {}),
+            // 判轻重的摘要(`account-render-requests.mjs`):张数、为什么、判轻的片段 id,不含凭证,原样留下供断言
+            ...(event === 'agent.render.judged' ? fields : {}) }) });
         eventStore = masterAssembly.eventStore;
         await until(() => readControl.describe().connected, { timeoutMs: 10_000, what: '主身份的读取控制连接' });
         schedulerMaster = createMasterSchedulerClient({ origin: `https://127.0.0.1:${P.masterEvents}`, tls: pki.rootctl,

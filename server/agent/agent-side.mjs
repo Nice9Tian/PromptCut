@@ -136,7 +136,7 @@ export function createAgentSide({
         // 用户正在编辑的片段被这次读到或写到:结果带 userEditing 与一句提示(A2;只提示,不拦)
         // 这次调用落地了一次写入:告诉宿主写到了哪些片段(托管档据此发预渲染重试计划,契约 cloud-agent-contract.md 第 16 节)
         if (seen?.write && typeof onWrite === 'function') {
-          try { onWrite(key, { opId: seen.write.opId, rev: seen.write.rev, clipIds: seen.write.clipIds ?? [] }); } catch { /* 宿主的事,不影响工具结果 */ }
+          try { onWrite(key, { opId: seen.write.opId, rev: seen.write.rev, clipIds: seen.write.clipIds ?? [], before: seen.write.before ?? null }); } catch { /* 宿主的事,不影响工具结果 */ }
         }
         const hit = userEditingFor({ tool, args, written: seen?.write?.clipIds ?? [], editing: editingNow() });
         return annotateResult(result, { userEditing: hit });

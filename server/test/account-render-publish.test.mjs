@@ -12,6 +12,9 @@
  *   AR-08  主服务的发布通道:按目录里的渲染节点与「生成轨道流」开关答 availability
  *   AR-09  (要账号后端)真实任务进程里 Agent 加一张重卡:render_request 经内部口进主服务,主服务发计划,渲完对话里有「完成」;
  *          同一节点关掉「生成轨道流」后再改:不发、对话里是 off
+ *   AR-13  判定摘要:render_request 带 judged 时主服务记 agent.render.judged(项目号取核过的绑定);片段为空、只带摘要的事件
+ *          (一张重的都没有)只记日志、不发布、不记 render 事件;旧事件不带摘要照旧;摘要形状不对的项不记
+ *   AR-12  (要账号后端)真实任务进程:一张重卡一张轻卡 → 主服务日志 judged heavy:1、只发重的;只改轻卡 → 主服务日志 judged heavy:0、不发
  * 跑:npm test -- server/test/account-render-publish.test.mjs
  */
 import test from 'node:test';
@@ -21,6 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createAccountRenderRequests, createAccountRenderPublisher, RENDER_REQUEST_EVENT } from '../agent-service/account-render-requests.mjs';
 import { renderStatusText } from '../../src/ai/cloud/events.ts';
+import { JUDGED_CLIP_IDS } from '../agent/service/render-clips.mjs';
 
 const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check, what, ms = 5000) {
@@ -171,6 +175,47 @@ test('AR-07 一轮收尾马上发;主服务重启后按盘上的清单重发;对
   assert.deepEqual(fs.readdirSync(dir), []);
 });
 
+test('AR-13 判定摘要:主服务记 agent.render.judged;片段为空只记日志不发布;旧事件照旧;形状不对的项不记', async (t) => {
+  const pub = fakePublisher();
+  const store = fakeStore();
+  const logs = [];
+  const rr = createAccountRenderRequests({ dir: path.join(tmp(t), 'rr'), eventStore: store, publisher: pub, limits: { debounceMs: 20 },
+    log: (event, fields) => logs.push({ event, ...fields }) });
+  t.after(() => rr.close());
+  const judgedLogs = () => logs.filter((l) => l.event === 'agent.render.judged');
+  const b = bindingFor('sp_a', 'conv_1', 'run_7');
+  // 有判重的:记日志,照发
+  rr.observe(receiptOf(b, { type: RENDER_REQUEST_EVENT, clips: ['h1'], rev: 5, userCards: false,
+    judged: { candidates: 3, heavy: 1, light: 2, why: 'judged', records: 4, estimated: 1, lightClips: ['l1', 'l2'] } }));
+  await until(() => pub.tasks.length === 1, '发出计划');
+  assert.deepEqual(judgedLogs(), [{ event: 'agent.render.judged', projectId: 'sp_a', runId: 'run_7', candidates: 3, heavy: 1, light: 2,
+    records: 4, estimated: 1, why: 'judged', lightClips: ['l1', 'l2'] }]);
+  // 一张重的都没有:片段为空、rev 为 null、只带摘要 → 记日志,不发布,不记 render 事件
+  await until(() => store.render().some((e) => e.state === 'published'), 'published 事件');
+  const before = store.render().length;
+  rr.observe(receiptOf(b, { type: RENDER_REQUEST_EVENT, clips: [], rev: null, userCards: false,
+    judged: { candidates: 1, heavy: 0, light: 1, why: 'judged', records: 4, lightClips: ['l1'] } }));
+  await tick(80);
+  assert.equal(judgedLogs().length, 2);
+  assert.deepEqual(judgedLogs()[1], { event: 'agent.render.judged', projectId: 'sp_a', runId: 'run_7', candidates: 1, heavy: 0, light: 1, records: 4, why: 'judged', lightClips: ['l1'] });
+  assert.equal(pub.tasks.length, 1, '没有发新计划');
+  assert.equal(store.render().length, before, '没有新的 render 事件');
+  // 旧任务进程的事件不带摘要:照旧发,不记判定日志
+  rr.observe(receiptOf(bindingFor('sp_a', 'conv_2', 'run_8'), { type: RENDER_REQUEST_EVENT, clips: ['h2'], rev: 6 }));
+  await until(() => pub.tasks.length === 2, '旧事件照发');
+  assert.equal(judgedLogs().length, 2);
+  // 摘要形状不对:认不得的项、坏的 id 丢掉;连候选张数都没有的整条不记;判轻的 id 最多 JUDGED_CLIP_IDS 个
+  rr.observe(receiptOf(b, { type: RENDER_REQUEST_EVENT, clips: [], rev: null,
+    judged: { candidates: 2, heavy: -1, light: 'x', why: 'Bad Why!', token: 'secret', lightClips: ['ok', 'bad\nid', 7, ...Array.from({ length: 20 }, (_, i) => `z${i}`)] } }));
+  rr.observe(receiptOf(b, { type: RENDER_REQUEST_EVENT, clips: [], rev: null, judged: { why: 'judged' } }));
+  rr.observe(receiptOf(b, { type: RENDER_REQUEST_EVENT, clips: [], rev: null, judged: ['x'] }));
+  await tick(40);
+  assert.equal(judgedLogs().length, 3);
+  const odd = judgedLogs()[2];
+  assert.deepEqual(Object.keys(odd).sort(), ['candidates', 'event', 'lightClips', 'projectId', 'runId']);
+  assert.equal(odd.lightClips.length, JUDGED_CLIP_IDS); assert.equal(odd.lightClips[0], 'ok');
+});
+
 test('AR-08 主服务的发布通道:按目录里的渲染节点与生成轨道流答 availability', async () => {
   let watcher = null;
   const client = { connected: true, instanceId: 'agent-inst', watch(h) { watcher = h; return Promise.resolve(); }, publishTicket: async () => ({ ok: false, reason: 'no-project' }),
@@ -297,4 +342,53 @@ test('AR-11 真实任务进程:剪辑1 引用剪辑2,Agent 切到剪辑2 加卡�
     const want = `${seg.id}~${inner.id}`;
     await until(() => pub.tasks.slice(before).some((task) => task.input.clips.includes(want)), `发布清单里有 ${want}`, 20_000);
     t.diagnostic(`AR-11 清单:${JSON.stringify(pub.tasks.slice(before).map((task) => task.input.clips))}`);
+  });
+
+// ---------------------------------------------------------------- AR-12 真实任务进程:判定摘要进主服务日志
+test('AR-12 真实任务进程:一重一轻 → 主服务日志 judged heavy:1、只发重的;只改轻卡 → 主服务日志 judged heavy:0、不发',
+  { skip: !have && 'account provider env not set', timeout: 300_000 }, async (t) => {
+    const { startRunnerProcessFixture } = await import('./fixtures/account-runner-process.mjs');
+    const { runnerPorts } = await import('./free-ports.mjs');
+    const pub = fakePublisher();
+    const f = await startRunnerProcessFixture({ ports: await runnerPorts(), productionMaster: true, render: { publisher: pub, limits: { debounceMs: 200 } } });
+    let actor;
+    t.after(async () => { await actor?.close().catch(() => {}); await f.close(); });
+    actor = await f.connectActor(0);
+    const send = async (conversationId, requestId, steps) => {
+      const posted = await actor.agent(`/conversations/${conversationId}/messages`, { prompt: script(steps), requestId, selectionSnapshot: { pageId: actor.pageId } });
+      assert.equal(posted.status, 202, JSON.stringify(posted.body));
+      return f.messageOf(conversationId, requestId).messageId;
+    };
+    const finished = (id) => f.grantOf(id)?.state === 'finished';
+    const judged = () => f.log.filter((l) => l.event === 'master.agent.render.judged');
+    pub.state = { available: true, enabled: true, streams: true };
+    await f.scheduler.start();
+    // 一、一张 stateful 的重卡(没有成本记录,同一张卡也没有)+ 一张声明 direct 的卡(没有记录按兜底判轻)
+    const first = await send('ar_judged', 'ar_judged_a', [
+      { tool: 'add_track', input: { name: '主序列' } },
+      { tool: 'add_clip', input: { cardId: 'blur-text', start: 0, duration: 4, params: { text: '重卡' } } },
+      { tool: 'add_clip', input: { cardId: 'lottie', start: 5, duration: 4 } },
+      { say: '加好了' }]);
+    await until(() => finished(first), '第一轮结清', 120_000);
+    await until(() => pub.tasks.length >= 1 && judged().length >= 1, '发出计划、主服务记了判定', 20_000);
+    const clips = (await actor.project()).project.tracks.flatMap((tr) => tr.clips);
+    const heavyClip = clips.find((c) => c.cardId === 'blur-text'), lightClip = clips.find((c) => c.cardId === 'lottie');
+    assert.ok(heavyClip && lightClip, JSON.stringify(clips));
+    assert.deepEqual([...new Set(pub.tasks.flatMap((task) => task.input.clips))], [heavyClip.id], '只发重的');
+    const j1 = judged().at(-1);
+    assert.equal(j1.projectId, f.projectId); assert.equal(j1.why, 'judged'); assert.equal(j1.heavy, 1); assert.equal(j1.light, 1);
+    assert.deepEqual(j1.lightClips, [lightClip.id]);
+    const ev1 = f.events('ar_judged').filter((r) => r.event.type === RENDER_REQUEST_EVENT);
+    assert.ok(ev1.some((r) => r.event.judged?.heavy === 1), `render_request 带摘要:${JSON.stringify(ev1.map((r) => r.event))}`);
+    // 二、只改轻卡:一张重的都没有 → 不发,主服务照样记一条 heavy:0
+    const tasksBefore = pub.tasks.length, judgedBefore = judged().length;
+    const second = await send('ar_judged', 'ar_judged_b', [
+      { tool: 'update_clip', input: { clipId: lightClip.id, params: { speed: 2 } } }, { say: '改好了' }]);
+    await until(() => finished(second), '第二轮结清', 120_000);
+    await until(() => judged().length > judgedBefore, '主服务记了 heavy:0 的判定', 20_000);
+    const j2 = judged().at(-1);
+    t.diagnostic(`AR-12 判定日志:${JSON.stringify(judged())}`);
+    assert.equal(j2.heavy, 0); assert.equal(j2.light, 1); assert.equal(j2.why, 'judged'); assert.deepEqual(j2.lightClips, [lightClip.id]);
+    await tick(400);
+    assert.equal(pub.tasks.length, tasksBefore, '轻卡不发');
   });

@@ -390,7 +390,7 @@ export function createHostedAgentService({
     if (!conv?.run) return;
     // 剪辑段里的卡按摊平视图里的虚拟片段 id 发(`render-clips.mjs`;一个实例一份上一次的签名表)
     entry.renderPicker ??= createRenderClipPicker(() => flatKernel);
-    renderGateOf(entry, conversationId, conv).note(write?.clipIds ?? []);
+    renderGateOf(entry, conversationId, conv).note(write?.clipIds ?? [], write?.before ?? null);
   }
 
   /**
