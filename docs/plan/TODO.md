@@ -130,15 +130,16 @@
   - 补「速度」「滤镜」两个入口；其余缺的入口（动画、音效分类、存储、设置、导出分辨率与透明层、Agent 未读角标、扫码加入）往后放。
   - 缩略卡、素材格子显示真画面（视频首帧、图片缩略图，要经素材票据），和上一条一起排。
   - 低内存档的提示与在线桌面 AI 栏的占位不单独撤，随 0.7.19 和三道闸门一起撤。
-- 〔进行中，分支 `claude/cut-look-ui`〕剪辑段引用哪条剪辑不能改：属性面板拿掉「引用」下拉框（`src/editor/left/CutSegmentForm.tsx`），Agent 的 `set_cut_segment` 也不能换；双击打开、右键「打开剪辑」、面板「打开被引用剪辑」按钮已有，保留。`workflow/editing.md` 那一句用户已批准。
-- 〔进行中，同一分支〕`see_frames` 加剪辑 id（留空为当前激活剪辑），不用切换就能看别的剪辑；会动用户界面的工具名字前加 `user_interface_`（如 `user_interface_switch_cut`）。
+- 〔已上线，main `cc716da3`，2026-10-21 部署并线上验过〕剪辑段引用哪条剪辑不能改：属性面板拿掉「引用」下拉框，Agent 的 `set_cut_segment` 也不能换；`workflow/editing.md` 那一句已写。
+- 〔已上线，同上〕`see_frames` 加剪辑 id（留空为当前激活剪辑）；会动用户界面的工具名字前加 `user_interface_`（`switch_cut`、`seek`、`play`、`pause`、`web_handoff`、`collect_login`），`add_cut` 只建不切。报告 `docs/archive/agent-reports/AGENT-cut-look-ui.md`。
 - 云端 Agent 发送接口不再重复核「首次使用告知」，点发送时面板核过一次即可（`docs/archive/agent-reports/AGENT-agent-panel-smooth.md`「待用户定」第 3 条）。
 - 另见上文已改状态的三条：音频看门狗、登录框「粘贴授权码」、托管地址换自有域名。
-- 〔裁〕总审第一批的回复（2026-10-22，原话见 `user-decisions-2026-10-21.md` 第 7 节；排在 `claude/cut-look-ui` 之后）：
-  - A04：云端出错时那几句话维持，另建一张对照表（出错种类 → 用户看到的话 → 代码位置 → 怎么查），方便以后排查。
-  - A07：单次输出上限调大（同时设 `max_completion_tokens`，算上思考占的额度）；研究截断后的续写，以及给项目一块「代码块空间」让 Agent 分段读写（如 read / replace），先出方案。
-  - A09：所有 Agent 会话都能关，最后一个也能关；没有会话时进项目显示开始页，用动画引导输入，或点预设「做一个动画告诉我使用软件可以干什么」放进输入框；点发送才建第一个会话；用户手动清空后只显示开始页、不放引导动画。
-  - A10：Agent 分页清单按项目分开，界面上叫 Agent1、Agent2…，代码里的标记是「项目ID_AgentID」。
+- 〔已上线，main `cca687a1`，2026-10-21 部署并线上验过〕〔裁〕总审第一批的回复（原话见 `user-decisions-2026-10-21.md` 第 7 节；报告 `docs/archive/agent-reports/AGENT-output-cache.md`、`AGENT-agent-tabs-start.md`）：
+  - A04：对照表在 `mechanism/agent.md` 末尾「出错时的话对照表」。
+  - A07：单次输出上限按模型取（Claude 当前各型号与 GPT-5 128000、Gemini 65536），推理模型发 `max_completion_tokens`，数太大回 400 降一档重发一次；截断时写了一半的参数存进代码块，提示模型接着写（一轮最多 6 次）；六个代码块工具与 `@code_cache:名字` 引用，本机与云端都有，按项目存放。生产 `ai.json` 的 `maxTokens` 改成 128000。
+  - A09：会话都能关；没有会话时显示开始页（刚进项目带引导动画，手动清空过只显示预设与输入框），点发送才建 Agent 1。
+  - A10：分页清单按项目分开，键 `pc.agentTabs:<项目ID>`，分页 id 是「项目ID_AgentID」；旧的全局清单不迁移〔裁〕，对话仍在历史里。
+  - 留下的：① 云端气泡把模型那一路的报错截到 80 字（`src/ai/cloud/events.ts` 的 `REASON_MAX`），截断超限等长中文话后半句看不到，放宽要用户同意；② 代码块工具没接到 MCP（桌面版经 MCP 接入的命令行 Agent）；③ `server/ai-config.mjs`、`server/agent-service/set-key.mjs`、`service-keys.mjs` 没填时仍写 4096（现在被当作「没填」，行为没问题）；④ 手机版 Agent 页没有会话时是一页固定说明，照演示稿重画时一起做。
 
 ## 性能方向（未排期）
 
