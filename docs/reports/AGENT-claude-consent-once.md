@@ -1,5 +1,7 @@
 # AGENT 报告：claude/consent-once
 
+状态：实现、单测、基线已完成，待主会话审查与 Opus 安全审查。
+
 任务：云端 Agent 发一条消息只核一次「首次使用告知」，省掉重复的那一次对账号服务的往返，不放松告知这道关。
 出处：`docs/archive/agent-reports/AGENT-agent-panel-smooth.md`「没改、交回主会话的」第 2 条。
 分支 `claude/consent-once`，从 main `141e0be8` 切。
@@ -25,7 +27,7 @@
   - `CLOUD_CONSENT_PERMIT_TTL_MS = 5_000` 与只给单测用的 `setCloudConsentClockForTest`。
 - `src/ai/cloud/useCloud.ts`：`CloudChat.send` 多一个可选参数 `consentPermit`，原样交给 `requireCloudConsent`。不带许可的调用（附件 `attach`、切权限、删除对话）不变，照旧每次新读。
 - `src/editor/right/CloudAiPanel.tsx`：`consentForUse` 改用 `grantCloudConsent`，放行时回 `{ permit }`（本地档回 `{ permit: null }`），不放行回 `null`；四条发送路径（账号模式的乐观发送、普通发送、本地排队的队首、插队发送）把许可经 `sendNow` 交给 `chat.send`。附件上传与重试只用它的真假，行为不变。
-- `src/ai/cloud/consent-once.test.mjs`（新）：17 个用例，见下。
+- `src/ai/cloud/consent-once.test.mjs`（新）：16 个用例，见下。
 
 ## 安全论证
 
@@ -61,7 +63,28 @@
 
 ## 验证
 
-（见下一节，跑完后填）
+所有命令在 worktree 里跑；`npm test` 前按任务书设了两个本机环境变量（值不写进报告）。
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `npx tsc -b --force` | 0 | 零错误（实现提交后、测试提交后各跑一次） |
+| `npm test -- src/ai/cloud/consent-once.test.mjs src/ai/cloud/consent.test.mjs` | 0 | 22 / 22 通过（新 16 + 原 6） |
+| `npm test`（全量，机器上有别的任务并行） | 0 | tests 7442，pass 7427，fail 0，cancelled 0，skipped 15，约 224 秒；没有文件级失败、没有触发重跑，所以不需要单跑复核 |
+
+请求计数（单测在账号客户端的桥上数 `/api/account/cloud-agent-consent` 的 GET）：
+
+| 场景 | 改前 | 改后 | 单测 |
+|---|---|---|---|
+| 发一条消息 | 2 | 1 | 「改前：…两次读取」「改后：一次发送只读一次告知」 |
+| 连发 4 条 | 8 | 4（每条各读一次，不是读一次一直放行） | 「改后：…」 |
+| 同一张许可用第二次 | — | 再读 1 次 | 「许可只能用一次」 |
+| 许可过期（> 5 秒）且服务端此时不同意 | 2，拒绝 | 2，拒绝 | 「许可过期…」 |
+| 中间插进一次读到「不同意」 / 一次还在路上的读取 | — | 退回新读，拒绝 | 两条「中间插进来…」 |
+| 撤权、换绑、退出登录、未登录、解绑项目 | 拒绝 | 拒绝（错误码与改前一致） | 「撤权」×2、「换绑」×2、「未登录」、「解绑项目后许可作废」 |
+| 伪造许可 | — | 当没有，照旧新读 | 「伪造的许可…」 |
+| 接线 | — | 面板四条发送路径都把许可交给 `chat.send`，`chat.send` 交给 `requireCloudConsent` | 「接线：…」（读源码） |
+
+本改动不涉及渲染，没有看图。
 
 ## 没做成的及原因
 
