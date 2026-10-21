@@ -285,7 +285,8 @@
 | 模型没配置 | `code: 'no-model-key'` | 云端 Agent 还没有配置模型,请联系托管方。 | `cloudApi.ts:69` | 节点 `config/ai.json`、`keys/custom.key` |
 | 消息太长 | `code: 'too-large'` | 消息太长了,云端 Agent 收不下。请缩短后再发。 | `cloudApi.ts:70` | 请求体上限 256 KiB |
 | 网络 | 请求没回来 | 连不上云端 Agent 服务,请检查网络。 | `cloudApi.ts:73`；`session.ts:572` | 浏览器网络面板 |
-| 其它代号 | 不在上面 | <服务端的话>；没有就是「云端 Agent 出错了(<代号>)。」 | `cloudApi.ts:83` | 回包的 `code` |
+| 没同意告知 | 403，`code: 'consent-required'` | 使用云端 Agent 前，请先阅读并确认告知。（页面同时弹出告知框，只弹发这条消息的那个分页） | `server/account/conversation-authority.mjs:250` → `cloudApi.ts:84` | 账号服务的告知状态；服务端每次收消息都现核 |
+| 其它代号 | 不在上面 | <服务端的话>；没有就是「云端 Agent 出错了(<代号>)。」 | `cloudApi.ts:85` | 回包的 `code` |
 | 对话数满、删除相关 | `conversation-limit`、`delete-forbidden`、`no-conversation` 等 | 见 `src/ai/cloud/chatTexts.ts`（例：「没有找到这个对话，它可能已经被删除。」，:39） | `cloudApi.ts:75`～`:82` | 对话账本 |
 
 ### 云端：读不了这个对话（对话区的提示，不是某一轮的红字）
