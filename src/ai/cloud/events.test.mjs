@@ -212,3 +212,43 @@ test('已有行为不变:正常轮收尾、第一个事件之前就失败的轮(
   assert.equal(early.length, 2);
   assert.match(early[1].error, /进程出了故障/);
 });
+
+// ---- 出错留痕(探针 E1～E3):账号模式下原因要写进对话 ----
+test('E1 没带 code 的 error 是模型调用失败:写「模型调用失败:原因」,中文原因保留', () => {
+  assert.equal(cloudErrorMessage(undefined, '上游接口 500(探针注入)'), '模型调用失败:上游接口 500(探针注入)');
+  assert.equal(cloudErrorMessage('model', '上游接口 500'), '模型调用失败:上游接口 500');
+  // 已经以「模型」开头的话不再叠一层
+  assert.equal(cloudErrorMessage(undefined, '模型服务暂时不可用'), '模型服务暂时不可用');
+  // 英文原因同样带前缀(没有更具体的分类时)
+  assert.equal(cloudErrorMessage(undefined, 'unexpected token in JSON'), '模型调用失败:unexpected token in JSON');
+  // 网关额度不足仍是原来那句(托管方充值)
+  assert.match(cloudErrorMessage(undefined, QUOTA_RAW), /额度不够.*托管方充值/);
+  const folded = applyCloudEvents([], [accepted, event('run', 2), event('error', 3, { message: '上游接口 500(探针注入)' }), event('runner_done', 4, { outcome: 'failed', settlement: 'pending' })]);
+  const settled = settleFromQueue(folded, snapshot([{ state: 'done', outcome: { status: 'failed', reason: null } }]))[1];
+  assert.equal(settled.outcome, 'error');
+  assert.match(settled.error, /^模型调用失败:上游接口 500/);
+});
+
+test('E2 项目额度用尽(带 code):服务端写的「已用 N / 上限 M」原样显示,不加「模型调用失败」前缀', () => {
+  const said = '这个项目的云端 Agent 额度已用完(已用 1234 / 上限 1000)。请联系托管方。';
+  assert.equal(cloudErrorMessage('quota-exceeded', said), said);
+  const folded = applyCloudEvents([], [accepted, event('run', 2), event('error', 3, { code: 'quota-exceeded', message: said }), event('runner_done', 4, { outcome: 'failed', settlement: 'pending' })]);
+  assert.match(folded[1].error, /额度已用完\(已用 \d+ \/ 上限 \d+\)/);
+  // 只有代号没有话:仍有兜底句
+  assert.equal(cloudErrorMessage('quota-exceeded'), '云端 Agent 的额度已用完。');
+});
+
+test('E3 创建者关了开关:gate 的话带 code=disabled 原样显示;只有账本强制终态(没有 error 事件)时也写出原因', () => {
+  assert.equal(cloudErrorMessage('disabled', '项目创建者已关闭云端 Agent。'), '项目创建者已关闭云端 Agent。');
+  const running = applyCloudEvents([], [accepted, event('run', 2), event('text', 3, { delta: '写了一半' })]);
+  const stopped = settleFromQueue(running, snapshot([{ state: 'cancelled', outcome: { status: 'interrupted', reason: 'agent-disabled' } }]))[1];
+  assert.equal(stopped.pending, false);
+  assert.equal(stopped.outcome, 'error');
+  assert.match(stopped.error, /已关闭云端 Agent/);
+  const removed = settleFromQueue(running, snapshot([{ state: 'cancelled', outcome: { status: 'interrupted', reason: 'member-revoked' } }]))[1];
+  assert.match(removed.error, /不在这个项目/);
+  // 已有 error 事件写过原因就以它为准
+  const withError = applyCloudEvents([], [accepted, event('run', 2), event('error', 3, { code: 'disabled', message: '项目创建者已关闭云端 Agent。' })]);
+  const kept = settleFromQueue(withError, snapshot([{ state: 'cancelled', outcome: { status: 'interrupted', reason: 'agent-disabled' } }]))[1];
+  assert.equal(kept.error, '项目创建者已关闭云端 Agent。');
+});

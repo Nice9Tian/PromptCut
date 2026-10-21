@@ -19,7 +19,8 @@ export const assistantMessageId = (runId: string) => `ca-${runId}`;
 
 /** 每个收尾原因在对话里留给人看的话(契约 7.3 节)。服务端的 `error.message` 优先,没给才用这里的 */
 export function cloudErrorMessage(code: string | undefined, message?: string): string {
-  if (typeof message === "string" && message) return friendlyErrorMessage(message);
+  // 没带 code 的 error 是模型调用那一路抛的(账号运行器不给模型错误打 code);带 code 的(额度、开关、轮数上限……)服务端已写好话
+  if (typeof message === "string" && message) return friendlyErrorMessage(message, code === undefined || code === "model");
   switch (code) {
     case "revoked": return "云端 Agent 的这段对话已失效(开关被关、你被移出项目或项目已删除)。已经落地的改动保留在项目里。";
     case "interrupted": return "云端 Agent 服务中断,这一轮没有做完。已经落地的改动保留在项目里。";
@@ -51,11 +52,15 @@ export function shortReason(raw: string): string {
  * 模型网关的报错形如 `openai HTTP 403: token quota is not enough, ...`,原文是英文又带请求号和金额,用户读不懂也无从下手。
  * 已经是中文的话(服务端自己写的「已失效」「中断」等)原样放过;不认得的英文报错压成一句短原因,不带密钥、请求号、网址。
  */
-export function friendlyErrorMessage(message: string): string {
+export function friendlyErrorMessage(message: string, model = false): string {
   const http = /\bHTTP\s+(\d{3})\b/i.exec(message);
   const status = http ? Number(http[1]) : 0;
   const quota = /quota|insufficient[ _-]?(?:funds|balance|credit)|out of credit|billing|balance/i.test(message);
-  if (/[一-鿿]/.test(message) && !quota) return shortReason(message) || "云端 Agent 出错了。";
+  if (/[一-鿿]/.test(message) && !quota) {
+    const said = shortReason(message);
+    if (!said) return model ? "模型调用失败。" : "云端 Agent 出错了。";
+    return model && !said.startsWith("模型") ? `模型调用失败:${said}` : said;
+  }
   if (quota && (!status || status === 402 || status === 403 || status === 429)) return "模型服务的额度不够,这一轮没有执行(需要托管方充值)。已经落地的改动保留在项目里。";
   if (status === 401 || (status === 403 && /api[ _-]?key|unauthori[sz]ed|forbidden|permission|invalid.*(?:key|token)/i.test(message))) {
     return "模型服务拒绝了云端 Agent 的凭证,这一轮没有执行(需要托管方检查模型配置)。";
@@ -68,7 +73,20 @@ export function friendlyErrorMessage(message: string): string {
   }
   const reason = shortReason(message);
   if (http) return reason ? `模型调用失败(HTTP ${status}):${reason}` : `模型调用失败(HTTP ${status})。`;
+  if (model) return reason ? `模型调用失败:${reason}` : "模型调用失败。";
   return reason ? `云端 Agent 出错了:${reason}` : "云端 Agent 出错了。";
+}
+
+/** 文档服务签的强制终态原因(账本 `outcome.reason`)→ 对话里留给人看的话;没有对应的返回 null */
+function forcedStopReason(reason: string | null | undefined): string | null {
+  switch (reason) {
+    case "worker-failed": return "云端执行这一轮的进程出了故障,这一轮没有做完。已经落地的改动保留在项目里。";
+    case "agent-disabled": return "项目创建者已关闭云端 Agent,这一轮已停止。已经落地的改动保留在项目里。";
+    case "member-revoked": return "你已不在这个项目里,这一轮已停止。已经落地的改动保留在项目里。";
+    case "credential-revoked": return "你的登录已失效,这一轮已停止。已经落地的改动保留在项目里。";
+    case "private": return "这个对话被切成了私有,这一轮已停止。已经落地的改动保留在项目里。";
+    default: return null;
+  }
 }
 
 /** 预渲染重试进展(契约 16 节)写成一行状态 */
@@ -321,10 +339,9 @@ function settledPatch(m: CloudAccountMessage, item: CloudQueueItem): Partial<Clo
     return { ...base, outcome, progress: { ...m.progress, phase: 'completed', text: '云端已确认这一轮结束。' } as ChatMessage['progress'] };
   }
   if (status === 'cancelled') return { ...base, outcome: 'aborted', progress: { ...m.progress, phase: 'paused', text: '已停止' } as ChatMessage['progress'] };
-  const error = m.error ?? (item.outcome?.reason === 'worker-failed'
-    ? '云端执行这一轮的进程出了故障,这一轮没有做完。已经落地的改动保留在项目里。'
-    : status === 'failed' ? '云端 Agent 这一轮执行失败了,没有做完。已经落地的改动保留在项目里。'
-    : cloudErrorMessage('interrupted'));
+  const error = m.error ?? (forcedStopReason(item.outcome?.reason)
+    ?? (status === 'failed' ? '云端 Agent 这一轮执行失败了,没有做完。已经落地的改动保留在项目里。'
+    : cloudErrorMessage('interrupted')));
   return { ...base, outcome: 'error', error, progress: { ...m.progress, phase: 'paused', text: error } as ChatMessage['progress'] };
 }
 

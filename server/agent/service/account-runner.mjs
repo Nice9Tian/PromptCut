@@ -336,7 +336,10 @@ export function createExistingHostedRunnerFactory({ root, loadModule, dataClient
             if (phase === 'before') {
               await onModelCall({ phase, info });
               const admitted = await gate.admitModelCall({ projectId: grant.projectId, userId: grant.accountId, model });
-              if (admitted?.ok !== true) fail(429, admitted?.code ?? 'quota');
+              // 带上闸门写好的话(额度:「已用 N / 上限 M」;开关:「项目创建者已关闭云端 Agent」)和代号:
+              // api 运行器据 runErrorCode 发 `error{code,message}`,页面直接显示;只抛代号会让对话里只剩一个英文代号
+              if (admitted?.ok !== true) throw Object.assign(new Error(admitted?.message ?? admitted?.code ?? 'quota'),
+                { status: 429, code: admitted?.code ?? 'quota', runErrorCode: admitted?.code ?? 'quota' });
             } else {
               gate.record({ t: now(), projectId: grant.projectId, userId: grant.accountId,
                 username: grant.initiatorName ?? record.senderNameAtSend, conversationId: grant.conversationId, runId: grant.runId,
