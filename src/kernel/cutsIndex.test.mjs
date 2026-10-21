@@ -43,7 +43,8 @@ test("索引只列没激活的剪辑;片段带 id / trackId / 卡或素材或被
   assert.equal("params" in b.clips[0], false, "不带 params,省 token");
   assert.deepEqual(idx.cuts[1].clips, [], "空剪辑也列出来,clips 为空");
   assert.equal(idx.cuts[1].duration, 30, "缺 duration 的停放剪辑用兜底 30");
-  assert.match(idx.note, /不用 switch_cut/);
+  assert.match(idx.note, /不用 user_interface_switch_cut/);
+  assert.match(idx.note, /see_frames 传 cutId/);
   assert.equal(idx.note, PARKED_EDIT_NOTE);
 });
 
@@ -94,7 +95,7 @@ test("坏数据不抛:停放条目没 tracks、序列没 clips", () => {
 test("otherCutsHint:只列有内容的别的剪辑的计数,不列片段;没有有内容的别的剪辑时为 null", () => {
   const h = otherCutsHint(proj());
   assert.deepEqual(h.cuts, [{ cutId: "cutB", name: "剪辑2", clipCount: 3 }]);
-  assert.match(h.hint, /不用 switch_cut/);
+  assert.match(h.hint, /不用 user_interface_switch_cut/);
   assert.match(h.hint, /parkedCuts/);
   const empty = proj();
   empty.cuts[1].tracks = [];

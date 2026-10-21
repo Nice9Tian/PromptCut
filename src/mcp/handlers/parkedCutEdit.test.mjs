@@ -5,7 +5,7 @@
  *     找得到停放剪辑里的片段并改在对的那条剪辑里,activeCutId 与激活剪辑的内容(同一份对象)原样不动;
  *   - 没有任何监听者、同步层、撤销栈看到过「视图」形状的项目;提交只改那条剪辑条目(文档差异里只有 /cuts/@B/…);
  *   - 改的全是新对象,没改到的序列 / 片段保持同一份对象;一步撤销就回来;
- *   - 回包标明在哪条剪辑、timeline 是那条剪辑的、不带 look;停放剪辑的总时长跟着内容走;
+ *   - 回包标明在哪条剪辑、timeline 是那条剪辑的、look 的调用带上 cutId(see_frames 能看没激活的剪辑,2026-10-21);停放剪辑的总时长跟着内容走;
  *   - 其它按 clipId 找的工具(删、复制、切分)找到停放剪辑里的片段时说清在哪条剪辑、要 switch_cut,而不是静默什么都没做。
  * 跑:node --experimental-test-module-mocks --test src/mcp/handlers/parkedCutEdit.test.mjs
  */
@@ -85,7 +85,10 @@ test("update_clip 改停放剪辑里的片段:改在 B 里,activeCutId 与 A 的
   assert.equal(r.ok, true);
   assert.deepEqual(r.cut, { id: "B", name: "剪辑B", active: false });
   assert.match(r.cutNote, /没有激活的剪辑「剪辑B」/);
-  assert.equal("look" in r, false, "see_frames 只看激活的剪辑,不给 look");
+  assert.equal(r.look?.tool, "see_frames");
+  assert.equal(r.look.args.cutId, "B", "look 带上 cutId:看它的画面不用切换");
+  assert.equal(r.look.args.clipId, "b1");
+  assert.match(r.cutNote, /see_frames 传 cutId: "B"/);
   assert.deepEqual(r.timeline.tracks.map((t) => t.trackId), ["tb1", "tb2"], "timeline 是 B 的");
   assert.deepEqual(r.changedParams, { size: { from: 10, to: 24 } });
   assert.ok(w.seen.length > 0);
@@ -194,10 +197,10 @@ test("激活剪辑里的片段照旧:不标 cut、带 look,行为不变", () => 
   assert.equal(cutB(), cutB(before), "B 原样不动");
 });
 
-test("删除 / 复制 / 切分找到停放剪辑里的片段:说清在哪条剪辑、要 switch_cut,不静默什么都没做", () => {
+test("删除 / 复制 / 切分找到停放剪辑里的片段:说清在哪条剪辑、要 user_interface_switch_cut,不静默什么都没做", () => {
   const before = fresh();
   for (const [tool, args] of [["remove_clip", { clipId: "b1", force: true, reason: "测" }], ["duplicate_clip", { clipId: "b1" }], ["split_clip", { clipId: "b1", t: 2 }]]) {
-    assert.throws(() => call(tool, args), /它在剪辑「剪辑B」\(B\)里.*switch_cut/, tool);
+    assert.throws(() => call(tool, args), /它在剪辑「剪辑B」\(B\)里.*user_interface_switch_cut/, tool);
   }
   assert.equal(getState().project, before, "什么都没写");
   assert.throws(() => call("update_clip", { clipId: "no-such", params: { size: 1 } }), (e) => e.message === "找不到 clip no-such");
@@ -267,12 +270,15 @@ test("list_cuts 带 cutId:多返回那条剪辑的 timeline,拿到片段 id 不�
   assert.throws(() => call("list_cuts", { cutId: "nope" }), /找不到剪辑/);
 });
 
-test("工具说明:list_cuts / switch_cut / update_clip 写明改别的剪辑里已有的片段不用 switch_cut", async () => {
+test("工具说明:list_cuts / user_interface_switch_cut / update_clip 写明改别的剪辑里已有的片段不用切换", async () => {
   const { tools } = await import("../../../server/mcp-tools.mjs");
   const d = (n) => tools.find((t) => t.name === n).description;
-  assert.match(d("list_cuts"), /不用 switch_cut/);
+  assert.match(d("list_cuts"), /不用 user_interface_switch_cut/);
   assert.match(d("list_cuts"), /不切换激活的剪辑/);
-  assert.match(d("switch_cut"), /共享状态/);
-  assert.match(d("update_clip"), /不用 switch_cut/);
+  assert.match(d("list_cuts"), /see_frames 传 cutId/);
+  assert.match(d("user_interface_switch_cut"), /会动用户的界面/);
+  assert.match(d("user_interface_switch_cut"), /共享的激活剪辑/);
+  assert.match(d("update_clip"), /不用 user_interface_switch_cut/);
+  assert.equal(tools.some((t) => t.name === "switch_cut"), false, "旧名不再出现在工具清单里");
   assert.ok(tools.find((t) => t.name === "list_cuts").inputSchema.properties.cutId, "list_cuts 收 cutId");
 });
