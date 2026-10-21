@@ -5,7 +5,7 @@ import '../lib/no-user-dirs.mjs';
  * 全在本机:真的 VisuHive 账号服务与官网页面、账号版文档服务、独立的素材服务进程(`startAccountDualUserFixture`)、
  * 在线构建当 `/editor/`,两个舞台源(6341、6342);绝不连生产。
  *
- *   node scripts/probes/mobile-account-probe.mjs --dist dist-online --site-root <VisuHive>/site [--out <目录>]
+ *   node scripts/probes/mobile-account-probe.mjs --dist dist-online --site-root <VisuHive>/site [--out <目录>] [--base-port <N>]
  *   要设 PROMPTCUT_ACCOUNT_PROVIDER_ROOT、PROMPTCUT_PASSWORD_ORDER_MODULE(同全量测试)
  *
  * 用户 2026-10-21 指定测试账号 `test`、密码 `123456`:网站规定密码至少 8 位,先核对 `123456` 被拒(页面的输入框判太短、注册接口回 400),
@@ -34,8 +34,12 @@ const DIST = path.resolve(arg('--dist', path.join(ROOT, 'dist-online')));
 const SITE = path.resolve(arg('--site-root', path.join(process.env.PROMPTCUT_ACCOUNT_PROVIDER_ROOT ?? '', 'site')));
 const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), 'mobile-account-probe')));
 await fs.mkdir(OUT, { recursive: true });
-const ORIGIN = 'https://127.0.0.1:6388';
-const STAGES = ['http://s1.pc.localhost:6341', 'http://s2.pc.localhost:6342'];
+// 缺省端口:夹具 6380～6385 + 公共入口 6388、两个舞台源 6341 / 6342;给 --base-port <N> 就改用连着的 9 个(N..N+5 夹具、N+6 公共入口、N+7 / N+8 舞台源),分给别的会话的端口段里跑
+const BASE = arg('--base-port', null) === null ? null : Number(arg('--base-port', null));
+const FIXTURE_PORTS = BASE === null ? undefined : [0, 1, 2, 3, 4, 5, 6].map((i) => BASE + i);
+const ORIGIN = `https://127.0.0.1:${BASE === null ? 6388 : BASE + 6}`;
+const STAGE_PORTS = BASE === null ? [6341, 6342] : [BASE + 7, BASE + 8];
+const STAGES = STAGE_PORTS.map((p, i) => `http://s${i + 1}.pc.localhost:${p}`);
 const ACCOUNT = { name: 'test', asked: '123456', password: '12345678' };
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.wasm': 'application/wasm' };
 
@@ -127,10 +131,9 @@ const digest = (page) => store(page, `
 let fixture = null, browser = null, P = null;
 try {
   const { startAccountDualUserFixture } = await import(pathToFileURL(path.join(ROOT, 'scripts/probes/account-dual-user-path-probe.mjs')).href);
-  fixture = await startAccountDualUserFixture({ publicHandler: staticHandler() });
+  fixture = await startAccountDualUserFixture({ ...(FIXTURE_PORTS ? { ports: FIXTURE_PORTS } : {}), publicHandler: staticHandler() });
   check(fixture.origin === ORIGIN, '本机账号版环境起来了', fixture.origin);
-  await startStage(6341);
-  await startStage(6342);
+  for (const port of STAGE_PORTS) await startStage(port);
   // 本机自签的 TLS(只在 127.0.0.1)
   browser = await puppeteer.launch({ headless: true, acceptInsecureCerts: true, protocolTimeout: 600_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--autoplay-policy=no-user-gesture-required'] });
 

@@ -8,9 +8,9 @@
  * 验收(每项一行 JSON,最后一行 { summary },有失败退出码 1):
  *   O1 在线桌面界面(?layout=desktop)的 AI 栏走「云端」接入方式:没有会话时同样是开始页(竖栏「开始」一项、预设按钮),带引导动画。
  *      (这台本机托管组合没有云端 Agent 服务,云端面板的输入框要等对话权限读回来才出现,所以点预设、发送那一段不在这里测;本机 AI 栏的那一段见 agent-tabs-start-probe.mjs。)
- *   M1 手机版(安卓仿真、窄屏):Agent 分页里的云端对话面板正常出来(有字、占满分页)、没有开始页、没有页面错误、不白屏
- *      (本机托管组合没有云端 Agent 服务,输入框要等对话权限读回来才出现,这里不要求它)
- *      (手机版用固定的一页 main,不看分页清单;它的开始页重画另有任务)。截图 mobile-agent.png。
+ *   M1 手机版(安卓仿真、窄屏):Agent 分页照演示稿重画(`src/mobile/AgentPage.tsx`),没有会话时同桌面一样是开始页:
+ *      只有「开始」一项标签、预设按钮、输入框,占满分页、没有页面错误、不白屏;不再是桌面那套云端对话面板。截图 mobile-agent.png。
+ *      (点预设、点发送建会话、引用、清空后无动画等在 `mobile-agent-probe.mjs`。)
  */
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
@@ -73,21 +73,21 @@ try {
     await p.browserContext().close();
   }
 
-  /* M1 手机版 Agent 分页 */
+  /* M1 手机版 Agent 分页:2026-10-22 起照演示稿重画,没有会话时也是开始页(同桌面共用 agentTabs;细节见 mobile-agent-probe.mjs) */
   {
     const p = await env.newPage(browser, 'phone');
     await env.enter(p);
     await waitFor(() => p.$('[data-pcm="pg-agent"]'), 90_000, '手机版底部导航栏');
     await sleep(800);
     await p.evaluate(() => document.querySelector('[data-pcm="pg-agent"]').click());
-    await waitFor(() => p.evaluate(() => { const e = document.querySelector('[data-pcm="pane-agent"]'); return !!e && e.style.display !== 'none' && !!e.querySelector('.ai-panel'); }), 30_000, '手机版 Agent 分页里的对话面板');
+    await waitFor(() => p.evaluate(() => { const e = document.querySelector('[data-pcm="pane-agent"]'); return !!e && e.style.display !== 'none' && !!e.querySelector('[data-pcm="agent-start"]'); }), 30_000, '手机版 Agent 分页里的开始页');
     await sleep(800);
     const m = await p.evaluate(() => {
       const e = document.querySelector('[data-pcm="pane-agent"]');
       const r = e.getBoundingClientRect();
-      return { w: Math.round(r.width), h: Math.round(r.height), composer: !!e.querySelector('[data-pc="ai-input"]'), startHero: !!e.querySelector('[data-pc="ai-start"]'), hasText: e.innerText.trim().length > 0 };
+      return { w: Math.round(r.width), h: Math.round(r.height), composer: !!e.querySelector('[data-pcm="chat-input"]'), startHero: !!e.querySelector('[data-pcm="agent-start"]'), preset: e.querySelector('[data-pcm="agent-start-preset"]')?.textContent ?? null, tabs: [...e.querySelectorAll('[data-pcm="atab"]')].map((t) => t.querySelector('.nm')?.textContent), oldPanel: !!e.querySelector('.ai-panel'), hasText: e.innerText.trim().length > 0 };
     });
-    check('M1.mobile-agent-page-renders', m.w > 300 && m.h > 300 && !m.startHero && m.hasText && p.errors.length === 0, { m, errors: p.errors.slice(0, 3) });
+    check('M1.mobile-agent-start-page', m.w > 300 && m.h > 300 && m.startHero && m.composer && m.preset === PRESET && m.tabs.length === 1 && m.tabs[0] === '开始' && !m.oldPanel && m.hasText && p.errors.length === 0, { m, errors: p.errors.slice(0, 3) });
     await p.screenshot({ path: path.join(OUT, 'mobile-agent.png') });
     await p.browserContext().close();
   }

@@ -178,6 +178,8 @@ export function AgentChat(props: {
     if (!body) { taRef.current?.focus(); return; }
     if (creatorReadOnly || view.revoked) return;
     if (off) { chat.notify(cloudErrorText("disabled")); return; }
+    // 已有对话、权限还没读回来:先别发(对话可能是别人的私有对话);新对话没有这个问题,不用等
+    if (!metadataReady && hasMessages) { toast("正在确认对话权限,稍等一下再发"); return; }
     // 开始页上点发送:这时才建第一个会话,这条消息在里面发出去
     start.commit();
     const text = withQuotes(body, quotes);

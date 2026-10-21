@@ -7,7 +7,7 @@
  *
  * 用手机界面(安卓仿真、触屏)对一个真项目逐项操作,每一项都看 store 里的项目变没变对:
  *   选中、seek、播放;换序、改时长、分割、复制、删除;撤销 / 重做;加素材(经素材库导入)、加卡片、加文字、加 / 换转场;
- *   切 / 建剪辑;引用进 Agent;导出(手机没有「另存为」,攒成文件下载)。
+ *   切 / 建剪辑;引用进 Agent(输入框上方的引用标记条);导出(手机没有「另存为」,攒成文件下载)。
  * 然后用桌面界面(桌面仿真)打开同一个项目,项目内容和手机这边一致;手机页刷新后内容仍在。
  * 手机界面里不出现演示稿的假数据(示例名字)。结果最后一行是一行 JSON。
  */
@@ -255,9 +255,12 @@ try {
   await tap(A, `[data-pcm="mblock"][data-id="${refId}"]`);
   await tapText(A, '[data-pcm="subnav-preview"]', '引用');
   const quotes = await until('引用事件', async () => { const q = await A.evaluate(() => window.__quotes); return q.length ? q : null; }, 5000);
-  const composer = await A.evaluate(() => document.querySelector('[data-pcm="pane-agent"] textarea')?.value ?? null);
+  // 引用不再往输入框里插字(2026-10-22 起):放进输入框上方的引用标记条,发送时才带上
+  await until('引用标记条出现', () => A.$('[data-pcm="refbar"]'), 5000);
+  const composer = await A.evaluate(() => ({ input: document.querySelector('[data-pcm="pane-agent"] textarea')?.value ?? null, chip: document.querySelector('[data-pcm="refbar"] [data-pcm="ref-chip"]')?.textContent?.replace(/✕$/, '').trim() ?? null }));
   step('quote', { page: await page_(A), quotes, composer });
   check((await page_(A)) === 'agent' && quotes?.[0]?.clipId === refId, '引用:切到 Agent 分页并把这一段带进对话', { quotes });
+  check(composer.input === '' && composer.chip === `@ ${quotes?.[0]?.label}`, '引用:输入框上方出现引用标记条(标记是「@ 名字」),输入框里没被插字', composer);
   await shot(A, 'm3-agent-quote');
   await tap(A, '[data-pcm="top-back"]');
 
