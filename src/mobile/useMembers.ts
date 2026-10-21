@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { AccountMembersSnapshot } from "../account/client";
 import { MEMBERS_POLL_CLOSED_MS, MEMBERS_POLL_OPEN_MS } from "../account/AccountMembersPanel";
 import { accountProjectMembers, useSync } from "../editor/sync/syncManager";
-import { cloudAgentConns, cloudAgentLabel, isCloudAgentOnly, isCloudAgentRunning, splitMembers, visibleMembers } from "../editor/sync/hostedServices";
+import { accountMemberCounts, accountMemberState, cloudAgentConns, cloudAgentLabel, isCloudAgentOnly, isCloudAgentRunning, splitMembers, visibleMembers } from "../editor/sync/hostedServices";
 import { useCloudRunning } from "../editor/sync/presence";
 
 export interface MemberLine {
@@ -49,20 +49,18 @@ export function useMembers(open: boolean): MembersInfo {
   if (!shared) return { unavailable: true, people: 0, agents: 0, lines: [] };
   if (account) {
     if (!snap) return { unavailable: true, people: 0, agents: 0, lines: [] };
+    // 口径同桌面版 `AccountMembersPanel`(`accountMemberState`;语义 `product/agent.md`「成员列表怎么数」)
     const lines: MemberLine[] = [];
-    let agents = 0;
     for (const m of snap.members) {
-      const devs = snap.devices.filter((d) => d.accountId === m.accountId);
-      const online = devs.some((d) => d.conns.some((c) => c.role === "page"));
+      const s = accountMemberState(m.accountId, snap.devices);
+      const name = m.accountName ?? m.accountId;
       const me = m.accountId === shared.accountId;
-      lines.push({ key: m.accountId, name: `${m.accountName ?? m.accountId}${me ? "（自己）" : ""}`, sub: online ? "编辑中" : "离线", me, creator: m.accountId === snap.creatorAccountId, online, agent: false });
-      for (const d of devs) for (const c of d.conns) {
-        if (c.role !== "agent") continue;
-        agents++;
-        lines.push({ key: `${d.deviceId}:${c.conversation ?? agents}`, name: c.service === "agent" ? cloudAgentLabel(m.accountName ?? m.accountId) : `${m.accountName ?? m.accountId} · Agent${c.conversation !== undefined ? ` · 对话 ${c.conversation}` : ""}`, sub: c.service === "agent" ? "云端" : "本机", me: false, creator: false, online: true, agent: true });
-      }
+      lines.push({ key: m.accountId, name: `${name}${me ? "（自己）" : ""}`, sub: s.offlineAgent ? "离线，Agent 在跑" : s.online ? "编辑中" : "离线", me, creator: m.accountId === snap.creatorAccountId, online: s.online, agent: false });
+      s.localAgents.forEach((c, i) => lines.push({ key: `${m.accountId}:a${i}`, name: `${name} · Agent${c.conversation !== undefined ? ` · 对话 ${c.conversation}` : ""}`, sub: "本机", me: false, creator: false, online: true, agent: true }));
+      if (s.cloudRunning) lines.push({ key: `${m.accountId}:cloud`, name: cloudAgentLabel(name), sub: "云端", me: false, creator: false, online: true, agent: true });
     }
-    return { unavailable: false, people: lines.filter((l) => !l.agent && l.online).length, agents, lines };
+    const counts = accountMemberCounts(snap);
+    return { unavailable: false, people: counts.people, agents: counts.agents, lines };
   }
   const people = visibleMembers(splitMembers(rows).people, running);
   const lines: MemberLine[] = [];

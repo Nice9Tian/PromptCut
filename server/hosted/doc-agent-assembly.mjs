@@ -297,7 +297,11 @@ export function createDocAgentAssembly({ ledger, accountClient, account, runtime
         ((state.runDocInstancesV1 ??= {})[runGrantId] ??= {})[docInstanceId] = { docInstanceId };
       });
       initialNonces.set(req.socket, requestNonce);
+      // 发起成员的名字(发消息时的账号名):成员列表把这条任务连接记在他名下,显示「〈成员名〉的云端 Agent」。
+      // 不给设备号:写入身份的比较键(`identityOf`)照旧,成员列表按任务号归项(`project-members.mjs`)
+      const initiatorName = ledger.read().runGrantsV2?.[runGrantId]?.initiatorName;
       return { ...principal, servicePrincipal: base, userId: principal.accountId, tenantId: projectId,
+        ...(typeof initiatorName === 'string' && initiatorName ? { accountName: initiatorName } : {}),
         service: 'agent', scope: 'member' };
     } finally { instanceAuthority.release(cap.instanceSession); }
   }

@@ -1244,7 +1244,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
       // 重新建成会话(断线重连、到期前换会话):进项目时接好的东西都还在,只把跟着连接走的那几样在新连接上重建 ——
       // 选区与在场(`resyncPresenceLink`)、工具调用记录(`events.list`);发布方登记由 `SyncLink.renew` 自己重报;
       // 其余(素材票据、成员名单、云端 Agent 的身份、卡片源码同步)不走这条连接。清单见 `docs/reports/AGENT-v18-cardsync.md`
-      if (ready) { if (!stopped && cur?.link === link) { resyncPresenceLink(); link.send({ type: 'events.list' }); refreshStatus(); } return; }
+      if (ready) { if (!stopped && cur?.link === link) { resyncPresenceLink(); link.send({ type: 'events.list', projectId: options.projectId }); refreshStatus(); } return; }
       await sharedStateReady(link);
       if (stopped) return;
       const account = options.client.account;
@@ -1355,7 +1355,7 @@ export async function enterAccountProject(options: { client: CloudAccountClient;
         }
       }
       await connectSharedAssets(link, base, { online: ONLINE_BUILD || ONLINE, account: { base: `${origin}/media/api/asset`, projectId: options.projectId, ticket } });
-      link.send({ type: 'events.list' });
+      link.send({ type: 'events.list', projectId: options.projectId });
       ready = true; resolveEntry();
       // 成员名字(提示气泡里「谁改的」)进来就取一次,之后成员有变化再取
       projectSession(current);

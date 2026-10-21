@@ -5,6 +5,7 @@ import { accountProjectMembers, accountMemberAdmin, returnToAccountProjectHome, 
 import { useCloudAgent, useCloudApi } from '../ai/cloud/useCloud';
 import { CLOUD_CHAT_TEXT } from '../ai/cloud/chatTexts';
 import { CloudError } from '../ai/cloud/cloudApi';
+import { accountMemberCountLabel, accountMemberState, cloudAgentLabel } from '../editor/sync/hostedServices';
 
 /** 成员列表展开 / 收着时取成员名单的间隔(毫秒) */
 export const MEMBERS_POLL_OPEN_MS = 3000;
@@ -100,35 +101,39 @@ export function AccountMembersPanel() {
       setError(e instanceof Error ? e.message : '暂时无法确认操作结果，请重试同一操作。');
     } finally { if (generation.current === own) setBusy(false); }
   };
-  const online = new Set(snapshot?.devices.filter(row => row.conns.some(conn => conn.role === 'page')).map(row => row.accountId) ?? []);
   // Only actual connections are displayed. Persisted queued messages are never Agents.
-  // The retained-run presence projection remains a separate provider integration.
-  const agents = snapshot?.devices.reduce((total, row) => total + row.conns.filter(conn => conn.role === 'agent').length, 0) ?? 0;
+  // 计数口径与「离线，Agent 在跑」见 `hostedServices.ts` 的 `accountMemberState`(语义 `product/agent.md`「成员列表怎么数」)
+  const stateOf = (accountId: string) => accountMemberState(accountId, snapshot?.devices ?? []);
   if (!shared?.accountId) return null;
   return <>
     <button ref={button} type="button" className="pc-sync-chip" data-pc="members-button" title="成员" onClick={() => {
       setRect(button.current?.getBoundingClientRect() ?? null); setOpen(!open); void refresh().catch(() => undefined);
-    }}><span data-pc="members-count">{snapshot ? `成员：${online.size} 人 · Agent：${agents} 个` : '成员：暂不可用'}</span></button>
+    }}><span data-pc="members-count">{snapshot ? accountMemberCountLabel(snapshot) : '成员：暂不可用'}</span></button>
     {open && createPortal(<div ref={pop} className="pc-members-pop pc-account-members" data-pc="members-pop"
       style={{ top: (rect?.bottom ?? 40) + 6, left: Math.max(8, Math.min((rect?.right ?? 340) - 360, window.innerWidth - 368)) }}>
       <div className="pc-account-members-heading">项目成员 <button type="button" disabled={busy} onClick={() => { void refresh().catch(() => undefined); }}>刷新</button></div>
       {error && <div role="alert" className="pc-account-members-error" data-pc="account-members-error">{error}</div>}
-      {snapshot?.members.map(member => <div className="pc-account-member" key={member.accountId} data-pc="account-member" data-account-id={member.accountId}>
+      {snapshot?.members.map(member => { const state = stateOf(member.accountId), name = member.accountName ?? member.accountId;
+        return <div className="pc-account-member pc-members-row" key={member.accountId} data-pc="account-member" data-account-id={member.accountId}>
         <div className="pc-members-row-main"><span className={`pc-members-name${member.accountId === shared.accountId ? ' is-me' : ''}`}>
-          {member.accountName ?? member.accountId}{member.accountId === shared.accountId ? '（自己）' : ''}</span>
+          {name}{member.accountId === shared.accountId ? '（自己）' : ''}</span>
           {member.accountId === snapshot.creatorAccountId && <span className="pc-sync-tag">[创建者]</span>}
-          {!online.has(member.accountId) && <span className="pc-sync-tag">[离线]</span>}
+          {state.offlineAgent ? <span className="pc-sync-tag" data-pc="members-offline-agent" title="这位成员不在线，他的云端 Agent 还在跑；不计入成员人数，计入 Agent 个数">[离线，Agent 在跑]</span>
+            : !state.online && <span className="pc-sync-tag">[离线]</span>}
+          {state.cloudRunning && <span className="pc-sync-tag" data-pc="members-cloud-agent" title={cloudAgentLabel(name)}>[云端 Agent]</span>}
           {member.access === 'r' && <span className="pc-sync-tag">[只读]</span>}
           {snapshot.self.creator && member.accountId !== snapshot.creatorAccountId && <button type="button" className="pc-members-kick" data-pc="account-member-kick"
             disabled={busy || !!attempt} onClick={() => { void select('kick', member.accountId); }}>踢出账号</button>}
         </div>
         <small className="pc-account-member-id">{member.accountId}</small>
-        {snapshot.devices.filter(row => row.accountId === member.accountId).map(device => <div className="pc-members-sub" key={device.deviceId}>
+        {/* 设备行只列页面与本机 Agent;云端 Agent 的任务连接(没有设备,按任务号归项)不当设备显示,统一成下面那一行 */}
+        {snapshot.devices.filter(row => row.accountId === member.accountId && row.conns.some(conn => conn.service !== 'agent')).map(device => <div className="pc-members-sub" key={device.deviceId}>
           <span>{device.deviceName} · {device.deviceId}</span>
           {device.conns.some(conn => conn.role === 'page') && <span>[编辑中]</span>}
-          {device.conns.filter(conn => conn.role === 'agent').map((conn, i) => <span key={i}>Agent{conn.conversation !== undefined ? ` · 对话 ${conn.conversation}` : ''}</span>)}
+          {device.conns.filter(conn => conn.role === 'agent' && conn.service !== 'agent').map((conn, i) => <span key={i}>Agent{conn.conversation !== undefined ? ` · 对话 ${conn.conversation}` : ''}</span>)}
         </div>)}
-      </div>)}
+        {state.cloudRunning && <div className="pc-members-sub"><span data-pc="members-cloud-agent-row">{cloudAgentLabel(name)}</span></div>}
+      </div>; })}
       {snapshot?.self.creator && <>
         <div className="pc-members-sep" />
         <button type="button" className="pc-members-admin-item" data-pc="account-bans-open" disabled={busy} onClick={() => setBansOpen(!bansOpen)}>已禁入的账号</button>
