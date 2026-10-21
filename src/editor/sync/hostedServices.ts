@@ -319,3 +319,55 @@ export function memberCountLabel(people: readonly CountRow[], running: CloudRunn
   const c = memberCounts(people, running);
   return `成员：${Math.max(1, c.people)} 人 · Agent：${c.agents} 个`;
 }
+
+/* ---------------------------------------------------------------------------------------------
+ * 账号云端项目的成员列表(`AccountMembersPanel`、手机版 `useMembers`)用同一口径〔语义 `product/agent.md`「成员列表怎么数」〕。
+ *
+ * 成员名单(`members`)按账号一行;在线连接(`devices`)按「账号 + 设备」给,云端 Agent 的任务连接没有设备,
+ * 文档服务按任务号归成 `run:<任务号>` 一项、记在发起成员的账号下(`server/account/project-members.mjs`)。
+ * 账号项目的任务连接只在一轮在跑时连着(一轮结束就关),所以「连着」就是「有一轮在跑」,不另看在场状态里的 `cloud-run`。
+ *
+ * - 人数:有页面连接(`role: 'page'`)的账号;
+ * - Agent 数:本机 Agent 连接(`role: 'agent'` 且不是云端 Agent)逐条算,云端 Agent 每位成员最多算一个;
+ * - 本人没有页面连接、云端 Agent 连着:「离线，Agent 在跑」,不计入人数、计入 Agent 数。
+ * ------------------------------------------------------------------------------------------- */
+
+interface AccountConnLike { role: string; service?: string; conversation?: string | number }
+interface AccountDeviceLike { accountId: string; conns: readonly AccountConnLike[] }
+
+export interface AccountMemberState {
+  /** 本人在线(有页面连接) */
+  online: boolean;
+  /** 他的云端 Agent 此刻有一轮在跑 */
+  cloudRunning: boolean;
+  /** 本人不在线、云端 Agent 在跑:标「离线，Agent 在跑」 */
+  offlineAgent: boolean;
+  /** 他名下的本机 Agent 连接 */
+  localAgents: AccountConnLike[];
+}
+
+/** 一位账号成员此刻的在线与 Agent 状态 */
+export function accountMemberState(accountId: string, devices: readonly AccountDeviceLike[]): AccountMemberState {
+  const conns = devices.filter((d) => d.accountId === accountId).flatMap((d) => d.conns);
+  const online = conns.some((c) => c.role === "page");
+  const cloudRunning = conns.some((c) => c.role === "agent" && c.service === "agent");
+  return { online, cloudRunning, offlineAgent: !online && cloudRunning, localAgents: conns.filter((c) => c.role === "agent" && c.service !== "agent") };
+}
+
+/** 账号项目的「成员：N 人 · Agent：M 个」的两个数。只数名单里的账号(被踢的、不在名单里的连接文档服务已滤掉) */
+export function accountMemberCounts(snapshot: { members: readonly { accountId: string }[]; devices: readonly AccountDeviceLike[] }): { people: number; agents: number } {
+  let people = 0;
+  let agents = 0;
+  for (const m of snapshot.members) {
+    const s = accountMemberState(m.accountId, snapshot.devices);
+    if (s.online) people++;
+    agents += s.localAgents.length + (s.cloudRunning ? 1 : 0);
+  }
+  return { people, agents };
+}
+
+/** 账号项目顶栏按钮上的字 */
+export function accountMemberCountLabel(snapshot: Parameters<typeof accountMemberCounts>[0]): string {
+  const c = accountMemberCounts(snapshot);
+  return `成员：${c.people} 人 · Agent：${c.agents} 个`;
+}
