@@ -4,6 +4,7 @@ import { EditorApi } from "../../ai/mcpExecutor";
 import { prerenderUrl } from "../../render/prerender";
 import { getState, actions } from "../../store/project";
 import { subjectForRange } from "../../kernel/project";
+import { cutLookView } from "../../kernel/agentScopes.mjs";
 import { mediaCardUrl, isImageMedia } from "../../ai/mediaRef";
 import { mediaReadyForServer, perceptionMediaRef } from "../../ai/perceptionMedia";
 
@@ -14,6 +15,14 @@ export const visionHandlers = {
   seePreview: async (args) => {
     const state = getState();
     /*
+     * cutId(2026-10-21 用户定):看没激活的剪辑不用切换。交给渲染的是「那条剪辑当激活」的项目视图,
+     * 只在这次出图时用:不进 store、不进文档同步、播放头和激活剪辑都不动。不给 t 时取那条剪辑上次离开时的播放头。
+     */
+    if (args?.cutId !== undefined && args?.cutId !== null && typeof args.cutId !== "string") throw new Error("cutId 要是字符串(list_cuts 里的剪辑 id);不传就看当前激活的剪辑。");
+    const look = cutLookView(state.project, args?.cutId);
+    const project = look.project;
+    const playheadT = look.active ? state.t : (look.parkedT ?? 0);
+    /*
      * 这条是兜底:有数据镜像时 see_frames 由服务端直接问预渲染(vite-plugin-ai 的服务端工具),
      * 根本不经过这个页面。走到这里时也发到预渲染的源上,并且和工具上限一样 180 秒就放手 ——
      * 放手之后连接断开,预渲染会把还在排队的活摘掉,不会白占一个 Chrome。
@@ -23,15 +32,15 @@ export const visionHandlers = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          project: state.project,
-          t: t ?? (args?.clipId ? undefined : state.t),
+          project,
+          t: t ?? (args?.clipId ? undefined : playheadT),
           clipId: args?.clipId,
         }),
         signal: AbortSignal.timeout(180000),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || `渲染画面失败(HTTP ${res.status})`);
-      return data;
+      return { ...data, cut: look.cut };
     };
     /*
      * times:一次看多个时刻。reviewer 判断镜头节奏要对比好几个时刻,一张一张调太慢,
@@ -44,12 +53,12 @@ export const visionHandlers = {
       const res = await fetch(await prerenderUrl("/api/vision/snapshot"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: state.project, times, clipId: args?.clipId }),
+        body: JSON.stringify({ project, times, clipId: args?.clipId }),
         signal: AbortSignal.timeout(180000),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || `渲染画面失败(HTTP ${res.status})`);
-      return { ok: true, frames: data.frames, note: data.note, __images: data.__images };
+      return { ok: true, frames: data.frames, note: data.note, __images: data.__images, cut: look.cut };
     }
     return snap(typeof args?.t === "number" ? args.t : undefined);
   },

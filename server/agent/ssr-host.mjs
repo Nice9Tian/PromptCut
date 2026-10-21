@@ -12,7 +12,7 @@
 /** 注册表要先于工具实现就位:卡片、部件都靠 import 时的副作用登记 */
 const REGISTRIES = ['/src/cards/index.ts', '/src/parts/index.ts'];
 
-export { diffScopes, overlappingScopes, splitScopes, scopeOverlaps, parkedCutsIndex } from '../../src/kernel/agentScopes.mjs';
+export { diffScopes, overlappingScopes, splitScopes, scopeOverlaps, parkedCutsIndex, cutLookView } from '../../src/kernel/agentScopes.mjs';
 export {
   CREATIVITY_HINT,
   CREATIVITY_LABEL,

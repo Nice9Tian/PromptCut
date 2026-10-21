@@ -22,7 +22,7 @@ import { createPresenceBridge } from '../presence-bridge.mjs';
 import { loadRole } from '../agent-roles.mjs';
 import { annotateError, annotateResult, createUserEditingBoard, userEditingFor } from '../user-editing.mjs';
 import { effectiveIsFile } from '../../card-overrides.mjs';
-import { parkedCutsIndex } from '../ssr-host.mjs';
+import { parkedCutsIndex, cutLookView } from '../ssr-host.mjs';
 import {
   checkCloudTool, initiatorOffline, initiatorUnreachable,
   CLOUD_AGENT_SIDE, CLOUD_HOSTED_TOOLS, CLOUD_INITIATOR_TOOLS, CLOUD_LOOK_TOOLS, CLOUD_PAGE_STATE_READS, CLOUD_PAGE_TOOLS, CLOUD_PLAYHEAD_TOOLS, CLOUD_SLOW_TOOLS,
@@ -171,16 +171,20 @@ export function createAgentInstance(env) {
     }
 
     if (tool === 'see_frames') {
-      const { source, ...rest } = args || {};
+      const { source, cutId, ...rest } = args || {};
       // 素材镜头拼图要跑镜头识别、写回项目,留给编辑器页面
       if (source !== undefined && source !== 'timeline') return undefined;
+      // cutId:看那条剪辑的画面,不切换(视图只在这次出图时用,见 agent-exec.mjs 的 seeFrames)
+      if (cutId !== undefined && cutId !== null && typeof cutId !== 'string') throw new Error('cutId 要是字符串(list_cuts 里的剪辑 id);不传就看当前激活的剪辑。');
+      const look = cutLookView(project, cutId);
       const times = Array.isArray(rest.times) ? rest.times.filter((x) => typeof x === 'number').slice(0, 10) : [];
       const body = times.length
-        ? { project, times, clipId: rest.clipId }
-        : { project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : (latestPlayhead()?.t ?? 0)), clipId: rest.clipId };
+        ? { project: look.project, times, clipId: rest.clipId }
+        : { project: look.project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : (look.active ? (latestPlayhead()?.t ?? 0) : look.parkedT)), clipId: rest.clipId };
       const data = await prerenderPost('/api/vision/snapshot', body, { timeoutMs });
       if (!data?.ok) throw new Error(data?.error || '渲染画面失败');
       let result = times.length ? { ok: true, frames: data.frames, note: data.note, __images: data.__images } : data;
+      result = { ...result, cut: look.cut };
       // 聊天栏里「看得见的工具结果」:和编辑器页面的 withVisual 同一份记录
       const images = [];
       if (data.__image?.base64) images.push({ mime: data.__image.mime, base64: data.__image.base64, label: typeof data.t === 'number' ? `t=${data.t}s` : '' });

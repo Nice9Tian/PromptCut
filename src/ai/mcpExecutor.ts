@@ -170,7 +170,7 @@ export interface EditorApi {
   editCard(args: { cardId: string; file?: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
   /** 只读 DOM 树(inspect_card_dom):每个节点标出源码位置,改动一律走 editCard */
   inspectCardDom(args: { clipId: string; t?: number; ref?: number | string; depth?: number }): Promise<any>;
-  seePreview(args: { t?: number; clipId?: string; times?: number[] }): Promise<any>;
+  seePreview(args: { t?: number; clipId?: string; times?: number[]; cutId?: string }): Promise<any>;
   seeSequences(args: { mediaId: string; page?: number; perPage?: number; grid?: number; scene?: number; from?: number; to?: number }): Promise<any>;
   cardAuthoringGuide(): Promise<any>;
 }

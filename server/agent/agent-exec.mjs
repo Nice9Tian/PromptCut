@@ -20,7 +20,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { annotateResult, clipIdsOfOps, overwroteView } from './user-editing.mjs';
-import { parkedCutsIndex } from './ssr-host.mjs';
+import { parkedCutsIndex, cutLookView } from './ssr-host.mjs';
 
 export const AGENT_EXEC_DEFAULTS = Object.freeze({
   /** 被拒(stale)后等副本追上文档服务的当前版本,Agent 马上重读就能读到最新的 */
@@ -177,6 +177,15 @@ export function projectView(project) {
       },
     } : m)),
   };
+}
+
+/**
+ * see_frames 的 `cutId` → 交给渲染的项目视图(`src/kernel/agentScopes.mjs` 的 `cutLookView`)。cutId 不存在时抛给模型看的错。
+ * 回 `{ project, cut: { id, name }, active, parkedT }`。
+ */
+export function seeFramesView(project, cutId) {
+  if (cutId !== undefined && cutId !== null && typeof cutId !== 'string') throw new Error('cutId 要是字符串(list_cuts 里的剪辑 id);不传就看当前激活的剪辑。');
+  return cutLookView(project, cutId);
 }
 
 function targetOf(args) {
@@ -501,14 +510,19 @@ export function createAgentExecutor({
 
   async function seeFrames(args, conv, toolDef) {
     const snap = await readSnapshot(conv);
-    const { source, ...rest } = args || {};
+    const { source, cutId, ...rest } = args || {};
+    // cutId(2026-10-21 用户定):看没激活的剪辑不用切换。渲染拿到的是「那条剪辑当激活」的项目视图,
+    // 视图只在这一次出图时用,不写副本、不提交、不改 activeCutId;渲染端看到的是普通项目,旧版本的渲染进程也出得对
+    const look = seeFramesView(snap.project, cutId);
     const times = Array.isArray(rest.times) ? rest.times.filter((x) => typeof x === 'number').slice(0, 10) : [];
     const body = times.length
-      ? { project: snap.project, times, clipId: rest.clipId }
-      : { project: snap.project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : playhead()), clipId: rest.clipId };
-    const data = await prerenderPost('/api/vision/snapshot', body, { timeoutMs: toolDef?.timeoutMs || 180_000 });
+      ? { project: look.project, times, clipId: rest.clipId }
+      : { project: look.project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : (look.active ? playhead() : look.parkedT)), clipId: rest.clipId };
+    // cutLook:出图要按这份视图渲(账号模式据此不交给成员设备:成员页面按自己的项目渲,看不了别的剪辑)
+    const data = await prerenderPost('/api/vision/snapshot', body, { timeoutMs: toolDef?.timeoutMs || 180_000, ...(look.active ? {} : { cutLook: true }) });
     if (!data?.ok) throw new Error(data?.error || '渲染画面失败');
     let result = times.length ? { ok: true, frames: data.frames, note: data.note, __images: data.__images } : data;
+    result = { ...result, cut: look.cut };
     const images = [];
     if (data.__image?.base64) images.push({ mime: data.__image.mime, base64: data.__image.base64, label: typeof data.t === 'number' ? `t=${data.t}s` : '' });
     for (const im of Array.isArray(data.__images) ? data.__images : []) if (im?.base64) images.push({ mime: im.mime, base64: im.base64, label: im.label ?? '' });
