@@ -62,6 +62,34 @@ export function AiSetupDialog(props: {
   const backdrop = useBackdropClose(onClose);
   const [clearing, setClearing] = useState<KeyKind | "">("");
   const [clearMsg, setClearMsg] = useState("");
+  /** 粘贴授权码：码只放在这个输入框的状态里，提交后立刻清空，不进诊断报告、不写日志 */
+  const [authCode, setAuthCode] = useState("");
+  const [authCodeBusy, setAuthCodeBusy] = useState(false);
+  const [authCodeMsg, setAuthCodeMsg] = useState("");
+  const waitingForCode = setupJobs.some((j) => j.kind === "login" && j.state === "running" && j.acceptsCode);
+  useEffect(() => {
+    if (!waitingForCode) { setAuthCode(""); setAuthCodeMsg(""); }
+  }, [waitingForCode]);
+  const submitAuthCode = async (provider: AiProvider) => {
+    const code = authCode.trim();
+    if (!code || authCodeBusy) return;
+    setAuthCodeBusy(true);
+    setAuthCodeMsg("");
+    try {
+      const res = await fetch("/api/ai/setup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, code }), signal: AbortSignal.timeout(15000),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "提交失败，请重试");
+      setAuthCode("");
+      setAuthCodeMsg("已提交，正在确认登录…");
+    } catch (e) {
+      setAuthCodeMsg(e instanceof Error ? e.message : "提交失败，请重试");
+    } finally {
+      setAuthCodeBusy(false);
+    }
+  };
   const clearKeyOf = async (kind: KeyKind) => {
     if (!onClearKey) return;
     if (!confirm(kind === "router" ? "删除 Router 导入的密钥文件?之后要再粘一次分发密文。" : "删除自定义 API 的密钥文件?之后要重新填 Key。")) return;
@@ -510,6 +538,30 @@ export function AiSetupDialog(props: {
               {job.state === "running" && <button className="ais-btn" onClick={(e) => { e.preventDefault(); onCancelSetup(p.id); }}>取消</button>}
               {job.url && <a className="ais-btn" href={job.url} target="_blank" rel="noreferrer">打开登录网页 ↗</a>}
               {job.deviceCode && <div>登录验证码：<strong>{job.deviceCode}</strong></div>}
+              {job.kind === "login" && job.state === "running" && job.acceptsCode && (
+                <details className="ais-code-paste">
+                  <summary>浏览器没有自动回到软件？粘贴登录网页给的授权码</summary>
+                  <div className="ais-detail">
+                    在登录网页授权后，如果页面显示了一串授权码，复制下来粘贴到这里，再点「提交」。
+                    浏览器已经自动回到软件、这里显示「登录成功」的，不需要填。
+                  </div>
+                  <div className="ais-api-field ais-code-row">
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={authCode}
+                      onChange={(e) => setAuthCode(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void submitAuthCode(p.id); } }}
+                      placeholder="粘贴授权码"
+                    />
+                    <button className="ais-btn ais-primary-btn" disabled={authCodeBusy || !authCode.trim()} onClick={(e) => { e.preventDefault(); void submitAuthCode(p.id); }}>
+                      {authCodeBusy ? "提交中…" : "提交"}
+                    </button>
+                  </div>
+                  {authCodeMsg && <div className="ais-detail" role="status">{authCodeMsg}</div>}
+                </details>
+              )}
               {job.kind === "install" && job.logs.length > 0 && <details><summary>查看安装详情</summary><pre>{job.logs.join("")}</pre></details>}
               {p.id === "codex" && job.kind === "login" && job.state === "failed" && (
                 <button className="ais-btn" onClick={(e) => { e.preventDefault(); onLogin(p.id, true); }}>改用设备码登录</button>
