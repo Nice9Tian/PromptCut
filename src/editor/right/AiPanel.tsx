@@ -164,7 +164,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const retryFilesRef = useRef<Map<string, File>>(new Map());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 开始页(本项目一个会话都没有):消息区换成 StartHero;点预设往输入框放那句话,点发送才把占位页变成第一个会话
-  const start = useStartPage(tabId, inputText, setInputText, () => { requestAnimationFrame(() => textareaRef.current?.focus()); });
+  const start = useStartPage(tabId, inputText, setInputText, () => { requestAnimationFrame(() => textareaRef.current?.focus()); }, messages.length > 0);
 
   // 预览窗口右键卡片时会在 window 上派发 pc-quote-clip,把引用插进输入框
   useEffect(() => {

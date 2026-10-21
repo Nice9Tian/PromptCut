@@ -222,7 +222,9 @@ try {
     check('O0:页面的身份是真的:发往 Agent 服务的请求都带账号会话签的委托票据', ticketed(agentReqs(A)) && !(await panelText(A)).includes('还没有取得身份证明'), { requests: agentReqs(A).length, kinds: [...new Set(agentReqs(A).map((r) => r.auth))] });
     await shot(A, 'O0-online-ai-panel');
     const ex0 = await exampleSentences(A, CLOUD_PANEL);
-    check('O8:空对话只有一条示例句,原文照抄「为我快速创建一个视频告诉我软件都可以做什么。」', ex0.length === 1 && ex0[0] === EXAMPLE, { ex0 });
+    // 2026-10-22 起项目里一个会话都没有时 AI 栏显示开始页(预设 + 输入框),取代空对话的那条示例句;示例句只在「+」新开的空对话里
+    const start0 = await P(A, (sel) => [...document.querySelectorAll(`${sel} [data-pc="ai-start-preset"]`)].map((e) => (e.textContent ?? '').trim()), CLOUD_PANEL);
+    check('O8:没有会话时是开始页,只有一个预设「做一个动画告诉我使用软件可以干什么」(不是空对话的示例句)', start0.length === 1 && start0[0] === '做一个动画告诉我使用软件可以干什么' && ex0.length === 0, { start0, ex0 });
     const menu0 = await menuState(A, CLOUD_PANEL);
     check('O8:云端下「一键配特效」在菜单里、置灰、悬停写原因;「诊断报告」不隐藏', !!menu0.workflow && menu0.workflow.disabled === true && /语音识别|云端暂不支持|暂不/.test(menu0.workflow.title) && !!menu0.diagnostics, menu0);
 

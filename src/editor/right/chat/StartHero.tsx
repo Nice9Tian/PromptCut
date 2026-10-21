@@ -22,9 +22,11 @@ export type StartGuide = "input" | "send" | null;
  * 面板(本机 AiPanel / 云端 CloudAiPanel)里和开始页有关的状态:
  * 这一页是不是开始页、要不要放引导动画、输入框和发送按钮此刻该引导哪一个、点预设和点发送时各做什么。
  */
-export function useStartPage(tabId: string, inputText: string, setInputText: (v: string | ((prev: string) => string)) => void, focus?: () => void) {
+export function useStartPage(tabId: string, inputText: string, setInputText: (v: string | ((prev: string) => string)) => void, focus?: () => void, hasMessages = false) {
   const { tabs, cleared } = useAgentTabs();
   const draft = tabs.find((t) => t.id === tabId)?.draft === true;
+  // 这一页里已经有对话了(从历史列表点开了一段旧对话、点了「接上看看」之类,不是点发送):它就已经是个会话,占位页变真页,免得对话被开始页盖住
+  useEffect(() => { if (draft && hasMessages) commitDraft(tabId); }, [draft, hasMessages, tabId]);
   const animated = draft && !cleared;
   const [picked, setPicked] = useState(false);
   const has = inputText.trim().length > 0;

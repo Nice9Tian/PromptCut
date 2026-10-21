@@ -128,7 +128,10 @@ async function phase1() {
     const a = m.actions.addCardClip(card.id, 1, { duration: 3 });
     const b = m.actions.addCardClip(card.id, 6, { duration: 3 });
     m.actions.select([]);
-    return { a: a?.id ?? null, b: b?.id ?? null, main: localStorage.getItem('pcChatId') };
+    // 分页清单按项目分开(2026-10-22):没有会话时当前页是开始页占位页,它的对话 ID 键是 pcChatId:<页 id>;
+    // 探针要一个主对话 ID,这里用占位页那一个(没读到就自己造一个,登记在服务端的是它)
+    const tabs = await import('/src/ai/agentTabs.ts');
+    return { a: a?.id ?? null, b: b?.id ?? null, main: localStorage.getItem(`pcChatId:${tabs.getActiveTabId()}`) || `probe-main-${Date.now().toString(36)}` };
   });
   check(!!ids.a && !!ids.b && !!ids.main, 'M1 新项目里放了两张卡,读到主对话 ID', ids);
   const MAIN = ids.main;

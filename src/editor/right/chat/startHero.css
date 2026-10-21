@@ -5,18 +5,21 @@
  */
 .pc-start {
   align-items: center;
-  justify-content: center;
+  /* 内容比消息区高时从顶上排、能滚;不用 justify-content:center(那样顶上一截会被裁掉滚不到) */
+  justify-content: flex-start;
   text-align: center;
   gap: 10px;
   padding: 24px 20px;
 }
+.pc-start > :first-child { margin-top: auto; }
+.pc-start > :last-child { margin-bottom: auto; }
 .pc-start-title {
   font-size: 15px;
   font-weight: 600;
   color: var(--ui-fg, #F2F1F6);
 }
 .pc-start-hint {
-  max-width: 260px;
+  max-width: 300px;
   font-size: 12px;
   line-height: 1.6;
   color: var(--ui-fg-muted, #A6A4B2);
