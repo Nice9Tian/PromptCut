@@ -1,7 +1,7 @@
 export const projectTools = [
   {
     name: "get_project",
-    description: "获取整个多轨 Project 对象,了解项目配置、素材和时间轴上的所有轨道与 clip。返回里 media 的 transcript 只是段数摘要，完整文字稿请用 get_transcript。",
+    description: "获取整个多轨 Project 对象,了解项目配置、素材和时间轴上的所有轨道与 clip。返回里 media 的 transcript 只是段数摘要，完整文字稿请用 get_transcript。**多条剪辑时注意**:`tracks` 只是当前激活那条剪辑的内容;别的(没激活的)剪辑里的片段在最前面的 `parkedCuts` 里列好了(每条剪辑的 cutId、片段 id、cardId / 标签、起止、所在 trackId,太多时有上限并指路 list_cuts 的 cutId)。**要改那些片段不用 switch_cut**:把 clipId 直接交给 update_clip / set_clip / get_clip / set_position / set_rect / align / nudge / set_emphasis / set_clip_volume / set_clip_muted 就地改(切换会让所有成员的界面一起翻)。",
     inputSchema: { type: "object", properties: {} },
     side: "agent"
   },
