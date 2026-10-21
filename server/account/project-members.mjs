@@ -1,6 +1,11 @@
 import { accountError } from './client.mjs';
 
 const fail = (status, code) => { throw accountError(status, code); };
+/**
+ * 项目号的形状与账本一致(`authority.mjs` 的 `projectIdOK`):云端发的 `sp_…`,或搬到云端时沿用的本机项目号(`p-…` 等)。
+ * 原来这里只认 `sp_…`,沿用本机项目号搬上去的项目读不到成员(「放弃这次搬迁」时发现,报告 `docs/reports/AGENT-claude-abandon-move.md`)
+ */
+const PROJECT_ID = /^(?:sp_[a-z2-7]{26}|[A-Za-z0-9_-]{8,64})$/;
 const accountOK = id => typeof id === 'string' && /^acc_[a-f0-9]{24}$/.test(id);
 /** 连接归在哪台「设备」下。云端 Agent 的任务连接(`role: 'agent'`、`service: 'agent'`)不带设备号,
  * 按这一轮的任务号归成一项 `run:<任务号>`;它仍按 `accountId` 记在发起成员名下(语义 `product/agent.md`「成员列表怎么数」) */
@@ -15,7 +20,7 @@ const nameOf = name => typeof name === 'string' && name.length > 0 && name.lengt
 export function createProjectMembers({ ledger, authority, getConnections }) {
   if (!ledger || typeof authority?.authorizePrincipal !== 'function' || typeof getConnections !== 'function') fail(503, 'members-unavailable');
   return async function membersSnapshot(actor, body) {
-    if (!body || Object.keys(body).some(key => key !== 'projectId') || !/^sp_[a-z2-7]{26}$/.test(body.projectId ?? '')) fail(400, 'invalid-project');
+    if (!body || Object.keys(body).some(key => key !== 'projectId') || !PROJECT_ID.test(body.projectId ?? '')) fail(400, 'invalid-project');
     const principal = await authority.authorizePrincipal(actor, { projectId: body.projectId, action: 'read' });
     // No await from this point until the entire projection has been copied.
     const state = ledger.read(), project = state.projects[body.projectId];
