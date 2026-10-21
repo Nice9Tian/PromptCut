@@ -111,8 +111,8 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 0.7.19 之前（2026-10-22 用户定，原话「先做。之后再开始做.19」「都做。在.19之前完成。」；在线页面的部分合进 main 后先部署上线，桌面版的部分随 0.7.19 发）：
 
 - [ ] 手机版补「速度」「滤镜」两个入口；缩略卡、素材格子显示真画面（视频首帧、图片缩略图，经素材票据）。
-- [ ] 播放停顿时让声音立刻停（音频看门狗）。
-- [ ] 登录框加「粘贴授权码」输入框，登录任务接上标准输入。
+- [x] ~~播放停顿时让声音立刻停（音频看门狗）。~~ 核对后**早已在 main 里**（`e289b886`，2026-10-06，早于记该决定的 `1014fa19`）：`src/editor/Preview.tsx` 的 `armStallWatch` 不等迟到的那一拍就置 `mediaStalled`，第 2437 行主文档音频层跟着停。正在补正向探针（现有 `playback-probe.mjs` 只验了它不误触发）。
+- [x] ~~登录框加「粘贴授权码」输入框，登录任务接上标准输入。~~（2026-10-22 合入 main `ae121cef`，语义补在 `product/agent.md`「接入」与 `mechanism/agent.md`，后者标〔裁〕三级；`release` 随之前进到 `6c571a27`）
 - [ ] 云端 Agent 的发送接口不再重复核「首次使用告知」。
 
 0.7.19：
@@ -186,6 +186,8 @@ Claude 主会话与 Antigravity 主会话接手后合进 `main` 的（每块的�
 | 前置 3 | 登录框加「粘贴授权码」输入框，登录任务接上标准输入 | `sonnet-dev-high`（Sonnet，high）——简单前端 + 一处服务端 | `.worktrees/cli-paste-code` / `claude/cli-paste-code` | 5830～5839 |
 | 前置 4 | 云端 Agent 的发送接口不再重复核「首次使用告知」 | `opus-dev`（Opus，medium）——告知与授权，属通讯安全 | `.worktrees/consent-once` / `claude/consent-once` | 5840～5849 |
 | 前置 2 的证据 | 补音频看门狗的**正向**探针（现有 `playback-probe.mjs` 只验了它不误触发，没验它真管用）：造一次真停顿，断言不等迟到的那一拍就跳闸、声音当场停、拍子回来后恢复 | `sonnet-dev-high`（Sonnet，high）——只改 `scripts/probes/` | `.worktrees/stall-audio-probe` / `claude/stall-audio-probe` | 5850～5859 |
+| 0.7.19 | 多项目渲染节点：每个请求只加载它那几帧用到的卡和素材，不让哪个项目占着（取代 0.7.18「按轮占用」暂行办法）。语义已写好，照着实现；语义文档不许它动（`mechanism/rendering.md` 另有 Agent 在改），要改的交回主会话 | `opus-dev-high`（Opus，high）——开工指令档位表把多项目渲染节点列在 Opus 一行 | `.worktrees/multi-project-render` / `claude/multi-project-render` | 5880～5889 |
+| 0.7.19 | 在线浏览器第二～四步：撤销低内存档（全仓库 144 个文件提到它）、落实身份、舞台／素材／即时渲染三道闸门与四档气泡、定机制里标「待定」的数字 | `opus-dev-high`（Opus，high）——最大的一块，会动渲染路径 | `.worktrees/online-browser` / `claude/online-browser` | 5870～5879 |
 | 并行分支 | 〔裁〕H04「放弃这次搬迁」按钮：删掉搬到云端失败留下的半成品项目（破坏性操作，要二次确认、幂等、清本机关联记号） | `opus-dev`（Opus，medium）——破坏性 + 云端项目删除 | `.worktrees/abandon-move` / `claude/abandon-move` | 5860～5869 |
 
 「速度」入口单独说明：`TrackClip` 上没有任何 per-clip 的速度字段（`src/kernel/project.ts` 里没有 `speed`；`rate` 只出现在 `cardNodes` 的 source 输入时间映射里，即素材效果卡的机制）。所以「补速度入口」可能不是接线，而是新增一项用户看得见的能力（二级语义），还会牵动渲染取帧、导出、混音和导出像素基线。先让前置 1 调研并按解法表给候选，再由主会话定做法。
