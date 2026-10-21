@@ -27,7 +27,7 @@ import { RemoteAgentsStrip } from "./RemoteAgentsStrip";
 import { ReportDialog } from "./ReportDialog";
 import { cloudConversationReport } from "../../ai/cloud/report";
 import { CODE_VERSION } from "../../online/buildInfo";
-import { acceptCloudConsent, cloudConsentState, grantCloudConsent, refreshCloudConsent, subscribeCloudConsent, type CloudConsentPermit } from "../../ai/cloud/consent";
+import { acceptCloudConsent, cloudConsentState, grantCloudConsent, onCloudConsentRequired, refreshCloudConsent, subscribeCloudConsent, type CloudConsentPermit } from "../../ai/cloud/consent";
 import { CloudAgentConsentDialog } from "./CloudAgentConsentDialog";
 import { CloudDeleteChatDialog, type CloudDeleteAsk } from "./CloudDeleteChatDialog";
 import { LIBRARY_KINDS, putInLibrary, type LibraryOutcome } from "./cloudAttachLibrary";
@@ -98,9 +98,10 @@ export function CloudAiPanel(props: {
       return null;
     }
     try {
-      const permit = await grantCloudConsent(expected);
+      const { accepted, permit } = await grantCloudConsent(expected);
       if (cloudConsentState().accountId !== expected.accountId || cloudConsentState().bindingVersion !== expected.bindingVersion) return null;
-      if (!permit) { setConsentError(null); setConsentOpen(true); return null; }
+      // 只有确实没同意才弹告知框；同意了但没拿到许可（permit 为 null）照常发，chat.send 发出前自己再读一次
+      if (!accepted) { setConsentError(null); setConsentOpen(true); return null; }
       return { permit };
     } catch (error) {
       if (!stillCurrent()) return null;
@@ -124,6 +125,15 @@ export function CloudAiPanel(props: {
   const stillCurrent = () => activeKeyRef.current === qKey && (!cloud.accountMode ||
     (cloudConsentState().accountId === cloud.accountId && cloudConsentState().bindingVersion === consent.bindingVersion));
   useEffect(() => { if (cloud.accountMode) { setConsentOpen(false); setConsentError(null); } }, [cloud.accountMode, qKey]);
+  // 这一页发的消息被拒在「没同意告知」上（发出前那次读取，或服务端收消息时回 consent-required）：弹告知框
+  useEffect(() => {
+    if (!cloud.accountMode) return;
+    return onCloudConsentRequired((binding, origin) => {
+      if (origin !== tabId || binding.accountId !== cloud.accountId || binding.bindingVersion !== consent.bindingVersion) return;
+      setConsentError(null);
+      setConsentOpen(true);
+    });
+  }, [cloud.accountMode, cloud.accountId, consent.bindingVersion, tabId]);
   const { tabs } = useAgentTabs();
   const tabTitle = desktop ? (tabs.find((t) => t.id === tabId)?.title ?? "AI 助手") : "云端 Agent";
   // 页签上的「对话 ID」是给本机 Agent 的多 Agent 通信用的;桌面版里这一页选回本机驱动后还要用它,云端的对话 id 不往里写

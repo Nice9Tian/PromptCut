@@ -14,7 +14,7 @@ import { getScript } from "../script";
 import { mediaCardUrl } from "../mediaRef";
 import { cloudAgentVersion, resolveCloudAgent, subscribeCloudAgent, type CloudAgentAvailability } from "./endpoint";
 import { cloudIdentityVersion, subscribeCloudIdentity } from "./identity";
-import { cloudConsentState, requireCloudConsent, subscribeCloudConsent, type CloudConsentPermit } from "./consent";
+import { CloudConsentRequiredError, cloudConsentState, reportCloudConsentRequired, requireCloudConsent, subscribeCloudConsent, type CloudConsentPermit } from "./consent";
 import { CloudError, cloudErrorText, createCloudApi, createCloudControlScopeGuard, requireAccountAbortControl, withCloudControlConsent, type CloudApi } from "./cloudApi";
 import { createCloudSession, type CloudSession, type CloudSessionView } from "./session";
 import { titleOf } from "./events";
@@ -455,7 +455,10 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       if (!cloud.accountId || !key) return fail(cloudErrorText("unauthorized"));
       // 一次发送只核一次告知：开头新读过、许可当场核对仍有效就不再读；许可作废时这里照旧新读一次
       try { await requireCloudConsent({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }, consentPermit); }
-      catch (err) { const reason = err instanceof Error ? err.message : cloudErrorText("network"); setNotice(reason); return fail(reason); }
+      catch (err) {
+        if (err instanceof CloudConsentRequiredError) reportCloudConsentRequired({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }, tabId);
+        const reason = err instanceof Error ? err.message : cloudErrorText("network"); setNotice(reason); return fail(reason);
+      }
     }
     const s = sessionRef.current;
     if (!s || !key || keyRef.current !== key || sessionKeyRef.current !== key) return fail("账号、项目或对话已切换。");
@@ -491,6 +494,9 @@ export function useCloudChat(o: { tabId: string; cloud: CloudAgentState; enabled
       return true;
     } catch (err) {
       setNotice(err instanceof CloudError ? err.message : cloudErrorText("network"));
+      // 服务端收消息时核告知没通过：弹告知框（文字见 cloudErrorText 的 consent-required）
+      if (err instanceof CloudError && err.code === "consent-required" && cloud.accountId)
+        reportCloudConsentRequired({ accountId: cloud.accountId, bindingVersion: consent.bindingVersion }, tabId);
       // 满额被拒：列表可能是旧的，重读一次让「已满」的提示和实际对上
       if (err instanceof CloudError && err.code === "conversation-limit") void refreshHistoryRef.current();
       return false;

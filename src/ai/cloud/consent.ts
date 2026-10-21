@@ -94,20 +94,39 @@ interface PermitRecord { bound: Source; generation: number; request: number; iss
 const permits = new WeakMap<CloudConsentPermit, PermitRecord>();
 /** 许可的有效期。发送前要先把附件放进素材库时可能超过它，那时最后一步照旧再读一次。 */
 export const CLOUD_CONSENT_PERMIT_TTL_MS = 5_000;
-let clock: () => number = () => Date.now();
+// 单调钟：系统时间往回拨不会把有效期拉长
+const monotonic = () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
+let clock: () => number = monotonic;
 /** 只给单测用：换掉许可有效期用的时钟。 */
-export function setCloudConsentClockForTest(next: (() => number) | null) { clock = next ?? (() => Date.now()); }
+export function setCloudConsentClockForTest(next: (() => number) | null) { clock = next ?? monotonic; }
 
-/** 向账号服务新读一次告知；已同意时回一张一次性许可，未同意回 null，出错照旧抛出。 */
-export async function grantCloudConsent(expected: CloudConsentBinding): Promise<CloudConsentPermit | null> {
-  if (!await refreshCloudConsent(expected)) return null;
+/**
+ * 向账号服务新读一次告知，出错照旧抛出。`accepted` 是「服务端说同意了没有」，决定要不要弹告知框；
+ * `permit` 是「这次能不能省掉发出前那次读取」：同意了但此刻发不出许可（别处有读取在路上、绑定刚变、
+ * 被更新的读取取代等）时 `permit` 为 null，调用方照常往下发，发出前那一步自己再真读一次。
+ */
+export async function grantCloudConsent(expected: CloudConsentBinding): Promise<{ accepted: boolean; permit: CloudConsentPermit | null }> {
+  const fresh = await refreshCloudConsent(expected);
   assertBinding(expected);
-  if (state.accepted !== true || state.pending) return null;
+  // 被更新的读取取代时 fresh 是 false，但不等于没同意：看此刻的状态（与面板挂载时那次读取的判断一致）
+  const accepted = fresh || (state.accepted === true && state.accountId === expected.accountId);
+  if (!fresh || state.accepted !== true || state.pending) return { accepted, permit: null };
   const bound = source;
-  if (!bound || bound.client.account?.id !== bound.accountId || bound.accountId !== expected.accountId || generation !== expected.bindingVersion) return null;
+  if (!bound || bound.client.account?.id !== bound.accountId || bound.accountId !== expected.accountId || generation !== expected.bindingVersion)
+    return { accepted, permit: null };
   const permit: CloudConsentPermit = Object.freeze({ binding: Object.freeze({ ...expected }) });
   permits.set(permit, { bound, generation, request: requestSeq, issuedAt: clock(), used: false });
-  return permit;
+  return { accepted, permit };
+}
+
+/** 发送被拒在「没同意告知」上（页面自己的读取，或服务端收消息时回 consent-required）：叫面板弹告知框。 */
+/** `origin`：发这条消息的那个分页，只让它弹框。绑定已经变了的旧报告丢掉。 */
+type RequiredListener = (binding: CloudConsentBinding, origin: string) => void;
+const requiredListeners = new Set<RequiredListener>();
+export function onCloudConsentRequired(listener: RequiredListener) { requiredListeners.add(listener); return () => { requiredListeners.delete(listener); }; }
+export function reportCloudConsentRequired(binding: CloudConsentBinding, origin: string) {
+  if (state.accountId !== binding.accountId || state.bindingVersion !== binding.bindingVersion) return;
+  for (const listener of [...requiredListeners]) listener(binding, origin);
 }
 
 /** 同步核许可并作废它；任何一项对不上都回 false，调用方要退回新读取。 */
