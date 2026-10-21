@@ -11,6 +11,9 @@ import { timelineDigest, lookHint, paramsEcho } from "../tools/toolEcho";
 
 import { stageSize, clipGuard } from "../common";
 import { segmentInfo } from "./cutSegments";
+import { inClipCut, assertClipNotParked, clipMissingError } from "../clipCut";
+
+type Args<K extends keyof EditorApi> = Parameters<EditorApi[K]>[0];
 
 export const clipsHandlers = {
   addClip: (args) => {
@@ -31,11 +34,11 @@ export const clipsHandlers = {
     // 之后模型引用 clipId 以它为准,不再凭几步前的记忆。理由见 toolEcho.ts。
     return { ...clip, look: lookHint(clip.id), timeline: timelineDigest(getState().project) };
   },
-  updateClip: (args) => {
+  updateClip: /* @__PURE__ */ inClipCut((args: Args<"updateClip">) => {
     rejectAudioVolumeKeys(args, "update_clip");
     if (args.params || args.cardId !== undefined) {
       const hit = findClip(getState().project, args.clipId);
-      if (!hit) throw new Error(`找不到 clip ${args.clipId}`);
+      if (!hit) throw clipMissingError(args.clipId);
       const clip = hit.clip as { cardId?: string; params?: Record<string, unknown> };
       // 换卡时旧参数不再适用,按空的算;只改参数时要带上 clip 已有的,
       // 免得「只改个颜色」被当成漏填了必填项。
@@ -95,26 +98,27 @@ export const clipsHandlers = {
       ...(args.params ? paramsEcho(paramsBefore, findClip(getState().project, args.clipId)?.clip.params) : null),
       ...(lock ? { movedGroup: lock.members, note: "这段挂着转场,整组一起挪了" } : {}),
     };
-  },
+  }),
   removeClip: (args) => {
     // 门槛:删自己刚建的卡、或一口气连删一串,要 force + reason。理由回显给用户。见 toolEcho.ts。
     const a = args as { clipId: string; force?: boolean; reason?: string };
+    assertClipNotParked(a.clipId);
     const { reason } = clipGuard.checkRemove(a);
     actions.removeClip(a.clipId);
     clipGuard.noteRemoved(a.clipId);
     return { ok: true, removed: a.clipId, ...(reason ? { reason } : null), timeline: timelineDigest(getState().project) };
   },
   // 约定封装:Agent 看到和改的都是它(kernel/envelope.ts),不是原始 clip 也不是组件源码
-  getClip: (args) => {
+  getClip: /* @__PURE__ */ inClipCut((args: Args<"getClip">) => {
     const hit = findClip(getState().project, args.clipId);
-    if (!hit) throw new Error(`找不到 clip ${args.clipId}`);
+    if (!hit) throw clipMissingError(args.clipId);
     const envelope = envelopeOf(getState().project, hit.clip, getCard(hit.clip.cardId), stageSize());
     // 剪辑段:另带引用哪条剪辑、偏移、被引用剪辑的总时长、音量与静音(kernel/cutSegments.ts)
     return hit.clip.cutId ? { ...envelope, cutSegment: segmentInfo(hit.clip.id) } : envelope;
-  },
-  setClip: (args) => {
+  }),
+  setClip: /* @__PURE__ */ inClipCut((args: Args<"setClip">) => {
     const hit = findClip(getState().project, args.clipId);
-    if (!hit) throw new Error(`找不到 clip ${args.clipId}`);
+    if (!hit) throw clipMissingError(args.clipId);
     const report = applyEnvelope(
       getState().project, args.clipId, args.envelope, getCard(hit.clip.cardId), stageSize(),
       {
@@ -134,8 +138,9 @@ export const clipsHandlers = {
       envelope: envelopeOf(getState().project, after.clip, getCard(after.clip.cardId), stageSize()),
       look: lookHint(args.clipId), timeline: timelineDigest(getState().project),
     };
-  },
+  }),
   splitClip: (args) => {
+    assertClipNotParked(args.clipId);
     const lock = timingLock(getState().project, args.clipId);
     if (lock) throw new Error(`切不开:${lock.message}`);
     const c = actions.splitClip(args.clipId, args.t);
@@ -143,8 +148,8 @@ export const clipsHandlers = {
     clipGuard.noteCreated(c.id);
     return c;
   },
-  duplicateClip: (args) => { const c = actions.duplicateClip(args.clipId); if (!c) throw new Error("复制失败"); clipGuard.noteCreated(c.id); return c; },
-  setEmphasis: (args) => {
+  duplicateClip: (args) => { assertClipNotParked(args.clipId); const c = actions.duplicateClip(args.clipId); if (!c) throw new Error("复制失败"); clipGuard.noteCreated(c.id); return c; },
+  setEmphasis: /* @__PURE__ */ inClipCut((args: Args<"setEmphasis">) => {
     const clipId = String(args.clipId ?? "");
     const kind = String(args.kind ?? "");
     if (!clipId) throw new Error("要 clipId");
@@ -167,5 +172,5 @@ export const clipsHandlers = {
       look: lookHint(clipId),
       note: "强调沿着画面里不透明部分的边缘走(按 alpha 算),透明底的卡片、抠好的人物最明显;整块不透明的画面只会在方框外圈看到一条边。",
     };
-  },
+  }),
 } satisfies Partial<EditorApi>;

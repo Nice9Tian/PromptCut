@@ -6,6 +6,9 @@ import { importAudioFromServer } from "../../editor/io";
 import { soundPresets, startSoundGeneration, getSoundGenerationJob, soundGenerationJobs, cancelSoundGeneration, waitSoundGeneration } from "../../editor/io/soundGeneration";
 
 import { clipGuard, audioFxTools, measureAudio, measureAudioJs } from "../common";
+import { inClipCut } from "../clipCut";
+
+type Args<K extends keyof EditorApi> = Parameters<EditorApi[K]>[0];
 
 export const audioHandlers = {
   soundPresets: () => soundPresets(),
@@ -30,18 +33,18 @@ export const audioHandlers = {
   applyAudioFx: (args) => { const r = audioFxTools.applyAudioFx(args); clipGuard.noteMutation(); return r; },
   measureAudio: (args) => measureAudio(args),
   measureAudioJs: (args) => measureAudioJs(args),
-  setClipVolume: (args) => {
+  setClipVolume: /* @__PURE__ */ inClipCut((args: Args<"setClipVolume">) => {
     const result = actions.setClipVolume(String(args.clipId), args.volume);
     if (!result.ok) throw new Error(result.error);
     clipGuard.noteMutation();
     return { ...result, timeline: timelineDigest(getState().project) };
-  },
-  setClipMuted: (args) => {
+  }),
+  setClipMuted: /* @__PURE__ */ inClipCut((args: Args<"setClipMuted">) => {
     const result = actions.setClipMuted(String(args.clipId), args.muted);
     if (!result.ok) return result;
     clipGuard.noteMutation();
     return { ...result, timeline: timelineDigest(getState().project) };
-  },
+  }),
   separateAudio: (args) => {
     if (!!args.clipId === !!args.clipIds) return { ok: false, code: "INVALID_CLIP_IDS", error: "clipId 和 clipIds 必须且只能给一个" };
     const result = args.clipIds ? actions.separateAudios(args.clipIds) : actions.separateAudio(String(args.clipId));

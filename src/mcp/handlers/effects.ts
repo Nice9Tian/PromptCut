@@ -3,6 +3,7 @@ import { getState, actions } from "../../store/project";
 import { describeTransition, transitionsOf, type TransitionKind } from "../../kernel/transitions";
 import { timelineDigest } from "../tools/toolEcho";
 import { listCuts, resolveCut } from "../../kernel/cuts";
+import { cutContent, activeCutIdOf } from "../../kernel/cutSegments";
 import { removeCutGate } from "./cutSegments";
 
 import { clipGuard, filterTools, pixelMapTools } from "../common";
@@ -51,7 +52,19 @@ export const effectsHandlers = {
   },
   /* ---------- 剪辑(多条时间轴) ---------- */
   // 每条剪辑带上引用关系(referencedBy:哪些剪辑的哪几段引用了它;references:它里面的剪辑段引用了谁)
-  listCuts: () => ({ activeCutId: getState().project.activeCutId, cuts: listCuts(getState().project) }),
+  // 给了 cutId 就多返回那条剪辑的 timeline 一览(各序列和片段的 id、起止):不用 switch_cut 就能拿到要改的片段 id,
+  // 拿到以后 update_clip / set_clip / get_clip / set_rect… 直接按 clipId 改(见 mcp/clipCut.ts)
+  listCuts: (args) => {
+    const p = getState().project;
+    const out: Record<string, unknown> = { activeCutId: p.activeCutId, cuts: listCuts(p) };
+    if (args?.cutId !== undefined) {
+      const cut = resolveCut(p, { cutId: String(args.cutId) });
+      const content = cutContent(p, cut.id);
+      if (!content) throw new Error(`剪辑「${cut.name}」(${cut.id})没有可读的内容`);
+      out.timeline = { cutId: cut.id, name: cut.name, active: cut.id === activeCutIdOf(p), ...timelineDigest({ ...p, tracks: content.tracks, duration: content.duration }) };
+    }
+    return out;
+  },
   switchCut: (args) => {
     const cut = resolveCut(getState().project, args);
     actions.switchCut(cut.id);

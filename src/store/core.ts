@@ -5,6 +5,7 @@
 import { createContext, useContext, useRef, useSyncExternalStore } from "react";
 import { createEmptyProject, type Project, type Track, type TrackClip } from "../kernel/project";
 import { type Transition } from "../kernel/transitions";
+import { cutEditView, foldCutEdit } from "../kernel/cuts";
 
 /**
  * 编辑器状态存储(单例)。所有面板、时间轴、MCP 工具都通过这里读写,不直接改 Project 对象。
@@ -77,8 +78,61 @@ export function emit() {
 }
 
 export function set(patch: Partial<EditorState>) {
+  if (cutScope) { outsideCutScope(() => set(patch)); return; }
   state = { ...state, ...patch };
   emit();
+}
+
+/*
+ * 就地改停放剪辑里的片段(Agent 的 update_clip 等,见 kernel/cuts.ts「就地改停放剪辑里的片段」)。
+ *
+ * `runInCutScope(cutId, fn)` 在 fn 执行期间把 `state.project` 换成「那条剪辑当激活」的视图,
+ * 让现成的、按激活剪辑写的 actions(`findClip(state.project, …)` + `setProject`)原样工作;
+ * 这期间 `setProject` 把动作产出的新项目折回真实形状再提交(撤销栈、文档服务同步看到的都是真实形状,
+ * 只有那条剪辑条目里的内容变了,activeCutId 与激活剪辑原样不动),`set` 通知监听者时也先换回真实项目 ——
+ * 所以任何监听者、同步层都看不到视图。fn 必须是同步的。
+ */
+let cutScope: { cutId: string; real: Project } | null = null;
+
+/** 在 scope 里要往外办事(提交、通知监听者)时:先换回真实项目、办完把视图按办完后的真实项目重建 */
+function outsideCutScope<T>(fn: () => T): T {
+  const sc = cutScope!;
+  cutScope = null;
+  state = { ...state, project: sc.real };
+  try {
+    return fn();
+  } finally {
+    sc.real = state.project;
+    const view = cutEditView(sc.real, sc.cutId);
+    if (view) {
+      state = { ...state, project: view };
+      cutScope = sc;
+    }
+  }
+}
+
+export function runInCutScope<T>(cutId: string, fn: () => T): T {
+  if (cutScope) {
+    if (cutScope.cutId !== cutId) throw new Error("不能在改一条剪辑的过程中嵌套改另一条");
+    return fn();
+  }
+  const real = state.project;
+  const view = cutEditView(real, cutId);
+  if (!view) return fn(); // 就是激活那条、或找不到:照常做
+  cutScope = { cutId, real };
+  state = { ...state, project: view };
+  let out: T;
+  try {
+    out = fn();
+  } finally {
+    const sc = cutScope as { cutId: string; real: Project } | null;
+    cutScope = null;
+    if (sc) state = { ...state, project: sc.real };
+  }
+  if (out && typeof (out as { then?: unknown }).then === "function") {
+    throw new Error("runInCutScope 只能包同步函数(异步的后半段已经不在这条剪辑的视图里了)");
+  }
+  return out;
 }
 
 export interface SetProjectOptions {
@@ -157,6 +211,12 @@ function noteLocalCommit(prev: Project, next: Project) {
 
 /** 改项目文档(会进撤销栈) */
 export function setProject(next: Project, opts: SetProjectOptions = {}) {
+  if (cutScope) {
+    if (next === state.project) return; // 视图原样提交 = 没改,不凭空产出一份新项目
+    const folded = foldCutEdit(cutScope.real, next, cutScope.cutId);
+    outsideCutScope(() => setProject(folded, opts));
+    return;
+  }
   if (ambientMerge && opts.mergeKey === undefined) opts = { ...opts, mergeKey: ambientMerge.key, mergeWindowMs: opts.mergeWindowMs ?? ambientMerge.windowMs };
   const prev = state.project;
   if (projectSync) {

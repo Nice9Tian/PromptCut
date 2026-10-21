@@ -5,6 +5,7 @@
 ## 剪辑的存法
 
 - 激活那条剪辑的序列、转场、总时长住在项目本身上，停放的各自带着（`src/kernel/cuts.ts`）。没有 `cuts` 字段的项目加载时只补「剪辑1」一条（`DEFAULT_CUT_COUNT = 1`）；已经带着 `cuts` 的原样不动。
+- 就地改停放剪辑里的片段（Agent 按片段 id 改属性的工具，`src/mcp/clipCut.ts`）：把那条剪辑当激活的视图交给现成动作，提交时折回，只改它条目里的 tracks / duration / transitions（`kernel/cuts.ts` 的 `cutEditView` / `foldCutEdit`，`store/core.ts` 的 `runInCutScope`）；激活剪辑与它的序列保持原对象，一次工具调用是一次提交、一步撤销。删、复制、切分片段与 `get_layout` 仍只认激活剪辑，片段在别的剪辑里时报出它在哪条剪辑、要先 `switch_cut`。
 
 ## 剪辑段的存法
 
