@@ -316,7 +316,13 @@ async function main() {
   /* ---- Q2 / Q1 / Q3：丙在产流时，甲、乙交错要四帧 */
   const markL = supLogs.length;
   const looksAt = Date.now();
-  const reqs = [look(jia, '甲-2'), look(jia, '甲-3'), look(yi, '乙-1'), look(yi, '乙-2')];
+  // 一个一个登记（等渲染服务记下前一个再发下一个）：「先来」按渲染服务收到的先后算，客户端并发发出去的先后不作数
+  const reqs = [];
+  for (const [proj, label] of [[jia, '甲-2'], [jia, '甲-3'], [yi, '乙-1'], [yi, '乙-2']]) {
+    const before = supLogs.filter((l) => l.event === 'look.queued').length;
+    reqs.push(look(proj, label));
+    await waitFor(() => supLogs.filter((l) => l.event === 'look.queued').length > before, 20_000, `${label} 登记进队列`, 50);
+  }
   // 撤回：乙再登记一条又撤回，队列里不留它
   const ac = new AbortController();
   const bx = look(yi, '乙-撤回', { signal: ac.signal });
