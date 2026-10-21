@@ -1,490 +1,355 @@
 /**
- * 舞台端口的闸 —— **真的编辑器、真的舞台窗口**里的探针(`server/stage-gate.mjs`:从舞台端口来的请求缺省全拒,只放行白名单)。
+ * 舞台闸门、崩溃记录、护栏、档位气泡、查看口的真浏览器探针(`docs/plan/online-browser-task.md` 第三步;语义 `product/platforms.md`「在线浏览器」,
+ * 做法 `mechanism/platforms.md`「三道闸门」)。无头 Chrome 打开在线构建的编辑页,**真的把页面进程杀掉**(CDP `Page.crash`)来模拟崩溃,
+ * 再重新载入,看停在哪一级。
  *
- *   node scripts/probes/stage-gate-probe.mjs --port 29000 [--out <目录>] [--json <文件>] [--shots <目录>] [--keep]
+ *   npx vite build --mode online
+ *   node scripts/probes/stage-gate-probe.mjs [--dist dist-online] [--base-port 5870] [--out <目录>] [--only S1,S3]
  *
- * 自己起一台隔离的编辑器(舞台端口是 +1、+2,三个连号都要空着;数据、素材、卡片改动层都指到 `--out` 下),跑完按进程号收掉。
- * 编辑器进程带 `PROMPTCUT_STAGE_PORT_LOG`:舞台端口每来一个请求,代理记一行(方法、地址、放没放行)。
- * `--out` 不要指到仓库的 `out/` 下:那里不在开发服务器的监听范围里,第 5 步改卡不会触发热更新(缺省在系统临时目录)。
+ * 端口:编辑器页 base、两个舞台 base+1 / +2、文档服务 base+3、素材服务 base+4(缺省 5870～5874)。本机隔离托管组合(`lib/mobile-env.mjs`),不连远端。
+ * 页面里只读两个口:`window.__pcGates()`(查看口的数据)与 `[data-pc="tier-bubble"]`(气泡)。`?gateHold=<一步>`(只给验收)让舞台闸门记下那一步后停住,
+ * 探针趁这时杀页面进程;`?gates=1` 打开只读查看口。
  *
- * 流程:
- *   0. 往卡片改动层写一张用户卡(`probe-gate-card`):它在舞台里挂上以后**自己**去调一次 `POST /api/agent/bind`,
- *      并留一个函数,让探针叫它用卡片模块里的 `fetch`、`WebSocket` 逐个去调一批接口。
- *      素材目录里放一段视频(ffmpeg 测试图样)和一段声音(正弦波)。
- *   1. 编辑器 `?editor&nosetup=1&preview=stage`;装进一份项目:这张用户卡、一张带文字的内置卡、一张带内嵌声音的内置卡(`av-pulse`)、
- *      视频、声音,各占一条序列。点几处、播放两秒、暂停、再点。
- *      核:两个舞台窗口都在舞台端口上;可见舞台里用户卡画出来了(标记色块的像素)、视频那一块有画面而且两处时间的画面不同;
- *      播放时播放头在走、舞台里的视频也在走;卡片声音生成成功(`generateCardAudio`)。
- *   2. **到这里为止舞台端口没有一个请求被拒**(代理的流水里没有 `ok: false`)—— 白名单没有挡住舞台正当要用的东西。
- *      流水里出现过的请求按「方法 + 路径前缀」归类,写进结果(白名单就是照它定的)。
- *   3. 用户卡在可见舞台里逐个去调一批接口(Agent 绑定与对话、数据镜像、项目写入、素材写入、帧与导出的写口、MCP、文件系统类、
- *      卡片写入与同步、渲染节点、采集、网页工具、项目根下的文件、`/@fs/` 任意文件、文档服务的 WebSocket):**全部被拒**(403;WebSocket 连不上)。
- *      同一批接口从编辑器端口发(Node 里,不带 Origin):没有一个是 403。
- *   4. 被拒之后预览照常:再点一处、播一秒,用户卡和视频照样画得出来。
- *   5. 改这张用户卡的源码:舞台不重载就换成新的(热更新的 WebSocket、重新取源码都经舞台端口)。
+ * 场景(每个场景一个新的浏览器上下文 = 全新的页面本地存储,除非写明接着上一个):
+ *   S1  电脑全新打开:从低往高试,到第三级「顶配模式」;气泡文字照用户定的,几秒后自动消失;崩溃记录最后一步是「第 3 级运行中」
+ *   S2  接着 S1 正常刷新(留了正常离开):不算崩;上次试成功,崩的次数为 0
+ *   S3  试各一套渲染器时杀掉页面进程 → 重新载入停在第二级「标准模式」,崩 1 次、护栏 30 分钟;气泡「标准模式」
+ *   S4  接着 S3:护栏内重新打开,停在第二级、不试
+ *   S5  接着 S4:把护栏拨到过去(仿过了 30 分钟)→ 从头试,到第三级;再正常刷新 → 试成功一次,清零
+ *   S6  试后台舞台时杀掉 → 停在第一级「精简模式」(一个舞台,没有后台舞台)
+ *   S7  开可见舞台时(可见舞台就绪之前)杀掉 → 最低一档「低配模式」
+ *   S8  切到后台(visibilitychange hidden)之后杀掉 → 不算崩
+ *   S9  有护栏、崩过的记录,把记录里的软件版本改成旧的(仿升级)→ 清零,从头试
+ *   S10 安卓手机(Chromium,报 4 GB)→ 不试,停在一个舞台,身份手机;报 8 GB → 试
+ *   S11 电脑上只把后台舞台的进程杀掉(舞台崩了页面还在)→ 看守重载那一台、照旧第三级;反复崩 → 握手容错退回单舞台,只管当次:
+ *       不留崩溃记录,重新载入照常试
+ *   S12 iPad(桌面标识 + 多点触控):要试的先按电脑;试后台舞台时杀掉 → 重新载入停在第一级,身份改判手机
+ *   S13 两个标签页:第一个还开着时开第二个,第二个不把第一个当成崩了
+ *   S14 只读查看口:`?gates=1` 显示档位、舞台闸门、崩溃记录,不含凭证
  *
- * 贴轨道流、按住标尺拖这两样的逐帧核对用现成的 `scrub-stream-probe.mjs`(同一道闸下跑,见报告)。
- * 验收:退出码 0,结果里 `fails: []`。等待时限只为防卡死。
+ * 输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, scenes }`;截图在 --out。
  */
-import '../lib/no-user-dirs.mjs'; // 第一个 import:不继承外部的 PROMPTCUT_EXPORT_DIR / PROMPTCUT_DATA_DIR
-import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import puppeteer from 'puppeteer';
-import { PNG } from 'pngjs';
 import { PROBE_CHROME_ARGS } from './probe-chrome.mjs';
 import { flagArg } from './probe-connect.mjs';
-import { startDevServer, REPO } from '../lib/dev-server.mjs';
+import { startMobileEnv, emptyProject, DEVICES } from './lib/mobile-env.mjs';
 
-const execFileAsync = promisify(execFile);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const args = process.argv.slice(2);
-const PORT = Number(flagArg('port', '0', args));
-const KEEP = args.includes('--keep');
-/** `--observe`:只跑到第 2 步(记下舞台端口正当发的请求),不让用户卡去调那一批 */
-const OBSERVE = args.includes('--observe');
-const JSON_OUT = flagArg('json', null, args);
-const SHOTS = flagArg('shots', null, args);
-const RUN = Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
-const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-stage-gate-probe-${RUN}`));
-if (!PORT) { console.error('要给 --port <自己起一台开发服务器的端口>'); process.exit(2); }
+const DIST = path.resolve(flagArg('dist', 'dist-online', args));
+const BASE = Number(flagArg('base-port', '5870', args));
+const OUT = path.resolve(flagArg('out', path.join(os.tmpdir(), `stage-gate-${Date.now().toString(36)}`), args));
+const ONLY = (flagArg('only', '', args) || '').split(',').filter(Boolean);
+fs.mkdirSync(OUT, { recursive: true });
 
-const WORK = path.join(OUT, 'work');
-const MEDIA_DIR = path.join(WORK, 'media');
-const DATA_DIR = path.join(WORK, 'data');
-const OVERRIDES = path.join(WORK, 'card-overrides');
-const GATE_LOG = path.join(WORK, 'stage-port.log');
-const CARD_ID = 'probe-gate-card';
-/** 用户卡画的色块:纯品红,别的东西不会是这个颜色 */
-const MARK = [255, 0, 255];
-/** 改卡之后的颜色 */
-const MARK2 = [16, 32, 48];
-const FPS = 30, WIDTH = 1280, HEIGHT = 720, SECONDS = 6;
-
-const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ step, t: Date.now(), ...fields })}\n`);
 const fails = [];
-const check = (cond, label, extra) => { if (!cond) { fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 1200))); say('FAIL', { label, extra }); } return !!cond; };
-async function until(label, fn, timeoutMs, everyMs = 300) {
-  const deadline = Date.now() + timeoutMs;
+const scenes = {};
+const say = (...a) => process.stderr.write(`[stage-gate] ${a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')}\n`);
+const check = (scene, cond, label, extra) => {
+  if (!cond) fails.push(`${scene} ${label}${extra === undefined ? '' : ` :: ${JSON.stringify(extra).slice(0, 600)}`}`);
+  (scenes[scene] ??= { checks: 0, failed: 0 }).checks++;
+  if (!cond) scenes[scene].failed++;
+  return !!cond;
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, timeoutMs = 60_000, everyMs = 150) {
+  const end = Date.now() + timeoutMs;
   for (;;) {
-    let value = null;
-    try { value = await fn(); } catch { value = null; }
-    if (value) return value;
-    if (Date.now() > deadline) { fails.push(`超时:${label}`); say('TIMEOUT', { label }); return null; }
+    let v = null;
+    try { v = await fn(); } catch { v = null; }
+    if (v) return v;
+    if (Date.now() > end) return null;
     await sleep(everyMs);
   }
 }
 
-/* ------------------------------------------------------------------ 素材与卡 */
-
-async function makeVideo(ffmpeg) {
-  const tmp = path.join(WORK, 'gate-video.mp4');
-  await execFileAsync(ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc2=size=${WIDTH}x${HEIGHT}:rate=${FPS}:duration=${SECONDS}`,
-    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', String(FPS), '-crf', '18', '-movflags', '+faststart', tmp], { windowsHide: true });
-  const bytes = await fs.readFile(tmp);
-  const hash = crypto.createHash('sha256').update(bytes).digest('hex');
-  await fs.rename(tmp, path.join(MEDIA_DIR, `${hash}.mp4`));
-  return { id: 'm-video', kind: 'video', name: 'gate-video.mp4', url: `/@media/${hash}`, hash, duration: SECONDS, width: WIDTH, height: HEIGHT, fps: FPS, bytes: bytes.length };
-}
-async function makeAudio() {
-  const rate = 48000, n = rate * SECONDS, data = Buffer.alloc(n * 2);
-  for (let i = 0; i < n; i++) data.writeInt16LE(Math.round(Math.sin(i / rate * 2 * Math.PI * 440) * 8000), i * 2);
-  const head = Buffer.alloc(44);
-  head.write('RIFF', 0); head.writeUInt32LE(36 + data.length, 4); head.write('WAVEfmt ', 8); head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(1, 22);
-  head.writeUInt32LE(rate, 24); head.writeUInt32LE(rate * 2, 28); head.writeUInt16LE(2, 32); head.writeUInt16LE(16, 34); head.write('data', 36); head.writeUInt32LE(data.length, 40);
-  const bytes = Buffer.concat([head, data]);
-  const hash = crypto.createHash('sha256').update(bytes).digest('hex');
-  await fs.writeFile(path.join(MEDIA_DIR, `${hash}.wav`), bytes);
-  return { id: 'm-audio', kind: 'audio', name: 'gate-audio.wav', url: `/@media/${hash}`, hash, duration: SECONDS, bytes: bytes.length };
-}
-
-/** 用户卡:画一个品红色块;挂上以后自己调一次 Agent 绑定;留一个函数让探针叫它逐个去调 */
-async function writeCard(color = MARK) {
-  const dir = path.join(OVERRIDES, 'src', 'cards', 'user');
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, `${CARD_ID}.tsx`), `import type { CardDef, CardProps } from "../../kernel/types";
-
-/** 探针用(stage-gate-probe.mjs 临时写进改动层):一张想从舞台里调编辑器本机接口的用户卡 */
-const g = globalThis as any;
-async function call(item: any) {
-  try {
-    const res = await fetch(item.path, { method: item.method, headers: item.type ? { "Content-Type": item.type } : undefined, body: item.body === undefined ? undefined : item.body, cache: "no-store" });
-    return { ...item, status: res.status, body: undefined };
-  } catch (e: any) { return { ...item, status: 0, error: String(e?.message ?? e), body: undefined }; }
-}
-function socket(item: any) {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (r: any) => { if (!done) { done = true; resolve({ ...item, ...r }); } };
-    try {
-      const ws = new WebSocket(location.origin.replace(/^http/, "ws") + item.path, item.protocols);
-      ws.onopen = () => { finish({ opened: true }); ws.close(); };
-      ws.onerror = () => finish({ opened: false });
-      ws.onclose = () => finish({ opened: false });
-      setTimeout(() => finish({ opened: false, timeout: true }), 8000);
-    } catch (e: any) { finish({ opened: false, error: String(e?.message ?? e) }); }
-  });
-}
-if (typeof window !== "undefined" && !g.__gateProbe) {
-  g.__gateProbe = { origin: location.origin, auto: null, run: async (list: any[]) => { const out = []; for (const item of list) out.push(item.ws ? await socket(item) : await call(item)); return out; } };
-  void call({ method: "POST", path: "/api/agent/bind", type: "application/json", body: JSON.stringify({ mode: "ticket", projectId: "p", url: "ws://attacker.invalid/" }) }).then((r) => { g.__gateProbe.auto = r; });
-}
-function C(_: CardProps<{}>) {
-  return <div data-gate-mark style={{ position: "absolute", left: 0, top: 0, width: 320, height: 240, background: "rgb(${color.join(',')})" }} />;
-}
-export const probeGateCard: CardDef<{}> = {
-  id: "${CARD_ID}", name: "舞台端口探针", description: "stage-gate-probe", source: "user",
-  frameMode: "direct",
-  defaults: {},
-  controls: [],
-  Component: C,
+const IPAD = {
+  ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+  viewport: { width: 1180, height: 820, deviceScaleFactor: 2, isMobile: false, hasTouch: true },
 };
-`);
-}
 
-/**
- * 用户卡去调的那一批。`type` 是 Content-Type;写口都按自家界面的写法带 JSON。
- * 这里只列「万一放行了,后果也只落在这台探针编辑器自己的临时目录里」的接口;会动到这台机器别处的几条
- * (开资源管理器、改用户级 MCP 配置、开网页、下载、起对话、起导出)不在真舞台里试,由单测 `server/test/stage-gate.test.mjs` 核。
- */
-const J = 'application/json';
-const body = (o) => JSON.stringify(o);
-const ATTACKS = [
-  // Agent 绑定与对话
-  { method: 'POST', path: '/api/agent/bind', type: J, body: body({ mode: 'ticket', projectId: 'p', url: 'ws://attacker.invalid/' }) },
-  { method: 'POST', path: '/api/agent/unbind', type: J, body: '{}' },
-  { method: 'POST', path: '/api/agent/ticket', type: J, body: body({ reqId: 'x', ticket: 'x' }) },
-  { method: 'GET', path: '/api/agent/status' },
-  { method: 'GET', path: '/api/agent/inbox' },
-  { method: 'GET', path: '/api/ai/config' },
-  { method: 'POST', path: '/api/ai/config', type: J, body: body({ api: { baseUrl: 'https://attacker.invalid' } }) },
-  { method: 'GET', path: '/api/ai/providers' },
-  { method: 'GET', path: '/api/ai/machine-code' },
-  { method: 'GET', path: '/api/chats/list' },
-  { method: 'POST', path: '/api/chats/save', type: J, body: body({ id: 'x', messages: [] }) },
-  { method: 'POST', path: '/api/chats/attach/import', type: J, body: body({ path: 'C:/Windows/win.ini' }) },
-  // 数据镜像
-  { method: 'GET', path: '/api/data/project' },
-  { method: 'PUT', path: '/api/data/project', type: J, body: body({ project: {} }) },
-  { method: 'POST', path: '/api/data/diff', type: J, body: '{}' },
-  { method: 'POST', path: '/api/data/playhead', type: J, body: body({ t: 0 }) },
-  { method: 'PUT', path: '/api/data/costs', type: J, body: body({ records: [] }) },
-  { method: 'GET', path: '/api/data/costs' },
-  // 项目写入
-  { method: 'GET', path: '/api/projects' },
-  { method: 'PUT', path: '/api/projects/gate-probe', type: J, body: body({ project: {} }) },
-  { method: 'DELETE', path: '/api/projects/gate-probe' },
-  { method: 'GET', path: '/api/project-backups' },
-  // 素材写入
-  { method: 'POST', path: '/api/media/upload/gate-probe.txt', type: 'text/plain', body: 'x' },
-  { method: 'POST', path: '/api/media/adopt', type: J, body: body({ path: 'C:/Windows/win.ini' }) },
-  { method: 'GET', path: '/api/media/local?path=C%3A%2FWindows%2Fwin.ini' },
-  { method: 'POST', path: '/api/media/upload-queue/target', type: J, body: body({ base: 'https://attacker.invalid' }) },
-  { method: 'POST', path: '/api/media/prefetch', type: J, body: '{}' },
-  // 帧与导出的写口
-  { method: 'POST', path: '/api/frames/preload', type: J, body: '{}' },
-  { method: 'POST', path: '/api/frames/yield', type: J, body: '{}' },
-  { method: 'POST', path: '/api/frames/render-node', type: J, body: '{}' },
-  { method: 'POST', path: '/api/export/audio-mix/x', type: 'audio/wav', body: 'x' },
-  { method: 'GET', path: '/api/exports' },
-  { method: 'POST', path: '/api/storage/clear-cache', type: J, body: '{}' },
-  { method: 'GET', path: '/api/storage' },
-  { method: 'POST', path: '/api/vision/bake', type: J, body: '{}' },
-  { method: 'POST', path: '/api/vision/snapshot', type: J, body: '{}' },
-  // MCP 与 Skill
-  { method: 'POST', path: '/api/mcp/call', type: J, body: body({ name: 'get_project', args: {} }) },
-  { method: 'GET', path: '/api/mcp/status' },
-  { method: 'POST', path: '/api/mcp/result', type: J, body: '{}' },
-  { method: 'GET', path: '/api/skill-lock' },
-  // 卡片写入与同步、渲染节点
-  { method: 'POST', path: '/api/cards/create', type: J, body: body({ id: 'gate-evil', source: 'x', existingIds: [] }) },
-  { method: 'POST', path: '/api/cards/edit', type: J, body: body({ id: CARD_ID, find: 'a', replace: 'b' }) },
-  { method: 'GET', path: `/api/cards/source?id=${CARD_ID}` },
-  { method: 'POST', path: '/api/cards/install', type: J, body: '{}' },
-  { method: 'POST', path: '/api/cards/sync/bind', type: J, body: body({ mode: 'ticket', projectId: 'p', url: 'ws://attacker.invalid/' }) },
-  { method: 'POST', path: '/api/cards/sync/ticket', type: J, body: body({ reqId: 'x', ticket: 'x' }) },
-  { method: 'POST', path: '/api/cards/sync/unbind', type: J, body: '{}' },
-  { method: 'GET', path: '/api/cards/sync/status' },
-  { method: 'POST', path: '/api/render-node/bind', type: J, body: body({ url: 'ws://attacker.invalid/' }) },
-  { method: 'POST', path: '/api/render-node/ticket', type: J, body: '{}' },
-  // 采集、网页工具、听写、配音、文档服务
-  { method: 'GET', path: '/api/collect/cookies' },
-  { method: 'GET', path: '/api/stt/status' },
-  { method: 'GET', path: '/api/voice/config' },
-  { method: 'GET', path: '/api/docservice/device' },
-  { method: 'POST', path: '/docservice/shared/create', type: J, body: '{}' },
-  // 大小写与重复斜杠的写法
-  { method: 'POST', path: '/aPi/agent/bind', type: J, body: '{}' },
-  { method: 'POST', path: '/api//agent/bind', type: J, body: '{}' },
-  // 文件系统类:项目根下的文件、/@fs/ 任意文件
-  { method: 'GET', path: '/package.json' },
-  { method: 'GET', path: '/vite.config.ts?raw' },
-  { method: 'GET', path: '/scripts/test-suite.mjs?raw' },
-  { method: 'GET', path: '/docs/semantics/glossary.md' },
-  { method: 'GET', path: '/desktop/src-tauri/tauri.conf.json' },
-  { method: 'GET', path: '/.git/config' },
-  { method: 'GET', path: '/out/' },
-  { method: 'GET', path: `/@fs/${REPO.replace(/\\/g, '/')}/package.json` },
-  { method: 'GET', path: '/@fs/C:/Windows/win.ini' },
-  // WebSocket:文档服务;不带热更新子协议的升级
-  { ws: true, path: '/docservice' },
-  { ws: true, path: '/' },
-];
+const env = await startMobileEnv({ dist: DIST, basePort: BASE, docPort: BASE + 3, assetPort: BASE + 4, name: 'stage-gate-probe' });
+await env.seed(emptyProject('stage-gate-probe'));
+const browser = await puppeteer.launch({ headless: true, protocolTimeout: 90_000, args: [...PROBE_CHROME_ARGS, '--no-first-run', '--autoplay-policy=no-user-gesture-required'] });
 
-/* ------------------------------------------------------------------ 流水 */
-
-const readLog = () => { try { return fsSync.readFileSync(GATE_LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
-/** 一条请求归成「方法 + 路径的形状」:哈希、数字、文件名这些会变的段换成占位 */
-function shapeOf(row) {
-  const p = row.u.split('?')[0];
-  let shape = p;
-  if (/^\/@fs\//.test(p)) shape = /\/node_modules\//.test(p) ? '/@fs/…/node_modules/…' : `/@fs/…/${p.split('/').slice(-1)[0]}`;
-  else if (/^\/(src|server|node_modules|@id|@vite)\//.test(p)) shape = `/${p.split('/')[1]}/…`;
-  else shape = p.replace(/[0-9a-f]{32,}/gi, '<hash>').replace(/\/\d+(?=\/|$)/g, '/<n>');
-  return `${row.ws ? 'WS' : row.m} ${shape}`;
-}
-const shapes = (rows) => { const m = new Map(); for (const r of rows) { const k = shapeOf(r); m.set(k, (m.get(k) ?? 0) + 1); } return Object.fromEntries([...m].sort()); };
-
-/* ------------------------------------------------------------------ 主流程 */
-
-const out = { out: OUT, port: PORT };
-let dev = null, browser = null;
-const started = Date.now();
-try {
-  await fs.mkdir(MEDIA_DIR, { recursive: true });
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  if (SHOTS) await fs.mkdir(SHOTS, { recursive: true });
-  const env = { PROMPTCUT_EXPORT_DIR: WORK, PROMPTCUT_DATA_DIR: DATA_DIR, PROMPTCUT_CARD_OVERRIDES: OVERRIDES, PROMPTCUT_NO_PORT_FILE: '1', PROMPTCUT_STAGE_PORT_LOG: GATE_LOG,
-    PROMPTCUT_CARD_SYNC: '0', PROMPTCUT_PUSH: '0', PROMPTCUT_LAN_HOST: '', PROMPTCUT_DEVICE_ID: `gateprobe-${RUN}`.padEnd(16, '0'), PROMPTCUT_DEVICE_NAME: 'gate-probe' };
-  Object.assign(process.env, env);
-  const { findFfmpeg } = await import('../../server/bakery/ffmpeg.mjs');
-  await writeCard();
-  const media = { video: await makeVideo(await findFfmpeg()), audio: await makeAudio() };
-  dev = await startDevServer({ env, port: PORT, logFile: path.join(WORK, 'vite.log'), log: (m) => say('dev', { m }) });
-  const origin = dev.origin;
-  out.origin = origin; out.stagePorts = dev.stagePorts;
-  say('spawn', { pid: dev.pid, port: PORT, stagePorts: dev.stagePorts });
-
-  browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
-    args: [...PROBE_CHROME_ARGS, '--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1920, height: 1200 });
-  const pageErrors = [];
-  page.on('pageerror', (e) => pageErrors.push(String(e).slice(0, 300)));
-  await page.goto(origin + '/?editor&nosetup=1&preview=stage', { waitUntil: 'domcontentloaded', timeout: 180000 });
-  await page.waitForFunction(async () => {
-    const m = await import('/src/editor/stageBridge.ts');
-    return !!m.frontStage() && m.backRole() === 'back';
-  }, { timeout: 180000, polling: 500 });
-  const stagePorts = dev.stagePorts.map(String);
-  const stageFrames = () => page.frames().filter((f) => /[?&]stage=1/.test(f.url()) && stagePorts.some((p) => f.url().includes(`:${p}/`)));
-  const frontId = () => page.evaluate(() => window.__pcPreviewDiag?.().frontId ?? 'A');
-  const frontFrame = async () => { const id = await frontId(); return stageFrames().find((f) => f.url().includes(`id=${id}`)) ?? null; };
-  check(stageFrames().length === 2, '两个舞台窗口都开在舞台端口上', page.frames().map((f) => f.url().slice(0, 80)));
-
-  /* ---------------------------------------------------------------- 1. 项目 */
-  // 整份项目直接装进去(片段的时间、所在的序列都写死;用「加一张卡」那几个动作的话,同一条序列上放不下的会被往后挪)
-  const clips = { user: 'clip-user', pill: 'clip-pill', pulse: 'clip-pulse', video: 'clip-video', audio: 'clip-audio' };
-  const PROJECT = { id: `stage-gate-${RUN}`, name: '舞台端口探针', width: WIDTH, height: HEIGHT, fps: FPS, duration: SECONDS, themeId: 'dark', filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
-    media: [media.video, media.audio],
-    tracks: [
-      { id: 'tr-user', name: 'user', hidden: false, clips: [{ id: clips.user, kind: 'card', cardId: CARD_ID, start: 0, end: SECONDS, params: {} }] },
-      { id: 'tr-pill', name: 'pill', hidden: false, clips: [{ id: clips.pill, kind: 'card', cardId: 'punch-pill', start: 0, end: SECONDS, params: { text: '舞台端口探针 Stage Gate 123' } }] },
-      { id: 'tr-pulse', name: 'pulse', hidden: false, clips: [{ id: clips.pulse, kind: 'card', cardId: 'av-pulse', embeddedAudio: true, start: 0.5, end: 2.5, params: { color: '#60a5fa', frequency: 880, gain: 0.3, duration: 0.3 } }] },
-      { id: 'tr-video', name: 'video', hidden: false, clips: [{ id: clips.video, mediaId: media.video.id, cardId: '', mediaOffset: 0, start: 0, end: SECONDS, params: {}, label: media.video.name }] },
-      { id: 'tr-audio', name: 'audio', hidden: false, clips: [{ id: clips.audio, mediaId: media.audio.id, cardId: '', mediaOffset: 0, start: 0, end: SECONDS, params: {}, label: media.audio.name }] },
-    ] };
-  const loaded = await page.evaluate(async (project) => {
-    const { actions, getState } = await import('/src/store/project.ts');
-    actions.loadProject(project);
-    actions.seek(1);
-    const p = getState().project;
-    return { size: [p.width, p.height], clips: p.tracks.map((t) => t.clips.map((c) => `${c.cardId || c.mediaId}@${c.start}-${c.end}`)) };
-  }, PROJECT);
-  out.loaded = loaded;
-  check(loaded.clips.length === 5 && loaded.clips.every((c) => c.length === 1), '项目里放上了用户卡、文字卡、有声卡、视频、声音(各占一条序列,都从头开始)', loaded);
-  out.clips = clips;
-
-  const stageBox = () => page.evaluate(() => {
-    const f = [...document.querySelectorAll('iframe')].filter((el) => /stage=1/.test(el.src) && getComputedStyle(el).opacity !== '0')
-      .map((el) => el.getBoundingClientRect()).find((r) => r.width > 100);
-    return f ? { x: Math.round(f.left), y: Math.round(f.top), width: Math.round(f.width), height: Math.round(f.height) } : null;
-  });
-  const shoot = async (name) => {
-    const f = await frontFrame();
-    await f?.evaluate(() => new Promise((r) => (window.__pcRealRaf ?? requestAnimationFrame)(() => (window.__pcRealRaf ?? requestAnimationFrame)(() => r())))).catch(() => {});
-    const box = await stageBox();
-    if (!box) return null;
-    const buf = await page.screenshot({ clip: box });
-    if (SHOTS && name) await fs.writeFile(path.join(SHOTS, `${name}.png`), buf);
-    return PNG.sync.read(buf);
-  };
-  /** 截图里:品红标记有多少像素;右下四分之一(视频露出来的地方)的平均色与离散程度 */
-  const measure = (png) => {
-    if (!png) return null;
-    let mark = 0, sum = 0, sq = 0, n = 0; const sig = [];
-    for (let y = 0; y < png.height; y++) for (let x = 0; x < png.width; x++) {
-      const i = (y * png.width + x) * 4, r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
-      if (r > 240 && g < 16 && b > 240) mark++;
-      if (x > png.width * 0.55 && y > png.height * 0.6) { const l = (r + g + b) / 3; sum += l; sq += l * l; n++; if ((x + y * 7) % 97 === 0) sig.push(r >> 3, g >> 3, b >> 3); }
-    }
-    const mean = sum / n;
-    return { size: [png.width, png.height], mark, markShare: +(mark / (png.width * png.height)).toFixed(4), videoMean: +mean.toFixed(1), videoStd: +Math.sqrt(Math.max(0, sq / n - mean * mean)).toFixed(1), sig: crypto.createHash('sha1').update(Buffer.from(sig)).digest('hex').slice(0, 12) };
-  };
-  const stageState = async () => {
-    const f = await frontFrame();
-    if (!f) return null;
-    return f.evaluate((ids) => {
-      const d = window.__pcStageDiag?.();
-      const v = document.querySelector('video');
-      return { origin: location.origin, t: d?.t ?? null, role: d?.role ?? null, mark: !!document.querySelector('[data-gate-mark]'), probe: !!globalThis.__gateProbe,
-        video: v ? { readyState: v.readyState, currentTime: +v.currentTime.toFixed(3), src: (v.currentSrc || v.src).replace(/[0-9a-f]{40,}/, '<hash>'), w: v.videoWidth } : null,
-        user: !!document.querySelector(`[data-pc-clip="${ids.user}"]`), pill: !!document.querySelector(`[data-pc-clip="${ids.pill}"]`), fontsReady: document.fonts.status, fonts: [...document.fonts].filter((x) => x.status === 'loaded').length };
-    }, clips).catch((e) => ({ error: String(e).slice(0, 200) }));
-  };
-  const seek = (t) => page.evaluate(async (t) => (await import('/src/store/project.ts')).actions.seek(t), t);
-  const storeT = () => page.evaluate(async () => (await import('/src/store/project.ts')).getState().t);
-
-  // 新卡头一次上舞台要先测一遍成本,测完要等播放头动一下才挂上:每隔几秒在 1 秒附近挪一帧
-  let nudge = 0;
-  const first = await until('可见舞台里用户卡挂上、视频解出画面', async () => {
-    const s = await stageState();
-    if (s?.mark && s?.video?.readyState >= 2) return s;
-    if (++nudge % 6 === 0) await seek(nudge % 12 === 0 ? 1 : 1 + 1 / FPS);
-    return null;
-  }, 240000, 500);
-  await seek(1);
-  await until('舞台里的视频回到 1 秒', async () => { const s = await stageState(); return s?.video && Math.abs(s.video.currentTime - 1) < 0.05 ? s : null; }, 60000);
-  out.stageAt1 = first ?? await stageState();
-  check(!!first && new URL(first.origin).port !== String(PORT), '可见舞台在舞台端口上,用户卡挂上了,视频解出了画面', out.stageAt1);
-  await sleep(800);
-  const shot1 = measure(await shoot('1-seek-1s'));
-  await seek(3.2);
-  await until('舞台里的视频走到 3.2 秒', async () => { const s = await stageState(); return s?.video && Math.abs(s.video.currentTime - 3.2) < 0.1 ? s : null; }, 60000);
-  await sleep(800);
-  const shot2 = measure(await shoot('2-seek-3s'));
-  out.shots = { at1: shot1, at3: shot2 };
-  check(shot1 && shot1.mark > 2000 && shot2 && shot2.mark > 2000, '截图里有用户卡的色块(两处时间都有)', out.shots);
-  check(shot1 && shot2 && shot1.videoStd > 8 && shot2.videoStd > 8 && shot1.sig !== shot2.sig, '截图里视频那一块有画面,两处时间的画面不同', out.shots);
-
-  // 播放两秒
-  await seek(0.5);
-  await sleep(500);
-  const before = { t: await storeT(), stage: await stageState() };
-  await page.evaluate(async () => (await import('/src/store/project.ts')).actions.play());
-  await sleep(2000);
-  const during = { t: await storeT(), stage: await stageState() };
-  await page.evaluate(async () => (await import('/src/store/project.ts')).actions.pause());
-  await sleep(600);
-  const after = { t: await storeT(), stage: await stageState() };
-  out.play = { before: { t: before.t, video: before.stage?.video?.currentTime }, during: { t: during.t, video: during.stage?.video?.currentTime }, after: { t: after.t, video: after.stage?.video?.currentTime } };
-  check(during.t - before.t > 1 && (during.stage?.video?.currentTime ?? 0) - (before.stage?.video?.currentTime ?? 0) > 0.8, '播放:播放头在走,舞台里的视频也在走', out.play);
-  check(Math.abs(after.t - (after.stage?.video?.currentTime ?? -9)) < 0.2, '暂停以后舞台里的视频停在播放头上', out.play);
-  const shot3 = measure(await shoot('3-after-play'));
-  out.shots.afterPlay = shot3;
-  check(shot3 && shot3.mark > 2000 && shot3.videoStd > 8, '播放之后截图里用户卡和视频都在', shot3);
-  out.fonts = { status: after.stage?.fontsReady, loaded: after.stage?.fonts };
-
-  // 卡片声音(有声卡的 audio() 在编辑器页里求值、入库)
-  const audio = await page.evaluate(async (clipId) => {
-    const G = await import('/src/editor/io/cardAudioGeneration.ts');
-    const S = await import('/src/store/project.ts');
-    try {
-      const r = await G.generateCardAudio(clipId);
-      const m = S.getState().project.media.find((x) => x.id === r.mediaId);
-      return { ok: r.ok, hash: m?.hash ?? null, duration: m?.duration ?? null };
-    } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
-  }, clips.pulse);
-  out.cardAudio = audio;
-  check(audio.ok === true && /^[a-f0-9]{64}$/.test(audio.hash ?? ''), '卡片声音生成成功', audio);
-  // 带着声音再播一秒(素材声音、卡片声音都在轨上)
-  await seek(0.6);
-  await page.evaluate(async () => (await import('/src/store/project.ts')).actions.play());
-  await sleep(1200);
-  const sound = await page.evaluate(async () => {
-    const t = (await import('/src/store/project.ts')).getState().t;
-    const els = [...document.querySelectorAll('audio, video')].map((el) => ({ tag: el.tagName, paused: el.paused, t: +el.currentTime.toFixed(2), ready: el.readyState }));
-    return { t, els };
-  });
-  await page.evaluate(async () => (await import('/src/store/project.ts')).actions.pause());
-  out.sound = sound;
-  check(sound.t > 1.2, '带着素材声音和卡片声音播放,播放头照走', sound);
-
-  /* ---------------------------------------------------------------- 2. 到这里没有一个请求被拒 */
-  await sleep(500);
-  const logBefore = readLog();
-  const deniedBefore = logBefore.filter((r) => !r.ok);
-  // 用户卡挂上时自己发的那一条 Agent 绑定是预期被拒的,不算在「正当请求」里
-  const unexpected = deniedBefore.filter((r) => !(r.m === 'POST' && r.u === '/api/agent/bind'));
-  out.observed = { total: logBefore.length, shapes: shapes(logBefore.filter((r) => r.ok)), deniedBeforeAttack: shapes(deniedBefore) };
-  check(logBefore.length > 50, '舞台端口的流水记下来了', logBefore.length);
-  check(unexpected.length === 0, '新建项目、点、播放、卡片声音这一路,舞台端口没有一个正当请求被拒', shapes(unexpected));
-
-  if (OBSERVE) throw new Error('observe');
-  /* ---------------------------------------------------------------- 3. 用户卡逐个去调 */
-  const front = await frontFrame();
-  const auto = await until('用户卡挂上时自己发的那一条有了结果', () => front.evaluate(() => globalThis.__gateProbe?.auto ?? null), 30000);
-  out.auto = auto;
-  check(auto?.status === 403, '用户卡挂上时自己调 POST /api/agent/bind:403', auto);
-  const fromStage = await front.evaluate((list) => globalThis.__gateProbe.run(list), ATTACKS);
-  const http = fromStage.filter((r) => !r.ws), sockets = fromStage.filter((r) => r.ws);
-  out.attack = { origin: await front.evaluate(() => globalThis.__gateProbe.origin), count: fromStage.length,
-    statuses: http.reduce((m, r) => { m[r.status] = (m[r.status] ?? 0) + 1; return m; }, {}),
-    notDenied: http.filter((r) => r.status !== 403).map((r) => `${r.method} ${r.path} → ${r.status}`), sockets: sockets.map((r) => `${r.path} opened=${r.opened}`) };
-  check(new URL(out.attack.origin).port !== String(PORT), '这一批是从舞台端口那个源发的', out.attack.origin);
-  check(out.attack.notDenied.length === 0, `用户卡从舞台里调 ${http.length} 个接口,全部 403`, out.attack.notDenied);
-  check(sockets.every((r) => r.opened === false), '用户卡从舞台里连文档服务的 WebSocket、不带热更新子协议的升级:连不上', out.attack.sockets);
-  // 同一批从编辑器端口发(Node,不带 Origin):没有一个是 403(各接口自己回什么照旧)
-  const fromEditor = [];
-  for (const a of ATTACKS.filter((x) => !x.ws)) {
-    const status = await fetch(origin + a.path, { method: a.method, headers: a.type ? { 'Content-Type': a.type } : undefined, body: a.body, signal: AbortSignal.timeout(20000) }).then((r) => r.status, (e) => `错误:${e.message}`);
-    fromEditor.push({ method: a.method, path: a.path, status });
+/** 新的上下文与页面;`device` 是 mobile-env 的设备名或 'ipad';`memory` 覆盖 navigator.deviceMemory */
+async function newPage(device = 'desktop', { memory } = {}) {
+  let page;
+  if (device === 'ipad') {
+    page = await env.newPage(browser, 'none');
+    await page.setViewport(IPAD.viewport);
+    await page.cdp.send('Emulation.setUserAgentOverride', { userAgent: IPAD.ua });
+    await page.cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  } else {
+    page = await env.newPage(browser, device);
   }
-  out.editorPort = { count: fromEditor.length, statuses: fromEditor.reduce((m, r) => { m[r.status] = (m[r.status] ?? 0) + 1; return m; }, {}), list: fromEditor.map((r) => `${r.method} ${r.path} → ${r.status}`) };
-  const editorDenied = fromEditor.filter((r) => r.status === 403 && !/^\/(\.git|@fs\/c:\/windows)/i.test(r.path));
-  check(editorDenied.length === 0, '同一批接口从编辑器端口发,没有被这道闸拒(.git 与工作区之外的 /@fs/ 是开发服务器自己的文件系统限制,不算)', editorDenied);
-  const logAfter = readLog().slice(logBefore.length);
-  out.deniedInAttack = logAfter.filter((r) => !r.ok).length;
-
-  /* ---------------------------------------------------------------- 4. 之后预览照常 */
-  await seek(2);
-  await until('舞台里的视频走到 2 秒', async () => { const s = await stageState(); return s?.video && Math.abs(s.video.currentTime - 2) < 0.1 ? s : null; }, 60000);
-  await sleep(800);
-  const shot4 = measure(await shoot('4-after-attack'));
-  await page.evaluate(async () => (await import('/src/store/project.ts')).actions.play());
-  await sleep(1000);
-  const t5 = await storeT();
-  await page.evaluate(async () => (await import('/src/store/project.ts')).actions.pause());
-  out.afterAttack = { shot: shot4, t: t5, stage: await stageState() };
-  check(shot4 && shot4.mark > 2000 && shot4.videoStd > 8 && t5 > 2.5, '被拒之后预览照常:用户卡、视频都画得出来,能播放', out.afterAttack);
-
-  /* ---------------------------------------------------------------- 5. 改卡:舞台跟着热更新(热更新的 WebSocket 与重新取源码都经舞台端口) */
-  for (const f of stageFrames()) await f.evaluate(() => { globalThis.__gateStay = 1; }).catch(() => {});
-  await writeCard(MARK2);
-  const colorNow = async () => (await frontFrame())?.evaluate(() => { const el = document.querySelector('[data-gate-mark]'); return el ? { color: getComputedStyle(el).backgroundColor, stayed: globalThis.__gateStay === 1 } : null; }).catch(() => null);
-  const hot = await until('舞台里的用户卡换成改过的颜色', async () => { const c = await colorNow(); return c?.color === `rgb(${MARK2.join(', ')})` ? c : null; }, 60000);
-  await sleep(500);
-  const shot5 = await shoot('5-after-card-edit');
-  const px = shot5 ? [0, 1, 2].map((k) => shot5.data[(Math.round(shot5.height * 0.15) * shot5.width + Math.round(shot5.width * 0.1)) * 4 + k]) : null;
-  out.hotUpdate = { dom: hot ?? await colorNow(), pixel: px };
-  check(!!hot && hot.stayed, '改了用户卡的源码,舞台不重载就换成新的(热更新经舞台端口照常)', out.hotUpdate);
-  check(px && px.every((v, k) => Math.abs(v - MARK2[k]) <= 6), '截图里那一块是改过之后的颜色', out.hotUpdate);
-  const tail = readLog().slice(logBefore.length + logAfter.length).filter((r) => !r.ok);
-  check(tail.length === 0, '之后舞台端口没有新的正当请求被拒', shapes(tail));
-  out.pageErrors = pageErrors.slice(0, 10);
-} catch (e) {
-  if (e?.message !== 'observe') fails.push(`异常:${e?.stack ?? e}`);
-} finally {
-  try { await browser?.close(); } catch {}
-  try { dev?.stop(); } catch {}
-  out.ms = Date.now() - started;
-  out.fails = fails;
-  if (JSON_OUT) await fs.writeFile(JSON_OUT, JSON.stringify(out, null, 2)).catch(() => {});
-  if (!KEEP && !fails.length) await fs.rm(OUT, { recursive: true, force: true }).catch(() => {});
-  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-  process.exit(fails.length ? 1 : 0);
+  if (memory !== undefined) await page.evaluateOnNewDocument((m) => { try { Object.defineProperty(Navigator.prototype, 'deviceMemory', { get: () => m, configurable: true }); } catch { /* 改不了 */ } }, memory);
+  return page;
 }
+const gates = (page) => page.evaluate(() => (typeof window.__pcGates === 'function' ? window.__pcGates() : null)).catch(() => null);
+const waitDone = (page, ms = 90_000) => until(async () => { const g = await gates(page); return g?.tier?.online && g.tier.gate === 'done' && g.step?.kind === 'running' ? g : null; }, ms);
+const bubbleText = (page, ms = 30_000) => until(() => page.$eval('[data-pc="tier-bubble"]', (el) => el.textContent).catch(() => null), ms, 100);
+async function enter(page, query = '') {
+  await env.enter(page, { layout: 'desktop' });
+  if (query) await page.goto(`${env.origin}/editor?layout=desktop&${query}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+}
+async function reload(page, query) {
+  const url = `${env.origin}/editor?layout=desktop${query ? `&${query}` : ''}`;
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+}
+/** 真的把页面(顶层文档)的渲染进程杀掉;回之后用新的 CDP 会话 */
+async function crashPage(page) {
+  const crashed = new Promise((resolve) => { page.once('error', () => resolve(true)); setTimeout(() => resolve(false), 15_000); });
+  const cdp = await page.createCDPSession();
+  // `Page.crash` 不回包(渲染进程当场没了):不等它,等页面的「Page crashed!」事件
+  void cdp.send('Page.crash').catch(() => {});
+  const ok = await crashed;
+  if (!ok) fails.push('Page.crash 之后 15 秒没等到页面崩溃的事件');
+  return ok;
+}
+/** 崩了之后用户点「重新加载」(同一个标签页) */
+async function reloadAfterCrash(page, query) {
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 }).catch(async () => { await reload(page, query); });
+}
+const tabStep = (g) => g?.step;
+const shot = (page, name) => page.screenshot({ path: path.join(OUT, `${name}.png`) }).catch(() => {});
+const want = (id) => !ONLY.length || ONLY.includes(id);
+const TEXT = {
+  top: '这台设备运行在顶配模式', standard: '这台设备运行在标准模式',
+  lite: '这台设备运行在精简模式：复杂的效果交给云端渲染', low: '这台设备运行在低配模式：播放时只显示已渲染好的画面',
+};
+async function holdAndCrash(scene, page, what) {
+  await reload(page, `gateHold=${what}`);
+  const reached = await until(async () => { const g = await gates(page); return g?.step?.kind === 'stage' && g.step.what === what ? g : null; }, 90_000, 50);
+  check(scene, !!reached, `停在「${what}」那一步(gateHold)`, await gates(page));
+  await crashPage(page);
+  await reloadAfterCrash(page, `gateHold=${what}`);
+}
+
+try {
+  /* ---------------------------------------------------------------- S1～S5:电脑 */
+  if (want('S1') || want('S2') || want('S3') || want('S4') || want('S5')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    let g = await waitDone(page);
+    check('S1', g?.tier?.reached === 3 && g.tier.target === 3 && !g.tier.lowest, '全新打开:到第三级', g?.tier);
+    check('S1', g?.decision?.reason === 'trial', '从低往高试', g?.decision);
+    check('S1', g?.judged?.crashed === false, '没判崩');
+    check('S1', tabStep(g)?.kind === 'running' && tabStep(g).level === 3, '最后一步是第 3 级运行中', tabStep(g));
+    const steps = (g?.log?.history ?? []).length;
+    check('S1', steps >= 1, '查看口有历次判定');
+    const b1 = await bubbleText(page);
+    check('S1', b1 === TEXT.top, '气泡:顶配模式', b1);
+    await shot(page, 'S1-bubble');
+    const gone = await until(() => page.$('[data-pc="tier-bubble"]').then((e) => !e), 15_000, 200);
+    check('S1', !!gone, '气泡几秒后自动消失');
+    const iframes = await page.$$eval('iframe[data-pc^="stage-frame"]', (els) => els.map((e) => ({ pc: e.dataset.pc, src: e.getAttribute('src') })));
+    check('S1', iframes.length === 2 && iframes.every((f) => /[?&]gl=shared/.test(f.src)), '两个舞台,地址按起手的路线(共用)拼、不因试第三级而变', iframes);
+    scenes.S1.tier = g?.tier;
+
+    // S2 正常刷新
+    await reload(page);
+    g = await waitDone(page);
+    check('S2', g?.judged?.crashed === false, '正常刷新不算崩', g?.judged);
+    check('S2', g?.log?.device?.stage?.crashes === 0, '崩的次数 0', g?.log?.device?.stage);
+    check('S2', g?.tier?.reached === 3, '照样到第三级');
+
+    // S3 试各一套时杀掉
+    await holdAndCrash('S3', page, 'try-separate');
+    g = await waitDone(page);
+    check('S3', g?.judged?.crashed === true && g.judged.step?.what === 'try-separate', '判崩,崩在试各一套', g?.judged);
+    check('S3', g?.decision?.reason === 'crash' && g.tier.target === 2 && g.tier.reached === 2, '停在第二级、不试', g?.tier);
+    const st = g?.log?.device?.stage;
+    check('S3', st?.crashes === 1 && st.guardUntil && Math.abs(st.guardUntil - Date.now() - 30 * 60_000) < 120_000, '崩 1 次,护栏 30 分钟', st);
+    const b3 = await bubbleText(page);
+    check('S3', b3 === TEXT.standard, '气泡:标准模式', b3);
+    await shot(page, 'S3-standard');
+    scenes.S3.sessionKept = g?.judged?.fromTab === g?.tab ? 'same-tab' : 'other-tab';
+
+    // S4 护栏内
+    await reload(page);
+    g = await waitDone(page);
+    check('S4', g?.decision?.reason === 'guard' && g.tier.target === 2, '护栏内:停在第二级、不试', g?.decision);
+
+    // S5 过了护栏:从头试;试成功再刷新清零
+    await page.evaluate(() => { const k = 'pc.online.crashLog'; const l = JSON.parse(localStorage.getItem(k)); l.device.stage.guardUntil = Date.now() - 1000; localStorage.setItem(k, JSON.stringify(l)); });
+    await reload(page);
+    g = await waitDone(page);
+    check('S5', g?.decision?.reason === 'trial' && g.tier.reached === 3, '过了护栏:从头试到第三级', g?.decision);
+    check('S5', g?.log?.device?.stage?.crashes === 1, '这时崩的次数还在(试成功的判据是下次载入没判崩)');
+    await reload(page);
+    g = await waitDone(page);
+    check('S5', g?.log?.device?.stage?.crashes === 0 && g.log.device.stage.guardUntil === null, '试成功一次:清零', g?.log?.device?.stage);
+
+    // S9 升级清零(先造一条崩过、有护栏的记录)
+    if (want('S9') || !ONLY.length) {
+      await page.evaluate(() => { const k = 'pc.online.crashLog'; const l = JSON.parse(localStorage.getItem(k)); l.device.stage = { reached: 1, lowest: false, crashes: 3, guardUntil: Date.now() + 3600_000, tried: false }; l.device.version = 'older-build'; localStorage.setItem(k, JSON.stringify(l)); });
+      await reload(page);
+      g = await waitDone(page);
+      check('S9', g?.decision?.reason === 'trial' && g.log.device.stage.crashes <= 0 && g.tier.reached === 3, '软件版本变了:清零、从头试', g?.decision);
+    }
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S6 试后台舞台时杀掉 */
+  if (want('S6')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    await waitDone(page);
+    await holdAndCrash('S6', page, 'try-back');
+    const g = await waitDone(page);
+    check('S6', g?.judged?.crashed && g.tier.target === 1 && !g.tier.lowest, '停在第一级(精简)', g?.tier);
+    const frames = await page.$$eval('iframe[data-pc^="stage-frame"]', (els) => els.map((e) => e.dataset.pc));
+    check('S6', frames.length === 1, '只有一个舞台', frames);
+    const b = await bubbleText(page);
+    check('S6', b === TEXT.lite, '气泡:精简模式', b);
+    await shot(page, 'S6-lite');
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S7 开可见舞台时杀掉 */
+  if (want('S7')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    await waitDone(page);
+    await holdAndCrash('S7', page, 'open-visible');
+    const g = await waitDone(page);
+    check('S7', g?.judged?.crashed && g.tier.lowest === 'stage' && g.tier.target === 1, '最低一档(一个舞台都撑不住)', g?.tier);
+    const src = await page.$eval('iframe[data-pc="stage-frame"]', (e) => e.getAttribute('src')).catch(() => '');
+    check('S7', /[?&]lowest=1/.test(src) && /[?&]compact=1/.test(src), '舞台起手就按最低一档(素材只用小尺寸)', src);
+    const b = await bubbleText(page);
+    check('S7', b === TEXT.low, '气泡:低配模式', b);
+    await shot(page, 'S7-low');
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S8 在后台被回收不算崩 */
+  if (want('S8')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    await waitDone(page);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await sleep(300);
+    const g0 = await gates(page);
+    const mine = g0?.log?.tabs?.[g0.tab];
+    check('S8', mine?.background === true, '记下了在后台', mine);
+    await crashPage(page);
+    await reloadAfterCrash(page);
+    const g = await waitDone(page);
+    check('S8', g?.judged?.crashed === false && g.decision.reason === 'trial', '在后台被回收:不算崩', g?.judged);
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S10 安卓 */
+  if (want('S10')) {
+    for (const [mem, expect] of [[4, 'fixed'], [8, 'trial']]) {
+      const page = await newPage('phone', { memory: mem });
+      await enter(page);
+      const g = await waitDone(page);
+      if (expect === 'fixed') {
+        check('S10', g?.decision?.reason === 'android-memory' && g.tier.target === 1, `安卓 ${mem} GB:停在一个舞台、不试`, g?.decision);
+        check('S10', g?.tier?.identity === 'phone', '身份手机');
+        const b = await bubbleText(page);
+        check('S10', b === TEXT.lite, '气泡:精简模式', b);
+        await shot(page, 'S10-android-4g');
+      } else {
+        check('S10', g?.decision?.reason === 'trial', `安卓 ${mem} GB:试`, g?.decision);
+      }
+      await page.browserContext().close();
+    }
+  }
+
+  /* ---------------------------------------------------------------- S11 电脑上只杀后台舞台的进程 */
+  if (want('S11')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    let g = await waitDone(page);
+    const before = g?.tier?.reached;
+    const stageBTarget = () => browser.targets().find((t) => t.url().includes(`:${BASE + 2}/`) && /[?&]id=B/.test(t.url()));
+    const crashB = async () => {
+      const t = await until(() => stageBTarget(), 30_000, 200);
+      if (!t) return false;
+      const cdp = await t.createCDPSession().catch(() => null);
+      void cdp?.send('Page.crash').catch(() => {});
+      return true;
+    };
+    check('S11', !!stageBTarget(), '后台舞台是独立的渲染进程(OOPIF 目标)');
+    // 第一次崩:看守整页重载那一台,握回来恢复双舞台(原有做法);页面与档位都不受影响、不留崩溃记录
+    await crashB();
+    const watch1 = await until(() => page.evaluate(() => window.__pcStageWatch?.()).then((w) => (w && w.reloads >= 1 ? w : null)), 90_000, 500);
+    check('S11', !!watch1, '舞台崩了页面还在:看守重载那一台', watch1);
+    g = await until(async () => { const x = await gates(page); return x?.tier?.reached === 3 ? x : null; }, 60_000, 500);
+    check('S11', g?.tier?.target === 3 && g.step?.kind === 'running' && g.step.level === 3, '重载那一台后照旧第三级,崩溃记录不动', g?.step);
+    // 反复崩(看守重载到上限):握手容错退回单舞台,只管当次
+    for (let i = 0; i < 4; i++) {
+      const w = await page.evaluate(() => window.__pcStageWatch?.()).catch(() => null);
+      if (w?.fellBack) break;
+      await until(() => page.evaluate(() => { const x = window.__pcStageWatch?.(); return x && x.B === 'ok' ? x : null; }), 60_000, 500);
+      await crashB();
+      await until(() => page.evaluate((n) => { const x = window.__pcStageWatch?.(); return x && (x.reloads > n || x.fellBack) ? x : null; }, (w?.reloads ?? 0)), 90_000, 500);
+    }
+    g = await until(async () => { const x = await gates(page); return x?.tier?.target === 1 ? x : null; }, 120_000, 500);
+    check('S11', !!g && g.tier.reached === 1, `反复崩:握手容错退回单舞台(之前第 ${before} 级)`, g?.tier ?? await gates(page));
+    check('S11', g?.step?.kind === 'running' && g.step.level === 1, '只管当次:最后一步是第 1 级运行中,不留「崩在试……」', g?.step);
+    await reload(page);
+    g = await waitDone(page);
+    check('S11', g?.judged?.crashed === false && g.decision.reason === 'trial' && g.tier.reached === 3, '重新载入照常试,不算崩', g?.decision);
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S12 iPad */
+  if (want('S12')) {
+    const page = await newPage('ipad');
+    await enter(page);
+    let g = await waitDone(page);
+    check('S12', g?.tier?.identity === 'desktop', 'iPad 要试:先按电脑', g?.tier);
+    await holdAndCrash('S12', page, 'try-back');
+    g = await waitDone(page);
+    check('S12', g?.tier?.target === 1 && g.tier.identity === 'phone', 'iPad 停在第一级:身份改判手机', g?.tier);
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S13 两个标签页 */
+  if (want('S13')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    await waitDone(page);
+    const second = await page.browserContext().newPage();
+    await second.setViewport(DEVICES.desktop.viewport);
+    await second.goto(`${env.origin}/editor?layout=desktop`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    // 新标签页没有会话恢复记录:停在开始页也照样开舞台闸门吗?闸门只在编辑页挂,这里直接读崩溃记录
+    await sleep(3000);
+    const log = await second.evaluate(() => JSON.parse(localStorage.getItem('pc.online.crashLog') || 'null'));
+    const last = log?.history?.at(-1);
+    check('S13', log && last && last.crashed === false, '第二个标签页:不把还开着的第一个当成崩了', last);
+    await page.browserContext().close();
+  }
+
+  /* ---------------------------------------------------------------- S14 查看口 */
+  if (want('S14')) {
+    const page = await newPage('desktop');
+    await enter(page);
+    await reload(page, 'gates=1');
+    await waitDone(page);
+    const rows = await until(() => page.$$eval('[data-pc="gate-viewer"] td[data-pc-gate-row]', (els) => els.map((e) => [e.dataset.pcGateRow, e.textContent])), 30_000);
+    check('S14', rows && rows.length >= 8, '查看口有各闸门的结果', rows);
+    const json = await page.evaluate(() => JSON.stringify(window.__pcGates()));
+    check('S14', !/ticket|password|token|"key":"[A-Za-z0-9_-]{43}"/i.test(json), '查看口不含凭证', json.slice(0, 200));
+    await shot(page, 'S14-viewer');
+    await page.browserContext().close();
+  }
+} catch (e) {
+  fails.push(`异常:${String(e?.stack ?? e).slice(0, 800)}`);
+} finally {
+  await browser.close().catch(() => {});
+  await env.close().catch(() => {});
+}
+
+const result = { ok: fails.length === 0, fails, scenes, out: OUT };
+process.stdout.write(`${JSON.stringify(result)}\n`);
+process.exit(fails.length ? 1 : 0);

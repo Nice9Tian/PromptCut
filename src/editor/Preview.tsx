@@ -956,27 +956,37 @@ export function Preview(props: { variant?: "mobile" } = {}) {
     if (!g) return;
     gateRunRef.current = true;
     const trying = !g.decision.fixed;
-    const mark = (what: Parameters<typeof g.stage>[0]) => { if (trying) g.stage(what); };
+    /*
+     * `?gateHold=<一步>` 只给验收用(`scripts/probes/stage-gate-probe.mjs`):记下这一步之后停住不往下走,探针趁这时把页面进程杀掉,
+     * 验「崩在这一步、重新载入停在下一级」。不带它与平时一样。
+     */
+    const hold = (() => { try { return new URLSearchParams(location.search).get("gateHold"); } catch { return null; } })();
+    const mark = async (what: Parameters<typeof g.stage>[0]) => {
+      if (!trying) return;
+      g.stage(what);
+      if (hold === what) await new Promise<never>(() => {});
+    };
     void (async () => {
       try {
+        if (trying && hold === "open-visible") await new Promise<never>(() => {});
         await syncProject("front", getState().project);
-        mark("visible-ready");
+        await mark("visible-ready");
         g.reached(1);
         if (tierState().target < 2 || !dualRef.current) { g.done(); return; }
-        mark("try-back");
+        await mark("try-back");
         setBackStageMount(true);
         const back = await whenStageReady("back");
         if (!dualRef.current) return; // 握手失败退回了单舞台(下面那个 effect 收摊)
         await syncProject("back", getState().project);
-        mark("dual-loaded");
+        await mark("dual-loaded");
         g.reached(2);
         if (tierState().target < 3) { g.done(); return; }
-        mark("try-separate");
+        await mark("try-separate");
         const front = frontStage();
         const results = await Promise.all([front, back].map((c) => c?.setGlRoute("perDocument").catch(() => null) ?? Promise.resolve(null)));
         if (!dualRef.current) return;
         if (results.some((r) => !r)) { g.done(); return; } // 换不过去(舞台在换):这次停在第二级
-        mark("separate-ready");
+        await mark("separate-ready");
         g.reached(3);
         // 共用的那一个 Worker 不再有人用:放掉(第三级每个舞台各一套)
         sharedGlRef.current?.dispose();
