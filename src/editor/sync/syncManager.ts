@@ -1142,6 +1142,9 @@ export function revertAgentOp(rec: AgentOp): UndoResult | null {
   if (result.done) {
     rec.state = "done";
     patch({ agentOpsVersion: view.agentOpsVersion + 1 });
+  } else if (!result.skipped.length && !result.failed.length) {
+    // 既没有被后来的改动挡住的、也没有落不下去的,却一处都没撤成:要说出来,不能让按钮点了没反应
+    pushToast("这一步没撤成:它改过的地方现在已经是撤之前的样子(可能已被撤回过),没有需要退回的内容。", "warn");
   }
   return result;
 }
