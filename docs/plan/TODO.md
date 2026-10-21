@@ -130,7 +130,8 @@
   - 补「速度」「滤镜」两个入口；其余缺的入口（动画、音效分类、存储、设置、导出分辨率与透明层、Agent 未读角标、扫码加入）往后放。
   - 缩略卡、素材格子显示真画面（视频首帧、图片缩略图，要经素材票据），和上一条一起排。
   - 低内存档的提示与在线桌面 AI 栏的占位不单独撤，随 0.7.19 和三道闸门一起撤。
-- 剪辑段属性面板拿掉「引用」下拉框（`src/editor/left/CutSegmentForm.tsx`），引用哪条剪辑不能改；双击打开、右键「打开剪辑」、面板「打开被引用剪辑」按钮已有，保留。Agent 的 `set_cut_segment` 是否也收掉换引用、`workflow/editing.md` 补哪一句，等用户确认修改前 / 修改后。
+- 〔进行中，分支 `claude/cut-look-ui`〕剪辑段引用哪条剪辑不能改：属性面板拿掉「引用」下拉框（`src/editor/left/CutSegmentForm.tsx`），Agent 的 `set_cut_segment` 也不能换；双击打开、右键「打开剪辑」、面板「打开被引用剪辑」按钮已有，保留。`workflow/editing.md` 那一句用户已批准。
+- 〔进行中，同一分支〕`see_frames` 加剪辑 id（留空为当前激活剪辑），不用切换就能看别的剪辑；会动用户界面的工具名字前加 `user_interface_`（如 `user_interface_switch_cut`）。
 - 云端 Agent 发送接口不再重复核「首次使用告知」，点发送时面板核过一次即可（`docs/archive/agent-reports/AGENT-agent-panel-smooth.md`「待用户定」第 3 条）。
 - 另见上文已改状态的三条：音频看门狗、登录框「粘贴授权码」、托管地址换自有域名。
 
