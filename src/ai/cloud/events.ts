@@ -32,11 +32,16 @@ export function cloudErrorMessage(code: string | undefined, message?: string): s
   }
 }
 
-/** 给人看的原因最长这么多个字:模型网关回来的原文可能带整段报文 */
+/** 给人看的原因最长这么多个字:模型网关回来的英文原文可能带整段报文 */
 const REASON_MAX = 80;
+/**
+ * 服务端写好的中文话整句给出,不截到 80 字(2026-10-22 用户定:「服务端写好的中文话不再截到 80 字」)。
+ * 只在中文里夹着整段报文这种极端情况才截,所以上限放得很宽。
+ */
+const CJK_REASON_MAX = 600;
 
-/** 去掉密钥、令牌、请求号、网址这类不该给用户看的东西,压成一行并截短 */
-export function shortReason(raw: string): string {
+/** 去掉密钥、令牌、请求号、网址这类不该给用户看的东西,压成一行;超过 `max` 个字才截短 */
+export function shortReason(raw: string, max = REASON_MAX): string {
   const text = raw
     .replace(/\(?\s*(?:request[ _-]?id|req[ _-]?id|trace[ _-]?id)\s*[:=]\s*[\w.-]+\s*\)?/gi, "")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "")
@@ -44,20 +49,21 @@ export function shortReason(raw: string): string {
     .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "")
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
-  return text.length > REASON_MAX ? `${text.slice(0, REASON_MAX)}…` : text;
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /**
  * 服务端的 `error.message` 变成给人看的话(出错留痕,语义 product/agent.md)。
  * 模型网关的报错形如 `openai HTTP 403: token quota is not enough, ...`,原文是英文又带请求号和金额,用户读不懂也无从下手。
- * 已经是中文的话(服务端自己写的「已失效」「中断」等)原样放过;不认得的英文报错压成一句短原因,不带密钥、请求号、网址。
+ * 已经是中文的话(服务端自己写的「已失效」「中断」「截断超限」等)整句放过,不截到 80 字;不认得的英文报错压成一句短原因,
+ * 不带密钥、请求号、网址。
  */
 export function friendlyErrorMessage(message: string, model = false): string {
   const http = /\bHTTP\s+(\d{3})\b/i.exec(message);
   const status = http ? Number(http[1]) : 0;
   const quota = /quota|insufficient[ _-]?(?:funds|balance|credit)|out of credit|billing|balance/i.test(message);
   if (/[一-鿿]/.test(message) && !quota) {
-    const said = shortReason(message);
+    const said = shortReason(message, CJK_REASON_MAX);
     if (!said) return model ? "模型调用失败。" : "云端 Agent 出错了。";
     return model && !said.startsWith("模型") ? `模型调用失败:${said}` : said;
   }

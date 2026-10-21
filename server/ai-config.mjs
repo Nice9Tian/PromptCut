@@ -78,7 +78,8 @@ function getDefaults() {
       /** 当前生效的 Key 来自哪一路:custom / router / ""(没设) */
       source: '',
       model: '',
-      maxTokens: 4096,
+      /** 单次输出上限的上限;0 = 按模型的最大上限(2026-10-22 用户定「默认到最大」,`server/harness/model-limits.mjs`) */
+      maxTokens: 0,
       /**
        * 两路各自的连接配置:自定义 API 里自己填的、Router 分发密文导入的。
        * 以前 vendor / baseUrl / model 只有一份,导入 Router 会把自己填的冲掉,反过来也一样;

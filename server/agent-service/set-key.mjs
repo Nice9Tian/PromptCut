@@ -136,9 +136,11 @@ export async function runSetKey({ argv = [], env = process.env, stdin = process.
     if (baseUrl && !/^https?:\/\//.test(baseUrl)) throw new Quit('接口地址要以 http:// 或 https:// 开头。没有改动。');
     const model = (await prompter.ask(`模型清单(多个用 | 分隔,第一个是缺省)[${old.model && old.vendor !== 'mock' ? old.model : '必填'}]:`)).trim() || (old.vendor !== 'mock' ? old.model : '') || '';
     if (!model) throw new Quit('模型清单不能空。没有改动。');
-    const maxText = (await prompter.ask(`单次回复的 token 上限 [${old.maxTokens || 4096}]:`)).trim();
-    const maxTokens = maxText ? Number(maxText) : (old.maxTokens || 4096);
-    if (!Number.isSafeInteger(maxTokens) || maxTokens < 256) throw new Quit('token 上限要是不小于 256 的整数。没有改动。');
+    // 缺省按模型的最大上限(0;2026-10-22 用户定「默认到最大」)。旧配置里的 4096 是以前没填时自动写的,当作没填
+    const oldMax = old.maxTokens && old.maxTokens !== 4096 ? old.maxTokens : 0;
+    const maxText = (await prompter.ask(`单次回复的 token 上限(直接回车 = 按模型最大)[${oldMax || '按模型最大'}]:`)).trim();
+    const maxTokens = maxText ? Number(maxText) : oldMax;
+    if (!Number.isSafeInteger(maxTokens) || (maxTokens !== 0 && maxTokens < 256)) throw new Quit('token 上限要是 0(按模型最大)或不小于 256 的整数。没有改动。');
     let key = (await prompter.ask('Key(输入时不显示,输完回车):', { hidden: true })).trim();
     if (!key) throw new Quit('没有输入 Key。没有改动。');
     writeModelConfig(dataDir, { vendor, baseUrl, model, maxTokens }, key);
